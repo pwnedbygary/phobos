@@ -139,6 +139,14 @@ float depth with 8-bit stencil, or 24-bit depth where that's all there is), draw
 stencil is its frame buffer's alpha (none in 5650), so the GPU's stencil holds it, and the color's alpha follows it
 where the renderer knows what's written.
 
+**Frame buffers side by side** (part 65): a frame buffer is part of the target of its row width and format that starts
+where its page does, where a page holds whole rows (rows whose bytes divide 4,096, from VRAM's start), else where its
+own row does, at a row and column of it; its dithering starts at its own first row (`Push::origin`; its columns start on
+16 bytes, a whole number of the matrix's four). God of War draws its effects into four 5650 frame buffers 64 pixels wide
+side by side in rows of 1,024 pixels, and 8888 ones side by side in rows of 512: one target each way, so drawing into
+one after another, or a texture read across them, puts nothing back. A PRIM reaching past the rows' end (where the PSP's
+addresses run on into the next row) or the last row, or one drawn with its depth buffer, keeps a target of its own.
+
 **Filled from memory.** Before a target is first drawn into, the rows a PRIM reaches are filled from memory's VRAM:
 the pixels widened to 8888, the stencil from their alpha, the depth from the depth buffer's bytes. Its bytes are then
 watched (`Memory::watch()`): whoever changes them (the CPU, a block transfer, a texture upload, another target's
@@ -153,7 +161,9 @@ afresh.
 renderer has put back what it drew (`begin()` says so): no target for its frame buffer (the GPU out of room), rows
 past the target's (a frame buffer near VRAM's end whose drawing runs past it, where the PSP's addresses run round to
 VRAM's start, or past 512 rows), a lost GPU, or a texture the GE reads from memory as it draws (none decoded, which
-the GPU can't sample). Columns past a row's end are cut at the row, as before.
+the GPU can't sample). Columns past a row's end are cut at the row, as before. Such a PRIM is drawn at once, never
+left in the drawing threads' batch (part 65): the GPU would fill its target from memory before the batch drew there,
+and the batch's settle gives every busy page back to the CPU, the GPU's too.
 
 **Owned until needed.** What's drawn stays on the GPU. VRAM's pages under the pixels drawn are the renderer's: busy
 (`Memory::busyPages`), exactly as the drawing threads' batches make them, so anyone touching one (the CPU, the
@@ -172,16 +182,21 @@ bytes in the same pages: Brave Story keeps its display list in the 32 unused col
 and writes and runs it every frame. So busy pages are asked about to the byte (`Memory::vramDrawnOver`, the GE's
 `drawnOver()`): memory finishes the renderer only for bytes the GPU drew over since its last finish (each target's
 drawn rectangle, row by row), and reaches the rest at once. A change to such bytes (`Memory::changed()` while pages
-are busy) is kept by the target over them (`beside`, at most 16 ranges), which takes them from memory again (filled
-afresh, after a finish) before it draws over them, shows them or lends them as a texture, and after its next finish.
+are busy) is kept by the target over them (`beside`, at most 16 ranges), which takes them from memory again before it
+draws over them, shows them, moves them or lends them as a texture (part 65: those ranges filled from memory, not the
+target afresh after a finish), and after its next finish; so are a page's bytes written while the target hadn't drawn
+in it. Each page's owner is asked (part 65), its answer kept until something is drawn or owned afresh: God of War's GE
+reads 700,000 vertices a frame from pages the GPU has drawn in.
 (The drawing threads' busy pages stay whole pages: their batches draw anywhere in them.) Brave Story's title, on the
 M1: 53 frames a second before, 90-96 after (the software renderer: 178), its waits for the GPU from 26,000 to 5,700
 in 2,400 frames. What's left are textures sampled across two targets (its bloom passes), which the renderer can't
 lend (below), and the uploads that follow.
 
 **Two targets over the same pages** (a frame buffer drawn as 5650 then 8888, or a smaller buffer inside a larger one):
-before a PRIM draws into, or fills, rows whose pages another target owns, the renderer finishes first, so memory has
-the other's pixels, and the target is filled from them.
+before a PRIM draws into, or fills, rows whose pages another target owns, the other's pixels there go into its target
+on the GPU where the rows are the same bytes (part 65: the same row width in bytes, pages of whole rows, rows starting
+at the same byte; `move()`, `move.frag`), as a finish and a fill from memory would leave them, any format into any, at
+any scale; elsewhere the renderer finishes first, so memory has the other's pixels, and the target is filled from them.
 
 **Submitting.** What's recorded is handed to the GPU every 128 commands, at a list's end once 32 commands are
 recorded (`submit()`; part 52: WipEout Pure ends 209 lists a frame, each a `vkQueueSubmit` and a wait for the slot
@@ -197,8 +212,12 @@ since the target's last finish (`Target::told`, at most 8), its pages still busy
 over can only be made after a finish, so no one has those bytes yet. A 3D game's PRIMs each reach the whole scissor
 rectangle; told at every PRIM, that was 2.7 ms a frame of Midnight Club 3's race on the RP6.
 
-**Block transfers** go through memory for now: a transfer reading or writing pages the renderer owns finishes it
-first, then copies in memory, and the targets it wrote over are filled afresh. Transfers between targets on the GPU
+**Block transfers** go through memory for now: a transfer reading pages the renderer has drawn in finishes it first,
+then copies in memory. What it writes whole over the GPU's pixels is memory's at once (part 65: `overwritten()`,
+`Target::dead`): not put back, and filled again from memory before a PRIM draws over it or it's copied, shown or moved,
+so the write waits for nothing (God of War streams textures and palettes over rows of its frame buffers). The CPU's
+stores likewise (`Memory::vramStoring`: Liberty City Stories writes a display list over a picture the GPU drew, which
+the GE then reads); a store or a transfer over part of a pixel finishes first. Transfers between targets on the GPU
 are on the list below.
 
 ### Render to texture
@@ -209,12 +228,15 @@ them waits for the read back. Instead, before decoding, the GE asks the renderer
 its pages are all one target's (the newest pixels on the GPU), its format is the frame buffer's own (5650, 5551, 4444
 or 8888, not swizzled, not a palette's indices), its row width is the target's, and it starts inside the target. Then
 the GE doesn't decode it, and the renderer copies the part of the target the texture covers into a texture of its own
-on the GPU, in order with the draws, for the PRIM to sample. One copy is kept for each target and size, and taken
-again when the place is another or the target has changed since; the draws before sample it as it was, as the GPU runs
-the commands in order. Taken again from the same place, only the part of the target changed since is copied, into its
-place in the copy (part 63): each target gathers the rectangle its pixels changed in (a PRIM's corners and a pixel
-more each way, for a corner's float a hair off, inside its scissor; a mesh's whole scissor; rows filled from memory),
-which its copies hear of as one is taken. Killzone's menu blurs a strip in the 32 unused columns right of its picture
+on the GPU, in order with the draws, for the PRIM to sample. One copy is kept for each target and place (part 65; for
+each size before), serving the PRIMs that take as much of it or less, each held to what it takes (`Push::held`), and
+made again to the next power of two for one that takes more (God of War draws a picture back over the screen in 272
+tiles a time, each reaching further); it's taken again where the target has changed since; the draws before sample it
+as it was, as the GPU runs the commands in order. Taken again from the same place, only the part of the target changed
+since is copied, into its place in the copy (part 63): each target gathers the rectangle its pixels changed in (those
+with one of the GPU's samples inside a PRIM's corners' extent, a 64th of a pixel more each way, inside its scissor:
+part 65's, where part 63 took a pixel more each way; a mesh's whole scissor; rows filled from memory), which its copies
+hear of as one is taken. Killzone's menu blurs a strip in the 32 unused columns right of its picture
 back and forth, each 3D PRIM drawing half the strip from the other half of the frame buffer it draws into, 1,100 times
 a frame: each was a copy of the whole 512x512 picture, now of the strip's half. At most 32 are kept, the one unused
 longest let go for another, and one unused for 16,384 PRIMs goes too, so a game that samples its frame buffer from a

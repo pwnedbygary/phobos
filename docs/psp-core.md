@@ -7841,3 +7841,219 @@ are the same from both runners.
   syms.py, dsos.py, kernelcallers.py; the logging patches copylog-, xferlog-, whylog-, ptrlog-patch.py; late4x-patch.py
   the runner's 4x; acc.sh and cmp.py the accuracy; mutate.sh the broken versions; soft-hashes.sh). Nothing of it is
   left on the RP6.
+
+## Part 65: God of War in Vulkan without waiting for the GPU, and part 63's open risks
+
+On branch `cursor/psp-gow-vk-2b67`, on top of `e9c98f3b9` (`cursor/psp-vk-speed6-2b67`, PR #198's). The task: God of
+War playable in Vulkan on the RP6, its 130-320 finishes a frame cut, both Vulkan modes' pictures as they were and their
+accuracy against the software renderer no worse; part 63's open risks closed (the drawing threads' settle and the
+GPU's pages, Peace Walker's states, no GPU test in CI); WipEout's and LCS's waits if there was time. The software
+renderer untouched. Clean room: no PPSSPP code was copied or translated, and JPCSP's wasn't read. Save states are
+unchanged (StateVersion 23): nothing new is saved (a state finishes the GPU first, and the renderer forgets its targets
+when one is loaded).
+
+### Where God of War's time went
+
+The base's renderer with each finish's cause logged (a scratch patch), on part 61's two scenes (the menu after the boot,
+and a battle), 150 frames each: 129 finishes a frame in the battle and 322 in the menu, the emulation thread waiting
+for the GPU 105 and 199 ms a frame (Turnip, accurate), 2,382 render-to-texture copies and 105 decoded textures a frame
+(913 and 215 in the menu), and no frame shown from the GPU. God of War draws its scene eight times between frames
+shown, and its effects into small frame buffers that share pages:
+- Four 5650 frame buffers 64 pixels wide side by side in rows of 1,024 pixels (at 0x161800, 0x161880, 0x161900 and
+  0x161980), and 8888 ones in rows of 512 over the same memory (0x161800, and a row down 0x162000, 0x162400 and
+  0x162600 side by side). Each was a
+  target of its own: drawing into one after another finished (two targets over the same pages), and so did a texture
+  read across them.
+- The same bytes drawn as 5650 and then as 8888, and read as either: a finish at each switch.
+- Textures and palettes streamed into VRAM by block transfers over rows of frame buffers the GPU had drawn (0x18a000
+  on): a finish before each.
+- The picture it shrinks the screen into, drawn back over the screen in 272 tiles a time, each reaching further: a copy
+  each, and the copies thrown out among four places.
+- And the GE reads its vertices from VRAM, 700,000 a frame, in pages the GPU had drawn in: each read asked
+  `drawnOver()`, which looked through every target's rows.
+
+### What was done
+
+1. **A PRIM the renderer refuses is drawn at once** (`draw.cpp`; part 63's open risk). With the drawing threads on, a
+   refused PRIM (rows past a target's 512, no room on the GPU) could wait in the threads' batch while later PRIMs went
+   to the GPU. The risk was real, and the new test failed three ways on the base: the GPU filled its target from memory
+   before the batch had drawn there and put those older rows back over the refused PRIM's pixels at its next finish;
+   and the batch's settle at the next list's start gave every busy page back to the CPU, the GPU's too, so a load found
+   memory's older bytes, and a store was put back over at the finish. Drawn at once, no batch is launched while the GPU
+   owns pages.
+2. **Frame buffers side by side are one target** (`targetFor()`): a frame buffer is part of the target of its row width
+   and format that starts where its page does, where a page holds whole rows (rows whose bytes divide 4,096, from VRAM's
+   start), else where its own row does, at a row and column of it. Dithering starts at the frame buffer's own first row
+   (`Push::origin`; its columns start on 16 bytes, a whole number of the matrix's four). A PRIM reaching past the rows'
+   end (where the PSP's addresses run on into the next row) or the last row, or drawn with its depth buffer, keeps a
+   target of its own. So drawing into one after another, and a texture read across them, put nothing back.
+3. **A copy kept for its place** (`textureFor()`): a render-to-texture copy is kept for its target and place and serves
+   the PRIMs that take as much of it or less, each held to what it takes (`Push::held`, in `draw.frag`'s fetch); one
+   that takes more has it made again, to the next power of two. The pixels a PRIM changes are those with one of the
+   GPU's samples inside its corners' extent (`reached()`: each of the PSP's pixels scale x scale of them, a 64th of a
+   pixel more each way for the GPU's rounding), not a pixel more each way, so a tile drawn beside a copy's place
+   doesn't change it. The 272 tiles take a few copies, not 272.
+4. **Pixels moved between targets on the GPU** (`movable()`, `move()`, `Command::Move`, `move.frag`): where a PRIM's
+   pages hold another target's pixels and the rows are the same bytes (the same row width in bytes, pages of whole
+   rows, rows starting at the same byte), they're drawn into its target on the GPU as a finish and a fill from memory
+   would leave them: any of the four formats into any (a 16-bit format's bits as memory has them, the stencil from its
+   alpha), at any scale. A texture across two targets is moved into the one of its own format first. (Each move is a
+   draw of its own: MoltenVK lost the stencil's passes unless the pipeline, the descriptor set and the push constants
+   were bound again after `vkCmdClearAttachments`.)
+5. **Bytes memory has the newest of** (`overwritten()`, `revive()`, `Target::dead`): bytes a block transfer writes whole
+   over the GPU's pixels are memory's at once: not put back, and filled again before a PRIM draws over them or they're
+   copied, shown or moved; the transfer waits for nothing for them. Memory's bytes beside the GPU's pixels (part 52's),
+   and those of pages written while the target hadn't drawn in them, are filled again likewise (16 ranges at most a
+   target) instead of the whole target afresh after a finish.
+6. **`drawnOver()` asks each page's owner** (`owners[]`, `clean[]`): whether the owner has drawn any of a page's bytes
+   is kept until something is drawn or owned afresh (`drawnSerial`), so each of the GE's vertex reads looks at a page:
+   the emulation thread 169 → 143 ms a frame in the battle on the M1, the battle on Turnip 9.5 → 11.5 frames a second.
+7. **The CPU's stores over the GPU's pixels** (`Memory::vramStoring`): a store into busy VRAM tells the GE first, and
+   the renderer gives up the pixels it covers whole, as it does a transfer's (item 5), so the store doesn't wait, nor do
+   reads of what it wrote. Liberty City Stories writes an 8 KB display list over a 64x64 picture the GPU drew, every
+   fourth frame, and the GE then reads it: its city and woods 76 finishes in 300 frames → 1 (at the start), its frames
+   as before. A byte into an 8888 pixel is only part of it, and still finishes. (Part 63 had tried taking the stores
+   into the target as uploads, which left the GE's read of the list to finish.)
+8. **WipEout's** blur spilling 5 rows into the next buffer's first rows is a move now (item 4): 600 finishes in 300
+   frames → 300. The one left is the CPU's depth read through VRAM's fourth copy, which lands on the bloom's pixels: the
+   CPU reading what the GPU drew needs it drawn.
+9. **Peace Walker's states** (part 63's "the state can't be loaded"): the program, its disc and the memory stick were
+   the states' own, but the bench scripts' fonts folder on the RP6 was gone, and a state whose game has the system's
+   font library open (sceFontNewLib, an open font) needs the very fonts it had, which the kernel refused without a
+   word. It now says so, naming the font (`fontReloaded()`), and the runner prints the kernel's last note with its
+   refusal. The scenes' scripts point at fonts kept beside the harness on the RP6 now, and the title scene is measured
+   below.
+10. **CI** (`.github/workflows/psp-core.yml`): the system tests' job installs Mesa's Vulkan driver that draws on the
+   CPU (lavapipe) and lets the renderer take it (`PSP_GPU_ON_CPU`), so the GPU groups run there instead of skipping.
+   The job hadn't built since part 55's and part 58's tests (the TLS pools', scePauth's): GCC 13, ubuntu-latest's,
+   refuses a local constant as a lambda's default argument, even a static constexpr one (clang takes it); those two
+   no longer do. On lavapipe the pipeline cache's data is as big with pipelines as without (80 bytes), so the cache
+   test checks its sizes only where they grow. What it costs: the GPU groups take 7.3-7.7 minutes there under the
+   sanitizers (llvmpipe, LLVM 20) and installing Mesa 11 seconds, so the system job goes from about 10 minutes (the
+   tests' build 9.5 of them) to about 18. Three runs on the branch: the first failed on that size check, the next two
+   passed (420 groups each).
+
+### Numbers
+
+The RP6 (Adreno 740), the runner from adb's shell, its emulation thread pinned to the X3 (cpu7) as Phobos pins it,
+late frames and the pipelines kept, as part 63; frames a second over 150 frames from each scene's state (300 for the
+bench scenes), the means of two rounds with the base (`e9c98f3b9`) and the branch taking turns to go first. The branch
+here is `6fb6452c4`; the code after the review's fixes, run again, was within 1% of it in God of War's two scenes at 1x
+in every configuration, and within 0.5% in MC3's menu, LCS's city and WipEout, its finishes the same.
+
+God of War, finishes in 150 frames 19,309 → 2 in the battle and 48,312 → 2 in the menu, every configuration (the two
+at the start); the emulation thread's wait for the GPU 72-171 ms a frame → 0.01-0.04:
+
+| Scene | Turnip accurate | Turnip fast | Qualcomm accurate | Qualcomm fast |
+| --- | --- | --- | --- | --- |
+| Battle, 1x | 3.97 -> 11.82 (x3.0) | 4.51 -> 11.92 (x2.6) | 3.71 -> 10.91 (x2.9) | 3.67 -> 10.93 (x3.0) |
+| Menu, 1x | 2.08 -> 8.50 (x4.1) | 2.30 -> 8.66 (x3.8) | 2.02 -> 7.54 (x3.7) | 2.05 -> 7.61 (x3.7) |
+| Battle, 4x | 1.66 -> 5.49 (x3.3) | 1.70 -> 9.79 (x5.8) | 1.46 -> 7.08 (x4.9) | 1.44 -> 6.49 (x4.5) |
+| Menu, 4x | 0.76 -> 1.72 (x2.3) | 1.00 -> 2.22 (x2.2) | 0.75 -> 1.98 (x2.6) | 0.81 -> 1.90 (x2.3) |
+
+At 1x the emulation thread is now the bound: 83-91 ms a frame in the battle, 115-132 in the menu, about the same in fast
+mode, where the GPU transforms the 3D. At 4x the GPU is: the emulation thread waits for a slot 44-92 ms a frame in the
+battle (3-4 in Turnip's fast mode) and 260-380 in the menu (see "Left"). Every frame is shown from the GPU (150 in 150;
+none before). Per frame on Turnip, the battle's copies 2,382 → 121 and decoded textures 105 → 0.5, with 112 moves; the
+menu's copies 913 → 242, textures 215 → 0.2, with 376 moves and 404 uploads.
+
+The bench scenes at 1x, the same way (300 frames):
+
+| Scene | Turnip accurate | Turnip fast | Qualcomm accurate | Qualcomm fast |
+| --- | --- | --- | --- | --- |
+| Killzone, menu | 48.6 -> 49.2 | 72.9 -> 72.6 | 42.7 -> 43.0 | 42.6 -> 43.0 |
+| Midnight Club 3, menu | 111.1 -> 110.0 | 115.2 -> 113.7 | 105.0 -> 98.8 (-6%) | 108.7 -> 101.9 (-6%) |
+| Midnight Club 3, race | 59.0 -> 59.0 | 65.1 -> 65.3 | 56.4 -> 56.3 | 61.6 -> 61.7 |
+| Liberty City Stories, city | 92.8 -> 97.5 (+5%) | 105.4 -> 112.0 (+6%) | 88.4 -> 92.9 (+5%) | 100.5 -> 106.1 (+6%) |
+| Liberty City Stories, woods | 115.6 -> 129.8 (+12%) | 139.9 -> 150.7 (+8%) | 115.9 -> 122.9 (+6%) | 131.6 -> 140.8 (+7%) |
+| WipEout Pure, race | 68.9 -> 93.4 (+36%) | 84.8 -> 95.1 (+12%) | 79.3 -> 88.4 (+12%) | 79.1 -> 88.2 (+12%) |
+| Peace Walker, title (2D) | 1104 -> 1115 | 1135 -> 1141 | 1065 -> 1020 (-4%) | 1065 -> 1027 (-4%) |
+| Lumines, demo (2D) | 910 -> 820 | 808 -> 906 | 829 -> 815 | 824 -> 816 |
+
+The scenes that finished are faster: LCS's two (76 finishes in 300 frames -> 2) and WipEout (600 -> 300). MC3's menu
+is 6% slower on Qualcomm's driver and 1% on Turnip, in both rounds: its texture running into the frame buffer below
+(part 63's) is now moved into the first target and, as the PRIM draws below, back (2 moves a frame, where part 63
+copied the second part from the target below), and Qualcomm's driver takes about 0.25 ms to record a move. Trying the
+two-part copy first took God of War's battle from 121 copies a frame to 12,000 (a texture over two targets isn't a
+copy kept, and God of War's 272 tiles each took one), so the order stays. Peace Walker's title on Qualcomm's driver
+records the same commands 0.04 ms a frame slower (0.12 -> 0.16; not looked into). Lumines' runs are 100 frames a
+second apart from one to the next, as in part 63.
+
+### Accuracy
+
+Part 49's method, 10 frames of each scene from its state, on the RP6: every Vulkan frame of the branch is byte for byte
+the base's, in the seven bench scenes, Peace Walker's title and God of War's two, in all four configurations (400
+frames; the last code's too, after the review's fixes). So the accuracy is the base's exactly; against the software
+renderer, pixels identical in Turnip's accurate mode / its fast / Qualcomm's accurate / its fast: God of War's battle
+79.5 / 7.4 / 7.4 / 7.4%, its menu 80.7 / 16.6 / 16.6 / 16.6%, Peace Walker's title 100.0 / 40.4 / 40.4 / 40.4% (the
+other scenes as part 63 has them). On the M1, LCS's two scenes and WipEout, 40 frames in both modes, byte for byte the
+base's too.
+
+### Checks
+
+- Software untouched: the measure harness's 137 pictures byte for byte the base's; the bench scenes', Peace Walker's
+  title's and God of War's two scenes' every frame (picture and VRAM) and end state the same from the base's runner
+  and the branch's, at 7 and 1 threads (300 frames each, God of War's menu 60 and battle 150), but MC3's menu's end
+  state, which differs from run to run of the base's own runner too (its frames don't). Outside the GPU's code, what
+  changed acts only with a hardware renderer on (a refused PRIM, item 1; the hooks it hears of transfers and stores
+  through, items 5 and 7), or only when a state is refused (the kernel's note, item 9).
+- `tests/psp/run-tests.sh` (sanitizers on): 421 groups, 0 failures; eight new: "gpu a PRIM it refuses among the
+  drawing threads" (item 1's three failures on the base), "gpu the same memory as frame buffers of other formats and
+  places: moved on the GPU" (8888, 5650 over the same bytes, 8888 a page down, 5551, 4444; at 1x, 2x and 3x), "gpu frame
+  buffers side by side in one target's rows" (four 5650 ones and one a row down, each dithered from its first row, a
+  texture across the four; a PRIM past the rows' end and one with its depth buffer each a target of its own), "gpu a
+  block transfer over pixels it drew", "gpu the CPU's stores over pixels it drew" (words over two rows, halfwords over
+  5650 pixels, nothing finished and read again without a finish; a byte into an 8888 pixel finishing; through VRAM's
+  third copy as through its first, its second finishing, a 17th range apart finishing), "gpu pixels moved over bytes
+  memory has the newest of" (the review's: five ways a move's target kept dead or beside ranges over the pixels it
+  moved in, or grew over), "gpu memory's bytes in its pages taken again, not the target afresh", and "gpu a texture's
+  place taken by tiles reaching further" (few copies, each tile held to what it takes, at 1x, 2x and 3x); each against
+  the software renderer's memory. `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh`
+  307 checks, 0 failed. In CI (GCC 13, lavapipe): 420 groups, 0 failures, in the two runs before the review's
+  fixes.
+- The GPU tests built for Android pass on the RP6 on Turnip and on Qualcomm's driver (30 groups each; one skips itself
+  on Qualcomm's, which doesn't read the frame buffer). GCC 11 (ubuntu:22.04) compiles `gpu.cpp` (with `vulkan.cpp`)
+  at -O1, -O2 and -O3 with -Wall -Wextra -Werror, and the kernel and the changed tests; the GE likewise but for twelve
+  maybe-uninitialized warnings in `four.cpp` (part 61's, the base's the same twelve). GCC 13 (ubuntu:24.04, CI's)
+  compiles every tests/psp file with -Werror.
+- Broken versions each fail a test: a refused PRIM deferred again (item 1's group), dead bytes put back at a finish
+  (the transfer and store groups, and the samples'), `drawnOver()`'s kept answer not renewed when a target draws more
+  in a page (the transfer group), moves turned off (the moves group, and part 63's texture from two frame buffers), the
+  CPU's stores not given up (the stores group: finishes where none are wanted). A copy not held to what a tile takes
+  isn't caught: the tiles' texels 1:1 at the copy's resolution sample none past what they take. (Three of these got past
+  the groups as first written, which are now as above.) The review's fixes likewise: a move filling none of its
+  target's ranges, or only those in the box with `begin()`'s check after its moves gone too, and a move while the
+  target's beside ranges are merged, each fail the new group. (On a texture's path, where the move's own check is the
+  only one, no variant grows the drawn rectangle over bytes beside it: that check alone gone isn't caught there.)
+- An independent review of the branch found one correctness bug: a move left its target's dead and beside ranges over
+  the pixels it moved in, so a finish skipped them, the CPU read memory's older bytes without one, or a later fill put
+  memory's over them (an 8888 frame buffer and a 5650 one over the same bytes, the CPU's word stored over both, the 5650
+  drawn over the word, the 8888 drawn in that page again). Fixed: the ranges are filled before the move, which puts the
+  newer pixels over them. A delta review found the same for beside bytes a move grows the drawn rectangle over, and a
+  finish then put back over: fixed in the move and in `begin()` after its moves, and a move is refused while those
+  ranges are merged. Its other points were taken (the kernel's notes through `note()`, `movable()`'s box set on entry,
+  the test gaps above, the wording), but one, left below: frame buffers shown from inside a target.
+
+### Left, and why
+
+- **God of War** is now the emulation thread's at 1x (83-132 ms a frame on the RP6, the same in fast mode, where the
+  GPU transforms the 3D): the scene is set up eight times a frame. Not profiled here. At 4x it's the GPU's, the menu
+  most (1.7-2.2 frames a second): a frame of it is 376 moves, 404 fills from memory and 242 copies, each 16 times the
+  pixels it is at 1x, and each move a render pass of its own (the colors and the stencil through staging pictures, then
+  a draw of the colors and eight of the stencil's bits). Not measured further; moves that leave the stencil alone where
+  the target's format has none (5650), or that set it in one draw where the driver can (`VK_EXT_shader_stencil_export`),
+  are where to look.
+- **A frame buffer shown from inside a target** (a row or a column of one that starts on its page, in rows that fill
+  pages) isn't shown from the GPU: `shownTarget()` wants a target starting where the frame buffer does, so the host
+  finishes and reads memory each frame, as for any frame the GPU can't show. The review's; none of the bench scenes
+  shows one (theirs start on pages, as frame buffers 512 pixels wide and 272 rows tall do).
+- **MC3's menu's** two moves a frame (6% slower on Qualcomm's driver, above): a cheaper move, or a copy of a texture
+  over two targets kept as copies of one target are, would take it back.
+- **WipEout's** one finish a frame, the CPU's depth read on the bloom's pixels (item 8): the GPU's depth isn't read
+  back, so the game gets memory's either way; the finish is for the color it reads there.
+- **Killzone's menu at 4x** (part 63's) and a target's one rectangle of changes stand. Dead and beside ranges are 16 a
+  target; more of them finish, or fill the target afresh.
+- Scratch: `~/phobos-work/scratch/gowvk` (build.sh, run-host.sh; why-patch.py, the finishes' causes; speed.sh,
+  session.sh, sess.py; acc.sh and cmp.py; measure.sh, soft-all.sh; gcc11.sh; ci-lavapipe.sh, lavapipe in a container;
+  gpu-tests, the GPU tests for Android). Nothing of it is left on the RP6 but the fonts folder beside the harness,
+  which Peace Walker's scenes need.
