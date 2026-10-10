@@ -507,9 +507,16 @@ struct GE {
 
   //Drawing on several threads (threads.cpp). While the GE runs a list, the primitives it meets wait in a batch,
   //set up, and are drawn together, in bands of rows shared out among the threads, before anything could see them.
+  //The rows in a band: rows 0-3, 4-7 and on. Smaller bands share a batch out more evenly: a thread on a slow core (the
+  //RP6's little ones) taking one of its last keeps the others waiting less, though a job is set up again for each
+  //band it reaches. (On the RP6 at 7 threads, against bands of 8 rows, both listed and with block transfers waiting
+  //only for what they touch: God of War's battle drew 36% faster, LCS's city 13%, its woods 6%, MC3 the same:
+  //docs/psp-core.md, part 61.)
+  static constexpr s32 BandRows = 4;
   struct Batch {
     std::deque<Look> looks;   //its primitives' settings, and their jobs in order
     std::vector<Job> jobs;
+    std::vector<std::vector<u32>> bandJobs;  //for each band (of rows 0-1023), its jobs reaching it, in order
     u64 work = 0;             //its pixels, roughly (its jobs' boxes)
     s32 top = 0, bottom = -1;           //its rows
     bool targeted = false;              //its render target: every primitive in a batch draws into the same one
@@ -544,7 +551,6 @@ struct GE {
     bool quit = false;
     u64 shared = 8192;        //a batch with fewer pixels is drawn on the GE's thread alone (tests may make it 0)
   } drawing;
-  static constexpr s32 BandRows = 8;  //the rows in a band
 
   //A hardware renderer (ge/gpu, docs/psp-gpu-renderers.md): the GPU's own rasterizer, texture units and blending
   //drawing the primitives in place of the software renderer, or none. The GE goes on doing everything up to the
