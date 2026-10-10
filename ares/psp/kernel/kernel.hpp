@@ -1815,6 +1815,11 @@ struct Kernel {
   auto sceMt19937Init() -> void;
   auto sceMt19937UInt() -> void;
 
+  //p3da.cpp: sound channels mixed into stereo (sceP3da)
+  auto sceP3daBridgeInit() -> void;
+  auto sceP3daBridgeCore() -> void;
+  auto sceP3daBridgeExit() -> void;
+
   //pauth.cpp: data a game keeps encrypted with a key of its own (scePauth)
   auto scePauth_98B83B5D() -> void;
 

@@ -40,6 +40,7 @@ namespace ares::PlayStationPortable {
 #include "messages.cpp"
 #include "audio.cpp"
 #include "sas.cpp"
+#include "p3da.cpp"
 #include "codec.cpp"
 #include "mpeg.cpp"
 #include "psmf.cpp"
@@ -349,6 +350,9 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceSasCore",        "__sceSasRevParam",              &Kernel::__sceSasRevParam);
   add("sceSasCore",        "__sceSasRevEVOL",               &Kernel::__sceSasRevEVOL);
   add("sceSasCore",        "__sceSasRevVON",                &Kernel::__sceSasRevVON);
+  add("sceP3da",           "sceP3daBridgeInit",             &Kernel::sceP3daBridgeInit);
+  add("sceP3da",           "sceP3daBridgeCore",             &Kernel::sceP3daBridgeCore);
+  add("sceP3da",           "sceP3daBridgeExit",             &Kernel::sceP3daBridgeExit);
   add("sceSuspendForUser", "sceKernelPowerTick",            &Kernel::sceKernelPowerTick);
   add("sceSuspendForUser", "sceKernelPowerLock",            &Kernel::sceKernelPowerLock);
   add("sceSuspendForUser", "sceKernelPowerUnlock",          &Kernel::sceKernelPowerUnlock);
