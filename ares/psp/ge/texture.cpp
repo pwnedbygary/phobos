@@ -285,13 +285,31 @@ static auto vramSpan(u32 address, u32 size, u32& first, u32& last) -> bool {
   return true;
 }
 
+//The bytes of VRAM a texture's texels are read from (offsets in VRAM): its first rows, each rowBytes long, pitch apart
+//from first; or (rows 0) every byte from first to last, where they aren't laid out so (swizzled, DXT, a row's
+//texels more than the rows' pitch, through VRAM's copies that rearrange it, running past VRAM's end).
+struct TexelRows { u32 first, last, pitch = 0, rowBytes = 0, rows = 0; };
+
 //Whether a primitive drawing with these settings, its pixels inside left-right and top-bottom (in the scissor
-//rectangle), may write anywhere in VRAM from first to last (inclusive): those pixels' bytes in its frame buffer,
-//row by row (a texture in the unused columns right of the picture isn't drawn over), and its depth buffer's, when
-//it writes depth (as a whole: the GE reaches it with each 16 KiB rearranged, memory.hpp).
-static auto drawsOver(const GE::PixelState& p, u32 first, u32 last, s32 left, s32 top, s32 right, s32 bottom)
+//rectangle), may write any byte its texels are read from: those pixels' bytes in its frame buffer, row by row,
+//against the texture's rows (a texture beside the picture in the same rows, or in the unused columns right of it,
+//isn't drawn over), and its depth buffer's, when it writes depth (as a whole: the GE reaches it with each 16 KiB
+//rearranged, memory.hpp), against all of the texture's span.
+static auto drawsOver(const GE::PixelState& p, const TexelRows& texels, s32 left, s32 top, s32 right, s32 bottom)
   -> bool {
   if(left > right || top > bottom) return false;
+  u32 first = texels.first, last = texels.last;
+  //whether the bytes from s to e (inclusive, s no more than e) are any texel's: in the texel row at or before s, or
+  //reaching the next one
+  auto meets = [&](u32 s, u32 e) {
+    if(e < first || s > last) return false;
+    if(!texels.rows) return true;
+    u32 v = s < first ? 0 : (s - first) / texels.pitch;
+    if(v >= texels.rows) return false;
+    u32 start = first + v * texels.pitch;
+    if(s < start || s - start < texels.rowBytes) return true;
+    return v + 1 < texels.rows && e >= start + texels.pitch;
+  };
   auto overlaps = [&](u32 from, u32 to, bool depth) {  //from VRAM offset from to to, before wrapping at its end
     if(to - from >= Memory::VRAMSize - 1) return true;
     from &= Memory::VRAMSize - 1, to &= Memory::VRAMSize - 1;
@@ -308,7 +326,7 @@ static auto drawsOver(const GE::PixelState& p, u32 first, u32 last, s32 left, s3
     u32 segment = (right - left + 1) * bytes;  //a row's bytes, from its first pixel's
     u32 lowest = first >= segment - 1 + from ? (first - (segment - 1) - from) / rowBytes : 0;
     for(u32 row = lowest; row <= u32(bottom - top) && from + row * rowBytes <= last; row++) {
-      if(from + row * rowBytes + segment - 1 >= first) return true;
+      if(meets(from + row * rowBytes, from + row * rowBytes + segment - 1)) return true;
     }
   }
   bool depth = p.clear ? p.clearDepth : p.depthWrite;
@@ -341,7 +359,16 @@ auto GE::decode(Look& look, const Region& region, u32 rows, bool allowDefer,
   textureBytes(t, rows, low, high);
   if(!memory.reaches(low, high - low)) return;
   if(u32 first, last; vramSpan(low, high - low, first, last)) {
-    bool own = drawsOver(pixel, first, last, region.left, region.top, region.right, region.bottom);
+    TexelRows texels{first, last};
+    u32 seen = (t.address & 0x1fff'ffff) - Memory::VRAMBase;
+    if(!t.swizzled && t.format < 8 && !(seen / Memory::VRAMSize & 1)) {  //(VRAM's plain copies)
+      u32 bits = TexelBits[t.format], pitch = t.bufferWidth * bits / 8;
+      u32 rowBytes = (std::min<u32>(t.width, 512) * bits + 7) / 8;
+      if(rowBytes && rowBytes <= pitch && first + (rows - 1) * pitch + rowBytes - 1 <= last) {
+        texels = {first, last, pitch, rowBytes, rows};
+      }
+    }
+    bool own = drawsOver(pixel, texels, region.left, region.top, region.right, region.bottom);
     if(own && !(copyDraws && copyDraws())) return;
     auto over = [&](const Batch& batch) {
       for(u32 page = first >> 12; page <= last >> 12; page++) {

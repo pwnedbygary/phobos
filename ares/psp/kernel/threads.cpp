@@ -282,6 +282,7 @@ auto Kernel::waiterLeft(Wait wait, u32 id) -> void {
 auto Kernel::untilNextEvent() const -> u64 {
   u64 next = std::min({nextVblank, nextAudioEvent(), nextAsyncEvent(), nextTimerEvent()});
   if(controller.cycle) next = std::min(next, controller.nextSample);
+  if(geFinishDue && geDoneAt > cycles) next = std::min(next, geDoneAt);  //(due already: taken once it may be)
   for(auto& [uid, thread] : threads) {
     if(thread->status == Status::Waiting && thread->wakeAt) next = std::min(next, thread->wakeAt);
   }
@@ -296,7 +297,7 @@ auto Kernel::idle(u64 end) -> bool {
   if(interrupting || (!calls.empty() && interruptsEnabled)) return true;
   //(a file's asynchronous request being done may wake a thread: one waiting for it, or through its callback; and so
   //may an alarm's or a virtual timer's handler)
-  bool timed = geBusy || vblankHandlers() || nextAsyncEvent() != ~0ull || nextTimerEvent() != ~0ull;
+  bool timed = geBusy || geFinishDue || vblankHandlers() || nextAsyncEvent() != ~0ull || nextTimerEvent() != ~0ull;
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Waiting) continue;
     if(thread->wakeAt || thread->wait == Wait::Vblank || thread->wait == Wait::Controller) timed = true;

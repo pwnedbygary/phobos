@@ -850,8 +850,9 @@ static auto draw3dBoundingBoxes() -> void {
 //q, or reaching far past the picture), triangles, strips, fans and sprites, with random settings of all the
 //pixel pipeline and textures read, drawn by two machines alike but for the four-pixel path, over the same random
 //VRAM (colors, stencils and depths); the frame and depth buffers must come out the same, byte for byte, and in the
-//end all of VRAM. Now and then the settings send a primitive a pixel at a time (the stencil test, a logic operation,
-//the depth buffer on the frame buffer, a texture where it draws), which must be the same too.
+//end all of VRAM. A quarter of them test the stencil, with every comparison and operation. Now and then the settings
+//send a primitive a pixel at a time (a logic operation, the depth buffer on the frame buffer, a texture where it
+//draws), which must be the same too.
 static auto draw3dFours() -> void {
   constexpr u32 Width = 64, Height = 40, Depth = 0x10'0000, Area = 0x0900'0000, AreaSize = 1 << 20;
   constexpr u32 Bits[8] = {16, 16, 16, 32, 4, 8, 16, 32};
@@ -901,7 +902,7 @@ static auto draw3dFours() -> void {
     set(GE::DepthTestEnable, chance(60));
     set(GE::DepthTest, below(8));
     set(GE::DepthMask, chance(30));
-    set(GE::StencilTestEnable, chance(8));
+    set(GE::StencilTestEnable, chance(25));
     set(GE::StencilTest, fields({{0, 8}, {8, 256}, {16, 256}}));
     set(GE::StencilOperation, fields({{0, 6}, {8, 6}, {16, 6}}));
     set(GE::AlphaBlendEnable, chance(50));
@@ -1038,6 +1039,83 @@ static auto draw3dFours() -> void {
   CHECK(fours.memory.vram == single.memory.vram, true);
 }
 
+//A renderer that draws nothing, for what the GE does before it hands primitives over; transforms: it takes 3D
+//triangles untransformed, as Vulkan (fast) does (meshes()).
+struct NothingDrawn : GE::Renderer {
+  bool transforms = false;
+  auto ready() const -> bool override { return true; }
+  auto begin(GE&, const GE::Look&, bool, const GE::Region&) -> bool override { return true; }
+  auto triangle(const GE::Vertex&, const GE::Vertex&, const GE::Vertex&) -> void override {}
+  auto sprite(const GE::Job&) -> void override {}
+  auto point(const GE::Vertex&) -> void override {}
+  auto line(const GE::Job&, const std::vector<GE::LinePixel>&) -> void override {}
+  auto submit(GE&) -> void override {}
+  auto finish(GE&) -> void override {}
+  auto written(GE&, u32) -> void override {}
+  auto forget(GE&) -> void override {}
+  auto holds(GE&, const GE::Sampler&, u32, u32) -> bool override { return false; }
+  auto drawnOver(GE&, u32, u32) -> bool override { return false; }
+  auto besideChanged(GE&, u32, u32) -> void override {}
+  auto meshes(GE&, const GE::Transform&, u32) -> bool override { return transforms; }
+};
+
+//What a primitive costs the GE's time (GE::owe(), for kernel/ge.cpp's geTime()), counted as it's set up, the same
+//whichever renderer then draws it: the software renderer, one that draws nothing, and one that transforms 3D
+//triangles itself. A triangle counts its area inside the scissor rectangle (32 pixels; a 6x6 scissor cuts its corner
+//off: 28; one of 20 cut below row 6 alone: 16.8), a sprite its rectangle there (16; one of 7x8 cut to 4x5: 20), a
+//line the pixels it lights there (8 of the 8 columns it crosses; cut, 5; leaving the rectangle across it, the 4 the
+//software renderer lights; past it, none), a point one if it's inside (3 of 4); and each set up, one primitive (the
+//point outside isn't).
+static auto draw3dTimeCounted() -> void {
+  NothingDrawn nothing, transforming;
+  transforming.transforms = true;
+  for(GE::Renderer* renderer : {static_cast<GE::Renderer*>(nullptr), static_cast<GE::Renderer*>(&nothing),
+                                static_cast<GE::Renderer*>(&transforming)}) {
+    Scene c;
+    c.ge.setRenderer(renderer);
+    auto counted = [&](u64 pixels, u64 primitives) {
+      CHECK(c.ge.owedPixels, pixels);
+      CHECK(c.ge.owedPrimitives, primitives);
+      c.ge.owedPixels = c.ge.owedPrimitives = 0;
+    };
+    u32 white = 0xffff'ffff;
+    auto triangle = [&] {
+      c.draw(GE::Triangles, {{0, 0, white, 0, 0, 0.1f}, {0, 0, white, 8, 0, 0.1f}, {0, 0, white, 0, 8, 0.1f}});
+    };
+    triangle();
+    counted(32, 1);
+    c.draw(GE::Sprites, {{0, 0, white, 2, 1, 0.1f}, {0, 0, white, 6, 5, 0.1f}});
+    counted(16, 1);
+    c.draw(GE::Lines, {{0, 0, white, 1, 1, 0.1f}, {0, 0, white, 9, 1, 0.1f}});
+    counted(8, 1);
+    c.ge.commands[GE::Scissor2] = 5 << 10 | 5;
+    triangle();
+    counted(28, 1);
+    c.draw(GE::Triangles, {{0, 0, white, 0, 0, 0.1f}, {0, 0, white, 4, 0, 0.1f}, {0, 0, white, 0, 10, 0.1f}});
+    counted(16, 1);
+    c.draw(GE::Sprites, {{0, 0, white, 2, 1, 0.1f}, {0, 0, white, 9, 9, 0.1f}});
+    counted(20, 1);
+    c.draw(GE::Lines, {{0, 0, white, 1, 1, 0.1f}, {0, 0, white, 9, 1, 0.1f}});
+    counted(5, 1);
+    c.clear();
+    c.draw(GE::Lines, {{0, 0, white, 1, 4, 0.1f}, {0, 0, white, 9, 8, 0.1f}});
+    if(!renderer) {
+      u32 lit = 0;
+      for(u32 y = 0; y < 16; y++) {
+        for(u32 x = 0; x < 16; x++) lit += c.pixel(x, y) != 0;
+      }
+      CHECK(lit, 4u);
+    }
+    counted(4, 1);
+    c.draw(GE::Lines, {{0, 0, white, 1, 8, 0.1f}, {0, 0, white, 9, 8, 0.1f}});
+    counted(0, 1);
+    c.draw(GE::Points, {{0, 0, white, 1, 1, 0.1f}, {0, 0, white, 2, 3, 0.1f}, {0, 0, white, 5, 5, 0.1f},
+                        {0, 0, white, 7, 2, 0.1f}});
+    counted(3, 3);
+    c.ge.setRenderer(nullptr);
+  }
+}
+
 auto draw3dTests() -> Tests {
   return {
     {"draw3d transform", draw3dTransform}, {"draw3d outside", draw3dOutside}, {"draw3d clipping", draw3dClipping},
@@ -1049,6 +1127,7 @@ auto draw3dTests() -> Tests {
     {"draw3d lighting specular", draw3dLightingSpecular}, {"draw3d environment map", draw3dEnvironmentMap},
     {"draw3d lines", draw3dLines}, {"draw3d bounding boxes", draw3dBoundingBoxes},
     {"draw3d four pixels at a time against one", draw3dFours},
+    {"draw3d the GE's time, any renderer", draw3dTimeCounted},
   };
 }
 

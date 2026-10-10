@@ -931,6 +931,8 @@ auto Kernel::power() -> void {
   geFinishing = -1;
   geLeft = GeBudget;
   geCommands = 0;
+  geDoneAt = 0;
+  geFinishDue = false;
   startTime = u64(std::time(nullptr)) * 1'000'000;
   trampoline();
 }
@@ -1073,6 +1075,7 @@ auto Kernel::run(u64 budget) -> u64 {
       return passed;
     }
     if(geBusy) geRun();
+    geInterrupt();
     startCall();  //a call into the program waiting its turn runs on whatever's in the CPU, a thread or nothing
     if(!current && !interrupting) {
       reschedule();
@@ -1169,7 +1172,8 @@ auto Kernel::dispatch(u32 code) -> bool {
     return true;
   }
   (this->*import.function->handler)();
-  startCall();  //what the function set off (a display list finishing) may call into the program now
+  geInterrupt();  //(a display list's FINISH, met by the GE in it)
+  startCall();    //what the function set off (a display list finishing) may call into the program now
   return true;
 }
 

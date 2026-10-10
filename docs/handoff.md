@@ -27,7 +27,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP GPU: God of War in Vulkan without waiting for the GPU; part 63's open risks closed — 2026-10-10
 
-Branch `cursor/psp-gow-vk-2b67`, on top of `e9c98f3b9` (`cursor/psp-vk-speed6-2b67`, PR #198's). docs/psp-core.md,
+Branch `cursor/psp-gow-vk-2b67`, on top of #199's `cursor/psp-gow-sw-2b67` (#198 under it; measured against #198's `e9c98f3b9`). docs/psp-core.md,
 part 65, has the evidence; docs/psp-gpu-renderers.md's "Frame buffers side by side", "Owned until needed", "Two targets
 over the same pages", "Block transfers" and "Render to texture" the design. Software untouched (its pictures byte for
 byte, every frame of the bench scenes and God of War's the same); every Vulkan frame of the seven bench scenes, Peace
@@ -61,6 +61,39 @@ PPSSPP code copied or translated, JPCSP's not read. Save states unchanged (23).
   ranges 16 a target; GCC 11's maybe-uninitialized warnings in `four.cpp` (the base's too). Scratch:
   `~/phobos-work/scratch/gowvk`; on the RP6 only the fonts folder beside the harness is left, which Peace Walker's
   scenes need.
+
+## PSP GE: God of War in the software renderer — the GE's time, its bloom batched, its stencil in fours — 2026-10-10
+
+Branch `cursor/psp-gow-sw-2b67`, on top of #198's `cursor/psp-vk-speed6-2b67` (`e9c98f3b9`). docs/psp-core.md, part 64,
+has the evidence. Clean room: pspautotests' recordings and Sony's published figures for the GE; nothing of PPSSPP's or
+JPCSP's read.
+- **Why the menu drew 28 million fours**: God of War's loop never waits for the vertical blank; it waits only in
+  sceGeListSync for the last frame's list, flips at once and queues the next whole frame. Our GE took no time, so the
+  menu drew its scene 27 times a vblank and the battle 8 (the game times itself by the clock: its speed was right).
+- **Changes** (each its own commit, with tests): a list is done for the program only once a PSP's GE would have drawn
+  it (its pixels at four a clock, or its primitives at 166/35 clocks each, at the bus's clock: Sony's peaks, so a
+  lower bound) and its FINISH comes as an interrupt (not while interrupts are held off, nor ahead of a GE callback),
+  as pspautotests' gpu/signals and gpu/ge/intrsuspend recorded; save states version 24, layouts 15-23 loading.
+  drawsOver() compares a texture's rows with the pixel rows, so God of War's bloom (levels side by side in one buffer)
+  is batched instead of drained; jobs with a deferred texture (in a batch), and with the stencil test, are drawn four
+  at a time. Pictures unchanged: the measure harness's 136 pictures byte for byte, every bench frame of commits 2-4
+  the same.
+- **Review**: an independent read-only review found two crashes (sceGeBreak(0) leaving a FINISH waiting for no list; a
+  deferred texture drawn at once four at a time with no copy) and a PAUSE's moved stall address lost; each fixed in
+  its commit with a test, with its smaller points (a line owed only its pixels inside the scissor, a list GU ends
+  reading as drawing while its FINISH waits, comments). A second review read the fixes.
+- **RP6** (fps, pinned as the app pins it; before → after): God of War's battle at 7 threads 4.67 → 8.99, its menu 1.73
+  → 22.2; at 1 thread 2.20 → 4.44 and 0.68 → 8.80. The final build: the same frames and end states as commit 4, the
+  same speed beside it in a later (slower) session.
+- **Checks**: tests/psp 417/0 (sanitized; four new groups), tests/allegrex 58/0, tests/psp/ares 307/0; each commit
+  builds and passes its groups; 47 broken versions each fail a test; the GE driver programs 9 of 22 matching (7
+  before); a state saved with a FINISH waiting carries on exactly. Library (all 266 beside the base's runner, then the
+  final runner beside that): Chains of Olympus no longer times out (its difficulty menu at 3600; 11.1 fps with all of
+  it); games show some frame a step or a few frames apart (the runner itself isn't the same from run to run), none
+  less than before.
+- **Left**: the GE's real speed (a measuring round for the owner's PSP would let the model be the PSP's rather than a
+  lower bound); God of War's battle is now its pixels and the emulation thread's setup; logic operations a pixel at a
+  time. Scratch: `~/phobos-work/scratch/gow-sw`; nothing of it left on the RP6.
 
 ## PSP GPU: Vulkan faster — copies of what changed, a texture from two frame buffers, texels kept — 2026-10-10
 

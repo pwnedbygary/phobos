@@ -1108,6 +1108,88 @@ static auto drawCopiedTexture() -> void {
   }
 }
 
+//Primitives drawing beside their texture in the same rows of a frame buffer, never into a byte of it (texture.cpp's
+//drawsOver(), row by row), as God of War's bloom does in a 512-wide buffer: a picture in columns 0-255 halved into
+//columns 256-383, that halved again into 384-447, each brought back over the one before. Such a primitive takes its
+//texture from a copy (decoded) like any other, and draws what reading it from memory as it draws gives (a machine
+//without watching(), which keeps nothing decoded), in a 16-bit and a 32-bit frame buffer, filtered, as triangle
+//strips of 16-pixel quads (God of War's) and as a sprite; and so with palette indices a byte each beside 16-bit
+//pixels, right up against them. Those some pixel of which is a texel they read are read from memory, and come out
+//the same too: a texture as wide as the rows, one whose last 8 columns are drawn over, pixels whose rows run on into
+//the next row's texels, a texture swizzled or through VRAM's second copy (whose rows aren't laid out plainly), and
+//texel rows longer than the pitch between them, the last running on under the pixels.
+static auto drawBesideTexture() -> void {
+  for(u32 format : {0u, 3u}) {
+    u32 bytes = format == 3 ? 4 : 2;
+    Canvas copied{format}, read{format};
+    read.memory.watching = nullptr;
+    std::mt19937 random{format + 11};
+    std::vector<u8> picture(512 * 64 * 4), palette(1024);
+    for(auto& byte : picture) byte = random();
+    for(auto& byte : palette) byte = random();
+    struct Case {
+      u32 texture, width, frameBuffer, drawn;  //columns: the texture's first and its width, the frame buffer's first,
+                                               //and those drawn
+      float scale;                             //texels a pixel
+      bool strip, decoded;
+      u32 kind = 0;                            //the texture's format (0: the frame buffer's), and whether swizzled
+      bool swizzled = false;
+      u32 copy = 0, pitch = 512, row = 0;      //VRAM's copy it's read through; the rows' pitch; the frame buffer's row
+      u32 height = 64;                         //the texture's
+    };
+    std::vector<Case> cases = {
+      {0, 256, 256, 128, 2, true, true}, {256, 128, 384, 64, 2, true, true}, {384, 64, 256, 128, 0.5f, true, true},
+      {256, 128, 0, 256, 0.5f, true, true}, {0, 256, 256, 128, 2, false, true},
+      {0, 512, 256, 128, 1, false, false}, {0, 256, 248, 128, 2, false, false}, {0, 64, 448, 128, 0.5f, false, false},
+      {0, 256, 256, 128, 2, false, false, 0, true}, {0, 256, 256, 128, 2, false, false, 0, false, 1},
+      {0, 512, 0, 32, 1, false, false, 0, false, 0, 256, 64},
+      {0, 256, 256, 128, 0.5f, false, false, 0, true, 0, 512, 0, 4},  //(its first 8 rows' blocks fill 4 rows)
+    };
+    if(format == 0) cases.push_back({0, 256, 128, 128, 2, false, true, 5});  //(indices: 256 bytes, beside column 128)
+    for(auto& test : cases) {
+      u32 kind = test.kind ? test.kind : format, texelBytes = kind == 5 ? 1 : bytes;
+      for(Canvas* c : {&copied, &read}) {
+        c->memory.copyIn(VRAM, picture.data(), picture.size());
+        c->memory.copyIn(Palette, palette.data(), palette.size());
+        c->ge.commands[GE::ClutAddress] = Palette & 0xff'ffff;
+        c->ge.commands[GE::ClutAddressUpper] = (Palette >> 8) & 0xf'0000;
+        c->ge.commands[GE::ClutFormat] = 1 | 0xff << 8;
+        c->ge.commands[GE::ClutLoad] = 32;
+        c->ge.loadClut();
+        c->ge.commands[GE::FrameBufferPointer] = (test.row * test.pitch + test.frameBuffer) * bytes;
+        c->ge.commands[GE::FrameBufferWidth] = test.pitch;
+        c->ge.commands[GE::Scissor1] = 0;
+        c->ge.commands[GE::Scissor2] = 31 << 10 | (test.drawn - 1);
+        c->texture(kind, test.width, test.height, test.pitch * bytes / texelBytes);
+        c->ge.commands[GE::TextureAddress0] = test.copy * Memory::VRAMSize + test.texture * texelBytes;
+        c->ge.commands[GE::TextureBufferWidth0] = 0x04 << 16 | test.pitch * bytes / texelBytes;
+        c->ge.commands[GE::TextureMode] = test.swizzled;
+        c->ge.commands[GE::TextureFilter] = 0x101;
+        c->ge.commands[GE::TextureWrap] = 0x101;
+      }
+      std::vector<V> vertices;
+      float s = test.scale;
+      if(test.strip) {
+        for(u32 x = 0; x <= test.drawn; x += 16) {
+          vertices.push_back({x * s, 0, 0xffff'ffff, float(x), 0, 0});
+          vertices.push_back({x * s, 32 * s, 0xffff'ffff, float(x), 32, 0});
+        }
+      } else {
+        vertices = {{0, 0, 0xffff'ffff, 0, 0, 0}, {test.drawn * s, 32 * s, 0xffff'ffff, float(test.drawn), 32, 0}};
+      }
+      auto pixel = copied.ge.pixelState();
+      auto texture = copied.ge.sampler();
+      GE::Look look = copied.ge.lookFor(pixel, &texture);
+      copied.ge.decode(look, GE::Region{pixel.left, pixel.top, pixel.right, pixel.bottom}, test.height);
+      CHECK(look.texture.decoded != nullptr, test.decoded);
+      copied.ge.dropTextures();  //(the draw decodes afresh)
+      copied.draw(test.strip ? GE::TriangleStrip : GE::Sprites, vertices);
+      read.draw(test.strip ? GE::TriangleStrip : GE::Sprites, vertices);
+      CHECK(copied.memory.vram == read.memory.vram, true);
+    }
+  }
+}
+
 //A sprite whose blending keeps every pixel as it was (draw.cpp's keepsPixels(): the source times a fixed 0, plus the
 //destination times a fixed 255) isn't drawn, in each frame buffer format, which leaves the picture as drawing it does:
 //as dithering by a matrix of zeros, which is drawn, leaves it. Unless reading its texture would be reported: with
@@ -1401,6 +1483,7 @@ auto drawTests() -> Tests {
     {"draw textures kept decoded, their rows", drawDecodedRows},
     {"draw textures kept decoded, their pages written", drawDecodedWritten},
     {"draw over its own texture from a copy", drawCopiedTexture},
+    {"draw beside its own texture from a copy", drawBesideTexture},
     {"draw keeping every pixel", drawKeptPixels},
     {"draw turned sprites kept decoded", drawTurnedDecoded},
     {"draw textures kept decoded against memory", drawDecodedAgainstMemory},

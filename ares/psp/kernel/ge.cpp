@@ -11,7 +11,9 @@
 //where the list had got to.
 //
 //A program sees how its lists are doing with sceGeListSync and sceGeDrawSync, and can wait there for them to finish.
-//The GE's work takes no time, so a list runs as far as it can as soon as it's queued or its stall address moves.
+//The GE runs a list as far as it can as soon as it's queued or its stall address moves, every pixel drawn there and
+//then; but the program hears that a list is done only once a PSP's GE would have drawn it (geTime()), as the GE's
+//interrupt for its FINISH is taken (geInterrupt()).
 //
 //What each call does follows uOFW's reading of the PSP's own driver (ge.c, stall.S); sceGeBreak, what callbacks see,
 //lists queued twice and the older SDKs' ways (geOldSdk()) follow what pspautotests' gpu/ge and gpu/signals recorded on
@@ -39,10 +41,12 @@ auto Kernel::geRestoreBase(u32 word) -> void {
 //Whether the GE waits at a list's stall address: the list's own, not the GE's. They differ for a paused list the GE
 //still has (on its way to a PAUSE's FINISH, or an older SDK's in its suspending signal's callback): a stall address
 //moved then stays with the list, which reads as drawing, the GE waiting where it was to stop (gpu/ge/queue2,
-//gpu/signals/handlercalls).
+//gpu/signals/handlercalls). Nor at a FINISH whose interrupt is still to come, though the GE has stopped just past it,
+//where a list GU ends has its stall address: a PSP's GE would be drawing the list still, at least till its time
+//(geInterrupt(); unmeasured).
 auto Kernel::geAtStall(u32 index) const -> bool {
   u32 stall = geLists[index].registers.stall;
-  return geRunning == s32(index) && stall && ge.list.address == stall;
+  return geRunning == s32(index) && stall && ge.list.address == stall && !geFinishDue;
 }
 
 //The GE runs its list as far as it goes: to the stall address, or through FINISHes and SIGNALs (dealt with as the
@@ -58,19 +62,21 @@ auto Kernel::geRun() -> void {
     auto& running = geLists[geRunning];
     if(running.state == GeList::State::Paused && !running.pausing) running.state = GeList::State::Running;
   }
-  while(geRunning >= 0 && !geSuspended) {
+  while(geRunning >= 0 && !geSuspended && !geFinishDue) {
     if(!geLeft) {
       geBusy = true;
       return;
     }
     u64 ran = 0;
+    ge.owedPixels = ge.owedPrimitives = 0;
     auto stop = ge.run(geLeft, ran);
     geLeft -= ran;
     geCommands += ran;
+    geTime();
     switch(stop) {
     case GE::Stop::Stalled:  return;
     case GE::Stop::Busy:     geBusy = true; return;
-    case GE::Stop::Finished: geFinished(); break;
+    case GE::Stop::Finished: geFinishDue = true; return;
     case GE::Stop::Signaled: geSignaled(); break;
     case GE::Stop::Ended:
       note("a display list ENDed without a FINISH or SIGNAL before it: the GE stopped there");
@@ -80,6 +86,39 @@ auto Kernel::geRun() -> void {
       geRunning = -1;
       return;
     }
+  }
+}
+
+//What the GE has just been given to draw (GE::owedPixels, GE::owedPrimitives) takes a PSP's GE at least this long,
+//by Sony's figures for it (its Hot Chips 2004 paper): at 166 MHz, 664 million pixels a second (four a clock) and 35
+//million polygons a second through its geometry and its setup. Those are its peaks, at the bus's clock, which is the
+//GE's (half the PLL's: 95, 111, 133 or 166 MHz, power.cpp); so it takes at least a clock for every four pixels, or
+//166/35 clocks for every primitive, whichever is longer (the two may go on at once). What no figure gives counts for
+//nothing: the commands themselves, primitives dropped before they're set up, block transfers. The GE takes it up once
+//it's done with what came before, or now.
+auto Kernel::geTime() -> void {
+  u64 pixels = ge.owedPixels, primitives = ge.owedPrimitives;
+  ge.owedPixels = ge.owedPrimitives = 0;
+  if(!pixels && !primitives) return;
+  u64 bus = std::clamp<u32>(powerState.bus, 1, 166);
+  u64 owed = std::max(pixels * 35, primitives * 664) * (CPUFrequency / 1'000'000) / (140 * bus);
+  geDoneAt = std::max(geDoneAt, cycles) + owed;
+}
+
+//The FINISH of the list the GE runs, met (geFinishDue): the GE has stopped at its END and raised its interrupt, which
+//the driver deals with (geFinished()) once the GE's time has come (geDoneAt) and an interrupt may be taken: with
+//interrupts on, no call into the program running, and none of the GE's waiting its turn (the PSP takes the GE's next
+//interrupt only once the last one's handler has returned). Till then the list reads as drawing, as pspautotests
+//recorded: a SIGNAL's callback that lets the GE go on finds its list drawing still, its FINISH run already
+//(gpu/signals/continue, simple), and with interrupts held off a list stays drawing however long the CPU spins
+//(gpu/ge/intrsuspend). It's taken at the end of a system function, or as the kernel's loop goes round; then the
+//next list runs.
+auto Kernel::geInterrupt() -> void {
+  while(geFinishDue && !interrupting && interruptsEnabled && cycles >= geDoneAt) {
+    if(std::any_of(calls.begin(), calls.end(), [](const Call& call) { return call.kind == Call::Ge; })) return;
+    geFinishDue = false;
+    geFinished();
+    geRun();
   }
 }
 
@@ -148,7 +187,9 @@ auto Kernel::geFinished() -> void {
   }
   if(list.pausing) {
     list.pausing = false;
+    u32 stall = list.registers.stall;  //(the list's own, moved while it was pausing: geAtStall())
     list.registers = ge.list;
+    list.registers.stall = stall;
     list.base = ge.commands[GE::Base];
     geRunning = -1;
     geCall(list, false, list.signalID);
@@ -495,7 +536,13 @@ auto Kernel::sceGeContinue() -> void {
 //What the lists thrown away had saved of the GE's state (sceGeListEnQueue's options) isn't put back. Their finish and
 //signal callbacks still waiting their turn are dropped, and one running returns to no GE to go on: else they'd be
 //for a list that's gone, or whose ID went to a new list, and one returning would end the new list ahead of its own
-//finish callback. Unmeasured: pspautotests doesn't record whether a PSP drops a pending callback at a break.
+//finish callback. Unmeasured: pspautotests doesn't record whether a PSP drops a pending callback at a break. A FINISH
+//the GE has run whose interrupt is still to come goes with its list in mode 1 (gpu/ge/intrsuspend: no callback once
+//interrupts are back on), and with it what the GE had left to draw. Mode 0 takes it first, as though the interrupt
+//came now, held off or not, and so the FINISH each list queued after it meets as it starts, those lists run then:
+//their pixels are drawn, and nothing of them is left for sceGeContinue to take up. With a finish callback, though,
+//the lists after it start only once that has returned: the break finds the list done (ALREADY) and breaks none of
+//them off. (Unmeasured: break's "Completed list" is done before its break, as its list draws nothing.)
 auto Kernel::sceGeBreak() -> void {
   u32 mode = arg(0), parameters = arg(1);
   if(mode > 1) return result(ErrorInvalidMode);
@@ -510,10 +557,18 @@ auto Kernel::sceGeBreak() -> void {
     geBusy = false;
     geSuspended = false;
     geFinishing = -1;
+    geFinishDue = false;
+    geDoneAt = 0;
     std::erase_if(calls, [](const Call& call) { return call.kind == Call::Ge; });
     callResumesGe = false;
     return result(0);
   }
+  while(geFinishDue) {  //(the next list may meet its own FINISH as it starts)
+    geFinishDue = false;
+    geFinished();
+    geRun();
+  }
+  if(geQueue.empty()) return result(ErrorAlready);
   u32 index = geQueue.front();
   auto& list = geLists[index];
   if(list.state == GeList::State::Paused) return result(ErrorBusy);
@@ -545,10 +600,12 @@ auto Kernel::sceGeGetMtx() -> void {
 }
 
 //Not while the GE runs a list, stalled or not: -1 then, as the PSP's driver says. Waiting for a callback to return
-//(a SIGNAL that suspends, a list's FINISH) it has stopped, and saves: pspautotests' gpu/ge/callbackstate.
+//(a SIGNAL that suspends, a list's FINISH) it has stopped, and saves: pspautotests' gpu/ge/callbackstate. So it has
+//at a FINISH whose interrupt is still to come, once the GE's time for it has come (geInterrupt()).
 auto Kernel::sceGeSaveContext() -> void {
   if(arg(0) & 3) return result(ErrorInvalidPointer);
-  if(geRunning >= 0 && !geSuspended) return result(0xffff'ffff);
+  bool stopped = geSuspended || (geFinishDue && cycles >= geDoneAt);
+  if(geRunning >= 0 && !stopped) return result(0xffff'ffff);
   geSaveContext(arg(0));
   result(0);
 }
