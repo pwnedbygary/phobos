@@ -271,7 +271,7 @@ static auto pauth() -> void {
     CHECK(plain == data, true);
     CHECK(m.notes.size(), 0);
   }
-  auto refused = [&](const std::vector<u8>& file, const u8* given, u32 size, u32 keyAt = Key) {
+  auto refused = [&](const std::vector<u8>& file, const u8* given, u32 size, u32 keyAt) {
     KernelMachine m;
     m.system.memory.copyIn(Buffer, file.data(), file.size());
     m.system.memory.copyIn(Key, given, 16);
@@ -282,15 +282,15 @@ static auto pauth() -> void {
   auto file = encrypted(0x2fd3'12f0, key);
   u8 wrong[16];
   memcpy(wrong, key, 16), wrong[15] ^= 1;
-  refused(file, wrong, file.size());
+  refused(file, wrong, file.size(), Key);
   for(u32 at : {0x10u, 0x84u, 0xc4u, 0x130u, 0x144u}) {  //the first 0x80 bytes, the hidden pieces, the digest, the ID
     auto damaged = file;
     damaged[at] ^= 0x20;
-    refused(damaged, key, damaged.size());
+    refused(damaged, key, damaged.size(), Key);
   }
-  refused(encrypted(0xd916'05f0, key), key, encrypted(0xd916'05f0, key).size());  //type 2's tag
-  refused(file, key, 0x14f);
-  refused(file, key, 0x0200'0000);  //past the end of memory
+  refused(encrypted(0xd916'05f0, key), key, encrypted(0xd916'05f0, key).size(), Key);  //type 2's tag
+  refused(file, key, 0x14f, Key);
+  refused(file, key, 0x0200'0000, Key);  //past the end of memory
   refused(file, key, file.size(), 0);
   //a type 5 program, no second key, still decrypts as one
   psp_encrypt::Options options;

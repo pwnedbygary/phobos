@@ -225,6 +225,8 @@ static auto poolWaitersLeave() -> void {
   }
 }
 
+constexpr u64 NoOptions = ~0ull;  //(tlsCreated()'s, out here: GCC takes no local in a default argument)
+
 //Thread-local storage pools made (ares/psp/kernel/tls.cpp), as pspautotests' threads/tls/create, partition, memory
 //and refer recorded: the refusals and their order, the memory a pool takes, 16 at most, each with its index in its
 //ID's bits 3 to 6, and the status (its size word read back as 60 for any size but 0, copied as far as it says), and
@@ -232,7 +234,6 @@ static auto poolWaitersLeave() -> void {
 static auto tlsCreated() -> void {
   KernelMachine m;
   u32 name = m.string("tls"), options = R + 0x200, info = R + 0x100;
-  constexpr u64 NoOptions = ~0ull;
   auto create = [&](u32 partition, u32 attributes, u32 size, u32 count, u64 alignment = NoOptions) {
     if(alignment != NoOptions) m.system.memory.write(4, options, 8), m.system.memory.write(4, options + 4, alignment);
     u32 given = alignment != NoOptions ? options : 0;
