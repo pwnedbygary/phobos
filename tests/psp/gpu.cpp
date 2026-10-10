@@ -618,6 +618,100 @@ static auto gpuPartialCopies() -> void {
   hardware.ge.setRenderer(nullptr);
 }
 
+//A texture running from one frame buffer into the next below it in memory (Midnight Club 3's menu samples its frame
+//buffer as a texture 512 rows tall, whose last rows are the next frame buffer's): taken from the two targets on the
+//GPU, each part from its own, with nothing finished, and the picture the software renderer's. From the first's row 0
+//and from its row 8 (fewer rows of it, more of the second), the whole texture sampled again after each of two sprites
+//drawn into the second (the same copy, taken again: the second part too, as MC3's menu samples it every frame); with
+//the second drawn only in its first 4 rows (the rest the texture takes filled from memory, which the CPU wrote) and a
+//PRIM drawing into it while it samples rows it doesn't draw over, as MC3's does. And one refused: the first frame
+//buffer drawn over the second's first rows since the second drew there (the newest of those pixels the first's):
+//decoded from memory, as before.
+static auto gpuStackedTexture() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::mt19937 random{20261013};
+  for(u32 from : {0u, 8u}) {
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto upper = randomSprites(random, 30, false), lower = randomSprites(random, 30, false);
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0, 3);  //(rows 0-47)
+      for(auto& one : upper) sprite(*s, one);
+      prepare(*s, 48 * 64 * 4, 3);  //(the next frame buffer, from row 48 on: its rows 0-15 the texture's rows 48-63)
+      for(auto& one : lower) sprite(*s, one);
+      prepare(*s, 0x2'0000, 3);
+      texture(*s, Memory::VRAMBase + from * 64 * 4, 64, 64, 64);
+    }
+    auto before = gpu->statistics;
+    for(System* s : {&software, &hardware}) {
+      sprite(*s, {{{0, 0, 0, 0}, {64, 64, 64, 48}}, 0xffff'ffff});  //(the whole texture, shrunk to rows 0-47)
+      sprite(*s, {{{8, 40, 4, 4}, {40, 64, 36, 28}}, 0xffff'ffff});  //(across the two)
+    }
+    for(u32 n = 0; n < 2; n++) {
+      for(System* s : {&software, &hardware}) {
+        prepare(*s, 48 * 64 * 4, 3);
+        s->ge.commands[GE::TextureMappingEnable] = 0;
+        sprite(*s, {{{0, 0, 10 + 20.0f * n, 2}, {0, 0, 30 + 20.0f * n, 12}}, 0xff20'40c0 + n * 0x30'0000});
+        prepare(*s, 0x2'0000, 3);
+        s->ge.commands[GE::TextureMappingEnable] = 1;
+        sprite(*s, {{{0, 0, 0, 0}, {64, 64, 64, 48}}, 0xffff'ffff});
+      }
+    }
+    CHECK(gpu->statistics.finishes, before.finishes);
+    CHECK(gpu->statistics.copies - before.copies >= 2, true);
+    CHECK(apart(software, hardware), 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+  {
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto upper = randomSprites(random, 30, false);
+    for(System* s : {&software, &hardware}) {
+      for(u32 n = 0; n < 64 * 16; n++) s->memory.write(4, Memory::VRAMBase + (48 * 64 + n) * 4, 0xff40'2010 + n * 131);
+      prepare(*s, 0, 3);
+      for(auto& one : upper) sprite(*s, one);
+      prepare(*s, 48 * 64 * 4, 3);
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 4}}, 0xff00'ff00});
+    }
+    auto before = gpu->statistics;
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0x2'0000, 3);
+      texture(*s, Memory::VRAMBase, 64, 64, 64);
+      sprite(*s, {{{0, 0, 0, 0}, {64, 64, 64, 48}}, 0xffff'ffff});
+      prepare(*s, 48 * 64 * 4, 3);
+      sprite(*s, {{{0, 0, 0, 20}, {64, 64, 64, 44}}, 0xffff'ffff});  //(rows 20-43 of the second, from both)
+    }
+    CHECK(gpu->statistics.finishes, before.finishes);
+    CHECK(apart(software, hardware), 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+  {  //(the second draws rows 0-31, the first its rows 0-7 since, then the second its rows 20-30 again: the first owns
+     //the second's first page, the second the page after)
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto upper = randomSprites(random, 30, false);
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0, 3);
+      for(auto& one : upper) sprite(*s, one);
+      prepare(*s, 48 * 64 * 4, 3);
+      for(u32 n = 0; n < 4; n++) sprite(*s, {{{0, 0, 16.0f * n, 0}, {0, 0, 16.0f * n + 16, 32}}, 0xff00'8000 + n * 17});
+      prepare(*s, 0, 3);
+      s->ge.commands[GE::Scissor2] = 63 | 63 << 10;
+      for(u32 n = 0; n < 6; n++) sprite(*s, {{{0, 0, 6.0f * n, 48}, {0, 0, 6.0f * n + 9, 56}}, 0xff80'0040 + n * 34});
+      prepare(*s, 48 * 64 * 4, 3);
+      sprite(*s, {{{0, 0, 4, 20}, {0, 0, 50, 31}}, 0xff40'40c0});
+      prepare(*s, 0x2'0000, 3);
+      texture(*s, Memory::VRAMBase, 64, 128, 64);
+    }
+    auto before = gpu->statistics;
+    for(System* s : {&software, &hardware}) sprite(*s, {{{0, 0, 0, 0}, {64, 80, 64, 48}}, 0xffff'ffff});
+    CHECK(gpu->statistics.finishes > before.finishes, true);
+    CHECK(apart(software, hardware), 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+}
+
 //The GPU's depth buffer against memory's: depth cleared by the CPU between two depth-tested sprites is taken (the
 //second sprite drawn), and a color pixel the CPU writes between them doesn't bring back memory's older depth (the
 //second sprite, behind the first, not drawn).
@@ -1134,6 +1228,7 @@ auto gpuTests() -> Tests {
     {"gpu refused primitives drawn by the software renderer", gpuRefused},
     {"gpu render-to-texture copies kept to a bound", gpuCopies},
     {"gpu render to texture taken again in part: the strip an effect draws into", gpuPartialCopies},
+    {"gpu render to texture from two frame buffers, one below the other, nothing finished", gpuStackedTexture},
     {"gpu depth buffer follows memory's changes", gpuDepth},
     {"gpu bytes beside its pixels are memory's, without waiting", gpuBeside},
     {"gpu start-up check passes on a GPU that draws right", gpuCheck},

@@ -380,8 +380,9 @@ private:
   Target* owners[GE::VRAMPages] = {};  //VRAM's pages whose newest pixels are the GPU's: the target drawn there
   u64 uses = 0;
   //A texture in a target the GPU has drawn (holds()), for the next PRIM: where, and the texture it's copied into
-  //(one for each place and size, kept with the target)
-  struct Held { Target* target; s32 x, y; u32 width, rows, format; };
+  //(one for each place and size, kept with the target); its rows from split on in next, from that one's first, where
+  //it runs on into the frame buffer below
+  struct Held { Target* target; s32 x, y; u32 width, rows, format; Target* next = nullptr; u32 split = 0; };
   std::optional<Held> held;
   //(one for each target and size, the place it was last copied from, and the rectangle of the target changed since,
   //left, top, right, bottom in its pixels, none where left is past right: taken again from the same place, only that

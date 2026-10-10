@@ -240,8 +240,11 @@ auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale) -> u32 {
     Held h = *held;
     held.reset();
     texels = h.format < 3 ? h.format : 4;
-    u32 below = h.y + h.rows;  //(rows the GPU hasn't drawn, memory's, filled first)
+    u32 below = h.y + h.split;  //(rows the GPU hasn't drawn, memory's, filled first)
     if(below > h.target->rows) fill(*h.target, h.target->rows, below, look.pixel), h.target->rows = below;
+    if(h.next && h.rows - h.split > h.next->rows) {
+      fill(*h.next, h.next->rows, h.rows - h.split, look.pixel), h.next->rows = h.rows - h.split;
+    }
     //(the copy of that size, copied again where it's from another place or the target has changed since: the
     //draws before it sample it as it was, as the GPU runs the commands in order. From the same place, only the
     //part changed since is copied again, into its place in the copy: the rest is as the target still has it.)
@@ -255,7 +258,7 @@ auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale) -> u32 {
     auto key = std::make_tuple(h.target->id, h.width, h.rows);
     auto found = copies.find(key);
     if(found != copies.end()) found->second.used = uses;
-    if(found != copies.end() && found->second.x == h.x && found->second.y == h.y) {
+    if(found != copies.end() && found->second.x == h.x && found->second.y == h.y && !h.next) {
       auto& copied = found->second;
       s32 left = std::max(copied.dirty[0], h.x), top = std::max(copied.dirty[1], h.y);
       s32 right = std::min({copied.dirty[2], h.x + s32(h.width) - 1, s32(h.target->stride) - 1});
@@ -284,9 +287,16 @@ auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale) -> u32 {
     copies[key] = {id, h.x, h.y, uses};
     Command c{Command::Kind::Copy, h.target->id};
     c.x = h.x, c.y = h.y, c.texture = id;
-    c.width = std::min<u32>(h.width, h.target->stride - h.x), c.height = h.rows;
+    c.width = std::min<u32>(h.width, h.target->stride - h.x), c.height = h.split;
     recorded.commands.push_back(c);
     statistics.copies++, statistics.copied += c.width * c.height;
+    if(h.next) {  //(the rest from the frame buffer below, whose changes this copy doesn't follow: taken whole again)
+      c.target = h.next->id, c.y = 0, c.height = h.rows - h.split, c.intoY = h.split;
+      recorded.commands.push_back(c);
+      statistics.copies++, statistics.copied += c.width * c.height;
+      auto& dirty = copies[key].dirty;
+      dirty[0] = h.x, dirty[1] = h.y, dirty[2] = h.x + h.width - 1, dirty[3] = h.y + h.rows - 1;
+    }
     return id;
   }
   auto* decoded = look.decoded.get();
@@ -979,21 +989,44 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns) -> bo
   rows = std::min<u32>({rows, texture.height, 512});
   u64 end = offset + (u64(rows - 1) * texture.bufferWidth + width) * bytes;
   if(!rows || end > Memory::VRAMSize) return false;
-  Target* t = nullptr;
+  //(its pages one target's, or a target's and then, from a page on, another's: next)
+  Target *t = nullptr, *next = nullptr, *last = nullptr;
+  u32 firstOwned = 0;  //(next's first page)
   for(u32 page = offset / Memory::PageSize; page <= (end - 1) / Memory::PageSize; page++) {
-    if(!owners[page]) continue;
-    if(t && owners[page] != t) return false;
-    t = owners[page];
+    Target* owner = owners[page];
+    if(!owner || owner == last) continue;
+    if(!t) t = owner;
+    else if(!next && owner != t) next = owner, firstOwned = page;
+    else return false;
+    last = owner;
   }
-  if(!t || t->stale || !direct || t->format != texture.format || t->stride != texture.bufferWidth) return false;
-  if(offset < t->address) return false;
+  auto fits = [&](Target* t) {
+    return t && !t->stale && t->format == texture.format && t->stride == texture.bufferWidth;
+  };
+  if(!fits(t) || !direct || offset < t->address) return false;
   //(a texture wider than the target's row, as a 3D PRIM's reach isn't known: only the columns inside it copied, those
   //past it, in memory the next rows' first, left as they are; the design's accuracy notes count it)
   u32 rowBytes = t->stride * bytes, y = (offset - t->address) / rowBytes;
   u32 x = (offset - t->address) % rowBytes / bytes;
-  if(x >= t->stride || y + rows > t->height) return false;
-  if(t->besideReaches(x, y, x + width - 1, y + rows - 1)) return false;  //(memory's newer bytes in it: decoded)
-  held = Held{t, s32(x), s32(y), width, rows, texture.format};
+  if(x >= t->stride) return false;
+  //A texture running from one frame buffer into the next below it in memory, of the same row width and format,
+  //which starts on a page and a row of the first: its rows from there on are the next one's, from its first
+  //(Midnight Club 3's menu samples its frame buffer as a texture 512 rows tall: its filter's second texel for the last
+  //row is the next frame buffer's first row, which the PRIM draws into, and decoded from memory it was a finish every
+  //frame). Each part is copied from its own target; the first owns none of the next one's pages (whose newest pixels
+  //would be its own then).
+  u32 split = rows;
+  if(next) {
+    u32 below = next->address - t->address;
+    if(!fits(next) || next->address <= t->address || next->address % Memory::PageSize || below % rowBytes) return false;
+    for(u32 page = next->address / Memory::PageSize; page < firstOwned; page++) if(owners[page]) return false;
+    split = below / rowBytes - y;
+    if(split >= rows || rows - split > next->height) return false;
+    if(next->besideReaches(x, 0, x + width - 1, rows - split - 1)) return false;
+  }
+  if(y + split > t->height) return false;
+  if(t->besideReaches(x, y, x + width - 1, y + split - 1)) return false;  //(memory's newer bytes in it: decoded)
+  held = Held{t, s32(x), s32(y), width, rows, texture.format, next, split};
   return true;
 }
 
