@@ -6792,6 +6792,25 @@ they still match, including perspective-textured triangles. Save states are unch
 which isn't serialized). The arithmetic was first written with library calls (frexp, ldexp) and then as it is now; the
 two drew every measured picture byte for byte the same.
 
+**Speed.** The GE's divide costs more than a float division: a table read per lane, the products in doubles, and the
+setup of s, t and q for every textured 3D triangle on the GE's thread. On the RP6 (the benchmark scenes, 300 frames,
+rounds taking turns with the build before this part):
+
+| Scene | 7 drawing threads, before → after | 1 drawing thread, before → after |
+| --- | --- | --- |
+| Midnight Club 3, race | 54.4 → 52.4 fps (−4%) | 23.7 → 21.7 fps (−8%) |
+| Midnight Club 3, menu | 73.2 → 68.6 fps (−6%) | |
+| Liberty City Stories, city | 76.1 → 68.8 fps (−10%) | 38.4 → 34.9 fps (−9%) |
+| Liberty City Stories, woods | 76.8 → 69.6 fps (−9%) | 38.9 → 34.9 fps (−10%) |
+
+Lumines's demo (2D) is about 3% faster: a triangle no longer sets up the old blend's edge values. The profile (simpleperf
+on the RP6) puts the rest about half on the new arithmetic itself and half on the pixel loop waiting for it (its chain
+from q to the texel is longer than the old divides'); with 7 threads the GE's thread also draws more bands itself, as
+the workers fall behind. Tried and kept: a 64-bit division a triangle shared by all its steps, only the steps its
+pixels use, the corners quantized with integer shifts, the exponent applied as two exact powers of two (no branch).
+Tried and dropped: reading a chord once for a four on one chord (the test cost more, 5% in LCS's scenes). Left to try:
+the reciprocal worked out a four ahead, to hide its latency.
+
 ### Patch divisions: round 4 again
 
 #191's program gives each GE list 5 seconds and resets the GE when it doesn't finish (part 48, "Round 4 again"). The
