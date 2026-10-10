@@ -380,6 +380,74 @@ static auto sasRefusedWhereNoWait() -> void {
   }
 }
 
+//A grain takes the calling thread 300 microseconds, as the Media Engine's work would, the grain written as the call
+//returns: a thread of the top priority making grains in a loop, an output after each that is refused at once while
+//no channel is reserved (PaRappa the Rapper's sound thread starts before its channels are), still lets a worse
+//thread run, which reserves the channel 2 ms on, the loop going round several times meanwhile; __sceSasCoreWithMix
+//waits alike. (Were a grain done at once, the loop would keep the CPU for good.) On both engines.
+static auto sasGrainWaits() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    constexpr u32 Loop = 0x0880'2000;
+    //the top-priority thread: grains, counting them at R + 0x20, and an output after each, until the worse thread
+    //has reserved its channel (R + 0x24 non-zero); it notes the time of 1 and 2 grains at R + 0x30 and 0x34, and the
+    //first grain's first word as the call returns at R + 0x38
+    Assembler loop{m, Loop};
+    loop.li(s0, R);
+    loop.call("sceKernelGetSystemTimeLow");
+    loop.put(addu(s1, v0, zero));
+    loop.li(a0, Core); loop.li(a1, Out);
+    loop.call("__sceSasCore");
+    loop.put(sw(v0, 0x28, s0));
+    loop.li(t0, Out); loop.put(lw(t1, 0, t0)); loop.put(sw(t1, 0x38, s0));
+    loop.call("sceKernelGetSystemTimeLow");
+    loop.put(subu(v0, v0, s1)); loop.put(sw(v0, 0x30, s0));
+    loop.li(a0, Core); loop.li(a1, Out); loop.li(a2, 0x1000); loop.li(a3, 0x1000);
+    loop.call("__sceSasCoreWithMix");
+    loop.put(sw(v0, 0x2c, s0));
+    loop.call("sceKernelGetSystemTimeLow");
+    loop.put(subu(v0, v0, s1)); loop.put(sw(v0, 0x34, s0));
+    u32 top = loop.here();
+    loop.li(a0, Core); loop.li(a1, Out);
+    loop.call("__sceSasCore");
+    loop.put(lw(t0, 0x20, s0)); loop.put(addiu(t0, t0, 1)); loop.put(sw(t0, 0x20, s0));
+    loop.li(a0, 0); loop.li(a1, 0x8000); loop.li(a2, 0x8000); loop.li(a3, Out);
+    loop.call("sceAudioOutputPannedBlocking");
+    loop.put(lw(t0, 0x24, s0));
+    loop.put(beq(t0, zero, s32(top - loop.here() - 4) / 4)); loop.put(nop);
+    loop.call("sceKernelExitThread");
+
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, Core); main.li(a1, 256); main.li(a2, 32); main.li(a3, 0); main.li(t0, 44100);
+    main.call("__sceSasInit");
+    main.li(a0, m.string("sound")); main.li(a1, Loop); main.li(a2, 0x10); main.li(a3, 0x1000); main.li(t0, 0);
+    main.li(t1, 0);
+    main.call("sceKernelCreateThread");
+    main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+    main.call("sceKernelStartThread");  //(it runs at once, and only its grains give the CPU back)
+    main.li(a0, 2000);
+    main.call("sceKernelDelayThread");
+    main.li(a0, 0); main.li(a1, 256); main.li(a2, 0);
+    main.call("sceAudioChReserve");
+    main.li(t0, R); main.put(addiu(v0, v0, 1)); main.put(sw(v0, 0x24, t0));
+    main.li(a0, 100'000);
+    main.call("sceKernelDelayThread");
+    main.call("sceKernelExitGame");
+    m.system.memory.fill(Out, 0x55, 1024);
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    CHECK(m.system.memory.read(4, R + 0x28) == 0 && m.system.memory.read(4, R + 0x2c) == 0, true);
+    u32 one = m.system.memory.read(4, R + 0x30), two = m.system.memory.read(4, R + 0x34);
+    CHECK(one >= 300 && one < 320, true);
+    CHECK(two >= 600 && two < 640, true);
+    CHECK(m.system.memory.read(4, R + 0x24), 1);  //the worse thread ran, reserving channel 0
+    CHECK(m.system.memory.read(4, R + 0x20) >= 4, true);  //rounds with the output refused, then one blocking
+    CHECK(m.system.memory.read(4, R + 0x38) != 0x5555'5555, true);
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
+  }
+}
+
 //Playing voices given new samples: three PCM voices 2016 samples into 65536; given 100 samples, the first goes on
 //from its last and ends at the next grain; given 300 looping from 100, the second goes on from where its loop would
 //have taken it; given VAG data, the third starts from its beginning, as does a VAG voice then given PCM samples. The
@@ -789,7 +857,8 @@ auto sasTests() -> Tests {
           {"sas vag decoded", sasVagDecoded}, {"sas vag endings", sasVagEndings}, {"sas pcm heard", sasPcmHeard},
           {"sas output modes", sasOutputModes}, {"sas voices mixed", sasMixed},
           {"sas voices in states", sasVoicesInStates},
-          {"sas core refused where no thread may wait", sasRefusedWhereNoWait}};
+          {"sas core refused where no thread may wait", sasRefusedWhereNoWait},
+          {"sas grains take the caller's time", sasGrainWaits}};
 }
 
 }

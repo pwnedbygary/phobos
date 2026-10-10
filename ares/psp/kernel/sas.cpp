@@ -73,8 +73,8 @@
 //flags byte is 1 or 7 ends the voice, 3 loops when the voice loops and ends it when it doesn't, 4 and 6 mark where
 //the loop goes back to, and any other byte goes on, 0x41 and 0x75 among them as recorded, 0x87 too); that a voice
 //keyed on with no samples set ends at the next __sceSasCore; and that every call works on the one SasCore
-//__sceSasInit set up, whatever core it's given. Nothing time-consuming is done: __sceSasCore returns at once, where
-//a PSP's waits for the Media Engine (but where a thread can't wait, it's refused as a PSP's is: sasMix()).
+//__sceSasInit set up, whatever core it's given; and how long a grain keeps the Media Engine: __sceSasCore waits 300
+//microseconds where a thread can wait, and is refused where it can't, as a PSP's is (sasMix()).
 
 namespace {
   //pspsdk's pspsascore.h; and __sceSasInit's own four, which pspautotests' audio/sascore recorded: a bad grain, voice
@@ -88,6 +88,7 @@ namespace {
   constexpr u32 SasErrorEffectVolume = 0x8042'0023, SasErrorNotInitialized = 0x8042'0100;
   constexpr s64 EnvelopeTop = 0x4000'0000;
   constexpr u32 KeyOnDelay = 32;  //samples a voice keyed on waits in its first grain
+  constexpr u32 SasGrainMicroseconds = 300;  //a grain's time on the Media Engine (sasMix())
   enum : u32 { Increase = 0, Decrease = 1, Bent = 2, ExponentRev = 3, Exponent = 4, Direct = 5 };
 
   //A grain: 64 to 2048 samples, in 64s.
@@ -298,7 +299,10 @@ auto Kernel::__sceSasInit() -> void {
 //where a thread can't wait it's refused as a function that waits is (mayWait()), the buffer and the voices left as
 //they were: pspautotests' intr/delays recorded __sceSasCore, whose grain waits for the Media Engine on a PSP, refused
 //in an interrupt handler (ILLEGAL_CONTEXT) and with interrupts or dispatching held off (CAN_NOT_WAIT).
-//__sceSasCoreWithMix waits alike, and is taken the same (not recorded).
+//__sceSasCoreWithMix waits alike, and is taken the same (not recorded). Where it may, the calling thread then waits
+//for that grain (SasGrainMicroseconds, chosen as the decoders' 300: not measured), other threads running meanwhile.
+//PaRappa the Rapper starts its sound thread, at the top priority, before it reserves its channels: each of the
+//thread's outputs is refused at once, and with a grain done at once it never gave the CPU back to reserve them.
 auto Kernel::sasMix(bool mix) -> void {
   if(!mayWait()) return;
   u32 buffer = arg(1);
@@ -344,6 +348,7 @@ auto Kernel::sasMix(bool mix) -> void {
   }
   memory.copyIn(buffer, sasSamples.data(), bytes);
   result(0);
+  codecWait(SasGrainMicroseconds);
 }
 
 //(core, buffer)
