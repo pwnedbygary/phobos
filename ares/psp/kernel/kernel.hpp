@@ -250,7 +250,7 @@ struct Kernel {
   auto trampoline() -> void;
   auto load(const u8* data, u64 size, const std::string& path, std::string& error) -> bool;
   auto start(const u8* data, u64 size, const std::string& path, std::string& error,
-             const std::vector<u8>* given = nullptr) -> bool;
+             const std::vector<u8>* given = nullptr, bool large = false) -> bool;
   auto run(u64 budget) -> u64;
   auto importCode(const std::string& library, u32 nid) -> u32;
   auto syscall(u32 code) -> bool;
@@ -577,7 +577,7 @@ struct Kernel {
     u32 address, size;
   };
   std::vector<Block> blocks;  //by address
-  bool largeMemory = false;   //the program asked for all of RAM (its PARAM.SFO's MEMSIZE): see userEnd()
+  bool largeMemory = false;   //the program has all of RAM (its PARAM.SFO's MEMSIZE...): see userEnd()
   u32 sdkVersion = 0;         //the SDK the program was built with, as its start-up code tells the system
   u32 compilerVersion = 0;    //and the version of the compiler that built it
   auto allocate(u32 size, u32 type, u32 address, const std::string& name) -> Block*;
@@ -586,6 +586,7 @@ struct Kernel {
   auto blockHeld(const Block& block) const -> bool;
   auto userEnd() const -> u32;
   auto largestFree() const -> u32;
+  auto largeRestart(u32 size) -> bool;
   auto programParameters(const u8* data, u64 size, const std::string& path) -> std::vector<u8>;
 
   auto sceKernelAllocPartitionMemory() -> void;
@@ -2007,7 +2008,14 @@ struct Kernel {
     std::vector<u8> program;   //decrypted, or a PBP holding it
     std::vector<u8> argument;  //its first thread's (none, if empty)
     bool pathArgument = false; //its path as that argument instead, as with no parameters
+    bool largeMemory = false;  //started with all of RAM (largeRestart())
   } exec;
+  struct Started {  //the program as start() started it, to start it again (largeRestart(); never kept in states)
+    std::string path;
+    std::vector<u8> argument;  //its first thread's, as it was given
+    bool pathArgument = true;  //or its path instead
+  } started;
+  auto execProgram(const std::string& path, std::vector<u8>& program, std::string& why) -> u32;
   auto sceKernelLoadExec() -> void;
   auto loadExec() -> void;
   auto sceRtcGetCurrentClock() -> void;

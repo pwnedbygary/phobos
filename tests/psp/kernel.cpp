@@ -383,6 +383,101 @@ static auto userPartition() -> void {
   }
 }
 
+//"HEAPER": asks for a block of size bytes from the user partition first thing, as pspsdk's start-up code asks for its
+//heap ("UserSbrk", the lowest free place), or after 20 milliseconds' wait (a frame and more), writing the answer at
+//0x088041f0, and leaves.
+static auto heapProgram(u32 size, bool waitFirst) -> std::vector<u8> {
+  ElfBuilder elf;
+  elf.type = 2;
+  elf.entry = 0x0880'4140;
+  ElfBuilder::Segment segment;
+  segment.address = 0x0880'4000;
+  auto& b = segment.bytes;
+  b.putString(4, "HEAPER");                  //module info: no exports; imports from 0x40 to 0x7c
+  b.put32(44, 0x0880'4040); b.put32(48, 0x0880'407c);
+  struct Import { u32 at; const char* library; const char* function; u32 nameAt; };
+  std::vector<Import> imports = {{0x40, "SysMemUserForUser", "sceKernelAllocPartitionMemory", 0xc0},
+                                 {0x54, "LoadExecForUser", "sceKernelExitGame", 0xe0},
+                                 {0x68, "ThreadManForUser", "sceKernelDelayThread", 0x100}};
+  for(u32 n = 0; n < imports.size(); n++) {  //each 5 words, one function: its NID at 0x80 on, its stub at 0x90 on
+    auto& i = imports[n];
+    b.put32(i.at, 0x0880'4000 + i.nameAt);
+    b.put32(i.at + 4, 0x4009'0000);
+    b.put32(i.at + 8, 5 | 1 << 16);
+    b.put32(i.at + 12, 0x0880'4080 + n * 4);
+    b.put32(i.at + 16, 0x0880'4090 + n * 8);
+    b.put32(0x80 + n * 4, Kernel::nid(i.function));
+    b.put32(0x90 + n * 8, jr(ra)); b.put32(0x94 + n * 8, nop);
+    b.putString(i.nameAt, i.library);
+  }
+  b.putString(0x120, "UserSbrk");
+  std::vector<u32> code;
+  if(waitFirst) code.insert(code.end(), {addiu(a0, zero, 20000), jal(0x0880'40a0), nop});
+  code.insert(code.end(), {addiu(a0, zero, 2), lui(a1, 0x0880), ori(a1, a1, 0x4120), addiu(a2, zero, 0),
+                           lui(a3, size >> 16), ori(a3, a3, size & 0xffff), jal(0x0880'4090), addiu(t0, zero, 0),
+                           lui(t1, 0x0880), sw(v0, 0x41f0, t1), jal(0x0880'4098), nop, break_});
+  for(u32 n = 0; n < code.size(); n++) b.put32(0x140 + n * 4, code[n]);
+  b.at(0x200);
+  elf.segments.push_back(segment);
+  elf.sections.push_back({".rodata.sceModuleInfo", 1, 0x0880'4000, {}});
+  return elf.build();
+}
+
+//A program asking, before its first frame, for a block bigger than the whole 24 MiB partition starts again with all
+//of RAM, and its request then succeeds, as Melodie (Prototype) asks for its 40 MiB heap first thing (pspsdk's
+//"UserSbrk"), its PARAM.SFO saying nothing. 56 MiB, all of RAM's partition, starts it again once, and is refused then
+//beside the program and its stack: started with all of RAM, it isn't started again. Not so a request the partition
+//could hold (24 MiB: refused as there isn't room for it now), one asked after the first frame, one more than all of
+//RAM could hold, or on a machine without the RAM (32 MiB): each is refused, the partition as it was. And one whose
+//file can't be read again is refused, noted.
+static auto largeRestart() -> void {
+  struct Case { u32 size; bool waitFirst; u32 ram; bool large, granted; };
+  for(auto [size, waitFirst, ram, large, granted] : {
+        Case{40_MiB, false, 64_MiB, true, true}, Case{56_MiB, false, 64_MiB, true, false},
+        Case{24_MiB, false, 64_MiB, false, false}, Case{40_MiB, true, 64_MiB, false, false},
+        Case{57_MiB, false, 64_MiB, false, false}, Case{40_MiB, false, 32_MiB, false, false}}) {
+    HostFolder stick;
+    auto program = heapProgram(size, waitFirst);
+    stick.put("HEAPER.ELF", std::string(program.begin(), program.end()));
+    KernelMachine m{ram};
+    m.kernel.mount("ms0", stick.path.string());
+    std::string error;
+    CHECK(m.kernel.load(program.data(), program.size(), "ms0:/HEAPER.ELF", error), true);
+    for(u32 frame = 0; frame < 4 && !m.kernel.exited; frame++) m.kernel.run(Kernel::VblankCycles);
+    CHECK(m.kernel.exited, true);
+    CHECK(m.kernel.largeMemory, large);
+    u32 answer = m.system.memory.read(4, 0x0880'41f0);
+    auto block = std::find_if(m.kernel.blocks.begin(), m.kernel.blocks.end(), [](auto& b) {
+      return b.name == "UserSbrk";
+    });
+    if(granted) {
+      CHECK(block != m.kernel.blocks.end() && block->uid == answer && block->size == size, true);
+    } else {
+      CHECK(answer, Kernel::ErrorAllocationFailed);
+      CHECK(block == m.kernel.blocks.end(), true);
+    }
+    CHECK(m.kernel.userEnd(), large ? 0x0c00'0000 : 0x0a00'0000);
+    std::string restarted = "ms0:/HEAPER.ELF asks for " + std::to_string(size >> 10) + " KiB first thing: started "
+                            "again with all of RAM";
+    CHECK(m.notes.size(), large ? 1 : 0);
+    CHECK(std::count(m.notes.begin(), m.notes.end(), restarted), large ? 1 : 0);
+  }
+  //its file gone since it started: it can't be started again, which is noted, and the request is refused
+  HostFolder stick;
+  auto program = heapProgram(40_MiB, false);
+  stick.put("HEAPER.ELF", std::string(program.begin(), program.end()));
+  KernelMachine m{64_MiB};
+  m.kernel.mount("ms0", stick.path.string());
+  std::string error;
+  CHECK(m.kernel.load(program.data(), program.size(), "ms0:/HEAPER.ELF", error), true);
+  std::filesystem::remove(stick.path / "HEAPER.ELF");
+  for(u32 frame = 0; frame < 4 && !m.kernel.exited; frame++) m.kernel.run(Kernel::VblankCycles);
+  CHECK(m.kernel.exited, true);
+  CHECK(m.kernel.largeMemory, false);
+  CHECK(m.system.memory.read(4, 0x0880'41f0), Kernel::ErrorAllocationFailed);
+  CHECK(m.notes == std::vector<std::string>{"can't start ms0:/HEAPER.ELF again with all of RAM: error 80010002"}, true);
+}
+
 //The program's first thread, as a module's module_start thread is made: at the module_start the program exports for
 //itself, whatever its ELF header's entry says (Dissidia 012's says 0), with the priority, stack and attributes its
 //module_start_thread_parameter gives (Ghostbusters asks for a 1 KiB stack), each 0 leaving the default; without
@@ -730,7 +825,9 @@ auto kernelTests() -> Tests {
     {"kernel nids", nids}, {"kernel threads", threads}, {"kernel waiting", waiting},
     {"kernel semaphores served past waiters that left", semaphoreWaitersLeave},
     {"kernel partitions", partitions}, {"kernel aligned blocks", alignedBlocks},
-    {"kernel user partition", userPartition}, {"kernel program start", programStart},
+    {"kernel user partition", userPartition},
+    {"kernel programs asking for all of RAM first thing start again with it", largeRestart},
+    {"kernel program start", programStart},
     {"kernel program base", programBase},
     {"kernel sdk versions", sdkVersions},
     {"kernel start arguments", startArguments},
