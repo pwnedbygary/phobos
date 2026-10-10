@@ -562,7 +562,11 @@ auto Kernel::serialize(serializer& s) -> bool {
     for(auto& [library, stream] : mpegStreams) check(memory.reaches(library, 0x800));
   }
   if(s.reading() && valid) {
-    check((fontLibraries.empty() && openFonts.empty() && fontCalls.empty()) || fontsInstalled());
+    if(!(fontLibraries.empty() && openFonts.empty() && fontCalls.empty()) && !fontsInstalled()) {
+      log("the state's game has the system's font library open, and the fonts folder has none of the fonts: it "
+          "can't load");
+      valid = false;
+    }
     for(auto& [address, library] : fontLibraries) {
       check(address && library.address == address);
       for(u32 n : range(MaxFonts)) {
@@ -584,7 +588,7 @@ auto Kernel::serialize(serializer& s) -> bool {
         for(u32 n : range(library->slots)) if(library->open[n] && library->fonts[n] == id) holders++;
       }
       check(holders && font.references == holders);
-      if(valid) check(fontReload(font) && font.blocks.size() == fontAsks(*font.pgf, font.mode, font.source).size());
+      if(valid) check(fontReloaded(font) && font.blocks.size() == fontAsks(*font.pgf, font.mode, font.source).size());
     }
     for(auto& [thread, call] : fontCalls) {
       check(threads.count(thread) && (call.kind != FontCall::NewLib || call.asks.size() == 4));
@@ -593,7 +597,7 @@ auto Kernel::serialize(serializer& s) -> bool {
       auto library = fontLibraryAt(call.library);
       check(library && call.slot < library->slots && library->open[call.slot] && !library->fonts[call.slot]);
       auto& font = call.opening;
-      if(valid) check(fontReload(font) && call.asks.size() == fontAsks(*font.pgf, font.mode, font.source).size());
+      if(valid) check(fontReloaded(font) && call.asks.size() == fontAsks(*font.pgf, font.mode, font.source).size());
     }
   }
   //the utilities: the dialog, and the modules loaded; the HOME menu's language and button (any the program sets)

@@ -889,7 +889,8 @@ static auto fontsResolution() -> void {
 
 //States: a library's functions part way through, in the program's alloc (which waits there), carry on in another
 //machine as they would have in the first; open fonts come back from the folder; a state whose fonts aren't there, or
-//aren't the same, is refused, the machine as it was.
+//aren't the same, is refused, the machine as it was, and the kernel says which (a runner given no fonts folder, or
+//another, can't load Peace Walker's states).
 static auto fontsStates() -> void {
   FontFolder folder;
   auto prepare = [&](KernelMachine& m) { m.kernel.fontsFrom(folder.path.string()); };
@@ -940,6 +941,7 @@ static auto fontsStates() -> void {
     //into a machine without its fonts, or with another kr0.pgf: refused, the machine as it was
     KernelMachine none;
     CHECK(loadState(none, state), false);
+    CHECK(!none.notes.empty() && none.notes.back().find("font library open") != std::string::npos, true);
     FontFolder other({0, 17});
     auto changed = systemFont(17);
     changed.name = "Another";
@@ -962,6 +964,8 @@ static auto fontsStates() -> void {
   KernelMachine without;
   without.kernel.fontsFrom(partial.path.string());
   CHECK(loadState(without, state), false);
+  CHECK(!without.notes.empty() && without.notes.back().find("open system font ltn4.pgf isn't in the fonts folder") !=
+        std::string::npos, true);
   KernelMachine with;
   prepare(with);
   CHECK(loadState(with, state), true);

@@ -563,8 +563,10 @@ auto main(int argc, char** argv) -> int {
     std::ifstream stream(loadState, std::ios::binary);
     std::vector<u8> data((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
     serializer load{data.data(), u32(data.size())};
+    lastNote.clear();
     if(!root->unserialize(load)) {
-      std::fprintf(stderr, "the state can't be loaded: %s\n", loadState.string().c_str());
+      std::fprintf(stderr, "the state can't be loaded: %s%s%s\n", loadState.string().c_str(),
+                   lastNote.empty() ? "" : ": ", lastNote.c_str());  //(the kernel's why, where it says)
       return 1;
     }
   }

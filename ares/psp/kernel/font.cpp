@@ -530,6 +530,21 @@ auto Kernel::fontReload(OpenFont& font) -> bool {
   return true;
 }
 
+//fontReload(), and where the font isn't there any more, which: a state of a game with fonts open needs the very
+//fonts it had (the system's from the owner's folder: a runner given another folder, or none, can't load it)
+auto Kernel::fontReloaded(OpenFont& font) -> bool {
+  if(fontReload(font)) return true;
+  if(font.source == 0) {
+    auto file = font.index < systemFonts.size() ? systemFonts[font.index].file : std::to_string(font.index);
+    log("the state's open system font " + file + " isn't in the fonts folder, or isn't the same: it can't load");
+  } else if(font.source == 1) {
+    log("the state's open font " + font.path + " isn't there, or isn't the same: it can't load");
+  } else {
+    log("the state's open font in the program's memory doesn't read: it can't load");
+  }
+  return false;
+}
+
 //(parameters, where to put an error): a library, in memory from the game's alloc, as its parameters say: numFonts of
 //them open at once (9 at most: pspautotests' newlib recorded the memory of 9 for 9, 10, 100 and -1); 0 and the error
 //without alloc and free functions (INVALID_PARAMETER). It asks for its own 76 bytes, then the handles' (76 each),

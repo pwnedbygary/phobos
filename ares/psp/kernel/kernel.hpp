@@ -1730,6 +1730,7 @@ struct Kernel {
   auto fontCallable(u32 function) -> bool;
   auto fontMemory(u32 address, u32 length) -> std::vector<u8>;
   auto fontReload(OpenFont& font) -> bool;
+  auto fontReloaded(OpenFont& font) -> bool;
   auto fontFits(u32 library, u32 style, std::vector<u32>& matches, std::vector<float>& distances, bool& sized)
     -> bool;
   auto fontCharInfo(const PGF::Glyph& glyph, u32 info) -> void;
