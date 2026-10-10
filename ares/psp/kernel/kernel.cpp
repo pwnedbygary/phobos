@@ -54,6 +54,7 @@ namespace ares::PlayStationPortable {
 #include "utility.cpp"
 #include "power.cpp"
 #include "system.cpp"
+#include "mt19937.cpp"
 #include "modules.cpp"
 #include "serialization.cpp"
 
@@ -224,6 +225,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("UtilsForUser",      "sceKernelLibcClock",            &Kernel::sceKernelLibcClock);
   add("UtilsForUser",      "sceKernelUtilsMt19937Init",     &Kernel::sceKernelUtilsMt19937Init);
   add("UtilsForUser",      "sceKernelUtilsMt19937UInt",     &Kernel::sceKernelUtilsMt19937UInt);
+  add("sceMt19937",        "sceMt19937Init",                &Kernel::sceMt19937Init);
+  add("sceMt19937",        "sceMt19937UInt",                &Kernel::sceMt19937UInt);
   add("UtilsForUser",      "sceKernelSetGPO",               &Kernel::sceKernelSetGPO);
   add("UtilsForUser",      "sceKernelGetGPI",               &Kernel::sceKernelGetGPI);
   //the CPU's caches: an emulator has none to write back or throw away

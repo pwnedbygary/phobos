@@ -659,16 +659,74 @@ static auto clocks() -> void {
   CHECK(m.call("sceKernelLibcClock", {}), 1234);
 }
 
-//The Mersenne Twister in the program's memory: seeded with 5489 (MT19937's own default), its first number and its
-//10000th are the reference generator's (3499211612, and 4123659995 as C++'s std::mt19937 is required to give).
+//The Mersenne Twister in the program's memory, the kernel's and sceMt19937's alike: seeded with 5489 (MT19937's own
+//default), its first number and its 10000th are the reference generator's (3499211612, and 4123659995 as C++'s
+//std::mt19937 is required to give). The context as hash/mt19937ctx recorded: a count of 0, then the 624 words
+//already stirred once seeded; one draw makes the count 1 and changes the words; its seeds' first eight numbers; two
+//contexts at once; a context copied goes on alike. And a context of the older layout (a count of 624 and its words
+//only seeded, as a state saved before kept one) goes on with the same numbers.
 static auto mersenneTwister() -> void {
-  KernelMachine m;
-  constexpr u32 Context = R;
-  CHECK(m.call("sceKernelUtilsMt19937Init", {Context, 5489}), 0);
-  CHECK(m.call("sceKernelUtilsMt19937UInt", {Context}), 3'499'211'612u);
-  u32 value = 0;
-  for(u32 n = 2; n <= 10000; n++) value = m.call("sceKernelUtilsMt19937UInt", {Context});
-  CHECK(value, 4'123'659'995u);
+  for(auto [init, draw] : {std::pair{"sceKernelUtilsMt19937Init", "sceKernelUtilsMt19937UInt"},
+                           std::pair{"sceMt19937Init", "sceMt19937UInt"}}) {
+    KernelMachine m;
+    constexpr u32 Context = R, Other = R + 0x1000, Copy = R + 0x2000;
+    CHECK(m.call(init, {Context, 5489}), 0);
+    CHECK(m.call(draw, {Context}), 3'499'211'612u);
+    u32 value = 0;
+    for(u32 n = 2; n <= 10000; n++) value = m.call(draw, {Context});
+    CHECK(value, 4'123'659'995u);
+    std::mt19937 reference(0x1234'5678);
+    std::vector<u32> seeded(624), stirred(624);
+    seeded[0] = 0x1234'5678;
+    for(u32 n = 1; n < 624; n++) seeded[n] = 1'812'433'253u * (seeded[n - 1] ^ seeded[n - 1] >> 30) + n;
+    stirred = seeded;
+    for(u32 n = 0; n < 624; n++) {
+      u32 y = (stirred[n] & 0x8000'0000) | (stirred[(n + 1) % 624] & 0x7fff'ffff);
+      stirred[n] = stirred[(n + 397) % 624] ^ y >> 1 ^ (y & 1 ? 0x9908'b0df : 0);
+    }
+    m.system.memory.fill(Context, 0xcc, 0xa00);
+    CHECK(m.call(init, {Context, 0x1234'5678}), 0);
+    CHECK(m.system.memory.read(4, Context), 0);
+    bool same = true;
+    for(u32 n = 0; n < 624; n++) same &= m.system.memory.read(4, Context + 4 + n * 4) == stirred[n];
+    CHECK(same, true);
+    CHECK(m.system.memory.read(4, Context + 4 + 624 * 4), 0xcccc'cccc);  //2500 bytes
+    CHECK(m.call(draw, {Context}), 0xc697'9343);
+    CHECK(m.system.memory.read(4, Context), 1);
+    CHECK(m.system.memory.read(4, Context + 4) == stirred[0], false);
+    CHECK(m.call(init, {Other, 0xdead'beef}), 0);
+    const u32 first[] = {0x0962'd2fa, 0xa73a'24a4, 0xe118'a180, 0xb547'5abb, 0x6461'3c7c, 0x6f32'f4db, 0xf27b'f199};
+    const u32 other[] = {0x3903'7a7d, 0xe505'2ed8, 0xc5dc'5c6e, 0x6ddc'cbe1, 0xa13a'ed6c, 0x2383'9b39, 0x37f0'a862};
+    reference.discard(1);
+    for(u32 n = 0; n < 7; n++) {
+      CHECK(m.call(draw, {Context}), first[n]);
+      CHECK(m.call(draw, {Other}), other[n]);
+      CHECK(first[n], reference());
+    }
+    std::vector<u8> context(2500);
+    m.system.memory.copyOut(context.data(), Context, 2500);
+    m.system.memory.copyIn(Copy, context.data(), 2500);
+    for(u32 n = 0; n < 700; n++) CHECK(m.call(draw, {Copy}), m.call(draw, {Context}));
+    //the older layout
+    m.system.memory.write(4, Copy, 624);
+    for(u32 n = 0; n < 624; n++) m.system.memory.write(4, Copy + 4 + n * 4, seeded[n]);
+    CHECK(m.call(init, {Context, 0x1234'5678}), 0);
+    for(u32 n = 0; n < 1300; n++) CHECK(m.call(draw, {Copy}), m.call(draw, {Context}));
+    //the older layout part way through a round (all its words this round's): the same numbers as this layout's from
+    //there, and in the end the same words
+    for(u32 count : {1u, 2u, 226u, 227u, 228u, 300u, 396u, 397u, 398u, 623u}) {
+      m.system.memory.write(4, Copy, count);
+      for(u32 n = 0; n < 624; n++) m.system.memory.write(4, Copy + 4 + n * 4, stirred[n]);
+      CHECK(m.call(init, {Context, 0x1234'5678}), 0);
+      for(u32 n = 0; n < count; n++) m.call(draw, {Context});
+      bool same = true;
+      for(u32 n = 0; n < 1300; n++) same &= m.call(draw, {Copy}) == m.call(draw, {Context});
+      for(u32 n = 0; n <= 624; n++) {
+        same &= m.system.memory.read(4, Copy + n * 4) == m.system.memory.read(4, Context + n * 4);
+      }
+      CHECK(same, true);
+    }
+  }
 }
 
 //The kernel's printf, to the program's output: with widths far past a field's room (a number's 63 characters, 63

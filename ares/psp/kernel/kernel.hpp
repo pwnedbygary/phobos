@@ -1788,6 +1788,14 @@ struct Kernel {
   auto sceCccSetErrorCharUTF16() -> void;
   auto sceCccSetErrorCharSJIS() -> void;
 
+  //mt19937.cpp: the Mersenne Twister, the kernel's and its library's (sceMt19937)
+  auto mt19937Init(u32 context, u32 seed) -> void;
+  auto mt19937UInt(u32 context) -> u32;
+  auto sceKernelUtilsMt19937Init() -> void;
+  auto sceKernelUtilsMt19937UInt() -> void;
+  auto sceMt19937Init() -> void;
+  auto sceMt19937UInt() -> void;
+
   //pauth.cpp: data a game keeps encrypted with a key of its own (scePauth)
   auto scePauth_98B83B5D() -> void;
 
@@ -1930,8 +1938,6 @@ struct Kernel {
   auto sceKernelUSec2SysClockWide() -> void;
   auto sceRtcGetTick() -> void;
   auto sceRtcCompareTick() -> void;
-  auto sceKernelUtilsMt19937Init() -> void;
-  auto sceKernelUtilsMt19937UInt() -> void;
   auto sceKernelPrintf() -> void;
   auto sceKernelSetGPO() -> void;
   auto sceKernelGetGPI() -> void;

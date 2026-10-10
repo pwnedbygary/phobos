@@ -277,41 +277,6 @@ auto Kernel::sceKernelUSec2SysClockWide() -> void {
   result64(arg(0));
 }
 
-//The Mersenne Twister (MT19937, as Matsumoto and Nishimura describe it), its state in the program's memory: a
-//SceKernelUtilsMt19937Context (psputils.h), how many of its 624 words have been handed out, then the words.
-//(context, seed): the words seeded, none handed out.
-auto Kernel::sceKernelUtilsMt19937Init() -> void {
-  u32 context = arg(0), word = arg(1);
-  memory.write(4, context + 4, word);
-  for(u32 n = 1; n < 624; n++) {
-    word = 1'812'433'253 * (word ^ word >> 30) + n;
-    memory.write(4, context + 4 + n * 4, word);
-  }
-  memory.write(4, context, 624);
-  result(0);
-}
-
-//(context): the next number. When all 624 words are handed out, they're stirred into the next 624.
-auto Kernel::sceKernelUtilsMt19937UInt() -> void {
-  u32 context = arg(0), index = memory.read(4, context);
-  auto state = [&](u32 n) { return memory.read(4, context + 4 + n * 4); };
-  if(index >= 624) {
-    for(u32 n = 0; n < 624; n++) {
-      u32 y = (state(n) & 0x8000'0000) | (state((n + 1) % 624) & 0x7fff'ffff);
-      u32 next = state((n + 397) % 624) ^ y >> 1 ^ (y & 1 ? 0x9908'b0df : 0);
-      memory.write(4, context + 4 + n * 4, next);
-    }
-    index = 0;
-  }
-  u32 y = state(index);
-  y ^= y >> 11;
-  y ^= y << 7 & 0x9d2c'5680;
-  y ^= y << 15 & 0xefc6'0000;
-  y ^= y >> 18;
-  memory.write(4, context, index + 1);
-  result(y);
-}
-
 //(format, ...): the kernel's printf, to the program's output: %d, %i, %u, %x, %X, %p, %c, %s and %%, with flags ('-'
 //to pad on the right, '0' to pad a number with zeros) and a width; a long's l is skipped, a 64-bit number isn't read.
 //A field is never wider than its room, 63 characters for a number and 63 past a string's text, where it was always
