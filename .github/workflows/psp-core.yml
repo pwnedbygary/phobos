@@ -50,5 +50,14 @@ jobs:
           key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
           restore-keys: ffmpeg-${{ runner.os }}-host-
 
+      # The GPU renderer's tests (tests/psp/gpu.cpp) on Mesa's Vulkan driver that draws on the CPU (lavapipe), which
+      # the renderer takes only when asked (PSP_GPU_ON_CPU)
+      - name: Install Mesa's software Vulkan driver
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers libvulkan1
+
       - name: Run the tests
+        env:
+          PSP_GPU_ON_CPU: 1
         run: tests/psp/run-tests.sh

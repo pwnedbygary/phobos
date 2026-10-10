@@ -30,8 +30,9 @@ INCLUDES=(-isystem "$ROOT/nall" -isystem "$ROOT/ares" -isystem "$ROOT" -isystem 
   -isystem "$ROOT/thirdparty/Vulkan-Headers/include")
 #The hardware renderer's shaders (ares/psp/ge/gpu/shaders): shaders.hpp must be what its GLSL compiles to (its
 #recorded hash; with glslang around, compiled again and compared). Its tests (gpu.cpp) need a Vulkan GPU, skipping
-#without one; Vulkan is opened at run time, on macOS from Homebrew's loader and MoltenVK where they are (brew install
-#vulkan-loader molten-vk), which the system's library paths don't name.
+#without one (or one that draws on the CPU, such as Mesa's lavapipe, as CI has: PSP_GPU_ON_CPU=1); Vulkan is opened at
+#run time, on macOS from Homebrew's loader and MoltenVK where they are (brew install vulkan-loader molten-vk), which
+#the system's library paths don't name.
 "$ROOT/ares/psp/ge/gpu/shaders/compile.sh" --check
 if [[ $(uname) == Darwin && -z ${DYLD_FALLBACK_LIBRARY_PATH:-} ]]; then
   export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:/usr/local/lib:/usr/lib
