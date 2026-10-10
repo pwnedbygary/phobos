@@ -7340,3 +7340,161 @@ third) was not refitted. `steps-check` (27) and `steps-depth-check` (346) are th
 left. `persp-sprite` (1204) is the sprite path above. `persp-w3`'s 18944, `persp-divide`'s 211 and `persp-floor`'s 351
 are the reciprocal and the stepper sitting a fraction of a texel the wrong side of a boundary; no further one-unit
 change of a chord improved one of them without making another worse.
+
+## Part 61: the software renderer faster — copies that wait only for what they touch, bands listed, fours in runs
+
+On branch `cursor/psp-ge-speed5-2b67`, on top of #195's `cursor/psp-hle-games13-2b67` (6e305764d). The task: the
+software renderer faster on the RP6 without changing a pixel, God of War: Chains of Olympus's block transfers first,
+then part 60's cost back. Every measured picture, every bench scene's frames and end state, at 1 and 7 threads, are
+byte for byte as before. Original code: nothing of PPSSPP's was needed or read, nor JPCSP's. Save states are
+unchanged (batches and jobs aren't saved; StateVersion stays 22).
+
+### God of War's block transfers
+
+Part 59 found God of War at 7.7 frames a second through its logos, 63% of the emulation thread in `GE::flush()` at
+TRANSFER_START: the GE drew everything waiting before each copy. The game streams its textures and palettes from RAM
+into one place in VRAM that nothing draws (0x18a000 on), with copies 128 pixels wide and 1 to 105 rows high: about
+2,250 a frame in its menu, 1,750 in its first battle. Only 1.2% of them touch anything the batch being filled draws.
+Two bench scenes were made for it (`~/phobos-work/scratch/speed5/scenes`, version 22): the menu (frame 1600 from boot,
+Start at 120) and the battle on the Shores of Attica (New Game, Hero, the intro; Kratos on the walls, a Persian
+soldier attacking, nothing pressed).
+
+**The rule** (`transfer.cpp`, `threads.cpp`'s `drawnBefore()`). A copy reads its source's rows and writes its
+destination's, each between its first row's first byte and its last row's last; `vramPages()` turns each into VRAM's
+4 KiB pages as a batch's pending pages count them: none for bytes outside VRAM (only VRAM is drawn into), every 16 KiB
+touched through the second and fourth copies (which rearrange each 16 KiB), and every page for a range running from
+one copy of VRAM into the next, past VRAM's window or round the end of the addresses. The copy then waits for every
+batch drawing over any of those pages, or yet to decode a deferred texture from the pages it writes (render to
+texture), through the last of them (`settleThrough()`, `settleOver()`'s wait made general, the waiting thread drawing
+bands too); the batch being filled, if it reaches them, is drawn after all of those (`flush()`), as before.
+Everything else goes on being drawn, or filling, while the GE's thread copies.
+
+**Why it's exact.** A batch that doesn't reach the copy's pages and the copy come out the same in either order: the
+batch writes nothing the copy reads and reads or writes nothing it writes (its frame and depth buffers are its
+pending pages; its decoded textures are copies taken as its primitives were set up, before the copy; its deferred
+textures are its reads, waited for). Primitives set up after the copy go into the same batch and are drawn after it,
+as the list has them. With a hardware renderer, a copy goes as before.
+
+**What it did on its own.** On the M1 the battle went from 1.7 to 2.9 frames a second (logging builds), and on the RP6
+at 5 and 3 threads it was ahead too (4.4 against 3.8-4.0; 3.5 against 3.0-3.4). At 7 it was behind, 3.0-3.7 against
+4.0-4.2. Timers in the copy's wait, and simpleperf's off-CPU trace, showed why:
+- The base drew 91% of the battle's jobs in those flushes, about 250 ms a frame of the emulation thread's drawing and
+  waiting; the change took that to 2.4 ms. But then the workers were idle 60% of the time, the emulation thread the
+  bound.
+- The batches now held about 1,100 jobs each (many more in the menu), and every band went through every job of its
+  batch to find those reaching it: a few hundred bytes a job, megabytes a band. `record()` now files each job under
+  every band it reaches, and a band draws its list, in order (commit 2: the same jobs on the same rows in the same
+  order).
+- The pipeline still drains everything about 50 times a frame (below: 32 of them for primitives drawing over their
+  own texture), and each drain waited for the last bands of a batch on whatever cores the workers ran: the RP6's
+  three A510s at 2 GHz take a band of a heavy batch several times as long as the X3. Bands of 4 rows, not 8, end a
+  drain sooner: the battle 3.07 → 4.18 frames a second at 7 threads (+36%; LCS's city 61.8 → 70.1, its woods 64.6 →
+  68.7; 2 rows: the battle 4.2, but MC3's race and menu 2-3% slower). A job is set up again for each band it reaches,
+  which costs MC3 nothing measurable at 4 rows.
+
+**What still drains everything in God of War** (the battle, a frame): about 32 primitives drawing over their own
+texture (effects reading the frame buffer they draw into: `texture.cpp` reads such a texture from memory as it draws,
+so the primitive is drawn at once after everything before it, which it would wait for anyway, drawing into the same
+frame buffer); about 8 copies that do touch pixels being drawn; and the CPU or the screen touching busy pages
+(`settleOver()`, about 12: the displayed buffer, 0x162000-0x1e1bff, and a word at 0x161000). `drawnFirst()` never
+had to.
+
+**Vulkan** is unchanged: with a hardware renderer a copy first draws everything waiting, as before (`drawnBefore()`
+flushes: what the software renderer was left, by a renderer not ready or a PRIM it refused), and its reads and writes
+then wait, through memory's busy pages, for what the GPU drew over the bytes they touch, which finishes everything
+the GPU drew (`Renderer::finish()`, its one sync: a full one, but only for a copy reaching the GPU's pixels).
+
+### Part 60's cost
+
+Part 60's exact texels cost the RP6 3-7% at 7 threads and 8-10% at 1 in the 3D scenes. A profile (LCS's city, 1
+thread) had 54% of all cycles in `triangleRows<3>`, mostly waiting: 14% on one branch for the chain from s, t and q
+through the reciprocal's table, the products and the floor to the texels' addresses, 6% on the alpha test's branch
+for the texels.
+
+**Fours in runs** (`four.cpp`'s `triangleFours()`, commit 1). A row's fours go in runs of up to 32, in three passes:
+every four's depth test, keeping those with a lane left; then those fours' texel axes, each apart from the others, so
+their chains overlap; then their texels and pixels. The colors, fog, depth and s, t and q at the four k fours along
+the row are its first four's plus k steps at once, which run round in 32 bits as k single steps do; a run's depths are
+read before any is written, which reads what one four after another would, as `fourFriendly()` keeps a row's pixels
+from sharing a byte and a job draws each pixel once.
+
+**Tried and dropped:**
+- Each four's axes worked out a four ahead, the next one's while this one is drawn: exact, but 18% slower at 1
+  thread. The depth test drops 41% of the fours in MC3's race, 43% in LCS's city and 58% in God of War's menu, whose
+  axes were then worked out for nothing; hence the runs.
+- The corners' setup (part 60's three `geReciprocal()`, nine cuts and three `quantize15()` a textured 3D triangle,
+  4% of the emulation thread at 7 threads) for all three corners at once in vectors: exact (`reciprocalLanes()`
+  against `geReciprocal()` on every float, and 30 million random corners, zeros, denormals, infinities and NaN among
+  them, against the code it would replace), but 1% slower at 1 thread and no faster at 7. `quantize15()` made inline:
+  no different.
+
+### Numbers
+
+The RP6, the emulation thread pinned to the X3 (cpu7) as Phobos pins it (a copy of `rp6-run4.sh`, `rp6-run6.sh`,
+pins it once the GE's workers are made, which keep to every core), medians of three rounds, the builds taking turns;
+frames a second, every end state the same as the base's:
+
+| Scene | 7 threads, before → after | 1 thread, before → after |
+| --- | --- | --- |
+| Midnight Club 3, race | 49.6 → 49.2 | 21.8 → 22.9 (+5%) |
+| Midnight Club 3, menu | 63.7 → 65.0 (+2%) | 27.0 → 28.6 (+6%) |
+| Liberty City Stories, city | 75.5 → 76.7 (+2%) | 35.1 → 37.1 (+6%) |
+| Liberty City Stories, woods | 74.3 → 78.1 (+5%) | 35.1 → 37.1 (+6%) |
+| Lumines, demo (2D) | 192.5 → 192.5 | 98.1 → 103.2 (+5%) |
+| God of War, the Shores of Attica | 3.67 → 4.42 (+20%) | 2.14 → 2.19 (+2%) |
+| God of War, menu | 1.50 → 1.65 (+10%) | 0.63 → 0.68 (+8%) |
+
+(God of War: 150 frames a run at 7 threads, 100 for its menu, two rounds; at 1 thread two rounds of 100 frames for
+the battle, one of 30 for the menu.) At 1 thread every scene gets back more than half of part 60's cost; at 7 the LCS
+scenes and MC3's menu gain a little, and MC3's race, bound by the emulation thread's own work (the CPU and the GE's
+setup), stays level.
+
+Unpinned (`rp6-run4.sh` as it is, the scheduler placing the emulation thread, at times on a slower core), 7 threads,
+three rounds, frames a second after each commit:
+
+| Scene | before | fours in runs | bands listed, 4 rows | transfers |
+| --- | --- | --- | --- | --- |
+| Midnight Club 3, race | 51.5 | 51.5 | 50.9 | 51.1 |
+| Midnight Club 3, menu | 66.0 | 66.7 | 66.9 | 66.7 |
+| Liberty City Stories, city | 64.0 | 70.8 | 77.0 | 77.2 (+21%) |
+| Liberty City Stories, woods | 63.5 | 66.9 | 74.1 | 74.6 (+18%) |
+| Lumines, demo | 191.5 | 187.7 | 195.3 | 191.7 |
+| God of War, the Shores of Attica | 3.70 | | 2.29 | 4.16 (+12%) |
+
+Unpinned, the even bands help most, as a slow core taking one of the last held up a wait. The band lists without the
+transfers' change made God of War's battle slower (its rounds 2.3-3.4 against the base's 2.7-3.9); with it, 4.1-4.2
+in every round. Unpinned at 1 thread: 21.6 → 22.6, 26.9 → 28.2, 34.8 → 36.3, 34.8 → 36.3, 93.8 → 98.4.
+
+### Checks
+
+- Pictures: the measure harness's 137 (`PSP_GE_OURS`, every round's), the last commit's against the base's: byte for
+  byte the same.
+- Frames: the six cpu-speed scenes (`bench.sh` with `HASHES=1`: each frame's picture and all of VRAM, then RAM and the
+  machine's state), 300 frames at 1 and 7 threads, the last commit against the base, and its 7 threads against the
+  base's 1: identical; God of War's menu (60 frames) and battle (150) likewise. On the RP6 every run's end state was
+  the base's, at 1, 3, 5 and 7 threads.
+- `tests/psp/run-tests.sh` (sanitizers on): 404 groups, 0 failures (one new: "ge transfers among batches", a list of
+  copies among batches against one thread, with the CPU's guard over VRAM and without, and copies that must and
+  mustn't wait); `tests/allegrex/run-tests.sh`: 58 groups, 0 failures; `tests/psp/ares/run-tests.sh`: 307 checks, 0
+  failed. GCC 11 (ubuntu:22.04) compiles the GE without a warning at -O1, -O2 and -O3 with -Wall -Wextra -Werror and
+  the sanitizers, and the new test at -O1, and passes every draw3d group, "draw3d four pixels at a time against one"
+  among them.
+- Six broken versions of the copies' rule (no wait for the batch being filled; none for those launched; deferred
+  decodes left out; the source's pages left out; the rearranged copies not widened; no pages at all) each fail the
+  new test, and a seventh, waiting for every launched batch, fails its check that a launched batch reaching nothing
+  the copy touches stays launched. (Its checks of the waits run without the CPU's guard over VRAM: with it, memory's
+  busy pages would have the copy wait as well.)
+
+### Left, and why
+
+- God of War's primitives drawing over their own texture (32 a frame in its battle) are still drawn at once from
+  memory after everything: batching them would need their texels read in band order, which isn't the PSP's order for
+  a primitive reading what it draws.
+- God of War's menu draws about 28 million fours a frame (58% dropped by the depth test), all eight threads drawing:
+  more than the PSP's GE fills in a frame, so the game may draw its scene more than once a frame while the GE takes no
+  time (not looked into: timing the GE would change what games do).
+- MC3's race at 7 threads is the emulation thread's own work: part 60's setup stays (4% of that thread).
+- The RP6's little cores still take bands at 7 threads; bands of 4 rows were chosen on these scenes.
+- Scratch: `~/phobos-work/scratch/speed5` (gow-scene.sh made the scenes; rp6-run5.sh and rp6-run6.sh, rp6-run4.sh with
+  God of War, then pinned; transfer-dump-patch.py, wait-patch.py, why-patch.py and four-count-patch.py the logging;
+  check-corners.cpp the corners' check; mutate.sh the broken versions; quick-tests.sh; snap.sh; hotlines.py).
