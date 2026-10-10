@@ -536,11 +536,11 @@ auto Kernel::fontReloaded(OpenFont& font) -> bool {
   if(fontReload(font)) return true;
   if(font.source == 0) {
     auto file = font.index < systemFonts.size() ? systemFonts[font.index].file : std::to_string(font.index);
-    log("the state's open system font " + file + " isn't in the fonts folder, or isn't the same: it can't load");
+    note("the state's open system font " + file + " isn't in the fonts folder, or isn't the same: it can't load");
   } else if(font.source == 1) {
-    log("the state's open font " + font.path + " isn't there, or isn't the same: it can't load");
+    note("the state's open font " + font.path + " isn't there, or isn't the same: it can't load");
   } else {
-    log("the state's open font in the program's memory doesn't read: it can't load");
+    note("the state's open font in the program's memory doesn't read: it can't load");
   }
   return false;
 }

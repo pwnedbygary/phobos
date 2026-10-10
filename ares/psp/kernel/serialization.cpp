@@ -563,8 +563,8 @@ auto Kernel::serialize(serializer& s) -> bool {
   }
   if(s.reading() && valid) {
     if(!(fontLibraries.empty() && openFonts.empty() && fontCalls.empty()) && !fontsInstalled()) {
-      log("the state's game has the system's font library open, and the fonts folder has none of the fonts: it "
-          "can't load");
+      note("the state's game has the system's font library open, and the fonts folder has none of the fonts: it "
+           "can't load");
       valid = false;
     }
     for(auto& [address, library] : fontLibraries) {

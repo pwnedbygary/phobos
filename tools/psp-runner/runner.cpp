@@ -566,7 +566,7 @@ auto main(int argc, char** argv) -> int {
     lastNote.clear();
     if(!root->unserialize(load)) {
       std::fprintf(stderr, "the state can't be loaded: %s%s%s\n", loadState.string().c_str(),
-                   lastNote.empty() ? "" : ": ", lastNote.c_str());  //(the kernel's why, where it says)
+                   lastNote.empty() ? "" : ": ", lastNote.c_str());  //(the last note while loading it, if any)
       return 1;
     }
   }
