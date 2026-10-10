@@ -248,11 +248,15 @@ auto Kernel::sceKernelLibcClock() -> void {
   result(u32(cycles / (CPUFrequency / 1'000'000)));
 }
 
-//(SceKernelSysClock, where to put seconds, where to put microseconds): a 64-bit count of microseconds split.
+//(SceKernelSysClock, where to put seconds, where to put microseconds): a 64-bit count of microseconds split, as
+//pspautotests' misc/timeconv recorded (0xffffffffffffffff: seconds 0xf7a0b5ed, microseconds 0x86abf). With nowhere
+//for the seconds, the microseconds are the whole count (its low 32 bits): Tekken: Dark Resurrection works out the
+//clock's rate as 10^12 over what 1,000,000 of it comes to that way, which split would be 0 (an infinite rate, and its
+//frame timing then waited for good, its movie never started). The recording's one such call, of 0x1337, can't tell.
 auto Kernel::sceKernelSysClock2USec() -> void {
   u64 clock = memory.read(4, arg(0)) | u64(memory.read(4, arg(0) + 4)) << 32;
   if(arg(1)) memory.write(4, arg(1), u32(clock / 1'000'000));
-  if(arg(2)) memory.write(4, arg(2), u32(clock % 1'000'000));
+  if(arg(2)) memory.write(4, arg(2), u32(arg(1) ? clock % 1'000'000 : clock));
   result(0);
 }
 
@@ -260,7 +264,7 @@ auto Kernel::sceKernelSysClock2USec() -> void {
 auto Kernel::sceKernelSysClock2USecWide() -> void {
   u64 clock = arg(0) | u64(arg(1)) << 32;
   if(arg(2)) memory.write(4, arg(2), u32(clock / 1'000'000));
-  if(arg(3)) memory.write(4, arg(3), u32(clock % 1'000'000));
+  if(arg(3)) memory.write(4, arg(3), u32(arg(2) ? clock % 1'000'000 : clock));
   result(0);
 }
 
