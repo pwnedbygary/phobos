@@ -967,7 +967,9 @@ static auto gpuSideBySide() -> void {
 //picture it has used): the pixels it writes whole are memory's at once (overwritten()), nothing finished; the CPU
 //reads them as written, and the GE decodes a texture from them; a sprite drawn over some of them after draws over
 //memory's bytes, and the CPU then finds its pixels drawn. A copy writing half of an 8888 pixel (2 bytes a pixel, from
-//its middle) finishes first. All as the software renderer has it.
+//its middle) finishes first. And rows written over the GPU's pixels, then a finish before anything takes them: not put
+//back over; and every pixel it drew in a page written over (so drawnOver() keeps the answer that it drew none there),
+//then more drawn in the page: the CPU finds those. All as the software renderer has it.
 static auto gpuTransferOver() -> void {
   auto gpu = renderer();
   if(!gpu) return;
@@ -1019,6 +1021,21 @@ static auto gpuTransferOver() -> void {
     transfer(*s, Memory::VRAMBase + At, 1 | 20 << 10, 16, 2, 2);  //(2-byte pixels from the middle of an 8888 one's)
   }
   CHECK(gpu->statistics.finishes > before.finishes, true);
+  for(System* s : {&software, &hardware}) {  //(rows written over the GPU's, then a finish before anything takes them)
+    sprite(*s, {{{0, 0, 0, 36}, {0, 0, 64, 48}}, 0xff42'8642});
+    transfer(*s, Memory::VRAMBase + At, 40 << 10, 64, 2, 4);
+    s->memory.read(4, Memory::VRAMBase + At + 38 * 256);
+  }
+  u32 found[2] = {};
+  for(System* s : {&software, &hardware}) {  //(every pixel it drew in a page written over, then more drawn there)
+    prepare(*s, 0x3'8000, 3);
+    sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 2}}, 0xff13'5713});
+    transfer(*s, Memory::VRAMBase + 0x3'8000, 0, 64, 2, 4);
+    s->memory.read(4, Memory::VRAMBase + 0x3'8000 + 8 * 256);  //(nothing it drew there: drawnOver()'s answer kept)
+    sprite(*s, {{{0, 0, 0, 4}, {0, 0, 64, 6}}, 0xff24'6824});
+    found[s == &hardware] = s->memory.read(4, Memory::VRAMBase + 0x3'8000 + 4 * 256 + 16);
+  }
+  CHECK(found[1], found[0]);
   u32 bytes = vramApart(software, hardware);
   if(bytes) std::printf("  %u bytes apart\n", bytes);
   CHECK(bytes, 0u);
@@ -1029,7 +1046,8 @@ static auto gpuTransferOver() -> void {
 //GE then reads): words over two rows, and halfwords over a 5650 frame buffer's pixels, memory's at once
 //(overwritten()), nothing finished, and read again (as the GE reads the list) without a finish either; a texture over
 //them decoded from memory, and a sprite drawn across them after. A byte into an 8888 pixel is only part of it: that
-//one finishes first. As the software renderer has it each time.
+//one finishes first. And rows stored over the GPU's, then a finish before anything takes them: not put back over. As
+//the software renderer has it each time.
 static auto gpuStoresOver() -> void {
   auto gpu = renderer();
   if(!gpu) return;
@@ -1076,6 +1094,11 @@ static auto gpuStoresOver() -> void {
         s->memory.write(1, Memory::VRAMBase + At + 30 * rowBytes + 20 * 4 + 1, 0x5a);
         if(s == &hardware) CHECK(gpu->statistics.finishes, before.finishes + 1);
       }
+    }
+    for(System* s : {&software, &hardware}) {  //(rows stored over the GPU's, then a finish before anything takes them)
+      sprite(*s, {{{0, 0, 0, 36}, {0, 0, 64, 48}}, 0xff42'8642});
+      for(u32 n = 0; n < rowBytes / 4; n++) s->memory.write(4, Memory::VRAMBase + At + 40 * rowBytes + n * 4, n);
+      s->memory.read(4, Memory::VRAMBase + At + 38 * rowBytes);
     }
     u32 bytes = vramApart(software, hardware);
     if(bytes) std::printf("  format %u: %u bytes apart\n", format, bytes);
@@ -1127,9 +1150,11 @@ static auto gpuRevived() -> void {
 //across or down than the ones before (as God of War draws the picture it shrank the screen into back over the screen,
 //272 tiles a time): a copy of the place serves those that take as much of it or less, made again larger (to a power
 //of two) where one takes more, so there are few copies; every tile's pixels are the software renderer's at 1x, 2x and
-//3x. And at 2x and 3x a tile filtered, its last texels at weight 0 left out of what it takes (whose pixels between the
-//GE's sample a little past them), drawn twice: from a copy of only what it takes, and after a larger tile, from that
-//larger copy, held to what it takes (Push::held): the GPU's pixels the same both times.
+//3x. And at 2x and 3x, in machines afresh (the frame buffer drawn and nothing finished: the GPU's copies of it, at its
+//resolution), filtered tiles: one drawn from a copy of only what it takes, and again after a larger tile, from that
+//larger copy, held to what it takes (Push::held); and the larger tile, from the copy made larger for it (to a power of
+//two), and alone, from a copy of its own: the GPU's pixels the same each time. (Its texels 1:1 at the copy's
+//resolution, a tile samples none past what it takes, so a copy not held isn't caught here.)
 static auto gpuTiles() -> void {
   auto gpu = renderer();
   if(!gpu) return;
@@ -1161,24 +1186,45 @@ static auto gpuTiles() -> void {
     u32 bytes = apart(software, hardware);
     if(bytes) std::printf("  %ux: %u bytes apart\n", scale, bytes);
     CHECK(bytes, 0u);
-    if(scale > 1) {
-      auto& c = hardware.ge.commands;
-      auto tile = [&](u32 at, float reach) {  //(into the frame buffer at VRAM's offset at, shrunk a little)
-        prepare(hardware, at, 3);
-        texture(hardware, Memory::VRAMBase + 0x2000, 64, 64, 64);
-        c[GE::TextureFilter] = 1 | 1 << 8;
-        sprite(hardware, {{{0.5f, 0.5f, 0, 0}, {reach - 0.5f, reach - 0.5f, 24, 24}}, 0xffff'ffff});
-      };
-      tile(0x2'8000, 20), tile(0x2'c000, 40), tile(0x3'0000, 20);
-      std::vector<u32> first, again;
-      CHECK(gpu->picture(0x2'8000, 64, 3, 24, 24, first, scale), true);
-      CHECK(gpu->picture(0x3'0000, 64, 3, 24, 24, again, scale), true);
-      u32 differ = 0;
-      for(u32 n = 0; n < first.size() && n < again.size(); n++) differ += first[n] != again[n];
-      if(differ) std::printf("  %ux: %u of the GPU's pixels differ from the larger copy\n", scale, differ);
-      CHECK(differ, 0u);
-    }
     hardware.ge.setRenderer(nullptr);
+    if(scale > 1) {
+      //(each list of tiles in a machine afresh, its frame buffer drawn and nothing finished since, so the tiles take
+      //the GPU's copies of it at its resolution; into the frame buffers at VRAM's offset at, texels 1:1)
+      auto tiles = [&](std::vector<std::pair<u32, f32>> list) {
+        gpu->resolution(scale);
+        System machine;
+        machine.ge.setRenderer(gpu);
+        prepare(machine, 0, 3);
+        for(auto& one : drawn) sprite(machine, one);
+        auto made = gpu->statistics.copies;
+        for(auto [at, reach] : list) {
+          prepare(machine, at, 3);
+          texture(machine, Memory::VRAMBase + 0x2000, 64, 64, 64);
+          machine.ge.commands[GE::TextureFilter] = 1 | 1 << 8;
+          sprite(machine, {{{0, 0, 0, 0}, {reach, reach, reach, reach}}, 0xffff'ffff});
+        }
+        CHECK(gpu->statistics.copies > made, true);
+        std::vector<std::vector<u32>> pictures(list.size());
+        for(u32 n = 0; n < list.size(); n++) {
+          u32 size = list[n].second;
+          CHECK(gpu->picture(list[n].first, 64, 3, size, size, pictures[n], scale), true);
+        }
+        machine.ge.setRenderer(nullptr);
+        return pictures;
+      };
+      auto differ = [](const std::vector<u32>& a, const std::vector<u32>& b) {
+        u32 count = a.size() != b.size();
+        for(u32 n = 0; n < a.size() && n < b.size(); n++) count += a[n] != b[n];
+        return count;
+      };
+      auto three = tiles({{0x2'8000, 20}, {0x2'c000, 40}, {0x3'0000, 20}}), alone = tiles({{0x2'c000, 40}});
+      u32 off = differ(three[0], three[2]);
+      if(off) std::printf("  %ux: %u of the GPU's pixels differ from the larger copy\n", scale, off);
+      CHECK(off, 0u);
+      off = differ(three[1], alone[0]);  //(the larger tile: from the copy made larger for it, and from its own)
+      if(off) std::printf("  %ux: %u of the GPU's pixels differ from a copy made larger\n", scale, off);
+      CHECK(off, 0u);
+    }
   }
   gpu->resolution(1);
 }
