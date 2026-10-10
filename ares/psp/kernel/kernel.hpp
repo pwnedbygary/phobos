@@ -250,7 +250,7 @@ struct Kernel {
   auto trampoline() -> void;
   auto load(const u8* data, u64 size, const std::string& path, std::string& error) -> bool;
   auto start(const u8* data, u64 size, const std::string& path, std::string& error,
-             const std::vector<u8>* given = nullptr) -> bool;
+             const std::vector<u8>* given = nullptr, bool large = false) -> bool;
   auto run(u64 budget) -> u64;
   auto importCode(const std::string& library, u32 nid) -> u32;
   auto syscall(u32 code) -> bool;
@@ -577,7 +577,7 @@ struct Kernel {
     u32 address, size;
   };
   std::vector<Block> blocks;  //by address
-  bool largeMemory = false;   //the program asked for all of RAM (its PARAM.SFO's MEMSIZE): see userEnd()
+  bool largeMemory = false;   //the program has all of RAM (its PARAM.SFO's MEMSIZE...): see userEnd()
   u32 sdkVersion = 0;         //the SDK the program was built with, as its start-up code tells the system
   u32 compilerVersion = 0;    //and the version of the compiler that built it
   auto allocate(u32 size, u32 type, u32 address, const std::string& name) -> Block*;
@@ -586,6 +586,7 @@ struct Kernel {
   auto blockHeld(const Block& block) const -> bool;
   auto userEnd() const -> u32;
   auto largestFree() const -> u32;
+  auto largeRestart(u32 size) -> bool;
   auto programParameters(const u8* data, u64 size, const std::string& path) -> std::vector<u8>;
 
   auto sceKernelAllocPartitionMemory() -> void;
@@ -637,11 +638,13 @@ struct Kernel {
     u32 asyncCallback = 0, asyncArgument = 0;  //sceIoSetAsyncCallback's: notified as each request is done
     bool resultOnly = false;  //nothing is open (an asynchronous close, or an asynchronous open that failed): the
                               //descriptor stays only to hand over its request's result
+    u64 opened = 0;        //its place in the order the program opened files (filesOpened then): sceIoGetFdList's
   };
   std::map<std::string, std::string> devices;  //"ms0" -> the host folder standing for it
   std::shared_ptr<Disc> disc;  //the disc image in the drive (disc0: and umd0:, unless a host folder stands for it)
   std::map<u32, OpenFile> files;  //by descriptor: 3 to MostFiles - 1 (newFile()), or more from an older state
   static constexpr u32 MostFiles = 64;
+  u64 filesOpened = 0;  //how many files and folders the program has opened (never saved: its files' largest count)
   auto newFile() -> u32;
   std::string workingDirectory;
   std::vector<u32> memoryStickCallbacks;  //callbacks the program registered for the memory stick going in and out
@@ -690,6 +693,7 @@ struct Kernel {
   auto sceIoDopen() -> void;
   auto sceIoDread() -> void;
   auto sceIoDclose() -> void;
+  auto sceIoGetFdList() -> void;
   auto sceIoIoctl() -> void;
   auto sceIoDevctl() -> void;
   auto sceNpDrmSetLicenseeKey() -> void;
@@ -1880,7 +1884,7 @@ struct Kernel {
     u32 abortUpdates = 0;  //an aborted message's Updates still to come before it finishes (0: not aborted)
     u32 runningUpdates = 0;  //Updates while Running, before an abort (utility/dialog/abort's fade length)
   } dialog;
-  u32 stateLayout = 22;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 23;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;
@@ -2016,7 +2020,14 @@ struct Kernel {
     std::vector<u8> program;   //decrypted, or a PBP holding it
     std::vector<u8> argument;  //its first thread's (none, if empty)
     bool pathArgument = false; //its path as that argument instead, as with no parameters
+    bool largeMemory = false;  //started with all of RAM (largeRestart())
   } exec;
+  struct Started {  //the program as start() started it, to start it again (largeRestart(); never kept in states)
+    std::string path;
+    std::vector<u8> argument;  //its first thread's, as it was given
+    bool pathArgument = true;  //or its path instead
+  } started;
+  auto execProgram(const std::string& path, std::vector<u8>& program, std::string& why) -> u32;
   auto sceKernelLoadExec() -> void;
   auto loadExec() -> void;
   auto sceRtcGetCurrentClock() -> void;
@@ -2053,6 +2064,7 @@ struct Kernel {
   auto readWhole(const std::string& path, std::vector<u8>& data) -> u32;
   auto readOpenFile(OpenFile& open, u64 size, std::vector<u8>& data) -> u32;
   auto loadModule(const std::vector<u8>& file, const std::string& path) -> u32;
+  auto standsInFor(const Module& loaded) const -> bool;
   auto standIn(const std::string& name, u32 attributes, const std::string& path) -> u32;
   auto unloadModule(u32 uid) -> void;
   auto programAsModule() -> void;

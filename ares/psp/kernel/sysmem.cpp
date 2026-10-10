@@ -7,10 +7,39 @@
 //(0x08800000 to 0x0a000000: the first 8 are the system's, the kernel's and 4 MiB it lends a game that asks). Later
 //models have 64 MiB, but give a program the same 24 MiB unless it asks for more in its PARAM.SFO (MEMSIZE 1, as
 //homebrew ports often do); then the partition runs to the end of RAM. Shop-bought games don't ask: they were made
-//for the PSP-1000, and the system keeps the rest.
+//for the PSP-1000, and the system keeps the rest. (A program too big for the partition, or asking first thing for
+//more than it holds, gets all of RAM too: start() and largeRestart().)
 auto Kernel::userEnd() const -> u32 {
   u32 end = Memory::RAMBase + memory.ram.size();
   return largeMemory ? end : std::min<u32>(end, 0x0a00'0000);
+}
+
+//A program asking, before its first frame, for a block bigger than the whole 24 MiB partition was made for all of a
+//64 MiB machine's RAM: it starts again with it, as its PARAM.SFO would have had it start with MEMSIZE 1, its first
+//start gone before anything of it is seen, and its own code asks again. Melodie (Prototype), built with pspsdk (its
+//first thread pspsdk's "user_main", its heap pspsdk's "UserSbrk"), asks for a 40 MiB heap first thing, its PARAM.SFO
+//saying nothing: refused, it stopped there, black; with all of RAM it shows its loading screen and its menus. The
+//system lays out its memory as a program starts, and when the request comes the program's threads' stacks are at
+//the 24 MiB partition's top, leaving no room that size above them or below: so the program starts again rather than
+//the partition growing under it (chosen: no PSP starts a program twice; this stands for a system knowing at the start
+//what the program needs). A program made for the 24 MiB partition doesn't ask for more than it holds: Cladun and
+//Phantom Kingdom look for the largest block they can have from 22 MiB down, which this leaves alone. The request must
+//be one all of RAM could hold (so the machine must have more than 32 MiB); beside the program it may still not fit,
+//and is refused then, once started again: a program already with all of RAM isn't started again. True if the program
+//starts again (the calling thread stops there, as sceKernelLoadExec's caller does).
+auto Kernel::largeRestart(u32 size) -> bool {
+  if(largeMemory || vblanks || exec.pending || interrupting || !current) return false;
+  if(size <= 0x0a00'0000 - UserMemory || size > Memory::RAMBase + memory.ram.size() - UserMemory) return false;
+  std::vector<u8> program;
+  std::string why;
+  if(u32 error = execProgram(started.path, program, why)) {
+    note("can't start " + started.path + " again with all of RAM: " + (why.empty() ? "error " + hexWord(error) : why));
+    return false;
+  }
+  note(started.path + " asks for " + std::to_string(size >> 10) + " KiB first thing: started again with all of RAM");
+  exec = {true, started.path, std::move(program), started.argument, started.pathArgument, true};
+  switchTo(nullptr);
+  return true;
 }
 
 //A number from a PARAM.SFO, the small table of a game's title, version and needs that comes beside its program; or
@@ -113,6 +142,7 @@ auto Kernel::sceKernelAllocPartitionMemory() -> void {
   if(type >= 3 && (!address || address & (address - 1))) return result(ErrorIllegalAlignmentSize);
   if(partition != 2 && partition != 6) return result(ErrorIllegalPartition);
   auto block = allocate(size, type, address, memory.readString(arg(1), 31));
+  if(!block && largeRestart(size)) return;
   result(block ? block->uid : ErrorAllocationFailed);
 }
 
@@ -207,6 +237,7 @@ auto Kernel::sceKernelAllocMemoryBlock() -> void {
   if(type > 1) return result(ErrorIllegalAllocationType);
   if(options && memory.read(4, options) != 4) return result(ErrorIllegalArgument);
   auto block = allocate(size, type, 0, memory.readString(name, 31));
+  if(!block && largeRestart(size)) return;
   result(block ? block->uid : ErrorAllocationFailed);
 }
 

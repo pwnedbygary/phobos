@@ -608,6 +608,7 @@ static auto stateFields() -> void {
     }},
     {"file asyncData", [&] { reader.asyncData = 0x0897'0000; }},
     {"file asyncFrom", [&] { reader.asyncFrom = 16, reader.position = 32; }},
+    {"file opened", [&] { host.opened += 100; }},  //its place in the order files were opened (sceIoGetFdList)
     {"folder entries", [&] { hostFolder.entries[2] += "x"; }},  //".", "..", then "ONE"
     {"folder nextEntry", [&] { hostFolder.nextEntry = 1; }},
     {"disc file folder", [&] { onDisc.folder = true; }}, {"disc file sectors", [&] { onDisc.sectors = true; }},
@@ -849,6 +850,10 @@ static auto stateFields() -> void {
   refuses("a descriptor for a result it hasn't got", [&] { k.files[other].async = Async::None; });
   refuses("a descriptor for a result, open for reading", [&] { k.files[other].flags = 0x0001; });
   refuses("an asynchronous callback not handed out yet", [&] { k.files[file].asyncCallback = k.nextUID; });
+  //a file with no place in the order files were opened, with another's, or past what counting could reach
+  refuses("a file opened as none was", [&] { k.files[file].opened = 0; });
+  refuses("two files opened as one", [&] { k.files[file].opened = k.files[folder].opened; });
+  refuses("a file opened past any count", [&] { k.files[file].opened = 1ull << 62; });
   auto reading = [&](u32 descriptor) -> Kernel::OpenFile& {  //16 bytes from the start, still to come
     auto& open = k.files[descriptor];
     open.async = Async::Pending, open.asyncDoneAt = k.cycles + 2000;
@@ -1527,11 +1532,12 @@ static auto idsRunOut() -> void {
   CHECK(n.kernel.nextUID, Kernel::LastUID + 1);
 }
 
-//States of the layouts before this one load: 21's (part 58's sceJpeg, sceHprm and low-level ATRAC fields, with
-//files' count still kept and no read's bytes to come) and 20's (none of those either). Each is this layout's state
-//with the newer fields taken out and the count put back, where saving the machine with just that field changed
-//shows it to be; loaded with the header's layout into a machine whose newer fields are set, it makes this layout's
-//state again, the newer fields defaulted.
+//States of the layouts before this one load: 22's (no file's place in the order files were opened), 21's (part
+//58's sceJpeg, sceHprm and low-level ATRAC fields, with files' count still kept and no read's bytes to come) and
+//20's (none of those either). Each is this layout's state with the newer fields taken out and the count put back,
+//where saving the machine with just that field changed shows it to be; loaded with the header's layout into a
+//machine whose newer fields are set, it makes this layout's state again, the newer fields defaulted. And files
+//opened out of the order of their numbers, in a layout-22 state, take the order of their numbers.
 static auto olderLayouts() -> void {
   HostFolder stick;
   stick.put("A.TXT", "abcdefgh");
@@ -1560,6 +1566,9 @@ static auto olderLayouts() -> void {
   open.asyncData = 0x0880'0001;
   u32 asyncData = where(kernelState(), state);
   open.asyncData = 0;
+  open.opened += 1;
+  u32 opened = where(kernelState(), state);
+  open.opened -= 1;
   m.kernel.workingDirectory = "ms0:/LIST";
   u32 workingDirectory = where(kernelState(), state);
   m.kernel.workingDirectory = "ms0:/";
@@ -1574,8 +1583,10 @@ static auto olderLayouts() -> void {
   node.key() = file;
   m.kernel.files.insert(std::move(node));
   CHECK(kernelState() == state, true);
-  CHECK(jpeg < files && files < asyncData && asyncData < workingDirectory && workingDirectory < state.size(), true);
-  if(!(jpeg < files && files < asyncData && asyncData < workingDirectory && workingDirectory < state.size())) return;
+  bool ordered = jpeg < files && files < asyncData && asyncData < opened && opened + 8 <= workingDirectory
+              && workingDirectory < state.size();
+  CHECK(ordered, true);
+  if(!ordered) return;
 
   u32 current = m.kernel.stateLayout;
   auto loads = [&](u32 layout, std::vector<u8> bytes) {
@@ -1592,6 +1603,9 @@ static auto olderLayouts() -> void {
     n.kernel.serialize(again);
     return loaded && std::vector<u8>{again.data(), again.data() + again.size()} == state;
   };
+  auto layout22 = state;
+  layout22.erase(layout22.begin() + opened, layout22.begin() + opened + 8);
+  CHECK(loads(22, layout22), true);
   std::vector<u8> counted = {0x45, 0x23, 0x01, 0x00};  //numbers handed out once, passed over
   auto layout21 = state;
   layout21.insert(layout21.begin() + workingDirectory, counted.begin(), counted.end());
@@ -1601,6 +1615,33 @@ static auto olderLayouts() -> void {
   CHECK(loads(21, layout21), true);
   CHECK(loads(20, layout20), true);
   CHECK(loads(current, layout21), false);  //read as this layout, it's another state
+
+  //another file opened, then the first closed and opened again: its number is the lower, its place the later
+  CHECK(m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0}), file + 1);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0}), file);
+  if(m.kernel.files.size() != 2) return;
+  auto twoFiles = kernelState();
+  std::vector<u32> places;
+  for(u32 number : {file, file + 1}) {
+    m.kernel.files[number].opened += 1;
+    places.push_back(where(kernelState(), twoFiles));
+    m.kernel.files[number].opened -= 1;
+  }
+  CHECK(places[0] < places[1], true);
+  if(!(places[0] < places[1])) return;
+  for(u32 at : {places[1], places[0]}) twoFiles.erase(twoFiles.begin() + at, twoFiles.begin() + at + 8);
+  KernelMachine n;
+  machine(n);
+  n.kernel.stateLayout = 22;
+  serializer s{twoFiles.data(), u32(twoFiles.size())};
+  CHECK(n.kernel.serialize(s) && s.size() == twoFiles.size(), true);
+  n.kernel.stateLayout = current;
+  CHECK(n.kernel.files.size(), 2);
+  if(n.kernel.files.size() != 2) return;
+  CHECK(n.kernel.files[file].opened, 1);
+  CHECK(n.kernel.files[file + 1].opened, 2);
+  CHECK(n.kernel.filesOpened, 2);
 }
 
 auto stateTests() -> Tests {

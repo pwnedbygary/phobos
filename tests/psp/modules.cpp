@@ -489,9 +489,10 @@ static auto linking() -> void {
 }
 
 //Sony's modules, as early games carry them: encrypted and named "sce..." (here an encrypted one whose tag Phobos has
-//no key for: it isn't even decrypted), a kernel module, and a plain one named "Sce...": each stood in for, an ID and
-//nothing in memory; started and stopped at once (status 0), unloaded. LoadModuleByID reads one from inside a file,
-//from where it's been seeked to, and refuses a file with an asynchronous request under way.
+//no key for: it isn't even decrypted), a kernel module (exporting only functions the kernel hasn't), and a plain one
+//named "Sce..." exporting a function the kernel has: each stood in for, an ID and nothing in memory; started and
+//stopped at once (status 0), unloaded. LoadModuleByID reads one from inside a file, from where it's been seeked to,
+//and refuses a file with an asynchronous request under way.
 static auto standIns() -> void {
   HostFolder stick;
   TestModule sas = libraryModule();
@@ -505,6 +506,7 @@ static auto standIns() -> void {
   put(stick, "DRIVER.PRX", kernelModule.build());
   TestModule plain = libraryModule();
   plain.name = "SceLibrary";
+  plain.exports.push_back({"sceSasCore", {{Kernel::nid("__sceSasInit"), 0}}});
   put(stick, "PLAIN.PRX", plain.build());
   //an archive holding modules after a ~SCE header each, as GTA Liberty City Stories keeps them: one of Sony's at
   //1000, and TESTLIB, encrypted, after it
@@ -551,6 +553,55 @@ static auto standIns() -> void {
   m.kernel.events();
   CHECK(m.call("sceIoPollAsync", {file, Results}), 0);
   CHECK(m.kernel.files[file].position, 1016);
+}
+
+//One of Sony's modules that came unencrypted, exporting functions the kernel has none of, runs as a game's own
+//module does: Persona 3 Portable and both Dissidias load Sony's LIBSUPPREACC.PRX, plain, its scesupPreAcc_library
+//exporting the scesupPreAcc library (0x86debd66 among its functions, which the games call). A program, on both
+//engines, loads it (as TESTLIB: its module_start writes 0xabcd at Results and returns 7) and a module importing
+//its function (as TESTUSER: add(40, 2) at Results + 8), and starts both: it has its memory, its module_start runs,
+//and the import reaches its function.
+static auto sonyModulesRun() -> void {
+  static constexpr u32 PreAccNID = 0x86de'bd66;
+  TestModule preAcc = libraryModule();
+  preAcc.name = "scesupPreAcc_library";
+  preAcc.exports[0] = {"scesupPreAcc", {{PreAccNID, preAcc.exports[0].functions[0].second}}};
+  TestModule user = userModule();
+  user.imports = {{"scesupPreAcc", PreAccNID}};
+  HostFolder stick;
+  put(stick, "PREACC.PRX", preAcc.build());
+  put(stick, "USER.PRX", user.build());
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    machine(m);
+    m.kernel.mount("ms0", stick.path.string());
+    Assembler main{m, 0x0880'1000};
+    main.li(s0, Results);
+    for(auto [path, at] : {std::pair{"ms0:/PREACC.PRX", 0x100}, std::pair{"ms0:/USER.PRX", 0x104}}) {
+      main.li(a0, m.string(path)); main.li(a1, 0); main.li(a2, 0);
+      main.call("sceKernelLoadModule");
+      main.put(sw(v0, at, s0));
+    }
+    for(auto [at, status] : {std::pair{0x100, 0x140}, std::pair{0x104, 0x144}}) {
+      main.put(lw(a0, at, s0)); main.li(a1, 4); main.li(a2, m.string("ARG")); main.li(a3, Results + status);
+      main.li(t0, 0);
+      main.call("sceKernelStartModule");
+    }
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+
+    u32 a = word(m.system, Results + 0x100);
+    CHECK(m.kernel.exited, true);
+    CHECK(m.kernel.modules.count(a), 1);
+    if(!m.kernel.modules.count(a)) continue;
+    auto& loaded = m.kernel.modules[a];
+    CHECK(loaded.standIn, false);
+    CHECK(loaded.block != 0, true);
+    CHECK(loaded.module.name == "scesupPreAcc_library", true);
+    CHECK(word(m.system, Results), 0xabcd);
+    CHECK(word(m.system, Results + 0x140), 7);
+    CHECK(word(m.system, Results + 8), 42);
+  }
 }
 
 //The module IDs: by address (the program's own, a module's, nowhere), the caller's (from where it called), the list,
@@ -1283,7 +1334,8 @@ auto moduleTests() -> Tests {
   return {
     {"modules unload themselves from a lent stack", unloadFromLentStack},
     {"modules start and link", startAndLink}, {"modules linking", linking}, {"modules stand-ins", standIns},
-    {"modules identities", identities}, {"modules refusals", refusals}, {"modules sizes", sizes},
+    {"modules of Sony's the kernel has nothing of run", sonyModulesRun}, {"modules identities", identities},
+    {"modules refusals", refusals}, {"modules sizes", sizes},
     {"modules unload themselves", unloadThemselves}, {"modules unload with a status", unloadWithStatus},
     {"modules exit threads", exitThreads}, {"modules terminated threads", terminatedThreads},
     {"modules entry points", entryPoints}, {"modules state", stateWhileStarting},

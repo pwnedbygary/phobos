@@ -28,4 +28,12 @@ done
 for file in frame-000030.png frame-000060.png; do
   file "$SCRATCH/$file" | grep -q "480 x 272" || { file "$SCRATCH/$file"; exit 1; }
 done
+#The WAV is the standard one players read: its 44-byte header with RIFF at 0, WAVE and "fmt " at 8, data at 36, its
+#two sizes those of the file past them (a terminator after a tag would move them all).
+WAV=$SCRATCH/sound.wav
+SIZE=$(wc -c < "$WAV")
+at() { dd if="$WAV" bs=1 skip="$1" count="$2" 2> /dev/null; }
+word() { od -An -tu4 -j"$1" -N4 "$WAV" | tr -d ' '; }
+[[ $(at 0 4) == RIFF && $(at 8 8) == "WAVEfmt " && $(at 36 4) == data && $(word 4) == $((SIZE - 8)) &&
+   $(word 40) == $((SIZE - 44)) ]] || { od -c -N48 "$WAV"; exit 1; }
 echo "the runner runs cube.elf for 60 frames: its summary, its PNGs and its WAV check out"

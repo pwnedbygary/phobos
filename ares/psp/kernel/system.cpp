@@ -29,27 +29,11 @@ auto Kernel::sceKernelLoadExec() -> void {
       if(!memory.copyOut(argument.data(), at, length)) return result(ErrorIllegalAddress);
     }
   }
-  std::vector<u8> file;
-  if(u32 error = readWhole(path, file)) return result(error);
-  const u8* data = file.data();
-  u64 size = file.size();
   std::vector<u8> program;
-  if(size >= 4 && !memcmp(data, "\0PBP", 4)) {
-    program = std::move(file);  //(start() finds the program inside)
-  } else {
-    unwrapProgram(data, size);
-    std::vector<u8> decrypted;
-    if(encryptedProgram(data, size)) {
-      if(auto why = decryptProgram(data, size, decrypted); !why.empty()) {
-        note("sceKernelLoadExec: can't start " + path + ": " + why);
-        return result(ErrorUnsupportedPrxType);
-      }
-      data = decrypted.data(), size = decrypted.size();
-    }
-    u32 low = 0, high = 0;
-    bool relocatable = false;
-    if(!Loader::extent(data, size, low, high, relocatable)) return result(ErrorIllegalObject);
-    program.assign(data, data + size);
+  std::string why;
+  if(u32 error = execProgram(path, program, why)) {
+    if(!why.empty()) note("sceKernelLoadExec: can't start " + path + ": " + why);
+    return result(error);
   }
   exec.pending = true;
   exec.path = path;
@@ -59,10 +43,37 @@ auto Kernel::sceKernelLoadExec() -> void {
   switchTo(nullptr);  //the caller stops here (the CPU's go ends with it)
 }
 
-//The program sceKernelLoadExec asked for, in the old one's place: everything of the old program goes, as at power on
-//(its threads, memory and modules, open files, the calls into it, sound, the GE's lists, the clock), the user
-//partition is cleared, and the new program starts as the system starts one. The devices, the disc and the system
-//fonts stay the system's. One that can't start after all ends the program, noted.
+//The program at path as sceKernelLoadExec starts one: an EBOOT.PBP as it is (start() finds the program inside), any
+//other decrypted if it's encrypted. 0, or why it can't be: the file's error, ILLEGAL_OBJECT for one that isn't a
+//program, UNSUPPORTED_PRX_TYPE for one that can't be decrypted (the decrypter's reason in why).
+auto Kernel::execProgram(const std::string& path, std::vector<u8>& program, std::string& why) -> u32 {
+  std::vector<u8> file;
+  if(u32 error = readWhole(path, file)) return error;
+  const u8* data = file.data();
+  u64 size = file.size();
+  if(size >= 4 && !memcmp(data, "\0PBP", 4)) {
+    program = std::move(file);
+    return 0;
+  }
+  unwrapProgram(data, size);
+  std::vector<u8> decrypted;
+  if(encryptedProgram(data, size)) {
+    why = decryptProgram(data, size, decrypted);
+    if(!why.empty()) return ErrorUnsupportedPrxType;
+    data = decrypted.data(), size = decrypted.size();
+  }
+  u32 low = 0, high = 0;
+  bool relocatable = false;
+  if(!Loader::extent(data, size, low, high, relocatable)) return ErrorIllegalObject;
+  program.assign(data, data + size);
+  return 0;
+}
+
+//The program sceKernelLoadExec asked for (or the same one started again with all of RAM: largeRestart()), in the old
+//one's place: everything of the old program goes, as at power on (its threads, memory and modules, open files, the
+//calls into it, sound, the GE's lists, the clock), the user partition is cleared, and the new program starts as the
+//system starts one. The devices, the disc and the system fonts stay the system's. One that can't start after all
+//ends the program, noted.
 auto Kernel::loadExec() -> void {
   auto request = std::move(exec);
   power();
@@ -70,7 +81,7 @@ auto Kernel::loadExec() -> void {
   memory.fill(UserMemory, 0, top > UserMemory ? u32(top - UserMemory) : 0);
   std::string error;
   auto given = request.pathArgument ? nullptr : &request.argument;
-  if(!start(request.program.data(), request.program.size(), request.path, error, given)) {
+  if(!start(request.program.data(), request.program.size(), request.path, error, given, request.largeMemory)) {
     note("sceKernelLoadExec: can't start " + request.path + ": " + error);
     power();
     exited = true;

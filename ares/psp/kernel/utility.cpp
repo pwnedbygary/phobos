@@ -341,10 +341,17 @@ auto Kernel::savedata(u32 p) -> u32 {
     //written, a 32 KiB cluster to a sector, and with no files listed the rest left as it was. Chosen: a listed file
     //takes its size in whole clusters, newly or over a save alike; what's needed is what they take past the free
     //space, 0 for anything a game saves on this stick, its text written only when something is needed (left as it
-    //was otherwise, as the recording leaves what has nothing to say); the answer is 0, the save being there or not,
-    //as a game asks before its first save.)
+    //was otherwise, as the recording leaves what has nothing to say).) The answer is 0 for a save that's there, as
+    //getsize recorded (it asks only with its save made), and for one that isn't NO_DATA, the sizes written all the
+    //same. No recording asks with no save; Def Jam: Fight for NY's code shows the answer: its first save asks this
+    //before writing, making the save when the answer is NO_DATA (0x80110327) and neededKB 0, and writing into it when
+    //it's 0 and overwriteKB 0 (its code's two ways on). Told 0 with no save, it wrote into none, was refused (NO_DATA:
+    //writing needs the save) and asked to go on without saving; and Hot Shots Golf: Open Tee 2, which asks it after
+    //finding no save to load, said its save was corrupted. Chosen: with no size information to fill in (none given,
+    //or the smaller structure), the answer is the same, by the save alone.
     u32 info = memory.read(4, p) >= 1536 ? memory.read(4, p + 1532) : 0;
-    if(!info || !memory.reaches(info, 60)) return 0;
+    u32 answer = exists ? 0 : SavedataReadNoData;
+    if(!info || !memory.reaches(info, 60)) return answer;
     memory.write(4, info + 16, StickClusterSize);
     memory.write(4, info + 20, StickFreeClusters);
     memory.write(4, info + 24, StickFreeClusters * (StickClusterSize / 1024));
@@ -369,7 +376,7 @@ auto Kernel::savedata(u32 p) -> u32 {
         stickText(info + 52, shortfall);
       }
     }
-    return 0;
+    return answer;
   }
   case 6: case 7: case 9: case 10: case 21: {  //deleting a save: its folder goes, with all it holds
     if(!exists) return SavedataDeleteNoData;

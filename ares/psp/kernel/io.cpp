@@ -306,6 +306,7 @@ auto Kernel::openOnDisc(const std::string& path, u32 flags) -> u32 {
   }
   u32 file = newFile();
   if(!file) return ErrorTooManyFiles;
+  open.opened = ++filesOpened;
   files[file] = std::move(open);
   return file;
 }
@@ -340,6 +341,7 @@ auto Kernel::openFile(const std::string& path, u32 flags) -> u32 {
   open.host = host;
   open.flags = flags;
   open.stream = std::move(stream);
+  open.opened = ++filesOpened;
   return file;
 }
 
@@ -727,6 +729,7 @@ auto Kernel::sceIoDopen() -> void {
     }
     u32 file = newFile();
     if(!file) return result(ErrorTooManyFiles);
+    open.opened = ++filesOpened;
     files[file] = std::move(open);
     return result(file);
   }
@@ -755,6 +758,7 @@ auto Kernel::sceIoDopen() -> void {
   open.entries.insert(open.entries.end(), names.begin(), names.end());
   u32 file = newFile();
   if(!file) return result(ErrorTooManyFiles);
+  open.opened = ++filesOpened;
   files[file] = std::move(open);
   result(file);
 }
@@ -816,6 +820,37 @@ auto Kernel::sceIoDclose() -> void {
   if(found == files.end() || !found->second.folder) return result(ErrorBadFile);
   files.erase(found);
   result(0);
+}
+
+//(where to put descriptors, how many fit there, where to put how many there are): the descriptors the program has,
+//as uOFW describes the PSP's kernel (iofilemgr_kernel.h's int sceIoGetFdList(SceUID *fds, int numFd, int *count);
+//pspsdk has no prototype, and no pspautotests program records it): every file and folder a program has opened, in
+//the order they were opened, standard input, output and error first (its kernel opens them as it starts), as many as
+//fit put there; how many were put there is the result, and how many there are goes where the third argument says,
+//unless that's NULL. A descriptor kept only for an asynchronous request's result is still the program's (the
+//kernel's record of a file stays until the result is taken), and so is the movie player's (the player library opens
+//its file as the program's code). The standard streams are listed as 0, 1 and 2, as sceKernelStdin and its siblings
+//give them here (chosen: uOFW's PSP lists them by its kernel's own IDs for them). The places are checked as the
+//kernel checks any it's given (ILLEGAL_ADDR for a list, its size of 4 bytes a descriptor, or a count reaching the
+//kernel's half of the addresses, as most negative sizes do), and a place nothing of the program's memory backs is
+//refused too (chosen: the PSP would fault writing there). A size counted as negative whose 4 bytes a descriptor wrap
+//round to less passes, and fits none: the kernel counts how many fit as a signed number. Crush counts its open files
+//with it, to find files left open.
+auto Kernel::sceIoGetFdList() -> void {
+  u32 list = arg(0), room = arg(1), count = arg(2), size = room * 4;
+  if(s32(list | size | (list + size)) < 0 || s32(count | (count + 4)) < 0) return result(ErrorIllegalAddress);
+  std::vector<std::pair<u64, u32>> opened;
+  for(auto& [file, open] : files) opened.push_back({open.opened, file});
+  std::sort(opened.begin(), opened.end());
+  std::vector<u32> numbers = {StandardInput, StandardOutput, StandardError};
+  for(auto& [order, file] : opened) numbers.push_back(file);
+  u32 put = s32(room) > 0 ? std::min<u32>(room, numbers.size()) : 0;
+  if((put && !memory.reaches(list, put * 4)) || (count && !memory.reaches(count, 4))) {
+    return result(ErrorIllegalAddress);
+  }
+  for(u32 n = 0; n < put; n++) memory.write(4, list + n * 4, numbers[n]);
+  if(count) memory.write(4, count, numbers.size());
+  result(put);
 }
 
 //A request a file's device answers rather than reading or writing (file, command, in, in length, out, out length):

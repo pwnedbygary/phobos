@@ -424,6 +424,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("IoFileMgrForUser",  "sceIoDopen",                    &Kernel::sceIoDopen);
   add("IoFileMgrForUser",  "sceIoDread",                    &Kernel::sceIoDread);
   add("IoFileMgrForUser",  "sceIoDclose",                   &Kernel::sceIoDclose);
+  add("IoFileMgrForUser",  "sceIoGetFdList",                &Kernel::sceIoGetFdList);
   add("IoFileMgrForUser",  "sceIoIoctl",                    &Kernel::sceIoIoctl);
   add("IoFileMgrForUser",  "sceIoDevctl",                   &Kernel::sceIoDevctl);
   add("scePspNpDrm_user",  "sceNpDrmSetLicenseeKey",        &Kernel::sceNpDrmSetLicenseeKey);
@@ -850,6 +851,7 @@ auto Kernel::power() -> void {
   programUID = 0;
   exited = false;
   exec = {};
+  started = {};
   stuck = false;
   cycles = 0;
   nextUID = 0x100;
@@ -895,6 +897,7 @@ auto Kernel::power() -> void {
   imposeLanguage = imposeButton = 1;
   geTranslation = 0x400;
   files.clear();
+  filesOpened = 0;
   workingDirectory = "ms0:/";
   controller = {};
   display = {};
@@ -967,10 +970,12 @@ auto Kernel::load(const u8* data, u64 size, const std::string& path, std::string
   return loaded;
 }
 
-//(Its first thread's argument is the program's path, or what sceKernelLoadExec was given for it, which may be none.)
+//(Its first thread's argument is the program's path, or what sceKernelLoadExec was given for it, which may be none.
+//It has all of RAM if it's started again so (large: largeRestart()), or its PARAM.SFO asks: sysmem.cpp's userEnd().)
 auto Kernel::start(const u8* data, u64 size, const std::string& path, std::string& error,
-                   const std::vector<u8>* given) -> bool {
-  largeMemory = parameterNumber(programParameters(data, size, path), "MEMSIZE", 0) == 1;
+                   const std::vector<u8>* given, bool large) -> bool {
+  largeMemory = large || parameterNumber(programParameters(data, size, path), "MEMSIZE", 0) == 1;
+  started = {path, given ? *given : std::vector<u8>{}, !given};
   u64 offset = 0, length = size;
   if(Loader::programInPBP(data, size, offset, length)) {
     data += offset;

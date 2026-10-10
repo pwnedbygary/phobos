@@ -211,11 +211,13 @@ auto writePng(const fs::path& path, const std::vector<u32>& frame, u32 width, u3
 }
 
 //The sound, as a WAV: RIFF's header, its format (16-bit signed, two channels, the PSP's 44.1 kHz), and the
-//samples, left and right, in the order the stream handed them on.
+//samples, left and right, in the order the stream handed them on. The header is the standard 44 bytes: each tag is
+//its four characters alone (a string literal's terminator after one would move everything after it).
 auto writeWav(const fs::path& path, const std::vector<s32>& samples) -> bool {
   u32 channels = 2, rate = 44'100, bits = 16;
   u32 bytes = samples.size() * 2;
   std::vector<u8> header;
+  auto tag = [&](const char* text) { header.insert(header.end(), text, text + 4); };
   auto little16 = [&](u32 value) { header.push_back(value & 255); header.push_back(value >> 8 & 255); };
   auto little32 = [&](u32 value) {
     header.push_back(value & 255);
@@ -223,10 +225,10 @@ auto writeWav(const fs::path& path, const std::vector<s32>& samples) -> bool {
     header.push_back(value >> 16 & 255);
     header.push_back(value >> 24 & 255);
   };
-  for(char c : "RIFF") header.push_back((u8)c);
+  tag("RIFF");
   little32(36 + bytes);
-  for(char c : "WAVE") header.push_back((u8)c);
-  for(char c : "fmt ") header.push_back((u8)c);
+  tag("WAVE");
+  tag("fmt ");
   little32(16);
   little16(1);  //format: PCM
   little16(channels);
@@ -234,7 +236,7 @@ auto writeWav(const fs::path& path, const std::vector<s32>& samples) -> bool {
   little32(rate * channels * bits / 8);
   little16(channels * bits / 8);
   little16(bits);
-  for(char c : "data") header.push_back((u8)c);
+  tag("data");
   little32(bytes);
   std::ofstream file(path, std::ios::binary);
   if(!file) return false;
