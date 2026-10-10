@@ -5,7 +5,13 @@
 //  - sprites, flat and textured (enlarged, shrunk, mirrored), some in clear mode, in 8888 and 5650: the GPU's bytes
 //    are the software renderer's exactly, as tests/psp/gpu.cpp's gpuSprites has them;
 //  - shaded triangles, some blended over them: close (each channel within 8 of the software renderer's but at the
-//    edges, where the two may cover a pixel differently: at most 1 pixel in 50 further off).
+//    edges, where the two may cover a pixel differently: at most 1 pixel in 50 further off);
+//  - where the GPU reads the frame buffer in the shader (Backend::reads), a frame buffer of a game's size (480x272
+//    in rows of 512) drawn as games draw it: 128 opaque sprites, each followed by a blended one over it (moved a
+//    few pixels) through a write mask keeping part of each channel (which reads wherever the GPU can), exactly. A
+//    driver whose reads there see the pixels as they were before the draw just before (Qualcomm's own, some of the
+//    time, which passes the rest) fails here: vulkan.cpp has nothing read on that one, and where another fails
+//    System::startRenderer() has the GPU blend with its own units instead.
 //It takes some milliseconds, most of them the GPU making its first pipelines (kept for the game).
 
 auto GPU::check(std::string& error) -> bool {
@@ -76,6 +82,18 @@ auto GPU::check(std::string& error) -> bool {
     }
     triangles.push_back(corners);
   }
+  //(the game-sized frame buffer's: each opaque sprite, then the blended one over it, moved up to 4 pixels each way)
+  constexpr u32 Large = 0x1'0000, LargeStride = 512, LargeWidth = 480, LargeHeight = 272;
+  bool reads = backend->reads;
+  std::vector<std::vector<Corner>> layered;
+  for(u32 n = 0; n < 128 && reads; n++) {
+    float x = 4 + random() % (LargeWidth - 88), y = 4 + random() % (LargeHeight - 68);
+    float w = 8 + random() % 72, h = 8 + random() % 52;
+    float dx = s32(random() % 9) - 4, dy = s32(random() % 9) - 4;
+    u32 color = random() | random() << 24, over = random() | random() << 24;
+    layered.push_back({{0, 0, color, x, y}, {0, 0, color, x + w, y + h}});
+    layered.push_back({{0, 0, over, x + dx, y + dy}, {0, 0, over, x + dx + w, y + dy + h}});
+  }
 
   for(Machine* m : {software.get(), hardware.get()}) {
     for(u32 n = 0; n < 16 * 16; n++) m->memory.write(4, Texels + n * 4, n * 0x9e37'79b9u);
@@ -96,6 +114,16 @@ auto GPU::check(std::string& error) -> bool {
       if(n == triangles.size() / 2) m->ge.commands[GE::AlphaBlendEnable] = 1, m->ge.commands[GE::BlendMode] = 0x32;
       draw(*m, GE::Triangles, triangles[n]);
     }
+    //the game-sized frame buffer, opaque and blended sprites in turn, the blended through the write mask
+    auto& c = m->ge.commands;
+    into(*m, Large, 3);
+    c[GE::FrameBufferWidth] = LargeStride, c[GE::Scissor2] = (LargeWidth - 1) | (LargeHeight - 1) << 10;
+    for(u32 n = 0; n < layered.size(); n++) {
+      bool blended = n & 1;
+      c[GE::AlphaBlendEnable] = blended, c[GE::BlendMode] = 0x32, c[GE::MaskColor] = blended ? 0x0f'0f0f : 0;
+      draw(*m, GE::Sprites, layered[n]);
+    }
+    c[GE::AlphaBlendEnable] = 0, c[GE::MaskColor] = 0;
     m->ge.settleAll();
   }
   hardware->ge.setRenderer(nullptr);
@@ -123,6 +151,15 @@ auto GPU::check(std::string& error) -> bool {
     }
     if(far > Width * Height / 50) {
       error = "its triangles are " + std::to_string(far) + " pixels off the software renderer's";
+      passed = false;
+    }
+  }
+  if(passed && reads) {
+    u32 apart = 0;
+    for(u32 n = Large; n < Large + LargeStride * LargeHeight * 4; n++) apart += a[n] != b[n];
+    if(apart) {
+      error = "its draws reading the frame buffer in a game-sized picture are " + std::to_string(apart) +
+              " bytes off the software renderer's";
       passed = false;
     }
   }

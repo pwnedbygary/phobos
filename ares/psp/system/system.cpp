@@ -599,16 +599,26 @@ auto System::startRenderer() -> void {
     std::string error;
     gpu = GPU::vulkan(vulkanLoader, error);
     //(where blending in the shader in rasterization order fails it, the check again with the draws that read apart:
-    //each after a barrier, their overlapping primitives in draws of their own, which every GPU orders)
+    //each after a barrier, their overlapping primitives in draws of their own, which every GPU orders, and the
+    //blending the GPU's own; where reading the frame buffer fails even so, or can't be trusted apart
+    //(Backend::readsApart), the check again with nothing read)
     bool passed = gpu && gpu->check(error);
     if(gpu && !passed && gpu->backend->readsInOrder) {
+      auto& b = *gpu->backend;
+      b.readsInOrder = b.readsBlending = false, b.reads = b.reads && b.readsApart;
       report(true, "the Vulkan renderer's start-up check, blending in the shader in order, failed (" + error +
-                   "): checked again with overlaps apart");
-      gpu->backend->readsInOrder = false, error.clear();
+                   "): checked again with the GPU blending" + (b.reads ? ", overlaps apart" : " alone"));
+      error.clear();
+      passed = gpu->check(error);
+    }
+    if(gpu && !passed && gpu->backend->reads) {
+      report(true, "the Vulkan renderer's start-up check, reading the frame buffer in the shader, failed (" + error +
+                   "): checked again with the GPU blending alone");
+      gpu->backend->reads = gpu->backend->readsBlending = false, error.clear();
       passed = gpu->check(error);
     }
     if(gpu && !passed) {
-      error += " on " + gpu->backend->name() + (gpu->backend->reads ? ", blending in the shader" : "");
+      error += " on " + gpu->backend->name();
       gpu.reset();
     }
     if(gpu && failCheck) gpu.reset(), error = "its start-up check made to fail, as the debug switch asks";
@@ -621,9 +631,10 @@ auto System::startRenderer() -> void {
     report(false, "the Vulkan renderer draws, on " + gpu->backend->name() + ", at " +
                   std::to_string(gpu->resolution()) + "x" +
                   (gpu->resolution() < resolution ? " (the most this GPU takes)" : "") +
-                  (!gpu->backend->reads ? ""
+                  (!gpu->backend->reads ? ", blending by the GPU"
                    : gpu->backend->readsInOrder ? ", blending in the shader, in order"
-                                                : ", blending in the shader, overlaps apart"));
+                                                : ", blending in 8888 by the GPU, the rest in the shader, overlaps "
+                                                  "apart"));
     gpu->report = [this](const std::string& what) { tell("The Vulkan renderer stopped: " + what); };
   }
   if(gpu && gpu->ready()) ge.setRenderer(gpu.get());

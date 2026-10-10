@@ -41,6 +41,12 @@ layout(constant_id = 14) const uint TEXELS = 4u;
 //write in the frame buffer's format (QUANTIZE)
 layout(constant_id = 15) const uint READS = 0u;
 layout(constant_id = 16) const uint BLENDING = 8u;
+//Where the GPU blends with output 0's color as it is (its source factor one), that color is the source term made as
+//pixel.cpp makes it, in whole numbers (TERM). The PSP drops each term's fraction and then adds, where the GPU adds
+//and rounds once: so the term goes a quarter of a step below itself where the GPU adds the destination's term (1),
+//above where it subtracts (2), which puts the GPU's rounding of the sum on the PSP's nearly always. 0 the color
+//weighed as floats.
+layout(constant_id = 17) const uint TERM = 0u;
 
 layout(push_constant) uniform Push {
   vec2 scale;
@@ -268,6 +274,8 @@ void main() {
       precise float row = fma((middle.y - float(vertexStart.y)) / 16.0, vertexStepping.w, vertexStepping.z);
       at = (vertexFlags & 4u) != 0u ? vec2(row, column) : vec2(column, row);
     }
+    //(above 1x, a 2D triangle's texels where its pixels' middles reach at 1x: gpu.cpp's triangle())
+    if((vertexFlags & 8u) != 0u) at = clamp(at, vertexStepping.xz, vertexStepping.yw);
     color = textureFunction(color, sampleTexture(at, (vertexFlags & 1u) != 0u));
   }
   uvec4 shine = uvec4(clamp(floor(vertexSpecular + 1.0 / 512.0), 0.0, 255.0));
@@ -339,5 +347,17 @@ void main() {
   if(LOGIC == 12u) rgb = 1.0 - rgb;
   if(LOGIC == 15u) rgb = vec3(1.0);
   float stencil = ALPHA_OUT == 1u ? float(push.stencil) / 255.0 : alpha;
+  if(TERM != 0u) {
+    ivec3 s = ivec3(rgb * 255.0 + 0.5), f = ivec3(255);
+    int a = int(color.a);
+    if(SOURCE == 1u) f = ivec3(a);
+    if(SOURCE == 2u) f = ivec3(255 - a);
+    if(SOURCE == 3u) f = ivec3(2 * a);
+    if(SOURCE == 4u) f = ivec3(255 - min(2 * a, 255));
+    if(SOURCE == 5u) f = ivec3(uvec3(channel(push.fixedA, 0u), channel(push.fixedA, 1u), channel(push.fixedA, 2u)));
+    vec3 term = vec3((s * 2 + 1) * (f * 2 + 1) >> 10);
+    outColor = vec4((term + (TERM == 1u ? -0.25 : 0.25)) / 255.0, stencil);
+    return;
+  }
   outColor = vec4(rgb * weight, stencil);
 }

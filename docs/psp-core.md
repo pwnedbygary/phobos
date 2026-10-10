@@ -5961,6 +5961,117 @@ corners now guard against it.
 - The measure test against the owner's round 2 and 3 files: as in the table above, nothing else changed; it drives
   round 5 through the menu and every file is written.
 
+## Part 49: the Vulkan renderer in play on the RP6, and its blending without rasterization order
+
+On branch `cursor/psp-vk-play-2b67`, on top of #186's `cursor/psp-hle-games10-2b67` (#183, #182 and #180 under it).
+docs/psp-gpu-renderers.md has the detail ("Without rasterization order", "Upscaling", and the accuracy and speed
+tables). Original code: nothing of PPSSPP's or JPCSP's used, copied or translated. Software stays the default and
+untouched; Native stays exact where it was (every blend still read in rasterization order, so on Turnip the pictures
+are as before).
+
+**In play, in the app** (the RP6, Adreno 740, Turnip from the Driver Manager: blending in the shader, in order;
+Vulkan at Native unless said; the app's per-second stats over 15 s, 60 being full speed; each game entered by scripted
+presses on the app's on-screen buttons and left by force-stopping the app, nothing saved):
+
+| Game | Reached | Frames a second |
+|---|---|---|
+| Midnight Club 3: DUB Edition | a Quick Race, racing | 29.9 |
+| GTA: Liberty City Stories | a new game's first mission, driving | 50.6; 4x 22.8, 10x 10.8; Software 60.0 |
+| GTA: Vice City Stories | a saved game, in the city | 57.7 |
+| Burnout Dominator | a race | 52.4 |
+| Burnout Legends | a Single Event race, at 123 mph | 43.2 |
+| WipEout Pure | a Single Race | 19.4 |
+| Metal Gear Solid: Peace Walker | a new game's beach tutorial | 45.0 |
+| MotorStorm: Arctic Edge | a Free-Play race (and its crash replay) | 50.7 |
+| Ace Combat X | a campaign sortie, in flight | 60.0 |
+
+The pictures were right to the eye in all of them, at each resolution: nothing missing, misplaced or flickering, no
+crash. Killzone wasn't started in the app: it saves by itself, to the owner's memory stick (the runner, with a
+scratch one, reached its Start Game menu). Ridge Racer 2 asks for a new driver profile again and again (the kernel's,
+not the renderer's; part 50 fixes it), so only its menus were seen: the 8x line, below. At 10x the GPU is the bound (81% busy at its
+top clock, 680 MHz); at 4x it wasn't (about 56% busy at 401 MHz, the CPU 61%). Going home and back while LCS
+ran at 4x kept presenting; so did making the window smaller and back while it presented (`wm size 900x1600`, then
+reset: about 30 fps each way). Rotation couldn't be tried: the RP6 puts its rotation lock back to landscape at once
+(`cmd window user-rotation lock 0` or `3` snaps back to `1`).
+
+**Faster at Native in software.** Part 47 made the software renderer's seven threads much faster, and in the 3D games
+they're now ahead of Vulkan at Native: LCS above, driving, 60.0 frames a second against 50.6; from adb's shell
+Midnight Club 3's race 53.5 against 33.8, GTA's city 77.2 against 63.7. With Vulkan the emulation thread is the
+bound: the transform and setup as before, the recording, and a wait whenever the CPU or the GE reads what the GPU
+drew (the race reads back 4 times a frame). WipEout Pure's race is the extreme: 209 submits, 9 read-backs and 53 new
+textures a frame, Vulkan 8.6 frames a second on the M1 against 16.7 in software. On the RP6 Vulkan's lead is in the
+2D games, in drawing sharper above 1x, and in leaving six cores idle (on the M1 seven threads lead everywhere).
+
+**Without rasterization order, the GPU blends again.** Part 45 had every blend read the frame buffer in the shader;
+without the order each such draw takes a barrier and holds no overlapping primitives, so a 3D game's blending became
+thousands of draws a frame: Midnight Club 3's race 4 million in 300 frames, 1.3 frames a second on the M1 (MoltenVK)
+and 13 on the RP6's own driver. Now, without the order, blending in an 8888 frame buffer by the factors and operations
+the GPU has is the GPU's again (38.2 and 32.2 frames a second), and only what it can't come close to reads in the
+shader, split as before: a write mask keeping part of a channel, a logic operation, the absolute difference, doubled
+alphas, and any blend in a 16-bit frame buffer, where the PSP narrows each result to the format, dithered, before the
+next blend reads it (Peace Walker's title, 5551, was 39.7% identical without that, 99.7% with). In order every blend
+reads as before, now without the barrier between draws, which the order makes needless once every pipeline of the
+subpass asks for it (in a run before and after, on an earlier build, GTA's woods 59 to 71 frames a second on Turnip
+from adb's shell).
+
+**The GPU's blending closer** (`draw.frag`'s `TERM`): where the GPU takes output 0 as it is, the shader makes that the
+PSP's whole-number source term and puts it a quarter of a step below itself where the GPU adds the destination's
+term, above where it subtracts, so the GPU's one rounding lands where the PSP's dropped fractions do. Alpha blending
+over every value, in a model: channels the same 50.6% to 93.7% (92.7% in half floats). The tests' random 8888 blends:
+8893 channels of 9216 the same on the M1 and on both of the RP6's drivers, none more than 8 apart.
+
+**Qualcomm's own driver reads nothing.** The RP6's system driver (build of 12/27/23) passed the start-up check's small
+pictures, but in a game's frame buffer a draw that read sometimes saw the pixels as they were before the draws just
+before it, with a barrier, an image barrier or shader-read access as well: from adb's shell Midnight Club 3's menu was
+10% identical, noise in all but Peace Walker. So `vulkan.cpp` turns reading off for that driver (its ID, from
+`VkPhysicalDeviceDriverProperties`) where it has no rasterization order, and the GPU blends everything there; with
+the order, should its check fail, the retry reads nothing either (`Backend::readsApart`). The start-up check gained a
+game-sized picture (480x272 in rows of 512: 128 opaque sprites, each under a blended one moved a few pixels, through
+a write mask keeping part of each channel), which caught that driver some of the time; a driver not known that fails
+it in order is checked again with the GPU blending, then with nothing read (`System::startRenderer()`).
+The log's start-up line says "blending in the shader, in order", "blending in 8888 by the GPU, the rest in the shader,
+overlaps apart", or "blending by the GPU".
+
+**The 8x line**, found with the runner on the M1 at 8x from a state just before Ridge Racer 2's title, a frame every
+10, each column compared with its neighbours: a line down the middle (the PSP's x = 240) in each frame that draws the
+menu's picture. The picture is two 2D quads meeting there, the right one's texture mirrored (u from 240 back to 0),
+filtered. At 1x every pixel's middle samples at least half a texel inside the picture; at 8x the GPU's pixels a
+sixteenth from the seam sampled at u = 239.94, which the filter blended with texel 240, past the picture. Above 1x a
+2D triangle's texture coordinates are now held inside its corners' by what half a pixel moves them, half a texel at
+most (`triangle()`, `draw.frag`), as far as its pixels' middles reach at 1x: the line is gone from every frame, and 1x
+is untouched.
+
+**Accuracy on the RP6's GPU** (10 frames of each of the six StateVersion 17 scenes, Software against Vulkan, pixels
+identical; docs/psp-gpu-renderers.md has the channels apart): from adb's shell on the system driver, which reads
+nothing, Lumines 73.0%, Peace Walker 40.4%, Midnight Club 3's menu 88.7% and race 67.1%, GTA's city 52.2% and woods
+49.3% (45.6%, 39.8%, 78.7%, 33.9%, 41.4% and 39.2% before `TERM`); with Turnip, the app's driver (the runner opening
+its `.so` itself, as the app does, a scratch patch), 97.8%, 100.0%, 97.5%, 87.8%, 73.4% and 80.6%; on the M1, 77.9%,
+99.7%, 92.6%, 80.3%, 52.9% and 61.9%. adb's shell can't use the app's Turnip: the app loads it through libadrenotools.
+
+**Tests**: `gpuBlendingApart` (new): without the order, the GPU's 8888 blending draws nothing in the shader and splits
+nothing, at least 85% of channels the same and no more than 3 in 1000 more than 8 off (run on a GPU that reads nothing
+too); masks, logic operations, the absolute difference, doubled alphas and every 16-bit blend, dithered or not, read
+and are the software renderer's bytes in each format; a 16-bit blend by the GPU's own factors is a draw that reads.
+`gpuSeams` (new): two 2D quads meeting at a mirrored seam, filtered, at 1x, 2x and 3x: every one of the GPU's pixels
+the picture's, memory the software renderer's (without the held texels it fails at 2x and 3x). `gpuCheck`: the
+game-sized picture's 128 blends read, and the check passes with nothing read. `gpuBlending` asks for every blend to
+read, as in order. The GPU tests built for Android pass on the RP6 on Turnip and on Qualcomm's driver.
+
+**Checks**: `tests/psp/run-tests.sh` (sanitized) 342 groups, none failing; `tests/allegrex/run-tests.sh` 58 groups;
+`tests/psp/ares/run-tests.sh` 307 checks, none failing. An independent read-only review passed it with fixes, all
+taken: the check's blended sprites over their opaque ones, the held texels scaled by the coordinates' slope, the
+driver's ID through the extension alone, `readsApart` so a retry on that driver reads nothing, doubled alphas read
+only for the operations that use factors, `TERM` not where output 0 is also the destination's factor, tests that
+can't pass without the GPU drawing, and the docs brought in line. The final build installed (106205, `adb install
+-r`): Ridge Racer 2's title at 8x without the line (39 fps, the GPU 80% busy), LCS in play at Native; then the
+Renderer and Resolution put back to Software and Native.
+
+**Left**: Vulkan at Native behind seven software threads in the 3D games (the emulation thread's recording and its
+waits at read-backs; WipEout's submits); Qualcomm's own driver's 16-bit blending (Peace Walker's title a step or
+three apart) and its reads, which a render pass of their own might make right (not tried); blended pixels not
+dithered where the GPU blends; a 2D sprite's stepped coordinates not held above 1x (none seen bleeding); rotation on
+a device that allows it; Killzone in play, and Ridge Racer 2's races; the swapchain in the panel's own orientation.
+
 ## Part 50: Ridge Racer 2's driver profile — the keyboard's answer
 
 On branch `cursor/psp-hle-games9-2b67`, on top of #182's `cursor/psp-ge-fits2-2b67` (#180 under it). Sources: pspsdk's

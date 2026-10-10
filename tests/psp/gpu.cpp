@@ -3,7 +3,8 @@
 //a frame buffer drawn and then sampled as a texture (render to texture: the copy taken on the GPU), the same again;
 //pspsdk's samples (PSP_TEST_PROGRAMS) run by two machines alike but for the renderer, measured for how close their
 //pictures are (they needn't be the same: the GPU interpolates texture coordinates its own way); blending, dithering,
-//logic operations and write masks done in the shader (shader blending), byte for byte; a GPU that stops answering;
+//logic operations and write masks done in the shader (shader blending), byte for byte, and without rasterization
+//order the GPU's own blending, close, and what it can't do in the shader, byte for byte; a GPU that stops answering;
 //bytes beside the GPU's pixels, memory's without waiting; the start-up check a game's renderer goes through; and
 //drawing at 2 and 3 times the PSP's resolution, where memory's bytes must still come back exactly.
 //Each group but the lost GPU's is skipped, saying why, where there's no Vulkan GPU (or with PSP_GPU=0): the
@@ -384,15 +385,27 @@ static auto gpuBeside() -> void {
 }
 
 //The start-up check (check.cpp) a game's renderer goes through: on a GPU that draws right it passes, and leaves the
-//renderer as it was for the next machine (everything dropped, nothing of its own machine's kept).
+//renderer as it was for the next machine (everything dropped, nothing of its own machine's kept). Where the GPU
+//reads the frame buffer, its game-sized picture's 128 blended sprites read it; with nothing read, as
+//System::startRenderer() falls back to where reading fails, it passes too, reading nothing.
 static auto gpuCheck() -> void {
   auto gpu = renderer();
   if(!gpu) return;
   std::string error;
+  auto before = gpu->statistics;
   bool passed = gpu->check(error);
   if(!passed) std::printf("  %s\n", error.c_str());
   CHECK(passed, true);
   CHECK(gpu->ready(), true);
+  if(gpu->backend->reads) CHECK(gpu->statistics.readingDraws - before.readingDraws >= 128, true);
+  bool reads = gpu->backend->reads, readsBlending = gpu->backend->readsBlending;
+  gpu->backend->reads = gpu->backend->readsBlending = false;
+  before = gpu->statistics, error.clear();
+  passed = gpu->check(error);
+  if(!passed) std::printf("  nothing read: %s\n", error.c_str());
+  CHECK(passed, true);
+  CHECK(gpu->statistics.readingDraws, before.readingDraws);
+  gpu->backend->reads = reads, gpu->backend->readsBlending = readsBlending;
 }
 
 //At 2 and 3 times the PSP's resolution (GPU::resolution()): flat sprites over VRAM full of random bytes, in each
@@ -473,16 +486,76 @@ static auto gpuScaled() -> void {
   gpu->resolution(1);
 }
 
+//Above 1x, two 2D quads of two triangles each meeting at a seam, the right one's texture mirrored (as Ridge Racer 2's
+//menu draws its picture), filtered, from a texture whose texels past the picture, across and down, are black: each
+//of the GPU's pixels at the quads' edges and at the seam keeps to the picture's texels, as the PSP's pixels' middles
+//do (white, none of the black blended in: triangle()'s held texels), and memory's bytes are the software renderer's.
+static auto gpuSeams() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  //(x from left to right and y 0-32, u from first to last and v 0-32)
+  auto quad = [](System& s, float left, float right, float first, float last) {
+    float corners[6][4] = {{first, 0, left, 0}, {last, 0, right, 0}, {first, 32, left, 32},
+                           {last, 0, right, 0}, {last, 32, right, 32}, {first, 32, left, 32}};
+    u32 to = GPUVertices;
+    for(auto& corner : corners) {
+      for(float value : {corner[0], corner[1]}) s.memory.write(4, to, bitsOf(value)), to += 4;
+      s.memory.write(4, to, 0xffff'ffff), to += 4;
+      for(float value : {corner[2], corner[3], 0.0f}) s.memory.write(4, to, bitsOf(value)), to += 4;
+    }
+    s.ge.vertexAddress = GPUVertices;
+    s.ge.primitive(GE::Triangles, 6);
+  };
+  for(u32 scale : {1u, 2u, 3u}) {
+    if(scale > gpu->backend->mostScale) {
+      std::printf("  %ux skipped: the GPU takes at most %ux\n", scale, gpu->backend->mostScale);
+      continue;
+    }
+    gpu->resolution(scale);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    for(System* s : {&software, &hardware}) {
+      //(the picture white, 32x32; past it, across and down, black)
+      for(u32 n = 0; n < 64 * 64; n++) {
+        s->memory.write(4, GPUTexture + n * 4, n % 64 < 32 && n / 64 < 32 ? 0xffff'ffff : 0xff00'0000);
+      }
+      prepare(*s, 0, 3);
+      texture(*s, GPUTexture, 64, 64, 64);
+      s->ge.commands[GE::TextureFilter] = 1 | 1 << 8;
+      quad(*s, 0, 32, 0, 32);
+      quad(*s, 32, 64, 32, 0);
+    }
+    std::vector<u32> pixels;
+    CHECK(gpu->picture(0, 64, 3, 64, 32, pixels, scale), true);
+    CHECK(pixels.size(), 64u * 32 * scale * scale);
+    u32 blended = 0;
+    for(u32 y = 0; y < 32 * scale && pixels.size() == 64u * 32 * scale * scale; y++) {
+      for(u32 x = 0; x < 64 * scale; x++) blended += (pixels[y * 64 * scale + x] & 0xff'ffff) != 0xff'ffff;
+    }
+    if(blended) std::printf("  %ux: %u of the GPU's pixels not the picture's white\n", scale, blended);
+    CHECK(blended, 0u);
+    u32 bytes = apart(software, hardware);
+    if(bytes) std::printf("  %ux: %u bytes apart\n", scale, bytes);
+    CHECK(bytes, 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+  gpu->resolution(1);
+}
+
 //Shader blending (docs/psp-gpu-renderers.md, "Shader blending"), where the GPU reads the frame buffer: overlapping
 //sprites blended with random factors (fixed ones too) and operations, dithered or not, with random logic operations
 //and write masks that keep part of a channel, over a frame buffer cleared to random colors and stencils, in each
 //format, at the PSP's resolution and at twice it: the software renderer's bytes exactly. Consecutive sprites with
 //the same settings are one draw, so where the GPU doesn't keep their order the renderer must split them (emit()).
+//Every blend reads here (Backend::readsBlending), as it does in rasterization order: without the order games
+//have the GPU's own blending (gpuBlendingApart).
 static auto gpuBlending() -> void {
   auto gpu = renderer();
   if(!gpu) return;
   if(!gpu->backend->reads) return void(std::printf("  skipped: the GPU doesn't read the frame buffer\n"));
   std::printf("  %s\n", gpu->backend->readsInOrder ? "in rasterization order" : "draws split where they overlap");
+  bool readsBlending = gpu->backend->readsBlending;
+  gpu->backend->readsBlending = true;
   std::mt19937 random{20261013};
   for(u32 scale : {1u, 2u}) {
     if(scale > gpu->backend->mostScale) continue;
@@ -537,6 +610,122 @@ static auto gpuBlending() -> void {
     }
   }
   gpu->resolution(1);
+  gpu->backend->readsBlending = readsBlending;
+}
+
+//Without rasterization order (Backend::readsInOrder off, as here on any GPU that reads), each draw that reads waits
+//for the ones before and holds no overlapping primitives, so games' blending, thousands of draws a frame, would be
+//thousands of draws and barriers: the GPU blends with its own units then, and only what they can't come close to
+//reads. Blending in 8888 with the factors and operations the GPU has draws nothing in the shader and splits nothing,
+//close to the software renderer (the source term pixel.cpp's whole number, draw.frag's TERM: at least 85% of the
+//channels the same, no more than 3 in 1000 more than 8 off), as on a GPU that reads nothing at all; a write mask
+//keeping part of a channel, a logic operation, the absolute difference and doubled alphas read, dithered or not, and
+//so does every blend in a 16-bit frame buffer (the PSP narrows each blend's result to the format before the next
+//reads it, which the GPU's 8-bit target doesn't): the software renderer's bytes exactly, in each format.
+static auto gpuBlendingApart() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  bool readsInOrder = gpu->backend->readsInOrder, readsBlending = gpu->backend->readsBlending;
+  gpu->backend->readsInOrder = gpu->backend->readsBlending = false;
+  std::mt19937 random{20261014};
+  struct Round { u32 mode, fixedA, fixedB, dither, logic, mask; std::vector<Corners> sprites; };
+  auto draw = [&](System& s, u32 format, std::vector<Corners>& base, std::vector<Round>& rounds) {
+    auto& c = s.ge.commands;
+    prepare(s, 0, format);
+    c[GE::Dither0] = 0x7f80, c[GE::Dither0 + 1] = 0x3c4d, c[GE::Dither0 + 2] = 0xe1a5, c[GE::Dither0 + 3] = 0x96b2;
+    c[GE::ClearMode] = 1 | 7 << 8;
+    for(auto& one : base) sprite(s, one);
+    c[GE::ClearMode] = 0;
+    for(auto& r : rounds) {
+      c[GE::AlphaBlendEnable] = 1, c[GE::BlendMode] = r.mode;
+      c[GE::BlendFixedA] = r.fixedA, c[GE::BlendFixedB] = r.fixedB;
+      c[GE::DitherEnable] = r.dither;
+      c[GE::LogicOpEnable] = r.logic != 3, c[GE::LogicOp] = r.logic;
+      c[GE::MaskColor] = r.mask;
+      for(auto& one : r.sprites) sprite(s, one);
+    }
+    c[GE::AlphaBlendEnable] = 0, c[GE::DitherEnable] = 0, c[GE::LogicOpEnable] = 0, c[GE::MaskColor] = 0;
+  };
+  static constexpr u32 own[] = {0, 1, 2, 3, 4, 5, 7, 10};
+  //the GPU's own blending, in 8888: factors 0-5, 7 and fixed (10), operations 0-4, no logic operation or mask
+  {
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto before = gpu->statistics;
+    auto base = randomSprites(random, 12, false);
+    std::vector<Round> rounds;
+    for(u32 n = 0; n < 24; n++) {
+      //(without dual-source blending, a destination factor by the pixel's color, or one less twice its alpha, is
+      //approximated far off: settings())
+      static constexpr u32 single[] = {2, 3, 4, 5, 10};
+      u32 source = own[random() % 8];
+      u32 destination = gpu->backend->dualSource ? own[random() % 8] : single[random() % 5];
+      u32 mode = source | destination << 4 | (random() % 5) << 8;
+      rounds.push_back({mode, u32(random()) & 0xff'ffff, u32(random()) & 0xff'ffff, 0, 3, 0,
+                        randomSprites(random, 8, false)});
+    }
+    for(System* s : {&software, &hardware}) draw(*s, 3, base, rounds);
+    CHECK(gpu->statistics.primitives > before.primitives, true);
+    software.ge.settleAll(), hardware.ge.settleAll();
+    u64 channels = 0, same = 0, far = 0;
+    for(u32 n = 0; n < 64 * 48 * 4; n++) {
+      if(n % 4 == 3) continue;
+      s32 off = std::abs(s32(software.memory.vram[n]) - s32(hardware.memory.vram[n]));
+      channels++, same += off == 0, far += off > 8;
+    }
+    std::printf("  the GPU's own blending: of %llu channels %llu the same, %llu more than 8 off\n",
+                (unsigned long long)channels, (unsigned long long)same, (unsigned long long)far);
+    CHECK(far * 1000 <= channels * 3, true);
+    CHECK(same * 20 >= channels * 17, true);
+    CHECK(gpu->statistics.readingDraws, before.readingDraws);
+    CHECK(gpu->statistics.splits, before.splits);
+    hardware.ge.setRenderer(nullptr);
+  }
+  if(!gpu->backend->reads) {
+    std::printf("  what reads skipped: the GPU doesn't read the frame buffer\n");
+    gpu->backend->readsInOrder = readsInOrder, gpu->backend->readsBlending = readsBlending;
+    return;
+  }
+  //what reads: each round a mask keeping part of a channel, a logic operation, the absolute difference or a doubled
+  //alpha (as source or destination factor), with random factors and operations besides; in a 16-bit frame buffer
+  //also the GPU's own factors and operations alone, and then one sprite blended so, a draw that reads
+  for(u32 format : {3u, 0u, 1u, 2u}) {
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto before = gpu->statistics;
+    auto base = randomSprites(random, 12, false);
+    std::vector<Round> rounds;
+    for(u32 n = 0; n < 24; n++) {
+      u32 source = random() % 11, destination = random() % 11, operation = random() % 6;
+      u32 logic = 3, mask = 0, reason = n % (format == 3 ? 5 : 6);
+      if(reason == 0) mask = (random() & 0x7f'7f7f) | 0x01'0101;
+      if(reason == 1) logic = random() % 15, logic += logic >= 3;
+      if(reason == 2) operation = 5;
+      static constexpr u32 doubled[] = {6, 8, 9};
+      if(reason == 3) source = doubled[random() % 3];
+      if(reason == 4) destination = doubled[random() % 3];
+      if(reason == 5) source = own[random() % 8], destination = own[random() % 8], operation = random() % 5;
+      rounds.push_back({source | destination << 4 | operation << 8, u32(random()) & 0xff'ffff,
+                        u32(random()) & 0xff'ffff, u32(random()) % 2, logic, mask, randomSprites(random, 8, false)});
+    }
+    for(System* s : {&software, &hardware}) draw(*s, format, base, rounds);
+    CHECK(gpu->statistics.readingDraws > before.readingDraws, true);
+    CHECK(gpu->statistics.splits > before.splits, true);
+    if(format != 3) {
+      auto between = gpu->statistics;
+      for(System* s : {&software, &hardware}) {
+        s->ge.commands[GE::AlphaBlendEnable] = 1, s->ge.commands[GE::BlendMode] = 2 | 3 << 4;
+        sprite(*s, {{{0, 0, 4, 4}, {0, 0, 36, 28}}, 0x80'40c0ff});
+        s->ge.commands[GE::AlphaBlendEnable] = 0;
+      }
+      CHECK(gpu->statistics.readingDraws - between.readingDraws, u64(1));
+    }
+    u32 bytes = apart(software, hardware);
+    if(bytes) std::printf("  format %u: %u bytes apart\n", format, bytes);
+    CHECK(bytes, 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+  gpu->backend->readsInOrder = readsInOrder, gpu->backend->readsBlending = readsBlending;
 }
 
 auto gpuTests() -> Tests {
@@ -545,6 +734,7 @@ auto gpuTests() -> Tests {
     {"gpu render to texture against the software renderer", gpuRenderToTexture},
     {"gpu samples near the software renderer", gpuSamples},
     {"gpu blending in the shader against the software renderer", gpuBlending},
+    {"gpu blending without rasterization order: the GPU's own, the rest read", gpuBlendingApart},
     {"gpu lost: the software renderer draws instead", gpuLost},
     {"gpu refused primitives drawn by the software renderer", gpuRefused},
     {"gpu render-to-texture copies kept to a bound", gpuCopies},
@@ -552,6 +742,7 @@ auto gpuTests() -> Tests {
     {"gpu bytes beside its pixels are memory's, without waiting", gpuBeside},
     {"gpu start-up check passes on a GPU that draws right", gpuCheck},
     {"gpu at 2 and 3 times the resolution: memory's bytes exact", gpuScaled},
+    {"gpu above 1x: 2D quads meeting at a seam keep to their texels", gpuSeams},
   };
 }
 
