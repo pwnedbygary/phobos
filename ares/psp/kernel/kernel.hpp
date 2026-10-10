@@ -950,7 +950,8 @@ struct Kernel {
   auto geSignaled() -> void;
   auto geStartNext() -> void;
   auto geCall(GeList& list, bool finish, u32 id, bool suspends = false) -> bool;
-  auto geStalled() const -> bool;
+  auto geOldSdk() const -> bool;
+  auto geAtStall(u32 index) const -> bool;
   auto geDrawSynced() -> void;
   auto geRemove(u32 index) -> void;
   auto geWake(Wait wait, u32 index) -> void;

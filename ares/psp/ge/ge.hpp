@@ -91,7 +91,7 @@ struct GE {
     Signaled,  //at an END after a SIGNAL: the driver does what the signal asks, then lets the GE go on
     Ended,     //at an END with neither before it: the GE just stops
     Busy,      //out of budget, still going
-    Faulted,   //a CALL deeper than the GE's two levels, or a RET with nothing to return to
+    Faulted,   //a CALL deeper than the GE's two levels
   };
 
   //Where the GE is in its list: the registers the driver saves while another list runs, and restores.
