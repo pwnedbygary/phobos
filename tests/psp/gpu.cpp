@@ -1657,7 +1657,8 @@ static auto gpuTallTexture() -> void {
 //check made some, given to a renderer made afresh, which takes them (its cache as big from the start) and draws as
 //right (its check passes); and data it must leave out, each made into a renderer whose cache starts without it and
 //which draws right: another driver version's, another driver cache UUID's, a file cut short, one whose second half
-//is zeros (a power cut after it was written), and junk.
+//is zeros (a power cut after it was written), and junk. (Where a driver's cache data is no bigger for the pipelines
+//it has than a renderer's at its start, as lavapipe's in CI, the sizes say nothing of what was taken.)
 static auto gpuPipelineCache() -> void {
   auto gpu = renderer();
   if(!gpu) return;
@@ -1665,6 +1666,12 @@ static auto gpuPipelineCache() -> void {
   CHECK(gpu->check(error), true);
   auto data = gpu->backend->pipelineData();
   CHECK(data.size() > 64, true);
+  auto start = GPU::vulkan(nullptr, error, false);
+  CHECK((bool)start, true);
+  if(!start) return;
+  size_t empty = start->backend->pipelineData().size();
+  std::printf("  pipeline data: %zu bytes, a renderer's at its start %zu\n", data.size(), empty);
+  bool sized = data.size() > empty;
   auto again = GPU::vulkan(nullptr, error, false, data);
   CHECK((bool)again, true);
   if(!again) return;
@@ -1679,7 +1686,7 @@ static auto gpuPipelineCache() -> void {
     auto other = GPU::vulkan(nullptr, error, false, left);
     CHECK((bool)other, true);
     if(!other) continue;
-    CHECK(other->backend->pipelineData().size() < data.size(), true);
+    if(sized) CHECK(other->backend->pipelineData().size() < data.size(), true);
     CHECK(other->check(error), true);
   }
 }
