@@ -55,6 +55,7 @@ namespace ares::PlayStationPortable {
 #include "power.cpp"
 #include "system.cpp"
 #include "mt19937.cpp"
+#include "rtc.cpp"
 #include "modules.cpp"
 #include "serialization.cpp"
 
@@ -254,6 +255,16 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceRtc",            "sceRtcSetDosTime",              &Kernel::sceRtcSetDosTime);
   add("sceRtc",            "sceRtcGetWin32FileTime",        &Kernel::sceRtcGetWin32FileTime);
   add("sceRtc",            "sceRtcSetTick",                 &Kernel::sceRtcSetTick);
+  for(auto [name, handler] : std::initializer_list<std::pair<const char*, auto (Kernel::*)() -> void>>{
+        {"sceRtcTickAddTicks", &Kernel::sceRtcTickAddTicks},
+        {"sceRtcTickAddMicroseconds", &Kernel::sceRtcTickAddMicroseconds},
+        {"sceRtcTickAddSeconds", &Kernel::sceRtcTickAddSeconds},
+        {"sceRtcTickAddMinutes", &Kernel::sceRtcTickAddMinutes},
+        {"sceRtcTickAddHours", &Kernel::sceRtcTickAddHours}, {"sceRtcTickAddDays", &Kernel::sceRtcTickAddDays},
+        {"sceRtcTickAddWeeks", &Kernel::sceRtcTickAddWeeks}, {"sceRtcTickAddMonths", &Kernel::sceRtcTickAddMonths},
+        {"sceRtcTickAddYears", &Kernel::sceRtcTickAddYears}}) {
+    add("sceRtc", name, handler);
+  }
   add("sceOpenPSID",       "sceOpenPSIDGetOpenPSID",        &Kernel::sceOpenPSIDGetOpenPSID);
   add("SysMemUserForUser", "sceKernelPrintf",               &Kernel::sceKernelPrintf);
   //the kernel's own debug printf, which kernel modules print with (pspautotests' modules/loadexec/simple)

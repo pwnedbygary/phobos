@@ -1788,6 +1788,19 @@ struct Kernel {
   auto sceCccSetErrorCharUTF16() -> void;
   auto sceCccSetErrorCharSJIS() -> void;
 
+  //rtc.cpp: ticks moved on by an amount of time (sceRtcTickAdd*)
+  auto rtcTickAdd(u64 amount) -> void;
+  auto rtcTickAddMonths(s64 months) -> void;
+  auto sceRtcTickAddTicks() -> void;
+  auto sceRtcTickAddMicroseconds() -> void;
+  auto sceRtcTickAddSeconds() -> void;
+  auto sceRtcTickAddMinutes() -> void;
+  auto sceRtcTickAddHours() -> void;
+  auto sceRtcTickAddDays() -> void;
+  auto sceRtcTickAddWeeks() -> void;
+  auto sceRtcTickAddMonths() -> void;
+  auto sceRtcTickAddYears() -> void;
+
   //mt19937.cpp: the Mersenne Twister, the kernel's and its library's (sceMt19937)
   auto mt19937Init(u32 context, u32 seed) -> void;
   auto mt19937UInt(u32 context) -> u32;

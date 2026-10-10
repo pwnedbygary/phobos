@@ -642,6 +642,10 @@ static auto clocks() -> void {
   CHECK(date(2004, 13, 1, 0, 0, 0, 0), Kernel::ErrorInvalidValue);
   CHECK(date(2004, 4, 31, 0, 0, 0, 0), Kernel::ErrorInvalidValue);
   CHECK(date(2004, 4, 30, 24, 0, 0, 0), Kernel::ErrorInvalidValue);
+  CHECK(date(9999, 12, 31, 23, 59, 59, 99'999'998), 0);  //microseconds past a second added (rtc/arithmetic)
+  CHECK(tick() == 315'537'897'698'999'998ull, true);
+  CHECK(date(10000, 1, 1, 0, 0, 0, 0), Kernel::ErrorInvalidValue);  //past the year 9999 (rtc/convert)
+  CHECK(tick() == 315'537'897'698'999'998ull, true);
   m.system.memory.write(4, R + 0x40, 5); m.system.memory.write(4, R + 0x44, 1);
   m.system.memory.write(4, R + 0x48, 6); m.system.memory.write(4, R + 0x4c, 0);
   CHECK(m.call("sceRtcCompareTick", {R + 0x40, R + 0x48}), 1);  //the high words decide
@@ -790,6 +794,62 @@ static auto wlanClock() -> void {
   CHECK(m.notes.size(), 0);
 }
 
+//Ticks moved on (rtc.cpp) as rtc/arithmetic recorded, its lines' sources and destinations as ticks: ticks,
+//microseconds, seconds and minutes by 64-bit amounts, hours, days and weeks by 32-bit ones, wrapping round either
+//way; months and years in the calendar, a month's last day kept to the new month, a date outside the years 1 to 9999
+//leaving the destination as it was; each returning 0.
+static auto tickArithmetic() -> void {
+  KernelMachine m;
+  constexpr u32 Source = R + 0x100, Destination = R + 0x108;
+  auto tickOf = [&](u32 year, u32 month, u32 day, u32 hour, u32 minute, u32 second, u32 microsecond) {
+    u32 values[] = {year, month, day, hour, minute, second};
+    for(u32 n = 0; n < 6; n++) m.system.memory.write(2, R + n * 2, values[n]);
+    m.system.memory.write(4, R + 12, microsecond);
+    m.call("sceRtcGetTick", {R, Source});
+    return m.system.memory.read(4, Source) | u64(m.system.memory.read(4, Source + 4)) << 32;
+  };
+  auto add = [&](const char* function, u64 source, u64 amount) {
+    m.system.memory.write(4, Source, u32(source)); m.system.memory.write(4, Source + 4, u32(source >> 32));
+    m.system.memory.write(4, Destination, 0x1337); m.system.memory.write(4, Destination + 4, 0);
+    CHECK(m.call(function, {Destination, Source, u32(amount), u32(amount >> 32)}), 0);
+    return m.system.memory.read(4, Destination) | u64(m.system.memory.read(4, Destination + 4)) << 32;
+  };
+  u64 epoch = tickOf(1970, 1, 1, 0, 0, 0, 445), big = 62'135'596'800'000'445ull;
+  CHECK(add("sceRtcTickAddTicks", big, -big), 0);
+  CHECK(add("sceRtcTickAddTicks", big, big) == 124'271'193'600'000'890ull, true);
+  CHECK(add("sceRtcTickAddTicks", big, 621'355'968'000ull) == 62'136'218'155'968'445ull, true);
+  CHECK(add("sceRtcTickAddMicroseconds", epoch, u64(-2000)) == tickOf(1969, 12, 31, 23, 59, 59, 998'445), true);
+  CHECK(add("sceRtcTickAddMicroseconds", tickOf(1, 1, 1, 0, 0, 0, 10), u64(-11)) == ~0ull, true);
+  CHECK(add("sceRtcTickAddSeconds", epoch, u64(-2000)) == tickOf(1969, 12, 31, 23, 26, 40, 445), true);
+  CHECK(add("sceRtcTickAddSeconds", epoch, -big) == epoch - big * 1'000'000, true);  //wrapping round
+  CHECK(add("sceRtcTickAddSeconds", tickOf(9999, 12, 31, 23, 59, 50, 0), 10)
+        == tickOf(9999, 12, 31, 23, 59, 50, 0) + 10'000'000, true);
+  CHECK(add("sceRtcTickAddMinutes", epoch, 2000) == tickOf(1970, 1, 2, 9, 20, 0, 445), true);
+  CHECK(add("sceRtcTickAddMinutes", epoch, big) == epoch + big * 60'000'000, true);
+  CHECK(add("sceRtcTickAddHours", epoch, u64(-2000)) == tickOf(1969, 10, 9, 16, 0, 0, 445), true);
+  //(a 32-bit amount: the test's 62135596800000445 hours reached the PSP as its low 32 bits)
+  CHECK(add("sceRtcTickAddHours", epoch, big) == epoch + u64(s64(s32(u32(big)))) * 3'600'000'000ull, true);
+  CHECK(add("sceRtcTickAddHours", epoch, big) == tickOf(383, 3, 16, 13, 0, 0, 445), true);
+  CHECK(add("sceRtcTickAddDays", epoch, 2000) == tickOf(1975, 6, 24, 0, 0, 0, 445), true);
+  CHECK(add("sceRtcTickAddDays", tickOf(1, 1, 10, 0, 0, 0, 0), u64(-10)) == u64(-86'400'000'000ll), true);
+  CHECK(add("sceRtcTickAddWeeks", epoch, u64(-2000)) == tickOf(1931, 9, 3, 0, 0, 0, 445), true);
+  CHECK(add("sceRtcTickAddWeeks", epoch, -big) == epoch + u64(s64(s32(u32(-big)))) * 604'800'000'000ull, true);
+  CHECK(add("sceRtcTickAddMonths", epoch, u64(-2000)) == tickOf(1803, 5, 1, 0, 0, 0, 445), true);
+  CHECK(add("sceRtcTickAddMonths", epoch, 14) == tickOf(1971, 3, 1, 0, 0, 0, 445), true);
+  CHECK(add("sceRtcTickAddMonths", tickOf(1970, 1, 31, 1, 2, 3, 4), 1) == tickOf(1970, 2, 28, 1, 2, 3, 4), true);
+  CHECK(add("sceRtcTickAddMonths", epoch, big), 0x1337);
+  CHECK(add("sceRtcTickAddMonths", tickOf(1, 2, 1, 0, 0, 0, 0), u64(-1)) == tickOf(1, 1, 1, 0, 0, 0, 0), true);
+  CHECK(add("sceRtcTickAddMonths", tickOf(1, 2, 1, 0, 0, 0, 0), u64(-2)), 0x1337);
+  CHECK(add("sceRtcTickAddMonths", tickOf(9999, 11, 1, 0, 0, 0, 0), 2), 0x1337);
+  CHECK(add("sceRtcTickAddYears", tickOf(2012, 2, 29, 0, 0, 0, 445), 1) == tickOf(2013, 2, 28, 0, 0, 0, 445), true);
+  CHECK(add("sceRtcTickAddYears", tickOf(2012, 2, 29, 0, 0, 0, 445), 4) == tickOf(2016, 2, 29, 0, 0, 0, 445), true);
+  CHECK(add("sceRtcTickAddYears", epoch, u64(-1969)) == tickOf(1, 1, 1, 0, 0, 0, 445), true);
+  CHECK(add("sceRtcTickAddYears", epoch, u64(-2000)), 0x1337);
+  CHECK(add("sceRtcTickAddYears", tickOf(9998, 1, 1, 0, 0, 0, 0), 2), 0x1337);
+  CHECK(m.call("sceRtcTickAddSeconds", {0, Source, 1, 0}), Kernel::ErrorInvalidPointer);
+  CHECK(m.notes.size(), 0);
+}
+
 auto powerTests() -> Tests {
   return {
     {"power callbacks", powerCallbacks}, {"power clocks", powerClocks}, {"power volatile memory", volatileMemory},
@@ -800,6 +860,7 @@ auto powerTests() -> Tests {
     {"kernel thread priorities", threadPriorities}, {"kernel thread stack free", stackFree},
     {"remote and running time", remoteAndRunningTime},
     {"power the clock beside the wireless LAN", wlanClock},
+    {"kernel ticks moved on", tickArithmetic},
   };
 }
 

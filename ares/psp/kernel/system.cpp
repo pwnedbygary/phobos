@@ -201,15 +201,17 @@ static auto dateFromYearOne(s64 days, s64& year, u32& month, u32& day) -> void {
 }
 
 //(date, where to put its tick): a ScePspDateTime (psprtc.h: year, month, day, hour, minute, second as 16-bit numbers,
-//then microseconds) as a tick, microseconds since 0001-01-01. A date that can't be is refused.
+//then microseconds) as a tick, microseconds since 0001-01-01. A date that can't be, or past the year 9999, is refused
+//(rtc/convert's 10000-01-01); its microseconds are added whatever they are (rtc/arithmetic's 9999-12-31 23:59:59
+//and 99999998 microseconds came out a minute and 39 seconds into 10000).
 auto Kernel::sceRtcGetTick() -> void {
   u32 date = arg(0);
   u32 year = memory.read(2, date), month = memory.read(2, date + 2), day = memory.read(2, date + 4);
   u32 hour = memory.read(2, date + 6), minute = memory.read(2, date + 8), second = memory.read(2, date + 10);
   u32 microsecond = memory.read(4, date + 12);
   static constexpr u8 MonthDays[] = {31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-  if(!year || !month || month > 12 || !day || day > MonthDays[month - 1] || hour > 23 || minute > 59 || second > 59
-  || microsecond > 999'999) return result(ErrorInvalidValue);
+  if(!year || year > 9999 || !month || month > 12 || !day || day > MonthDays[month - 1] || hour > 23 || minute > 59
+  || second > 59) return result(ErrorInvalidValue);
   bool leap = (year % 4 == 0 && year % 100) || year % 400 == 0;
   if(month == 2 && day == 29 && !leap) return result(ErrorInvalidValue);
   u64 seconds = u64(daysFromYearOne(year, month, day)) * 86'400 + hour * 3'600 + minute * 60 + second;
