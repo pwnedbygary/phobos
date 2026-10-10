@@ -474,6 +474,7 @@ struct GE {
   auto transfer() -> void;
 
   //threads.cpp
+  static constexpr u32 VRAMPages = (2 << 20) / 4096;  //VRAM's 2 MiB in 4 KiB pages (memory.hpp)
   auto setThreads(u32 count) -> void;
   auto flush() -> void;
   auto launch(bool returning) -> void;
@@ -488,8 +489,10 @@ struct GE {
   auto freeVRAM() -> void;
   auto settleAll() -> void;
   auto settleOver(u32 first, u32 last) -> void;
+  template<typename Reaches> auto settleThrough(const Reaches& reaches) -> bool;
   auto clearBatch(Batch& batch) -> void;
   auto drawnFirst(u32 address, u32 size) -> void;
+  auto drawnBefore(const std::bitset<VRAMPages>& read, const std::bitset<VRAMPages>& written) -> void;
   auto drawnOver(u32 first, u32 last) -> bool;
   auto defer(const PixelState& pixel, const Region& region) -> bool;
   auto record(const Job& job) -> void;
@@ -502,8 +505,6 @@ struct GE {
   //The bytes of VRAM the primitive being drawn may draw over (draw.cpp): its frame buffer's, and its depth buffer's.
   struct Touched { u32 low = ~0u, high = 0; };
   std::array<Touched, 2> touched;
-
-  static constexpr u32 VRAMPages = (2 << 20) / 4096;  //VRAM's 2 MiB in 4 KiB pages (memory.hpp)
 
   //Drawing on several threads (threads.cpp). While the GE runs a list, the primitives it meets wait in a batch,
   //set up, and are drawn together, in bands of rows shared out among the threads, before anything could see them.
