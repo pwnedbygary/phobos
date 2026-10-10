@@ -526,11 +526,94 @@ static auto atracFFmpeg() -> void {
   CHECK(loud > total / 10 && clipped < total / 1000, true);
 }
 
+//The low level (sceAtracLowLevelInitDecoder, sceAtracLowLevelDecode), as Corpse Party's CRI library uses it: on an
+//ID from sceAtracGetAtracID, the frames' channels, the output's and the frame size; each frame decoded into the
+//output's channels, interleaved (two from two, the left from two, one doubled), its bytes used and samples' bytes
+//written told; ATRAC3's two-channel 0xc0-byte frames joint stereo. Refused: an ID not handed out (BAD_ID), parameters
+//out of range (BAD_PARAMETERS), decoding before them (NO_DATA, as on an ID with no file), a frame that won't decode
+//(FAILED, nothing written). Its high level sees no file; setting one makes the ID the file's.
+static auto atracLowLevel() -> void {
+  constexpr u32 AtracErrorFailed = 0x8063'0002, AtracErrorBadID = 0x8063'0005, AtracErrorBadParameters = 0x8063'0008;
+  constexpr u32 AtracErrorNoData = 0x8063'0010;
+  Machine m;
+  constexpr u32 Parameters = R + 0x100, Used = R + 0x110, Written = R + 0x114, Frame = File + 0x1000;
+  auto frame = [&](u32 number, u32 bytes = 376) {
+    m.system.memory.fill(Frame, 0x5a, bytes);
+    m.system.memory.write(2, Frame, number);
+  };
+  auto initialize = [&](u32 id, u32 channels, u32 output, u32 bytes) {
+    m.system.memory.write(4, Parameters, channels);
+    m.system.memory.write(4, Parameters + 4, output);
+    m.system.memory.write(4, Parameters + 8, bytes);
+    return m.call("sceAtracLowLevelInitDecoder", {id, Parameters});
+  };
+  auto decode = [&] {
+    m.system.memory.fill(Samples, 0xcc, 0x4004);
+    m.system.memory.write(4, Used, 0x1337), m.system.memory.write(4, Written, 0x1337);
+    return m.call("sceAtracLowLevelDecode", {0, Frame, Used, Samples, Written});
+  };
+  auto sample = [&](u32 n) { return m.system.memory.read(2, Samples + n * 2); };
+  CHECK(initialize(0, 2, 2, 376), AtracErrorBadID);
+  CHECK(m.call("sceAtracGetAtracID", {0x1000}), 0);
+  CHECK(decode(), AtracErrorNoData);
+  for(auto [channels, output, bytes] : {std::tuple{0u, 2u, 376u}, {3u, 2u, 376u}, {2u, 0u, 376u}, {2u, 3u, 376u},
+                                        {2u, 2u, 0u}, {2u, 2u, 0x2001u}}) {
+    CHECK(initialize(0, channels, output, bytes), AtracErrorBadParameters);
+  }
+  CHECK(initialize(0, 2, 2, 376), 0);
+  frame(7);
+  CHECK(decode(), 0);
+  CHECK(m.system.memory.read(4, Used) == 376 && m.system.memory.read(4, Written) == 2048 * 4, true);
+  CHECK(sample(0) == 7 && sample(1) == 0 && sample(4094) == 7 && sample(4095) == 2047, true);
+  CHECK(m.system.memory.read(2, Samples + 8192), 0xcccc);
+  CHECK(m.call("sceAtracDecodeData", {0, Samples, R, R + 4, R + 8}), AtracErrorNoData);  //no file
+  //mono output from two channels: the left; one channel doubled
+  CHECK(initialize(0, 2, 1, 376), 0);
+  frame(9);
+  CHECK(decode(), 0);
+  CHECK(m.system.memory.read(4, Written) == 2048 * 2 && sample(0) == 9 && sample(2047) == 9, true);
+  CHECK(m.system.memory.read(2, Samples + 4096), 0xcccc);
+  CHECK(initialize(0, 1, 2, 376), 0);
+  frame(10);
+  CHECK(decode(), 0);
+  CHECK(sample(0) == 10 && sample(1) == 10 && sample(4095) == 10, true);
+  //a frame that won't decode
+  m.system.memory.write(1, Frame + 4, 0xee);
+  CHECK(decode(), AtracErrorFailed);
+  CHECK(sample(0) == 0xcccc && m.system.memory.read(4, Used) == 0x1337, true);
+  //ATRAC3: joint stereo for two channels of 0xc0 bytes
+  CHECK(m.call("sceAtracGetAtracID", {0x1001}), 2);
+  std::vector<u8> extra;
+  m.kernel.audioDecoders = [&extra](const AudioDecoder::Format& format) -> std::unique_ptr<AudioDecoder> {
+    extra = format.extra;
+    auto decoder = std::make_unique<StandIn>();
+    decoder->format = format;
+    decoder->log = std::make_shared<std::vector<s32>>();
+    return decoder;
+  };
+  for(auto [bytes, joint] : {std::pair{0xc0u, 1u}, {0x130u, 0u}}) {
+    CHECK(initialize(2, 2, 2, bytes), 0);
+    m.system.memory.fill(Frame, 0x5a, bytes);
+    CHECK(m.call("sceAtracLowLevelDecode", {2, Frame, Used, Samples, Written}), 0);
+    CHECK(m.system.memory.read(4, Written), 1024 * 4);
+    CHECK(extra.size() == 14 && extra[6] == joint && extra[8] == joint, true);
+  }
+  //a file set on the ID makes it the file's again
+  auto bytes = file();
+  m.system.memory.copyIn(File, bytes.data(), bytes.size());
+  m.kernel.audioDecoders = Machine().kernel.audioDecoders;
+  CHECK(m.call("sceAtracSetData", {0, File, u32(bytes.size())}), 0);
+  CHECK(m.kernel.atracs[0].lowLevel, false);
+  CHECK(m.call("sceAtracLowLevelDecode", {0, Frame, Used, Samples, Written}), AtracErrorNoData);
+  CHECK(m.notes.size(), 0);
+}
+
 auto atracTests() -> Tests {
   return {{"atrac ids", atracIDs}, {"atrac setting", atracSetting}, {"atrac whole file", atracWholeFile},
           {"atrac halfway", atracHalfway}, {"atrac streamed", atracStreamed}, {"atrac looped", atracLooped},
           {"atrac second buffer", atracSecondBuffer}, {"atrac reset", atracReset}, {"atrac bad frame", atracBadFrame},
-          {"atrac states", atracStates}, {"atrac header sizes", atracHeaderSizes}, {"atrac ffmpeg", atracFFmpeg}};
+          {"atrac states", atracStates}, {"atrac header sizes", atracHeaderSizes}, {"atrac ffmpeg", atracFFmpeg},
+          {"atrac low level", atracLowLevel}};
 }
 
 }

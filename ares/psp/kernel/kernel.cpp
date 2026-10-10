@@ -804,6 +804,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceAtrac3plus",     "sceAtracGetSecondBufferInfo",   &Kernel::sceAtracGetSecondBufferInfo);
   add("sceAtrac3plus",     "sceAtracSetSecondBuffer",       &Kernel::sceAtracSetSecondBuffer);
   add("sceAtrac3plus",     "_sceAtracGetContextAddress",    &Kernel::_sceAtracGetContextAddress);
+  add("sceAtrac3plus",     "sceAtracLowLevelInitDecoder",   &Kernel::sceAtracLowLevelInitDecoder);
+  add("sceAtrac3plus",     "sceAtracLowLevelDecode",        &Kernel::sceAtracLowLevelDecode);
   for(auto [name, handler] : std::initializer_list<std::pair<const char*, auto (Kernel::*)() -> void>>{
         {"sceMp3InitResource", &Kernel::sceMp3InitResource}, {"sceMp3TermResource", &Kernel::sceMp3TermResource},
         {"sceMp3ReserveMp3Handle", &Kernel::sceMp3ReserveMp3Handle},

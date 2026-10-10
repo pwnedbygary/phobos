@@ -1531,6 +1531,7 @@ struct Kernel {
     bool looped = false;
     u32 loopStart = 0, loopEnd = 0;    //on the decoder's count, the end the loop's last sample
     bool monoFrames = false;    //ATRAC3 frames decoded as mono whatever the header's channels (atrac.cpp)
+    bool lowLevel = false;      //no file: frames the game hands it one at a time (sceAtracLowLevelInitDecoder)
     std::vector<u8> extra;      //the codec's parameters from the fmt chunk
     //the buffers
     u32 buffer = 0, bufferByte = 0, secondBuffer = 0, secondBufferByte = 0;
@@ -1602,6 +1603,8 @@ struct Kernel {
   auto sceAtracGetSecondBufferInfo() -> void;
   auto sceAtracSetSecondBuffer() -> void;
   auto _sceAtracGetContextAddress() -> void;
+  auto sceAtracLowLevelInitDecoder() -> void;
+  auto sceAtracLowLevelDecode() -> void;
 
   //mp3.cpp: sceMp3, MP3 streams fed through a buffer and decoded a frame a call
   struct Mp3 {
