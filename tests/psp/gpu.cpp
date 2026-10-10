@@ -1130,43 +1130,66 @@ static auto gpuStoresOver() -> void {
 //pixels are the newest, not memory's. An 8888 frame buffer drawn, a 5650 one over the same bytes drawn (the 8888's
 //pixels in its pages moved into it), the CPU's word stored over both (dead in each), the 5650 drawn over the word;
 //then the 8888 drawn in that page again, or taken as a texture from its first row (the 5650's pixels moved back into
-//it), and the word's place read. And the word written into a page no one owns (beside the 8888's pixels), the 5650
-//drawn over it, then the 8888 taken as a texture. As the software renderer has it each time.
+//it), and the word's place read. The word written after a finish instead, over pixels the 8888 drew before it (its
+//page's bytes memory's: beside), the 5650 drawn over it, then the 8888 taken as a texture. And bytes beside the
+//8888's pixels its drawn rectangle grows over as the 5650's pixels below move into it, not put back over at the
+//finish; and more than 16 such words apart (taken together, over a row it drew), then the 8888 taken as a texture
+//across the 5650's page: not moved, finished. As the software renderer has it each time.
 static auto gpuMovedOverMemorys() -> void {
   auto gpu = renderer();
   if(!gpu) return;
   constexpr u32 At = 0x3'0000, Word = 20 * 256 + 40;
-  auto as = [](System& s, u32 format) {  //(8888 in rows of 64 pixels, or 5650 in rows of 128: the same bytes)
-    prepare(s, At, format);
+  auto as = [](System& s, u32 format, u32 address) {  //(8888 in rows of 64 pixels, or 5650 in rows of 128)
+    prepare(s, address, format);
     s.ge.commands[GE::FrameBufferWidth] = format == 3 ? 64 : 128;
     s.ge.commands[GE::TextureMappingEnable] = 0;
   };
-  for(u32 variant : {0u, 1u, 2u}) {
+  auto taken = [](System& s) {  //(the 8888 as a texture from its first row, 32 rows)
+    prepare(s, 0x2'0000, 3);
+    texture(s, Memory::VRAMBase + At, 64, 32, 64);
+    sprite(s, {{{0, 0, 0, 0}, {64, 32, 64, 32}}, 0xffff'ffff});
+  };
+  for(u32 variant : {0u, 1u, 2u, 3u, 4u}) {
     System software, hardware;
     hardware.ge.setRenderer(gpu);
-    u32 seen[2] = {};
+    u32 seen[2] = {}, read = variant < 3 ? Word : variant == 3 ? 256 + 80 : 2 * 256 + 16;
     for(System* s : {&software, &hardware}) {
-      as(*s, 3);
-      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff10'2030});
-      if(variant == 2) {  //(a finish, so no page is the GPU's: the word's page written, beside the 8888's pixels)
-        s->memory.read(4, Memory::VRAMBase + At);
-        s->memory.write(4, Memory::VRAMBase + At + Word, 0x1234'5678);
+      as(*s, 3, At);
+      if(variant < 3) {
+        sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff10'2030});
+        if(variant == 2) {  //(a finish, so no page is the GPU's: the word's page written)
+          s->memory.read(4, Memory::VRAMBase + At);
+          s->memory.write(4, Memory::VRAMBase + At + Word, 0x1234'5678);
+        }
+        as(*s, 0, At);
+        sprite(*s, {{{0, 0, 0, 16}, {0, 0, 64, 32}}, 0xff40'5060});
+        if(variant < 2) {  //(the word stored over both: dead in each; the 5650 drawn over it)
+          s->memory.write(4, Memory::VRAMBase + At + Word, 0x1234'5678);
+          sprite(*s, {{{0, 0, 0, 18}, {0, 0, 64, 22}}, 0xff70'8090});
+        }
+        if(variant == 0) {
+          as(*s, 3, At);
+          sprite(*s, {{{0, 0, 0, 28}, {0, 0, 64, 30}}, 0xffa0'b0c0});
+        } else {
+          taken(*s);
+        }
+      } else {
+        sprite(*s, {{{0, 0, 0, 0}, {0, 0, 8, variant == 3 ? 2.0f : 4.0f}}, 0xff10'2030});
+        if(variant == 3) s->memory.write(4, Memory::VRAMBase + At + 256 + 80, 0x1357'9bdf);  //(row 1, column 20)
+        for(u32 n = 0; n < 17 && variant == 4; n++) {  //(rows 1 and 3 from column 10, a pixel apart)
+          u32 at = (1 + 2 * (n & 1)) * 256 + (10 + 2 * (n >> 1)) * 4;
+          s->memory.write(4, Memory::VRAMBase + At + at, n * 0x0101'0101);
+        }
+        as(*s, 0, At + 0x1000);
+        sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 4}}, 0xff40'5060});
+        if(variant == 3) {
+          as(*s, 3, At);
+          sprite(*s, {{{0, 0, 0, 16}, {0, 0, 4, 18}}, 0xffa0'b0c0});
+        } else {
+          taken(*s);
+        }
       }
-      as(*s, 0);
-      sprite(*s, {{{0, 0, 0, 16}, {0, 0, 64, 32}}, 0xff40'5060});
-      if(variant < 2) {  //(the word stored over both: dead in each; the 5650 drawn over it)
-        s->memory.write(4, Memory::VRAMBase + At + Word, 0x1234'5678);
-        sprite(*s, {{{0, 0, 0, 18}, {0, 0, 64, 22}}, 0xff70'8090});
-      }
-      if(variant == 0) {
-        as(*s, 3);
-        sprite(*s, {{{0, 0, 0, 28}, {0, 0, 64, 30}}, 0xffa0'b0c0});
-      } else {  //(the 8888 taken as a texture from its first row: the 5650's pixels moved into it first)
-        prepare(*s, 0x2'0000, 3);
-        texture(*s, Memory::VRAMBase + At, 64, 32, 64);
-        sprite(*s, {{{0, 0, 0, 0}, {64, 32, 64, 32}}, 0xffff'ffff});
-      }
-      seen[s == &hardware] = s->memory.read(4, Memory::VRAMBase + At + Word);
+      seen[s == &hardware] = s->memory.read(4, Memory::VRAMBase + At + read);
     }
     CHECK(seen[1], seen[0]);
     u32 bytes = vramApart(software, hardware);

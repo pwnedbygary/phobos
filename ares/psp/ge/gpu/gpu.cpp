@@ -274,7 +274,7 @@ auto GPU::own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
 //Whether another target's pixels in pages first to last, which it has drawn in, can move into t on the GPU (move():
 //as putting them in memory and filling t from it would leave t): the same bytes a row, pages of whole rows, and rows
 //starting the same bytes in both, every pixel it drew there in t's rows; not where memory has newer bytes among them
-//(from's beside), nor where t's own bytes beside its pixels are merged into ranges that may take in pixels it drew
+//(from's beside), nor while t's own bytes beside its pixels are merged into ranges that may take in pixels it drew
 //(those it fills afresh, after a finish). box: the rectangle moved, in from's pixels: its drawn columns (a 16-bit
 //one's going into an 8888 one's widened to whole pixels of that: the newest of the pixels beside them are its too, in
 //the pages it owns), its drawn rows in those pages.
@@ -292,8 +292,7 @@ auto GPU::movable(const Target& from, const Target& t, u32 first, u32 last, s32 
   s32 down = (s32(from.address) - s32(t.address)) / s32(rowBytes);
   if(box[1] > box[3]) return true;
   if(box[1] + down < 0 || box[3] + down >= s32(t.height)) return false;
-  s32 x = box[0] * s32(from.bytes()) / s32(t.bytes()), right = (box[2] + 1) * s32(from.bytes()) / s32(t.bytes()) - 1;
-  if(t.merged && t.besideReaches(x, box[1] + down, right, box[3] + down)) return false;
+  if(t.merged && !t.beside.empty()) return false;
   return !from.besideReaches(box[0], box[1], box[2], box[3]);
 }
 
@@ -313,8 +312,14 @@ auto GPU::move(Target& from, Target& t, const Moving& m) -> void {
   c.y = box[1] + (s32(from.address) - s32(t.address)) / s32(rowBytes), c.height = box[3] - box[1] + 1;
   s32 right = c.x + c.width - 1, bottom = c.y + c.height - 1;
   //(t's bytes memory has the newest of, over its older pixels, filled first where the move goes: it puts from's
-  //newer ones over those, and the ranges no longer say memory's of them)
-  if(t.besideReaches(c.x, c.y, right, bottom)) revive(t, t.beside);
+  //newer ones over those, and the ranges no longer say memory's of them; and those beside its pixels in what its
+  //drawn rectangle grows to, which a finish would put back over)
+  s32 uLeft = c.x, uTop = c.y, uRight = right, uBottom = bottom;
+  if(t.drawn()) {
+    uLeft = std::min(uLeft, t.left), uTop = std::min(uTop, t.top);
+    uRight = std::max(uRight, t.right), uBottom = std::max(uBottom, t.bottom);
+  }
+  if(t.besideReaches(uLeft, uTop, uRight, uBottom)) revive(t, t.beside);
   if(t.deadReaches(c.x, c.y, right, bottom)) revive(t, t.dead);
   recorded.commands.push_back(c);
   statistics.moves++;
@@ -715,6 +720,12 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   if(t->deadReaches(left, top, right, bottom)) revive(*t, t->dead);  //(where it draws, as memory has it)
   if(depth && u32(bottom + 1) > t->depthRows) fill(*t, t->depthRows, bottom + 1, p, 2), t->depthRows = bottom + 1;
   for(auto& m : moving) move(*m.from, *t, m);
+  //(bytes beside its pixels the moves and this PRIM together take into its drawn rectangle, which neither did alone:
+  //memory's, filled now, where they're no moved pixels')
+  if(!moving.empty() && t->besideReaches(std::min(uLeft, t->left), std::min(uTop, t->top),
+                                         std::max(uRight, t->right), std::max(uBottom, t->bottom))) {
+    revive(*t, t->beside);
+  }
   target = t, this->column = column, this->row = row;
   this->through = through;
   filter = ge.commands[GE::TextureFilter];
