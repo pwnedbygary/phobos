@@ -27,7 +27,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP GE: the software renderer faster — copies wait only for what they touch, bands listed, runs — 2026-10-10
 
-Branch `cursor/psp-ge-speed5-2b67`, on top of #195's `cursor/psp-hle-games13-2b67`. docs/psp-core.md, part 61, has the
+Branch `cursor/psp-ge-speed5-2b67`, on top of #196's `cursor/psp-hle-games14-2b67` (#195 under it). docs/psp-core.md, part 61, has the
 evidence. Nothing drawn changed: every measured picture, and every bench scene's frames and end state at 1 and 7
 threads, byte for byte as before. Clean room: nothing of PPSSPP's or JPCSP's read. Save states unchanged (22).
 - **Changes** (each its own commit): a triangle's fours in runs of three passes (depth tests, then the survivors'
@@ -47,6 +47,35 @@ threads, byte for byte as before. Clean room: nothing of PPSSPP's or JPCSP's rea
   fours a frame (maybe drawn more than once a frame, the GE taking no time); MC3's race at 7 threads is the emulation
   thread's own work. Scratch: `~/phobos-work/scratch/speed5` (God of War's two scenes, the RP6's scripts rp6-run5.sh
   and rp6-run6.sh, the logging patches); nothing of it left on the RP6.
+
+## PSP core: Sony's plain modules, sceIoGetFdList, GETSIZE's NO_DATA, a restart with all of RAM — 2026-10-10
+
+Branch `cursor/psp-hle-games14-2b67`, on top of #195's `cursor/psp-hle-games13-2b67`. docs/psp-core.md, part 62, has the
+evidence; docs/psp-compatibility.md's summary and changed rows are updated. Clean room: uOFW and PPSSPP's savedata
+code read only as descriptions of the PSP; JPCSP not read.
+- **Fixes** (each its own commit, with tests): a plain module of Sony's whose functions the kernel has none of runs as
+  the game's own (scesupPreAcc was Sony's LIBSUPPREACC.PRX, carried by Persona 3 Portable and both Dissidias);
+  sceIoGetFdList as uOFW describes it, descriptors in the order opened (Crush); the savedata size mode answers NO_DATA
+  for a save not there, as Def Jam's code expects (its first save works; Hot Shots Golf 2 saves instead of calling its
+  save corrupted); a program asking, before its first frame, for more than the whole 24 MiB partition is started again
+  with all of RAM (Melodie, chosen); the disc's folders are read once (Ghost of Sparta's PGD retry loop no longer
+  times out); the runner's WAV header is the standard 44 bytes.
+- **Numbers** (against part 59 on the merged stack): menu or gameplay 187 -> 188, movie 71, loading 0, black or hang 6
+  (Melodie out, Ghost of Sparta in, black on PGD), timed out 2 -> 1 (Chains of Olympus: the GE's, 68% of the
+  emulation thread in GE::flush at block transfers). Ultimate Ghosts 'n Goblins and Me & My Katamari take a fresh
+  stick's way now (its "no game data" prompt; its opening). No function missing in any game.
+- **Checks**: tests/psp 407/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0, runner-test.sh passes; each commit
+  builds and passes its groups alone. Save states version 23 (each open file's place in the opening order); layouts 15
+  to 22 load, files in number order; the base runner's version-22 states carry on, Lumines', Patapon 2's and GTA's byte
+  for byte, Crush's one frame apart (it calls sceIoGetFdList, refused on the base). An independent read-only review
+  found two bugs (the ares suite's hand-made open file without its place; a negative size compared unsigned in
+  sceIoGetFdList) and a test gap (the restart's once-only guard); all its findings are fixed.
+- **Left / for others**: PGD (six games); Chains of Olympus's speed (the GE, part 61); sceIoChstat (imported by
+  LIBSUPPREACC.PRX, never called in the runs); the restart and sceIoGetFdList's standard stream numbers are chosen.
+- Scratch: `~/phobos-work/scratch/hle14` (run.sh, lib.sh, survey.sh; sync-dbg.sh builds the debug tree
+  `~/phobos-work/wt/dbg-hle14` with apply-hooks.py's traces: PSP_TRACE, PSP_SAVEDATA, PSP_SFO, PSP_PROGRAM,
+  PSP_SAVE_MODULES, PSP_BREAK/STEP/WATCH; tools/prxinfo.py and prxdis.py read a plain PRX; lib-new is this branch's
+  library run, cmp-new.tsv its comparison with hle13/lib-merged).
 
 ## PSP core: the black games with nothing missing — descriptors, the drive, async requests, SAS, the movie ring — 2026-10-09
 

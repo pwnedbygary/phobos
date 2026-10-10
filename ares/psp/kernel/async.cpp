@@ -165,6 +165,7 @@ auto Kernel::sceIoOpenAsync() -> void {
     shell.path = path;
     shell.onDisc = disc;
     shell.resultOnly = true;
+    shell.opened = ++filesOpened;
     asyncStart(shell, s32(error), 0);
     return result(file);
   }

@@ -852,9 +852,66 @@ static auto stickCallback() -> void {
   }
 }
 
+//A folder is read once: a path looked up again, or another file in a folder already listed, reads nothing more from
+//the image, and listing a folder gives the same entries as the first time; opened on another image, the Disc keeps
+//none of them; and a folder whose sectors couldn't be read is read again. (God of War: Ghost of Sparta opens one file
+//about 3,000 times a frame, and each lookup unpacked the image's blocks for the folders afresh.)
+static auto discFolders() -> void {
+  auto image = testDisc();
+  auto data = std::make_shared<std::vector<u8>>(image.bytes);
+  auto reads = std::make_shared<u32>(0);
+  Disc disc;
+  std::string error;
+  CHECK(disc.open([data, reads](u64 offset, void* out, u64 size) -> u64 {
+    (*reads)++;
+    if(offset >= data->size()) return 0;
+    size = std::min<u64>(size, data->size() - offset);
+    memcpy(out, data->data() + offset, size);
+    return size;
+  }, data->size(), error), true);
+  Disc::Entry entry;
+  CHECK(disc.find({"PSP_GAME", "USRDIR", "DATA.BIN"}, entry) && entry.size == 7 * 1024, true);
+  u32 first = *reads;
+  CHECK(first > 0, true);
+  for(u32 n = 0; n < 3; n++) CHECK(disc.find({"psp_game", "usrdir", "data.bin"}, entry), true);
+  CHECK(disc.find({"PSP_GAME", "USRDIR", "EMPTY.BIN"}, entry) && entry.size == 0, true);
+  CHECK(disc.find({"PSP_GAME", "USRDIR", "MISSING.BIN"}, entry), false);
+  Disc::Entry usrdir;
+  CHECK(disc.find({"PSP_GAME", "USRDIR"}, usrdir) && usrdir.folder, true);
+  CHECK(names(disc.list(usrdir)) == "DATA.BIN EMPTY.BIN", true);
+  CHECK(*reads, first);
+  CHECK(disc.find({"PSP_GAME", "SYSDIR", "EBOOT.BIN"}, entry), true);  //a folder not listed yet: read
+  CHECK(*reads > first, true);
+  //the same Disc opened on another image: none of the first's folders is kept
+  auto otherImage = disc_image::makeIso({{"PSP_GAME/USRDIR/OTHER.BIN", pattern(10, 5)}});
+  auto other = std::make_shared<std::vector<u8>>(otherImage.bytes);
+  CHECK(disc.open([other](u64 offset, void* out, u64 size) -> u64 {
+    if(offset >= other->size()) return 0;
+    size = std::min<u64>(size, other->size() - offset);
+    memcpy(out, other->data() + offset, size);
+    return size;
+  }, other->size(), error), true);
+  CHECK(disc.find({"PSP_GAME", "USRDIR", "DATA.BIN"}, entry), false);
+  CHECK(disc.find({"PSP_GAME", "USRDIR", "OTHER.BIN"}, entry) && entry.size == 10, true);
+  //a folder whose sectors can't be read just then (anything past the volume descriptor): not kept, read again
+  auto failing = std::make_shared<bool>(false);
+  CHECK(disc.open([data, failing](u64 offset, void* out, u64 size) -> u64 {
+    if(*failing && offset >= 17 * Disc::SectorSize) return 0;
+    if(offset >= data->size()) return 0;
+    size = std::min<u64>(size, data->size() - offset);
+    memcpy(out, data->data() + offset, size);
+    return size;
+  }, data->size(), error), true);
+  *failing = true;
+  CHECK(disc.find({"PSP_GAME", "USRDIR", "DATA.BIN"}, entry), false);
+  *failing = false;
+  CHECK(disc.find({"PSP_GAME", "USRDIR", "DATA.BIN"}, entry) && entry.size == 7 * 1024, true);
+}
+
 auto discTests() -> Tests {
   return {
-    {"disc images", discImages}, {"disc files", discFiles}, {"disc requests", discRequests},
+    {"disc images", discImages}, {"disc files", discFiles}, {"disc folders read once", discFolders},
+    {"disc requests", discRequests},
     {"disc PGD keys", discKeys}, {"disc drive", umdDrive}, {"disc drive's callback", umdCallback},
     {"disc drive mounting as it's activated", umdMounting}, {"memory stick's callback", stickCallback},
   };

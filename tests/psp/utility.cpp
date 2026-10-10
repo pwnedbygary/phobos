@@ -309,7 +309,8 @@ static auto savedataErase() -> void {
 //carries, its PARAM.SFO and the folder. The size mode (22), as utility/savedata/getsize recorded: the free space in
 //32 KiB "sectors", and with no files listed nothing else written; with files, what they take in whole clusters past
 //the free space (none for 128 KiB, its text left alone; 256 MiB for a 2 GiB file); not in the smaller structure of
-//before firmware 2.00. Sizes as text in whole units: KB, MB, GB.
+//before firmware 2.00; 0 for a save that's there, and NO_DATA for one that isn't, the sizes written all the same (Def
+//Jam: Fight for NY makes its save on that answer). Sizes as text in whole units: KB, MB, GB.
 static auto stickSpace() -> void {
   HostFolder stick;
   KernelMachine m;
@@ -399,10 +400,11 @@ static auto stickSpace() -> void {
   memory.write(4, Sizes + 4, 1);
   memory.write(4, Sizes + 8, Files);
   memory.write(4, Sizes + 12, Files + 48);
-  saveParameters(m, 22, "ULUS99999", "NONE", 0);  //(the save needn't be there)
+  saveParameters(m, 22, "ULUS99999", "NONE", 0);  //a save not there: no data, the sizes told all the same
   memory.write(4, Parameters + 1532, Sizes);
-  memory.fill(Sizes + 36, 0xcc, 24);
-  CHECK(runSave(m), 0);
+  memory.fill(Sizes + 16, 0xcc, 44);
+  CHECK(runSave(m), 0x8011'0327);
+  CHECK(memory.read(4, Sizes + 20), 57'344);
   //they take 128 KiB, well within the free space: nothing more needed, new or over a save, the text left alone
   for(u32 at : {36u, 48u}) CHECK(memory.read(4, Sizes + at), 0);
   for(u32 at : {40u, 52u}) CHECK(memory.read(4, Sizes + at), 0xcccc'cccc);
@@ -410,9 +412,21 @@ static auto stickSpace() -> void {
   memory.write(4, Files + 48, 0x8000'0000);  //(a 64-bit size, low word first)
   memory.write(4, Files + 52, 0);
   memory.write(4, Sizes, 0);  //no secure files
-  CHECK(runSave(m), 0);
+  CHECK(runSave(m), 0x8011'0327);
   for(u32 at : {36u, 48u}) CHECK(memory.read(4, Sizes + at), 262'144);
   for(u32 at : {40u, 52u}) CHECK(memory.readString(Sizes + at, 8) == "256 MB", true);
+  //and the save there: 0, the same sizes
+  saveParameters(m, 22, "ULUS99999", "ABC", 0);
+  memory.write(4, Parameters + 1532, Sizes);
+  memory.fill(Sizes + 36, 0xcc, 24);
+  CHECK(runSave(m), 0);
+  for(u32 at : {36u, 48u}) CHECK(memory.read(4, Sizes + at), 262'144);
+  //with no size information to fill in, the same answers
+  memory.write(4, Parameters + 1532, 0);
+  CHECK(runSave(m), 0);
+  saveParameters(m, 22, "ULUS99999", "NONE", 0);
+  memory.write(4, Parameters + 1532, 0);
+  CHECK(runSave(m), 0x8011'0327);
   //the smaller structure has no size mode's answer
   memory.fill(Sizes, 0xcc, 64);
   saveParameters(m, 22, "ULUS99999", "ABC", 0);

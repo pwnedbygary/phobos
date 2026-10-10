@@ -7343,7 +7343,8 @@ change of a chord improved one of them without making another worse.
 
 ## Part 61: the software renderer faster — copies that wait only for what they touch, bands listed, fours in runs
 
-On branch `cursor/psp-ge-speed5-2b67`, on top of #195's `cursor/psp-hle-games13-2b67` (6e305764d). The task: the
+On branch `cursor/psp-ge-speed5-2b67`, on top of #196's `cursor/psp-hle-games14-2b67` (#195 under it; measured against
+#195's `cursor/psp-hle-games13-2b67`, 6e305764d). The task: the
 software renderer faster on the RP6 without changing a pixel, God of War: Chains of Olympus's block transfers first,
 then part 60's cost back. Every measured picture, every bench scene's frames and end state, at 1 and 7 threads, are
 byte for byte as before. Original code: nothing of PPSSPP's was needed or read, nor JPCSP's. Save states are
@@ -7498,3 +7499,135 @@ in every round. Unpinned at 1 thread: 21.6 → 22.6, 26.9 → 28.2, 34.8 → 36.
 - Scratch: `~/phobos-work/scratch/speed5` (gow-scene.sh made the scenes; rp6-run5.sh and rp6-run6.sh, rp6-run4.sh with
   God of War, then pinned; transfer-dump-patch.py, wait-patch.py, why-patch.py and four-count-patch.py the logging;
   check-corners.cpp the corners' check; mutate.sh the broken versions; quick-tests.sh; snap.sh; hotlines.py).
+
+## Part 62: Sony's modules the kernel has nothing of, sceIoGetFdList, the size mode's NO_DATA, a restart with all of RAM
+
+On branch `cursor/psp-hle-games14-2b67`, on top of #195's `cursor/psp-hle-games13-2b67`. Sources: pspautotests'
+recordings (utility/savedata/getsize and saveemptyfilename), pspsdk's headers, uOFW's reverse-engineered kernel read as
+a description of the PSP's (its iofilemgr, for sceIoGetFdList), PPSSPP's savedata code read as a description of the size
+mode's answer (nothing copied), and the games' own code, traced with a scratch runner (their calls, memory and code
+around the calls). JPCSP was not read. Part 61 is the GE's (its speed).
+
+**1. Sony's plain modules the kernel has nothing of run** (`modules.cpp`, `standsInFor()`). Persona 3 Portable and both
+Dissidias load Sony's LIBSUPPREACC.PRX, unencrypted. Its module, scesupPreAcc_library, exports eight functions of a
+library named scesupPreAcc (0x86debd66 among them, which each game calls once with the disc's ID) and imports only file,
+callback and power lock functions. Its "sce" name had the kernel stand in for it, but the kernel has none of its
+functions, so the games' call was refused: the last missing function of the report. A module of Sony's that came
+unencrypted is now stood in for only if the kernel has a function it exports (a kernel module, attribute 0x1000,
+always); one it has nothing of is loaded and run as a game's own module is, as on a PSP. The same rule runs the network
+libraries some games carry plain: pspnet_adhoc_download.prx (Burnout Legends, Star Soldier, WipEout, MediEvil
+Resurrection, Bubble Bobble Evolution), WipEout's HTTP, SSL and parsing libraries, and Need for Speed: Most Wanted's
+network dialog stub. None of them called a function the kernel lacks, and their frames are as before; MediEvil's own
+count of free memory shows the module's 10.5 KiB taken, as a PSP would have it. An encrypted module of Sony's is still
+stood in for by its name alone, never decrypted.
+
+**2. sceIoGetFdList** (`io.cpp`). Crush counts its open files with it (its FHLeakCheck.cpp, "%d filehandle(s) leaked")
+and, refused, took the count from its stack; the check's assert is off in the retail build, so nothing showed. pspsdk
+has no prototype, and no pspautotests program records it. uOFW's iofilemgr_kernel.h gives
+`int sceIoGetFdList(SceUID *fds, int numFd, int *count)`, and its description of the kernel's code: every file object
+the caller may see, in the order the kernel's list holds them (the first made first), the standard streams first (opened
+as the kernel starts, and made visible to programs), each one's descriptor written while there's room; the result is how
+many were written, and how many there are goes where count points unless it's NULL; a list (numFd descriptors of 4
+bytes) or a count reaching the kernel's half of the addresses is ILLEGAL_ADDR, as most negative numFds make it (one
+whose bytes wrap round below that half passes, and fits none: the kernel counts how many fit as a signed number).
+Folders count (sceIoDopen makes the same object), and so do a descriptor kept only for an asynchronous request's result
+(the object lives until the result is taken) and the movie player's file (its library opens it as the program's code).
+Chosen: the standard streams are listed as 0, 1 and 2, as sceKernelStdin and its siblings give them here (uOFW's PSP
+lists them by its kernel's own IDs for them), and a list or count nothing of the program's memory backs is refused too
+(a PSP would fault writing there). The order is each open file's place in the order the program opened files, kept in
+states.
+
+**3. The size mode's NO_DATA for a save not there** (`utility.cpp`). Def Jam: Fight for NY's first save, on a fresh
+stick: READDATASECURE (no data, rightly), its "no saved game data: save now?" message, the size mode (GETSIZE, 22), then
+WRITEDATASECURE, refused with NO_DATA (writing needs the save: part 51's saveemptyfilename), and "Save Failed
+(0x80110327)", "continue without saving?". Its code sorts GETSIZE's result through a table of the read and write errors
+0x80110321 to 0x8011032a: 0, with overwriteKB 0, leads to WRITEDATASECURE; 0x80110327, NO_DATA, with neededKB 0, to
+MAKEDATASECURE. So a PSP answers the size mode NO_DATA for a save that isn't there, and the game makes its save;
+utility/savedata/getsize recorded 0 with its save made (it never asks without one), and PPSSPP's GETSIZE answers NO_DATA
+for a missing save too. The sizes are still written. Def Jam now makes its save, reads it back, writes it and asks about
+autosave. Three more games ask the size mode before their first save and now take the way a fresh stick takes: Hot Shots
+Golf: Open Tee 2 makes its save ("Saving of game data complete") where it had called its save corrupted ("Overwrite game
+data?"); Ultimate Ghosts 'n Goblins asks "There is no game data present... Begin game anyway?", as the report's first
+runs found it, its cursor on neither answer (the run's lone Cross picks "check again"; with Left first, YES, it begins,
+its story and a stage as before); Me & My Katamari, told none of its three saves is there, plays its opening and then
+its title, where it had shown its save screen with every slot "No data".
+
+**4. A program asking first for more than the partition starts again with all of RAM** (`sysmem.cpp`, `largeRestart()`).
+Melodie (Prototype) is built with pspsdk (its first thread is pspsdk's "user_main", its heap block pspsdk's "UserSbrk")
+and asks, first thing, for a 40 MiB heap; its PARAM.SFO doesn't say MEMSIZE. Refused, it stopped there, black. A
+PSP-2000/3000 lays out its memory as a program starts (MEMSIZE 1: all of RAM), and part 58 gave all of RAM to a program
+too big for the partition; a program's need for a large heap shows only when it asks, and by then its threads' stacks
+sit at the 24 MiB partition's top, so the partition can't simply grow under it (no 40 MiB is free on either side of
+them). So a program asking, before its first frame, for a block bigger than the whole 24 MiB partition (one all of RAM
+could hold, on a machine with the RAM) is started again with all of RAM, as MEMSIZE 1 would have started it, nothing of
+its first start seen; started with all of RAM, a program isn't started again (a request all of RAM's partition holds,
+but not beside the program and its stack, is refused after the one restart), and one whose file can't be read again is
+refused, noted. Chosen: no PSP starts a program twice; this stands for the system knowing at the start what the program
+needs. A program made for the 24 MiB partition doesn't ask for more than it holds: in the library's first 120 frames
+only Melodie asks for more than 24 MiB at all, and Cladun and Phantom Kingdom, which look for their largest block from
+22 MiB down, are left alone. Melodie shows its loading screen and its menus (PLAY, SELECT TRACK, ARENA; then CONTINUE,
+MUSIC ANALYSIS, CREATURE VIEWER).
+
+**5. The two games that timed out** (`disc.cpp`). God of War: Ghost of Sparta opens a PGD-encrypted file about 3,000
+times a frame (its key refused, it tries again: part 55's PGD), and each open looked its path up folder by folder,
+reading the folders' sectors afresh and unpacking the CHD's LZMA hunks for them (80% of the emulation thread, by macOS
+`sample`): it reached frame 60 in the library run's 900 seconds. A disc never changes, so each folder's entries are now
+kept once read (a folder a sector of which couldn't be read is read again next time). It runs at about 40 frames a
+second alone (9 in the library run, five games at a time), still retrying its file, and its frames can be judged: black
+(PGD's part). God of War: Chains of Olympus is the GE's: 68% of the emulation thread waits in GE::flush() at each block
+transfer while the seven drawing threads are busy in triangleFours (15 seconds of `sample`), with no kernel wait or loop
+among it; it isn't stuck (its main menu by frame 1200).
+
+**6. The runner's WAV** (`tools/psp-runner/runner.cpp`). The header wrote each tag with `for(char c : "RIFF")`, which
+takes the literal's terminator: a NUL after each tag moved every field after it, and players refused the files. Each tag
+is now its four characters, the header the standard 44 bytes; runner-test.sh checks the tags' places and both sizes.
+
+**Save states.** Version 23: each open file keeps its place in the order the program opened files (sceIoGetFdList's);
+layouts 15 to 22 load, their files taking the order of their numbers. "older layouts load" makes a layout-22 state from
+a layout-23 one (the field cut out) beside the 21 and 20 it made, and checks two files opened out of the order of their
+numbers come back in it from a layout-22 state; "state fields" covers the field and refuses a file with no place in the
+order, another's, or one of 2^62 or more (counting on could run round). A loaded state's count of files opened is its
+files' largest place.
+
+**The games** (the report's runs: Software, 7 GE threads, 3600 frames, Start at 120 and Cross at 1800, PNGs at 60, 300,
+1200 and 3600): this branch's runner over the whole library, beside part 59's run of the merged stack (the base,
+`6e305764d`, but for later commits' save-state numbering and a test), with frames every 300 or 100 where a judgement
+needed it:
+
+| Game | Base at 3600 | Now | What shows now |
+|---|---|---|---|
+| Melodie (Prototype) | black | menu | its loading screen, then its menus |
+| God of War - Ghost of Sparta | timed out (frame 60) | black | black throughout, retrying its PGD file (9 fps) |
+| Ultimate Ghosts 'n Goblins | movie | menu | its "no game data... begin game anyway?" prompt from 300 |
+| Me & My Katamari | menu | movie | its opening; its title from about 6000 |
+| Hot Shots Golf - Open Tee 2 | menu | menu | "Saving of game data complete" (its "corrupted" prompt before) |
+| Def Jam - Fight for NY - The Takeover | menu | menu | its title, as before; its first save made |
+
+Every other game shows at each frame the scene the base's run showed, or the same sequence a few frames apart (a logo's
+fade, a movie, Battlefront II's random map), no function missing in any; Army of Two, Chains of Olympus and Killzone,
+stopped at the time limit on both runs (900 seconds there, 1200 here), show the same frames up to 1200. Persona 3
+Portable, both Dissidias and Crush miss nothing now, their frames as before. In the report's categories: menu or
+gameplay 187 -> 188, movie 71, stuck loading 0, black or hang 6 (Melodie out, Ghost of Sparta in), timed out 2 -> 1
+(docs/psp-compatibility.md).
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 407 groups, none failing. `tests/allegrex/run-tests.sh`: 58, none
+failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing; `tests/psp/ares/runner-test.sh` passes. New groups:
+"modules of Sony's the kernel has nothing of run", "files listed in the order they were opened", "kernel programs asking
+for all of RAM first thing start again with it", "disc folders read once"; changed: "modules stand-ins" (its plain
+module of Sony's exports a function the kernel has), "memory stick free space" (the size mode on a save not there),
+"state fields", "older layouts load", and the ares suite's save states (its hand-made open file given its place). Each
+new or changed test fails without its fix, each fix taken away alone, and each commit builds and passes its groups
+alone. States the base runner saved (version 22) of Lumines at frame 600, Patapon 2 at 1200 and GTA: Liberty City
+Stories at 2400 load into this branch's runner and carry on 600 frames, their pictures byte for byte the base runner's;
+Crush's at 900 too, but for one frame an animation step apart (it calls sceIoGetFdList again on the way, refused on the
+base). An independent read-only review found two bugs (the ares suite's hand-made open file had no place in the order,
+so the new check refused the machine's own state as a damaged load was undone; a negative size compared unsigned in
+sceIoGetFdList, writing every descriptor where the PSP writes none), a test gap (nothing held the restart to once), the
+size mode comment's evidence worded as a recording's, no bound on a file's place in states, a folder's listing kept
+after a failed read, no test of a reopened disc's folders, and wording; all fixed, each with its test.
+
+**Left, and why.** PGD decryption (six games now, Ghost of Sparta among them). Chains of Olympus's speed (the GE's). The
+restart with all of RAM is chosen, not something a PSP does. The standard streams' numbers in sceIoGetFdList's list (0,
+1 and 2, chosen). sceIoChstat, which LIBSUPPREACC.PRX imports, isn't here yet; none of the three games' runs called it.
+Ultimate Ghosts 'n Goblins and Me & My Katamari take a fresh stick's way now; the report's presses don't choose YES at
+the first's prompt.

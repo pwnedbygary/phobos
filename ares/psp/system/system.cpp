@@ -505,7 +505,8 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a
 //signature, the version of its layout, RAM's size and the program it was made with, all of which must be the
 //machine's; then memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a
-//field means: 22 since files are numbered lowest free first, the count of numbers handed out gone, and an
+//field means: 23 since each open file keeps its place in the order the program opened them, sceIoGetFdList's
+//(part 62); 22 since files are numbered lowest free first, the count of numbers handed out gone, and an
 //asynchronous read under way keeps where its bytes go as it's done (part 59); 21 since the kernel keeps sceJpeg's
 //library and context, sceHprm's callbacks and which ATRAC IDs decode frames one at a time (part 58); 20 since a
 //thread keeps the stacks lent to it for calls (sceKernelExtendThreadStack: part 55); 19 since
@@ -537,10 +538,10 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //dialogs), each of which came first on a branch of its own as a version 2, two layouts that differ from each other
 //and from these. Layouts 15 and 16 load with the dialog abort counters defaulted to 0, 15 to 17 with no sceCcc tables
 //set, 15 to 18 with no thread-local storage pools, 15 to 19 with no stacks lent, 15 to 20 with sceJpeg not started,
-//no sceHprm callbacks and no ATRAC low-level IDs, and 15 to 21 with their files' count passed over and no read's
-//bytes still to come; older layouts are refused.
+//no sceHprm callbacks and no ATRAC low-level IDs, 15 to 21 with their files' count passed over and no read's
+//bytes still to come, and 15 to 22 with their files opened in the order of their numbers; older layouts are refused.
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
-static constexpr u32 StateVersion = 22;
+static constexpr u32 StateVersion = 23;
 
 //The program that started, to tell it from any other: an FNV-1a hash of all its bytes. A state is only loaded into
 //the program it was made with, as another's memory, threads and files mean nothing to it.
@@ -550,10 +551,10 @@ auto System::hash(std::span<const u8> bytes) -> u64 {
   return value;
 }
 
-//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 21 (the
+//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 22 (the
 //dialog's abort counters default to 0, no sceCcc tables, no thread-local storage pools, no stacks lent, sceJpeg not
 //started, no sceHprm callbacks, no ATRAC low-level IDs, the files' count passed over, no read's bytes still to
-//come): the owner's accuracy scenes were saved at 15 before part 42.
+//come, files opened in the order of their numbers): the owner's accuracy scenes were saved at 15 before part 42.
 auto System::header(serializer& s) -> bool {
   u32 signature = StateSignature, version = StateVersion, ramSize = memory.ram.size();
   u64 program = programHash;

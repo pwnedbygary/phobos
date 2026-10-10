@@ -583,10 +583,74 @@ static auto fileNumbers() -> void {
   }), true);
 }
 
+//The descriptors a program has (sceIoGetFdList), as uOFW describes the PSP's kernel listing them: standard input,
+//output and error, then every file and folder in the order they were opened, whatever their numbers (a closed file's
+//number given again comes last), a descriptor kept for an asynchronous request's result among them until it's taken;
+//as many as fit, their count the result, all of them counted where asked (nowhere for NULL); a list or count reaching
+//the kernel's half of the addresses, or a negative size, refused. A state keeps the order, and a file opened after
+//it loads comes last. (Crush counts its open files so.)
+static auto fileList() -> void {
+  HostFolder stick;
+  stick.put("A.TXT", "a");
+  stick.put("B.TXT", "b");
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  constexpr u32 List = Buffer, Count = Buffer + 0x100;
+  auto listed = [&](KernelMachine& on, u32 room) {
+    on.system.memory.write(4, Count, 0xdead);
+    u32 put = on.call("sceIoGetFdList", {List, room, Count});
+    std::vector<u32> numbers;
+    for(u32 n = 0; n < put && n < 64; n++) numbers.push_back(on.system.memory.read(4, List + n * 4));
+    return numbers;
+  };
+  auto open = [&](KernelMachine& on, const char* path) {
+    return on.call("sceIoOpen", {on.string(path), 0x0001, 0});
+  };
+  CHECK(listed(m, 16) == std::vector<u32>({0, 1, 2}), true);
+  CHECK(m.system.memory.read(4, Count), 3);
+  CHECK(open(m, "ms0:/A.TXT"), 3);
+  CHECK(open(m, "ms0:/B.TXT"), 4);
+  CHECK(m.call("sceIoDopen", {m.string("ms0:/")}), 5);
+  CHECK(m.call("sceIoClose", {3}), 0);
+  CHECK(open(m, "ms0:/B.TXT"), 3);  //the lowest number, opened last
+  CHECK(m.call("sceIoOpenAsync", {m.string("ms0:/MISSING.TXT"), 0x0001, 0}), 6);  //holds its error's number
+  CHECK(listed(m, 16) == std::vector<u32>({0, 1, 2, 4, 5, 3, 6}), true);
+  CHECK(m.system.memory.read(4, Count), 7);
+  CHECK(listed(m, 4) == std::vector<u32>({0, 1, 2, 4}), true);  //as many as fit
+  CHECK(m.system.memory.read(4, Count), 7);
+  CHECK(m.call("sceIoGetFdList", {0, 0, Count}), 0);  //nowhere to put any: counted all the same
+  CHECK(m.system.memory.read(4, Count), 7);
+  CHECK(m.call("sceIoGetFdList", {List, 16, 0}), 7);  //nowhere for the count
+  m.system.memory.write(4, Count, 0xdead);
+  CHECK(m.call("sceIoGetFdList", {0x8890'0000, 16, Count}), Kernel::ErrorIllegalAddress);
+  CHECK(m.call("sceIoGetFdList", {List, u32(-1), Count}), Kernel::ErrorIllegalAddress);
+  CHECK(m.call("sceIoGetFdList", {List, 16, 0x8890'0000}), Kernel::ErrorIllegalAddress);
+  CHECK(m.call("sceIoGetFdList", {List, 16, 0x7fff'fffe}), Kernel::ErrorIllegalAddress);  //its 4 bytes reach past
+  CHECK(m.system.memory.read(4, Count), 0xdead);
+  //a size counted as negative whose descriptors' bytes wrap round below the kernel's half: none fit, all counted
+  for(u32 room : {0x8000'0000u, 0xc000'0000u, 0x8000'0001u}) {
+    m.system.memory.write(4, List, 0xdead);
+    CHECK(m.call("sceIoGetFdList", {List, room, Count}), 0);
+    CHECK(m.system.memory.read(4, List), 0xdead);
+    CHECK(m.system.memory.read(4, Count), 7);
+    m.system.memory.write(4, Count, 0xdead);
+  }
+  auto state = saveState(m);
+  m.kernel.run(Kernel::VblankCycles);
+  CHECK(m.call("sceIoPollAsync", {6, Count}), 0);  //the result taken: 6 is no more
+  CHECK(listed(m, 16) == std::vector<u32>({0, 1, 2, 4, 5, 3}), true);
+  KernelMachine n;
+  n.kernel.mount("ms0", stick.path.string());
+  CHECK(loadState(n, state), true);
+  CHECK(open(n, "ms0:/A.TXT"), 7);
+  CHECK(listed(n, 16) == std::vector<u32>({0, 1, 2, 4, 5, 3, 6, 7}), true);
+}
+
 auto fileTests() -> Tests {
   return {
     {"files basics", fileBasics}, {"files folders", fileFolders}, {"files containment", fileContainment},
     {"files rename", fileRename}, {"files numbered lowest free first", fileNumbers},
+    {"files listed in the order they were opened", fileList},
     {"files short names", fileShortNames}, {"controller peek", controllerPeek}, {"controller latch", controllerLatch},
     {"controller new samples", controllerReadNew}, {"controller cycle", controllerCycle},
     {"controller read", controllerRead}, {"controller two readers", controllerTwoReaders},

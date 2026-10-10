@@ -622,6 +622,7 @@ auto states(const fs::path& programs) -> void {
     open.host = openPath.string();
     open.flags = 0x0001;  //PSP_O_RDONLY
     open.stream = std::make_unique<std::fstream>(openPath, std::ios::binary | std::ios::in);
+    open.opened = ++psp.kernel.filesOpened;  //its place in the order files were opened, as opening gives it one
     u32 number = psp.kernel.newFile();
     psp.kernel.files[number] = std::move(open);
     fs::remove(openPath);
