@@ -265,11 +265,12 @@ static auto draw3dCulling() -> void {
   CHECK(drawn({a, d, b}), true);
 }
 
-//Perspective: texture coordinates blended as u/w and 1/w. Corners (0, 0) u 0 w 1, (16, 0) u 16 w 4, (0, 16) u 0 w 1:
-//at pixel (7, 0), sample point (7.4375, 0.4375), the weights are 0.5078125, 0.46484375 and 0.02734375, so
-//u = (0.46484375 * 16 / 4) / (0.5078125 + 0.46484375 / 4 + 0.02734375) = 2.85: texel 2. Blended straight (2D), 7.4375.
-//With the second corner's q 0.5 (texture projection), q is blended the same way and divides:
-//u = 1.859375 / (0.5078125 + 0.46484375 * 0.5 / 4 + 0.02734375) = 3.13: texel 3.
+//Perspective: texture coordinates follow u/w and 1/w (draw.cpp: the GE's own divide, part 60). Corners (0, 0) u 0
+//w 1, (16, 0) u 16 w 4, (0, 16) u 0 w 1: at pixel (7, 0), sample point (7.4375, 0.4375), the weights are 0.5078125,
+//0.46484375 and 0.02734375, and the true blend u = (0.46484375 * 16 / 4) / (0.5078125 + 0.46484375 / 4 + 0.02734375)
+//= 2.85 lies well inside texel 2, where the GE's divide lands too. Blended straight (2D), 7.4375. With the second
+//corner's q 0.5 (texture projection), q goes the same way and divides: 1.859375 / (0.5078125 + 0.46484375 * 0.5 / 4
+//+ 0.02734375) = 3.13, texel 3.
 static auto draw3dPerspective() -> void {
   Scene c;
   c.texture();
@@ -309,6 +310,51 @@ static auto draw3dPerspective() -> void {
   f.clip[3] = -1;
   c.ge.rectangle(pixel, &texture, e, f, true);
   CHECK(c.pixel(7, 0) & 0xff, 7);
+}
+
+//Perspective texels as a PSP draws them (draw.cpp's GE divide, docs/psp-core.md part 60): two of round 5's pictures
+//(tools/psp-measure's perspectiveWall()), drawn here as there: the lens (near 0.5, far 10), a 256x256 viewport at
+//2048, a 256x256 texture whose texel (x, y) is x | y << 8, repeating, nearest, replaced. Each pixel checked is one
+//the owner's PSP drew and a plain float divide wouldn't: persp-w3 (w 3 at every corner, u 0 to 1024 texels) at
+//(0, 0), (4, 0) and (0, 128), a texel lower than the divide; persp-divide (u / w the same at every corner) at (2, 2),
+//a texel row lower, and at (102, 62) and (135, 81), which the two chords set two counts low pin (without them, texel
+//x 0xb3 and 0xf7). Four pixels at a time and one at a time alike.
+static auto draw3dPerspectiveMeasured() -> void {
+  for(bool fours : {true, false}) {
+    Scene c;
+    auto& g = c.ge;
+    g.fourPixels = fours;
+    g.commands[GE::FrameBufferWidth] = 256, g.commands[GE::DepthBufferPointer] = 0x4'0000;
+    g.commands[GE::DepthBufferWidth] = 256;
+    g.commands[GE::ViewportXScale] = f24(128), g.commands[GE::ViewportYScale] = f24(-128);
+    g.commands[GE::ViewportZScale] = f24(-32768), g.commands[GE::ViewportZCenter] = f24(32767);
+    g.commands[GE::OffsetX] = (2048 - 128) << 4, g.commands[GE::OffsetY] = (2048 - 128) << 4;
+    for(u32 n = 0; n < 16; n++) g.projection[n] = 0;
+    g.projection[0] = g.projection[5] = f24(1), g.projection[10] = f24(-1.10526316f), g.projection[11] = f24(-1);
+    g.projection[14] = f24(-1.05263158f);
+    for(u32 y = 0; y < 256; y++) {
+      for(u32 x = 0; x < 256; x++) c.memory.write(4, Texture3D + (y * 256 + x) * 4, x | y << 8 | 0x80 << 16);
+    }
+    g.commands[GE::TextureMappingEnable] = 1;
+    g.commands[GE::TextureAddress0] = Texture3D & 0xff'ffff;
+    g.commands[GE::TextureBufferWidth0] = (Texture3D >> 24 & 0xf) << 16 | 256;
+    g.commands[GE::TextureSize0] = 8 << 8 | 8, g.commands[GE::TextureFormat] = 3, g.commands[GE::TextureFunction] = 3;
+    auto texel = [&](u32 x, u32 y) { return c.memory.read(4, VRAM3D + (y * 256 + x) * 4) & 0xffff; };
+    auto wall = [&](float near, float far, float size, float uLeft, float uRight) {
+      c.memory.fill(VRAM3D, 0, 0x4'0000);
+      c.draw(GE::Triangles, {{uLeft, 0, 0xffff'ffff, -size, size, near}, {uRight, 0, 0xffff'ffff, size, size, far},
+                             {uLeft, 1, 0xffff'ffff, -size, -size, near}, {uRight, 0, 0xffff'ffff, size, size, far},
+                             {uRight, 1, 0xffff'ffff, size, -size, far}, {uLeft, 1, 0xffff'ffff, -size, -size, near}});
+    };
+    wall(-3, -3, 3, 0, 4);  //persp-w3
+    CHECK(texel(0, 0), 0x0001u);
+    CHECK(texel(4, 0), 0x0011u);
+    CHECK(texel(0, 128), 0x8001u);
+    wall(-1, -4, 1, 4, 16);  //persp-divide
+    CHECK(texel(2, 2), 0x000cu);
+    CHECK(texel(102, 62), 0x01b2u);
+    CHECK(texel(135, 81), 0x00f6u);
+  }
 }
 
 //Fog: FOG1 1, FOG2 0.5: a vertex at view z 0 keeps half its color, (0 + 1) * 0.5 = 0.5, 128 of 255:
@@ -800,7 +846,8 @@ static auto draw3dBoundingBoxes() -> void {
 }
 
 //Four pixels at a time (ares/psp/ge/four.cpp) against one at a time: random primitives, 2D and 3D (in perspective,
-//lit now and then with the shine kept apart), triangles, strips, fans and sprites, with random settings of all the
+//lit now and then with the shine kept apart, now and then with far-reaching texture coordinates or the texture
+//matrix's q), triangles, strips, fans and sprites, with random settings of all the
 //pixel pipeline and textures read, drawn by two machines alike but for the four-pixel path, over the same random
 //VRAM (colors, stencils and depths); the frame and depth buffers must come out the same, byte for byte, and in the
 //end all of VRAM. Now and then the settings send a primitive a pixel at a time (the stencil test, a logic operation,
@@ -912,6 +959,15 @@ static auto draw3dFours() -> void {
       }
     }
     bool flat = chance(35);  //2D: through mode
+    //In 3D, now and then the perspective divide (part 60) at its far reaches: texture coordinates over dozens of
+    //repeats with corners from just past the near plane to nearly the far one, or the texture matrix's own q (from
+    //the texture coordinates, so it varies, and at times goes below 0).
+    bool wide = !flat && chance(25);
+    bool projected = textured && !flat && chance(15);
+    set(GE::TextureMapMode, projected ? 1 | 1 << 8 : 0);
+    float matrix[12];
+    for(auto& value : matrix) value = real(-1, 1);
+    matrix[11] = real(0.25f, 2);
     u32 lit = !flat && chance(15);
     set(GE::LightingEnable, lit);
     if(lit) {
@@ -927,6 +983,7 @@ static auto draw3dFours() -> void {
     }
     for(Scene* c : {&fours, &single}) {
       for(auto [command, value] : commands) c->ge.commands[command] = value;
+      for(u32 k = 0; k < 12; k++) c->ge.textureMatrix[k] = f24(matrix[k]);
       if(textured && format >= 4) c->ge.loadClut();
     }
 
@@ -937,8 +994,8 @@ static auto draw3dFours() -> void {
     //(often every vertex of the primitive the same color, white or not: blended, it lands on whole numbers)
     u32 one = chance(30) ? (chance(50) ? 0xffff'ffff : u32(random())) : 0;
     for(u32 k = 0; k < count; k++) {
-      float u = flat ? real(-4, float(4 << widthBits)) : real(-0.2f, 1.3f);
-      float v = flat ? real(-4, float(4 << heightBits)) : real(-0.2f, 1.3f);
+      float u = flat ? real(-4, float(4 << widthBits)) : wide ? real(-40, 40) : real(-0.2f, 1.3f);
+      float v = flat ? real(-4, float(4 << heightBits)) : wide ? real(-40, 40) : real(-0.2f, 1.3f);
       u32 color = one ? one : chance(20) ? 0xffff'ffff : u32(random());
       float normal[3], position[3];
       for(auto& value : normal) value = real(-1, 1);
@@ -948,7 +1005,7 @@ static auto draw3dFours() -> void {
         position[1] = std::round(real(-8, Height + 8) * 16) / 16;
         position[2] = real(0, 65535);
       } else {
-        position[2] = real(-4, -0.6f);
+        position[2] = wide ? real(-9.5f, -0.52f) : real(-4, -0.6f);
         position[0] = real(-1.3f, 1.3f) * -position[2];
         position[1] = real(-1.3f, 1.3f) * -position[2];
       }
@@ -981,7 +1038,8 @@ static auto draw3dFours() -> void {
 auto draw3dTests() -> Tests {
   return {
     {"draw3d transform", draw3dTransform}, {"draw3d outside", draw3dOutside}, {"draw3d clipping", draw3dClipping},
-    {"draw3d culling", draw3dCulling}, {"draw3d perspective", draw3dPerspective}, {"draw3d fog", draw3dFog},
+    {"draw3d culling", draw3dCulling}, {"draw3d perspective", draw3dPerspective},
+    {"draw3d perspective texels as a PSP draws them", draw3dPerspectiveMeasured}, {"draw3d fog", draw3dFog},
     {"draw3d depth range", draw3dDepthRange}, {"draw3d texture coordinates", draw3dTextureCoordinates},
     {"draw3d morph and skin", draw3dMorphAndSkin}, {"draw3d lighting ambient", draw3dLightingAmbient},
     {"draw3d lighting diffuse", draw3dLightingDiffuse}, {"draw3d lighting point and spot", draw3dLightingPointAndSpot},
