@@ -902,6 +902,11 @@ apart to 240 (the same scattered shortfalls color ramps still show); round 2's `
 Stepping u/w and 1/w like 2D's shortStep made `3d-wall-texels` worse (307 → 2423), so perspective texels stay as
 the edge weights have them. Color ramps and those last lighting products are still open (round 5's probes).
 
+**And colors, fog and depth are stepped** from a corner, as the PSP steps them (part 48): round 3's color and fog
+ramps and `bezier-flat`, and round 2's `3d-clip` (with the cut's four corners split the PSP's way), `3d-floor-fog`
+and `3d-floor-depth`, are now identical. Lighting's last products and perspective texels stay open: part 48 says what
+the data show of them, and round 5 measures them.
+
 ## Part 11: drawing in 3D
 
 `ares/psp/ge/transform.cpp`, and 3D paths in `vertex.cpp`, `draw.cpp` and `pixel.cpp`. Outside through mode:
@@ -918,18 +923,21 @@ the edge weights have them. Color ramps and those last lighting products are sti
   aren't judged by it (as PPSSPP has it). A triangle with every w below zero isn't drawn either.
 - **Clipping**: a triangle is cut at the near plane (z < -w) only, never at the screen's edges (the scissor does
   those). The new corners are blended in clip space from the kept corner toward the one past the plane (colors in
-  256ths, which the way round decides: the PSP's way, measured later) and put on the screen again; with flat shading
-  every piece keeps the last vertex's color.
+  256ths, which the way round decides: the PSP's way, measured later) and put on the screen again; four corners left
+  (two kept, two cuts, in the order of a walk round the edges) are drawn as corners 0, 1, 3 and 1, 2, 3, the PSP's
+  split where the third corner is past the plane, the one case measured (part 48); with flat shading every piece
+  keeps the last vertex's color.
 - **Culling** (CULL_FACE_ENABLE, not in clear mode, through mode too): CULL 1 draws the triangles running clockwise on
   the screen, 0 those running counterclockwise; every other triangle of a strip counts the other way round.
 - **Texture coordinates**: perspective-correct across triangles (blended as u/w and 1/w, then divided); colors and
-  depth are blended straight. Mode 0 takes the vertex's, times TEX_SCALE plus TEX_OFFSET; mode 1 the texture
-  matrix's result from the position, the texture coordinates or the normal, its q dividing at each pixel.
+  depth aren't: they're stepped from a corner, straight across the screen (part 48). Mode 0 takes the vertex's, times
+  TEX_SCALE plus TEX_OFFSET; mode 1 the texture matrix's result from the position, the texture coordinates or the
+  normal, its q dividing at each pixel.
 - **Fog**: each vertex's (view z + FOG1) × FOG2, turned into 0-255 there (rounded down, 1 or more giving 255), then
-  that amount blended straight across the primitive as a color channel (measured: round 3's `ramp-fog`; blending the
-  0-1 and converting at each pixel left the first pixel of a near-to-far ramp unfogged). Mixed in after the alpha
-  test as (color × f + fog color × (255 − f) + 255) / 256. A FOG1 or FOG2 that isn't a number to a float is a huge
-  number to the GE.
+  that amount stepped across the primitive as a color channel is (measured: round 3's `ramp-fog`, and part 48;
+  blending the 0-1 and converting at each pixel left the first pixel of a near-to-far ramp unfogged). Mixed in after
+  the alpha test as (color × f + fog color × (255 − f) + 255) / 256. A FOG1 or FOG2 that isn't a number to a float is
+  a huge number to the GE.
 - **The depth range test** (MIN_Z to MAX_Z), in 3D only, clear mode included.
 - **Sprites in 3D**: both corners transformed and checked by the same rules, then drawn as in 2D but for two things:
   the texture coordinates follow the perspective (u / w and 1 / w across x, v / w down y, then divided: measured), and
@@ -991,9 +999,9 @@ turns it round), and made one long.
 - **The arithmetic**, as the GE does it: a color c counts as 2c + 1, so white times white is white; two colors
   multiply and shift down 10 bits; a light's share counts 256ths, rounded up, and three numbers shift down 18 (the
   256ths measured in round 3, where PPSSPP has 512ths and one more; rounding up at a whole 256th assumed; a few
-  products still come out a level lower on the PSP, unexplained). "To the power of" is the GE's quick approximation
-  (exact at powers of two, a little low between them), and the coefficient keeps only the top four bits of its
-  fraction. Each channel ends held to 0-255.
+  products still come out a level lower on the PSP: part 48 found the share finer than 256ths, the GE's own cosine,
+  which round 5 measures). "To the power of" is the GE's quick approximation (exact at powers of two, a little low
+  between them), and the coefficient keeps only the top four bits of its fraction. Each channel ends held to 0-255.
 - **The shine kept apart** (LIGHT_MODE 1): a second color, blended across triangles like the first and added after
   texturing, so a dark texture doesn't dull it.
 - **Environment mapping** (TEXTURE_MAP_MODE 2): texture coordinates from two lights (TEXTURE_SHADE_MAPPING), lit or
@@ -5759,3 +5767,191 @@ it no longer draws for its own textures.
   vertices running past it into the next copy aren't waited for there (the palette's byte-by-byte read still waits in
   `pointer()`); and `vramGuard` giving a page back calls the recompiler's `writable()`, which lets compiled stores go
   straight to it even if code was compiled from it (only code run from VRAM the GE draws or reads would notice).
+
+## Part 48: colors, fog and depth stepped as the PSP steps them; round 5 for what's left
+
+On branch `cursor/psp-ge-fits2-2b67`, on top of #180's `cursor/psp-cpu-speed4-2b67` (a4a63b13f). A last fitting pass,
+with the measurements we already have (round 2 and round 3, `tests/psp/measurements/ge-round3` and the raw files the
+owner keeps), at the three things #178 left open: colors stepped across triangles, lighting's last six products, and
+perspective-correct texels. A rule was taken only where it reproduces every measured case it covers. Then round 5 of
+`tools/psp-measure`, for what the data couldn't settle. Original code: no PPSSPP or JPCSP source was read.
+
+### Colors, fog and depth: fitted
+
+The fitting was done by a scratch copy of the core that wrote down every triangle it set up (its corners in sixteenths
+of a pixel, their colors, fog, depths and texture coordinates), for each test, and a small program that tried rules on
+those triangles against the PSP's pictures (thousands of rules a minute, exact integer arithmetic).
+
+**The rule** (`draw.cpp`'s `stepped()`, `raster.cpp`, `four.cpp`). The GE doesn't blend a triangle's colors at each
+pixel; it steps them from one corner, with steps of limited precision:
+- **The corner**: the one texture coordinates already step from in 2D (part 10's "Fixed since"): the leftmost, the
+  topmost of two. Each value starts as exactly that corner's.
+- **The steps**: one a sixteenth of a pixel across and one down, in 16384ths of a level (14 bits below a whole level),
+  rounded down. They're worked out through the reciprocal of twice the triangle's area (in sixteenths squared) kept to
+  16 significant bits, rounded down: `2^(bits + 16) / area` for an area of at least `2^bits` and below `2^(bits + 1)`.
+  So an area that's a power of two gives exact steps, but a step that should be a whole number of 16384ths, such as a
+  ramp of 255 levels over 240 pixels (17/16 of a level a pixel), falls one 16384th short (and a step downward, one
+  further down).
+- **A pixel**: the corner's value, plus each step times the sixteenths from the corner to the pixel's middle, rounded
+  down to a whole level, held to 0-255.
+
+That explains round 3's level shortfalls: a value can come out a level below the true blend, more likely the further
+from the corner; and the vertical ramps' values a level above it where their triangles start from the bottom. The same
+stepper does **fog** (its 0-255 amount at each corner, #178's fit) and **depth** (0-65535, each corner's a whole
+number), with the same 14 bits. The cut at the near plane needed one more change:
+
+**The cut at the near plane** (`transform.cpp`'s `clipTriangle()`). A triangle with one corner past the plane leaves
+four corners, which the core walks round the edges as the two kept corners and the two cuts. It drew them as a fan
+from the first, corners 0, 1, 2 and 0, 2, 3; now it draws corners 0, 1, 3 and 1, 2, 3. In `3d-clip`, the one case
+measured (its third corner past the plane), that's the PSP's split, from the second kept corner to the cut after the
+corner past the plane: every pixel of `3d-clip` is then the PSP's, where the fan's split leaves 1113 color values a
+level apart. With the first or second corner past the plane, which split the PSP makes isn't measured: round 5's
+`clip-split` cuts with each corner past it, each way round. The hardware renderer gets the same triangles (it's drawn
+through `clipTriangle()` too).
+
+**What it does to the measured pictures** (pixels a level apart, before and after):
+
+| File | Before | After |
+| --- | --- | --- |
+| `ramp-colors` | 1712 | 0 |
+| `ramp-colors-vertical` | 1359 | 0 |
+| `ramp-colors-3d` | 6992 | 0 |
+| `ramp-fog` | 240 | 0 |
+| `3d-floor-fog` (round 2) | 497 | 0 |
+| `3d-floor-depth` (round 2, depths) | 1388 | 0 |
+| `3d-clip` (round 2) | 1512 | 0 |
+| `bezier-flat` | 15368 | 0 |
+| `bezier-curved`, `spline-edges-3` (the same picture) | 1494 | 1056 |
+| `bezier-divide-8` | 938 | 721 |
+| `spline-edges-0` | 787 | 782 |
+
+`gouraud` stays identical, and every other file is as it was: no picture got worse.
+
+**How tightly it's pinned.** Against the three color ramps, `gouraud`, `3d-clip` and the curved surfaces together, the
+nearest alternatives all lose: the reciprocal kept to 17 bits leaves `ramp-colors-3d` 144 values apart, to 15 bits
+320, an exact reciprocal (or one of a fixed 2^36 or more) 144; steps in 512ths, 2048ths or 4096ths of a level a pixel
+(rather than 1024ths: 16384ths a sixteenth), thousands; steps rounded to the nearest or toward zero, thousands more;
+starting from the first corner given, or the topmost, or the leftmost but the bottom one of two, thousands (the last
+1810 in `ramp-colors-vertical`). Depths in 4096ths or 65536ths of a depth a sixteenth leave 692 and 209 of
+`3d-floor-depth`'s 7728 measurable values apart. Bands of a power-of-two width (256, 128, 64, 16 pixels) come out
+exact under any of these, which is why `gouraud` (a 256-pixel square) always matched.
+
+**The curved surfaces** are better but not exact, and the rest isn't the stepping: in `bezier-curved` every triangle
+fits the rule exactly once its start (its leftmost corner's value) is moved by less than about 0.05 of a level, the
+steps as the rule has them; so what differs is the vertices the GE makes for a curved patch (their values, or where
+they fall finer than a sixteenth). The flat patch's vertices fall on sixteenths and its colors on whole levels, and
+it's exact. Moving the curved patch's vertices a sixteenth each way barely helps (1144 color values apart to 1139),
+nor does splitting its quads the other way (both splits tried quad by quad; the one pspautotests recorded wins in
+every quad). Round 4's `curves-*` record those vertices directly. `spline-edges-0`'s vertices are further off (4 edge
+pixels already differ).
+
+**Not changed, as not measured**: lines (colors, fog and depth along them are still blended as before; round 4's
+`lines-colors`, `lines-depth` and `lines-3d` will show whether the same stepper runs along them), sprites and points
+(nothing to step). The shine kept apart (LIGHT_MODE 1) and alpha are stepped like the colors: they're colors to the
+same interpolator, though neither was measured across a triangle (nor has the shine a hand-worked test: it goes
+through the colors' code, and the random four-at-a-time test lights triangles with it now and then).
+
+**The hardware renderer** (Vulkan) can't mirror this: its colors, fog and depth are the GPU's own blend between
+vertices, as before (part 36). Only the cut's split is shared.
+
+**Tests** (`tests/psp/draw.cpp`'s "draw steps", and new checks in `draw3d.cpp`'s "draw3d clipping" and "draw3d fog"),
+worked out by hand from the rule: a ramp of 128 levels over 15 pixels whose eighth pixel the true blend puts at 64 and
+the steps at 63, the same in depths, the same blend stepped from the bottom left corner coming out 64, the topmost of
+two leftmost corners, a triangle where 15 or 17 bits of reciprocal give another level, one where rounding the steps to
+the nearest or toward zero does; the same ramp in fog; and the cut's split, two pixels of `draw3d clipping`'s cut that
+the fan's split would give another level. Broken versions each failed them: the reciprocal to 15 or 17 bits, an exact
+reciprocal, steps rounded to the nearest, the start from the first corner, the fan's split, and the code before this
+part. "draw3d four pixels at a time against one" draws 20000 random primitives both ways, as before: the
+four-at-a-time path steps in 32 bits that may run round (every lane inside the triangle keeps its value;
+`fourFriendly()` sends triangles with steps of 2^24 16384ths a sixteenth or more, slivers, a pixel at a time), the
+other in 64 bits, each row's start in 128.
+
+### Lighting's last products: still open, and why
+
+The core takes a light's share of a color as `ceil(256 × cosine)` 256ths (round 3's fit), which gives 1620 of 1632
+values with exact cosines. The last 12 aren't a rounding detail: **the share isn't in 256ths at all.** For each
+normal, all the products measured with it (about a hundred light-and-material pairs) pin the share the GE used to an
+interval, and two of them hold no whole 256th:
+- (33, 0, 56), cosine 56/65 (220.55 256ths): the share lies between 220.86 and 220.985;
+- (65, 0, 72), cosine 72/97 (190.02): between 190.74 and 190.88.
+
+So the share is finer than a 256th, and not simply above the true cosine: round 2's `light-diffuse` (normals (k, 0,
+127 - k), its 255 channel pinning the share) has it below the cosine in places, such as (101, 0, 26), cosine 63.82
+256ths, whose share lies between 63.25 and 63.63 (0.3% to 0.9% short). It isn't a function of the normal's length
+alone: (16, 0, 63) and (33, 0, 56) are both 65 long, and their shares are over by 0.34% to 0.42% and 0.14% to 0.20%. A
+cosine worked out in floats of 6 to 24 bits (rounded each way, through a square root or its reciprocal) misses at
+least 114 of the 304 intervals. Nothing here pins the GE's arithmetic further, so lighting stays as it was. Round 5's
+`light-share-*` measure the share of 16 normals with 192 products each, finer than a hundredth of a 256th, among them
+those normals three times as long and turned.
+
+### Perspective texels: still open, and why
+
+`3d-wall-texels` (307 pixels a texel apart), `3d-floor-texels` (291) and `3d-sprite-texels` (72) stay as they were.
+Stepping u / w, v / w and 1 / w with this part's stepper (u / w and v / w in units of 1 to 2^-16 texels, 1 / w in 2^-8
+to 2^-24, steps of 2^-10 to 2^-18 of a unit a sixteenth) fits neither: the best leaves the floor 188 apart but the
+wall 389. What the pictures show instead: on the floor, where 1 / w is the same along a row, the PSP's u comes out
+short by a fixed fraction of u in each row (about 0.2% on row 164), as if 1 / w were a little high there; on the wall,
+where 1 / w is the same down a column, it's short in most columns and over in some (column 156's whole u is 235 where
+the true one is 234.98), and no one factor fits some columns' u and v together. That points at the divide at each
+pixel, of limited precision, more than at the steps; 256 texels across 256 pixels show it only where a coordinate is
+within a few hundredths of a whole texel. Round 5's `persp-*` read the coordinates to a texel in four thousand.
+
+### Round 5
+
+`tools/psp-measure`'s new first menu line, "Round 5: the GE's steps, lighting's share, texels (about 3 MB)", runs 12
+tests into `results/ge` (`manifest5.txt`), each a 256x256 picture of 32-bit words (`ge.c`'s `round5()`):
+- `steps-check`: 64 triangles at random (one to a 32x32 cell, corners to the sixteenth, colors from a fixed sequence)
+  in through mode: the rule on slanting edges and every kind of corner; `steps-depth-check`: the same with random
+  depths (written always), the depth buffer read through VRAM's fourth copy.
+- `clip-split`: six bands, each round 2's 3d-clip triangle squashed into it with its blue corner past the near plane
+  (cut two thirds of the way to it): bands 0-2 with the corners turning as 3d-clip's, the blue one first, second and
+  third (band 2 is 3d-clip's order), bands 3-5 turning the other way, blue first, second and third. The two ways to
+  split the four corners left differ in 181 pixels of each band (in the core's arithmetic), so each band will show the
+  PSP's.
+- `light-share-0` to `-3`: four normals each (rows 4j to 4j + 3), each row with its own light color and each cell its
+  own material color (levels 96-255): 192 products a normal, which pin its share finely. The normals: round 3's two
+  odd ones and (16, 0, 63), as long as one of them, and round 2's (101, 0, 26); the same four three times as long;
+  four more of round 2's `light-diffuse` normals; and the first four turned (cosines a / c).
+- `persp-wall`, `-divide`, `-w3`, `-floor`, `-sprite`: a repeating texture and coordinates up to 4096 texels, so each
+  pixel shows its coordinates to the texel (its texel is their whole part less a multiple of 256, which a prediction
+  within 128 texels tells; from one pixel to the next they change by less than that, the most at the far end): round
+  3's wall and 3D sprite and round 2's floor (the floor's v and the sprite's coordinates to 2048 texels, so they
+  change by under 128 a pixel); a wall whose u / w is the same at every corner, so u shows 1 / w alone; and one at w 3
+  everywhere, no perspective, which shows the steps and divide by a 1 / w that isn't a whole number of any power of
+  two.
+
+#178's round 5 probes (source only, never run) are gone, each measured more finely by one of these: its color ramps by
+`steps-check`, its two lit cells by `light-share-0`, its shorter wall and floor by `persp-wall` and `persp-floor`.
+
+`tests/psp/measure.cpp` drives the new line too (the menu's lines below it moved down one) and checks every file is
+written; once a PSP's `results/ge` with `manifest5.txt` is given in `PSP_GE_RESULTS`, it lists what differs, as for
+the other rounds. `pspmeasure.elf` in `tests/psp/programs` is rebuilt (its README has the new SHA-256), in the same
+pspdev image as before (`ghcr.io/pspdev/pspdev@sha256:54895e6f...`), which rebuilds the previous `pspmeasure.elf` byte
+for byte from its own source; the other programs are as they were. Round 4 hasn't been run on the PSP yet either: its
+line is the second.
+
+The owner's copy: `.local/psp-round5/` beside the repository (not committed) holds the EBOOT.PBP, its SHA-256 and a
+HOW-TO.md (where it goes on the memory stick, which line to run, how long, and which folder to bring back).
+
+### Review
+
+An independent read-only review found no bug in the core: no overflow or undefined behavior in `stepped()` and the row
+starts (checked against exact 128-bit arithmetic on about 3 million triangles, slivers and far corners among them),
+the scalar and four-at-a-time paths byte-identical over 550,000 extreme triangles, and nothing else changed (flat
+shading, the shine, fog off, clear mode, the hardware renderer, lines, points, sprites; equal corner depths still give
+exactly that depth). What it found, fixed before committing: the reciprocal's formula off by one in this part and in a
+comment; probes credited to round 3 that are round 2's; the cut's split stated as if measured for every corner;
+`clip-split`'s middle band turning the other way round as well as moving the corner past the plane (now six bands,
+each corner past it each way round); light and material levels taken in one expression, in an order C leaves open (now
+one statement each); the floor's v changing by more than 128 texels a row at the far end, too much to tell which
+multiple of 256 it is (now a span of 2048, and the 3D sprite's too, which came close); stale comments, an unused
+function and field; no hand-worked test of fog's steps (added). Seen and left as it was, older than this part: lines
+and points in through mode turn a depth that isn't a number into a whole number (undefined behavior), where triangles'
+corners now guard against it.
+
+### Checks
+
+- `tests/psp/run-tests.sh` (sanitizers on): 341 groups, 0 failures (one new: "draw steps");
+  `tests/allegrex/run-tests.sh`: 58 groups, 0 failures; `tests/psp/ares/run-tests.sh`: 307 checks, 0 failed.
+- The measure test against the owner's round 2 and 3 files: as in the table above, nothing else changed; it drives
+  round 5 through the menu and every file is written.

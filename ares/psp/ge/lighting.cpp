@@ -1,5 +1,5 @@
 //Lighting (3D, LIGHTING_ENABLE): each vertex's color worked out from the lights shining on it, the way lamps light a
-//model, once per vertex after the transform; the colors are then blended across each triangle as usual. What goes in:
+//model, once per vertex after the transform; the colors are then stepped across each triangle as usual. What goes in:
 //  - the material, the model's own colors: emissive (MATERIAL_EMISSIVE: light it gives off itself), ambient
 //    (AMBIENT_COLOR, AMBIENT_ALPHA), diffuse (MATERIAL_DIFFUSE: what direct light shows), specular
 //    (MATERIAL_SPECULAR: its shine), and how tight the shine is (MATERIAL_SPECULAR_COEF). MATERIAL_COLOR's bits 0-2
@@ -28,7 +28,8 @@
 //and the coefficient keeps only the top four bits of its fraction. (As PPSSPP reads it from tests on the PSP, but for
 //the share, which PPSSPP counts in 512ths, rounded up and one more: the PSP's own pictures settled 256ths, round 3's
 //lighting files in docs/psp-core.md. Rounding up at a whole 256th is assumed, no measured share landing on one; and
-//a few products come out a level lower on the PSP than this, unexplained.)
+//a few products come out a level lower on the PSP than this: part 48 found the PSP's share finer than a 256th, its
+//own cosine, off the true one either way, which round 5 of tools/psp-measure measures.)
 //
 //Environment mapping (TEXTURE_MAP_MODE 2) takes texture coordinates from two lights (TEXTURE_SHADE_MAPPING bits 0-1
 //for u, 8-9 for v), lit or not: (the cosine between the normal and the direction to that light, or with a shining

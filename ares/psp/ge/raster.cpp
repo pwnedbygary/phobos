@@ -127,25 +127,24 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
     least[k] = a[k] > 0 || (a[k] == 0 && b[k] > 0) ? 0 : 1;
   }
   bool needsZ = p.depthRange || (p.clear ? p.clearDepth : p.depthTest);
-  //Corners at one depth give every pixel that depth. Blended in floats, the weights' sum divided out again, it came
-  //out a hair under at some pixels (65534.996 for 65535), which the whole number then cut to the one below: Chili Con
-  //Carnage's logo, drawn at 65535 over a background at 65535 with the depth test "at least as near", lost those
-  //pixels, a stripe here and there, frame by frame as the logo's size changed.
-  bool oneDepth = r.z[0] == r.z[1] && r.z[1] == r.z[2];
-  u32 depth = oneDepth ? u32(std::clamp(r.z[0], 0.0f, 65535.0f)) : 0;
   bool blended = !r.flat, shining = !r.flat && r.shines;
-  float colors[3][4], shines[3][4];  //each corner's channels, as the blending takes them
-  for(u32 k = 0; k < 3; k++) {
-    for(u32 n = 0; n < 4; n++) colors[k][n] = channel(r.color[k], n), shines[k][n] = channel(r.specular[k], n);
+  //Colors, the shine, fog and depth, stepped (draw.cpp's stepped()), those the pixels use: each one's 16384ths at a
+  //row's first pixel, from (startX, startY), then a pixel's step (16 sixteenths') added at each pixel along the row;
+  //its value is those rounded down, held to 0-255 (a depth to 0-65535). Corners at one depth step by nothing, so
+  //every pixel has exactly that depth. (Blended in floats, as before part 48, it came out a hair under at some
+  //pixels: Chili Con Carnage's logo, drawn at 65535 over a background at 65535 with the depth test "at least as
+  //near", lost those pixels, a stripe here and there.) A row's first value is worked out in 128 bits: a sliver's
+  //steps can be huge, though the values inside it, where the steps lead, stay within 64 bits.
+  const Job::Stepped* stepped[9] = {&r.colors[0], &r.colors[1], &r.colors[2], &r.colors[3],
+                                    &r.shine[0], &r.shine[1], &r.shine[2], &r.fog, &r.depth};
+  s64 values[9] = {}, steps[9] = {};  //red, green, blue, alpha; the shine's red, green, blue; the fog; the depth
+  u32 used[9], uses = 0;
+  for(u32 n = 0; n < 9; n++) {
+    if(n < 4 ? blended : n < 7 ? shining : n < 8 ? p.fog : needsZ) {
+      used[uses++] = n, steps[n] = stepped[n]->across * 16;
+    }
   }
-  //a weighted sum of the corners' values, as the blending has always taken it
-  auto blendColor = [&](const float (&value)[3][4], float w0, float w1, float w2) {
-    float mixed[4];
-    for(u32 n = 0; n < 4; n++) mixed[n] = (value[0][n] * w0 + value[1][n] * w1 + value[2][n] * w2) / r.total;
-    u32 color = 0;
-    for(u32 n = 0; n < 4; n++) color |= u32(std::clamp(s32(mixed[n]), 0, 255)) << n * 8;
-    return color;
-  };
+  auto level = [&](u32 n) { return u32(std::clamp<s64>(values[n] >> 14, 0, n < 8 ? 255 : 65535)); };
   for(s32 y = std::max(job.firstY, fromY); y <= std::min(job.lastY, toY); y++) {
     s64 sampleY = s64(y) * 16 + 8;
     s64 sampleX = s64(job.firstX) * 16 + 8;
@@ -161,14 +160,17 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
     }
     if(start > stop) continue;
     for(u32 k = 0; k < 3; k++) w[k] += a[k] * 16 * (start - job.firstX);
+    for(u32 k = 0; k < uses; k++) {
+      auto& c = *stepped[used[k]];
+      values[used[k]] = s64(c.start + s128(start * 16 + 8 - r.startX) * c.across + s128(sampleY - r.startY) * c.down);
+    }
     for(s32 x = start; x <= stop; x++, w[0] += a[0] * 16, w[1] += a[1] * 16, w[2] += a[2] * 16) {
       float w0 = float(w[0]), w1 = float(w[1]), w2 = float(w[2]);
-      auto blend = [&](float first, float second, float third) {
-        return (first * w0 + second * w1 + third * w2) / r.total;
-      };
-      u32 color = blended ? blendColor(colors, w0, w1, w2) : r.flatColor;
-      u32 specular = shining ? blendColor(shines, w0, w1, w2) : r.flatSpecular;
-      u32 z = !needsZ ? 0 : oneDepth ? depth : u32(std::clamp(blend(r.z[0], r.z[1], r.z[2]), 0.0f, 65535.0f));
+      u32 color = blended ? level(0) | level(1) << 8 | level(2) << 16 | level(3) << 24 : r.flatColor;
+      u32 specular = shining ? level(4) | level(5) << 8 | level(6) << 16 : r.flatSpecular;
+      u32 fog = p.fog ? level(7) : 255;
+      u32 z = needsZ ? level(8) : 0;
+      for(u32 k = 0; k < uses; k++) values[used[k]] += steps[used[k]];
       float u = 0, v = 0;
       if(look.textured && r.perspective) {
         float ka = w0 / r.w[0], kb = w1 / r.w[1], kc = w2 / r.w[2];
@@ -180,8 +182,6 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
         u = r.uStart + f64(middleX - r.startX) / 16 * r.uAcross + f64(sampleY - r.startY) / 16 * r.uDown;
         v = r.vStart + f64(middleX - r.startX) / 16 * r.vAcross + f64(sampleY - r.startY) / 16 * r.vDown;
       }
-      //Fog corners are already 0-255 (draw.cpp); blend as a color channel and truncate.
-      u32 fog = p.fog ? u32(std::clamp(s32(blend(r.fog[0], r.fog[1], r.fog[2])), 0, 255)) : 255;
       shadeAs<Format>(look, job.linear, x, y, z, color, specular, u, v, fog);
     }
   }
@@ -189,16 +189,17 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
 
 //A line's pixels in rows fromY to toY (draw.cpp's line() says which): along x (y when it's steep) from its first
 //to its last, each in the row (column) where it crosses the pixel's middle. Its colors, depth, fog and texture
-//coordinates are blended from its ends by how far along x that middle is, held to its ends, as a triangle's are
-//from its corners (the same arithmetic, with two weights). Worked out here, each pixel's values, for whoever draws
-//them: lineRows() here, or the hardware renderer, which draws each as a pixel-sized square (gpu/gpu.cpp).
+//coordinates are blended from its ends by how far along x that middle is, held to its ends, as triangles' were
+//before part 48 (floats from two weights; triangles' are stepped now, lines' aren't measured). Worked out here, each
+//pixel's values, for whoever draws them: lineRows() here, or the hardware renderer, which draws each as a pixel-sized
+//square (gpu/gpu.cpp).
 auto GE::linePixels(const Job& job, s32 fromY, s32 toY, std::vector<LinePixel>& pixels) -> void {
   pixels.clear();
   auto& l = job.line;
   auto& look = *job.look;
   auto& p = look.pixel;
   bool needsZ = p.depthRange || (p.clear ? p.clearDepth : p.depthTest);
-  bool oneDepth = l.z[0] == l.z[1];  //(as triangleRows())
+  bool oneDepth = l.z[0] == l.z[1];  //(ends at one depth give every pixel exactly that depth)
   u32 depth = oneDepth ? u32(std::clamp(l.z[0], 0.0f, 65535.0f)) : 0;
   bool shining = !l.flat && l.shines;
   float colors[2][4], shines[2][4];

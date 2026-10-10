@@ -25,6 +25,31 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP GE: colors, fog and depth stepped as the PSP steps them; measurement round 5 — 2026-10-08
+
+Branch `cursor/psp-ge-fits2-2b67`, on top of #180 (`cursor/psp-cpu-speed4-2b67`, a4a63b13f). docs/psp-core.md,
+part 48, has the rule, the numbers and what's open. Clean room: the owner's measurements only, no PPSSPP or JPCSP
+source read.
+- **Fitted** (`ares/psp/ge/draw.cpp`'s `stepped()`, `raster.cpp`, `four.cpp`): a triangle's colors, shine, fog and
+  depth are stepped from its leftmost corner (topmost of two), a step a sixteenth across and down in 16384ths, rounded
+  down, through the reciprocal of twice its area kept to 16 bits. The near plane's cut draws its four corners as
+  0, 1, 3 and 1, 2, 3 of its walk (`transform.cpp`): the PSP's split in the one case measured (third corner past).
+  Now identical to the PSP: `ramp-colors` (was 1712 pixels apart), `-vertical` (1359), `-3d` (6992), `ramp-fog`
+  (240), `3d-floor-fog` (497), `3d-floor-depth` (1388), `3d-clip` (1512), `bezier-flat` (15368); curved patches
+  closer (`bezier-curved` 1494 to 1056, `bezier-divide-8` 938 to 721, `spline-edges-0` 787 to 782), the rest in the
+  GE's own patch vertices. Nothing worse. Vulkan can't mirror the steps (GPU interpolation); the cut is shared.
+- **Still open**: lighting's share isn't 256ths (finer: the GE's own cosine, off either way); perspective texels look
+  like a per-pixel divide of limited precision. Lines aren't changed (unmeasured; round 4 has them).
+- **Round 5** (`tools/psp-measure`, first menu line, 12 tests, about 3 MB): random triangles' colors and depths, the
+  cut with each corner past the plane each way round, lighting's share at 16 normals (192 products each),
+  perspective texels with a repeating texture to the texel in thousands. `pspmeasure.elf` rebuilt (same pspdev
+  image; README hash); `tests/psp/measure.cpp` drives the new line. #178's never-run probes replaced.
+- **For the owner**: `.local/psp-round5/` (EBOOT.PBP, its SHA-256, HOW-TO.md). Round 4 hasn't been run either.
+- **Tests**: "draw steps" (new), checks in "draw3d clipping" and "draw3d fog", hand-worked; seven broken versions
+  each fail them. tests/psp 341/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0. An independent read-only
+  review (two passes) found no bug in the core; its doc, probe and comment findings were fixed.
+- Scratch: `~/phobos-work/scratch/ge-fits2` (the dumping core in `inst/`, the fitters in `fit/` and `py/`).
+
 ## PSP core: the emulation thread faster again — no drawing for its own textures, batches in a ring — 2026-10-08
 
 Branch `cursor/psp-cpu-speed4-2b67`, on top of #178's `cursor/psp-ge-fits-2b67` (72443bc4d). docs/psp-core.md, part 47,

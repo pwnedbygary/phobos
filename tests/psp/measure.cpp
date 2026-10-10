@@ -1,7 +1,7 @@
 //tools/psp-measure's program (see its main.c) in Phobos's core, driven through its menu as a person would. With
 //PSP_TEST_PROGRAMS holding pspmeasure.elf, its GE tests must run to the end and write every file, start afresh (the
 //first files kept in results-1), run again and draw the same, and skip what's done on a third run; the GE's rounds
-//3 and 4 and the FPU probes must write theirs; then it must leave. With PSP_GE_RESULTS set to the results folder
+//3, 4 and 5 and the FPU probes must write theirs; then it must leave. With PSP_GE_RESULTS set to the results folder
 //(results/ge) a real PSP (or another emulator) wrote, each file is compared with that folder's, and what differs is
 //listed rather than failed: finding it is what the program is for. PSP_GE_OURS, when set, is a folder this core's
 //files are copied to, for a closer look.
@@ -65,6 +65,14 @@ static const MeasureFile measureFiles4[] = {
   {"curves-count-200", 256, 256}, {"curves-count-255", 256, 256},
 };
 
+//Round 5's (part 48: the steps on random triangles, the near plane's cut each way, lighting's share, perspective
+//texels to the texel in thousands; steps-depth-check is depths, read through VRAM's fourth copy).
+static const MeasureFile measureFiles5[] = {
+  {"steps-check", 256, 256}, {"steps-depth-check", 256, 256}, {"clip-split", 256, 256}, {"light-share-0", 256, 256},
+  {"light-share-1", 256, 256}, {"light-share-2", 256, 256}, {"light-share-3", 256, 256}, {"persp-wall", 256, 256},
+  {"persp-divide", 256, 256}, {"persp-w3", 256, 256}, {"persp-floor", 256, 256}, {"persp-sprite", 256, 256},
+};
+
 static auto readWords(const std::filesystem::path& path) -> std::vector<u32> {
   std::ifstream file(path, std::ios::binary);
   std::vector<u8> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
@@ -120,7 +128,10 @@ static const char* probeFiles[] = {
 };
 
 //The menu's lines (tools/psp-measure/main.c), counted from the top, and the buttons that move through it.
-enum : u32 { GeRound4Line = 0, GeRound3Line = 2, ProbesLine = 3, GeRound2Line = 5, AfreshLine = 7, LeaveLine = 8 };
+enum : u32 {
+  GeRound5Line = 0, GeRound4Line = 1, GeRound3Line = 3, ProbesLine = 4, GeRound2Line = 6, AfreshLine = 8,
+  LeaveLine = 9
+};
 enum : u32 { Up = 0x0010, Down = 0x0040, Cross = 0x4000 };
 
 //Presses buttons as a person would, times over: let go for ten frames (the program waits for every button to be let
@@ -197,8 +208,13 @@ static auto pspMeasure() -> void {
   press(m, Cross);
   CHECK(waitFor(m, 3000, exists(results / "curves-count-255.bin")), true);
   press(m, Cross);
+  //the GE's round 5
+  move(m, GeRound4Line, GeRound5Line);
+  press(m, Cross);
+  CHECK(waitFor(m, 3000, exists(results / "persp-sprite.bin")), true);
+  press(m, Cross);
   //leaving
-  move(m, GeRound4Line, LeaveLine);
+  move(m, GeRound5Line, LeaveLine);
   press(m, Cross);
   CHECK(waitFor(m, 100, [&] { return m.kernel.exited; }), true);
 
@@ -206,10 +222,11 @@ static auto pspMeasure() -> void {
   const char* copy = std::getenv("PSP_GE_OURS");
   if(copy) std::filesystem::create_directories(copy);
   //each file against the reference's; one the reference lacks is said to be missing (one given up on there, say),
-  //but for round 3's or 4's when the reference has none of that round (its manifest3.txt or manifest4.txt), as a PSP
-  //that hasn't run it
+  //but for round 3's, 4's or 5's when the reference has none of that round (its manifest3.txt, manifest4.txt or
+  //manifest5.txt), as a PSP that hasn't run it
   bool referenceRound3 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest3.txt");
   bool referenceRound4 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest4.txt");
+  bool referenceRound5 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest5.txt");
   auto look = [&](const MeasureFile& file, const std::vector<u32>& ours, bool expected) {
     std::string name = std::string(file.name) + ".bin";
     if(reference && std::filesystem::exists(std::filesystem::path(reference) / name)) {
@@ -240,6 +257,12 @@ static auto pspMeasure() -> void {
     CHECK(ours.size(), file.width * file.height);
     look(file, ours, referenceRound4);
   }
+  for(auto& file : measureFiles5) {
+    auto ours = readWords(results / (std::string(file.name) + ".bin"));
+    CHECK(ours.size(), file.width * file.height);
+    look(file, ours, referenceRound5);
+  }
+  CHECK(std::filesystem::exists(results / "manifest5.txt"), true);
   for(auto name : probeFiles) CHECK(readWords(vfpu / (std::string(name) + ".bin")).size(), 4);
 
   //what the files hold, from end to end: the sprite drawn top-left to bottom-right shows its 4x4 texture (texel n,

@@ -203,6 +203,12 @@ static auto draw3dClipping() -> void {
   u32 color = c.pixel(8, 4);
   auto near = [](u32 value, u32 expected) { return value + 1 >= expected && value <= expected + 1; };
   CHECK(near(color & 0xff, 90) && near(color >> 8 & 0xff, 111) && near(color >> 16 & 0xff, 53), true);
+  //the four corners left (red (2, 2), green (14, 2), then the cuts (12.5, 5) and (3.5, 5), a quarter of the way to
+  //blue: (0, 191, 63) and (191, 0, 63)) are split from green to the second cut, as the PSP split 3d-clip's: the steps
+  //across the two triangles then give (6, 4) and (9, 4) these colors; split from red to the first cut, as a fan,
+  //they'd be (132, 68, 52) and (69, 132, 52)
+  CHECK(c.pixel(6, 4), 132 | 69 << 8 | 52 << 16);
+  CHECK(c.pixel(9, 4), 68 | 132 << 8 | 52 << 16);
   c.ge.commands[GE::ShadeMode] = 0;   //flat: every piece takes the last vertex's color, blue
   draw();
   CHECK(c.pixel(8, 4), 0x00ff'0000);
@@ -333,6 +339,12 @@ static auto draw3dFog() -> void {
   c.clear();
   c.draw(GE::Triangles, {{0, 0, 0xff00'ff00, 0, 0, 1}, {0, 0, 0xff00'ff00, 16, 0, -1}, {0, 0, 0xff00'ff00, 0, 16, 1}});
   CHECK(c.pixel(7, 0), u32((255 * 135 + 255) / 256) << 8 | u32((255 * 120 + 255) / 256));  //at (7.5, 0.5)
+  //fog amounts stepped as colors are (draw.cpp's stepped(); "draw steps" works the same triangle out): 0, 128 and 0
+  //at (0, 0), (15, 0) and (0, 4) leave pixel (7, 1) 63 of fog, where the true blend is 64
+  c.clear();
+  c.draw(GE::Triangles,
+         {{0, 0, 0xff00'ff00, 0, 0, -1}, {0, 0, 0xff00'ff00, 15, 0, 0}, {0, 0, 0xff00'ff00, 0, 4, -1}});
+  CHECK(c.pixel(7, 1), u32(255 - 63) | 63u << 8);
   for(bool first : {true, false}) {  //no fog (z 1) at the left corner, all fog (z -1) at the right, either order
     c.clear();
     V3 left{0, 0, 0xff00'ff00, 0, 0, 1}, right{0, 0, 0xff00'ff00, 8, 4, -1};
