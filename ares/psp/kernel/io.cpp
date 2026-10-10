@@ -48,10 +48,29 @@ static auto pathNames(const std::string& rest, std::vector<std::string>& names) 
   return 0;
 }
 
-//A new file's number: they count up as IDs do (newUID()), are never handed out twice, and run out the same way (0
-//then: the file can't be opened).
+//A new file's number: the lowest not in use, from 3 up (0 to 2 are standard input, output and error). A PSP hands
+//out small numbers in turn (pspautotests' io/open/tty0, under PSPLink, got 5, 6, 7 and on); that a closed file's is
+//given again, lowest first, is chosen, as a table of descriptors would have it. Games keep tables of their own by
+//them: Crush counts each file's bytes read in 16 words just before its file buffer, so a number past 15 counts into
+//the data it has just read. Not given to another: the movie player's file's while it has a movie (even if a state
+//loaded without the file), and one a thread's wait for a request still names (its file closed while the thread was
+//made ready to run its callbacks, or ran them with the wait put aside: resumeWait() finds it gone). A descriptor kept
+//for an asynchronous result alone is in use until the result is taken (async.cpp). 0 once 3 to 63 are all in use
+//(MostFiles: chosen, no recording shows a PSP's limit): the file can't be opened.
 auto Kernel::newFile() -> u32 {
-  return nextFile <= LastUID ? nextFile++ : 0;
+  auto awaited = [&](u32 number) {
+    for(auto& [uid, thread] : threads) {
+      if(thread->wait == Wait::Async && thread->waitID == number) return true;
+      auto& aside = thread->waitBeforeCallback;
+      if(thread->inCallback && aside.wait == Wait::Async && aside.id == number) return true;
+    }
+    return false;
+  };
+  for(u32 number = 3; number < MostFiles; number++) {
+    if(files.count(number) || (psmfPlayer.status >= 2 && psmfPlayer.file == number) || awaited(number)) continue;
+    return number;
+  }
+  return 0;
 }
 
 //The folder a program's path is in, written as resolve() writes paths ("ms0:/PSP/GAME/HELLO" for
@@ -303,10 +322,10 @@ auto Kernel::openFile(const std::string& path, u32 flags) -> u32 {
   auto mode = std::ios::binary | std::ios::in;
   if(write) mode |= std::ios::out;
   if(write && (!exists || (flags & OpenTruncate))) mode |= std::ios::trunc;  //made, or emptied
-  if(nextFile > LastUID) return ErrorTooManyFiles;  //before the file is made or emptied
+  u32 file = newFile();
+  if(!file) return ErrorTooManyFiles;  //before the file is made or emptied
   auto stream = std::make_unique<std::fstream>(host, mode);
   if(!stream->is_open()) return ErrorNoPermission;
-  u32 file = newFile();
   auto& open = files[file];
   open.path = normalized;
   open.host = host;

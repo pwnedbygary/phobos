@@ -852,7 +852,6 @@ auto Kernel::power() -> void {
   imposeLanguage = imposeButton = 1;
   geTranslation = 0x400;
   files.clear();
-  nextFile = 3;
   workingDirectory = "ms0:/";
   controller = {};
   display = {};

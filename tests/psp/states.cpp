@@ -83,7 +83,7 @@ static auto kernelStates() -> void {
     CHECK(n.kernel.threads[thread]->gp, 0x1234);
     CHECK(n.kernel.threads[thread]->name == "worker", true);
   }
-  CHECK(n.call("sceIoOpen", {n.string("ms0:/A.TXT"), 0x0001, 0}) > d, true);  //new descriptors go on from the old
+  CHECK(n.call("sceIoOpen", {n.string("ms0:/A.TXT"), 0x0001, 0}), b);  //the lowest free: the dropped file's
 
   //a list longer than the rest of the state, and a text longer than it: refused, as they run out of state
   std::vector<u8> damaged(s.data(), s.data() + s.size());
@@ -608,7 +608,7 @@ static auto stateFields() -> void {
     {"disc folder entry folder", [&] { discList.discEntries[1].folder = true; }},
     {"disc folder entry date", [&] { discList.discEntries[1].date[6] ^= 1; }},
     {"disc folder nextEntry", [&] { discList.nextEntry = 2; }},
-    {"nextFile", [&] { k.nextFile += 10; }}, {"workingDirectory", [&] { k.workingDirectory = "ms0:/LIST"; }},
+    {"workingDirectory", [&] { k.workingDirectory = "ms0:/LIST"; }},
     //the controller, the display
     {"buttons", [&] { c.buttons ^= 1; }}, {"analogX", [&] { c.analogX ^= 1; }}, {"analogY", [&] { c.analogY ^= 1; }},
     {"cycle", [&] { c.cycle = 5555; }}, {"mode", [&] { c.mode ^= 1; }},
@@ -903,7 +903,13 @@ static auto stateFields() -> void {
     thread.waitBeforeCallback = {Kernel::Wait::File, discFile, 16, 0, 0, 0, k.cycles + 1000, false, 0, 0};
     thread.wait = Kernel::Wait::Sleep;
   });
-  refuses("a file number handed out twice", [&] { k.nextFile = discFolder; });
+  auto renumber = [&](u32 file, u32 number) {
+    auto node = k.files.extract(file);
+    node.key() = number;
+    k.files.insert(std::move(node));
+  };
+  refuses("a file numbered as standard error", [&] { renumber(discFolder, 2); });
+  refuses("a file numbered past 2^31", [&] { renumber(discFolder, Kernel::LastUID + 1); });
   refuses("an ID handed out twice", [&] { k.nextUID = u32(one); });
   refuses("a semaphore under another's ID", [&] { k.semaphores.begin()->second.uid ^= 1; });
   refuses("an event flag under another's ID", [&] { k.eventFlags.begin()->second.uid ^= 1; });
@@ -1116,7 +1122,8 @@ static auto stateFields() -> void {
   refuses("a player ending but not playing", [&] { player.status = 2, player.ending = true; });
   refuses("a player playing with no movie", [&] { player.header.clear(); });
   refuses("a player made, with a movie", [&] { player.status = 1; });
-  refuses("a player's file not handed out yet", [&] { player.file = k.nextFile; });
+  refuses("a player's file numbered as standard error", [&] { player.file = 2; });
+  refuses("a player's file numbered past 2^31", [&] { player.file = Kernel::LastUID + 1; });
   refuses("a player's header that isn't one", [&] { player.header[0] = 'X'; });
   refuses("a player's header longer than its stream's offset", [&] { player.header.resize(0x900); });
   refuses("a player read past its stream", [&] { player.nextPack = 3; });
@@ -1320,7 +1327,6 @@ static auto stateFields() -> void {
   refuses("a folder name no path can name", [&] { k.files[folder].entries.push_back("C:D"); });
   refuses("a folder name with a backslash", [&] { k.files[folder].entries.push_back("A\\B"); });
   refuses("IDs counted past 2^31", [&] { k.nextUID = 0xffff'ffff; });
-  refuses("file numbers counted past 2^31", [&] { k.nextFile = 0xffff'ffff; });
   refuses("a clock past a century", [&] {
     k.cycles = 1ull << 60;
     k.nextVblank = k.controller.nextSample = k.cycles + 1000;
@@ -1434,10 +1440,10 @@ static auto stateFields() -> void {
   CHECK(save(a) == state, true);
 }
 
-//IDs and file numbers count up and are never handed out twice, so they stop short of 2^31 (a number with its top bit
-//set would read as an error): what would need another fails instead, as out of memory, or with too many files open.
-//A thread's stack, made first, goes again when the thread can't have an ID. A machine that has handed out every one
-//still saves, and loads into another.
+//IDs count up and are never handed out twice, so they stop short of 2^31 (a number with its top bit set would read as
+//an error): what would need another fails instead, as out of memory. A thread's stack, made first, goes again when
+//the thread can't have an ID. A machine that has handed out every one still saves, and loads into another. (File
+//numbers are given again once closed: "files numbered lowest free first" runs them out.)
 static auto idsRunOut() -> void {
   HostFolder stick;
   stick.put("A.TXT", "a");
@@ -1456,14 +1462,6 @@ static auto idsRunOut() -> void {
   CHECK(m.kernel.allocate(0x100, 0, 0, "none") == nullptr, true);
   m.kernel.nextUID = Kernel::LastUID;
   CHECK(m.call("sceKernelCreateSema", {m.string("last"), 0, 0, 1, 0}), Kernel::LastUID);
-  m.kernel.nextFile = Kernel::LastUID;
-  CHECK(m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0}), Kernel::LastUID);
-  CHECK(m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0}), Kernel::ErrorTooManyFiles);
-  CHECK(m.call("sceIoOpen", {m.string("ms0:/NEW.TXT"), 0x0602, 0}), Kernel::ErrorTooManyFiles);
-  CHECK(std::filesystem::exists(stick.path / "NEW.TXT"), false);  //refused before anything was made
-  CHECK(m.call("sceIoDopen", {m.string("ms0:/")}), Kernel::ErrorTooManyFiles);
-  CHECK(m.call("sceIoOpen", {m.string("disc0:/DATA.BIN"), 0x0001, 0}), Kernel::ErrorTooManyFiles);
-  CHECK(m.call("sceIoDopen", {m.string("disc0:/")}), Kernel::ErrorTooManyFiles);
   serializer s;
   CHECK(m.kernel.serialize(s), true);
   KernelMachine n;
@@ -1472,7 +1470,6 @@ static auto idsRunOut() -> void {
   serializer load{s.data(), s.size()};
   CHECK(n.kernel.serialize(load), true);
   CHECK(n.kernel.nextUID, Kernel::LastUID + 1);
-  CHECK(n.kernel.nextFile, Kernel::LastUID + 1);
 }
 
 auto stateTests() -> Tests {

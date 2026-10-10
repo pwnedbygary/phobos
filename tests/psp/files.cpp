@@ -470,10 +470,80 @@ static auto downloadDrm() -> void {
   CHECK(m.notes.size(), 0);
 }
 
+//Descriptors handed out: the lowest number free, from 3 (io/open/tty0 recorded small numbers counting up), a closed
+//file's number given to the next file or folder, whatever it is; an asynchronous open's descriptor holding its
+//number until its result is taken; the movie player's file keeping its number while the player has a movie, and a
+//thread's put-aside wait for a request keeping its file's; once 3 to 63 are all in use, nothing more opens until one
+//is closed; and a file numbered past them (an older state's) kept. (Crush indexes a table of 16 by them.)
+static auto fileNumbers() -> void {
+  HostFolder stick;
+  stick.put("A.TXT", "a");
+  stick.put("B.TXT", "b");
+  auto image = disc_image::makeIso({{"DATA.BIN", std::vector<u8>(100, 1)}});
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  m.kernel.disc = discFrom(image.bytes);
+  auto open = [&](const char* path) { return m.call("sceIoOpen", {m.string(path), 0x0001, 0}); };
+  CHECK(open("ms0:/A.TXT"), 3);
+  CHECK(open("ms0:/B.TXT"), 4);
+  CHECK(m.call("sceIoDopen", {m.string("ms0:/")}), 5);
+  CHECK(open("disc0:/DATA.BIN"), 6);
+  CHECK(m.call("sceIoClose", {4}), 0);
+  CHECK(open("disc0:/DATA.BIN"), 4);  //the lowest free, whatever it was before
+  CHECK(m.call("sceIoDclose", {5}), 0);
+  CHECK(m.call("sceIoClose", {3}), 0);
+  CHECK(m.call("sceIoDopen", {m.string("disc0:/")}), 3);
+  CHECK(open("ms0:/MISSING.TXT"), Kernel::ErrorFileNotFound);  //a failed open takes none
+  CHECK(open("ms0:/A.TXT"), 5);
+  CHECK(m.call("sceIoOpenAsync", {m.string("ms0:/MISSING.TXT"), 0x0001, 0}), 7);  //holds its error's number
+  CHECK(open("ms0:/B.TXT"), 8);
+  m.kernel.run(Kernel::VblankCycles);
+  CHECK(m.call("sceIoPollAsync", {7, Buffer}), 0);
+  CHECK(s32(m.system.memory.read(4, Buffer)), s32(Kernel::ErrorFileNotFound));
+  CHECK(open("ms0:/A.TXT"), 7);  //once its result is taken
+  m.kernel.psmfPlayer.status = 2;  //the movie player has a movie through 9 (its file dropped as a state loaded)
+  m.kernel.psmfPlayer.file = 9;
+  CHECK(open("ms0:/A.TXT"), 10);
+  m.kernel.psmfPlayer = {};
+  CHECK(open("ms0:/A.TXT"), 9);
+  for(u32 number = 11; number < Kernel::MostFiles; number++) CHECK(open("ms0:/A.TXT"), number);
+  CHECK(open("ms0:/A.TXT"), Kernel::ErrorTooManyFiles);
+  CHECK(m.call("sceIoOpen", {m.string("ms0:/NEW.TXT"), 0x0602, 0}), Kernel::ErrorTooManyFiles);
+  CHECK(std::filesystem::exists(stick.path / "NEW.TXT"), false);  //refused before anything was made
+  CHECK(m.call("sceIoDopen", {m.string("ms0:/")}), Kernel::ErrorTooManyFiles);
+  CHECK(open("disc0:/DATA.BIN"), Kernel::ErrorTooManyFiles);
+  CHECK(m.call("sceIoDopen", {m.string("disc0:/")}), Kernel::ErrorTooManyFiles);
+  CHECK(m.call("sceIoOpenAsync", {m.string("ms0:/A.TXT"), 0x0001, 0}), Kernel::ErrorTooManyFiles);
+  CHECK(m.call("sceIoOpenAsync", {m.string("ms0:/MISSING.TXT"), 0x0001, 0}), Kernel::ErrorTooManyFiles);
+  CHECK(m.call("sceIoClose", {40}), 0);
+  CHECK(open("ms0:/B.TXT"), 40);
+  //numbered past them, as a state of an older layout may have a file: kept, its old number free again
+  auto node = m.kernel.files.extract(40);
+  node.key() = 1000;
+  m.kernel.files.insert(std::move(node));
+  CHECK(open("ms0:/B.TXT"), 40);
+  //a number a thread's wait for a request still names isn't given to another: the thread made ready to run its
+  //callbacks, its wait kept, then running them with the wait put aside
+  CHECK(m.call("sceIoClose", {41}), 0);
+  s32 waiter = m.kernel.createThread("waiter", 0x0880'1000, 0x20, 0x1000, 0, 0);
+  auto& aside = *m.kernel.threads[waiter];
+  aside.status = Kernel::Status::Ready, aside.wait = Kernel::Wait::Async, aside.waitID = 41;
+  CHECK(open("ms0:/B.TXT"), Kernel::ErrorTooManyFiles);
+  aside.wait = Kernel::Wait::None, aside.waitID = 0, aside.inCallback = true;
+  aside.waitBeforeCallback.wait = Kernel::Wait::Async, aside.waitBeforeCallback.id = 41;
+  CHECK(open("ms0:/B.TXT"), Kernel::ErrorTooManyFiles);
+  aside.status = Kernel::Status::Dormant, aside.inCallback = false, aside.waitBeforeCallback = {};
+  CHECK(open("ms0:/B.TXT"), 41);
+  CHECK(roundTrip(m, [&](KernelMachine& n) {
+    n.kernel.mount("ms0", stick.path.string());
+    n.kernel.disc = discFrom(image.bytes);
+  }), true);
+}
+
 auto fileTests() -> Tests {
   return {
     {"files basics", fileBasics}, {"files folders", fileFolders}, {"files containment", fileContainment},
-    {"files rename", fileRename},
+    {"files rename", fileRename}, {"files numbered lowest free first", fileNumbers},
     {"files short names", fileShortNames}, {"controller peek", controllerPeek}, {"controller latch", controllerLatch},
     {"controller new samples", controllerReadNew}, {"controller cycle", controllerCycle},
     {"controller read", controllerRead}, {"controller two readers", controllerTwoReaders},
