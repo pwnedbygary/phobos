@@ -233,7 +233,7 @@ static auto tlsCreated() -> void {
   KernelMachine m;
   u32 name = m.string("tls"), options = R + 0x200, info = R + 0x100;
   constexpr u64 NoOptions = ~0ull;
-  auto create = [&](u32 partition, u32 attributes, u32 size, u32 count, u64 alignment = NoOptions) {
+  auto create = [&](u32 partition, u32 attributes, u32 size, u32 count, u64 alignment = ~0ull) {
     if(alignment != NoOptions) m.system.memory.write(4, options, 8), m.system.memory.write(4, options + 4, alignment);
     u32 given = alignment != NoOptions ? options : 0;
     return m.call("sceKernelCreateTlspl", {name, partition, attributes, size, count, given});
