@@ -201,9 +201,9 @@ auto GPU::revive(Target& t, std::vector<std::pair<u32, u32>>& ranges) -> void {
   ranges.clear();
 }
 
-//A block transfer's write over VRAM's bytes first to last: the whole pixels of them in each target's drawn rows
-//are dead (memory's from now on), where it has room to say so; the transfer's write then waits for nothing for
-//those (drawnOver()), as for bytes beside its pixels (besideChanged()), and a finish leaves them be.
+//A block transfer's write over VRAM's bytes first to last, or the CPU's store: the whole pixels of them in each
+//target's drawn rows are dead (memory's from now on), where it has room to say so; the write then waits for
+//nothing for those (drawnOver()), as for bytes beside its pixels (besideChanged()), and a finish leaves them be.
 auto GPU::overwritten(GE& ge, u32 first, u32 last) -> void {
   this->ge = &ge;
   for(auto& t : targets) {

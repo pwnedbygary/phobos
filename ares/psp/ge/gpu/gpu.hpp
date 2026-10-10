@@ -279,9 +279,9 @@ struct GPU : GE::Renderer {
     //it's filled afresh, what it drew put back first.)
     std::vector<std::pair<u32, u32>> beside;
     bool merged = false;
-    //VRAM's bytes (offsets, inclusive) in its drawn rows a block transfer has written whole since it drew there
-    //(overwritten()): memory's, not put back, and filled again before a PRIM draws over them or they're copied or
-    //shown or moved (revive()). (At most 16; where there'd be more, the transfer waits for a finish.)
+    //VRAM's bytes (offsets, inclusive) in its drawn rows a block transfer or the CPU has written whole since it
+    //drew there (overwritten()): memory's, not put back, and filled again before a PRIM draws over them or they're
+    //copied or shown or moved (revive()). (At most 16; where there'd be more, the write waits for a finish.)
     std::vector<std::pair<u32, u32>> dead;
     auto bytes() const -> u32 { return format == 3 ? 4 : 2; }
     auto end() const -> u32 { return address + rows * stride * bytes(); }  //(the VRAM bytes it covers)

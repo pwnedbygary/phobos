@@ -1025,6 +1025,65 @@ static auto gpuTransferOver() -> void {
   hardware.ge.setRenderer(nullptr);
 }
 
+//The CPU's stores over pixels the GPU drew (as Liberty City Stories writes a list over a picture it drew, which the
+//GE then reads): words over two rows, and halfwords over a 5650 frame buffer's pixels, memory's at once
+//(overwritten()), nothing finished, and read again (as the GE reads the list) without a finish either; a texture over
+//them decoded from memory, and a sprite drawn across them after. A byte into an 8888 pixel is only part of it: that
+//one finishes first. As the software renderer has it each time.
+static auto gpuStoresOver() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::mt19937 random{20261021};
+  constexpr u32 At = 0x3'0000;
+  for(u32 format : {3u, 0u}) {
+    u32 rowBytes = 64 * (format == 3 ? 4 : 2);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto drawn = randomSprites(random, 30, false);
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, At, format);
+      for(auto& one : drawn) sprite(*s, one);
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 24}}, 0xff10'2030});  //(rows 0-23 drawn whole)
+    }
+    auto before = gpu->statistics;
+    u32 read[2] = {}, after[2] = {};
+    for(System* s : {&software, &hardware}) {
+      for(u32 n = 0; n < 2 * rowBytes / 4; n++) {  //(rows 8 and 9)
+        s->memory.write(4, Memory::VRAMBase + At + 8 * rowBytes + n * 4, 0xff00'0000 | n * 0x03'0507);
+      }
+      for(u32 n = 0; n < 20 && format == 0; n++) {  //(row 20, columns 4-23)
+        s->memory.write(2, Memory::VRAMBase + At + 20 * rowBytes + (4 + n) * 2, n * 0x0321);
+      }
+      read[s == &hardware] = s->memory.read(4, Memory::VRAMBase + At + 9 * rowBytes + 12);
+    }
+    CHECK(read[1], read[0]);
+    CHECK(gpu->statistics.finishes, before.finishes);
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0x2'0000, 3);  //(a texture over the rows stored: decoded from memory)
+      texture(*s, Memory::VRAMBase + At + 8 * rowBytes, 32, 2, 64, format);
+      sprite(*s, {{{0, 0, 0, 0}, {32, 2, 32, 2}}, 0xffff'ffff});
+      prepare(*s, At, format);
+      s->ge.commands[GE::TextureMappingEnable] = 0;
+      sprite(*s, {{{0, 0, 10, 7}, {0, 0, 40, 21}}, 0xff35'79bd});
+      after[s == &hardware] = s->memory.read(4, Memory::VRAMBase + At + 9 * rowBytes + 48 * 2);
+    }
+    CHECK(after[1], after[0]);
+    CHECK(gpu->statistics.finishes, before.finishes + 1);  //(the CPU's read of the sprite's pixels)
+    if(format == 3) {
+      for(System* s : {&software, &hardware}) {
+        sprite(*s, {{{0, 0, 10, 28}, {0, 0, 40, 34}}, 0xff12'3456});
+        before = gpu->statistics;
+        s->memory.write(1, Memory::VRAMBase + At + 30 * rowBytes + 20 * 4 + 1, 0x5a);
+        if(s == &hardware) CHECK(gpu->statistics.finishes, before.finishes + 1);
+      }
+    }
+    u32 bytes = vramApart(software, hardware);
+    if(bytes) std::printf("  format %u: %u bytes apart\n", format, bytes);
+    CHECK(bytes, 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+}
+
 //Memory's bytes changed in a target's pages it hasn't drawn in since the last finish (the CPU's word): taken from
 //memory again before a sprite draws over them (written(), revive()), nothing finished, and the pixels the sprite drew
 //found by the CPU after. And more than 16 ranges of words beside pixels it has drawn in a page it owns: taken
@@ -1647,6 +1706,7 @@ auto gpuTests() -> Tests {
     {"gpu the same memory as frame buffers of other formats and places: moved on the GPU", gpuMoves},
     {"gpu frame buffers side by side in one target's rows", gpuSideBySide},
     {"gpu a block transfer over pixels it drew: memory's at once, nothing finished", gpuTransferOver},
+    {"gpu the CPU's stores over pixels it drew: memory's at once, nothing finished", gpuStoresOver},
     {"gpu memory's bytes in its pages taken again, not the target afresh", gpuRevived},
     {"gpu a texture's place taken by tiles reaching further: few copies, held to what each takes", gpuTiles},
     {"gpu depth buffer follows memory's changes", gpuDepth},

@@ -29,6 +29,9 @@ GE::GE(Memory& memory) : memory(memory) {
   memory.vramChangedBusy = [this](u32 first, u32 last) {
     if(renderer) renderer->besideChanged(*this, first, last);
   };
+  memory.vramStoring = [this](u32 first, u32 last) {  //(a batch still drawn there is waited for even so)
+    if(renderer && renderer->drawnOver(*this, first, last)) renderer->overwritten(*this, first, last);
+  };
 }
 
 //The hardware renderer that draws from now on, or none for the software renderer: the one before settled (what it

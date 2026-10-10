@@ -111,6 +111,10 @@ struct Memory {
   //A change to VRAM's bytes first to last while pages are busy, reached without waiting (changed()): for the GE to
   //hear of, as a hardware renderer keeps its own copies of the pages.
   std::function<auto (u32 first, u32 last) -> void> vramChangedBusy;
+  //A store about to write VRAM's bytes first to last (through a copy that keeps them in order) while pages are busy,
+  //before pointer() looks at them: for the GE to have a hardware renderer give up the pixels it covers whole, as
+  //memory's bytes are the newest there from then on, so pointer() needn't wait for them.
+  std::function<auto (u32 first, u32 last) -> void> vramStoring;
 
   //memory.cpp
   static auto vramOffset(u32 copy, u32 seen) -> u32;

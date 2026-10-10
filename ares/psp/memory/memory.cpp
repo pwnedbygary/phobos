@@ -165,6 +165,13 @@ auto Memory::read(u32 size, u32 address) -> u32 {
 
 //The CPU's stores, as aligned as its loads (and HLE functions', likewise a byte at a time across such a piece).
 auto Memory::write(u32 size, u32 address, u32 data) -> void {
+  if(vramBusy && vramStoring && !knownDrawn) {  //(not through the second or fourth copy, which rearrange the bytes)
+    u32 physical = address & 0x1fff'ffff;
+    if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow && !((physical - VRAMBase) / VRAMSize & 1)) {
+      u32 seen = (physical - VRAMBase) % VRAMSize;
+      if(seen + size <= VRAMSize) vramStoring(seen, seen + size - 1);
+    }
+  }
   u8* bytes = pointer(address, size);
   if(!bytes && size > 1 && reaches(address, size)) {
     for(u32 n = 0; n < size; n++) write(1, address + n, data >> 8 * n);

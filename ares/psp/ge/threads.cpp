@@ -55,6 +55,7 @@ GE::~GE() {
   memory.finishDrawingOver = nullptr;
   memory.vramDrawnOver = nullptr;
   memory.vramChangedBusy = nullptr;
+  memory.vramStoring = nullptr;
   memory.watchedWritten = nullptr;
 }
 
