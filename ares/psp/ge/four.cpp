@@ -116,7 +116,7 @@ static alwaysinline auto passesLanes(u32 comparison, GE::s32x4 a, GE::s32x4 b) -
 //draw.cpp), so each is its true step times one factor between 1 - 2^-15 and 1, less under 1 for rounding down. At a
 //pixel inside the triangle the true blend lies between the corners' values (each within 2^30 of 0: a depth is at
 //most 65535 16384ths), so the stepped value is off it by under a 2^15th of 2^30, plus one for each sixteenth from the
-//corner (under 2^17: the screen is 2^16 sixteenths each way).
+//corner (under 2^18: positions are held within 2^16 sixteenths of 0, each way).
 auto GE::fourFriendly(const Job& job) const -> bool {
   if(!fourPixels || (job.kind != Job::Kind::Sprite && job.kind != Job::Kind::Triangle)) return false;
   auto& look = *job.look;
@@ -515,7 +515,7 @@ auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
   bool blended = !r.flat, shining = !r.flat && r.shines;
   //Colors, the shine, fog and depth stepped (triangleRows()), lane by lane: each one's 16384ths at a four's pixels,
   //and a four's step, kept in 32 bits that may run round. Every lane inside the triangle keeps its value, which
-  //fits (a level or a depth, and how far the steps' rounding takes it: fourFriendly() sees to that); the lanes
+  //fits (a level or a depth, and how far the steps' rounding takes it: fourFriendly() says why); the lanes
   //outside it may come out anything.
   const Job::Stepped* stepped[9] = {&r.colors[0], &r.colors[1], &r.colors[2], &r.colors[3],
                                     &r.shine[0], &r.shine[1], &r.shine[2], &r.fog, &r.depth};

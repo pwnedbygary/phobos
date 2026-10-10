@@ -485,8 +485,8 @@ static auto shortStep(f64 step) -> f64 { return std::trunc(step * 65536) / 65536
 
 //The GE's reciprocal's 128 straight chords (geReciprocal()): where chord s starts, round(2^17 / (1 + s/128)) (131072
 //down to 65793, never a half), and its slope over its 256 positions, the run to the next start over 4, rounded half
-//to even (half away from zero suits persp-divide, persp-floor and round 3's wall and floor a few pixels better but
-//leaves persp-wall 246 pixels apart, not 23, and persp-w3 28928, not 18944). Two chords sit one unit high where
+//to even (half away from zero suits persp-floor better, 305 pixels apart against 351, and round 3's floor, 20 against
+//64, but leaves persp-wall 246 apart, not 23, and persp-w3 28928, not 18944). Two chords sit one unit high where
 //round 5's persp-divide and persp-floor sample them, so their starts are two counts low; their slopes are the
 //unadjusted ones (part 60).
 struct ReciprocalChords {

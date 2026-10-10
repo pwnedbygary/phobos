@@ -7090,9 +7090,9 @@ exact, and the other line pictures are unchanged. Curved surfaces' texels (`curv
 and draws with the GPU's own divide, as before.
 
 **Tests.** "draw3d perspective texels as a PSP draws them" (`tests/psp/draw3d.cpp`) draws round 5's `persp-w3` and
-`persp-divide` as `tools/psp-measure` drew them and checks six pixels the owner's PSP drew and a float divide wouldn't,
-two of them the ones chords 5 and 58 pin (without chord 5's correction it fails), four pixels at a time and one at a
-time. "draw3d four pixels at a time against one", 20000 random primitives, both paths, now also gives some of them
+`persp-divide` as `tools/psp-measure` drew them and checks six pixels as the owner's PSP drew them: five a float divide
+gets wrong, among them one chord 5's correction pins (without it the test fails), and one chord 58's pins, four pixels
+at a time and one at a time. "draw3d four pixels at a time against one", 20000 random primitives, both paths, now also gives some of them
 texture coordinates over dozens of repeats, corners from just past the near plane to nearly the far one, or the
 texture matrix's own q: they still match. Save states are unchanged (the new fields are on a job, which isn't
 serialized). The arithmetic was first written with library calls (frexp, ldexp) and then as it is now; the two drew
