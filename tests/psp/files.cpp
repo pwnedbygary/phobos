@@ -164,25 +164,68 @@ static auto fileContainment() -> void {
   CHECK(inward >= 3 && inward < 0x8000'0000, true);
 }
 
-//A directory entry's private part, when the program asks for it: the short 8.3 name in capitals, and the long name.
+//A directory entry's private part, when the program asks for it: the short 8.3 name in capitals, and the long name,
+//laid out by the program's SDK version as io/shortname recorded. With none (as homebrew gives), or 0x03070010 (Need
+//for Speed: ProStreet's), the short name in 13 bytes and the long name right after it, nothing past its end (the
+//program's first word written over, whatever it declared); with 0x06060010, the declared size (0x414) kept, the
+//short name 4 bytes in and the long name 20 in, and nothing at all when the size declared is smaller. A folder's
+//"." and ".." have themselves for both names.
 static auto fileShortNames() -> void {
   HostFolder folder;
   folder.put("Verylongname.extension", "");
   folder.put("File.txt", "");
+  folder.put("sub/x", "");
   KernelMachine m;
+  auto& memory = m.system.memory;
   m.kernel.mount("ms0", folder.path.string());
   constexpr u32 Extra = Buffer + 0x1000;
-  u32 listing = m.call("sceIoDopen", {m.string("ms0:/")});
-  std::vector<std::pair<std::string, std::string>> names;
-  m.system.memory.write(4, Buffer + 344, Extra);
-  while(m.call("sceIoDread", {listing, Buffer}) == 1) {
-    names.push_back({m.system.memory.readString(Extra + 4, 13), m.system.memory.readString(Extra + 20, 1024)});
+  struct Entry { std::string name, older, newer; u32 first, fourth, past; };
+  auto list = [&](const char* path, u32 declared) {
+    std::vector<Entry> entries;
+    u32 listing = m.call("sceIoDopen", {m.string(path)});
+    while(true) {
+      memory.fill(Extra, 0xee, 0x500);
+      memory.write(4, Extra, declared);
+      memory.write(4, Buffer + 344, Extra);
+      if(m.call("sceIoDread", {listing, Buffer}) != 1) break;
+      Entry e;
+      e.name = memory.readString(Buffer + 88, 256);
+      e.older = memory.readString(Extra, 13) + "|" + memory.readString(Extra + 13, 256);
+      e.newer = memory.readString(Extra + 4, 16) + "|" + memory.readString(Extra + 20, 1024);
+      e.first = memory.read(4, Extra), e.fourth = memory.read(4, Extra + 4);
+      e.past = memory.read(1, Extra + 13 + e.name.size() + 1);  //just past the older layout's long name
+      entries.push_back(e);
+    }
+    m.call("sceIoDclose", {listing});
+    return entries;
+  };
+  for(u32 sdk : {0u, 0x0307'0010u}) {
+    m.kernel.sdkVersion = sdk;
+    auto entries = list("ms0:/", 0x414);  //(in order, whatever their case: File.txt, sub, Verylongname...)
+    CHECK(entries.size(), 3);
+    if(entries.size() == 3) {
+      CHECK(entries[0].name == "File.txt" && entries[0].older == "FILE.TXT|File.txt", true);
+      CHECK(entries[1].name == "sub" && entries[1].older == "SUB|sub", true);
+      CHECK(entries[2].name == "Verylongname.extension", true);
+      CHECK(entries[2].older == "VERYLONG.EXT|Verylongname.extension", true);
+      for(auto& e : entries) CHECK(e.first != 0x414 && e.past == 0xee, true);
+    }
+    auto inside = list("ms0:/sub", 0);
+    CHECK(inside.size(), 3);
+    if(inside.size() == 3) {
+      CHECK(inside[0].older == ".|." && inside[1].older == "..|.." && inside[2].older == "X|x", true);
+    }
   }
-  CHECK(names.size(), 2);
-  if(names.size() == 2) {
-    CHECK(names[0].first == "FILE.TXT" && names[0].second == "File.txt", true);
-    CHECK(names[1].first == "VERYLONG.EXT" && names[1].second == "Verylongname.extension", true);
+  m.kernel.sdkVersion = 0x0606'0010;
+  auto entries = list("ms0:/", 0x414);
+  CHECK(entries.size(), 3);
+  if(entries.size() == 3) {
+    CHECK(entries[0].newer == "FILE.TXT|File.txt" && entries[0].first == 0x414, true);
+    CHECK(entries[1].newer == "SUB|sub" && entries[2].newer == "VERYLONG.EXT|Verylongname.extension", true);
   }
+  entries = list("ms0:/", 0x413);  //declared smaller than a SceIoFatDirentPrivate: nothing written
+  CHECK(entries.size(), 3);
+  for(auto& e : entries) CHECK(e.first == 0x413 && e.fourth == 0xeeee'eeee, true);
 }
 
 //The buttons and stick: sampled at each vertical blank and kept; the latest peeked at once, oldest first, each with

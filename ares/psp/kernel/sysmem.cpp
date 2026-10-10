@@ -170,7 +170,9 @@ auto Kernel::sceKernelTotalFreeMemSize() -> void {
 //(version): the SDK the program was built with, which its start-up code tells the system first thing, through this
 //function or, from SDK 3.7 on, one of its siblings for a range of versions (sceKernelSetCompiledSdkVersion370 and so
 //on, whose NIDs aren't their names' hashes: Sony gave later functions random ones). The PSP keeps older programs
-//working as they were built to with it; nothing here depends on it yet, but it's kept to be read back.
+//working as they were built to with it, and calls here that changed between SDKs keep an older one's ways for
+//programs built with it (how much of a thread's status is written, the drive state an activation tells the UMD
+//callback, what unregistering that callback returns, where sceIoDread puts its short and long names).
 auto Kernel::sceKernelSetCompiledSdkVersion() -> void {
   sdkVersion = arg(0);
   result(0);

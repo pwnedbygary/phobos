@@ -706,8 +706,14 @@ auto Kernel::sceIoDopen() -> void {
 }
 
 //(folder, where to put the entry, a SceIoDirent of 352 bytes): 1 and the next entry (its SceIoStat and name), or 0
-//once there are no more. If the program points d_private at a SceIoFatDirentPrivate, its short (8.3) and long names go
-//there too.
+//once there are no more. If the program points d_private somewhere, a memory stick entry's short (8.3) and long names
+//go there too, laid out by the SDK version the program gave, as pspautotests' io/shortname recorded: with none, or
+//0x03070110, the short name in 13 bytes from the start and the long name right after it; with 0x06060010 a
+//SceIoFatDirentPrivate, the size the program declared in its first word left there, the short name in 16 bytes after
+//it and the long name in 1024 after that. The change is taken at 0x03080000 (the test's "documented as changing at
+//SDK 3.08"). Nothing goes past the long name's end in the older layout, nor into a SceIoFatDirentPrivate declared
+//smaller than one (chosen): Need for Speed: ProStreet (0x03070010) gives 272 bytes on its stack, and the newer
+//layout's 1044 bytes, written there, zeroed its saved registers, and it returned to address 0.
 auto Kernel::sceIoDread() -> void {
   auto found = files.find(arg(0));
   if(found == files.end() || !found->second.folder) return result(ErrorBadFile);
@@ -728,14 +734,25 @@ auto Kernel::sceIoDread() -> void {
   memory.fill(entry + 88, 0, 256);
   memory.copyIn(entry + 88, name.c_str(), std::min<size_t>(name.size(), 255));
   //on the memory stick only: the disc's names have no short forms (PPSSPP's notes)
-  if(u32 extra = memory.read(4, entry + 344); !open.onDisc && extra && memory.reaches(extra, 1044)) {
+  if(u32 extra = memory.read(4, entry + 344); !open.onDisc && extra) {
     std::string base = name, extension;  //an 8.3 short name: up to eight letters, a dot, up to three, in capitals
     if(auto dot = name.rfind('.'); dot != std::string::npos && dot > 0) base = name.substr(0, dot), extension = name.substr(dot + 1);
     std::string shortName = base.substr(0, 8) + (extension.empty() ? "" : "." + extension.substr(0, 3));
     for(auto& c : shortName) c = std::toupper(u8(c));
-    memory.fill(extra + 4, 0, 1040);
-    memory.copyIn(extra + 4, shortName.c_str(), std::min<size_t>(shortName.size(), 12));
-    memory.copyIn(extra + 20, name.c_str(), std::min<size_t>(name.size(), 1023));
+    if(name == "." || name == "..") shortName = name;  //as io/shortname recorded them
+    shortName.resize(std::min<size_t>(shortName.size(), 12));
+    std::string longName = name.substr(0, 255);
+    if(sdkVersion < 0x0308'0000) {
+      if(memory.reaches(extra, 13 + longName.size() + 1)) {
+        memory.fill(extra, 0, 13);
+        memory.copyIn(extra, shortName.c_str(), shortName.size());
+        memory.copyIn(extra + 13, longName.c_str(), longName.size() + 1);
+      }
+    } else if(memory.reaches(extra, 1044) && memory.read(4, extra) >= 1044) {
+      memory.fill(extra + 4, 0, 1040);
+      memory.copyIn(extra + 4, shortName.c_str(), shortName.size());
+      memory.copyIn(extra + 20, longName.c_str(), longName.size());
+    }
   }
   result(1);
 }
