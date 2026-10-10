@@ -649,6 +649,27 @@ auto Kernel::serialize(serializer& s) -> bool {
       check(t->waitMode == TlsByLibrary || userAddress(t->waitPointer));
     }
   }
+  //sceJpeg's library and context (jpeg.cpp), sceHprm's callbacks (ctrl.cpp), and which ATRAC IDs decode frames handed
+  //them one at a time (atrac.cpp's low level, their channels and frame size the IDs' own fields, saved above): layout
+  //21 on, none in older states. A context is made only with the library started, and 1024 pixels wide at most; a
+  //low-level ID has no file, and parameters sceAtracLowLevelInitDecoder takes.
+  if(s.reading() && stateLayout < 21) {
+    jpeg = {};
+    for(auto& callback : hprmCallbacks) callback = 0;
+    for(auto& a : atracs) a.lowLevel = false;
+  } else {
+    s(jpeg.initialized); s(jpeg.created); s(jpeg.width); s(jpeg.height);
+    s(hprmCallbacks);
+    for(auto& a : atracs) s(a.lowLevel);
+    check((!jpeg.created || jpeg.initialized) && jpeg.width <= 1024);
+    for(auto& a : atracs) {
+      if(!a.lowLevel) continue;
+      check(a.codec && !a.state && a.channels >= 1 && a.channels <= 2 && a.outputChannels >= 1);
+      check(a.outputChannels <= 2 && a.frameBytes && a.frameBytes <= 0x2000);
+      check(a.frameSamples == (a.codec == 0x1000 ? 2048u : 1024u) && a.extra.size() <= AudioDecoder::Format::MaxExtra);
+      check(a.recent.empty() || a.recent.size() == a.frameBytes);
+    }
+  }
   //IDs count up from nextUID as objects are made, so every object's is below it; and a map's key is its object's own
   if(s.reading()) {
     for(auto& [uid, t] : threads) check(uid < nextUID);
@@ -750,7 +771,7 @@ auto Kernel::serialize(serializer& s) -> bool {
 
   //open files and folders. Nothing on the disc is open for writing (openOnDisc() refuses it), and a folder on the
   //disc keeps each of its names' entries, one for one: reading the folder hands out both. Files are numbered from 3:
-  //newFile() hands out those below MostFiles, but a state of a layout before 21, which counted numbers up for good
+  //newFile() hands out those below MostFiles, but a state of a layout before 22, which counted numbers up for good
   //(their count is passed over), keeps the ones its files had, short of 2^31, as do states saved after it. An
   //asynchronous request is on a file, not a folder, its state one there is, and one under way is due within the
   //longest any request can take (64 MiB, the most of the program's memory one can move, from the disc: under a
@@ -766,9 +787,9 @@ auto Kernel::serialize(serializer& s) -> bool {
     vector(open.discEntries, entry);
     s(open.async); s(open.asyncDoneAt); s(open.asyncResult); s(open.asyncCallback); s(open.asyncArgument);
     s(open.resultOnly);
-    //a read under way, its bytes to come (layout 21 on; older layouts moved them as it was made): as many as its
+    //a read under way, its bytes to come (layout 22 on; older layouts moved them as it was made): as many as its
     //result counts, of a file opened to read, from where it was then, into the program's memory
-    if(s.reading() && stateLayout < 21) open.asyncData = 0, open.asyncFrom = 0;
+    if(s.reading() && stateLayout < 22) open.asyncData = 0, open.asyncFrom = 0;
     else s(open.asyncData), s(open.asyncFrom);
     if(open.asyncData) {
       u64 unit = open.sectors ? Disc::SectorSize : 1;
@@ -788,7 +809,7 @@ auto Kernel::serialize(serializer& s) -> bool {
       check(due > cycles ? due - cycles <= longest : cycles - due < VblankCycles);
     }
   });
-  if(s.reading() && stateLayout < 21) {
+  if(s.reading() && stateLayout < 22) {
     u32 counted = 0;
     s(counted);
   }

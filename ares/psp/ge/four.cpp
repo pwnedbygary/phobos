@@ -6,12 +6,15 @@
 //does exactly what drawing its pixel by itself does (raster.cpp, texture.cpp, pixel.cpp), so that every pixel
 //comes out the same, bit for bit:
 //  - Whole numbers: the same additions, multiplications, shifts and comparisons, lane by lane, in 32 bits, none of
-//    which overflows (where one might, it says why not), but for a triangle's stepped colors, fog and depth, which
-//    run round on purpose and still leave every lane inside the triangle its value (triangleFours()).
+//    which overflows (where one might, it says why not), but for a triangle's stepped colors, fog and depth and its
+//    3D texture coordinates' s, t and q, which run round on purpose and still leave every lane inside the triangle
+//    its value (fourFriendly() says why).
 //  - Floating point: the same expressions, written the same way, with a vector in every product, so that each lane
 //    rounds as the single number did. Where the host has fused multiply-adds (ARM64), the compiler fuses a product
 //    into the sum it's part of by the expression's shape, for vectors as for single numbers; a product of two single
-//    numbers, made a vector afterwards, wouldn't be fused, so none is written that way.
+//    numbers, made a vector afterwards, wouldn't be fused, so none is written that way. One exception: the GE's
+//    reciprocal and the 24-bit products of the perspective divide (reciprocalLanes(), productLanes()) are worked out
+//    another way than geReciprocal() and trunc24() work them out, every step exact, so they give the same numbers.
 //  - The order: no pixel of a primitive depends on another (raster.cpp) but through the frame and depth buffers it's
 //    drawn into. Four pixels read and written at once see what drawing them one after another would, as long as the
 //    job's frame buffer and depth buffer don't overlap, so that each pixel's bytes are its own, and its texture isn't
@@ -59,6 +62,38 @@ static alwaysinline auto floorLanes(GE::f32x4 value) -> GE::s32x4 {
   GE::s32x4 cut = __builtin_convertvector(value, GE::s32x4);
   return cut + (__builtin_convertvector(cut, GE::f32x4) > value);  //(a comparison that holds is -1)
 }
+//geReciprocal() (draw.cpp) of each lane, the same numbers, four at once but for the chords' table, read a lane at a
+//time. (Reading it once when all four lanes share a chord was slower on the RP6: the test costs more than it saves.)
+static alwaysinline auto reciprocalLanes(GE::f32x4 x) -> GE::f32x4 {
+  auto bits = (GE::u32x4)x;
+  auto exponent = (GE::s32x4)(bits >> 23 & 255);
+  GE::s32x4 q;
+  for(u32 lane = 0; lane < 4; lane++) {
+    auto& line = reciprocalChords.chords[bits[lane] >> 16 & 127];
+    q[lane] = (64 * line.start + 63 + line.slope * s32(bits[lane] >> 8 & 255)) >> 7;
+  }
+  //times 2^(111 - exponent) as two powers of two, each a normal float, so that every product is exact (one below
+  //2^-126 too: q has 16 significant bits at most); the sign put back; a zero, denormal, infinity or not a number: 0
+  GE::s32x4 power = 111 - exponent, half = power >> 1;
+  auto value = __builtin_convertvector(q, GE::f32x4) * (GE::f32x4)((half + 127) << 23) *
+               (GE::f32x4)((power - half + 127) << 23);
+  GE::s32x4 counts = (exponent != 0) & (exponent != 255);
+  return (GE::f32x4)(((GE::u32x4)value | (bits & 0x8000'0000)) & (GE::u32x4)counts);
+}
+//trunc24(integer * unit * reciprocal) (draw.cpp) of each lane, two at a time in doubles, where each product is exact
+//and, being 0 or between 2^-300 and 2^300, a normal double (so clearing its fraction past the top 23 bits is all).
+static alwaysinline auto productLanes(GE::s32x4 integer, float unit, GE::f32x4 reciprocal) -> GE::f32x4 {
+  //(the halves made from lanes, as GCC before 12 has no __builtin_shufflevector)
+  using s32x2 = s32 __attribute__((vector_size(8)));
+  using f32x2 = float __attribute__((vector_size(8)));
+  auto half = [&](s32x2 whole, f32x2 by) {
+    auto product = __builtin_convertvector(whole, GE::f64x2) * f64(unit) * __builtin_convertvector(by, GE::f64x2);
+    return __builtin_convertvector((GE::f64x2)((GE::u64x2)product & ~u64(0) << 29), f32x2);
+  };
+  f32x2 low = half(s32x2{integer[0], integer[1]}, f32x2{reciprocal[0], reciprocal[1]});
+  f32x2 high = half(s32x2{integer[2], integer[3]}, f32x2{reciprocal[2], reciprocal[3]});
+  return GE::f32x4{low[0], low[1], high[0], high[1]};
+}
 //passes() (pixel.cpp) lane by lane.
 static alwaysinline auto passesLanes(u32 comparison, GE::s32x4 a, GE::s32x4 b) -> GE::s32x4 {
   switch(comparison & 7) {
@@ -73,9 +108,15 @@ static alwaysinline auto passesLanes(u32 comparison, GE::s32x4 a, GE::s32x4 b) -
   return a >= b;
 }
 //Whether the job may be drawn four pixels at a time (see the top of this file): a triangle or a sprite, without the
-//stencil test or a logic operation, its texture (if any) kept decoded, its frame buffer's bytes apart from its depth
-//buffer's (when it reaches it) and neither running round VRAM's end; and for a triangle, its edge functions within
-//32 bits at every pixel its fours may reach (three columns either side of its box).
+//stencil test or a logic operation, its texture (if any) kept decoded, and its frame buffer's bytes apart from its
+//depth buffer's (when it reaches it) and neither running round VRAM's end.
+//A triangle's size doesn't matter: its rows are found in 64 bits, as triangleRows() finds them, and its stepped
+//values (colors, fog, depth, and in 3D the texture coordinates' s, t and q) stay inside 32 bits at every pixel inside
+//it, however steep their steps. All the steps of a triangle come from one reciprocal of its area (stepped(),
+//draw.cpp), so each is its true step times one factor between 1 - 2^-15 and 1, less under 1 for rounding down. At a
+//pixel inside the triangle the true blend lies between the corners' values (each within 2^30 of 0: a depth is at
+//most 65535 16384ths), so the stepped value is off it by under a 2^15th of 2^30, plus one for each sixteenth from the
+//corner (under 2^18: positions are held within 2^16 sixteenths of 0, each way).
 auto GE::fourFriendly(const Job& job) const -> bool {
   if(!fourPixels || (job.kind != Job::Kind::Sprite && job.kind != Job::Kind::Triangle)) return false;
   auto& look = *job.look;
@@ -92,24 +133,6 @@ auto GE::fourFriendly(const Job& job) const -> bool {
     if(depthHigh >= Memory::VRAMSize) return false;
     depthLow &= ~0x3fffull, depthHigh |= 0x3fff;  //(each 16 KiB rearranged: memory.hpp)
     if(depthLow <= colorHigh && colorLow <= depthHigh) return false;
-  }
-  if(job.kind == Job::Kind::Triangle) {
-    auto& r = job.triangle;
-    s64 farX = std::max(std::abs(s64(job.firstX - 3) * 16 + 8), std::abs(s64(job.lastX + 3) * 16 + 8));
-    s64 farY = std::max(std::abs(s64(job.firstY) * 16 + 8), std::abs(s64(job.lastY) * 16 + 8));
-    for(u32 k = 0; k < 3; k++) {
-      u32 from = (k + 1) % 3, to = (k + 2) % 3;
-      s64 a = r.y[from] - r.y[to], b = r.x[to] - r.x[from], c = r.y[to] * r.x[from] - r.x[to] * r.y[from];
-      if(std::abs(a) * farX + std::abs(b) * farY + std::abs(c) + std::abs(a) * 64 >= 0x7fff'ffff) return false;
-    }
-    //Its stepped values (triangleFours()) at its pixels within 32 bits: steps under 2^24 a sixteenth, which their
-    //rounding (under 1 + 2^9 each, the reciprocal kept to 16 bits) can take at most 2^28 from the true blend over
-    //the 2^17 sixteenths a triangle spans each way, beside a depth's 2^30. (Only those its pixels use.)
-    bool needsZ = p.depthRange || (p.clear ? p.clearDepth : p.depthTest);
-    auto small = [](const Job::Stepped& c) { return std::abs(c.across) < 1 << 24 && std::abs(c.down) < 1 << 24; };
-    for(u32 n = 0; n < 4; n++) if(!r.flat && !small(r.colors[n])) return false;
-    for(u32 n = 0; n < 3; n++) if(!r.flat && r.shines && !small(r.shine[n])) return false;
-    if((p.fog && !small(r.fog)) || (needsZ && !small(r.depth))) return false;
   }
   return true;
 }
@@ -475,8 +498,7 @@ auto GE::spriteFours(const Job& job, s32 fromY, s32 toY) -> void {
 }
 
 //A triangle's rows, four pixels at a time: triangleRows() (raster.cpp), lane by lane. Each row's pixels inside it are
-//found as there; its fours then run from the multiple of four at or before the first. The edge functions at a four's
-//pixels are whole numbers within 32 bits (fourFriendly()), so turned into floats they're what the 64-bit ones give.
+//found as there (in 64 bits); its fours then run from the multiple of four at or before the first.
 template<u32 Format>
 auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
   auto& r = job.triangle;
@@ -493,7 +515,7 @@ auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
   bool blended = !r.flat, shining = !r.flat && r.shines;
   //Colors, the shine, fog and depth stepped (triangleRows()), lane by lane: each one's 16384ths at a four's pixels,
   //and a four's step, kept in 32 bits that may run round. Every lane inside the triangle keeps its value, which
-  //fits (a level or a depth, and how far the steps' rounding takes it: fourFriendly() sees to that); the lanes
+  //fits (a level or a depth, and how far the steps' rounding takes it: fourFriendly() says why); the lanes
   //outside it may come out anything.
   const Job::Stepped* stepped[9] = {&r.colors[0], &r.colors[1], &r.colors[2], &r.colors[3],
                                     &r.shine[0], &r.shine[1], &r.shine[2], &r.fog, &r.depth};
@@ -522,26 +544,34 @@ auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
     }
     if(start > stop) continue;
     s32 first = s32(start) & ~3;
-    s32x4 edge[3];
-    for(u32 k = 0; k < 3; k++) {
-      s64 at = a[k] * (s64(first) * 16 + 8) + b[k] * sampleY + c[k];
-      edge[k] = s32(at) + s32(a[k] * 16) * Lanes;
-    }
     for(u32 k = 0; k < uses; k++) {
       auto& c = *stepped[used[k]];
       s128 at = c.start + s128(s64(first) * 16 + 8 - r.startX) * c.across + s128(sampleY - r.startY) * c.down;
       values[used[k]] = u32(at) + u32(c.across * 16) * u32x4(Lanes);
     }
-    auto next = [&] { for(u32 k = 0; k < uses; k++) values[used[k]] += steps[used[k]]; };
+    //s, t and q (part 60) as the colors: 32-bit lanes that may run round, as every lane inside the triangle keeps its
+    //value (each within 2^30 of 0 there), from the row's first four, then stepped a four at a time
+    bool divides = look.textured && r.perspective;
+    u32x4 texLanes[3] = {};
+    u32 texSteps[3] = {};
+    if(divides) {
+      const Job::Stepped* tex[3] = {&r.texS, &r.texT, &r.texQ};
+      for(u32 k = 0; k < 3; k++) {
+        auto& c = *tex[k];
+        s128 at = c.start + s128(s64(first) * 16 + 8 - r.startX) * c.across + s128(sampleY - r.startY) * c.down;
+        texLanes[k] = u32(at) + u32(c.across * 16) * u32x4(Lanes);
+        texSteps[k] = u32(c.across * 64);
+      }
+    }
+    auto next = [&] {
+      for(u32 k = 0; k < uses; k++) values[used[k]] += steps[used[k]];
+      if(divides) for(u32 k = 0; k < 3; k++) texLanes[k] += texSteps[k];
+    };
     for(s32 x = first; x <= stop; x += 4, next()) {
       Four four;
       s32x4 column = x + Lanes;
       four.live = four.inside = (column >= s32(start)) & (column <= s32(stop));
       four.full = x >= start && x + 3 <= stop;
-      f32x4 w0 = __builtin_convertvector(edge[0], f32x4);
-      f32x4 w1 = __builtin_convertvector(edge[1], f32x4);
-      f32x4 w2 = __builtin_convertvector(edge[2], f32x4);
-      for(u32 k = 0; k < 3; k++) edge[k] += s32(a[k] * 64);
       four.z = needsZ ? levels(8) : s32x4{};
       if(!depthFirst<Format>(p, x, y, four)) continue;
       if(blended) for(u32 n = 0; n < 4; n++) four.color[n] = levels(n);
@@ -549,10 +579,10 @@ auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
       if(look.textured) {
         f32x4 u, v;
         if(r.perspective) {
-          f32x4 ka = w0 / r.w[0], kb = w1 / r.w[1], kc = w2 / r.w[2];
-          f32x4 divisor = ka * r.q[0] + kb * r.q[1] + kc * r.q[2];
-          u = (ka * r.u[0] + kb * r.u[1] + kc * r.u[2]) / divisor;
-          v = (ka * r.v[0] + kb * r.v[1] + kc * r.v[2]) / divisor;
+          //each lane: the floored units times R(q), as triangleRows() works them out
+          f32x4 reciprocal = reciprocalLanes(__builtin_convertvector((s32x4)texLanes[2] >> 14, f32x4) * r.qUnit);
+          u = productLanes((s32x4)texLanes[0] >> 14, r.sUnit, reciprocal);
+          v = productLanes((s32x4)texLanes[1] >> 14, r.tUnit, reciprocal);
         } else {  //(in doubles, two lanes at a time; each lane's difference is a whole number, exact as a double)
           f64 across = f64(s64(x) * 16 + 8 - r.startX);
           f64x2 near = f64x2{across, across + 16}, far = f64x2{across + 32, across + 48};

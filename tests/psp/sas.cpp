@@ -851,6 +851,31 @@ static auto sasVoicesInStates() -> void {
   }
 }
 
+//sceP3da (p3da.cpp): the channels' buffers, an array of addresses, mixed into stereo pairs, each channel in both
+//ears, their sum held to 16 bits; a channel whose samples aren't in memory left out; every call 0.
+static auto p3daMixed() -> void {
+  KernelMachine m;
+  constexpr u32 Buffers = R + 0x100, Output = 0x0898'0000;
+  const u32 channels[3] = {0x0894'0000, 0x0895'0000, 0x0000'1000};  //the third outside memory
+  CHECK(m.call("sceP3daBridgeInit", {3, 0x800}), 0);
+  for(u32 n = 0; n < 3; n++) m.system.memory.write(4, Buffers + n * 4, channels[n]);
+  for(u32 n = 0; n < 0x800; n++) {
+    m.system.memory.write(2, channels[0] + n * 2, u16(s16(n * 16)));
+    m.system.memory.write(2, channels[1] + n * 2, u16(s16(-1000)));
+  }
+  m.system.memory.write(2, channels[0] + 0x7ff * 2, 0x7fff);
+  m.system.memory.write(2, channels[1] + 0x7ff * 2, 0x7fff);
+  m.system.memory.fill(Output, 0xcc, 0x2004);
+  CHECK(m.call("sceP3daBridgeCore", {R, 3, 0x800, Buffers, Output}), 0);
+  auto sample = [&](u32 n) { return s16(m.system.memory.read(2, Output + n * 2)); };
+  CHECK(sample(0) == -1000 && sample(1) == -1000, true);
+  CHECK(sample(200) == 100 * 16 - 1000 && sample(201) == 100 * 16 - 1000, true);
+  CHECK(sample(0xffe) == 32767 && sample(0xfff) == 32767, true);  //held to 16 bits
+  CHECK(m.system.memory.read(4, Output + 0x2000), 0xcccc'cccc);
+  CHECK(m.call("sceP3daBridgeExit", {}), 0);
+  CHECK(m.notes.size(), 0);
+}
+
 auto sasTests() -> Tests {
   return {{"sas settings", sasSettings}, {"sas envelopes", sasEnvelopes}, {"sas voices end", sasVoicesEnd},
           {"sas voices given new samples", sasNewSamples}, {"sas vag as recorded", sasVagRecorded},
@@ -858,7 +883,7 @@ auto sasTests() -> Tests {
           {"sas output modes", sasOutputModes}, {"sas voices mixed", sasMixed},
           {"sas voices in states", sasVoicesInStates},
           {"sas core refused where no thread may wait", sasRefusedWhereNoWait},
-          {"sas grains take the caller's time", sasGrainWaits}};
+          {"sas grains take the caller's time", sasGrainWaits}, {"p3da channels mixed", p3daMixed}};
 }
 
 }

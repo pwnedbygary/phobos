@@ -838,6 +838,23 @@ auto Kernel::sceMpegAvcCsc() -> void {
   result(0);
 }
 
+//(handle, destination, YCbCr buffer, unused): the picture sceMpegAvcDecodeYCbCr gave last, as 4:2:0 planes one
+//after another: Y, then Cb and Cr at half its width and height (rounded up), each as wide as it is, what sceJpegCsc
+//converts with the colour information 0x00020202 (jpeg.cpp). Monster Hunter Portable 3rd shows its movies so, through
+//sceJpegCsc into its own buffers. The samples are the decoder's, video's range kept (whether the PSP widens it to
+//JPEG's for sceJpegCsc isn't measured). No picture yet: nothing written. pspautotests' video/mpeg imports it but
+//records nothing of it.
+auto Kernel::sceMpegAvcConvertToYuv420() -> void {
+  u32 library = mpegLibrary(arg(0)), destination = arg(1);
+  if(auto found = mpegStreams.find(library); library && found != mpegStreams.end()) {
+    auto& planes = found->second.shown;
+    if(!planes.empty() && memory.reaches(destination, planes.size())) {
+      memory.copyIn(destination, planes.data(), planes.size());
+    }
+  }
+  result(0);
+}
+
 //(handle, access unit, buffer, initialized): the sound access unit's ATRAC3plus frame decoded into 2048 stereo
 //16-bit samples (mono doubled), 0x2000 bytes; the access unit used up. With none: 0x807f00fd, as video/mpeg/basic
 //recorded for its movie, which has no sound (asked with no buffer to decode into, refused as well). But once the

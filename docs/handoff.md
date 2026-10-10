@@ -27,7 +27,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP core: the black games with nothing missing — descriptors, the drive, async requests, SAS, the movie ring — 2026-10-09
 
-Branch `cursor/psp-hle-games13-2b67`, on top of #189's `cursor/psp-hle-games11-2b67` (its PR's base).
+Branch `cursor/psp-hle-games13-2b67`, on top of #194's `cursor/psp-hle-games12-2b67` (merged in; its PR's base).
 docs/psp-core.md, part 59, has the evidence; docs/psp-compatibility.md's changed rows are updated. Clean room: no
 PPSSPP or JPCSP source read. The GE's agent worked the same list from the GE's side (#192); nothing here touches
 `ares/psp/ge/`.
@@ -45,10 +45,16 @@ PPSSPP or JPCSP source read. The GE's agent worked the same list from the GE's s
   among them, from its notice to its title and, after the run's Cross, its intro), loading 4 -> 0, black or hang 19 ->
   9. The whole library run on both runners: every other game the same scene, or a few frames apart; two logo movies now
   play through. None worse.
-- **Checks**: tests/psp 383/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0; two independent reviews, their
-  findings fixed (the first fix for Valhalla Knights, seeks done at once, was undone after the library run found
-  Patapon 2 and 3 black with it). Save states version 21 (files numbered afresh, a pending read's bytes); version 20
-  states from the base runner load and carry on (Lumines, Patapon 2, GTA: Liberty City Stories).
+- **On the stack** (merged onto #194, parts 57, 58 and 60 under it): the whole library again, the same scenes as this
+  branch's own run but #194's three rows (Need for Speed: Most Wanted 5-1-0, both Monster Hunter Portable 3rds) and
+  part 60's few pixels in 3D; none worse than on either branch. Menu or gameplay 187, movie 71, loading 0, black or
+  hang 6, timed out 2.
+- **Checks**: tests/psp 383/0 (sanitized) on the branch, 403/0 on the stack; tests/allegrex 58/0; tests/psp/ares 307/0;
+  two independent reviews, their findings fixed (the first fix for Valhalla Knights, seeks done at once, was undone
+  after the library run found Patapon 2 and 3 black with it). Save states version 22, after #194's 21 (files numbered
+  afresh, a pending read's bytes); layouts 15 to 21 load ("older layouts load" makes a 21 and a 20), and version 20
+  states from the base runner carry on (Lumines, Patapon 2, GTA: Liberty City Stories). The branch's own 21 from
+  before the merge is neither a 22 nor #194's 21: only test runs made such states.
 - **Left / for others**: God of War: Chains of Olympus is slow in the GE (TRANSFER START flushes: the GE's part); Ghost
   of Sparta retries a PGD file (the PGD agent's); Def Jam's first save (WRITEDATASECURE into no save: no recording);
   Crush's sceIoGetFdList (the libraries'); the runner's WAV tags carry a NUL each (the runner's); the 300 µs grain and
@@ -57,6 +63,97 @@ PPSSPP or JPCSP source read. The GE's agent worked the same list from the GE's s
   library runs; statecheck.sh carries a base runner's state on in both runners; quick-tests.sh builds chosen test
   groups; build-commit.py split the commits; mipsdis.py disassembles a memory dump; the debug tree
   `~/phobos-work/wt/dbg-hle13` traces calls by frame).
+
+## PSP core: sceJpeg, scePauth, the PS3's memory and the last missing functions — 2026-10-09
+
+Branch `cursor/psp-hle-games12-2b67`, on top of #189's `cursor/psp-hle-games11-2b67` (its PR targets that branch).
+docs/psp-core.md, part 58, has the evidence; docs/psp-compatibility.md's changed rows and tables are updated. Clean
+room: no PPSSPP or JPCSP source read.
+- **Added** (each its own commit, with tests): the sceJpeg library (a baseline decoder of our own from T.81; every
+  function as pspautotests' jpeg tests recorded, six of the eleven exactly, the conversions' sums fitted to their 40
+  colours, the Media Engine's 8-byte transfers and its waits); sceMpegAvcConvertToYuv420; scePauth_98B83B5D (type 5 with
+  the game's key as a second key: the one way the digest checks out); scePowerCheckWlanCoexistenceClock (uOFW's docs:
+  1, a PSP-2000); a program bigger than the user partition given all of RAM (Monster Hunter Portable 3rd HD); sceMt19937
+  with the kernel's MT contexts as hash/mt19937ctx recorded (older states' contexts carried on); the sceRtcTickAdd
+  family as rtc/arithmetic recorded (and sceRtcGetTick's microseconds past a second, and its years past 9999 refused, as
+  rtc/convert recorded); sceHprm's callbacks (as scePower's, the shape Soulcalibur calls them in); the ATRAC low level
+  (followed through Corpse Party's CRI library); sceP3da's mix (Sol Trigger).
+- **Games**: both Monster Hunter Portable 3rds black to their intro movies, titles and game menus (and, merged with part 57's
+  GE fix for a RET with no CALL, the PSP version's whole character creation screen); Corpse Party and Sol Trigger have their
+  music; Genso Suikoden, Soulcalibur, Tekken 6, Final Fantasy Type-0, Kingdom Hearts BBS and Dragon Ball Z miss nothing.
+  The report's missing functions are down to scesupPreAcc (3 games, none held by it). The base commit's runner and this
+  branch's on 35 games: every other frame the same, or moved by the runner's timing under load.
+- **Checks**: tests/psp 392/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0 (merged with #193: 396/0, 58/0,
+  307/0); twenty-one deliberately broken
+  versions each caught; pspautotests' rtc/arithmetic, hash/mt19937ctx and six jpeg programs print what the PSP printed.
+  Independent read-only review: fourteen findings, each fixed or answered in part 58 (older MT contexts mid-round, a
+  picture's data read only as far as used, the IDCT held to 0-255 before rounding, the Media Engine's misaligned writes
+  done at once, a state's JPEG width checked, years past 9999, test and doc claims, sceHprm's sources), the fixes then
+  reviewed again. Save states version 21 (layout 21: sceJpeg, sceHprm's callbacks, ATRAC low-level IDs); 15 to 20 load.
+- **Left**: scesupPreAcc; P3DA's placing (unknown); whether
+  sceMpegAvcConvertToYuv420 widens the movie's sample range (unrecorded); Melodie's 40 MiB request (a PSP-2000 refuses
+  it too); PGD; the runner's WAV tags carry a stray NUL (`tools/psp-runner`).
+- Scratch: `~/phobos-work/scratch/hle12` (sync-dbg.sh and apply-hooks.py for a traced runner; at/run.sh runs a
+  pspautotests program against its recording; quick-tests.sh builds chosen test groups, scratch ones in qtests/;
+  mutate.py and mutate2.sh the broken versions; compare.sh/compare.py the two runners' runs; jpegcmp/ the libjpeg-turbo
+  check; pauth/ the digest search; cmp1/ and cmp2/ the comparison runs; build-commit.py the commits' split).
+
+## PSP GE: perspective texels by the GE's reciprocal; patch divisions — 2026-10-09
+
+Branch `cursor/psp-ge-fits3-2b67`, on top of #192's `cursor/psp-ge-lists-2b67` (#191 under it). docs/psp-core.md, part
+60. 3D triangles divide by a 128-chord reciprocal and step s, t and q as colors: persp-wall 2662→23, persp-divide
+3172→211, persp-floor 6026→351, persp-w3 33040→18944, with the older wall and floor pictures; no division at a pixel.
+It costs the software renderer on the RP6 3-7% in 3D scenes with 7 drawing threads and 8-10% with one (part 60's
+table); a 2D scene is 6% faster. Round 4 again (the owner's `psp-round5b`): #191's reset freed the PSP's GE
+every time; PATCH_DIVISION's counts are 7 bits, and past 64 the GE hangs, so the core draws nothing of such a surface.
+Lighting, sprites, lines and the near-plane split are unchanged; no measured picture got worse.
+
+## PSP core: the GE's RET with no CALL, and what the GE driver's callers see — 2026-10-09
+
+Branch `cursor/psp-ge-lists-2b67`, on top of #189's `cursor/psp-hle-games11-2b67`. docs/psp-core.md, part 57, has the
+evidence; docs/psp-compatibility.md's changed rows are updated. Clean room: no PPSSPP or JPCSP source read.
+- **Fixes** (each its own commit, with tests): the GE passes over a RET with no CALL to return from (Need for Speed:
+  Most Wanted runs its CALLable frame buffer settings in place; it waited for good in sceGeDrawSync, black, and now
+  reaches its title on Software, Vulkan and Vulkan (fast)); from pspautotests' gpu/ge and gpu/signals recordings, the
+  driver's answers: sceGeDrawSync(1) no longer counts a list whose finish callback runs, "stalled" is the GE at the
+  list's own stall address, sceGeSaveContext saves from a callback that stopped the GE; a list queued twice is BUSY
+  for SDK 2.00 and later; programs built with SDKs up to 2.00.10 (or saying none) get the older driver's ways
+  (callbacks told no list address, a suspending signal's list paused in its callback, sceGeContinue's -1); a list
+  can't be queued at the head ahead of a paused list the GE still has (it would start over: unmeasured, chosen).
+- **The report's other black games**: none stuck in the GE. What each showed from the GE's side went to the notes
+  shared with the kernel side (`~/phobos-work/scratch/compat-notes.md`), whose parallel branch found and fixed the
+  causes: Def Jam (sceUmdActivate taking no time), Crush and Jak and Daxter (descriptors never reused), DOA Paradise
+  (an async read's bytes landing early), Tekken DR (clock conversion with no seconds pointer), Valhalla Knights (async
+  seeks), PaRappa (__sceSasCore taking no time), ProStreet's crash (sceIoDread's d_private layout). Ridge Racer draws
+  a clear a frame after its stub movie (not found). MACH isn't stuck (frame 3600 is a transition; judged again: menu).
+- **Numbers** (against part 55): menu or gameplay 178 -> 180, black or hang 19 -> 17. pspautotests' 22 GE driver
+  programs: 3 -> 7 printing what the PSP printed; gpu/signals' differing lines 147 -> 23 of 622.
+- **Checks**: tests/psp 382/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0; each new test fails without its
+  fix. No new saved state (version 20 still). 30 working games (14 of older SDKs) on both runners, Software, and 4 on
+  Vulkan: the same pictures but for run-to-run variation each runner shows on its own. An independent read-only
+  review; its findings fixed (the NFS row, the head enqueue, claims worded as unmeasured or as kernel-side findings).
+- **Left**: the GE's time (statuses a callback sees while a list draws), the state buffer's PSP layout, sceGeGetStack,
+  a SIGNAL call's stack in use refused, a third CALL, transfers past VRAM's end; God of War: Chains of Olympus's speed
+  (every TRANSFER_START flushes all pending drawing: the kernel side's profile).
+- Scratch: `~/phobos-work/scratch/ge-lists` (survey/ the black games' runs, at/ the pspautotests runs before and
+  after, regress/ the base and branch runners' frames, ge-hooks.py and dbg-hooks-1.patch for a traced runner).
+
+## PSP measure: a GE stall no longer freezes the owner's PSP — 2026-10-09
+
+Branch `cursor/psp-measure-stall-2b67`, on top of #189's `cursor/psp-hle-games11-2b67`. Only `tools/psp-measure`,
+`tests/psp/measure.cpp`, the rebuilt `tests/psp/programs/pspmeasure.elf` and docs; no core change.
+- **Why**: in round 4 the owner's PSP froze at `curves-count` and `curves-count-128` (patches cut past 64 times),
+  most likely the GE never finishing while `finishList` waited in `sceGeDrawSync(0)` for good; each test cost two
+  power-offs.
+- **What**: the GE gets 5 s a list (`waitForGe`); a stall is written to `<test>.stalled`, the GE reset
+  (`sceGuBreak(GU_BREAK_CANCEL)`, then `sceGuTerm`/`sceGuInit`), the test saved as the GE left it, and the round goes
+  on. A test whose reset itself froze the PSP is given up on at the next start. Counts past 64 are a test each
+  (`curves-count-65`, `-100`, `-128`, `-200`, `-255`); the earlier program's leftovers for them are cleared once
+  (`curves-count.timed`). A new `stall-check` resets the GE on purpose the first time round 4 runs in a results
+  folder (docs/psp-core.md, part 48, "Round 4 again").
+- **Owner**: `.local/psp-round5b/` (EBOOT.PBP SHA-256
+  `2c5c3343cf1e1ecf56eb4deb4fdc4eb5d1dbf1312ae7896d0d90bdcbbbd0a173`, HOW-TO.md): round 4 again, restart, then
+  round 5; bring back `results/ge`. Whether the reset frees a GE stuck inside a patch is what that run will show.
 
 ## PSP core: character conversion, thread-local storage, lent stacks; PGD holds five black games — 2026-10-09
 

@@ -778,6 +778,9 @@ struct Kernel {
   auto sceHprmIsHeadphoneExist() -> void;
   auto sceHprmIsRemoteExist() -> void;
   auto sceHprmIsMicrophoneExist() -> void;
+  u32 hprmCallbacks[16] = {};  //the callbacks registered in each slot (0: none)
+  auto sceHprmRegisterCallback() -> void;
+  auto sceHprmUnregitserCallback() -> void;
   auto sceHprmPeekCurrentKey() -> void;
   auto sceHprmPeekLatch() -> void;
   auto sceHprmReadLatch() -> void;
@@ -955,7 +958,8 @@ struct Kernel {
   auto geSignaled() -> void;
   auto geStartNext() -> void;
   auto geCall(GeList& list, bool finish, u32 id, bool suspends = false) -> bool;
-  auto geStalled() const -> bool;
+  auto geOldSdk() const -> bool;
+  auto geAtStall(u32 index) const -> bool;
   auto geDrawSynced() -> void;
   auto geRemove(u32 index) -> void;
   auto geWake(Wait wait, u32 index) -> void;
@@ -1355,6 +1359,7 @@ struct Kernel {
   auto sceMpegAvcDecodeStopYCbCr() -> void;
   auto sceMpegAvcDecodeDetail() -> void;
   auto sceMpegAvcCsc() -> void;
+  auto sceMpegAvcConvertToYuv420() -> void;
   auto sceMpegAtracDecode() -> void;
   auto pictureConvert(const std::vector<u8>& planes, u32 pictureWidth, u32 pictureHeight, u32 format, bool opaque,
                       u32 destination, u32 frameWidth, u32 x, u32 y, u32 width, u32 height) -> void;
@@ -1532,6 +1537,7 @@ struct Kernel {
     bool looped = false;
     u32 loopStart = 0, loopEnd = 0;    //on the decoder's count, the end the loop's last sample
     bool monoFrames = false;    //ATRAC3 frames decoded as mono whatever the header's channels (atrac.cpp)
+    bool lowLevel = false;      //no file: frames the game hands it one at a time (sceAtracLowLevelInitDecoder)
     std::vector<u8> extra;      //the codec's parameters from the fmt chunk
     //the buffers
     u32 buffer = 0, bufferByte = 0, secondBuffer = 0, secondBufferByte = 0;
@@ -1603,6 +1609,8 @@ struct Kernel {
   auto sceAtracGetSecondBufferInfo() -> void;
   auto sceAtracSetSecondBuffer() -> void;
   auto _sceAtracGetContextAddress() -> void;
+  auto sceAtracLowLevelInitDecoder() -> void;
+  auto sceAtracLowLevelDecode() -> void;
 
   //mp3.cpp: sceMp3, MP3 streams fed through a buffer and decoded a frame a call
   struct Mp3 {
@@ -1792,6 +1800,55 @@ struct Kernel {
   auto sceCccSetErrorCharUTF16() -> void;
   auto sceCccSetErrorCharSJIS() -> void;
 
+  //rtc.cpp: ticks moved on by an amount of time (sceRtcTickAdd*)
+  auto rtcTickAdd(u64 amount) -> void;
+  auto rtcTickAddMonths(s64 months) -> void;
+  auto sceRtcTickAddTicks() -> void;
+  auto sceRtcTickAddMicroseconds() -> void;
+  auto sceRtcTickAddSeconds() -> void;
+  auto sceRtcTickAddMinutes() -> void;
+  auto sceRtcTickAddHours() -> void;
+  auto sceRtcTickAddDays() -> void;
+  auto sceRtcTickAddWeeks() -> void;
+  auto sceRtcTickAddMonths() -> void;
+  auto sceRtcTickAddYears() -> void;
+
+  //mt19937.cpp: the Mersenne Twister, the kernel's and its library's (sceMt19937)
+  auto mt19937Init(u32 context, u32 seed) -> void;
+  auto mt19937UInt(u32 context) -> u32;
+  auto sceKernelUtilsMt19937Init() -> void;
+  auto sceKernelUtilsMt19937UInt() -> void;
+  auto sceMt19937Init() -> void;
+  auto sceMt19937UInt() -> void;
+
+  //p3da.cpp: sound channels mixed into stereo (sceP3da)
+  auto sceP3daBridgeInit() -> void;
+  auto sceP3daBridgeCore() -> void;
+  auto sceP3daBridgeExit() -> void;
+
+  //pauth.cpp: data a game keeps encrypted with a key of its own (scePauth)
+  auto scePauth_98B83B5D() -> void;
+
+  //jpeg.cpp: JPEG pictures decoded, and YCbCr pictures converted to pixels (sceJpeg)
+  struct Jpeg {
+    bool initialized = false;  //sceJpegInitMJpeg, till sceJpegFinishMJpeg
+    bool created = false;      //sceJpegCreateMJpeg, till sceJpegDeleteMJpeg
+    s32 width = 0, height = 0; //the context's picture buffer (kept once it's deleted)
+  } jpeg;
+  auto sceJpegInitMJpeg() -> void;
+  auto sceJpegFinishMJpeg() -> void;
+  auto sceJpegCreateMJpeg() -> void;
+  auto sceJpegDeleteMJpeg() -> void;
+  auto sceJpegGetOutputInfo() -> void;
+  auto sceJpegDecodeMJpeg() -> void;
+  auto jpegDecodePixels(u32 data, u32 size, u32 pixels) -> u32;
+  auto sceJpegDecodeMJpegYCbCr() -> void;
+  auto sceJpegDecodeMJpegYCbCrSuccessively() -> void;
+  auto jpegDecodeYCbCr(u32 data, u32 size, u32 buffer, u32 room, bool successively) -> u32;
+  auto sceJpegCsc() -> void;
+  auto sceJpegMJpegCsc() -> void;
+  auto jpegConvert(u32 destination, u32 source, u32 size, u32 stride, u32 across, u32 down, bool engine) -> void;
+
   //net.cpp: the network libraries, with the wireless LAN switched off
   auto sceNetDone() -> void;
   auto sceNetUnavailable() -> void;
@@ -1811,7 +1868,7 @@ struct Kernel {
     u32 abortUpdates = 0;  //an aborted message's Updates still to come before it finishes (0: not aborted)
     u32 runningUpdates = 0;  //Updates while Running, before an abort (utility/dialog/abort's fade length)
   } dialog;
-  u32 stateLayout = 21;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 22;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;
@@ -1884,6 +1941,7 @@ struct Kernel {
   auto scePowerGetBatteryLifePercent() -> void;
   auto scePowerGetBatteryLifeTime() -> void;
   auto scePowerTick() -> void;
+  auto scePowerCheckWlanCoexistenceClock() -> void;
   auto scePowerSetClockFrequency() -> void;
   auto scePowerSetCpuClockFrequency() -> void;
   auto scePowerSetBusClockFrequency() -> void;
@@ -1910,8 +1968,6 @@ struct Kernel {
   auto sceKernelUSec2SysClockWide() -> void;
   auto sceRtcGetTick() -> void;
   auto sceRtcCompareTick() -> void;
-  auto sceKernelUtilsMt19937Init() -> void;
-  auto sceKernelUtilsMt19937UInt() -> void;
   auto sceKernelPrintf() -> void;
   auto sceKernelSetGPO() -> void;
   auto sceKernelGetGPI() -> void;
