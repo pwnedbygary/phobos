@@ -1359,10 +1359,12 @@ static auto geThreads() -> void {
 //(ge/threads.cpp): till then the texture's pages stay busy for the CPU, as the pages a batch draws over do, and the
 //CPU's store into the picture just after the list lands after the sprite drew with it, its load of the sprite's pixel
 //finding it drawn and its load of the texel finding what it stored. It comes out as drawing it all before the CPU runs
-//on does (one thread), with batches shared out however small.
+//on does (one thread), with batches shared out however small; the sprite is drawn four pixels at a time, the texture
+//decoded by then. Into a frame buffer narrower than itself (32 pixels) the sprite can't wait in a batch (defer()):
+//it's drawn at once, after the batch before it, its texture (decoded for no batch) read from memory as it draws.
 static auto geDeferredBusy() -> void {
   constexpr u32 Offscreen = 0x15'4000;  //(VRAM offset)
-  auto build = [&](Memory& memory) {
+  auto build = [&](Memory& memory, u32 width) {
     ListWriter list{memory, ListA};
     u32 vertex = Vertices;
     struct V { float u, v; u32 color; float x, y, z; };
@@ -1382,20 +1384,20 @@ static auto geDeferredBusy() -> void {
     for(u32 n = 0; n < 8; n++) {
       put(GE::Sprites, {{0, 0, 0, 0, n * 8.0f, 0}, {0, 0, 0xff00'0000 + n * 0x10'2030, 64, n * 8.0f + 8, 0}});
     }
-    list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 512);
+    list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, width);
     list.put(GE::TextureMappingEnable, 1), list.put(GE::TextureAddress0, Offscreen);
     list.put(GE::TextureBufferWidth0, 0x04 << 16 | 64), list.put(GE::TextureSize0, 6 << 8 | 6);
     list.put(GE::TextureFormat, 3), list.put(GE::TextureFunction, 3);
     put(GE::Sprites, {{0, 0, 0, 100, 100, 0}, {64, 64, 0, 164, 164, 0}});
     list.put(GE::Finish), list.put(GE::End);
   };
-  auto drawn = [&](u32 threads, bool recompile) {
+  auto drawn = [&](u32 width, u32 threads, bool recompile) {
     KernelMachine m;
     m.system.ge.setThreads(threads);
     m.system.ge.drawing.shared = 0;
-    build(m.system.memory);
+    build(m.system.memory, width);
     m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
-    if(threads > 1) {  //(both batches still launched, the second's decode deferred)
+    if(threads > 1 && width == 512) {  //(both batches launched still, the second's decode deferred, drawn in fours)
       bool deferred = false;
       for(auto& batch : m.system.ge.drawing.batches) {
         if(!batch.launched) continue;
@@ -1404,11 +1406,12 @@ static auto geDeferredBusy() -> void {
           deferred = true;
           CHECK(m.system.memory.vramPageBusy(page), true);
         }
+        if(batch.reads.any()) for(auto& job : batch.jobs) CHECK(job.fours, true);
       }
       CHECK(deferred, true);
     }
     //the store into the picture; then loads of the sprite's pixel and of the stored texel, into RAM
-    u32 stored = VRAM + Offscreen + (10 * 64 + 10) * 4, loaded = VRAM + (110 * 512 + 110) * 4;
+    u32 stored = VRAM + Offscreen + (10 * 64 + 10) * 4, loaded = VRAM + (110 * width + 110) * 4;
     m.system.runProgram(0x0890'0000, {lui(t0, stored >> 16), ori(t0, t0, stored & 0xffff), lui(t1, 0x1234),
                                       ori(t1, t1, 0x5678), sw(t1, 0, t0), lui(t2, loaded >> 16),
                                       ori(t2, t2, loaded & 0xffff), lw(t3, 0, t2), lui(t4, 0x0892), sw(t3, 0, t4),
@@ -1418,10 +1421,12 @@ static auto geDeferredBusy() -> void {
     CHECK(m.system.memory.read(4, 0x0892'0000), m.system.memory.read(4, loaded));
     return m.system.memory.vram;
   };
-  auto whole = drawn(1, false);
-  CHECK(whole[(110 * 512 + 110) * 4], u8(0x30));  //(the sprite took its texel 10, 10 as drawn, not as stored)
-  for(u32 threads : {2u, 4u, 8u}) {
-    for(bool recompile : {false, true}) CHECK(drawn(threads, recompile) == whole, true);
+  for(u32 width : {512u, 32u}) {
+    auto whole = drawn(width, 1, false);
+    CHECK(whole[(110 * width + 110) * 4], u8(0x30));  //(the sprite took its texel 10, 10 as drawn, not as stored)
+    for(u32 threads : {2u, 4u, 8u}) {
+      for(bool recompile : {false, true}) CHECK(drawn(width, threads, recompile) == whole, true);
+    }
   }
 }
 

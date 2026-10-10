@@ -109,8 +109,10 @@ static alwaysinline auto passesLanes(u32 comparison, GE::s32x4 a, GE::s32x4 b) -
   return a >= b;
 }
 //Whether the job may be drawn four pixels at a time (see the top of this file): a triangle or a sprite, without the
-//stencil test or a logic operation, its texture (if any) kept decoded, and its frame buffer's bytes apart from its
-//depth buffer's (when it reaches it) and neither running round VRAM's end.
+//stencil test or a logic operation, its texture (if any) kept decoded, or to be as its batch starts (deferred: no
+//band draws before that, threads.cpp; one whose primitive is drawn at once instead, defer() turning it down, is read
+//from memory as it draws), and its frame buffer's bytes apart from its depth buffer's (when it reaches it) and
+//neither running round VRAM's end.
 //A triangle's size doesn't matter: its rows are found in 64 bits, as triangleRows() finds them, and its stepped
 //values (colors, fog, depth, and in 3D the texture coordinates' s, t and q) stay inside 32 bits at every pixel inside
 //it, however steep their steps. All the steps of a triangle come from one reciprocal of its area (stepped(),
@@ -123,7 +125,7 @@ auto GE::fourFriendly(const Job& job) const -> bool {
   auto& look = *job.look;
   auto& p = look.pixel;
   if(!p.clear && (p.stencilTest || p.logicOp)) return false;
-  if(look.textured && !look.texture.decoded) return false;
+  if(look.textured && !look.texture.decoded && !(look.deferRows && drawing.recording)) return false;
   u32 bytes = p.format == 3 ? 4 : 2;
   u64 colorLow = p.frameBuffer + (u64(job.firstY) * p.stride + job.firstX) * bytes;
   u64 colorHigh = p.frameBuffer + (u64(job.lastY) * p.stride + job.lastX) * bytes + bytes - 1;
