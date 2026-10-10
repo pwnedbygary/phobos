@@ -12,6 +12,9 @@ struct Game {
   std::string system;
   // The files to load, in disc order; one for most games.
   std::vector<std::string> discs;
+  // The PSP disc's own title (its PARAM.SFO's TITLE), filled in after the list shows; empty when there's none.
+  // The states and saves are keyed by `title` (the file's name), never by this.
+  std::string discTitle;
 };
 
 // The games in `folder` and the two levels of folders inside it, sorted by title. A folder

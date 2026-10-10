@@ -4,7 +4,9 @@
 //the GPU's own filtering), the texture function, lighting's shine, the alpha test, fog and the color test. What
 //follows (stencil, depth, blending, the write) is the GPU's own, set up from the GE's settings by the renderer
 //(gpu.cpp): blending's factors that depend on the pixel alone are applied here, those on the frame buffer's by the
-//GPU, as the design's "Blending" says.
+//GPU, as the design's "Blending" says. Where the GPU lets the shader read the frame buffer's pixel (READS: the
+//design's "Shader blending"), blending, dithering, the logic operation and the write mask are pixel.cpp's instead,
+//in its whole numbers, and the GPU only writes the result.
 //
 //Each choice the GE's state makes is a specialization constant, so each mix of settings games use is a shader of
 //its own, compiled by the driver without what it doesn't use: the "generated shaders" of the design, made by the
@@ -33,6 +35,12 @@ layout(constant_id = 12) const uint LOGIC = 3u;
 layout(constant_id = 13) const uint CLAMP = 0u;      //TEXTURE_WRAP: bit 0 across held at the edge, bit 1 down
 //A texture taken from a frame buffer the GPU drew (render to texture): its format, 16-bit (0-2), or 4 for any other
 layout(constant_id = 14) const uint TEXELS = 4u;
+//Shader blending: 1 where the frame buffer's pixel is read (frameBuffer), and what follows the tests is pixel.cpp's:
+//blending by SOURCE's and DESTINATION's factors (the GE's, 0-15) with BLENDING's operation (BLEND_MODE's, 0-7;
+//8 none), dithering (DITHER), the logic operation (LOGIC, any of the 16), the write mask (push.writeMask), each
+//write in the frame buffer's format (QUANTIZE)
+layout(constant_id = 15) const uint READS = 0u;
+layout(constant_id = 16) const uint BLENDING = 8u;
 
 layout(push_constant) uniform Push {
   vec2 scale;
@@ -48,9 +56,12 @@ layout(push_constant) uniform Push {
   uint textureSize;     //the texture's width and, in bits 16-31, its height (each at most 512)
   uint resolution;      //the target's: each of the PSP's pixels resolution x resolution of the GPU's (gpu.hpp)
   uint textureScale;    //the texture's: a copy of a target is at the target's resolution, a decoded texture at 1
+  uint fixedB;          //BLEND_FIXED_B (READS)
+  uint writeMask;       //the frame buffer's bits left alone, in its format (READS)
 } push;
 
 layout(set = 0, binding = 0) uniform sampler2D texels;  //8888, red in the low byte (as the GE's decoded copies)
+layout(input_attachment_index = 0, set = 1, binding = 0) uniform subpassInput frameBuffer;  //(READS) the target's
 
 layout(location = 0) noperspective in vec4 vertexColor;
 layout(location = 1) noperspective in vec4 vertexSpecular;
@@ -132,6 +143,79 @@ uvec4 sampleTexture(vec2 at, bool linear) {
 
 uint channel(uint color, uint n) { return color >> (n * 8u) & 255u; }
 
+//pixel.cpp's narrowPixel(): an 8888 color in the frame buffer's format (QUANTIZE: 0-2, 16-bit; 4, 8888, as it is)
+uint packed(uvec4 c) {
+  if(QUANTIZE == 0u) return c.r >> 3 | c.g >> 2 << 5 | c.b >> 3 << 11;
+  if(QUANTIZE == 1u) return c.r >> 3 | c.g >> 3 << 5 | c.b >> 3 << 10 | c.a >> 7 << 15;
+  if(QUANTIZE == 2u) return c.r >> 4 | c.g >> 4 << 4 | c.b >> 4 << 8 | c.a >> 4 << 12;
+  return c.r | c.g << 8 | c.b << 16 | c.a << 24;
+}
+
+//and back, pixel.cpp's widenPixel(): each field widened by repeating its top bits (a 5650's alpha 0)
+uint widened(uint value, uint bits) { return value << (8u - bits) | value >> (2u * bits - 8u); }
+uvec4 unpacked(uint p) {
+  if(QUANTIZE == 0u) return uvec4(widened(p & 31u, 5u), widened(p >> 5 & 63u, 6u), widened(p >> 11 & 31u, 5u), 0u);
+  if(QUANTIZE == 1u) {
+    uint alpha = p >> 15 != 0u ? 255u : 0u;
+    return uvec4(widened(p & 31u, 5u), widened(p >> 5 & 31u, 5u), widened(p >> 10 & 31u, 5u), alpha);
+  }
+  if(QUANTIZE == 2u) {
+    return uvec4(widened(p & 15u, 4u), widened(p >> 4 & 15u, 4u), widened(p >> 8 & 15u, 4u), widened(p >> 12, 4u));
+  }
+  return uvec4(p & 255u, p >> 8 & 255u, p >> 16 & 255u, p >> 24);
+}
+
+//The colors a write leaves in the frame buffer, as memory would keep them: value in its format, and where the
+//write mask says (READS), the bits of old (the frame buffer's pixel) kept — RGB and the stencil/alpha bits too
+uvec4 written(uvec4 value, uvec4 old) {
+  uint keep = READS != 0u ? push.writeMask : 0u;
+  return unpacked((packed(value) & ~keep) | (packed(old) & keep));
+}
+
+//DITHER0-3's value for the pixel (the matrix over the PSP's pixels, each resolution x resolution of the GPU's)
+int dithered() {
+  uvec2 at = uvec2(gl_FragCoord.xy / float(push.resolution)) & 3u;
+  uint nibble = push.dither[at.y >> 1] >> ((at.y & 1u) * 16u + at.x * 4u) & 15u;
+  return nibble < 8u ? int(nibble) : int(nibble) - 16;
+}
+
+//pixel.cpp's blending factors (BLEND_MODE's 0-15): by other's color (the frame buffer's, for the source; the
+//pixel's, for the destination), the source's or the destination's alpha, or fixed
+ivec3 factor(uint which, ivec3 other, int sourceAlpha, int destinationAlpha, uint fixedFactor) {
+  if(which == 0u) return other;
+  if(which == 1u) return 255 - other;
+  if(which == 2u) return ivec3(sourceAlpha);
+  if(which == 3u) return ivec3(255 - sourceAlpha);
+  if(which == 4u) return ivec3(destinationAlpha);
+  if(which == 5u) return ivec3(255 - destinationAlpha);
+  if(which == 6u) return ivec3(2 * sourceAlpha);
+  if(which == 7u) return ivec3(255 - min(2 * sourceAlpha, 255));
+  if(which == 8u) return ivec3(2 * destinationAlpha);
+  if(which == 9u) return ivec3(255 - min(2 * destinationAlpha, 255));
+  return ivec3(channel(fixedFactor, 0u), channel(fixedFactor, 1u), channel(fixedFactor, 2u));
+}
+
+//pixel.cpp's logic operations (LOGIC_OP), on the colors' 24 bits
+uvec3 logic(uvec3 s, uvec3 d) {
+  uvec3 v = s;
+  if(LOGIC == 0u) v = uvec3(0u);
+  if(LOGIC == 1u) v = s & d;
+  if(LOGIC == 2u) v = s & ~d;
+  if(LOGIC == 4u) v = ~s & d;
+  if(LOGIC == 5u) v = d;
+  if(LOGIC == 6u) v = s ^ d;
+  if(LOGIC == 7u) v = s | d;
+  if(LOGIC == 8u) v = ~(s | d);
+  if(LOGIC == 9u) v = ~(s ^ d);
+  if(LOGIC == 10u) v = ~d;
+  if(LOGIC == 11u) v = s | ~d;
+  if(LOGIC == 12u) v = ~s;
+  if(LOGIC == 13u) v = ~s | d;
+  if(LOGIC == 14u) v = ~(s & d);
+  if(LOGIC == 15u) v = uvec3(255u);
+  return v & 255u;
+}
+
 //texture.cpp's textureFunctionWith()
 uvec4 textureFunction(uvec4 f, uvec4 t) {
   uint function = FUNCTION & 7u;
@@ -165,8 +249,11 @@ void main() {
   //(the GE blends a color's channels as floats and drops their fractions; the interpolation's own error is kept
   //from tipping a whole number below itself)
   uvec4 color = uvec4(clamp(floor(vertexColor + 1.0 / 512.0), 0.0, 255.0));
+  //(the frame buffer's pixel as memory keeps it, where it's read)
+  uvec4 old = READS != 0u ? unpacked(packed(uvec4(subpassLoad(frameBuffer) * 255.0 + 0.5))) : uvec4(0u);
   if(CLEAR != 0u) {
-    outColor = vec4(color) / 255.0;
+    uvec4 cleared = QUANTIZE != 4u || READS != 0u ? written(color, old) : color;
+    outColor = vec4(cleared) / 255.0;
     outFactor = vec4(0.0);
     return;
   }
@@ -199,6 +286,29 @@ void main() {
     bool equal = (packed & push.colorMask) == (push.colorReference & push.colorMask);
     if(COLOR_TEST == 0u || (COLOR_TEST == 2u) != equal) discard;
   }
+  if(READS != 0u) {  //(pixel.cpp's, from blending to the write)
+    ivec3 result = ivec3(color.rgb);
+    if(BLENDING < 8u) {
+      ivec3 s = ivec3(color.rgb), d = ivec3(old.rgb);
+      ivec3 f = factor(SOURCE, d, int(color.a), int(old.a), push.fixedA);
+      ivec3 g = factor(DESTINATION, s, int(color.a), int(old.a), push.fixedB);
+      ivec3 sourceTerm = (s * 2 + 1) * (f * 2 + 1) >> 10, destinationTerm = (d * 2 + 1) * (g * 2 + 1) >> 10;
+      if(BLENDING == 0u) result = sourceTerm + destinationTerm;
+      if(BLENDING == 1u) result = sourceTerm - destinationTerm;
+      if(BLENDING == 2u) result = destinationTerm - sourceTerm;
+      if(BLENDING == 3u) result = min(s, d);
+      if(BLENDING == 4u) result = max(s, d);
+      if(BLENDING == 5u) result = abs(s - d);
+    }
+    if(DITHER != 0u) result += dithered();
+    uvec3 kept = uvec3(clamp(result, 0, 255));
+    if(LOGIC != 3u) kept = logic(kept, old.rgb);
+    //(stencil/alpha: Replace/Clear known here, else the color's alpha is left — write mask applied in packing)
+    uint stencil = ALPHA_OUT == 1u ? push.stencil : old.a;
+    outColor = vec4(written(uvec4(kept, stencil), old)) / 255.0;
+    outFactor = vec4(0.0);
+    return;
+  }
   //blending's factors that depend on the pixel alone (see SOURCE and DESTINATION)
   vec3 rgb = vec3(color.rgb) / 255.0, weight = vec3(1.0);
   float alpha = float(color.a) / 255.0;
@@ -218,11 +328,8 @@ void main() {
   outFactor = vec4(factor, 0.0);
   //dithering and the frame buffer's format, where the GPU's blending won't change the color after (QUANTIZE 4 and
   //DITHER 0 otherwise: blended, they're approximated by the 8888 the GPU keeps)
-  if(DITHER != 0u) {  //(the matrix over the PSP's pixels, each of them resolution x resolution of the GPU's)
-    uvec2 at = uvec2(gl_FragCoord.xy / float(push.resolution)) & 3u;
-    uint nibble = push.dither[at.y >> 1] >> ((at.y & 1u) * 16u + at.x * 4u) & 15u;
-    int offset = nibble < 8u ? int(nibble) : int(nibble) - 16;
-    color.rgb = uvec3(clamp(ivec3(color.rgb) + offset, 0, 255));
+  if(DITHER != 0u) {
+    color.rgb = uvec3(clamp(ivec3(color.rgb) + dithered(), 0, 255));
     rgb = vec3(color.rgb) / 255.0;
   }
   if(QUANTIZE == 0u) rgb = vec3(narrowed(color.r, 5u), narrowed(color.g, 6u), narrowed(color.b, 5u)) / 255.0;

@@ -3,8 +3,9 @@
 #(docs/psp-gpu-renderers.md, "Shaders"): SPIR-V for Vulkan from glslang, and the GLSL itself for OpenGL. The
 #fragment shader is built twice: with dual-source blending's second output, and without (SINGLE), for GPUs that
 #lack it; copy.vert, copy.frag and present.frag are upscaling's and the screen's. shaders.hpp is kept in the
-#repository, so that building Phobos needs no shader compiler; it records the sources' SHA-256, which --check compares with the sources as they are (tests/psp/run-tests.sh runs it), and with
-#glslangValidator there too, --check compiles them again and compares the result with shaders.hpp byte for byte.
+#repository, so that building Phobos needs no shader compiler; it records the sources' SHA-256, which --check
+#compares with the sources as they are (tests/psp/run-tests.sh runs it), and with glslangValidator there too,
+#--check compiles them again and compares the result with shaders.hpp byte for byte.
 #usage: compile.sh            (needs glslangValidator: Homebrew's or the Vulkan SDK's glslang)
 #       compile.sh --check
 set -euo pipefail
@@ -17,7 +18,7 @@ sha256() {
 }
 hash=$(cd "$HERE" && cat $ALL | sha256)
 
-work=$(mktemp -d)
+work=$(mktemp -d "${TMPDIR:-/tmp}/psp-shaders.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
 compileAll() {

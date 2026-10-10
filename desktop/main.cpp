@@ -3,6 +3,7 @@
 #include "Input.hpp"
 #include "Library.hpp"
 #include "Platform.hpp"
+#include "PspDiscInfo.hpp"
 #include "Settings.hpp"
 #include "PhobosHost.hpp"
 #include "PhobosRunner.hpp"
@@ -11,6 +12,7 @@
 #include <SDL3/SDL_main.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <functional>
 #include <map>
@@ -18,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -155,6 +158,13 @@ private:
   std::optional<std::string> pickedFolder;
   bool pickerFailed = false;
   bool quit = false;
+
+  // The PSP's titles, filled in after the list shows (PspDiscInfo): the thread that fills them, the scan's
+  // generation (a rescan supersedes its unfinished work), and the lock the list, the launch and the fill share.
+  std::mutex gamesMutex;
+  std::atomic<int> scanGeneration{0};
+  std::thread pspTitlesThread;
+  std::atomic<bool> quitting{false};
 };
 
 // Boot ROMs (System) and game databases (Database) ship beside the program: in the build folder
@@ -207,6 +217,9 @@ auto Shell::run(int argc, char* argv[]) -> int {
     if (!vsync) SDL_DelayNS(8'000'000);
   }
   if (game) quitGame();
+  // The titles' thread, stopped and joined (it's at most one disc open in flight when it checks next).
+  quitting = true;
+  if (pspTitlesThread.joinable()) pspTitlesThread.join();
   input.close();
   if (frameTexture) SDL_DestroyTexture(frameTexture);
   SDL_DestroyRenderer(renderer);
@@ -296,8 +309,31 @@ auto Shell::applySettings() -> void {
 }
 
 auto Shell::rescan() -> void {
-  games = scanLibrary(gamesFolder);
-  cursor = std::clamp(cursor, 0, std::max(0, (int)games.size() - 1));
+  std::vector<std::string> files;
+  {
+    std::lock_guard<std::mutex> lock(gamesMutex);
+    games = scanLibrary(gamesFolder);
+    cursor = std::clamp(cursor, 0, std::max(0, (int)games.size() - 1));
+    ++scanGeneration;
+    for (auto& game : games)
+      if (game.system == "PlayStation Portable" && pspDiscImage(game.discs.front()))
+        files.push_back(game.discs.front());
+  }
+  // The PSP's titles, filled in after the list shows (a CHD's open takes a while, so the list isn't held for it),
+  // on a thread of their own. A rescan supersedes its unfinished work: the old thread stops at its next check
+  // and is joined (so it can't outlive the Shell) before the new one starts.
+  if (pspTitlesThread.joinable()) pspTitlesThread.join();
+  pspTitlesThread = std::thread([this, files, generation = scanGeneration.load()] {
+    auto cache = PspIconCache(dataFolder + "psp-icons");
+    for (auto& file : files) {
+      if (quitting || generation != scanGeneration.load()) break;
+      auto title = listTitle(pspDiscTitle(file, cache));
+      std::lock_guard<std::mutex> lock(gamesMutex);
+      if (generation != scanGeneration.load()) break;
+      for (auto& game : games)
+        if (game.discs.front() == file) game.discTitle = title;
+    }
+  });
 }
 
 auto Shell::chooseFolder(Pick pick) -> void {
@@ -659,14 +695,19 @@ auto Shell::update() -> void {
   case Screen::Library: {
     if (pressed(PadY)) chooseFolder(Pick::Games);
     if (pressed(PadX)) rescan();
-    int count = (int)games.size();
-    if (!count) return;
-    constexpr int page = 10;
-    if (navUp) cursor = (cursor + count - 1) % count;
-    if (navDown) cursor = (cursor + 1) % count;
-    if (navLeft || pressed(PadL1)) cursor = std::max(0, cursor - page);
-    if (navRight || pressed(PadR1)) cursor = std::min(count - 1, cursor + page);
-    if (confirm) launch(games[cursor]);
+    Game entry;
+    {
+      std::lock_guard<std::mutex> lock(gamesMutex);
+      int count = (int)games.size();
+      if (!count) return;
+      constexpr int page = 10;
+      if (navUp) cursor = (cursor + count - 1) % count;
+      if (navDown) cursor = (cursor + 1) % count;
+      if (navLeft || pressed(PadL1)) cursor = std::max(0, cursor - page);
+      if (navRight || pressed(PadR1)) cursor = std::min(count - 1, cursor + page);
+      entry = games[cursor];
+    }
+    if (confirm) launch(entry);
     return;
   }
   }
@@ -729,6 +770,7 @@ auto Shell::render() -> void {
 }
 
 auto Shell::drawLibrary(float width, float height) -> void {
+  std::lock_guard<std::mutex> lock(gamesMutex);
   fill(0, 0, width, 22, panelColor);
   print(8, 7, "PHOBOS", textColor);
   print(72, 7, gamesFolder.empty() ? "No games folder" : gamesFolder, dimColor, width - 80);
@@ -760,7 +802,9 @@ auto Shell::drawLibrary(float width, float height) -> void {
     if (i == cursor) fill(4, y - 2, width - 8, rowHeight, highlightColor);
     const auto& entry = games[i];
     float systemWidth = entry.system.size() * glyph;
-    print(10, y, entry.title, textColor, width - systemWidth - 36);
+    // The disc's own title when it's there and the font can draw it, the file's name when it isn't; the states
+    // and saves keep their key in the file's name (entry.title).
+    print(10, y, entry.discTitle.empty() ? entry.title : entry.discTitle, textColor, width - systemWidth - 36);
     print(width - systemWidth - 10, y, entry.system, i == cursor ? textColor : dimColor);
   }
 }

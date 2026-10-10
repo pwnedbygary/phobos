@@ -67,7 +67,10 @@ struct GPU : GE::Renderer {
     u8 stencilTest, stencilCompare, stencilFail, stencilDepthFail, stencilPass;
     u8 logicOp, logicOperation;  //the GPU's own logic operation
     u8 texels;                   //draw.frag's TEXELS: a texture taken from a 16-bit frame buffer's format (4 not)
-    u8 spare[2];
+    //Shader blending (docs/psp-gpu-renderers.md, "Shader blending"): draw.frag reads the frame buffer's pixel and
+    //does what follows the tests as pixel.cpp does (READS 1), with source and destination the GE's factors (0-15)
+    //and blending its BLEND_MODE operation (0-7; 8 not blending: a logic operation or a write mask alone)
+    u8 reads, blending;
     auto operator==(const Pipeline&) const -> bool = default;
   };
   static_assert(sizeof(Pipeline) == 32);
@@ -78,6 +81,8 @@ struct GPU : GE::Renderer {
     u32 textureSize;
     u32 resolution = 1;    //the target's: each of the PSP's pixels resolution x resolution of the GPU's
     u32 textureScale = 1;  //the texture's: a copy of a target's (render to texture) is at its resolution
+    u32 fixedB = 0;        //BLEND_FIXED_B (shader blending's)
+    u32 writeMask = 0;     //the frame buffer's bits a write leaves alone, in its format (shader blending's)
     auto operator==(const Push&) const -> bool = default;
   };
   //A draw's settings, all of them
@@ -127,6 +132,12 @@ struct GPU : GE::Renderer {
     bool lost = false;        //the GPU stopped answering: nothing more is drawn by it
     bool dualSource = false;  //dual-source blending (Source1Color)
     bool logicOps = false;    //its own logic operations
+    //Shader blending: the target's pixel read in the fragment shader (an input attachment), so blending, dithering,
+    //logic operations and write masks are pixel.cpp's own; the backend puts a barrier before each draw that reads.
+    //inOrder where a draw's overlapping primitives see each other's pixels in order (rasterization order access),
+    //else the renderer draws those apart (emit()); System::startRenderer() turns it off where the check fails so
+    //the log can say "overlaps apart" instead of failing the renderer.
+    bool reads = false, readsInOrder = false;
     //Whether the last run put a picture on the window: a Present's swapchain image acquired and presented (not
     //where there's no window, or the acquiring timed out: the host shows the frame itself then)
     bool presented = false;
@@ -189,6 +200,7 @@ struct GPU : GE::Renderer {
   struct Statistics {
     u64 draws = 0, primitives = 0, submits = 0, finishes = 0, uploads = 0, readbacks = 0, textures = 0, copies = 0;
     u64 pictures = 0;  //frames shown straight from a target (picture())
+    u64 readingDraws = 0, splits = 0;  //draws blended in the shader; those begun as their primitives overlapped
     u64 presents = 0, presentsFromMemory = 0;  //frames presented on the window (show()): from a target, memory's
     u64 waiting = 0;   //nanoseconds the CPU waited in finish() and picture()
   } statistics;
@@ -280,6 +292,11 @@ private:
   std::map<std::tuple<u32, u32, u32>, Copied> copies;  //(target, width, rows)
   static constexpr u32 MostCopies = 32;
   static constexpr u64 CopyAge = 1 << 14;
+  //The current draw's primitives' boxes (left, top, right, bottom in the target's pixels, at most MostBoxes), where
+  //it reads the frame buffer without the GPU keeping their order (Backend::readsInOrder): one overlapping them
+  //begins another draw
+  std::vector<std::array<float, 4>> boxes;
+  static constexpr u32 MostBoxes = 64;
   //(a PRIM's vertices handed to the GPU, without waiting for its end, once there are this many: a long line's
   //pixels are six each)
   static constexpr u32 MostVertices = 1 << 18;

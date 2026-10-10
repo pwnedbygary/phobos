@@ -262,6 +262,16 @@ auto GPU::settings(const GE::Look& look) -> void {
   u8 rgb = 0;
   for(u32 n = 0; n < 3; n++) rgb |= (maskColor >> n * 8 & 0xff) != 0xff ? 1 << n : 0;
   bool alphaWritable = stencils && maskAlpha != 0xff;
+  //Shader blending (docs/psp-gpu-renderers.md, "Shader blending"), where the backend reads the frame buffer: a
+  //write mask that keeps part of a channel is pixel.cpp's then (the GPU's masks keep whole channels), and so are
+  //blending and logic operations below
+  bool partial = false;
+  for(u32 n = 0; n < 3; n++) partial |= (maskColor >> n * 8 & 0xff) != 0 && (maskColor >> n * 8 & 0xff) != 0xff;
+  bool reading = backend->reads && (partial || (!p.clear && (p.blend || (p.logicOp && p.logic != 3))));
+  if(reading) {
+    k.reads = 1, k.blending = 8, s.push.writeMask = p.writeMask;
+    k.quantize = p.format < 3 ? p.format : 4;  //(each write narrowed to the format, so what's read is memory's)
+  }
   s.stencilWriteMask = ~maskAlpha & 0xff;
   s.stencilCompareMask = 0xff;
   k.depthRange = p.depthRange;
@@ -270,6 +280,7 @@ auto GPU::settings(const GE::Look& look) -> void {
     k.clear = 1;
     k.colorMask = (p.clearColor ? rgb : 0) | (p.clearAlpha && alphaWritable ? 8 : 0);
     k.depthTest = 1, k.depthCompare = 1, k.depthWrite = p.clearDepth;
+    if(p.format < 3) k.quantize = p.format;  //(a 16-bit frame buffer cleared to the colors it can keep)
     if(p.clearAlpha && alphaWritable) {
       k.stencilTest = 1, k.stencilCompare = 1, k.stencilPass = Replace;  //(the reference: the vertex's alpha)
     }
@@ -302,7 +313,11 @@ auto GPU::settings(const GE::Look& look) -> void {
         s.push.stencil = k.stencilPass == Replace ? p.stencilReference : 0;
       }
     }
-    if(p.blend && p.blendOperation < 6) {
+    if(reading) {  //(blending and the logic operation pixel.cpp's, in draw.frag; dithered after blending, as there)
+      if(p.blend) k.blending = p.blendOperation, k.source = p.blendSource, k.destination = p.blendDestination;
+      if(p.logicOp) k.logic = p.logic;
+      s.push.fixedB = p.fixedB;
+    } else if(p.blend && p.blendOperation < 6) {
       k.blend = 1;
       k.operation = p.blendOperation == 5 ? u8(Maximum) : u8(p.blendOperation);  //(absolute difference: the larger)
       if(k.operation == Minimum || k.operation == Maximum) {
@@ -346,7 +361,7 @@ auto GPU::settings(const GE::Look& look) -> void {
         }
       }
     }
-    if(p.logicOp && p.logic != 3) {
+    if(p.logicOp && p.logic != 3 && !reading) {
       if(backend->logicOps) {
         k.logicOp = 1, k.logicOperation = p.logic, k.blend = 0;
       } else if(p.logic == 0 || p.logic == 12 || p.logic == 15) {
@@ -360,6 +375,7 @@ auto GPU::settings(const GE::Look& look) -> void {
     }
     k.dither = p.dither && !k.blend && !k.logicOp;
     if(!k.blend && !k.logicOp && p.format < 3) k.quantize = p.format;
+    if(reading) statistics.readingDraws++;
   }
   for(u32 row = 0; row < 4; row++) {
     for(u32 column = 0; column < 4; column++) {
@@ -454,8 +470,28 @@ auto GPU::emit(const Vertex* vertices, u32 count) -> void {
   if(recorded.states.empty() || !(recorded.states.back() == state)) recorded.states.push_back(state);
   u32 index = recorded.states.size() - 1, first = recorded.vertices.size();
   auto& commands = recorded.commands;
-  if(!commands.empty() && commands.back().kind == Command::Kind::Draw && commands.back().state == index &&
-     commands.back().first + commands.back().count == first) {
+  bool joined = !commands.empty() && commands.back().kind == Command::Kind::Draw && commands.back().state == index &&
+                commands.back().first + commands.back().count == first;
+  //A draw that reads the frame buffer, where the GPU doesn't keep its primitives' order (Backend::readsInOrder),
+  //takes no primitive overlapping one it has: that one begins another draw, after a barrier (the backend's), so
+  //it reads what the one before wrote. (Boxes in the target's pixels: a pixel's middle inside both overlaps.)
+  if(state.pipeline.reads && !backend->readsInOrder) {
+    std::array<float, 4> box{vertices[0].x, vertices[0].y, vertices[0].x, vertices[0].y};
+    for(u32 n = 1; n < count; n++) {
+      box[0] = std::min(box[0], vertices[n].x), box[1] = std::min(box[1], vertices[n].y);
+      box[2] = std::max(box[2], vertices[n].x), box[3] = std::max(box[3], vertices[n].y);
+    }
+    if(joined) {
+      bool overlaps = boxes.size() >= MostBoxes;
+      for(auto& b : boxes) {
+        overlaps |= box[0] < b[2] && b[0] < box[2] && box[1] < b[3] && b[1] < box[3];
+      }
+      if(overlaps) joined = false, statistics.splits++;
+    }
+    if(!joined) boxes.clear();
+    boxes.push_back(box);
+  }
+  if(joined) {
     commands.back().count += count;
   } else {
     Command c{Command::Kind::Draw, state.target};

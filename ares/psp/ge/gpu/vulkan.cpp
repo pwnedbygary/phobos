@@ -98,6 +98,7 @@ struct VulkanBackend : GPU::Backend {
     Image color, depth;
     VkFramebuffer framebuffer = VK_NULL_HANDLE;
     VkDescriptorSet set = VK_NULL_HANDLE;  //(its colors sampled, to be presented: made when first presented)
+    VkDescriptorSet frame = VK_NULL_HANDLE;  //its colors as draw.frag's input attachment (shader blending)
     bool fresh = true;  //its pictures not yet in their layouts (the next run puts them there)
   };
   //A picture the CPU fills for the GPU to read, at the PSP's size (a higher resolution's uploads: copy.frag), with
@@ -112,7 +113,7 @@ struct VulkanBackend : GPU::Backend {
     u64 serial = 0;
     Image color = {}, depth = {};
     VkFramebuffer framebuffer = VK_NULL_HANDLE;
-    VkDescriptorSet set = VK_NULL_HANDLE;
+    VkDescriptorSet set = VK_NULL_HANDLE, frame = VK_NULL_HANDLE;
   };
   struct Texture {
     u32 width = 0, height = 0;
@@ -137,7 +138,9 @@ struct VulkanBackend : GPU::Backend {
   };
   static constexpr u32 Slots = 3;
   static constexpr u64 Timeout = 5'000'000'000;
-  static constexpr VkImageLayout ColorLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  //(general: a target's colors are its render pass's color attachment and input attachment at once, for shader
+  //blending's draws to read)
+  static constexpr VkImageLayout ColorLayout = VK_IMAGE_LAYOUT_GENERAL;
   static constexpr VkImageLayout DepthLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
   VulkanFunctions vk;
@@ -153,6 +156,7 @@ struct VulkanBackend : GPU::Backend {
   bool depthClamp = false;
   VkRenderPass renderPass = VK_NULL_HANDLE;
   VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+  VkDescriptorSetLayout frameLayout = VK_NULL_HANDLE;  //(set 1 of draws: a target's Target::frame)
   VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
   VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
   VkSampler sampler = VK_NULL_HANDLE;
@@ -198,6 +202,9 @@ struct VulkanBackend : GPU::Backend {
     VkSemaphore rendered = VK_NULL_HANDLE;
   };
   bool canPresent = false, failed = false, rebuild = false;
+  //The render pass's subpass, and so every pipeline, asks for rasterization order (readsInOrder as the device was
+  //made: the renderer may stop counting on it later, splitting draws again, while the pass stays as it was)
+  bool orderedPass = false;
   void* shownOn = nullptr;
   VkSurfaceKHR surface = VK_NULL_HANDLE;
   VkSwapchainKHR swapchain = VK_NULL_HANDLE;
@@ -250,6 +257,7 @@ struct VulkanBackend : GPU::Backend {
       if(descriptorPool) vk.vkDestroyDescriptorPool(device, descriptorPool, nullptr);
       if(pipelineLayout) vk.vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
       if(setLayout) vk.vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
+      if(frameLayout) vk.vkDestroyDescriptorSetLayout(device, frameLayout, nullptr);
       if(renderPass) vk.vkDestroyRenderPass(device, renderPass, nullptr);
       vk.vkDestroyDevice(device, nullptr);
     }
@@ -334,6 +342,7 @@ struct VulkanBackend : GPU::Backend {
   }
   auto destroy(Target& t) -> void {
     if(t.set) vk.vkFreeDescriptorSets(device, descriptorPool, 1, &t.set);
+    if(t.frame) vk.vkFreeDescriptorSets(device, descriptorPool, 1, &t.frame);
     if(t.framebuffer) vk.vkDestroyFramebuffer(device, t.framebuffer, nullptr);
     destroy(t.color), destroy(t.depth);
   }
@@ -344,16 +353,19 @@ struct VulkanBackend : GPU::Backend {
   auto destroy(Retired& r) -> void {
     if(r.framebuffer) vk.vkDestroyFramebuffer(device, r.framebuffer, nullptr);
     if(r.set) vk.vkFreeDescriptorSets(device, descriptorPool, 1, &r.set);
+    if(r.frame) vk.vkFreeDescriptorSets(device, descriptorPool, 1, &r.frame);
     destroy(r.color), destroy(r.depth);
   }
 
-  //A target's pictures, rows of the PSP's tall (and its width), at the scale: the colors (sampled too, to be shown)
-  //and the depth and stencil, and the framebuffer that draws into them
+  //A target's pictures, rows of the PSP's tall (and its width), at the scale: the colors (sampled too, to be shown,
+  //and read by shader blending's draws: Target::frame) and the depth and stencil, and the framebuffer that draws
+  //into them
   auto makePictures(Target& t, u32 rows) -> bool {
     constexpr auto Transfers = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     u32 width = t.width * scale, height = rows * scale;
     bool ok = make(t.color, width, height, VK_FORMAT_R8G8B8A8_UNORM,
-                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | Transfers,
+                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                   VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | Transfers,
                    VK_IMAGE_ASPECT_COLOR_BIT) &&
               make(t.depth, width, height, depthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | Transfers,
                    VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
@@ -363,6 +375,19 @@ struct VulkanBackend : GPU::Backend {
       info.renderPass = renderPass, info.attachmentCount = 2, info.pAttachments = views;
       info.width = width, info.height = height, info.layers = 1;
       ok = vk.vkCreateFramebuffer(device, &info, nullptr, &t.framebuffer) == VK_SUCCESS;
+    }
+    if(ok) {
+      auto setInfo = made<VkDescriptorSetAllocateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
+      setInfo.descriptorPool = descriptorPool, setInfo.descriptorSetCount = 1, setInfo.pSetLayouts = &frameLayout;
+      ok = vk.vkAllocateDescriptorSets(device, &setInfo, &t.frame) == VK_SUCCESS;
+      if(!ok) t.frame = VK_NULL_HANDLE;
+    }
+    if(ok) {
+      VkDescriptorImageInfo picture{VK_NULL_HANDLE, t.color.view, ColorLayout};
+      auto write = made<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+      write.dstSet = t.frame, write.descriptorCount = 1;
+      write.descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, write.pImageInfo = &picture;
+      vk.vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     }
     t.rows = rows;
     return ok;
@@ -401,9 +426,9 @@ struct VulkanBackend : GPU::Backend {
     vk.vkCmdCopyImage(commands, t.depth.image, Source, grown.depth.image, Destination, 1, &depth);
     transition(commands, grown.color.image, VK_IMAGE_ASPECT_COLOR_BIT, Destination, ColorLayout);
     transition(commands, grown.depth.image, DepthStencil, Destination, DepthLayout);
-    retired.push_back({submitted + 1, t.color, t.depth, t.framebuffer, t.set});
+    retired.push_back({submitted + 1, t.color, t.depth, t.framebuffer, t.set, t.frame});
     t.color = grown.color, t.depth = grown.depth, t.framebuffer = grown.framebuffer, t.rows = grown.rows;
-    t.set = VK_NULL_HANDLE;
+    t.set = VK_NULL_HANDLE, t.frame = grown.frame;
     return true;
   }
 
@@ -549,11 +574,12 @@ struct VulkanBackend : GPU::Backend {
     std::array<u8, sizeof(GPU::Pipeline)> key;
     std::memcpy(key.data(), &k, sizeof(k));
     if(auto found = pipelineCache_.find(key); found != pipelineCache_.end()) return found->second;
-    u32 constants[15] = {k.textured, k.function, k.alphaTest, k.colorTest, k.fog, k.depthRange, k.clear, k.source,
-                         k.destination, k.alphaOut, k.dither, k.quantize, k.logic, k.clamp, k.texels};
-    VkSpecializationMapEntry entries[15];
-    for(u32 n = 0; n < 15; n++) entries[n] = {n, n * 4, 4};
-    VkSpecializationInfo specialization{15, entries, sizeof(constants), constants};
+    u32 constants[17] = {k.textured, k.function, k.alphaTest, k.colorTest, k.fog, k.depthRange, k.clear, k.source,
+                         k.destination, k.alphaOut, k.dither, k.quantize, k.logic, k.clamp, k.texels, k.reads,
+                         k.blending};
+    VkSpecializationMapEntry entries[17];
+    for(u32 n = 0; n < 17; n++) entries[n] = {n, n * 4, 4};
+    VkSpecializationInfo specialization{17, entries, sizeof(constants), constants};
     VkPipelineShaderStageCreateInfo stages[2] = {
       {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vertexModule,
        "main", nullptr},
@@ -606,6 +632,11 @@ struct VulkanBackend : GPU::Backend {
     attachment.colorWriteMask = k.colorMask & 15;
     auto blend = made<VkPipelineColorBlendStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);
     blend.logicOpEnable = k.logicOp, blend.logicOp = VkLogicOp(k.logicOperation & 15);
+    //(shader blending's draws read the pixels the ones before wrote, in order, where the GPU can be asked to: every
+    //pipeline of the subpass asks, so that the writes of draws that don't read are in that order too)
+    if(orderedPass) {
+      blend.flags = VK_PIPELINE_COLOR_BLEND_STATE_CREATE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_BIT_EXT;
+    }
     blend.attachmentCount = 1, blend.pAttachments = &attachment;
     VkDynamicState dynamics[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
       VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK, VK_DYNAMIC_STATE_STENCIL_WRITE_MASK, VK_DYNAMIC_STATE_STENCIL_REFERENCE,
@@ -820,6 +851,10 @@ struct VulkanBackend : GPU::Backend {
           VkViewport viewport{0, 0, f32(t.width * scale), f32(t.height * scale), 0, 1};
           vk.vkCmdSetViewport(commands, 0, 1, &viewport);
           pass = &t, lastState = ~0u;
+          //(set 1, the target's colors for shader blending; set 0 bound again after, as a copy's may be there)
+          vk.vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1, &t.frame, 0,
+                                     nullptr);
+          boundSet = VK_NULL_HANDLE;
         }
         if(c.state != lastState) {
           VkPipeline pipeline = pipelineFor(s.pipeline);
@@ -845,6 +880,16 @@ struct VulkanBackend : GPU::Backend {
           vk.vkCmdPushConstants(commands, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                 0, sizeof(GPU::Push), &s.push);
           lastState = c.state;
+        }
+        //(what the draws before wrote, made visible to its reading; in rasterization order too, which orders a
+        //draw's own primitives but, by the letter of it, maybe not a draw before that didn't ask)
+        if(s.pipeline.reads) {
+          auto barrier = made<VkMemoryBarrier>(VK_STRUCTURE_TYPE_MEMORY_BARRIER);
+          barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+          barrier.dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+          vk.vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_DEPENDENCY_BY_REGION_BIT, 1, &barrier, 0,
+                                  nullptr, 0, nullptr);
         }
         vk.vkCmdDraw(commands, c.count, 1, c.first, 0);
         continue;
@@ -1448,7 +1493,11 @@ struct VulkanBackend : GPU::Backend {
     #endif
     auto application = made<VkApplicationInfo>(VK_STRUCTURE_TYPE_APPLICATION_INFO);
     application.pApplicationName = "Phobos PSP GPU renderer";
-    application.apiVersion = VK_API_VERSION_1_0;
+    //(1.1 where the loader has it, for vkGetPhysicalDeviceFeatures2: shader blending's rasterization order)
+    auto instanceVersion = (PFN_vkEnumerateInstanceVersion)getInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion");
+    u32 version = VK_API_VERSION_1_0;
+    if(instanceVersion && instanceVersion(&version) != VK_SUCCESS) version = VK_API_VERSION_1_0;
+    application.apiVersion = version >= VK_API_VERSION_1_1 ? VK_API_VERSION_1_1 : VK_API_VERSION_1_0;
     auto instanceInfo = made<VkInstanceCreateInfo>(VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO);
     instanceInfo.pApplicationInfo = &application;
     if(portability) instanceInfo.flags = 0x00000001;  //VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
@@ -1526,6 +1575,31 @@ struct VulkanBackend : GPU::Backend {
         deviceExtensions.push_back("VK_KHR_swapchain"), canPresent = true;
       }
     }
+    //Shader blending (docs/psp-gpu-renderers.md): the target's pixel read through an input attachment, which every
+    //Vulkan GPU has. Each draw that reads waits for the ones before (a barrier); its primitives are in rasterization
+    //order where the GPU offers it (EXT's, or ARM's before it), else it holds no overlapping ones (GPU::emit())
+    reads = true;
+    auto ordered = made<VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT>(
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_FEATURES_EXT);
+    const char* orderedName = nullptr;
+    for(auto& extension : extensions) {
+      for(auto name : {"VK_EXT_rasterization_order_attachment_access",
+                       "VK_ARM_rasterization_order_attachment_access"}) {
+        if(!orderedName && !std::strcmp(extension.extensionName, name)) orderedName = name;
+      }
+    }
+    auto features2 = (PFN_vkGetPhysicalDeviceFeatures2)getInstanceProcAddr(instance, "vkGetPhysicalDeviceFeatures2");
+    if(orderedName && features2 && application.apiVersion >= VK_API_VERSION_1_1 &&
+       chosen.apiVersion >= VK_API_VERSION_1_1) {
+      auto query = made<VkPhysicalDeviceFeatures2>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2);
+      query.pNext = &ordered;
+      features2(physical, &query);
+      readsInOrder = ordered.rasterizationOrderColorAttachmentAccess;
+    }
+    if(readsInOrder) {
+      deviceExtensions.push_back(orderedName);
+      ordered.rasterizationOrderDepthAttachmentAccess = ordered.rasterizationOrderStencilAttachmentAccess = false;
+    }
     float priority = 1.0f;
     auto queueInfo = made<VkDeviceQueueCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO);
     queueInfo.queueFamilyIndex = family, queueInfo.queueCount = 1, queueInfo.pQueuePriorities = &priority;
@@ -1534,6 +1608,7 @@ struct VulkanBackend : GPU::Backend {
     deviceInfo.enabledExtensionCount = deviceExtensions.size();
     deviceInfo.ppEnabledExtensionNames = deviceExtensions.data();
     deviceInfo.pEnabledFeatures = &wanted;
+    if(readsInOrder) deviceInfo.pNext = &ordered;
     if(vk.vkCreateDevice(physical, &deviceInfo, nullptr, &device) != VK_SUCCESS) {
       return error = "no Vulkan device", false;
     }
@@ -1554,17 +1629,23 @@ struct VulkanBackend : GPU::Backend {
        VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE, ColorLayout, ColorLayout},
       {0, depthFormat, VK_SAMPLE_COUNT_1_BIT, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE,
        VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE, DepthLayout, DepthLayout}};
+    //(the colors its input attachment too, for shader blending, with the dependency on itself its barriers need)
     VkAttachmentReference color{0, ColorLayout}, depth{1, DepthLayout};
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1, subpass.pColorAttachments = &color, subpass.pDepthStencilAttachment = &depth;
-    VkSubpassDependency dependency{VK_SUBPASS_EXTERNAL, 0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-      VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, VK_ACCESS_MEMORY_WRITE_BIT,
-      VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, 0};
+    subpass.inputAttachmentCount = 1, subpass.pInputAttachments = &color;
+    orderedPass = readsInOrder;
+    if(orderedPass) subpass.flags = VK_SUBPASS_DESCRIPTION_RASTERIZATION_ORDER_ATTACHMENT_COLOR_ACCESS_BIT_EXT;
+    VkSubpassDependency dependencies[2] = {
+      {VK_SUBPASS_EXTERNAL, 0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
+       VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, 0},
+      {0, 0, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_INPUT_ATTACHMENT_READ_BIT, VK_DEPENDENCY_BY_REGION_BIT}};
     auto passInfo = made<VkRenderPassCreateInfo>(VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO);
     passInfo.attachmentCount = 2, passInfo.pAttachments = attachments;
     passInfo.subpassCount = 1, passInfo.pSubpasses = &subpass;
-    passInfo.dependencyCount = 1, passInfo.pDependencies = &dependency;
+    passInfo.dependencyCount = 2, passInfo.pDependencies = dependencies;
     if(vk.vkCreateRenderPass(device, &passInfo, nullptr, &renderPass) != VK_SUCCESS) {
       return error = "no render pass", false;
     }
@@ -1576,17 +1657,26 @@ struct VulkanBackend : GPU::Backend {
     if(vk.vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &setLayout) != VK_SUCCESS) {
       return error = "no descriptor set layout", false;
     }
+    VkDescriptorSetLayoutBinding frameBinding{0, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
+                                              nullptr};
+    layoutInfo.pBindings = &frameBinding;
+    if(vk.vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &frameLayout) != VK_SUCCESS) {
+      return error = "no descriptor set layout", false;
+    }
     VkPushConstantRange range{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(GPU::Push)};
+    VkDescriptorSetLayout drawSets[2] = {setLayout, frameLayout};
     auto pipelineLayoutInfo = made<VkPipelineLayoutCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
-    pipelineLayoutInfo.setLayoutCount = 1, pipelineLayoutInfo.pSetLayouts = &setLayout;
+    pipelineLayoutInfo.setLayoutCount = 2, pipelineLayoutInfo.pSetLayouts = drawSets;
     pipelineLayoutInfo.pushConstantRangeCount = 1, pipelineLayoutInfo.pPushConstantRanges = &range;
     if(vk.vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
       return error = "no pipeline layout", false;
     }
-    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8192};
+    pipelineLayoutInfo.setLayoutCount = 1, pipelineLayoutInfo.pSetLayouts = &setLayout;  //(copies' and presenting's)
+    VkDescriptorPoolSize poolSizes[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8192},
+                                         {VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1024}};
     auto poolInfo = made<VkDescriptorPoolCreateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    poolInfo.maxSets = 8192, poolInfo.poolSizeCount = 1, poolInfo.pPoolSizes = &poolSize;
+    poolInfo.maxSets = 8192 + 1024, poolInfo.poolSizeCount = 2, poolInfo.pPoolSizes = poolSizes;
     if(vk.vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
       return error = "no descriptor pool", false;
     }

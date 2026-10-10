@@ -7,7 +7,9 @@ and blending, at the PSP's resolution, on Apple's M1 (MoltenVK) and the RP6's Ad
 same as the software renderer's, nearly all of the rest a level or two apart ("Accuracy"). In the app and the desktop
 program since part 41 (Settings' "PSP Renderer", Software the default: "In Phobos"). Since part 44 it draws at 1
 (exact) to 10 times the PSP's resolution and presents on Android's window without reading back ("Upscaling",
-"Presenting"); no OpenGL yet ("The plan").
+"Presenting"); since part 45 it blends in the shader, reading the frame buffer, so blending, dithering, logic
+operations and write masks are the software renderer's to the bit ("Shader blending"; the accuracy figures below
+are from before it). No OpenGL yet ("The plan").
 
 The owner's direction (2026-10-07): a hardware renderer as PPSSPP has one (the GPU's own rasterizer, texture units
 and blending; shaders generated from the GE's state; upscaling), Vulkan first and OpenGL after. The software renderer
@@ -238,10 +240,9 @@ What the GPU does with the GPU's own units, and how near the PSP it comes:
   "inverted destination" by a blend; the rest are drawn as copy.
 - **Color test, alpha test, fog, texture functions**: in the shader, exact.
 
-Exactness here would need programmable blending: the frame buffer's pixel read in the shader (Vulkan's input
-attachments with rasterization-order access, `GL_EXT_shader_framebuffer_fetch` on OpenGL ES), so blending, dithering
-and the 16-bit formats could be done as the PSP does them. The Adreno has it; MoltenVK on the M1 doesn't. It's the
-first item on the accuracy list.
+That's the fixed-function way, still what a backend that can't read the frame buffer does. Vulkan's now reads it
+(part 45, "Shader blending" below): blending, dithering after it, logic operations, partial write masks and the
+16-bit formats are pixel.cpp's arithmetic there, and the differences above are gone for those draws.
 
 ## Upscaling (part 44)
 
@@ -301,6 +302,57 @@ frame buffer's colours as memory would keep them. The host's `video()` then neit
 PPSSPP's presentation (drawing its output framebuffer to the backbuffer with a post-processing pass, and its
 render resolution multiplier) informed the design here as before; none of its code is used, copied or translated.
 
+Presenting reports itself: `Backend::presented` is set only when this frame's `vkQueuePresentKHR` succeeded (or was
+suboptimal), and `System::present` returns false otherwise (no window, as in the background, or an acquire that
+timed out), so that frame is read back and the host draws it. A screenshot taken just after a presented frame may be
+the frame before's: the shrunk copy is kept when its slot is next waited for, a frame or two later.
+
+## Shader blending (part 45)
+
+A draw that blends, uses a logic operation other than copy, or has a write mask keeping part of a channel reads the
+target's pixel in `draw.frag` and does from there on what pixel.cpp does, so its result is the software renderer's
+to the bit (`settings()`: `reading`, the pipeline's `reads` and `blending`):
+- **The read**: the target's color is the render pass's input attachment as well as its color attachment, in the
+  GENERAL layout, read with `subpassLoad` (`READS`), which every Vulkan GPU has. Each write is narrowed to the frame
+  buffer's format (`QUANTIZE` its format), so what's read back is what memory would hold: 5, 6 or 4 bits kept
+  between draws as on the PSP, where fixed-function blending kept 8.
+- **Blending**: the GE's factors (the colors, alphas, doubled alphas, fixed A and B) and all eight
+  operations, the absolute difference included, each term `(2s+1)(2f+1) >> 10` and then added, as pixel.cpp
+  multiplies them; then the dither (after blending, as the PSP does it), the clamp, all 16 logic operations, and the
+  write mask bit by bit in the format's packing (`packed()`, `unpacked()`). The GPU's own blending and logic
+  operations are off for those draws.
+- **Order**: a pixel's read has to see the primitive before's write. Where the driver offers rasterization-order
+  attachment access (`VK_EXT_rasterization_order_attachment_access`, or ARM's before it) the subpass and pipelines
+  ask for it, every pipeline too, and a draw's overlapping primitives stay in one draw (`readsInOrder`). Every
+  reading draw also waits for the ones before (a `BY_REGION` barrier, a self-dependency of the subpass): without
+  it, and with only the reading pipelines asking for the order, Turnip on the RP6 failed the start-up check (its
+  blended triangles over unblended ones 80 pixels off). Without that access each reading draw has the barrier, and
+  `GPU::emit()` keeps no two primitives that overlap in one draw: each primitive's box in the target's pixels is
+  checked against the draw's (at most `MostBoxes`, 64), and one that overlaps begins another draw. The M1's MoltenVK
+  and the Adreno's own driver have no such access, so they split: with the splitting off, the test below fails on
+  the M1. Where the start-up check fails in order, it's run again with the draws split (`System::startRenderer()`),
+  and the log says so; a check that fails names the GPU and whether it blended in the shader.
+- **Clears** of a 16-bit frame buffer are narrowed to its format too, so a reading draw over a cleared pixel reads
+  memory's color.
+- **Native stays exact**, the software renderer the default; at a scale above 1 the same arithmetic runs on each of
+  the GPU's pixels.
+
+The test (`gpuBlending`, "gpu blending in the shader against the software renderer"): random sprites over a random
+background of random colors and stencils, blended with random factors, operations and fixed colors, dithered or
+not, with random logic operations and write masks keeping part of a channel, then a clear through such a mask, in
+each of the four formats at 1x and 2x: read back byte for byte the software renderer's, with reading draws counted
+and, without rasterization order, draws split. pspsdk's blend
+sample went from 68.7% of pixels the same to 100%.
+
+On the RP6 (Adreno 740, Turnip from the Driver Manager, in order; logcat's "PSP" start-up line says which way:
+"blending in the shader, in order" or "overlaps apart"): Lumines' menus 60 frames a second at Native (5.2 ms a
+frame); Burnout Legends' menu, its 3D attract scene behind, 60 at Native (14.4 ms) and 51.4 at 4x (18.3 ms, a
+heavier attract scene, the GPU 20% busy); the pictures right to the eye. The GPU tests, built for Android and run
+on the Adreno's own driver (no rasterization-order access: `cmd gpu vkjson`), pass with the draws split.
+
+PPSSPP's shader blending (its framebuffer fetch and its copies of the destination) was a guide to the approach only;
+none of its code is used, copied or translated.
+
 ## OpenGL (after Vulkan)
 
 The renderer (`gpu.cpp`: targets, ownership, render to texture, the texture cache, the settings' mapping, the
@@ -330,7 +382,7 @@ The software renderer is the reference. Two tools compare against it:
   compared: the share of pixels identical, and each differing channel counted as 1-2, 3-8 or more levels apart.
 
 pspsdk's samples (M1): clut, blit, doublelist and gu 100% the same; celshading 100% (176 channels a level apart);
-cube 99.7%, envmap 99.4%; blend 68.7% (its blended pixels all a level or two apart).
+cube 99.7%, envmap 99.4%; blend 68.7% (its blended pixels all a level or two apart), 100% since part 45.
 
 The owner's games, 10 frames each from the verified scenes, on the RP6. (Part 36 said the M1's were the same; they
 aren't quite: its pixels identical are 52.7%, 41.3%, 60.0%, 27.6%, 43.9% and 42.6%, in the table's order, the
@@ -359,8 +411,13 @@ What differs:
 - **Known approximations**: the depth buffer not read back (so the CPU, a texture or a PRIM the software renderer
   draws sees memory's depth, not the GPU's); a change to the depth buffer's bytes refills all of each 16 KiB it
   touches, so the GPU's depth drawn there since is replaced by memory's; a PRIM's pixels past its frame buffer's row
-  end cut at the row; textures past a frame buffer's row; partial write masks; absolute-difference blending; logic
+  end cut at the row; textures past a frame buffer's row; and, before part 45's shader blending (still so for a
+  backend that can't read the frame buffer), partial write masks, absolute-difference blending and logic
   operations other than clear, set, invert and keep without the GPU's own.
+
+The table and the list above are from before part 45. With shader blending, blending's rounding, the dithering of
+blended pixels and the 8 bits kept between draws of a 16-bit frame buffer are gone; texels chosen differently and
+rasterization's edges remain. The scenes' states were lost (above), so the table wasn't measured again.
 
 The pictures look the same to the eye in all six scenes; nothing is missing or misplaced.
 
@@ -492,6 +549,7 @@ software renderer.
    from the GPU, measured in the app with the system and a custom driver.
 3. **Upscaling** (part 44, done): an internal resolution from 1 (exact) to 10 times the PSP's, and presenting the
    target's image on Android's window without reading it back.
-4. **Accuracy**: programmable blending where the GPU has it (blending, dithering and 16-bit formats as the PSP's),
-   depth read back where games need it, block transfers between targets on the GPU, textures decoded on the GPU.
-5. **OpenGL**: the GL backend over the same renderer and shaders; the same measurements; "OpenGL" in the setting.
+4. **Accuracy**: shader blending (part 45, done: blending, dithering, logic operations, write masks and 16-bit
+   formats as the PSP's, on every Vulkan GPU); still to do, depth read back where games need it, block transfers
+   between targets on the GPU, textures decoded on the GPU.
+5. **OpenGL** (parked 2026-10-08): not worth a second HW backend yet; Software is the non-Vulkan path. Revisit only if telemetry shows need.

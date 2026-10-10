@@ -25,6 +25,44 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Desktop Library: the PSP's disc titles — 2026-10-08
+
+Branch `local/psp-desktop-disc-info`, on top of `cursor/psp-gpu-hw4-2b67` (#172's tip, part 45). The desktop's
+Library now shows a PSP disc's own title, as the Android app does (docs/psp-core.md, part 39's consumers).
+- **The display** (`desktop/main.cpp`'s `drawLibrary`): the list's line shows the disc's title (its PARAM.SFO's
+  TITLE) when there's one, the file's name when there isn't. The file's name stays the game's key: the states,
+  the saves and the memory card are keyed by it, as before.
+- **The fill** (`desktop/PspDiscInfo.cpp`): the list shows at once; the PSP's disc images' titles fill in after,
+  on a thread of their own (a CHD's open takes a while, so the UI isn't held), each from the cache or the shared
+  reader (`ares/psp/kernel/disc-info.cpp`), and a rescan supersedes the unfinished scan.
+- **The cache**: the title, disc ID and icon (its ICON0.PNG's bytes) beside the settings (`dataFolder`'s
+  `psp-icons/`), under a SHA-256 of the file's path+size+mtime, as the Android app's `psp-icons/` cache: a
+  second visit doesn't re-open the disc. The icon is cached, not drawn: the list's 8x8 font has no place for
+  it. A title the font can't draw (no printable ASCII) is shown as the file's name.
+- **Tests**: `tests/psp/desktop-disc-info.cpp` (the key, the disc image's file choice, the title's choice, the
+  cache's round trip, and the title served from the cache without re-opening the disc).
+- **Checked**: tests/psp (with the new desktop groups).
+- **Left**: the icon's draw (the list's rows are 12 px and the font 8x8: no place for it); the game's window
+  title (the launch keeps the file's name).
+
+## PSP core: blending in the shader — 2026-10-08
+
+Branch `cursor/psp-gpu-hw4-2b67`, on top of part 44's `cursor/psp-gpu-hw3-2b67` (#171 under it). Opened as #172.
+docs/psp-core.md, part 45, and docs/psp-gpu-renderers.md's "Shader blending" describe it; PPSSPP stayed a guide only.
+- **Shader blending**: draws that blend, use a logic operation or a partial write mask read the frame buffer
+  (an input attachment) and do pixel.cpp's arithmetic in `draw.frag`; 16-bit frame buffers keep their own bits.
+  A barrier before each reading draw; overlapping primitives kept in one draw where the driver has
+  rasterization-order access (Turnip; every pipeline asks), else split into separate draws (M1, Qualcomm's driver).
+  A check failing in order is retried split. Native exact, Software the default.
+- **Review fix**: the shader's write mask keeps stencil/alpha bits too (was only RGB).
+- **Tests**: new `gpuBlending` byte-exact in four formats at 1x and 2x; pspsdk's blend sample 100% (from 68.7%); the
+  sanitized PSP suite passes on the M1 (325 groups, Allegrex 58).
+- **RP6** (Turnip, in order): Lumines 60 fps at Native, Burnout Legends' menu 60 at Native and 51.4 at 4x. The
+  first build failed Turnip's start-up check (only reading pipelines asked for the order, no barrier); fixed. The
+  GPU tests built for Android pass on Qualcomm's driver. Settings put back to Software (resolution left at 3x;
+  Software ignores it).
+- **Next**: Software/7-thread remaining waits and Vulkan accuracy (OpenGL parked; Software covers devices without Vulkan).
+
 ## PSP core: upscaling, and presenting without reading back — 2026-10-08
 
 Branch `cursor/psp-gpu-hw3-2b67`, on top of part 46's `cursor/psp-cpu-speed3-2b67` (#176 under it). docs/psp-core.md, part 44, and
@@ -215,8 +253,8 @@ Branch `local/psp-disc-info`, on top of `cursor/psp-ge-curves-2b67` (#162). docs
   captured only for PSP discs; (6) a single-disc .m3u shows the playlist's name; (7) a CHD disc-info case in
   `tests/psp/ares/system.cpp`; (8) the CATEGORY isn't read (the Library shows the title and icon, not the
   category).
-- **Left**: cost measurement on 20+ real images (to be done on the handheld); desktop `Library.cpp` showing the
-  same titles (optional if cheap); RP6 fd-count check (no device access on the host).
+- **Left**: cost measurement on 20+ real images (to be done on the handheld); RP6 fd-count check (no device
+  access on the host). The desktop's Library shows the same titles (the entry above).
 
 ## PSP core: curved surfaces (BEZIER and SPLINE) — 2026-10-07
 
