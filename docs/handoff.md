@@ -39,18 +39,19 @@ room: no PPSSPP or JPCSP source read.
   family as rtc/arithmetic recorded (and sceRtcGetTick's microseconds past a second, and its years past 9999 refused, as
   rtc/convert recorded); sceHprm's callbacks (as scePower's, the shape Soulcalibur calls them in); the ATRAC low level
   (followed through Corpse Party's CRI library); sceP3da's mix (Sol Trigger).
-- **Games**: both Monster Hunter Portable 3rds black to their intro movies, titles and game menus (the PSP version's
-  character creation then stops at the GE's RET with no CALL: the GE's part); Corpse Party and Sol Trigger have their
+- **Games**: both Monster Hunter Portable 3rds black to their intro movies, titles and game menus (and, merged with part 57's
+  GE fix for a RET with no CALL, the PSP version's whole character creation screen); Corpse Party and Sol Trigger have their
   music; Genso Suikoden, Soulcalibur, Tekken 6, Final Fantasy Type-0, Kingdom Hearts BBS and Dragon Ball Z miss nothing.
   The report's missing functions are down to scesupPreAcc (3 games, none held by it). The base commit's runner and this
   branch's on 35 games: every other frame the same, or moved by the runner's timing under load.
-- **Checks**: tests/psp 392/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0; twenty-one deliberately broken
+- **Checks**: tests/psp 392/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0 (merged with #193: 396/0, 58/0,
+  307/0); twenty-one deliberately broken
   versions each caught; pspautotests' rtc/arithmetic, hash/mt19937ctx and six jpeg programs print what the PSP printed.
   Independent read-only review: fourteen findings, each fixed or answered in part 58 (older MT contexts mid-round, a
   picture's data read only as far as used, the IDCT held to 0-255 before rounding, the Media Engine's misaligned writes
   done at once, a state's JPEG width checked, years past 9999, test and doc claims, sceHprm's sources), the fixes then
   reviewed again. Save states version 21 (layout 21: sceJpeg, sceHprm's callbacks, ATRAC low-level IDs); 15 to 20 load.
-- **Left**: scesupPreAcc; Monster Hunter Portable 3rd's character creation (GE); P3DA's placing (unknown); whether
+- **Left**: scesupPreAcc; P3DA's placing (unknown); whether
   sceMpegAvcConvertToYuv420 widens the movie's sample range (unrecorded); Melodie's 40 MiB request (a PSP-2000 refuses
   it too); PGD; the runner's WAV tags carry a stray NUL (`tools/psp-runner`).
 - Scratch: `~/phobos-work/scratch/hle12` (sync-dbg.sh and apply-hooks.py for a traced runner; at/run.sh runs a

@@ -422,7 +422,7 @@ and now, and what the last frames showed or why a game stops.
 | Midnight Club - L.A. Remix | ULUS10383 | 46 | black | movie | menu | title (its attract scene at 3600 before) |
 | Midnight Club 3 - DUB Edition [v2.02] | ULUS10021 | 72 | movie | menu | menu | title, press start |
 | ModNation Racers | UCUS98741 | 184 | menu | menu | menu | title, press any button |
-| Monster Hunter Portable 3rd [English v6.1.0 Team Maverick One] | ULJM05800 | 347 | black | black | movie | Capcom logo, memory stick check, intro movie at 3600; with Start at the title (frame 3900), its game menu and character creation, whose next screen stays empty after the GE's RET with no CALL (part 58: sceJpegCsc, sceMpegAvcConvertToYuv420 and scePauth were missing) |
+| Monster Hunter Portable 3rd [English v6.1.0 Team Maverick One] | ULJM05800 | 347 | black | black | movie | Capcom logo, memory stick check, intro movie at 3600; with Start at the title (frame 3900), its game menu and character creation, drawn whole (its character and name prompt) once part 57's GE stops taking a RET with no CALL as the list's end (part 58: sceJpegCsc, sceMpegAvcConvertToYuv420 and scePauth were missing) |
 | Monster Hunter Portable 3rd HD ver [English v6.1.0 Team Maverick One] | NPJB40001 | 349 | black | black | movie | memory device check, intro movie with its sound at 3600; its title and game menu with Start (part 58: its 26.5 MiB program gets all of RAM, as the PS3 gave it; it never started before) |
 | Monster Kingdom Jewel Summoner | ULUS10211 | 53 | menu | movie | movie | intro |
 | Moto GP | ULUS10153 | 325 | menu | menu | menu | new save prompt |

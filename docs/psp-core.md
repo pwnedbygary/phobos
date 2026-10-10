@@ -6977,8 +6977,8 @@ the low level); layouts 15 to 20 load with none of those. The states' field and 
 **The games** (the report's runs: Software, 7 GE threads, 3600 frames, Start at 120 and Cross at 1800, PNGs at 60, 300,
 1200 and 3600; the base commit's runner and this branch's on 35 games):
 - *Monster Hunter Portable 3rd*: black to its intro movie (the Capcom logo, its memory stick check, the movie); with
-  Start at the title, its game menu and character creation, where its next screen stays empty after "GE: a display list
-  RETurned with no CALL to return from" (the GE's part, as Need for Speed: Most Wanted).
+  Start at the title, its game menu and character creation, whose screen stayed empty after "GE: a display list RETurned
+  with no CALL to return from" until merged with part 57's GE fix for it: its character, menu and name prompt now.
 - *Monster Hunter Portable 3rd HD*: black (never started) to the same: its memory device check, the intro movie with its
   sound, the title and the game menu.
 - *Corpse Party* and *Sol Trigger*: their title menus as before, with their music now.
@@ -7003,12 +7003,12 @@ RAM, the 4:2:0 planes a byte off, P3DA's channels replaced, a used sceHprm slot 
 older context's words left unstirred, a picture's data read no further than its first 64 KiB, the Media Engine's writes
 made straight, years past 9999 taken, a context wider than 1024 loaded) each failed them.
 
-**Left, and why.** scesupPreAcc (both Dissidias and Persona 3 Portable call it and go on). Monster Hunter Portable 3rd's
-character creation (the GE's RET with no CALL). P3DA's placing of its channels. The range of sceMpegAvcConvertToYuv420's
-samples, and the Media Engine's byte order writing a misaligned row (both above). A state of layout 20 or before isn't
-loaded by any test (as for every earlier layout). Melodie's 40 MiB request (above). PGD decryption and the black games
-part 55 listed. The runner's WAV header writes each of its tags with a NUL after it (`tools/psp-runner/runner.cpp`'s
-loops over C strings), which players reject; the measurements here read past it.
+**Left, and why.** scesupPreAcc (both Dissidias and Persona 3 Portable call it and go on). P3DA's placing of its
+channels. The range of sceMpegAvcConvertToYuv420's samples, and the Media Engine's byte order writing a misaligned row
+(both above). A state of layout 20 or before isn't loaded by any test (as for every earlier layout). Melodie's 40 MiB
+request (above). PGD decryption and the black games part 55 listed. The runner's WAV header writes each of its tags with
+a NUL after it (`tools/psp-runner/runner.cpp`'s loops over C strings), which players reject; the measurements here read
+past it.
 
 ## Part 60: perspective texels divided by the GE's reciprocal; patch divisions
 
