@@ -882,9 +882,11 @@ auto GPU::release() -> void {
 }
 
 //Everything drawn waited for, and the pixels the GPU drew put into memory's VRAM: each target's drawn rectangle read
-//back (its stencil as the pixels' alpha) and narrowed to its format. Its pages are no longer the renderer's; a target
-//over bytes another's pixels were just put into is filled from memory when next drawn into; and every target's bytes
-//are watched again, to hear of whoever else changes them.
+//back (its stencil as the pixels' alpha) and narrowed to its format, in the pages it owns: a page inside the
+//rectangle it didn't draw in since the last finish (between two PRIMs far apart) wasn't busy, and memory's bytes there
+//are as new as its pixels, or newer (the CPU's). Its pages are no longer the renderer's; a target over bytes
+//another's pixels were just put into is filled from memory when next drawn into; and every target's bytes are watched
+//again, to hear of whoever else changes them.
 auto GPU::finish(GE& ge) -> void {
   this->ge = &ge;
   bool drawn = false;
@@ -915,11 +917,15 @@ auto GPU::finish(GE& ge) -> void {
     if(!backend->read(n, colors, stencil)) continue;
     u32 bytes = t.bytes(), width = t.right - t.left + 1;
     for(s32 y = t.top; y <= t.bottom; y++) {
-      for(s32 x = t.left; x <= t.right; x++) {
+      for(s32 x = t.left, next = 0; x <= t.right; x = next) {  //(the row a page at a time)
         u32 at = (t.address + (y * t.stride + x) * bytes) & (Memory::VRAMSize - 1);
+        next = std::min<s32>(t.right + 1, x + (Memory::PageSize - at % Memory::PageSize + bytes - 1) / bytes);
+        if(owners[at / Memory::PageSize] != &t) continue;
         u32 i = (y - t.top) * width + (x - t.left);
-        u32 pixel = narrowTarget((colors[i] & 0xff'ffff) | u32(stencil[i]) << 24, t.format);
-        std::memcpy(&memory.vram[at], &pixel, bytes);
+        for(s32 column = x; column < next; column++, i++, at += bytes) {
+          u32 pixel = narrowTarget((colors[i] & 0xff'ffff) | u32(stencil[i]) << 24, t.format);
+          std::memcpy(&memory.vram[at], &pixel, bytes);
+        }
       }
     }
     statistics.readbacks++;

@@ -738,6 +738,58 @@ static auto gpuTexelsKept() -> void {
   hardware.ge.setRenderer(nullptr);
 }
 
+//What the GPU drew put into memory at a finish only in the pages each target drew in: a frame buffer's drawn
+//rectangle spans two PRIMs far apart (rows 0-1 and 40-41: its pages 0 and 2, not 1), and memory's bytes between them
+//are newer than its pixels there: the CPU's, written between the PRIMs, or another frame buffer's, drawn into that
+//page since (the other one read back first). Both kept, as the software renderer has them; and the CPU's in the
+//second page of a row that runs over two (a frame buffer 1,024 pixels wide, from half a page in).
+static auto gpuBetweenPages() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  for(bool cpu : {true, false}) {
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    u32 at = cpu ? 0 : 0x3'0000;  //(where no other test draws: the other frame buffer's target made first, below)
+    for(System* s : {&software, &hardware}) {
+      if(!cpu) {  //(the other frame buffer, at row 16's page, drawn first: read back first)
+        prepare(*s, at + 0x1000, 3);
+        sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 4}}, 0xff80'4020});
+        (void)s->memory.read(4, Memory::VRAMBase + at + 0x1000);  //(a finish)
+      }
+      prepare(*s, at, 3);
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 2}}, 0xff00'00ff});
+      sprite(*s, {{{0, 0, 0, 40}, {0, 0, 64, 42}}, 0xff00'ff00});
+      if(cpu) {
+        for(u32 n = 0; n < 64; n++) s->memory.write(4, Memory::VRAMBase + at + (20 * 64 + n) * 4, 0xffab'cdef);
+      } else {
+        prepare(*s, at + 0x1000, 3);
+        sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 4}}, 0xff10'20c0});
+        prepare(*s, at, 3);
+      }
+      sprite(*s, {{{0, 0, 0, 44}, {0, 0, 8, 46}}, 0xffff'0000});
+    }
+    u32 bytes = apart(software, hardware);
+    if(bytes) std::printf("  %s: %u bytes apart\n", cpu ? "the CPU's row" : "the other frame buffer's", bytes);
+    CHECK(bytes, 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  u32 at = 0x3'8800;  //(row 0 in pages 0x38 and 0x39, row 1 in 0x39 and 0x3a, row 2 in 0x3a and 0x3b)
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, at, 3);
+    s->ge.commands[GE::FrameBufferWidth] = 1024, s->ge.commands[GE::Scissor2] = 1023 | 47 << 10;
+    sprite(*s, {{{0, 0, 0, 0}, {0, 0, 16, 1}}, 0xff00'00ff});  //(page 0x38)
+    sprite(*s, {{{0, 0, 600, 2}, {0, 0, 616, 3}}, 0xff00'ff00});  //(page 0x3b)
+    for(u32 n = 0; n < 64; n++) s->memory.write(4, Memory::VRAMBase + at + (512 + n) * 4, 0xffab'cdef);  //(0x39)
+    sprite(*s, {{{0, 0, 0, 1}, {0, 0, 8, 2}}, 0xffff'0000});
+  }
+  u32 bytes = apart(software, hardware);
+  if(bytes) std::printf("  a row over two pages: %u bytes apart\n", bytes);
+  CHECK(bytes, 0u);
+  hardware.ge.setRenderer(nullptr);
+}
+
 //The GPU's depth buffer against memory's: depth cleared by the CPU between two depth-tested sprites is taken (the
 //second sprite drawn), and a color pixel the CPU writes between them doesn't bring back memory's older depth (the
 //second sprite, behind the first, not drawn).
@@ -1256,6 +1308,7 @@ auto gpuTests() -> Tests {
     {"gpu render to texture taken again in part: the strip an effect draws into", gpuPartialCopies},
     {"gpu render to texture from two frame buffers, one below the other, nothing finished", gpuStackedTexture},
     {"gpu a texture decoded again before the GPU has the first: its texels kept till then", gpuTexelsKept},
+    {"gpu a finish puts back only the pages drawn in, not memory's newer bytes between", gpuBetweenPages},
     {"gpu depth buffer follows memory's changes", gpuDepth},
     {"gpu bytes beside its pixels are memory's, without waiting", gpuBeside},
     {"gpu start-up check passes on a GPU that draws right", gpuCheck},
