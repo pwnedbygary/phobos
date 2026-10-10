@@ -151,11 +151,12 @@ struct GPU : GE::Renderer {
 
   //What the backend runs, in order: draws (a state's, count vertices from first), and pictures put into, read from
   //or copied out of a target (a rectangle; uploaded from the renderer's upload bytes, read back to be read() after
-  //finish(), copied into a texture's top left for draws after to sample), and the screen's picture presented on the
-  //window the backend shows on (Present: a target's top left, or with no target memory's picture, uploaded), or only
-  //a shot of a target's top left taken for the host, as a Present takes one (Shot); and fast mode's 3D draws (Mesh:
-  //count of the indices from first, into the models, each model's settings its Transformed block). Every position
-  //and size is in the PSP's pixels: the backend has each of them Backend::scale times over.
+  //finish(), copied into a texture for draws after to sample: its top left, or a part of it taken again), and the
+  //screen's picture presented on the window the backend shows on (Present: a target's top left, or with no target
+  //memory's picture, uploaded), or only a shot of a target's top left taken for the host, as a Present takes one
+  //(Shot); and fast mode's 3D draws (Mesh: count of the indices from first, into the models, each model's settings
+  //its Transformed block). Every position and size is in the PSP's pixels: the backend has each of them
+  //Backend::scale times over.
   struct Command {
     enum class Kind : u8 { Draw, Upload, Readback, Copy, Present, Shot, Mesh } kind;
     u32 target;
@@ -165,6 +166,7 @@ struct GPU : GE::Renderer {
     u64 colors = 0, stencil = 0, depth = 0;  //Upload: where in uploads (8888s, bytes, 16-bit depths); Present's
     u8 parts = 3;                            //Upload: bit 0 the colors and stencils, bit 1 the depths
     u32 texture = 0;                         //Copy
+    u16 intoX = 0, intoY = 0;                //Copy: where in the texture (its top left the target's x, y)
     //Readback: how many times the PSP's size its pixels come back: 1, the PSP's own (for memory: one of each pixel's
     //scale x scale, the same one each time, so that memory's bytes the GPU didn't draw over come back as they went
     //in), or more, up to the backend's scale, for the screen (shrunk smoothly, the colors alone, no stencil)
@@ -219,8 +221,10 @@ struct GPU : GE::Renderer {
     virtual auto name() const -> std::string = 0;
     virtual auto makeTarget(u32 width, u32 height) -> u32 = 0;  //0: it couldn't
     virtual auto dropTarget(u32 target) -> void = 0;
-    //(texels: none for one a Copy fills) 0: it couldn't
-    virtual auto makeTexture(u32 width, u32 height, const u32* texels) -> u32 = 0;
+    //(texels: none for one a Copy fills; kept, not copied, until they're on the GPU, by owner where one is given,
+    //which they mustn't change under) 0: it couldn't
+    virtual auto makeTexture(u32 width, u32 height, const u32* texels, std::shared_ptr<const void> owner = {})
+      -> u32 = 0;
     virtual auto dropTexture(u32 texture) -> void = 0;  //(once the GPU is done with it)
     //Whether draws of this pipeline can be made (the driver took its shaders): fast mode's 3D asks before it records
     //one (mesh()), so that a driver refusing them leaves the GE to transform those PRIMs itself
@@ -254,9 +258,9 @@ struct GPU : GE::Renderer {
     u32 depthBuffer = 0, depthStride = 0, depthRows = 0;
     u32 depthChangedFrom = 0, depthChangedTo = 0;
     s32 left = 0, top = 0, right = -1, bottom = -1;  //drawn since it was last read back
+    s32 changes[4] = {0, 0, -1, -1};  //changed since its copies last heard (textureFor()): left, top, right, bottom
     std::vector<std::array<s32, 4>> told;  //rectangles memory has heard were drawn over since then (own())
     u64 used = 0;
-    u64 version = 0;              //goes up whenever its pixels may change (filled, drawn into)
     //VRAM's bytes (offsets, inclusive) someone reached in its pages while the GPU drew in them, not over what it
     //drew (drawnOver()): memory's, maybe changed, so it's filled afresh before it draws, shows or lends a texture
     //over any of them. (At most 16 ranges; more are taken together.)
@@ -274,6 +278,7 @@ struct GPU : GE::Renderer {
 
   struct Statistics {
     u64 draws = 0, primitives = 0, submits = 0, finishes = 0, uploads = 0, readbacks = 0, textures = 0, copies = 0;
+    u64 copied = 0;    //the targets' pixels those copies took (render to texture: textureFor())
     u64 pictures = 0;  //frames shown straight from a target (picture())
     u64 readingDraws = 0, splits = 0;  //draws blended in the shader; those begun as their primitives overlapped
     u64 presents = 0, presentsFromMemory = 0;  //frames presented on the window (show()): from a target, memory's
@@ -377,13 +382,27 @@ private:
   Target* owners[GE::VRAMPages] = {};  //VRAM's pages whose newest pixels are the GPU's: the target drawn there
   u64 uses = 0;
   //A texture in a target the GPU has drawn (holds()), for the next PRIM: where, and the texture it's copied into
-  //(one for each place and size, kept with the target)
-  struct Held { Target* target; s32 x, y; u32 width, rows, format; };
+  //(one for each place and size, kept with the target); its rows from split on in next, from that one's first, where
+  //it runs on into the frame buffer below
+  struct Held { Target* target; s32 x, y; u32 width, rows, format; Target* next = nullptr; u32 split = 0; };
   std::optional<Held> held;
-  //(one for each target and size, the place it was last copied from, and the target's version then; at most
-  //MostCopies, the one unused longest let go for another, and none unused for CopyAge PRIMs: release())
-  struct Copied { u32 texture; u64 version; s32 x, y; u64 used; };
+  //(one for each target and size, the place it was last copied from, and the rectangle of the target changed since,
+  //left, top, right, bottom in its pixels, none where left is past right: taken again from the same place, only that
+  //part is copied, so an effect drawing again and again into one corner of the frame buffer it samples copies the
+  //corner, not the picture, as Killzone's menu blurs a strip right of its picture 1,100 times a frame. At most
+  //MostCopies, the one unused longest let go for another, and none unused for CopyAge PRIMs: release().)
+  struct Copied { u32 texture; s32 x, y; u64 used; s32 dirty[4] = {0, 0, -1, -1}; };
   std::map<std::tuple<u32, u32, u32>, Copied> copies;  //(target, width, rows)
+  auto changed(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;  //(Target::changes)
+  //The PRIM's target, scissor and the extent of its corners drawn so far (none: left past right), given to the
+  //target's changes as the next PRIM begins (reached())
+  static constexpr float Far = 1e30f;
+  struct Reach {
+    Target* target = nullptr;
+    s32 scissor[4] = {};
+    float box[4] = {Far, Far, -Far, -Far};
+  } reach;
+  auto reached() -> void;
   static constexpr u32 MostCopies = 32;
   static constexpr u64 CopyAge = 1 << 14;
   //The current draw's primitives' boxes (left, top, right, bottom in the target's pixels, at most MostBoxes), where

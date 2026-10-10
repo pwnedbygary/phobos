@@ -159,11 +159,13 @@ the GPU can't sample). Columns past a row's end are cut at the row, as before.
 (`Memory::busyPages`), exactly as the drawing threads' batches make them, so anyone touching one (the CPU, the
 display, a texture decode, a block transfer, a save state) first has the renderer `finish()`: everything drawn is
 waited for, each target's drawn rectangle read back, narrowed to its format (the stencil as alpha) and put into
-memory's VRAM, and the pages are memory's again. Decoded textures and the recompiler hear of the change when the pages
-are first owned, as they do of the software renderer's drawing. The depth buffer isn't read back (the GPU's depth
-stays the GPU's; a game that reads depth with the CPU, or samples it as a texture, sees what memory had; and a PRIM
-the software renderer draws, above, tests against memory's depth): PPSSPP makes the same choice by default, and it's
-on the list below.
+memory's VRAM, and the pages are memory's again. Only the pages the target owns are put back (part 63): its rectangle
+spans its PRIMs since the last finish, and a page between two far apart wasn't busy, so the CPU's bytes written there,
+or another frame buffer's drawn there, are newer than its pixels. Decoded textures and the recompiler hear of the
+change when the pages are first owned, as they do of the software renderer's drawing. The depth buffer isn't read back
+(the GPU's depth stays the GPU's; a game that reads depth with the CPU, or samples it as a texture, sees what memory
+had; and a PRIM the software renderer draws, above, tests against memory's depth): PPSSPP makes the same choice by
+default, and it's on the list below.
 
 **Bytes beside the pixels.** A page is 4 KiB, two rows of a 512-wide 8888 frame buffer, and games keep their own
 bytes in the same pages: Brave Story keeps its display list in the 32 unused columns right of its 480-pixel picture,
@@ -208,12 +210,16 @@ its pages are all one target's (the newest pixels on the GPU), its format is the
 or 8888, not swizzled, not a palette's indices), its row width is the target's, and it starts inside the target. Then
 the GE doesn't decode it, and the renderer copies the part of the target the texture covers into a texture of its own
 on the GPU, in order with the draws, for the PRIM to sample. One copy is kept for each target and size, and taken
-again when the place is another or the target has changed since (each target counts its fills and PRIMs drawn); the
-draws before sample it as it was, as the GPU runs the commands in order. At most 32 are kept, the one unused longest
-let go for another, and one unused for 16,384 PRIMs goes too, so a game that samples its frame buffer from a place
-that moves each frame doesn't fill the GPU's memory or its descriptor sets. The shader reads a
-16-bit target's texels as its format keeps them (the GPU's 8888 narrowed and widened again), as the GE would read
-them from memory.
+again when the place is another or the target has changed since; the draws before sample it as it was, as the GPU runs
+the commands in order. Taken again from the same place, only the part of the target changed since is copied, into its
+place in the copy (part 63): each target gathers the rectangle its pixels changed in (a PRIM's corners and a pixel
+more each way, for a corner's float a hair off, inside its scissor; a mesh's whole scissor; rows filled from memory),
+which its copies hear of as one is taken. Killzone's menu blurs a strip in the 32 unused columns right of its picture
+back and forth, each 3D PRIM drawing half the strip from the other half of the frame buffer it draws into, 1,100 times
+a frame: each was a copy of the whole 512x512 picture, now of the strip's half. At most 32 are kept, the one unused
+longest let go for another, and one unused for 16,384 PRIMs goes too, so a game that samples its frame buffer from a
+place that moves each frame doesn't fill the GPU's memory or its descriptor sets. The shader reads a 16-bit target's
+texels as its format keeps them (the GPU's 8888 narrowed and widened again), as the GE would read them from memory.
 
 The GE tells the renderer how many of the texture's rows and columns a 2D PRIM can reach, so a texture declared
 larger than the picture in it is copied only as far as it's used: for 2D sprites exactly those their pixels take
@@ -230,6 +236,15 @@ target the GPU hasn't drawn are filled from memory before the copy.
 In Midnight Club 3's race this took the render passes from 82 a frame to 12-16 and the GPU's wait from 15.9 ms to
 1.6-2 ms a frame (M1).
 
+**A texture running into the frame buffer below** (part 63): its pages one target's and then, from a page on,
+another's, of the same row width and format, which begins on a row of the first, the first owning none of the second's
+pages (whose newest pixels would be its own then): copied in two parts, each from its own target, the rows from the
+second's address on from its first rows, and taken whole each time (the second part's changes aren't followed).
+Midnight Club 3's menu samples its frame buffer at VRAM 0 as a texture 512 rows tall, and its filter reaches row 272,
+the next frame buffer's first, which the PRIM is drawing into: refused, it was decoded from memory, a finish every
+frame. The texture is the GPU's copy of each target's pixels as they were before the PRIM, as for any texture a PRIM
+draws over.
+
 ## The texture cache
 
 The GE already keeps decoded copies of the textures it samples (`texture.cpp`: 8888, the palette applied, unswizzled,
@@ -237,7 +252,10 @@ DXT decoded, watched for changes, and decoded again when their bytes or palette 
 GPU once and keeps it while the GE keeps the copy (a weak pointer: once the GE lets it go, the renderer drops its copy
 at the next submit or finish), and again when the GE's copy grows more rows. So texture decoding stays one piece of
 CPU code for both renderers, and its caching and invalidation are the GE's, measured since part 24. Textures from
-render targets are the copies above.
+render targets are the copies above. A new texture's texels go straight from the GE's copy into the next run's
+staging buffer, the copy kept alive till then (a decoded copy never changes: decoded again, it's another), not
+copied into the texture first (part 63: the copies' fresh pages cost the emulation thread 0.8 ms a frame of the
+kernel's where a game decodes 8 textures a frame).
 
 **Written beside** (part 52): a decoded texture whose page is written isn't thrown away at once. It keeps a copy of
 the bytes it was decoded from (where they're side by side in the host's memory and no more than its texels), and
@@ -739,6 +757,26 @@ So from a game's second session on, fast mode is ahead of seven software threads
 warm-up. Fast mode makes more pipelines than the accurate mode (its transform pipelines, 79 against 62 in the race)
 and each takes Turnip longer (33 ms against 14), which the first session still pays. The files: 0.5-1.3 MB (Turnip),
 0.15-0.5 MB (Qualcomm's driver) for a scene's pipelines.
+
+**Part 63** (both modes: render-to-texture copies of what changed, a texture from two frame buffers, texels kept): the
+same runner, late frames and the pipelines kept, the emulation thread pinned to the X3 as Phobos pins it, 300 frames
+from each scene's state, means of two rounds with each runner first in one, frames a second, base -> this; at 4x the
+runner's late frames taken at the PSP's size and its screen the PSP's (a scratch patch, as the app's presenting reads
+nothing back):
+
+| Scene | Turnip accurate | Turnip fast | Qualcomm's accurate | Qualcomm's fast |
+|---|---|---|---|---|
+| Killzone, menu | 30.2 -> **48.6** | 38.6 -> **73.1** | 29.6 -> **42.7** | 29.5 -> **42.6** |
+| Midnight Club 3, menu | 78.6 -> **110.7** | 80.9 -> **115.0** | 76.0 -> **105.0** | 75.2 -> **108.7** |
+| Killzone, menu, 4x | 4.4 -> **12.9** | 4.9 -> **17.0** | 4.5 -> **14.0** | 4.5 -> **14.0** |
+| Midnight Club 3, menu, 4x | 40.6 -> **57.1** | 50.1 -> **78.9** | 42.4 -> **71.2** | 39.0 -> **63.6** |
+
+The other scenes (MC3's race, LCS's city and woods, WipEout, Lumines) are level, at 1x and 4x, within their rounds'
+spread; a finish putting back only the pages each target drew in (a page at a time) made WipEout 3% faster at 1x.
+Killzone's menu is still the GPU's bound at 4x (1,100 render passes a frame, each a copy and a draw); MC3's menu now
+shows its frames from the GPU instead of finishing every frame. Tried and dropped there (docs/psp-core.md, part 63):
+render passes over only what their draws reach, fewer barriers around copies and uploads, passes leaving the depth and
+stencil unloaded, and textures made again from ones let go of (WipEout 6% slower on Turnip).
 
 Host frames a second, the same 300 frames from each scene's state (the M1's GPU runs 120): the software renderer on
 1 and 7 drawing threads, then the Vulkan renderer (one thread: the GE's).
