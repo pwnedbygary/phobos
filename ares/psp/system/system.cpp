@@ -24,7 +24,9 @@ auto load(Node::System& node, string name) -> bool {
 //one) or "Vulkan" (the GPU's, ge/gpu: docs/psp-gpu-renderers.md), taken at the next power on. "Resolution", the
 //Vulkan renderer's internal resolution: 1 (the default), the PSP's own, the exact native mode, to 10 times it each
 //way, taken at the next load. "Renderer Check", "Fail" to have the Vulkan renderer's start-up check fail as if the
-//GPU drew wrong (a front end's debug switch, to see the software renderer take over and the owner told).
+//GPU drew wrong (a front end's debug switch, to see the software renderer take over and the owner told). "Late
+//Frames", "true" for a host that reads the GPU's frames back to show them but can take them up to three frames late
+//(at 1x): nothing is waited for each frame, as when the GPU presents on Android's window (the runner, to time it so).
 auto option(string name, string value) -> bool {
   if(name == "Memory Stick") system.memoryStick = value;
   if(name == "Fonts") system.fonts = value;
@@ -33,6 +35,7 @@ auto option(string name, string value) -> bool {
   if(name == "Renderer") system.renderer = value == "Vulkan" ? "Vulkan" : "Software";
   if(name == "Resolution") system.resolution = std::clamp<u64>(value.natural(), 1, 10);
   if(name == "Renderer Check") system.failCheck = value == "Fail";
+  if(name == "Late Frames") system.lateFrames = value.boolean();
   return true;
 }
 
@@ -124,8 +127,12 @@ auto System::run() -> void {
     u32 width = display.width ? display.width : 480, height = display.height ? display.height : 272;
     at = std::min(shown, gpu->resolution());
     if(physical >= Memory::VRAMBase && physical - Memory::VRAMBase < Memory::VRAMSize) {
-      drawn = gpu->picture(physical - Memory::VRAMBase, display.bufferWidth, display.pixelFormat & 3, width, height,
-                           pixels, at);
+      if(lateFrames && at == 1) {
+        drawn = late(physical - Memory::VRAMBase, display.bufferWidth, display.pixelFormat & 3, width, height);
+      } else {
+        drawn = gpu->picture(physical - Memory::VRAMBase, display.bufferWidth, display.pixelFormat & 3, width,
+                             height, pixels, at);
+      }
     }
   }
   if(!drawn) kernel.picture(pixels), at = 1;
@@ -147,6 +154,21 @@ auto System::run() -> void {
   }
   screen->frame();
   speak();
+}
+
+//A late frame (option "Late Frames"): the GPU takes a shot of the frame shown (GPU::shoot()), nothing waited for, and
+//the newest it has finished taking is the picture, up to three frames late, as memory would keep it (picture()'s
+//colors). False till there's one of this size: the frame from memory then.
+auto System::late(u32 offset, u32 stride, u32 format, u32 width, u32 height) -> bool {
+  if(!gpu->shoot(offset, stride, format, width, height)) return false;
+  u32 w, h, f;
+  if(gpu->shot(latePixels, w, h, f)) lateWidth = w, lateHeight = h, lateFormat = f;
+  if(lateWidth != width || lateHeight != height || latePixels.size() < u64(width) * height) return false;
+  pixels.resize(u64(width) * height);
+  for(u32 n = 0; n < pixels.size(); n++) {
+    pixels[n] = 0xff00'0000 | (widenTarget(narrowTarget(latePixels[n], lateFormat), lateFormat) & 0xff'ffff);
+  }
+  return true;
 }
 
 //The frame presented by the GPU on the host's window itself (GPU::show(): Android's, where its Vulkan renderer has
@@ -268,6 +290,7 @@ auto System::unload() -> void {
   cpu.recompiler.table = nullptr;
   cpu.recompiler.allocator.reset();
   pixels = {};
+  latePixels = {}, lateWidth = lateHeight = 0;
   sound = {};
   if(screen) {
     screen->quit();  //stops the screen's video thread
@@ -292,6 +315,7 @@ auto System::power(bool reset) -> void {
   //(what the hardware renderer drew is the old memory's: let go)
   ge.setRenderer(nullptr);
   if(gpu) gpu->drop();
+  latePixels = {}, lateWidth = lateHeight = 0;
   memory.power(64_MiB);
   memory.buildPages(pageTable);
   cpu.pages = pageTable.data();

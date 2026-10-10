@@ -961,7 +961,9 @@ static auto drawDecodedTextures() -> void {
     CHECK(drawn(3), 0x0031'0003u);
     palette(0x0030'0000);
     CHECK(drawn(4), 0x0030'0004u);
-    CHECK(c.ge.textures.entries.size(), 3u);  //the 8888 one in VRAM, and the indices with each palette
+    //the 8888 one in VRAM, the indices with each palette, and the 8888 one in RAM, whose page was written since: it's
+    //looked at again when next drawn with (drawDecodedWritten)
+    CHECK(c.ge.textures.entries.size(), 4u);
 
     //a state loaded: the memory as it was then, and nothing kept from after
     serializer saved;
@@ -1146,6 +1148,52 @@ static auto drawKeptPixels() -> void {
     c.ge.commands[GE::TextureFunction] = 0;
     c.draw(GE::Sprites, {{0, 0, 0xffff'ffff, 0, 0, 0}, {4, 4, 0x80ff'ffff, 64, 64, 0}});
     CHECK(c.ge.noted.size(), 1u);
+  }
+}
+
+//A texture whose page is written is looked at again as it's next drawn with: kept, the same copy, where its own bytes
+//are as they were (a write beside it in the same page, or its bytes written as they were); decoded afresh where
+//they aren't.
+static auto drawDecodedWritten() -> void {
+  for(bool recompile : {false, true}) {
+    Canvas c;
+    c.texture(3, 4, 4, 4);
+    for(u32 n = 0; n < 16; n++) c.memory.write(4, Texture + n * 4, 0x0010'2030 + n);
+    auto drawn = [&](u32 n) {
+      c.draw(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {4, 4, 0, 4, 4, 0}});
+      return c.pixel(n % 4, n / 4);
+    };
+    auto& entries = c.ge.textures.entries;
+    CHECK(drawn(5), 0x0010'2035u);
+    CHECK(entries.size(), 1u);
+    auto* first = entries.begin()->second.get();
+    //beside it, by the CPU's store and by memory's own write: kept
+    c.s.runProgram(0x0890'0000, {lui(t0, Texture >> 16), ori(t0, t0, 64), lui(t1, 0x55), sw(t1, 0, t0)},
+                   recompile);
+    CHECK(first->suspect, true);
+    CHECK(drawn(5), 0x0010'2035u);
+    CHECK(entries.size() == 1 && entries.begin()->second.get() == first && !first->suspect, true);
+    c.memory.write(4, Texture + 128, 7);
+    CHECK(drawn(6), 0x0010'2036u);
+    CHECK(entries.size() == 1 && entries.begin()->second.get() == first, true);
+    //its own byte written as it was: kept
+    c.memory.write(4, Texture + 8 * 4, 0x0010'2038);
+    CHECK(drawn(8), 0x0010'2038u);
+    CHECK(entries.begin()->second.get() == first, true);
+    //and written to another value: decoded afresh, and watched again (the next write is heard of)
+    c.memory.write(4, Texture + 9 * 4, 0x00aa'bbcc);
+    CHECK(drawn(9), 0x00aa'bbccu);
+    CHECK(entries.size(), 1u);
+    CHECK(entries.begin()->second->suspect, false);
+    c.memory.write(4, Texture + 10 * 4, 0x00dd'eeffu);
+    CHECK(drawn(10), 0x00dd'eeffu);
+    //written while it isn't drawn with, then drawn with another texture, then with it again
+    c.memory.write(4, Texture + 11 * 4, 0x0012'3456);
+    c.ge.commands[GE::TextureAddress0] = (Texture + 0x1000) & 0xff'ffff;
+    CHECK(drawn(0), 0u);
+    c.ge.commands[GE::TextureAddress0] = Texture & 0xff'ffff;
+    CHECK(drawn(11), 0x0012'3456u);
+    CHECK(drawn(10), 0x00dd'eeffu);
   }
 }
 
@@ -1351,6 +1399,7 @@ auto drawTests() -> Tests {
   return {
     {"draw textures kept decoded", drawDecodedTextures},
     {"draw textures kept decoded, their rows", drawDecodedRows},
+    {"draw textures kept decoded, their pages written", drawDecodedWritten},
     {"draw over its own texture from a copy", drawCopiedTexture},
     {"draw keeping every pixel", drawKeptPixels},
     {"draw turned sprites kept decoded", drawTurnedDecoded},

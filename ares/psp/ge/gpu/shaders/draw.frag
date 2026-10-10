@@ -118,9 +118,12 @@ uint narrowed(uint value, uint bits) {
   return kept << (8u - bits) | kept >> (2u * bits - 8u);
 }
 
-//A texel; one of a texture taken from a 16-bit frame buffer (TEXELS) as its format keeps it, as the GE reads it
+//A texel; one of a texture taken from a 16-bit frame buffer (TEXELS) as its format keeps it, as the GE reads it.
+//(Held inside the picture on the GPU, which may have only the rows and columns the GE's pixels reach: above 1x a
+//pixel between two of the GE's may sample a little past them.)
 uvec4 fetch(uint u, uint v) {
-  uvec4 t = uvec4(texelFetch(texels, ivec2(u, v), 0) * 255.0 + 0.5);
+  ivec2 at = min(ivec2(u, v), textureSize(texels, 0) - 1);
+  uvec4 t = uvec4(texelFetch(texels, at, 0) * 255.0 + 0.5);
   if(TEXELS == 0u) t = uvec4(narrowed(t.r, 5u), narrowed(t.g, 6u), narrowed(t.b, 5u), 255u);
   if(TEXELS == 1u) t = uvec4(narrowed(t.r, 5u), narrowed(t.g, 5u), narrowed(t.b, 5u), t.a >= 128u ? 255u : 0u);
   if(TEXELS == 2u) t = uvec4(narrowed(t.r, 4u), narrowed(t.g, 4u), narrowed(t.b, 4u), narrowed(t.a, 4u));

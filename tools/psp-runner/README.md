@@ -59,6 +59,11 @@ The options, and what each does:
 - `--resolution N` — the Vulkan renderer's internal resolution: 1, the PSP's own (the default),
   to 10 times it each way. The frames, and so the PNGs, are read back from the GPU at up to 4 times
   the PSP's size (1920x1088), shrunk smoothly where it draws larger.
+- `--late-frames` — the Vulkan renderer's frames taken up to three frames late (the core's option
+  "Late Frames", at `--resolution 1` only): each frame's picture is copied on the GPU and read when
+  its run is done, so nothing waits for the GPU at a frame's end, as when the app presents on its
+  window. For timing the GPU as the app runs it; the PNGs then show a frame up to three before the
+  one they're named by.
 - `--memory-stick DIR` — the host folder standing for `ms0:` (a scratch folder, made and
   removed with the run, by default)
 - `--fonts DIR` — the PSP's system fonts (the `.pgf` files of a PSP's `flash0:`), for the

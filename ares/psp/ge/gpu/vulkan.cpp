@@ -895,6 +895,10 @@ struct VulkanBackend : GPU::Backend {
         continue;
       }
       endPass();
+      if(c.kind == GPU::Command::Kind::Shot) {  //(the slot's shot, kept once its run is done: shot())
+        shoot(commands, slot, t, c);
+        continue;
+      }
       if(!fit(commands, t, c.y + c.height)) return lost = true, false;
       u32 count = c.width * c.height;
       VkOffset3D offset{c.x * s32(scale), c.y * s32(scale), 0};

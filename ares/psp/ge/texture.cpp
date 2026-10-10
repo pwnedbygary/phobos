@@ -29,7 +29,8 @@
 //texels (decode()), each exactly what texel() would read, and drawing takes each texel from there in one step. The
 //copy is good only while the memory it came from stays as it was: the GE watches those pages (Memory::watch()),
 //and whoever writes any of them (the CPU, an HLE function, the GE drawing or copying, a state loaded) throws the
-//copy away (textureWritten()), to be decoded afresh when next drawn with. The palette is part of what a texture of
+//copy away (textureWritten()), unless its own bytes are as they were when it's next drawn with (a copy of them is
+//kept to compare), to be decoded afresh then. The palette is part of what a texture of
 //indices looks like: its copy is kept for the palette it was decoded with, found again by the palette's hash and
 //checked byte for byte whenever the palette has changed since (clutVersion). A texture whose bytes a batch still draws
 //over (render to texture) can wait in the next batch and be decoded as that batch starts (ensureDecoded), for that
@@ -454,6 +455,23 @@ auto GE::fillDecoded(Look& look, u32 rows) -> void {
     if(!std::memcmp(entry->palette.data(), clut, sizeof(clut))) entry->paletteChecked = clutVersion;
     else forget(entry.get()), entry.reset();  //another palette with the same hash: decoded afresh
   }
+  //One whose pages were written since (textureWritten()): kept if its bytes are still those it was decoded from (a
+  //write beside it in the same 4 KiB, or the same bytes written again), watched again; else decoded afresh, as one
+  //with more rows than this PRIM takes is (its other rows' bytes might wait for drawing this PRIM doesn't need).
+  if(entry && entry->suspect && entry->rows > rows) forget(entry.get()), entry.reset();
+  if(entry && entry->suspect) {
+    u32 kept, keptEnd;
+    textureBytes(t, entry->rows, kept, keptEnd);
+    drawnFirst(kept, keptEnd - kept);  //(from VRAM primitives waiting to be drawn draw over: threads.cpp)
+    Memory::KnownDrawn known;
+    const u8* bytes = memory.pointer(kept, keptEnd - kept);
+    if(bytes && entry->source.size() == keptEnd - kept && !std::memcmp(bytes, entry->source.data(), keptEnd - kept)) {
+      entry->suspect = false;
+      memory.watch(kept, keptEnd - kept);
+    } else {
+      forget(entry.get()), entry.reset();
+    }
+  }
   //A texture is kept once, with as many rows as any primitive has reached: one reaching fewer draws from it as it
   //is, one reaching more gets a longer copy, the rows kept already copied into it (still as their memory is, or
   //they'd be gone) and the rest decoded.
@@ -473,6 +491,10 @@ auto GE::fillDecoded(Look& look, u32 rows) -> void {
     }
     decodeTexels(t, clut, low, high, key.width, from, rows, entry->texels.data());
     if(indexed) entry->palette.assign(clut, clut + sizeof(clut)), entry->paletteChecked = clutVersion;
+    //(no copy bigger than the texels: a texture of rows longer than it is wide, as a frame buffer's part, goes as
+    //its pages are written, as before)
+    const u8* bytes = high - low <= entry->texels.size() * 4 ? memory.pointer(low, high - low) : nullptr;
+    if(bytes) entry->source.assign(bytes, bytes + (high - low));
     memory.pagesOf(low, high - low, entry->firstPage, entry->lastPage);
     memory.watch(low, high - low);
     for(u32 page = entry->firstPage; page <= entry->lastPage; page++) textures.pages[page].push_back(entry.get());
@@ -491,12 +513,16 @@ auto GE::fillDecoded(Look& look, u32 rows) -> void {
   t.decodedRows = rows;
 }
 
-//Memory::watchedWritten(): the page changed, so every texture decoded from it goes.
+//Memory::watchedWritten(): the page changed, so every texture decoded from it may be stale: each is looked at again
+//when next drawn with (fillDecoded()), against a copy of the bytes it was decoded from, or goes now if it has none.
 auto GE::textureWritten(u32 page) -> void {
   auto found = textures.pages.find(page);
   if(found == textures.pages.end()) return;
   auto stale = found->second;  //(forget() edits the lists)
-  for(auto* entry : stale) forget(entry);
+  for(auto* entry : stale) {
+    if(entry->source.empty()) forget(entry);
+    else entry->suspect = true;
+  }
 }
 
 //A decoded texture out of the cache (a primitive drawing with it keeps it until it's done).

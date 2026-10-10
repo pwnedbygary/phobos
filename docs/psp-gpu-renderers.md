@@ -167,10 +167,18 @@ lend (below), and the uploads that follow.
 before a PRIM draws into, or fills, rows whose pages another target owns, the renderer finishes first, so memory has
 the other's pixels, and the target is filled from them.
 
-**Submitting.** What's recorded is handed to the GPU every 128 commands and at a list's end (`submit()`), not waited
-for, so the GPU draws while the CPU emulates; and within a PRIM once it has 262,144 vertices (a long line costs six
-for each pixel it lights), so no PRIM's recording grows without bound. The backend has three slots, each with its own
-command buffer, fence and staging memory (vertices, uploads), used round. Only `finish()` waits.
+**Submitting.** What's recorded is handed to the GPU every 128 commands, at a list's end once 32 commands are
+recorded (`submit()`; part 52: WipEout Pure ends 209 lists a frame, each a `vkQueueSubmit` and a wait for the slot
+three runs before), and with each frame shown or finished, not waited for, so the GPU draws while the CPU emulates;
+and within a PRIM once it has 262,144 vertices (a long line costs six for each pixel it lights), so no PRIM's
+recording grows without bound. The backend has three slots, each with its own command buffer, fence and staging
+memory (vertices, uploads), used round. Only `finish()` waits.
+
+**Telling memory of the GPU's drawing** (part 52): `own()` tells memory (`Memory::changed()`: the recompiler and the
+decoded textures, through all four of VRAM's copies) of a PRIM's rectangle only where it isn't inside one told of
+since the target's last finish (`Target::told`, at most 8), its pages still busy: a copy of bytes the GPU has drawn
+over can only be made after a finish, so no one has those bytes yet. A 3D game's PRIMs each reach the whole scissor
+rectangle; told at every PRIM, that was 2.7 ms a frame of Midnight Club 3's race on the RP6.
 
 **Block transfers** go through memory for now: a transfer reading or writing pages the renderer owns finishes it
 first, then copies in memory, and the targets it wrote over are filled afresh. Transfers between targets on the GPU
@@ -192,9 +200,14 @@ that moves each frame doesn't fill the GPU's memory or its descriptor sets. The 
 16-bit target's texels as its format keeps them (the GPU's 8888 narrowed and widened again), as the GE would read
 them from memory.
 
-The GE tells the renderer how many of the texture's rows and columns a 2D PRIM can reach (from its vertices'
-coordinates, as it already does for decoding), so a texture declared larger than the picture in it is copied only as
-far as it's used. Where that isn't known (3D), a texture wider than the target's row has only the columns inside the
+The GE tells the renderer how many of the texture's rows and columns a 2D PRIM can reach, so a texture declared
+larger than the picture in it is copied only as far as it's used: for 2D sprites exactly those their pixels take
+texels from (draw.cpp's `spriteReach()`, part 47's, the filter's second texel left out where its weight is 0), else
+from the vertices' coordinates. `draw.frag` holds every fetch inside the picture on the GPU, so a weight-0 texel past
+the copy finds the copy's last row, times 0. Midnight Club 3's bloom samples its 480x272 frame buffer as a texture
+512 rows tall whose last rows are other frame buffers': taken from the vertices, the copy reached those, which
+`holds()` refuses, and the GPU finished every frame to decode it from memory (part 52: 300 finishes in 300 frames,
+then 5). Where that isn't known (3D), a texture wider than the target's row has only the columns inside the
 row copied; on the PSP the columns past it are the next rows' first pixels, so such a texture is approximate past the
 row (Midnight Club 3 declares 256-wide textures over 64-pixel frame buffers, and samples only the 64). Rows of the
 target the GPU hasn't drawn are filled from memory before the copy.
@@ -210,6 +223,14 @@ GPU once and keeps it while the GE keeps the copy (a weak pointer: once the GE l
 at the next submit or finish), and again when the GE's copy grows more rows. So texture decoding stays one piece of
 CPU code for both renderers, and its caching and invalidation are the GE's, measured since part 24. Textures from
 render targets are the copies above.
+
+**Written beside** (part 52): a decoded texture whose page is written isn't thrown away at once. It keeps a copy of
+the bytes it was decoded from (where they're side by side in the host's memory and no more than its texels), and
+before it's next drawn with those bytes are compared: kept, watched again, where they're the same (the write was
+beside it in the same 4 KiB, or wrote the same bytes); decoded afresh where they aren't, or where the PRIM takes fewer
+rows than it has. A decode depends only on those bytes, the key and the palette, so it's exact (the software
+renderer's pictures and state are unchanged). Midnight Club 3's race decoded 25 RAM textures again every frame (8,249
+textures in 300 frames, the GPU making and destroying an image for each): 520 now.
 
 Not yet: decoding on the GPU (palettes and swizzling in a shader), which would also cover textures in a target in a
 format the target isn't (a palette's indices drawn by the GE, rare).
@@ -280,7 +301,8 @@ images allow (a target 512 of the PSP's pixels across, so 10 on both test GPUs).
   pixels within half a PSP pixel of an edge sampled up to half a texel beyond it before: Ridge
   Racer 2's menu draws its picture as two quads meeting at x = 240, the right one mirroring the left, and the filter
   blended the texel past the picture into a one-pixel line down the middle (`gpuSeams`). At 1x nothing changes. A
-  2D sprite's stepped coordinates aren't held (none seen bleeding).
+  2D sprite's stepped coordinates aren't held, but since part 52 every fetch is held inside the picture on the GPU,
+  so a sprite's edge pixels above 1x that step past the rows or columns copied read the last of them.
 
 The shown picture, read back (where it isn't presented): the screen is made `MostShown` (4) times the PSP's size
 at most, and the picture is read back at the renderer's scale and copied (nearest) into it. That's the desktop's
@@ -524,6 +546,36 @@ The pictures look the same to the eye in the scenes measured; nothing is missing
 
 ## Speed
 
+**Part 52** (the Vulkan renderer's own waste, both modes): profiled on the RP6 (simpleperf, call graphs, Turnip),
+Midnight Club 3's race spent 26.4 ms a frame on the emulation thread with Vulkan against 17.8 with seven software
+threads: `own()` telling memory of every PRIM's rectangle (2.7 ms), the bloom's finish every frame (a 2.7 ms wait,
+the read-back's narrowing, the targets filled again, a 1 MB texture decoded and uploaded), 25 textures decoded again
+every frame and their images made and destroyed (about 2.6 ms), and pipelines made in the run's first frames (2.5 ms
+a frame over 300). The fixes are above ("Submitting", "Render to texture", "The texture cache"); pictures are byte
+for byte the same (the six scenes, 10 frames each, before and after, on the M1; the software renderer's every frame
+and state, at 1 and 7 threads). The runner from adb's shell reads the shown frame back each frame and waits for the
+GPU; the app presents and doesn't, and its emulation thread is pinned to the prime core, which adb's shell can't
+do: there the waits let the scheduler move the thread to slower cores at lower clocks. So the runner's
+`--late-frames` (System's "Late Frames") takes each frame's picture as a shot on the GPU, a few frames late, and
+nothing waits a frame: the app's way. Medians of three runs, 300 frames, frames a second (the emulation thread's ms a
+frame), Turnip and Qualcomm's own driver:
+
+| Scene | Software 1 / 7 threads | Turnip before | Turnip, read back / late | Qualcomm before | Qualcomm, late |
+|---|---|---|---|---|---|
+| Midnight Club 3, race | 23.6 / 53.2 (18.7) | 34.5 (26.4) | 47.0 / **52.6 (18.8)** | 33.1 (28.6) | **46.9 (21.1)** |
+| Midnight Club 3, menu | 29.9 / 69.2 (13.7) | 49.7 (18.1) | 68.1 / **68.0 (12.8)** | 46.3 (20.0) | **64.0 (14.4)** |
+| Liberty City Stories, city | 38.3 / 71.8 (12.4) | 63.3 (14.4) | 50.1 / **76.3 (11.6)** | 59.9 (15.9) | **75.7 (12.7)** |
+| Liberty City Stories, woods | 38.8 / 70.9 (12.1) | 75.1 (11.7) | 53.1 / **79.0 (10.4)** | 73.9 (12.7) | **94.7 (10.0)** |
+| Peace Walker, title | 66.4 / 224.4 (4.1) | 343.0 (1.9) | 132.4 / **780.7 (1.2)** | 360.0 (2.1) | **670.0 (1.4)** |
+| Lumines, demo | 92.0 / 180.3 (4.7) | 205.7 (3.4) | 199.4 / **508.7 (1.7)** | 198.1 (3.9) | **390.4 (2.2)** |
+| Peace Walker, tutorial play | 79.6 / 98.1 (9.1) | 73.9 (12.2) | 105.8 / **105.8 (8.4)** | 68.0 (13.6) | **93.3 (9.9)** |
+| WipEout Pure, race | 16.5 / 16.2 (51.3) | 18.9 (43.3) | 36.2 / **36.2 (22.0)** | 21.0 (39.3) | **60.9 (14.5)** |
+
+Read back each frame (the desktop's way, and the runner's before), Turnip's LCS scenes and Peace Walker's title come
+out slower than before (the CPU idles at each frame's wait and the scheduler moves it); presented, as the app runs,
+every scene is faster, and Vulkan is level with seven software threads or ahead (WipEout over twice as fast).
+WipEout renders off screen and copies its picture by block transfers, which go through memory: two finishes a frame.
+
 Host frames a second, the same 300 frames from each scene's state (the M1's GPU runs 120): the software renderer on
 1 and 7 drawing threads, then the Vulkan renderer (one thread: the GE's).
 
@@ -674,6 +726,8 @@ software renderer.
    from the GPU, measured in the app with the system and a custom driver.
 3. **Upscaling** (part 44, done): an internal resolution from 1 (exact) to 10 times the PSP's, and presenting the
    target's image on Android's window without reading it back.
+3a. **Speed** (part 52, done): the renderer's own waste found with a profile and cut, both modes; still to do, block
+   transfers on the GPU, a pipeline cache kept on disk, and the CPU's transform (Vulkan (fast), part 53).
 4. **Accuracy**: shader blending (part 45, done: blending, dithering, logic operations, write masks and 16-bit
    formats as the PSP's, on every Vulkan GPU); still to do, depth read back where games need it, block transfers
    between targets on the GPU, textures decoded on the GPU.

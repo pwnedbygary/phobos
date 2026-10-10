@@ -25,6 +25,26 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP Vulkan renderer faster: its own waste, found with a profile — 2026-10-09
+
+Branch `cursor/psp-gpu-fast-2b67`, on top of #184's `cursor/psp-vk-play-2b67`. docs/psp-core.md, part 52, has the
+profile and numbers; docs/psp-gpu-renderers.md the design and the speed table. Original code: nothing of PPSSPP's or
+JPCSP's used. Software stays the default and exact; Vulkan (accurate)'s pictures byte for byte as before.
+- **Fixes** (`ares/psp/ge/gpu/gpu.cpp`, `draw.cpp`, `texture.cpp`, `system.cpp`): memory told of the GPU's drawing
+  once a finish, not once a PRIM (2.7 ms a frame); 2D sprites' exact texture reach for render to texture (Midnight
+  Club 3's bloom: 300 finishes in 300 frames → 5); decoded textures kept when their page is written but their bytes
+  aren't (25 textures a frame decoded again → none; both renderers); lists submitted at their end only with 32
+  commands; "Late Frames" / `--late-frames` to time the GPU as the app presents.
+- **RP6, late frames, medians of three** (fps, Turnip / Qualcomm; Software 7 threads): MC3 race 52.6 / 46.9 (53.2),
+  menu 68.0 / 64.0 (69.2), LCS city 76.3 / 75.7 (71.8), woods 79.0 / 94.7 (70.9), Peace Walker play 105.8 / 93.3
+  (98.1), WipEout 36.2 / 60.9 (16.2). Before: race 34.5 / 33.1, LCS city 63.3 / 59.9, WipEout 18.9 / 21.0.
+- **Checks:** tests/psp 345/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0, GPU tests on the RP6 both
+  drivers; Software's frames and state identical in all seven scenes at 1 and 7 threads. Independent review: fixes
+  taken (release(), lost reports, source copies bounded, ...).
+- **Next:** Vulkan (fast), part 53 (the GPU's transform); block transfers on the GPU; a disk pipeline cache.
+- Scratch: `~/phobos-work/scratch/gpu-fast` (build.sh, speed.sh, rounds.sh, perf.sh, callers.py, texlog-patch.py,
+  warm-patch.py, m1-acc.sh, m1-hashes.sh, quick-tests.sh); RP6 `/data/local/tmp/gpu-fast`. Hold `~/phobos-work/rp6.lock`.
+
 ## PSP Vulkan renderer: in play on the RP6, blending without rasterization order, the 8x line — 2026-10-09
 
 Branch `cursor/psp-vk-play-2b67`, on top of #186's `cursor/psp-hle-games10-2b67` (#183, #182 and #180 under it). PR #184. docs/psp-core.md, part

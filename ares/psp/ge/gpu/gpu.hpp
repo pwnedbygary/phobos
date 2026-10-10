@@ -27,8 +27,8 @@
 //  - Draws: a primitive's vertices go into a list for the GPU, consecutive primitives with the same settings into
 //    one draw; the settings make a pipeline (Pipeline: what the GPU's fixed stages do, and the fragment shader's
 //    specialization constants), which the backend makes once and keeps.
-//What's drawn is handed to the GPU when a list ends (submit(), not waited for) and waited for only when VRAM's
-//pages are needed (finish()).
+//What's drawn is handed to the GPU as it piles up and with each frame shown (submit(), not waited for), and waited for
+//only when VRAM's pages are needed (finish()).
 //
 //The backend (Backend: Vulkan's in vulkan.cpp, OpenGL's to come) only runs what the renderer recorded: it knows
 //nothing of the PSP.
@@ -104,10 +104,11 @@ struct GPU : GE::Renderer {
   //What the backend runs, in order: draws (a state's, count vertices from first), and pictures put into, read from
   //or copied out of a target (a rectangle; uploaded from the renderer's upload bytes, read back to be read() after
   //finish(), copied into a texture's top left for draws after to sample), and the screen's picture presented on the
-  //window the backend shows on (Present: a target's top left, or with no target memory's picture, uploaded). Every
-  //position and size is in the PSP's pixels: the backend has each of them Backend::scale times over.
+  //window the backend shows on (Present: a target's top left, or with no target memory's picture, uploaded), or only
+  //a shot of a target's top left taken for the host, as a Present takes one (Shot). Every position and size is in
+  //the PSP's pixels: the backend has each of them Backend::scale times over.
   struct Command {
-    enum class Kind : u8 { Draw, Upload, Readback, Copy, Present } kind;
+    enum class Kind : u8 { Draw, Upload, Readback, Copy, Present, Shot } kind;
     u32 target;
     u32 state = 0, first = 0, count = 0;  //Draw
     s32 x = 0, y = 0;                     //Upload, Readback, Copy
@@ -189,6 +190,7 @@ struct GPU : GE::Renderer {
     u32 depthBuffer = 0, depthStride = 0, depthRows = 0;
     u32 depthChangedFrom = 0, depthChangedTo = 0;
     s32 left = 0, top = 0, right = -1, bottom = -1;  //drawn since it was last read back
+    std::vector<std::array<s32, 4>> told;  //rectangles memory has heard were drawn over since then (own())
     u64 used = 0;
     u64 version = 0;              //goes up whenever its pixels may change (filled, drawn into)
     //VRAM's bytes (offsets, inclusive) someone reached in its pages while the GPU drew in them, not over what it
@@ -259,6 +261,11 @@ struct GPU : GE::Renderer {
   auto shot(std::vector<u32>& pixels, u32& width, u32& height, u32& format) -> bool {
     return backend && backend->shot(pixels, width, height, format);
   }
+  //A late frame, for a host that shows frames read back but takes them late (System's "Late Frames": the runner
+  //timing the GPU as the app presents, which reads nothing back): the frame buffer as picture() would read it, a
+  //shot of it taken on the GPU at the PSP's size, as show() takes one, with nothing waited for; shot() has it once
+  //its run is done, up to three frames later. False where picture() would be false, or the GPU stopped answering.
+  auto shoot(u32 address, u32 stride, u32 format, u32 width, u32 height) -> bool;
   //Everything on the GPU let go (the targets, the textures and their copies) without a pixel read back: for a
   //machine powered on afresh, whose memory is new.
   auto drop() -> void;
@@ -279,12 +286,14 @@ struct GPU : GE::Renderer {
 
 private:
   static constexpr u32 SubmitEvery = 128;  //commands recorded, handed to the GPU without waiting for the list's end
+  static constexpr u32 SubmitEnough = 32;  //and at a list's end, at least these (submit())
   GE* ge = nullptr;
   Recorded recorded;
   std::vector<std::unique_ptr<Target>> targets;
   Target* target = nullptr;  //the PRIM's
   bool drawing = false;      //the PRIM draws something (begin())
   State state;               //its settings
+  bool stateKept = false;    //and they're the last recorded's (emit())
   u32 filter = 0, shade = 0; //TEXTURE_FILTER, SHADE_MODE
   bool through = false, textured = false;
   u32 textureWidth = 0, textureHeight = 0;
@@ -309,10 +318,12 @@ private:
   //(a PRIM's vertices handed to the GPU, without waiting for its end, once there are this many: a long line's
   //pixels are six each)
   static constexpr u32 MostVertices = 1 << 18;
+  static constexpr u32 MostTold = 8;  //(Target::told's)
 
   auto targetFor(const GE::PixelState& p) -> Target*;
   auto fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts = 1) -> void;
   auto release() -> void;
+  auto flush() -> void;  //(what's recorded handed to the GPU now: submit()'s)
   auto own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;
   auto textureFor(const GE::Look& look, u8& texels, u32& scale) -> u32;
   auto settings(const GE::Look& look) -> void;

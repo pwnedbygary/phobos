@@ -209,6 +209,11 @@ struct GE {
     u32 firstPage = 0, lastPage = 0;  //the pages it came from (Memory::pagesOf())
     std::list<Decoded*>::iterator place;  //where it is in the cache's list, the last used first
     std::vector<u32> texels;  //key.width x rows
+    //The bytes it was decoded from (none where they aren't side by side in the host's memory, or would be more than
+    //its texels', which alone count against the budget), and whether one of their pages was written since
+    //(textureWritten()): looked at again before it's next drawn with
+    std::vector<u8> source;
+    bool suspect = false;
   };
   struct TextureCache {
     std::unordered_map<TextureKey, std::shared_ptr<Decoded>, TextureKey::Hash> entries;
