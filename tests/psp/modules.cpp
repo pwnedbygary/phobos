@@ -491,7 +491,7 @@ static auto linking() -> void {
 //Sony's modules, as early games carry them: encrypted and named "sce..." (here an encrypted one whose tag Phobos has
 //no key for: it isn't even decrypted), a kernel module, and a plain one named "Sce...": each stood in for, an ID and
 //nothing in memory; started and stopped at once (status 0), unloaded. LoadModuleByID reads one from inside a file,
-//from where it's been seeked to.
+//from where it's been seeked to, and refuses a file with an asynchronous request under way.
 static auto standIns() -> void {
   HostFolder stick;
   TestModule sas = libraryModule();
@@ -543,6 +543,14 @@ static auto standIns() -> void {
   uid = m.call("sceKernelLoadModuleByID", {file, 0, 0});
   CHECK(m.kernel.modules.count(uid) && !m.kernel.modules[uid].standIn, true);
   CHECK(m.kernel.modules.count(uid) && m.kernel.modules[uid].module.name == "TESTLIB", true);
+  //a file with an asynchronous read under way: refused, as its own reads are, the read's position left to it
+  m.call("sceIoLseek32", {file, 1000, 0});
+  CHECK(m.call("sceIoReadAsync", {file, 0x0890'0000, 16}), 0);
+  CHECK(m.call("sceKernelLoadModuleByID", {file, 0, 0}), Kernel::ErrorAsyncBusy);
+  m.kernel.cycles = m.kernel.files[file].asyncDoneAt;
+  m.kernel.events();
+  CHECK(m.call("sceIoPollAsync", {file, Results}), 0);
+  CHECK(m.kernel.files[file].position, 1016);
 }
 
 //The module IDs: by address (the program's own, a module's, nowhere), the caller's (from where it called), the list,

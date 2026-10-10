@@ -9,8 +9,10 @@
 games (docs/psp-core.md, part 55). Then part 57 (branch `cursor/psp-ge-lists-2b67`, on #189): Need for Speed - Most
 Wanted 5-1-0 (the GE's RET with no CALL) and MACH (judged again), with the report's black games' causes traced
 (docs/psp-core.md, part 57); and part 58 (branch `cursor/psp-hle-games12-2b67`, on #189): the rows its functions
-changed, run the same way beside the base commit's runner on 35 games (docs/psp-core.md, part 58). The other rows are
-the report's.
+changed, run the same way beside the base commit's runner on 35 games (docs/psp-core.md, part 58); and part 59
+(branch `cursor/psp-hle-games13-2b67`, on #194's `cursor/psp-hle-games12-2b67`): the rows its fixes changed, from the
+whole library run again on the merged stack (parts 57 to 60) and compared with part 59's own run beside the base
+commit's runner (docs/psp-core.md, part 59). The other rows are the report's.
 
 ## Method
 
@@ -46,13 +48,13 @@ game that looked worse was run again without presses on both commits before call
 
 ## Summary
 
-| Category | Before (`b27f084a5`) | Run 1 (#183's tip) | Now | Part 55 | Part 57 | Part 58 | Change since Before |
-|---|---|---|---|---|---|---|---|
-| Menu or gameplay | 141 | 148 | 175 | 178 | 180 | 180 | +39 |
-| Movie | 35 | 43 | 63 | 63 | 63 | 65 | +30 |
-| Stuck loading | 13 | 8 | 5 | 4 | 4 | 4 | -9 |
-| Black or hang | 73 | 64 | 21 | 19 | 17 | 15 | -58 |
-| Timed out | 4 | 3 | 2 | 2 | 2 | 2 | -2 |
+| Category | Before (`b27f084a5`) | Run 1 (#183's tip) | Now | Part 55 | Part 57 | Part 58 | Part 59 | Change since Before |
+|---|---|---|---|---|---|---|---|---|
+| Menu or gameplay | 141 | 148 | 175 | 178 | 180 | 180 | 187 | +46 |
+| Movie | 35 | 43 | 63 | 63 | 63 | 65 | 71 | +36 |
+| Stuck loading | 13 | 8 | 5 | 4 | 4 | 4 | 0 | -13 |
+| Black or hang | 73 | 64 | 21 | 19 | 17 | 15 | 6 | -67 |
+| Timed out | 4 | 3 | 2 | 2 | 2 | 2 | 2 | -2 |
 
 Part 57 moves two rows from black to a menu: Need for Speed - Most Wanted 5-1-0, whose lists the GE had stopped at a
 RET with no CALL (it reaches its title now, on all three renderers), and MACH, judged again with a frame every 300 to
@@ -70,6 +72,18 @@ and for the HD version a program too big for the user partition given all of RAM
 Corpse Party and Sol Trigger keep their menus, now with their music (the ATRAC low level, sceP3da); Genso Suikoden,
 Soulcalibur: Broken Destiny, Tekken 6, Final Fantasy Type-0, Kingdom Hearts Birth by Sleep and Dragon Ball Z: Tenkaichi
 Tag Team no longer stop at a missing function, their frames as before.
+
+Part 59 moves fourteen rows. To a menu or title: Crush (descriptors as small numbers), Dead or Alive - Paradise (an
+asynchronous read's bytes landing as it's done), Def Jam (the drive's activation taking a mount's time), Metal Gear
+Solid - Portable Ops and Portable Ops Plus, MX vs. ATV - On the Edge and Need for Speed - ProStreet (sceIoDread's short
+names by the program's SDK), and PaRappa the Rapper (a SAS grain taking its time). To a movie: Jak and Daxter - The Lost
+Frontier (descriptors), Ridge Racer (its movie ring counted in its library's: its title follows at about 4000), Tekken -
+Dark Resurrection (SysClock2USec's whole count), Valhalla Knights (one asynchronous result at a time), Street Supremacy
+(judged again: a loading screen inside its intro), and Need for Speed - Carbon - Own the City, from its notice to its
+title and, after the run's Cross, its intro (sceIoDread too). On the merged stack, every other game shows at each frame
+the scene part 59's own run showed, but for part 57's and part 58's three rows (Need for Speed - Most Wanted 5-1-0 at
+its title, both Monster Hunter Portable 3rds at their intro movie) and 3D frames a few pixels apart (part 60's
+perspective texels); MACH, judged again in part 59 too, is the menu part 57 found.
 
 In the comparison, gameplay counts as menu and a hang as black, as the last report's categories had them. Against
 the last report, 81 games are further along and 26 rank lower. None of the 26 is a regression left unfixed:
@@ -159,22 +173,18 @@ The last report listed 22 games that had gone from a menu to black (the RP6 show
 | Miami Vice - The Game | black | black | menu | title, Press START (black before: its ring's 12th word over its movie file) |
 | Midnight Club - L.A. Remix | black | movie | menu | title (its attract scene at 3600 before) |
 | Pangya Fantasy Golf [Black Screen Fix] | black | menu | menu | title menu |
-| Ridge Racer | black | black | black | the Pac-Man loading game until frame 3000, then its opening movie (two pictures, at 3100) and black frames after it, drawn every frame on both renderers: one clear a frame (part 57: the image's movies are stubs; cause not found) |
+| Ridge Racer | black | black | movie | the Rally-X loading game until frame 3000, then its opening movie, and its title, PRESS START BUTTON, from about frame 4000 (part 59: its movie thread's copy of the ring counted in the library's ring) |
 | Super Stardust Portable | black | menu | menu | main menu |
 | Toca Race Driver 2 | black | menu | menu | profile select |
 
-19 of the 22 show something now: 15 a menu, a title or a game, 4 a movie (The King of Fighters since part 55's
-sceCcc). Three are still black, each for a reason of its own:
+20 of the 22 show something now (The King of Fighters since part 55's sceCcc, Ridge Racer since part 59's movie
+ring): 15 a menu, a title or a game, 5 a movie. Two are still black, each for a reason of its own:
 - **Black Wolves Saga - Last Hope** reads its install data through CRI's file system: it opens
   `PSP_GAME/INSDIR/INSTALL.DNS`, gives it its PGD key and closes it, over and over (31,000 times by frame 2400). The
   file really is PGD-encrypted, and the kernel can't decrypt PGD yet, so it refuses the key (four more games wait on
   PGD the same way: part 55).
 - **Melodie (Prototype)** asks for one 40 MiB block of user memory, more than a 32 MB PSP gives, and stops when it
   gets nothing: a prototype expecting a 64 MB PSP's memory without saying so in its PARAM.SFO.
-- **Ridge Racer** shows its Pac-Man loading game until frame 3000, then plays its opening movie (two pictures) and
-  draws only black frames after it, every frame, on both renderers. Part 57: the GE draws what it's given, one clear a
-  frame; the image's movies are all 139264-byte stubs (three pictures, no sound), and the movie ends and tears down
-  cleanly; what the game waits for after it is not found yet.
 
 ## Speed distribution
 
@@ -194,12 +204,14 @@ Own the City (10) and Underground Rivals (14), Death Jr. II (17). God of War: Ch
 
 ## Top missing functions
 
-3 of 266 games hit a function not implemented yet since part 58 (12 since part 55; 14 in the report's run), all
-scesupPreAcc, which each calls and goes on from.
+4 of 266 games hit a function not implemented yet on the merged stack (14 in the report's run, 12 after part 55, 3
+after part 58): scesupPreAcc, which each calls and goes on from, and Crush's sceIoGetFdList, which it reaches since
+part 59 and goes on from.
 
 | Games | Function | Which |
 |---|---|---|
 | 3 | `scesupPreAcc 86debd66` | Dissidia 012 - Duodecim Final Fantasy, Dissidia Final Fantasy, Shin Megami Tensei - Persona 3 Portable |
+| 1 | `IoFileMgrForUser 5c2be2cc` (sceIoGetFdList) | Crush (since part 59, which gets it past its boot; it goes on) |
 
 Part 58 added the others the report's run stopped at: scePowerCheckWlanCoexistenceClock (`scePower a85880d0`: Dragon
 Ball Z - Tenkaichi Tag Team, Final Fantasy Type 0, Kingdom Hearts Birth by Sleep, and Monster Hunter Portable 3rd),
@@ -209,34 +221,29 @@ sceHprmRegisterCallback and sceHprmUnregitserCallback (Soulcalibur - Broken Dest
 (`sceRtc e6605bca` and `f2a4afe5`, Tekken 6's minutes and seconds).
 
 In the last report 77 games stopped at a function not implemented yet; part 55 left 12, part 58 three (scesupPreAcc,
-which none is held by). Part 55 added sceCcc (The King of Fighters - Orochi Saga, Genso Suikoden), the thread-local
-storage pools and sceKernelTryLockLwMutex_600 (God Eater 2) and sceKernelExtendThreadStack (Dragon Ball Z: Tenkaichi Tag
-Team); part 58 the functions above. None left leaves a game black.
+which none is held by), part 59 four (Crush's sceIoGetFdList). Part 55 added sceCcc (The King of Fighters - Orochi Saga,
+Genso Suikoden), the thread-local storage pools and sceKernelTryLockLwMutex_600 (God Eater 2) and
+sceKernelExtendThreadStack (Dragon Ball Z: Tenkaichi Tag Team); part 58 the functions above. None left leaves a game
+black.
 
 ## Top remaining blockers
 
-What still stops games, by cause (the per-game table has each game's note; updated for parts 55, 57 and 58):
+What still stops games, by cause (the per-game table has each game's note; updated for parts 55, 57, 58 and 59):
 1. **PGD decryption**, five games: Black Wolves Saga's install data, Dragon Ball Z: Tenkaichi Tag Team (past its
    autosave notice), Shining Blade and Valkyria Chronicles III (`PSP_GAME/INSDIR/DATA.BIN`, through CRI's file system)
    and Naruto Shippuden Ultimate Ninja Impact. Each gives its file's key and, refused, tries again for good. The kernel
    reads unencrypted data but can't decrypt PGD: AMCTRL's cipher isn't described in a source this project uses, and its
    checks need keys not committed (docs/psp-core.md, part 55).
-2. **Libraries the kernel doesn't have yet**: none a game here stops at since part 58 (scesupPreAcc is called and
-   passed over).
-3. **Black screens with the game running and no missing function**, traced in part 57: none of them stuck in the GE
-   now (Need for Speed - Most Wanted 5-1-0, whose lists the GE stopped at a RET with no CALL, reaches its title).
-   Ridge Racer draws a clear a frame after its opening movie (the image's movies are stubs); what it waits for isn't
-   found. The others' causes are the kernel's, each found by the kernel side's parallel branch: Def Jam - Fight for NY
-   (sceUmdActivate taking no time, so a loader thread runs before the semaphore it needs exists), Crush and Jak and
-   Daxter - The Lost Frontier (file descriptors never reused), Dead or Alive - Paradise (an asynchronous read's bytes
-   landing before the request is done), Tekken - Dark Resurrection (sceKernelSysClock2USecWide with no seconds
-   pointer, making its frame limiter wait for good), Valhalla Knights (an asynchronous seek still under way when it
-   looks), PaRappa the Rapper (__sceSasCore taking no time, its sound thread spinning at the top priority).
-4. **Crashes**: Need for Speed - ProStreet (sceIoDread writing the newer 1040-byte private layout into the game's
-   272-byte d_private buffer, over its caller's saved registers; also the kernel side's).
-5. **Stuck loading**: Metal Gear Solid - Portable Ops and Portable Ops Plus, MX vs. ATV - On the Edge, Street Supremacy
-   (a map loading screen, after the run's presses).
-6. **Too slow to judge**: God of War: Chains of Olympus and Ghost of Sparta.
+2. **Libraries the kernel doesn't have yet**: none a game here stops at since part 58 (scesupPreAcc, and Crush's
+   sceIoGetFdList since part 59, are called and passed over).
+3. **Black screens with the game running and no missing function**: none of the report's list is left. Part 57
+   found Need for Speed - Most Wanted 5-1-0's in the GE (a RET with no CALL taken as its list's end) and traced the
+   others, all but Ridge Racer, to the kernel; part 59 fixed each of those and found Ridge Racer's (its movie thread's
+   copy of the ring), docs/psp-core.md.
+4. **Crashes**: none left (Need for Speed - ProStreet's was sceIoDread writing over its stack, part 59).
+5. **Stuck loading**: none left (part 59).
+6. **Too slow to judge**: God of War: Chains of Olympus (the GE flushing all its drawing at each block transfer: the
+   GE's part) and Ghost of Sparta (opening a PGD file 3,000 times a frame, refused: PGD's part).
 7. **Memory**: Melodie (Prototype) asks at run time for a 40 MiB block, which a PSP-2000 refuses too. (Monster Hunter
    Portable 3rd HD's 26.5 MiB program, made for the PS3, gets all of RAM since part 58, as any program bigger than the
    user partition does.)
@@ -313,17 +320,17 @@ and now, and what the last frames showed or why a game stops.
 | Crazy Taxi - Fare Wars | ULUS10273 | 299 | menu | menu | menu | title |
 | Crimson Gem Saga | ULUS10400 | 129 | menu | menu | menu | system data notice |
 | Crisis Core - Final Fantasy VII | ULUS10336 | 138 | black | black | menu | title menu |
-| Crush | ULUS10238 | 154 | black | black | black | black throughout (11.7 fps) (part 57: not the GE; file descriptors never reused corrupt a read, then a memcpy runs over all of RAM, the crash at 730: the kernel side's) |
+| Crush | ULUS10238 | 70 | black | black | menu | Sega logo, then its title, Press START (part 59: descriptors are small numbers now; it counted bytes per descriptor in a table of 16, and its file numbered 35 counted into the data it had read, the CPU stopping in a call into the program at frame 730) |
 | Cube | ULUS10223 | 121 | menu | menu | menu | title menu |
 | Dante's Inferno | ULUS10469 | 50 | black | black | menu | title |
 | Darkstalkers Chronicle - The Chaos Tower | ULUS10005 | 190 | menu | menu | menu | no save data prompt |
 | Daxter | UCUS98618 | 84 | menu | movie | movie | title menu at 1200, cutscene after Cross |
 | Dead Head Fred | ULUS10288 | 165 | loading | movie | menu | main menu (publisher logos before) |
-| Dead or Alive - Paradise | ULUS10521 | 683 | black | black | black | black throughout (part 57: not the GE; an asynchronous read's bytes land before the request is done, so it's re-issued for good: the kernel side's) |
+| Dead or Alive - Paradise | ULUS10521 | 123 | black | black | menu | its logos, save prompts and title, PRESS START (part 59: an asynchronous read's bytes land as it's done; finding its marker still there, it read the same data again for good) |
 | Dead to Rights - Reckoning | ULUS10023 | 188 | menu | menu | menu | profile prompt |
 | Death Jr. | ULUS10027 | 39 | black | black | menu | title, Press START (black after its 3D intro before) |
 | Death Jr. II - Root of Evil | ULUS10157 | 17 | black | black | menu | main menu (black after the legal screen before) |
-| Def Jam - Fight for NY - The Takeover | ULUS10100 | 725 | black | black | black | black throughout (part 57: not the GE; a loader thread runs before the semaphore it needs exists, sceUmdActivate taking no time: the kernel side's) |
+| Def Jam - Fight for NY - The Takeover | ULUS10100 | 161 | black | black | menu | logos, autosave warning and title, Press START button (part 59: activating the drive takes a mount's time; its loader thread ran before the semaphore it waits on was made); its first save asks to go on without saving |
 | Dirt 2 (En,Fr,Es) | ULUS10471 | 251 | menu | menu | menu | "create save file" prompt |
 | Disaster Report 3 [English] | ULJS00191 | 105 | black | black | menu | main menu (the title dim at 3600 before) |
 | Disgaea - Afternoon of Darkness | ULUS10308 | 302 | menu | menu | menu | title menu |
@@ -377,7 +384,7 @@ and now, and what the last frames showed or why a game stops.
 | Hot Wheels - Ultimate Racing | ULUS10239 | 174 | menu | menu | menu | title |
 | IL-2 Sturmovik - Birds of Prey | ULUS10476 | 459 | menu | movie | movie | intro |
 | Innocent Life - A Futuristic Harvest Moon | ULUS10219 | 601 | menu | menu | menu | title, press start |
-| Jak and Daxter - The Lost Frontier | UCUS98634 | 39 | black | black | black | black throughout (29 fps) (part 57: the GE never gets a list; an LBN file opened and closed for good, the descriptors climbing: the kernel side's) |
+| Jak and Daxter - The Lost Frontier | UCUS98634 | 289 | black | black | movie | SCE and Naughty Dog notices, then its 3D intro cutscene (part 59: small descriptors; it opened and closed one file 87,000 times in its first 200 frames) |
 | Jeanne d'Arc | UCUS98700 | 172 | menu | menu | menu | title menu |
 | Juiced - Eliminator | ULUS10090 | 254 | loading | black | movie | loading screen, THQ movie, then the intro movie |
 | Juiced 2 - Hot Import Nights | ULUS10312 | 123 | black | timeout | movie | intro and a 3D club scene (159 fps) |
@@ -413,8 +420,8 @@ and now, and what the last frames showed or why a game stops.
 | Metal Gear Acid 2 | ULUS10077 | 789 | movie | movie | movie | intro art |
 | Metal Gear Solid - Digital Graphic Novel | ULUS10108 | 260 | black | movie | movie | intro |
 | Metal Gear Solid - Peace Walker [v2.00] | ULUS10509 | 201 | movie | movie | movie | opening quote |
-| Metal Gear Solid - Portable Ops | ULUS10202 | 759 | movie | loading | loading | loading icon |
-| Metal Gear Solid - Portable Ops Plus | ULUS10290 | 465 | movie | loading | loading | loading icon |
+| Metal Gear Solid - Portable Ops | ULUS10202 | 545 | movie | loading | menu | intro, then PRESS START BUTTON (part 59: sceIoDread's short names laid out by its SDK) |
+| Metal Gear Solid - Portable Ops Plus | ULUS10290 | 431 | movie | loading | menu | intro, then PRESS START BUTTON (part 59: sceIoDread's short names laid out by its SDK) |
 | Metal Slug Anthology | ULUS10154 | 209 | menu | menu | menu | game menu |
 | Metal Slug XX | ULUS10495 | 366 | menu | menu | menu | main menu |
 | Miami Vice - The Game | ULUS10109 | 77 | black | black | menu | title, Press START (black before: its ring's 12th word over its movie file) |
@@ -427,20 +434,20 @@ and now, and what the last frames showed or why a game stops.
 | Monster Kingdom Jewel Summoner | ULUS10211 | 53 | menu | movie | movie | intro |
 | Moto GP | ULUS10153 | 325 | menu | menu | menu | new save prompt |
 | MotorStorm - Arctic Edge | UCUS98743 | 185 | black | black | movie | its intro, a 3D scene (black after the notice before) |
-| MX vs. ATV - On the Edge | ULUS10071 | 1249 | loading | loading | loading | LOADING throughout |
+| MX vs. ATV - On the Edge | ULUS10071 | 162 | loading | loading | menu | THQ and Tantalus logos, then "Press START button to begin" (part 59: sceIoDread's short names laid out by its SDK) |
 | MX vs. ATV Reflex | ULUS10429 | 236 | loading | black | movie | publisher logos (a blank white screen at 3600 before) |
 | MX vs. ATV Untamed | ULUS10330 | 178 | black | black | menu | title, PRESS START (black after its logo before: its movie never ended) |
 | Naruto Shippuden Ultimate Ninja Impact | ULUS10582 | 1226 | black | black | black | black throughout: its data is PGD-encrypted, refused and tried again for good (part 55's trace) |
-| Need for Speed - Carbon - Own the City | ULUS10114 | 10 | menu | menu | menu | notice over the title (12 fps) |
+| Need for Speed - Carbon - Own the City | ULUS10114 | 63 | menu | menu | movie | notice, then its title, Press START button, from frame 900, and its intro after the run's Cross (part 59: sceIoDread's short names laid out by its SDK; it had sat on its notice at 12 fps) |
 | Need for Speed - Most Wanted - 5-1-0 | ULUS10036 | 19 | black | black | menu | title art, its safe driving notice and intro movie (on Software, with a frame every 300), then its title, "Press START button", from 2100, on all three renderers (part 57: the GE stopped its frame list at a RET with no CALL before, and its main thread waited in sceGeDrawSync for good) |
-| Need for Speed - ProStreet | ULUS10331 | 514 | menu | hang | hang | notice, then the CPU stopped in user_main (part 57: sceIoDread writes the newer 1040-byte private layout into its 272-byte d_private buffer, over its caller's saved registers: the kernel side's) |
+| Need for Speed - ProStreet | ULUS10331 | 52 | menu | hang | menu | notice, EA logo and title, then its main menu after Cross (part 59: sceIoDread had written the newer layout over its stack, and it returned to address 0) |
 | Need for Speed - Shift | ULUS10462 | 45 | menu | menu | menu | title, press start |
 | Need for Speed - Underground Rivals | ULUS10007 | 14 | menu | black | gameplay | autosave prompt, then a night race after Cross (black at 3600 before) |
 | OutRun 2006 - Coast 2 Coast | ULUS10064 | 103 | menu | menu | menu | memory stick notice; sceUsbStart missing |
 | PAC-MAN CE | NPUZ00125 | 127 | menu | menu | menu | autosave notice |
 | Pac-Man World Rally | ULUS10149 | 335 | menu | menu | menu | no save file warning |
 | Pangya Fantasy Golf [Black Screen Fix] | ULUS10438 | 157 | black | menu | menu | title menu |
-| PaRappa the Rapper | UCUS98702 | 57 | menu | black | black | black throughout (also at the earlier report's commit) (part 57: the GE never gets a list; __sceSasCore takes no time, so its sound thread spins at the top priority before its channels are reserved: the kernel side's) |
+| PaRappa the Rapper | UCUS98702 | 540 | menu | black | menu | logos, then its title, START / MENU (part 59: __sceSasCore waits for its grain; its top-priority sound thread had spun for good before the game reserved its channels) |
 | Parodius Portable | ULJM05220 | 332 | menu | menu | menu | title, press start |
 | Patapon | UCUS98711 | 819 | menu | menu | menu | title menu |
 | Patapon 2 | UCUS98732 | 1130 | menu | menu | menu | system data prompts (every thread waiting at boot before: the stick callback and a semaphore) |
@@ -456,7 +463,7 @@ and now, and what the last frames showed or why a game stops.
 | Ratchet & Clank - Size Matters | UCUS98633 | 347 | menu | menu | menu | title, press start |
 | Resistance - Retribution | UCUS98668 | 239 | menu | menu | menu | title, press start |
 | Retro City Rampage DX (Europe) | NPEH00170 | 521 | menu | menu | menu | title, press start |
-| Ridge Racer | ULUS10001 | 429 | black | black | black | the Pac-Man loading game until frame 3000, then its opening movie (two pictures, at 3100) and black frames after it, drawn every frame on both renderers: one clear a frame (part 57: the image's movies are stubs; cause not found) |
+| Ridge Racer | ULUS10001 | 348 | black | black | movie | the Rally-X loading game until frame 3000, then its opening movie (at 3600), and its title, PRESS START BUTTON, from about frame 4000 (part 59: its movie thread's copy of the ring is counted in the library's ring; counted in itself, the movie ended three pictures in and the game drew black for good) |
 | Ridge Racer 2 | UCES00422 | 439 | movie | movie | movie | attract movie |
 | Riviera - The Promised Land | ULUS10286 | 206 | menu | movie | movie | intro |
 | Samurai Dou Portable [English] | ULJS00155 | 546 | movie | movie | movie | intro |
@@ -496,7 +503,7 @@ and now, and what the last frames showed or why a game stops.
 | Star Wars - The Force Unleashed | ULUS10345 | 80 | menu | movie | movie | intro |
 | Street Fighter 3 - 3rd Strike [Port] | UCJS10041 | 390 | menu | menu | menu | character select |
 | Street Fighter Alpha 3 Max | ULUS10062 | 164 | menu | menu | menu | auto-load prompt |
-| Street Supremacy | ULES00239 | 389 | menu | black | loading | map loading screen (black after Cross before) |
+| Street Supremacy | ULES00239 | 153 | menu | black | movie | Konami and Genki logos and its notices, then its intro: a map loading screen at 3600 inside it, a map with video at 4200 (judged again in part 59: not stuck) |
 | Super Moneky Ball Adventures | ULES00364 | 8 | menu | menu | menu | title, press start (12 fps) |
 | Super Stardust Portable | NPUG80221 | 66 | black | menu | menu | main menu |
 | Syphon Filter - Dark Mirror | UCUS98641 | 100 | menu | menu | menu | profile name entry |
@@ -506,7 +513,7 @@ and now, and what the last frames showed or why a game stops.
 | Tales of Phantasia Full Voice Edition [English v1.2][QoL] | ULJS00079 | 488 | black | black | movie | anime intro |
 | Tales of Phantasia X [English v1.2] | ULJS00293 | 468 | black | black | movie | anime intro |
 | Tales Of The World - Radiant Mythology 2 [English 31-08] | ULJS00175 | 114 | movie | movie | movie | intro |
-| Tekken - Dark Resurrection | ULUS10139 | 666 | black | black | black | autosave notice, then black (part 57: the GE gets nothing after the logo; its frame limiter waits for good, sceKernelSysClock2USecWide given no seconds pointer, so its intro movie never starts: the kernel side's) |
+| Tekken - Dark Resurrection | ULUS10139 | 186 | black | black | movie | autosave notice, then its intro movie (part 59: sceKernelSysClock2USecWide with no seconds pointer gives the whole count; split, its frame limiter's rate came out infinite) |
 | Tekken 6 | ULUS10466 | 299 | black | black | movie | intro (sceRtcTickAddSeconds and Minutes, missing before, since part 58) |
 | Tenchu - Shadow Assassins | ULUS10419 | 385 | movie | movie | movie | intro |
 | Tenchu - Time of the Assassins [UNDUB v1.5c] | ULES00277 | 515 | movie | movie | movie | intro |
@@ -525,7 +532,7 @@ and now, and what the last frames showed or why a game stops.
 | Twisted Metal Head On | UCUS98601 | 70 | menu | menu | menu | title, press X |
 | Ultimate Ghosts 'n Goblins | ULUS10105 | 335 | menu | movie | movie | story text, then a stage scene |
 | Umineko no Nakukoro ni Portable [English v1.0] | ULJM05968 | 205 | menu | black | menu | title menu |
-| Valhalla Knights | ULUS10230 | 682 | menu | black | black | black throughout (idle) (part 57: a clear and a fade a frame; it seeks its first file over and over, the asynchronous seek still under way when it looks: the kernel side's) |
+| Valhalla Knights | ULUS10230 | 373 | menu | black | movie | autosave notice, XSEED and Marvelous logos, then its intro (part 59: a file holds one asynchronous result at a time; its seek, made again over the first's result not taken, had been under way again at each poll, for good) |
 | Valhalla Knights 2 | ULUS10366 | 416 | menu | menu | movie | intro |
 | Valkyria Chronicles II | ULUS10515 | 278 | loading | menu | menu | autosave notices |
 | Valkyria Chronicles III [English v1.0.8] | ULJM05957 | 546 | black | black | black | black throughout: PSP_GAME/INSDIR/DATA.BIN is PGD-encrypted, refused and tried again for good, as Shining Blade's (part 55's trace) |

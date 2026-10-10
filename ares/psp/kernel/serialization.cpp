@@ -770,10 +770,12 @@ auto Kernel::serialize(serializer& s) -> bool {
   }
 
   //open files and folders. Nothing on the disc is open for writing (openOnDisc() refuses it), and a folder on the
-  //disc keeps each of its names' entries, one for one: reading the folder hands out both. Files are numbered counting
-  //up from nextFile, as IDs are. An asynchronous request is on a file, not a folder, its state one there is, and one
-  //under way is due within the longest any request can take (64 MiB, the most of the program's memory one can move,
-  //from the disc: under a minute), nor overdue by a frame; a descriptor kept for a result alone has one to give.
+  //disc keeps each of its names' entries, one for one: reading the folder hands out both. Files are numbered from 3:
+  //newFile() hands out those below MostFiles, but a state of a layout before 22, which counted numbers up for good
+  //(their count is passed over), keeps the ones its files had, short of 2^31, as do states saved after it. An
+  //asynchronous request is on a file, not a folder, its state one there is, and one under way is due within the
+  //longest any request can take (64 MiB, the most of the program's memory one can move, from the disc: under a
+  //minute), nor overdue by a frame; a descriptor kept for a result alone has one to give.
   auto entry = [&](Disc::Entry& e) { text(e.name); s(e.sector); s(e.size); s(e.folder); s(e.date); };
   u64 longest = asyncDuration(true, 64_MiB);
   map(files, [&](OpenFile& open) {
@@ -785,6 +787,18 @@ auto Kernel::serialize(serializer& s) -> bool {
     vector(open.discEntries, entry);
     s(open.async); s(open.asyncDoneAt); s(open.asyncResult); s(open.asyncCallback); s(open.asyncArgument);
     s(open.resultOnly);
+    //a read under way, its bytes to come (layout 22 on; older layouts moved them as it was made): as many as its
+    //result counts, of a file opened to read, from where it was then, into the program's memory
+    if(s.reading() && stateLayout < 22) open.asyncData = 0, open.asyncFrom = 0;
+    else s(open.asyncData), s(open.asyncFrom);
+    if(open.asyncData) {
+      u64 unit = open.sectors ? Disc::SectorSize : 1;
+      check(open.async == OpenFile::Async::Pending && (open.flags & OpenRead));
+      check(open.asyncResult && open.asyncResult <= 64_MiB / unit);
+      check(memory.reaches(open.asyncData, u32(open.asyncResult * unit)));
+      check(open.asyncFrom <= open.position && open.position - open.asyncFrom == open.asyncResult);
+      check(!open.onDisc || open.position <= open.size);
+    }
     check(!open.onDisc || !(open.flags & OpenWrite));
     check(!open.onDisc || !open.folder || open.discEntries.size() == open.entries.size());
     check(open.async <= OpenFile::Async::Done && open.asyncCallback < nextUID);
@@ -795,9 +809,11 @@ auto Kernel::serialize(serializer& s) -> bool {
       check(due > cycles ? due - cycles <= longest : cycles - due < VblankCycles);
     }
   });
-  s(nextFile);
-  check(nextFile >= 3 && nextFile <= LastUID + 1);  //after standard input, output and error; short of 2^31
-  if(s.reading()) for(auto& [file, open] : files) check(file < nextFile);
+  if(s.reading() && stateLayout < 22) {
+    u32 counted = 0;
+    s(counted);
+  }
+  for(auto& [file, open] : files) check(file >= 3 && file <= LastUID);
   //a thread waiting on a file's request waits on a file whose request is under way: only its end wakes it. (One
   //made ready to run its callbacks, or running them with its wait put aside, ends that wait as it finds the file
   //once they're done, whatever has become of it: resumeWait().)
@@ -839,13 +855,13 @@ auto Kernel::serialize(serializer& s) -> bool {
 
   //the movie player (psmfplayer.cpp): its status (none, 1, 2, 4, 0x200) and settings (a priority Create takes, a
   //pixel format and play mode as they're set); its movie, with a status from 2 on, none before (the descriptor it's
-  //read through, a file number handed out: one dropped above, its file gone from the host, ends the movie early as
-  //its reads fail; where the PSMF begins in its file; its header, as long as its program stream's offset says);
-  //where reading is (within the program stream); the streams' data read and not yet taken (no more than the player
-  //holds) with their time stamps (inside them, in order); the pictures decoded (three at most) and the one shown
-  //(4:2:0 of their sizes, up to VideoDecoder::MaxSide each way); the start-up, pacing and end; the last sound frame
-  //decoded (of a frame's size, less its header). The decoders aren't saved: made afresh, the sound's is primed with
-  //that frame, the pictures' passes over pictures until one it can start from.
+  //read through, a file's number: one dropped above, its file gone from the host, ends the movie early as its reads
+  //fail, its number kept from other files meanwhile; where the PSMF begins in its file; its header, as long as its
+  //program stream's offset says); where reading is (within the program stream); the streams' data read and not yet
+  //taken (no more than the player holds) with their time stamps (inside them, in order); the pictures decoded (three
+  //at most) and the one shown (4:2:0 of their sizes, up to VideoDecoder::MaxSide each way); the start-up, pacing and
+  //end; the last sound frame decoded (of a frame's size, less its header). The decoders aren't saved: made afresh,
+  //the sound's is primed with that frame, the pictures' passes over pictures until one it can start from.
   auto& p = psmfPlayer;
   auto stamps = [&](std::vector<std::pair<u32, u64>>& items, const std::vector<u8>& data) {
     vector(items, [&](std::pair<u32, u64>& stamp) { s(stamp.first); s(stamp.second); });
@@ -879,7 +895,8 @@ auto Kernel::serialize(serializer& s) -> bool {
   check(p.status == 0 || p.status == 1 || p.status == 2 || p.status == 4 || p.status == 0x200);
   check(!p.status || (p.priority >= 16 && p.priority <= 109));
   check(p.pixelFormat <= 3 && p.mode >= 0 && p.mode <= 5 && (!p.ending || p.status == 4));
-  check(p.file < nextFile && (p.status >= 2) == (p.file != 0) && (p.status >= 2) == !p.header.empty());
+  check((p.status >= 2) == (p.file != 0) && (p.status >= 2) == !p.header.empty());
+  check(!p.file || (p.file >= 3 && p.file <= LastUID));
   check(p.video.size() <= 2 * 4_MiB && p.audio.size() <= 2 * 4_MiB && p.pictures.size() <= 3);
   check(p.soundLast.size() <= 0x840 - 8 && !(p.soundLast.size() % 8) && (p.audioID >= -1 && p.audioID <= 0xff));
   if(!p.header.empty()) {

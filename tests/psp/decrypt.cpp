@@ -271,7 +271,7 @@ static auto pauth() -> void {
     CHECK(plain == data, true);
     CHECK(m.notes.size(), 0);
   }
-  auto refused = [&](const std::vector<u8>& file, const u8* given, u32 size, u32 keyAt = Key) {
+  auto refused = [&](const std::vector<u8>& file, const u8* given, u32 size, u32 keyAt = KernelMachine::Results + 0x10) {
     KernelMachine m;
     m.system.memory.copyIn(Buffer, file.data(), file.size());
     m.system.memory.copyIn(Key, given, 16);

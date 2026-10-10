@@ -938,6 +938,35 @@ static auto mpegRingOwnLibrary() -> void {
   }
 }
 
+//A ring's free packets are counted in the ring its library reads, through the library the ring names: a copy of the
+//ring (a thread's start argument, as Ridge Racer's movie thread has it) follows the ring as it fills and empties,
+//itself untouched. A ring no library was made with counts its own. Once the library is deleted, a ring naming it is
+//refused (avail's "Deleted mpeg"); made again, it counts again.
+static auto mpegRingbufferCopy() -> void {
+  KernelMachine m;
+  feedingSetUp(m, 64, {});
+  constexpr u32 Copy = R + 0x200, Other = R + 0x300;
+  for(u32 n = 0; n < 48; n += 4) m.system.memory.write(4, Copy + n, word(m, Ring + n));
+  CHECK(m.call("sceMpegRingbufferAvailableSize", {Copy}), 64);
+  m.system.memory.write(4, Ring + 12, 5);
+  CHECK(m.call("sceMpegRingbufferAvailableSize", {Ring}), 59);
+  CHECK(m.call("sceMpegRingbufferAvailableSize", {Copy}), 59);
+  m.system.memory.write(4, Ring + 12, 64);
+  CHECK(m.call("sceMpegRingbufferAvailableSize", {Copy}), 0);
+  CHECK(word(m, Copy + 12), 0);
+  CHECK(m.call("sceMpegRingbufferConstruct", {Other, 16, RingData, 16 * 0x868, CallbackCode, Place}), 0);
+  m.system.memory.write(4, Other + 12, 3);
+  CHECK(m.call("sceMpegRingbufferAvailableSize", {Other}), 13);
+  CHECK(m.call("sceMpegDelete", {Handle}), 0);
+  CHECK(m.call("sceMpegRingbufferAvailableSize", {Ring}), 0x8061'8009);
+  CHECK(m.call("sceMpegRingbufferAvailableSize", {Copy}), 0x8061'8009);
+  CHECK(m.call("sceMpegRingbufferAvailableSize", {Other}), 13);
+  CHECK(m.call("sceMpegCreate", {Handle, Library, 0x10000, Ring, 512, 0, 0}), 0);
+  CHECK(m.call("sceMpegRingbufferAvailableSize", {Copy}), 0);
+  CHECK(m.notes.size(), 0);
+  CHECK(roundTrip(m), true);
+}
+
 //The callback runs with the global pointer of Put's caller, not the word after a ring of pspsdk's 44 bytes (here
 //someone else's, written after the ring was made). On both engines.
 static auto mpegCallbackGlobalPointer() -> void {
@@ -1802,6 +1831,7 @@ auto mediaTests() -> Tests {
           {"mpeg ringbuffer callback states", mpegCallbackStates},
           {"mpeg ringbuffer that isn't one given nothing", mpegRingbufferNotARing},
           {"mpeg ringbuffer with the game's own library", mpegRingOwnLibrary},
+          {"mpeg ringbuffer's free packets counted in its library's", mpegRingbufferCopy},
           {"mpeg ringbuffer callback with the caller's global pointer", mpegCallbackGlobalPointer},
           {"mpeg ringbuffer callback giving more than asked", mpegCallbackGivesMore},
           {"mpeg ringbuffer callback returning an error", mpegCallbackError},

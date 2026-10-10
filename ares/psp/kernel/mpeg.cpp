@@ -24,7 +24,7 @@
 //Decoding waits a moment (MpegDecodeMicroseconds), as atrac.cpp's does.
 
 namespace {
-  constexpr u32 MpegErrorValue = 0x8061'0022, MpegErrorNoData = 0x8061'8001;
+  constexpr u32 MpegErrorValue = 0x8061'0022, MpegErrorNoData = 0x8061'8001, MpegErrorLibrary = 0x8061'8009;
   constexpr u32 RingbufferPacketMemory = 0x868, PacketSize = 2048;
   //A ringbuffer's fields (SceMpegRingbuffer2 in video/mpeg's shared.h): its packets, the next to read and to write
   //(places in the ring, from 0), how many hold data, the packets' memory, the callback and its argument, and the
@@ -185,13 +185,28 @@ auto Kernel::sceMpegRingbufferConstruct() -> void {
 auto Kernel::sceMpegRingbufferDestruct() -> void { result(0); }
 
 //(ringbuffer): its free packets: those that don't hold data (video/mpeg/ringbuffer/avail: 512 packets with 1 holding
-//data have 511 free).
+//data have 511 free). They're counted through the library the ring names, in the ring that library reads (the one
+//it was made with): avail's PSP crashed for a ring with no library yet, and refused one whose library had been
+//deleted (0x80618009: sceMpegDelete()). So a copy of the ring counts what the ring holds now. Ridge Racer starts its
+//movie thread with one (its start argument, copied onto the thread's stack) and ends the movie once its reader has
+//given it all and the copy shows every packet free; counted in the copy itself, its movie ended three pictures in,
+//and the game, which goes on to its title only after 30 frames of a movie, waited for good. Chosen (avail's PSP
+//crashed): a ring with no library yet counts its own.
 auto Kernel::sceMpegRingbufferAvailableSize() -> void {
-  if(!memory.reaches(arg(0), 16)) return result(ErrorInvalidPointer);
-  result(memory.read(4, arg(0) + RingPackets) - memory.read(4, arg(0) + RingFilled));
+  u32 ringbuffer = arg(0);
+  if(!memory.reaches(ringbuffer, 16)) return result(ErrorInvalidPointer);
+  if(u32 library = memory.reaches(ringbuffer, 44) ? memory.read(4, ringbuffer + RingLibrary) : 0) {
+    if(!memory.reaches(library, LibraryState) || memory.readString(library, 8) != "LIBMPEG") {
+      return result(MpegErrorLibrary);
+    }
+    u32 read = memory.read(4, library + LibraryRingbuffer);
+    if(memory.reaches(read, 16)) ringbuffer = read;
+  }
+  result(memory.read(4, ringbuffer + RingPackets) - memory.read(4, ringbuffer + RingFilled));
 }
 
-//(ringbuffer, packets, available): the ringbuffer fed, as video/mpeg/basic recorded. Its callback is asked for
+//(ringbuffer, packets, available): the ringbuffer fed, as video/mpeg/basic recorded (the ring given, which basic's is
+//its library's own: what a copy fed would do isn't recorded, nor seen in a game). Its callback is asked for
 //packets (where they go, how many, its argument): as many as asked for, no more than available and free, a run at a
 //time that stops at the ring's end; and asked again for what's left as long as it gives some (at its file's end
 //basic's gave 9 of 24, and was asked for the other 15), but not once it has given packets past the movie's end
@@ -347,9 +362,15 @@ auto Kernel::sceMpegCreate() -> void {
   result(0);
 }
 
-//(handle): what the Media Engine held for the library goes.
+//(handle): what the Media Engine held for the library goes, and the library is no longer one: its signature is
+//cleared (chosen), as a ring naming it is then refused by sceMpegRingbufferAvailableSize (video/mpeg/ringbuffer/
+//avail's "Deleted mpeg": 0x80618009, after the library was deleted and its memory freed, the ring's library word
+//still set, as the PSP didn't crash). sceMpegCreate makes one there again.
 auto Kernel::sceMpegDelete() -> void {
-  if(u32 library = mpegLibrary(arg(0))) mpegStreams.erase(library);
+  if(u32 library = mpegLibrary(arg(0))) {
+    mpegStreams.erase(library);
+    memory.write(4, library, 0);
+  }
   result(0);
 }
 

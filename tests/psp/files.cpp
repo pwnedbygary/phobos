@@ -164,25 +164,68 @@ static auto fileContainment() -> void {
   CHECK(inward >= 3 && inward < 0x8000'0000, true);
 }
 
-//A directory entry's private part, when the program asks for it: the short 8.3 name in capitals, and the long name.
+//A directory entry's private part, when the program asks for it: the short 8.3 name in capitals, and the long name,
+//laid out by the program's SDK version as io/shortname recorded. With none (as homebrew gives), or 0x03070010 (Need
+//for Speed: ProStreet's), the short name in 13 bytes and the long name right after it, nothing past its end (the
+//program's first word written over, whatever it declared); with 0x06060010, the declared size (0x414) kept, the
+//short name 4 bytes in and the long name 20 in, and nothing at all when the size declared is smaller. A folder's
+//"." and ".." have themselves for both names.
 static auto fileShortNames() -> void {
   HostFolder folder;
   folder.put("Verylongname.extension", "");
   folder.put("File.txt", "");
+  folder.put("sub/x", "");
   KernelMachine m;
+  auto& memory = m.system.memory;
   m.kernel.mount("ms0", folder.path.string());
   constexpr u32 Extra = Buffer + 0x1000;
-  u32 listing = m.call("sceIoDopen", {m.string("ms0:/")});
-  std::vector<std::pair<std::string, std::string>> names;
-  m.system.memory.write(4, Buffer + 344, Extra);
-  while(m.call("sceIoDread", {listing, Buffer}) == 1) {
-    names.push_back({m.system.memory.readString(Extra + 4, 13), m.system.memory.readString(Extra + 20, 1024)});
+  struct Entry { std::string name, older, newer; u32 first, fourth, past; };
+  auto list = [&](const char* path, u32 declared) {
+    std::vector<Entry> entries;
+    u32 listing = m.call("sceIoDopen", {m.string(path)});
+    while(true) {
+      memory.fill(Extra, 0xee, 0x500);
+      memory.write(4, Extra, declared);
+      memory.write(4, Buffer + 344, Extra);
+      if(m.call("sceIoDread", {listing, Buffer}) != 1) break;
+      Entry e;
+      e.name = memory.readString(Buffer + 88, 256);
+      e.older = memory.readString(Extra, 13) + "|" + memory.readString(Extra + 13, 256);
+      e.newer = memory.readString(Extra + 4, 16) + "|" + memory.readString(Extra + 20, 1024);
+      e.first = memory.read(4, Extra), e.fourth = memory.read(4, Extra + 4);
+      e.past = memory.read(1, Extra + 13 + e.name.size() + 1);  //just past the older layout's long name
+      entries.push_back(e);
+    }
+    m.call("sceIoDclose", {listing});
+    return entries;
+  };
+  for(u32 sdk : {0u, 0x0307'0010u}) {
+    m.kernel.sdkVersion = sdk;
+    auto entries = list("ms0:/", 0x414);  //(in order, whatever their case: File.txt, sub, Verylongname...)
+    CHECK(entries.size(), 3);
+    if(entries.size() == 3) {
+      CHECK(entries[0].name == "File.txt" && entries[0].older == "FILE.TXT|File.txt", true);
+      CHECK(entries[1].name == "sub" && entries[1].older == "SUB|sub", true);
+      CHECK(entries[2].name == "Verylongname.extension", true);
+      CHECK(entries[2].older == "VERYLONG.EXT|Verylongname.extension", true);
+      for(auto& e : entries) CHECK(e.first != 0x414 && e.past == 0xee, true);
+    }
+    auto inside = list("ms0:/sub", 0);
+    CHECK(inside.size(), 3);
+    if(inside.size() == 3) {
+      CHECK(inside[0].older == ".|." && inside[1].older == "..|.." && inside[2].older == "X|x", true);
+    }
   }
-  CHECK(names.size(), 2);
-  if(names.size() == 2) {
-    CHECK(names[0].first == "FILE.TXT" && names[0].second == "File.txt", true);
-    CHECK(names[1].first == "VERYLONG.EXT" && names[1].second == "Verylongname.extension", true);
+  m.kernel.sdkVersion = 0x0606'0010;
+  auto entries = list("ms0:/", 0x414);
+  CHECK(entries.size(), 3);
+  if(entries.size() == 3) {
+    CHECK(entries[0].newer == "FILE.TXT|File.txt" && entries[0].first == 0x414, true);
+    CHECK(entries[1].newer == "SUB|sub" && entries[2].newer == "VERYLONG.EXT|Verylongname.extension", true);
   }
+  entries = list("ms0:/", 0x413);  //declared smaller than a SceIoFatDirentPrivate: nothing written
+  CHECK(entries.size(), 3);
+  for(auto& e : entries) CHECK(e.first == 0x413 && e.fourth == 0xeeee'eeee, true);
 }
 
 //The buttons and stick: sampled at each vertical blank and kept; the latest peeked at once, oldest first, each with
@@ -470,10 +513,80 @@ static auto downloadDrm() -> void {
   CHECK(m.notes.size(), 0);
 }
 
+//Descriptors handed out: the lowest number free, from 3 (io/open/tty0 recorded small numbers counting up), a closed
+//file's number given to the next file or folder, whatever it is; an asynchronous open's descriptor holding its
+//number until its result is taken; the movie player's file keeping its number while the player has a movie, and a
+//thread's put-aside wait for a request keeping its file's; once 3 to 63 are all in use, nothing more opens until one
+//is closed; and a file numbered past them (an older state's) kept. (Crush indexes a table of 16 by them.)
+static auto fileNumbers() -> void {
+  HostFolder stick;
+  stick.put("A.TXT", "a");
+  stick.put("B.TXT", "b");
+  auto image = disc_image::makeIso({{"DATA.BIN", std::vector<u8>(100, 1)}});
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  m.kernel.disc = discFrom(image.bytes);
+  auto open = [&](const char* path) { return m.call("sceIoOpen", {m.string(path), 0x0001, 0}); };
+  CHECK(open("ms0:/A.TXT"), 3);
+  CHECK(open("ms0:/B.TXT"), 4);
+  CHECK(m.call("sceIoDopen", {m.string("ms0:/")}), 5);
+  CHECK(open("disc0:/DATA.BIN"), 6);
+  CHECK(m.call("sceIoClose", {4}), 0);
+  CHECK(open("disc0:/DATA.BIN"), 4);  //the lowest free, whatever it was before
+  CHECK(m.call("sceIoDclose", {5}), 0);
+  CHECK(m.call("sceIoClose", {3}), 0);
+  CHECK(m.call("sceIoDopen", {m.string("disc0:/")}), 3);
+  CHECK(open("ms0:/MISSING.TXT"), Kernel::ErrorFileNotFound);  //a failed open takes none
+  CHECK(open("ms0:/A.TXT"), 5);
+  CHECK(m.call("sceIoOpenAsync", {m.string("ms0:/MISSING.TXT"), 0x0001, 0}), 7);  //holds its error's number
+  CHECK(open("ms0:/B.TXT"), 8);
+  m.kernel.run(Kernel::VblankCycles);
+  CHECK(m.call("sceIoPollAsync", {7, Buffer}), 0);
+  CHECK(s32(m.system.memory.read(4, Buffer)), s32(Kernel::ErrorFileNotFound));
+  CHECK(open("ms0:/A.TXT"), 7);  //once its result is taken
+  m.kernel.psmfPlayer.status = 2;  //the movie player has a movie through 9 (its file dropped as a state loaded)
+  m.kernel.psmfPlayer.file = 9;
+  CHECK(open("ms0:/A.TXT"), 10);
+  m.kernel.psmfPlayer = {};
+  CHECK(open("ms0:/A.TXT"), 9);
+  for(u32 number = 11; number < Kernel::MostFiles; number++) CHECK(open("ms0:/A.TXT"), number);
+  CHECK(open("ms0:/A.TXT"), Kernel::ErrorTooManyFiles);
+  CHECK(m.call("sceIoOpen", {m.string("ms0:/NEW.TXT"), 0x0602, 0}), Kernel::ErrorTooManyFiles);
+  CHECK(std::filesystem::exists(stick.path / "NEW.TXT"), false);  //refused before anything was made
+  CHECK(m.call("sceIoDopen", {m.string("ms0:/")}), Kernel::ErrorTooManyFiles);
+  CHECK(open("disc0:/DATA.BIN"), Kernel::ErrorTooManyFiles);
+  CHECK(m.call("sceIoDopen", {m.string("disc0:/")}), Kernel::ErrorTooManyFiles);
+  CHECK(m.call("sceIoOpenAsync", {m.string("ms0:/A.TXT"), 0x0001, 0}), Kernel::ErrorTooManyFiles);
+  CHECK(m.call("sceIoOpenAsync", {m.string("ms0:/MISSING.TXT"), 0x0001, 0}), Kernel::ErrorTooManyFiles);
+  CHECK(m.call("sceIoClose", {40}), 0);
+  CHECK(open("ms0:/B.TXT"), 40);
+  //numbered past them, as a state of an older layout may have a file: kept, its old number free again
+  auto node = m.kernel.files.extract(40);
+  node.key() = 1000;
+  m.kernel.files.insert(std::move(node));
+  CHECK(open("ms0:/B.TXT"), 40);
+  //a number a thread's wait for a request still names isn't given to another: the thread made ready to run its
+  //callbacks, its wait kept, then running them with the wait put aside
+  CHECK(m.call("sceIoClose", {41}), 0);
+  s32 waiter = m.kernel.createThread("waiter", 0x0880'1000, 0x20, 0x1000, 0, 0);
+  auto& aside = *m.kernel.threads[waiter];
+  aside.status = Kernel::Status::Ready, aside.wait = Kernel::Wait::Async, aside.waitID = 41;
+  CHECK(open("ms0:/B.TXT"), Kernel::ErrorTooManyFiles);
+  aside.wait = Kernel::Wait::None, aside.waitID = 0, aside.inCallback = true;
+  aside.waitBeforeCallback.wait = Kernel::Wait::Async, aside.waitBeforeCallback.id = 41;
+  CHECK(open("ms0:/B.TXT"), Kernel::ErrorTooManyFiles);
+  aside.status = Kernel::Status::Dormant, aside.inCallback = false, aside.waitBeforeCallback = {};
+  CHECK(open("ms0:/B.TXT"), 41);
+  CHECK(roundTrip(m, [&](KernelMachine& n) {
+    n.kernel.mount("ms0", stick.path.string());
+    n.kernel.disc = discFrom(image.bytes);
+  }), true);
+}
+
 auto fileTests() -> Tests {
   return {
     {"files basics", fileBasics}, {"files folders", fileFolders}, {"files containment", fileContainment},
-    {"files rename", fileRename},
+    {"files rename", fileRename}, {"files numbered lowest free first", fileNumbers},
     {"files short names", fileShortNames}, {"controller peek", controllerPeek}, {"controller latch", controllerLatch},
     {"controller new samples", controllerReadNew}, {"controller cycle", controllerCycle},
     {"controller read", controllerRead}, {"controller two readers", controllerTwoReaders},

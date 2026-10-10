@@ -83,7 +83,7 @@ static auto kernelStates() -> void {
     CHECK(n.kernel.threads[thread]->gp, 0x1234);
     CHECK(n.kernel.threads[thread]->name == "worker", true);
   }
-  CHECK(n.call("sceIoOpen", {n.string("ms0:/A.TXT"), 0x0001, 0}) > d, true);  //new descriptors go on from the old
+  CHECK(n.call("sceIoOpen", {n.string("ms0:/A.TXT"), 0x0001, 0}), b);  //the lowest free: the dropped file's
 
   //a list longer than the rest of the state, and a text longer than it: refused, as they run out of state
   std::vector<u8> damaged(s.data(), s.data() + s.size());
@@ -220,8 +220,9 @@ static auto stateFields() -> void {
   u32 top = a.call("sceIoDopen", {a.string("ms0:/")});  //a device's top: no "." or ".." in it
   u32 discFile = a.call("sceIoOpen", {a.string("disc0:/DATA.BIN"), 0x0001, 0});
   u32 discFolder = a.call("sceIoDopen", {a.string("disc0:/DIR")});
-  CHECK(k.files.size(), 6);
-  for(u32 open : {file, other, folder, top, discFile, discFolder}) if(!k.files.count(open)) return;
+  u32 discReader = a.call("sceIoOpen", {a.string("disc0:/DATA.BIN"), 0x0001, 0});  //(its read's bytes below)
+  CHECK(k.files.size(), 7);
+  for(u32 open : {file, other, folder, top, discFile, discFolder, discReader}) if(!k.files.count(open)) return;
   CHECK(k.files[discFolder].discEntries.size(), 2);
   u32 list = a.call("sceGeListEnQueue", {0x0890'8000, 0x0890'8000, u32(-1), 0}) - Kernel::GeListIDs;  //stalled
   u32 list2 = a.call("sceGeListEnQueue", {0x0890'9000, 0x0890'9000, u32(-1), 0}) - Kernel::GeListIDs;  //queued
@@ -377,6 +378,7 @@ static auto stateFields() -> void {
   auto& hostFolder = k.files[folder];
   auto& onDisc = k.files[discFile];
   auto& discList = k.files[discFolder];
+  auto& reader = k.files[discReader];
   auto& c = k.controller;
   auto& l = k.geLists[list];
   auto& gc = k.geCallbacks[3];
@@ -597,6 +599,15 @@ static auto stateFields() -> void {
       closed.async = Kernel::OpenFile::Async::Pending;
       closed.asyncDoneAt = k.cycles + 2000;
     }},
+    //the disc's file opened again, reading its first 16 bytes: the request under way, then where its bytes are to
+    //go, then the read made from 16 bytes on (where it read from moving its position with it)
+    {"file async of a read", [&] {
+      reader.async = Kernel::OpenFile::Async::Pending;
+      reader.asyncDoneAt = k.cycles + 2000;
+      reader.asyncResult = 16, reader.position = 16;
+    }},
+    {"file asyncData", [&] { reader.asyncData = 0x0897'0000; }},
+    {"file asyncFrom", [&] { reader.asyncFrom = 16, reader.position = 32; }},
     {"folder entries", [&] { hostFolder.entries[2] += "x"; }},  //".", "..", then "ONE"
     {"folder nextEntry", [&] { hostFolder.nextEntry = 1; }},
     {"disc file folder", [&] { onDisc.folder = true; }}, {"disc file sectors", [&] { onDisc.sectors = true; }},
@@ -608,7 +619,7 @@ static auto stateFields() -> void {
     {"disc folder entry folder", [&] { discList.discEntries[1].folder = true; }},
     {"disc folder entry date", [&] { discList.discEntries[1].date[6] ^= 1; }},
     {"disc folder nextEntry", [&] { discList.nextEntry = 2; }},
-    {"nextFile", [&] { k.nextFile += 10; }}, {"workingDirectory", [&] { k.workingDirectory = "ms0:/LIST"; }},
+    {"workingDirectory", [&] { k.workingDirectory = "ms0:/LIST"; }},
     //the controller, the display
     {"buttons", [&] { c.buttons ^= 1; }}, {"analogX", [&] { c.analogX ^= 1; }}, {"analogY", [&] { c.analogY ^= 1; }},
     {"cycle", [&] { c.cycle = 5555; }}, {"mode", [&] { c.mode ^= 1; }},
@@ -838,6 +849,26 @@ static auto stateFields() -> void {
   refuses("a descriptor for a result it hasn't got", [&] { k.files[other].async = Async::None; });
   refuses("a descriptor for a result, open for reading", [&] { k.files[other].flags = 0x0001; });
   refuses("an asynchronous callback not handed out yet", [&] { k.files[file].asyncCallback = k.nextUID; });
+  auto reading = [&](u32 descriptor) -> Kernel::OpenFile& {  //16 bytes from the start, still to come
+    auto& open = k.files[descriptor];
+    open.async = Async::Pending, open.asyncDoneAt = k.cycles + 2000;
+    open.asyncResult = 16, open.asyncFrom = 0, open.position = 16, open.asyncData = 0x0897'0000;
+    return open;
+  };
+  refuses("a read's bytes to come with its request done", [&] { reading(discFile).async = Async::Done; });
+  refuses("a read's bytes to come into a file opened to write", [&] { reading(file).flags = 0x0002; });
+  refuses("a read of nothing with bytes to come", [&] { reading(discFile).asyncResult = 0; });
+  refuses("a read's bytes to come past memory", [&] { reading(discFile).asyncData = 0x09ff'fff8; });
+  refuses("a read's bytes to come, more than any read moves", [&] {
+    auto& open = reading(file);
+    open.asyncResult = 64_MiB + 1, open.position = 64_MiB + 1;
+  });
+  refuses("a read's bytes to come from elsewhere than it read", [&] { reading(discFile).asyncFrom = 1; });
+  refuses("a read's bytes to come from past where it is", [&] { reading(discFile).asyncFrom = 32; });
+  refuses("a read's bytes to come from past the disc's file", [&] {
+    auto& open = reading(discFile);
+    open.asyncFrom = open.size, open.position = open.size + 16;
+  });
   refuses("a thread waiting on a file with no request", [&] {
     auto& thread = *k.threads.at(two);
     thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Async, thread.waitID = discFile;
@@ -912,7 +943,13 @@ static auto stateFields() -> void {
     thread.waitBeforeCallback = {Kernel::Wait::File, discFile, 16, 0, 0, 0, k.cycles + 1000, false, 0, 0};
     thread.wait = Kernel::Wait::Sleep;
   });
-  refuses("a file number handed out twice", [&] { k.nextFile = discFolder; });
+  auto renumber = [&](u32 file, u32 number) {
+    auto node = k.files.extract(file);
+    node.key() = number;
+    k.files.insert(std::move(node));
+  };
+  refuses("a file numbered as standard error", [&] { renumber(discFolder, 2); });
+  refuses("a file numbered past 2^31", [&] { renumber(discFolder, Kernel::LastUID + 1); });
   refuses("an ID handed out twice", [&] { k.nextUID = u32(one); });
   refuses("a semaphore under another's ID", [&] { k.semaphores.begin()->second.uid ^= 1; });
   refuses("an event flag under another's ID", [&] { k.eventFlags.begin()->second.uid ^= 1; });
@@ -1125,7 +1162,8 @@ static auto stateFields() -> void {
   refuses("a player ending but not playing", [&] { player.status = 2, player.ending = true; });
   refuses("a player playing with no movie", [&] { player.header.clear(); });
   refuses("a player made, with a movie", [&] { player.status = 1; });
-  refuses("a player's file not handed out yet", [&] { player.file = k.nextFile; });
+  refuses("a player's file numbered as standard error", [&] { player.file = 2; });
+  refuses("a player's file numbered past 2^31", [&] { player.file = Kernel::LastUID + 1; });
   refuses("a player's header that isn't one", [&] { player.header[0] = 'X'; });
   refuses("a player's header longer than its stream's offset", [&] { player.header.resize(0x900); });
   refuses("a player read past its stream", [&] { player.nextPack = 3; });
@@ -1329,7 +1367,6 @@ static auto stateFields() -> void {
   refuses("a folder name no path can name", [&] { k.files[folder].entries.push_back("C:D"); });
   refuses("a folder name with a backslash", [&] { k.files[folder].entries.push_back("A\\B"); });
   refuses("IDs counted past 2^31", [&] { k.nextUID = 0xffff'ffff; });
-  refuses("file numbers counted past 2^31", [&] { k.nextFile = 0xffff'ffff; });
   refuses("a clock past a century", [&] {
     k.cycles = 1ull << 60;
     k.nextVblank = k.controller.nextSample = k.cycles + 1000;
@@ -1458,10 +1495,10 @@ static auto stateFields() -> void {
   CHECK(save(a) == state, true);
 }
 
-//IDs and file numbers count up and are never handed out twice, so they stop short of 2^31 (a number with its top bit
-//set would read as an error): what would need another fails instead, as out of memory, or with too many files open.
-//A thread's stack, made first, goes again when the thread can't have an ID. A machine that has handed out every one
-//still saves, and loads into another.
+//IDs count up and are never handed out twice, so they stop short of 2^31 (a number with its top bit set would read as
+//an error): what would need another fails instead, as out of memory. A thread's stack, made first, goes again when
+//the thread can't have an ID. A machine that has handed out every one still saves, and loads into another. (File
+//numbers are given again once closed: "files numbered lowest free first" runs them out.)
 static auto idsRunOut() -> void {
   HostFolder stick;
   stick.put("A.TXT", "a");
@@ -1480,14 +1517,6 @@ static auto idsRunOut() -> void {
   CHECK(m.kernel.allocate(0x100, 0, 0, "none") == nullptr, true);
   m.kernel.nextUID = Kernel::LastUID;
   CHECK(m.call("sceKernelCreateSema", {m.string("last"), 0, 0, 1, 0}), Kernel::LastUID);
-  m.kernel.nextFile = Kernel::LastUID;
-  CHECK(m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0}), Kernel::LastUID);
-  CHECK(m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0}), Kernel::ErrorTooManyFiles);
-  CHECK(m.call("sceIoOpen", {m.string("ms0:/NEW.TXT"), 0x0602, 0}), Kernel::ErrorTooManyFiles);
-  CHECK(std::filesystem::exists(stick.path / "NEW.TXT"), false);  //refused before anything was made
-  CHECK(m.call("sceIoDopen", {m.string("ms0:/")}), Kernel::ErrorTooManyFiles);
-  CHECK(m.call("sceIoOpen", {m.string("disc0:/DATA.BIN"), 0x0001, 0}), Kernel::ErrorTooManyFiles);
-  CHECK(m.call("sceIoDopen", {m.string("disc0:/")}), Kernel::ErrorTooManyFiles);
   serializer s;
   CHECK(m.kernel.serialize(s), true);
   KernelMachine n;
@@ -1496,11 +1525,87 @@ static auto idsRunOut() -> void {
   serializer load{s.data(), s.size()};
   CHECK(n.kernel.serialize(load), true);
   CHECK(n.kernel.nextUID, Kernel::LastUID + 1);
-  CHECK(n.kernel.nextFile, Kernel::LastUID + 1);
+}
+
+//States of the layouts before this one load: 21's (part 58's sceJpeg, sceHprm and low-level ATRAC fields, with
+//files' count still kept and no read's bytes to come) and 20's (none of those either). Each is this layout's state
+//with the newer fields taken out and the count put back, where saving the machine with just that field changed
+//shows it to be; loaded with the header's layout into a machine whose newer fields are set, it makes this layout's
+//state again, the newer fields defaulted.
+static auto olderLayouts() -> void {
+  HostFolder stick;
+  stick.put("A.TXT", "abcdefgh");
+  auto machine = [&](KernelMachine& m) {
+    m.kernel.mount("ms0", stick.path.string());
+    m.kernel.workingDirectory = "ms0:/";
+  };
+  KernelMachine m;
+  machine(m);
+  u32 file = m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0});
+  CHECK(m.kernel.files.count(file), 1);
+  CHECK(m.call("sceIoRead", {file, Buffer, 3}), 3);
+  if(!m.kernel.files.count(file)) return;
+  auto kernelState = [&] {
+    serializer s;
+    m.kernel.serialize(s);
+    return std::vector<u8>{s.data(), s.data() + s.size()};
+  };
+  auto where = [&](const std::vector<u8>& changed, const std::vector<u8>& state) -> u32 {
+    u32 at = 0;
+    while(at < state.size() && at < changed.size() && state[at] == changed[at]) at++;
+    return at;
+  };
+  auto state = kernelState();
+  auto& open = m.kernel.files[file];
+  open.asyncData = 0x0880'0001;
+  u32 asyncData = where(kernelState(), state);
+  open.asyncData = 0;
+  m.kernel.workingDirectory = "ms0:/LIST";
+  u32 workingDirectory = where(kernelState(), state);
+  m.kernel.workingDirectory = "ms0:/";
+  m.kernel.jpeg.initialized = true;
+  u32 jpeg = where(kernelState(), state);
+  m.kernel.jpeg.initialized = false;
+  auto node = m.kernel.files.extract(file);
+  node.key() = file + 1;
+  m.kernel.files.insert(std::move(node));
+  u32 files = where(kernelState(), state) - 4;  //the files' count, before the first one's number
+  node = m.kernel.files.extract(file + 1);
+  node.key() = file;
+  m.kernel.files.insert(std::move(node));
+  CHECK(kernelState() == state, true);
+  CHECK(jpeg < files && files < asyncData && asyncData < workingDirectory && workingDirectory < state.size(), true);
+  if(!(jpeg < files && files < asyncData && asyncData < workingDirectory && workingDirectory < state.size())) return;
+
+  u32 current = m.kernel.stateLayout;
+  auto loads = [&](u32 layout, std::vector<u8> bytes) {
+    KernelMachine n;
+    machine(n);
+    n.kernel.jpeg.initialized = n.kernel.jpeg.created = true, n.kernel.jpeg.width = 480;
+    n.kernel.hprmCallbacks[3] = 1;
+    n.kernel.atracs[1].lowLevel = true;
+    n.kernel.stateLayout = layout;
+    serializer s{bytes.data(), u32(bytes.size())};
+    bool loaded = n.kernel.serialize(s) && s.size() == bytes.size();
+    n.kernel.stateLayout = current;
+    serializer again;
+    n.kernel.serialize(again);
+    return loaded && std::vector<u8>{again.data(), again.data() + again.size()} == state;
+  };
+  std::vector<u8> counted = {0x45, 0x23, 0x01, 0x00};  //numbers handed out once, passed over
+  auto layout21 = state;
+  layout21.insert(layout21.begin() + workingDirectory, counted.begin(), counted.end());
+  layout21.erase(layout21.begin() + asyncData, layout21.begin() + workingDirectory);
+  auto layout20 = layout21;
+  layout20.erase(layout20.begin() + jpeg, layout20.begin() + files);
+  CHECK(loads(21, layout21), true);
+  CHECK(loads(20, layout20), true);
+  CHECK(loads(current, layout21), false);  //read as this layout, it's another state
 }
 
 auto stateTests() -> Tests {
-  return {{"kernel states", kernelStates}, {"state fields", stateFields}, {"kernel ids run out", idsRunOut}};
+  return {{"kernel states", kernelStates}, {"state fields", stateFields}, {"kernel ids run out", idsRunOut},
+          {"older layouts load", olderLayouts}};
 }
 
 }

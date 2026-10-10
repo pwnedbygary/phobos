@@ -7,7 +7,8 @@
 //pspautotests' umd/callbacks recorded, and wakes the threads waiting for the state it brings (umd/wait). No disc is
 //ever swapped, so a thread waiting for a state the drive won't come to waits until its timeout, if it gave one, or
 //for good. (MotorStorm: Arctic Edge activates the drive and waits, a vertical blank at a time, for its callback to
-//say the disc is ready and readable.)
+//say the disc is ready and readable.) Activating takes the caller a sector's read, for mounting the disc's file
+//system (uOFW's mediaman documentation describes the mount; the time is chosen: sceUmdActivate()).
 
 //The drive's state: a disc is in it, ready, and readable unless the game deactivated the drive (an image, or a folder
 //standing for one); or there's none.
@@ -53,12 +54,21 @@ auto Kernel::sceUmdCheckMedium() -> void {
 
 //(mode 1 or 2, the drive's name, which must be "disc0:" and in the program's memory): readies the drive (it's ready
 //already), readable again if it was deactivated. The callback is told the state, without its "ready" for a program
-//that never said which SDK it was built with (0x22 rather than 0x32: older SDKs' programs see it so).
+//that never said which SDK it was built with (0x22 rather than 0x32: older SDKs' programs see it so). Activating
+//mounts the disc's file system under the name (uOFW's mediaman documentation: it "includes assigning the file system,
+//the block device ... and setting the alias name"), which reads the disc: the caller waits a sector's read for it,
+//other threads running meanwhile (chosen, as no recording times it). Def Jam: Fight for NY starts its file thread, of
+//a lower priority, just before activating, and makes the thread that waits on that thread's semaphore only after:
+//done at once, the semaphore wasn't there yet, and the game waited for good on a black screen. A call that can't wait
+//(in a call into the program, or with interrupts or dispatching held off) mounts it at once.
 auto Kernel::sceUmdActivate() -> void {
   if(arg(0) < 1 || arg(0) > 2) return result(ErrorInvalidArgument);
   if(!arg(1) || arg(1) & 0x8000'0000 || memory.readString(arg(1), 8) != "disc0:") return result(ErrorInvalidArgument);
   result(0);
   umdDeactivated = false;
+  if(current && !interrupting && interruptsEnabled && !dispatchSuspended) {  //(before umdChanged() may switch threads)
+    block(Wait::Delay, 0, cycles + asyncDuration(true, Disc::SectorSize));
+  }
   u32 state = umdState();
   umdChanged(sdkVersion || !(state & UmdPresent) ? state : state & ~UmdReady);
 }

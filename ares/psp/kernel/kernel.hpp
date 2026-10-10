@@ -617,20 +617,31 @@ struct Kernel {
     bool onDisc = false, sectors = false;
     u32 sector = 0;
     u64 size = 0;
+    //PGD (Protected Game Data): a UMD data file, or an NPDRM EDATA, whose data the PSP decrypts as it's read. The
+    //version key (sceIoIoctl's 0x04100001) and where the data starts (0x04100002) set it; the reads of that data in
+    //io.cpp are decrypted (ares/psp/kernel/pgd.cpp).
+    bool pgd = false;
+    u8 pgdVersionKey[16] = {};
+    bool pgdReady = false;
+    u8 pgdDataKey[16] = {};
+    u32 pgdDataSize = 0, pgdBlockSize = 0;
+    u32 pgdDataOffset = 0;
     std::vector<Disc::Entry> discEntries;  //a folder on the disc's entries, beside their names
     //Its asynchronous request (async.cpp): none; one under way, done at asyncDoneAt; or one done whose result the
     //program hasn't taken yet. The result is 64 bits: a count, a position, or an error (sign-extended).
     enum class Async : u32 { None, Pending, Done } async = Async::None;
     u64 asyncDoneAt = 0;
     u64 asyncResult = 0;
+    u32 asyncData = 0;     //a read under way: where its bytes go as it's done (0: none to move), from asyncFrom on,
+    u64 asyncFrom = 0;     //as many as its result counts (bytes, or sectors through umd0:)
     u32 asyncCallback = 0, asyncArgument = 0;  //sceIoSetAsyncCallback's: notified as each request is done
     bool resultOnly = false;  //nothing is open (an asynchronous close, or an asynchronous open that failed): the
                               //descriptor stays only to hand over its request's result
   };
   std::map<std::string, std::string> devices;  //"ms0" -> the host folder standing for it
   std::shared_ptr<Disc> disc;  //the disc image in the drive (disc0: and umd0:, unless a host folder stands for it)
-  std::map<u32, OpenFile> files;
-  u32 nextFile = 3;  //after standard input, output and error
+  std::map<u32, OpenFile> files;  //by descriptor: 3 to MostFiles - 1 (newFile()), or more from an older state
+  static constexpr u32 MostFiles = 64;
   auto newFile() -> u32;
   std::string workingDirectory;
   std::vector<u32> memoryStickCallbacks;  //callbacks the program registered for the memory stick going in and out
@@ -650,6 +661,11 @@ struct Kernel {
   auto runOnDisc(const std::string& path, u32& first, u64& bytes) const -> bool;
   auto openFile(const std::string& path, u32 flags) -> u32;
   auto readFile(u32 file, u32 data, u32 size) -> u32;
+  auto readCount(OpenFile& open, u32 data, u32 size, u64& count) -> u32;
+  auto readMove(OpenFile& open, u64 at, u64 count, u32 data) -> s64;
+  //pgd.cpp: a PGD data file's decryption, set up by the two ioctl commands and applied to its reads
+  auto pgdDescriptor(OpenFile& open) -> std::string;  //its header's descriptor, decrypted once; why it can't
+  auto pgdDecryptRead(OpenFile& open, u32 data, u64 count) -> void;  //its reads' data region, decrypted in place
   auto writeFile(u32 file, u32 data, u32 size) -> u32;
   auto fileWaitRefused() const -> u32;
   auto fileWait(u32 file, u32 value, bool onDisc, u64 bytes) -> void;
@@ -693,6 +709,7 @@ struct Kernel {
   auto asyncPoll(u32 file, u32 pointer) -> void;
   auto asyncWait(u32 file, u32 pointer, bool callbacks) -> void;
   auto asyncEvents() -> bool;
+  auto asyncDone(u32 file) -> bool;
   auto nextAsyncEvent() const -> u64;
   auto sceIoOpenAsync() -> void;
   auto sceIoCloseAsync() -> void;
@@ -1863,7 +1880,7 @@ struct Kernel {
     u32 abortUpdates = 0;  //an aborted message's Updates still to come before it finishes (0: not aborted)
     u32 runningUpdates = 0;  //Updates while Running, before an abort (utility/dialog/abort's fade length)
   } dialog;
-  u32 stateLayout = 21;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 22;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;

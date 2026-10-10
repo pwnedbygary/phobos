@@ -25,6 +25,45 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: the black games with nothing missing — descriptors, the drive, async requests, SAS, the movie ring — 2026-10-09
+
+Branch `cursor/psp-hle-games13-2b67`, on top of #194's `cursor/psp-hle-games12-2b67` (merged in; its PR's base).
+docs/psp-core.md, part 59, has the evidence; docs/psp-compatibility.md's changed rows are updated. Clean room: no
+PPSSPP or JPCSP source read. The GE's agent worked the same list from the GE's side (#192); nothing here touches
+`ares/psp/ge/`.
+- **Fixes** (each its own commit, with tests): file descriptors handed out lowest free first, 3 to 63 (Crush: its
+  per-descriptor table; Jak and Daxter: The Lost Frontier); sceUmdActivate waits a mount's sector read (Def Jam: Fight
+  for NY's file thread ran too late); an asynchronous read's bytes land as it's done (Dead or Alive Paradise's marker);
+  sceIoDread's short names laid out by the program's SDK, as io/shortname recorded (Need for Speed: ProStreet's stack,
+  and Metal Gear Solid: Portable Ops, Ops Plus and MX vs. ATV: On the Edge, stuck loading); SysClock2USec with no seconds
+  pointer gives the whole count (Tekken: Dark Resurrection's frame limiter); a file holds one asynchronous result at a
+  time, a request over one not taken refused (Valhalla Knights' seek made again); __sceSasCore waits 300 microseconds
+  for its grain (PaRappa the Rapper's top-priority sound thread); sceMpegRingbufferAvailableSize counts in the ring its
+  library reads, as ringbuffer/avail's crash and refusal show (Ridge Racer's movie thread holds a copy of its ring).
+- **Re-judged**: MACH (menu: its 3600 falls in a fade) and Street Supremacy (movie: a loading screen inside its intro).
+- **Numbers** (against part 55's): menu or gameplay 178 -> 186, movie 63 -> 69 (Need for Speed: Carbon - Own the City
+  among them, from its notice to its title and, after the run's Cross, its intro), loading 4 -> 0, black or hang 19 ->
+  9. The whole library run on both runners: every other game the same scene, or a few frames apart; two logo movies now
+  play through. None worse.
+- **On the stack** (merged onto #194, parts 57, 58 and 60 under it): the whole library again, the same scenes as this
+  branch's own run but #194's three rows (Need for Speed: Most Wanted 5-1-0, both Monster Hunter Portable 3rds) and
+  part 60's few pixels in 3D; none worse than on either branch. Menu or gameplay 187, movie 71, loading 0, black or
+  hang 6, timed out 2.
+- **Checks**: tests/psp 383/0 (sanitized) on the branch, 403/0 on the stack; tests/allegrex 58/0; tests/psp/ares 307/0;
+  two independent reviews, their findings fixed (the first fix for Valhalla Knights, seeks done at once, was undone
+  after the library run found Patapon 2 and 3 black with it). Save states version 22, after #194's 21 (files numbered
+  afresh, a pending read's bytes); layouts 15 to 21 load ("older layouts load" makes a 21 and a 20), and version 20
+  states from the base runner carry on (Lumines, Patapon 2, GTA: Liberty City Stories). The branch's own 21 from
+  before the merge is neither a 22 nor #194's 21: only test runs made such states.
+- **Left / for others**: God of War: Chains of Olympus is slow in the GE (TRANSFER START flushes: the GE's part); Ghost
+  of Sparta retries a PGD file (the PGD agent's); Def Jam's first save (WRITEDATASECURE into no save: no recording);
+  Crush's sceIoGetFdList (the libraries'); the runner's WAV tags carry a NUL each (the runner's); the 300 µs grain and
+  the mount's 1.6 ms are chosen, not measured (pspautotests' new audio/timing probes have no recording yet).
+- Scratch: `~/phobos-work/scratch/hle13` (run.sh and lib.sh run the report's way; compare.py and pairs.py compare two
+  library runs; statecheck.sh carries a base runner's state on in both runners; quick-tests.sh builds chosen test
+  groups; build-commit.py split the commits; mipsdis.py disassembles a memory dump; the debug tree
+  `~/phobos-work/wt/dbg-hle13` traces calls by frame).
+
 ## PSP core: sceJpeg, scePauth, the PS3's memory and the last missing functions — 2026-10-09
 
 Branch `cursor/psp-hle-games12-2b67`, on top of #189's `cursor/psp-hle-games11-2b67` (its PR targets that branch).

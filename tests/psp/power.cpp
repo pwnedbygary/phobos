@@ -677,6 +677,25 @@ static auto clocks() -> void {
   CHECK(m.call("sceKernelSysClock2USecWide", {u32(clock), u32(clock >> 32), R + 0x60, R + 0x64}), 0);
   CHECK(m.system.memory.read(4, R + 0x60), 4'321'987);
   CHECK(m.system.memory.read(4, R + 0x64), 654'321);
+  //misc/timeconv's: -1 split, and 0x1337 with either place alone (the other left as it was)
+  auto split = [&](u64 count, bool seconds, bool microseconds) {
+    for(u32 at : {0x70u, 0x74u}) m.system.memory.write(4, R + at, 0xcccc'cccc);
+    m.system.memory.write(4, R + 0x50, u32(count)); m.system.memory.write(4, R + 0x54, u32(count >> 32));
+    u32 a = seconds ? R + 0x70 : 0, b = microseconds ? R + 0x74 : 0;
+    u32 narrow = m.call("sceKernelSysClock2USec", {R + 0x50, a, b});
+    u64 first = m.system.memory.read(4, R + 0x70) | u64(m.system.memory.read(4, R + 0x74)) << 32;
+    for(u32 at : {0x70u, 0x74u}) m.system.memory.write(4, R + at, 0xcccc'cccc);
+    u32 wide = m.call("sceKernelSysClock2USecWide", {u32(count), u32(count >> 32), a, b});
+    u64 second = m.system.memory.read(4, R + 0x70) | u64(m.system.memory.read(4, R + 0x74)) << 32;
+    CHECK(narrow == 0 && wide == 0 && first == second, true);
+    return second;
+  };
+  CHECK(split(~0ull, true, true), 0x0008'6abf'f7a0'b5edull);
+  CHECK(split(0x1337, false, true), 0x0000'1337'cccc'ccccull);
+  CHECK(split(0x1337, true, false), 0xcccc'cccc'0000'0000ull);
+  //with nowhere for the seconds, the whole count (its low 32 bits): Tekken: Dark Resurrection's clock rate
+  CHECK(split(1'000'000, false, true), 0x000f'4240'cccc'ccccull);
+  CHECK(split(clock, false, true), u64(u32(clock)) << 32 | 0xcccc'cccc);
   m.kernel.cycles = 333 * 1234;
   CHECK(m.call("sceKernelLibcClock", {}), 1234);
 }
