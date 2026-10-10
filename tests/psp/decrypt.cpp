@@ -230,10 +230,81 @@ static auto kernelLoads() -> void {
   CHECK(m.kernel.threads.empty() && m.kernel.blocks.empty(), true);
 }
 
+//scePauth's data (ares/psp/kernel/pauth.cpp): bytes encrypted as a type 5 ~PSP body under each of scePauth's tags,
+//a second key mixed in, the first 0x80 bytes scrambled where a program has its header: decrypted where they lie,
+//the size written, 0. Refused (INVALID_VALUE), the data and the size left as they were: the wrong key, a damaged
+//piece of the header, a tag that isn't type 5's, data cut short of a header or past memory, a key that isn't in
+//memory. (scePauth_98B83B5D is known by its NID alone.) The data is encrypted here by the way the key is mixed in
+//that Monster Hunter Portable 3rd's data proved (docs/psp-core.md, part 58; the game's data isn't kept), so these
+//hold the code to that way, not prove it.
+static auto pauth() -> void {
+  std::vector<u8> data(0x1235);
+  for(u32 n = 0; n < data.size(); n++) data[n] = u8(n * 7 + 3);
+  const u8 key[16] = {0x3e, 0x4a, 0xd6, 0xfc, 0x2a, 0x41, 0xb6, 0x43, 0x53, 0xc6, 0x47, 0x45, 0x65, 0xd6, 0x5e, 0x54};
+  constexpr u32 Buffer = 0x0894'0000, Size = KernelMachine::Results, Key = Size + 0x10;
+  auto call = [](KernelMachine& m, std::initializer_list<u32> arguments) {
+    u32 n = 0;
+    for(u32 value : arguments) m.system.ipu.r[4 + n++] = value;
+    m.kernel.syscall(m.kernel.importCode("scePauth", 0x98b8'3b5d));
+    return m.system.ipu.r[2];
+  };
+  auto encrypted = [&](u32 tag, const u8* with) {
+    psp_encrypt::Options options;
+    options.tag = tag, options.pauthKey = with, options.magic = false;
+    return psp_encrypt::encrypt(data, options);
+  };
+  auto unchanged = [](KernelMachine& m, const std::vector<u8>& file) {
+    std::vector<u8> now(file.size());
+    m.system.memory.copyOut(now.data(), Buffer, now.size());
+    return now == file && m.system.memory.read(4, Size) == 0x1337;
+  };
+  for(u32 tag : {0x2fd3'11f0u, 0x2fd3'12f0u, 0x2fd3'13f0u}) {
+    auto file = encrypted(tag, key);
+    KernelMachine m;
+    m.system.memory.copyIn(Buffer, file.data(), file.size());
+    m.system.memory.copyIn(Key, key, 16);
+    m.system.memory.write(4, Size, 0x1337);
+    CHECK(call(m, {Buffer, u32(file.size()), Size, Key}), 0);
+    CHECK(m.system.memory.read(4, Size), data.size());
+    std::vector<u8> plain(data.size());
+    m.system.memory.copyOut(plain.data(), Buffer, plain.size());
+    CHECK(plain == data, true);
+    CHECK(m.notes.size(), 0);
+  }
+  auto refused = [&](const std::vector<u8>& file, const u8* given, u32 size, u32 keyAt = Key) {
+    KernelMachine m;
+    m.system.memory.copyIn(Buffer, file.data(), file.size());
+    m.system.memory.copyIn(Key, given, 16);
+    m.system.memory.write(4, Size, 0x1337);
+    CHECK(call(m, {Buffer, size, Size, keyAt}), Kernel::ErrorInvalidValue);
+    CHECK(unchanged(m, file), true);
+  };
+  auto file = encrypted(0x2fd3'12f0, key);
+  u8 wrong[16];
+  memcpy(wrong, key, 16), wrong[15] ^= 1;
+  refused(file, wrong, file.size());
+  for(u32 at : {0x10u, 0x84u, 0xc4u, 0x130u, 0x144u}) {  //the first 0x80 bytes, the hidden pieces, the digest, the ID
+    auto damaged = file;
+    damaged[at] ^= 0x20;
+    refused(damaged, key, damaged.size());
+  }
+  refused(encrypted(0xd916'05f0, key), key, encrypted(0xd916'05f0, key).size());  //type 2's tag
+  refused(file, key, 0x14f);
+  refused(file, key, 0x0200'0000);  //past the end of memory
+  refused(file, key, file.size(), 0);
+  //a type 5 program, no second key, still decrypts as one
+  psp_encrypt::Options options;
+  options.tag = 0x2fd3'13f0;
+  auto program = testProgram();
+  std::vector<u8> decrypted;
+  CHECK(decrypt(psp_encrypt::encrypt(program, options), decrypted).empty(), true);
+  CHECK(decrypted == program, true);
+}
+
 auto decryptTests() -> Tests {
   return {
     {"decrypt types", types}, {"decrypt every tag", everyTag}, {"decrypt refusals", refusals},
-    {"decrypt packing", packing}, {"decrypt kernel loads", kernelLoads},
+    {"decrypt packing", packing}, {"decrypt kernel loads", kernelLoads}, {"decrypt scePauth's data", pauth},
   };
 }
 

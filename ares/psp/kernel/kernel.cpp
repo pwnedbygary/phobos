@@ -25,6 +25,7 @@ namespace ares::PlayStationPortable {
 #include "keys.cpp"
 #include "kirk.cpp"
 #include "decrypt.cpp"
+#include "pauth.cpp"
 #include "unpack.cpp"
 #include "disc.cpp"
 #include "disc-info.cpp"
@@ -740,6 +741,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceCcc",            "sceCccSetErrorCharUTF8",        &Kernel::sceCccSetErrorCharUTF8);
   add("sceCcc",            "sceCccSetErrorCharUTF16",       &Kernel::sceCccSetErrorCharUTF16);
   add("sceCcc",            "sceCccSetErrorCharSJIS",        &Kernel::sceCccSetErrorCharSJIS);
+  addNID("scePauth",       "scePauth_98B83B5D",             0x98b8'3b5d, &Kernel::scePauth_98B83B5D);
   for(auto [name, handler] : std::initializer_list<std::pair<const char*, auto (Kernel::*)() -> void>>{
         {"sceJpegInitMJpeg", &Kernel::sceJpegInitMJpeg}, {"sceJpegFinishMJpeg", &Kernel::sceJpegFinishMJpeg},
         {"sceJpegCreateMJpeg", &Kernel::sceJpegCreateMJpeg}, {"sceJpegDeleteMJpeg", &Kernel::sceJpegDeleteMJpeg},

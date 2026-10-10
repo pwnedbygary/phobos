@@ -1788,6 +1788,9 @@ struct Kernel {
   auto sceCccSetErrorCharUTF16() -> void;
   auto sceCccSetErrorCharSJIS() -> void;
 
+  //pauth.cpp: data a game keeps encrypted with a key of its own (scePauth)
+  auto scePauth_98B83B5D() -> void;
+
   //jpeg.cpp: JPEG pictures decoded, and YCbCr pictures converted to pixels (sceJpeg)
   struct Jpeg {
     bool initialized = false;  //sceJpegInitMJpeg, till sceJpegFinishMJpeg
