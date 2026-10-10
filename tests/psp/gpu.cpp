@@ -327,6 +327,72 @@ static auto gpuFastRules() -> void {
   }
 }
 
+//Fast mode's 3D (mesh()) changes a target as any draw does, for render to texture taken again: a frame buffer
+//sampled into another, a wall of one color drawn over part of it with the GPU transforming it, then sampled again from
+//the same place. The second picture has the wall in it as the software renderer has it, all but a few pixels of its
+//edges (which fast mode may cover where the GE doesn't).
+static auto gpuFastMeshChanges() -> void {
+  GPU* gpu = renderer() ? fastRenderer() : nullptr;
+  if(!gpu || !gpu->backend->transforms) return;
+  auto f24 = [](float value) { return bitsOf(value) >> 8; };
+  std::mt19937 random{20261015};
+  auto drawn = randomSprites(random, 30, false);
+  auto sample = [](System& s) {
+    prepare(s, 0x2'0000, 3);
+    texture(s, Memory::VRAMBase, 64, 64, 64);
+    sprite(s, {{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0xffff'ffff});
+  };
+  auto wall = [&](System& s) {  //(2 away, 2 by 2: x 16-48 and y 12-36 of the frame buffer at 0)
+    prepare(s, 0, 3);
+    auto& c = s.ge.commands;
+    c[GE::TextureMappingEnable] = 0, c[GE::VertexType] = 0x1ff, c[GE::MaxZ] = 0xffff;
+    for(u32 n = 0; n < 12; n++) s.ge.world[n] = s.ge.view[n] = f24(n % 4 == 0 ? 1 : 0);
+    for(u32 n = 0; n < 16; n++) s.ge.projection[n] = 0;
+    s.ge.projection[0] = s.ge.projection[5] = f24(1);  //(the near plane 1 away, the far one 10)
+    s.ge.projection[10] = f24(-11.0f / 9), s.ge.projection[11] = f24(-1), s.ge.projection[14] = f24(-20.0f / 9);
+    c[GE::ViewportXScale] = f24(32), c[GE::ViewportYScale] = f24(-24), c[GE::ViewportZScale] = f24(30000);
+    c[GE::ViewportXCenter] = f24(2048), c[GE::ViewportYCenter] = f24(2048), c[GE::ViewportZCenter] = f24(32768);
+    c[GE::OffsetX] = (2048 - 32) << 4, c[GE::OffsetY] = (2048 - 24) << 4;
+    u32 to = GPUVertices, count = 0;
+    for(u32 j = 0; j < 2; j++) {
+      for(u32 i = 0; i < 4; i++) {
+        for(u32 corner : {0u, 1u, 3u, 0u, 3u, 2u}) {  //(4 by 2 quads, 2 triangles each)
+          float x = -1 + 0.5f * (i + (corner & 1)), y = -1 + 1.0f * (j + (corner >> 1));
+          for(u32 word : {0u, 0u, 0xff30'c060u, 0u, 0u, bitsOf(1), bitsOf(x), bitsOf(y), bitsOf(-2)}) {
+            s.memory.write(4, to, word), to += 4;
+          }
+          count++;
+        }
+      }
+    }
+    s.ge.vertexAddress = GPUVertices;
+    s.ge.primitive(GE::Triangles, count);
+  };
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  auto before = gpu->statistics;
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, 0, 3);
+    for(auto& one : drawn) sprite(*s, one);
+    sample(*s);
+    wall(*s);
+    sample(*s);
+    s->ge.settleAll();
+  }
+  CHECK(gpu->statistics.meshes > before.meshes, true);
+  u32 far = 0;
+  for(u32 n = 0; n < 64 * 48; n++) {
+    for(u32 channel = 0; channel < 4; channel++) {
+      u32 at = 0x2'0000 + n * 4 + channel;
+      s32 d = s32(software.memory.vram[at]) - s32(hardware.memory.vram[at]);
+      if(d > 8 || d < -8) { far++; break; }
+    }
+  }
+  if(far >= 64) std::printf("  %u pixels of the second picture more than 8 levels off\n", far);
+  CHECK(far < 64, true);
+  hardware.ge.setRenderer(nullptr);
+}
+
 //A GPU that stops answering (as the driver's VK_ERROR_DEVICE_LOST, or a wait that never ends, has it) at its first
 //finish: what it drew since is gone, memory's VRAM keeps what was there, the loss is said once, and the software
 //renderer draws everything after. A pretend backend: no GPU needed.
@@ -449,6 +515,106 @@ static auto gpuCopies() -> void {
   }
   CHECK(most <= 32, true);
   CHECK(apart(software, hardware), 0u);
+  hardware.ge.setRenderer(nullptr);
+}
+
+//Render to texture taken again from the same place with the target changed in part since, at 1x and above: an effect
+//blurring a strip right of the picture back and forth, each sprite sampling the frame buffer it draws into (as
+//Killzone's menu does), the picture left of it sampled now and then. Every picture is the software renderer's (each
+//pass modulates by its own color, so a part of a copy left stale would show), and the copies after the first take
+//the strip, not the picture: fewer than half the pixels copies of the whole would. Then a texture starting inside the
+//frame buffer (at 8, 8) sampled into another frame buffer, small patches of it drawn over between the samples (each
+//part copied to its own place in the copy), and rows the CPU writes over between two of them (the target filled
+//from memory again: the rows filled are changes too). And sprites reaching past a scissor away from the frame
+//buffer's corner (16, 8 to 47, 39) between samples: what they change is inside the scissor, wherever it is.
+static auto gpuPartialCopies() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::mt19937 random{20261010};
+  for(u32 scale : {1u, 2u, 3u}) {
+    if(scale > gpu->backend->mostScale) break;
+    gpu->resolution(scale);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto drawn = randomSprites(random, 40, false);
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0, 3);
+      for(auto& one : drawn) sprite(*s, one);
+      texture(*s, Memory::VRAMBase, 64, 64, 64);
+      s->ge.commands[GE::TextureFunction] = 0 | 1 << 8;  //(modulated by the color, with its alpha)
+    }
+    auto before = gpu->statistics;
+    u64 whole = 0;  //(what copies of all that's sampled would take)
+    for(u32 n = 0; n < 16; n++) {  //(columns 48-63: rows 0-15 drawn from rows 16-31, then back)
+      float from = n & 1 ? 0 : 16, to = n & 1 ? 16 : 0;
+      u32 color = 0xff80'8080 + n * 0x0007'0b05;
+      for(System* s : {&software, &hardware}) {
+        sprite(*s, {{{48, from, 48, to}, {64, from + 16, 64, to + 16}}, color});
+        if(n % 4 == 3) sprite(*s, {{{0, 0, 48, 32}, {16, 16, 64, 48}}, 0xffff'ffff});
+      }
+      whole += 64 * (from + 16) + (n % 4 == 3 ? 16 * 16 : 0);
+    }
+    u32 bytes = apart(software, hardware);
+    if(bytes) std::printf("  %ux: %u bytes apart\n", scale, bytes);
+    CHECK(bytes, 0u);
+    u64 copied = gpu->statistics.copied - before.copied;
+    if(copied * 2 >= whole) std::printf("  %ux: %llu pixels copied of %llu\n", scale, (unsigned long long)copied,
+                                        (unsigned long long)whole);
+    CHECK(copied * 2 < whole, true);
+    hardware.ge.setRenderer(nullptr);
+  }
+  for(u32 scale : {1u, 2u}) {
+    if(scale > gpu->backend->mostScale) break;
+    gpu->resolution(scale);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto drawn = randomSprites(random, 30, false);
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0, 3);
+      for(auto& one : drawn) sprite(*s, one);
+    }
+    for(u32 n = 0; n < 12; n++) {
+      float x = 8 + n * 5 % 26, y = 8 + n * 7 % 26;
+      for(System* s : {&software, &hardware}) {
+        prepare(*s, 0, 3);
+        s->ge.commands[GE::TextureMappingEnable] = 0;
+        sprite(*s, {{{0, 0, x, y}, {0, 0, x + 6, y + 6}}, 0xff00'0000 | n * 0x13'2b47});
+        if(n == 6) {  //(the CPU's bytes over the texture's rows 4-7: the target filled with them when next drawn)
+          for(u32 m = 0; m < 256; m++) s->memory.write(4, Memory::VRAMBase + 12 * 256 + m * 4, 0xff00'00ffu + m * 77);
+        }
+        prepare(*s, 0x2'0000, 3);
+        texture(*s, Memory::VRAMBase + (8 * 64 + 8) * 4, 32, 32, 64);
+        sprite(*s, {{{0, 0, 4 * float(n % 3), 4}, {32, 32, 4 * float(n % 3) + 32, 36}}, 0xffff'ffff});
+      }
+    }
+    u32 bytes = apart(software, hardware);
+    if(bytes) std::printf("  %ux, inside the frame buffer: %u bytes apart\n", scale, bytes);
+    CHECK(bytes, 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+  gpu->resolution(1);
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  auto drawn = randomSprites(random, 30, false);
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, 0, 3);
+    for(auto& one : drawn) sprite(*s, one);
+  }
+  for(u32 n = 0; n < 4; n++) {
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0x2'0000, 3);
+      texture(*s, Memory::VRAMBase, 64, 64, 64);
+      sprite(*s, {{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0xffff'ffff});
+      prepare(*s, 0, 3);
+      s->ge.commands[GE::Scissor1] = 16 | 8 << 10, s->ge.commands[GE::Scissor2] = 47 | 39 << 10;
+      s->ge.commands[GE::TextureMappingEnable] = 0;
+      sprite(*s, {{{0, 0, 4 + 9.0f * n, 2}, {0, 0, 30 + 9.0f * n, 46}}, 0xff00'0000 | (n + 1) * 0x30'5070});
+      s->ge.commands[GE::Scissor1] = 0;
+    }
+  }
+  u32 bytes = apart(software, hardware);
+  if(bytes) std::printf("  a scissor away from the corner: %u bytes apart\n", bytes);
+  CHECK(bytes, 0u);
   hardware.ge.setRenderer(nullptr);
 }
 
@@ -961,11 +1127,13 @@ auto gpuTests() -> Tests {
     {"gpu samples near the software renderer", gpuSamples},
     {"gpu fast mode: 3D transformed by the GPU, near the software renderer", gpuFast},
     {"gpu fast mode: the GE's rules for which triangles are drawn", gpuFastRules},
+    {"gpu fast mode: 3D the GPU transformed is taken by render to texture after", gpuFastMeshChanges},
     {"gpu blending in the shader against the software renderer", gpuBlending},
     {"gpu blending without rasterization order: the GPU's own, the rest read", gpuBlendingApart},
     {"gpu lost: the software renderer draws instead", gpuLost},
     {"gpu refused primitives drawn by the software renderer", gpuRefused},
     {"gpu render-to-texture copies kept to a bound", gpuCopies},
+    {"gpu render to texture taken again in part: the strip an effect draws into", gpuPartialCopies},
     {"gpu depth buffer follows memory's changes", gpuDepth},
     {"gpu bytes beside its pixels are memory's, without waiting", gpuBeside},
     {"gpu start-up check passes on a GPU that draws right", gpuCheck},

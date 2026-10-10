@@ -155,7 +155,7 @@ auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts) -
     }
   }
   recorded.commands.push_back(c);
-  t.version++;
+  if(parts & 1) changed(t, 0, from, t.stride - 1, to - 1);
   if(parts & 1) ge->memory.watch(Memory::VRAMBase + t.address + from * t.stride * bytes, height * t.stride * bytes);
   if(parts & 2 && t.depthStride) {  //(through the fourth copy, as the GE sees it)
     ge->memory.watch(Memory::VRAMBase + 3 * Memory::VRAMSize + t.depthBuffer + from * t.depthStride * 2,
@@ -201,6 +201,34 @@ auto GPU::own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
   memory.changed(Memory::VRAMBase + low, high + bytes - low);
 }
 
+//The target's pixels left-right, top-bottom changed (filled, drawn into): every copy taken of it is that much older,
+//which the copies hear of as one is next taken (textureFor()).
+static auto widen(s32 (&box)[4], s32 left, s32 top, s32 right, s32 bottom) -> void {
+  if(box[0] > box[2]) box[0] = left, box[1] = top, box[2] = right, box[3] = bottom;
+  else {
+    box[0] = std::min(box[0], left), box[1] = std::min(box[1], top);
+    box[2] = std::max(box[2], right), box[3] = std::max(box[3], bottom);
+  }
+}
+auto GPU::changed(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
+  if(left <= right && top <= bottom) widen(t.changes, left, top, right, bottom);
+}
+
+//The last PRIM's pixels given to its target's changes, as the next begins (gathered as the corners' extent, a float
+//compared at each primitive, not worked out at each): those its corners reach, and one more each way (for a corner's
+//float a hair off the GE's), inside its scissor.
+auto GPU::reached() -> void {
+  auto& [t, scissor, box] = reach;
+  if(t && box[0] <= box[2]) {
+    s32 left = std::max(s32(std::floor(box[0])) - 1, scissor[0]);
+    s32 top = std::max(s32(std::floor(box[1])) - 1, scissor[1]);
+    s32 right = std::min(s32(std::floor(box[2])) + 1, scissor[0] + scissor[2] - 1);
+    s32 bottom = std::min(s32(std::floor(box[3])) + 1, scissor[1] + scissor[3] - 1);
+    changed(*t, left, top, right, bottom);
+  }
+  reach = {};
+}
+
 //The PRIM's texture on the GPU: one taken from a target (holds()), copied out of it now, its texels then read as
 //the target's format keeps them, at the target's resolution (scale: each texel scale x scale of the copy's); or the
 //GPU's copy of a decoded texture (put there now if it isn't yet, or has fewer rows than the GE's copy), at the
@@ -215,15 +243,32 @@ auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale) -> u32 {
     u32 below = h.y + h.rows;  //(rows the GPU hasn't drawn, memory's, filled first)
     if(below > h.target->rows) fill(*h.target, h.target->rows, below, look.pixel), h.target->rows = below;
     //(the copy of that size, copied again where it's from another place or the target has changed since: the
-    //draws before it sample it as it was, as the GPU runs the commands in order)
+    //draws before it sample it as it was, as the GPU runs the commands in order. From the same place, only the
+    //part changed since is copied again, into its place in the copy: the rest is as the target still has it.)
+    if(h.target->changes[0] <= h.target->changes[2]) {
+      auto& changes = h.target->changes;
+      for(auto& [where, copied] : copies) {
+        if(std::get<0>(where) == h.target->id) widen(copied.dirty, changes[0], changes[1], changes[2], changes[3]);
+      }
+      changes[0] = 0, changes[1] = 0, changes[2] = -1, changes[3] = -1;
+    }
     auto key = std::make_tuple(h.target->id, h.width, h.rows);
     auto found = copies.find(key);
-    if(found != copies.end()) {
+    if(found != copies.end()) found->second.used = uses;
+    if(found != copies.end() && found->second.x == h.x && found->second.y == h.y) {
       auto& copied = found->second;
-      copied.used = uses;
-      if(copied.version == h.target->version && copied.x == h.x && copied.y == h.y) {
-        return scale = backend->scale, copied.texture;
-      }
+      s32 left = std::max(copied.dirty[0], h.x), top = std::max(copied.dirty[1], h.y);
+      s32 right = std::min({copied.dirty[2], h.x + s32(h.width) - 1, s32(h.target->stride) - 1});
+      s32 bottom = std::min(copied.dirty[3], h.y + s32(h.rows) - 1);
+      copied.dirty[0] = 0, copied.dirty[1] = 0, copied.dirty[2] = -1, copied.dirty[3] = -1;
+      scale = backend->scale;
+      if(left > right || top > bottom) return copied.texture;
+      Command c{Command::Kind::Copy, h.target->id};
+      c.x = left, c.y = top, c.texture = copied.texture;
+      c.width = right - left + 1, c.height = bottom - top + 1, c.intoX = left - h.x, c.intoY = top - h.y;
+      recorded.commands.push_back(c);
+      statistics.copies++, statistics.copied += c.width * c.height;
+      return copied.texture;
     }
     if(found == copies.end() && copies.size() >= MostCopies) {  //(the one unused longest let go: release())
       auto oldest = copies.begin();
@@ -236,12 +281,12 @@ auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale) -> u32 {
                                    : backend->makeTexture(h.width * backend->scale, h.rows * backend->scale, nullptr);
     if(!id) return 0;
     scale = backend->scale;
-    copies[key] = {id, h.target->version, h.x, h.y, uses};
+    copies[key] = {id, h.x, h.y, uses};
     Command c{Command::Kind::Copy, h.target->id};
     c.x = h.x, c.y = h.y, c.texture = id;
     c.width = std::min<u32>(h.width, h.target->stride - h.x), c.height = h.rows;
     recorded.commands.push_back(c);
-    statistics.copies++;
+    statistics.copies++, statistics.copied += c.width * c.height;
     return id;
   }
   auto* decoded = look.decoded.get();
@@ -428,6 +473,7 @@ auto GPU::settings(const GE::Look& look) -> void {
 auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region) -> bool {
   this->ge = &ge;
   drawing = false;
+  reached();
   auto& p = look.pixel;
   if(!ready() || (look.textured && !p.clear && !held && !look.decoded)) return held.reset(), false;
   //(a long list's draws handed over as they come, so the GPU draws while the CPU goes on)
@@ -484,7 +530,7 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   textured = false;
   settings(look);
   own(*t, left, top, right, bottom);
-  t->version++;
+  reach = {t, {state.scissor[0], state.scissor[1], state.scissor[2], state.scissor[3]}};
   drawing = true;
   return true;
 }
@@ -500,15 +546,17 @@ auto GPU::emit(const Vertex* vertices, u32 count) -> void {
   auto& commands = recorded.commands;
   bool joined = !commands.empty() && commands.back().kind == Command::Kind::Draw && commands.back().state == index &&
                 commands.back().first + commands.back().count == first;
+  std::array<float, 4> box{vertices[0].x, vertices[0].y, vertices[0].x, vertices[0].y};
+  for(u32 n = 1; n < count; n++) {
+    box[0] = std::min(box[0], vertices[n].x), box[1] = std::min(box[1], vertices[n].y);
+    box[2] = std::max(box[2], vertices[n].x), box[3] = std::max(box[3], vertices[n].y);
+  }
+  reach.box[0] = std::min(reach.box[0], box[0]), reach.box[1] = std::min(reach.box[1], box[1]);
+  reach.box[2] = std::max(reach.box[2], box[2]), reach.box[3] = std::max(reach.box[3], box[3]);
   //A draw that reads the frame buffer, where the GPU doesn't keep its primitives' order (Backend::readsInOrder),
   //takes no primitive overlapping one it has: that one begins another draw, after a barrier (the backend's), so
   //it reads what the one before wrote. (Boxes in the target's pixels: a pixel's middle inside both overlaps.)
   if(state.pipeline.reads && !backend->readsInOrder) {
-    std::array<float, 4> box{vertices[0].x, vertices[0].y, vertices[0].x, vertices[0].y};
-    for(u32 n = 1; n < count; n++) {
-      box[0] = std::min(box[0], vertices[n].x), box[1] = std::min(box[1], vertices[n].y);
-      box[2] = std::max(box[2], vertices[n].x), box[3] = std::max(box[3], vertices[n].y);
-    }
     if(joined) {
       bool overlaps = boxes.size() >= MostBoxes;
       for(auto& b : boxes) {
@@ -721,6 +769,9 @@ auto GPU::mesh(GE& ge, const GE::Transform& t, const std::vector<GE::Vertex>& ve
   }
   u32 first = recorded.indices.size();
   for(u32 corner : corners) recorded.indices.push_back(meshFirst + corner);
+  //(where on the screen the GPU puts them isn't known here: anywhere inside the scissor)
+  changed(*target, state.scissor[0], state.scissor[1], state.scissor[0] + state.scissor[2] - 1,
+          state.scissor[1] + state.scissor[3] - 1);
   State s = state;
   s.pipeline.transformed = 1;
   s.pipeline.flat = !(shade & 1);
@@ -1117,6 +1168,7 @@ auto GPU::show(const std::vector<u32>& pixels, u32 width, u32 height) -> void {
 auto GPU::drop() -> void {
   recorded.clear();
   held.reset();
+  reach = {};
   target = nullptr, drawing = false;
   for(auto& owner : owners) owner = nullptr;
   if(!backend) return;

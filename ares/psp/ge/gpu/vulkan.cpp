@@ -1024,7 +1024,7 @@ struct VulkanBackend : GPU::Backend {
         transition(commands, t.color.image, VK_IMAGE_ASPECT_COLOR_BIT, ColorLayout, Source);
         transition(commands, texture.image.image, VK_IMAGE_ASPECT_COLOR_BIT, was, Destination);
         VkImageCopy region{{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, offset, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                           {0, 0, 0}, extent};
+                           {c.intoX * s32(scale), c.intoY * s32(scale), 0}, extent};
         vk.vkCmdCopyImage(commands, t.color.image, Source, texture.image.image, Destination, 1, &region);
         transition(commands, t.color.image, VK_IMAGE_ASPECT_COLOR_BIT, Source, ColorLayout);
         transition(commands, texture.image.image, VK_IMAGE_ASPECT_COLOR_BIT, Destination,
