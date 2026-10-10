@@ -1903,6 +1903,7 @@ struct Kernel {
   auto scePowerGetBatteryLifePercent() -> void;
   auto scePowerGetBatteryLifeTime() -> void;
   auto scePowerTick() -> void;
+  auto scePowerCheckWlanCoexistenceClock() -> void;
   auto scePowerSetClockFrequency() -> void;
   auto scePowerSetCpuClockFrequency() -> void;
   auto scePowerSetBusClockFrequency() -> void;

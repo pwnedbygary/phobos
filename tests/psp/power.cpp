@@ -723,6 +723,15 @@ static auto oddsAndEnds() -> void {
   CHECK(word(R + 0x300) == 28 && word(R + 0x304) == 0 && word(R + 0x308) == 0xcccc'cccc, true);
 }
 
+//The fastest PLL the model allows with the wireless LAN on (scePowerCheckWlanCoexistenceClock, known by its NID,
+//0xa85880d0): 1, a PSP-2000's 333 MHz.
+static auto wlanClock() -> void {
+  KernelMachine m;
+  m.kernel.syscall(m.kernel.importCode("scePower", 0xa858'80d0));
+  CHECK(m.system.ipu.r[2], 1);
+  CHECK(m.notes.size(), 0);
+}
+
 auto powerTests() -> Tests {
   return {
     {"power callbacks", powerCallbacks}, {"power clocks", powerClocks}, {"power volatile memory", volatileMemory},
@@ -732,6 +741,7 @@ auto powerTests() -> Tests {
     {"kernel mersenne twister", mersenneTwister}, {"kernel odds and ends", oddsAndEnds},
     {"kernel thread priorities", threadPriorities}, {"kernel thread stack free", stackFree},
     {"remote and running time", remoteAndRunningTime},
+    {"power the clock beside the wireless LAN", wlanClock},
   };
 }
 

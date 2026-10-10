@@ -266,6 +266,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("scePower",          "scePowerGetBatteryLifePercent", &Kernel::scePowerGetBatteryLifePercent);
   add("scePower",          "scePowerGetBatteryLifeTime",    &Kernel::scePowerGetBatteryLifeTime);
   add("scePower",          "scePowerTick",                  &Kernel::scePowerTick);
+  addNID("scePower",       "scePowerCheckWlanCoexistenceClock", 0xa858'80d0,
+         &Kernel::scePowerCheckWlanCoexistenceClock);
   add("scePower",          "scePowerSetClockFrequency",     &Kernel::scePowerSetClockFrequency);
   //later SDKs' scePowerSetClockFrequency, under NIDs of their own: Gunhound EX calls the first with (333, 333, 166),
   //Peace Walker the second
