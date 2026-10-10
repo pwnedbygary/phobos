@@ -858,10 +858,10 @@ static auto gpuRefusedAmongThreads() -> void {
 
 //The same memory drawn as frame buffers of different formats and places in turn, as God of War draws its effects:
 //an 8888 frame buffer 64 pixels wide, a 5650 one 128 wide over the same bytes, an 8888 one a page further down whose
-//rows are the first's rows 16 on, and a 5551 one 128 wide (its alpha the stencil's top bit). Each takes the pixels the
-//one before drew in its pages on the GPU, as memory would have them (move()), with nothing put back; at 1x, 2x and
-//3x, and everything comes out as the software renderer has it. (Sprites with random colors and alphas, some in clear
-//mode setting the stencil, some textured from another frame buffer the GPU drew.)
+//rows are the first's rows 16 on, a 5551 one 128 wide (its alpha the stencil's top bit), and a 4444 one (its top
+//four). Each takes the pixels the one before drew in its pages on the GPU, as memory would have them (move()), with
+//nothing put back; at 1x, 2x and 3x, and everything comes out as the software renderer has it. (Sprites with random
+//colors and alphas, some in clear mode setting the stencil, some textured from a texture the CPU wrote in VRAM.)
 static auto gpuMoves() -> void {
   auto gpu = renderer();
   if(!gpu) return;
@@ -884,6 +884,7 @@ static auto gpuMoves() -> void {
       passes.push_back({At, 128, 0, randomSprites(random, 12, false), false, round == 2});
       passes.push_back({At + 0x1000, 64, 3, randomSprites(random, 8, false), false, round == 0});
       passes.push_back({At, 128, 1, randomSprites(random, 8, false), round == 2, false});
+      passes.push_back({At, 128, 2, randomSprites(random, 8, false), round == 0, round == 1});
     }
     for(System* s : {&software, &hardware}) {
       auto& c = s->ge.commands;
@@ -908,9 +909,10 @@ static auto gpuMoves() -> void {
 
 //Frame buffers side by side in the rows of a wide one, and one a row down, as God of War draws its effects (four 5650
 //ones 64 pixels wide in rows of 256 here): parts of one target, drawn into in turn with nothing finished, dithered
-//(each one's matrix from its own first row and column: the fifth starts a row down), a sprite's texture stepped
-//across each, and a texture read across the four, held on the GPU. Then one whose PRIM reaches past its target's
-//rows' end, and one drawn with its depth buffer, each a target of its own. Everything as the software renderer has it.
+//(each one's matrix from its own first row, its columns starting on a multiple of four: the fifth starts a row down), a
+//sprite's texture stepped across each, and a texture read across the four, held on the GPU. Then one whose PRIM
+//reaches past its target's rows' end, and one drawn with its depth buffer, each a target of its own. Everything as the
+//software renderer has it.
 static auto gpuSideBySide() -> void {
   auto gpu = renderer();
   if(!gpu) return;
@@ -1046,8 +1048,9 @@ static auto gpuTransferOver() -> void {
 //GE then reads): words over two rows, and halfwords over a 5650 frame buffer's pixels, memory's at once
 //(overwritten()), nothing finished, and read again (as the GE reads the list) without a finish either; a texture over
 //them decoded from memory, and a sprite drawn across them after. A byte into an 8888 pixel is only part of it: that
-//one finishes first. And rows stored over the GPU's, then a finish before anything takes them: not put back over. As
-//the software renderer has it each time.
+//one finishes first. And rows stored over the GPU's, then a finish before anything takes them: not put back over; a
+//store through VRAM's third copy (the same bytes) as through the first, a 17th range apart finishing, and one through
+//its second copy (which rearranges them) finishing. As the software renderer has it each time.
 static auto gpuStoresOver() -> void {
   auto gpu = renderer();
   if(!gpu) return;
@@ -1100,8 +1103,74 @@ static auto gpuStoresOver() -> void {
       for(u32 n = 0; n < rowBytes / 4; n++) s->memory.write(4, Memory::VRAMBase + At + 40 * rowBytes + n * 4, n);
       s->memory.read(4, Memory::VRAMBase + At + 38 * rowBytes);
     }
+    if(format == 3) {
+      for(System* s : {&software, &hardware}) {
+        sprite(*s, {{{0, 0, 0, 24}, {0, 0, 64, 34}}, 0xff22'4466});
+        before = gpu->statistics;
+        s->memory.write(4, 0x0440'0000 + At + 26 * rowBytes + 8, 0xfeed'beefu);  //(VRAM's third copy: the same bytes)
+        for(u32 n = 0; n < 16; n++) {  //(each a range of its own: the 17th a finish)
+          s->memory.write(4, Memory::VRAMBase + At + 30 * rowBytes + n * 8, n);
+          if(s == &hardware) CHECK(gpu->statistics.finishes, before.finishes + (n == 15));
+        }
+        sprite(*s, {{{0, 0, 0, 24}, {0, 0, 64, 34}}, 0xff66'4422});
+        before = gpu->statistics;
+        s->memory.write(4, 0x0420'0000 + At + 28 * rowBytes + 8, 0xdead'beefu);  //(its second copy rearranges them)
+        if(s == &hardware) CHECK(gpu->statistics.finishes, before.finishes + 1);
+      }
+    }
     u32 bytes = vramApart(software, hardware);
     if(bytes) std::printf("  format %u: %u bytes apart\n", format, bytes);
+    CHECK(bytes, 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+}
+
+//Bytes memory has the newest of over a target's pixels, then another target's newer pixels moved over them, the same
+//bytes as another format (God of War's 5650 and 8888 over the same memory, among its streamed writes): the moved
+//pixels are the newest, not memory's. An 8888 frame buffer drawn, a 5650 one over the same bytes drawn (the 8888's
+//pixels in its pages moved into it), the CPU's word stored over both (dead in each), the 5650 drawn over the word;
+//then the 8888 drawn in that page again, or taken as a texture from its first row (the 5650's pixels moved back into
+//it), and the word's place read. And the word written into a page no one owns (beside the 8888's pixels), the 5650
+//drawn over it, then the 8888 taken as a texture. As the software renderer has it each time.
+static auto gpuMovedOverMemorys() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 At = 0x3'0000, Word = 20 * 256 + 40;
+  auto as = [](System& s, u32 format) {  //(8888 in rows of 64 pixels, or 5650 in rows of 128: the same bytes)
+    prepare(s, At, format);
+    s.ge.commands[GE::FrameBufferWidth] = format == 3 ? 64 : 128;
+    s.ge.commands[GE::TextureMappingEnable] = 0;
+  };
+  for(u32 variant : {0u, 1u, 2u}) {
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    u32 seen[2] = {};
+    for(System* s : {&software, &hardware}) {
+      as(*s, 3);
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff10'2030});
+      if(variant == 2) {  //(a finish, so no page is the GPU's: the word's page written, beside the 8888's pixels)
+        s->memory.read(4, Memory::VRAMBase + At);
+        s->memory.write(4, Memory::VRAMBase + At + Word, 0x1234'5678);
+      }
+      as(*s, 0);
+      sprite(*s, {{{0, 0, 0, 16}, {0, 0, 64, 32}}, 0xff40'5060});
+      if(variant < 2) {  //(the word stored over both: dead in each; the 5650 drawn over it)
+        s->memory.write(4, Memory::VRAMBase + At + Word, 0x1234'5678);
+        sprite(*s, {{{0, 0, 0, 18}, {0, 0, 64, 22}}, 0xff70'8090});
+      }
+      if(variant == 0) {
+        as(*s, 3);
+        sprite(*s, {{{0, 0, 0, 28}, {0, 0, 64, 30}}, 0xffa0'b0c0});
+      } else {  //(the 8888 taken as a texture from its first row: the 5650's pixels moved into it first)
+        prepare(*s, 0x2'0000, 3);
+        texture(*s, Memory::VRAMBase + At, 64, 32, 64);
+        sprite(*s, {{{0, 0, 0, 0}, {64, 32, 64, 32}}, 0xffff'ffff});
+      }
+      seen[s == &hardware] = s->memory.read(4, Memory::VRAMBase + At + Word);
+    }
+    CHECK(seen[1], seen[0]);
+    u32 bytes = vramApart(software, hardware);
+    if(bytes) std::printf("  variant %u: %u bytes apart\n", variant, bytes);
     CHECK(bytes, 0u);
     hardware.ge.setRenderer(nullptr);
   }
@@ -1760,6 +1829,7 @@ auto gpuTests() -> Tests {
     {"gpu frame buffers side by side in one target's rows", gpuSideBySide},
     {"gpu a block transfer over pixels it drew: memory's at once, nothing finished", gpuTransferOver},
     {"gpu the CPU's stores over pixels it drew: memory's at once, nothing finished", gpuStoresOver},
+    {"gpu pixels moved over bytes memory has the newest of: the moved ones newest", gpuMovedOverMemorys},
     {"gpu memory's bytes in its pages taken again, not the target afresh", gpuRevived},
     {"gpu a texture's place taken by tiles reaching further: few copies, held to what each takes", gpuTiles},
     {"gpu depth buffer follows memory's changes", gpuDepth},

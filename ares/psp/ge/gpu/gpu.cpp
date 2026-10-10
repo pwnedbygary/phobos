@@ -82,15 +82,15 @@ auto GPU::lose() -> void {
 }
 
 //The target for a frame buffer, made if there's none yet: the frame buffer of its width and format that starts
-//where its page does, where a page holds whole rows of it (rows of 512, 1,024, 2,048 or 4,096 bytes from VRAM's
-//start), else where its row does; and the row and column of it the frame buffer starts at. So small frame buffers
-//side by side in the rows of a wide one are parts of one target (God of War draws effects into four 64 pixels wide
-//in rows of 1,024, and three in rows of 512), and drawing into one after another, and a texture read across them,
-//need nothing put back; and every page of a frame buffer of such rows is whole rows of a target, so its pixels can
-//go from one target to another on the GPU (move()). One whose PRIM reaches past its target's rows' end (which the
-//PSP's addresses run on into the next row) or last row, or is drawn with its depth buffer, is a target of its own.
-//The same bytes as another format are another target. Its height is as many rows as fit in VRAM, up to 512 (a PRIM
-//reaching further is the software renderer's: begin()). None where not a row fits, or the GPU has no room for it.
+//where its page does, where a page holds whole rows of it (rows whose bytes divide 4,096, from VRAM's start), else
+//where its row does; and the row and column of it the frame buffer starts at. So small frame buffers side by side in
+//the rows of a wide one are parts of one target (God of War draws effects into four 5650 ones 64 pixels wide in rows
+//of 1,024 pixels, and 8888 ones side by side in rows of 512), and drawing into one after another, and a texture read
+//across them, need nothing put back; and every page of a frame buffer of such rows is whole rows of a target, so its
+//pixels can go from one target to another on the GPU (move()). One whose PRIM reaches past its target's rows' end
+//(which the PSP's addresses run on into the next row) or last row, or is drawn with its depth buffer, is a target of
+//its own. The same bytes as another format are another target. Its height is as many rows as fit in VRAM, up to 512
+//(a PRIM reaching further is the software renderer's: begin()). None where not a row fits, or the GPU has no room.
 auto GPU::targetFor(const GE::PixelState& p, const GE::Region& region, u32& column, u32& row) -> Target* {
   u32 bytes = p.format == 3 ? 4 : 2, rowBytes = p.stride * bytes;
   u32 address = p.frameBuffer - p.frameBuffer % (Memory::PageSize % rowBytes ? rowBytes : Memory::PageSize);
@@ -274,10 +274,12 @@ auto GPU::own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
 //Whether another target's pixels in pages first to last, which it has drawn in, can move into t on the GPU (move():
 //as putting them in memory and filling t from it would leave t): the same bytes a row, pages of whole rows, and rows
 //starting the same bytes in both, every pixel it drew there in t's rows; not where memory has newer bytes among them
-//(from's beside). box: the rectangle moved, in from's pixels: its drawn columns (a 16-bit one's going into an 8888
-//one's widened to whole pixels of that: the newest of the pixels beside them are its too, in the pages it owns),
-//its drawn rows in those pages.
+//(from's beside), nor where t's own bytes beside its pixels are merged into ranges that may take in pixels it drew
+//(those it fills afresh, after a finish). box: the rectangle moved, in from's pixels: its drawn columns (a 16-bit
+//one's going into an 8888 one's widened to whole pixels of that: the newest of the pixels beside them are its too, in
+//the pages it owns), its drawn rows in those pages.
 auto GPU::movable(const Target& from, const Target& t, u32 first, u32 last, s32 (&box)[4]) const -> bool {
+  box[0] = 0, box[1] = 0, box[2] = -1, box[3] = -1;
   u32 rowBytes = t.stride * t.bytes();
   if(!backend->moves || from.stride * from.bytes() != rowBytes || Memory::PageSize % rowBytes ||
      from.address % rowBytes || t.address % rowBytes) {
@@ -290,6 +292,8 @@ auto GPU::movable(const Target& from, const Target& t, u32 first, u32 last, s32 
   s32 down = (s32(from.address) - s32(t.address)) / s32(rowBytes);
   if(box[1] > box[3]) return true;
   if(box[1] + down < 0 || box[3] + down >= s32(t.height)) return false;
+  s32 x = box[0] * s32(from.bytes()) / s32(t.bytes()), right = (box[2] + 1) * s32(from.bytes()) / s32(t.bytes()) - 1;
+  if(t.merged && t.besideReaches(x, box[1] + down, right, box[3] + down)) return false;
   return !from.besideReaches(box[0], box[1], box[2], box[3]);
 }
 
@@ -307,9 +311,13 @@ auto GPU::move(Target& from, Target& t, const Moving& m) -> void {
   c.sourceX = box[0], c.sourceY = box[1];
   c.x = box[0] * from.bytes() / t.bytes(), c.width = (box[2] + 1 - box[0]) * from.bytes() / t.bytes();
   c.y = box[1] + (s32(from.address) - s32(t.address)) / s32(rowBytes), c.height = box[3] - box[1] + 1;
+  s32 right = c.x + c.width - 1, bottom = c.y + c.height - 1;
+  //(t's bytes memory has the newest of, over its older pixels, filled first where the move goes: it puts from's
+  //newer ones over those, and the ranges no longer say memory's of them)
+  if(t.besideReaches(c.x, c.y, right, bottom)) revive(t, t.beside);
+  if(t.deadReaches(c.x, c.y, right, bottom)) revive(t, t.dead);
   recorded.commands.push_back(c);
   statistics.moves++;
-  s32 right = c.x + c.width - 1, bottom = c.y + c.height - 1;
   if(!t.drawn()) t.left = c.x, t.top = c.y, t.right = right, t.bottom = bottom;
   else {
     t.left = std::min(t.left, c.x), t.top = std::min(t.top, c.y);

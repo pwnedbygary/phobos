@@ -18,11 +18,12 @@
 //the renderer each PRIM's settings and its primitives' vertices on the screen (GE::Renderer, ge.hpp); the renderer
 //turns them into draws:
 //  - Frame buffers ("targets"): each frame buffer the GE draws into (address, width, format) is a picture on the GPU,
-//    8888 with an 8-bit stencil (the PSP's stencil is its frame buffer's alpha) and a depth buffer. It's filled from
-//    memory's VRAM before it's first drawn into, and again whenever someone else has changed those bytes since
-//    (written()); what's drawn stays on the GPU, and VRAM's pages under it are the renderer's (busy, Memory::
-//    busyPages) until something needs them: the CPU, the screen, a texture, a block transfer (finish()). Then the
-//    pixels drawn are read back and put into memory's VRAM in the frame buffer's format, the stencil as its alpha.
+//    or part of one (those side by side in a page's rows: targetFor()), 8888 with an 8-bit stencil (the PSP's
+//    stencil is its frame buffer's alpha) and a depth buffer. It's filled from memory's VRAM before it's first drawn
+//    into, and again whenever someone else has changed those bytes since (written()); what's drawn stays on the
+//    GPU, and VRAM's pages under it are the renderer's (busy, Memory::busyPages) until something needs them: the
+//    CPU, the screen, a texture, a block transfer (finish()). Then the pixels drawn are read back and put into
+//    memory's VRAM in the frame buffer's format, the stencil as its alpha.
 //  - Textures: the GE's decoded copies, each put on the GPU once and kept while the GE keeps the copy.
 //  - Draws: a primitive's vertices go into a list for the GPU, consecutive primitives with the same settings into
 //    one draw; the settings make a pipeline (Pipeline: what the GPU's fixed stages do, and the fragment shader's
@@ -304,7 +305,7 @@ struct GPU : GE::Renderer {
     u64 readingDraws = 0, splits = 0;  //draws blended in the shader; those begun as their primitives overlapped
     u64 presents = 0, presentsFromMemory = 0;  //frames presented on the window (show()): from a target, memory's
     u64 meshes = 0;    //3D PRIMs the GPU transformed (fast mode: mesh(), the first of each PRIM's runs)
-    u64 moves = 0;     //pixels moved from one target into another on the GPU (move()), not put back and filled
+    u64 moves = 0;     //rectangles moved from one target into another on the GPU (move()), not put back and filled
     u64 waiting = 0;   //nanoseconds the CPU waited in finish() and picture()
   } statistics;
 
