@@ -1,5 +1,6 @@
-//Files' asynchronous requests (ares/psp/kernel/async.cpp): each done as it's made but its result held back for the
-//time the file's device takes, then polled or waited for; the refusals while one is under way; the descriptor an
+//Files' asynchronous requests (ares/psp/kernel/async.cpp): each done as it's made (a read's bytes landing as it's
+//done) but its result held back for the time the file's device takes, then polled or waited for; a damaged image's
+//reads; the refusals while one is under way; the descriptor an
 //asynchronous open or close leaves for its result; callbacks notified as requests are done, and run in CB waits;
 //two threads waiting on one request, and a callback taking the result its thread waits for; an ioctl's time; and a
 //state saved while a thread waits for a request. Synchronous reads and writes (io.cpp) wait the same time, and are
@@ -35,10 +36,11 @@ auto text(u32 size) -> std::string {
 }
 
 //Requests called directly: a read's bytes and result, held back until 100 microseconds plus its bytes at 4 MB a
-//second (the memory stick) have passed; polls before and after; everything else refused meanwhile; seeks, a read
-//past the end, a write refused as its result, an ioctl; an asynchronous close and a failed asynchronous open each
-//leaving a descriptor for the result alone, which goes once it's taken; the disc's rate; the priority's and the
-//callback's checks.
+//second (the memory stick) have passed, its bytes landing over what the program wrote there meanwhile; polls before
+//and after; everything else refused meanwhile; seeks, a read past the end, one at the end, one where nothing is, a
+//write refused as its result, an ioctl; an asynchronous close and a failed asynchronous open each leaving a
+//descriptor for the result alone, which goes once it's taken; the disc's rate, and umd0:'s sectors; the priority's
+//and the callback's checks.
 static auto asyncCalls() -> void {
   HostFolder stick;
   stick.put("DATA.BIN", text(10000));
@@ -49,8 +51,11 @@ static auto asyncCalls() -> void {
   u32 file = m.call("sceIoOpen", {m.string("ms0:/DATA.BIN"), 0x0001, 0});
   CHECK(m.call("sceIoPollAsync", {file, R}), Kernel::ErrorNoAsync);
   CHECK(m.call("sceIoWaitAsync", {file, R}), Kernel::ErrorNoAsync);
+  m.system.memory.fill(Buffer, 0, 4000);
   CHECK(m.call("sceIoReadAsync", {file, Buffer, 4000}), 0);
-  CHECK(m.system.memory.readString(Buffer, 4) == "abcd", true);  //the bytes are there as it's made
+  CHECK(m.system.memory.read(4, Buffer + 4) == 0 && m.system.memory.read(4, Buffer + 3996) == 0, true);  //not yet
+  m.system.memory.copyIn(Buffer, "MARK", 4);  //Dead or Alive Paradise's marker, written once the read is made
+  m.system.memory.copyIn(Buffer + 3996, "MARK", 4);
   u64 due = m.kernel.cycles + 100 * Microsecond + 4000 * Kernel::CPUFrequency / 4'000'000;
   CHECK(m.kernel.files[file].asyncDoneAt, due);
   CHECK(m.call("sceIoPollAsync", {file, R}), 1);
@@ -62,7 +67,10 @@ static auto asyncCalls() -> void {
   CHECK(m.call("sceIoReadAsync", {file, Buffer, 4}), Kernel::ErrorAsyncBusy);
   advance(m, due - 1);
   CHECK(m.call("sceIoGetAsyncStat", {file, 1, R}), 1);
+  CHECK(m.system.memory.readString(Buffer, 4) == "MARK", true);
   advance(m, due);
+  CHECK(m.system.memory.readString(Buffer, 4) == "abcd", true);  //as it's done, over the marker
+  CHECK(m.system.memory.readString(Buffer + 3996, 4) == text(4000).substr(3996), true);
   m.system.memory.write(4, R + 4, 0xcccc'cccc);
   CHECK(m.call("sceIoPollAsync", {file, R}), 0);
   CHECK(result64(m, R), 4000);
@@ -80,6 +88,11 @@ static auto asyncCalls() -> void {
   CHECK(finish(file), 95);
   CHECK(m.call("sceIoReadAsync", {file, Buffer, 20000}), 0);  //past the end: what's left
   CHECK(finish(file), 9905);
+  CHECK(m.system.memory.readString(Buffer, 4) == text(99).substr(95), true);
+  CHECK(m.call("sceIoReadAsync", {file, Buffer, 4}), 0);  //at the end: none, in a request's time
+  CHECK(finish(file), 0);
+  CHECK(m.call("sceIoReadAsync", {file, 0x10, 4}), 0);  //where nothing is: refused, as the result
+  CHECK(finish(file), u64(s64(s32(Kernel::ErrorIllegalAddress))));
   CHECK(m.call("sceIoLseek32Async", {file, u32(-1), 0}), 0);
   CHECK(finish(file), u64(s64(s32(Kernel::ErrorInvalidArgument))));
   CHECK(m.call("sceIoWriteAsync", {file, Buffer, 4}), 0);  //opened to read: refused, as the result
@@ -130,6 +143,19 @@ static auto asyncCalls() -> void {
   CHECK(m.call("sceIoIoctlAsync", {disc, 0x0102'0006, 0, 0, R + 8, 4}), 0);
   CHECK(finish(disc), 0);
   CHECK(word(m, R + 8), m.kernel.files[disc].sector);
+  //through umd0:, in sectors: two of them, the position moved by two as it's made, their bytes landing as it's done
+  u32 umd = m.call("sceIoOpen", {m.string("umd0:"), 0x0001, 0});
+  u32 sector = m.kernel.files[disc].sector;
+  CHECK(m.call("sceIoLseek32", {umd, sector, 0}), sector);
+  m.system.memory.fill(Buffer, 0, 4096);
+  start = m.kernel.cycles;
+  CHECK(m.call("sceIoReadAsync", {umd, Buffer, 2}), 0);
+  CHECK(m.kernel.files[umd].asyncDoneAt - start, 100 * Microsecond + 4096 * Kernel::CPUFrequency / 1'375'000);
+  CHECK(m.kernel.files[umd].position, sector + 2);
+  CHECK(word(m, Buffer), 0);
+  CHECK(finish(umd), 2);
+  CHECK(word(m, Buffer) == 0x0707'0707 && word(m, Buffer + 4092) == 0x0707'0707, true);
+  CHECK(m.call("sceIoClose", {umd}), 0);
 
   //the priority: a user thread's, for a file or (-1) for those to come; the callback: one there is
   CHECK(m.call("sceIoChangeAsyncPriority", {u32(-1), 0x65}), 0);
@@ -146,6 +172,46 @@ static auto asyncCalls() -> void {
     n.kernel.mount("ms0", stick.path.string());
     n.kernel.disc = discFrom(image.bytes);
   }), true);
+}
+
+//A disc image that can't be read where a read goes (a damaged one): a read is an I/O error, the file's position left
+//where it was; an asynchronous one is made, its position moved, and done as an I/O error, nothing landing and its
+//position back where the read began. The image readable there again, the same read gets the bytes.
+static auto asyncDamaged() -> void {
+  auto image = disc_image::makeIso({{"DISC.BIN", std::vector<u8>(8192, 7)}});
+  auto bytes = std::make_shared<std::vector<u8>>(image.bytes);
+  auto unreadable = std::make_shared<std::pair<u64, u64>>(0, 0);  //where in the image, from and to
+  auto disc = std::make_shared<ares::PlayStationPortable::Disc>();
+  std::string error;
+  disc->open([bytes, unreadable](u64 offset, void* out, u64 size) -> u64 {
+    if(offset < unreadable->second && offset + size > unreadable->first) return 0;
+    size = offset < bytes->size() ? std::min<u64>(size, bytes->size() - offset) : 0;
+    memcpy(out, bytes->data() + offset, size);
+    return size;
+  }, bytes->size(), error);
+  KernelMachine m;
+  m.kernel.disc = disc;
+  u32 file = m.call("sceIoOpen", {m.string("disc0:/DISC.BIN"), 0x0001, 0});
+  u64 at = u64(m.kernel.files[file].sector) * 2048;
+  *unreadable = {at + 4096, at + 6144};  //its third sector
+  m.system.memory.fill(Buffer, 0xcc, 8192);
+  CHECK(m.call("sceIoRead", {file, Buffer, 4096}), 4096);
+  CHECK(m.call("sceIoRead", {file, Buffer + 4096, 4096}), Kernel::ErrorIOError);
+  CHECK(m.kernel.files[file].position, 4096);
+  CHECK(m.call("sceIoReadAsync", {file, Buffer + 4096, 4096}), 0);
+  CHECK(m.kernel.files[file].position, 8192);
+  advance(m, m.kernel.files[file].asyncDoneAt);
+  CHECK(m.call("sceIoPollAsync", {file, R}), 0);
+  CHECK(result64(m, R), u64(s64(s32(Kernel::ErrorIOError))));
+  CHECK(m.kernel.files[file].position, 4096);
+  CHECK(word(m, Buffer + 4096) == 0xcccc'cccc && word(m, Buffer + 8188) == 0xcccc'cccc, true);
+  *unreadable = {0, 0};
+  CHECK(m.call("sceIoReadAsync", {file, Buffer + 4096, 4096}), 0);
+  advance(m, m.kernel.files[file].asyncDoneAt);
+  CHECK(m.call("sceIoPollAsync", {file, R}), 0);
+  CHECK(result64(m, R), 4096);
+  CHECK(word(m, Buffer + 4096) == 0x0707'0707 && word(m, Buffer + 8188) == 0x0707'0707, true);
+  CHECK(m.notes.size(), 0);
 }
 
 //A program waits for its requests: the first wait blocks the main thread (a worker runs meanwhile) for exactly the
@@ -358,8 +424,9 @@ static auto asyncIoctlTiming() -> void {
 }
 
 //A state saved while the main thread waits for a read from the disc loads into another machine, which makes the same
-//state and carries on as the first does: the wait ends with the read's result at the same moment. And a state with
-//the file gone (no disc in the drive) tells the waiting thread it's a bad file.
+//state and carries on as the first does: the wait ends with the read's result at the same moment, its bytes landing
+//then. And a state with the file gone (no disc in the drive) tells the waiting thread it's a bad file, and nothing
+//lands.
 static auto asyncState() -> void {
   auto image = disc_image::makeIso({{"DISC.BIN", std::vector<u8>(65536, 3)}});
   for(bool recompile : {false, true}) {
@@ -379,6 +446,7 @@ static auto asyncState() -> void {
     main.call("sceKernelExitGame");
     m.runProgram(0x0880'1000, recompile, Kernel::CPUFrequency / 100);  //10 ms of the read's 48
     CHECK(m.kernel.exited, false);
+    CHECK(word(m, Buffer) == 0 && word(m, Buffer + 65532) == 0, true);  //its bytes not there yet
     auto state = saveState(m);
     KernelMachine n;
     n.system.recompiler.enabled = recompile;
@@ -390,6 +458,7 @@ static auto asyncState() -> void {
       CHECK(each->kernel.exited, true);
       CHECK(result64(*each, R + 0x10), 65536);
       CHECK(word(*each, R + 0x20), 0);
+      CHECK(word(*each, Buffer) == 0x0303'0303 && word(*each, Buffer + 65532) == 0x0303'0303, true);
     }
     CHECK(word(m, R + 0x24), word(n, R + 0x24));
     CHECK(word(m, R + 0x24), (100 * Microsecond + 65536 * Kernel::CPUFrequency / 1'375'000) / Microsecond);
@@ -399,6 +468,7 @@ static auto asyncState() -> void {
     without.kernel.run(Kernel::CPUFrequency / 10);
     CHECK(without.kernel.exited, true);
     CHECK(word(without, R + 0x20), Kernel::ErrorBadFile);
+    CHECK(word(without, Buffer), 0);  //none came
     CHECK(roundTrip(m, [&](KernelMachine& fresh) { fresh.kernel.disc = discFrom(image.bytes); }), true);
     CHECK(roundTrip(without), true);
   }
@@ -588,7 +658,8 @@ static auto syncWaitState() -> void {
 }
 
 auto asyncTests() -> Tests {
-  return {{"async files called directly", asyncCalls}, {"async files waited for", asyncWaits},
+  return {{"async files called directly", asyncCalls}, {"async files from a damaged image", asyncDamaged},
+          {"async files waited for", asyncWaits},
           {"async files two waiters", asyncTwoWaiters}, {"async files callback takes the result", asyncCallbackTakes},
           {"async files ioctl timing", asyncIoctlTiming}, {"async files state", asyncState},
           {"files synchronous reads wait", syncWaits}, {"files synchronous wait state", syncWaitState}};

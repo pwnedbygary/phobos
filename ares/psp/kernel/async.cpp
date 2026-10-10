@@ -2,10 +2,11 @@
 //written, seeked, closed or sent an ioctl, gets on with something else, and later polls the file or waits on it for
 //the result. Games use them to load while a loading screen animates, and to stream music and data from the disc.
 //
-//Each open file takes one request at a time. The request is done here as it's made (the bytes are read into the
-//program's memory, the position moves), but its result is held back until the time the file's device would have
-//taken has passed: until then a poll finds it under way (1) and a wait blocks the thread. Once the time is up
-//(asyncEvents()), the result waits on the file until the program takes it, with sceIoPollAsync, sceIoWaitAsync,
+//Each open file takes one request at a time. The request is done here as it's made (the position moves, a write's
+//bytes are written), but its result is held back until the time the file's device would have taken has passed, and
+//a read's bytes reach the program's memory only then (sceIoReadAsync(); an ioctl's reads, as sceIoIoctl makes them,
+//move theirs as it's made): until then a poll finds it under way (1) and a wait blocks the thread. Once the time is
+//up (asyncEvents()), the result waits on the file until the program takes it, with sceIoPollAsync, sceIoWaitAsync,
 //sceIoWaitAsyncCB or sceIoGetAsyncStat; a thread waiting already takes it then and there (of several, the first to
 //begin waiting; the others are told there's none), and a callback set with sceIoSetAsyncCallback is notified. The
 //result is 64 bits (SceInt64): what the synchronous function would have returned, an error sign-extended so that
@@ -99,22 +100,35 @@ auto Kernel::asyncResume(Thread& thread) -> bool {
   return true;
 }
 
-//Requests whose time is up are done: each file's callback is notified, and every thread waiting on it runs on, the
-//first to have begun waiting taking the result, any others finding none (asyncResume()). A thread waiting where its
-//callbacks may run, whose callback that is, runs the callback first and ends its wait after it (resumeWait()).
-//Returns whether a thread woke.
+//Requests whose time is up are done: a read's bytes reach the program's memory (an image that can't be read there
+//making its result an I/O error, the file's position back where the read began), each file's callback is notified,
+//and every thread waiting on it runs on, the first to have begun waiting taking the result, any others finding none
+//(asyncResume()). A thread waiting where its callbacks may run, whose callback that is, runs the callback first and
+//ends its wait after it (resumeWait()). Returns whether a thread woke.
 auto Kernel::asyncEvents() -> bool {
   bool woke = false;
   std::vector<u32> done;
   for(auto& [file, open] : files) {
     if(open.async == OpenFile::Async::Pending && cycles >= open.asyncDoneAt) done.push_back(file);
   }
-  for(u32 file : done) {
-    auto& open = files[file];
-    open.async = OpenFile::Async::Done;
-    if(open.asyncCallback && notifyCallback(open.asyncCallback, open.asyncArgument)) woke = true;
-    for(auto thread : asyncWaiters(file)) woke = asyncResume(*thread) || woke;
+  for(u32 file : done) woke = asyncDone(file) || woke;
+  return woke;
+}
+
+//A file's request is done, its time up: its bytes, its callback and its waiters, as asyncEvents() has them. Returns
+//whether a thread woke.
+auto Kernel::asyncDone(u32 file) -> bool {
+  bool woke = false;
+  auto& open = files[file];
+  open.async = OpenFile::Async::Done;
+  if(open.asyncData) {
+    s64 moved = readMove(open, open.asyncFrom, open.asyncResult, open.asyncData);  //(fewer from a host file cut short)
+    open.position = open.asyncFrom + std::max<s64>(moved, 0);
+    open.asyncResult = moved < 0 ? u64(s64(s32(ErrorIOError))) : u64(moved);
   }
+  open.asyncData = 0;
+  if(open.asyncCallback && notifyCallback(open.asyncCallback, open.asyncArgument)) woke = true;
+  for(auto thread : asyncWaiters(file)) woke = asyncResume(*thread) || woke;
   return woke;
 }
 
@@ -162,14 +176,22 @@ auto Kernel::sceIoCloseAsync() -> void {
   result(0);
 }
 
-//(file, data, size): read as sceIoRead reads; the result is how many bytes (umd0:'s sectors) were read.
+//(file, data, size): read as sceIoRead reads; the result is how many bytes (umd0:'s sectors) were read. They're
+//counted, and the file's position moved past them, as the request is made, but they reach the program's memory only
+//as it's done (asyncEvents()), as the drive's transfer would put them there: Dead or Alive Paradise writes a marker
+//over a read's first and last words once the request is made, and takes the marker still there when it's done for a
+//read that failed, and makes it again.
 auto Kernel::sceIoReadAsync() -> void {
   u32 file = arg(0);
   auto open = asyncIssue(file);
   if(!open) return;
-  u32 got = readFile(file, arg(1), arg(2));
-  u64 bytes = s32(got) < 0 ? 0 : u64(got) * (open->sectors ? Disc::SectorSize : 1);
-  asyncStart(*open, s32(got), bytes);
+  u64 count = 0;
+  u32 error = open->flags & OpenRead ? readCount(*open, arg(1), arg(2), count) : ErrorBadFile;
+  if(error) return asyncStart(*open, s32(error), 0), result(0);
+  open->asyncData = count ? arg(1) : 0;
+  open->asyncFrom = open->position;
+  open->position += count;
+  asyncStart(*open, s64(count), count * (open->sectors ? Disc::SectorSize : 1));
   result(0);
 }
 

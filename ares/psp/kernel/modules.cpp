@@ -412,10 +412,12 @@ auto Kernel::sceKernelLoadModule() -> void {
 //(file, flags, options): a module loaded from a file already open, from where it's at: games keep modules inside
 //archives of their own, and seek to one before loading it. An encrypted module is as long as its ~PSP header says
 //(0x2c), after the ~SCE header some have: one said to be shorter than that header, or longer than 64 MiB (the PSP's
-//memory), is refused, the file left where it was. A plain one runs to the file's end (16 MiB at most).
+//memory), is refused, the file left where it was. A plain one runs to the file's end (16 MiB at most). A file with
+//an asynchronous request under way is refused, as its reads are (ASYNC_BUSY).
 auto Kernel::sceKernelLoadModuleByID() -> void {
   auto found = files.find(arg(0));
   if(found == files.end()) return result(ErrorBadFile);
+  if(asyncBusy(arg(0))) return result(ErrorAsyncBusy);
   auto& open = found->second;
   u64 position = open.position;
   std::vector<u8> data;

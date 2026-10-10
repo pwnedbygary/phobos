@@ -623,6 +623,8 @@ struct Kernel {
     enum class Async : u32 { None, Pending, Done } async = Async::None;
     u64 asyncDoneAt = 0;
     u64 asyncResult = 0;
+    u32 asyncData = 0;     //a read under way: where its bytes go as it's done (0: none to move), from asyncFrom on,
+    u64 asyncFrom = 0;     //as many as its result counts (bytes, or sectors through umd0:)
     u32 asyncCallback = 0, asyncArgument = 0;  //sceIoSetAsyncCallback's: notified as each request is done
     bool resultOnly = false;  //nothing is open (an asynchronous close, or an asynchronous open that failed): the
                               //descriptor stays only to hand over its request's result
@@ -650,6 +652,8 @@ struct Kernel {
   auto runOnDisc(const std::string& path, u32& first, u64& bytes) const -> bool;
   auto openFile(const std::string& path, u32 flags) -> u32;
   auto readFile(u32 file, u32 data, u32 size) -> u32;
+  auto readCount(OpenFile& open, u32 data, u32 size, u64& count) -> u32;
+  auto readMove(OpenFile& open, u64 at, u64 count, u32 data) -> s64;
   auto writeFile(u32 file, u32 data, u32 size) -> u32;
   auto fileWaitRefused() const -> u32;
   auto fileWait(u32 file, u32 value, bool onDisc, u64 bytes) -> void;
@@ -693,6 +697,7 @@ struct Kernel {
   auto asyncPoll(u32 file, u32 pointer) -> void;
   auto asyncWait(u32 file, u32 pointer, bool callbacks) -> void;
   auto asyncEvents() -> bool;
+  auto asyncDone(u32 file) -> bool;
   auto nextAsyncEvent() const -> u64;
   auto sceIoOpenAsync() -> void;
   auto sceIoCloseAsync() -> void;

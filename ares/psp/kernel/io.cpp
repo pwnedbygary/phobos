@@ -351,36 +351,65 @@ auto Kernel::sceIoClose() -> void {
 }
 
 //Reads from an open file into the program's memory: size bytes (or sectors, for umd0: and runs of sectors opened
-//through it), fewer at the end. Returns how many, or an error.
+//through it), fewer at the end. Returns how many, or an error. (An asynchronous read counts them as it's made, and
+//moves them as it's done: async.cpp.)
 auto Kernel::readFile(u32 file, u32 data, u32 size) -> u32 {
   if(file == StandardInput) return 0;  //nothing to read
   auto found = files.find(file);
   if(found == files.end() || found->second.folder || !(found->second.flags & OpenRead)) return ErrorBadFile;
   auto& open = found->second;
+  u64 count = 0;
+  if(u32 error = readCount(open, data, size, count)) return error;
+  s64 moved = readMove(open, open.position, count, data);
+  if(moved < 0) return ErrorIOError;
+  open.position += moved;
+  return u32(moved);
+}
+
+//How many bytes (or sectors) a read of size from the file's position gets, fewer at its end: 0 with them in count, or
+//why it can't (a destination not in the program's memory: for the disc, the bytes it gets; for a host file, all it
+//asked for). Nothing moves.
+auto Kernel::readCount(OpenFile& open, u32 data, u32 size, u64& count) -> u32 {
   if(open.onDisc) {
     u64 unit = open.sectors ? Disc::SectorSize : 1;
     u64 start = u64(open.sector) * Disc::SectorSize + open.position * unit;
     //no further than the disc goes, whatever the run said: in sectors, its last whole one; in bytes, its last byte
     u64 end = open.sectors ? u64(disc->sectors()) * Disc::SectorSize : disc->size();
-    u64 count = std::min<u64>(size, open.size > open.position ? open.size - open.position : 0);
+    count = std::min<u64>(size, open.size > open.position ? open.size - open.position : 0);
     count = std::min<u64>(count, start < end ? (end - start) / unit : 0);
     u64 bytes = count * unit;
     if(bytes && (bytes > 0xffff'ffff || !memory.reaches(data, u32(bytes)))) return ErrorIllegalAddress;
-    std::vector<u8> buffer(bytes);
-    if(bytes && !disc->read(start, bytes, buffer.data())) return ErrorIOError;
-    memory.copyIn(data, buffer.data(), u32(bytes));
-    open.position += count;
-    return u32(count);
+    return 0;
   }
   if(size && !memory.reaches(data, size)) return ErrorIllegalAddress;
-  std::vector<char> buffer(size);
+  open.stream->flush();
   open.stream->clear();
-  open.stream->seekg(std::streamoff(open.position));
-  open.stream->read(buffer.data(), size);
+  open.stream->seekg(0, std::ios::end);
+  s64 length = s64(open.stream->tellg());
+  open.stream->clear();
+  count = length > s64(open.position) ? std::min<u64>(size, u64(length) - open.position) : 0;
+  return 0;
+}
+
+//Moves up to count bytes (or sectors) of the file, from position at, into the program's memory at data, which
+//readCount() found can take them: how many it moved (a host file may have been cut shorter since), or -1 if the disc
+//image can't be read there (a damaged image).
+auto Kernel::readMove(OpenFile& open, u64 at, u64 count, u32 data) -> s64 {
+  if(!count) return 0;
+  if(open.onDisc) {
+    u64 unit = open.sectors ? Disc::SectorSize : 1;
+    std::vector<u8> buffer(count * unit);
+    if(!disc->read(u64(open.sector) * Disc::SectorSize + at * unit, buffer.size(), buffer.data())) return -1;
+    memory.copyIn(data, buffer.data(), u32(buffer.size()));
+    return s64(count);
+  }
+  std::vector<char> buffer(count);
+  open.stream->clear();
+  open.stream->seekg(std::streamoff(at));
+  open.stream->read(buffer.data(), buffer.size());
   u32 got = u32(open.stream->gcount());
   open.stream->clear();
   memory.copyIn(data, buffer.data(), got);
-  open.position += got;
   return got;
 }
 
@@ -395,11 +424,11 @@ auto Kernel::fileWaitRefused() const -> u32 {
   return 0;
 }
 
-//A synchronous read or write is done as it's made (its bytes move now), as an asynchronous request is (async.cpp),
-//and the calling thread then waits the time the same request would take its device (asyncDuration()), other
-//threads running meanwhile, before it returns value. GTA's disc streaming counts on that: its streaming thread calls
-//a request's callback as its last read ends, and the callback drops the request unless the thread that made it, of
-//a lower priority, has run meanwhile to note it. An error returns at once.
+//A synchronous read or write is done as it's made (its bytes move now), and the calling thread then waits the time
+//the same request would take its device made asynchronously (asyncDuration(), async.cpp), other threads running
+//meanwhile, before it returns value. GTA's disc streaming counts on that: its streaming thread calls a request's
+//callback as its last read ends, and the callback drops the request unless the thread that made it, of a lower
+//priority, has run meanwhile to note it. An error returns at once.
 auto Kernel::fileWait(u32 file, u32 value, bool onDisc, u64 bytes) -> void {
   result(value);
   if(!current || s32(value) < 0) return;

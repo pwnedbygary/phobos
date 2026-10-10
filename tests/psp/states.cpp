@@ -220,8 +220,9 @@ static auto stateFields() -> void {
   u32 top = a.call("sceIoDopen", {a.string("ms0:/")});  //a device's top: no "." or ".." in it
   u32 discFile = a.call("sceIoOpen", {a.string("disc0:/DATA.BIN"), 0x0001, 0});
   u32 discFolder = a.call("sceIoDopen", {a.string("disc0:/DIR")});
-  CHECK(k.files.size(), 6);
-  for(u32 open : {file, other, folder, top, discFile, discFolder}) if(!k.files.count(open)) return;
+  u32 discReader = a.call("sceIoOpen", {a.string("disc0:/DATA.BIN"), 0x0001, 0});  //(its read's bytes below)
+  CHECK(k.files.size(), 7);
+  for(u32 open : {file, other, folder, top, discFile, discFolder, discReader}) if(!k.files.count(open)) return;
   CHECK(k.files[discFolder].discEntries.size(), 2);
   u32 list = a.call("sceGeListEnQueue", {0x0890'8000, 0x0890'8000, u32(-1), 0}) - Kernel::GeListIDs;  //stalled
   u32 list2 = a.call("sceGeListEnQueue", {0x0890'9000, 0x0890'9000, u32(-1), 0}) - Kernel::GeListIDs;  //queued
@@ -377,6 +378,7 @@ static auto stateFields() -> void {
   auto& hostFolder = k.files[folder];
   auto& onDisc = k.files[discFile];
   auto& discList = k.files[discFolder];
+  auto& reader = k.files[discReader];
   auto& c = k.controller;
   auto& l = k.geLists[list];
   auto& gc = k.geCallbacks[3];
@@ -597,6 +599,15 @@ static auto stateFields() -> void {
       closed.async = Kernel::OpenFile::Async::Pending;
       closed.asyncDoneAt = k.cycles + 2000;
     }},
+    //the disc's file opened again, reading its first 16 bytes: the request under way, then where its bytes are to
+    //go, then the read made from 16 bytes on (where it read from moving its position with it)
+    {"file async of a read", [&] {
+      reader.async = Kernel::OpenFile::Async::Pending;
+      reader.asyncDoneAt = k.cycles + 2000;
+      reader.asyncResult = 16, reader.position = 16;
+    }},
+    {"file asyncData", [&] { reader.asyncData = 0x0897'0000; }},
+    {"file asyncFrom", [&] { reader.asyncFrom = 16, reader.position = 32; }},
     {"folder entries", [&] { hostFolder.entries[2] += "x"; }},  //".", "..", then "ONE"
     {"folder nextEntry", [&] { hostFolder.nextEntry = 1; }},
     {"disc file folder", [&] { onDisc.folder = true; }}, {"disc file sectors", [&] { onDisc.sectors = true; }},
@@ -829,6 +840,26 @@ static auto stateFields() -> void {
   refuses("a descriptor for a result it hasn't got", [&] { k.files[other].async = Async::None; });
   refuses("a descriptor for a result, open for reading", [&] { k.files[other].flags = 0x0001; });
   refuses("an asynchronous callback not handed out yet", [&] { k.files[file].asyncCallback = k.nextUID; });
+  auto reading = [&](u32 descriptor) -> Kernel::OpenFile& {  //16 bytes from the start, still to come
+    auto& open = k.files[descriptor];
+    open.async = Async::Pending, open.asyncDoneAt = k.cycles + 2000;
+    open.asyncResult = 16, open.asyncFrom = 0, open.position = 16, open.asyncData = 0x0897'0000;
+    return open;
+  };
+  refuses("a read's bytes to come with its request done", [&] { reading(discFile).async = Async::Done; });
+  refuses("a read's bytes to come into a file opened to write", [&] { reading(file).flags = 0x0002; });
+  refuses("a read of nothing with bytes to come", [&] { reading(discFile).asyncResult = 0; });
+  refuses("a read's bytes to come past memory", [&] { reading(discFile).asyncData = 0x09ff'fff8; });
+  refuses("a read's bytes to come, more than any read moves", [&] {
+    auto& open = reading(file);
+    open.asyncResult = 64_MiB + 1, open.position = 64_MiB + 1;
+  });
+  refuses("a read's bytes to come from elsewhere than it read", [&] { reading(discFile).asyncFrom = 1; });
+  refuses("a read's bytes to come from past where it is", [&] { reading(discFile).asyncFrom = 32; });
+  refuses("a read's bytes to come from past the disc's file", [&] {
+    auto& open = reading(discFile);
+    open.asyncFrom = open.size, open.position = open.size + 16;
+  });
   refuses("a thread waiting on a file with no request", [&] {
     auto& thread = *k.threads.at(two);
     thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Async, thread.waitID = discFile;

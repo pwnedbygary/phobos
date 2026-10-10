@@ -766,6 +766,18 @@ auto Kernel::serialize(serializer& s) -> bool {
     vector(open.discEntries, entry);
     s(open.async); s(open.asyncDoneAt); s(open.asyncResult); s(open.asyncCallback); s(open.asyncArgument);
     s(open.resultOnly);
+    //a read under way, its bytes to come (layout 21 on; older layouts moved them as it was made): as many as its
+    //result counts, of a file opened to read, from where it was then, into the program's memory
+    if(s.reading() && stateLayout < 21) open.asyncData = 0, open.asyncFrom = 0;
+    else s(open.asyncData), s(open.asyncFrom);
+    if(open.asyncData) {
+      u64 unit = open.sectors ? Disc::SectorSize : 1;
+      check(open.async == OpenFile::Async::Pending && (open.flags & OpenRead));
+      check(open.asyncResult && open.asyncResult <= 64_MiB / unit);
+      check(memory.reaches(open.asyncData, u32(open.asyncResult * unit)));
+      check(open.asyncFrom <= open.position && open.position - open.asyncFrom == open.asyncResult);
+      check(!open.onDisc || open.position <= open.size);
+    }
     check(!open.onDisc || !(open.flags & OpenWrite));
     check(!open.onDisc || !open.folder || open.discEntries.size() == open.entries.size());
     check(open.async <= OpenFile::Async::Done && open.asyncCallback < nextUID);
