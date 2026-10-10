@@ -49,6 +49,7 @@ namespace ares::PlayStationPortable {
 #include "pgf.cpp"
 #include "font.cpp"
 #include "ccc.cpp"
+#include "jpeg.cpp"
 #include "utility.cpp"
 #include "power.cpp"
 #include "system.cpp"
@@ -738,6 +739,17 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceCcc",            "sceCccSetErrorCharUTF8",        &Kernel::sceCccSetErrorCharUTF8);
   add("sceCcc",            "sceCccSetErrorCharUTF16",       &Kernel::sceCccSetErrorCharUTF16);
   add("sceCcc",            "sceCccSetErrorCharSJIS",        &Kernel::sceCccSetErrorCharSJIS);
+  for(auto [name, handler] : std::initializer_list<std::pair<const char*, auto (Kernel::*)() -> void>>{
+        {"sceJpegInitMJpeg", &Kernel::sceJpegInitMJpeg}, {"sceJpegFinishMJpeg", &Kernel::sceJpegFinishMJpeg},
+        {"sceJpegCreateMJpeg", &Kernel::sceJpegCreateMJpeg}, {"sceJpegDeleteMJpeg", &Kernel::sceJpegDeleteMJpeg},
+        {"sceJpegGetOutputInfo", &Kernel::sceJpegGetOutputInfo},
+        {"sceJpegDecodeMJpeg", &Kernel::sceJpegDecodeMJpeg},
+        {"sceJpegDecodeMJpegSuccessively", &Kernel::sceJpegDecodeMJpeg},
+        {"sceJpegDecodeMJpegYCbCr", &Kernel::sceJpegDecodeMJpegYCbCr},
+        {"sceJpegDecodeMJpegYCbCrSuccessively", &Kernel::sceJpegDecodeMJpegYCbCrSuccessively},
+        {"sceJpegCsc", &Kernel::sceJpegCsc}, {"sceJpegMJpegCsc", &Kernel::sceJpegMJpegCsc}}) {
+    add("sceJpeg", name, handler);
+  }
   add("sceAtrac3plus",     "sceAtracGetAtracID",            &Kernel::sceAtracGetAtracID);
   add("sceAtrac3plus",     "sceAtracReleaseAtracID",        &Kernel::sceAtracReleaseAtracID);
   add("sceAtrac3plus",     "sceAtracReinit",                &Kernel::sceAtracReinit);
@@ -847,6 +859,7 @@ auto Kernel::power() -> void {
   mpegStreams.clear();
   psmfPlayer = {};
   ccc = {};
+  jpeg = {};
   dialog = {};
   utilityModules.clear();
   imposeLanguage = imposeButton = 1;

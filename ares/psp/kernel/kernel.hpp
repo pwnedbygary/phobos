@@ -1787,6 +1787,26 @@ struct Kernel {
   auto sceCccSetErrorCharUTF16() -> void;
   auto sceCccSetErrorCharSJIS() -> void;
 
+  //jpeg.cpp: JPEG pictures decoded, and YCbCr pictures converted to pixels (sceJpeg)
+  struct Jpeg {
+    bool initialized = false;  //sceJpegInitMJpeg, till sceJpegFinishMJpeg
+    bool created = false;      //sceJpegCreateMJpeg, till sceJpegDeleteMJpeg
+    s32 width = 0, height = 0; //the context's picture buffer (kept once it's deleted)
+  } jpeg;
+  auto sceJpegInitMJpeg() -> void;
+  auto sceJpegFinishMJpeg() -> void;
+  auto sceJpegCreateMJpeg() -> void;
+  auto sceJpegDeleteMJpeg() -> void;
+  auto sceJpegGetOutputInfo() -> void;
+  auto sceJpegDecodeMJpeg() -> void;
+  auto jpegDecodePixels(u32 data, u32 size, u32 pixels) -> u32;
+  auto sceJpegDecodeMJpegYCbCr() -> void;
+  auto sceJpegDecodeMJpegYCbCrSuccessively() -> void;
+  auto jpegDecodeYCbCr(u32 data, u32 size, u32 buffer, u32 room, bool successively) -> u32;
+  auto sceJpegCsc() -> void;
+  auto sceJpegMJpegCsc() -> void;
+  auto jpegConvert(u32 destination, u32 source, u32 size, u32 stride, u32 across, u32 down, bool engine) -> void;
+
   //net.cpp: the network libraries, with the wireless LAN switched off
   auto sceNetDone() -> void;
   auto sceNetUnavailable() -> void;
