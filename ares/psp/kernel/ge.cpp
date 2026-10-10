@@ -13,10 +13,10 @@
 //A program sees how its lists are doing with sceGeListSync and sceGeDrawSync, and can wait there for them to finish.
 //The GE's work takes no time, so a list runs as far as it can as soon as it's queued or its stall address moves.
 //
-//What each call does follows uOFW's reading of the PSP's own driver (ge.c, stall.S); sceGeBreak follows what
-//pspautotests' gpu/ge/break and breakwait recorded on a PSP. Not yet: the debugger's breakpoints, SIGNALs that patch
-//texture or CLUT addresses, and what uOFW shows differs for programs built with SDKs before 2.0; a list may be queued
-//twice, as for programs that don't say their SDK's version.
+//What each call does follows uOFW's reading of the PSP's own driver (ge.c, stall.S); sceGeBreak, what callbacks see,
+//lists queued twice and the older SDKs' ways (geOldSdk()) follow what pspautotests' gpu/ge and gpu/signals recorded on
+//a PSP. Not yet: the debugger's breakpoints, SIGNALs that patch texture or CLUT addresses, and a SIGNAL call's stack
+//in use by another list refused.
 
 auto Kernel::geIndex(u32 id) const -> s32 {
   u32 index = id - GeListIDs;
@@ -36,8 +36,13 @@ auto Kernel::geRestoreBase(u32 word) -> void {
   if(word >> 24 == GE::Base) ge.commands[GE::Base] = word;
 }
 
-auto Kernel::geStalled() const -> bool {
-  return ge.list.stall && ge.list.address == ge.list.stall;
+//Whether the GE waits at a list's stall address: the list's own, not the GE's. They differ for a paused list the GE
+//still has (on its way to a PAUSE's FINISH, or an older SDK's in its suspending signal's callback): a stall address
+//moved then stays with the list, which reads as drawing, the GE waiting where it was to stop (gpu/ge/queue2,
+//gpu/signals/handlercalls).
+auto Kernel::geAtStall(u32 index) const -> bool {
+  u32 stall = geLists[index].registers.stall;
+  return geRunning == s32(index) && stall && ge.list.address == stall;
 }
 
 //The GE runs its list as far as it goes: to the stall address, or through FINISHes and SIGNALs (dealt with as the
@@ -49,6 +54,10 @@ auto Kernel::geStalled() const -> bool {
 //waits for it waits on: the PSP's driver never hears the end of such a list either.
 auto Kernel::geRun() -> void {
   geBusy = false;
+  if(geRunning >= 0 && !geSuspended) {  //(an older SDK's list, paused for its suspending signal's callback: geOldSdk())
+    auto& running = geLists[geRunning];
+    if(running.state == GeList::State::Paused && !running.pausing) running.state = GeList::State::Running;
+  }
   while(geRunning >= 0 && !geSuspended) {
     if(!geLeft) {
       geBusy = true;
@@ -74,17 +83,27 @@ auto Kernel::geRun() -> void {
   }
 }
 
-//A list's callback: its finish or signal function, with id, its argument and where the list had got to. With
-//suspends, the GE waits until it returns. Returns whether there was one to call.
+//A list's callback: its finish or signal function, with id, its argument and where the list had got to (0 for an
+//older SDK's: geOldSdk()). With suspends, the GE waits until it returns. Returns whether there was one to call.
 auto Kernel::geCall(GeList& list, bool finish, u32 id, bool suspends) -> bool {
   if(list.callback < 0 || list.callback >= 16 || !geCallbacks[list.callback].used) return false;
   auto& callback = geCallbacks[list.callback];
   u32 function = finish ? callback.finishFunction : callback.signalFunction;
   if(!function) return false;
   if(suspends) geSuspended = true;
-  queueCall(function, callback.gp, id, finish ? callback.finishArgument : callback.signalArgument, ge.list.address,
-            suspends);
+  queueCall(function, callback.gp, id, finish ? callback.finishArgument : callback.signalArgument,
+            geOldSdk() ? 0 : ge.list.address, suspends);
   return true;
+}
+
+//Programs built with SDKs up to 2.00.10, or saying none, meet the driver's older ways, as pspautotests' gpu/signals
+//recorded. A list reads as paused while its suspending SIGNAL's callback runs, the GE still on it, so the callback
+//can't break it off (BUSY), and its stall address moved there is the list's alone: the GE goes on to where it was to
+//stop, the list reading as drawing there (handlercalls with 0x01000010, suspend saying none; handlercalls puts the cut
+//above 0x02000010). Callbacks aren't told where the list had got to (saying none; pause2 tells it at 0x02080000), and
+//sceGeContinue on a list drawing says -1 (saying none; ALREADY at 0x06060010): taken to change at the same cut.
+auto Kernel::geOldSdk() const -> bool {
+  return sdkVersion <= 0x0200'0010;
 }
 
 //Out of the queue and free for the next list; whoever waits for it to finish is told it has. A list that isn't in
@@ -182,7 +201,7 @@ auto Kernel::geSignaled() -> void {
   };
   switch(kind) {
   case 0x01:  //the callback runs, then the GE goes on
-    geCall(list, false, signal & 0xffff, true);
+    if(geCall(list, false, signal & 0xffff, true) && geOldSdk()) list.state = GeList::State::Paused;
     return;
   case 0x02:  //the GE goes on, and the callback runs; but should another callback wait its turn or run still, the GE
               //waits for this one too: the PSP takes the GE's next interrupt only once the last one's handler has
@@ -290,7 +309,7 @@ auto Kernel::sceGeEdramSetAddrTranslation() -> void {
 auto Kernel::sceGeListEnQueue() -> void { geEnqueue(false); }
 
 //As above, but at the queue's front, paused: it runs when the program calls sceGeContinue. Only while the front list
-//is paused itself, or there's none, so as not to cut in on a list the GE has.
+//is paused itself, and not still the GE's, or there's none, so as not to cut in on a list the GE has.
 auto Kernel::sceGeListEnQueueHead() -> void { geEnqueue(true); }
 
 auto Kernel::geEnqueue(bool head) -> void {
@@ -304,8 +323,19 @@ auto Kernel::geEnqueue(bool head) -> void {
     }
   }
   if((address | stall | context) & 3) return result(ErrorInvalidPointer);
+  //Built with SDK 2.00 or later, a program can't queue a list at an address the queue holds already: where a list
+  //starts, or where it was broken off or paused (where it would go on), its finished list still queued while its
+  //finish callback runs; not where one is now (pspautotests' gpu/ge/queue: 0x01000010 queues it, 0x02000000 doesn't).
+  if(sdkVersion >= 0x0200'0000) {
+    for(u32 index : geQueue) {
+      if(geLists[index].registers.address == (address & 0x0fff'ffff)) return result(ErrorBusy);
+    }
+  }
   if(geFree.empty()) return result(ErrorOutOfMemory);
-  if(head && !geQueue.empty() && geLists[geQueue.front()].state != GeList::State::Paused) {
+  //At the head, not ahead of a paused list the GE still has (on its way to a PAUSE's FINISH, or an older SDK's in its
+  //suspending signal's callback): put back in the queue under the GE, that one would start over (unmeasured).
+  if(head && !geQueue.empty() && (geLists[geQueue.front()].state != GeList::State::Paused
+                                  || geRunning == s32(geQueue.front()))) {
     return result(ErrorInvalidValue);
   }
   u32 index = geFree.front();
@@ -389,7 +419,7 @@ auto Kernel::sceGeListSync() -> void {
   if(arg(1) != 1) return result(ErrorInvalidMode);
   switch(list.state) {
   case State::Queued:    return result(list.started ? 4 : 1);
-  case State::Running:   return result(geRunning == index && geStalled() ? 3 : 2);
+  case State::Running:   return result(geAtStall(index) ? 3 : 2);
   case State::Completed: return result(0);
   case State::Paused:    return result(4);
   default:               return result(ErrorInvalidID);
@@ -397,7 +427,8 @@ auto Kernel::sceGeListSync() -> void {
 }
 
 //(mode): 0 waits for every list to finish, then forgets the finished ones; 1 says how the GE is doing: 0 nothing to
-//do, 2 drawing, 3 stopped at a stall address.
+//do, 2 drawing, 3 stopped at a stall address. A list whose finish callback runs is still queued but done: in it, 0
+//if it was the last, 2 with another behind it (pspautotests' gpu/signals and gpu/ge/queue2 recorded both).
 auto Kernel::sceGeDrawSync() -> void {
   if(arg(0) == 0) {
     if(!mayWait()) return;
@@ -406,8 +437,10 @@ auto Kernel::sceGeDrawSync() -> void {
     return block(Wait::GeDraw, 0, 0);
   }
   if(arg(0) != 1) return result(ErrorInvalidMode);
-  if(geQueue.empty()) return result(0);
-  result(geRunning == s32(geQueue.front()) && geStalled() ? 3 : 2);
+  for(u32 index : geQueue) {
+    if(geLists[index].state != GeList::State::Completed) return result(geAtStall(index) ? 3 : 2);
+  }
+  result(0);
 }
 
 //(PspGeCallbackData: signal function and argument, finish function and argument): the callbacks' number, for
@@ -429,14 +462,16 @@ auto Kernel::sceGeUnsetCallback() -> void {
   result(0);
 }
 
-//Lets the front list go on if it's paused, unless its PAUSE signal is still on its way to its FINISH.
+//Lets the front list go on if it's paused, unless the GE still has it: its PAUSE signal still on its way to its
+//FINISH (gpu/ge/queue2), or an older SDK's list paused for its suspending signal's callback (geOldSdk(); unmeasured:
+//gpu/signals/suspend leaves it out, as it crashed the PSP's older driver).
 auto Kernel::sceGeContinue() -> void {
   if(geQueue.empty()) return result(0);
   u32 index = geQueue.front();
   auto& list = geLists[index];
-  if(list.state == GeList::State::Running) return result(ErrorAlready);
+  if(list.state == GeList::State::Running) return result(geOldSdk() ? 0xffff'ffff : ErrorAlready);
   if(list.state != GeList::State::Paused) return result(ErrorNotSupported);
-  if(list.pausing) return result(ErrorBusy);
+  if(list.pausing || geRunning == s32(index)) return result(ErrorBusy);
   list.state = GeList::State::Running;
   if(list.context && !list.started) geSaveContext(list.context);
   list.started = true;
@@ -509,10 +544,11 @@ auto Kernel::sceGeGetMtx() -> void {
   result(0);
 }
 
-//Not while the GE runs a list: -1 then, as the PSP's driver says.
+//Not while the GE runs a list, stalled or not: -1 then, as the PSP's driver says. Waiting for a callback to return
+//(a SIGNAL that suspends, a list's FINISH) it has stopped, and saves: pspautotests' gpu/ge/callbackstate.
 auto Kernel::sceGeSaveContext() -> void {
   if(arg(0) & 3) return result(ErrorInvalidPointer);
-  if(geRunning >= 0) return result(0xffff'ffff);
+  if(geRunning >= 0 && !geSuspended) return result(0xffff'ffff);
   geSaveContext(arg(0));
   result(0);
 }

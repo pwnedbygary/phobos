@@ -150,22 +150,28 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
     s64 sampleX = s64(job.firstX) * 16 + 8;
     //the row's pixels inside: where every edge's function is at least its least
     s64 start = job.firstX, stop = job.lastX;
-    s64 w[3];
     for(u32 k = 0; k < 3; k++) {
-      w[k] = a[k] * sampleX + b[k] * sampleY + c[k];
-      s64 have = w[k] - least[k], step = a[k] * 16;  //how far past its least at the first column; column to column
+      //how far past its least at the first column; column to column
+      s64 have = a[k] * sampleX + b[k] * sampleY + c[k] - least[k], step = a[k] * 16;
       if(step > 0 && have < 0) start = std::max(start, job.firstX + (-have + step - 1) / step);
       if(step < 0) stop = have < 0 ? -1 : std::min(stop, job.firstX + have / -step);
       if(step == 0 && have < 0) stop = -1;
     }
     if(start > stop) continue;
-    for(u32 k = 0; k < 3; k++) w[k] += a[k] * 16 * (start - job.firstX);
     for(u32 k = 0; k < uses; k++) {
       auto& c = *stepped[used[k]];
       values[used[k]] = s64(c.start + s128(start * 16 + 8 - r.startX) * c.across + s128(sampleY - r.startY) * c.down);
     }
-    for(s32 x = start; x <= stop; x++, w[0] += a[0] * 16, w[1] += a[1] * 16, w[2] += a[2] * 16) {
-      float w0 = float(w[0]), w1 = float(w[1]), w2 = float(w[2]);
+    //s, t and q at the row's first pixel, then a pixel's step, as the colors above (part 60)
+    auto atCorner = [&](const Job::Stepped& c) {
+      return s64(c.start + s128(start * 16 + 8 - r.startX) * c.across + s128(sampleY - r.startY) * c.down);
+    };
+    s64 sAt = 0, tAt = 0, qAt = 0, sStep = 0, tStep = 0, qStep = 0;
+    if(look.textured && r.perspective) {
+      sAt = atCorner(r.texS), tAt = atCorner(r.texT), qAt = atCorner(r.texQ);
+      sStep = r.texS.across * 16, tStep = r.texT.across * 16, qStep = r.texQ.across * 16;
+    }
+    for(s32 x = start; x <= stop; x++) {
       u32 color = blended ? level(0) | level(1) << 8 | level(2) << 16 | level(3) << 24 : r.flatColor;
       u32 specular = shining ? level(4) | level(5) << 8 | level(6) << 16 : r.flatSpecular;
       u32 fog = p.fog ? level(7) : 255;
@@ -173,10 +179,11 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
       for(u32 k = 0; k < uses; k++) values[used[k]] += steps[used[k]];
       float u = 0, v = 0;
       if(look.textured && r.perspective) {
-        float ka = w0 / r.w[0], kb = w1 / r.w[1], kc = w2 / r.w[2];
-        float divisor = ka * r.q[0] + kb * r.q[1] + kc * r.q[2];
-        u = (ka * r.u[0] + kb * r.u[1] + kc * r.u[2]) / divisor;
-        v = (ka * r.v[0] + kb * r.v[1] + kc * r.v[2]) / divisor;
+        //s, t and q stepped from the corner (draw.cpp); the coordinate is the floored unit times R(q)
+        float reciprocal = geReciprocal(float(qAt >> 14) * r.qUnit);
+        u = trunc24(f64(sAt >> 14) * r.sUnit * reciprocal);
+        v = trunc24(f64(tAt >> 14) * r.tUnit * reciprocal);
+        sAt += sStep, tAt += tStep, qAt += qStep;
       } else if(look.textured) {
         s64 middleX = s64(x) * 16 + 8;
         u = r.uStart + f64(middleX - r.startX) / 16 * r.uAcross + f64(sampleY - r.startY) / 16 * r.uDown;

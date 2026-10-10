@@ -60,10 +60,9 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
       list.address = relative(argument & ~3u);
       break;
     case Return:
-      if(list.depth == 0) {
-        note("a display list RETurned with no CALL to return from");
-        return Stop::Faulted;
-      }
+      //With no CALL to return from, the GE goes on with the next command. Need for Speed: Most Wanted runs lists
+      //made to be CALLed (a frame buffer's settings, then RET) in place in its frame's list, and draws on the PSP.
+      if(list.depth == 0) break;
       list.depth--;
       list.address = list.returnAddress[list.depth];
       list.offset = list.returnOffset[list.depth];

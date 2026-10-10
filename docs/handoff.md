@@ -58,6 +58,57 @@ room: no PPSSPP or JPCSP source read.
   mutate.py and mutate2.sh the broken versions; compare.sh/compare.py the two runners' runs; jpegcmp/ the libjpeg-turbo
   check; pauth/ the digest search; cmp1/ and cmp2/ the comparison runs; build-commit.py the commits' split).
 
+## PSP GE: perspective texels by the GE's reciprocal; patch divisions — 2026-10-09
+
+Branch `cursor/psp-ge-fits3-2b67`, on top of #192's `cursor/psp-ge-lists-2b67` (#191 under it). docs/psp-core.md, part 60. 3D triangles divide by a 128-chord reciprocal and step s, t and q as colors: persp-wall 2662→23, persp-divide 3172→211, persp-floor 6026→351, persp-w3 33040→18944, with the older wall and floor pictures; no division at a pixel. It costs the software renderer on the RP6 4-10% in 3D scenes with 7 drawing threads and 8-10% with one (part 60's table); 2D scenes are slightly faster. Round 4 again (the owner's `psp-round5b`): #191's reset freed the PSP's GE every time; PATCH_DIVISION's counts are 7 bits, and past 64 the GE hangs, so the core draws nothing of such a surface. Lighting, sprites, lines and the near-plane split are unchanged; no measured picture got worse.
+
+## PSP core: the GE's RET with no CALL, and what the GE driver's callers see — 2026-10-09
+
+Branch `cursor/psp-ge-lists-2b67`, on top of #189's `cursor/psp-hle-games11-2b67`. docs/psp-core.md, part 57, has the
+evidence; docs/psp-compatibility.md's changed rows are updated. Clean room: no PPSSPP or JPCSP source read.
+- **Fixes** (each its own commit, with tests): the GE passes over a RET with no CALL to return from (Need for Speed:
+  Most Wanted runs its CALLable frame buffer settings in place; it waited for good in sceGeDrawSync, black, and now
+  reaches its title on Software, Vulkan and Vulkan (fast)); from pspautotests' gpu/ge and gpu/signals recordings, the
+  driver's answers: sceGeDrawSync(1) no longer counts a list whose finish callback runs, "stalled" is the GE at the
+  list's own stall address, sceGeSaveContext saves from a callback that stopped the GE; a list queued twice is BUSY
+  for SDK 2.00 and later; programs built with SDKs up to 2.00.10 (or saying none) get the older driver's ways
+  (callbacks told no list address, a suspending signal's list paused in its callback, sceGeContinue's -1); a list
+  can't be queued at the head ahead of a paused list the GE still has (it would start over: unmeasured, chosen).
+- **The report's other black games**: none stuck in the GE. What each showed from the GE's side went to the notes
+  shared with the kernel side (`~/phobos-work/scratch/compat-notes.md`), whose parallel branch found and fixed the
+  causes: Def Jam (sceUmdActivate taking no time), Crush and Jak and Daxter (descriptors never reused), DOA Paradise
+  (an async read's bytes landing early), Tekken DR (clock conversion with no seconds pointer), Valhalla Knights (async
+  seeks), PaRappa (__sceSasCore taking no time), ProStreet's crash (sceIoDread's d_private layout). Ridge Racer draws
+  a clear a frame after its stub movie (not found). MACH isn't stuck (frame 3600 is a transition; judged again: menu).
+- **Numbers** (against part 55): menu or gameplay 178 -> 180, black or hang 19 -> 17. pspautotests' 22 GE driver
+  programs: 3 -> 7 printing what the PSP printed; gpu/signals' differing lines 147 -> 23 of 622.
+- **Checks**: tests/psp 382/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0; each new test fails without its
+  fix. No new saved state (version 20 still). 30 working games (14 of older SDKs) on both runners, Software, and 4 on
+  Vulkan: the same pictures but for run-to-run variation each runner shows on its own. An independent read-only
+  review; its findings fixed (the NFS row, the head enqueue, claims worded as unmeasured or as kernel-side findings).
+- **Left**: the GE's time (statuses a callback sees while a list draws), the state buffer's PSP layout, sceGeGetStack,
+  a SIGNAL call's stack in use refused, a third CALL, transfers past VRAM's end; God of War: Chains of Olympus's speed
+  (every TRANSFER_START flushes all pending drawing: the kernel side's profile).
+- Scratch: `~/phobos-work/scratch/ge-lists` (survey/ the black games' runs, at/ the pspautotests runs before and
+  after, regress/ the base and branch runners' frames, ge-hooks.py and dbg-hooks-1.patch for a traced runner).
+
+## PSP measure: a GE stall no longer freezes the owner's PSP — 2026-10-09
+
+Branch `cursor/psp-measure-stall-2b67`, on top of #189's `cursor/psp-hle-games11-2b67`. Only `tools/psp-measure`,
+`tests/psp/measure.cpp`, the rebuilt `tests/psp/programs/pspmeasure.elf` and docs; no core change.
+- **Why**: in round 4 the owner's PSP froze at `curves-count` and `curves-count-128` (patches cut past 64 times),
+  most likely the GE never finishing while `finishList` waited in `sceGeDrawSync(0)` for good; each test cost two
+  power-offs.
+- **What**: the GE gets 5 s a list (`waitForGe`); a stall is written to `<test>.stalled`, the GE reset
+  (`sceGuBreak(GU_BREAK_CANCEL)`, then `sceGuTerm`/`sceGuInit`), the test saved as the GE left it, and the round goes
+  on. A test whose reset itself froze the PSP is given up on at the next start. Counts past 64 are a test each
+  (`curves-count-65`, `-100`, `-128`, `-200`, `-255`); the earlier program's leftovers for them are cleared once
+  (`curves-count.timed`). A new `stall-check` resets the GE on purpose the first time round 4 runs in a results
+  folder (docs/psp-core.md, part 48, "Round 4 again").
+- **Owner**: `.local/psp-round5b/` (EBOOT.PBP SHA-256
+  `2c5c3343cf1e1ecf56eb4deb4fdc4eb5d1dbf1312ae7896d0d90bdcbbbd0a173`, HOW-TO.md): round 4 again, restart, then
+  round 5; bring back `results/ge`. Whether the reset frees a GE stuck inside a patch is what that run will show.
+
 ## PSP core: character conversion, thread-local storage, lent stacks; PGD holds five black games — 2026-10-09
 
 Branch `cursor/psp-hle-games11-2b67`, on top of #188's `cursor/psp-gpu-fast3-2b67` (#187, #185 and #184 under it). PR #189.

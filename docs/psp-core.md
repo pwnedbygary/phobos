@@ -4708,7 +4708,8 @@ own tessellation stands between the control points and the pixels (`tools/psp-me
 - `curves-culling`: the 16 combinations of CULL_FACE_ENABLE, CULL, PATCH_CULL_ENABLE and PATCH_FACING.
 - `curves-joins`: which vertices strips join across patches, as lines and flat-shaded triangles.
 - `curves-count`, `-count-128`, `-count-200` and `-count-255`, last: how many vertices a row has (points added up) at
-  16, 63, 64 and 65 cuts, at 100 and 128, at 200, and at 255, each in a display list of its own.
+  16, 63, 64 and 65 cuts, at 100 and 128, at 200, and at 255, each in a display list of its own. (Since split further,
+  one count past 64 to a test, with the GE's waits timed: part 48, "Round 4 again".)
 Built in pspdev's Docker image (`ghcr.io/pspdev/pspdev@sha256:54895e6f...`, part 29's), and `tests/psp/programs/
 pspmeasure.elf` replaced as that folder's README asks (its SHA-256 there). The EBOOT.PBP for the PSP is outside the
 repository: `/tmp/psp-measure-round4-curves/PSP/GAME/PSPMEASURE/EBOOT.PBP` (SHA-256
@@ -5961,6 +5962,34 @@ corners now guard against it.
 - The measure test against the owner's round 2 and 3 files: as in the table above, nothing else changed; it drives
   round 5 through the menu and every file is written.
 
+### Round 4 again: the GE's waits timed (2026-10-09)
+
+Running round 4, the owner's PSP froze at `curves-count` (16, 63, 64 and 65 divisions in one list) and
+`curves-count-128` (100 and 128), and had to be switched off by hand, twice a test before results.c set it aside.
+Most likely the GE never finished the list and `finishList` waited for it in `sceGeDrawSync(0)` for good (part 33
+had expected a stall past pspsdk's 64); nothing showed whether the CPU was still running. Now:
+- `waitForGe` peeks (`sceGeDrawSync(1)`) every millisecond for 5 seconds at most. A list still not done then is a
+  stall: `<test>.stalled` records it (how long, the driver's state, what the list held) before anything is done
+  about it, so if the reset stops the PSP the next start gives up on that test at once rather than after a second
+  freeze (results.c). Then `sceGuBreak(GU_BREAK_CANCEL)` (`sceGeBreak(1)`: every list thrown away and the GE reset),
+  its result recorded, and `sceGuTerm`/`sceGuInit` (its own list gives the GE back its first state; it waits for
+  that list, for good if the GE is still stuck, and the record then lacks its result); the test saves what the GE
+  had drawn, as `.bin`, and the round goes on. A freeze with no "the GE stalled" on the screen and no `.stalled` is
+  the other kind (the CPU stopped too), handled as before.
+- Each count past 64 is a test of its own: `curves-count` (16, 63, 64; rows 0-2), `-65`, `-100`, `-128`, `-200` and
+  `-255` (rows 3-7, each in its own row as before). What the earlier program left of the counts (`.part`, `.again`,
+  `.stopped`) is cleared once in a results folder (`curves-count.timed` marks it), so they run again; finished
+  `.bin` files are kept.
+- `stall-check`, before them, gets the GE stuck on purpose (a list left waiting at its stall address), so the reset
+  runs whenever round 4 runs in a results folder for the first time, in this core too (the measure test checks its
+  `.stalled` and that 16 divisions' count drawn before the reset and after it match; then that results.c gives up on
+  this program's own leftovers, which ge.c's one-time clearing leaves alone). On the PSP, a break on a list stopped at
+  its stall address is what pspautotests' gpu/ge/break recorded; a GE stuck inside a patch is unmeasured, and the next
+  run will show whether the reset frees it.
+
+`pspmeasure.elf` is rebuilt in the same image; the owner's copy is `.local/psp-round5b/` (EBOOT.PBP, its SHA-256,
+HOW-TO.md).
+
 ## Part 49: the Vulkan renderer in play on the RP6, and its blending without rasterization order
 
 On branch `cursor/psp-vk-play-2b67`, on top of #186's `cursor/psp-hle-games10-2b67` (#183, #182 and #180 under it).
@@ -6687,6 +6716,151 @@ Most Wanted). Black still, cause not found: Ridge Racer, Crush (its CPU stops in
 Dead or Alive - Paradise, Def Jam, Jak and Daxter - The Lost Frontier, Tekken - Dark Resurrection, Valhalla Knights,
 PaRappa the Rapper, MACH; Need for Speed - ProStreet's crash after its notice.
 
+## Part 57: the GE's lists — a RET with no CALL, and what the driver's callers see
+
+On branch `cursor/psp-ge-lists-2b67`, on top of #189's `cursor/psp-hle-games11-2b67`. Sources: the games' own lists,
+traced with a scratch runner; pspautotests' gpu/ge, gpu/signals, gpu/callbacks and gpu/displaylist programs and their
+recordings (each named below; the programs were run through the kernel by a scratch runner answering their emulator
+devctl, their output compared with the recordings line for line); the PSP Developer Wiki's Hardware Registers and
+Graphics Engine pages (through the Wayback Machine); pspsdk's headers. No PPSSPP or JPCSP source was read.
+
+**1. A RET with no CALL to return from** (`ge/list.cpp`). Need for Speed: Most Wanted 5-1-0 waited for good in
+sceGeDrawSync from its ninth list on (frame 108): the GE stopped it at a RET at depth 0 and the driver never heard its
+end. The list, 0x0914dc40 (it takes turns with 0x090edc00), is the game's frame: its settings come in small lists made
+to be CALLed, a frame buffer's (FBP, FBW, PSM, then RET with FBP's low bits as its argument) and a depth buffer width's
+(ZBW, RET). Most of them it jumps over and CALLs (0x0914e448: BASE, JUMP 0x0914e468, six such words, BASE, CALL
+0x0914e450), but before drawing into its 256-wide target at 0x040cc000 it runs six such words, that target's, in place
+(0x0914e374-0x0914e388), RETs and all, and the frame's commands go on after them to its FINISH. Nothing public says what
+the GE does there: the wiki's Hardware Registers page gives it two return addresses (GE_RADR1, GE_RADR2, with
+GE_OADR1/2 for the offsets) and two depth bits in GE_LIST (0x100 at depth 1 or 2, 0x200 at 2), and an ERROR bit among
+its interrupts. The game draws on the PSP, so the GE goes on: back to the stale first return address (0x0914dcd0) it
+would loop through the frame for good, and stopped, the game would hang as it did here. So a RET at depth 0 is passed
+over, the next command next, the offset and depth as they were (and nothing noted: it isn't a fault). A third CALL
+still stops the GE (no game was seen doing it; no source says). With it the game goes on past its autosave prompt:
+its title art, its safe driving notice and its intro movie (frames 300, 600 and 1500-1800 with a frame every 300, on
+Software), then its title, "Press START button", from frame 2100, on all three renderers (below).
+
+**2. What the driver's callers see**, as pspautotests recorded (`kernel/ge.cpp`):
+- *A finish callback's list is done.* The PSP's driver runs a list's finish callback before taking it off the queue
+  and before starting the next (gpu/ge/queue2: "a finish callback runs before the next list is started, with its own
+  list still linked"), and there sceGeDrawSync(1) no longer counts it: 0 when it's the last, 2 with another queued
+  behind (queue2's "Finish callback ordering"; gpu/signals' simple, sync, pause, suspend, jumps, gpu/displaylist/state).
+  Phobos said 2 for the last one too. A game whose finish callback asks whether drawing is over would have waited.
+- *A list's own stall address.* "Stopped at its stall address" (3) is the GE waiting where the list's stall address
+  is: between a PAUSE signal and the FINISH that delivers it, a list's stall address moved on goes no further than the
+  list (only a running list's reaches the GE), so the GE waits on and the list reads as drawing (queue2's "Pause
+  window": 3, then 2; Phobos kept saying 3).
+- *sceGeSaveContext from a callback that stopped the GE.* Waiting for a suspending SIGNAL's or a FINISH's callback,
+  the GE has stopped, and sceGeSaveContext saves (gpu/ge/callbackstate: "a GE that has stopped — which is all
+  sceGeSaveContext cares about"); with the GE running on (a SIGNAL that lets it go on), or stalled, it's -1 still.
+  sceGeRestoreContext is refused as before while a list is the GE's (unmeasured there; it would move the list).
+- *A list queued twice.* Built with SDK 2.00 or later (gpu/ge/queue: 0x02000000 refuses, 0x01000010 doesn't), a
+  program can't queue a list at an address the queue holds: BUSY. The driver compares the address it keeps for each
+  queued list (queue2: "against the list's start address, not where it is now"), which is where a list starts, or where
+  it was broken off or paused, the address it would go on from (queue2: enqueueing where a broken-off list stopped is
+  refused, its start then isn't); both of memory's views (the uncached one too), and the list whose finish callback
+  runs, still queued (queue2: from its own finish callback). Phobos's list registers hold exactly that address while a
+  list isn't the GE's, so they're compared.
+- *Programs built with older SDKs*, up to 2.00.10 or saying none. A suspending SIGNAL's list reads as paused (4)
+  while its callback runs, the GE still on it, so breaking it off from the callback is BUSY, and a stall address moved
+  there is the list's alone: the GE goes on to where it was to stop, the list reading as drawing, until it's moved on
+  again (handlercalls with 0x01000010, suspend saying none; handlercalls: "above this SDK version [0x02000010] the
+  list isn't PAUSED during the handler"). Callbacks aren't told where the list had got to (0 for the third argument:
+  simple, pause2, jumps, gpu/callbacks/ge_callbacks saying none; the list's address at 0x02080000 and 0x03080000 in
+  pause2, and at 6.60), and sceGeContinue on a list drawing says -1, not ALREADY (simple and continue saying none,
+  ALREADY at 6.60): taken to change at handlercalls' cut, which those recordings allow. Unmeasured, and chosen so the
+  list the GE still has isn't taken from under it: sceGeContinue on it (paused for that callback, or on its way to a
+  PAUSE's FINISH, whose BUSY queue2 recorded) is BUSY, and sceGeListEnQueueHead ahead of it is INVALID_VALUE, as for
+  a front list that isn't paused (before, it put the list back in the queue under the GE, which started it over).
+
+Of the 22 driver programs (gpu/ge 11, gpu/signals 8, gpu/callbacks 1, gpu/displaylist 2), 3 printed what the PSP
+printed before (alignment, edram, enqueueparam) and 7 do now (ge_callbacks, callbackstate, queue, jumps besides). Of
+gpu/signals' 622 recorded lines 147 differed, now 23; of the other 14 programs' 938, 236, now 215 (edramswizzle's
+swizzled patterns, unchanged, most of them).
+What's left in the others is mostly the GE's time: on a PSP a list takes time, so a callback for a SIGNAL that lets the
+GE go on finds the list still drawing (Phobos's GE, taking no time, is past it: continue, simple's kind 2), a
+thread waiting in sceGeDrawSync is rescheduled (the [r] marks), intrsuspend's list is still drawing. The rest:
+the GE state buffer's layout (context and break read its words: the PSP keeps the vertex, index and offset addresses
+at words 5 to 7, command 0x17's word at 26, and writes 386 words at most; Phobos's own layout is 419 words, inside
+the 512 of pspsdk's PspGeContext), sceGeGetStack (get: not here; no game in the library calls it), a SIGNAL call's
+stack in use by a started list refused (queue2's shared stack), break's DrawSync(1) after a list is queued at the head
+of a broken-off one (state: 3 on the PSP), and the transfers' and VRAM mirrors' edges with sceGeEdramSetAddrTranslation
+(0) (gpu/transfer/invalid and mirrors: a transfer past VRAM's end wraps to its start).
+
+**The report's black games** (traced in the scratch runner: thread states and the GE's queue at frames 300, 1200, 2400
+and 3600, a frame every 300, then traces of each one's calls and lists). Only Need for Speed: Most Wanted was stuck in
+the GE. For the others the GE draws what it's given; what each showed from the GE's side went to the notes shared with
+the kernel side's parallel branch, which found and fixed the causes there:
+- *Def Jam: Fight for NY*: its GE init lists (state only, no PRIM) finish at once; DVDUMD_LOAD_MODULE (priority 0x32)
+  runs before 'file' (0x6f) has made UMD_SAMPLE_IO_SEMA, waits on semaphore -1 and ends; main polls its end for good.
+  The kernel side: sceUmdActivate takes no time.
+- *Ridge Racer*: after its opening movie each frame's list is one clear (18 commands); the disc image's movies are
+  139264-byte stubs (3 pictures, no sound) and the movie tears down cleanly; what the game waits for after it isn't
+  the GE, and isn't found.
+- *Crush*: its buffered file reader's memcpy runs with a size near 0x7e000000 over all of RAM (the program's code too,
+  hence the crash in a VBlank handler at frame 730), from a corrupted read. The kernel side: file descriptors handed
+  out without reuse land the game's per-descriptor counter in its read buffer.
+- *Tekken: Dark Resurrection*: after its logo the GE gets nothing; its intro movie never decodes a picture. The kernel
+  side: its frame limiter waits for good on sceKernelSysClock2USecWide given no seconds pointer.
+- *Dead or Alive Paradise*: a list a frame, all finished; its async read is re-issued for good. The kernel side: the
+  read's bytes landed as it was made, before the game's marker.
+- *Jak and Daxter: The Lost Frontier* and *PaRappa the Rapper*: the GE never gets a list; the first opens and closes an
+  LBN file 87,861 times in 200 frames (the kernel side: descriptors), the second's sound thread spins at the top
+  priority on sceAudioOutputPannedBlocking refusing an unreserved channel 0 (the kernel side: __sceSasCore taking no
+  time, so the thread never lets the game reserve its channels).
+- *Valhalla Knights*: a clear and a fade a frame; it seeks its first file over and over, never reading it. The kernel
+  side: the asynchronous seek still under way when it looks.
+- *Need for Speed: ProStreet*'s crash: sceIoDread fills 1040 bytes from the entry's d_private (0x09fff380) over its
+  caller's saved registers. The kernel side: the game's buffer is the older 272-byte layout, written as the newer one.
+- *MACH* isn't stuck: with a frame every 50 and 300 to 5400 it shows its title from 2100, a black transition at 3600
+  (the report's frame), its attract movie and the title again. Judged again: menu.
+
+**Save states.** Nothing new is kept: the RET needs no state, and the driver's new answers come from what was kept
+already (each list's state and registers, the SDK version). Version 20 still; no layout change.
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 382 groups, none failing. `tests/allegrex/run-tests.sh`: 58, none
+failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing. New and changed groups: "ge moving" (a frame buffer's
+settings made to be CALLed, run in place: passed over, the offset kept), "ge callbacks see the ge stopped" (both SDK
+ages), "ge pause window", "ge lists queued twice", "ge suspending signals' callbacks" (also sceGeContinue and a list
+queued at the head from the callback), "ge callbacks" (both SDK ages), "ge break and callbacks" (its last list's
+finish callback now reads 0). Each fails without its fix, each fix taken away alone (the RET: 4 checks; the finish
+callback's sceGeDrawSync(1): 6; the list's own stall address: 3; sceGeSaveContext: 6; the twice-queued list: 6; the
+older SDKs: 14; sceGeContinue's BUSY for a list the GE still has: 10; the head enqueue: 6). Three independent read-only
+reviews: the first found the report's Need for Speed row left unchanged, the head enqueue (above), and claims to word
+as unmeasured or as the kernel side's findings; the second, fail counts out of date and wording to tighten; the third
+passed, with comments' wording to tighten; all fixed.
+
+**The games** (the report's runs: 3600 frames, Start at 120 and Cross at 1800, 2 GE threads, frames at 300, 1200, 2400
+and 3600; the base commit's runner and this branch's):
+- *Need for Speed: Most Wanted 5-1-0*: black throughout before; now, on all three renderers, its title art at 300 and
+  its title, "Press START button", at 2100 and 3600 (black at 1200, between its notice and its movie), at 19 frames a
+  second on Software and on Vulkan, 14 on Vulkan (fast). Software and Vulkan (accurate) give the same pictures at the
+  five frames taken (60, 300, 1200, 2100, 3600); Vulkan (fast) is within 0.44 of 255 of them (its own transform:
+  part 53).
+- *MACH*: judged again (above). *Ridge Racer*: as before, black after its movie.
+- Thirty working games on Software: 14 built with SDKs up to 2.00.10 or saying none (Lumines, Twisted Metal: Head-On,
+  Ape Escape: On the Loose, Darkstalkers Chronicle, Hot Shots Golf: Open Tee, Metal Gear Acid, Need for Speed:
+  Underground Rivals, Tony Hawk's Underground 2 Remix, Burnout Legends, Death Jr., ATV Offroad Fury: Blazin' Trails,
+  Archer Maclean's Mercury, MediEvil Resurrection; Tokobot at 2.00.10) and 16 newer (Gradius Collection, Liberty City
+  Stories, Pursuit Force, Ridge Racer 2, Crisis Core, Patapon 2, LocoRoco, Midnight Club 3, Peace Walker, Dissidia,
+  Ys Seven, Ratchet & Clank: Size Matters, Virtua Tennis 3, Daxter, Lumines II, Ultimate Ghosts 'n Goblins). 25 give
+  the same pictures at all four frames. The other 5 differ at a frame or two by an animation step (Dissidia's logo
+  fading in at 300, Lumines's title background at 1200, Peace Walker at 300, Pursuit Force at 2400, LocoRoco's title
+  at 2400 and 3600); run again, each runner differs from itself as much (the base runner from itself in LocoRoco,
+  this branch's in the other four), and the two runners' second runs match but for LocoRoco, which varies on its own.
+- On Vulkan (accurate), Lumines, Tokobot, Crisis Core and Hot Shots Golf: the same pictures on both runners at all
+  four frames.
+- The final build (after the review's fixes) against the base runner: Lumines, Tokobot, Twisted Metal, Metal Gear
+  Acid, Crisis Core, Patapon 2 and Ridge Racer 2 the same at all four frames; Need for Speed: Most Wanted's frames as
+  the branch's earlier run.
+
+**Left, and why.** The GE's time (a list taking time to draw: the statuses a callback or a poll would see meanwhile;
+not modelled, as part 9 decided). The state buffer's layout as the PSP's (programs that look inside it: two
+pspautotests). sceGeGetStack. A SIGNAL call's stack in use refused. A third CALL (still stops the GE). Transfers past
+VRAM's end and sceGeEdramSetAddrTranslation(0)'s mirrors. God of War: Chains of Olympus's speed (7.7 frames a second,
+the kernel side's profile finding most of its time in the drawing a TRANSFER_START waits for: every transfer flushes
+everything pending, overlapping or not). The kernel-side causes above (the kernel side's branch).
+
 ## Part 58: sceJpeg, scePauth, the PS3's memory, and the last functions games stopped at
 
 On branch `cursor/psp-hle-games12-2b67`, on top of #189's `cursor/psp-hle-games11-2b67`. Sources: pspautotests' programs
@@ -6835,3 +7009,147 @@ samples, and the Media Engine's byte order writing a misaligned row (both above)
 loaded by any test (as for every earlier layout). Melodie's 40 MiB request (above). PGD decryption and the black games
 part 55 listed. The runner's WAV header writes each of its tags with a NUL after it (`tools/psp-runner/runner.cpp`'s
 loops over C strings), which players reject; the measurements here read past it.
+
+## Part 60: perspective texels divided by the GE's reciprocal; patch divisions
+
+On branch `cursor/psp-ge-fits3-2b67`, on top of #192's `cursor/psp-ge-lists-2b67` (#191 under it). Round 5 of `tools/psp-measure`
+(the owner's `psp-round5` pictures) and round 4 run again with #191's timed waits (`psp-round5b`) against the software
+renderer. A rule was taken only where every picture it touches got closer and none got worse. Original arithmetic:
+none of PPSSPP's code was copied, and JPCSP was not read. The screen projection is unchanged (part 10's
+trunc-toward-2048). Lighting is unchanged (below).
+
+### The perspective divide: fitted
+
+`persp-w3` holds w = 3 at every corner, so there is no perspective gradient, and u runs from 0 to 1024 texels. The
+core's per-pixel u was an IEEE divide and came out exactly one texel high on the left half of every row. The geometry
+and the edge weights already matched, so the divide is what differs: the GE divides by a reduced-precision reciprocal,
+not a full divide. The same path is what `persp-wall`, `persp-divide` and `persp-floor` exercise, and the older
+`3d-wall-texels` and `3d-floor-texels`.
+
+**The reciprocal** (`draw.cpp`'s `geReciprocal()`). The top 15 bits of the magnitude's fraction pick one of 128 straight
+chords. Chord s starts at `round(131072 / (1 + s/128))` (131072 down to 65793; never an exact half, so which way a half
+rounds doesn't arise) and its slope is that run to the next start, over the 256 positions in the chord, rounded half to
+even (slopes from -254 to -64; a half away from zero misses the texels below). The value is
+`(64 * start + 63 + slope * position) >> 7`, in units of 2^-16 of the fraction's reciprocal, placed back at the
+exponent. The sign is kept. A zero, a denormal or an infinity gives 0. Two chords sit one unit high at the positions
+`persp-divide` and `persp-floor` actually sample, so their starts are two counts low (the slopes stay the unadjusted
+ones): chords 5 and 58. Without chord 5's correction `persp-divide` has 343 pixels apart and `persp-floor` 355;
+without chord 58's, 305 and 353 (211 and 351 with both). Putting 49 or 73 one unit low as well would clear the rest of
+`persp-divide`'s exact-integer columns and make `persp-floor` worse, so they stay. The other 126 chords aren't pinned
+one by one: they're the formula's.
+
+**At a vertex** (`GE::triangle()`). q is that reciprocal of w. s is u * q and t is v * q, each with its low 8 fraction
+bits cut off (the GE's 24-bit float, toward zero). s, t and q then become 15-bit integers on the unit of the largest
+exponent among the three of that one, cut toward zero. The 15 bits are sharply pinned: with 13, 14, 16 and 17 bits
+`persp-wall` has 5647, 2416, 1738 and 2396 pixels apart (23 with 15), and with 20 or 23 about 2550, as the plain
+divide had. With the texture matrix's own q (TEXTURE_MAP_MODE 1, projected textures), q is float24(q * R(w)): the
+divide by q the blend had before, carried over, not measured. (Every other way q is 1, and R(w) has 16 significant
+bits at most, which the cut keeps, so q is R(w) itself.)
+
+**Across the triangle.** Those integers are stepped with part 48's stepper: the reciprocal of twice the area kept to 16
+significant bits and rounded down, the steps in 16384ths and rounded down, anchored at the leftmost corner (the topmost
+of two). A pixel takes the stepped value rounded down, times its unit. Its texture coordinate is that s (and t) times
+the reciprocal of that q, the product kept to 24 significant bits and cut toward zero (a rounded float multiply sits
+the wrong side of several of these texels). A q of 0 has the reciprocal 0, so the coordinate 0, and a q below 0 a
+reciprocal below 0 (no picture measures either: every corner's w is above 0 in all of them). Nearest filtering still
+takes `floor` of the coordinate (`texture.cpp`). The four-at-a-time path (`four.cpp`) and the one-at-a-time path
+(`raster.cpp`) do this with the same operations, so they still match. It's integer arithmetic and masks on the
+floats' bits (the chords a table made at compile time), with no division at a pixel.
+
+**What it does to the measured pictures** (pixels apart, before and after; every other file is as it was):
+
+| File | Before | After |
+| --- | --- | --- |
+| `persp-wall` | 2662 | 23 |
+| `persp-divide` | 3172 | 211 |
+| `persp-floor` | 6026 | 351 |
+| `persp-w3` | 33040 | 18944 |
+| `3d-wall-texels` (round 2) | 307 | 23 |
+| `3d-floor-texels` (round 2) | 291 | 64 |
+| `curves-made-up` | 13264 | 12974 |
+
+`persp-wall`'s u is exact; its 23 are the same v pixels `3d-wall-texels` still misses, one texel off. `persp-w3` is
+closer on every row and not exact: with w constant the stepper's gradient is a hair short of the true slope, so the
+coordinate saws across the texel boundary, 74 columns of row 128 still a few thousandths to a few hundredths of a texel
+the wrong side. Moving the chord w = 3 uses, either way, doesn't beat 18944, and that chord is one the wall uses too.
+`persp-divide` and `persp-floor` keep a boundary pixel here and there (211 and 351); the two corrected chords are what
+those pictures pin, and the rest of the table is what they all share.
+
+**Not this path.** Sprites still blend 1 / w in IEEE doubles between the two corners (`spriteRows()`, `spriteFours()`):
+`persp-sprite` stays at 1204 and `3d-sprite-texels` at 72. Lines still divide from their two ends: `lines-texels` stays
+exact, and the other line pictures are unchanged. Curved surfaces' texels (`curves-texels`, 958) are unchanged; the
+290 `curves-made-up` picked up are patches that go through a triangle. The hardware renderer returns before this setup
+and draws with the GPU's own divide, as before.
+
+**Tests.** "draw3d four pixels at a time against one" (`tests/psp/draw3d.cpp`), 20000 random primitives, both paths:
+they still match, including perspective-textured triangles. Save states are unchanged (the new fields are on a job,
+which isn't serialized). The arithmetic was first written with library calls (frexp, ldexp) and then as it is now; the
+two drew every measured picture byte for byte the same.
+
+**Speed.** The GE's divide costs more than a float division: a table read per lane, the products in doubles, and the
+setup of s, t and q for every textured 3D triangle on the GE's thread. On the RP6 (the benchmark scenes, 300 frames,
+rounds taking turns with the build before this part):
+
+| Scene | 7 drawing threads, before → after | 1 drawing thread, before → after |
+| --- | --- | --- |
+| Midnight Club 3, race | 54.4 → 52.4 fps (−4%) | 23.7 → 21.7 fps (−8%) |
+| Midnight Club 3, menu | 73.2 → 68.6 fps (−6%) | |
+| Liberty City Stories, city | 76.1 → 68.8 fps (−10%) | 38.4 → 34.9 fps (−9%) |
+| Liberty City Stories, woods | 76.8 → 69.6 fps (−9%) | 38.9 → 34.9 fps (−10%) |
+
+Lumines's demo (2D) is about 3% faster: a triangle no longer sets up the old blend's edge values. The profile (simpleperf
+on the RP6) puts the rest about half on the new arithmetic itself and half on the pixel loop waiting for it (its chain
+from q to the texel is longer than the old divides'); with 7 threads the GE's thread also draws more bands itself, as
+the workers fall behind. Tried and kept: a 64-bit division a triangle shared by all its steps, only the steps its
+pixels use, the corners quantized with integer shifts, the exponent applied as two exact powers of two (no branch).
+Tried and dropped: reading a chord once for a four on one chord (the test cost more, 5% in LCS's scenes). Left to try:
+the reciprocal worked out a four ahead, to hide its latency.
+
+### Patch divisions: round 4 again
+
+#191's program gives each GE list 5 seconds and resets the GE when it doesn't finish (part 48, "Round 4 again"). The
+owner's run (`psp-round5b`) finished round 4: `stall-check` drew the same rows before and after its reset as the core
+does, so the reset works on the PSP, and the curve counts came back as:
+
+| Test | Divisions along u | On the PSP |
+| --- | --- | --- |
+| `curves-count` | 16, 63, 64 | drawn (292 pixels lit) |
+| `curves-count-65` | 65 | the GE never finished, not a point drawn |
+| `curves-count-100` | 100 | the same |
+| `curves-count-128` | 128 | drawn as 1 division: 4 points, and the list finished |
+| `curves-count-200` | 200 | never finished, nothing drawn |
+| `curves-count-255` | 255 | the same |
+
+So PATCH_DIVISION's counts are 7 bits (bits 0-6 and 8-14): 128 is 0, which divides as 1 does (the rule already
+known), and 200 is 72, 255 127, both past 64 like 65 and 100. More than 64 divisions leave the GE drawing forever
+(`sceGeDrawSync` said "drawing", not at a stall address), and nothing of that surface is drawn. The core
+(`curves.cpp`'s `patch()`) now takes the counts as 7 bits and draws nothing of a surface with more than 64 along
+either way, its points still read, and goes on with the list: a game can't have relied on more, since the PSP would
+stop there. (Only u was measured past 64; v is taken to be the same.) `curves-count-128` is now identical, and the
+four that stalled are too (nothing drawn). `curves-count`'s 72 pixels apart at 16, 63 and 64 divisions are the
+vertices' placement part 48 found (a point a pixel over here and there), not refitted here.
+
+"curves malformed" (`tests/psp/curves.cpp`) checks the counts: 64 divisions light 65 points, 128 two, and 65, 127 and
+200 none, the points read each time; its budget checks now cut 255 points each way 64 times.
+
+### Lighting: left as it was
+
+`share()` still returns `ceil(256 * amount)`, held to -256..256. Round 5's `light-share-0` through `light-share-3` (16
+normals, 192 products each: 3072 channel values) have the PSP match the core on 2209, one level lower on 816 and one
+higher on 47, so the core is right or one high. Rounding the share down instead wrecks the round-3 pictures
+(`light-diffuse`, `light-cosines`, `light-shine`, `light-materials`, `light-colors`, tens of thousands of pixels), which
+is what settled the rounding up (part 48). The leftover isn't that multiply: a level taken as the product times the
+true cosine still misses hundreds, well away from a level boundary, and a normal and the same normal turned don't share
+one scale. A fixed-point cosine from 8 to 20 bits still leaves about 631 of the 3072 off, so no change to the
+share was taken. `light-share-*` are as they were (43520, 39424, 42240, 36096), and so are `light-diffuse` (12288),
+`light-spot` (768), `light-point` (9728), `light-environment`
+(512), `light-materials` and `light-colors` (1536 each). `light-cosines`, `light-powered`, `light-shine` and
+`light-ambient` stay exact.
+
+### Left, and why
+
+The near-plane cut when the first or second corner is past the plane (`clip-split`, 14086; part 48 measured only the
+third) was not refitted. `steps-check` (27) and `steps-depth-check` (346) are the stepper's known leftovers and were
+left. `persp-sprite` (1204) is the sprite path above. `persp-w3`'s 18944, `persp-divide`'s 211 and `persp-floor`'s 351
+are the reciprocal and the stepper sitting a fraction of a texel the wrong side of a boundary; no further one-unit
+change of a chord improved one of them without making another worse.

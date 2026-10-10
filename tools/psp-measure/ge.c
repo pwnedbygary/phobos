@@ -20,13 +20,15 @@
 //Each test draws into VRAM (away from the text on the screen), reads the pixels back as they are and writes them to
 //results/ge/<test>.bin: little-endian 32-bit words, one per pixel, row by row (a 16-bit frame buffer's pixels in the
 //low half). manifest.txt (round 2), manifest3.txt, manifest4.txt and manifest5.txt (rounds 3-5) say what each test
-//drew. A test whose file is there is skipped, and one that stops the PSP is given up on, as results.c has it. The
-//program computes nothing: the host runs the same program in Phobos's core (tests/psp/measure.cpp) and compares the
-//files.
+//drew. A test whose file is there is skipped, and one that stops the PSP is given up on, as results.c has it. A list
+//the GE hasn't finished after 5 seconds is a stall: the GE is reset, <test>.stalled says so, and the round goes on
+//(waitForGe). The program computes nothing: the host runs the same program in Phobos's core (tests/psp/measure.cpp)
+//and compares the files.
 
 #include "measure.h"
 #include <pspdisplay.h>
 #include <pspctrl.h>
+#include <pspge.h>
 #include <pspgu.h>
 #include <psputils.h>
 #include <stdio.h>
@@ -129,11 +131,59 @@ static void start(int psm) {
   sceGuShadeModel(GU_SMOOTH);
 }
 
-//Ends the list and waits for the GE to have drawn it.
-static void finishList(void) {
-  sceGuFinish();
-  sceGuSync(GU_SYNC_FINISH, GU_SYNC_WHAT_DONE);
+//How long the GE may take over a list before it's taken to have stalled, in microseconds: every list here takes a
+//small part of it. (In round 4 a PSP froze where the GE didn't finish patches cut past 64 times, when this program
+//still waited for the GE as long as it took.)
+enum { Patience = 5000000 };
+
+//Adds text to the running test's <name>.stalled.
+static void noteStall(const char* text) {
+  SceUID file = sceIoOpen(current.stalled, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_APPEND, 0777);
+  if(file < 0) return;
+  sceIoWrite(file, text, strlen(text));
+  sceIoClose(file);
 }
+
+//Waits for the GE to have drawn every list queued, for Patience at most, and returns 1 if it has. If it hasn't, the
+//GE stalled: <name>.stalled says so, and what the list held (what), before anything is done about it, so that if
+//that stops the PSP the next start gives up on the test at once (results.c). Then the lists are thrown away and the
+//GE reset (sceGuBreak's cancel, sceGeBreak(1): the reset pspsdk offers a program), and the GU library started
+//afresh (sceGuInit's own list puts back the GE's first state), so the tests after draw as before; the test goes on,
+//saving what the GE had drawn.
+static int waitForGe(const char* what) {
+  unsigned int began = sceKernelGetSystemTimeLow(), waited = 0;
+  int state;
+  while((state = sceGeDrawSync(1)) > 0) {  //1 looks without waiting: 0 once every list is done
+    waited = sceKernelGetSystemTimeLow() - began;
+    if(waited >= Patience) break;
+    sceKernelDelayThread(1000);
+  }
+  if(state <= 0) return 1;
+  char text[320];
+  snprintf(text, sizeof(text), "The GE hadn't finished after %u ms (sceGeDrawSync(1) gave %d: 2 drawing, 3 at a "
+           "stall address).\nIts list: %s.\n", waited / 1000, state, what ? what : "see ge.c");
+  noteStall(text);
+  pspDebugScreenSetXY(35, current.line);  //past "running", and the "done" that replaces it
+  print("the GE stalled: resetting");
+  unsigned int broken = sceGuBreak(GU_BREAK_CANCEL);
+  snprintf(text, sizeof(text), "Reset: sceGuBreak(GU_BREAK_CANCEL) gave 0x%08x", broken);
+  noteStall(text);  //before sceGuInit, which waits for its own list: if the GE is still stuck, it waits for good
+  sceGuTerm();
+  unsigned int started = sceGuInit();
+  snprintf(text, sizeof(text), ", sceGuInit 0x%08x. The .bin is what the GE had drawn.\n", started);
+  noteStall(text);
+  pspDebugScreenSetXY(35, current.line);
+  print("the GE stalled: reset    ");
+  return 0;
+}
+
+//Ends the list and waits for the GE to have drawn it (waitForGe, what saying what the list holds); returns 0 if the GE
+//stalled.
+static int finishListOf(const char* what) {
+  sceGuFinish();
+  return waitForGe(what);
+}
+static void finishList(void) { finishListOf(0); }
 
 //The texture, 256x256 8888, nearest, clamped, with function tfx and its alpha (tcc).
 static void useTexture(int tfx, int tcc) {
@@ -1931,27 +1981,91 @@ static void curvesJoins(const char* name) {
   saveTarget(name, 256, 256, 0);
 }
 
-//How many vertices: in row n of 16 pixels (first to last), a flat patch 240 pixels wide (through mode) cut into
-//divisions[n] along u and once along v, as points added up (each adds 1 to its pixel: blending with fixed factors),
-//its two rows of vertices at y + 4 and y + 12: a row's sum is how many vertices a row of the patch has. Past
-//pspsdk's 64 the GE might stall, so those run last, a few divisions to a test (and a display list) each: a test
-//that stops the PSP twice is given up on alone (beginTest), and the ones before it are already saved.
-static void curvesCount(const char* name, int first, int last) {
-  static const int divisions[8] = {16, 63, 64, 65, 100, 128, 200, 255};
-  if(!beginTest(name)) return;
-  fillTarget(zero, 0);
+//How many vertices: in row n of 16 pixels, a flat patch 240 pixels wide (through mode) cut into some divisions along
+//u and once along v, as points added up (each adds 1 to its pixel: blending with fixed factors), its two rows of
+//vertices at y + 4 and y + 12: a row's sum is how many vertices a row of the patch has.
+static void startCount(void) {
   start(GU_PSM_8888);
   sceGuEnable(GU_BLEND);
   sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, 0xffffff, 0xffffff);
   sceGuPatchPrim(GU_POINTS);
-  for(int row = first; row <= last; row++) {
-    ColorVertex* v = sceGuGetMemory(16 * sizeof(ColorVertex));
-    for(int j = 0; j < 4; j++) {
-      for(int i = 0; i < 4; i++) v[j * 4 + i] = (ColorVertex){0xff010101, 8 + i * 80, row * 16 + 4 + j * 8 / 3.0f, 0};
-    }
-    sceGuPatchDivide(divisions[row], 1);
-    sceGuDrawBezier(ColorVertexType, 4, 4, 0, v);
+}
+static void countRow(int row, int divisions) {
+  ColorVertex* v = sceGuGetMemory(16 * sizeof(ColorVertex));
+  for(int j = 0; j < 4; j++) {
+    for(int i = 0; i < 4; i++) v[j * 4 + i] = (ColorVertex){0xff010101, 8 + i * 80, row * 16 + 4 + j * 8 / 3.0f, 0};
   }
+  sceGuPatchDivide(divisions, 1);
+  sceGuDrawBezier(ColorVertexType, 4, 4, 0, v);
+}
+
+//The counts, in rows 0 to 7 of their pictures, and their tests: 16, 63 and 64 in one, and past pspsdk's 64 one to a
+//test, last in the round. The GE stalled there on the user's PSP (when the program still waited for it as long as it
+//took, which froze the PSP): one that stalls now is reset (waitForGe) and its test saved as the GE left it, beside
+//<name>.stalled, and the others are drawn each in a list of its own.
+static const int countDivisions[8] = {16, 63, 64, 65, 100, 128, 200, 255};
+static const struct { const char* name; int first, last; } countTests[] = {
+  {"curves-count", 0, 2}, {"curves-count-65", 3, 3}, {"curves-count-100", 4, 4}, {"curves-count-128", 5, 5},
+  {"curves-count-200", 6, 6}, {"curves-count-255", 7, 7},
+};
+enum { CountTests = sizeof(countTests) / sizeof(countTests[0]) };
+
+static void curvesCount(const char* name, int first, int last) {
+  if(!beginTest(name)) return;
+  fillTarget(zero, 0);
+  startCount();
+  char what[128];
+  int length = snprintf(what, sizeof(what), "Bezier patches of 4x4 points as points, 1 division along v, along u");
+  for(int row = first; row <= last; row++) {
+    countRow(row, countDivisions[row]);
+    if(length < (int)sizeof(what)) length += snprintf(what + length, sizeof(what) - length, " %d", countDivisions[row]);
+  }
+  sceGuDisable(GU_BLEND);
+  finishListOf(what);
+  saveTarget(name, 256, 256, 0);
+}
+
+//The counts' tests as an earlier version of this program left them: a stall froze the PSP there, so what that left
+//(<name>.part, .again, .stopped) would have them run once more at most, or not at all. It's cleared, once in a
+//results folder (curves-count.timed marks that; if it can't be written, nothing is cleared), so they run with the
+//wait timed. Finished ones (.bin) are kept.
+static void countsAfresh(void) {
+  static const char* kinds[] = {"part", "again", "stopped"};
+  char path[320];
+  snprintf(path, sizeof(path), "%s/curves-count.timed", folder);
+  if(exists(path) || !mark(path)) return;
+  for(int test = 0; test < CountTests; test++) {
+    for(int kind = 0; kind < 3; kind++) {
+      snprintf(path, sizeof(path), "%s/%s.%s", folder, countTests[test].name, kinds[kind]);
+      sceIoRemove(path);
+    }
+  }
+}
+
+//The timed wait itself, as a stall has it: a list left waiting at its stall address (its start, never moved on), so
+//the GE doesn't finish it and is reset (stall-check.stalled says so). Around it, 16 divisions' count in row 0 before
+//the reset and in row 1 after, which should be alike.
+static void stallCheck(const char* name) {
+  static unsigned int __attribute__((aligned(16))) waiting[2];
+  if(!beginTest(name)) return;
+  fillTarget(zero, 0);
+  startCount();
+  countRow(0, 16);
+  sceGuDisable(GU_BLEND);
+  finishList();
+  waiting[0] = 15 << 24;  //FINISH
+  waiting[1] = 12 << 24;  //END
+  sceKernelDcacheWritebackAll();
+  int queued = sceGeListEnQueue(waiting, waiting, -1, 0);
+  if(queued >= 0) waitForGe("a FINISH and an END, left waiting at its stall address, on purpose");
+  else {
+    char text[96];
+    snprintf(text, sizeof(text), "sceGeListEnQueue gave 0x%08x: nothing was left waiting, nor reset.\n",
+             (unsigned int)queued);
+    noteStall(text);
+  }
+  startCount();
+  countRow(1, 16);
   sceGuDisable(GU_BLEND);
   finishList();
   saveTarget(name, 256, 256, 0);
@@ -1973,8 +2087,13 @@ static void writeManifest4(void) {
     "their pixels and colors, -bezier-depths and -spline-depths the depth buffer's 256x256 values there (low half,\n"
     "through VRAM's fourth copy); -places the vertices' sixteenths, -texels their texture coordinates, -made-up\n"
     "texture coordinates a vertex type lacks, -lit normals made from the slopes, -culling, -joins which\n"
-    "vertices strips join, -count how many vertices at 16-65 divisions (-count-128 at 100 and 128, -count-200 and\n"
-    "-count-255 at those).\n"
+    "vertices strips join, -count how many vertices at 16, 63 and 64 divisions (rows 0-2), -count-65, -100, -128,\n"
+    "-200 and -255 at that many (rows 3-7), one to a test.\n"
+    "stall-check: a list left at its stall address, so the GE doesn't finish it and is reset as after a stall;\n"
+    "16 divisions' count drawn before the reset (row 0) and after it (row 1).\n"
+    "<name>.stalled: the GE hadn't finished the test's list after 5 s and was reset: what the list held, how long it\n"
+    "waited, what the reset gave. Its .bin is what the GE had drawn.\n"
+    "curves-count.timed: the counts' runs left by the program before its GE waits were timed were cleared.\n"
     "<name>.stopped: a test that stopped the PSP twice, given up on.\n";
   sceIoWrite(file, text, sizeof(text) - 1);
   sceIoClose(file);
@@ -2012,10 +2131,11 @@ static void round4(void) {
   curvesLit("curves-lit");
   curvesCulling("curves-culling");
   curvesJoins("curves-joins");
-  curvesCount("curves-count", 0, 3);
-  curvesCount("curves-count-128", 4, 5);
-  curvesCount("curves-count-200", 6, 6);
-  curvesCount("curves-count-255", 7, 7);
+  stallCheck("stall-check");
+  countsAfresh();
+  for(int test = 0; test < CountTests; test++) {
+    curvesCount(countTests[test].name, countTests[test].first, countTests[test].last);
+  }
 }
 
 
@@ -2214,6 +2334,7 @@ static void writeManifest5(void) {
     "wall), persp-divide (u / w the same at every corner), persp-w3 (w 3 everywhere), "
     "persp-floor (round 2's floor),\n"
     "persp-sprite (round 3's 3D sprite).\n"
+    "<name>.stalled: the GE hadn't finished the test's list after 5 s and was reset (manifest4.txt says more).\n"
     "<name>.stopped: a test that stopped the PSP twice, given up on.\n";
   sceIoWrite(file, text, sizeof(text) - 1);
   sceIoClose(file);
