@@ -99,6 +99,39 @@ static auto keepsPixels(const GE::PixelState& p) -> bool {
          p.fixedA == 0 && p.fixedB == 0xff'ffff && !p.dither && !p.logicOp && !p.stencilTest && !p.depthWrite;
 }
 
+//A triangle's pixels inside the scissor rectangle and drawing region, its corners in sixteenths, for the GE's time
+//(owe()): its area there. (It draws the pixels whose middles are inside it: as many, but for those along its edges.)
+static auto pixelsInside(const s64 (&x)[3], const s64 (&y)[3], const GE::PixelState& p) -> u64 {
+  f64 left = p.left * 16.0, right = (p.right + 1) * 16.0, top = p.top * 16.0, bottom = (p.bottom + 1) * 16.0;
+  if(left >= right || top >= bottom) return 0;
+  s64 twice = (x[1] - x[0]) * (y[2] - y[0]) - (y[1] - y[0]) * (x[2] - x[0]);
+  if(std::min({x[0], x[1], x[2]}) >= left && std::max({x[0], x[1], x[2]}) <= right &&
+     std::min({y[0], y[1], y[2]}) >= top && std::max({y[0], y[1], y[2]}) <= bottom) return u64(std::abs(twice)) / 512;
+  //cut at each side of the rectangle in turn (each cut adds a corner at most: seven), then what's left's area
+  f64 px[8], py[8], qx[8], qy[8];
+  u32 count = 3;
+  for(u32 k = 0; k < 3; k++) px[k] = f64(x[k]), py[k] = f64(y[k]);
+  auto cut = [&](bool across, f64 limit, bool above) {
+    u32 kept = 0;
+    for(u32 k = 0; k < count; k++) {
+      u32 before = (k + count - 1) % count;
+      f64 from = across ? px[before] : py[before], to = across ? px[k] : py[k];
+      bool fromIn = above ? from >= limit : from <= limit, toIn = above ? to >= limit : to <= limit;
+      if(fromIn != toIn) {
+        f64 t = (limit - from) / (to - from);
+        qx[kept] = px[before] + (px[k] - px[before]) * t, qy[kept] = py[before] + (py[k] - py[before]) * t, kept++;
+      }
+      if(toIn) qx[kept] = px[k], qy[kept] = py[k], kept++;
+    }
+    count = kept;
+    for(u32 k = 0; k < count; k++) px[k] = qx[k], py[k] = qy[k];
+  };
+  cut(true, left, true), cut(true, right, false), cut(false, top, true), cut(false, bottom, false);
+  f64 area = 0;
+  for(u32 k = 0; k < count; k++) area += px[k] * py[(k + 1) % count] - px[(k + 1) % count] * py[k];
+  return u64(std::abs(area) / 512);
+}
+
 //The settings a primitive is drawn with: these pipeline and texture settings, with the commands' texture function.
 auto GE::lookFor(const PixelState& pixel, const Sampler* texture) const -> Look {
   Look look;
@@ -418,6 +451,7 @@ auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip
     s64 x0 = fixed(pa.x), y0 = fixed(pa.y);
     s64 area = (fixed(pb.x) - x0) * (fixed(pc.y) - y0) - (fixed(pb.y) - y0) * (fixed(pc.x) - x0);
     if(area == 0 || (facing && (area > 0) != (facing > 0))) return;
+    owe(pixelsInside({x0, fixed(pb.x), fixed(pc.x)}, {y0, fixed(pb.y), fixed(pc.y)}, look.pixel));
     handed.insert(handed.end(), {c, a, b});
   };
   if(kind == Triangles) {
@@ -640,6 +674,8 @@ static auto stepped(const s64 (&x)[3], const s64 (&y)[3], StepScale scale, const
 auto GE::rectangle(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void {
   Job job;
   if(!spriteJob(look, from, to, perspective, job)) return;
+  bool covers = job.firstX <= job.lastX && job.firstY <= job.lastY;
+  owe(covers ? u64(job.lastX - job.firstX + 1) * u64(job.lastY - job.firstY + 1) : 0);
   if(hardware) return renderer->sprite(job);  //(its pixels, and their coordinates' steps, worked out as here)
   submit(job);
 }
@@ -802,6 +838,7 @@ auto GE::triangle(const Look& look, const Vertex& a, const Vertex& b, const Vert
   s64 area = (p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[1].y - p[0].y) * (p[2].x - p[0].x);  //above 0: clockwise
   if(area == 0) return;
   if(facing && (area > 0) != (facing > 0)) return;
+  owe(pixelsInside({p[0].x, p[1].x, p[2].x}, {p[0].y, p[1].y, p[2].y}, pixel));
   if(hardware) return renderer->triangle(a, b, c);
   if(area < 0) std::swap(p[1], p[2]), area = -area;  //the same corners, turned the way the edges are worked out for
   //(which pixels on its edges it draws: triangleRows(), raster.cpp)
@@ -891,6 +928,7 @@ auto GE::point(const Look& look, const Vertex& at) -> void {
   auto& pixel = look.pixel;
   s32 x = fixed(at.x) >> 4, y = fixed(at.y) >> 4;
   if(x < pixel.left || x > pixel.right || y < pixel.top || y > pixel.bottom) return;
+  owe(1);
   if(hardware) return renderer->point(at);
   Job job{};
   job.kind = Job::Kind::Point;
@@ -975,6 +1013,31 @@ auto GE::line(const Look& look, const Vertex& from, const Vertex& to, bool persp
   while(first <= last && !lights(first)) first++;
   while(last >= first && !lights(last)) last--;
   if(first > last) return;
+  //What it lights inside the scissor rectangle, for the GE's time: of its columns there, those whose rows are there
+  //too. Its rows go one way along it, so those follow one after another, from the first column not short of the
+  //rectangle's rows to the first past them.
+  s64 lowEdge = steep ? pixel.top : pixel.left, highEdge = steep ? pixel.bottom : pixel.right;
+  s64 lowAcross = steep ? pixel.left : pixel.top, highAcross = steep ? pixel.right : pixel.bottom;
+  bool rising = (rise < 0) == (along < 0);
+  auto search = [](s64 from, s64 to, auto holds) {  //the first column of from-to where holds() does, else to + 1
+    to++;
+    while(from < to) {
+      s64 middle = from + (to - from) / 2;
+      if(holds(middle)) to = middle;
+      else from = middle + 1;
+    }
+    return from;
+  };
+  s64 low = std::max(first, lowEdge), high = std::min(last, highEdge);
+  s64 start = search(low, high, [&](s64 column) {
+    s64 row = acrossAt(column);
+    return rising ? row >= lowAcross : row <= highAcross;
+  });
+  s64 end = search(start, high, [&](s64 column) {
+    s64 row = acrossAt(column);
+    return rising ? row > highAcross : row < lowAcross;
+  });
+  owe(u64(std::max<s64>(0, end - start)));
   Job job{};
   job.kind = Job::Kind::Line;
   job.look = &look;

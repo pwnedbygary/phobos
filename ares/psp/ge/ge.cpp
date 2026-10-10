@@ -55,6 +55,7 @@ auto GE::power() -> void {
   for(auto& element : textureMatrix) element = 0;
   boneIndex = worldIndex = viewIndex = projectionIndex = textureIndex = 0;
   pending = Stop::Ended;
+  owedPixels = owedPrimitives = 0;
   noted.clear();
   flush();
   dropTextures();

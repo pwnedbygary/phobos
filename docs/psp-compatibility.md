@@ -14,7 +14,9 @@ changed, run the same way beside the base commit's runner on 35 games (docs/psp-
 whole library run again on the merged stack (parts 57 to 60) and compared with part 59's own run beside the base
 commit's runner (docs/psp-core.md, part 59); and part 62 (branch `cursor/psp-hle-games14-2b67`, on #195's
 `cursor/psp-hle-games13-2b67`): the rows its fixes changed, from the whole library run again beside part 59's run of
-the merged stack (docs/psp-core.md, part 62). The other rows are the report's.
+the merged stack (docs/psp-core.md, part 62); and part 64 (branch `cursor/psp-gow-sw-2b67`, on #198's
+`cursor/psp-vk-speed6-2b67`): the rows its GE changes moved, from the whole library run again beside the base commit's
+runner (docs/psp-core.md, part 64). The other rows are the report's.
 
 ## Method
 
@@ -50,13 +52,25 @@ game that looked worse was run again without presses on both commits before call
 
 ## Summary
 
-| Category | Before (`b27f084a5`) | Run 1 (#183's tip) | Now | Part 55 | Part 57 | Part 58 | Part 59 | Part 62 | Change since Before |
-|---|---|---|---|---|---|---|---|---|---|
-| Menu or gameplay | 141 | 148 | 175 | 178 | 180 | 180 | 187 | 188 | +47 |
-| Movie | 35 | 43 | 63 | 63 | 63 | 65 | 71 | 71 | +36 |
-| Stuck loading | 13 | 8 | 5 | 4 | 4 | 4 | 0 | 0 | -13 |
-| Black or hang | 73 | 64 | 21 | 19 | 17 | 15 | 6 | 6 | -67 |
-| Timed out | 4 | 3 | 2 | 2 | 2 | 2 | 2 | 1 | -3 |
+| Category | Before (`b27f084a5`) | Run 1 (#183's tip) | Now | Part 55 | Part 57 | Part 58 | Part 59 | Part 62 | Part 64 | Change since Before |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Menu or gameplay | 141 | 148 | 175 | 178 | 180 | 180 | 187 | 188 | 189 | +48 |
+| Movie | 35 | 43 | 63 | 63 | 63 | 65 | 71 | 71 | 71 | +36 |
+| Stuck loading | 13 | 8 | 5 | 4 | 4 | 4 | 0 | 0 | 0 | -13 |
+| Black or hang | 73 | 64 | 21 | 19 | 17 | 15 | 6 | 6 | 6 | -67 |
+| Timed out | 4 | 3 | 2 | 2 | 2 | 2 | 2 | 1 | 0 | -4 |
+
+Part 64 moves one row: God of War: Chains of Olympus, which had timed out, finishes its 3600 frames, its difficulty
+menu at 3600 (the Cross at 1800 took New Game): its loop drew its scene as fast as the GE let it, and our GE took no
+time (docs/psp-core.md, part 64); a list is now done for the program only once a PSP's GE would have drawn it. With
+part 64's first two commits it finished in 429 s (8.4 frames a second), with all of it in 325 s (11.1). That changes
+when every game sees its lists done, and 100 of the 266 show some frame differently from the base commit's runner,
+each the same scene at each frame or the same sequence a few frames apart (a movie or a fade further on or behind, an
+animation step, Battlefront II's random map; Persona 2: Innocent Sin's opening comes a little later, its CRIWARE logo
+at 1200 where the base showed the movie, both in the movie by 3600): no game shows less than it did, nor with all of
+part 64 (79 games a frame or a step apart from the run before, some of that the runner's own, as two runs of one
+runner differ too). Killzone, killed at the limit in the base run, finishes its 3600 frames (its row's gameplay, as
+before), and Army of Two runs at 9.8 frames a second (3.7 before).
 
 Part 62 moves four rows. Melodie (Prototype), black, shows its loading screen and its menus: asking first thing for a
 40 MiB heap, it's started again with all of RAM. God of War: Ghost of Sparta finishes its 3600 frames, black (it retries
@@ -217,10 +231,11 @@ ring, Melodie since part 62's restart with all of RAM): 16 a menu, a title or a 
 
 These are the runner's own frames per second: unthrottled, `-O1`, `BUILD_DEBUG`, 7 GE threads, on a Mac shared with
 other work (load averages of 40 to 140 during this run), so treat them as relative. The 8 under 30 are mostly 3D games
-keeping the GE busy: Killzone (3 fps), Army of Two (4), Super Monkey Ball Adventure (8), Activision Hits Remixed (9),
-The King of Fighters - Orochi Saga (9, black then; 390 and its autosave notice since part 55), Need for Speed: Carbon -
-Own the City (10) and Underground Rivals (14), Death Jr. II (17). God of War: Chains of Olympus (its main menu by frame
-1200) and Ghost of Sparta (barely past frame 60) were killed at the 1200 s limit.
+keeping the GE busy: Killzone (3 fps), Army of Two (4; 9.8 since part 64), Super Monkey Ball Adventure (8), Activision
+Hits Remixed (9), The King of Fighters - Orochi Saga (9, black then; 390 and its autosave notice since part 55), Need
+for Speed: Carbon - Own the City (10) and Underground Rivals (14), Death Jr. II (17). God of War: Chains of Olympus (its
+main menu by frame 1200) and Ghost of Sparta (barely past frame 60) were killed at the 1200 s limit; Ghost of Sparta
+finishes since part 62, Chains of Olympus since part 64 (11.1 fps).
 
 ## Top missing functions
 
@@ -261,8 +276,8 @@ What still stops games, by cause (the per-game table has each game's note; updat
    copy of the ring), docs/psp-core.md.
 4. **Crashes**: none left (Need for Speed - ProStreet's was sceIoDread writing over its stack, part 59).
 5. **Stuck loading**: none left (part 59).
-6. **Too slow to judge**: God of War: Chains of Olympus (the GE waiting at each block transfer for all its drawing,
-   the seven drawing threads busy: the GE's part). Ghost of Sparta finishes since part 62 (above).
+6. **Too slow to judge**: none left. God of War: Chains of Olympus finishes since part 64 (it drew its scene 27 times a
+   vblank while the GE took no time), Ghost of Sparta since part 62 (above).
 7. **Memory**: none left. Melodie (Prototype) asks first thing for a 40 MiB block and is started again with all of RAM
    since part 62; Monster Hunter Portable 3rd HD's 26.5 MiB program, made for the PS3, gets all of RAM since part 58,
    as any program bigger than the user partition does.
@@ -380,7 +395,7 @@ and now, and what the last frames showed or why a game stops.
 | Ghostbusters - The Video Game | ULUS10486 | 413 | black | black | movie | intro |
 | Gitaroo Man Lives! | ULUS10207 | 516 | black | movie | movie | intro |
 | God Eater 2 [English v2.0 RedArtz] | NPJH50832 | 442 | black | black | menu | the fan translation's notice that its DLC file (ms0:/PSP/GAME/NPJH50832/SYSTEM_UPDATE.EDAT, the patch's, not on the stick) is missing (part 55: thread-local storage pools and sceKernelTryLockLwMutex_600 were missing before) |
-| God of War - Chains of Olympus | UCUS98653 | timeout | timeout | timeout | timeout | main menu by frame 1200; too slow to reach 3600 in 1200 s (the GE waits at each block transfer for all its drawing: part 62's profile) |
+| God of War - Chains of Olympus | UCUS98653 | 11 | timeout | timeout | menu | main menu by frame 1200, its difficulty menu at 3600 (part 64: its loop draws its scene as fast as the GE lets it, and the GE takes time now; part 61's block transfers before) |
 | God of War - Ghost of Sparta | UCUS98737 | 9 | timeout | timeout | black | black throughout: it opens a PGD-encrypted file 3,000 times a frame, gives its key and, refused, tries again for good; frame 60 in 900 s in part 59's run, before part 62 read each folder of the disc once |
 | Gradius Collection | ULUS10103 | 432 | loading | menu | menu | title, press start |
 | Gran Turismo | UCUS98632 | 217 | menu | menu | menu | main menu |

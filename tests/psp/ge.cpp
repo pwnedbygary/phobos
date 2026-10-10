@@ -1359,10 +1359,12 @@ static auto geThreads() -> void {
 //(ge/threads.cpp): till then the texture's pages stay busy for the CPU, as the pages a batch draws over do, and the
 //CPU's store into the picture just after the list lands after the sprite drew with it, its load of the sprite's pixel
 //finding it drawn and its load of the texel finding what it stored. It comes out as drawing it all before the CPU runs
-//on does (one thread), with batches shared out however small.
+//on does (one thread), with batches shared out however small; the sprite is drawn four pixels at a time, the texture
+//decoded by then. Into a frame buffer narrower than itself (32 pixels) the sprite can't wait in a batch (defer()):
+//it's drawn at once, after the batch before it, its texture (decoded for no batch) read from memory as it draws.
 static auto geDeferredBusy() -> void {
   constexpr u32 Offscreen = 0x15'4000;  //(VRAM offset)
-  auto build = [&](Memory& memory) {
+  auto build = [&](Memory& memory, u32 width) {
     ListWriter list{memory, ListA};
     u32 vertex = Vertices;
     struct V { float u, v; u32 color; float x, y, z; };
@@ -1382,20 +1384,20 @@ static auto geDeferredBusy() -> void {
     for(u32 n = 0; n < 8; n++) {
       put(GE::Sprites, {{0, 0, 0, 0, n * 8.0f, 0}, {0, 0, 0xff00'0000 + n * 0x10'2030, 64, n * 8.0f + 8, 0}});
     }
-    list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 512);
+    list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, width);
     list.put(GE::TextureMappingEnable, 1), list.put(GE::TextureAddress0, Offscreen);
     list.put(GE::TextureBufferWidth0, 0x04 << 16 | 64), list.put(GE::TextureSize0, 6 << 8 | 6);
     list.put(GE::TextureFormat, 3), list.put(GE::TextureFunction, 3);
     put(GE::Sprites, {{0, 0, 0, 100, 100, 0}, {64, 64, 0, 164, 164, 0}});
     list.put(GE::Finish), list.put(GE::End);
   };
-  auto drawn = [&](u32 threads, bool recompile) {
+  auto drawn = [&](u32 width, u32 threads, bool recompile) {
     KernelMachine m;
     m.system.ge.setThreads(threads);
     m.system.ge.drawing.shared = 0;
-    build(m.system.memory);
+    build(m.system.memory, width);
     m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
-    if(threads > 1) {  //(both batches still launched, the second's decode deferred)
+    if(threads > 1 && width == 512) {  //(both batches launched still, the second's decode deferred, drawn in fours)
       bool deferred = false;
       for(auto& batch : m.system.ge.drawing.batches) {
         if(!batch.launched) continue;
@@ -1404,11 +1406,12 @@ static auto geDeferredBusy() -> void {
           deferred = true;
           CHECK(m.system.memory.vramPageBusy(page), true);
         }
+        if(batch.reads.any()) for(auto& job : batch.jobs) CHECK(job.fours, true);
       }
       CHECK(deferred, true);
     }
     //the store into the picture; then loads of the sprite's pixel and of the stored texel, into RAM
-    u32 stored = VRAM + Offscreen + (10 * 64 + 10) * 4, loaded = VRAM + (110 * 512 + 110) * 4;
+    u32 stored = VRAM + Offscreen + (10 * 64 + 10) * 4, loaded = VRAM + (110 * width + 110) * 4;
     m.system.runProgram(0x0890'0000, {lui(t0, stored >> 16), ori(t0, t0, stored & 0xffff), lui(t1, 0x1234),
                                       ori(t1, t1, 0x5678), sw(t1, 0, t0), lui(t2, loaded >> 16),
                                       ori(t2, t2, loaded & 0xffff), lw(t3, 0, t2), lui(t4, 0x0892), sw(t3, 0, t4),
@@ -1418,10 +1421,12 @@ static auto geDeferredBusy() -> void {
     CHECK(m.system.memory.read(4, 0x0892'0000), m.system.memory.read(4, loaded));
     return m.system.memory.vram;
   };
-  auto whole = drawn(1, false);
-  CHECK(whole[(110 * 512 + 110) * 4], u8(0x30));  //(the sprite took its texel 10, 10 as drawn, not as stored)
-  for(u32 threads : {2u, 4u, 8u}) {
-    for(bool recompile : {false, true}) CHECK(drawn(threads, recompile) == whole, true);
+  for(u32 width : {512u, 32u}) {
+    auto whole = drawn(width, 1, false);
+    CHECK(whole[(110 * width + 110) * 4], u8(0x30));  //(the sprite took its texel 10, 10 as drawn, not as stored)
+    for(u32 threads : {2u, 4u, 8u}) {
+      for(bool recompile : {false, true}) CHECK(drawn(width, threads, recompile) == whole, true);
+    }
   }
 }
 
@@ -1811,11 +1816,12 @@ static auto geBreak() -> void {
   CHECK(w.system.memory.read(4, Woke + 4), 0u);
 }
 
-//sceGeBreak(1) and the GE's callbacks (unmeasured: pspautotests doesn't record a PSP at this). A finish callback
-//waiting its turn (interrupts held off) when the break comes is dropped, so the next list, which takes the same ID,
-//has its own callback run once, first, the list done by then (sceGeDrawSync(1) 0, as for any last list's finish
-//callback); and so does it when the break comes from a finish callback that's running, and enqueues the next list
-//itself. On both engines, the first with the state round trip while the new list's callback waits.
+//sceGeBreak(1) and the GE's callbacks. A FINISH whose interrupt waits (interrupts held off) when the break comes goes
+//with its list, callback and all (gpu/ge/intrsuspend: none once they're back on), so the next list, which takes the
+//same ID, has its own callback run once, first, the list done by then (sceGeDrawSync(1) 0, as for any last list's
+//finish callback); its own FINISH waits for interrupts too, the list drawing meanwhile. And so does it when the break
+//comes from a finish callback that's running, and enqueues the next list itself (unmeasured: pspautotests doesn't
+//record a PSP at this). On both engines, the first with the state round trip while the new list's FINISH waits.
 static auto geBreakCallbacks() -> void {
   constexpr u32 Gate = KernelMachine::Results + 0x40, Other = KernelMachine::Results + 0x44;
   for(bool fromCallback : {false, true}) for(bool recompile : {false, true}) {
@@ -1856,12 +1862,12 @@ static auto geBreakCallbacks() -> void {
     main.call("sceKernelCpuSuspendIntr");
     main.put(addu(s0, v0, zero));
     main.li(a0, ListA); main.li(a1, 0); main.put(addu(a2, s1, zero)); main.li(a3, 0);
-    main.call("sceGeListEnQueue");  //finishes at once; its callback waits
+    main.call("sceGeListEnQueue");  //its FINISH met at once; its interrupt waits
     if(!fromCallback) {
       main.li(a0, 1); main.li(a1, 0); main.call("sceGeBreak");
       main.li(t0, KernelMachine::Results); main.put(sw(v0, 0, t0));
       main.li(a0, ListB); main.li(a1, 0); main.put(addu(a2, s1, zero)); main.li(a3, 0);
-      main.call("sceGeListEnQueue");  //the first ID again: finishes too, its callback queued behind
+      main.call("sceGeListEnQueue");  //the first ID again: its FINISH met too, its interrupt waiting
       main.li(t0, KernelMachine::Results + 4); main.put(sw(v0, 0, t0));
       u32 wait = main.here();
       main.li(t0, Gate); main.put(lw(t1, 0, t0));
@@ -1878,11 +1884,11 @@ static auto geBreakCallbacks() -> void {
     m.kernel.startThread(*m.kernel.threads[uid], 0, 0);
     if(!fromCallback) {
       m.kernel.run(Kernel::VblankCycles);
-      CHECK(m.kernel.calls.size(), 1);
-      if(!m.kernel.calls.empty()) {
-        CHECK(m.kernel.calls[0].kind, Kernel::Call::Ge);
-        CHECK(m.kernel.calls[0].arguments[0], 2);
-      }
+      CHECK(m.kernel.calls.size(), 0);  //(list A's FINISH went with it)
+      CHECK(m.kernel.geFinishDue, true);
+      s32 running = m.kernel.geRunning;
+      bool drawing = running >= 0 && m.kernel.geLists[running].state == Kernel::GeList::State::Running;
+      CHECK(drawing, true);
       CHECK(roundTrip(m), true);
       memory.write(4, Gate, 1);
     }
@@ -1900,6 +1906,325 @@ static auto geBreakCallbacks() -> void {
   }
 }
 
+//A display list drawing into a 512-wide 8888 frame buffer at VRAM's start, its scissor 480x272, in through mode:
+//each PRIM's vertices (a color, and a 16-bit x, y and z: 12 bytes) written as it goes; then FINISH and END.
+struct DrawingList {
+  Memory& memory;
+  ListWriter list;
+  u32 vertices;
+  DrawingList(Memory& memory, u32 at, u32 vertices) : memory(memory), list{memory, at}, vertices(vertices) {
+    list.put(GE::FrameBufferPointer, 0);
+    list.put(GE::FrameBufferWidth, 512);
+    list.put(GE::FrameBufferPixelFormat, 3);
+    list.put(GE::Scissor1, 0);
+    list.put(GE::Scissor2, 271 << 10 | 479);
+    list.put(GE::Region2, 1023 << 10 | 1023);
+    list.put(GE::VertexType, 0x80'011c);
+  }
+  auto draw(u32 kind, const std::vector<std::pair<s32, s32>>& corners) -> void {
+    list.to(GE::VertexAddress, vertices);
+    for(auto [x, y] : corners) {
+      memory.write(4, vertices, 0xff00'00ff);
+      memory.write(2, vertices + 4, u32(x)), memory.write(2, vertices + 6, u32(y)), memory.write(2, vertices + 8, 0);
+      vertices += 12;
+    }
+    list.put(GE::Primitive, kind << 16 | u32(corners.size()));
+  }
+  auto finish(u32 id = 0) -> void { list.put(GE::Finish, id); list.put(GE::End); }
+};
+
+//The GE's time (kernel/ge.cpp's geTime()): a list is done for the program only once a PSP's GE would have drawn it, by
+//Sony's peak figures at the bus's clock (four pixels a clock, or 166/35 clocks a primitive, the longer), counted in
+//the CPU's 333 MHz: a 64x32 sprite at the bus's first 111 MHz in 2048 * 35 * 333 / (140 * 111) = 1536 cycles, at
+//166 MHz in 1027; a hundred one-pixel sprites in 100 * 664 * 333 / (140 * 166) = 951, their primitives the longer.
+//The pixels are drawn at once; the list reads as drawing for sceGeListSync and sceGeDrawSync till then. A list
+//queued behind is taken up as the GE is done with the one before; a list given in parts takes each up as it comes,
+//or once the GE is done with the last, whichever is later. A list whose stall address is just past its END reads as
+//drawing till then, not stalled. A PAUSE's list stops at the FINISH after it once that FINISH's time has come,
+//keeping a stall address moved meanwhile; after a SYNC the GE goes on past the FINISH then. sceGeBreak(0) at a FINISH
+//whose time hasn't come takes it first, and the FINISHes the lists after it meet as they start; and a state keeps a
+//FINISH waiting.
+static auto geTime() -> void {
+  KernelMachine m;
+  auto& memory = m.system.memory;
+  auto enqueue = [&](u32 at, u32 stall = 0) { return m.call("sceGeListEnQueue", {at, stall, 0xffff'ffff, 0}); };
+  DrawingList a{memory, ListA, Vertices};
+  a.draw(GE::Sprites, {{0, 0}, {64, 32}});
+  a.finish();
+  std::vector<std::pair<s32, s32>> dots;
+  for(s32 n = 0; n < 100; n++) dots.push_back({n, 40}), dots.push_back({n + 1, 41});
+  DrawingList b{memory, ListB, Vertices + 0x1000};
+  b.draw(GE::Sprites, dots);
+  b.finish();
+
+  u64 start = m.kernel.cycles;
+  u32 id = enqueue(ListA);
+  CHECK(memory.read(4, VRAM + (31 * 512 + 63) * 4), 0xffu);  //drawn at once
+  CHECK(memory.read(4, VRAM + (32 * 512 + 63) * 4), 0u);
+  CHECK(m.kernel.geDoneAt, start + 1536);
+  CHECK(m.call("sceGeListSync", {id, 1}), 2);  //drawing still
+  CHECK(m.call("sceGeDrawSync", {1}), 2);
+  CHECK(m.call("sceGeSaveContext", {Saved}), 0xffff'ffff);
+  CHECK(roundTrip(m), true);
+  m.kernel.run(1535);
+  CHECK(m.call("sceGeListSync", {id, 1}), 2);
+  m.kernel.run(2);  //(the FINISH is taken as the kernel's loop goes round, past its time)
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+  CHECK(m.call("sceGeDrawSync", {1}), 0);
+  id = enqueue(ListA, a.list.address);  //its stall address just past its END, as GU leaves it: drawing, not stalled
+  CHECK(m.call("sceGeListSync", {id, 1}), 2);
+  CHECK(m.call("sceGeDrawSync", {1}), 2);
+  m.kernel.run(1540);
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+
+  CHECK(m.call("scePowerSetClockFrequency", {333, 333, 166}), 0);
+  start = m.kernel.cycles;
+  id = enqueue(ListA);
+  CHECK(m.kernel.geDoneAt, start + 1027);
+  u32 behind = enqueue(ListB);
+  CHECK(m.call("sceGeListSync", {behind, 1}), 1);  //queued
+  m.kernel.run(1028);
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+  CHECK(m.call("sceGeListSync", {behind, 1}), 2);  //taken up as the first was done with
+  CHECK(m.kernel.geDoneAt, start + 1027 + 951);
+  m.kernel.run(951);
+  CHECK(m.call("sceGeListSync", {behind, 1}), 0);
+
+  //in parts: the 64x32 sprite, then a 32x32 one (513 cycles), the second given before the first is drawn, then after
+  DrawingList c{memory, ListA + 0x400, Vertices + 0x2000};
+  c.draw(GE::Sprites, {{0, 0}, {64, 32}});
+  u32 middle = c.list.address;
+  c.draw(GE::Sprites, {{100, 0}, {132, 32}});
+  c.finish();
+  for(bool late : {false, true}) {
+    id = enqueue(ListA + 0x400, ListA + 0x400);
+    CHECK(m.call("sceGeListSync", {id, 1}), 3);
+    u64 first = m.kernel.cycles;
+    CHECK(m.call("sceGeListUpdateStallAddr", {id, middle}), 0);
+    CHECK(m.kernel.geDoneAt, first + 1027);
+    m.kernel.cycles += late ? 2000 : 1000;  //(time passing, which nothing waits on while the list stalls)
+    u64 second = m.kernel.cycles;
+    CHECK(m.call("sceGeListUpdateStallAddr", {id, 0}), 0);
+    CHECK(m.kernel.geDoneAt, late ? second + 513 : first + 1027 + 513);
+    m.kernel.run(2000);
+    CHECK(m.call("sceGeListSync", {id, 1}), 0);
+  }
+
+  //a PAUSE, then the 64x32 sprite and the FINISH it pauses at, as far as the stall address; the rest after it
+  DrawingList d{memory, ListA + 0x800, Vertices + 0x3000};
+  d.list.put(GE::Signal, 0x03'0000);
+  d.list.put(GE::End);
+  d.draw(GE::Sprites, {{0, 0}, {64, 32}});
+  d.finish();
+  u32 pause = d.list.address;
+  d.draw(GE::Sprites, {{200, 0}, {208, 8}});
+  d.finish();
+  id = enqueue(ListA + 0x800, pause);
+  CHECK(m.kernel.geFinishDue, true);
+  CHECK(roundTrip(m), true);
+  CHECK(m.call("sceGeContinue", {}), Kernel::ErrorBusy);
+  CHECK(m.call("sceGeListUpdateStallAddr", {id, 0}), 0);
+  m.kernel.run(1028);
+  CHECK(m.call("sceGeListSync", {id, 1}), 4);  //paused
+  CHECK(m.call("sceGeContinue", {}), 0);
+  CHECK(memory.read(4, VRAM + (7 * 512 + 207) * 4), 0xffu);  //the rest, past the stall address moved
+  m.kernel.run(100);
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+
+  //a SYNC: the FINISH after it doesn't end the list, and the GE goes on past it once it's taken
+  DrawingList s{memory, ListA + 0xc00, Vertices + 0x4000};
+  s.list.put(GE::Signal, 0x08'0000);
+  s.list.put(GE::End);
+  s.draw(GE::Sprites, {{0, 50}, {64, 82}});
+  s.finish();
+  s.draw(GE::Sprites, {{300, 0}, {308, 8}});
+  s.finish();
+  id = enqueue(ListA + 0xc00);
+  CHECK(memory.read(4, VRAM + (81 * 512 + 63) * 4), 0xffu);
+  CHECK(memory.read(4, VRAM + (7 * 512 + 307) * 4), 0u);
+  m.kernel.run(1028);
+  CHECK(memory.read(4, VRAM + (7 * 512 + 307) * 4), 0xffu);
+  CHECK(m.call("sceGeListSync", {id, 1}), 2);
+  m.kernel.run(100);
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+
+  id = enqueue(ListA);
+  CHECK(m.kernel.geFinishDue, true);
+  CHECK(m.call("sceGeBreak", {0, 0}), Kernel::ErrorAlready);  //its FINISH taken first: nothing left to break off
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+  CHECK(m.kernel.geFinishDue, false);
+  id = enqueue(ListA);
+  behind = enqueue(ListB);
+  CHECK(m.call("sceGeBreak", {0, 0}), Kernel::ErrorAlready);  //the list behind it met its own as it started
+  CHECK(m.call("sceGeListSync", {behind, 1}), 0);
+  CHECK(m.kernel.geFinishDue, false);
+  id = enqueue(ListA);
+  behind = enqueue(ListB);
+  u32 stalled = enqueue(ListA + 0x400, ListA + 0x400);
+  CHECK(m.call("sceGeBreak", {0, 0}), stalled);  //the two FINISHes before it taken, the third broken off at its stall
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+  CHECK(m.call("sceGeListSync", {behind, 1}), 0);
+  CHECK(m.call("sceGeListSync", {stalled, 1}), 4);
+  CHECK(m.kernel.geFinishDue, false);
+  CHECK(roundTrip(m), true);
+}
+
+//The GE's FINISH comes to the program as an interrupt (kernel/ge.cpp's geInterrupt()), as pspautotests recorded: with
+//interrupts held off the list stays drawing past its time, its callback once they're back on (gpu/ge/intrsuspend);
+//a SIGNAL's callback that lets the GE go on finds its list drawing, though the GE has run its FINISH (
+//gpu/signals/continue); a thread waiting in sceGeDrawSync wakes when the GE's time has come, here a 480x272 clear
+//at 111 MHz: 130560 * 35 * 333 / (140 * 111) = 97920 cycles, 294 microseconds; and a FINISH whose time comes as an
+//interrupt's handler runs is taken once the handler has returned. On both engines.
+static auto geTimeInterrupts() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    auto& memory = m.system.memory;
+    memory.write(4, Callbacks + 8, recorder(m, 0x0880'4100, Finished));
+    DrawingList list{memory, ListA, Vertices};
+    list.draw(GE::Sprites, {{0, 0}, {64, 32}});
+    list.finish(1);
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, Callbacks); main.call("sceGeSetCallback");
+    main.put(addu(s1, v0, zero));
+    main.call("sceKernelCpuSuspendIntr");
+    main.put(addu(s0, v0, zero));
+    main.li(a0, ListA); main.li(a1, 0); main.put(addu(a2, s1, zero)); main.li(a3, 0);
+    main.call("sceGeListEnQueue");
+    main.put(addu(s2, v0, zero));
+    main.li(t3, 2000);  //three instructions a round: some 6000 cycles, past the list's 1536
+    u32 spin = main.here();
+    main.put(addiu(t3, t3, -1));
+    main.put(bne(t3, zero, s32(spin - main.here() - 4) / 4));
+    main.put(nop);
+    main.put(addu(a0, s2, zero)); main.li(a1, 1); main.call("sceGeListSync");
+    main.li(t0, KernelMachine::Results); main.put(sw(v0, 0, t0));
+    main.li(a0, 1); main.call("sceGeDrawSync");
+    main.li(t0, KernelMachine::Results); main.put(sw(v0, 4, t0));
+    main.li(t1, Turn); main.put(lw(t2, 0, t1)); main.put(sw(t2, 8, t0));
+    main.put(addu(a0, s0, zero)); main.call("sceKernelCpuResumeIntr");
+    main.put(addu(a0, s2, zero)); main.li(a1, 1); main.call("sceGeListSync");
+    main.li(t0, KernelMachine::Results); main.put(sw(v0, 12, t0));
+    main.li(t1, Turn); main.put(lw(t2, 0, t1)); main.put(sw(t2, 16, t0));
+    main.call("sceKernelExitGame");
+    runMain(m, recompile);
+    CHECK(memory.read(4, KernelMachine::Results), 2);       //drawing, interrupts held off
+    CHECK(memory.read(4, KernelMachine::Results + 4), 2);
+    CHECK(memory.read(4, KernelMachine::Results + 8), 0);   //no callback yet
+    CHECK(memory.read(4, KernelMachine::Results + 12), 0);  //done once they're back on,
+    CHECK(memory.read(4, KernelMachine::Results + 16), 1);  //its callback run
+    CHECK(memory.read(4, Finished), 1);
+  }
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    auto& memory = m.system.memory;
+    auto seeing = [&](u32 at, u32 slot) {  //notes sceGeListSync(the first list, 1) and sceGeDrawSync(1)
+      Assembler f{m, at};
+      f.put(addiu(sp, sp, -16)); f.put(sw(ra, 12, sp));
+      f.li(a0, Kernel::GeListIDs); f.li(a1, 1); f.call("sceGeListSync");
+      f.li(t0, slot); f.put(sw(v0, 0, t0));
+      f.li(a0, 1); f.call("sceGeDrawSync");
+      f.li(t0, slot); f.put(sw(v0, 4, t0));
+      f.put(lw(ra, 12, sp)); f.put(addiu(sp, sp, 16));
+      f.put(jr(ra));
+      f.put(nop);
+      return at;
+    };
+    memory.write(4, Callbacks, seeing(0x0880'4000, Signaled));
+    memory.write(4, Callbacks + 8, seeing(0x0880'4200, Finished));
+    ListWriter list{memory, ListA};
+    list.put(GE::Signal, 0x02'0007);
+    list.put(GE::End);
+    list.put(GE::Finish);
+    list.put(GE::End);
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, 0x0606'0010); main.call("sceKernelSetCompiledSdkVersion");
+    main.li(a0, Callbacks); main.call("sceGeSetCallback");
+    main.li(a0, ListA); main.li(a1, 0); main.put(addu(a2, v0, zero)); main.li(a3, 0);
+    main.call("sceGeListEnQueue");
+    main.li(a0, 0); main.call("sceGeDrawSync");
+    main.call("sceKernelExitGame");
+    runMain(m, recompile);
+    CHECK(memory.read(4, Signaled), 2);  //the signal's callback: drawing still
+    CHECK(memory.read(4, Signaled + 4), 2);
+    CHECK(memory.read(4, Finished), 0);  //the finish callback: done, the last
+    CHECK(memory.read(4, Finished + 4), 0);
+  }
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    auto& memory = m.system.memory;
+    ListWriter list{memory, ListA};
+    list.put(GE::FrameBufferPointer, 0);
+    list.put(GE::FrameBufferWidth, 512);
+    list.put(GE::FrameBufferPixelFormat, 3);
+    list.put(GE::Scissor2, 271 << 10 | 479);
+    list.put(GE::Region2, 1023 << 10 | 1023);
+    list.put(GE::ClearMode, 0x101);
+    list.put(GE::VertexType, 0x80'011c);
+    list.to(GE::VertexAddress, Vertices);
+    list.put(GE::Primitive, GE::Sprites << 16 | 2);
+    list.put(GE::Finish);
+    list.put(GE::End);
+    memory.write(2, Vertices + 16, 480), memory.write(2, Vertices + 18, 272);
+    Assembler main{m, 0x0880'1000};
+    main.call("sceKernelGetSystemTimeLow");
+    main.put(addu(s0, v0, zero));
+    main.li(a0, ListA); main.li(a1, 0); main.li(a2, 0xffff'ffff); main.li(a3, 0);
+    main.call("sceGeListEnQueue");
+    main.li(a0, 0); main.call("sceGeDrawSync");
+    main.call("sceKernelGetSystemTimeLow");
+    main.put(subu(v0, v0, s0));
+    main.li(t0, KernelMachine::Results); main.put(sw(v0, 0, t0));
+    main.call("sceKernelExitGame");
+    runMain(m, recompile);
+    u32 waited = memory.read(4, KernelMachine::Results);
+    CHECK(waited >= 294 && waited <= 295, true);
+  }
+  for(bool recompile : {false, true}) {  //the clear's FINISH falling due as an alarm's handler runs
+    KernelMachine m;
+    auto& memory = m.system.memory;
+    memory.write(4, Callbacks + 8, recorder(m, 0x0880'4100, Finished));
+    DrawingList list{memory, ListA, Vertices};
+    list.list.put(GE::ClearMode, 0x101);
+    list.draw(GE::Sprites, {{0, 0}, {480, 272}});
+    list.finish();
+    Assembler handler{m, 0x0880'3000};
+    handler.put(addiu(sp, sp, -16)); handler.put(sw(ra, 12, sp));
+    handler.li(t3, 40000);  //three instructions a round: some 120000 cycles, past the clear's 97920
+    u32 spin = handler.here();
+    handler.put(addiu(t3, t3, -1));
+    handler.put(bne(t3, zero, s32(spin - handler.here() - 4) / 4));
+    handler.put(nop);
+    handler.call("sceKernelGetSystemTimeLow");
+    handler.li(t0, KernelMachine::Results); handler.put(sw(v0, 16, t0));
+    handler.li(a0, Kernel::GeListIDs); handler.li(a1, 1); handler.call("sceGeListSync");
+    handler.li(t0, KernelMachine::Results); handler.put(sw(v0, 0, t0));
+    handler.li(t1, Turn); handler.put(lw(t2, 0, t1)); handler.put(sw(t2, 4, t0));
+    handler.put(lw(ra, 12, sp));
+    handler.li(v0, 0);  //not again
+    handler.put(jr(ra));
+    handler.put(addiu(sp, sp, 16));
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, Callbacks); main.call("sceGeSetCallback");
+    main.put(addu(s1, v0, zero));
+    main.call("sceKernelGetSystemTimeLow");
+    main.li(t0, KernelMachine::Results); main.put(sw(v0, 12, t0));
+    main.li(a0, ListA); main.li(a1, 0); main.put(addu(a2, s1, zero)); main.li(a3, 0);
+    main.call("sceGeListEnQueue");
+    main.li(a0, 10); main.li(a1, 0x0880'3000); main.li(a2, 0); main.call("sceKernelSetAlarm");
+    main.li(a0, 2000); main.call("sceKernelDelayThread");
+    main.li(a0, Kernel::GeListIDs); main.li(a1, 1); main.call("sceGeListSync");
+    main.li(t0, KernelMachine::Results); main.put(sw(v0, 8, t0));
+    main.call("sceKernelExitGame");
+    runMain(m, recompile);
+    u32 waited = memory.read(4, KernelMachine::Results + 16) - memory.read(4, KernelMachine::Results + 12);
+    CHECK(waited > 294, true);                             //(the clear's 294 microseconds past)
+    CHECK(memory.read(4, KernelMachine::Results), 2);      //in the handler, past the GE's time: drawing still,
+    CHECK(memory.read(4, KernelMachine::Results + 4), 0);  //its callback not run
+    CHECK(memory.read(4, Finished + 16), 1);               //that once the handler had returned
+    CHECK(memory.read(4, KernelMachine::Results + 8), 0);
+  }
+}
+
 auto geTests() -> Tests {
   return {
     {"ge commands", geCommands}, {"ge moving", geMoving}, {"ge stops", geStops}, {"ge vertices", geVertices},
@@ -1911,7 +2236,7 @@ auto geTests() -> Tests {
     {"ge pause", gePause}, {"ge callbacks see the ge stopped", geCallbackState}, {"ge pause window", gePauseWindow},
     {"ge lists queued twice", geQueuedTwice}, {"ge suspending signals' callbacks", geSuspendedCallbacks},
     {"ge calls and threads", geCallsAndThreads}, {"ge break", geBreak},
-    {"ge break and callbacks", geBreakCallbacks},
+    {"ge break and callbacks", geBreakCallbacks}, {"ge time", geTime}, {"ge time's interrupt", geTimeInterrupts},
     {"event flags", eventFlags}, {"event flag waiting", eventFlagWaiting}, {"display picture", displayPicture},
     {"gu program", guProgram}, {"copy sample", copySample},
   };

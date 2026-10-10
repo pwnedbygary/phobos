@@ -1532,12 +1532,13 @@ static auto idsRunOut() -> void {
   CHECK(n.kernel.nextUID, Kernel::LastUID + 1);
 }
 
-//States of the layouts before this one load: 22's (no file's place in the order files were opened), 21's (part
-//58's sceJpeg, sceHprm and low-level ATRAC fields, with files' count still kept and no read's bytes to come) and
-//20's (none of those either). Each is this layout's state with the newer fields taken out and the count put back,
-//where saving the machine with just that field changed shows it to be; loaded with the header's layout into a
-//machine whose newer fields are set, it makes this layout's state again, the newer fields defaulted. And files
-//opened out of the order of their numbers, in a layout-22 state, take the order of their numbers.
+//States of the layouts before this one load: 23's (no GE time: when the GE will have drawn what it was given, and
+//whether its list's FINISH waits), 22's (nor any file's place in the order files were opened), 21's (nor part 58's
+//sceJpeg, sceHprm and low-level ATRAC fields, with files' count still kept and no read's bytes to come) and 20's
+//(none of those either). Each is this layout's state with the newer fields taken out and the count put back, where
+//saving the machine with just that field changed shows it to be; loaded with the header's layout into a machine
+//whose newer fields are set, it makes this layout's state again, the newer fields defaulted. And files opened out of
+//the order of their numbers, in a layout-22 state, take the order of their numbers.
 static auto olderLayouts() -> void {
   HostFolder stick;
   stick.put("A.TXT", "abcdefgh");
@@ -1575,6 +1576,12 @@ static auto olderLayouts() -> void {
   m.kernel.jpeg.initialized = true;
   u32 jpeg = where(kernelState(), state);
   m.kernel.jpeg.initialized = false;
+  m.kernel.geDoneAt = 1;
+  u32 geDone = where(kernelState(), state);
+  m.kernel.geDoneAt = 0;
+  m.kernel.geFinishDue = true;
+  u32 geFinish = where(kernelState(), state);
+  m.kernel.geFinishDue = false;
   auto node = m.kernel.files.extract(file);
   node.key() = file + 1;
   m.kernel.files.insert(std::move(node));
@@ -1584,7 +1591,7 @@ static auto olderLayouts() -> void {
   m.kernel.files.insert(std::move(node));
   CHECK(kernelState() == state, true);
   bool ordered = jpeg < files && files < asyncData && asyncData < opened && opened + 8 <= workingDirectory
-              && workingDirectory < state.size();
+              && workingDirectory < geDone && geFinish == geDone + 8 && geFinish < state.size();
   CHECK(ordered, true);
   if(!ordered) return;
 
@@ -1595,6 +1602,7 @@ static auto olderLayouts() -> void {
     n.kernel.jpeg.initialized = n.kernel.jpeg.created = true, n.kernel.jpeg.width = 480;
     n.kernel.hprmCallbacks[3] = 1;
     n.kernel.atracs[1].lowLevel = true;
+    n.kernel.geDoneAt = 12345;
     n.kernel.stateLayout = layout;
     serializer s{bytes.data(), u32(bytes.size())};
     bool loaded = n.kernel.serialize(s) && s.size() == bytes.size();
@@ -1603,11 +1611,14 @@ static auto olderLayouts() -> void {
     n.kernel.serialize(again);
     return loaded && std::vector<u8>{again.data(), again.data() + again.size()} == state;
   };
-  auto layout22 = state;
+  auto layout23 = state;
+  layout23.erase(layout23.begin() + geDone, layout23.begin() + geFinish + 1);
+  CHECK(loads(23, layout23), true);
+  auto layout22 = layout23;
   layout22.erase(layout22.begin() + opened, layout22.begin() + opened + 8);
   CHECK(loads(22, layout22), true);
   std::vector<u8> counted = {0x45, 0x23, 0x01, 0x00};  //numbers handed out once, passed over
-  auto layout21 = state;
+  auto layout21 = layout23;
   layout21.insert(layout21.begin() + workingDirectory, counted.begin(), counted.end());
   layout21.erase(layout21.begin() + asyncData, layout21.begin() + workingDirectory);
   auto layout20 = layout21;
@@ -1628,8 +1639,12 @@ static auto olderLayouts() -> void {
     places.push_back(where(kernelState(), twoFiles));
     m.kernel.files[number].opened -= 1;
   }
-  CHECK(places[0] < places[1], true);
-  if(!(places[0] < places[1])) return;
+  m.kernel.geDoneAt = 1;
+  u32 geAt = where(kernelState(), twoFiles);
+  m.kernel.geDoneAt = 0;
+  CHECK(places[0] < places[1] && places[1] < geAt, true);
+  if(!(places[0] < places[1] && places[1] < geAt)) return;
+  twoFiles.erase(twoFiles.begin() + geAt, twoFiles.begin() + geAt + 9);
   for(u32 at : {places[1], places[0]}) twoFiles.erase(twoFiles.begin() + at, twoFiles.begin() + at + 8);
   KernelMachine n;
   machine(n);

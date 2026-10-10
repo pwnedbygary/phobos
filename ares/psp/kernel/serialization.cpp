@@ -1012,6 +1012,10 @@ auto Kernel::serialize(serializer& s) -> bool {
   s(geTranslation);  //a width sceGeEdramSetAddrTranslation takes
   check(!geTranslation || geTranslation == 0x200 || geTranslation == 0x400 || geTranslation == 0x800
         || geTranslation == 0x1000);
+  //when the GE will have drawn what it was given, and whether the list it runs has met its FINISH (layout 24 on: an
+  //older layout's lists were done the moment the GE met their FINISH, which left it nothing to draw)
+  if(s.reading() && stateLayout < 24) geDoneAt = 0, geFinishDue = false;
+  else s(geDoneAt), s(geFinishDue);
   if(s.reading() && valid) {
     //Every list is in the queue or free, once. A list queued, running or paused is in the queue (sceGeListDeQueue
     //and geEnded() take it out of there); one never queued is free; a completed one is either (it leaves the queue
@@ -1032,6 +1036,15 @@ auto Kernel::serialize(serializer& s) -> bool {
     }
     for(s32 index : {geRunning, geFinishing}) check(index == -1 || (index >= 0 && index < 64 && queued[index]));
     if(valid && geFinishing >= 0) check(geLists[geFinishing].state == GeList::State::Completed);
+    //a FINISH met is the running list's, whose interrupt isn't taken yet: it hasn't completed (it's drawing, or
+    //paused on its way to a PAUSE's FINISH), nor waits for a callback
+    if(valid && geFinishDue) {
+      check(geRunning >= 0 && !geSuspended);
+      if(valid) {
+        auto& list = geLists[geRunning];
+        check(list.state == GeList::State::Running || (list.state == GeList::State::Paused && list.pausing));
+      }
+    }
   }
   return valid;
 }

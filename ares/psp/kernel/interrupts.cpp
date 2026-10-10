@@ -72,6 +72,7 @@ auto Kernel::callReturned() -> void {
     if(geFinishing >= 0) geEnded();
     geRun();
   }
+  geInterrupt();
   startCall();
   if(!interrupting && rescheduleAfter) {
     rescheduleAfter = false;

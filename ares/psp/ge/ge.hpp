@@ -34,7 +34,9 @@
 //addresses all work that way.
 //
 //The HLE kernel's version of the GE driver (kernel/ge.cpp) runs the GE: it keeps the queue of lists, starts each in
-//turn, and deals with whatever made one stop. The GE's work takes no time yet.
+//turn, and deals with whatever made one stop. The GE carries out a list's commands at once, every pixel drawn there
+//and then; what they would take a PSP's GE to draw (owedPixels, owedPrimitives) is what the driver waits for before
+//the program hears that the list is done (Kernel::geTime()).
 //
 //Sources: pspsdk's GU library (src/gu, BSD-licensed), which writes display lists, for the commands' numbers and how
 //their arguments are laid out; uOFW's reading of the GE driver for the GE's registers; PPSSPP, for what neither
@@ -254,6 +256,7 @@ struct GE {
     s32x4 inside;     //the lanes inside the row (all bits set)
     bool full;        //all four inside it
     s32x4 z, depth;   //the pixels' depths, and the depth buffer's there (when it's read)
+    s32x4 passed;     //the lanes passing the depth test: with the stencil test, those failing it stay live
     s32x4 color[4];   //red, green, blue, alpha: 0-255
     s32x4 fog;        //0-255
   };
@@ -607,6 +610,15 @@ struct GE {
   std::vector<LinePixel> hardwareLine;
   std::vector<Vertex> placed;  //meshTriangles()'s: its corners' clip positions, on the screen
   std::vector<u32> handed;     //and the run of triangles it hands to the renderer
+
+  //What the primitives set up since the driver last looked take a PSP's GE to draw (Kernel::geTime()): how many
+  //there are (sprites, triangles, lines and points; a triangle cut at the near plane, its pieces), and their pixels
+  //inside the scissor rectangle (a sprite's rectangle, a triangle's area there, the pixels a line lights there, a
+  //point's one). Counted as each is set up, whichever renderer then draws it, so the time is the same for all of
+  //them (but for a renderer transforming 3D triangles itself, whose corners, meshTriangles()'s, are the GE's but for
+  //a float's rounding).
+  u64 owedPixels = 0, owedPrimitives = 0;
+  auto owe(u64 pixels) -> void { owedPixels += pixels, owedPrimitives++; }
 
   Stop pending = Stop::Ended;  //what the next END means: a FINISH or SIGNAL before it changes it
   std::set<std::string> noted;
