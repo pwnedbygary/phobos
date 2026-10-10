@@ -668,6 +668,103 @@ static auto umdCallback() -> void {
   }
 }
 
+//Activating the drive mounts the disc's file system, which reads the disc: the caller waits a sector's read (about
+//1.6 ms) and a worse thread runs meanwhile, as Def Jam: Fight for NY needs (its file thread makes the semaphore the
+//thread main makes after activating waits on). The drive is readable as it returns. With interrupts held off, or
+//dispatching, or from an interrupt handler, it can't wait, and mounts at once. On both engines.
+static auto umdMounting() -> void {
+  constexpr u32 R = KernelMachine::Results, Worse = 0x0880'0800;
+  for(bool recompile : {false, true}) {
+    DiscMachine m;
+    auto& memory = m.system.memory;
+    //a worse thread: notes that it ran (0x600d at R + 0x20), then sleeps
+    Assembler worse{m, Worse};
+    worse.li(t0, R); worse.li(t1, 0x600d); worse.put(sw(t1, 0x20, t0));
+    worse.call("sceKernelSleepThread");
+
+    Assembler main{m, 0x0880'1000};
+    main.li(s0, R);
+    main.li(a0, m.string("worse")); main.li(a1, Worse); main.li(a2, 0x30); main.li(a3, 0x1000); main.li(t0, 0);
+    main.li(t1, 0);
+    main.call("sceKernelCreateThread");
+    main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+    main.call("sceKernelStartThread");  //(it doesn't run: main is better)
+    main.put(lw(t0, 0x20, s0)); main.put(sw(t0, 0x24, s0));
+    main.call("sceKernelGetSystemTimeLow");
+    main.put(addu(s1, v0, zero));
+    main.li(a0, 1); main.li(a1, m.string("disc0:"));
+    main.call("sceUmdActivate");
+    main.put(sw(v0, 0, s0));
+    main.call("sceKernelGetSystemTimeLow");
+    main.put(subu(v0, v0, s1)); main.put(sw(v0, 4, s0));
+    main.put(lw(t0, 0x20, s0)); main.put(sw(t0, 0x28, s0));  //it ran meanwhile
+    main.call("sceUmdGetDriveStat");
+    main.put(sw(v0, 8, s0));
+    //interrupts held off, then dispatching: at once
+    main.call("sceKernelCpuSuspendIntr");
+    main.put(addu(s2, v0, zero));
+    main.call("sceKernelGetSystemTimeLow");
+    main.put(addu(s1, v0, zero));
+    main.li(a0, 1); main.li(a1, m.string("disc0:"));
+    main.call("sceUmdActivate");
+    main.put(sw(v0, 0xc, s0));
+    main.call("sceKernelGetSystemTimeLow");
+    main.put(subu(v0, v0, s1)); main.put(sw(v0, 0x10, s0));
+    main.put(addu(a0, s2, zero));
+    main.call("sceKernelCpuResumeIntr");
+    main.call("sceKernelSuspendDispatchThread");
+    main.put(addu(s2, v0, zero));
+    main.call("sceKernelGetSystemTimeLow");
+    main.put(addu(s1, v0, zero));
+    main.li(a0, 1); main.li(a1, m.string("disc0:"));
+    main.call("sceUmdActivate");
+    main.put(sw(v0, 0x14, s0));
+    main.call("sceKernelGetSystemTimeLow");
+    main.put(subu(v0, v0, s1)); main.put(sw(v0, 0x18, s0));
+    main.put(addu(a0, s2, zero));
+    main.call("sceKernelResumeDispatchThread");
+    //a vertical blank's handler activating it, timed at R + 0x2c and 0x30
+    Assembler handler{m, 0x0880'3000};
+    handler.put(addiu(sp, sp, -16)); handler.put(sw(ra, 12, sp)); handler.put(sw(s0, 8, sp));
+    handler.put(sw(s1, 4, sp));
+    handler.li(s0, R);
+    handler.call("sceKernelGetSystemTimeLow");
+    handler.put(addu(s1, v0, zero));
+    handler.li(a0, 1); handler.li(a1, m.string("disc0:"));
+    handler.call("sceUmdActivate");
+    handler.put(sw(v0, 0x2c, s0));
+    handler.call("sceKernelGetSystemTimeLow");
+    handler.put(subu(v0, v0, s1)); handler.put(sw(v0, 0x30, s0));
+    handler.put(lw(s1, 4, sp)); handler.put(lw(s0, 8, sp)); handler.put(lw(ra, 12, sp));
+    handler.put(addiu(sp, sp, 16));
+    handler.li(v0, 0); handler.put(jr(ra)); handler.put(nop);
+    main.li(a0, 30); main.li(a1, 0); main.li(a2, 0x0880'3000); main.li(a3, 0);
+    main.call("sceKernelRegisterSubIntrHandler");
+    main.li(a0, 30); main.li(a1, 0);
+    main.call("sceKernelEnableSubIntr");
+    main.call("sceDisplayWaitVblankStart");
+    main.li(a0, 30); main.li(a1, 0);
+    main.call("sceKernelReleaseSubIntrHandler");
+    main.call("sceKernelExitGame");
+    memory.write(4, R + 0x2c, 0xcccc'cccc);
+    m.runProgram(0x0880'1000, recompile);
+
+    CHECK(m.kernel.exited, true);
+    CHECK(memory.read(4, R + 0x24), 0);       //not before
+    CHECK(memory.read(4, R + 0), 0);
+    u32 mounted = memory.read(4, R + 4);
+    CHECK(mounted >= 1580 && mounted < 1700, true);  //100 microseconds and a sector at 1,375,000 bytes a second
+    CHECK(memory.read(4, R + 0x28), 0x600d);
+    CHECK(memory.read(4, R + 8), Kernel::UmdPresent | Kernel::UmdReady | Kernel::UmdReadable);
+    CHECK(memory.read(4, R + 0xc), 0);
+    CHECK(memory.read(4, R + 0x10) < 100, true);
+    CHECK(memory.read(4, R + 0x14), 0);
+    CHECK(memory.read(4, R + 0x18) < 100, true);
+    CHECK(memory.read(4, R + 0x2c), 0);
+    CHECK(memory.read(4, R + 0x30) < 100, true);
+  }
+}
+
 //The memory stick's insert and eject callback, as pspautotests' mstick recorded: registered through fatms0:, it's
 //told at once that a stick is in, and the program's next sceKernelCheckCallback runs it (1: one ran) with a count of
 //1, the event 1 (inserted) and its own argument; unregistering it and deleting it then succeed. mscmhc0's register
@@ -759,7 +856,7 @@ auto discTests() -> Tests {
   return {
     {"disc images", discImages}, {"disc files", discFiles}, {"disc requests", discRequests},
     {"disc PGD keys", discKeys}, {"disc drive", umdDrive}, {"disc drive's callback", umdCallback},
-    {"memory stick's callback", stickCallback},
+    {"disc drive mounting as it's activated", umdMounting}, {"memory stick's callback", stickCallback},
   };
 }
 
