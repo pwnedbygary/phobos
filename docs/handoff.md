@@ -25,6 +25,36 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP GPU: Vulkan faster — copies of what changed, a texture from two frame buffers, texels kept — 2026-10-10
+
+Branch `cursor/psp-vk-speed6-2b67`, on top of `3de4a0514` (`cursor/psp-ge-speed5-2b67`, #196 in; PR #197's).
+docs/psp-core.md, part 63, has the evidence; docs/psp-gpu-renderers.md's "Owned until needed", "Render to texture" and
+"The texture cache" the design. Software untouched (its pictures byte for byte, every frame of the bench scenes the
+same); every Vulkan frame of the seven bench scenes byte for byte as before, so the accuracy is the base's. Clean
+room: nothing of PPSSPP's read for it, nor JPCSP's. Save states unchanged (23).
+- **Changes** (each its own commit, with its tests): a render-to-texture copy taken again copies only the part of the
+  target changed since (Killzone's menu blurs a strip right of its picture 1,100 times a frame, each a copy of the
+  whole 512x512 picture); a texture running into the frame buffer below is copied from both targets (MC3's menu's
+  texture reached one row of the next frame buffer: a finish every frame); a new texture's texels go from the GE's
+  copy to the GPU without a copy of their own; a finish puts back only the pages each target drew in (an older bug
+  the review found: the CPU's bytes between two PRIMs far apart were overwritten).
+- **RP6, means of two rounds, each runner first in one** (fps, Turnip accurate / fast, Qualcomm's accurate / fast):
+  Killzone's menu 30.2 / 38.6 / 29.6 / 29.5 -> 48.6 / 73.1 / 42.7 / 42.6, at 4x 4.4 / 4.9 / 4.5 / 4.5 -> 12.9 / 17.0 /
+  14.0 / 14.0; MC3's menu 78.6 / 80.9 / 76.0 / 75.2 -> 110.7 / 115.0 / 105.0 / 108.7, at 4x 40.6 / 50.1 / 42.4 / 39.0
+  -> 57.1 / 78.9 / 71.2 / 63.6; MC3's race, LCS's city and woods level (-0.4% to +1.3%), WipEout 3% faster with the
+  last commit; Lumines' 2D within its noise; God of War unchanged (3.5-4.4).
+- **Checks**: tests/psp 413/0 (sanitized; five new groups, which fifteen broken versions each fail), tests/allegrex
+  58/0, tests/psp/ares 307/0; the GPU tests on the RP6 pass on Turnip and Qualcomm's driver (22 groups each); GCC 11
+  builds the GPU code and tests with -Werror at -O1-O3. An independent review found no correctness bug in the first
+  three commits (its test gaps filled, its wording taken; the older bug it reproduced is the last commit), and a
+  second review of everything since found none either.
+- **Left**: God of War in Vulkan (130-320 finishes a frame from small frame buffers sharing pages and the same memory
+  as 5650 and 8888, 2,400 copies and 100 textures a frame); WipEout's two finishes a frame (a depth read, a blur
+  spilling into the next buffer); LCS's every fourth frame (a list written over a picture); Killzone's menu at 4x
+  (still 1,100 passes a frame); one rectangle of changes a target; no GPU test in CI; the drawing threads' settle
+  giving the GPU's busy pages back to the CPU (older, the review's, untested); Peace Walker's states don't load on this
+  stack. Scratch: `~/phobos-work/scratch/vkspeed6`; nothing of it left on the RP6.
+
 ## PSP GE: the software renderer faster — copies wait only for what they touch, bands listed, runs — 2026-10-10
 
 Branch `cursor/psp-ge-speed5-2b67`, on top of #196's `cursor/psp-hle-games14-2b67` (#195 under it). docs/psp-core.md, part 61, has the

@@ -7631,3 +7631,213 @@ restart with all of RAM is chosen, not something a PSP does. The standard stream
 1 and 2, chosen). sceIoChstat, which LIBSUPPREACC.PRX imports, isn't here yet; none of the three games' runs called it.
 Ultimate Ghosts 'n Goblins and Me & My Katamari take a fresh stick's way now; the report's presses don't choose YES at
 the first's prompt.
+
+## Part 63: the Vulkan renderer faster — copies of what changed, a texture from two frame buffers, texels kept
+
+On branch `cursor/psp-vk-speed6-2b67`, on top of `3de4a0514` (`cursor/psp-ge-speed5-2b67`, #196 merged in; PR #197's).
+The task: both Vulkan modes faster on the RP6 before an Experimental release, the software renderer untouched, the
+accurate mode as accurate and the fast mode as close. Original code: nothing of PPSSPP's was read for this part, nor
+JPCSP's. Save states are unchanged (StateVersion 23): nothing new is saved.
+
+### Where the time went
+
+A survey of every bench scene in both modes on both drivers, at 1x and 4x, from the runner with late frames and the
+pipelines kept (part 54), and simpleperf on the emulation thread. Peace Walker's states don't load on this stack (see
+"Left"), and God of War's are another matter (below).
+- At 1x most 3D scenes are bound by the emulation thread: in Midnight Club 3's race on Turnip 16.3 ms a frame, of it
+  about 4 ms the CPU's emulation (the recompiler's code), 5 the GE's transform and setup, and under 1 the backend's
+  recording; Turnip's own code 0.3 ms, Qualcomm's driver's more (the recording 1.3 ms). Nothing here moves those.
+- **Killzone's menu** was the GPU's bound: 30 frames a second on both drivers, 4.5 at 4x. Logged PRIM by PRIM, it
+  blurs a strip in the 32 unused columns right of its 480-pixel picture back and forth: a 3D PRIM draws half the
+  strip from the other half of the frame buffer it draws into, 1,100 times a frame, in 64 slices of 17 passes. Each
+  sampled its own frame buffer, so each took a render-to-texture copy, and the copy was of the whole 512x512 picture
+  (1 MB; 16 MB at 4x), taken again because the target had changed since (any PRIM drawn into a target counted as a
+  change of all of it), and a break in the render pass.
+- **Midnight Club 3's menu** finished the GPU every frame (241 finishes in 300 frames; at 4x 11 ms a frame waiting,
+  41 frames a second). A 2D PRIM samples the frame buffer at VRAM 0 as a texture 512 rows tall; its filter reaches
+  row 272, the first row of the next frame buffer (0x088000), which that PRIM draws into. The texture's pages were
+  two targets', so `holds()` refused it, and the GE decoded it from memory, which finished everything first.
+- **New textures** on Qualcomm's driver: Killzone's menu and MC3's race decode about 8 textures a frame. Profiled,
+  `makeTexture()` took 1.5 ms a frame there, and the kernel 2.8 ms, 0.8 of it page faults in copying each texture's
+  texels into a vector of its own until the run uploaded them (and 0.8 in the GE's decode's own fresh buffer, which
+  is the software renderer's code too, so left).
+- **WipEout** finishes twice a frame: the CPU reads a depth value through VRAM's fourth copy (a sun test, it seems)
+  where the bloom's buffer now lies, which the GPU drew, and a blur PRIM spills 5 rows (rows 136-140 of a 136-row
+  buffer) into the next buffer's first rows, two targets over the same pages. **Liberty City Stories** finishes every
+  fourth frame: the CPU writes an 8 KB display list over a 64x64 picture the GPU drew there, which the GE then reads.
+  Both are left (below).
+
+### What was done
+
+1. **A copy taken again copies only what changed** (`gpu.cpp`'s `textureFor()`, `changed()`, `reached()`): each
+   target gathers the rectangle its pixels changed in since its copies last heard (`Target::changes`: a PRIM's
+   corners' extent, gathered as it draws and given as the next PRIM begins, and a pixel more each way for a corner's
+   float a hair off, inside its scissor; a fast-mode mesh's whole scissor; rows filled from memory); a copy hears of
+   them as one is taken (`Copied::dirty`), and taken again from the same place it copies only the part changed
+   since, into its place in the copy (`Command::intoX`, `intoY`): the rest is what the target still has. Killzone's
+   strip copies the half drawn since, 34x138 pixels, not 512x512.
+2. **A texture running into the frame buffer below** (`holds()`): pages one target's and then, from a page on,
+   another's, of the same row width and format, beginning on a row of the first, the first owning none of the
+   second's pages: copied in two parts, each from its own target, the rows from the second's address on from its
+   first rows, whole each time (the second part's changes aren't followed). MC3's menu no longer finishes.
+3. **A new texture's texels kept, not copied** (`vulkan.cpp`'s `makeTexture()`): the backend keeps the GE's decoded
+   copy alive until the run that uploads it (a decoded copy never changes: decoded again, it's another) and its
+   texels go straight into the staging buffer; the textures with texels to upload are listed, not looked for among
+   every texture at every run.
+4. **A finish puts back only the pages each target drew in** (`finish()`; an older bug the review found): a target's
+   drawn rectangle spans its PRIMs since the last finish, but only the pages each PRIM draws in are busy, so between
+   two far apart the CPU's writes went straight into memory, and another frame buffer could draw there without a
+   finish; the finish then wrote the target's older pixels over them. Since the last finish one target at most has
+   drawn in a page (`owners[]`), and memory's bytes in the rest are as new as the target's pixels, or newer. Each row
+   is put back a page at a time, the owner looked up once a run (looked up for each pixel, WipEout ran 1% slower). No
+   bench scene's frame changes.
+
+**Tried and dropped** (each measured, kept only where faster):
+- Render passes over only what their draws reach (each draw's box, made out to the GPU's render-area granularity):
+  no frame faster anywhere, and Qualcomm's driver drew LCS's woods 7% slower at 4x (80.0 -> 74.5; the whole picture
+  for passes testing depth got it back, but nothing gained either).
+- One barrier each side of a render-to-texture copy, the target read in its own general layout, and one each side of
+  an upload, instead of two: nothing measurable (Killzone's menu at 4x the same either way).
+- Passes whose draws neither test nor write depth or stencil not loading and storing them (`VK_EXT_load_store_op_none`,
+  a second, compatible render pass): 1,065 of Killzone's 1,125 passes a frame took it, and nothing changed.
+- Textures let go of kept to be made again at the same size (an image, its memory and its descriptor set cost
+  Qualcomm's driver about 0.2 ms each): Killzone's menu on Qualcomm's driver 43.0 -> 45.6, but WipEout on Turnip 6%
+  slower (67 -> 63 frames a second; the runs' finishes waited 0.56 ms a frame longer), and still with the reuse held
+  off for 16 runs. Not understood; dropped.
+- CPU stores into pixels the GPU drew taken into its target as uploads instead of finishing (for LCS's list): LCS
+  writes 2,048 words there every fourth frame, and the GE then reads them as a list, which finishes anyway.
+
+The earlier reading that the render areas and the barriers doubled Killzone at 4x on Turnip was one run's, measured
+again at 12.2 either way.
+
+### Numbers
+
+The RP6 (Adreno 740), the runner from adb's shell, its emulation thread pinned to the X3 (cpu7) as Phobos pins it,
+late frames (part 52) and the pipelines kept between sessions (part 54); frames a second over 300 frames from each
+scene's state, the means of two rounds with the base (`3de4a0514`) and this branch taking turns to go first (the
+device warms over a round, which costs whichever runs second 0-2%). At 4x the runner takes its late frames at the
+PSP's size and its screen is the PSP's (a scratch patch: the core reads the frame back at the screen's size above 1x,
+waiting for the GPU every frame, as the app's presenting doesn't). Turnip, the app's driver, is opened by the runner
+as the app opens it (scratch); Qualcomm's is the system's. The branch here is the code before item 4, which only
+changes what a finish writes into memory: the final code against it in Killzone's menu, LCS's city and WipEout (the
+scenes that finish) is in the next paragraph.
+
+1x:
+
+| Scene | Turnip accurate | Turnip fast | Qualcomm accurate | Qualcomm fast |
+| --- | --- | --- | --- | --- |
+| Killzone, menu | 30.2 -> 48.6 (+61%) | 38.6 -> 73.1 (+89%) | 29.6 -> 42.7 (+44%) | 29.5 -> 42.6 (+44%) |
+| Midnight Club 3, menu | 78.6 -> 110.7 (+41%) | 80.9 -> 115.0 (+42%) | 76.0 -> 105.0 (+38%) | 75.2 -> 108.7 (+45%) |
+| Midnight Club 3, race | 58.9 -> 58.6 | 66.2 -> 66.5 | 56.7 -> 56.6 | 63.3 -> 63.1 |
+| Liberty City Stories, city | 91.9 -> 92.0 | 104.1 -> 105.3 | 87.7 -> 88.1 | 99.3 -> 99.9 |
+| Liberty City Stories, woods | 114.0 -> 115.0 | 136.8 -> 138.6 | 113.6 -> 115.0 | 129.4 -> 130.8 |
+| WipEout Pure, race | 67.8 -> 67.7 | 84.1 -> 84.4 | 77.7 -> 78.0 | 78.6 -> 78.9 |
+| Lumines, demo (2D) | 820 -> 835 | 914 -> 820 | 791 -> 739 | 712 -> 777 |
+
+4x:
+
+| Scene | Turnip accurate | Turnip fast | Qualcomm accurate | Qualcomm fast |
+| --- | --- | --- | --- | --- |
+| Killzone, menu | 4.4 -> 12.9 (+193%) | 4.9 -> 17.0 (+248%) | 4.5 -> 14.0 (+208%) | 4.5 -> 14.0 (+207%) |
+| Midnight Club 3, menu | 40.6 -> 57.1 (+41%) | 50.1 -> 78.9 (+58%) | 42.4 -> 71.2 (+68%) | 39.0 -> 63.6 (+63%) |
+| Midnight Club 3, race | 52.4 -> 52.3 | 61.4 -> 61.2 | 52.2 -> 52.2 | 57.7 -> 58.0 |
+| Liberty City Stories, city | 67.4 -> 67.8 | 90.6 -> 90.8 | 75.1 -> 75.1 | 67.4 -> 67.3 |
+| Liberty City Stories, woods | 59.7 -> 60.2 | 90.3 -> 91.2 | 80.3 -> 80.7 | 66.3 -> 66.8 |
+| WipEout Pure, race | 30.3 -> 31.3 | 47.9 -> 47.9 | 34.2 -> 34.4 | 29.3 -> 29.4 |
+| Lumines, demo (2D) | 283 -> 283 | 368 -> 369 | 212 -> 213 | 210 -> 210 |
+
+Killzone's menu: 1.6 times as fast in Turnip's accurate mode at 1x, 1.9 in its fast mode, 1.4 on Qualcomm's driver,
+about 3 times at 4x (still GPU-bound there: 1,100 render passes a frame, each a copy and a draw). MC3's menu: 1.4
+times at 1x, 1.4-1.7 at 4x, its frames shown from the GPU again (240 in 240, none before). The other scenes are level:
+-0.4% to +3.5%, +0.5% on average. Lumines' 2D runs at 700-900 frames a second at 1x, where its runs are 100 apart from
+one to the next. An earlier three rounds of the first version, the base first each time, gave the same for Killzone's
+and MC3's menus (within 1%) and the rest 0-2% low, as the warming has it. What changed for those scenes on the CPU: a
+PRIM's corners' extent gathered as it draws (first worked out at each primitive, 0.2 ms a frame of MC3's race in a
+profile; gathered, 0.03).
+
+The final code (item 4 too) against the branch in the tables, the two taking turns over two rounds at 1x: WipEout
+2.6-3.6% faster (67.4 / 84.2 / 78.0 / 78.6 -> 69.1 / 86.8 / 80.4 / 81.5: its two finishes a frame put back fewer
+bytes, a run at a time, the emulation thread 0.4 ms a frame less), LCS's city 0.5-0.8% (92.6 / 105.5 / 88.3 / 99.8
+-> 93.1 / 106.0 / 89.0 / 100.4), Killzone's menu the same (it finishes twice in 300 frames).
+
+**God of War: Chains of Olympus** in Vulkan (part 61's two scenes, 150 frames): as before, 3.9 / 4.4 / 3.6 / 3.5
+frames a second in the battle (Turnip accurate / fast, Qualcomm's accurate / fast) and 2.0-2.2 in the menu, base and
+branch alike: see "Left".
+
+### Accuracy
+
+Part 49's method: 10 frames of each scene from its state, the software renderer's PNGs against each Vulkan
+configuration's, the base's and the branch's runners on the RP6. Every one of the branch's Vulkan frames is byte for
+byte the base's (seven scenes, four configurations, 280 frames; the final code's too), so the accuracy is the base's
+exactly: pixels identical to the software renderer's, accurate on Turnip / fast / Qualcomm's accurate / fast, Lumines
+96.6 / 72.9 / 72.9 / 72.9%, MC3's menu 94.7 / 86.3 / 86.3 / 86.3%, its race 90.2 / 68.4 / 68.4 / 68.4%, LCS's city
+78.5 / 50.9 / 50.9 / 50.9%, its woods 74.5 / 42.6 / 42.7 / 42.6%, WipEout 94.5 / 87.1 / 87.1 / 87.1%, Killzone's menu
+97.3 / 68.3 / 68.3 / 68.3%. (MC3's menu's last row's texels, taken from the frame buffer the PRIM draws into as it was
+before the PRIM, are what memory had after the base's finish: the same pictures.) The software renderer's captures
+are the same from both runners.
+
+### Checks
+
+- Software untouched: no file of its code changed (the branch changes `ares/psp/ge/gpu` and its tests alone); the
+  measure harness's 137 pictures byte for byte the base's; the bench scenes' every frame (picture and VRAM) the same
+  from the base's runner and the branch's, at 7 and 1 threads, 300 frames each (MC3's menu's end state differs from
+  run to run with the base's own runner too: RAM the game changes by the host's clock, it seems; its frames don't).
+- `tests/psp/run-tests.sh` (sanitizers on): 413 groups, 0 failures; five new: "gpu render to texture taken again in
+  part" (the strip at 1x, 2x and 3x; a texture inside the frame buffer sampled into another, patches drawn over it and
+  the CPU's rows written into it between the samples; sprites reaching past a scissor away from the frame buffer's
+  corner), "gpu render to texture from two frame buffers, one below the other, nothing finished" (from the first's row
+  0 and row 8, the whole texture sampled again after the second is drawn into; the second drawn only in its first
+  rows, and drawn into as it's sampled; one refused, the first having drawn over the second's first page since), "gpu
+  a texture decoded again before the GPU has the first: its texels kept till then", "gpu fast mode: 3D the GPU
+  transformed is taken by render to texture after", "gpu a finish puts back only the pages drawn in, not memory's
+  newer bytes between" (the CPU's row, another frame buffer's pixels, and the CPU's bytes in the second page of a row
+  over two). `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 307 checks, 0 failed.
+  The GPU tests built for Android pass on the RP6 on Turnip and on Qualcomm's driver (22 groups each).
+- Broken versions each fail a test: draws not marking what they change (none of a PRIM's extent given), fills not
+  marking it, a mesh not marking it, copies taken whole again (the copied pixels' check), the changed part copied to
+  the copy's top left, a change's rectangle held to the scissor's size and not its place, no second target, the second
+  part copied from the first target, a two-part copy taken again only in part, the split worked out without the
+  texture's first row, the second target's rows not filled from memory, the first owning a page of the second's not
+  refused, the texels kept without their owner (the address sanitizer's use after free), a finish putting back its
+  whole rectangle, and a row put back as one run. A copy's margin of a pixel past the corners isn't caught (it's there
+  for float error the tests' corners don't have).
+- GCC 11 (ubuntu:22.04) compiles `gpu.cpp` (with `vulkan.cpp`) and the tests at -O1, -O2 and -O3 with -Wall -Wextra
+  -Werror; the GPU code and its tests compile at each commit.
+- An independent review of the first three commits found no correctness bug; its points were taken: tests for the gaps
+  it showed (the cases above that broken versions it made got past), the margin's reason and the ownership rule worded
+  right, and the older bug of item 4, which it reproduced. A second review of everything since (the extent gathered
+  once a PRIM, item 4 and its runs, the tests, the docs) found no correctness problem either, and tried to break item
+  4's argument (the told rectangles, the bytes beside, stale targets, VRAM's copies, depth, the late frames); its two
+  test gaps (the same two-part copy taken again, a scissor away from the corner) are filled.
+
+### Left, and why
+
+- **God of War: Chains of Olympus** is slow in Vulkan as in software (3.5-4.5 frames a second in the battle): 130 to
+  320 finishes a frame. It draws effects into small frame buffers that share pages: four 64-pixel-wide ones side by
+  side in one 1024-wide 5650 buffer, three in a 512-wide 8888 one, and the same memory as both formats, so every
+  switch between them, and textures read across them, finish; and it takes 2,400 render-to-texture copies and decodes
+  100 textures a frame. Frame buffers drawn as parts of one target (at a column offset) would take most of the
+  finishes away; the same bytes as two formats need the GPU to reinterpret them.
+- **WipEout's** two finishes a frame: the CPU's depth read lands on the bloom's pixels (the GPU's depth isn't read
+  back, so the game gets the wrong value either way; reading it back would be right, and as slow), and the blur's 5
+  rows into the next buffer could be copied between the two targets on the GPU. **LCS's** every fourth frame is the
+  list written over its 64x64 picture.
+- **Killzone's menu at 4x** is still the GPU's bound (13-17 frames a second): 1,100 passes a frame, each a copy and a
+  draw. Reading the frame buffer it draws into without a copy needs `VK_EXT_attachment_feedback_loop_layout`, which
+  not every driver has.
+- A target keeps one rectangle of changes, so changes far apart merge into one (the review's test: 12 patches of 8x8
+  copied as 7,840 pixels, not about 1,800); Killzone's strip isn't one. CI runs no GPU test (its machines have no
+  Vulkan): a pretend backend recording the copies' rectangles could check them there. A lost device keeps the last
+  run's decoded textures alive until the renderer goes, as the copies of their texels were kept before.
+- **Busy pages the drawing threads give back** (the review's, older than this part, not tested): the threads'
+  settle (`GE::freeVRAM()`) makes every busy page the CPU's again, the GPU's too, while `owners[]` keeps them (`own()`
+  says so). With a PRIM the GPU refuses deferred into the threads' batch while later PRIMs own pages, the CPU could read
+  those pages without the GPU's pixels, and a write there would be put back over at the next finish.
+- **Peace Walker's** version-17 states (the bench's title and tutorial scenes) don't load on this stack ("the state
+  can't be loaded"; not looked into, and no scene of it measured here). The rest of the list from parts 53 and 54
+  stands: the bones in a block of their own for its small skinned PRIMs, pipelines made on another thread in a
+  first session, textures decoded on the GPU (0.4 ms a frame), Qualcomm's driver's GPU time in fast mode.
+- Scratch: `~/phobos-work/scratch/vkspeed6` (build.sh, speed.sh, rounds.sh, summarize.py, tables.py; perf.sh,
+  syms.py, dsos.py, kernelcallers.py; the logging patches copylog-, xferlog-, whylog-, ptrlog-patch.py; late4x-patch.py
+  the runner's 4x; acc.sh and cmp.py the accuracy; mutate.sh the broken versions; soft-hashes.sh). Nothing of it is
+  left on the RP6.
