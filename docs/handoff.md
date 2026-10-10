@@ -27,40 +27,38 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP GPU: God of War in Vulkan without waiting for the GPU; part 63's open risks closed — 2026-10-10
 
-Branch `cursor/psp-gow-vk-2b67`, on top of #199's `cursor/psp-gow-sw-2b67` (#198 under it; measured against #198's `e9c98f3b9`). docs/psp-core.md,
-part 65, has the evidence; docs/psp-gpu-renderers.md's "Frame buffers side by side", "Owned until needed", "Two targets
-over the same pages", "Block transfers" and "Render to texture" the design. Software untouched (its pictures byte for
-byte, every frame of the bench scenes and God of War's the same); every Vulkan frame of the seven bench scenes, Peace
-Walker's title and God of War's two scenes byte for byte as before, so the accuracy is the base's. Clean room: no
-PPSSPP code copied or translated, JPCSP's not read. Save states unchanged (23).
-- **Changes** (each its own commit, with its tests): a PRIM the GPU refuses is drawn at once, not left in the drawing
-  threads' batch (part 63's risk was real: the new test failed three ways on the base); God of War's frame buffers side
-  by side are parts of one target, its copies kept for their place and held to what each PRIM takes, pixels another
-  target drew moved on the GPU as a finish and a fill would leave them, bytes block transfers write over the GPU's
-  pixels memory's at once, and `drawnOver()` asking each page's owner; the CPU's stores over the GPU's pixels likewise
-  memory's at once (LCS's list over its picture); a state refused for its fonts says which (Peace Walker's bench states:
-  the RP6's fonts folder was gone); CI runs the GPU tests on Mesa's lavapipe, and builds again (GCC 13 refused two
-  tests' lambdas).
-- **RP6, means of two rounds, each runner first in one** (fps, Turnip accurate / fast, Qualcomm's accurate / fast):
-  God of War's battle 3.97 / 4.51 / 3.71 / 3.67 -> 11.82 / 11.92 / 10.91 / 10.93, its menu 2.08 / 2.30 / 2.02 / 2.05 ->
-  8.50 / 8.66 / 7.54 / 7.61, finishes 129 and 322 a frame -> 2 in 150 frames; at 4x (the GPU the bound there) the
-  battle 1.66 / 1.70 / 1.46 / 1.44 -> 5.49 / 9.79 / 7.08 / 6.49 and the menu 0.76 / 1.00 / 0.75 / 0.81 -> 1.72 / 2.22 /
-  1.98 / 1.90. LCS's city and woods 5-12% faster (76 finishes in 300 frames -> 2), WipEout 12-36% (600 -> 300); MC3's
-  menu 6% slower on Qualcomm's driver, 1% on Turnip (two moves a frame where part 63 took a copy); the rest level.
-- **Checks**: tests/psp 421/0 (sanitized; eight new groups, which broken versions fail, but for a copy not held to what
-  a tile takes), tests/allegrex 58/0, tests/psp/ares 307/0; CI (GCC 13, lavapipe) 421/0 on the last commit, its GPU
-  groups 8.8 minutes; the GPU tests on the RP6 pass on Turnip and Qualcomm's driver (30 groups each); GCC 11 builds the
-  GPU code and tests with -Werror at -O1-O3 (the GE too, but for twelve maybe-uninitialized warnings in four.cpp, the
-  base's the same). An independent review found one correctness bug (a move left its target's dead and beside ranges
-  over the pixels it moved in), and a delta review its neighbor (beside bytes a move grows the drawn rectangle over):
-  both fixed, with a test group that fails without them; the rest of its points taken but one (frame buffers shown from
-  inside a target aren't shown from the GPU: left).
-- **Left**: God of War now bound by the emulation thread at 1x (83-132 ms a frame) and by the GPU at 4x in three of the
-  four configurations (each move a render pass of ten draws); MC3's menu's two moves a frame; WipEout's one finish a
-  frame (the CPU reads the bloom's pixels); Killzone's menu at 4x; one rectangle of changes a target; dead and beside
-  ranges 16 a target; GCC 11's maybe-uninitialized warnings in `four.cpp` (the base's too). Scratch:
-  `~/phobos-work/scratch/gowvk`; on the RP6 only the fonts folder beside the harness is left, which Peace Walker's
-  scenes need.
+Branch `cursor/psp-gow-vk-2b67`, on top of #199's `cursor/psp-gow-sw-2b67` (#198 under it; measured against #198's
+`e9c98f3b9`). docs/psp-core.md, part 65, has the evidence; docs/psp-gpu-renderers.md's "Frame buffers side by side",
+"Owned until needed", "Two targets over the same pages", "Block transfers" and "Render to texture" the design.
+Software untouched (its pictures byte for byte, every frame of the bench scenes and God of War's the same); every
+Vulkan frame of the seven bench scenes, Peace Walker's title and God of War's two scenes byte for byte as before, so
+the accuracy is the base's. Clean room: no PPSSPP code copied or translated, JPCSP's not read. Save states unchanged
+(23). - **Changes** (each its own commit, with its tests): a PRIM the GPU refuses is drawn at once, not left in the
+drawing threads' batch (part 63's risk was real: the new test failed three ways on the base); God of War's frame
+buffers side by side are parts of one target, its copies kept for their place and held to what each PRIM takes, pixels
+another target drew moved on the GPU as a finish and a fill would leave them, bytes block transfers write over the
+GPU's pixels memory's at once, and `drawnOver()` asking each page's owner; the CPU's stores over the GPU's pixels
+likewise memory's at once (LCS's list over its picture); a state refused for its fonts says which (Peace Walker's
+bench states: the RP6's fonts folder was gone); CI runs the GPU tests on Mesa's lavapipe, and builds again (GCC 13
+refused two tests' lambdas). - **RP6, means of two rounds, each runner first in one** (fps, Turnip accurate / fast,
+Qualcomm's accurate / fast): God of War's battle 3.97 / 4.51 / 3.71 / 3.67 -> 11.82 / 11.92 / 10.91 / 10.93, its menu
+2.08 / 2.30 / 2.02 / 2.05 -> 8.50 / 8.66 / 7.54 / 7.61, finishes 129 and 322 a frame -> 2 in 150 frames; at 4x (the
+GPU the bound there) the battle 1.66 / 1.70 / 1.46 / 1.44 -> 5.49 / 9.79 / 7.08 / 6.49 and the menu 0.76 / 1.00 / 0.75
+/ 0.81 -> 1.72 / 2.22 / 1.98 / 1.90. LCS's city and woods 5-12% faster (76 finishes in 300 frames -> 2), WipEout
+12-36% (600 -> 300); MC3's menu 6% slower on Qualcomm's driver, 1% on Turnip (two moves a frame where part 63 took a
+copy); the rest level. - **Checks**: tests/psp 421/0 (sanitized; eight new groups, which broken versions fail, but for
+a copy not held to what a tile takes), tests/allegrex 58/0, tests/psp/ares 307/0; CI (GCC 13, lavapipe) 421/0 on the
+last commit, its GPU groups 8.8 minutes; the GPU tests on the RP6 pass on Turnip and Qualcomm's driver (30 groups
+each); GCC 11 builds the GPU code and tests with -Werror at -O1-O3 (the GE too, but for twelve maybe-uninitialized
+warnings in four.cpp, the base's the same). An independent review found one correctness bug (a move left its target's
+dead and beside ranges over the pixels it moved in), and a delta review its neighbor (beside bytes a move grows the
+drawn rectangle over): both fixed, with a test group that fails without them; the rest of its points taken but one
+(frame buffers shown from inside a target aren't shown from the GPU: left). - **Left**: God of War now bound by the
+emulation thread at 1x (83-132 ms a frame) and by the GPU at 4x in three of the four configurations (each move a
+render pass of ten draws); MC3's menu's two moves a frame; WipEout's one finish a frame (the CPU reads the bloom's
+pixels); Killzone's menu at 4x; one rectangle of changes a target; dead and beside ranges 16 a target; GCC 11's
+maybe-uninitialized warnings in `four.cpp` (the base's too). Scratch: `~/phobos-work/scratch/gowvk`; on the RP6 only
+the fonts folder beside the harness is left, which Peace Walker's scenes need.
 
 ## PSP GE: God of War in the software renderer — the GE's time, its bloom batched, its stencil in fours — 2026-10-10
 
