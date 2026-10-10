@@ -1,6 +1,6 @@
 //Files' asynchronous requests (ares/psp/kernel/async.cpp): each done as it's made (a read's bytes landing as it's
 //done) but its result held back for the time the file's device takes, then polled or waited for; a damaged image's
-//reads; the refusals while one is under way; the descriptor an
+//reads; the refusals while one is under way, or its result not taken; the descriptor an
 //asynchronous open or close leaves for its result; callbacks notified as requests are done, and run in CB waits;
 //two threads waiting on one request, and a callback taking the result its thread waits for; an ioctl's time; and a
 //state saved while a thread waits for a request. Synchronous reads and writes (io.cpp) wait the same time, and are
@@ -37,8 +37,9 @@ auto text(u32 size) -> std::string {
 
 //Requests called directly: a read's bytes and result, held back until 100 microseconds plus its bytes at 4 MB a
 //second (the memory stick) have passed, its bytes landing over what the program wrote there meanwhile; polls before
-//and after; everything else refused meanwhile; seeks, a read past the end, one at the end, one where nothing is, a
-//write refused as its result, an ioctl; an asynchronous close and a failed asynchronous open each leaving a
+//and after; everything else refused meanwhile; seeks (Valhalla Knights', its seek made again over a result not
+//taken); a read past the end, one at the end, one where nothing is, a write refused as its result, an ioctl; a
+//result not taken refusing the next request; an asynchronous close and a failed asynchronous open each leaving a
 //descriptor for the result alone, which goes once it's taken; the disc's rate, and umd0:'s sectors; the priority's
 //and the callback's checks.
 static auto asyncCalls() -> void {
@@ -82,7 +83,21 @@ static auto asyncCalls() -> void {
     CHECK(m.call("sceIoGetAsyncStat", {descriptor, 1, R}), 0);
     return result64(m, R);
   };
+  //Valhalla Knights' seek, polled straight after (under way), made again two frames on (refused: the first's result
+  //not taken) and polled (the first's result); the file's callback, set just after a request as Fuuun Shinsengumi
+  //sets it, told as that request is done, with its argument
+  u32 callback = m.call("sceKernelCreateCallback", {m.string("cb"), 0x0880'3000, 0});
   CHECK(m.call("sceIoLseekAsync", {file, 0, 100, 0, 0}), 0);  //(file, unused, the offset's halves, whence)
+  CHECK(m.call("sceIoSetAsyncCallback", {file, callback, 0x77}), 0);
+  CHECK(m.call("sceIoPollAsync", {file, R}), 1);
+  advance(m, m.kernel.files[file].asyncDoneAt + 2 * Kernel::VblankCycles);
+  CHECK(m.kernel.callbacks[callback].notifyCount == 1 && m.kernel.callbacks[callback].notifyArg == 0x77, true);
+  CHECK(m.call("sceIoLseekAsync", {file, 0, 50, 0, 0}), Kernel::ErrorAsyncBusy);
+  CHECK(m.call("sceIoPollAsync", {file, R}), 0);
+  CHECK(result64(m, R), 100);
+  m.kernel.callbacks[callback].notifyCount = 0;
+  CHECK(m.call("sceIoSetAsyncCallback", {file, 0, 0}), 0);
+  CHECK(m.call("sceIoLseekAsync", {file, 0, 100, 0, 0}), 0);
   CHECK(finish(file), 100);
   CHECK(m.call("sceIoLseek32Async", {file, u32(-5), 1}), 0);
   CHECK(finish(file), 95);
@@ -100,11 +115,14 @@ static auto asyncCalls() -> void {
   CHECK(m.call("sceIoIoctlAsync", {file, 0x0102'0006, 0, 0, R + 8, 4}), 0);  //not the disc's
   CHECK(finish(file), u64(s64(s32(Kernel::ErrorFunctionNotSupported))));
 
-  //a result never taken is overwritten by the next request
+  //a result not taken: the next request, of any kind, is refused, the file keeping the result (and its position)
   CHECK(m.call("sceIoLseek32Async", {file, 7, 0}), 0);
   advance(m, m.kernel.files[file].asyncDoneAt);
-  CHECK(m.call("sceIoLseek32Async", {file, 9, 0}), 0);
-  CHECK(finish(file), 9);
+  CHECK(m.call("sceIoLseek32Async", {file, 9, 0}), Kernel::ErrorAsyncBusy);
+  CHECK(m.call("sceIoReadAsync", {file, Buffer, 4}), Kernel::ErrorAsyncBusy);
+  CHECK(m.call("sceIoCloseAsync", {file}), Kernel::ErrorAsyncBusy);
+  CHECK(finish(file), 7);
+  CHECK(m.kernel.files[file].position, 7);
 
   //closed at once, the descriptor kept until its result is taken
   CHECK(m.call("sceIoCloseAsync", {file}), 0);

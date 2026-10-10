@@ -14,14 +14,16 @@
 //
 //What's known and what's chosen. pspsdk's pspiofilemgr.h gives the functions and their arguments, and pspkerror.h
 //the errors: ASYNC_BUSY for a file whose request is still under way, NOASYNC for one with no request to wait for.
-//pspautotests has no test of these functions, so the rest is chosen as games accept it and isn't measured:
+//pspautotests tests them only through intr/waits' waits and polls, so the rest is chosen as games accept it and isn't
+//measured:
 //- The time a request takes: 100 microseconds for the request itself, plus its bytes at the device's rate: the UMD
 //  drive's top rate, 11 megabits a second (1,375,000 bytes), for the disc; 4 MB a second for the memory stick (and
 //  a host folder standing for the disc). The drive's seeks aren't counted. So a game's loading screen lasts about
 //  as long as on a PSP. The priority sceIoChangeAsyncPriority gives the request's thread is checked but not used:
 //  a request takes its device's time whatever the priority.
-//- A synchronous function on a file whose request is under way is refused (ASYNC_BUSY), as is another request.
-//  A request done whose result the program hasn't taken is overwritten by the next one, as nothing waits for it.
+//- A synchronous function on a file whose request is under way is refused (ASYNC_BUSY), as is another request; so
+//  is another request while a done one's result hasn't been taken: the file holds one result at a time
+//  (asyncIssue()).
 //- sceIoOpenAsync gives a descriptor at once, even when the open fails: the descriptor then holds only the error,
 //  as its result, and goes once that's taken (as a file closed with sceIoCloseAsync does). The result of an open
 //  that worked is the descriptor itself.
@@ -43,11 +45,17 @@ auto Kernel::asyncDuration(bool onDisc, u64 bytes) const -> u64 {
 }
 
 //The file a request goes to: open (not a folder, nor a descriptor kept only for a result), with no request under
-//way. Null, with the error for the result, if it can't take one.
+//way, nor one done whose result the program hasn't taken. Null, with the error for the result, if it can't take
+//one. intr/waits makes four seeks with only refused waits between them, and a wait after the fourth that may not
+//wait still takes a result: the first's, done, the others refused over it (made, the fourth would have been under
+//way); then a seek made on the empty file is still under way at a poll soon after, only refused calls between.
+//Valhalla Knights makes a seek, polls it (under way), and two frames on makes the seek again and polls: the first's
+//result is still there to take, and taken, it goes on; were the second made instead, it would be under way again at
+//the poll, for good.
 auto Kernel::asyncIssue(u32 file) -> OpenFile* {
   auto found = files.find(file);
   if(found == files.end() || found->second.folder || found->second.resultOnly) return result(ErrorBadFile), nullptr;
-  if(found->second.async == OpenFile::Async::Pending) return result(ErrorAsyncBusy), nullptr;
+  if(found->second.async != OpenFile::Async::None) return result(ErrorAsyncBusy), nullptr;
   return &found->second;
 }
 
