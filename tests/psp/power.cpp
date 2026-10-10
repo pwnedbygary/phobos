@@ -614,6 +614,24 @@ static auto remoteAndRunningTime() -> void {
     CHECK(m.call(latch, {0}), Kernel::ErrorIllegalAddress);
   }
   CHECK(m.call("sceHprmPeekCurrentKey", {0}), Kernel::ErrorIllegalAddress);
+  //callbacks for the remote's changes (never told: nothing is plugged in): -1 takes the first free slot and gives it
+  //back, a slot given takes that one and gives 0; 16 slots; a used one ALREADY, none free OUT_OF_MEMORY, past them
+  //INVALID_INDEX, no callback INVALID_ID; unregistering ("Unregitser", as Sony spelt it) an empty one NOT_FOUND
+  CHECK(m.call("sceHprmRegisterCallback", {u32(-1), 0x123}), 0);
+  CHECK(m.call("sceHprmRegisterCallback", {u32(-1), 0x124}), 1);
+  CHECK(m.call("sceHprmRegisterCallback", {5, 0x125}), 0);
+  CHECK(m.call("sceHprmRegisterCallback", {5, 0x126}), Kernel::ErrorAlready);
+  CHECK(m.call("sceHprmRegisterCallback", {16, 0x126}), Kernel::ErrorInvalidIndex);
+  CHECK(m.call("sceHprmRegisterCallback", {u32(-2), 0x126}), Kernel::ErrorInvalidIndex);
+  CHECK(m.call("sceHprmRegisterCallback", {u32(-1), 0}), Kernel::ErrorInvalidID);
+  CHECK(roundTrip(m), true);
+  for(u32 slot = 2; slot < 16; slot++) if(slot != 5) CHECK(m.call("sceHprmRegisterCallback", {u32(-1), 0x200}), slot);
+  CHECK(m.call("sceHprmRegisterCallback", {u32(-1), 0x200}), Kernel::ErrorOutOfMemory);
+  CHECK(m.call("sceHprmUnregitserCallback", {5}), 0);
+  CHECK(m.call("sceHprmUnregitserCallback", {5}), Kernel::ErrorNotFound);
+  CHECK(m.call("sceHprmUnregitserCallback", {16}), Kernel::ErrorInvalidIndex);
+  CHECK(m.call("sceHprmRegisterCallback", {u32(-1), 0x200}), 5);
+  CHECK(m.kernel.hprmCallbacks[0] == 0x123 && m.kernel.hprmCallbacks[1] == 0x124, true);
   m.kernel.cycles = u64(Kernel::CPUFrequency) * 5'000;  //5,000 seconds: past 32 bits of microseconds
   for(const char* name : {"sceRtcGetAccumulativeTime", "sceRtcGetAccumlativeTime"}) {
     CHECK(m.call(name, {}), u32(5'000'000'000ull));

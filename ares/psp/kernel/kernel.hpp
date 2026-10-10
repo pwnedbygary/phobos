@@ -773,6 +773,9 @@ struct Kernel {
   auto sceHprmIsHeadphoneExist() -> void;
   auto sceHprmIsRemoteExist() -> void;
   auto sceHprmIsMicrophoneExist() -> void;
+  u32 hprmCallbacks[16] = {};  //the callbacks registered in each slot (0: none)
+  auto sceHprmRegisterCallback() -> void;
+  auto sceHprmUnregitserCallback() -> void;
   auto sceHprmPeekCurrentKey() -> void;
   auto sceHprmPeekLatch() -> void;
   auto sceHprmReadLatch() -> void;

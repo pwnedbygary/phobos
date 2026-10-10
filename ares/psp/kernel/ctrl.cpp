@@ -179,6 +179,39 @@ auto Kernel::sceHprmIsHeadphoneExist() -> void { result(0); }
 auto Kernel::sceHprmIsRemoteExist() -> void { result(0); }
 auto Kernel::sceHprmIsMicrophoneExist() -> void { result(0); }
 
+//(slot, or -1 for the first free one; callback): a callback to be told when headphones or the remote come or go,
+//or a key on the remote changes; with nothing ever plugged in, it never is. pspsdk gives only the pair's NIDs, so
+//they're taken to be as scePower's (pspsdk's psppower.h: a slot 0-15 or -1, a callback sceKernelCreateCallback
+//made; the slot taken given back for -1, else 0), which is how Soulcalibur: Broken Destiny calls it at boot (-1, and
+//the callback it has just made; it keeps the callback, not the result). Sony spelt the second's name "Unregitser":
+//its NID, 0x444ed0b7, is that name's hash. Refusals as scePower's (power.cpp): a slot past the 16 or a used one,
+//no callback INVALID_ID (chosen, as no recording shows them).
+auto Kernel::sceHprmRegisterCallback() -> void {
+  s32 slot = s32(arg(0));
+  u32 callback = arg(1);
+  if(slot < -1 || slot >= 16) return result(ErrorInvalidIndex);
+  if(!callback) return result(ErrorInvalidID);
+  if(slot == -1) {
+    slot = 0;
+    while(slot < 16 && hprmCallbacks[slot]) slot++;
+    if(slot == 16) return result(ErrorOutOfMemory);
+    result(slot);
+  } else {
+    if(hprmCallbacks[slot]) return result(ErrorAlready);
+    result(0);
+  }
+  hprmCallbacks[slot] = callback;
+}
+
+//(slot)
+auto Kernel::sceHprmUnregitserCallback() -> void {
+  s32 slot = s32(arg(0));
+  if(slot < 0 || slot >= 16) return result(ErrorInvalidIndex);
+  if(!hprmCallbacks[slot]) return result(ErrorNotFound);
+  hprmCallbacks[slot] = 0;
+  result(0);
+}
+
 //(where the keys held go)
 auto Kernel::sceHprmPeekCurrentKey() -> void {
   if(!memory.reaches(arg(0), 4)) return result(ErrorIllegalAddress);

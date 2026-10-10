@@ -465,6 +465,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceHprm",           "sceHprmIsHeadphoneExist",       &Kernel::sceHprmIsHeadphoneExist);
   add("sceHprm",           "sceHprmIsRemoteExist",          &Kernel::sceHprmIsRemoteExist);
   add("sceHprm",           "sceHprmIsMicrophoneExist",      &Kernel::sceHprmIsMicrophoneExist);
+  add("sceHprm",           "sceHprmRegisterCallback",       &Kernel::sceHprmRegisterCallback);
+  add("sceHprm",           "sceHprmUnregitserCallback",     &Kernel::sceHprmUnregitserCallback);  //Sony's spelling
   add("sceHprm",           "sceHprmPeekCurrentKey",         &Kernel::sceHprmPeekCurrentKey);
   add("sceHprm",           "sceHprmPeekLatch",              &Kernel::sceHprmPeekLatch);
   add("sceHprm",           "sceHprmReadLatch",              &Kernel::sceHprmReadLatch);
@@ -879,6 +881,7 @@ auto Kernel::power() -> void {
   psmfPlayer = {};
   ccc = {};
   jpeg = {};
+  for(auto& callback : hprmCallbacks) callback = 0;
   dialog = {};
   utilityModules.clear();
   imposeLanguage = imposeButton = 1;
