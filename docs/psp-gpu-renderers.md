@@ -10,7 +10,10 @@ mostly a level or two apart from texel edges and rasterization. In the app and t
 PSP's resolution and presents on Android's window without reading back ("Upscaling", "Presenting"); since part 45
 it blends in the shader where the GPU keeps rasterization order (Turnip), reading the frame buffer, so blending,
 dithering, logic operations and write masks are the software renderer's to the bit ("Shader blending"); without
-the order the GPU blends 8888 itself, close (part 49: "Without rasterization order"). No OpenGL yet ("The plan").
+the order the GPU blends 8888 itself, close (part 49: "Without rasterization order"). Since part 53 it has two
+modes, the owner's choice: accurate (all that) and fast, where the GPU transforms and lights 3D itself and blends with
+its own units, very close and much faster than seven software threads in the 3D games ("Vulkan (fast)"). No OpenGL
+yet ("The plan").
 
 The owner's direction (2026-10-07): a hardware renderer as PPSSPP has one (the GPU's own rasterizer, texture units
 and blending; shaders generated from the GE's state; upscaling), Vulkan first and OpenGL after. The software renderer
@@ -169,10 +172,11 @@ the other's pixels, and the target is filled from them.
 
 **Submitting.** What's recorded is handed to the GPU every 128 commands, at a list's end once 32 commands are
 recorded (`submit()`; part 52: WipEout Pure ends 209 lists a frame, each a `vkQueueSubmit` and a wait for the slot
-three runs before), and with each frame shown or finished, not waited for, so the GPU draws while the CPU emulates;
+a few runs before), and with each frame shown or finished, not waited for, so the GPU draws while the CPU emulates;
 and within a PRIM once it has 262,144 vertices (a long line costs six for each pixel it lights), so no PRIM's
-recording grows without bound. The backend has three slots, each with its own command buffer, fence and staging
-memory (vertices, uploads), used round. Only `finish()` waits.
+recording grows without bound. The backend has eight slots (three before part 53), each with its own command
+buffer, fence and staging memory (vertices, uploads), used round, and at most two frames in flight: a run that shows
+a frame waits first for the run that showed the one before the last. Only `finish()` waits for everything.
 
 **Telling memory of the GPU's drawing** (part 52): `own()` tells memory (`Memory::changed()`: the recompiler and the
 decoded textures, through all four of VRAM's copies) of a PRIM's rectangle only where it isn't inside one told of
@@ -426,6 +430,83 @@ overlaps apart", or "blending by the GPU".
 PPSSPP's shader blending (its framebuffer fetch and its copies of the destination) was a guide to the approach only;
 none of its code is used, copied or translated.
 
+## Vulkan (fast) (part 53)
+
+The owner's choice (2026-10-09): three PSP renderers, Software (exact, the default), Vulkan (accurate: everything
+above) and Vulkan (fast), whose job is speed, "very close" as PPSSPP's hardware renderer is. PPSSPP's hardware
+transform (vertex decoding on the CPU, the transform, skinning and lighting in a generated vertex shader) informed
+the design; none of its code is used, copied or translated.
+
+**What it does differently** (`GPU::fast`, `GPU::vulkan(..., fast)`, the core's "Renderer" option "Vulkan (fast)"):
+- **The GPU transforms and lights 3D** (`GE::Renderer::meshes()` and `mesh()`, `gpu.cpp`, `shaders/transform.vert`).
+  A 3D PRIM of triangles (a list, strips, a fan, a curved surface's strips) is handed over as the vertex type laid
+  its vertices out, morph targets blended by the GE as it reads them (`GPU::Model`: position, normal, texture
+  coordinates, color, eight weights, and its PRIM's settings' index), untransformed. `transform.vert` does what
+  `transform.cpp` and `lighting.cpp` do: skinning (up to eight bone matrices), the world, view and projection
+  matrices, the GE's lighting in its own whole numbers (the 2c + 1 factors, products shifted down 10 bits, shares in
+  256ths rounded up, the quick power from a float's bits, four lights of every kind, the shine kept apart or added),
+  texture coordinates (scaled, by the texture matrix from any source, or environment-mapped from two lights) and
+  fog; then the screen position cut to the GE's sixteenths of a pixel toward 2048, as `project()` cuts it, and the
+  depth held to 0-65535 at each corner, as `project()` holds it (the GE steps the held depths between the corners;
+  a depth clamped at each pixel instead differed inside a triangle crossing the far plane). The position's
+  arithmetic is `precise` (done as written, nothing fused or reordered by the driver's compiler), and `gl_Position`
+  is invariant, so the same vertex lands on the same place and depth whatever else the pipeline does (GTA's cars
+  draw their gloss over their body with a depth test of equal: without it the gloss was missing).
+- **The GE keeps its rules for which triangles are drawn** (`GE::meshTriangles()`). It works out where each corner
+  lands (its position alone, `clipPosition()` and `project()`: the same operations as `transform()`, so the same
+  numbers but for a float's rounding: the world, view and projection matrices made one, once a PRIM) and drops the
+  triangles it wouldn't draw: out of sight (a corner off its 4096-pixel screen, depths outside the range as
+  DEPTH_CLIP_ENABLE has it), behind the camera, no area, facing away. A triangle reaching past the near plane, or with
+  a corner behind the camera (which the GE projects through its w, as the GPU doesn't), it transforms, cuts and draws
+  itself, as in the accurate mode, where it comes among the others, so the order is kept: the GPU's clipper would
+  blend a cut corner's colors and fog straight across the screen, not in clip space as the GE does (a ground mesh
+  running under the camera, its colors random: 67.6% of pixels the same as the software renderer the GPU's way,
+  95.6% the GE's, as the accurate mode). The rest go to the GPU whole, in runs between those, each triangle's last
+  corner first (the GPU takes a flat triangle's colors from its first corner, the GE from its last); the GPU culls
+  and clips nothing more.
+- **One draw for many PRIMs**: each PRIM's settings (`GPU::Transformed`: its matrices, viewport, lights, material,
+  fog, texture mapping and bones, 1,168 bytes) are a block of the run's storage buffer, the same block again where a
+  PRIM's settings are the last one's, and each vertex names its block; PRIMs drawn alike are one indexed draw,
+  whatever their matrices. (A uniform block per PRIM, its first form, split the draws in two and left Turnip's GPU
+  more work at each finish: GTA's city ran slower than the accurate mode.)
+- **Skinning, lighting and mapping are the block's to say**, not the pipeline's: as constants they multiplied the
+  pipelines (Peace Walker made dozens more, 5 ms a frame of compiling over a 300-frame run on Turnip). The pipeline
+  key has only what the GPU's fixed stages need, and FLAT.
+- **Left to the GE**, as in the accurate mode: a PRIM of fewer than 16 vertices (`GPU::MeshLeast`: each PRIM costs
+  its settings' block, and a skinned one's bones differ from PRIM to PRIM; Peace Walker draws 5,000 PRIMs a frame of
+  three triangles each, which the GPU's way made slower); clear mode (each triangle's stencil from its own last
+  corner); and a PRIM whose pipeline the driver won't make (`Backend::drawable()`, asked before anything's recorded).
+- **The filter chosen once a triangle**, as the GE chooses it: `draw.frag` takes the texels a pixel covers from the
+  texture coordinates straight across the screen (`vertexTexels`, `noperspective`), whose steps are the triangle's
+  own texels to its pixels: the GE's ratio exactly, for a triangle the GE didn't cut.
+- **The GPU's own blending throughout**: nothing read in the shader, no rasterization order asked for (as on
+  Qualcomm's driver without it, part 49: 8888 blends with the PSP's source term, 16-bit frame buffers keeping 8 bits
+  between blends, blended pixels not dithered).
+- **Anything else as Vulkan (accurate)**: 2D (through mode), 3D sprites, lines and points, the texture path and
+  render to texture, the frame buffers on the GPU, presenting and upscaling.
+- **The start-up check** draws 3D triangles in perspective (smooth, half lit, some textured, four PRIMs of six)
+  through the GPU's transform against the software renderer: at most one pixel in 50 more than 8 levels apart. Where
+  that part alone fails (or the triangles never reached the GPU's transform), the check runs again with the GE
+  transforming, saying so, and fast mode goes on with the GPU's blending alone; where anything else fails, the
+  software renderer draws the game, as in the accurate mode. (MoltenVK refused the first `transform.vert`, a helper
+  named `signbit()` clashing with Metal's own, and the 3D drew nothing: `drawable()` and the check each catch that
+  now.)
+
+**What the GE does that fast mode doesn't** ("very close"): step colors, fog and depth in its 16384ths (the GPU
+interpolates); and the accurate mode's shader blending. And one case the two paths split: a second pass with a depth
+test of equal over a model drawn first as one large PRIM and then as small ones (or the other way) meets depths a
+float's last bit apart, the GPU's transform against the GE's (a scene made to show it: 181 of its 3,448 pixels
+missed); passes over the same PRIMs, as games draw them, meet exactly.
+
+Also in part 53, for both Vulkan modes: eight slots instead of three (fast mode hands the GPU more runs a frame, and
+with three slots its emulation thread kept waiting a moment for the run three back, which had the scheduler move it
+to slower cores), with at most two frames in flight (a run that shows a frame first waits for the run that showed the
+one before the last, by its serial, so that where the GPU is the bound the frames shown, and the player's input,
+aren't late). Handing
+the recording over every 512 commands instead of 128 was tried too and kept at 128: Midnight Club 3's menu, which
+finishes every frame, ran slower. And the descriptor sets bound again from set 0 up at every render pass (a copy's
+pipeline layout bound between left them undefined; drivers kept them anyway).
+
 ## OpenGL (after Vulkan)
 
 The renderer (`gpu.cpp`: targets, ownership, render to texture, the texture cache, the settings' mapping, the
@@ -544,6 +625,29 @@ What differs after shader blending:
 
 The pictures look the same to the eye in the scenes measured; nothing is missing or misplaced.
 
+**Vulkan (fast)** (part 53), the same seven scenes on the RP6, 10 frames each against the software renderer, beside
+the accurate mode on Turnip from the same build (Qualcomm's own driver gives fast mode the same pictures, to a few
+dozen channels):
+
+| Scene (game) | Accurate (Turnip): identical | Fast: identical | Fast: channels apart by 1-2 | 3-8 | more |
+|---|---|---|---|---|---|
+| Lumines, demo | 96.6% | 72.9% | 651,256 | 128,428 | 500 |
+| Peace Walker, title | 100.0% | 40.4% | 0 | 740,466 | 824,039 |
+| Midnight Club 3, profile menu | 97.0% | 88.0% | 245,103 | 12,632 | 3,648 |
+| Midnight Club 3, night race | 95.0% | 71.5% | 528,450 | 29,984 | 5,975 |
+| Liberty City Stories, city | 95.4% | 57.8% | 782,726 | 4,243 | 2,026 |
+| Liberty City Stories, woods | 91.5% | 52.4% | 947,943 | 8,316 | 2,034 |
+| Peace Walker, tutorial play | 99.2% | 55.0% | 0 | 516,704 | 899,566 |
+
+Fast mode's differences are mostly a level or two in the 3D scenes: colors and fog interpolated by the GPU instead
+of stepped in the GE's 16384ths, over every lit and fogged triangle. Peace Walker's are its 16-bit frame buffer
+blended by the GPU (8 bits kept between blends, blended pixels not dithered): a 5-bit channel's step is 8 levels, so
+they count as 3-8 or more, but spread evenly over the picture as a different dither, not as anything misplaced.
+Lumines' are its 5551 sprites' blending, likewise. Nothing is missing, misplaced or wrongly colored to the eye in
+these scenes (the pictures side by side, and the differences' maps); the near plane's cut triangles, whose colors
+and fog the GPU's clipper got wrong before the review (a test scene's ground mesh running under the camera, its
+colors random: 67.6% the same, now 95.6%, as the accurate mode), come from the GE as in the accurate mode.
+
 ## Speed
 
 **Part 52** (the Vulkan renderer's own waste, both modes): profiled on the RP6 (simpleperf, call graphs, Turnip),
@@ -575,6 +679,38 @@ Read back each frame (the desktop's way, and the runner's before), Turnip's LCS 
 out slower than before (the CPU idles at each frame's wait and the scheduler moves it); presented, as the app runs,
 every scene is faster, and Vulkan is level with seven software threads or ahead (WipEout over twice as fast).
 WipEout renders off screen and copies its picture by block transfers, which go through memory: two finishes a frame.
+
+**Part 53** (Vulkan (fast), and eight slots for both modes): the same runner, late frames, 450 frames from each
+scene's state, medians of three; frames a second over the whole run, then over its last 300 frames (after a
+150-frame warm-up, the pipelines made by then: a session's first minutes make them, a few dozen); the software
+renderer's from the same day:
+
+| Scene | Software 1 / 7 threads | Turnip: accurate / **fast** | Qualcomm's: accurate / **fast** |
+|---|---|---|---|
+| Midnight Club 3, race | 22.8 / 52.5, 53.8 | 54.5, 62.3 / **49.2, 67.1** | 49.1, 59.1 / **47.9, 63.2** |
+| Midnight Club 3, menu | 29.2 / 67.3, 67.0 | 69.5, 75.1 / **65.2, 77.4** | 65.5, 73.4 / **60.0, 70.9** |
+| Liberty City Stories, city | 37.4 / 70.4, 70.1 | 85.7, 92.3 / **85.9, 105.1** | 78.0, 87.4 / **78.8, 96.5** |
+| Liberty City Stories, woods | 37.9 / 71.0, 71.3 | 88.3, 93.8 / **102.3, 126.5** | 98.2, 110.8 / **83.5, 99.5** |
+| Peace Walker, tutorial play | 79.2 / 100.6, 103.1 | 108.3, 121.5 / **105.2, 125.0** | 97.4, 114.8 / **93.1, 113.7** |
+| WipEout Pure, race | 17.0 / 16.8, 17.1 | 37.4, 39.6 / **55.4, 79.7** | 63.7, 75.5 / **55.2, 76.5** |
+| Peace Walker, title | 66.8 / 220.4 | 867, 1253 / **957, 1277** | 602, 798 / **599, 797** |
+| Lumines, demo | 91.8 / 176.1 | 527, 722 / **535, 709** | 419, 609 / **416, 606** |
+
+Once its pipelines are made, fast mode on Turnip (the app's driver) is ahead of the accurate mode in every 3D scene
+(3% in Peace Walker's play and MC3's menu, 14% in the city, 35% in the woods, twice in WipEout) and ahead of seven
+software threads by 16-77% (WipEout 4.7 times); the emulation thread's ms a frame after the warm-up, accurate
+against fast: race 15.9 / 14.8, city 10.6 / 9.3, woods 8.7 / 7.2, WipEout 19.8 / 10.3. Over the whole run, the first
+150 frames' pipelines (more of them in fast mode) eat most of that: the race 49.2 against seven threads' 52.5, until
+a pipeline cache is kept between sessions. On Qualcomm's own driver fast mode is within 10% of the accurate mode
+either way (the city 10% ahead, the woods 10% behind) and 6-40% ahead of seven threads: its CPU time is lower (the
+woods 8.4 ms a frame against 8.6) but its GPU is slower with the vertex shader's work, the lighting with it, so the
+emulation thread waits for runs to finish (the woods 1.7 ms a frame against 0.6; Midnight Club 3's menu, which
+finishes every frame, 2.8 against 2.2, and 3.8 before the GE culled for the GPU, which drew 3.5 times the
+triangles). The two frames in flight cost the 2D scenes' uncapped speed on Qualcomm's driver (Peace Walker's title
+1188 → 798), nothing at the app's 60. What fast mode cost on the way: the GE deciding which triangles are drawn (the
+review's fix for the near plane) costs the race about 1.3 ms a frame of the CPU's (74.0 → 67.1 frames a second
+after the warm-up), the city 115.8 → 105.1; the world, view and projection matrices made one for it won back 3% of
+that.
 
 Host frames a second, the same 300 frames from each scene's state (the M1's GPU runs 120): the software renderer on
 1 and 7 drawing threads, then the Vulkan renderer (one thread: the GE's).
@@ -665,9 +801,12 @@ finish is forced to bound it.
 ## In Phobos (part 41)
 
 **The setting.** "PSP Renderer" in the app's Settings, Emulation, PlayStation Portable (beside Drawing Threads):
-"Software (exact)", the default, or "Vulkan (GPU)", applied when a game starts. The desktop program's menu has "PSP
-renderer: Software / Vulkan (next start)" (`psp.renderer` in its settings). Either hands the core its "Renderer"
-option as the game loads; OpenGL's choice comes with OpenGL.
+"Software (exact)", the default, "Vulkan (accurate)" or "Vulkan (fast)" (part 53), each described as it's chosen,
+applied when a game starts. The setting keeps its saved values: 0 Software, 1 Vulkan (accurate, what Vulkan was
+before), 2 Vulkan (fast); anything else is Software. The desktop program's menu has "PSP renderer: Software /
+Vulkan (accurate) / Vulkan (fast) (next start)" (`psp.renderer`, the same values). Either hands the core its
+"Renderer" option as the game loads ("Software", "Vulkan", "Vulkan (fast)"); `tools/psp-runner --renderer` takes
+`Software`, `Vulkan` (or `Vulkan-accurate`) and `Vulkan-fast`.
 
 **Starting.** As the PSP powers on with Vulkan chosen, the system (`System::startRenderer()`) makes the GPU renderer
 on the host's loader and puts it through a start-up check (`GPU::check()`, `ge/gpu/check.cpp`), in a machine of its
@@ -710,6 +849,11 @@ pass the start-up check and draw every scene right; Turnip is a little faster in
 the app's toast for a fallback wasn't seen on the RP6; the desktop's fallback was (below), and
 `tests/psp/gpu.cpp`'s lost GPU covers the renderer's side.
 
+In fast mode (part 53, Turnip, the release build): Midnight Club 3's title 60.0 and 16 ms, a quick race 51-53 and
+19 ms; Liberty City Stories' 3D city 60.0, 11-13 ms; Vice City Stories' opening 60.0, 13-16 ms; Burnout Legends' car
+select and a race 60.0, 11-13 ms; WipEout's menus, Peace Walker's title and Ridge Racer 2's title 60.0, 4-5 ms;
+MotorStorm: Arctic Edge's title scene 60.0, 9 ms. All drew right, none fell back.
+
 The other 19 games, booted and pressed through to their menus on Vulkan with the custom driver: no crash in any;
 18 at 59.3-60 frames a second, from 0.9 to 13.3 ms a frame. Brave Story's title drew right but at 18.6 frames a second
 (64 ms a frame, the software renderer 9.5): its display list beside the frame buffer ("Bytes beside the pixels"),
@@ -732,3 +876,9 @@ software renderer.
    formats as the PSP's, on every Vulkan GPU); still to do, depth read back where games need it, block transfers
    between targets on the GPU, textures decoded on the GPU.
 5. **OpenGL** (parked 2026-10-08): not worth a second HW backend yet; Software is the non-Vulkan path. Revisit only if telemetry shows need.
+6. **Vulkan (fast)** (part 53, done): the GPU's transform and lighting for 3D, the GE's rules for which triangles are
+   drawn, the GPU's blending; still to do, a pipeline cache kept on disk (fast mode makes more pipelines in a game's
+   first minutes), the bones in a block of their own (so that Peace Walker's small skinned PRIMs could go to the GPU
+   too, and every 3D PRIM take one path), less for Qualcomm's own driver's GPU to do (fast mode's waits there grow),
+   and textures decoded on the GPU (palettes, swizzling, DXT: about 0.4 ms a frame of the CPU's in the race since
+   part 52, so later).

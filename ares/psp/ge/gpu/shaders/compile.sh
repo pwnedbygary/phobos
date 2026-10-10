@@ -2,16 +2,16 @@
 #Builds shaders.hpp, the hardware renderer's shaders as the program carries them, from the GLSL beside this script
 #(docs/psp-gpu-renderers.md, "Shaders"): SPIR-V for Vulkan from glslang, and the GLSL itself for OpenGL. The
 #fragment shader is built twice: with dual-source blending's second output, and without (SINGLE), for GPUs that
-#lack it; copy.vert, copy.frag and present.frag are upscaling's and the screen's. shaders.hpp is kept in the
-#repository, so that building Phobos needs no shader compiler; it records the sources' SHA-256, which --check
-#compares with the sources as they are (tests/psp/run-tests.sh runs it), and with glslangValidator there too,
-#--check compiles them again and compares the result with shaders.hpp byte for byte.
+#lack it; copy.vert, copy.frag and present.frag are upscaling's and the screen's; transform.vert is fast mode's.
+#shaders.hpp is kept in the repository, so that building Phobos needs no shader compiler; it records the sources'
+#SHA-256, which --check compares with the sources as they are (tests/psp/run-tests.sh runs it), and with
+#glslangValidator there too, --check compiles them again and compares the result with shaders.hpp byte for byte.
 #usage: compile.sh            (needs glslangValidator: Homebrew's or the Vulkan SDK's glslang)
 #       compile.sh --check
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 OUT=$HERE/shaders.hpp
-ALL="draw.vert draw.frag copy.vert copy.frag present.frag compile.sh"
+ALL="draw.vert draw.frag copy.vert copy.frag present.frag transform.vert compile.sh"
 
 sha256() {
   if command -v sha256sum > /dev/null; then sha256sum | cut -d' ' -f1; else shasum -a 256 | cut -d' ' -f1; fi
@@ -25,10 +25,10 @@ compileAll() {
   { echo '#version 450'; cat "$HERE/draw.vert"; } > "$work/draw.vert"
   { echo '#version 450'; cat "$HERE/draw.frag"; } > "$work/draw.frag"
   { echo '#version 450'; echo '#define SINGLE'; cat "$HERE/draw.frag"; } > "$work/single.frag"
-  for stage in copy.vert copy.frag present.frag; do
+  for stage in copy.vert copy.frag present.frag transform.vert; do
     { echo '#version 450'; cat "$HERE/$stage"; } > "$work/$stage"
   done
-  for stage in draw.vert draw.frag single.frag copy.vert copy.frag present.frag; do
+  for stage in draw.vert draw.frag single.frag copy.vert copy.frag present.frag transform.vert; do
     glslangValidator -V --target-env vulkan1.0 -o "$work/$stage.spv" "$work/$stage" > "$work/log" 2>&1 ||
       { cat "$work/log"; exit 1; }
   done
@@ -58,6 +58,8 @@ header() {
   echo "static const u32 copyFragmentSPIRV[] = {"; words "$work/copy.frag.spv"; echo "};"
   echo
   echo "static const u32 presentSPIRV[] = {"; words "$work/present.frag.spv"; echo "};"
+  echo
+  echo "static const u32 transformSPIRV[] = {"; words "$work/transform.vert.spv"; echo "};"
   echo
   echo "}"
 }

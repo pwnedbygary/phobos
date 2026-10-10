@@ -25,6 +25,31 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP renderer "Vulkan (fast)": the GPU transforms and lights 3D — 2026-10-09
+
+Branch `cursor/psp-gpu-fast2-2b67`, on top of part 52's `cursor/psp-gpu-fast-2b67`. docs/psp-core.md, part 53, has
+the story and numbers; docs/psp-gpu-renderers.md "Vulkan (fast)" the design, "Accuracy" and "Speed" the tables.
+PPSSPP's hardware transform informed the design; none of its code is used (JPCSP's not read). Software stays the
+default and exact; Vulkan (accurate) is the path as it was, its pictures unchanged.
+- **The choice:** Settings' "PSP Renderer" is "Software (exact)", "Vulkan (accurate)" or "Vulkan (fast)", each
+  described; the desktop's menu likewise; the core's "Renderer" takes "Vulkan (fast)"; `psp-runner --renderer
+  Vulkan-fast`. The saved 1 is accurate (as Vulkan was), 2 fast. Fallbacks to Software as before, said once.
+- **Fast mode** (`ares/psp/ge/gpu/shaders/transform.vert`, `gpu.cpp`'s `meshes()`/`mesh()`, `draw.cpp`'s
+  `GE::meshTriangles()`): 3D PRIMs of 16 vertices or more go to the GPU untransformed; the shader skins,
+  transforms, lights, fogs and maps them in the GE's arithmetic; the GE still decides which triangles are drawn and
+  cuts the near plane's itself; each PRIM's settings a storage-buffer block, so PRIMs drawn alike are one draw; the
+  GPU's own blending. Both modes: eight slots, two frames in flight.
+- **RP6, medians of three, fps after warm-up** (Turnip accurate / fast; Qualcomm accurate / fast; Software 7
+  threads): MC3 race 62.3 / 67.1; 59.1 / 63.2; 53.8 — LCS city 92.3 / 105.1; 87.4 / 96.5; 70.1 — woods 93.8 / 126.5;
+  110.8 / 99.5; 71.3 — Peace Walker play 121.5 / 125.0; 114.8 / 113.7; 103.1 — WipEout 39.6 / 79.7; 75.5 / 76.5;
+  17.1. Whole runs from a state include the first pipelines (fast makes more): part 54 keeps them on disk.
+- **Accuracy** (pixels identical to Software, accurate / fast): MC3 menu 97.0 / 88.0%, race 95.0 / 71.5%, LCS city
+  95.4 / 57.8%, Peace Walker play 99.2 / 55.0% (its 16-bit blends a different dither); mostly a level or two;
+  nothing missing or misplaced, in the harness or in the app (MC3, both GTAs, Burnout, WipEout's menus, Peace
+  Walker, MotorStorm, Ridge Racer 2, all at 60 but MC3's race at 51-53).
+- **Left:** a pipeline cache on disk (part 54); bones in a block of their own (Peace Walker's small skinned PRIMs to
+  the GPU); Qualcomm's driver's GPU time in fast mode; textures decoded on the GPU; block transfers on the GPU.
+
 ## PSP Vulkan renderer faster: its own waste, found with a profile — 2026-10-09
 
 Branch `cursor/psp-gpu-fast-2b67`, on top of #184's `cursor/psp-vk-play-2b67`. docs/psp-core.md, part 52, has the

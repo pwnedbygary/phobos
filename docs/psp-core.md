@@ -6391,3 +6391,121 @@ isn't understood yet); a test of the fetch's hold above 1x and of `System::late(
 
 **Left:** block transfers on the GPU (WipEout's two finishes a frame), a pipeline cache kept on disk, the CPU's
 transform (part 53: Vulkan (fast)).
+
+## Part 53: Vulkan (fast) — the GPU transforms 3D, and blends with its own units
+
+On branch `cursor/psp-gpu-fast2-2b67`, on top of part 52's `cursor/psp-gpu-fast-2b67`. docs/psp-gpu-renderers.md's
+"Vulkan (fast) (part 53)" is the design. PPSSPP's hardware transform informed it; none of its code is used, copied or
+translated (JPCSP's not read). Software stays the default and exact; Vulkan (accurate) is today's path, its pictures
+as they were.
+
+**The choice** (the owner's, 2026-10-09): "PSP Renderer" is now "Software (exact)", "Vulkan (accurate)" or "Vulkan
+(fast)", each described in Settings as it's chosen; the desktop's menu likewise; the core's "Renderer" option takes
+"Vulkan (fast)"; `psp-runner --renderer Vulkan-fast`. The saved value 1 is Vulkan (accurate), as Vulkan was; 2 is
+fast. A start-up check that fails, or a device lost, falls back to Software and says so, in fast mode as in accurate.
+
+**What fast mode does** (the design has the detail): 3D PRIMs of 16 vertices or more are handed to the GPU as the
+vertex type laid them out; `transform.vert` skins, transforms, lights, fogs and maps them as `transform.cpp` and
+`lighting.cpp` would (the lighting in the GE's own whole numbers) and cuts their positions to the GE's sixteenths.
+The GE still decides which triangles are drawn (`GE::meshTriangles()`): from each corner's clip position it drops
+what it wouldn't draw (out of sight, behind, no area, facing away) and cuts and draws the triangles reaching past the
+near plane itself, in their place among the others; the GPU gets the rest. Each PRIM's settings are a block of the
+run's storage buffer that its vertices name, so PRIMs drawn alike are one draw. Nothing is read in the shader: the
+GPU blends. Everything else is as Vulkan (accurate).
+
+**How it got fast** (the RP6, Turnip, the runner from adb's shell, late frames, frames a second after a 150-frame
+warm-up unless said):
+1. The first version (a uniform block per PRIM, skinning, lighting and mapping as pipeline constants) was slower
+   than the accurate mode: GTA's city 52 against 81. Pipelines: Peace Walker's combinations of bones and lights made
+   dozens more (5 ms a frame of compiling over 300 frames). Draws: each PRIM's block split them, 1,162 a frame against
+   604. And the waits at a finish grew from 0.67 to 3.96 ms a frame: the GPU had far more queued.
+2. Skinning, lighting and mapping read from the block, not constants: the pipelines as few as accurate's, about.
+3. Eight slots instead of three: fast mode makes more commands, and with three its emulation thread kept waiting a
+   moment for the run three back; sleeping often, the scheduler moved it to slower cores (seen: cpu 3-6 at 1.65-2.8
+   GHz, not cpu 7 at 3.19). MC3's race 59.8 → 79.6. (A 512-command submit bound tried with it cost MC3's menu, which
+   finishes every frame: back to 128.)
+4. The blocks in a storage buffer, each vertex naming its own: draws as few as accurate's. GTA's city 68 → 102.
+5. PRIMs under 16 vertices left to the CPU: Peace Walker's 5,000 small skinned PRIMs a frame cost more on the GPU's
+   way (64 against accurate's 107); left to the CPU, 128.
+6. The review's near plane (below): the GE deciding which triangles are drawn cost the race 1.3 ms a frame of the
+   CPU's (74.0 → 65.4); the world, view and projection matrices made one for it, 67.1. The GPU now gets the triangles
+   the accurate mode draws and no more (the menu's 23.7 million in 450 frames → 6.7), which shortened Qualcomm's
+   driver's waits (the menu 3.8 → 2.8 ms a frame).
+
+**Found on the way**: MoltenVK refused every transform pipeline (a helper named `signbit` clashed with Metal's own),
+and the 3D drew nothing: fast mode now asks for a pipeline before it records a PRIM for it (`Backend::drawable()`),
+leaving the PRIM to the GE where the driver won't make it, and the start-up check draws 3D through the GPU's
+transform. GTA's cars lost their gloss (a second pass with a depth test of equal: the two pipelines put the vertices
+a hair apart): `gl_Position` is invariant now.
+
+**Measured** on the RP6 (docs/psp-gpu-renderers.md, "Speed", has the table): medians of three runs of 450 frames,
+late frames, frames a second after a 150-frame warm-up. Turnip, accurate / fast: the race 62.3 / 67.1, the menu
+75.1 / 77.4, LCS's city 92.3 / 105.1, the woods 93.8 / 126.5, Peace Walker's play 121.5 / 125.0, WipEout 39.6 / 79.7;
+seven software threads 53.8, 67.0, 70.1, 71.3, 103.1, 17.1. Qualcomm's own driver, accurate / fast: 59.1 / 63.2,
+73.4 / 70.9, 87.4 / 96.5, 110.8 / 99.5, 114.8 / 113.7, 75.5 / 76.5. So on Turnip, the app's driver, fast mode is
+16-77% ahead of seven threads in the 3D scenes (WipEout 4.7 times) once its pipelines are made; over a whole run
+from a state the first frames' pipelines take most of that back (the race 49.2 against 52.5), until they're kept
+between sessions (part 54). On Qualcomm's driver its GPU is slower with fast mode's vertex shader and it's within
+10% of the accurate mode either way, 6-40% ahead of seven threads.
+
+**Accuracy** (docs/psp-gpu-renderers.md, "Accuracy"): pixels identical to the software renderer's, 10 frames of each
+scene, accurate / fast: Lumines 96.6 / 72.9%, Peace Walker's title 100.0 / 40.4%, MC3's menu 97.0 / 88.0%, the race
+95.0 / 71.5%, LCS's city 95.4 / 57.8%, the woods 91.5 / 52.4%, Peace Walker's play 99.2 / 55.0%; fast mode's
+differences a level or two (colors and fog interpolated by the GPU) but for Peace Walker's 16-bit blends, a step of a
+5-bit channel spread evenly as a different dither. Nothing missing or misplaced to the eye. Vulkan (accurate)'s
+pictures are as they were: the GPU tests' every count the same from the base and from this branch (the review's), and
+the RP6's scenes the same to the channel.
+
+**In the app** (the RP6, Turnip, the release build, Vulkan (fast), the app's stats: frames a second, capped at 60,
+and the emulation's ms a frame): Midnight Club 3's title 60.0 (16 ms) and a quick race 51-53 (19 ms; part 41 had
+the accurate path at 39.0 and 25.6 ms in a quick race); Liberty City Stories' 3D city 60.0 (11-13 ms); Vice City
+Stories' opening 60.0 (13-16 ms); Burnout Legends' car select and a race 60.0 (11-13 ms); WipEout's menus 60.0 (4-5
+ms; at its profile screen it stopped taking adb's presses, so its race wasn't reached in the app); Peace Walker's
+title 60.0 (5 ms); MotorStorm: Arctic Edge, black after its first screen in part 41, through its notice to its
+title scene, 60.0 (9 ms); Ridge Racer 2's loading game and title 60.0 (5 ms). Each said "the Vulkan renderer draws
+(fast, 3D transformed by the GPU), on Vulkan: Turnip Adreno (TM) 740"; none fell back, and nothing looked wrong.
+
+**Review** (an independent read-only one, then a second over the fixes). Found and fixed:
+- The start-up check's 3D never reached the GPU's transform (PRIMs of three corners, under `MeshLeast`), so a
+  driver drawing `transform.vert` wrong would have passed it, and `gpuFast` failed: four PRIMs of six now, and the
+  check fails where none reached it. Where its 3D alone fails, the check runs again with the GE transforming.
+- Triangles cut by the near plane had their colors and fog blended across the screen by the GPU's clipper, not in
+  clip space as the GE does (a ground mesh under the camera 67.6% the same, its fog 76.0%): the GE cuts and draws
+  them now, in their place (`GE::meshTriangles()`). And the GPU drew triangles the GE drops for their depths (wholly
+  past the far plane with DEPTH_CLIP_ENABLE on, any corner outside with it off): the GE's rules decide every
+  triangle now, its culling with them. The reviewer's scenes, strips, fans, culling, flat shading, lights, texture
+  modes, fog, skinning, the near and far planes, give the accurate mode's numbers exactly.
+- `transform.vert` declared clip distances, which needs a device feature, and its module was made on every device,
+  in both modes: no clip distance now, the module made in fast mode alone.
+- 3D clear mode went through the GPU's transform (each triangle's stencil is its own last corner's): left to the GE.
+- The filter was chosen at each pixel from perspective-correct coordinates: once a triangle now, from coordinates
+  straight across the screen, the GE's ratio (the reviewer's filter scenes: 54 pixels far off → none).
+- Eight slots let a GPU-bound game show frames up to eight runs late: two frames in flight at most.
+- A GPU of the other mode was kept across a power cycle; the descriptor sets weren't bound again after a copy's
+  pipeline layout (both modes; drivers kept them anyway); stale text ("three slots"); layout asserts.
+The second review, over those fixes, found: the frames-in-flight wait named slots, not runs, so with five runs a
+frame or more it waited for one of the frame's own (by serial now); with DEPTH_CLIP_ENABLE on the GPU clamped the
+depth at each pixel where the GE holds each corner's (a triangle across the far plane, then a quad drawn with a test
+of less: 210 pixels far off, none now; held at each corner in `transform.vert`); a corner behind the camera that
+isn't past the near plane, which the GE projects through its w, went to the GPU (the GE's now); a mode switched
+without unloading kept Android's window from the new GPU; `statistics.meshes` counted runs. Its scenes (overlapping
+triangles cut and whole in turn, a strip cut mid-way, flat shading, a narrow depth range, a flush between a PRIM's
+runs, random triangles from behind the camera to past the far plane, off the 4096-pixel screen, culled each way)
+give the accurate mode's numbers exactly. Not taken: a second pass with a depth test of equal over a model drawn as
+PRIMs of other sizes meets the GE's depths and the GPU's a float's last bit apart (181 of 3,448 pixels missed in a
+scene made to show it; `MeshLeast` splits the paths; games' passes redraw the same PRIMs, which meet exactly).
+
+**Tests:** "gpu fast mode: 3D transformed by the GPU, near the software renderer" (the start-up check with its 3D
+through the GPU's transform, at least four PRIMs taken; pspsdk's samples, cube, celshading and envmap through it,
+held to the same 3 channels in 1000 as the accurate mode); "gpu fast mode: the GE's rules for which triangles are
+drawn" (random triangles from behind the camera to past the far plane, off the screen, culled each way, lists and
+strips, and a fogged ground of random colors under the camera, DEPTH_CLIP_ENABLE on and off: no more pixels far off
+than the accurate mode, none on the M1 and the RP6); "gpu start-up check" and the rest as before. The app's
+`PspVideoTest.rendererChoicesKeepTheSavedValues` (0, 1 and 2 kept, anything else Software, the labels).
+`tests/psp/run-tests.sh` (sanitized), `tests/allegrex/run-tests.sh`, `tests/psp/ares/run-tests.sh`: none failing;
+the GPU tests on the RP6, Turnip and Qualcomm's own driver: none failing.
+
+**Left:** a pipeline cache kept between sessions (part 54); the bones in a block of their own, so that small skinned
+PRIMs (Peace Walker's) could go to the GPU too and every 3D PRIM take one path; Qualcomm's driver's GPU time in fast
+mode; textures decoded on the GPU (palettes, swizzling, DXT: 0.4 ms a frame of the race's CPU since part 52, so
+later); block transfers on the GPU (WipEout's two finishes a frame).

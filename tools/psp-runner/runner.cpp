@@ -25,11 +25,11 @@
 //    --load-state FILE          start from a save-state file (the game booted, then the state loaded at once)
 //    --interpreter              run the CPU's interpreter (the recompiler is the default)
 //    --ge-threads N             how many threads draw the GE's pictures (0: one fewer than the host's cores)
-//    --renderer NAME            who draws them: Software (the default) or Vulkan (the system's Vulkan loader;
-//                                the summary then gives the GPU renderer's counts)
+//    --renderer NAME            who draws them: Software (the default), Vulkan (accurate) or Vulkan-fast (the
+//                                system's Vulkan loader; the summary then gives the GPU renderer's counts)
 //    --resolution N             Vulkan's internal resolution, 1 (the PSP's, the default) to 10 times it; the
 //                                frames (and PNGs) are then read back at up to 4 times the PSP's size
-//    --late-frames              the GPU's frames taken up to three frames late, nothing waited for each frame, as
+//    --late-frames              the GPU's frames taken a frame or two late, nothing waited for each frame, as
 //                                when the app presents them (for timing, at 1x; PNGs then show an earlier frame)
 //    --memory-stick DIR         the host folder standing for ms0: (a scratch folder by default)
 //    --fonts DIR                the PSP's system fonts (the .pgf files of a PSP's flash0), for the game's text
@@ -504,6 +504,9 @@ auto main(int argc, char** argv) -> int {
   if(!fonts.empty()) PlayStationPortable::option("Fonts", fonts.c_str());
   if(interpreter) PlayStationPortable::option("Recompiler", "false");
   if(geThreads) PlayStationPortable::option("GE Threads", std::to_string(geThreads).c_str());
+  //(the core's names, "Vulkan (accurate)" and "Vulkan (fast)", as one word each for a shell)
+  if(renderer == "Vulkan-accurate") renderer = "Vulkan";
+  if(renderer == "Vulkan-fast") renderer = "Vulkan (fast)";
   if(!renderer.empty()) PlayStationPortable::option("Renderer", renderer.c_str());
   if(resolution) PlayStationPortable::option("Resolution", std::to_string(resolution).c_str());
   if(lateFrames) PlayStationPortable::option("Late Frames", "true");
@@ -631,9 +634,10 @@ auto main(int argc, char** argv) -> int {
   std::printf("program: %s\n", ended ? "ended" : "still running");
   std::printf("frames per second: %.2f\n", frames / elapsed);
   if(gpu) {
-    std::printf("gpu: %llu draws, %llu primitives, %llu submits, %llu finishes, %llu uploads, %llu read-backs, "
-                "%llu textures, %llu copies, %llu frames shown from the GPU, %.2f ms a frame waiting\n",
-                (unsigned long long)gpu->draws, (unsigned long long)gpu->primitives,
+    std::printf("gpu: %llu draws, %llu primitives, %llu 3D PRIMs transformed by the GPU, %llu submits, %llu "
+                "finishes, %llu uploads, %llu read-backs, %llu textures, %llu copies, %llu frames shown from the "
+                "GPU, %.2f ms a frame waiting\n",
+                (unsigned long long)gpu->draws, (unsigned long long)gpu->primitives, (unsigned long long)gpu->meshes,
                 (unsigned long long)gpu->submits, (unsigned long long)gpu->finishes,
                 (unsigned long long)gpu->uploads, (unsigned long long)gpu->readbacks,
                 (unsigned long long)gpu->textures, (unsigned long long)gpu->copies,

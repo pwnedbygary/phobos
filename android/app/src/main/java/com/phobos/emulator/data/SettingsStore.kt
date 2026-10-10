@@ -247,6 +247,7 @@ data class EmulatorSettings(
     val pspMemoryStickPath: String = "",
     /** How many threads draw a PSP game's pictures (util/PspVideo.kt); 0, Auto, for all the device's cores but one. */
     val pspDrawingThreads: Int = 0,
+    /** Who draws a PSP game's pictures (util/PspVideo.kt's PspRenderer): 0 Software, 1 Vulkan (accurate), 2 Vulkan (fast). */
     val pspRenderer: Int = 0,
     /** The Vulkan renderer's internal resolution (util/PspVideo.kt): 1, Native, to 10 times the PSP's. */
     val pspResolution: Int = 1,
