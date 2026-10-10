@@ -456,8 +456,8 @@ static auto discRequests() -> void {
 }
 
 //A file's PGD key (ioctl 0x04100001): given for a file without PGD's header, the file is read as it is (the fan
-//translations of 7th Dragon 2020 and its sequel); one with the header is refused, nothing here decrypting, as are a
-//key shorter than 16 bytes, umd0: and a file off the disc, as every request was before.
+//translations of 7th Dragon 2020 and its sequel); one with the header keeps the key and decrypts its reads (pgd.cpp);
+//a key shorter than 16 bytes, umd0:, and a file off the disc are refused, as every request was before.
 static auto discKeys() -> void {
   KernelMachine m;
   auto& memory = m.system.memory;
@@ -479,7 +479,7 @@ static auto discKeys() -> void {
   CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 8, 0, 0}), Kernel::ErrorFunctionNotSupported);
   m.call("sceIoClose", {file});
   file = m.call("sceIoOpen", {m.string("disc0:/PSP_GAME/INSDIR/PGD.DNS"), 0x4000'4001, 0});
-  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), Kernel::ErrorFunctionNotSupported);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), 0);
   m.call("sceIoClose", {file});
   file = m.call("sceIoOpen", {m.string("umd0:"), 0x0001, 0});
   CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), Kernel::ErrorFunctionNotSupported);
