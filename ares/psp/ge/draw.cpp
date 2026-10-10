@@ -14,7 +14,7 @@
 //    coordinates are blended across from the corners at each pixel's middle, or with flat
 //    shading (SHADE_MODE 0) the color is the last vertex's. In 3D the texture coordinates are blended as the
 //    perspective has them (as u/w and 1/w, then divided, so a texture on a floor shrinks into the distance); colors
-//    and depth aren't, nor is the fog.
+//    and depth aren't. Fog is turned into 0-255 at each corner, then blended straight as a color (measured: ramp-fog).
 //  - Culling (CULL_FACE_ENABLE, not in clear mode): with CULL 1 only triangles whose corners run clockwise on the
 //    screen are drawn, with 0 only those running counterclockwise (pspsdk's sceGuFrontFace(GU_CW) sets 1). Every
 //    other triangle of a strip runs the other way round, so for those it's the other way.
@@ -283,7 +283,9 @@ auto GE::submit(Job& job) -> void {
   else rasterize(job, job.firstY, job.lastY);
 }
 
-//The fog at a pixel, 0-255, from its 0-1: rounded down, 1 or more giving 255 (as PPSSPP has it).
+//The fog at a vertex, 0-255, from its 0-1: rounded down, 1 or more giving 255. Measured (docs/psp-core.md,
+//ramp-fog): this amount is what is blended across a triangle or line, not the 0-1; blending the 0-1 and converting
+//at each pixel leaves the first pixel of a ramp unfogged (255) where the PSP has already stepped to 254.
 static auto fogAmount(float fog) -> u32 {
   if(std::signbit(fog)) return 0;
   if(!(fog < 1)) return 255;
@@ -408,7 +410,9 @@ auto GE::triangle(const Look& look, const Vertex& a, const Vertex& b, const Vert
     auto& v = *p[k].vertex;
     r.x[k] = p[k].x, r.y[k] = p[k].y;
     r.color[k] = v.color, r.specular[k] = v.specular;
-    r.z[k] = v.z, r.fog[k] = v.fog, r.u[k] = v.u, r.v[k] = v.v, r.q[k] = v.q, r.w[k] = v.clip[3];
+    r.z[k] = v.z, r.u[k] = v.u, r.v[k] = v.v, r.q[k] = v.q, r.w[k] = v.clip[3];
+    //Fog is held to 0-255 at each corner, then blended as a color channel (measured: ramp-fog).
+    r.fog[k] = float(fogAmount(v.fog));
   }
   //Without perspective, texture coordinates are stepped from the leftmost corner (see shortStep): its value, then a
   //step per pixel across and down, from the plane through the three corners.
@@ -545,7 +549,8 @@ auto GE::line(const Look& look, const Vertex& from, const Vertex& to, bool persp
   for(u32 k = 0; k < 2; k++) {
     auto& v = *ends[k];
     l.color[k] = v.color, l.specular[k] = v.specular;
-    l.z[k] = v.z, l.fog[k] = v.fog, l.u[k] = v.u, l.v[k] = v.v, l.q[k] = v.q, l.w[k] = v.clip[3];
+    l.z[k] = v.z, l.u[k] = v.u, l.v[k] = v.v, l.q[k] = v.q, l.w[k] = v.clip[3];
+    l.fog[k] = float(fogAmount(v.fog));  //0-255 at each end, then blended (as for triangles)
   }
   if(look.textured) {
     float du = l.u[1] - l.u[0], dv = l.v[1] - l.v[0];

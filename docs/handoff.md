@@ -25,6 +25,24 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP GE: fog amount fixed at each corner (measurement fits) — 2026-10-08
+
+Branch `cursor/psp-ge-fits-2b67`, on `cursor/psp-vfpu-fits-2b67` (#177; #175 and #172 under it). PR #178. Clean room: Phobos measurement data only
+(`tests/psp/measurements/ge-round3`, `docs/psp-core.md`); no PPSSPP. Does not touch VFPU / `ares/psp/cpu/` /
+`docs/psp-vfpu-measurements.md`.
+
+- **Fitted:** fog is converted to 0–255 at each vertex (`fogAmount`), then that amount is blended across the
+  triangle or line as a color channel (software path, SIMD fours, and the Vulkan attribute). Measured on
+  `ramp-fog` (18976 → 240 pixels a level apart) and `3d-floor-fog` (6257 → 497). Unit tests `draw3d fog` and
+  `draw3d lines` updated to the same arithmetic.
+- **Tried and not taken:** stepping perspective u/w and 1/w like 2D's `shortStep` made `3d-wall-texels` worse
+  (307 → 2423); left as the edge-weight divide. Color ramps and lighting's last six product cells (level 32 at
+  cosine 56/65, level 64 at 72/97) still have no rule the data pin down.
+- **Probes (source only):** `tools/psp-measure/ge.c` `round5()` / `geRound(5)` —
+  `ramp-color-probes`, `light-product-probes`, `texel-wall-probe`, `texel-floor-probe`. Not on the menu or in the
+  committed EBOOT yet (so the host measure test keeps its line numbers).
+- **Checks:** `tests/psp` 330/0, `tests/allegrex` 58/0, `tests/psp/ares` 315/0.
+
 ## PSP core: the adder's carry (GTA: Liberty City Stories' twitching limbs) — 2026-10-08
 
 On `cursor/psp-vfpu-fits-2b67` (#177), for the stack above to merge up. The owner saw the player's limbs twitch
