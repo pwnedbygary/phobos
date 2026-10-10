@@ -6686,3 +6686,152 @@ and unlock recordings on hand-made work areas and counts (part 32 noted it). The
 Most Wanted). Black still, cause not found: Ridge Racer, Crush (its CPU stops in a call into the program at frame 730),
 Dead or Alive - Paradise, Def Jam, Jak and Daxter - The Lost Frontier, Tekken - Dark Resurrection, Valhalla Knights,
 PaRappa the Rapper, MACH; Need for Speed - ProStreet's crash after its notice.
+
+## Part 58: sceJpeg, scePauth, the PS3's memory, and the last functions games stopped at
+
+On branch `cursor/psp-hle-games12-2b67`, on top of #189's `cursor/psp-hle-games11-2b67`. Sources: pspautotests' programs
+and their recordings (jpeg's eleven, hash/mt19937ctx, rtc/arithmetic and rtc/convert's sceRtcGetTick, each program also
+run through the kernel by a scratch runner answering its emulator devctl and its output compared with the recording line
+for line), pspsdk's headers and stubs, ITU-T T.81 (JPEG), uOFW's interface documentation (the power service's
+`power_user.h` and its exports list), the PSP Developer Wiki's keys, and the games' own behaviour: their calls traced,
+and their code read around the calls (what they pass, what they do with what comes back). No PPSSPP or JPCSP source was
+read.
+
+**1. sceJpeg** (`jpeg.cpp`). Monster Hunter Portable 3rd shows its movies through sceJpegCsc (below); the whole library
+is here, as pspautotests' jpeg tests recorded it on a PSP. The library's one context: sceJpegInitMJpeg (again:
+0x80650042), sceJpegCreateMJpeg with the picture buffer's size (wider than 1024, compared signed: 0x80650020; any
+height), sceJpegDeleteMJpeg (its size kept: decoding into pixels still uses it), sceJpegFinishMJpeg (refused while a
+context is made); 0x80650039 out of turn. Pictures: baseline JPEG, Y with its colours at half its size each way (4:2:0);
+grey or 2x1 pictures are 0x80650016. sceJpegGetOutputInfo gives the planes' size (480x272: 195840) and the colour
+information 0x00020202; sceJpegDecodeMJpegYCbCr and its Successively sibling write the planes, Y then Cb then Cr;
+sceJpegDecodeMJpeg and its sibling write 32-bit pixels a row of the picture to a row of the context's width, refusing a
+picture larger than the context (0x80650020, before the library starts too) and then the library not started
+(0x80000001). Every decoding function refuses data reaching the kernel's half of the addresses (0x80000023), no data,
+none at all (0x80650004), and data not starting with SOI (0x80650023), each in the order the recordings show. The
+conversions, from planes into 32-bit pixels a row of the picture to a row of the buffer's width: sceJpegCsc for 2x2, 2x1
+and 1x1 colour planes (anything else 0x80650013; a height of 0 converts a row and returns -1), with JPEG's own sums in
+16-bit fixed point; sceJpegMJpegCsc on the Media Engine (the library started; at most 720x480 and a buffer 1024 wide),
+with sums of 8-bit coefficients and its Cb and Cr from 1: both fitted to the recordings' 40 colours to the value. The
+Media Engine moves 8 bytes at a time, a byte's place in its 8 its own address's, so a plane 4 bytes past a multiple of 8
+reads each 8 bytes' second half from 8 bytes before: that is mjpegcsc's patterns (its first 16 pixels' Y, Cb and Cr from
+before each plane, the buffer being a static array 4 bytes off), and its rows a pixel apart writing every byte but their
+last four (the write's own byte order, unrecorded, taken to be the read's); it keeps the buffer width in 11 bits (its -4
+wrote its first rows 8176 bytes apart). Decoding into pixels uses sceJpegMJpegCsc's sums, its rows written as they are
+(no recording shows its pixels or a buffer off a multiple of 8). A picture's data is read from memory only as far as
+it's used, as a game may give the size of a whole buffer of pictures. The calls on the Media Engine let other threads
+run, as the tests' checkpoints show: init and finish when they succeed, the decoders and sceJpegGetOutputInfo once their
+buffers' addresses pass, the conversions when they convert (sceJpegMJpegCsc only for 16 rows or more), never the
+context's calls.
+
+The decoder is Phobos's own, from T.81: markers, Huffman tables (Annex K's when a picture has none, as Motion JPEG's
+pictures may not), restart markers, a floating-point inverse DCT rounded to the nearest. Checked in scratch against
+libjpeg-turbo on pspautotests' pictures and pictures of our own (odd sizes, restart markers every MCU and every three,
+optimized tables, the tables taken out): its float IDCT's planes to the sample but 0 to 11 pixels a picture, its integer
+one within 1. Six of the eleven programs print exactly what the PSP printed (create, delete, getoutputinfo, decode,
+decodes, decodeycbcrs); init and finish differ only in their module loading's lines (sceUtilityLoadAvModule and its
+siblings switching threads: utility.cpp's, not sceJpeg's); the other three only where the PSP did what nothing explains
+or what timing decides: csc's init and mjpegcsc's finish not switching (an earlier call keeping the Media Engine busy),
+decodeycbcr's null buffer written somewhere the test could see, csc's colour information with its top 12 bits set
+writing past the picture, and mjpegcsc's pictures under 16 rows or 16 pixels wide, its negative stride's later rows, and
+one byte of the test's own heap pointer before its buffer (0x50 there, 0x30 here).
+
+**2. sceMpegAvcConvertToYuv420** (`mpeg.cpp`). Monster Hunter Portable 3rd decodes each movie picture with
+sceMpegAvcDecodeYCbCr, converts it with this into a buffer, then sceJpegCsc (480x272, 512 wide, 0x00020202) into its own
+frame buffers. It writes the picture sceMpegAvcDecodeYCbCr gave last as 4:2:0 planes, the decoder's samples as they are;
+nothing before a picture has come. pspautotests imports it but records nothing, so whether a PSP's stretches the
+movie's video-range samples (Y 16 to 235) to the full range of sceJpegCsc's sums (csc's recorded colours are JFIF's)
+isn't known: given as they are, the movie's blacks may be a little lighter than on a PSP.
+
+**3. scePauth** (`pauth.cpp`, and `decrypt.cpp`'s type 5 given a second key). Monster Hunter Portable 3rd calls
+scePauth_98B83B5D (data, size, where the size goes, a 16-byte key) once, on 0x48000 bytes: a type 5 ~PSP body (tag
+0x2fd313f0, the wiki's scePauth XOR key's) with no header in the clear. Part 18's note that a PSN game's programs mix a
+second key into type 5's pad and first step was the lead; of the ways the game's key could enter those steps, one alone
+makes the header's SHA-1 digest check out (XORed into the pad once it's decrypted, and into the XOR key of the first
+0x50 bytes), and the data then decrypts to a Capcom texture (".TMH0.14", 0x47c80 bytes), so the digest is the proof. The
+game copies the size it's told back from its buffer, and marks the data bad when the result isn't 0. Data that won't
+decrypt is refused (SCE_ERROR_INVALID_VALUE, chosen), left as it was. scePauth_F7AA47F6 isn't added: no game here calls
+it, and nothing says what it does. The tests encrypt their data the same way (the game's isn't kept here), so they hold
+the code to that way; the game's digest is what proves it.
+
+**4. scePowerCheckWlanCoexistenceClock** (`power.cpp`; NID 0xa85880d0, uOFW's exports list). The fastest PLL the model
+allows with the wireless LAN on: 1 (266 and 333 MHz), a PSP-2000's, as uOFW's documentation gives it. Monster Hunter
+Portable 3rd, Final Fantasy Type-0, Kingdom Hearts Birth by Sleep and Dragon Ball Z: Tenkaichi Tag Team call it.
+
+**5. Monster Hunter Portable 3rd HD's memory** (`kernel.cpp`, `start()`). Its EBOOT.BIN is a static program of one
+segment, 26.5 MiB from 0x08804000 (0x22b258 bytes of code and data, 24.4 MiB of .bss); its ~PSP header says SDK
+0x06030610 and its PARAM.SFO 6.36, neither asking for memory (no MEMSIZE). The PS3's PSP emulator ran these remasters
+with more than a PSP's 24 MiB; a PSP-2000's 64 MiB holds it. So a program bigger than the user partition gets all of
+RAM, as MEMSIZE 1 gives it (the partition to 0x0c000000): no retail PSP could load such a program, so every program a
+PSP runs sees the partition it always did. Melodie (Prototype) is left as it was: its program fits, and it asks at run
+time for a 40 MiB block, which a PSP-2000 refuses too; growing the partition on request would change what any program
+probing for memory sees.
+
+**6. sceMt19937** (`mt19937.cpp`; Genso Suikoden carries Sony's libmt19937.prx, which the kernel stands in for), sharing
+the kernel's sceKernelUtilsMt19937, which now keeps its context as hash/mt19937ctx recorded: a count of 0 and the 624
+words already stirred once seeded, each number stirring its own word for the next round as it's handed out (the same
+numbers as before). A context of the older layout, as a state saved before kept one, goes on with them too: that layout
+stirred all 624 words at once when its count reached 624, so part way through a round the words it has handed out aren't
+stirred, which the last of them shows (stirred, a word agrees with the next one and the one 397 on whatever its own top
+bit was; unstirred, by a chance in 2^31), and they're stirred at its next draw; checked from ten points in a round to
+the same numbers and words as the new layout's. The library's context is taken to be the same (no recording shows it).
+
+**7. sceRtcTickAdd*** (`rtc.cpp`; Tekken 6 calls the seconds' and minutes'), as rtc/arithmetic recorded: ticks,
+microseconds, seconds and minutes by 64-bit amounts, hours, days and weeks by 32-bit ones, wrapping round; months and
+years in the calendar, the day cut to the new month's last, a date outside the years 1 to 9999 leaving the destination
+as it was (and 0). sceRtcGetTick now adds microseconds past a second rather than refusing them, as the recording's
+9999-12-31 23:59:59 with 99,999,998 microseconds shows (a minute and 39 seconds into 10000), and refuses a date past the
+year 9999 (rtc/convert's 10000-01-01, its tick left as it was). rtc/arithmetic prints exactly what the PSP printed.
+
+**8. sceHprm's callbacks** (`ctrl.cpp`): sceHprmRegisterCallback and sceHprmUnregitserCallback (Sony's spelling: the NID
+pspsdk's stubs give, 0x444ed0b7, is that name's hash). pspsdk gives nothing more, so they're taken to be as scePower's
+pair (pspsdk's psppower.h: a slot 0-15 or -1, a callback; the slot taken given back for -1, else 0), which is how
+Soulcalibur: Broken Destiny calls it at boot (-1 and the callback it has just made; it keeps the callback, not the
+result). Never told, nothing being plugged in.
+
+**9. The ATRAC low level** (`atrac.cpp`): sceAtracLowLevelInitDecoder and sceAtracLowLevelDecode, which nothing
+documents; followed through Corpse Party's CRI sound library: parameters of three words (the frames' channels, the
+output's, the frame size), then a frame at a time into 16-bit interleaved samples, the bytes used and the samples' bytes
+written told. Corpse Party's music, silent before, plays from about 35 seconds on.
+
+**10. sceP3da** (`p3da.cpp`), the positional 3D audio library: as Sol Trigger's sound thread uses it, the channels'
+buffers (an array of addresses of mono samples) mixed into stereo pairs. Sony's placing of each channel isn't known, so
+each is heard in both ears, their sum held to 16 bits. Sol Trigger, silent before, has its sound from 20 seconds on.
+
+**Save states.** Version 21 (layout 21: sceJpeg's library and context, sceHprm's callbacks, which ATRAC IDs decode at
+the low level); layouts 15 to 20 load with none of those. The states' field and refusal tests cover each.
+
+**The games** (the report's runs: Software, 7 GE threads, 3600 frames, Start at 120 and Cross at 1800, PNGs at 60, 300,
+1200 and 3600; the base commit's runner and this branch's on 35 games):
+- *Monster Hunter Portable 3rd*: black to its intro movie (the Capcom logo, its memory stick check, the movie); with
+  Start at the title, its game menu and character creation, where its next screen stays empty after "GE: a display list
+  RETurned with no CALL to return from" (the GE's part, as Need for Speed: Most Wanted).
+- *Monster Hunter Portable 3rd HD*: black (never started) to the same: its memory device check, the intro movie with its
+  sound, the title and the game menu.
+- *Corpse Party* and *Sol Trigger*: their title menus as before, with their music now.
+- *Genso Suikoden*, *Soulcalibur: Broken Destiny*, *Tekken 6*, *Final Fantasy Type-0*, *Kingdom Hearts Birth by Sleep*
+  and *Dragon Ball Z: Tenkaichi Tag Team*: nothing missing any more; their frames the same (Genso's notice a fade step
+  apart; Dragon Ball Z still waits on PGD data past its notice).
+- The other 25 (menus, movies and gameplay across the library): every frame the same on both runners, but where the
+  runner's own timing moves an animation under load (Space Invaders Extreme's frame 1200 differs between two runs of the
+  base runner as much), checked again with fewer runs at once.
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 392 groups, none failing. `tests/allegrex/run-tests.sh`: 58, none
+failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing. New groups: the jpeg library's context, pictures
+decoded, data refused, planes converted, planes converted on the Media Engine, calls that wait, pspautotests' pictures
+(with PSP_AUTOTESTS); scePauth's data; movies as 4:2:0 planes; the clock beside the wireless LAN; ticks moved on; the
+ATRAC low level and in a state; P3DA's mixing; and the Mersenne Twister, clocks, sceHprm, the user partition, states and
+their fields extended. The pictures are made by `tests/psp/jpeg-maker.hpp`, a small baseline encoder (Annex K's tables
+written or left out, restart markers): flat blocks decode to the sample. Twenty-one deliberately broken versions (pixels
+from the wrong colour sample, the Media Engine's colours not held to 1, its transfers read as they lie, short pictures
+waiting, widths compared unsigned, coefficients not unzigzagged, scePauth's key kept out of the pad, hours by 64-bit
+amounts, months past the years written, no stirring at seeding, every low-level channel the left, big programs not given
+RAM, the 4:2:0 planes a byte off, P3DA's channels replaced, a used sceHprm slot taken again, low-level IDs not saved, an
+older context's words left unstirred, a picture's data read no further than its first 64 KiB, the Media Engine's writes
+made straight, years past 9999 taken, a context wider than 1024 loaded) each failed them.
+
+**Left, and why.** scesupPreAcc (both Dissidias and Persona 3 Portable call it and go on). Monster Hunter Portable 3rd's
+character creation (the GE's RET with no CALL). P3DA's placing of its channels. The range of sceMpegAvcConvertToYuv420's
+samples, and the Media Engine's byte order writing a misaligned row (both above). A state of layout 20 or before isn't
+loaded by any test (as for every earlier layout). Melodie's 40 MiB request (above). PGD decryption and the black games
+part 55 listed. The runner's WAV header writes each of its tags with a NUL after it (`tools/psp-runner/runner.cpp`'s
+loops over C strings), which players reject; the measurements here read past it.

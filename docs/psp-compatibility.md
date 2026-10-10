@@ -6,7 +6,9 @@
 **Runner:** `tools/psp-runner/` (headless; 3600 frames, Start at frame 120 and Cross at 1800, 4 PNG captures, 1 WAV)
 **Updated:** 2026-10-09, part 55 (`f30eefe09`, branch `cursor/psp-hle-games11-2b67`, on #184's
 `cursor/psp-vk-play-2b67`): the rows its fixes changed, run again the same way beside the base commit's runner on 53
-games (docs/psp-core.md, part 55); the other rows are the report's.
+games (docs/psp-core.md, part 55); and part 58 (branch `cursor/psp-hle-games12-2b67`, on #189): the rows its functions
+changed, run the same way beside the base commit's runner on 35 games (docs/psp-core.md, part 58). The other rows are
+the report's.
 
 ## Method
 
@@ -42,19 +44,26 @@ game that looked worse was run again without presses on both commits before call
 
 ## Summary
 
-| Category | Before (`b27f084a5`) | Run 1 (#183's tip) | Now | Part 55 | Change since Before |
-|---|---|---|---|---|---|
-| Menu or gameplay | 141 | 148 | 175 | 178 | +37 |
-| Movie | 35 | 43 | 63 | 63 | +28 |
-| Stuck loading | 13 | 8 | 5 | 4 | -9 |
-| Black or hang | 73 | 64 | 21 | 19 | -54 |
-| Timed out | 4 | 3 | 2 | 2 | -2 |
+| Category | Before (`b27f084a5`) | Run 1 (#183's tip) | Now | Part 55 | Part 58 | Change since Before |
+|---|---|---|---|---|---|---|
+| Menu or gameplay | 141 | 148 | 175 | 178 | 178 | +37 |
+| Movie | 35 | 43 | 63 | 63 | 65 | +30 |
+| Stuck loading | 13 | 8 | 5 | 4 | 4 | -9 |
+| Black or hang | 73 | 64 | 21 | 19 | 17 | -56 |
+| Timed out | 4 | 3 | 2 | 2 | 2 | -2 |
 
 Part 55 moves three rows: The King of Fighters - Orochi Saga (sceCcc) and God Eater 2 (thread-local storage pools and
 sceKernelTryLockLwMutex_600) from black to a menu or notice, and Persona 3 Portable, judged again with a frame every
 300, from loading to its title (its frame 3600 falls on its attract loop's loading screen). Dragon Ball Z: Tenkaichi Tag
 Team (sceKernelExtendThreadStack) shows its autosave notice now, but is black again at 3600, waiting on PGD-encrypted
 data.
+
+Part 58 moves two rows, both Monster Hunter Portable 3rds, from black to their intro movie at frame 3600 (and with
+Start at their titles, to their game menus): sceJpegCsc, sceMpegAvcConvertToYuv420 and scePauth for the PSP version,
+and for the HD version a program too big for the user partition given all of RAM, as the PS3 gave its remasters.
+Corpse Party and Sol Trigger keep their menus, now with their music (the ATRAC low level, sceP3da); Genso Suikoden,
+Soulcalibur: Broken Destiny, Tekken 6, Final Fantasy Type-0, Kingdom Hearts Birth by Sleep and Dragon Ball Z: Tenkaichi
+Tag Team no longer stop at a missing function, their frames as before.
 
 In the comparison, gameplay counts as menu and a hang as black, as the last report's categories had them. Against
 the last report, 81 games are further along and 26 rank lower. None of the 26 is a regression left unfixed:
@@ -177,37 +186,35 @@ Own the City (10) and Underground Rivals (14), Death Jr. II (17). God of War: Ch
 
 ## Top missing functions
 
-12 of 266 games hit at least one function not implemented yet (since part 55: 14 in the report's run).
+3 of 266 games hit a function not implemented yet since part 58 (12 since part 55; 14 in the report's run), all
+scesupPreAcc, which each calls and goes on from.
 
 | Games | Function | Which |
 |---|---|---|
 | 3 | `scesupPreAcc 86debd66` | Dissidia 012 - Duodecim Final Fantasy, Dissidia Final Fantasy, Shin Megami Tensei - Persona 3 Portable |
-| 3 | `scePower a85880d0` | Dragon Ball Z - Tenkaichi Tag Team, Final Fantasy Type 0, Kingdom Hearts Birth by Sleep Final Mix [English] |
-| 1 | `sceAtrac3plus sceAtracLowLevelInitDecoder` | Corpse Party - Sweet Sachikos Hysteric Birthday Bash [English 04-29-2026] |
-| 1 | `sceMt19937 sceMt19937Init` | Genso Suikoden Tsumugareshi Hyakunen no Toki |
-| 1 | `sceJpeg sceJpegCsc` | Monster Hunter Portable 3rd [English v6.1.0 Team Maverick One] |
-| 1 | `sceMpeg sceMpegAvcConvertToYuv420` | Monster Hunter Portable 3rd [English v6.1.0 Team Maverick One] |
-| 1 | `scePauth 98b83b5d` | Monster Hunter Portable 3rd [English v6.1.0 Team Maverick One] |
-| 1 | `sceP3da 374500a5` | Sol Trigger |
-| 1 | `sceHprm sceHprmRegisterCallback` | Soulcalibur - Broken Destiny |
-| 1 | `sceRtc e6605bca` | Tekken 6 |
-| 1 | `sceRtc f2a4afe5` | Tekken 6 |
 
-In the last report 77 games stopped at a function not implemented yet; now 12 do, and no function stops more than
-three. Part 55 added sceCcc (The King of Fighters - Orochi Saga, Genso Suikoden), the thread-local storage pools and
-sceKernelTryLockLwMutex_600 (God Eater 2) and sceKernelExtendThreadStack (Dragon Ball Z: Tenkaichi Tag Team, which
-then calls scePower a85880d0 and goes on). The ones that leave a game black: scePauth, sceJpegCsc and
-sceMpegAvcConvertToYuv420 (Monster Hunter Portable 3rd).
+Part 58 added the others the report's run stopped at: scePowerCheckWlanCoexistenceClock (`scePower a85880d0`: Dragon
+Ball Z - Tenkaichi Tag Team, Final Fantasy Type 0, Kingdom Hearts Birth by Sleep, and Monster Hunter Portable 3rd),
+sceAtracLowLevelInitDecoder and sceAtracLowLevelDecode (Corpse Party), sceMt19937 (Genso Suikoden), the whole sceJpeg
+library, sceMpegAvcConvertToYuv420 and scePauth_98B83B5D (Monster Hunter Portable 3rd), sceP3da (Sol Trigger),
+sceHprmRegisterCallback and sceHprmUnregitserCallback (Soulcalibur - Broken Destiny), and the sceRtcTickAdd family
+(`sceRtc e6605bca` and `f2a4afe5`, Tekken 6's minutes and seconds).
+
+In the last report 77 games stopped at a function not implemented yet; part 55 left 12, part 58 three (scesupPreAcc,
+which none is held by). Part 55 added sceCcc (The King of Fighters - Orochi Saga, Genso Suikoden), the thread-local
+storage pools and sceKernelTryLockLwMutex_600 (God Eater 2) and sceKernelExtendThreadStack (Dragon Ball Z: Tenkaichi Tag
+Team); part 58 the functions above. None left leaves a game black.
 
 ## Top remaining blockers
 
-What still stops games, by cause (the per-game table has each game's note; updated for part 55):
+What still stops games, by cause (the per-game table has each game's note; updated for parts 55 and 58):
 1. **PGD decryption**, five games: Black Wolves Saga's install data, Dragon Ball Z: Tenkaichi Tag Team (past its
    autosave notice), Shining Blade and Valkyria Chronicles III (`PSP_GAME/INSDIR/DATA.BIN`, through CRI's file system)
    and Naruto Shippuden Ultimate Ninja Impact. Each gives its file's key and, refused, tries again for good. The kernel
    reads unencrypted data but can't decrypt PGD: AMCTRL's cipher isn't described in a source this project uses, and its
    checks need keys not committed (docs/psp-core.md, part 55).
-2. **Libraries the kernel doesn't have yet**: scePauth and sceJpeg (Monster Hunter Portable 3rd).
+2. **Libraries the kernel doesn't have yet**: none a game here stops at since part 58 (scesupPreAcc is called and
+   passed over). Monster Hunter Portable 3rd's character creation stops at the GE's RET with no CALL (item 3's).
 3. **Black screens with the game running and no missing function**, cause not found: Ridge Racer (black frames after
    its opening movie), Crush, Dead or Alive - Paradise, Def Jam - Fight for NY (its file thread waits for requests that
    never come), Jak and Daxter - The Lost Frontier, Tekken - Dark Resurrection (after its autosave notice), Valhalla
@@ -217,8 +224,9 @@ What still stops games, by cause (the per-game table has each game's note; updat
 5. **Stuck loading**: Metal Gear Solid - Portable Ops and Portable Ops Plus, MX vs. ATV - On the Edge, Street Supremacy
    (a map loading screen, after the run's presses).
 6. **Too slow to judge**: God of War: Chains of Olympus and Ghost of Sparta.
-7. **Memory**: Melodie (Prototype) wants a 64 MB PSP's memory; Monster Hunter Portable 3rd HD's program is 26.5 MiB,
-   more than the 24 MiB user partition (made for the PS3), and given more it stops at sceJpeg as the PSP version does.
+7. **Memory**: Melodie (Prototype) asks at run time for a 40 MiB block, which a PSP-2000 refuses too. (Monster Hunter
+   Portable 3rd HD's 26.5 MiB program, made for the PS3, gets all of RAM since part 58, as any program bigger than the
+   user partition does.)
 
 ## Vulkan spot checks
 
@@ -287,7 +295,7 @@ and now, and what the last frames showed or why a game stops.
 | Chili Con Carnage | ULUS10216 | 152 | menu | menu | menu | profile menu |
 | Cladun - This Is An RPG | NPUH10072 | 393 | menu | menu | menu | title menu |
 | Colin McRae Rally 2005 Plus [Europe] | ULES00111 | 50 | menu | menu | menu | auto-save prompt |
-| Corpse Party - Sweet Sachikos Hysteric Birthday Bash [English 04-29-2026] | ULJM06114 | 295 | menu | menu | menu | title, press start; sceAtracLowLevelInitDecoder missing |
+| Corpse Party - Sweet Sachikos Hysteric Birthday Bash [English 04-29-2026] | ULJM06114 | 295 | menu | menu | menu | title, press start; its music from about 35 s on since part 58 (the ATRAC low level, missing before) |
 | Crash Tag Team Racing | ULUS10044 | 134 | black | black | menu | Memory Stick check notice (black after the legal screen before) |
 | Crazy Taxi - Fare Wars | ULUS10273 | 299 | menu | menu | menu | title |
 | Crimson Gem Saga | ULUS10400 | 129 | menu | menu | menu | system data notice |
@@ -313,7 +321,7 @@ and now, and what the last frames showed or why a game stops.
 | Disney-Pixar Cars 2 | UCUS98766 | 304 | menu | menu | menu | memory stick notice |
 | Dissidia 012 - Duodecim Final Fantasy | ULUS10566 | 220 | black | black | menu | "Create New Data" |
 | Dissidia Final Fantasy | ULUS10437 | 253 | menu | menu | menu | nickname entry; scesupPreAcc 86debd66 missing |
-| Dragon Ball Z - Tenkaichi Tag Team | ULUS10537 | 800 | black | black | black | autosave notice at 300 and 1200, then black after Cross: it opens a PGD-encrypted file (disc0:/sce_lbn0xe98b_size0x4A0), gives its key and, refused, tries again for good (part 55: sceKernelExtendThreadStack is here; scePower a85880d0 missing) |
+| Dragon Ball Z - Tenkaichi Tag Team | ULUS10537 | 800 | black | black | black | autosave notice at 300 and 1200, then black after Cross: it opens a PGD-encrypted file (disc0:/sce_lbn0xe98b_size0x4A0), gives its key and, refused, tries again for good (part 55: sceKernelExtendThreadStack is here; part 58: scePowerCheckWlanCoexistenceClock too) |
 | Dragonball Z Shin Budokai | ULUS10081 | 156 | menu | menu | menu | title, press start |
 | Dragonball Z Shin Budokai - Another Road | ULUS10234 | 98 | movie | movie | movie | intro movie |
 | Driver 76 | ULUS10235 | 142 | black | menu | menu | memory stick notice |
@@ -325,10 +333,10 @@ and now, and what the last frames showed or why a game stops.
 | Final Fantasy III | NPUH10125 | 324 | movie | movie | movie | intro movie |
 | Final Fantasy IV | ULUS10560 | 428 | movie | movie | movie | white fade after the title movie |
 | Final Fantasy Tactics - War of the Lions Tweak [v2.52] | ULUS10297 | 224 | menu | menu | menu | title |
-| Final Fantasy Type 0 | NPJH50443 | 254 | menu | menu | menu | autosave notice; scePower a85880d0 missing |
+| Final Fantasy Type 0 | NPJH50443 | 254 | menu | menu | menu | autosave notice (scePower a85880d0, missing before, since part 58) |
 | Full Auto 2 - Battlelines | ULUS10220 | 215 | menu | menu | menu | profile menu |
 | Fuuun Shinsengumi Bakumatsu den Portable [japan] | ULJM05561 | 436 | menu | menu | movie | memory stick check, then the intro |
-| Genso Suikoden Tsumugareshi Hyakunen no Toki | NPJH50535 | 666 | black | black | movie | anime intro with its subtitles (sceMt19937Init missing; sceCcc here since part 55) |
+| Genso Suikoden Tsumugareshi Hyakunen no Toki | NPJH50535 | 666 | black | black | movie | anime intro with its subtitles (sceCcc here since part 55, sceMt19937 since part 58) |
 | Ghost in the Shell - Stand Alone Complex | ULUS10020 | 498 | menu | menu | menu | title menu |
 | Ghostbusters - The Video Game | ULUS10486 | 413 | black | black | movie | intro |
 | Gitaroo Man Lives! | ULUS10207 | 516 | black | movie | movie | intro |
@@ -365,7 +373,7 @@ and now, and what the last frames showed or why a game stops.
 | Kidou Senshi Gundam Gundam vs. Gundam NEXT PLUS [English] | NPJH50107 | 238 | menu | menu | menu | pilot name notice |
 | Killzone - Liberation | UCUS98646 | 3 | black | gameplay | gameplay | in the first level (4.8 fps) |
 | King of Fighters, The - Orochi Saga | ULUS10360 | 391 | black | black | menu | "Loading...", the SNK Playmore logo and its intro, then its autosave notice (part 55: black and 9 fps before, spinning on sceCccDecodeUTF8, missing then) |
-| Kingdom Hearts Birth by Sleep Final Mix [English] | ULJM05775 | 442 | menu | menu | menu | autosave notice; scePower a85880d0 missing |
+| Kingdom Hearts Birth by Sleep Final Mix [English] | ULJM05775 | 442 | menu | menu | menu | autosave notice (scePower a85880d0, missing before, since part 58) |
 | Kisou Ryouhei Gunhound EX | NPJH50723 | 589 | menu | menu | menu | title, press start |
 | Kurohyou 2 [English v1.0] | NPJH50562 | 158 | black | black | menu | autosave notices |
 | Kurohyou Ryu ga Gotoku Shinshou [English v1.2 TeamK4L] | NPJH50333 | 270 | menu | menu | menu | title menu; sceRtcGetLastReincarnatedTime missing |
@@ -401,8 +409,8 @@ and now, and what the last frames showed or why a game stops.
 | Midnight Club - L.A. Remix | ULUS10383 | 46 | black | movie | menu | title (its attract scene at 3600 before) |
 | Midnight Club 3 - DUB Edition [v2.02] | ULUS10021 | 72 | movie | menu | menu | title, press start |
 | ModNation Racers | UCUS98741 | 184 | menu | menu | menu | title, press any button |
-| Monster Hunter Portable 3rd [English v6.1.0 Team Maverick One] | ULJM05800 | 593 | black | black | black | Capcom logo, then sceJpegCsc, sceMpegAvcConvertToYuv420 and scePauth 98b83b5d missing |
-| Monster Hunter Portable 3rd HD ver [English v6.1.0 Team Maverick One] | NPJB40001 | 1977 | black | black | black | black throughout: its program (26.5 MiB from 0x08804000) doesn't fit the 24 MiB user partition, so it never starts (part 55: given 64 MiB it shows a Dolby logo and stops at sceJpegCsc, as the PSP version does) |
+| Monster Hunter Portable 3rd [English v6.1.0 Team Maverick One] | ULJM05800 | 347 | black | black | movie | Capcom logo, memory stick check, intro movie at 3600; with Start at the title (frame 3900), its game menu and character creation, whose next screen stays empty after the GE's RET with no CALL (part 58: sceJpegCsc, sceMpegAvcConvertToYuv420 and scePauth were missing) |
+| Monster Hunter Portable 3rd HD ver [English v6.1.0 Team Maverick One] | NPJB40001 | 349 | black | black | movie | memory device check, intro movie with its sound at 3600; its title and game menu with Start (part 58: its 26.5 MiB program gets all of RAM, as the PS3 gave it; it never started before) |
 | Monster Kingdom Jewel Summoner | ULUS10211 | 53 | menu | movie | movie | intro |
 | Moto GP | ULUS10153 | 325 | menu | menu | menu | new save prompt |
 | MotorStorm - Arctic Edge | UCUS98743 | 185 | black | black | movie | its intro, a 3D scene (black after the notice before) |
@@ -457,10 +465,10 @@ and now, and what the last frames showed or why a game stops.
 | SOCOM - U.S. Navy SEALs - Fireteam Bravo 2 | UCUS98645 | 291 | menu | menu | menu | no save prompt |
 | SOCOM - U.S. Navy SEALs - Fireteam Bravo 3 | UCUS98716 | 562 | black | menu | menu | autosave notice |
 | SOCOM - U.S. Navy SEALs - Tactical Strike | UCUS98649 | 73 | menu | menu | menu | title |
-| Sol Trigger | NPJH50619 | 101 | black | menu | menu | title menu; sceP3da 374500a5 missing |
+| Sol Trigger | NPJH50619 | 101 | black | menu | menu | title menu; its sound from 20 s on since part 58 (sceP3da, missing before) |
 | Sonic Rivals | ULUS10195 | 210 | menu | menu | menu | title, press start (autosave notice and logos before) |
 | Sonic Rivals 2 | ULUS10323 | 226 | menu | menu | menu | title, press start |
-| Soulcalibur - Broken Destiny | ULUS10457 | 419 | menu | movie | movie | intro; sceHprm c7154136 missing |
+| Soulcalibur - Broken Destiny | ULUS10457 | 419 | menu | movie | movie | intro (sceHprmRegisterCallback, missing before, since part 58) |
 | Space Invaders Extreme | ULUS10346 | 614 | menu | menu | menu | name entry |
 | Spectral Souls | ULUS10076 | 369 | menu | menu | movie | its intro, the main menu after (black before: its movies drawn as gradients) |
 | Split-Second | ULUS10513 | 414 | black | movie | movie | intro |
@@ -486,7 +494,7 @@ and now, and what the last frames showed or why a game stops.
 | Tales of Phantasia X [English v1.2] | ULJS00293 | 468 | black | black | movie | anime intro |
 | Tales Of The World - Radiant Mythology 2 [English 31-08] | ULJS00175 | 114 | movie | movie | movie | intro |
 | Tekken - Dark Resurrection | ULUS10139 | 666 | black | black | black | autosave notice, then black |
-| Tekken 6 | ULUS10466 | 299 | black | black | movie | intro |
+| Tekken 6 | ULUS10466 | 299 | black | black | movie | intro (sceRtcTickAddSeconds and Minutes, missing before, since part 58) |
 | Tenchu - Shadow Assassins | ULUS10419 | 385 | movie | movie | movie | intro |
 | Tenchu - Time of the Assassins [UNDUB v1.5c] | ULES00277 | 515 | movie | movie | movie | intro |
 | The 3rd Birthday | ULUS10567 | 210 | menu | menu | menu | no system data prompt |
