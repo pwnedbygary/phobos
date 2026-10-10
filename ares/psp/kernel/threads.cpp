@@ -100,8 +100,10 @@ auto Kernel::restore(const Context& c) -> void {
 }
 
 //A thread may run again; returnValue is what the function it waited in returns (its v0). A message pipe's send or
-//receive tells how many bytes it moved, however its wait ends (messages.cpp).
+//receive tells how many bytes it moved, however its wait ends (messages.cpp); sceKernelGetTlsAddr, a block's
+//address, or NULL for any error the call under it returned (tls.cpp).
 auto Kernel::ready(Thread& thread, u32 returnValue) -> void {
+  if(thread.wait == Wait::Tlspl && thread.waitMode == TlsByLibrary && s32(returnValue) < 0) returnValue = 0;
   if(thread.timeoutPointer) {  //what's left of its timeout, in microseconds (none, if it ran out)
     u64 left = thread.wakeAt > cycles ? (thread.wakeAt - cycles) / (CPUFrequency / 1'000'000) : 0;
     memory.write(4, thread.timeoutPointer, returnValue == ErrorWaitTimeout ? 0 : u32(left));
@@ -324,6 +326,7 @@ auto Kernel::endThread(Thread& thread, s32 status) -> void {
   thread.callbacks = thread.inCallback = false;
   thread.waitBeforeCallback = {};
   thread.exitStatus = status;
+  extensionsEnded(thread);
   for(auto& [uid, other] : threads) {
     if(other->status == Status::Waiting && other->wait == Wait::ThreadEnd && other->waitID == thread.uid) {
       ready(*other, u32(status));
@@ -332,6 +335,7 @@ auto Kernel::endThread(Thread& thread, s32 status) -> void {
   waiterLeft(wait, thread.waitID);
   waiterLeft(before.wait, before.id);
   mutexesFreed(thread.uid);
+  tlsThreadEnded(thread.uid);
   moduleThreadEnded(thread, status);
   fontAbandoned(thread.uid);
   mpegAbandoned(thread.uid);
@@ -541,13 +545,13 @@ auto Kernel::sceKernelReferSystemStatus() -> void {
   result(0);
 }
 
-//The IDs of the thread manager's objects of a kind, in the order they were made (pspsdk's SceKernelIdListType):
-//1 threads, 2 semaphores, 3 event flags, 4 mailboxes, 5 VPLs, 6 FPLs, 7 message pipes, 8 callbacks, 9 thread event
+//The IDs of the thread manager's objects of a kind, in the order they were made (pspsdk's SceKernelIdListType): 1
+//threads, 2 semaphores, 3 event flags, 4 mailboxes, 5 VPLs, 6 FPLs, 7 message pipes, 8 callbacks, 9 thread event
 //handlers (the kernel has none), 10 alarms, 11 virtual timers, 12 mutexes, 13 lightweight mutexes, 14 thread-local
-//storage pools (none either); and threads by state, 64 sleeping, 65 delaying, 66 suspended (whatever else they're
-//doing), 67 dormant. False for any other kind. pspautotests' threads/threads/threadmanidlist recorded 1-14 and 64-67
-//taken and all else refused, 14 listing such a pool once made; pspsdk names 1-11 and 64-67. Chosen: 12 and 13 as the
-//two kinds of mutex, which came with the same firmware as those pools, in that order.
+//storage pools; and threads by state, 64 sleeping, 65 delaying, 66 suspended (whatever else they're doing), 67 dormant.
+//False for any other kind. pspautotests' threads/threads/threadmanidlist recorded 1-14 and 64-67 taken and all else
+//refused, 14 listing such a pool once made; pspsdk names 1-11 and 64-67. Chosen: 12 and 13 as the two kinds of mutex,
+//which came with the same firmware as those pools, in that order.
 auto Kernel::threadmanIDs(u32 type, std::vector<u32>& ids) -> bool {
   auto all = [&](auto& objects) { for(auto& entry : objects) ids.push_back(entry.first); };
   auto threadsWhere = [&](auto&& matches) {
@@ -570,7 +574,7 @@ auto Kernel::threadmanIDs(u32 type, std::vector<u32>& ids) -> bool {
   case 11: all(vtimers); return true;
   case 12: all(mutexes); return true;
   case 13: all(lwMutexes); return true;
-  case 14: return true;
+  case 14: all(tlsPools); return true;
   case 64: threadsWhere([&](const Thread& t) { return t.status == Status::Waiting && t.wait == Wait::Sleep; });
     return true;
   case 65: threadsWhere([&](const Thread& t) { return t.status == Status::Waiting && t.wait == Wait::Delay; });
@@ -603,9 +607,9 @@ auto Kernel::sceKernelGetThreadmanIdList() -> void {
   result(written);
 }
 
-//(ID): the kind of thread manager object an ID is (threadmanIDs()'s numbers, 1 to 13), or ILLEGAL_ARGUMENT for one
-//that isn't any, as threads/threads/threadmanidtype recorded: a thread 1, whatever it's doing; a deleted one, -1, 0,
-//1, a memory block and a module ILLEGAL_ARGUMENT.
+//(ID): the kind of thread manager object an ID is (threadmanIDs()'s numbers, 1 to 14; 14, a thread-local storage pool,
+//chosen: threadmanidtype makes none), or ILLEGAL_ARGUMENT for one that isn't any, as threads/threads/threadmanidtype
+//recorded: a thread 1, whatever it's doing; a deleted one, -1, 0, 1, a memory block and a module ILLEGAL_ARGUMENT.
 auto Kernel::sceKernelGetThreadmanIdType() -> void {
   u32 uid = arg(0);
   if(threads.count(uid)) return result(1);
@@ -619,6 +623,7 @@ auto Kernel::sceKernelGetThreadmanIdType() -> void {
   if(vtimers.count(uid)) return result(11);
   if(mutexes.count(uid)) return result(12);
   if(lwMutexes.count(uid)) return result(13);
+  if(tlsPools.count(uid)) return result(14);
   result(ErrorIllegalArgument);
 }
 
@@ -926,7 +931,7 @@ auto Kernel::sceKernelDeleteLwMutex() -> void {
       ready(*thread, ErrorWaitDeleted);
     }
   }
-  memory.write(4, workArea + 16, 0);
+  memory.write(4, workArea + 16, 0xffff'ffff);  //(what sceKernelTryLockLwMutex_600 knows a deleted one by)
   result(0);
   reschedule();
 }
@@ -982,6 +987,35 @@ auto Kernel::sceKernelTryLockLwMutex() -> void {
     return result(0);
   }
   result(ErrorLwMutexLocked);
+}
+
+//(work area, count): sceKernelTryLockLwMutex_600, the newer firmware's try, as Kernel_Library has it in user mode: the
+//lock taken in the work area alone, without asking the kernel, so a work area made by hand locks as well as one the
+//kernel made. As pspautotests' threads/lwmutex/try600 recorded for both: a deleted one is LWMUTEX_NOTFOUND (its ID
+//-1: sceKernelDeleteLwMutex), a count under 1 ILLEGAL_COUNT, and so is a count but 1 for a free mutex that isn't
+//recursive; its holder trying again is LWMUTEX_RECURSIVE for one that isn't, LWMUTEX_LOCK_OVERFLOW past 2^31 - 1
+//for one that is; held by another, LWMUTEX_LOCKED (where a PSP's older try answers MUTEX_LOCKED to everything,
+//threads/lwmutex/try). God Eater 2 tries its locks so.
+auto Kernel::sceKernelTryLockLwMutex_600() -> void {
+  if(!fromThread()) return;
+  u32 workArea = arg(0);
+  s32 count = arg(1);
+  if(memory.read(4, workArea + 16) == 0xffff'ffff) return result(ErrorLwMutexNotFound);
+  if(count <= 0) return result(ErrorIllegalCount);
+  s32 level = memory.read(4, workArea);
+  u32 owner = memory.read(4, workArea + 4), attributes = memory.read(4, workArea + 8);
+  bool recursive = attributes & 0x200;
+  if(!level) {
+    if(!recursive && count != 1) return result(ErrorIllegalCount);
+    memory.write(4, workArea, count);
+    memory.write(4, workArea + 4, current->uid);
+    return result(0);
+  }
+  if(owner != current->uid) return result(ErrorLwMutexLocked);
+  if(!recursive) return result(ErrorLwMutexRecursion);
+  if(level > 0x7fff'ffff - count) return result(ErrorLwMutexOverflow);
+  memory.write(4, workArea, level + count);
+  result(0);
 }
 
 //Gives an unlocked mutex to the thread that has waited for it longest, or with attribute 0x100 to the best of them
@@ -1166,6 +1200,55 @@ auto Kernel::sceKernelCheckThreadStack() -> void {
   if(!current || interrupting) return result(0);
   u32 sp = cpu.ipu.r[29], bottom = current->stackBlock;
   result(sp >= bottom && sp - bottom <= current->stackSize ? sp - bottom : 0);
+}
+
+//(size, function, argument): the function called on the calling thread with a stack lent for the call, its stack
+//pointer at the lent stack's top, and its result returned when it returns, the thread's own stack back then. As
+//threads/threads/extend recorded: the thread's ID the same, its status giving the lent stack while the function runs
+//(the size rounded up to 0x100: 640 and 768 bytes both 0x300) and its own again after, calls within calls, the
+//function's result; under 512 bytes refused (ILLEGAL_STACK_SIZE), -1 bytes more than there is (NO_MEMORY); the stack
+//taken from the top of the user partition, filled with 0xff bytes and the thread's ID at its bottom, as a new
+//thread's (createThread()), k0 still pointing into the thread's own. Dragon Ball Z: Tenkaichi Tag Team calls into its
+//game through it at boot. From an interrupt handler, refused (chosen).
+auto Kernel::sceKernelExtendThreadStack() -> void {
+  if(!current || interrupting) return result(ErrorIllegalContext);
+  if(arg(0) < 0x200) return result(ErrorIllegalStackSize);
+  auto block = allocate(arg(0), 1, 0, "stack: " + current->name);
+  if(!block) return result(ErrorNoMemory);
+  memory.fill(block->address, 0xff, block->size);
+  memory.write(4, block->address, current->uid);
+  u32 function = arg(1), argument = arg(2);
+  auto& lent = current->extensions.emplace_back();
+  save(lent.caller);
+  lent.stack = current->stackBlock, lent.size = current->stackSize;
+  current->stackBlock = block->address, current->stackSize = block->size;
+  cpu.ipu.r[4] = argument;
+  cpu.ipu.r[29] = block->address + block->size;
+  cpu.ipu.r[31] = Trampoline + 48;
+  cpu.ipu.pc = function;
+  cpu.ipu.pd = function + 4;
+}
+
+//The trampoline's syscall after a function on a lent stack returns (its result in v0): the thread carries on where
+//it called, its own stack back, the lent one freed.
+auto Kernel::extendReturned() -> void {
+  if(!current || current->extensions.empty()) return;
+  u32 value = cpu.ipu.r[2];
+  auto lent = current->extensions.back();
+  current->extensions.pop_back();
+  for(auto& block : blocks) if(block.address == current->stackBlock) { release(block.uid); break; }
+  current->stackBlock = lent.stack, current->stackSize = lent.size;
+  restore(lent.caller);
+  cpu.ipu.r[2] = value;
+}
+
+//A thread that ends with stacks lent to it gives them back, innermost first: its stack is its own again.
+auto Kernel::extensionsEnded(Thread& thread) -> void {
+  while(!thread.extensions.empty()) {
+    for(auto& block : blocks) if(block.address == thread.stackBlock) { release(block.uid); break; }
+    thread.stackBlock = thread.extensions.back().stack, thread.stackSize = thread.extensions.back().size;
+    thread.extensions.pop_back();
+  }
 }
 
 //The profiler's figures for a thread, or for all (sceKernelReferThreadProfiler, sceKernelReferGlobalProfiler): only

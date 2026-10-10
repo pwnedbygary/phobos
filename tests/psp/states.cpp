@@ -201,6 +201,7 @@ static auto stateFields() -> void {
   k.memoryStickCallbacks = {callback};
   u32 plainBlock = k.allocate(0x1000, 0, 0, "block")->uid;
   u32 spareStack = k.allocate(0xf00, 0, 0, "spare stack")->address;  //what thread one's stack moves to below
+  u32 lentStack = k.allocate(0x800, 0, 0, "lent stack")->address;    //and the stack lent to it for a call
   u32 fixedID = a.call("sceKernelCreateFpl", {a.string("fpl"), 2, 0, 16, 2, 0});
   u32 variableID = a.call("sceKernelCreateVpl", {a.string("vpl"), 2, 0, 0x100, 0});
   u32 spareID = a.call("sceKernelCreateFpl", {a.string("spare"), 2, 0, 16, 1, 0});
@@ -210,6 +211,9 @@ static auto stateFields() -> void {
   u32 mutexID = a.call("sceKernelCreateMutex", {a.string("mutex"), 0x200, 0, 0});
   u32 alarmID = a.call("sceKernelSetAlarm", {1000, 0x0880'7000, 0x11});
   u32 vtimerID = a.call("sceKernelCreateVTimer", {a.string("vtimer"), 0});
+  //part 55's: a thread-local storage pool of two 16-byte blocks, thread one holding the first
+  u32 tlsID = a.call("sceKernelCreateTlspl", {a.string("tls"), 2, 0, 16, 2, 0});
+  CHECK(a.call("sceKernelGetTlsAddr", {tlsID}), k.tlsPools[tlsID].address);
   u32 file = a.call("sceIoOpen", {a.string("ms0:/A.TXT"), 0x0001, 0});
   u32 other = a.call("sceIoOpen", {a.string("ms0:/B.TXT"), 0x0001, 0});
   u32 folder = a.call("sceIoDopen", {a.string("ms0:/LIST")});
@@ -452,6 +456,12 @@ static auto stateFields() -> void {
     {"thread waitDone", [&] { t.waitDone ^= 1; }}, {"thread waitResult", [&] { t.waitResult ^= 4; }},
     {"wait before callback done", [&] { t.waitBeforeCallback.done ^= 1; }},
     {"wait before callback resultPointer", [&] { t.waitBeforeCallback.resultPointer ^= 4; }},
+    //(a stack lent for a call: thread one's moves to it, its own kept with its registers as the call found them)
+    {"thread extensions", [&] {
+      t.extensions.push_back({t.context, t.stackBlock, t.stackSize});
+      t.stackBlock = lentStack, t.stackSize = 0x800;
+    }},
+    {"thread extension caller", [&] { t.extensions.back().caller.gpr[4] ^= 1; }},
     {"the thread running", [&] { k.current = k.threads[two].get(); }},
     {"readySequence", [&] { k.readySequence += 7; }}, {"nextVblank", [&] { k.nextVblank = k.cycles + 1000; }},
     {"vblanks", [&] { k.vblanks += 7; }},
@@ -524,6 +534,10 @@ static auto stateFields() -> void {
     {"dialog abortUpdates", [&] { k.dialog.abortUpdates = 3; }},
     {"dialog runningUpdates", [&] { k.dialog.runningUpdates = 2; }},
     {"utilityModules", [&] { k.utilityModules.push_back(0x301); }},
+    {"ccc jisToUnicode", [&] { k.ccc.jisToUnicode = 0x0890'0000; }},
+    {"ccc unicodeToJis", [&] { k.ccc.unicodeToJis = 0x0892'0000; }},
+    {"ccc errorUTF8", [&] { k.ccc.errorUTF8 = '?'; }}, {"ccc errorUTF16", [&] { k.ccc.errorUTF16 = 0xfffd; }},
+    {"ccc errorSJIS", [&] { k.ccc.errorSJIS = 0x3013; }},
     //(each pool as a machine could leave it, which loading checks: the spare made a variable pool whole, the fixed
     //pool's block renumbered with it, its blocks halved and doubled)
     {"pool name", [&] { fixedPool.name += "x"; }}, {"pool attributes", [&] { fixedPool.attributes ^= 1; }},
@@ -755,10 +769,20 @@ static auto stateFields() -> void {
     {"lwMutex initial", [&] { lw.initial = 2; }},
     {"display hcountBase", [&] { k.display.hcountBase = 0x1234; }},
   };
+  //part 55's: the thread-local storage pool's fields, each change leaving a pool a machine could have (thread one's
+  //block moved to the second, which thread one has since been made ready to hold)
+  auto& tls = k.tlsPools[tlsID];
+  std::vector<std::pair<std::string, std::function<void()>>> part55 = {
+    {"tls pool name", [&] { tls.name += "x"; }}, {"tls pool attributes", [&] { tls.attributes ^= 0x100; }},
+    {"tls pool address", [&] { tls.address += 4; }}, {"tls pool blockSize", [&] { tls.blockSize = 12; }},
+    {"tls pool stride", [&] { tls.stride = 20; }}, {"tls pool next", [&] { tls.next = 0; }},
+    {"tls pool holders", [&] { tls.holders = {0, u32(one)}; }},
+  };
   changes.insert(changes.end(), more.begin(), more.end());
   changes.insert(changes.end(), codecs.begin(), codecs.end());
   changes.insert(changes.end(), part28.begin(), part28.end());
   changes.insert(changes.end(), part32.begin(), part32.end());
+  changes.insert(changes.end(), part55.begin(), part55.end());
   for(auto& [field, change] : changes) {
     auto before = save(a);
     change();
@@ -914,6 +938,29 @@ static auto stateFields() -> void {
   //user partition
   refuses("a thread's stack that isn't a block", [&] { k.threads.at(one)->stackBlock += 0x100; });
   refuses("a thread's stack not its block's size", [&] { k.threads.at(one)->stackSize += 0x100; });
+  //a stack lent for a call: the thread's own, kept meanwhile, not a block; or lent to a thread that has ended
+  refuses("a thread's own stack, while lent another, that isn't a block", [&] {
+    k.threads.at(one)->extensions.back().stack += 0x100;
+  });
+  //(thread one made to have ended in a state that says nothing else of it: its TLS block and mutex let go)
+  auto ended = [&] {
+    k.threads.at(one)->status = Kernel::Status::Dormant;
+    for(auto& holder : k.tlsPools.begin()->second.holders) holder = 0;
+    auto& held = k.mutexes.at(mutexID);
+    held.count = 0, held.owner = 0;
+  };
+  refuses("a stack lent to a thread that has ended", ended);
+  {
+    ended();  //...which, its stack its own again, loads
+    auto& thread = *k.threads.at(one);
+    for(; !thread.extensions.empty(); thread.extensions.pop_back()) {
+      thread.stackBlock = thread.extensions.back().stack, thread.stackSize = thread.extensions.back().size;
+    }
+    KernelMachine fresh;
+    devices(fresh);
+    CHECK(load(fresh, save(a)), true);
+    CHECK(load(a, state), true);
+  }
   refuses("a thread's stack of 0x100 bytes", [&] {
     auto& thread = *k.threads.at(one);
     stackOf(thread).size = thread.stackSize = 0x100;
@@ -928,6 +975,14 @@ static auto stateFields() -> void {
     stackOf(thread).size = thread.stackSize = 0xffff'f000;
   });
   refuses("a block below the user partition", [&] { k.blocks.front().address = Kernel::UserMemory - 0x1000; });
+  //thread-local storage pools as no machine has them: an index its ID doesn't carry, a block held by a thread there
+  //isn't, a thread holding two blocks of one pool, blocks past the pool's memory
+  refuses("a tls pool whose ID doesn't carry its index", [&] { k.tlsPools.begin()->second.index ^= 1; });
+  refuses("a tls pool block held by a thread there isn't", [&] { k.tlsPools.begin()->second.holders[0] = 0x7777; });
+  refuses("a thread holding two blocks of a tls pool", [&] {
+    k.tlsPools.begin()->second.holders = {u32(one), u32(one)};
+  });
+  refuses("a tls pool's blocks past its memory", [&] { k.tlsPools.begin()->second.stride = 0x100; });
   refuses("a buffer in a slot with the DMA stopped", [&] { k.audio.dma.running = false; });
   refuses("a mixer channel's count not a multiple of 64", [&] { k.audio.channels[3].sampleCount = 100; });
   refuses("a slot with more left than its buffer holds", [&] { k.audio.channels[3].remaining = 192; });

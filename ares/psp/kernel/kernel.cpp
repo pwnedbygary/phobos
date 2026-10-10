@@ -35,6 +35,7 @@ namespace ares::PlayStationPortable {
 #include "display.cpp"
 #include "ge.cpp"
 #include "pools.cpp"
+#include "tls.cpp"
 #include "messages.cpp"
 #include "audio.cpp"
 #include "sas.cpp"
@@ -47,6 +48,7 @@ namespace ares::PlayStationPortable {
 #include "net.cpp"
 #include "pgf.cpp"
 #include "font.cpp"
+#include "ccc.cpp"
 #include "utility.cpp"
 #include "power.cpp"
 #include "system.cpp"
@@ -125,6 +127,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("ThreadManForUser",  "sceKernelChangeCurrentThreadAttr", &Kernel::sceKernelChangeCurrentThreadAttr);
   add("ThreadManForUser",  "sceKernelGetThreadStackFreeSize", &Kernel::sceKernelGetThreadStackFreeSize);
   add("ThreadManForUser",  "sceKernelCheckThreadStack",     &Kernel::sceKernelCheckThreadStack);
+  add("ThreadManForUser",  "sceKernelExtendThreadStack",    &Kernel::sceKernelExtendThreadStack);
   add("ThreadManForUser",  "sceKernelReferThreadProfiler",  &Kernel::sceKernelReferThreadProfiler);
   add("ThreadManForUser",  "sceKernelGetThreadCurrentPriority", &Kernel::sceKernelGetThreadCurrentPriority);
   add("ThreadManForUser",  "sceKernelRotateThreadReadyQueue", &Kernel::sceKernelRotateThreadReadyQueue);
@@ -147,6 +150,12 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("ThreadManForUser",  "sceKernelFreeVpl",              &Kernel::sceKernelFreeVpl);
   add("ThreadManForUser",  "sceKernelCancelVpl",            &Kernel::sceKernelCancelVpl);
   add("ThreadManForUser",  "sceKernelReferVplStatus",       &Kernel::sceKernelReferVplStatus);
+  add("ThreadManForUser",  "sceKernelCreateTlspl",          &Kernel::sceKernelCreateTlspl);
+  add("ThreadManForUser",  "sceKernelDeleteTlspl",          &Kernel::sceKernelDeleteTlspl);
+  add("ThreadManForUser",  "_sceKernelAllocateTlspl",       &Kernel::_sceKernelAllocateTlspl);
+  add("ThreadManForUser",  "sceKernelFreeTlspl",            &Kernel::sceKernelFreeTlspl);
+  add("ThreadManForUser",  "sceKernelReferTlsplStatus",     &Kernel::sceKernelReferTlsplStatus);
+  add("Kernel_Library",    "sceKernelGetTlsAddr",           &Kernel::sceKernelGetTlsAddr);
   add("ThreadManForUser",  "sceKernelCreateMsgPipe",        &Kernel::sceKernelCreateMsgPipe);
   add("ThreadManForUser",  "sceKernelDeleteMsgPipe",        &Kernel::sceKernelDeleteMsgPipe);
   add("ThreadManForUser",  "sceKernelSendMsgPipe",          &Kernel::sceKernelSendMsgPipe);
@@ -194,6 +203,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("ThreadManForUser",  "sceKernelCheckCallback",        &Kernel::sceKernelCheckCallback);
   add("Kernel_Library",    "sceKernelLockLwMutex",          &Kernel::sceKernelLockLwMutex);
   add("Kernel_Library",    "sceKernelTryLockLwMutex",       &Kernel::sceKernelTryLockLwMutex);
+  add("Kernel_Library",    "sceKernelTryLockLwMutex_600",   &Kernel::sceKernelTryLockLwMutex_600);
   add("Kernel_Library",    "sceKernelUnlockLwMutex",        &Kernel::sceKernelUnlockLwMutex);
   add("Kernel_Library",    "sceKernelLockLwMutexCB",        &Kernel::sceKernelLockLwMutexCB);
   add("Kernel_Library",    "sceKernelReferLwMutexStatus",   &Kernel::sceKernelReferLwMutexStatus);
@@ -707,6 +717,27 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceLibFont",        "sceFontPointToPixelV",          &Kernel::sceFontPointToPixelV);
   add("sceLibFont",        "sceFontPixelToPointH",          &Kernel::sceFontPixelToPointH);
   add("sceLibFont",        "sceFontPixelToPointV",          &Kernel::sceFontPixelToPointV);
+  add("sceCcc",            "sceCccSetTable",                &Kernel::sceCccSetTable);
+  add("sceCcc",            "sceCccUCStoJIS",                &Kernel::sceCccUCStoJIS);
+  add("sceCcc",            "sceCccJIStoUCS",                &Kernel::sceCccJIStoUCS);
+  add("sceCcc",            "sceCccUTF8toUTF16",             &Kernel::sceCccUTF8toUTF16);
+  add("sceCcc",            "sceCccUTF8toSJIS",              &Kernel::sceCccUTF8toSJIS);
+  add("sceCcc",            "sceCccUTF16toUTF8",             &Kernel::sceCccUTF16toUTF8);
+  add("sceCcc",            "sceCccUTF16toSJIS",             &Kernel::sceCccUTF16toSJIS);
+  add("sceCcc",            "sceCccSJIStoUTF8",              &Kernel::sceCccSJIStoUTF8);
+  add("sceCcc",            "sceCccSJIStoUTF16",             &Kernel::sceCccSJIStoUTF16);
+  add("sceCcc",            "sceCccStrlenUTF8",              &Kernel::sceCccStrlenUTF8);
+  add("sceCcc",            "sceCccStrlenUTF16",             &Kernel::sceCccStrlenUTF16);
+  add("sceCcc",            "sceCccStrlenSJIS",              &Kernel::sceCccStrlenSJIS);
+  add("sceCcc",            "sceCccEncodeUTF8",              &Kernel::sceCccEncodeUTF8);
+  add("sceCcc",            "sceCccEncodeUTF16",             &Kernel::sceCccEncodeUTF16);
+  add("sceCcc",            "sceCccEncodeSJIS",              &Kernel::sceCccEncodeSJIS);
+  add("sceCcc",            "sceCccDecodeUTF8",              &Kernel::sceCccDecodeUTF8);
+  add("sceCcc",            "sceCccDecodeUTF16",             &Kernel::sceCccDecodeUTF16);
+  add("sceCcc",            "sceCccDecodeSJIS",              &Kernel::sceCccDecodeSJIS);
+  add("sceCcc",            "sceCccSetErrorCharUTF8",        &Kernel::sceCccSetErrorCharUTF8);
+  add("sceCcc",            "sceCccSetErrorCharUTF16",       &Kernel::sceCccSetErrorCharUTF16);
+  add("sceCcc",            "sceCccSetErrorCharSJIS",        &Kernel::sceCccSetErrorCharSJIS);
   add("sceAtrac3plus",     "sceAtracGetAtracID",            &Kernel::sceAtracGetAtracID);
   add("sceAtrac3plus",     "sceAtracReleaseAtracID",        &Kernel::sceAtracReleaseAtracID);
   add("sceAtrac3plus",     "sceAtracReinit",                &Kernel::sceAtracReinit);
@@ -815,6 +846,7 @@ auto Kernel::power() -> void {
   mpegCalls.clear();
   mpegStreams.clear();
   psmfPlayer = {};
+  ccc = {};
   dialog = {};
   utilityModules.clear();
   imposeLanguage = imposeButton = 1;
@@ -836,6 +868,7 @@ auto Kernel::power() -> void {
   vblankPending = false;
   eventFlags.clear();
   pools.clear();
+  tlsPools.clear();
   pipes.clear();
   mailboxes.clear();
   callbacks.clear();
@@ -856,6 +889,13 @@ auto Kernel::power() -> void {
   geLeft = GeBudget;
   geCommands = 0;
   startTime = u64(std::time(nullptr)) * 1'000'000;
+  trampoline();
+}
+
+//The trampoline: the kernel's own code, where the functions it calls in the program return to, each to a syscall
+//that tells it which returned. Written at power on, and again as a state loads (serialize()): a loaded machine's
+//memory holds this kernel's returns, whatever the state's.
+auto Kernel::trampoline() -> void {
   memory.write(4, Trampoline, ThreadReturnCode << 6 | 0x0c);    //syscall: the thread's entry function returned
   memory.write(4, Trampoline + 4, 0x0000'000d);                  //break: never reached
   memory.write(4, Trampoline + 8, CallReturnCode << 6 | 0x0c);  //syscall: a call into the program returned
@@ -868,6 +908,8 @@ auto Kernel::power() -> void {
   memory.write(4, Trampoline + 36, 0x0000'000d);
   memory.write(4, Trampoline + 40, MpegReturnCode << 6 | 0x0c);  //syscall: a ringbuffer's callback returned
   memory.write(4, Trampoline + 44, 0x0000'000d);
+  memory.write(4, Trampoline + 48, ExtendReturnCode << 6 | 0x0c);  //syscall: a function on a lent stack returned
+  memory.write(4, Trampoline + 52, 0x0000'000d);
 }
 
 //Loads a program (an EBOOT.PBP, or an ELF on its own) and starts its first thread, as the PSP does when a game is
@@ -1055,6 +1097,10 @@ auto Kernel::dispatch(u32 code) -> bool {
   }
   if(code == MpegReturnCode) {
     mpegReturned();
+    return true;
+  }
+  if(code == ExtendReturnCode) {
+    extendReturned();
     return true;
   }
   if(code < FirstImportCode || code - FirstImportCode >= imports.size()) {

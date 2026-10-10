@@ -196,6 +196,25 @@ static auto selfModule(SelfStart how) -> TestModule {
   return m;
 }
 
+//"TESTLENT": as TESTSELF (module_start returning at once), but quit() puts module_stop's argument, 0x41524731, on its
+//own stack and unloads the module with it: sceKernelSelfStopUnloadModule(1, 4, sp).
+static auto lentModule() -> TestModule {
+  TestModule m;
+  m.name = "TESTLENT";
+  m.imports = {{"ModuleMgrForUser", Kernel::nid("sceKernelSelfStopUnloadModule")}};
+  m.code = {addiu(sp, sp, -16), sw(ra, 12, sp), lui(t0, 0x4152), ori(t0, t0, 0x4731), sw(t0, 0, sp),
+            addiu(a0, zero, 1), addiu(a1, zero, 4)};
+  callStub(m, 0x3c0, addu(a2, sp, zero));
+  m.code.insert(m.code.end(), {lw(ra, 12, sp), jr(ra), addiu(sp, sp, 16)});
+  m.exports = {{"SelfLib", {{QuitNID, 0}}}};
+  m.stop = m.code.size() * 4;
+  store(m.code, Results + 0x20, 0x5709);
+  m.code.insert(m.code.end(), {sw(a0, 4, t9), lw(t0, 0, a1), sw(t0, 8, t9), jr(ra), addiu(v0, zero, 0)});
+  m.start = m.code.size() * 4;
+  m.code.insert(m.code.end(), {jr(ra), addiu(v0, zero, 0)});
+  return m;
+}
+
 //"TESTSTATUS": StatusLib's quit() unloads the module it's in as later SDKs do,
 //sceKernelStopUnloadSelfModuleWithStatus(1, 4, Results + 0x30, Results + 0x40, options) (or without the status,
 //sceKernelStopUnloadSelfModule(4, Results + 0x30, Results + 0x40, options)), and if that's refused writes what it
@@ -1218,8 +1237,43 @@ static auto programUnloadsItself() -> void {
   }
 }
 
+//A module unloads itself from a function on a stack lent for the call (sceKernelExtendThreadStack), module_stop's
+//argument on that stack: the stack goes back as the caller ends, and module_stop's thread is given its memory for a
+//stack of its own, yet module_stop gets the argument whole. On both engines.
+static auto unloadFromLentStack() -> void {
+  HostFolder stick;
+  put(stick, "LENT.PRX", lentModule().build());
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    machine(m);
+    m.system.recompiler.enabled = recompile;
+    m.kernel.mount("ms0", stick.path.string());
+    u32 uid = m.call("sceKernelLoadModule", {m.string("ms0:/LENT.PRX"), 0, 0});
+    CHECK(m.kernel.modules.count(uid), 1);
+    if(!m.kernel.modules.count(uid)) continue;
+    m.call("sceKernelStartModule", {uid, 0, 0, 0, 0});
+    m.kernel.run(Kernel::VblankCycles);
+    u32 quit = 0;
+    for(auto& e : m.kernel.modules[uid].module.exports) if(e.nid == QuitNID) quit = e.address;
+    Assembler caller{m, 0x0880'1000};
+    caller.li(a0, 0x4000); caller.li(a1, quit); caller.li(a2, 0);
+    caller.call("sceKernelExtendThreadStack");
+    caller.call("sceKernelSleepThread");  //(not reached: the thread ends as the module unloads)
+    s32 thread = m.kernel.createThread("caller", 0x0880'1000, 0x20, 0x1000, 0, 0);
+    m.kernel.startThread(*m.kernel.threads[thread], 0, 0);
+    m.kernel.run(Kernel::VblankCycles);
+    CHECK(m.kernel.modules.count(uid), 0);
+    CHECK(m.kernel.threads.count(thread), 0);
+    CHECK(word(m.system, Results + 0x20), 0x5709);
+    CHECK(word(m.system, Results + 0x24), 4);
+    CHECK(word(m.system, Results + 0x28), 0x4152'4731);
+    for(auto& note : m.notes) CHECK(note == "no threads left to run", true);  //(none is, the module gone)
+  }
+}
+
 auto moduleTests() -> Tests {
   return {
+    {"modules unload themselves from a lent stack", unloadFromLentStack},
     {"modules start and link", startAndLink}, {"modules linking", linking}, {"modules stand-ins", standIns},
     {"modules identities", identities}, {"modules refusals", refusals}, {"modules sizes", sizes},
     {"modules unload themselves", unloadThemselves}, {"modules unload with a status", unloadWithStatus},
