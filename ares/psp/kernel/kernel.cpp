@@ -977,6 +977,11 @@ auto Kernel::start(const u8* data, u64 size, const std::string& path, std::strin
     high = segment.address + segment.size;  //the loader saw that each fits in memory
   }
   if(high && module.relocatable) low = UserMemory;
+  //A program bigger than the user partition gets all of RAM, as if it asked with MEMSIZE (sysmem.cpp): the PSP
+  //remasters Sony made for the PS3 (Monster Hunter Portable 3rd HD's 26.5 MiB from 0x08804000, its PARAM.SFO asking
+  //for nothing) ran with more memory than a PSP's 24 MiB, which a PSP-2000's 64 MiB holds. A program that fits sees
+  //the partition it always did.
+  if(high > userEnd() && high <= Memory::RAMBase + memory.ram.size()) largeMemory = true;
   if(high) {
     auto block = allocate(high - low, 2, low, module.name);
     if(!block || block->address != low) {  //it must be exactly where the program is
