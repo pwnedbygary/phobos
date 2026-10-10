@@ -485,8 +485,10 @@ static auto shortStep(f64 step) -> f64 { return std::trunc(step * 65536) / 65536
 
 //The GE's reciprocal's 128 straight chords (geReciprocal()): where chord s starts, round(2^17 / (1 + s/128)) (131072
 //down to 65793, never a half), and its slope over its 256 positions, the run to the next start over 4, rounded half
-//to even (a half away from zero misses measured texels). Two chords sit one unit high where round 5's persp-divide
-//and persp-floor sample them, so their starts are two counts low; their slopes are the unadjusted ones (part 60).
+//to even (half away from zero suits persp-divide, persp-floor and round 3's wall and floor a few pixels better but
+//leaves persp-wall 246 pixels apart, not 23, and persp-w3 28928, not 18944). Two chords sit one unit high where
+//round 5's persp-divide and persp-floor sample them, so their starts are two counts low; their slopes are the
+//unadjusted ones (part 60).
 struct ReciprocalChords {
   struct Chord { s32 start, slope; } chords[128];
   constexpr ReciprocalChords() : chords() {
@@ -534,7 +536,8 @@ static auto cutLowBits(float x) -> float {
 
 //A product kept to 24 significant bits and cut toward zero (the pixel's s * R(q); a float multiply would round): a
 //double's fraction past its top 23 bits cleared. Zeros, infinities and not a number stay as they are, and a double
-//too small for its leading one to be normal is far below any float.
+//too small for its leading one to be normal is far below any float. (One below 2^-126 then rounds as a float holds
+//it, with fewer bits: far below any texel.)
 static alwaysinline auto trunc24(f64 x) -> float {
   u64 bits;
   std::memcpy(&bits, &x, 8);
@@ -854,11 +857,12 @@ auto GE::triangle(const Look& look, const Vertex& a, const Vertex& b, const Vert
   if(needsZ) {
     r.depth = steps([](const Vertex& v) { return v.z > 0 ? u32(std::min(v.z, 65535.0f)) : 0u; });  //(not a number: 0)
   }
-  //In 3D, each corner takes q = R(w), s = float24(u * q), t = float24(v * q). s, t and q then become 15-bit
-  //integers on the largest exponent among the three of each, and are stepped from the same corner as the colors
-  //(part 60). A pixel's coordinate is the floored step times R of the floored q. With the texture matrix's q
-  //(TEXTURE_MAP_MODE 1) q is float24(q * R(w)), as the divide by q the blend had before carried over: not measured.
-  //(Every other way q is 1, and R(w) has 16 significant bits at most, which the cut keeps.)
+  //In 3D, each corner takes s = float24(u * R(w)), t = float24(v * R(w)) and q = float24(q * R(w)), where its own
+  //q is 1 but with the texture matrix's (TEXTURE_MAP_MODE 1: the divide by q the blend had before, carried over, not
+  //measured). Every other way q is then R(w) itself: it has 16 significant bits at most (but where it's a denormal,
+  //for w of 2^126 or more), which the cut keeps. s, t and q then become 15-bit integers on the largest exponent among
+  //the three of each, and are stepped from the same corner as the colors (part 60). A pixel's coordinate is the
+  //floored step times R of the floored q.
   if(look.textured && perspective) {
     float qs[3], ss[3], ts[3];
     for(u32 k = 0; k < 3; k++) {

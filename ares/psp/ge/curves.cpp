@@ -149,7 +149,7 @@ auto GE::patch(bool spline, u32 argument) -> void {
   if(!format.positionFormat) return;
   u32 divisionsU = std::max(commands[PatchDivision] & 0x7f, 1u);
   u32 divisionsV = std::max(commands[PatchDivision] >> 8 & 0x7f, 1u);
-  if(divisionsU > 64 || divisionsV > 64) return;  //(the PSP's GE hangs on it)
+  if(divisionsU > 64 || divisionsV > 64) return note("a curved surface cut more than 64 times (the PSP's GE hangs)");
   //The budget is checked before anything is worked out, so a surface past it allocates nothing.
   u64 columns = patchColumns(spline, ucount, divisionsU), rows = patchColumns(spline, vcount, divisionsV);
   if(!columns || !rows) return;

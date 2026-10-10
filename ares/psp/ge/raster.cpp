@@ -101,9 +101,8 @@ auto GE::spriteRows(const Job& job, s32 fromY, s32 toY) -> void {
 }
 
 //A triangle's rows. Its edges' functions (positive on the triangle's side, zero on the edge) are whole numbers, so
-//each row's pixels inside it are found by dividing, not by trying every pixel of the box around it, and the
-//functions step along the row by adding: the same numbers as working each out afresh. What a pixel's color, depth,
-//texture coordinates and fog are blended from is worked out only where the pipeline uses it.
+//each row's pixels inside it are found by dividing, not by trying every pixel of the box around it. A pixel's color,
+//depth, fog and texture coordinates are stepped from a corner (draw.cpp), each only where the pipeline uses it.
 template<u32 Format>
 auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
   if(job.fours) return triangleFours<Format>(job, fromY, toY);  //(four.cpp: the same pixels, four at a time)
@@ -112,7 +111,7 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
   auto& p = look.pixel;
   //Edge k, the one facing corner k (from corner k + 1 to corner k + 2), at (x, y) in sixteenths:
   //a[k] * x + b[k] * y + c[k]. It's zero along the edge's line and grows toward corner k, the triangle's inside (the
-  //corners are turned so), and at a pixel's middle it's the pixel's blending weight for corner k.
+  //corners are turned so).
   //The triangle covers the pixels at whose middles every edge's function is at least its least[k]. The functions are
   //whole numbers there (positions are whole sixteenths), so the test is exact. least[k] settles a middle exactly on
   //edge k's line (a function of 0): two triangles sharing an edge see it from either side, one's function the
