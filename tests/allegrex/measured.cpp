@@ -6,12 +6,12 @@
 //Covered here: the random number generator (its start, 64 seeds of 4096 draws, vrndi.q's lanes); vadd, vsub,
 //vmul and vdiv on a million spread-out inputs between them (NaN results included); the first 16384 spread-out
 //results of each math function the core computes exactly (vrcp, vnrcp, vrsq, vsqrt, vexp2, vrexp2, vsin, vnsin,
-//vcos, vasin: the *-spread-16k files, which start the full *-spread files); and vlog2, except from 4 up, where the
-//PSP sometimes gives one unit less than the core (its spread-out results, and every 1024th result from 1/2 up to
-//2). vdot's file is kept for when the core sums its products as the PSP does. From round 2: div and divu on 8192
-//pairs, dividing by zero included. From rounds 2 and 3: the FPU's conversions and arithmetic in each rounding mode,
-//on every kind of input (fpu-convert, fpu-arith) and on zeros and normal numbers (the -safe files), and FIR. From
-//round 3: vmul on products a sliver below the smallest normal number (vmul-tiny).
+//vcos, vasin: the *-spread-16k files, which start the full *-spread files); vlog2, except from 4 up, where the PSP
+//sometimes gives one unit less than the core (its spread-out results, and every 1024th result from 1/2 up to 2);
+//and vdot on 262144 spread-out quads (the adder, vfpuDot). From round 2: div and divu on 8192 pairs, dividing by
+//zero included. From rounds 2 and 3: the FPU's conversions and arithmetic in each rounding mode, on every kind of
+//input (fpu-convert, fpu-arith) and on zeros and normal numbers (the -safe files), and FIR. From round 3: vmul on
+//products a sliver below the smallest normal number (vmul-tiny).
 
 #include "harness.hpp"
 
@@ -89,6 +89,26 @@ static auto measuredArithmetic(const char* name, uint32_t instruction, uint32_t 
     for(uint32_t lane = 0; lane < 4; lane++) v[1 + 32 * lane] = next();
     m.cpu.execute(Base, instruction);
     for(uint32_t lane = 0; lane < 4; lane++) exact += hardware[quad * 4 + lane] == v[2 + 32 * lane];
+  }
+  CHECK(exact, hardware.size());
+}
+
+//vdot-spread.bin: vdot.q on quads from the generator (seed 16), s's four lanes then t's as in the arithmetic files,
+//one result a quad (S020).
+static auto measuredDot() -> void {
+  auto hardware = loadMeasured("vdot-spread.bin");
+  CHECK(hardware.size(), 1u << 18);
+  if(hardware.size() != 1u << 18) return;
+  Machine m;
+  m.cpu.power(Base);
+  auto& v = m.cpu.vfpu.r;
+  uint32_t state = 16, exact = 0;
+  auto next = [&] { return state = state * 1664525u + 1013904223u; };
+  for(uint32_t quad = 0; quad < hardware.size(); quad++) {
+    for(uint32_t lane = 0; lane < 4; lane++) v[32 * lane] = next();
+    for(uint32_t lane = 0; lane < 4; lane++) v[1 + 32 * lane] = next();
+    m.cpu.execute(Base, 0x64818082);  //vdot.q S020, C000, C010
+    exact += hardware[quad] == v[2];
   }
   CHECK(exact, hardware.size());
 }
@@ -251,6 +271,7 @@ auto measured() -> void {
   measuredArithmetic("vsub-spread.bin", 0x60818082, 13);
   measuredArithmetic("vmul-spread.bin", 0x64018082, 14);
   measuredArithmetic("vdiv-spread.bin", 0x63818082, 15);
+  measuredDot();
   measuredFunction("vrcp-spread-16k.bin", 0xd0108081, 1);  //vrcp.q C010, C000
   measuredFunction("vnrcp-spread-16k.bin", 0xd0188081, 2);
   measuredFunction("vrsq-spread-16k.bin", 0xd0118081, 3);

@@ -25,6 +25,47 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: the adder's carry (GTA: Liberty City Stories' twitching limbs) — 2026-10-08
+
+On `cursor/psp-vfpu-fits-2b67` (#177), for the stack above to merge up. The owner saw the player's limbs twitch
+standing by a car in Portland (RP6, Vulkan). It was #177's `vfpuDot`: when the final round to nearest carried out of
+the 24-bit mantissa, the exponent stayed, so a sum just under a power of two came out half of it. GTA's skinning
+dots unit vectors with themselves (`vmmul`, some `vcrsp`) and got 1/2 for 1, about eight times a frame standing still.
+
+- **Found:** the psp-runner from a state of the player beside the car, frame-to-frame differences over him: #169,
+  #172 and #175 identical and smooth; #177, #178 and #180 with a limb out for a frame 17 times in 80 frames, the same
+  in Software, Vulkan (MoltenVK) and with the interpreter; walking, a frame with his torso collapsed. Every result
+  the carry changed, logged in the game (1,305 in 160 frames): 1 → 1/2, or −1 → −1/2.
+- **Fix:** `vfpuDot` raises the exponent on that carry (interpreter-vfpu.cpp). The recompiler's `vdot` helper
+  (recompiler-vfpu.cpp) still summed in doubles, off the PSP on 19% of `vdot-spread`'s quads, so the engines
+  disagreed (#177's note had the recompiler calling the interpreter for the VFPU; vdot it didn't): it goes through
+  `vfpuDot` now.
+- **Measurements:** no measured adder input carries (4,730,624 results), so `compare.sh`'s tables are byte for byte
+  the same; `vdot-spread` is exact on both engines (262,144 quads), and `measured.cpp` now checks that file.
+- **Tests:** `vfpu edges` (the game's vector to 1; two measured `vdot-spread` quads, which the double sum misses on
+  the recompiler) and `vfpu matrices` (`vmmul` to 1) fail without their half of the fix; `measured on a PSP` checks
+  all of `vdot-spread` (interpreter). Allegrex 58/0 (sanitizers), PSP suite (ASan) 335/0, tests/psp/ares 307/0.
+- **Open:** a measured carry case (a probe in psp-vfpu-measurements.md's Next); `measured.cpp` still leaves out
+  `vlog2` from 4 up, which #177 fitted.
+
+## PSP core: VFPU measurement fits (vlog2 above 4 and the adders) — 2026-10-08
+
+Branch `cursor/psp-vfpu-fits-2b67`, on `cursor/psp-gpu-vk-acc-2b67` (#175; #172 under it). PR #177. Does not touch `ares/psp/ge/` or
+OpenGL. Co-authored with Cursor; independent review before the commit.
+
+- **`vlog2`:** coefficient cutting by level `d` and truncation to step `2^(d+2)` in units of `2^-24` (linear term
+  kept full width until then). Exact on every measured binade above 4, on `[1/2, 2)`, and on the spread-out file.
+- **Adders:** `vfpuDot` (2 extra bits, round-to-odd products, align+truncate, nearest-even sum). Used by `vdot`,
+  `vhdp`, `vfad`, `vavg` (weights `±1/size`), `vdet`, `vcrsp`, `vqmul`, `vmmul`, `vtfm`, `vhtfm`. Exact on every
+  round-2 adder file and on `vdot-spread`.
+- **Recorder:** ops.bin 1216/1216; ops3.bin 260/284 (24 open: swizzles past the size in `vcmp` / `vcrs` / `vcrsp` /
+  `vdet` / `vsocp` — probes sketched in `tools/psp-measure/vfpu.c`).
+- **Docs:** `docs/psp-vfpu-measurements.md` (fits section), Part 3 in `docs/psp-core.md`.
+- **Tests:** Allegrex 58/0; PSP suite (ASan) 330/0. Interpreter and recompiler match (recompiler still calls the
+  interpreter for VFPU). Independent review PASS (manifest/diff hashes in
+  `phobos-work/scratch/psp-vfpu-fits-review/`).
+- **Stack:** VFPU only; do not merge to master from here.
+
 ## Desktop Library: the PSP's disc titles — 2026-10-08
 
 Branch `local/psp-desktop-disc-info`, on top of `cursor/psp-gpu-hw4-2b67` (#172's tip, part 45). The desktop's
