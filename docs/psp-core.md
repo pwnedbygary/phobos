@@ -6860,3 +6860,164 @@ pspautotests). sceGeGetStack. A SIGNAL call's stack in use refused. A third CALL
 VRAM's end and sceGeEdramSetAddrTranslation(0)'s mirrors. God of War: Chains of Olympus's speed (7.7 frames a second,
 the kernel side's profile finding most of its time in the drawing a TRANSFER_START waits for: every transfer flushes
 everything pending, overlapping or not). The kernel-side causes above (the kernel side's branch).
+
+## Part 60: perspective texels divided by the GE's reciprocal; patch divisions
+
+On branch `cursor/psp-ge-fits3-2b67`, on top of #192's `cursor/psp-ge-lists-2b67` (#191 under it). Round 5 of
+`tools/psp-measure` (the owner's `psp-round5` pictures) and round 4 run again with #191's timed waits (`psp-round5b`)
+against the software renderer. A rule was taken only where every picture it touches got closer and none got worse.
+Original arithmetic: none of PPSSPP's code was copied, and JPCSP was not read. The screen projection is unchanged
+(part 10's trunc-toward-2048). Lighting is unchanged (below).
+
+### The perspective divide: fitted
+
+`persp-w3` holds w = 3 at every corner, so there is no perspective gradient, and u runs from 0 to 1024 texels. The
+core's per-pixel u was an IEEE divide and came out exactly one texel high on the left half of every row. The geometry
+and the edge weights already matched, so the divide is what differs: the GE divides by a reduced-precision reciprocal,
+not a full divide. The same path is what `persp-wall`, `persp-divide` and `persp-floor` exercise, and the older
+`3d-wall-texels` and `3d-floor-texels`.
+
+**The reciprocal** (`draw.cpp`'s `geReciprocal()`). It's a table of 128 straight chords across the fraction: the top
+7 bits of the magnitude's fraction pick the chord and the next 8 the position along it. Chord s starts at
+`round(131072 / (1 + s/128))` (131072 down to 65793; never an exact half, so which way a half rounds doesn't arise)
+and its slope is that run to the next start, over the 256 positions in the chord, rounded half to even (slopes from
+-254 to -64). Rounding the slopes' halves away from zero is a trade: `persp-divide` 209, `persp-floor` 305, round 3's
+`3d-wall-texels` 21 and `3d-floor-texels` 20 pixels apart, but `persp-wall` 246 and `persp-w3` 28928 (29,729 in all
+against 19,616), so halves go to the even. The value is `(64 * start + 63 + slope * position) >> 7`, in units of 2^-16
+of the fraction's reciprocal, placed back at the exponent. The sign is kept. A zero, a denormal, an infinity or not a
+number gives 0. Two chords sit one unit high at the positions
+`persp-divide` and `persp-floor` actually sample, so their starts are two counts low (the slopes stay the unadjusted
+ones): chords 5 and 58. Without chord 5's correction `persp-divide` has 343 pixels apart and `persp-floor` 355;
+without chord 58's, 305 and 353 (211 and 351 with both). Putting 49 or 73 one unit low as well would clear the rest of
+`persp-divide`'s exact-integer columns and make `persp-floor` worse, so they stay. The other 126 chords aren't pinned
+one by one: they're the formula's.
+
+**At a vertex** (`GE::triangle()`). s is u * R(w) and t is v * R(w), each with its low 8 fraction bits cut off (the
+GE's 24-bit float, toward zero), and q is R(w). s, t and q then become 15-bit integers on the unit of the largest
+exponent among the three of that one, cut toward zero. The 15 bits are sharply pinned: with 13, 14, 16 and 17 bits
+`persp-wall` has 5647, 2416, 1738 and 2396 pixels apart (23 with 15), and with 20 or 23 about 2550, as the plain
+divide had. With the texture matrix's own q (TEXTURE_MAP_MODE 1, projected textures), q is float24(q * R(w)): the
+divide by q the blend had before, carried over, not measured. (Every other way that's R(w) itself: it has 16
+significant bits at most, which the cut keeps, but where it's a denormal, for w of 2^126 or more.)
+
+**Across the triangle.** Those integers are stepped with part 48's stepper: the reciprocal of twice the area kept to
+16 significant bits and rounded down, the steps in 16384ths and rounded down, anchored at the leftmost corner (the
+topmost of two). A pixel takes the stepped value rounded down, times its unit. Its texture coordinate is that s (and
+t) times the reciprocal of that q, the product kept to 24 significant bits and cut toward zero (a rounded float
+multiply sits the wrong side of several of these texels; a product below 2^-126 then rounds as a float holds it). A q
+of 0 has the reciprocal 0, so the coordinate 0, and a q below 0 a reciprocal below 0 (no picture measures either:
+every corner's w is above 0 in all of them). Nearest filtering still takes `floor` of the coordinate (`texture.cpp`).
+The four-at-a-time path (`four.cpp`) and the one-at-a-time path (`raster.cpp`) give the same numbers: the same
+operations, but for the reciprocal and the 24-bit products, which the four-at-a-time path works out in its own way
+with every step exact (`reciprocalLanes()`, `productLanes()`). It's integer arithmetic and masks on the floats' bits
+(the chords a table made at compile time), with no division at a pixel. s, t and q are stepped there in 32-bit lanes
+that may run round, as colors and depth are: every value inside a triangle stays within 32 bits, whatever its steps
+(`fourFriendly()` says why), so no triangle is turned away for its size or steps any more.
+
+**What it does to the measured pictures** (pixels apart, before and after; every other file is as it was):
+
+| File | Before | After |
+| --- | --- | --- |
+| `persp-wall` | 2662 | 23 |
+| `persp-divide` | 3172 | 211 |
+| `persp-floor` | 6026 | 351 |
+| `persp-w3` | 33040 | 18944 |
+| `3d-wall-texels` (round 3) | 307 | 23 |
+| `3d-floor-texels` (round 2) | 291 | 64 |
+| `curves-made-up` | 13264 | 12974 |
+
+`persp-wall`'s u is exact; its 23 are the same v pixels `3d-wall-texels` still misses, one texel off. `persp-w3` is
+closer on every row and not exact: with w constant the stepper's gradient is a hair short of the true slope, so the
+coordinate saws across the texel boundary, 74 columns of row 128 still a few thousandths to a few hundredths of a texel
+the wrong side. Moving the chord w = 3 uses (chord 64) a unit either way doesn't beat 18944: raised it leaves
+`persp-w3` 18944 and `persp-floor` 353, lowered `persp-w3` 22016; the wall pictures stay at 23 either way.
+`persp-divide` and `persp-floor` keep a boundary pixel here and there (211 and 351); the two corrected chords are what
+those pictures pin, and the rest of the table is what they all share.
+
+**Not this path.** Sprites still blend 1 / w in IEEE doubles between the two corners (`spriteRows()`, `spriteFours()`):
+`persp-sprite` stays at 1204 and `3d-sprite-texels` at 72. Lines still divide from their two ends: `lines-texels` stays
+exact, and the other line pictures are unchanged. Curved surfaces' texels (`curves-texels`, 958) are unchanged; the
+290 `curves-made-up` picked up are patches that go through a triangle. The hardware renderer returns before this setup
+and draws with the GPU's own divide, as before.
+
+**Tests.** "draw3d perspective texels as a PSP draws them" (`tests/psp/draw3d.cpp`) draws round 5's `persp-w3` and
+`persp-divide` as `tools/psp-measure` drew them and checks six pixels as the owner's PSP drew them: five a float divide
+gets wrong, among them one chord 5's correction pins (without it the test fails), and one chord 58's pins, four pixels
+at a time and one at a time. "draw3d four pixels at a time against one", 20000 random primitives, both paths, now also gives some of them
+texture coordinates over dozens of repeats, corners from just past the near plane to nearly the far one, or the
+texture matrix's own q: they still match. Save states are unchanged (the new fields are on a job, which isn't
+serialized). The arithmetic was first written with library calls (frexp, ldexp) and then as it is now; the two drew
+every measured picture byte for byte the same. An independent review checked the reciprocal over all 2^32 floats, the
+products and the quantizing over hundreds of millions of random cases, and 1.2 million extreme triangles both ways,
+with no difference; the GE's source builds with GCC 11, as the Linux build's does.
+
+**Speed.** The GE's divide costs more than a float division: a table read per lane, the products in doubles, and the
+setup of s, t and q for every textured 3D triangle on the GE's thread. On the RP6 (the benchmark scenes, 300 frames,
+rounds taking turns with the build before this part):
+
+| Scene | 7 drawing threads, before → after | 1 drawing thread, before → after |
+| --- | --- | --- |
+| Midnight Club 3, race | 54.8 → 53.2 fps (−3%) | 23.7 → 21.7 fps (−8%) |
+| Midnight Club 3, menu | 74.6 → 70.2 fps (−6%) | |
+| Liberty City Stories, city | 75.1 → 70.0 fps (−7%) | 38.4 → 35.0 fps (−9%) |
+| Liberty City Stories, woods | 71.6 → 69.3 fps (−3%) | 38.9 → 35.1 fps (−10%) |
+| Lumines, demo (2D) | 186.9 → 198.1 fps (+6%) | |
+
+The 2D scene gains as a triangle no longer sets up the old blend's edge values, and as every triangle now goes four
+pixels at a time, whatever its size or steps (`fourFriendly()`: large triangles reaching past the screen used to go a
+pixel at a time). The profile (simpleperf on the RP6) puts the 3D scenes' loss about half on the new arithmetic itself
+and half on the pixel loop waiting for it (its chain from q to the texel is longer than the old divides'); with 7
+threads the GE's thread also draws more bands itself, as the workers fall behind. Tried and kept: a 64-bit division a
+triangle shared by all its steps, only the steps its pixels use, the corners quantized with integer shifts, the
+exponent applied as two exact powers of two (no branch). Tried and dropped: reading a chord once for a four on one
+chord (the test cost more, 5% in LCS's scenes). Left to try: the reciprocal worked out a four ahead, to hide its
+latency.
+
+### Patch divisions: round 4 again
+
+#191's program gives each GE list 5 seconds and resets the GE when it doesn't finish (part 48, "Round 4 again"). The
+owner's run (`psp-round5b`) finished round 4: `stall-check` drew the same rows before and after its reset as the core
+does, so the reset works on the PSP, and the curve counts came back as:
+
+| Test | Divisions along u | On the PSP |
+| --- | --- | --- |
+| `curves-count` | 16, 63, 64 | drawn (292 pixels lit) |
+| `curves-count-65` | 65 | the GE never finished, not a point drawn |
+| `curves-count-100` | 100 | the same |
+| `curves-count-128` | 128 | drawn as 1 division: 4 points, and the list finished |
+| `curves-count-200` | 200 | never finished, nothing drawn |
+| `curves-count-255` | 255 | the same |
+
+So PATCH_DIVISION's counts are 7 bits (bits 0-6 and 8-14): 128 is 0, which divides as 1 does (the rule already
+known), and 200 is 72, 255 127, both past 64 like 65 and 100. More than 64 divisions leave the GE drawing forever
+(`sceGeDrawSync` said "drawing", not at a stall address), and nothing of that surface is drawn. The core
+(`curves.cpp`'s `patch()`) now takes the counts as 7 bits and draws nothing of a surface with more than 64 along
+either way, its points still read, and goes on with the list: a game can't have relied on more, since the PSP would
+stop there. (Only u was measured past 64; v is taken to be the same.) `curves-count-128` is now identical, and the
+four that stalled are too (nothing drawn). `curves-count`'s 72 pixels apart at 16, 63 and 64 divisions are the
+vertices' placement part 48 found (a point a pixel over here and there), not refitted here.
+
+"curves malformed" (`tests/psp/curves.cpp`) checks the counts: 64 divisions light 65 points, 128 two, and 65, 127 and
+200 none, the points read each time; its budget checks now cut 255 points each way 64 times.
+
+### Lighting: left as it was
+
+`share()` still returns `ceil(256 * amount)`, held to -256..256. Round 5's `light-share-0` through `light-share-3` (16
+normals, 192 products each: 3072 channel values) have the PSP match the core on 2209, one level lower on 816 and one
+higher on 47, so the core is mostly right or one high. Rounding the share down instead wrecks the round-3 pictures
+(`light-diffuse`, `light-cosines`, `light-shine`, `light-materials`, `light-colors`, tens of thousands of pixels), which
+is what settled the rounding up (part 48). The leftover isn't that multiply: a level taken as the product times the
+true cosine still misses hundreds, well away from a level boundary, and a normal and the same normal turned don't share
+one scale. A fixed-point cosine from 8 to 20 bits still leaves about 631 of the 3072 off, so no change to the
+share was taken. `light-share-*` are as they were (43520, 39424, 42240, 36096), and so are `light-diffuse` (12288),
+`light-spot` (768), `light-point` (9728), `light-environment`
+(512), `light-materials` and `light-colors` (1536 each). `light-cosines`, `light-powered`, `light-shine` and
+`light-ambient` stay exact.
+
+### Left, and why
+
+The near-plane cut when the first or second corner is past the plane (`clip-split`, 14086; part 48 measured only the
+third) was not refitted. `steps-check` (27) and `steps-depth-check` (346) are the stepper's known leftovers and were
+left. `persp-sprite` (1204) is the sprite path above. `persp-w3`'s 18944, `persp-divide`'s 211 and `persp-floor`'s 351
+are the reciprocal and the stepper sitting a fraction of a texel the wrong side of a boundary; no further one-unit
+change of a chord improved one of them without making another worse.

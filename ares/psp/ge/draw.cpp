@@ -13,9 +13,10 @@
 //    counting only on left and top edges, so triangles sharing an edge don't both draw it. Texture coordinates are
 //    blended across from the corners at each pixel's middle (in 2D, stepped from a corner: shortStep()); color, fog
 //    and depth are stepped from a corner, as a PSP steps them (stepped()), or with flat shading (SHADE_MODE 0) the
-//    color is the last vertex's. In 3D the texture coordinates are blended as the perspective has them (as u/w and
-//    1/w, then divided, so a texture on a floor shrinks into the distance); colors, fog and depth aren't. Fog is
-//    turned into 0-255 at each corner first (measured: ramp-fog).
+//    color is the last vertex's. In 3D each corner's texture coordinate is divided by w with the GE's reciprocal
+//    first (geReciprocal()), then s, t and q are stepped as the colors are; a pixel divides s and t by q the
+//    same way. Colors, fog and depth aren't divided by w. Fog is turned into 0-255 at each corner first (measured:
+//    ramp-fog).
 //  - Culling (CULL_FACE_ENABLE, not in clear mode): with CULL 1 only triangles whose corners run clockwise on the
 //    screen are drawn, with 0 only those running counterclockwise (pspsdk's sceGuFrontFace(GU_CW) sets 1). Every
 //    other triangle of a strip runs the other way round, so for those it's the other way.
@@ -482,6 +483,114 @@ static auto chooseFilter(u32 filter, float texelsPerPixel) -> bool {
 //and which way a step going down (to the left or up) is cut, aren't pinned down; this fits every measurement.
 static auto shortStep(f64 step) -> f64 { return std::trunc(step * 65536) / 65536; }
 
+//The GE's reciprocal's 128 straight chords (geReciprocal()): where chord s starts, round(2^17 / (1 + s/128)) (131072
+//down to 65793, never a half), and its slope over its 256 positions, the run to the next start over 4, rounded half
+//to even (half away from zero suits persp-floor better, 305 pixels apart against 351, and round 3's floor, 20 against
+//64, but leaves persp-wall 246 apart, not 23, and persp-w3 28928, not 18944). Two chords sit one unit high where
+//round 5's persp-divide and persp-floor sample them, so their starts are two counts low; their slopes are the
+//unadjusted ones (part 60).
+struct ReciprocalChords {
+  struct Chord { s32 start, slope; } chords[128];
+  constexpr ReciprocalChords() : chords() {
+    for(u32 s = 0; s < 128; s++) chords[s].start = s32((16'777'216 + (128 + s) / 2) / (128 + s));
+    for(u32 s = 0; s < 128; s++) {
+      s32 run = (s < 127 ? chords[s + 1].start : 65536) - chords[s].start;  //(below zero)
+      s32 whole = run >> 2, quarters = run & 3;  //run / 4 is whole + quarters / 4, whole rounded down
+      chords[s].slope = whole + (quarters == 3 || (quarters == 2 && (whole & 1)));
+    }
+    chords[5].start -= 2, chords[58].start -= 2;
+  }
+};
+static constexpr ReciprocalChords reciprocalChords;
+
+//The GE's reciprocal, for the perspective divide (measured, docs/psp-core.md, part 60). Not a division: the top 7
+//bits of the magnitude's fraction pick a chord, the next 8 the position along it, and the result is that chord in
+//units of 2^-16 of the fraction's reciprocal (32769 to 65536), placed back at the exponent, the sign kept. A zero, a
+//denormal, an infinity or not a number gives 0.
+static alwaysinline auto geReciprocal(float x) -> float {
+  u32 bits;
+  std::memcpy(&bits, &x, 4);
+  u32 exponent = bits >> 23 & 255, chord = bits >> 16 & 127, at = bits >> 8 & 255;
+  if(exponent == 0 || exponent == 255) return 0.0f;
+  auto& line = reciprocalChords.chords[chord];
+  s32 q = (64 * line.start + 63 + line.slope * s32(at)) >> 7;
+  float value;
+  if(exponent <= 237) {  //times 2^(111 - exponent), a power of two a float holds: exact
+    u32 power = (238 - exponent) << 23;
+    std::memcpy(&value, &power, 4);
+    value *= float(q);
+  } else {
+    value = std::ldexp(float(q), 111 - s32(exponent));
+  }
+  return bits >> 31 ? -value : value;
+}
+
+//A float with its low 8 fraction bits cut off (the GE's float24): toward zero.
+static auto cutLowBits(float x) -> float {
+  u32 bits;
+  std::memcpy(&bits, &x, 4);
+  bits &= 0xffff'ff00;
+  std::memcpy(&x, &bits, 4);
+  return x;
+}
+
+//A product kept to 24 significant bits and cut toward zero (the pixel's s * R(q); a float multiply would round): a
+//double's fraction past its top 23 bits cleared. Zeros, infinities and not a number stay as they are, and a double
+//too small for its leading one to be normal is far below any float. (One below 2^-126 then rounds as a float holds
+//it, with fewer bits: far below any texel.)
+static alwaysinline auto trunc24(f64 x) -> float {
+  u64 bits;
+  std::memcpy(&bits, &x, 8);
+  u32 exponent = bits >> 52 & 2047;
+  if(exponent == 0 || exponent == 2047) return float(x);
+  bits &= ~u64(0) << 29;
+  std::memcpy(&x, &bits, 8);
+  return float(x);
+}
+
+//Three values as 15-bit integers on the unit of the largest one's exponent (the largest's leading one is the
+//integers' bit 14), cut toward zero; returns the unit (1 when all three are 0). A pixel rebuilds a value as the
+//integer times the unit. Infinities and not a number count as 0. Mostly each integer is the value's 24 bits (the
+//hidden one and the fraction) shifted down by how far its exponent is below the largest's, and 9 more; a trio with
+//a denormal, or whose largest is below 2^-112, is worked out in doubles, where its unit always fits (as a float, a
+//tiny trio's unit can be 0, which leaves its pixels' values 0).
+static auto quantize15(const float (&value)[3], s32 (&out)[3]) -> float {
+  u32 bits[3], top = 0;  //the largest exponent among the finite values
+  bool tiny = false;
+  for(u32 k = 0; k < 3; k++) {
+    std::memcpy(&bits[k], &value[k], 4);
+    u32 exponent = bits[k] >> 23 & 255;
+    if(exponent == 255) continue;
+    tiny |= exponent == 0 && bits[k] << 1;
+    top = std::max(top, exponent);
+  }
+  if(!tiny && top >= 15) {
+    for(u32 k = 0; k < 3; k++) {
+      u32 exponent = bits[k] >> 23 & 255, shift = 9 + top - exponent;
+      bool counts = exponent && exponent < 255 && shift < 24;  //(0, infinities and not a number: 0)
+      s32 magnitude = counts ? s32(((bits[k] & 0x7f'ffff) | 0x80'0000) >> shift) : 0;
+      out[k] = bits[k] >> 31 ? -magnitude : magnitude;
+    }
+    u32 unitBits = (top - 14) << 23;
+    float unit;
+    std::memcpy(&unit, &unitBits, 4);
+    return unit;
+  }
+  s32 largest = -1000;  //the largest one's exponent: it's 1 to 2 times 2 to that
+  for(u32 k = 0; k < 3; k++) {
+    u32 exponent = bits[k] >> 23 & 255, fraction = bits[k] & 0x7f'ffff;
+    if(exponent == 255 || (exponent == 0 && fraction == 0)) continue;
+    largest = std::max(largest, exponent ? s32(exponent) - 127 : -118 - __builtin_clz(fraction));  //(denormal)
+  }
+  if(largest == -1000) return out[0] = out[1] = out[2] = 0, 1.0f;
+  u64 unitBits = u64(1023 + largest - 14) << 52, inverseBits = u64(1023 - largest + 14) << 52;
+  f64 unit, inverse;
+  std::memcpy(&unit, &unitBits, 8);
+  std::memcpy(&inverse, &inverseBits, 8);
+  for(u32 k = 0; k < 3; k++) out[k] = std::isfinite(value[k]) ? s32(f64(value[k]) * inverse) : 0;
+  return float(unit);
+}
+
 //How a PSP steps colors, fog and depth across a triangle (measured, docs/psp-core.md, part 48: every pixel of round
 //3's color and fog ramps and bezier-flat, and round 2's gouraud, 3d-clip, 3d-floor-fog and 3d-floor-depth). Each
 //starts at the corner texture coordinates are stepped from (the leftmost, the topmost of two) and is stepped from
@@ -495,10 +604,16 @@ static auto shortStep(f64 step) -> f64 { return std::trunc(step * 65536) / 65536
 //    17 bits, or 15, leaves round 3's 3D ramps 144 and 320 values apart; steps in 512ths, 2048ths or 4096ths of a
 //    level a pixel (not 1024ths), thousands. Depths in 2^-12 or 2^-16, 692 and 209 of 3d-floor-depth's 7728.
 //  - An area of 2^bits or more, below 2^(bits + 1): the reciprocal 2^(bits + 16) / area, which keeps 16 bits.
-static auto stepped(const s64 (&x)[3], const s64 (&y)[3], s64 area, const s32 (&value)[3], s32 start)
-  -> GE::Job::Stepped {
+//(stepScale() works the reciprocal out once a triangle, for each value stepped.)
+struct StepScale { u32 shift; s64 reciprocal; };
+static auto stepScale(s64 area) -> StepScale {
   u32 shift = 64 - __builtin_clzll(u64(area)) + 15;  //(area is above 0, and below 2^36: positions are held)
-  s64 reciprocal = (s64(1) << shift) / area;
+  return {shift, (s64(1) << shift) / area};
+}
+static auto stepped(const s64 (&x)[3], const s64 (&y)[3], StepScale scale, const s32 (&value)[3], s32 start)
+  -> GE::Job::Stepped {
+  u32 shift = scale.shift;
+  s64 reciprocal = scale.reciprocal;
   s64 x1 = x[1] - x[0], y1 = y[1] - y[0], x2 = x[2] - x[0], y2 = y[2] - y[0];
   s64 across = s64(value[1] - value[0]) * y2 - s64(value[2] - value[0]) * y1;
   s64 down = s64(value[2] - value[0]) * x1 - s64(value[1] - value[0]) * x2;
@@ -710,11 +825,7 @@ auto GE::triangle(const Look& look, const Vertex& a, const Vertex& b, const Vert
     float texels = std::abs((vb.u - va.u) * (vc.v - va.v) - (vb.v - va.v) * (vc.u - va.u));
     job.linear = chooseFilter(commands[TextureFilter], std::sqrt(texels / (area / 256.0f)));
   }
-  for(u32 k = 0; k < 3; k++) {
-    auto& v = *p[k].vertex;
-    r.x[k] = p[k].x, r.y[k] = p[k].y;
-    r.u[k] = v.u, r.v[k] = v.v, r.q[k] = v.q, r.w[k] = v.clip[3];
-  }
+  for(u32 k = 0; k < 3; k++) r.x[k] = p[k].x, r.y[k] = p[k].y;
   //Without perspective, texture coordinates are stepped from the leftmost corner (see shortStep): its value, then a
   //step per pixel across and down, from the plane through the three corners.
   struct Steps { f64 start, across, down; };
@@ -731,14 +842,42 @@ auto GE::triangle(const Look& look, const Vertex& a, const Vertex& b, const Vert
   r.startX = p[leftmost].x, r.startY = p[leftmost].y;
   //Colors, the shine, fog and depth stepped from there (stepped()); fog held to 0-255 at each corner first
   //(fogAmount()), and a depth to 0-65535.
+  auto scale = stepScale(area);
   auto steps = [&](auto&& of) {
     s32 value[3] = {s32(of(*p[0].vertex)), s32(of(*p[1].vertex)), s32(of(*p[2].vertex))};
-    return stepped(r.x, r.y, area, value, value[leftmost]);
+    return stepped(r.x, r.y, scale, value, value[leftmost]);
   };
-  for(u32 n = 0; n < 4; n++) r.colors[n] = steps([n](const Vertex& v) { return channel(v.color, n); });
-  for(u32 n = 0; n < 3; n++) r.shine[n] = steps([n](const Vertex& v) { return channel(v.specular, n); });
-  r.fog = steps([](const Vertex& v) { return fogAmount(v.fog); });
-  r.depth = steps([](const Vertex& v) { return v.z > 0 ? u32(std::min(v.z, 65535.0f)) : 0u; });  //(not a number: 0)
+  //Only those its pixels use (as triangleRows() and triangleFours() choose them); the rest are left 0.
+  bool needsZ = pixel.depthRange || (pixel.clear ? pixel.clearDepth : pixel.depthTest);
+  if(!r.flat) for(u32 n = 0; n < 4; n++) r.colors[n] = steps([n](const Vertex& v) { return channel(v.color, n); });
+  if(!r.flat && r.shines) {
+    for(u32 n = 0; n < 3; n++) r.shine[n] = steps([n](const Vertex& v) { return channel(v.specular, n); });
+  }
+  if(pixel.fog) r.fog = steps([](const Vertex& v) { return fogAmount(v.fog); });
+  if(needsZ) {
+    r.depth = steps([](const Vertex& v) { return v.z > 0 ? u32(std::min(v.z, 65535.0f)) : 0u; });  //(not a number: 0)
+  }
+  //In 3D, each corner takes s = float24(u * R(w)), t = float24(v * R(w)) and q = float24(q * R(w)), where its own
+  //q is 1 but with the texture matrix's (TEXTURE_MAP_MODE 1: the divide by q the blend had before, carried over, not
+  //measured). Every other way q is then R(w) itself: it has 16 significant bits at most (but where it's a denormal,
+  //for w of 2^126 or more), which the cut keeps. s, t and q then become 15-bit integers on the largest exponent among
+  //the three of each, and are stepped from the same corner as the colors (part 60). A pixel's coordinate is the
+  //floored step times R of the floored q.
+  if(look.textured && perspective) {
+    float qs[3], ss[3], ts[3];
+    for(u32 k = 0; k < 3; k++) {
+      auto& v = *p[k].vertex;
+      float reciprocal = geReciprocal(v.clip[3]);
+      qs[k] = cutLowBits(v.q * reciprocal);
+      ss[k] = cutLowBits(v.u * reciprocal);
+      ts[k] = cutLowBits(v.v * reciprocal);
+    }
+    s32 si[3], ti[3], qi[3];
+    r.sUnit = quantize15(ss, si), r.tUnit = quantize15(ts, ti), r.qUnit = quantize15(qs, qi);
+    r.texS = stepped(r.x, r.y, scale, si, si[leftmost]);
+    r.texT = stepped(r.x, r.y, scale, ti, ti[leftmost]);
+    r.texQ = stepped(r.x, r.y, scale, qi, qi[leftmost]);
+  }
   if(look.textured && !perspective) {
     const Vertex& start = *p[leftmost].vertex;
     auto u = stepsFor(va.u, vb.u, vc.u, start.u), v = stepsFor(va.v, vb.v, vc.v, start.v);

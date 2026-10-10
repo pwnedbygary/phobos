@@ -25,6 +25,16 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP GE: perspective texels by the GE's reciprocal; patch divisions — 2026-10-09
+
+Branch `cursor/psp-ge-fits3-2b67`, on top of #192's `cursor/psp-ge-lists-2b67` (#191 under it). docs/psp-core.md, part
+60. 3D triangles divide by a 128-chord reciprocal and step s, t and q as colors: persp-wall 2662→23, persp-divide
+3172→211, persp-floor 6026→351, persp-w3 33040→18944, with the older wall and floor pictures; no division at a pixel.
+It costs the software renderer on the RP6 3-7% in 3D scenes with 7 drawing threads and 8-10% with one (part 60's
+table); a 2D scene is 6% faster. Round 4 again (the owner's `psp-round5b`): #191's reset freed the PSP's GE
+every time; PATCH_DIVISION's counts are 7 bits, and past 64 the GE hangs, so the core draws nothing of such a surface.
+Lighting, sprites, lines and the near-plane split are unchanged; no measured picture got worse.
+
 ## PSP core: the GE's RET with no CALL, and what the GE driver's callers see — 2026-10-09
 
 Branch `cursor/psp-ge-lists-2b67`, on top of #189's `cursor/psp-hle-games11-2b67`. docs/psp-core.md, part 57, has the
