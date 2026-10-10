@@ -25,6 +25,36 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: the GE's RET with no CALL, and what the GE driver's callers see — 2026-10-09
+
+Branch `cursor/psp-ge-lists-2b67`, on top of #189's `cursor/psp-hle-games11-2b67`. docs/psp-core.md, part 57, has the
+evidence; docs/psp-compatibility.md's changed rows are updated. Clean room: no PPSSPP or JPCSP source read.
+- **Fixes** (each its own commit, with tests): the GE passes over a RET with no CALL to return from (Need for Speed:
+  Most Wanted runs its CALLable frame buffer settings in place; it waited for good in sceGeDrawSync, black, and now
+  reaches its title on Software, Vulkan and Vulkan (fast)); from pspautotests' gpu/ge and gpu/signals recordings, the
+  driver's answers: sceGeDrawSync(1) no longer counts a list whose finish callback runs, "stalled" is the GE at the
+  list's own stall address, sceGeSaveContext saves from a callback that stopped the GE; a list queued twice is BUSY
+  for SDK 2.00 and later; programs built with SDKs up to 2.00.10 (or saying none) get the older driver's ways
+  (callbacks told no list address, a suspending signal's list paused in its callback, sceGeContinue's -1); a list
+  can't be queued at the head ahead of a paused list the GE still has (it would start over: unmeasured, chosen).
+- **The report's other black games**: none stuck in the GE. What each showed from the GE's side went to the notes
+  shared with the kernel side (`~/phobos-work/scratch/compat-notes.md`), whose parallel branch found and fixed the
+  causes: Def Jam (sceUmdActivate taking no time), Crush and Jak and Daxter (descriptors never reused), DOA Paradise
+  (an async read's bytes landing early), Tekken DR (clock conversion with no seconds pointer), Valhalla Knights (async
+  seeks), PaRappa (__sceSasCore taking no time), ProStreet's crash (sceIoDread's d_private layout). Ridge Racer draws
+  a clear a frame after its stub movie (not found). MACH isn't stuck (frame 3600 is a transition; judged again: menu).
+- **Numbers** (against part 55): menu or gameplay 178 -> 180, black or hang 19 -> 17. pspautotests' 22 GE driver
+  programs: 3 -> 7 printing what the PSP printed; gpu/signals' differing lines 147 -> 23 of 622.
+- **Checks**: tests/psp 382/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0; each new test fails without its
+  fix. No new saved state (version 20 still). 30 working games (14 of older SDKs) on both runners, Software, and 4 on
+  Vulkan: the same pictures but for run-to-run variation each runner shows on its own. An independent read-only
+  review; its findings fixed (the NFS row, the head enqueue, claims worded as unmeasured or as kernel-side findings).
+- **Left**: the GE's time (statuses a callback sees while a list draws), the state buffer's PSP layout, sceGeGetStack,
+  a SIGNAL call's stack in use refused, a third CALL, transfers past VRAM's end; God of War: Chains of Olympus's speed
+  (every TRANSFER_START flushes all pending drawing: the kernel side's profile).
+- Scratch: `~/phobos-work/scratch/ge-lists` (survey/ the black games' runs, at/ the pspautotests runs before and
+  after, regress/ the base and branch runners' frames, ge-hooks.py and dbg-hooks-1.patch for a traced runner).
+
 ## PSP measure: a GE stall no longer freezes the owner's PSP — 2026-10-09
 
 Branch `cursor/psp-measure-stall-2b67`, on top of #189's `cursor/psp-hle-games11-2b67`. Only `tools/psp-measure`,

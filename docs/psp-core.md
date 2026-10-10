@@ -6715,3 +6715,148 @@ and unlock recordings on hand-made work areas and counts (part 32 noted it). The
 Most Wanted). Black still, cause not found: Ridge Racer, Crush (its CPU stops in a call into the program at frame 730),
 Dead or Alive - Paradise, Def Jam, Jak and Daxter - The Lost Frontier, Tekken - Dark Resurrection, Valhalla Knights,
 PaRappa the Rapper, MACH; Need for Speed - ProStreet's crash after its notice.
+
+## Part 57: the GE's lists — a RET with no CALL, and what the driver's callers see
+
+On branch `cursor/psp-ge-lists-2b67`, on top of #189's `cursor/psp-hle-games11-2b67`. Sources: the games' own lists,
+traced with a scratch runner; pspautotests' gpu/ge, gpu/signals, gpu/callbacks and gpu/displaylist programs and their
+recordings (each named below; the programs were run through the kernel by a scratch runner answering their emulator
+devctl, their output compared with the recordings line for line); the PSP Developer Wiki's Hardware Registers and
+Graphics Engine pages (through the Wayback Machine); pspsdk's headers. No PPSSPP or JPCSP source was read.
+
+**1. A RET with no CALL to return from** (`ge/list.cpp`). Need for Speed: Most Wanted 5-1-0 waited for good in
+sceGeDrawSync from its ninth list on (frame 108): the GE stopped it at a RET at depth 0 and the driver never heard its
+end. The list, 0x0914dc40 (it takes turns with 0x090edc00), is the game's frame: its settings come in small lists made
+to be CALLed, a frame buffer's (FBP, FBW, PSM, then RET with FBP's low bits as its argument) and a depth buffer width's
+(ZBW, RET). Most of them it jumps over and CALLs (0x0914e448: BASE, JUMP 0x0914e468, six such words, BASE, CALL
+0x0914e450), but before drawing into its 256-wide target at 0x040cc000 it runs six such words, that target's, in place
+(0x0914e374-0x0914e388), RETs and all, and the frame's commands go on after them to its FINISH. Nothing public says what
+the GE does there: the wiki's Hardware Registers page gives it two return addresses (GE_RADR1, GE_RADR2, with
+GE_OADR1/2 for the offsets) and two depth bits in GE_LIST (0x100 at depth 1 or 2, 0x200 at 2), and an ERROR bit among
+its interrupts. The game draws on the PSP, so the GE goes on: back to the stale first return address (0x0914dcd0) it
+would loop through the frame for good, and stopped, the game would hang as it did here. So a RET at depth 0 is passed
+over, the next command next, the offset and depth as they were (and nothing noted: it isn't a fault). A third CALL
+still stops the GE (no game was seen doing it; no source says). With it the game goes on past its autosave prompt:
+its title art, its safe driving notice and its intro movie (frames 300, 600 and 1500-1800 with a frame every 300, on
+Software), then its title, "Press START button", from frame 2100, on all three renderers (below).
+
+**2. What the driver's callers see**, as pspautotests recorded (`kernel/ge.cpp`):
+- *A finish callback's list is done.* The PSP's driver runs a list's finish callback before taking it off the queue
+  and before starting the next (gpu/ge/queue2: "a finish callback runs before the next list is started, with its own
+  list still linked"), and there sceGeDrawSync(1) no longer counts it: 0 when it's the last, 2 with another queued
+  behind (queue2's "Finish callback ordering"; gpu/signals' simple, sync, pause, suspend, jumps, gpu/displaylist/state).
+  Phobos said 2 for the last one too. A game whose finish callback asks whether drawing is over would have waited.
+- *A list's own stall address.* "Stopped at its stall address" (3) is the GE waiting where the list's stall address
+  is: between a PAUSE signal and the FINISH that delivers it, a list's stall address moved on goes no further than the
+  list (only a running list's reaches the GE), so the GE waits on and the list reads as drawing (queue2's "Pause
+  window": 3, then 2; Phobos kept saying 3).
+- *sceGeSaveContext from a callback that stopped the GE.* Waiting for a suspending SIGNAL's or a FINISH's callback,
+  the GE has stopped, and sceGeSaveContext saves (gpu/ge/callbackstate: "a GE that has stopped — which is all
+  sceGeSaveContext cares about"); with the GE running on (a SIGNAL that lets it go on), or stalled, it's -1 still.
+  sceGeRestoreContext is refused as before while a list is the GE's (unmeasured there; it would move the list).
+- *A list queued twice.* Built with SDK 2.00 or later (gpu/ge/queue: 0x02000000 refuses, 0x01000010 doesn't), a
+  program can't queue a list at an address the queue holds: BUSY. The driver compares the address it keeps for each
+  queued list (queue2: "against the list's start address, not where it is now"), which is where a list starts, or where
+  it was broken off or paused, the address it would go on from (queue2: enqueueing where a broken-off list stopped is
+  refused, its start then isn't); both of memory's views (the uncached one too), and the list whose finish callback
+  runs, still queued (queue2: from its own finish callback). Phobos's list registers hold exactly that address while a
+  list isn't the GE's, so they're compared.
+- *Programs built with older SDKs*, up to 2.00.10 or saying none. A suspending SIGNAL's list reads as paused (4)
+  while its callback runs, the GE still on it, so breaking it off from the callback is BUSY, and a stall address moved
+  there is the list's alone: the GE goes on to where it was to stop, the list reading as drawing, until it's moved on
+  again (handlercalls with 0x01000010, suspend saying none; handlercalls: "above this SDK version [0x02000010] the
+  list isn't PAUSED during the handler"). Callbacks aren't told where the list had got to (0 for the third argument:
+  simple, pause2, jumps, gpu/callbacks/ge_callbacks saying none; the list's address at 0x02080000 and 0x03080000 in
+  pause2, and at 6.60), and sceGeContinue on a list drawing says -1, not ALREADY (simple and continue saying none,
+  ALREADY at 6.60): taken to change at handlercalls' cut, which those recordings allow. Unmeasured, and chosen so the
+  list the GE still has isn't taken from under it: sceGeContinue on it (paused for that callback, or on its way to a
+  PAUSE's FINISH, whose BUSY queue2 recorded) is BUSY, and sceGeListEnQueueHead ahead of it is INVALID_VALUE, as for
+  a front list that isn't paused (before, it put the list back in the queue under the GE, which started it over).
+
+Of the 22 driver programs (gpu/ge 11, gpu/signals 8, gpu/callbacks 1, gpu/displaylist 2), 3 printed what the PSP
+printed before (alignment, edram, enqueueparam) and 7 do now (ge_callbacks, callbackstate, queue, jumps besides). Of
+gpu/signals' 622 recorded lines 147 differed, now 23; of the other 14 programs' 938, 236, now 215 (edramswizzle's
+swizzled patterns, unchanged, most of them).
+What's left in the others is mostly the GE's time: on a PSP a list takes time, so a callback for a SIGNAL that lets the
+GE go on finds the list still drawing (Phobos's GE, taking no time, is past it: continue, simple's kind 2), a
+thread waiting in sceGeDrawSync is rescheduled (the [r] marks), intrsuspend's list is still drawing. The rest:
+the GE state buffer's layout (context and break read its words: the PSP keeps the vertex, index and offset addresses
+at words 5 to 7, command 0x17's word at 26, and writes 386 words at most; Phobos's own layout is 419 words, inside
+the 512 of pspsdk's PspGeContext), sceGeGetStack (get: not here; no game in the library calls it), a SIGNAL call's
+stack in use by a started list refused (queue2's shared stack), break's DrawSync(1) after a list is queued at the head
+of a broken-off one (state: 3 on the PSP), and the transfers' and VRAM mirrors' edges with sceGeEdramSetAddrTranslation
+(0) (gpu/transfer/invalid and mirrors: a transfer past VRAM's end wraps to its start).
+
+**The report's black games** (traced in the scratch runner: thread states and the GE's queue at frames 300, 1200, 2400
+and 3600, a frame every 300, then traces of each one's calls and lists). Only Need for Speed: Most Wanted was stuck in
+the GE. For the others the GE draws what it's given; what each showed from the GE's side went to the notes shared with
+the kernel side's parallel branch, which found and fixed the causes there:
+- *Def Jam: Fight for NY*: its GE init lists (state only, no PRIM) finish at once; DVDUMD_LOAD_MODULE (priority 0x32)
+  runs before 'file' (0x6f) has made UMD_SAMPLE_IO_SEMA, waits on semaphore -1 and ends; main polls its end for good.
+  The kernel side: sceUmdActivate takes no time.
+- *Ridge Racer*: after its opening movie each frame's list is one clear (18 commands); the disc image's movies are
+  139264-byte stubs (3 pictures, no sound) and the movie tears down cleanly; what the game waits for after it isn't
+  the GE, and isn't found.
+- *Crush*: its buffered file reader's memcpy runs with a size near 0x7e000000 over all of RAM (the program's code too,
+  hence the crash in a VBlank handler at frame 730), from a corrupted read. The kernel side: file descriptors handed
+  out without reuse land the game's per-descriptor counter in its read buffer.
+- *Tekken: Dark Resurrection*: after its logo the GE gets nothing; its intro movie never decodes a picture. The kernel
+  side: its frame limiter waits for good on sceKernelSysClock2USecWide given no seconds pointer.
+- *Dead or Alive Paradise*: a list a frame, all finished; its async read is re-issued for good. The kernel side: the
+  read's bytes landed as it was made, before the game's marker.
+- *Jak and Daxter: The Lost Frontier* and *PaRappa the Rapper*: the GE never gets a list; the first opens and closes an
+  LBN file 87,861 times in 200 frames (the kernel side: descriptors), the second's sound thread spins at the top
+  priority on sceAudioOutputPannedBlocking refusing an unreserved channel 0 (the kernel side: __sceSasCore taking no
+  time, so the thread never lets the game reserve its channels).
+- *Valhalla Knights*: a clear and a fade a frame; it seeks its first file over and over, never reading it. The kernel
+  side: the asynchronous seek still under way when it looks.
+- *Need for Speed: ProStreet*'s crash: sceIoDread fills 1040 bytes from the entry's d_private (0x09fff380) over its
+  caller's saved registers. The kernel side: the game's buffer is the older 272-byte layout, written as the newer one.
+- *MACH* isn't stuck: with a frame every 50 and 300 to 5400 it shows its title from 2100, a black transition at 3600
+  (the report's frame), its attract movie and the title again. Judged again: menu.
+
+**Save states.** Nothing new is kept: the RET needs no state, and the driver's new answers come from what was kept
+already (each list's state and registers, the SDK version). Version 20 still; no layout change.
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 382 groups, none failing. `tests/allegrex/run-tests.sh`: 58, none
+failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing. New and changed groups: "ge moving" (a frame buffer's
+settings made to be CALLed, run in place: passed over, the offset kept), "ge callbacks see the ge stopped" (both SDK
+ages), "ge pause window", "ge lists queued twice", "ge suspending signals' callbacks" (also sceGeContinue and a list
+queued at the head from the callback), "ge callbacks" (both SDK ages), "ge break and callbacks" (its last list's
+finish callback now reads 0). Each fails without its fix, each fix taken away alone (the RET: 4 checks; the finish
+callback's sceGeDrawSync(1): 6; the list's own stall address: 3; sceGeSaveContext: 6; the twice-queued list: 6; the
+older SDKs: 14; sceGeContinue's BUSY for a list the GE still has: 10; the head enqueue: 6). Three independent read-only
+reviews: the first found the report's Need for Speed row left unchanged, the head enqueue (above), and claims to word
+as unmeasured or as the kernel side's findings; the second, fail counts out of date and wording to tighten; the third
+passed, with comments' wording to tighten; all fixed.
+
+**The games** (the report's runs: 3600 frames, Start at 120 and Cross at 1800, 2 GE threads, frames at 300, 1200, 2400
+and 3600; the base commit's runner and this branch's):
+- *Need for Speed: Most Wanted 5-1-0*: black throughout before; now, on all three renderers, its title art at 300 and
+  its title, "Press START button", at 2100 and 3600 (black at 1200, between its notice and its movie), at 19 frames a
+  second on Software and on Vulkan, 14 on Vulkan (fast). Software and Vulkan (accurate) give the same pictures at the
+  five frames taken (60, 300, 1200, 2100, 3600); Vulkan (fast) is within 0.44 of 255 of them (its own transform:
+  part 53).
+- *MACH*: judged again (above). *Ridge Racer*: as before, black after its movie.
+- Thirty working games on Software: 14 built with SDKs up to 2.00.10 or saying none (Lumines, Twisted Metal: Head-On,
+  Ape Escape: On the Loose, Darkstalkers Chronicle, Hot Shots Golf: Open Tee, Metal Gear Acid, Need for Speed:
+  Underground Rivals, Tony Hawk's Underground 2 Remix, Burnout Legends, Death Jr., ATV Offroad Fury: Blazin' Trails,
+  Archer Maclean's Mercury, MediEvil Resurrection; Tokobot at 2.00.10) and 16 newer (Gradius Collection, Liberty City
+  Stories, Pursuit Force, Ridge Racer 2, Crisis Core, Patapon 2, LocoRoco, Midnight Club 3, Peace Walker, Dissidia,
+  Ys Seven, Ratchet & Clank: Size Matters, Virtua Tennis 3, Daxter, Lumines II, Ultimate Ghosts 'n Goblins). 25 give
+  the same pictures at all four frames. The other 5 differ at a frame or two by an animation step (Dissidia's logo
+  fading in at 300, Lumines's title background at 1200, Peace Walker at 300, Pursuit Force at 2400, LocoRoco's title
+  at 2400 and 3600); run again, each runner differs from itself as much (the base runner from itself in LocoRoco,
+  this branch's in the other four), and the two runners' second runs match but for LocoRoco, which varies on its own.
+- On Vulkan (accurate), Lumines, Tokobot, Crisis Core and Hot Shots Golf: the same pictures on both runners at all
+  four frames.
+- The final build (after the review's fixes) against the base runner: Lumines, Tokobot, Twisted Metal, Metal Gear
+  Acid, Crisis Core, Patapon 2 and Ridge Racer 2 the same at all four frames; Need for Speed: Most Wanted's frames as
+  the branch's earlier run.
+
+**Left, and why.** The GE's time (a list taking time to draw: the statuses a callback or a poll would see meanwhile;
+not modelled, as part 9 decided). The state buffer's layout as the PSP's (programs that look inside it: two
+pspautotests). sceGeGetStack. A SIGNAL call's stack in use refused. A third CALL (still stops the GE). Transfers past
+VRAM's end and sceGeEdramSetAddrTranslation(0)'s mirrors. God of War: Chains of Olympus's speed (7.7 frames a second,
+the kernel side's profile finding most of its time in the drawing a TRANSFER_START waits for: every transfer flushes
+everything pending, overlapping or not). The kernel-side causes above (the kernel side's branch).
