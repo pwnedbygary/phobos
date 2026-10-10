@@ -608,12 +608,33 @@ static auto atracLowLevel() -> void {
   CHECK(m.notes.size(), 0);
 }
 
+//The low level in a state: the ID's parameters kept, and its decoder, made afresh, primed with the frame decoded last.
+static auto atracLowLevelState() -> void {
+  Machine m;
+  constexpr u32 Parameters = R + 0x100, Used = R + 0x110, Written = R + 0x114, Frame = File + 0x1000;
+  CHECK(m.call("sceAtracGetAtracID", {0x1000}), 0);
+  m.system.memory.write(4, Parameters, 2), m.system.memory.write(4, Parameters + 4, 1);
+  m.system.memory.write(4, Parameters + 8, 376);
+  CHECK(m.call("sceAtracLowLevelInitDecoder", {0, Parameters}), 0);
+  m.system.memory.fill(Frame, 0x5a, 376);
+  m.system.memory.write(2, Frame, 7);
+  CHECK(m.call("sceAtracLowLevelDecode", {0, Frame, Used, Samples, Written}), 0);
+  auto state = saveState(m);
+  Machine n;
+  CHECK(loadState(n, state), true);
+  CHECK(saveState(n) == state, true);
+  n.system.memory.write(2, Frame, 8);
+  CHECK(n.call("sceAtracLowLevelDecode", {0, Frame, Used, Samples, Written}), 0);
+  CHECK(*n.log == std::vector<s32>({7, 8}), true);
+  CHECK(n.system.memory.read(2, Samples) == 8 && n.system.memory.read(4, Written) == 2048 * 2, true);
+}
+
 auto atracTests() -> Tests {
   return {{"atrac ids", atracIDs}, {"atrac setting", atracSetting}, {"atrac whole file", atracWholeFile},
           {"atrac halfway", atracHalfway}, {"atrac streamed", atracStreamed}, {"atrac looped", atracLooped},
           {"atrac second buffer", atracSecondBuffer}, {"atrac reset", atracReset}, {"atrac bad frame", atracBadFrame},
           {"atrac states", atracStates}, {"atrac header sizes", atracHeaderSizes}, {"atrac ffmpeg", atracFFmpeg},
-          {"atrac low level", atracLowLevel}};
+          {"atrac low level", atracLowLevel}, {"atrac low level in a state", atracLowLevelState}};
 }
 
 }

@@ -675,6 +675,15 @@ static auto stateFields() -> void {
     {"atrac laps", [&] { at.readLap = 1, at.writeLap = 1; }}, {"atrac writeOff", [&] { at.writeOff += 8; }},
     {"atrac writeFileOff", [&] { at.writeFileOff += 8; }}, {"atrac loopsAhead", [&] { at.loopsAhead = 1; }},
     {"atrac recent", [&] { at.recent[0] ^= 1; }}, {"atrac contexts", [&] { k.atracContexts = contexts; }},
+    {"atrac lowLevel", [&] {  //ATRAC3's ID 1 given parameters (atrac.cpp's low level)
+      auto& low = k.atracs[1];
+      low.codec = 0x1001, low.lowLevel = true, low.channels = 2, low.outputChannels = 1, low.frameBytes = 0xc0;
+      low.frameSamples = 1024, low.delay = 69;
+    }},
+    {"jpeg initialized", [&] { k.jpeg.initialized = true; }},
+    {"jpeg created", [&] { k.jpeg.initialized = k.jpeg.created = true; }},
+    {"jpeg width", [&] { k.jpeg.width = 480; }}, {"jpeg height", [&] { k.jpeg.height = -1; }},
+    {"hprm callbacks", [&] { k.hprmCallbacks[3] = callback; }},
     {"mp3 reserved", [&] { k.mp3s[1].reserved = true; }}, {"mp3 loopSet", [&] { mp.loopSet = true; }},
     {"mp3 start", [&] { mp.start = 0x10; }}, {"mp3 end", [&] { mp.end = 0x20000; }},
     {"mp3 buffer", [&] { mp.buffer ^= 0x40; }}, {"mp3 bufferSize", [&] { mp.bufferSize = 16384; }},
@@ -1431,6 +1440,21 @@ static auto stateFields() -> void {
   refuses("a lightweight mutex made held twice that isn't recursive", [&] {
     k.lwMutexes.begin()->second.attributes = 0, k.lwMutexes.begin()->second.initial = 2;
   });
+  //part 58's: a sceJpeg context made with the library not started; a low-level ATRAC ID with a file, or parameters
+  //sceAtracLowLevelInitDecoder refuses
+  refuses("a jpeg context with the library not started", [&] { k.jpeg.initialized = false, k.jpeg.created = true; });
+  refuses("a jpeg context wider than 1024", [&] { k.jpeg.width = 1025; });
+  auto lowLevel = [&]() -> Kernel::Atrac& {  //(ID 1 is ATRAC3's in this state)
+    auto& low = k.atracs[1];
+    low.codec = 0x1001, low.lowLevel = true, low.channels = 2, low.outputChannels = 2, low.frameBytes = 0xc0;
+    low.frameSamples = 1024, low.delay = 69;
+    return low;
+  };
+  refuses("a low-level ATRAC ID with a file", [&] { k.atracs[0].lowLevel = true; });
+  refuses("a low-level ATRAC ID of three channels", [&] { lowLevel().channels = 3; });
+  refuses("a low-level ATRAC ID with no frame size", [&] { lowLevel().frameBytes = 0; });
+  refuses("a low-level ATRAC ID's frame of another size", [&] { lowLevel().recent.assign(100, 0); });
+  refuses("a low-level ATRAC ID of another codec's samples", [&] { lowLevel().frameSamples = 2048; });
   CHECK(save(a) == state, true);
 }
 
