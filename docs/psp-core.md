@@ -1837,8 +1837,9 @@ a module); our own code.
   third syscall in the kernel's trampoline, which ends and deletes its thread; one that ends with
   `sceKernelExitThread` instead, or that another thread terminates (part 17's `sceKernelTerminateThread` and
   `sceKernelTerminateDeleteThread`), is deleted all the same, as the PSP's module manager deletes the thread it made
-  however it ends. The calling thread waits meanwhile, and then gets the module's ID, the function's result (or its
-  exit status) written where it asked. A module without the function starts (or stops) at once.
+  however it ends. The calling thread waits meanwhile, and then gets the module's ID (a stop's caller 0 since part
+  71, as a PSP gives), the function's result (or its exit status) written where it asked. A module without the
+  function starts (or stops) at once.
 - **Unloading** (`sceKernelUnloadModule`): a module never started, or stopped; its memory goes back to the user
   partition, and stubs linked to it go back to the kernel.
 - **Unloading itself** (`sceKernelSelfStopUnloadModule(exit status, argument size, argument)`, through
@@ -1905,7 +1906,8 @@ module_start and a module_stop; TESTUSER imports the function):
   started it gets its ID and 1. Refused while its module_start sleeps on another thread. The program, or code in no
   module, calling it leaves.
 - "modules exit threads": module_start and module_stop ending with `sceKernelExitThread(5)` and `(6)`: the caller
-  gets 5 and 6 as their results, and both threads and their stacks are gone, on both engines.
+  gets 5 and 6 as their results, where it asked for them, and both threads and their stacks are gone, on both
+  engines.
 - "modules entry points": a module without a module_start runs its ELF entry point when that's in it, and starts at
   once when it isn't; a module's thread parameters (three for module_start, two for module_stop) make its functions'
   threads, the options going over them but for their zeros.
@@ -8778,3 +8780,114 @@ of two rounds taking turns, God of War's battle 150 frames and its menu 60), Vul
 - Scratch: `~/phobos-work/scratch/speed7` (build-vk.sh; rp6.sh, rp6-all.sh and push/, the RP6's sessions; gputime-
   and the count patches; acc-host.sh, soft-all.sh, cmp4.py; tables67.py; mutate.sh, quick-tests.sh; logicbench.cpp;
   gcc.sh). Nothing of it is left on the RP6.
+
+## Part 71: a module's stop gives 0 — Kenka Bancho past its intro movie
+
+On branch `cursor/psp-kenka-2b67`, on `master` as v2.0.0 shipped (`3cae0f907`). The owner's test of his library on
+the RP6 found Kenka Bancho: Badass Rumble black for good once Start had cut its intro movie short (at 45 s), the
+emulator at a steady 60 frames a second with about 0.8 ms of work a frame, and no press after it changing anything:
+the game idle-waiting, not crashed or busy. Sources: pspautotests' modules/unloadfill and its recording (a PSP's),
+uOFW's module manager (`src/kd/modulemgr`: `start-stopModule.c`, and `modulemgr.c`'s `exe_thread()` and
+`_StopModule()`), pspsdk's error codes, and the game itself, traced with a scratch runner (its calls by frame, the
+threads' waits, wakes and ends, and its code around the calls, disassembled from a dump of its memory). No PPSSPP or
+JPCSP source was read. Save states are unchanged (StateVersion 24): nothing new is kept, a waiting caller's answer
+following from the module's status, which states carry. (Parts 69 and 70 and StateVersion 26 are two other
+branches', `cursor/psp-hangs-2b67` and `cursor/psp-savename-2b67`; this one takes no state version.)
+
+**What the game waited on.** The intro plays through Sony's movie player library, which the game carries
+(`disc0:/PSP_GAME/USRDIR/MODULE/PSMF.PRX` and `LIBPSMFPLAYER.PRX`: scePsmf_library and scePsmfP_library, encrypted,
+which the HLE kernel stands in for; IDs 0x125 and 0x126 in the trace). Whether Start cuts the movie short or it plays
+to its end (its closing logo at about frame 7200 in the runner), the game ends it the same way: its main thread
+starts a thread, MyThread-MovieStop, which stops the player, lets the movie go and deletes the player a frame apart
+(scePsmfPlayerStop, ReleasePsmf, Delete, each answered as part 31 has them) and ends; main deletes it, finishes
+sceMpeg and wakes MyThread-DevModule, its module manager, then polls it in 50-microsecond delays. That thread unloads
+the utility's MPEG module (`sceUtilityUnloadModule(0x303)`) and goes through a table of eight module slots once a
+vertical blank, each with a state: a slot to stop calls `sceKernelStopModule(id, 0, NULL, NULL, NULL)` and goes on to
+unloading only on a result of exactly 0 (`bnezl v0` back to the same state otherwise); a slot to unload calls
+`sceKernelUnloadModule(id)` and is done on a result above 0. The kernel answered the first stop with the module's ID
+(0x125, 0x126), so the game stopped it again a frame later and was told ALREADY_STOPPED (0x80020135), and again,
+for good, nothing drawn: in the runner frame 3000 on was black with Start at 2700, and with no presses at all, the
+movie played to its end, frame 7500 on (to 12000).
+
+**What a PSP gives.** pspautotests' modules/unloadfill, recorded on a PSP, stops a module of its own that has a
+module_stop and prints what the stop gave: `sceKernelStopModule: 00000000`. uOFW's module manager has the same: its
+stop command's result is 0 (SCE_ERROR_OK) once the module has stopped (its module_stop returned
+SCE_KERNEL_STOP_SUCCESS, or it has none), while its start command's is the module's ID (for one that stays resident),
+and its unload command's the ID. Part 19 gave a stop's caller the ID, as a start's.
+
+**The fix** (`modules.cpp`): a stop's caller gets 0, whether the module stops at once (a stand-in, or a module with no
+module_stop) or once its module_stop has run on a thread of its own while the caller waited (`moduleThreadEnded()`).
+module_stop's result still goes where the caller asked for it, a start's caller still gets the ID, an unload's the
+ID, and the refusals are as they were (ALREADY_STOPPED for a stopped module, NOT_STARTED for one not started). The
+game's two stops give 0 at the first try, its two unloads 0x125 and 0x126, and it goes on.
+
+**The game now** (the runner, the software renderer at 7 threads, a fresh memory stick). Start at 2700 cuts the intro
+short, a "Bancho 101" loading tip shows, and its title, PRESS START BUTTON, is there from about 2900. Cross gives its
+main menu (NEW GAME, LOAD GAME, NIGHT OUT), Circle goes back to the title, and NEW GAME goes on to the difficulty, a
+loading tip, the name entry and the hometown map ("Hokkaido - Is this okay?"). With no presses the movie plays to its
+closing logo at 7200 and the title follows by 7800; Start, Left and Cross there give the same menu, difficulty and
+name entry. LOAD GAME on the fresh stick asks the savedata utility for a list load (mode 4) of SGL, which answers
+LOAD_NO_DATA (0x80110307) at once, with no dialog, and the game shows its own "An error has occurred. Retry / Cancel
+and return" (the savedata utility's part; no recording here of a list load with nothing to list).
+
+**Final Fantasy IV: The Complete Collection** has the same module thread (its threads named as Kenka Bancho's,
+MyThread-Main and MyThread-DevModule) and stops the same two modules once its title movie is over (frame 1855 in the
+report's run), again and again till a stop gives 0: white for good from about 2100 before (the report's "white fade
+after the title movie", to 7200 at least), its title, PRESS ANY BUTTON, from 2100 now, and with no press its attract
+movie from about 3900. Pressed on, it gives the collection's menu, Final Fantasy IV's own title (New Game, Load Game,
+Bestiary) and, with New Game, its opening over the world map.
+
+**The library** (the report's run, `~/phobos-work/scratch/final/lib.sh`'s way: 3600 frames, Start at 120, Cross at
+1800, three at a time, the software renderer at 7 threads; compared with the final run, `be543afba`, whose core is
+`master`'s). All 266 finish their 3600 frames, none at a missing function (Killzone: Liberation, at 5 frames a second,
+was killed at the 900-second limit with the Mac at a load of about 220 from other jobs, its first three frames the
+same; run again with a longer limit it finishes, every frame the final run's). 72 show some frame differently:
+- **Final Fantasy IV** is further on, movie -> menu: its title at 3600 where the final run had the white screen.
+- **Killzone**, the time limit above.
+- **70 others** show the same scene at each frame, or the same sequence a few frames apart (a fade, a movie, an
+  animated title, Battlefront II's random map): the runner waits at most two seconds for the screen's thread before it
+  writes a PNG, so with the Mac this loaded a picture is sometimes the one before. 64 of them never call
+  sceKernelStopModule in their 3600 frames (a scratch runner noting each call), so the change can't reach them. Of the
+  six that do: Gitaroo Man Lives!, Ghostbusters and Grand Theft Auto: Liberty City Stories differ only at frames before
+  their first stop; Grand Theft Auto: Sindacco Chronicles (three MPEG modules, at frame 13) and Metal Gear Acid (its
+  own mgp_stage, a module_stop waited for, at 300) unload what they stop whatever the stop gives, their calls
+  through frame 1250 the same as the base runner's but for the stop's result, and their library command run again
+  with both runners gives the final run's frames byte for byte; Metal Slug Anthology's run again gives the same frames
+  from both runners (at 3600 the final run is the odd one out).
+- Run side by side, base and branch at the same moment, 39 of the 71 still differed somewhere, mostly at other frames
+  than in the library run (Star Ocean at 1200, Ridge Racer 2 at 1200, Macross: Ultimate Frontier at 60, none of which
+  stops a module); only Final Fantasy IV differed every time.
+
+In the report's categories: menu or gameplay 194 -> 195, movie 71 -> 70 (Final Fantasy IV), the rest as they were.
+Kenka Bancho's row stays a movie: with the report's presses its intro is still playing at 3600.
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 440 groups, 0 failures (`master`'s 438 in this environment and
+the new "modules stops give 0" and "modules state while stopping"). `tests/allegrex/run-tests.sh`: 58, none
+failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failed. "modules stops give 0" does what the game does, on
+both engines: the movie player's two modules as the game carries them (Sony's, encrypted, stood in for) and a module
+of its own whose module_stop runs while the caller waits are each started (the ID back), stopped (0), stopped again a
+frame later (ALREADY_STOPPED) and unloaded (the ID). "modules state while stopping" saves a state while a module_stop
+waits in a delay, its caller waiting for it, and loads it into another machine: both carry on alike, the caller given
+0 and module_stop's result where it asked. "modules start and link", "modules stand-ins" and "modules exit threads"
+take a stop's 0 where they took the ID. With the old kernel all five groups fail (17 checks: both engines, a
+stand-in's stop and a stop waited for, and the loaded state's). An independent read-only review found the change
+right on every path (stand-ins, module_stop waited for, a module unloading itself from module_start or module_stop,
+terminated threads, states saved mid-stop) and nothing else in the kernel relying on what a stop returns. Its points
+were taken: the state saved mid-stop is tested; a comment says a stop called with no thread has its result unseen
+(the CPU goes to module_stop's thread at once); the new test's comment is put right; uOFW's module_stop failure is
+noted beside `moduleThreadEnded()`; and part 19's description says now that a stop's caller gets 0, and its "modules
+exit threads" line where 5 and 6 go.
+
+**Left, and why.** uOFW's module manager has module_stop's own result decide whether the module stops: 1
+(SCE_KERNEL_STOP_FAIL) leaves it running and the caller gets CAN_NOT_STOP, another value leaves it running and the
+caller gets that value. Here a module stops whatever its module_stop returns, as before (the test modules' return 3
+and 6, and would change with it); no recording covers it, and no game here has been seen to need it. Likewise a
+module_start returning 1 (SCE_KERNEL_NO_RESIDENT) or an error has a PSP unload the module at once, its caller getting
+0 or the error, where here the module stays, started, its caller getting the ID; a stop asked for while module_stop
+runs is ALREADY_STOPPING (0x8002013f) by uOFW, NOT_STARTED here; and unloadfill's stop took 1-5 ms on the PSP, a
+stand-in's none here. The savedata list load with nothing to list (above) is the savedata utility's.
+- Scratch: `~/phobos-work/scratch/kenka` (`ktrace.patch`, the temporary tracing; `t1` to `t5`, `ff4t-*`, `gtat-*`
+  and `mga-*`, the traces and memory dumps; `skip-fix`, `newgame-fix`, `natural-base`, `natural-fix`, `ff4-*` and
+  their sheets; `lib.sh` and `lib-list.sh`, the library script with its temporary files kept here; `lib-fix`, the
+  library run, and `cmp-lib.tsv`; `lib-stopnote`, the runs noting each stop; `pairs` and `binchk`, the runs again;
+  `ref/`, the uOFW, pspsdk and pspautotests files read). Nothing was run on the RP6.
