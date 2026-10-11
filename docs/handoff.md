@@ -25,6 +25,46 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: WipEout without waiting for the GPU, the stencil as each format keeps it, the emulation thread at 1x — 2026-10-11
+
+Branch `cursor/psp-speed8-2b67`, on top of speed 7's `cursor/psp-speed7-2b67` (part 67), measured against its tip
+`671072d6f` (#204's Experimental merge in it). docs/psp-core.md, part 68, has the evidence; docs/psp-gpu-renderers.md's
+"Owned until needed" and "Depth, stencil, blending and logic operations" the design. Clean room: no PPSSPP code copied
+or translated, JPCSP's not read. Save states unchanged (25).
+- **Changes** (each its own commit, with its tests): WipEout's one finish a frame was a CPU load of its depth buffer
+  through VRAM's fourth copy (the screen's middle, after a SIGNAL mid-list), where its bloom's buffers lie: the GPU's
+  depth never reaches memory, so the finish only gave it the last bloom's colors; a load through VRAM's second or
+  fourth copy now waits only for the drawing threads (which write memory's depth), not a hardware renderer
+  (`Memory::vramDrawnOver`'s `depthLoad`). The GPU renderer's stencil: a 5650 frame buffer's test compared with 0
+  (failing, nothing drawn), and a 5551 or 4444 one's held as the GE keeps it after clear mode, a REPLACE and
+  MASK_ALPHA (a 5551 REPLACE's comparison made on the top bit where it must). A PRIM's vertices transformed a stage
+  at a time over 64 of them (the same arithmetic per vertex).
+- **RP6, means of two rounds, each runner first in one** (fps, Turnip accurate / fast, Qualcomm's accurate / fast):
+  WipEout's race at 1x 99.8 / 105.4 / 94.8 / 96.3 -> 135.4 / 141.8 / 125.9 / 127.6 (+33-36%, the emulation thread
+  9.1-10.1 -> 7.0-7.9 ms), at 4x 38.7 / 59.8 / 43.1 / 39.3 -> 46.3 / 87.1 / 67.4 / 63.9 (+20-63%); God of War, MC3 and
+  LCS within 1% at 1x and 4x (the staged transform +0.5-1.2% in God of War's battle, in rounds of its own); the
+  software renderer within 1.6%, every end state the base's.
+- **Pictures**: the software renderer's byte for byte (the measure harness's 173 files; every frame and end state of
+  nine scenes at 1 and 7 threads on the M1, but MC3's menu's end state, which differs between runs of the base's own
+  runner too; every end state on the RP6). Vulkan: 76 of 80 RP6 comparisons (ten scenes, four configurations, 1x and
+  4x) byte for byte; the four others WipEout at 4x, now shown from the GPU's 4x target instead of memory's picture at
+  the PSP's size scaled up (it was never shown above 1x before); it draws the same (its loads read 0 either way), and
+  against the software renderer it's as close by the 4x4 blocks' middle samples (35.77 -> 35.71 and 35.64%).
+- **Emulation thread profile** (simpleperf, -g, the RP6): the time is spread: the vertex's arithmetic (its divisions
+  and lighting waiting on themselves; the X3's divider measured, not the bound), its reading, each PRIM's settings,
+  each triangle's steps, the CPU's compiled code (16-29%). Tried and dropped, as no faster: vertices read in place,
+  the texture cache's lookup without shares, the list's words straight from the page, `transformKept()`'s blocks;
+  `vfpuDot()` without its checks was slower.
+- **Checks**: tests/psp 437/0 (sanitized; three new groups, which broken versions fail, but a REPLACE's color alpha
+  left whole), tests/allegrex 58/0, tests/psp/ares 307/0; the GPU tests on the RP6 33/0 on both drivers (one skips
+  itself on Qualcomm's); GCC 11 and 13 as the base (four.cpp's maybe-uninitialized warnings, the base's the same).
+  The states test's frame under the address sanitizer is within a few KB of the main thread's 8 MB: a machine 72
+  bytes bigger overflowed it (fixed: the machine is the base's size).
+- **Left**: the emulation thread's many small steps (a GE on a thread of its own would take most of them off it); the
+  recompiler's registers kept in memory; a 16-bit stencil's increments and decrements; WipEout's depth loads read
+  memory, not the GPU's depth.
+- Scratch: `~/phobos-work/scratch/speed8`; nothing left on the RP6.
+
 ## PSP: God of War faster in every renderer — a move's stencil in one draw, the GE's PRIMs cheaper, logic operations in fours — 2026-10-11
 
 Branch `cursor/psp-speed7-2b67`, begun on #200's `cursor/psp-gow-vk-2b67` with #201's `cursor/psp-measure6-2b67`

@@ -8778,3 +8778,229 @@ of two rounds taking turns, God of War's battle 150 frames and its menu 60), Vul
 - Scratch: `~/phobos-work/scratch/speed7` (build-vk.sh; rp6.sh, rp6-all.sh and push/, the RP6's sessions; gputime-
   and the count patches; acc-host.sh, soft-all.sh, cmp4.py; tables67.py; mutate.sh, quick-tests.sh; logicbench.cpp;
   gcc.sh). Nothing of it is left on the RP6.
+
+## Part 68: WipEout without waiting for the GPU, the stencil as each format keeps it, and the emulation thread at 1x
+
+On branch `cursor/psp-speed8-2b67`, on top of speed 7's `cursor/psp-speed7-2b67` (part 67), whose tip `671072d6f` (with
+`cursor/psp-experimental-2b67` merged into it: PSP states layout 25) is the base of every number here. The task: the
+last wait for the GPU in WipEout Pure removed, each Vulkan frame of the bench scenes as it was (or, where that can't
+be, its accuracy against the software renderer no worse and what differs said); the emulation thread at 1x faster
+(profiled on the RP6: transform, vertex reading, the GE's commands, triangle setup, the CPU), behaviour exact; and two
+older differences of the GPU renderer's stencil (part 67's "Left"). Clean room: no PPSSPP code copied or translated,
+JPCSP's not read. Save states unchanged (StateVersion 25): nothing new is saved.
+
+### WipEout's last wait
+
+Part 65 left WipEout finishing the GPU once a frame (300 finishes in 300 frames of its race), the cause given as the
+CPU reading through VRAM's fourth copy where the bloom's buffers lie; no block transfer waits any more (the blur's
+five rows into the next buffer are a move since part 65). Logged (a scratch patch: every system call, each GE run
+and where it stopped, each wait in `Memory::pointer()` and what it read): just after a SIGNAL in its frame's list,
+after the 3D pass and before the bloom, the game reads its depth buffer (0x110000, 512 wide) through the fourth copy
+at the screen's middle (0x047321e0: 240, 136) and at a few more points, 17 loads a frame. Its bloom's buffers
+(0x110000 and 0x132000, 256 pixels wide, 8888) lie over those bytes, and the GPU had drawn them, so the first load
+finished everything: the waits and the read backs of five targets were 12.8% of the emulation thread on the RP6
+(`GPU::fill()`, `GPU::finish()`, the backend's run, `Kernel::picture()`).
+
+What the loads find: in the software renderer, the depth the 3D pass has just written (0x16 mostly, 0x539 to 0x546
+elsewhere). With the GPU, whose depth never reaches memory, the finish gave them the colors of the bloom of the
+frame before, put back over the depth buffer's bytes: 0 in all but 130 of 3,400 loads in 200 frames (0x505, 0x303,
+...). So finishing never gave them what they ask for. Now (`Memory::pointer()`, `GE::drawnOver()`) a load through
+VRAM's second or fourth copy, the views the GE keeps its depth buffer in, waits only for drawing that writes memory's
+depth, the drawing threads' batches (exact, as before), and reads memory's bytes past a hardware renderer's pixels:
+0 in every load of the bench scene, at 1x and 4x (the base's at 4x: 0 in all 1,700 of 100 frames). Stores, and
+loads through the first and third copies, wait as before. WipEout's race on the M1: 120 finishes in 120 frames -> 1
+(its first), 119 frames shown from the GPU (none before).
+
+At 1x every frame is as it was. At 4x it isn't, as a frame shown from memory isn't one shown from the GPU: the base
+finished every frame, and the picture shown was memory's, one of each pixel's 4x4 samples, scaled up (every 4x4
+block of its frames one color, 100%: WipEout was never shown above 1x); now it's the GPU's own, as every other
+game's is. See "Accuracy".
+
+### The stencil as each format keeps it
+
+- **A 5650 frame buffer with the stencil test on** (`GPU::settings()`): the GE's test reads its stencil as 0, so
+  one failing against 0 drops every pixel, its depth too; the GPU drew them as if there were no test. The
+  comparison is worked out once a PRIM: failing, the GPU's test never passes; passing, there's no test, as before.
+- **Clear mode or a REPLACE on a 5551 or 4444 frame buffer**: the PSP keeps one or four bits, read back as 0 or 255
+  and as the four twice over, which is how fills and moves hold them in the GPU's eight bits (part 67) for its tests
+  to compare as the GE's do; but clear mode's alpha and a REPLACE's reference went in whole. Now the reference is the
+  stencil as the format keeps it (`keptStencil()`): clear mode's, whose test always passes, at each primitive's last
+  corner; a REPLACE's where its comparison comes out the same with it (never, always, or the same bits where it
+  looks), else in 5551 made on the top bit against the kept reference, which gives the same at 0 and 255, and in
+  4444 left the GE's (its REPLACE writing all eight bits, as before). MASK_ALPHA's bits for a 16-bit one go with
+  their copies, and a REPLACE's color alpha is the kept stencil. Increments and decrements of a 16-bit stencil still
+  step it by one where the PSP's steps a 5551 one to 255 or 0 and a 4444 one by 16 (left).
+
+Both are in the settings every draw takes, in either mode; no bench scene draws either way (their frames are the
+same), and the cost is a comparison or two a PRIM.
+
+### The emulation thread at 1x
+
+simpleperf on the RP6's emulation thread (cpu-clock at 4 kHz, the thread pinned to the X3 as Phobos pins it, a
+`-g` build, the NDK's llvm-symbolizer for lines; dwarf call graphs for libc's callers), Turnip's accurate mode, the
+base:
+
+| Scene | Thread, ms a frame | The core | The CPU's compiled code | libc | Turnip, kernel |
+| --- | --- | --- | --- | --- | --- |
+| God of War, battle | 43.9 | 72% | 16% | 7.7% | 4.1% |
+| WipEout Pure, race | 9.3 | 57% | 21% | 11.7% | 9.6% |
+| Midnight Club 3, race | 17.2 | 60% | 29% | 5.1% | 5.1% |
+| Liberty City Stories, city | 10.0 | 70% | 19% | 6.3% | 4.4% |
+
+- **God of War's battle**: `project()` 10.9%, `transform()` 10.6% (lighting inlined in it), `readVertices()` and
+  the vertices' decoding 8.5%, memcpy 5.8% (`GPU::emit()`'s append of each triangle's three vertices half of
+  `__memcpy`; the backend's copies into staging most of `memcpy_opt`, then block transfers), `GPU::settings()` 2.9%,
+  `transformKept()` 2.7% and its memcmp 1.2%, `GE::triangle()` 2.6%, `geRun()` (the list's words) 2.5%, the GE's
+  time's `pixelsInside()` 2.2%, `GPU::triangle()` 2.0%, `Memory::pointer()` 1.9%, atomic steps on the decoded
+  texture's shares 2.7% (`decode()` and the Look going), `GPU::emit()` 1.8%, `GPU::begin()` 1.7%,
+  `clipTriangle()` 1.6%: a vertex's arithmetic, then the PRIM's and the triangle's own steps, none large.
+- **Midnight Club 3 and Liberty City Stories**: `project()` and `transform()` 9-10%, the vertices' reading 7%, the
+  triangle's steps 10%, and the VFPU's helpers the compiled code calls (`vfpuDot()`, the adder's exact sum, 3.9% and
+  5.7%; the matrix instructions' operand reads and writes 2-4% more).
+- **The CPU**: 16-29% of the thread is the recompiler's code itself (it keeps the PSP's registers in memory and
+  compiles an instruction at a time); what's handed to the interpreter is a fraction of a percent (part 67).
+
+`project()`'s hot instruction (10% of the core's samples) waits on its divisions, their conversions to doubles and
+the comparisons after; the X3's divider isn't the bound (a benchmark on the X3: a float division about every 0.35 ns
+in independent chains, a square root every 0.28 ns; 4-lane forms barely faster a lane), the waiting is. So:
+
+1. **A PRIM's vertices transformed a stage at a time** (`transformAll()`, `transformPlace()`, `projected()`,
+   `transformRest()`): their places (skinned, in the world, in clip space), then each onto the screen, then the
+   rest (normal, texture coordinates, fog, lighting), 64 vertices at a time, so that one vertex's waiting overlaps
+   the next's work. Each vertex's statements are `transform()`'s own, multiply-adds as the compiler fuses them
+   included, so the arithmetic is the same; `transform()` runs the same three parts for one vertex (clipped corners,
+   fast mode's). Profiled after it, `project()`'s hot instruction went from 10.3% of the core's samples to 3.0%, and
+   the waiting moved to the normal's three divisions and lighting's chains: God of War's battle 22.98 -> 23.25 fps
+   in two rounds of its own (the thread 43.25 -> 42.75 ms), MC3's race 58.9 -> 59.3, LCS's city 100.7 -> 101.8; later,
+   the device warmer, 16 runs each of the final code against the base: the battle 21.61 -> 21.75 on Turnip and
+   19.99 -> 20.08 on Qualcomm's driver (the thread 46.01 -> 45.69 and 49.73 -> 49.49 ms). Small, and within the
+   tables' rounding below.
+
+**Tried and dropped** (each measured on the RP6, two or more rounds taking turns, kept only where faster):
+- The vertices read straight into the PRIM's vector, their bytes looked up once a PRIM: the copy and the per-vertex
+  `Memory::pointer()` went, the time moved into the decoding (`readTarget()` 3.0 -> 5.7% of the samples); no frame
+  faster.
+- The texture cache's lookup taking one share in the decoded texture, for the Look, instead of five or six: the
+  atomic steps went from 2.8% of the samples to 1.4%, no frame faster.
+- A list's words read straight from the page `run()` knows has nothing drawn over it, and `transformKept()`'s
+  ranges of commands compared and copied as blocks: no change.
+- `vfpuDot()` without its checks where no lane is an infinity or NaN (200 million random cases the same as
+  before): slower, LCS's city -2.2% and MC3's race -1.8% (16 runs each).
+
+What's left of the thread is spread over the vertex's arithmetic and the PRIM's and triangle's steps, each a few
+percent; see "Left".
+
+### Numbers
+
+The RP6 (Adreno 740), the runner from adb's shell, its emulation thread pinned to the X3 (cpu7), late frames and
+the pipelines kept (part 63); frames a second over 150 frames of God of War's scenes and 300 of the others', the means
+of two rounds with the base (`671072d6f`) and the branch taking turns to go first (the device warms over a session,
+which costs whichever runs second 0-2%). The branch is `9a88846bd` (the docs after it change nothing run).
+
+Vulkan, 1x:
+
+| Scene | Turnip accurate | Turnip fast | Qualcomm accurate | Qualcomm fast |
+| --- | --- | --- | --- | --- |
+| God of War, battle | 21.9 -> 21.9 | 22.0 -> 22.1 | 20.3 -> 20.3 | 20.3 -> 20.3 |
+| God of War, menu | 100.5 -> 101.4 | 103.2 -> 103.5 | 87.2 -> 87.9 | 89.2 -> 89.7 |
+| WipEout Pure, race | 99.8 -> 135.4 (+36%) | 105.4 -> 141.8 (+34%) | 94.8 -> 125.9 (+33%) | 96.3 -> 127.6 (+33%) |
+| Midnight Club 3, race | 57.8 -> 58.2 | 66.2 -> 65.7 | 55.6 -> 55.9 | 63.0 -> 62.9 |
+| Midnight Club 3, menu | 114.0 -> 114.6 | 120.4 -> 119.7 | 108.8 -> 109.6 | 114.4 -> 113.8 |
+| Liberty City Stories, city | 97.5 -> 98.6 | 113.7 -> 112.7 | 93.6 -> 94.9 | 108.4 -> 108.2 |
+
+Vulkan, 4x:
+
+| Scene | Turnip accurate | Turnip fast | Qualcomm accurate | Qualcomm fast |
+| --- | --- | --- | --- | --- |
+| God of War, battle | 9.9 -> 9.9 | 18.7 -> 18.5 | 13.9 -> 14.0 | 12.5 -> 12.5 |
+| God of War, menu | 21.2 -> 21.2 | 28.9 -> 28.9 | 26.1 -> 26.1 | 24.5 -> 24.5 |
+| WipEout Pure, race | 38.7 -> 46.3 (+20%) | 59.8 -> 87.1 (+46%) | 43.1 -> 67.4 (+56%) | 39.3 -> 63.9 (+63%) |
+| Midnight Club 3, race | 50.4 -> 50.3 | 58.5 -> 57.8 | 50.2 -> 49.8 | 55.1 -> 54.7 |
+| Midnight Club 3, menu | 56.9 -> 56.9 | 78.5 -> 78.4 | 64.9 -> 64.9 | 58.3 -> 58.2 |
+| Liberty City Stories, city | 79.1 -> 79.0 | 100.5 -> 100.0 | 82.9 -> 83.3 | 82.5 -> 82.5 |
+
+WipEout at 4x on Turnip's accurate mode gains least: the GPU is its bound there, and its frames, shown from memory's
+picture at the PSP's size before, are shown from its 4x target now.
+
+The emulation thread at 1x, ms a frame (Turnip accurate / fast, Qualcomm's accurate / fast): God of War's battle
+45.5 / 45.1 / 49.0 / 48.9 -> 45.4 / 45.0 / 48.9 / 48.9, its menu 9.86 / 9.60 / 11.4 / 11.1 -> 9.78 / 9.57 / 11.3 /
+11.0, WipEout 9.09 / 8.75 / 10.1 / 9.89 -> 7.31 / 7.00 / 7.88 / 7.76, MC3's race 17.2 / 15.0 / 17.9 / 15.8 -> 17.1 /
+15.1 / 17.8 / 15.8, LCS's city 10.2 / 8.74 / 10.6 / 9.15 -> 10.1 / 8.81 / 10.5 / 9.17.
+
+The software renderer (`bench`, part 61's), the same way, frames a second at 7 and 1 GE threads, every end state the
+base's:
+
+| Scene | 7 threads | 1 thread |
+| --- | --- | --- |
+| God of War, battle | 8.66 -> 8.75 | 4.30 -> 4.31 |
+| God of War, menu | 21.56 -> 21.61 | 8.62 -> 8.64 |
+| WipEout Pure, race | 21.91 -> 21.92 | 18.09 -> 18.13 |
+| Midnight Club 3, race | 48.88 -> 49.07 | 22.00 -> 22.11 |
+| Midnight Club 3, menu | 69.09 -> 69.34 | 27.68 -> 27.77 |
+| Liberty City Stories, city | 76.59 -> 77.81 (+1.6%) | 36.12 -> 36.28 |
+| Liberty City Stories, woods | 78.21 -> 79.12 | 36.11 -> 36.25 |
+
+(God of War: 150 frames of the battle and 100 of the menu at 7 threads, 100 and 30 at 1.)
+
+### Accuracy
+
+- **Software**: untouched. The measure harness's 173 files and its log are byte for byte the base's. On the M1 the
+  bench scenes', WipEout's, Peace Walker's title's and God of War's two scenes' every frame (picture and VRAM) and end
+  state are the base's at 7 and 1 threads, but MC3's menu's end state, which differs from run to run of the base's own
+  runner too (its frames don't); on the RP6 every Software run's end state above was the base's.
+- **Vulkan**: 10 frames from each of ten scenes' states (God of War's two, WipEout, MC3's two, LCS's two, Killzone's
+  menu, Lumines, Peace Walker's title) in all four configurations at 1x and 4x on the RP6: 76 runs of 80 byte for
+  byte the base's; the four others are WipEout at 4x. On the M1, nine scenes in both modes at 1x and 4x: every frame
+  the base's but WipEout's at 4x (9 of 10 in each mode, the first being shown from memory in both).
+- **WipEout at 4x** differs as its frames are now the GPU's 4x pictures, not memory's at the PSP's size scaled up
+  (the base's frames all 4x4 blocks of one color): its loads read 0 in both, so it draws the same, and at 1x every
+  frame is the same. Against the software renderer, each 4x frame brought to the PSP's pixels, 10 frames on the M1,
+  the accurate mode: identical 35.77% (the base's, any way it's sampled) -> 35.71% and 35.64% by the two middle
+  samples of each 4x4 block, 33.44% by its mean, 25.8% by the two corner samples; the fast mode 35.82% -> 35.76%,
+  35.68%, 33.49%; at 1x 77.4% in both.
+
+### Checks
+
+- `tests/psp/run-tests.sh` (sanitizers on): 437 groups, 0 failures (the base's 434 and three new: "ge loads through
+  the depth buffer's views wait for the threads", compiled loads and the interpreter's at 2 and 4 threads; "gpu loads
+  through the depth buffer's views: memory's, without waiting", through the second and fourth copies, a store through
+  the fourth still finishing; "gpu the stencil as each 16-bit format keeps it", in both modes at 1x and 2x, which all
+  six accurate-mode runs fail on the base). `tests/allegrex/run-tests.sh` 58 groups, 0 failures;
+  `tests/psp/ares/run-tests.sh` 307 checks, 0 failed. The GPU tests built for Android pass on the RP6 on Turnip and on
+  Qualcomm's driver (33 groups each; one skips itself on Qualcomm's, which doesn't read the frame buffer). GCC 11
+  (ubuntu:22.04) and 13 (ubuntu:24.04): the kernel and the changed tests compile, `gpu.cpp` and `memory.cpp` at -O1,
+  -O2 and -O3 with -Wall -Wextra -Werror, the GE likewise but for `four.cpp`'s maybe-uninitialized warnings (part
+  61's; 12, 12 and 16, the base's the same).
+- The states test's `stateFields()` holds about 200 machines' worth of slots under the address sanitizer, its frame
+  8,337,696 bytes of the main thread's 8 MB: the first versions here, with a callback more in Memory and a vector
+  more in the GE (72 bytes a machine), took it to 8,352,512 and the suite aborted in it; as committed, the machine is
+  the base's size and the frame the base's to the byte (`-fstack-usage`).
+- Broken versions each fail a test: a depth view's load waiting for the renderer again, one not waiting for the
+  threads, a store taken as a load (the two depth view groups); 5650's comparison left out, clear mode's alpha or a
+  REPLACE's reference whole, MASK_ALPHA's bits without their copies, 5551's comparison on the top bit left out, the
+  never-or-always case and the same-bits case each left out (the stencil group). A REPLACE's color alpha left whole
+  isn't caught: the stencil itself is what's read back, and a 16-bit frame buffer's blending reads the alpha through
+  its format.
+
+### Left, and why
+
+- **The emulation thread at 1x** is spread over many small steps: the vertex's arithmetic (its divisions and
+  lighting, waiting on themselves; 4-lane forms would have to be the same operations in the same order, lane by
+  lane), its reading and decoding, each PRIM's settings worked out afresh (`GPU::settings()`, `pixelState()`,
+  `lookFor()`, `transformKept()`), each triangle's steps (`GE::triangle()`, the GE's time's `pixelsInside()`,
+  `clipTriangle()`, `GPU::triangle()` converting each corner again, a strip's vertices three times over, and
+  `GPU::emit()` appending them), and the CPU's compiled code. A GE running beside the CPU on a thread of its own, as a
+  PSP's does, would take most of it off the emulation thread; a large change (the driver's syncs, signals, the GE's
+  time and the CPU's reads of what it draws all meet there).
+- **The recompiler** keeps the PSP's registers in memory and compiles an instruction at a time: registers kept in the
+  host's across a block is where its 16-29% of the thread would go down.
+- **A 16-bit stencil's increments and decrements** step it by one on the GPU (above), and a 4444 REPLACE whose
+  comparison takes the reference's low four bits writes all eight.
+- **WipEout's depth loads** read memory's bytes (0 in the bench scene), not the depth the GPU drew, as the GPU's depth
+  isn't read back: the software renderer's loads see the 3D pass's depth, which a lens flare or the like would use.
+  Reading the GPU's depth back would mean waiting for it, as before.
+- Scratch: `~/phobos-work/scratch/speed8` (build-vk.sh, rp6.sh, rp6-perf.sh, rp6-final.sh and push/, the RP6's
+  sessions and profiles; patches/: why-, hletrace- and depthread-patch.py, the finishes' causes and the depth loads;
+  hotlines.py, callers.py, tables8.py; bench/divbench.cpp, the divider, and dotcheck.cpp, `vfpuDot()`'s random
+  cases; mutants.sh, quick-tests.sh, gcc.sh, measure.sh, soft-all.sh, acc-host.sh, cmp4.py). Nothing of it is left on
+  the RP6.
