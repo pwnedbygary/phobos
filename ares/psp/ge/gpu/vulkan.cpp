@@ -873,7 +873,8 @@ struct VulkanBackend : GPU::Backend {
   //it with them (stencilExport): cleared, then draw(bit, mask) for each bit its GE format keeps apart, a draw that
   //sets the stencil's bits in mask where the pixel's alpha has bit: a 5551 target's stencil is 0 or 255 (one draw), a
   //4444 one's its four bits twice over (four), an 8888 one's eight. A 5650 target's is left as it is: it has none,
-  //which no draw tests (GPU::settings()), no read back takes and no move from it reads.
+  //which no draw tests (GPU::settings()), and which a read back for memory (narrowTarget()) and a move from it
+  //(move.frag) leave out.
   template<typename Draw> auto stencilBits(VkCommandBuffer commands, u32 format, VkRect2D area, const Draw& draw)
     -> void {
     if(format == 0) return;

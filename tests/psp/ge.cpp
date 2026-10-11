@@ -2228,12 +2228,14 @@ static auto geTimeInterrupts() -> void {
 //Vertices read from VRAM that a sprite just before them in the list draws over (two points, through mode, an 8888
 //color and 16-bit positions, 12 bytes each, which the sprite's color 0x00200010 puts at (16, 32), where memory had
 //them at (8, 8)): what waits to be drawn over them is drawn first, as at one thread, with batches shared out however
-//small; for vertices in a row (all asked for at once: readVertices()) and by indices. Likewise a list's words its own
-//sprite draws over (run(): a page found undrawn is asked about again after a PRIM).
+//small; for vertices in a row (all asked for at once: readVertices()), the first of them in the page before too, and
+//by indices. Likewise a list's words its own sprite draws over (run(): a page found undrawn is asked about again
+//after a PRIM).
 static auto geVerticesDrawn() -> void {
   constexpr u32 Drawn = 0x15'4000, Indices = 0x0899'0000;  //(Drawn: VRAM offset)
+  u32 first = 0;  //(the first vertex's bytes before the sprite's first pixel)
   auto build = [&](Memory& memory, bool indexed) {
-    for(u32 n = 0; n < 64; n++) memory.write(4, VRAM + Drawn + n * 4, 0x0008'0008);
+    for(u32 n = 0; n < 68; n++) memory.write(4, VRAM + Drawn - 16 + n * 4, 0x0008'0008);
     memory.write(1, Indices, 1), memory.write(1, Indices + 1, 0);
     ListWriter list{memory, ListA};
     u32 vertex = Vertices;
@@ -2251,7 +2253,7 @@ static auto geVerticesDrawn() -> void {
     list.put(GE::Primitive, GE::Sprites << 16 | 2);
     list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 512);
     list.put(GE::VertexType, 0x80'011c | (indexed ? 1 << 11 : 0));
-    list.to(GE::VertexAddress, VRAM + Drawn);
+    list.to(GE::VertexAddress, VRAM + Drawn - first);
     if(indexed) list.to(GE::IndexAddress, Indices);
     list.put(GE::Primitive, GE::Points << 16 | 2);
     list.put(GE::Finish), list.put(GE::End);
@@ -2270,6 +2272,11 @@ static auto geVerticesDrawn() -> void {
     CHECK(whole[(32 * 512 + 16) * 4], u8(0x10));  //(the point drawn where the sprite put it)
     for(u32 threads : {2u, 4u, 8u}) CHECK(drawn(indexed, threads) == whole, true);
   }
+  //(the first vertex in the page before, which nothing draws, at (8, 8); the second, the sprite's, in the next)
+  first = 12;
+  auto whole = drawn(false, 1);
+  CHECK(whole[(8 * 512 + 8) * 4], u8(0x08)), CHECK(whole[(32 * 512 + 16) * 4], u8(0x10));
+  for(u32 threads : {2u, 4u, 8u}) CHECK(drawn(false, threads) == whole, true);
   //And a list in VRAM whose own sprite draws over its words further on in the page, reached by a JUMP: AMBIENT_COLOR
   //words whose low 24 bits the sprite fills (its alpha the stencil, the frame buffer's own), run as drawn.
   auto listed = [&](u32 threads) {

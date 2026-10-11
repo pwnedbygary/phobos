@@ -920,8 +920,8 @@ static auto gpuRefusedAmongThreads() -> void {
 //four). Each takes the pixels the one before drew in its pages on the GPU, as memory would have them (move()), with
 //nothing put back; at 1x, 2x and 3x, and everything comes out as the software renderer has it. (Sprites with random
 //colors and alphas, some in clear mode setting the stencil, some textured from a texture the CPU wrote in VRAM, some
-//keeping the stencil's low bits.) The stencil moved a bit at a time and, where a shader can give it, with the colors
-//(stencilWays()).
+//keeping the stencil's low bits, some drawn where the stencil is 255, which the moved stencil decides.) The stencil
+//moved a bit at a time and, where a shader can give it, with the colors (stencilWays()).
 static auto gpuMoves() -> void {
   auto gpu = renderer();
   if(!gpu) return;
@@ -946,15 +946,15 @@ static auto gpuMoves() -> void {
       struct Pass {
         u32 address, width, format;
         std::vector<Corners> sprites;
-        bool clear, textured, masked = false;
+        bool clear, textured, masked = false, tested = false;
       };
       std::vector<Pass> passes;
       for(u32 round = 0; round < 3; round++) {
         passes.push_back({At, 64, 3, randomSprites(random, 12, false), round == 1, false, round == 2});
         passes.push_back({At, 128, 0, randomSprites(random, 12, false), false, round == 2});
         passes.push_back({At + 0x1000, 64, 3, randomSprites(random, 8, false), false, round == 0});
-        passes.push_back({At, 128, 1, randomSprites(random, 8, false), round == 2, false});
-        passes.push_back({At, 128, 2, randomSprites(random, 8, false), round == 0, round == 1});
+        passes.push_back({At, 128, 1, randomSprites(random, 8, false), round == 2, false, false, round == 1});
+        passes.push_back({At, 128, 2, randomSprites(random, 8, false), round == 0, round == 1, false, round == 2});
       }
       for(System* s : {&software, &hardware}) {
         auto& c = s->ge.commands;
@@ -964,8 +964,9 @@ static auto gpuMoves() -> void {
           if(pass.textured) texture(*s, Memory::VRAMBase + 0x2'0000, 64, 64, 64);
           if(pass.clear) c[GE::ClearMode] = 1 | 3 << 8;  //(colors and stencil)
           if(pass.masked) c[GE::MaskAlpha] = 0x0f;  //(the stencil's low bits kept: a write mask the move mustn't keep)
+          if(pass.tested) c[GE::StencilTestEnable] = 1, c[GE::StencilTest] = 2 | 0xff << 8 | 0xff << 16;
           for(auto& one : pass.sprites) sprite(*s, one);
-          c[GE::ClearMode] = 0, c[GE::TextureMappingEnable] = 0, c[GE::MaskAlpha] = 0;
+          c[GE::ClearMode] = 0, c[GE::TextureMappingEnable] = 0, c[GE::MaskAlpha] = 0, c[GE::StencilTestEnable] = 0;
         }
       }
       CHECK(gpu->statistics.finishes, before.finishes);
@@ -1564,8 +1565,9 @@ static auto gpuCheck() -> void {
 //At 2 and 3 times the PSP's resolution (GPU::resolution()): flat sprites over VRAM full of random bytes, in each
 //format, are the software renderer's byte for byte once read back (each pixel's scale x scale the same; memory's
 //bytes the GPU didn't draw over, the stencils too, back as they went in, through copy.frag's enlarging and the
-//blit's shrinking: their stencils a bit at a time and, where a shader can give them, with the colors, stencilWays());
-//the screen's picture at the target's own resolution is them, scale x scale each; render to texture from a copy at
+//blit's shrinking: their stencils a bit at a time and, where a shader can give them, with the colors, stencilWays(),
+//each exactly, as a sprite drawn first where the stencil is 255 shows); the screen's picture at the target's own
+//resolution is them, scale x scale each; render to texture from a copy at
 //the target's resolution, sampled 1:1, is exact too; and the depth buffer and the bytes beside the pixels behave as
 //at the PSP's own (gpuDepth, gpuBeside, run again).
 static auto gpuScaled() -> void {
@@ -1589,6 +1591,11 @@ static auto gpuScaled() -> void {
         for(System* s : {&software, &hardware}) {
           std::memcpy(s->memory.vram.data(), noise.data(), noise.size());
           prepare(*s, 0, format);
+          if(format) {  //(first, over all of it, where the stencil filled in is 255: the GPU's stencil decides)
+            s->ge.commands[GE::StencilTestEnable] = 1, s->ge.commands[GE::StencilTest] = 2 | 0xff << 8 | 0xff << 16;
+            sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff20'4060});
+            s->ge.commands[GE::StencilTestEnable] = 0;
+          }
           for(auto& one : flat) sprite(*s, one);
           s->ge.commands[GE::ClearMode] = 1 | 7 << 8;
           for(u32 n = 0; n < 4; n++) sprite(*s, flat[n]);
