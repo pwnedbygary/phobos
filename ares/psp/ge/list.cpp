@@ -29,11 +29,22 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
       else ge.renderer->finish(ge);
     }
   } drawn{*this};
+  //(a page of the list's found with nothing drawn or waiting to be drawn over any of its bytes, which stays so until a
+  //command draws: its words read without drawnFirst() asking each time. God of War runs its lists from VRAM, in pages
+  //the GPU draws in.)
+  u32 undrawn = ~0u;
   for(ran = 0; ran < budget;) {
     if(list.stall && list.address == list.stall) return Stop::Stalled;
     u32 at = list.address;
-    drawnFirst(at, 4);  //(a list in VRAM, where what waits may draw)
-    u32 word = memory.read(4, at);
+    if(at >> 12 != undrawn) {  //(a list in VRAM, where what waits may draw: drawn first, then read without asking again)
+      drawnFirst(at, 4);
+      undrawn = undrawnPage(at) ? at >> 12 : ~0u;
+    }
+    u32 word;
+    {
+      Memory::KnownDrawn known;
+      word = memory.read(4, at);
+    }
     ran++;
     list.address = (at + 4) & 0x0fff'ffff;
     u32 command = word >> 24, argument = word & 0xff'ffff;
@@ -41,9 +52,9 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
     switch(command) {
     case VertexAddress: vertexAddress = relative(argument); break;
     case IndexAddress:  indexAddress = relative(argument); break;
-    case Primitive:     primitive(argument >> 16 & 7, argument & 0xffff); break;
-    case Bezier:        patch(false, argument); break;
-    case Spline:        patch(true, argument); break;
+    case Primitive:     primitive(argument >> 16 & 7, argument & 0xffff), undrawn = ~0u; break;
+    case Bezier:        patch(false, argument), undrawn = ~0u; break;
+    case Spline:        patch(true, argument), undrawn = ~0u; break;
     case BoundingBox:   boxOutside = boundingBox(argument & 0xffff); break;
     case ConditionalJump:  //where JUMP would go, if the last BOUNDING_BOX was out of sight (pspsdk's sceGuEndObject)
       if(boxOutside) list.address = relative(argument & ~3u);
@@ -87,7 +98,7 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
     case ProjectionMatrixData:   matrixData(projection, 16, projectionIndex, argument); break;
     case TextureMatrixNumber:    textureIndex = argument & 0xf; break;
     case TextureMatrixData:      matrixData(textureMatrix, 12, textureIndex, argument); break;
-    case TransferStart:          transfer(); break;  //(after the drawing it depends on: threads.cpp)
+    case TransferStart:          transfer(), undrawn = ~0u; break;  //(after the drawing it depends on: threads.cpp)
     case ClutLoad:               loadClut(); break;
     }
   }

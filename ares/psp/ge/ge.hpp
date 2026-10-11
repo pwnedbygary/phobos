@@ -388,6 +388,8 @@ struct GE {
 
   //transform.cpp
   auto transformState() const -> Transform;
+  auto settingsState(Transform& t) const -> void;
+  auto transformKept() -> Transform&;
   auto transform(Vertex& vertex, const Transform& t) -> void;
   auto project(Vertex& vertex, const Transform& t, bool clipped) const -> void;
   auto clipTriangle(const Look& look, const Transform& t, const Vertex& a, const Vertex& b, const Vertex& c,
@@ -495,12 +497,24 @@ struct GE {
   template<typename Reaches> auto settleThrough(const Reaches& reaches) -> bool;
   auto clearBatch(Batch& batch) -> void;
   auto drawnFirst(u32 address, u32 size) -> void;
+  auto undrawnPage(u32 address) -> bool;
   auto drawnBefore(const std::bitset<VRAMPages>& read, const std::bitset<VRAMPages>& written) -> void;
   auto drawnOver(u32 first, u32 last) -> bool;
   auto defer(const PixelState& pixel, const Region& region) -> bool;
   auto record(const Job& job) -> void;
   auto drawBands(Batch& batch) -> void;
   auto worker() -> void;
+
+  //transformState()'s parts as they were last worked out (transformKept()), and the words they came from: the
+  //matrices', and the commands settingsState() and lightingState() read, in transform.cpp's ranges' order. (A PRIM
+  //sets its own on it too: its weights, its texture's size, whether its vertices have colors.)
+  struct KeptTransform {
+    static constexpr u32 Settings = 17, Lighting = 77;
+    bool valid = false;
+    u32 bones[96], world[12], view[12], projection[16], textureMatrix[12];
+    u32 settings[Settings], lighting[Lighting];
+    Transform transform{};
+  } keptTransform;
 
   std::vector<Vertex> primitiveVertices;  //the primitive being drawn's (draw.cpp); a curved surface's points
   std::vector<Vertex> patchVertices;      //the vertices a curved surface is cut into (curves.cpp)

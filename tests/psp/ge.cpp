@@ -2225,6 +2225,151 @@ static auto geTimeInterrupts() -> void {
   }
 }
 
+//Vertices read from VRAM that a sprite just before them in the list draws over (two points, through mode, an 8888
+//color and 16-bit positions, 12 bytes each, which the sprite's color 0x00200010 puts at (16, 32), where memory had
+//them at (8, 8)): what waits to be drawn over them is drawn first, as at one thread, with batches shared out however
+//small; for vertices in a row (all asked for at once: readVertices()), the first of them in the page before too, and
+//by indices, also past the PRIM's count of vertices from the first. Likewise a list's words its own sprite draws over
+//(run(): a page found undrawn is asked about again after a PRIM).
+static auto geVerticesDrawn() -> void {
+  constexpr u32 Drawn = 0x15'4000, Indices = 0x0899'0000;  //(Drawn: VRAM offset)
+  u32 first = 0;  //(the first vertex's bytes before the sprite's first pixel)
+  auto build = [&](Memory& memory, bool indexed) {
+    for(u32 n = 0; n < 68; n++) memory.write(4, VRAM + Drawn - 16 + n * 4, 0x0008'0008);
+    memory.write(1, Indices, first / 12 + 1), memory.write(1, Indices + 1, first / 12);  //(the sprite's two)
+    ListWriter list{memory, ListA};
+    u32 vertex = Vertices;
+    for(float value : {0.0f, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+    memory.write(4, vertex, 0), vertex += 4;
+    for(float value : {0.0f, 0.0f, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+    for(float value : {0.0f, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+    memory.write(4, vertex, 0x0020'0010), vertex += 4;
+    for(float value : {8.0f, 1.0f, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+    list.put(GE::FrameBufferPointer, Drawn), list.put(GE::FrameBufferWidth, 64);
+    list.put(GE::FrameBufferPixelFormat, 3);
+    list.put(GE::Scissor2, 479 | 271 << 10), list.put(GE::Region2, 479 | 271 << 10);
+    list.put(GE::VertexType, 0x80'019f), list.put(GE::ShadeMode, 1);
+    list.to(GE::VertexAddress, Vertices);
+    list.put(GE::Primitive, GE::Sprites << 16 | 2);
+    list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 512);
+    list.put(GE::VertexType, 0x80'011c | (indexed ? 1 << 11 : 0));
+    list.to(GE::VertexAddress, VRAM + Drawn - first);
+    if(indexed) list.to(GE::IndexAddress, Indices);
+    list.put(GE::Primitive, GE::Points << 16 | 2);
+    list.put(GE::Finish), list.put(GE::End);
+  };
+  auto drawn = [&](bool indexed, u32 threads) {
+    KernelMachine m;
+    m.system.ge.setThreads(threads);
+    m.system.ge.drawing.shared = 0;
+    build(m.system.memory, indexed);
+    m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
+    m.system.ge.settle();
+    return m.system.memory.vram;
+  };
+  for(bool indexed : {false, true}) {
+    auto whole = drawn(indexed, 1);
+    CHECK(whole[(32 * 512 + 16) * 4], u8(0x10));  //(the point drawn where the sprite put it)
+    for(u32 threads : {2u, 4u, 8u}) CHECK(drawn(indexed, threads) == whole, true);
+  }
+  //(the first vertex in the page before, which nothing draws, at (8, 8); the second, the sprite's, in the next)
+  first = 12;
+  auto whole = drawn(false, 1);
+  CHECK(whole[(8 * 512 + 8) * 4], u8(0x08)), CHECK(whole[(32 * 512 + 16) * 4], u8(0x10));
+  for(u32 threads : {2u, 4u, 8u}) CHECK(drawn(false, threads) == whole, true);
+  //(by indices 3 and 2, the sprite's: the PRIM's two vertices from the first are in the page before, not read)
+  first = 24;
+  whole = drawn(true, 1);
+  CHECK(whole[(32 * 512 + 16) * 4], u8(0x10));
+  for(u32 threads : {2u, 4u, 8u}) CHECK(drawn(true, threads) == whole, true);
+  //And a list in VRAM whose own sprite draws over its words further on in the page, reached by a JUMP: AMBIENT_COLOR
+  //words whose low 24 bits the sprite fills (its alpha the stencil, the frame buffer's own), run as drawn.
+  auto listed = [&](u32 threads) {
+    KernelMachine m;
+    m.system.ge.setThreads(threads);
+    m.system.ge.drawing.shared = 0;
+    auto& memory = m.system.memory;
+    u32 vertex = Vertices;
+    for(float value : {0.0f, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+    memory.write(4, vertex, 0), vertex += 4;
+    for(float value : {0.0f, 1.0f, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+    for(float value : {0.0f, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+    memory.write(4, vertex, 0xff00'ff40), vertex += 4;
+    for(float value : {4.0f, 2.0f, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+    ListWriter list{memory, VRAM + Drawn};
+    list.put(GE::FrameBufferPointer, Drawn), list.put(GE::FrameBufferWidth, 64);
+    list.put(GE::FrameBufferPixelFormat, 3);
+    list.put(GE::Scissor2, 479 | 271 << 10), list.put(GE::Region2, 479 | 271 << 10);
+    list.put(GE::VertexType, 0x80'019f), list.put(GE::ShadeMode, 1);
+    list.to(GE::VertexAddress, Vertices);
+    list.put(GE::Primitive, GE::Sprites << 16 | 2);
+    list.to(GE::Jump, VRAM + Drawn + 64 * 4);
+    ListWriter after{memory, VRAM + Drawn + 64 * 4};  //(row 1, which the sprite draws)
+    for(u32 n = 0; n < 4; n++) after.put(GE::AmbientColor);
+    after.put(GE::Finish), after.put(GE::End);
+    m.call("sceGeListEnQueue", {VRAM + Drawn, 0, 0xffff'ffff, 0});
+    m.system.ge.settle();
+    return m.system.ge.commands[GE::AmbientColor];
+  };
+  for(u32 threads : {1u, 2u, 4u, 8u}) CHECK(listed(threads), u32(GE::AmbientColor << 24 | 0x00'ff40));
+}
+
+//The 3D settings kept from one PRIM to the next (transformKept()), taken after a few of the GE's commands (any of the
+//256) and matrix elements are changed at random, round after round: field for field (floats bit for bit) the
+//Transform transformState() works out afresh. (Changes to the world matrix alone, most PRIMs' in a 3D game, are as
+//many as all the rest; a quarter of the values are infinities or not numbers as floats.)
+static auto sameTransform(const GE::Transform& a, const GE::Transform& b) -> bool {
+  static_assert(sizeof(GE::Transform) == 1292);  //(a field added is compared here too)
+  auto bits = [](const auto& x, const auto& y) { return !std::memcmp(&x, &y, sizeof(x)); };
+  for(u32 n = 0; n < 4; n++) {
+    auto &p = a.lights[n], &q = b.lights[n];
+    if(p.enabled != q.enabled || p.directional != q.directional || p.spot != q.spot || p.specular != q.specular ||
+       p.powered != q.powered || !bits(p.position, q.position) || !bits(p.direction, q.direction) ||
+       !bits(p.attenuation, q.attenuation) || !bits(p.cutoff, q.cutoff) || !bits(p.exponent, q.exponent) ||
+       p.ambient != q.ambient || p.diffuse != q.diffuse || p.shine != q.shine || !bits(p.toLight, q.toLight) ||
+       !bits(p.halfway, q.halfway) || !bits(p.products, q.products)) return false;
+  }
+  return bits(a.world, b.world) && bits(a.view, b.view) && bits(a.projection, b.projection) &&
+         bits(a.textureMatrix, b.textureMatrix) && bits(a.bones, b.bones) && a.weights == b.weights &&
+         bits(a.scale, b.scale) && bits(a.center, b.center) && bits(a.offsetX, b.offsetX) &&
+         bits(a.offsetY, b.offsetY) && a.depthClamp == b.depthClamp && a.mapMode == b.mapMode &&
+         a.mapSource == b.mapSource && bits(a.textureScale, b.textureScale) &&
+         bits(a.textureOffset, b.textureOffset) && bits(a.textureWidth, b.textureWidth) &&
+         bits(a.textureHeight, b.textureHeight) && a.fog == b.fog && a.fogForced == b.fogForced &&
+         bits(a.fogEnd, b.fogEnd) && bits(a.fogSlope, b.fogSlope) && bits(a.fogValue, b.fogValue) &&
+         a.lighting == b.lighting && a.separateSpecular == b.separateSpecular && a.normalReverse == b.normalReverse &&
+         a.vertexColor == b.vertexColor && a.materialColor == b.materialColor &&
+         a.materialEmissive == b.materialEmissive && a.materialAmbient == b.materialAmbient &&
+         a.materialDiffuse == b.materialDiffuse && a.materialSpecular == b.materialSpecular &&
+         a.ambientLight == b.ambientLight && bits(a.specularPower, b.specularPower) &&
+         bits(a.viewDirection, b.viewDirection) && bits(a.unlit, b.unlit) && a.shadeU == b.shadeU &&
+         a.shadeV == b.shadeV;
+}
+static auto geTransformKept() -> void {
+  System s;
+  auto& ge = s.ge;
+  std::mt19937 random{20261010};
+  u32* matrices[5] = {ge.bones, ge.world, ge.view, ge.projection, ge.textureMatrix};
+  u32 sizes[5] = {96, 12, 12, 16, 12};
+  u32 differing = 0;
+  for(u32 round = 0; round < 20000; round++) {
+    for(u32 changes = 1 + random() % 3; changes; changes--) {
+      u32 which = random() % 8, value = random() & 0xff'ffff;
+      if(random() % 4 == 0) value |= 0x7f'8000;  //(as a float24, an infinity or not a number)
+      if(which < 4) ge.world[random() % 12] = value;
+      else if(which < 6) ge.commands[random() % 256] = value;
+      else {
+        u32 matrix = random() % 5;
+        matrices[matrix][random() % sizes[matrix]] = value;
+      }
+    }
+    if(!sameTransform(ge.transformKept(), ge.transformState()) && differing++ < 4) {
+      std::printf("  round %u: not the same\n", round);
+    }
+  }
+  CHECK(differing, 0u);
+}
+
 auto geTests() -> Tests {
   return {
     {"ge commands", geCommands}, {"ge moving", geMoving}, {"ge stops", geStops}, {"ge vertices", geVertices},
@@ -2237,6 +2382,7 @@ auto geTests() -> Tests {
     {"ge lists queued twice", geQueuedTwice}, {"ge suspending signals' callbacks", geSuspendedCallbacks},
     {"ge calls and threads", geCallsAndThreads}, {"ge break", geBreak},
     {"ge break and callbacks", geBreakCallbacks}, {"ge time", geTime}, {"ge time's interrupt", geTimeInterrupts},
+    {"ge 3D settings kept from PRIM to PRIM", geTransformKept}, {"ge vertices and lists drawn first", geVerticesDrawn},
     {"event flags", eventFlags}, {"event flag waiting", eventFlagWaiting}, {"display picture", displayPicture},
     {"gu program", guProgram}, {"copy sample", copySample},
   };

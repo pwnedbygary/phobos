@@ -300,6 +300,7 @@ auto GE::reap() -> void {
   for(u32 n = 0; n < VRAMPages / 64; n++) memory.busyPages[n] = freed[n];
   if(memory.vramGuard) memory.vramGuard(false);
   for(u32 n = 0; n < VRAMPages / 64; n++) memory.busyPages[n] = kept[n];
+  memory.busyCleared++;
 }
 
 //Waits for every batch handed to the workers (the GE's thread drawing bands too), and empties them: VRAM is
@@ -338,6 +339,7 @@ auto GE::freeVRAM() -> void {
   memory.vramBusy = false;
   if(memory.vramGuard) memory.vramGuard(false);
   for(auto& pages : memory.busyPages) pages = 0;
+  memory.busyCleared++;
 }
 
 //Everything drawn put in memory's VRAM: the batches settled, and what a hardware renderer owns put back (ge.hpp's
@@ -415,6 +417,26 @@ auto GE::clearBatch(Batch& batch) -> void {
 //commands): whatever is waiting to be drawn over them is drawn first. A batch being filled is drawn, after those
 //before it; batches being drawn are waited for (those all drawn already needn't be); what a hardware renderer drew
 //over them is put back in memory.
+//Whether nothing drawn or waiting to be drawn reaches any byte of address's 4 KiB page, which drawnFirst() would then
+//find for each of them: it isn't VRAM's, or no batch draws over it (or has yet to read a deferred texture from it),
+//and the renderer has drawn none of its bytes. (Asked just after drawnFirst() for a word of the page, which has drawn
+//any batch over the page by then: the renderer's pixels beside that word are what it can find.)
+auto GE::undrawnPage(u32 address) -> bool {
+  u32 first, last;
+  if(!vramSpan(address & ~0xfffu, 0x1000, first, last)) return true;
+  auto over = [&](const Batch& batch) {
+    for(u32 page = first >> 12; page <= last >> 12; page++) {
+      if(batch.pending[page] || batch.reads[page]) return true;
+    }
+    return false;
+  };
+  if(!drawing.batch->jobs.empty() && over(*drawing.batch)) return false;
+  for(auto& batch : drawing.batches) {
+    if(unfinished(batch) && over(batch)) return false;
+  }
+  return !(renderer && memory.vramBusy && renderer->drawnOver(*this, first, last));
+}
+
 auto GE::drawnFirst(u32 address, u32 size) -> void {
   u32 first, last;
   if(!vramSpan(address, size, first, last)) return;
@@ -424,11 +446,12 @@ auto GE::drawnFirst(u32 address, u32 size) -> void {
     }
     return false;
   };
-  if(!drawing.batch->jobs.empty() && over(*drawing.batch)) return flush();
-  for(auto& batch : drawing.batches) {
-    if(unfinished(batch) && over(batch)) return settle();
+  if(!drawing.batch->jobs.empty() && over(*drawing.batch)) flush();
+  else for(auto& batch : drawing.batches) {
+    if(unfinished(batch) && over(batch)) { settle(); break; }
   }
-  //(what a hardware renderer drew, still on the GPU: its pixels' bytes, not all of the pages they're in)
+  //(what a hardware renderer drew, still on the GPU: its pixels' bytes, not all of the pages they're in; asked after
+  //the batches too, as the GE's reads after this don't ask memory again)
   if(renderer && memory.vramBusy && renderer->drawnOver(*this, first, last)) renderer->finish(*this);
 }
 

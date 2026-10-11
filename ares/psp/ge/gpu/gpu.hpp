@@ -170,7 +170,8 @@ struct GPU : GE::Renderer {
     u32 state = 0, first = 0, count = 0;  //Draw, Mesh
     s32 x = 0, y = 0;                     //Upload, Readback, Copy
     u32 width = 0, height = 0;
-    u64 colors = 0, stencil = 0, depth = 0;  //Upload: where in uploads (8888s, bytes, 16-bit depths); Present's
+    u64 colors = 0, stencil = 0, depth = 0;  //Upload: where in uploads (8888s, bytes, 16-bit depths: the parts it
+                                             //has); Present's
     u8 parts = 3;                            //Upload: bit 0 the colors and stencils, bit 1 the depths
     u32 texture = 0;                         //Copy
     u16 intoX = 0, intoY = 0;                //Copy: where in the texture (its top left the target's x, y)
@@ -178,7 +179,8 @@ struct GPU : GE::Renderer {
     //scale x scale, the same one each time, so that memory's bytes the GPU didn't draw over come back as they went
     //in), or more, up to the backend's scale, for the screen (shrunk smoothly, the colors alone, no stencil)
     u8 at = 1;
-    u8 format = 3;  //Present: the frame buffer's GE format, its colors shown as memory keeps them (3: as they are)
+    u8 format = 3;  //Present: the frame buffer's GE format, its colors shown as memory keeps them (3: as they are);
+                  //Upload, Move: the target's
     u8 sourceFormat = 3;            //Move
     u32 source = 0;
     u16 sourceX = 0, sourceY = 0;
@@ -219,6 +221,10 @@ struct GPU : GE::Renderer {
     bool transforms = false;
     //Whether it moves pixels from one target into another (Command::Move: the driver took move.frag's pipelines)
     bool moves = false;
+    //Whether a shader gives the stencil's value (VK_EXT_shader_stencil_export): pixels put into a target above 1x
+    //(Upload) or moved into one (Move) are drawn with their stencil at once, not a bit at a time (the tests turn it
+    //off to draw the bits)
+    bool stencilExport = false;
     //Whether the last run put a picture on the window: a Present's swapchain image acquired and presented (not
     //where there's no window, or the acquiring timed out: the host shows the frame itself then)
     bool presented = false;
@@ -272,6 +278,7 @@ struct GPU : GE::Renderer {
     s32 left = 0, top = 0, right = -1, bottom = -1;  //drawn since it was last read back
     s32 changes[4] = {0, 0, -1, -1};  //changed since its copies last heard (textureFor()): left, top, right, bottom
     std::vector<std::array<s32, 4>> told;  //rectangles memory has heard were drawn over since then (own())
+    u64 toldBusy = 0;                       //(Memory::busyCleared as they were told)
     u64 used = 0;
     //VRAM's bytes (offsets, inclusive) someone reached in its pages while the GPU drew in them, not over what it
     //drew (drawnOver()), or changed in pages it hasn't drawn in since the last finish (written()): memory's, maybe
@@ -284,6 +291,9 @@ struct GPU : GE::Renderer {
     //drew there (overwritten()): memory's, not put back, and filled again before a PRIM draws over them or they're
     //copied or shown or moved (revive()). (At most 16; where there'd be more, the write waits for a finish.)
     std::vector<std::pair<u32, u32>> dead;
+    //VRAM's pages first to last found owned by no other target as of drawnSerial (begin(): not looked through again
+    //while that's so)
+    struct Alone { u32 first = 0, last = 0; u64 serial = 0; } alone;
     auto bytes() const -> u32 { return format == 3 ? 4 : 2; }
     auto end() const -> u32 { return address + rows * stride * bytes(); }  //(the VRAM bytes it covers)
     auto drawn() const -> bool { return left <= right; }
@@ -414,6 +424,7 @@ private:
   //it runs on into the frame buffer below
   struct Held { Target* target; s32 x, y; u32 width, rows, format; Target* next = nullptr; u32 split = 0; };
   std::optional<Held> held;
+  auto take(const GE::Sampler& texture, u32 offset, u64 end, u32 width, u32 rows, bool direct) -> bool;
   //(one for each target and place copied from, its width and rows, and the rectangle of the target changed since,
   //left, top, right, bottom in its pixels, none where left is past right: taken again, only that part is copied, so
   //an effect drawing again and again into one corner of the frame buffer it samples copies the corner, not the

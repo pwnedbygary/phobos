@@ -197,6 +197,11 @@ before a PRIM draws into, or fills, rows whose pages another target owns, the ot
 on the GPU where the rows are the same bytes (part 65: the same row width in bytes, pages of whole rows, rows starting
 at the same byte; `move()`, `move.frag`), as a finish and a fill from memory would leave them, any format into any, at
 any scale; elsewhere the renderer finishes first, so memory has the other's pixels, and the target is filled from them.
+A move draws the colors and the stencil in one draw where a shader can give the stencil (part 67:
+`VK_EXT_shader_stencil_export`, `move.frag`'s EXPORT build), else the colors and then the stencil's bits a draw each,
+only those the target's format keeps (one for 5551, four for 4444, eight for 8888; `stencilBits()`); a 5650 target has
+no stencil, which no draw tests and which read backs and moves leave out, so moves into it leave it and moves from it
+don't take it.
 
 **Submitting.** What's recorded is handed to the GPU every 128 commands, at a list's end once 32 commands are
 recorded (`submit()`; part 52: WipEout Pure ends 209 lists a frame, each a `vkQueueSubmit` and a wait for the slot
@@ -265,7 +270,10 @@ second's address on from its first rows, and taken whole each time (the second p
 Midnight Club 3's menu samples its frame buffer at VRAM 0 as a texture 512 rows tall, and its filter reaches row 272,
 the next frame buffer's first, which the PRIM is drawing into: refused, it was decoded from memory, a finish every
 frame. The texture is the GPU's copy of each target's pixels as they were before the PRIM, as for any texture a PRIM
-draws over.
+draws over. Part 65 moved the other targets' pixels in a texture's pages into its own target first (God of War's 272
+tiles then take one copy kept, where two parts, not kept, were 12,000 copies a frame); part 67 leaves out a move of
+pages the PRIM itself draws in, which its own drawing would move back (Midnight Club 3's), taking those in two parts,
+and moves only where two parts can't be had (`holds()`, `take()`).
 
 ## The texture cache
 
@@ -342,7 +350,9 @@ images allow (a target 512 of the PSP's pixels across, so 10 on both test GPUs).
   its middle (the GE's texel centres), so `gl_FragCoord` times 16 over the scale lands on the same texels at any N,
   with no half-pixel shift (one was tried; it moved the texels).
 - **Uploads** (memory's newer bytes into a target) go through `copy.frag`, drawn N times larger: mode 0 the colours,
-  mode 1 the depth, mode 2 the stencil one bit at a time (a stencil can only be written by its test).
+  mode 1 the depth, mode 2 the stencil one bit at a time (a stencil can only be written by its test), only the bits
+  the target's format keeps and none for 5650; or, where a shader can give the stencil (part 67:
+  `VK_EXT_shader_stencil_export`), mode 0 of its EXPORT build, the colours and the stencil in one draw.
 - **Read-backs** for the CPU or the GE (a frame buffer it reads, depth, the picture in VRAM) are first blitted to
   the PSP's size with NEAREST into a scratch image (`shrunk`), the stencil copied row by row, and squeezed on the
   CPU, so memory's VRAM always holds the PSP's own pictures and everything that reads it sees what the software

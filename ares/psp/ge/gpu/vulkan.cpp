@@ -16,10 +16,10 @@
 //At a higher resolution (Backend::scale above 1: docs/psp-gpu-renderers.md, "Upscaling") each target's pictures are
 //scale times the PSP's size each way, and every command's rectangle is scaled with them. What Vulkan's copies can't
 //scale is drawn: memory's pixels are copied into pictures of the PSP's size and enlarged into the target by
-//copy.frag (the colors, the depth, and the stencil a bit at a time); read back for memory, a target is shrunk by a
-//blit that takes one of each pixel's scale x scale (the one at its middle, or just right of and below it), and its
-//stencil comes back a row of each pixel's at a time, the same one of each taken on the CPU. So memory's bytes the GPU
-//didn't draw over come back as they went in, at any scale.
+//copy.frag (the colors, the depth, and the stencil with the colors or a bit at a time); read back for memory, a
+//target is shrunk by a blit that takes one of each pixel's scale x scale (the one at its middle, or just right of
+//and below it), and its stencil comes back a row of each pixel's at a time, the same one of each taken on the CPU.
+//So memory's bytes the GPU didn't draw over come back as they went in, at any scale.
 //
 //Presenting (docs/psp-gpu-renderers.md, "Presenting"): given the host's window (Android's), the screen's picture is
 //drawn over the whole of a swapchain image by present.frag and presented, in the run that has the Present, with
@@ -199,6 +199,10 @@ struct VulkanBackend : GPU::Backend {
   VkShaderModule copyVertexModule = VK_NULL_HANDLE, copyFragmentModule = VK_NULL_HANDLE;
   VkPipelineLayout copyLayout = VK_NULL_HANDLE;
   VkPipeline copyPipelines[3] = {};
+  //(where a shader can give the stencil's value, Backend::stencilExport: copy.frag's and move.frag's colors drawn with
+  //the stencil at once, by their EXPORT modules' pipelines, in place of a draw for each of its bits)
+  VkShaderModule copyExportModule = VK_NULL_HANDLE, moveExportModule = VK_NULL_HANDLE;
+  VkPipeline copyExportPipeline = VK_NULL_HANDLE, moveExportPipeline = VK_NULL_HANDLE;
   //(moves' (Command::Move, move.frag): its set's layout (the source's colors and stencils), its pipelines (MODE 0
   //and 1) and their layout, and the pictures the source's pixels are taken into, with the set that samples them,
   //made larger as wanted)
@@ -265,6 +269,12 @@ struct VulkanBackend : GPU::Backend {
       if(shownPicture.set) vk.vkFreeDescriptorSets(device, descriptorPool, 1, &shownPicture.set);
       destroy(shownPicture.image);
       for(auto pipeline : copyPipelines) if(pipeline) vk.vkDestroyPipeline(device, pipeline, nullptr);
+      for(auto pipeline : {copyExportPipeline, moveExportPipeline}) {
+        if(pipeline) vk.vkDestroyPipeline(device, pipeline, nullptr);
+      }
+      for(auto module : {copyExportModule, moveExportModule}) {
+        if(module) vk.vkDestroyShaderModule(device, module, nullptr);
+      }
       if(copyLayout) vk.vkDestroyPipelineLayout(device, copyLayout, nullptr);
       for(auto pipeline : movePipelines) if(pipeline) vk.vkDestroyPipeline(device, pipeline, nullptr);
       if(moveSet) vk.vkFreeDescriptorSets(device, descriptorPool, 1, &moveSet);
@@ -714,7 +724,8 @@ struct VulkanBackend : GPU::Backend {
   //copy.frag's pipeline for a MODE: the colors written as they are (0), the depth through gl_FragDepth (1), or the
   //stencil's bit the write mask has (2: replaced with the reference, 255, where the pixel's stencil has it). The
   //viewport is the rectangle copied into; nothing else is tested or blended. (move.frag's likewise, its MODE 0 the
-  //colors, 1 the stencil's bit: writes 0 or 2, in its layout.)
+  //colors, 1 the stencil's bit: writes 0 or 2, in its layout; and either's EXPORT module's MODE 0, the colors and
+  //the stencil the shader gives, replaced under the write mask: writes 3.)
   auto makeCopyPipeline(u32 mode, VkShaderModule fragment = VK_NULL_HANDLE, VkPipelineLayout layout = VK_NULL_HANDLE,
                         u32 writes = ~0u) -> VkPipeline {
     if(!fragment) fragment = copyFragmentModule, layout = copyLayout, writes = mode;
@@ -742,12 +753,12 @@ struct VulkanBackend : GPU::Backend {
       VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO);
     depth.depthTestEnable = writes == 1, depth.depthWriteEnable = writes == 1;
     depth.depthCompareOp = VK_COMPARE_OP_ALWAYS;
-    depth.stencilTestEnable = writes == 2;
+    depth.stencilTestEnable = writes >= 2;
     depth.front = {VK_STENCIL_OP_KEEP, VK_STENCIL_OP_REPLACE, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_ALWAYS, 0xff, 0xff,
                    0xff};
     depth.back = depth.front;
     VkPipelineColorBlendAttachmentState attachment{};
-    attachment.colorWriteMask = writes == 0 ? 15 : 0;
+    attachment.colorWriteMask = writes == 0 || writes == 3 ? 15 : 0;
     auto blend = made<VkPipelineColorBlendStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);
     blend.attachmentCount = 1, blend.pAttachments = &attachment;
     VkDynamicState dynamics[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
@@ -796,7 +807,21 @@ struct VulkanBackend : GPU::Backend {
     }
     movePipelines[0] = makeCopyPipeline(0, moveModule, moveLayout, 0);
     movePipelines[1] = makeCopyPipeline(1, moveModule, moveLayout, 2);
+    moveExportPipeline = exportPipeline(GPUShaders::moveExportSPIRV, sizeof(GPUShaders::moveExportSPIRV),
+                                        moveExportModule, moveLayout);
     return movePipelines[0] && movePipelines[1];
+  }
+
+  //An EXPORT module's pipeline (stencilExport's): none where there's no such extension or the driver won't take it,
+  //and the stencil's bits are drawn one at a time
+  auto exportPipeline(const u32* code, size_t size, VkShaderModule& module, VkPipelineLayout layout) -> VkPipeline {
+    if(!stencilExport) return VK_NULL_HANDLE;
+    auto moduleInfo = made<VkShaderModuleCreateInfo>(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
+    moduleInfo.codeSize = size, moduleInfo.pCode = code;
+    if(vk.vkCreateShaderModule(device, &moduleInfo, nullptr, &module) != VK_SUCCESS) {
+      return module = VK_NULL_HANDLE, VK_NULL_HANDLE;
+    }
+    return makeCopyPipeline(0, module, layout, 3);
   }
 
   //The pictures a move takes the source's pixels into (width x height of its colors, stencilWidth x height of its
@@ -844,10 +869,27 @@ struct VulkanBackend : GPU::Backend {
   //(its stencils' rows in the staging buffer: bytes of each, whole words)
   auto movedPitch(const GPU::Command& c) const -> u32 { return (moved(c) * scale + 3) & ~3u; }
 
+  //The target's stencil over area set from its pixels' alphas, after their colors are drawn, where no shader gives
+  //it with them (stencilExport): cleared, then draw(bit, mask) for each bit its GE format keeps apart, a draw that
+  //sets the stencil's bits in mask where the pixel's alpha has bit: a 5551 target's stencil is 0 or 255 (one draw), a
+  //4444 one's its four bits twice over (four), an 8888 one's eight. A 5650 target's is left as it is: it has none,
+  //which no draw tests (GPU::settings()), and which a read back for memory (narrowTarget()) and a move from it
+  //(move.frag) leave out.
+  template<typename Draw> auto stencilBits(VkCommandBuffer commands, u32 format, VkRect2D area, const Draw& draw)
+    -> void {
+    if(format == 0) return;
+    VkClearAttachment clear{VK_IMAGE_ASPECT_STENCIL_BIT, 0, {}};
+    VkClearRect rect{area, 0, 1};
+    vk.vkCmdClearAttachments(commands, 1, &clear, 1, &rect);
+    if(format == 1) return draw(0x80, 0xff);
+    for(u32 bit = 0; bit < (format == 2 ? 4u : 8u); bit++) draw(1 << bit, (format == 2 ? 0x11 : 1) << bit);
+  }
+
   //A Move (move.frag): the source's rectangle, one of each pixel's colors and its stencils' rows through the
   //middle of each (as a read back for memory takes them), taken into pictures of the PSP's size, through the slot's
-  //staging buffer at stencils for the stencils, then drawn into the target's rectangle: the colors, then the stencil
-  //cleared and set a bit at a time.
+  //staging buffer at stencils for the stencils (none for a 5650 source, whose colors are all it takes), then drawn
+  //into the target's rectangle: the colors and the stencil at once (stencilExport), or the colors and then the
+  //stencil's bits (stencilBits()).
   auto move(VkCommandBuffer commands, Slot& slot, Target& t, Target& from, const GPU::Command& c, u64 stencils)
     -> void {
     u32 width = moved(c), height = c.height, pitch = movedPitch(c);
@@ -871,25 +913,29 @@ struct VulkanBackend : GPU::Backend {
     }
     transition(commands, from.color.image, VK_IMAGE_ASPECT_COLOR_BIT, Source, ColorLayout);
     transition(commands, moveColors.image, VK_IMAGE_ASPECT_COLOR_BIT, Destination, Read);
-    transition(commands, from.depth.image, DepthStencil, DepthLayout, Source);
-    rows.resize(height);
-    for(u32 y = 0; y < height; y++) {
-      rows[y] = {stencils + u64(y) * pitch, 0, 0, {VK_IMAGE_ASPECT_STENCIL_BIT, 0, 0, 1},
-                 {offset.x, s32((c.sourceY + y) * scale + scale / 2), 0}, {width * scale, 1, 1}};
+    if(c.sourceFormat == 0) {  //(a 5650 source's colors are all move.frag takes from it)
+      transition(commands, moveStencils.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, Read);
+    } else {
+      transition(commands, from.depth.image, DepthStencil, DepthLayout, Source);
+      rows.resize(height);
+      for(u32 y = 0; y < height; y++) {
+        rows[y] = {stencils + u64(y) * pitch, 0, 0, {VK_IMAGE_ASPECT_STENCIL_BIT, 0, 0, 1},
+                   {offset.x, s32((c.sourceY + y) * scale + scale / 2), 0}, {width * scale, 1, 1}};
+      }
+      vk.vkCmdCopyImageToBuffer(commands, from.depth.image, Source, slot.staging.buffer, height, rows.data());
+      transition(commands, from.depth.image, DepthStencil, Source, DepthLayout);
+      auto copied = made<VkBufferMemoryBarrier>(VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER);
+      copied.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, copied.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+      copied.srcQueueFamilyIndex = copied.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      copied.buffer = slot.staging.buffer, copied.offset = stencils, copied.size = u64(pitch) * height;
+      vk.vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
+                              1, &copied, 0, nullptr);
+      transition(commands, moveStencils.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, Destination);
+      VkBufferImageCopy stencilCopy{stencils, pitch, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {},
+                                    {width * scale, height, 1}};
+      vk.vkCmdCopyBufferToImage(commands, slot.staging.buffer, moveStencils.image, Destination, 1, &stencilCopy);
+      transition(commands, moveStencils.image, VK_IMAGE_ASPECT_COLOR_BIT, Destination, Read);
     }
-    vk.vkCmdCopyImageToBuffer(commands, from.depth.image, Source, slot.staging.buffer, height, rows.data());
-    transition(commands, from.depth.image, DepthStencil, Source, DepthLayout);
-    auto copied = made<VkBufferMemoryBarrier>(VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER);
-    copied.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, copied.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    copied.srcQueueFamilyIndex = copied.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    copied.buffer = slot.staging.buffer, copied.offset = stencils, copied.size = u64(pitch) * height;
-    vk.vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
-                            1, &copied, 0, nullptr);
-    transition(commands, moveStencils.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, Destination);
-    VkBufferImageCopy stencilCopy{stencils, pitch, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {},
-                                  {width * scale, height, 1}};
-    vk.vkCmdCopyBufferToImage(commands, slot.staging.buffer, moveStencils.image, Destination, 1, &stencilCopy);
-    transition(commands, moveStencils.image, VK_IMAGE_ASPECT_COLOR_BIT, Destination, Read);
     VkRect2D area = scaled(t, c.x, c.y, c.width, c.height);
     if(!area.extent.width || !area.extent.height) return;
     beginPass(commands, t);
@@ -899,20 +945,22 @@ struct VulkanBackend : GPU::Backend {
     MovePush push{{c.x * s32(scale), c.y * s32(scale)}, scale, 0, u32(c.sourceFormat) | u32(c.format) << 8};
     //(everything bound again for each draw, as upload()'s are: the stencil's clearing may be a draw of the driver's
     //own, which MoltenVK leaves the set unbound after)
-    auto draw = [&](u32 mode) {
-      vk.vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, movePipelines[mode]);
+    auto draw = [&](VkPipeline pipeline) {
+      vk.vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
       vk.vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, moveLayout, 0, 1, &moveSet, 0, nullptr);
       vk.vkCmdPushConstants(commands, moveLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
       vk.vkCmdDraw(commands, 3, 1, 0, 0);
     };
-    draw(0);
-    VkClearAttachment clear{VK_IMAGE_ASPECT_STENCIL_BIT, 0, {}};
-    VkClearRect rect{area, 0, 1};
-    vk.vkCmdClearAttachments(commands, 1, &clear, 1, &rect);
-    for(u32 bit = 0; bit < 8; bit++) {
-      push.bit = 1 << bit;
-      vk.vkCmdSetStencilWriteMask(commands, VK_STENCIL_FACE_FRONT_AND_BACK, push.bit);
-      draw(1);
+    if(c.format && stencilExport && moveExportPipeline) {
+      vk.vkCmdSetStencilWriteMask(commands, VK_STENCIL_FACE_FRONT_AND_BACK, 0xff);
+      draw(moveExportPipeline);
+    } else {
+      draw(movePipelines[0]);
+      stencilBits(commands, c.format, area, [&](u32 bit, u32 mask) {
+        push.bit = bit;
+        vk.vkCmdSetStencilWriteMask(commands, VK_STENCIL_FACE_FRONT_AND_BACK, mask);
+        draw(movePipelines[1]);
+      });
     }
     vk.vkCmdEndRenderPass(commands);
   }
@@ -1057,6 +1105,13 @@ struct VulkanBackend : GPU::Backend {
     u32 lastState = ~0u;
     VkPipeline boundPipeline = VK_NULL_HANDLE;
     VkDescriptorSet boundSet = VK_NULL_HANDLE;
+    //(the dynamic state and push constants set in the open pass, which a draw with the same doesn't set again: every
+    //draw pipeline has them dynamic, in one layout; forgotten as a pass begins, so nothing another layout's pipelines
+    //bound in between, or a driver, may have left counts. God of War draws 2,200 times a frame in 140 passes.)
+    struct Set { bool known = false; VkRect2D scissor; u32 reference, compareMask, writeMask, blend; GPU::Push push; };
+    Set set;
+    GPU::Pipeline lastKey{};  //(and the last state's pipeline, not looked up again for the next with the same)
+    VkPipeline lastPipeline = VK_NULL_HANDLE;
     auto endPass = [&] {
       if(pass) vk.vkCmdEndRenderPass(commands), pass = nullptr;
     };
@@ -1092,7 +1147,7 @@ struct VulkanBackend : GPU::Backend {
           beginPass(commands, t);
           VkViewport viewport{0, 0, f32(t.width * scale), f32(t.height * scale), 0, 1};
           vk.vkCmdSetViewport(commands, 0, 1, &viewport);
-          pass = &t, lastState = ~0u;
+          pass = &t, lastState = ~0u, set.known = false;
           //(the sets bound again from 0 up, as a copy's layout may have been bound, which leaves this layout's sets
           //undefined, and binding a lower set after a higher one through another layout would too: set 0 the blank
           //texture's until a draw's own, set 1 the target's colors for shader blending, set 2 at the first mesh)
@@ -1102,7 +1157,8 @@ struct VulkanBackend : GPU::Backend {
           boundSet = sets[0], transformsBound = false;
         }
         if(c.state != lastState) {
-          VkPipeline pipeline = pipelineFor(s.pipeline);
+          if(!lastPipeline || !(s.pipeline == lastKey)) lastPipeline = pipelineFor(s.pipeline), lastKey = s.pipeline;
+          VkPipeline pipeline = lastPipeline;
           if(!pipeline) continue;
           if(pipeline != boundPipeline) {
             vk.vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline), boundPipeline = pipeline;
@@ -1115,15 +1171,29 @@ struct VulkanBackend : GPU::Backend {
                                        0, nullptr);
           }
           VkRect2D scissor = scaled(t, s.scissor[0], s.scissor[1], s.scissor[2], s.scissor[3]);
-          vk.vkCmdSetScissor(commands, 0, 1, &scissor);
-          vk.vkCmdSetStencilReference(commands, VK_STENCIL_FACE_FRONT_AND_BACK, s.stencilReference);
-          vk.vkCmdSetStencilCompareMask(commands, VK_STENCIL_FACE_FRONT_AND_BACK, s.stencilCompareMask);
-          vk.vkCmdSetStencilWriteMask(commands, VK_STENCIL_FACE_FRONT_AND_BACK, s.stencilWriteMask);
-          f32 constant[4];
-          for(u32 n = 0; n < 4; n++) constant[n] = (s.blendConstant >> n * 8 & 0xff) / 255.0f;
-          vk.vkCmdSetBlendConstants(commands, constant);
-          vk.vkCmdPushConstants(commands, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                                0, sizeof(GPU::Push), &s.push);
+          bool known = set.known;
+          if(!known || std::memcmp(&scissor, &set.scissor, sizeof(scissor))) {
+            vk.vkCmdSetScissor(commands, 0, 1, &scissor);
+          }
+          if(!known || s.stencilReference != set.reference) {
+            vk.vkCmdSetStencilReference(commands, VK_STENCIL_FACE_FRONT_AND_BACK, s.stencilReference);
+          }
+          if(!known || s.stencilCompareMask != set.compareMask) {
+            vk.vkCmdSetStencilCompareMask(commands, VK_STENCIL_FACE_FRONT_AND_BACK, s.stencilCompareMask);
+          }
+          if(!known || s.stencilWriteMask != set.writeMask) {
+            vk.vkCmdSetStencilWriteMask(commands, VK_STENCIL_FACE_FRONT_AND_BACK, s.stencilWriteMask);
+          }
+          if(!known || s.blendConstant != set.blend) {
+            f32 constant[4];
+            for(u32 n = 0; n < 4; n++) constant[n] = (s.blendConstant >> n * 8 & 0xff) / 255.0f;
+            vk.vkCmdSetBlendConstants(commands, constant);
+          }
+          if(!known || !(s.push == set.push)) {
+            vk.vkCmdPushConstants(commands, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                  0, sizeof(GPU::Push), &s.push);
+          }
+          set = {true, scissor, s.stencilReference, s.stencilCompareMask, s.stencilWriteMask, s.blendConstant, s.push};
           lastState = c.state;
         }
         //(what the draws before wrote, made visible to its reading, where the GPU doesn't keep the order: in
@@ -1189,10 +1259,12 @@ struct VulkanBackend : GPU::Backend {
           boundPipeline = VK_NULL_HANDLE, boundSet = VK_NULL_HANDLE, lastState = ~0u, transformsBound = false;
           continue;
         }
-        std::memcpy(staging + colors, in + c.colors, count * 4);
-        std::memcpy(staging + stencils, in + c.stencil, count);
+        if(colored) {
+          std::memcpy(staging + colors, in + c.colors, count * 4);
+          std::memcpy(staging + stencils, in + c.stencil, count);
+        }
         u32* depth = (u32*)(staging + depths);
-        for(u32 n = 0; n < count; n++) {
+        for(u32 n = 0; n < count && depthed; n++) {
           u16 z;
           std::memcpy(&z, in + c.depth + n * 2, 2);
           if(depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT) {
@@ -1347,8 +1419,9 @@ struct VulkanBackend : GPU::Backend {
 
   //Memory's pixels put into a target at a higher resolution (copy.frag): the colors (the stencil their alpha) and
   //the depths (two bytes of each, the low one first) copied into pictures of the PSP's size, then drawn into the
-  //rectangle each of them covers: the colors as they are, the stencil cleared and then set a bit at a time (eight
-  //draws, each writing one bit where the pixel's stencil has it), the depth through gl_FragDepth.
+  //rectangle each of them covers: the colors as they are, and the stencil with them (stencilExport) or then a bit at
+  //a time (stencilBits(): a draw for each bit the target's format keeps apart, each writing it where the pixel's
+  //stencil has it), the depth through gl_FragDepth.
   auto upload(VkCommandBuffer commands, Slot& slot, Target& t, const GPU::Command& c, const u8* in, u64 colors,
               u64 depths) -> void {
     u32 count = c.width * c.height;
@@ -1384,25 +1457,25 @@ struct VulkanBackend : GPU::Backend {
     vk.vkCmdSetViewport(commands, 0, 1, &viewport);
     vk.vkCmdSetScissor(commands, 0, 1, &area);
     CopyPush push{{c.x * s32(scale), c.y * s32(scale)}, scale, 0};
-    auto draw = [&](u32 mode, const Staged& staged) {
-      vk.vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, copyPipelines[mode]);
+    auto draw = [&](VkPipeline pipeline, const Staged& staged) {
+      vk.vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
       vk.vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, copyLayout, 0, 1, &staged.set, 0,
                                  nullptr);
       vk.vkCmdPushConstants(commands, copyLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
       vk.vkCmdDraw(commands, 3, 1, 0, 0);
     };
-    if(colored) {
-      draw(0, stagedColors);
-      VkClearAttachment clear{VK_IMAGE_ASPECT_STENCIL_BIT, 0, {}};
-      VkClearRect rect{area, 0, 1};
-      vk.vkCmdClearAttachments(commands, 1, &clear, 1, &rect);
-      for(u32 bit = 0; bit < 8; bit++) {
-        push.bit = 1 << bit;
-        vk.vkCmdSetStencilWriteMask(commands, VK_STENCIL_FACE_FRONT_AND_BACK, push.bit);
-        draw(2, stagedColors);
-      }
+    if(colored && c.format && stencilExport && copyExportPipeline) {
+      vk.vkCmdSetStencilWriteMask(commands, VK_STENCIL_FACE_FRONT_AND_BACK, 0xff);
+      draw(copyExportPipeline, stagedColors);
+    } else if(colored) {
+      draw(copyPipelines[0], stagedColors);
+      stencilBits(commands, c.format, area, [&](u32 bit, u32 mask) {
+        push.bit = bit;
+        vk.vkCmdSetStencilWriteMask(commands, VK_STENCIL_FACE_FRONT_AND_BACK, mask);
+        draw(copyPipelines[2], stagedColors);
+      });
     }
-    if(depthed) draw(1, stagedDepths);
+    if(depthed) draw(copyPipelines[1], stagedDepths);
     vk.vkCmdEndRenderPass(commands);
   }
 
@@ -1884,6 +1957,9 @@ struct VulkanBackend : GPU::Backend {
       if(surfaces && !std::strcmp(extension.extensionName, "VK_KHR_swapchain")) {
         deviceExtensions.push_back("VK_KHR_swapchain"), canPresent = true;
       }
+      if(!std::strcmp(extension.extensionName, "VK_EXT_shader_stencil_export")) {
+        deviceExtensions.push_back("VK_EXT_shader_stencil_export"), stencilExport = true;
+      }
     }
     //Shader blending (docs/psp-gpu-renderers.md): the target's pixel read through an input attachment, which every
     //Vulkan GPU has. Where the GPU offers rasterization order (EXT's, or ARM's before it) every blend reads, in
@@ -2085,6 +2161,9 @@ struct VulkanBackend : GPU::Backend {
     for(u32 mode = 0; mode < 3; mode++) {
       if(!(copyPipelines[mode] = makeCopyPipeline(mode))) return error = "the copy pipelines weren't made", false;
     }
+    copyExportPipeline = exportPipeline(GPUShaders::copyExportSPIRV, sizeof(GPUShaders::copyExportSPIRV),
+                                        copyExportModule, copyLayout);
+    stencilExport = copyExportPipeline;
     moves = makeMoves();
     auto commandPoolInfo = made<VkCommandPoolCreateInfo>(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
     commandPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;

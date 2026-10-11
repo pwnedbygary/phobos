@@ -29,8 +29,7 @@
 //is barely wider than the area drawn, they can be another row's pixels, which another thread may be drawing. A four
 //wholly inside its row reads and writes its four pixels at once, those dropped with the very bytes they had (its own
 //pixels, in its own row, which only this thread draws meanwhile); one that isn't, each lane inside it by itself.
-//What isn't drawn here (points, lines, logic operations, the jobs fourFriendly() turns down) is drawn a pixel at a
-//time, as before.
+//What isn't drawn here (points, lines, the jobs fourFriendly() turns down) is drawn a pixel at a time, as before.
 
 static constexpr GE::s32x4 Lanes = {0, 1, 2, 3};
 
@@ -129,8 +128,31 @@ static alwaysinline auto stencilLanes(u32 operation, s32 reference, GE::s32x4 st
   }
   return stencil;
 }
-//Whether the job may be drawn four pixels at a time (see the top of this file): a triangle or a sprite, without a
-//logic operation, its texture (if any) kept decoded, or to be as its batch starts (deferred: no band draws before
+//The logic operation (drawPixelAs(), pixel.cpp) lane by lane, on a channel of the pixels' colors and the frame
+//buffer's, each 0-255: bit by bit, as it works on the three channels at once, each kept to its 8 bits.
+static alwaysinline auto logicLanes(u32 operation, GE::s32x4 s, GE::s32x4 d) -> GE::s32x4 {
+  switch(operation & 15) {
+  case 0:  return GE::s32x4{};
+  case 1:  return s & d;
+  case 2:  return s & ~d;
+  case 3:  return s;
+  case 4:  return ~s & d;
+  case 5:  return d;
+  case 6:  return s ^ d;
+  case 7:  return s | d;
+  case 8:  return ~(s | d) & 0xff;
+  case 9:  return ~(s ^ d) & 0xff;
+  case 10: return ~d & 0xff;
+  case 11: return (s | ~d) & 0xff;
+  case 12: return ~s & 0xff;
+  case 13: return (~s | d) & 0xff;
+  case 14: return ~(s & d) & 0xff;
+  }
+  return splatLanes(0xff);
+}
+
+//Whether the job may be drawn four pixels at a time (see the top of this file): a triangle or a sprite, its texture
+//(if any) kept decoded, or to be as its batch starts (deferred: no band draws before
 //that, threads.cpp; one whose primitive is drawn at once instead, defer() turning it down, is read from memory as it
 //draws), and its frame buffer's bytes apart from its depth buffer's (when it reaches it) and neither running round
 //VRAM's end.
@@ -145,7 +167,6 @@ auto GE::fourFriendly(const Job& job) const -> bool {
   if(!fourPixels || (job.kind != Job::Kind::Sprite && job.kind != Job::Kind::Triangle)) return false;
   auto& look = *job.look;
   auto& p = look.pixel;
-  if(!p.clear && p.logicOp) return false;
   if(look.textured && !look.texture.decoded && !(look.deferRows && drawing.recording)) return false;
   u32 bytes = p.format == 3 ? 4 : 2;
   u64 colorLow = p.frameBuffer + (u64(job.firstY) * p.stride + job.firstX) * bytes;
@@ -287,7 +308,7 @@ alwaysinline auto GE::combineFour(const Look& look, s32x4 (&color)[4], const s32
 
 //The pixel pipeline (drawPixelAs(), pixel.cpp) for four pixels whose color, depth and fog are worked out, and which
 //depthFirst() has seen: the alpha test, fog, the color test, the stencil test, the depth written, blending, dithering,
-//and the frame buffer written, lane by lane. All four lanes are written at once, those dropped with the very bytes
+//the logic operation and the frame buffer written, lane by lane. All four lanes are written at once, those dropped with the very bytes
 //they had (or their stencil changed, by the stencil test).
 template<u32 Format>
 alwaysinline auto GE::pixelsFour(const PixelState& p, s32 x, s32 y, Four& four) -> void {
@@ -449,6 +470,7 @@ alwaysinline auto GE::pixelsFour(const PixelState& p, s32 x, s32 y, Four& four) 
     for(u32 n = 0; n < 3; n++) rgb[n] += dither;
   }
   for(u32 n = 0; n < 3; n++) rgb[n] = heldLanes(rgb[n], 0, 255);
+  if(p.logicOp) for(u32 n = 0; n < 3; n++) rgb[n] = logicLanes(p.logic, rgb[n], oldColor[n]);
   //The alpha written is the stencil: as the stencil test made it, or as it was (widenPixel()'s alpha), which narrowed
   //again is the frame buffer's own alpha bits, which the write keeps instead.
   write(narrow(rgb), p.writeMask | (p.stencilTest ? 0 : stencilBits));

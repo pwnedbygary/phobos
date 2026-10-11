@@ -112,6 +112,10 @@ static auto pixelsInside(const s64 (&x)[3], const s64 (&y)[3], const GE::PixelSt
   u32 count = 3;
   for(u32 k = 0; k < 3; k++) px[k] = f64(x[k]), py[k] = f64(y[k]);
   auto cut = [&](bool across, f64 limit, bool above) {
+    bool inside = true;  //(every corner inside this side: cut, the polygon would be as it is)
+    for(u32 k = 0; k < count && inside; k++) inside = above ? (across ? px[k] : py[k]) >= limit
+                                                            : (across ? px[k] : py[k]) <= limit;
+    if(inside) return;
     u32 kept = 0;
     for(u32 k = 0; k < count; k++) {
       u32 before = (k + count - 1) % count;
@@ -153,12 +157,24 @@ auto GE::readVertices(u32 count, const VertexFormat& format) -> void {
   u32 indexBytes = format.indexFormat == 3 ? 4 : format.indexFormat;
   auto& vertices = primitiveVertices;  //(kept from one primitive to the next, with room for them)
   vertices.clear();
+  //(vertices in a row, no indices, in RAM or in one of VRAM's copies: whatever waits to be drawn over any of their
+  //bytes drawn first for them all, as the first vertex it reaches would have had it drawn, nothing being drawn
+  //between their reads; then read without each asking again. God of War draws 37,600 PRIMs a frame of about seven
+  //vertices each, from VRAM.)
+  u64 low = vertexAddress & 0x1fff'ffff, high = low + u64(count) * format.size;
+  auto inside = [&](u64 base, u64 size) { return low >= base && high <= base + size; };
+  u64 copy = (low - Memory::VRAMBase) / Memory::VRAMSize * Memory::VRAMSize + Memory::VRAMBase;
+  bool together = !format.indexFormat && count && (inside(Memory::RAMBase, memory.ram.size()) ||
+                  (low >= Memory::VRAMBase && inside(copy, Memory::VRAMSize) &&
+                   inside(Memory::VRAMBase, Memory::VRAMWindow)));
+  if(together) drawnFirst(vertexAddress, count * format.size);
+  Memory::KnownDrawn known{together};
   for(u32 n = 0; n < count; n++) {
     //(indices and vertices in VRAM that primitives waiting to be drawn draw over: they're drawn first, threads.cpp)
     if(format.indexFormat) drawnFirst(indexAddress + n * indexBytes, indexBytes);
     u32 index = format.indexFormat ? readIndex(n, format) : n;
     u32 address = vertexAddress + index * format.size;
-    drawnFirst(address, format.size);
+    if(!together) drawnFirst(address, format.size);
     vertices.push_back(readVertex(address, format));
     if(!format.colorFormat) vertices.back().color = ambient;
   }
@@ -323,10 +339,11 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   if(drawing.recording && drawn.deferRows) {  //(the CPU waits for its texture's pages till it's decoded: threads.cpp)
     for(u32 page = drawn.deferFirst >> 12; page <= drawn.deferLast >> 12; page++) drawing.batch->reads.set(page);
   }
-  Transform t{};
+  //(3D's settings: the last PRIM's kept, worked out again where they've changed, with this PRIM's own set; 2D uses
+  //none of them)
+  Transform& t = format.through ? keptTransform.transform : transformKept();
   s32 facing = (commands[CullFaceEnable] & 1) && !pixel.clear ? (commands[Cull] & 1 ? 1 : -1) : 0;
   if(!format.through) {
-    t = transformState();
     t.weights = format.weightFormat ? format.weights : 0;
     t.textureWidth = texture.width, t.textureHeight = texture.height;
     t.vertexColor = format.colorFormat != 0;
@@ -1108,11 +1125,8 @@ auto GE::boundingBox(u32 count) -> bool {
   auto pixel = pixelState();
   s64 left = (pixel.left - 1) * 16, right = (pixel.right + 1) * 16;
   s64 top = (pixel.top - 1) * 16, bottom = (pixel.bottom + 1) * 16;
-  Transform t{};
-  if(!format.through) {
-    t = transformState();
-    t.weights = format.weightFormat ? format.weights : 0;
-  }
+  Transform& t = format.through ? keptTransform.transform : transformKept();
+  if(!format.through) t.weights = format.weightFormat ? format.weights : 0;
   //(on the screen in sixteenths, held to it: something not a number at its left or top edge)
   auto screen = [](float position) -> s64 {
     f64 cut = 32768 + std::trunc((f64(position) - 2048) * 16);

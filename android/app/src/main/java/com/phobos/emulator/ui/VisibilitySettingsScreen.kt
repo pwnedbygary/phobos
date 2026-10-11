@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
@@ -35,7 +36,12 @@ fun VisibilitySettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     allSystems.forEach { system ->
                         val isVisible = system !in settings.hiddenSystems
                         ListItem(
-                            headlineContent = { Text(system) },
+                            headlineContent = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(system, Modifier.weight(1f, fill = false))
+                                    ExperimentalBadge(system, Modifier.padding(start = 8.dp))
+                                }
+                            },
                             trailingContent = {
                                 Checkbox(
                                     checked = isVisible,
