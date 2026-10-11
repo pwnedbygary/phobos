@@ -3,7 +3,8 @@
 #(docs/psp-gpu-renderers.md, "Shaders"): SPIR-V for Vulkan from glslang, and the GLSL itself for OpenGL. The
 #fragment shader is built twice: with dual-source blending's second output, and without (SINGLE), for GPUs that
 #lack it; copy.vert, copy.frag and present.frag are upscaling's and the screen's; transform.vert is fast mode's;
-#move.frag moves pixels from one target into another.
+#move.frag moves pixels from one target into another. copy.frag and move.frag are built again with the stencil given
+#by the shader (EXPORT), for GPUs that have VK_EXT_shader_stencil_export.
 #shaders.hpp is kept in the repository, so that building Phobos needs no shader compiler; it records the sources'
 #SHA-256, which --check compares with the sources as they are (tests/psp/run-tests.sh runs it), and with
 #glslangValidator there too, --check compiles them again and compares the result with shaders.hpp byte for byte.
@@ -29,7 +30,10 @@ compileAll() {
   for stage in copy.vert copy.frag present.frag transform.vert move.frag; do
     { echo '#version 450'; cat "$HERE/$stage"; } > "$work/$stage"
   done
-  for stage in draw.vert draw.frag single.frag copy.vert copy.frag present.frag transform.vert move.frag; do
+  { echo '#version 450'; echo '#define EXPORT'; cat "$HERE/copy.frag"; } > "$work/copyExport.frag"
+  { echo '#version 450'; echo '#define EXPORT'; cat "$HERE/move.frag"; } > "$work/moveExport.frag"
+  for stage in draw.vert draw.frag single.frag copy.vert copy.frag present.frag transform.vert move.frag \
+               copyExport.frag moveExport.frag; do
     glslangValidator -V --target-env vulkan1.0 -o "$work/$stage.spv" "$work/$stage" > "$work/log" 2>&1 ||
       { cat "$work/log"; exit 1; }
   done
@@ -63,6 +67,10 @@ header() {
   echo "static const u32 transformSPIRV[] = {"; words "$work/transform.vert.spv"; echo "};"
   echo
   echo "static const u32 moveSPIRV[] = {"; words "$work/move.frag.spv"; echo "};"
+  echo
+  echo "static const u32 copyExportSPIRV[] = {"; words "$work/copyExport.frag.spv"; echo "};"
+  echo
+  echo "static const u32 moveExportSPIRV[] = {"; words "$work/moveExport.frag.spv"; echo "};"
   echo
   echo "}"
 }

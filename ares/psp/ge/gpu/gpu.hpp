@@ -178,7 +178,8 @@ struct GPU : GE::Renderer {
     //scale x scale, the same one each time, so that memory's bytes the GPU didn't draw over come back as they went
     //in), or more, up to the backend's scale, for the screen (shrunk smoothly, the colors alone, no stencil)
     u8 at = 1;
-    u8 format = 3;  //Present: the frame buffer's GE format, its colors shown as memory keeps them (3: as they are)
+    u8 format = 3;  //Present: the frame buffer's GE format, its colors shown as memory keeps them (3: as they are);
+                  //Upload, Move: the target's
     u8 sourceFormat = 3;            //Move
     u32 source = 0;
     u16 sourceX = 0, sourceY = 0;
@@ -219,6 +220,10 @@ struct GPU : GE::Renderer {
     bool transforms = false;
     //Whether it moves pixels from one target into another (Command::Move: the driver took move.frag's pipelines)
     bool moves = false;
+    //Whether a shader gives the stencil's value (VK_EXT_shader_stencil_export): pixels put into a target above 1x
+    //(Upload) or moved into one (Move) are drawn with their stencil at once, not a bit at a time (the tests turn it
+    //off to draw the bits)
+    bool stencilExport = false;
     //Whether the last run put a picture on the window: a Present's swapchain image acquired and presented (not
     //where there's no window, or the acquiring timed out: the host shows the frame itself then)
     bool presented = false;

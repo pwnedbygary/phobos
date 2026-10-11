@@ -144,7 +144,7 @@ auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts, u
   u32 width = right - left + 1, height = to - from, count = width * height, bytes = t.bytes();
   auto& vram = ge->memory.vram;
   Command c{Command::Kind::Upload, t.id};
-  c.x = left, c.y = from, c.width = width, c.height = height;
+  c.x = left, c.y = from, c.width = width, c.height = height, c.format = t.format;
   c.colors = recorded.uploads.size();
   c.stencil = c.colors + count * 4;
   c.depth = c.stencil + count;

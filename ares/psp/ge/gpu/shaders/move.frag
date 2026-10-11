@@ -6,9 +6,13 @@
 //as memory keeps it (the stencil its alpha), the bytes taken as the other's format, and widened as a fill widens them
 //(gpu.cpp's narrowTarget() and widenTarget()).
 //
-//The colors are written as they are; the stencil, which a shader can't write, a bit at a time as copy.frag does.
+//The colors are written as they are; the stencil, which a shader can't write, a bit at a time as copy.frag does, or
+//with them where the GPU lets a shader give the stencil's value (EXPORT: VK_EXT_shader_stencil_export).
+#if defined(EXPORT)
+#extension GL_ARB_shader_stencil_export : require
+#endif
 
-layout(constant_id = 0) const uint MODE = 0u;  //0 the colors, 1 a bit of the stencil
+layout(constant_id = 0) const uint MODE = 0u;  //0 the colors (EXPORT: and the stencil), 1 a bit of the stencil
 
 layout(push_constant) uniform Push {
   ivec2 origin;  //where the rectangle starts in the target, in its own pixels
@@ -51,4 +55,7 @@ void main() {
   else c = uvec4(p & 255u, p >> 8 & 255u, p >> 16 & 255u, p >> 24);
   outColor = vec4(c) / 255.0;
   if(MODE == 1u && (c.a & push.bit) == 0u) discard;
+#if defined(EXPORT)
+  gl_FragStencilRefARB = int(c.a);
+#endif
 }

@@ -5,9 +5,14 @@
 //
 //The color is written as it is; the depth (two bytes of the picture, the low one first) through gl_FragDepth; the
 //stencil, which a shader can't write, a bit at a time: the target's stencil cleared, then for each bit a draw that
-//replaces it with the bit (the stencil's write mask that bit alone) where the pixel's stencil (its alpha) has it.
+//replaces it with the bit (the stencil's write mask that bit alone) where the pixel's stencil (its alpha) has it; or
+//with the color where the GPU lets a shader give the stencil's value (EXPORT: VK_EXT_shader_stencil_export).
+#if defined(EXPORT)
+#extension GL_ARB_shader_stencil_export : require
+#endif
 
-layout(constant_id = 0) const uint MODE = 0u;  //0 the colors, 1 the depth, 2 a bit of the stencil
+layout(constant_id = 0) const uint MODE = 0u;  //0 the colors (EXPORT: and the stencil), 1 the depth, 2 a bit of the
+                                               //stencil
 
 layout(push_constant) uniform Push {
   ivec2 origin;  //where the rectangle starts in the target, in its own pixels
@@ -23,6 +28,9 @@ void main() {
   ivec2 at = ivec2(gl_FragCoord.xy - vec2(push.origin)) / int(push.scale);
   vec4 texel = texelFetch(picture, at, 0);
   outColor = texel;
+#if defined(EXPORT)
+  gl_FragStencilRefARB = int(texel.a * 255.0 + 0.5);
+#endif
   if(MODE == 0u) return;
   uvec4 bytes = uvec4(texel * 255.0 + 0.5);
   if(MODE == 1u) {

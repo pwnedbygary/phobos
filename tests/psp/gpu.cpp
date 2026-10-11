@@ -107,6 +107,12 @@ static auto apart(System& a, System& b) -> u32 {
   return bytes;
 }
 
+//The ways the backend sets a target's stencil from its pixels' alphas, above 1x and in moves, to try: a draw for each
+//of its bits, and, where a shader can give it (Backend::stencilExport), with the colors.
+static auto stencilWays(GPU* gpu) -> std::vector<bool> {
+  return gpu->backend->stencilExport ? std::vector<bool>{false, true} : std::vector<bool>{false};
+}
+
 //Sprites without blending or dithering, in each format: the GPU's pixels are the software renderer's, byte for
 //byte (the colors narrowed as the PSP narrows them, a texture's coordinates stepped as the GE steps them, the
 //stencil the alpha).
@@ -861,49 +867,64 @@ static auto gpuRefusedAmongThreads() -> void {
 //rows are the first's rows 16 on, a 5551 one 128 wide (its alpha the stencil's top bit), and a 4444 one (its top
 //four). Each takes the pixels the one before drew in its pages on the GPU, as memory would have them (move()), with
 //nothing put back; at 1x, 2x and 3x, and everything comes out as the software renderer has it. (Sprites with random
-//colors and alphas, some in clear mode setting the stencil, some textured from a texture the CPU wrote in VRAM.)
+//colors and alphas, some in clear mode setting the stencil, some textured from a texture the CPU wrote in VRAM, some
+//keeping the stencil's low bits.) The stencil moved a bit at a time and, where a shader can give it, with the colors
+//(stencilWays()).
 static auto gpuMoves() -> void {
   auto gpu = renderer();
   if(!gpu) return;
   if(!gpu->backend->moves) return void(std::printf("  skipped: the GPU doesn't move pixels between targets\n"));
   std::mt19937 random{20261016};
   constexpr u32 At = 0x3'0000;  //(where no other test draws: VRAM's offset)
-  for(u32 scale : {1u, 2u, 3u}) {
-    if(scale > gpu->backend->mostScale) break;
-    gpu->resolution(scale);
-    System software, hardware;
-    hardware.ge.setRenderer(gpu);
-    for(System* s : {&software, &hardware}) {
-      for(u32 n = 0; n < 64 * 48; n++) s->memory.write(4, Memory::VRAMBase + 0x2'0000 + n * 4, u32(n * 0x9e37'79b9));
-    }
-    auto before = gpu->statistics;
-    struct Pass { u32 address, width, format; std::vector<Corners> sprites; bool clear, textured; };
-    std::vector<Pass> passes;
-    for(u32 round = 0; round < 3; round++) {
-      passes.push_back({At, 64, 3, randomSprites(random, 12, false), round == 1, false});
-      passes.push_back({At, 128, 0, randomSprites(random, 12, false), false, round == 2});
-      passes.push_back({At + 0x1000, 64, 3, randomSprites(random, 8, false), false, round == 0});
-      passes.push_back({At, 128, 1, randomSprites(random, 8, false), round == 2, false});
-      passes.push_back({At, 128, 2, randomSprites(random, 8, false), round == 0, round == 1});
-    }
-    for(System* s : {&software, &hardware}) {
-      auto& c = s->ge.commands;
-      for(auto& pass : passes) {
-        prepare(*s, pass.address, pass.format);
-        c[GE::FrameBufferWidth] = pass.width;
-        if(pass.textured) texture(*s, Memory::VRAMBase + 0x2'0000, 64, 64, 64);
-        if(pass.clear) c[GE::ClearMode] = 1 | 3 << 8;  //(colors and stencil)
-        for(auto& one : pass.sprites) sprite(*s, one);
-        c[GE::ClearMode] = 0, c[GE::TextureMappingEnable] = 0;
+  bool exports = gpu->backend->stencilExport;
+  std::printf("  the stencil %s\n", exports ? "a bit at a time, and with the colors" : "a bit at a time");
+  for(bool exported : stencilWays(gpu)) {
+    gpu->backend->stencilExport = exported;
+    for(u32 scale : {1u, 2u, 3u}) {
+      if(scale > gpu->backend->mostScale) break;
+      gpu->resolution(scale);
+      System software, hardware;
+      hardware.ge.setRenderer(gpu);
+      for(System* s : {&software, &hardware}) {
+        for(u32 n = 0; n < 64 * 48; n++) {
+          s->memory.write(4, Memory::VRAMBase + 0x2'0000 + n * 4, u32(n * 0x9e37'79b9));
+        }
       }
+      auto before = gpu->statistics;
+      struct Pass {
+        u32 address, width, format;
+        std::vector<Corners> sprites;
+        bool clear, textured, masked = false;
+      };
+      std::vector<Pass> passes;
+      for(u32 round = 0; round < 3; round++) {
+        passes.push_back({At, 64, 3, randomSprites(random, 12, false), round == 1, false, round == 2});
+        passes.push_back({At, 128, 0, randomSprites(random, 12, false), false, round == 2});
+        passes.push_back({At + 0x1000, 64, 3, randomSprites(random, 8, false), false, round == 0});
+        passes.push_back({At, 128, 1, randomSprites(random, 8, false), round == 2, false});
+        passes.push_back({At, 128, 2, randomSprites(random, 8, false), round == 0, round == 1});
+      }
+      for(System* s : {&software, &hardware}) {
+        auto& c = s->ge.commands;
+        for(auto& pass : passes) {
+          prepare(*s, pass.address, pass.format);
+          c[GE::FrameBufferWidth] = pass.width;
+          if(pass.textured) texture(*s, Memory::VRAMBase + 0x2'0000, 64, 64, 64);
+          if(pass.clear) c[GE::ClearMode] = 1 | 3 << 8;  //(colors and stencil)
+          if(pass.masked) c[GE::MaskAlpha] = 0x0f;  //(the stencil's low bits kept: a write mask the move mustn't keep)
+          for(auto& one : pass.sprites) sprite(*s, one);
+          c[GE::ClearMode] = 0, c[GE::TextureMappingEnable] = 0, c[GE::MaskAlpha] = 0;
+        }
+      }
+      CHECK(gpu->statistics.finishes, before.finishes);
+      CHECK(gpu->statistics.moves - before.moves >= 9, true);
+      u32 bytes = vramApart(software, hardware);
+      if(bytes) std::printf("  %ux: %u bytes apart\n", scale, bytes);
+      CHECK(bytes, 0u);
+      hardware.ge.setRenderer(nullptr);
     }
-    CHECK(gpu->statistics.finishes, before.finishes);
-    CHECK(gpu->statistics.moves - before.moves >= 9, true);
-    u32 bytes = vramApart(software, hardware);
-    if(bytes) std::printf("  %ux: %u bytes apart\n", scale, bytes);
-    CHECK(bytes, 0u);
-    hardware.ge.setRenderer(nullptr);
   }
+  gpu->backend->stencilExport = exports;
   gpu->resolution(1);
 }
 
@@ -1406,9 +1427,10 @@ static auto gpuCheck() -> void {
 //At 2 and 3 times the PSP's resolution (GPU::resolution()): flat sprites over VRAM full of random bytes, in each
 //format, are the software renderer's byte for byte once read back (each pixel's scale x scale the same; memory's
 //bytes the GPU didn't draw over, the stencils too, back as they went in, through copy.frag's enlarging and the
-//blit's shrinking); the screen's picture at the target's own resolution is them, scale x scale each; render to
-//texture from a copy at the target's resolution, sampled 1:1, is exact too; and the depth buffer and the bytes beside
-//the pixels behave as at the PSP's own (gpuDepth, gpuBeside, run again).
+//blit's shrinking: their stencils a bit at a time and, where a shader can give them, with the colors, stencilWays());
+//the screen's picture at the target's own resolution is them, scale x scale each; render to texture from a copy at
+//the target's resolution, sampled 1:1, is exact too; and the depth buffer and the bytes beside the pixels behave as
+//at the PSP's own (gpuDepth, gpuBeside, run again).
 static auto gpuScaled() -> void {
   auto gpu = renderer();
   if(!gpu) return;
@@ -1418,39 +1440,44 @@ static auto gpuScaled() -> void {
   for(u32 scale : {2u, 3u}) {
     gpu->resolution(scale);
     CHECK(gpu->resolution(), scale);
-    for(u32 format : {3u, 0u, 1u, 2u}) {
-      System software, hardware;
-      hardware.ge.setRenderer(gpu);
-      auto flat = randomSprites(random, 40, false);
-      std::vector<u8> noise(0x4'0000);
-      for(auto& byte : noise) byte = random();
-      for(System* s : {&software, &hardware}) {
-        std::memcpy(s->memory.vram.data(), noise.data(), noise.size());
-        prepare(*s, 0, format);
-        for(auto& one : flat) sprite(*s, one);
-        s->ge.commands[GE::ClearMode] = 1 | 7 << 8;
-        for(u32 n = 0; n < 4; n++) sprite(*s, flat[n]);
-        s->ge.commands[GE::ClearMode] = 0;
-      }
-      if(format == 3) {  //(the screen's picture, before anything's read back: one of each pixel's scale x scale)
-        std::vector<u32> pixels;
-        CHECK(gpu->picture(0, 64, 3, 64, 48, pixels, scale), true);
-        CHECK(pixels.size(), 64u * 48 * scale * scale);
-        u32 wrong = 0;
-        for(u32 y = 0; y < 48 && pixels.size() == 64u * 48 * scale * scale; y++) {
-          for(u32 x = 0; x < 64; x++) {
-            u32 shown = pixels[(y * scale + scale / 2) * 64 * scale + x * scale + scale / 2] & 0xff'ffff;
-            u32 drawn = software.memory.read(4, 0x0400'0000 + (y * 64 + x) * 4) & 0xff'ffff;
-            wrong += shown != drawn;
-          }
+    bool exports = gpu->backend->stencilExport;
+    for(bool exported : stencilWays(gpu)) {
+      gpu->backend->stencilExport = exported;
+      for(u32 format : {3u, 0u, 1u, 2u}) {
+        System software, hardware;
+        hardware.ge.setRenderer(gpu);
+        auto flat = randomSprites(random, 40, false);
+        std::vector<u8> noise(0x4'0000);
+        for(auto& byte : noise) byte = random();
+        for(System* s : {&software, &hardware}) {
+          std::memcpy(s->memory.vram.data(), noise.data(), noise.size());
+          prepare(*s, 0, format);
+          for(auto& one : flat) sprite(*s, one);
+          s->ge.commands[GE::ClearMode] = 1 | 7 << 8;
+          for(u32 n = 0; n < 4; n++) sprite(*s, flat[n]);
+          s->ge.commands[GE::ClearMode] = 0;
         }
-        CHECK(wrong, 0u);
+        if(format == 3) {  //(the screen's picture, before anything's read back: one of each pixel's scale x scale)
+          std::vector<u32> pixels;
+          CHECK(gpu->picture(0, 64, 3, 64, 48, pixels, scale), true);
+          CHECK(pixels.size(), 64u * 48 * scale * scale);
+          u32 wrong = 0;
+          for(u32 y = 0; y < 48 && pixels.size() == 64u * 48 * scale * scale; y++) {
+            for(u32 x = 0; x < 64; x++) {
+              u32 shown = pixels[(y * scale + scale / 2) * 64 * scale + x * scale + scale / 2] & 0xff'ffff;
+              u32 drawn = software.memory.read(4, 0x0400'0000 + (y * 64 + x) * 4) & 0xff'ffff;
+              wrong += shown != drawn;
+            }
+          }
+          CHECK(wrong, 0u);
+        }
+        u32 bytes = apart(software, hardware);
+        if(bytes) std::printf("  %ux, format %u: %u bytes apart\n", scale, format, bytes);
+        CHECK(bytes, 0u);
+        hardware.ge.setRenderer(nullptr);
       }
-      u32 bytes = apart(software, hardware);
-      if(bytes) std::printf("  %ux, format %u: %u bytes apart\n", scale, format, bytes);
-      CHECK(bytes, 0u);
-      hardware.ge.setRenderer(nullptr);
     }
+    gpu->backend->stencilExport = exports;
     {
       System software, hardware;
       hardware.ge.setRenderer(gpu);
