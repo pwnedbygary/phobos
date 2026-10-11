@@ -25,6 +25,38 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: the Metal Gear Acids' titles and menus — vnop leaves the VFPU's prefixes — 2026-10-11
+
+Branch `cursor/psp-mga2-2b67`, on master (`3cae0f907`, v2.0.0). The owner's run of 2.0 on the RP6 left Metal Gear Acid
+2 on a still yellow-and-black picture after the Kojima Productions logo, every press seemingly ignored; investigated
+and fixed on the Mac alone (the RP6 was busy). docs/psp-core.md, part 72, has the evidence. Clean room: pspdev's VFPU
+documentation and its tests, the game's own code; no PPSSPP code read, JPCSP not read. Save states unchanged (25).
+- **Cause**: the game wasn't waiting for anything: it took Start at its title and opened its menu, but drew none of
+  its sprites. It clips each one with `vpfxt; vcmp; vpfxt; vnop; vnop; mfvc; vcmp`, the second prefix meant for the
+  second vcmp; both CPU engines used it up at the vnop (as pspdev's documentation says, against what the game's code
+  needs), so every sprite inside the screen read as left of it and was culled: the logo, PRESS START, the menus, the
+  Solid Eye notice's text. Only full-screen pictures showed.
+- **Fix** (`interpreter-vfpu.cpp`, `recompiler-vfpu.cpp`): vnop, like vsync and vflush, leaves the prefixes for the
+  next instruction. This reverses part 3's reading of the documentation (its tests never showed vnop using them up;
+  PPSSPP keeps them too).
+- **The game now**: the notice, the logos, the title with its logo and PRESS START BUTTON, the main menu on Start (Cross
+  closes it, Circle confirms), and with Start then Circle a new game's carry-over prompts and its tutorial. Metal Gear
+  Acid, which clips the same way, shows its title, menu and first scene where its row had a "static picture".
+- **Checks**: tests/allegrex 58/0 ("vfpu more" now pins all three prefixes through vnop, vsync and vflush, a vnop in a
+  delay slot, and the game's clipping sequence, on both engines), tests/psp 438/0 (sanitized), tests/psp/ares 307/0.
+  The whole library the report's way beside the final run: both Metal Gear Acids move from movie to menu (menu or
+  gameplay 194 -> 196, movie 71 -> 69); every other game shows the final run's scenes, a fade, an animation step, a
+  movie's frame, Battlefront II's random map or PixelJunk Monsters' clock-coloured sky apart where they differ; all 266
+  finish, none missing a function. Counted, only four games run a vnop with a prefix pending at all: the two Metal
+  Gear Acids, and Portable Ops and Portable Ops Plus, whose frames don't change; the other differences are the runs'
+  own. An independent review found no bug; its test gaps (rt's and rd's prefixes
+  through the three, a delay slot, vflush in the random programs) and stale comments were fixed; a delta review found
+  no bug either, and its points (the report's summary column, README's counts, wording) were fixed.
+- **Left**: not checked on a PSP; rs's and rd's prefixes surviving vnop is the same rule, not seen. The report's summary
+  gains a Part 72 column on the final run's numbers, and README's counts follow it (196 and 69); parts 70 and 71, on
+  their own branches, add columns too (part 71 moves Final Fantasy IV to menu), so whichever merges later sums them.
+- Scratch: `~/phobos-work/scratch/mga2`.
+
 ## Version codes for 2.x — 2026-10-11
 
 Branch `cursor/version-base-2x-2b67`, on `master` after the PSP stack merged (#208, #210), at the owner's request before

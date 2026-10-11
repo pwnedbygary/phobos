@@ -231,10 +231,10 @@ them for changes to `ares/psp/`, nall or ares's types).
 one function each, named after their mnemonics. The register file is eight 4x4 matrices of floats; a 7-bit
 register number names a single, a row or column vector (pair, triple, quad) or a matrix, by the operand size
 (`vfpuLine()`, `vfpuSquare()`). Source prefixes swizzle, take absolute values, negate or substitute constants;
-the destination prefix saturates or masks; every VFPU instruction but the prefix ones uses them up. As a PSP does
-it, the math functions take the prefixes on their last lane alone (`vfpuLastLaneFirst()`); a swizzle past an
-operand's size gives 0 in its lane, or leaves that lane's product out of the adders (`vdot`, `vhdp`, `vfad` and
-`vavg`), which add up all four lanes whatever the size (`outsideLanes()`, `vfpuReadFour()`).
+the destination prefix saturates or masks; every VFPU arithmetic instruction uses them up (which others do, below).
+As a PSP does it, the math functions take the prefixes on their last lane alone (`vfpuLastLaneFirst()`); a swizzle
+past an operand's size gives 0 in its lane, or leaves that lane's product out of the adders (`vdot`, `vhdp`, `vfad`
+and `vavg`), which add up all four lanes whatever the size (`outsideLanes()`, `vfpuReadFour()`).
 Denormals count as zero both ways: a result is rounded to a float's 24 bits as if exponents went on below 2^-126, the
 smallest normal number, then flushed to a zero of its sign if it's still below (`vfpuBits()`; measured on products,
 taken to hold for quotients). Only round-to-nearest exists. The rest was measured too (psp-vfpu-measurements.md,
@@ -260,10 +260,11 @@ Stories' characters twitched).
 
 Not checked against hardware: `vrot` on its own (it uses vsin's and vcos's), `vwbn` (implemented from its
 description; no test), and what reserved size combinations do (they raise ReservedInstruction, and leave the
-prefixes). Which instructions use up the prefixes: every VFPU
-arithmetic instruction, and `vnop`, as pspdev's documentation says (PPSSPP keeps them through `vnop`, but the
-documentation rests on tests on hardware); not `vsync`, `vflush`, `vmfvc` and `vmtvc`, which the documentation
-doesn't cover, as in PPSSPP; nor the loads, stores and moves to integer registers.
+prefixes). Which instructions use up the prefixes: every VFPU arithmetic instruction (`viim` and `vfim` too); not
+`vsync`, `vflush`, `vmfvc` and `vmtvc`, which the documentation doesn't cover, as in PPSSPP; not `vnop` either (since
+part 72: the documentation says it does, but none of its tests shows it, and Metal Gear Acid 2's code needs a prefix
+kept through two of them, as PPSSPP keeps it); nor the loads, stores, VFPU branches, and moves to and from integer
+registers.
 
 Tests: `tests/allegrex/vfpu.cpp`, twelve groups (addressing, arithmetic, prefixes, products, comparisons,
 conversions, functions, matrices, moves, more instructions worked out by hand from the descriptions, the random
@@ -8778,3 +8779,121 @@ of two rounds taking turns, God of War's battle 150 frames and its menu 60), Vul
 - Scratch: `~/phobos-work/scratch/speed7` (build-vk.sh; rp6.sh, rp6-all.sh and push/, the RP6's sessions; gputime-
   and the count patches; acc-host.sh, soft-all.sh, cmp4.py; tables67.py; mutate.sh, quick-tests.sh; logicbench.cpp;
   gcc.sh). Nothing of it is left on the RP6.
+
+## Part 72: the Metal Gear Acids' titles and menus — vnop leaves the VFPU's prefixes for the next instruction
+
+On branch `cursor/psp-mga2-2b67`, on v2.0.0's `3cae0f907`. The task: Metal Gear Acid 2 (ULUS10077), which on the
+owner's RP6 showed the Kojima Productions logo and then, from about 45 s, a still yellow-and-black picture (Snake's
+silhouette, Venus below it) for the rest of the run, Start, Cross, Circle and the pad changing nothing, at a steady
+60 fps; the Mac's runner showed the same (the logo at 1800, a yellow screen at 2400, the picture from 3000 to 10800,
+Start and Cross pressed every 400 frames from 3700). Sources: pspdev's VFPU documentation and its tests on hardware
+(github.com/pspdev/vfpu-docs), and the game's own code, traced with a scratch runner (its kernel calls, its stage
+overlay's script, its memory, its display lists, its CPU's calls). No PPSSPP code was read for this part; JPCSP was
+not read. Save states are unchanged: the prefixes were saved already, and nothing is added to the kernel.
+
+### What the game waited for
+
+Nothing the kernel held back. Traced, the main thread ran its frame loop at 30 frames a second, waiting only for the
+vertical blank and the GE, and read the controller each time; the sound threads played the title's music; no file,
+module, font, callback or semaphore was outstanding. The title's logic is in a stage overlay (`mgp_stage`, loaded from
+the disc's raw sectors at frame 516) as a script for the engine's interpreter (its commands and names hashed to 24
+bits, read off the interpreter's code): a state machine showing a notice, the KONAMI and Kojima Productions logos and
+then the title, whose actor waits for Start (the newly pressed 0x8 of its first virtual pad), opens the main menu on
+it, and after 60 s with nothing pressed has the opening movie played. Start was taken: the actor went to its menu and
+the script to its menu state, and Circle and Cross worked the menu (Circle confirms, Cross goes back, so the
+reproduction's Start then Cross opened and closed it every 800 frames). None of it showed. The frame's display list
+set up the textures of the title's logo and its copyright line but drew nothing with them, and the menu, "PRESS START
+BUTTON", the Memory Stick check's box (a thin line at frame 300) and the Solid Eye notice before the logos (the 12
+seconds of black at frames 559-1290) were missing too; only full-screen pictures and fades were drawn.
+
+The game's sprite routine clips each sprite against the screen first, with the VFPU, and culls one whose corners are
+all outside on the same side:
+
+    lv.q    C100, 0(a0)          the corner (x, y, z, w)
+    lv.q    C110, 0(sp)          the screen: right 480, left 0, bottom 272, top 0
+    vpfxt   [x, z, z, w]
+    vcmp.q  GT, C100, C110       x > right, y > bottom
+    vpfxt   [y, w, z, w]         (for the vcmp below)
+    vnop
+    vnop
+    mfvc    v0, $131             the first vcmp's condition codes (the vnops wait out its latency)
+    vcmp.q  LT, C100, C110       x < left, y < top
+    vnop; vnop; vnop
+    mfvc    a1, $131
+
+The second prefix is set before the vnops that wait out the first vcmp's condition codes, and is meant for the second
+vcmp. Both engines used it up at the first vnop, as pspdev's documentation says vnop does, so the second vcmp compared
+x with the right edge: every corner left of x 480 was "left of the screen", every sprite inside the screen was culled,
+and only a picture reaching x 480 (a full-screen one) was drawn. (The notice's text, a fan from x 0 to 480, was drawn,
+but cut by the clipper at the edge it took it to cross, which left its u running from 65524 to 468: nothing showed.)
+
+### The fix
+
+`vnop` leaves the prefixes for the instruction after it, as `vsync` and `vflush` already did (`interpreter-vfpu.cpp`;
+in the recompiler, `recompiler-vfpu.cpp`, compiled code no longer resets them, and the block no longer takes them as at
+rest after a vnop). pspdev's documentation says vnop uses them up, but none of its tests shows it (they clear the
+prefixes with a `vadd.s` between two vnops), and a retail game built with Sony's tools needs them kept: it could not
+show its title on a PSP otherwise. PPSSPP keeps them too. That mfvc leaves them was already so (the documentation's
+tests show it). This reverses part 3's choice, which followed the documentation.
+
+### The game now
+
+The reproduction's run (10800 frames, Start and Cross every 400 frames from 3700, a PNG every 600): the notice ("SOLID
+OFF! Don't attach the SOLID EYE yet."), the KONAMI and Kojima Productions logos, then the title with its logo down the
+left, "©1987 2006 KONAMI" and a blinking "PRESS START BUTTON"; each Start opens the main menu (NEW GAME, LOAD GAME,
+CONTINUE, OPTIONS, PASSWORD, ARENA, MGS3 SUBSISTENCE LINK), each Cross closes it. With Start and then Circle: NEW
+GAME, its difficulty, the offer to carry over Metal Gear Acid's save ("Insert a Memory Stick™ containing save data",
+"Unable to load", "The game will begin without transferring data"), then its first scene and the nano-chip training
+("Okay, Snake. From here on out, you'll have to do as I say."), by frame 8400. Left at its title, it plays its opening
+movie a minute later ("Kojima Productions presents", the credits), from frame 6000.
+
+Metal Gear Acid, the first game, clips its sprites the same way, and its row's "static picture" was its title's
+background alone: it now shows its title (the logo, its two heroes, "PRESS START BUTTON"), its menu on Start, and with
+Circle its first scene's dialogue.
+
+### The library
+
+The whole library the report's way (3600 frames, Start at 120 and Cross at 1800, the software renderer at 7 threads,
+three games at a time) beside the final run (`be543afba`, whose core is master's): all 266 finish their 3600 frames
+(the slowest, Killzone, in 622 s), none missing a function. Two rows move, both from movie to menu: Metal Gear Acid's
+title at 1200 and 3600 where its background alone was, and Metal Gear Acid 2's Memory Stick check at 300, its Solid Eye
+notice at 1200 and its title at 3600 (above). In the report's categories, menu or gameplay 194 -> 196 and movie
+71 -> 69. Of the other games, 38 differ at some frame by a mean of at most 1 of 255 a channel, and 26 by more, each
+showing the scene the final run showed, a few frames apart or as the clock has it: movies further on or behind (IL-2
+Sturmovik's intro at 3600, Mega Man Maverick Hunter X's, Virtua Tennis 3's, Tales of Eternia's, Kenka Bancho's), fades
+and logos a step apart (Star Ocean: Second Evolution, Dissidia, Syphon Filter, Fuuun Shinsengumi's notice, Dragon Ball
+Z: Another Road, The Legend of Heroes III, Virtua Tennis: World Tour, Final Fantasy Tactics, Gitaroo Man's KOEI logo,
+The Sims 2's logo), titles' animations and blinking PRESS STARTs (Shepherd's Crossing, Space Invaders Extreme, LocoRoco
+and LocoRoco 2, Lumines, Star Trek, Metal Slug Anthology, Gran Turismo's and Hot Shots Golf: Open Tee 2's menus),
+Battlefront II's random map (Coruscant loading at 3600, a snow map in the final run), and PixelJunk Monsters' title,
+which follows the clock: an evening sky now, a night one in the final run (made at 4 a.m.).
+
+Which games the change touches at all: a scratch runner counting every vnop run with a prefix pending (its vnops all
+sent to the interpreter), over the library the same way, all 266 to their 3600 frames. Four run one: both Metal Gear
+Acids (113,060 and 102,212 times) and Metal Gear Solid: Portable Ops and Portable Ops Plus (6,024 and 5,880 times),
+whose frames are the same as the final run's at all four captures. No other game does, and up to a game's first such
+vnop the two runners run it alike, so the other games' differences above are the runs' own, as two runs of one runner
+differ too.
+
+### Checks
+
+- `tests/allegrex/run-tests.sh` 58 groups, 0 failures. "vfpu more" (both engines) now checks that all three prefixes
+  outlive vnop, vsync and vflush and that a vadd after each still sees one, runs a vnop in a branch's delay slot with
+  the vadd after it starting the next compiled block, and runs the game's clipping sequence above on a corner at
+  (48, 241): 0x18 and 0x14 from the two mfvc (0x15 from the second with the prefix used up). The old vnop fails it on
+  both engines, and so does a vnop resetting only the destination prefix, or resetting them only in a delay slot; the
+  random programs that compare the engines take vflush too.
+- `tests/psp/run-tests.sh` (sanitizers on) 438 groups, 0 failures; `tests/psp/ares/run-tests.sh` 307 checks, 0 failed.
+- An independent read-only review found no bug. Its points were fixed: rt's and rd's prefixes through vnop, vsync and
+  vflush, a vnop in a delay slot and vflush in the random programs had gone untested (a vnop resetting rd's prefix
+  alone passed every test), and the comments and part 3's lines listing what uses up the prefixes were stale. A delta
+  review of those found no bug either; its points (the report's summary column and README's counts, wording here)
+  were fixed too.
+
+### Left, and why
+
+- Not checked on a PSP (none here). The game shows a PSP keeping rt's prefix through two vnops; that rs's and rd's stay
+  too is taken from the same rule (and PPSSPP's), not seen.
+- Scratch: `~/phobos-work/scratch/mga2` (tools/: the script, display list and texture decoders and the contact
+  sheets; trace-patch/: the scratch runner's tracing and the vnop counter; after1 and after2, the runs above; lib-fix
+  and count, the library runs).
