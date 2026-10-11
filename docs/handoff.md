@@ -25,6 +25,40 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP measure: round 6 — the GE's time, lighting's cosine, the reciprocal's chords, patches — 2026-10-10
+
+Branch `cursor/psp-measure6-2b67`, on top of #200's `cursor/psp-gow-vk-2b67` (`c86461ec6`). docs/psp-core.md, part 66,
+says what each test is for and what result would settle what. Only `tools/psp-measure`, `tests/psp/measure.cpp`, the
+rebuilt `tests/psp/programs/pspmeasure.elf` and docs; no core change. Clean room: no PPSSPP code read for it, JPCSP's
+not read.
+- **What**: a new first menu line, "Round 6: the GE's time, lighting, reciprocal, curves (about 7 MB)", 36 tests into
+  `results/ge` (`manifest6.txt`): seven timing tests (lists of known work queued alone, every run timed to its finish
+  callback, at the clocks found and at 333/166 MHz: commands, primitives of every kind, fills in every state and texture
+  format, primitive sizes, block transfers, the texture cache, a SIGNAL); lighting's products in full at four normals
+  (round 5's `light-share-*` fit no one share a normal: 15 of 16 normals' intervals are empty), 8 sweeps of 1024 normals
+  with 64 products each, lights added up; the reciprocal's chords read off texels at pixels (13- and 14-bit qs, the
+  latter through the texture matrix, also measuring that path and q of 0 and below) and at vertices (constant-w cells at
+  every chord, and as sprites), and how far the GE keeps a texture coordinate's low bits; PATCH_CULL_ENABLE in 256
+  combinations and at the scissor's edges and the planes, and timed off-screen; divisions past 64 along v, one to a
+  test, last (four expected to stall, each reset after 5 s); the driver's statuses while a list draws and with its
+  FINISH's interrupt held off.
+- **Checks**: the measure test drives round 6 in the core: every file, the timing records whole and every run finished,
+  and self-checks that the products and chord pictures read what they're meant to in the core's own arithmetic; with a
+  PSP's results it prints round 6 against them. tests/psp 425/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0.
+  pspmeasure.elf rebuilt in the pinned image, byte for byte reproducible. An independent read-only review found the
+  timed primitives "outside the scissor rectangle" drawn on screen (the timed lists' scissor spans 512 columns),
+  `recip-pixels` missing 16 qs and `ge-statuses` able to run out of looks, with smaller points: all fixed; a delta
+  review found the fixes right.
+- **Owner**: `.local/psp-round6/` (EBOOT.PBP SHA-256 `bb59b7ab11e913693f20d851048af62b19a8ffdce2471d082c418ea2cce6ba0b`,
+  HOW-TO.md); not on the RP6 yet (it wasn't attached in this session: `~/phobos-work/scratch/measure6/push-rp6.sh`
+  pushes it to `/sdcard/Download/PSPMEASURE-ROUND6` and checks the SHA-256 there, under the RP6 lock): run round 6
+  (about two minutes), bring `results/ge` back to the RP6's `Download/PSPMEASURE/results`.
+- **Left**: fitting it all once the PSP's files are back (part 64's time model, lighting's multiply and cosine, every
+  chord, what PATCH_CULL_ENABLE does, v past 64). In the core `recip-vertex-*` read 0 (it clamps texture coordinates at
+  65536 texels; `texel-range` will show the PSP's range).
+- Scratch: `~/phobos-work/scratch/measure6` (build.sh, the pinned image's build; quick.sh, the measure group alone;
+  times.py and topng.py read the files; share*.py, round 5's light-share taken again).
+
 ## PSP GPU: God of War in Vulkan without waiting for the GPU; part 63's open risks closed — 2026-10-10
 
 Branch `cursor/psp-gow-vk-2b67`, on top of #199's `cursor/psp-gow-sw-2b67` (#198 under it; measured against #198's

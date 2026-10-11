@@ -8497,4 +8497,31 @@ core's model's (commands nothing, a 256x256 fill 147.6 microseconds at 111 MHz, 
 
 `pspmeasure.elf` is rebuilt in the pinned image (`ghcr.io/pspdev/pspdev@sha256:54895e6f...`), which rebuilds the
 previous one byte for byte from its own source, and two builds of the new source are identical. The owner's copy:
-`.local/psp-round6/` (EBOOT.PBP, its SHA-256, HOW-TO.md), also on the RP6 in `/sdcard/Download/PSPMEASURE-ROUND6`.
+`.local/psp-round6/` (EBOOT.PBP, SHA-256 `bb59b7ab11e913693f20d851048af62b19a8ffdce2471d082c418ea2cce6ba0b`, and
+HOW-TO.md: where it goes, which line, about two minutes, the four deliberate stalls, and `results/ge` back to the
+RP6's `Download/PSPMEASURE/results`). The RP6 wasn't attached in this session, so it isn't there yet.
+
+### Review
+
+An independent read-only review (a reviewer agent with its own builds of the program and the measure test) found
+nothing that should freeze a PSP, every table, count and layout as the program has it, the arithmetic of the exactness
+claims sound, and the committed `pspmeasure.elf` a fresh build. It found three things that would have wasted part of
+the run, fixed: the timed primitives and patches "outside the scissor rectangle" were drawn on screen (the timed lists'
+scissor spans 512 columns, so they're 600 pixels across now); `recip-pixels`' second window, 257 pixels on, missed 16
+qs (each window now starts half a pixel back, so its pixels' middles fall on 4096 consecutive sixteenths, and the two
+together on every q); and `ge-statuses` stopped looking after 128 looks, about 7 ms, before a PSP drawing below peak
+would finish (1024 now). And smaller points, taken: the timing tests' first half at 222/111 MHz set rather than as found
+(custom firmware may run homebrew at 333), a refused `sceGeListEnQueue` noted, the statuses printed as numbers, wording.
+A delta review found the fixes right and complete; its points (`recip-projected` reads every q but its top one, the
+strip's corner; error codes in hex; line widths) are taken too, without changing the program.
+
+### Checks
+
+- `tests/psp/run-tests.sh` (sanitizers on): 425 groups, 0 failures (the measure group drives round 6);
+  `tests/allegrex/run-tests.sh`: 58 groups, 0 failures; `tests/psp/ares/run-tests.sh`: 307 checks, 0 failed.
+- The program builds without a warning (`-O2 -Wall`), its `SMOKE` version too; `tests/psp/measure.cpp` with `-Wall
+  -Wextra -Werror` and the sanitizers. The comparison was run against a made-up reference (the core's own files, with
+  times tripled and an error code among the statuses) and prints as it should.
+- Scratch: `~/phobos-work/scratch/measure6` (build.sh, the pinned image's build; quick.sh, the measure group alone;
+  times.py and topng.py read the files; recip_model.py, part 60's chords and `recip-vertex`'s readings under them,
+  within 6 of the wrap; share*.py, round 5's light-share taken again; push-rp6.sh, the owner's copy to the RP6).
