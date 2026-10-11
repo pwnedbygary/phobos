@@ -782,7 +782,8 @@ auto Kernel::serialize(serializer& s) -> bool {
   //minute), nor overdue by a frame; a descriptor kept for a result alone has one to give. Each keeps its place in
   //the order the program opened files (layout 23 on: sceIoGetFdList's), counted from 1, no two alike, and short of
   //2^62 (counting on from it could never run round); a state of an older layout gives its files the order of their
-  //numbers.
+  //numbers. A file keeps its PGD decryption (layout 25 on: none set up in older states), which a folder never has,
+  //its header's descriptor decrypted only once it's set up.
   auto entry = [&](Disc::Entry& e) { text(e.name); s(e.sector); s(e.size); s(e.folder); s(e.date); };
   u64 longest = asyncDuration(true, 64_MiB);
   map(files, [&](OpenFile& open) {
@@ -800,6 +801,14 @@ auto Kernel::serialize(serializer& s) -> bool {
     else s(open.asyncData), s(open.asyncFrom);
     if(s.reading() && stateLayout < 23) open.opened = 0;
     else s(open.opened);
+    if(s.reading() && stateLayout < 25) {
+      open.pgd = open.pgdReady = false;
+      for(u32 n : range(16)) open.pgdVersionKey[n] = open.pgdDataKey[n] = 0;
+      open.pgdDataSize = open.pgdBlockSize = open.pgdDataOffset = 0;
+    } else {
+      s(open.pgd); s(open.pgdVersionKey); s(open.pgdReady); s(open.pgdDataKey);
+      s(open.pgdDataSize); s(open.pgdBlockSize); s(open.pgdDataOffset);
+    }
     if(open.asyncData) {
       u64 unit = open.sectors ? Disc::SectorSize : 1;
       check(open.async == OpenFile::Async::Pending && (open.flags & OpenRead));
@@ -813,6 +822,8 @@ auto Kernel::serialize(serializer& s) -> bool {
     check(open.async <= OpenFile::Async::Done && open.asyncCallback < nextUID);
     check(open.async == OpenFile::Async::None || !open.folder);
     check(!open.resultOnly || (open.async != OpenFile::Async::None && !open.flags));
+    check(!open.pgdReady || open.pgd);
+    check(!open.pgd || !open.folder);
     if(open.async == OpenFile::Async::Pending) {
       u64 due = open.asyncDoneAt;
       check(due > cycles ? due - cycles <= longest : cycles - due < VblankCycles);

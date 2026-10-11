@@ -25,6 +25,22 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP states: open files keep their PGD decryption (layout 25) — 2026-10-11
+
+Branch `cursor/psp-pgd-states-2b67`, on top of #201's `cursor/psp-measure6-2b67` (`055029692`). Save states only; the
+PGD code (pgd.cpp, io.cpp's ioctls and sceNpDrm) is untouched.
+- **What**: each open file's PGD fields (e014f4a34's: whether it's set up, its version key, whether its descriptor is
+  decrypted, the data's key, size and block size, where the data starts) are saved and loaded. A state saved while a
+  game had a PGD file open used to load with that file reading its raw bytes. StateVersion 25; layouts 15 to 24 load
+  with no file's PGD decryption set up (each read as it is). Loading refuses a descriptor decrypted with nothing set
+  up, and a folder set up as PGD (neither ioctl nor sceNpDrmEdataSetupKey takes one); a descriptor closed
+  asynchronously keeps its file's fields (sceIoCloseAsync leaves them), and loads.
+- **Checks**: "state fields" changes each of the seven fields on a disc file and round-trips them, refuses the two
+  damaged states and loads the two real ones; "older layouts load" makes a layout-24 state, and takes the new bytes
+  out of its older states too. Versions with the fields left unsaved, the checks gone, the layout gate at 24, or the
+  kernel's default layout left at 24 fail them. tests/psp 428/0 (sanitized; the checks are in existing groups),
+  tests/allegrex 58/0, tests/psp/ares 307/0.
+
 ## PSP measure: round 6 — the GE's time, lighting's cosine, the reciprocal's chords, patches — 2026-10-10
 
 Branch `cursor/psp-measure6-2b67`, on top of #200's `cursor/psp-gow-vk-2b67` (`c86461ec6`). docs/psp-core.md, part 66,

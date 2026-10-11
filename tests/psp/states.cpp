@@ -609,6 +609,15 @@ static auto stateFields() -> void {
     {"file asyncData", [&] { reader.asyncData = 0x0897'0000; }},
     {"file asyncFrom", [&] { reader.asyncFrom = 16, reader.position = 32; }},
     {"file opened", [&] { host.opened += 100; }},  //its place in the order files were opened (sceIoGetFdList)
+    //the disc's file opened again, set up as PGD (its version key given, and where its data starts), then its
+    //header's descriptor decrypted (its data's key, size and block size)
+    {"file pgd", [&] { reader.pgd = true; }},
+    {"file pgdVersionKey", [&] { for(u32 n : range(16)) reader.pgdVersionKey[n] = u8(0x10 + n); }},
+    {"file pgdDataOffset", [&] { reader.pgdDataOffset = 0x90; }},
+    {"file pgdReady", [&] { reader.pgdReady = true; }},
+    {"file pgdDataKey", [&] { for(u32 n : range(16)) reader.pgdDataKey[n] = u8(0xa0 + n); }},
+    {"file pgdDataSize", [&] { reader.pgdDataSize = 0x1000; }},
+    {"file pgdBlockSize", [&] { reader.pgdBlockSize = 0x400; }},
     {"folder entries", [&] { hostFolder.entries[2] += "x"; }},  //".", "..", then "ONE"
     {"folder nextEntry", [&] { hostFolder.nextEntry = 1; }},
     {"disc file folder", [&] { onDisc.folder = true; }}, {"disc file sectors", [&] { onDisc.sectors = true; }},
@@ -854,6 +863,19 @@ static auto stateFields() -> void {
   refuses("a file opened as none was", [&] { k.files[file].opened = 0; });
   refuses("two files opened as one", [&] { k.files[file].opened = k.files[folder].opened; });
   refuses("a file opened past any count", [&] { k.files[file].opened = 1ull << 62; });
+  //a file's PGD decryption as no machine has it: its descriptor decrypted with nothing set up (only reading a file
+  //set up decrypts it), or a folder set up (neither ioctl nor sceNpDrmEdataSetupKey takes one). Set up with its
+  //descriptor still to decrypt, and kept by a descriptor closed asynchronously (sceIoCloseAsync leaves it), it loads.
+  {
+    k.files[discReader].pgdReady = false;
+    k.files[other].pgd = k.files[other].pgdReady = true;
+    KernelMachine fresh;
+    devices(fresh);
+    CHECK(load(fresh, save(a)), true);  //as a machine has it: loads
+    CHECK(load(a, state), true);
+  }
+  refuses("a PGD descriptor decrypted with no PGD set up", [&] { k.files[file].pgdReady = true; });
+  refuses("a folder read as PGD", [&] { k.files[folder].pgd = true; });
   auto reading = [&](u32 descriptor) -> Kernel::OpenFile& {  //16 bytes from the start, still to come
     auto& open = k.files[descriptor];
     open.async = Async::Pending, open.asyncDoneAt = k.cycles + 2000;
@@ -1532,13 +1554,13 @@ static auto idsRunOut() -> void {
   CHECK(n.kernel.nextUID, Kernel::LastUID + 1);
 }
 
-//States of the layouts before this one load: 23's (no GE time: when the GE will have drawn what it was given, and
-//whether its list's FINISH waits), 22's (nor any file's place in the order files were opened), 21's (nor part 58's
-//sceJpeg, sceHprm and low-level ATRAC fields, with files' count still kept and no read's bytes to come) and 20's
-//(none of those either). Each is this layout's state with the newer fields taken out and the count put back, where
-//saving the machine with just that field changed shows it to be; loaded with the header's layout into a machine
-//whose newer fields are set, it makes this layout's state again, the newer fields defaulted. And files opened out of
-//the order of their numbers, in a layout-22 state, take the order of their numbers.
+//States of the layouts before this one load: 24's (no file's PGD decryption), 23's (nor GE time: when the GE will
+//have drawn what it was given, and whether its list's FINISH waits), 22's (nor any file's place in the order files
+//were opened), 21's (nor part 58's sceJpeg, sceHprm and low-level ATRAC fields, with files' count still kept and no
+//read's bytes to come) and 20's (none of those either). Each is this layout's state with the newer fields taken out
+//and the count put back, where saving the machine with just that field changed shows it to be; loaded with the
+//header's layout into a machine whose newer fields are set, it makes this layout's state again, the newer fields
+//defaulted. And files opened out of the order of their numbers, in a layout-22 state, take the order of their numbers.
 static auto olderLayouts() -> void {
   HostFolder stick;
   stick.put("A.TXT", "abcdefgh");
@@ -1570,6 +1592,12 @@ static auto olderLayouts() -> void {
   open.opened += 1;
   u32 opened = where(kernelState(), state);
   open.opened -= 1;
+  open.pgd = true;
+  u32 pgd = where(kernelState(), state);
+  open.pgd = false;
+  open.pgdDataOffset = 1;
+  u32 pgdEnd = where(kernelState(), state) + 4;  //(the last of its PGD fields, and of the file's)
+  open.pgdDataOffset = 0;
   m.kernel.workingDirectory = "ms0:/LIST";
   u32 workingDirectory = where(kernelState(), state);
   m.kernel.workingDirectory = "ms0:/";
@@ -1590,8 +1618,9 @@ static auto olderLayouts() -> void {
   node.key() = file;
   m.kernel.files.insert(std::move(node));
   CHECK(kernelState() == state, true);
-  bool ordered = jpeg < files && files < asyncData && asyncData < opened && opened + 8 <= workingDirectory
-              && workingDirectory < geDone && geFinish == geDone + 8 && geFinish < state.size();
+  bool ordered = jpeg < files && files < asyncData && asyncData < opened && opened + 8 <= pgd && pgd < pgdEnd
+              && pgdEnd <= workingDirectory && workingDirectory < geDone && geFinish == geDone + 8
+              && geFinish < state.size();
   CHECK(ordered, true);
   if(!ordered) return;
 
@@ -1611,14 +1640,19 @@ static auto olderLayouts() -> void {
     n.kernel.serialize(again);
     return loaded && std::vector<u8>{again.data(), again.data() + again.size()} == state;
   };
-  auto layout23 = state;
-  layout23.erase(layout23.begin() + geDone, layout23.begin() + geFinish + 1);
+  auto layout24 = state;
+  layout24.erase(layout24.begin() + pgd, layout24.begin() + pgdEnd);
+  CHECK(loads(24, layout24), true);
+  auto untimed = state;  //no GE time, the file's fields all there
+  untimed.erase(untimed.begin() + geDone, untimed.begin() + geFinish + 1);
+  auto layout23 = untimed;
+  layout23.erase(layout23.begin() + pgd, layout23.begin() + pgdEnd);
   CHECK(loads(23, layout23), true);
   auto layout22 = layout23;
   layout22.erase(layout22.begin() + opened, layout22.begin() + opened + 8);
   CHECK(loads(22, layout22), true);
   std::vector<u8> counted = {0x45, 0x23, 0x01, 0x00};  //numbers handed out once, passed over
-  auto layout21 = layout23;
+  auto layout21 = untimed;
   layout21.insert(layout21.begin() + workingDirectory, counted.begin(), counted.end());
   layout21.erase(layout21.begin() + asyncData, layout21.begin() + workingDirectory);
   auto layout20 = layout21;
@@ -1645,7 +1679,9 @@ static auto olderLayouts() -> void {
   CHECK(places[0] < places[1] && places[1] < geAt, true);
   if(!(places[0] < places[1] && places[1] < geAt)) return;
   twoFiles.erase(twoFiles.begin() + geAt, twoFiles.begin() + geAt + 9);
-  for(u32 at : {places[1], places[0]}) twoFiles.erase(twoFiles.begin() + at, twoFiles.begin() + at + 8);
+  for(u32 at : {places[1], places[0]}) {  //each file's place, and its PGD decryption after it
+    twoFiles.erase(twoFiles.begin() + at, twoFiles.begin() + at + (pgdEnd - opened));
+  }
   KernelMachine n;
   machine(n);
   n.kernel.stateLayout = 22;
