@@ -497,6 +497,7 @@ struct GE {
   template<typename Reaches> auto settleThrough(const Reaches& reaches) -> bool;
   auto clearBatch(Batch& batch) -> void;
   auto drawnFirst(u32 address, u32 size) -> void;
+  auto undrawnPage(u32 address) -> bool;
   auto drawnBefore(const std::bitset<VRAMPages>& read, const std::bitset<VRAMPages>& written) -> void;
   auto drawnOver(u32 first, u32 last) -> bool;
   auto defer(const PixelState& pixel, const Region& region) -> bool;

@@ -2228,7 +2228,8 @@ static auto geTimeInterrupts() -> void {
 //Vertices read from VRAM that a sprite just before them in the list draws over (two points, through mode, an 8888
 //color and 16-bit positions, 12 bytes each, which the sprite's color 0x00200010 puts at (16, 32), where memory had
 //them at (8, 8)): what waits to be drawn over them is drawn first, as at one thread, with batches shared out however
-//small; for vertices in a row (all asked for at once: readVertices()) and by indices.
+//small; for vertices in a row (all asked for at once: readVertices()) and by indices. Likewise a list's words its own
+//sprite draws over (run(): a page found undrawn is asked about again after a PRIM).
 static auto geVerticesDrawn() -> void {
   constexpr u32 Drawn = 0x15'4000, Indices = 0x0899'0000;  //(Drawn: VRAM offset)
   auto build = [&](Memory& memory, bool indexed) {
@@ -2269,6 +2270,36 @@ static auto geVerticesDrawn() -> void {
     CHECK(whole[(32 * 512 + 16) * 4], u8(0x10));  //(the point drawn where the sprite put it)
     for(u32 threads : {2u, 4u, 8u}) CHECK(drawn(indexed, threads) == whole, true);
   }
+  //And a list in VRAM whose own sprite draws over its words further on in the page, reached by a JUMP: AMBIENT_COLOR
+  //words whose low 24 bits the sprite fills (its alpha the stencil, the frame buffer's own), run as drawn.
+  auto listed = [&](u32 threads) {
+    KernelMachine m;
+    m.system.ge.setThreads(threads);
+    m.system.ge.drawing.shared = 0;
+    auto& memory = m.system.memory;
+    u32 vertex = Vertices;
+    for(float value : {0.0f, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+    memory.write(4, vertex, 0), vertex += 4;
+    for(float value : {0.0f, 1.0f, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+    for(float value : {0.0f, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+    memory.write(4, vertex, 0xff00'ff40), vertex += 4;
+    for(float value : {4.0f, 2.0f, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+    ListWriter list{memory, VRAM + Drawn};
+    list.put(GE::FrameBufferPointer, Drawn), list.put(GE::FrameBufferWidth, 64);
+    list.put(GE::FrameBufferPixelFormat, 3);
+    list.put(GE::Scissor2, 479 | 271 << 10), list.put(GE::Region2, 479 | 271 << 10);
+    list.put(GE::VertexType, 0x80'019f), list.put(GE::ShadeMode, 1);
+    list.to(GE::VertexAddress, Vertices);
+    list.put(GE::Primitive, GE::Sprites << 16 | 2);
+    list.to(GE::Jump, VRAM + Drawn + 64 * 4);
+    ListWriter after{memory, VRAM + Drawn + 64 * 4};  //(row 1, which the sprite draws)
+    for(u32 n = 0; n < 4; n++) after.put(GE::AmbientColor);
+    after.put(GE::Finish), after.put(GE::End);
+    m.call("sceGeListEnQueue", {VRAM + Drawn, 0, 0xffff'ffff, 0});
+    m.system.ge.settle();
+    return m.system.ge.commands[GE::AmbientColor];
+  };
+  for(u32 threads : {1u, 2u, 4u, 8u}) CHECK(listed(threads), u32(GE::AmbientColor << 24 | 0x00'ff40));
 }
 
 //The 3D settings kept from one PRIM to the next (transformKept()), taken after a few of the GE's commands (any of the
@@ -2339,7 +2370,7 @@ auto geTests() -> Tests {
     {"ge lists queued twice", geQueuedTwice}, {"ge suspending signals' callbacks", geSuspendedCallbacks},
     {"ge calls and threads", geCallsAndThreads}, {"ge break", geBreak},
     {"ge break and callbacks", geBreakCallbacks}, {"ge time", geTime}, {"ge time's interrupt", geTimeInterrupts},
-    {"ge 3D settings kept from PRIM to PRIM", geTransformKept}, {"ge vertices drawn first", geVerticesDrawn},
+    {"ge 3D settings kept from PRIM to PRIM", geTransformKept}, {"ge vertices and lists drawn first", geVerticesDrawn},
     {"event flags", eventFlags}, {"event flag waiting", eventFlagWaiting}, {"display picture", displayPicture},
     {"gu program", guProgram}, {"copy sample", copySample},
   };

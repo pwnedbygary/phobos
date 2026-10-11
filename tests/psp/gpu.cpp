@@ -983,7 +983,8 @@ static auto gpuMoves() -> void {
 //Vertices read from VRAM the GPU drew over (two points whose vertices, through mode, an 8888 color and 16-bit
 //positions, are the pixels of a sprite drawn just before, read in a row and by indices): the GPU's pixels put back
 //first, so they're where the software renderer has them; likewise a display list there (AMBIENT_COLOR words whose
-//low 24 bits the sprite draws, run after it). And pages given back to the CPU without a finish (as the drawing
+//low 24 bits the sprite draws, jumped to from words in the page it doesn't draw), and a list whose own sprite draws
+//over its words further on. And pages given back to the CPU without a finish (as the drawing
 //threads' settle gives every busy page back: GE::freeVRAM()) while the GPU has drawn in them: a sprite drawn again
 //inside what it drew makes them its own again, busy (own()), so the CPU's read there finds its pixels.
 static auto gpuVerticesDrawn() -> void {
@@ -1010,14 +1011,41 @@ static auto gpuVerticesDrawn() -> void {
   {
     System software, hardware;
     hardware.ge.setRenderer(gpu);
-    for(System* s : {&software, &hardware}) {
-      u32 list = Memory::VRAMBase + Drawn;
-      for(u32 n = 0; n < 4; n++) s->memory.write(4, list + n * 4, GE::AmbientColor << 24);
-      s->memory.write(4, list + 16, GE::Finish << 24), s->memory.write(4, list + 20, GE::End << 24);
+    for(System* s : {&software, &hardware}) {  //(it starts in row 0, which nothing draws, and jumps into row 1)
+      u32 list = Memory::VRAMBase + Drawn, words = list + 64 * 4;
+      s->memory.write(4, list, GE::Base << 24 | (words >> 8 & 0xf'0000));
+      s->memory.write(4, list + 4, GE::Jump << 24 | (words & 0xff'ffff));
+      for(u32 n = 0; n < 4; n++) s->memory.write(4, words + n * 4, GE::AmbientColor << 24);
+      s->memory.write(4, words + 16, GE::Finish << 24), s->memory.write(4, words + 20, GE::End << 24);
       prepare(*s, Drawn, 3);
-      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 4, 1}}, 0xff00'ff40});
+      sprite(*s, {{{0, 0, 0, 1}, {0, 0, 4, 2}}, 0xff00'ff40});
       s->ge.list = {}, s->ge.list.address = list;
       CHECK(s->ge.run(16) == GE::Stop::Finished, true);
+    }
+    CHECK(software.ge.commands[GE::AmbientColor], u32(GE::AmbientColor << 24 | 0x00'ff40));
+    CHECK(hardware.ge.commands[GE::AmbientColor], software.ge.commands[GE::AmbientColor]);
+    hardware.ge.setRenderer(nullptr);
+  }
+  {  //(a list whose own sprite draws over its words further on in the page, reached by a JUMP)
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    for(System* s : {&software, &hardware}) {
+      u32 list = Memory::VRAMBase + Drawn, at = list, vertex = GPUVertices;
+      auto put = [&](u32 command, u32 argument) { s->memory.write(4, at, command << 24 | argument), at += 4; };
+      for(auto [x, y, color] : {std::tuple{0.0f, 1.0f, 0u}, std::tuple{4.0f, 2.0f, 0xff00'ff40u}}) {
+        for(float value : {0.0f, 0.0f}) s->memory.write(4, vertex, bitsOf(value)), vertex += 4;
+        s->memory.write(4, vertex, color), vertex += 4;
+        for(float value : {x, y, 0.0f}) s->memory.write(4, vertex, bitsOf(value)), vertex += 4;
+      }
+      prepare(*s, Drawn, 3);
+      put(GE::Base, GPUVertices >> 8 & 0xf'0000), put(GE::VertexAddress, GPUVertices & 0xff'ffff);
+      put(GE::Primitive, GE::Sprites << 16 | 2);
+      put(GE::Base, (list + 64 * 4) >> 8 & 0xf'0000), put(GE::Jump, (list + 64 * 4) & 0xff'ffff);
+      at = list + 64 * 4;  //(row 1, which the sprite draws)
+      for(u32 n = 0; n < 4; n++) put(GE::AmbientColor, 0);
+      put(GE::Finish, 0), put(GE::End, 0);
+      s->ge.list = {}, s->ge.list.address = list;
+      CHECK(s->ge.run(32) == GE::Stop::Finished, true);
     }
     CHECK(software.ge.commands[GE::AmbientColor], u32(GE::AmbientColor << 24 | 0x00'ff40));
     CHECK(hardware.ge.commands[GE::AmbientColor], software.ge.commands[GE::AmbientColor]);

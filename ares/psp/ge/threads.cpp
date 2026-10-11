@@ -417,6 +417,25 @@ auto GE::clearBatch(Batch& batch) -> void {
 //commands): whatever is waiting to be drawn over them is drawn first. A batch being filled is drawn, after those
 //before it; batches being drawn are waited for (those all drawn already needn't be); what a hardware renderer drew
 //over them is put back in memory.
+//Whether nothing drawn or waiting to be drawn reaches any byte of address's 4 KiB page, which drawnFirst() would then
+//find for each of them: it isn't VRAM's, or no batch draws over it (or has yet to read a deferred texture from it),
+//and the renderer has drawn none of its bytes.
+auto GE::undrawnPage(u32 address) -> bool {
+  u32 first, last;
+  if(!vramSpan(address & ~0xfffu, 0x1000, first, last)) return true;
+  auto over = [&](const Batch& batch) {
+    for(u32 page = first >> 12; page <= last >> 12; page++) {
+      if(batch.pending[page] || batch.reads[page]) return true;
+    }
+    return false;
+  };
+  if(!drawing.batch->jobs.empty() && over(*drawing.batch)) return false;
+  for(auto& batch : drawing.batches) {
+    if(unfinished(batch) && over(batch)) return false;
+  }
+  return !(renderer && memory.vramBusy && renderer->drawnOver(*this, first, last));
+}
+
 auto GE::drawnFirst(u32 address, u32 size) -> void {
   u32 first, last;
   if(!vramSpan(address, size, first, last)) return;
