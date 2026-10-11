@@ -2799,10 +2799,11 @@ static void curvesCountV(const char* name, int first, int last) {
 //from just before sceGeListEnQueue: to the finish callback, to sceGeListEnQueue's return, and (time-signals) to the
 //signal callback. A run the GE didn't finish in Patience is a stall (reset as waitForGe resets it, noted in the
 //test's .stalled), its times 0xffffffff and the rest of its size's too; after three, the test's remaining runs aren't
-//tried. The program waits on a semaphore the finish callback signals, so nothing looks at the GE while it draws.
+//tried. The program waits on a semaphore the finish callback signals, so nothing looks at the GE while it draws; it
+//wakes every 2 ms to look at the flag the callback sets too, in case a callback may not signal a semaphore.
 static int foundPll, foundCpu, foundBus;
 static volatile unsigned int finishedAt, signalledAt;
-static volatile int signalled;
+static volatile int finished, signalled;
 static SceUID timingSemaphore = -1;
 static int timingCallbacks = -1;
 enum { Unfinished = 0xffffffffu };
@@ -2810,6 +2811,7 @@ enum { Unfinished = 0xffffffffu };
 static void timingFinish(int id, void* argument) {
   (void)id, (void)argument;
   finishedAt = sceKernelGetSystemTimeLow();
+  finished = 1;
   sceKernelSignalSema(timingSemaphore, 1);
 }
 static void timingSignal(int id, void* argument) {
@@ -2833,24 +2835,26 @@ static void setClocks(int fast) {
 static int runTimed(const char* what, unsigned int* times) {
   times[0] = times[1] = times[2] = Unfinished;
   while(sceKernelPollSema(timingSemaphore, 1) >= 0) continue;
-  signalled = 0;
+  finished = signalled = 0;
   unsigned int began = sceKernelGetSystemTimeLow();
   int queued = sceGeListEnQueue(TIMED, 0, timingCallbacks, 0);
-  unsigned int after = sceKernelGetSystemTimeLow();
+  unsigned int after = sceKernelGetSystemTimeLow(), now = after;
   if(queued < 0) {
     times[1] = queued;
     return 0;
   }
-  SceUInt timeout = Patience;
-  int waited = sceKernelWaitSema(timingSemaphore, 1, &timeout);
+  while(!finished && now - began < Patience) {
+    SceUInt timeout = 2000;
+    sceKernelWaitSema(timingSemaphore, 1, &timeout);
+    now = sceKernelGetSystemTimeLow();
+  }
   int state = sceGeDrawSync(1);
-  unsigned int now = sceKernelGetSystemTimeLow();
-  while(waited >= 0 && state > 0 && now - began < Patience) {  //its END, just after the FINISH
+  while(finished && state > 0 && now - began < Patience) {  //its END, just after the FINISH
     sceKernelDelayThread(50);
     state = sceGeDrawSync(1);
     now = sceKernelGetSystemTimeLow();
   }
-  if(waited < 0 || state > 0) {
+  if(!finished || state > 0) {
     resetGe(now - began, state, what);
     return 0;
   }
@@ -3440,7 +3444,7 @@ static void geStatuses(const char* name) {
   for(int layer = 0; layer < 16; layer++) timedSprite(0, 0, 256, 256, 0, 0, 256, 256, 0xffffffff);
   sceGuFinish();
   while(sceKernelPollSema(timingSemaphore, 1) >= 0) continue;
-  finishedAt = 0;
+  finished = 0;
   unsigned int began = sceKernelGetSystemTimeLow();
   int id = sceGeListEnQueue(TIMED, 0, timingCallbacks, 0), looks = 0, after = 0;
   while(id >= 0 && looks < 128) {
@@ -3452,8 +3456,8 @@ static void geStatuses(const char* name) {
     spinUntil(began, time + 50);
   }
   pixels[0] = looks;
-  SceUInt timeout = Patience;
-  if(id >= 0 && sceKernelWaitSema(timingSemaphore, 1, &timeout) >= 0) pixels[1] = finishedAt - began;
+  while(id >= 0 && !finished && sceKernelGetSystemTimeLow() - began < Patience) sceKernelDelayThread(1000);
+  if(finished) pixels[1] = finishedAt - began;
   waitForGe("16 layers of an 8888 texture in RAM, queued alone");
   unsigned int* part2 = pixels + 2 + 128 * 3;
   Vertex* v = (Vertex*)big;
@@ -3535,7 +3539,8 @@ static void writeManifest6(void) {
 static void round6(void) {
   foundCpu = scePowerGetCpuClockFrequencyInt();
   foundBus = scePowerGetBusClockFrequencyInt();
-  foundPll = 2 * foundBus;  //(the bus runs at half the PLL; pspsdk has no call that reads the PLL)
+  //The bus runs at half the PLL (333 MHz gives 166), which pspsdk has no call to read.
+  foundPll = foundCpu > 2 * foundBus ? foundCpu : 2 * foundBus;
   writeManifest6();
   char name[32];
   for(int set = 0; set < 4; set++) {

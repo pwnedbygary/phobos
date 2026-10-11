@@ -8354,7 +8354,8 @@ culled primitives or block transfers. Seven timing tests give the PSP's own cost
 built once in a buffer (with GU_SEND, or word by word) and queued alone with `sceGeListEnQueue` and a callback of
 the program's own: the time from just before the list is queued to its finish callback, in microseconds
 (`sceKernelGetSystemTimeLow`, read in the callback), and to `sceGeListEnQueue`'s return. The program waits on a
-semaphore the finish callback signals, so nothing looks at the GE while it draws, and the 5-second limit still
+semaphore the finish callback signals, so nothing looks at the GE while it draws (waking every 2 ms to look at a flag
+the callback also sets, in case the firmware won't have a callback signal a semaphore), and the 5-second limit still
 applies (a stall is reset as `waitForGe` resets it). Every case runs at a few sizes (straight-line fits: the slope is a
 unit's cost, free of the fixed cost of queueing a list and taking its interrupt) and 8 or 16 times at each, every run's
 time recorded so the noise shows; first at the clocks the program found, then at 333 MHz with the bus at 166, each
@@ -8475,7 +8476,9 @@ PATCH_FACING, culling on or off. What's left that it could do is tried:
 and `sceGeDrawSync(1)` looked at every 50 microseconds until a few looks after it's done, beside its finish callback's
 time; and a list GU ends (its stall address just past its END) whose drawing and FINISH come with interrupts held off
 (`sceKernelCpuSuspendIntr`), `sceGeDrawSync(1)` looked at for 20 ms, then interrupts let through. Part 64 has it read
-"drawing" (2) there, unmeasured; the core's run gives 2.
+"drawing" (2) there, unmeasured; the core's run gives 2. Part 64's other unmeasured detail, `sceGeBreak(0)` at a
+waiting FINISH, isn't tried: a break that went wrong would leave the driver's queue in a state no later test could
+trust.
 
 ### In the core, and the program
 
