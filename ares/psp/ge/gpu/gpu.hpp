@@ -170,7 +170,8 @@ struct GPU : GE::Renderer {
     u32 state = 0, first = 0, count = 0;  //Draw, Mesh
     s32 x = 0, y = 0;                     //Upload, Readback, Copy
     u32 width = 0, height = 0;
-    u64 colors = 0, stencil = 0, depth = 0;  //Upload: where in uploads (8888s, bytes, 16-bit depths); Present's
+    u64 colors = 0, stencil = 0, depth = 0;  //Upload: where in uploads (8888s, bytes, 16-bit depths: the parts it
+                                             //has); Present's
     u8 parts = 3;                            //Upload: bit 0 the colors and stencils, bit 1 the depths
     u32 texture = 0;                         //Copy
     u16 intoX = 0, intoY = 0;                //Copy: where in the texture (its top left the target's x, y)

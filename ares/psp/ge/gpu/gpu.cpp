@@ -59,6 +59,22 @@ static auto narrowTarget(u32 color, u32 format) -> u32 {
   return color;
 }
 
+//Rows of a target's pixels in memory's VRAM, from at (a VRAM offset, each wrapping at VRAM's end), stride pixels
+//apart, as 8888s and their stencils (fill()'s), in a frame buffer of Format.
+template<u32 Format>
+static auto widenRows(const u8* vram, u32 at, u32 stride, u32 width, u32 height, u8* colors, u8* stencils) -> void {
+  constexpr u32 bytes = Format == 3 ? 4 : 2;
+  for(u32 y = 0; y < height; y++, at += stride * bytes) {
+    for(u32 x = 0, from = at; x < width; x++, from += bytes) {
+      u32 pixel = 0;
+      std::memcpy(&pixel, vram + (from & (Memory::VRAMSize - 1)), bytes);
+      u32 color = widenTarget(pixel, Format);
+      std::memcpy(colors, &color, 4), colors += 4;
+      *stencils++ = color >> 24;
+    }
+  }
+}
+
 GPU::GPU(std::unique_ptr<Backend> backend) : backend(std::move(backend)) {}
 
 GPU::~GPU() {
@@ -145,29 +161,30 @@ auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts, u
   auto& vram = ge->memory.vram;
   Command c{Command::Kind::Upload, t.id};
   c.x = left, c.y = from, c.width = width, c.height = height, c.format = t.format;
+  //(the parts it has: the colors and stencils, the depths)
   c.colors = recorded.uploads.size();
-  c.stencil = c.colors + count * 4;
-  c.depth = c.stencil + count;
+  c.stencil = c.colors + (parts & 1 ? count * 4 : 0);
+  c.depth = c.stencil + (parts & 1 ? count : 0);
   c.parts = parts;
-  recorded.uploads.resize(c.depth + count * 2);
+  recorded.uploads.resize(c.depth + (parts & 2 ? count * 2 : 0));
   u8* out = recorded.uploads.data();
-  for(u32 y = 0; y < height; y++) {
+  if(parts & 1) {
+    u32 at = t.address + (from * t.stride + left) * bytes;
+    auto rows = [&](auto widen) { widen(vram.data(), at, t.stride, width, height, out + c.colors, out + c.stencil); };
+    if(t.format == 0) rows(widenRows<0>);
+    if(t.format == 1) rows(widenRows<1>);
+    if(t.format == 2) rows(widenRows<2>);
+    if(t.format == 3) rows(widenRows<3>);
+  }
+  for(u32 y = 0; y < height && parts & 2; y++) {
     for(u32 x = left; x <= right; x++) {
-      u32 n = y * width + x - left;
-      if(parts & 1) {
-        u32 at = (t.address + ((from + y) * t.stride + x) * bytes) & (Memory::VRAMSize - 1), pixel = 0;
-        std::memcpy(&pixel, &vram[at], bytes);
-        u32 color = widenTarget(pixel, t.format);
-        std::memcpy(out + c.colors + n * 4, &color, 4);
-        out[c.stencil + n] = color >> 24;
-      }
       u16 depth = 0;
-      if(parts & 2 && x < t.depthStride) {
+      if(x < t.depthStride) {
         u32 offset = Memory::vramOffset(3, (t.depthBuffer + ((from + y) * t.depthStride + x) * 2) &
                                               (Memory::VRAMSize - 1));
         depth = vram[offset] | vram[offset + 1] << 8;
       }
-      if(parts & 2) std::memcpy(out + c.depth + n * 2, &depth, 2);
+      std::memcpy(out + c.depth + (y * width + x - left) * 2, &depth, 2);
     }
   }
   recorded.commands.push_back(c);

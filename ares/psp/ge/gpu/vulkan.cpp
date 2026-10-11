@@ -1258,10 +1258,12 @@ struct VulkanBackend : GPU::Backend {
           boundPipeline = VK_NULL_HANDLE, boundSet = VK_NULL_HANDLE, lastState = ~0u, transformsBound = false;
           continue;
         }
-        std::memcpy(staging + colors, in + c.colors, count * 4);
-        std::memcpy(staging + stencils, in + c.stencil, count);
+        if(colored) {
+          std::memcpy(staging + colors, in + c.colors, count * 4);
+          std::memcpy(staging + stencils, in + c.stencil, count);
+        }
         u32* depth = (u32*)(staging + depths);
-        for(u32 n = 0; n < count; n++) {
+        for(u32 n = 0; n < count && depthed; n++) {
           u16 z;
           std::memcpy(&z, in + c.depth + n * 2, 2);
           if(depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT) {
