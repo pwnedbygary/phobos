@@ -2229,14 +2229,14 @@ static auto geTimeInterrupts() -> void {
 //color and 16-bit positions, 12 bytes each, which the sprite's color 0x00200010 puts at (16, 32), where memory had
 //them at (8, 8)): what waits to be drawn over them is drawn first, as at one thread, with batches shared out however
 //small; for vertices in a row (all asked for at once: readVertices()), the first of them in the page before too, and
-//by indices. Likewise a list's words its own sprite draws over (run(): a page found undrawn is asked about again
-//after a PRIM).
+//by indices, also past the PRIM's count of vertices from the first. Likewise a list's words its own sprite draws over
+//(run(): a page found undrawn is asked about again after a PRIM).
 static auto geVerticesDrawn() -> void {
   constexpr u32 Drawn = 0x15'4000, Indices = 0x0899'0000;  //(Drawn: VRAM offset)
   u32 first = 0;  //(the first vertex's bytes before the sprite's first pixel)
   auto build = [&](Memory& memory, bool indexed) {
     for(u32 n = 0; n < 68; n++) memory.write(4, VRAM + Drawn - 16 + n * 4, 0x0008'0008);
-    memory.write(1, Indices, 1), memory.write(1, Indices + 1, 0);
+    memory.write(1, Indices, first / 12 + 1), memory.write(1, Indices + 1, first / 12);  //(the sprite's two)
     ListWriter list{memory, ListA};
     u32 vertex = Vertices;
     for(float value : {0.0f, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
@@ -2277,6 +2277,11 @@ static auto geVerticesDrawn() -> void {
   auto whole = drawn(false, 1);
   CHECK(whole[(8 * 512 + 8) * 4], u8(0x08)), CHECK(whole[(32 * 512 + 16) * 4], u8(0x10));
   for(u32 threads : {2u, 4u, 8u}) CHECK(drawn(false, threads) == whole, true);
+  //(by indices 3 and 2, the sprite's: the PRIM's two vertices from the first are in the page before, not read)
+  first = 24;
+  whole = drawn(true, 1);
+  CHECK(whole[(32 * 512 + 16) * 4], u8(0x10));
+  for(u32 threads : {2u, 4u, 8u}) CHECK(drawn(true, threads) == whole, true);
   //And a list in VRAM whose own sprite draws over its words further on in the page, reached by a JUMP: AMBIENT_COLOR
   //words whose low 24 bits the sprite fills (its alpha the stencil, the frame buffer's own), run as drawn.
   auto listed = [&](u32 threads) {

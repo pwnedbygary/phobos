@@ -982,7 +982,8 @@ static auto gpuMoves() -> void {
 }
 
 //Vertices read from VRAM the GPU drew over (two points whose vertices, through mode, an 8888 color and 16-bit
-//positions, are the pixels of a sprite drawn just before, read in a row and by indices): the GPU's pixels put back
+//positions, are the pixels of a sprite drawn just before, read in a row and by indices, those also past the PRIM's
+//two vertices from the first, which are then in the page before, which nothing draws): the GPU's pixels put back
 //first, so they're where the software renderer has them; likewise a display list there (AMBIENT_COLOR words whose
 //low 24 bits the sprite draws, jumped to from words in the page it doesn't draw), and a list whose own sprite draws
 //over its words further on. And pages given back to the CPU without a finish (as the drawing
@@ -992,17 +993,17 @@ static auto gpuVerticesDrawn() -> void {
   auto gpu = renderer();
   if(!gpu) return;
   constexpr u32 Drawn = 0x1'0000, Indices = 0x0899'0000;  //(Drawn: VRAM offset)
-  for(bool indexed : {false, true}) {
+  for(auto [indexed, first] : {std::pair{false, 0u}, std::pair{true, 0u}, std::pair{true, 24u}}) {
     System software, hardware;
     hardware.ge.setRenderer(gpu);
     for(System* s : {&software, &hardware}) {
       for(u32 n = 0; n < 64; n++) s->memory.write(4, Memory::VRAMBase + Drawn + n * 4, 0x0008'0008);
-      s->memory.write(1, Indices, 1), s->memory.write(1, Indices + 1, 0);
+      s->memory.write(1, Indices, first / 12 + 1), s->memory.write(1, Indices + 1, first / 12);  //(the sprite's two)
       prepare(*s, Drawn, 3);
       sprite(*s, {{{0, 0, 0, 0}, {0, 0, 8, 1}}, 0x0020'0010});
       prepare(*s, 0, 3);
       s->ge.commands[GE::VertexType] = 0x80'011c | (indexed ? 1 << 11 : 0);
-      s->ge.vertexAddress = Memory::VRAMBase + Drawn, s->ge.indexAddress = Indices;
+      s->ge.vertexAddress = Memory::VRAMBase + Drawn - first, s->ge.indexAddress = Indices;
       s->ge.primitive(GE::Points, 2);
     }
     CHECK(apart(software, hardware), 0u);
