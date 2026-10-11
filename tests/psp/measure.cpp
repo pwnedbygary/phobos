@@ -3,9 +3,10 @@
 //first files kept in results-1), run again and draw the same, and skip what's done on a third run; the GE's rounds
 //3 to 6 and the FPU probes must write theirs (round 4's stall check getting past a list the GE doesn't finish, its
 //counts running again over what the program before left of them, not over what this one leaves; round 6's timing
-//records complete, every run finished); then it must leave. With PSP_GE_RESULTS set to the results folder (results/ge) a real PSP (or another emulator) wrote, each file
-//is compared with that folder's, and what differs is listed rather than failed: finding it is what the program is
-//for. PSP_GE_OURS, when set, is a folder this core's files are copied to, for a closer look.
+//records complete, every run finished); then it must leave. With PSP_GE_RESULTS set to the results folder
+//(results/ge) a real PSP (or another emulator) wrote, each file is compared with that folder's, and what differs is
+//listed rather than failed: finding it is what the program is for. PSP_GE_OURS, when set, is a folder this core's
+//files are copied to, for a closer look.
 #include "kernel-machine.hpp"
 
 #include <algorithm>
@@ -122,8 +123,8 @@ static auto medianFinish(const TimingRecord& record) -> u32 {
   std::sort(finishes.begin(), finishes.end());
   return finishes[finishes.size() / 2];
 }
-//ge-statuses's words: part 1's 2 + 128 * 3, part 2's 4 + 128 * 2.
-static constexpr u32 StatusWords = 2 + 128 * 3 + 4 + 128 * 2;
+//ge-statuses's words: part 1's 2 + 1024 * 3 (its looks), part 2's 4 + 128 * 2.
+static constexpr u32 StatusLooks = 1024, StatusHeld = 128, StatusWords = 2 + StatusLooks * 3 + 4 + StatusHeld * 2;
 
 static auto readWords(const std::filesystem::path& path) -> std::vector<u32> {
   std::ifstream file(path, std::ios::binary);
@@ -210,25 +211,25 @@ static auto describeTimes(const char* name, const std::vector<u32>& ours, const 
   }
 }
 
-//How ge-statuses differs: each part's statuses in the order they came, with when each was first seen (us).
+//How ge-statuses differs: each part's statuses in the order they came (sceGeListSync/sceGeDrawSync in part 1, as
+//signed numbers), with when each was first seen (us).
 static auto describeStatuses(const std::vector<u32>& ours, const std::vector<u32>& theirs) -> void {
   auto summary = [](const std::vector<u32>& words) {
+    auto number = [](u32 word) { return std::to_string(s32(word)); };
     std::string text = "part 1:";
-    u32 looks = std::min<u32>(words[0], 128), last = ~0u;
+    u32 looks = std::min(words[0], StatusLooks);
     for(u32 n = 0; n < looks; n++) {
-      u32 status = words[3 + n * 3] << 8 | words[4 + n * 3];
-      if(status != last) text += " " + std::to_string(words[2 + n * 3]) + "us:" + std::to_string(status >> 8) + "/" +
-                                 std::to_string(status & 0xff);
-      last = status;
+      if(n && words[3 + n * 3] == words[n * 3] && words[4 + n * 3] == words[1 + n * 3]) continue;
+      text += " " + std::to_string(words[2 + n * 3]) + "us:" + number(words[3 + n * 3]) + "/" + number(words[4 + n * 3]);
     }
-    text += ", finished " + std::to_string(int(words[1])) + "us; part 2:";
-    const u32* part2 = words.data() + 2 + 128 * 3;
-    looks = std::min<u32>(part2[0], 128), last = ~0u;
+    text += ", finished " + number(words[1]) + "us; part 2:";
+    const u32* part2 = words.data() + 2 + StatusLooks * 3;
+    looks = std::min(part2[0], StatusHeld);
     for(u32 n = 0; n < looks; n++) {
-      if(part2[5 + n * 2] != last) text += " " + std::to_string(part2[4 + n * 2]) + "us:" + std::to_string(part2[5 + n * 2]);
-      last = part2[5 + n * 2];
+      if(n && part2[5 + n * 2] == part2[3 + n * 2]) continue;
+      text += " " + std::to_string(part2[4 + n * 2]) + "us:" + number(part2[5 + n * 2]);
     }
-    text += ", held off " + std::to_string(part2[1]) + "us, then " + std::to_string(part2[2]) + ", done " +
+    text += ", held off " + std::to_string(part2[1]) + "us, then " + number(part2[2]) + ", done " +
             std::to_string(part2[3]) + "us";
     return text;
   };
@@ -503,10 +504,11 @@ static auto pspMeasure() -> void {
   auto statuses = readWords(results / "ge-statuses.bin");
   CHECK(statuses.size(), StatusWords);
   if(statuses.size() == StatusWords) {
-    CHECK(statuses[0] > 0 && statuses[0] <= 128, true);                 //part 1 looked
-    CHECK(statuses[1] != 0xffff'ffff, true);                             //and its finish callback came
-    CHECK(statuses[2 + 128 * 3] > 0 && statuses[2 + 128 * 3] <= 128, true);  //part 2 looked
-    CHECK(statuses[2 + 128 * 3 + 3] != 0xffff'ffff, true);              //and its list was done
+    u32 part2 = 2 + StatusLooks * 3;
+    CHECK(statuses[0] > 0 && statuses[0] <= StatusLooks, true);       //part 1 looked
+    CHECK(statuses[1] != 0xffff'ffff, true);                           //and its finish callback came
+    CHECK(statuses[part2] > 0 && statuses[part2] <= StatusHeld, true);  //part 2 looked
+    CHECK(statuses[part2 + 3] != 0xffff'ffff, true);                   //and its list was done
     if(reference && std::filesystem::exists(std::filesystem::path(reference) / "ge-statuses.bin")) {
       describeStatuses(statuses, readWords(std::filesystem::path(reference) / "ge-statuses.bin"));
     }
@@ -556,7 +558,9 @@ static auto pspMeasure() -> void {
     for(u32 y = 0; y < 256; y++) {
       for(u32 x = 0; x < 256; x++) {
         u32 light[3] = {y, 255 - y, y}, material[3] = {x, x, 255 - x};
-        for(u32 c = 0; c < 3; c++) lit &= (products[y * 256 + x] >> c * 8 & 0xff) == (2 * light[c] + 1) * (2 * material[c] + 1) >> 10;
+        for(u32 c = 0; c < 3; c++) {
+          lit &= (products[y * 256 + x] >> c * 8 & 0xff) == (2 * light[c] + 1) * (2 * material[c] + 1) >> 10;
+        }
       }
     }
     CHECK(lit, true);
@@ -566,7 +570,7 @@ static auto pspMeasure() -> void {
     bool read = true;
     for(u32 row : {0u, 224u}) {
       for(u32 r = 0; r < 32; r++) {
-        s32 left = (r & 16 ? -257 * 16 : 0) + s32(r & 15);  //the strip's left end, in sixteenths
+        s32 left = (r & 16 ? -256 * 16 : 0) + s32(r & 15) - 8;  //the strip's left end, in sixteenths
         for(u32 x = 0; x < 256; x++) {
           s32 middle = s32(x) * 16 + 8, q = 16384 - (middle - left);
           if(middle <= left || q <= 8192) continue;
@@ -581,7 +585,7 @@ static auto pspMeasure() -> void {
   if(projected.size() == 256 * 256) {
     bool read = true;
     for(u32 r = 0; r < 64; r++) {
-      s32 left = -256 * 16 * s32(r >> 4) + s32(r & 15);
+      s32 left = -256 * 16 * s32(r >> 4) + s32(r & 15) - 8;
       for(u32 x = 0; x < 256; x++) {
         s32 middle = s32(x) * 16 + 8, q = 32767 - (middle - left);
         if(middle <= left || q < 16384) continue;

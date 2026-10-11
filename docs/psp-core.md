@@ -8358,9 +8358,10 @@ semaphore the finish callback signals, so nothing looks at the GE while it draws
 the callback also sets, in case the firmware won't have a callback signal a semaphore), and the 5-second limit still
 applies (a stall is reset as `waitForGe` resets it). Every case runs at a few sizes (straight-line fits: the slope is a
 unit's cost, free of the fixed cost of queueing a list and taking its interrupt) and 8 or 16 times at each, every run's
-time recorded so the noise shows; first at the clocks the program found, then at 333 MHz with the bus at 166, each
-record carrying the CPU and bus clocks `scePowerGet*ClockFrequencyInt` gave back. Whether the times scale with the bus
-clock is the model's first assumption to check.
+time recorded so the noise shows; first at 222 MHz with the bus at 111 (set, whatever custom firmware chose), then at
+333 MHz with the bus at 166, the clocks found put back after, each record carrying the CPU and bus clocks
+`scePowerGet*ClockFrequencyInt` gave back. Whether the times scale with the bus clock is the model's first assumption
+to check. A list `sceGeListEnQueue` refused counts as a stall (noted in `.stalled`, its run's second time the error).
 - `time-commands`: an empty list (FINISH, END); 1024 to 65536 NOPs, writes of a register (TEXTURE_ENV_COLOR), and
   TEX_FLUSHes; world-matrix uploads (13 commands each); 256 to 16384 JUMPs to the next word, and CALLs to a RET. The
   slopes are the GE's time a command (part 64: none), and JUMP and CALL show what restarting the list's fetch costs.
@@ -8429,8 +8430,8 @@ Part 60 fitted R as 128 straight chords, two pinned by measurement and the rest 
   their u scale x w, so that s is constant while q steps from 1 / w0 to 1 / w1 one unit of its 15 bits each
   sixteenth of a pixel (both steps exact, whatever the stepper). A pixel's u is then scale x R(q), and the scale makes its
   texel the chord's 16-bit value's low 8 bits: each pixel reads one value outright. 16 rows at the 16 sub-pixel
-  offsets and 16 more 257 pixels on put every q of the binade on a pixel: every chord at the 64 positions a 13-bit q
-  has (the largest corner a power of two leaves 13 bits). The cases: w 1 to 2; the same at half the scale (the value's
+  offsets (each 4096 sixteenths of the strip on pixels' middles) and 16 more 256 pixels on put every q of the binade
+  on a pixel: every chord at the 64 positions a 13-bit q has (the largest corner a power of two leaves 13 bits). The cases: w 1 to 2; the same at half the scale (the value's
   bits 1-8, coordinates below 32768 texels, a hedge in case the GE keeps fewer bits: `texel-range`); 2 to 4, 1/2 to 1,
   1024 to 2048, 2^-10 to 2^-9 (whether only the fraction matters); 2 to 1 (stepped the other way); 1 to 2 along v.
   This pins every chord's start and slope as integers, and whether a chord is straight at all.
@@ -8438,8 +8439,8 @@ Part 60 fitted R as 128 straight chords, two pinned by measurement and the rest 
   just below a power of two, so the pixels read 14-bit qs (positions 0, 2, 4, ...: 128 a chord), in [0.5, 1) and [1, 2).
   It also measures the projective path, which part 60 carried over unmeasured: rows 192-223 (the matrix's s 128 w and q 1,
   w 1 to 2) are `recip-pixels`' rows 0-31 if the matrix's s and q are taken as a vertex's own (as the core takes them;
-  checked in its run), rows 224-255 show the matrix's q times R(w), and rows 128-191 a q of 0, -0, below 0, tiny and
-  huge (part 60: "no picture measures either").
+  checked in its run), rows 224-255 show the matrix's q times R(w), and rows 128-191 a q of 0, -0, below 0 and tiny
+  (part 60: "no picture measures either").
 - `recip-vertex-0` to `-2`: the user's constant-w triangles (as `persp-w3`): 4096 cells of 4x4 pixels, each at one w in
   [1, 2) at chord c / 32 and 32 positions a chord (`-0` even positions, `-1` three on, `-2` with w's 8 lowest bits set,
   which R should ignore), u 512 at every corner. A pixel's u is 512 x R15(w) x R(R15(w)) (R15: R cut to 15 bits, as s
@@ -8473,8 +8474,8 @@ PATCH_FACING, culling on or off. What's left that it could do is tried:
 ### The driver's statuses (part 64's unmeasured details)
 
 `ge-statuses`: a slow list (16 layers of an 8888 texture in RAM, not swizzled) queued alone, with `sceGeListSync(id, 1)`
-and `sceGeDrawSync(1)` looked at every 50 microseconds until a few looks after it's done, beside its finish callback's
-time; and a list GU ends (its stall address just past its END) whose drawing and FINISH come with interrupts held off
+and `sceGeDrawSync(1)` looked at every 50 microseconds until a few looks after it's done (1024 looks, about 50 ms, at
+most), beside its finish callback's time; and a list GU ends (its stall address just past its END) whose drawing and FINISH come with interrupts held off
 (`sceKernelCpuSuspendIntr`), `sceGeDrawSync(1)` looked at for 20 ms, then interrupts let through. Part 64 has it read
 "drawing" (2) there, unmeasured; the core's run gives 2. Part 64's other unmeasured detail, `sceGeBreak(0)` at a
 waiting FINISH, isn't tried: a break that went wrong would leave the driver's queue in a state no later test could

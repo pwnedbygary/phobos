@@ -23,8 +23,9 @@
 //Each test draws into VRAM (away from the text on the screen), reads the pixels back as they are and writes them to
 //results/ge/<test>.bin: little-endian 32-bit words, one per pixel, row by row (a 16-bit frame buffer's pixels in the
 //low half); round 6's timing tests write times instead. manifest.txt (round 2), manifest3.txt to manifest6.txt
-//(rounds 3-6) say what each test drew. A test whose file is there is skipped, and one that stops the PSP is given up on, as results.c has it. A list
-//the GE hasn't finished after 5 seconds is a stall: the GE is reset, <test>.stalled says so, and the round goes on
+//(rounds 3-6) say what each test drew. A test whose file is there is skipped, and one that stops the PSP is given up
+//on, as results.c has it. A list the GE hasn't finished after 5 seconds is a stall: the GE is reset, <test>.stalled
+//says so, and the round goes on
 //(waitForGe). The program computes nothing: the host runs the same program in Phobos's core (tests/psp/measure.cpp)
 //and compares the files.
 
@@ -2509,8 +2510,9 @@ static void chordStrip(FloatVertex* v, float left, int row, float w0, float w1, 
 //where R is exact, its u (or v) scale * w at each end, so s is scale all along while q steps from 1 / w0 to 1 / w1,
 //one unit of its 15 bits each sixteenth of a pixel (both steps exact). A pixel's u is then scale * R(q), and scale
 //makes its texel (the repeating texture's, texelXY) the chord's 16-bit value's low 8 bits. Rows 32c to 32c + 15 have
-//the strip's left end at 0, 1/16, ... 15/16 of a pixel; the next 16 the same 257 pixels further left (its far half):
-//every q of the binade on a pixel (13 bits below the power of two: chord and position's top 6 bits). The cases: w
+//the strip's left end at -8/16, -7/16, ... 7/16 of a pixel, so the pixels' middles fall 1 to 4096 sixteenths along
+//it; the next 16 the same 256 pixels further left, 4097 to 8192: every q of the binade on a pixel (13 bits below the
+//power of two: chord and position's top 6 bits). The cases: w
 //1 to 2; the same at half the scale (texel: the value's bits 1-8, the coordinates below 32768 texels, in case the GE
 //keeps no more: texel-range shows); 2 to 4, 1/2 to 1, 1024 to 2048, 2^-10 to 2^-9 (other binades); 2 to 1 (the
 //other way along); and 1 to 2 along v.
@@ -2527,7 +2529,7 @@ static void recipPixels(const char* name) {
   FloatVertex* v = sceGuGetMemory(256 * 6 * sizeof(FloatVertex));
   for(int row = 0; row < 256; row++) {
     const ChordCase* c = &chordCases[row >> 5];
-    float left = (row & 16 ? -257 : 0) + (row & 15) / 16.0f;
+    float left = (row & 16 ? -256 : 0) + ((row & 15) - 8) / 16.0f;
     chordStrip(v + row * 6, left, row, c->w0, c->w1, c->scale * c->w0, c->scale * c->w1, c->alongV);
   }
   sceGuDrawArray(GU_TRIANGLES, FloatVertexType3D, 256 * 6, 0, v);
@@ -2538,11 +2540,11 @@ static void recipPixels(const char* name) {
 //The reciprocal at a pixel through the texture matrix (TEXTURE_MAP_MODE 1, from the model's position; part 60: never
 //measured): at w 1, s, t and q are the matrix's as given, so q can start just below a power of two and the pixels
 //read 14-bit qs (recip-pixels' start on one, which leaves 13). Strips a pixel tall, 64 rows a case: 4 windows of 256
-//pixels along a 1024-pixel strip, each at 16 offsets (the strip's left end 0 to 15/16 of a pixel past them). Rows
+//pixels along a 1024-pixel strip, each at 16 offsets (the strip's left end -8/16 to 7/16 of a pixel past them). Rows
 //0-63: q from 32767/32768 down one unit of 2^-15 each sixteenth of a pixel, s 128 (texel: the chord's low 8 bits);
 //64-127: q from 32767/16384 down a unit of 2^-14 each sixteenth, s 256. 128-191: q the same at every corner, in 16
 //groups of 4 rows, 1, 0.75, 0.5, 0.375, 2^-20, +0, -0, -2^-20, -0.375, -0.5, -0.75, -1, 3, -3, 2^-126, -2^-126 (a q
-//of 0 or below, also unmeasured), s 0.25, t 0.3125. 192-255: w 1 at the left end of a 512-pixel strip and 2 at its
+//of 0 or below, also unmeasured, and tiny ones), s 0.25, t 0.3125. 192-255: w 1 at the left end of a 512-pixel strip and 2 at its
 //right, the windows and offsets of recip-pixels' first case, the matrix's s 128 w (from the model's z, -w) and q 1
 //(rows 192-223: recip-pixels' rows 0-31 if the matrix's s and q are taken as a vertex's own u and q), or s 96 w and
 //q 0.75 (224-255: the matrix's q times R(w), as part 60 has it, not measured).
@@ -2560,13 +2562,13 @@ static void recipProjected(const char* name) {
     float left = 0, length = 256, w0 = 1, w1 = 1;
     if(row < 128) {
       float top = row < 64 ? 32767.0f / 32768 : 32767.0f / 16384, slope = row < 64 ? 1.0f / 16 : 1.0f / 8;
-      left = -256 * (row >> 4 & 3) + (row & 15) / 16.0f, length = 1024;
+      left = -256 * (row >> 4 & 3) + ((row & 15) - 8) / 16.0f, length = 1024;
       m.x.z = -slope;  //q's drop per unit of the model's x (128 pixels at w 1)
       m.w.x = row < 64 ? 128 : 256, m.w.z = top + slope * ndcX(left);
     } else if(row < 192) {
       m.w.x = 0.25f, m.w.y = 0.3125f, m.w.z = constants[(row - 128) >> 2];
     } else {
-      left = (row & 16 ? -257 : 0) + (row & 15) / 16.0f, length = 512, w1 = 2;
+      left = (row & 16 ? -256 : 0) + ((row & 15) - 8) / 16.0f, length = 512, w1 = 2;
       m.z.x = row < 224 ? -128 : -96, m.w.z = row < 224 ? 1 : 0.75f;
     }
     sceGuSetMatrix(GU_TEXTURE, &m);
@@ -2782,7 +2784,9 @@ static void curvesCountV(const char* name, int first, int last) {
   int length = snprintf(what, sizeof(what), "Bezier patches of 4x4 points as points, 1 division along u, along v");
   for(int column = first; column <= last; column++) {
     countColumn(column, countDivisions[column]);
-    if(length < (int)sizeof(what)) length += snprintf(what + length, sizeof(what) - length, " %d", countDivisions[column]);
+    if(length < (int)sizeof(what)) {
+      length += snprintf(what + length, sizeof(what) - length, " %d", countDivisions[column]);
+    }
   }
   sceGuDisable(GU_BLEND);
   finishListOf(what);
@@ -2791,15 +2795,17 @@ static void curvesCountV(const char* name, int first, int last) {
 
 //-- the GE's drawing time (part 64: a lower bound from Sony's peak rates)
 
-//Each timing test runs its cases at two clock settings, first as the program found them (foundPll and the rest, read
-//as round 6 starts), then at 333 MHz with the bus at 166; each case at a few sizes, each size `repeats` times in a
+//Each timing test runs its cases at two clock settings, first 222 MHz with the bus at 111 (a PSP's own, set whatever
+//custom firmware chose), then 333 MHz with the bus at 166, and puts the clocks back as it found them (foundPll and the
+//rest, read as round 6 starts); each case at a few sizes, each size `repeats` times in a
 //row, a list of known work built in timed (its FINISH and END at its end) and queued alone with timingCallbacks. Its
 //.bin holds, for each case and size: the case, the size, the clocks (CPU MHz << 16 | bus MHz, as scePower gives them
 //back), repeats | values << 16, then for each run `values` times in microseconds (sceKernelGetSystemTimeLow), all
 //from just before sceGeListEnQueue: to the finish callback, to sceGeListEnQueue's return, and (time-signals) to the
 //signal callback. A run the GE didn't finish in Patience is a stall (reset as waitForGe resets it, noted in the
 //test's .stalled), its times 0xffffffff and the rest of its size's too; after three, the test's remaining runs aren't
-//tried. The program waits on a semaphore the finish callback signals, so nothing looks at the GE while it draws; it
+//tried. A list sceGeListEnQueue refuses counts as a stall too (noted, nothing reset), its run's second time the
+//error. The program waits on a semaphore the finish callback signals, so nothing looks at the GE while it draws; it
 //wakes every 2 ms to look at the flag the callback sets too, in case a callback may not signal a semaphore.
 static int foundPll, foundCpu, foundBus;
 static volatile unsigned int finishedAt, signalledAt;
@@ -2826,8 +2832,10 @@ static void timingStart(void) {  //once in a run of the program
   timingCallbacks = sceGeSetCallback(&callbacks);
   sceKernelDcacheWritebackInvalidateRange(timed, sizeof(timed));  //(no cached line of it to land over a list later)
 }
-static void setClocks(int fast) {
-  if(fast) scePowerSetClockFrequency(333, 333, 166);
+//0: 222/111 MHz; 1: 333/166; -1: as round 6 found them.
+static void setClocks(int setting) {
+  if(setting > 0) scePowerSetClockFrequency(333, 333, 166);
+  else if(setting == 0) scePowerSetClockFrequency(222, 222, 111);
   else scePowerSetClockFrequency(foundPll, foundCpu, foundBus);
 }
 
@@ -2840,6 +2848,9 @@ static int runTimed(const char* what, unsigned int* times) {
   int queued = sceGeListEnQueue(TIMED, 0, timingCallbacks, 0);
   unsigned int after = sceKernelGetSystemTimeLow(), now = after;
   if(queued < 0) {
+    char text[200];
+    snprintf(text, sizeof(text), "sceGeListEnQueue gave 0x%08x for %s.\n", (unsigned int)queued, what);
+    noteStall(text);
     times[1] = queued;
     return 0;
   }
@@ -2884,7 +2895,7 @@ static void timeCases(const char* name, const TimedCase* cases, int count, int r
         int size = cases[c].sizes[s], ready = stalls < 3 && timingCallbacks >= 0 && timingSemaphore >= 0;
         char what[160];
         snprintf(what, sizeof(what), "%s case %d (%s), size %d, %s", name, c, cases[c].name, size,
-                 fast ? "333 MHz" : "the clocks as found");
+                 fast ? "333 MHz" : "222 MHz");
         if(ready) build(c, size);
         record(c), record(size), record(clocks), record(repeats | values << 16);
         for(int r = 0; r < repeats; r++) {
@@ -2896,7 +2907,7 @@ static void timeCases(const char* name, const TimedCase* cases, int count, int r
       progress(&current, name, ++done, 2 * count);
     }
   }
-  setClocks(0);
+  setClocks(-1);
   save(name, pixels, recorded * 4);
 }
 
@@ -3029,7 +3040,7 @@ static float planX[3 * 4096], planY[3 * 4096];
 static float planW(int c, int n) { return c == 11 ? 2 : c == 19 || (c == 20 && n % 3 == 2) ? 0.25f : 1; }
 static void buildPrimitives(int c, int count) {
   int threeD = c >= 10, vertices = 3 * count, prim = GU_TRIANGLES;
-  float shift = c == 18 ? 260 : 0;  //outside the scissor rectangle (the target's columns 0-255)
+  float shift = c == 18 ? 600 : 0;  //outside the scissor rectangle (setUp's: columns 0-511)
   for(int i = 0; i < count; i++) {  //most cases' triangles: (x, y), (x + 2, y), (x, y + 2) at spot i
     float x = spotX(i) + shift, y = spotY(i);
     planX[i * 3] = x, planY[i * 3] = y;
@@ -3108,7 +3119,7 @@ static void buildPrimitives(int c, int count) {
   }
   int side = c == 30 ? 16 : 8, perRow = 256 / side;  //27-30: patches of 16 flat points, side 8 (or 16) pixels
   for(int i = 0; i < count && c >= 27; i++) {
-    float x0 = (i % perRow) * side + (c == 28 || c == 29 ? 260 : 0), y0 = (i / perRow % perRow) * side;
+    float x0 = (i % perRow) * side + (c == 28 || c == 29 ? 600 : 0), y0 = (i / perRow % perRow) * side;
     for(int n = 0; n < 16; n++) {
       ((ColorVertex*)big)[i * 16 + n] =
         (ColorVertex){0xffffffff, ndcX(x0 + (n & 3) * side / 3.0f), ndcY(y0 + (n >> 2) * side / 3.0f), 0};
@@ -3168,17 +3179,17 @@ static const TimedCase fillCases[] = {
   {"flat color, 5650 target", "layers", 3, {1, 2, 4}},
   {"flat color, 5551 target", "layers", 3, {1, 2, 4}},
   {"flat color, 4444 target", "layers", 3, {1, 2, 4}},
-  {"8888 texture, linear (not swizzled)", "layers", 3, {1, 2, 4}},
+  {"8888 texture, not swizzled", "layers", 3, {1, 2, 4}},
   {"8888 texture", "layers", 3, {1, 2, 4}},
-  {"8888 texture in VRAM, linear", "layers", 3, {1, 2, 4}},
+  {"8888 texture in VRAM, not swizzled", "layers", 3, {1, 2, 4}},
   {"8888 texture in VRAM", "layers", 3, {1, 2, 4}},
   {"5650 texture", "layers", 3, {1, 2, 4}},
   {"5551 texture", "layers", 3, {1, 2, 4}},
   {"4444 texture", "layers", 3, {1, 2, 4}},
   {"CLUT8 texture (8888 palette)", "layers", 3, {1, 2, 4}},
   {"CLUT4 texture (8888 palette)", "layers", 3, {1, 2, 4}},
-  {"CLUT8 texture, linear", "layers", 3, {1, 2, 4}},
-  {"CLUT4 texture, linear", "layers", 3, {1, 2, 4}},
+  {"CLUT8 texture, not swizzled", "layers", 3, {1, 2, 4}},
+  {"CLUT4 texture, not swizzled", "layers", 3, {1, 2, 4}},
   {"DXT1 texture", "layers", 3, {1, 2, 4}},
   {"DXT3 texture", "layers", 3, {1, 2, 4}},
   {"DXT5 texture", "layers", 3, {1, 2, 4}},
@@ -3362,14 +3373,14 @@ static void buildTransfer(int c, int size) {
 }
 
 //The texture cache: cases 0-47 a 256x256 sprite tiled by a texture side x side texels (8 to 256; repeating, nearest)
-//in 8888, 5650, CLUT8 or CLUT4, linear or swizzled, in RAM, flushed as each list starts: the time a pixel as the
+//in 8888, 5650, CLUT8 or CLUT4, swizzled or not, in RAM, flushed as each list starts: the time a pixel as the
 //texture outgrows the cache. Cases 48-55 the same texture again or a new one: `count` sprites (32x32 pixels, 8 to a
 //row; 64x64 in 54 and 55, 4 to a row) each from a texture as big as itself.
 #define CACHE_SIDES(format, layout)                                                                                  \
   {format ", " layout ", 8x8", "layers", 2, {1, 3}}, {format ", " layout ", 16x16", "layers", 2, {1, 3}},            \
   {format ", " layout ", 32x32", "layers", 2, {1, 3}}, {format ", " layout ", 64x64", "layers", 2, {1, 3}},          \
   {format ", " layout ", 128x128", "layers", 2, {1, 3}}, {format ", " layout ", 256x256", "layers", 2, {1, 3}}
-#define CACHE_FORMAT(format) CACHE_SIDES(format, "linear"), CACHE_SIDES(format, "swizzled")
+#define CACHE_FORMAT(format) CACHE_SIDES(format, "not swizzled"), CACHE_SIDES(format, "swizzled")
 static const TimedCase cacheCases[] = {
   CACHE_FORMAT("8888"), CACHE_FORMAT("5650"), CACHE_FORMAT("CLUT8"), CACHE_FORMAT("CLUT4"),
   {"again: one 32x32 8888 texture, set once", "sprites", 2, {16, 64}},
@@ -3423,11 +3434,11 @@ static void buildSignal(int c, int layers) {
 //The driver's statuses while the GE draws (part 64: what a list GU ends reads as between the GE's time and its
 //FINISH's interrupt, held off, is unmeasured). Part 1: 16 layers of an 8888 texture in RAM, not swizzled (the
 //slowest fill here) queued alone, and every 50 microseconds or so sceGeListSync(its id, 1) and sceGeDrawSync(1), to
-//4 looks after the latter says done (128 looks at most). Part 2: a GU list (GU_DIRECT, its stall address moving
+//4 looks after the latter says done (1024 looks at most, about 50 ms). Part 2: a GU list (GU_DIRECT, its stall address moving
 //as it's built) whose 8 such layers are drawn with interrupts held off, then sceGuFinish (the stall address just past
 //its END, as GU leaves it), still held off: every 160 microseconds sceGeDrawSync(1), for 20 ms; then interrupts let
 //through, and the list's end waited for. The .bin: part 1's looks, the finish callback's time (or 0xffffffff), then
-//the looks as (time, sceGeListSync, sceGeDrawSync), 128 places; part 2's looks, how long interrupts were held off,
+//the looks as (time, sceGeListSync, sceGeDrawSync), 1024 places; part 2's looks, how long interrupts were held off,
 //sceGeDrawSync(1) just after, the time the list was done, then the looks as (time, sceGeDrawSync), 128 places; all
 //times in microseconds from just before the list was queued (part 1) or interrupts held off (part 2), places unused
 //0xffffffff.
@@ -3438,7 +3449,8 @@ static void geStatuses(const char* name) {
   if(!beginTest(name)) return;
   timingStart();
   prepareTexels();
-  for(int n = 0; n < 2 + 128 * 3 + 4 + 128 * 2; n++) pixels[n] = Unfinished;
+  enum { Looks = 1024, Held = 128 };  //part 1's places and part 2's
+  for(int n = 0; n < 2 + Looks * 3 + 4 + Held * 2; n++) pixels[n] = Unfinished;
   timedList(GU_PSM_8888);
   timedTexture(GU_PSM_8888, 0, 256, 256, texture, 0);
   for(int layer = 0; layer < 16; layer++) timedSprite(0, 0, 256, 256, 0, 0, 256, 256, 0xffffffff);
@@ -3447,7 +3459,7 @@ static void geStatuses(const char* name) {
   finished = 0;
   unsigned int began = sceKernelGetSystemTimeLow();
   int id = sceGeListEnQueue(TIMED, 0, timingCallbacks, 0), looks = 0, after = 0;
-  while(id >= 0 && looks < 128) {
+  while(id >= 0 && looks < Looks) {
     unsigned int time = sceKernelGetSystemTimeLow() - began;
     int list = sceGeListSync(id, 1), draw = sceGeDrawSync(1);
     pixels[2 + looks * 3] = time, pixels[3 + looks * 3] = list, pixels[4 + looks * 3] = draw;
@@ -3459,7 +3471,7 @@ static void geStatuses(const char* name) {
   while(id >= 0 && !finished && sceKernelGetSystemTimeLow() - began < Patience) sceKernelDelayThread(1000);
   if(finished) pixels[1] = finishedAt - began;
   waitForGe("16 layers of an 8888 texture in RAM, queued alone");
-  unsigned int* part2 = pixels + 2 + 128 * 3;
+  unsigned int* part2 = pixels + 2 + Looks * 3;
   Vertex* v = (Vertex*)big;
   v[0] = (Vertex){0, 0, 0xffffffff, 0, 0, 0, 0}, v[1] = (Vertex){256, 256, 0xffffffff, 256, 256, 0, 0};
   sceKernelDcacheWritebackAll();
@@ -3470,7 +3482,7 @@ static void geStatuses(const char* name) {
   for(int layer = 0; layer < 8; layer++) sceGuDrawArray(GU_SPRITES, VertexType, 2, 0, v);
   sceGuFinish();
   looks = 0;
-  while(looks < 128) {
+  while(looks < Held) {
     unsigned int time = sceKernelGetSystemTimeLow() - began;
     if(time >= 20000) break;
     part2[4 + looks * 2] = time, part2[5 + looks * 2] = sceGeDrawSync(1);
@@ -3483,7 +3495,7 @@ static void geStatuses(const char* name) {
   waitForGe("8 layers of an 8888 texture in RAM, drawn with interrupts held off, then GU's FINISH and END");
   part2[3] = sceKernelGetSystemTimeLow() - began;
   part2[0] = looks;
-  save(name, pixels, (2 + 128 * 3 + 4 + 128 * 2) * 4);
+  save(name, pixels, (2 + Looks * 3 + 4 + Held * 2) * 4);
 }
 
 static void writeManifest6(void) {
@@ -3509,7 +3521,8 @@ static void writeManifest6(void) {
     "time-*: the GE's drawing time. Records of words: case, size, CPU MHz << 16 | bus MHz, repeats | values << 16,\n"
     "then per run `values` times in microseconds from just before sceGeListEnQueue: to the finish callback, to\n"
     "sceGeListEnQueue's return, (time-signals) to the signal callback; 0xffffffff for a run not finished (a stall,\n"
-    "see <name>.stalled). Each test at the clocks as found, then at 333/166 MHz. The cases (case: what; size):\n";
+    "see <name>.stalled; a list sceGeListEnQueue refused: 0xffffffff, then its error). Each test at 222/111 MHz, then\n"
+    "at 333/166 (the clocks as found put back after). The cases (case: what; size):\n";
   sceIoWrite(file, text, sizeof(text) - 1);
   static const struct { const char* test; const TimedCase* cases; int count; } tests[] = {
     {"time-commands", commandCases, sizeof(commandCases) / sizeof(commandCases[0])},
