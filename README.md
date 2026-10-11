@@ -41,7 +41,7 @@
 | Neo Geo (MVS/AES) | ✅ Graphics, controls and audio (KOF2003 verified @59.2 FPS); per-title compat matrix → [docs/neo-geo-compatibility.md](docs/neo-geo-compatibility.md) |
 | Neo Geo CD | ✅ Boots, renders and has sound (Samurai Shodown verified), with the CDZ's double-speed drive and an optional faster loading speed |
 | **Experimental (in the nightly builds)** | |
-| PlayStation Portable | 🧪 Phobos's own core: an exact software renderer and two Vulkan renderers, ISO/CSO/CHD and more, sound, music and movies, save states. Of 266 retail games run in the test runner, 189 reach a menu or gameplay → [PlayStation Portable](#playstation-portable-experimental) |
+| PlayStation Portable | 🧪 Phobos's own core: an exact software renderer and two Vulkan renderers, ISO/CSO/CHD and more, sound, music and movies, save states. Of 266 retail games run in the test runner, 194 reach a menu or gameplay and 71 play their opening movies → [PlayStation Portable](#playstation-portable-experimental) |
 | **Added, not yet tried with a game on-device** | |
 | Mega CD 32X, Super Game Boy, Arcade (Aleck64, SG-1000A) | Load paths, firmware slots and touch layouts are in |
 | LaserActive (Mega LD, PC Engine LD) | `.mmi` discs read straight from the SD card; both PAC BIOSes boot (60 FPS on the RP6), and Side in the pause menu turns the disc over |
@@ -54,8 +54,9 @@
 
 - **Super Mario 64 B3313 v1.0.2 Hotfix 3** stops at a black screen (its UAA2 build runs), and **F-Zero ZX Overdrive**
   runs with a black picture; both N64 hacks are open in the implementation plan.
-- **PlayStation Portable:** a few games still stop at a black screen (most of them read data the PSP decrypts as it
-  loads, PGD), and there's no network play. See [PlayStation Portable](#playstation-portable-experimental).
+- **PlayStation Portable:** every game in the 266-game test library gets past its loading screens, but that's a minute
+  of each, not a playthrough; God of War's games are still slow in the software renderer, and there's no network play.
+  See [PlayStation Portable](#playstation-portable-experimental).
 
 ---
 
@@ -70,8 +71,8 @@ polished for a tagged release.
 - **No firmware needed.** The game's code runs on the emulated Allegrex and its display lists on the emulated GE, but
   the PSP's operating system is emulated at a high level: the kernel's threads, memory, files and timers, the
   system's dialogs and saves, sound (sceAudio, sceSas), music and movies (sceAtrac3plus, sceMp3, sceMpeg, scePsmf),
-  sceJpeg, the system fonts and more are Phobos's own. Encrypted retail executables are decrypted with the published
-  keys. Games that print with the PSP's own fonts need them from your PSP: `tools/psp-flash0-dump` copies its flash0
+  sceJpeg, the system fonts and more are Phobos's own. Encrypted retail executables, and the data files games protect
+  with PGD, are decrypted as a PSP decrypts them. Games that print with the PSP's own fonts need them from your PSP: `tools/psp-flash0-dump` copies its flash0
   to the memory stick, and Settings → Firmware's PSP fonts row takes the font folder in.
 - **CPU:** the Allegrex (MIPS32 with its FPU and the VFPU) runs through a recompiler (sljit, ARM64 and x86-64) with
   an interpreter behind it, and loads and stores compile straight to RAM. The FPU's and VFPU's results, rounding and
@@ -96,8 +97,9 @@ polished for a tagged release.
   versioned, so states saved by earlier builds keep loading.
 - **Controls:** the PSP's own touch layout, and controllers mapped as on every other system.
 - **Compatibility:** in the [compatibility report](docs/psp-compatibility.md)'s runs (each of 266 retail games run
-  headless for a minute of PSP time), 189 reach a menu or gameplay and 71 play their opening movies. Speed is
-  measured on a Retroid Pocket 6 (Snapdragon 8 Gen 2) as the work goes; docs/psp-core.md has the tables.
+  headless for a minute of PSP time), 194 reach a menu or gameplay and 71 play their opening movies, and the last plays
+  its opening a few seconds later; none stops at a missing system function. Speed is measured on a Retroid Pocket 6
+  (Snapdragon 8 Gen 2) as the work goes; docs/psp-core.md has the tables.
 - **Tested in CI:** the Allegrex's instructions, the kernel's functions, the GE against the PSP's measurements, save
   states, and the Vulkan renderer (on Mesa's software Vulkan driver) run on every change to the core
   (`tests/allegrex`, `tests/psp`).
