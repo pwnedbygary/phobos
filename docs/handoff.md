@@ -25,6 +25,15 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Version codes for 2.x — 2026-10-11
+
+Branch `cursor/version-base-2x-2b67`, on `master` after the PSP stack merged (#208, #210), at the owner's request before
+the v2.0.0 tag. The version code is now 200000 + the commit count (`android/app/build.gradle.kts`), so v2.0.0 is
+205,18x: the PSP work's test builds on the owner's RP6 went up to 106407, past what 100000 + the count gives 2.0
+(105,18x), and Android refuses a lower code over a higher one. Every earlier build, release or nightly, is below 200000,
+so nobody's update becomes a downgrade; nightly tags become `nightly-2xxxxx` and the newest three are kept as before.
+README.md and the implementation plan's updater row say so.
+
 ## PSP: the final library run before the merge into master — 2026-10-11
 
 Branch `cursor/psp-final-numbers-2b67`, on #207. Docs only. The whole library (266 games, the report's run: 3600
