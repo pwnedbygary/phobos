@@ -28,7 +28,9 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 ## PSP: God of War faster in every renderer — a move's stencil in one draw, the GE's PRIMs cheaper, logic operations in fours — 2026-10-11
 
 Branch `cursor/psp-speed7-2b67`, begun on #200's `cursor/psp-gow-vk-2b67` with #201's `cursor/psp-measure6-2b67`
-merged under it; the RP6 measured against #201's tip `055029692` (#201 changes no GE, renderer or CPU code; the
+merged under it, then #204's `cursor/psp-experimental-2b67` (#181, #202, #203 and #204: the desktop's disc titles, the
+README, PGD in states, the Experimental mark; none touches the core's speed); the RP6 measured against #201's tip
+`055029692` (#201 changes no GE, renderer or CPU code; the
 M1's and some earlier RP6 checks were against `c86461ec6`, as part 67 says). docs/psp-core.md, part 67, has the evidence;
 docs/psp-gpu-renderers.md's "Two targets over the same pages", "A texture running into the frame buffer below" and
 upscaling's uploads the design. Clean room: no PPSSPP code copied or translated, JPCSP's not read. Save states
