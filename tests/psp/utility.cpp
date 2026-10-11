@@ -206,6 +206,39 @@ static auto savedataNames() -> void {
   refused(9, "../..", "", "", 0x8011'0348);
 }
 
+//"<>" names no save: as the save's name, or as the list's choice in the list modes, the save's folder is the game's
+//name alone, and a sizes request's msData "<>" measures that folder. No folder with "<>" in its name is made.
+static auto savedataUnnamed() -> void {
+  HostFolder stick;
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  m.system.memory.copyIn(Buffer, "game alone", 10);
+  saveParameters(m, 1, "ULUS99999", "<>", 10);  //autosave
+  CHECK(runSave(m), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS99999/DATA.BIN") == "game alone", true);
+  CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/ULUS99999<>"), false);
+  m.system.memory.fill(Buffer, 0, 16);
+  saveParameters(m, 2, "ULUS99999", "<>", 0);  //load
+  CHECK(runSave(m), 0);
+  CHECK(m.system.memory.readString(Buffer, 16) == "game alone", true);
+  saveParameters(m, 8, "ULUS99999", "<>", 0);  //sizes: msData's "<>" is the same folder
+  CHECK(runSave(m), 0);
+  CHECK(m.system.memory.read(4, Used + 36), 2);
+  //a list save: "<>" as the save's name takes the list's first name, and "<>" there is the game's name alone
+  m.system.memory.copyIn(Buffer, "from a list", 11);
+  saveParameters(m, 5, "ULUS99999", "<>", 11);
+  m.system.memory.copyIn(Buffer + 0x100, "SLOT9", 6);
+  m.system.memory.write(4, Parameters + 96, Buffer + 0x100);
+  CHECK(runSave(m), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS99999SLOT9/DATA.BIN") == "from a list", true);
+  saveParameters(m, 5, "ULUS99998", "<>", 11);
+  m.system.memory.copyIn(Buffer + 0x100, "<>", 3);
+  m.system.memory.write(4, Parameters + 96, Buffer + 0x100);
+  CHECK(runSave(m), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS99998/DATA.BIN") == "from a list", true);
+  CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/ULUS99998<>"), false);
+}
+
 //The program's buffer must be in its memory as far as what's copied in or out: a save from memory that isn't there
 //(which wrote a file of zeros, of up to 4 GiB) or that runs past RAM's end, and a load or a read into such memory
 //(which said it had read the file), are refused before anything is made or read. A load reads no more than the
@@ -718,6 +751,7 @@ static auto modules() -> void {
 auto utilityTests() -> Tests {
   return {
     {"utility savedata", savedata}, {"utility savedata names", savedataNames},
+    {"utility savedata unnamed (\"<>\")", savedataUnnamed},
     {"utility savedata buffers", savedataBuffers}, {"utility savedata loops", savedataLoops},
     {"utility savedata erase", savedataErase}, {"memory stick free space", stickSpace}, {"utility dialogs", dialogs},
     {"utility keyboard", keyboard}, {"utility modules", modules},

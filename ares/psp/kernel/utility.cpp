@@ -253,9 +253,16 @@ auto Kernel::savedata(u32 p) -> u32 {
   u32 refused = savedataRefusal(mode);
   std::error_code error;
   if(mode == 11) return savedataList(p, game);  //(the game's name only picks the folders listed)
+  //"<>" names no save of its own: the PSP takes it as none, the save's folder the game's name alone, as the save's
+  //name and as a list's choice (where it stands for any name). Taken as a name, it made folders no PSP's memory stick
+  //can hold ('<' and '>' aren't allowed there), which the games looking for their saves again never found: Shining
+  //Blade, Space Invaders Extreme and Valkyria Chronicles II made a save and called it corrupted.
+  auto unnamed = [](std::string& name) { if(name == "<>") name.clear(); };
+  unnamed(save);
   if((mode == 4 || mode == 5) && save.empty() && memory.read(4, p + 96)) {  //from a list: its first name
     save = memory.readString(memory.read(4, p + 96), 20);
     if(save.empty()) return refused;
+    unnamed(save);
   }
   //(Valhalla Knights 2 asks for sizes with no names, and took a refusal for a memory stick too full to save on.)
   if(mode != 8 && (!plainName(game, 13) || (!save.empty() && !plainName(save, 20)))) return refused;
@@ -322,6 +329,7 @@ auto Kernel::savedata(u32 p) -> u32 {
     u32 answer = 0;
     if(data) {  //(the game's name in 16 bytes, the save's in 20, then where its size goes)
       std::string other = memory.readString(data, 13), otherSave = memory.readString(data + 16, 20);
+      unnamed(otherSave);
       bool plain = plainName(other, 13) && (otherSave.empty() || plainName(otherSave, 20));
       std::string otherFolder = plain ? savePath(other + otherSave) : std::string{};
       if(!otherFolder.empty() && fs::is_directory(otherFolder, error)) {
