@@ -62,7 +62,7 @@ class PspSettingsTest {
     }
 
     @Test
-    fun thePspsStartSettingsKeepWhatThePauseMenuOrSettingsChose() {
+    fun everyPspSettingKeepsItsValueAcrossStarts() {
         withStore { store, _ ->
             val defaults = store.current()
             assertEquals(0, defaults.pspRenderer)

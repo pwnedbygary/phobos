@@ -37,19 +37,19 @@ class PspVideoTest {
     }
 
     @Test
-    fun aGameStartedWithOtherSettingsDrawsDifferently() {
+    fun aGameStartedWithOtherSettingsRunsDifferently() {
         val software = PspStartSettings.of(PspRenderer.SOFTWARE, 1, 0)
-        assertTrue(software.drawsAs(PspStartSettings.of(PspRenderer.SOFTWARE, 1, 0)))
-        assertFalse(software.drawsAs(PspStartSettings.of(PspRenderer.VULKAN, 1, 0)))
-        assertFalse(software.drawsAs(PspStartSettings.of(PspRenderer.SOFTWARE, 1, 4)))
+        assertTrue(software.runsAs(PspStartSettings.of(PspRenderer.SOFTWARE, 1, 0)))
+        assertFalse(software.runsAs(PspStartSettings.of(PspRenderer.VULKAN, 1, 0)))
+        assertFalse(software.runsAs(PspStartSettings.of(PspRenderer.SOFTWARE, 1, 4)))
         // The software renderer draws at Native whatever the resolution.
-        assertTrue(software.drawsAs(PspStartSettings.of(PspRenderer.SOFTWARE, 4, 0)))
+        assertTrue(software.runsAs(PspStartSettings.of(PspRenderer.SOFTWARE, 4, 0)))
         val vulkan = PspStartSettings.of(PspRenderer.VULKAN_FAST, 2, 0)
-        assertFalse(vulkan.drawsAs(PspStartSettings.of(PspRenderer.VULKAN_FAST, 3, 0)))
-        assertFalse(vulkan.drawsAs(PspStartSettings.of(PspRenderer.VULKAN, 2, 0)))
+        assertFalse(vulkan.runsAs(PspStartSettings.of(PspRenderer.VULKAN_FAST, 3, 0)))
+        assertFalse(vulkan.runsAs(PspStartSettings.of(PspRenderer.VULKAN, 2, 0)))
         // As the core is told them: a value from elsewhere is its default.
         assertEquals(PspStartSettings(PspRenderer.SOFTWARE, PspResolution.NATIVE, PspDrawingThreads.AUTO), PspStartSettings.of(7, 0, 3))
-        assertTrue(software.drawsAs(PspStartSettings.of(9, 1, 5)))
+        assertTrue(software.runsAs(PspStartSettings.of(9, 1, 5)))
     }
 
     @Test

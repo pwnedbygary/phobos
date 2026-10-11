@@ -81,8 +81,8 @@ object PspResolution {
 
 /** The PSP's settings a game takes as it starts, as the core is told them: kept for the running game. */
 data class PspStartSettings(val renderer: Int, val resolution: Int, val drawingThreads: Int) {
-    /** Whether a game started with these draws as one started with [other] would: Resolution is the Vulkan renderer's alone. */
-    fun drawsAs(other: PspStartSettings): Boolean =
+    /** Whether a game started with these runs as one started with [other] would: Resolution is the Vulkan renderer's alone. */
+    fun runsAs(other: PspStartSettings): Boolean =
         renderer == other.renderer && drawingThreads == other.drawingThreads &&
             (renderer == PspRenderer.SOFTWARE || resolution == other.resolution)
 

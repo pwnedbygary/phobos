@@ -769,6 +769,7 @@ class MainViewModel(
         _isLoaded.value = false
         _isPaused.value = false
         _loadedGame.value = null
+        _pspStartSettings.value = null
         _runningFrame.value = null
         PhobosCore.setEmulationRunning(false)
         PhobosCore.unloadSystem()
@@ -1448,7 +1449,7 @@ class MainViewModel(
     val loadedDiscs: StateFlow<List<RomFile>> = _loadedDiscs.asStateFlow()
     private val _currentDisc = MutableStateFlow(-1)
     val currentDisc: StateFlow<Int> = _currentDisc.asStateFlow()
-    // The PSP settings the core took for the game it loaded last; the pause menu offers a restart when Settings' differ.
+    // The PSP settings the running PSP game started with; the pause menu offers a restart when Settings' differ.
     private val _pspStartSettings = MutableStateFlow<PspStartSettings?>(null)
     val pspStartSettings: StateFlow<PspStartSettings?> = _pspStartSettings.asStateFlow()
 
@@ -2731,15 +2732,21 @@ class MainViewModel(
         startLoad(context, systemName, rom, disc)
     }
 
-    /** Loads the running game's file again (the Reload hotkey), wherever it was started from, from the disc in the drive. */
-    fun reloadGame(context: Context) {
+    /**
+     * Loads the running game's file again (the Reload hotkey), wherever it was started from, from the disc in the drive.
+     * Without [autoLoad] it starts over even with Auto-Load State on: that state is from when the game was last quit.
+     */
+    fun reloadGame(context: Context, autoLoad: Boolean = true) {
         val rom = loadedRom ?: return
         val system = currentSystemName.takeIf { it.isNotEmpty() } ?: return
-        startLoad(context, system, rom, _currentDisc.value.coerceAtLeast(0))
+        startLoad(context, system, rom, _currentDisc.value.coerceAtLeast(0), autoLoad)
     }
 
     /** [beforeLoad] runs once the previous game is unloaded, with its battery saves written to disk. */
-    private fun startLoad(context: Context, systemName: String, rom: RomFile, disc: Int = 0, beforeLoad: (suspend () -> Unit)? = null) {
+    private fun startLoad(
+        context: Context, systemName: String, rom: RomFile, disc: Int = 0, autoLoad: Boolean = true,
+        beforeLoad: (suspend () -> Unit)? = null,
+    ) {
         viewModelScope.launch(Dispatchers.IO) {
             CoreSession.lock.withLock {
                 // A loaded game is saved and unloaded first, as quitting it would, even one a replaced activity
@@ -2747,12 +2754,12 @@ class MainViewModel(
                 val reload = CoreSession.owner === sessionToken && CoreSession.system == systemName && CoreSession.rom == rom.name
                 closeSessionLocked(autoSave = !reload)
                 beforeLoad?.invoke()
-                loadLocked(context, systemName, rom, disc)
+                loadLocked(context, systemName, rom, disc, autoLoad)
             }
         }
     }
 
-    private suspend fun loadLocked(context: Context, systemName: String, rom: RomFile, disc: Int = 0) {
+    private suspend fun loadLocked(context: Context, systemName: String, rom: RomFile, disc: Int = 0, autoLoad: Boolean = true) {
         withContext(Dispatchers.IO) {
             // For the merged "ZX Spectrum" entry, native detects 48K vs 128K by
             // CONTENT (TAP header block scan) — see PhobosRunner initialize().
@@ -2929,7 +2936,7 @@ class MainViewModel(
             // The PSP's memory stick: the folder the user picked, else native code's shared one under the saves path.
             PhobosCore.setPspMemoryStickPath(resolveSafPath(currentSettings.pspMemoryStickPath) ?: "")
             val pspStart = PspStartSettings.of(currentSettings.pspRenderer, currentSettings.pspResolution, currentSettings.pspDrawingThreads)
-            _pspStartSettings.value = pspStart
+            _pspStartSettings.value = pspStart.takeIf { effectiveSystem == LaunchSystems.PSP }
             // How many threads draw its pictures (Settings → Emulation), the core's "GE Threads" as the game starts.
             PhobosCore.setPspDrawingThreads(pspStart.drawingThreads)
             // Who draws them: the software renderer, or Vulkan's with the driver loaded for the game.
@@ -3074,7 +3081,7 @@ class MainViewModel(
                         // no race with runMutex). Silently skip when no auto state
                         // exists (performLoadState returns false + logs only).
                         // A state from another disc is skipped: the player chose to start from this one.
-                        if (settings.value.autoLoadState) {
+                        if (autoLoad && settings.value.autoLoadState) {
                             val autoStateDisc = if (rom.discs.size > 1) stateDisc(effectiveSystem, rom.name, AUTO_STATE_SLOT) else null
                             if (autoStateDisc != null && autoStateDisc != discIndex) {
                                 Log.i("Phobos", "Auto-load skipped: the auto state is from disc ${autoStateDisc + 1}")

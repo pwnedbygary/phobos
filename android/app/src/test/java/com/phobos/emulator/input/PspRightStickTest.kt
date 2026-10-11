@@ -5,6 +5,7 @@ import com.phobos.emulator.input.PspRightStick.ANALOG
 import com.phobos.emulator.input.PspRightStick.DPAD
 import com.phobos.emulator.input.PspRightStick.FACE_BUTTONS
 import com.phobos.emulator.input.PspRightStick.OFF
+import com.phobos.emulator.launch.LaunchSystems
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -12,7 +13,7 @@ import org.junit.Before
 import org.junit.Test
 
 class PspRightStickTest {
-    private val psp = "PlayStation Portable"
+    private val psp = LaunchSystems.PSP
     private val diagonal = 0.7071f
 
     @Before
@@ -56,8 +57,9 @@ class PspRightStickTest {
         move(diagonal, -diagonal, FACE_BUTTONS); assertEquals(Input.Y or Input.B, buttons)  // up-right: Triangle and Circle
         move(-diagonal, diagonal, FACE_BUTTONS); assertEquals(Input.A or Input.X, buttons)  // down-left: Cross and Square
         move(-diagonal, -diagonal, DPAD); assertEquals(Input.UP or Input.LEFT, buttons)
-        // Between right and up-right, up isn't past half: Circle alone.
-        move(0.92f, -0.38f, FACE_BUTTONS); assertEquals(Input.B, buttons)
+        // From the middle, nearer right than up-right: up isn't past half, so Circle alone.
+        move(0f, 0f, FACE_BUTTONS)
+        move(0.89f, -0.45f, FACE_BUTTONS); assertEquals(Input.B, buttons)
     }
 
     @Test
