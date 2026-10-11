@@ -36,7 +36,8 @@ compileAll() {
 }
 
 words() {
-  od -An -v -tx4 "$1" | awk '{ line = " "; for(i = 1; i <= NF; i++) line = line " 0x" $i ","; print line }'
+  #(lines with no words skipped: macOS's od ends with an empty one, GNU's doesn't, and the file must be the same)
+  od -An -v -tx4 "$1" | awk 'NF { line = " "; for(i = 1; i <= NF; i++) line = line " 0x" $i ","; print line }'
 }
 
 header() {
