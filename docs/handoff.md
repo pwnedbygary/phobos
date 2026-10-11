@@ -25,6 +25,22 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: the final library run before the merge into master — 2026-10-11
+
+Branch `cursor/psp-final-numbers-2b67`, on #207. Docs only. The whole library (266 games, the report's run: 3600
+frames, three at a time, software renderer at 7 threads) on `be543afba`, #206 on the stack's top (#207 adds only the
+Library's PSP art): menu or gameplay 194 (189 in part 64's run), movie 71, black 1, stuck loading 0, timed out 0, no
+missing functions. The six black games all read PGD data, which now decrypts (#206): five reach a title, menu or prompt,
+and Black Wolves Saga is loading its opening at 3600 (it plays from about 4200). Eighteen other games differ from part
+64's run only by a few frames (fades, animation steps, movies further on); none shows less.
+- **Docs**: docs/psp-compatibility.md (a Final column, the six rows, the run's paragraph); README.md (the PSP's row,
+  its compatibility line, the known issues, PGD-protected data decrypted).
+- **Release**: the owner merges the stack through #208 and tags v2.0.0 right after, so the README speaks of 2.0 (the
+  latest release, the desktop packages with it, the PSP new in 2.0 and marked Experimental in the app) rather than of
+  the nightly builds.
+- Scratch: `~/phobos-work/scratch/final` (lib.sh, `lib-top/` the run, `cmp-top.tsv` against
+  `~/phobos-work/scratch/gow-sw/lib/fix`, `diff-sheet-*.png`).
+
 ## Library: the PlayStation Portable's own console art — 2026-10-11
 
 Branch `cursor/psp-console-art-2b67`, begun on #205's `cursor/psp-speed7-2b67` (`671072d6f`), so it ships with the
