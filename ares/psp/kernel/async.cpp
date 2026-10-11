@@ -131,6 +131,13 @@ auto Kernel::asyncDone(u32 file) -> bool {
   open.async = OpenFile::Async::Done;
   if(open.asyncData) {
     s64 moved = readMove(open, open.asyncFrom, open.asyncResult, open.asyncData);  //(fewer from a host file cut short)
+    //A PGD file's bytes, decrypted in place as readFile does. sceIoReadAsync moved the position on when the read was
+    //issued, so it points past these bytes here: put it back where the read started, which is where they belong,
+    //before decrypting them. Without this an async read hands the game its data still encrypted.
+    if(open.pgd && moved > 0) {
+      open.position = u64(open.asyncFrom);
+      pgdDecryptRead(open, open.asyncData, u64(moved));
+    }
     open.position = open.asyncFrom + std::max<s64>(moved, 0);
     open.asyncResult = moved < 0 ? u64(s64(s32(ErrorIOError))) : u64(moved);
   }

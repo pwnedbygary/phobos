@@ -24,7 +24,10 @@ struct Pgd {
   }
 
   //A header's decrypted descriptor: the data's key, its size, the chunk it's decrypted in, and where it starts.
+  //versionKey is the key the data is actually decrypted with: the one the game gave, or the one recovered from the
+  //header's second MAC when the game's didn't match (see descriptor). The data must be read with this same key.
   struct Descriptor {
+    u8 versionKey[16];
     u8 dataKey[16];
     u32 dataSize, blockSize, dataOffset;
   };
