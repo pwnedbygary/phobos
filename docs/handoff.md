@@ -29,7 +29,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 Branch `cursor/psp-kenka-2b67`, on `master` as v2.0.0 shipped (`3cae0f907`). docs/psp-core.md, part 71, has the
 evidence. Clean room: pspautotests' modules/unloadfill and its PSP recording, uOFW's module manager, pspsdk's error
-codes and the game's own code; no PPSSPP or JPCSP source read. Save states unchanged (StateVersion 24). Docs part 71,
+codes and the game's own code; no PPSSPP or JPCSP source read. Save states unchanged (StateVersion 25). Docs part 71,
 after the two branches in flight that take parts 69 and 70 and StateVersion 26 (`cursor/psp-hangs-2b67`,
 `cursor/psp-savename-2b67`), so the three merge in any order but for the docs' part numbers.
 - **The bug**: the owner's RP6 test of v2.0.0 found Kenka Bancho: Badass Rumble black for good after Start skipped

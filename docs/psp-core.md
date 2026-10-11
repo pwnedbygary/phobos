@@ -8790,7 +8790,7 @@ the game idle-waiting, not crashed or busy. Sources: pspautotests' modules/unloa
 uOFW's module manager (`src/kd/modulemgr`: `start-stopModule.c`, and `modulemgr.c`'s `exe_thread()` and
 `_StopModule()`), pspsdk's error codes, and the game itself, traced with a scratch runner (its calls by frame, the
 threads' waits, wakes and ends, and its code around the calls, disassembled from a dump of its memory). No PPSSPP or
-JPCSP source was read. Save states are unchanged (StateVersion 24): nothing new is kept, a waiting caller's answer
+JPCSP source was read. Save states are unchanged (StateVersion 25): nothing new is kept, a waiting caller's answer
 following from the module's status, which states carry. (Parts 69 and 70 and StateVersion 26 are two other
 branches', `cursor/psp-hangs-2b67` and `cursor/psp-savename-2b67`; this one takes no state version.)
 
@@ -8854,7 +8854,8 @@ same; run again with a longer limit it finishes, every frame the final run's). 7
   through frame 1250 the same as the base runner's but for the stop's result, and their library command run again
   with both runners gives the final run's frames byte for byte; Metal Slug Anthology's run again gives the same frames
   from both runners (at 3600 the final run is the odd one out).
-- Run side by side, base and branch at the same moment, 39 of the 71 still differed somewhere, mostly at other frames
+- Run side by side, base and branch at the same moment, 39 of the 71 (the 70 and Final Fantasy IV) still differed
+  somewhere, mostly at other frames
   than in the library run (Star Ocean at 1200, Ridge Racer 2 at 1200, Macross: Ultimate Frontier at 60, none of which
   stops a module); only Final Fantasy IV differed every time.
 
@@ -8881,7 +8882,7 @@ exit threads" line where 5 and 6 go.
 **Left, and why.** uOFW's module manager has module_stop's own result decide whether the module stops: 1
 (SCE_KERNEL_STOP_FAIL) leaves it running and the caller gets CAN_NOT_STOP, another value leaves it running and the
 caller gets that value. Here a module stops whatever its module_stop returns, as before (the test modules' return 3
-and 6, and would change with it); no recording covers it, and no game here has been seen to need it. Likewise a
+or exit with 6, and would change with it); no recording covers it, and no game here has been seen to need it. Likewise a
 module_start returning 1 (SCE_KERNEL_NO_RESIDENT) or an error has a PSP unload the module at once, its caller getting
 0 or the error, where here the module stays, started, its caller getting the ID; a stop asked for while module_stop
 runs is ALREADY_STOPPING (0x8002013f) by uOFW, NOT_STARTED here; and unloadfill's stop took 1-5 ms on the PSP, a

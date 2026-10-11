@@ -68,10 +68,11 @@ after its title movie, shows its title at 3600 (then its attract movie; pressed 
 Kenka Bancho: Badass Rumble stop the movie player's two modules after a movie and wait for a stop to give 0, as a PSP
 gives, where the kernel gave the module's ID (docs/psp-core.md, part 71). Kenka Bancho's row stays a movie (its intro
 still plays at 3600 with the report's presses), but past the intro, skipped or played out, it now reaches its title,
-menu and a new game, where it was black for good, on the owner's RP6 too. The whole library was run again the same
-way beside the final run: all 266 finish (Killzone run again with a longer limit, the Mac at a load of about 220 from
-other jobs), none stops at a missing function, and the 70 other games with a frame shown differently show the same
-scenes a few frames apart, the runner's own (64 of them never stop a module; the six that do act alike on both runners).
+menu and a new game in the runner, where it was black for good (on the owner's RP6 too). The whole library was run
+again the same way beside the final run: all 266 finish (Killzone run again with a longer limit, the Mac at a load of
+about 220 from other jobs), none stops at a missing function, and the 70 other games with a frame shown differently
+show the same scenes a few frames apart, the runner's own (64 of them never stop a module; the six that do act alike
+on both runners).
 
 The final run (2026-10-11), the whole library again on the stack's top before it merged into `master` (`be543afba`:
 part 67's speedups, #205, and the owner's PGD fix, #206, on part 64's), moves six rows, the six black games, all of which
@@ -445,7 +446,7 @@ and now, and what the last frames showed or why a game stops.
 | Jeanne d'Arc | UCUS98700 | 172 | menu | menu | menu | title menu |
 | Juiced - Eliminator | ULUS10090 | 254 | loading | black | movie | loading screen, THQ movie, then the intro movie |
 | Juiced 2 - Hot Import Nights | ULUS10312 | 123 | black | timeout | movie | intro and a 3D club scene (159 fps) |
-| Kenka Bancho - Badass Rumble | ULUS10442 | 364 | black | movie | movie | intro scenes; past them (skipped with Start, or played out by about 7300) its title, main menu and a new game's name entry (part 71: a module's stop gives 0; black for good after the intro before, on the RP6 too) |
+| Kenka Bancho - Badass Rumble | ULUS10442 | 364 | black | movie | movie | intro scenes; past them, skipped with Start or played out (by about 7800 then), its title, main menu and a new game's name entry (part 71: a module's stop gives 0; black for good after the intro before, on the RP6 too) |
 | Key Of Heaven | UCES00178 | 184 | menu | menu | menu | language select |
 | Kidou Senshi Gundam Gundam vs. Gundam NEXT PLUS [English] | NPJH50107 | 238 | menu | menu | menu | pilot name notice |
 | Killzone - Liberation | UCUS98646 | 3 | black | gameplay | gameplay | in the first level (4.8 fps) |
