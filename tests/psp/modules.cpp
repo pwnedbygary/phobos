@@ -3,8 +3,9 @@
 //threads of their own while the caller waits (however they end, terminated too, their threads go), one module's
 //imports reach the functions another (or the program) exports, unloading sends them back to the kernel; a module
 //unloads itself, either way the SDKs have it; what runs as module_start, and on what thread; Sony's modules are
-//stood in for; the module IDs and information; refusals, and sizes a damaged header claims; and a state saved while
-//a module_start runs carries on as the machine did.
+//stood in for; a stop gives 0, a start and an unload the module's ID; the module IDs and information; refusals, and
+//sizes a damaged header claims; and a state saved while a module_start or a module_stop runs carries on as the
+//machine did.
 #include "kernel-machine.hpp"
 #include "encrypt.hpp"
 #include "disc-image.hpp"
@@ -285,6 +286,23 @@ static auto delayModule() -> TestModule {
   return m;
 }
 
+//"TESTSTOPDELAY": module_start returns 0 at once; module_stop writes 0xa3 at Results + 0x94, waits 10 milliseconds
+//(sceKernelDelayThread), writes 0xb4 at Results + 0x98 and returns 0.
+static auto stopDelayModule() -> TestModule {
+  TestModule m;
+  m.name = "TESTSTOPDELAY";
+  m.imports = {{"ThreadManForUser", Kernel::nid("sceKernelDelayThread")}};
+  m.start = 0;
+  m.code = {jr(ra), addiu(v0, zero, 0)};
+  m.stop = m.code.size() * 4;
+  m.code.insert(m.code.end(), {addiu(sp, sp, -16), sw(ra, 12, sp)});
+  store(m.code, Results + 0x94, 0xa3);
+  callStub(m, 0x3c0, addiu(a0, zero, 10000));
+  store(m.code, Results + 0x98, 0xb4);
+  m.code.insert(m.code.end(), {lw(ra, 12, sp), addiu(sp, sp, 16), jr(ra), addiu(v0, zero, 0)});
+  return m;
+}
+
 //"TESTLIVES": its module_start starts a thread of its own, "lives" (priority 0x30), and returns. The thread calls
 //ProgLib's function (the program's) once, writing what it gave at Results + 0x68, then counts at Results + 0x64,
 //once a millisecond (sceKernelDelayThread), for good.
@@ -559,9 +577,10 @@ static auto standIns() -> void {
 //What Kenka Bancho's module thread does as its intro movie ends or is skipped, on both engines: the movie player's
 //two modules it loads from its disc (Sony's scePsmf_library and scePsmfP_library, encrypted: stood in for) and a
 //module of its own (TESTSTOP, whose module_stop writes 0x5710 at Results + 0x30 and returns 0, on a thread of its own
-//while the caller waits) are each started (the module's ID back), stopped (0 back: the game stops each again a frame
-//later until a stop gives exactly 0), stopped again a frame later (ALREADY_STOPPED) and unloaded (the module's ID
-//back, which the game waits for too). pspautotests' modules/unloadfill recorded a stop's 0.
+//while the caller waits) are each started (the module's ID back), stopped (0 back, which is all the game waits for:
+//it stops each again a frame later till a stop gives exactly 0), stopped again a frame later (ALREADY_STOPPED, as
+//the game's retries were told for good when the first stop gave the ID) and unloaded (the module's ID back, which
+//the game waits for too). pspautotests' modules/unloadfill recorded a stop's 0.
 static auto stopsGiveZero() -> void {
   HostFolder stick;
   for(auto [file, name] : {std::pair{"PSMF.PRX", "scePsmf_library"}, std::pair{"PLAYER.PRX", "scePsmfP_library"}}) {
@@ -1215,6 +1234,58 @@ static auto stateWhileStarting() -> void {
   }
 }
 
+//A state saved while a module_stop runs (it waits in a delay, and the thread that stopped it waits for it) loads
+//into another machine, which carries on as the first does: module_stop ends, the thread that waited gets 0 (a stop's
+//answer, worked out as module_stop's thread ends from the module's status, which the state carries) and module_stop's
+//result where it asked, module_stop's thread goes, and the program runs on to its end. On both engines.
+static auto stateWhileStopping() -> void {
+  HostFolder stick;
+  put(stick, "STOPDELAY.PRX", stopDelayModule().build());
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    machine(m);
+    m.kernel.mount("ms0", stick.path.string());
+    Assembler main{m, 0x0880'1000};
+    main.li(s0, Results);
+    main.li(a0, m.string("ms0:/STOPDELAY.PRX")); main.li(a1, 0); main.li(a2, 0);
+    main.call("sceKernelLoadModule");
+    main.put(sw(v0, 0xa0, s0));
+    main.put(addu(s1, v0, zero));
+    main.put(addu(a0, s1, zero)); main.li(a1, 0); main.li(a2, 0); main.li(a3, 0); main.li(t0, 0);
+    main.call("sceKernelStartModule");
+    main.put(sw(v0, 0xa4, s0));
+    main.put(addu(a0, s1, zero)); main.li(a1, 0); main.li(a2, 0); main.li(a3, Results + 0xa8); main.li(t0, 0);
+    main.call("sceKernelStopModule");
+    main.put(sw(v0, 0xac, s0));
+    main.call("sceKernelExitGame");
+    m.system.memory.write(Allegrex::Word, Results + 0xa8, 0x1111);  //module_stop's result is written over it
+    m.runProgram(0x0880'1000, recompile, Kernel::CPUFrequency / 1000 * 3);  //3 milliseconds: module_stop waits
+    u32 uid = word(m.system, Results + 0xa0);
+    CHECK(m.kernel.modules.count(uid), 1);
+    if(!m.kernel.modules.count(uid)) continue;
+    CHECK(m.kernel.modules[uid].status == Kernel::ModuleStatus::Stopping && m.kernel.modules[uid].thread, true);
+    CHECK(word(m.system, Results + 0x94) == 0xa3 && word(m.system, Results + 0x98) == 0, true);
+    CHECK(word(m.system, Results + 0xa4), uid);
+    CHECK(word(m.system, Results + 0xa8), 0x1111);
+    auto state = save(m);
+    KernelMachine n;
+    n.system.recompiler.enabled = recompile;
+    n.kernel.mount("ms0", stick.path.string());
+    CHECK(load(n, state), true);
+    CHECK(save(n) == state, true);
+    for(auto* each : {&m, &n}) {
+      auto& k = each->kernel;
+      k.run(Kernel::CPUFrequency / 10);
+      CHECK(k.exited, true);
+      CHECK(word(each->system, Results + 0x98), 0xb4);
+      CHECK(word(each->system, Results + 0xa8), 0);
+      CHECK(word(each->system, Results + 0xac), 0);
+      CHECK(k.modules.count(uid) && k.modules[uid].status == Kernel::ModuleStatus::Stopped, true);
+      CHECK(k.modules.count(uid) && !k.modules[uid].thread && k.threads.size() == 1, true);
+    }
+  }
+}
+
 //"TESTEXEC", a program another starts in its place: writes its argument's length at Results + 0x100 and, if it has
 //one, the argument's first word at Results + 0x104, then 0xb0b0 at Results + 0x108, and leaves (sceKernelExitGame).
 static auto execModule() -> TestModule {
@@ -1409,6 +1480,7 @@ auto moduleTests() -> Tests {
     {"modules unload themselves", unloadThemselves}, {"modules unload with a status", unloadWithStatus},
     {"modules exit threads", exitThreads}, {"modules terminated threads", terminatedThreads},
     {"modules entry points", entryPoints}, {"modules state", stateWhileStarting},
+    {"modules state while stopping", stateWhileStopping},
     {"programs started in another's place", loadExec}, {"programs unloading themselves", programUnloadsItself},
   };
 }

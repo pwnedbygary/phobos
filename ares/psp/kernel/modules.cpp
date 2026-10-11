@@ -291,9 +291,9 @@ auto Kernel::runModuleFunction(LoadedModule& loaded, u32 nid, ModuleStatus durin
   u32 length = arg(1), argument = arg(2), status = arg(3), options = arg(4);
   if(status && !memory.reaches(status, 4)) return result(ErrorIllegalAddress);
   if(argument && length && !memory.reaches(argument, length)) return result(ErrorIllegalAddress);
+  bool starting = during == ModuleStatus::Starting;
   u32 entry = loaded.standIn ? 0 : moduleFunction(loaded, nid);
   if(!entry) {
-    bool starting = during == ModuleStatus::Starting;
     loaded.status = starting ? ModuleStatus::Started : ModuleStatus::Stopped;
     if(status) memory.write(4, status, 0);
     return result(starting ? loaded.uid : 0);
@@ -308,7 +308,8 @@ auto Kernel::runModuleFunction(LoadedModule& loaded, u32 nid, ModuleStatus durin
     current->waitPointer = status;
     block(Wait::Module, loaded.uid, 0);
   } else {
-    result(during == ModuleStatus::Starting ? loaded.uid : 0);  //no thread called it (the kernel's own tests)
+    //no thread called it (the kernel's own tests): nothing waits, and this is lost as the CPU goes to the thread made
+    result(starting ? loaded.uid : 0);
   }
   startThread(*threads[made], length, argument, Trampoline + 16);
 }
@@ -316,7 +317,9 @@ auto Kernel::runModuleFunction(LoadedModule& loaded, u32 nid, ModuleStatus durin
 //A thread that ran a module's module_start or module_stop has ended (by returning, or exiting): the module is
 //started (or stopped), and the threads waiting for it run again, given its ID (a start) or 0 (a stop), the
 //function's result written where each asked. A module whose module_stop ran as it unloaded itself goes now
-//(unloadSelf()). The thread itself is deleted by whoever ended it, once it's no longer the one running.
+//(unloadSelf()). The thread itself is deleted by whoever ended it, once it's no longer the one running. (uOFW's
+//module manager keeps a module whose module_stop returns other than 0 running, its caller told CAN_NOT_STOP for 1,
+//else that value; here it stops whatever module_stop returns, as no recording shows that.)
 auto Kernel::moduleThreadEnded(Thread& thread, s32 status) -> void {
   auto found = std::find_if(modules.begin(), modules.end(), [&](auto& entry) {
     return entry.second.thread == thread.uid;
