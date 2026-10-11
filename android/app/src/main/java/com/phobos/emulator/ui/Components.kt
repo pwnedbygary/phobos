@@ -44,6 +44,7 @@ import kotlin.math.roundToInt
 import com.phobos.emulator.LogLevel
 import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.RegionPreference
+import com.phobos.emulator.input.PspRightStick
 import com.phobos.emulator.util.PspDrawingThreads
 import com.phobos.emulator.util.PspRenderer
 import com.phobos.emulator.util.PspResolution
@@ -514,6 +515,18 @@ fun PspDrawingThreadsItem(current: Int, onSelect: (Int) -> Unit) {
         current = PspDrawingThreads.forCore(current),
         options = PspDrawingThreads.choices,
         label = PspDrawingThreads::label,
+        onSelect = onSelect,
+    )
+}
+
+@Composable
+fun PspRightStickItem(current: PspRightStick, onSelect: (PspRightStick) -> Unit) {
+    SettingsDropdownItem(
+        title = "PSP Right Stick",
+        description = "What a controller's right stick does in a PSP game, since a PSP has one stick. ${current.description} Applies immediately.",
+        current = current,
+        options = PspRightStick.entries,
+        label = { it.label },
         onSelect = onSelect,
     )
 }

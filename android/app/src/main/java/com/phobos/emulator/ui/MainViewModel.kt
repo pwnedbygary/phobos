@@ -26,6 +26,7 @@ import com.phobos.emulator.input.ControlCapture
 import com.phobos.emulator.input.ControlLevel
 import com.phobos.emulator.input.Controls
 import com.phobos.emulator.input.GameInputState
+import com.phobos.emulator.input.PspRightStick
 import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.CatalogBackdrop
 import com.phobos.emulator.data.CrtBackdropScene
@@ -561,6 +562,8 @@ class MainViewModel(
         settingsStore.setPspResolution(scale)
         PhobosCore.setPspResolution(PspResolution.forCore(scale))
     }
+    /** What a controller's right stick does in a PSP game: [PspRightStick], read by every stick move. */
+    fun setPspRightStick(choice: PspRightStick) = viewModelScope.launch { settingsStore.setPspRightStick(choice) }
     fun setZxTapeAuto(enabled: Boolean) = viewModelScope.launch {
         settingsStore.setZxTapeAuto(enabled)
         PhobosCore.setZxTapeAuto(enabled)

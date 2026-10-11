@@ -296,7 +296,9 @@ class MainActivity : ComponentActivity() {
         if (viewModel.isLoaded.value && viewModel.emulatorScreenVisible.value && !viewModel.isPaused.value &&
             (event.source and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK &&
             event.action == MotionEvent.ACTION_MOVE) {
-            return GameInputState.handleMotionEvent(event, viewModel.activeControls.value.mappings, viewModel.loadedSystemName)
+            return GameInputState.handleMotionEvent(
+                event, viewModel.activeControls.value.mappings, viewModel.loadedSystemName, viewModel.settings.value.pspRightStick,
+            )
         }
         return false
     }

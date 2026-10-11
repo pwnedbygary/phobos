@@ -79,6 +79,7 @@ fun EmulationSettingsScreen(
                     PspRendererItem(settings.pspRenderer) { viewModel.setPspRenderer(it) }
                     PspResolutionItem(settings.pspResolution) { viewModel.setPspResolution(it) }
                     PspDrawingThreadsItem(settings.pspDrawingThreads) { viewModel.setPspDrawingThreads(it) }
+                    PspRightStickItem(settings.pspRightStick) { viewModel.setPspRightStick(it) }
                 }
             }
         }
