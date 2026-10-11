@@ -116,6 +116,7 @@ import com.phobos.emulator.util.N64SaveTransfer
 import com.phobos.emulator.util.PspDrawingThreads
 import com.phobos.emulator.util.PspRenderer
 import com.phobos.emulator.util.PspResolution
+import com.phobos.emulator.util.PspStartSettings
 import com.phobos.emulator.util.PspFonts
 import com.phobos.emulator.util.ZxTape
 import com.phobos.emulator.util.cueTracks
@@ -1447,6 +1448,9 @@ class MainViewModel(
     val loadedDiscs: StateFlow<List<RomFile>> = _loadedDiscs.asStateFlow()
     private val _currentDisc = MutableStateFlow(-1)
     val currentDisc: StateFlow<Int> = _currentDisc.asStateFlow()
+    // The PSP settings the core took for the game it loaded last; the pause menu offers a restart when Settings' differ.
+    private val _pspStartSettings = MutableStateFlow<PspStartSettings?>(null)
+    val pspStartSettings: StateFlow<PspStartSettings?> = _pspStartSettings.asStateFlow()
 
     /** The Library scan: lists files, then (for PSP) fills titles and icons. Cancelled when another scan starts. */
     private var romScanJob: Job? = null
@@ -2924,12 +2928,14 @@ class MainViewModel(
             Log.i("Phobos", "Saves path resolved: $savesDir")
             // The PSP's memory stick: the folder the user picked, else native code's shared one under the saves path.
             PhobosCore.setPspMemoryStickPath(resolveSafPath(currentSettings.pspMemoryStickPath) ?: "")
+            val pspStart = PspStartSettings.of(currentSettings.pspRenderer, currentSettings.pspResolution, currentSettings.pspDrawingThreads)
+            _pspStartSettings.value = pspStart
             // How many threads draw its pictures (Settings → Emulation), the core's "GE Threads" as the game starts.
-            PhobosCore.setPspDrawingThreads(PspDrawingThreads.forCore(currentSettings.pspDrawingThreads))
+            PhobosCore.setPspDrawingThreads(pspStart.drawingThreads)
             // Who draws them: the software renderer, or Vulkan's with the driver loaded for the game.
-            PhobosCore.setPspRenderer(PspRenderer.forCore(currentSettings.pspRenderer))
+            PhobosCore.setPspRenderer(pspStart.renderer)
             // How many times over it draws each pixel (Vulkan's alone): Native, or 2x to 10x.
-            PhobosCore.setPspResolution(PspResolution.forCore(currentSettings.pspResolution))
+            PhobosCore.setPspResolution(pspStart.resolution)
             // Its system fonts: the copies of the user's own PSP's flash0 fonts (picked in Settings → Firmware, or
             // found by themselves in Download/FLASH0DUMP while any are missing), if any.
             val pspFonts = PspFonts.folder(context.filesDir)

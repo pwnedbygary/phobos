@@ -79,6 +79,20 @@ object PspResolution {
     fun forCore(scale: Int): Int = if (scale in choices) scale else NATIVE
 }
 
+/** The PSP's settings a game takes as it starts, as the core is told them: kept for the running game. */
+data class PspStartSettings(val renderer: Int, val resolution: Int, val drawingThreads: Int) {
+    /** Whether a game started with these draws as one started with [other] would: Resolution is the Vulkan renderer's alone. */
+    fun drawsAs(other: PspStartSettings): Boolean =
+        renderer == other.renderer && drawingThreads == other.drawingThreads &&
+            (renderer == PspRenderer.SOFTWARE || resolution == other.resolution)
+
+    companion object {
+        fun of(renderer: Int, resolution: Int, drawingThreads: Int) = PspStartSettings(
+            PspRenderer.forCore(renderer), PspResolution.forCore(resolution), PspDrawingThreads.forCore(drawingThreads),
+        )
+    }
+}
+
 /**
  * The whole multiple of a picture of [width] x [height] that native code draws it at for a view of [viewWidth] x
  * [viewHeight] pixels: the one nearest to how much the view enlarges it, 1 to 4 (each pixel repeated, nearest-

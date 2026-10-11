@@ -80,11 +80,13 @@ import androidx.compose.ui.unit.dp
 import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.input.ControlLevel
+import com.phobos.emulator.launch.LaunchSystems
 import com.phobos.emulator.ui.hud.hudConfig
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.neonGlow
 import com.phobos.emulator.ui.theme.pillShape
 import com.phobos.emulator.util.N64SaveFormat
+import com.phobos.emulator.util.PspStartSettings
 import com.phobos.emulator.util.ZX_SCHEMES
 import com.phobos.emulator.util.zxScheme
 import kotlinx.coroutines.launch
@@ -242,6 +244,9 @@ fun EmulationMenu(
                                     }
                                 }
                             }
+                        }
+                        if (systemName == LaunchSystems.PSP) {
+                            item { PspSection(viewModel, settings) }
                         }
                         if (systemName.contains("ZX Spectrum", ignoreCase = true)) {
                             item { ZxKeyboardSection(viewModel, settings, showKeyboard, onKeyboardToggle, zxControlScheme, onZxControlScheme) }
@@ -429,6 +434,48 @@ private fun N64Section(viewModel: MainViewModel, settings: EmulatorSettings, onO
             trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
             colors = transparentListItemColors(),
             modifier = Modifier.focusRing(MaterialTheme.colorScheme.primary).clickable(onClick = onOpenExperimental),
+        )
+    }
+}
+
+/**
+ * Settings → Emulation's PSP settings. The core takes the renderer, resolution and drawing threads as the game starts,
+ * so once they differ from those the running game started with, a row offers to restart it with them.
+ */
+@Composable
+private fun PspSection(viewModel: MainViewModel, settings: EmulatorSettings) {
+    val context = LocalContext.current
+    val started by viewModel.pspStartSettings.collectAsState()
+    val chosen = PspStartSettings.of(settings.pspRenderer, settings.pspResolution, settings.pspDrawingThreads)
+    var confirmRestart by remember { mutableStateOf(false) }
+    MenuSection("PlayStation Portable") {
+        PspRendererItem(settings.pspRenderer) { viewModel.setPspRenderer(it) }
+        PspResolutionItem(settings.pspResolution) { viewModel.setPspResolution(it) }
+        PspDrawingThreadsItem(settings.pspDrawingThreads) { viewModel.setPspDrawingThreads(it) }
+        if (started?.drawsAs(chosen) == false) {
+            ListItem(
+                headlineContent = { Text("Restart Game") },
+                supportingContent = { Text("The game started with other settings; restart it to use these now") },
+                leadingContent = { Icon(Icons.Default.Refresh, null) },
+                colors = transparentListItemColors(),
+                modifier = Modifier.focusRing(MaterialTheme.colorScheme.primary).clickable { confirmRestart = true },
+            )
+        }
+        PspRightStickItem(settings.pspRightStick) { viewModel.setPspRightStick(it) }
+    }
+
+    if (confirmRestart) {
+        PhobosAlertDialog(
+            onDismissRequest = { confirmRestart = false },
+            title = { DialogSystemBars(settings.fullScreenMode, inGame = true); Text("Restart the game?") },
+            text = { Text("It starts again with the new renderer, resolution and drawing threads. Progress since your last save is lost.") },
+            confirmButton = {
+                TextButton(
+                    onClick = { confirmRestart = false; viewModel.reloadGame(context) },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("Restart") }
+            },
+            dismissButton = { TextButton(onClick = { confirmRestart = false }) { Text("Cancel") } },
         )
     }
 }
