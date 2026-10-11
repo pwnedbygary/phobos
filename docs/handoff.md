@@ -25,6 +25,23 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## README brought up to date, with the pixel-art logo — 2026-10-11
+
+Branch `cursor/psp-readme-2b67`, at the owner's request before the PSP chain merges into `master`. Docs and the logo
+only; no code change.
+- **Logo**: `docs/images/phobos-logo.png`, built by `tools/logo/build_banner.py` from the launcher icon's
+  `moon-greenscreen.png`: the moon sampled once per art pixel (its grid is 10.2 image pixels, phase 5.3 and 8.6), and
+  "phobos" in Avenir Next Bold Italic rasterized onto the same grid in the old logo's purple (six bands, dark outline,
+  drop shadow), scaled 4x with nearest neighbour. The README shows it at 502 px wide, 2 screen pixels to the art pixel
+  (4 on a 2x display), so it stays crisp. The old logo (`ares/ares/resource/logo@2x.png`) is unchanged: ares's
+  resources compile it in.
+- **README**: a Download section (channels, the Modern and Legacy flavors, the desktop packages); the systems table
+  moved up, with the PlayStation Portable as an experimental row and in the known issues; new sections for the PSP
+  core (no firmware, the CPU, the three renderers, discs, sound, saves, compatibility, tests) and the desktop program;
+  the app's themes, shaders, Performance Monitor, touch controls, remapping, hotkeys and GPU Driver Manager; CI's
+  desktop and PSP test runs; the desktop build's presets; the components list. The existing technical sections are
+  kept as they were.
+
 ## PSP measure: round 6 — the GE's time, lighting's cosine, the reciprocal's chords, patches — 2026-10-10
 
 Branch `cursor/psp-measure6-2b67`, on top of #200's `cursor/psp-gow-vk-2b67` (`c86461ec6`). docs/psp-core.md, part 66,
