@@ -551,6 +551,132 @@ static auto dialogStatuses() -> void {
   CHECK(m.notes.size(), 0);
 }
 
+//A save dialog closed from threads of several priorities, its graphics and access threads at 17 and 19 as the games
+//set them (pspautotests' utility/savedata/shutdownstatus): a caller worse than 0x20 and both threads finds it closed
+//at its first look after ShutdownStart, no time gone, and starts the next one at once, as Crash Tag Team Racing's
+//main thread (0x3f) does; so does one whose parameters give priorities no thread can have. Found closing, its next
+//start refused: a caller at 0x20, callers better than the graphics or the access thread, one with interrupts or
+//dispatching held off, an alarm's handler interrupting a worse thread, and a message's caller even at 111
+//(utility/dialog/priority). A state saved while a dialog closes loads into another machine, which carries on to the
+//same answers. On both engines.
+static auto savedataClosing() -> void {
+  constexpr u32 Out = 0x0895'0000, Message = 0x0896'0000, Handler = 0x0880'3000;
+  enum How : u32 { Plain, Interrupts, Dispatch, Alarm };
+  struct Case { u32 caller, graphics, access; How how; u32 seen, again; };
+  std::vector<Case> cases = {
+    {0x21, 0x11, 0x13, Plain, 0, 0},
+    {0x6f, 0x11, 0x13, Plain, 0, 0},
+    {0x20, 0x11, 0x13, Plain, 4, 0x8011'0001},
+    {0x30, 0x40, 0x13, Plain, 4, 0x8011'0001},
+    {0x30, 0x11, 0x40, Plain, 4, 0x8011'0001},
+    {0x21, 0x00, 0x80, Plain, 0, 0},
+    {0x21, 0xffff'ffff, 0x13, Plain, 0, 0},
+    {0x6f, 0x11, 0x13, Interrupts, 4, 0x8011'0001},
+    {0x6f, 0x11, 0x13, Dispatch, 4, 0x8011'0001},
+    {0x6f, 0x11, 0x13, Alarm, 4, 0x8011'0001},
+  };
+  for(bool recompile : {false, true}) {
+    HostFolder stick;
+    KernelMachine m;
+    auto& memory = m.system.memory;
+    m.kernel.mount("ms0", stick.path.string());
+    saveParameters(m, 0, "TEST99909", "ABC", 16);  //loading a save that isn't there
+    memory.fill(Message, 0, 580);
+    memory.write(4, Message, 580);
+    memory.copyIn(Message + 60, "Saved.", 7);
+    u32 alarmCase = 0;
+    for(u32 n = 0; n < cases.size(); n++) if(cases[n].how == Alarm) alarmCase = n;
+    Assembler handler{m, Handler};  //closes the dialog from the alarm's case, and asks again
+    auto store = [&](Assembler& a, u32 offset) { a.li(t0, Out + offset); a.put(sw(v0, 0, t0)); };
+    handler.put(addiu(sp, sp, -16)); handler.put(sw(ra, 12, sp));
+    handler.call("sceUtilitySavedataShutdownStart"); store(handler, alarmCase * 16);
+    handler.call("sceUtilitySavedataGetStatus"); store(handler, alarmCase * 16 + 8);
+    handler.li(a0, Parameters); handler.call("sceUtilitySavedataInitStart"); store(handler, alarmCase * 16 + 12);
+    handler.put(lw(ra, 12, sp)); handler.put(addiu(sp, sp, 16));
+    handler.li(v0, 0); handler.put(jr(ra)); handler.put(nop);
+    Assembler a{m, 0x0880'1000};
+    auto priority = [&](u32 value) { a.li(a0, 0); a.li(a1, value); a.call("sceKernelChangeThreadPriority"); };
+    auto delay = [&](u32 microseconds) { a.li(a0, microseconds); a.call("sceKernelDelayThread"); };
+    for(u32 n = 0; n < cases.size(); n++) {
+      auto& c = cases[n];
+      a.li(t0, Parameters); a.li(t1, c.graphics); a.put(sw(t1, 12, t0)); a.li(t1, c.access); a.put(sw(t1, 16, t0));
+      a.li(a0, Parameters); a.call("sceUtilitySavedataInitStart");
+      delay(250'000);
+      a.li(a0, 1); a.call("sceUtilitySavedataUpdate");
+      priority(c.caller);
+      if(c.how == Alarm) {  //its handler interrupts the caller spinning
+        a.li(a0, 1000); a.li(a1, Handler); a.li(a2, 0); a.call("sceKernelSetAlarm");
+        a.li(t1, 300'000);
+        u32 loop = a.here();
+        a.put(addiu(t1, t1, -1));
+        a.put(bne(t1, zero, int32_t(loop - (a.here() + 4)) / 4)); a.put(nop);
+        delay(10'000);
+      } else {
+        if(c.how == Interrupts) { a.call("sceKernelCpuSuspendIntr"); a.put(addu(s1, v0, zero)); }
+        if(c.how == Dispatch) { a.call("sceKernelSuspendDispatchThread"); a.put(addu(s1, v0, zero)); }
+        a.call("sceKernelGetSystemTimeLow"); a.put(addu(s0, v0, zero));
+        a.call("sceUtilitySavedataShutdownStart"); store(a, n * 16);
+        a.call("sceKernelGetSystemTimeLow"); a.put(subu(v0, v0, s0)); store(a, n * 16 + 4);
+        a.call("sceUtilitySavedataGetStatus"); store(a, n * 16 + 8);
+        a.li(a0, Parameters); a.call("sceUtilitySavedataInitStart"); store(a, n * 16 + 12);
+        if(c.how == Interrupts) { a.put(addu(a0, s1, zero)); a.call("sceKernelCpuResumeIntr"); }
+        if(c.how == Dispatch) { a.put(addu(a0, s1, zero)); a.call("sceKernelResumeDispatchThread"); }
+      }
+      priority(0x20);
+      delay(250'000);  //whichever dialog is left, finished and closed (Update and ShutdownStart refused if none)
+      a.li(a0, 1); a.call("sceUtilitySavedataUpdate");
+      a.call("sceUtilitySavedataShutdownStart");
+      delay(10'000);
+    }
+    a.li(a0, Message); a.call("sceUtilityMsgDialogInitStart");
+    delay(350'000);
+    a.li(a0, 1); a.call("sceUtilityMsgDialogUpdate");
+    priority(0x6f);
+    a.call("sceUtilityMsgDialogShutdownStart"); store(a, 0x100);
+    a.call("sceUtilityMsgDialogGetStatus"); store(a, 0x104);
+    a.li(a0, Parameters); a.call("sceUtilitySavedataInitStart"); store(a, 0x108);
+    a.call("sceKernelExitGame");
+    m.system.recompiler.enabled = recompile;
+    m.system.power(0x0880'1000);
+    s32 uid = m.kernel.createThread("main", 0x0880'1000, 0x20, 0x4000, 0, 0);
+    auto& main = *m.kernel.threads[uid];
+    m.kernel.startThread(main, 0, 0);
+    KernelMachine fresh;
+    fresh.kernel.mount("ms0", stick.path.string());
+    fresh.system.recompiler.enabled = recompile;
+    bool saved = false;
+    for(u32 step = 0; step < 100'000 && !m.kernel.exited; step++) {
+      m.kernel.run(Kernel::CPUFrequency / 10'000);
+      if(!saved && main.status == Kernel::Status::Waiting && m.kernel.dialog.status == 4) {
+        auto state = saveState(m);
+        CHECK(loadState(fresh, state), true);
+        CHECK(saveState(fresh) == state, true);
+        saved = true;
+      }
+    }
+    CHECK(saved, true);
+    CHECK(m.kernel.exited, true);
+    for(u32 step = 0; step < 100'000 && !fresh.kernel.exited; step++) fresh.kernel.run(Kernel::CPUFrequency / 100);
+    CHECK(fresh.kernel.exited, true);
+    for(u32 n = 0; n < cases.size(); n++) {
+      auto& c = cases[n];
+      CHECK(memory.read(4, Out + n * 16), 0);
+      CHECK(memory.read(4, Out + n * 16 + 4) < 100, true);  //(nobody waits)
+      CHECK(memory.read(4, Out + n * 16 + 8), c.seen);
+      CHECK(memory.read(4, Out + n * 16 + 12), c.again);
+    }
+    CHECK(memory.read(4, Out + 0x100), 0);
+    CHECK(memory.read(4, Out + 0x104), 4);
+    CHECK(memory.read(4, Out + 0x108), 0x8011'0001);
+    std::vector<u8> ours(0x110), theirs(0x110);
+    memory.copyOut(ours.data(), Out, ours.size());
+    fresh.system.memory.copyOut(theirs.data(), Out, theirs.size());
+    CHECK(ours == theirs, true);
+    CHECK(m.notes.size() == 1 && m.notes[0] == "message dialog (answered yes): Saved.", true);
+    CHECK(fresh.notes == m.notes, true);
+  }
+}
+
 //Installing a game's data: asked about before any install dialog started, the wrong type (Ace Combat: Joint Assault
 //asks at boot, and goes on); parameters of a size it doesn't take refused; started, it runs and is cancelled, by
 //Update or by Abort (which, not running, is the wrong status, and asked of another dialog the wrong type); it shuts
@@ -722,6 +848,7 @@ auto utilityTests() -> Tests {
     {"utility savedata erase", savedataErase}, {"memory stick free space", stickSpace}, {"utility dialogs", dialogs},
     {"utility keyboard", keyboard}, {"utility modules", modules},
     {"utility game data install", gamedataInstall}, {"utility dialog sizes and statuses", dialogStatuses},
+    {"utility save dialog closed by priority", savedataClosing},
   };
 }
 
