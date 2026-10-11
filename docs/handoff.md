@@ -25,6 +25,50 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Android: a PSP section in the pause menu, and the right stick — 2026-10-11
+
+Branch `cursor/psp-pause-menu-2b67`, on `master` after v2.0.0 (`3cae0f907`), at the owner's request from playing PSP
+games on the RP6. App only: no native or core change.
+- **Pause menu**: a PlayStation Portable section while a PSP game runs (`PspSection`, `ui/EmulationMenu.kt`), with
+  Settings → Emulation's PSP Renderer, Resolution, Drawing Threads and the new Right Stick: the same items
+  (`ui/Components.kt`) and the same global settings, as the N64's, the PS1's and the Neo Geo CD's pause-menu options
+  are (only the ZX control scheme and the Controller pages keep a game's own). The core takes the renderer, resolution
+  and drawing threads only as a game loads (`PhobosRunner.cpp` hands them over as `option()`s before
+  `PlayStationPortable::load`; the menu's Reset is `power(true)`, which keeps them), so the view model keeps what the
+  running PSP game started with (`pspStartSettings`; `PspStartSettings` in `util/PspVideo.kt`). Once Settings' differ
+  (a resolution under the software renderer, which draws at Native, doesn't count), a Restart to Apply row appears
+  ("Reset keeps the ones it started with"). After a warning that progress since the last save is lost, it reloads the
+  game as the Reload hotkey does, but without Auto-Load State's state (`reloadGame(context, autoLoad = false)`): that
+  state is from the last quit, and a game carrying on from it could save over newer memory-stick saves.
+- **Right stick** (`input/PspRightStick.kt`, `GameInputState.updateSticks`): Off (as before); Face buttons (up
+  Triangle, right Circle, down Cross, left Square: the Y, B, A and X bits `resolveButtonBit` reads them from), for
+  twin-stick shooters such as Super Stardust Portable; D-pad, for a camera on the D-pad; Analog stick (the right stick
+  is the PSP's stick, and the left takes the right's place, which the PSP doesn't read). The directions come from
+  rx/ry as the user's bindings give them (the R-Up/Down/Left/Right rows, at any level), each latched with the N64
+  C-buttons' hysteresis (one `axisPressed`: press past 0.5, let go at 0.4), so a diagonal presses two. The stick's
+  buttons are a mask of their own (`rightStickButtons`), OR'd with the pad's and the touch controls': a button held on
+  both lets go only when both do; pausing (`releaseAllButtons`) and `reset()` release it. A changed choice applies at
+  the stick's next move. The PSP touch layout has no right stick, so the touch controls are unchanged (its one stick is
+  the PSP's in every choice). Stored as `psp_right_stick`, an enum name; one this build doesn't know reads as Off.
+  Global, like the other pause-menu options; a game's own choice could come later, through the Controller pages.
+- **SettingsStore** takes its DataStore (`SettingsStore(context)` opens the app's, as before), so a JVM test runs the
+  real store on a file.
+- **Checks**: `:app:compileModernReleaseKotlin`; `:app:testModernDebugUnitTest` 289/0 (16 new): `PspRightStickTest`
+  (each choice, diagonals, the thresholds, the pad's and the touch controls' presses with the stick's, a choice changed
+  mid-hold, other systems, reset), `PspSettingsTest` (the store on a DataStore file, reopened: the default, each
+  choice, an unknown or mistyped value, every PSP setting), `PspVideoTest` (when a restart changes how the game runs).
+  Three deliberate breaks (the right stick left out of the settings read, the stick's buttons folded into the pad's
+  mask, no release threshold) each failed the tests meant for them. An independent read-only review found no bug (its
+  points taken: the restart's Auto-Load State, Reset against Restart in the row, the dialog outside the list, a name,
+  two test names); the delta review passed. Not run on a device: the RP6 was busy with a long test.
+- **On the RP6, to check**: the section shows for PSP games only; changing the renderer (or the resolution under
+  Vulkan, or the threads) shows Restart to Apply, which restarts into the new renderer, and changing it back hides the
+  row; with Auto-Load State on, the restart still starts the game over. Right Stick: Face buttons in Super Stardust
+  Portable (aiming and firing, a diagonal firing two buttons); D-pad in a game that turns the camera with it (Monster
+  Hunter Freedom Unite); a face button held on the pad while the stick presses the same one, then either let go
+  first; Analog stick moving the PSP's stick from the right, the left stick doing nothing; Off as before; a PS1 game's
+  right stick still analog; the choice the same in Settings and the pause menu.
+
 ## Version codes for 2.x — 2026-10-11
 
 Branch `cursor/version-base-2x-2b67`, on `master` after the PSP stack merged (#208, #210), at the owner's request before
