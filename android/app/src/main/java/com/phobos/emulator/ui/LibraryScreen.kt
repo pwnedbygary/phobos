@@ -480,12 +480,11 @@ private fun systematicAssetFor(slug: String): String? = when (slug) {
     "sgb" -> "snes"
     "pceld" -> "laseractive"
     "pcv2" -> "wonderswan"
-    "psp" -> "psx"
     else -> slug.takeIf { it in SYSTEMATIC_ASSETS }
 }
 private val SYSTEMATIC_ASSETS = setOf(
     "atari2600", "colecovision", "nes", "snes", "arcade", "laseractive", "n64",
-    "gb", "gbc", "gba", "sms", "genesis", "sega32", "gamegear", "segacd", "psx",
+    "gb", "gbc", "gba", "sms", "genesis", "sega32", "gamegear", "segacd", "psx", "psp",
     "neogeomvs", "neo-geo-cd", "neo-geo-pocket", "neo-geo-pocket-color", "zx-spectrum",
     "pce", "pcecd", "supergrafx", "wonderswan", "wonderswan-color", "msx", "msx2",
 )

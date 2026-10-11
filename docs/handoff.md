@@ -25,6 +25,25 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Library: the PlayStation Portable's own console art — 2026-10-11
+
+Branch `cursor/psp-console-art-2b67`, begun on #205's `cursor/psp-speed7-2b67` (`671072d6f`), so it ships with the
+Experimental PSP core. The Systematic pack (BAXY Square's, MIT) has no PSP, so `systematicAssetFor`
+(`ui/LibraryScreen.kt`) gave the PSP's tile the PlayStation's console.
+- **The art**: `assets/platforms/psp.svg`, drawn for Phobos in the set's style (LICENSE says so after the Systematic
+  notice): a PSP-1000 from the front, with its wide pill body and 16:9 screen, the D-pad's four buttons with the nub
+  below, the face buttons' triangle, circle, cross and square, the row under the screen, L and R along the top corners,
+  and the speakers and power light where the PSP-1000's manual puts them. It uses the set's 256 grid shown at 4/3, its
+  greys and its 8-unit white halo at half opacity; it's 330.667 x 165.333, slimmer than the GBA's 186.667, as a PSP is.
+  The D-pad, nub and marks are lighter than mid-grey, since the recolor takes darker greys below a dark theme's tile,
+  where the Game Gear's controls vanish into its body.
+- **Code**: the `psp` -> `psx` alias is gone and `psp` is in `SYSTEMATIC_ASSETS`; nothing else gave the PSP the
+  PlayStation's art (the Phobos, Pixel and Manga packs keep their own `psp` glyph).
+- **Checked**: `:app:compileModernReleaseKotlin` and `:app:testModernDebugUnitTest` (273 tests, none failing;
+  `ConsoleArtTest` recolors the new SVG in every theme). Previews outside the repo drew it beside the GBA's, Game Gear's
+  and PlayStation's art at 120-315 px, in grey and through the app's own `ConsoleArtPalette` mapping for all 39 theme
+  variants. Not yet seen on a device.
+
 ## PSP: God of War faster in every renderer — a move's stencil in one draw, the GE's PRIMs cheaper, logic operations in fours — 2026-10-11
 
 Branch `cursor/psp-speed7-2b67`, begun on #200's `cursor/psp-gow-vk-2b67` with #201's `cursor/psp-measure6-2b67`
