@@ -25,6 +25,27 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Android: the PlayStation Portable marked Experimental — 2026-10-11
+
+Branch `cursor/psp-experimental-2b67`, on top of `cursor/psp-measure6-2b67` (`055029692`). Once the PSP is on master,
+the owner releases it as an Experimental core in the nightly builds, before a tagged v2.0; this is how the app and the
+nightly's notes say so. Display only: "PlayStation Portable" stays the system's name wherever it's a key (the core,
+LaunchSystems, folders such as `firmware/PlayStation Portable/font`, saves, states, settings, PerformanceHud,
+TouchLayouts).
+- **What**: `ui/ExperimentalSystems.kt` holds `experimentalSystems` (the PSP alone) and `ExperimentalBadge`, a small
+  pill reading "Experimental" in the style's pill shape and the theme's tertiary container colors (AA-checked by
+  ThemeContrastTest). It sits under the name on the Library's tiles (all five tile styles), after it in Platform
+  Visibility, and after the "PlayStation Portable" header in Settings → Emulation (`SettingsCategory` and
+  `SectionHeader` take a `badge`). README's first PSP paragraph and the nightly release notes say the core is
+  experimental.
+- **Checks**: `:app:compileModernReleaseKotlin`; `:app:testModernDebugUnitTest` 273/0 (the app's unit tests run for
+  the debug variants only), with `ExperimentalSystemsTest`: an experimental system must be named as the Library lists
+  it (it fails on "Playstation Portable"). The workflow's YAML parsed, its nightly step through `bash -n`. Not on the
+  RP6 (busy measuring), so the badge hasn't been seen on a screen yet.
+- **Left**: dropping the mark is taking the PSP out of `experimentalSystems`, and the sentences out of README.md and
+  the nightly's notes. Unmarked on purpose: the system's game list, the running game's card, the firmware table's PSP
+  fonts row, the touch layout list and a launch's system choice. README's Systems table has no PSP row.
+
 ## PSP measure: round 6 — the GE's time, lighting's cosine, the reciprocal's chords, patches — 2026-10-10
 
 Branch `cursor/psp-measure6-2b67`, on top of #200's `cursor/psp-gow-vk-2b67` (`c86461ec6`). docs/psp-core.md, part 66,

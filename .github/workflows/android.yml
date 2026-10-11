@@ -169,7 +169,7 @@ jobs:
           if ! gh release view "nightly-$code" > /dev/null 2>&1; then
             gh release create "nightly-$code" apks/* --prerelease --target "$GITHUB_SHA" \
               --title "Nightly $name" \
-              --notes "Built from $GITHUB_SHA on master. Nightly builds are less tested than releases."
+              --notes "Built from $GITHUB_SHA on master. Nightly builds are less tested than releases. The PlayStation Portable core is experimental."
           fi
           gh release list --limit 100 --json tagName,isPrerelease \
             --jq '.[] | select(.isPrerelease and (.tagName | startswith("nightly-"))) | .tagName' \

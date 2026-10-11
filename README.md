@@ -141,6 +141,7 @@ a JDK 17+, and the `thirdparty/libadrenotools` submodule
 
 APKs land in `app/build/outputs/apk/<flavor>/<type>/`.
 
+The PlayStation Portable core is experimental, in the nightly builds for now.
 The PSP core's music and movies are decoded by FFmpeg's LGPL decoders, which the build makes itself from FFmpeg's
 release with `thirdparty/ffmpeg/build.sh` (a few minutes, once; kept in `.cache/ffmpeg`). That needs bash, make, curl
 and xz, and network access on the first build to download the release's tarball (checked against its SHA-256).
