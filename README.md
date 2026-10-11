@@ -186,7 +186,7 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 - GitHub Actions builds **release-only** APKs (legacy + modern flavors) on every commit. A version tag (`v1.2.3`) publishes a GitHub Release, and every push to `master` publishes a nightly pre-release; both carry `update.json` for the in-app updater (Settings → About), which installs the newer build of the installed flavor through Android's installer. Debug builds are never published.
 - The desktop program is built for Linux (AppImage + zsync), Windows and macOS for every pull request and on `master`, and attached to tagged releases.
 - The PSP core's tests (the Allegrex CPU tests, and the PSP system tests with the Vulkan renderer's on Mesa's software driver) run on every change to it.
-- Every build is numbered from git history, locally and on CI alike: version code 100000 + the commit count, version name the tag on a tagged commit and `<tag>-<commits since>-g<hash>` otherwise.
+- Every build is numbered from git history, locally and on CI alike: version code 200000 + the commit count (100000 + it before 2.0), version name the tag on a tagged commit and `<tag>-<commits since>-g<hash>` otherwise.
 
 ---
 
