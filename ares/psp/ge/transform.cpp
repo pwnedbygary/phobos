@@ -159,8 +159,30 @@ auto GE::settingsState(Transform& t) const -> void {
   }
 }
 
-//A vertex through the matrices onto the screen, with its texture coordinates (in texels) and fog.
+//A vertex through the matrices onto the screen, with its texture coordinates (in texels) and fog: its place, then
+//its place on the screen, then the rest (transformAll()'s stages, for one vertex).
 auto GE::transform(Vertex& vertex, const Transform& t) -> void {
+  Placing placing;
+  transformPlace(vertex, t, placing);
+  project(vertex, t, false);
+  transformRest(vertex, t, placing);
+}
+
+//A PRIM's vertices transformed, each as transform() has it, but a stage at a time over all of them: each vertex's
+//arithmetic waits on itself all along (project()'s divisions and conversions, lighting's), and a vertex's stage
+//done after the last's leaves the CPU the next's to do meanwhile. (God of War's battle draws 255,000 vertices a
+//frame, nearly all lit.)
+auto GE::transformAll(std::vector<Vertex>& vertices, const Transform& t) -> void {
+  u32 count = vertices.size();
+  if(placings.size() < count) placings.resize(count);
+  for(u32 n = 0; n < count; n++) transformPlace(vertices[n], t, placings[n]);
+  for(u32 n = 0; n < count; n++) project(vertices[n], t, false);
+  for(u32 n = 0; n < count; n++) transformRest(vertices[n], t, placings[n]);
+}
+
+//A vertex's place: in its model (through the bone matrices its weights pick, its normal too), in the world, its depth
+//in the view, and in clip space.
+alwaysinline auto GE::transformPlace(Vertex& vertex, const Transform& t, Placing& placing) -> void {
   float model[3] = {vertex.x, vertex.y, vertex.z};
   if(t.weights) {
     float position[3] = {}, normal[3] = {};
@@ -172,11 +194,18 @@ auto GE::transform(Vertex& vertex, const Transform& t) -> void {
     }
     for(u32 k = 0; k < 3; k++) model[k] = position[k], vertex.normal[k] = normal[k];
   }
-  float inWorld[3], inView[3];
-  times43(t.world, model, inWorld);
-  times43(t.view, inWorld, inView);
+  float inView[3];
+  times43(t.world, model, placing.world);
+  times43(t.view, placing.world, inView);
   times44(t.projection, inView, vertex.clip);
-  project(vertex, t, false);
+  for(u32 k = 0; k < 3; k++) placing.model[k] = model[k];
+  placing.viewZ = inView[2];
+}
+
+//The rest of a vertex, once it's placed: its normal in the world, its texture coordinates, its fog, its lighting.
+alwaysinline auto GE::transformRest(Vertex& vertex, const Transform& t, const Placing& placing) -> void {
+  const float* model = placing.model;
+  const float* inWorld = placing.world;
   float normal[3] = {0, 0, 1};  //in the world, one long: for lighting and environment mapping
   if(t.lighting || t.mapMode == 2) {
     float turned[3], sign = t.normalReverse ? -1.0f : 1.0f;
@@ -207,13 +236,13 @@ auto GE::transform(Vertex& vertex, const Transform& t) -> void {
     vertex.u = (vertex.u * t.textureScale[0] + t.textureOffset[0]) * t.textureWidth;
     vertex.v = (vertex.v * t.textureScale[1] + t.textureOffset[1]) * t.textureHeight;
   }
-  if(t.fog) vertex.fog = t.fogForced ? t.fogValue : (inView[2] + t.fogEnd) * t.fogSlope;
+  if(t.fog) vertex.fog = t.fogForced ? t.fogValue : (placing.viewZ + t.fogEnd) * t.fogSlope;
   if(t.lighting) light(vertex, inWorld, normal, t);
 }
 
 //A position in clip space onto the screen: x and y in pixels (whole sixteenths), z the depth, and whether the GE
 //can draw it there. A vertex made by clipping (on the near plane) is always checked against the screen's edges.
-auto GE::project(Vertex& v, const Transform& t, bool clipped) const -> void {
+alwaysinline auto GE::project(Vertex& v, const Transform& t, bool clipped) const -> void {
   float w = v.clip[3];
   float x = v.clip[0] * t.scale[0] / w + t.center[0];
   float y = v.clip[1] * t.scale[1] / w + t.center[1];
