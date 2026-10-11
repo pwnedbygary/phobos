@@ -273,7 +273,9 @@ data class EmulatorSettings(
     val hasDefaultsInitialized: Boolean = false
 )
 
-class SettingsStore(private val context: Context) {
+class SettingsStore(private val dataStore: DataStore<Preferences>) {
+    constructor(context: Context) : this(context.dataStore)
+
     companion object {
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val UI_THEME = stringPreferencesKey("ui_theme")
@@ -406,7 +408,7 @@ class SettingsStore(private val context: Context) {
         val LAST_DISC_PREFIX = "last_disc_"
     }
 
-    val settings: Flow<EmulatorSettings> = context.dataStore.data.map { preferences ->
+    val settings: Flow<EmulatorSettings> = dataStore.data.map { preferences ->
         val romPaths = mutableMapOf<String, MutableSet<String>>()
         val fwPaths = mutableMapOf<String, String>()
         val mappings = mutableMapOf<Int, String>()
@@ -646,7 +648,7 @@ class SettingsStore(private val context: Context) {
     }
 
     suspend fun initializeDefaults() {
-        context.dataStore.edit { preferences ->
+        dataStore.edit { preferences ->
             if (preferences[HAS_DEFAULTS_INITIALIZED] == true) return@edit
             val defaults = mapOf(
                 1 shl 0  to "k:19",  1 shl 1  to "k:20",  1 shl 2  to "k:21",  1 shl 3  to "k:22",
@@ -662,7 +664,7 @@ class SettingsStore(private val context: Context) {
     }
 
     suspend fun updateInputMapping(aresBit: Int, newBinding: String) {
-        context.dataStore.edit { preferences ->
+        dataStore.edit { preferences ->
             val otherBitKey = preferences.asMap().keys.find {
                 it.name.startsWith("mapping_") && preferences[it as Preferences.Key<String>] == newBinding
             }
@@ -678,46 +680,46 @@ class SettingsStore(private val context: Context) {
         }
     }
 
-    suspend fun clearInputMapping(aresBit: Int) = context.dataStore.edit { it.remove(stringPreferencesKey("mapping_$aresBit")) }
-    suspend fun clearAllMappings() = context.dataStore.edit { p ->
+    suspend fun clearInputMapping(aresBit: Int) = dataStore.edit { it.remove(stringPreferencesKey("mapping_$aresBit")) }
+    suspend fun clearAllMappings() = dataStore.edit { p ->
         p.asMap().keys.filter { it.name.startsWith("mapping_") }.forEach { p.remove(it) }
         p[HAS_DEFAULTS_INITIALIZED] = true
     }
 
-    suspend fun setThemeMode(mode: ThemeMode) = context.dataStore.edit { it[THEME_MODE] = mode.name }
+    suspend fun setThemeMode(mode: ThemeMode) = dataStore.edit { it[THEME_MODE] = mode.name }
     /** Both keys in one edit, so the UI never renders an id with the previous follow-system flag. */
-    suspend fun setTheme(id: String, followSystem: Boolean) = context.dataStore.edit {
+    suspend fun setTheme(id: String, followSystem: Boolean) = dataStore.edit {
         it[UI_THEME] = id
         it[UI_THEME_FOLLOW_SYSTEM] = followSystem
     }
-    suspend fun setUiEffects(effects: UiEffects) = context.dataStore.edit {
+    suspend fun setUiEffects(effects: UiEffects) = dataStore.edit {
         it[UI_EFFECTS] = effects.name
         it[RETROWAVE_EFFECTS] = effects == UiEffects.RETROWAVE
     }
-    suspend fun setPixelBackdrop(scene: PixelBackdropScene) = context.dataStore.edit { it[PIXEL_BACKDROP] = scene.name }
-    suspend fun setMangaBackdrop(scene: MangaBackdropScene) = context.dataStore.edit { it[MANGA_BACKDROP] = scene.name }
-    suspend fun setRpgBackdrop(scene: RpgBackdropScene) = context.dataStore.edit { it[RPG_BACKDROP] = scene.name }
-    suspend fun setRetrowaveBackdrop(scene: RetrowaveBackdropScene) = context.dataStore.edit { it[RETROWAVE_BACKDROP] = scene.name }
-    suspend fun setCrtBackdrop(scene: CrtBackdropScene) = context.dataStore.edit { it[CRT_BACKDROP] = scene.name }
-    suspend fun setGlassBackdrop(scene: GlassBackdropScene) = context.dataStore.edit { it[GLASS_BACKDROP] = scene.name }
-    suspend fun setXmbBackdrop(scene: XmbBackdropScene) = context.dataStore.edit { it[XMB_BACKDROP] = scene.name }
-    suspend fun setPlatformIconPack(pack: PlatformIconPack) = context.dataStore.edit { it[PLATFORM_ICON_PACK] = pack.name }
-    suspend fun setScreensaverDelay(delay: ScreensaverDelay) = context.dataStore.edit { it[SCREENSAVER_DELAY] = delay.name }
-    suspend fun setScreensaverBackdrop(backdrop: CatalogBackdrop) = context.dataStore.edit { it[SCREENSAVER_BACKDROP] = backdrop.name }
-    suspend fun setGlassEffects(level: GlassEffects) = context.dataStore.edit { it[GLASS_EFFECTS] = level.name }
-    suspend fun setRegionPreference(pref: RegionPreference) = context.dataStore.edit { it[REGION_PREFERENCE] = pref.name }
-    suspend fun setFastBoot(enabled: Boolean) = context.dataStore.edit { it[FAST_BOOT] = enabled }
-    suspend fun setMuteAudio(enabled: Boolean) = context.dataStore.edit { it[MUTE_AUDIO] = enabled }
-    suspend fun setColorEmulation(enabled: Boolean) = context.dataStore.edit { it[COLOR_EMULATION] = enabled }
-    suspend fun setInterframeBlending(enabled: Boolean) = context.dataStore.edit { it[INTERFRAME_BLENDING] = enabled }
-    suspend fun setOverscan(enabled: Boolean) = context.dataStore.edit { it[OVERSCAN] = enabled }
-    suspend fun setRunAhead(enabled: Boolean) = context.dataStore.edit { it[RUN_AHEAD] = enabled }
-    suspend fun setAutoSaveState(enabled: Boolean) = context.dataStore.edit { it[AUTO_SAVE_MEMORY] = enabled }
-    suspend fun setAutoLoadState(enabled: Boolean) = context.dataStore.edit { it[AUTO_LOAD_MEMORY] = enabled }
-    suspend fun setFullScreenMode(enabled: Boolean) = context.dataStore.edit { it[FULL_SCREEN_MODE] = enabled }
-    suspend fun setShowTouchControls(enabled: Boolean) = context.dataStore.edit { it[SHOW_TOUCH_CONTROLS] = enabled }
+    suspend fun setPixelBackdrop(scene: PixelBackdropScene) = dataStore.edit { it[PIXEL_BACKDROP] = scene.name }
+    suspend fun setMangaBackdrop(scene: MangaBackdropScene) = dataStore.edit { it[MANGA_BACKDROP] = scene.name }
+    suspend fun setRpgBackdrop(scene: RpgBackdropScene) = dataStore.edit { it[RPG_BACKDROP] = scene.name }
+    suspend fun setRetrowaveBackdrop(scene: RetrowaveBackdropScene) = dataStore.edit { it[RETROWAVE_BACKDROP] = scene.name }
+    suspend fun setCrtBackdrop(scene: CrtBackdropScene) = dataStore.edit { it[CRT_BACKDROP] = scene.name }
+    suspend fun setGlassBackdrop(scene: GlassBackdropScene) = dataStore.edit { it[GLASS_BACKDROP] = scene.name }
+    suspend fun setXmbBackdrop(scene: XmbBackdropScene) = dataStore.edit { it[XMB_BACKDROP] = scene.name }
+    suspend fun setPlatformIconPack(pack: PlatformIconPack) = dataStore.edit { it[PLATFORM_ICON_PACK] = pack.name }
+    suspend fun setScreensaverDelay(delay: ScreensaverDelay) = dataStore.edit { it[SCREENSAVER_DELAY] = delay.name }
+    suspend fun setScreensaverBackdrop(backdrop: CatalogBackdrop) = dataStore.edit { it[SCREENSAVER_BACKDROP] = backdrop.name }
+    suspend fun setGlassEffects(level: GlassEffects) = dataStore.edit { it[GLASS_EFFECTS] = level.name }
+    suspend fun setRegionPreference(pref: RegionPreference) = dataStore.edit { it[REGION_PREFERENCE] = pref.name }
+    suspend fun setFastBoot(enabled: Boolean) = dataStore.edit { it[FAST_BOOT] = enabled }
+    suspend fun setMuteAudio(enabled: Boolean) = dataStore.edit { it[MUTE_AUDIO] = enabled }
+    suspend fun setColorEmulation(enabled: Boolean) = dataStore.edit { it[COLOR_EMULATION] = enabled }
+    suspend fun setInterframeBlending(enabled: Boolean) = dataStore.edit { it[INTERFRAME_BLENDING] = enabled }
+    suspend fun setOverscan(enabled: Boolean) = dataStore.edit { it[OVERSCAN] = enabled }
+    suspend fun setRunAhead(enabled: Boolean) = dataStore.edit { it[RUN_AHEAD] = enabled }
+    suspend fun setAutoSaveState(enabled: Boolean) = dataStore.edit { it[AUTO_SAVE_MEMORY] = enabled }
+    suspend fun setAutoLoadState(enabled: Boolean) = dataStore.edit { it[AUTO_LOAD_MEMORY] = enabled }
+    suspend fun setFullScreenMode(enabled: Boolean) = dataStore.edit { it[FULL_SCREEN_MODE] = enabled }
+    suspend fun setShowTouchControls(enabled: Boolean) = dataStore.edit { it[SHOW_TOUCH_CONTROLS] = enabled }
     /** Read-modify-write in one transaction, so quick successive edits are not lost. */
-    suspend fun updateTouchPrefs(transform: (TouchPrefs) -> TouchPrefs) = context.dataStore.edit {
+    suspend fun updateTouchPrefs(transform: (TouchPrefs) -> TouchPrefs) = dataStore.edit {
         val prefs = transform(it.touchPrefs())
         it[TOUCH_OPACITY] = prefs.opacity.coerceIn(0.1f, 1f)
         it[TOUCH_OPACITY_PORTRAIT] = prefs.opacityPortrait.coerceIn(0.1f, 1f)
@@ -767,28 +769,28 @@ class SettingsStore(private val context: Context) {
         )
     }
     /** Saves one family/orientation layout; an empty [encoded] string restores the defaults. */
-    suspend fun setTouchLayout(layoutKey: String, encoded: String) = context.dataStore.edit {
+    suspend fun setTouchLayout(layoutKey: String, encoded: String) = dataStore.edit {
         val key = stringPreferencesKey(TOUCH_LAYOUT_PREFIX + layoutKey)
         if (encoded.isEmpty()) it.remove(key) else it[key] = encoded
     }
-    suspend fun setShowPerformanceMonitor(enabled: Boolean) = context.dataStore.edit { it[SHOW_PERFORMANCE_MONITOR] = enabled }
-    suspend fun setPerfShowFps(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_FPS] = enabled }
-    suspend fun setPerfShowFrameTime(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_FRAMETIME] = enabled }
-    suspend fun setPerfShowRam(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_RAM] = enabled }
-    suspend fun setPerfShowCore(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_CORE] = enabled }
-    suspend fun setPerfShowShaderFails(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_SHADER_FAILS] = enabled }
-    suspend fun setPerfShowGraph(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_GRAPH] = enabled }
-    suspend fun setPerfShowCpu(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_CPU] = enabled }
-    suspend fun setPerfShowGpu(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_GPU] = enabled }
-    suspend fun setPerfShowBattery(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_BATTERY] = enabled }
-    suspend fun setPerfShowThermal(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_THERMAL] = enabled }
-    suspend fun setPerfShowSystem(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_SYSTEM] = enabled }
-    suspend fun setPerfShowClock(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_CLOCK] = enabled }
-    suspend fun setPerfHudHorizontal(enabled: Boolean) = context.dataStore.edit { it[PERF_HUD_HORIZONTAL] = enabled }
-    suspend fun setPerfHudOrder(order: String) = context.dataStore.edit { it[PERF_HUD_ORDER] = order }
-    suspend fun setPerfHudOpacity(opacity: Float) = context.dataStore.edit { it[PERF_HUD_OPACITY] = opacity }
+    suspend fun setShowPerformanceMonitor(enabled: Boolean) = dataStore.edit { it[SHOW_PERFORMANCE_MONITOR] = enabled }
+    suspend fun setPerfShowFps(enabled: Boolean) = dataStore.edit { it[PERF_SHOW_FPS] = enabled }
+    suspend fun setPerfShowFrameTime(enabled: Boolean) = dataStore.edit { it[PERF_SHOW_FRAMETIME] = enabled }
+    suspend fun setPerfShowRam(enabled: Boolean) = dataStore.edit { it[PERF_SHOW_RAM] = enabled }
+    suspend fun setPerfShowCore(enabled: Boolean) = dataStore.edit { it[PERF_SHOW_CORE] = enabled }
+    suspend fun setPerfShowShaderFails(enabled: Boolean) = dataStore.edit { it[PERF_SHOW_SHADER_FAILS] = enabled }
+    suspend fun setPerfShowGraph(enabled: Boolean) = dataStore.edit { it[PERF_SHOW_GRAPH] = enabled }
+    suspend fun setPerfShowCpu(enabled: Boolean) = dataStore.edit { it[PERF_SHOW_CPU] = enabled }
+    suspend fun setPerfShowGpu(enabled: Boolean) = dataStore.edit { it[PERF_SHOW_GPU] = enabled }
+    suspend fun setPerfShowBattery(enabled: Boolean) = dataStore.edit { it[PERF_SHOW_BATTERY] = enabled }
+    suspend fun setPerfShowThermal(enabled: Boolean) = dataStore.edit { it[PERF_SHOW_THERMAL] = enabled }
+    suspend fun setPerfShowSystem(enabled: Boolean) = dataStore.edit { it[PERF_SHOW_SYSTEM] = enabled }
+    suspend fun setPerfShowClock(enabled: Boolean) = dataStore.edit { it[PERF_SHOW_CLOCK] = enabled }
+    suspend fun setPerfHudHorizontal(enabled: Boolean) = dataStore.edit { it[PERF_HUD_HORIZONTAL] = enabled }
+    suspend fun setPerfHudOrder(order: String) = dataStore.edit { it[PERF_HUD_ORDER] = order }
+    suspend fun setPerfHudOpacity(opacity: Float) = dataStore.edit { it[PERF_HUD_OPACITY] = opacity }
     /** Writes every metric toggle of [config] in one edit (used by HUD presets). */
-    suspend fun setPerfHudMetrics(config: HudConfig) = context.dataStore.edit {
+    suspend fun setPerfHudMetrics(config: HudConfig) = dataStore.edit {
         it[PERF_SHOW_FPS] = config.fps
         it[PERF_SHOW_FRAMETIME] = config.frameTime
         it[PERF_SHOW_GRAPH] = config.graph
@@ -801,9 +803,9 @@ class SettingsStore(private val context: Context) {
         it[PERF_SHOW_SYSTEM] = config.system
         it[PERF_SHOW_CLOCK] = config.clock
     }
-    suspend fun setPerfOverlayScale(scale: Float) = context.dataStore.edit { it[PERF_OVERLAY_SCALE] = scale }
+    suspend fun setPerfOverlayScale(scale: Float) = dataStore.edit { it[PERF_OVERLAY_SCALE] = scale }
     /** A place for the monitor, which forgets where it was moved on screen. */
-    suspend fun setPerfHudPosition(position: String) = context.dataStore.edit {
+    suspend fun setPerfHudPosition(position: String) = dataStore.edit {
         it[PERF_HUD_POSITION] = position
         it.remove(PERF_HUD_POS_LANDSCAPE)
         it.remove(PERF_HUD_POS_PORTRAIT)
@@ -814,7 +816,7 @@ class SettingsStore(private val context: Context) {
      * its size there (null for automatic) and its scale.
      */
     suspend fun savePerfHudEdit(position: String, landscape: Boolean, fractions: String?, size: String?, scale: Float) =
-        context.dataStore.edit {
+        dataStore.edit {
             it[PERF_HUD_POSITION] = position
             if (fractions != null) {
                 it[if (landscape) PERF_HUD_POS_LANDSCAPE else PERF_HUD_POS_PORTRAIT] = fractions
@@ -826,75 +828,75 @@ class SettingsStore(private val context: Context) {
             if (size != null) it[sizeKey] = size else it.remove(sizeKey)
             it[PERF_OVERLAY_SCALE] = scale
         }
-    suspend fun clearPerfHudSizes() = context.dataStore.edit {
+    suspend fun clearPerfHudSizes() = dataStore.edit {
         it.remove(PERF_HUD_SIZE_LANDSCAPE)
         it.remove(PERF_HUD_SIZE_PORTRAIT)
     }
-    suspend fun setZxKeyboardOpacity(opacity: Float) = context.dataStore.edit { it[ZX_KEYBOARD_OPACITY] = opacity.coerceIn(0.2f, 1.0f) }
-    suspend fun setZxTapeMuted(muted: Boolean) = context.dataStore.edit { it[ZX_TAPE_MUTED] = muted }
-    suspend fun setLogVerbosity(level: LogLevel) = context.dataStore.edit { it[LOG_VERBOSITY] = level.name }
-    suspend fun setFastForwardSpeed(speed: Float) = context.dataStore.edit { it[FAST_FORWARD_SPEED] = speed }
-    suspend fun setN64Upscale(factor: Int) = context.dataStore.edit { it[N64_UPSCALE] = factor }
-    suspend fun setN64Recompiler(enabled: Boolean) = context.dataStore.edit { it[N64_RECOMPILER] = enabled }
-    suspend fun setSkipBootRom(enabled: Boolean) = context.dataStore.edit { it[SKIP_BOOT_ROM] = enabled }
-    suspend fun setCustomDriverPath(path: String) = context.dataStore.edit { it[CUSTOM_DRIVER_PATH] = path }
-    suspend fun setDriverUpdateNotifications(enabled: Boolean) = context.dataStore.edit { it[DRIVER_UPDATE_NOTIFICATIONS] = enabled }
-    suspend fun setDriverUpdateCheckTime(time: Long) = context.dataStore.edit { it[DRIVER_UPDATE_CHECK_TIME] = time }
-    suspend fun setAppUpdateAutoCheck(enabled: Boolean) = context.dataStore.edit { it[APP_UPDATE_AUTO_CHECK] = enabled }
-    suspend fun setAppUpdateNightly(enabled: Boolean) = context.dataStore.edit { it[APP_UPDATE_NIGHTLY] = enabled }
-    suspend fun setAppUpdateCheckTime(time: Long) = context.dataStore.edit { it[APP_UPDATE_CHECK_TIME] = time }
-    suspend fun setPs1AnalogMode(enabled: Boolean) = context.dataStore.edit { it[PS1_ANALOG_MODE] = enabled }
-    suspend fun setOrientationMode(vertical: Boolean) = context.dataStore.edit { it[ORIENTATION_VERTICAL] = vertical }
-    suspend fun setN64ExpansionPak(enabled: Boolean) = context.dataStore.edit { it[N64_EXPANSION_PAK] = enabled }
-    suspend fun setN64DisableVIProcessing(enabled: Boolean) = context.dataStore.edit { it[N64_DISABLE_VI_PROCESSING] = enabled }
-    suspend fun setN64WeaveDeinterlacing(enabled: Boolean) = context.dataStore.edit { it[N64_WEAVE_DEINTERLACING] = enabled }
-    suspend fun setN64SupersampleScanout(enabled: Boolean) = context.dataStore.edit { it[N64_SUPERSAMPLE_SCANOUT] = enabled }
-    suspend fun setN64ViOverclock(percent: Int) = context.dataStore.edit { it[N64_VI_OVERCLOCK] = percent }
-    suspend fun setN64UseDefaultCountPerOp(enabled: Boolean) = context.dataStore.edit { it[N64_USE_DEFAULT_COUNT_PER_OP] = enabled }
-    suspend fun setN64CountPerOp(value: Int) = context.dataStore.edit { it[N64_COUNT_PER_OP] = value }
-    suspend fun setN64UseDefaultCpuOverclock(enabled: Boolean) = context.dataStore.edit { it[N64_USE_DEFAULT_CPU_OVERCLOCK] = enabled }
-    suspend fun setN64CpuOverclock(factor: Int) = context.dataStore.edit { it[N64_CPU_OVERCLOCK] = factor }
-    suspend fun setN64AsyncRdp(enabled: Boolean) = context.dataStore.edit { it[N64_ASYNC_RDP] = enabled }
-    suspend fun setN64FasterSync(enabled: Boolean) = context.dataStore.edit { it[N64_FASTER_SYNC] = enabled }
-    suspend fun setN64SkipCaches(enabled: Boolean) = context.dataStore.edit { it[N64_SKIP_CACHES] = enabled }
-    suspend fun setN64RspTaskMode(enabled: Boolean) = context.dataStore.edit { it[N64_RSP_TASK_MODE] = enabled }
-    suspend fun setPinFastestCore(enabled: Boolean) = context.dataStore.edit { it[PIN_FASTEST_CORE] = enabled }
-    suspend fun setNgcdLoadSpeed(speed: Int) = context.dataStore.edit { it[NGCD_LOAD_SPEED] = speed }
-    suspend fun setZxLoadSpeed(speed: Int) = context.dataStore.edit { it[ZX_LOAD_SPEED] = speed }
-    suspend fun setMsxLoadSpeed(speed: Int) = context.dataStore.edit { it[MSX_LOAD_SPEED] = speed }
-    suspend fun setPspDrawingThreads(threads: Int) = context.dataStore.edit { it[PSP_DRAWING_THREADS] = threads }
-    suspend fun setPspRenderer(renderer: Int) = context.dataStore.edit { it[PSP_RENDERER] = renderer }
-    suspend fun setPspResolution(scale: Int) = context.dataStore.edit { it[PSP_RESOLUTION] = scale }
-    suspend fun setZxTapeAuto(enabled: Boolean) = context.dataStore.edit { it[ZX_TAPE_AUTO] = enabled }
-    suspend fun setBusyWaitPacing(enabled: Boolean) = context.dataStore.edit { it[BUSY_WAIT_PACING] = enabled }
-    suspend fun setN64Pak(pak: String) = context.dataStore.edit { it[N64_PAK] = pak }
-    suspend fun setN64DebugLogging(enabled: Boolean) = context.dataStore.edit { it[N64_DEBUG_LOGGING] = enabled }
-    suspend fun setGlobalPath(key: Preferences.Key<String>, path: String) = context.dataStore.edit { it[key] = path }
-    suspend fun setVulkanCachePath(path: String) = context.dataStore.edit { it[VULKAN_CACHE_PATH] = path }
-    suspend fun setShaderPath(path: String) = context.dataStore.edit { it[SHADER_PATH] = path }
-    suspend fun setAspectRatioMode(mode: AspectRatioMode) = context.dataStore.edit { it[ASPECT_RATIO_MODE] = mode.name }
+    suspend fun setZxKeyboardOpacity(opacity: Float) = dataStore.edit { it[ZX_KEYBOARD_OPACITY] = opacity.coerceIn(0.2f, 1.0f) }
+    suspend fun setZxTapeMuted(muted: Boolean) = dataStore.edit { it[ZX_TAPE_MUTED] = muted }
+    suspend fun setLogVerbosity(level: LogLevel) = dataStore.edit { it[LOG_VERBOSITY] = level.name }
+    suspend fun setFastForwardSpeed(speed: Float) = dataStore.edit { it[FAST_FORWARD_SPEED] = speed }
+    suspend fun setN64Upscale(factor: Int) = dataStore.edit { it[N64_UPSCALE] = factor }
+    suspend fun setN64Recompiler(enabled: Boolean) = dataStore.edit { it[N64_RECOMPILER] = enabled }
+    suspend fun setSkipBootRom(enabled: Boolean) = dataStore.edit { it[SKIP_BOOT_ROM] = enabled }
+    suspend fun setCustomDriverPath(path: String) = dataStore.edit { it[CUSTOM_DRIVER_PATH] = path }
+    suspend fun setDriverUpdateNotifications(enabled: Boolean) = dataStore.edit { it[DRIVER_UPDATE_NOTIFICATIONS] = enabled }
+    suspend fun setDriverUpdateCheckTime(time: Long) = dataStore.edit { it[DRIVER_UPDATE_CHECK_TIME] = time }
+    suspend fun setAppUpdateAutoCheck(enabled: Boolean) = dataStore.edit { it[APP_UPDATE_AUTO_CHECK] = enabled }
+    suspend fun setAppUpdateNightly(enabled: Boolean) = dataStore.edit { it[APP_UPDATE_NIGHTLY] = enabled }
+    suspend fun setAppUpdateCheckTime(time: Long) = dataStore.edit { it[APP_UPDATE_CHECK_TIME] = time }
+    suspend fun setPs1AnalogMode(enabled: Boolean) = dataStore.edit { it[PS1_ANALOG_MODE] = enabled }
+    suspend fun setOrientationMode(vertical: Boolean) = dataStore.edit { it[ORIENTATION_VERTICAL] = vertical }
+    suspend fun setN64ExpansionPak(enabled: Boolean) = dataStore.edit { it[N64_EXPANSION_PAK] = enabled }
+    suspend fun setN64DisableVIProcessing(enabled: Boolean) = dataStore.edit { it[N64_DISABLE_VI_PROCESSING] = enabled }
+    suspend fun setN64WeaveDeinterlacing(enabled: Boolean) = dataStore.edit { it[N64_WEAVE_DEINTERLACING] = enabled }
+    suspend fun setN64SupersampleScanout(enabled: Boolean) = dataStore.edit { it[N64_SUPERSAMPLE_SCANOUT] = enabled }
+    suspend fun setN64ViOverclock(percent: Int) = dataStore.edit { it[N64_VI_OVERCLOCK] = percent }
+    suspend fun setN64UseDefaultCountPerOp(enabled: Boolean) = dataStore.edit { it[N64_USE_DEFAULT_COUNT_PER_OP] = enabled }
+    suspend fun setN64CountPerOp(value: Int) = dataStore.edit { it[N64_COUNT_PER_OP] = value }
+    suspend fun setN64UseDefaultCpuOverclock(enabled: Boolean) = dataStore.edit { it[N64_USE_DEFAULT_CPU_OVERCLOCK] = enabled }
+    suspend fun setN64CpuOverclock(factor: Int) = dataStore.edit { it[N64_CPU_OVERCLOCK] = factor }
+    suspend fun setN64AsyncRdp(enabled: Boolean) = dataStore.edit { it[N64_ASYNC_RDP] = enabled }
+    suspend fun setN64FasterSync(enabled: Boolean) = dataStore.edit { it[N64_FASTER_SYNC] = enabled }
+    suspend fun setN64SkipCaches(enabled: Boolean) = dataStore.edit { it[N64_SKIP_CACHES] = enabled }
+    suspend fun setN64RspTaskMode(enabled: Boolean) = dataStore.edit { it[N64_RSP_TASK_MODE] = enabled }
+    suspend fun setPinFastestCore(enabled: Boolean) = dataStore.edit { it[PIN_FASTEST_CORE] = enabled }
+    suspend fun setNgcdLoadSpeed(speed: Int) = dataStore.edit { it[NGCD_LOAD_SPEED] = speed }
+    suspend fun setZxLoadSpeed(speed: Int) = dataStore.edit { it[ZX_LOAD_SPEED] = speed }
+    suspend fun setMsxLoadSpeed(speed: Int) = dataStore.edit { it[MSX_LOAD_SPEED] = speed }
+    suspend fun setPspDrawingThreads(threads: Int) = dataStore.edit { it[PSP_DRAWING_THREADS] = threads }
+    suspend fun setPspRenderer(renderer: Int) = dataStore.edit { it[PSP_RENDERER] = renderer }
+    suspend fun setPspResolution(scale: Int) = dataStore.edit { it[PSP_RESOLUTION] = scale }
+    suspend fun setZxTapeAuto(enabled: Boolean) = dataStore.edit { it[ZX_TAPE_AUTO] = enabled }
+    suspend fun setBusyWaitPacing(enabled: Boolean) = dataStore.edit { it[BUSY_WAIT_PACING] = enabled }
+    suspend fun setN64Pak(pak: String) = dataStore.edit { it[N64_PAK] = pak }
+    suspend fun setN64DebugLogging(enabled: Boolean) = dataStore.edit { it[N64_DEBUG_LOGGING] = enabled }
+    suspend fun setGlobalPath(key: Preferences.Key<String>, path: String) = dataStore.edit { it[key] = path }
+    suspend fun setVulkanCachePath(path: String) = dataStore.edit { it[VULKAN_CACHE_PATH] = path }
+    suspend fun setShaderPath(path: String) = dataStore.edit { it[SHADER_PATH] = path }
+    suspend fun setAspectRatioMode(mode: AspectRatioMode) = dataStore.edit { it[ASPECT_RATIO_MODE] = mode.name }
 
-    suspend fun addSystemRomPath(system: String, path: String) = context.dataStore.edit { p ->
+    suspend fun addSystemRomPath(system: String, path: String) = dataStore.edit { p ->
         val key = stringSetPreferencesKey("rom_paths_$system")
         p[key] = (p[key] ?: emptySet()) + path
     }
-    suspend fun removeSystemRomPath(system: String, path: String) = context.dataStore.edit { p ->
+    suspend fun removeSystemRomPath(system: String, path: String) = dataStore.edit { p ->
         val key = stringSetPreferencesKey("rom_paths_$system")
         val next = (p[key] ?: emptySet()) - path
         if (next.isEmpty()) p.remove(key) else p[key] = next
     }
     suspend fun setSystemRomPath(system: String, path: String) = addSystemRomPath(system, path)
-    suspend fun setSystemFirmwarePath(system: String, path: String) = context.dataStore.edit { it[stringPreferencesKey("fw_path_$system")] = path }
-    suspend fun setSystemVisibility(system: String, visible: Boolean) = context.dataStore.edit { p ->
+    suspend fun setSystemFirmwarePath(system: String, path: String) = dataStore.edit { it[stringPreferencesKey("fw_path_$system")] = path }
+    suspend fun setSystemVisibility(system: String, visible: Boolean) = dataStore.edit { p ->
         val current = p[HIDDEN_SYSTEMS] ?: emptySet()
         p[HIDDEN_SYSTEMS] = if (visible) current - system else current + system
     }
     /** [key] is a system, or "system/game" for one game. */
-    suspend fun setZxControlScheme(key: String, scheme: Int) = context.dataStore.edit { it[intPreferencesKey(ZX_SCHEME_PREFIX + key)] = scheme }
-    suspend fun setLastDisc(game: String, disc: Int) = context.dataStore.edit { it[intPreferencesKey(LAST_DISC_PREFIX + game)] = disc }
-    suspend fun setZxStickToKeys(system: String, enabled: Boolean) = context.dataStore.edit { it[booleanPreferencesKey(ZX_STICK_PREFIX + system)] = enabled }
-    suspend fun setZxReversePitch(system: String, enabled: Boolean) = context.dataStore.edit { it[booleanPreferencesKey(ZX_REVERSE_PREFIX + system)] = enabled }
-    suspend fun setZxKeyBinding(system: String, label: String, bit: Int) = context.dataStore.edit { p ->
+    suspend fun setZxControlScheme(key: String, scheme: Int) = dataStore.edit { it[intPreferencesKey(ZX_SCHEME_PREFIX + key)] = scheme }
+    suspend fun setLastDisc(game: String, disc: Int) = dataStore.edit { it[intPreferencesKey(LAST_DISC_PREFIX + game)] = disc }
+    suspend fun setZxStickToKeys(system: String, enabled: Boolean) = dataStore.edit { it[booleanPreferencesKey(ZX_STICK_PREFIX + system)] = enabled }
+    suspend fun setZxReversePitch(system: String, enabled: Boolean) = dataStore.edit { it[booleanPreferencesKey(ZX_REVERSE_PREFIX + system)] = enabled }
+    suspend fun setZxKeyBinding(system: String, label: String, bit: Int) = dataStore.edit { p ->
         // Merge into the per-system "label=bit,label=bit" string.
         val key = stringPreferencesKey(ZX_BIND_PREFIX + system)
         val current = p[key] ?: ""
@@ -910,30 +912,30 @@ class SettingsStore(private val context: Context) {
         if (bit == 0) binds.remove(label) else binds[label] = bit
         p[key] = binds.entries.joinToString(",") { (l, b) -> "$l=$b" }
     }
-    suspend fun setHotkey(action: String, combo: List<Int>) = context.dataStore.edit { it[stringPreferencesKey(HOTKEYS_PREFIX + action)] = combo.joinToString(",") }
+    suspend fun setHotkey(action: String, combo: List<Int>) = dataStore.edit { it[stringPreferencesKey(HOTKEYS_PREFIX + action)] = combo.joinToString(",") }
 
     /** A console's or game's binding changes in one edit: a binding, "" to unbind, null to inherit. */
-    suspend fun setScopedMappings(scope: String, changes: Map<Int, String?>) = context.dataStore.edit { p ->
+    suspend fun setScopedMappings(scope: String, changes: Map<Int, String?>) = dataStore.edit { p ->
         changes.forEach { (bit, binding) ->
             val key = stringPreferencesKey(ScopedKeys.mapping(scope, bit))
             if (binding == null) p.remove(key) else p[key] = binding
         }
     }
     /** A console's or game's hotkey: a combo, empty to unbind, null to inherit. */
-    suspend fun setScopedHotkey(scope: String, action: String, combo: List<Int>?) = context.dataStore.edit { p ->
+    suspend fun setScopedHotkey(scope: String, action: String, combo: List<Int>?) = dataStore.edit { p ->
         val key = stringPreferencesKey(ScopedKeys.hotkey(scope, action))
         if (combo == null) p.remove(key) else p[key] = combo.joinToString(",")
     }
     /** Every button binding [scope] changes, back to inheriting. */
-    suspend fun clearScopedMappings(scope: String) = context.dataStore.edit { p ->
+    suspend fun clearScopedMappings(scope: String) = dataStore.edit { p ->
         p.asMap().keys.filter { ScopedKeys.parse(it.name, ScopedKeys.MAPPING_PREFIX)?.first == scope }.forEach { p.remove(it) }
     }
     /** Every hotkey [scope] changes, back to inheriting. */
-    suspend fun clearScopedHotkeys(scope: String) = context.dataStore.edit { p ->
+    suspend fun clearScopedHotkeys(scope: String) = dataStore.edit { p ->
         p.asMap().keys.filter { ScopedKeys.parse(it.name, ScopedKeys.HOTKEY_PREFIX)?.first == scope }.forEach { p.remove(it) }
     }
     suspend fun resetDefaultMapping() {
-        context.dataStore.edit { p ->
+        dataStore.edit { p ->
             p.asMap().keys.filter { it.name.startsWith("mapping_") }.forEach { p.remove(it) }
             p[HAS_DEFAULTS_INITIALIZED] = false
         }
