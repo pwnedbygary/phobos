@@ -883,7 +883,8 @@ auto matchesInterpreter() -> void {
         break;
       }
       case 49: word = ccond(random(16), random(32), random(32)); break;
-      // the VFPU, which the recompiler also leaves to the interpreter
+      // the VFPU, which the recompiler compiles in part (the rest, and any instruction with a prefix set, it leaves to
+      // the interpreter)
       case 50: {
         const uint32_t operations[] = {0xc0, 0xc1, 0xc7, 0xc8, 0xc9, 0xca, 0xda, 0xdb, 0xde, 0xdf};  // vadd ... vslt
         word = vfpuOp(operations[random(10)], size, vd, vs, vt);
