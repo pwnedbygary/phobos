@@ -25,6 +25,17 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Pause menu: the running game's name beside "Emulation Paused" — 2026-10-11
+
+Branch `cursor/pause-title-2b67`, on `master`, at the owner's request, so the pause menu always says which game is
+paused. `MainViewModel.loadedTitle` is set when a game loads and cleared with `loadedGame`: `gameTitle()`
+(`util/RomNames.kt`) gives the disc's own title when the library read one (a PSP disc's PARAM.SFO title) and the file's
+name without its extension otherwise; a game started from outside the library (a frontend's intent) has no disc title,
+so it shows its file's name. `EmulationMenu`'s `PausedHeader` puts it beside the heading when the menu is at least
+480 dp wide (one line, ellipsized) and below it in narrower menus (portrait, split screen); TalkBack reads both as one.
+Independent review: no High/Medium; its Lows on right-to-left placement, narrow windows and accessibility are taken.
+Unit tests: 275 passed (two new in `RomNamesTest`); not yet seen on a device.
+
 ## Version codes for 2.x — 2026-10-11
 
 Branch `cursor/version-base-2x-2b67`, on `master` after the PSP stack merged (#208, #210), at the owner's request before

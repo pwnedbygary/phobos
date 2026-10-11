@@ -24,6 +24,18 @@ class RomNamesTest {
     }
 
     @Test
+    fun gameTitleIsTheDiscsOwnWhenItHasOne() {
+        assertEquals("Grand Theft Auto: Chinatown Wars", gameTitle("ULUS10490.iso", "Grand Theft Auto: Chinatown Wars"))
+    }
+
+    @Test
+    fun gameTitleIsTheFilesNameWithoutADiscTitle() {
+        assertEquals("Grand Theft Auto - Chinatown Wars", gameTitle("Grand Theft Auto - Chinatown Wars.chd", null))
+        assertEquals("Mario Tennis (USA)", gameTitle("Mario Tennis (USA).z64", ""))
+        assertEquals("Dr. Mario (USA)", gameTitle("Dr. Mario (USA).nes", "  "))
+    }
+
+    @Test
     fun dropsTheDiscNumber() {
         assertEquals("Metal Gear Solid (USA) (Rev 1)", withoutDiscNumber("Metal Gear Solid (USA) (Disc 1) (Rev 1)"))
         assertEquals("Metal Gear Solid (USA) (Rev 1)", withoutDiscNumber("Metal Gear Solid (USA) (Disc 2) (Rev 1)"))

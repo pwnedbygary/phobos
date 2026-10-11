@@ -9,6 +9,12 @@ private val extension = Regex("""\.[A-Za-z0-9]{1,5}$""")
  */
 fun romTitle(fileName: String): String = fileName.replace(extension, "").ifEmpty { fileName }
 
+/**
+ * A running game's name, as the pause menu shows it: the disc's own title (a PSP disc's, read when the library
+ * listed it) if it has one, else the file's name without its extension.
+ */
+fun gameTitle(fileName: String, discTitle: String?): String = displayTitle(romTitle(fileName), discTitle)
+
 private val discNumber = Regex("""\s*[(\[]\s*(?:disc|disk|cd)\s*\d+(?:\s*of\s*\d+)?\s*[)\]]""", RegexOption.IGNORE_CASE)
 
 /**
