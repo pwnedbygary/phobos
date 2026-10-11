@@ -518,10 +518,26 @@ auto more() -> void {
   //it gives 1, and one after the prefixes were used up gives 3.
   auto oneAndTwo = [](Allegrex& s) { s.vfpu.r[S(1, 0, 0)] = bits(1.0f); s.vfpu.r[S(2, 0, 0)] = bits(2.0f); };
   uint32_t negateX = 0xe4 | 1 << 16;
-  //vnop uses them up, as pspdev's documentation says.
-  Machine nop;
-  nop.run({vpfxs(negateX), vnop, alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0))}, oneAndTwo);
-  CHECK(nop.cpu.vfpu.r[S(0, 0, 0)], bits(3.0f));
+  //vnop, vsync and vflush leave them for the instruction after.
+  for(uint32_t wait : {vnop, 0xffff0320u, 0xffff040du}) {
+    Machine kept;
+    kept.run({vpfxs(negateX), wait, alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0))}, oneAndTwo);
+    CHECK(kept.cpu.vfpu.r[S(0, 0, 0)], bits(1.0f));
+    CHECK(kept.cpu.vfpu.pfxs, 0xe4);  //(used up by the vadd)
+  }
+  //Metal Gear Acid 2's sprite clipping, as its code has it: a corner against the screen's right, left, bottom and
+  //top, greater than {right, bottom} and less than {left, top} by rt's prefix, the second prefix set before the
+  //vnops and mfvc that wait for the first vcmp's condition codes. Used up there, the second vcmp took the right
+  //edge for the left one: every corner left of x 480 was outside.
+  Machine clip;
+  clip.run({vpfxt(0xe8), vcmp(7, 4, C(1, 0), C(1, 1)), vpfxt(0xed), vnop, vnop, mfv(s0, 0x83),
+            vcmp(2, 4, C(1, 0), C(1, 1)), vnop, vnop, vnop, mfv(s1, 0x83)},
+           [](Allegrex& s) {
+             setQuad(s, C(1, 0), {48.0f, 241.0f, -1.0f, 1.0f});
+             setQuad(s, C(1, 1), {480.0f, 0.0f, 272.0f, 0.0f});
+           });
+  CHECK(clip.gpr(s0), 0x18);  //w > 0 (any)
+  CHECK(clip.gpr(s1), 0x14);  //z < 272 (any): neither x < 0 nor y < 0
   //vmfvc doesn't, and vmtvc can set one (control register 128 is rs's prefix).
   Machine control;
   control.run({vpfxs(negateX), alu(0b110100000, 1, S(3, 0, 0), 3, 0x50), alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0)),

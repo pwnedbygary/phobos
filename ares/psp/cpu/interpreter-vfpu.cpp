@@ -1181,9 +1181,11 @@ auto Allegrex::VNEG(u8 vd, u8 vs, u32 size) -> void {
   vfpuWrite(vd, size, s, vfpu.pfxd);
 }
 
-//vnop does nothing, but it does use up the prefixes: pspdev's documentation says so.
+//vnop does nothing, and leaves the prefixes for the instruction after it, as vsync and vflush do. pspdev's
+//documentation says it uses them up, but none of its tests shows that, and Metal Gear Acid 2's sprite clipping
+//needs them kept: vpfxt, vnop, vnop, mfvc, then the vcmp the prefix is for (used up, the game culls its logo, menus
+//and notices). PPSSPP keeps them too.
 auto Allegrex::VNOP() -> void {
-  vfpuPrefixesUsed();
 }
 
 //-1/x
@@ -1448,8 +1450,8 @@ auto Allegrex::VSUB(u8 vd, u8 vs, u8 vt, u32 size) -> void {
 }
 
 //vsync and vflush wait for the VFPU's pipeline, or its writes to memory, to finish: there's nothing to wait for
-//here. pspdev's documentation doesn't say whether they use up the prefixes; they don't in PPSSPP, nor here. (PPSSPP
-//keeps the prefixes through vnop too, but the documentation, which rests on tests on hardware, says otherwise.)
+//here. pspdev's documentation doesn't say whether they use up the prefixes; they don't in PPSSPP, nor here (nor does
+//vnop: VNOP()).
 auto Allegrex::VSYNC() -> void {
 }
 
