@@ -1104,6 +1104,13 @@ struct VulkanBackend : GPU::Backend {
     u32 lastState = ~0u;
     VkPipeline boundPipeline = VK_NULL_HANDLE;
     VkDescriptorSet boundSet = VK_NULL_HANDLE;
+    //(the dynamic state and push constants set in the open pass, which a draw with the same doesn't set again: every
+    //draw pipeline has them dynamic, in one layout; forgotten as a pass begins, so nothing another layout's pipelines
+    //bound in between, or a driver, may have left counts. God of War draws 2,200 times a frame in 140 passes.)
+    struct Set { bool known = false; VkRect2D scissor; u32 reference, compareMask, writeMask, blend; GPU::Push push; };
+    Set set;
+    GPU::Pipeline lastKey{};  //(and the last state's pipeline, not looked up again for the next with the same)
+    VkPipeline lastPipeline = VK_NULL_HANDLE;
     auto endPass = [&] {
       if(pass) vk.vkCmdEndRenderPass(commands), pass = nullptr;
     };
@@ -1139,7 +1146,7 @@ struct VulkanBackend : GPU::Backend {
           beginPass(commands, t);
           VkViewport viewport{0, 0, f32(t.width * scale), f32(t.height * scale), 0, 1};
           vk.vkCmdSetViewport(commands, 0, 1, &viewport);
-          pass = &t, lastState = ~0u;
+          pass = &t, lastState = ~0u, set.known = false;
           //(the sets bound again from 0 up, as a copy's layout may have been bound, which leaves this layout's sets
           //undefined, and binding a lower set after a higher one through another layout would too: set 0 the blank
           //texture's until a draw's own, set 1 the target's colors for shader blending, set 2 at the first mesh)
@@ -1149,7 +1156,8 @@ struct VulkanBackend : GPU::Backend {
           boundSet = sets[0], transformsBound = false;
         }
         if(c.state != lastState) {
-          VkPipeline pipeline = pipelineFor(s.pipeline);
+          if(!lastPipeline || !(s.pipeline == lastKey)) lastPipeline = pipelineFor(s.pipeline), lastKey = s.pipeline;
+          VkPipeline pipeline = lastPipeline;
           if(!pipeline) continue;
           if(pipeline != boundPipeline) {
             vk.vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline), boundPipeline = pipeline;
@@ -1162,15 +1170,29 @@ struct VulkanBackend : GPU::Backend {
                                        0, nullptr);
           }
           VkRect2D scissor = scaled(t, s.scissor[0], s.scissor[1], s.scissor[2], s.scissor[3]);
-          vk.vkCmdSetScissor(commands, 0, 1, &scissor);
-          vk.vkCmdSetStencilReference(commands, VK_STENCIL_FACE_FRONT_AND_BACK, s.stencilReference);
-          vk.vkCmdSetStencilCompareMask(commands, VK_STENCIL_FACE_FRONT_AND_BACK, s.stencilCompareMask);
-          vk.vkCmdSetStencilWriteMask(commands, VK_STENCIL_FACE_FRONT_AND_BACK, s.stencilWriteMask);
-          f32 constant[4];
-          for(u32 n = 0; n < 4; n++) constant[n] = (s.blendConstant >> n * 8 & 0xff) / 255.0f;
-          vk.vkCmdSetBlendConstants(commands, constant);
-          vk.vkCmdPushConstants(commands, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                                0, sizeof(GPU::Push), &s.push);
+          bool known = set.known;
+          if(!known || std::memcmp(&scissor, &set.scissor, sizeof(scissor))) {
+            vk.vkCmdSetScissor(commands, 0, 1, &scissor);
+          }
+          if(!known || s.stencilReference != set.reference) {
+            vk.vkCmdSetStencilReference(commands, VK_STENCIL_FACE_FRONT_AND_BACK, s.stencilReference);
+          }
+          if(!known || s.stencilCompareMask != set.compareMask) {
+            vk.vkCmdSetStencilCompareMask(commands, VK_STENCIL_FACE_FRONT_AND_BACK, s.stencilCompareMask);
+          }
+          if(!known || s.stencilWriteMask != set.writeMask) {
+            vk.vkCmdSetStencilWriteMask(commands, VK_STENCIL_FACE_FRONT_AND_BACK, s.stencilWriteMask);
+          }
+          if(!known || s.blendConstant != set.blend) {
+            f32 constant[4];
+            for(u32 n = 0; n < 4; n++) constant[n] = (s.blendConstant >> n * 8 & 0xff) / 255.0f;
+            vk.vkCmdSetBlendConstants(commands, constant);
+          }
+          if(!known || !(s.push == set.push)) {
+            vk.vkCmdPushConstants(commands, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                  0, sizeof(GPU::Push), &s.push);
+          }
+          set = {true, scissor, s.stencilReference, s.stencilCompareMask, s.stencilWriteMask, s.blendConstant, s.push};
           lastState = c.state;
         }
         //(what the draws before wrote, made visible to its reading, where the GPU doesn't keep the order: in
