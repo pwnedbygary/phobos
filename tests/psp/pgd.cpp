@@ -1,7 +1,8 @@
 //PGD (ares/psp/kernel/pgd.cpp): the data in a file made here the way its disc has it (pgd.hpp, the part that follows
 //docs/psp-core.md, run backwards) comes back exactly, read whole or in pieces, any place and any size; MAC type 1 and
-//3 both round-trip; and a wrong key, a header damaged in any byte it hashes, a file cut short, and one that isn't a
-//PGD are refused, each saying why, without reading or writing outside what they hold (the sanitizers watch). The
+//3 both round-trip; a wrong key is recovered from the header's own MAC and reads the data all the same; a header
+//damaged in any byte it hashes, a file cut short, and one that isn't a PGD are refused, each saying why, without
+//reading or writing outside what they hold (the sanitizers watch). The
 //BBMac core is checked against AES-CMAC's own example (FIPS-198.1), so the check isn't only that encrypting and
 //decrypting here undo each other.
 #include "kernel-machine.hpp"
@@ -32,22 +33,24 @@ inline auto region(const psp_pgd::Bytes& file, const Pgd::Descriptor& d) -> psp_
   return psp_pgd::Bytes(file.begin() + d.dataOffset, file.begin() + d.dataOffset + d.dataSize);
 }
 
-//The data, decrypted whole: its bytes, or why it can't.
+//The data, decrypted whole: its bytes, or why it can't. Decrypted with the version key the descriptor reports, which
+//is what the kernel reads it back with (io.cpp), not necessarily the key handed in.
 inline auto decryptWhole(const psp_pgd::Bytes& file, const psp_pgd::Bytes& vKey, psp_pgd::Bytes& out) -> std::string {
   Pgd::Descriptor descriptor;
   auto why = Pgd::descriptor(file.data(), file.size(), vKey.data(), descriptor);
   if(!why.empty()) { out.clear(); return why; }
   out = region(file, descriptor);
-  Pgd::decryptData(out.data(), 0, u32(out.size()), descriptor.dataKey, vKey.data());
+  Pgd::decryptData(out.data(), 0, u32(out.size()), descriptor.dataKey, descriptor.versionKey);
   return {};
 }
 
 //The data read at region-relative `start` for `length` bytes: the ciphertext there decrypted at its offset, the
-//plaintext there. BBCipher is one keystream, so any piece decrypts on its own.
-inline auto decryptPiece(const psp_pgd::Bytes& file, const Pgd::Descriptor& d, const psp_pgd::Bytes& vKey,
+//plaintext there. BBCipher is one keystream, so any piece decrypts on its own. The descriptor's own version key is used,
+//which is what the kernel decrypts the data with.
+inline auto decryptPiece(const psp_pgd::Bytes& file, const Pgd::Descriptor& d,
   u32 start, u32 length, psp_pgd::Bytes& out) -> void {
   out = psp_pgd::Bytes(file.begin() + d.dataOffset + start, file.begin() + d.dataOffset + start + length);
-  Pgd::decryptData(out.data(), start, length, d.dataKey, vKey.data());
+  Pgd::decryptData(out.data(), start, length, d.dataKey, d.versionKey);
 }
 
 //The data, made with each MAC type, comes back exactly read whole and in every piece tested: whole, and each 16-byte
@@ -75,15 +78,18 @@ static auto roundTrip() -> void {
       for(u32 length : {0u, 1u, 0xfu, 0x10u, 0x11u, 0x100u, 0x200u}) {
         if(start + length > plain.size()) continue;
         psp_pgd::Bytes piece;
-        decryptPiece(file, descriptor, vKey, start, length, piece);
+        decryptPiece(file, descriptor, start, length, piece);
         CHECK(piece == psp_pgd::Bytes(plain.begin() + start, plain.begin() + start + length), true);
       }
     }
   }
 }
 
-//A wrong version key fails the header's version MAC; a header damaged in any byte the two MACs hash (0x00-0x6f, the
-//0x30-0x5f descriptor they cover, and the 0x60-0x6f before the 0x70 MAC), and the data key, are refused.
+//A version key that doesn't match the header's MAC is not refused: the key is recovered out of that MAC (amctrl's
+//bbmac_getkey), so the file still unlocks and its data still comes back exactly, and the descriptor reports the key it
+//was read under so the data is decrypted with the same one. What IS refused: a header damaged in any byte the DNAS
+//MAC hashes (0x00-0x6f, the 0x30-0x5f descriptor they cover, and the 0x60-0x6f before the 0x70 MAC), one cut short,
+//and one that isn't a PGD at all.
 static auto refusals() -> void {
   auto vKey = versionKey(3);
   auto plain = plaintext(0x200, 3);
@@ -91,11 +97,21 @@ static auto refusals() -> void {
   options.versionKey = vKey.data();
   auto file = psp_pgd::build(plain, options);
 
+  //a wrong key: recovered from the MAC, so the descriptor comes out and the data decrypts exactly.
+  auto wrongKey = psp_pgd::scrambled(16, 0xdead'beef);
   psp_pgd::Bytes wrongKeyData;
-  auto wrong = decryptWhole(file, psp_pgd::scrambled(16, 0xdead'beef), wrongKeyData);
-  CHECK(!wrong.empty(), true);
+  auto wrong = decryptWhole(file, wrongKey, wrongKeyData);
+  CHECK(wrong.empty(), true);
+  CHECK(wrongKeyData == plain, true);
 
+  //the key it reports is the one the data goes with, and it is the file's own, not the wrong one handed in.
   Pgd::Descriptor descriptor;
+  CHECK(Pgd::descriptor(file.data(), file.size(), wrongKey.data(), descriptor).empty(), true);
+  CHECK(memcmp(descriptor.versionKey, vKey.data(), 16), 0);
+  //with the right key handed in, the same key is reported (nothing was recovered in that case).
+  CHECK(Pgd::descriptor(file.data(), file.size(), vKey.data(), descriptor).empty(), true);
+  CHECK(memcmp(descriptor.versionKey, vKey.data(), 16), 0);
+
   for(u32 at : {0u, 4u, 0x10u, 0x20u, 0x30u, 0x40u, 0x60u, 0x6fu}) {
     auto damaged = file;
     damaged[at] ^= 0x01;
@@ -173,11 +189,75 @@ static auto bbmacCore() -> void {
   CHECK(aesCmac(Keys::kirk7[0x38], nistMsg.data(), nistMsg.size()) == expected, true);
 }
 
+//BBCipher's keystream chains on the counter block it is given, not on the keystream it makes: block s is
+//AES_0x63(counter(base,s)) XOR counter(base,s-1), with counter(base,0) as the first block's IV. A round trip only
+//shows the decrypter undoes whatever encryptor ran beside it, so this pins the convention to bytes worked out from
+//amctrl.prx's own routine (tpunix's sub_428 feeding KIRK's cipher-block-chaining under key 0x63) and checked against
+//a real game's decrypted PGD data region. Chaining on the keystream instead (what this once did) agrees on the first
+//block, whose IV is 0, and differs from the second on: a two-block vector catches it, and three are used here.
+static auto bbcipherVector() -> void {
+  auto key   = psp_pgd::bytes("000102030405060708090a0b0c0d0e0f");
+  auto plain = psp_pgd::bytes(
+    "030a11181f262d343b424950575e656c"
+    "737a81888f969da4abb2b9c0c7ced5dc"
+    "e3eaf1f8ff060d141b222930373e454c");
+  auto expect = psp_pgd::bytes(
+    "ec8fdde83b0b63fa7f4aab91949c3591"
+    "188a9ba085c39dcf2a3161f3b1043379"
+    "5e50dad78df2d23f3a5b6d90453022ac");
+  //the data key XORed with the version key is the one BBCipher key: the version key all zero leaves the data key.
+  u8 zeroVersionKey[16] = {};
+  auto data = plain;
+  Pgd::decryptData(data.data(), 0, u32(data.size()), key.data(), zeroVersionKey);
+  CHECK(data == expect, true);
+
+  //the second block alone, and the same bytes read at an offset, so the chain's start is checked too.
+  auto piece = psp_pgd::Bytes(plain.begin() + 16, plain.end());
+  Pgd::decryptData(piece.data(), 16, u32(piece.size()), key.data(), zeroVersionKey);
+  CHECK(piece == psp_pgd::Bytes(expect.begin() + 16, expect.end()), true);
+}
+
+//The descriptor says where the data starts and how long it is, and that is checked against the WHOLE file, not the
+//0x90-byte header that was read to find it. Handed the header's length instead, every real file is refused for
+//holding more data than its own header, which is how a UMD data file (186 MB of it) came to be turned away. The file
+//here is much bigger than its header on purpose, and both sizes are checked: the whole file comes back its descriptor,
+//and a size of only the header's refuses it.
+static auto descriptorBoundsUseTheFile() -> void {
+  auto vKey = versionKey(9);
+  auto plain = plaintext(0x8000, 9);  //32 KB of data under a 0x90-byte header
+  psp_pgd::Options options;
+  options.versionKey = vKey.data();
+  options.dataSize = u32(plain.size());
+  options.blockSize = 0x400;
+  auto file = psp_pgd::build(plain, options);
+  CHECK(file.size(), 0x90 + plain.size());
+
+  Pgd::Descriptor descriptor;
+  CHECK(Pgd::descriptor(file.data(), file.size(), vKey.data(), descriptor).empty(), true);
+  CHECK(descriptor.dataSize, plain.size());
+  CHECK(descriptor.dataOffset, 0x90);
+  CHECK(descriptor.blockSize, 0x400);
+
+  //the size of only the header, which is what the caller used to hand over: not the file, so refused.
+  CHECK(!Pgd::descriptor(file.data(), 0x90, vKey.data(), descriptor).empty(), true);
+
+  //and a descriptor claiming more data than the file holds is still refused.
+  psp_pgd::Options overOptions;
+  overOptions.versionKey = vKey.data();
+  overOptions.dataSize = u32(plain.size());
+  overOptions.blockSize = 0x400;
+  auto overFile = psp_pgd::build(plain, overOptions);
+  overFile.resize(0x90 + plain.size() / 2);  //the file, cut short of what its descriptor says
+  CHECK(!Pgd::descriptor(overFile.data(), overFile.size(), vKey.data(), descriptor).empty(), true);
+}
+
 auto pgdTests() -> Tests {
   return {
     {"pgd whole and piece reads", roundTrip},
     {"pgd refusals", refusals},
     {"pgd BBMac core", bbmacCore},
+    {"pgd BBCipher keystream", bbcipherVector},
+    {"pgd descriptor bounds use the file", descriptorBoundsUseTheFile},
   };
 }
 

@@ -10,10 +10,10 @@ fun git(vararg args: String): String? = runCatching {
     }.standardOutput.asText.get().trim().takeIf { it.isNotEmpty() }
 }.getOrNull()
 
-// Every build is numbered from git history, locally and on CI alike: the code is 100000 plus the commit
-// count, above the codes the old tag mapping gave (v1.1.0 is 10100), so an update is never a downgrade;
-// the name is the tag on a tagged commit and "<tag>-<commits since>-g<hash>" otherwise.
-val gitVersionCode = git("rev-list", "--count", "HEAD")?.toIntOrNull()?.let { 100_000 + it } ?: 1
+// Every build is numbered from git history, locally and on CI alike: the code is 200000 plus the commit
+// count (100000 plus it before 2.0, whose test builds went past 106000), above every code given before, so an
+// update is never a downgrade; the name is the tag on a tagged commit and "<tag>-<commits since>-g<hash>" otherwise.
+val gitVersionCode = git("rev-list", "--count", "HEAD")?.toIntOrNull()?.let { 200_000 + it } ?: 1
 val gitVersionName = git("describe", "--tags", "--match", "v[0-9]*")?.removePrefix("v") ?: "0.0.0-dev"
 
 android {

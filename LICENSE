@@ -2785,6 +2785,14 @@ SOFTWARE.
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
+Phobos PSP console art (android/app/src/main/assets/platforms/psp.svg)
+
+Drawn for Phobos in the style of the Systematic set above, which has no
+PSP: the one SVG in that folder that isn't BAXY Square's. It is Phobos's
+own work, under Phobos's license (the first notice).
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
 Phobos platform glyphs (ui/theme/PlatformGlyphs.kt, PlatformGlyphArt.kt)
 
 Original console silhouettes drawn for Phobos (Phobos / Pixel / Manga icon

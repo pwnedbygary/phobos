@@ -16,7 +16,8 @@ commit's runner (docs/psp-core.md, part 59); and part 62 (branch `cursor/psp-hle
 `cursor/psp-hle-games13-2b67`): the rows its fixes changed, from the whole library run again beside part 59's run of
 the merged stack (docs/psp-core.md, part 62); and part 64 (branch `cursor/psp-gow-sw-2b67`, on #198's
 `cursor/psp-vk-speed6-2b67`): the rows its GE changes moved, from the whole library run again beside the base commit's
-runner (docs/psp-core.md, part 64). The other rows are the report's.
+runner (docs/psp-core.md, part 64). And the final run (2026-10-11, `be543afba`, the stack's top before the merge into
+`master`): the whole library run again beside part 64's run. The other rows are the report's.
 
 ## Method
 
@@ -52,13 +53,23 @@ game that looked worse was run again without presses on both commits before call
 
 ## Summary
 
-| Category | Before (`b27f084a5`) | Run 1 (#183's tip) | Now | Part 55 | Part 57 | Part 58 | Part 59 | Part 62 | Part 64 | Change since Before |
-|---|---|---|---|---|---|---|---|---|---|---|
-| Menu or gameplay | 141 | 148 | 175 | 178 | 180 | 180 | 187 | 188 | 189 | +48 |
-| Movie | 35 | 43 | 63 | 63 | 63 | 65 | 71 | 71 | 71 | +36 |
-| Stuck loading | 13 | 8 | 5 | 4 | 4 | 4 | 0 | 0 | 0 | -13 |
-| Black or hang | 73 | 64 | 21 | 19 | 17 | 15 | 6 | 6 | 6 | -67 |
-| Timed out | 4 | 3 | 2 | 2 | 2 | 2 | 2 | 1 | 0 | -4 |
+| Category | Before (`b27f084a5`) | Run 1 (#183's tip) | Now | Part 55 | Part 57 | Part 58 | Part 59 | Part 62 | Part 64 | Final | Change since Before |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Menu or gameplay | 141 | 148 | 175 | 178 | 180 | 180 | 187 | 188 | 189 | 194 | +53 |
+| Movie | 35 | 43 | 63 | 63 | 63 | 65 | 71 | 71 | 71 | 71 | +36 |
+| Stuck loading | 13 | 8 | 5 | 4 | 4 | 4 | 0 | 0 | 0 | 0 | -13 |
+| Black or hang | 73 | 64 | 21 | 19 | 17 | 15 | 6 | 6 | 6 | 1 | -72 |
+| Timed out | 4 | 3 | 2 | 2 | 2 | 2 | 2 | 1 | 0 | 0 | -4 |
+
+The final run (2026-10-11), the whole library again on the stack's top before it merged into `master` (`be543afba`:
+part 67's speedups, #205, and the owner's PGD fix, #206, on part 64's), moves six rows, the six black games, all of which
+read PGD-encrypted data: their data now decrypts. Dragon Ball Z: Tenkaichi Tag Team reaches its title, God of War:
+Ghost of Sparta its difficulty menu, and Naruto, Shining Blade and Valkyria Chronicles III the prompts and notices
+before their menus. Black Wolves Saga, black at 3600, is loading its opening there: run to 7200 frames, it plays it
+from about 4200 and shows its title by 5400. Eighteen other games show some frame differently from part 64's run, each
+the same scene a few frames apart (a fade, an animation step, a movie further on), as two runs of one runner differ
+too; no game shows less than it did. All 266 finish their 3600 frames (the slowest, Ghost of Sparta, in 639 s, three
+at a time beside other work), and none stops at a missing function.
 
 Part 64 moves one row: God of War: Chains of Olympus, which had timed out, finishes its 3600 frames, its difficulty
 menu at 3600 (the Cross at 1800 took New Game): its loop drew its scene as fast as the GE let it, and our GE took no
@@ -335,7 +346,7 @@ and now, and what the last frames showed or why a game stops.
 | ATV Offroad Fury - Blazin' Trails | UCUS98603 | 337 | menu | menu | menu | autosave warning |
 | ATV Offroad Fury Pro | UCUS98648 | 118 | black | black | menu | autosave warnings |
 | Battle vs. Chess [Europe Proto] | ULES01517 | 157 | menu | menu | menu | title, press start |
-| Black Wolves Saga - Last Hope | ULJM06220 | 392 | black | black | black | black throughout: its CRI file system opens PSP_GAME/INSDIR/INSTALL.DNS, PGD-encrypted, gives it its key (ioctl 0x04100001) and closes it, 31,000 times by frame 2400; the kernel can't decrypt PGD yet and refuses the key |
+| Black Wolves Saga - Last Hope | ULJM06220 | 392 | black | black | black | black at 3600, loading its opening: INSTALL.DNS decrypts (#206); the system data and copyright notices and a disclaimer at 600-1800, then the opening from about 4200 and its title by 5400 (run to 7200 frames) |
 | BlazBlue - Calamity Trigger | ULUS10519 | 330 | menu | menu | menu | name entry |
 | BlazBlue - Continuum Shift II | ULUS10579 | 412 | menu | menu | menu | name entry |
 | Blitz - Overtime | ULUS10200 | 56 | black | black | menu | title screen (black from 1200 before: its logo movies never ended) |
@@ -375,7 +386,7 @@ and now, and what the last frames showed or why a game stops.
 | Disney-Pixar Cars 2 | UCUS98766 | 304 | menu | menu | menu | memory stick notice |
 | Dissidia 012 - Duodecim Final Fantasy | ULUS10566 | 220 | black | black | menu | "Create New Data" (Sony's LIBSUPPREACC.PRX runs since part 62) |
 | Dissidia Final Fantasy | ULUS10437 | 253 | menu | menu | menu | nickname entry (Sony's LIBSUPPREACC.PRX, whose scesupPreAcc 86debd66 it calls, runs since part 62) |
-| Dragon Ball Z - Tenkaichi Tag Team | ULUS10537 | 800 | black | black | black | autosave notice at 300 and 1200, then black after Cross: it opens a PGD-encrypted file (disc0:/sce_lbn0xe98b_size0x4A0), gives its key and, refused, tries again for good (part 55: sceKernelExtendThreadStack is here; part 58: scePowerCheckWlanCoexistenceClock too) |
+| Dragon Ball Z - Tenkaichi Tag Team | ULUS10537 | 800 | black | black | menu | its title (Press START) at 3600, after the autosave notice at 300 and 1200: its PGD data decrypts (the final run) |
 | Dragonball Z Shin Budokai | ULUS10081 | 156 | menu | menu | menu | title, press start |
 | Dragonball Z Shin Budokai - Another Road | ULUS10234 | 98 | movie | movie | movie | intro movie |
 | Driver 76 | ULUS10235 | 142 | black | menu | menu | memory stick notice |
@@ -396,7 +407,7 @@ and now, and what the last frames showed or why a game stops.
 | Gitaroo Man Lives! | ULUS10207 | 516 | black | movie | movie | intro |
 | God Eater 2 [English v2.0 RedArtz] | NPJH50832 | 442 | black | black | menu | the fan translation's notice that its DLC file (ms0:/PSP/GAME/NPJH50832/SYSTEM_UPDATE.EDAT, the patch's, not on the stick) is missing (part 55: thread-local storage pools and sceKernelTryLockLwMutex_600 were missing before) |
 | God of War - Chains of Olympus | UCUS98653 | 11 | timeout | timeout | menu | main menu by frame 1200, its difficulty menu at 3600 (part 64: its loop draws its scene as fast as the GE lets it, and the GE takes time now; part 61's block transfers before) |
-| God of War - Ghost of Sparta | UCUS98737 | 9 | timeout | timeout | black | black throughout: it opens a PGD-encrypted file 3,000 times a frame, gives its key and, refused, tries again for good; frame 60 in 900 s in part 59's run, before part 62 read each folder of the disc once |
+| God of War - Ghost of Sparta | UCUS98737 | 9 | timeout | timeout | menu | Ready At Dawn's logo, then its difficulty menu at 3600 (the Cross at 1800): its PGD data decrypts (#206); 5.6 frames a second in the final run |
 | Gradius Collection | ULUS10103 | 432 | loading | menu | menu | title, press start |
 | Gran Turismo | UCUS98632 | 217 | menu | menu | menu | main menu |
 | Grand Knights History | ULJS00394 | 686 | menu | menu | menu | "No saves detected" prompt |
@@ -471,7 +482,7 @@ and now, and what the last frames showed or why a game stops.
 | MX vs. ATV - On the Edge | ULUS10071 | 162 | loading | loading | menu | THQ and Tantalus logos, then "Press START button to begin" (part 59: sceIoDread's short names laid out by its SDK) |
 | MX vs. ATV Reflex | ULUS10429 | 236 | loading | black | movie | publisher logos (a blank white screen at 3600 before) |
 | MX vs. ATV Untamed | ULUS10330 | 178 | black | black | menu | title, PRESS START (black after its logo before: its movie never ended) |
-| Naruto Shippuden Ultimate Ninja Impact | ULUS10582 | 1226 | black | black | black | black throughout: its data is PGD-encrypted, refused and tried again for good (part 55's trace) |
+| Naruto Shippuden Ultimate Ninja Impact | ULUS10582 | 1226 | black | black | menu | "No Options data found", then "Failed to load Options data. OK to proceed?" at 3600: its PGD data decrypts (#206), and it no longer runs what it read undecrypted |
 | Need for Speed - Carbon - Own the City | ULUS10114 | 63 | menu | menu | movie | notice, then its title, Press START button, from frame 900, and its intro after the run's Cross (part 59: sceIoDread's short names laid out by its SDK; it had sat on its notice at 12 fps) |
 | Need for Speed - Most Wanted - 5-1-0 | ULUS10036 | 19 | black | black | menu | title art, its safe driving notice and intro movie (on Software, with a frame every 300), then its title, "Press START button", from 2100, on all three renderers (part 57: the GE stopped its frame list at a RET with no CALL before, and its main thread waited in sceGeDrawSync for good) |
 | Need for Speed - ProStreet | ULUS10331 | 52 | menu | hang | menu | notice, EA logo and title, then its main menu after Cross (part 59: sceIoDread had written the newer layout over its stack, and it returned to address 0) |
@@ -507,7 +518,7 @@ and now, and what the last frames showed or why a game stops.
 | Sega Rally Revo | ULUS10311 | 129 | black | black | menu | autosave notice, then the title (an assert at its 4800-packet ring before) |
 | Sheperds Crossing | ULUS10499 | 86 | black | menu | menu | title, press start |
 | Shin Megami Tensei - Persona 3 Portable | ULUS10512 | 755 | movie | loading | menu | logo, intro and title, PRESS ANY BUTTON (2100 to 3000), then its attract loop starts over: a loading screen at 3600 (judged again in part 55; scesupPreAcc 86debd66, a function of Sony's LIBSUPPREACC.PRX, which the game loads, runs since part 62) |
-| Shining Blade [gugule] | NPJH50530 | 526 | black | black | black | black throughout: its CRI file system opens PSP_GAME/INSDIR/DATA.BIN, PGD-encrypted, gives its key and, refused, tries again for good (part 55's trace) |
+| Shining Blade [gugule] | NPJH50530 | 526 | black | black | menu | its autosave notice at 1200, "There is no save data." at 3600: DATA.BIN decrypts (#206) |
 | Shining Hearts [English MT v1.2] | NPJH50342 | 302 | menu | menu | menu | system data prompt |
 | Shining Hearts [English] | NPJH50342 | 314 | menu | menu | menu | system data prompt |
 | Shinobido - Tales of the Ninja [Europe] [Undub 2021-06-28] | UCES00421 | 269 | menu | menu | menu | title |
@@ -569,7 +580,7 @@ and now, and what the last frames showed or why a game stops.
 | Valhalla Knights | ULUS10230 | 373 | menu | black | movie | autosave notice, XSEED and Marvelous logos, then its intro (part 59: a file holds one asynchronous result at a time; its seek, made again over the first's result not taken, had been under way again at each poll, for good) |
 | Valhalla Knights 2 | ULUS10366 | 416 | menu | menu | movie | intro |
 | Valkyria Chronicles II | ULUS10515 | 278 | loading | menu | menu | autosave notices |
-| Valkyria Chronicles III [English v1.0.8] | ULJM05957 | 546 | black | black | black | black throughout: PSP_GAME/INSDIR/DATA.BIN is PGD-encrypted, refused and tried again for good, as Shining Blade's (part 55's trace) |
+| Valkyria Chronicles III [English v1.0.8] | ULJM05957 | 546 | black | black | menu | its autosave and Media Storage notices at 1200 and 3600: DATA.BIN decrypts (#206) |
 | Valkyrie Profile Lennth | ULUS10107 | 78 | loading | menu | menu | new game difficulty select |
 | Virtua Tennis - World Tour | ULUS10037 | 193 | menu | menu | menu | title at 1200, white at 3600 after Cross |
 | Virtua Tennis 3 | ULUS10246 | 341 | menu | menu | menu | title |

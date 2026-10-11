@@ -2,16 +2,16 @@
   <img src="docs/images/phobos-logo.png" width="502" alt="Phobos"/>
 </p>
 
-**Phobos** is a multi-system emulator for **Android**, forked from [ares](https://github.com/ares-emulator/ares) (which began development on October 14th, 2004 as a descendant of [higan](https://github.com/higan-emu/higan) and [bsnes](https://github.com/bsnes-emu/bsnes/)). It focuses on accuracy and preservation, with Android-specific engineering layered on top: ARM64 work on ares's N64 recompilers and its Vulkan/parallel-RDP renderer, custom Turnip/Adreno driver loading, a Jetpack Compose UI, and a **PlayStation Portable core of its own**, written for Phobos (experimental, in the nightly builds). The same cores also run in a desktop program for Linux, macOS and Windows.
+**Phobos** is a multi-system emulator for **Android**, forked from [ares](https://github.com/ares-emulator/ares) (which began development on October 14th, 2004 as a descendant of [higan](https://github.com/higan-emu/higan) and [bsnes](https://github.com/bsnes-emu/bsnes/)). It focuses on accuracy and preservation, with Android-specific engineering layered on top: ARM64 work on ares's N64 recompilers and its Vulkan/parallel-RDP renderer, custom Turnip/Adreno driver loading, a Jetpack Compose UI, and a **PlayStation Portable core of its own**, written for Phobos (new in 2.0, and marked experimental while it's polished). The same cores also run in a desktop program for Linux, macOS and Windows.
 
 > ares deliberately trades some speed for code clarity (state machines and bitmasks are avoided where possible). Phobos keeps that philosophy for the cores but adds performance-oriented backends around them, so the clarity remains while the hot paths run fast.
 
 ## Download
 
-- **[Releases](https://github.com/pwnedbygary/phobos/releases):** tagged versions (the latest is v1.1.0), and a nightly pre-release for every push to `master`. Settings → About updates the app from either channel.
+- **[Releases](https://github.com/pwnedbygary/phobos/releases):** tagged versions (the latest is v2.0.0, the first with the PlayStation Portable), and a nightly pre-release for every
+  push to `master`. Settings → About updates the app from either channel.
 - Each Android build comes in two flavors: **Modern** (ARMv8.2-A with FP16 and dot product instructions, which most devices from 2018 on have) and **Legacy** (any 64-bit ARM device). Both need Android 8.0 or newer.
-- The desktop program (a Linux AppImage, a universal macOS app and a Windows `Phobos.exe`) comes with tagged releases
-  from the next one on; until then, each CI run on `master` has it as an artifact.
+- Tagged releases also carry the desktop program: a Linux AppImage, a universal macOS app and a Windows `Phobos.exe`.
 
 ---
 
@@ -40,8 +40,8 @@
 | SuperGrafx | ✅ |
 | Neo Geo (MVS/AES) | ✅ Graphics, controls and audio (KOF2003 verified @59.2 FPS); per-title compat matrix → [docs/neo-geo-compatibility.md](docs/neo-geo-compatibility.md) |
 | Neo Geo CD | ✅ Boots, renders and has sound (Samurai Shodown verified), with the CDZ's double-speed drive and an optional faster loading speed |
-| **Experimental (in the nightly builds)** | |
-| PlayStation Portable | 🧪 Phobos's own core: an exact software renderer and two Vulkan renderers, ISO/CSO/CHD and more, sound, music and movies, save states. Of 266 retail games run in the test runner, 189 reach a menu or gameplay → [PlayStation Portable](#playstation-portable-experimental) |
+| **Experimental (new in 2.0)** | |
+| PlayStation Portable | 🧪 Phobos's own core: an exact software renderer and two Vulkan renderers, ISO/CSO/CHD and more, sound, music and movies, save states. Of 266 retail games run in the test runner, 194 reach a menu or gameplay and 71 play their opening movies → [PlayStation Portable](#playstation-portable-experimental) |
 | **Added, not yet tried with a game on-device** | |
 | Mega CD 32X, Super Game Boy, Arcade (Aleck64, SG-1000A) | Load paths, firmware slots and touch layouts are in |
 | LaserActive (Mega LD, PC Engine LD) | `.mmi` discs read straight from the SD card; both PAC BIOSes boot (60 FPS on the RP6), and Side in the pause menu turns the disc over |
@@ -54,8 +54,9 @@
 
 - **Super Mario 64 B3313 v1.0.2 Hotfix 3** stops at a black screen (its UAA2 build runs), and **F-Zero ZX Overdrive**
   runs with a black picture; both N64 hacks are open in the implementation plan.
-- **PlayStation Portable:** a few games still stop at a black screen (most of them read data the PSP decrypts as it
-  loads, PGD), and there's no network play. See [PlayStation Portable](#playstation-portable-experimental).
+- **PlayStation Portable:** every game in the 266-game test library gets past its loading screens, but that's a minute
+  of each, not a playthrough; God of War's games are still slow in the software renderer, and there's no network play.
+  See [PlayStation Portable](#playstation-portable-experimental).
 
 ---
 
@@ -64,14 +65,14 @@
 The PSP core is Phobos's own, written for Phobos in ares's style from the PSP's documentation, tests and
 measurements taken on a real PSP. No code comes from other PSP emulators: PPSSPP's code was read only as a reference
 for how the PSP behaves, and nothing was copied, translated or reworded from it ([docs/psp-core.md](docs/psp-core.md)
-records the work and its decisions, part by part). It ships in the nightly builds as an experimental core while it's
-polished for a tagged release.
+records the work and its decisions, part by part). It's new in Phobos 2.0, and the app marks it Experimental while it's
+polished.
 
 - **No firmware needed.** The game's code runs on the emulated Allegrex and its display lists on the emulated GE, but
   the PSP's operating system is emulated at a high level: the kernel's threads, memory, files and timers, the
   system's dialogs and saves, sound (sceAudio, sceSas), music and movies (sceAtrac3plus, sceMp3, sceMpeg, scePsmf),
-  sceJpeg, the system fonts and more are Phobos's own. Encrypted retail executables are decrypted with the published
-  keys. Games that print with the PSP's own fonts need them from your PSP: `tools/psp-flash0-dump` copies its flash0
+  sceJpeg, the system fonts and more are Phobos's own. Encrypted retail executables, and the data files games protect
+  with PGD, are decrypted as a PSP decrypts them. Games that print with the PSP's own fonts need them from your PSP: `tools/psp-flash0-dump` copies its flash0
   to the memory stick, and Settings → Firmware's PSP fonts row takes the font folder in.
 - **CPU:** the Allegrex (MIPS32 with its FPU and the VFPU) runs through a recompiler (sljit, ARM64 and x86-64) with
   an interpreter behind it, and loads and stores compile straight to RAM. The FPU's and VFPU's results, rounding and
@@ -96,8 +97,9 @@ polished for a tagged release.
   versioned, so states saved by earlier builds keep loading.
 - **Controls:** the PSP's own touch layout, and controllers mapped as on every other system.
 - **Compatibility:** in the [compatibility report](docs/psp-compatibility.md)'s runs (each of 266 retail games run
-  headless for a minute of PSP time), 189 reach a menu or gameplay and 71 play their opening movies. Speed is
-  measured on a Retroid Pocket 6 (Snapdragon 8 Gen 2) as the work goes; docs/psp-core.md has the tables.
+  headless for a minute of PSP time), 194 reach a menu or gameplay and 71 play their opening movies, and the last plays
+  its opening a few seconds later; none stops at a missing system function. Speed is measured on a Retroid Pocket 6
+  (Snapdragon 8 Gen 2) as the work goes; docs/psp-core.md has the tables.
 - **Tested in CI:** the Allegrex's instructions, the kernel's functions, the GE against the PSP's measurements, save
   states, and the Vulkan renderer (on Mesa's software Vulkan driver) run on every change to the core
   (`tests/allegrex`, `tests/psp`).
@@ -184,7 +186,7 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 - GitHub Actions builds **release-only** APKs (legacy + modern flavors) on every commit. A version tag (`v1.2.3`) publishes a GitHub Release, and every push to `master` publishes a nightly pre-release; both carry `update.json` for the in-app updater (Settings → About), which installs the newer build of the installed flavor through Android's installer. Debug builds are never published.
 - The desktop program is built for Linux (AppImage + zsync), Windows and macOS for every pull request and on `master`, and attached to tagged releases.
 - The PSP core's tests (the Allegrex CPU tests, and the PSP system tests with the Vulkan renderer's on Mesa's software driver) run on every change to it.
-- Every build is numbered from git history, locally and on CI alike: version code 100000 + the commit count, version name the tag on a tagged commit and `<tag>-<commits since>-g<hash>` otherwise.
+- Every build is numbered from git history, locally and on CI alike: version code 200000 + the commit count (100000 + it before 2.0), version name the tag on a tagged commit and `<tag>-<commits since>-g<hash>` otherwise.
 
 ---
 

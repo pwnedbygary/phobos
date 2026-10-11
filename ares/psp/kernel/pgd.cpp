@@ -80,6 +80,16 @@ static auto counterBlock(const Block& base, u32 n) -> Block {
   return block;
 }
 
+//The version key recovered from the header's 0x70 MAC (amctrl's bbmac_getkey). That MAC is the BBMac over the first
+//0x70 bytes with the version key XORed in and encrypted once more, so the same BBMac run with no key, put against
+//the stored MAC undone, gives the version key back. Possible only because the key enters as one XOR and one AES.
+static auto versionKeyFromMac(const u8* file, const Block& storedMac) -> Block {
+  Block key, mac = bbmac(file, 0x70, nullptr), encrypted = storedMac;
+  AES128{Keys::kirk7[0x38]}.decrypt(encrypted.data());  //undo the MAC's last encrypt
+  for(u32 n = 0; n < 16; n++) key[n] = u8(mac[n] ^ encrypted[n]);
+  return key;
+}
+
 }
 
 //The data key XORed with the version key, one BBCipher key, is how both the descriptor and the data are keyed.
@@ -93,27 +103,24 @@ auto Pgd::decryptData(u8* data, u32 offset, u32 size, const u8 dataKey[16], cons
   if(size == 0) return;
   auto base = cipherBase(bbcipherKey(dataKey, versionKey).data());
   AES128 k63{Keys::kirk7[0x63]};
-  //BBCipher is one keystream K over the whole data region: K(0)=0, and K(s)=AES_0x63(counter(base,s)) XOR K(s-1). The
-  //data block at region index b uses K(b+1). The block just before the data starts is region index offset/16, so its
-  //keystream K(offset/16) seeds the chain; the piece is then taken from that stream, at its place within the block.
+  //BBCipher builds one keystream over the whole data region out of the counter blocks: each is CBC-decrypted with
+  //KIRK's key 0x63, and KIRK's cipher-block-chaining chains on the INPUT block, not on the keystream it produces.
+  //So K(s) = AES_0x63(counter(base,s)) XOR counter(base,s-1), counting counter(base,0) as 0. The data block at
+  //region index b uses K(b+1). The block the data starts in is region index offset/16, so the keystream for it
+  //chains on counter(base, offset/16); the piece is taken from there, at its place within the block.
   u32 firstBlock = offset / 16;
-  Block previous = Block{};  //K(0)
-  for(u32 s = 1; s <= firstBlock; s++) {  //K(1)..K(offset/16): the chain up to the block before the data
-    Block c = counterBlock(base, s);
-    k63.decrypt(c.data());
-    for(u32 n = 0; n < 16; n++) c[n] ^= previous[n];
-    previous = c;
-  }
+  Block previous = firstBlock ? counterBlock(base, firstBlock) : Block{};  //counter(base,0)
   u32 at = 0, s = firstBlock, within = offset % 16;
   while(at < size) {
-    Block current = counterBlock(base, s + 1);  //K(s+1) for the data block at region index s
-    k63.decrypt(current.data());
-    for(u32 n = 0; n < 16; n++) current[n] ^= previous[n];
+    Block input = counterBlock(base, s + 1);  //the counter for the data block at region index s
+    Block stream = input;
+    k63.decrypt(stream.data());
+    for(u32 n = 0; n < 16; n++) stream[n] ^= previous[n];
     u32 take = size - at < 16 ? size - at : 16;
     u32 shift = at ? 0 : within;  //the first block is entered partway; the rest from its start
     if(take > 16 - shift) take = 16 - shift;  //stay within the first block
-    for(u32 n = 0; n < take; n++) data[at + n] ^= current[n + shift];
-    previous = current;
+    for(u32 n = 0; n < take; n++) data[at + n] ^= stream[n + shift];
+    previous = input;  //the next block chains on this counter, not on the keystream
     s++;
     at += take;
   }
@@ -132,14 +139,20 @@ auto Pgd::descriptor(const u8* file, u64 size, const u8 versionKey[16], Descript
   };
 
   //The header's two MACs: the file with the DNAS key over its first 0x80 bytes, and with the version key over its
-  //first 0x70. Either failing says the header isn't what its keys say, or the key is wrong.
+  //first 0x70. The first failing says the header isn't what its keys say. For the second, a game that hands over a key
+  //which doesn't match this file's MAC (a key meant for another of its files, say) isn't stuck: the key comes back
+  //out of the MAC itself, so a header that checks against the recovered key still unlocks. Which key was used is
+  //reported, because the data has to be decrypted with the same one.
   if(bbmac(file, 0x80, kDnasKey) != storedMac(0x80)) return "a PGD file whose header doesn't match its DNAS MAC";
-  if(bbmac(file, 0x70, versionKey) != storedMac(0x70)) return "a PGD file whose header doesn't match its version MAC";
+  Block key;
+  memcpy(key.data(), versionKey, 16);
+  if(bbmac(file, 0x70, versionKey) != storedMac(0x70)) key = versionKeyFromMac(file, storedMac(0x70));
+  memcpy(out.versionKey, key.data(), 16);
 
   //The descriptor (0x30 bytes at 0x30), BBCiphered with the 0x10 key XORed with the version key.
   u8 descriptor[0x30];
   memcpy(descriptor, file + 0x30, sizeof(descriptor));
-  decryptData(descriptor, 0, sizeof(descriptor), file + 0x10, versionKey);
+  decryptData(descriptor, 0, sizeof(descriptor), file + 0x10, key.data());
 
   memcpy(out.dataKey, descriptor, 16);
   out.dataSize = le32(descriptor + 0x14);

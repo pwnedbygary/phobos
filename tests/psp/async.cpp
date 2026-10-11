@@ -8,6 +8,7 @@
 //state. Programs run on both engines.
 #include "kernel-machine.hpp"
 #include "disc-image.hpp"
+#include "pgd.hpp"
 
 namespace allegrex_test::psp {
 
@@ -675,11 +676,54 @@ static auto syncWaitState() -> void {
   }
 }
 
+//A PGD file's asynchronous reads decrypt as synchronous ones do (async.cpp's asyncDone decrypts what the request
+//moved, as readFile does): the data whole, straddling its end, and past it.
+static auto pgdAsyncReads() -> void {
+  KernelMachine m;
+  std::string textPlain = text(3000);
+  std::vector<u8> plain(textPlain.begin(), textPlain.end());
+  u8 key[16];
+  for(u32 at = 0; at < 16; at++) key[at] = u8(0x40 + at);
+  psp_pgd::Options options;
+  options.keyIndex = 1;  //as the games' headers say, MAC type 1
+  options.versionKey = key;
+  auto pgd = psp_pgd::build(plain, options);
+  CHECK(pgd.empty(), false);
+  auto image = disc_image::makeIso({{"PSP_GAME/INSDIR/DATA.BIN", pgd}});
+  m.kernel.disc = discFrom(image.bytes);
+  constexpr u32 Key = 0x0894'1000;
+  for(u32 at = 0; at < 16; at++) m.system.memory.write(1, Key + at, 0x40 + at);  //the key
+  u32 file = m.call("sceIoOpen", {m.string("disc0:/PSP_GAME/INSDIR/DATA.BIN"), 0x4000'4001, 0});
+  CHECK(file >= 3 && file < 0x8000'0000, true);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, Key, 16, 0, 0}), 0);
+  auto finished = [&]() {
+    advance(m, m.kernel.files[file].asyncDoneAt);
+    CHECK(m.call("sceIoPollAsync", {file, R}), 0);
+    return result64(m, R);
+  };
+  CHECK(m.call("sceIoReadAsync", {file, Buffer, 3000}), 0);  //whole: the data, as the sync read gives
+  CHECK(finished(), 3000);
+  std::vector<u8> read(3000);
+  m.system.memory.copyOut(read.data(), Buffer, 3000);
+  CHECK(read == plain, true);
+  CHECK(m.call("sceIoLseek32", {file, 2900, 0}), 2900);
+  CHECK(m.call("sceIoReadAsync", {file, Buffer, 4000}), 0);  //straddling the end: only the data
+  CHECK(finished(), 100);
+  std::vector<u8> tail(100);
+  m.system.memory.copyOut(tail.data(), Buffer, 100);
+  CHECK(tail == std::vector<u8>(plain.begin() + 2900, plain.end()), true);
+  CHECK(m.call("sceIoReadAsync", {file, Buffer, 4000}), 0);  //at the end: none, in a request's time
+  CHECK(finished(), 0);
+  m.call("sceIoClose", {file});
+  CHECK(m.notes.size(), 0);
+}
+
 auto asyncTests() -> Tests {
   return {{"async files called directly", asyncCalls}, {"async files from a damaged image", asyncDamaged},
           {"async files waited for", asyncWaits},
           {"async files two waiters", asyncTwoWaiters}, {"async files callback takes the result", asyncCallbackTakes},
           {"async files ioctl timing", asyncIoctlTiming}, {"async files state", asyncState},
+          {"async PGD reads", pgdAsyncReads},
           {"files synchronous reads wait", syncWaits}, {"files synchronous wait state", syncWaitState}};
 }
 

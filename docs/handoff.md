@@ -66,6 +66,50 @@ or translated, JPCSP's not read. Save states unchanged (25).
   memory, not the GPU's depth.
 - Scratch: `~/phobos-work/scratch/speed8`; nothing left on the RP6.
 
+## Version codes for 2.x — 2026-10-11
+
+Branch `cursor/version-base-2x-2b67`, on `master` after the PSP stack merged (#208, #210), at the owner's request before
+the v2.0.0 tag. The version code is now 200000 + the commit count (`android/app/build.gradle.kts`), so v2.0.0 is
+205,18x: the PSP work's test builds on the owner's RP6 went up to 106407, past what 100000 + the count gives 2.0
+(105,18x), and Android refuses a lower code over a higher one. Every earlier build, release or nightly, is below 200000,
+so nobody's update becomes a downgrade; nightly tags become `nightly-2xxxxx` and the newest three are kept as before.
+README.md and the implementation plan's updater row say so.
+
+## PSP: the final library run before the merge into master — 2026-10-11
+
+Branch `cursor/psp-final-numbers-2b67`, on #207. Docs only. The whole library (266 games, the report's run: 3600
+frames, three at a time, software renderer at 7 threads) on `be543afba`, #206 on the stack's top (#207 adds only the
+Library's PSP art): menu or gameplay 194 (189 in part 64's run), movie 71, black 1, stuck loading 0, timed out 0, no
+missing functions. The six black games all read PGD data, which now decrypts (#206): five reach a title, menu or prompt,
+and Black Wolves Saga is loading its opening at 3600 (it plays from about 4200). Eighteen other games differ from part
+64's run only by a few frames (fades, animation steps, movies further on); none shows less.
+- **Docs**: docs/psp-compatibility.md (a Final column, the six rows, the run's paragraph); README.md (the PSP's row,
+  its compatibility line, the known issues, PGD-protected data decrypted).
+- **Release**: the owner merges the stack through #208 and tags v2.0.0 right after, so the README speaks of 2.0 (the
+  latest release, the desktop packages with it, the PSP new in 2.0 and marked Experimental in the app) rather than of
+  the nightly builds.
+- Scratch: `~/phobos-work/scratch/final` (lib.sh, `lib-top/` the run, `cmp-top.tsv` against
+  `~/phobos-work/scratch/gow-sw/lib/fix`, `diff-sheet-*.png`).
+
+## Library: the PlayStation Portable's own console art — 2026-10-11
+
+Branch `cursor/psp-console-art-2b67`, begun on #205's `cursor/psp-speed7-2b67` (`671072d6f`), so it ships with the
+Experimental PSP core. The Systematic pack (BAXY Square's, MIT) has no PSP, so `systematicAssetFor`
+(`ui/LibraryScreen.kt`) gave the PSP's tile the PlayStation's console.
+- **The art**: `assets/platforms/psp.svg`, drawn for Phobos in the set's style (LICENSE says so after the Systematic
+  notice): a PSP-1000 from the front, with its wide pill body and 16:9 screen, the D-pad's four buttons with the nub
+  below, the face buttons' triangle, circle, cross and square, the row under the screen, L and R along the top corners,
+  and the speakers and power light where the PSP-1000's manual puts them. It uses the set's 256 grid shown at 4/3, its
+  greys and its 8-unit white halo at half opacity; it's 330.667 x 165.333, slimmer than the GBA's 186.667, as a PSP is.
+  The D-pad, nub and marks are lighter than mid-grey, since the recolor takes darker greys below a dark theme's tile,
+  where the Game Gear's controls vanish into its body.
+- **Code**: the `psp` -> `psx` alias is gone and `psp` is in `SYSTEMATIC_ASSETS`; nothing else gave the PSP the
+  PlayStation's art (the Phobos, Pixel and Manga packs keep their own `psp` glyph).
+- **Checked**: `:app:compileModernReleaseKotlin` and `:app:testModernDebugUnitTest` (273 tests, none failing;
+  `ConsoleArtTest` recolors the new SVG in every theme). Previews outside the repo drew it beside the GBA's, Game Gear's
+  and PlayStation's art at 120-315 px, in grey and through the app's own `ConsoleArtPalette` mapping for all 39 theme
+  variants. Not yet seen on a device.
+
 ## PSP: God of War faster in every renderer — a move's stencil in one draw, the GE's PRIMs cheaper, logic operations in fours — 2026-10-11
 
 Branch `cursor/psp-speed7-2b67`, begun on #200's `cursor/psp-gow-vk-2b67` with #201's `cursor/psp-measure6-2b67`
