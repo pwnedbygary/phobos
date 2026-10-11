@@ -1,13 +1,15 @@
 //tools/psp-measure's program (see its main.c) in Phobos's core, driven through its menu as a person would. With
 //PSP_TEST_PROGRAMS holding pspmeasure.elf, its GE tests must run to the end and write every file, start afresh (the
 //first files kept in results-1), run again and draw the same, and skip what's done on a third run; the GE's rounds
-//3, 4 and 5 and the FPU probes must write theirs (round 4's stall check getting past a list the GE doesn't finish,
-//its counts running again over what the program before left of them, not over what this one leaves); then it must
-//leave. With PSP_GE_RESULTS set to the results folder (results/ge) a real PSP (or another emulator) wrote, each file
-//is compared with that folder's, and what differs is listed rather than failed: finding it is what the program is
-//for. PSP_GE_OURS, when set, is a folder this core's files are copied to, for a closer look.
+//3 to 6 and the FPU probes must write theirs (round 4's stall check getting past a list the GE doesn't finish, its
+//counts running again over what the program before left of them, not over what this one leaves; round 6's timing
+//records complete, every run finished); then it must leave. With PSP_GE_RESULTS set to the results folder
+//(results/ge) a real PSP (or another emulator) wrote, each file is compared with that folder's, and what differs is
+//listed rather than failed: finding it is what the program is for. PSP_GE_OURS, when set, is a folder this core's
+//files are copied to, for a closer look.
 #include "kernel-machine.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <functional>
@@ -76,6 +78,54 @@ static const MeasureFile measureFiles5[] = {
   {"persp-divide", 256, 256}, {"persp-w3", 256, 256}, {"persp-floor", 256, 256}, {"persp-sprite", 256, 256},
 };
 
+//Round 6's pictures (part 66: lighting's products and sweeps, the reciprocal read off texels, texture coordinates far
+//past the texture, PATCH_CULL_ENABLE, patch divisions past 64 along v).
+static const MeasureFile measureFiles6[] = {
+  {"light-products-0", 256, 256}, {"light-products-1", 256, 256}, {"light-products-2", 256, 256},
+  {"light-products-3", 256, 256}, {"light-sweep-0", 256, 256}, {"light-sweep-1", 256, 256},
+  {"light-sweep-2", 256, 256}, {"light-sweep-3", 256, 256}, {"light-sweep-4", 256, 256}, {"light-sweep-5", 256, 256},
+  {"light-sweep-6", 256, 256}, {"light-sweep-7", 256, 256}, {"light-sum", 256, 256}, {"recip-pixels", 256, 256},
+  {"recip-projected", 256, 256}, {"recip-vertex-0", 256, 256}, {"recip-vertex-1", 256, 256},
+  {"recip-vertex-2", 256, 256}, {"recip-sprites", 256, 256}, {"texel-range", 256, 256}, {"patch-cull", 256, 256},
+  {"patch-cull-edges", 256, 256},
+  {"curves-count-v", 256, 256}, {"curves-count-v-65", 256, 256}, {"curves-count-v-100", 256, 256},
+  {"curves-count-v-128", 256, 256}, {"curves-count-v-200", 256, 256}, {"curves-count-v-255", 256, 256},
+};
+
+//Round 6's timing tests (tools/psp-measure/ge.c's tables): how many records (each case's sizes, at two clock
+//settings), runs to a record, times to a run. A record is the case, the size, the clocks (CPU MHz << 16 | bus MHz),
+//repeats | values << 16, then the runs' times in microseconds (0xffffffff: a run not finished).
+struct TimingFile { const char* name; u32 records, repeats, values; };
+static const TimingFile timingFiles6[] = {
+  {"time-commands", 50, 16, 2}, {"time-primitives", 186, 16, 2}, {"time-fill", 264, 8, 2}, {"time-sizes", 108, 8, 2},
+  {"time-transfers", 68, 8, 2}, {"time-texcache", 224, 8, 2}, {"time-signals", 6, 16, 3},
+};
+struct TimingRecord { u32 test, size, clocks, repeats, values; std::vector<u32> times; };
+//The records, or none if the words don't make whole records.
+static auto timingRecords(const std::vector<u32>& words) -> std::vector<TimingRecord> {
+  std::vector<TimingRecord> records;
+  for(size_t at = 0; at < words.size();) {
+    if(words.size() - at < 4) return {};
+    TimingRecord record{words[at], words[at + 1], words[at + 2], words[at + 3] & 0xffff, words[at + 3] >> 16, {}};
+    size_t count = size_t(record.repeats) * record.values;
+    if(words.size() - at - 4 < count) return {};
+    record.times.assign(words.begin() + at + 4, words.begin() + at + 4 + count);
+    records.push_back(std::move(record));
+    at += 4 + count;
+  }
+  return records;
+}
+//A record's middle finish time (its runs' first times), unfinished runs counting as the longest.
+static auto medianFinish(const TimingRecord& record) -> u32 {
+  std::vector<u32> finishes;
+  for(u32 run = 0; run < record.repeats; run++) finishes.push_back(record.times[run * record.values]);
+  if(finishes.empty()) return 0;
+  std::sort(finishes.begin(), finishes.end());
+  return finishes[finishes.size() / 2];
+}
+//ge-statuses's words: part 1's 2 + 1024 * 3 (its looks), part 2's 4 + 128 * 2.
+static constexpr u32 StatusLooks = 1024, StatusHeld = 128, StatusWords = 2 + StatusLooks * 3 + 4 + StatusHeld * 2;
+
 static auto readWords(const std::filesystem::path& path) -> std::vector<u32> {
   std::ifstream file(path, std::ios::binary);
   std::vector<u8> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
@@ -123,6 +173,91 @@ static auto describe(const MeasureFile& file, const std::vector<u32>& ours, cons
                    examples.c_str());
 }
 
+//How a timing file differs from the reference's: for each case at each clock setting, the middle finish time at each
+//size here and there, and the time a unit of size (a straight line through them, least squares).
+static auto describeTimes(const char* name, const std::vector<u32>& ours, const std::vector<u32>& theirs) -> void {
+  auto here = timingRecords(ours), there = timingRecords(theirs);
+  if(here.empty() || there.empty()) {
+    std::printf("  %-24s %zu records here, %zu there (not whole records)\n", name, here.size(), there.size());
+    return;
+  }
+  auto slope = [](const std::vector<std::pair<u32, u32>>& points) {
+    double n = points.size(), sx = 0, sy = 0, sxx = 0, sxy = 0;
+    for(auto [x, y] : points) sx += x, sy += y, sxx += double(x) * x, sxy += double(x) * y;
+    double d = n * sxx - sx * sx;
+    return d > 0 ? (n * sxy - sx * sy) / d : 0.0;
+  };
+  for(u32 setting = 0; setting < 2; setting++) {
+    std::map<u32, std::vector<std::pair<u32, u32>>> mine, others;
+    u32 clocksHere = 0, clocksThere = 0;
+    for(u32 n = 0; n < here.size(); n++) {
+      if(n * 2 / here.size() != setting) continue;
+      mine[here[n].test].push_back({here[n].size, medianFinish(here[n])}), clocksHere = here[n].clocks;
+    }
+    for(u32 n = 0; n < there.size(); n++) {
+      if(n * 2 / there.size() != setting) continue;
+      others[there[n].test].push_back({there[n].size, medianFinish(there[n])}), clocksThere = there[n].clocks;
+    }
+    std::printf("  %-24s at %u/%u MHz here, %u/%u there: case, middle times by size (us), a unit's\n", name,
+                clocksHere >> 16, clocksHere & 0xffff, clocksThere >> 16, clocksThere & 0xffff);
+    for(auto& [test, points] : mine) {
+      std::string line;
+      for(auto [size, time] : points) line += " " + std::to_string(time);
+      line += " here, ";
+      for(auto [size, time] : others[test]) line += std::to_string(time) + " ";
+      std::printf("    %2u:%sthere; %.3f here, %.3f there\n", test, line.c_str(), slope(points),
+                  slope(others[test]));
+    }
+  }
+}
+
+//How ge-statuses differs: each part's statuses in the order they came (sceGeListSync/sceGeDrawSync in part 1; an
+//error code in hex), with when each was first seen (us).
+static auto describeStatuses(const std::vector<u32>& ours, const std::vector<u32>& theirs) -> void {
+  auto summary = [](const std::vector<u32>& words) {
+    auto number = [](u32 word) {  //an error code (below 0) in hex
+      char text[16];
+      std::snprintf(text, sizeof(text), s32(word) < 0 ? "0x%08x" : "%u", word);
+      return std::string(text);
+    };
+    std::string text = "part 1:";
+    u32 looks = std::min(words[0], StatusLooks);
+    for(u32 n = 0; n < looks; n++) {
+      if(n && words[3 + n * 3] == words[n * 3] && words[4 + n * 3] == words[1 + n * 3]) continue;
+      text += " " + std::to_string(words[2 + n * 3]) + "us:" + number(words[3 + n * 3]) + "/" +
+              number(words[4 + n * 3]);
+    }
+    text += ", finished " + number(words[1]) + "us; part 2:";
+    const u32* part2 = words.data() + 2 + StatusLooks * 3;
+    looks = std::min(part2[0], StatusHeld);
+    for(u32 n = 0; n < looks; n++) {
+      if(n && part2[5 + n * 2] == part2[3 + n * 2]) continue;
+      text += " " + std::to_string(part2[4 + n * 2]) + "us:" + number(part2[5 + n * 2]);
+    }
+    text += ", held off " + std::to_string(part2[1]) + "us, then " + number(part2[2]) + ", done " +
+            std::to_string(part2[3]) + "us";
+    return text;
+  };
+  if(ours.size() != StatusWords || theirs.size() != StatusWords) {
+    std::printf("  %-24s %zu words here, %zu there\n", "ge-statuses", ours.size(), theirs.size());
+    return;
+  }
+  std::printf("  %-24s here %s\n  %-24s there %s\n", "ge-statuses", summary(ours).c_str(), "", summary(theirs).c_str());
+}
+
+//The GE's reciprocal as the core takes it (docs/psp-core.md, part 60: 128 chords, two starts two counts low), for
+//q in [0.5, 1) given as its 13 or 14 fraction bits: the chord's 16-bit value (q's reciprocal in units of 2^-15).
+static auto chordValue(u32 fraction, u32 bits) -> u32 {
+  s32 starts[129];
+  for(u32 s = 0; s < 128; s++) starts[s] = s32((16'777'216 + (128 + s) / 2) / (128 + s));
+  starts[128] = 65536;
+  u32 chord = fraction >> (bits - 7), at = fraction << (15 - bits) & 255;
+  s32 run = starts[chord + 1] - starts[chord], whole = run >> 2, quarters = run & 3;
+  s32 slope = whole + (quarters == 3 || (quarters == 2 && (whole & 1)));
+  s32 start = starts[chord] - (chord == 5 || chord == 58 ? 2 : 0);
+  return u32((64 * start + 63 + slope * s32(at)) >> 7);
+}
+
 //The FPU probes' files (tools/psp-measure/vfpu.c), 16 bytes each: a, b, the result, FCSR after.
 static const char* probeFiles[] = {
   "probe-div-zero", "probe-mul-big", "probe-sqrt-negative", "probe-add-infinity", "probe-add-qnan", "probe-add-snan",
@@ -132,8 +267,8 @@ static const char* probeFiles[] = {
 
 //The menu's lines (tools/psp-measure/main.c), counted from the top, and the buttons that move through it.
 enum : u32 {
-  GeRound5Line = 0, GeRound4Line = 1, GeRound3Line = 3, ProbesLine = 4, GeRound2Line = 6, AfreshLine = 8,
-  LeaveLine = 9
+  GeRound6Line = 0, GeRound5Line = 1, GeRound4Line = 2, GeRound3Line = 4, ProbesLine = 5, GeRound2Line = 7,
+  AfreshLine = 9, LeaveLine = 10
 };
 enum : u32 { Up = 0x0010, Down = 0x0040, Cross = 0x4000 };
 
@@ -277,8 +412,15 @@ static auto pspMeasure() -> void {
   CHECK(waitFor(m, 3000, exists(results / "persp-sprite.bin")), true);
   press(m, Cross);
   onlyStallCheckStalled();
+  //the GE's round 6, its patch divisions past 64 along v last (the core draws nothing of such a surface, so none
+  //stalls here)
+  move(m, GeRound5Line, GeRound6Line);
+  press(m, Cross);
+  CHECK(waitFor(m, 20000, exists(results / "curves-count-v-255.bin")), true);
+  press(m, Cross);
+  onlyStallCheckStalled();
   //leaving
-  move(m, GeRound5Line, LeaveLine);
+  move(m, GeRound6Line, LeaveLine);
   press(m, Cross);
   CHECK(waitFor(m, 100, [&] { return m.kernel.exited; }), true);
 
@@ -291,6 +433,7 @@ static auto pspMeasure() -> void {
   bool referenceRound3 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest3.txt");
   bool referenceRound4 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest4.txt");
   bool referenceRound5 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest5.txt");
+  bool referenceRound6 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest6.txt");
   auto look = [&](const MeasureFile& file, const std::vector<u32>& ours, bool expected) {
     std::string name = std::string(file.name) + ".bin";
     if(reference && std::filesystem::exists(std::filesystem::path(reference) / name)) {
@@ -327,6 +470,59 @@ static auto pspMeasure() -> void {
     look(file, ours, referenceRound5);
   }
   CHECK(std::filesystem::exists(results / "manifest5.txt"), true);
+  for(auto& file : measureFiles6) {
+    auto ours = readWords(results / (std::string(file.name) + ".bin"));
+    CHECK(ours.size(), file.width * file.height);
+    look(file, ours, referenceRound6);
+  }
+  //round 6's timing records: whole, as many as the program's tables give, the first half at the clocks the core
+  //starts at and the second at 333/166 MHz, every run finished (the core's GE doesn't stall), a SIGNAL's callback
+  //before the list's finish
+  for(auto& file : timingFiles6) {
+    std::string name = std::string(file.name) + ".bin";
+    auto ours = readWords(results / name);
+    CHECK(ours.size(), file.records * (4 + file.repeats * file.values));
+    auto records = timingRecords(ours);
+    CHECK(records.size(), file.records);
+    bool shaped = true, finished = true, signalled = true;
+    for(u32 n = 0; n < records.size(); n++) {
+      auto& record = records[n];
+      shaped &= record.repeats == file.repeats && record.values == file.values;
+      shaped &= record.clocks == (n < records.size() / 2 ? (222u << 16 | 111) : (333u << 16 | 166));
+      for(u32 run = 0; run < record.repeats; run++) {
+        u32 finish = record.times[run * record.values];
+        finished &= finish != 0xffff'ffff;
+        if(record.values == 3) signalled &= record.times[run * 3 + 2] <= finish;
+      }
+    }
+    CHECK(shaped, true);
+    CHECK(finished, true);
+    CHECK(signalled, true);
+    if(reference && std::filesystem::exists(std::filesystem::path(reference) / name)) {
+      describeTimes(file.name, ours, readWords(std::filesystem::path(reference) / name));
+    } else if(referenceRound6) {
+      std::printf("  %-24s not in the reference\n", file.name);
+    }
+    if(copy) std::filesystem::copy_file(results / name, std::filesystem::path(copy) / name,
+                                        std::filesystem::copy_options::overwrite_existing);
+  }
+  auto statuses = readWords(results / "ge-statuses.bin");
+  CHECK(statuses.size(), StatusWords);
+  if(statuses.size() == StatusWords) {
+    u32 part2 = 2 + StatusLooks * 3;
+    CHECK(statuses[0] > 0 && statuses[0] <= StatusLooks, true);       //part 1 looked
+    CHECK(statuses[1] != 0xffff'ffff, true);                           //and its finish callback came
+    CHECK(statuses[part2] > 0 && statuses[part2] <= StatusHeld, true);  //part 2 looked
+    CHECK(statuses[part2 + 3] != 0xffff'ffff, true);                   //and its list was done
+    if(reference && std::filesystem::exists(std::filesystem::path(reference) / "ge-statuses.bin")) {
+      describeStatuses(statuses, readWords(std::filesystem::path(reference) / "ge-statuses.bin"));
+    }
+  }
+  if(copy && std::filesystem::exists(results / "ge-statuses.bin")) {
+    std::filesystem::copy_file(results / "ge-statuses.bin", std::filesystem::path(copy) / "ge-statuses.bin",
+                               std::filesystem::copy_options::overwrite_existing);
+  }
+  CHECK(std::filesystem::exists(results / "manifest6.txt"), true);
   for(auto name : probeFiles) CHECK(readWords(vfpu / (std::string(name) + ".bin")).size(), 4);
 
   //what the files hold, from end to end: the sprite drawn top-left to bottom-right shows its 4x4 texture (texel n,
@@ -354,6 +550,58 @@ static auto pspMeasure() -> void {
     }
     CHECK(drawn, true);
     CHECK(alike, true);
+  }
+  //round 6's layouts read what they're meant to, in the core's own arithmetic: light-products-0, lit straight on
+  //(the share 256), is (2 light + 1)(2 material + 1) >> 10 in each channel, row y's light (y, 255 - y, y) on column x's
+  //material (x, x, 255 - x); recip-pixels' first case (w 1 to 2 along u, rows 0-31) and its last (the same along v,
+  //rows 224-255), and recip-projected's first (rows 0-63), show the chord's value's low 8 bits at the q each pixel's
+  //middle samples (pixels whose middle is on a strip's end left out), and recip-projected's rows 192-223 are
+  //recip-pixels' rows 0-31
+  auto products = readWords(results / "light-products-0.bin");
+  if(products.size() == 256 * 256) {
+    bool lit = true;
+    for(u32 y = 0; y < 256; y++) {
+      for(u32 x = 0; x < 256; x++) {
+        u32 light[3] = {y, 255 - y, y}, material[3] = {x, x, 255 - x};
+        for(u32 c = 0; c < 3; c++) {
+          lit &= (products[y * 256 + x] >> c * 8 & 0xff) == (2 * light[c] + 1) * (2 * material[c] + 1) >> 10;
+        }
+      }
+    }
+    CHECK(lit, true);
+  }
+  auto chords = readWords(results / "recip-pixels.bin");
+  if(chords.size() == 256 * 256) {
+    bool read = true;
+    for(u32 row : {0u, 224u}) {
+      for(u32 r = 0; r < 32; r++) {
+        s32 left = (r & 16 ? -256 * 16 : 0) + s32(r & 15) - 8;  //the strip's left end, in sixteenths
+        for(u32 x = 0; x < 256; x++) {
+          s32 middle = s32(x) * 16 + 8, q = 16384 - (middle - left);
+          if(middle <= left || q <= 8192) continue;
+          u32 expected = q == 16384 ? 0 : chordValue(u32(q - 8192), 13) & 0xff;
+          read &= (chords[(row + r) * 256 + x] >> (row ? 8 : 0) & 0xff) == expected;
+        }
+      }
+    }
+    CHECK(read, true);
+  }
+  auto projected = readWords(results / "recip-projected.bin");
+  if(projected.size() == 256 * 256) {
+    bool read = true;
+    for(u32 r = 0; r < 64; r++) {
+      s32 left = -256 * 16 * s32(r >> 4) + s32(r & 15) - 8;
+      for(u32 x = 0; x < 256; x++) {
+        s32 middle = s32(x) * 16 + 8, q = 32767 - (middle - left);
+        if(middle <= left || q < 16384) continue;
+        read &= (projected[r * 256 + x] & 0xff) == (chordValue(u32(q - 16384), 14) & 0xff);
+      }
+    }
+    CHECK(read, true);
+    //its rows 192-223 (the texture matrix's s 128 w and q 1, w 1 to 2) as recip-pixels' rows 0-31
+    if(chords.size() == 256 * 256) {
+      CHECK(std::equal(chords.begin(), chords.begin() + 32 * 256, projected.begin() + 192 * 256), true);
+    }
   }
   for(auto& note : m.notes) std::printf("  note: %s\n", note.c_str());
 }

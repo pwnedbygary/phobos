@@ -8332,3 +8332,196 @@ base's too.
   session.sh, sess.py; acc.sh and cmp.py; measure.sh, soft-all.sh; gcc11.sh; ci-lavapipe.sh, lavapipe in a container;
   gpu-tests, the GPU tests for Android). Nothing of it is left on the RP6 but the fonts folder beside the harness,
   which Peace Walker's scenes need.
+
+## Part 66: round 6 of tools/psp-measure — the GE's time, lighting's cosine, the reciprocal's chords, patches
+
+On branch `cursor/psp-measure6-2b67`, on top of #200's `cursor/psp-gow-vk-2b67` (`c86461ec6`). Only `tools/psp-measure`,
+`tests/psp/measure.cpp`, the rebuilt `tests/psp/programs/pspmeasure.elf` and docs; no core change. The task: round 6 of
+the measurement program for the owner's PSP, for what parts 60 and 64 left open, each test designed so that its results
+can pin a model rather than only show a difference. Clean room: no PPSSPP code was read for it, and JPCSP's wasn't.
+
+The menu's new first line, "Round 6: the GE's time, lighting, reciprocal, curves (about 7 MB)", runs 36 tests into
+`results/ge` (`manifest6.txt`, which also lists every timing case): 28 pictures (256x256, a 32-bit word a pixel), 7
+timing files and the driver's statuses. Every test is a results.c test as before (skipped once done, run once more after
+a stop, then given up on; a stall noted in `<test>.stalled` and the GE reset after 5 seconds). Four tests stall on
+purpose if v behaves as u did. On a PSP the round should take about two minutes.
+
+### The GE's drawing time (part 64's model)
+
+Part 64 owes each list `max(pixels / 4, primitives x 166/35)` bus clocks, Sony's peaks, and nothing for commands, culled
+primitives or block transfers. Seven timing tests give the PSP's own costs. Each times lists of known work, built once
+in a buffer (with GU_SEND, or word by word) and queued alone with `sceGeListEnQueue` and a callback of the program's
+own: the time from just before the list is queued to its finish callback, in microseconds (`sceKernelGetSystemTimeLow`,
+read in the callback), and to `sceGeListEnQueue`'s return. The program waits on a semaphore the finish callback signals,
+so nothing looks at the GE while it draws (waking every 2 ms to look at a flag the callback also sets, in case the
+firmware won't have a callback signal a semaphore), and the 5-second limit still applies (a stall is reset as
+`waitForGe` resets it). Every case runs at a few sizes (straight-line fits: the slope is a unit's cost, free of the
+fixed cost of queueing a list and taking its interrupt) and 8 or 16 times at each, every run's time recorded so the
+noise shows; first at 222 MHz with the bus at 111 (set, whatever custom firmware chose), then at 333 MHz with the bus at
+166, the clocks found put back after, each record carrying the CPU and bus clocks `scePowerGet*ClockFrequencyInt` gave
+back. Whether the times scale with the bus clock is the model's first assumption to check. A list `sceGeListEnQueue`
+refused counts as a stall (noted in `.stalled`, its run's second time the error).
+- `time-commands`: an empty list (FINISH, END); 1024 to 65536 NOPs, writes of a register (TEXTURE_ENV_COLOR), and
+  TEX_FLUSHes; world-matrix uploads (13 commands each); 256 to 16384 JUMPs to the next word, and CALLs to a RET. The
+  slopes are the GE's time a command (part 64: none), and JUMP and CALL show what restarting the list's fetch costs.
+- `time-primitives` (256, 1024 and 4096 primitives, about 2 pixels each): in through mode triangles, triangles covering
+  no pixel's middle, a strip and a fan (one vertex a triangle), sprites, lines, a line strip, points, textured
+  triangles, triangles through 16-bit indices; in 3D the same kinds and triangles with texture coordinates in
+  perspective, lit by one directional light or four point lights with their shine, skinned with 2 or 8 weights, morphed,
+  with their vertices in VRAM, culled as back faces, outside the scissor rectangle, past the near plane and cut by it;
+  Bezier patches cut 4x4 (and 16x16), and the same patches outside the scissor rectangle with PATCH_CULL_ENABLE off and
+  on. Strips against separate triangles give a vertex's cost apart from a triangle's; the culled, outside and cut cases
+  give what part 64 counts as nothing.
+- `time-fill` (layers of the target's 256x256 pixels, 1, 2 and 4): flat color into each frame buffer format; textures in
+  every format (8888, 5650, 5551, 4444, CLUT8, CLUT4, DXT1, DXT3, DXT5), swizzled or not, in RAM or VRAM, nearest or
+  bilinear, 1:1, magnified 4 times and shrunk 2 times, REPLACE and MODULATE; blending into 8888 and 5650; the depth test
+  passing and writing, failing, passing without writing; the alpha test passing and failing; the stencil test with INCR;
+  XOR; dithering; a pixel mask; 3D triangles flat, fogged, textured at w 1 and in perspective; through-mode triangles
+  flat and smooth; clear mode. A layer's slope is the time for 65536 pixels, so pixels a bus clock for each state,
+  against Sony's 4.
+- `time-sizes`: the same 65536 pixels a layer in sprites of 2x2 up to 128x128, rows (256x1), columns (1x256), 3x3 and
+  17x17, and in triangle pairs of 2x2 up to 128x128: a primitive's cost against a pixel's, and whether the GE fills rows
+  or tiles.
+- `time-transfers` (`sceGuCopyImage`): RAM to VRAM, VRAM to VRAM, VRAM to RAM, RAM to RAM, 32- and 16-bit, squares of 16
+  to 256 pixels; 4 pixels wide (a row's cost) and one row; and RAM to VRAM followed by TEXSYNC, which shows whether a
+  list's FINISH waits for its transfer at all.
+- `time-texcache`: a 256x256 sprite tiled by a texture of 8x8 up to 256x256 texels in 8888, 5650, CLUT8 and CLUT4,
+  swizzled or not (48 cases, 1 and 3 layers): the time a pixel against the texture's bytes, whose knee is the cache's
+  size; and the same 32x32 texture again with and without a TEX_FLUSH between sprites, a new texture each sprite (RAM or
+  VRAM), a palette loaded before each sprite or once, a 64x64 one again.
+- `time-signals`: 1, 4 or 16 flat layers, a SIGNAL that lets the GE go on, as many layers again: whether the signal
+  callback comes when the GE reaches it (the first half's time) rather than at once, as the core gives it.
+
+What would settle the model: the commands' slopes give a time a command (or show none); the primitive cases a time a
+vertex for each vertex type and a time a primitive for each kind, culled ones included; the fills a time a pixel for
+each state, which tells whether pixel and setup costs add or overlap (the model's max) once `time-sizes` puts both in
+one list; the transfers a time a byte and a row; the cache cases a miss cost and the cache's size. Together a list's
+time becomes a sum the GE driver can owe as part 64's does now.
+
+### Lighting's cosine (part 60)
+
+Round 5's `light-share-*` measured 16 normals with 192 light-times-material products each, expecting each normal's share
+of a light to be pinned by them: level = floor(product x share / 1024) for product = (2L + 1)(2M + 1). Taken again for
+this part, they aren't: for 15 of the 16 normals no share satisfies all 192 products (the interval each product allows
+doesn't meet the others'), and the best single share per normal still misses 451 of the 3072 values (by up to 1.4
+levels, well away from a level's edge, with the same light, normal and channel and another material). So the multiply
+isn't a share times the product, and the sweep needs the multiply's structure first:
+- `light-products-0` to `-3`: the products in full, a lit point a pixel, at four normals: row y's light (y, 255 - y, y)
+  on column x's material (x, x, 255 - x), so each channel holds every light level against every material level. Normal
+  (0, 0, 1) (the cosine 1: the core's (2L + 1)(2M + 1) >> 10, checked in the core's run), then (33, 0, 56), (65, 0, 72)
+  and (101, 0, 26), three of round 5's. At one cosine the output as a function of L and M shows whether it's one scale
+  on the product, on the light first, on the material first, or rounded between.
+- `light-sweep-0` to `-7`: 1024 normals a picture, each in an 8x8 block with 64 products as `light-share-*` chose them
+  (levels 96-255 from a fixed sequence, light by row, material by pixel), white light in each block's first row and
+  white material in its first column. The normals: (k, 0, 1023) and (1023, 0, k) for k = 0..1023, one component swept at
+  a time over the whole quarter turn; the first three times as long and over 1024 (lengths); (0, k, 1023) along y;
+  (1023, k, 0) with the light along +x; the first with the light toward (1, 1, 1) and toward (0, 0, 3) (not one long).
+  With the multiply known, each normal's 192 values pin its share to a narrow interval, and the sweeps show the cosine
+  as the GE works it out: whether normalizing depends on length (by a power of two or not), on the axis, or on the
+  light's own length.
+- `light-sum`: one to four lights alike on the same products (each light's part below 64, so four don't saturate):
+  whether the parts are added before they're cut to whole levels (the core cuts each).
+
+### The reciprocal's chords (part 60)
+
+Part 60 fitted R as 128 straight chords, two pinned by measurement and the rest by formula. Here every chord is read.
+- `recip-pixels`: in 32 rows a case, strips 512 pixels long from w0 to w1 a power of two apart (where R is exact), their
+  u scale x w, so that s is constant while q steps from 1 / w0 to 1 / w1 one unit of its 15 bits each sixteenth of a
+  pixel (both steps exact, whatever the stepper). A pixel's u is then scale x R(q), and the scale makes its texel the
+  chord's 16-bit value's low 8 bits: each pixel reads one value outright. 16 rows at the 16 sub-pixel offsets (each 4096
+  sixteenths of the strip on pixels' middles) and 16 more 256 pixels on put every q of the binade on a pixel: every
+  chord at the 64 positions a 13-bit q has (the largest corner a power of two leaves 13 bits). The cases: w 1 to 2; the
+  same at half the scale (the value's bits 1-8, coordinates below 32768 texels, a hedge in case the GE keeps fewer bits:
+  `texel-range`); 2 to 4, 1/2 to 1, 1024 to 2048, 2^-10 to 2^-9 (whether only the fraction matters); 2 to 1 (stepped the
+  other way); 1 to 2 along v. This pins every chord's start and slope as integers, and whether a chord is straight at
+  all.
+- `recip-projected`: the same through the texture matrix (TEXTURE_MAP_MODE 1 from the position, w 1), where q can start
+  just below a power of two, so the pixels read 14-bit qs (positions 0, 2, 4, ...: 128 a chord, but for the top q, which
+  is the strip's corner), in [0.5, 1) and [1, 2). It also measures the projective path, which part 60 carried over
+  unmeasured: rows 192-223 (the matrix's s 128 w and q 1, w 1 to 2) are `recip-pixels`' rows 0-31 if the matrix's s and
+  q are taken as a vertex's own (as the core takes them; checked in its run), rows 224-255 show the matrix's q times
+  R(w), and rows 128-191 a q of 0, -0, below 0 and tiny (part 60: "no picture measures either").
+- `recip-vertex-0` to `-2`: the user's constant-w triangles (as `persp-w3`): 4096 cells of 4x4 pixels, each at one w in
+  [1, 2) at chord c / 32 and 32 positions a chord (`-0` even positions, `-1` three on, `-2` with w's 8 lowest bits set,
+  which R should ignore), u 512 at every corner. A pixel's u is 512 x R15(w) x R(R15(w)) (R15: R cut to 15 bits, as s
+  and q are), and its texel that product to 2^-17. With the pixel path known from the two pictures above, each cell
+  gives R15(w) at the vertex, positions every 8 (and 3 on) along every chord.
+- `recip-sprites`: the same cells as 3D sprites: whether a sprite divides by R too (the core blends 1/w in doubles).
+- `texel-range`: sprites whose texture coordinates are 2^k plus a known part (k 8 to 23, either sign), in through mode:
+  where the GE stops keeping a coordinate's low bits. The reciprocal's pictures read coordinates up to 2^16
+  (`recip-pixels`) and 2^17 texels (`recip-vertex`), where round 5's reached 4096; the core clamps at 65536 (a guard of
+  its own), so in its run `recip-vertex-*` read 0 everywhere and `texel-range` stops at 2^16. The PSP's picture decides
+  how far the others can be read.
+
+### PATCH_CULL_ENABLE and divisions along v (curves.cpp)
+
+Round 4's `curves-culling` found PATCH_CULL_ENABLE changing nothing on a flat patch facing the screen, with either
+PATCH_FACING, culling on or off. What's left that it could do is tried:
+- `patch-cull`: 256 patches, every combination of PATCH_CULL_ENABLE, PATCH_FACING, the control points mirrored (strips
+  the other way round), normals none, toward the viewer, away and edge on, culling off, CW, CCW, or lit, as triangles
+  and as points. A rule that culls by the normals given, by the made-up ones, or only with lighting shows as cells
+  missing.
+- `patch-cull-edges`: 64 patches against their cells' own scissor rectangles: inside, across each edge, wholly outside,
+  around, across and past the near plane, across the far plane, bowed out past every edge, pulled in across it, all at
+  one point; PATCH_CULL_ENABLE off and on; triangles and points. A cull of whole patches by their control points shows
+  as a partly visible patch missing.
+- `time-primitives`' cases 28 and 29: patches wholly outside the scissor rectangle, PATCH_CULL_ENABLE off and on. A cull
+  that only skips the work shows in the time and nowhere else.
+- `curves-count-v` (16, 63 and 64 divisions along v) and `-v-65`, `-v-100`, `-v-128`, `-v-200`, `-v-255`, one each, last
+  in the round: round 4's counts turned (points added up in columns). If v is like u, 65, 100, 200 (72) and 255 (127)
+  stall, each reset after 5 seconds, and 128 counts as 0, so as 1: the core already assumes so.
+
+### The driver's statuses (part 64's unmeasured details)
+
+`ge-statuses`: a slow list (16 layers of an 8888 texture in RAM, not swizzled) queued alone, with `sceGeListSync(id, 1)`
+and `sceGeDrawSync(1)` looked at every 50 microseconds until a few looks after it's done (1024 looks, about 50 ms, at
+most), beside its finish callback's time; and a list GU ends (its stall address just past its END) whose drawing and
+FINISH come with interrupts held off (`sceKernelCpuSuspendIntr`), `sceGeDrawSync(1)` looked at for 20 ms, then
+interrupts let through. Part 64 has it read "drawing" (2) there, unmeasured; the core's run gives 2. Part 64's other
+unmeasured detail, `sceGeBreak(0)` at a waiting FINISH, isn't tried: a break that went wrong would leave the driver's
+queue in a state no later test could trust.
+
+### In the core, and the program
+
+`tests/psp/measure.cpp` drives the new line (the menu's other lines moved down one) after round 5 and checks: every
+picture's size; every timing file's records whole and as many as the program's tables give, the first half at 222/111
+MHz and the second at 333/166, every run finished, each SIGNAL's callback before its finish; `ge-statuses` complete;
+`manifest6.txt`; and four checks that the layouts read what they're meant to in the core's own arithmetic:
+`light-products-0` is (2L + 1)(2M + 1) >> 10 in every channel of every pixel, `recip-pixels`' first and last cases and
+`recip-projected`'s first show the core's chord values' low bytes at the q each pixel samples, and `recip-projected`'s
+rows 192-223 are `recip-pixels`' rows 0-31. With `PSP_GE_RESULTS` holding a PSP's round 6, it prints each picture's
+differences as before, each timing case's middle times by size and a unit's time (a straight line through them) here and
+there at each clock setting, and the statuses here and there. In the core no list stalls (it draws nothing of a surface
+cut past 64 times), and the whole measure group, every round, takes about 9 seconds unsanitized; the timings are the
+core's model's (commands nothing, a 256x256 fill 147.6 microseconds at 111 MHz, a SIGNAL at once).
+
+`pspmeasure.elf` is rebuilt in the pinned image (`ghcr.io/pspdev/pspdev@sha256:54895e6f...`), which rebuilds the
+previous one byte for byte from its own source, and two builds of the new source are identical. The owner's copy:
+`.local/psp-round6/` (EBOOT.PBP, SHA-256 `bb59b7ab11e913693f20d851048af62b19a8ffdce2471d082c418ea2cce6ba0b`, and
+HOW-TO.md: where it goes, which line, about two minutes, the four deliberate stalls, and `results/ge` back to the
+RP6's `Download/PSPMEASURE/results`). The RP6 wasn't attached in this session, so it isn't there yet.
+
+### Review
+
+An independent read-only review (a reviewer agent with its own builds of the program and the measure test) found
+nothing that should freeze a PSP, every table, count and layout as the program has it, the arithmetic of the exactness
+claims sound, and the committed `pspmeasure.elf` a fresh build. It found three things that would have wasted part of
+the run, fixed: the timed primitives and patches "outside the scissor rectangle" were drawn on screen (the timed lists'
+scissor spans 512 columns, so they're 600 pixels across now); `recip-pixels`' second window, 257 pixels on, missed 16
+qs (each window now starts half a pixel back, so its pixels' middles fall on 4096 consecutive sixteenths, and the two
+together on every q); and `ge-statuses` stopped looking after 128 looks, about 7 ms, before a PSP drawing below peak
+would finish (1024 now). And smaller points, taken: the timing tests' first half at 222/111 MHz set rather than as found
+(custom firmware may run homebrew at 333), a refused `sceGeListEnQueue` noted, the statuses printed as numbers, wording.
+A delta review found the fixes right and complete; its points (`recip-projected` reads every q but its top one, the
+strip's corner; error codes in hex; line widths) are taken too, without changing the program.
+
+### Checks
+
+- `tests/psp/run-tests.sh` (sanitizers on): 425 groups, 0 failures (the measure group drives round 6);
+  `tests/allegrex/run-tests.sh`: 58 groups, 0 failures; `tests/psp/ares/run-tests.sh`: 307 checks, 0 failed.
+- The program builds without a warning (`-O2 -Wall`), its `SMOKE` version too; `tests/psp/measure.cpp` with `-Wall
+  -Wextra -Werror` and the sanitizers. The comparison was run against a made-up reference (the core's own files, with
+  times tripled and an error code among the statuses) and prints as it should.
+- Scratch: `~/phobos-work/scratch/measure6` (build.sh, the pinned image's build; quick.sh, the measure group alone;
+  times.py and topng.py read the files; recip_model.py, part 60's chords and `recip-vertex`'s readings under them,
+  within 6 of the wrap; share*.py, round 5's light-share taken again; push-rp6.sh, the owner's copy to the RP6).

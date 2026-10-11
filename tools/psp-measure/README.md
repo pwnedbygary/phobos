@@ -33,11 +33,12 @@ on a real PSP, reads back the exact pixels and saves them, so the core can be co
    `/opt/pspdev`, with `psp-config` on the PATH): `make` gives `EBOOT.PBP`. `make SMOKE=1` gives a quick version for
    trying in an emulator first, PPSSPP's PPSSPPHeadless, with `-i` (its ARM64 JIT trips an assertion on one of
    round 3's recorder entries) and `--graphics=software`. It runs round 3's VFPU and FPU tests (the big ones cut
-   short), the FPU probes and the GE's tests (rounds 2-5) at once, then leaves; its results say nothing about a
+   short), the FPU probes and the GE's tests (rounds 2-6) at once, then leaves; its results say nothing about a
    PSP. Run `make clean` when switching between the two.
 2. On a PSP with custom firmware that runs homebrew, copy `EBOOT.PBP` to a folder under `PSP/GAME` on the memory
    stick (say `PSP/GAME/PSPMEASURE`) and start it. Keep the charger in. Up and down pick a line of the menu, and X
    runs it:
+   - Round 6: the GE's time, lighting, reciprocal, curves (about 7 MB)
    - Round 5: the GE's steps, lighting's share, texels (about 3 MB)
    - Round 4: the GE's lines, boxes, DXT and curves (about 8 MB)
    - Round 3: the VFPU and the FPU (about 6 MB)
@@ -76,7 +77,7 @@ start the program again first (otherwise it says so, and skips that one test).
 | `main.c` | The menu, starting afresh, and leaving. |
 | `results.c`, `measure.h` | The results folder, and each test's file in it: written as `<name>.part` and renamed to `.bin` once complete, run once more after a stop, then given up on as `.stopped` (at once if it left a `.stalled`). `measure.h` is what the parts share. |
 | `vfpu.c` | The VFPU's and the FPU's tests. |
-| `ge.c` | The GE's and the controller's tests. Its waits for the GE are timed (`waitForGe`): a stall is recorded, the GE reset, and the round goes on. |
+| `ge.c` | The GE's and the controller's tests, and round 6's timed lists. Its waits for the GE are timed (`waitForGe`): a stall is recorded, the GE reset, and the round goes on. |
 | `Makefile` | Builds them into the one program. |
 | `ops.py`, `ops.h`, `ops3.h` | `ops.py` writes `ops.h` and `ops3.h`, the instruction recorder's lists for rounds 2 and 3. Every entry is checked by pspdev's own assembler, because a real PSP stops a program at an instruction it doesn't have. |
 | `compare.sh`, `compare.cpp` | Checks the core against a folder of VFPU and FPU results: each input run through the core's own instruction and compared bit for bit, with how far off any mismatch is (in units in the last place); for the instruction recorder, each differing entry's words counted by kind (a NaN, a denormal, rounding, a lane left unwritten, other); for the probes, each result beside the core's. Works on any round's files. |
@@ -225,13 +226,36 @@ steps colors, fog and depth across triangles:
   `-sprite`, `-floor`), a wall with u / w the same at every corner, so u shows 1 / w alone (`persp-divide`), and one
   at w 3 everywhere, no perspective (`persp-w3`).
 
+Round 6 (about 7 MB, `manifest6.txt`, which also lists every timing case) takes what parts 60 and 64 left open
+(docs/psp-core.md, part 66, says what each result would settle):
+
+- **The GE's drawing time** (part 64 models it from Sony's peak rates): lists of known work, each queued alone and
+  timed from just before `sceGeListEnQueue` to its finish callback, every run's time kept, each case at a few sizes
+  for straight-line fits, at the clocks the program found and again at 333/166 MHz: commands of several kinds
+  (`time-commands`), small primitives of every kind in through mode and 3D, lit, skinned, morphed, culled, cut and as
+  curved surfaces (`time-primitives`), fills in every state and texture format (`time-fill`), the same pixels in
+  primitives of every size (`time-sizes`), block transfers (`time-transfers`), the texture cache (`time-texcache`)
+  and a SIGNAL's time (`time-signals`).
+- **Lighting's cosine**: the products in full at four normals (`light-products-*`, as round 5's `light-share-*` fit
+  no one share a normal), 1024 normals swept a picture with 64 products each (`light-sweep-*`), and lights added up
+  (`light-sum`).
+- **The reciprocal's chords**: every chord's value read off texels at 13-bit and 14-bit qs (`recip-pixels`,
+  `recip-projected`, the latter through the texture matrix, also measuring that path and a q of 0 or below), at a
+  vertex in constant-w cells at every chord (`recip-vertex-*`, and `recip-sprites` as sprites), and how far the GE
+  keeps a texture coordinate's low bits (`texel-range`).
+- **Curved surfaces**: what PATCH_CULL_ENABLE does (`patch-cull`, `patch-cull-edges`, and two timed cases), and
+  divisions past 64 along v (`curves-count-v`, then `-v-65`, `-v-100`, `-v-128`, `-v-200` and `-v-255` one to a test,
+  last, where the GE may stall on purpose).
+- **The driver's statuses** while a list draws, and with its FINISH's interrupt held off (`ge-statuses`).
+
 ### How the GE's comparison works
 
 The program computes nothing itself. `tests/psp/measure.cpp` runs the same program in Phobos's core, through its
 menu as a person would (the GE's tests, starting afresh, the tests again, round 3, the probes, round 4, round 4
-again over counts left as the earlier program left them, round 5, leaving), and checks every file is written (and
-that the stall check got past its stall); with `PSP_GE_RESULTS` set to a `results/ge` folder, it lists what differs
-from that folder (`PSP_GE_OURS` keeps the core's own files for a closer look):
+again over counts left as the earlier program left them, round 5, round 6, leaving), and checks every file is written
+(that the stall check got past its stall, and round 6's timing records are whole); with `PSP_GE_RESULTS` set to a
+`results/ge` folder, it lists what differs from that folder, and for round 6's timing files each case's middle times
+here and there (`PSP_GE_OURS` keeps the core's own files for a closer look):
 
 ```
 tools/psp-test-programs/build.sh /tmp/programs   # builds pspmeasure.elf among the test programs

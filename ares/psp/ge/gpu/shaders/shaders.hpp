@@ -4,7 +4,7 @@
 
 namespace ares::PlayStationPortable::GPUShaders {
 
-static constexpr char SourceHash[] = "62d3566fc238f872dc58bc674f45c6375c3083a1baf6d55d09cb9ab87885c5ae";
+static constexpr char SourceHash[] = "57ac2c08bfe45fdb16fb8e6af5339ba103d9a10193f5a92e1a2e6bf50963444e";
 
 static const u32 vertexSPIRV[] = {
   0x07230203, 0x00010000, 0x0008000b, 0x00000060,
@@ -200,7 +200,6 @@ static const u32 vertexSPIRV[] = {
   0x0000005b, 0x00000039, 0x0003003e, 0x0000005a,
   0x0000005b, 0x0003003e, 0x0000005d, 0x0000005f,
   0x000100fd, 0x00010038,
- 
 };
 
 static const u32 fragmentSPIRV[] = {
@@ -3342,7 +3341,6 @@ static const u32 fragmentSPIRV[] = {
   0x0000001d, 0x00000495, 0x00000492, 0x00000493,
   0x00000494, 0x00000491, 0x000200fe, 0x00000495,
   0x00010038,
- 
 };
 
 static const u32 fragmentSingleSPIRV[] = {
@@ -6481,7 +6479,6 @@ static const u32 fragmentSingleSPIRV[] = {
   0x0000048f, 0x00000002, 0x00070050, 0x0000001d,
   0x00000495, 0x00000492, 0x00000493, 0x00000494,
   0x00000491, 0x000200fe, 0x00000495, 0x00010038,
- 
 };
 
 static const u32 copyVertexSPIRV[] = {
@@ -6557,7 +6554,6 @@ static const u32 copyVertexSPIRV[] = {
   0x00000029, 0x0000002a, 0x0000001d, 0x0000001e,
   0x0003003e, 0x0000002a, 0x00000028, 0x000100fd,
   0x00010038,
- 
 };
 
 static const u32 copyFragmentSPIRV[] = {
@@ -6705,7 +6701,6 @@ static const u32 copyFragmentSPIRV[] = {
   0x0000005f, 0x000100fc, 0x000200f8, 0x00000060,
   0x000200f9, 0x00000044, 0x000200f8, 0x00000044,
   0x000100fd, 0x00010038,
- 
 };
 
 static const u32 presentSPIRV[] = {
@@ -7082,7 +7077,6 @@ static const u32 presentSPIRV[] = {
   0x00000045, 0x00000045, 0x00000045, 0x00050088,
   0x00000011, 0x0000008e, 0x0000008c, 0x0000008d,
   0x000200fe, 0x0000008e, 0x00010038,
- 
 };
 
 static const u32 transformSPIRV[] = {
@@ -9041,7 +9035,6 @@ static const u32 transformSPIRV[] = {
   0x000002a9, 0x000002a8, 0x00000095, 0x00050085,
   0x00000013, 0x000002ab, 0x000002a9, 0x000002aa,
   0x000200fe, 0x000002ab, 0x00010038,
- 
 };
 
 static const u32 moveSPIRV[] = {
@@ -9584,7 +9577,6 @@ static const u32 moveSPIRV[] = {
   0x000000ac, 0x000000af, 0x000500c5, 0x00000008,
   0x000000b1, 0x000000ab, 0x000000b0, 0x000200fe,
   0x000000b1, 0x00010038,
- 
 };
 
 static const u32 copyExportSPIRV[] = {
@@ -9750,7 +9742,6 @@ static const u32 copyExportSPIRV[] = {
   0x00000068, 0x000200f8, 0x00000067, 0x000100fc,
   0x000200f8, 0x00000068, 0x000200f9, 0x0000004d,
   0x000200f8, 0x0000004d, 0x000100fd, 0x00010038,
- 
 };
 
 static const u32 moveExportSPIRV[] = {
@@ -10308,7 +10299,6 @@ static const u32 moveExportSPIRV[] = {
   0x000000ac, 0x000000af, 0x000500c5, 0x00000008,
   0x000000b1, 0x000000ab, 0x000000b0, 0x000200fe,
   0x000000b1, 0x00010038,
- 
 };
 
 }
