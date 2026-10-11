@@ -389,7 +389,7 @@ struct GE {
   //transform.cpp
   auto transformState() const -> Transform;
   auto settingsState(Transform& t) const -> void;
-  auto transformKept() -> const Transform&;
+  auto transformKept() -> Transform&;
   auto transform(Vertex& vertex, const Transform& t) -> void;
   auto project(Vertex& vertex, const Transform& t, bool clipped) const -> void;
   auto clipTriangle(const Look& look, const Transform& t, const Vertex& a, const Vertex& b, const Vertex& c,
@@ -505,7 +505,8 @@ struct GE {
   auto worker() -> void;
 
   //transformState()'s parts as they were last worked out (transformKept()), and the words they came from: the
-  //matrices', and the commands settingsState() and lightingState() read, in transform.cpp's ranges' order
+  //matrices', and the commands settingsState() and lightingState() read, in transform.cpp's ranges' order. (A PRIM
+  //sets its own on it too: its weights, its texture's size, whether its vertices have colors.)
   struct KeptTransform {
     static constexpr u32 Settings = 17, Lighting = 77;
     bool valid = false;

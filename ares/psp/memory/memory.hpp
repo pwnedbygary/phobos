@@ -88,6 +88,7 @@ struct Memory {
   //vramGuard(), which takes the busy pages out of the CPU's page tables (busy) and puts them back (not).
   bool vramBusy = false;
   u64 busyPages[VRAMSize / PageSize / 64] = {};
+  u64 busyCleared = 0;  //goes up as busy pages are given back (cleared)
   std::function<auto () -> void> finishDrawing;
   //What pointer() waits for, touching VRAM's bytes first to last (offsets in VRAM) drawn over (vramDrawnOver()): only
   //the drawing that reaches them, and what's drawn before it (the GE's settleOver()). None: finishDrawing().
@@ -96,9 +97,9 @@ struct Memory {
   //batch's deferred textures, decoded as it starts): pointer() neither waits for drawing for it nor looks at the busy
   //pages, which the emulation thread changes meanwhile.
   static thread_local bool knownDrawn;
-  struct KnownDrawn {  //knownDrawn while it lives
+  struct KnownDrawn {  //knownDrawn while it lives (where known)
     bool was = knownDrawn;
-    KnownDrawn() { knownDrawn = true; }
+    KnownDrawn(bool known = true) { knownDrawn = was || known; }
     ~KnownDrawn() { knownDrawn = was; }
   };
   std::function<auto (bool busy) -> void> vramGuard;

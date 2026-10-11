@@ -300,6 +300,7 @@ auto GE::reap() -> void {
   for(u32 n = 0; n < VRAMPages / 64; n++) memory.busyPages[n] = freed[n];
   if(memory.vramGuard) memory.vramGuard(false);
   for(u32 n = 0; n < VRAMPages / 64; n++) memory.busyPages[n] = kept[n];
+  memory.busyCleared++;
 }
 
 //Waits for every batch handed to the workers (the GE's thread drawing bands too), and empties them: VRAM is
@@ -338,6 +339,7 @@ auto GE::freeVRAM() -> void {
   memory.vramBusy = false;
   if(memory.vramGuard) memory.vramGuard(false);
   for(auto& pages : memory.busyPages) pages = 0;
+  memory.busyCleared++;
 }
 
 //Everything drawn put in memory's VRAM: the batches settled, and what a hardware renderer owns put back (ge.hpp's

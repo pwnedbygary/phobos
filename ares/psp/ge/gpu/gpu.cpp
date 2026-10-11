@@ -251,10 +251,12 @@ auto GPU::own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
   u32 bytes = t.bytes();
   u32 low = t.address + (top * t.stride + left) * bytes, high = t.address + (bottom * t.stride + right) * bytes;
   u32 first = low / Memory::PageSize, last = std::min<u32>(high / Memory::PageSize, GE::VRAMPages - 1);
-  //(told, and its pages busy still: memory may copy a page that isn't without a finish)
+  //(told, and its pages busy still: memory may copy a page that isn't without a finish. A told rectangle's pages are
+  //made busy as it's told, and stay so while memory.busyCleared stays as it was then, toldBusy: where it's gone up
+  //since, they're told afresh)
   bool told = false;
+  if(t.toldBusy != memory.busyCleared) t.told.clear(), t.toldBusy = memory.busyCleared;
   for(auto& r : t.told) told |= left >= r[0] && top >= r[1] && right <= r[2] && bottom <= r[3];
-  for(u32 page = first; page <= last && told; page++) told = memory.vramPageBusy(page);
   if(told) return;
   if(t.told.size() < MostTold) t.told.push_back({left, top, right, bottom});
   bool added = false;
@@ -681,12 +683,16 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   u32 first = (t->address + from * rowBytes) / Memory::PageSize;
   u32 last = std::min<u32>((t->address + to * rowBytes - 1) / Memory::PageSize, GE::VRAMPages - 1);
   moving.clear();
-  for(u32 page = first; page <= last; page++) {
+  //(pages found with no other target's pixels, and owners[] the same since, as drawnSerial says: a 3D game's PRIMs
+  //each reach their target's whole scissor rectangle, 136 pages of a screen, one after another)
+  bool alone = t->alone.serial == drawnSerial && first >= t->alone.first && last <= t->alone.last;
+  for(u32 page = first; page <= last && !alone; page++) {
     Target* owner = owners[page];
     if(!owner || owner == t) continue;
     if(!moving.empty() && moving.back().from == owner && moving.back().last + 1 == page) moving.back().last = page;
     else moving.push_back({owner, page, page});
   }
+  if(!alone && moving.empty()) t->alone = {first, last, drawnSerial};
   for(auto& m : moving) {
     s32 box[4];
     if(movable(*m.from, *t, m.first, m.last, box)) continue;
@@ -1135,6 +1141,7 @@ auto GPU::finish(GE& ge) -> void {
     if(memory.vramGuard) memory.vramGuard(false);
     for(auto& pages : memory.busyPages) pages = 0;
     memory.vramBusy = false;
+    memory.busyCleared++;
   }
   for(auto& owner : owners) owner = nullptr;
   drawnSerial++;

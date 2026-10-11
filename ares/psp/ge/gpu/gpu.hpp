@@ -277,6 +277,7 @@ struct GPU : GE::Renderer {
     s32 left = 0, top = 0, right = -1, bottom = -1;  //drawn since it was last read back
     s32 changes[4] = {0, 0, -1, -1};  //changed since its copies last heard (textureFor()): left, top, right, bottom
     std::vector<std::array<s32, 4>> told;  //rectangles memory has heard were drawn over since then (own())
+    u64 toldBusy = 0;                       //(Memory::busyCleared as they were told)
     u64 used = 0;
     //VRAM's bytes (offsets, inclusive) someone reached in its pages while the GPU drew in them, not over what it
     //drew (drawnOver()), or changed in pages it hasn't drawn in since the last finish (written()): memory's, maybe
@@ -289,6 +290,9 @@ struct GPU : GE::Renderer {
     //drew there (overwritten()): memory's, not put back, and filled again before a PRIM draws over them or they're
     //copied or shown or moved (revive()). (At most 16; where there'd be more, the write waits for a finish.)
     std::vector<std::pair<u32, u32>> dead;
+    //VRAM's pages first to last found owned by no other target as of drawnSerial (begin(): not looked through again
+    //while that's so)
+    struct Alone { u32 first = 0, last = 0; u64 serial = 0; } alone;
     auto bytes() const -> u32 { return format == 3 ? 4 : 2; }
     auto end() const -> u32 { return address + rows * stride * bytes(); }  //(the VRAM bytes it covers)
     auto drawn() const -> bool { return left <= right; }

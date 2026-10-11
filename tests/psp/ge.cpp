@@ -2225,6 +2225,52 @@ static auto geTimeInterrupts() -> void {
   }
 }
 
+//Vertices read from VRAM that a sprite just before them in the list draws over (two points, through mode, an 8888
+//color and 16-bit positions, 12 bytes each, which the sprite's color 0x00200010 puts at (16, 32), where memory had
+//them at (8, 8)): what waits to be drawn over them is drawn first, as at one thread, with batches shared out however
+//small; for vertices in a row (all asked for at once: readVertices()) and by indices.
+static auto geVerticesDrawn() -> void {
+  constexpr u32 Drawn = 0x15'4000, Indices = 0x0899'0000;  //(Drawn: VRAM offset)
+  auto build = [&](Memory& memory, bool indexed) {
+    for(u32 n = 0; n < 64; n++) memory.write(4, VRAM + Drawn + n * 4, 0x0008'0008);
+    memory.write(1, Indices, 1), memory.write(1, Indices + 1, 0);
+    ListWriter list{memory, ListA};
+    u32 vertex = Vertices;
+    for(float value : {0.0f, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+    memory.write(4, vertex, 0), vertex += 4;
+    for(float value : {0.0f, 0.0f, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+    for(float value : {0.0f, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+    memory.write(4, vertex, 0x0020'0010), vertex += 4;
+    for(float value : {8.0f, 1.0f, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+    list.put(GE::FrameBufferPointer, Drawn), list.put(GE::FrameBufferWidth, 64);
+    list.put(GE::FrameBufferPixelFormat, 3);
+    list.put(GE::Scissor2, 479 | 271 << 10), list.put(GE::Region2, 479 | 271 << 10);
+    list.put(GE::VertexType, 0x80'019f), list.put(GE::ShadeMode, 1);
+    list.to(GE::VertexAddress, Vertices);
+    list.put(GE::Primitive, GE::Sprites << 16 | 2);
+    list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 512);
+    list.put(GE::VertexType, 0x80'011c | (indexed ? 1 << 11 : 0));
+    list.to(GE::VertexAddress, VRAM + Drawn);
+    if(indexed) list.to(GE::IndexAddress, Indices);
+    list.put(GE::Primitive, GE::Points << 16 | 2);
+    list.put(GE::Finish), list.put(GE::End);
+  };
+  auto drawn = [&](bool indexed, u32 threads) {
+    KernelMachine m;
+    m.system.ge.setThreads(threads);
+    m.system.ge.drawing.shared = 0;
+    build(m.system.memory, indexed);
+    m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
+    m.system.ge.settle();
+    return m.system.memory.vram;
+  };
+  for(bool indexed : {false, true}) {
+    auto whole = drawn(indexed, 1);
+    CHECK(whole[(32 * 512 + 16) * 4], u8(0x10));  //(the point drawn where the sprite put it)
+    for(u32 threads : {2u, 4u, 8u}) CHECK(drawn(indexed, threads) == whole, true);
+  }
+}
+
 //The 3D settings kept from one PRIM to the next (transformKept()), taken after a few of the GE's commands (any of the
 //256) and matrix elements are changed at random, round after round: field for field (floats bit for bit) the
 //Transform transformState() works out afresh. (Changes to the world matrix alone, most PRIMs' in a 3D game, are as
@@ -2293,7 +2339,7 @@ auto geTests() -> Tests {
     {"ge lists queued twice", geQueuedTwice}, {"ge suspending signals' callbacks", geSuspendedCallbacks},
     {"ge calls and threads", geCallsAndThreads}, {"ge break", geBreak},
     {"ge break and callbacks", geBreakCallbacks}, {"ge time", geTime}, {"ge time's interrupt", geTimeInterrupts},
-    {"ge 3D settings kept from PRIM to PRIM", geTransformKept},
+    {"ge 3D settings kept from PRIM to PRIM", geTransformKept}, {"ge vertices drawn first", geVerticesDrawn},
     {"event flags", eventFlags}, {"event flag waiting", eventFlagWaiting}, {"display picture", displayPicture},
     {"gu program", guProgram}, {"copy sample", copySample},
   };

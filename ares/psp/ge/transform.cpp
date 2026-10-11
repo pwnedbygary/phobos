@@ -101,7 +101,7 @@ static_assert(commandsIn(LightingCommands) == GE::KeptTransform::Lighting);
 //commands, lighting's from its commands and the view matrix), so only the parts whose words have changed are worked
 //out again. Most PRIMs share their 3D settings with the one before, but for the world matrix; and they're compared,
 //not told of, as a list, a context or a state loaded, and the tests all set them.
-auto GE::transformKept() -> const Transform& {
+auto GE::transformKept() -> Transform& {
   auto& k = keptTransform;
   auto& t = k.transform;
   auto renew = [&](u32* kept, const u32* now, u32 count, float* floats) {
