@@ -212,32 +212,95 @@ static auto fixedBits(u64 value, s32 point) -> u32 {
   return u32(top - point + 127) << 23 | mantissa;
 }
 
-//log2 of x = 2^p * (1 + f) is p + log2(1 + f), and log2's table holds log2(1 + f) in fixed point, in units of
-//2^-24 in every segment. The result is fixed point too, so how precise it is depends on its size, not as a float:
-//- From 1 up (p >= 0): p plus the table's value, truncated to 22 bits after the point, and to 23 significant bits
-//  once p needs some of them. (From 4 up the PSP sometimes gives one unit less: not worked out yet.)
-//- Below 1 (p < 0): the PSP takes a cheaper path, a straight line through the segment: its first value cut to 17
-//  bits after the point, its slope with the low 9 bits dropped, and no squared term. The result's magnitude,
-//  |p| - log2(1 + f), is truncated to 15 bits after the point whatever its size, so just below 1 it's -0.
+//log2 of x = 2^p * (1 + f) is p + log2(1 + f). The table holds log2(1 + f) in units of 2^-24. The datapath truncates
+//the result to a step of 2^(d+2) of those units (2^-22 for p in {0, 1}, twice that each time p doubles, 2^-15 for
+//every negative p) and, where the step is coarser than 2^-22, cuts coefficients to match: m loses its low d+2 bits,
+//|n| and the absorbed c0 and squared term lose their low d bits. The linear term is kept full width until that
+//final truncation (measured, docs/psp-vfpu-measurements.md, round 2's binades above 4 and round 1 below 4).
 static auto vfpuLog2(u32 bits) -> u32 {
   FloatParts x{bits};
   if(x.nan() || (x.sign && !x.zero())) return 0x7f80'0001;  //negative numbers have no logarithm
   if(x.zero()) return 0xff80'0000;                            //-infinity, for either zero (denormals too)
   if(x.infinite()) return 0x7f80'0000;
-  s64 p = s64(x.exponent) - 127;
-  auto& segment = log2Segments[x.mantissa >> 16];
-  s64 x2 = x.mantissa & 0xffff;
-  if(p < 0) {
-    s64 first = segment.c0 + 2 * segment.n;  //the segment's first value: its squared term is 2n there (u = 1024)
-    s64 line = (first >> 7 << 15) + (segment.m >> 9) * x2;  //log2(1 + f), in units of 2^-32
-    s64 magnitude = ((-p << 32) - line) >> 17;              //|log2 x|, in units of 2^-15
-    return 0x8000'0000 | fixedBits(magnitude, 15);
+  s32 exponent = s32(x.exponent) - 127;
+  u32 index = x.mantissa;
+  //level d: 7 below 1; 0 for exponents 0 and 1; floor(log2(p)) above that
+  s32 d = exponent < 0 ? 7 : exponent < 2 ? 0 : 31 - std::countl_zero(u32(exponent));
+  u32 lowN = (1u << d) - 1;       //mask of the low d bits
+  u32 lowM = (4u << d) - 1;       //mask of the low d+2 bits
+  s64 step = s64(4 << d) << 17;   //truncation step in units of 2^-41
+  auto& segment = log2Segments[index >> 16];
+  u32 x2 = index & 0xffff;
+  s32 t = s32(x2 >> 6) - 512;
+  s32 u = (t * t + 255) >> 8;
+  s32 n = segment.n < 0 ? -(-segment.n & ~lowN) : (segment.n & ~lowN);
+  s32 c0 = (segment.c0 + 2 * (segment.n - n)) & ~lowN;
+  s32 square = ((n * u) >> InterpolatorScale) & ~lowN;
+  s64 m = segment.m & ~s32(lowM);
+  s64 y = (s64(c0 + square) << 17) + m * s64(x2);  //log2(1 + f) in units of 2^-41
+  s64 frac = exponent >= 0 ? (y & ~(step - 1)) : -(-y & ~(step - 1));  //toward zero
+  s64 sum = (s64(exponent) << 41) + frac;
+  u64 magnitude = u64(sum < 0 ? -sum : sum);
+  u32 result = fixedBits(magnitude, 41);
+  if(exponent < 0) result |= 0x8000'0000;  //log2 on (0, 1) is negative, including -0 just below 1
+  return result;
+}
+
+//The VFPU's adder (vdot and the instructions that share its circuit: vhdp, vfad, vavg, vdet, vcrsp, vqmul, and the
+//matrix products). Each product keeps two extra bits with round-to-odd; the four terms are aligned to the largest
+//exponent and truncated; the integer sum rounds to nearest, ties to even, a carry out of that rounding raising the
+//exponent; subnormals flush after that. Order of the lanes does not matter (measured, docs/psp-vfpu-measurements.md,
+//round 2).
+static auto vfpuDot(const u32 a[4], const u32 b[4]) -> u32 {
+  constexpr s32 Extra = 2;
+  constexpr u32 Hidden = 1u << 23, Frac = Hidden - 1;
+  s32 sign[4], exponent[4], highest = -777;
+  u32 product[4];
+  s32 sum = 0;
+  s32 infinity = 0;  //+1 or -1 when an infinity product has been seen
+  for(u32 i : range(4)) {
+    u32 x = a[i], y = b[i];
+    s32 ex = s32((x >> 23) & 255), ey = s32((y >> 23) & 255);
+    u32 mx = x & Frac, my = y & Frac;
+    if(ex == 255 || ey == 255) {
+      if((ex == 255 && mx) || (ey == 255 && my)) return 0x7f80'0001;  //NaN * anything, or anything * NaN
+      if((ex == 255 && ey == 0) || (ey == 255 && ex == 0)) return 0x7f80'0001;  //inf * 0
+      s32 sgn = (x ^ y) >> 31 ? -1 : +1;
+      if(infinity && infinity != sgn) return 0x7f80'0001;  //inf - inf
+      infinity = sgn;
+    }
+    sign[i] = s32((x ^ y) >> 31);
+    exponent[i] = s32(ex + ey) - 2 * 127;
+    u64 wide = u64(Hidden + mx) * u64(Hidden + my);
+    product[i] = u32(wide >> (23 - Extra));
+    if(wide & ((1u << (23 - Extra)) - 1)) product[i] += !(product[i] & 1);  //round to odd
+    if(!(ex && ey)) { exponent[i] = -2 * 127; product[i] = 0; }  //zero or denormal → zero
+    if(exponent[i] > highest) highest = exponent[i];
   }
-  s64 t = (x2 >> 6) - 512;
-  s64 u = (t * t + 255) >> 8;
-  s64 value = (p << 24) + segment.c0 + (segment.m * x2 >> 17) + (segment.n * u >> InterpolatorScale);
-  s32 drop = std::max(2, 63 - std::countl_zero(u64(value)) - 22);  //22 bits after the point, 23 significant
-  return fixedBits(u64(value) >> drop << drop, 24);
+  if(infinity) return infinity < 0 ? 0xff80'0000 : 0x7f80'0000;
+  for(u32 i : range(4)) {
+    s32 shift = highest - exponent[i];
+    if(shift > 28) shift = 28;
+    u32 term = product[i] >> shift;
+    sum += (sign[i] ? -1 : +1) * s32(term);
+  }
+  u32 mantissa = u32(sum < 0 ? -sum : sum);
+  mantissa >>= Extra;
+  if(mantissa) {
+    s32 adjust = s32(8 - std::countl_zero(mantissa));
+    highest += adjust;
+    if(adjust > 0) {
+      u32 half = 1u << (adjust - 1);
+      mantissa = (mantissa >> adjust) + ((mantissa & (half + half - 1)) + ((mantissa >> adjust) & 1) > half);
+      if(mantissa >> 24) mantissa >>= 1, highest++;  //rounded up to the next power of two (0.99999997 to 1)
+    }
+    if(adjust < 0) mantissa <<= -adjust;
+  } else {
+    highest = -128;
+  }
+  if(highest <= -127) { highest = -127; mantissa = 0; }  //flush below the smallest normal
+  if(highest >= +128) { highest = +128; mantissa = 0; }  //overflow to infinity
+  return u32(sum < 0) << 31 | u32(highest + 127) << 23 | (mantissa & 0x007f'ffff);
 }
 
 //Half-precision floats (16 bits: sign, 5-bit exponent, 10-bit mantissa), as vfim, vf2h and vh2f use them. Neither
@@ -685,21 +748,23 @@ auto Allegrex::VASIN(u8 vd, u8 vs, u32 size) -> void {
   vfpuLastLaneFirst(vd, vs, size, vfpuArcsine);
 }
 
-//vavg averages the lanes into one value. On a PSP it's an adder like vfad (below): it adds up all four lanes (see
-//outsideLanes()) and divides by the size, and its t prefix only negates: a lane whose t prefix sets negate is
-//subtracted instead of added (measured, docs/psp-vfpu-measurements.md, round 3; dividing fits the PSP better than
-//weighing by the constant 1/3 does).
+//vavg averages the lanes into one value. On a PSP it's an adder like vfad (below): it dots all four lanes (see
+//outsideLanes()) with the constant 1/size (1/2, 1/3 or 1/4) through vfpuDot, and its t prefix only negates: a lane
+//whose t prefix sets negate is weighed by -1/size instead (measured, docs/psp-vfpu-measurements.md, rounds 2 and 3;
+//weighing in the adder matches the PSP, including the recorder's vavg.t cases that a post-sum divide misses).
 auto Allegrex::VAVG(u8 vd, u8 vs, u32 size) -> void {
   if(size == 1) return INVALID();
   auto s = vfpuReadFour(vs, size, vfpu.pfxs);
   u32 outside = outsideLanes(vfpu.pfxs, size);
-  f64 sum = 0;
+  static constexpr u32 Reciprocal[] = {0, 0x3f80'0000, 0x3f00'0000, 0x3eaa'aaab, 0x3e80'0000};  //1, 1/2, 1/3, 1/4
+  u32 a[4] = {}, b[4] = {};
   for(u32 i : range(4)) {
     if(outside >> i & 1) continue;
-    f64 lane = vfpuFloat(s.lane[i]);
-    sum += vfpu.pfxt >> (16 + i) & 1 ? -lane : lane;
+    a[i] = s.lane[i];
+    u32 w = Reciprocal[size];
+    b[i] = vfpu.pfxt >> (16 + i) & 1 ? w ^ 0x8000'0000 : w;
   }
-  Vector d{{vfpuNaN(vfpuBits(sum / size), NaNSign::Positive, 0)}};
+  Vector d{{vfpuNaN(vfpuDot(a, b), NaNSign::Positive, 0)}};
   vfpuWrite(vd, 1, d, vfpu.pfxd);
 }
 
@@ -788,13 +853,13 @@ auto Allegrex::VCRS(u8 vd, u8 vs, u8 vt, u32 size) -> void {
 auto Allegrex::VCRSP(u8 vd, u8 vs, u8 vt, u32) -> void {
   auto s = vfpuRead(vs, 3, vfpu.pfxs);
   auto t = vfpuRead(vt, 3, vfpu.pfxt);
-  f64 a[3], b[3];
-  for(u32 i : range(3)) {
-    a[i] = vfpuFloat(s.lane[i]);
-    b[i] = vfpuFloat(t.lane[i]);
-  }
-  auto bits = [&](f64 value) { return vfpuNaN(vfpuBits(value), NaNSign::Positive, 0); };
-  Vector d{{bits(a[1] * b[2] - a[2] * b[1]), bits(a[2] * b[0] - a[0] * b[2]), bits(a[0] * b[1] - a[1] * b[0])}};
+  //each lane is a two-term sum through the adder (sx * ty - sy * tx)
+  auto cross = [&](u32 i, u32 j) -> u32 {
+    u32 a[4] = {s.lane[i], s.lane[j], 0, 0};
+    u32 b[4] = {t.lane[j], t.lane[i] ^ 0x8000'0000, 0, 0};
+    return vfpuNaN(vfpuDot(a, b), NaNSign::Positive, 0);
+  };
+  Vector d{{cross(1, 2), cross(2, 0), cross(0, 1)}};
   vfpuWrite(vd, 3, d, vfpu.pfxd);
 }
 
@@ -805,13 +870,14 @@ auto Allegrex::VCST(u8 vd, u32 size, u8 constant) -> void {
   vfpuWrite(vd, size, d, vfpu.pfxd);
 }
 
-//vdet.p: the determinant of the 2x2 matrix whose rows are rs and rt, sx * ty - sy * tx.
+//vdet.p: the determinant of the 2x2 matrix whose rows are rs and rt, sx * ty - sy * tx, through the adder.
 auto Allegrex::VDET(u8 vd, u8 vs, u8 vt, u32 size) -> void {
   if(size != 2) return INVALID();
   auto s = vfpuRead(vs, 2, vfpu.pfxs);
   auto t = vfpuRead(vt, 2, vfpu.pfxt);
-  f64 determinant = (f64)vfpuFloat(s.lane[0]) * vfpuFloat(t.lane[1]) - (f64)vfpuFloat(s.lane[1]) * vfpuFloat(t.lane[0]);
-  Vector d{{vfpuNaN(vfpuBits(determinant), NaNSign::Positive, 0)}};
+  u32 a[4] = {s.lane[0], s.lane[1], 0, 0};
+  u32 b[4] = {t.lane[1], t.lane[0] ^ 0x8000'0000, 0, 0};
+  Vector d{{vfpuNaN(vfpuDot(a, b), NaNSign::Positive, 0)}};
   vfpuWrite(vd, 1, d, vfpu.pfxd);
 }
 
@@ -820,14 +886,14 @@ auto Allegrex::VDIV(u8 vd, u8 vs, u8 vt, u32 size) -> void {
 }
 
 //vdot: the dot product of rs and rt (each lane of one times the same lane of the other, all added up), into one
-//value. On a PSP it adds up all four lanes, whatever the size (see outsideLanes()).
+//value. On a PSP it adds up all four lanes, whatever the size (see outsideLanes()), through vfpuDot.
 auto Allegrex::VDOT(u8 vd, u8 vs, u8 vt, u32 size) -> void {
   auto s = vfpuReadFour(vs, size, vfpu.pfxs);
   auto t = vfpuReadFour(vt, size, vfpu.pfxt);
   u32 outside = outsideLanes(vfpu.pfxs, size) | outsideLanes(vfpu.pfxt, size);
-  f64 sum = 0;
-  for(u32 i : range(4)) if(!(outside >> i & 1)) sum += (f64)vfpuFloat(s.lane[i]) * vfpuFloat(t.lane[i]);
-  Vector d{{vfpuNaN(vfpuBits(sum), NaNSign::Positive, 0)}};
+  u32 a[4] = {}, b[4] = {};
+  for(u32 i : range(4)) if(!(outside >> i & 1)) a[i] = s.lane[i], b[i] = t.lane[i];
+  Vector d{{vfpuNaN(vfpuDot(a, b), NaNSign::Positive, 0)}};
   vfpuWrite(vd, 1, d, vfpu.pfxd);
 }
 
@@ -862,15 +928,15 @@ auto Allegrex::VF2I(u8 vd, u8 vs, u32 size, u8 scale, u32 mode) -> void {
 //the prefix is forced to constants in every lane (constant bit set, swizzle 1), keeping its absolute and negate
 //bits. So each lane is weighed by 1, or 1/3 where the t prefix sets the absolute bit, negated where it sets negate
 //(measured, docs/psp-vfpu-measurements.md, round 2). Like vdot it adds up all four lanes, whatever the size (see
-//outsideLanes(); round 3).
+//outsideLanes(); round 3), through vfpuDot.
 auto Allegrex::VFAD(u8 vd, u8 vs, u32 size) -> void {
   if(size == 1) return INVALID();
   auto s = vfpuReadFour(vs, size, vfpu.pfxs);
   auto t = vfpuReadFour(vs, size, (vfpu.pfxt & 0x000f'0f00) | 0xf055);
   u32 outside = outsideLanes(vfpu.pfxs, size);
-  f64 sum = 0;
-  for(u32 i : range(4)) if(!(outside >> i & 1)) sum += (f64)vfpuFloat(s.lane[i]) * vfpuFloat(t.lane[i]);
-  Vector d{{vfpuNaN(vfpuBits(sum), NaNSign::Positive, 0)}};
+  u32 a[4] = {}, b[4] = {};
+  for(u32 i : range(4)) if(!(outside >> i & 1)) a[i] = s.lane[i], b[i] = t.lane[i];
+  Vector d{{vfpuNaN(vfpuDot(a, b), NaNSign::Positive, 0)}};
   vfpuWrite(vd, 1, d, vfpu.pfxd);
 }
 
@@ -900,29 +966,31 @@ auto Allegrex::VH2F(u8 vd, u8 vs, u32 size) -> void {
 //That's how a point (x, y, z, 1) is dotted with a row of a transformation matrix. On a PSP it's a dot product whose
 //s prefix is forced to a constant in the last lane (constant bit set, swizzle 1), keeping that lane's absolute and
 //negate bits: 1, or 1/3 with the absolute bit, negated with the negate bit (measured, docs/psp-vfpu-measurements.md,
-//round 2). Like vdot it adds up all four lanes, whatever the size (see outsideLanes(); round 3).
+//round 2). Like vdot it adds up all four lanes, whatever the size (see outsideLanes(); round 3), through vfpuDot.
 auto Allegrex::VHDP(u8 vd, u8 vs, u8 vt, u32 size) -> void {
   u32 last = size - 1;
   u32 sourcePrefix = (vfpu.pfxs & ~(3u << (2 * last))) | 1u << (2 * last) | 1u << (12 + last);
   auto s = vfpuReadFour(vs, size, sourcePrefix);
   auto t = vfpuReadFour(vt, size, vfpu.pfxt);
   u32 outside = outsideLanes(sourcePrefix, size) | outsideLanes(vfpu.pfxt, size);
-  f64 sum = 0;
-  for(u32 i : range(4)) if(!(outside >> i & 1)) sum += (f64)vfpuFloat(s.lane[i]) * vfpuFloat(t.lane[i]);
-  Vector d{{vfpuNaN(vfpuBits(sum), NaNSign::Positive, 0)}};
+  u32 a[4] = {}, b[4] = {};
+  for(u32 i : range(4)) if(!(outside >> i & 1)) a[i] = s.lane[i], b[i] = t.lane[i];
+  Vector d{{vfpuNaN(vfpuDot(a, b), NaNSign::Positive, 0)}};
   vfpuWrite(vd, 1, d, vfpu.pfxd);
 }
 
 //vhtfm2-4: vtfm for a point one lane short, as if its missing last lane were 1, so each result also gets the last
-//element of the matrix's column. The size is the matrix's.
+//element of the matrix's column. The size is the matrix's. Each result goes through the adder.
 auto Allegrex::VHTFM(u8 vd, u8 vs, u8 vt, u32 size) -> void {
   auto m = vfpuReadMatrix(vs, size);
   auto t = vfpuRead(vt, size - 1, PrefixIdentity);
   Vector d{};
   for(u32 i : range(size)) {
-    f64 sum = vfpuFloat(m.element[size * (size - 1) + i]);
-    for(u32 k : range(size - 1)) sum += (f64)vfpuFloat(m.element[size * k + i]) * vfpuFloat(t.lane[k]);
-    d.lane[i] = vfpuNaN(vfpuBits(sum), NaNSign::Positive, 0);
+    u32 a[4] = {}, b[4] = {};
+    for(u32 k : range(size - 1)) a[k] = m.element[size * k + i], b[k] = t.lane[k];
+    a[size - 1] = m.element[size * (size - 1) + i];
+    b[size - 1] = 0x3f80'0000;  //× 1
+    d.lane[i] = vfpuNaN(vfpuDot(a, b), NaNSign::Positive, 0);
   }
   vfpuWrite(vd, size, d, 0);
 }
@@ -1060,9 +1128,9 @@ auto Allegrex::VMMUL(u8 vd, u8 vs, u8 vt, u32 size) -> void {
   Matrix d{};
   for(u32 r : range(size)) {
     for(u32 c : range(size)) {
-      f64 sum = 0;
-      for(u32 k : range(size)) sum += (f64)vfpuFloat(s.element[k * size + r]) * vfpuFloat(t.element[k * size + c]);
-      d.element[r * size + c] = vfpuNaN(vfpuBits(sum), NaNSign::Positive, 0);
+      u32 a[4] = {}, b[4] = {};
+      for(u32 k : range(size)) a[k] = s.element[k * size + r], b[k] = t.element[k * size + c];
+      d.element[r * size + c] = vfpuNaN(vfpuDot(a, b), NaNSign::Positive, 0);
     }
   }
   vfpuWriteMatrix(vd, size, d);
@@ -1152,20 +1220,22 @@ auto Allegrex::VPFXT(u32 prefix) -> void {
   vfpu.pfxt = prefix;
 }
 
-//vqmul.q: the product of two quaternions (the four-number form of a rotation), x, y, z then w.
+//vqmul.q: the product of two quaternions (the four-number form of a rotation), x, y, z then w. Each lane is a
+//four-term sum through the adder.
 auto Allegrex::VQMUL(u8 vd, u8 vs, u8 vt, u32) -> void {
   auto s = vfpuRead(vs, 4, vfpu.pfxs);
   auto t = vfpuRead(vt, 4, vfpu.pfxt);
-  f64 a[4], b[4];
-  for(u32 i : range(4)) {
-    a[i] = vfpuFloat(s.lane[i]);
-    b[i] = vfpuFloat(t.lane[i]);
-  }
-  auto bits = [&](f64 value) { return vfpuNaN(vfpuBits(value), NaNSign::Positive, 0); };
-  Vector d{{bits(a[3] * b[0] - a[2] * b[1] + a[1] * b[2] + a[0] * b[3]),
-            bits(a[3] * b[1] + a[2] * b[0] + a[1] * b[3] - a[0] * b[2]),
-            bits(a[3] * b[2] + a[2] * b[3] - a[1] * b[0] + a[0] * b[1]),
-            bits(a[3] * b[3] - a[2] * b[2] - a[1] * b[1] - a[0] * b[0])}};
+  auto neg = [](u32 x) -> u32 { return x ^ 0x8000'0000; };
+  auto dot = [&](u32 a0, u32 a1, u32 a2, u32 a3, u32 b0, u32 b1, u32 b2, u32 b3) -> u32 {
+    u32 a[4] = {a0, a1, a2, a3}, b[4] = {b0, b1, b2, b3};
+    return vfpuNaN(vfpuDot(a, b), NaNSign::Positive, 0);
+  };
+  Vector d{{
+    dot(s.lane[3], s.lane[2], s.lane[1], s.lane[0], t.lane[0], neg(t.lane[1]), t.lane[2], t.lane[3]),
+    dot(s.lane[3], s.lane[2], s.lane[1], s.lane[0], t.lane[1], t.lane[0], t.lane[3], neg(t.lane[2])),
+    dot(s.lane[3], s.lane[2], s.lane[1], s.lane[0], t.lane[2], t.lane[3], neg(t.lane[0]), t.lane[1]),
+    dot(s.lane[3], s.lane[2], s.lane[1], s.lane[0], t.lane[3], neg(t.lane[2]), neg(t.lane[1]), neg(t.lane[0])),
+  }};
   vfpuWrite(vd, 4, d, vfpu.pfxd);
 }
 
@@ -1419,9 +1489,9 @@ auto Allegrex::VTFM(u8 vd, u8 vs, u8 vt, u32 size) -> void {
   auto t = vfpuRead(vt, size, PrefixIdentity);
   Vector d{};
   for(u32 i : range(size)) {
-    f64 sum = 0;
-    for(u32 k : range(size)) sum += (f64)vfpuFloat(m.element[size * k + i]) * vfpuFloat(t.lane[k]);
-    d.lane[i] = vfpuNaN(vfpuBits(sum), NaNSign::Positive, 0);
+    u32 a[4] = {}, b[4] = {};
+    for(u32 k : range(size)) a[k] = m.element[size * k + i], b[k] = t.lane[k];
+    d.lane[i] = vfpuNaN(vfpuDot(a, b), NaNSign::Positive, 0);
   }
   vfpuWrite(vd, size, d, 0);
 }

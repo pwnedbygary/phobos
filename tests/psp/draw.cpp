@@ -422,6 +422,51 @@ static auto drawTriangles() -> void {
   CHECK(dots.pixel(3, 2), 0x12'3456);
 }
 
+//Colors and depths stepped across a triangle as a PSP steps them (draw.cpp's stepped(); docs/psp-core.md, part 48):
+//from the leftmost corner, the topmost of two, a step a sixteenth across and one down in 16384ths, each through the
+//reciprocal of twice the area kept to 16 bits, rounded down; and a pixel's value is rounded down.
+static auto drawSteps() -> void {
+  //red 0 at (0, 0), 128 at (15, 0), 0 at (0, 4): twice the area is 240 * 64 = 15360 sixteenths squared, its
+  //reciprocal 2^29 / 15360 = 34952.53 kept as 34952, so the step across, 128 * 64 * 34952 / 2^15 = 8738.06 16384ths
+  //a sixteenth (exactly 8738.13), is 8738: at pixel 7's middle, 120 sixteenths along, that's 1048560 16384ths, a
+  //hair under 64, where the true blend is 64: 63. At pixel 8, 72.53 either way: 72.
+  Canvas c;
+  c.draw(GE::Triangles, {{0, 0, 0xff00'0000, 0, 0, 0}, {0, 0, 0xff00'0080, 15, 0, 0}, {0, 0, 0xff00'0000, 0, 4, 0}});
+  CHECK(c.pixel(7, 1) & 0xff, 63u);
+  CHECK(c.pixel(8, 1) & 0xff, 72u);
+  CHECK(c.pixel(0, 3) & 0xff, 4u);  //4.27: the start, 0, and 8 sixteenths of the step
+  //depths the same way (0, 128, 0, written always): 63 at pixel 7 too
+  c.memory.fill(VRAM, 0, 0x1000);
+  c.ge.commands[GE::DepthTestEnable] = 1, c.ge.commands[GE::DepthTest] = 1;
+  c.draw(GE::Triangles,
+         {{0, 0, 0xff00'0000, 0, 0, 0}, {0, 0, 0xff00'0080, 15, 0, 128}, {0, 0, 0xff00'0000, 0, 4, 0}});
+  CHECK(c.depth(7, 1), 63u);
+  CHECK(c.depth(8, 1), 72u);
+  c.ge.commands[GE::DepthTestEnable] = 0;
+  //stepped from the bottom left corner (the leftmost) up, the same blend comes out 64 at pixel (3, 7): the start,
+  //128 at row 15's sixteenths, less 120 sixteenths' steps of 8738, is a hair over 64
+  c.memory.fill(VRAM, 0, 0x1000);
+  c.draw(GE::Triangles, {{0, 0, 0xff00'0000, 4, 0, 0}, {0, 0, 0xff00'0080, 4, 15, 0}, {0, 0, 0xff00'0080, 0, 15, 0}});
+  CHECK(c.pixel(3, 7) & 0xff, 64u);
+  //of two leftmost corners, the top one: (0, 0) red 0, (0, 15) 128, (15, 7) 64, where pixel (3, 7) is 64.996; from
+  //(0, 0) the steps (291 across, 8737 down) leave it at 64 (from (0, 15) they'd give 65)
+  c.memory.fill(VRAM, 0, 0x1000);
+  c.draw(GE::Triangles, {{0, 0, 0xff00'0000, 0, 0, 0}, {0, 0, 0xff00'0080, 0, 15, 0}, {0, 0, 0xff00'0040, 15, 7, 0}});
+  CHECK(c.pixel(3, 7) & 0xff, 64u);
+  //the reciprocal's 16 bits: red 70, 108 and 128 at (9.8125, 8.25), (0.8125, 0.25) and (13.4375, 13.9375) give pixel
+  //(9, 8) 87 (the true blend is 87.013); kept to 15 bits, or 17, the steps would give 86
+  c.memory.fill(VRAM, 0, 0x1000);
+  c.draw(GE::Triangles, {{0, 0, 0xff00'0046, 9.8125f, 8.25f, 0}, {0, 0, 0xff00'006c, 0.8125f, 0.25f, 0},
+                         {0, 0, 0xff00'0080, 13.4375f, 13.9375f, 0}});
+  CHECK(c.pixel(9, 8) & 0xff, 87u);
+  //steps rounded down: red 55, 205 and 55 at (12.125, 3.625), (8.1875, 4.5625) and (0.4375, 1.0625) give pixel
+  //(11, 3) 55 (the true blend is 56.002); steps rounded to the nearest, or toward zero, would give 56
+  c.memory.fill(VRAM, 0, 0x1000);
+  c.draw(GE::Triangles, {{0, 0, 0xff00'0037, 12.125f, 3.625f, 0}, {0, 0, 0xff00'00cd, 8.1875f, 4.5625f, 0},
+                         {0, 0, 0xff00'0037, 0.4375f, 1.0625f, 0}});
+  CHECK(c.pixel(11, 3) & 0xff, 55u);
+}
+
 //Lines (draw.cpp's line()): the pictures pspautotests recorded of them on a PSP (gpu/primitives/lines, linestrip and
 //indices, moved to fit the canvas), and the diamond exit rule's own cases: from a pixel's middle to another's, the
 //first pixel lit and not the last; steep lines; a strip's joint lit once; lines too short to leave a diamond, and one
@@ -916,7 +961,9 @@ static auto drawDecodedTextures() -> void {
     CHECK(drawn(3), 0x0031'0003u);
     palette(0x0030'0000);
     CHECK(drawn(4), 0x0030'0004u);
-    CHECK(c.ge.textures.entries.size(), 3u);  //the 8888 one in VRAM, and the indices with each palette
+    //the 8888 one in VRAM, the indices with each palette, and the 8888 one in RAM, whose page was written since: it's
+    //looked at again when next drawn with (drawDecodedWritten)
+    CHECK(c.ge.textures.entries.size(), 4u);
 
     //a state loaded: the memory as it was then, and nothing kept from after
     serializer saved;
@@ -962,6 +1009,276 @@ static auto drawDecodedTextures() -> void {
   for(u32 x = 0; x < 4; x++) CHECK(c.pixel(x, 2), 0x0001'0101u * (x + 1));
 }
 
+//Sprites drawing over their own texture (the frame buffer, 64 pixels wide, as a texture of 256 by 256) that never
+//take a texel they have drawn by then, where its weight isn't 0, draw from a copy taken first (draw.cpp's
+//readsAhead()), and come out as reading the texture from memory as they draw does (a machine without watching(), which
+//keeps nothing decoded), in each frame buffer format: the picture brightened in place, filtered (some second texels,
+//whose weights are 0, drawn already: the first sprite's first column, a row down, past the frame buffer's width);
+//halved in place; shrunk a little from its own top left; from a texture starting two rows and 16 pixels before the
+//frame buffer, a row down and 16 pixels right; through VRAM's third copy; and of palette indices. Those taking a texel
+//they have drawn aren't copied, and come out the same too: a pixel up, or left; from the texture before the frame
+//buffer, a row up; a filtered second texel, a quarter of the weight, repeated round to its row's first; a second
+//sprite taking the first's pixels.
+static auto drawCopiedTexture() -> void {
+  for(u32 format : {0u, 1u, 2u, 3u}) {
+    u32 bytes = format == 3 ? 4 : 2;
+    Canvas copied{format}, read{format};
+    read.memory.watching = nullptr;
+    std::mt19937 random{format + 1};
+    std::vector<u8> picture(64 * 1024), palette(1024);
+    for(auto& byte : picture) byte = random();
+    for(auto& byte : palette) byte = random();
+    for(Canvas* c : {&copied, &read}) {
+      c->memory.copyIn(Palette, palette.data(), palette.size());
+      c->ge.commands[GE::ClutAddress] = Palette & 0xff'ffff;
+      c->ge.commands[GE::ClutAddressUpper] = (Palette >> 8) & 0xf'0000;
+      c->ge.commands[GE::ClutFormat] = 3 | 0xff << 8;
+      c->ge.commands[GE::ClutLoad] = 32;  //(all 1 KiB)
+      c->ge.loadClut();
+    }
+    auto strips = [](u32 count, float width, float height, float across, float down) {
+      std::vector<V> sprites;
+      for(u32 n = 0; n < count; n++) {
+        sprites.push_back({n * across, 0, 0xff8e'8e8e, n * width, 0, 0});
+        sprites.push_back({(n + 1) * across, down, 0xff8e'8e8e, (n + 1) * width, height, 0});
+      }
+      return sprites;
+    };
+    auto one = [](float x, float y, float u, float v, float width = 32) {  //a sprite 32 high, from (x, y) at (u, v)
+      return std::vector<V>{{u, v, 0xffff'ffff, x, y, 0}, {u + width, v + 32, 0xffff'ffff, x + width, y + 32, 0}};
+    };
+    auto both = [](std::vector<V> first, const std::vector<V>& second) {
+      first.insert(first.end(), second.begin(), second.end());
+      return first;
+    };
+    u32 before = 0x8000 - (2 * 64 + 16) * bytes;  //(two rows and 16 pixels before a frame buffer at 0x8000)
+    struct Case {
+      std::vector<V> sprites;
+      u32 filter;
+      bool ahead;
+      u32 frameBuffer = 0, texture = 0, size = 8, kind = 0;  //(the texture's address, sides' bits and format)
+    };
+    std::vector<Case> cases = {
+      {strips(2, 32, 64, 32, 64), 0x101, true},   //brightened in place, 1:1
+      {strips(4, 8, 32, 16, 64), 0x101, true},    //halved
+      {strips(2, 30, 60, 32, 64), 0x101, true},   //shrunk a little
+      {one(0, 0, 16, 3), 0, true, 0x8000, before},
+      {strips(2, 32, 64, 32, 64), 0x101, true, 0, 0x40'0000},  //(VRAM's third copy)
+      {strips(2, 32, 64, 32, 64), 0x101, true, 0, 0, 8, format == 3 ? 7u : 6u},
+      {one(0, 1, 0, 0), 0, false},
+      {one(1, 0, 0, 0), 0, false},
+      {one(0, 0, 16, 1), 0, false, 0x8000, before},
+      {one(0, 0, 0.25f, 0, 64), 0x101, false, 0, 0, 6},  //(64 wide: column 64 repeats round to 0)
+      {both(one(0, 0, 0, 0), one(32, 0, 0, 0)), 0, false},
+    };
+    for(auto& test : cases) {
+      for(Canvas* c : {&copied, &read}) {
+        c->memory.copyIn(VRAM, picture.data(), picture.size());
+        c->ge.commands[GE::FrameBufferPointer] = test.frameBuffer;
+        c->ge.commands[GE::FrameBufferWidth] = 64;
+        c->texture(test.kind ? test.kind : format, 1 << test.size, 1 << test.size, 64);
+        c->ge.commands[GE::TextureAddress0] = test.texture;
+        c->ge.commands[GE::TextureBufferWidth0] = 0x04 << 16 | 64;
+        c->ge.commands[GE::TextureFilter] = test.filter;
+        c->ge.commands[GE::TextureFunction] = 0 | 1 << 16;  //modulated, doubled
+        c->ge.commands[GE::AlphaBlendEnable] = 1;
+        c->ge.commands[GE::BlendMode] = 10 | 10 << 4;
+        c->ge.commands[GE::BlendFixedA] = 0xff'ffff, c->ge.commands[GE::BlendFixedB] = 0xff'ffff;
+      }
+      auto pixel = copied.ge.pixelState();
+      auto texture = copied.ge.sampler();
+      auto look = copied.ge.lookFor(pixel, &texture);
+      std::vector<GE::Vertex> corners;
+      for(auto& v : test.sprites) {
+        GE::Vertex corner;
+        corner.u = v.u, corner.v = v.v, corner.x = v.x, corner.y = v.y, corner.color = v.color;
+        corners.push_back(corner);
+      }
+      CHECK(copied.ge.readsAhead(look, corners, corners.size()), test.ahead);
+      //(decode() takes the copy where readsAhead() says so, and only there)
+      GE::Look decoding = look;
+      copied.ge.decode(decoding, GE::Region{pixel.left, pixel.top, pixel.right, pixel.bottom}, 512, false,
+                       [&] { return copied.ge.readsAhead(decoding, corners, corners.size()); });
+      CHECK(decoding.texture.decoded != nullptr, test.ahead);
+      copied.ge.dropTextures();  //(the draw decodes afresh)
+      copied.draw(GE::Sprites, test.sprites);
+      read.draw(GE::Sprites, test.sprites);
+      CHECK(copied.memory.vram == read.memory.vram, true);
+    }
+  }
+}
+
+//Primitives drawing beside their texture in the same rows of a frame buffer, never into a byte of it (texture.cpp's
+//drawsOver(), row by row), as God of War's bloom does in a 512-wide buffer: a picture in columns 0-255 halved into
+//columns 256-383, that halved again into 384-447, each brought back over the one before. Such a primitive takes its
+//texture from a copy (decoded) like any other, and draws what reading it from memory as it draws gives (a machine
+//without watching(), which keeps nothing decoded), in a 16-bit and a 32-bit frame buffer, filtered, as triangle
+//strips of 16-pixel quads (God of War's) and as a sprite; and so with palette indices a byte each beside 16-bit
+//pixels, right up against them. Those some pixel of which is a texel they read are read from memory, and come out
+//the same too: a texture as wide as the rows, one whose last 8 columns are drawn over, pixels whose rows run on into
+//the next row's texels, a texture swizzled or through VRAM's second copy (whose rows aren't laid out plainly), and
+//texel rows longer than the pitch between them, the last running on under the pixels.
+static auto drawBesideTexture() -> void {
+  for(u32 format : {0u, 3u}) {
+    u32 bytes = format == 3 ? 4 : 2;
+    Canvas copied{format}, read{format};
+    read.memory.watching = nullptr;
+    std::mt19937 random{format + 11};
+    std::vector<u8> picture(512 * 64 * 4), palette(1024);
+    for(auto& byte : picture) byte = random();
+    for(auto& byte : palette) byte = random();
+    struct Case {
+      u32 texture, width, frameBuffer, drawn;  //columns: the texture's first and its width, the frame buffer's first,
+                                               //and those drawn
+      float scale;                             //texels a pixel
+      bool strip, decoded;
+      u32 kind = 0;                            //the texture's format (0: the frame buffer's), and whether swizzled
+      bool swizzled = false;
+      u32 copy = 0, pitch = 512, row = 0;      //VRAM's copy it's read through; the rows' pitch; the frame buffer's row
+      u32 height = 64;                         //the texture's
+    };
+    std::vector<Case> cases = {
+      {0, 256, 256, 128, 2, true, true}, {256, 128, 384, 64, 2, true, true}, {384, 64, 256, 128, 0.5f, true, true},
+      {256, 128, 0, 256, 0.5f, true, true}, {0, 256, 256, 128, 2, false, true},
+      {0, 512, 256, 128, 1, false, false}, {0, 256, 248, 128, 2, false, false}, {0, 64, 448, 128, 0.5f, false, false},
+      {0, 256, 256, 128, 2, false, false, 0, true}, {0, 256, 256, 128, 2, false, false, 0, false, 1},
+      {0, 512, 0, 32, 1, false, false, 0, false, 0, 256, 64},
+      {0, 256, 256, 128, 0.5f, false, false, 0, true, 0, 512, 0, 4},  //(its first 8 rows' blocks fill 4 rows)
+    };
+    if(format == 0) cases.push_back({0, 256, 128, 128, 2, false, true, 5});  //(indices: 256 bytes, beside column 128)
+    for(auto& test : cases) {
+      u32 kind = test.kind ? test.kind : format, texelBytes = kind == 5 ? 1 : bytes;
+      for(Canvas* c : {&copied, &read}) {
+        c->memory.copyIn(VRAM, picture.data(), picture.size());
+        c->memory.copyIn(Palette, palette.data(), palette.size());
+        c->ge.commands[GE::ClutAddress] = Palette & 0xff'ffff;
+        c->ge.commands[GE::ClutAddressUpper] = (Palette >> 8) & 0xf'0000;
+        c->ge.commands[GE::ClutFormat] = 1 | 0xff << 8;
+        c->ge.commands[GE::ClutLoad] = 32;
+        c->ge.loadClut();
+        c->ge.commands[GE::FrameBufferPointer] = (test.row * test.pitch + test.frameBuffer) * bytes;
+        c->ge.commands[GE::FrameBufferWidth] = test.pitch;
+        c->ge.commands[GE::Scissor1] = 0;
+        c->ge.commands[GE::Scissor2] = 31 << 10 | (test.drawn - 1);
+        c->texture(kind, test.width, test.height, test.pitch * bytes / texelBytes);
+        c->ge.commands[GE::TextureAddress0] = test.copy * Memory::VRAMSize + test.texture * texelBytes;
+        c->ge.commands[GE::TextureBufferWidth0] = 0x04 << 16 | test.pitch * bytes / texelBytes;
+        c->ge.commands[GE::TextureMode] = test.swizzled;
+        c->ge.commands[GE::TextureFilter] = 0x101;
+        c->ge.commands[GE::TextureWrap] = 0x101;
+      }
+      std::vector<V> vertices;
+      float s = test.scale;
+      if(test.strip) {
+        for(u32 x = 0; x <= test.drawn; x += 16) {
+          vertices.push_back({x * s, 0, 0xffff'ffff, float(x), 0, 0});
+          vertices.push_back({x * s, 32 * s, 0xffff'ffff, float(x), 32, 0});
+        }
+      } else {
+        vertices = {{0, 0, 0xffff'ffff, 0, 0, 0}, {test.drawn * s, 32 * s, 0xffff'ffff, float(test.drawn), 32, 0}};
+      }
+      auto pixel = copied.ge.pixelState();
+      auto texture = copied.ge.sampler();
+      GE::Look look = copied.ge.lookFor(pixel, &texture);
+      copied.ge.decode(look, GE::Region{pixel.left, pixel.top, pixel.right, pixel.bottom}, test.height);
+      CHECK(look.texture.decoded != nullptr, test.decoded);
+      copied.ge.dropTextures();  //(the draw decodes afresh)
+      copied.draw(test.strip ? GE::TriangleStrip : GE::Sprites, vertices);
+      read.draw(test.strip ? GE::TriangleStrip : GE::Sprites, vertices);
+      CHECK(copied.memory.vram == read.memory.vram, true);
+    }
+  }
+}
+
+//A sprite whose blending keeps every pixel as it was (draw.cpp's keepsPixels(): the source times a fixed 0, plus the
+//destination times a fixed 255) isn't drawn, in each frame buffer format, which leaves the picture as drawing it does:
+//as dithering by a matrix of zeros, which is drawn, leaves it. Unless reading its texture would be reported: with
+//nothing behind it, it's drawn, each read reported as when it's dithered; of format 11, the format noted.
+static auto drawKeptPixels() -> void {
+  for(u32 format : {0u, 1u, 2u, 3u}) {
+    Canvas c{format};
+    std::mt19937 random{format + 5};
+    std::vector<u8> picture(64 * 64 * 4);
+    for(auto& byte : picture) byte = random();
+    c.ge.commands[GE::FrameBufferWidth] = 64;
+    c.texture(3, 4, 4, 4);
+    c.ge.commands[GE::TextureFunction] = 0;
+    c.ge.commands[GE::AlphaBlendEnable] = 1;
+    c.ge.commands[GE::BlendMode] = 12 | 15 << 4;  //(fixed factors, both)
+    c.ge.commands[GE::BlendFixedA] = 0, c.ge.commands[GE::BlendFixedB] = 0xff'ffff;
+    for(bool dithered : {false, true}) {
+      c.memory.copyIn(VRAM, picture.data(), picture.size());
+      c.ge.commands[GE::DitherEnable] = dithered;
+      c.draw(GE::Sprites, {{0, 0, 0xffff'ffff, 0, 0, 0}, {4, 4, 0x80ff'ffff, 64, 64, 0}});
+      CHECK(std::equal(picture.begin(), picture.end(), c.memory.vram.begin()), true);
+    }
+    //its texels with nothing behind them (address 0): each read reported, drawn or dithered
+    c.ge.commands[GE::TextureAddress0] = 0, c.ge.commands[GE::TextureBufferWidth0] = 4;
+    size_t reported[2];
+    for(bool dithered : {false, true}) {
+      c.s.unmapped.clear();
+      c.ge.commands[GE::DitherEnable] = dithered;
+      c.draw(GE::Sprites, {{0, 0, 0xffff'ffff, 0, 0, 0}, {4, 4, 0x80ff'ffff, 64, 64, 0}});
+      reported[dithered] = c.s.unmapped.size();
+      CHECK(std::equal(picture.begin(), picture.end(), c.memory.vram.begin()), true);
+    }
+    CHECK(reported[0] > 0 && reported[0] == reported[1], true);
+    //a format the PSP doesn't have
+    c.ge.noted.clear();
+    c.ge.commands[GE::DitherEnable] = 0;
+    c.texture(11, 4, 4, 4);
+    c.ge.commands[GE::TextureFunction] = 0;
+    c.draw(GE::Sprites, {{0, 0, 0xffff'ffff, 0, 0, 0}, {4, 4, 0x80ff'ffff, 64, 64, 0}});
+    CHECK(c.ge.noted.size(), 1u);
+  }
+}
+
+//A texture whose page is written is looked at again as it's next drawn with: kept, the same copy, where its own bytes
+//are as they were (a write beside it in the same page, or its bytes written as they were); decoded afresh where
+//they aren't.
+static auto drawDecodedWritten() -> void {
+  for(bool recompile : {false, true}) {
+    Canvas c;
+    c.texture(3, 4, 4, 4);
+    for(u32 n = 0; n < 16; n++) c.memory.write(4, Texture + n * 4, 0x0010'2030 + n);
+    auto drawn = [&](u32 n) {
+      c.draw(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {4, 4, 0, 4, 4, 0}});
+      return c.pixel(n % 4, n / 4);
+    };
+    auto& entries = c.ge.textures.entries;
+    CHECK(drawn(5), 0x0010'2035u);
+    CHECK(entries.size(), 1u);
+    auto* first = entries.begin()->second.get();
+    //beside it, by the CPU's store and by memory's own write: kept
+    c.s.runProgram(0x0890'0000, {lui(t0, Texture >> 16), ori(t0, t0, 64), lui(t1, 0x55), sw(t1, 0, t0)},
+                   recompile);
+    CHECK(first->suspect, true);
+    CHECK(drawn(5), 0x0010'2035u);
+    CHECK(entries.size() == 1 && entries.begin()->second.get() == first && !first->suspect, true);
+    c.memory.write(4, Texture + 128, 7);
+    CHECK(drawn(6), 0x0010'2036u);
+    CHECK(entries.size() == 1 && entries.begin()->second.get() == first, true);
+    //its own byte written as it was: kept
+    c.memory.write(4, Texture + 8 * 4, 0x0010'2038);
+    CHECK(drawn(8), 0x0010'2038u);
+    CHECK(entries.begin()->second.get() == first, true);
+    //and written to another value: decoded afresh, and watched again (the next write is heard of)
+    c.memory.write(4, Texture + 9 * 4, 0x00aa'bbcc);
+    CHECK(drawn(9), 0x00aa'bbccu);
+    CHECK(entries.size(), 1u);
+    CHECK(entries.begin()->second->suspect, false);
+    c.memory.write(4, Texture + 10 * 4, 0x00dd'eeffu);
+    CHECK(drawn(10), 0x00dd'eeffu);
+    //written while it isn't drawn with, then drawn with another texture, then with it again
+    c.memory.write(4, Texture + 11 * 4, 0x0012'3456);
+    c.ge.commands[GE::TextureAddress0] = (Texture + 0x1000) & 0xff'ffff;
+    CHECK(drawn(0), 0u);
+    c.ge.commands[GE::TextureAddress0] = Texture & 0xff'ffff;
+    CHECK(drawn(11), 0x0012'3456u);
+    CHECK(drawn(10), 0x00dd'eeffu);
+  }
+}
+
 //What's kept of a texture: one copy, of as many rows as any primitive has taken from it. One taking fewer draws from
 //it as it is; one taking more makes it longer (the rows already decoded kept as they are, the rest decoded). Past
 //the cache's budget, the copies used longest ago go first.
@@ -970,10 +1287,10 @@ static auto drawDecodedRows() -> void {
   c.texture(3, 16, 512, 16);
   for(u32 n = 0; n < 16 * 512; n++) c.memory.write(4, Texture + n * 4, n);
   auto& entries = c.ge.textures.entries;
-  c.draw(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {16, 16, 0, 16, 16, 0}});  //rows 0-15, so 24 kept (2 more, in eights)
+  c.draw(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {16, 16, 0, 16, 16, 0}});  //rows 0-15, so 16 kept (in eights)
   CHECK(entries.size(), 1u);
   auto* first = entries.begin()->second.get();
-  CHECK(first->rows, 24u);
+  CHECK(first->rows, 16u);
   c.draw(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {16, 8, 0, 16, 8, 0}});  //fewer: the same copy
   CHECK(entries.size(), 1u);
   CHECK(entries.begin()->second.get() == first, true);
@@ -1164,11 +1481,15 @@ auto drawTests() -> Tests {
   return {
     {"draw textures kept decoded", drawDecodedTextures},
     {"draw textures kept decoded, their rows", drawDecodedRows},
+    {"draw textures kept decoded, their pages written", drawDecodedWritten},
+    {"draw over its own texture from a copy", drawCopiedTexture},
+    {"draw beside its own texture from a copy", drawBesideTexture},
+    {"draw keeping every pixel", drawKeptPixels},
     {"draw turned sprites kept decoded", drawTurnedDecoded},
     {"draw textures kept decoded against memory", drawDecodedAgainstMemory},
     {"draw sprites", drawSprites}, {"draw texture formats", drawTextureFormats}, {"draw filter", drawFilter},
     {"draw texture functions", drawTextureFunctions}, {"draw pixel tests", drawPixelTests}, {"draw blending", drawBlending},
-    {"draw dither and masks", drawDitherAndMasks}, {"draw triangles", drawTriangles},
+    {"draw dither and masks", drawDitherAndMasks}, {"draw triangles", drawTriangles}, {"draw steps", drawSteps},
     {"draw texel steps", drawTexelSteps}, {"draw ambient and filters", drawAmbientAndFilters},
     {"draw lines", drawLines}, {"draw corners at one depth", drawOneDepth}, {"draw DXT textures", drawDXT},
     {"draw vertex formats", drawVertexFormats},

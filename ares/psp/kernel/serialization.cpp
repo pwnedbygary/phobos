@@ -70,6 +70,7 @@ static auto poolHolds(const Kernel::Pool& pool, const std::vector<Kernel::Block>
 
 auto Kernel::serialize(serializer& s) -> bool {
   bool valid = true;
+  if(s.reading()) trampoline();  //(memory has loaded: the kernel's own code is this kernel's, whatever the state's)
   //where the state ends: what nall's serializer reads past it is zeros, not the state's
   u32 end = s.capacity();
   auto check = [&](bool good) { if(s.reading() && !good) valid = false; };
@@ -178,9 +179,14 @@ auto Kernel::serialize(serializer& s) -> bool {
     auto& w = t.waitBeforeCallback;
     s(w.wait); s(w.id); s(w.count); s(w.mode); s(w.pointer); s(w.timeoutPointer); s(w.wakeAt); s(w.callbacks);
     s(w.done); s(w.resultPointer);
-    check(t.wait <= Wait::Psmf && (w.wait <= Wait::Mailbox || w.wait == Wait::Mutex || w.wait == Wait::Psmf));
+    check(t.wait <= Wait::Tlspl && (w.wait <= Wait::Mailbox || w.wait == Wait::Mutex || w.wait == Wait::Psmf));
     check(t.callbackID < nextUID);
     s(t.suspended);
+    //the stacks lent to it for calls (sceKernelExtendThreadStack), innermost last: each with the thread as the call
+    //found it and the stack it had then (layout 20 on); none once it has ended
+    if(s.reading() && stateLayout < 20) t.extensions.clear();
+    else vector(t.extensions, [&](Thread::Extension& e) { context(e.caller); s(e.stack); s(e.size); });
+    check(t.status != Status::Dormant || t.extensions.empty());
     //its run figures (threads.cpp): no more time on the CPU than has passed
     s(t.runCycles); s(t.interruptPreempts); s(t.threadPreempts); s(t.releases);
     check(t.runCycles <= cycles);
@@ -516,22 +522,23 @@ auto Kernel::serialize(serializer& s) -> bool {
     check(call.slots <= MaxFonts && call.asks.size() <= 9 && call.got.size() <= call.asks.size());
     check(call.frees.size() <= MaxFonts * 9 + 4);
   });
-  //a ringbuffer being fed, its callback running: it asked for a run of what's left (at most a ring's 4096 packets)
+  //a ringbuffer being fed, its callback running: it asked for a run of what's left (at most RingMostPackets)
   map(mpegCalls, [&](MpegCall& call) {
     context(call.caller); s(call.ringbuffer); s(call.left); s(call.asked); s(call.put);
-    check(call.left <= 4096 && call.asked >= 1 && call.asked <= call.left && call.put <= 4096 - call.left);
+    check(call.left <= RingMostPackets && call.asked >= 1 && call.asked <= call.left);
+    check(call.put <= RingMostPackets - call.left);
     check(memory.reaches(call.ringbuffer, 48));
   });
   if(s.reading()) {
     for(auto& [thread, call] : mpegCalls) check(threads.count(thread));
   }
-  //what each library's Media Engine holds (mpeg.cpp): the access unit to decode next (no more than a ring of 4096
-  //packets holds), sound kept from freed packets (1 MiB at most) with its time stamps (within it, in order), the
-  //sound handed out from the ring's packets, the last sound access unit's time stamp and the one carried over, and
-  //the pictures held back and shown (4:2:0, as many bytes as their sizes take, up to the most a movie shows each
-  //way, VideoDecoder::MaxSide), and the last sound frame decoded (of a frame's size: at most 0x840 bytes, less its
-  //header). The decoders aren't saved: made afresh, the sound's is primed with that frame, the pictures' shows no
-  //new picture until one it can start from. A library is in memory.
+  //what each library's Media Engine holds (mpeg.cpp): the access unit to decode next (no more than a ring of
+  //RingMostPackets holds), sound kept from freed packets (1 MiB at most) with its time stamps (within it, in
+  //order), the sound handed out from the ring's packets, the last sound access unit's time stamp and the one
+  //carried over, and the pictures held back and shown (4:2:0, as many bytes as their sizes take, up to the most a
+  //movie shows each way, VideoDecoder::MaxSide), and the last sound frame decoded (of a frame's size: at most 0x840
+  //bytes, less its header). The decoders aren't saved: made afresh, the sound's is primed with that frame, the
+  //pictures' shows no new picture until one it can start from. A library is in memory.
   map(mpegStreams, [&](MpegStream& m) {
     bytes(m.unit); bytes(m.audio);
     vector(m.audioStamps, [&](std::pair<u32, u64>& stamp) { s(stamp.first); s(stamp.second); });
@@ -539,7 +546,7 @@ auto Kernel::serialize(serializer& s) -> bool {
     bytes(m.held); s(m.heldWidth); s(m.heldHeight); bytes(m.shown); s(m.shownWidth); s(m.shownHeight);
     bytes(m.soundLast);
     if(s.reading()) m.video.reset(), m.sound.reset(), m.keyframe = true;
-    check(m.unit.size() <= 4096 * 2048 && m.audio.size() <= 1_MiB && m.audioTaken <= 4096 * 2048);
+    check(m.unit.size() <= RingMostPackets * 2048 && m.audio.size() <= 1_MiB && m.audioTaken <= RingMostPackets * 2048);
     check(m.soundLast.size() <= 0x840 - 8 && !(m.soundLast.size() % 8));
     for(u32 n = 0; n < m.audioStamps.size(); n++) {
       check(m.audioStamps[n].first <= m.audio.size() && (!n || m.audioStamps[n - 1].first <= m.audioStamps[n].first));
@@ -555,7 +562,11 @@ auto Kernel::serialize(serializer& s) -> bool {
     for(auto& [library, stream] : mpegStreams) check(memory.reaches(library, 0x800));
   }
   if(s.reading() && valid) {
-    check((fontLibraries.empty() && openFonts.empty() && fontCalls.empty()) || fontsInstalled());
+    if(!(fontLibraries.empty() && openFonts.empty() && fontCalls.empty()) && !fontsInstalled()) {
+      note("the state's game has the system's font library open, and the fonts folder has none of the fonts: it "
+           "can't load");
+      valid = false;
+    }
     for(auto& [address, library] : fontLibraries) {
       check(address && library.address == address);
       for(u32 n : range(MaxFonts)) {
@@ -577,7 +588,7 @@ auto Kernel::serialize(serializer& s) -> bool {
         for(u32 n : range(library->slots)) if(library->open[n] && library->fonts[n] == id) holders++;
       }
       check(holders && font.references == holders);
-      if(valid) check(fontReload(font) && font.blocks.size() == fontAsks(*font.pgf, font.mode, font.source).size());
+      if(valid) check(fontReloaded(font) && font.blocks.size() == fontAsks(*font.pgf, font.mode, font.source).size());
     }
     for(auto& [thread, call] : fontCalls) {
       check(threads.count(thread) && (call.kind != FontCall::NewLib || call.asks.size() == 4));
@@ -586,14 +597,83 @@ auto Kernel::serialize(serializer& s) -> bool {
       auto library = fontLibraryAt(call.library);
       check(library && call.slot < library->slots && library->open[call.slot] && !library->fonts[call.slot]);
       auto& font = call.opening;
-      if(valid) check(fontReload(font) && call.asks.size() == fontAsks(*font.pgf, font.mode, font.source).size());
+      if(valid) check(fontReloaded(font) && call.asks.size() == fontAsks(*font.pgf, font.mode, font.source).size());
     }
   }
   //the utilities: the dialog, and the modules loaded; the HOME menu's language and button (any the program sets)
   s(dialog.kind); s(dialog.status); s(dialog.next); s(dialog.changeAt); s(dialog.parameters);
-  s(dialog.abortUpdates); s(dialog.runningUpdates);
+  //Layouts before 16/17 omit the message-dialog abort counters (none aborted in those states).
+  if(s.reading() && stateLayout < 16) dialog.abortUpdates = 0;
+  else s(dialog.abortUpdates);
+  if(s.reading() && stateLayout < 17) dialog.runningUpdates = 0;
+  else s(dialog.runningUpdates);
   vector(utilityModules, [&](u32& module) { s(module); });
   s(imposeLanguage); s(imposeButton);
+  //character code conversion's tables and error characters (ccc.cpp): layout 18 on, none set in older states
+  if(s.reading() && stateLayout < 18) ccc = {};
+  else s(ccc.jisToUnicode), s(ccc.unicodeToJis), s(ccc.errorUTF8), s(ccc.errorUTF16), s(ccc.errorSJIS);
+  //thread-local storage pools (tls.cpp): layout 19 on, none in older states. Each has blocks, the one to look from
+  //among them, room for each at least its size (a multiple of 4), and its index, one of 16 no other pool has, in its
+  //ID's bits 3 to 6; each block is free or a thread's that hasn't ended, a thread holding one of a pool at most.
+  if(s.reading() && stateLayout < 19) tlsPools.clear();
+  else map(tlsPools, [&](TlsPool& pool) {
+    s(pool.uid); text(pool.name); s(pool.attributes); s(pool.index); s(pool.block); s(pool.address);
+    s(pool.blockSize); s(pool.stride); s(pool.next);
+    vector(pool.holders, [&](u32& holder) { s(holder); });
+    check(pool.index < 16 && (pool.uid >> 3 & 15) == pool.index && !pool.holders.empty());
+    check(pool.next < pool.holders.size() && pool.stride >= pool.blockSize && pool.stride && !(pool.stride & 3));
+  });
+  if(s.reading() && valid) {
+    u32 indexes = 0;
+    for(auto& [uid, pool] : tlsPools) {
+      check(uid < nextUID && pool.uid == uid && pool.block < nextUID && !(indexes >> pool.index & 1));
+      indexes |= 1 << pool.index;
+      auto block = std::find_if(blocks.begin(), blocks.end(), [&](auto& b) { return b.uid == pool.block; });
+      check(block != blocks.end() && pool.address >= block->address
+            && pool.address + u64(pool.stride) * pool.holders.size() <= u64(block->address) + block->size);
+      std::vector<u32> holders;
+      for(u32 holder : pool.holders) {
+        if(!holder) continue;
+        auto thread = threads.find(holder);
+        check(thread != threads.end() && thread->second->status != Status::Dormant);
+        holders.push_back(holder);
+      }
+      std::sort(holders.begin(), holders.end());
+      check(std::adjacent_find(holders.begin(), holders.end()) == holders.end());
+    }
+    //a thread waiting for a block waits on a pool there is, every block of it held, holding none itself; the
+    //system call's wait has where to put the address
+    for(auto& [uid, t] : threads) {
+      if(t->status != Status::Waiting || t->wait != Wait::Tlspl) continue;
+      auto pool = tlsPools.find(t->waitID);
+      check(pool != tlsPools.end() && !t->callbacks && t->waitMode <= TlsByLibrary);
+      if(pool == tlsPools.end()) continue;
+      auto& holders = pool->second.holders;
+      check(std::count(holders.begin(), holders.end(), 0) == 0 && tlsHeld(pool->second, uid) < 0);
+      check(t->waitMode == TlsByLibrary || userAddress(t->waitPointer));
+    }
+  }
+  //sceJpeg's library and context (jpeg.cpp), sceHprm's callbacks (ctrl.cpp), and which ATRAC IDs decode frames handed
+  //them one at a time (atrac.cpp's low level, their channels and frame size the IDs' own fields, saved above): layout
+  //21 on, none in older states. A context is made only with the library started, and 1024 pixels wide at most; a
+  //low-level ID has no file, and parameters sceAtracLowLevelInitDecoder takes.
+  if(s.reading() && stateLayout < 21) {
+    jpeg = {};
+    for(auto& callback : hprmCallbacks) callback = 0;
+    for(auto& a : atracs) a.lowLevel = false;
+  } else {
+    s(jpeg.initialized); s(jpeg.created); s(jpeg.width); s(jpeg.height);
+    s(hprmCallbacks);
+    for(auto& a : atracs) s(a.lowLevel);
+    check((!jpeg.created || jpeg.initialized) && jpeg.width <= 1024);
+    for(auto& a : atracs) {
+      if(!a.lowLevel) continue;
+      check(a.codec && !a.state && a.channels >= 1 && a.channels <= 2 && a.outputChannels >= 1);
+      check(a.outputChannels <= 2 && a.frameBytes && a.frameBytes <= 0x2000);
+      check(a.frameSamples == (a.codec == 0x1000 ? 2048u : 1024u) && a.extra.size() <= AudioDecoder::Format::MaxExtra);
+      check(a.recent.empty() || a.recent.size() == a.frameBytes);
+    }
+  }
   //IDs count up from nextUID as objects are made, so every object's is below it; and a map's key is its object's own
   if(s.reading()) {
     for(auto& [uid, t] : threads) check(uid < nextUID);
@@ -681,8 +761,12 @@ auto Kernel::serialize(serializer& s) -> bool {
       auto& t = *entry.second;
       auto stack = [&](const Block& b) { return b.address == t.stackBlock && b.size == t.stackSize; };
       check(t.stackSize >= 0x200 && own(stack));
+      for(auto& e : t.extensions) {  //its own stack, and those of the calls lent theirs, as blocks too
+        check(e.size >= 0x200 && own([&](const Block& b) { return b.address == e.stack && b.size == e.size; }));
+      }
     }
     for(auto& [uid, pool] : pools) owned(pool.block);
+    for(auto& [uid, pool] : tlsPools) check(owned(pool.block));
     for(auto& [uid, pipe] : pipes) if(pipe.block) check(owned(pipe.block));
     for(auto& [uid, m] : modules) check(!m.block || owned(m.block));
     if(u32 program = programBlockAt()) check(own([&](const Block& b) { return b.address == program; }));
@@ -690,10 +774,15 @@ auto Kernel::serialize(serializer& s) -> bool {
   }
 
   //open files and folders. Nothing on the disc is open for writing (openOnDisc() refuses it), and a folder on the
-  //disc keeps each of its names' entries, one for one: reading the folder hands out both. Files are numbered counting
-  //up from nextFile, as IDs are. An asynchronous request is on a file, not a folder, its state one there is, and one
-  //under way is due within the longest any request can take (64 MiB, the most of the program's memory one can move,
-  //from the disc: under a minute), nor overdue by a frame; a descriptor kept for a result alone has one to give.
+  //disc keeps each of its names' entries, one for one: reading the folder hands out both. Files are numbered from 3:
+  //newFile() hands out those below MostFiles, but a state of a layout before 22, which counted numbers up for good
+  //(their count is passed over), keeps the ones its files had, short of 2^31, as do states saved after it. An
+  //asynchronous request is on a file, not a folder, its state one there is, and one under way is due within the
+  //longest any request can take (64 MiB, the most of the program's memory one can move, from the disc: under a
+  //minute), nor overdue by a frame; a descriptor kept for a result alone has one to give. Each keeps its place in
+  //the order the program opened files (layout 23 on: sceIoGetFdList's), counted from 1, no two alike, and short of
+  //2^62 (counting on from it could never run round); a state of an older layout gives its files the order of their
+  //numbers.
   auto entry = [&](Disc::Entry& e) { text(e.name); s(e.sector); s(e.size); s(e.folder); s(e.date); };
   u64 longest = asyncDuration(true, 64_MiB);
   map(files, [&](OpenFile& open) {
@@ -705,6 +794,20 @@ auto Kernel::serialize(serializer& s) -> bool {
     vector(open.discEntries, entry);
     s(open.async); s(open.asyncDoneAt); s(open.asyncResult); s(open.asyncCallback); s(open.asyncArgument);
     s(open.resultOnly);
+    //a read under way, its bytes to come (layout 22 on; older layouts moved them as it was made): as many as its
+    //result counts, of a file opened to read, from where it was then, into the program's memory
+    if(s.reading() && stateLayout < 22) open.asyncData = 0, open.asyncFrom = 0;
+    else s(open.asyncData), s(open.asyncFrom);
+    if(s.reading() && stateLayout < 23) open.opened = 0;
+    else s(open.opened);
+    if(open.asyncData) {
+      u64 unit = open.sectors ? Disc::SectorSize : 1;
+      check(open.async == OpenFile::Async::Pending && (open.flags & OpenRead));
+      check(open.asyncResult && open.asyncResult <= 64_MiB / unit);
+      check(memory.reaches(open.asyncData, u32(open.asyncResult * unit)));
+      check(open.asyncFrom <= open.position && open.position - open.asyncFrom == open.asyncResult);
+      check(!open.onDisc || open.position <= open.size);
+    }
     check(!open.onDisc || !(open.flags & OpenWrite));
     check(!open.onDisc || !open.folder || open.discEntries.size() == open.entries.size());
     check(open.async <= OpenFile::Async::Done && open.asyncCallback < nextUID);
@@ -715,9 +818,20 @@ auto Kernel::serialize(serializer& s) -> bool {
       check(due > cycles ? due - cycles <= longest : cycles - due < VblankCycles);
     }
   });
-  s(nextFile);
-  check(nextFile >= 3 && nextFile <= LastUID + 1);  //after standard input, output and error; short of 2^31
-  if(s.reading()) for(auto& [file, open] : files) check(file < nextFile);
+  if(s.reading() && stateLayout < 22) {
+    u32 counted = 0;
+    s(counted);
+  }
+  for(auto& [file, open] : files) check(file >= 3 && file <= LastUID);
+  if(s.reading()) {
+    u64 counted = 0;
+    if(stateLayout < 23) for(auto& [file, open] : files) open.opened = ++counted;
+    std::vector<u64> orders;
+    for(auto& [file, open] : files) check(open.opened && open.opened < 1ull << 62), orders.push_back(open.opened);
+    std::sort(orders.begin(), orders.end());
+    check(std::adjacent_find(orders.begin(), orders.end()) == orders.end());
+    filesOpened = orders.empty() ? 0 : orders.back();
+  }
   //a thread waiting on a file's request waits on a file whose request is under way: only its end wakes it. (One
   //made ready to run its callbacks, or running them with its wait put aside, ends that wait as it finds the file
   //once they're done, whatever has become of it: resumeWait().)
@@ -759,13 +873,13 @@ auto Kernel::serialize(serializer& s) -> bool {
 
   //the movie player (psmfplayer.cpp): its status (none, 1, 2, 4, 0x200) and settings (a priority Create takes, a
   //pixel format and play mode as they're set); its movie, with a status from 2 on, none before (the descriptor it's
-  //read through, a file number handed out: one dropped above, its file gone from the host, ends the movie early as
-  //its reads fail; where the PSMF begins in its file; its header, as long as its program stream's offset says);
-  //where reading is (within the program stream); the streams' data read and not yet taken (no more than the player
-  //holds) with their time stamps (inside them, in order); the pictures decoded (three at most) and the one shown
-  //(4:2:0 of their sizes, up to VideoDecoder::MaxSide each way); the start-up, pacing and end; the last sound frame
-  //decoded (of a frame's size, less its header). The decoders aren't saved: made afresh, the sound's is primed with
-  //that frame, the pictures' passes over pictures until one it can start from.
+  //read through, a file's number: one dropped above, its file gone from the host, ends the movie early as its reads
+  //fail, its number kept from other files meanwhile; where the PSMF begins in its file; its header, as long as its
+  //program stream's offset says); where reading is (within the program stream); the streams' data read and not yet
+  //taken (no more than the player holds) with their time stamps (inside them, in order); the pictures decoded (three
+  //at most) and the one shown (4:2:0 of their sizes, up to VideoDecoder::MaxSide each way); the start-up, pacing and
+  //end; the last sound frame decoded (of a frame's size, less its header). The decoders aren't saved: made afresh,
+  //the sound's is primed with that frame, the pictures' passes over pictures until one it can start from.
   auto& p = psmfPlayer;
   auto stamps = [&](std::vector<std::pair<u32, u64>>& items, const std::vector<u8>& data) {
     vector(items, [&](std::pair<u32, u64>& stamp) { s(stamp.first); s(stamp.second); });
@@ -799,7 +913,8 @@ auto Kernel::serialize(serializer& s) -> bool {
   check(p.status == 0 || p.status == 1 || p.status == 2 || p.status == 4 || p.status == 0x200);
   check(!p.status || (p.priority >= 16 && p.priority <= 109));
   check(p.pixelFormat <= 3 && p.mode >= 0 && p.mode <= 5 && (!p.ending || p.status == 4));
-  check(p.file < nextFile && (p.status >= 2) == (p.file != 0) && (p.status >= 2) == !p.header.empty());
+  check((p.status >= 2) == (p.file != 0) && (p.status >= 2) == !p.header.empty());
+  check(!p.file || (p.file >= 3 && p.file <= LastUID));
   check(p.video.size() <= 2 * 4_MiB && p.audio.size() <= 2 * 4_MiB && p.pictures.size() <= 3);
   check(p.soundLast.size() <= 0x840 - 8 && !(p.soundLast.size() % 8) && (p.audioID >= -1 && p.audioID <= 0xff));
   if(!p.header.empty()) {
@@ -901,6 +1016,10 @@ auto Kernel::serialize(serializer& s) -> bool {
   s(geTranslation);  //a width sceGeEdramSetAddrTranslation takes
   check(!geTranslation || geTranslation == 0x200 || geTranslation == 0x400 || geTranslation == 0x800
         || geTranslation == 0x1000);
+  //when the GE will have drawn what it was given, and whether the list it runs has met its FINISH (layout 24 on: an
+  //older layout's lists were done the moment the GE met their FINISH, which left it nothing to draw)
+  if(s.reading() && stateLayout < 24) geDoneAt = 0, geFinishDue = false;
+  else s(geDoneAt), s(geFinishDue);
   if(s.reading() && valid) {
     //Every list is in the queue or free, once. A list queued, running or paused is in the queue (sceGeListDeQueue
     //and geEnded() take it out of there); one never queued is free; a completed one is either (it leaves the queue
@@ -921,6 +1040,15 @@ auto Kernel::serialize(serializer& s) -> bool {
     }
     for(s32 index : {geRunning, geFinishing}) check(index == -1 || (index >= 0 && index < 64 && queued[index]));
     if(valid && geFinishing >= 0) check(geLists[geFinishing].state == GeList::State::Completed);
+    //a FINISH met is the running list's, whose interrupt isn't taken yet: it hasn't completed (it's drawing, or
+    //paused on its way to a PAUSE's FINISH), nor waits for a callback
+    if(valid && geFinishDue) {
+      check(geRunning >= 0 && !geSuspended);
+      if(valid) {
+        auto& list = geLists[geRunning];
+        check(list.state == GeList::State::Running || (list.state == GeList::State::Paused && list.pausing));
+      }
+    }
   }
   return valid;
 }

@@ -31,6 +31,9 @@ struct Options {
   u32 programSize = 0;        //what the ~PSP header says the program unpacks to (0: its true size)
   u8 signature = 0;           //type 6: the byte the signature's end at 0x10c-0x12c is filled with
   u8 typeFiveByte = 0x5a;     //type 5: the byte at 0xd4, which it leaves unchecked
+  const u8* pauthKey = nullptr;  //type 5: scePauth's second key (pauth.cpp), mixed into the pad and the first step
+  bool magic = true;          //the header in the clear ("~PSP", the name, the sizes); else scrambled bytes, as
+                              //scePauth's data has
   std::string name = "TESTPROGRAM";
   void (*damage)(Bytes& data) = nullptr;  //changes the data (packed, if gzip) before it's encrypted
 };
@@ -131,13 +134,18 @@ inline auto encrypt(const Bytes& program, const Options& options = {}) -> Bytes 
 
   //the ~PSP header's parts in the clear
   u8 header[0x150] = {};
-  memcpy(header, "~PSP", 4);
-  header[6] = options.gzip;
-  header[7] = options.gzip ? options.packing : 0;
-  for(u32 n = 0; n < options.name.size() && n < 27; n++) header[0x0a + n] = options.name[n];
-  put32(header + 0x28, options.programSize ? options.programSize : program.size());
-  put32(header + 0x2c, 0x150 + blocks);
-  header[0x7c] = 9;
+  if(options.magic) {
+    memcpy(header, "~PSP", 4);
+    header[6] = options.gzip;
+    header[7] = options.gzip ? options.packing : 0;
+    for(u32 n = 0; n < options.name.size() && n < 27; n++) header[0x0a + n] = options.name[n];
+    put32(header + 0x28, options.programSize ? options.programSize : program.size());
+    put32(header + 0x2c, 0x150 + blocks);
+    header[0x7c] = 9;
+  } else {
+    auto filler = scrambled(0x80, options.tag + 2);
+    memcpy(header, filler.data(), 0x80);
+  }
   put32(header + 0xd0, options.tag);
 
   if(padTag) {
@@ -164,6 +172,7 @@ inline auto encrypt(const Bytes& program, const Options& options = {}) -> Bytes 
     for(u32 n = 0; n < 9; n++) memcpy(pad + n * 16, seedTag->seed, 16), pad[n * 16] = n;
     u8 zero[16] = {};
     psp::AES128{psp::Keys::kirk7[seedTag->keyseed]}.decryptCBC(pad, sizeof(pad), zero);
+    if(options.pauthKey) for(u32 n = 0; n < sizeof(pad); n++) pad[n] ^= options.pauthKey[n % 16];
     for(u32 n = 0; n < 0x40; n++) kirk[n] ^= pad[0x50 + n];
     encryptStatic(kirk, 0x40, seedTag->keyseed);
     for(u32 n = 0; n < 0x40; n++) kirk[n] ^= pad[0x10 + n];
@@ -183,7 +192,9 @@ inline auto encrypt(const Bytes& program, const Options& options = {}) -> Bytes 
     const u8* xorKey = seedTag->type == 5 ? seedTag->xorKey : nullptr;
     encryptPieces(header, {{0x140, 0x10}, {0x12c, 0x14}, {0x80, 0x30}, {0xc0, 0x0c}}, seedTag->keyseed, xorKey);
     if(seedTag->type == 5) {
-      encryptPieces(header, {{0x80, 0x30}, {0xc0, 0x10}, {0x12c, 0x10}}, seedTag->keyseed, xorKey);
+      u8 firstKey[16];
+      for(u32 n = 0; n < 16; n++) firstKey[n] = xorKey[n] ^ (options.pauthKey ? options.pauthKey[n] : 0);
+      encryptPieces(header, {{0x80, 0x30}, {0xc0, 0x10}, {0x12c, 0x10}}, seedTag->keyseed, firstKey);
       header[0xd4] = options.typeFiveByte;
     }
   }

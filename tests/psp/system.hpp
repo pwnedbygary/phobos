@@ -78,6 +78,7 @@ auto desktopDiscInfoTests() -> Tests;
 auto stateTests() -> Tests;
 auto cryptoTests() -> Tests;
 auto decryptTests() -> Tests;
+auto pgdTests() -> Tests;
 auto moduleTests() -> Tests;
 auto asyncTests() -> Tests;
 auto sasTests() -> Tests;
@@ -91,5 +92,7 @@ auto mp3Tests() -> Tests;
 auto movieTests() -> Tests;
 auto psmfTests() -> Tests;
 auto fontTests() -> Tests;
+auto cccTests() -> Tests;
+auto jpegTests() -> Tests;
 
 }

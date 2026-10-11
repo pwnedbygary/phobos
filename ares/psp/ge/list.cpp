@@ -60,10 +60,9 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
       list.address = relative(argument & ~3u);
       break;
     case Return:
-      if(list.depth == 0) {
-        note("a display list RETurned with no CALL to return from");
-        return Stop::Faulted;
-      }
+      //With no CALL to return from, the GE goes on with the next command. Need for Speed: Most Wanted runs lists
+      //made to be CALLed (a frame buffer's settings, then RET) in place in its frame's list, and draws on the PSP.
+      if(list.depth == 0) break;
       list.depth--;
       list.address = list.returnAddress[list.depth];
       list.offset = list.returnOffset[list.depth];
@@ -88,7 +87,7 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
     case ProjectionMatrixData:   matrixData(projection, 16, projectionIndex, argument); break;
     case TextureMatrixNumber:    textureIndex = argument & 0xf; break;
     case TextureMatrixData:      matrixData(textureMatrix, 12, textureIndex, argument); break;
-    case TransferStart:          flush(), transfer(); break;
+    case TransferStart:          transfer(); break;  //(after the drawing it depends on: threads.cpp)
     case ClutLoad:               loadClut(); break;
     }
   }

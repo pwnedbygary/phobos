@@ -6,25 +6,31 @@
 //does exactly what drawing its pixel by itself does (raster.cpp, texture.cpp, pixel.cpp), so that every pixel
 //comes out the same, bit for bit:
 //  - Whole numbers: the same additions, multiplications, shifts and comparisons, lane by lane, in 32 bits, none of
-//    which overflows (where one might, it says why not).
+//    which overflows (where one might, it says why not), but for a triangle's stepped colors, fog and depth and its
+//    3D texture coordinates' s, t and q, which run round on purpose and still leave every lane inside the triangle
+//    its value (fourFriendly() says why).
 //  - Floating point: the same expressions, written the same way, with a vector in every product, so that each lane
 //    rounds as the single number did. Where the host has fused multiply-adds (ARM64), the compiler fuses a product
 //    into the sum it's part of by the expression's shape, for vectors as for single numbers; a product of two single
-//    numbers, made a vector afterwards, wouldn't be fused, so none is written that way.
+//    numbers, made a vector afterwards, wouldn't be fused, so none is written that way. One exception: the GE's
+//    reciprocal and the 24-bit products of the perspective divide (reciprocalLanes(), productLanes()) are worked out
+//    another way than geReciprocal() and trunc24() work them out, every step exact, so they give the same numbers.
 //  - The order: no pixel of a primitive depends on another (raster.cpp) but through the frame and depth buffers it's
 //    drawn into. Four pixels read and written at once see what drawing them one after another would, as long as the
 //    job's frame buffer and depth buffer don't overlap, so that each pixel's bytes are its own, and its texture isn't
 //    read from memory as it draws (texture.cpp): fourFriendly() sees to both.
-//  - The depth test comes before the texture. Without the stencil test (which isn't drawn here), failing any test
-//    only drops the pixel, and the depth test needs only the pixel's depth: testing it first drops the same pixels,
-//    before their texels are looked up for nothing.
+//  - The depth test comes before the texture. Without the stencil test, failing any test only drops the pixel, and the
+//    depth test needs only the pixel's depth: testing it first drops the same pixels, before their texels are looked
+//    up for nothing. With it, a pixel failing the depth test still changes the stencil once the alpha and color
+//    tests have passed it, so it's kept till then (depthFirst()). A triangle's row goes in runs of fours, every
+//    four's depth test of a run first (triangleFours() says why that reads the same depths).
 //A row's first and last fours may have lanes outside it. They're worked out and dropped (their texels taken from the
 //texture's first), and their bytes of the frame and depth buffers are neither read nor written: where a frame buffer
 //is barely wider than the area drawn, they can be another row's pixels, which another thread may be drawing. A four
 //wholly inside its row reads and writes its four pixels at once, those dropped with the very bytes they had (its own
 //pixels, in its own row, which only this thread draws meanwhile); one that isn't, each lane inside it by itself.
-//What isn't drawn here (points, lines, the stencil test, logic operations, the jobs fourFriendly() turns down) is
-//drawn a pixel at a time, as before.
+//What isn't drawn here (points, lines, logic operations, the jobs fourFriendly() turns down) is drawn a pixel at a
+//time, as before.
 
 static constexpr GE::s32x4 Lanes = {0, 1, 2, 3};
 
@@ -58,6 +64,38 @@ static alwaysinline auto floorLanes(GE::f32x4 value) -> GE::s32x4 {
   GE::s32x4 cut = __builtin_convertvector(value, GE::s32x4);
   return cut + (__builtin_convertvector(cut, GE::f32x4) > value);  //(a comparison that holds is -1)
 }
+//geReciprocal() (draw.cpp) of each lane, the same numbers, four at once but for the chords' table, read a lane at a
+//time. (Reading it once when all four lanes share a chord was slower on the RP6: the test costs more than it saves.)
+static alwaysinline auto reciprocalLanes(GE::f32x4 x) -> GE::f32x4 {
+  auto bits = (GE::u32x4)x;
+  auto exponent = (GE::s32x4)(bits >> 23 & 255);
+  GE::s32x4 q;
+  for(u32 lane = 0; lane < 4; lane++) {
+    auto& line = reciprocalChords.chords[bits[lane] >> 16 & 127];
+    q[lane] = (64 * line.start + 63 + line.slope * s32(bits[lane] >> 8 & 255)) >> 7;
+  }
+  //times 2^(111 - exponent) as two powers of two, each a normal float, so that every product is exact (one below
+  //2^-126 too: q has 16 significant bits at most); the sign put back; a zero, denormal, infinity or not a number: 0
+  GE::s32x4 power = 111 - exponent, half = power >> 1;
+  auto value = __builtin_convertvector(q, GE::f32x4) * (GE::f32x4)((half + 127) << 23) *
+               (GE::f32x4)((power - half + 127) << 23);
+  GE::s32x4 counts = (exponent != 0) & (exponent != 255);
+  return (GE::f32x4)(((GE::u32x4)value | (bits & 0x8000'0000)) & (GE::u32x4)counts);
+}
+//trunc24(integer * unit * reciprocal) (draw.cpp) of each lane, two at a time in doubles, where each product is exact
+//and, being 0 or between 2^-300 and 2^300, a normal double (so clearing its fraction past the top 23 bits is all).
+static alwaysinline auto productLanes(GE::s32x4 integer, float unit, GE::f32x4 reciprocal) -> GE::f32x4 {
+  //(the halves made from lanes, as GCC before 12 has no __builtin_shufflevector)
+  using s32x2 = s32 __attribute__((vector_size(8)));
+  using f32x2 = float __attribute__((vector_size(8)));
+  auto half = [&](s32x2 whole, f32x2 by) {
+    auto product = __builtin_convertvector(whole, GE::f64x2) * f64(unit) * __builtin_convertvector(by, GE::f64x2);
+    return __builtin_convertvector((GE::f64x2)((GE::u64x2)product & ~u64(0) << 29), f32x2);
+  };
+  f32x2 low = half(s32x2{integer[0], integer[1]}, f32x2{reciprocal[0], reciprocal[1]});
+  f32x2 high = half(s32x2{integer[2], integer[3]}, f32x2{reciprocal[2], reciprocal[3]});
+  return GE::f32x4{low[0], low[1], high[0], high[1]};
+}
 //passes() (pixel.cpp) lane by lane.
 static alwaysinline auto passesLanes(u32 comparison, GE::s32x4 a, GE::s32x4 b) -> GE::s32x4 {
   switch(comparison & 7) {
@@ -71,36 +109,44 @@ static alwaysinline auto passesLanes(u32 comparison, GE::s32x4 a, GE::s32x4 b) -
   }
   return a >= b;
 }
-//fogAmount() (draw.cpp) lane by lane: 0 below zero (its sign bit, as std::signbit() reads it), 255 from 1 up (and
-//where it isn't a number), else rounded down in 256ths.
-static alwaysinline auto fogLanes(GE::f32x4 fog) -> GE::s32x4 {
-  GE::s32x4 amount = __builtin_convertvector(fog * 256, GE::s32x4);  //(only kept where 0 <= fog < 1)
-  amount = pickLanes(fog < 1, amount, splatLanes(255));
-  return pickLanes((GE::s32x4)fog < 0, splatLanes(0), amount);
+//stencilOperation() (pixel.cpp) lane by lane, in a frame buffer of Format: each lane's stencil as the operation
+//changes it.
+template<u32 Format>
+static alwaysinline auto stencilLanes(u32 operation, s32 reference, GE::s32x4 stencil) -> GE::s32x4 {
+  switch(operation & 7) {
+  case 0: return stencil;
+  case 1: return GE::s32x4{};
+  case 2: return splatLanes(reference);
+  case 3: return ~stencil & 0xff;
+  case 4:
+    if constexpr(Format == 1) return splatLanes(0xff);
+    else if constexpr(Format == 2) return pickLanes(stencil < 0xf0, stencil + 0x10, stencil);
+    else return pickLanes(stencil < 0xff, stencil + 1, stencil);
+  case 5:
+    if constexpr(Format == 1) return GE::s32x4{};
+    else if constexpr(Format == 2) return pickLanes(stencil >= 0x10, stencil - 0x10, stencil);
+    else return pickLanes(stencil != 0, stencil - 1, GE::s32x4{});
+  }
+  return stencil;
 }
-//u32(std::clamp(depth, 0.0f, 65535.0f)) lane by lane. Where it isn't a number, the clamp leaves it so and the
-//conversion gives 0, on ARM64 and x86-64 alike; here that's said outright, as x86-64's conversion of four lanes
-//would give another number.
-static alwaysinline auto depthLanes(GE::f32x4 depth) -> GE::s32x4 {
-  GE::s32x4 whole = __builtin_convertvector(heldLanes(depth, 0.0f, 65535.0f), GE::s32x4);
-  return pickLanes(depth != depth, splatLanes(0), whole);
-}
-//clamp(s32(value), 0, 255) lane by lane: a blended color channel (raster.cpp). The conversion is the scalar one's,
-//lane by lane, on either host (ARM64's saturates; x86-64's gives the lowest number for what doesn't fit, held to 0).
-static alwaysinline auto channelLanes(GE::f32x4 value) -> GE::s32x4 {
-  return heldLanes(__builtin_convertvector(value, GE::s32x4), 0, 255);
-}
-
-//Whether the job may be drawn four pixels at a time (see the top of this file): a triangle or a sprite, without the
-//stencil test or a logic operation, its texture (if any) kept decoded, its frame buffer's bytes apart from its depth
-//buffer's (when it reaches it) and neither running round VRAM's end; and for a triangle, its edge functions within
-//32 bits at every pixel its fours may reach (three columns either side of its box).
+//Whether the job may be drawn four pixels at a time (see the top of this file): a triangle or a sprite, without a
+//logic operation, its texture (if any) kept decoded, or to be as its batch starts (deferred: no band draws before
+//that, threads.cpp; one whose primitive is drawn at once instead, defer() turning it down, is read from memory as it
+//draws), and its frame buffer's bytes apart from its depth buffer's (when it reaches it) and neither running round
+//VRAM's end.
+//A triangle's size doesn't matter: its rows are found in 64 bits, as triangleRows() finds them, and its stepped
+//values (colors, fog, depth, and in 3D the texture coordinates' s, t and q) stay inside 32 bits at every pixel inside
+//it, however steep their steps. All the steps of a triangle come from one reciprocal of its area (stepped(),
+//draw.cpp), so each is its true step times one factor between 1 - 2^-15 and 1, less under 1 for rounding down. At a
+//pixel inside the triangle the true blend lies between the corners' values (each within 2^30 of 0: a depth is at
+//most 65535 16384ths), so the stepped value is off it by under a 2^15th of 2^30, plus one for each sixteenth from the
+//corner (under 2^18: positions are held within 2^16 sixteenths of 0, each way).
 auto GE::fourFriendly(const Job& job) const -> bool {
   if(!fourPixels || (job.kind != Job::Kind::Sprite && job.kind != Job::Kind::Triangle)) return false;
   auto& look = *job.look;
   auto& p = look.pixel;
-  if(!p.clear && (p.stencilTest || p.logicOp)) return false;
-  if(look.textured && !look.texture.decoded) return false;
+  if(!p.clear && p.logicOp) return false;
+  if(look.textured && !look.texture.decoded && !(look.deferRows && drawing.recording)) return false;
   u32 bytes = p.format == 3 ? 4 : 2;
   u64 colorLow = p.frameBuffer + (u64(job.firstY) * p.stride + job.firstX) * bytes;
   u64 colorHigh = p.frameBuffer + (u64(job.lastY) * p.stride + job.lastX) * bytes + bytes - 1;
@@ -112,24 +158,16 @@ auto GE::fourFriendly(const Job& job) const -> bool {
     depthLow &= ~0x3fffull, depthHigh |= 0x3fff;  //(each 16 KiB rearranged: memory.hpp)
     if(depthLow <= colorHigh && colorLow <= depthHigh) return false;
   }
-  if(job.kind == Job::Kind::Triangle) {
-    auto& r = job.triangle;
-    s64 farX = std::max(std::abs(s64(job.firstX - 3) * 16 + 8), std::abs(s64(job.lastX + 3) * 16 + 8));
-    s64 farY = std::max(std::abs(s64(job.firstY) * 16 + 8), std::abs(s64(job.lastY) * 16 + 8));
-    for(u32 k = 0; k < 3; k++) {
-      u32 from = (k + 1) % 3, to = (k + 2) % 3;
-      s64 a = r.y[from] - r.y[to], b = r.x[to] - r.x[from], c = r.y[to] * r.x[from] - r.x[to] * r.y[from];
-      if(std::abs(a) * farX + std::abs(b) * farY + std::abs(c) + std::abs(a) * 64 >= 0x7fff'ffff) return false;
-    }
-  }
   return true;
 }
 
 //The depth range test, and the depth test, of four pixels whose depths are worked out (see the top of this file): the
-//lanes failing them are dropped. Returns whether any lane is left. (The depth buffer's four values, read here, stay
-//in four.depth for the write.)
+//lanes failing them are dropped, but with the stencil test those failing the depth test, which still change the
+//stencil, stay (four.passed says which passed). Returns whether any lane is left. (The depth buffer's four values,
+//read here, stay in four.depth for the write.)
 template<u32 Format>
 alwaysinline auto GE::depthFirst(const PixelState& p, s32 x, s32 y, Four& four) -> bool {
+  four.passed = splatLanes(-1);
   if(p.depthRange) four.live &= (four.z >= s32(p.minDepth)) & (four.z <= s32(p.maxDepth));
   if(p.clear ? p.clearDepth : p.depthTest) {
     //The four depths are side by side even as the GE rearranges its depth buffer: the four's first byte is a
@@ -140,7 +178,8 @@ alwaysinline auto GE::depthFirst(const PixelState& p, s32 x, s32 y, Four& four) 
     if(four.full) std::memcpy(depths, memory.vram.data() + at, sizeof(depths));
     else for(u32 n = 0; n < 4; n++) if(four.inside[n]) std::memcpy(&depths[n], memory.vram.data() + at + n * 2, 2);
     four.depth = GE::s32x4{depths[0], depths[1], depths[2], depths[3]};
-    if(!p.clear) four.live &= passesLanes(p.depthFunction, four.z, four.depth);
+    if(!p.clear) four.passed = passesLanes(p.depthFunction, four.z, four.depth);
+    if(!p.clear && !p.stencilTest) four.live &= four.passed;
   }
   return anyLane(four.live);
 }
@@ -247,8 +286,9 @@ alwaysinline auto GE::combineFour(const Look& look, s32x4 (&color)[4], const s32
 }
 
 //The pixel pipeline (drawPixelAs(), pixel.cpp) for four pixels whose color, depth and fog are worked out, and which
-//depthFirst() has seen: the alpha test, fog, the color test, the depth written, blending, dithering, and the frame
-//buffer written, lane by lane. All four lanes are written at once, those dropped with the very bytes they had.
+//depthFirst() has seen: the alpha test, fog, the color test, the stencil test, the depth written, blending, dithering,
+//and the frame buffer written, lane by lane. All four lanes are written at once, those dropped with the very bytes
+//they had (or their stencil changed, by the stencil test).
 template<u32 Format>
 alwaysinline auto GE::pixelsFour(const PixelState& p, s32 x, s32 y, Four& four) -> void {
   constexpr u32 bytes = Format == 3 ? 4 : 2;
@@ -289,11 +329,12 @@ alwaysinline auto GE::pixelsFour(const PixelState& p, s32 x, s32 y, Four& four) 
     if constexpr(Format == 2) return r >> 4 | g >> 4 << 4 | b >> 4 << 8 | a >> 4 << 12;
     return r | g << 8 | b << 16 | a << 24;
   };
+  s32x4 writes = four.live;  //the lanes written: those drawn, and those the stencil test dropped
   auto write = [&](u32x4 pixel, u32 keep) {
     pixel = (pixel & ~keep) | (old & keep);
     pixel = u32x4(pickLanes(four.live, s32x4(pixel), s32x4(old)));
     for(u32 n = 0; n < 4 && !four.full; n++) {
-      if(!four.live[n]) continue;
+      if(!writes[n]) continue;
       if constexpr(bytes == 4) { u32 word = pixel[n]; std::memcpy(vram + at + n * 4, &word, 4); }
       else { u16 half = pixel[n]; std::memcpy(vram + at + n * 2, &half, 2); }
     }
@@ -327,9 +368,9 @@ alwaysinline auto GE::pixelsFour(const PixelState& p, s32 x, s32 y, Four& four) 
     four.live &= p.colorFunction == 0 ? s32x4{} : p.colorFunction == 2 ? equal : ~equal;
   }
   if(!anyLane(four.live)) return;
-  if(p.depthWrite) writeDepth();
 
-  //the frame buffer's colors, widened (widenPixel()): each narrow channel's top bits repeated; 5650's alpha 0
+  //the frame buffer's colors, widened (widenPixel()): each narrow channel's top bits repeated; 5650's alpha 0. Its
+  //alpha is the stencil.
   s32x4 oldColor[4];
   {
     s32x4 c = s32x4(old);
@@ -347,7 +388,25 @@ alwaysinline auto GE::pixelsFour(const PixelState& p, s32 x, s32 y, Four& four) 
       for(u32 n = 0; n < 4; n++) oldColor[n] = s32x4(old >> n * 8 & 0xff);
     }
   }
-  s32x4 rgb[4] = {color[0], color[1], color[2], s32x4{}};
+  //The stencil test: a lane failing it, or the depth test (depthFirst() kept those), has its stencil changed as
+  //STENCIL_OPERATION's "fail" or "depth fail" says, its color kept, and is dropped; the rest take "pass"'s.
+  s32x4 stencil = oldColor[3];
+  writes = four.live;
+  if(p.stencilTest) {
+    s32 reference = p.stencilReference;
+    s32x4 passes = passesLanes(p.stencilFunction, splatLanes(reference & p.stencilMask), stencil & s32(p.stencilMask));
+    s32x4 drawn = passes & four.passed;
+    stencil = pickLanes(drawn, stencilLanes<Format>(p.stencilPass, reference, stencil),
+                        pickLanes(passes, stencilLanes<Format>(p.stencilDepthFail, reference, stencil),
+                                  stencilLanes<Format>(p.stencilFail, reference, stencil)));
+    s32x4 only[4] = {s32x4{}, s32x4{}, s32x4{}, stencil};
+    u32 keep = p.writeMask | colorBits;
+    old = u32x4(pickLanes(four.live & ~drawn, s32x4((narrow(only) & ~keep) | (old & keep)), s32x4(old)));
+    four.live &= drawn;
+    if(!anyLane(four.live)) return write(old, 0);
+  }
+  if(p.depthWrite) writeDepth();
+  s32x4 rgb[4] = {color[0], color[1], color[2], stencil};
   if(p.blend) {
     s32x4 sourceAlpha = alpha, destinationAlpha = oldColor[3];
     auto factors = [&](u32 which, const s32x4 (&other)[4], u32 fixed, s32x4 (&factor)[3]) {
@@ -390,9 +449,9 @@ alwaysinline auto GE::pixelsFour(const PixelState& p, s32 x, s32 y, Four& four) 
     for(u32 n = 0; n < 3; n++) rgb[n] += dither;
   }
   for(u32 n = 0; n < 3; n++) rgb[n] = heldLanes(rgb[n], 0, 255);
-  //The alpha written is the stencil, as it was (widenPixel()'s alpha); narrowed again, that's the frame buffer's own
-  //alpha bits, which the write keeps instead.
-  write(narrow(rgb), p.writeMask | stencilBits);
+  //The alpha written is the stencil: as the stencil test made it, or as it was (widenPixel()'s alpha), which narrowed
+  //again is the frame buffer's own alpha bits, which the write keeps instead.
+  write(narrow(rgb), p.writeMask | (p.stencilTest ? 0 : stencilBits));
 }
 
 //A sprite's rows, four pixels at a time: spriteRows() (raster.cpp), lane by lane. Its depth and color are the same
@@ -422,7 +481,7 @@ auto GE::spriteFours(const Job& job, s32 fromY, s32 toY) -> void {
                         : texelAxis(acrossX, t.width, t.clampU, job.linear);
         inverses[x - firstX] = inverse;
       } else {
-        float column = s.columnFirst + f64(x * 16 + 8 - s.columnStart) / 16 * s.columnStep;
+        float column = spriteAxis(s.columnFirst, s.columnStep, s.columnStart, x);
         axis = s.turned ? texelAxis(column, t.height, t.clampV, job.linear)
                         : texelAxis(column, t.width, t.clampU, job.linear);
       }
@@ -442,7 +501,7 @@ auto GE::spriteFours(const Job& job, s32 fromY, s32 toY) -> void {
       f64 alongY = f64(y * 16 + 8 - s.top) / (s.bottom - s.top);
       downOverW = s.topDown + (s.bottomDown - s.topDown) * alongY;
     } else if(textured) {
-      float row = s.rowFirst + f64(y * 16 + 8 - s.rowStart) / 16 * s.rowStep;
+      float row = spriteAxis(s.rowFirst, s.rowStep, s.rowStart, y);
       TexelAxis axis = texelAxis(row, downSize, downClamp, job.linear);
       downAxis[0] = splatLanes(axis.first), downAxis[1] = splatLanes(axis.second);
       downAxis[2] = splatLanes(axis.fraction);
@@ -486,8 +545,7 @@ auto GE::spriteFours(const Job& job, s32 fromY, s32 toY) -> void {
 }
 
 //A triangle's rows, four pixels at a time: triangleRows() (raster.cpp), lane by lane. Each row's pixels inside it are
-//found as there; its fours then run from the multiple of four at or before the first. The edge functions at a four's
-//pixels are whole numbers within 32 bits (fourFriendly()), so turned into floats they're what the 64-bit ones give.
+//found as there (in 64 bits); its fours then run from the multiple of four at or before the first.
 template<u32 Format>
 auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
   auto& r = job.triangle;
@@ -501,19 +559,20 @@ auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
     least[k] = a[k] > 0 || (a[k] == 0 && b[k] > 0) ? 0 : 1;
   }
   bool needsZ = p.depthRange || (p.clear ? p.clearDepth : p.depthTest);
-  bool oneDepth = r.z[0] == r.z[1] && r.z[1] == r.z[2];  //(as triangleRows())
-  s32x4 depth = splatLanes(oneDepth ? s32(std::clamp(r.z[0], 0.0f, 65535.0f)) : 0);
   bool blended = !r.flat, shining = !r.flat && r.shines;
-  float colors[3][4], shines[3][4];
-  for(u32 k = 0; k < 3; k++) {
-    for(u32 n = 0; n < 4; n++) colors[k][n] = channel(r.color[k], n), shines[k][n] = channel(r.specular[k], n);
-  }
-  //a weighted sum of the corners' values (blendColor()), lane by lane
-  auto blendColor = [&](const float (&value)[3][4], f32x4 w0, f32x4 w1, f32x4 w2, s32x4 (&color)[4], u32 count) {
-    for(u32 n = 0; n < count; n++) {
-      color[n] = channelLanes((value[0][n] * w0 + value[1][n] * w1 + value[2][n] * w2) / r.total);
+  //Colors, the shine, fog and depth stepped (triangleRows()), lane by lane: each one's 16384ths at a four's pixels,
+  //and a four's step, kept in 32 bits that may run round. Every lane inside the triangle keeps its value, which
+  //fits (a level or a depth, and how far the steps' rounding takes it: fourFriendly() says why); the lanes
+  //outside it may come out anything.
+  const Job::Stepped* stepped[9] = {&r.colors[0], &r.colors[1], &r.colors[2], &r.colors[3],
+                                    &r.shine[0], &r.shine[1], &r.shine[2], &r.fog, &r.depth};
+  u32x4 values[9] = {}, steps[9] = {};
+  u32 used[9], uses = 0;
+  for(u32 n = 0; n < 9; n++) {
+    if(n < 4 ? blended : n < 7 ? shining : n < 8 ? p.fog : needsZ) {
+      used[uses++] = n, steps[n] = u32x4{} + u32(stepped[n]->across * 64);
     }
-  };
+  }
   s32x4 flatColor[4], flatShine[3];
   for(u32 n = 0; n < 4; n++) flatColor[n] = splatLanes(channel(r.flatColor, n));
   for(u32 n = 0; n < 3; n++) flatShine[n] = splatLanes(channel(r.flatSpecular, n));
@@ -531,31 +590,60 @@ auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
     }
     if(start > stop) continue;
     s32 first = s32(start) & ~3;
-    s32x4 edge[3];
-    for(u32 k = 0; k < 3; k++) {
-      s64 at = a[k] * (s64(first) * 16 + 8) + b[k] * sampleY + c[k];
-      edge[k] = s32(at) + s32(a[k] * 16) * Lanes;
+    for(u32 k = 0; k < uses; k++) {
+      auto& c = *stepped[used[k]];
+      s128 at = c.start + s128(s64(first) * 16 + 8 - r.startX) * c.across + s128(sampleY - r.startY) * c.down;
+      values[used[k]] = u32(at) + u32(c.across * 16) * u32x4(Lanes);
     }
-    for(s32 x = first; x <= stop; x += 4) {
-      Four four;
-      s32x4 column = x + Lanes;
-      four.live = four.inside = (column >= s32(start)) & (column <= s32(stop));
-      four.full = x >= start && x + 3 <= stop;
-      f32x4 w0 = __builtin_convertvector(edge[0], f32x4);
-      f32x4 w1 = __builtin_convertvector(edge[1], f32x4);
-      f32x4 w2 = __builtin_convertvector(edge[2], f32x4);
-      for(u32 k = 0; k < 3; k++) edge[k] += s32(a[k] * 64);
-      four.z = !needsZ ? s32x4{} : oneDepth ? depth : depthLanes((r.z[0] * w0 + r.z[1] * w1 + r.z[2] * w2) / r.total);
-      if(!depthFirst<Format>(p, x, y, four)) continue;
-      if(blended) blendColor(colors, w0, w1, w2, four.color, 4);
-      else for(u32 n = 0; n < 4; n++) four.color[n] = flatColor[n];
-      if(look.textured) {
+    //s, t and q (part 60) as the colors: 32-bit lanes that may run round, as every lane inside the triangle keeps its
+    //value (each within 2^30 of 0 there), from the row's first four, and a four's step
+    u32x4 texLanes[3] = {};
+    u32 texSteps[3] = {};
+    if(look.textured && r.perspective) {
+      const Job::Stepped* tex[3] = {&r.texS, &r.texT, &r.texQ};
+      for(u32 k = 0; k < 3; k++) {
+        auto& c = *tex[k];
+        s128 at = c.start + s128(s64(first) * 16 + 8 - r.startX) * c.across + s128(sampleY - r.startY) * c.down;
+        texLanes[k] = u32(at) + u32(c.across * 16) * u32x4(Lanes);
+        texSteps[k] = u32(c.across * 64);
+      }
+    }
+    //A run of fours drawn in three passes: the depth test of each, which drops many (about half of them in the 3D
+    //scenes measured); then the texel axes of those left, each four's apart from the others', so that the long chain
+    //from s, t and q to the texels' addresses (the reciprocal's table, the products, the floor) runs for several fours
+    //at once rather than holding up each four's drawing; then those fours' texels and pixels. Each four's numbers are
+    //worked out by the same operations as one at a time (the values at the four k fours along taking k steps at once,
+    //which run round alike), and reading the run's depths before writing any reads what drawing the fours one after
+    //another would: no two pixels of a row share a byte (fourFriendly()), and the job draws each once.
+    constexpr u32 Run = 32;
+    struct Kept { s32 x; s32x4 live, z, depth, passed; } kept[Run];
+    s32x4 uAxes[Run][3], vAxes[Run][3];
+    auto levelsAt = [&](u32 n, u32 k) {
+      return heldLanes(s32x4(values[n] + k * steps[n]) >> 14, 0, n < 8 ? 255 : 65535);
+    };
+    for(s32 from = first; from <= stop; from += 4 * Run) {
+      u32 count = 0;
+      for(s32 x = from; x <= std::min<s32>(stop, from + 4 * (Run - 1)); x += 4) {
+        Four four;
+        s32x4 column = x + Lanes;
+        four.live = four.inside = (column >= s32(start)) & (column <= s32(stop));
+        four.full = x >= start && x + 3 <= stop;
+        four.z = needsZ ? levelsAt(8, (x - first) >> 2) : s32x4{};
+        four.depth = s32x4{};
+        if(depthFirst<Format>(p, x, y, four)) kept[count++] = {x, four.live, four.z, four.depth, four.passed};
+      }
+      //each four's texel axes (u's and v's: first, second, fraction): in 3D, each lane the floored units times R(q),
+      //as triangleRows() works them out; in 2D, from the four's column itself
+      if(look.textured) for(u32 n = 0; n < count; n++) {
+        s32 x = kept[n].x;
+        u32 k = (x - first) >> 2;
         f32x4 u, v;
         if(r.perspective) {
-          f32x4 ka = w0 / r.w[0], kb = w1 / r.w[1], kc = w2 / r.w[2];
-          f32x4 divisor = ka * r.q[0] + kb * r.q[1] + kc * r.q[2];
-          u = (ka * r.u[0] + kb * r.u[1] + kc * r.u[2]) / divisor;
-          v = (ka * r.v[0] + kb * r.v[1] + kc * r.v[2]) / divisor;
+          s32x4 sAt = s32x4(texLanes[0] + k * texSteps[0]) >> 14, tAt = s32x4(texLanes[1] + k * texSteps[1]) >> 14;
+          s32x4 qAt = s32x4(texLanes[2] + k * texSteps[2]) >> 14;
+          f32x4 reciprocal = reciprocalLanes(__builtin_convertvector(qAt, f32x4) * r.qUnit);
+          u = productLanes(sAt, r.sUnit, reciprocal);
+          v = productLanes(tAt, r.tUnit, reciprocal);
         } else {  //(in doubles, two lanes at a time; each lane's difference is a whole number, exact as a double)
           f64 across = f64(s64(x) * 16 + 8 - r.startX);
           f64x2 near = f64x2{across, across + 16}, far = f64x2{across + 32, across + 48};
@@ -567,20 +655,32 @@ auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
           u = f32x4{float(nearU[0]), float(nearU[1]), float(farU[0]), float(farU[1])};
           v = f32x4{float(nearV[0]), float(nearV[1]), float(farV[0]), float(farV[1])};
         }
-        s32x4 uAxis[3], vAxis[3], texel[4];
-        texelAxisLanes(u, t.width, t.clampU, job.linear, uAxis);
-        texelAxisLanes(v, t.height, t.clampV, job.linear, vAxis);
-        texelsFour(look, job.linear, four.live, uAxis, vAxis, texel);
-        combineFour(look, four.color, texel);
+        texelAxisLanes(u, t.width, t.clampU, job.linear, uAxes[n]);
+        texelAxisLanes(v, t.height, t.clampV, job.linear, vAxes[n]);
       }
-      if(addsShine) {
-        s32x4 shine[4];
-        if(shining) blendColor(shines, w0, w1, w2, shine, 3);
-        else for(u32 n = 0; n < 3; n++) shine[n] = flatShine[n];
-        for(u32 n = 0; n < 3; n++) four.color[n] = heldLanes(four.color[n] + shine[n], 0, 255);
+      for(u32 n = 0; n < count; n++) {
+        s32 x = kept[n].x;
+        u32 k = (x - first) >> 2;
+        Four four;
+        s32x4 column = x + Lanes;
+        four.inside = (column >= s32(start)) & (column <= s32(stop));
+        four.full = x >= start && x + 3 <= stop;
+        four.live = kept[n].live, four.z = kept[n].z, four.depth = kept[n].depth, four.passed = kept[n].passed;
+        if(blended) for(u32 c = 0; c < 4; c++) four.color[c] = levelsAt(c, k);
+        else for(u32 c = 0; c < 4; c++) four.color[c] = flatColor[c];
+        if(look.textured) {
+          s32x4 texel[4];
+          texelsFour(look, job.linear, four.live, uAxes[n], vAxes[n], texel);
+          combineFour(look, four.color, texel);
+        }
+        if(addsShine) {
+          for(u32 c = 0; c < 3; c++) {
+            four.color[c] = heldLanes(four.color[c] + (shining ? levelsAt(4 + c, k) : flatShine[c]), 0, 255);
+          }
+        }
+        if(p.fog) four.fog = levelsAt(7, k);
+        pixelsFour<Format>(p, x, y, four);
       }
-      if(p.fog) four.fog = fogLanes((r.fog[0] * w0 + r.fog[1] * w1 + r.fog[2] * w2) / r.total);
-      pixelsFour<Format>(p, x, y, four);
     }
   }
 }

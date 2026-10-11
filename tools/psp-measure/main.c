@@ -38,6 +38,11 @@ static unsigned int choose(unsigned int buttons) {
 enum { Vfpu, Ge, Afresh, Leave };
 typedef struct { const char* text; int what, round; const char* note; } Choice;
 static const Choice choices[] = {
+  {"Round 6: the GE's time, lighting, reciprocal, curves (about 7 MB)", Ge, 6,
+   "Four tests near the end stop the GE on purpose: each waits 5\n"
+   "seconds, then says \"the GE stalled: reset\" and goes on. The timing\n"
+   "tests run the PSP at 333 MHz part of the time.\n"},
+  {"Round 5: the GE's steps, lighting's share, texels (about 3 MB)", Ge, 5, 0},
   {"Round 4: the GE's lines, boxes, DXT and curves (about 8 MB)", Ge, 4, 0},
   {"Round 3: the VFPU and the FPU (about 6 MB)", Vfpu, 3, 0},
   {"Round 3: the GE (about 7 MB)", Ge, 3, 0},
@@ -103,6 +108,8 @@ int main(int argc, char** argv) {
     geRound(2);
     geRound(3);
     geRound(4);
+    geRound(5);
+    geRound(6);
     geEnd();
     sceKernelExitGame();
     return 0;

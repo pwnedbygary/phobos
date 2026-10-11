@@ -987,7 +987,8 @@ namespace ares {
   static string pspFontsPath;
   // How many threads draw the PSP's pictures (Settings' "PSP Drawing Threads"): 0 for all the device's cores but one.
   static std::atomic<s32> pspDrawingThreads{0};
-  // Who draws the PSP's pictures (Settings' "PSP Renderer"): 0 the software renderer, 1 Vulkan's.
+  // Who draws the PSP's pictures (Settings' "PSP Renderer"): 0 the software renderer, 1 Vulkan's (accurate), 2 Vulkan's
+  // fast mode.
   static std::atomic<s32> pspRenderer{0};
   // How many times over Vulkan's draws each of the PSP's pixels (Settings' "PSP Resolution"): 1, Native, to 10.
   static std::atomic<s32> pspResolution{1};
@@ -3597,12 +3598,18 @@ else if (port->type() == "Keyboard") {
       LOGI("PSP: drawing threads %d (0: all cores but one)", pspDrawingThreads.load());
       ::ares::PlayStationPortable::option("GE Threads", string{pspDrawingThreads.load()});
       // The renderer, and for Vulkan's the driver loadVulkan() loaded above (the user's custom one if it loaded).
-      bool vulkan = pspRenderer.load() == 1;
-      LOGI("PSP: renderer %s", vulkan ? "Vulkan" : "Software");
-      ::ares::PlayStationPortable::vulkanLoader(vulkan ? phobos::host::vulkanLoader() : nullptr);
-      ::ares::PlayStationPortable::option("Renderer", vulkan ? "Vulkan" : "Software");
+      s32 renderer = pspRenderer.load();
+      const char* rendererName = renderer == 2 ? "Vulkan (fast)" : renderer == 1 ? "Vulkan" : "Software";
+      LOGI("PSP: renderer %s", rendererName);
+      ::ares::PlayStationPortable::vulkanLoader(renderer ? phobos::host::vulkanLoader() : nullptr);
+      ::ares::PlayStationPortable::option("Renderer", rendererName);
       LOGI("PSP: resolution %dx", pspResolution.load());
       ::ares::PlayStationPortable::option("Resolution", string{pspResolution.load()});
+      // The Vulkan renderer's pipelines kept between sessions, beside the N64's (the Vulkan cache folder, or saves').
+      string pspCacheDir = vulkanCachePath;
+      if (!pspCacheDir) pspCacheDir = savesPath;
+      ::ares::PlayStationPortable::option("Pipeline Cache",
+                                          pspCacheDir ? string{pspCacheDir, "/psp_vulkan_pipeline_cache.bin"} : string{});
       // A debug switch, set over adb alone (adb shell setprop debug.phobos.psp.failcheck 1): Vulkan's start-up check
       // made to fail, to see the software renderer take over and the user told.
       bool failCheck = false;
@@ -4707,7 +4714,7 @@ else if (port->type() == "Keyboard") {
     pspFontsPath = path ? (string)path : "";
   }
   auto setPspDrawingThreads(s32 threads) -> void { pspDrawingThreads = std::max(0, threads); }
-  auto setPspRenderer(s32 renderer) -> void { pspRenderer = renderer == 1 ? 1 : 0; }
+  auto setPspRenderer(s32 renderer) -> void { pspRenderer = renderer == 1 || renderer == 2 ? renderer : 0; }
   auto setPspResolution(s32 scale) -> void { pspResolution = std::clamp(scale, 1, 10); }
   auto takePspNotice() -> std::string {
     std::string text = (const char*)::ares::PlayStationPortable::notice();

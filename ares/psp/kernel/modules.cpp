@@ -2,7 +2,8 @@
 //(decrypt.cpp), put in the user partition and relocated there by the loader, their imports linked to the functions
 //the program and the modules loaded earlier export, and their module_start run on a thread of their own. Sony's own
 //modules, which early games carried for the libraries they use (sound, video, the network), aren't run: the HLE
-//kernel is their stand-in. docs/psp-core.md, part 19, describes it.
+//kernel is their stand-in, but for one that came unencrypted with none of the kernel's functions (standsInFor()).
+//docs/psp-core.md, parts 19 and 62, describe it.
 
 enum : u32 {
   ModuleStartNID     = 0xd632'acdb,  //the module_start a module exports for itself (no library name)
@@ -12,16 +13,33 @@ enum : u32 {
   StopParametersNID  = 0xcf0c'c697,  //module_stop_thread_parameter: module_stop's
 };
 
-//Sony's own modules aren't run: the HLE kernel stands in for them, its versions of their functions answering the
-//game's imports of them (sceSAScore's, sceMpeg_library's...). They're told by their names, which all start with
-//"sce" or "Sce", or by being kernel modules (attribute 0x1000), which a game's own modules never are. (Peace
-//Walker's psmf.prx and libpsmfplayer.prx are scePsmf_library and scePsmfP_library, stood in for so. The movie
-//player's library goes by other names in some games, libpsmfplayer, psmf_jk, jkPsmfP_library: those are loaded and
-//run as a game's own code, their module_start too; but the kernel's own functions go before a module's exports as
-//imports are linked, so a game's calls to scePsmfPlayer reach the kernel's player whatever its module is called.
-//docs/psp-core.md, part 31.)
+//Sony's own modules aren't run: the HLE kernel stands in for them, its versions of their functions answering the game's
+//imports of them (sceSAScore's, sceMpeg_library's...), unless standsInFor() finds it has none of a plain one's
+//functions. They're told by their names, which all start with "sce" or "Sce", or by being kernel modules (attribute
+//0x1000), which a game's own modules never are. (Peace Walker's psmf.prx and libpsmfplayer.prx are scePsmf_library and
+//scePsmfP_library, stood in for so. The movie player's library goes by other names in some games, libpsmfplayer,
+//psmf_jk, jkPsmfP_library: those are loaded and run as a game's own code, their module_start too; but the kernel's own
+//functions go before a module's exports as imports are linked, so a game's calls to scePsmfPlayer reach the kernel's
+//player whatever its module is called. docs/psp-core.md, part 31.)
 static auto sonyModule(const std::string& name, u32 attributes) -> bool {
   return !name.compare(0, 3, "sce") || !name.compare(0, 3, "Sce") || (attributes & 0x1000);
+}
+
+//Whether the kernel stands in for one of Sony's modules that came unencrypted, its exports read: a kernel module
+//always (it couldn't run among a game's threads), a user module if the kernel has a function it exports. Persona 3
+//Portable and both Dissidias load Sony's LIBSUPPREACC.PRX, unencrypted, whose scesupPreAcc_library exports eight
+//functions of the scesupPreAcc library, none of them the kernel's: stood in for, the games' calls to it were
+//refused. It's an ordinary user module, needing only the file, callback and power lock functions it imports, so it
+//runs as a game's own module does, as on a PSP; so do the network libraries some games carry plain (the ad hoc
+//download library, WipEout's HTTP and SSL ones), which the kernel has nothing of either. (An encrypted module of
+//Sony's is still stood in for by its name alone, never decrypted.)
+auto Kernel::standsInFor(const Module& loaded) const -> bool {
+  if(loaded.attributes & 0x1000) return true;
+  return std::any_of(loaded.exports.begin(), loaded.exports.end(), [&](auto& e) {
+    return !e.library.empty() && !e.variable && std::any_of(functions.begin(), functions.end(), [&](auto& f) {
+      return f.nid == e.nid;
+    });
+  });
 }
 
 //A file's bytes, read whole into the host's memory (at most 64 MiB, the PSP's memory): one on the disc, by its path
@@ -148,13 +166,16 @@ auto Kernel::loadModule(const std::vector<u8>& file, const std::string& path) ->
     note("can't load " + path + ": " + why);
     return ErrorIllegalObject;
   }
-  if(sonyModule(loaded.module.name, loaded.module.attributes)) {  //one of Sony's that came unencrypted
-    release(loaded.block);
+  if(sonyModule(loaded.module.name, loaded.module.attributes) && standsInFor(loaded.module)) {
+    release(loaded.block);  //one of Sony's that came unencrypted
     return standIn(loaded.module.name, loaded.module.attributes, path);
   }
   loaded.uid = newUID();
   if(!loaded.uid) return release(loaded.block), ErrorNoMemory;
   for(auto& skipped : loaded.module.skipped) note(path + ": the loader left out " + skipped);
+  if(sonyModule(loaded.module.name, loaded.module.attributes)) {
+    note(path + " is Sony's " + loaded.module.name + ", none of whose functions the HLE kernel has: it runs");
+  }
   u32 uid = loaded.uid;
   modules[uid] = std::move(loaded);
   linkImports();
@@ -214,17 +235,13 @@ auto Kernel::moduleFunction(const LoadedModule& loaded, u32 nid) const -> u32 {
   return nid == ModuleStartNID && entry && moduleAt(entry) == loaded.uid ? entry : 0;
 }
 
-//Makes the thread a module's module_start or module_stop runs on, from entry, dormant, with room on its stack for
-//the argument (length bytes at argument, if any). Its priority, stack size and attributes are the program's first
-//thread's (0x20, 256 KiB, user mode with the VFPU), unless the module's own thread parameters say otherwise
-//(parameters: the NID of module_start_thread_parameter or module_stop_thread_parameter, a variable it exports for
-//itself: how many values follow, Sony's SDK writing 3, then a priority, a stack size and attributes, as uOFW's
-//SceModuleEntryThread has them), or the caller's options do (SceKernelSMOption: its size, a stack's partition, then
-//the same three). A 0 in either leaves the value as it was. Returns the thread's ID, or why it couldn't be made.
-auto Kernel::makeModuleThread(const LoadedModule& loaded, u32 entry, u32 parameters, u32 length, u32 argument,
-                              u32 options) -> s32 {
-  u32 priority = 0x20, stackSize = 256_KiB, attributes = 0x8000'4000;
-  for(auto& e : loaded.module.exports) {
+//A module's own thread parameters (parameters: the NID of module_start_thread_parameter or
+//module_stop_thread_parameter, a variable it exports for itself: how many values follow, Sony's SDK writing 3, then a
+//priority, a stack size and attributes, as uOFW's SceModuleEntryThread has them), over the values given: a 0 leaves
+//one as it was. The program has them as any module does.
+auto Kernel::threadParameters(const Module& module, u32 parameters, u32& priority, u32& stackSize,
+                              u32& attributes) const -> void {
+  for(auto& e : module.exports) {
     if(!e.library.empty() || e.nid != parameters || !e.variable || !memory.reaches(e.address, 4)) continue;
     u32 count = std::min<u32>(memory.read(4, e.address), 3);
     if(!memory.reaches(e.address, 4 + count * 4)) continue;
@@ -232,6 +249,17 @@ auto Kernel::makeModuleThread(const LoadedModule& loaded, u32 entry, u32 paramet
     if(u32 value = count >= 2 ? memory.read(4, e.address + 8) : 0) stackSize = value;
     if(u32 value = count >= 3 ? memory.read(4, e.address + 12) : 0) attributes = value;
   }
+}
+
+//Makes the thread a module's module_start or module_stop runs on, from entry, dormant, with room on its stack for
+//the argument (length bytes at argument, if any). Its priority, stack size and attributes are the defaults (0x20,
+//256 KiB, user mode with the VFPU), unless the module's own thread parameters say otherwise
+//(threadParameters()), or the caller's options do (SceKernelSMOption: its size, a stack's partition, then the same
+//three). A 0 in either leaves the value as it was. Returns the thread's ID, or why it couldn't be made.
+auto Kernel::makeModuleThread(const LoadedModule& loaded, u32 entry, u32 parameters, u32 length, u32 argument,
+                              u32 options) -> s32 {
+  u32 priority = 0x20, stackSize = 256_KiB, attributes = 0x8000'4000;
+  threadParameters(loaded.module, parameters, priority, stackSize, attributes);
   if(options && memory.reaches(options, 20) && memory.read(4, options) >= 20) {
     if(u32 value = memory.read(4, options + 8)) stackSize = value;
     if(u32 value = memory.read(4, options + 12)) priority = value;
@@ -355,10 +383,14 @@ auto Kernel::unloadSelf(s32 exitStatus, u32 length, u32 argument, u32 options) -
     programAsModule();
   }
   result(0);  //what a caller that isn't a thread (the kernel's own tests) sees
+  //module_stop's argument, kept before the caller ends: a stack lent to it for a call (sceKernelExtendThreadStack)
+  //goes back as it ends, and module_stop's thread may be given that very memory for its own stack
+  std::vector<u8> kept(argument && length ? length : 0);
+  if(!kept.empty()) memory.copyOut(kept.data(), argument, length);
   Thread* caller = current;
   if(caller) {
     endThread(*caller, exitStatus);  //which ends the module's module_start or module_stop, if the caller ran it
-    current = nullptr;  //nothing to save: it goes once module_stop's argument is copied off its stack
+    current = nullptr;  //nothing to save: it goes once module_stop's thread has its argument
   }
   found = modules.find(uid);  //gone already if the caller was the module_stop it ran as it unloaded itself
   if(found != modules.end()) {
@@ -369,6 +401,7 @@ auto Kernel::unloadSelf(s32 exitStatus, u32 length, u32 argument, u32 options) -
       loaded.status = ModuleStatus::Unloading;
       loaded.thread = made;
       startThread(*threads[made], length, argument, Trampoline + 16);
+      if(!kept.empty()) memory.copyIn(threads[made]->context.gpr[5], kept.data(), kept.size());
     } else {
       if(stop) note(loaded.module.name + " unloads itself without its module_stop, which had no thread to run on");
       unloadModule(uid);
@@ -400,10 +433,12 @@ auto Kernel::sceKernelLoadModule() -> void {
 //(file, flags, options): a module loaded from a file already open, from where it's at: games keep modules inside
 //archives of their own, and seek to one before loading it. An encrypted module is as long as its ~PSP header says
 //(0x2c), after the ~SCE header some have: one said to be shorter than that header, or longer than 64 MiB (the PSP's
-//memory), is refused, the file left where it was. A plain one runs to the file's end (16 MiB at most).
+//memory), is refused, the file left where it was. A plain one runs to the file's end (16 MiB at most). A file with
+//an asynchronous request under way is refused, as its reads are (ASYNC_BUSY).
 auto Kernel::sceKernelLoadModuleByID() -> void {
   auto found = files.find(arg(0));
   if(found == files.end()) return result(ErrorBadFile);
+  if(asyncBusy(arg(0))) return result(ErrorAsyncBusy);
   auto& open = found->second;
   u64 position = open.position;
   std::vector<u8> data;

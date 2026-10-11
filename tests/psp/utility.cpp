@@ -1,7 +1,7 @@
 //The system's utilities (ares/psp/kernel/utility.cpp): a dialog's statuses and their timing, saves made, loaded,
 //sized, listed, erased and deleted in a memory stick folder (names that would reach elsewhere and buffers outside
 //the program's memory refused), the memory stick's free space told alike everywhere, a message answered yes, the
-//keyboard's fields accepted (an empty one given the nickname), network settings cancelled, the wrong type and the
+//keyboard's fields entered (an empty one given the nickname), network settings cancelled, the wrong type and the
 //wrong status refused; a game's data install cancelled; optional modules loaded and unloaded; the nickname. Called
 //directly, the clock moved on by hand.
 #include "kernel-machine.hpp"
@@ -102,6 +102,22 @@ static auto savedata() -> void {
   CHECK(runSave(m), 0x8011'03c7);
   saveParameters(m, 10, "ULUS99999", "SLOT0", 0);
   CHECK(runSave(m), 0x8011'0347);
+  //writing data (secure or not) into a save that isn't there: NO_DATA, nothing made (utility/savedata/
+  //saveemptyfilename); into one made first, its file written
+  for(u32 mode : {17u, 18u}) {
+    saveParameters(m, mode, "ULUS99999", "SLOT1", 11);
+    CHECK(runSave(m), 0x8011'0327);
+    CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/ULUS99999SLOT1"), false);
+    fileName(m, "");
+    CHECK(runSave(m), 0x8011'0327);
+    CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/ULUS99999SLOT1"), false);
+  }
+  saveParameters(m, 14, "ULUS99999", "SLOT1", 0);  //make data
+  fileName(m, "");
+  CHECK(runSave(m), 0);
+  saveParameters(m, 17, "ULUS99999", "SLOT1", 11);
+  CHECK(runSave(m), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS99999SLOT1/DATA.BIN") == "saved bytes", true);
 }
 
 //A save's names become a folder and a file on the host, so each must be one plain name, and the save's paths must be
@@ -164,7 +180,7 @@ static auto savedataNames() -> void {
   saveParameters(m, 4, "ULUS99999", "", 5);
   m.system.memory.write(4, Parameters + 96, Buffer + 0x100);
   CHECK(runSave(m), 0x8011'0308);
-  refused(8, "ULUS99999", ".", "", 0x8011'03c8);
+  refused(8, "ULUS99999", ".", "", 0x8011'03c7);  //(no names of its own: msData's "." is no save there)
   refused(12, "ULUS99999SLOT0", "..", "", 0x8011'0328);
   refused(0, "ULUS999999999", "SLOT0", "DATA.BIN", 0x8011'0308);  //a game's name as long as its field
   refused(0, "ULUS99999", "SLOT0SLOT0SLOT0SLOT0", "DATA.BIN", 0x8011'0308);  //and a save's
@@ -293,7 +309,8 @@ static auto savedataErase() -> void {
 //carries, its PARAM.SFO and the folder. The size mode (22), as utility/savedata/getsize recorded: the free space in
 //32 KiB "sectors", and with no files listed nothing else written; with files, what they take in whole clusters past
 //the free space (none for 128 KiB, its text left alone; 256 MiB for a 2 GiB file); not in the smaller structure of
-//before firmware 2.00. Sizes as text in whole units: KB, MB, GB.
+//before firmware 2.00; 0 for a save that's there, and NO_DATA for one that isn't, the sizes written all the same (Def
+//Jam: Fight for NY makes its save on that answer). Sizes as text in whole units: KB, MB, GB.
 static auto stickSpace() -> void {
   HostFolder stick;
   KernelMachine m;
@@ -352,6 +369,16 @@ static auto stickSpace() -> void {
   CHECK(runSave(m), 0);
   CHECK(memory.read(4, Needed + 4), 2112);
   CHECK(memory.readString(Needed + 8, 8) == "2 MB", true);
+  //with no names of the request's own (Valhalla Knights 2's), answered just the same; a save not there, no data
+  saveParameters(m, 8, "", "", 16);
+  memory.copyIn(Used, "ULUS99999", 10);
+  memory.copyIn(Used + 16, "ABC", 4);
+  memory.fill(Free, 0xcc, 32);
+  CHECK(runSave(m), 0);
+  CHECK(memory.read(4, Used + 36), 4);
+  CHECK(memory.read(4, Free + 4), 57'344);
+  memory.copyIn(Used + 16, "XYZ", 4);
+  CHECK(runSave(m), 0x8011'03c7);
 
   //the size mode: the free space; no files listed, nothing else; two secure files and a normal one, 4 clusters
   saveParameters(m, 22, "ULUS99999", "ABC", 0);
@@ -373,10 +400,11 @@ static auto stickSpace() -> void {
   memory.write(4, Sizes + 4, 1);
   memory.write(4, Sizes + 8, Files);
   memory.write(4, Sizes + 12, Files + 48);
-  saveParameters(m, 22, "ULUS99999", "NONE", 0);  //(the save needn't be there)
+  saveParameters(m, 22, "ULUS99999", "NONE", 0);  //a save not there: no data, the sizes told all the same
   memory.write(4, Parameters + 1532, Sizes);
-  memory.fill(Sizes + 36, 0xcc, 24);
-  CHECK(runSave(m), 0);
+  memory.fill(Sizes + 16, 0xcc, 44);
+  CHECK(runSave(m), 0x8011'0327);
+  CHECK(memory.read(4, Sizes + 20), 57'344);
   //they take 128 KiB, well within the free space: nothing more needed, new or over a save, the text left alone
   for(u32 at : {36u, 48u}) CHECK(memory.read(4, Sizes + at), 0);
   for(u32 at : {40u, 52u}) CHECK(memory.read(4, Sizes + at), 0xcccc'cccc);
@@ -384,9 +412,21 @@ static auto stickSpace() -> void {
   memory.write(4, Files + 48, 0x8000'0000);  //(a 64-bit size, low word first)
   memory.write(4, Files + 52, 0);
   memory.write(4, Sizes, 0);  //no secure files
-  CHECK(runSave(m), 0);
+  CHECK(runSave(m), 0x8011'0327);
   for(u32 at : {36u, 48u}) CHECK(memory.read(4, Sizes + at), 262'144);
   for(u32 at : {40u, 52u}) CHECK(memory.readString(Sizes + at, 8) == "256 MB", true);
+  //and the save there: 0, the same sizes
+  saveParameters(m, 22, "ULUS99999", "ABC", 0);
+  memory.write(4, Parameters + 1532, Sizes);
+  memory.fill(Sizes + 36, 0xcc, 24);
+  CHECK(runSave(m), 0);
+  for(u32 at : {36u, 48u}) CHECK(memory.read(4, Sizes + at), 262'144);
+  //with no size information to fill in, the same answers
+  memory.write(4, Parameters + 1532, 0);
+  CHECK(runSave(m), 0);
+  saveParameters(m, 22, "ULUS99999", "NONE", 0);
+  memory.write(4, Parameters + 1532, 0);
+  CHECK(runSave(m), 0x8011'0327);
   //the smaller structure has no size mode's answer
   memory.fill(Sizes, 0xcc, 64);
   saveParameters(m, 22, "ULUS99999", "ABC", 0);
@@ -552,11 +592,12 @@ static auto gamedataInstall() -> void {
   CHECK(m.notes.size(), 0);
 }
 
-//The keyboard: each field's text accepted as it is (UNCHANGED), an empty field or one of spaces given the console's
-//nickname (CHANGED), each as far as its room (its NUL among it) and its limit allow, a limit of 0 being none; a
-//field with nowhere to put its text, or no room for any, still has its result, nothing written there (a NUL had gone
-//into a field of no room, and a limit of 0 had cut the nickname to nothing); the common part's result is 0. (Peace
-//Walker, its keyboard cancelled, asked for its player's name again and again.)
+//The keyboard: each field's text entered as it is, an empty field or one of spaces given the console's nickname,
+//each as far as its room (its NUL among it) and its limit allow, a limit of 0 being none, and each CHANGED; a field
+//with nowhere to put its text, or no room for any, still has its result, nothing written there (a NUL had gone into
+//a field of no room, and a limit of 0 had cut the nickname to nothing); the common part's result is 0. (Peace
+//Walker, its keyboard cancelled, asked for its player's name again and again; Ridge Racer 2, its default driver name
+//answered UNCHANGED, went back to its title as if the player had cancelled.)
 static auto keyboard() -> void {
   KernelMachine m;
   u64 millisecond = Kernel::CPUFrequency / 1000;
@@ -585,7 +626,7 @@ static auto keyboard() -> void {
   auto result = [&](u32 n) { return m.system.memory.read(4, Fields + n * 52 + 44); };
   m.system.memory.fill(Parameters, 0, 64);
   m.system.memory.write(4, Parameters, 64);
-  m.system.memory.write(4, Parameters + 48, 10);
+  m.system.memory.write(4, Parameters + 48, 11);
   m.system.memory.write(4, Parameters + 52, Fields);
   field(0, u"Snake", 0x200, 15);
   field(1, u"", 0x200, 15);
@@ -597,6 +638,7 @@ static auto keyboard() -> void {
   field(7, u"Ocelot", 4, 0);
   field(8, u"", 0, 15);
   field(9, u"Kaz", 0, 0);
+  field(10, u"DAMACY", 8, 7);  //(Ridge Racer 2's driver name: room for 7 and the NUL, at most 7)
   auto advance = [&](u64 cycles) {  //(the kernel catching up with the vertical blanks, as a state wants)
     m.kernel.cycles += cycles;
     m.kernel.events();
@@ -607,16 +649,17 @@ static auto keyboard() -> void {
   CHECK(m.call("sceUtilityOskUpdate", {1}), 0);
   CHECK(m.call("sceUtilityOskGetStatus", {}), 3);
   CHECK(m.system.memory.read(4, Parameters + 28), 0);
-  CHECK(answer(0) == u"Snake" && result(0) == 0, true);
+  CHECK(answer(0) == u"Snake" && result(0) == 2, true);
   CHECK(answer(1) == u"PSP" && result(1) == 2, true);
   CHECK(answer(2) == u"PSP" && result(2) == 2, true);
-  CHECK(answer(3) == u"Big" && result(3) == 0, true);
+  CHECK(answer(3) == u"Big" && result(3) == 2, true);
   CHECK(answer(4) == u"P" && result(4) == 2, true);
-  CHECK(m.system.memory.read(2, Texts + 5 * 0x100 + 0x80) == 0xcccc && result(5) == 0, true);
+  CHECK(m.system.memory.read(2, Texts + 5 * 0x100 + 0x80) == 0xcccc && result(5) == 2, true);
   CHECK(answer(6) == u"PSP" && result(6) == 2, true);
-  CHECK(answer(7) == u"Oce" && result(7) == 0, true);
+  CHECK(answer(7) == u"Oce" && result(7) == 2, true);
   CHECK(m.system.memory.read(2, Texts + 8 * 0x100 + 0x80) == 0xcccc && result(8) == 2, true);
-  CHECK(m.system.memory.read(2, Texts + 9 * 0x100 + 0x80) == 0xcccc && result(9) == 0, true);
+  CHECK(m.system.memory.read(2, Texts + 9 * 0x100 + 0x80) == 0xcccc && result(9) == 2, true);
+  CHECK(answer(10) == u"DAMACY" && result(10) == 2, true);
   CHECK(m.call("sceUtilityOskShutdownStart", {}), 0);
   advance(40 * millisecond);
   CHECK(m.call("sceUtilityOskGetStatus", {}), 0);
@@ -624,8 +667,9 @@ static auto keyboard() -> void {
   CHECK(roundTrip(m), true);
 }
 
-//Optional modules: loaded once (again: already loaded), unloaded once (again: not loaded), 0x308 among them,
-//numbers that aren't a module refused, the older network numbers standing for 0x100-0x106; the nickname.
+//Optional modules: loaded once (again: already loaded), unloaded once (again: not loaded), 0x107, 0x108 and 0x308
+//among them, numbers that aren't a module refused, the older network numbers standing for 0x100-0x106 and the older
+//USB numbers for 0x200-0x203; the nickname.
 static auto modules() -> void {
   KernelMachine m;
   CHECK(m.call("sceUtilityLoadModule", {0x301}), 0);
@@ -635,14 +679,40 @@ static auto modules() -> void {
   CHECK(m.call("sceUtilityLoadModule", {0x308}), 0);  //later firmwares' (Ace Combat: Joint Assault loads it)
   CHECK(m.call("sceUtilityUnloadModule", {0x308}), 0);
   CHECK(m.call("sceUtilityLoadModule", {0x309}), 0x8011'1101);
+  CHECK(m.call("sceUtilityLoadModule", {0x108}), 0);  //later firmwares' (Macross: Triangle Frontier loads it)
+  CHECK(m.call("sceUtilityLoadModule", {0x108}), 0x8011'1102);
+  CHECK(m.call("sceUtilityLoadModule", {0x107}), 0);
+  CHECK(roundTrip(m), true);
+  CHECK(m.call("sceUtilityUnloadModule", {0x108}), 0);
+  CHECK(m.call("sceUtilityUnloadModule", {0x107}), 0);
+  CHECK(m.call("sceUtilityLoadModule", {0x109}), 0x8011'1101);
   CHECK(m.call("sceUtilityLoadModule", {0x700}), 0x8011'1101);
   CHECK(m.call("sceUtilityLoadNetModule", {1}), 0);
   CHECK(m.call("sceUtilityLoadModule", {0x100}), 0x8011'1102);  //the same module
   CHECK(m.call("sceUtilityUnloadNetModule", {1}), 0);
   CHECK(m.call("sceUtilityLoadNetModule", {8}), 0x8011'1101);
+  //the older USB numbers: 1 and 3-5 standing for 0x200-0x203, the accessory driver (2) taken without a number
+  CHECK(m.call("sceUtilityLoadUsbModule", {5}), 0);
+  CHECK(m.call("sceUtilityLoadModule", {0x203}), 0x8011'1102);  //the same module
+  CHECK(m.call("sceUtilityLoadUsbModule", {5}), 0x8011'1102);
+  CHECK(m.call("sceUtilityUnloadUsbModule", {5}), 0);
+  CHECK(m.call("sceUtilityUnloadUsbModule", {5}), 0x8011'1103);
+  CHECK(m.call("sceUtilityLoadUsbModule", {1}), 0);
+  CHECK(m.call("sceUtilityUnloadModule", {0x200}), 0);
+  CHECK(m.call("sceUtilityLoadUsbModule", {2}), 0);
+  CHECK(m.call("sceUtilityUnloadUsbModule", {2}), 0);
+  CHECK(m.call("sceUtilityLoadUsbModule", {0}), 0x8011'1101);
+  CHECK(m.call("sceUtilityLoadUsbModule", {6}), 0x8011'1101);
+  CHECK(m.call("sceUtilityUnloadUsbModule", {6}), 0x8011'1101);
   CHECK(m.call("sceUtilityGetSystemParamString", {1, Buffer, 128}), 0);
   CHECK(m.system.memory.readString(Buffer, 128) == "PSP", true);
   CHECK(m.call("sceUtilityGetSystemParamString", {2, Buffer, 128}), 0x8011'0103);
+  //number settings taken and forgotten: the language stays English (1)
+  CHECK(m.call("sceUtilitySetSystemParamInt", {3, 0}), 0);
+  CHECK(m.call("sceUtilitySetSystemParamInt", {8, 2}), 0);
+  m.system.memory.write(4, Buffer, 7);
+  CHECK(m.call("sceUtilityGetSystemParamInt", {8, Buffer}), 0);
+  CHECK(m.system.memory.read(4, Buffer), 1);
 }
 
 auto utilityTests() -> Tests {

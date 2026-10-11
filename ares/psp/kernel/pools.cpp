@@ -30,7 +30,10 @@ auto Kernel::createPool(bool variable) -> void {
   if(!size || !count) return result(ErrorIllegalMemorySize);
   u32 alignment = 4;
   if(!variable && options && memory.read(4, options) >= 8) alignment = memory.read(4, options + 4);
-  if(!alignment || alignment & (alignment - 1) || alignment > 0x1000) return result(ErrorIllegalArgument);
+  //(an alignment of 0 is the default, as threads/fpl/create recorded: Brothers in Arms: D-Day gives one, and on a
+  //refusal looks for memory it never finds)
+  if(!alignment) alignment = 4;
+  if(alignment & (alignment - 1) || alignment > 0x1000) return result(ErrorIllegalArgument);
   u64 blockSize = (u64(size) + alignment - 1) & ~u64(alignment - 1);
   if(variable && size <= 0x30) size = 0x1000;  //too small to hold anything: made 4 KiB (pspautotests' threads/vpl)
   u64 total = variable ? (u64(size) + 7) & ~7ull : blockSize * count;

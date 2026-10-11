@@ -23,6 +23,8 @@ int main() {
   for(auto& test : movieTests()) tests.push_back(test);
   for(auto& test : psmfTests()) tests.push_back(test);
   for(auto& test : fontTests()) tests.push_back(test);
+  for(auto& test : cccTests()) tests.push_back(test);
+  for(auto& test : jpegTests()) tests.push_back(test);
   for(auto& test : fileTests()) tests.push_back(test);
   for(auto& test : asyncTests()) tests.push_back(test);
   for(auto& test : discTests()) tests.push_back(test);
@@ -31,6 +33,7 @@ int main() {
   for(auto& test : desktopDiscInfoTests()) tests.push_back(test);
   for(auto& test : cryptoTests()) tests.push_back(test);
   for(auto& test : decryptTests()) tests.push_back(test);
+  for(auto& test : pgdTests()) tests.push_back(test);
   for(auto& test : moduleTests()) tests.push_back(test);
   for(auto& test : stateTests()) tests.push_back(test);
   for(auto& test : geTests()) tests.push_back(test);

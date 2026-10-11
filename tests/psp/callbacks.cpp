@@ -227,6 +227,216 @@ static auto waitsGoOn() -> void {
   }
 }
 
+//A callback that takes the semaphore its thread's CB wait (no timeout) would take at once, as Patapon 2's memory
+//stick callback does, notified as it's registered: it runs first, finding the count there, waiting for it and giving
+//it back, and the wait takes the count once it's done, the thread holding it after. (Run after the wait took it, it
+//waited for good.) With another thread in line, wanting two of the semaphore's one, the count is taken at once and
+//the callback (taking nothing) runs after, finding none left, the other thread still waiting.
+static auto callbackBeforeSemaphore() -> void {
+  for(auto [queued, recompile] : {std::pair{false, false}, {false, true}, {true, false}, {true, true}}) {
+    KernelMachine m;
+    constexpr u32 Seen = R + 0x200;  //the semaphore's status, as the callback found it
+    Assembler callback{m, 0x0880'3000};  //notes the semaphore in R, takes and gives it back, notes 0xc0 at R + 0x100
+    callback.put(addiu(sp, sp, -16)); callback.put(sw(ra, 12, sp));
+    callback.li(t0, R); callback.put(lw(a0, 0, t0)); callback.li(a1, Seen);
+    callback.call("sceKernelReferSemaStatus");
+    if(!queued) {
+      callback.li(t0, R); callback.put(lw(a0, 0, t0)); callback.li(a1, 1); callback.li(a2, 0);
+      callback.call("sceKernelWaitSemaCB");
+      callback.li(t0, R); callback.put(lw(a0, 0, t0)); callback.li(a1, 1);
+      callback.call("sceKernelSignalSema");
+    }
+    callback.li(t0, R + 0x100); callback.li(t1, 0xc0); callback.put(sw(t1, 0, t0));
+    callback.put(lw(ra, 12, sp)); callback.put(addiu(sp, sp, 16));
+    callback.li(v0, 0); callback.put(jr(ra)); callback.put(nop);
+    Assembler other{m, 0x0880'2000};  //waits for two of the semaphore's count
+    other.li(t0, R); other.put(lw(a0, 0, t0)); other.li(a1, 2); other.li(a2, 0);
+    other.call("sceKernelWaitSema");
+    other.li(a0, 0); other.call("sceKernelExitThread");
+    m.system.memory.write(4, Seen, 56);
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, m.string("s")); main.li(a1, 0); main.li(a2, 1); main.li(a3, 2); main.li(t0, 0);
+    main.call("sceKernelCreateSema");
+    main.li(t0, R); main.put(sw(v0, 0, t0));
+    if(queued) {  //better than main: it runs at once, and waits
+      main.li(a0, m.string("other")); main.li(a1, 0x0880'2000); main.li(a2, 0x10); main.li(a3, 0x1000);
+      main.li(t0, 0); main.li(t1, 0);
+      main.call("sceKernelCreateThread");
+      main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+      main.call("sceKernelStartThread");
+    }
+    main.li(a0, m.string("cb")); main.li(a1, 0x0880'3000); main.li(a2, 0);
+    main.call("sceKernelCreateCallback");
+    main.put(addu(a0, v0, zero)); main.li(a1, 1);
+    main.call("sceKernelNotifyCallback");
+    main.li(t0, R); main.put(lw(a0, 0, t0)); main.li(a1, 1); main.li(a2, 0);
+    main.call("sceKernelWaitSemaCB");
+    main.li(t0, R + 0x108); main.put(sw(v0, 0, t0));
+    main.li(t0, R + 0x100); main.put(lw(t1, 0, t0)); main.li(t0, R + 0x104); main.put(sw(t1, 0, t0));
+    main.li(t0, R); main.put(lw(a0, 0, t0)); main.li(a1, 1);
+    main.call("sceKernelPollSema");
+    main.li(t0, R + 0x10c); main.put(sw(v0, 0, t0));
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    CHECK(word(m, R + 0x108), 0);                           //the wait took the count
+    CHECK(word(m, R + 0x104), 0xc0);                        //once the callback had run
+    CHECK(word(m, R + 0x10c), Kernel::ErrorSemaphoreZero);  //and holds it
+    CHECK(word(m, Seen + 44), queued ? 0 : 1);              //the count, as the callback found it
+    CHECK(word(m, Seen + 52), queued ? 1 : 0);              //and the threads waiting
+    CHECK(m.notes.size(), 0);
+  }
+}
+
+//Such a wait runs its callbacks at once, in its wait: a ready thread of the same priority doesn't run first (it would
+//find the count there and take it). And it's first in line after them: a better thread that asks for two of the
+//semaphore's one while the callback waits doesn't hold it up.
+static auto callbacksFirstInLine() -> void {
+  for(auto [overtaken, recompile] : {std::pair{false, false}, {false, true}, {true, false}, {true, true}}) {
+    KernelMachine m;
+    m.system.memory.write(4, R + 0x14, 0xffff'ffff);
+    Assembler callback{m, 0x0880'3000};  //notes 0xc0 at R + 0x100 (having waited 2 ms, overtaken)
+    callback.put(addiu(sp, sp, -16)); callback.put(sw(ra, 12, sp));
+    if(overtaken) callback.li(a0, 2000), callback.call("sceKernelDelayThread");
+    callback.li(t0, R + 0x100); callback.li(t1, 0xc0); callback.put(sw(t1, 0, t0));
+    callback.put(lw(ra, 12, sp)); callback.put(addiu(sp, sp, 16));
+    callback.li(v0, 0); callback.put(jr(ra)); callback.put(nop);
+    Assembler other{m, 0x0880'2000};  //better, waits 1 ms then for two of the one; or the same priority, polls one
+    if(overtaken) other.li(a0, 1000), other.call("sceKernelDelayThread");
+    other.li(t0, R); other.put(lw(a0, 0, t0)); other.li(a1, overtaken ? 2 : 1); other.li(a2, 0);
+    other.call(overtaken ? "sceKernelWaitSema" : "sceKernelPollSema");
+    other.li(t0, R + 0x14); other.put(sw(v0, 0, t0));
+    other.call("sceKernelExitThread");
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, m.string("s")); main.li(a1, 0); main.li(a2, 1); main.li(a3, 2); main.li(t0, 0);
+    main.call("sceKernelCreateSema");
+    main.li(t0, R); main.put(sw(v0, 0, t0));
+    startThread(main, m, "other", 0x0880'2000, overtaken ? 0x10 : 0x20);
+    main.li(a0, m.string("cb")); main.li(a1, 0x0880'3000); main.li(a2, 0);
+    main.call("sceKernelCreateCallback");
+    main.put(addu(a0, v0, zero)); main.li(a1, 1);
+    main.call("sceKernelNotifyCallback");
+    main.li(t0, R); main.put(lw(a0, 0, t0)); main.li(a1, 1); main.li(a2, 0);
+    main.call("sceKernelWaitSemaCB");
+    main.li(t0, R + 0x10); main.put(sw(v0, 0, t0));
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    CHECK(word(m, R + 0x10), 0);      //the wait took the count
+    CHECK(word(m, R + 0x100), 0xc0);  //its callback having run
+    CHECK(word(m, R + 0x14) != 0, true);  //the other thread didn't get it (polled after: none; or still waiting)
+    CHECK(m.notes.size(), 0);
+  }
+}
+
+//With a timeout, a CB wait whose count is there takes it first, its callbacks running after: the callback finds none
+//left, and the timeout isn't written (the call didn't wait). And a thread waiting on the semaphore from inside its own
+//callback, for more than is there, is in line: the CB wait (no timeout) takes the count at once all the same.
+static auto callbackAfterSemaphore() -> void {
+  for(auto [inCallback, recompile] : {std::pair{false, false}, {false, true}, {true, false}, {true, true}}) {
+    KernelMachine m;
+    constexpr u32 Seen = R + 0x200, Timeout = R + 0x110;
+    m.system.memory.write(4, Seen, 56);
+    m.system.memory.write(4, Timeout, 1'000'000);
+    Assembler callback{m, 0x0880'3000};  //main's: notes the semaphore's status
+    callback.put(addiu(sp, sp, -16)); callback.put(sw(ra, 12, sp));
+    callback.li(t0, R); callback.put(lw(a0, 0, t0)); callback.li(a1, Seen);
+    callback.call("sceKernelReferSemaStatus");
+    callback.put(lw(ra, 12, sp)); callback.put(addiu(sp, sp, 16));
+    callback.li(v0, 0); callback.put(jr(ra)); callback.put(nop);
+    Assembler waiting{m, 0x0880'3800};  //the other thread's: waits for two of the semaphore's one
+    waiting.put(addiu(sp, sp, -16)); waiting.put(sw(ra, 12, sp));
+    waiting.li(t0, R); waiting.put(lw(a0, 0, t0)); waiting.li(a1, 2); waiting.li(a2, 0);
+    waiting.call("sceKernelWaitSema");
+    waiting.put(lw(ra, 12, sp)); waiting.put(addiu(sp, sp, 16));
+    waiting.li(v0, 0); waiting.put(jr(ra)); waiting.put(nop);
+    Assembler other{m, 0x0880'2000};  //makes its callback and sleeps where it may run
+    other.li(a0, m.string("waiting")); other.li(a1, 0x0880'3800); other.li(a2, 0);
+    other.call("sceKernelCreateCallback");
+    other.li(t0, R + 4); other.put(sw(v0, 0, t0));
+    other.call("sceKernelSleepThreadCB");
+    other.call("sceKernelExitThread");
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, m.string("s")); main.li(a1, 0); main.li(a2, 1); main.li(a3, 2); main.li(t0, 0);
+    main.call("sceKernelCreateSema");
+    main.li(t0, R); main.put(sw(v0, 0, t0));
+    if(inCallback) {
+      startThread(main, m, "other", 0x0880'2000, 0x10);  //runs at once: makes its callback and sleeps
+      main.li(t0, R + 4); main.put(lw(a0, 0, t0)); main.li(a1, 1);
+      main.call("sceKernelNotifyCallback");  //which runs at once, and waits
+    }
+    main.li(a0, m.string("cb")); main.li(a1, 0x0880'3000); main.li(a2, 0);
+    main.call("sceKernelCreateCallback");
+    main.put(addu(a0, v0, zero)); main.li(a1, 1);
+    main.call("sceKernelNotifyCallback");
+    main.li(t0, R); main.put(lw(a0, 0, t0)); main.li(a1, 1); main.li(a2, inCallback ? 0 : Timeout);
+    main.call("sceKernelWaitSemaCB");
+    main.li(t0, R + 0x108); main.put(sw(v0, 0, t0));
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    CHECK(word(m, R + 0x108), 0);
+    CHECK(word(m, Seen + 44), 0);        //taken before the callback ran
+    CHECK(word(m, Timeout), 1'000'000);  //no wait: the timeout isn't written
+    CHECK(m.notes.size(), 0);
+  }
+}
+
+//A thread whose CB wait on the semaphore is set aside while its callback waits is in line too: the CB wait (no
+//timeout) takes the count at once, its own callback running after; the other thread, back from its callback, finds
+//none and waits on. (Not seen in line, the CB wait's callbacks ran first and the other thread took the count.)
+static auto callbackAfterSemaphoreAside() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    m.system.memory.write(4, R + 0x10, 0xffff'ffff);
+    m.system.memory.write(4, R + 0x14, 0xffff'ffff);
+    Assembler theirs{m, 0x0880'3800};  //the other thread's callback: waits 2 ms, notes 0xa0
+    theirs.put(addiu(sp, sp, -16)); theirs.put(sw(ra, 12, sp));
+    theirs.li(a0, 2000); theirs.call("sceKernelDelayThread");
+    theirs.li(t0, R + 0x104); theirs.li(t1, 0xa0); theirs.put(sw(t1, 0, t0));
+    theirs.put(lw(ra, 12, sp)); theirs.put(addiu(sp, sp, 16));
+    theirs.li(v0, 0); theirs.put(jr(ra)); theirs.put(nop);
+    Assembler callback{m, 0x0880'3000};  //main's: waits 4 ms, notes 0xc0
+    callback.put(addiu(sp, sp, -16)); callback.put(sw(ra, 12, sp));
+    callback.li(a0, 4000); callback.call("sceKernelDelayThread");
+    callback.li(t0, R + 0x100); callback.li(t1, 0xc0); callback.put(sw(t1, 0, t0));
+    callback.put(lw(ra, 12, sp)); callback.put(addiu(sp, sp, 16));
+    callback.li(v0, 0); callback.put(jr(ra)); callback.put(nop);
+    Assembler other{m, 0x0880'2000};  //makes its callback, CB-waits for one of the semaphore
+    other.li(a0, m.string("theirs")); other.li(a1, 0x0880'3800); other.li(a2, 0);
+    other.call("sceKernelCreateCallback");
+    other.li(t0, R + 4); other.put(sw(v0, 0, t0));
+    other.li(t0, R); other.put(lw(a0, 0, t0)); other.li(a1, 1); other.li(a2, 0);
+    other.call("sceKernelWaitSemaCB");
+    other.li(t0, R + 0x14); other.put(sw(v0, 0, t0));
+    other.call("sceKernelExitThread");
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, m.string("s")); main.li(a1, 0); main.li(a2, 0); main.li(a3, 2); main.li(t0, 0);
+    main.call("sceKernelCreateSema");
+    main.li(t0, R); main.put(sw(v0, 0, t0));
+    startThread(main, m, "other", 0x0880'2000, 0x10);  //runs at once and waits
+    main.li(t0, R + 4); main.put(lw(a0, 0, t0)); main.li(a1, 1);
+    main.call("sceKernelNotifyCallback");  //its callback runs at once, its wait set aside, and waits itself
+    main.li(t0, R); main.put(lw(a0, 0, t0)); main.li(a1, 1);
+    main.call("sceKernelSignalSema");  //(the other thread isn't waiting on it now: the count stays)
+    main.li(a0, m.string("cb")); main.li(a1, 0x0880'3000); main.li(a2, 0);
+    main.call("sceKernelCreateCallback");
+    main.put(addu(a0, v0, zero)); main.li(a1, 1);
+    main.call("sceKernelNotifyCallback");
+    main.li(t0, R); main.put(lw(a0, 0, t0)); main.li(a1, 1); main.li(a2, 0);
+    main.call("sceKernelWaitSemaCB");
+    main.li(t0, R + 0x10); main.put(sw(v0, 0, t0));
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    CHECK(word(m, R + 0x10), 0);            //the CB wait took the count
+    CHECK(word(m, R + 0x100), 0xc0);        //its callback ran
+    CHECK(word(m, R + 0x104), 0xa0);        //the other's too
+    CHECK(word(m, R + 0x14), 0xffff'ffff);  //which waits on
+    CHECK(m.notes.size(), 0);
+  }
+}
+
 //A wait that lets callbacks run but needn't wait, what it waits for being there already, still runs the callbacks
 //notified by then, and returns what it got once they're done: a semaphore's count there (taken: none left after), a
 //wakeup that came first, an event flag's bits set, a fixed pool's free block, a thread that has ended (its exit
@@ -426,6 +636,11 @@ static auto vblankTiming() -> void {
   KernelMachine m;
   auto at = [&](u64 cycles) { m.kernel.cycles = cycles; };
   at(0);
+  //shown in the foreground with a frame buffer set, not without (display/isstate, the buffers set at once)
+  CHECK(m.call("sceDisplaySetFrameBuf", {0, 0, 0, 0}), 0);
+  CHECK(m.call("sceDisplayIsForeground", {}), 0);
+  CHECK(m.call("sceDisplaySetFrameBuf", {0x0400'0000, 512, 3, 0}), 0);
+  CHECK(m.call("sceDisplayIsForeground", {}), 1);
   CHECK(m.call("sceDisplayIsVblank", {}), 1);
   CHECK(m.call("sceDisplayGetCurrentHcount", {}), 0);
   CHECK(m.call("sceDisplayWaitVblank", {}), 1);
@@ -978,7 +1193,10 @@ static auto interruptFlag() -> void {
 auto callbackTests() -> Tests {
   return {
     {"callbacks in waits", runInWaits}, {"callbacks and waits going on", waitsGoOn},
-    {"callbacks in waits ending at once", waitsAtOnce},
+    {"callbacks in waits ending at once", waitsAtOnce}, {"callbacks before a semaphore", callbackBeforeSemaphore},
+    {"callbacks before a semaphore, first in line", callbacksFirstInLine},
+    {"callbacks after a semaphore", callbackAfterSemaphore},
+    {"callbacks after a semaphore, one in line with its wait set aside", callbackAfterSemaphoreAside},
     {"callbacks by priority", byPriority}, {"callbacks called directly", callbackCalls},
     {"display vblank timing", vblankTiming}, {"interrupts vblank handler", vblankHandler},
     {"interrupts held off, delivered once", heldOffOnce}, {"interrupts handlers longer than a frame", longHandlers},

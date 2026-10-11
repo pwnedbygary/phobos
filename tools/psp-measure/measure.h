@@ -9,7 +9,7 @@
 
 //make SMOKE=1 builds a quick version for trying the program in an emulator before a PSP runs it (PPSSPP's
 //PPSSPPHeadless, which has no buttons to press): it runs round 3's VFPU and FPU tests (the big ones cut short by
-//Shrink, a shift), the FPU probes and the GE's rounds 2, 3 and 4 straight away, and leaves when done. Its results say
+//Shrink, a shift), the FPU probes and the GE's rounds 2 to 6 straight away, and leaves when done. Its results say
 //nothing about a PSP.
 #ifdef SMOKE
 enum { Smoke = 1, Shrink = 8 };
@@ -28,10 +28,10 @@ int exists(const char* path);
 int mark(const char* path);  //an empty file, as a marker; 0 if it can't be written
 void awake(void);            //tells the PSP it's in use, so its power-save timer starts over
 
-//One test's file: written as <name>.part and renamed to <name>.bin once complete (see results.c). line is the
-//screen line saying how the test is doing.
+//One test's file: written as <name>.part and renamed to <name>.bin once complete (see results.c). stalled is where
+//a test says the GE stalled on it (ge.c). line is the screen line saying how the test is doing.
 typedef struct {
-  char done[320], part[320], again[320];
+  char done[320], part[320], again[320], stalled[320];
   SceUID file;
   int line;
 } Output;
@@ -48,5 +48,5 @@ void drop(Output* out);  //closes the file unkept, as if the test hadn't started
 void vfpuStart(void);      //first thing when the program starts: what round 1 and round 3 record as found then
 int vfpuRound(int round);  //1-3, or 4 for the FPU probes
 int geRound(int round);    //2: the GE's first tests and the controller's timing; 3: what they left open; 4:
-                           //parts 29's and 33's
+                           //parts 29's and 33's; 5: what part 48 left open; 6: what parts 60 and 64 left open
 void geEnd(void);          //lets the GE go before the program leaves

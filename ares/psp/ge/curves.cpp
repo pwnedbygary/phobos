@@ -22,9 +22,13 @@
 //    closed, from a to (a + 3b) / 4 with only the first open and from (3a + b) / 4 to b with only the last; and
 //    round 3 of tools/psp-measure drew a 4x4 spline with both ends open exactly as the same Bezier patch.
 //  - PATCH_DIVISION: how many pieces each patch (BEZIER) or each piece of the curve (SPLINE) is cut into along u
-//    (bits 0-7) and v (bits 8-15), evenly in t; 0 cuts as 1 does (gpu/primitives/bezier: two triangles). So vertices
+//    (bits 0-6) and v (bits 8-14), evenly in t; 0 cuts as 1 does (gpu/primitives/bezier: two triangles). So vertices
 //    are at t = k / divisions, neighbours sharing the vertices on their common edge. (The colors down a 4x5 Bezier
 //    and a 4x5 spline, in those pictures, step where 4 divisions of each patch and of each piece of curve put them.)
+//    The counts are 7 bits: round 4's curves-count-128 drew 128 divisions along u as 0, so as 1 (its four points).
+//    More than 64 never finishes: curves-count-65, -100, -200 (72) and -255 (127) left the PSP's GE drawing, not a
+//    point drawn, until tools/psp-measure reset it (docs/psp-core.md, part 60). Such a surface draws nothing here,
+//    and the list goes on. (Only u was measured past 64; v is taken to be the same.)
 //  - PATCH_PRIMITIVE (bits 0-1), as gpu/primitives/bezier and spline recorded: 0 triangles, the vertices' rows two at
 //    a time as triangle strips along u, (u0, v0), (u0, v1), (u1, v0), (u1, v1)... (so with flat shading a quad's top
 //    left triangle takes its top right vertex's color); 1 lines, those strips' vertices as line strips (a line down
@@ -143,8 +147,9 @@ auto GE::patch(bool spline, u32 argument) -> void {
   u32 ucount = argument & 0xff, vcount = argument >> 8 & 0xff;
   readVertices(ucount * vcount, format);
   if(!format.positionFormat) return;
-  u32 divisionsU = std::max(commands[PatchDivision] & 0xff, 1u);
-  u32 divisionsV = std::max(commands[PatchDivision] >> 8 & 0xff, 1u);
+  u32 divisionsU = std::max(commands[PatchDivision] & 0x7f, 1u);
+  u32 divisionsV = std::max(commands[PatchDivision] >> 8 & 0x7f, 1u);
+  if(divisionsU > 64 || divisionsV > 64) return note("a curved surface cut more than 64 times (the PSP's GE hangs)");
   //The budget is checked before anything is worked out, so a surface past it allocates nothing.
   u64 columns = patchColumns(spline, ucount, divisionsU), rows = patchColumns(spline, vcount, divisionsV);
   if(!columns || !rows) return;

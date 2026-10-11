@@ -360,6 +360,16 @@ auto matrices() -> void {
     }
   }
 
+  //vmmul.q of a matrix with itself, rs turned on its side as above: its first column, a unit vector, dotted with
+  //itself rounds up to exactly 1 (the adder's carry, as GTA: Liberty City Stories' skinning needs it; vdot's case in
+  //edges()).
+  Machine unit;
+  unit.run({alu(Vmmul, 4, M(3), M(1), M(1))}, [](Allegrex& s) {
+    const uint32_t column[4] = {0x3f024ba3, 0x3f024ba3, 0xbefb5343, 0x3efb5343};
+    for(uint32_t k = 0; k < 4; k++) s.vfpu.r[4 + 32 * k] = column[k];
+  });
+  CHECK(unit.cpu.vfpu.r[12], bits(1.0f));
+
   //A transposed operand reads columns where the plain one reads rows.
   Machine transposed;
   transposed.run({alu(Vmatrix, 4, M(3), E(1), Vmov)},
@@ -590,9 +600,10 @@ auto random() -> void {
 
 //What a PSP does with NaNs, infinities, denormals and prefixes where the instructions above don't show it, from the
 //second and third rounds of measurements (docs/psp-vfpu-measurements.md); most values are from the recorder's runs
-//(tests/allegrex/measured/ops.txt and ops3.txt list its entries), the tiny products built from round 3's rule. Each
-//case is instruction words as pspdev's assembler encoded them for the recorder, on C000 (s) and C100 (t, S100 being
-//its first lane), the result read from C200, whose unwritten lanes keep their 0xdead marks.
+//(tests/allegrex/measured/ops.txt and ops3.txt list its entries), the tiny products built from round 3's rule, the
+//adder's from round 1's vdot-spread.bin and a game. Each case is instruction words as pspdev's assembler encoded them
+//for the recorder, on C000 (s) and C100 (t, S100 being its first lane), the result read from C200, whose unwritten
+//lanes keep their 0xdead marks.
 auto edges() -> void {
   using Quad = std::array<uint32_t, 4>;
   constexpr uint32_t mark = 0xdead0000, one = 0x3f80'0000, minusOne = 0xbf80'0000, nan = 0x7f80'0001;
@@ -656,6 +667,15 @@ auto edges() -> void {
      {0x008005a8, 0x008005a9, 0x00800000, 0x00800001}, {0x00800000, 0x80000000, 0, 0x80800000}},
     //A quotient is taken to round the same way (not measured): 2^-126 - 2^-150 again.
     {"vdiv.s, a tiny quotient", 0x63840008, {0x3f7fffff}, {0x7e800000}, {0, mark | 1, mark | 2, mark | 3}},
+    //The adder on two of vdot-spread.bin's quads (measured), where a sum in doubles comes out a unit higher.
+    {"vdot.q, measured", 0x64848088, {0xf1fbf9d7, 0x51c54d4a, 0x8c795c21, 0xb886c70c},
+     {0xbec1d6fb, 0x2671e01e, 0x727148e5, 0x4d97e500}, {0x713ecaf4, mark | 1, mark | 2, mark | 3}},
+    {"vdot.q, measured again", 0x64848088, {0x257544df, 0x969b4cb2, 0x4042c469, 0x4855c2b4},
+     {0x17f18e83, 0x9d466206, 0xd6a651ad, 0x61510728}, {0x6a2e89ee, mark | 1, mark | 2, mark | 3}},
+    //A unit vector dotted with itself, as GTA: Liberty City Stories' skinning does: the truncated sum is a sliver
+    //below 1, and rounding it carries into the exponent: 1, not 1/2 (not measured; the carry is any adder's).
+    {"vdot.q, rounding up to 1", 0x64848088, {0x3f024ba3, 0x3f024ba3, 0xbefb5343, 0x3efb5343},
+     {0x3f024ba3, 0x3f024ba3, 0xbefb5343, 0x3efb5343}, {one, mark | 1, mark | 2, mark | 3}},
   };
   //Prefixes as a PSP applies them, one recorded run each: the math functions take them on their last lane alone,
   //with lane 0's settings (a constant; a setting naming another lane gives 0; the absolute value; the write mask),

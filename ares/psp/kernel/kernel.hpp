@@ -153,6 +153,7 @@ struct Kernel {
   static constexpr u32 ErrorLwMutexNotFound       = 0x8002'01ca;
   static constexpr u32 ErrorLwMutexLocked         = 0x8002'01cb;
   static constexpr u32 ErrorLwMutexUnlocked       = 0x8002'01cc;
+  static constexpr u32 ErrorLwMutexOverflow       = 0x8002'01cd;  //a recursive lock counted past 2^31 - 1
   static constexpr u32 ErrorLwMutexUnderflow      = 0x8002'01ce;
   static constexpr u32 ErrorLwMutexRecursion      = 0x8002'01cf;
   static constexpr u32 ErrorUnknownMailbox        = 0x8002'019b;
@@ -163,6 +164,10 @@ struct Kernel {
   static constexpr u32 ErrorIllegalSize           = 0x8002'01bc;
   static constexpr u32 ErrorIllegalType           = 0x8002'01bb;  //a kind of object there isn't (pspkerror.h)
   static constexpr u32 ErrorMessageQueued         = 0x8002'01c9;  //a mailbox's packet sent again while queued
+  //the thread-local storage pools': as pspautotests' threads/tls recorded them
+  static constexpr u32 ErrorUnknownTlspl          = 0x8002'01d0;
+  static constexpr u32 ErrorTooManyTlspls         = 0x8002'01d1;  //a 17th pool
+  static constexpr u32 ErrorTlsplInUse            = 0x8002'01d2;  //deleting a pool another thread holds a block of
   //uOFW's errors.h
   static constexpr u32 ErrorNotImplemented        = 0x8000'0003;
   static constexpr u32 ErrorNotSupported          = 0x8000'0004;
@@ -226,9 +231,11 @@ struct Kernel {
   static constexpr u32 Trampoline = 0x0800'0000;  //kernel memory: where a thread returns to when its entry function
                                                   //ends (8 bytes on, a call into the program; 16 on, a module's
                                                   //module_start or module_stop; 24 on, a thread's callback; 32 on,
-                                                  //the program's alloc or free called by sceLibFont)
+                                                  //the program's alloc or free called by sceLibFont; 40 on, a
+                                                  //movie ring's callback; 48 on, a function on a lent stack)
   static constexpr u32 InterruptStack = 0x0802'0000;  //kernel memory: the top of the stack calls into the program use
   static constexpr u32 UserMemory = 0x0880'0000;  //the user partition, games' memory, runs from here to the end of RAM
+  static constexpr u32 ProgramBase = UserMemory + 0x4000;  //where a program that's a PRX goes (start())
 
   Kernel(Allegrex& cpu, Memory& memory, GE& ge);
 
@@ -240,9 +247,10 @@ struct Kernel {
   //kernel.cpp
   static auto nid(const std::string& name) -> u32;
   auto power() -> void;
+  auto trampoline() -> void;
   auto load(const u8* data, u64 size, const std::string& path, std::string& error) -> bool;
   auto start(const u8* data, u64 size, const std::string& path, std::string& error,
-             const std::vector<u8>* given = nullptr) -> bool;
+             const std::vector<u8>* given = nullptr, bool large = false) -> bool;
   auto run(u64 budget) -> u64;
   auto importCode(const std::string& library, u32 nid) -> u32;
   auto syscall(u32 code) -> bool;
@@ -282,7 +290,7 @@ struct Kernel {
   std::vector<Function> functions;
   std::vector<Import> imports;  //by syscall code minus FirstImportCode
   static constexpr u32 ThreadReturnCode = 1, CallReturnCode = 2, ModuleReturnCode = 3, CallbackReturnCode = 4,
-                       FontReturnCode = 5, MpegReturnCode = 6;
+                       FontReturnCode = 5, MpegReturnCode = 6, ExtendReturnCode = 7;
   static constexpr u32 FirstImportCode = 0x1000;
 
   //threads.cpp
@@ -301,6 +309,7 @@ struct Kernel {
     Mutex,     //a kernel mutex another thread holds (mutexes.cpp)
     Psmf,      //the movie player's work (psmfplayer.cpp: opening a movie, a picture, making or deleting the player);
                //the call returns waitCount as it ends
+    Tlspl,     //a thread-local storage pool's block (tls.cpp)
   };
   struct WaitState {  //a thread's wait, put aside while its callbacks run (they may wait themselves)
     Wait wait = Wait::None;
@@ -317,17 +326,21 @@ struct Kernel {
     Context context{};
     Wait wait = Wait::None;
     u32 waitID = 0;        //the semaphore, mutex (a kernel one's ID, a lightweight one's work area), thread, event
-                           //flag, display list, module, message pipe or mailbox waited for; the sound channel (0-7
-                           //a mixer channel's, Audio::WaitSrc or WaitSrcDrain the SRC channel's); the file whose
-                           //asynchronous request is waited for, or that a synchronous read or write went to
+                           //flag, display list, module, message pipe, mailbox or thread-local storage pool waited
+                           //for; the sound channel (0-7 a mixer channel's, Audio::WaitSrc or WaitSrcDrain the SRC
+                           //channel's); the file whose asynchronous request is waited for, or that a synchronous
+                           //read or write went to
     u32 waitCount = 0;     //how many a semaphore or mutex wait needs (the count a mutex is to be held with); the
                            //bits an event flag wait needs; a mixer output's left volume; the samples an SRC output's
                            //buffer was armed with; the bytes a message pipe's send or receive asked for; what a
                            //synchronous read or write returns; the count of vertical blanks a blank's wait ends at
-    u32 waitMode = 0;      //an event flag wait's mode; a mixer output's right volume; a message pipe's mode
+    u32 waitMode = 0;      //an event flag wait's mode; a mixer output's right volume; a message pipe's mode;
+                           //whether a semaphore's CB wait is first in line once its callbacks are done; whether a
+                           //thread-local storage pool's waiter is sceKernelGetTlsAddr's (TlsByLibrary)
     u32 waitPointer = 0;   //where an event flag wait puts the bits it saw, a module wait the function's result, an
-                           //asynchronous wait the request's result, a mailbox wait the message; the buffer a mixer
-                           //output hands over, or a message pipe's send or receive reads or fills
+                           //asynchronous wait the request's result, a mailbox wait the message, a thread-local
+                           //storage pool's system call the block's address; the buffer a mixer output hands over,
+                           //or a message pipe's send or receive reads or fills
     u32 waitDone = 0;      //the bytes a message pipe's send or receive has moved so far
     u32 waitResult = 0;    //where a message pipe's send or receive puts how many it moved
     u64 wakeAt = 0;        //for a delay or timeout: the cycle to wake at (0: none)
@@ -346,6 +359,11 @@ struct Kernel {
     Context beforeCallback{};  //the thread as its callbacks found it: in its wait, or in sceKernelCheckCallback
     WaitState waitBeforeCallback;
     bool suspended = false;    //another thread suspended it: it doesn't run, whatever its state, until resumed
+    struct Extension {         //a stack lent for a call (sceKernelExtendThreadStack): the thread as the call found
+      Context caller{};        //it, carrying on there as the function returns, and the stack it had then
+      u32 stack = 0, size = 0;
+    };
+    std::vector<Extension> extensions;  //innermost last; stackBlock and stackSize are the innermost's lent stack
   };
   struct Semaphore {
     u32 uid;
@@ -388,6 +406,8 @@ struct Kernel {
   auto untilNextEvent() const -> u64;
   auto endThread(Thread& thread, s32 status) -> void;
   auto threadReturned() -> void;
+  auto extendReturned() -> void;
+  auto extensionsEnded(Thread& thread) -> void;
   auto signalSemaphores(Semaphore& semaphore) -> void;
   auto unlockLwMutex(u32 workArea) -> void;
   auto findThread(u32 uid) -> Thread*;
@@ -419,6 +439,7 @@ struct Kernel {
   auto sceKernelGetThreadId() -> void;
   auto sceKernelReferThreadStatus() -> void;
   auto sceKernelReferThreadRunStatus() -> void;
+  auto sceKernelReferSystemStatus() -> void;
   auto sceKernelGetThreadmanIdList() -> void;
   auto sceKernelGetThreadmanIdType() -> void;
   auto sceKernelDelayThread() -> void;
@@ -446,6 +467,7 @@ struct Kernel {
   auto sceKernelChangeCurrentThreadAttr() -> void;
   auto sceKernelGetThreadStackFreeSize() -> void;
   auto sceKernelCheckThreadStack() -> void;
+  auto sceKernelExtendThreadStack() -> void;
   auto sceKernelReferThreadProfiler() -> void;
   auto sceKernelGetThreadCurrentPriority() -> void;
   auto sceKernelRotateThreadReadyQueue() -> void;
@@ -461,6 +483,7 @@ struct Kernel {
   auto sceKernelLockLwMutex() -> void;
   auto sceKernelLockLwMutexCB() -> void;
   auto sceKernelTryLockLwMutex() -> void;
+  auto sceKernelTryLockLwMutex_600() -> void;
   auto sceKernelUnlockLwMutex() -> void;
   auto sceKernelGetSystemTimeLow() -> void;
 
@@ -554,7 +577,7 @@ struct Kernel {
     u32 address, size;
   };
   std::vector<Block> blocks;  //by address
-  bool largeMemory = false;   //the program asked for all of RAM (its PARAM.SFO's MEMSIZE): see userEnd()
+  bool largeMemory = false;   //the program has all of RAM (its PARAM.SFO's MEMSIZE...): see userEnd()
   u32 sdkVersion = 0;         //the SDK the program was built with, as its start-up code tells the system
   u32 compilerVersion = 0;    //and the version of the compiler that built it
   auto allocate(u32 size, u32 type, u32 address, const std::string& name) -> Block*;
@@ -563,6 +586,7 @@ struct Kernel {
   auto blockHeld(const Block& block) const -> bool;
   auto userEnd() const -> u32;
   auto largestFree() const -> u32;
+  auto largeRestart(u32 size) -> bool;
   auto programParameters(const u8* data, u64 size, const std::string& path) -> std::vector<u8>;
 
   auto sceKernelAllocPartitionMemory() -> void;
@@ -594,20 +618,33 @@ struct Kernel {
     bool onDisc = false, sectors = false;
     u32 sector = 0;
     u64 size = 0;
+    //PGD (Protected Game Data): a UMD data file, or an NPDRM EDATA, whose data the PSP decrypts as it's read. The
+    //version key (sceIoIoctl's 0x04100001) and where the data starts (0x04100002) set it; the reads of that data in
+    //io.cpp are decrypted (ares/psp/kernel/pgd.cpp).
+    bool pgd = false;
+    u8 pgdVersionKey[16] = {};
+    bool pgdReady = false;
+    u8 pgdDataKey[16] = {};
+    u32 pgdDataSize = 0, pgdBlockSize = 0;
+    u32 pgdDataOffset = 0;
     std::vector<Disc::Entry> discEntries;  //a folder on the disc's entries, beside their names
     //Its asynchronous request (async.cpp): none; one under way, done at asyncDoneAt; or one done whose result the
     //program hasn't taken yet. The result is 64 bits: a count, a position, or an error (sign-extended).
     enum class Async : u32 { None, Pending, Done } async = Async::None;
     u64 asyncDoneAt = 0;
     u64 asyncResult = 0;
+    u32 asyncData = 0;     //a read under way: where its bytes go as it's done (0: none to move), from asyncFrom on,
+    u64 asyncFrom = 0;     //as many as its result counts (bytes, or sectors through umd0:)
     u32 asyncCallback = 0, asyncArgument = 0;  //sceIoSetAsyncCallback's: notified as each request is done
     bool resultOnly = false;  //nothing is open (an asynchronous close, or an asynchronous open that failed): the
                               //descriptor stays only to hand over its request's result
+    u64 opened = 0;        //its place in the order the program opened files (filesOpened then): sceIoGetFdList's
   };
   std::map<std::string, std::string> devices;  //"ms0" -> the host folder standing for it
   std::shared_ptr<Disc> disc;  //the disc image in the drive (disc0: and umd0:, unless a host folder stands for it)
-  std::map<u32, OpenFile> files;
-  u32 nextFile = 3;  //after standard input, output and error
+  std::map<u32, OpenFile> files;  //by descriptor: 3 to MostFiles - 1 (newFile()), or more from an older state
+  static constexpr u32 MostFiles = 64;
+  u64 filesOpened = 0;  //how many files and folders the program has opened (never saved: its files' largest count)
   auto newFile() -> u32;
   std::string workingDirectory;
   std::vector<u32> memoryStickCallbacks;  //callbacks the program registered for the memory stick going in and out
@@ -627,6 +664,11 @@ struct Kernel {
   auto runOnDisc(const std::string& path, u32& first, u64& bytes) const -> bool;
   auto openFile(const std::string& path, u32 flags) -> u32;
   auto readFile(u32 file, u32 data, u32 size) -> u32;
+  auto readCount(OpenFile& open, u32 data, u32 size, u64& count) -> u32;
+  auto readMove(OpenFile& open, u64 at, u64 count, u32 data) -> s64;
+  //pgd.cpp: a PGD data file's decryption, set up by the two ioctl commands and applied to its reads
+  auto pgdDescriptor(OpenFile& open) -> std::string;  //its header's descriptor, decrypted once; why it can't
+  auto pgdDecryptRead(OpenFile& open, u32 data, u64 count) -> void;  //its reads' data region, decrypted in place
   auto writeFile(u32 file, u32 data, u32 size) -> u32;
   auto fileWaitRefused() const -> u32;
   auto fileWait(u32 file, u32 value, bool onDisc, u64 bytes) -> void;
@@ -646,10 +688,12 @@ struct Kernel {
   auto sceIoRmdir() -> void;
   auto sceIoRename() -> void;
   auto sceIoChdir() -> void;
+  auto sceIoAssign() -> void;
   auto sceIoGetstat() -> void;
   auto sceIoDopen() -> void;
   auto sceIoDread() -> void;
   auto sceIoDclose() -> void;
+  auto sceIoGetFdList() -> void;
   auto sceIoIoctl() -> void;
   auto sceIoDevctl() -> void;
   auto sceNpDrmSetLicenseeKey() -> void;
@@ -669,6 +713,7 @@ struct Kernel {
   auto asyncPoll(u32 file, u32 pointer) -> void;
   auto asyncWait(u32 file, u32 pointer, bool callbacks) -> void;
   auto asyncEvents() -> bool;
+  auto asyncDone(u32 file) -> bool;
   auto nextAsyncEvent() const -> u64;
   auto sceIoOpenAsync() -> void;
   auto sceIoCloseAsync() -> void;
@@ -749,6 +794,9 @@ struct Kernel {
   auto sceHprmIsHeadphoneExist() -> void;
   auto sceHprmIsRemoteExist() -> void;
   auto sceHprmIsMicrophoneExist() -> void;
+  u32 hprmCallbacks[16] = {};  //the callbacks registered in each slot (0: none)
+  auto sceHprmRegisterCallback() -> void;
+  auto sceHprmUnregitserCallback() -> void;
   auto sceHprmPeekCurrentKey() -> void;
   auto sceHprmPeekLatch() -> void;
   auto sceHprmReadLatch() -> void;
@@ -775,6 +823,7 @@ struct Kernel {
   auto sceDisplayWaitVblankStartMulti() -> void;
   auto sceDisplayWaitVblankStartMultiCB() -> void;
   auto sceDisplayIsVblank() -> void;
+  auto sceDisplayIsForeground() -> void;
   auto hcountLines() const -> u32;
   auto sceDisplayGetCurrentHcount() -> void;
   auto sceDisplayGetAccumulatedHcount() -> void;
@@ -854,6 +903,7 @@ struct Kernel {
   auto pendingCallback(const Thread& thread) -> Callback*;
   auto wakeForCallbacks(Thread& thread) -> void;
   auto callbacksOnReturn(bool callbacks) -> void;
+  auto callbacksDue() -> bool;
   auto runCallbacks(Thread& thread) -> void;
   auto callNextCallback(Thread& thread) -> bool;
   auto callbackReturned() -> void;
@@ -914,7 +964,11 @@ struct Kernel {
   s32 geFinishing = -1;     //the list whose finish callback runs: the rest of its ending waits for it
   u64 geLeft = GeBudget;    //commands the GE may still run this frame (each vertical blank gives it GeBudget again)
   u64 geCommands = 0;       //commands the GE has run since power on (not saved: a count for tests and notes)
+  u64 geDoneAt = 0;         //when (cycles) a PSP's GE would have drawn all it has been given (geTime())
+  bool geFinishDue = false; //the list it runs met its FINISH: its interrupt is taken from geDoneAt on (geInterrupt())
   auto geIndex(u32 id) const -> s32;
+  auto geTime() -> void;
+  auto geInterrupt() -> void;
   auto geEnqueue(bool head) -> void;
   auto geLoad(GeList& list) -> void;
   auto geRestoreBase(u32 word) -> void;
@@ -924,7 +978,8 @@ struct Kernel {
   auto geSignaled() -> void;
   auto geStartNext() -> void;
   auto geCall(GeList& list, bool finish, u32 id, bool suspends = false) -> bool;
-  auto geStalled() const -> bool;
+  auto geOldSdk() const -> bool;
+  auto geAtStall(u32 index) const -> bool;
   auto geDrawSynced() -> void;
   auto geRemove(u32 index) -> void;
   auto geWake(Wait wait, u32 index) -> void;
@@ -989,6 +1044,40 @@ struct Kernel {
   auto sceKernelFreeVpl() -> void;
   auto sceKernelCancelVpl() -> void;
   auto sceKernelReferVplStatus() -> void;
+
+  //tls.cpp: thread-local storage pools, blocks of one size of which each thread holds one at most
+  struct TlsPool {
+    u32 uid;
+    std::string name;
+    u32 attributes = 0;
+    u32 index = 0;        //its place among a program's 16, which its ID carries in bits 3 to 6
+    u32 block = 0;        //its memory's block (sysmem.cpp)
+    u32 address = 0;      //where its first block starts
+    u32 blockSize = 0;    //a block's size as asked
+    u32 stride = 0;       //and the room it takes: rounded up to the alignment, 4 bytes at least
+    u32 next = 0;         //the block the next one handed out is looked for from
+    std::vector<u32> holders;  //each block's thread (0: free)
+  };
+  std::map<u32, TlsPool> tlsPools;
+  static constexpr u32 TlsByLibrary = 1;  //a waiter's waitMode: sceKernelGetTlsAddr's, which returns the address
+  auto tlsUID(u32 index) -> u32;
+  auto tlsPoolAt(u32 index) -> TlsPool*;
+  auto tlsHeld(const TlsPool& pool, u32 thread) const -> s32;
+  auto tlsAddress(const TlsPool& pool, u32 block) const -> u32;
+  auto tlsTake(TlsPool& pool, u32 thread) -> u32;
+  auto tlsWaiters(const TlsPool& pool) -> std::vector<Thread*>;
+  auto tlsWake(TlsPool& pool) -> void;
+  auto tlsFree(TlsPool& pool, u32 block) -> void;
+  auto tlsThreadEnded(u32 thread) -> void;
+  auto tlsAllocate(u32 uid, u32 pointer, u32 timeoutPointer, bool byLibrary) -> void;
+  auto tlsCaller() const -> Thread*;
+  auto userAddress(u32 address) const -> bool;
+  auto sceKernelCreateTlspl() -> void;
+  auto sceKernelDeleteTlspl() -> void;
+  auto sceKernelGetTlsAddr() -> void;
+  auto _sceKernelAllocateTlspl() -> void;
+  auto sceKernelFreeTlspl() -> void;
+  auto sceKernelReferTlsplStatus() -> void;
 
   //audio.cpp: sound output. Eight mixer channels holding a buffer each, read a block of 64 samples at a time by the
   //mixer's DMA; and the SRC channel (sceAudioOutput2*, sceAudioSRC*), a ninth output at a rate of its own, with two
@@ -1236,6 +1325,7 @@ struct Kernel {
     std::unique_ptr<AudioDecoder> sound;   //not saved: made afresh
   };
   std::map<u32, MpegStream> mpegStreams;
+  static constexpr u32 RingMostPackets = 0x8000;  //the most a ring may have: more than any can, at 64 MiB of data
   struct MpegCall {        //sceMpegRingbufferPut part way through, calling the ringbuffer's own callback
     Context caller{};      //the thread where it called Put: put back as Put returns
     u32 ringbuffer = 0;    //the ringbuffer being fed
@@ -1249,6 +1339,8 @@ struct Kernel {
   auto mpegFinish(MpegCall& call) -> void;
   auto mpegAbandoned(u32 thread) -> void;
   auto mpegLibrary(u32 handle) -> u32;
+  auto mpegHeaderWord(u32 address) -> u32;
+  auto mpegFrameWidth(u32 handle, u32 frameWidth) -> u32;
   auto mpegOwnLibrary() -> bool;
   auto mpegDecoded(u32 handle, u32 au, u32 frame, u32 pixels, u32 frameWidth) -> void;
   auto mpegConvert(MpegStream& stream, u32 library, u32 destination, u32 frameWidth, u32 x, u32 y, u32 width,
@@ -1287,6 +1379,7 @@ struct Kernel {
   auto sceMpegAvcDecodeStopYCbCr() -> void;
   auto sceMpegAvcDecodeDetail() -> void;
   auto sceMpegAvcCsc() -> void;
+  auto sceMpegAvcConvertToYuv420() -> void;
   auto sceMpegAtracDecode() -> void;
   auto pictureConvert(const std::vector<u8>& planes, u32 pictureWidth, u32 pictureHeight, u32 format, bool opaque,
                       u32 destination, u32 frameWidth, u32 x, u32 y, u32 width, u32 height) -> void;
@@ -1464,6 +1557,7 @@ struct Kernel {
     bool looped = false;
     u32 loopStart = 0, loopEnd = 0;    //on the decoder's count, the end the loop's last sample
     bool monoFrames = false;    //ATRAC3 frames decoded as mono whatever the header's channels (atrac.cpp)
+    bool lowLevel = false;      //no file: frames the game hands it one at a time (sceAtracLowLevelInitDecoder)
     std::vector<u8> extra;      //the codec's parameters from the fmt chunk
     //the buffers
     u32 buffer = 0, bufferByte = 0, secondBuffer = 0, secondBufferByte = 0;
@@ -1535,6 +1629,8 @@ struct Kernel {
   auto sceAtracGetSecondBufferInfo() -> void;
   auto sceAtracSetSecondBuffer() -> void;
   auto _sceAtracGetContextAddress() -> void;
+  auto sceAtracLowLevelInitDecoder() -> void;
+  auto sceAtracLowLevelDecode() -> void;
 
   //mp3.cpp: sceMp3, MP3 streams fed through a buffer and decoded a frame a call
   struct Mp3 {
@@ -1650,6 +1746,7 @@ struct Kernel {
   auto fontCallable(u32 function) -> bool;
   auto fontMemory(u32 address, u32 length) -> std::vector<u8>;
   auto fontReload(OpenFont& font) -> bool;
+  auto fontReloaded(OpenFont& font) -> bool;
   auto fontFits(u32 library, u32 style, std::vector<u32>& matches, std::vector<float>& distances, bool& sized)
     -> bool;
   auto fontCharInfo(const PGF::Glyph& glyph, u32 info) -> void;
@@ -1688,6 +1785,91 @@ struct Kernel {
   auto sceFontPixelToPointH() -> void;
   auto sceFontPixelToPointV() -> void;
 
+  //ccc.cpp: character code conversion between UTF-8, UTF-16 and Shift-JIS (sceCcc), by the program's JIS tables
+  struct Ccc {
+    u32 jisToUnicode = 0, unicodeToJis = 0;  //the program's tables (sceCccSetTable): 65536 halfwords each, by code
+    u16 errorUTF8 = 0, errorUTF16 = 0, errorSJIS = 0;  //each encoding's error character (sceCccSetErrorChar*)
+  } ccc;
+  auto cccToUnicode(u32 jis) -> u32;
+  auto cccToJis(u32 code) -> u32;
+  auto cccDecode(u32 kind, u32& at) -> u32;
+  auto cccEncoding(u32 kind, u32 code, u8 bytes[4]) -> u32;
+  auto cccConvert(u32 from, u32 to) -> void;
+  auto cccLength(u32 kind) -> void;
+  auto cccEncode(u32 kind) -> void;
+  auto cccDecodeNext(u32 kind) -> void;
+  auto cccErrorCharacter(u16& character) -> void;
+  auto sceCccSetTable() -> void;
+  auto sceCccUCStoJIS() -> void;
+  auto sceCccJIStoUCS() -> void;
+  auto sceCccUTF8toUTF16() -> void;
+  auto sceCccUTF8toSJIS() -> void;
+  auto sceCccUTF16toUTF8() -> void;
+  auto sceCccUTF16toSJIS() -> void;
+  auto sceCccSJIStoUTF8() -> void;
+  auto sceCccSJIStoUTF16() -> void;
+  auto sceCccStrlenUTF8() -> void;
+  auto sceCccStrlenUTF16() -> void;
+  auto sceCccStrlenSJIS() -> void;
+  auto sceCccEncodeUTF8() -> void;
+  auto sceCccEncodeUTF16() -> void;
+  auto sceCccEncodeSJIS() -> void;
+  auto sceCccDecodeUTF8() -> void;
+  auto sceCccDecodeUTF16() -> void;
+  auto sceCccDecodeSJIS() -> void;
+  auto sceCccSetErrorCharUTF8() -> void;
+  auto sceCccSetErrorCharUTF16() -> void;
+  auto sceCccSetErrorCharSJIS() -> void;
+
+  //rtc.cpp: ticks moved on by an amount of time (sceRtcTickAdd*)
+  auto rtcTickAdd(u64 amount) -> void;
+  auto rtcTickAddMonths(s64 months) -> void;
+  auto sceRtcTickAddTicks() -> void;
+  auto sceRtcTickAddMicroseconds() -> void;
+  auto sceRtcTickAddSeconds() -> void;
+  auto sceRtcTickAddMinutes() -> void;
+  auto sceRtcTickAddHours() -> void;
+  auto sceRtcTickAddDays() -> void;
+  auto sceRtcTickAddWeeks() -> void;
+  auto sceRtcTickAddMonths() -> void;
+  auto sceRtcTickAddYears() -> void;
+
+  //mt19937.cpp: the Mersenne Twister, the kernel's and its library's (sceMt19937)
+  auto mt19937Init(u32 context, u32 seed) -> void;
+  auto mt19937UInt(u32 context) -> u32;
+  auto sceKernelUtilsMt19937Init() -> void;
+  auto sceKernelUtilsMt19937UInt() -> void;
+  auto sceMt19937Init() -> void;
+  auto sceMt19937UInt() -> void;
+
+  //p3da.cpp: sound channels mixed into stereo (sceP3da)
+  auto sceP3daBridgeInit() -> void;
+  auto sceP3daBridgeCore() -> void;
+  auto sceP3daBridgeExit() -> void;
+
+  //pauth.cpp: data a game keeps encrypted with a key of its own (scePauth)
+  auto scePauth_98B83B5D() -> void;
+
+  //jpeg.cpp: JPEG pictures decoded, and YCbCr pictures converted to pixels (sceJpeg)
+  struct Jpeg {
+    bool initialized = false;  //sceJpegInitMJpeg, till sceJpegFinishMJpeg
+    bool created = false;      //sceJpegCreateMJpeg, till sceJpegDeleteMJpeg
+    s32 width = 0, height = 0; //the context's picture buffer (kept once it's deleted)
+  } jpeg;
+  auto sceJpegInitMJpeg() -> void;
+  auto sceJpegFinishMJpeg() -> void;
+  auto sceJpegCreateMJpeg() -> void;
+  auto sceJpegDeleteMJpeg() -> void;
+  auto sceJpegGetOutputInfo() -> void;
+  auto sceJpegDecodeMJpeg() -> void;
+  auto jpegDecodePixels(u32 data, u32 size, u32 pixels) -> u32;
+  auto sceJpegDecodeMJpegYCbCr() -> void;
+  auto sceJpegDecodeMJpegYCbCrSuccessively() -> void;
+  auto jpegDecodeYCbCr(u32 data, u32 size, u32 buffer, u32 room, bool successively) -> u32;
+  auto sceJpegCsc() -> void;
+  auto sceJpegMJpegCsc() -> void;
+  auto jpegConvert(u32 destination, u32 source, u32 size, u32 stride, u32 across, u32 down, bool engine) -> void;
+
   //net.cpp: the network libraries, with the wireless LAN switched off
   auto sceNetDone() -> void;
   auto sceNetUnavailable() -> void;
@@ -1707,6 +1889,7 @@ struct Kernel {
     u32 abortUpdates = 0;  //an aborted message's Updates still to come before it finishes (0: not aborted)
     u32 runningUpdates = 0;  //Updates while Running, before an abort (utility/dialog/abort's fade length)
   } dialog;
+  u32 stateLayout = 24;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;
@@ -1756,8 +1939,11 @@ struct Kernel {
   auto sceUtilityUnloadNetModule() -> void;
   auto sceUtilityLoadAvModule() -> void;
   auto sceUtilityUnloadAvModule() -> void;
+  auto sceUtilityLoadUsbModule() -> void;
+  auto sceUtilityUnloadUsbModule() -> void;
   auto sceUtilityGetSystemParamString() -> void;
   auto sceUtilitySetSystemParamString() -> void;
+  auto sceUtilitySetSystemParamInt() -> void;
 
   //power.cpp: the battery, the clocks, the power switch's callbacks, the volatile memory
   struct Power {
@@ -1776,6 +1962,7 @@ struct Kernel {
   auto scePowerGetBatteryLifePercent() -> void;
   auto scePowerGetBatteryLifeTime() -> void;
   auto scePowerTick() -> void;
+  auto scePowerCheckWlanCoexistenceClock() -> void;
   auto scePowerSetClockFrequency() -> void;
   auto scePowerSetCpuClockFrequency() -> void;
   auto scePowerSetBusClockFrequency() -> void;
@@ -1802,21 +1989,25 @@ struct Kernel {
   auto sceKernelUSec2SysClockWide() -> void;
   auto sceRtcGetTick() -> void;
   auto sceRtcCompareTick() -> void;
-  auto sceKernelUtilsMt19937Init() -> void;
-  auto sceKernelUtilsMt19937UInt() -> void;
   auto sceKernelPrintf() -> void;
   auto sceKernelSetGPO() -> void;
   auto sceKernelGetGPI() -> void;
   auto sceWlanGetSwitchState() -> void;
   auto sceWlanGetEtherAddr() -> void;
+  auto sceUsbStart() -> void;
+  auto sceUsbStop() -> void;
+  auto sceUsbActivate() -> void;
+  auto sceUsbDeactivate() -> void;
   u32 imposeLanguage = 1, imposeButton = 1;  //sceImposeSetLanguageMode's: English, the cross button confirming
   auto sceImposeSetLanguageMode() -> void;
   auto sceImposeGetLanguageMode() -> void;
   auto sceImposeGetBatteryIconStatus() -> void;
+  auto sceImposeSetUMDPopup() -> void;
   auto sceDmacMemcpy() -> void;
   auto sceKernelExitGame() -> void;
   auto sceKernelSelfStopUnloadModule() -> void;
   auto sceKernelStopUnloadSelfModuleWithStatus() -> void;
+  auto sceKernelStopUnloadSelfModule() -> void;
   auto sceUtilityGetSystemParamInt() -> void;
   auto sceNetInetUnavailable() -> void;
   auto sceKernelGetSystemTimeWide() -> void;
@@ -1834,12 +2025,24 @@ struct Kernel {
     std::vector<u8> program;   //decrypted, or a PBP holding it
     std::vector<u8> argument;  //its first thread's (none, if empty)
     bool pathArgument = false; //its path as that argument instead, as with no parameters
+    bool largeMemory = false;  //started with all of RAM (largeRestart())
   } exec;
+  struct Started {  //the program as start() started it, to start it again (largeRestart(); never kept in states)
+    std::string path;
+    std::vector<u8> argument;  //its first thread's, as it was given
+    bool pathArgument = true;  //or its path instead
+  } started;
+  auto execProgram(const std::string& path, std::vector<u8>& program, std::string& why) -> u32;
   auto sceKernelLoadExec() -> void;
   auto loadExec() -> void;
   auto sceRtcGetCurrentClock() -> void;
   auto sceRtcGetCurrentClockLocalTime() -> void;
+  auto dateSeconds(u32 date) -> s64;
   auto sceRtcGetTime_t() -> void;
+  auto sceRtcGetTime64_t() -> void;
+  auto sceRtcGetDayOfWeek() -> void;
+  auto sceRtcGetLastAdjustedTime() -> void;
+  auto sceRtcGetLastReincarnatedTime() -> void;
   auto sceRtcGetDosTime() -> void;
   auto sceRtcSetDosTime() -> void;
   auto sceRtcGetWin32FileTime() -> void;
@@ -1866,6 +2069,7 @@ struct Kernel {
   auto readWhole(const std::string& path, std::vector<u8>& data) -> u32;
   auto readOpenFile(OpenFile& open, u64 size, std::vector<u8>& data) -> u32;
   auto loadModule(const std::vector<u8>& file, const std::string& path) -> u32;
+  auto standsInFor(const Module& loaded) const -> bool;
   auto standIn(const std::string& name, u32 attributes, const std::string& path) -> u32;
   auto unloadModule(u32 uid) -> void;
   auto programAsModule() -> void;
@@ -1873,6 +2077,8 @@ struct Kernel {
   auto linkImports() -> void;
   auto moduleAt(u32 address) const -> u32;
   auto moduleFunction(const LoadedModule& loaded, u32 nid) const -> u32;
+  auto threadParameters(const Module& module, u32 parameters, u32& priority, u32& stackSize, u32& attributes) const
+    -> void;
   auto makeModuleThread(const LoadedModule& loaded, u32 entry, u32 parameters, u32 length, u32 argument,
                         u32 options) -> s32;
   auto madeForModule(u32 thread) const -> bool;

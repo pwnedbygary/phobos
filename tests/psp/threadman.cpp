@@ -555,12 +555,115 @@ static auto vblankMulti() -> void {
   CHECK(m.call("sceDisplayWaitVblankStartMulti", {1}), Kernel::ErrorCanNotWait);
 }
 
+//A function called with a stack lent for it (sceKernelExtendThreadStack), as threads/threads/extend recorded: on the
+//calling thread, its status giving the lent stack (filled with 0xff bytes, the thread's ID at its bottom, the stack
+//pointer at its top) while the function runs, the function's result returned and the thread's own stack back after;
+//a call within a call; sizes under 512 refused, -1 too much, 640 rounded up to 0x300. A thread that exits inside such
+//a function gives the lent stack back. A state saved inside the function loads into another machine and carries on
+//alike, even with its trampoline's memory as an older state's (no return for a lent stack there). On both engines.
+static auto extendStack() -> void {
+  constexpr u32 Info = R + 0x800, F = 0x0880'3000, G = 0x0880'3400, H = 0x0880'3800;
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    m.system.memory.write(4, Info, 0x68);
+    auto status = [&](Assembler& a, u32 stack, u32 size) {  //the calling thread's stack and its size, kept
+      a.li(a0, 0); a.li(a1, Info); a.call("sceKernelReferThreadStatus");
+      a.li(t0, Info); a.put(lw(t1, 48, t0)); a.put(lw(t2, 52, t0));
+      a.li(t0, stack); a.put(sw(t1, 0, t0)); a.li(t0, size); a.put(sw(t2, 0, t0));
+    };
+    Assembler f{m, F};  //waits 100 microseconds, keeps its argument, its thread, its stack and the stack's first words
+    f.put(addiu(sp, sp, -16)); f.put(sw(ra, 12, sp)); f.put(sw(a0, 8, sp));
+    f.li(t0, R + 0x20); f.put(sw(sp, 0, t0));
+    f.li(a0, 100); f.call("sceKernelDelayThread");
+    f.put(lw(t1, 8, sp)); f.li(t0, R + 0x10); f.put(sw(t1, 0, t0));
+    f.call("sceKernelGetThreadId"); f.li(t0, R + 0x14); f.put(sw(v0, 0, t0));
+    status(f, R + 0x18, R + 0x1c);
+    f.li(t0, R + 0x18); f.put(lw(t1, 0, t0)); f.put(lw(t2, 0, t1)); f.put(lw(t3, 4, t1));
+    f.li(t0, R + 0x24); f.put(sw(t2, 0, t0)); f.put(sw(t3, 4, t0));
+    f.put(lw(ra, 12, sp)); f.put(addiu(sp, sp, 16));
+    f.li(v0, 0x1234'5678); f.put(jr(ra)); f.put(nop);
+    Assembler g{m, G};  //keeps its own stack's size, then calls f with a stack of 0x8000 lent
+    g.put(addiu(sp, sp, -16)); g.put(sw(ra, 12, sp));
+    status(g, R + 0xa0, R + 0xa4);
+    g.li(a0, 0x8000); g.li(a1, F); g.li(a2, 0xc0de'1c71); g.call("sceKernelExtendThreadStack");
+    g.put(lw(ra, 12, sp)); g.put(addiu(sp, sp, 16));
+    g.put(jr(ra)); g.put(nop);
+    Assembler h{m, H};  //the other thread's: exits
+    h.li(a0, 0); h.call("sceKernelExitThread");
+    Assembler other{m, 0x0880'2000};
+    other.li(a0, 0x4000); other.li(a1, H); other.li(a2, 0); other.call("sceKernelExtendThreadStack");
+    other.call("sceKernelExitThread");
+    auto keep = [&](Assembler& a, u32 to) {  //f's record, copied
+      for(u32 n = 0; n < 7; n++) {
+        a.li(t0, R + 0x10 + n * 4); a.put(lw(t1, 0, t0)); a.li(t0, to + n * 4); a.put(sw(t1, 0, t0));
+      }
+    };
+    Assembler main{m, 0x0880'1000};
+    main.call("sceKernelGetThreadId"); main.li(t0, R); main.put(sw(v0, 0, t0));
+    status(main, R + 0x04, R + 0x08);
+    main.li(a0, 0x4000); main.li(a1, F); main.li(a2, 0xc0de'beef); main.call("sceKernelExtendThreadStack");
+    main.li(t0, R + 0x0c); main.put(sw(v0, 0, t0));
+    keep(main, R + 0x40);
+    status(main, R + 0x2c, R + 0x30);
+    main.li(a0, 0x4000); main.li(a1, G); main.li(a2, 0xc0de'beef); main.call("sceKernelExtendThreadStack");
+    main.li(t0, R + 0x34); main.put(sw(v0, 0, t0));
+    keep(main, R + 0x60);
+    for(auto [size, at] : {std::pair{0x1ffu, 0x38u}, {~0u, 0x3cu}, {640u, 0x5cu}}) {
+      main.li(a0, size); main.li(a1, F); main.li(a2, 0); main.call("sceKernelExtendThreadStack");
+      main.li(t0, R + at); main.put(sw(v0, 0, t0));
+    }
+    main.li(a0, m.string("other")); main.li(a1, 0x0880'2000); main.li(a2, 0x10); main.li(a3, 0x1000);
+    main.li(t0, 0); main.li(t1, 0); main.call("sceKernelCreateThread");
+    main.li(t0, R + 0xb0); main.put(sw(v0, 0, t0));
+    main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0); main.call("sceKernelStartThread");
+    main.call("sceKernelExitGame");
+    m.system.recompiler.enabled = recompile;
+    m.system.power(0x0880'1000);
+    s32 uid = m.kernel.createThread("main", 0x0880'1000, 0x20, 0x4000, 0, 0);
+    m.kernel.startThread(*m.kernel.threads[uid], 0, 0);
+    m.kernel.run(Kernel::CPUFrequency / 20000);  //50 microseconds: in f's first wait
+    CHECK(m.kernel.threads[uid]->extensions.size(), 1);
+    auto state = saveState(m);
+    KernelMachine same;
+    CHECK(loadState(same, state) && saveState(same) == state, true);
+    //(the state as one saved before the trampoline had the lent stack's return: written again as it loads)
+    same.system.memory.write(4, Kernel::Trampoline + 48, 0);
+    same.system.memory.write(4, Kernel::Trampoline + 52, 0);
+    KernelMachine fresh;
+    fresh.system.recompiler.enabled = recompile;
+    CHECK(loadState(fresh, saveState(same)), true);
+    CHECK(fresh.system.memory.read(4, Kernel::Trampoline + 48), Kernel::ExtendReturnCode << 6 | 0x0c);
+    fresh.kernel.run(Kernel::CPUFrequency / 3);
+    auto at = [&](u32 offset) { return word(fresh, R + offset); };
+    CHECK(fresh.kernel.exited, true);
+    u32 own = at(0x04);
+    CHECK(at(0x08), 0x4000);                                                //main's own stack
+    CHECK(at(0x0c), 0x1234'5678);                                           //the function's result
+    CHECK(at(0x40) == 0xc0de'beef && at(0x44) == u32(uid), true);           //its argument, on main
+    CHECK(at(0x48) != own && at(0x4c) == 0x4000, true);                     //on the lent stack
+    CHECK(at(0x50), at(0x48) + 0x4000 - 16);                                //its stack pointer at the top, less f's
+    CHECK(at(0x54) == u32(uid) && at(0x58) == 0xffff'ffff, true);           //filled, its ID at the bottom
+    CHECK(at(0x2c) == own && at(0x30) == 0x4000, true);                     //main's own stack back
+    CHECK(at(0x34) == 0x1234'5678 && at(0xa4) == 0x4000, true);             //g on a lent stack of 0x4000
+    CHECK(at(0x60) == 0xc0de'1c71 && at(0x6c) == 0x8000, true);             //f within it on one of 0x8000
+    CHECK(at(0x38) == Kernel::ErrorIllegalStackSize && at(0x3c) == Kernel::ErrorNoMemory, true);
+    CHECK(at(0x5c) == 0x1234'5678 && at(0x1c) == 0x300, true);
+    auto& gone = *fresh.kernel.threads.at(at(0xb0));                        //the thread that exited in its function
+    CHECK(gone.status == Kernel::Status::Dormant && gone.extensions.empty() && gone.stackSize == 0x1000, true);
+    u32 lent = 0;
+    for(auto& block : fresh.kernel.blocks) lent += block.size == 0x4000 && block.name == "stack: other";
+    CHECK(lent, 0);
+    CHECK(fresh.notes.size(), 0);
+  }
+}
+
 auto threadmanTests() -> Tests {
   return {
     {"thread status sizes and exit", threadStatusCalls}, {"thread run figures", runFigures},
     {"a handler ending the game", handlerExits},
     {"threadman ID lists", idLists}, {"status size words and creates", statusSizes},
     {"accumulated hcount adjusted", hcountAdjusted}, {"vertical blanks waited for by count", vblankMulti},
+    {"a stack lent for a call", extendStack},
   };
 }
 

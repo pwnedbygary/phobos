@@ -83,7 +83,7 @@ static auto kernelStates() -> void {
     CHECK(n.kernel.threads[thread]->gp, 0x1234);
     CHECK(n.kernel.threads[thread]->name == "worker", true);
   }
-  CHECK(n.call("sceIoOpen", {n.string("ms0:/A.TXT"), 0x0001, 0}) > d, true);  //new descriptors go on from the old
+  CHECK(n.call("sceIoOpen", {n.string("ms0:/A.TXT"), 0x0001, 0}), b);  //the lowest free: the dropped file's
 
   //a list longer than the rest of the state, and a text longer than it: refused, as they run out of state
   std::vector<u8> damaged(s.data(), s.data() + s.size());
@@ -163,8 +163,9 @@ static auto stateFields() -> void {
   auto& ge = a.system.ge;
 
   //one of everything
+  //where start() would put a PRX (module.relocatable, which the changes below set) and its block
   k.module.segments = {{0x0880'4000, 0x100}};
-  u32 programBlock = k.allocate(0x100, 2, 0x0880'4000, "program")->uid;  //where start() would put it
+  u32 programBlock = k.allocate(0x4100, 2, Kernel::UserMemory, "program")->uid;
   k.module.imports = {{"Lib", 0x1111, 0x0880'5000}};
   k.module.exports = {{"Lib", 0x2222, 0x0880'6000, false}};
   k.module.skipped = {"left out"};
@@ -200,6 +201,7 @@ static auto stateFields() -> void {
   k.memoryStickCallbacks = {callback};
   u32 plainBlock = k.allocate(0x1000, 0, 0, "block")->uid;
   u32 spareStack = k.allocate(0xf00, 0, 0, "spare stack")->address;  //what thread one's stack moves to below
+  u32 lentStack = k.allocate(0x800, 0, 0, "lent stack")->address;    //and the stack lent to it for a call
   u32 fixedID = a.call("sceKernelCreateFpl", {a.string("fpl"), 2, 0, 16, 2, 0});
   u32 variableID = a.call("sceKernelCreateVpl", {a.string("vpl"), 2, 0, 0x100, 0});
   u32 spareID = a.call("sceKernelCreateFpl", {a.string("spare"), 2, 0, 16, 1, 0});
@@ -209,14 +211,18 @@ static auto stateFields() -> void {
   u32 mutexID = a.call("sceKernelCreateMutex", {a.string("mutex"), 0x200, 0, 0});
   u32 alarmID = a.call("sceKernelSetAlarm", {1000, 0x0880'7000, 0x11});
   u32 vtimerID = a.call("sceKernelCreateVTimer", {a.string("vtimer"), 0});
+  //part 55's: a thread-local storage pool of two 16-byte blocks, thread one holding the first
+  u32 tlsID = a.call("sceKernelCreateTlspl", {a.string("tls"), 2, 0, 16, 2, 0});
+  CHECK(a.call("sceKernelGetTlsAddr", {tlsID}), k.tlsPools[tlsID].address);
   u32 file = a.call("sceIoOpen", {a.string("ms0:/A.TXT"), 0x0001, 0});
   u32 other = a.call("sceIoOpen", {a.string("ms0:/B.TXT"), 0x0001, 0});
   u32 folder = a.call("sceIoDopen", {a.string("ms0:/LIST")});
   u32 top = a.call("sceIoDopen", {a.string("ms0:/")});  //a device's top: no "." or ".." in it
   u32 discFile = a.call("sceIoOpen", {a.string("disc0:/DATA.BIN"), 0x0001, 0});
   u32 discFolder = a.call("sceIoDopen", {a.string("disc0:/DIR")});
-  CHECK(k.files.size(), 6);
-  for(u32 open : {file, other, folder, top, discFile, discFolder}) if(!k.files.count(open)) return;
+  u32 discReader = a.call("sceIoOpen", {a.string("disc0:/DATA.BIN"), 0x0001, 0});  //(its read's bytes below)
+  CHECK(k.files.size(), 7);
+  for(u32 open : {file, other, folder, top, discFile, discFolder, discReader}) if(!k.files.count(open)) return;
   CHECK(k.files[discFolder].discEntries.size(), 2);
   u32 list = a.call("sceGeListEnQueue", {0x0890'8000, 0x0890'8000, u32(-1), 0}) - Kernel::GeListIDs;  //stalled
   u32 list2 = a.call("sceGeListEnQueue", {0x0890'9000, 0x0890'9000, u32(-1), 0}) - Kernel::GeListIDs;  //queued
@@ -372,6 +378,7 @@ static auto stateFields() -> void {
   auto& hostFolder = k.files[folder];
   auto& onDisc = k.files[discFile];
   auto& discList = k.files[discFolder];
+  auto& reader = k.files[discReader];
   auto& c = k.controller;
   auto& l = k.geLists[list];
   auto& gc = k.geCallbacks[3];
@@ -451,6 +458,12 @@ static auto stateFields() -> void {
     {"thread waitDone", [&] { t.waitDone ^= 1; }}, {"thread waitResult", [&] { t.waitResult ^= 4; }},
     {"wait before callback done", [&] { t.waitBeforeCallback.done ^= 1; }},
     {"wait before callback resultPointer", [&] { t.waitBeforeCallback.resultPointer ^= 4; }},
+    //(a stack lent for a call: thread one's moves to it, its own kept with its registers as the call found them)
+    {"thread extensions", [&] {
+      t.extensions.push_back({t.context, t.stackBlock, t.stackSize});
+      t.stackBlock = lentStack, t.stackSize = 0x800;
+    }},
+    {"thread extension caller", [&] { t.extensions.back().caller.gpr[4] ^= 1; }},
     {"the thread running", [&] { k.current = k.threads[two].get(); }},
     {"readySequence", [&] { k.readySequence += 7; }}, {"nextVblank", [&] { k.nextVblank = k.cycles + 1000; }},
     {"vblanks", [&] { k.vblanks += 7; }},
@@ -523,6 +536,10 @@ static auto stateFields() -> void {
     {"dialog abortUpdates", [&] { k.dialog.abortUpdates = 3; }},
     {"dialog runningUpdates", [&] { k.dialog.runningUpdates = 2; }},
     {"utilityModules", [&] { k.utilityModules.push_back(0x301); }},
+    {"ccc jisToUnicode", [&] { k.ccc.jisToUnicode = 0x0890'0000; }},
+    {"ccc unicodeToJis", [&] { k.ccc.unicodeToJis = 0x0892'0000; }},
+    {"ccc errorUTF8", [&] { k.ccc.errorUTF8 = '?'; }}, {"ccc errorUTF16", [&] { k.ccc.errorUTF16 = 0xfffd; }},
+    {"ccc errorSJIS", [&] { k.ccc.errorSJIS = 0x3013; }},
     //(each pool as a machine could leave it, which loading checks: the spare made a variable pool whole, the fixed
     //pool's block renumbered with it, its blocks halved and doubled)
     {"pool name", [&] { fixedPool.name += "x"; }}, {"pool attributes", [&] { fixedPool.attributes ^= 1; }},
@@ -582,6 +599,16 @@ static auto stateFields() -> void {
       closed.async = Kernel::OpenFile::Async::Pending;
       closed.asyncDoneAt = k.cycles + 2000;
     }},
+    //the disc's file opened again, reading its first 16 bytes: the request under way, then where its bytes are to
+    //go, then the read made from 16 bytes on (where it read from moving its position with it)
+    {"file async of a read", [&] {
+      reader.async = Kernel::OpenFile::Async::Pending;
+      reader.asyncDoneAt = k.cycles + 2000;
+      reader.asyncResult = 16, reader.position = 16;
+    }},
+    {"file asyncData", [&] { reader.asyncData = 0x0897'0000; }},
+    {"file asyncFrom", [&] { reader.asyncFrom = 16, reader.position = 32; }},
+    {"file opened", [&] { host.opened += 100; }},  //its place in the order files were opened (sceIoGetFdList)
     {"folder entries", [&] { hostFolder.entries[2] += "x"; }},  //".", "..", then "ONE"
     {"folder nextEntry", [&] { hostFolder.nextEntry = 1; }},
     {"disc file folder", [&] { onDisc.folder = true; }}, {"disc file sectors", [&] { onDisc.sectors = true; }},
@@ -593,7 +620,7 @@ static auto stateFields() -> void {
     {"disc folder entry folder", [&] { discList.discEntries[1].folder = true; }},
     {"disc folder entry date", [&] { discList.discEntries[1].date[6] ^= 1; }},
     {"disc folder nextEntry", [&] { discList.nextEntry = 2; }},
-    {"nextFile", [&] { k.nextFile += 10; }}, {"workingDirectory", [&] { k.workingDirectory = "ms0:/LIST"; }},
+    {"workingDirectory", [&] { k.workingDirectory = "ms0:/LIST"; }},
     //the controller, the display
     {"buttons", [&] { c.buttons ^= 1; }}, {"analogX", [&] { c.analogX ^= 1; }}, {"analogY", [&] { c.analogY ^= 1; }},
     {"cycle", [&] { c.cycle = 5555; }}, {"mode", [&] { c.mode ^= 1; }},
@@ -660,6 +687,15 @@ static auto stateFields() -> void {
     {"atrac laps", [&] { at.readLap = 1, at.writeLap = 1; }}, {"atrac writeOff", [&] { at.writeOff += 8; }},
     {"atrac writeFileOff", [&] { at.writeFileOff += 8; }}, {"atrac loopsAhead", [&] { at.loopsAhead = 1; }},
     {"atrac recent", [&] { at.recent[0] ^= 1; }}, {"atrac contexts", [&] { k.atracContexts = contexts; }},
+    {"atrac lowLevel", [&] {  //ATRAC3's ID 1 given parameters (atrac.cpp's low level)
+      auto& low = k.atracs[1];
+      low.codec = 0x1001, low.lowLevel = true, low.channels = 2, low.outputChannels = 1, low.frameBytes = 0xc0;
+      low.frameSamples = 1024, low.delay = 69;
+    }},
+    {"jpeg initialized", [&] { k.jpeg.initialized = true; }},
+    {"jpeg created", [&] { k.jpeg.initialized = k.jpeg.created = true; }},
+    {"jpeg width", [&] { k.jpeg.width = 480; }}, {"jpeg height", [&] { k.jpeg.height = -1; }},
+    {"hprm callbacks", [&] { k.hprmCallbacks[3] = callback; }},
     {"mp3 reserved", [&] { k.mp3s[1].reserved = true; }}, {"mp3 loopSet", [&] { mp.loopSet = true; }},
     {"mp3 start", [&] { mp.start = 0x10; }}, {"mp3 end", [&] { mp.end = 0x20000; }},
     {"mp3 buffer", [&] { mp.buffer ^= 0x40; }}, {"mp3 bufferSize", [&] { mp.bufferSize = 16384; }},
@@ -754,10 +790,20 @@ static auto stateFields() -> void {
     {"lwMutex initial", [&] { lw.initial = 2; }},
     {"display hcountBase", [&] { k.display.hcountBase = 0x1234; }},
   };
+  //part 55's: the thread-local storage pool's fields, each change leaving a pool a machine could have (thread one's
+  //block moved to the second, which thread one has since been made ready to hold)
+  auto& tls = k.tlsPools[tlsID];
+  std::vector<std::pair<std::string, std::function<void()>>> part55 = {
+    {"tls pool name", [&] { tls.name += "x"; }}, {"tls pool attributes", [&] { tls.attributes ^= 0x100; }},
+    {"tls pool address", [&] { tls.address += 4; }}, {"tls pool blockSize", [&] { tls.blockSize = 12; }},
+    {"tls pool stride", [&] { tls.stride = 20; }}, {"tls pool next", [&] { tls.next = 0; }},
+    {"tls pool holders", [&] { tls.holders = {0, u32(one)}; }},
+  };
   changes.insert(changes.end(), more.begin(), more.end());
   changes.insert(changes.end(), codecs.begin(), codecs.end());
   changes.insert(changes.end(), part28.begin(), part28.end());
   changes.insert(changes.end(), part32.begin(), part32.end());
+  changes.insert(changes.end(), part55.begin(), part55.end());
   for(auto& [field, change] : changes) {
     auto before = save(a);
     change();
@@ -804,6 +850,30 @@ static auto stateFields() -> void {
   refuses("a descriptor for a result it hasn't got", [&] { k.files[other].async = Async::None; });
   refuses("a descriptor for a result, open for reading", [&] { k.files[other].flags = 0x0001; });
   refuses("an asynchronous callback not handed out yet", [&] { k.files[file].asyncCallback = k.nextUID; });
+  //a file with no place in the order files were opened, with another's, or past what counting could reach
+  refuses("a file opened as none was", [&] { k.files[file].opened = 0; });
+  refuses("two files opened as one", [&] { k.files[file].opened = k.files[folder].opened; });
+  refuses("a file opened past any count", [&] { k.files[file].opened = 1ull << 62; });
+  auto reading = [&](u32 descriptor) -> Kernel::OpenFile& {  //16 bytes from the start, still to come
+    auto& open = k.files[descriptor];
+    open.async = Async::Pending, open.asyncDoneAt = k.cycles + 2000;
+    open.asyncResult = 16, open.asyncFrom = 0, open.position = 16, open.asyncData = 0x0897'0000;
+    return open;
+  };
+  refuses("a read's bytes to come with its request done", [&] { reading(discFile).async = Async::Done; });
+  refuses("a read's bytes to come into a file opened to write", [&] { reading(file).flags = 0x0002; });
+  refuses("a read of nothing with bytes to come", [&] { reading(discFile).asyncResult = 0; });
+  refuses("a read's bytes to come past memory", [&] { reading(discFile).asyncData = 0x09ff'fff8; });
+  refuses("a read's bytes to come, more than any read moves", [&] {
+    auto& open = reading(file);
+    open.asyncResult = 64_MiB + 1, open.position = 64_MiB + 1;
+  });
+  refuses("a read's bytes to come from elsewhere than it read", [&] { reading(discFile).asyncFrom = 1; });
+  refuses("a read's bytes to come from past where it is", [&] { reading(discFile).asyncFrom = 32; });
+  refuses("a read's bytes to come from past the disc's file", [&] {
+    auto& open = reading(discFile);
+    open.asyncFrom = open.size, open.position = open.size + 16;
+  });
   refuses("a thread waiting on a file with no request", [&] {
     auto& thread = *k.threads.at(two);
     thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Async, thread.waitID = discFile;
@@ -878,7 +948,13 @@ static auto stateFields() -> void {
     thread.waitBeforeCallback = {Kernel::Wait::File, discFile, 16, 0, 0, 0, k.cycles + 1000, false, 0, 0};
     thread.wait = Kernel::Wait::Sleep;
   });
-  refuses("a file number handed out twice", [&] { k.nextFile = discFolder; });
+  auto renumber = [&](u32 file, u32 number) {
+    auto node = k.files.extract(file);
+    node.key() = number;
+    k.files.insert(std::move(node));
+  };
+  refuses("a file numbered as standard error", [&] { renumber(discFolder, 2); });
+  refuses("a file numbered past 2^31", [&] { renumber(discFolder, Kernel::LastUID + 1); });
   refuses("an ID handed out twice", [&] { k.nextUID = u32(one); });
   refuses("a semaphore under another's ID", [&] { k.semaphores.begin()->second.uid ^= 1; });
   refuses("an event flag under another's ID", [&] { k.eventFlags.begin()->second.uid ^= 1; });
@@ -913,6 +989,29 @@ static auto stateFields() -> void {
   //user partition
   refuses("a thread's stack that isn't a block", [&] { k.threads.at(one)->stackBlock += 0x100; });
   refuses("a thread's stack not its block's size", [&] { k.threads.at(one)->stackSize += 0x100; });
+  //a stack lent for a call: the thread's own, kept meanwhile, not a block; or lent to a thread that has ended
+  refuses("a thread's own stack, while lent another, that isn't a block", [&] {
+    k.threads.at(one)->extensions.back().stack += 0x100;
+  });
+  //(thread one made to have ended in a state that says nothing else of it: its TLS block and mutex let go)
+  auto ended = [&] {
+    k.threads.at(one)->status = Kernel::Status::Dormant;
+    for(auto& holder : k.tlsPools.begin()->second.holders) holder = 0;
+    auto& held = k.mutexes.at(mutexID);
+    held.count = 0, held.owner = 0;
+  };
+  refuses("a stack lent to a thread that has ended", ended);
+  {
+    ended();  //...which, its stack its own again, loads
+    auto& thread = *k.threads.at(one);
+    for(; !thread.extensions.empty(); thread.extensions.pop_back()) {
+      thread.stackBlock = thread.extensions.back().stack, thread.stackSize = thread.extensions.back().size;
+    }
+    KernelMachine fresh;
+    devices(fresh);
+    CHECK(load(fresh, save(a)), true);
+    CHECK(load(a, state), true);
+  }
   refuses("a thread's stack of 0x100 bytes", [&] {
     auto& thread = *k.threads.at(one);
     stackOf(thread).size = thread.stackSize = 0x100;
@@ -927,6 +1026,14 @@ static auto stateFields() -> void {
     stackOf(thread).size = thread.stackSize = 0xffff'f000;
   });
   refuses("a block below the user partition", [&] { k.blocks.front().address = Kernel::UserMemory - 0x1000; });
+  //thread-local storage pools as no machine has them: an index its ID doesn't carry, a block held by a thread there
+  //isn't, a thread holding two blocks of one pool, blocks past the pool's memory
+  refuses("a tls pool whose ID doesn't carry its index", [&] { k.tlsPools.begin()->second.index ^= 1; });
+  refuses("a tls pool block held by a thread there isn't", [&] { k.tlsPools.begin()->second.holders[0] = 0x7777; });
+  refuses("a thread holding two blocks of a tls pool", [&] {
+    k.tlsPools.begin()->second.holders = {u32(one), u32(one)};
+  });
+  refuses("a tls pool's blocks past its memory", [&] { k.tlsPools.begin()->second.stride = 0x100; });
   refuses("a buffer in a slot with the DMA stopped", [&] { k.audio.dma.running = false; });
   refuses("a mixer channel's count not a multiple of 64", [&] { k.audio.channels[3].sampleCount = 100; });
   refuses("a slot with more left than its buffer holds", [&] { k.audio.channels[3].remaining = 192; });
@@ -1060,7 +1167,8 @@ static auto stateFields() -> void {
   refuses("a player ending but not playing", [&] { player.status = 2, player.ending = true; });
   refuses("a player playing with no movie", [&] { player.header.clear(); });
   refuses("a player made, with a movie", [&] { player.status = 1; });
-  refuses("a player's file not handed out yet", [&] { player.file = k.nextFile; });
+  refuses("a player's file numbered as standard error", [&] { player.file = 2; });
+  refuses("a player's file numbered past 2^31", [&] { player.file = Kernel::LastUID + 1; });
   refuses("a player's header that isn't one", [&] { player.header[0] = 'X'; });
   refuses("a player's header longer than its stream's offset", [&] { player.header.resize(0x900); });
   refuses("a player read past its stream", [&] { player.nextPack = 3; });
@@ -1142,7 +1250,10 @@ static auto stateFields() -> void {
   });
   refuses("an mpeg call past a ring's packets", [&] {
     auto& call = k.mpegCalls.at(one);
-    call.put = 4096 - call.left + 1;
+    call.put = Kernel::RingMostPackets - call.left + 1;
+  });
+  refuses("an mpeg call with more left than any ring has", [&] {
+    k.mpegCalls.at(one).left = Kernel::RingMostPackets + 1;
   });
   refuses("an mpeg call feeding a ringbuffer nowhere", [&] { k.mpegCalls.at(one).ringbuffer = 0x1000; });
   refuses("a font call given more than it asked for", [&] { k.fontCalls.at(two).got.push_back(1); });
@@ -1261,7 +1372,6 @@ static auto stateFields() -> void {
   refuses("a folder name no path can name", [&] { k.files[folder].entries.push_back("C:D"); });
   refuses("a folder name with a backslash", [&] { k.files[folder].entries.push_back("A\\B"); });
   refuses("IDs counted past 2^31", [&] { k.nextUID = 0xffff'ffff; });
-  refuses("file numbers counted past 2^31", [&] { k.nextFile = 0xffff'ffff; });
   refuses("a clock past a century", [&] {
     k.cycles = 1ull << 60;
     k.nextVblank = k.controller.nextSample = k.cycles + 1000;
@@ -1372,13 +1482,28 @@ static auto stateFields() -> void {
   refuses("a lightweight mutex made held twice that isn't recursive", [&] {
     k.lwMutexes.begin()->second.attributes = 0, k.lwMutexes.begin()->second.initial = 2;
   });
+  //part 58's: a sceJpeg context made with the library not started; a low-level ATRAC ID with a file, or parameters
+  //sceAtracLowLevelInitDecoder refuses
+  refuses("a jpeg context with the library not started", [&] { k.jpeg.initialized = false, k.jpeg.created = true; });
+  refuses("a jpeg context wider than 1024", [&] { k.jpeg.width = 1025; });
+  auto lowLevel = [&]() -> Kernel::Atrac& {  //(ID 1 is ATRAC3's in this state)
+    auto& low = k.atracs[1];
+    low.codec = 0x1001, low.lowLevel = true, low.channels = 2, low.outputChannels = 2, low.frameBytes = 0xc0;
+    low.frameSamples = 1024, low.delay = 69;
+    return low;
+  };
+  refuses("a low-level ATRAC ID with a file", [&] { k.atracs[0].lowLevel = true; });
+  refuses("a low-level ATRAC ID of three channels", [&] { lowLevel().channels = 3; });
+  refuses("a low-level ATRAC ID with no frame size", [&] { lowLevel().frameBytes = 0; });
+  refuses("a low-level ATRAC ID's frame of another size", [&] { lowLevel().recent.assign(100, 0); });
+  refuses("a low-level ATRAC ID of another codec's samples", [&] { lowLevel().frameSamples = 2048; });
   CHECK(save(a) == state, true);
 }
 
-//IDs and file numbers count up and are never handed out twice, so they stop short of 2^31 (a number with its top bit
-//set would read as an error): what would need another fails instead, as out of memory, or with too many files open.
-//A thread's stack, made first, goes again when the thread can't have an ID. A machine that has handed out every one
-//still saves, and loads into another.
+//IDs count up and are never handed out twice, so they stop short of 2^31 (a number with its top bit set would read as
+//an error): what would need another fails instead, as out of memory. A thread's stack, made first, goes again when
+//the thread can't have an ID. A machine that has handed out every one still saves, and loads into another. (File
+//numbers are given again once closed: "files numbered lowest free first" runs them out.)
 static auto idsRunOut() -> void {
   HostFolder stick;
   stick.put("A.TXT", "a");
@@ -1397,14 +1522,6 @@ static auto idsRunOut() -> void {
   CHECK(m.kernel.allocate(0x100, 0, 0, "none") == nullptr, true);
   m.kernel.nextUID = Kernel::LastUID;
   CHECK(m.call("sceKernelCreateSema", {m.string("last"), 0, 0, 1, 0}), Kernel::LastUID);
-  m.kernel.nextFile = Kernel::LastUID;
-  CHECK(m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0}), Kernel::LastUID);
-  CHECK(m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0}), Kernel::ErrorTooManyFiles);
-  CHECK(m.call("sceIoOpen", {m.string("ms0:/NEW.TXT"), 0x0602, 0}), Kernel::ErrorTooManyFiles);
-  CHECK(std::filesystem::exists(stick.path / "NEW.TXT"), false);  //refused before anything was made
-  CHECK(m.call("sceIoDopen", {m.string("ms0:/")}), Kernel::ErrorTooManyFiles);
-  CHECK(m.call("sceIoOpen", {m.string("disc0:/DATA.BIN"), 0x0001, 0}), Kernel::ErrorTooManyFiles);
-  CHECK(m.call("sceIoDopen", {m.string("disc0:/")}), Kernel::ErrorTooManyFiles);
   serializer s;
   CHECK(m.kernel.serialize(s), true);
   KernelMachine n;
@@ -1413,11 +1530,138 @@ static auto idsRunOut() -> void {
   serializer load{s.data(), s.size()};
   CHECK(n.kernel.serialize(load), true);
   CHECK(n.kernel.nextUID, Kernel::LastUID + 1);
-  CHECK(n.kernel.nextFile, Kernel::LastUID + 1);
+}
+
+//States of the layouts before this one load: 23's (no GE time: when the GE will have drawn what it was given, and
+//whether its list's FINISH waits), 22's (nor any file's place in the order files were opened), 21's (nor part 58's
+//sceJpeg, sceHprm and low-level ATRAC fields, with files' count still kept and no read's bytes to come) and 20's
+//(none of those either). Each is this layout's state with the newer fields taken out and the count put back, where
+//saving the machine with just that field changed shows it to be; loaded with the header's layout into a machine
+//whose newer fields are set, it makes this layout's state again, the newer fields defaulted. And files opened out of
+//the order of their numbers, in a layout-22 state, take the order of their numbers.
+static auto olderLayouts() -> void {
+  HostFolder stick;
+  stick.put("A.TXT", "abcdefgh");
+  auto machine = [&](KernelMachine& m) {
+    m.kernel.mount("ms0", stick.path.string());
+    m.kernel.workingDirectory = "ms0:/";
+  };
+  KernelMachine m;
+  machine(m);
+  u32 file = m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0});
+  CHECK(m.kernel.files.count(file), 1);
+  CHECK(m.call("sceIoRead", {file, Buffer, 3}), 3);
+  if(!m.kernel.files.count(file)) return;
+  auto kernelState = [&] {
+    serializer s;
+    m.kernel.serialize(s);
+    return std::vector<u8>{s.data(), s.data() + s.size()};
+  };
+  auto where = [&](const std::vector<u8>& changed, const std::vector<u8>& state) -> u32 {
+    u32 at = 0;
+    while(at < state.size() && at < changed.size() && state[at] == changed[at]) at++;
+    return at;
+  };
+  auto state = kernelState();
+  auto& open = m.kernel.files[file];
+  open.asyncData = 0x0880'0001;
+  u32 asyncData = where(kernelState(), state);
+  open.asyncData = 0;
+  open.opened += 1;
+  u32 opened = where(kernelState(), state);
+  open.opened -= 1;
+  m.kernel.workingDirectory = "ms0:/LIST";
+  u32 workingDirectory = where(kernelState(), state);
+  m.kernel.workingDirectory = "ms0:/";
+  m.kernel.jpeg.initialized = true;
+  u32 jpeg = where(kernelState(), state);
+  m.kernel.jpeg.initialized = false;
+  m.kernel.geDoneAt = 1;
+  u32 geDone = where(kernelState(), state);
+  m.kernel.geDoneAt = 0;
+  m.kernel.geFinishDue = true;
+  u32 geFinish = where(kernelState(), state);
+  m.kernel.geFinishDue = false;
+  auto node = m.kernel.files.extract(file);
+  node.key() = file + 1;
+  m.kernel.files.insert(std::move(node));
+  u32 files = where(kernelState(), state) - 4;  //the files' count, before the first one's number
+  node = m.kernel.files.extract(file + 1);
+  node.key() = file;
+  m.kernel.files.insert(std::move(node));
+  CHECK(kernelState() == state, true);
+  bool ordered = jpeg < files && files < asyncData && asyncData < opened && opened + 8 <= workingDirectory
+              && workingDirectory < geDone && geFinish == geDone + 8 && geFinish < state.size();
+  CHECK(ordered, true);
+  if(!ordered) return;
+
+  u32 current = m.kernel.stateLayout;
+  auto loads = [&](u32 layout, std::vector<u8> bytes) {
+    KernelMachine n;
+    machine(n);
+    n.kernel.jpeg.initialized = n.kernel.jpeg.created = true, n.kernel.jpeg.width = 480;
+    n.kernel.hprmCallbacks[3] = 1;
+    n.kernel.atracs[1].lowLevel = true;
+    n.kernel.geDoneAt = 12345;
+    n.kernel.stateLayout = layout;
+    serializer s{bytes.data(), u32(bytes.size())};
+    bool loaded = n.kernel.serialize(s) && s.size() == bytes.size();
+    n.kernel.stateLayout = current;
+    serializer again;
+    n.kernel.serialize(again);
+    return loaded && std::vector<u8>{again.data(), again.data() + again.size()} == state;
+  };
+  auto layout23 = state;
+  layout23.erase(layout23.begin() + geDone, layout23.begin() + geFinish + 1);
+  CHECK(loads(23, layout23), true);
+  auto layout22 = layout23;
+  layout22.erase(layout22.begin() + opened, layout22.begin() + opened + 8);
+  CHECK(loads(22, layout22), true);
+  std::vector<u8> counted = {0x45, 0x23, 0x01, 0x00};  //numbers handed out once, passed over
+  auto layout21 = layout23;
+  layout21.insert(layout21.begin() + workingDirectory, counted.begin(), counted.end());
+  layout21.erase(layout21.begin() + asyncData, layout21.begin() + workingDirectory);
+  auto layout20 = layout21;
+  layout20.erase(layout20.begin() + jpeg, layout20.begin() + files);
+  CHECK(loads(21, layout21), true);
+  CHECK(loads(20, layout20), true);
+  CHECK(loads(current, layout21), false);  //read as this layout, it's another state
+
+  //another file opened, then the first closed and opened again: its number is the lower, its place the later
+  CHECK(m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0}), file + 1);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0}), file);
+  if(m.kernel.files.size() != 2) return;
+  auto twoFiles = kernelState();
+  std::vector<u32> places;
+  for(u32 number : {file, file + 1}) {
+    m.kernel.files[number].opened += 1;
+    places.push_back(where(kernelState(), twoFiles));
+    m.kernel.files[number].opened -= 1;
+  }
+  m.kernel.geDoneAt = 1;
+  u32 geAt = where(kernelState(), twoFiles);
+  m.kernel.geDoneAt = 0;
+  CHECK(places[0] < places[1] && places[1] < geAt, true);
+  if(!(places[0] < places[1] && places[1] < geAt)) return;
+  twoFiles.erase(twoFiles.begin() + geAt, twoFiles.begin() + geAt + 9);
+  for(u32 at : {places[1], places[0]}) twoFiles.erase(twoFiles.begin() + at, twoFiles.begin() + at + 8);
+  KernelMachine n;
+  machine(n);
+  n.kernel.stateLayout = 22;
+  serializer s{twoFiles.data(), u32(twoFiles.size())};
+  CHECK(n.kernel.serialize(s) && s.size() == twoFiles.size(), true);
+  n.kernel.stateLayout = current;
+  CHECK(n.kernel.files.size(), 2);
+  if(n.kernel.files.size() != 2) return;
+  CHECK(n.kernel.files[file].opened, 1);
+  CHECK(n.kernel.files[file + 1].opened, 2);
+  CHECK(n.kernel.filesOpened, 2);
 }
 
 auto stateTests() -> Tests {
-  return {{"kernel states", kernelStates}, {"state fields", stateFields}, {"kernel ids run out", idsRunOut}};
+  return {{"kernel states", kernelStates}, {"state fields", stateFields}, {"kernel ids run out", idsRunOut},
+          {"older layouts load", olderLayouts}};
 }
 
 }

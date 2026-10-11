@@ -117,7 +117,8 @@ namespace ares {
   auto setPspFontsPath(const char* path) -> void;
   // How many threads draw the PSP's pictures (its core's "GE Threads", as a game starts): 0 for all cores but one.
   auto setPspDrawingThreads(s32 threads) -> void;
-  // Who draws the PSP's pictures (its core's "Renderer", as a game starts): 0 the software renderer, 1 Vulkan's.
+  // Who draws the PSP's pictures (its core's "Renderer", as a game starts): 0 the software renderer, 1 Vulkan's
+  // (accurate), 2 Vulkan's fast mode.
   auto setPspRenderer(s32 renderer) -> void;
   // The Vulkan renderer's internal resolution (its core's "Resolution", as a game starts): 1, the PSP's, to 10 times.
   auto setPspResolution(s32 scale) -> void;

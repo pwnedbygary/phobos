@@ -922,3 +922,89 @@ auto Kernel::_sceAtracGetContextAddress() -> void {
   atracContext(id);
   result(atracContexts + id * 256);
 }
+
+//The library's low level: frames a game finds itself, as CRI's middleware does, decoded one at a time with no file
+//(Corpse Party's CRI sound library plays its music so). pspautotests' audio/atrac imports the two functions by name
+//but records nothing of them, and pspsdk doesn't describe them; what they take is what Corpse Party's library hands
+//them and reads back, followed through its code:
+//  - sceAtracLowLevelInitDecoder(ID, parameters): on an ID from sceAtracGetAtracID, three words: the frames'
+//    channels, the channels the samples are to be written with, and the frame's size in bytes (CRI gives its stream's
+//    channels as both). It returns 0, or less than 0 for an ID it won't take.
+//  - sceAtracLowLevelDecode(ID, frame, where to put the bytes used, samples, where to put the bytes written): one
+//    frame decoded into 16-bit samples, interleaved, the output channels' worth (CRI advances its frames by the bytes
+//    used, and its ring of samples by the bytes written, a whole frame's when 0 comes back). It returns 0.
+//Chosen, as nothing records them: the decoder's samples a frame are its codec's (2048 for ATRAC3plus, 1024 for
+//ATRAC3), all of them written and counted; ATRAC3's frames are joint stereo when they're two channels of 0xc0 bytes,
+//as its 66 kbps mode's are; mono written from a stereo stream takes its left channel; parameters out of range (no
+//channels, more than two, no frame size or more than 0x2000 bytes) are BAD_PARAMETERS; decoding on an ID never
+//given parameters is NO_DATA, a frame that won't decode FAILED (nothing written). Decoding waits as
+//sceAtracDecodeData does. Setting a file on the ID afterwards makes it the file's again.
+auto Kernel::sceAtracLowLevelInitDecoder() -> void {
+  u32 id = arg(0), parameters = arg(1);
+  auto a = atracFind(id, false);
+  if(!a) return;
+  if(!memory.reaches(parameters, 12)) return result(ErrorInvalidPointer);
+  u32 channels = memory.read(4, parameters), output = memory.read(4, parameters + 4);
+  u32 frameBytes = memory.read(4, parameters + 8);
+  if(channels < 1 || channels > 2 || output < 1 || output > 2 || !frameBytes || frameBytes > 0x2000) {
+    return result(AtracErrorBadParameters);
+  }
+  u32 codec = a->codec;
+  *a = {};
+  a->codec = codec;
+  a->lowLevel = true;
+  a->channels = channels;
+  a->outputChannels = output;
+  a->frameBytes = frameBytes;
+  a->frameSamples = codec == AtracPlus ? 2048 : 1024;
+  a->delay = codec == AtracPlus ? 368 : 69;
+  if(codec == AtracClassic) {
+    //the fmt chunk's 14 bytes an ATRAC3 file would carry (its coding mode at 6 and 8: 1 for joint stereo)
+    u8 joint = channels == 2 && frameBytes == 0xc0;
+    a->extra = {1, 0, 0, 0x10, 0, 0, joint, 0, joint, 0, 1, 0, 0, 0};
+  }
+  atracContext(id);
+  result(0);
+}
+
+auto Kernel::sceAtracLowLevelDecode() -> void {
+  u32 id = arg(0), source = arg(1), used = arg(2), destination = arg(3), written = arg(4);
+  auto a = atracFind(id, false);
+  if(!a) return;
+  if(!a->lowLevel) return result(AtracErrorNoData);
+  if(!memory.reaches(source, a->frameBytes)) return result(AtracErrorFailed);
+  if(!a->decoder) {
+    if(!audioDecoders) return result(AtracErrorFailed);
+    AudioDecoder::Format format;
+    format.codec = a->codec == AtracPlus ? AudioDecoder::Codec::Atrac3plus : AudioDecoder::Codec::Atrac3;
+    format.channels = a->channels;
+    format.frameBytes = a->frameBytes;
+    format.extra = a->extra;
+    a->decoder = audioDecoders(format);
+    if(!a->decoder) return result(AtracErrorFailed);
+    std::vector<s16> primed(a->frameSamples * a->channels);
+    if(!a->recent.empty()) a->decoder->decode(a->recent.data(), a->recent.size(), primed.data(), a->frameSamples);
+  }
+  std::vector<u8> frame(a->frameBytes);
+  memory.copyOut(frame.data(), source, a->frameBytes);
+  std::vector<s16> decoded(a->frameSamples * a->channels, 0);
+  s32 made = a->decoder->decode(frame.data(), frame.size(), decoded.data(), a->frameSamples);
+  if(made < 0) {
+    a->error = AtracCodecError;
+    return result(AtracErrorFailed);
+  }
+  a->error = 0;
+  a->recent = std::move(frame);
+  std::vector<s16> samples(a->frameSamples * a->outputChannels, 0);
+  for(u32 n = 0; n < std::min<u32>(made, a->frameSamples); n++) {
+    for(u32 c = 0; c < a->outputChannels; c++) {
+      samples[n * a->outputChannels + c] = decoded[n * a->channels + std::min(c, a->channels - 1)];
+    }
+  }
+  u32 bytes = samples.size() * 2;
+  if(memory.reaches(destination, bytes)) memory.copyIn(destination, samples.data(), bytes);
+  if(memory.reaches(used, 4)) memory.write(4, used, a->frameBytes);
+  if(memory.reaches(written, 4)) memory.write(4, written, bytes);
+  result(0);
+  codecWait(AtracDecodeMicroseconds);
+}

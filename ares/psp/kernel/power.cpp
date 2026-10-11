@@ -71,6 +71,14 @@ auto Kernel::scePowerTick() -> void {
   result(0);
 }
 
+//The fastest PLL the model allows while the wireless LAN is on, as uOFW's power service documents it (its exports
+//list it under NID 0xa85880d0, not its name's hash): 0 for 222 MHz, a PSP-1000's, or 1 for 266 and 333 MHz, a
+//PSP-2000's and every later model's, which this PSP is (docs/psp-core.md, part 13). Monster Hunter Portable 3rd,
+//Final Fantasy Type-0, Kingdom Hearts Birth by Sleep and Dragon Ball Z: Tenkaichi Tag Team call it.
+auto Kernel::scePowerCheckWlanCoexistenceClock() -> void {
+  result(1);
+}
+
 //(PLL, CPU, bus, in MHz): the PLL is set to the next of its four speeds, the bus to half of it. Out of range:
 //refused.
 //Changing the PLL takes the PSP a while (PPSSPP's measurements: 150 ms, but 15.7 between 190 and 222 MHz and 16.6

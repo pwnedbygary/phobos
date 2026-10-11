@@ -607,15 +607,15 @@ static auto curvesThreads() -> void {
   CHECK(n.system.memory.vram == whole, true);
 }
 
-//Malformed surfaces: bounded, and quick. Counts of 255 each way cut 255 times (a spline of 252 pieces each way
-//would be 4 billion vertices, a Bezier 458 million) aren't drawn, but the points are read and the address moves on
-//past them; a spline cut as finely as the budget allows along one way is drawn; control points that aren't
-//numbers draw nothing, nor do counts below 4; and none of it takes long.
+//Malformed surfaces: bounded, and quick. Counts of 255 each way cut 64 times (a spline of 252 pieces each way
+//would be 260 million vertices, a Bezier 29 million) aren't drawn, but the points are read and the address moves
+//on past them; a spline of 252 pieces cut 64 times along one way is drawn; control points that aren't numbers draw
+//nothing, nor do counts below 4; and none of it takes long.
 static auto curvesMalformed() -> void {
   auto start = std::chrono::steady_clock::now();
   Surface c;
   std::vector<FloatPoint> many(255 * 255, FloatPoint{0, 0, 0xffff'ffff, 0.1f, 0.1f, 0});
-  c.put(GE::PatchDivision, 255 | 255 << 8);
+  c.put(GE::PatchDivision, 64 | 64 << 8);
   c.patch(GE::Bezier, 0x19f, 255 | 255 << 8, many);
   c.patch(GE::Spline, 0x19f, 255 | 255 << 8, std::vector<FloatPoint>{});
   c.run();
@@ -624,16 +624,34 @@ static auto curvesMalformed() -> void {
   for(u32 y = 0; y < 272; y++) for(u32 x = 0; x < 480; x++) blank &= c.pixel(x, y) == 0;
   CHECK(blank, true);
   CHECK(c.ge.noted.count("a curved surface cut into more vertices than the core draws"), 1u);
-  //the most along one way: 252 pieces cut 255 times, by one along the other (64,261 x 2 vertices), drawn
+  //the most along one way: 252 pieces cut 64 times, by one along the other (16,129 x 2 vertices), drawn
   Surface wide;
   std::vector<FloatPoint> row;
   for(u32 j = 0; j < 4; j++) {
     for(u32 i = 0; i < 255; i++) row.push_back({0, 0, 0xff00'ff00, -0.9f + i * 0.007f, 0.5f - j * 0.3f, 0});
   }
-  wide.put(GE::PatchDivision, 255 | 1 << 8);
+  wide.put(GE::PatchDivision, 64 | 1 << 8);
   wide.patch(GE::Spline, 0x19f, 255 | 4 << 8 | 3 << 16 | 3 << 18, row);
   wide.run();
   CHECK(wide.pixel(240, 120), 0x00ff00u);
+  //The division counts are 7 bits, and more than 64 draws nothing (round 4's curves-count tests: docs/psp-core.md,
+  //part 60). A 4x4 Bezier as points in through mode, across x 16.1 to 208.1 on row 10 (each lit pixel one vertex,
+  //the lit pixels counted): 64 divisions along u light 65 pixels; 128 divides as 0, so as 1, lighting the 2 ends;
+  //65 and 127 (and 200, which is 72) light none, but their points are still read.
+  for(u32 divisions : {64u, 128u, 65u, 127u, 200u}) {
+    Surface d;
+    std::vector<FloatPoint> points;
+    for(u32 j = 0; j < 4; j++) {
+      for(u32 i = 0; i < 4; i++) points.push_back({0, 0, 0xffff'ffff, 16.1f + i * 64, 10, 0});
+    }
+    d.put(GE::PatchPrimitive, 2), d.put(GE::PatchDivision, divisions | 1 << 8);
+    d.patch(GE::Bezier, 0x80'019f, 4 | 4 << 8, points);
+    d.run();
+    u32 lit = 0;
+    for(u32 x = 0; x < 480; x++) lit += d.pixel(x, 10) != 0;
+    CHECK(lit, divisions == 64 ? 65u : divisions == 128 ? 2u : 0u);
+    CHECK(d.ge.vertexAddress, PatchPoints + 16 * 24);
+  }
   //not numbers: nothing drawn (3D: not on the screen; through mode: held to the GE's range, off this one), the
   //colors still worked out
   for(u32 type : {0x19fu, 0x80'019fu}) {

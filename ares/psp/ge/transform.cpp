@@ -223,7 +223,12 @@ auto GE::clipTriangle(const Look& look, const Transform& t, const Vertex& a, con
   if(nearer(a) >= 0 && nearer(b) >= 0 && nearer(c) >= 0) return triangle(look, a, b, c, facing, true);
 
   //Walk round the edges, keeping each corner on the far side of the plane and making one wherever an edge crosses
-  //it: a triangle cut by a plane leaves three or four corners, drawn as a fan of triangles from the first.
+  //it: a triangle cut by a plane leaves three or four corners. Four are drawn as two triangles split from the second
+  //to the fourth, corners 0, 1, 3 and 1, 2, 3, each turning as the whole did: with the third corner past the plane
+  //(so 0 and 1 kept, 2 and 3 cut on the edges after them), that splits it from the second kept corner to the cut
+  //after the one past the plane, as the PSP does (measured, docs/psp-core.md, part 48: 3d-clip, every pixel; split
+  //from the first to the third, as a fan, 1113 color values a level apart). Cut with another corner past the plane
+  //isn't measured.
   const Vertex* corners[3] = {&a, &b, &c};
   Vertex kept[4];
   u32 count = 0;
@@ -244,12 +249,13 @@ auto GE::clipTriangle(const Look& look, const Transform& t, const Vertex& a, con
     }
   }
   bool flat = !(commands[ShadeMode] & 1);
-  for(u32 n = 2; n < count; n++) {
-    Vertex last = kept[n];
-    if(kept[0].outside || kept[n - 1].outside || last.outside) continue;
+  auto draw = [&](const Vertex& first, const Vertex& second, Vertex last) {
+    if(first.outside || second.outside || last.outside) return;
     if(flat) last.color = c.color, last.specular = c.specular;
-    triangle(look, kept[0], kept[n - 1], last, facing, true);
-  }
+    triangle(look, first, second, last, facing, true);
+  };
+  if(count == 3) draw(kept[0], kept[1], kept[2]);
+  if(count == 4) draw(kept[0], kept[1], kept[3]), draw(kept[1], kept[2], kept[3]);
 }
 
 //A line in 3D: dropped if out of sight, by the rules for a triangle's corners, else cut where it reaches past the

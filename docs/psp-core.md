@@ -238,8 +238,8 @@ operand's size gives 0 in its lane, or leaves that lane's product out of the add
 Denormals count as zero both ways: a result is rounded to a float's 24 bits as if exponents went on below 2^-126, the
 smallest normal number, then flushed to a zero of its sign if it's still below (`vfpuBits()`; measured on products,
 taken to hold for quotients). Only round-to-nearest exists. The rest was measured too (psp-vfpu-measurements.md,
-rounds 2 and 3). The recompiler runs the VFPU through the interpreter for now (its branches included), as it does
-the FPU.
+rounds 2 and 3). The recompiler does the common instructions with the prefixes at rest through helpers with the
+interpreter's arithmetic, and some natively (`recompiler-vfpu.cpp`, part 38's item 6), and hands the rest to it.
 
 The random number generator is the hardware's, as fp64 worked it out from a PSP's output (PPSSPP issue 16946):
 a linear congruential generator, a xorshift and a Pell-like sequence with a carry, added together, their state
@@ -248,11 +248,15 @@ fill lanes from the last back, and their destination prefix only reaches the las
 description (no PPSSPP code), and checked against the user's PSP: its state at power on and the numbers of 64
 seeds all match, including those that exercise the carry (psp-vfpu-measurements.md).
 
-The math functions `vrcp`, `vnrcp`, `vrsq`, `vsqrt`, `vexp2`, `vrexp2`, `vsin`, `vcos`, `vnsin` and `vasin` (and
-`vrot`'s sine and cosine) are the PSP's own: its quadratic interpolator with coefficients fitted from our
+The math functions `vrcp`, `vnrcp`, `vrsq`, `vsqrt`, `vexp2`, `vrexp2`, `vsin`, `vcos`, `vnsin`, `vasin` and `vlog2`
+(and `vrot`'s sine and cosine) are the PSP's own: its quadratic interpolator with coefficients fitted from our
 measurements (`vfpu-segments.hpp`, from `tools/psp-measure/fit.py`), exact on every measured input; see
-psp-vfpu-measurements.md. So is `vlog2` below 4, from a fixed-point table and a cheaper straight-line path below 1;
-from 4 up about half its results are one unit above the PSP's, which drops more precision there.
+psp-vfpu-measurements.md. `vlog2` works in fixed point from the same table, truncating to a step that grows with the
+result's size and cutting coefficients to match above 4 (and below 1). The adders (`vdot`, `vhdp`, `vfad`, `vavg`,
+`vdet`, `vcrsp`, `vqmul`, and the matrix products) share one circuit (`vfpuDot`, the recompiler's `vdot` too):
+products with two extra bits and round-to-odd, aligned and truncated, then a nearest-even sum whose carry raises the
+exponent (without it a sum rounding up to a power of two came out half of it, 1/2 for 1, and GTA: Liberty City
+Stories' characters twitched).
 
 Not checked against hardware: `vrot` on its own (it uses vsin's and vcos's), `vwbn` (implemented from its
 description; no test), and what reserved size combinations do (they raise ReservedInstruction, and leave the
@@ -432,10 +436,10 @@ version of the PSP's operating system, as far as a program sees it. The loader a
   another, and stops.
 - **The program**: `load()` starts afresh, as the PSP does when a game is chosen (whatever an earlier program left,
   having exited included, goes; a load that fails leaves nothing behind either). It takes a PBP or an ELF, puts a PRX
-  at the start of the user partition, reserves the program's memory exactly where it is, one block from its first
-  segment to the end of its last as the PSP's loader gives a module (two segments may share a 256-byte step, as a
-  retail PRX's data starts right after its code; a program whose segments overlap is refused), and starts its first
-  thread at the entry
+  16 KiB into the user partition (its block from the partition's start: part 51), reserves the program's memory
+  exactly where it is, one block from its first segment to the end of its last as the PSP's loader gives a module
+  (two segments may share a 256-byte step, as a retail PRX's data starts right after its code; a program whose
+  segments overlap is refused), and starts its first thread at the entry
   point with the path as its argument (argv[0]), its `gp`, a 256 KiB stack, and the top 256 bytes of the stack as
   the kernel's area (`k0`). A thread's start argument must fit on its stack and be readable, or starting it fails;
   the program's path may be up to 4 KiB.
@@ -893,6 +897,16 @@ results at the whole 256ths the tests use, 0.5 and 0.75). Now identical: `light-
 confirms, as `light-materials`' 12; `light-point` 9728 (was 30720) and `light-spot` 768 (was 2560), whose normals
 are exact but not the direction to the light, nor its fading or spot; all a level each.
 
+**And fog's amount** is fixed at each corner before blending (see Part 11): `ramp-fog` from 18976 pixels a level
+apart to 240 (the same scattered shortfalls color ramps still show); round 2's `3d-floor-fog` from 6257 to 497.
+Stepping u/w and 1/w like 2D's shortStep made `3d-wall-texels` worse (307 → 2423), so perspective texels stay as
+the edge weights have them. Color ramps and those last lighting products are still open (round 5's probes).
+
+**And colors, fog and depth are stepped** from a corner, as the PSP steps them (part 48): round 3's color and fog
+ramps and `bezier-flat`, and round 2's `3d-clip` (with the cut's four corners split the PSP's way), `3d-floor-fog`
+and `3d-floor-depth`, are now identical. Lighting's last products and perspective texels stay open: part 48 says what
+the data show of them, and round 5 measures them.
+
 ## Part 11: drawing in 3D
 
 `ares/psp/ge/transform.cpp`, and 3D paths in `vertex.cpp`, `draw.cpp` and `pixel.cpp`. Outside through mode:
@@ -909,16 +923,21 @@ are exact but not the direction to the light, nor its fading or spot; all a leve
   aren't judged by it (as PPSSPP has it). A triangle with every w below zero isn't drawn either.
 - **Clipping**: a triangle is cut at the near plane (z < -w) only, never at the screen's edges (the scissor does
   those). The new corners are blended in clip space from the kept corner toward the one past the plane (colors in
-  256ths, which the way round decides: the PSP's way, measured later) and put on the screen again; with flat shading
-  every piece keeps the last vertex's color.
+  256ths, which the way round decides: the PSP's way, measured later) and put on the screen again; four corners left
+  (two kept, two cuts, in the order of a walk round the edges) are drawn as corners 0, 1, 3 and 1, 2, 3, the PSP's
+  split where the third corner is past the plane, the one case measured (part 48); with flat shading every piece
+  keeps the last vertex's color.
 - **Culling** (CULL_FACE_ENABLE, not in clear mode, through mode too): CULL 1 draws the triangles running clockwise on
   the screen, 0 those running counterclockwise; every other triangle of a strip counts the other way round.
-- **Texture coordinates**: perspective-correct across triangles (blended as u/w and 1/w, then divided); colors, depth
-  and fog are blended straight. Mode 0 takes the vertex's, times TEX_SCALE plus TEX_OFFSET; mode 1 the texture
-  matrix's result from the position, the texture coordinates or the normal, its q dividing at each pixel.
-- **Fog**: each vertex's (view z + FOG1) × FOG2, blended across, 0-255, mixed in after the alpha test as
-  (color × f + fog color × (255 − f) + 255) / 256. A FOG1 or FOG2 that isn't a number to a float is a huge number to
-  the GE.
+- **Texture coordinates**: perspective-correct across triangles (blended as u/w and 1/w, then divided); colors and
+  depth aren't: they're stepped from a corner, straight across the screen (part 48). Mode 0 takes the vertex's, times
+  TEX_SCALE plus TEX_OFFSET; mode 1 the texture matrix's result from the position, the texture coordinates or the
+  normal, its q dividing at each pixel.
+- **Fog**: each vertex's (view z + FOG1) × FOG2, turned into 0-255 there (rounded down, 1 or more giving 255), then
+  that amount stepped across the primitive as a color channel is (measured: round 3's `ramp-fog`, and part 48;
+  blending the 0-1 and converting at each pixel left the first pixel of a near-to-far ramp unfogged). Mixed in after
+  the alpha test as (color × f + fog color × (255 − f) + 255) / 256. A FOG1 or FOG2 that isn't a number to a float is
+  a huge number to the GE.
 - **The depth range test** (MIN_Z to MAX_Z), in 3D only, clear mode included.
 - **Sprites in 3D**: both corners transformed and checked by the same rules, then drawn as in 2D but for two things:
   the texture coordinates follow the perspective (u / w and 1 / w across x, v / w down y, then divided: measured), and
@@ -980,9 +999,9 @@ turns it round), and made one long.
 - **The arithmetic**, as the GE does it: a color c counts as 2c + 1, so white times white is white; two colors
   multiply and shift down 10 bits; a light's share counts 256ths, rounded up, and three numbers shift down 18 (the
   256ths measured in round 3, where PPSSPP has 512ths and one more; rounding up at a whole 256th assumed; a few
-  products still come out a level lower on the PSP, unexplained). "To the power of" is the GE's quick approximation
-  (exact at powers of two, a little low between them), and the coefficient keeps only the top four bits of its
-  fraction. Each channel ends held to 0-255.
+  products still come out a level lower on the PSP: part 48 found the share finer than 256ths, the GE's own cosine,
+  which round 5 measures). "To the power of" is the GE's quick approximation (exact at powers of two, a little low
+  between them), and the coefficient keeps only the top four bits of its fraction. Each channel ends held to 0-255.
 - **The shine kept apart** (LIGHT_MODE 1): a second color, blended across triangles like the first and added after
   texturing, so a dark texture doesn't dull it.
 - **Environment mapping** (TEXTURE_MAP_MODE 2): texture coordinates from two lights (TEXTURE_SHADE_MAPPING), lit or
@@ -1224,8 +1243,8 @@ exactly there.
     with no '/', '\', ':' or NUL: reading the folder joins each to its place on the host, so a path, or ".." at the
     top, would reach outside the device's folder);
   - an ID or a file number at or past the next one to be handed out, or a map's key that isn't its object's ID; IDs
-    or file numbers counted past 2^31 (they're positive 32-bit numbers, and stop short of that: newUID(), newFile());
-    a running thread that isn't there;
+    or file numbers counted past 2^31 (they're positive 32-bit numbers, and stop short of that: newUID(), newFile();
+    part 59: file numbers are the lowest free now, under 3 or past 2^31 refused); a running thread that isn't there;
   - memory as the kernel never hands it out (since part 17's final review): a block outside the user partition, a
     thread's stack that isn't a block of its own, of its size, or a block two owners claim (threads' stacks, memory
     pools, modules and the program);
@@ -1418,7 +1437,10 @@ the code they replace.
   bits, a pool's room, a thread that has ended, the drive ready, sceDisplayWaitVblankCB inside the blank), still runs
   the callbacks notified by then: they run at once, as sceKernelCheckCallback's do, and the function returns what it
   got when they're done (it skipped them; a wait made to wait for them instead could time out in a long callback
-  after getting what it asked for, and sceDisplayWaitVblankCB's 1 would become a wait for the next blank).
+  after getting what it asked for, and sceDisplayWaitVblankCB's 1 would become a wait for the next blank). A
+  semaphore's CB wait with no timeout and nobody else in line runs them first instead, in its wait, and takes the
+  count after them if it's still there, ahead of any thread that queued meanwhile (part 51: Patapon 2's callback
+  takes that semaphore itself); a callback deleting the semaphore ends the wait as deleted.
 - **The display** (display.cpp): sceDisplayWaitVblankStartCB, WaitVblank (not waiting, returning 1, inside the
   vertical blank, which lasts 0.77 ms as pspautotests measured), IsVblank, GetCurrentHcount (lines of 525 dots at
   9 MHz, counted from the blank's start).
@@ -1586,17 +1608,18 @@ whether the PSP notifies a power callback as it's registered (PPSSPP's reading);
 timings; the CPU clock not slowing at 222 MHz; the errors taken from PPSSPP's tables where pspsdk has none; which
 group of errors the savedata modes after 11 report from (the bad parameters follow the groups their other errors
 already came from); and whether a CB wait that ends at once runs its callbacks before or after taking what it waited
-for (here, after). For sound and interrupts: the 64-sample pacing (K outputs taking K - 2 blocks) follows from the
-measured block model, but only its first two outputs were timed on a PSP (intr/waits); which of a mixer output's
-volume and channel checks comes first, and an SRC output's volume and reservation; a null SRC output on two armed
-buffers (BUSY here; intr/waits' later results show only that it doesn't wait for them); the volumes after reserving
-(0) and the volume scale (0x8000 full, pspsdk's PSP_AUDIO_VOLUME_MAX) for when the samples are mixed; how long a null
-buffer's count stays; the interrupt kinds, recorded once under PSPLink; and which of a bad priority and a bad thread
-sceKernelChangeThreadPriority checks first. Other waits (sceKernelDelayThread and the rest) don't refuse yet with
-interrupts held off, as intr/waits shows a PSP does: only sound's do. Since the final review: the SRC channel's
-100 µs (the specification's "about 100 µs", from a result bucketed as "13XX"), and whether the buffers chained after
-the first keep it (here they do, so a stream's pace is a buffer's length); and what sceKernelFreePartitionMemory
-says of a block the kernel holds (ILLEGAL_PERMISSION here, not tried on a PSP).
+for (here, after, but before for a semaphore's with no timeout and nobody else in line: part 51). For sound and
+interrupts: the 64-sample pacing (K outputs taking K - 2 blocks) follows from the measured block model, but only its
+first two outputs were timed on a PSP (intr/waits); which of a mixer output's volume and channel checks comes first, and
+an SRC output's volume and reservation; a null SRC output on two armed buffers (BUSY here; intr/waits' later results
+show only that it doesn't wait for them); the volumes after reserving (0) and the volume scale (0x8000 full, pspsdk's
+PSP_AUDIO_VOLUME_MAX) for when the samples are mixed; how long a null buffer's count stays; the interrupt kinds,
+recorded once under PSPLink; and which of a bad priority and a bad thread sceKernelChangeThreadPriority checks first.
+Other waits (sceKernelDelayThread and the rest) don't refuse yet with interrupts held off, as intr/waits shows a PSP
+does: only sound's do. Since the final review: the SRC channel's 100 µs (the specification's "about 100 µs", from a
+result bucketed as "13XX"), and whether the buffers chained after the first keep it (here they do, so a stream's pace is
+a buffer's length); and what sceKernelFreePartitionMemory says of a block the kernel holds (ILLEGAL_PERMISSION here, not
+tried on a PSP).
 
 Merged with parts 18 and 19 (`cursor/psp-decrypt-2b67`, #144), which now sit under this part. Each branch had made
 the state's layout version 2, its own way, so the merged layout is version 3, and a state of version 1 or 2 is
@@ -2063,8 +2086,9 @@ What the games do now, on the host (frames from the scratch runner, kept outside
 Tests (`tests/psp/run-tests.sh`, 180 groups, both sanitizers; `tests/psp/ares` 236 checks):
 - `async.cpp`: requests called directly (a read's bytes and its result held back exactly 100 microseconds plus its
   bytes at 4 MB a second, polls before and after, every other call refused meanwhile, seeks, a read past the end, a
-  write refused as its result, an ioctl, a result never taken overwritten, the asynchronous close and failed open
-  and their descriptors, the disc's rate, the priority's and callback's checks); a program waiting (1100
+  write refused as its result, an ioctl, a result never taken overwritten (part 59: the next request refused over
+  it), the asynchronous close and failed open and their descriptors, the disc's rate, the priority's and callback's
+  checks); a program waiting (1100
   microseconds exactly, a worker running meanwhile, the callback run in the CB wait before its result); a state saved
   while waiting on the disc, and with no disc the waiter told.
 - `sas.cpp`: every refusal above from audio/sascore's recordings; envelopes grain by grain (keyon's, keyoff's,
@@ -2962,12 +2986,13 @@ calls filtered by name, and builds with one function taken out, to show what its
   holding one back, and draws nothing. Run through the HLE with basic's own movie, as basic fed it (a scratch
   harness), all 180 frames came out as recorded: the free packets before and after each feeding, every access
   unit's size and time stamps, the pictures, and the callback's 181 calls. sceMpegRingbufferAvailableSize counts
-  the free packets, those holding no data (ringbuffer/avail), sceMpegInitAu sets an access unit's buffer and clears
-  the rest (basic's ATRAC3plus one), and sceMpegAvcDecodeDetail (named by pspautotests' imports, nothing of it
-  recorded) answers 0 and leaves the details as they were: Space Invaders Extreme waits for its movie's first
-  picture, and asks it of each, before the stage starts. The library's own state (the video taken from the ring's
-  first packet, the picture held back, the file having ended) is kept in the memory the game gave it, where Sony's
-  library keeps its own.
+  the free packets, those holding no data (ringbuffer/avail; part 59: in the ring its library reads), sceMpegInitAu
+  sets an access unit's buffer and clears the rest (basic's ATRAC3plus one), and sceMpegAvcDecodeDetail (named by
+  pspautotests' imports, nothing of it recorded) answers 0 and gives the newest picture's width and height at 8 and
+  12, the rest of the details left as they were (part 51: Spectral Souls draws its movies by them): Space Invaders
+  Extreme waits for its movie's first picture, and asks it of each, before the stage starts. The library's own state
+  (the video taken from the ring's first packet, the picture held back, the file having ended) is kept in the memory
+  the game gave it, where Sony's library keeps its own.
 - **The ring as games keep it**: the callback runs with the global pointer of Put's caller. pspautotests'
   SceMpegRingbuffer2 keeps the one Construct found at offset 44, but pspsdk's SceMpegRingbuffer is 44 bytes, the
   word after it the game's own (in every case seen, the word at 44 and the caller's are the same). And a ring whose
@@ -4684,7 +4709,8 @@ own tessellation stands between the control points and the pixels (`tools/psp-me
 - `curves-culling`: the 16 combinations of CULL_FACE_ENABLE, CULL, PATCH_CULL_ENABLE and PATCH_FACING.
 - `curves-joins`: which vertices strips join across patches, as lines and flat-shaded triangles.
 - `curves-count`, `-count-128`, `-count-200` and `-count-255`, last: how many vertices a row has (points added up) at
-  16, 63, 64 and 65 cuts, at 100 and 128, at 200, and at 255, each in a display list of its own.
+  16, 63, 64 and 65 cuts, at 100 and 128, at 200, and at 255, each in a display list of its own. (Since split further,
+  one count past 64 to a test, with the GE's waits timed: part 48, "Round 4 again".)
 Built in pspdev's Docker image (`ghcr.io/pspdev/pspdev@sha256:54895e6f...`, part 29's), and `tests/psp/programs/
 pspmeasure.elf` replaced as that folder's README asks (its SHA-256 there). The EBOOT.PBP for the PSP is outside the
 repository: `/tmp/psp-measure-round4-curves/PSP/GAME/PSPMEASURE/EBOOT.PBP` (SHA-256
@@ -5577,3 +5603,2926 @@ The race's emulation thread stays about 24 ms a frame either way (within round n
 **Left, and why:**
 - Primitives that can't wait in a batch, and those drawn at once (textures read from memory as they're drawn).
 - Holding registers across block chains; VFPU with prefixes and rarer instructions still interpreted.
+
+## Part 47: the emulation thread faster again — no drawing for its own textures, batches in a ring
+
+On branch `cursor/psp-cpu-speed4-2b67`, on top of #178's `cursor/psp-ge-fits-2b67` (72443bc4d). The task as in parts 38,
+43 and 46: the Software renderer faster at 1 and 7 GE threads, nothing changed in any result. Original code: no PPSSPP
+or JPCSP source was read.
+
+**The scenes** are part 46's six at StateVersion 17 (`~/phobos-work/scratch/cpu-speed/scenes`). Each commit was checked
+against 72443bc4d in all six, 300 frames at 1 and 7 GE threads: every frame's picture and all of VRAM (drawing settled
+each frame), then RAM and the machine's whole serialized state at the end. On the RP6 the end states were also
+compared without settling each frame.
+
+**Where the time went.** simpleperf on the RP6 at 72443bc4d, with line tables (`-gline-tables-only`, which leaves the
+code as it was):
+- 1 GE thread: the emulation thread is mostly drawing. Midnight Club 3's race: triangles into its 8888 frame buffer 44%
+  of the thread (nearly all of it four pixels at a time: the texel gather 29% of that, the pixel pipeline 21%, the depth
+  test 15%), sprites 13%, compiled code 11%, the GE's setup about 14%. GTA's city: triangles 55%. Peace Walker's
+  title: 3D sprites into 5551, 86%. Lumines: triangles 75%.
+- 7 GE threads, the race (the emulation thread about 26 ms a frame, the bottleneck; the workers about a third busy):
+  compiled code 5.7 ms, the GE's setup about 7.5 ms (`drawVertices` 2.3, `project` 1.8, `triangle` 1.1, reading
+  vertices 1.5, clipping 0.5), and its own drawing about 6 ms.
+
+Why the emulation thread draws at 7 threads, by a scratch count of where it draws and waits (ms a frame, drawing +
+waiting for the workers):
+- Midnight Club 3's race: 4 primitives a frame that draw over their own texture (texture.cpp's `drawsOver()`): each is
+  drawn at once, reading its texels from memory as it draws, so the whole batch before it is drawn first (4.7 + 1.2),
+  then the primitive itself, slowly (1.1). Its menu: 5 a frame, 7.0 + 3.4, then 7.0.
+- GTA's city: filling a batch again (two of them) that's still being drawn: 4.3 + 1.6. Its woods: 2.1 + 4.2. Lumines:
+  3.1 + 0.5.
+- Peace Walker's title: the screen's picture reading pixels still being drawn: 3.1.
+
+Midnight Club 3's primitives are its bloom: the frame buffer shrunk to 64 by 64 (a sprite of v = 0 at its top edge,
+filtered, so its rows couldn't be bounded: all 512, which reach the 64 by 64 target), that brightened in place twice,
+1:1, filtered, each texel its own pixel's; another target halved in place; and in the menu, a pass whose blending
+keeps every pixel as it is (a fixed 0 for the source, a fixed 255 for the destination) over 512 by 320 pixels, and
+one shrinking its own frame buffer a little from its top left.
+
+**What was done**, one commit each:
+1. **Deferred decodes stay with their batch, their pages busy for the CPU** (`texture.cpp`, `threads.cpp`, `draw.cpp`,
+   `memory.*`). Part 46's deferred decode (render to texture) ran on whichever thread started its batch and went into
+   the shared texture cache, calling `memory.watch()` off the emulation thread (the recompiler's `protect()`); its copy,
+   of VRAM as the batch started, could go stale under primitives set up before it existed (their changes heard of before
+   it was kept); and the CPU could write the texture before the batch read it, its pages not busy. Now each batch
+   decodes its own (`ensureDecoded()`, a copy shared by its Looks with the same texture and palette), the cache is the
+   GE thread's alone again (no mutex), and the texture's pages (`Batch::reads`) are busy for the CPU until the decode
+   has run (`readsDone`). `Memory::knownDrawn` lets a thread read VRAM it knows is drawn without waiting or looking at
+   the busy pages: the deferred decodes, and the GE thread's own reads after `drawnFirst()` (a texture's decode, a
+   palette's copy). It's what the rest builds on; alone it changes the scenes' speed by little (below).
+2. **A 2D sprite's texture rows as its pixels reach them** (`draw.cpp`'s `spriteReach()`). A sprite's texture
+   coordinate runs one way along its job, so the rows (and columns) its pixels take, the filter's second texel too, are
+   those at the job's two ends, worked out with the drawing code's own arithmetic (`spriteAxis()`, shared with
+   `raster.cpp` and `four.cpp`; `texelSpot()`, `texelAxis()` before it wraps). The software renderer decodes that many
+   rows (in eights), not the vertices' estimate. Midnight Club 3's and GTA's shrunk frame buffers are then no longer
+   taken as drawing over their own textures, and GTA's deferred decode of its frame buffer keeps 280 rows busy, not
+   512 (whose last rows were the displayed buffer, which the screen's picture then waited for).
+3. **Batches in a ring of eight; the CPU waits only for the drawing it touches** (`threads.cpp`). With two batches the
+   GE's thread waited for the older one to be drawn whenever it launched the next. Now batches are filled in turn, eight
+   of them, the GE's thread waiting only to fill one still launched (the oldest); a batch all drawn is marked
+   (`finished`), and those are emptied at each list's start, their pages given back to the CPU (`reap()`). Whoever
+   touches busy pages waits only for the batches up to the last one reaching those bytes (`settleOver()`, through
+   `Memory::finishDrawingOver`), drawing bands too, then gives back what's drawn; the rest go on being drawn. The GE's
+   own reads of VRAM skip batches all drawn.
+4. **A primitive that can't change any pixel isn't drawn** (`draw.cpp`'s `keepsPixels()`). Blending with a fixed 0 for
+   the source and a fixed 255 for the destination gives (2d + 1) × 511 >> 10 = d for every d up to 255, and each
+   format's channels widened and narrowed again are the bits they were, so with no dither, logic operation, stencil
+   test or depth written every pixel is written back as it was. Such a primitive is set up and what it may draw over
+   reported as before, but not drawn nor its texture decoded, unless reading its texels would have been reported (no
+   memory behind them, or a format the PSP doesn't have: `memory.unmapped` counts those in the saved state).
+5. **Sprites drawing over their own texture from a copy, where none reads what it drew** (`draw.cpp`'s
+   `readsAhead()`). The old way, reading memory as it draws, sees the pixels the primitive has drawn by then. A copy
+   taken first draws the same when no pixel takes a texel, with a weight that isn't 0, that the primitive has drawn by
+   then, drawing its jobs in order, each row by row, left to right. For unturned 2D sprites into a frame buffer laid out
+   as the texture is (the same bytes from row to row, a texel a pixel, VRAM's plain copies), a texel is a pixel a whole
+   number of rows and columns away, so it's checked exactly from each job's columns and rows: none in an earlier job's
+   area, none in a row above the pixel's in its own, none left of it in its row. Such a texture is decoded (at once,
+   or deferred to its batch's start) and the primitive batched like any other.
+
+**How it's known to be exact:**
+- The six scenes, 300 frames at 1 and 7 GE threads, after each commit: every frame's picture and VRAM, RAM and the whole
+  serialized state identical to 72443bc4d's. On the RP6, the end states of all six matched unsettled, every build.
+- `tests/psp/run-tests.sh` (sanitized): 335 groups, none failing (340 after merging #179's desktop tests in). New:
+  `ge deferred texture busy` (a deferred texture's pages busy for the CPU, its store landing after),
+  `ge batches round the ring` (more than eight batches, against one thread), `ge drawn over its own texture` (the
+  bloom's passes in two lists at 1, 2, 4 and 8 threads, shared however small, against a machine that keeps nothing
+  decoded), `draw over its own texture from a copy` (each frame buffer format: passes `readsAhead()` takes and turns
+  down, from texture layouts at an offset, through VRAM's third copy, of palette indices, each against reading memory),
+  `draw keeping every pixel`. `ge drawn on several threads` checks that what the CPU touched is drawn (not everything
+  settled); `draw textures kept decoded, their rows` keeps 16 rows, not 24 (those the sprite takes).
+  `tests/allegrex/run-tests.sh`: 58 groups, none failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing (the
+  parent's count on this machine too).
+- Three independent read-only reviews. The first (commits 1-3) found no change to any result; its points were taken:
+  a test's expectation, an uninitialized read after `spriteReach()` failed, `reap()` returning before giving back stale
+  busy pages and `settleOver()` not giving any back, `reads` counted after their decode ran, the workers' formally
+  racy look at the busy pages (now `knownDrawn`), comments, and the commits' order (deferred decodes first). The second
+  (commits 4-5) found the one change to a result: a skipped primitive whose texels have no memory behind them no
+  longer counted those reads in `System::unmappedReports`, which save states keep, now guarded; and asked for more
+  test cases and a smaller capture for the `readsAhead()` callback. The third checked those fixes and found one more:
+  `Memory::knownDrawn` around a palette's whole load also covered its byte-by-byte read past a VRAM copy's end, which
+  `drawnFirst()` hadn't seen (now only the copy within one area skips the wait); and asked for tests of the skip's
+  guard, of `decode()` taking the copy, and of the CPU's loads while batches draw. Those were added, and it confirmed
+  the result.
+
+**The numbers.** The RP6, the runner from adb's shell (unpinned), the Phobos app not running (checked before and after
+each round; a first set of rounds, during which the app was started, was thrown away). Medians, the builds taking
+turns. fps is the frame loop's; thread is the emulation thread's CPU time, ms a frame. The end states of all six
+scenes were the same in every build, every round.
+
+7 GE threads, 72443bc4d → the last commit, four rounds:
+
+| scene | fps | thread ms |
+| --- | --- | --- |
+| MC3 race | 34.0 → 53.5 | 26.0 → 18.5 |
+| MC3 menu | 33.3 → 71.9 | 26.1 → 13.1 |
+| GTA city | 55.1 → 78.8 | 16.3 → 11.5 |
+| GTA woods | 53.3 → 71.8 | 14.9 → 11.3 |
+| Peace Walker title | 213.7 → 224.5 | 4.23 → 4.09 |
+| Lumines demo | 171.3 → 182.7 | 4.95 → 4.67 |
+
+At 7 threads the RP6's frames a second move with the cores the threads land on (part 38): the base's race ran at
+32.8-35.3 here, 36-40 in part 46's rounds; the last commit's at 52.7-56.1.
+
+1 GE thread, three rounds (steady to under 1%):
+
+| scene | fps | thread ms |
+| --- | --- | --- |
+| MC3 race | 23.02 → 23.37 | 43.2 → 42.6 |
+| MC3 menu | 25.60 → 30.49 | 38.9 → 32.7 |
+| GTA city | 38.93 → 39.68 | 25.6 → 25.1 |
+| GTA woods | 38.97 → 39.79 | 25.6 → 25.0 |
+| Peace Walker title | 66.00 → 66.16 | 15.11 → 15.07 |
+| Lumines demo | 91.04 → 90.95 | 10.30 → 10.25 |
+
+At 1 thread only the menu moves much: its pass that keeps every pixel (164,000 pixels a frame, read from memory as it
+drew) isn't drawn, and the in-place passes go four pixels at a time from their copies. The rest is the rasterizer.
+
+Step by step at 7 threads (fps, medians of two rounds; base, then after each commit):
+- MC3 race: 34.1, 37.5, 37.2, 39.0, 38.8, 55.1.
+- MC3 menu: 33.6, 37.2, 39.2, 34.8, 39.3, 74.9.
+- GTA city: 54.9, 55.4, 59.6, 84.5, 80.6, 80.4.
+- GTA woods: 56.6, 51.0, 75.0, 67.6, 79.6, 75.2.
+- Peace Walker title: 214.2, 215.1, 214.4, 225.9, 225.9, 225.2.
+- Lumines demo: 174.2, 175.4, 171.7, 187.6, 188.2, 187.2.
+
+The ring (commit 3) is GTA's, Peace Walker's and Lumines' step; the copies (commit 5) and the skipped pass (commit 4)
+Midnight Club 3's. The exact rows (commit 2) help GTA by themselves (its shrunk frame buffer no longer read from
+memory every other frame) and are what lets Midnight Club 3's downsample, and every deferred decode, go to the
+workers. Commits 1 and 2 alone move the race and menu within a 7-thread run's spread. With the last commit, the race's
+workers are each about 60% busy and the emulation thread is the bottleneck still, at about 18 ms a frame:
+compiled code 5.4, the GE's setup about 7, the rest the kernel, the VFPU's interpreted instructions and the like;
+it no longer draws for its own textures.
+
+**Left, and why:**
+- At 7 threads the emulation thread is now its own work: the CPU (the race's compiled code about 5.4 ms a frame; the
+  VFPU with prefixes set, and the FPU's remaining conversions, still interpreted; registers held only within a block)
+  and the GE's setup (about 7 ms in the race: `project()`'s four divisions a vertex, lighting, each vertex built and
+  copied, each job copied into its batch). Each is spread thin; none is a large step alone.
+- At 1 thread the frame is drawing, four pixels at a time, bound by divisions that must stay as they are: a lit,
+  fogged, perspective-textured triangle makes about eleven four-wide divisions a four. Nothing exact is left there of
+  the size of what's above.
+- A deferred own-texture sprite is drawn a pixel at a time (`fourFriendly()` decides as the job is recorded, before the
+  copy exists); one decoded at once goes four at a time.
+- `readsAhead()` covers unturned 2D sprites in a frame buffer laid out as their texture; others drawing over their own
+  texture are still drawn at once from memory. It re-derives the jobs and relies on raster.cpp's order for such a
+  primitive: a change to either must keep them in step.
+- Deferred decodes aren't kept between batches (a texture deferred in two batches is decoded twice: about 1.25 ms a
+  frame in the race, over all threads).
+- The screen's picture reading pixels still being drawn (Peace Walker's title) still waits for them. A CPU touching a
+  busy page no batch still draws over gives nothing back till a wait or the next list (it goes the slow way meanwhile).
+- Older, seen by the reviews, left as they were: `drawnFirst()`'s span stops at a VRAM copy's end, so a palette or
+  vertices running past it into the next copy aren't waited for there (the palette's byte-by-byte read still waits in
+  `pointer()`); and `vramGuard` giving a page back calls the recompiler's `writable()`, which lets compiled stores go
+  straight to it even if code was compiled from it (only code run from VRAM the GE draws or reads would notice).
+
+## Part 48: colors, fog and depth stepped as the PSP steps them; round 5 for what's left
+
+On branch `cursor/psp-ge-fits2-2b67`, on top of #180's `cursor/psp-cpu-speed4-2b67` (a4a63b13f). A last fitting pass,
+with the measurements we already have (round 2 and round 3, `tests/psp/measurements/ge-round3` and the raw files the
+owner keeps), at the three things #178 left open: colors stepped across triangles, lighting's last six products, and
+perspective-correct texels. A rule was taken only where it reproduces every measured case it covers. Then round 5 of
+`tools/psp-measure`, for what the data couldn't settle. Original code: no PPSSPP or JPCSP source was read.
+
+### Colors, fog and depth: fitted
+
+The fitting was done by a scratch copy of the core that wrote down every triangle it set up (its corners in sixteenths
+of a pixel, their colors, fog, depths and texture coordinates), for each test, and a small program that tried rules on
+those triangles against the PSP's pictures (thousands of rules a minute, exact integer arithmetic).
+
+**The rule** (`draw.cpp`'s `stepped()`, `raster.cpp`, `four.cpp`). The GE doesn't blend a triangle's colors at each
+pixel; it steps them from one corner, with steps of limited precision:
+- **The corner**: the one texture coordinates already step from in 2D (part 10's "Fixed since"): the leftmost, the
+  topmost of two. Each value starts as exactly that corner's.
+- **The steps**: one a sixteenth of a pixel across and one down, in 16384ths of a level (14 bits below a whole level),
+  rounded down. They're worked out through the reciprocal of twice the triangle's area (in sixteenths squared) kept to
+  16 significant bits, rounded down: `2^(bits + 16) / area` for an area of at least `2^bits` and below `2^(bits + 1)`.
+  So an area that's a power of two gives exact steps, but a step that should be a whole number of 16384ths, such as a
+  ramp of 255 levels over 240 pixels (17/16 of a level a pixel), falls one 16384th short (and a step downward, one
+  further down).
+- **A pixel**: the corner's value, plus each step times the sixteenths from the corner to the pixel's middle, rounded
+  down to a whole level, held to 0-255.
+
+That explains round 3's level shortfalls: a value can come out a level below the true blend, more likely the further
+from the corner; and the vertical ramps' values a level above it where their triangles start from the bottom. The same
+stepper does **fog** (its 0-255 amount at each corner, #178's fit) and **depth** (0-65535, each corner's a whole
+number), with the same 14 bits. The cut at the near plane needed one more change:
+
+**The cut at the near plane** (`transform.cpp`'s `clipTriangle()`). A triangle with one corner past the plane leaves
+four corners, which the core walks round the edges as the two kept corners and the two cuts. It drew them as a fan
+from the first, corners 0, 1, 2 and 0, 2, 3; now it draws corners 0, 1, 3 and 1, 2, 3. In `3d-clip`, the one case
+measured (its third corner past the plane), that's the PSP's split, from the second kept corner to the cut after the
+corner past the plane: every pixel of `3d-clip` is then the PSP's, where the fan's split leaves 1113 color values a
+level apart. With the first or second corner past the plane, which split the PSP makes isn't measured: round 5's
+`clip-split` cuts with each corner past it, each way round. The hardware renderer gets the same triangles (it's drawn
+through `clipTriangle()` too).
+
+**What it does to the measured pictures** (pixels a level apart, before and after):
+
+| File | Before | After |
+| --- | --- | --- |
+| `ramp-colors` | 1712 | 0 |
+| `ramp-colors-vertical` | 1359 | 0 |
+| `ramp-colors-3d` | 6992 | 0 |
+| `ramp-fog` | 240 | 0 |
+| `3d-floor-fog` (round 2) | 497 | 0 |
+| `3d-floor-depth` (round 2, depths) | 1388 | 0 |
+| `3d-clip` (round 2) | 1512 | 0 |
+| `bezier-flat` | 15368 | 0 |
+| `bezier-curved`, `spline-edges-3` (the same picture) | 1494 | 1056 |
+| `bezier-divide-8` | 938 | 721 |
+| `spline-edges-0` | 787 | 782 |
+
+`gouraud` stays identical, and every other file is as it was: no picture got worse.
+
+**How tightly it's pinned.** Against the three color ramps, `gouraud`, `3d-clip` and the curved surfaces together, the
+nearest alternatives all lose: the reciprocal kept to 17 bits leaves `ramp-colors-3d` 144 values apart, to 15 bits
+320, an exact reciprocal (or one of a fixed 2^36 or more) 144; steps in 512ths, 2048ths or 4096ths of a level a pixel
+(rather than 1024ths: 16384ths a sixteenth), thousands; steps rounded to the nearest or toward zero, thousands more;
+starting from the first corner given, or the topmost, or the leftmost but the bottom one of two, thousands (the last
+1810 in `ramp-colors-vertical`). Depths in 4096ths or 65536ths of a depth a sixteenth leave 692 and 209 of
+`3d-floor-depth`'s 7728 measurable values apart. Bands of a power-of-two width (256, 128, 64, 16 pixels) come out
+exact under any of these, which is why `gouraud` (a 256-pixel square) always matched.
+
+**The curved surfaces** are better but not exact, and the rest isn't the stepping: in `bezier-curved` every triangle
+fits the rule exactly once its start (its leftmost corner's value) is moved by less than about 0.05 of a level, the
+steps as the rule has them; so what differs is the vertices the GE makes for a curved patch (their values, or where
+they fall finer than a sixteenth). The flat patch's vertices fall on sixteenths and its colors on whole levels, and
+it's exact. Moving the curved patch's vertices a sixteenth each way barely helps (1144 color values apart to 1139),
+nor does splitting its quads the other way (both splits tried quad by quad; the one pspautotests recorded wins in
+every quad). Round 4's `curves-*` record those vertices directly. `spline-edges-0`'s vertices are further off (4 edge
+pixels already differ).
+
+**Not changed, as not measured**: lines (colors, fog and depth along them are still blended as before; round 4's
+`lines-colors`, `lines-depth` and `lines-3d` will show whether the same stepper runs along them), sprites and points
+(nothing to step). The shine kept apart (LIGHT_MODE 1) and alpha are stepped like the colors: they're colors to the
+same interpolator, though neither was measured across a triangle (nor has the shine a hand-worked test: it goes
+through the colors' code, and the random four-at-a-time test lights triangles with it now and then).
+
+**The hardware renderer** (Vulkan) can't mirror this: its colors, fog and depth are the GPU's own blend between
+vertices, as before (part 36). Only the cut's split is shared.
+
+**Tests** (`tests/psp/draw.cpp`'s "draw steps", and new checks in `draw3d.cpp`'s "draw3d clipping" and "draw3d fog"),
+worked out by hand from the rule: a ramp of 128 levels over 15 pixels whose eighth pixel the true blend puts at 64 and
+the steps at 63, the same in depths, the same blend stepped from the bottom left corner coming out 64, the topmost of
+two leftmost corners, a triangle where 15 or 17 bits of reciprocal give another level, one where rounding the steps to
+the nearest or toward zero does; the same ramp in fog; and the cut's split, two pixels of `draw3d clipping`'s cut that
+the fan's split would give another level. Broken versions each failed them: the reciprocal to 15 or 17 bits, an exact
+reciprocal, steps rounded to the nearest, the start from the first corner, the fan's split, and the code before this
+part. "draw3d four pixels at a time against one" draws 20000 random primitives both ways, as before: the
+four-at-a-time path steps in 32 bits that may run round (every lane inside the triangle keeps its value;
+`fourFriendly()` sends triangles with steps of 2^24 16384ths a sixteenth or more, slivers, a pixel at a time), the
+other in 64 bits, each row's start in 128.
+
+### Lighting's last products: still open, and why
+
+The core takes a light's share of a color as `ceil(256 × cosine)` 256ths (round 3's fit), which gives 1620 of 1632
+values with exact cosines. The last 12 aren't a rounding detail: **the share isn't in 256ths at all.** For each
+normal, all the products measured with it (about a hundred light-and-material pairs) pin the share the GE used to an
+interval, and two of them hold no whole 256th:
+- (33, 0, 56), cosine 56/65 (220.55 256ths): the share lies between 220.86 and 220.985;
+- (65, 0, 72), cosine 72/97 (190.02): between 190.74 and 190.88.
+
+So the share is finer than a 256th, and not simply above the true cosine: round 2's `light-diffuse` (normals (k, 0,
+127 - k), its 255 channel pinning the share) has it below the cosine in places, such as (101, 0, 26), cosine 63.82
+256ths, whose share lies between 63.25 and 63.63 (0.3% to 0.9% short). It isn't a function of the normal's length
+alone: (16, 0, 63) and (33, 0, 56) are both 65 long, and their shares are over by 0.34% to 0.42% and 0.14% to 0.20%. A
+cosine worked out in floats of 6 to 24 bits (rounded each way, through a square root or its reciprocal) misses at
+least 114 of the 304 intervals. Nothing here pins the GE's arithmetic further, so lighting stays as it was. Round 5's
+`light-share-*` measure the share of 16 normals with 192 products each, finer than a hundredth of a 256th, among them
+those normals three times as long and turned.
+
+### Perspective texels: still open, and why
+
+`3d-wall-texels` (307 pixels a texel apart), `3d-floor-texels` (291) and `3d-sprite-texels` (72) stay as they were.
+Stepping u / w, v / w and 1 / w with this part's stepper (u / w and v / w in units of 1 to 2^-16 texels, 1 / w in 2^-8
+to 2^-24, steps of 2^-10 to 2^-18 of a unit a sixteenth) fits neither: the best leaves the floor 188 apart but the
+wall 389. What the pictures show instead: on the floor, where 1 / w is the same along a row, the PSP's u comes out
+short by a fixed fraction of u in each row (about 0.2% on row 164), as if 1 / w were a little high there; on the wall,
+where 1 / w is the same down a column, it's short in most columns and over in some (column 156's whole u is 235 where
+the true one is 234.98), and no one factor fits some columns' u and v together. That points at the divide at each
+pixel, of limited precision, more than at the steps; 256 texels across 256 pixels show it only where a coordinate is
+within a few hundredths of a whole texel. Round 5's `persp-*` read the coordinates to a texel in four thousand.
+
+### Round 5
+
+`tools/psp-measure`'s new first menu line, "Round 5: the GE's steps, lighting's share, texels (about 3 MB)", runs 12
+tests into `results/ge` (`manifest5.txt`), each a 256x256 picture of 32-bit words (`ge.c`'s `round5()`):
+- `steps-check`: 64 triangles at random (one to a 32x32 cell, corners to the sixteenth, colors from a fixed sequence)
+  in through mode: the rule on slanting edges and every kind of corner; `steps-depth-check`: the same with random
+  depths (written always), the depth buffer read through VRAM's fourth copy.
+- `clip-split`: six bands, each round 2's 3d-clip triangle squashed into it with its blue corner past the near plane
+  (cut two thirds of the way to it): bands 0-2 with the corners turning as 3d-clip's, the blue one first, second and
+  third (band 2 is 3d-clip's order), bands 3-5 turning the other way, blue first, second and third. The two ways to
+  split the four corners left differ in 181 pixels of each band (in the core's arithmetic), so each band will show the
+  PSP's.
+- `light-share-0` to `-3`: four normals each (rows 4j to 4j + 3), each row with its own light color and each cell its
+  own material color (levels 96-255): 192 products a normal, which pin its share finely. The normals: round 3's two
+  odd ones and (16, 0, 63), as long as one of them, and round 2's (101, 0, 26); the same four three times as long;
+  four more of round 2's `light-diffuse` normals; and the first four turned (cosines a / c).
+- `persp-wall`, `-divide`, `-w3`, `-floor`, `-sprite`: a repeating texture and coordinates up to 4096 texels, so each
+  pixel shows its coordinates to the texel (its texel is their whole part less a multiple of 256, which a prediction
+  within 128 texels tells; from one pixel to the next they change by less than that, the most at the far end): round
+  3's wall and 3D sprite and round 2's floor (the floor's v and the sprite's coordinates to 2048 texels, so they
+  change by under 128 a pixel); a wall whose u / w is the same at every corner, so u shows 1 / w alone; and one at w 3
+  everywhere, no perspective, which shows the steps and divide by a 1 / w that isn't a whole number of any power of
+  two.
+
+#178's round 5 probes (source only, never run) are gone, each measured more finely by one of these: its color ramps by
+`steps-check`, its two lit cells by `light-share-0`, its shorter wall and floor by `persp-wall` and `persp-floor`.
+
+`tests/psp/measure.cpp` drives the new line too (the menu's lines below it moved down one) and checks every file is
+written; once a PSP's `results/ge` with `manifest5.txt` is given in `PSP_GE_RESULTS`, it lists what differs, as for
+the other rounds. `pspmeasure.elf` in `tests/psp/programs` is rebuilt (its README has the new SHA-256), in the same
+pspdev image as before (`ghcr.io/pspdev/pspdev@sha256:54895e6f...`), which rebuilds the previous `pspmeasure.elf` byte
+for byte from its own source; the other programs are as they were. Round 4 hasn't been run on the PSP yet either: its
+line is the second.
+
+The owner's copy: `.local/psp-round5/` beside the repository (not committed) holds the EBOOT.PBP, its SHA-256 and a
+HOW-TO.md (where it goes on the memory stick, which line to run, how long, and which folder to bring back).
+
+### Review
+
+An independent read-only review found no bug in the core: no overflow or undefined behavior in `stepped()` and the row
+starts (checked against exact 128-bit arithmetic on about 3 million triangles, slivers and far corners among them),
+the scalar and four-at-a-time paths byte-identical over 550,000 extreme triangles, and nothing else changed (flat
+shading, the shine, fog off, clear mode, the hardware renderer, lines, points, sprites; equal corner depths still give
+exactly that depth). What it found, fixed before committing: the reciprocal's formula off by one in this part and in a
+comment; probes credited to round 3 that are round 2's; the cut's split stated as if measured for every corner;
+`clip-split`'s middle band turning the other way round as well as moving the corner past the plane (now six bands,
+each corner past it each way round); light and material levels taken in one expression, in an order C leaves open (now
+one statement each); the floor's v changing by more than 128 texels a row at the far end, too much to tell which
+multiple of 256 it is (now a span of 2048, and the 3D sprite's too, which came close); stale comments, an unused
+function and field; no hand-worked test of fog's steps (added). Seen and left as it was, older than this part: lines
+and points in through mode turn a depth that isn't a number into a whole number (undefined behavior), where triangles'
+corners now guard against it.
+
+### Checks
+
+- `tests/psp/run-tests.sh` (sanitizers on): 341 groups, 0 failures (one new: "draw steps");
+  `tests/allegrex/run-tests.sh`: 58 groups, 0 failures; `tests/psp/ares/run-tests.sh`: 307 checks, 0 failed.
+- The measure test against the owner's round 2 and 3 files: as in the table above, nothing else changed; it drives
+  round 5 through the menu and every file is written.
+
+### Round 4 again: the GE's waits timed (2026-10-09)
+
+Running round 4, the owner's PSP froze at `curves-count` (16, 63, 64 and 65 divisions in one list) and
+`curves-count-128` (100 and 128), and had to be switched off by hand, twice a test before results.c set it aside.
+Most likely the GE never finished the list and `finishList` waited for it in `sceGeDrawSync(0)` for good (part 33
+had expected a stall past pspsdk's 64); nothing showed whether the CPU was still running. Now:
+- `waitForGe` peeks (`sceGeDrawSync(1)`) every millisecond for 5 seconds at most. A list still not done then is a
+  stall: `<test>.stalled` records it (how long, the driver's state, what the list held) before anything is done
+  about it, so if the reset stops the PSP the next start gives up on that test at once rather than after a second
+  freeze (results.c). Then `sceGuBreak(GU_BREAK_CANCEL)` (`sceGeBreak(1)`: every list thrown away and the GE reset),
+  its result recorded, and `sceGuTerm`/`sceGuInit` (its own list gives the GE back its first state; it waits for
+  that list, for good if the GE is still stuck, and the record then lacks its result); the test saves what the GE
+  had drawn, as `.bin`, and the round goes on. A freeze with no "the GE stalled" on the screen and no `.stalled` is
+  the other kind (the CPU stopped too), handled as before.
+- Each count past 64 is a test of its own: `curves-count` (16, 63, 64; rows 0-2), `-65`, `-100`, `-128`, `-200` and
+  `-255` (rows 3-7, each in its own row as before). What the earlier program left of the counts (`.part`, `.again`,
+  `.stopped`) is cleared once in a results folder (`curves-count.timed` marks it), so they run again; finished
+  `.bin` files are kept.
+- `stall-check`, before them, gets the GE stuck on purpose (a list left waiting at its stall address), so the reset
+  runs whenever round 4 runs in a results folder for the first time, in this core too (the measure test checks its
+  `.stalled` and that 16 divisions' count drawn before the reset and after it match; then that results.c gives up on
+  this program's own leftovers, which ge.c's one-time clearing leaves alone). On the PSP, a break on a list stopped at
+  its stall address is what pspautotests' gpu/ge/break recorded; a GE stuck inside a patch is unmeasured, and the next
+  run will show whether the reset frees it.
+
+`pspmeasure.elf` is rebuilt in the same image; the owner's copy is `.local/psp-round5b/` (EBOOT.PBP, its SHA-256,
+HOW-TO.md).
+
+## Part 49: the Vulkan renderer in play on the RP6, and its blending without rasterization order
+
+On branch `cursor/psp-vk-play-2b67`, on top of #186's `cursor/psp-hle-games10-2b67` (#183, #182 and #180 under it).
+docs/psp-gpu-renderers.md has the detail ("Without rasterization order", "Upscaling", and the accuracy and speed
+tables). Original code: nothing of PPSSPP's or JPCSP's used, copied or translated. Software stays the default and
+untouched; Native stays exact where it was (every blend still read in rasterization order, so on Turnip the pictures
+are as before).
+
+**In play, in the app** (the RP6, Adreno 740, Turnip from the Driver Manager: blending in the shader, in order;
+Vulkan at Native unless said; the app's per-second stats over 15 s, 60 being full speed; each game entered by scripted
+presses on the app's on-screen buttons and left by force-stopping the app, nothing saved):
+
+| Game | Reached | Frames a second |
+|---|---|---|
+| Midnight Club 3: DUB Edition | a Quick Race, racing | 29.9 |
+| GTA: Liberty City Stories | a new game's first mission, driving | 50.6; 4x 22.8, 10x 10.8; Software 60.0 |
+| GTA: Vice City Stories | a saved game, in the city | 57.7 |
+| Burnout Dominator | a race | 52.4 |
+| Burnout Legends | a Single Event race, at 123 mph | 43.2 |
+| WipEout Pure | a Single Race | 19.4 |
+| Metal Gear Solid: Peace Walker | a new game's beach tutorial | 45.0 |
+| MotorStorm: Arctic Edge | a Free-Play race (and its crash replay) | 50.7 |
+| Ace Combat X | a campaign sortie, in flight | 60.0 |
+
+The pictures were right to the eye in all of them, at each resolution: nothing missing, misplaced or flickering, no
+crash. Killzone wasn't started in the app: it saves by itself, to the owner's memory stick (the runner, with a
+scratch one, reached its Start Game menu). Ridge Racer 2 asks for a new driver profile again and again (the kernel's,
+not the renderer's; part 50 fixes it), so only its menus were seen: the 8x line, below. At 10x the GPU is the bound (81% busy at its
+top clock, 680 MHz); at 4x it wasn't (about 56% busy at 401 MHz, the CPU 61%). Going home and back while LCS
+ran at 4x kept presenting; so did making the window smaller and back while it presented (`wm size 900x1600`, then
+reset: about 30 fps each way). Rotation couldn't be tried: the RP6 puts its rotation lock back to landscape at once
+(`cmd window user-rotation lock 0` or `3` snaps back to `1`).
+
+**Faster at Native in software.** Part 47 made the software renderer's seven threads much faster, and in the 3D games
+they're now ahead of Vulkan at Native: LCS above, driving, 60.0 frames a second against 50.6; from adb's shell
+Midnight Club 3's race 53.5 against 33.8, GTA's city 77.2 against 63.7. With Vulkan the emulation thread is the
+bound: the transform and setup as before, the recording, and a wait whenever the CPU or the GE reads what the GPU
+drew (the race reads back 4 times a frame). WipEout Pure's race is the extreme: 209 submits, 9 read-backs and 53 new
+textures a frame, Vulkan 8.6 frames a second on the M1 against 16.7 in software. On the RP6 Vulkan's lead is in the
+2D games, in drawing sharper above 1x, and in leaving six cores idle (on the M1 seven threads lead everywhere).
+
+**Without rasterization order, the GPU blends again.** Part 45 had every blend read the frame buffer in the shader;
+without the order each such draw takes a barrier and holds no overlapping primitives, so a 3D game's blending became
+thousands of draws a frame: Midnight Club 3's race 4 million in 300 frames, 1.3 frames a second on the M1 (MoltenVK)
+and 13 on the RP6's own driver. Now, without the order, blending in an 8888 frame buffer by the factors and operations
+the GPU has is the GPU's again (38.2 and 32.2 frames a second), and only what it can't come close to reads in the
+shader, split as before: a write mask keeping part of a channel, a logic operation, the absolute difference, doubled
+alphas, and any blend in a 16-bit frame buffer, where the PSP narrows each result to the format, dithered, before the
+next blend reads it (Peace Walker's title, 5551, was 39.7% identical without that, 99.7% with). In order every blend
+reads as before, now without the barrier between draws, which the order makes needless once every pipeline of the
+subpass asks for it (in a run before and after, on an earlier build, GTA's woods 59 to 71 frames a second on Turnip
+from adb's shell).
+
+**The GPU's blending closer** (`draw.frag`'s `TERM`): where the GPU takes output 0 as it is, the shader makes that the
+PSP's whole-number source term and puts it a quarter of a step below itself where the GPU adds the destination's
+term, above where it subtracts, so the GPU's one rounding lands where the PSP's dropped fractions do. Alpha blending
+over every value, in a model: channels the same 50.6% to 93.7% (92.7% in half floats). The tests' random 8888 blends:
+8893 channels of 9216 the same on the M1 and on both of the RP6's drivers, none more than 8 apart.
+
+**Qualcomm's own driver reads nothing.** The RP6's system driver (build of 12/27/23) passed the start-up check's small
+pictures, but in a game's frame buffer a draw that read sometimes saw the pixels as they were before the draws just
+before it, with a barrier, an image barrier or shader-read access as well: from adb's shell Midnight Club 3's menu was
+10% identical, noise in all but Peace Walker. So `vulkan.cpp` turns reading off for that driver (its ID, from
+`VkPhysicalDeviceDriverProperties`) where it has no rasterization order, and the GPU blends everything there; with
+the order, should its check fail, the retry reads nothing either (`Backend::readsApart`). The start-up check gained a
+game-sized picture (480x272 in rows of 512: 128 opaque sprites, each under a blended one moved a few pixels, through
+a write mask keeping part of each channel), which caught that driver some of the time; a driver not known that fails
+it in order is checked again with the GPU blending, then with nothing read (`System::startRenderer()`).
+The log's start-up line says "blending in the shader, in order", "blending in 8888 by the GPU, the rest in the shader,
+overlaps apart", or "blending by the GPU".
+
+**The 8x line**, found with the runner on the M1 at 8x from a state just before Ridge Racer 2's title, a frame every
+10, each column compared with its neighbours: a line down the middle (the PSP's x = 240) in each frame that draws the
+menu's picture. The picture is two 2D quads meeting there, the right one's texture mirrored (u from 240 back to 0),
+filtered. At 1x every pixel's middle samples at least half a texel inside the picture; at 8x the GPU's pixels a
+sixteenth from the seam sampled at u = 239.94, which the filter blended with texel 240, past the picture. Above 1x a
+2D triangle's texture coordinates are now held inside its corners' by what half a pixel moves them, half a texel at
+most (`triangle()`, `draw.frag`), as far as its pixels' middles reach at 1x: the line is gone from every frame, and 1x
+is untouched.
+
+**Accuracy on the RP6's GPU** (10 frames of each of the six StateVersion 17 scenes, Software against Vulkan, pixels
+identical; docs/psp-gpu-renderers.md has the channels apart): from adb's shell on the system driver, which reads
+nothing, Lumines 73.0%, Peace Walker 40.4%, Midnight Club 3's menu 88.7% and race 67.1%, GTA's city 52.2% and woods
+49.3% (45.6%, 39.8%, 78.7%, 33.9%, 41.4% and 39.2% before `TERM`); with Turnip, the app's driver (the runner opening
+its `.so` itself, as the app does, a scratch patch), 97.8%, 100.0%, 97.5%, 87.8%, 73.4% and 80.6%; on the M1, 77.9%,
+99.7%, 92.6%, 80.3%, 52.9% and 61.9%. adb's shell can't use the app's Turnip: the app loads it through libadrenotools.
+
+**Tests**: `gpuBlendingApart` (new): without the order, the GPU's 8888 blending draws nothing in the shader and splits
+nothing, at least 85% of channels the same and no more than 3 in 1000 more than 8 off (run on a GPU that reads nothing
+too); masks, logic operations, the absolute difference, doubled alphas and every 16-bit blend, dithered or not, read
+and are the software renderer's bytes in each format; a 16-bit blend by the GPU's own factors is a draw that reads.
+`gpuSeams` (new): two 2D quads meeting at a mirrored seam, filtered, at 1x, 2x and 3x: every one of the GPU's pixels
+the picture's, memory the software renderer's (without the held texels it fails at 2x and 3x). `gpuCheck`: the
+game-sized picture's 128 blends read, and the check passes with nothing read. `gpuBlending` asks for every blend to
+read, as in order. The GPU tests built for Android pass on the RP6 on Turnip and on Qualcomm's driver.
+
+**Checks**: `tests/psp/run-tests.sh` (sanitized) 342 groups, none failing; `tests/allegrex/run-tests.sh` 58 groups;
+`tests/psp/ares/run-tests.sh` 307 checks, none failing. An independent read-only review passed it with fixes, all
+taken: the check's blended sprites over their opaque ones, the held texels scaled by the coordinates' slope, the
+driver's ID through the extension alone, `readsApart` so a retry on that driver reads nothing, doubled alphas read
+only for the operations that use factors, `TERM` not where output 0 is also the destination's factor, tests that
+can't pass without the GPU drawing, and the docs brought in line. The final build installed (106205, `adb install
+-r`): Ridge Racer 2's title at 8x without the line (39 fps, the GPU 80% busy), LCS in play at Native; then the
+Renderer and Resolution put back to Software and Native.
+
+**Left**: Vulkan at Native behind seven software threads in the 3D games (the emulation thread's recording and its
+waits at read-backs; WipEout's submits); Qualcomm's own driver's 16-bit blending (Peace Walker's title a step or
+three apart) and its reads, which a render pass of their own might make right (not tried); blended pixels not
+dithered where the GPU blends; a 2D sprite's stepped coordinates not held above 1x (none seen bleeding); rotation on
+a device that allows it; Killzone in play, and Ridge Racer 2's races; the swapchain in the panel's own orientation.
+
+## Part 50: Ridge Racer 2's driver profile — the keyboard's answer
+
+On branch `cursor/psp-hle-games9-2b67`, on top of #182's `cursor/psp-ge-fits2-2b67` (#180 under it). Sources: pspsdk's
+`psputility_osk.h` and its keyboard sample (`samples/utility/osk`), pspautotests (it has no keyboard program or
+recording; utility/dialog's sizes and statuses are part 42's), the PSP Developer Wiki through web.archive.org (no page
+on the keyboard or the utility dialogs in its list of pages, December 2023), and the games' own code, traced and
+disassembled with a scratch runner. No PPSSPP or JPCSP source was read.
+
+**The report.** On the owner's RP6, Ridge Racer 2's new game showed "Welcome to the world of Ridge Racer! Please
+create your driver profile." with an OK button, then went back to the menu instead of making a profile.
+
+**Reproduced** in the runner, Software, from boot with presses (`~/phobos-work/scratch/rr2/race.script`): Select past
+the Rally-X loading game (frame 650), Start past the intro (900), Start at the title (1200), Cross on NEW GAME (1300),
+the notice, Cross on its OK (1450). A scratch build logged every sceUtility call: its parameters' size, the savedata
+mode and names, the keyboard's fields, the answer and every status asked for (`scratch/rr2/trace.patch`):
+- At boot: savedata's sizes mode (8, 0x600 bytes) answered 0; its autoload (mode 0, UCES00422 / 000 / DATA.BIN, into
+  0x6900 bytes) no data (0x80110307), as there's no profile yet.
+- At OK (frame 1486): sceUtilityOskInitStart, 0x40 bytes, one field: "Driver Name (7 CHAR MAX.)", holding "DAMACY"
+  (the game's default driver name), room for 8 characters with the NUL, at most 7, input type 4, one line. Two frames
+  on the game starts it again and is refused INVALID_STATUS, one being current (it doesn't look at that answer; a PSP
+  refuses it too, part 42). The statuses: 1 for 18 frames, 2 (Update: the text as it was, the field UNCHANGED), 3
+  (ShutdownStart), 4, 4, 0.
+- Then no utility or I/O call and no missing function before the title showed again (frame 1520).
+
+**Where the game gives up.** Its keyboard poller (0x08878164; its menu script's commands 0xcc and 0x136 open the
+keyboard, 0x08872280) acts at status 0 on the field's result (read from 0x08a7402c): CHANGED (2) copies the name (7
+characters at most) and tells the script the player answered (1); CANCELLED (1) and UNCHANGED (0) alike tell it the
+player backed out (2), and the script goes back to the title. The kernel answered UNCHANGED for every field that
+wasn't empty (part 22's choice, listed there among the uncertain things): here, the default name.
+
+**What the PSP answers.** Nothing recorded says: pspsdk's header only names the three results, its sample prints them,
+and pspautotests has no keyboard program. The games do. Of the 23 games here, ten import the keyboard's functions
+(007: From Russia with Love, both Ace Combats, Brave Story, Killzone, Midnight Club 3, Peace Walker, Ridge Racer 2,
+Space Invaders Extreme, WipEout; Peace Walker from a module it loads later, Brave Story only GetStatus, its keyboard
+its own). Where each followed reads a field's result once its keyboard is gone:
+- Ridge Racer 2: only CHANGED is an answer, though the field holds a name of its own.
+- Killzone (0x089641b8): the name copied only when the common result is 0 and the field CHANGED; its field holds the
+  name it has.
+- Space Invaders Extreme (0x088825d8): the name taken only when the common result is 0 and the field CHANGED, else
+  -1; its field starts empty.
+- Midnight Club 3 (0x08b3f00c): anything but CANCELLED taken as the answer.
+- WipEout takes the text whatever the result; Peace Walker checks the text itself (part 22); the others weren't
+  followed that far.
+Killzone, Space Invaders Extreme and Midnight Club 3 can't tell the two answers apart (Killzone's field holds the
+name it keeps either way, Space Invaders Extreme's starts empty); Ridge Racer 2 can. It fills the field with a name
+of its own and takes only CHANGED, so it would send every player who kept that name back to its title if a PSP said
+UNCHANGED of it: a PSP is taken to say CHANGED of every field the player confirms, edited or not.
+
+**The fix** (`utility.cpp`'s `keyboard()`): every field answered is CHANGED (2), its text as before (what it started
+with, an empty field the console's nickname "PSP", as far as its room and limit allow). "utility keyboard" checks each
+field CHANGED, Ridge Racer 2's field among them (DAMACY, room 8, limit 7); the old answer fails 6 of its
+checks. No kernel state is added: the save states' version stays 17.
+
+**After the fix**, from boot (Software: `scratch/rr2/sw-race`; the PNGs in `scratch/rr2/evidence`): the name taken,
+"DRIVER NAME DAMACY. Would you like to proceed?", YES; the profile saved (savedata mode 3, 0x600 bytes:
+`PSP/SAVEDATA/UCES00422000/DATA.BIN`, 26,628 bytes, DAMACY among them); "Would you like to turn Autosave ON?", YES;
+the main menu; Arcade, Seaside Route 765, class 1, the Shootaway Fiera, automatic, OK, NOW LOADING, and the race: GO!
+at frame 4200, 158 km/h in the tunnel at 4800, Cross held. Vulkan (MoltenVK, the M1, `scratch/rr2/vk-race`): the same
+screens at the same frames. Booted again with that memory stick, the autoload finds the profile (0), the title offers
+CONTINUE, which leads to the main menu, and Options' NAME CHANGE opens the keyboard holding DAMACY.
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 340 groups, none failing. `tests/allegrex/run-tests.sh`: 58
+groups, none failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing.
+
+**Left, and why:**
+- The keyboard isn't drawn (the screen stays black the 18 frames it starts and the frame it runs), as with every
+  dialog here.
+- A save is its data file alone (no PARAM.SFO, icons or encryption), as before: the game reads it back.
+- The kernel's player never cancels a keyboard, nor answers a field UNCHANGED: whether a PSP ever says UNCHANGED (of
+  a second field, say) isn't known.
+
+## Part 51: the library run again on the whole stack — three regressions, and what stopped games most
+
+On branch `cursor/psp-hle-games10-2b67`, on top of #183's `cursor/psp-hle-games9-2b67` (the Vulkan renderer, the
+speedups, the VFPU carry fix and Ridge Racer 2's keyboard under it). Sources: pspsdk's headers, pspautotests'
+programs and recordings (each named below), and the games' own behaviour, traced and disassembled with a scratch
+runner. No PPSSPP or JPCSP source was read.
+
+**The run.** The owner's 266 games, as `docs/psp-compatibility.md`'s run went (tools/psp-runner/README.md, "The
+report"): Software, 7 GE threads, 3600 frames, Start pressed at 120 and Cross at 1800, PNGs at 60, 300, 1200 and
+3600, a scratch memory stick each. First on the stack's tip (`a2b48f8f8`, #183) as the library was copied in (a game
+taken once its size held still across looks a minute apart: run 1), then part way through this branch (run 2) and at
+its end (run 3). Each game's frames were judged by eye (menu, gameplay, movie, loading, black, hang) and compared row
+for row with the report (`b27f084a5`); in run 3 a game whose frames matched run 2's kept run 2's judgement.
+That report's runs pressed nothing (the runner's presses were broken then), so every game that looked worse was run
+again without presses on both commits before calling it a regression.
+
+**Regressions: two, both since scePsmf (#160, `18c58f968`).** Mega Man Maverick Hunter X and Juiced: Eliminator
+skipped their movies while scePsmf was missing; now they play them through sceMpeg, and stalled (runners built at
+`b27f084a5` and `18c58f968` showed where it began). Three things, each its own commit:
+- *The ring past the movie's end* (`mpegReturned()`). Mega Man's ring callback reads 32 packets at a time from
+  `rockx_pack.dat`, a file that goes on past the movie ("LINK..."), adds Put's answer times 2048 to a count, and
+  starts the movie only when that count equals sceMpegQueryStreamSize's (0xB7800, 367 packets) or the ring is full
+  (1600 packets: never). The count overshot, and the screen stayed black. Every 2048-byte packet of a PSMF movie
+  starts with a pack's start code (00 00 01 ba: all 129 of pspautotests' `test.pmf`, all 74,871 of Ridge Racer 2's
+  15 movies), so once a ring has had a pack, a packet without one is past the movie's end: Put stops before it, its
+  callback isn't asked again, and the movie has ended. What comes before the first pack (a header, from a game that
+  reads its file from the start) is taken, and a header coming round again after packs is the movie starting over
+  when the feeding began with one (Space Invaders Extreme's callback goes back to its file's start). A ring with no
+  library keeps no such state and takes everything. The state is two bits in the library's own memory (0x714), which
+  sceMpegCreate zeroes and a flush clears: no save state change. Chosen, as no recording shows it.
+- *Frame width 0* (`mpegFrameWidth()`). Juiced decodes with a frame width of 0, and its pictures went nowhere: 0 is
+  now the width sceMpegCreate was given (pspmpeg.h: the display buffer's), kept at 0x710; sceMpegAvcDecodeStop's last
+  picture too.
+- *Sound past its end* (`sceMpegAtracDecode`). As each movie ends, Juiced's movie loop, its data fed and its ring
+  empty, calls sceMpegAtracDecode with no new access unit to drain its sound buffers, and abandons the movie (then
+  waits for good) at any error. Once a movie's sound has been decoded, a unit with nothing in it decodes to silence;
+  before that, or with no buffer, it's 0x807f00fd, as video/mpeg/basic recorded for a movie with no sound.
+Tests: "mpeg ring at the movie's end", "mpeg ring fed round and round", "mpeg decode at the library's width", "mpeg
+sound past its end"; the random packs test keeps its packets that aren't packs and its checker now models the cut.
+
+A third regression came from this branch itself: fix 1 below (a memory stick callback told the stick is in as
+it's registered) left Patapon 2 deadlocked at boot in the second run; fix 17 put it right.
+
+The other rows that rank lower than in the report weren't the code (docs/psp-compatibility.md goes through all 26):
+games that now get the runner's presses go on from a menu or notice to a movie, a demo or a screen the old runs
+never reached (each shows its menu again run without presses); some get further than before (past a "no Memory
+Stick" notice, or into an intro movie scePsmfPlayer now plays); and some show the same at the report's commit, a
+runner built there run without presses (black, loading, or the same intro frame the report judged a menu).
+
+**What stopped games.** In the first run 58 ended black, 3 hung and 3 timed out; 24 games stopped at a missing
+function (mostly one game each). The fixes, each its own commit with its tests, in the order they went in:
+1. *A memory stick callback is told the stick is in as it's registered* (`sceIoDevctl` 0x02015804/0x02415821).
+   pspautotests' `mstick` recorded the callback running at the next CheckCallback with count 1 and event 1 (inserted).
+   50 Cent, Dirt 2, Crisis Core, Hexyz Force, Patapon 1 and 2, Parodius, Sonic Rivals 1 and 2 and Ys: The Ark of
+   Napishtim learn of the stick only so, and said none was inserted, or that it was full.
+2. *A file without PGD's header is read as it is once its key is given* (ioctl 0x04100001): 7th Dragon 2020's
+   translations keep their data decrypted, yet set a key and retried for good on the refusal.
+3. *A fixed pool's alignment of 0 is the default* (threads/fpl/create): Brothers in Arms: D-Day.
+4. *Sony's static EBOOTs without sections find their module info* in the first program header (Ghostbusters,
+   Dissidia 012, Dragon Ball Z: Tenkaichi Tag Team, Disaster Report 3, Kurohyou 2, Tekken 6, Monster Hunter Portable
+   3rd HD).
+5. *The program's first thread is made, and goes, as a module's start thread*: it starts at the module_start the
+   program exports, with module_start_thread_parameter's priority, stack and attributes, and is deleted when it
+   returns. Ghostbusters asks for a 1 KiB stack; Death Jr. and Ys Seven need the 256 KiB back ("mem tarine").
+6. *sceUtilityLoadUsbModule/UnloadUsbModule*: ATV Offroad Fury Pro (black from boot at its assert).
+7. *Writing save data needs the save to be there* (utility/savedata/saveemptyfilename: NO_DATA): Hot Shots Golf 2.
+8. The three movie fixes above.
+9. *sceRtc's day of the week, 64-bit time_t and when the clock was set*: sceRtcGetDayOfWeek by Zeller's congruence,
+   which gives all twelve answers rtc/lookup recorded, impossible dates included (only January and February are
+   counted as the year before's; 0 is Sunday, though psprtc.h says Monday); sceRtcGetTime64_t as rtc/convert
+   recorded; sceRtcGetLastAdjustedTime and GetLastReincarnatedTime, both when the PSP started here. Juiced 2 (each
+   frame), LittleBigPlanet, Kurohyou.
+10. *sceKernelStopUnloadSelfModule* (MediEvil Resurrection's program, once it has started the game's module).
+11. *sceIoAssign* (Metal Gear Acid, Ridge Racer: disc0: from umd0: through isofs0:, which it already is).
+12. *sceImposeSetUMDPopup* (every Patapon), *sceUsbStart/Stop/Activate/Deactivate* (OutRun 2006),
+    *sceDisplayIsForeground* (display/isstate: 1 with a frame buffer; Power Stone Collection),
+    *sceKernelReferSystemStatus* (Dante's Inferno), *sceUtilitySetSystemParamInt* (Colin McRae Rally 2005), each
+    its own commit.
+13. *The savedata sizes mode reads no names of its own*: the save it measures is msData's. Valhalla Knights 2 asks
+    with empty names, and took the refusal for a memory stick too full to save on.
+14. *A program that's a PRX goes 16 KiB into user memory*, at 0x08804000: pspautotests' recordings of PRXs have
+    their code there (cpu/cpu_branch's 0x420 bytes in at 0x08804420, video/pmf's ring callback at 0x088042b4) and
+    their data (audio/mp3/stream's buffer at 0x0882ba40). The program's block still starts at the partition's
+    start, the 16 KiB below held with it: sysmem/partition found the lowest free place with room for 1 MiB. Fan
+    translations call code they added by its address: Persona 2: Eternal Punishment's start-up calls 0x08c47c84
+    with no relocation, which held its data when the program sat at 0x08800000. With it, Persona 2, both Tales of
+    Phantasia translations, Fate/Extra's perfect patch and Growlanser IV no longer crash at boot, Armored Core:
+    Silent Line Portable's True Analogs patch no longer stops in a game thread, and Formula Front's no longer loads
+    for ever at 18 frames a second (a runner built just before the change shows both).
+15. *A ring may have more than 4096 packets*, when its memory fits (`sceMpegRingbufferConstruct`). Sega Rally Revo
+    makes a ring of 4800 packets with their memory and asserts when that's refused. video/mpeg/ringbuffer/construct
+    gave every count it tried 4096 packets' memory (0x868000): 4097 was refused, but -1, 0x7fffffff and 0x80000000
+    were taken. Every line it recorded fits one rule: refused when the packets' memory, as
+    sceMpegRingbufferQueryMemSize reckons it in 32 bits, is more than the size, both taken as signed. Put,
+    sceMpegGetAvcAu and sceMpegGetAtracAu now take a ring of up to `RingMostPackets` (0x8000, 64 MiB of data, more
+    than any ring can be) where they took 4096, and so do the save state's checks. Sega Rally Revo now shows its
+    autosave notice and its title.
+16. *sceMpegAvcDecodeDetail gives the decoder's newest picture's width and height* at 8 and 12 of the details.
+    Spectral Souls (which fix 1 let past its "no Memory Stick" prompt, to its movies) checks those two words after
+    each decode and asks again while they're 0; its movie code (0x08840c58) draws the picture from (1, 1) to
+    (width - 1, height - 1) by them. Left at 0, a few texels of the picture's corner were stretched over the screen,
+    the same on both renderers, and its intro played as coloured gradients. Now the intro plays and the main menu
+    follows. The rest of the details are left as they were (nothing of them is recorded), and with no picture held
+    (before the first, after a flush) nothing is written. Space Invaders Extreme, which also asks after each picture,
+    is unchanged.
+17. *A semaphore's CB wait runs its notified callbacks first, when it has no timeout and nobody else is in line*
+    (`waitSemaphore()`). Fix 1 broke Patapon 2: its main thread registers a memory stick callback, then CB-waits on
+    a semaphore that is free, with no callback point between, and the callback, notified as it was registered,
+    first waits on that same semaphore. Taking the count and then running the callback (as every wait that ends at
+    once does) left the callback waiting on its own thread for good. Now such a wait runs its callbacks at once, in
+    its wait (no other thread runs first: threads/callbacks/nested has a CB wait that ends at once not yield to one
+    of the same priority), and takes the count after them if it's still there, ahead of any thread that queued
+    meanwhile; a callback deleting the semaphore ends the wait as deleted. With a timeout, or with another thread in
+    line (waiting, woken for its callbacks, or its wait set aside while they run: served in order, one wanting more
+    could hold this one up), the count is taken first as before. Chosen: no recording shows the order
+    (threads/callbacks/afterwait's callback never looks at the semaphore), and the game shows this one. Patapon 2
+    reaches its save prompt.
+18. *A ring made for a game's own copy of the library is pspsdk's 44 bytes* (`sceMpegRingbufferConstruct`). With the
+    firmware's library, construct records a ring of 48, the caller's global pointer last. Miami Vice loads its own
+    MPEG.PRX (stood in for) and keeps its movie's file descriptor in the word after a 44-byte ring: written over with
+    the global pointer (0x08b98530), every read of the movie failed (0x80020323, a bad descriptor) and the game
+    retried for good on a black screen ("READ FAILED. RETRY..."). Nothing but the library would read that word, and
+    the ring's callback already runs with Put's caller's global pointer, so the word is left alone with a game's own
+    library. Miami Vice now plays its intro movies and reaches its title; Crash Tag Team Racing, which brings its own
+    library too, no longer stops after its legal screen (a runner without this fix still crashes there).
+19. *sceUtilityLoadModule takes the network modules 0x107 and 0x108.* pspsdk's list stops at 0x106; Macross:
+    Triangle Frontier loads 0x108 at boot and, refused, waits six frames and tries again, for good, on a black
+    screen. 0x107 is taken with it (a group's modules are numbered without gaps; 0x308 was taken on the same kind of
+    evidence in part 37, for Ace Combat: Joint Assault), 0x109 is refused. Macross now shows its logo, its autosave
+    notice and its next prompt.
+20. *A movie has ended once a Put has given its whole stream* (`sceMpegQueryStreamOffset`, `mpegFinish()`). The
+    last access unit comes only once the library knows the movie has ended; it learnt that only from a feeding that
+    came up short. Games black after their logos ended in their movie loops, sceMpegGetAvcAu and GetAtracAu giving
+    "no data" for good, the ring never quite free: Disney-Pixar Cars: Race-O-Rama gives its whole 561-packet movie
+    in one Put (its callback reads it out of a container file), Pursuit Force: Extreme Justice asks for just what's
+    left and then for nothing, MX vs. ATV Untamed the same. Sony's movies end with no program end code (Ridge Racer
+    2's twelve and pspautotests' test.pmf: padding after the last PES packet), and each game reads its movie's
+    header with sceMpegQueryStreamOffset, its handle given, right after making the library. So the library keeps the
+    stream's size in packets from that header, counts the packs Put gives (a flush, or the header coming round
+    again, starts the count over; a flush keeps the size), and the movie has ended when a Put stops having given
+    exactly that many, as when a feeding comes up short (a feeding that goes on past them is the movie going round
+    again, its access units whole). Both words are in the library's own memory, cleared by sceMpegCreate: no new
+    save state. Cars now reaches its racing attract scene, Pursuit Force and MX vs. ATV Untamed their titles, and
+    Blitz: Overtime, Death Jr. and its sequel, Disaster Report 3 and Dead Head Fred get past their movies to their
+    titles or menus (a runner without this fix shows them as before).
+
+**After.** Run 3, against the report and run 1 (gameplay counted as menu and a hang as black, as the report did):
+
+| | Report (`b27f084a5`) | Run 1 (#183) | Run 3 |
+|---|---|---|---|
+| Menu or gameplay | 141 | 148 | 175 |
+| Movie | 35 | 43 | 63 |
+| Stuck loading | 13 | 8 | 5 |
+| Black or hang | 73 | 64 | 21 |
+| Timed out | 4 | 3 | 2 |
+
+81 games are further along than in the report; 14 stop at a function not implemented yet, where 77 did. Of the
+report's 22 games that had gone from a menu to black, 18 show something now; Black Wolves Saga (PGD-encrypted install
+data, which the kernel can't decrypt yet), The King of Fighters - Orochi Saga (the sceCcc library), Melodie (a 40
+MiB block of memory) and Ridge Racer (black frames after its opening movie, cause not found) are still black.
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 362 groups, none failing. `tests/allegrex/run-tests.sh`: 58 groups,
+none failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing. Each batch reviewed independently, and what
+the reviews found was fixed: among it a looping movie's header, the fuzz checker and the silence path's buffer (the
+movies); the ring-size rule's signed comparison and the big rings' tests; a thread with its semaphore wait set aside
+in its callbacks counted as in line, the callbacks run in place and the wait kept first in line (fix 17); the end of
+a stream counted exactly, so a movie fed round again keeps whole access units, and its size kept across a flush
+(fix 20). The save states' version stays 17.
+
+**Left, and why.** The libraries the kernel doesn't have yet: sceCcc (The King of Fighters - Orochi Saga, Genso
+Suikoden; pspautotests' ccc/convertstring records its conversions), thread-local storage pools (God Eater 2),
+scePauth and sceJpeg (Monster Hunter Portable 3rd), scesupPreAcc (Persona 3 Portable's loading screen). PGD
+decryption (Black Wolves Saga). sceKernelExtendThreadStack (Dragon Ball Z: Tenkaichi Tag Team) is written and
+reviewed on a side branch, every line of threads/threads/extend matched, but not here: the game stays black with it,
+and the review found two things to fix first (a program unloading itself from a lent call loses module_stop's
+argument; a state of an older layout loads with no trampoline for its return). Black screens with the game running
+and no missing function: Ridge Racer, Crush, Dead or Alive - Paradise, Def Jam - Fight for NY, Jak and Daxter - The
+Lost Frontier, Naruto Shippuden Ultimate Ninja Impact, Need for Speed - Most Wanted 5-1-0, Shining Blade, Tekken -
+Dark Resurrection, Valhalla Knights, Valkyria Chronicles III, PaRappa the Rapper, Monster Hunter Portable 3rd HD.
+Need for Speed - ProStreet crashes after its notice. Both God of War games are too slow to reach frame 3600 in 1200
+s. Vulkan draws what the software renderer draws in all 11 gameplay games, but 3D gameplay is much slower on it
+(docs/psp-compatibility.md, "Vulkan spot checks").
+
+## Part 52: the Vulkan renderer faster — its own waste, found with a profile
+
+On branch `cursor/psp-gpu-fast-2b67`, on top of #184's `cursor/psp-vk-play-2b67` (80bfd9807). docs/psp-gpu-renderers.md
+has the detail ("Submitting", "Render to texture", "The texture cache", "Speed"). Original code: nothing of PPSSPP's
+or JPCSP's used, copied or translated. Software stays the default; its pictures and state are unchanged, and Vulkan
+(accurate)'s pictures are byte for byte what they were.
+
+**Where the time went.** simpleperf on the RP6 (call graphs, Turnip opened by the runner as the app opens it), the
+race in Midnight Club 3: the emulation thread 26.4 ms a frame with Vulkan, 17.8 with seven software threads, which
+spend about 7 ms of theirs on the GE's setup as Vulkan does. Vulkan's extra:
+- `GPU::own()` told memory of every PRIM's rectangle (`Memory::changed()`, the recompiler's invalidation over all
+  four of VRAM's copies); a 3D PRIM's rectangle is the whole scissor: 2.7 ms a frame.
+- The bloom sampled the 480x272 frame buffer as a 512-row texture whose last rows are two other frame buffers'.
+  `holds()` was given the vertices' rough reach (all 512 rows) and refused it, so the GPU finished every frame: a
+  2.7 ms wait, the read-back narrowed into memory, the targets filled again, the 1 MB texture decoded and uploaded.
+- 25 small swizzled textures in RAM were decoded again every frame (8,249 in 300 frames), the GPU making and
+  destroying an image for each: about 2.6 ms. Their pages hold other data the game writes each frame.
+- Pipelines made in the run's first frames (45 in the race): 2.5 ms a frame over 300 frames, once a session.
+- Recording, about 1.3 ms. WipEout Pure ends 209 short lists a frame, each a `vkQueueSubmit` and a wait for the
+  slot three runs back.
+
+**What was done:**
+1. `own()` tells memory only of a rectangle not inside one told since the target's last finish, its pages still
+   busy (`Target::told`): no one can copy bytes the GPU drew over without a finish, which clears it.
+2. A 2D sprite PRIM's texture rows and columns for the GPU are `spriteReach()`'s, exact, a filter's second texel at
+   weight 0 left out; `draw.frag` holds every texel fetch inside the picture on the GPU. The bloom's copies are taken
+   on the GPU: finishes 300 → 5, read-backs 1,200 → 20, uploads 1,249 → 51 in 300 frames.
+3. Decoded textures keep the bytes they came from (where side by side and no larger than their texels); a write to
+   their pages marks them, and before the next draw their bytes are compared: kept if the same, else decoded afresh.
+   Both renderers: the race's textures 8,249 → 520.
+4. A list's end hands the recording to the GPU only with 32 commands or more; frames shown and finishes always do.
+5. The draw state isn't compared with the last recorded one at every primitive when nothing changed.
+6. "Late Frames" (System's option, the runner's `--late-frames`): the shown frame copied on the GPU into the slot's
+   shot buffer and taken when its run is done, a few frames late, so nothing waits each frame, as when the app
+   presents. The runner needs it to time the GPU as the app runs: read back synchronously each frame from adb's shell,
+   whose threads can't be pinned to the prime core as the app's are, the waits had the scheduler move the emulation
+   thread to slower cores at lower clocks (seen: cpu 3-6 at 1.65-2.8 GHz instead of cpu 7 at 3.19).
+
+**Measured** on the RP6, medians of three runs (the table in docs/psp-gpu-renderers.md, "Speed"), late frames, frames
+a second: Turnip's race 34.5 → 52.6, menu 49.7 → 68.0, LCS city 63.3 → 76.3, woods 75.1 → 79.0, Peace Walker's
+tutorial 73.9 → 105.8, WipEout 18.9 → 36.2; Qualcomm's driver 33.1 → 46.9, 46.3 → 64.0, 59.9 → 75.7, 73.9 → 94.7,
+68.0 → 93.3, 21.0 → 60.9. Seven software threads: 53.2, 69.2, 71.8, 70.9, 98.1, 16.2. So Vulkan (accurate) is level
+with seven threads in the 3D scenes and well ahead in WipEout and the 2D ones. Read back each frame, Turnip's LCS
+scenes are slower than before (the waits above); that's the desktop's way, not the app's.
+
+**Exact:** Software's every frame (VRAM and picture) and its end state (RAM and the whole machine) identical before
+and after, all seven scenes at 1 and 7 threads, 300 frames each; Vulkan (accurate)'s pictures byte for byte the same,
+all seven scenes, 10 frames each (M1).
+
+**Tests:** "draw textures kept decoded, their pages written" (new: kept where the bytes are the same, decoded afresh
+where they aren't, watched again); "gpu render to texture from a frame buffer taller than its picture, nothing
+finished" (new: the bloom's case, its last row at weight 0; late frames' shot; a short list not submitted at its
+end); "gpu lost" (its pretend backend marks itself lost, as Vulkan's does). `tests/psp/run-tests.sh` (sanitized) 345
+groups, none failing; `tests/allegrex/run-tests.sh` 58; `tests/psp/ares/run-tests.sh` 307 checks; the GPU tests on
+the RP6, Turnip and Qualcomm's driver, none failing.
+
+**Review** (an independent read-only one): no change to a picture; fixed as it found: `release()` at every frame
+handed over (short lists no longer submit), a lost GPU reported whichever path finds it first, source copies no
+larger than their texels, a written texture with more rows than the PRIM needs decoded afresh, `own()` telling again
+where the drawing threads' settle freed its pages, `GPU::drop()` dropping the last shot, `shoot()` false when the GPU
+stops, comments. Not taken: copies' sizes rounded to eights (it changed the render-to-texture test's pixels, which
+isn't understood yet); a test of the fetch's hold above 1x and of `System::late()`.
+
+**Left:** block transfers on the GPU (WipEout's two finishes a frame), a pipeline cache kept on disk, the CPU's
+transform (part 53: Vulkan (fast)).
+
+## Part 53: Vulkan (fast) — the GPU transforms 3D, and blends with its own units
+
+On branch `cursor/psp-gpu-fast2-2b67`, on top of part 52's `cursor/psp-gpu-fast-2b67`. docs/psp-gpu-renderers.md's
+"Vulkan (fast) (part 53)" is the design. PPSSPP's hardware transform informed it; none of its code is used, copied or
+translated (JPCSP's not read). Software stays the default and exact; Vulkan (accurate) is today's path, its pictures
+as they were.
+
+**The choice** (the owner's, 2026-10-09): "PSP Renderer" is now "Software (exact)", "Vulkan (accurate)" or "Vulkan
+(fast)", each described in Settings as it's chosen; the desktop's menu likewise; the core's "Renderer" option takes
+"Vulkan (fast)"; `psp-runner --renderer Vulkan-fast`. The saved value 1 is Vulkan (accurate), as Vulkan was; 2 is
+fast. A start-up check that fails, or a device lost, falls back to Software and says so, in fast mode as in accurate.
+
+**What fast mode does** (the design has the detail): 3D PRIMs of 16 vertices or more are handed to the GPU as the
+vertex type laid them out; `transform.vert` skins, transforms, lights, fogs and maps them as `transform.cpp` and
+`lighting.cpp` would (the lighting in the GE's own whole numbers) and cuts their positions to the GE's sixteenths.
+The GE still decides which triangles are drawn (`GE::meshTriangles()`): from each corner's clip position it drops
+what it wouldn't draw (out of sight, behind, no area, facing away) and cuts and draws the triangles reaching past the
+near plane itself, in their place among the others; the GPU gets the rest. Each PRIM's settings are a block of the
+run's storage buffer that its vertices name, so PRIMs drawn alike are one draw. Nothing is read in the shader: the
+GPU blends. Everything else is as Vulkan (accurate).
+
+**How it got fast** (the RP6, Turnip, the runner from adb's shell, late frames, frames a second after a 150-frame
+warm-up unless said):
+1. The first version (a uniform block per PRIM, skinning, lighting and mapping as pipeline constants) was slower
+   than the accurate mode: GTA's city 52 against 81. Pipelines: Peace Walker's combinations of bones and lights made
+   dozens more (5 ms a frame of compiling over 300 frames). Draws: each PRIM's block split them, 1,162 a frame against
+   604. And the waits at a finish grew from 0.67 to 3.96 ms a frame: the GPU had far more queued.
+2. Skinning, lighting and mapping read from the block, not constants: the pipelines as few as accurate's, about.
+3. Eight slots instead of three: fast mode makes more commands, and with three its emulation thread kept waiting a
+   moment for the run three back; sleeping often, the scheduler moved it to slower cores (seen: cpu 3-6 at 1.65-2.8
+   GHz, not cpu 7 at 3.19). MC3's race 59.8 → 79.6. (A 512-command submit bound tried with it cost MC3's menu, which
+   finishes every frame: back to 128.)
+4. The blocks in a storage buffer, each vertex naming its own: draws as few as accurate's. GTA's city 68 → 102.
+5. PRIMs under 16 vertices left to the CPU: Peace Walker's 5,000 small skinned PRIMs a frame cost more on the GPU's
+   way (64 against accurate's 107); left to the CPU, 128.
+6. The review's near plane (below): the GE deciding which triangles are drawn cost the race 1.3 ms a frame of the
+   CPU's (74.0 → 65.4); the world, view and projection matrices made one for it, 67.1. The GPU now gets the triangles
+   the accurate mode draws and no more (the menu's 23.7 million in 450 frames → 6.7), which shortened Qualcomm's
+   driver's waits (the menu 3.8 → 2.8 ms a frame).
+
+**Found on the way**: MoltenVK refused every transform pipeline (a helper named `signbit` clashed with Metal's own),
+and the 3D drew nothing: fast mode now asks for a pipeline before it records a PRIM for it (`Backend::drawable()`),
+leaving the PRIM to the GE where the driver won't make it, and the start-up check draws 3D through the GPU's
+transform. GTA's cars lost their gloss (a second pass with a depth test of equal: the two pipelines put the vertices
+a hair apart): `gl_Position` is invariant now.
+
+**Measured** on the RP6 (docs/psp-gpu-renderers.md, "Speed", has the table): medians of three runs of 450 frames,
+late frames, frames a second after a 150-frame warm-up. Turnip, accurate / fast: the race 62.3 / 67.1, the menu
+75.1 / 77.4, LCS's city 92.3 / 105.1, the woods 93.8 / 126.5, Peace Walker's play 121.5 / 125.0, WipEout 39.6 / 79.7;
+seven software threads 53.8, 67.0, 70.1, 71.3, 103.1, 17.1. Qualcomm's own driver, accurate / fast: 59.1 / 63.2,
+73.4 / 70.9, 87.4 / 96.5, 110.8 / 99.5, 114.8 / 113.7, 75.5 / 76.5. So on Turnip, the app's driver, fast mode is
+16-77% ahead of seven threads in the 3D scenes (WipEout 4.7 times) once its pipelines are made; over a whole run
+from a state the first frames' pipelines take most of that back (the race 49.2 against 52.5), until they're kept
+between sessions (part 54). On Qualcomm's driver its GPU is slower with fast mode's vertex shader and it's within
+10% of the accurate mode either way, 6-40% ahead of seven threads.
+
+**Accuracy** (docs/psp-gpu-renderers.md, "Accuracy"): pixels identical to the software renderer's, 10 frames of each
+scene, accurate / fast: Lumines 96.6 / 72.9%, Peace Walker's title 100.0 / 40.4%, MC3's menu 97.0 / 88.0%, the race
+95.0 / 71.5%, LCS's city 95.4 / 57.8%, the woods 91.5 / 52.4%, Peace Walker's play 99.2 / 55.0%; fast mode's
+differences a level or two (colors and fog interpolated by the GPU) but for Peace Walker's 16-bit blends, a step of a
+5-bit channel spread evenly as a different dither. Nothing missing or misplaced to the eye. Vulkan (accurate)'s
+pictures are as they were: the GPU tests' every count the same from the base and from this branch (the review's), and
+the RP6's scenes the same to the channel.
+
+**In the app** (the RP6, Turnip, the release build, Vulkan (fast), the app's stats: frames a second, capped at 60,
+and the emulation's ms a frame): Midnight Club 3's title 60.0 (16 ms) and a quick race 51-53 (19 ms; part 41 had
+the accurate path at 39.0 and 25.6 ms in a quick race); Liberty City Stories' 3D city 60.0 (11-13 ms); Vice City
+Stories' opening 60.0 (13-16 ms); Burnout Legends' car select and a race 60.0 (11-13 ms); WipEout's menus 60.0 (4-5
+ms; at its profile screen it stopped taking adb's presses, so its race wasn't reached in the app); Peace Walker's
+title 60.0 (5 ms); MotorStorm: Arctic Edge, black after its first screen in part 41, through its notice to its
+title scene, 60.0 (9 ms); Ridge Racer 2's loading game and title 60.0 (5 ms). Each said "the Vulkan renderer draws
+(fast, 3D transformed by the GPU), on Vulkan: Turnip Adreno (TM) 740"; none fell back, and nothing looked wrong.
+
+**Review** (an independent read-only one, then a second over the fixes). Found and fixed:
+- The start-up check's 3D never reached the GPU's transform (PRIMs of three corners, under `MeshLeast`), so a
+  driver drawing `transform.vert` wrong would have passed it, and `gpuFast` failed: four PRIMs of six now, and the
+  check fails where none reached it. Where its 3D alone fails, the check runs again with the GE transforming.
+- Triangles cut by the near plane had their colors and fog blended across the screen by the GPU's clipper, not in
+  clip space as the GE does (a ground mesh under the camera 67.6% the same, its fog 76.0%): the GE cuts and draws
+  them now, in their place (`GE::meshTriangles()`). And the GPU drew triangles the GE drops for their depths (wholly
+  past the far plane with DEPTH_CLIP_ENABLE on, any corner outside with it off): the GE's rules decide every
+  triangle now, its culling with them. The reviewer's scenes, strips, fans, culling, flat shading, lights, texture
+  modes, fog, skinning, the near and far planes, give the accurate mode's numbers exactly.
+- `transform.vert` declared clip distances, which needs a device feature, and its module was made on every device,
+  in both modes: no clip distance now, the module made in fast mode alone.
+- 3D clear mode went through the GPU's transform (each triangle's stencil is its own last corner's): left to the GE.
+- The filter was chosen at each pixel from perspective-correct coordinates: once a triangle now, from coordinates
+  straight across the screen, the GE's ratio (the reviewer's filter scenes: 54 pixels far off → none).
+- Eight slots let a GPU-bound game show frames up to eight runs late: two frames in flight at most.
+- A GPU of the other mode was kept across a power cycle; the descriptor sets weren't bound again after a copy's
+  pipeline layout (both modes; drivers kept them anyway); stale text ("three slots"); layout asserts.
+The second review, over those fixes, found: the frames-in-flight wait named slots, not runs, so with five runs a
+frame or more it waited for one of the frame's own (by serial now); with DEPTH_CLIP_ENABLE on the GPU clamped the
+depth at each pixel where the GE holds each corner's (a triangle across the far plane, then a quad drawn with a test
+of less: 210 pixels far off, none now; held at each corner in `transform.vert`); a corner behind the camera that
+isn't past the near plane, which the GE projects through its w, went to the GPU (the GE's now); a mode switched
+without unloading kept Android's window from the new GPU; `statistics.meshes` counted runs. Its scenes (overlapping
+triangles cut and whole in turn, a strip cut mid-way, flat shading, a narrow depth range, a flush between a PRIM's
+runs, random triangles from behind the camera to past the far plane, off the 4096-pixel screen, culled each way)
+give the accurate mode's numbers exactly. Not taken: a second pass with a depth test of equal over a model drawn as
+PRIMs of other sizes meets the GE's depths and the GPU's a float's last bit apart (181 of 3,448 pixels missed in a
+scene made to show it; `MeshLeast` splits the paths; games' passes redraw the same PRIMs, which meet exactly).
+
+**Tests:** "gpu fast mode: 3D transformed by the GPU, near the software renderer" (the start-up check with its 3D
+through the GPU's transform, at least four PRIMs taken; pspsdk's samples, cube, celshading and envmap through it,
+held to the same 3 channels in 1000 as the accurate mode); "gpu fast mode: the GE's rules for which triangles are
+drawn" (random triangles from behind the camera to past the far plane, off the screen, culled each way, lists and
+strips, and a fogged ground of random colors under the camera, DEPTH_CLIP_ENABLE on and off: no more pixels far off
+than the accurate mode, none on the M1 and the RP6); "gpu start-up check" and the rest as before. The app's
+`PspVideoTest.rendererChoicesKeepTheSavedValues` (0, 1 and 2 kept, anything else Software, the labels).
+`tests/psp/run-tests.sh` (sanitized), `tests/allegrex/run-tests.sh`, `tests/psp/ares/run-tests.sh`: none failing;
+the GPU tests on the RP6, Turnip and Qualcomm's own driver: none failing.
+
+**Left:** a pipeline cache kept between sessions (part 54); the bones in a block of their own, so that small skinned
+PRIMs (Peace Walker's) could go to the GPU too and every 3D PRIM take one path; Qualcomm's driver's GPU time in fast
+mode; textures decoded on the GPU (palettes, swizzling, DXT: 0.4 ms a frame of the race's CPU since part 52, so
+later); block transfers on the GPU (WipEout's two finishes a frame).
+
+## Part 54: the Vulkan renderer's pipelines kept between sessions
+
+On branch `cursor/psp-gpu-fast3-2b67`, on top of part 53's `cursor/psp-gpu-fast2-2b67`. docs/psp-gpu-renderers.md
+has the design (the pipelines' paragraph) and the table ("Speed", part 54). Software is untouched; neither Vulkan
+mode draws differently.
+
+**Why.** Part 53's numbers after a warm-up and over a whole run from a state differ by the pipelines a game makes in
+its first frames: fast mode's 79 in Midnight Club 3's race took Turnip 2.6 seconds to make (its transform pipelines
+cost 33 ms each, the accurate mode's 14), so over the 450 frames the race ran at 49.2 frames a second, behind seven
+software threads' 52.5, and in the app the race's start stalled for 725 ms. Pipelines were made afresh every session.
+
+**What was done:**
+- System's option "Pipeline Cache", a host file: read at the renderer's start and handed to `GPU::vulkan()`, which
+  gives it to the driver as its pipeline cache's first data; written by `System::keepPipelines()` where pipelines
+  were made since it was last written (as a game ends, every 600 frames, as the renderer is let go of), beside the
+  file and renamed over it. The app's file is `psp_vulkan_pipeline_cache.bin` in its Vulkan cache folder, beside the
+  N64's (or the saves folder); the runner's `--pipeline-cache FILE` the same; its summary says how many pipelines were
+  made and the ms the driver took.
+- The driver's data goes in the file after a header of our own (`Kept`: the device, the driver's version and cache
+  UUID, a 64-bit or 32-bit build, the data's size and CRC-32), and reaches the next session's driver only where all
+  of it matches and the driver's own header is sound: the review found MoltenVK taking a cache with an intact header
+  and a zeroed tail (a power cut after the rename could leave one) and then failing the start-up check every session,
+  and a cut-short one leaving the session's cache unreadable for good. A renderer made with a kept cache that fails
+  its check is made again without it, the file let go of; a driver refusing the data gets an empty cache; the same
+  size again isn't written again; past 32 MB the file is let go of; a folder that isn't there is made, and a file that
+  can't be written is said once, not tried every 600 frames.
+
+**Measured** on the RP6: each scene twice from its state with `--pipeline-cache`, the first from an empty cache, the
+second from what the first kept; the driver's ms making the pipelines, and frames a second over the 450 frames.
+Turnip, fast: the race 2,589 → 1.2 ms, 49.2 → 67.1; LCS's city 1,074 → 0.6 ms, 85.5 → 103.6; Peace Walker's play
+790 → 0.6 ms, 105.2 → 123.8; WipEout 2,559 → 1.2 ms, 55.4 → 78.6. Qualcomm's driver, fast: 2,587 → 23 ms, 47.8 →
+63.9; 1,258 → 13 ms, 78.8 → 95.7; 1,106 → 12 ms, 93.1 → 113.0; 2,423 → 24 ms, 55.1 → 75.6. The accurate mode gains
+likewise (Turnip's race 872 → 0.8 ms, 54.3 → 60.2). From a game's second session on, fast mode is ahead of seven
+software threads over a whole run too: the race 67.1 against 52.5, the city 103.6 against 70.4. The files: 0.15-1.3
+MB a scene. In the app (Turnip, fast): the file written at the 600-frame mark, 198 KB, then 1.4 MB once
+Midnight Club 3's race had been run; that race's start, its longest frames 619, 335 and 226 ms in a first session,
+30 ms at most in the second (the file a build before `Kept` wrote was left out at the first, as another format's,
+and written again).
+
+**Review** (an independent read-only one): found the damaged-cache cases above (fixed: `Kept`, the retry without
+the cache), the app's cache folder possibly not made on an install whose setting was never changed (made now), a
+refused cache leaving the session without one (an empty one now), the driver's version not checked (in `Kept`),
+the write's close not checked and a failed write's `.new` left (both fixed), every warm session rewriting the same
+file (not now), an unbounded file (32 MB), the read byte by byte without a bound (sized now), and the test not
+showing bad data left out. Not taken: writing on another thread (the write happens only where pipelines were made,
+which stalls anyway: 0.4-1.5 ms on the M1 for 44 KB).
+
+**Tests:** "gpu pipelines kept between sessions" (a renderer made with the data from one whose check ran takes it,
+its cache as big from the start, and passes its check; another driver version's, another cache UUID's, a file cut
+short, one with a zeroed tail, and junk are left out, each renderer's cache starting without them, and draw right).
+`tests/psp/run-tests.sh` (sanitized), `tests/allegrex/run-tests.sh`, `tests/psp/ares/run-tests.sh`: none failing;
+the GPU tests on the RP6, Turnip and Qualcomm's own driver: none failing.
+
+**Left:** a file per game (one file holds every game's pipelines until 32 MB); fast mode's first session still pays
+for its pipelines (made on another thread while the GE draws those PRIMs, as PPSSPP does, would hide it); the app's
+Vulkan cache folder moved in Settings carries the N64's file over, not the PSP's (one session made afresh).
+
+## Part 55: character conversion, thread-local storage, lent stacks, and what keeps the black games black
+
+On branch `cursor/psp-hle-games11-2b67`, on top of #188's `cursor/psp-gpu-fast3-2b67` (#187, #185, #184 and #186's re-run
+under it). Sources:
+pspautotests' programs and their recordings (each named below; the programs themselves were also run through the kernel
+by a scratch runner answering their emulator devctl, their output compared with the recordings line for line), pspsdk's
+headers, the PSP Developer Wiki (through the Wayback Machine) and the games' own behaviour, traced with a scratch
+runner. No PPSSPP or JPCSP source was read.
+
+**1. sceCcc, character code conversion** (`ccc.cpp`). The King of Fighters - Orochi Saga's first call is
+sceCccDecodeUTF8 on "Loading...", in a loop that ends only as the pointer reaches the string's end: refused, the pointer
+never moved, and the game spun there for good (4.6 million calls in its first 30 frames, 9 frames a second, black). The
+whole library is here now, as ccc/convertstring recorded it for all six conversions (UTF-8, UTF-16 and Shift-JIS, each
+way): a conversion returns how many characters it wrote, not counting the terminator; the destination's size is in
+bytes, and a character is written only while it fits with room for the terminator after it (a UTF-16 destination of 1
+byte gets nothing, of 2 just the terminator, of 4 one character); no destination converts nothing; input that isn't
+valid converts to nothing. Shift-JIS goes through the JIS tables the program gives (sceCccSetTable: the library has none
+of its own, "crashes without table set"), indexed by JIS code, a Shift-JIS pair turned into its JIS code the standard
+way. Decoding and encoding one character move the program's pointer past it; the error characters (sceCccSetErrorChar*)
+stand for what can't be decoded or encoded, and are 0 until set, which ends the string (chosen: it's what makes the
+recording's invalid input come out empty; no recording shows their first values). The tables' addresses and the error
+characters are kept in states (layout 18). The convertstring program itself prints exactly what the PSP printed, with
+the test's own tables.
+
+**2. Thread-local storage pools** (`tls.cpp`): sceKernelCreateTlspl, DeleteTlspl, FreeTlspl, ReferTlsplStatus, the
+system call _sceKernelAllocateTlspl and Kernel_Library's sceKernelGetTlsAddr. God Eater 2 makes its pools at boot,
+asserted on the refusal, and stopped. As threads/tls's ten programs recorded: a pool of blocks of one size, each thread
+holding one at most and getting the same one when it asks again; blocks handed out in turn from the one after the last
+handed out (0, 1, 2 and 0 again), not the lowest; zeroed as they're handed out and as they're freed; a thread's blocks
+back as it ends; waiters served in order or by priority (0x100), a timeout as every wait's; deleting refused while
+another thread holds a block (0x800201d2); 16 pools at most (0x800201d1); creation's checks in create's order, the
+memory a pool takes (blocks rounded up to their alignment, 4 bytes at least, and nothing more), partitions 2, 5 and 6
+taken. Given an ID that isn't a pool's, sceKernelGetTlsAddr answers by its bits 3 to 6, as the index of a pool in which
+the thread holds a block (0 and 1 gave the first pool's block, 0xf the second's, a deleted pool's ID nothing): the
+library looks in the thread's own list before it calls the kernel. So a pool's ID carries its index there: the next ID
+up that does, those passed over never handed out. From an interrupt handler sceKernelGetTlsAddr gives NULL (intr/waits).
+Chosen: partition 5's memory comes from the user partition (the kernel hands out no other), and a handler has no thread
+to hold, free or delete a block for. Pools, holders and threads waiting for a block are kept in states (layout 19),
+checked as they load. Nine of the ten programs print what the PSP printed; the tenth (delete) interleaves two threads'
+lines differently, the PSP's slower output through PSPLink letting a thread's delay run out first. threadmanidlist's
+pool line matches now too.
+
+**3. sceKernelTryLockLwMutex_600** (Kernel_Library 0x37431849), God Eater 2's other call. As threads/lwmutex/try600
+recorded, it locks in the work area alone, as the user-mode library does (a work area made by hand locks too): a count
+under 1 is ILLEGAL_COUNT, and so is a count but 1 for a free mutex that isn't recursive; its holder trying again,
+LWMUTEX_RECURSIVE for one that isn't, LWMUTEX_LOCK_OVERFLOW past 2^31 - 1 for one that is; held by another,
+LWMUTEX_LOCKED; a deleted one, LWMUTEX_NOTFOUND, which sceKernelDeleteLwMutex now marks by writing -1 to the work area's
+ID (it wrote 0, which a hand-made one has). Every line that turns on the new function matches; the two that differ come
+from the older sceKernelLockLwMutex refusing a hand-made work area (part 32's known difference).
+
+**4. sceKernelExtendThreadStack**, part 51's (written and reviewed on a side branch), with that review's two findings
+fixed. A function runs on the calling thread with a stack lent for the call, its result returned, as
+threads/threads/extend recorded line for line. A program unloading itself from inside such a call
+(sceKernelSelfStopUnloadModule) gives the lent stack back as its thread ends, and module_stop's thread could be given
+that very memory for its own stack, its argument overwritten before it was copied: the argument is kept first ("modules
+unload themselves from a lent stack"; without the fix module_stop saw 0). The trampoline, the kernel's own code the lent
+call returns to, is now written as every state loads as well as at power on, so a state saved before that return existed
+has it (the extend test wipes it before loading). The lent stacks are kept in states (layout 20).
+
+**Save states.** Version 20; layouts 15 to 19 load, what's new left empty. A committed test can't hold an older-layout
+state (megabytes of memory), so it was checked end to end: states the base commit's runner saved (version 17) of Lumines
+at frame 600 and Patapon 2 at 1200 load into this branch's runner, and 60 to 600 frames on its pictures are byte for
+byte those of the base runner carrying on from the same state.
+
+**The games** (the report's runs: Software, 7 GE threads, 3600 frames, Start at 120 and Cross at 1800, PNGs at 60, 300,
+1200 and 3600; the base commit's runner and this branch's on the same 53 games, and a frame every 300 where a judgement
+needed it):
+- *The King of Fighters - Orochi Saga*: black to its autosave notice (menu): "Loading...", the SNK Playmore logo, its
+  intro, then the notice; 9 frames a second to 390-530.
+- *God Eater 2* (English v2.0, RedArtz): black to a notice: the fan translation's "your DLC file is corrupted or
+  missing" (it opens `ms0:/PSP/GAME/NPJH50832/SYSTEM_UPDATE.EDAT`, which the translation's patch puts on the memory
+  stick and the owner's copy doesn't have).
+- *Dragon Ball Z: Tenkaichi Tag Team*: black from boot to its autosave notice at frames 300 and 1200; past it (Cross at
+  1800) black again, opening a PGD-encrypted file over and over (below). It now calls scePower 0xa85880d0, missing (as
+  Final Fantasy Type-0 and Kingdom Hearts Birth by Sleep do), and goes on.
+- *Genso Suikoden*: sceCcc is no longer missing; its intro plays with its subtitles as before (sceMt19937Init still is).
+- *Persona 3 Portable* isn't stuck: with a frame every 300 it shows its logo, intro and title ("PRESS ANY BUTTON", 2100
+  to 3000), and then its attract loop starts over, frame 3600 landing on that loop's loading screen. scesupPreAcc
+  0x86debd66, called once with the disc's ID, is refused and the game goes on. Its row is judged again: menu.
+- The other 48 (all the black and hanging games but these, and a sample of menus, movies and gameplay across the
+  library): every frame the same picture on both runners, or the same scene an animation step apart (under 2.5 of 255),
+  but Tekken: Dark Resurrection's frame 60, where the runner's capture caught its "Loading game data" box a frame early
+  under load (run again alone, both runners give the same pictures at frames 55 to 65).
+
+**What keeps the black games black.** Traced in the scratch runner, thread states at frames 300, 1200 and 2400:
+- *PGD-encrypted data*, five games: Black Wolves Saga (`PSP_GAME/INSDIR/INSTALL.DNS`), Dragon Ball Z: Tenkaichi Tag Team
+  (`disc0:/sce_lbn0xe98b_size0x4A0`), Shining Blade and Valkyria Chronicles III (`PSP_GAME/INSDIR/DATA.BIN`, through
+  CRI's file system: its busy server thread is retrying, not stuck) and Naruto Shippuden: Ultimate Ninja Impact. Each
+  opens the file, gives its key (ioctl 0x04100001; the headers say key index 1, DRM type 1) and, refused, tries again
+  for good. Decrypting PGD needs AMCTRL's cipher, which the wiki's PGD page lays out only as a structure (its link for
+  the algorithm goes to JPCSP's forum, not a source this project uses), and its MAC checks need the wiki's AMCTRL and
+  DNAS keys, which aren't among the keys committed (an owner's decision, as part 18's were).
+- *Need for Speed: Most Wanted 5-1-0*: its main thread waits for good in sceGeDrawSync; the GE met a RET with no CALL to
+  return from in one of its lists (0x0914dc40 and 0x090edc00 take turns, calling shared lists at 0x08afd6c0) and stopped
+  it, and the driver never hears its end. A matter for the GE's part (`ares/psp/ge/list.cpp`).
+- *Monster Hunter Portable 3rd HD*: its program, 26.5 MiB in one segment from 0x08804000, doesn't fit the 24 MiB user
+  partition (its PARAM.SFO asks for no more: the HD versions were made for the PS3), so it never starts. Given the 64
+  MiB partition (a scratch build), it shows a Dolby logo and stops at the same missing functions as the PSP version
+  (sceJpegCsc and sceMpegAvcConvertToYuv420): not worth a rule of its own until sceJpeg is here.
+- *Def Jam: Fight for NY*: its file thread reads the disc's folders and then waits for requests that never come; why,
+  not found.
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 373 groups, none failing. `tests/allegrex/run-tests.sh`: 58, none
+failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing. New groups: "ccc convertstring", "ccc characters",
+"ccc one at a time", "tls pools created", "tls pools handed out", "tls pools waited for", "lightweight mutexes tried the
+newer way", "modules unload themselves from a lent stack"; "a stack lent for a call" (part 51's) with the older state's
+trampoline; and the states' fields and refusals for each. Two independent read-only reviews; what they found was fixed:
+the TLS status copied as far as its size word says (it had been written whole), a priority test that couldn't tell
+priority from first come, an interrupt handler's TLS calls acting for the interrupted thread, state refusals not
+isolated, the recordings' inputs followed exactly, and comments.
+
+**Left, and why.** PGD decryption (five games, above). scePauth, sceJpeg and sceMpegAvcConvertToYuv420 (Monster Hunter
+Portable 3rd, and its HD version once it has the memory). scesupPreAcc (both Dissidias and Persona 3 Portable call it
+and go on). scePower 0xa85880d0 (Final Fantasy Type-0, Kingdom Hearts Birth by Sleep, Dragon Ball Z), sceMt19937 (Genso
+Suikoden). The older sceKernelTryLockLwMutex, sceKernelLockLwMutex and Unlock disagree with threads/lwmutex's try, lock
+and unlock recordings on hand-made work areas and counts (part 32 noted it). The GE's RET at depth 0 (Need for Speed:
+Most Wanted). Black still, cause not found: Ridge Racer, Crush (its CPU stops in a call into the program at frame 730),
+Dead or Alive - Paradise, Def Jam, Jak and Daxter - The Lost Frontier, Tekken - Dark Resurrection, Valhalla Knights,
+PaRappa the Rapper, MACH; Need for Speed - ProStreet's crash after its notice.
+
+## Part 57: the GE's lists — a RET with no CALL, and what the driver's callers see
+
+On branch `cursor/psp-ge-lists-2b67`, on top of #189's `cursor/psp-hle-games11-2b67`. Sources: the games' own lists,
+traced with a scratch runner; pspautotests' gpu/ge, gpu/signals, gpu/callbacks and gpu/displaylist programs and their
+recordings (each named below; the programs were run through the kernel by a scratch runner answering their emulator
+devctl, their output compared with the recordings line for line); the PSP Developer Wiki's Hardware Registers and
+Graphics Engine pages (through the Wayback Machine); pspsdk's headers. No PPSSPP or JPCSP source was read.
+
+**1. A RET with no CALL to return from** (`ge/list.cpp`). Need for Speed: Most Wanted 5-1-0 waited for good in
+sceGeDrawSync from its ninth list on (frame 108): the GE stopped it at a RET at depth 0 and the driver never heard its
+end. The list, 0x0914dc40 (it takes turns with 0x090edc00), is the game's frame: its settings come in small lists made
+to be CALLed, a frame buffer's (FBP, FBW, PSM, then RET with FBP's low bits as its argument) and a depth buffer width's
+(ZBW, RET). Most of them it jumps over and CALLs (0x0914e448: BASE, JUMP 0x0914e468, six such words, BASE, CALL
+0x0914e450), but before drawing into its 256-wide target at 0x040cc000 it runs six such words, that target's, in place
+(0x0914e374-0x0914e388), RETs and all, and the frame's commands go on after them to its FINISH. Nothing public says what
+the GE does there: the wiki's Hardware Registers page gives it two return addresses (GE_RADR1, GE_RADR2, with
+GE_OADR1/2 for the offsets) and two depth bits in GE_LIST (0x100 at depth 1 or 2, 0x200 at 2), and an ERROR bit among
+its interrupts. The game draws on the PSP, so the GE goes on: back to the stale first return address (0x0914dcd0) it
+would loop through the frame for good, and stopped, the game would hang as it did here. So a RET at depth 0 is passed
+over, the next command next, the offset and depth as they were (and nothing noted: it isn't a fault). A third CALL
+still stops the GE (no game was seen doing it; no source says). With it the game goes on past its autosave prompt:
+its title art, its safe driving notice and its intro movie (frames 300, 600 and 1500-1800 with a frame every 300, on
+Software), then its title, "Press START button", from frame 2100, on all three renderers (below).
+
+**2. What the driver's callers see**, as pspautotests recorded (`kernel/ge.cpp`):
+- *A finish callback's list is done.* The PSP's driver runs a list's finish callback before taking it off the queue
+  and before starting the next (gpu/ge/queue2: "a finish callback runs before the next list is started, with its own
+  list still linked"), and there sceGeDrawSync(1) no longer counts it: 0 when it's the last, 2 with another queued
+  behind (queue2's "Finish callback ordering"; gpu/signals' simple, sync, pause, suspend, jumps, gpu/displaylist/state).
+  Phobos said 2 for the last one too. A game whose finish callback asks whether drawing is over would have waited.
+- *A list's own stall address.* "Stopped at its stall address" (3) is the GE waiting where the list's stall address
+  is: between a PAUSE signal and the FINISH that delivers it, a list's stall address moved on goes no further than the
+  list (only a running list's reaches the GE), so the GE waits on and the list reads as drawing (queue2's "Pause
+  window": 3, then 2; Phobos kept saying 3).
+- *sceGeSaveContext from a callback that stopped the GE.* Waiting for a suspending SIGNAL's or a FINISH's callback,
+  the GE has stopped, and sceGeSaveContext saves (gpu/ge/callbackstate: "a GE that has stopped — which is all
+  sceGeSaveContext cares about"); with the GE running on (a SIGNAL that lets it go on), or stalled, it's -1 still.
+  sceGeRestoreContext is refused as before while a list is the GE's (unmeasured there; it would move the list).
+- *A list queued twice.* Built with SDK 2.00 or later (gpu/ge/queue: 0x02000000 refuses, 0x01000010 doesn't), a
+  program can't queue a list at an address the queue holds: BUSY. The driver compares the address it keeps for each
+  queued list (queue2: "against the list's start address, not where it is now"), which is where a list starts, or where
+  it was broken off or paused, the address it would go on from (queue2: enqueueing where a broken-off list stopped is
+  refused, its start then isn't); both of memory's views (the uncached one too), and the list whose finish callback
+  runs, still queued (queue2: from its own finish callback). Phobos's list registers hold exactly that address while a
+  list isn't the GE's, so they're compared.
+- *Programs built with older SDKs*, up to 2.00.10 or saying none. A suspending SIGNAL's list reads as paused (4)
+  while its callback runs, the GE still on it, so breaking it off from the callback is BUSY, and a stall address moved
+  there is the list's alone: the GE goes on to where it was to stop, the list reading as drawing, until it's moved on
+  again (handlercalls with 0x01000010, suspend saying none; handlercalls: "above this SDK version [0x02000010] the
+  list isn't PAUSED during the handler"). Callbacks aren't told where the list had got to (0 for the third argument:
+  simple, pause2, jumps, gpu/callbacks/ge_callbacks saying none; the list's address at 0x02080000 and 0x03080000 in
+  pause2, and at 6.60), and sceGeContinue on a list drawing says -1, not ALREADY (simple and continue saying none,
+  ALREADY at 6.60): taken to change at handlercalls' cut, which those recordings allow. Unmeasured, and chosen so the
+  list the GE still has isn't taken from under it: sceGeContinue on it (paused for that callback, or on its way to a
+  PAUSE's FINISH, whose BUSY queue2 recorded) is BUSY, and sceGeListEnQueueHead ahead of it is INVALID_VALUE, as for
+  a front list that isn't paused (before, it put the list back in the queue under the GE, which started it over).
+
+Of the 22 driver programs (gpu/ge 11, gpu/signals 8, gpu/callbacks 1, gpu/displaylist 2), 3 printed what the PSP
+printed before (alignment, edram, enqueueparam) and 7 do now (ge_callbacks, callbackstate, queue, jumps besides). Of
+gpu/signals' 622 recorded lines 147 differed, now 23; of the other 14 programs' 938, 236, now 215 (edramswizzle's
+swizzled patterns, unchanged, most of them).
+What's left in the others is mostly the GE's time: on a PSP a list takes time, so a callback for a SIGNAL that lets the
+GE go on finds the list still drawing (Phobos's GE, taking no time, is past it: continue, simple's kind 2), a
+thread waiting in sceGeDrawSync is rescheduled (the [r] marks), intrsuspend's list is still drawing. The rest:
+the GE state buffer's layout (context and break read its words: the PSP keeps the vertex, index and offset addresses
+at words 5 to 7, command 0x17's word at 26, and writes 386 words at most; Phobos's own layout is 419 words, inside
+the 512 of pspsdk's PspGeContext), sceGeGetStack (get: not here; no game in the library calls it), a SIGNAL call's
+stack in use by a started list refused (queue2's shared stack), break's DrawSync(1) after a list is queued at the head
+of a broken-off one (state: 3 on the PSP), and the transfers' and VRAM mirrors' edges with sceGeEdramSetAddrTranslation
+(0) (gpu/transfer/invalid and mirrors: a transfer past VRAM's end wraps to its start).
+
+**The report's black games** (traced in the scratch runner: thread states and the GE's queue at frames 300, 1200, 2400
+and 3600, a frame every 300, then traces of each one's calls and lists). Only Need for Speed: Most Wanted was stuck in
+the GE. For the others the GE draws what it's given; what each showed from the GE's side went to the notes shared with
+the kernel side's parallel branch, which found and fixed the causes there:
+- *Def Jam: Fight for NY*: its GE init lists (state only, no PRIM) finish at once; DVDUMD_LOAD_MODULE (priority 0x32)
+  runs before 'file' (0x6f) has made UMD_SAMPLE_IO_SEMA, waits on semaphore -1 and ends; main polls its end for good.
+  The kernel side: sceUmdActivate takes no time.
+- *Ridge Racer*: after its opening movie each frame's list is one clear (18 commands); the disc image's movies are
+  139264-byte stubs (3 pictures, no sound) and the movie tears down cleanly; what the game waits for after it isn't
+  the GE, and isn't found.
+- *Crush*: its buffered file reader's memcpy runs with a size near 0x7e000000 over all of RAM (the program's code too,
+  hence the crash in a VBlank handler at frame 730), from a corrupted read. The kernel side: file descriptors handed
+  out without reuse land the game's per-descriptor counter in its read buffer.
+- *Tekken: Dark Resurrection*: after its logo the GE gets nothing; its intro movie never decodes a picture. The kernel
+  side: its frame limiter waits for good on sceKernelSysClock2USecWide given no seconds pointer.
+- *Dead or Alive Paradise*: a list a frame, all finished; its async read is re-issued for good. The kernel side: the
+  read's bytes landed as it was made, before the game's marker.
+- *Jak and Daxter: The Lost Frontier* and *PaRappa the Rapper*: the GE never gets a list; the first opens and closes an
+  LBN file 87,861 times in 200 frames (the kernel side: descriptors), the second's sound thread spins at the top
+  priority on sceAudioOutputPannedBlocking refusing an unreserved channel 0 (the kernel side: __sceSasCore taking no
+  time, so the thread never lets the game reserve its channels).
+- *Valhalla Knights*: a clear and a fade a frame; it seeks its first file over and over, never reading it. The kernel
+  side: the asynchronous seek still under way when it looks.
+- *Need for Speed: ProStreet*'s crash: sceIoDread fills 1040 bytes from the entry's d_private (0x09fff380) over its
+  caller's saved registers. The kernel side: the game's buffer is the older 272-byte layout, written as the newer one.
+- *MACH* isn't stuck: with a frame every 50 and 300 to 5400 it shows its title from 2100, a black transition at 3600
+  (the report's frame), its attract movie and the title again. Judged again: menu.
+
+**Save states.** Nothing new is kept: the RET needs no state, and the driver's new answers come from what was kept
+already (each list's state and registers, the SDK version). Version 20 still; no layout change.
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 382 groups, none failing. `tests/allegrex/run-tests.sh`: 58, none
+failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing. New and changed groups: "ge moving" (a frame buffer's
+settings made to be CALLed, run in place: passed over, the offset kept), "ge callbacks see the ge stopped" (both SDK
+ages), "ge pause window", "ge lists queued twice", "ge suspending signals' callbacks" (also sceGeContinue and a list
+queued at the head from the callback), "ge callbacks" (both SDK ages), "ge break and callbacks" (its last list's
+finish callback now reads 0). Each fails without its fix, each fix taken away alone (the RET: 4 checks; the finish
+callback's sceGeDrawSync(1): 6; the list's own stall address: 3; sceGeSaveContext: 6; the twice-queued list: 6; the
+older SDKs: 14; sceGeContinue's BUSY for a list the GE still has: 10; the head enqueue: 6). Three independent read-only
+reviews: the first found the report's Need for Speed row left unchanged, the head enqueue (above), and claims to word
+as unmeasured or as the kernel side's findings; the second, fail counts out of date and wording to tighten; the third
+passed, with comments' wording to tighten; all fixed.
+
+**The games** (the report's runs: 3600 frames, Start at 120 and Cross at 1800, 2 GE threads, frames at 300, 1200, 2400
+and 3600; the base commit's runner and this branch's):
+- *Need for Speed: Most Wanted 5-1-0*: black throughout before; now, on all three renderers, its title art at 300 and
+  its title, "Press START button", at 2100 and 3600 (black at 1200, between its notice and its movie), at 19 frames a
+  second on Software and on Vulkan, 14 on Vulkan (fast). Software and Vulkan (accurate) give the same pictures at the
+  five frames taken (60, 300, 1200, 2100, 3600); Vulkan (fast) is within 0.44 of 255 of them (its own transform:
+  part 53).
+- *MACH*: judged again (above). *Ridge Racer*: as before, black after its movie.
+- Thirty working games on Software: 14 built with SDKs up to 2.00.10 or saying none (Lumines, Twisted Metal: Head-On,
+  Ape Escape: On the Loose, Darkstalkers Chronicle, Hot Shots Golf: Open Tee, Metal Gear Acid, Need for Speed:
+  Underground Rivals, Tony Hawk's Underground 2 Remix, Burnout Legends, Death Jr., ATV Offroad Fury: Blazin' Trails,
+  Archer Maclean's Mercury, MediEvil Resurrection; Tokobot at 2.00.10) and 16 newer (Gradius Collection, Liberty City
+  Stories, Pursuit Force, Ridge Racer 2, Crisis Core, Patapon 2, LocoRoco, Midnight Club 3, Peace Walker, Dissidia,
+  Ys Seven, Ratchet & Clank: Size Matters, Virtua Tennis 3, Daxter, Lumines II, Ultimate Ghosts 'n Goblins). 25 give
+  the same pictures at all four frames. The other 5 differ at a frame or two by an animation step (Dissidia's logo
+  fading in at 300, Lumines's title background at 1200, Peace Walker at 300, Pursuit Force at 2400, LocoRoco's title
+  at 2400 and 3600); run again, each runner differs from itself as much (the base runner from itself in LocoRoco,
+  this branch's in the other four), and the two runners' second runs match but for LocoRoco, which varies on its own.
+- On Vulkan (accurate), Lumines, Tokobot, Crisis Core and Hot Shots Golf: the same pictures on both runners at all
+  four frames.
+- The final build (after the review's fixes) against the base runner: Lumines, Tokobot, Twisted Metal, Metal Gear
+  Acid, Crisis Core, Patapon 2 and Ridge Racer 2 the same at all four frames; Need for Speed: Most Wanted's frames as
+  the branch's earlier run.
+
+**Left, and why.** The GE's time (a list taking time to draw: the statuses a callback or a poll would see meanwhile;
+not modelled, as part 9 decided). The state buffer's layout as the PSP's (programs that look inside it: two
+pspautotests). sceGeGetStack. A SIGNAL call's stack in use refused. A third CALL (still stops the GE). Transfers past
+VRAM's end and sceGeEdramSetAddrTranslation(0)'s mirrors. God of War: Chains of Olympus's speed (7.7 frames a second,
+the kernel side's profile finding most of its time in the drawing a TRANSFER_START waits for: every transfer flushes
+everything pending, overlapping or not). The kernel-side causes above (the kernel side's branch).
+
+## Part 58: sceJpeg, scePauth, the PS3's memory, and the last functions games stopped at
+
+On branch `cursor/psp-hle-games12-2b67`, on top of #189's `cursor/psp-hle-games11-2b67`. Sources: pspautotests' programs
+and their recordings (jpeg's eleven, hash/mt19937ctx, rtc/arithmetic and rtc/convert's sceRtcGetTick, each program also
+run through the kernel by a scratch runner answering its emulator devctl and its output compared with the recording line
+for line), pspsdk's headers and stubs, ITU-T T.81 (JPEG), uOFW's interface documentation (the power service's
+`power_user.h` and its exports list), the PSP Developer Wiki's keys, and the games' own behaviour: their calls traced,
+and their code read around the calls (what they pass, what they do with what comes back). No PPSSPP or JPCSP source was
+read.
+
+**1. sceJpeg** (`jpeg.cpp`). Monster Hunter Portable 3rd shows its movies through sceJpegCsc (below); the whole library
+is here, as pspautotests' jpeg tests recorded it on a PSP. The library's one context: sceJpegInitMJpeg (again:
+0x80650042), sceJpegCreateMJpeg with the picture buffer's size (wider than 1024, compared signed: 0x80650020; any
+height), sceJpegDeleteMJpeg (its size kept: decoding into pixels still uses it), sceJpegFinishMJpeg (refused while a
+context is made); 0x80650039 out of turn. Pictures: baseline JPEG, Y with its colours at half its size each way (4:2:0);
+grey or 2x1 pictures are 0x80650016. sceJpegGetOutputInfo gives the planes' size (480x272: 195840) and the colour
+information 0x00020202; sceJpegDecodeMJpegYCbCr and its Successively sibling write the planes, Y then Cb then Cr;
+sceJpegDecodeMJpeg and its sibling write 32-bit pixels a row of the picture to a row of the context's width, refusing a
+picture larger than the context (0x80650020, before the library starts too) and then the library not started
+(0x80000001). Every decoding function refuses data reaching the kernel's half of the addresses (0x80000023), no data,
+none at all (0x80650004), and data not starting with SOI (0x80650023), each in the order the recordings show. The
+conversions, from planes into 32-bit pixels a row of the picture to a row of the buffer's width: sceJpegCsc for 2x2, 2x1
+and 1x1 colour planes (anything else 0x80650013; a height of 0 converts a row and returns -1), with JPEG's own sums in
+16-bit fixed point; sceJpegMJpegCsc on the Media Engine (the library started; at most 720x480 and a buffer 1024 wide),
+with sums of 8-bit coefficients and its Cb and Cr from 1: both fitted to the recordings' 40 colours to the value. The
+Media Engine moves 8 bytes at a time, a byte's place in its 8 its own address's, so a plane 4 bytes past a multiple of 8
+reads each 8 bytes' second half from 8 bytes before: that is mjpegcsc's patterns (its first 16 pixels' Y, Cb and Cr from
+before each plane, the buffer being a static array 4 bytes off), and its rows a pixel apart writing every byte but their
+last four (the write's own byte order, unrecorded, taken to be the read's); it keeps the buffer width in 11 bits (its -4
+wrote its first rows 8176 bytes apart). Decoding into pixels uses sceJpegMJpegCsc's sums, its rows written as they are
+(no recording shows its pixels or a buffer off a multiple of 8). A picture's data is read from memory only as far as
+it's used, as a game may give the size of a whole buffer of pictures. The calls on the Media Engine let other threads
+run, as the tests' checkpoints show: init and finish when they succeed, the decoders and sceJpegGetOutputInfo once their
+buffers' addresses pass, the conversions when they convert (sceJpegMJpegCsc only for 16 rows or more), never the
+context's calls.
+
+The decoder is Phobos's own, from T.81: markers, Huffman tables (Annex K's when a picture has none, as Motion JPEG's
+pictures may not), restart markers, a floating-point inverse DCT rounded to the nearest. Checked in scratch against
+libjpeg-turbo on pspautotests' pictures and pictures of our own (odd sizes, restart markers every MCU and every three,
+optimized tables, the tables taken out): its float IDCT's planes to the sample but 0 to 11 pixels a picture, its integer
+one within 1. Six of the eleven programs print exactly what the PSP printed (create, delete, getoutputinfo, decode,
+decodes, decodeycbcrs); init and finish differ only in their module loading's lines (sceUtilityLoadAvModule and its
+siblings switching threads: utility.cpp's, not sceJpeg's); the other three only where the PSP did what nothing explains
+or what timing decides: csc's init and mjpegcsc's finish not switching (an earlier call keeping the Media Engine busy),
+decodeycbcr's null buffer written somewhere the test could see, csc's colour information with its top 12 bits set
+writing past the picture, and mjpegcsc's pictures under 16 rows or 16 pixels wide, its negative stride's later rows, and
+one byte of the test's own heap pointer before its buffer (0x50 there, 0x30 here).
+
+**2. sceMpegAvcConvertToYuv420** (`mpeg.cpp`). Monster Hunter Portable 3rd decodes each movie picture with
+sceMpegAvcDecodeYCbCr, converts it with this into a buffer, then sceJpegCsc (480x272, 512 wide, 0x00020202) into its own
+frame buffers. It writes the picture sceMpegAvcDecodeYCbCr gave last as 4:2:0 planes, the decoder's samples as they are;
+nothing before a picture has come. pspautotests imports it but records nothing, so whether a PSP's stretches the
+movie's video-range samples (Y 16 to 235) to the full range of sceJpegCsc's sums (csc's recorded colours are JFIF's)
+isn't known: given as they are, the movie's blacks may be a little lighter than on a PSP.
+
+**3. scePauth** (`pauth.cpp`, and `decrypt.cpp`'s type 5 given a second key). Monster Hunter Portable 3rd calls
+scePauth_98B83B5D (data, size, where the size goes, a 16-byte key) once, on 0x48000 bytes: a type 5 ~PSP body (tag
+0x2fd313f0, the wiki's scePauth XOR key's) with no header in the clear. Part 18's note that a PSN game's programs mix a
+second key into type 5's pad and first step was the lead; of the ways the game's key could enter those steps, one alone
+makes the header's SHA-1 digest check out (XORed into the pad once it's decrypted, and into the XOR key of the first
+0x50 bytes), and the data then decrypts to a Capcom texture (".TMH0.14", 0x47c80 bytes), so the digest is the proof. The
+game copies the size it's told back from its buffer, and marks the data bad when the result isn't 0. Data that won't
+decrypt is refused (SCE_ERROR_INVALID_VALUE, chosen), left as it was. scePauth_F7AA47F6 isn't added: no game here calls
+it, and nothing says what it does. The tests encrypt their data the same way (the game's isn't kept here), so they hold
+the code to that way; the game's digest is what proves it.
+
+**4. scePowerCheckWlanCoexistenceClock** (`power.cpp`; NID 0xa85880d0, uOFW's exports list). The fastest PLL the model
+allows with the wireless LAN on: 1 (266 and 333 MHz), a PSP-2000's, as uOFW's documentation gives it. Monster Hunter
+Portable 3rd, Final Fantasy Type-0, Kingdom Hearts Birth by Sleep and Dragon Ball Z: Tenkaichi Tag Team call it.
+
+**5. Monster Hunter Portable 3rd HD's memory** (`kernel.cpp`, `start()`). Its EBOOT.BIN is a static program of one
+segment, 26.5 MiB from 0x08804000 (0x22b258 bytes of code and data, 24.4 MiB of .bss); its ~PSP header says SDK
+0x06030610 and its PARAM.SFO 6.36, neither asking for memory (no MEMSIZE). The PS3's PSP emulator ran these remasters
+with more than a PSP's 24 MiB; a PSP-2000's 64 MiB holds it. So a program bigger than the user partition gets all of
+RAM, as MEMSIZE 1 gives it (the partition to 0x0c000000): no retail PSP could load such a program, so every program a
+PSP runs sees the partition it always did. Melodie (Prototype) is left as it was: its program fits, and it asks at run
+time for a 40 MiB block, which a PSP-2000 refuses too; growing the partition on request would change what any program
+probing for memory sees.
+
+**6. sceMt19937** (`mt19937.cpp`; Genso Suikoden carries Sony's libmt19937.prx, which the kernel stands in for), sharing
+the kernel's sceKernelUtilsMt19937, which now keeps its context as hash/mt19937ctx recorded: a count of 0 and the 624
+words already stirred once seeded, each number stirring its own word for the next round as it's handed out (the same
+numbers as before). A context of the older layout, as a state saved before kept one, goes on with them too: that layout
+stirred all 624 words at once when its count reached 624, so part way through a round the words it has handed out aren't
+stirred, which the last of them shows (stirred, a word agrees with the next one and the one 397 on whatever its own top
+bit was; unstirred, by a chance in 2^31), and they're stirred at its next draw; checked from ten points in a round to
+the same numbers and words as the new layout's. The library's context is taken to be the same (no recording shows it).
+
+**7. sceRtcTickAdd*** (`rtc.cpp`; Tekken 6 calls the seconds' and minutes'), as rtc/arithmetic recorded: ticks,
+microseconds, seconds and minutes by 64-bit amounts, hours, days and weeks by 32-bit ones, wrapping round; months and
+years in the calendar, the day cut to the new month's last, a date outside the years 1 to 9999 leaving the destination
+as it was (and 0). sceRtcGetTick now adds microseconds past a second rather than refusing them, as the recording's
+9999-12-31 23:59:59 with 99,999,998 microseconds shows (a minute and 39 seconds into 10000), and refuses a date past the
+year 9999 (rtc/convert's 10000-01-01, its tick left as it was). rtc/arithmetic prints exactly what the PSP printed.
+
+**8. sceHprm's callbacks** (`ctrl.cpp`): sceHprmRegisterCallback and sceHprmUnregitserCallback (Sony's spelling: the NID
+pspsdk's stubs give, 0x444ed0b7, is that name's hash). pspsdk gives nothing more, so they're taken to be as scePower's
+pair (pspsdk's psppower.h: a slot 0-15 or -1, a callback; the slot taken given back for -1, else 0), which is how
+Soulcalibur: Broken Destiny calls it at boot (-1 and the callback it has just made; it keeps the callback, not the
+result). Never told, nothing being plugged in.
+
+**9. The ATRAC low level** (`atrac.cpp`): sceAtracLowLevelInitDecoder and sceAtracLowLevelDecode, which nothing
+documents; followed through Corpse Party's CRI sound library: parameters of three words (the frames' channels, the
+output's, the frame size), then a frame at a time into 16-bit interleaved samples, the bytes used and the samples' bytes
+written told. Corpse Party's music, silent before, plays from about 35 seconds on.
+
+**10. sceP3da** (`p3da.cpp`), the positional 3D audio library: as Sol Trigger's sound thread uses it, the channels'
+buffers (an array of addresses of mono samples) mixed into stereo pairs. Sony's placing of each channel isn't known, so
+each is heard in both ears, their sum held to 16 bits. Sol Trigger, silent before, has its sound from 20 seconds on.
+
+**Save states.** Version 21 (layout 21: sceJpeg's library and context, sceHprm's callbacks, which ATRAC IDs decode at
+the low level); layouts 15 to 20 load with none of those. The states' field and refusal tests cover each.
+
+**The games** (the report's runs: Software, 7 GE threads, 3600 frames, Start at 120 and Cross at 1800, PNGs at 60, 300,
+1200 and 3600; the base commit's runner and this branch's on 35 games):
+- *Monster Hunter Portable 3rd*: black to its intro movie (the Capcom logo, its memory stick check, the movie); with
+  Start at the title, its game menu and character creation, whose screen stayed empty after "GE: a display list RETurned
+  with no CALL to return from" until merged with part 57's GE fix for it: its character, menu and name prompt now.
+- *Monster Hunter Portable 3rd HD*: black (never started) to the same: its memory device check, the intro movie with its
+  sound, the title and the game menu.
+- *Corpse Party* and *Sol Trigger*: their title menus as before, with their music now.
+- *Genso Suikoden*, *Soulcalibur: Broken Destiny*, *Tekken 6*, *Final Fantasy Type-0*, *Kingdom Hearts Birth by Sleep*
+  and *Dragon Ball Z: Tenkaichi Tag Team*: nothing missing any more; their frames the same (Genso's notice a fade step
+  apart; Dragon Ball Z still waits on PGD data past its notice).
+- The other 25 (menus, movies and gameplay across the library): every frame the same on both runners, but where the
+  runner's own timing moves an animation under load (Space Invaders Extreme's frame 1200 differs between two runs of the
+  base runner as much), checked again with fewer runs at once.
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 392 groups, none failing. `tests/allegrex/run-tests.sh`: 58, none
+failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing. New groups: the jpeg library's context, pictures
+decoded, data refused, planes converted, planes converted on the Media Engine, calls that wait, pspautotests' pictures
+(with PSP_AUTOTESTS); scePauth's data; movies as 4:2:0 planes; the clock beside the wireless LAN; ticks moved on; the
+ATRAC low level and in a state; P3DA's mixing; and the Mersenne Twister, clocks, sceHprm, the user partition, states and
+their fields extended. The pictures are made by `tests/psp/jpeg-maker.hpp`, a small baseline encoder (Annex K's tables
+written or left out, restart markers): flat blocks decode to the sample. Twenty-one deliberately broken versions (pixels
+from the wrong colour sample, the Media Engine's colours not held to 1, its transfers read as they lie, short pictures
+waiting, widths compared unsigned, coefficients not unzigzagged, scePauth's key kept out of the pad, hours by 64-bit
+amounts, months past the years written, no stirring at seeding, every low-level channel the left, big programs not given
+RAM, the 4:2:0 planes a byte off, P3DA's channels replaced, a used sceHprm slot taken again, low-level IDs not saved, an
+older context's words left unstirred, a picture's data read no further than its first 64 KiB, the Media Engine's writes
+made straight, years past 9999 taken, a context wider than 1024 loaded) each failed them.
+
+**Left, and why.** scesupPreAcc (both Dissidias and Persona 3 Portable call it and go on). P3DA's placing of its
+channels. The range of sceMpegAvcConvertToYuv420's samples, and the Media Engine's byte order writing a misaligned row
+(both above). A state of layout 20 or before isn't loaded by any test (as for every earlier layout). Melodie's 40 MiB
+request (above). PGD decryption and the black games part 55 listed. The runner's WAV header writes each of its tags with
+a NUL after it (`tools/psp-runner/runner.cpp`'s loops over C strings), which players reject; the measurements here read
+past it.
+
+## Part 59: the black games with nothing missing — descriptors, the drive, async requests, SAS and the movie ring
+
+On branch `cursor/psp-hle-games13-2b67`, on top of #189's `cursor/psp-hle-games11-2b67`. Sources: pspautotests'
+programs and their recordings (io/open/tty0, io/shortname, misc/timeconv, intr/delays, video/mpeg/ringbuffer/avail and
+destruct, threads/scheduling/dispatch, utility/savedata/saveemptyfilename), uOFW's interface documentation (mediaman),
+pspsdk's headers, and the games' own behaviour, traced with a scratch runner (their calls by frame, threads, memory
+and code, and the interpreter's calls by frame). No PPSSPP or JPCSP source was read. The GE's agent worked the same
+list from the GE's side (#192); findings went both ways through a shared note, and nothing here touches
+`ares/psp/ge/`.
+
+**1. File descriptors, lowest free first** (`io.cpp` newFile()). Descriptors counted up for good, as IDs do. Crush
+keeps a byte counter per descriptor in 16 words just before its file stream's buffer; the archive it opens at boot got
+35, whose counter lands inside the buffer and flipped a byte of the zlib data just read: its inflate failed, a
+negative count became a copy of 0x80000108 bytes over all of memory, and the CPU stopped in a call into the program at
+frame 730. Jak and Daxter: The Lost Frontier opened and closed one file 87,000 times in its first 200 frames, its
+numbers climbing, and never went on. On a PSP descriptors are small numbers (io/open/tty0 recorded 5, 6, 7 and on
+under PSPLink); a closed file's number is given again, the lowest free (chosen, as a table of descriptors has it),
+from 3 to 63 (MostFiles: chosen, no recording shows the limit). A number the movie player's file holds, or that a
+thread's wait for a request still names (its file closed while the thread was made ready to run its callbacks, or ran
+them), isn't given to another. Crush reaches its title; Jak its notices and its intro cutscene.
+
+**2. Activating the drive takes a mount's time** (`umd.cpp`). Def Jam: Fight for NY starts its file thread, of a lower
+priority, just before sceUmdActivate, and makes the thread that waits on that thread's semaphore only after: activated
+at once, the semaphore wasn't there yet, the loader ended with -1, and main polled for it for good. uOFW's mediaman
+documentation says activating assigns the file system, the block device and the alias: it mounts the disc, which reads
+it. The caller now waits a sector's read (about 1.6 ms; chosen, as no recording times it), other threads running
+meanwhile; with interrupts or dispatching held off, or from an interrupt handler, it doesn't wait. Def Jam shows its
+logos, its autosave warning and its title.
+
+**3. An asynchronous read's bytes land as it's done** (`async.cpp`, `io.cpp`). The kernel did a read as it was made
+and held only its result back. Dead or Alive Paradise writes a marker over a read's first and last words right after
+sceIoReadAsync returns and takes the marker still there, when the request is done, for a read that failed: it made the
+same 506 KB read again for good. A read is now counted, and the position moved, as it's made, and its bytes moved into
+memory as it's done, as the drive's transfer puts them; an image that can't be read there makes the result an I/O
+error, the position back where the read began. A pending read keeps where its bytes go and where it read from (state
+layout 22). sceKernelLoadModuleByID now refuses a file with a request under way, as the file's own reads are refused.
+Dead or Alive reaches its title.
+
+**4. sceIoDread's short names by the program's SDK** (`io.cpp`). Need for Speed: ProStreet (SDK 0x03070010) lists
+ms0:PSP/SAVEDATA with d_private pointing at a 272-byte buffer on its stack; the kernel wrote the newer
+SceIoFatDirentPrivate there (1040 bytes zeroed from 4 in), over its saved registers, and it returned to address 0.
+io/shortname recorded two layouts: with no SDK version or 0x03070110, the 8.3 name in 13 bytes from the start and the
+long name right after it; with 0x06060010, the size the program declared kept, the short name 4 bytes in and the long
+name 20 in. The change is taken at 0x03080000 (the test's "documented as changing at SDK 3.08"); nothing goes past the
+long name in the older layout, nor into a newer one declared smaller than 1044 bytes; "." and ".." are their own short
+names. ProStreet reaches its main menu; Metal Gear Solid: Portable Ops and Portable Ops Plus and MX vs. ATV: On the
+Edge, stuck loading, reach their titles.
+
+**5. sceKernelSysClock2USec(Wide) with nowhere for the seconds** (`kernel/system.cpp`). Tekken: Dark Resurrection
+works out its clock's rate as 10^12 over what sceKernelSysClock2USecWide makes of 1,000,000, asking for the
+microseconds alone (the seconds pointer NULL); split, that's 0, an infinite rate, and its frame limiter waited for
+good after the autosave notice, the intro movie's feeder never started. With no seconds wanted, the microseconds are
+the whole count (its low 32 bits), in both functions; misc/timeconv's one such call, of 0x1337, can't tell either way,
+and its split of -1 is kept. Tekken plays its intro movie.
+
+**6. One asynchronous result at a time** (`async.cpp` asyncIssue()). Valhalla Knights makes a seek, polls it straight
+away (under way) and, two frames on, its file state machine makes the seek again before polling: the kernel let a new
+request overwrite a done result nobody had taken, so the second seek was under way at the poll, and so on for good. A
+file now holds one request's result at a time: another request (of any kind) is refused, ASYNC_BUSY, until the result
+is taken, as one under way is. intr/waits shows it: four seeks made with only refused waits between them, and a wait
+after the fourth that may not wait still takes a result at once (the first's: made, the fourth would have been under
+way), then a seek on the emptied file still under way at a poll soon after, with only refused calls between. VK's
+second seek is refused, its poll takes the first's result, and it shows its notice, logos and intro. (A first fix,
+seeks done at once, was undone: the library run found Patapon 2 and 3 black with it, their file library polling a seek
+at once and, finding it done, polling again for a result already taken, for good; intr/waits too shows a poll soon
+after a seek finding it under way. That fix had also turned Fuuun Shinsengumi black, which with it gone is as before.)
+
+**7. A SAS grain takes the caller's time** (`sas.cpp`). PaRappa the Rapper's sound thread, at the top priority, starts
+before the game reserves its channels: each output was refused at once, __sceSasCore returned at once, and the thread
+spun for good (2,800 rounds a frame), the main thread never running to reserve them. intr/delays recorded __sceSasCore
+among the calls that take a while on a PSP (refused where nothing may wait); the caller now waits 300 microseconds for
+the grain (chosen, as the decoders' Media Engine wait: pspautotests' new audio/timing probes have no recording yet).
+PaRappa shows its logos and title. Other games' sound threads now give the CPU back for their grains: After Burner:
+Black Falcon's logo movie decodes at its 30 pictures a second rather than stuttering, and the run's Start at frame 120
+no longer cuts it short, so its title comes 600 frames later than before.
+
+**8. A movie's ring counted where its library reads it** (`mpeg.cpp`). Ridge Racer's movies are short (opening.pmf:
+300 pictures, 10 seconds, its 67 packets all fitting in the game's 320-packet ring), and its movie scene goes on to
+the title only once a movie has played 30 frames. Its movie thread is started with the SceMpeg handle and the
+ringbuffer as its argument, so it holds a copy of the ring, and ends the movie once its reader has put the whole
+stream and sceMpegRingbufferAvailableSize(copy) says every packet is free: counted in the copy's own fields that was
+so at once, the movie ended three pictures in, and the game drew black for good. ringbuffer/avail recorded the call
+crashing for a ring with no library, and 0x80618009 once the library was deleted: it goes through the ring's library
+word. Counted in the library's ring, the copy follows the real one. sceMpegDelete now clears the library's signature
+(chosen), so a ring naming it is refused, as avail's was. Ridge Racer plays its movie and reaches PRESS START BUTTON,
+then NEW GAME and its driver profile.
+
+**Re-judged, recorded, left to others.** MACH isn't stuck: its title shows from 2100 to about 3550, and frame 3600
+falls in the fade before its attract loop (menu). Street Supremacy isn't stuck either: frame 3600 is a map's loading
+screen inside its intro, which goes on (movie). God of War: Chains of Olympus is slow in the GE: 63% of the emulation
+thread in GE::flush() at TRANSFER START (macOS `sample` over 20 s), only 26% running the CPU and the kernel (the GE's
+part). God of War: Ghost of Sparta opens a PGD file about 3,000 times a frame, refused each time, each open looking
+the path up on the CHD image (the PGD agent's part). Def Jam's first save is a WRITEDATASECURE into a save that isn't
+there: NO_DATA, as saveemptyfilename recorded for a write with no file name, and it asks to go on without saving; no
+recording covers a write with a file name, nor GETSIZE with no save. Crush now calls sceIoGetFdList once and goes on
+(the libraries' part). Jak's newlib heap asks sceKernelAllocPartitionMemory for type 0x30 (refused, as
+sysmem/partition recorded the types past 10), and its level module touches 8 bytes at address 0; it runs on. The
+runner's WAV writer puts a NUL after each of its four-letter tags (`for(char c : "RIFF")` takes the literal's
+terminator), so standard readers refuse its files (the runner's part).
+
+**Save states.** Version 22, after part 58's 21 (sceJpeg, sceHprm and the ATRAC low level), as the stack has them;
+layouts 15 to 21 load, their files' count passed over and their files keeping their numbers (any short of 2^31, as
+states saved from them keep them), 15 to 20 with part 58's fields defaulted too. "older layouts load" makes a layout-21
+and a layout-20 state from a layout-22 one, the newer fields cut out where saving with each changed shows them, and
+loads both. This branch was a 21 of its own before the stack merged under it: a state its runner saved then is neither a
+22 nor a 21 (part 58's fields where its own should be), and won't load safely; only test runs made such states. States
+the base commit's runner saved (version 20) of Lumines at frame 600, Patapon 2 at 1200 and GTA: Liberty City Stories at
+2400 load into this branch's runner and carry on 600 frames: Lumines' and Patapon 2's pictures are byte for byte the
+base runner's; two of GTA's ten frames are a few pixels apart (27 and 3), its sound thread's grains now taking their
+time (the same with the wait taken out). Into the merged stack's runner the same three states load and carry on:
+Lumines' and Patapon 2's pictures byte for byte again, and GTA's the same scene, from its 3D street on about a tenth of
+the pixels a little apart (a mean of 0.06 of 255, at most 14), part 60's perspective texels.
+
+**The games** (the report's run over the whole library, the base commit's runner and this branch's; frames every 300
+where a judgement needed it):
+
+| Game | Base at 3600 | Now | What shows now |
+|---|---|---|---|
+| Crush | black (the CPU stopped at 730) | menu | its title, Press START |
+| Dead or Alive - Paradise | black | menu | its logos, save prompts and title |
+| Def Jam - Fight for NY - The Takeover | black | menu | logos, autosave warning, title |
+| Jak and Daxter - The Lost Frontier | black | movie | notices, then its intro cutscene |
+| MACH | black (judged again) | menu | its title to about 3550, then a fade |
+| Metal Gear Solid - Portable Ops | loading | menu | intro, then PRESS START BUTTON |
+| Metal Gear Solid - Portable Ops Plus | loading | menu | intro, then PRESS START BUTTON |
+| MX vs. ATV - On the Edge | loading | menu | logos, then "Press START button to begin" |
+| Need for Speed - Carbon - Own the City | menu (its notice, 12 fps) | movie | title from 900, its intro after Cross |
+| Need for Speed - ProStreet | hang | menu | title, then its main menu |
+| PaRappa the Rapper | black | menu | logos and its title |
+| Ridge Racer | black | movie | its opening movie; its title from about 4000 |
+| Street Supremacy | loading (judged again) | movie | logos, notices, then its intro |
+| Tekken - Dark Resurrection | black | movie | autosave notice, then its intro movie |
+| Valhalla Knights | black | movie | notice, logos, then its intro |
+
+Need for Speed: Carbon - Own the City, not among the black games, is the Dread fix's too (it had sat on its notice at
+12 fps). Against the base runner, every other game shows the same scene at each frame, or the same sequence a few
+frames apart (the SAS grain's timing, or Battlefront's random maps), save two that now show more: Mercury Meltdown's
+Ignition logo movie and After Burner's logo movie play through (the first was skipped on the base runner, with or
+without presses; the second was cut short by the run's Start). None went worse. In part 55's categories: menu or
+gameplay 178 -> 186, movie 63 -> 69, stuck loading 4 -> 0, black or hang 19 -> 9.
+
+**On the stack.** Merged onto #194 (parts 57, 58 and 60 under it), the whole library was run again the same way and
+compared with this branch's own run: every game shows the same scene at each frame but part 57's Need for Speed: Most
+Wanted 5-1-0 (its title) and part 58's two Monster Hunter Portable 3rds (their intro movie), as their branches found,
+and 3D frames a few pixels apart, part 60's perspective texels (IL-2 Sturmovik's movie and Gitaroo Man's frame 3600
+a few frames apart; none another scene). MACH, judged again here, is the menu part 57 found too. None is worse than on
+either branch; Corpse Party's music, missing on this branch alone, plays. Four games call a function not there yet: the
+three scesupPreAcc ones and Crush's sceIoGetFdList, each going on. The combined counts: menu or gameplay 187, movie
+71, stuck loading 0, black or hang 6, timed out 2 (docs/psp-compatibility.md).
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 383 groups, none failing, and 403 on the stack.
+`tests/allegrex/run-tests.sh`: 58, none failing, on both. `tests/psp/ares/run-tests.sh`: 307 checks, none failing, on
+both. New groups: "files numbered lowest free first", "disc drive mounting as it's activated", "async files from a
+damaged image", "sas grains take the caller's time", "mpeg ringbuffer's free packets counted in its library's"; "files
+short names" redone for both layouts; and to existing groups, the clock's split with nowhere for the seconds, a read's
+bytes landing as it's done, Valhalla Knights' seeks, a request refused over a result not taken, LoadModuleByID over a
+busy file, and the states' new fields and refusals; on the stack, "older layouts load". Each new or changed test fails
+without its fix, and each commit builds and passes its groups alone. Two independent read-only reviews (the second over
+three rounds); what they found was fixed: file numbers past 63 from an older state kept whatever the layout (a state
+saved after loading one was refused), checks safe from overflow, a short or failed read's position, LoadModuleByID
+refused on a busy file, a thread's waits keeping their file's number, the mpeg library's deletion, tests isolating what
+they name, and comments.
+
+**Left, and why.** The 300-microsecond grain and the mount's sector are chosen, not measured; so are the descriptors'
+limit of 63 and their reuse lowest first. intr/waits' wait with interrupts held off takes a done result (0), where
+sceIoWaitAsyncCB here refuses it first (CAN_NOT_WAIT): an older difference, no game seen to need it. Black still: the
+five PGD games (part 55) and Melodie (Prototype), its 40 MiB block. God of War's speed (the GE). Def Jam's save (no
+recording).
+
+## Part 60: perspective texels divided by the GE's reciprocal; patch divisions
+
+On branch `cursor/psp-ge-fits3-2b67`, on top of #192's `cursor/psp-ge-lists-2b67` (#191 under it). Round 5 of
+`tools/psp-measure` (the owner's `psp-round5` pictures) and round 4 run again with #191's timed waits (`psp-round5b`)
+against the software renderer. A rule was taken only where every picture it touches got closer and none got worse.
+Original arithmetic: none of PPSSPP's code was copied, and JPCSP was not read. The screen projection is unchanged
+(part 10's trunc-toward-2048). Lighting is unchanged (below).
+
+### The perspective divide: fitted
+
+`persp-w3` holds w = 3 at every corner, so there is no perspective gradient, and u runs from 0 to 1024 texels. The
+core's per-pixel u was an IEEE divide and came out exactly one texel high on the left half of every row. The geometry
+and the edge weights already matched, so the divide is what differs: the GE divides by a reduced-precision reciprocal,
+not a full divide. The same path is what `persp-wall`, `persp-divide` and `persp-floor` exercise, and the older
+`3d-wall-texels` and `3d-floor-texels`.
+
+**The reciprocal** (`draw.cpp`'s `geReciprocal()`). It's a table of 128 straight chords across the fraction: the top
+7 bits of the magnitude's fraction pick the chord and the next 8 the position along it. Chord s starts at
+`round(131072 / (1 + s/128))` (131072 down to 65793; never an exact half, so which way a half rounds doesn't arise)
+and its slope is that run to the next start, over the 256 positions in the chord, rounded half to even (slopes from
+-254 to -64). Rounding the slopes' halves away from zero is a trade: `persp-divide` 209, `persp-floor` 305, round 3's
+`3d-wall-texels` 21 and `3d-floor-texels` 20 pixels apart, but `persp-wall` 246 and `persp-w3` 28928 (29,729 in all
+against 19,616), so halves go to the even. The value is `(64 * start + 63 + slope * position) >> 7`, in units of 2^-16
+of the fraction's reciprocal, placed back at the exponent. The sign is kept. A zero, a denormal, an infinity or not a
+number gives 0. Two chords sit one unit high at the positions
+`persp-divide` and `persp-floor` actually sample, so their starts are two counts low (the slopes stay the unadjusted
+ones): chords 5 and 58. Without chord 5's correction `persp-divide` has 343 pixels apart and `persp-floor` 355;
+without chord 58's, 305 and 353 (211 and 351 with both). Putting 49 or 73 one unit low as well would clear the rest of
+`persp-divide`'s exact-integer columns and make `persp-floor` worse, so they stay. The other 126 chords aren't pinned
+one by one: they're the formula's.
+
+**At a vertex** (`GE::triangle()`). s is u * R(w) and t is v * R(w), each with its low 8 fraction bits cut off (the
+GE's 24-bit float, toward zero), and q is R(w). s, t and q then become 15-bit integers on the unit of the largest
+exponent among the three of that one, cut toward zero. The 15 bits are sharply pinned: with 13, 14, 16 and 17 bits
+`persp-wall` has 5647, 2416, 1738 and 2396 pixels apart (23 with 15), and with 20 or 23 about 2550, as the plain
+divide had. With the texture matrix's own q (TEXTURE_MAP_MODE 1, projected textures), q is float24(q * R(w)): the
+divide by q the blend had before, carried over, not measured. (Every other way that's R(w) itself: it has 16
+significant bits at most, which the cut keeps, but where it's a denormal, for w of 2^126 or more.)
+
+**Across the triangle.** Those integers are stepped with part 48's stepper: the reciprocal of twice the area kept to
+16 significant bits and rounded down, the steps in 16384ths and rounded down, anchored at the leftmost corner (the
+topmost of two). A pixel takes the stepped value rounded down, times its unit. Its texture coordinate is that s (and
+t) times the reciprocal of that q, the product kept to 24 significant bits and cut toward zero (a rounded float
+multiply sits the wrong side of several of these texels; a product below 2^-126 then rounds as a float holds it). A q
+of 0 has the reciprocal 0, so the coordinate 0, and a q below 0 a reciprocal below 0 (no picture measures either:
+every corner's w is above 0 in all of them). Nearest filtering still takes `floor` of the coordinate (`texture.cpp`).
+The four-at-a-time path (`four.cpp`) and the one-at-a-time path (`raster.cpp`) give the same numbers: the same
+operations, but for the reciprocal and the 24-bit products, which the four-at-a-time path works out in its own way
+with every step exact (`reciprocalLanes()`, `productLanes()`). It's integer arithmetic and masks on the floats' bits
+(the chords a table made at compile time), with no division at a pixel. s, t and q are stepped there in 32-bit lanes
+that may run round, as colors and depth are: every value inside a triangle stays within 32 bits, whatever its steps
+(`fourFriendly()` says why), so no triangle is turned away for its size or steps any more.
+
+**What it does to the measured pictures** (pixels apart, before and after; every other file is as it was):
+
+| File | Before | After |
+| --- | --- | --- |
+| `persp-wall` | 2662 | 23 |
+| `persp-divide` | 3172 | 211 |
+| `persp-floor` | 6026 | 351 |
+| `persp-w3` | 33040 | 18944 |
+| `3d-wall-texels` (round 3) | 307 | 23 |
+| `3d-floor-texels` (round 2) | 291 | 64 |
+| `curves-made-up` | 13264 | 12974 |
+
+`persp-wall`'s u is exact; its 23 are the same v pixels `3d-wall-texels` still misses, one texel off. `persp-w3` is
+closer on every row and not exact: with w constant the stepper's gradient is a hair short of the true slope, so the
+coordinate saws across the texel boundary, 74 columns of row 128 still a few thousandths to a few hundredths of a texel
+the wrong side. Moving the chord w = 3 uses (chord 64) a unit either way doesn't beat 18944: raised it leaves
+`persp-w3` 18944 and `persp-floor` 353, lowered `persp-w3` 22016; the wall pictures stay at 23 either way.
+`persp-divide` and `persp-floor` keep a boundary pixel here and there (211 and 351); the two corrected chords are what
+those pictures pin, and the rest of the table is what they all share.
+
+**Not this path.** Sprites still blend 1 / w in IEEE doubles between the two corners (`spriteRows()`, `spriteFours()`):
+`persp-sprite` stays at 1204 and `3d-sprite-texels` at 72. Lines still divide from their two ends: `lines-texels` stays
+exact, and the other line pictures are unchanged. Curved surfaces' texels (`curves-texels`, 958) are unchanged; the
+290 `curves-made-up` picked up are patches that go through a triangle. The hardware renderer returns before this setup
+and draws with the GPU's own divide, as before.
+
+**Tests.** "draw3d perspective texels as a PSP draws them" (`tests/psp/draw3d.cpp`) draws round 5's `persp-w3` and
+`persp-divide` as `tools/psp-measure` drew them and checks six pixels as the owner's PSP drew them: five a float divide
+gets wrong, among them one chord 5's correction pins (without it the test fails), and one chord 58's pins, four pixels
+at a time and one at a time. "draw3d four pixels at a time against one", 20000 random primitives, both paths, now also gives some of them
+texture coordinates over dozens of repeats, corners from just past the near plane to nearly the far one, or the
+texture matrix's own q: they still match. Save states are unchanged (the new fields are on a job, which isn't
+serialized). The arithmetic was first written with library calls (frexp, ldexp) and then as it is now; the two drew
+every measured picture byte for byte the same. An independent review checked the reciprocal over all 2^32 floats, the
+products and the quantizing over hundreds of millions of random cases, and 1.2 million extreme triangles both ways,
+with no difference; the GE's source builds with GCC 11, as the Linux build's does.
+
+**Speed.** The GE's divide costs more than a float division: a table read per lane, the products in doubles, and the
+setup of s, t and q for every textured 3D triangle on the GE's thread. On the RP6 (the benchmark scenes, 300 frames,
+rounds taking turns with the build before this part):
+
+| Scene | 7 drawing threads, before → after | 1 drawing thread, before → after |
+| --- | --- | --- |
+| Midnight Club 3, race | 54.8 → 53.2 fps (−3%) | 23.7 → 21.7 fps (−8%) |
+| Midnight Club 3, menu | 74.6 → 70.2 fps (−6%) | |
+| Liberty City Stories, city | 75.1 → 70.0 fps (−7%) | 38.4 → 35.0 fps (−9%) |
+| Liberty City Stories, woods | 71.6 → 69.3 fps (−3%) | 38.9 → 35.1 fps (−10%) |
+| Lumines, demo (2D) | 186.9 → 198.1 fps (+6%) | |
+
+The 2D scene gains as a triangle no longer sets up the old blend's edge values, and as every triangle now goes four
+pixels at a time, whatever its size or steps (`fourFriendly()`: large triangles reaching past the screen used to go a
+pixel at a time). The profile (simpleperf on the RP6) puts the 3D scenes' loss about half on the new arithmetic itself
+and half on the pixel loop waiting for it (its chain from q to the texel is longer than the old divides'); with 7
+threads the GE's thread also draws more bands itself, as the workers fall behind. Tried and kept: a 64-bit division a
+triangle shared by all its steps, only the steps its pixels use, the corners quantized with integer shifts, the
+exponent applied as two exact powers of two (no branch). Tried and dropped: reading a chord once for a four on one
+chord (the test cost more, 5% in LCS's scenes). Left to try: the reciprocal worked out a four ahead, to hide its
+latency.
+
+### Patch divisions: round 4 again
+
+#191's program gives each GE list 5 seconds and resets the GE when it doesn't finish (part 48, "Round 4 again"). The
+owner's run (`psp-round5b`) finished round 4: `stall-check` drew the same rows before and after its reset as the core
+does, so the reset works on the PSP, and the curve counts came back as:
+
+| Test | Divisions along u | On the PSP |
+| --- | --- | --- |
+| `curves-count` | 16, 63, 64 | drawn (292 pixels lit) |
+| `curves-count-65` | 65 | the GE never finished, not a point drawn |
+| `curves-count-100` | 100 | the same |
+| `curves-count-128` | 128 | drawn as 1 division: 4 points, and the list finished |
+| `curves-count-200` | 200 | never finished, nothing drawn |
+| `curves-count-255` | 255 | the same |
+
+So PATCH_DIVISION's counts are 7 bits (bits 0-6 and 8-14): 128 is 0, which divides as 1 does (the rule already
+known), and 200 is 72, 255 127, both past 64 like 65 and 100. More than 64 divisions leave the GE drawing forever
+(`sceGeDrawSync` said "drawing", not at a stall address), and nothing of that surface is drawn. The core
+(`curves.cpp`'s `patch()`) now takes the counts as 7 bits and draws nothing of a surface with more than 64 along
+either way, its points still read, and goes on with the list: a game can't have relied on more, since the PSP would
+stop there. (Only u was measured past 64; v is taken to be the same.) `curves-count-128` is now identical, and the
+four that stalled are too (nothing drawn). `curves-count`'s 72 pixels apart at 16, 63 and 64 divisions are the
+vertices' placement part 48 found (a point a pixel over here and there), not refitted here.
+
+"curves malformed" (`tests/psp/curves.cpp`) checks the counts: 64 divisions light 65 points, 128 two, and 65, 127 and
+200 none, the points read each time; its budget checks now cut 255 points each way 64 times.
+
+### Lighting: left as it was
+
+`share()` still returns `ceil(256 * amount)`, held to -256..256. Round 5's `light-share-0` through `light-share-3` (16
+normals, 192 products each: 3072 channel values) have the PSP match the core on 2209, one level lower on 816 and one
+higher on 47, so the core is mostly right or one high. Rounding the share down instead wrecks the round-3 pictures
+(`light-diffuse`, `light-cosines`, `light-shine`, `light-materials`, `light-colors`, tens of thousands of pixels), which
+is what settled the rounding up (part 48). The leftover isn't that multiply: a level taken as the product times the
+true cosine still misses hundreds, well away from a level boundary, and a normal and the same normal turned don't share
+one scale. A fixed-point cosine from 8 to 20 bits still leaves about 631 of the 3072 off, so no change to the
+share was taken. `light-share-*` are as they were (43520, 39424, 42240, 36096), and so are `light-diffuse` (12288),
+`light-spot` (768), `light-point` (9728), `light-environment`
+(512), `light-materials` and `light-colors` (1536 each). `light-cosines`, `light-powered`, `light-shine` and
+`light-ambient` stay exact.
+
+### Left, and why
+
+The near-plane cut when the first or second corner is past the plane (`clip-split`, 14086; part 48 measured only the
+third) was not refitted. `steps-check` (27) and `steps-depth-check` (346) are the stepper's known leftovers and were
+left. `persp-sprite` (1204) is the sprite path above. `persp-w3`'s 18944, `persp-divide`'s 211 and `persp-floor`'s 351
+are the reciprocal and the stepper sitting a fraction of a texel the wrong side of a boundary; no further one-unit
+change of a chord improved one of them without making another worse.
+
+## Part 61: the software renderer faster — copies that wait only for what they touch, bands listed, fours in runs
+
+On branch `cursor/psp-ge-speed5-2b67`, on top of #196's `cursor/psp-hle-games14-2b67` (#195 under it; measured against
+#195's `cursor/psp-hle-games13-2b67`, 6e305764d). The task: the
+software renderer faster on the RP6 without changing a pixel, God of War: Chains of Olympus's block transfers first,
+then part 60's cost back. Every measured picture, every bench scene's frames and end state, at 1 and 7 threads, are
+byte for byte as before. Original code: nothing of PPSSPP's was needed or read, nor JPCSP's. Save states are
+unchanged (batches and jobs aren't saved; StateVersion stays 22).
+
+### God of War's block transfers
+
+Part 59 found God of War at 7.7 frames a second through its logos, 63% of the emulation thread in `GE::flush()` at
+TRANSFER_START: the GE drew everything waiting before each copy. The game streams its textures and palettes from RAM
+into one place in VRAM that nothing draws (0x18a000 on), with copies 128 pixels wide and 1 to 105 rows high: about
+2,250 a frame in its menu, 1,750 in its first battle. Only 1.2% of them touch anything the batch being filled draws.
+Two bench scenes were made for it (`~/phobos-work/scratch/speed5/scenes`, version 22): the menu (frame 1600 from boot,
+Start at 120) and the battle on the Shores of Attica (New Game, Hero, the intro; Kratos on the walls, a Persian
+soldier attacking, nothing pressed).
+
+**The rule** (`transfer.cpp`, `threads.cpp`'s `drawnBefore()`). A copy reads its source's rows and writes its
+destination's, each between its first row's first byte and its last row's last; `vramPages()` turns each into VRAM's
+4 KiB pages as a batch's pending pages count them: none for bytes outside VRAM (only VRAM is drawn into), every 16 KiB
+touched through the second and fourth copies (which rearrange each 16 KiB), and every page for a range running from
+one copy of VRAM into the next, past VRAM's window or round the end of the addresses. The copy then waits for every
+batch drawing over any of those pages, or yet to decode a deferred texture from the pages it writes (render to
+texture), through the last of them (`settleThrough()`, `settleOver()`'s wait made general, the waiting thread drawing
+bands too); the batch being filled, if it reaches them, is drawn after all of those (`flush()`), as before.
+Everything else goes on being drawn, or filling, while the GE's thread copies.
+
+**Why it's exact.** A batch that doesn't reach the copy's pages and the copy come out the same in either order: the
+batch writes nothing the copy reads and reads or writes nothing it writes (its frame and depth buffers are its
+pending pages; its decoded textures are copies taken as its primitives were set up, before the copy; its deferred
+textures are its reads, waited for). Primitives set up after the copy go into the same batch and are drawn after it,
+as the list has them. With a hardware renderer, a copy goes as before.
+
+**What it did on its own.** On the M1 the battle went from 1.7 to 2.9 frames a second (logging builds), and on the RP6
+at 5 and 3 threads it was ahead too (4.4 against 3.8-4.0; 3.5 against 3.0-3.4). At 7 it was behind, 3.0-3.7 against
+4.0-4.2. Timers in the copy's wait, and simpleperf's off-CPU trace, showed why:
+- The base drew 91% of the battle's jobs in those flushes, about 250 ms a frame of the emulation thread's drawing and
+  waiting; the change took that to 2.4 ms. But then the workers were idle 60% of the time, the emulation thread the
+  bound.
+- The batches now held about 1,100 jobs each (many more in the menu), and every band went through every job of its
+  batch to find those reaching it: a few hundred bytes a job, megabytes a band. `record()` now files each job under
+  every band it reaches, and a band draws its list, in order (commit 2: the same jobs on the same rows in the same
+  order).
+- The pipeline still drains everything about 50 times a frame (below: 32 of them for primitives drawing over their
+  own texture), and each drain waited for the last bands of a batch on whatever cores the workers ran: the RP6's
+  three A510s at 2 GHz take a band of a heavy batch several times as long as the X3. Bands of 4 rows, not 8, end a
+  drain sooner: the battle 3.07 → 4.18 frames a second at 7 threads (+36%; LCS's city 61.8 → 70.1, its woods 64.6 →
+  68.7; 2 rows: the battle 4.2, but MC3's race and menu 2-3% slower). A job is set up again for each band it reaches,
+  which costs MC3 nothing measurable at 4 rows.
+
+**What still drains everything in God of War** (the battle, a frame): about 32 primitives drawing over their own
+texture (effects reading the frame buffer they draw into: `texture.cpp` reads such a texture from memory as it draws,
+so the primitive is drawn at once after everything before it, which it would wait for anyway, drawing into the same
+frame buffer); about 8 copies that do touch pixels being drawn; and the CPU or the screen touching busy pages
+(`settleOver()`, about 12: the displayed buffer, 0x162000-0x1e1bff, and a word at 0x161000). `drawnFirst()` never
+had to.
+
+**Vulkan** is unchanged: with a hardware renderer a copy first draws everything waiting, as before (`drawnBefore()`
+flushes: what the software renderer was left, by a renderer not ready or a PRIM it refused), and its reads and writes
+then wait, through memory's busy pages, for what the GPU drew over the bytes they touch, which finishes everything
+the GPU drew (`Renderer::finish()`, its one sync: a full one, but only for a copy reaching the GPU's pixels).
+
+### Part 60's cost
+
+Part 60's exact texels cost the RP6 3-7% at 7 threads and 8-10% at 1 in the 3D scenes. A profile (LCS's city, 1
+thread) had 54% of all cycles in `triangleRows<3>`, mostly waiting: 14% on one branch for the chain from s, t and q
+through the reciprocal's table, the products and the floor to the texels' addresses, 6% on the alpha test's branch
+for the texels.
+
+**Fours in runs** (`four.cpp`'s `triangleFours()`, commit 1). A row's fours go in runs of up to 32, in three passes:
+every four's depth test, keeping those with a lane left; then those fours' texel axes, each apart from the others, so
+their chains overlap; then their texels and pixels. The colors, fog, depth and s, t and q at the four k fours along
+the row are its first four's plus k steps at once, which run round in 32 bits as k single steps do; a run's depths are
+read before any is written, which reads what one four after another would, as `fourFriendly()` keeps a row's pixels
+from sharing a byte and a job draws each pixel once.
+
+**Tried and dropped:**
+- Each four's axes worked out a four ahead, the next one's while this one is drawn: exact, but 18% slower at 1
+  thread. The depth test drops 41% of the fours in MC3's race, 43% in LCS's city and 58% in God of War's menu, whose
+  axes were then worked out for nothing; hence the runs.
+- The corners' setup (part 60's three `geReciprocal()`, nine cuts and three `quantize15()` a textured 3D triangle,
+  4% of the emulation thread at 7 threads) for all three corners at once in vectors: exact (`reciprocalLanes()`
+  against `geReciprocal()` on every float, and 30 million random corners, zeros, denormals, infinities and NaN among
+  them, against the code it would replace), but 1% slower at 1 thread and no faster at 7. `quantize15()` made inline:
+  no different.
+
+### Numbers
+
+The RP6, the emulation thread pinned to the X3 (cpu7) as Phobos pins it (a copy of `rp6-run4.sh`, `rp6-run6.sh`,
+pins it once the GE's workers are made, which keep to every core), medians of three rounds, the builds taking turns;
+frames a second, every end state the same as the base's:
+
+| Scene | 7 threads, before → after | 1 thread, before → after |
+| --- | --- | --- |
+| Midnight Club 3, race | 49.6 → 49.2 | 21.8 → 22.9 (+5%) |
+| Midnight Club 3, menu | 63.7 → 65.0 (+2%) | 27.0 → 28.6 (+6%) |
+| Liberty City Stories, city | 75.5 → 76.7 (+2%) | 35.1 → 37.1 (+6%) |
+| Liberty City Stories, woods | 74.3 → 78.1 (+5%) | 35.1 → 37.1 (+6%) |
+| Lumines, demo (2D) | 192.5 → 192.5 | 98.1 → 103.2 (+5%) |
+| God of War, the Shores of Attica | 3.67 → 4.42 (+20%) | 2.14 → 2.19 (+2%) |
+| God of War, menu | 1.50 → 1.65 (+10%) | 0.63 → 0.68 (+8%) |
+
+(God of War: 150 frames a run at 7 threads, 100 for its menu, two rounds; at 1 thread two rounds of 100 frames for
+the battle, one of 30 for the menu.) At 1 thread every scene gets back more than half of part 60's cost; at 7 the LCS
+scenes and MC3's menu gain a little, and MC3's race, bound by the emulation thread's own work (the CPU and the GE's
+setup), stays level.
+
+Unpinned (`rp6-run4.sh` as it is, the scheduler placing the emulation thread, at times on a slower core), 7 threads,
+three rounds, frames a second after each commit:
+
+| Scene | before | fours in runs | bands listed, 4 rows | transfers |
+| --- | --- | --- | --- | --- |
+| Midnight Club 3, race | 51.5 | 51.5 | 50.9 | 51.1 |
+| Midnight Club 3, menu | 66.0 | 66.7 | 66.9 | 66.7 |
+| Liberty City Stories, city | 64.0 | 70.8 | 77.0 | 77.2 (+21%) |
+| Liberty City Stories, woods | 63.5 | 66.9 | 74.1 | 74.6 (+18%) |
+| Lumines, demo | 191.5 | 187.7 | 195.3 | 191.7 |
+| God of War, the Shores of Attica | 3.70 | | 2.29 | 4.16 (+12%) |
+
+Unpinned, the even bands help most, as a slow core taking one of the last held up a wait. The band lists without the
+transfers' change made God of War's battle slower (its rounds 2.3-3.4 against the base's 2.7-3.9); with it, 4.1-4.2
+in every round. Unpinned at 1 thread: 21.6 → 22.6, 26.9 → 28.2, 34.8 → 36.3, 34.8 → 36.3, 93.8 → 98.4.
+
+### Checks
+
+- Pictures: the measure harness's 137 (`PSP_GE_OURS`, every round's), the last commit's against the base's: byte for
+  byte the same.
+- Frames: the six cpu-speed scenes (`bench.sh` with `HASHES=1`: each frame's picture and all of VRAM, then RAM and the
+  machine's state), 300 frames at 1 and 7 threads, the last commit against the base, and its 7 threads against the
+  base's 1: identical; God of War's menu (60 frames) and battle (150) likewise. On the RP6 every run's end state was
+  the base's, at 1, 3, 5 and 7 threads.
+- `tests/psp/run-tests.sh` (sanitizers on): 404 groups, 0 failures (one new: "ge transfers among batches", a list of
+  copies among batches against one thread, with the CPU's guard over VRAM and without, and copies that must and
+  mustn't wait); `tests/allegrex/run-tests.sh`: 58 groups, 0 failures; `tests/psp/ares/run-tests.sh`: 307 checks, 0
+  failed. GCC 11 (ubuntu:22.04) compiles the GE without a warning at -O1, -O2 and -O3 with -Wall -Wextra -Werror and
+  the sanitizers, and the new test at -O1, and passes every draw3d group, "draw3d four pixels at a time against one"
+  among them.
+- Six broken versions of the copies' rule (no wait for the batch being filled; none for those launched; deferred
+  decodes left out; the source's pages left out; the rearranged copies not widened; no pages at all) each fail the
+  new test, and a seventh, waiting for every launched batch, fails its check that a launched batch reaching nothing
+  the copy touches stays launched. (Its checks of the waits run without the CPU's guard over VRAM: with it, memory's
+  busy pages would have the copy wait as well.)
+
+### Left, and why
+
+- God of War's primitives drawing over their own texture (32 a frame in its battle) are still drawn at once from
+  memory after everything: batching them would need their texels read in band order, which isn't the PSP's order for
+  a primitive reading what it draws.
+- God of War's menu draws about 28 million fours a frame (58% dropped by the depth test), all eight threads drawing:
+  more than the PSP's GE fills in a frame, so the game may draw its scene more than once a frame while the GE takes no
+  time (not looked into: timing the GE would change what games do).
+- MC3's race at 7 threads is the emulation thread's own work: part 60's setup stays (4% of that thread).
+- The RP6's little cores still take bands at 7 threads; bands of 4 rows were chosen on these scenes.
+- Scratch: `~/phobos-work/scratch/speed5` (gow-scene.sh made the scenes; rp6-run5.sh and rp6-run6.sh, rp6-run4.sh with
+  God of War, then pinned; transfer-dump-patch.py, wait-patch.py, why-patch.py and four-count-patch.py the logging;
+  check-corners.cpp the corners' check; mutate.sh the broken versions; quick-tests.sh; snap.sh; hotlines.py).
+
+## Part 62: Sony's modules the kernel has nothing of, sceIoGetFdList, the size mode's NO_DATA, a restart with all of RAM
+
+On branch `cursor/psp-hle-games14-2b67`, on top of #195's `cursor/psp-hle-games13-2b67`. Sources: pspautotests'
+recordings (utility/savedata/getsize and saveemptyfilename), pspsdk's headers, uOFW's reverse-engineered kernel read as
+a description of the PSP's (its iofilemgr, for sceIoGetFdList), PPSSPP's savedata code read as a description of the size
+mode's answer (nothing copied), and the games' own code, traced with a scratch runner (their calls, memory and code
+around the calls). JPCSP was not read. Part 61 is the GE's (its speed).
+
+**1. Sony's plain modules the kernel has nothing of run** (`modules.cpp`, `standsInFor()`). Persona 3 Portable and both
+Dissidias load Sony's LIBSUPPREACC.PRX, unencrypted. Its module, scesupPreAcc_library, exports eight functions of a
+library named scesupPreAcc (0x86debd66 among them, which each game calls once with the disc's ID) and imports only file,
+callback and power lock functions. Its "sce" name had the kernel stand in for it, but the kernel has none of its
+functions, so the games' call was refused: the last missing function of the report. A module of Sony's that came
+unencrypted is now stood in for only if the kernel has a function it exports (a kernel module, attribute 0x1000,
+always); one it has nothing of is loaded and run as a game's own module is, as on a PSP. The same rule runs the network
+libraries some games carry plain: pspnet_adhoc_download.prx (Burnout Legends, Star Soldier, WipEout, MediEvil
+Resurrection, Bubble Bobble Evolution), WipEout's HTTP, SSL and parsing libraries, and Need for Speed: Most Wanted's
+network dialog stub. None of them called a function the kernel lacks, and their frames are as before; MediEvil's own
+count of free memory shows the module's 10.5 KiB taken, as a PSP would have it. An encrypted module of Sony's is still
+stood in for by its name alone, never decrypted.
+
+**2. sceIoGetFdList** (`io.cpp`). Crush counts its open files with it (its FHLeakCheck.cpp, "%d filehandle(s) leaked")
+and, refused, took the count from its stack; the check's assert is off in the retail build, so nothing showed. pspsdk
+has no prototype, and no pspautotests program records it. uOFW's iofilemgr_kernel.h gives
+`int sceIoGetFdList(SceUID *fds, int numFd, int *count)`, and its description of the kernel's code: every file object
+the caller may see, in the order the kernel's list holds them (the first made first), the standard streams first (opened
+as the kernel starts, and made visible to programs), each one's descriptor written while there's room; the result is how
+many were written, and how many there are goes where count points unless it's NULL; a list (numFd descriptors of 4
+bytes) or a count reaching the kernel's half of the addresses is ILLEGAL_ADDR, as most negative numFds make it (one
+whose bytes wrap round below that half passes, and fits none: the kernel counts how many fit as a signed number).
+Folders count (sceIoDopen makes the same object), and so do a descriptor kept only for an asynchronous request's result
+(the object lives until the result is taken) and the movie player's file (its library opens it as the program's code).
+Chosen: the standard streams are listed as 0, 1 and 2, as sceKernelStdin and its siblings give them here (uOFW's PSP
+lists them by its kernel's own IDs for them), and a list or count nothing of the program's memory backs is refused too
+(a PSP would fault writing there). The order is each open file's place in the order the program opened files, kept in
+states.
+
+**3. The size mode's NO_DATA for a save not there** (`utility.cpp`). Def Jam: Fight for NY's first save, on a fresh
+stick: READDATASECURE (no data, rightly), its "no saved game data: save now?" message, the size mode (GETSIZE, 22), then
+WRITEDATASECURE, refused with NO_DATA (writing needs the save: part 51's saveemptyfilename), and "Save Failed
+(0x80110327)", "continue without saving?". Its code sorts GETSIZE's result through a table of the read and write errors
+0x80110321 to 0x8011032a: 0, with overwriteKB 0, leads to WRITEDATASECURE; 0x80110327, NO_DATA, with neededKB 0, to
+MAKEDATASECURE. So a PSP answers the size mode NO_DATA for a save that isn't there, and the game makes its save;
+utility/savedata/getsize recorded 0 with its save made (it never asks without one), and PPSSPP's GETSIZE answers NO_DATA
+for a missing save too. The sizes are still written. Def Jam now makes its save, reads it back, writes it and asks about
+autosave. Three more games ask the size mode before their first save and now take the way a fresh stick takes: Hot Shots
+Golf: Open Tee 2 makes its save ("Saving of game data complete") where it had called its save corrupted ("Overwrite game
+data?"); Ultimate Ghosts 'n Goblins asks "There is no game data present... Begin game anyway?", as the report's first
+runs found it, its cursor on neither answer (the run's lone Cross picks "check again"; with Left first, YES, it begins,
+its story and a stage as before); Me & My Katamari, told none of its three saves is there, plays its opening and then
+its title, where it had shown its save screen with every slot "No data".
+
+**4. A program asking first for more than the partition starts again with all of RAM** (`sysmem.cpp`, `largeRestart()`).
+Melodie (Prototype) is built with pspsdk (its first thread is pspsdk's "user_main", its heap block pspsdk's "UserSbrk")
+and asks, first thing, for a 40 MiB heap; its PARAM.SFO doesn't say MEMSIZE. Refused, it stopped there, black. A
+PSP-2000/3000 lays out its memory as a program starts (MEMSIZE 1: all of RAM), and part 58 gave all of RAM to a program
+too big for the partition; a program's need for a large heap shows only when it asks, and by then its threads' stacks
+sit at the 24 MiB partition's top, so the partition can't simply grow under it (no 40 MiB is free on either side of
+them). So a program asking, before its first frame, for a block bigger than the whole 24 MiB partition (one all of RAM
+could hold, on a machine with the RAM) is started again with all of RAM, as MEMSIZE 1 would have started it, nothing of
+its first start seen; started with all of RAM, a program isn't started again (a request all of RAM's partition holds,
+but not beside the program and its stack, is refused after the one restart), and one whose file can't be read again is
+refused, noted. Chosen: no PSP starts a program twice; this stands for the system knowing at the start what the program
+needs. A program made for the 24 MiB partition doesn't ask for more than it holds: in the library's first 120 frames
+only Melodie asks for more than 24 MiB at all, and Cladun and Phantom Kingdom, which look for their largest block from
+22 MiB down, are left alone. Melodie shows its loading screen and its menus (PLAY, SELECT TRACK, ARENA; then CONTINUE,
+MUSIC ANALYSIS, CREATURE VIEWER).
+
+**5. The two games that timed out** (`disc.cpp`). God of War: Ghost of Sparta opens a PGD-encrypted file about 3,000
+times a frame (its key refused, it tries again: part 55's PGD), and each open looked its path up folder by folder,
+reading the folders' sectors afresh and unpacking the CHD's LZMA hunks for them (80% of the emulation thread, by macOS
+`sample`): it reached frame 60 in the library run's 900 seconds. A disc never changes, so each folder's entries are now
+kept once read (a folder a sector of which couldn't be read is read again next time). It runs at about 40 frames a
+second alone (9 in the library run, five games at a time), still retrying its file, and its frames can be judged: black
+(PGD's part). God of War: Chains of Olympus is the GE's: 68% of the emulation thread waits in GE::flush() at each block
+transfer while the seven drawing threads are busy in triangleFours (15 seconds of `sample`), with no kernel wait or loop
+among it; it isn't stuck (its main menu by frame 1200).
+
+**6. The runner's WAV** (`tools/psp-runner/runner.cpp`). The header wrote each tag with `for(char c : "RIFF")`, which
+takes the literal's terminator: a NUL after each tag moved every field after it, and players refused the files. Each tag
+is now its four characters, the header the standard 44 bytes; runner-test.sh checks the tags' places and both sizes.
+
+**Save states.** Version 23: each open file keeps its place in the order the program opened files (sceIoGetFdList's);
+layouts 15 to 22 load, their files taking the order of their numbers. "older layouts load" makes a layout-22 state from
+a layout-23 one (the field cut out) beside the 21 and 20 it made, and checks two files opened out of the order of their
+numbers come back in it from a layout-22 state; "state fields" covers the field and refuses a file with no place in the
+order, another's, or one of 2^62 or more (counting on could run round). A loaded state's count of files opened is its
+files' largest place.
+
+**The games** (the report's runs: Software, 7 GE threads, 3600 frames, Start at 120 and Cross at 1800, PNGs at 60, 300,
+1200 and 3600): this branch's runner over the whole library, beside part 59's run of the merged stack (the base,
+`6e305764d`, but for later commits' save-state numbering and a test), with frames every 300 or 100 where a judgement
+needed it:
+
+| Game | Base at 3600 | Now | What shows now |
+|---|---|---|---|
+| Melodie (Prototype) | black | menu | its loading screen, then its menus |
+| God of War - Ghost of Sparta | timed out (frame 60) | black | black throughout, retrying its PGD file (9 fps) |
+| Ultimate Ghosts 'n Goblins | movie | menu | its "no game data... begin game anyway?" prompt from 300 |
+| Me & My Katamari | menu | movie | its opening; its title from about 6000 |
+| Hot Shots Golf - Open Tee 2 | menu | menu | "Saving of game data complete" (its "corrupted" prompt before) |
+| Def Jam - Fight for NY - The Takeover | menu | menu | its title, as before; its first save made |
+
+Every other game shows at each frame the scene the base's run showed, or the same sequence a few frames apart (a logo's
+fade, a movie, Battlefront II's random map), no function missing in any; Army of Two, Chains of Olympus and Killzone,
+stopped at the time limit on both runs (900 seconds there, 1200 here), show the same frames up to 1200. Persona 3
+Portable, both Dissidias and Crush miss nothing now, their frames as before. In the report's categories: menu or
+gameplay 187 -> 188, movie 71, stuck loading 0, black or hang 6 (Melodie out, Ghost of Sparta in), timed out 2 -> 1
+(docs/psp-compatibility.md).
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 407 groups, none failing. `tests/allegrex/run-tests.sh`: 58, none
+failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing; `tests/psp/ares/runner-test.sh` passes. New groups:
+"modules of Sony's the kernel has nothing of run", "files listed in the order they were opened", "kernel programs asking
+for all of RAM first thing start again with it", "disc folders read once"; changed: "modules stand-ins" (its plain
+module of Sony's exports a function the kernel has), "memory stick free space" (the size mode on a save not there),
+"state fields", "older layouts load", and the ares suite's save states (its hand-made open file given its place). Each
+new or changed test fails without its fix, each fix taken away alone, and each commit builds and passes its groups
+alone. States the base runner saved (version 22) of Lumines at frame 600, Patapon 2 at 1200 and GTA: Liberty City
+Stories at 2400 load into this branch's runner and carry on 600 frames, their pictures byte for byte the base runner's;
+Crush's at 900 too, but for one frame an animation step apart (it calls sceIoGetFdList again on the way, refused on the
+base). An independent read-only review found two bugs (the ares suite's hand-made open file had no place in the order,
+so the new check refused the machine's own state as a damaged load was undone; a negative size compared unsigned in
+sceIoGetFdList, writing every descriptor where the PSP writes none), a test gap (nothing held the restart to once), the
+size mode comment's evidence worded as a recording's, no bound on a file's place in states, a folder's listing kept
+after a failed read, no test of a reopened disc's folders, and wording; all fixed, each with its test.
+
+**Left, and why.** PGD decryption (six games now, Ghost of Sparta among them). Chains of Olympus's speed (the GE's). The
+restart with all of RAM is chosen, not something a PSP does. The standard streams' numbers in sceIoGetFdList's list (0,
+1 and 2, chosen). sceIoChstat, which LIBSUPPREACC.PRX imports, isn't here yet; none of the three games' runs called it.
+Ultimate Ghosts 'n Goblins and Me & My Katamari take a fresh stick's way now; the report's presses don't choose YES at
+the first's prompt.
+
+## Part 63: the Vulkan renderer faster — copies of what changed, a texture from two frame buffers, texels kept
+
+On branch `cursor/psp-vk-speed6-2b67`, on top of `3de4a0514` (`cursor/psp-ge-speed5-2b67`, #196 merged in; PR #197's).
+The task: both Vulkan modes faster on the RP6 before an Experimental release, the software renderer untouched, the
+accurate mode as accurate and the fast mode as close. Original code: nothing of PPSSPP's was read for this part, nor
+JPCSP's. Save states are unchanged (StateVersion 23): nothing new is saved.
+
+### Where the time went
+
+A survey of every bench scene in both modes on both drivers, at 1x and 4x, from the runner with late frames and the
+pipelines kept (part 54), and simpleperf on the emulation thread. Peace Walker's states don't load on this stack (see
+"Left"), and God of War's are another matter (below).
+- At 1x most 3D scenes are bound by the emulation thread: in Midnight Club 3's race on Turnip 16.3 ms a frame, of it
+  about 4 ms the CPU's emulation (the recompiler's code), 5 the GE's transform and setup, and under 1 the backend's
+  recording; Turnip's own code 0.3 ms, Qualcomm's driver's more (the recording 1.3 ms). Nothing here moves those.
+- **Killzone's menu** was the GPU's bound: 30 frames a second on both drivers, 4.5 at 4x. Logged PRIM by PRIM, it
+  blurs a strip in the 32 unused columns right of its 480-pixel picture back and forth: a 3D PRIM draws half the
+  strip from the other half of the frame buffer it draws into, 1,100 times a frame, in 64 slices of 17 passes. Each
+  sampled its own frame buffer, so each took a render-to-texture copy, and the copy was of the whole 512x512 picture
+  (1 MB; 16 MB at 4x), taken again because the target had changed since (any PRIM drawn into a target counted as a
+  change of all of it), and a break in the render pass.
+- **Midnight Club 3's menu** finished the GPU every frame (241 finishes in 300 frames; at 4x 11 ms a frame waiting,
+  41 frames a second). A 2D PRIM samples the frame buffer at VRAM 0 as a texture 512 rows tall; its filter reaches
+  row 272, the first row of the next frame buffer (0x088000), which that PRIM draws into. The texture's pages were
+  two targets', so `holds()` refused it, and the GE decoded it from memory, which finished everything first.
+- **New textures** on Qualcomm's driver: Killzone's menu and MC3's race decode about 8 textures a frame. Profiled,
+  `makeTexture()` took 1.5 ms a frame there, and the kernel 2.8 ms, 0.8 of it page faults in copying each texture's
+  texels into a vector of its own until the run uploaded them (and 0.8 in the GE's decode's own fresh buffer, which
+  is the software renderer's code too, so left).
+- **WipEout** finishes twice a frame: the CPU reads a depth value through VRAM's fourth copy (a sun test, it seems)
+  where the bloom's buffer now lies, which the GPU drew, and a blur PRIM spills 5 rows (rows 136-140 of a 136-row
+  buffer) into the next buffer's first rows, two targets over the same pages. **Liberty City Stories** finishes every
+  fourth frame: the CPU writes an 8 KB display list over a 64x64 picture the GPU drew there, which the GE then reads.
+  Both are left (below).
+
+### What was done
+
+1. **A copy taken again copies only what changed** (`gpu.cpp`'s `textureFor()`, `changed()`, `reached()`): each
+   target gathers the rectangle its pixels changed in since its copies last heard (`Target::changes`: a PRIM's
+   corners' extent, gathered as it draws and given as the next PRIM begins, and a pixel more each way for a corner's
+   float a hair off, inside its scissor; a fast-mode mesh's whole scissor; rows filled from memory); a copy hears of
+   them as one is taken (`Copied::dirty`), and taken again from the same place it copies only the part changed
+   since, into its place in the copy (`Command::intoX`, `intoY`): the rest is what the target still has. Killzone's
+   strip copies the half drawn since, 34x138 pixels, not 512x512.
+2. **A texture running into the frame buffer below** (`holds()`): pages one target's and then, from a page on,
+   another's, of the same row width and format, beginning on a row of the first, the first owning none of the
+   second's pages: copied in two parts, each from its own target, the rows from the second's address on from its
+   first rows, whole each time (the second part's changes aren't followed). MC3's menu no longer finishes.
+3. **A new texture's texels kept, not copied** (`vulkan.cpp`'s `makeTexture()`): the backend keeps the GE's decoded
+   copy alive until the run that uploads it (a decoded copy never changes: decoded again, it's another) and its
+   texels go straight into the staging buffer; the textures with texels to upload are listed, not looked for among
+   every texture at every run.
+4. **A finish puts back only the pages each target drew in** (`finish()`; an older bug the review found): a target's
+   drawn rectangle spans its PRIMs since the last finish, but only the pages each PRIM draws in are busy, so between
+   two far apart the CPU's writes went straight into memory, and another frame buffer could draw there without a
+   finish; the finish then wrote the target's older pixels over them. Since the last finish one target at most has
+   drawn in a page (`owners[]`), and memory's bytes in the rest are as new as the target's pixels, or newer. Each row
+   is put back a page at a time, the owner looked up once a run (looked up for each pixel, WipEout ran 1% slower). No
+   bench scene's frame changes.
+
+**Tried and dropped** (each measured, kept only where faster):
+- Render passes over only what their draws reach (each draw's box, made out to the GPU's render-area granularity):
+  no frame faster anywhere, and Qualcomm's driver drew LCS's woods 7% slower at 4x (80.0 -> 74.5; the whole picture
+  for passes testing depth got it back, but nothing gained either).
+- One barrier each side of a render-to-texture copy, the target read in its own general layout, and one each side of
+  an upload, instead of two: nothing measurable (Killzone's menu at 4x the same either way).
+- Passes whose draws neither test nor write depth or stencil not loading and storing them (`VK_EXT_load_store_op_none`,
+  a second, compatible render pass): 1,065 of Killzone's 1,125 passes a frame took it, and nothing changed.
+- Textures let go of kept to be made again at the same size (an image, its memory and its descriptor set cost
+  Qualcomm's driver about 0.2 ms each): Killzone's menu on Qualcomm's driver 43.0 -> 45.6, but WipEout on Turnip 6%
+  slower (67 -> 63 frames a second; the runs' finishes waited 0.56 ms a frame longer), and still with the reuse held
+  off for 16 runs. Not understood; dropped.
+- CPU stores into pixels the GPU drew taken into its target as uploads instead of finishing (for LCS's list): LCS
+  writes 2,048 words there every fourth frame, and the GE then reads them as a list, which finishes anyway.
+
+The earlier reading that the render areas and the barriers doubled Killzone at 4x on Turnip was one run's, measured
+again at 12.2 either way.
+
+### Numbers
+
+The RP6 (Adreno 740), the runner from adb's shell, its emulation thread pinned to the X3 (cpu7) as Phobos pins it,
+late frames (part 52) and the pipelines kept between sessions (part 54); frames a second over 300 frames from each
+scene's state, the means of two rounds with the base (`3de4a0514`) and this branch taking turns to go first (the
+device warms over a round, which costs whichever runs second 0-2%). At 4x the runner takes its late frames at the
+PSP's size and its screen is the PSP's (a scratch patch: the core reads the frame back at the screen's size above 1x,
+waiting for the GPU every frame, as the app's presenting doesn't). Turnip, the app's driver, is opened by the runner
+as the app opens it (scratch); Qualcomm's is the system's. The branch here is the code before item 4, which only
+changes what a finish writes into memory: the final code against it in Killzone's menu, LCS's city and WipEout (the
+scenes that finish) is in the next paragraph.
+
+1x:
+
+| Scene | Turnip accurate | Turnip fast | Qualcomm accurate | Qualcomm fast |
+| --- | --- | --- | --- | --- |
+| Killzone, menu | 30.2 -> 48.6 (+61%) | 38.6 -> 73.1 (+89%) | 29.6 -> 42.7 (+44%) | 29.5 -> 42.6 (+44%) |
+| Midnight Club 3, menu | 78.6 -> 110.7 (+41%) | 80.9 -> 115.0 (+42%) | 76.0 -> 105.0 (+38%) | 75.2 -> 108.7 (+45%) |
+| Midnight Club 3, race | 58.9 -> 58.6 | 66.2 -> 66.5 | 56.7 -> 56.6 | 63.3 -> 63.1 |
+| Liberty City Stories, city | 91.9 -> 92.0 | 104.1 -> 105.3 | 87.7 -> 88.1 | 99.3 -> 99.9 |
+| Liberty City Stories, woods | 114.0 -> 115.0 | 136.8 -> 138.6 | 113.6 -> 115.0 | 129.4 -> 130.8 |
+| WipEout Pure, race | 67.8 -> 67.7 | 84.1 -> 84.4 | 77.7 -> 78.0 | 78.6 -> 78.9 |
+| Lumines, demo (2D) | 820 -> 835 | 914 -> 820 | 791 -> 739 | 712 -> 777 |
+
+4x:
+
+| Scene | Turnip accurate | Turnip fast | Qualcomm accurate | Qualcomm fast |
+| --- | --- | --- | --- | --- |
+| Killzone, menu | 4.4 -> 12.9 (+193%) | 4.9 -> 17.0 (+248%) | 4.5 -> 14.0 (+208%) | 4.5 -> 14.0 (+207%) |
+| Midnight Club 3, menu | 40.6 -> 57.1 (+41%) | 50.1 -> 78.9 (+58%) | 42.4 -> 71.2 (+68%) | 39.0 -> 63.6 (+63%) |
+| Midnight Club 3, race | 52.4 -> 52.3 | 61.4 -> 61.2 | 52.2 -> 52.2 | 57.7 -> 58.0 |
+| Liberty City Stories, city | 67.4 -> 67.8 | 90.6 -> 90.8 | 75.1 -> 75.1 | 67.4 -> 67.3 |
+| Liberty City Stories, woods | 59.7 -> 60.2 | 90.3 -> 91.2 | 80.3 -> 80.7 | 66.3 -> 66.8 |
+| WipEout Pure, race | 30.3 -> 31.3 | 47.9 -> 47.9 | 34.2 -> 34.4 | 29.3 -> 29.4 |
+| Lumines, demo (2D) | 283 -> 283 | 368 -> 369 | 212 -> 213 | 210 -> 210 |
+
+Killzone's menu: 1.6 times as fast in Turnip's accurate mode at 1x, 1.9 in its fast mode, 1.4 on Qualcomm's driver,
+about 3 times at 4x (still GPU-bound there: 1,100 render passes a frame, each a copy and a draw). MC3's menu: 1.4
+times at 1x, 1.4-1.7 at 4x, its frames shown from the GPU again (240 in 240, none before). The other scenes are level:
+-0.4% to +3.5%, +0.5% on average. Lumines' 2D runs at 700-900 frames a second at 1x, where its runs are 100 apart from
+one to the next. An earlier three rounds of the first version, the base first each time, gave the same for Killzone's
+and MC3's menus (within 1%) and the rest 0-2% low, as the warming has it. What changed for those scenes on the CPU: a
+PRIM's corners' extent gathered as it draws (first worked out at each primitive, 0.2 ms a frame of MC3's race in a
+profile; gathered, 0.03).
+
+The final code (item 4 too) against the branch in the tables, the two taking turns over two rounds at 1x: WipEout
+2.6-3.6% faster (67.4 / 84.2 / 78.0 / 78.6 -> 69.1 / 86.8 / 80.4 / 81.5: its two finishes a frame put back fewer
+bytes, a run at a time, the emulation thread 0.4 ms a frame less), LCS's city 0.5-0.8% (92.6 / 105.5 / 88.3 / 99.8
+-> 93.1 / 106.0 / 89.0 / 100.4), Killzone's menu the same (it finishes twice in 300 frames).
+
+**God of War: Chains of Olympus** in Vulkan (part 61's two scenes, 150 frames): as before, 3.9 / 4.4 / 3.6 / 3.5
+frames a second in the battle (Turnip accurate / fast, Qualcomm's accurate / fast) and 2.0-2.2 in the menu, base and
+branch alike: see "Left".
+
+### Accuracy
+
+Part 49's method: 10 frames of each scene from its state, the software renderer's PNGs against each Vulkan
+configuration's, the base's and the branch's runners on the RP6. Every one of the branch's Vulkan frames is byte for
+byte the base's (seven scenes, four configurations, 280 frames; the final code's too), so the accuracy is the base's
+exactly: pixels identical to the software renderer's, accurate on Turnip / fast / Qualcomm's accurate / fast, Lumines
+96.6 / 72.9 / 72.9 / 72.9%, MC3's menu 94.7 / 86.3 / 86.3 / 86.3%, its race 90.2 / 68.4 / 68.4 / 68.4%, LCS's city
+78.5 / 50.9 / 50.9 / 50.9%, its woods 74.5 / 42.6 / 42.7 / 42.6%, WipEout 94.5 / 87.1 / 87.1 / 87.1%, Killzone's menu
+97.3 / 68.3 / 68.3 / 68.3%. (MC3's menu's last row's texels, taken from the frame buffer the PRIM draws into as it was
+before the PRIM, are what memory had after the base's finish: the same pictures.) The software renderer's captures
+are the same from both runners.
+
+### Checks
+
+- Software untouched: no file of its code changed (the branch changes `ares/psp/ge/gpu` and its tests alone); the
+  measure harness's 137 pictures byte for byte the base's; the bench scenes' every frame (picture and VRAM) the same
+  from the base's runner and the branch's, at 7 and 1 threads, 300 frames each (MC3's menu's end state differs from
+  run to run with the base's own runner too: RAM the game changes by the host's clock, it seems; its frames don't).
+- `tests/psp/run-tests.sh` (sanitizers on): 413 groups, 0 failures; five new: "gpu render to texture taken again in
+  part" (the strip at 1x, 2x and 3x; a texture inside the frame buffer sampled into another, patches drawn over it and
+  the CPU's rows written into it between the samples; sprites reaching past a scissor away from the frame buffer's
+  corner), "gpu render to texture from two frame buffers, one below the other, nothing finished" (from the first's row
+  0 and row 8, the whole texture sampled again after the second is drawn into; the second drawn only in its first
+  rows, and drawn into as it's sampled; one refused, the first having drawn over the second's first page since), "gpu
+  a texture decoded again before the GPU has the first: its texels kept till then", "gpu fast mode: 3D the GPU
+  transformed is taken by render to texture after", "gpu a finish puts back only the pages drawn in, not memory's
+  newer bytes between" (the CPU's row, another frame buffer's pixels, and the CPU's bytes in the second page of a row
+  over two). `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 307 checks, 0 failed.
+  The GPU tests built for Android pass on the RP6 on Turnip and on Qualcomm's driver (22 groups each).
+- Broken versions each fail a test: draws not marking what they change (none of a PRIM's extent given), fills not
+  marking it, a mesh not marking it, copies taken whole again (the copied pixels' check), the changed part copied to
+  the copy's top left, a change's rectangle held to the scissor's size and not its place, no second target, the second
+  part copied from the first target, a two-part copy taken again only in part, the split worked out without the
+  texture's first row, the second target's rows not filled from memory, the first owning a page of the second's not
+  refused, the texels kept without their owner (the address sanitizer's use after free), a finish putting back its
+  whole rectangle, and a row put back as one run. A copy's margin of a pixel past the corners isn't caught (it's there
+  for float error the tests' corners don't have).
+- GCC 11 (ubuntu:22.04) compiles `gpu.cpp` (with `vulkan.cpp`) and the tests at -O1, -O2 and -O3 with -Wall -Wextra
+  -Werror; the GPU code and its tests compile at each commit.
+- An independent review of the first three commits found no correctness bug; its points were taken: tests for the gaps
+  it showed (the cases above that broken versions it made got past), the margin's reason and the ownership rule worded
+  right, and the older bug of item 4, which it reproduced. A second review of everything since (the extent gathered
+  once a PRIM, item 4 and its runs, the tests, the docs) found no correctness problem either, and tried to break item
+  4's argument (the told rectangles, the bytes beside, stale targets, VRAM's copies, depth, the late frames); its two
+  test gaps (the same two-part copy taken again, a scissor away from the corner) are filled.
+
+### Left, and why
+
+- **God of War: Chains of Olympus** is slow in Vulkan as in software (3.5-4.5 frames a second in the battle): 130 to
+  320 finishes a frame. It draws effects into small frame buffers that share pages: four 64-pixel-wide ones side by
+  side in one 1024-wide 5650 buffer, three in a 512-wide 8888 one, and the same memory as both formats, so every
+  switch between them, and textures read across them, finish; and it takes 2,400 render-to-texture copies and decodes
+  100 textures a frame. Frame buffers drawn as parts of one target (at a column offset) would take most of the
+  finishes away; the same bytes as two formats need the GPU to reinterpret them.
+- **WipEout's** two finishes a frame: the CPU's depth read lands on the bloom's pixels (the GPU's depth isn't read
+  back, so the game gets the wrong value either way; reading it back would be right, and as slow), and the blur's 5
+  rows into the next buffer could be copied between the two targets on the GPU. **LCS's** every fourth frame is the
+  list written over its 64x64 picture.
+- **Killzone's menu at 4x** is still the GPU's bound (13-17 frames a second): 1,100 passes a frame, each a copy and a
+  draw. Reading the frame buffer it draws into without a copy needs `VK_EXT_attachment_feedback_loop_layout`, which
+  not every driver has.
+- A target keeps one rectangle of changes, so changes far apart merge into one (the review's test: 12 patches of 8x8
+  copied as 7,840 pixels, not about 1,800); Killzone's strip isn't one. CI runs no GPU test (its machines have no
+  Vulkan): a pretend backend recording the copies' rectangles could check them there. A lost device keeps the last
+  run's decoded textures alive until the renderer goes, as the copies of their texels were kept before.
+- **Busy pages the drawing threads give back** (the review's, older than this part, not tested): the threads'
+  settle (`GE::freeVRAM()`) makes every busy page the CPU's again, the GPU's too, while `owners[]` keeps them (`own()`
+  says so). With a PRIM the GPU refuses deferred into the threads' batch while later PRIMs own pages, the CPU could read
+  those pages without the GPU's pixels, and a write there would be put back over at the next finish.
+- **Peace Walker's** version-17 states (the bench's title and tutorial scenes) don't load on this stack ("the state
+  can't be loaded"; not looked into, and no scene of it measured here). The rest of the list from parts 53 and 54
+  stands: the bones in a block of their own for its small skinned PRIMs, pipelines made on another thread in a
+  first session, textures decoded on the GPU (0.4 ms a frame), Qualcomm's driver's GPU time in fast mode.
+- Scratch: `~/phobos-work/scratch/vkspeed6` (build.sh, speed.sh, rounds.sh, summarize.py, tables.py; perf.sh,
+  syms.py, dsos.py, kernelcallers.py; the logging patches copylog-, xferlog-, whylog-, ptrlog-patch.py; late4x-patch.py
+  the runner's 4x; acc.sh and cmp.py the accuracy; mutate.sh the broken versions; soft-hashes.sh). Nothing of it is
+  left on the RP6.
+
+## Part 64: God of War in the software renderer — the GE's time, its bloom batched, the stencil four at a time
+
+On branch `cursor/psp-gow-sw-2b67`, on top of #198's `cursor/psp-vk-speed6-2b67` (`e9c98f3b9`). The task: God of War:
+Chains of Olympus playable in the software renderer on the RP6 without making another game worse: find out why its
+menu drew about 28 million fours a frame (part 61), model the GE's time as far as the evidence goes if that was the
+cause, and take away what part 61 left, every pixel as before. Sources: the game's own lists and code, traced and
+read with a scratch runner; pspautotests' gpu/ge, gpu/signals, gpu/callbacks and gpu/displaylist programs and their
+recordings (run through the kernel by the scratch runner, their output compared line for line); Sony's figures for
+the GE (its Hot Chips 16 paper, 2004, which the PSP Developer Wiki's Graphics Engine page repeats). No PPSSPP or JPCSP
+source was read.
+
+### Why the menu drew 28 million fours
+
+A scratch runner logging the GE driver's events, each list's PRIMs, pixels and frame buffers, and every system call,
+over part 61's two scenes (`~/phobos-work/scratch/speed5/scenes`):
+- **How many times a frame.** In one vblank the menu ran 66,402 PRIMs, and every count of a kind was a multiple of
+  27: 2,268 block transfers (27 x 84), 756 PRIMs into the bloom's buffer at 0x162000 (27 x 28), 297 at 0x162400, 81 at
+  0x162600, 2,349 into a 5650 buffer at 0x161800 (27 x 87), 405 read from memory as they drew (27 x 15); in the next
+  vblank 26 of each. It drew its whole scene 27 times a vblank, about 1.04 million fours each, 58% of them dropped by
+  the depth test. The battle drew its scene 8 times (1,680 transfers = 8 x 210; 400,000 fours a scene).
+- **Which lists.** Two, taking turns, each a whole frame queued with no stall address: 0x084801f0 and 0x084a01f0
+  (about 2,460 PRIMs a scene in the menu, 1,160 of them into the frame buffer).
+- **What it waits on.** Its loop (user_main), every 583 microseconds of the PSP's time in the menu and 2.1 ms in the
+  battle: sceKernelGetSystemTimeWide, sceKernelDcacheWritebackAll, sceGeListSync(the last frame's list, 0),
+  sceDisplaySetFrameBuf(the other buffer, 512, 8888, 0: at once), sceGeListEnQueue(this frame's list),
+  sceCtrlPeekBufferPositive, then the next frame's list built. Nothing in it waits for the vertical blank; a semaphore
+  it waits on now and then never makes it wait. Its pace is the GE's: on a PSP sceGeListSync waits until the GE has
+  drawn the frame before while the CPU builds the next. Ours took no time, every list done the moment it was queued, so
+  the loop ran as fast as the CPU built lists, 27 scenes a vblank of which the screen showed one.
+- **Its clock.** Its time source (0x089a0de8) reads the system clock unless a byte (0x08b32458) says to use a count
+  it steps by 33 ms a loop (0x089a0e4c); the byte is 0 in both scenes. So the game ran at its right speed, and the
+  extra scenes cost the host their drawing and nothing else.
+- **What a PSP would do.** Draw a scene as fast as its GE fills about 4 million pixels and sets up 5,300 triangles
+  (the menu) or 1.6 million and 14,000 (the battle), the CPU building the next meanwhile, and show it at once. How
+  fast that is, nothing measured on a PSP says (below).
+
+### What's known of the GE's time
+
+pspautotests' recordings show a list taking time and its end coming as an interrupt, but measure no rate:
+- gpu/signals/continue and simple: a SIGNAL that lets the GE go on (kind 2) has its callback find the list drawing
+  (sceGeListSync 2, sceGeDrawSync 2), though the GE has run the commands after it (an AMBIENT_COLOR past it reads back
+  set): the list's FINISH, run already, is taken only once that callback has returned. We said 0 and 0.
+- gpu/ge/intrsuspend: with interrupts held off, a list stays drawing (2) however long the CPU spins, the next
+  queued (1), no callback. We said 0.
+- intrsuspend's and queue2's comments: the GE "needs a moment on hardware". gpu/timing/blittiming times blits on a PSP
+  but its output isn't recorded (pspautotests keeps no timing probe's output), and none of the owner's measurement
+  rounds times the GE.
+Sony's figures (Hot Chips 16, "Frequency & Performance (@166MHz)"): 664 million pixels a second (four a clock), 35
+million polygons a second through the geometry and the setup, at 166 MHz, the bus's clock (half the PLL's, as
+power.cpp has it: 95, 111, 133 or 166 MHz; the wiki: 111 MHz unless a game asks for more). They're peaks: no PSP
+draws faster.
+
+### The GE's time (commit 1)
+
+`kernel/ge.cpp`'s geTime() and geInterrupt(); GE::owe() in `draw.cpp`.
+- The GE still carries out a list's commands at once, every pixel drawn there and then, but the program hears that a
+  list is done only once a PSP's GE would have drawn it. As each primitive is set up, before a hardware renderer takes
+  it (so every renderer gives the same time; Vulkan (fast), which transforms 3D triangles itself, counts them by its own
+  corners, the same but for a float's rounding), the GE counts it and its pixels inside the scissor rectangle: a
+  sprite's rectangle, a triangle's area there (cut at the rectangle's sides, a polygon of up to seven corners, where its
+  corners reach past them), the pixels a line lights there (its columns there whose rows are there too, found by two
+  binary searches, as its rows go one way), a point's one. As each run of the list returns, the driver adds
+  max(pixels / 4, primitives x 166/35) clocks at the bus's clock (half the PLL's: 95, 111, 133 or 166 MHz), in the
+  CPU's 333 MHz cycles, to when the GE will be done, from now or from when it's done with what came before. Each term
+  is a peak and the two may overlap, so that's the least a PSP could take, by these counts (a triangle cut at the near
+  plane counts as its one or two pieces). What no figure gives counts for nothing: the commands themselves, primitives
+  dropped before they're set up, block transfers.
+- The FINISH comes as the GE's interrupt: the GE stops at its END, the list running still, and the driver deals with
+  it (geFinished(): the callback, the waiters, the next list) once its time has come and an interrupt can be taken:
+  interrupts on, no call into the program running, none of the GE's own waiting its turn (the PSP takes the GE's next
+  interrupt only once the last one's handler has returned). That's at the end of a system call, as a call into the
+  program returns, or as the kernel's loop goes round, which stops the CPU at that time. Till then the list reads as
+  drawing for sceGeListSync and sceGeDrawSync, also where GU leaves its stall address, just past its END (where the
+  GE has stopped, but a PSP's would be drawing still: unmeasured); sceGeSaveContext refuses as for any drawing list
+  (and saves once the time has come, the GE stopped); sceGeBreak(1) drops the FINISH with its list, as intrsuspend
+  recorded; sceGeBreak(0) takes it first, as though its interrupt came then, and so the FINISH each list queued after
+  it meets as it starts (their pixels are drawn: nothing of them is left for sceGeContinue; unmeasured), but after a
+  finish callback those lists start only once it has returned, the break saying ALREADY. A PAUSE's
+  list keeps a stall address moved while its FINISH waits (the list's, not the GE's: queue2), and after a SYNC the GE
+  goes on once the FINISH is taken, as a PSP's driver lets it go on from its interrupt.
+- Not changed: SIGNALs still come at once (no recording needs them later), the statuses at a stall address (by where
+  the GE has got, as before, but just past a FINISH whose interrupt waits: above), the million commands a vblank.
+
+What it does to part 57's 22 driver programs: simple and intrsuspend now print what the PSP printed, continue's
+callback lines do (its last two differences are "[r]" marks, the reschedule probe started from a callback, the
+kernel's), and no other program's output changes: 9 of 22 match, 7 before.
+
+To God of War: each list is done 6.5 to 7 ms after it's queued in the menu (the bus at 166 MHz), 3.15 ms in the
+battle. The menu draws 2 or 3 scenes a vblank (its fours a vblank 28 million to 2.1-3.2 million), the battle about 5
+(3.2 million to 1.6-2.0 million). At a PSP's own rates it would draw fewer; those aren't measured.
+
+### The bloom batched (commit 2)
+
+The 15 PRIMs a scene read from memory as they drew are God of War's bloom (the scratch runner logged each): 2D
+triangle strips of 16-pixel quads, filtered, in one 512-wide 8888 buffer whose columns 0-255 hold a picture, 256-383 it
+halved, 384-447 that halved, each brought back over the one before (blended, fixed 0x555555 each way). No pass reads a
+byte it writes: its texture is columns 0-255 and its target 256-383, and so on. texture.cpp's drawsOver() took a
+texture's bytes as one span, first to last, the columns between its rows included, so every pass was read from memory
+as it drew, after everything waiting was drawn: about 30 drains a vblank in the battle, 100 in the menu. Now a plain
+texture (not swizzled, not DXT, through VRAM's plain copies, its rows no longer than their pitch, inside VRAM) is its
+rows: a primitive draws over it only where a row of the pixels it may write meets a row of texels it may read; any
+other is a span as before. Such a primitive takes its texture from a copy, decoded at once or as its batch starts
+(part 46's deferral, where a batch still draws over the texture's pages), and is batched like any other: what it reads
+is what memory holds as it draws, as nothing it draws is a texel of its own.
+
+Drains a vblank (flushes and waits for launched batches, counted by the scratch runner at 7 threads): the battle about
+55 (32 for those passes, 8 transfers' flushes, 12 waits for the CPU or the screen) to about 13; the menu about 177 to
+about 9.
+
+### Four pixels at a time: deferred textures and the stencil test (commits 3 and 4)
+
+With the drains gone, simpleperf on the RP6 (the battle, 7 threads, a build with line tables) had three quarters of
+the whole process's samples in `triangleRows<3>`, on every thread: the emulation thread's 47%, and nearly all of each
+worker's. A scratch count of the jobs fourFriendly() turned down, by their boxes' pixels a vblank: in the battle 3.96
+million with the stencil test and 1.95 million with a deferred texture (render to texture, decoded as their batch
+starts); in the menu 2.25 and 1.19 million.
+- **Deferred textures** (commit 3): fourFriendly() decided as the job was recorded, before the copy existed. No band of
+  a batch draws before ensureDecoded() has run (drawBands(), flush()), so such a job waiting in a batch is taken as
+  decoded and drawn four at a time. One whose primitive defer() turns down is drawn at once with no copy, still read
+  from memory a pixel at a time.
+- **The stencil test** (commit 4): the four-pixel path tests depth before the texture and drops what fails it, which
+  the stencil test can't have: a pixel failing the depth test still changes the stencil ("depth fail") once the alpha
+  and color tests have passed it. depthFirst() now keeps those lanes when the stencil test is on (four.passed says which
+  passed), and pixelsFour() runs the stencil test after the color test, as drawPixelAs() does: each lane's stencil (the
+  frame buffer's alpha, widened) compared under the mask, changed by "fail", "depth fail" or "pass" (stencilLanes(),
+  stencilOperation() lane by lane, each format's ends as there), the lanes failing either test written with their
+  color kept and their stencil changed, the rest drawn with the new stencil as their alpha. Logic operations are still
+  drawn a pixel at a time.
+
+### Numbers
+
+The RP6, the runner from adb's shell, its emulation thread pinned to the X3 (cpu7) as Phobos pins it (speed5's
+rp6-run6.sh), part 61's two scenes from their states (the battle 150 frames at 7 threads and 100 at 1, the menu 100 and
+30), the builds taking turns; frames a second, means of two rounds (one for the menu at 1 thread; each build's rounds
+within 3% of each other), the Phobos app not running:
+
+| Scene | Before | GE's time | + bloom batched | + deferred fours | + stencil fours |
+| --- | --- | --- | --- | --- | --- |
+| Battle (the Shores of Attica), 7 threads | 4.67 | 7.09 | 7.61 | 8.03 | 8.99 (+93%) |
+| Menu, 7 threads | 1.73 | 17.37 | 18.35 | 19.69 | 22.21 (12.8x) |
+| Battle, 1 thread | 2.20 | 3.46 | 3.55 | 3.55 | 4.44 (2.0x) |
+| Menu, 1 thread | 0.68 | 7.20 | 7.38 | 7.38 | 8.80 (12.9x) |
+
+The emulation thread's time a frame: the battle at 7 threads 198 ms to 104, the menu 544 to 41. The end states of the
+last three columns are the second's in every scene and round (commits 2 to 4 change no pixel); the first column's and
+the second's differ, as the game runs differently. The menu at 1 thread runs faster than at 7 did before.
+
+The review's fixes (below) change no frame or end state of either scene. In a later session, the device slower for
+every build (its emulation thread's time a frame the same, each frame longer: warm, little memory free), the final
+build and the last column's took turns at 7 threads, two rounds each: the battle 4.84 and 5.51 frames a second
+against 4.93 and 5.09, the menu 15.01 and 15.01 against 15.11 and 15.26, every end state the same.
+
+### What a profile shows now
+
+simpleperf, the battle at 7 threads with all four commits: the emulation thread is busy 91% of the time, 40% of it
+drawing bands while it waits for a batch (settles and reclaims), the rest the GE's setup (triangle() 5.4%, project()
+5.2%, transform() 4.7%, transformState() 2.6%, drawVertices() 2.5%, readVertices() 2.2%, quantize15() 1.8%, submit()
+1.7%, the GE's time's areas 1.2%) and the CPU (9.8 ms a frame); the six workers are each about 40% busy. Of all
+threads' samples, 73% are triangles' pixels (the four-pixel path is inlined into triangleRows(), so the profile
+doesn't tell the two apart). What's left is the pixels' own arithmetic, exact, and the emulation thread's setup.
+
+### Library
+
+The report's runs (3600 frames, Start at 120 and Cross at 1800, PNGs at 60, 300, 1200 and 3600, 7 GE threads, four
+games at a time, 1200 s each at most) over all 266 games, the base commit's runner beside commit 2's (commits 3 and 4
+change no frame: above), compared frame by frame and judged by eye where they differ:
+- **God of War: Chains of Olympus**, killed at the limit in the base run (its main menu at 1200), finishes its 3600
+  frames in 429 s (8.4 frames a second, four games at a time): its difficulty menu at 3600, the Cross at 1800 having
+  taken New Game. Timed out 1 to 0, menu or gameplay 188 to 189 (docs/psp-compatibility.md).
+- **Killzone**, killed at the limit in the base run, finishes (1125 s, its first level: its row's gameplay, as before);
+  **Army of Two** runs at 9.9 frames a second where it ran at 3.7.
+- 100 games show some frame differently: each the same scene at each frame, or the same sequence a few frames apart (a
+  movie or a fade further on or behind, an animation step, Battlefront II's random map). The most apart: Persona 2:
+  Innocent Sin's opening a little later (its CRIWARE logo at 1200, the base's movie; both in the movie by 3600),
+  Fuuun Shinsengumi's, Persona 2: Eternal Punishment's, Monster Hunter Portable 3rd's and Tekken's openings at other
+  points, Mega Man Maverick Hunter X's and SOCOM's logos a step apart. No game shows less than it did; no function is
+  missing in any.
+- The final commits' runner (the review's fixes in) beside commit 2's: the same categories. Chains of Olympus
+  finishes in 325 s (11.1 frames a second), Killzone in 992 s, Army of Two at 9.8. 79 games show some frame
+  differently, each the same scene (an animation step, a fade or a movie a little on, Battlefront II's random map; at
+  3600 IL-2's movie shows a darker shot of the same scene). Some of that is the runner's own: run twice, the final
+  runner gave IL-2's, LocoRoco's and Battlefront II's last frames differently, IL-2's second run showing commit 2's
+  shot again. Every game exits as before.
+
+### Checks
+
+- Pictures: the measure harness's 137 files (`PSP_GE_OURS`, every round's), the last commit's against the base's: the
+  136 pictures byte for byte the same; controller-timing.bin, the round-2 record of 48 controller calls' times in
+  microseconds, has its 16683/16684 rounding a call apart (the measure program runs at another phase of the clock
+  with the GE taking time), as close to the PSP's own record (16591 to 16775) as before. The final build's 137 files
+  are commit 2's, byte for byte.
+- Frames: the six cpu-speed scenes and God of War's two (`hashes.sh`: every frame's picture and all of VRAM, drawing
+  settled each frame, then RAM and the machine's whole state), 300 frames (God of War's menu 60, battle 150) at 1 and
+  7 threads: commits 2, 3 and 4 each the same as commit 1 in every frame and end state, and every build's 7 threads the
+  same as its 1. Commit 1 against the base: Peace Walker's title and Lumines' demo the same in every frame; Midnight
+  Club 3's race and menu and Liberty City Stories' city and woods differ from frame 2-24 on (their loops see the GE's
+  time), each frame still a new picture in both (60 a second; Lumines 30). On the RP6 every round's end state of
+  commits 2-4 was the same, scene by scene. The final build against commit 4: every frame's picture and VRAM the same
+  in all eight scenes, at 1 and 7 threads alike; the end states the same but for Midnight Club 3's race and Liberty
+  City Stories' city (and its RAM), which draw lines leaving the scissor rectangle across, now owing only their pixels
+  inside: with the old count for lines, both end as commit 4's.
+- A state saved mid-battle (version 24, its list's FINISH waiting 3 ms on: the trace's) and loaded carries on as the
+  run never stopped did, frames 15 to 30 and the end's RAM and state the same; the bench scenes' version-22 states load.
+- `tests/psp/run-tests.sh` (sanitizers on): 417 groups, 0 failures (four new: "ge time", "ge time's interrupt",
+  "draw3d the GE's time, any renderer", "draw beside its own texture from a copy"; changed: "ge break and callbacks",
+  "ge deferred texture busy", "older layouts load", "draw3d four pixels at a time against one");
+  `tests/allegrex/run-tests.sh`: 58 groups, 0 failures; `tests/psp/ares/run-tests.sh`: 307 checks, 0 failed. Each
+  commit, archived and built afresh, passes the GE, drawing, state and GPU groups.
+- pspautotests' GE driver programs (part 57's 22, through the scratch runner): as above, 9 matching, 7 before; no other
+  output changed.
+- GCC 11 (ubuntu:22.04, 11.4), on the final tree: the GE with -Wall -Wextra -Werror and the sanitizers at -O1, as the
+  tests build it, and the draw3d test so; the kernel and the other changed test files with -fsyntax-only: no
+  warning. At -O2 and -O3
+  without the sanitizers it warns that spriteFours()'s downAxis and a Four's depth may be read uninitialized, exactly
+  as it does on the base commit (they're set before they're read; part 61's check had the sanitizers on).
+- Broken versions (`mutate.py`), each failing a test: 40, among them the GE's time with no time owed, with pixels or
+  primitives alone or added, the bus fixed at 166 MHz, counted from the last done rather than now; the FINISH taken
+  before its time, with interrupts held off, ahead of the GE's own callbacks, at once as before, without the event at
+  its time or idle() timed by it, sceGeBreak(0) not taking it, the end of a system call or a call's return not taking
+  it; the fields not saved, layout 23 reading them; a triangle owed after the renderer took it, not cut by the scissor
+  (or cut across only), a mesh not owed, a line, a point or a sprite not cut by it; the texture's bytes one span again,
+  its rows without their gaps, pixels not reaching the next texel row, a swizzled texture or VRAM's second copy taken
+  as rows, rows longer than their pitch; deferred textures a pixel at a time again; the stencil test dropping the depth
+  test's failures, "depth fail" taken as "fail", compared the other way, 4444's increment by one, a decrement past 0,
+  the dropped lanes not written or their colors not kept, the stencil kept at the write, depth written for dropped
+  lanes. (A third geInterrupt() call, at sceKernelCpuResumeIntr, was found to change nothing, every system call's end
+  taking the FINISH anyway, and was dropped.) And 7 more for the review's fixes (`mutate-fixes.sh`): sceGeBreak(0)
+  taking one FINISH only, a PAUSE's moved stall address not kept, a texture deferred for a primitive drawn at once
+  taken as decoded, a list GU ends reading as stalled while its FINISH waits, a line owing its columns whatever its
+  rows, the FINISH taken as an interrupt's handler runs, a SYNC's FINISH taken at once.
+- An independent read-only review of the four commits (a reviewer agent, with its own scratch builds and tests) found
+  two crashes and a lost stall address, each reproduced. sceGeBreak(0) at a waiting FINISH ran the next list, which
+  could meet its own FINISH as it started and was then broken off with that FINISH still waiting: the driver would
+  later finish list -1. A texture deferred to its batch's start whose primitive defer() turned down (its frame buffer
+  narrower than it, say) was drawn at once four at a time, from a copy that didn't exist. And a stall address moved
+  while a PAUSE's FINISH waited (commit 1 makes that wait) was lost as the FINISH came. Each is fixed in its commit,
+  with a test that fails without the fix. Its smaller points are taken too: the bus clock's range in geTime()'s
+  comment, "never later than a PSP" (a line was owed its columns whatever its rows: now its pixels inside; a triangle
+  cut at the near plane counts as its pieces, said), sceGeBreak's comment (unmeasured, what it runs), a test
+  comment's count, and a list GU ends reading as stalled (3) while its FINISH waits, now drawing (2), as a PSP still
+  drawing it would say. Its test gaps (a SYNC's FINISH, a FINISH falling due as an interrupt's handler runs) have
+  tests now. It found commits 2 and 4 exact, and the callback order and the time's arithmetic sound. A second review
+  read the fixes and found no bug: on 120,000 random lines the count matched what linePixels() lights inside the
+  scissor (and the software renderer's own pixels on 30,000 of them, where the old count was wrong for 57,164); its
+  own broken versions each failed a test; commits 1 and 3 pass alone. Its wording points are taken (sceGeBreak(0)
+  after a finish callback, the statuses at a stall address, a test comment's count), and the alarm's case now
+  records that the GE's time had passed in the handler.
+
+### Left, and why
+
+- **The GE's real speed.** The time is a lower bound by Sony's peak figures; a PSP's GE is surely slower, so God of
+  War still draws 2-3 scenes a vblank in its menu and about 5 in its battle where a PSP draws fewer. Measuring it
+  (full-screen fills textured and not, 16- and 32-bit, triangles of a few sizes, block transfers, each timed around
+  sceGeDrawSync) would let the model be the PSP's: a round of tools/psp-measure for the owner's PSP. Commands, culled
+  primitives and block transfers count for nothing meanwhile; SIGNALs still come at once.
+- **What God of War's battle spends now**: its pixels (exact arithmetic, four at a time where they can be) and the
+  emulation thread's setup and waits (about 13 drains a vblank: transfers touching pixels being drawn, the CPU and the
+  screen touching busy pages); the emulation thread is the bound at 7 threads, its workers 40% busy.
+- **Logic operations** are still drawn a pixel at a time.
+- **The runner isn't the same from run to run**: run twice, it gave IL-2's, LocoRoco's and Battlefront II's last
+  frames differently, so a library comparison carries that noise besides what a change does (each difference here
+  judged by eye).
+- **Unmeasured driver details**: what a list GU ends (its stall address just past its END) reads as between the GE's
+  time and its FINISH's interrupt, held off (drawing here), and sceGeBreak(0) at a waiting FINISH.
+- **pspautotests' other GE differences**: sceGeDrawSync(1) on a queue of paused lists (displaylist/state: 3 on the
+  PSP), the order breakwait's two waiters wake in, the state buffer's layout (context, break), sceGeGetStack, a
+  SIGNAL call's shared stack, edram's swizzled patterns, and the "[r]" marks of a reschedule probe started from a
+  callback (the kernel's).
+- Scratch: `~/phobos-work/scratch/gow-sw` (trace-patch.py the scratch runner's logging: PSP_GETRACE, PSP_TRACE,
+  PSP_OWNTRACE, PSP_AUTOTEST; sync-dbg.sh builds it; at/ the pspautotests runs; state-ram.py and callers.py, the game's
+  code; hashes.sh, rp6-gow.sh, rp6-perf.sh, cleanup-rp6.sh; mutate.py and mutate-fixes.sh; gcc11.sh and gcc11c.sh;
+  lib.sh, compare.py and rerun.sh the library runs, lib/base, lib/final and lib/fix). Nothing of it is left on the
+  RP6.
+
+## Part 65: God of War in Vulkan without waiting for the GPU, and part 63's open risks
+
+On branch `cursor/psp-gow-vk-2b67`, on top of #199's `cursor/psp-gow-sw-2b67` (#198 under it; measured against #198's
+`e9c98f3b9`, `cursor/psp-vk-speed6-2b67`). The task: God of
+War playable in Vulkan on the RP6, its 130-320 finishes a frame cut, both Vulkan modes' pictures as they were and their
+accuracy against the software renderer no worse; part 63's open risks closed (the drawing threads' settle and the
+GPU's pages, Peace Walker's states, no GPU test in CI); WipEout's and LCS's waits if there was time. The software
+renderer untouched. Clean room: no PPSSPP code was copied or translated, and JPCSP's wasn't read. Save states are
+unchanged (StateVersion 23): nothing new is saved (a state finishes the GPU first, and the renderer forgets its targets
+when one is loaded).
+
+### Where God of War's time went
+
+The base's renderer with each finish's cause logged (a scratch patch), on part 61's two scenes (the menu after the boot,
+and a battle), 150 frames each: 129 finishes a frame in the battle and 322 in the menu, the emulation thread waiting
+for the GPU 105 and 199 ms a frame (Turnip, accurate), 2,382 render-to-texture copies and 105 decoded textures a frame
+(913 and 215 in the menu), and no frame shown from the GPU. God of War draws its scene eight times between frames
+shown, and its effects into small frame buffers that share pages:
+- Four 5650 frame buffers 64 pixels wide side by side in rows of 1,024 pixels (at 0x161800, 0x161880, 0x161900 and
+  0x161980), and 8888 ones in rows of 512 over the same memory (0x161800, and a row down 0x162000, 0x162400 and
+  0x162600 side by side). Each was a
+  target of its own: drawing into one after another finished (two targets over the same pages), and so did a texture
+  read across them.
+- The same bytes drawn as 5650 and then as 8888, and read as either: a finish at each switch.
+- Textures and palettes streamed into VRAM by block transfers over rows of frame buffers the GPU had drawn (0x18a000
+  on): a finish before each.
+- The picture it shrinks the screen into, drawn back over the screen in 272 tiles a time, each reaching further: a copy
+  each, and the copies thrown out among four places.
+- And the GE reads its vertices from VRAM, 700,000 a frame, in pages the GPU had drawn in: each read asked
+  `drawnOver()`, which looked through every target's rows.
+
+### What was done
+
+1. **A PRIM the renderer refuses is drawn at once** (`draw.cpp`; part 63's open risk). With the drawing threads on, a
+   refused PRIM (rows past a target's 512, no room on the GPU) could wait in the threads' batch while later PRIMs went
+   to the GPU. The risk was real, and the new test failed three ways on the base: the GPU filled its target from memory
+   before the batch had drawn there and put those older rows back over the refused PRIM's pixels at its next finish;
+   and the batch's settle at the next list's start gave every busy page back to the CPU, the GPU's too, so a load found
+   memory's older bytes, and a store was put back over at the finish. Drawn at once, no batch is launched while the GPU
+   owns pages.
+2. **Frame buffers side by side are one target** (`targetFor()`): a frame buffer is part of the target of its row width
+   and format that starts where its page does, where a page holds whole rows (rows whose bytes divide 4,096, from VRAM's
+   start), else where its own row does, at a row and column of it. Dithering starts at the frame buffer's own first row
+   (`Push::origin`; its columns start on 16 bytes, a whole number of the matrix's four). A PRIM reaching past the rows'
+   end (where the PSP's addresses run on into the next row) or the last row, or drawn with its depth buffer, keeps a
+   target of its own. So drawing into one after another, and a texture read across them, put nothing back.
+3. **A copy kept for its place** (`textureFor()`): a render-to-texture copy is kept for its target and place and serves
+   the PRIMs that take as much of it or less, each held to what it takes (`Push::held`, in `draw.frag`'s fetch); one
+   that takes more has it made again, to the next power of two. The pixels a PRIM changes are those with one of the
+   GPU's samples inside its corners' extent (`reached()`: each of the PSP's pixels scale x scale of them, a 64th of a
+   pixel more each way for the GPU's rounding), not a pixel more each way, so a tile drawn beside a copy's place
+   doesn't change it. The 272 tiles take a few copies, not 272.
+4. **Pixels moved between targets on the GPU** (`movable()`, `move()`, `Command::Move`, `move.frag`): where a PRIM's
+   pages hold another target's pixels and the rows are the same bytes (the same row width in bytes, pages of whole
+   rows, rows starting at the same byte), they're drawn into its target on the GPU as a finish and a fill from memory
+   would leave them: any of the four formats into any (a 16-bit format's bits as memory has them, the stencil from its
+   alpha), at any scale. A texture across two targets is moved into the one of its own format first. (Each move is a
+   draw of its own: MoltenVK lost the stencil's passes unless the pipeline, the descriptor set and the push constants
+   were bound again after `vkCmdClearAttachments`.)
+5. **Bytes memory has the newest of** (`overwritten()`, `revive()`, `Target::dead`): bytes a block transfer writes whole
+   over the GPU's pixels are memory's at once: not put back, and filled again before a PRIM draws over them or they're
+   copied, shown or moved; the transfer waits for nothing for them. Memory's bytes beside the GPU's pixels (part 52's),
+   and those of pages written while the target hadn't drawn in them, are filled again likewise (16 ranges at most a
+   target) instead of the whole target afresh after a finish.
+6. **`drawnOver()` asks each page's owner** (`owners[]`, `clean[]`): whether the owner has drawn any of a page's bytes
+   is kept until something is drawn or owned afresh (`drawnSerial`), so each of the GE's vertex reads looks at a page:
+   the emulation thread 169 → 143 ms a frame in the battle on the M1, the battle on Turnip 9.5 → 11.5 frames a second.
+7. **The CPU's stores over the GPU's pixels** (`Memory::vramStoring`): a store into busy VRAM tells the GE first, and
+   the renderer gives up the pixels it covers whole, as it does a transfer's (item 5), so the store doesn't wait, nor do
+   reads of what it wrote. Liberty City Stories writes an 8 KB display list over a 64x64 picture the GPU drew, every
+   fourth frame, and the GE then reads it: its city and woods 76 finishes in 300 frames → 1 (at the start), its frames
+   as before. A byte into an 8888 pixel is only part of it, and still finishes. (Part 63 had tried taking the stores
+   into the target as uploads, which left the GE's read of the list to finish.)
+8. **WipEout's** blur spilling 5 rows into the next buffer's first rows is a move now (item 4): 600 finishes in 300
+   frames → 300. The one left is the CPU's depth read through VRAM's fourth copy, which lands on the bloom's pixels: the
+   CPU reading what the GPU drew needs it drawn.
+9. **Peace Walker's states** (part 63's "the state can't be loaded"): the program, its disc and the memory stick were
+   the states' own, but the bench scripts' fonts folder on the RP6 was gone, and a state whose game has the system's
+   font library open (sceFontNewLib, an open font) needs the very fonts it had, which the kernel refused without a
+   word. It now says so, naming the font (`fontReloaded()`), and the runner prints the kernel's last note with its
+   refusal. The scenes' scripts point at fonts kept beside the harness on the RP6 now, and the title scene is measured
+   below.
+10. **CI** (`.github/workflows/psp-core.yml`): the system tests' job installs Mesa's Vulkan driver that draws on the
+   CPU (lavapipe) and lets the renderer take it (`PSP_GPU_ON_CPU`), so the GPU groups run there instead of skipping.
+   The job hadn't built since part 55's and part 58's tests (the TLS pools', scePauth's): GCC 13, ubuntu-latest's,
+   refuses a local constant as a lambda's default argument, even a static constexpr one (clang takes it); those two
+   no longer do. On lavapipe the pipeline cache's data is as big with pipelines as without (80 bytes), so the cache
+   test checks its sizes only where they grow. What it costs: the GPU groups take 7.3-7.7 minutes there under the
+   sanitizers (llvmpipe, LLVM 20), 8.8 with the review's groups, and installing Mesa 11 seconds, so the system job goes
+   from about 10 minutes (the tests' build 9.5 of them) to about 19-21. Four runs on the branch: the first failed on
+   that size check, the next two passed (420 groups each), and the pull request's on the last commit (421).
+
+### Numbers
+
+The RP6 (Adreno 740), the runner from adb's shell, its emulation thread pinned to the X3 (cpu7) as Phobos pins it,
+late frames and the pipelines kept, as part 63; frames a second over 150 frames from each scene's state (300 for the
+bench scenes), the means of two rounds with the base (`e9c98f3b9`) and the branch taking turns to go first. The branch
+here is `6fb6452c4`; the code after the review's fixes, run again, was within 1% of it in God of War's two scenes at 1x
+in every configuration, and within 0.5% in MC3's menu, LCS's city and WipEout, its finishes the same.
+
+God of War, finishes in 150 frames 19,309 → 2 in the battle and 48,312 → 2 in the menu, every configuration (the two
+at the start); the emulation thread's wait for the GPU 72-171 ms a frame → 0.01-0.04:
+
+| Scene | Turnip accurate | Turnip fast | Qualcomm accurate | Qualcomm fast |
+| --- | --- | --- | --- | --- |
+| Battle, 1x | 3.97 -> 11.82 (x3.0) | 4.51 -> 11.92 (x2.6) | 3.71 -> 10.91 (x2.9) | 3.67 -> 10.93 (x3.0) |
+| Menu, 1x | 2.08 -> 8.50 (x4.1) | 2.30 -> 8.66 (x3.8) | 2.02 -> 7.54 (x3.7) | 2.05 -> 7.61 (x3.7) |
+| Battle, 4x | 1.66 -> 5.49 (x3.3) | 1.70 -> 9.79 (x5.8) | 1.46 -> 7.08 (x4.9) | 1.44 -> 6.49 (x4.5) |
+| Menu, 4x | 0.76 -> 1.72 (x2.3) | 1.00 -> 2.22 (x2.2) | 0.75 -> 1.98 (x2.6) | 0.81 -> 1.90 (x2.3) |
+
+At 1x the emulation thread is now the bound: 83-91 ms a frame in the battle, 115-132 in the menu, about the same in fast
+mode, where the GPU transforms the 3D. At 4x the GPU is: the emulation thread waits for a slot 44-92 ms a frame in the
+battle (3-4 in Turnip's fast mode) and 260-380 in the menu (see "Left"). Every frame is shown from the GPU (150 in 150;
+none before). Per frame on Turnip, the battle's copies 2,382 → 121 and decoded textures 105 → 0.5, with 112 moves; the
+menu's copies 913 → 242, textures 215 → 0.2, with 376 moves and 404 uploads.
+
+The bench scenes at 1x, the same way (300 frames):
+
+| Scene | Turnip accurate | Turnip fast | Qualcomm accurate | Qualcomm fast |
+| --- | --- | --- | --- | --- |
+| Killzone, menu | 48.6 -> 49.2 | 72.9 -> 72.6 | 42.7 -> 43.0 | 42.6 -> 43.0 |
+| Midnight Club 3, menu | 111.1 -> 110.0 | 115.2 -> 113.7 | 105.0 -> 98.8 (-6%) | 108.7 -> 101.9 (-6%) |
+| Midnight Club 3, race | 59.0 -> 59.0 | 65.1 -> 65.3 | 56.4 -> 56.3 | 61.6 -> 61.7 |
+| Liberty City Stories, city | 92.8 -> 97.5 (+5%) | 105.4 -> 112.0 (+6%) | 88.4 -> 92.9 (+5%) | 100.5 -> 106.1 (+6%) |
+| Liberty City Stories, woods | 115.6 -> 129.8 (+12%) | 139.9 -> 150.7 (+8%) | 115.9 -> 122.9 (+6%) | 131.6 -> 140.8 (+7%) |
+| WipEout Pure, race | 68.9 -> 93.4 (+36%) | 84.8 -> 95.1 (+12%) | 79.3 -> 88.4 (+12%) | 79.1 -> 88.2 (+12%) |
+| Peace Walker, title (2D) | 1104 -> 1115 | 1135 -> 1141 | 1065 -> 1020 (-4%) | 1065 -> 1027 (-4%) |
+| Lumines, demo (2D) | 910 -> 820 | 808 -> 906 | 829 -> 815 | 824 -> 816 |
+
+The scenes that finished are faster: LCS's two (76 finishes in 300 frames -> 2) and WipEout (600 -> 300). MC3's menu
+is 6% slower on Qualcomm's driver and 1% on Turnip, in both rounds: its texture running into the frame buffer below
+(part 63's) is now moved into the first target and, as the PRIM draws below, back (2 moves a frame, where part 63
+copied the second part from the target below), and Qualcomm's driver takes about 0.25 ms to record a move. Trying the
+two-part copy first took God of War's battle from 121 copies a frame to 12,000 (a texture over two targets isn't a
+copy kept, and God of War's 272 tiles each took one), so the order stays. Peace Walker's title on Qualcomm's driver
+records the same commands 0.04 ms a frame slower (0.12 -> 0.16; not looked into). Lumines' runs are 100 frames a
+second apart from one to the next, as in part 63.
+
+### Accuracy
+
+Part 49's method, 10 frames of each scene from its state, on the RP6: every Vulkan frame of the branch is byte for byte
+the base's, in the seven bench scenes, Peace Walker's title and God of War's two, in all four configurations (400
+frames; the last code's too, after the review's fixes). So the accuracy is the base's exactly; against the software
+renderer, pixels identical in Turnip's accurate mode / its fast / Qualcomm's accurate / its fast: God of War's battle
+79.5 / 7.4 / 7.4 / 7.4%, its menu 80.7 / 16.6 / 16.6 / 16.6%, Peace Walker's title 100.0 / 40.4 / 40.4 / 40.4% (the
+other scenes as part 63 has them). On the M1, LCS's two scenes and WipEout, 40 frames in both modes, byte for byte the
+base's too.
+
+### Checks
+
+- Software untouched: the measure harness's 137 pictures byte for byte the base's; the bench scenes', Peace Walker's
+  title's and God of War's two scenes' every frame (picture and VRAM) and end state the same from the base's runner
+  and the branch's, at 7 and 1 threads (300 frames each, God of War's menu 60 and battle 150), but MC3's menu's end
+  state, which differs from run to run of the base's own runner too (its frames don't). Outside the GPU's code, what
+  changed acts only with a hardware renderer on (a refused PRIM, item 1; the hooks it hears of transfers and stores
+  through, items 5 and 7), or only when a state is refused (the kernel's note, item 9).
+- `tests/psp/run-tests.sh` (sanitizers on): 421 groups, 0 failures; eight new: "gpu a PRIM it refuses among the
+  drawing threads" (item 1's three failures on the base), "gpu the same memory as frame buffers of other formats and
+  places: moved on the GPU" (8888, 5650 over the same bytes, 8888 a page down, 5551, 4444; at 1x, 2x and 3x), "gpu frame
+  buffers side by side in one target's rows" (four 5650 ones and one a row down, each dithered from its first row, a
+  texture across the four; a PRIM past the rows' end and one with its depth buffer each a target of its own), "gpu a
+  block transfer over pixels it drew", "gpu the CPU's stores over pixels it drew" (words over two rows, halfwords over
+  5650 pixels, nothing finished and read again without a finish; a byte into an 8888 pixel finishing; through VRAM's
+  third copy as through its first, its second finishing, a 17th range apart finishing), "gpu pixels moved over bytes
+  memory has the newest of" (the review's: five ways a move's target kept dead or beside ranges over the pixels it
+  moved in, or grew over), "gpu memory's bytes in its pages taken again, not the target afresh", and "gpu a texture's
+  place taken by tiles reaching further" (few copies, each tile held to what it takes, at 1x, 2x and 3x); each against
+  the software renderer's memory. `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh`
+  307 checks, 0 failed. In CI (GCC 13, lavapipe): 421 groups, 0 failures on the last commit (420 in the two runs
+  before the review's fixes).
+- The GPU tests built for Android pass on the RP6 on Turnip and on Qualcomm's driver (30 groups each; one skips itself
+  on Qualcomm's, which doesn't read the frame buffer). GCC 11 (ubuntu:22.04) compiles `gpu.cpp` (with `vulkan.cpp`)
+  at -O1, -O2 and -O3 with -Wall -Wextra -Werror, and the kernel and the changed tests; the GE likewise but for twelve
+  maybe-uninitialized warnings in `four.cpp` (part 61's, the base's the same twelve). GCC 13 (ubuntu:24.04, CI's)
+  compiles every tests/psp file with -Werror.
+- Broken versions each fail a test: a refused PRIM deferred again (item 1's group), dead bytes put back at a finish
+  (the transfer and store groups, and the samples'), `drawnOver()`'s kept answer not renewed when a target draws more
+  in a page (the transfer group), moves turned off (the moves group, and part 63's texture from two frame buffers), the
+  CPU's stores not given up (the stores group: finishes where none are wanted). A copy not held to what a tile takes
+  isn't caught: the tiles' texels 1:1 at the copy's resolution sample none past what they take. (Three of these got past
+  the groups as first written, which are now as above.) The review's fixes likewise: a move filling none of its
+  target's ranges, or only those in the box with `begin()`'s check after its moves gone too, and a move while the
+  target's beside ranges are merged, each fail the new group. (On a texture's path, where the move's own check is the
+  only one, no variant grows the drawn rectangle over bytes beside it: that check alone gone isn't caught there.)
+- An independent review of the branch found one correctness bug: a move left its target's dead and beside ranges over
+  the pixels it moved in, so a finish skipped them, the CPU read memory's older bytes without one, or a later fill put
+  memory's over them (an 8888 frame buffer and a 5650 one over the same bytes, the CPU's word stored over both, the 5650
+  drawn over the word, the 8888 drawn in that page again). Fixed: the ranges are filled before the move, which puts the
+  newer pixels over them. A delta review found the same for beside bytes a move grows the drawn rectangle over, and a
+  finish then put back over: fixed in the move and in `begin()` after its moves, and a move is refused while those
+  ranges are merged. Its other points were taken (the kernel's notes through `note()`, `movable()`'s box set on entry,
+  the test gaps above, the wording), but one, left below: frame buffers shown from inside a target.
+
+### Left, and why
+
+- **God of War** is now the emulation thread's at 1x (83-132 ms a frame on the RP6, the same in fast mode, where the
+  GPU transforms the 3D): the scene is set up eight times a frame. Not profiled here. At 4x it's the GPU's, the menu
+  most (1.7-2.2 frames a second): a frame of it is 376 moves, 404 fills from memory and 242 copies, each 16 times the
+  pixels it is at 1x, and each move a render pass of its own (the colors and the stencil through staging pictures, then
+  a draw of the colors and eight of the stencil's bits). Not measured further; moves that leave the stencil alone where
+  the target's format has none (5650), or that set it in one draw where the driver can (`VK_EXT_shader_stencil_export`),
+  are where to look.
+- **A frame buffer shown from inside a target** (a row or a column of one that starts on its page, in rows that fill
+  pages) isn't shown from the GPU: `shownTarget()` wants a target starting where the frame buffer does, so the host
+  finishes and reads memory each frame, as for any frame the GPU can't show. The review's; none of the bench scenes
+  shows one (theirs start on pages, as frame buffers 512 pixels wide and 272 rows tall do).
+- **MC3's menu's** two moves a frame (6% slower on Qualcomm's driver, above): a cheaper move, or a copy of a texture
+  over two targets kept as copies of one target are, would take it back.
+- **WipEout's** one finish a frame, the CPU's depth read on the bloom's pixels (item 8): the GPU's depth isn't read
+  back, so the game gets memory's either way; the finish is for the color it reads there.
+- **Killzone's menu at 4x** (part 63's) and a target's one rectangle of changes stand. Dead and beside ranges are 16 a
+  target; more of them finish, or fill the target afresh.
+- Scratch: `~/phobos-work/scratch/gowvk` (build.sh, run-host.sh; why-patch.py, the finishes' causes; speed.sh,
+  session.sh, sess.py; acc.sh and cmp.py; measure.sh, soft-all.sh; gcc11.sh; ci-lavapipe.sh, lavapipe in a container;
+  gpu-tests, the GPU tests for Android). Nothing of it is left on the RP6 but the fonts folder beside the harness,
+  which Peace Walker's scenes need.
+
+## Part 66: round 6 of tools/psp-measure — the GE's time, lighting's cosine, the reciprocal's chords, patches
+
+On branch `cursor/psp-measure6-2b67`, on top of #200's `cursor/psp-gow-vk-2b67` (`c86461ec6`). Only `tools/psp-measure`,
+`tests/psp/measure.cpp`, the rebuilt `tests/psp/programs/pspmeasure.elf` and docs; no core change. The task: round 6 of
+the measurement program for the owner's PSP, for what parts 60 and 64 left open, each test designed so that its results
+can pin a model rather than only show a difference. Clean room: no PPSSPP code was read for it, and JPCSP's wasn't.
+
+The menu's new first line, "Round 6: the GE's time, lighting, reciprocal, curves (about 7 MB)", runs 36 tests into
+`results/ge` (`manifest6.txt`, which also lists every timing case): 28 pictures (256x256, a 32-bit word a pixel), 7
+timing files and the driver's statuses. Every test is a results.c test as before (skipped once done, run once more after
+a stop, then given up on; a stall noted in `<test>.stalled` and the GE reset after 5 seconds). Four tests stall on
+purpose if v behaves as u did. On a PSP the round should take about two minutes.
+
+### The GE's drawing time (part 64's model)
+
+Part 64 owes each list `max(pixels / 4, primitives x 166/35)` bus clocks, Sony's peaks, and nothing for commands, culled
+primitives or block transfers. Seven timing tests give the PSP's own costs. Each times lists of known work, built once
+in a buffer (with GU_SEND, or word by word) and queued alone with `sceGeListEnQueue` and a callback of the program's
+own: the time from just before the list is queued to its finish callback, in microseconds (`sceKernelGetSystemTimeLow`,
+read in the callback), and to `sceGeListEnQueue`'s return. The program waits on a semaphore the finish callback signals,
+so nothing looks at the GE while it draws (waking every 2 ms to look at a flag the callback also sets, in case the
+firmware won't have a callback signal a semaphore), and the 5-second limit still applies (a stall is reset as
+`waitForGe` resets it). Every case runs at a few sizes (straight-line fits: the slope is a unit's cost, free of the
+fixed cost of queueing a list and taking its interrupt) and 8 or 16 times at each, every run's time recorded so the
+noise shows; first at 222 MHz with the bus at 111 (set, whatever custom firmware chose), then at 333 MHz with the bus at
+166, the clocks found put back after, each record carrying the CPU and bus clocks `scePowerGet*ClockFrequencyInt` gave
+back. Whether the times scale with the bus clock is the model's first assumption to check. A list `sceGeListEnQueue`
+refused counts as a stall (noted in `.stalled`, its run's second time the error).
+- `time-commands`: an empty list (FINISH, END); 1024 to 65536 NOPs, writes of a register (TEXTURE_ENV_COLOR), and
+  TEX_FLUSHes; world-matrix uploads (13 commands each); 256 to 16384 JUMPs to the next word, and CALLs to a RET. The
+  slopes are the GE's time a command (part 64: none), and JUMP and CALL show what restarting the list's fetch costs.
+- `time-primitives` (256, 1024 and 4096 primitives, about 2 pixels each): in through mode triangles, triangles covering
+  no pixel's middle, a strip and a fan (one vertex a triangle), sprites, lines, a line strip, points, textured
+  triangles, triangles through 16-bit indices; in 3D the same kinds and triangles with texture coordinates in
+  perspective, lit by one directional light or four point lights with their shine, skinned with 2 or 8 weights, morphed,
+  with their vertices in VRAM, culled as back faces, outside the scissor rectangle, past the near plane and cut by it;
+  Bezier patches cut 4x4 (and 16x16), and the same patches outside the scissor rectangle with PATCH_CULL_ENABLE off and
+  on. Strips against separate triangles give a vertex's cost apart from a triangle's; the culled, outside and cut cases
+  give what part 64 counts as nothing.
+- `time-fill` (layers of the target's 256x256 pixels, 1, 2 and 4): flat color into each frame buffer format; textures in
+  every format (8888, 5650, 5551, 4444, CLUT8, CLUT4, DXT1, DXT3, DXT5), swizzled or not, in RAM or VRAM, nearest or
+  bilinear, 1:1, magnified 4 times and shrunk 2 times, REPLACE and MODULATE; blending into 8888 and 5650; the depth test
+  passing and writing, failing, passing without writing; the alpha test passing and failing; the stencil test with INCR;
+  XOR; dithering; a pixel mask; 3D triangles flat, fogged, textured at w 1 and in perspective; through-mode triangles
+  flat and smooth; clear mode. A layer's slope is the time for 65536 pixels, so pixels a bus clock for each state,
+  against Sony's 4.
+- `time-sizes`: the same 65536 pixels a layer in sprites of 2x2 up to 128x128, rows (256x1), columns (1x256), 3x3 and
+  17x17, and in triangle pairs of 2x2 up to 128x128: a primitive's cost against a pixel's, and whether the GE fills rows
+  or tiles.
+- `time-transfers` (`sceGuCopyImage`): RAM to VRAM, VRAM to VRAM, VRAM to RAM, RAM to RAM, 32- and 16-bit, squares of 16
+  to 256 pixels; 4 pixels wide (a row's cost) and one row; and RAM to VRAM followed by TEXSYNC, which shows whether a
+  list's FINISH waits for its transfer at all.
+- `time-texcache`: a 256x256 sprite tiled by a texture of 8x8 up to 256x256 texels in 8888, 5650, CLUT8 and CLUT4,
+  swizzled or not (48 cases, 1 and 3 layers): the time a pixel against the texture's bytes, whose knee is the cache's
+  size; and the same 32x32 texture again with and without a TEX_FLUSH between sprites, a new texture each sprite (RAM or
+  VRAM), a palette loaded before each sprite or once, a 64x64 one again.
+- `time-signals`: 1, 4 or 16 flat layers, a SIGNAL that lets the GE go on, as many layers again: whether the signal
+  callback comes when the GE reaches it (the first half's time) rather than at once, as the core gives it.
+
+What would settle the model: the commands' slopes give a time a command (or show none); the primitive cases a time a
+vertex for each vertex type and a time a primitive for each kind, culled ones included; the fills a time a pixel for
+each state, which tells whether pixel and setup costs add or overlap (the model's max) once `time-sizes` puts both in
+one list; the transfers a time a byte and a row; the cache cases a miss cost and the cache's size. Together a list's
+time becomes a sum the GE driver can owe as part 64's does now.
+
+### Lighting's cosine (part 60)
+
+Round 5's `light-share-*` measured 16 normals with 192 light-times-material products each, expecting each normal's share
+of a light to be pinned by them: level = floor(product x share / 1024) for product = (2L + 1)(2M + 1). Taken again for
+this part, they aren't: for 15 of the 16 normals no share satisfies all 192 products (the interval each product allows
+doesn't meet the others'), and the best single share per normal still misses 451 of the 3072 values (by up to 1.4
+levels, well away from a level's edge, with the same light, normal and channel and another material). So the multiply
+isn't a share times the product, and the sweep needs the multiply's structure first:
+- `light-products-0` to `-3`: the products in full, a lit point a pixel, at four normals: row y's light (y, 255 - y, y)
+  on column x's material (x, x, 255 - x), so each channel holds every light level against every material level. Normal
+  (0, 0, 1) (the cosine 1: the core's (2L + 1)(2M + 1) >> 10, checked in the core's run), then (33, 0, 56), (65, 0, 72)
+  and (101, 0, 26), three of round 5's. At one cosine the output as a function of L and M shows whether it's one scale
+  on the product, on the light first, on the material first, or rounded between.
+- `light-sweep-0` to `-7`: 1024 normals a picture, each in an 8x8 block with 64 products as `light-share-*` chose them
+  (levels 96-255 from a fixed sequence, light by row, material by pixel), white light in each block's first row and
+  white material in its first column. The normals: (k, 0, 1023) and (1023, 0, k) for k = 0..1023, one component swept at
+  a time over the whole quarter turn; the first three times as long and over 1024 (lengths); (0, k, 1023) along y;
+  (1023, k, 0) with the light along +x; the first with the light toward (1, 1, 1) and toward (0, 0, 3) (not one long).
+  With the multiply known, each normal's 192 values pin its share to a narrow interval, and the sweeps show the cosine
+  as the GE works it out: whether normalizing depends on length (by a power of two or not), on the axis, or on the
+  light's own length.
+- `light-sum`: one to four lights alike on the same products (each light's part below 64, so four don't saturate):
+  whether the parts are added before they're cut to whole levels (the core cuts each).
+
+### The reciprocal's chords (part 60)
+
+Part 60 fitted R as 128 straight chords, two pinned by measurement and the rest by formula. Here every chord is read.
+- `recip-pixels`: in 32 rows a case, strips 512 pixels long from w0 to w1 a power of two apart (where R is exact), their
+  u scale x w, so that s is constant while q steps from 1 / w0 to 1 / w1 one unit of its 15 bits each sixteenth of a
+  pixel (both steps exact, whatever the stepper). A pixel's u is then scale x R(q), and the scale makes its texel the
+  chord's 16-bit value's low 8 bits: each pixel reads one value outright. 16 rows at the 16 sub-pixel offsets (each 4096
+  sixteenths of the strip on pixels' middles) and 16 more 256 pixels on put every q of the binade on a pixel: every
+  chord at the 64 positions a 13-bit q has (the largest corner a power of two leaves 13 bits). The cases: w 1 to 2; the
+  same at half the scale (the value's bits 1-8, coordinates below 32768 texels, a hedge in case the GE keeps fewer bits:
+  `texel-range`); 2 to 4, 1/2 to 1, 1024 to 2048, 2^-10 to 2^-9 (whether only the fraction matters); 2 to 1 (stepped the
+  other way); 1 to 2 along v. This pins every chord's start and slope as integers, and whether a chord is straight at
+  all.
+- `recip-projected`: the same through the texture matrix (TEXTURE_MAP_MODE 1 from the position, w 1), where q can start
+  just below a power of two, so the pixels read 14-bit qs (positions 0, 2, 4, ...: 128 a chord, but for the top q, which
+  is the strip's corner), in [0.5, 1) and [1, 2). It also measures the projective path, which part 60 carried over
+  unmeasured: rows 192-223 (the matrix's s 128 w and q 1, w 1 to 2) are `recip-pixels`' rows 0-31 if the matrix's s and
+  q are taken as a vertex's own (as the core takes them; checked in its run), rows 224-255 show the matrix's q times
+  R(w), and rows 128-191 a q of 0, -0, below 0 and tiny (part 60: "no picture measures either").
+- `recip-vertex-0` to `-2`: the user's constant-w triangles (as `persp-w3`): 4096 cells of 4x4 pixels, each at one w in
+  [1, 2) at chord c / 32 and 32 positions a chord (`-0` even positions, `-1` three on, `-2` with w's 8 lowest bits set,
+  which R should ignore), u 512 at every corner. A pixel's u is 512 x R15(w) x R(R15(w)) (R15: R cut to 15 bits, as s
+  and q are), and its texel that product to 2^-17. With the pixel path known from the two pictures above, each cell
+  gives R15(w) at the vertex, positions every 8 (and 3 on) along every chord.
+- `recip-sprites`: the same cells as 3D sprites: whether a sprite divides by R too (the core blends 1/w in doubles).
+- `texel-range`: sprites whose texture coordinates are 2^k plus a known part (k 8 to 23, either sign), in through mode:
+  where the GE stops keeping a coordinate's low bits. The reciprocal's pictures read coordinates up to 2^16
+  (`recip-pixels`) and 2^17 texels (`recip-vertex`), where round 5's reached 4096; the core clamps at 65536 (a guard of
+  its own), so in its run `recip-vertex-*` read 0 everywhere and `texel-range` stops at 2^16. The PSP's picture decides
+  how far the others can be read.
+
+### PATCH_CULL_ENABLE and divisions along v (curves.cpp)
+
+Round 4's `curves-culling` found PATCH_CULL_ENABLE changing nothing on a flat patch facing the screen, with either
+PATCH_FACING, culling on or off. What's left that it could do is tried:
+- `patch-cull`: 256 patches, every combination of PATCH_CULL_ENABLE, PATCH_FACING, the control points mirrored (strips
+  the other way round), normals none, toward the viewer, away and edge on, culling off, CW, CCW, or lit, as triangles
+  and as points. A rule that culls by the normals given, by the made-up ones, or only with lighting shows as cells
+  missing.
+- `patch-cull-edges`: 64 patches against their cells' own scissor rectangles: inside, across each edge, wholly outside,
+  around, across and past the near plane, across the far plane, bowed out past every edge, pulled in across it, all at
+  one point; PATCH_CULL_ENABLE off and on; triangles and points. A cull of whole patches by their control points shows
+  as a partly visible patch missing.
+- `time-primitives`' cases 28 and 29: patches wholly outside the scissor rectangle, PATCH_CULL_ENABLE off and on. A cull
+  that only skips the work shows in the time and nowhere else.
+- `curves-count-v` (16, 63 and 64 divisions along v) and `-v-65`, `-v-100`, `-v-128`, `-v-200`, `-v-255`, one each, last
+  in the round: round 4's counts turned (points added up in columns). If v is like u, 65, 100, 200 (72) and 255 (127)
+  stall, each reset after 5 seconds, and 128 counts as 0, so as 1: the core already assumes so.
+
+### The driver's statuses (part 64's unmeasured details)
+
+`ge-statuses`: a slow list (16 layers of an 8888 texture in RAM, not swizzled) queued alone, with `sceGeListSync(id, 1)`
+and `sceGeDrawSync(1)` looked at every 50 microseconds until a few looks after it's done (1024 looks, about 50 ms, at
+most), beside its finish callback's time; and a list GU ends (its stall address just past its END) whose drawing and
+FINISH come with interrupts held off (`sceKernelCpuSuspendIntr`), `sceGeDrawSync(1)` looked at for 20 ms, then
+interrupts let through. Part 64 has it read "drawing" (2) there, unmeasured; the core's run gives 2. Part 64's other
+unmeasured detail, `sceGeBreak(0)` at a waiting FINISH, isn't tried: a break that went wrong would leave the driver's
+queue in a state no later test could trust.
+
+### In the core, and the program
+
+`tests/psp/measure.cpp` drives the new line (the menu's other lines moved down one) after round 5 and checks: every
+picture's size; every timing file's records whole and as many as the program's tables give, the first half at 222/111
+MHz and the second at 333/166, every run finished, each SIGNAL's callback before its finish; `ge-statuses` complete;
+`manifest6.txt`; and four checks that the layouts read what they're meant to in the core's own arithmetic:
+`light-products-0` is (2L + 1)(2M + 1) >> 10 in every channel of every pixel, `recip-pixels`' first and last cases and
+`recip-projected`'s first show the core's chord values' low bytes at the q each pixel samples, and `recip-projected`'s
+rows 192-223 are `recip-pixels`' rows 0-31. With `PSP_GE_RESULTS` holding a PSP's round 6, it prints each picture's
+differences as before, each timing case's middle times by size and a unit's time (a straight line through them) here and
+there at each clock setting, and the statuses here and there. In the core no list stalls (it draws nothing of a surface
+cut past 64 times), and the whole measure group, every round, takes about 9 seconds unsanitized; the timings are the
+core's model's (commands nothing, a 256x256 fill 147.6 microseconds at 111 MHz, a SIGNAL at once).
+
+`pspmeasure.elf` is rebuilt in the pinned image (`ghcr.io/pspdev/pspdev@sha256:54895e6f...`), which rebuilds the
+previous one byte for byte from its own source, and two builds of the new source are identical. The owner's copy:
+`.local/psp-round6/` (EBOOT.PBP, SHA-256 `bb59b7ab11e913693f20d851048af62b19a8ffdce2471d082c418ea2cce6ba0b`, and
+HOW-TO.md: where it goes, which line, about two minutes, the four deliberate stalls, and `results/ge` back to the
+RP6's `Download/PSPMEASURE/results`). The RP6 wasn't attached in this session, so it isn't there yet.
+
+### Review
+
+An independent read-only review (a reviewer agent with its own builds of the program and the measure test) found
+nothing that should freeze a PSP, every table, count and layout as the program has it, the arithmetic of the exactness
+claims sound, and the committed `pspmeasure.elf` a fresh build. It found three things that would have wasted part of
+the run, fixed: the timed primitives and patches "outside the scissor rectangle" were drawn on screen (the timed lists'
+scissor spans 512 columns, so they're 600 pixels across now); `recip-pixels`' second window, 257 pixels on, missed 16
+qs (each window now starts half a pixel back, so its pixels' middles fall on 4096 consecutive sixteenths, and the two
+together on every q); and `ge-statuses` stopped looking after 128 looks, about 7 ms, before a PSP drawing below peak
+would finish (1024 now). And smaller points, taken: the timing tests' first half at 222/111 MHz set rather than as found
+(custom firmware may run homebrew at 333), a refused `sceGeListEnQueue` noted, the statuses printed as numbers, wording.
+A delta review found the fixes right and complete; its points (`recip-projected` reads every q but its top one, the
+strip's corner; error codes in hex; line widths) are taken too, without changing the program.
+
+### Checks
+
+- `tests/psp/run-tests.sh` (sanitizers on): 425 groups, 0 failures (the measure group drives round 6);
+  `tests/allegrex/run-tests.sh`: 58 groups, 0 failures; `tests/psp/ares/run-tests.sh`: 307 checks, 0 failed.
+- The program builds without a warning (`-O2 -Wall`), its `SMOKE` version too; `tests/psp/measure.cpp` with `-Wall
+  -Wextra -Werror` and the sanitizers. The comparison was run against a made-up reference (the core's own files, with
+  times tripled and an error code among the statuses) and prints as it should.
+- Scratch: `~/phobos-work/scratch/measure6` (build.sh, the pinned image's build; quick.sh, the measure group alone;
+  times.py and topng.py read the files; recip_model.py, part 60's chords and `recip-vertex`'s readings under them,
+  within 6 of the wrap; share*.py, round 5's light-share taken again; push-rp6.sh, the owner's copy to the RP6).

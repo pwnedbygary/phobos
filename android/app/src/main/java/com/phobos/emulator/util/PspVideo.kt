@@ -26,21 +26,33 @@ object PspDrawingThreads {
 
 /**
  * The PSP's "Renderer" setting: who draws a PSP game's pictures, handed to the core as its option "Renderer" as a
- * game starts. The software renderer, the default, draws them as the PSP does, exactly; Vulkan's draws them on the
- * GPU (with the driver Settings' Driver Manager chose, or the system's), much faster and very close. The core checks
- * the GPU's pictures against the software renderer's as the game starts, and draws with the software renderer,
- * saying so once, where they're wrong or the GPU stops answering. OpenGL's is to come.
+ * game starts. The software renderer, the default, draws them as the PSP does, exactly. The Vulkan renderer draws them
+ * on the GPU (with the driver Settings' Driver Manager chose, or the system's) in one of two modes: accurate (the CPU
+ * transforms and lights the vertices, and the shader blends where the driver allows: very close, most 2D exact at
+ * Native), or fast (the GPU transforms and lights 3D itself and blends with its own units: very close, a little less
+ * exact, and the fastest). A saved 1 is accurate, as Vulkan was before fast came. The core checks the GPU's pictures
+ * against the software renderer's as the game starts, and draws with the software renderer, saying so once, where
+ * they're wrong or the GPU stops answering.
  */
 object PspRenderer {
     const val SOFTWARE = 0
     const val VULKAN = 1
+    const val VULKAN_FAST = 2
 
     /** The choices Settings offers. */
-    val choices = listOf(SOFTWARE, VULKAN)
+    val choices = listOf(SOFTWARE, VULKAN, VULKAN_FAST)
 
     fun label(renderer: Int): String = when (renderer) {
-        VULKAN -> "Vulkan (GPU)"
+        VULKAN -> "Vulkan (accurate)"
+        VULKAN_FAST -> "Vulkan (fast)"
         else -> "Software (exact)"
+    }
+
+    /** What each choice does, for Settings. */
+    fun description(renderer: Int): String = when (renderer) {
+        VULKAN -> "Vulkan (accurate) draws on the GPU as close to the PSP as it can: very close, most 2D exact at Native."
+        VULKAN_FAST -> "Vulkan (fast) also transforms and lights 3D on the GPU and blends with its own units: the fastest, very close, a little less exact."
+        else -> "Software (exact) draws every pixel as the PSP does."
     }
 
     /** What the core is told: one of [choices], anything else taken as the software renderer. */

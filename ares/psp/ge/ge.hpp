@@ -34,7 +34,9 @@
 //addresses all work that way.
 //
 //The HLE kernel's version of the GE driver (kernel/ge.cpp) runs the GE: it keeps the queue of lists, starts each in
-//turn, and deals with whatever made one stop. The GE's work takes no time yet.
+//turn, and deals with whatever made one stop. The GE carries out a list's commands at once, every pixel drawn there
+//and then; what they would take a PSP's GE to draw (owedPixels, owedPrimitives) is what the driver waits for before
+//the program hears that the list is done (Kernel::geTime()).
 //
 //Sources: pspsdk's GU library (src/gu, BSD-licensed), which writes display lists, for the commands' numbers and how
 //their arguments are laid out; uOFW's reading of the GE driver for the GE's registers; PPSSPP, for what neither
@@ -91,7 +93,7 @@ struct GE {
     Signaled,  //at an END after a SIGNAL: the driver does what the signal asks, then lets the GE go on
     Ended,     //at an END with neither before it: the GE just stops
     Busy,      //out of budget, still going
-    Faulted,   //a CALL deeper than the GE's two levels, or a RET with nothing to return to
+    Faulted,   //a CALL deeper than the GE's two levels
   };
 
   //Where the GE is in its list: the registers the driver saves while another list runs, and restores.
@@ -209,9 +211,13 @@ struct GE {
     u32 firstPage = 0, lastPage = 0;  //the pages it came from (Memory::pagesOf())
     std::list<Decoded*>::iterator place;  //where it is in the cache's list, the last used first
     std::vector<u32> texels;  //key.width x rows
+    //The bytes it was decoded from (none where they aren't side by side in the host's memory, or would be more than
+    //its texels', which alone count against the budget), and whether one of their pages was written since
+    //(textureWritten()): looked at again before it's next drawn with
+    std::vector<u8> source;
+    bool suspect = false;
   };
   struct TextureCache {
-    std::mutex mutex;  //decode and forget: the GE's thread and workers share the cache (threads.cpp)
     std::unordered_map<TextureKey, std::shared_ptr<Decoded>, TextureKey::Hash> entries;
     std::unordered_map<u32, std::vector<Decoded*>> pages;  //the decoded textures that came from each page
     std::list<Decoded*> recent;                            //all of them, the last used first
@@ -242,6 +248,7 @@ struct GE {
   //which they compile to the host's SIMD instructions (NEON on ARM64, SSE on x86-64).
   using f32x4 = float __attribute__((vector_size(16)));
   using f64x2 = f64 __attribute__((vector_size(16)));
+  using u64x2 = u64 __attribute__((vector_size(16)));
   using s32x4 = s32 __attribute__((vector_size(16)));
   using u32x4 = u32 __attribute__((vector_size(16)));
   struct Four {
@@ -249,6 +256,7 @@ struct GE {
     s32x4 inside;     //the lanes inside the row (all bits set)
     bool full;        //all four inside it
     s32x4 z, depth;   //the pixels' depths, and the depth buffer's there (when it's read)
+    s32x4 passed;     //the lanes passing the depth test: with the stencil test, those failing it stay live
     s32x4 color[4];   //red, green, blue, alpha: 0-255
     s32x4 fog;        //0-255
   };
@@ -268,10 +276,11 @@ struct GE {
     bool withAlpha = false, doubled = false;
     std::shared_ptr<Decoded> decoded;  //its texels, kept while a job may draw with them
     //Render to texture from a batch still being drawn (or filled): decode later, when this Look's batch starts
-    //(ensureDecoded), once that batch has been drawn; the palette as it was when the primitive was set up.
+    //(ensureDecoded), once the batches before it have been drawn; the palette as it was when the primitive was set
+    //up; and the texture's bytes, first to last (offsets in VRAM), which the CPU waits for till then (Batch::reads).
     u32 deferRows = 0;
     std::vector<u8> deferClut;
-    u64 deferClutHash = 0;
+    u32 deferFirst = 0, deferLast = 0;
   };
 
   //A primitive set up for drawing (draw.cpp): everything about it worked out once, so that any of its rows can be
@@ -296,15 +305,21 @@ struct GE {
       s32 left, right, top, bottom;
       f64 leftInverse, rightInverse, leftAcross, rightAcross, topDown, bottomDown;
     };
+    //A color channel, the fog or the depth stepped across a triangle (draw.cpp's stepped()): its value at (startX,
+    //startY), and its steps a sixteenth of a pixel across and down, all in 16384ths of a level (or a depth).
+    struct Stepped { s64 across, down; s32 start; };
     struct Triangle {
       s64 x[3], y[3];                  //the corners (sixteenths), turned clockwise
-      float total;                     //twice its area
       bool flat, shines, perspective;
       u32 flatColor, flatSpecular;
-      u32 color[3], specular[3];
-      float z[3], fog[3], u[3], v[3], q[3], w[3];
+      Stepped colors[4], shine[3], fog;  //red, green, blue, alpha; the shine's red, green and blue; the fog (0-255)
+      Stepped depth;                     //0-65535
       f64 uStart, uAcross, uDown, vStart, vAcross, vDown;  //2D texture coordinates, stepped from (startX, startY)
       s64 startX, startY;
+      //3D texture coordinates (draw.cpp): s, t and q stepped as colors are, in 16384ths of a 15-bit unit, and the
+      //size of that unit. A pixel's coordinate is the floored unit times the reciprocal of q (raster.cpp).
+      Stepped texS, texT, texQ;
+      float sUnit, tUnit, qUnit;
     };
     struct Point {
       s32 x, y;
@@ -384,7 +399,11 @@ struct GE {
   auto lookFor(const PixelState& pixel, const Sampler* texture) const -> Look;
   auto primitive(u32 kind, u32 count) -> void;
   auto drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>& vertices, u32 strip) -> void;
+  auto meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip, s32 facing,
+                     std::vector<Vertex>& vertices) -> void;
   auto submit(Job& job) -> void;
+  auto spriteJob(const Look& look, const Vertex& from, const Vertex& to, bool perspective, Job& job) const -> bool;
+  auto readsAhead(const Look& look, const std::vector<Vertex>& vertices, u32 count) const -> bool;
   auto rectangle(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto triangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing, bool perspective)
     -> void;
@@ -428,6 +447,8 @@ struct GE {
   auto sampleWith(const Sampler& texture, bool linear, float u, float v) -> u32;
   struct TexelAxis { s32 first, second, fraction; };
   static auto texelAxis(float coordinate, u32 size, bool clamp, bool linear) -> TexelAxis;
+  struct TexelSpot { s32 first, fraction; };
+  static auto texelSpot(float coordinate, bool linear) -> TexelSpot;
   auto fetch(const Sampler& texture, s32 x, s32 y) -> u32;
   auto filtered(const Sampler& texture, TexelAxis u, TexelAxis v) -> u32;
   auto textureFunction(u32 color, u32 texel) const -> u32;
@@ -437,14 +458,15 @@ struct GE {
   auto textureBytes(const Sampler& texture, u32 rows, u32& low, u32& high) const -> void;
   //Decodes look's texture, or (allowDefer, workers drawing) leaves it for ensureDecoded once a batch that draws
   //over it has been drawn (render to texture: threads.cpp).
-  auto decode(Look& look, const Region& region, u32 rows, bool allowDefer = false) -> void;
+  //copyDraws: whether a primitive drawing over its texture draws the same from a copy taken first (readsAhead()).
+  auto decode(Look& look, const Region& region, u32 rows, bool allowDefer = false,
+              const std::function<auto () -> bool>& copyDraws = {}) -> void;
   auto ensureDecoded(Batch& batch) -> void;
-  auto fillDecoded(Look& look, u32 rows, const u8* palette, u64 paletteHash, u32 paletteVersion, bool waitFirst)
-    -> void;
-  //ensureDecoded reads VRAM of batches already drawn without settling this one (pointer / vramDrawnOver).
-  static thread_local bool readingDeferred;
+  auto fillDecoded(Look& look, u32 rows) -> void;
+  auto decodeTexels(const Sampler& t, const u8* palette, u32 low, u32 high, u32 width, u32 from, u32 rows,
+                    u32* texels) -> void;
   auto textureWritten(u32 page) -> void;
-  auto forget(Decoded* entry) -> void;  //caller holds textures.mutex
+  auto forget(Decoded* entry) -> void;
   auto dropTextures() -> void;
 
   //pixel.cpp
@@ -455,18 +477,25 @@ struct GE {
   auto transfer() -> void;
 
   //threads.cpp
+  static constexpr u32 VRAMPages = (2 << 20) / 4096;  //VRAM's 2 MiB in 4 KiB pages (memory.hpp)
   auto setThreads(u32 count) -> void;
   auto flush() -> void;
   auto launch(bool returning) -> void;
   auto startBands(Batch& batch) -> void;
   auto drew(Batch& batch) -> bool;
+  auto launched() const -> bool;
+  static auto unfinished(const Batch& batch) -> bool;
   auto reclaim(Batch& batch) -> void;
+  auto reap() -> void;
   auto resume() -> void;
   auto settle() -> void;
   auto freeVRAM() -> void;
   auto settleAll() -> void;
+  auto settleOver(u32 first, u32 last) -> void;
+  template<typename Reaches> auto settleThrough(const Reaches& reaches) -> bool;
   auto clearBatch(Batch& batch) -> void;
   auto drawnFirst(u32 address, u32 size) -> void;
+  auto drawnBefore(const std::bitset<VRAMPages>& read, const std::bitset<VRAMPages>& written) -> void;
   auto drawnOver(u32 first, u32 last) -> bool;
   auto defer(const PixelState& pixel, const Region& region) -> bool;
   auto record(const Job& job) -> void;
@@ -480,13 +509,18 @@ struct GE {
   struct Touched { u32 low = ~0u, high = 0; };
   std::array<Touched, 2> touched;
 
-  static constexpr u32 VRAMPages = (2 << 20) / 4096;  //VRAM's 2 MiB in 4 KiB pages (memory.hpp)
-
   //Drawing on several threads (threads.cpp). While the GE runs a list, the primitives it meets wait in a batch,
   //set up, and are drawn together, in bands of rows shared out among the threads, before anything could see them.
+  //The rows in a band: rows 0-3, 4-7 and on. Smaller bands share a batch out more evenly: a thread on a slow core (the
+  //RP6's little ones) taking one of its last keeps the others waiting less, though a job is set up again for each
+  //band it reaches. (On the RP6 at 7 threads, against bands of 8 rows, both listed and with block transfers waiting
+  //only for what they touch: God of War's battle drew 36% faster, LCS's city 13%, its woods 6%, MC3 the same:
+  //docs/psp-core.md, part 61.)
+  static constexpr s32 BandRows = 4;
   struct Batch {
     std::deque<Look> looks;   //its primitives' settings, and their jobs in order
     std::vector<Job> jobs;
+    std::vector<std::vector<u32>> bandJobs;  //for each band (of rows 0-1023), its jobs reaching it, in order
     u64 work = 0;             //its pixels, roughly (its jobs' boxes)
     s32 top = 0, bottom = -1;           //its rows
     bool targeted = false;              //its render target: every primitive in a batch draws into the same one
@@ -494,21 +528,25 @@ struct GE {
     s32 left = 0, right = 0, upper = 0, lower = 0;  //its area: its primitives' scissor rectangles together
     bool depth = false;                 //some of them reach the depth buffer
     std::bitset<VRAMPages> pending;     //VRAM's 4 KiB pages it may draw over
-    bool launched = false;              //handed to the workers: being drawn, or next once the one before is done
+    std::bitset<VRAMPages> reads;       //those its deferred textures are read from as it starts (Look::deferRows)
+    std::atomic<bool> readsDone{false}; //and they have been, decoded (ensureDecoded)
+    bool launched = false;              //handed to the workers: being drawn, or next once those before are done
+    std::atomic<bool> finished{false};  //launched, and every band drawn: its pixels are all in VRAM
     u32 users = 0;                      //threads drawing its bands now (under the mutex)
     u32 bands = 0;
     std::atomic<u32> nextBand{0}, bandsLeft{0};
     //0: deferred textures not decoded yet; 1: one thread is decoding; 2: ready (drawBands)
     std::atomic<u32> decodeState{2};
   };
+  static constexpr u32 Batches = 8;  //filled in turn, round and round: one waiting for its primitives
   struct Drawing {
     u32 threads = 1;          //how many threads draw ('GE Threads'): 1, each primitive at once on the GE's own
     bool deferring = false;   //run() is running: primitives wait in the batch
     bool recording = false;   //the primitive being set up waits in the batch
-    Batch batches[2];         //one waiting for its primitives, the other maybe still being drawn
+    Batch batches[Batches];   //one waiting for its primitives, those after it in turn maybe still being drawn
     Batch* batch = &batches[0];         //the one primitives go into
     Batch* drawn = nullptr;             //the one the workers draw (under the mutex)
-    Batch* queued = nullptr;            //the one to draw once that's done (under the mutex)
+    std::deque<Batch*> queued;          //those to draw once that's done, in turn (under the mutex)
 
     std::vector<std::thread> workers;   //the threads besides the GE's own
     std::mutex mutex;
@@ -517,7 +555,6 @@ struct GE {
     bool quit = false;
     u64 shared = 8192;        //a batch with fewer pixels is drawn on the GE's thread alone (tests may make it 0)
   } drawing;
-  static constexpr s32 BandRows = 8;  //the rows in a band
 
   //A hardware renderer (ge/gpu, docs/psp-gpu-renderers.md): the GPU's own rasterizer, texture units and blending
   //drawing the primitives in place of the software renderer, or none. The GE goes on doing everything up to the
@@ -530,9 +567,9 @@ struct GE {
   //for that first (Memory::finishDrawing, settleAll()), as for the drawing threads' batches. written() hears of
   //every watched page someone changes (Memory::watch()), so that the renderer knows when its copy of a frame buffer
   //is older than memory's. When ready() is false (the GPU lost) the software renderer draws; and a PRIM begin()
-  //refuses (the renderer can't draw it) is drawn by the software renderer, once the renderer has put back what it
-  //drew. It's set with setRenderer(), which has it forget any machine's VRAM it saw before, and taken away with it
-  //before it goes, settled.
+  //refuses (the renderer can't draw it) is drawn by the software renderer, at once, once the renderer has put back
+  //what it drew. It's set with setRenderer(), which has it forget any machine's VRAM it saw before, and taken away
+  //with it before it goes, settled.
   struct Renderer {
     virtual ~Renderer() = default;
     virtual auto ready() const -> bool = 0;
@@ -556,11 +593,36 @@ struct GE {
     //Memory changed VRAM's bytes first to last while pages were busy, without its waiting: bytes it hasn't drawn
     //over (drawnOver()), which its copies of frame buffers take from memory again before they're used.
     virtual auto besideChanged(GE& ge, u32 first, u32 last) -> void = 0;
+    //A block transfer (having read what it copies) or the CPU's store is about to write VRAM's bytes first to last
+    //whole: pixels it drew there are memory's from then on, not put back, and no longer drawn over (drawnOver()),
+    //where it can keep track of them; the rest it still has drawn over (the writes wait for a finish, as anyone's).
+    virtual auto overwritten(GE&, u32 /*first*/, u32 /*last*/) -> void {}
+    //A renderer that transforms and lights 3D vertices itself (Vulkan's fast mode, the GPU's vertex shader): whether
+    //it takes a 3D PRIM of count corners with these settings (t), after begin(); then (meshTriangles()) the
+    //triangles the GE would draw whole, as the vertex type laid them out, untransformed: corners, three to a
+    //triangle, each triangle's last corner first, in runs between those the GE cuts and draws (again: the same
+    //PRIM's vertices as the run before's). Where it won't, the GE transforms, lights and clips them itself, as for
+    //any renderer.
+    virtual auto meshes(GE&, const Transform& /*t*/, u32 /*count*/) -> bool { return false; }
+    virtual auto mesh(GE&, const Transform& /*t*/, const std::vector<Vertex>&, const std::vector<u32>& /*corners*/,
+                      bool /*again*/) -> void {}
   };
   Renderer* renderer = nullptr;
   auto setRenderer(Renderer* next) -> void;  //ge.cpp
   bool hardware = false;  //the primitive being drawn goes to the renderer (drawVertices())
+  bool skipping = false;  //the primitive being drawn changes no pixel: set up, not drawn (drawVertices())
   std::vector<LinePixel> hardwareLine;
+  std::vector<Vertex> placed;  //meshTriangles()'s: its corners' clip positions, on the screen
+  std::vector<u32> handed;     //and the run of triangles it hands to the renderer
+
+  //What the primitives set up since the driver last looked take a PSP's GE to draw (Kernel::geTime()): how many
+  //there are (sprites, triangles, lines and points; a triangle cut at the near plane, its pieces), and their pixels
+  //inside the scissor rectangle (a sprite's rectangle, a triangle's area there, the pixels a line lights there, a
+  //point's one). Counted as each is set up, whichever renderer then draws it, so the time is the same for all of
+  //them (but for a renderer transforming 3D triangles itself, whose corners, meshTriangles()'s, are the GE's but for
+  //a float's rounding).
+  u64 owedPixels = 0, owedPrimitives = 0;
+  auto owe(u64 pixels) -> void { owedPixels += pixels, owedPrimitives++; }
 
   Stop pending = Stop::Ended;  //what the next END means: a FINISH or SIGNAL before it changes it
   std::set<std::string> noted;

@@ -29,27 +29,11 @@ auto Kernel::sceKernelLoadExec() -> void {
       if(!memory.copyOut(argument.data(), at, length)) return result(ErrorIllegalAddress);
     }
   }
-  std::vector<u8> file;
-  if(u32 error = readWhole(path, file)) return result(error);
-  const u8* data = file.data();
-  u64 size = file.size();
   std::vector<u8> program;
-  if(size >= 4 && !memcmp(data, "\0PBP", 4)) {
-    program = std::move(file);  //(start() finds the program inside)
-  } else {
-    unwrapProgram(data, size);
-    std::vector<u8> decrypted;
-    if(encryptedProgram(data, size)) {
-      if(auto why = decryptProgram(data, size, decrypted); !why.empty()) {
-        note("sceKernelLoadExec: can't start " + path + ": " + why);
-        return result(ErrorUnsupportedPrxType);
-      }
-      data = decrypted.data(), size = decrypted.size();
-    }
-    u32 low = 0, high = 0;
-    bool relocatable = false;
-    if(!Loader::extent(data, size, low, high, relocatable)) return result(ErrorIllegalObject);
-    program.assign(data, data + size);
+  std::string why;
+  if(u32 error = execProgram(path, program, why)) {
+    if(!why.empty()) note("sceKernelLoadExec: can't start " + path + ": " + why);
+    return result(error);
   }
   exec.pending = true;
   exec.path = path;
@@ -59,10 +43,37 @@ auto Kernel::sceKernelLoadExec() -> void {
   switchTo(nullptr);  //the caller stops here (the CPU's go ends with it)
 }
 
-//The program sceKernelLoadExec asked for, in the old one's place: everything of the old program goes, as at power on
-//(its threads, memory and modules, open files, the calls into it, sound, the GE's lists, the clock), the user
-//partition is cleared, and the new program starts as the system starts one. The devices, the disc and the system
-//fonts stay the system's. One that can't start after all ends the program, noted.
+//The program at path as sceKernelLoadExec starts one: an EBOOT.PBP as it is (start() finds the program inside), any
+//other decrypted if it's encrypted. 0, or why it can't be: the file's error, ILLEGAL_OBJECT for one that isn't a
+//program, UNSUPPORTED_PRX_TYPE for one that can't be decrypted (the decrypter's reason in why).
+auto Kernel::execProgram(const std::string& path, std::vector<u8>& program, std::string& why) -> u32 {
+  std::vector<u8> file;
+  if(u32 error = readWhole(path, file)) return error;
+  const u8* data = file.data();
+  u64 size = file.size();
+  if(size >= 4 && !memcmp(data, "\0PBP", 4)) {
+    program = std::move(file);
+    return 0;
+  }
+  unwrapProgram(data, size);
+  std::vector<u8> decrypted;
+  if(encryptedProgram(data, size)) {
+    why = decryptProgram(data, size, decrypted);
+    if(!why.empty()) return ErrorUnsupportedPrxType;
+    data = decrypted.data(), size = decrypted.size();
+  }
+  u32 low = 0, high = 0;
+  bool relocatable = false;
+  if(!Loader::extent(data, size, low, high, relocatable)) return ErrorIllegalObject;
+  program.assign(data, data + size);
+  return 0;
+}
+
+//The program sceKernelLoadExec asked for (or the same one started again with all of RAM: largeRestart()), in the old
+//one's place: everything of the old program goes, as at power on (its threads, memory and modules, open files, the
+//calls into it, sound, the GE's lists, the clock), the user partition is cleared, and the new program starts as the
+//system starts one. The devices, the disc and the system fonts stay the system's. One that can't start after all
+//ends the program, noted.
 auto Kernel::loadExec() -> void {
   auto request = std::move(exec);
   power();
@@ -70,7 +81,7 @@ auto Kernel::loadExec() -> void {
   memory.fill(UserMemory, 0, top > UserMemory ? u32(top - UserMemory) : 0);
   std::string error;
   auto given = request.pathArgument ? nullptr : &request.argument;
-  if(!start(request.program.data(), request.program.size(), request.path, error, given)) {
+  if(!start(request.program.data(), request.program.size(), request.path, error, given, request.largeMemory)) {
     note("sceKernelLoadExec: can't start " + request.path + ": " + error);
     power();
     exited = true;
@@ -89,6 +100,13 @@ auto Kernel::sceKernelSelfStopUnloadModule() -> void {
 //(unloadSelf()).
 auto Kernel::sceKernelStopUnloadSelfModuleWithStatus() -> void {
   unloadSelf(s32(arg(0)), arg(1), arg(2), arg(4));
+}
+
+//(argument size, argument, where to put module_stop's status, options): the same with no exit status of its own
+//(pspmodulemgr.h), the calling thread ending with 0 (chosen: nothing recorded says). MediEvil Resurrection's program
+//ends so once it has started the game's module.
+auto Kernel::sceKernelStopUnloadSelfModule() -> void {
+  unloadSelf(0, arg(0), arg(1), arg(3));
 }
 
 //(which setting, where to put it): the system's settings (psputility_sysparam.h). Language 1 is English; button
@@ -143,9 +161,12 @@ auto Kernel::sceKernelLibcTime() -> void {
   result(seconds);
 }
 
+namespace {
+  constexpr u64 From1To1970 = 62'135'596'800ull * 1'000'000;  //microseconds from 0001-01-01 to 1970-01-01
+}
+
 //(where): the real-time clock's tick, a microsecond count from the start of year 1 (as the PSP's sceRtc counts).
 auto Kernel::sceRtcGetCurrentTick() -> void {
-  static constexpr u64 From1To1970 = 62'135'596'800ull * 1'000'000;  //microseconds from 0001-01-01 to 1970-01-01
   u64 tick = From1To1970 + startTime + cycles / (CPUFrequency / 1'000'000);
   memory.write(4, arg(0), u32(tick));
   memory.write(4, arg(0) + 4, u32(tick >> 32));
@@ -191,15 +212,17 @@ static auto dateFromYearOne(s64 days, s64& year, u32& month, u32& day) -> void {
 }
 
 //(date, where to put its tick): a ScePspDateTime (psprtc.h: year, month, day, hour, minute, second as 16-bit numbers,
-//then microseconds) as a tick, microseconds since 0001-01-01. A date that can't be is refused.
+//then microseconds) as a tick, microseconds since 0001-01-01. A date that can't be, or past the year 9999, is refused
+//(rtc/convert's 10000-01-01); its microseconds are added whatever they are (rtc/arithmetic's 9999-12-31 23:59:59
+//and 99999998 microseconds came out a minute and 39 seconds into 10000).
 auto Kernel::sceRtcGetTick() -> void {
   u32 date = arg(0);
   u32 year = memory.read(2, date), month = memory.read(2, date + 2), day = memory.read(2, date + 4);
   u32 hour = memory.read(2, date + 6), minute = memory.read(2, date + 8), second = memory.read(2, date + 10);
   u32 microsecond = memory.read(4, date + 12);
   static constexpr u8 MonthDays[] = {31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-  if(!year || !month || month > 12 || !day || day > MonthDays[month - 1] || hour > 23 || minute > 59 || second > 59
-  || microsecond > 999'999) return result(ErrorInvalidValue);
+  if(!year || year > 9999 || !month || month > 12 || !day || day > MonthDays[month - 1] || hour > 23 || minute > 59
+  || second > 59) return result(ErrorInvalidValue);
   bool leap = (year % 4 == 0 && year % 100) || year % 400 == 0;
   if(month == 2 && day == 29 && !leap) return result(ErrorInvalidValue);
   u64 seconds = u64(daysFromYearOne(year, month, day)) * 86'400 + hour * 3'600 + minute * 60 + second;
@@ -238,11 +261,15 @@ auto Kernel::sceKernelLibcClock() -> void {
   result(u32(cycles / (CPUFrequency / 1'000'000)));
 }
 
-//(SceKernelSysClock, where to put seconds, where to put microseconds): a 64-bit count of microseconds split.
+//(SceKernelSysClock, where to put seconds, where to put microseconds): a 64-bit count of microseconds split, as
+//pspautotests' misc/timeconv recorded (0xffffffffffffffff: seconds 0xf7a0b5ed, microseconds 0x86abf). With nowhere
+//for the seconds, the microseconds are the whole count (its low 32 bits): Tekken: Dark Resurrection works out the
+//clock's rate as 10^12 over what 1,000,000 of it comes to that way, which split would be 0 (an infinite rate, and its
+//frame timing then waited for good, its movie never started). The recording's one such call, of 0x1337, can't tell.
 auto Kernel::sceKernelSysClock2USec() -> void {
   u64 clock = memory.read(4, arg(0)) | u64(memory.read(4, arg(0) + 4)) << 32;
   if(arg(1)) memory.write(4, arg(1), u32(clock / 1'000'000));
-  if(arg(2)) memory.write(4, arg(2), u32(clock % 1'000'000));
+  if(arg(2)) memory.write(4, arg(2), u32(arg(1) ? clock % 1'000'000 : clock));
   result(0);
 }
 
@@ -250,7 +277,7 @@ auto Kernel::sceKernelSysClock2USec() -> void {
 auto Kernel::sceKernelSysClock2USecWide() -> void {
   u64 clock = arg(0) | u64(arg(1)) << 32;
   if(arg(2)) memory.write(4, arg(2), u32(clock / 1'000'000));
-  if(arg(3)) memory.write(4, arg(3), u32(clock % 1'000'000));
+  if(arg(3)) memory.write(4, arg(3), u32(arg(2) ? clock % 1'000'000 : clock));
   result(0);
 }
 
@@ -265,41 +292,6 @@ auto Kernel::sceKernelUSec2SysClock() -> void {
 //(microseconds): the same, in v0 and v1.
 auto Kernel::sceKernelUSec2SysClockWide() -> void {
   result64(arg(0));
-}
-
-//The Mersenne Twister (MT19937, as Matsumoto and Nishimura describe it), its state in the program's memory: a
-//SceKernelUtilsMt19937Context (psputils.h), how many of its 624 words have been handed out, then the words.
-//(context, seed): the words seeded, none handed out.
-auto Kernel::sceKernelUtilsMt19937Init() -> void {
-  u32 context = arg(0), word = arg(1);
-  memory.write(4, context + 4, word);
-  for(u32 n = 1; n < 624; n++) {
-    word = 1'812'433'253 * (word ^ word >> 30) + n;
-    memory.write(4, context + 4 + n * 4, word);
-  }
-  memory.write(4, context, 624);
-  result(0);
-}
-
-//(context): the next number. When all 624 words are handed out, they're stirred into the next 624.
-auto Kernel::sceKernelUtilsMt19937UInt() -> void {
-  u32 context = arg(0), index = memory.read(4, context);
-  auto state = [&](u32 n) { return memory.read(4, context + 4 + n * 4); };
-  if(index >= 624) {
-    for(u32 n = 0; n < 624; n++) {
-      u32 y = (state(n) & 0x8000'0000) | (state((n + 1) % 624) & 0x7fff'ffff);
-      u32 next = state((n + 397) % 624) ^ y >> 1 ^ (y & 1 ? 0x9908'b0df : 0);
-      memory.write(4, context + 4 + n * 4, next);
-    }
-    index = 0;
-  }
-  u32 y = state(index);
-  y ^= y >> 11;
-  y ^= y << 7 & 0x9d2c'5680;
-  y ^= y << 15 & 0xefc6'0000;
-  y ^= y >> 18;
-  memory.write(4, context, index + 1);
-  result(y);
 }
 
 //(format, ...): the kernel's printf, to the program's output: %d, %i, %u, %x, %X, %p, %c, %s and %%, with flags ('-'
@@ -365,6 +357,25 @@ auto Kernel::sceWlanGetEtherAddr() -> void {
   result(0);
 }
 
+//(driver's name, its argument's size, argument): a USB driver started, or stopped (pspusb.h); and (product ID) the
+//USB device activated, or not: taken, as on a PSP with no cable plugged in, where none of it connects anything.
+//OutRun 2006 starts the bus driver and activates as it starts.
+auto Kernel::sceUsbStart() -> void {
+  result(0);
+}
+
+auto Kernel::sceUsbStop() -> void {
+  result(0);
+}
+
+auto Kernel::sceUsbActivate() -> void {
+  result(0);
+}
+
+auto Kernel::sceUsbDeactivate() -> void {
+  result(0);
+}
+
 //(language, button that confirms): what the HOME menu's on-screen texts use (pspsdk's pspimpose.h, whose values
 //aren't known: taken as the system's settings number them, psputility_sysparam.h's, 1 English and 1 the cross
 //button); there's no HOME menu to tell, but they're kept to be read back.
@@ -390,6 +401,12 @@ auto Kernel::sceImposeGetLanguageMode() -> void {
 auto Kernel::sceImposeGetBatteryIconStatus() -> void {
   if(arg(0)) memory.write(4, arg(0), 0);
   if(arg(1)) memory.write(4, arg(1), 3);
+  result(0);
+}
+
+//(mode): whether the HOME menu offers the UMD's own popup (pspimpose.h); there's no HOME menu to offer it, so it's
+//taken and forgotten. Every Patapon sets it as it starts.
+auto Kernel::sceImposeSetUMDPopup() -> void {
   result(0);
 }
 
@@ -440,15 +457,55 @@ auto Kernel::sceRtcGetCurrentClockLocalTime() -> void {
   result(writeDate(arg(0), now, true) ? 0 : ErrorInvalidPointer);
 }
 
-//(date, where to put a time_t): the date as seconds since 1970.
-auto Kernel::sceRtcGetTime_t() -> void {
-  u32 date = arg(0);
+//A ScePspDateTime's seconds since 1970, its microseconds left out.
+auto Kernel::dateSeconds(u32 date) -> s64 {
   s64 days = daysFromYearOne(memory.read(2, date), memory.read(2, date + 2), memory.read(2, date + 4))
            - daysFromYearOne(1970, 1, 1);
-  s64 seconds = days * 86'400 + memory.read(2, date + 6) * 3'600 + memory.read(2, date + 8) * 60
-              + memory.read(2, date + 10);
-  if(arg(1)) memory.write(4, arg(1), u32(seconds));
+  return days * 86'400 + memory.read(2, date + 6) * 3'600 + memory.read(2, date + 8) * 60 + memory.read(2, date + 10);
+}
+
+//(date, where to put a time_t): the date as seconds since 1970.
+auto Kernel::sceRtcGetTime_t() -> void {
+  if(arg(1)) memory.write(4, arg(1), u32(dateSeconds(arg(0))));
   result(0);
+}
+
+//(date, where to put a 64-bit time_t): the same, 64 bits wide, as pspautotests' rtc/convert recorded
+//(2012-09-20 07:12:15.500 is 1348125135; its high word, which held 0 already, chosen). LittleBigPlanet asks.
+auto Kernel::sceRtcGetTime64_t() -> void {
+  u64 seconds = dateSeconds(arg(0));
+  if(arg(1)) {
+    memory.write(4, arg(1), u32(seconds));
+    memory.write(4, arg(1) + 4, u32(seconds >> 32));
+  }
+  result(0);
+}
+
+//(year, month, day): the day of the week, 0 Sunday to 6 Saturday (psprtc.h says 0 is Monday, but pspautotests'
+//rtc/lookup recorded 2 for 2010-04-27, a Tuesday). By Zeller's congruence, which gives the PSP's answers for the
+//dates that can't be that rtc/lookup recorded too: January and February counted as the year before's 13th and
+//14th months, a month of 0 or past 12 taken as it is, the days counted on from the month's start (2000-01-00 is a
+//Friday, 2001-00-00 a Tuesday, 166970016-1024-00 a Wednesday). Juiced 2 asks each frame.
+auto Kernel::sceRtcGetDayOfWeek() -> void {
+  s64 year = s32(arg(0)), month = s32(arg(1)), day = s32(arg(2));
+  if(month == 1 || month == 2) month += 12, year--;
+  s64 century = year / 100, ofCentury = year % 100;
+  s64 saturday0 = (day + 13 * (month + 1) / 5 + ofCentury + ofCentury / 4 + century / 4 + 5 * century) % 7;
+  result(u32((saturday0 + 13) % 7));
+}
+
+//(where to put a tick): when the clock was last set, and when it was last started afresh (as when the battery came
+//out): both when the PSP started here, the clock set from the host's. Kurohyou asks for both.
+auto Kernel::sceRtcGetLastAdjustedTime() -> void {
+  u64 tick = From1To1970 + startTime;
+  if(!memory.reaches(arg(0), 8)) return result(ErrorInvalidPointer);
+  memory.write(4, arg(0), u32(tick));
+  memory.write(4, arg(0) + 4, u32(tick >> 32));
+  result(0);
+}
+
+auto Kernel::sceRtcGetLastReincarnatedTime() -> void {
+  sceRtcGetLastAdjustedTime();
 }
 
 //(date, where to put a DOS time): the date as FAT keeps one: years since 1980 in bits 25-31, the month in 21-24, the

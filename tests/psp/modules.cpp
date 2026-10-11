@@ -196,20 +196,48 @@ static auto selfModule(SelfStart how) -> TestModule {
   return m;
 }
 
+//"TESTLENT": as TESTSELF (module_start returning at once), but quit() puts module_stop's argument, 0x41524731, on its
+//own stack and unloads the module with it: sceKernelSelfStopUnloadModule(1, 4, sp).
+static auto lentModule() -> TestModule {
+  TestModule m;
+  m.name = "TESTLENT";
+  m.imports = {{"ModuleMgrForUser", Kernel::nid("sceKernelSelfStopUnloadModule")}};
+  m.code = {addiu(sp, sp, -16), sw(ra, 12, sp), lui(t0, 0x4152), ori(t0, t0, 0x4731), sw(t0, 0, sp),
+            addiu(a0, zero, 1), addiu(a1, zero, 4)};
+  callStub(m, 0x3c0, addu(a2, sp, zero));
+  m.code.insert(m.code.end(), {lw(ra, 12, sp), jr(ra), addiu(sp, sp, 16)});
+  m.exports = {{"SelfLib", {{QuitNID, 0}}}};
+  m.stop = m.code.size() * 4;
+  store(m.code, Results + 0x20, 0x5709);
+  m.code.insert(m.code.end(), {sw(a0, 4, t9), lw(t0, 0, a1), sw(t0, 8, t9), jr(ra), addiu(v0, zero, 0)});
+  m.start = m.code.size() * 4;
+  m.code.insert(m.code.end(), {jr(ra), addiu(v0, zero, 0)});
+  return m;
+}
+
 //"TESTSTATUS": StatusLib's quit() unloads the module it's in as later SDKs do,
-//sceKernelStopUnloadSelfModuleWithStatus(1, 4, Results + 0x30, Results + 0x40, options), and if that's refused
-//writes what it said at Results + 0x34 and returns. module_stop writes 0x5709 at Results + 0x20, the length of its
-//argument at Results + 0x24 and the argument's first word at Results + 0x28, then has its own thread's information
-//put at info (sceKernelReferThreadStatus). module_start returns at once.
-static auto statusModule(u32 options, u32 info) -> TestModule {
+//sceKernelStopUnloadSelfModuleWithStatus(1, 4, Results + 0x30, Results + 0x40, options) (or without the status,
+//sceKernelStopUnloadSelfModule(4, Results + 0x30, Results + 0x40, options)), and if that's refused writes what it
+//said at Results + 0x34 and returns. module_stop writes 0x5709 at Results + 0x20, the length of its argument at
+//Results + 0x24 and the argument's first word at Results + 0x28, then has its own thread's information put at info
+//(sceKernelReferThreadStatus). module_start returns at once.
+static auto statusModule(u32 options, u32 info, bool withStatus = true) -> TestModule {
   TestModule m;
   m.name = "TESTSTATUS";
-  m.imports = {{"ModuleMgrForUser", StopUnloadSelfWithStatusNID},
+  m.imports = {{"ModuleMgrForUser", withStatus ? StopUnloadSelfWithStatusNID
+                                               : Kernel::nid("sceKernelStopUnloadSelfModule")},
                {"ThreadManForUser", Kernel::nid("sceKernelReferThreadStatus")}};
-  m.code = {addiu(sp, sp, -16), sw(ra, 12, sp), addiu(a0, zero, 1), addiu(a1, zero, 4),
-            lui(a2, (Results + 0x30) >> 16), ori(a2, a2, (Results + 0x30) & 0xffff),
-            lui(a3, (Results + 0x40) >> 16), ori(a3, a3, (Results + 0x40) & 0xffff), lui(t0, options >> 16)};
-  callStub(m, 0x3c0, ori(t0, t0, options & 0xffff));
+  if(withStatus) {
+    m.code = {addiu(sp, sp, -16), sw(ra, 12, sp), addiu(a0, zero, 1), addiu(a1, zero, 4),
+              lui(a2, (Results + 0x30) >> 16), ori(a2, a2, (Results + 0x30) & 0xffff),
+              lui(a3, (Results + 0x40) >> 16), ori(a3, a3, (Results + 0x40) & 0xffff), lui(t0, options >> 16)};
+    callStub(m, 0x3c0, ori(t0, t0, options & 0xffff));
+  } else {
+    m.code = {addiu(sp, sp, -16), sw(ra, 12, sp), addiu(a0, zero, 4),
+              lui(a1, (Results + 0x30) >> 16), ori(a1, a1, (Results + 0x30) & 0xffff),
+              lui(a2, (Results + 0x40) >> 16), ori(a2, a2, (Results + 0x40) & 0xffff), lui(a3, options >> 16)};
+    callStub(m, 0x3c0, ori(a3, a3, options & 0xffff));
+  }
   m.code.insert(m.code.end(), {lui(t1, Results >> 16), ori(t1, t1, Results & 0xffff), sw(v0, 0x34, t1),
                                lw(ra, 12, sp), jr(ra), addiu(sp, sp, 16)});
   m.exports = {{"StatusLib", {{QuitNID, 0}}}};
@@ -461,9 +489,10 @@ static auto linking() -> void {
 }
 
 //Sony's modules, as early games carry them: encrypted and named "sce..." (here an encrypted one whose tag Phobos has
-//no key for: it isn't even decrypted), a kernel module, and a plain one named "Sce...": each stood in for, an ID and
-//nothing in memory; started and stopped at once (status 0), unloaded. LoadModuleByID reads one from inside a file,
-//from where it's been seeked to.
+//no key for: it isn't even decrypted), a kernel module (exporting only functions the kernel hasn't), and a plain one
+//named "Sce..." exporting a function the kernel has: each stood in for, an ID and nothing in memory; started and
+//stopped at once (status 0), unloaded. LoadModuleByID reads one from inside a file, from where it's been seeked to,
+//and refuses a file with an asynchronous request under way.
 static auto standIns() -> void {
   HostFolder stick;
   TestModule sas = libraryModule();
@@ -477,6 +506,7 @@ static auto standIns() -> void {
   put(stick, "DRIVER.PRX", kernelModule.build());
   TestModule plain = libraryModule();
   plain.name = "SceLibrary";
+  plain.exports.push_back({"sceSasCore", {{Kernel::nid("__sceSasInit"), 0}}});
   put(stick, "PLAIN.PRX", plain.build());
   //an archive holding modules after a ~SCE header each, as GTA Liberty City Stories keeps them: one of Sony's at
   //1000, and TESTLIB, encrypted, after it
@@ -515,6 +545,63 @@ static auto standIns() -> void {
   uid = m.call("sceKernelLoadModuleByID", {file, 0, 0});
   CHECK(m.kernel.modules.count(uid) && !m.kernel.modules[uid].standIn, true);
   CHECK(m.kernel.modules.count(uid) && m.kernel.modules[uid].module.name == "TESTLIB", true);
+  //a file with an asynchronous read under way: refused, as its own reads are, the read's position left to it
+  m.call("sceIoLseek32", {file, 1000, 0});
+  CHECK(m.call("sceIoReadAsync", {file, 0x0890'0000, 16}), 0);
+  CHECK(m.call("sceKernelLoadModuleByID", {file, 0, 0}), Kernel::ErrorAsyncBusy);
+  m.kernel.cycles = m.kernel.files[file].asyncDoneAt;
+  m.kernel.events();
+  CHECK(m.call("sceIoPollAsync", {file, Results}), 0);
+  CHECK(m.kernel.files[file].position, 1016);
+}
+
+//One of Sony's modules that came unencrypted, exporting functions the kernel has none of, runs as a game's own
+//module does: Persona 3 Portable and both Dissidias load Sony's LIBSUPPREACC.PRX, plain, its scesupPreAcc_library
+//exporting the scesupPreAcc library (0x86debd66 among its functions, which the games call). A program, on both
+//engines, loads it (as TESTLIB: its module_start writes 0xabcd at Results and returns 7) and a module importing
+//its function (as TESTUSER: add(40, 2) at Results + 8), and starts both: it has its memory, its module_start runs,
+//and the import reaches its function.
+static auto sonyModulesRun() -> void {
+  static constexpr u32 PreAccNID = 0x86de'bd66;
+  TestModule preAcc = libraryModule();
+  preAcc.name = "scesupPreAcc_library";
+  preAcc.exports[0] = {"scesupPreAcc", {{PreAccNID, preAcc.exports[0].functions[0].second}}};
+  TestModule user = userModule();
+  user.imports = {{"scesupPreAcc", PreAccNID}};
+  HostFolder stick;
+  put(stick, "PREACC.PRX", preAcc.build());
+  put(stick, "USER.PRX", user.build());
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    machine(m);
+    m.kernel.mount("ms0", stick.path.string());
+    Assembler main{m, 0x0880'1000};
+    main.li(s0, Results);
+    for(auto [path, at] : {std::pair{"ms0:/PREACC.PRX", 0x100}, std::pair{"ms0:/USER.PRX", 0x104}}) {
+      main.li(a0, m.string(path)); main.li(a1, 0); main.li(a2, 0);
+      main.call("sceKernelLoadModule");
+      main.put(sw(v0, at, s0));
+    }
+    for(auto [at, status] : {std::pair{0x100, 0x140}, std::pair{0x104, 0x144}}) {
+      main.put(lw(a0, at, s0)); main.li(a1, 4); main.li(a2, m.string("ARG")); main.li(a3, Results + status);
+      main.li(t0, 0);
+      main.call("sceKernelStartModule");
+    }
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+
+    u32 a = word(m.system, Results + 0x100);
+    CHECK(m.kernel.exited, true);
+    CHECK(m.kernel.modules.count(a), 1);
+    if(!m.kernel.modules.count(a)) continue;
+    auto& loaded = m.kernel.modules[a];
+    CHECK(loaded.standIn, false);
+    CHECK(loaded.block != 0, true);
+    CHECK(loaded.module.name == "scesupPreAcc_library", true);
+    CHECK(word(m.system, Results), 0xabcd);
+    CHECK(word(m.system, Results + 0x140), 7);
+    CHECK(word(m.system, Results + 8), 42);
+  }
 }
 
 //The module IDs: by address (the program's own, a module's, nowhere), the caller's (from where it called), the list,
@@ -770,13 +857,14 @@ static auto unloadThemselves() -> void {
 //A module unloads itself as later SDKs do (sceKernelStopUnloadSelfModuleWithStatus, known by its NID alone): as with
 //sceKernelSelfStopUnloadModule, the thread that asked ends and is deleted, the one waiting for it given its exit
 //status; module_stop runs with the argument, on a thread the options (the fifth argument) make; the module and its
-//memory go, and the program runs on to its own end. The program itself calling it goes as a module, and code no
-//module holds is refused.
+//memory go, and the program runs on to its own end. sceKernelStopUnloadSelfModule does the same with no exit status
+//(the waiting thread is given 0), its options the fourth argument. The program itself calling it goes as a module,
+//and code no module holds is refused.
 static auto unloadWithStatus() -> void {
   constexpr u32 Options = Results + 0x180, Info = Results + 0x1a0;
-  HostFolder stick;
-  put(stick, "STATUS.PRX", statusModule(Options, Info).build());
-  for(bool recompile : {false, true}) {
+  for(bool withStatus : {true, false}) for(bool recompile : {false, true}) {
+    HostFolder stick;
+    put(stick, "STATUS.PRX", statusModule(Options, Info, withStatus).build());
     KernelMachine m;
     machine(m);
     m.system.recompiler.enabled = recompile;
@@ -811,7 +899,7 @@ static auto unloadWithStatus() -> void {
     m.kernel.run(Kernel::VblankCycles);
     CHECK(m.kernel.exited, true);
     CHECK(word(m.system, Results + 0x3c), 0x600d);  //the program's own end, after the module had gone
-    CHECK(word(m.system, Results + 0x38), 1);
+    CHECK(word(m.system, Results + 0x38), withStatus ? 1 : 0);
     CHECK(word(m.system, Results + 0x34), 0);       //quit() never returned
     CHECK(word(m.system, Results + 0x20), 0x5709);
     CHECK(word(m.system, Results + 0x24), 4);
@@ -1208,10 +1296,46 @@ static auto programUnloadsItself() -> void {
   }
 }
 
+//A module unloads itself from a function on a stack lent for the call (sceKernelExtendThreadStack), module_stop's
+//argument on that stack: the stack goes back as the caller ends, and module_stop's thread is given its memory for a
+//stack of its own, yet module_stop gets the argument whole. On both engines.
+static auto unloadFromLentStack() -> void {
+  HostFolder stick;
+  put(stick, "LENT.PRX", lentModule().build());
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    machine(m);
+    m.system.recompiler.enabled = recompile;
+    m.kernel.mount("ms0", stick.path.string());
+    u32 uid = m.call("sceKernelLoadModule", {m.string("ms0:/LENT.PRX"), 0, 0});
+    CHECK(m.kernel.modules.count(uid), 1);
+    if(!m.kernel.modules.count(uid)) continue;
+    m.call("sceKernelStartModule", {uid, 0, 0, 0, 0});
+    m.kernel.run(Kernel::VblankCycles);
+    u32 quit = 0;
+    for(auto& e : m.kernel.modules[uid].module.exports) if(e.nid == QuitNID) quit = e.address;
+    Assembler caller{m, 0x0880'1000};
+    caller.li(a0, 0x4000); caller.li(a1, quit); caller.li(a2, 0);
+    caller.call("sceKernelExtendThreadStack");
+    caller.call("sceKernelSleepThread");  //(not reached: the thread ends as the module unloads)
+    s32 thread = m.kernel.createThread("caller", 0x0880'1000, 0x20, 0x1000, 0, 0);
+    m.kernel.startThread(*m.kernel.threads[thread], 0, 0);
+    m.kernel.run(Kernel::VblankCycles);
+    CHECK(m.kernel.modules.count(uid), 0);
+    CHECK(m.kernel.threads.count(thread), 0);
+    CHECK(word(m.system, Results + 0x20), 0x5709);
+    CHECK(word(m.system, Results + 0x24), 4);
+    CHECK(word(m.system, Results + 0x28), 0x4152'4731);
+    for(auto& note : m.notes) CHECK(note == "no threads left to run", true);  //(none is, the module gone)
+  }
+}
+
 auto moduleTests() -> Tests {
   return {
+    {"modules unload themselves from a lent stack", unloadFromLentStack},
     {"modules start and link", startAndLink}, {"modules linking", linking}, {"modules stand-ins", standIns},
-    {"modules identities", identities}, {"modules refusals", refusals}, {"modules sizes", sizes},
+    {"modules of Sony's the kernel has nothing of run", sonyModulesRun}, {"modules identities", identities},
+    {"modules refusals", refusals}, {"modules sizes", sizes},
     {"modules unload themselves", unloadThemselves}, {"modules unload with a status", unloadWithStatus},
     {"modules exit threads", exitThreads}, {"modules terminated threads", terminatedThreads},
     {"modules entry points", entryPoints}, {"modules state", stateWhileStarting},

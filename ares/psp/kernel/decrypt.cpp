@@ -82,15 +82,20 @@ struct LockedHeader {
   //0x12c-0x140 (the digest), 0x80-0xb0 and 0xc0-0xcc are decrypted as one; then the digest checks the tag, the pad's
   //first 16 bytes, 0xd4-0x12c, the ID, the header's stored pieces, its sizes and the file's first 0x80 bytes. Type 6
   //keeps the end of an ECDSA signature at 0x10c-0x12c, where type 2 has zeros, and is hashed the same way. Type 5
-  //XORs a key of its own into what it decrypts, decrypts 0x50 bytes first, and counts 0xd4-0x12c as zeros.
-  auto unlock(const SeedTag& tag) -> bool {
+  //XORs a key of its own into what it decrypts, decrypts 0x50 bytes first, and counts 0xd4-0x12c as zeros; given a
+  //second 16-byte key (scePauth's: pauth.cpp), it XORs that into the pad once the pad is decrypted, and into its own
+  //key for the first 0x50 bytes.
+  auto unlock(const SeedTag& tag, const u8* second = nullptr) -> bool {
     u8 pad[0x90];
     for(u32 n = 0; n < 9; n++) memcpy(pad + n * 16, tag.seed, 16), pad[n * 16] = n;
     if(!Kirk::decryptInPlace(pad, sizeof(pad), tag.keyseed)) return false;
+    if(second) for(u32 n = 0; n < sizeof(pad); n++) pad[n] ^= second[n % 16];
     const u8* xorKey = tag.type == 5 ? tag.xorKey : nullptr;
     if(tag.type == 5) {
       if(!xorKey || !zeros(0xd5, 0x12c)) return false;
-      if(!decrypt({{0x80, 0x30}, {0xc0, 0x10}, {0x12c, 0x10}}, tag.keyseed, xorKey)) return false;
+      u8 firstKey[16];
+      for(u32 n = 0; n < 16; n++) firstKey[n] = xorKey[n] ^ (second ? second[n] : 0);
+      if(!decrypt({{0x80, 0x30}, {0xc0, 0x10}, {0x12c, 0x10}}, tag.keyseed, firstKey)) return false;
     } else if(!zeros(0xd4, 0x10c)) {
       return false;
     }

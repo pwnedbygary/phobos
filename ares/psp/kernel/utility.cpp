@@ -21,7 +21,8 @@
 //    refused. The PSP encrypts the data file and writes a PARAM.SFO and icons beside it: not done yet (the files are
 //    only Phobos's to read).
 //  - A message: answered at once, as if the player pressed Yes (or OK), the message noted.
-//  - The keyboard: each field's text accepted as it is, an empty one given the console's nickname (keyboard()).
+//  - The keyboard: each field's text entered as it is, an empty one given the console's nickname, each CHANGED
+//    (keyboard()).
 //  - Network settings, game sharing, the web browser: cancelled, as if the player backed out.
 //  - Installing a game's data to the memory stick (gamedata install, which later games show at their first start):
 //    cancelled too, the game going on from the disc.
@@ -46,6 +47,7 @@ namespace {
   constexpr u32 SavedataDeleteParameter = 0x8011'0348, SavedataSaveParameter = 0x8011'0388;
   constexpr u32 SavedataSizesParameter = 0x8011'03c8;
   constexpr u32 DialogCancelled = 1;  //a dialog's result when the player backs out
+  constexpr u32 KeyboardChanged = 2;  //a keyboard field's result when the player enters its text
   constexpr u32 MessageAbortUpdates = 8;  //(utility/dialog/abort: that many Updates from the start, less any already)
   //Whether InitStart takes a kind's parameters at this size (their common part's first word): the sizes
   //utility/dialog/sizes skipped as the ones each kind takes (every other size up to 0x800 refused), and those
@@ -168,13 +170,17 @@ auto Kernel::dialogShutdown(u32 kind) -> void {
 }
 
 //The keyboard (psputility_osk.h's SceUtilityOskParams: the common part, then how many fields and where their
-//SceUtilityOskData are), answered as a player accepting each field's text at once would: what the field started with
-//goes into its output, its result UNCHANGED (0). A field holding nothing but spaces gets the console's nickname,
-//"PSP", as a player asked for a name would type one, its result CHANGED (2): Peace Walker, asking for its player's
-//name in an empty field, refused an empty answer ("at least 1 characters") and asked again for good. The text is
-//UTF-16, as far as the field's room (outtextlength, its NUL among it) and limit (outtextlimit) allow: a limit of 0
-//is none (taken as no characters, it cut the nickname to nothing, still saying CHANGED), and a field with no room
-//gets nothing written, not even its NUL. Returns the common part's result: 0.
+//SceUtilityOskData are), answered as a player entering each field's text and confirming it would: what the field
+//started with goes into its output, or for a field holding nothing but spaces the console's nickname, "PSP", as a
+//player asked for a name would type one (Peace Walker, asking for its player's name in an empty field, refused an
+//empty answer, "at least 1 characters", and asked again for good). Each field's result is CHANGED (2), as a PSP is
+//taken to say of every field the player confirms, edited or not: Ridge Racer 2 fills its field with a default driver
+//name, "DAMACY", and takes UNCHANGED (0) as it takes CANCELLED (1), going back to its title without a profile, which
+//every player keeping that name would meet if a PSP said UNCHANGED. (Killzone and Space Invaders Extreme also act
+//only on CHANGED; Midnight Club 3 takes anything but CANCELLED.) The text is UTF-16, as far as the field's room
+//(outtextlength, its NUL among it) and limit (outtextlimit) allow: a limit of 0 is none (taken as no characters, it
+//cut the nickname to nothing), and a field with no room gets nothing written, not even its NUL. Returns the common
+//part's result: 0.
 auto Kernel::keyboard(u32 parameters) -> u32 {
   static constexpr u32 FieldSize = 52, MostFields = 16, MostText = 1024;  //(pspsdk gives no limits: bounds of ours)
   u32 count = memory.read(4, parameters + 48), fields = memory.read(4, parameters + 52);
@@ -198,7 +204,7 @@ auto Kernel::keyboard(u32 parameters) -> u32 {
       for(u32 at = 0; at < text.size(); at++) memory.write(2, output + at * 2, text[at]);
       memory.write(2, output + text.size() * 2, 0);
     }
-    memory.write(4, field + 44, blank ? 2 : 0);
+    memory.write(4, field + 44, KeyboardChanged);
   }
   return 0;
 }
@@ -236,7 +242,8 @@ auto Kernel::savePath(const std::string& folder, const std::string& file) -> std
 //The names become a folder and a file on the host: each must be a plain name (plainName(); the game's can't be left
 //out, the save's can), and the paths where a save belongs (savePath()). The buffer must be in the program's memory as
 //far as what's copied in or out, which memory's size bounds: a load reads no more than the buffer takes. What isn't
-//so is refused as a bad parameter, before anything is made, read or deleted.
+//so is refused as a bad parameter, before anything is made, read or deleted. The sizes mode reads no names of its
+//own, so none are asked of it: the save it measures is msData's, whose names are checked there.
 auto Kernel::savedata(u32 p) -> u32 {
   namespace fs = std::filesystem;
   u32 mode = memory.read(4, p + 48);
@@ -250,7 +257,8 @@ auto Kernel::savedata(u32 p) -> u32 {
     save = memory.readString(memory.read(4, p + 96), 20);
     if(save.empty()) return refused;
   }
-  if(!plainName(game, 13) || (!save.empty() && !plainName(save, 20))) return refused;
+  //(Valhalla Knights 2 asks for sizes with no names, and took a refusal for a memory stick too full to save on.)
+  if(mode != 8 && (!plainName(game, 13) || (!save.empty() && !plainName(save, 20)))) return refused;
   bool filed = mode <= 5 || (mode >= 13 && mode <= 20);  //the modes that read, write or erase the data file
   if(filed && !fileName.empty() && !plainName(fileName, 13)) return refused;
   std::string folder = savePath(game + save);
@@ -276,6 +284,10 @@ auto Kernel::savedata(u32 p) -> u32 {
     u32 size = std::min(dataSize, bufferSize);
     if(folder.empty() || (!fileName.empty() && file.empty())) return SavedataSaveAccess;
     if(!fileName.empty() && size && !memory.reaches(buffer, size)) return refused;
+    //Writing data (17, 18) only adds a file to a save that's there: with none, the write is NO_DATA and nothing is
+    //made, as utility/savedata/saveemptyfilename recorded. (Hot Shots Golf: Open Tee 2 writes its data so before it
+    //has made a save, and took the zeros it had written, kept, for a corrupted save.)
+    if((mode == 17 || mode == 18) && !exists) return SavedataReadNoData;
     fs::create_directories(folder, error);
     if(fileName.empty()) return 0;
     std::vector<u8> bytes(size);
@@ -329,10 +341,17 @@ auto Kernel::savedata(u32 p) -> u32 {
     //written, a 32 KiB cluster to a sector, and with no files listed the rest left as it was. Chosen: a listed file
     //takes its size in whole clusters, newly or over a save alike; what's needed is what they take past the free
     //space, 0 for anything a game saves on this stick, its text written only when something is needed (left as it
-    //was otherwise, as the recording leaves what has nothing to say); the answer is 0, the save being there or not,
-    //as a game asks before its first save.)
+    //was otherwise, as the recording leaves what has nothing to say).) The answer is 0 for a save that's there, as
+    //getsize recorded (it asks only with its save made), and for one that isn't NO_DATA, the sizes written all the
+    //same. No recording asks with no save; Def Jam: Fight for NY's code shows the answer: its first save asks this
+    //before writing, making the save when the answer is NO_DATA (0x80110327) and neededKB 0, and writing into it when
+    //it's 0 and overwriteKB 0 (its code's two ways on). Told 0 with no save, it wrote into none, was refused (NO_DATA:
+    //writing needs the save) and asked to go on without saving; and Hot Shots Golf: Open Tee 2, which asks it after
+    //finding no save to load, said its save was corrupted. Chosen: with no size information to fill in (none given,
+    //or the smaller structure), the answer is the same, by the save alone.
     u32 info = memory.read(4, p) >= 1536 ? memory.read(4, p + 1532) : 0;
-    if(!info || !memory.reaches(info, 60)) return 0;
+    u32 answer = exists ? 0 : SavedataReadNoData;
+    if(!info || !memory.reaches(info, 60)) return answer;
     memory.write(4, info + 16, StickClusterSize);
     memory.write(4, info + 20, StickFreeClusters);
     memory.write(4, info + 24, StickFreeClusters * (StickClusterSize / 1024));
@@ -357,7 +376,7 @@ auto Kernel::savedata(u32 p) -> u32 {
         stickText(info + 52, shortfall);
       }
     }
-    return 0;
+    return answer;
   }
   case 6: case 7: case 9: case 10: case 21: {  //deleting a save: its folder goes, with all it holds
     if(!exists) return SavedataDeleteNoData;
@@ -490,14 +509,15 @@ auto Kernel::sceUtilityGamedataInstallAbort() -> void {
   result(0);
 }
 
-//(module: psputility_modules.h's PSP_MODULE_*): network (0x100-0x106), USB devices (0x200-0x203), sound and video
+//(module: psputility_modules.h's PSP_MODULE_*): network (0x100-0x108), USB devices (0x200-0x203), sound and video
 //codecs (0x300-0x308), the network platform (0x400-0x402), DRM (0x500), infrared (0x600). pspsdk's list stops at
-//0x307; later firmwares have one more sound and video module, 0x308 (taken here to be the MP4 library, sceMp4, whose
-//functions the kernel would stand in for as for the rest). Ace Combat: Joint Assault loads it at boot and stops if
-//it's refused; 0x309 still is.
+//0x106 and 0x307; later firmwares have more: 0x308 (taken here to be the MP4 library, sceMp4, whose functions the
+//kernel would stand in for as for the rest), which Ace Combat: Joint Assault loads at boot, stopping if it's refused,
+//and network modules to 0x108, which Macross: Triangle Frontier loads, trying again every few frames for as long as
+//it's refused (0x107 is taken too, each group's modules being numbered without gaps). 0x109 and 0x309 are refused.
 static auto utilityModuleKnown(u32 module) -> bool {
   u32 group = module >> 8, index = module & 0xff;
-  static constexpr u8 Counts[] = {0, 7, 4, 9, 3, 1, 1};  //how many modules in each group
+  static constexpr u8 Counts[] = {0, 9, 4, 9, 3, 1, 1};  //how many modules in each group
   return group >= 1 && group <= 6 && index < Counts[group];
 }
 
@@ -546,6 +566,30 @@ auto Kernel::sceUtilityUnloadAvModule() -> void {
   sceUtilityUnloadModule();
 }
 
+//(USB module 1-5: psputility_usbmodules.h's PSP_USB_MODULE_*), the older way to load the USB devices' modules:
+//PSPCM (1), the accessory port's driver (2), and the microphone (3), camera (4) and GPS (5), which need the accessory
+//driver first, as the modules 0x200 and 0x201-0x203. The accessory driver has no number of its
+//own among psputility_modules.h's (the later firmwares' modules load it with the device's), so it's taken, and let
+//go, without being kept. ATV Offroad Fury Pro loads one at boot and stops at a break if it isn't loaded.
+static auto usbModule(u32 module) -> u32 {
+  static constexpr u32 Modules[] = {0, 0x200, 0, 0x201, 0x202, 0x203};
+  return module < 6 ? Modules[module] : 0;
+}
+
+auto Kernel::sceUtilityLoadUsbModule() -> void {
+  if(arg(0) < 1 || arg(0) > 5) return result(ModuleBadID);
+  if(!usbModule(arg(0))) return result(0);
+  cpu.ipu.r[4] = usbModule(arg(0));
+  sceUtilityLoadModule();
+}
+
+auto Kernel::sceUtilityUnloadUsbModule() -> void {
+  if(arg(0) < 1 || arg(0) > 5) return result(ModuleBadID);
+  if(!usbModule(arg(0))) return result(0);
+  cpu.ipu.r[4] = usbModule(arg(0));
+  sceUtilityUnloadModule();
+}
+
 //(which, where, its size): the system's text settings: the player's nickname (1) is "PSP". Others aren't known.
 auto Kernel::sceUtilityGetSystemParamString() -> void {
   if(arg(0) != 1) return result(UtilityBadParameterID);
@@ -557,5 +601,10 @@ auto Kernel::sceUtilityGetSystemParamString() -> void {
 
 //(which, text): setting them is accepted and forgotten: the settings stay the system's own.
 auto Kernel::sceUtilitySetSystemParamString() -> void {
+  result(0);
+}
+
+//(which, value): the number settings likewise (Colin McRae Rally 2005 sets 3, the wireless LAN's power saving).
+auto Kernel::sceUtilitySetSystemParamInt() -> void {
   result(0);
 }

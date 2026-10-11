@@ -3,7 +3,8 @@
 //a frame buffer drawn and then sampled as a texture (render to texture: the copy taken on the GPU), the same again;
 //pspsdk's samples (PSP_TEST_PROGRAMS) run by two machines alike but for the renderer, measured for how close their
 //pictures are (they needn't be the same: the GPU interpolates texture coordinates its own way); blending, dithering,
-//logic operations and write masks done in the shader (shader blending), byte for byte; a GPU that stops answering;
+//logic operations and write masks done in the shader (shader blending), byte for byte, and without rasterization
+//order the GPU's own blending, close, and what it can't do in the shader, byte for byte; a GPU that stops answering;
 //bytes beside the GPU's pixels, memory's without waiting; the start-up check a game's renderer goes through; and
 //drawing at 2 and 3 times the PSP's resolution, where memory's bytes must still come back exactly.
 //Each group but the lost GPU's is skipped, saying why, where there's no Vulkan GPU (or with PSP_GPU=0): the
@@ -163,11 +164,9 @@ static auto gpuRenderToTexture() -> void {
 
 //pspsdk's samples (PSP_TEST_PROGRAMS) run by two machines alike but for the renderer, frame by frame for a second
 //and a half of the PSP's time: how many pixels are the same, and how far apart the rest are (each channel's
-//difference: 1-2 is blending's rounding, the GPU's sum against the PSP's terms each truncated). Every frame must
-//show the picture: no pixel's channel further off than 8 in more than 1 of 1000.
-static auto gpuSamples() -> void {
-  auto gpu = renderer();
-  if(!gpu || !testPrograms()) return;
+//difference: 1-2 is blending's rounding, the GPU's sum against the PSP's terms each truncated), printed. Every
+//frame must show the picture: no more than farPerThousand channels in 1000 more than 8 levels apart.
+static auto samples(GPU* gpu, u32 farPerThousand) -> void {
   for(const char* name : {"cube", "blend", "clut", "blit", "celshading", "envmap", "doublelist", "gu"}) {
     auto program = testProgram((std::string(name) + ".elf").c_str());
     if(program.empty()) continue;
@@ -195,9 +194,203 @@ static auto gpuSamples() -> void {
                 pixels ? 100.0 * same / pixels : 0.0, (unsigned long long)near[0], (unsigned long long)near[1],
                 (unsigned long long)near[2]);
     CHECK(pixels > 0, true);
-    CHECK(near[2] * 1000 <= pixels * 3, true);
+    CHECK(near[2] * 1000 <= pixels * farPerThousand, true);
     hardware.system.ge.setRenderer(nullptr);
   }
+}
+
+static auto gpuSamples() -> void {
+  auto gpu = renderer();
+  if(!gpu || !testPrograms()) return;
+  samples(gpu, 3);
+}
+
+//Vulkan (fast) (docs/psp-gpu-renderers.md): a renderer of its own, the GPU transforming 3D vertices itself and
+//blending with its own units. It passes the start-up check, whose 3D triangles it transforms; and pspsdk's samples,
+//3D among them (cube, celshading's lighting, envmap's environment mapping), come out close to the software
+//renderer's (not as close as the accurate mode's: the GPU steps colors and texture coordinates its own way).
+static auto fastRenderer() -> GPU* {
+  static std::unique_ptr<GPU> gpu;
+  std::string error;
+  if(!gpu && renderer()) gpu = GPU::vulkan(nullptr, error, true);
+  return gpu.get();
+}
+
+static auto gpuFast() -> void {
+  if(!renderer()) return;
+  GPU* gpu = fastRenderer();
+  CHECK((bool)gpu, true);
+  if(!gpu) return;
+  CHECK(gpu->fast && !gpu->backend->reads, true);
+  if(!gpu->backend->transforms) return void(std::printf("  the driver didn't take transform.vert: 3D on the CPU\n"));
+  auto before = gpu->statistics;
+  std::string error;
+  bool passed = gpu->check(error);
+  if(!passed) std::printf("  %s\n", error.c_str());
+  CHECK(passed, true);
+  CHECK(gpu->statistics.meshes - before.meshes >= 4, true);
+  if(!testPrograms()) return;
+  before = gpu->statistics;
+  samples(gpu, 3);
+  CHECK(gpu->statistics.meshes > before.meshes, true);
+}
+
+//Fast mode's triangles kept to the GE's rules for which are drawn (GE::meshTriangles()), against the software
+//renderer and beside the accurate mode: random triangles from behind the camera to past the far plane, some off the
+//GE's 4096-pixel screen, culled either way or not, in lists and strips, no depth test (so that their order shows);
+//and a ground of random colors, fogged, running under the camera, whose triangles the near plane cuts; with
+//DEPTH_CLIP_ENABLE on and off. Fast mode must come as close as the accurate mode: no more pixels more than 8 levels
+//off but one in a thousand.
+static auto gpuFastRules() -> void {
+  GPU* accurate = renderer();
+  GPU* fast = accurate ? fastRenderer() : nullptr;
+  if(!fast || !fast->backend->transforms) return;
+  constexpr u32 Width = 128, Height = 96, Background = 0xff20'2020;
+  auto f24 = [](float value) { return bitsOf(value) >> 8; };
+  struct Corner { float u, v; u32 color; float normal[3], at[3]; };  //(vertex type 0x1ff)
+  auto draw = [&](System& s, u32 kind, const std::vector<Corner>& corners) {
+    u32 to = GPUVertices;
+    for(auto& c : corners) {
+      for(u32 word : {bitsOf(c.u), bitsOf(c.v), c.color, bitsOf(c.normal[0]), bitsOf(c.normal[1]),
+                      bitsOf(c.normal[2]), bitsOf(c.at[0]), bitsOf(c.at[1]), bitsOf(c.at[2])}) {
+        s.memory.write(4, to, word), to += 4;
+      }
+    }
+    s.ge.vertexAddress = GPUVertices;
+    s.ge.primitive(kind, corners.size());
+  };
+  auto scene = [&](System& s, u32 clip) {
+    auto& c = s.ge.commands;
+    c[GE::FrameBufferPointer] = 0, c[GE::FrameBufferWidth] = Width, c[GE::FrameBufferPixelFormat] = 3;
+    c[GE::DepthBufferPointer] = 0x10'0000, c[GE::DepthBufferWidth] = Width;
+    c[GE::Region2] = 1023 << 10 | 1023, c[GE::Scissor2] = (Width - 1) | (Height - 1) << 10;
+    c[GE::VertexType] = 0x1ff, c[GE::ShadeMode] = 1, c[GE::DepthClipEnable] = clip, c[GE::MaxZ] = 0xffff;
+    for(u32 n = 0; n < 12; n++) s.ge.world[n] = s.ge.view[n] = f24(n % 4 == 0 ? 1 : 0);
+    for(u32 n = 0; n < 16; n++) s.ge.projection[n] = 0;
+    s.ge.projection[0] = s.ge.projection[5] = f24(1);  //(the near plane 1 away, the far one 10)
+    s.ge.projection[10] = f24(-11.0f / 9), s.ge.projection[11] = f24(-1), s.ge.projection[14] = f24(-20.0f / 9);
+    c[GE::ViewportXScale] = f24(64), c[GE::ViewportYScale] = f24(-48), c[GE::ViewportZScale] = f24(30000);
+    c[GE::ViewportXCenter] = f24(2048), c[GE::ViewportYCenter] = f24(2048), c[GE::ViewportZCenter] = f24(32768);
+    c[GE::OffsetX] = (2048 - 64) << 4, c[GE::OffsetY] = (2048 - 48) << 4;
+    for(u32 n = 0; n < Width * Height; n++) std::memcpy(&s.memory.vram[n * 4], &Background, 4);
+    std::mt19937 random{20261009};
+    for(u32 prim = 0; prim < 6; prim++) {
+      c[GE::CullFaceEnable] = prim % 3 != 0, c[GE::Cull] = prim % 3 == 2;
+      std::vector<Corner> corners;
+      for(u32 n = 0; n < 60; n++) {
+        float z = 1.0f - (random() % 1000) / 1000.0f * 16.0f, distance = std::max(std::abs(z), 0.3f);
+        float spread = random() % 10 == 0 ? 60.0f : 1.4f;
+        float x = (s32(random() % 2000) - 1000) / 1000.0f * spread * distance;
+        float y = (s32(random() % 2000) - 1000) / 1000.0f * distance;
+        corners.push_back({0, 0, u32(random()) | 0xff00'0000, {0, 0, 1}, {x, y, z}});
+      }
+      draw(s, prim & 1 ? GE::TriangleStrip : GE::Triangles, corners);
+    }
+    c[GE::CullFaceEnable] = 0;
+    c[GE::FogEnable] = 1, c[GE::FogEnd] = f24(30.0f), c[GE::FogSlope] = f24(1.0f / 28), c[GE::FogColor] = 0xff'0000;
+    std::vector<std::vector<u32>> colors(7, std::vector<u32>(5));
+    for(auto& row : colors) for(auto& color : row) color = u32(random()) | 0xff00'0000;
+    auto at = [&](u32 i, u32 j) -> Corner {
+      return {0, 0, colors[i][j], {0, 1, 0}, {-6 + 3.0f * j, -0.8f, 1.0f - 1.5f * i}};
+    };
+    std::vector<Corner> ground;
+    for(u32 i = 0; i < 6; i++) {
+      for(u32 j = 0; j < 4; j++) {
+        for(auto& corner : {at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j), at(i + 1, j + 1), at(i, j + 1)}) {
+          ground.push_back(corner);
+        }
+      }
+    }
+    draw(s, GE::Triangles, ground);
+    c[GE::FogEnable] = 0;
+    s.ge.settleAll();
+  };
+  for(u32 clip : {1u, 0u}) {
+    u32 far[2] = {};
+    for(u32 mode : {0u, 1u}) {
+      GPU* gpu = mode ? fast : accurate;
+      System software, hardware;
+      hardware.ge.setRenderer(gpu);
+      auto before = gpu->statistics;
+      scene(software, clip), scene(hardware, clip);
+      if(mode) CHECK(gpu->statistics.meshes > before.meshes, true);
+      hardware.ge.setRenderer(nullptr);
+      for(u32 n = 0; n < Width * Height; n++) {
+        for(u32 channel = 0; channel < 3; channel++) {
+          s32 d = s32(software.memory.vram[n * 4 + channel]) - s32(hardware.memory.vram[n * 4 + channel]);
+          if(d > 8 || d < -8) { far[mode]++; break; }
+        }
+      }
+    }
+    std::printf("  DEPTH_CLIP_ENABLE %u: pixels more than 8 levels off, accurate %u, fast %u\n", clip, far[0], far[1]);
+    CHECK(far[1] <= far[0] + Width * Height / 1000, true);
+  }
+}
+
+//Fast mode's 3D (mesh()) changes a target as any draw does, for render to texture taken again: a frame buffer
+//sampled into another, a wall of one color drawn over part of it with the GPU transforming it, then sampled again from
+//the same place. The second picture has the wall in it as the software renderer has it, all but a few pixels of its
+//edges (which fast mode may cover where the GE doesn't).
+static auto gpuFastMeshChanges() -> void {
+  GPU* gpu = renderer() ? fastRenderer() : nullptr;
+  if(!gpu || !gpu->backend->transforms) return;
+  auto f24 = [](float value) { return bitsOf(value) >> 8; };
+  std::mt19937 random{20261015};
+  auto drawn = randomSprites(random, 30, false);
+  auto sample = [](System& s) {
+    prepare(s, 0x2'0000, 3);
+    texture(s, Memory::VRAMBase, 64, 64, 64);
+    sprite(s, {{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0xffff'ffff});
+  };
+  auto wall = [&](System& s) {  //(2 away, 2 by 2: x 16-48 and y 12-36 of the frame buffer at 0)
+    prepare(s, 0, 3);
+    auto& c = s.ge.commands;
+    c[GE::TextureMappingEnable] = 0, c[GE::VertexType] = 0x1ff, c[GE::MaxZ] = 0xffff;
+    for(u32 n = 0; n < 12; n++) s.ge.world[n] = s.ge.view[n] = f24(n % 4 == 0 ? 1 : 0);
+    for(u32 n = 0; n < 16; n++) s.ge.projection[n] = 0;
+    s.ge.projection[0] = s.ge.projection[5] = f24(1);  //(the near plane 1 away, the far one 10)
+    s.ge.projection[10] = f24(-11.0f / 9), s.ge.projection[11] = f24(-1), s.ge.projection[14] = f24(-20.0f / 9);
+    c[GE::ViewportXScale] = f24(32), c[GE::ViewportYScale] = f24(-24), c[GE::ViewportZScale] = f24(30000);
+    c[GE::ViewportXCenter] = f24(2048), c[GE::ViewportYCenter] = f24(2048), c[GE::ViewportZCenter] = f24(32768);
+    c[GE::OffsetX] = (2048 - 32) << 4, c[GE::OffsetY] = (2048 - 24) << 4;
+    u32 to = GPUVertices, count = 0;
+    for(u32 j = 0; j < 2; j++) {
+      for(u32 i = 0; i < 4; i++) {
+        for(u32 corner : {0u, 1u, 3u, 0u, 3u, 2u}) {  //(4 by 2 quads, 2 triangles each)
+          float x = -1 + 0.5f * (i + (corner & 1)), y = -1 + 1.0f * (j + (corner >> 1));
+          for(u32 word : {0u, 0u, 0xff30'c060u, 0u, 0u, bitsOf(1), bitsOf(x), bitsOf(y), bitsOf(-2)}) {
+            s.memory.write(4, to, word), to += 4;
+          }
+          count++;
+        }
+      }
+    }
+    s.ge.vertexAddress = GPUVertices;
+    s.ge.primitive(GE::Triangles, count);
+  };
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  auto before = gpu->statistics;
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, 0, 3);
+    for(auto& one : drawn) sprite(*s, one);
+    sample(*s);
+    wall(*s);
+    sample(*s);
+    s->ge.settleAll();
+  }
+  CHECK(gpu->statistics.meshes > before.meshes, true);
+  u32 far = 0;
+  for(u32 n = 0; n < 64 * 48; n++) {
+    for(u32 channel = 0; channel < 4; channel++) {
+      u32 at = 0x2'0000 + n * 4 + channel;
+      s32 d = s32(software.memory.vram[at]) - s32(hardware.memory.vram[at]);
+      if(d > 8 || d < -8) { far++; break; }
+    }
+  }
+  if(far >= 64) std::printf("  %u pixels of the second picture more than 8 levels off\n", far);
+  CHECK(far < 64, true);
+  hardware.ge.setRenderer(nullptr);
 }
 
 //A GPU that stops answering (as the driver's VK_ERROR_DEVICE_LOST, or a wait that never ends, has it) at its first
@@ -209,10 +402,10 @@ static auto gpuLost() -> void {
     auto name() const -> std::string override { return "pretend"; }
     auto makeTarget(u32, u32) -> u32 override { return ++made; }
     auto dropTarget(u32) -> void override {}
-    auto makeTexture(u32, u32, const u32*) -> u32 override { return ++made; }
+    auto makeTexture(u32, u32, const u32*, std::shared_ptr<const void>) -> u32 override { return ++made; }
     auto dropTexture(u32) -> void override {}
     auto submit(const GPU::Recorded&) -> bool override { return runs++, true; }
-    auto finish(const GPU::Recorded&) -> bool override { return runs++, false; }
+    auto finish(const GPU::Recorded&) -> bool override { return runs++, lost = true, false; }  //(as Vulkan's)
     auto read(u32, const u32*&, const u8*&) -> bool override { return false; }
   };
   auto backend = std::make_unique<Lost>();
@@ -261,7 +454,7 @@ static auto gpuRefused() -> void {
     auto name() const -> std::string override { return "pretend"; }
     auto makeTarget(u32, u32) -> u32 override { return 0; }
     auto dropTarget(u32) -> void override {}
-    auto makeTexture(u32, u32, const u32*) -> u32 override { return 1; }
+    auto makeTexture(u32, u32, const u32*, std::shared_ptr<const void>) -> u32 override { return 1; }
     auto dropTexture(u32) -> void override {}
     auto submit(const GPU::Recorded&) -> bool override { return true; }
     auto finish(const GPU::Recorded&) -> bool override { return true; }
@@ -325,6 +518,809 @@ static auto gpuCopies() -> void {
   hardware.ge.setRenderer(nullptr);
 }
 
+//Render to texture taken again from the same place with the target changed in part since, at 1x and above: an effect
+//blurring a strip right of the picture back and forth, each sprite sampling the frame buffer it draws into (as
+//Killzone's menu does), the picture left of it sampled now and then. Every picture is the software renderer's (each
+//pass modulates by its own color, so a part of a copy left stale would show), and the copies after the first take
+//the strip, not the picture: fewer than half the pixels copies of the whole would. Then a texture starting inside the
+//frame buffer (at 8, 8) sampled into another frame buffer, small patches of it drawn over between the samples (each
+//part copied to its own place in the copy), and rows the CPU writes over between two of them (the target filled
+//from memory again: the rows filled are changes too). And sprites reaching past a scissor away from the frame
+//buffer's corner (16, 8 to 47, 39) between samples: what they change is inside the scissor, wherever it is.
+static auto gpuPartialCopies() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::mt19937 random{20261010};
+  for(u32 scale : {1u, 2u, 3u}) {
+    if(scale > gpu->backend->mostScale) break;
+    gpu->resolution(scale);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto drawn = randomSprites(random, 40, false);
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0, 3);
+      for(auto& one : drawn) sprite(*s, one);
+      texture(*s, Memory::VRAMBase, 64, 64, 64);
+      s->ge.commands[GE::TextureFunction] = 0 | 1 << 8;  //(modulated by the color, with its alpha)
+    }
+    auto before = gpu->statistics;
+    u64 whole = 0;  //(what copies of all that's sampled would take)
+    for(u32 n = 0; n < 16; n++) {  //(columns 48-63: rows 0-15 drawn from rows 16-31, then back)
+      float from = n & 1 ? 0 : 16, to = n & 1 ? 16 : 0;
+      u32 color = 0xff80'8080 + n * 0x0007'0b05;
+      for(System* s : {&software, &hardware}) {
+        sprite(*s, {{{48, from, 48, to}, {64, from + 16, 64, to + 16}}, color});
+        if(n % 4 == 3) sprite(*s, {{{0, 0, 48, 32}, {16, 16, 64, 48}}, 0xffff'ffff});
+      }
+      whole += 64 * (from + 16) + (n % 4 == 3 ? 16 * 16 : 0);
+    }
+    u32 bytes = apart(software, hardware);
+    if(bytes) std::printf("  %ux: %u bytes apart\n", scale, bytes);
+    CHECK(bytes, 0u);
+    u64 copied = gpu->statistics.copied - before.copied;
+    if(copied * 2 >= whole) std::printf("  %ux: %llu pixels copied of %llu\n", scale, (unsigned long long)copied,
+                                        (unsigned long long)whole);
+    CHECK(copied * 2 < whole, true);
+    hardware.ge.setRenderer(nullptr);
+  }
+  for(u32 scale : {1u, 2u}) {
+    if(scale > gpu->backend->mostScale) break;
+    gpu->resolution(scale);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto drawn = randomSprites(random, 30, false);
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0, 3);
+      for(auto& one : drawn) sprite(*s, one);
+    }
+    for(u32 n = 0; n < 12; n++) {
+      float x = 8 + n * 5 % 26, y = 8 + n * 7 % 26;
+      for(System* s : {&software, &hardware}) {
+        prepare(*s, 0, 3);
+        s->ge.commands[GE::TextureMappingEnable] = 0;
+        sprite(*s, {{{0, 0, x, y}, {0, 0, x + 6, y + 6}}, 0xff00'0000 | n * 0x13'2b47});
+        if(n == 6) {  //(the CPU's bytes over the texture's rows 4-7: the target filled with them when next drawn)
+          for(u32 m = 0; m < 256; m++) s->memory.write(4, Memory::VRAMBase + 12 * 256 + m * 4, 0xff00'00ffu + m * 77);
+        }
+        prepare(*s, 0x2'0000, 3);
+        texture(*s, Memory::VRAMBase + (8 * 64 + 8) * 4, 32, 32, 64);
+        sprite(*s, {{{0, 0, 4 * float(n % 3), 4}, {32, 32, 4 * float(n % 3) + 32, 36}}, 0xffff'ffff});
+      }
+    }
+    u32 bytes = apart(software, hardware);
+    if(bytes) std::printf("  %ux, inside the frame buffer: %u bytes apart\n", scale, bytes);
+    CHECK(bytes, 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+  gpu->resolution(1);
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  auto drawn = randomSprites(random, 30, false);
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, 0, 3);
+    for(auto& one : drawn) sprite(*s, one);
+  }
+  for(u32 n = 0; n < 4; n++) {
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0x2'0000, 3);
+      texture(*s, Memory::VRAMBase, 64, 64, 64);
+      sprite(*s, {{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0xffff'ffff});
+      prepare(*s, 0, 3);
+      s->ge.commands[GE::Scissor1] = 16 | 8 << 10, s->ge.commands[GE::Scissor2] = 47 | 39 << 10;
+      s->ge.commands[GE::TextureMappingEnable] = 0;
+      sprite(*s, {{{0, 0, 4 + 9.0f * n, 2}, {0, 0, 30 + 9.0f * n, 46}}, 0xff00'0000 | (n + 1) * 0x30'5070});
+      s->ge.commands[GE::Scissor1] = 0;
+    }
+  }
+  u32 bytes = apart(software, hardware);
+  if(bytes) std::printf("  a scissor away from the corner: %u bytes apart\n", bytes);
+  CHECK(bytes, 0u);
+  hardware.ge.setRenderer(nullptr);
+}
+
+//A texture running from one frame buffer into the next below it in memory (Midnight Club 3's menu samples its frame
+//buffer as a texture 512 rows tall, whose last rows are the next frame buffer's): taken from the two targets on the
+//GPU, each part from its own, with nothing finished, and the picture the software renderer's. From the first's row 0
+//and from its row 8 (fewer rows of it, more of the second), the whole texture sampled again after each of two sprites
+//drawn into the second (the same copy, taken again: the second part too, as MC3's menu samples it every frame); with
+//the second drawn only in its first 4 rows (the rest the texture takes filled from memory, which the CPU wrote) and a
+//PRIM drawing into it while it samples rows it doesn't draw over, as MC3's does. And one whose pixels the first frame
+//buffer drew over the second's first rows since the second drew there (the newest of those pixels the first's):
+//the second's pixels in the texture's pages moved into the first's target on the GPU (move()), nothing finished;
+//where the GPU doesn't move them, decoded from memory, as before.
+static auto gpuStackedTexture() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::mt19937 random{20261013};
+  for(u32 from : {0u, 8u}) {
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto upper = randomSprites(random, 30, false), lower = randomSprites(random, 30, false);
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0, 3);  //(rows 0-47)
+      for(auto& one : upper) sprite(*s, one);
+      prepare(*s, 48 * 64 * 4, 3);  //(the next frame buffer, from row 48 on: its rows 0-15 the texture's rows 48-63)
+      for(auto& one : lower) sprite(*s, one);
+      prepare(*s, 0x2'0000, 3);
+      texture(*s, Memory::VRAMBase + from * 64 * 4, 64, 64, 64);
+    }
+    auto before = gpu->statistics;
+    for(System* s : {&software, &hardware}) {
+      sprite(*s, {{{0, 0, 0, 0}, {64, 64, 64, 48}}, 0xffff'ffff});  //(the whole texture, shrunk to rows 0-47)
+      sprite(*s, {{{8, 40, 4, 4}, {40, 64, 36, 28}}, 0xffff'ffff});  //(across the two)
+    }
+    for(u32 n = 0; n < 2; n++) {
+      for(System* s : {&software, &hardware}) {
+        prepare(*s, 48 * 64 * 4, 3);
+        s->ge.commands[GE::TextureMappingEnable] = 0;
+        sprite(*s, {{{0, 0, 10 + 20.0f * n, 2}, {0, 0, 30 + 20.0f * n, 12}}, 0xff20'40c0 + n * 0x30'0000});
+        prepare(*s, 0x2'0000, 3);
+        s->ge.commands[GE::TextureMappingEnable] = 1;
+        sprite(*s, {{{0, 0, 0, 0}, {64, 64, 64, 48}}, 0xffff'ffff});
+      }
+    }
+    CHECK(gpu->statistics.finishes, before.finishes);
+    CHECK(gpu->statistics.copies - before.copies >= 2, true);
+    CHECK(apart(software, hardware), 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+  {
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto upper = randomSprites(random, 30, false);
+    for(System* s : {&software, &hardware}) {
+      for(u32 n = 0; n < 64 * 16; n++) s->memory.write(4, Memory::VRAMBase + (48 * 64 + n) * 4, 0xff40'2010 + n * 131);
+      prepare(*s, 0, 3);
+      for(auto& one : upper) sprite(*s, one);
+      prepare(*s, 48 * 64 * 4, 3);
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 4}}, 0xff00'ff00});
+    }
+    auto before = gpu->statistics;
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0x2'0000, 3);
+      texture(*s, Memory::VRAMBase, 64, 64, 64);
+      sprite(*s, {{{0, 0, 0, 0}, {64, 64, 64, 48}}, 0xffff'ffff});
+      prepare(*s, 48 * 64 * 4, 3);
+      sprite(*s, {{{0, 0, 0, 20}, {64, 64, 64, 44}}, 0xffff'ffff});  //(rows 20-43 of the second, from both)
+    }
+    CHECK(gpu->statistics.finishes, before.finishes);
+    CHECK(apart(software, hardware), 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+  {  //(the second draws rows 0-31, the first its rows 0-7 since, then the second its rows 20-30 again: the first owns
+     //the second's first page, the second the page after)
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto upper = randomSprites(random, 30, false);
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0, 3);
+      for(auto& one : upper) sprite(*s, one);
+      prepare(*s, 48 * 64 * 4, 3);
+      for(u32 n = 0; n < 4; n++) sprite(*s, {{{0, 0, 16.0f * n, 0}, {0, 0, 16.0f * n + 16, 32}}, 0xff00'8000 + n * 17});
+      prepare(*s, 0, 3);
+      s->ge.commands[GE::Scissor2] = 63 | 63 << 10;
+      for(u32 n = 0; n < 6; n++) sprite(*s, {{{0, 0, 6.0f * n, 48}, {0, 0, 6.0f * n + 9, 56}}, 0xff80'0040 + n * 34});
+      prepare(*s, 48 * 64 * 4, 3);
+      sprite(*s, {{{0, 0, 4, 20}, {0, 0, 50, 31}}, 0xff40'40c0});
+      prepare(*s, 0x2'0000, 3);
+      texture(*s, Memory::VRAMBase, 64, 128, 64);
+    }
+    auto before = gpu->statistics;
+    for(System* s : {&software, &hardware}) sprite(*s, {{{0, 0, 0, 0}, {64, 80, 64, 48}}, 0xffff'ffff});
+    if(gpu->backend->moves) {
+      CHECK(gpu->statistics.finishes, before.finishes);
+      CHECK(gpu->statistics.moves > before.moves, true);
+    } else {
+      CHECK(gpu->statistics.finishes > before.finishes, true);
+    }
+    CHECK(apart(software, hardware), 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+}
+
+//A texture decoded again before the GPU has the first copy's texels (its bytes rewritten between two sprites, which
+//has the GE let the first go): each copy's texels are kept until the run that puts them on the GPU, without a copy of
+//its own (the sanitizers would catch the first one's read after it was let go), and the picture is the software
+//renderer's.
+static auto gpuTexelsKept() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::mt19937 random{20261014};
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  auto sampled = randomSprites(random, 8, true);
+  for(System* s : {&software, &hardware}) prepare(*s, 0, 3);
+  for(u32 frame = 0; frame < 4; frame++) {
+    for(auto& one : sampled) {
+      u32 seed = random();
+      for(System* s : {&software, &hardware}) {
+        for(u32 n = 0; n < 32 * 32; n++) s->memory.write(4, GPUTexture + n * 4, u32((n + seed) * 0x9e37'79b9));
+        texture(*s, GPUTexture, 32, 32, 32);
+        sprite(*s, one);
+      }
+    }
+    CHECK(apart(software, hardware), 0u);
+  }
+  hardware.ge.setRenderer(nullptr);
+}
+
+//What the GPU drew put into memory at a finish only in the pages each target drew in: a frame buffer's drawn
+//rectangle spans two PRIMs far apart (rows 0-1 and 40-41: its pages 0 and 2, not 1), and memory's bytes between them
+//are newer than its pixels there: the CPU's, written between the PRIMs, or another frame buffer's, drawn into that
+//page since (the other one read back first). Both kept, as the software renderer has them; and the CPU's in the
+//second page of a row that runs over two (a frame buffer 1,024 pixels wide, from half a page in).
+static auto gpuBetweenPages() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  for(bool cpu : {true, false}) {
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    u32 at = cpu ? 0 : 0x3'0000;  //(where no other test draws: the other frame buffer's target made first, below)
+    for(System* s : {&software, &hardware}) {
+      if(!cpu) {  //(the other frame buffer, at row 16's page, drawn first: read back first)
+        prepare(*s, at + 0x1000, 3);
+        sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 4}}, 0xff80'4020});
+        (void)s->memory.read(4, Memory::VRAMBase + at + 0x1000);  //(a finish)
+      }
+      prepare(*s, at, 3);
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 2}}, 0xff00'00ff});
+      sprite(*s, {{{0, 0, 0, 40}, {0, 0, 64, 42}}, 0xff00'ff00});
+      if(cpu) {
+        for(u32 n = 0; n < 64; n++) s->memory.write(4, Memory::VRAMBase + at + (20 * 64 + n) * 4, 0xffab'cdef);
+      } else {
+        prepare(*s, at + 0x1000, 3);
+        sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 4}}, 0xff10'20c0});
+        prepare(*s, at, 3);
+      }
+      sprite(*s, {{{0, 0, 0, 44}, {0, 0, 8, 46}}, 0xffff'0000});
+    }
+    u32 bytes = apart(software, hardware);
+    if(bytes) std::printf("  %s: %u bytes apart\n", cpu ? "the CPU's row" : "the other frame buffer's", bytes);
+    CHECK(bytes, 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  u32 at = 0x3'8800;  //(row 0 in pages 0x38 and 0x39, row 1 in 0x39 and 0x3a, row 2 in 0x3a and 0x3b)
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, at, 3);
+    s->ge.commands[GE::FrameBufferWidth] = 1024, s->ge.commands[GE::Scissor2] = 1023 | 47 << 10;
+    sprite(*s, {{{0, 0, 0, 0}, {0, 0, 16, 1}}, 0xff00'00ff});  //(page 0x38)
+    sprite(*s, {{{0, 0, 600, 2}, {0, 0, 616, 3}}, 0xff00'ff00});  //(page 0x3b)
+    for(u32 n = 0; n < 64; n++) s->memory.write(4, Memory::VRAMBase + at + (512 + n) * 4, 0xffab'cdef);  //(0x39)
+    sprite(*s, {{{0, 0, 0, 1}, {0, 0, 8, 2}}, 0xffff'0000});
+  }
+  u32 bytes = apart(software, hardware);
+  if(bytes) std::printf("  a row over two pages: %u bytes apart\n", bytes);
+  CHECK(bytes, 0u);
+  hardware.ge.setRenderer(nullptr);
+}
+
+//A PRIM the renderer refuses among PRIMs the GPU draws, in a list run with the drawing threads (four, batches shared
+//out however small, the CPU's guard over VRAM): the refused one (a sprite reaching rows 505-520 of a frame buffer,
+//past a target's 512) is the software renderer's, and later sprites the GPU draws reach rows 500-511 of the same
+//frame buffer, either side of it, and the rows of another. Then the next list starts, and the CPU loads a pixel the
+//GPU drew and stores into another of them. Everything comes out as the software renderer has it: the refused sprite
+//under the GPU's (not the rows the GPU had from memory before it, put back over it), the load finding the GPU's
+//pixel, and the store kept (not put back over by the GPU's older pixels at the finish).
+static auto gpuRefusedAmongThreads() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 ListA = 0x0894'0000, ListB = 0x0895'0000, Other = 0x4'0000;  //(Other: a VRAM offset)
+  auto build = [](Memory& memory) {
+    u32 at = ListA, vertex = GPUVertices;
+    auto put = [&](u32 command, u32 argument = 0) {
+      memory.write(4, at, command << 24 | (argument & 0xff'ffff)), at += 4;
+    };
+    auto sprite = [&](float left, float top, float right, float bottom, u32 color) {
+      put(GE::Base, vertex >> 8 & 0xf'0000), put(GE::VertexAddress, vertex);
+      for(auto [x, y] : {std::pair{left, top}, std::pair{right, bottom}}) {
+        for(float value : {0.0f, 0.0f}) memory.write(4, vertex, bitsOf(value)), vertex += 4;
+        memory.write(4, vertex, color), vertex += 4;
+        for(float value : {x, y, 0.0f}) memory.write(4, vertex, bitsOf(value)), vertex += 4;
+      }
+      put(GE::Primitive, GE::Sprites << 16 | 2);
+    };
+    put(GE::FrameBufferPointer, 0), put(GE::FrameBufferWidth, 64), put(GE::FrameBufferPixelFormat, 3);
+    put(GE::Scissor1, 0), put(GE::Scissor2, 63 | 1023 << 10), put(GE::Region2, 1023 | 1023 << 10);
+    put(GE::VertexType, 0x80'019f), put(GE::ShadeMode, 1);
+    sprite(4, 505, 40, 521, 0xff33'66cc);  //(refused: rows 505-520)
+    sprite(0, 500, 4, 512, 0xff00'ff00);   //(the GPU's: rows 500-511, either side of it)
+    sprite(60, 500, 64, 512, 0xffff'0000);
+    put(GE::FrameBufferPointer, Other);
+    sprite(0, 0, 64, 16, 0xff12'3456);
+    put(GE::Finish), put(GE::End);
+    at = ListB;
+    put(GE::ShadeMode, 1), put(GE::Finish), put(GE::End);
+  };
+  KernelMachine software, hardware;
+  hardware.system.ge.setRenderer(gpu);
+  u32 loaded[2] = {};
+  for(auto* m : {&software, &hardware}) {
+    m->system.ge.setThreads(4);
+    m->system.ge.drawing.shared = 0;
+    build(m->system.memory);
+    m->call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
+    m->call("sceGeListEnQueue", {ListB, 0, 0xffff'ffff, 0});
+    loaded[m == &hardware] = m->system.memory.read(4, Memory::VRAMBase + Other + (8 * 64 + 8) * 4);
+    m->system.memory.write(4, Memory::VRAMBase + Other + (10 * 64 + 8) * 4, 0xffab'cdef);
+  }
+  if(loaded[1] != loaded[0]) std::printf("  the CPU's load found %08x, not the GPU's pixel\n", loaded[1]);
+  CHECK(loaded[0], 0x0012'3456u);  //(the stencil, the alpha, kept: 0)
+  CHECK(loaded[1], loaded[0]);
+  u32 bytes = vramApart(software.system, hardware.system);
+  if(bytes) std::printf("  %u bytes apart\n", bytes);
+  CHECK(bytes, 0u);
+  CHECK(hardware.system.memory.read(4, Memory::VRAMBase + Other + (10 * 64 + 8) * 4), 0xffab'cdefu);
+  CHECK(hardware.system.memory.read(4, Memory::VRAMBase + (508 * 64 + 20) * 4), 0x0033'66ccu);
+  hardware.system.ge.setRenderer(nullptr);
+}
+
+//The same memory drawn as frame buffers of different formats and places in turn, as God of War draws its effects:
+//an 8888 frame buffer 64 pixels wide, a 5650 one 128 wide over the same bytes, an 8888 one a page further down whose
+//rows are the first's rows 16 on, a 5551 one 128 wide (its alpha the stencil's top bit), and a 4444 one (its top
+//four). Each takes the pixels the one before drew in its pages on the GPU, as memory would have them (move()), with
+//nothing put back; at 1x, 2x and 3x, and everything comes out as the software renderer has it. (Sprites with random
+//colors and alphas, some in clear mode setting the stencil, some textured from a texture the CPU wrote in VRAM.)
+static auto gpuMoves() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  if(!gpu->backend->moves) return void(std::printf("  skipped: the GPU doesn't move pixels between targets\n"));
+  std::mt19937 random{20261016};
+  constexpr u32 At = 0x3'0000;  //(where no other test draws: VRAM's offset)
+  for(u32 scale : {1u, 2u, 3u}) {
+    if(scale > gpu->backend->mostScale) break;
+    gpu->resolution(scale);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    for(System* s : {&software, &hardware}) {
+      for(u32 n = 0; n < 64 * 48; n++) s->memory.write(4, Memory::VRAMBase + 0x2'0000 + n * 4, u32(n * 0x9e37'79b9));
+    }
+    auto before = gpu->statistics;
+    struct Pass { u32 address, width, format; std::vector<Corners> sprites; bool clear, textured; };
+    std::vector<Pass> passes;
+    for(u32 round = 0; round < 3; round++) {
+      passes.push_back({At, 64, 3, randomSprites(random, 12, false), round == 1, false});
+      passes.push_back({At, 128, 0, randomSprites(random, 12, false), false, round == 2});
+      passes.push_back({At + 0x1000, 64, 3, randomSprites(random, 8, false), false, round == 0});
+      passes.push_back({At, 128, 1, randomSprites(random, 8, false), round == 2, false});
+      passes.push_back({At, 128, 2, randomSprites(random, 8, false), round == 0, round == 1});
+    }
+    for(System* s : {&software, &hardware}) {
+      auto& c = s->ge.commands;
+      for(auto& pass : passes) {
+        prepare(*s, pass.address, pass.format);
+        c[GE::FrameBufferWidth] = pass.width;
+        if(pass.textured) texture(*s, Memory::VRAMBase + 0x2'0000, 64, 64, 64);
+        if(pass.clear) c[GE::ClearMode] = 1 | 3 << 8;  //(colors and stencil)
+        for(auto& one : pass.sprites) sprite(*s, one);
+        c[GE::ClearMode] = 0, c[GE::TextureMappingEnable] = 0;
+      }
+    }
+    CHECK(gpu->statistics.finishes, before.finishes);
+    CHECK(gpu->statistics.moves - before.moves >= 9, true);
+    u32 bytes = vramApart(software, hardware);
+    if(bytes) std::printf("  %ux: %u bytes apart\n", scale, bytes);
+    CHECK(bytes, 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+  gpu->resolution(1);
+}
+
+//Frame buffers side by side in the rows of a wide one, and one a row down, as God of War draws its effects (four 5650
+//ones 64 pixels wide in rows of 256 here): parts of one target, drawn into in turn with nothing finished, dithered
+//(each one's matrix from its own first row, its columns starting on a multiple of four: the fifth starts a row down), a
+//sprite's texture stepped across each, and a texture read across the four, held on the GPU. Then one whose PRIM
+//reaches past its target's rows' end, and one drawn with its depth buffer, each a target of its own. Everything as the
+//software renderer has it.
+static auto gpuSideBySide() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::mt19937 random{20261017};
+  constexpr u32 At = 0x3'8000;  //(VRAM's offset, on a page: rows of 512 bytes, 8 a page)
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  for(System* s : {&software, &hardware}) {
+    for(u32 n = 0; n < 32 * 32; n++) s->memory.write(4, GPUTexture + n * 4, u32(n * 0x9e37'79b9));
+  }
+  auto flat = randomSprites(random, 30, false), textured = randomSprites(random, 30, true);
+  auto draw = [&](System& s, u32 address, u32 first) {
+    auto& c = s.ge.commands;
+    prepare(s, address, 0);
+    c[GE::FrameBufferWidth] = 256, c[GE::Scissor2] = 63 | 31 << 10;
+    c[GE::DitherEnable] = 1, c[GE::Dither0] = 0x7f80, c[GE::Dither0 + 1] = 0x3c4d;
+    c[GE::Dither0 + 2] = 0xe1a5, c[GE::Dither0 + 3] = 0x96b2;
+    for(u32 n = first; n < first + 6; n++) sprite(s, flat[n]);
+    texture(s, GPUTexture, 32, 32, 32);
+    for(u32 n = first; n < first + 6; n++) sprite(s, textured[n]);
+    c[GE::TextureMappingEnable] = 0, c[GE::DitherEnable] = 0;
+  };
+  auto before = gpu->statistics;
+  for(System* s : {&software, &hardware}) {
+    for(u32 n = 0; n < 4; n++) draw(*s, At + n * 128, n * 6);
+    draw(*s, At + 512 + 128, 24);
+  }
+  auto across = gpu->statistics;
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, 0x2'0000, 3);
+    texture(*s, Memory::VRAMBase + At, 256, 32, 256, 0);
+    sprite(*s, {{{0, 0, 0, 0}, {256, 32, 64, 16}}, 0xffff'ffff});
+  }
+  CHECK(gpu->statistics.finishes, before.finishes);
+  CHECK(gpu->statistics.textures, across.textures);  //(none decoded: held)
+  CHECK(gpu->statistics.copies > across.copies, true);
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, At + 192 * 2, 0);
+    s->ge.commands[GE::FrameBufferWidth] = 256, s->ge.commands[GE::Scissor2] = 127 | 31 << 10;
+    sprite(*s, {{{0, 0, 40, 2}, {0, 0, 100, 9}}, 0xff20'40c0});  //(past the rows' end, at 256: run on into the next)
+    prepare(*s, At + 128, 0);
+    s->ge.commands[GE::FrameBufferWidth] = 256;
+    s->ge.commands[GE::DepthTestEnable] = 1, s->ge.commands[GE::DepthTest] = 7;
+    sprite(*s, {{{0, 0, 4, 4}, {0, 0, 30, 20}}, 0xff80'2010}, 30000);
+    s->ge.commands[GE::DepthTestEnable] = 0;
+  }
+  u32 bytes = apart(software, hardware);  //(the frame buffers': the GPU's depth isn't put back)
+  if(bytes) std::printf("  %u bytes apart\n", bytes);
+  CHECK(bytes, 0u);
+  hardware.ge.setRenderer(nullptr);
+}
+
+//A block transfer over pixels the GPU drew, after they were sampled (God of War streams palettes over the rows of a
+//picture it has used): the pixels it writes whole are memory's at once (overwritten()), nothing finished; the CPU
+//reads them as written, and the GE decodes a texture from them; a sprite drawn over some of them after draws over
+//memory's bytes, and the CPU then finds its pixels drawn. A copy writing half of an 8888 pixel (2 bytes a pixel, from
+//its middle) finishes first. And rows written over the GPU's pixels, then a finish before anything takes them: not put
+//back over; and every pixel it drew in a page written over (so drawnOver() keeps the answer that it drew none there),
+//then more drawn in the page: the CPU finds those. All as the software renderer has it.
+static auto gpuTransferOver() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::mt19937 random{20261018};
+  constexpr u32 At = 0x3'0000;
+  auto transfer = [](System& s, u32 to, u32 at, u32 width, u32 height, u32 bytes) {
+    auto& c = s.ge.commands;
+    c[GE::TransferSource] = GPUTexture & 0xff'fff0, c[GE::TransferSourceWidth] = (GPUTexture >> 24) << 16 | 64;
+    c[GE::TransferSourcePosition] = 0;
+    c[GE::TransferDestination] = to & 0xff'fff0;
+    c[GE::TransferDestinationWidth] = (to >> 24) << 16 | (bytes == 4 ? 64 : 128);
+    c[GE::TransferDestinationPosition] = at;
+    c[GE::TransferSize] = (width - 1) | (height - 1) << 10, c[GE::TransferStart] = bytes == 4;
+    s.ge.transfer();
+  };
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  auto drawn = randomSprites(random, 30, false);
+  u32 read[2] = {}, after[2] = {};
+  for(System* s : {&software, &hardware}) {
+    for(u32 n = 0; n < 64 * 64; n++) s->memory.write(4, GPUTexture + n * 4, 0xff00'0000 | u32(n * 0x01'0203));
+    prepare(*s, At, 3);
+    for(auto& one : drawn) sprite(*s, one);
+    prepare(*s, 0x2'0000, 3);
+    texture(*s, Memory::VRAMBase + At, 64, 64, 64);
+    sprite(*s, {{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0xffff'ffff});
+  }
+  auto before = gpu->statistics;
+  for(System* s : {&software, &hardware}) {
+    transfer(*s, Memory::VRAMBase + At, 8 << 10, 64, 8, 4);    //(rows 8-15, whole)
+    transfer(*s, Memory::VRAMBase + At, 4 | 30 << 10, 20, 3, 4);  //(rows 30-32, columns 4-23)
+    read[s == &hardware] = s->memory.read(4, Memory::VRAMBase + At + (10 * 64 + 20) * 4);
+    prepare(*s, 0x2'4000, 3);  //(a texture of rows of 32 over the transferred rows: decoded from memory)
+    texture(*s, Memory::VRAMBase + At + 8 * 256, 32, 16, 32);
+    sprite(*s, {{{0, 0, 0, 0}, {32, 16, 32, 16}}, 0xffff'ffff});
+    prepare(*s, At, 3);
+    s->ge.commands[GE::TextureMappingEnable] = 0;
+    sprite(*s, {{{0, 0, 10, 9}, {0, 0, 40, 13}}, 0xff35'79bd});
+    after[s == &hardware] = s->memory.read(4, Memory::VRAMBase + At + (11 * 64 + 20) * 4);
+  }
+  CHECK(read[1], read[0]);
+  CHECK(after[1], after[0]);
+  CHECK(after[0], 0xff35'79bdu);  //(the stencil, the alpha, kept: the transfer's)
+  CHECK(gpu->statistics.finishes, before.finishes + 1);  //(the CPU's read of the sprite's pixel)
+  before = gpu->statistics;
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, At, 3);
+    for(u32 n = 0; n < 8; n++) sprite(*s, drawn[n]);
+    transfer(*s, Memory::VRAMBase + At, 1 | 20 << 10, 16, 2, 2);  //(2-byte pixels from the middle of an 8888 one's)
+  }
+  CHECK(gpu->statistics.finishes > before.finishes, true);
+  for(System* s : {&software, &hardware}) {  //(rows written over the GPU's, then a finish before anything takes them)
+    sprite(*s, {{{0, 0, 0, 36}, {0, 0, 64, 48}}, 0xff42'8642});
+    transfer(*s, Memory::VRAMBase + At, 40 << 10, 64, 2, 4);
+    s->memory.read(4, Memory::VRAMBase + At + 38 * 256);
+  }
+  u32 found[2] = {};
+  for(System* s : {&software, &hardware}) {  //(every pixel it drew in a page written over, then more drawn there)
+    prepare(*s, 0x3'8000, 3);
+    sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 2}}, 0xff13'5713});
+    transfer(*s, Memory::VRAMBase + 0x3'8000, 0, 64, 2, 4);
+    s->memory.read(4, Memory::VRAMBase + 0x3'8000 + 8 * 256);  //(nothing it drew there: drawnOver()'s answer kept)
+    sprite(*s, {{{0, 0, 0, 4}, {0, 0, 64, 6}}, 0xff24'6824});
+    found[s == &hardware] = s->memory.read(4, Memory::VRAMBase + 0x3'8000 + 4 * 256 + 16);
+  }
+  CHECK(found[1], found[0]);
+  u32 bytes = vramApart(software, hardware);
+  if(bytes) std::printf("  %u bytes apart\n", bytes);
+  CHECK(bytes, 0u);
+  hardware.ge.setRenderer(nullptr);
+}
+
+//The CPU's stores over pixels the GPU drew (as Liberty City Stories writes a list over a picture it drew, which the
+//GE then reads): words over two rows, and halfwords over a 5650 frame buffer's pixels, memory's at once
+//(overwritten()), nothing finished, and read again (as the GE reads the list) without a finish either; a texture over
+//them decoded from memory, and a sprite drawn across them after. A byte into an 8888 pixel is only part of it: that
+//one finishes first. And rows stored over the GPU's, then a finish before anything takes them: not put back over; a
+//store through VRAM's third copy (the same bytes) as through the first, a 17th range apart finishing, and one through
+//its second copy (which rearranges them) finishing. As the software renderer has it each time.
+static auto gpuStoresOver() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::mt19937 random{20261021};
+  constexpr u32 At = 0x3'0000;
+  for(u32 format : {3u, 0u}) {
+    u32 rowBytes = 64 * (format == 3 ? 4 : 2);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto drawn = randomSprites(random, 30, false);
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, At, format);
+      for(auto& one : drawn) sprite(*s, one);
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 24}}, 0xff10'2030});  //(rows 0-23 drawn whole)
+    }
+    auto before = gpu->statistics;
+    u32 read[2] = {}, after[2] = {};
+    for(System* s : {&software, &hardware}) {
+      for(u32 n = 0; n < 2 * rowBytes / 4; n++) {  //(rows 8 and 9)
+        s->memory.write(4, Memory::VRAMBase + At + 8 * rowBytes + n * 4, 0xff00'0000 | n * 0x03'0507);
+      }
+      for(u32 n = 0; n < 20 && format == 0; n++) {  //(row 20, columns 4-23)
+        s->memory.write(2, Memory::VRAMBase + At + 20 * rowBytes + (4 + n) * 2, n * 0x0321);
+      }
+      read[s == &hardware] = s->memory.read(4, Memory::VRAMBase + At + 9 * rowBytes + 12);
+    }
+    CHECK(read[1], read[0]);
+    CHECK(gpu->statistics.finishes, before.finishes);
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0x2'0000, 3);  //(a texture over the rows stored: decoded from memory)
+      texture(*s, Memory::VRAMBase + At + 8 * rowBytes, 32, 2, 64, format);
+      sprite(*s, {{{0, 0, 0, 0}, {32, 2, 32, 2}}, 0xffff'ffff});
+      prepare(*s, At, format);
+      s->ge.commands[GE::TextureMappingEnable] = 0;
+      sprite(*s, {{{0, 0, 10, 7}, {0, 0, 40, 21}}, 0xff35'79bd});
+      after[s == &hardware] = s->memory.read(4, Memory::VRAMBase + At + 9 * rowBytes + 48 * 2);
+    }
+    CHECK(after[1], after[0]);
+    CHECK(gpu->statistics.finishes, before.finishes + 1);  //(the CPU's read of the sprite's pixels)
+    if(format == 3) {
+      for(System* s : {&software, &hardware}) {
+        sprite(*s, {{{0, 0, 10, 28}, {0, 0, 40, 34}}, 0xff12'3456});
+        before = gpu->statistics;
+        s->memory.write(1, Memory::VRAMBase + At + 30 * rowBytes + 20 * 4 + 1, 0x5a);
+        if(s == &hardware) CHECK(gpu->statistics.finishes, before.finishes + 1);
+      }
+    }
+    for(System* s : {&software, &hardware}) {  //(rows stored over the GPU's, then a finish before anything takes them)
+      sprite(*s, {{{0, 0, 0, 36}, {0, 0, 64, 48}}, 0xff42'8642});
+      for(u32 n = 0; n < rowBytes / 4; n++) s->memory.write(4, Memory::VRAMBase + At + 40 * rowBytes + n * 4, n);
+      s->memory.read(4, Memory::VRAMBase + At + 38 * rowBytes);
+    }
+    if(format == 3) {
+      for(System* s : {&software, &hardware}) {
+        sprite(*s, {{{0, 0, 0, 24}, {0, 0, 64, 34}}, 0xff22'4466});
+        before = gpu->statistics;
+        s->memory.write(4, 0x0440'0000 + At + 26 * rowBytes + 8, 0xfeed'beefu);  //(VRAM's third copy: the same bytes)
+        for(u32 n = 0; n < 16; n++) {  //(each a range of its own: the 17th a finish)
+          s->memory.write(4, Memory::VRAMBase + At + 30 * rowBytes + n * 8, n);
+          if(s == &hardware) CHECK(gpu->statistics.finishes, before.finishes + (n == 15));
+        }
+        sprite(*s, {{{0, 0, 0, 24}, {0, 0, 64, 34}}, 0xff66'4422});
+        before = gpu->statistics;
+        s->memory.write(4, 0x0420'0000 + At + 28 * rowBytes + 8, 0xdead'beefu);  //(its second copy rearranges them)
+        if(s == &hardware) CHECK(gpu->statistics.finishes, before.finishes + 1);
+      }
+    }
+    u32 bytes = vramApart(software, hardware);
+    if(bytes) std::printf("  format %u: %u bytes apart\n", format, bytes);
+    CHECK(bytes, 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+}
+
+//Bytes memory has the newest of over a target's pixels, then another target's newer pixels moved over them, the same
+//bytes as another format (God of War's 5650 and 8888 over the same memory, among its streamed writes): the moved
+//pixels are the newest, not memory's. An 8888 frame buffer drawn, a 5650 one over the same bytes drawn (the 8888's
+//pixels in its pages moved into it), the CPU's word stored over both (dead in each), the 5650 drawn over the word;
+//then the 8888 drawn in that page again, or taken as a texture from its first row (the 5650's pixels moved back into
+//it), and the word's place read. The word written after a finish instead, over pixels the 8888 drew before it (its
+//page's bytes memory's: beside), the 5650 drawn over it, then the 8888 taken as a texture. And bytes beside the
+//8888's pixels its drawn rectangle grows over as the 5650's pixels below move into it, not put back over at the
+//finish; and more than 16 such words apart (taken together, over a row it drew), then the 8888 taken as a texture
+//across the 5650's page: not moved, finished. As the software renderer has it each time.
+static auto gpuMovedOverMemorys() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 At = 0x3'0000, Word = 20 * 256 + 40;
+  auto as = [](System& s, u32 format, u32 address) {  //(8888 in rows of 64 pixels, or 5650 in rows of 128)
+    prepare(s, address, format);
+    s.ge.commands[GE::FrameBufferWidth] = format == 3 ? 64 : 128;
+    s.ge.commands[GE::TextureMappingEnable] = 0;
+  };
+  auto taken = [](System& s) {  //(the 8888 as a texture from its first row, 32 rows)
+    prepare(s, 0x2'0000, 3);
+    texture(s, Memory::VRAMBase + At, 64, 32, 64);
+    sprite(s, {{{0, 0, 0, 0}, {64, 32, 64, 32}}, 0xffff'ffff});
+  };
+  for(u32 variant : {0u, 1u, 2u, 3u, 4u}) {
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    u32 seen[2] = {}, read = variant < 3 ? Word : variant == 3 ? 256 + 80 : 2 * 256 + 16;
+    for(System* s : {&software, &hardware}) {
+      as(*s, 3, At);
+      if(variant < 3) {
+        sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff10'2030});
+        if(variant == 2) {  //(a finish, so no page is the GPU's: the word's page written)
+          s->memory.read(4, Memory::VRAMBase + At);
+          s->memory.write(4, Memory::VRAMBase + At + Word, 0x1234'5678);
+        }
+        as(*s, 0, At);
+        sprite(*s, {{{0, 0, 0, 16}, {0, 0, 64, 32}}, 0xff40'5060});
+        if(variant < 2) {  //(the word stored over both: dead in each; the 5650 drawn over it)
+          s->memory.write(4, Memory::VRAMBase + At + Word, 0x1234'5678);
+          sprite(*s, {{{0, 0, 0, 18}, {0, 0, 64, 22}}, 0xff70'8090});
+        }
+        if(variant == 0) {
+          as(*s, 3, At);
+          sprite(*s, {{{0, 0, 0, 28}, {0, 0, 64, 30}}, 0xffa0'b0c0});
+        } else {
+          taken(*s);
+        }
+      } else {
+        sprite(*s, {{{0, 0, 0, 0}, {0, 0, 8, variant == 3 ? 2.0f : 4.0f}}, 0xff10'2030});
+        if(variant == 3) s->memory.write(4, Memory::VRAMBase + At + 256 + 80, 0x1357'9bdf);  //(row 1, column 20)
+        for(u32 n = 0; n < 17 && variant == 4; n++) {  //(rows 1 and 3 from column 10, a pixel apart)
+          u32 at = (1 + 2 * (n & 1)) * 256 + (10 + 2 * (n >> 1)) * 4;
+          s->memory.write(4, Memory::VRAMBase + At + at, n * 0x0101'0101);
+        }
+        as(*s, 0, At + 0x1000);
+        sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 4}}, 0xff40'5060});
+        if(variant == 3) {
+          as(*s, 3, At);
+          sprite(*s, {{{0, 0, 0, 16}, {0, 0, 4, 18}}, 0xffa0'b0c0});
+        } else {
+          taken(*s);
+        }
+      }
+      seen[s == &hardware] = s->memory.read(4, Memory::VRAMBase + At + read);
+    }
+    CHECK(seen[1], seen[0]);
+    u32 bytes = vramApart(software, hardware);
+    if(bytes) std::printf("  variant %u: %u bytes apart\n", variant, bytes);
+    CHECK(bytes, 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+}
+
+//Memory's bytes changed in a target's pages it hasn't drawn in since the last finish (the CPU's word): taken from
+//memory again before a sprite draws over them (written(), revive()), nothing finished, and the pixels the sprite drew
+//found by the CPU after. And more than 16 ranges of words beside pixels it has drawn in a page it owns: taken
+//together, which may take in pixels the GPU drew between, so the target is filled afresh, what it drew put back
+//first. As the software renderer has it either way.
+static auto gpuRevived() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::mt19937 random{20261019};
+  constexpr u32 At = 0x3'0000;
+  for(u32 ranges : {1u, 20u}) {
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto drawn = randomSprites(random, 30, false);
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, At, 3);
+      for(auto& one : drawn) sprite(*s, one);
+      s->ge.settleAll();
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 32, 4}}, 0xff10'2030});  //(rows 0-3, columns 0-31: page 0x30)
+      if(ranges == 1) s->memory.write(4, Memory::VRAMBase + At + (40 * 64 + 20) * 4, 0xff12'3456);  //(page 0x32)
+      for(u32 n = 0; n < ranges && ranges > 1; n++) {  //(beside the sprite, a word apart)
+        s->memory.write(4, Memory::VRAMBase + At + ((n & 3) * 64 + 34 + n / 4 * 2) * 4, 0xff00'0000 | n * 0x10'1010);
+      }
+    }
+    auto before = gpu->statistics;
+    u32 seen[2] = {};
+    for(System* s : {&software, &hardware}) {
+      sprite(*s, {{{0, 0, 8, 34}, {0, 0, 50, 46}}, 0xff60'a0e0});
+      if(s == &hardware && ranges == 1) CHECK(gpu->statistics.finishes, before.finishes);
+      seen[s == &hardware] = s->memory.read(4, Memory::VRAMBase + At + (40 * 64 + 20) * 4);
+    }
+    CHECK(seen[1], seen[0]);
+    u32 bytes = vramApart(software, hardware);
+    if(bytes) std::printf("  %u ranges: %u bytes apart\n", ranges, bytes);
+    CHECK(bytes, 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+}
+
+//A frame buffer drawn, then taken as a texture from its top left by sprites drawn in tiles, each reaching further
+//across or down than the ones before (as God of War draws the picture it shrank the screen into back over the screen,
+//272 tiles a time): a copy of the place serves those that take as much of it or less, made again larger (to a power
+//of two) where one takes more, so there are few copies; every tile's pixels are the software renderer's at 1x, 2x and
+//3x. And at 2x and 3x, in machines afresh (the frame buffer drawn and nothing finished: the GPU's copies of it, at its
+//resolution), filtered tiles: one drawn from a copy of only what it takes, and again after a larger tile, from that
+//larger copy, held to what it takes (Push::held); and the larger tile, from the copy made larger for it (to a power of
+//two), and alone, from a copy of its own: the GPU's pixels the same each time. (Its texels 1:1 at the copy's
+//resolution, a tile samples none past what it takes, so a copy not held isn't caught here.)
+static auto gpuTiles() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::mt19937 random{20261020};
+  for(u32 scale : {1u, 2u, 3u}) {
+    if(scale > gpu->backend->mostScale) break;
+    gpu->resolution(scale);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto drawn = randomSprites(random, 40, false);
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0, 3);
+      for(auto& one : drawn) sprite(*s, one);
+      prepare(*s, 0x2'0000, 3);
+      texture(*s, Memory::VRAMBase, 64, 64, 64);
+    }
+    auto before = gpu->statistics;
+    for(u32 y = 0; y < 4; y++) {
+      for(u32 x = 0; x < 6; x++) {  //(each tile 10 by 12, its own texels 1:1: the copy of the corner to its own)
+        float left = x * 10, top = y * 12, right = left + 10, bottom = top + 12;
+        for(System* s : {&software, &hardware}) {
+          sprite(*s, {{{left, top, left, top}, {right, bottom, right, bottom}}, 0xffff'ffff});
+        }
+      }
+    }
+    u64 copies = gpu->statistics.copies - before.copies;
+    if(copies > 8) std::printf("  %ux: %llu copies for 24 tiles\n", scale, (unsigned long long)copies);
+    CHECK(copies <= 8, true);
+    u32 bytes = apart(software, hardware);
+    if(bytes) std::printf("  %ux: %u bytes apart\n", scale, bytes);
+    CHECK(bytes, 0u);
+    hardware.ge.setRenderer(nullptr);
+    if(scale > 1) {
+      //(each list of tiles in a machine afresh, its frame buffer drawn and nothing finished since, so the tiles take
+      //the GPU's copies of it at its resolution; into the frame buffers at VRAM's offset at, texels 1:1)
+      auto tiles = [&](std::vector<std::pair<u32, f32>> list) {
+        gpu->resolution(scale);
+        System machine;
+        machine.ge.setRenderer(gpu);
+        prepare(machine, 0, 3);
+        for(auto& one : drawn) sprite(machine, one);
+        auto made = gpu->statistics.copies;
+        for(auto [at, reach] : list) {
+          prepare(machine, at, 3);
+          texture(machine, Memory::VRAMBase + 0x2000, 64, 64, 64);
+          machine.ge.commands[GE::TextureFilter] = 1 | 1 << 8;
+          sprite(machine, {{{0, 0, 0, 0}, {reach, reach, reach, reach}}, 0xffff'ffff});
+        }
+        CHECK(gpu->statistics.copies > made, true);
+        std::vector<std::vector<u32>> pictures(list.size());
+        for(u32 n = 0; n < list.size(); n++) {
+          u32 size = list[n].second;
+          CHECK(gpu->picture(list[n].first, 64, 3, size, size, pictures[n], scale), true);
+        }
+        machine.ge.setRenderer(nullptr);
+        return pictures;
+      };
+      auto differ = [](const std::vector<u32>& a, const std::vector<u32>& b) {
+        u32 count = a.size() != b.size();
+        for(u32 n = 0; n < a.size() && n < b.size(); n++) count += a[n] != b[n];
+        return count;
+      };
+      auto three = tiles({{0x2'8000, 20}, {0x2'c000, 40}, {0x3'0000, 20}}), alone = tiles({{0x2'c000, 40}});
+      u32 off = differ(three[0], three[2]);
+      if(off) std::printf("  %ux: %u of the GPU's pixels differ from the larger copy\n", scale, off);
+      CHECK(off, 0u);
+      off = differ(three[1], alone[0]);  //(the larger tile: from the copy made larger for it, and from its own)
+      if(off) std::printf("  %ux: %u of the GPU's pixels differ from a copy made larger\n", scale, off);
+      CHECK(off, 0u);
+    }
+  }
+  gpu->resolution(1);
+}
+
 //The GPU's depth buffer against memory's: depth cleared by the CPU between two depth-tested sprites is taken (the
 //second sprite drawn), and a color pixel the CPU writes between them doesn't bring back memory's older depth (the
 //second sprite, behind the first, not drawn).
@@ -384,15 +1380,27 @@ static auto gpuBeside() -> void {
 }
 
 //The start-up check (check.cpp) a game's renderer goes through: on a GPU that draws right it passes, and leaves the
-//renderer as it was for the next machine (everything dropped, nothing of its own machine's kept).
+//renderer as it was for the next machine (everything dropped, nothing of its own machine's kept). Where the GPU
+//reads the frame buffer, its game-sized picture's 128 blended sprites read it; with nothing read, as
+//System::startRenderer() falls back to where reading fails, it passes too, reading nothing.
 static auto gpuCheck() -> void {
   auto gpu = renderer();
   if(!gpu) return;
   std::string error;
+  auto before = gpu->statistics;
   bool passed = gpu->check(error);
   if(!passed) std::printf("  %s\n", error.c_str());
   CHECK(passed, true);
   CHECK(gpu->ready(), true);
+  if(gpu->backend->reads) CHECK(gpu->statistics.readingDraws - before.readingDraws >= 128, true);
+  bool reads = gpu->backend->reads, readsBlending = gpu->backend->readsBlending;
+  gpu->backend->reads = gpu->backend->readsBlending = false;
+  before = gpu->statistics, error.clear();
+  passed = gpu->check(error);
+  if(!passed) std::printf("  nothing read: %s\n", error.c_str());
+  CHECK(passed, true);
+  CHECK(gpu->statistics.readingDraws, before.readingDraws);
+  gpu->backend->reads = reads, gpu->backend->readsBlending = readsBlending;
 }
 
 //At 2 and 3 times the PSP's resolution (GPU::resolution()): flat sprites over VRAM full of random bytes, in each
@@ -473,16 +1481,76 @@ static auto gpuScaled() -> void {
   gpu->resolution(1);
 }
 
+//Above 1x, two 2D quads of two triangles each meeting at a seam, the right one's texture mirrored (as Ridge Racer 2's
+//menu draws its picture), filtered, from a texture whose texels past the picture, across and down, are black: each
+//of the GPU's pixels at the quads' edges and at the seam keeps to the picture's texels, as the PSP's pixels' middles
+//do (white, none of the black blended in: triangle()'s held texels), and memory's bytes are the software renderer's.
+static auto gpuSeams() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  //(x from left to right and y 0-32, u from first to last and v 0-32)
+  auto quad = [](System& s, float left, float right, float first, float last) {
+    float corners[6][4] = {{first, 0, left, 0}, {last, 0, right, 0}, {first, 32, left, 32},
+                           {last, 0, right, 0}, {last, 32, right, 32}, {first, 32, left, 32}};
+    u32 to = GPUVertices;
+    for(auto& corner : corners) {
+      for(float value : {corner[0], corner[1]}) s.memory.write(4, to, bitsOf(value)), to += 4;
+      s.memory.write(4, to, 0xffff'ffff), to += 4;
+      for(float value : {corner[2], corner[3], 0.0f}) s.memory.write(4, to, bitsOf(value)), to += 4;
+    }
+    s.ge.vertexAddress = GPUVertices;
+    s.ge.primitive(GE::Triangles, 6);
+  };
+  for(u32 scale : {1u, 2u, 3u}) {
+    if(scale > gpu->backend->mostScale) {
+      std::printf("  %ux skipped: the GPU takes at most %ux\n", scale, gpu->backend->mostScale);
+      continue;
+    }
+    gpu->resolution(scale);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    for(System* s : {&software, &hardware}) {
+      //(the picture white, 32x32; past it, across and down, black)
+      for(u32 n = 0; n < 64 * 64; n++) {
+        s->memory.write(4, GPUTexture + n * 4, n % 64 < 32 && n / 64 < 32 ? 0xffff'ffff : 0xff00'0000);
+      }
+      prepare(*s, 0, 3);
+      texture(*s, GPUTexture, 64, 64, 64);
+      s->ge.commands[GE::TextureFilter] = 1 | 1 << 8;
+      quad(*s, 0, 32, 0, 32);
+      quad(*s, 32, 64, 32, 0);
+    }
+    std::vector<u32> pixels;
+    CHECK(gpu->picture(0, 64, 3, 64, 32, pixels, scale), true);
+    CHECK(pixels.size(), 64u * 32 * scale * scale);
+    u32 blended = 0;
+    for(u32 y = 0; y < 32 * scale && pixels.size() == 64u * 32 * scale * scale; y++) {
+      for(u32 x = 0; x < 64 * scale; x++) blended += (pixels[y * 64 * scale + x] & 0xff'ffff) != 0xff'ffff;
+    }
+    if(blended) std::printf("  %ux: %u of the GPU's pixels not the picture's white\n", scale, blended);
+    CHECK(blended, 0u);
+    u32 bytes = apart(software, hardware);
+    if(bytes) std::printf("  %ux: %u bytes apart\n", scale, bytes);
+    CHECK(bytes, 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+  gpu->resolution(1);
+}
+
 //Shader blending (docs/psp-gpu-renderers.md, "Shader blending"), where the GPU reads the frame buffer: overlapping
 //sprites blended with random factors (fixed ones too) and operations, dithered or not, with random logic operations
 //and write masks that keep part of a channel, over a frame buffer cleared to random colors and stencils, in each
 //format, at the PSP's resolution and at twice it: the software renderer's bytes exactly. Consecutive sprites with
 //the same settings are one draw, so where the GPU doesn't keep their order the renderer must split them (emit()).
+//Every blend reads here (Backend::readsBlending), as it does in rasterization order: without the order games
+//have the GPU's own blending (gpuBlendingApart).
 static auto gpuBlending() -> void {
   auto gpu = renderer();
   if(!gpu) return;
   if(!gpu->backend->reads) return void(std::printf("  skipped: the GPU doesn't read the frame buffer\n"));
   std::printf("  %s\n", gpu->backend->readsInOrder ? "in rasterization order" : "draws split where they overlap");
+  bool readsBlending = gpu->backend->readsBlending;
+  gpu->backend->readsBlending = true;
   std::mt19937 random{20261013};
   for(u32 scale : {1u, 2u}) {
     if(scale > gpu->backend->mostScale) continue;
@@ -537,21 +1605,262 @@ static auto gpuBlending() -> void {
     }
   }
   gpu->resolution(1);
+  gpu->backend->readsBlending = readsBlending;
+}
+
+//Without rasterization order (Backend::readsInOrder off, as here on any GPU that reads), each draw that reads waits
+//for the ones before and holds no overlapping primitives, so games' blending, thousands of draws a frame, would be
+//thousands of draws and barriers: the GPU blends with its own units then, and only what they can't come close to
+//reads. Blending in 8888 with the factors and operations the GPU has draws nothing in the shader and splits nothing,
+//close to the software renderer (the source term pixel.cpp's whole number, draw.frag's TERM: at least 85% of the
+//channels the same, no more than 3 in 1000 more than 8 off), as on a GPU that reads nothing at all; a write mask
+//keeping part of a channel, a logic operation, the absolute difference and doubled alphas read, dithered or not, and
+//so does every blend in a 16-bit frame buffer (the PSP narrows each blend's result to the format before the next
+//reads it, which the GPU's 8-bit target doesn't): the software renderer's bytes exactly, in each format.
+static auto gpuBlendingApart() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  bool readsInOrder = gpu->backend->readsInOrder, readsBlending = gpu->backend->readsBlending;
+  gpu->backend->readsInOrder = gpu->backend->readsBlending = false;
+  std::mt19937 random{20261014};
+  struct Round { u32 mode, fixedA, fixedB, dither, logic, mask; std::vector<Corners> sprites; };
+  auto draw = [&](System& s, u32 format, std::vector<Corners>& base, std::vector<Round>& rounds) {
+    auto& c = s.ge.commands;
+    prepare(s, 0, format);
+    c[GE::Dither0] = 0x7f80, c[GE::Dither0 + 1] = 0x3c4d, c[GE::Dither0 + 2] = 0xe1a5, c[GE::Dither0 + 3] = 0x96b2;
+    c[GE::ClearMode] = 1 | 7 << 8;
+    for(auto& one : base) sprite(s, one);
+    c[GE::ClearMode] = 0;
+    for(auto& r : rounds) {
+      c[GE::AlphaBlendEnable] = 1, c[GE::BlendMode] = r.mode;
+      c[GE::BlendFixedA] = r.fixedA, c[GE::BlendFixedB] = r.fixedB;
+      c[GE::DitherEnable] = r.dither;
+      c[GE::LogicOpEnable] = r.logic != 3, c[GE::LogicOp] = r.logic;
+      c[GE::MaskColor] = r.mask;
+      for(auto& one : r.sprites) sprite(s, one);
+    }
+    c[GE::AlphaBlendEnable] = 0, c[GE::DitherEnable] = 0, c[GE::LogicOpEnable] = 0, c[GE::MaskColor] = 0;
+  };
+  static constexpr u32 own[] = {0, 1, 2, 3, 4, 5, 7, 10};
+  //the GPU's own blending, in 8888: factors 0-5, 7 and fixed (10), operations 0-4, no logic operation or mask
+  {
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto before = gpu->statistics;
+    auto base = randomSprites(random, 12, false);
+    std::vector<Round> rounds;
+    for(u32 n = 0; n < 24; n++) {
+      //(without dual-source blending, a destination factor by the pixel's color, or one less twice its alpha, is
+      //approximated far off: settings())
+      static constexpr u32 single[] = {2, 3, 4, 5, 10};
+      u32 source = own[random() % 8];
+      u32 destination = gpu->backend->dualSource ? own[random() % 8] : single[random() % 5];
+      u32 mode = source | destination << 4 | (random() % 5) << 8;
+      rounds.push_back({mode, u32(random()) & 0xff'ffff, u32(random()) & 0xff'ffff, 0, 3, 0,
+                        randomSprites(random, 8, false)});
+    }
+    for(System* s : {&software, &hardware}) draw(*s, 3, base, rounds);
+    CHECK(gpu->statistics.primitives > before.primitives, true);
+    software.ge.settleAll(), hardware.ge.settleAll();
+    u64 channels = 0, same = 0, far = 0;
+    for(u32 n = 0; n < 64 * 48 * 4; n++) {
+      if(n % 4 == 3) continue;
+      s32 off = std::abs(s32(software.memory.vram[n]) - s32(hardware.memory.vram[n]));
+      channels++, same += off == 0, far += off > 8;
+    }
+    std::printf("  the GPU's own blending: of %llu channels %llu the same, %llu more than 8 off\n",
+                (unsigned long long)channels, (unsigned long long)same, (unsigned long long)far);
+    CHECK(far * 1000 <= channels * 3, true);
+    CHECK(same * 20 >= channels * 17, true);
+    CHECK(gpu->statistics.readingDraws, before.readingDraws);
+    CHECK(gpu->statistics.splits, before.splits);
+    hardware.ge.setRenderer(nullptr);
+  }
+  if(!gpu->backend->reads) {
+    std::printf("  what reads skipped: the GPU doesn't read the frame buffer\n");
+    gpu->backend->readsInOrder = readsInOrder, gpu->backend->readsBlending = readsBlending;
+    return;
+  }
+  //what reads: each round a mask keeping part of a channel, a logic operation, the absolute difference or a doubled
+  //alpha (as source or destination factor), with random factors and operations besides; in a 16-bit frame buffer
+  //also the GPU's own factors and operations alone, and then one sprite blended so, a draw that reads
+  for(u32 format : {3u, 0u, 1u, 2u}) {
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto before = gpu->statistics;
+    auto base = randomSprites(random, 12, false);
+    std::vector<Round> rounds;
+    for(u32 n = 0; n < 24; n++) {
+      u32 source = random() % 11, destination = random() % 11, operation = random() % 6;
+      u32 logic = 3, mask = 0, reason = n % (format == 3 ? 5 : 6);
+      if(reason == 0) mask = (random() & 0x7f'7f7f) | 0x01'0101;
+      if(reason == 1) logic = random() % 15, logic += logic >= 3;
+      if(reason == 2) operation = 5;
+      static constexpr u32 doubled[] = {6, 8, 9};
+      if(reason == 3) source = doubled[random() % 3];
+      if(reason == 4) destination = doubled[random() % 3];
+      if(reason == 5) source = own[random() % 8], destination = own[random() % 8], operation = random() % 5;
+      rounds.push_back({source | destination << 4 | operation << 8, u32(random()) & 0xff'ffff,
+                        u32(random()) & 0xff'ffff, u32(random()) % 2, logic, mask, randomSprites(random, 8, false)});
+    }
+    for(System* s : {&software, &hardware}) draw(*s, format, base, rounds);
+    CHECK(gpu->statistics.readingDraws > before.readingDraws, true);
+    CHECK(gpu->statistics.splits > before.splits, true);
+    if(format != 3) {
+      auto between = gpu->statistics;
+      for(System* s : {&software, &hardware}) {
+        s->ge.commands[GE::AlphaBlendEnable] = 1, s->ge.commands[GE::BlendMode] = 2 | 3 << 4;
+        sprite(*s, {{{0, 0, 4, 4}, {0, 0, 36, 28}}, 0x80'40c0ff});
+        s->ge.commands[GE::AlphaBlendEnable] = 0;
+      }
+      CHECK(gpu->statistics.readingDraws - between.readingDraws, u64(1));
+    }
+    u32 bytes = apart(software, hardware);
+    if(bytes) std::printf("  format %u: %u bytes apart\n", format, bytes);
+    CHECK(bytes, 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+  gpu->backend->readsInOrder = readsInOrder, gpu->backend->readsBlending = readsBlending;
+}
+
+//A frame buffer sampled as a texture declared taller than its picture (Midnight Club 3's bloom samples its 480x272
+//picture as a texture of 512 rows, whose last rows are other frame buffers'): 2D sprites, filtered, taking texels
+//from its first 48 rows, the last row's second texel at weight 0, while the rows past are another frame buffer's on
+//the GPU. The copy is taken on the GPU of the rows the sprites reach (draw.cpp's spriteReach()), nothing finished,
+//and the pixels are the software renderer's. Then the frame shown late (System's "Late Frames": GPU::shoot()), whose
+//shot is the frame buffer as memory has it once its run is done; and a short list's draws not handed to the GPU at
+//its end (GPU::submit()), but with the next frame or finish.
+static auto gpuTallTexture() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::mt19937 random{20261009};
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  auto drawn = randomSprites(random, 40, false);
+  GPU::Statistics before;
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, 0, 3);
+    for(auto& one : drawn) sprite(*s, one);
+    prepare(*s, 48 * 256, 0);  //(another frame buffer, 5650, from the first's row 48)
+    sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 16}}, 0x1234'5678});
+    prepare(*s, 0x2'0000, 3);
+    texture(*s, Memory::VRAMBase, 64, 128, 64);
+    s->ge.commands[GE::TextureFilter] = 0x101;
+    if(s == &hardware) before = gpu->statistics;
+    sprite(*s, {{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0});  //(1:1: row 47's v 47.5, rows 47 and 48, 48 at weight 0)
+    sprite(*s, {{{2, 1, 0, 0}, {34, 47, 20, 30}}, 0});
+  }
+  CHECK(gpu->statistics.finishes, before.finishes);
+  CHECK(gpu->statistics.copies > before.copies, true);
+  CHECK(apart(software, hardware), 0u);
+
+  //late: the frame buffer at 0x2'0000 shown, its shot taken; there once the run is done (finished here)
+  prepare(hardware, 0x2'0000, 3);
+  hardware.ge.commands[GE::TextureMappingEnable] = 0;
+  sprite(hardware, {{{0, 0, 0, 0}, {0, 0, 8, 8}}, 0xff00'ff00});
+  std::vector<u32> pixels;
+  u32 width = 0, height = 0, format = 0;
+  while(gpu->shot(pixels, width, height, format)) {}  //(none older left)
+  CHECK(gpu->shoot(0x2'0000, 64, 3, 64, 48), true);
+  hardware.ge.settleAll();
+  CHECK(gpu->shot(pixels, width, height, format), true);
+  CHECK(width == 64 && height == 48 && format == 3 && pixels.size() == 64u * 48, true);
+  u32 same = 0;
+  for(u32 y = 0; y < 48; y++) {
+    for(u32 x = 0; x < 64; x++) {
+      u32 pixel = hardware.memory.read(4, Memory::VRAMBase + 0x2'0000 + (y * 64 + x) * 4);
+      same += (pixels[y * 64 + x] & 0xff'ffff) == (pixel & 0xff'ffff);
+    }
+  }
+  CHECK(same, 64u * 48);
+  CHECK(gpu->shoot(0x2'0000, 64, 3, 64, 48), false);  //(the pages memory's now: memory has the picture)
+
+  //a short list's end: nothing handed over yet; a long one's, or a finish, hands it over
+  auto submits = gpu->statistics.submits;
+  sprite(hardware, {{{0, 0, 0, 0}, {0, 0, 4, 4}}, 0xff12'3456});
+  gpu->submit(hardware.ge);
+  CHECK(gpu->statistics.submits, submits);
+  for(u32 n = 0; n < 40; n++) {  //(each scissor its own draw)
+    hardware.ge.commands[GE::Scissor2] = (24 + n) | 47 << 10;
+    sprite(hardware, {{{0, 0, 8, 8}, {0, 0, f32(12 + n % 7), 12}}, 0xff00'0000 | n << 8});
+  }
+  gpu->submit(hardware.ge);
+  CHECK(gpu->statistics.submits, submits + 1);
+  hardware.ge.settleAll();
+  CHECK(hardware.memory.read(4, Memory::VRAMBase + 0x2'0000 + (3 * 64 + 3) * 4) & 0xff'ffff, 0x12'3456u);
+  hardware.ge.setRenderer(nullptr);
+}
+
+//A pipeline cache kept between sessions (System's "Pipeline Cache"): the renderer's pipelines, after the start-up
+//check made some, given to a renderer made afresh, which takes them (its cache as big from the start) and draws as
+//right (its check passes); and data it must leave out, each made into a renderer whose cache starts without it and
+//which draws right: another driver version's, another driver cache UUID's, a file cut short, one whose second half
+//is zeros (a power cut after it was written), and junk. (Where a driver's cache data is no bigger for the pipelines
+//it has than a renderer's at its start, as lavapipe's in CI, the sizes say nothing of what was taken.)
+static auto gpuPipelineCache() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::string error;
+  CHECK(gpu->check(error), true);
+  auto data = gpu->backend->pipelineData();
+  CHECK(data.size() > 64, true);
+  auto start = GPU::vulkan(nullptr, error, false);
+  CHECK((bool)start, true);
+  if(!start) return;
+  size_t empty = start->backend->pipelineData().size();
+  std::printf("  pipeline data: %zu bytes, a renderer's at its start %zu\n", data.size(), empty);
+  bool sized = data.size() > empty;
+  auto again = GPU::vulkan(nullptr, error, false, data);
+  CHECK((bool)again, true);
+  if(!again) return;
+  CHECK(again->backend->pipelineData().size() >= data.size(), true);
+  CHECK(again->check(error), true);
+  auto driver = data, uuid = data, cut = data, zeroed = data;
+  driver[24] ^= 1;   //(vulkan.cpp's Kept: the driver's version)
+  uuid[32] ^= 0xff;  //(its cache UUID)
+  cut.resize(data.size() / 2);
+  std::fill(zeroed.begin() + data.size() / 2, zeroed.end(), 0);
+  for(auto& left : {driver, uuid, cut, zeroed, std::vector<u8>(64, 0x5a)}) {
+    auto other = GPU::vulkan(nullptr, error, false, left);
+    CHECK((bool)other, true);
+    if(!other) continue;
+    if(sized) CHECK(other->backend->pipelineData().size() < data.size(), true);
+    CHECK(other->check(error), true);
+  }
 }
 
 auto gpuTests() -> Tests {
   return {
     {"gpu sprites against the software renderer", gpuSprites},
     {"gpu render to texture against the software renderer", gpuRenderToTexture},
+    {"gpu render to texture from a frame buffer taller than its picture, nothing finished", gpuTallTexture},
     {"gpu samples near the software renderer", gpuSamples},
+    {"gpu fast mode: 3D transformed by the GPU, near the software renderer", gpuFast},
+    {"gpu fast mode: the GE's rules for which triangles are drawn", gpuFastRules},
+    {"gpu fast mode: 3D the GPU transformed is taken by render to texture after", gpuFastMeshChanges},
     {"gpu blending in the shader against the software renderer", gpuBlending},
+    {"gpu blending without rasterization order: the GPU's own, the rest read", gpuBlendingApart},
     {"gpu lost: the software renderer draws instead", gpuLost},
     {"gpu refused primitives drawn by the software renderer", gpuRefused},
     {"gpu render-to-texture copies kept to a bound", gpuCopies},
+    {"gpu render to texture taken again in part: the strip an effect draws into", gpuPartialCopies},
+    {"gpu render to texture from two frame buffers, one below the other, nothing finished", gpuStackedTexture},
+    {"gpu a texture decoded again before the GPU has the first: its texels kept till then", gpuTexelsKept},
+    {"gpu a finish puts back only the pages drawn in, not memory's newer bytes between", gpuBetweenPages},
+    {"gpu a PRIM it refuses among the drawing threads: drawn in order, the GPU's pages kept", gpuRefusedAmongThreads},
+    {"gpu the same memory as frame buffers of other formats and places: moved on the GPU", gpuMoves},
+    {"gpu frame buffers side by side in one target's rows", gpuSideBySide},
+    {"gpu a block transfer over pixels it drew: memory's at once, nothing finished", gpuTransferOver},
+    {"gpu the CPU's stores over pixels it drew: memory's at once, nothing finished", gpuStoresOver},
+    {"gpu pixels moved over bytes memory has the newest of: the moved ones newest", gpuMovedOverMemorys},
+    {"gpu memory's bytes in its pages taken again, not the target afresh", gpuRevived},
+    {"gpu a texture's place taken by tiles reaching further: few copies, held to what each takes", gpuTiles},
     {"gpu depth buffer follows memory's changes", gpuDepth},
     {"gpu bytes beside its pixels are memory's, without waiting", gpuBeside},
     {"gpu start-up check passes on a GPU that draws right", gpuCheck},
     {"gpu at 2 and 3 times the resolution: memory's bytes exact", gpuScaled},
+    {"gpu above 1x: 2D quads meeting at a seam keep to their texels", gpuSeams},
+    {"gpu pipelines kept between sessions", gpuPipelineCache},
   };
 }
 

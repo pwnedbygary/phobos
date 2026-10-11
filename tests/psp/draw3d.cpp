@@ -203,6 +203,12 @@ static auto draw3dClipping() -> void {
   u32 color = c.pixel(8, 4);
   auto near = [](u32 value, u32 expected) { return value + 1 >= expected && value <= expected + 1; };
   CHECK(near(color & 0xff, 90) && near(color >> 8 & 0xff, 111) && near(color >> 16 & 0xff, 53), true);
+  //the four corners left (red (2, 2), green (14, 2), then the cuts (12.5, 5) and (3.5, 5), a quarter of the way to
+  //blue: (0, 191, 63) and (191, 0, 63)) are split from green to the second cut, as the PSP split 3d-clip's: the steps
+  //across the two triangles then give (6, 4) and (9, 4) these colors; split from red to the first cut, as a fan,
+  //they'd be (132, 68, 52) and (69, 132, 52)
+  CHECK(c.pixel(6, 4), 132 | 69 << 8 | 52 << 16);
+  CHECK(c.pixel(9, 4), 68 | 132 << 8 | 52 << 16);
   c.ge.commands[GE::ShadeMode] = 0;   //flat: every piece takes the last vertex's color, blue
   draw();
   CHECK(c.pixel(8, 4), 0x00ff'0000);
@@ -259,11 +265,12 @@ static auto draw3dCulling() -> void {
   CHECK(drawn({a, d, b}), true);
 }
 
-//Perspective: texture coordinates blended as u/w and 1/w. Corners (0, 0) u 0 w 1, (16, 0) u 16 w 4, (0, 16) u 0 w 1:
-//at pixel (7, 0), sample point (7.4375, 0.4375), the weights are 0.5078125, 0.46484375 and 0.02734375, so
-//u = (0.46484375 * 16 / 4) / (0.5078125 + 0.46484375 / 4 + 0.02734375) = 2.85: texel 2. Blended straight (2D), 7.4375.
-//With the second corner's q 0.5 (texture projection), q is blended the same way and divides:
-//u = 1.859375 / (0.5078125 + 0.46484375 * 0.5 / 4 + 0.02734375) = 3.13: texel 3.
+//Perspective: texture coordinates follow u/w and 1/w (draw.cpp: the GE's own divide, part 60). Corners (0, 0) u 0
+//w 1, (16, 0) u 16 w 4, (0, 16) u 0 w 1: at pixel (7, 0), sample point (7.4375, 0.4375), the weights are 0.5078125,
+//0.46484375 and 0.02734375, and the true blend u = (0.46484375 * 16 / 4) / (0.5078125 + 0.46484375 / 4 + 0.02734375)
+//= 2.85 lies well inside texel 2, where the GE's divide lands too. Blended straight (2D), 7.4375. With the second
+//corner's q 0.5 (texture projection), q goes the same way and divides: 1.859375 / (0.5078125 + 0.46484375 * 0.5 / 4
+//+ 0.02734375) = 3.13, texel 3.
 static auto draw3dPerspective() -> void {
   Scene c;
   c.texture();
@@ -305,12 +312,57 @@ static auto draw3dPerspective() -> void {
   CHECK(c.pixel(7, 0) & 0xff, 7);
 }
 
+//Perspective texels as a PSP draws them (draw.cpp's GE divide, docs/psp-core.md part 60): two of round 5's pictures
+//(tools/psp-measure's perspectiveWall()), drawn here as there: the lens (near 0.5, far 10), a 256x256 viewport at
+//2048, a 256x256 texture whose texel (x, y) is x | y << 8, repeating, nearest, replaced. The pixels checked are the
+//owner's PSP's: persp-w3 (w 3 at every corner, u 0 to 1024 texels) at (0, 0), (4, 0) and (0, 128), a texel lower than
+//a plain float divide gives; persp-divide (u / w the same at every corner) at (2, 2), a texel row lower than it, and at
+//(102, 62) and (135, 81), which the two chords set two counts low pin (without them, texel x 0xb3 and 0xf7; the float
+//divide gets (135, 81) right, not (102, 62)). Four pixels at a time and one at a time alike.
+static auto draw3dPerspectiveMeasured() -> void {
+  for(bool fours : {true, false}) {
+    Scene c;
+    auto& g = c.ge;
+    g.fourPixels = fours;
+    g.commands[GE::FrameBufferWidth] = 256, g.commands[GE::DepthBufferPointer] = 0x4'0000;
+    g.commands[GE::DepthBufferWidth] = 256;
+    g.commands[GE::ViewportXScale] = f24(128), g.commands[GE::ViewportYScale] = f24(-128);
+    g.commands[GE::ViewportZScale] = f24(-32768), g.commands[GE::ViewportZCenter] = f24(32767);
+    g.commands[GE::OffsetX] = (2048 - 128) << 4, g.commands[GE::OffsetY] = (2048 - 128) << 4;
+    for(u32 n = 0; n < 16; n++) g.projection[n] = 0;
+    g.projection[0] = g.projection[5] = f24(1), g.projection[10] = f24(-1.10526316f), g.projection[11] = f24(-1);
+    g.projection[14] = f24(-1.05263158f);
+    for(u32 y = 0; y < 256; y++) {
+      for(u32 x = 0; x < 256; x++) c.memory.write(4, Texture3D + (y * 256 + x) * 4, x | y << 8 | 0x80 << 16);
+    }
+    g.commands[GE::TextureMappingEnable] = 1;
+    g.commands[GE::TextureAddress0] = Texture3D & 0xff'ffff;
+    g.commands[GE::TextureBufferWidth0] = (Texture3D >> 24 & 0xf) << 16 | 256;
+    g.commands[GE::TextureSize0] = 8 << 8 | 8, g.commands[GE::TextureFormat] = 3, g.commands[GE::TextureFunction] = 3;
+    auto texel = [&](u32 x, u32 y) { return c.memory.read(4, VRAM3D + (y * 256 + x) * 4) & 0xffff; };
+    auto wall = [&](float near, float far, float size, float uLeft, float uRight) {
+      c.memory.fill(VRAM3D, 0, 0x4'0000);
+      c.draw(GE::Triangles, {{uLeft, 0, 0xffff'ffff, -size, size, near}, {uRight, 0, 0xffff'ffff, size, size, far},
+                             {uLeft, 1, 0xffff'ffff, -size, -size, near}, {uRight, 0, 0xffff'ffff, size, size, far},
+                             {uRight, 1, 0xffff'ffff, size, -size, far}, {uLeft, 1, 0xffff'ffff, -size, -size, near}});
+    };
+    wall(-3, -3, 3, 0, 4);  //persp-w3
+    CHECK(texel(0, 0), 0x0001u);
+    CHECK(texel(4, 0), 0x0011u);
+    CHECK(texel(0, 128), 0x8001u);
+    wall(-1, -4, 1, 4, 16);  //persp-divide
+    CHECK(texel(2, 2), 0x000cu);
+    CHECK(texel(102, 62), 0x01b2u);
+    CHECK(texel(135, 81), 0x00f6u);
+  }
+}
+
 //Fog: FOG1 1, FOG2 0.5: a vertex at view z 0 keeps half its color, (0 + 1) * 0.5 = 0.5, 128 of 255:
 //red (0 * 128 + 255 * 127 + 255) / 256 = 127 from the fog color; green (255 * 128 + 255) / 256 = 128. At z 1, fog 1:
-//none; at z -0.9, 0.05: 12 of 255. Not in through mode. Across a triangle the fog is blended from the corners: from
-//1 (z 1) at two to 0 (z -1) at the third, at pixel (7, 0) (the third's weight 0.46484375) it's 0.53515625, 137. A
-//sprite is split at its middle column, each half taking the fog of the corner on the other side, whichever corner
-//comes first.
+//none; at z -0.9, 0.05: 12 of 255. Not in through mode. Across a triangle the fog is converted to 0-255 at each
+//corner, then blended as a color (measured: ramp-fog): from 255 (z 1) at two to 0 (z -1) at the third, at pixel
+//(7, 0) (the third's weight 30720/65536) it's 255 × 34816/65536 = 135.46875, 135. A sprite is split at its middle
+//column, each half taking the fog of the corner on the other side, whichever corner comes first.
 static auto draw3dFog() -> void {
   Scene c;
   c.ge.commands[GE::FogEnable] = 1;
@@ -332,7 +384,13 @@ static auto draw3dFog() -> void {
   c.ge.commands[GE::VertexType] = 0x19f;
   c.clear();
   c.draw(GE::Triangles, {{0, 0, 0xff00'ff00, 0, 0, 1}, {0, 0, 0xff00'ff00, 16, 0, -1}, {0, 0, 0xff00'ff00, 0, 16, 1}});
-  CHECK(c.pixel(7, 0), u32((255 * 136 + 255) / 256) << 8 | u32((255 * 119 + 255) / 256));  //at (7.5, 0.5)
+  CHECK(c.pixel(7, 0), u32((255 * 135 + 255) / 256) << 8 | u32((255 * 120 + 255) / 256));  //at (7.5, 0.5)
+  //fog amounts stepped as colors are (draw.cpp's stepped(); "draw steps" works the same triangle out): 0, 128 and 0
+  //at (0, 0), (15, 0) and (0, 4) leave pixel (7, 1) 63 of fog, where the true blend is 64
+  c.clear();
+  c.draw(GE::Triangles,
+         {{0, 0, 0xff00'ff00, 0, 0, -1}, {0, 0, 0xff00'ff00, 15, 0, 0}, {0, 0, 0xff00'ff00, 0, 4, -1}});
+  CHECK(c.pixel(7, 1), u32(255 - 63) | 63u << 8);
   for(bool first : {true, false}) {  //no fog (z 1) at the left corner, all fog (z -1) at the right, either order
     c.clear();
     V3 left{0, 0, 0xff00'ff00, 0, 0, 1}, right{0, 0, 0xff00'ff00, 8, 4, -1};
@@ -584,8 +642,8 @@ static auto draw3dEnvironmentMap() -> void {
 //where they reach past it (to z -3: a third of the way, at x 5.5, so columns 1-4), the new end's color blended a
 //third of the way in 256ths as a triangle's (255 * 171 / 256 = 170), the colors then along the rest (at column 4,
 //(255 * 16 + 170 * 48) / 64 = 191); with DEPTH_CLIP_ENABLE off, dropped for that z / w; with flat shading, the
-//cut-away end's color; fog blended along them (none at z 1, all at z -1: at column 4's middle, 72 of 128
-//sixteenths along, 0.4375 left); dropped with an end off the screen.
+//cut-away end's color; fog converted to 0-255 at each end then blended (none at z 1 → 255, all at z -1 → 0: at
+//column 4's middle, 72 of 128 sixteenths along, 255 × 0.4375 = 111.5625, 111); dropped with an end off the screen.
 static auto draw3dLines() -> void {
   Scene c;
   c.draw(GE::Lines, {{0, 0, 0xff00'00ff, 1.5f, 2.5f, 0}, {0, 0, 0xff00'00ff, 9.5f, 2.5f, 1}});
@@ -613,7 +671,7 @@ static auto draw3dLines() -> void {
   c.ge.commands[GE::FogColor] = 0x00'00ff;
   c.clear();
   c.draw(GE::Lines, {{0, 0, 0xff00'ff00, 0, 0.5f, 1}, {0, 0, 0xff00'ff00, 8, 0.5f, -1}});
-  u32 f = u32(0.4375f * 256);
+  u32 f = u32(255 * 0.4375f);  //0-255 at the ends, then blended (not the 0-1 × 256 at the pixel)
   CHECK(c.pixel(4, 0), u32((255 * f + 255) / 256) << 8 | u32((255 * (255 - f) + 255) / 256));
   c.ge.commands[GE::FogEnable] = 0;
   c.clear();
@@ -788,11 +846,13 @@ static auto draw3dBoundingBoxes() -> void {
 }
 
 //Four pixels at a time (ares/psp/ge/four.cpp) against one at a time: random primitives, 2D and 3D (in perspective,
-//lit now and then with the shine kept apart), triangles, strips, fans and sprites, with random settings of all the
+//lit now and then with the shine kept apart, now and then with far-reaching texture coordinates, the texture matrix's
+//q, or reaching far past the picture), triangles, strips, fans and sprites, with random settings of all the
 //pixel pipeline and textures read, drawn by two machines alike but for the four-pixel path, over the same random
 //VRAM (colors, stencils and depths); the frame and depth buffers must come out the same, byte for byte, and in the
-//end all of VRAM. Now and then the settings send a primitive a pixel at a time (the stencil test, a logic operation,
-//the depth buffer on the frame buffer, a texture where it draws), which must be the same too.
+//end all of VRAM. A quarter of them test the stencil, with every comparison and operation. Now and then the settings
+//send a primitive a pixel at a time (a logic operation, the depth buffer on the frame buffer, a texture where it
+//draws), which must be the same too.
 static auto draw3dFours() -> void {
   constexpr u32 Width = 64, Height = 40, Depth = 0x10'0000, Area = 0x0900'0000, AreaSize = 1 << 20;
   constexpr u32 Bits[8] = {16, 16, 16, 32, 4, 8, 16, 32};
@@ -842,7 +902,7 @@ static auto draw3dFours() -> void {
     set(GE::DepthTestEnable, chance(60));
     set(GE::DepthTest, below(8));
     set(GE::DepthMask, chance(30));
-    set(GE::StencilTestEnable, chance(8));
+    set(GE::StencilTestEnable, chance(25));
     set(GE::StencilTest, fields({{0, 8}, {8, 256}, {16, 256}}));
     set(GE::StencilOperation, fields({{0, 6}, {8, 6}, {16, 6}}));
     set(GE::AlphaBlendEnable, chance(50));
@@ -900,6 +960,18 @@ static auto draw3dFours() -> void {
       }
     }
     bool flat = chance(35);  //2D: through mode
+    //In 3D, now and then the perspective divide (part 60) at its far reaches: texture coordinates over dozens of
+    //repeats with corners from just past the near plane to nearly the far one, or the texture matrix's own q (from
+    //the texture coordinates, so it varies, and at times goes below 0).
+    bool wide = !flat && chance(25);
+    bool projected = textured && !flat && chance(15);
+    set(GE::TextureMapMode, projected ? 1 | 1 << 8 : 0);
+    float matrix[12];
+    for(auto& value : matrix) value = real(-1, 1);
+    matrix[11] = real(0.25f, 2);
+    //(and now and then, triangles reaching far past the picture, though not off the GE's screen: a pixel's s, t, q,
+    //colors and depth stepped from a corner thousands of pixels away)
+    float reach = !flat && chance(5) ? real(10, 55) : 1;
     u32 lit = !flat && chance(15);
     set(GE::LightingEnable, lit);
     if(lit) {
@@ -915,6 +987,7 @@ static auto draw3dFours() -> void {
     }
     for(Scene* c : {&fours, &single}) {
       for(auto [command, value] : commands) c->ge.commands[command] = value;
+      for(u32 k = 0; k < 12; k++) c->ge.textureMatrix[k] = f24(matrix[k]);
       if(textured && format >= 4) c->ge.loadClut();
     }
 
@@ -925,8 +998,8 @@ static auto draw3dFours() -> void {
     //(often every vertex of the primitive the same color, white or not: blended, it lands on whole numbers)
     u32 one = chance(30) ? (chance(50) ? 0xffff'ffff : u32(random())) : 0;
     for(u32 k = 0; k < count; k++) {
-      float u = flat ? real(-4, float(4 << widthBits)) : real(-0.2f, 1.3f);
-      float v = flat ? real(-4, float(4 << heightBits)) : real(-0.2f, 1.3f);
+      float u = flat ? real(-4, float(4 << widthBits)) : wide ? real(-40, 40) : real(-0.2f, 1.3f);
+      float v = flat ? real(-4, float(4 << heightBits)) : wide ? real(-40, 40) : real(-0.2f, 1.3f);
       u32 color = one ? one : chance(20) ? 0xffff'ffff : u32(random());
       float normal[3], position[3];
       for(auto& value : normal) value = real(-1, 1);
@@ -936,9 +1009,9 @@ static auto draw3dFours() -> void {
         position[1] = std::round(real(-8, Height + 8) * 16) / 16;
         position[2] = real(0, 65535);
       } else {
-        position[2] = real(-4, -0.6f);
-        position[0] = real(-1.3f, 1.3f) * -position[2];
-        position[1] = real(-1.3f, 1.3f) * -position[2];
+        position[2] = wide ? real(-9.5f, -0.52f) : real(-4, -0.6f);
+        position[0] = real(-1.3f, 1.3f) * -position[2] * reach;
+        position[1] = real(-1.3f, 1.3f) * -position[2] * reach;
       }
       for(Scene* c : {&fours, &single}) {
         u32 to = at;
@@ -966,16 +1039,95 @@ static auto draw3dFours() -> void {
   CHECK(fours.memory.vram == single.memory.vram, true);
 }
 
+//A renderer that draws nothing, for what the GE does before it hands primitives over; transforms: it takes 3D
+//triangles untransformed, as Vulkan (fast) does (meshes()).
+struct NothingDrawn : GE::Renderer {
+  bool transforms = false;
+  auto ready() const -> bool override { return true; }
+  auto begin(GE&, const GE::Look&, bool, const GE::Region&) -> bool override { return true; }
+  auto triangle(const GE::Vertex&, const GE::Vertex&, const GE::Vertex&) -> void override {}
+  auto sprite(const GE::Job&) -> void override {}
+  auto point(const GE::Vertex&) -> void override {}
+  auto line(const GE::Job&, const std::vector<GE::LinePixel>&) -> void override {}
+  auto submit(GE&) -> void override {}
+  auto finish(GE&) -> void override {}
+  auto written(GE&, u32) -> void override {}
+  auto forget(GE&) -> void override {}
+  auto holds(GE&, const GE::Sampler&, u32, u32) -> bool override { return false; }
+  auto drawnOver(GE&, u32, u32) -> bool override { return false; }
+  auto besideChanged(GE&, u32, u32) -> void override {}
+  auto meshes(GE&, const GE::Transform&, u32) -> bool override { return transforms; }
+};
+
+//What a primitive costs the GE's time (GE::owe(), for kernel/ge.cpp's geTime()), counted as it's set up, the same
+//whichever renderer then draws it: the software renderer, one that draws nothing, and one that transforms 3D
+//triangles itself. A triangle counts its area inside the scissor rectangle (32 pixels; a 6x6 scissor cuts its corner
+//off: 28; one of 20 cut below row 6 alone: 16.8), a sprite its rectangle there (16; one of 7x8 cut to 4x5: 20), a
+//line the pixels it lights there (8 of the 8 columns it crosses; cut, 5; leaving the rectangle across it, the 4 the
+//software renderer lights; past it, none), a point one if it's inside (3 of 4); and each set up, one primitive (the
+//point outside isn't).
+static auto draw3dTimeCounted() -> void {
+  NothingDrawn nothing, transforming;
+  transforming.transforms = true;
+  for(GE::Renderer* renderer : {static_cast<GE::Renderer*>(nullptr), static_cast<GE::Renderer*>(&nothing),
+                                static_cast<GE::Renderer*>(&transforming)}) {
+    Scene c;
+    c.ge.setRenderer(renderer);
+    auto counted = [&](u64 pixels, u64 primitives) {
+      CHECK(c.ge.owedPixels, pixels);
+      CHECK(c.ge.owedPrimitives, primitives);
+      c.ge.owedPixels = c.ge.owedPrimitives = 0;
+    };
+    u32 white = 0xffff'ffff;
+    auto triangle = [&] {
+      c.draw(GE::Triangles, {{0, 0, white, 0, 0, 0.1f}, {0, 0, white, 8, 0, 0.1f}, {0, 0, white, 0, 8, 0.1f}});
+    };
+    triangle();
+    counted(32, 1);
+    c.draw(GE::Sprites, {{0, 0, white, 2, 1, 0.1f}, {0, 0, white, 6, 5, 0.1f}});
+    counted(16, 1);
+    c.draw(GE::Lines, {{0, 0, white, 1, 1, 0.1f}, {0, 0, white, 9, 1, 0.1f}});
+    counted(8, 1);
+    c.ge.commands[GE::Scissor2] = 5 << 10 | 5;
+    triangle();
+    counted(28, 1);
+    c.draw(GE::Triangles, {{0, 0, white, 0, 0, 0.1f}, {0, 0, white, 4, 0, 0.1f}, {0, 0, white, 0, 10, 0.1f}});
+    counted(16, 1);
+    c.draw(GE::Sprites, {{0, 0, white, 2, 1, 0.1f}, {0, 0, white, 9, 9, 0.1f}});
+    counted(20, 1);
+    c.draw(GE::Lines, {{0, 0, white, 1, 1, 0.1f}, {0, 0, white, 9, 1, 0.1f}});
+    counted(5, 1);
+    c.clear();
+    c.draw(GE::Lines, {{0, 0, white, 1, 4, 0.1f}, {0, 0, white, 9, 8, 0.1f}});
+    if(!renderer) {
+      u32 lit = 0;
+      for(u32 y = 0; y < 16; y++) {
+        for(u32 x = 0; x < 16; x++) lit += c.pixel(x, y) != 0;
+      }
+      CHECK(lit, 4u);
+    }
+    counted(4, 1);
+    c.draw(GE::Lines, {{0, 0, white, 1, 8, 0.1f}, {0, 0, white, 9, 8, 0.1f}});
+    counted(0, 1);
+    c.draw(GE::Points, {{0, 0, white, 1, 1, 0.1f}, {0, 0, white, 2, 3, 0.1f}, {0, 0, white, 5, 5, 0.1f},
+                        {0, 0, white, 7, 2, 0.1f}});
+    counted(3, 3);
+    c.ge.setRenderer(nullptr);
+  }
+}
+
 auto draw3dTests() -> Tests {
   return {
     {"draw3d transform", draw3dTransform}, {"draw3d outside", draw3dOutside}, {"draw3d clipping", draw3dClipping},
-    {"draw3d culling", draw3dCulling}, {"draw3d perspective", draw3dPerspective}, {"draw3d fog", draw3dFog},
+    {"draw3d culling", draw3dCulling}, {"draw3d perspective", draw3dPerspective},
+    {"draw3d perspective texels as a PSP draws them", draw3dPerspectiveMeasured}, {"draw3d fog", draw3dFog},
     {"draw3d depth range", draw3dDepthRange}, {"draw3d texture coordinates", draw3dTextureCoordinates},
     {"draw3d morph and skin", draw3dMorphAndSkin}, {"draw3d lighting ambient", draw3dLightingAmbient},
     {"draw3d lighting diffuse", draw3dLightingDiffuse}, {"draw3d lighting point and spot", draw3dLightingPointAndSpot},
     {"draw3d lighting specular", draw3dLightingSpecular}, {"draw3d environment map", draw3dEnvironmentMap},
     {"draw3d lines", draw3dLines}, {"draw3d bounding boxes", draw3dBoundingBoxes},
     {"draw3d four pixels at a time against one", draw3dFours},
+    {"draw3d the GE's time, any renderer", draw3dTimeCounted},
   };
 }
 

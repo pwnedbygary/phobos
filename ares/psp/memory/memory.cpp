@@ -2,6 +2,8 @@
 
 namespace ares::PlayStationPortable {
 
+thread_local bool Memory::knownDrawn = false;
+
 //Where in VRAM an offset seen through copy 0-3 is (see memory.hpp), and the reverse: the offset through that copy
 //that sees a byte of VRAM. Each keeps an offset in its 16 KiB.
 auto Memory::vramOffset(u32 copy, u32 seen) -> u32 {
@@ -104,12 +106,14 @@ auto Memory::pointer(u32 address, u32 size) -> u8* {
     return size <= ram.size() - offset ? &ram[offset] : nullptr;
   }
   if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow) {
-    if(vramBusy) {  //(the first and third copies: the bytes; the others: the 16 KiB they rearrange, its four pages)
+    if(!knownDrawn && vramBusy) {  //(the first and third copies: the bytes; others: the 16 KiB they rearrange)
       u32 seen = (physical - VRAMBase) % VRAMSize, last = std::min<u32>(seen + size, VRAMSize) - 1;
       if((physical - VRAMBase) / VRAMSize & 1) seen &= ~0x3fffu, last |= 0x3fff;
       for(u32 page = seen / PageSize; page <= last / PageSize; page++) {
         if(!vramPageBusy(page)) continue;
-        if(!vramDrawnOver || vramDrawnOver(seen, last)) finishDrawing();
+        if(vramDrawnOver && !vramDrawnOver(seen, last)) break;
+        if(finishDrawingOver) finishDrawingOver(seen, last);
+        else finishDrawing();
         break;
       }
     }
@@ -161,6 +165,13 @@ auto Memory::read(u32 size, u32 address) -> u32 {
 
 //The CPU's stores, as aligned as its loads (and HLE functions', likewise a byte at a time across such a piece).
 auto Memory::write(u32 size, u32 address, u32 data) -> void {
+  if(vramBusy && vramStoring && !knownDrawn) {  //(not through the second or fourth copy, which rearrange the bytes)
+    u32 physical = address & 0x1fff'ffff;
+    if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow && !((physical - VRAMBase) / VRAMSize & 1)) {
+      u32 seen = (physical - VRAMBase) % VRAMSize;
+      if(seen + size <= VRAMSize) vramStoring(seen, seen + size - 1);
+    }
+  }
   u8* bytes = pointer(address, size);
   if(!bytes && size > 1 && reaches(address, size)) {
     for(u32 n = 0; n < size; n++) write(1, address + n, data >> 8 * n);

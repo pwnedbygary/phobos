@@ -378,30 +378,64 @@ the -fs ones). The core's results already match:
     prefix puts its own two lanes past the size and the constant 1 in lane 3 gives 1 in every run.
   - **`vavg`'s t prefix only negates:** a lane whose t prefix sets negate is subtracted, and its absolute and constant
     settings change nothing (fitting a weight per lane, the constants of either sign, against every run showed it).
-    The sum is divided by the size, which fits the PSP better than weighing each lane by the constant 1/3 does (round
-    2's unprefixed `vavg.t` loses 5 runs that way). `vfad`'s t prefix keeps round 2's rule (1, or 1/3 with the
-    absolute bit, negated with the negate bit).
+    Round 3 first took the sum and divided by the size (that beat weighing by the constant `1/3` on IEEE host
+    arithmetic); the adder fit below weighs each lane by `±1/size` through `vfpuDot` instead, which matches both the
+    big files and the recorder's `vavg.t` cases. `vfad`'s t prefix keeps round 2's rule (1, or 1/3 with the absolute
+    bit, negated with the negate bit).
   - **A swizzle past the operand's size** also gives 0 in `vf2i`'s, `vi2f`'s and `vbfy1`'s lane, as in the
     instructions that work lane by lane (for `vbfy1`, seen with both lanes of a pair past it), a half float of 0 in
     `vf2h` whatever the negate setting, and in `vh2f` a 0 that the negate setting still makes -0 before it's split
     (so its second float is -0).
 
-  The 54 that differ only by rounding are the adders' (39) and `vlog2`'s above 4 (15): see Next, below. Still open, 32
-  entries, all from the part of the list built to put swizzles past an operand's size into instructions that combine
-  lanes, which compilers don't produce: `vavg` (8: where large terms cancel, the PSP loses the small terms' low bits
-  or the small terms entirely, so it can be far from the core: halving 1.25e35 + 1/2 - 1.25e35 - 2, it gives 0 where
-  the core gives -1; the adders' fit should explain it), `vcmp` (8: given a destination prefix too, it changes
-  condition bits of lanes its write mask leaves out, with no rule seen yet), and `vcrs`, `vcrsp`, `vdet` and `vsocp`
-  (4 each), which reading such a lane as 0 doesn't fit.
+  The 54 that differed only by rounding were the adders' (39) and `vlog2`'s above 4 (15). Both are fitted now (below).
+  Still open after that fit, 24 entries of the second list, all from swizzles past an operand's size in instructions
+  that combine lanes (compilers don't produce these): `vcmp` (8: a destination prefix changes condition bits of lanes
+  its write mask leaves out, with no rule seen yet), and `vcrs`, `vcrsp`, `vdet` and `vsocp` (4 each), which reading
+  such a lane as 0 doesn't fit. The eight `vavg` entries that cancelled large terms are settled by the adder fit.
+
+### Fits from round 2's data (2026-10-08)
+
+Fitted against the round-2 files in `.local/psp-measure-2026-10-04-round3/results/vfpu` (and the round-1 / round-3
+files beside them). `compare.sh` after the fit:
+
+| test | results | exact | worst (ulps) |
+| --- | --- | --- | --- |
+| vlog2-4-8 … vlog2-2p64 (6 binades) | 8388608 each | 8388608 (100%) | 0 |
+| vlog2-half-2, vlog2-spread | full | 100% | 0 |
+| vdot-one/two/close/short, vhdp-close, vfad-close/two, vavg-close, vdot-spread | full | 100% | 0 |
+| ops.bin (round 2 recorder) | 1216 | 1216 (100%) | |
+| ops3.bin (round 3 recorder) | 284 | 260 exact; 24 open (swizzles past the size, above) | |
+
+- **`vlog2` above 4:** the result is still `p + log2(1.m)` from the fixed-point table, but the datapath truncates to
+  a step of `2^(d+2)` units of `2^-24` (`d = 0` for exponents 0 and 1, `floor(log2(p))` above that, `d = 7` for every
+  negative exponent) and, where that step is coarser than `2^-22`, cuts coefficients to match: `m` loses its low
+  `d+2` bits, `|n|` and the absorbed `c0` and squared term lose their low `d` bits. The linear term stays full width
+  until that truncation (units of `2^-41`). Below 1 the sign is always negative, including `-0` just under 1. That
+  replaces the old "truncate after a full-precision sum" path and the separate straight-line path below 1.
+- **The adder (`vfpuDot`):** each product keeps two extra bits with round-to-odd; the four terms align to the largest
+  exponent and truncate (the two extra bits are dropped after the integer sum); when the mantissa is then shifted to
+  24 bits, that shift rounds to nearest with ties to even, and a carry out of that rounding raises the exponent;
+  subnormals flush after that. Order of the lanes does not matter. `vdot`, `vhdp`, `vfad`, `vdet`, `vcrsp`, `vqmul`,
+  and the matrix products (`vmmul`, `vtfm`, `vhtfm`) all use it, and so does the recompiler's `vdot`. `vavg` dots
+  with the constant `1/size` (`1/2`, `1/3` or `1/4`) and only flips that weight's sign from the t prefix — a post-sum
+  divide matches the big files but misses the recorder's `vavg.t` cases by an ulp.
+- **The carry (2026-10-08, later):** the fit's first version dropped that carry, so a sum rounding up to a power of
+  two came out half of it: a unit vector dotted with itself gave 1/2, not 1. GTA: Liberty City Stories computes such
+  sums (`vmmul` and `vcrsp`, some eight a frame standing still), and its characters' limbs jumped for a frame. No
+  measured input carries (4,730,624 adder results, every file above and both recorder lists), so the tables above
+  are the same with the carry. The recompiler's `vdot` helper still summed in doubles, off the PSP on 19% of
+  `vdot-spread`'s quads (by up to 757 ulps), and goes through `vfpuDot` now.
 
 ## Next
 
-- From round 2: `vlog2` above 4, and the adders' model (`vdot`, `vhdp`, `vfad`, `vavg`, `vcrsp`, `vdet`, `vqmul` and
-  the matrix products).
-- From round 3: the second recorder list's 32 open entries (swizzles past the size, above), if a game ever needs them.
-  The GE's round 3 is in [psp-core.md](psp-core.md) ("Round 3's results").
+- From round 3: the second recorder list's 24 open entries (swizzles past the size in `vcmp`, `vcrs`, `vcrsp`,
+  `vdet`, `vsocp`), if a game ever needs them. Probes to settle them are sketched in `tools/psp-measure/vfpu.c`
+  (comments only until a next round runs them). The GE's round 3 is in [psp-core.md](psp-core.md) ("Round 3's
+  results").
 - For a next round: flush to zero in the directed rounding modes (MIPS documents the smallest normal number when
-  rounding toward it; the core gives 0 in every mode), and `cvt.s.w` in each mode.
+  rounding toward it; the core gives 0 in every mode), and `cvt.s.w` in each mode. And an adder sum whose rounding
+  carries, which no file has yet: `vdot.q` of `(0x3f024ba3, 0x3f024ba3, 0xbefb5343, 0x3efb5343)` with itself, 1 in the
+  core (tests/allegrex/vfpu.cpp's edges).
 
 `compare.sh` shows the progress against the full data; `fit.py <results> ares/psp/cpu/vfpu-segments.hpp` regenerates
 the tables.

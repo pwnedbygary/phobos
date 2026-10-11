@@ -217,15 +217,21 @@ auto Loader::load(Memory& memory, const u8* data, u64 size, u32 base, const Impo
     }
   }
 
-  //The module info: its section if the program kept sections, or else (in a PRX) where the first program header's
-  //physical address field says, as a file offset.
+  //The module info: its section if the program kept sections, or else where the first program header's physical
+  //address field says, as a file offset (bit 31 marking a kernel module, as pspsdk's psp-prxgen writes it). PRXs
+  //keep it there, and so do Sony's static programs without sections (the EBOOT.BINs of Ghostbusters, Dissidia 012
+  //and others, whose ~PSP header gives the same offset). pspdev's static programs put their address in that field,
+  //so for one of those the offset is taken only if it lands among the segment's bytes in the file.
   for(auto& section : sections) {
     if(section.name == ".rodata.sceModuleInfo") module.moduleInfo = relocation + section.address;
   }
-  if(!module.moduleInfo && module.relocatable && !segments.empty()) {
+  if(!module.moduleInfo && !segments.empty()) {
     auto& first = segments[0];
     u32 offset = first.physical & 0x7fff'ffff;
-    if(offset >= first.offset) module.moduleInfo = relocation + first.address + (offset - first.offset);
+    bool inFile = offset >= first.offset && offset - first.offset < first.fileSize;
+    if(offset >= first.offset && (module.relocatable || inFile)) {
+      module.moduleInfo = relocation + first.address + (offset - first.offset);
+    }
   }
   if(!module.moduleInfo || !memory.reaches(module.moduleInfo, ModuleInfoSize)) return "no module info";
   u32 info = module.moduleInfo;

@@ -16,6 +16,15 @@ enum : u32 {
   OpenExclusive = 0x0800,  //pspiofilemgr_fcntl.h
 };
 
+#include "pgd.hpp"
+using ares::PlayStationPortable::Pgd;
+
+//NPDRM's (download games') licensee key (sceNpDrm_user): set before a game opens its protected EDATA files, which
+//wrap a PGD. The key the game gives is the version key the PGD decrypts with (part that follows); how a download's
+//module key is really derived from a console's fixed key isn't emulated yet, so this is the best the key gives.
+static u8 npdrmLicenseeKey[16];
+static bool npdrmLicenseeKeySet = false;
+
 //The device a name stands for: the PSP knows the disc as umd0: and disc0:, and the memory stick as ms0: and fatms0:.
 static auto deviceName(std::string name) -> std::string {
   for(auto& c : name) c = std::tolower(u8(c));
@@ -48,10 +57,29 @@ static auto pathNames(const std::string& rest, std::vector<std::string>& names) 
   return 0;
 }
 
-//A new file's number: they count up as IDs do (newUID()), are never handed out twice, and run out the same way (0
-//then: the file can't be opened).
+//A new file's number: the lowest not in use, from 3 up (0 to 2 are standard input, output and error). A PSP hands
+//out small numbers in turn (pspautotests' io/open/tty0, under PSPLink, got 5, 6, 7 and on); that a closed file's is
+//given again, lowest first, is chosen, as a table of descriptors would have it. Games keep tables of their own by
+//them: Crush counts each file's bytes read in 16 words just before its file buffer, so a number past 15 counts into
+//the data it has just read. Not given to another: the movie player's file's while it has a movie (even if a state
+//loaded without the file), and one a thread's wait for a request still names (its file closed while the thread was
+//made ready to run its callbacks, or ran them with the wait put aside: resumeWait() finds it gone). A descriptor kept
+//for an asynchronous result alone is in use until the result is taken (async.cpp). 0 once 3 to 63 are all in use
+//(MostFiles: chosen, no recording shows a PSP's limit): the file can't be opened.
 auto Kernel::newFile() -> u32 {
-  return nextFile <= LastUID ? nextFile++ : 0;
+  auto awaited = [&](u32 number) {
+    for(auto& [uid, thread] : threads) {
+      if(thread->wait == Wait::Async && thread->waitID == number) return true;
+      auto& aside = thread->waitBeforeCallback;
+      if(thread->inCallback && aside.wait == Wait::Async && aside.id == number) return true;
+    }
+    return false;
+  };
+  for(u32 number = 3; number < MostFiles; number++) {
+    if(files.count(number) || (psmfPlayer.status >= 2 && psmfPlayer.file == number) || awaited(number)) continue;
+    return number;
+  }
+  return 0;
 }
 
 //The folder a program's path is in, written as resolve() writes paths ("ms0:/PSP/GAME/HELLO" for
@@ -278,6 +306,7 @@ auto Kernel::openOnDisc(const std::string& path, u32 flags) -> u32 {
   }
   u32 file = newFile();
   if(!file) return ErrorTooManyFiles;
+  open.opened = ++filesOpened;
   files[file] = std::move(open);
   return file;
 }
@@ -303,15 +332,16 @@ auto Kernel::openFile(const std::string& path, u32 flags) -> u32 {
   auto mode = std::ios::binary | std::ios::in;
   if(write) mode |= std::ios::out;
   if(write && (!exists || (flags & OpenTruncate))) mode |= std::ios::trunc;  //made, or emptied
-  if(nextFile > LastUID) return ErrorTooManyFiles;  //before the file is made or emptied
+  u32 file = newFile();
+  if(!file) return ErrorTooManyFiles;  //before the file is made or emptied
   auto stream = std::make_unique<std::fstream>(host, mode);
   if(!stream->is_open()) return ErrorNoPermission;
-  u32 file = newFile();
   auto& open = files[file];
   open.path = normalized;
   open.host = host;
   open.flags = flags;
   open.stream = std::move(stream);
+  open.opened = ++filesOpened;
   return file;
 }
 
@@ -332,36 +362,110 @@ auto Kernel::sceIoClose() -> void {
 }
 
 //Reads from an open file into the program's memory: size bytes (or sectors, for umd0: and runs of sectors opened
-//through it), fewer at the end. Returns how many, or an error.
+//through it), fewer at the end. Returns how many, or an error. (An asynchronous read counts them as it's made, and
+//moves them as it's done: async.cpp.)
 auto Kernel::readFile(u32 file, u32 data, u32 size) -> u32 {
   if(file == StandardInput) return 0;  //nothing to read
   auto found = files.find(file);
   if(found == files.end() || found->second.folder || !(found->second.flags & OpenRead)) return ErrorBadFile;
   auto& open = found->second;
+  u64 count = 0;
+  if(u32 error = readCount(open, data, size, count)) return error;
+  s64 moved = readMove(open, open.position, count, data);
+  if(moved < 0) return ErrorIOError;
+  if(open.pgd) pgdDecryptRead(open, data, u64(moved));
+  open.position += moved;
+  return u32(moved);
+}
+
+//A PGD file's header descriptor, decrypted once (pgd.cpp): why it can't, or nothing. The header is read from where
+//the file lies (the disc, or the host), and where the data starts is the offset the game gave (0x04100002) if it did,
+//else the descriptor's.
+auto Kernel::pgdDescriptor(OpenFile& open) -> std::string {
+  u8 header[0x90];
+  u64 size = std::min<u64>(sizeof(header), open.size);
+  if(open.onDisc) {
+    if(!disc->read(u64(open.sector) * Disc::SectorSize, size, header)) return "couldn't read a PGD file's header";
+  } else {
+    open.stream->flush();
+    open.stream->clear();
+    open.stream->seekg(0);
+    open.stream->read(reinterpret_cast<char*>(header), size);
+    if(u64(open.stream->gcount()) < size) return "a PGD file cut short in its header";
+  }
+  Pgd::Descriptor descriptor;
+  auto why = Pgd::descriptor(header, size, open.pgdVersionKey, descriptor);
+  if(!why.empty()) return why;
+  open.pgdDataOffset = open.pgdDataOffset ? open.pgdDataOffset : descriptor.dataOffset;
+  open.pgdDataSize = descriptor.dataSize;
+  open.pgdBlockSize = descriptor.blockSize;
+  memcpy(open.pgdDataKey, descriptor.dataKey, 16);
+  open.pgdReady = true;
+  return {};
+}
+
+//A PGD file's reads: the part of this read that's in the data region ([dataOffset, dataOffset + dataSize), decrypted
+//with the descriptor's key), decrypted in place. The header before it, and any padding after the data, stay as they
+//are. Set up the descriptor first.
+auto Kernel::pgdDecryptRead(OpenFile& open, u32 data, u64 count) -> void {
+  if(count == 0 || !open.pgd) return;
+  if(!open.pgdReady) {
+    if(auto why = pgdDescriptor(open); !why.empty()) return;  //leave the reads as they are
+  }
+  u64 start = open.pgdDataOffset, end = u64(open.pgdDataOffset) + open.pgdDataSize;
+  if(open.position >= end || u64(open.position) + count <= start) return;  //not in the data region
+  u8* bytes = memory.pointer(data, u32(count));
+  u32 headerPart = open.position < start ? u32(start - open.position) : 0;  //bytes before the data, left alone
+  u32 decStart = headerPart;  //where the decryption starts, in this read
+  u32 decLen = u32(count) - headerPart;
+  u32 decOffset = u32(open.position + decStart - open.pgdDataOffset);  //its place in the data region
+  Pgd::decryptData(bytes + decStart, decOffset, decLen, open.pgdDataKey, open.pgdVersionKey);
+}
+
+//How many bytes (or sectors) a read of size from the file's position gets, fewer at its end: 0 with them in count, or
+//why it can't (a destination not in the program's memory: for the disc, the bytes it gets; for a host file, all it
+//asked for). Nothing moves.
+auto Kernel::readCount(OpenFile& open, u32 data, u32 size, u64& count) -> u32 {
   if(open.onDisc) {
     u64 unit = open.sectors ? Disc::SectorSize : 1;
     u64 start = u64(open.sector) * Disc::SectorSize + open.position * unit;
     //no further than the disc goes, whatever the run said: in sectors, its last whole one; in bytes, its last byte
     u64 end = open.sectors ? u64(disc->sectors()) * Disc::SectorSize : disc->size();
-    u64 count = std::min<u64>(size, open.size > open.position ? open.size - open.position : 0);
+    count = std::min<u64>(size, open.size > open.position ? open.size - open.position : 0);
     count = std::min<u64>(count, start < end ? (end - start) / unit : 0);
     u64 bytes = count * unit;
     if(bytes && (bytes > 0xffff'ffff || !memory.reaches(data, u32(bytes)))) return ErrorIllegalAddress;
-    std::vector<u8> buffer(bytes);
-    if(bytes && !disc->read(start, bytes, buffer.data())) return ErrorIOError;
-    memory.copyIn(data, buffer.data(), u32(bytes));
-    open.position += count;
-    return u32(count);
+    return 0;
   }
   if(size && !memory.reaches(data, size)) return ErrorIllegalAddress;
-  std::vector<char> buffer(size);
+  open.stream->flush();
   open.stream->clear();
-  open.stream->seekg(std::streamoff(open.position));
-  open.stream->read(buffer.data(), size);
+  open.stream->seekg(0, std::ios::end);
+  s64 length = s64(open.stream->tellg());
+  open.stream->clear();
+  count = length > s64(open.position) ? std::min<u64>(size, u64(length) - open.position) : 0;
+  return 0;
+}
+
+//Moves up to count bytes (or sectors) of the file, from position at, into the program's memory at data, which
+//readCount() found can take them: how many it moved (a host file may have been cut shorter since), or -1 if the disc
+//image can't be read there (a damaged image).
+auto Kernel::readMove(OpenFile& open, u64 at, u64 count, u32 data) -> s64 {
+  if(!count) return 0;
+  if(open.onDisc) {
+    u64 unit = open.sectors ? Disc::SectorSize : 1;
+    std::vector<u8> buffer(count * unit);
+    if(!disc->read(u64(open.sector) * Disc::SectorSize + at * unit, buffer.size(), buffer.data())) return -1;
+    memory.copyIn(data, buffer.data(), u32(buffer.size()));
+    return s64(count);
+  }
+  std::vector<char> buffer(count);
+  open.stream->clear();
+  open.stream->seekg(std::streamoff(at));
+  open.stream->read(buffer.data(), buffer.size());
   u32 got = u32(open.stream->gcount());
   open.stream->clear();
   memory.copyIn(data, buffer.data(), got);
-  open.position += got;
   return got;
 }
 
@@ -376,11 +480,11 @@ auto Kernel::fileWaitRefused() const -> u32 {
   return 0;
 }
 
-//A synchronous read or write is done as it's made (its bytes move now), as an asynchronous request is (async.cpp),
-//and the calling thread then waits the time the same request would take its device (asyncDuration()), other
-//threads running meanwhile, before it returns value. GTA's disc streaming counts on that: its streaming thread calls
-//a request's callback as its last read ends, and the callback drops the request unless the thread that made it, of
-//a lower priority, has run meanwhile to note it. An error returns at once.
+//A synchronous read or write is done as it's made (its bytes move now), and the calling thread then waits the time
+//the same request would take its device made asynchronously (asyncDuration(), async.cpp), other threads running
+//meanwhile, before it returns value. GTA's disc streaming counts on that: its streaming thread calls a request's
+//callback as its last read ends, and the callback drops the request unless the thread that made it, of a lower
+//priority, has run meanwhile to note it. An error returns at once.
 auto Kernel::fileWait(u32 file, u32 value, bool onDisc, u64 bytes) -> void {
   result(value);
   if(!current || s32(value) < 0) return;
@@ -559,6 +663,14 @@ auto Kernel::sceIoChdir() -> void {
   result(0);
 }
 
+//(name, block device, file system, mode, ...): a device named for a block device's file system (pspiofilemgr.h's
+//example assigns flash0: to lflash0:0,0 through flashfat0:). The devices here have their names for good
+//(deviceName()), so it changes nothing: Metal Gear Acid and Ridge Racer assign disc0: to umd0: through isofs0:,
+//which it already is.
+auto Kernel::sceIoAssign() -> void {
+  result(0);
+}
+
 //(path, where to put its SceIoStat)
 auto Kernel::sceIoGetstat() -> void {
   std::string path = memory.readString(arg(0), 1024), host, normalized;
@@ -617,6 +729,7 @@ auto Kernel::sceIoDopen() -> void {
     }
     u32 file = newFile();
     if(!file) return result(ErrorTooManyFiles);
+    open.opened = ++filesOpened;
     files[file] = std::move(open);
     return result(file);
   }
@@ -645,13 +758,20 @@ auto Kernel::sceIoDopen() -> void {
   open.entries.insert(open.entries.end(), names.begin(), names.end());
   u32 file = newFile();
   if(!file) return result(ErrorTooManyFiles);
+  open.opened = ++filesOpened;
   files[file] = std::move(open);
   result(file);
 }
 
 //(folder, where to put the entry, a SceIoDirent of 352 bytes): 1 and the next entry (its SceIoStat and name), or 0
-//once there are no more. If the program points d_private at a SceIoFatDirentPrivate, its short (8.3) and long names go
-//there too.
+//once there are no more. If the program points d_private somewhere, a memory stick entry's short (8.3) and long names
+//go there too, laid out by the SDK version the program gave, as pspautotests' io/shortname recorded: with none, or
+//0x03070110, the short name in 13 bytes from the start and the long name right after it; with 0x06060010 a
+//SceIoFatDirentPrivate, the size the program declared in its first word left there, the short name in 16 bytes after
+//it and the long name in 1024 after that. The change is taken at 0x03080000 (the test's "documented as changing at
+//SDK 3.08"). Nothing goes past the long name's end in the older layout, nor into a SceIoFatDirentPrivate declared
+//smaller than one (chosen): Need for Speed: ProStreet (0x03070010) gives 272 bytes on its stack, and the newer
+//layout's 1044 bytes, written there, zeroed its saved registers, and it returned to address 0.
 auto Kernel::sceIoDread() -> void {
   auto found = files.find(arg(0));
   if(found == files.end() || !found->second.folder) return result(ErrorBadFile);
@@ -672,14 +792,25 @@ auto Kernel::sceIoDread() -> void {
   memory.fill(entry + 88, 0, 256);
   memory.copyIn(entry + 88, name.c_str(), std::min<size_t>(name.size(), 255));
   //on the memory stick only: the disc's names have no short forms (PPSSPP's notes)
-  if(u32 extra = memory.read(4, entry + 344); !open.onDisc && extra && memory.reaches(extra, 1044)) {
+  if(u32 extra = memory.read(4, entry + 344); !open.onDisc && extra) {
     std::string base = name, extension;  //an 8.3 short name: up to eight letters, a dot, up to three, in capitals
     if(auto dot = name.rfind('.'); dot != std::string::npos && dot > 0) base = name.substr(0, dot), extension = name.substr(dot + 1);
     std::string shortName = base.substr(0, 8) + (extension.empty() ? "" : "." + extension.substr(0, 3));
     for(auto& c : shortName) c = std::toupper(u8(c));
-    memory.fill(extra + 4, 0, 1040);
-    memory.copyIn(extra + 4, shortName.c_str(), std::min<size_t>(shortName.size(), 12));
-    memory.copyIn(extra + 20, name.c_str(), std::min<size_t>(name.size(), 1023));
+    if(name == "." || name == "..") shortName = name;  //as io/shortname recorded them
+    shortName.resize(std::min<size_t>(shortName.size(), 12));
+    std::string longName = name.substr(0, 255);
+    if(sdkVersion < 0x0308'0000) {
+      if(memory.reaches(extra, 13 + longName.size() + 1)) {
+        memory.fill(extra, 0, 13);
+        memory.copyIn(extra, shortName.c_str(), shortName.size());
+        memory.copyIn(extra + 13, longName.c_str(), longName.size() + 1);
+      }
+    } else if(memory.reaches(extra, 1044) && memory.read(4, extra) >= 1044) {
+      memory.fill(extra + 4, 0, 1040);
+      memory.copyIn(extra + 4, shortName.c_str(), shortName.size());
+      memory.copyIn(extra + 20, longName.c_str(), longName.size());
+    }
   }
   result(1);
 }
@@ -689,6 +820,37 @@ auto Kernel::sceIoDclose() -> void {
   if(found == files.end() || !found->second.folder) return result(ErrorBadFile);
   files.erase(found);
   result(0);
+}
+
+//(where to put descriptors, how many fit there, where to put how many there are): the descriptors the program has,
+//as uOFW describes the PSP's kernel (iofilemgr_kernel.h's int sceIoGetFdList(SceUID *fds, int numFd, int *count);
+//pspsdk has no prototype, and no pspautotests program records it): every file and folder a program has opened, in
+//the order they were opened, standard input, output and error first (its kernel opens them as it starts), as many as
+//fit put there; how many were put there is the result, and how many there are goes where the third argument says,
+//unless that's NULL. A descriptor kept only for an asynchronous request's result is still the program's (the
+//kernel's record of a file stays until the result is taken), and so is the movie player's (the player library opens
+//its file as the program's code). The standard streams are listed as 0, 1 and 2, as sceKernelStdin and its siblings
+//give them here (chosen: uOFW's PSP lists them by its kernel's own IDs for them). The places are checked as the
+//kernel checks any it's given (ILLEGAL_ADDR for a list, its size of 4 bytes a descriptor, or a count reaching the
+//kernel's half of the addresses, as most negative sizes do), and a place nothing of the program's memory backs is
+//refused too (chosen: the PSP would fault writing there). A size counted as negative whose 4 bytes a descriptor wrap
+//round to less passes, and fits none: the kernel counts how many fit as a signed number. Crush counts its open files
+//with it, to find files left open.
+auto Kernel::sceIoGetFdList() -> void {
+  u32 list = arg(0), room = arg(1), count = arg(2), size = room * 4;
+  if(s32(list | size | (list + size)) < 0 || s32(count | (count + 4)) < 0) return result(ErrorIllegalAddress);
+  std::vector<std::pair<u64, u32>> opened;
+  for(auto& [file, open] : files) opened.push_back({open.opened, file});
+  std::sort(opened.begin(), opened.end());
+  std::vector<u32> numbers = {StandardInput, StandardOutput, StandardError};
+  for(auto& [order, file] : opened) numbers.push_back(file);
+  u32 put = s32(room) > 0 ? std::min<u32>(room, numbers.size()) : 0;
+  if((put && !memory.reaches(list, put * 4)) || (count && !memory.reaches(count, 4))) {
+    return result(ErrorIllegalAddress);
+  }
+  for(u32 n = 0; n < put; n++) memory.write(4, list + n * 4, numbers[n]);
+  if(count) memory.write(4, count, numbers.size());
+  result(put);
 }
 
 //A request a file's device answers rather than reading or writing (file, command, in, in length, out, out length):
@@ -767,6 +929,28 @@ auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 out
     return writeOut(4, [&] { memory.write(4, out, u32(open.position)); });
   case 0x01f1'00a6:  //seek in umd0:, in sectors
     return seekBy(ErrorInvalidFileSize);
+  case 0x0410'0001: {  //the file's key (16 bytes), for data encrypted as PGD, which the PSP decrypts as it's read
+    //A file without PGD's header ("\0PGD") is read as it is: the fan translations of 7th Dragon 2020 and its sequel
+    //carry their INSDIR data decrypted, and the games set its key all the same, taking anything but success as the
+    //drive failing and opening the file again, for good. A file with the header keeps the key, and decrypts its
+    //reads (pgd.cpp); its header is read as it is, its key (0x10) being in the clear.
+    if(open.sectors || inLength < 16 || !memory.reaches(in, 16)) return ErrorFunctionNotSupported;
+    u8 head[4] = {};
+    if(open.size >= 4 && !disc->read(u64(open.sector) * Disc::SectorSize, 4, head)) return ErrorIOError;
+    if(!memcmp(head, "\0PGD", 4)) {
+      memcpy(open.pgdVersionKey, memory.pointer(in, 16), 16);
+      open.pgd = true;
+      open.pgdReady = false;
+    }
+    return 0;
+  }
+  case 0x0410'0002: {  //where the encrypted data starts, relative to the file (the rest is read as it is)
+    if(open.sectors || inLength < 4 || !memory.reaches(in, 4)) return ErrorFunctionNotSupported;
+    open.pgd = true;
+    open.pgdReady = false;
+    open.pgdDataOffset = memory.read(4, in);
+    return 0;
+  }
   }
   return ErrorFunctionNotSupported;
 }
@@ -873,7 +1057,14 @@ auto Kernel::sceIoDevctl() -> void {
   case 0x0201'5804: case 0x0241'5821:  //register a callback for the stick going in or out (it never does)
     if(!inWord(word) || !callbacks.count(word)) return result(ErrorInvalidArgument);
     memoryStickCallbacks.push_back(word);
-    return result(0);
+    //It's told at once that a stick is in (pspmscm.h's MS_CB_EVENT_INSERTED, 1), to run when its thread next runs
+    //callbacks, as pspautotests' mstick recorded for fatms0's: the game's next sceKernelCheckCallback ran it with a
+    //count of 1 and the event 1. Games that learn of the stick only so (50 Cent: Bulletproof) otherwise say none is
+    //inserted. mscmhc0's register is taken to do the same. (The result first: a better thread the notice wakes
+    //takes the CPU, and the caller's registers with it.)
+    result(0);
+    if(notifyCallback(word, 1)) reschedule();
+    return;
   case 0x0201'5805: case 0x0241'5822: {  //unregister one
     if(!inWord(word)) return result(ErrorInvalidArgument);
     auto at = std::find(memoryStickCallbacks.begin(), memoryStickCallbacks.end(), word);
@@ -890,16 +1081,49 @@ auto Kernel::sceIoDevctl() -> void {
 //then decrypts as they're read. There is no DRM here: a key is taken and forgotten, and a game's files are read as
 //they are, so a game's plain files work and an encrypted one reads as its encrypted bytes. uOFW's npdrm exports
 //name the user library's five functions; none has a pspautotests program.
-auto Kernel::sceNpDrmSetLicenseeKey() -> void { result(0); }
-auto Kernel::sceNpDrmClearLicenseeKey() -> void { result(0); }
+//(the licensee key, 16 bytes): the key a download game hands before it opens its protected EDATA files. It's the
+//version key the PGD decrypts with (part that follows), stored for sceNpDrmEdataSetupKey to put on them.
+auto Kernel::sceNpDrmSetLicenseeKey() -> void {
+  if(memory.reaches(arg(0), 16)) {
+    memory.copyOut(npdrmLicenseeKey, arg(0), 16);
+    npdrmLicenseeKeySet = true;
+  }
+  result(0);
+}
+
+//The licensee key, gone.
+auto Kernel::sceNpDrmClearLicenseeKey() -> void {
+  npdrmLicenseeKeySet = false;
+  result(0);
+}
 
 //(name): whether a protected file still has the name it was sold with: always, here.
 auto Kernel::sceNpDrmRenameCheck() -> void { result(0); }
 
-//(file): readies an open file's decryption; one not open (or a folder) is BAD_FILE.
+//(file): readies an open file's decryption; one not open (or a folder) is BAD_FILE. A protected file is wrapped in
+//EDATA ("\0PSPEDAT"), which wraps a PGD: the licensee key is put on it, and the data is said to start after EDATA's
+//0x90-byte header, so its reads decrypt (io.cpp's 0x04100001 and 0x04100002).
 auto Kernel::sceNpDrmEdataSetupKey() -> void {
   auto found = files.find(arg(0));
   if(found == files.end() || found->second.folder || found->second.resultOnly) return result(ErrorBadFile);
+  auto& open = found->second;
+  if(npdrmLicenseeKeySet) {
+    u8 magic[8] = {};
+    u64 size = std::min<u64>(sizeof(magic), open.size);
+    if(open.onDisc) disc->read(u64(open.sector) * Disc::SectorSize, size, magic);
+    else {
+      open.stream->flush();
+      open.stream->clear();
+      open.stream->seekg(0);
+      open.stream->read(reinterpret_cast<char*>(magic), size);
+    }
+    if(!memcmp(magic, "\0PSPEDAT", 8)) {
+      memcpy(open.pgdVersionKey, npdrmLicenseeKey, 16);
+      open.pgd = true;
+      open.pgdReady = false;
+      open.pgdDataOffset = 0x90;
+    }
+  }
   result(0);
 }
 

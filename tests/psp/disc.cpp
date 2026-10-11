@@ -307,6 +307,10 @@ static auto discFiles() -> void {
   CHECK(m.call("sceIoChdir", {m.string("disc0:/UMD_DATA.BIN")}), Kernel::ErrorNotDirectory);
   CHECK(m.call("sceIoChdir", {m.string("umd0:/PSP_GAME")}), Kernel::ErrorNotDirectory);
 
+  //disc0: assigned to the drive, as it already is: nothing changes
+  CHECK(m.call("sceIoAssign", {m.string("disc0:"), m.string("umd0:"), m.string("isofs0:"), 1, 0, 0}), 0);
+  CHECK(listing("disc0:/") == "PSP_GAME/ UMD_DATA.BIN", true);
+
   //a run of sectors by number, its numbers hexadecimal with or without "0x", what follows them ignored
   char run[64];
   for(const char* form : {"disc0:/sce_lbn0x%x_size0x1000", "disc0:/SCE_LBN%X_SIZE1000",
@@ -449,6 +453,43 @@ static auto discRequests() -> void {
   CHECK(m.call("sceIoDevctl", {m.string("ms0:"), 0x0201'5804, In, 4, 0, 0}), Kernel::ErrorInvalidArgument);
   CHECK(m.call("sceIoDevctl", {m.string("ms0:"), 0x0999'9999, 0, 0, 0, 0}), Kernel::ErrorFunctionNotSupported);
   CHECK(m.call("sceIoDevctl", {m.string("flash0:"), 0x0202'5806, 0, 0, Out, 4}), Kernel::ErrorFunctionNotSupported);
+}
+
+//A file's PGD key (ioctl 0x04100001): given for a file without PGD's header, the file is read as it is (the fan
+//translations of 7th Dragon 2020 and its sequel); one with the header keeps the key and decrypts its reads (pgd.cpp);
+//a key shorter than 16 bytes, umd0:, and a file off the disc are refused, as every request was before.
+static auto discKeys() -> void {
+  KernelMachine m;
+  auto& memory = m.system.memory;
+  auto plain = pattern(3000, 5), encrypted = pattern(3000, 6);
+  memcpy(encrypted.data(), "\0PGD", 4);
+  auto image = disc_image::makeIso({
+    {"PSP_GAME/INSDIR/GAME.DNS", plain}, {"PSP_GAME/INSDIR/PGD.DNS", encrypted}, {"UMD_DATA.BIN", pattern(32, 4)},
+  });
+  std::string error;
+  m.kernel.disc = openDisc(image.bytes, error);
+  for(u32 at = 0; at < 16; at++) memory.write(1, In + at, 0x40 + at);  //the key
+  u32 file = m.call("sceIoOpen", {m.string("disc0:/PSP_GAME/INSDIR/GAME.DNS"), 0x4000'4001, 0});
+  CHECK(file >= 3 && file < 0x8000'0000, true);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), 0);
+  CHECK(m.call("sceIoRead", {file, Buffer, 4000}), 3000);
+  std::vector<u8> read(3000);
+  memory.copyOut(read.data(), Buffer, 3000);
+  CHECK(read == plain, true);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 8, 0, 0}), Kernel::ErrorFunctionNotSupported);
+  m.call("sceIoClose", {file});
+  file = m.call("sceIoOpen", {m.string("disc0:/PSP_GAME/INSDIR/PGD.DNS"), 0x4000'4001, 0});
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), 0);
+  m.call("sceIoClose", {file});
+  file = m.call("sceIoOpen", {m.string("umd0:"), 0x0001, 0});
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), Kernel::ErrorFunctionNotSupported);
+  m.call("sceIoClose", {file});
+  HostFolder folder;
+  folder.put("A.TXT", "a");
+  m.kernel.mount("ms0", folder.path.string());
+  file = m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0});
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), Kernel::ErrorFunctionNotSupported);
+  CHECK(m.notes.size(), 0);
 }
 
 //The drive's state, and waiting for it.
@@ -627,10 +668,252 @@ static auto umdCallback() -> void {
   }
 }
 
+//Activating the drive mounts the disc's file system, which reads the disc: the caller waits a sector's read (about
+//1.6 ms) and a worse thread runs meanwhile, as Def Jam: Fight for NY needs (its file thread makes the semaphore the
+//thread main makes after activating waits on). The drive is readable as it returns. With interrupts held off, or
+//dispatching, or from an interrupt handler, it can't wait, and mounts at once. On both engines.
+static auto umdMounting() -> void {
+  constexpr u32 R = KernelMachine::Results, Worse = 0x0880'0800;
+  for(bool recompile : {false, true}) {
+    DiscMachine m;
+    auto& memory = m.system.memory;
+    //a worse thread: notes that it ran (0x600d at R + 0x20), then sleeps
+    Assembler worse{m, Worse};
+    worse.li(t0, R); worse.li(t1, 0x600d); worse.put(sw(t1, 0x20, t0));
+    worse.call("sceKernelSleepThread");
+
+    Assembler main{m, 0x0880'1000};
+    main.li(s0, R);
+    main.li(a0, m.string("worse")); main.li(a1, Worse); main.li(a2, 0x30); main.li(a3, 0x1000); main.li(t0, 0);
+    main.li(t1, 0);
+    main.call("sceKernelCreateThread");
+    main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+    main.call("sceKernelStartThread");  //(it doesn't run: main is better)
+    main.put(lw(t0, 0x20, s0)); main.put(sw(t0, 0x24, s0));
+    main.call("sceKernelGetSystemTimeLow");
+    main.put(addu(s1, v0, zero));
+    main.li(a0, 1); main.li(a1, m.string("disc0:"));
+    main.call("sceUmdActivate");
+    main.put(sw(v0, 0, s0));
+    main.call("sceKernelGetSystemTimeLow");
+    main.put(subu(v0, v0, s1)); main.put(sw(v0, 4, s0));
+    main.put(lw(t0, 0x20, s0)); main.put(sw(t0, 0x28, s0));  //it ran meanwhile
+    main.call("sceUmdGetDriveStat");
+    main.put(sw(v0, 8, s0));
+    //interrupts held off, then dispatching: at once
+    main.call("sceKernelCpuSuspendIntr");
+    main.put(addu(s2, v0, zero));
+    main.call("sceKernelGetSystemTimeLow");
+    main.put(addu(s1, v0, zero));
+    main.li(a0, 1); main.li(a1, m.string("disc0:"));
+    main.call("sceUmdActivate");
+    main.put(sw(v0, 0xc, s0));
+    main.call("sceKernelGetSystemTimeLow");
+    main.put(subu(v0, v0, s1)); main.put(sw(v0, 0x10, s0));
+    main.put(addu(a0, s2, zero));
+    main.call("sceKernelCpuResumeIntr");
+    main.call("sceKernelSuspendDispatchThread");
+    main.put(addu(s2, v0, zero));
+    main.call("sceKernelGetSystemTimeLow");
+    main.put(addu(s1, v0, zero));
+    main.li(a0, 1); main.li(a1, m.string("disc0:"));
+    main.call("sceUmdActivate");
+    main.put(sw(v0, 0x14, s0));
+    main.call("sceKernelGetSystemTimeLow");
+    main.put(subu(v0, v0, s1)); main.put(sw(v0, 0x18, s0));
+    main.put(addu(a0, s2, zero));
+    main.call("sceKernelResumeDispatchThread");
+    //a vertical blank's handler activating it, timed at R + 0x2c and 0x30
+    Assembler handler{m, 0x0880'3000};
+    handler.put(addiu(sp, sp, -16)); handler.put(sw(ra, 12, sp)); handler.put(sw(s0, 8, sp));
+    handler.put(sw(s1, 4, sp));
+    handler.li(s0, R);
+    handler.call("sceKernelGetSystemTimeLow");
+    handler.put(addu(s1, v0, zero));
+    handler.li(a0, 1); handler.li(a1, m.string("disc0:"));
+    handler.call("sceUmdActivate");
+    handler.put(sw(v0, 0x2c, s0));
+    handler.call("sceKernelGetSystemTimeLow");
+    handler.put(subu(v0, v0, s1)); handler.put(sw(v0, 0x30, s0));
+    handler.put(lw(s1, 4, sp)); handler.put(lw(s0, 8, sp)); handler.put(lw(ra, 12, sp));
+    handler.put(addiu(sp, sp, 16));
+    handler.li(v0, 0); handler.put(jr(ra)); handler.put(nop);
+    main.li(a0, 30); main.li(a1, 0); main.li(a2, 0x0880'3000); main.li(a3, 0);
+    main.call("sceKernelRegisterSubIntrHandler");
+    main.li(a0, 30); main.li(a1, 0);
+    main.call("sceKernelEnableSubIntr");
+    main.call("sceDisplayWaitVblankStart");
+    main.li(a0, 30); main.li(a1, 0);
+    main.call("sceKernelReleaseSubIntrHandler");
+    main.call("sceKernelExitGame");
+    memory.write(4, R + 0x2c, 0xcccc'cccc);
+    m.runProgram(0x0880'1000, recompile);
+
+    CHECK(m.kernel.exited, true);
+    CHECK(memory.read(4, R + 0x24), 0);       //not before
+    CHECK(memory.read(4, R + 0), 0);
+    u32 mounted = memory.read(4, R + 4);
+    CHECK(mounted >= 1580 && mounted < 1700, true);  //100 microseconds and a sector at 1,375,000 bytes a second
+    CHECK(memory.read(4, R + 0x28), 0x600d);
+    CHECK(memory.read(4, R + 8), Kernel::UmdPresent | Kernel::UmdReady | Kernel::UmdReadable);
+    CHECK(memory.read(4, R + 0xc), 0);
+    CHECK(memory.read(4, R + 0x10) < 100, true);
+    CHECK(memory.read(4, R + 0x14), 0);
+    CHECK(memory.read(4, R + 0x18) < 100, true);
+    CHECK(memory.read(4, R + 0x2c), 0);
+    CHECK(memory.read(4, R + 0x30) < 100, true);
+  }
+}
+
+//The memory stick's insert and eject callback, as pspautotests' mstick recorded: registered through fatms0:, it's
+//told at once that a stick is in, and the program's next sceKernelCheckCallback runs it (1: one ran) with a count of
+//1, the event 1 (inserted) and its own argument; unregistering it and deleting it then succeed. mscmhc0's register
+//tells it too. A better thread's callback, its thread asleep where callbacks run, runs at once, and the register
+//still gives its caller 0. On both engines.
+static auto stickCallback() -> void {
+  constexpr u32 R = KernelMachine::Results, Handler = 0x0880'0000, Owner = 0x0880'0800;
+  for(bool recompile : {false, true}) {
+    DiscMachine m;
+    auto& memory = m.system.memory;
+    //the callback (count, event, its argument): counts its calls at R + 0x40 and keeps its three words after
+    Assembler handler{m, Handler};
+    handler.li(t0, R);
+    handler.put(lw(t1, 0x40, t0)); handler.put(addiu(t1, t1, 1)); handler.put(sw(t1, 0x40, t0));
+    handler.put(sw(a0, 0x44, t0)); handler.put(sw(a1, 0x48, t0)); handler.put(sw(a2, 0x4c, t0));
+    handler.put(jr(ra)); handler.put(addiu(v0, zero, 0));
+    //a thread better than main's: makes a callback of its own (its ID at R + 0x64), then sleeps where callbacks run
+    Assembler owner{m, Owner};
+    owner.li(a0, m.string("OWNER")); owner.li(a1, Handler); owner.li(a2, 0x888);
+    owner.call("sceKernelCreateCallback");
+    owner.li(t0, R); owner.put(sw(v0, 0x64, t0));
+    u32 sleep = owner.here();
+    owner.call("sceKernelSleepThreadCB");
+    owner.put(beq(zero, zero, s32(sleep - owner.here() - 4) / 4)); owner.put(nop);
+
+    Assembler main{m, 0x0880'1000};
+    main.li(s0, R);
+    main.li(a0, m.string("MSCB")); main.li(a1, Handler); main.li(a2, 0x777);
+    main.call("sceKernelCreateCallback");
+    main.put(addu(s1, v0, zero));
+    main.put(sw(s1, 0x60, s0));  //the callback's ID, the devctl's in
+    main.li(a0, m.string("fatms0:")); main.li(a1, 0x0241'5821); main.put(addiu(a2, s0, 0x60)); main.li(a3, 4);
+    main.li(t0, 0); main.li(t1, 0);
+    main.call("sceIoDevctl");
+    main.put(sw(v0, 0, s0));
+    main.call("sceKernelCheckCallback");
+    main.put(sw(v0, 4, s0));
+    main.call("sceKernelCheckCallback");  //nothing more to run
+    main.put(sw(v0, 8, s0));
+    main.li(a0, m.string("fatms0:")); main.li(a1, 0x0241'5822); main.put(addiu(a2, s0, 0x60)); main.li(a3, 4);
+    main.li(t0, 0); main.li(t1, 0);
+    main.call("sceIoDevctl");
+    main.put(sw(v0, 0xc, s0));
+    main.li(a0, m.string("mscmhc0:")); main.li(a1, 0x0201'5804); main.put(addiu(a2, s0, 0x60)); main.li(a3, 4);
+    main.li(t0, 0); main.li(t1, 0);
+    main.call("sceIoDevctl");
+    main.put(sw(v0, 0x10, s0));
+    main.call("sceKernelCheckCallback");
+    main.put(sw(v0, 0x14, s0));
+    main.li(a0, m.string("mscmhc0:")); main.li(a1, 0x0201'5805); main.put(addiu(a2, s0, 0x60)); main.li(a3, 4);
+    main.li(t0, 0); main.li(t1, 0);
+    main.call("sceIoDevctl");
+    main.put(sw(v0, 0x18, s0));
+    main.put(addu(a0, s1, zero));
+    main.call("sceKernelDeleteCallback");
+    main.put(sw(v0, 0x1c, s0));
+    main.li(a0, m.string("owner")); main.li(a1, Owner); main.li(a2, 0x10); main.li(a3, 0x1000); main.li(t0, 0);
+    main.li(t1, 0);
+    main.call("sceKernelCreateThread");
+    main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+    main.call("sceKernelStartThread");  //(it runs first, and sleeps)
+    main.li(a0, m.string("fatms0:")); main.li(a1, 0x0241'5821); main.put(addiu(a2, s0, 0x64)); main.li(a3, 4);
+    main.li(t0, 0); main.li(t1, 0);
+    main.li(v0, 0x5555);  //(what a result written to the wrong thread would leave)
+    main.call("sceIoDevctl");
+    main.put(sw(v0, 0x20, s0));
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+
+    CHECK(m.kernel.exited, true);
+    CHECK(memory.read(4, R), 0);         //registered
+    CHECK(memory.read(4, R + 4), 1);     //and run by the next CheckCallback
+    CHECK(memory.read(4, R + 8), 0);
+    CHECK(memory.read(4, R + 0xc), 0);   //unregistered
+    CHECK(memory.read(4, R + 0x10), 0);  //registered with mscmhc0
+    CHECK(memory.read(4, R + 0x14), 1);
+    CHECK(memory.read(4, R + 0x18), 0);
+    CHECK(memory.read(4, R + 0x1c), 0);  //deleted
+    CHECK(memory.read(4, R + 0x20), 0);  //the better thread's registered, and main told so
+    CHECK(memory.read(4, R + 0x40), 3);  //run once for each register
+    CHECK(memory.read(4, R + 0x44), 1);  //a count of 1
+    CHECK(memory.read(4, R + 0x48), 1);  //inserted
+    CHECK(memory.read(4, R + 0x4c), 0x888);  //(the last: the better thread's)
+    CHECK(m.kernel.memoryStickCallbacks.size(), 1);
+  }
+}
+
+//A folder is read once: a path looked up again, or another file in a folder already listed, reads nothing more from
+//the image, and listing a folder gives the same entries as the first time; opened on another image, the Disc keeps
+//none of them; and a folder whose sectors couldn't be read is read again. (God of War: Ghost of Sparta opens one file
+//about 3,000 times a frame, and each lookup unpacked the image's blocks for the folders afresh.)
+static auto discFolders() -> void {
+  auto image = testDisc();
+  auto data = std::make_shared<std::vector<u8>>(image.bytes);
+  auto reads = std::make_shared<u32>(0);
+  Disc disc;
+  std::string error;
+  CHECK(disc.open([data, reads](u64 offset, void* out, u64 size) -> u64 {
+    (*reads)++;
+    if(offset >= data->size()) return 0;
+    size = std::min<u64>(size, data->size() - offset);
+    memcpy(out, data->data() + offset, size);
+    return size;
+  }, data->size(), error), true);
+  Disc::Entry entry;
+  CHECK(disc.find({"PSP_GAME", "USRDIR", "DATA.BIN"}, entry) && entry.size == 7 * 1024, true);
+  u32 first = *reads;
+  CHECK(first > 0, true);
+  for(u32 n = 0; n < 3; n++) CHECK(disc.find({"psp_game", "usrdir", "data.bin"}, entry), true);
+  CHECK(disc.find({"PSP_GAME", "USRDIR", "EMPTY.BIN"}, entry) && entry.size == 0, true);
+  CHECK(disc.find({"PSP_GAME", "USRDIR", "MISSING.BIN"}, entry), false);
+  Disc::Entry usrdir;
+  CHECK(disc.find({"PSP_GAME", "USRDIR"}, usrdir) && usrdir.folder, true);
+  CHECK(names(disc.list(usrdir)) == "DATA.BIN EMPTY.BIN", true);
+  CHECK(*reads, first);
+  CHECK(disc.find({"PSP_GAME", "SYSDIR", "EBOOT.BIN"}, entry), true);  //a folder not listed yet: read
+  CHECK(*reads > first, true);
+  //the same Disc opened on another image: none of the first's folders is kept
+  auto otherImage = disc_image::makeIso({{"PSP_GAME/USRDIR/OTHER.BIN", pattern(10, 5)}});
+  auto other = std::make_shared<std::vector<u8>>(otherImage.bytes);
+  CHECK(disc.open([other](u64 offset, void* out, u64 size) -> u64 {
+    if(offset >= other->size()) return 0;
+    size = std::min<u64>(size, other->size() - offset);
+    memcpy(out, other->data() + offset, size);
+    return size;
+  }, other->size(), error), true);
+  CHECK(disc.find({"PSP_GAME", "USRDIR", "DATA.BIN"}, entry), false);
+  CHECK(disc.find({"PSP_GAME", "USRDIR", "OTHER.BIN"}, entry) && entry.size == 10, true);
+  //a folder whose sectors can't be read just then (anything past the volume descriptor): not kept, read again
+  auto failing = std::make_shared<bool>(false);
+  CHECK(disc.open([data, failing](u64 offset, void* out, u64 size) -> u64 {
+    if(*failing && offset >= 17 * Disc::SectorSize) return 0;
+    if(offset >= data->size()) return 0;
+    size = std::min<u64>(size, data->size() - offset);
+    memcpy(out, data->data() + offset, size);
+    return size;
+  }, data->size(), error), true);
+  *failing = true;
+  CHECK(disc.find({"PSP_GAME", "USRDIR", "DATA.BIN"}, entry), false);
+  *failing = false;
+  CHECK(disc.find({"PSP_GAME", "USRDIR", "DATA.BIN"}, entry) && entry.size == 7 * 1024, true);
+}
+
 auto discTests() -> Tests {
   return {
-    {"disc images", discImages}, {"disc files", discFiles}, {"disc requests", discRequests},
-    {"disc drive", umdDrive}, {"disc drive's callback", umdCallback},
+    {"disc images", discImages}, {"disc files", discFiles}, {"disc folders read once", discFolders},
+    {"disc requests", discRequests},
+    {"disc PGD keys", discKeys}, {"disc drive", umdDrive}, {"disc drive's callback", umdCallback},
+    {"disc drive mounting as it's activated", umdMounting}, {"memory stick's callback", stickCallback},
   };
 }
 

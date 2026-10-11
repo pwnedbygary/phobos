@@ -5,7 +5,16 @@
 //  - sprites, flat and textured (enlarged, shrunk, mirrored), some in clear mode, in 8888 and 5650: the GPU's bytes
 //    are the software renderer's exactly, as tests/psp/gpu.cpp's gpuSprites has them;
 //  - shaded triangles, some blended over them: close (each channel within 8 of the software renderer's but at the
-//    edges, where the two may cover a pixel differently: at most 1 pixel in 50 further off).
+//    edges, where the two may cover a pixel differently: at most 1 pixel in 50 further off);
+//  - where the GPU reads the frame buffer in the shader (Backend::reads), a frame buffer of a game's size (480x272
+//    in rows of 512) drawn as games draw it: 128 opaque sprites, each followed by a blended one over it (moved a
+//    few pixels) through a write mask keeping part of each channel (which reads wherever the GPU can), exactly. A
+//    driver whose reads there see the pixels as they were before the draw just before (Qualcomm's own, some of the
+//    time, which passes the rest) fails here: vulkan.cpp has nothing read on that one, and where another fails
+//    System::startRenderer() has the GPU blend with its own units instead.
+//  - in fast mode, where the GPU transforms 3D vertices itself (mesh()), 3D triangles in perspective, smooth, half of
+//    them lit by a light, some textured: close, as the 2D triangles are, so a driver that takes transform.vert wrong
+//    fails here rather than in a game.
 //It takes some milliseconds, most of them the GPU making its first pipelines (kept for the game).
 
 auto GPU::check(std::string& error) -> bool {
@@ -57,6 +66,20 @@ auto GPU::check(std::string& error) -> bool {
     c[GE::TextureFilter] = 0;
   };
 
+  //(3D: float u, v; 8888 color; float normal; float position)
+  struct Corner3 { float u, v; u32 color; float normal[3], at[3]; };
+  auto draw3d = [&](Machine& m, const std::vector<Corner3>& corners) {
+    u32 to = Vertices;
+    for(auto& c : corners) {
+      for(u32 word : {bitsOf(c.u), bitsOf(c.v), c.color, bitsOf(c.normal[0]), bitsOf(c.normal[1]),
+                      bitsOf(c.normal[2]), bitsOf(c.at[0]), bitsOf(c.at[1]), bitsOf(c.at[2])}) {
+        m.memory.write(4, to, word), to += 4;
+      }
+    }
+    m.ge.vertexAddress = Vertices;
+    m.ge.primitive(GE::Triangles, corners.size());
+  };
+  auto f24 = [&](float value) { return bitsOf(value) >> 8; };
   std::vector<std::vector<Corner>> sprites, textured, triangles;
   for(u32 n = 0; n < 48; n++) {
     float x = random() % 56, y = random() % 40, w = 1 + random() % 40, h = 1 + random() % 30;
@@ -75,6 +98,33 @@ auto GPU::check(std::string& error) -> bool {
                          float(random() % (Height * 16)) / 16.0f});
     }
     triangles.push_back(corners);
+  }
+  bool transforms = fast && backend->transforms;
+  u64 meshes = statistics.meshes;
+  transformsFailed = false;
+  std::vector<std::vector<Corner3>> solids;
+  for(u32 n = 0; n < 24 && transforms; n++) {
+    std::vector<Corner3> corners;
+    for(u32 k = 0; k < 3; k++) {
+      float depth = -1.5f - (random() % 1000) / 666.0f;  //(in front of the camera, from 1.5 to 3 away)
+      float x = (s32(random() % 2000) - 1000) / 1000.0f * -depth, y = (s32(random() % 2000) - 1000) / 1000.0f * -depth;
+      float facing[3] = {(s32(random() % 200) - 100) / 400.0f, (s32(random() % 200) - 100) / 400.0f, 1};
+      corners.push_back({float(random() % 16), float(random() % 16), random() | random() << 24,
+                         {facing[0], facing[1], facing[2]}, {x, y, depth}});
+    }
+    solids.push_back(corners);
+  }
+  //(the game-sized frame buffer's: each opaque sprite, then the blended one over it, moved up to 4 pixels each way)
+  constexpr u32 Large = 0x1'0000, LargeStride = 512, LargeWidth = 480, LargeHeight = 272;
+  bool reads = backend->reads;
+  std::vector<std::vector<Corner>> layered;
+  for(u32 n = 0; n < 128 && reads; n++) {
+    float x = 4 + random() % (LargeWidth - 88), y = 4 + random() % (LargeHeight - 68);
+    float w = 8 + random() % 72, h = 8 + random() % 52;
+    float dx = s32(random() % 9) - 4, dy = s32(random() % 9) - 4;
+    u32 color = random() | random() << 24, over = random() | random() << 24;
+    layered.push_back({{0, 0, color, x, y}, {0, 0, color, x + w, y + h}});
+    layered.push_back({{0, 0, over, x + dx, y + dy}, {0, 0, over, x + dx + w, y + dy + h}});
   }
 
   for(Machine* m : {software.get(), hardware.get()}) {
@@ -96,6 +146,46 @@ auto GPU::check(std::string& error) -> bool {
       if(n == triangles.size() / 2) m->ge.commands[GE::AlphaBlendEnable] = 1, m->ge.commands[GE::BlendMode] = 0x32;
       draw(*m, GE::Triangles, triangles[n]);
     }
+    //3D (fast mode): the camera looking down -z, w the distance, the 64x48 picture the screen's middle
+    auto& c = m->ge.commands;
+    if(transforms) {
+      into(*m, 0xc000, 3);
+      c[GE::VertexType] = 0x1ff, c[GE::DepthClipEnable] = 1, c[GE::MaxZ] = 0xffff;
+      for(u32 n = 0; n < 12; n++) m->ge.world[n] = m->ge.view[n] = f24(n % 4 == 0 ? 1 : 0);
+      for(u32 n = 0; n < 16; n++) m->ge.projection[n] = 0;
+      m->ge.projection[0] = m->ge.projection[5] = f24(1);
+      m->ge.projection[10] = m->ge.projection[11] = f24(-1), m->ge.projection[14] = f24(-2);
+      c[GE::ViewportXScale] = f24(32), c[GE::ViewportYScale] = f24(-24), c[GE::ViewportZScale] = f24(30000);
+      c[GE::ViewportXCenter] = f24(2048), c[GE::ViewportYCenter] = f24(2048), c[GE::ViewportZCenter] = f24(32768);
+      c[GE::OffsetX] = (2048 - 32) << 4, c[GE::OffsetY] = (2048 - 24) << 4;
+      c[GE::TextureScaleU] = c[GE::TextureScaleV] = f24(1.0f / 16);
+      c[GE::MaterialColor] = 2, c[GE::AmbientLightColor] = 0x30'3030, c[GE::AmbientLightAlpha] = 0xff;
+      c[GE::LightEnable0] = 1, c[GE::LightType0] = 0;  //(directional: ambient and diffuse)
+      c[GE::Light0X] = f24(0.3f), c[GE::Light0X + 1] = f24(0.2f), c[GE::Light0X + 2] = f24(1);
+      c[GE::Light0Ambient] = 0x10'1010, c[GE::Light0Ambient + 1] = 0xff'ffff;
+      //(six triangles a PRIM, enough vertices for mesh() to take them: lit and unlit in turn, the last textured)
+      static_assert(6 * 3 >= MeshLeast);
+      for(u32 group = 0; group < solids.size() / 6; group++) {
+        std::vector<Corner3> corners;
+        for(u32 n = group * 6; n < group * 6 + 6; n++) {
+          corners.insert(corners.end(), solids[n].begin(), solids[n].end());
+        }
+        c[GE::LightingEnable] = group & 1;
+        if(group == 3) texture(*m);
+        draw3d(*m, corners);
+        c[GE::TextureMappingEnable] = 0;
+      }
+      c[GE::LightingEnable] = 0;
+    }
+    //the game-sized frame buffer, opaque and blended sprites in turn, the blended through the write mask
+    into(*m, Large, 3);
+    c[GE::FrameBufferWidth] = LargeStride, c[GE::Scissor2] = (LargeWidth - 1) | (LargeHeight - 1) << 10;
+    for(u32 n = 0; n < layered.size(); n++) {
+      bool blended = n & 1;
+      c[GE::AlphaBlendEnable] = blended, c[GE::BlendMode] = 0x32, c[GE::MaskColor] = blended ? 0x0f'0f0f : 0;
+      draw(*m, GE::Sprites, layered[n]);
+    }
+    c[GE::AlphaBlendEnable] = 0, c[GE::MaskColor] = 0;
     m->ge.settleAll();
   }
   hardware->ge.setRenderer(nullptr);
@@ -123,6 +213,33 @@ auto GPU::check(std::string& error) -> bool {
     }
     if(far > Width * Height / 50) {
       error = "its triangles are " + std::to_string(far) + " pixels off the software renderer's";
+      passed = false;
+    }
+  }
+  if(passed && transforms && statistics.meshes == meshes) {
+    error = "its 3D triangles weren't transformed by the GPU";
+    passed = false, transformsFailed = true;
+  }
+  if(passed && transforms) {
+    u32 far = 0;
+    for(u32 n = 0; n < Width * Height; n++) {
+      for(u32 channel = 0; channel < 3; channel++) {
+        s32 d = s32(a[0xc000 + n * 4 + channel]) - s32(b[0xc000 + n * 4 + channel]);
+        if(d > 8 || d < -8) { far++; break; }
+      }
+    }
+    if(far > Width * Height / 50) {
+      error = "its 3D triangles, transformed by the GPU, are " + std::to_string(far) +
+              " pixels off the software renderer's";
+      passed = false, transformsFailed = true;
+    }
+  }
+  if(passed && reads) {
+    u32 apart = 0;
+    for(u32 n = Large; n < Large + LargeStride * LargeHeight * 4; n++) apart += a[n] != b[n];
+    if(apart) {
+      error = "its draws reading the frame buffer in a game-sized picture are " + std::to_string(apart) +
+              " bytes off the software renderer's";
       passed = false;
     }
   }
