@@ -367,8 +367,9 @@ static auto word(System& s, u32 address) -> u32 { return s.memory.read(Allegrex:
 
 //A program, on both engines, loads TESTLIB (plain) and TESTUSER (encrypted) from the memory stick, starts the first
 //(its module_start runs, and its result comes back), then the second with an argument: its import of add reaches
-//TESTLIB's, and 40 + 2 comes back. It stops TESTLIB (module_stop runs) and unloads it: TESTUSER's stub goes back to
-//the kernel, TESTLIB's memory to the user partition. Each module_start's thread is gone once it returns.
+//TESTLIB's, and 40 + 2 comes back. It stops TESTLIB (module_stop runs, the stop giving 0) and unloads it: TESTUSER's
+//stub goes back to the kernel, TESTLIB's memory to the user partition. Each module_start's thread is gone once it
+//returns.
 static auto startAndLink() -> void {
   HostFolder stick;
   put(stick, "A.PRX", libraryModule().build());
@@ -413,7 +414,7 @@ static auto startAndLink() -> void {
     CHECK(word(m.system, Results + 12), 4);
     CHECK(word(m.system, Results + 16), 'A' | 'R' << 8 | 'G' << 16);
     CHECK(word(m.system, Results + 0x144), 0);
-    CHECK(word(m.system, Results + 0x110), a);
+    CHECK(word(m.system, Results + 0x110), 0);
     CHECK(word(m.system, Results + 4), 0x5707);
     CHECK(word(m.system, Results + 0x148), 3);
     CHECK(word(m.system, Results + 0x114), a);
@@ -490,9 +491,9 @@ static auto linking() -> void {
 
 //Sony's modules, as early games carry them: encrypted and named "sce..." (here an encrypted one whose tag Phobos has
 //no key for: it isn't even decrypted), a kernel module (exporting only functions the kernel hasn't), and a plain one
-//named "Sce..." exporting a function the kernel has: each stood in for, an ID and nothing in memory; started and
-//stopped at once (status 0), unloaded. LoadModuleByID reads one from inside a file, from where it's been seeked to,
-//and refuses a file with an asynchronous request under way.
+//named "Sce..." exporting a function the kernel has: each stood in for, an ID and nothing in memory; started (its ID
+//back) and stopped (0 back) at once, status 0, unloaded (its ID back). LoadModuleByID reads one from inside a file,
+//from where it's been seeked to, and refuses a file with an asynchronous request under way.
 static auto standIns() -> void {
   HostFolder stick;
   TestModule sas = libraryModule();
@@ -532,7 +533,7 @@ static auto standIns() -> void {
     m.system.memory.write(Allegrex::Word, Results, 0x1111);
     CHECK(m.call("sceKernelStartModule", {uid, 0, 0, Results, 0}), uid);
     CHECK(word(m.system, Results), 0);
-    CHECK(m.call("sceKernelStopModule", {uid, 0, 0, 0, 0}), uid);
+    CHECK(m.call("sceKernelStopModule", {uid, 0, 0, 0, 0}), 0);
     CHECK(m.call("sceKernelUnloadModule", {uid}), uid);
     CHECK(m.kernel.modules.count(uid), 0);
   }
@@ -553,6 +554,73 @@ static auto standIns() -> void {
   m.kernel.events();
   CHECK(m.call("sceIoPollAsync", {file, Results}), 0);
   CHECK(m.kernel.files[file].position, 1016);
+}
+
+//What Kenka Bancho's module thread does as its intro movie ends or is skipped, on both engines: the movie player's
+//two modules it loads from its disc (Sony's scePsmf_library and scePsmfP_library, encrypted: stood in for) and a
+//module of its own (TESTSTOP, whose module_stop writes 0x5710 at Results + 0x30 and returns 0, on a thread of its own
+//while the caller waits) are each started (the module's ID back), stopped (0 back: the game stops each again a frame
+//later until a stop gives exactly 0), stopped again a frame later (ALREADY_STOPPED) and unloaded (the module's ID
+//back, which the game waits for too). pspautotests' modules/unloadfill recorded a stop's 0.
+static auto stopsGiveZero() -> void {
+  HostFolder stick;
+  for(auto [file, name] : {std::pair{"PSMF.PRX", "scePsmf_library"}, std::pair{"PLAYER.PRX", "scePsmfP_library"}}) {
+    auto encrypted = psp_encrypt::encrypt(libraryModule().build(), {.name = name});
+    psp_encrypt::put32(encrypted.data() + 0xd0, 0x1234'5678);  //a tag with no key: stood in for by its name alone
+    put(stick, file, encrypted);
+  }
+  TestModule own;
+  own.name = "TESTSTOP";
+  own.start = 0;
+  own.code = {jr(ra), addiu(v0, zero, 0)};
+  own.stop = own.code.size() * 4;
+  store(own.code, Results + 0x30, 0x5710);
+  own.code.insert(own.code.end(), {jr(ra), addiu(v0, zero, 0)});
+  put(stick, "STOP.PRX", own.build());
+  const char* paths[] = {"ms0:/PSMF.PRX", "ms0:/PLAYER.PRX", "ms0:/STOP.PRX"};
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    machine(m);
+    m.kernel.mount("ms0", stick.path.string());
+    Assembler main{m, 0x0880'1000};
+    main.li(s0, Results);
+    for(u32 n = 0; n < 3; n++) {  //loaded (their IDs at Results + 0x100) and started (what that gave at 0x110)
+      main.li(a0, m.string(paths[n])); main.li(a1, 0); main.li(a2, 0);
+      main.call("sceKernelLoadModule");
+      main.put(sw(v0, 0x100 + n * 4, s0));
+      main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0); main.li(a3, 0); main.li(t0, 0);
+      main.call("sceKernelStartModule");
+      main.put(sw(v0, 0x110 + n * 4, s0));
+    }
+    for(u32 round = 0; round < 2; round++) {  //stopped, and again a frame later (what each gave at 0x120 and 0x130)
+      for(u32 n = 0; n < 3; n++) {
+        main.put(lw(a0, 0x100 + n * 4, s0)); main.li(a1, 0); main.li(a2, 0); main.li(a3, 0); main.li(t0, 0);
+        main.call("sceKernelStopModule");
+        main.put(sw(v0, 0x120 + round * 0x10 + n * 4, s0));
+      }
+      main.call("sceDisplayWaitVblankStart");
+    }
+    for(u32 n = 0; n < 3; n++) {  //unloaded (what that gave at 0x140)
+      main.put(lw(a0, 0x100 + n * 4, s0));
+      main.call("sceKernelUnloadModule");
+      main.put(sw(v0, 0x140 + n * 4, s0));
+    }
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+
+    CHECK(m.kernel.exited, true);
+    for(u32 n = 0; n < 3; n++) {
+      u32 uid = word(m.system, Results + 0x100 + n * 4);
+      CHECK(uid >= 0x100 && uid < 0x8000'0000, true);
+      CHECK(m.kernel.modules.count(uid), 0);
+      CHECK(word(m.system, Results + 0x110 + n * 4), uid);
+      CHECK(word(m.system, Results + 0x120 + n * 4), 0);
+      CHECK(word(m.system, Results + 0x130 + n * 4), Kernel::ErrorAlreadyStopped);
+      CHECK(word(m.system, Results + 0x140 + n * 4), uid);
+    }
+    CHECK(word(m.system, Results + 0x30), 0x5710);
+    CHECK(m.kernel.threads.size(), 1);  //the program's own: module_start's and module_stop's threads are gone
+  }
 }
 
 //One of Sony's modules that came unencrypted, exporting functions the kernel has none of, runs as a game's own
@@ -986,7 +1054,8 @@ static auto terminatedThreads() -> void {
 }
 
 //module_start and module_stop that end with sceKernelExitThread rather than returning: the caller gets each one's
-//exit status as its result, and their threads go all the same, their stacks back to the user partition.
+//exit status as its result (where it asked; the start gives the module's ID, the stop 0), and their threads go all
+//the same, their stacks back to the user partition.
 static auto exitThreads() -> void {
   HostFolder stick;
   put(stick, "EXIT.PRX", exitModule().build());
@@ -1014,7 +1083,7 @@ static auto exitThreads() -> void {
     CHECK(word(m.system, Results + 0x60), uid);
     CHECK(word(m.system, Results + 0x5c), 5);
     CHECK(word(m.system, Results + 0x54), 0xe2);
-    CHECK(word(m.system, Results + 0x68), uid);
+    CHECK(word(m.system, Results + 0x68), 0);
     CHECK(word(m.system, Results + 0x64), 6);
     CHECK(m.kernel.modules.count(uid) && m.kernel.modules[uid].status == Kernel::ModuleStatus::Stopped, true);
     CHECK(m.kernel.threads.size(), 1);  //the program's own
@@ -1334,6 +1403,7 @@ auto moduleTests() -> Tests {
   return {
     {"modules unload themselves from a lent stack", unloadFromLentStack},
     {"modules start and link", startAndLink}, {"modules linking", linking}, {"modules stand-ins", standIns},
+    {"modules stops give 0", stopsGiveZero},
     {"modules of Sony's the kernel has nothing of run", sonyModulesRun}, {"modules identities", identities},
     {"modules refusals", refusals}, {"modules sizes", sizes},
     {"modules unload themselves", unloadThemselves}, {"modules unload with a status", unloadWithStatus},

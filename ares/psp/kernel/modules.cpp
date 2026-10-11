@@ -282,17 +282,21 @@ auto Kernel::madeForModule(u32 thread) const -> bool {
 //What sceKernelStartModule and sceKernelStopModule share (module, argument size, argument, where to put the result,
 //options): the module's module_start (or module_stop) runs on a thread made for it (makeModuleThread()), its
 //argument copied onto the thread's stack, and returns to the trampoline's third syscall (moduleReturned()). The
-//calling thread waits meanwhile, and then gets the module's ID, the function's result going where it asked
-//(moduleThreadEnded()). A module without the function, or a stand-in, is started (or stopped) at once.
+//calling thread waits meanwhile, and then gets the module's ID if it started it, 0 if it stopped it, the function's
+//result going where it asked (moduleThreadEnded()). A module without the function, or a stand-in, is started (or
+//stopped) at once. (pspautotests' modules/unloadfill recorded 0 for a stop; uOFW's module manager gives a start's
+//caller the ID of a module that stays, and a stop's 0. Kenka Bancho stops the movie player's two modules after its
+//intro movie again and again until a stop gives exactly 0.)
 auto Kernel::runModuleFunction(LoadedModule& loaded, u32 nid, ModuleStatus during) -> void {
   u32 length = arg(1), argument = arg(2), status = arg(3), options = arg(4);
   if(status && !memory.reaches(status, 4)) return result(ErrorIllegalAddress);
   if(argument && length && !memory.reaches(argument, length)) return result(ErrorIllegalAddress);
   u32 entry = loaded.standIn ? 0 : moduleFunction(loaded, nid);
   if(!entry) {
-    loaded.status = during == ModuleStatus::Starting ? ModuleStatus::Started : ModuleStatus::Stopped;
+    bool starting = during == ModuleStatus::Starting;
+    loaded.status = starting ? ModuleStatus::Started : ModuleStatus::Stopped;
     if(status) memory.write(4, status, 0);
-    return result(loaded.uid);
+    return result(starting ? loaded.uid : 0);
   }
   if(!mayWait()) return;
   u32 parameters = nid == ModuleStartNID ? StartParametersNID : StopParametersNID;
@@ -304,15 +308,15 @@ auto Kernel::runModuleFunction(LoadedModule& loaded, u32 nid, ModuleStatus durin
     current->waitPointer = status;
     block(Wait::Module, loaded.uid, 0);
   } else {
-    result(loaded.uid);  //no thread called it (the kernel's own tests): nothing to wait
+    result(during == ModuleStatus::Starting ? loaded.uid : 0);  //no thread called it (the kernel's own tests)
   }
   startThread(*threads[made], length, argument, Trampoline + 16);
 }
 
 //A thread that ran a module's module_start or module_stop has ended (by returning, or exiting): the module is
-//started (or stopped), and the threads waiting for it run again, given its ID, the function's result written where
-//each asked. A module whose module_stop ran as it unloaded itself goes now (unloadSelf()). The thread itself is
-//deleted by whoever ended it, once it's no longer the one running.
+//started (or stopped), and the threads waiting for it run again, given its ID (a start) or 0 (a stop), the
+//function's result written where each asked. A module whose module_stop ran as it unloaded itself goes now
+//(unloadSelf()). The thread itself is deleted by whoever ended it, once it's no longer the one running.
 auto Kernel::moduleThreadEnded(Thread& thread, s32 status) -> void {
   auto found = std::find_if(modules.begin(), modules.end(), [&](auto& entry) {
     return entry.second.thread == thread.uid;
@@ -324,7 +328,7 @@ auto Kernel::moduleThreadEnded(Thread& thread, s32 status) -> void {
   for(auto& [id, other] : threads) {
     if(other->status != Status::Waiting || other->wait != Wait::Module || other->waitID != uid) continue;
     if(other->waitPointer) memory.write(4, other->waitPointer, u32(status));
-    ready(*other, uid);
+    ready(*other, loaded.status == ModuleStatus::Starting ? uid : 0);
   }
   if(loaded.status == ModuleStatus::Unloading) return unloadModule(uid);
   loaded.status = loaded.status == ModuleStatus::Starting ? ModuleStatus::Started : ModuleStatus::Stopped;
@@ -468,7 +472,7 @@ auto Kernel::sceKernelStartModule() -> void {
   runModuleFunction(found->second, ModuleStartNID, ModuleStatus::Starting);
 }
 
-//(module, argument size, argument, where to put module_stop's result, options)
+//(module, argument size, argument, where to put module_stop's result, options): 0 once it has stopped
 auto Kernel::sceKernelStopModule() -> void {
   auto found = modules.find(arg(0));
   if(found == modules.end()) return result(ErrorUnknownModule);
