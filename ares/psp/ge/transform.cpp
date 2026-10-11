@@ -159,12 +159,14 @@ auto GE::settingsState(Transform& t) const -> void {
   }
 }
 
+static auto projected(GE::Vertex& v, const GE::Transform& t, bool clipped) -> void;
+
 //A vertex through the matrices onto the screen, with its texture coordinates (in texels) and fog: its place, then
 //its place on the screen, then the rest (transformAll()'s stages, for one vertex).
 auto GE::transform(Vertex& vertex, const Transform& t) -> void {
   Placing placing;
   transformPlace(vertex, t, placing);
-  project(vertex, t, false);
+  projected(vertex, t, false);
   transformRest(vertex, t, placing);
 }
 
@@ -176,7 +178,7 @@ auto GE::transformAll(std::vector<Vertex>& vertices, const Transform& t) -> void
   u32 count = vertices.size();
   if(placings.size() < count) placings.resize(count);
   for(u32 n = 0; n < count; n++) transformPlace(vertices[n], t, placings[n]);
-  for(u32 n = 0; n < count; n++) project(vertices[n], t, false);
+  for(u32 n = 0; n < count; n++) projected(vertices[n], t, false);
   for(u32 n = 0; n < count; n++) transformRest(vertices[n], t, placings[n]);
 }
 
@@ -242,7 +244,12 @@ alwaysinline auto GE::transformRest(Vertex& vertex, const Transform& t, const Pl
 
 //A position in clip space onto the screen: x and y in pixels (whole sixteenths), z the depth, and whether the GE
 //can draw it there. A vertex made by clipping (on the near plane) is always checked against the screen's edges.
-alwaysinline auto GE::project(Vertex& v, const Transform& t, bool clipped) const -> void {
+auto GE::project(Vertex& v, const Transform& t, bool clipped) const -> void {
+  projected(v, t, clipped);
+}
+
+//(project()'s, inlined where it runs over a PRIM's vertices: transformAll())
+static alwaysinline auto projected(GE::Vertex& v, const GE::Transform& t, bool clipped) -> void {
   float w = v.clip[3];
   float x = v.clip[0] * t.scale[0] / w + t.center[0];
   float y = v.clip[1] * t.scale[1] / w + t.center[1];

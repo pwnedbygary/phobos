@@ -396,8 +396,8 @@ struct GE {
   //first to the last; transformAll() keeps each vertex's in placings)
   struct Placing { float model[3], world[3], viewZ; };
   std::vector<Placing> placings;
-  auto transformPlace(Vertex& vertex, const Transform& t, Placing& placing) -> void;
-  auto transformRest(Vertex& vertex, const Transform& t, const Placing& placing) -> void;
+  inline auto transformPlace(Vertex& vertex, const Transform& t, Placing& placing) -> void;
+  inline auto transformRest(Vertex& vertex, const Transform& t, const Placing& placing) -> void;
   auto project(Vertex& vertex, const Transform& t, bool clipped) const -> void;
   auto clipTriangle(const Look& look, const Transform& t, const Vertex& a, const Vertex& b, const Vertex& c,
                     s32 facing) -> void;
