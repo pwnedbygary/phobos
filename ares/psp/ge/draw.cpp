@@ -112,6 +112,10 @@ static auto pixelsInside(const s64 (&x)[3], const s64 (&y)[3], const GE::PixelSt
   u32 count = 3;
   for(u32 k = 0; k < 3; k++) px[k] = f64(x[k]), py[k] = f64(y[k]);
   auto cut = [&](bool across, f64 limit, bool above) {
+    bool inside = true;  //(every corner inside this side: cut, the polygon would be as it is)
+    for(u32 k = 0; k < count && inside; k++) inside = above ? (across ? px[k] : py[k]) >= limit
+                                                            : (across ? px[k] : py[k]) <= limit;
+    if(inside) return;
     u32 kept = 0;
     for(u32 k = 0; k < count; k++) {
       u32 before = (k + count - 1) % count;
