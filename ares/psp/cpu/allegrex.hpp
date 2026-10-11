@@ -298,11 +298,12 @@ struct Allegrex {
   //    one, and bit 6 where along it a pair (two further on) or a triple (one further on) starts;
   //  - a matrix (2x2, 3x3 or 4x4) uses the same bits, bit 5 then meaning "transposed": rows read as columns.
   //
-  //The prefixes change how the next instruction reads its operands and writes its result, and are used up by it
-  //(vnop, vsync and vflush pass them on to the one after): vpfxs sets the one for rs, vpfxt for rt and vpfxd for
-  //rd. A source prefix can reorder the lanes (a "swizzle"), take their absolute values, negate them, or put a
-  //constant such as 1 or 1/2 in a lane instead; the destination prefix can clamp results to 0..1 or -1..1
-  //("saturate"), or leave lanes unwritten ("mask").
+  //The prefixes change how the next instruction reads its operands and writes its result, and are used up by it:
+  //vpfxs sets the one for rs, vpfxt for rt and vpfxd for rd. A source prefix can reorder the lanes (a "swizzle"),
+  //take their absolute values, negate them, or put a constant such as 1 or 1/2 in a lane instead; the destination
+  //prefix can clamp results to 0..1 or -1..1 ("saturate"), or leave lanes unwritten ("mask"). vnop, vsync, vflush,
+  //the loads, stores, branches, and moves to and from integer and control registers don't use them: they stay for
+  //the next instruction that does.
   //
   //The condition codes (cc) hold vcmp's results, a bit per lane plus "any lane" and "every lane", which bvt and
   //bvf branch on and vcmovt and vcmovf choose by.

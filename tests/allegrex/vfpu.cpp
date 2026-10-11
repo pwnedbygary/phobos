@@ -39,7 +39,7 @@ constexpr auto vcmp(uint32_t condition, uint32_t size, uint32_t rs, uint32_t rt)
 constexpr auto unary(uint32_t code, uint32_t size, uint32_t rd, uint32_t rs) { return alu(0b110100000, size, rd, rs, code); }
 constexpr auto viim(uint32_t rd, uint32_t value) { return 0xdf000000u | rd << 16 | (value & 0xffff); }
 constexpr auto vfim(uint32_t rd, uint32_t value) { return 0xdf800000u | rd << 16 | (value & 0xffff); }
-constexpr uint32_t vnop = 0xffff0000;
+constexpr uint32_t vnop = 0xffff0000, vsync = 0xffff0320, vflush = 0xffff040d;
 enum : uint32_t {
   Vadd = 0b011000000, Vsub = 0b011000001, Vdiv = 0b011000111, Vmul = 0b011001000, Vdot = 0b011001001,
   Vscl = 0b011001010, Vhdp = 0b011001100, Vcrs = 0b011001101, Vdet = 0b011001110, Vmin = 0b011011010,
@@ -518,13 +518,22 @@ auto more() -> void {
   //it gives 1, and one after the prefixes were used up gives 3.
   auto oneAndTwo = [](Allegrex& s) { s.vfpu.r[S(1, 0, 0)] = bits(1.0f); s.vfpu.r[S(2, 0, 0)] = bits(2.0f); };
   uint32_t negateX = 0xe4 | 1 << 16;
-  //vnop, vsync and vflush leave them for the instruction after.
-  for(uint32_t wait : {vnop, 0xffff0320u, 0xffff040du}) {
+  //vnop, vsync and vflush leave all three for the instruction after; here a vnop in a branch's delay slot too, the
+  //vadd after it the start of the next compiled block.
+  for(uint32_t wait : {vnop, vsync, vflush}) {
+    Machine all;
+    all.run({vpfxs(negateX), vpfxt(0x1b), vpfxd(0x100), wait});
+    CHECK(all.cpu.vfpu.pfxs, negateX);
+    CHECK(all.cpu.vfpu.pfxt, 0x1b);
+    CHECK(all.cpu.vfpu.pfxd, 0x100);
     Machine kept;
     kept.run({vpfxs(negateX), wait, alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0))}, oneAndTwo);
     CHECK(kept.cpu.vfpu.r[S(0, 0, 0)], bits(1.0f));
     CHECK(kept.cpu.vfpu.pfxs, 0xe4);  //(used up by the vadd)
   }
+  Machine slot;
+  slot.run({vpfxs(negateX), beq(zero, zero, 1), vnop, alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0))}, oneAndTwo);
+  CHECK(slot.cpu.vfpu.r[S(0, 0, 0)], bits(1.0f));
   //Metal Gear Acid 2's sprite clipping, as its code has it: a corner against the screen's right, left, bottom and
   //top, greater than {right, bottom} and less than {left, top} by rt's prefix, the second prefix set before the
   //vnops and mfvc that wait for the first vcmp's condition codes. Used up there, the second vcmp took the right
@@ -538,7 +547,7 @@ auto more() -> void {
            });
   CHECK(clip.gpr(s0), 0x18);  //w > 0 (any)
   CHECK(clip.gpr(s1), 0x14);  //z < 272 (any): neither x < 0 nor y < 0
-  //vmfvc doesn't, and vmtvc can set one (control register 128 is rs's prefix).
+  //vmfvc leaves them too, and vmtvc can set one (control register 128 is rs's prefix).
   Machine control;
   control.run({vpfxs(negateX), alu(0b110100000, 1, S(3, 0, 0), 3, 0x50), alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0)),
                alu(0b110100000, 1, 0, S(3, 1, 0), 0x51), alu(Vadd, 1, S(0, 1, 0), S(1, 0, 0), S(2, 0, 0))},

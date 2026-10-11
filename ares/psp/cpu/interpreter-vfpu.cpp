@@ -3,7 +3,8 @@
 //Most instructions follow one pattern: read the operands' lanes (through the source prefixes), do the same math on
 //each lane, and write the results (through the destination prefix). vfpuUnary() and vfpuBinary() do that, given
 //the math for one lane. After each VFPU instruction the prefixes go back to doing nothing; the decoder sees to
-//that (vfpuPrefixesUsed()), except after vpfxs, vpfxt and vpfxd, which set them.
+//that (vfpuPrefixesUsed()), except after vpfxs, vpfxt and vpfxd, which set them, and vnop, vsync, vflush, the loads,
+//stores, branches, and moves to and from integer and control registers, which leave them.
 //
 //The VFPU has no denormals (numbers too tiny for the normal float format): they count as zero, keeping their
 //sign, both read and written. It always rounds to the nearest. On the hardware its functions (sine, 2^x and so
@@ -1183,8 +1184,8 @@ auto Allegrex::VNEG(u8 vd, u8 vs, u32 size) -> void {
 
 //vnop does nothing, and leaves the prefixes for the instruction after it, as vsync and vflush do. pspdev's
 //documentation says it uses them up, but none of its tests shows that, and Metal Gear Acid 2's sprite clipping
-//needs them kept: vpfxt, vnop, vnop, mfvc, then the vcmp the prefix is for (used up, the game culls its logo, menus
-//and notices). PPSSPP keeps them too.
+//needs them kept: vpfxt, vnop, vnop, mfvc, then the vcmp the prefix is for (were vnop to use it up, the game would
+//cull its logo, menus and notices). PPSSPP keeps them too.
 auto Allegrex::VNOP() -> void {
 }
 

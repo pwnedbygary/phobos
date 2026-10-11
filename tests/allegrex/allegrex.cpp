@@ -912,9 +912,11 @@ auto matchesInterpreter() -> void {
         word = vfpuOp(operation, size, vd, vs, operation == 0x1a5 ? random(32) : vt);
         break;
       }
-      case 57:  // vnop, vsync, cache
-        word = random(3) == 0 ? 0xffff0000u : random(2) ? 0xffff0320u : 0xbc000000u | random(0x400000);
+      case 57: {  // vnop, vsync, vflush, cache
+        const uint32_t waits[] = {0xffff0000u, 0xffff0320u, 0xffff040du};
+        word = random(4) ? waits[random(3)] : 0xbc000000u | random(0x400000);
         break;
+      }
       }
       code.push_back(word);
     }
