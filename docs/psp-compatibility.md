@@ -17,7 +17,9 @@ commit's runner (docs/psp-core.md, part 59); and part 62 (branch `cursor/psp-hle
 the merged stack (docs/psp-core.md, part 62); and part 64 (branch `cursor/psp-gow-sw-2b67`, on #198's
 `cursor/psp-vk-speed6-2b67`): the rows its GE changes moved, from the whole library run again beside the base commit's
 runner (docs/psp-core.md, part 64). And the final run (2026-10-11, `be543afba`, the stack's top before the merge into
-`master`): the whole library run again beside part 64's run. The other rows are the report's.
+`master`): the whole library run again beside part 64's run. And part 69 (branch `cursor/psp-hangs-2b67`, on v2.0.0's
+`3cae0f907`): Crash Tag Team Racing's row, from the whole library run again beside the final run (docs/psp-core.md,
+part 69). The other rows are the report's.
 
 ## Method
 
@@ -60,6 +62,16 @@ game that looked worse was run again without presses on both commits before call
 | Stuck loading | 13 | 8 | 5 | 4 | 4 | 4 | 0 | 0 | 0 | 0 | -13 |
 | Black or hang | 73 | 64 | 21 | 19 | 17 | 15 | 6 | 6 | 6 | 1 | -72 |
 | Timed out | 4 | 3 | 2 | 2 | 2 | 2 | 2 | 1 | 0 | 0 | -4 |
+
+Part 69 (2026-10-11, on v2.0.0) moves no category. Crash Tag Team Racing, which sat at its Memory Stick check notice
+(counted as a menu), plays its intro and shows its attract race at 3600: its main thread starts its next save dialog
+straight after closing one, and a PSP has the dialog closed by then (docs/psp-core.md, part 69). Dragon Ball Z:
+Tenkaichi Tag Team, which looked stuck at "Now Loading" on the RP6, was loading its attract demo while the RP6's SD card
+was being written by a copy; its row is unchanged. The whole library run again beside the final run: 81 games close a
+save dialog the way Crash does within their minute; every game but Crash shows at each frame the scene the final run
+showed, or the same sequence a few frames apart (three titles a step apart from the closing taking no time now), none
+missing a function. Super Monkey Ball Adventures hit the 900 s limit with the Mac shared with other jobs; run alone, its
+frames are the final run's.
 
 The final run (2026-10-11), the whole library again on the stack's top before it merged into `master` (`be543afba`:
 part 67's speedups, #205, and the owner's PGD fix, #206, on part 64's), moves six rows, the six black games, all of which
@@ -361,7 +373,7 @@ and now, and what the last frames showed or why a game stops.
 | Cladun - This Is An RPG | NPUH10072 | 393 | menu | menu | menu | title menu |
 | Colin McRae Rally 2005 Plus [Europe] | ULES00111 | 50 | menu | menu | menu | auto-save prompt |
 | Corpse Party - Sweet Sachikos Hysteric Birthday Bash [English 04-29-2026] | ULJM06114 | 295 | menu | menu | menu | title, press start; its music from about 35 s on since part 58 (the ATRAC low level, missing before) |
-| Crash Tag Team Racing | ULUS10044 | 134 | black | black | menu | Memory Stick check notice (black after the legal screen before) |
+| Crash Tag Team Racing | ULUS10044 | 134 | black | black | gameplay | its attract race at 3600, after its intro and title (part 69: its main thread, at 0x3f, starts its next save dialog straight after closing one, and refused as the first still closed, it had polled for good at its Memory Stick check notice); with Start at the title, its menus and name entry, its save made (black after the legal screen before) |
 | Crazy Taxi - Fare Wars | ULUS10273 | 299 | menu | menu | menu | title |
 | Crimson Gem Saga | ULUS10400 | 129 | menu | menu | menu | system data notice |
 | Crisis Core - Final Fantasy VII | ULUS10336 | 138 | black | black | menu | title menu |

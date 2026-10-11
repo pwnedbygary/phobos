@@ -8778,3 +8778,109 @@ of two rounds taking turns, God of War's battle 150 frames and its menu 60), Vul
 - Scratch: `~/phobos-work/scratch/speed7` (build-vk.sh; rp6.sh, rp6-all.sh and push/, the RP6's sessions; gputime-
   and the count patches; acc-host.sh, soft-all.sh, cmp4.py; tables67.py; mutate.sh, quick-tests.sh; logicbench.cpp;
   gcc.sh). Nothing of it is left on the RP6.
+
+## Part 69: the RP6's two stuck games — a save dialog closed from a worse thread, and a loading behind a copy
+
+On branch `cursor/psp-hangs-2b67`, on master (`3cae0f907`, v2.0.0). The owner's run of v2.0.0 on the RP6
+(`~/phobos-work/scratch/rp6play/findings.md`) left two games looking stuck: Crash Tag Team Racing at "Checking Memory
+Stick Duo..." and Dragon Ball Z: Tenkaichi Tag Team at "Now Loading". Sources: pspautotests' recordings
+(utility/savedata/shutdownstatus and initstatus, utility/dialog/priority), PPSSPP's dialog code read as a description
+of the PSP's dialog threads (nothing copied), the RP6's logs and screenshots, and the games' own calls traced with a
+scratch runner (every call with its arguments, result and the calling thread's priority; every 60 frames the wall
+time and the disc image's reads). JPCSP was not read. The PGD code is untouched. Nothing here used the RP6.
+
+**1. Crash Tag Team Racing: a save dialog closed from a worse thread** (`utility.cpp`, `dialogShutdown()`). The runner
+showed what the RP6 showed: from frame 1500 (25 s on the RP6) the notice and its turning gear, for good (9,000 frames
+run with the RP6's presses; the gear turns throughout. The RP6's "last change" at 46 s was its touch controls fading:
+its script counts a screen changed when the mean of a 160x90 copy moves by a level, which the gear's turn doesn't). Its
+main thread, user_main at priority 0x3f, looks for its saves through the save dialog: AUTOLOAD (mode 0) of ULUS10044's
+slot 0000, CRASH.BIN, none on a fresh stick. It gives the volatile memory back when the dialog says it's starting
+(sceKernelVolatileMemUnlock at status 1), and once it's finished calls ShutdownStart, sceKernelVolatileMemLock and
+InitStart for the next slot one after another, never looking at the status. The kernel kept a save dialog closing (4)
+for 2 ms whoever closed it, so that InitStart was refused (INVALID_STATUS, 0x80110001); the game doesn't check, and
+polled GetStatus, 0, for good.
+
+A PSP closes a save dialog in the utility's own threads, last at priority 0x20, without waiting:
+utility/savedata/shutdownstatus recorded callers at 33 to 36 and 111 reading NONE at their first look after
+ShutdownStart, and one at 32 SHUTDOWN, then NONE, the dialog's graphics and access threads at 17 and 19 (its font and
+sound threads' priorities made no difference; the test's notes name NFL Street 3, which starts its next dialog straight
+after from 111). PPSSPP's description has those threads run at the graphics and access threads' priorities before that
+last step. So Crash's 0x3f doesn't get the CPU back before its dialog has closed. (PPSSPP's dialog threads also borrow
+the volatile memory while a dialog runs, which would be why the game gives it back at status 1 and takes it again after
+closing; the kernel doesn't model that: no recording shows it, and with the caller worse than the threads nothing would
+wait on it.)
+
+Now a caller worse than 0x20 and than the graphics and access threads' priorities (the words at 12 and 16 of the
+dialog's parameters) finds a save dialog closed at once, the closing's time the utility's threads', not counted; a
+priority no thread can have (outside 1 to 0x7f) holds no caller off. A caller at 0x20, or better than either thread,
+one the utility's threads can't take the CPU from (interrupts or dispatching held off, a call into the program such
+as an alarm's handler) and a call with no thread see it closing for 2 ms as before, and the other dialogs close as
+they did (utility/dialog/priority: a message closed from 111 still read SHUTDOWN, and a save dialog started straight
+after was refused). Chosen: no time passes for the caller. A first version made it wait the 2 ms; the review found
+that a released wait would end ShutdownStart with an error and that any thread, worse ones too, could run in between,
+where a PSP's busy utility threads hold the worse ones off.
+
+Crash now looks through its five slots and sizes the stick (mode 8) by frame 1500, shows "Loading", its intro, its title
+and its attract race; a Start takes its intro or race to the title, and a second one opens its menus: NEW GAME, the name
+entry, Single Player, ENTER THE PARK and its prompt. It makes its save (`PSP/SAVEDATA/ULUS100440004/CRASH.BIN`), and
+booted again with it goes from "Loading" to its title, RESUME GAME first.
+
+**2. Dragon Ball Z: Tenkaichi Tag Team: not stuck, but loading behind a copy** (no change). In the runner, with presses
+as the RP6 had them, the title menu (New Game, Load Game, Install Data) left alone for about 30 s goes to an attract
+demo: black from about 7020, "Now Loading" from 7050 to 7600, black at 7620, the demo from 7640 (Start goes back to the
+title). The loading reads a dozen plain files, five of 1.1 to 1.3 MB each in one sceIoRead and one of 2 MB in 64 KiB
+pieces (4,838 reads of the CHD file, about 6 MB, mostly in order); the game's PGD file, opened every 243 frames, isn't
+among them. The RP6's log has the emulation running 2.6 to 5.2 frames a second from 08:13:07, single frames of 3.2, 11.6
+and 19.9 s, and its overlay the emulation thread at 0-3% of a core (blocked, not busy; 25-29% at the title). Its frames
+add up to about 600 by the run's end (08:14:10), and its last picture, black at 60 frames a second, is about the
+runner's frame 7620, the black between the loading and the demo: it was loading at about a tenth of the PSP's speed, not
+stuck. DBZ was phase B's first game (08:11), and phase B's other 236 games were being copied onto the same SD card
+meanwhile (adb push, mostly 20 to 35 MB/s, done at 09:49): each of the 33 games run during the copy (08:11 to 09:51) has
+frames of 1 to 20 s in its log, and none of the 34 run after it (09:53 to 11:22) a frame longer than 0.8 s. In the
+runner New Game goes on too: the name prompt, its first save (`PSP/SAVEDATA/ULUS10537DAT0/DATA.BIN`), the main menu,
+Dragon Walker, and a stage's "Now Loading" (with its mini-game) into its story.
+
+**Save states.** Unchanged (version 25): nothing new is kept.
+
+**The games.** The report's run over the whole library (266 games, 3600 frames, Start at 120 and Cross at 1800, PNGs at
+60, 300, 1200 and 3600, the software renderer at 7 threads, three at a time, each killed at 900 s) with this branch's
+runner (and a line to standard error at each save dialog's closing, nothing else), beside the final run (`be543afba`; no
+core change since). 179 games close a save dialog within their minute, 81 of them from a thread worse than 0x20 and its
+threads (callers from 0x21 to 0x74), which now find it closed at once. Crash Tag Team Racing moves: its attract race at
+3600, where it had sat at its Memory Stick check notice (gameplay; the notice had counted as a menu, so the categories'
+counts stay as they were: docs/psp-compatibility.md). 59 of the other 80 show all four frames as the final run did; 21
+show some frame differently, each the same scene a few frames apart (a fade, an animation step, a movie further on:
+PixelJunk Monsters' title fading in, Gitaroo Man's intro). 15 of those differed the same way between the final run and
+part 64's; of the other six, master's runner run again now differs alike on three (Ridge Racer 2, Full Auto 2, Sega
+Rally Revo), and Sonic Rivals 2 and Pursuit Force (their titles' backgrounds a step apart at 3600) and Gran Turismo (a
+logo's fade at 1200) follow the closing now taking no time. 38 more games show some frame differently without closing a
+save dialog that way, their code the final run's: the same kinds of differences (Battlefront II's random map, Virtua
+Tennis 3's and Space Invaders Extreme's titles a step apart), most of them in the final run's own comparison too. 265
+finished; Super Monkey Ball Adventures was killed at 900 s with the Mac shared with other jobs (load averages of 230 to
+275), and run again alone it finishes, its four frames the final run's. None stops at a missing function.
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 439 groups, 0 failures (master's 438 here and the new "utility save
+dialog closed by priority": save dialogs closed from callers at 0x21, 0x6f and 0x20, better than the graphics or the
+access thread, with priorities no thread can have, with interrupts or dispatching held off and from an alarm's handler
+interrupting a worse thread, and a message closed from 0x6f, on both engines; a state saved while a dialog closes
+carries on in another machine to the same answers). `tests/allegrex/run-tests.sh` 58 groups, 0 failures;
+`tests/psp/ares/run-tests.sh` 307 checks, 0 failed. Broken versions each fail the new group: no closing at once, a
+caller at 0x20 closing at once too, the graphics or the access thread's priority left out, priorities taken as they
+come, and the interrupt, dispatching, call-into-the-program and dialog kind conditions each left out. An independent
+review of the first version (the caller waited the 2 ms) found no bug in what it did; its points were that a released
+wait would end ShutdownStart with an error and let other threads run in between (hence closing at once), that invalid
+priorities in the parameters would turn the fix off (now ignored), that the comment gave PPSSPP's description as a
+recording's (now said), and two test gaps (dispatching held off and a call into the program; a loaded state not run on),
+all taken.
+
+**Left, and why.**
+- The dialog threads' borrowing of the volatile memory (PPSSPP's description, unrecorded): a game closing a save dialog
+  from a thread at 0x20 or better, then locking the volatile memory and starting the next dialog at once, would still
+  be refused here; none has been seen.
+- The dialogs' whiles stay PPSSPP's (200 ms to start a save dialog, 2 ms to close it, ...).
+- Dragon Ball Z on the RP6: worth running again with nothing copying onto its card. Its disc image, a CHD on the SD
+  card read through a memory map a 2 KiB hunk at a time on the emulation thread, gave frames of up to 20 s while the
+  card was being written (the loading's single reads are of up to 1.3 MB); reading it through its descriptor, or ahead
+  in larger pieces, might help a busy card, but nothing here measured that.
+- Scratch: `~/phobos-work/scratch/hangs` (run.sh, sheet.py, the trace patch `trace-only.patch`, quick-test.sh and
+  quick-main.cpp for the utility tests alone, `lib-final/` the library run, `cmp-final.tsv`).
