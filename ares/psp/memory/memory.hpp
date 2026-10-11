@@ -107,13 +107,12 @@ struct Memory {
   //Whether the drawing that keeps pages busy reaches VRAM's bytes first to last (offsets in VRAM, inclusive): the
   //GE's (GE::drawnOver()). A hardware renderer's pixels may share their pages with bytes no one draws over (a list
   //kept in the unused columns beside a frame buffer's picture), which pointer() then reaches without waiting. None:
-  //all of a busy page is drawn over.
-  std::function<auto (u32 first, u32 last) -> bool> vramDrawnOver;
-  //Likewise for a load through VRAM's second or fourth copy, the views the GE keeps its depth buffer in: only drawing
-  //that writes memory's depth (the GE's drawing threads), not a hardware renderer's, whose depth stays on the GPU, so
-  //that finishing would hand such a load the colors of a frame buffer drawn over the same bytes instead (WipEout reads
-  //its depth buffer at the screen's middle as it draws, where its bloom's buffers are). None: vramDrawnOver's.
-  std::function<auto (u32 first, u32 last) -> bool> vramDepthDrawnOver;
+  //all of a busy page is drawn over. depthLoad: they're to be read through VRAM's second or fourth copy, the views
+  //the GE keeps its depth buffer in, where only drawing that writes memory's depth counts (the GE's drawing threads),
+  //not a hardware renderer's, whose depth stays on the GPU, so that finishing would hand such a load the colors of a
+  //frame buffer drawn over the same bytes instead (WipEout reads its depth buffer at the screen's middle as it
+  //draws, where its bloom's buffers are).
+  std::function<auto (u32 first, u32 last, bool depthLoad) -> bool> vramDrawnOver;
   //A change to VRAM's bytes first to last while pages are busy, reached without waiting (changed()): for the GE to
   //hear of, as a hardware renderer keeps its own copies of the pages.
   std::function<auto (u32 first, u32 last) -> void> vramChangedBusy;

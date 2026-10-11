@@ -170,16 +170,19 @@ auto GE::transform(Vertex& vertex, const Transform& t) -> void {
   transformRest(vertex, t, placing);
 }
 
-//A PRIM's vertices transformed, each as transform() has it, but a stage at a time over all of them: each vertex's
-//arithmetic waits on itself all along (project()'s divisions and conversions, lighting's), and a vertex's stage
-//done after the last's leaves the CPU the next's to do meanwhile. (God of War's battle draws 255,000 vertices a
-//frame, nearly all lit.)
+//A PRIM's vertices transformed, each as transform() has it, but a stage at a time over all of them (64 at a time):
+//each vertex's arithmetic waits on itself all along (project()'s divisions and conversions, lighting's), and a
+//vertex's stage done after the last's leaves the CPU the next's to do meanwhile. (God of War's battle draws 255,000
+//vertices a frame, nearly all lit.)
 auto GE::transformAll(std::vector<Vertex>& vertices, const Transform& t) -> void {
-  u32 count = vertices.size();
-  if(placings.size() < count) placings.resize(count);
-  for(u32 n = 0; n < count; n++) transformPlace(vertices[n], t, placings[n]);
-  for(u32 n = 0; n < count; n++) projected(vertices[n], t, false);
-  for(u32 n = 0; n < count; n++) transformRest(vertices[n], t, placings[n]);
+  Placing placings[64];
+  for(u32 first = 0, count = vertices.size(); first < count; first += 64) {
+    Vertex* v = vertices.data() + first;
+    u32 run = std::min(count - first, 64u);
+    for(u32 n = 0; n < run; n++) transformPlace(v[n], t, placings[n]);
+    for(u32 n = 0; n < run; n++) projected(v[n], t, false);
+    for(u32 n = 0; n < run; n++) transformRest(v[n], t, placings[n]);
+  }
 }
 
 //A vertex's place: in its model (through the bone matrices its weights pick, its normal too), in the world, its depth

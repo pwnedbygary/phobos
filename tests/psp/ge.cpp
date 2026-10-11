@@ -1357,8 +1357,8 @@ static auto geThreads() -> void {
 
 //A load through VRAM's fourth copy (the depth buffer as the GE has it) of depths a batch still draws, and through its
 //second copy: the batch is waited for, as for a load through the first copy (only a hardware renderer's depth isn't
-//memory's to wait for: Memory::vramDepthDrawnOver). The depths found are those drawing it all on one thread writes,
-//compiled loads and the interpreter's alike.
+//memory's to wait for: Memory::vramDrawnOver's depthLoad). The depths found are those drawing it all on one thread
+//writes, compiled loads and the interpreter's alike.
 static auto geDepthViewLoads() -> void {
   constexpr u32 Depth = 0x11'0000;  //(VRAM offset: 512 depths a row)
   auto build = [&](Memory& memory) {

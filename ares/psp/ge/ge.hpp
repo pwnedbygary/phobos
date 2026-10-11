@@ -393,9 +393,8 @@ struct GE {
   auto transform(Vertex& vertex, const Transform& t) -> void;
   auto transformAll(std::vector<Vertex>& vertices, const Transform& t) -> void;
   //(transform()'s stages: a vertex's place in its model, skinned, in the world and its depth in the view, from the
-  //first to the last; transformAll() keeps each vertex's in placings)
+  //first to the last)
   struct Placing { float model[3], world[3], viewZ; };
-  std::vector<Placing> placings;
   inline auto transformPlace(Vertex& vertex, const Transform& t, Placing& placing) -> void;
   inline auto transformRest(Vertex& vertex, const Transform& t, const Placing& placing) -> void;
   auto project(Vertex& vertex, const Transform& t, bool clipped) const -> void;

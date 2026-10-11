@@ -54,7 +54,6 @@ GE::~GE() {
   memory.finishDrawing = nullptr;
   memory.finishDrawingOver = nullptr;
   memory.vramDrawnOver = nullptr;
-  memory.vramDepthDrawnOver = nullptr;
   memory.vramChangedBusy = nullptr;
   memory.vramStoring = nullptr;
   memory.watchedWritten = nullptr;
@@ -478,7 +477,7 @@ auto GE::drawnBefore(const std::bitset<VRAMPages>& read, const std::bitset<VRAMP
 //Whether drawing still going on reaches VRAM's bytes first to last (offsets in VRAM): all of a page a batch being
 //drawn draws in, or has yet to read a deferred texture from (not one all drawn already), or (rendered) a hardware
 //renderer's pixels themselves (Memory::vramDrawnOver, for whoever touches busy pages; the batches alone for a load
-//through the depth buffer's views, Memory::vramDepthDrawnOver).
+//through the depth buffer's views).
 auto GE::drawnOver(u32 first, u32 last, bool rendered) -> bool {
   for(auto& batch : drawing.batches) {
     if(!unfinished(batch)) continue;

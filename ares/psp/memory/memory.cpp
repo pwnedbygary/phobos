@@ -111,10 +111,9 @@ auto Memory::pointer(u32 address, u32 size, bool load) -> u8* {
       u32 seen = (physical - VRAMBase) % VRAMSize, last = std::min<u32>(seen + size, VRAMSize) - 1;
       bool depthView = (physical - VRAMBase) / VRAMSize & 1;
       if(depthView) seen &= ~0x3fffu, last |= 0x3fff;
-      auto& drawnOver = load && depthView && vramDepthDrawnOver ? vramDepthDrawnOver : vramDrawnOver;
       for(u32 page = seen / PageSize; page <= last / PageSize; page++) {
         if(!vramPageBusy(page)) continue;
-        if(drawnOver && !drawnOver(seen, last)) break;
+        if(vramDrawnOver && !vramDrawnOver(seen, last, load && depthView)) break;
         if(finishDrawingOver) finishDrawingOver(seen, last);
         else finishDrawing();
         break;

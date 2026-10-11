@@ -271,7 +271,8 @@ static auto stencilFormats(GPU* gpu) -> void {
       }
       struct Replace { u32 comparison, reference, mask; bool pass; u32 maskAlpha; };
       std::vector<Replace> replaces = {{1, 0x81, 0xff, true, 0}, {1, 0x5a, 0xff, true, 0}, {1, 0x7e, 0x0f, true, 0},
-                                       {2, 0xa5, 0xf0, true, 0}, {3, 0x5a, 0xf0, false, 0}, {1, 0xc3, 0xff, true, 0x3c}};
+                                       {2, 0xa5, 0xf0, true, 0}, {3, 0x5a, 0xf0, false, 0},
+                                       {1, 0xc3, 0xff, true, 0x3c}};
       if(format == 1) {  //(comparisons taking the bits a 5551 one doesn't keep)
         for(Replace r : {Replace{6, 0x81, 0xff, true, 0}, {4, 0x7f, 0xff, false, 0}, {2, 0x01, 0x7f, true, 0},
                          {7, 0x80, 0xc0, false, 0}, {3, 0x7f, 0xff, true, 0x7f}, {5, 0x40, 0x7f, false, 0}}) {
@@ -321,7 +322,8 @@ static auto stencilFormats(GPU* gpu) -> void {
         c[GE::StencilTestEnable] = 0;
       }
       u32 bytes = apart(software, hardware);
-      if(bytes) std::printf("  %s %ux, format %u: %u bytes apart\n", gpu->fast ? "fast" : "accurate", scale, format, bytes);
+      const char* mode = gpu->fast ? "fast" : "accurate";
+      if(bytes) std::printf("  %s %ux, format %u: %u bytes apart\n", mode, scale, format, bytes);
       CHECK(bytes, 0u);
       hardware.ge.setRenderer(nullptr);
     }
