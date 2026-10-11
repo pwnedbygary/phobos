@@ -2,16 +2,16 @@
   <img src="docs/images/phobos-logo.png" width="502" alt="Phobos"/>
 </p>
 
-**Phobos** is a multi-system emulator for **Android**, forked from [ares](https://github.com/ares-emulator/ares) (which began development on October 14th, 2004 as a descendant of [higan](https://github.com/higan-emu/higan) and [bsnes](https://github.com/bsnes-emu/bsnes/)). It focuses on accuracy and preservation, with Android-specific engineering layered on top: ARM64 work on ares's N64 recompilers and its Vulkan/parallel-RDP renderer, custom Turnip/Adreno driver loading, a Jetpack Compose UI, and a **PlayStation Portable core of its own**, written for Phobos (experimental, in the nightly builds). The same cores also run in a desktop program for Linux, macOS and Windows.
+**Phobos** is a multi-system emulator for **Android**, forked from [ares](https://github.com/ares-emulator/ares) (which began development on October 14th, 2004 as a descendant of [higan](https://github.com/higan-emu/higan) and [bsnes](https://github.com/bsnes-emu/bsnes/)). It focuses on accuracy and preservation, with Android-specific engineering layered on top: ARM64 work on ares's N64 recompilers and its Vulkan/parallel-RDP renderer, custom Turnip/Adreno driver loading, a Jetpack Compose UI, and a **PlayStation Portable core of its own**, written for Phobos (new in 2.0, and marked experimental while it's polished). The same cores also run in a desktop program for Linux, macOS and Windows.
 
 > ares deliberately trades some speed for code clarity (state machines and bitmasks are avoided where possible). Phobos keeps that philosophy for the cores but adds performance-oriented backends around them, so the clarity remains while the hot paths run fast.
 
 ## Download
 
-- **[Releases](https://github.com/pwnedbygary/phobos/releases):** tagged versions (the latest is v1.1.0), and a nightly pre-release for every push to `master`. Settings → About updates the app from either channel.
+- **[Releases](https://github.com/pwnedbygary/phobos/releases):** tagged versions (the latest is v2.0.0, the first with the PlayStation Portable), and a nightly pre-release for every
+  push to `master`. Settings → About updates the app from either channel.
 - Each Android build comes in two flavors: **Modern** (ARMv8.2-A with FP16 and dot product instructions, which most devices from 2018 on have) and **Legacy** (any 64-bit ARM device). Both need Android 8.0 or newer.
-- The desktop program (a Linux AppImage, a universal macOS app and a Windows `Phobos.exe`) comes with tagged releases
-  from the next one on; until then, each CI run on `master` has it as an artifact.
+- Tagged releases also carry the desktop program: a Linux AppImage, a universal macOS app and a Windows `Phobos.exe`.
 
 ---
 
@@ -40,7 +40,7 @@
 | SuperGrafx | ✅ |
 | Neo Geo (MVS/AES) | ✅ Graphics, controls and audio (KOF2003 verified @59.2 FPS); per-title compat matrix → [docs/neo-geo-compatibility.md](docs/neo-geo-compatibility.md) |
 | Neo Geo CD | ✅ Boots, renders and has sound (Samurai Shodown verified), with the CDZ's double-speed drive and an optional faster loading speed |
-| **Experimental (in the nightly builds)** | |
+| **Experimental (new in 2.0)** | |
 | PlayStation Portable | 🧪 Phobos's own core: an exact software renderer and two Vulkan renderers, ISO/CSO/CHD and more, sound, music and movies, save states. Of 266 retail games run in the test runner, 194 reach a menu or gameplay and 71 play their opening movies → [PlayStation Portable](#playstation-portable-experimental) |
 | **Added, not yet tried with a game on-device** | |
 | Mega CD 32X, Super Game Boy, Arcade (Aleck64, SG-1000A) | Load paths, firmware slots and touch layouts are in |
@@ -65,8 +65,8 @@
 The PSP core is Phobos's own, written for Phobos in ares's style from the PSP's documentation, tests and
 measurements taken on a real PSP. No code comes from other PSP emulators: PPSSPP's code was read only as a reference
 for how the PSP behaves, and nothing was copied, translated or reworded from it ([docs/psp-core.md](docs/psp-core.md)
-records the work and its decisions, part by part). It ships in the nightly builds as an experimental core while it's
-polished for a tagged release.
+records the work and its decisions, part by part). It's new in Phobos 2.0, and the app marks it Experimental while it's
+polished.
 
 - **No firmware needed.** The game's code runs on the emulated Allegrex and its display lists on the emulated GE, but
   the PSP's operating system is emulated at a high level: the kernel's threads, memory, files and timers, the

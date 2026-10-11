@@ -35,6 +35,9 @@ and Black Wolves Saga is loading its opening at 3600 (it plays from about 4200).
 64's run only by a few frames (fades, animation steps, movies further on); none shows less.
 - **Docs**: docs/psp-compatibility.md (a Final column, the six rows, the run's paragraph); README.md (the PSP's row,
   its compatibility line, the known issues, PGD-protected data decrypted).
+- **Release**: the owner merges the stack through #208 and tags v2.0.0 right after, so the README speaks of 2.0 (the
+  latest release, the desktop packages with it, the PSP new in 2.0 and marked Experimental in the app) rather than of
+  the nightly builds.
 - Scratch: `~/phobos-work/scratch/final` (lib.sh, `lib-top/` the run, `cmp-top.tsv` against
   `~/phobos-work/scratch/gow-sw/lib/fix`, `diff-sheet-*.png`).
 
