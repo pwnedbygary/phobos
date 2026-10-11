@@ -41,6 +41,23 @@ PGD code (pgd.cpp, io.cpp's ioctls and sceNpDrm) is untouched.
   kernel's default layout left at 24 fail them. tests/psp 428/0 (sanitized; the checks are in existing groups),
   tests/allegrex 58/0, tests/psp/ares 307/0.
 
+## README brought up to date, with the pixel-art logo — 2026-10-11
+
+Branch `cursor/psp-readme-2b67`, at the owner's request before the PSP chain merges into `master`. Docs and the logo
+only; no code change.
+- **Logo**: `docs/images/phobos-logo.png`, built by `tools/logo/build_banner.py` from the launcher icon's
+  `moon-greenscreen.png`: the moon sampled once per art pixel (its grid is 10.2 image pixels, phase 5.3 and 8.6), and
+  "phobos" in Avenir Next Bold Italic rasterized onto the same grid in the old logo's purple (six bands, dark outline,
+  drop shadow), scaled 4x with nearest neighbour. The README shows it at 502 px wide, 2 screen pixels to the art pixel
+  (4 on a 2x display), so it stays crisp. The old logo (`ares/ares/resource/logo@2x.png`) is unchanged: ares's
+  resources compile it in.
+- **README**: a Download section (channels, the Modern and Legacy flavors, the desktop packages); the systems table
+  moved up, with the PlayStation Portable as an experimental row and in the known issues; new sections for the PSP
+  core (no firmware, the CPU, the three renderers, discs, sound, saves, compatibility, tests) and the desktop program;
+  the app's themes, shaders, Performance Monitor, touch controls, remapping, hotkeys and GPU Driver Manager; CI's
+  desktop and PSP test runs; the desktop build's presets; the components list. The existing technical sections are
+  kept as they were.
+
 ## PSP measure: round 6 — the GE's time, lighting's cosine, the reciprocal's chords, patches — 2026-10-10
 
 Branch `cursor/psp-measure6-2b67`, on top of #200's `cursor/psp-gow-vk-2b67` (`c86461ec6`). docs/psp-core.md, part 66,
@@ -633,23 +650,39 @@ OpenGL. Co-authored with Cursor; independent review before the commit.
 
 ## Desktop Library: the PSP's disc titles — 2026-10-08
 
-Branch `local/psp-desktop-disc-info`, on top of `cursor/psp-gpu-hw4-2b67` (#172's tip, part 45). The desktop's
+Branch `local/psp-desktop-disc-info-2`, on top of `cursor/psp-gpu-hw4-2b67` (#179's merge, part 45). The desktop's
 Library now shows a PSP disc's own title, as the Android app does (docs/psp-core.md, part 39's consumers).
 - **The display** (`desktop/main.cpp`'s `drawLibrary`): the list's line shows the disc's title (its PARAM.SFO's
   TITLE) when there's one, the file's name when there isn't. The file's name stays the game's key: the states,
   the saves and the memory card are keyed by it, as before.
 - **The fill** (`desktop/PspDiscInfo.cpp`): the list shows at once; the PSP's disc images' titles fill in after,
   on a thread of their own (a CHD's open takes a while, so the UI isn't held), each from the cache or the shared
-  reader (`ares/psp/kernel/disc-info.cpp`), and a rescan supersedes the unfinished scan.
+  reader (`ares/psp/kernel/disc-info.cpp`), and a rescan supersedes the unfinished scan. No titles fill in while
+  a game runs: the thread stops when a game starts and restarts when the Library shows.
 - **The cache**: the title, disc ID and icon (its ICON0.PNG's bytes) beside the settings (`dataFolder`'s
   `psp-icons/`), under a SHA-256 of the file's path+size+mtime, as the Android app's `psp-icons/` cache: a
   second visit doesn't re-open the disc. The icon is cached, not drawn: the list's 8x8 font has no place for
-  it. A title the font can't draw (no printable ASCII) is shown as the file's name.
-- **Tests**: `tests/psp/desktop-disc-info.cpp` (the key, the disc image's file choice, the title's choice, the
-  cache's round trip, and the title served from the cache without re-opening the disc).
+  it. A title the font can't draw has its characters dropped; only when none are left is the file's name shown.
+- **Tests**: `tests/psp/desktop-disc-info.cpp` (the key, the key's collision, the disc image's file choice, the
+  title's choice, the cache's round trip, the title served from the cache without re-opening the disc, and a
+  cancelled scan, before it starts and mid-read).
 - **Checked**: tests/psp (with the new desktop groups).
 - **Left**: the icon's draw (the list's rows are 12 px and the font 8x8: no place for it); the game's window
   title (the launch keeps the file's name).
+- **Round 2 review fixes** (2026-10-08): (1) the reader gives up (returns 0) when the scan is superseded, so a
+  cancelled disc isn't read to the end or cached; (2) the cache key's parts are joined with `|` separators (the
+  `"\0"` was an empty C string, so it appended nothing); (3) the cache files are written to a temporary name and
+  renamed over the real one, so a crash mid-write can't leave a truncated title that counts as a hit; a `.info`
+  without both lines is a miss; (4) the title thread stops while a game runs and restarts when the Library shows;
+  (5) `desktop/PspDiscInfo.*` added to the PSP Core Tests workflow's paths; (6) `listTitle` drops the characters
+  the 8x8 font can't draw instead of rejecting the whole title, falling back to the file name only when nothing
+  printable is left; the test's scratch folder is removed when the program ends.
+- **Round 3 review fixes** (2026-10-08): (1) the `.png` write's rename is guarded by its `open` too (the `.info`
+  branch already was), so a temp file that never opened is never renamed over the icon; (2) a direct test that
+  the key's `|` separators disambiguate (two files whose path+size+mtime merge into the same string get
+  different keys); (3) a test of a scan cancelled mid-read: it gives up at its first sector and caches nothing;
+  (4) note, no code change: a title with a newline shows its parts joined (the 8x8 font can't draw the newline,
+  so `listTitle` drops it).
 
 ## PSP core: blending in the shader — 2026-10-08
 
