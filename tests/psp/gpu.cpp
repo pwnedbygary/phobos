@@ -1508,6 +1508,47 @@ static auto gpuDepth() -> void {
   }
 }
 
+//Loads through VRAM's second and fourth copies, the views the GE keeps its depth buffer in, of pixels the GPU drew
+//(WipEout reads its depth buffer where its bloom's buffers are): memory's bytes, without waiting, as the GPU's depth
+//isn't memory's to finish for; through the first copy the same bytes finish and find the GPU's pixels, as the
+//software renderer has them; and so do the depth views' once they're memory's again. A store through the fourth
+//copy still finishes first, as it did.
+static auto gpuDepthViewLoads() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 At = 0x3'0000;
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  for(System* s : {&software, &hardware}) {
+    for(u32 n = 0; n < 64 * 48 * 4; n += 4) s->memory.write(4, Memory::VRAMBase + At + n, 0x0102'0304 * (n / 4 + 1));
+    prepare(*s, At, 3);
+    sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff10'2030});
+  }
+  auto pixel = [](System& s, u32 offset) { return s.memory.read(4, Memory::VRAMBase + offset); };
+  constexpr u32 Pixel = At + 20 * 256 + 8 * 4;  //(row 20, column 8)
+  u32 memorys = 0x0102'0304 * ((Pixel - At) / 4 + 1), drawn = (memorys & 0xff00'0000) | 0x10'2030;  //(the stencil kept)
+  for(u32 copy : {1u, 3u}) {
+    u32 seen = Memory::VRAMBase + copy * Memory::VRAMSize + Memory::vramSeen(copy, Pixel);
+    auto before = gpu->statistics;
+    CHECK(hardware.memory.read(4, seen), memorys);
+    CHECK(gpu->statistics.finishes, before.finishes);
+    CHECK(software.memory.read(4, seen), drawn);
+  }
+  auto before = gpu->statistics;
+  CHECK(pixel(hardware, At + 30 * 256 + 40), pixel(software, At + 30 * 256 + 40));
+  CHECK(gpu->statistics.finishes, before.finishes + 1);
+  u32 seen = Memory::vramSeen(3, Pixel);
+  CHECK(hardware.memory.read(4, 0x0460'0000 + seen), drawn);
+  for(System* s : {&software, &hardware}) {
+    sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff40'5060});
+    before = gpu->statistics;
+    s->memory.write(2, 0x0460'0000 + seen, 0x7788);
+    if(s == &hardware) CHECK(gpu->statistics.finishes, before.finishes + 1);
+  }
+  CHECK(apart(software, hardware), 0u);
+  hardware.ge.setRenderer(nullptr);
+}
+
 //Bytes beside the GPU's pixels, in the unused columns right of a picture (where games keep their lists): the CPU
 //writes and reads them without waiting for the GPU, a sprite beside them doesn't wait either, and a sprite over
 //them, once the GPU has its pixels from memory again, draws as the software renderer does.
@@ -2029,6 +2070,7 @@ auto gpuTests() -> Tests {
     {"gpu memory's bytes in its pages taken again, not the target afresh", gpuRevived},
     {"gpu a texture's place taken by tiles reaching further: few copies, held to what each takes", gpuTiles},
     {"gpu depth buffer follows memory's changes", gpuDepth},
+    {"gpu loads through the depth buffer's views: memory's, without waiting", gpuDepthViewLoads},
     {"gpu bytes beside its pixels are memory's, without waiting", gpuBeside},
     {"gpu start-up check passes on a GPU that draws right", gpuCheck},
     {"gpu at 2 and 3 times the resolution: memory's bytes exact", gpuScaled},

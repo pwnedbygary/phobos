@@ -499,7 +499,7 @@ struct GE {
   auto drawnFirst(u32 address, u32 size) -> void;
   auto undrawnPage(u32 address) -> bool;
   auto drawnBefore(const std::bitset<VRAMPages>& read, const std::bitset<VRAMPages>& written) -> void;
-  auto drawnOver(u32 first, u32 last) -> bool;
+  auto drawnOver(u32 first, u32 last, bool rendered = true) -> bool;
   auto defer(const PixelState& pixel, const Region& region) -> bool;
   auto record(const Job& job) -> void;
   auto drawBands(Batch& batch) -> void;

@@ -175,7 +175,11 @@ or another frame buffer's drawn there, are newer than its pixels. Decoded textur
 change when the pages are first owned, as they do of the software renderer's drawing. The depth buffer isn't read back
 (the GPU's depth stays the GPU's; a game that reads depth with the CPU, or samples it as a texture, sees what memory
 had; and a PRIM the software renderer draws, above, tests against memory's depth): PPSSPP makes the same choice by
-default, and it's on the list below.
+default, and it's on the list below. So a load through VRAM's second or fourth copy, the views the GE keeps its depth
+buffer in, doesn't finish the renderer (part 68: `Memory::vramDepthDrawnOver`): finishing couldn't give it the GPU's
+depth, only the colors of a frame buffer drawn over the same bytes. WipEout reads its depth buffer at the screen's
+middle and a few more points as it draws, where its bloom's buffers are: one finish a frame, and its pixels read back,
+for the colors of the bloom of the frame before.
 
 **Bytes beside the pixels.** A page is 4 KiB, two rows of a 512-wide 8888 frame buffer, and games keep their own
 bytes in the same pages: Brave Story keeps its display list in the 32 unused columns right of its 480-pixel picture,

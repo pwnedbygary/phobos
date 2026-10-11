@@ -109,6 +109,11 @@ struct Memory {
   //kept in the unused columns beside a frame buffer's picture), which pointer() then reaches without waiting. None:
   //all of a busy page is drawn over.
   std::function<auto (u32 first, u32 last) -> bool> vramDrawnOver;
+  //Likewise for a load through VRAM's second or fourth copy, the views the GE keeps its depth buffer in: only drawing
+  //that writes memory's depth (the GE's drawing threads), not a hardware renderer's, whose depth stays on the GPU, so
+  //that finishing would hand such a load the colors of a frame buffer drawn over the same bytes instead (WipEout reads
+  //its depth buffer at the screen's middle as it draws, where its bloom's buffers are). None: vramDrawnOver's.
+  std::function<auto (u32 first, u32 last) -> bool> vramDepthDrawnOver;
   //A change to VRAM's bytes first to last while pages are busy, reached without waiting (changed()): for the GE to
   //hear of, as a hardware renderer keeps its own copies of the pages.
   std::function<auto (u32 first, u32 last) -> void> vramChangedBusy;
@@ -126,7 +131,7 @@ struct Memory {
   auto unwatchAll() -> void;
   auto pagesOf(u32 address, u32 size, u32& first, u32& last) const -> bool;
   auto serialize(serializer& s) -> void;
-  auto pointer(u32 address, u32 size = 1) -> u8*;
+  auto pointer(u32 address, u32 size = 1, bool load = false) -> u8*;
   auto reaches(u32 address, u32 size) -> bool;
   auto read(u32 size, u32 address) -> u32;
   auto write(u32 size, u32 address, u32 data) -> void;
