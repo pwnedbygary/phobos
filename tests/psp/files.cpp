@@ -256,12 +256,16 @@ static auto controllerPeek() -> void {
   CHECK(m.system.memory.read(4, Buffer + 4), ~0x4010u);
   m.call("sceCtrlGetSamplingMode", {Buffer});
   CHECK(m.system.memory.read(4, Buffer), 1);
-  //the count is a byte, and the PSP keeps 64 samples: 64 or more is refused, and a count that wraps can't overflow
-  CHECK(m.call("sceCtrlPeekBufferPositive", {Buffer, 64}), Kernel::ErrorInvalidSize);
-  CHECK(m.call("sceCtrlPeekBufferPositive", {Buffer, 0x1000'0040}), Kernel::ErrorInvalidSize);
+  //the count is a byte, and the PSP keeps 64 samples: up to 64 may be asked for (MACH's title reads all 64), more is
+  //refused, and a count that wraps can't overflow
+  CHECK(m.call("sceCtrlPeekBufferPositive", {Buffer, 65}), Kernel::ErrorInvalidSize);
+  CHECK(m.call("sceCtrlPeekBufferPositive", {Buffer, 0x1000'0041}), Kernel::ErrorInvalidSize);
   CHECK(m.call("sceCtrlPeekBufferPositive", {Buffer, 0x1000'0001}), 1);
   CHECK(m.call("sceCtrlPeekBufferPositive", {Buffer, 63}), 63);
-  CHECK(m.call("sceCtrlReadBufferPositive", {Buffer, 64}), Kernel::ErrorInvalidSize);
+  CHECK(m.call("sceCtrlPeekBufferPositive", {Buffer, 64}), 64);
+  CHECK(m.system.memory.read(4, Buffer + 63 * 16 + 4), 0x4010);  //the latest, last of the 64
+  CHECK(m.call("sceCtrlReadBufferPositive", {Buffer, 65}), Kernel::ErrorInvalidSize);
+  CHECK(m.call("sceCtrlReadBufferPositive", {Buffer, 64}) != Kernel::ErrorInvalidSize, true);
 }
 
 //The latch: presses and releases between reads, the buttons held and not held at some sample meanwhile, and how many

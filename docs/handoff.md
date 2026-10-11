@@ -25,6 +25,15 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: a read of all 64 controller samples (MACH's title takes Start) — 2026-10-11
+
+Branch `cursor/psp-ctrl64-2b67`, on `master` (v2.0.0). The owner found MACH ignoring Start at its title on the RP6.
+Its title loop reads all 64 kept samples each frame (sceCtrlReadBufferPositive with a count of 64), which
+`ares/psp/kernel/ctrl.cpp` refused as too many (INVALID_SIZE), so no button ever reached it; the library runs never
+showed it, their Start coming before the title. Up to 64 may now be asked for, more refused, in the peek and read
+functions alike. In the runner, Start/Cross at the title now takes MACH to its profile handling. tests/psp's controller
+group asks for 64 (and 65, refused); tests/psp 438/0.
+
 ## Version codes for 2.x — 2026-10-11
 
 Branch `cursor/version-base-2x-2b67`, on `master` after the PSP stack merged (#208, #210), at the owner's request before
