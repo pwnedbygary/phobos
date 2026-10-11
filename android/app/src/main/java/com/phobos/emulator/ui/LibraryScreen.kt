@@ -237,6 +237,7 @@ private fun GlassSystemCard(
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 2,
             )
+            ExperimentalBadge(system, Modifier.padding(top = 4.dp))
         }
     }
 }
@@ -268,12 +269,12 @@ private fun MangaPanelSystemCard(
             ) {
                 SystemIcon(system, artPalette, iconPack, size = 78.dp)
             }
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(paper)
                     .padding(horizontal = 8.dp, vertical = 6.dp),
-                contentAlignment = Alignment.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
                     system.uppercase(),
@@ -283,6 +284,7 @@ private fun MangaPanelSystemCard(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                ExperimentalBadge(system, Modifier.padding(top = 4.dp))
             }
         }
     }
@@ -327,6 +329,7 @@ private fun PixelBoxSystemCard(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+            ExperimentalBadge(system, Modifier.padding(top = 4.dp))
         }
     }
 }
@@ -363,6 +366,7 @@ private fun RpgWindowSystemCard(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+            ExperimentalBadge(system, Modifier.padding(top = 4.dp))
         }
     }
 }
@@ -408,6 +412,7 @@ private fun CrtPanelSystemCard(
                 )
                 TitleCursor(nameStyle, nameColor)
             }
+            ExperimentalBadge(system, Modifier.padding(top = 4.dp))
         }
     }
 }

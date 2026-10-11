@@ -7,6 +7,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.phobos.emulator.launch.LaunchSystems
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -74,7 +75,7 @@ fun EmulationSettingsScreen(
                 }
             }
             item {
-                SettingsCategory("PlayStation Portable") {
+                SettingsCategory("PlayStation Portable", badge = { ExperimentalBadge(LaunchSystems.PSP, Modifier.padding(start = 8.dp)) }) {
                     PspRendererItem(settings.pspRenderer) { viewModel.setPspRenderer(it) }
                     PspResolutionItem(settings.pspResolution) { viewModel.setPspResolution(it) }
                     PspDrawingThreadsItem(settings.pspDrawingThreads) { viewModel.setPspDrawingThreads(it) }
