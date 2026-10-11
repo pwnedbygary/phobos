@@ -28,12 +28,14 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 ## PSP: God of War faster in every renderer — a move's stencil in one draw, the GE's PRIMs cheaper, logic operations in fours — 2026-10-11
 
 Branch `cursor/psp-speed7-2b67`, begun on #200's `cursor/psp-gow-vk-2b67` with #201's `cursor/psp-measure6-2b67`
-merged under it; measured against #201's tip `055029692`. docs/psp-core.md, part 67, has the evidence;
+merged under it; the RP6 measured against #201's tip `055029692` (#201 changes no GE, renderer or CPU code; the
+M1's and some earlier RP6 checks were against `c86461ec6`, as part 67 says). docs/psp-core.md, part 67, has the evidence;
 docs/psp-gpu-renderers.md's "Two targets over the same pages", "A texture running into the frame buffer below" and
 upscaling's uploads the design. Clean room: no PPSSPP code copied or translated, JPCSP's not read. Save states
 unchanged (24).
 - **Pictures**: the software renderer's byte for byte the base's (the measure harness's 137; every frame and end state
-  of the bench scenes and God of War's two at 1 and 7 threads, on the M1 and the RP6's end states). Every Vulkan frame
+  of the bench scenes and God of War's two at 1 and 7 threads on the M1, but MC3's menu's end state, which differs
+  between runs of the base's own runner too; every end state the same on the RP6). Every Vulkan frame
   of the bench scenes and God of War's two, in all four configurations, the base's at 1x, and at 4x but Midnight Club
   3's menu (on the RP6 76 of 80 comparisons identical, the four MC3's 4x): its frame buffer below now keeps the GPU's
   own pixels where part 65's round trip kept one of each pixel's sixteen; against the software renderer as close or

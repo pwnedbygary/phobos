@@ -8529,7 +8529,10 @@ strip's corner; error codes in hex; line widths) are taken too, without changing
 ## Part 67: God of War faster in every renderer — a move's stencil in one draw, the GE's PRIMs cheaper, logic operations in fours
 
 On branch `cursor/psp-speed7-2b67`, begun on #200's `cursor/psp-gow-vk-2b67` (`c86461ec6`) and with #201's
-`cursor/psp-measure6-2b67` merged under it; the base measured below is #201's tip, `055029692`. The task:
+`cursor/psp-measure6-2b67` merged under it; the base of the RP6's numbers (the frames a second, the profiles and
+the timestamps) is #201's tip, `055029692`. #201 changes the kernel's PGD and file calls but not the GE, the
+renderers or the CPU, so what was measured before the merge against `c86461ec6` (said where it's given: the M1's
+numbers, a move's parts left out, item 1 alone, a pass's render area) is the same rendering code's. The task:
 God of War: Chains of Olympus, and the rest, faster on the RP6 in all three renderers: the software renderer's every
 pixel as it was, every Vulkan frame of the bench scenes as it was (or, where a change can't keep it, its accuracy
 against the software renderer no worse, and what differs said); Midnight Club 3's menu back from part 65's 6% on
@@ -8548,8 +8551,9 @@ Per frame the battle has 72 moves (the menu 36, not part 65's 376), 78 fills fro
 140 render passes.
 
 - **The GPU at 4x.** Timestamps after each command (a scratch patch: draw passes, moves, fills, copies) on the RP6, the
-  battle at 4x: Turnip's accurate mode 93.2 ms a frame of draw passes, 17.3 of moves, 4.8 of fills, 2.3 of copies;
-  Qualcomm's 60.9, 22.6, 5.1 and 2.5. Leaving out each part of a move in turn (wrong pictures, for timing only): its
+  battle at 4x: Turnip's accurate mode 93.1 ms a frame of draw passes, 17.3 of moves, 4.8 of fills, 2.2 of copies;
+  Qualcomm's 60.9, 22.6, 5.1 and 2.4. Leaving out each part of a move in turn (wrong pictures, for timing only;
+  against `c86461ec6`): its
   stencil's clear and eight bit draws were 12.9 of Turnip's 17.3 ms and 14.1 of Qualcomm's 22.6; the stencil's staging
   1.6 and 5.2, the colors' staging 0.7 and 0.8, their draw 1.7 and 2.0. Fills above 1x likewise: 3.7 ms of their 4.8
   and 5.1 were the stencil's bits.
@@ -8558,8 +8562,8 @@ Per frame the battle has 72 moves (the menu 36, not part 65's 376), 78 fills fro
   GPU draws in, and its lists run from VRAM too, hundreds of thousands of command words a frame. So what the GE and
   the renderer do once a PRIM, once a vertex and once a word was most of the thread, beside the vertices' own
   arithmetic. simpleperf on the emulation thread (the battle, Turnip's accurate mode): `project()` 9.2%,
-  `transform()` 7.9%, `GPU::begin()` 5.2%, `GPU::own()` 4.6%, `transformState()` 4.2%, memcpy 3.9%, `readVertices()` 3.8%,
-  `Memory::pointer()` 2.9%, `GPU::settings()` 2.7%, `drawnFirst()` 2.7%, `GPU::drawnOver()` 2.5%. The backend's
+  `transform()` 7.9%, `GPU::begin()` 5.2%, `GPU::own()` 4.6%, `transformState()` 4.2%, memcpy 3.9%,
+  `readVertices()` 3.8%, `readVertex()` 3.0%, `Memory::pointer()` 2.9%, `GPU::settings()` 2.7%, `drawnFirst()` 2.7%, `GPU::drawnOver()` 2.5%. The backend's
   recording was 3.6 ms a frame on Turnip and 7.2 on Qualcomm's driver.
 - **The CPU's emulation**: 3.8 million instructions a frame in the battle, 10,500 of them (0.3%) handed to the
   interpreter (VFPU prefixes and rare instructions, counted by a scratch patch); the recompiled code ran 8.7 ms a
@@ -8573,8 +8577,9 @@ Per frame the battle has 72 moves (the menu 36, not part 65's 376), 78 fills fro
    replaced under a write mask of 255. Elsewhere only the bits the target's format keeps are drawn: a 5551 target's
    stencil, 0 or 255, in one draw; a 4444 one's, its four bits twice over, in four. A 5650 target has no stencil (no
    draw tests it, and read backs and moves leave it out), so moves and fills into one leave it, and moves from one
-   don't stage it. The battle at 4x: moves 17.3 -> 3.6 ms a frame on Turnip, 22.6 -> 6.2 on Qualcomm's driver, fills
-   4.8 -> 1.2 and 5.1 -> 1.6; 8.08 -> 9.20 and 10.50 -> 12.50 frames a second in the accurate mode, with this alone.
+   don't stage it. The battle at 4x with the branch: moves 17.3 -> 3.6 ms a frame on Turnip, 22.6 -> 6.3 on
+   Qualcomm's driver, fills 4.8 -> 1.2 and 5.1 -> 1.6; with this alone, against `c86461ec6` (an earlier session),
+   8.08 -> 9.20 and 10.50 -> 12.50 frames a second in the accurate mode.
 2. **A texture over two targets** (`holds()`, `take()`): part 65 moved the other targets' pixels in a texture's pages
    into its own target first. Logged on both games, every such move of Midnight Club 3's menu was of pages its PRIM
    then draws in, which its `begin()` moved straight back (the frame buffer below, two moves a frame), and none of God
@@ -8612,10 +8617,10 @@ Per frame the battle has 72 moves (the menu 36, not part 65's 376), 78 fills fro
    curved surface, a block transfer) or the list leaves it.
 8. **The backend's dynamic state** (`run()`): each draw with a state of its own set its scissor, three stencil states,
    the blend constants and the push constants again, and looked its pipeline up, whether or not the draw before had
-   the same (God of War: 2,200 draws a frame in 140 passes). Every draw pipeline has them dynamic, in one layout, so
+   the same (God of War: 2,230 draws a frame in 140 passes). Every draw pipeline has them dynamic, in one layout, so
    within a pass only what differs is set; it's all forgotten as a pass begins.
 9. **Fills** (`fill()`, `widenRows()`): God of War's battle fills about 357,000 of its targets' pixels a frame from
-   memory (77 fills; mostly bytes its block transfers wrote over parts of targets that PRIMs then draw over), its menu
+   memory (78 fills; mostly bytes its block transfers wrote over parts of targets that PRIMs then draw over), its menu
    213,000. A row at a time now, the format's widening chosen once; and an upload carries only the parts it has (the
    depths only for a depth buffer's), which the backend at 1x copied and converted whole for every fill.
 10. **The GE's time's areas** (`pixelsInside()`): a triangle's area inside the scissor rectangle isn't cut at the sides
@@ -8623,7 +8628,7 @@ Per frame the battle has 72 moves (the menu 36, not part 65's 376), 78 fills fro
 
 **Tried and dropped:** render passes over only what they draw (the draws' scissors together; a move's or fill's
 rectangle), made out to the render area granularity: no faster on Turnip, and Qualcomm's driver 5% slower in the
-battle at 4x (its GPU time 91.3 -> 96.2 ms a frame): the drivers aren't loading and storing whole targets for these
+battle at 4x (its GPU time 91.3 -> 96.2 ms a frame, against `c86461ec6`): the drivers aren't loading and storing whole targets for these
 passes. Making `transform()`'s arithmetic four lanes wide: its float operations' order is the software renderer's
 pictures (and the GPU's fast mode's inputs), so it would have to be the same operations in the same order, lane by
 lane; not attempted here.
@@ -8632,9 +8637,10 @@ lane; not attempted here.
 
 The RP6 (Adreno 740), the runner from adb's shell, its emulation thread pinned to the X3 (cpu7) as Phobos pins it,
 late frames and the pipelines kept, as part 65; frames a second over 150 frames from each scene's state (300 for the
-bench scenes), the means of two rounds with the base (`055029692`) and the branch taking turns to go first. The two
-rounds agreed within 3%, but for Lumines' (100 frames a second apart, as in part 63) and the branch's MC3 menu at 4x
-on Qualcomm's accurate mode (59.6 and 64.9).
+bench scenes), the means of two rounds with the base (`055029692`) and the branch taking turns to go first. Most
+pairs of rounds agreed within 3%; the widest were WipEout's race in the fast modes (up to 9%), MC3's race in the fast
+modes (up to 5%), the base's God of War menu on Turnip's accurate mode (5%), the branch's MC3 menu at 4x on
+Qualcomm's accurate mode (59.6 and 64.9), and Lumines' (up to 236 frames a second apart, as noisy as in part 63).
 
 God of War in Vulkan:
 
@@ -8694,38 +8700,38 @@ operations, which none of them draws.
 Logic operations four at a time on the RP6 (item 3's benchmark, pinned to the X3): 2.4-3.3 times as fast (flat
 sprites 2.9-3.0, flat triangles 3.0-3.3, textured sprites 2.4, textured triangles 2.6), VRAM the same either way.
 
-On the M1 (the runner, late frames; frames a second and the emulation thread's ms a frame, means of two rounds taking
-turns, God of War's battle 150 frames and its menu 60), Vulkan at 1x:
+On the M1 against `c86461ec6` (the runner, late frames; frames a second and the emulation thread's ms a frame, means
+of two rounds taking turns, God of War's battle 150 frames and its menu 60), Vulkan at 1x:
 
 | Scene | Accurate | Fast |
 | --- | --- | --- |
 | Battle | 4.60 -> 4.61 fps, 90.4 -> 73.8 ms (-18%) | 16.30 -> 22.96 fps (+41%), 60.7 -> 43.4 ms (-28%) |
-| Menu | 21.95 -> 22.38 fps, 22.5 -> 17.6 ms (-22%) | 62.26 -> 87.93 fps (+41%), 16.0 -> 11.3 ms (-30%) |
+| Menu | 21.95 -> 22.38 fps, 22.5 -> 17.6 ms (-22%) | 62.26 -> 87.93 fps (+41%), 16.0 -> 11.3 ms (-29%) |
 
 (The M1's GPU is the bound in the battle's accurate mode.)
 
 ### Accuracy
 
 - **Software**: untouched. The measure harness's 137 pictures and its log are byte for byte the base's; on the M1
-  the bench scenes', Peace Walker's title's and God of War's two scenes' every frame (picture and VRAM) and end state
+  (against `c86461ec6`) the bench scenes', Peace Walker's title's and God of War's two scenes' every frame (picture and VRAM) and end state
   are the same from the base's runner and the branch's, at 7 and 1 threads, but MC3's menu's end state, which differs
   from run to run of the base's own runner too (its frames don't). On the RP6 every software session's end state was
   the same from both (God of War's two and the six bench scenes, 1 and 7 threads, two rounds).
 - **Vulkan**: every frame of God of War's two scenes and the eight bench scenes, ten from each state in all four
-  configurations at 1x and at 4x, was byte for byte the base's on the RP6 with item 1 (80 of 80); with the whole
-  branch, 76 of the 80, the four apart MC3's menu at 4x in each configuration (below). On the
-  M1 with the whole branch, the same nine scenes in both modes at 1x and 4x (Killzone's state isn't on the M1): every
+  configurations at 1x and at 4x, was byte for byte the base's on the RP6 with item 1 alone (80 of 80, against
+  `c86461ec6`); with the whole branch against `055029692`, 76 of the 80, the four apart MC3's menu at 4x in each
+  configuration (below). On the M1 with the whole branch against `c86461ec6`, the same nine scenes in both modes at 1x and 4x (Killzone's state isn't on the M1): every
   frame the base's but MC3's menu at 4x.
 - **MC3's menu at 4x** differs (item 2), and only above 1x: a move is the PSP's pixels' bits, so it keeps one of each
   pixel's scale x scale samples, and part 65's round trip left the frame buffer below at the PSP's resolution where the
   PRIM's texture ran into it; now the GPU's own pixels stay there (27% of the frame's pixels differ on the M1). Against
-  the software renderer, each 4x frame brought to the PSP's pixels, 40 frames on the M1: identical 47.9 -> 50.0% by
+  the software renderer, each 4x frame brought to the PSP's pixels, 40 frames on the M1 (against `c86461ec6`): identical 47.9 -> 50.0% by
   each 4x4 block's mean, 47.4 -> 48.4% by its middle sample, 48.8 -> 49.5% and 44.0 -> 44.7% by two of the other
   three samples on its diagonal, and 46.9 -> 46.2% by the top-left one. On the RP6, 20 frames, Qualcomm's driver
   (both modes; Turnip's fast mode the same, its accurate mode a point above each): 49.9 -> 52.2% by the blocks' means,
   49.8 -> 51.0% by the middle sample, 51.3 -> 52.1% and 46.5 -> 47.3% by the other two, 49.5 -> 48.8% by the
-  top-left one; channels more than 8 levels apart by the means 215,000 -> 229,000 of the 2.6 million pixels. So as
-  close or closer by the means and three of the samples, 0.7 points further by one, and a few more pixels far apart:
+  top-left one; channels more than 8 levels apart by the means 215,000 -> 229,000 (of 7.8 million). So as close or
+  closer by the means and three of the samples, 0.7 points further by one, and a few more channels far apart:
   the GPU's own 4x pixels against the software renderer's single sample, which neither way matches exactly.
 
 ### Checks
