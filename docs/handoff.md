@@ -25,6 +25,48 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: God of War faster in every renderer — a move's stencil in one draw, the GE's PRIMs cheaper, logic operations in fours — 2026-10-11
+
+Branch `cursor/psp-speed7-2b67`, begun on #200's `cursor/psp-gow-vk-2b67` with #201's `cursor/psp-measure6-2b67`
+merged under it; measured against #201's tip `055029692`. docs/psp-core.md, part 67, has the evidence;
+docs/psp-gpu-renderers.md's "Two targets over the same pages", "A texture running into the frame buffer below" and
+upscaling's uploads the design. Clean room: no PPSSPP code copied or translated, JPCSP's not read. Save states
+unchanged (24).
+- **Pictures**: the software renderer's byte for byte the base's (the measure harness's 137; every frame and end state
+  of the bench scenes and God of War's two at 1 and 7 threads, on the M1 and the RP6's end states). Every Vulkan frame
+  of the bench scenes and God of War's two, in all four configurations, the base's at 1x, and at 4x but Midnight Club
+  3's menu (on the RP6 76 of 80 comparisons identical, the four MC3's 4x): its frame buffer below now keeps the GPU's
+  own pixels where part 65's round trip kept one of each pixel's sixteen; against the software renderer as close or
+  closer by the blocks' means and three of four samples (RP6 49.9 -> 52.2% identical by the means), 0.7 points further
+  by the top-left one.
+- **Changes** (each its own commit, with its tests): moves and fills above 1x give the stencil with the colors in one
+  draw where the driver has `VK_EXT_shader_stencil_export` (both of the RP6's), else draw only the bits the format
+  keeps, none for 5650; a texture over two targets is moved into one only where the PRIM doesn't draw over the pages
+  moved (MC3's menu: no moves, part 63's two-part copy); logic operations four pixels at a time in the software
+  renderer; and for God of War's 37,600 PRIMs a frame at 1x: a PRIM's 3D settings kept and worked out again only where
+  their words change, vertices in a row asked about at once, the renderer's page scans skipped while nothing changed,
+  list words read without asking twice, the backend's dynamic state set only where it differs, fills a row at a time,
+  the GE time's triangle areas cut only where they cross.
+- **RP6, means of two rounds, each runner first in one** (fps, Turnip accurate / fast, Qualcomm's accurate / fast):
+  God of War's battle at 1x 16.8 / 17.0 / 15.8 / 15.8 -> 22.1 / 22.4 / 20.5 / 20.6 (+30-32%, the emulation thread
+  59-63 -> 44-48 ms a frame), its menu 73.6 / 76.4 / 66.4 / 67.1 -> 101.7 / 104.8 / 88.2 / 90.6 (+33-38%); at 4x the
+  battle 8.46 / 14.3 / 10.9 / 10.0 -> 9.93 / 18.8 / 13.9 / 12.5 (+17-32%; the GPU's moves 17.3 -> 3.6 ms a frame on
+  Turnip, 22.6 -> 6.3 on Qualcomm's), the menu 17.9 / 23.0 / 20.5 / 19.7 -> 21.2 / 28.9 / 26.1 / 24.5 (+18-27%).
+  MC3's menu at 1x 103.1 / 108.4 / 93.5 / 97.8 -> 113.0 / 119.3 / 107.7 / 112.9 (+10-15%, past part 63's 105 on
+  Qualcomm's), at 4x +26-35%. The other bench scenes at 1x +5-7% (Killzone's menu and the 2D two about the same).
+  The software renderer: God of War's battle 4.29 -> 4.32 at 1 thread, 8.41 -> 8.73 at 7, the bench scenes within 2%;
+  logic operations 2.4-3.3 times as fast.
+- **Checks**: tests/psp 431/0 (sanitized; three new groups and cases in the moves, scaled and stacked texture groups,
+  which broken versions fail), tests/allegrex 58/0, tests/psp/ares 307/0; the GPU tests on the RP6 31/0 on both
+  drivers (one skips itself on Qualcomm's); GCC 11 and 13 as the base (four.cpp's maybe-uninitialized warnings at
+  -O1-O3, the base's the same). An independent review found no correctness bug (two test gaps filled, a comment
+  corrected); a delta review no bug (its two points taken).
+- **Left**: the draws at 4x (God of War's scene about five times a vblank, 16 times the pixels; 93 ms a frame on
+  Turnip's accurate mode); `transform()`'s arithmetic (exactly, lane by lane, not attempted); the GE's real speed; two
+  older GPU renderer differences found writing the tests (a 5650 target's stencil test, clear mode's full 8-bit
+  stencil on 5551/4444).
+- Scratch: `~/phobos-work/scratch/speed7`; nothing left on the RP6.
+
 ## PSP measure: round 6 — the GE's time, lighting's cosine, the reciprocal's chords, patches — 2026-10-10
 
 Branch `cursor/psp-measure6-2b67`, on top of #200's `cursor/psp-gow-vk-2b67` (`c86461ec6`). docs/psp-core.md, part 66,

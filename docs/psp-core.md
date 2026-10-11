@@ -8528,7 +8528,8 @@ strip's corner; error codes in hex; line widths) are taken too, without changing
 
 ## Part 67: God of War faster in every renderer — a move's stencil in one draw, the GE's PRIMs cheaper, logic operations in fours
 
-On branch `cursor/psp-speed7-2b67`, on top of #200's `cursor/psp-gow-vk-2b67` (`c86461ec6`, the base here). The task:
+On branch `cursor/psp-speed7-2b67`, begun on #200's `cursor/psp-gow-vk-2b67` (`c86461ec6`) and with #201's
+`cursor/psp-measure6-2b67` merged under it; the base measured below is #201's tip, `055029692`. The task:
 God of War: Chains of Olympus, and the rest, faster on the RP6 in all three renderers: the software renderer's every
 pixel as it was, every Vulkan frame of the bench scenes as it was (or, where a change can't keep it, its accuracy
 against the software renderer no worse, and what differs said); Midnight Club 3's menu back from part 65's 6% on
@@ -8540,9 +8541,9 @@ worked out again from the GE's words where they differ, and the renderer's cache
 
 Part 65 measured God of War before part 64's GE time was merged under it: since then the menu draws its scene 2 or 3
 times a vblank, not 27, and the battle about 5, not 8. With the base on the RP6 (fps; Turnip accurate / fast,
-Qualcomm's accurate / fast): the battle 16.7 / 17.5 / 15.0 / 16.1 at 1x, the emulation thread 57-66 ms a frame; the
-menu 75.8 / 78.3 / 65.6 / 68.4; at 4x the battle 8.4 / 15.3 / 10.8 / 10.0 and the menu 17.9 / 23.0 / 20.5 / 19.6, the
-GPU the bound (on Turnip in the accurate mode the emulation thread waited 57 ms a frame for a slot in the battle).
+Qualcomm's accurate / fast): the battle 16.8 / 17.0 / 15.8 / 15.8 at 1x, the emulation thread 59-63 ms a frame; the
+menu 73.6 / 76.4 / 66.4 / 67.1; at 4x the battle 8.46 / 14.3 / 10.9 / 10.0 and the menu 17.9 / 23.0 / 20.5 / 19.7, the
+GPU the bound (on Turnip in the accurate mode the emulation thread waited 56 ms a frame for a slot in the battle).
 Per frame the battle has 72 moves (the menu 36, not part 65's 376), 78 fills from memory, 78 copies, 2,230 draws in
 140 render passes.
 
@@ -8556,11 +8557,13 @@ Per frame the battle has 72 moves (the menu 36, not part 65's 376), 78 fills fro
   seven vertices each, from VRAM: 255,000 vertices a frame, 95% of them lit and 45% skinned, read from VRAM pages the
   GPU draws in, and its lists run from VRAM too, hundreds of thousands of command words a frame. So what the GE and
   the renderer do once a PRIM, once a vertex and once a word was most of the thread, beside the vertices' own
-  arithmetic (`transform()`, the biggest single function). The backend's recording was 6.6 ms a frame on Turnip and
-  13.2 on Qualcomm's driver.
+  arithmetic. simpleperf on the emulation thread (the battle, Turnip's accurate mode): `project()` 9.2%,
+  `transform()` 7.9%, `GPU::begin()` 5.2%, `GPU::own()` 4.6%, `transformState()` 4.2%, memcpy 3.9%, `readVertices()` 3.8%,
+  `Memory::pointer()` 2.9%, `GPU::settings()` 2.7%, `drawnFirst()` 2.7%, `GPU::drawnOver()` 2.5%. The backend's
+  recording was 3.6 ms a frame on Turnip and 7.2 on Qualcomm's driver.
 - **The CPU's emulation**: 3.8 million instructions a frame in the battle, 10,500 of them (0.3%) handed to the
-  interpreter (VFPU prefixes and rare instructions, counted by a scratch patch): the recompiled code is the cost, not
-  the interpreter.
+  interpreter (VFPU prefixes and rare instructions, counted by a scratch patch); the recompiled code ran 8.7 ms a
+  frame of the software renderer's 232 at one thread. Neither is where the time is.
 
 ### What was done
 
@@ -8582,7 +8585,8 @@ Per frame the battle has 72 moves (the menu 36, not part 65's 376), 78 fills fro
    logic operation comes after blending and dithering, bit by bit on the channels held to 0-255, the stencil left
    as it is, so `pixelsFour()` does it there, lane by lane on each channel, each kept to its 8 bits. No bench scene
    nor God of War draws with one; a scratch benchmark (200 full-screen sprites or triangles with XOR, flat or from a
-   filtered texture, 8888 or 5650) draws them 3.0-4.2 times as fast on the M1 (RP6 below), VRAM the same either way.
+   filtered texture, 8888 or 5650) draws them 3.0-4.2 times as fast on the M1 and 2.4-3.3 on the RP6, VRAM the same
+   either way.
 4. **A PRIM's 3D settings kept** (`transformKept()`, `settingsState()`): `transformState()` turned every matrix's 148
    words into floats and worked out the four lights for each PRIM. Each part of a Transform comes from its own words
    alone (a matrix's floats from its words; the viewport's, texture mapping's and fog's settings from their commands;
@@ -8626,7 +8630,69 @@ lane; not attempted here.
 
 ### Numbers
 
-TODO-RP6
+The RP6 (Adreno 740), the runner from adb's shell, its emulation thread pinned to the X3 (cpu7) as Phobos pins it,
+late frames and the pipelines kept, as part 65; frames a second over 150 frames from each scene's state (300 for the
+bench scenes), the means of two rounds with the base (`055029692`) and the branch taking turns to go first. The two
+rounds agreed within 3%, but for Lumines' (100 frames a second apart, as in part 63) and the branch's MC3 menu at 4x
+on Qualcomm's accurate mode (59.6 and 64.9).
+
+God of War in Vulkan:
+
+| Scene | Turnip accurate | Turnip fast | Qualcomm accurate | Qualcomm fast |
+| --- | --- | --- | --- | --- |
+| Battle, 1x | 16.8 -> 22.1 (+32%) | 17.0 -> 22.4 (+32%) | 15.8 -> 20.5 (+30%) | 15.8 -> 20.6 (+30%) |
+| Menu, 1x | 73.6 -> 101.7 (+38%) | 76.4 -> 104.8 (+37%) | 66.4 -> 88.2 (+33%) | 67.1 -> 90.6 (+35%) |
+| Battle, 4x | 8.46 -> 9.93 (+17%) | 14.3 -> 18.8 (+32%) | 10.9 -> 13.9 (+28%) | 10.0 -> 12.5 (+25%) |
+| Menu, 4x | 17.9 -> 21.2 (+18%) | 23.0 -> 28.9 (+25%) | 20.5 -> 26.1 (+27%) | 19.7 -> 24.5 (+25%) |
+
+The emulation thread at 1x, ms a frame: the battle 59.2 / 58.6 / 62.9 / 62.9 -> 44.9 / 44.4 / 48.4 / 48.4 (-23 to
+-24%), the menu 13.5 / 13.0 / 14.9 / 14.8 -> 9.7 / 9.5 / 11.2 / 10.9 (-25 to -28%). Its profile in the battle on
+Turnip's accurate mode, 58.9 -> 45.0 ms: `GPU::begin()` and `GPU::own()` (3,300 samples) fall out of the top,
+`transformState()`'s 1,397 are `transformKept()`'s 623, and `drawnFirst()`, `drawnOver()` and `Memory::pointer()`
+shrink; `project()` 11.3% and `transform()` 10.7% are the top now. The backend's recording at 1x 19-35% less (the
+battle 3.6 -> 2.7 ms on Turnip, 7.2 -> 5.8 on Qualcomm's driver). The GPU's time in the battle at 4x (timestamps, as
+above): Turnip's accurate mode 117.6 -> 100.1 ms a frame (moves 17.3 -> 3.6, fills 4.8 -> 1.2, draws 93.1 the same),
+Qualcomm's 91.1 -> 71.2 (moves 22.6 -> 6.3, fills 5.1 -> 1.6, draws 60.9); the menu at 4x 55.8 -> 47.1 and 48.3 ->
+38.0. Turnip's accurate mode at 4x is the one bound by the draws themselves, so it gains least.
+
+God of War in the software renderer (its time is the drawing, which this part leaves as it was; every end state the
+same from both):
+
+| Scene | 1 thread | 7 threads |
+| --- | --- | --- |
+| Battle | 4.29 -> 4.32 | 8.41 -> 8.73 (+4%) |
+| Menu | 8.71 -> 8.66 | 21.3 -> 21.6 |
+
+Midnight Club 3's menu (part 65's 6% on Qualcomm's driver), its own session of 300 frames:
+
+| Scene | Turnip accurate | Turnip fast | Qualcomm accurate | Qualcomm fast |
+| --- | --- | --- | --- | --- |
+| Menu, 1x | 103.1 -> 113.0 (+10%) | 108.4 -> 119.3 (+10%) | 93.5 -> 107.7 (+15%) | 97.8 -> 112.9 (+15%) |
+| Menu, 4x | 45.3 -> 56.9 (+26%) | 58.0 -> 78.5 (+35%) | 47.5 -> 62.2 (+31%) | 43.8 -> 58.3 (+33%) |
+
+On Qualcomm's driver its recording at 1x is 1.51 -> 0.82 ms a frame: the two moves gone. Part 63 had 105.0 there.
+
+The bench scenes at 1x, Vulkan:
+
+| Scene | Turnip accurate | Turnip fast | Qualcomm accurate | Qualcomm fast |
+| --- | --- | --- | --- | --- |
+| Killzone, menu | 65.5 -> 65.5 | 94.9 -> 96.5 | 57.0 -> 57.8 | 57.0 -> 57.4 |
+| Midnight Club 3, menu | 105.3 -> 115.2 (+9%) | 110.6 -> 121.4 (+10%) | 96.0 -> 110.7 (+15%) | 99.0 -> 114.9 (+16%) |
+| Midnight Club 3, race | 55.3 -> 57.9 (+5%) | 61.4 -> 64.9 (+6%) | 53.2 -> 55.8 (+5%) | 58.4 -> 61.6 (+6%) |
+| Liberty City Stories, city | 93.4 -> 98.3 (+5%) | 108.2 -> 114.3 (+6%) | 90.0 -> 94.2 (+5%) | 103.3 -> 109.1 (+6%) |
+| Liberty City Stories, woods | 122.6 -> 129.9 (+6%) | 144.8 -> 153.3 (+6%) | 117.4 -> 123.8 (+5%) | 136.4 -> 144.6 (+6%) |
+| WipEout Pure, race | 92.9 -> 98.5 (+6%) | 95.1 -> 101.3 (+7%) | 87.4 -> 93.7 (+7%) | 87.8 -> 93.1 (+6%) |
+| Peace Walker, title (2D) | 1094 -> 1107 | 1111 -> 1149 (+3%) | 1022 -> 1036 | 1024 -> 1035 |
+| Lumines, demo (2D) | 798 -> 852 | 794 -> 808 | 758 -> 752 | 765 -> 750 |
+
+The bench scenes in the software renderer, frames a second at 1 / 7 threads, every end state the same from both:
+MC3's race 22.0 -> 21.9 / 48.6 -> 49.5, its menu 27.9 -> 27.6 / 69.0 -> 69.8, LCS's city 36.3 -> 36.2 / 76.0 ->
+77.6, its woods 36.4 -> 36.3 / 78.8 -> 78.7, Lumines 142.4 -> 140.0 / 374.7 -> 373.2, Peace Walker's title 65.5 ->
+64.8 / 212.6 -> 211.4: within 2% either way, as nothing of the software renderer's drawing changed but logic
+operations, which none of them draws.
+
+Logic operations four at a time on the RP6 (item 3's benchmark, pinned to the X3): 2.4-3.3 times as fast (flat
+sprites 2.9-3.0, flat triangles 3.0-3.3, textured sprites 2.4, textured triangles 2.6), VRAM the same either way.
 
 On the M1 (the runner, late frames; frames a second and the emulation thread's ms a frame, means of two rounds taking
 turns, God of War's battle 150 frames and its menu 60), Vulkan at 1x:
@@ -8643,9 +8709,11 @@ turns, God of War's battle 150 frames and its menu 60), Vulkan at 1x:
 - **Software**: untouched. The measure harness's 137 pictures and its log are byte for byte the base's; on the M1
   the bench scenes', Peace Walker's title's and God of War's two scenes' every frame (picture and VRAM) and end state
   are the same from the base's runner and the branch's, at 7 and 1 threads, but MC3's menu's end state, which differs
-  from run to run of the base's own runner too (its frames don't). TODO-RP6-SOFT
+  from run to run of the base's own runner too (its frames don't). On the RP6 every software session's end state was
+  the same from both (God of War's two and the six bench scenes, 1 and 7 threads, two rounds).
 - **Vulkan**: every frame of God of War's two scenes and the eight bench scenes, ten from each state in all four
-  configurations at 1x and at 4x, was byte for byte the base's on the RP6 with item 1 (80 of 80). TODO-RP6-ACC On the
+  configurations at 1x and at 4x, was byte for byte the base's on the RP6 with item 1 (80 of 80); with the whole
+  branch, 76 of the 80, the four apart MC3's menu at 4x in each configuration (below). On the
   M1 with the whole branch, the same nine scenes in both modes at 1x and 4x (Killzone's state isn't on the M1): every
   frame the base's but MC3's menu at 4x.
 - **MC3's menu at 4x** differs (item 2), and only above 1x: a move is the PSP's pixels' bits, so it keeps one of each
@@ -8653,15 +8721,22 @@ turns, God of War's battle 150 frames and its menu 60), Vulkan at 1x:
   PRIM's texture ran into it; now the GPU's own pixels stay there (27% of the frame's pixels differ on the M1). Against
   the software renderer, each 4x frame brought to the PSP's pixels, 40 frames on the M1: identical 47.9 -> 50.0% by
   each 4x4 block's mean, 47.4 -> 48.4% by its middle sample, 48.8 -> 49.5% and 44.0 -> 44.7% by two of the other
-  three samples on its diagonal, and 46.9 -> 46.2% by the top-left one. TODO-RP6-MC3
+  three samples on its diagonal, and 46.9 -> 46.2% by the top-left one. On the RP6, 20 frames, Qualcomm's driver
+  (both modes; Turnip's fast mode the same, its accurate mode a point above each): 49.9 -> 52.2% by the blocks' means,
+  49.8 -> 51.0% by the middle sample, 51.3 -> 52.1% and 46.5 -> 47.3% by the other two, 49.5 -> 48.8% by the
+  top-left one; channels more than 8 levels apart by the means 215,000 -> 229,000 of the 2.6 million pixels. So as
+  close or closer by the means and three of the samples, 0.7 points further by one, and a few more pixels far apart:
+  the GPU's own 4x pixels against the software renderer's single sample, which neither way matches exactly.
 
 ### Checks
 
-- `tests/psp/run-tests.sh` (sanitizers on): 431 groups, 0 failures (with #201 merged under it; its 428 and three new: "ge 3D settings
-  kept from PRIM to PRIM", "ge vertices and lists drawn first", "gpu vertices and a list read from what it drew, and
-  pages given back without a finish"); the moves, scaled and stacked texture groups take in the new cases. `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 307 checks, 0
-  failed. TODO-RP6-GPU GCC 11 (ubuntu:22.04) and 13 (ubuntu:24.04) as on the base: the kernel and the changed tests
-  compile, `gpu.cpp` (with `vulkan.cpp`) at -O1, -O2 and -O3 with -Wall -Wextra -Werror, the GE likewise but for
+- `tests/psp/run-tests.sh` (sanitizers on): 431 groups, 0 failures (with #201 merged under it; its 428 and three new:
+  "ge 3D settings kept from PRIM to PRIM", "ge vertices and lists drawn first", "gpu vertices and a list read from what
+  it drew, and pages given back without a finish"); the moves, scaled and stacked texture groups take in the new cases.
+  `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 307 checks, 0 failed. The GPU
+  tests built for Android pass on the RP6 on Turnip and on Qualcomm's driver (31 groups each; one skips itself on
+  Qualcomm's, which doesn't read the frame buffer). GCC 11 (ubuntu:22.04) and 13 (ubuntu:24.04) as on the base: the
+  kernel and the changed tests compile, `gpu.cpp` (with `vulkan.cpp`) at -O1, -O2 and -O3 with -Wall -Wextra -Werror, the GE likewise but for
   `four.cpp`'s maybe-uninitialized warnings (part 61's, the base's the same).
 - Broken versions each fail a test: a 5551 stencil left out of moves or fills, or set to 0x80, and a 4444 one's low
   bits left out (the moves and scaled groups); the exported stencil wrong in value or the colors left out with it;
@@ -8694,5 +8769,5 @@ turns, God of War's battle 150 frames and its menu 60), Vulkan at 1x:
   later stencil test there can differ. The groups' stencil-tested sprites are drawn where neither shows.
 - **MC3's menu at 4x** differs from part 65's (item 2, "Accuracy").
 - Scratch: `~/phobos-work/scratch/speed7` (build-vk.sh; rp6.sh, rp6-all.sh and push/, the RP6's sessions; gputime-
-  and the count patches; acc-host.sh, soft-all.sh, cmp4.py; mutate.sh, quick-tests.sh; logicbench.cpp; gcc.sh).
-  TODO-RP6-CLEAN
+  and the count patches; acc-host.sh, soft-all.sh, cmp4.py; tables67.py; mutate.sh, quick-tests.sh; logicbench.cpp;
+  gcc.sh). Nothing of it is left on the RP6.
