@@ -32,8 +32,12 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
   for(ran = 0; ran < budget;) {
     if(list.stall && list.address == list.stall) return Stop::Stalled;
     u32 at = list.address;
-    drawnFirst(at, 4);  //(a list in VRAM, where what waits may draw)
-    u32 word = memory.read(4, at);
+    drawnFirst(at, 4);  //(a list in VRAM, where what waits may draw: drawn first, then read without asking again)
+    u32 word;
+    {
+      Memory::KnownDrawn known;
+      word = memory.read(4, at);
+    }
     ran++;
     list.address = (at + 4) & 0x0fff'ffff;
     u32 command = word >> 24, argument = word & 0xff'ffff;

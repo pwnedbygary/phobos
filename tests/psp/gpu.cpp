@@ -982,9 +982,10 @@ static auto gpuMoves() -> void {
 
 //Vertices read from VRAM the GPU drew over (two points whose vertices, through mode, an 8888 color and 16-bit
 //positions, are the pixels of a sprite drawn just before, read in a row and by indices): the GPU's pixels put back
-//first, so they're where the software renderer has them. And pages given back to the CPU without a finish (as the
-//drawing threads' settle gives every busy page back: GE::freeVRAM()) while the GPU has drawn in them: a sprite drawn
-//again inside what it drew makes them its own again, busy (own()), so the CPU's read there finds its pixels.
+//first, so they're where the software renderer has them; likewise a display list there (AMBIENT_COLOR words whose
+//low 24 bits the sprite draws, run after it). And pages given back to the CPU without a finish (as the drawing
+//threads' settle gives every busy page back: GE::freeVRAM()) while the GPU has drawn in them: a sprite drawn again
+//inside what it drew makes them its own again, busy (own()), so the CPU's read there finds its pixels.
 static auto gpuVerticesDrawn() -> void {
   auto gpu = renderer();
   if(!gpu) return;
@@ -1004,6 +1005,22 @@ static auto gpuVerticesDrawn() -> void {
     }
     CHECK(apart(software, hardware), 0u);
     CHECK(software.memory.read(4, Memory::VRAMBase + (32 * 64 + 16) * 4), 0x0020'0010u);
+    hardware.ge.setRenderer(nullptr);
+  }
+  {
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    for(System* s : {&software, &hardware}) {
+      u32 list = Memory::VRAMBase + Drawn;
+      for(u32 n = 0; n < 4; n++) s->memory.write(4, list + n * 4, GE::AmbientColor << 24);
+      s->memory.write(4, list + 16, GE::Finish << 24), s->memory.write(4, list + 20, GE::End << 24);
+      prepare(*s, Drawn, 3);
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 4, 1}}, 0xff00'ff40});
+      s->ge.list = {}, s->ge.list.address = list;
+      CHECK(s->ge.run(16) == GE::Stop::Finished, true);
+    }
+    CHECK(software.ge.commands[GE::AmbientColor], u32(GE::AmbientColor << 24 | 0x00'ff40));
+    CHECK(hardware.ge.commands[GE::AmbientColor], software.ge.commands[GE::AmbientColor]);
     hardware.ge.setRenderer(nullptr);
   }
   System software, hardware;
@@ -1969,7 +1986,7 @@ auto gpuTests() -> Tests {
     {"gpu a PRIM it refuses among the drawing threads: drawn in order, the GPU's pages kept", gpuRefusedAmongThreads},
     {"gpu the same memory as frame buffers of other formats and places: moved on the GPU", gpuMoves},
     {"gpu frame buffers side by side in one target's rows", gpuSideBySide},
-    {"gpu vertices read from what it drew, and pages given back without a finish", gpuVerticesDrawn},
+    {"gpu vertices and a list read from what it drew, and pages given back without a finish", gpuVerticesDrawn},
     {"gpu a block transfer over pixels it drew: memory's at once, nothing finished", gpuTransferOver},
     {"gpu the CPU's stores over pixels it drew: memory's at once, nothing finished", gpuStoresOver},
     {"gpu pixels moved over bytes memory has the newest of: the moved ones newest", gpuMovedOverMemorys},
