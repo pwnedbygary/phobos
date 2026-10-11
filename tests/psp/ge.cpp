@@ -1379,9 +1379,9 @@ static auto geDepthViewLoads() -> void {
     list.put(GE::Scissor2, 479 | 271 << 10), list.put(GE::Region2, 479 | 271 << 10);
     list.put(GE::VertexType, 0x80'019f), list.put(GE::ShadeMode, 1);
     list.put(GE::DepthTestEnable, 1), list.put(GE::DepthTest, 1);  //(always: each sprite's depth written)
-    for(u32 n = 0; n < 12; n++) {
+    for(u32 n = 0; n < 30; n++) {
       float x = n * 37 % 200, y = n * 23 % 100;
-      put({{0, 0, 0, x, y, 0}, {0, 0, 0xff00'0000 + n * 0x10'2030, x + 280, y + 172, 1000.0f + n * 3000}});
+      put({{0, 0, 0, x, y, 0}, {0, 0, 0xff00'0000 + n * 0x10'2030, x + 280, y + 172, 1000.0f + n * 2000}});
     }
     list.put(GE::Finish), list.put(GE::End);
   };
@@ -1392,7 +1392,13 @@ static auto geDepthViewLoads() -> void {
     m.system.ge.drawing.shared = 0;
     build(m.system.memory);
     m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
-    if(threads > 1) CHECK(m.system.ge.launched(), true);
+    if(threads > 1) {  //(a batch drawing the depths still being drawn: else the loads wait for nothing)
+      bool drawing = false;
+      for(auto& batch : m.system.ge.drawing.batches) {
+        drawing |= GE::unfinished(batch) && batch.pending[Memory::vramOffset(3, middle) >> 12];
+      }
+      CHECK(drawing, true);
+    }
     u32 fourth = 0x0460'0000 + middle, second = 0x0420'0000 + Memory::vramSeen(1, Memory::vramOffset(3, corner));
     m.system.runProgram(0x0890'0000, {lui(t0, fourth >> 16), ori(t0, t0, fourth & 0xffff), lhu(t1, 0, t0),
                                       lui(t2, second >> 16), ori(t2, t2, second & 0xffff), lhu(t3, 0, t2),
@@ -1401,8 +1407,8 @@ static auto geDepthViewLoads() -> void {
     return std::array<u32, 2>{m.system.memory.read(4, 0x0892'0000), m.system.memory.read(4, 0x0892'0004)};
   };
   auto one = loads(1, false);
-  CHECK(one[0], 34000u);  //(the last sprite over each, its depth written as it was drawn)
-  CHECK(one[1], 31000u);
+  CHECK(one[0], 59000u);  //(the last sprite over each, its depth written as it was drawn)
+  CHECK(one[1], 57000u);
   for(u32 threads : {2u, 4u}) {
     for(bool recompile : {false, true}) CHECK(loads(threads, recompile) == one, true);
   }

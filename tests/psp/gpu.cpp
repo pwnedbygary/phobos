@@ -246,9 +246,9 @@ static auto gpuFast() -> void {
 //through), one passing draws them all. A 5551 one keeps a bit and a 4444 one four, so clear mode's alpha and a
 //REPLACE's reference leave the stencil the GPU tests next as the GE's: 0 or 255, or four bits twice over, also
 //through MASK_ALPHA keeping some of its bits, and a 5551 REPLACE whose comparison takes bits the format doesn't
-//keep compares as the GE does. Clears and replaces over random rectangles, then a full-frame pass testing for each
-//stencil a frame buffer can hold and some it can't, each its own color: every byte the software renderer's. In
-//either mode (fast mode's settings are the accurate mode's).
+//keep compares as the GE does. Clears and replaces over random rectangles, clear mode's points, a line and (at 1x)
+//a triangle, then a full-frame pass testing for each stencil a frame buffer can hold and some it can't, each its own
+//color: every byte the software renderer's. In either mode (fast mode's settings are the accurate mode's).
 static auto stencilFormats(GPU* gpu) -> void {
   struct Pass { bool clear; u32 test, operation, maskAlpha, color; Corners at; };
   std::mt19937 random{20261068};
@@ -298,6 +298,25 @@ static auto stencilFormats(GPU* gpu) -> void {
           c[GE::StencilTestEnable] = !pass.clear, c[GE::StencilTest] = pass.test;
           c[GE::StencilOperation] = pass.operation, c[GE::MaskAlpha] = pass.maskAlpha;
           sprite(*s, pass.at);
+        }
+        //clear mode's points, a line and a triangle, each pixel's stencil its color's alpha (along the line, blended;
+        //the triangle's corners one alpha, as the GPU takes its last corner's for all of it)
+        struct Corner { float x, y; u32 color; };
+        auto draw = [&](u32 kind, std::initializer_list<Corner> corners) {
+          u32 to = GPUVertices;
+          for(auto& corner : corners) {
+            for(float value : {0.0f, 0.0f}) s->memory.write(4, to, bitsOf(value)), to += 4;
+            s->memory.write(4, to, corner.color), to += 4;
+            for(float value : {corner.x, corner.y, 0.0f}) s->memory.write(4, to, bitsOf(value)), to += 4;
+          }
+          s->ge.vertexAddress = GPUVertices;
+          s->ge.primitive(kind, corners.size());
+        };
+        c[GE::ClearMode] = 1 | 3 << 8, c[GE::StencilTestEnable] = 0, c[GE::MaskAlpha] = 0;
+        draw(GE::Points, {{2, 44, 0x7f00'00ff}, {4, 44, 0x8000'ff00}, {6, 44, 0x5aff'0000}, {8, 44, 0xa500'ffff}});
+        draw(GE::Lines, {{10, 46, 0x0112'3456}, {62, 47, 0xfe65'4321}});
+        if(scale == 1) {  //(above it a triangle's edges are the GPU's coverage, not the PSP's pixels')
+          draw(GE::Triangles, {{40, 2, 0xc4aa'bbcc}, {62, 2, 0xc4aa'bbcc}, {50, 20, 0xc4aa'bbcc}});
         }
         c[GE::ClearMode] = 0, c[GE::MaskAlpha] = 0, c[GE::StencilOperation] = 0, c[GE::StencilTestEnable] = 1;
         for(u32 n = 0; n < stencils.size(); n++) {
@@ -1606,9 +1625,9 @@ static auto gpuDepth() -> void {
 
 //Loads through VRAM's second and fourth copies, the views the GE keeps its depth buffer in, of pixels the GPU drew
 //(WipEout reads its depth buffer where its bloom's buffers are): memory's bytes, without waiting, as the GPU's depth
-//isn't memory's to finish for; through the first copy the same bytes finish and find the GPU's pixels, as the
-//software renderer has them; and so do the depth views' once they're memory's again. A store through the fourth
-//copy still finishes first, as it did.
+//isn't memory's to finish for; through the first copy another of the sprite's pixels finishes and finds the GPU's
+//pixels, as the software renderer has them; and the depth views find them too once they're memory's again. A store
+//through the fourth copy still finishes first, as it did.
 static auto gpuDepthViewLoads() -> void {
   auto gpu = renderer();
   if(!gpu) return;

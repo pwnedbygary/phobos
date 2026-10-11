@@ -8805,10 +8805,14 @@ What the loads find: in the software renderer, the depth the 3D pass has just wr
 elsewhere). With the GPU, whose depth never reaches memory, the finish gave them the colors of the bloom of the
 frame before, put back over the depth buffer's bytes: 0 in all but 130 of 3,400 loads in 200 frames (0x505, 0x303,
 ...). So finishing never gave them what they ask for. Now (`Memory::pointer()`, `GE::drawnOver()`) a load through
-VRAM's second or fourth copy, the views the GE keeps its depth buffer in, waits only for drawing that writes memory's
-depth, the drawing threads' batches (exact, as before), and reads memory's bytes past a hardware renderer's pixels:
-0 in every load of the bench scene, at 1x and 4x (the base's at 4x: 0 in all 1,700 of 100 frames). Stores, and
-loads through the first and third copies, wait as before. WipEout's race on the M1: 120 finishes in 120 frames -> 1
+`Memory::read()` (the CPU's, an HLE function's small reads) through VRAM's second or fourth copy, the views the GE
+keeps its depth buffer in, waits only where drawing that writes memory's depth reaches it, the drawing threads'
+batches (exact, as before; with a renderer about, that wait finishes it too, as any did), and reads memory's bytes
+past a hardware renderer's pixels:
+0 in every load of the bench scene, at 1x and 4x (the base's at 4x: 0 in all 1,700 of 100 frames). Stores, loads
+through the first and third copies, and copies in and out (block transfers, HLE functions' buffers) wait as before.
+The rule goes by the view, not by what the bytes are: a game reading colors through those views (none known) would
+now read memory's older bytes. WipEout's race on the M1: 120 finishes in 120 frames -> 1
 (its first), 119 frames shown from the GPU (none before).
 
 At 1x every frame is as it was. At 4x it isn't, as a frame shown from memory isn't one shown from the GPU: the base
@@ -8824,8 +8828,10 @@ game's is. See "Accuracy".
 - **Clear mode or a REPLACE on a 5551 or 4444 frame buffer**: the PSP keeps one or four bits, read back as 0 or 255
   and as the four twice over, which is how fills and moves hold them in the GPU's eight bits (part 67) for its tests
   to compare as the GE's do; but clear mode's alpha and a REPLACE's reference went in whole. Now the reference is the
-  stencil as the format keeps it (`keptStencil()`): clear mode's, whose test always passes, at each primitive's last
-  corner; a REPLACE's where its comparison comes out the same with it (never, always, or the same bits where it
+  stencil as the format keeps it (`keptStencil()`): clear mode's, whose test always passes, from each primitive's
+  color (a triangle's last corner's, a sprite's, a point's, each pixel's of a line; points and lines had left it 0,
+  in every format, which the review found); a REPLACE's where its comparison comes out the same with it (never,
+  always, or the same bits where it
   looks), else in 5551 made on the top bit against the kept reference, which gives the same at 0 and 255, and in
   4444 left the GE's (its REPLACE writing all eight bits, as before). MASK_ALPHA's bits for a 16-bit one go with
   their copies, and a REPLACE's color alpha is the kept stencil. Increments and decrements of a 16-bit stencil still
@@ -8962,10 +8968,11 @@ base's:
 ### Checks
 
 - `tests/psp/run-tests.sh` (sanitizers on): 437 groups, 0 failures (the base's 434 and three new: "ge loads through
-  the depth buffer's views wait for the threads", compiled loads and the interpreter's at 2 and 4 threads; "gpu loads
+  the depth buffer's views wait for the threads", compiled loads and the interpreter's at 2 and 4 threads, the batch
+  checked to be still drawing as they load; "gpu loads
   through the depth buffer's views: memory's, without waiting", through the second and fourth copies, a store through
   the fourth still finishing; "gpu the stencil as each 16-bit format keeps it", in both modes at 1x and 2x, which all
-  six accurate-mode runs fail on the base). `tests/allegrex/run-tests.sh` 58 groups, 0 failures;
+  six accurate-mode runs fail on the base; clear mode's points, a line and a triangle among them). `tests/allegrex/run-tests.sh` 58 groups, 0 failures;
   `tests/psp/ares/run-tests.sh` 307 checks, 0 failed. The GPU tests built for Android pass on the RP6 on Turnip and on
   Qualcomm's driver (33 groups each; one skips itself on Qualcomm's, which doesn't read the frame buffer). GCC 11
   (ubuntu:22.04) and 13 (ubuntu:24.04): the kernel and the changed tests compile, `gpu.cpp` and `memory.cpp` at -O1,

@@ -876,10 +876,7 @@ auto GPU::triangle(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c
   if(!(shade & 1)) {
     for(auto& corner : v) corner.color = c.color, corner.specular = c.specular;
   }
-  if(state.pipeline.clear && state.pipeline.stencilTest) {  //(the stencil as the frame buffer keeps it)
-    u32 stencil = keptStencil(c.color >> 24, target->format);
-    if(state.stencilReference != stencil) state.stencilReference = stencil, stateKept = false;
-  }
+  clearStencil(c.color);
   if(textured) {
     f64 area = std::abs(f64(targetFixed(b.x) - targetFixed(a.x)) * (targetFixed(c.y) - targetFixed(a.y)) -
                         f64(targetFixed(b.y) - targetFixed(a.y)) * (targetFixed(c.x) - targetFixed(a.x)));
@@ -921,10 +918,7 @@ auto GPU::sprite(const GE::Job& job) -> void {
   auto& s = job.sprite;
   Vertex base{};
   base.z = s.z, base.w = 1, base.q = 1, base.color = s.color, base.specular = s.specular;
-  if(state.pipeline.clear && state.pipeline.stencilTest) {
-    u32 stencil = keptStencil(s.color >> 24, target->format);
-    if(state.stencilReference != stencil) state.stencilReference = stencil, stateKept = false;
-  }
+  clearStencil(s.color);
   bool divided = textured && s.divided;
   if(textured) {
     base.flags = job.linear | (divided ? 0 : 2) | (s.turned ? 4 : 0);
@@ -961,6 +955,14 @@ auto GPU::sprite(const GE::Job& job) -> void {
   quad(std::max(split, job.firstX), job.lastX, s.rightFog);
 }
 
+//Clear mode's stencil, where it's written: the color's alpha (a triangle's last corner's, a sprite's, a point's, a
+//line's pixel's), as the frame buffer keeps it (keptStencil()); the draws after a change of it are another draw.
+auto GPU::clearStencil(u32 color) -> void {
+  if(!state.pipeline.clear || !state.pipeline.stencilTest) return;
+  u32 stencil = keptStencil(color >> 24, target->format);
+  if(state.stencilReference != stencil) state.stencilReference = stencil, stateKept = false;
+}
+
 //A pixel-sized square (two triangles) at pixel (x, y), with the vertex's values.
 static auto squareOf(GPU::Vertex base, s32 x, s32 y, GPU::Vertex (&v)[6]) -> void {
   for(u32 n = 0; n < 6; n++) {
@@ -972,6 +974,7 @@ static auto squareOf(GPU::Vertex base, s32 x, s32 y, GPU::Vertex (&v)[6]) -> voi
 
 auto GPU::point(const GE::Vertex& at) -> void {
   if(!drawing) return;
+  clearStencil(at.color);
   Vertex base = vertex(at, false), v[6];
   base.flags = textured && targetFilter(filter, 1.0f);
   squareOf(base, (targetFixed(at.x) >> 4) + s32(column), (targetFixed(at.y) >> 4) + s32(row), v);
@@ -983,6 +986,7 @@ auto GPU::point(const GE::Vertex& at) -> void {
 auto GPU::line(const GE::Job& job, const std::vector<GE::LinePixel>& pixels) -> void {
   if(!drawing) return;
   for(auto& pixel : pixels) {
+    clearStencil(pixel.color);
     Vertex base{}, v[6];
     base.z = pixel.z, base.w = 1, base.u = pixel.u, base.v = pixel.v, base.q = 1;
     base.color = pixel.color, base.specular = pixel.specular, base.fog = pixel.fog >= 255 ? 1.0f : pixel.fog / 256.0f;
