@@ -630,10 +630,12 @@ static auto gpuPartialCopies() -> void {
 //and from its row 8 (fewer rows of it, more of the second), the whole texture sampled again after each of two sprites
 //drawn into the second (the same copy, taken again: the second part too, as MC3's menu samples it every frame); with
 //the second drawn only in its first 4 rows (the rest the texture takes filled from memory, which the CPU wrote) and a
-//PRIM drawing into it while it samples rows it doesn't draw over, as MC3's does. And one whose pixels the first frame
-//buffer drew over the second's first rows since the second drew there (the newest of those pixels the first's):
-//the second's pixels in the texture's pages moved into the first's target on the GPU (move()), nothing finished;
-//where the GPU doesn't move them, decoded from memory, as before.
+//PRIM drawing into it while it samples rows it doesn't draw over, as MC3's does: that one alone takes the two parts
+//with nothing moved (a move of the second's pixels into the first's target would go back as it draws there). And one
+//whose pixels the first frame buffer drew over the second's first rows since the second drew there (the newest of
+//those pixels the first's): the second's pixels in the texture's pages moved into the first's target on the GPU
+//(move()), nothing finished, also for a PRIM drawing into the second, which can't take two parts there; where the
+//GPU doesn't move them, decoded from memory, as before.
 static auto gpuStackedTexture() -> void {
   auto gpu = renderer();
   if(!gpu) return;
@@ -693,6 +695,25 @@ static auto gpuStackedTexture() -> void {
     CHECK(apart(software, hardware), 0u);
     hardware.ge.setRenderer(nullptr);
   }
+  {  //(MC3's PRIM alone: drawing into the second, sampling both)
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto upper = randomSprites(random, 30, false), lower = randomSprites(random, 30, false);
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0, 3);
+      for(auto& one : upper) sprite(*s, one);
+      prepare(*s, 48 * 64 * 4, 3);
+      for(auto& one : lower) sprite(*s, one);
+      texture(*s, Memory::VRAMBase, 64, 64, 64);
+    }
+    auto before = gpu->statistics;
+    for(System* s : {&software, &hardware}) sprite(*s, {{{0, 0, 0, 20}, {64, 64, 64, 44}}, 0x8080'8080});
+    CHECK(gpu->statistics.finishes, before.finishes);
+    CHECK(gpu->statistics.moves, before.moves);
+    CHECK(gpu->statistics.copies - before.copies >= 2, true);
+    CHECK(apart(software, hardware), 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
   {  //(the second draws rows 0-31, the first its rows 0-7 since, then the second its rows 20-30 again: the first owns
      //the second's first page, the second the page after)
     System software, hardware;
@@ -713,6 +734,37 @@ static auto gpuStackedTexture() -> void {
     }
     auto before = gpu->statistics;
     for(System* s : {&software, &hardware}) sprite(*s, {{{0, 0, 0, 0}, {64, 80, 64, 48}}, 0xffff'ffff});
+    if(gpu->backend->moves) {
+      CHECK(gpu->statistics.finishes, before.finishes);
+      CHECK(gpu->statistics.moves > before.moves, true);
+    } else {
+      CHECK(gpu->statistics.finishes > before.finishes, true);
+    }
+    CHECK(apart(software, hardware), 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+  {  //(the same, the PRIM drawing into the second's rows 40-47 past those it samples: no two parts there, moved)
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto upper = randomSprites(random, 30, false);
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0, 3);
+      for(auto& one : upper) sprite(*s, one);
+      prepare(*s, 48 * 64 * 4, 3);
+      for(u32 n = 0; n < 4; n++) sprite(*s, {{{0, 0, 16.0f * n, 0}, {0, 0, 16.0f * n + 16, 32}}, 0xff00'8000 + n * 17});
+      prepare(*s, 0, 3);
+      s->ge.commands[GE::Scissor2] = 63 | 63 << 10;
+      for(u32 n = 0; n < 6; n++) sprite(*s, {{{0, 0, 6.0f * n, 48}, {0, 0, 6.0f * n + 9, 56}}, 0xff80'0040 + n * 34});
+      prepare(*s, 48 * 64 * 4, 3);
+      sprite(*s, {{{0, 0, 4, 20}, {0, 0, 50, 31}}, 0xff40'40c0});
+      prepare(*s, 0x2'0000, 3);
+      texture(*s, Memory::VRAMBase, 64, 128, 64);
+    }
+    auto before = gpu->statistics;
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 48 * 64 * 4, 3);
+      sprite(*s, {{{0, 0, 0, 40}, {64, 80, 64, 48}}, 0xffff'ffff});
+    }
     if(gpu->backend->moves) {
       CHECK(gpu->statistics.finishes, before.finishes);
       CHECK(gpu->statistics.moves > before.moves, true);

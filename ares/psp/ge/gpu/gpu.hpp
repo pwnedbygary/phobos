@@ -419,6 +419,7 @@ private:
   //it runs on into the frame buffer below
   struct Held { Target* target; s32 x, y; u32 width, rows, format; Target* next = nullptr; u32 split = 0; };
   std::optional<Held> held;
+  auto take(const GE::Sampler& texture, u32 offset, u64 end, u32 width, u32 rows, bool direct) -> bool;
   //(one for each target and place copied from, its width and rows, and the rectangle of the target changed since,
   //left, top, right, bottom in its pixels, none where left is past right: taken again, only that part is copied, so
   //an effect drawing again and again into one corner of the frame buffer it samples copies the corner, not the

@@ -1201,15 +1201,19 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns) -> bo
   if(!rows || end > Memory::VRAMSize) return false;
   //(the pixels other targets drew in its pages moved first into the target of its format and width that a frame
   //buffer there would draw into (move()), where they can all be: God of War samples the four shadows it drew as
-  //5650 over a page of the 8888 it drew before and a row the frame buffer below drew)
+  //5650 over a page of the 8888 it drew before and a row the frame buffer below drew. But not pages the PRIM draws
+  //in, from which its own drawing would move them again: Midnight Club 3's menu samples its frame buffer as a texture
+  //512 rows tall, whose last rows are the frame buffer below, which the PRIM draws into, and moved, all of that one's
+  //pixels went into the texture's target and back each frame. Those are taken in two parts first, below, and moved
+  //only where they can't be.)
+  Target* home = nullptr;
+  moving.clear();
+  u32 rowBytes = texture.bufferWidth * bytes;
   if(direct && backend->moves && texture.bufferWidth) {
-    u32 rowBytes = texture.bufferWidth * bytes;
     u32 address = offset - offset % (Memory::PageSize % rowBytes ? rowBytes : Memory::PageSize);
-    Target* home = nullptr;
     for(auto& t : targets) {
       if(t->address == address && t->stride == texture.bufferWidth && t->format == texture.format) home = t.get();
     }
-    moving.clear();
     for(u32 page = offset / Memory::PageSize; home && page <= (end - 1) / Memory::PageSize; page++) {
       Target* owner = owners[page];
       u32 low = std::max<u32>(offset, page * Memory::PageSize);
@@ -1218,25 +1222,48 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns) -> bo
       if(!moving.empty() && moving.back().from == owner && moving.back().last + 1 == page) moving.back().last = page;
       else moving.push_back({owner, page, page});
     }
-    u32 filled = home ? home->rows : 0;
     for(auto& m : moving) {
       s32 box[4];
       if(home->stale || !movable(*m.from, *home, m.first, m.last, box)) { moving.clear(); break; }
-      filled = std::max<u32>(filled, box[3] + (s32(m.from->address) - s32(home->address)) / s32(rowBytes) + 1);
-    }
-    if(!moving.empty()) {
-      if(filled > home->rows) fill(*home, home->rows, filled, {}, 1), home->rows = filled;
-      for(auto& m : moving) {
-        s32 box[4];
-        movable(*m.from, *home, m.first, m.last, box);
-        if(m.from->deadReaches(box[0], box[1], box[2], box[3])) revive(*m.from, m.from->dead);
-        move(*m.from, *home, m);
-      }
     }
   }
-  //(its pages one target's, or a target's and then, from a page on, another's: next. A page's owner that drew none
-  //of the texture's bytes in it, a page holding rows of both, hasn't the newest of them: God of War's shadows, 64
-  //rows each, end in the page the frame buffer below them starts in.)
+  bool drawnIn = false;  //(the PRIM's frame buffer's rows, in its scissor, reach pages moved)
+  if(!moving.empty()) {
+    auto p = ge.pixelState();
+    u32 drawnBytes = p.stride * (p.format == 3 ? 4 : 2);
+    u32 first = (p.frameBuffer + std::max(p.top, 0) * drawnBytes) / Memory::PageSize;
+    u32 last = (p.frameBuffer + (std::max(p.bottom, p.top) + 1) * drawnBytes - 1) / Memory::PageSize;
+    for(auto& m : moving) drawnIn |= first <= m.last && m.first <= last;
+  }
+  auto moveIn = [&] {
+    u32 filled = home->rows;
+    for(auto& m : moving) {
+      s32 box[4];
+      movable(*m.from, *home, m.first, m.last, box);
+      filled = std::max<u32>(filled, box[3] + (s32(m.from->address) - s32(home->address)) / s32(rowBytes) + 1);
+    }
+    if(filled > home->rows) fill(*home, home->rows, filled, {}, 1), home->rows = filled;
+    for(auto& m : moving) {
+      s32 box[4];
+      movable(*m.from, *home, m.first, m.last, box);
+      if(m.from->deadReaches(box[0], box[1], box[2], box[3])) revive(*m.from, m.from->dead);
+      move(*m.from, *home, m);
+    }
+    moving.clear();
+  };
+  if(!moving.empty() && !drawnIn) moveIn();
+  if(take(texture, offset, end, width, rows, direct)) return true;
+  if(moving.empty()) return false;
+  moveIn();
+  return take(texture, offset, end, width, rows, direct);
+}
+
+//The texture held from the targets that drew its pages (holds()), where its pages are one target's, or a target's
+//and then, from a page on, another's: next. (A page's owner that drew none of the texture's bytes in it, a page
+//holding rows of both, hasn't the newest of them: God of War's shadows, 64 rows each, end in the page the frame
+//buffer below them starts in.)
+auto GPU::take(const GE::Sampler& texture, u32 offset, u64 end, u32 width, u32 rows, bool direct) -> bool {
+  u32 bytes = texture.format == 3 ? 4 : 2;
   Target *t = nullptr, *next = nullptr, *last = nullptr;
   u32 firstOwned = 0;  //(next's first page)
   for(u32 page = offset / Memory::PageSize; page <= (end - 1) / Memory::PageSize; page++) {
