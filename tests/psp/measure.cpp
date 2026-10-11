@@ -211,16 +211,21 @@ static auto describeTimes(const char* name, const std::vector<u32>& ours, const 
   }
 }
 
-//How ge-statuses differs: each part's statuses in the order they came (sceGeListSync/sceGeDrawSync in part 1, as
-//signed numbers), with when each was first seen (us).
+//How ge-statuses differs: each part's statuses in the order they came (sceGeListSync/sceGeDrawSync in part 1; an
+//error code in hex), with when each was first seen (us).
 static auto describeStatuses(const std::vector<u32>& ours, const std::vector<u32>& theirs) -> void {
   auto summary = [](const std::vector<u32>& words) {
-    auto number = [](u32 word) { return std::to_string(s32(word)); };
+    auto number = [](u32 word) {  //an error code (below 0) in hex
+      char text[16];
+      std::snprintf(text, sizeof(text), s32(word) < 0 ? "0x%08x" : "%u", word);
+      return std::string(text);
+    };
     std::string text = "part 1:";
     u32 looks = std::min(words[0], StatusLooks);
     for(u32 n = 0; n < looks; n++) {
       if(n && words[3 + n * 3] == words[n * 3] && words[4 + n * 3] == words[1 + n * 3]) continue;
-      text += " " + std::to_string(words[2 + n * 3]) + "us:" + number(words[3 + n * 3]) + "/" + number(words[4 + n * 3]);
+      text += " " + std::to_string(words[2 + n * 3]) + "us:" + number(words[3 + n * 3]) + "/" +
+              number(words[4 + n * 3]);
     }
     text += ", finished " + number(words[1]) + "us; part 2:";
     const u32* part2 = words.data() + 2 + StatusLooks * 3;
