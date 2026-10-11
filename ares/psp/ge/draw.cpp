@@ -326,7 +326,7 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   Transform t{};
   s32 facing = (commands[CullFaceEnable] & 1) && !pixel.clear ? (commands[Cull] & 1 ? 1 : -1) : 0;
   if(!format.through) {
-    t = transformState();
+    t = transformKept();
     t.weights = format.weightFormat ? format.weights : 0;
     t.textureWidth = texture.width, t.textureHeight = texture.height;
     t.vertexColor = format.colorFormat != 0;
@@ -1110,7 +1110,7 @@ auto GE::boundingBox(u32 count) -> bool {
   s64 top = (pixel.top - 1) * 16, bottom = (pixel.bottom + 1) * 16;
   Transform t{};
   if(!format.through) {
-    t = transformState();
+    t = transformKept();
     t.weights = format.weightFormat ? format.weights : 0;
   }
   //(on the screen in sixteenths, held to it: something not a number at its left or top edge)

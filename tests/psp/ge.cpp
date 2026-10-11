@@ -2225,6 +2225,62 @@ static auto geTimeInterrupts() -> void {
   }
 }
 
+//The 3D settings kept from one PRIM to the next (transformKept()), taken after a few of the GE's commands (any of the
+//256) and matrix elements are changed at random, round after round: field for field (floats bit for bit) the
+//Transform transformState() works out afresh. (Changes to the world matrix alone, most PRIMs' in a 3D game, are as
+//many as all the rest; a quarter of the values are infinities or not numbers as floats.)
+static auto sameTransform(const GE::Transform& a, const GE::Transform& b) -> bool {
+  static_assert(sizeof(GE::Transform) == 1292);  //(a field added is compared here too)
+  auto bits = [](const auto& x, const auto& y) { return !std::memcmp(&x, &y, sizeof(x)); };
+  for(u32 n = 0; n < 4; n++) {
+    auto &p = a.lights[n], &q = b.lights[n];
+    if(p.enabled != q.enabled || p.directional != q.directional || p.spot != q.spot || p.specular != q.specular ||
+       p.powered != q.powered || !bits(p.position, q.position) || !bits(p.direction, q.direction) ||
+       !bits(p.attenuation, q.attenuation) || !bits(p.cutoff, q.cutoff) || !bits(p.exponent, q.exponent) ||
+       p.ambient != q.ambient || p.diffuse != q.diffuse || p.shine != q.shine || !bits(p.toLight, q.toLight) ||
+       !bits(p.halfway, q.halfway) || !bits(p.products, q.products)) return false;
+  }
+  return bits(a.world, b.world) && bits(a.view, b.view) && bits(a.projection, b.projection) &&
+         bits(a.textureMatrix, b.textureMatrix) && bits(a.bones, b.bones) && a.weights == b.weights &&
+         bits(a.scale, b.scale) && bits(a.center, b.center) && bits(a.offsetX, b.offsetX) &&
+         bits(a.offsetY, b.offsetY) && a.depthClamp == b.depthClamp && a.mapMode == b.mapMode &&
+         a.mapSource == b.mapSource && bits(a.textureScale, b.textureScale) &&
+         bits(a.textureOffset, b.textureOffset) && bits(a.textureWidth, b.textureWidth) &&
+         bits(a.textureHeight, b.textureHeight) && a.fog == b.fog && a.fogForced == b.fogForced &&
+         bits(a.fogEnd, b.fogEnd) && bits(a.fogSlope, b.fogSlope) && bits(a.fogValue, b.fogValue) &&
+         a.lighting == b.lighting && a.separateSpecular == b.separateSpecular && a.normalReverse == b.normalReverse &&
+         a.vertexColor == b.vertexColor && a.materialColor == b.materialColor &&
+         a.materialEmissive == b.materialEmissive && a.materialAmbient == b.materialAmbient &&
+         a.materialDiffuse == b.materialDiffuse && a.materialSpecular == b.materialSpecular &&
+         a.ambientLight == b.ambientLight && bits(a.specularPower, b.specularPower) &&
+         bits(a.viewDirection, b.viewDirection) && bits(a.unlit, b.unlit) && a.shadeU == b.shadeU &&
+         a.shadeV == b.shadeV;
+}
+static auto geTransformKept() -> void {
+  System s;
+  auto& ge = s.ge;
+  std::mt19937 random{20261010};
+  u32* matrices[5] = {ge.bones, ge.world, ge.view, ge.projection, ge.textureMatrix};
+  u32 sizes[5] = {96, 12, 12, 16, 12};
+  u32 differing = 0;
+  for(u32 round = 0; round < 20000; round++) {
+    for(u32 changes = 1 + random() % 3; changes; changes--) {
+      u32 which = random() % 8, value = random() & 0xff'ffff;
+      if(random() % 4 == 0) value |= 0x7f'8000;  //(as a float24, an infinity or not a number)
+      if(which < 4) ge.world[random() % 12] = value;
+      else if(which < 6) ge.commands[random() % 256] = value;
+      else {
+        u32 matrix = random() % 5;
+        matrices[matrix][random() % sizes[matrix]] = value;
+      }
+    }
+    if(!sameTransform(ge.transformKept(), ge.transformState()) && differing++ < 4) {
+      std::printf("  round %u: not the same\n", round);
+    }
+  }
+  CHECK(differing, 0u);
+}
+
 auto geTests() -> Tests {
   return {
     {"ge commands", geCommands}, {"ge moving", geMoving}, {"ge stops", geStops}, {"ge vertices", geVertices},
@@ -2237,6 +2293,7 @@ auto geTests() -> Tests {
     {"ge lists queued twice", geQueuedTwice}, {"ge suspending signals' callbacks", geSuspendedCallbacks},
     {"ge calls and threads", geCallsAndThreads}, {"ge break", geBreak},
     {"ge break and callbacks", geBreakCallbacks}, {"ge time", geTime}, {"ge time's interrupt", geTimeInterrupts},
+    {"ge 3D settings kept from PRIM to PRIM", geTransformKept},
     {"event flags", eventFlags}, {"event flag waiting", eventFlagWaiting}, {"display picture", displayPicture},
     {"gu program", guProgram}, {"copy sample", copySample},
   };

@@ -74,6 +74,64 @@ auto GE::transformState() const -> Transform {
   toFloats(projection, t.projection, 16);
   toFloats(textureMatrix, t.textureMatrix, 12);
   toFloats(bones, t.bones, 96);
+  settingsState(t);
+  lightingState(t);
+  return t;
+}
+
+//The commands settingsState() and lightingState() read, as ranges of their indices, first to last (transformKept()
+//compares them)
+static constexpr std::pair<u32, u32> SettingsCommands[] = {
+  {GE::DepthClipEnable, GE::DepthClipEnable}, {GE::FogEnable, GE::FogEnable}, {GE::ViewportXScale, GE::OffsetY},
+  {GE::TextureMapMode, GE::TextureMapMode}, {GE::FogEnd, GE::FogSlope}};
+static constexpr std::pair<u32, u32> LightingCommands[] = {
+  {GE::LightingEnable, GE::LightEnable0 + 3}, {GE::NormalReverse, GE::NormalReverse},
+  {GE::MaterialColor, GE::AmbientAlpha}, {GE::MaterialSpecularCoefficient, GE::Light0Ambient + 11},
+  {GE::TextureShadeMapping, GE::TextureShadeMapping}};
+static constexpr auto commandsIn(const auto& ranges) -> u32 {
+  u32 count = 0;
+  for(auto [first, last] : ranges) count += last - first + 1;
+  return count;
+}
+static_assert(commandsIn(SettingsCommands) == GE::KeptTransform::Settings);
+static_assert(commandsIn(LightingCommands) == GE::KeptTransform::Lighting);
+
+//transformState() as it would be now, from the last one kept: each part of a Transform is worked out from its own
+//words alone (a matrix's floats from its words, the viewport's, texture mapping's and fog's settings from their
+//commands, lighting's from its commands and the view matrix), so only the parts whose words have changed are worked
+//out again. Most PRIMs share their 3D settings with the one before, but for the world matrix; and they're compared,
+//not told of, as a list, a context or a state loaded, and the tests all set them.
+auto GE::transformKept() -> const Transform& {
+  auto& k = keptTransform;
+  auto& t = k.transform;
+  auto renew = [&](u32* kept, const u32* now, u32 count, float* floats) {
+    if(k.valid && !std::memcmp(kept, now, count * 4)) return false;
+    std::memcpy(kept, now, count * 4);
+    toFloats(now, floats, count);
+    return true;
+  };
+  auto gathered = [&](const auto& ranges, u32* kept) {
+    bool same = k.valid;
+    for(auto [first, last] : ranges) {
+      for(u32 command = first; command <= last; command++, kept++) {
+        same &= *kept == commands[command], *kept = commands[command];
+      }
+    }
+    return !same;
+  };
+  renew(k.world, world, 12, t.world);
+  bool viewed = renew(k.view, view, 12, t.view);
+  renew(k.projection, projection, 16, t.projection);
+  renew(k.textureMatrix, textureMatrix, 12, t.textureMatrix);
+  renew(k.bones, bones, 96, t.bones);
+  if(gathered(SettingsCommands, k.settings)) settingsState(t);
+  if(gathered(LightingCommands, k.lighting) || viewed) lightingState(t);
+  k.valid = true;
+  return t;
+}
+
+//The viewport's, texture mapping's and fog's settings, from their commands (SettingsCommands)
+auto GE::settingsState(Transform& t) const -> void {
   for(u32 n = 0; n < 3; n++) {
     t.scale[n] = float24(commands[ViewportXScale + n]);
     t.center[n] = float24(commands[ViewportXCenter + n]);
@@ -88,6 +146,7 @@ auto GE::transformState() const -> Transform {
   t.textureWidth = t.textureHeight = 1;
   t.fog = commands[FogEnable] & 1;
   t.fogEnd = float24(commands[FogEnd]), t.fogSlope = float24(commands[FogSlope]);
+  t.fogForced = false, t.fogValue = 0;
   //A FOG1 or FOG2 whose exponent is all ones (infinity, or not a number, to a float) is still a number to the GE:
   //a huge one. So an end like that makes every vertex all fog or none, by the signs (a slope of 0 counts as
   //negative), and a slope like that is just steep. (As PPSSPP has it: OutRun 2006's sky needs it.)
@@ -98,8 +157,6 @@ auto GE::transformState() const -> Transform {
   } else if(!std::isfinite(t.fogSlope)) {
     t.fogSlope = std::signbit(t.fogSlope) ? -262144.0f : 262144.0f;
   }
-  lightingState(t);
-  return t;
 }
 
 //A vertex through the matrices onto the screen, with its texture coordinates (in texels) and fog.
