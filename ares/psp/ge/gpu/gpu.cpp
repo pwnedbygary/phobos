@@ -59,6 +59,28 @@ static auto narrowTarget(u32 color, u32 format) -> u32 {
   return color;
 }
 
+//A stencil (or the bits of one a write may change) as a frame buffer of format keeps it, read as the GE reads it:
+//a 5551 one's top bit as 0 or 255, a 4444 one's top four bits twice over, an 8888 one's as it is (5650: none). The
+//GPU's stencil holds it so, as fills and moves put it there, for its tests to compare as the GE's do.
+static auto keptStencil(u32 value, u32 format) -> u32 {
+  return widenTarget(narrowTarget(value << 24, format), format) >> 24;
+}
+
+//The GE's comparisons (0 never, 1 always, 2 equal, 3 not equal, 4 less, 5 less or equal, 6 greater, 7 greater or
+//equal), as pixel.cpp makes them
+static auto comparesTrue(u32 comparison, u32 a, u32 b) -> bool {
+  switch(comparison & 7) {
+  case 0: return false;
+  case 1: return true;
+  case 2: return a == b;
+  case 3: return a != b;
+  case 4: return a < b;
+  case 5: return a <= b;
+  case 6: return a > b;
+  }
+  return a >= b;
+}
+
 //Rows of a target's pixels in memory's VRAM, from at (a VRAM offset, each wrapping at VRAM's end), stride pixels
 //apart, as 8888s and their stencils (fill()'s), in a frame buffer of Format.
 template<u32 Format>
@@ -522,7 +544,7 @@ auto GPU::settings(const GE::Look& look) -> void {
     k.reads = 1, k.blending = 8, s.push.writeMask = p.writeMask;
     k.quantize = p.format < 3 ? p.format : 4;  //(each write narrowed to the format, so what's read is memory's)
   }
-  s.stencilWriteMask = ~maskAlpha & 0xff;
+  s.stencilWriteMask = keptStencil(~maskAlpha & 0xff, p.format);  //(a 16-bit one's bits and their copies together)
   s.stencilCompareMask = 0xff;
   k.depthRange = p.depthRange;
   s.push.depthRange = p.minDepth | p.maxDepth << 16;
@@ -555,13 +577,34 @@ auto GPU::settings(const GE::Look& look) -> void {
       k.stencilDepthFail = operation(p.stencilDepthFail);
       k.stencilPass = operation(p.stencilPass);
       s.stencilReference = p.stencilReference, s.stencilCompareMask = p.stencilMask;
+      //A REPLACE writes the reference as a 16-bit frame buffer keeps it (keptStencil()), which the GPU's writes
+      //as the reference it compares with: where the comparison takes the two apart (by the bits it takes), a 5551
+      //one's comparison (its stencil 0 or 255) is made on the top bit instead, against the kept reference, which
+      //comes out the same at either stencil; a 4444 one's stays the GE's, its REPLACE writing all eight bits.
+      u32 kept = keptStencil(p.stencilReference, p.format);
+      bool replaces = k.stencilFail == Replace || k.stencilDepthFail == Replace || k.stencilPass == Replace;
+      if(replaces && kept != p.stencilReference) {
+        u32 reference = p.stencilReference & p.stencilMask;
+        if(p.stencilFunction < 2 || (kept & p.stencilMask) == reference) {  //(never, always: no reference)
+          s.stencilReference = kept;
+        } else if(p.format == 1) {
+          bool zero = comparesTrue(p.stencilFunction, reference, 0);
+          bool full = comparesTrue(p.stencilFunction, reference, 0xff & p.stencilMask);
+          s.stencilReference = kept, s.stencilCompareMask = 0x80;
+          k.stencilCompare = zero == full ? zero : zero == !kept ? 2 : 3;  //(always or never; equal, not equal)
+        }
+      }
       //The alpha the frame buffer keeps is the stencil; where the pass operation's result is known here, the
       //color's alpha follows it (blending by the destination's alpha reads it), else it's left (the stencil
       //itself is read back from the GPU's stencil, finish()).
       if(alphaWritable && (k.stencilPass == Replace || k.stencilPass == Clear)) {
         k.alphaOut = 1, k.colorMask |= 8;
-        s.push.stencil = k.stencilPass == Replace ? p.stencilReference : 0;
+        s.push.stencil = k.stencilPass == Replace ? kept : 0;
       }
+    } else if(p.stencilTest && !comparesTrue(p.stencilFunction, p.stencilReference & p.stencilMask, 0)) {
+      //A 5650 frame buffer's stencil reads as 0: a test that fails against it drops every pixel (and keeps the
+      //stencil it doesn't have); one that passes is no test
+      k.stencilTest = 1, k.stencilCompare = 0;
     }
     if(reading) {  //(blending and the logic operation pixel.cpp's, in draw.frag; dithered after blending, as there)
       if(p.blend) k.blending = p.blendOperation, k.source = p.blendSource, k.destination = p.blendDestination;
@@ -833,8 +876,9 @@ auto GPU::triangle(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c
   if(!(shade & 1)) {
     for(auto& corner : v) corner.color = c.color, corner.specular = c.specular;
   }
-  if(state.pipeline.clear && state.pipeline.stencilTest && state.stencilReference != c.color >> 24) {
-    state.stencilReference = c.color >> 24, stateKept = false;
+  if(state.pipeline.clear && state.pipeline.stencilTest) {  //(the stencil as the frame buffer keeps it)
+    u32 stencil = keptStencil(c.color >> 24, target->format);
+    if(state.stencilReference != stencil) state.stencilReference = stencil, stateKept = false;
   }
   if(textured) {
     f64 area = std::abs(f64(targetFixed(b.x) - targetFixed(a.x)) * (targetFixed(c.y) - targetFixed(a.y)) -
@@ -877,8 +921,9 @@ auto GPU::sprite(const GE::Job& job) -> void {
   auto& s = job.sprite;
   Vertex base{};
   base.z = s.z, base.w = 1, base.q = 1, base.color = s.color, base.specular = s.specular;
-  if(state.pipeline.clear && state.pipeline.stencilTest && state.stencilReference != s.color >> 24) {
-    state.stencilReference = s.color >> 24, stateKept = false;
+  if(state.pipeline.clear && state.pipeline.stencilTest) {
+    u32 stencil = keptStencil(s.color >> 24, target->format);
+    if(state.stencilReference != stencil) state.stencilReference = stencil, stateKept = false;
   }
   bool divided = textured && s.divided;
   if(textured) {

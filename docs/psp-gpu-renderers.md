@@ -310,7 +310,14 @@ What the GPU does with the GPU's own units, and how near the PSP it comes:
 - **Stencil**: the GPU's 8-bit stencil, with the GE's comparison, reference, masks and operations (keep, zero,
   replace, invert, increment and decrement clamped). The alpha written to the color follows the stencil where the pass
   operation's result is known in advance (replace, zero), so blending by the frame buffer's alpha reads it; the
-  stencil itself is what's read back as the alpha.
+  stencil itself is what's read back as the alpha. A 16-bit frame buffer's stencil is held as the GE reads it (part
+  68): a 5551 one's bit as 0 or 255, a 4444 one's four bits twice over, as fills and moves put it there, and so do
+  clear mode's alpha, a replace's reference and MASK_ALPHA's bits (each kept bit with its copies); where a replace's
+  comparison takes bits the format doesn't keep, a 5551 one's is made on its top bit against the kept reference
+  (the same at 0 and 255), and a 4444 one's stays the GE's, its replace then writing all eight bits. Increment and
+  decrement still step a 16-bit one's stencil by one, where the PSP's steps a 5551 one to 255 or 0 and a 4444 one by
+  16. A 5650 frame buffer has none, which the GE's test reads as 0: a test failing against 0 drops every pixel (a
+  never-passing test on the GPU), one passing is no test.
 - **Write masks**: per channel, where a channel's mask is all or nothing (as games use them); the GPU has no bitwise
   color mask, so a partial mask writes the whole channel.
 - **Blending**: the GE's factors map onto the GPU's: the frame buffer's color or alpha as the GPU's destination

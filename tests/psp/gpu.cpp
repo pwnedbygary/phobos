@@ -241,6 +241,100 @@ static auto gpuFast() -> void {
   CHECK(gpu->statistics.meshes > before.meshes, true);
 }
 
+//The stencil as each 16-bit format keeps it (part 68), at 1x and 2x. A 5650 frame buffer has none, which a stencil
+//test reads as 0: a test failing against it drops every pixel (its depth not written either: a sprite behind shows
+//through), one passing draws them all. A 5551 one keeps a bit and a 4444 one four, so clear mode's alpha and a
+//REPLACE's reference leave the stencil the GPU tests next as the GE's: 0 or 255, or four bits twice over, also
+//through MASK_ALPHA keeping some of its bits, and a 5551 REPLACE whose comparison takes bits the format doesn't
+//keep compares as the GE does. Clears and replaces over random rectangles, then a full-frame pass testing for each
+//stencil a frame buffer can hold and some it can't, each its own color: every byte the software renderer's. In
+//either mode (fast mode's settings are the accurate mode's).
+static auto stencilFormats(GPU* gpu) -> void {
+  struct Pass { bool clear; u32 test, operation, maskAlpha, color; Corners at; };
+  std::mt19937 random{20261068};
+  auto rectangle = [&](u32 color) {
+    float x = random() % 48, y = random() % 32;
+    return Corners{{{0, 0, x, y}, {0, 0, x + 8 + random() % 24, y + 8 + random() % 20}}, color};
+  };
+  //(STENCIL_TEST: comparison, reference, mask; STENCIL_OPERATION: fail, depth fail, pass)
+  auto test = [](u32 comparison, u32 reference, u32 mask) { return comparison | reference << 8 | mask << 16; };
+  auto replaceOn = [](bool pass) { return pass ? 2u << 16 : 2u; };
+  for(u32 scale : {1u, 2u}) {
+    gpu->resolution(scale);
+    for(u32 format : {0u, 1u, 2u}) {
+      std::vector<Pass> passes;
+      for(u32 alpha : {0x7fu, 0x80u, 0x5au, 0xa5u, 0x01u, 0xfeu, 0x0fu, 0xf0u, 0x33u, 0xc4u}) {
+        passes.push_back({true, 0, 0, 0, 0, rectangle(u32(random() & 0xff'ffff) | alpha << 24)});
+      }
+      for(u32 maskAlpha : {0x7fu, 0x80u, 0x3cu, 0x0fu}) {
+        passes.push_back({true, 0, 0, maskAlpha, 0, rectangle(u32(random()))});
+      }
+      struct Replace { u32 comparison, reference, mask; bool pass; u32 maskAlpha; };
+      std::vector<Replace> replaces = {{1, 0x81, 0xff, true, 0}, {1, 0x5a, 0xff, true, 0}, {1, 0x7e, 0x0f, true, 0},
+                                       {2, 0xa5, 0xf0, true, 0}, {3, 0x5a, 0xf0, false, 0}, {1, 0xc3, 0xff, true, 0x3c}};
+      if(format == 1) {  //(comparisons taking the bits a 5551 one doesn't keep)
+        for(Replace r : {Replace{6, 0x81, 0xff, true, 0}, {4, 0x7f, 0xff, false, 0}, {2, 0x01, 0x7f, true, 0},
+                         {7, 0x80, 0xc0, false, 0}, {3, 0x7f, 0xff, true, 0x7f}, {5, 0x40, 0x7f, false, 0}}) {
+          replaces.push_back(r);
+        }
+      }
+      for(auto& r : replaces) {
+        passes.push_back({false, test(r.comparison, r.reference, r.mask), replaceOn(r.pass), r.maskAlpha, 0,
+                          rectangle(u32(random()))});
+      }
+      std::vector<u32> stencils;  //(the full-frame passes: each tests for one stencil)
+      for(u32 n = 0; n < 16; n++) stencils.push_back(n * 0x11);
+      for(u32 stencil : {0x80u, 0x7fu, 0x01u, 0xfeu, 0x5au, 0xa5u, 0x81u, 0x7eu}) stencils.push_back(stencil);
+      System software, hardware;
+      hardware.ge.setRenderer(gpu);
+      for(System* s : {&software, &hardware}) {
+        auto& c = s->ge.commands;
+        prepare(*s, 0, format);
+        c[GE::ClearMode] = 1 | 3 << 8;
+        sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0x0012'3456});  //(the stencil 0 to start)
+        for(auto& pass : passes) {
+          c[GE::ClearMode] = pass.clear ? 1 | 3 << 8 : 0;
+          c[GE::StencilTestEnable] = !pass.clear, c[GE::StencilTest] = pass.test;
+          c[GE::StencilOperation] = pass.operation, c[GE::MaskAlpha] = pass.maskAlpha;
+          sprite(*s, pass.at);
+        }
+        c[GE::ClearMode] = 0, c[GE::MaskAlpha] = 0, c[GE::StencilOperation] = 0, c[GE::StencilTestEnable] = 1;
+        for(u32 n = 0; n < stencils.size(); n++) {
+          c[GE::StencilTest] = test(2, stencils[n], 0xff);
+          sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff00'0000 | (n + 1) * 0x0a'1b2c});
+        }
+        if(format == 0) {  //(5650: tests against a stencil of 0, each over a strip of its own)
+          struct Five { u32 comparison, reference, mask; };
+          Five fives[] = {{2, 5, 0xff}, {2, 5, 0xf0}, {3, 5, 0xff}, {4, 0, 0xff}, {7, 9, 0xff}, {6, 1, 0xff},
+                          {5, 1, 0xff}, {0, 0, 0xff}, {1, 0, 0xff}, {5, 0, 0xff}};
+          for(u32 n = 0; n < 10; n++) {
+            c[GE::StencilTest] = test(fives[n].comparison, fives[n].reference, fives[n].mask);
+            sprite(*s, {{{0, 0, n * 6.0f, 0}, {0, 0, n * 6.0f + 6, 48}}, 0xff80'4020 + n * 0x0c'0b0a});
+          }
+          c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 1;  //(always, written: but for the stencil's test)
+          c[GE::StencilTest] = test(2, 5, 0xff);
+          sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 24}}, 0xffff'ffff}, 60000);
+          c[GE::StencilTestEnable] = 0, c[GE::DepthTest] = 7;  //(greater or equal: drawn where no depth was)
+          sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 24}}, 0xff00'ff00}, 30000);
+          c[GE::DepthTestEnable] = 0;
+        }
+        c[GE::StencilTestEnable] = 0;
+      }
+      u32 bytes = apart(software, hardware);
+      if(bytes) std::printf("  %s %ux, format %u: %u bytes apart\n", gpu->fast ? "fast" : "accurate", scale, format, bytes);
+      CHECK(bytes, 0u);
+      hardware.ge.setRenderer(nullptr);
+    }
+  }
+  gpu->resolution(1);
+}
+static auto gpuStencilFormats() -> void {
+  if(!renderer()) return;
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(gpu) stencilFormats(gpu);
+  }
+}
+
 //Fast mode's triangles kept to the GE's rules for which are drawn (GE::meshTriangles()), against the software
 //renderer and beside the accurate mode: random triangles from behind the camera to past the far plane, some off the
 //GE's 4096-pixel screen, culled either way or not, in lists and strips, no depth test (so that their order shows);
@@ -2045,6 +2139,7 @@ static auto gpuPipelineCache() -> void {
 auto gpuTests() -> Tests {
   return {
     {"gpu sprites against the software renderer", gpuSprites},
+    {"gpu the stencil as each 16-bit format keeps it: 5650's tests against 0, clears and replaces", gpuStencilFormats},
     {"gpu render to texture against the software renderer", gpuRenderToTexture},
     {"gpu render to texture from a frame buffer taller than its picture, nothing finished", gpuTallTexture},
     {"gpu samples near the software renderer", gpuSamples},
