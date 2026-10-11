@@ -25,6 +25,37 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: savedata's files mode and PARAM.SFO — the second boot that called its save corrupted — 2026-10-11
+
+Branch `cursor/psp-savename-2b67`, on `master` (v2.0.0): the "<>" fix (`5fd162d75`), then this (`340649d14`).
+docs/psp-core.md, part 70, has the evidence; docs/psp-compatibility.md's rows are updated. Clean room: pspautotests'
+recordings, pspsdk, PPSSPP's savedata code read only as a description of the PSP; JPCSP not read.
+- **The fix** (`utility.cpp`, with tests): the files mode (12), which answered 0 with an empty list, fills it, secure,
+  normal and system files apart (utility/savedata/filelist); every save mode writes the PARAM.SFO a PSP writes (4912
+  bytes: titles, SAVEDATA_FILE_LIST naming the secure files, hashes zero) and the icons it's given; loads fill sfoParam
+  from it, the list mode dates saves by it; loads, reads and erases answer as loadbroken, deletebroken and
+  loademptyfilename recorded (FILE_NOT_FOUND, DATA_BROKEN, 0 with no file named; erases in the read/write group); the
+  sizes modes count a secure file 16 bytes longer, as a PSP stores it. Saves made by v2.0.0 (no PARAM.SFO) still load,
+  their files normal (chosen: a PSP calls such a save broken), so a game checking its files' kinds calls one corrupted
+  once. No new state (StateVersion 25).
+- **Games**, two boots on one stick: Valkyria Chronicles II and III and Shining Blade find their saves on the second
+  boot (they called them corrupted, deleted them and made them again); Space Invaders Extreme, Hot Shots Golf 2, Def
+  Jam and Mega Man Powered Up load theirs, as before; Monster Hunter Portable 3rd makes no save in the runs; Crash Tag
+  Team Racing waits at "Checking Memory Stick Duo" on every runner, its one savedata call answered rightly (another
+  agent's).
+- **Library** (the report's run, this branch's runner beside the final run's `lib-top`): every game's scenes and
+  categories as there (menu or gameplay 194, movie 71, black 1), no function missing. 79 differ at some capture, all
+  as two runs of one runner differ: run again with both runners at the same time, 41 of 77 match exactly, and the six
+  closest to splitting by runner mix both runners' frames over three more runs each. Ghost of Sparta and Killzone, at
+  the 900-second limit with other work on the machine, finish alone with the final run's frames.
+- **Checks**: tests/psp 443/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0; ares/psp/psp.cpp built with NDK
+  28.2 for arm64. Review: NEEDS CHANGES (a crafted PARAM.SFO's value rooms unbounded: a write far past a buffer), fixed
+  with its minor findings; three delta reviews, the last PASS with nothing left.
+- **Left**: no encryption (these saves don't load on a PSP; encrypted ones copied in aren't read); loads don't fill
+  the icon buffers; DELETEDATA's no-save answer (outside this change).
+- Scratch: `~/phobos-work/scratch/savename` (two-boots.sh, the runners with a [save] trace, review1-4, the library
+  runs).
+
 ## Version codes for 2.x — 2026-10-11
 
 Branch `cursor/version-base-2x-2b67`, on `master` after the PSP stack merged (#208, #210), at the owner's request before

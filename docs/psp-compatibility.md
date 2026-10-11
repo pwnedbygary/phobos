@@ -17,7 +17,10 @@ commit's runner (docs/psp-core.md, part 59); and part 62 (branch `cursor/psp-hle
 the merged stack (docs/psp-core.md, part 62); and part 64 (branch `cursor/psp-gow-sw-2b67`, on #198's
 `cursor/psp-vk-speed6-2b67`): the rows its GE changes moved, from the whole library run again beside the base commit's
 runner (docs/psp-core.md, part 64). And the final run (2026-10-11, `be543afba`, the stack's top before the merge into
-`master`): the whole library run again beside part 64's run. The other rows are the report's.
+`master`): the whole library run again beside part 64's run. And part 70 (2026-10-11, branch
+`cursor/psp-savename-2b67`, on `master` after v2.0.0): the savedata files mode and PARAM.SFO, the whole library run
+again beside the final run, and the games that save early booted twice on one memory stick (docs/psp-core.md, part
+70). The other rows are the report's.
 
 ## Method
 
@@ -53,13 +56,22 @@ game that looked worse was run again without presses on both commits before call
 
 ## Summary
 
-| Category | Before (`b27f084a5`) | Run 1 (#183's tip) | Now | Part 55 | Part 57 | Part 58 | Part 59 | Part 62 | Part 64 | Final | Change since Before |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| Menu or gameplay | 141 | 148 | 175 | 178 | 180 | 180 | 187 | 188 | 189 | 194 | +53 |
-| Movie | 35 | 43 | 63 | 63 | 63 | 65 | 71 | 71 | 71 | 71 | +36 |
-| Stuck loading | 13 | 8 | 5 | 4 | 4 | 4 | 0 | 0 | 0 | 0 | -13 |
-| Black or hang | 73 | 64 | 21 | 19 | 17 | 15 | 6 | 6 | 6 | 1 | -72 |
-| Timed out | 4 | 3 | 2 | 2 | 2 | 2 | 2 | 1 | 0 | 0 | -4 |
+| Category | Before (`b27f084a5`) | Run 1 (#183's tip) | Now | Part 55 | Part 57 | Part 58 | Part 59 | Part 62 | Part 64 | Final | Part 70 | Change since Before |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Menu or gameplay | 141 | 148 | 175 | 178 | 180 | 180 | 187 | 188 | 189 | 194 | 194 | +53 |
+| Movie | 35 | 43 | 63 | 63 | 63 | 65 | 71 | 71 | 71 | 71 | 71 | +36 |
+| Stuck loading | 13 | 8 | 5 | 4 | 4 | 4 | 0 | 0 | 0 | 0 | 0 | -13 |
+| Black or hang | 73 | 64 | 21 | 19 | 17 | 15 | 6 | 6 | 6 | 1 | 1 | -72 |
+| Timed out | 4 | 3 | 2 | 2 | 2 | 2 | 2 | 1 | 0 | 0 | 0 | -4 |
+
+Part 70 (2026-10-11, the savedata utility's files mode and the PARAM.SFO written beside every save) moves no row: the
+whole library run again with its runner shows every game's scenes as the final run did, in the same categories.
+Seventy-nine games differ at some capture; run again with the base commit's runner and this one at the same time, 41 of
+77 match exactly (PixelJunk Monsters' title sky follows the time of day), and the rest are the same scene a frame or a
+step apart, as two runs of one runner differ; God of War: Ghost of Sparta and Killzone, which reached the time limit
+with other work on the machine, finish alone with the final run's frames. Three rows gain a note: Valkyria Chronicles II
+and III and Shining Blade, booted again on the same memory stick, find their saves, where each had called its save
+corrupted and made it again (docs/psp-core.md, part 70).
 
 The final run (2026-10-11), the whole library again on the stack's top before it merged into `master` (`be543afba`:
 part 67's speedups, #205, and the owner's PGD fix, #206, on part 64's), moves six rows, the six black games, all of which
@@ -518,7 +530,7 @@ and now, and what the last frames showed or why a game stops.
 | Sega Rally Revo | ULUS10311 | 129 | black | black | menu | autosave notice, then the title (an assert at its 4800-packet ring before) |
 | Sheperds Crossing | ULUS10499 | 86 | black | menu | menu | title, press start |
 | Shin Megami Tensei - Persona 3 Portable | ULUS10512 | 755 | movie | loading | menu | logo, intro and title, PRESS ANY BUTTON (2100 to 3000), then its attract loop starts over: a loading screen at 3600 (judged again in part 55; scesupPreAcc 86debd66, a function of Sony's LIBSUPPREACC.PRX, which the game loads, runs since part 62) |
-| Shining Blade [gugule] | NPJH50530 | 526 | black | black | menu | its autosave notice at 1200, "There is no save data." at 3600: DATA.BIN decrypts (#206) |
+| Shining Blade [gugule] | NPJH50530 | 526 | black | black | menu | its autosave notice at 1200, "There is no save data." at 3600: DATA.BIN decrypts (#206); booted again on the same stick, "Save data has been loaded." (part 70: before, "Save data is corrupted." and made again) |
 | Shining Hearts [English MT v1.2] | NPJH50342 | 302 | menu | menu | menu | system data prompt |
 | Shining Hearts [English] | NPJH50342 | 314 | menu | menu | menu | system data prompt |
 | Shinobido - Tales of the Ninja [Europe] [Undub 2021-06-28] | UCES00421 | 269 | menu | menu | menu | title |
@@ -579,8 +591,8 @@ and now, and what the last frames showed or why a game stops.
 | Umineko no Nakukoro ni Portable [English v1.0] | ULJM05968 | 205 | menu | black | menu | title menu |
 | Valhalla Knights | ULUS10230 | 373 | menu | black | movie | autosave notice, XSEED and Marvelous logos, then its intro (part 59: a file holds one asynchronous result at a time; its seek, made again over the first's result not taken, had been under way again at each poll, for good) |
 | Valhalla Knights 2 | ULUS10366 | 416 | menu | menu | movie | intro |
-| Valkyria Chronicles II | ULUS10515 | 278 | loading | menu | menu | autosave notices |
-| Valkyria Chronicles III [English v1.0.8] | ULJM05957 | 546 | black | black | menu | its autosave and Media Storage notices at 1200 and 3600: DATA.BIN decrypts (#206) |
+| Valkyria Chronicles II | ULUS10515 | 278 | loading | menu | menu | autosave notices; booted again on the same stick, its save found and read, its title and opening (part 70: before, "Delete corrupted save data?" and made again) |
+| Valkyria Chronicles III [English v1.0.8] | ULJM05957 | 546 | black | black | menu | its autosave and Media Storage notices at 1200 and 3600: DATA.BIN decrypts (#206); booted again on the same stick, its save found and read (part 70: before, deleted as corrupted and made again) |
 | Valkyrie Profile Lennth | ULUS10107 | 78 | loading | menu | menu | new game difficulty select |
 | Virtua Tennis - World Tour | ULUS10037 | 193 | menu | menu | menu | title at 1200, white at 3600 after Cross |
 | Virtua Tennis 3 | ULUS10246 | 341 | menu | menu | menu | title |
