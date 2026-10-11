@@ -8802,18 +8802,17 @@ finished everything: the waits and the read backs of five targets were 12.8% of 
 (`GPU::fill()`, `GPU::finish()`, the backend's run, `Kernel::picture()`).
 
 What the loads find: in the software renderer, the depth the 3D pass has just written (0x16 mostly, 0x539 to 0x546
-elsewhere). With the GPU, whose depth never reaches memory, the finish gave them the colors of the bloom of the
-frame before, put back over the depth buffer's bytes: 0 in all but 130 of 3,400 loads in 200 frames (0x505, 0x303,
-...). So finishing never gave them what they ask for. Now (`Memory::pointer()`, `GE::drawnOver()`) a load through
+elsewhere). With the GPU, whose depth never reaches memory, the finish gave them the colors of the bloom of the frame
+before, put back over the depth buffer's bytes: 0 in all but 130 of 3,400 loads in 200 frames (0x505, 0x303, ...). So
+finishing never gave them what they ask for. Now (`Memory::pointer()`, `GE::drawnOver()`) a load through
 `Memory::read()` (the CPU's, an HLE function's small reads) through VRAM's second or fourth copy, the views the GE
 keeps its depth buffer in, waits only where drawing that writes memory's depth reaches it, the drawing threads'
 batches (exact, as before; with a renderer about, that wait finishes it too, as any did), and reads memory's bytes
-past a hardware renderer's pixels:
-0 in every load of the bench scene, at 1x and 4x (the base's at 4x: 0 in all 1,700 of 100 frames). Stores, loads
-through the first and third copies, and copies in and out (block transfers, HLE functions' buffers) wait as before.
-The rule goes by the view, not by what the bytes are: a game reading colors through those views (none known) would
-now read memory's older bytes. WipEout's race on the M1: 120 finishes in 120 frames -> 1
-(its first), 119 frames shown from the GPU (none before).
+past a hardware renderer's pixels: 0 in every load of the bench scene, at 1x and 4x (the base's at 4x: 0 in all 1,700
+of 100 frames). Stores, loads through the first and third copies, and copies in and out (block transfers, HLE
+functions' buffers) wait as before. The rule goes by the view, not by what the bytes are: a game reading colors
+through those views (none known) would now read memory's older bytes. WipEout's race on the M1: 120 finishes in 120
+frames -> 1 (its first), 119 frames shown from the GPU (none before).
 
 At 1x every frame is as it was. At 4x it isn't, as a frame shown from memory isn't one shown from the GPU: the base
 finished every frame, and the picture shown was memory's, one of each pixel's 4x4 samples, scaled up (every 4x4
@@ -8829,13 +8828,12 @@ game's is. See "Accuracy".
   and as the four twice over, which is how fills and moves hold them in the GPU's eight bits (part 67) for its tests
   to compare as the GE's do; but clear mode's alpha and a REPLACE's reference went in whole. Now the reference is the
   stencil as the format keeps it (`keptStencil()`): clear mode's, whose test always passes, from each primitive's
-  color (a triangle's last corner's, a sprite's, a point's, each pixel's of a line; points and lines had left it 0,
-  in every format, which the review found); a REPLACE's where its comparison comes out the same with it (never,
-  always, or the same bits where it
-  looks), else in 5551 made on the top bit against the kept reference, which gives the same at 0 and 255, and in
-  4444 left the GE's (its REPLACE writing all eight bits, as before). MASK_ALPHA's bits for a 16-bit one go with
-  their copies, and a REPLACE's color alpha is the kept stencil. Increments and decrements of a 16-bit stencil still
-  step it by one where the PSP's steps a 5551 one to 255 or 0 and a 4444 one by 16 (left).
+  color (a triangle's last corner's, a sprite's, a point's, each pixel's of a line; points and lines had left it 0, in
+  every format, which the review found); a REPLACE's where its comparison comes out the same with it (never, always,
+  or the same bits where it looks), else in 5551 made on the top bit against the kept reference, which gives the same
+  at 0 and 255, and in 4444 left the GE's (its REPLACE writing all eight bits, as before). MASK_ALPHA's bits for a
+  16-bit one go with their copies, and a REPLACE's color alpha is the kept stencil. Increments and decrements of a
+  16-bit stencil still step it by one where the PSP's steps a 5551 one to 255 or 0 and a 4444 one by 16 (left).
 
 Both are in the settings every draw takes, in either mode; no bench scene draws either way (their frames are the
 same), and the cost is a comparison or two a PRIM.
@@ -8901,7 +8899,8 @@ percent; see "Left".
 The RP6 (Adreno 740), the runner from adb's shell, its emulation thread pinned to the X3 (cpu7), late frames and
 the pipelines kept (part 63); frames a second over 150 frames of God of War's scenes and 300 of the others', the means
 of two rounds with the base (`671072d6f`) and the branch taking turns to go first (the device warms over a session,
-which costs whichever runs second 0-2%). The branch is `9a88846bd` (the docs after it change nothing run).
+which costs whichever runs second 0-2%). The branch here is `9a88846bd`; the review's fix after it (clear mode's points
+and lines) changes no frame these scenes draw, and the accuracy runs below are of it, `515e48f65`.
 
 Vulkan, 1x:
 
@@ -8969,10 +8968,10 @@ base's:
 
 - `tests/psp/run-tests.sh` (sanitizers on): 437 groups, 0 failures (the base's 434 and three new: "ge loads through
   the depth buffer's views wait for the threads", compiled loads and the interpreter's at 2 and 4 threads, the batch
-  checked to be still drawing as they load; "gpu loads
-  through the depth buffer's views: memory's, without waiting", through the second and fourth copies, a store through
-  the fourth still finishing; "gpu the stencil as each 16-bit format keeps it", in both modes at 1x and 2x, which all
-  six accurate-mode runs fail on the base; clear mode's points, a line and a triangle among them). `tests/allegrex/run-tests.sh` 58 groups, 0 failures;
+  checked to be still drawing as they load; "gpu loads through the depth buffer's views: memory's, without waiting",
+  through the second and fourth copies, a store through the fourth still finishing; "gpu the stencil as each 16-bit
+  format keeps it", in both modes at 1x and 2x, which all six accurate-mode runs fail on the base; it draws clear
+  mode's points, lines and a triangle too, and 8888's). `tests/allegrex/run-tests.sh` 58 groups, 0 failures;
   `tests/psp/ares/run-tests.sh` 307 checks, 0 failed. The GPU tests built for Android pass on the RP6 on Turnip and on
   Qualcomm's driver (33 groups each; one skips itself on Qualcomm's, which doesn't read the frame buffer). GCC 11
   (ubuntu:22.04) and 13 (ubuntu:24.04): the kernel and the changed tests compile, `gpu.cpp` and `memory.cpp` at -O1,
@@ -8985,9 +8984,17 @@ base's:
 - Broken versions each fail a test: a depth view's load waiting for the renderer again, one not waiting for the
   threads, a store taken as a load (the two depth view groups); 5650's comparison left out, clear mode's alpha or a
   REPLACE's reference whole, MASK_ALPHA's bits without their copies, 5551's comparison on the top bit left out, the
-  never-or-always case and the same-bits case each left out (the stencil group). A REPLACE's color alpha left whole
-  isn't caught: the stencil itself is what's read back, and a 16-bit frame buffer's blending reads the alpha through
-  its format.
+  never-or-always case and the same-bits case each left out, clear mode's point or line left at the PRIM's
+  reference (the stencil group). A REPLACE's color alpha left whole isn't caught: the stencil itself is what's read
+  back, and a 16-bit frame buffer's blending reads the alpha through its format.
+- An independent review of the branch found no correctness bug: it tried every comparison, reference, mask, the keep,
+  zero, replace and invert operations in each slot, eight MASK_ALPHAs and depth passing and failing against
+  `pixel.cpp`'s rules, 620 million 5551 cases and 717 million 4444 ones outside the case left, all the same, and 5650's
+  every case. Its points were taken: clear mode's points and lines (above), the GE group's batch checked to be still
+  drawing, the docs' wording (the rule is `Memory::read()`'s, by the view, a batch's wait finishing the renderer too)
+  and two of the handoff's numbers. A delta review of those fixes found no bug (its scratch builds without the
+  point's or the line's call failed the stencil group in all eight runs); its points were taken: the group draws an
+  8888 frame buffer and a flat line too, and the docs' lines are wrapped.
 
 ### Left, and why
 

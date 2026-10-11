@@ -178,9 +178,9 @@ had; and a PRIM the software renderer draws, above, tests against memory's depth
 default, and it's on the list below. So a load (`Memory::read()`: the CPU's, an HLE function's) through VRAM's second
 or fourth copy, the views the GE keeps its depth buffer in, doesn't finish the renderer (part 68:
 `Memory::vramDrawnOver`'s `depthLoad`): finishing couldn't give it the GPU's depth, only the colors of a frame buffer
-drawn over the same bytes. (Stores, and copies in or out through those views, still finish.) WipEout reads its depth buffer at the
-screen's middle and a few more points as it draws, where its bloom's buffers are: one finish a frame, and its pixels
-read back, for the colors of the bloom of the frame before.
+drawn over the same bytes. (Stores, and copies in or out through those views, still finish.) WipEout reads its depth
+buffer at the screen's middle and a few more points as it draws, where its bloom's buffers are: one finish a frame,
+and its pixels read back, for the colors of the bloom of the frame before.
 
 **Bytes beside the pixels.** A page is 4 KiB, two rows of a 512-wide 8888 frame buffer, and games keep their own
 bytes in the same pages: Brave Story keeps its display list in the 32 unused columns right of its 480-pixel picture,

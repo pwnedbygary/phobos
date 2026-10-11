@@ -241,14 +241,15 @@ static auto gpuFast() -> void {
   CHECK(gpu->statistics.meshes > before.meshes, true);
 }
 
-//The stencil as each 16-bit format keeps it (part 68), at 1x and 2x. A 5650 frame buffer has none, which a stencil
-//test reads as 0: a test failing against it drops every pixel (its depth not written either: a sprite behind shows
-//through), one passing draws them all. A 5551 one keeps a bit and a 4444 one four, so clear mode's alpha and a
-//REPLACE's reference leave the stencil the GPU tests next as the GE's: 0 or 255, or four bits twice over, also
-//through MASK_ALPHA keeping some of its bits, and a 5551 REPLACE whose comparison takes bits the format doesn't
-//keep compares as the GE does. Clears and replaces over random rectangles, clear mode's points, a line and (at 1x)
-//a triangle, then a full-frame pass testing for each stencil a frame buffer can hold and some it can't, each its own
-//color: every byte the software renderer's. In either mode (fast mode's settings are the accurate mode's).
+//The stencil as each 16-bit format keeps it (part 68), beside 8888's, at 1x and 2x. A 5650 frame buffer has none,
+//which a stencil test reads as 0: a test failing against it drops every pixel (its depth not written either: a
+//sprite behind shows through), one passing draws them all. A 5551 one keeps a bit and a 4444 one four, so clear
+//mode's alpha and a REPLACE's reference leave the stencil the GPU tests next as the GE's: 0 or 255, or four bits
+//twice over, also through MASK_ALPHA keeping some of its bits, and a 5551 REPLACE whose comparison takes bits the
+//format doesn't keep compares as the GE does. Clears and replaces over random rectangles, clear mode's points, two
+//lines (one flat) and (at 1x) a triangle, then a full-frame pass testing for each stencil a frame buffer can hold
+//and some it can't, each its own color: every byte the software renderer's. In either mode (fast mode's settings
+//are the accurate mode's).
 static auto stencilFormats(GPU* gpu) -> void {
   struct Pass { bool clear; u32 test, operation, maskAlpha, color; Corners at; };
   std::mt19937 random{20261068};
@@ -261,7 +262,7 @@ static auto stencilFormats(GPU* gpu) -> void {
   auto replaceOn = [](bool pass) { return pass ? 2u << 16 : 2u; };
   for(u32 scale : {1u, 2u}) {
     gpu->resolution(scale);
-    for(u32 format : {0u, 1u, 2u}) {
+    for(u32 format : {0u, 1u, 2u, 3u}) {
       std::vector<Pass> passes;
       for(u32 alpha : {0x7fu, 0x80u, 0x5au, 0xa5u, 0x01u, 0xfeu, 0x0fu, 0xf0u, 0x33u, 0xc4u}) {
         passes.push_back({true, 0, 0, 0, 0, rectangle(u32(random() & 0xff'ffff) | alpha << 24)});
@@ -315,6 +316,9 @@ static auto stencilFormats(GPU* gpu) -> void {
         c[GE::ClearMode] = 1 | 3 << 8, c[GE::StencilTestEnable] = 0, c[GE::MaskAlpha] = 0;
         draw(GE::Points, {{2, 44, 0x7f00'00ff}, {4, 44, 0x8000'ff00}, {6, 44, 0x5aff'0000}, {8, 44, 0xa500'ffff}});
         draw(GE::Lines, {{10, 46, 0x0112'3456}, {62, 47, 0xfe65'4321}});
+        c[GE::ShadeMode] = 0;  //(flat: the second end's alpha all along)
+        draw(GE::Lines, {{10, 40, 0x4012'3456}, {40, 42, 0x9b65'4321}});
+        c[GE::ShadeMode] = 1;
         if(scale == 1) {  //(above it a triangle's edges are the GPU's coverage, not the PSP's pixels')
           draw(GE::Triangles, {{40, 2, 0xc4aa'bbcc}, {62, 2, 0xc4aa'bbcc}, {50, 20, 0xc4aa'bbcc}});
         }
