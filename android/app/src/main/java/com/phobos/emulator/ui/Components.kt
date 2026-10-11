@@ -56,11 +56,11 @@ import com.phobos.emulator.ui.theme.sunsetPlate
 import com.phobos.emulator.ui.theme.neonGlow
 import com.phobos.emulator.ui.theme.pillShape
 
-/** A titled group of settings rows on a rounded card. */
+/** A titled group of settings rows on a rounded card; [badge] as in [SectionHeader]. */
 @Composable
-fun SettingsCategory(title: String, content: @Composable ColumnScope.() -> Unit) {
+fun SettingsCategory(title: String, badge: (@Composable () -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     Column {
-        SectionHeader(title)
+        SectionHeader(title, badge = badge)
         SettingsCard(content = content)
     }
 }
@@ -68,10 +68,16 @@ fun SettingsCategory(title: String, content: @Composable ColumnScope.() -> Unit)
 /**
  * Section title in the primary color; uppercase neon with retrowave effects, on a soft plate and
  * outlined where it is drawn straight on the backdrop ([onBackdrop]; false inside panels such as the
- * pause menu).
+ * pause menu). [badge] sits right after the title and brings its own spacing, [trailing] at the row's end.
  */
 @Composable
-fun SectionHeader(title: String, modifier: Modifier = Modifier, onBackdrop: Boolean = true, trailing: (@Composable () -> Unit)? = null) {
+fun SectionHeader(
+    title: String,
+    modifier: Modifier = Modifier,
+    onBackdrop: Boolean = true,
+    badge: (@Composable () -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
+) {
     val scheme = MaterialTheme.colorScheme
     val primary = scheme.primary
     val theme = LocalPhobosTheme.current
@@ -98,6 +104,7 @@ fun SectionHeader(title: String, modifier: Modifier = Modifier, onBackdrop: Bool
             } else {
                 Text(text, style = style, color = primary)
             }
+            badge?.invoke()
             solid?.sectionRule()?.let { rule ->
                 Spacer(Modifier.padding(start = 12.dp).weight(1f).height(8.dp).then(rule))
             }

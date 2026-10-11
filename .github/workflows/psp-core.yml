@@ -6,9 +6,9 @@ name: PSP Core Tests
 on:
   push:
     branches: [ master ]
-    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', 'tests/psp/**', 'thirdparty/ffmpeg/**', '.github/workflows/psp-core.yml' ]
+    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', 'tests/psp/**', 'desktop/PspDiscInfo.*', 'thirdparty/ffmpeg/**', '.github/workflows/psp-core.yml' ]
   pull_request:
-    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', 'tests/psp/**', 'thirdparty/ffmpeg/**', '.github/workflows/psp-core.yml' ]
+    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', 'tests/psp/**', 'desktop/PspDiscInfo.*', 'thirdparty/ffmpeg/**', '.github/workflows/psp-core.yml' ]
   workflow_dispatch:
 
 concurrency:
