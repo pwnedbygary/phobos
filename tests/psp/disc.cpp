@@ -2,6 +2,7 @@
 //an ISO and as CSOs; their files through the kernel, every way games read them; and the drive's state.
 #include "kernel-machine.hpp"
 #include "disc-image.hpp"
+#include "pgd.hpp"
 
 namespace allegrex_test::psp {
 
@@ -492,6 +493,56 @@ static auto discKeys() -> void {
   CHECK(m.notes.size(), 0);
 }
 
+//A PGD file's reads, once its key is given: the file reads as its decrypted data, its 0x90-byte header hidden. What
+//Black Wolves Saga's CRI file system stalls on without: it reads the first sector, wants "CPK " at its start, and
+//opens the file again, for good. Made with the tests' PGD maker (pgd.hpp), read whole and in pieces.
+static auto discPgdReads() -> void {
+  KernelMachine m;
+  auto& memory = m.system.memory;
+  auto plain = pattern(3000, 7);
+  u8 key[16];
+  for(u32 at = 0; at < 16; at++) key[at] = u8(0x40 + at);
+  psp_pgd::Options options;
+  options.keyIndex = 1;  //as the games' headers say, MAC type 1
+  options.versionKey = key;
+  auto pgd = psp_pgd::build(plain, options);
+  CHECK(pgd.empty(), false);
+  auto image = disc_image::makeIso({
+    {"PSP_GAME/INSDIR/DATA.BIN", pgd}, {"UMD_DATA.BIN", pattern(32, 4)},
+  });
+  std::string error;
+  m.kernel.disc = openDisc(image.bytes, error);
+  for(u32 at = 0; at < 16; at++) memory.write(1, In + at, 0x40 + at);  //the key
+  u32 file = m.call("sceIoOpen", {m.string("disc0:/PSP_GAME/INSDIR/DATA.BIN"), 0x4000'4001, 0});
+  CHECK(file >= 3 && file < 0x8000'0000, true);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), 0);
+  CHECK(m.call("sceIoRead", {file, Buffer, 3000}), 3000);  //the data at the file's start, not its header
+  std::vector<u8> read(3000);
+  memory.copyOut(read.data(), Buffer, 3000);
+  CHECK(read == plain, true);
+  CHECK(m.call("sceIoLseek32", {file, 100, 0}), 100);
+  CHECK(m.call("sceIoRead", {file, Buffer, 200}), 200);
+  std::vector<u8> piece(200);
+  memory.copyOut(piece.data(), Buffer, 200);
+  CHECK(piece == std::vector<u8>(plain.begin() + 100, plain.begin() + 300), true);
+  CHECK(m.call("sceIoLseek32", {file, 2900, 0}), 2900);
+  CHECK(m.call("sceIoRead", {file, Buffer, 4000}), 100);  //past the end: only the data, not the file's tail
+  std::vector<u8> tail(100);
+  memory.copyOut(tail.data(), Buffer, 100);
+  CHECK(tail == std::vector<u8>(plain.begin() + 2900, plain.end()), true);
+  m.call("sceIoClose", {file});
+  //a wrong key is recovered from the header's own MAC and reads the data all the same (pgd.cpp)
+  file = m.call("sceIoOpen", {m.string("disc0:/PSP_GAME/INSDIR/DATA.BIN"), 0x4000'4001, 0});
+  CHECK(file >= 3 && file < 0x8000'0000, true);
+  for(u32 at = 0; at < 16; at++) memory.write(1, In + at, u8(0x80 + at));  //not the key
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), 0);
+  CHECK(m.call("sceIoRead", {file, Buffer, 3000}), 3000);
+  memory.copyOut(read.data(), Buffer, 3000);
+  CHECK(read == plain, true);
+  m.call("sceIoClose", {file});
+  CHECK(m.notes.size(), 0);
+}
+
 //The drive's state, and waiting for it.
 static auto umdDrive() -> void {
   for(bool recompile : {false, true}) {
@@ -912,7 +963,7 @@ auto discTests() -> Tests {
   return {
     {"disc images", discImages}, {"disc files", discFiles}, {"disc folders read once", discFolders},
     {"disc requests", discRequests},
-    {"disc PGD keys", discKeys}, {"disc drive", umdDrive}, {"disc drive's callback", umdCallback},
+    {"disc PGD keys", discKeys}, {"disc PGD reads", discPgdReads}, {"disc drive", umdDrive}, {"disc drive's callback", umdCallback},
     {"disc drive mounting as it's activated", umdMounting}, {"memory stick's callback", stickCallback},
   };
 }

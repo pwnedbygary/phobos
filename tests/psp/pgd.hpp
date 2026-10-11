@@ -121,19 +121,22 @@ inline auto counterBlock(const Block& base, u32 n) -> Block {
 }
 
 //`size` bytes, BBCiphered one way (the data's, the descriptor's): a keystream, so this both encrypts and decrypts.
+//The keystream chains on the counter block KIRK's cipher-block-chaining is given (the input), not on the keystream it
+//produces: block s is AES_0x63(counter(base,s)) XOR counter(base,s-1), with counter(base,0) as the first block's IV.
 inline auto bbcipher(const u8* key, u32 seed, u8* data, u32 size) -> void {
   auto base = cipherBase(key);
   psp::AES128 k63{psp::Keys::kirk7[0x63]};
   u32 s = seed;
-  Block previous = seed == 1 ? Block{} : counterBlock(base, seed - 1);
+  Block previous = seed == 1 ? Block{} : counterBlock(base, seed - 1);  //KIRK's IV for this start
   u32 at = 0;
   while(at < size) {
-    Block current = counterBlock(base, s);
+    Block input = counterBlock(base, s);
+    Block current = input;
     k63.decrypt(current.data());
     for(u32 n = 0; n < 16; n++) current[n] ^= previous[n];
     u32 take = size - at < 16 ? size - at : 16;
     for(u32 n = 0; n < take; n++) data[at + n] ^= current[n];
-    previous = current;
+    previous = input;  //the next block chains on this counter, not on the keystream
     s++;
     at += take;
   }

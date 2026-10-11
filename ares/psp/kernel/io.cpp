@@ -383,19 +383,26 @@ auto Kernel::readFile(u32 file, u32 data, u32 size) -> u32 {
 //else the descriptor's.
 auto Kernel::pgdDescriptor(OpenFile& open) -> std::string {
   u8 header[0x90];
-  u64 size = std::min<u64>(sizeof(header), open.size);
+  u64 read = std::min<u64>(sizeof(header), open.size);  //the header is 0x90 bytes, or the file if it's shorter
   if(open.onDisc) {
-    if(!disc->read(u64(open.sector) * Disc::SectorSize, size, header)) return "couldn't read a PGD file's header";
+    if(!disc->read(u64(open.sector) * Disc::SectorSize, read, header)) return "couldn't read a PGD file's header";
   } else {
     open.stream->flush();
     open.stream->clear();
     open.stream->seekg(0);
-    open.stream->read(reinterpret_cast<char*>(header), size);
-    if(u64(open.stream->gcount()) < size) return "a PGD file cut short in its header";
+    open.stream->read(reinterpret_cast<char*>(header), read);
+    if(u64(open.stream->gcount()) < read) return "a PGD file cut short in its header";
   }
+  //The file's own size, not how much of its header was read: the descriptor says where the data starts and how long it
+  //is, and that is checked against the whole file (pgd.cpp). Handed the 0x90 read above, every PGD file would be
+  //refused for holding more data than its own header.
+  u64 size = open.size;
   Pgd::Descriptor descriptor;
   auto why = Pgd::descriptor(header, size, open.pgdVersionKey, descriptor);
   if(!why.empty()) return why;
+  //the key the descriptor came out under, which the data must also be decrypted with (pgd.cpp may have recovered it
+  //from the header's own MAC when the key the game gave didn't match).
+  memcpy(open.pgdVersionKey, descriptor.versionKey, 16);
   open.pgdDataOffset = open.pgdDataOffset ? open.pgdDataOffset : descriptor.dataOffset;
   open.pgdDataSize = descriptor.dataSize;
   open.pgdBlockSize = descriptor.blockSize;
@@ -404,28 +411,42 @@ auto Kernel::pgdDescriptor(OpenFile& open) -> std::string {
   return {};
 }
 
-//A PGD file's reads: the part of this read that's in the data region ([dataOffset, dataOffset + dataSize), decrypted
-//with the descriptor's key), decrypted in place. The header before it, and any padding after the data, stay as they
-//are. Set up the descriptor first.
+//A PGD file's reads: unlocked with its key (ioctl 0x04100001), the file reads as its decrypted data, its 0x90-byte
+//header hidden: file offset p is data byte p, "CPK " and all. The ciphertext lives behind the header, so it's read
+//from there and decrypted over what the read moved. readCount() already clamped the read to the data, so length here
+//is the whole count whenever the position is inside the data. Set up the descriptor first.
 auto Kernel::pgdDecryptRead(OpenFile& open, u32 data, u64 count) -> void {
   if(count == 0 || !open.pgd) return;
   if(!open.pgdReady) {
     if(auto why = pgdDescriptor(open); !why.empty()) return;  //leave the reads as they are
   }
-  u64 start = open.pgdDataOffset, end = u64(open.pgdDataOffset) + open.pgdDataSize;
-  if(open.position >= end || u64(open.position) + count <= start) return;  //not in the data region
-  u8* bytes = memory.pointer(data, u32(count));
-  u32 headerPart = open.position < start ? u32(start - open.position) : 0;  //bytes before the data, left alone
-  u32 decStart = headerPart;  //where the decryption starts, in this read
-  u32 decLen = u32(count) - headerPart;
-  u32 decOffset = u32(open.position + decStart - open.pgdDataOffset);  //its place in the data region
-  Pgd::decryptData(bytes + decStart, decOffset, decLen, open.pgdDataKey, open.pgdVersionKey);
+  if(u64(open.position) >= open.pgdDataSize) return;  //past the data: nothing decrypted
+  u64 length = std::min<u64>(count, u64(open.pgdDataSize) - open.position);
+  //The data's ciphertext, at its place behind the header: read again, as the read moved the file's own bytes.
+  std::vector<u8> cipher(length);
+  bool got = false;
+  if(open.onDisc) {
+    got = disc->read(u64(open.sector) * Disc::SectorSize + u64(open.pgdDataOffset) + open.position, length, cipher.data());
+  } else if(open.stream) {
+    open.stream->clear();
+    open.stream->seekg(std::streamoff(u64(open.pgdDataOffset) + open.position));
+    open.stream->read(reinterpret_cast<char*>(cipher.data()), length);
+    got = u64(open.stream->gcount()) == length;
+    open.stream->clear();
+  }
+  if(!got) return;  //a damaged image: leave the read as it is
+  Pgd::decryptData(cipher.data(), u32(open.position), u32(length), open.pgdDataKey, open.pgdVersionKey);
+  memory.copyIn(data, cipher.data(), u32(length));
 }
 
 //How many bytes (or sectors) a read of size from the file's position gets, fewer at its end: 0 with them in count, or
 //why it can't (a destination not in the program's memory: for the disc, the bytes it gets; for a host file, all it
-//asked for). Nothing moves.
+//asked for). Nothing moves. A PGD file unlocked with its key reads as its decrypted data (pgdDecryptRead(), which
+//reads file offset p as data byte p): the descriptor is set up here, so the count is already clamped to the data,
+//not the whole file, for sync reads (readFile) and async ones (sceIoReadAsync) alike. Still locked, or refused its
+//descriptor, it reads as a plain file.
 auto Kernel::readCount(OpenFile& open, u32 data, u32 size, u64& count) -> u32 {
+  if(open.pgd && !open.pgdReady) pgdDescriptor(open);
   if(open.onDisc) {
     u64 unit = open.sectors ? Disc::SectorSize : 1;
     u64 start = u64(open.sector) * Disc::SectorSize + open.position * unit;
@@ -433,6 +454,8 @@ auto Kernel::readCount(OpenFile& open, u32 data, u32 size, u64& count) -> u32 {
     u64 end = open.sectors ? u64(disc->sectors()) * Disc::SectorSize : disc->size();
     count = std::min<u64>(size, open.size > open.position ? open.size - open.position : 0);
     count = std::min<u64>(count, start < end ? (end - start) / unit : 0);
+    if(open.pgd && open.pgdReady)
+      count = std::min<u64>(count, u64(open.position) < open.pgdDataSize ? u64(open.pgdDataSize) - open.position : 0);
     u64 bytes = count * unit;
     if(bytes && (bytes > 0xffff'ffff || !memory.reaches(data, u32(bytes)))) return ErrorIllegalAddress;
     return 0;
@@ -444,6 +467,8 @@ auto Kernel::readCount(OpenFile& open, u32 data, u32 size, u64& count) -> u32 {
   s64 length = s64(open.stream->tellg());
   open.stream->clear();
   count = length > s64(open.position) ? std::min<u64>(size, u64(length) - open.position) : 0;
+  if(open.pgd && open.pgdReady)
+    count = std::min<u64>(count, u64(open.position) < open.pgdDataSize ? u64(open.pgdDataSize) - open.position : 0);
   return 0;
 }
 
@@ -932,8 +957,8 @@ auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 out
   case 0x0410'0001: {  //the file's key (16 bytes), for data encrypted as PGD, which the PSP decrypts as it's read
     //A file without PGD's header ("\0PGD") is read as it is: the fan translations of 7th Dragon 2020 and its sequel
     //carry their INSDIR data decrypted, and the games set its key all the same, taking anything but success as the
-    //drive failing and opening the file again, for good. A file with the header keeps the key, and decrypts its
-    //reads (pgd.cpp); its header is read as it is, its key (0x10) being in the clear.
+    //drive failing and opening the file again, for good. A file with the header keeps the key, and reads as its
+    //decrypted data with the header hidden (pgdDecryptRead()); its key (0x10) is in the clear.
     if(open.sectors || inLength < 16 || !memory.reaches(in, 16)) return ErrorFunctionNotSupported;
     u8 head[4] = {};
     if(open.size >= 4 && !disc->read(u64(open.sector) * Disc::SectorSize, 4, head)) return ErrorIOError;
