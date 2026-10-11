@@ -39,18 +39,20 @@ read only as a description of the PSP's dialog threads, JPCSP not read; the PGD 
   and 111 read NONE at once, 32 SHUTDOWN): a caller worse than 0x20 and the dialog's graphics and access threads now
   finds it closed at once. Crash reaches its title, attract race, menus and name entry, and makes and loads its save.
 - **DBZ** (no change): not stuck. Its "Now Loading" is the title menu's attract demo loading (about 570 frames in the
-  runner, then the demo); on the RP6 it ran at a tenth of the PSP's speed, frames of up to 20 s with the emulation
-  thread blocked, because phase B's other 236 games were being copied onto the same SD card (every game run during the
-  copy shows such frames, none after it). Its 600 frames by the run's end reached the runner's frame 7620, the black
-  before the demo. New Game, its first save and a stage's loading all go on in the runner.
+  runner, then the demo); on the RP6 it ran at about a sixth of the PSP's speed, frames of up to 20 s with the
+  emulation thread blocked, while phase B's other 236 games were being copied onto the same SD card (every game run
+  during the copy shows such frames, none after it). Its 600 frames by the run's end reached about the runner's frame
+  7620, the black before the demo. New Game, its first save and a stage's loading all go on in the runner.
 - **Checks**: tests/psp 439/0 (sanitized; master's 438 here and a new group, "utility save dialog closed by priority",
   which each broken version of the fix fails), tests/allegrex 58/0, tests/psp/ares 307/0. The whole library the
   report's way beside the final run: 81 games close a save dialog from such a thread now; Crash's row moves (its
   attract race at 3600, still "menu or gameplay"); every other game's frames are the same scenes as before, a fade or
   an animation step apart where they differ (three titles a step apart from the closing taking no time now); none
-  missing a function. Super Monkey Ball Adventures hit the 900 s limit with the Mac shared with other jobs, and run
-  alone matches. An independent review of a first version (the caller waited the 2 ms) led to closing at once, invalid
-  priorities ignored, the comment's evidence split from PPSSPP's description, and two more test cases.
+  missing a function. Super Monkey Ball Adventures hit the 900 s limit with the Mac shared with other jobs; run again
+  with no limit its frames match, and beside master's runner it runs at the same speed. An independent review of a
+  first version (the caller waited the 2 ms) led to closing at once, invalid priorities ignored, the comment's evidence
+  split from PPSSPP's description, and two more test cases; a delta review found no new bug and corrected the docs'
+  figures.
 - **Left**: the dialog threads' borrowing of the volatile memory (PPSSPP's description, unrecorded); DBZ to run again
   on the RP6 with nothing copying onto the card.
 - Scratch: `~/phobos-work/scratch/hangs`.

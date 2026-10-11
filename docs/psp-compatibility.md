@@ -68,10 +68,11 @@ Part 69 (2026-10-11, on v2.0.0) moves no category. Crash Tag Team Racing, which 
 straight after closing one, and a PSP has the dialog closed by then (docs/psp-core.md, part 69). Dragon Ball Z:
 Tenkaichi Tag Team, which looked stuck at "Now Loading" on the RP6, was loading its attract demo while the RP6's SD card
 was being written by a copy; its row is unchanged. The whole library run again beside the final run: 81 games close a
-save dialog the way Crash does within their minute; every game but Crash shows at each frame the scene the final run
-showed, or the same sequence a few frames apart (three titles a step apart from the closing taking no time now), none
-missing a function. Super Monkey Ball Adventures hit the 900 s limit with the Mac shared with other jobs; run alone, its
-frames are the final run's.
+save dialog from a thread worse than 0x20 and the dialog's own threads within their minute; every game but Crash shows
+at each frame the scene the final run showed, or the same sequence a few frames apart (three titles a step apart from
+the closing taking no time now), none missing a function. Super Monkey Ball Adventures hit the 900 s limit with the Mac
+shared with other jobs; run again with no limit, its four frames are the final run's, and side by side with master's
+runner it runs at the same speed.
 
 The final run (2026-10-11), the whole library again on the stack's top before it merged into `master` (`be543afba`:
 part 67's speedups, #205, and the owner's PGD fix, #206, on part 64's), moves six rows, the six black games, all of which
