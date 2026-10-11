@@ -40,6 +40,9 @@ auto audioUnderruns() -> std::int64_t;
 
 // Points parallel-RDP's loader at the Vulkan driver for the next N64 session.
 auto loadVulkan(const char* customDriverPath, const char* nativeLibraryDir, const char* tempPath) -> bool;
+// The vkGetInstanceProcAddr the last loadVulkan() loaded (the custom driver's, or the system loader's), for the
+// PSP's Vulkan renderer; null if none loaded.
+auto vulkanLoader() -> void*;
 
 #if defined(__ANDROID__)
 // Takes ownership of `window` (released when replaced).

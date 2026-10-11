@@ -23,6 +23,7 @@ fun systemIconSlug(system: String): String? {
         system.contains("Game Boy Advance", ignoreCase = true) -> "gba"
         system.contains("Game Boy Color", ignoreCase = true) -> "gbc"
         system.contains("Game Boy", ignoreCase = true) -> "gb"
+        system.contains("PlayStation Portable", ignoreCase = true) -> "psp"
         system.contains("PlayStation", ignoreCase = true) -> "psx"
         system.contains("Game Gear", ignoreCase = true) -> "gamegear"
         system.contains("MSX2", ignoreCase = true) -> "msx2"
@@ -51,7 +52,7 @@ fun systemIconSlug(system: String): String? {
 /** Every platform slug emitted by [systemIconSlug]. */
 val systemIconSlugs: Set<String> = setOf(
     "atari2600", "colecovision", "nes", "snes", "sgb", "arcade", "laseractive", "pceld",
-    "n64", "gb", "gbc", "gba", "sms", "genesis", "sega32", "gamegear", "segacd", "psx",
+    "n64", "gb", "gbc", "gba", "sms", "genesis", "sega32", "gamegear", "segacd", "psx", "psp",
     "neogeomvs", "neo-geo-cd", "neo-geo-pocket", "neo-geo-pocket-color", "zx-spectrum",
     "pce", "pcecd", "supergrafx", "wonderswan", "wonderswan-color", "pcv2", "msx", "msx2",
 )

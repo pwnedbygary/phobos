@@ -6,6 +6,7 @@
 #include "vfs_android.hpp"
 #include <android/native_window_jni.h>
 #include <sys/auxv.h>
+#include <sys/system_properties.h>
 #if defined(__aarch64__)
 #include <asm/hwcap.h>
 #endif
@@ -47,6 +48,7 @@
 #include <pce/pce.hpp>
 #undef NCCS
 #include <ps1/ps1.hpp>
+#include <psp/psp.hpp>
 #include <sfc/sfc.hpp>
 #include <sg/sg.hpp>
 #include <spec/spec.hpp>
@@ -162,6 +164,8 @@ namespace ares {
   // per-game save files on disk (saves/<System>/<RomName>.save.ram etc.) so
   // different games never overwrite each other's saves.
   static string currentRomBase;
+  // Why the last load failed, when the game's medium said (lastLoadProblem()); empty otherwise.
+  static string loadProblem;
 
   // ── Dedicated audio thread + ring buffer ────────────────────────────────
   // The emulation thread NEVER blocks on AAudioStream_write, and never does
@@ -305,6 +309,7 @@ namespace ares {
   static u32 bufferWidth = 0;
   static u32 bufferHeight = 0;
   static std::vector<u32> lastFrameBuffer;
+  static std::vector<u32> widenedLine;  // video(): a row of the PSP's picture, each pixel repeated
 
   // Performance Monitoring
   static std::atomic<u64> frameCount{0};
@@ -976,6 +981,19 @@ namespace ares {
   static string homePath;
   static string savesPath;
   static string vulkanCachePath;
+  // The folder the user picked for the PSP's memory stick; empty for the shared one in the saves folder.
+  static string pspMemoryStickPath;
+  // The PSP's system fonts: the app's copies of the user's own PSP's flash0 fonts; empty for none.
+  static string pspFontsPath;
+  // How many threads draw the PSP's pictures (Settings' "PSP Drawing Threads"): 0 for all the device's cores but one.
+  static std::atomic<s32> pspDrawingThreads{0};
+  // Who draws the PSP's pictures (Settings' "PSP Renderer"): 0 the software renderer, 1 Vulkan's (accurate), 2 Vulkan's
+  // fast mode.
+  static std::atomic<s32> pspRenderer{0};
+  // How many times over Vulkan's draws each of the PSP's pixels (Settings' "PSP Resolution"): 1, Native, to 10.
+  static std::atomic<s32> pspResolution{1};
+  // The whole multiple video() draws the PSP's picture at, from the view's size (Kotlin's pictureMultiple()).
+  static std::atomic<s32> pictureMultiple{1};
   static std::map<string, string> firmwareMap;
 
   // The 32X's boot ROMs: Sega's 68000 vector table and the two SH-2 boot ROMs, from the Firmware
@@ -1943,8 +1961,17 @@ namespace ares {
       // Nearest-neighbour 2x for small software frames keeps them sharp when the
       // compositor scales the window (N64 Vulkan output is already full size).
       bool scale2x = (width <= 320) && !rotate && !isN64Vulkan;
-      u32 targetW = rotate ? height : (scale2x ? width * 2 : width);
-      u32 targetH = rotate ? width : (scale2x ? height * 2 : height);
+      // The PSP's picture goes in at the whole multiple of its size nearest the view's (pictureMultiple), each pixel
+      // repeated, so the compositor's own bilinear scaling is slight ("sharp bilinear"): its one-pixel lines stay
+      // sharp and even. Scaled 3.97 times by the compositor alone (480x272 to 1080 rows), they were soft bands, some
+      // fainter than others (Peace Walker's title, a picture of such lines, looked striped).
+      // (A picture larger than the PSP's, read back from a GPU drawing at a higher resolution, is that many times
+      // the PSP's already: the multiple is shared out between the two.)
+      bool psp = root && root->name() == "PlayStation Portable";
+      u32 multiple = psp && !rotate && !scale2x ? pictureMultiple.load() : 1;
+      if (psp && width > 480) multiple = std::max<u32>(1, (multiple * 480 + width / 2) / width);
+      u32 targetW = rotate ? height : (scale2x ? width * 2 : width * multiple);
+      u32 targetH = rotate ? width : (scale2x ? height * 2 : height * multiple);
 
       // Ask for a display rate that fits the game (e.g. 60 Hz rather than 120 for a 60 Hz
       // game). On a 120 Hz panel a frame that finishes a little early or late in its period
@@ -1954,6 +1981,13 @@ namespace ares {
       if (windowChanged || std::abs(contentRate - hintedFrameRate) > 0.5) {
           phobos::host::hintFrameRate(contentRate);
           hintedFrameRate = contentRate;
+      }
+
+      // A PSP game whose Vulkan renderer presents on the window itself (its swapchain): nothing to draw here, and
+      // the window mustn't be locked, which would take it from the swapchain.
+      if (psp && ::ares::PlayStationPortable::presenting()) {
+          windowChanged = false, bufferWidth = 0;
+          return;
       }
 
       if (windowChanged || targetW != bufferWidth || targetH != bufferHeight) {
@@ -1990,6 +2024,15 @@ namespace ares {
                   convertToWindowPixels(data + y * sourceStride, saveLine, width, screen, colors);
                   if (scale2x) {
                       doubleLineWidth(saveLine, width, dest + (y * 2) * destStride, dest + (y * 2 + 1) * destStride);
+                  } else if (multiple > 1) {
+                      // (widened once, then copied to each of its rows: the window buffer is never read back)
+                      if (widenedLine.size() < (u64)width * multiple) widenedLine.resize((u64)width * multiple);
+                      for (u32 x = 0; x < width; x++) {
+                          for (u32 n = 0; n < multiple; n++) widenedLine[x * multiple + n] = saveLine[x];
+                      }
+                      for (u32 n = 0; n < multiple; n++) {
+                          memcpy(dest + (y * multiple + n) * destStride, widenedLine.data(), width * multiple * sizeof(u32));
+                      }
                   } else {
                       memcpy(dest + y * destStride, saveLine, width * sizeof(u32));
                   }
@@ -2898,7 +2941,8 @@ namespace ares {
           portIndex++;
           continue;
       }
-      if (port->type() == "Cartridge" || port->type() == "Compact Disc" || port->type() == "Disk Drive" || port->type() == "Floppy Disk") {
+      if (port->type() == "Cartridge" || port->type() == "Compact Disc" || port->type() == "Disk Drive" || port->type() == "Floppy Disk"
+          || port->type() == "Universal Media Disc") {
         // Mega CD 32X: the 32X fills the cartridge slot with no cartridge in it
         // (the game is in the Mega CD's tray). Cartridge::power() builds that
         // board only when the slot is left empty; a connected slot would get
@@ -3052,6 +3096,7 @@ else if (port->type() == "Keyboard") {
     currentRomBase = romName;
     if (auto dot = currentRomBase.findPrevious(currentRomBase.size(), ".")) currentRomBase = currentRomBase.slice(0, *dot);
     if (currentRomBase.size() == 0) currentRomBase = "rom";
+    loadProblem = "";
     unloadSystem();
 
     std::unique_lock<std::recursive_mutex> lock(systemMutex);
@@ -3101,9 +3146,31 @@ else if (port->type() == "Keyboard") {
         if (auto dot = tempFname.find(".")) tempFname = tempFname.slice(0, *dot);
       }
     }
+    // A PSP program's folder stands for its disc (disc0:), so its copies get a folder of their own rather than the
+    // cache other games' copies and the firmware share.
+    string copyFolder = tempFilePath;
+    if (systemName == "PlayStation Portable") {
+      copyFolder = {tempFilePath, "/psp"};
+      directory::create(copyFolder);
+    }
     string loadPath = directPath;
+    // A PSP disc image (a gigabyte or two) isn't copied: mia's PSP medium reads it through the app's descriptor, if
+    // that's a file (a provider may hand over a pipe, which only copying reads). An image is told by the URI's
+    // extension or, for a URI that doesn't end in its name, the game's.
+    string nameExtension;
+    if (auto dot = romName.findPrevious(romName.size(), ".")) nameExtension = romName.slice(*dot + 1).downcase();
+    auto isDiscImage = [](const string& e) {
+      return e == "iso" || e == "cso" || e == "zso" || e == "dax" || e == "jso" || e == "chd";
+    };
+    bool discImage = isDiscImage(extension) || isDiscImage(nameExtension);
+    struct stat romStat;
+    if (!loadPath && systemName == "PlayStation Portable" && discImage
+        && fstat(romFd, &romStat) == 0 && S_ISREG(romStat.st_mode)) {
+      loadPath = string{"/proc/self/fd/", romFd};
+      LOGI("PSP: reading the disc image through its descriptor");
+    }
     if (!loadPath) {
-      string tempPath = string{tempFilePath, "/", tempFname, ".", extension};
+      string tempPath = string{copyFolder, "/", tempFname, ".", extension};
 
       FILE* f = fopen((const char*)tempPath, "wb");
       if (!f) return false;
@@ -3144,6 +3211,7 @@ else if (port->type() == "Keyboard") {
     else if (lookup.find("ZX Spectrum") || lookup.find("ZXSpectrum") || lookup.find("ZX")) identifiedSystem = "ZX Spectrum";
     else if (lookup.find("Super Famicom") || lookup.find("SNES")) identifiedSystem = "Super Famicom";
     else if (lookup.find("Famicom") || lookup.find("NES")) identifiedSystem = "Famicom";
+    else if (lookup.find("PlayStation Portable") || lookup.find("PSP")) identifiedSystem = "PlayStation Portable";
     else if (lookup.find("PlayStation") || lookup.find("PS1")) identifiedSystem = "PlayStation";
     else if (lookup.find("Neo Geo Pocket Color") || lookup.find("NGPC") || lookup.find("NGC")) identifiedSystem = "Neo Geo Pocket Color";
     else if (lookup.find("Neo Geo Pocket") || lookup.find("NGP") || lookup.find("NGP ")) identifiedSystem = "Neo Geo Pocket";
@@ -3237,6 +3305,11 @@ else if (port->type() == "Keyboard") {
             if (identifiedSystem == "Famicom") aresExt = "fc";
             if (identifiedSystem == "Nintendo 64") aresExt = "z64";
             if (identifiedSystem == "Mega 32X") aresExt = "32x";
+            if (identifiedSystem == "PlayStation Portable") {
+                // The extracted copy is named for what it is: an EBOOT.PBP starts "\0PBP", an ELF "\x7fELF".
+                if (romBuffer.size() >= 4 && memcmp(romBuffer.data(), "\0PBP", 4) == 0) aresExt = "pbp";
+                if (romBuffer.size() >= 4 && memcmp(romBuffer.data(), "\x7f" "ELF", 4) == 0) aresExt = "elf";
+            }
             if (identifiedSystem == "ZX Spectrum" || identifiedSystem == "ZX Spectrum 128") {
                 // The ZX medium dispatches on filename extension (.tap/.tzx/.wav),
                 // so sniff the extracted bytes to pick the right one. TZX has a
@@ -3295,7 +3368,7 @@ else if (port->type() == "Keyboard") {
                 }
             }
 
-            string rawRomPath = string{tempFilePath, "/phobos_rom_raw.", aresExt};
+            string rawRomPath = string{copyFolder, "/phobos_rom_raw.", aresExt};
             FILE* rf = fopen((const char*)rawRomPath, "wb");
             if (rf) { fwrite(romBuffer.data(), 1, romBuffer.size(), rf); fclose(rf); }
             loadPath = rawRomPath;
@@ -3373,7 +3446,8 @@ else if (port->type() == "Keyboard") {
 
     auto loadResult = currentMedium->load(loadPath);
     if (loadResult != successful) {
-        LOGE("MIA: Failed to load medium for %s at %s (Result: %d)", (const char*)identifiedSystem, (const char*)loadPath, (s32)loadResult.result);
+        LOGE("MIA: Failed to load medium for %s at %s (Result: %d) %s", (const char*)identifiedSystem, (const char*)loadPath, (s32)loadResult.result, (const char*)loadResult.info);
+        loadProblem = loadResult.info;
         return false;
     }
     LOGI("MIA: Successfully loaded medium %s", (const char*)loadPath);
@@ -3509,6 +3583,43 @@ else if (port->type() == "Keyboard") {
       success = ::ares::Famicom::load(root, getRegion("[Nintendo] Famicom (NTSC-U)", "[Nintendo] Famicom (NTSC-J)", "[Nintendo] Famicom (PAL)"));
     } else if (identifiedSystem == "PlayStation") {
       success = ::ares::PlayStation::load(root, getRegion("[Sony] PlayStation (NTSC-U)", "[Sony] PlayStation (NTSC-J)", "[Sony] PlayStation (PAL)"));
+    } else if (identifiedSystem == "PlayStation Portable") {
+      // Every game shares one memory stick (saves in PSP/SAVEDATA, as on a PSP) unless the user picked a folder.
+      string memoryStick = pspMemoryStickPath;
+      if (!memoryStick && savesPath) memoryStick = {savesPath, "/PlayStation Portable/Memory Stick"};
+      if (memoryStick) directory::create(memoryStick);
+      LOGI("PSP: memory stick at '%s'", (const char*)memoryStick);
+      ::ares::PlayStationPortable::option("Memory Stick", memoryStick);
+      // The system's fonts, read by the core as it powers on; none without them (games print nothing in them).
+      LOGI("PSP: system fonts %s%s", pspFontsPath ? "in " : "not given", (const char*)pspFontsPath);
+      ::ares::PlayStationPortable::option("Fonts", pspFontsPath);
+      ::ares::PlayStationPortable::option("Recompiler", "true");
+      // How many threads draw the GE's pictures: the setting's count, or 0 for all the cores but one (the core's own).
+      LOGI("PSP: drawing threads %d (0: all cores but one)", pspDrawingThreads.load());
+      ::ares::PlayStationPortable::option("GE Threads", string{pspDrawingThreads.load()});
+      // The renderer, and for Vulkan's the driver loadVulkan() loaded above (the user's custom one if it loaded).
+      s32 renderer = pspRenderer.load();
+      const char* rendererName = renderer == 2 ? "Vulkan (fast)" : renderer == 1 ? "Vulkan" : "Software";
+      LOGI("PSP: renderer %s", rendererName);
+      ::ares::PlayStationPortable::vulkanLoader(renderer ? phobos::host::vulkanLoader() : nullptr);
+      ::ares::PlayStationPortable::option("Renderer", rendererName);
+      LOGI("PSP: resolution %dx", pspResolution.load());
+      ::ares::PlayStationPortable::option("Resolution", string{pspResolution.load()});
+      // The Vulkan renderer's pipelines kept between sessions, beside the N64's (the Vulkan cache folder, or saves').
+      string pspCacheDir = vulkanCachePath;
+      if (!pspCacheDir) pspCacheDir = savesPath;
+      ::ares::PlayStationPortable::option("Pipeline Cache",
+                                          pspCacheDir ? string{pspCacheDir, "/psp_vulkan_pipeline_cache.bin"} : string{});
+      // A debug switch, set over adb alone (adb shell setprop debug.phobos.psp.failcheck 1): Vulkan's start-up check
+      // made to fail, to see the software renderer take over and the user told.
+      bool failCheck = false;
+      #if defined(__ANDROID__)
+      char property[PROP_VALUE_MAX] = {};
+      failCheck = __system_property_get("debug.phobos.psp.failcheck", property) > 0 && !strcmp(property, "1");
+      #endif
+      if (failCheck) LOGI("PSP: the renderer's start-up check made to fail (debug.phobos.psp.failcheck)");
+      ::ares::PlayStationPortable::option("Renderer Check", failCheck ? "Fail" : "Pass");
+      success = ::ares::PlayStationPortable::load(root, "[Sony] PlayStation Portable");
     } else if (identifiedSystem == "Game Boy Advance") {
       success = ::ares::GameBoyAdvance::load(root, "[Nintendo] Game Boy Advance");
     } else if (identifiedSystem == "Game Boy") {
@@ -3998,17 +4109,37 @@ else if (port->type() == "Keyboard") {
     isPausedAtomic.store(wasPaused);
   }
 
-  auto saveState(const char* path) -> bool {
+  // Takes runMutex once the emulation thread's frame ends: false after two seconds of a frame that doesn't (a core
+  // stuck in it, which unloadSystem() waits as long for before abandoning it).
+  auto lockFrame(std::unique_lock<std::recursive_mutex>& lock) -> bool {
+    for (int i = 0; !lock.try_lock(); i++) {
+      if (i == 200) return false;
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return true;
+  }
+
+  // Saves a state to path: 1, or 0 when there's none to save, or -1 when it couldn't be written. A core with nothing
+  // to carry on from (a PSP program that ended) gives an empty state; a core stuck in a frame gives none at all. The
+  // core stays paused, and runMutex held, from the check to the write.
+  auto trySaveState(const char* path) -> int {
     bool wasPaused = isPausedAtomic.exchange(true);
-    lock_guard<recursive_mutex> lock(*runMutex);
-    if (!root) { isPausedAtomic.store(wasPaused); return false; }
-    drainN64RdpIfAsync();
-    auto s = root->serialize(true);
-    bool result = nall::file::write(path, {s.data(), s.size()});
-    LOGI("Save state to %s: %s (%u bytes)", path, result ? "success" : "failed", (unsigned)s.size());
+    std::unique_lock<std::recursive_mutex> lock(*runMutex, std::defer_lock);
+    int result = 0;
+    if (!lockFrame(lock)) {
+      LOGI("Save state to %s: the core is stuck in a frame", path);
+    } else if (root) {
+      drainN64RdpIfAsync();
+      auto s = root->serialize(true);
+      if (s.size()) result = nall::file::write(path, {s.data(), s.size()}) ? 1 : -1;
+      LOGI("Save state to %s: %s (%u bytes)", path, result > 0 ? "success" : result ? "failed" : "nothing to save",
+           (unsigned)s.size());
+    }
     isPausedAtomic.store(wasPaused);
     return result;
   }
+
+  auto saveState(const char* path) -> bool { return trySaveState(path) > 0; }
   auto loadState(const char* path) -> bool {
     bool wasPaused = isPausedAtomic.exchange(true);
     lock_guard<recursive_mutex> lock(*runMutex);
@@ -4541,6 +4672,15 @@ else if (port->type() == "Keyboard") {
   auto setNativeLibraryDir(const char* path) -> void { nativeLibraryDir = path ? (string)path : ""; LOGI("Native library dir set: %s", (const char*)nativeLibraryDir); }
   auto setFirmwarePath(const char* path) -> void { LOGI("Firmware path set: %s", path ? path : ""); }
   auto mapFirmwareFile(const char* name, const char* path) -> void { firmwareMap[name] = path ? (string)path : ""; LOGI("Firmware mapped: %s -> %s", name, (const char*)path); }
+  auto lastLoadProblem() -> string {
+    return loadProblem;
+  }
+  auto isPspGame(const char* path) -> bool {
+    // The medium only looks: a few bytes of the file's head (an EBOOT.PBP's PARAM.SFO at most), read through a map.
+    auto medium = mia::Medium::create("PlayStation Portable");
+    return path && medium && medium->load(path) == successful;
+  }
+
   auto missingFirmware(const char* system) -> std::vector<string> {
     std::vector<string> missing;
     string name = system ? system : "";
@@ -4567,6 +4707,21 @@ else if (port->type() == "Keyboard") {
   auto setMemoryCardKey(const char* key) -> void {
     ps1MemoryCardKey = key ? (string)key : "";
   }
+  auto setPspMemoryStickPath(const char* path) -> void {
+    pspMemoryStickPath = path ? (string)path : "";
+  }
+  auto setPspFontsPath(const char* path) -> void {
+    pspFontsPath = path ? (string)path : "";
+  }
+  auto setPspDrawingThreads(s32 threads) -> void { pspDrawingThreads = std::max(0, threads); }
+  auto setPspRenderer(s32 renderer) -> void { pspRenderer = renderer == 1 || renderer == 2 ? renderer : 0; }
+  auto setPspResolution(s32 scale) -> void { pspResolution = std::clamp(scale, 1, 10); }
+  auto takePspNotice() -> std::string {
+    std::string text = (const char*)::ares::PlayStationPortable::notice();
+    if (!text.empty()) addLog(LogLevel::Warn, {"PSP: ", text.c_str()});
+    return text;
+  }
+  auto setPictureMultiple(s32 multiple) -> void { pictureMultiple = std::clamp(multiple, 1, 4); }
   auto setVulkanCachePath(const char* path) -> void {
     vulkanCachePath = path ? (string)path : "";
     LOGI("Vulkan cache path set: %s", (const char*)vulkanCachePath);
@@ -4848,6 +5003,8 @@ else if (port->type() == "Keyboard") {
     ANativeWindow* window = surface ? ANativeWindow_fromSurface(env, surface) : nullptr;
     LOGI("PhobosSurface: setSurface called. New=%p", window);
     phobos::host::setWindow(window);
+    // (and to the PSP's core, whose Vulkan renderer presents on it itself: it keeps a reference of its own)
+    ::ares::PlayStationPortable::window(window);
     windowChanged = true;
   }
 #endif
@@ -4905,6 +5062,15 @@ else if (port->type() == "Keyboard") {
       return nall::Encode::PNG::RGBA8(path, pixels.data(), (s32)width * 4, (s32)width, (s32)height);
     }
     #endif
+    // A PSP game presented by its Vulkan renderer: the picture it presented last (red in the low byte, as the
+    // window's are)
+    if (root && root->name() == "PlayStation Portable" && ::ares::PlayStationPortable::presenting()) {
+      std::vector<u32> pixels;
+      u32 width = 0, height = 0;
+      if (!::ares::PlayStationPortable::shot(pixels, width, height)) return false;
+      for (auto& p : pixels) p = 0xFF000000 | ((p >> 16) & 0x000000FF) | (p & 0x0000FF00) | ((p << 16) & 0x00FF0000);
+      return nall::Encode::PNG::RGBA8(path, pixels.data(), (s32)width * 4, (s32)width, (s32)height);
+    }
     lock_guard<mutex> lock(windowMutex);
     if (lastFrameBuffer.empty() || currentWidth == 0 || currentHeight == 0) return false;
     std::vector<u32> converted;

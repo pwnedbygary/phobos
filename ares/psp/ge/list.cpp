@@ -1,0 +1,113 @@
+//Reading the display list: the commands that move about it, stop it, or fill in the GE's registers.
+
+//A matrix's next element, where its NUMBER command left off. Past the matrix's end, data goes nowhere.
+static auto matrixData(u32* matrix, u32 size, u32& index, u32 argument) -> void {
+  if(index < size) matrix[index++] = argument;
+}
+
+auto GE::run(u64 budget) -> Stop {
+  u64 ran = 0;
+  return run(budget, ran);
+}
+
+//Runs commands from list.address until something stops it (the stall address, an END, a fault) or budget commands
+//have run (Busy: call again to go on); ran says how many did, the one that stopped it among them. Every command's
+//word is kept, whatever the command. Meanwhile primitives wait to be drawn together (threads.cpp), and as it returns
+//they're drawn, or go on being drawn by the GE's workers while the CPU runs on.
+auto GE::run(u64 budget, u64& ran) -> Stop {
+  resume();  //(what the last list left being drawn goes on being drawn: threads.cpp)
+  drawing.deferring = drawing.threads > 1;
+  //As it returns, a hardware renderer hands the GPU what it drew, to go on drawing while the CPU runs; without the
+  //CPU's owner's guard over VRAM's busy pages (Memory::vramGuard), it puts them back in memory's VRAM at once.
+  struct Drawn {
+    GE& ge;
+    ~Drawn() {
+      ge.drawing.deferring = false;
+      ge.launch(true);
+      if(!ge.renderer) return;
+      if(ge.memory.vramGuard) ge.renderer->submit(ge);
+      else ge.renderer->finish(ge);
+    }
+  } drawn{*this};
+  //(a page of the list's found with nothing drawn or waiting to be drawn over any of its bytes, which stays so until a
+  //command draws: its words read without drawnFirst() asking each time. God of War runs its lists from VRAM, in pages
+  //the GPU draws in.)
+  u32 undrawn = ~0u;
+  for(ran = 0; ran < budget;) {
+    if(list.stall && list.address == list.stall) return Stop::Stalled;
+    u32 at = list.address;
+    if(at >> 12 != undrawn) {  //(a list in VRAM, where what waits may draw: drawn first, then read without asking again)
+      drawnFirst(at, 4);
+      undrawn = undrawnPage(at) ? at >> 12 : ~0u;
+    }
+    u32 word;
+    {
+      Memory::KnownDrawn known;
+      word = memory.read(4, at);
+    }
+    ran++;
+    list.address = (at + 4) & 0x0fff'ffff;
+    u32 command = word >> 24, argument = word & 0xff'ffff;
+    commands[command] = word;
+    switch(command) {
+    case VertexAddress: vertexAddress = relative(argument); break;
+    case IndexAddress:  indexAddress = relative(argument); break;
+    case Primitive:     primitive(argument >> 16 & 7, argument & 0xffff), undrawn = ~0u; break;
+    case Bezier:        patch(false, argument), undrawn = ~0u; break;
+    case Spline:        patch(true, argument), undrawn = ~0u; break;
+    case BoundingBox:   boxOutside = boundingBox(argument & 0xffff); break;
+    case ConditionalJump:  //where JUMP would go, if the last BOUNDING_BOX was out of sight (pspsdk's sceGuEndObject)
+      if(boxOutside) list.address = relative(argument & ~3u);
+      break;
+    case Jump:          list.address = relative(argument & ~3u); break;
+    case Call:
+      if(list.depth == 2) {
+        note("a display list CALLed three deep, and the GE has room for two");
+        return Stop::Faulted;
+      }
+      list.returnAddress[list.depth] = list.address;
+      list.returnOffset[list.depth] = list.offset;
+      list.depth++;
+      list.address = relative(argument & ~3u);
+      break;
+    case Return:
+      //With no CALL to return from, the GE goes on with the next command. Need for Speed: Most Wanted runs lists
+      //made to be CALLed (a frame buffer's settings, then RET) in place in its frame's list, and draws on the PSP.
+      if(list.depth == 0) break;
+      list.depth--;
+      list.address = list.returnAddress[list.depth];
+      list.offset = list.returnOffset[list.depth];
+      break;
+    case Signal: signalWord = word; pending = Stop::Signaled; break;
+    case Finish: finishWord = word; pending = Stop::Finished; break;
+    case End: {
+      endWord = word;
+      auto stop = pending;
+      pending = Stop::Ended;
+      return stop;
+    }
+    case OffsetAddress: list.offset = argument << 8; break;
+    case Origin:        list.offset = at; break;  //the ORIGIN command's own address
+    case BoneMatrixNumber:       boneIndex = argument & 0x7f; break;
+    case BoneMatrixData:         matrixData(bones, 96, boneIndex, argument); break;
+    case WorldMatrixNumber:      worldIndex = argument & 0xf; break;
+    case WorldMatrixData:        matrixData(world, 12, worldIndex, argument); break;
+    case ViewMatrixNumber:       viewIndex = argument & 0xf; break;
+    case ViewMatrixData:         matrixData(view, 12, viewIndex, argument); break;
+    case ProjectionMatrixNumber: projectionIndex = argument & 0xf; break;
+    case ProjectionMatrixData:   matrixData(projection, 16, projectionIndex, argument); break;
+    case TextureMatrixNumber:    textureIndex = argument & 0xf; break;
+    case TextureMatrixData:      matrixData(textureMatrix, 12, textureIndex, argument); break;
+    case TransferStart:          transfer(), undrawn = ~0u; break;  //(after the drawing it depends on: threads.cpp)
+    case ClutLoad:               loadClut(); break;
+    }
+  }
+  return Stop::Busy;
+}
+
+//An address from a command's argument: BASE's bits 16-19 become its bits 24-27, and the offset is added. (That the
+//offset is added here, and wraps at 28 bits, is as PPSSPP has it; pspsdk's library only ever uses BASE.)
+auto GE::relative(u32 argument) const -> u32 {
+  u32 address = (commands[Base] << 8 & 0x0f00'0000) | (argument & 0xff'ffff);
+  return (address + list.offset) & 0x0fff'ffff;
+}

@@ -1,0 +1,297 @@
+//The VFPU against a real PSP: results tools/psp-measure recorded on the user's PSP (firmware 6.61), which the core
+//must reproduce bit for bit. run-tests.sh unpacks them from tests/allegrex/measured/ and passes the folder in
+//ALLEGREX_MEASURED; docs/psp-vfpu-measurements.md describes them, and tools/psp-measure/compare.sh checks the rest
+//of the measurements, which are kept outside the repository.
+//
+//Covered here: the random number generator (its start, 64 seeds of 4096 draws, vrndi.q's lanes); vadd, vsub,
+//vmul and vdiv on a million spread-out inputs between them (NaN results included); the first 16384 spread-out
+//results of each math function the core computes exactly (vrcp, vnrcp, vrsq, vsqrt, vexp2, vrexp2, vsin, vnsin,
+//vcos, vasin: the *-spread-16k files, which start the full *-spread files); vlog2, except from 4 up, where the PSP
+//sometimes gives one unit less than the core (its spread-out results, and every 1024th result from 1/2 up to 2);
+//and vdot on 262144 spread-out quads (the adder, vfpuDot). From round 2: div and divu on 8192 pairs, dividing by
+//zero included. From rounds 2 and 3: the FPU's conversions and arithmetic in each rounding mode, on every kind of
+//input (fpu-convert, fpu-arith) and on zeros and normal numbers (the -safe files), and FIR. From round 3: vmul on
+//products a sliver below the smallest normal number (vmul-tiny).
+
+#include "harness.hpp"
+
+#include <cstdlib>
+#include <fstream>
+#include <string>
+
+namespace allegrex_test {
+
+static auto loadMeasured(const char* name) -> std::vector<uint32_t> {
+  const char* folder = std::getenv("ALLEGREX_MEASURED");
+  std::vector<uint32_t> words;
+  if(!folder) return words;
+  std::ifstream file(std::string(folder) + "/" + name, std::ios::binary);
+  if(!file) return words;
+  file.seekg(0, std::ios::end);
+  words.resize(size_t(file.tellg()) / 4);
+  file.seekg(0);
+  file.read((char*)words.data(), words.size() * 4);
+  return words;
+}
+
+//vrnd.bin: the RCX registers at start and 256 draws; then per seed, the seed, the RCX registers after vrnds.s and
+//4096 draws; then after seeding 0x12345678, 256 vrndi.q (lane 0 first). Draws go to S100 (register 4) as on the
+//PSP; vrndi.q to C200 (registers 8, 40, 72, 104).
+static auto measuredRandom() -> void {
+  auto w = loadMeasured("vrnd.bin");
+  CHECK(w.size(), 264008);
+  if(w.size() != 264008) return;
+  Machine m;
+  m.cpu.power(Base);
+  auto& cpu = m.cpu;
+  uint64_t checked = 0, matched = 0;
+  auto expect = [&](uint32_t hardware, uint32_t ours) { checked++; matched += hardware == ours; };
+  size_t n = 0;
+  for(uint32_t i = 0; i < 8; i++) expect(w[n + i], cpu.vfpu.rcx[i]);  //the power-on state
+  n += 8;
+  for(uint32_t i = 0; i < 256; i++) {
+    cpu.execute(Base, 0xd0210004);  //vrndi.s S100
+    expect(w[n++], cpu.vfpu.r[4]);
+  }
+  for(uint32_t seed = 0; seed < 64; seed++) {
+    cpu.vfpu.r[4] = w[n++];
+    cpu.execute(Base, 0xd0200400);  //vrnds.s S100
+    for(uint32_t i = 0; i < 8; i++) expect(w[n + i], cpu.vfpu.rcx[i]);
+    n += 8;
+    for(uint32_t i = 0; i < 4096; i++) {
+      cpu.execute(Base, 0xd0210004);
+      expect(w[n++], cpu.vfpu.r[4]);
+    }
+  }
+  cpu.vfpu.r[4] = 0x12345678;
+  cpu.execute(Base, 0xd0200400);
+  for(uint32_t i = 0; i < 256; i++) {
+    cpu.execute(Base, 0xd0218088);  //vrndi.q C200
+    for(uint32_t lane = 0; lane < 4; lane++) expect(w[n++], cpu.vfpu.r[8 + 32 * lane]);
+  }
+  CHECK(matched, checked);
+}
+
+//An arithmetic file: the results of the instruction on quads whose lanes came from the PSP program's generator,
+//state * 1664525 + 1013904223 from the seed: per quad, s's four lanes, then t's. s was in C000, t in C010, the
+//result in C020.
+static auto measuredArithmetic(const char* name, uint32_t instruction, uint32_t seed) -> void {
+  auto hardware = loadMeasured(name);
+  CHECK(hardware.size(), 1u << 18);
+  if(hardware.size() != 1u << 18) return;
+  Machine m;
+  m.cpu.power(Base);
+  auto& v = m.cpu.vfpu.r;
+  uint32_t state = seed, exact = 0;
+  auto next = [&] { return state = state * 1664525u + 1013904223u; };
+  for(uint32_t quad = 0; quad < hardware.size() / 4; quad++) {
+    for(uint32_t lane = 0; lane < 4; lane++) v[32 * lane] = next();
+    for(uint32_t lane = 0; lane < 4; lane++) v[1 + 32 * lane] = next();
+    m.cpu.execute(Base, instruction);
+    for(uint32_t lane = 0; lane < 4; lane++) exact += hardware[quad * 4 + lane] == v[2 + 32 * lane];
+  }
+  CHECK(exact, hardware.size());
+}
+
+//vdot-spread.bin: vdot.q on quads from the generator (seed 16), s's four lanes then t's as in the arithmetic files,
+//one result a quad (S020).
+static auto measuredDot() -> void {
+  auto hardware = loadMeasured("vdot-spread.bin");
+  CHECK(hardware.size(), 1u << 18);
+  if(hardware.size() != 1u << 18) return;
+  Machine m;
+  m.cpu.power(Base);
+  auto& v = m.cpu.vfpu.r;
+  uint32_t state = 16, exact = 0;
+  auto next = [&] { return state = state * 1664525u + 1013904223u; };
+  for(uint32_t quad = 0; quad < hardware.size(); quad++) {
+    for(uint32_t lane = 0; lane < 4; lane++) v[32 * lane] = next();
+    for(uint32_t lane = 0; lane < 4; lane++) v[1 + 32 * lane] = next();
+    m.cpu.execute(Base, 0x64818082);  //vdot.q S020, C000, C010
+    exact += hardware[quad] == v[2];
+  }
+  CHECK(exact, hardware.size());
+}
+
+//A math function's first results on spread-out inputs: per quad, four inputs from the generator in C000, the
+//results in C010. checked picks the inputs whose results the core must match (all of them if not given).
+static auto measuredFunction(const char* name, uint32_t instruction, uint32_t seed,
+                             bool (*checked)(uint32_t input) = nullptr) -> void {
+  auto hardware = loadMeasured(name);
+  CHECK(hardware.size(), 16384);
+  if(hardware.size() != 16384) return;
+  Machine m;
+  m.cpu.power(Base);
+  auto& v = m.cpu.vfpu.r;
+  uint32_t state = seed, input[4], count = 0, exact = 0;
+  for(uint32_t quad = 0; quad < hardware.size() / 4; quad++) {
+    for(uint32_t lane = 0; lane < 4; lane++) v[32 * lane] = input[lane] = state = state * 1664525u + 1013904223u;
+    m.cpu.execute(Base, instruction);
+    for(uint32_t lane = 0; lane < 4; lane++) {
+      if(checked && !checked(input[lane])) continue;
+      count++;
+      exact += hardware[quad * 4 + lane] == v[1 + 32 * lane];
+    }
+  }
+  CHECK(exact, count);
+}
+
+//Every 1024th result of a sweep over consecutive inputs from first (the *-1k files). The instruction works out
+//each lane on its own, so they're replayed four to a quad.
+static auto measuredSweep(const char* name, uint32_t instruction, uint32_t first) -> void {
+  auto hardware = loadMeasured(name);
+  CHECK(hardware.size(), 16384);
+  if(hardware.size() != 16384) return;
+  Machine m;
+  m.cpu.power(Base);
+  auto& v = m.cpu.vfpu.r;
+  uint32_t exact = 0;
+  for(uint32_t quad = 0; quad < hardware.size() / 4; quad++) {
+    for(uint32_t lane = 0; lane < 4; lane++) v[32 * lane] = first + (quad * 4 + lane) * 1024;
+    m.cpu.execute(Base, instruction);
+    for(uint32_t lane = 0; lane < 4; lane++) exact += hardware[quad * 4 + lane] == v[1 + 32 * lane];
+  }
+  CHECK(exact, hardware.size());
+}
+
+//vmul-tiny.bin (round 3): vmul.q on products a sliver below 2^-126, the smallest normal number: 2^-126 (1 - j² 2^-46)
+//for j from 1 to 4096. One draw from the generator (seed 41) per lane, lane 0 first: j = 1 + its low 12 bits, s =
+//0x3f800000 - 2j with the draw's bit 31 for its sign, t = 0x00800000 + j with bit 30 for its sign. s was in C000, t
+//in C010, the result in C020.
+static auto measuredTinyProducts() -> void {
+  auto hardware = loadMeasured("vmul-tiny.bin");
+  CHECK(hardware.size(), 1u << 18);
+  if(hardware.size() != 1u << 18) return;
+  Machine m;
+  m.cpu.power(Base);
+  auto& v = m.cpu.vfpu.r;
+  uint32_t state = 41, exact = 0;
+  for(uint32_t quad = 0; quad < hardware.size() / 4; quad++) {
+    for(uint32_t lane = 0; lane < 4; lane++) {
+      uint32_t draw = state = state * 1664525u + 1013904223u, j = 1 + (draw & 4095);
+      v[32 * lane] = (draw & 0x8000'0000) | (0x3f80'0000 - 2 * j);
+      v[1 + 32 * lane] = (draw << 1 & 0x8000'0000) | (0x0080'0000 + j);
+    }
+    m.cpu.execute(Base, 0x64018082);  //vmul.q C020, C000, C010
+    for(uint32_t lane = 0; lane < 4; lane++) exact += hardware[quad * 4 + lane] == v[2 + 32 * lane];
+  }
+  CHECK(exact, hardware.size());
+}
+
+//ipu-divide.bin (round 2): per pair, a and b, then div's lo and hi, then divu's lo and hi. The first 1024 pairs are
+//32 chosen numbers each with each (zero, the most negative number and -1 among them), the rest spread out.
+static auto measuredDivide() -> void {
+  auto hardware = loadMeasured("ipu-divide.bin");
+  CHECK(hardware.size(), 8192u * 6);
+  if(hardware.size() != 8192u * 6) return;
+  Machine m;
+  m.cpu.power(Base);
+  uint32_t exact = 0;
+  for(uint32_t pair = 0; pair < 8192; pair++) {
+    const uint32_t* p = &hardware[pair * 6];
+    m.cpu.ipu.r[t0] = p[0];
+    m.cpu.ipu.r[t1] = p[1];
+    m.cpu.execute(Base, div_(t0, t1));
+    bool same = m.cpu.ipu.lo == p[2] && m.cpu.ipu.hi == p[3];
+    m.cpu.execute(Base, divu(t0, t1));
+    exact += same && m.cpu.ipu.lo == p[4] && m.cpu.ipu.hi == p[5];
+  }
+  CHECK(exact, 8192u);
+}
+
+//fpu-state.bin (round 3): FCSR as the PSP program found it, then FIR, which cfc1 reads from control register 0.
+//Returns FCSR's bits above the exception bits (flush to zero among them), which the FPU tests kept for every
+//instruction.
+static auto measuredFpuState() -> uint32_t {
+  auto state = loadMeasured("fpu-state.bin");
+  CHECK(state.size(), 2);
+  if(state.size() != 2) return 0;
+  Machine m;
+  m.run({cfc1(t0, 0)});
+  CHECK(m.gpr(t0), state[1]);
+  return state[0] & ~0x3ffffu;
+}
+
+//fpu-convert.bin (round 2: every kind of input, NaNs and numbers past the integers' range among them) and
+//fpu-convert-safe.bin (round 3: zeros and normal numbers): per input, x, then for each rounding mode cvt.w.s,
+//round.w.s, trunc.w.s, ceil.w.s and floor.w.s.
+static auto measuredConvert(const char* name, uint32_t upper) -> void {
+  auto hardware = loadMeasured(name);
+  CHECK(hardware.size(), 4096u * 21);
+  if(hardware.size() != 4096u * 21) return;
+  static const uint32_t instructions[5] = {0x460000a4, 0x4600008c, 0x4600008d, 0x4600008e, 0x4600008f};  //$f2 from $f0
+  Machine m;
+  m.cpu.power(Base);
+  uint32_t exact = 0;
+  for(size_t n = 0; n < hardware.size(); n += 21) {
+    for(uint32_t mode = 0; mode < 4; mode++) {
+      for(uint32_t i = 0; i < 5; i++) {
+        m.cpu.fpu.csr = upper | mode;
+        m.cpu.fpu.r[0] = hardware[n];
+        m.cpu.execute(Base, instructions[i]);
+        exact += m.cpu.fpu.r[2] == hardware[n + 1 + mode * 5 + i];
+      }
+    }
+  }
+  CHECK(exact, 4096u * 20);
+}
+
+//fpu-arith.bin (round 2) and fpu-arith-safe.bin (round 3, whose square roots are of a's size: absolute): per pair,
+//a and b, then for each rounding mode add.s, sub.s, mul.s, div.s, and sqrt.s of a.
+static auto measuredFpuArithmetic(const char* name, bool absolute, uint32_t upper) -> void {
+  auto hardware = loadMeasured(name);
+  CHECK(hardware.size(), 4096u * 22);
+  if(hardware.size() != 4096u * 22) return;
+  static const uint32_t instructions[5] = {0x46010080, 0x46010081, 0x46010082, 0x46010083, 0x46000084};  //$f2
+  Machine m;
+  m.cpu.power(Base);
+  uint32_t exact = 0;
+  for(size_t n = 0; n < hardware.size(); n += 22) {
+    for(uint32_t mode = 0; mode < 4; mode++) {
+      for(uint32_t i = 0; i < 5; i++) {
+        m.cpu.fpu.csr = upper | mode;
+        m.cpu.fpu.r[0] = i == 4 && absolute ? hardware[n] & 0x7fff'ffff : hardware[n];
+        m.cpu.fpu.r[1] = hardware[n + 1];
+        m.cpu.execute(Base, instructions[i]);  //from $f0 (and $f1)
+        exact += m.cpu.fpu.r[2] == hardware[n + 2 + mode * 5 + i];
+      }
+    }
+  }
+  CHECK(exact, 4096u * 20);
+}
+
+auto measured() -> void {
+  if(!std::getenv("ALLEGREX_MEASURED")) {
+    std::printf("(no ALLEGREX_MEASURED folder: run-tests.sh sets it)\n");
+    failures++;
+    return;
+  }
+  measuredRandom();
+  measuredArithmetic("vadd-spread.bin", 0x60018082, 12);  //vadd.q C020, C000, C010
+  measuredArithmetic("vsub-spread.bin", 0x60818082, 13);
+  measuredArithmetic("vmul-spread.bin", 0x64018082, 14);
+  measuredArithmetic("vdiv-spread.bin", 0x63818082, 15);
+  measuredDot();
+  measuredFunction("vrcp-spread-16k.bin", 0xd0108081, 1);  //vrcp.q C010, C000
+  measuredFunction("vnrcp-spread-16k.bin", 0xd0188081, 2);
+  measuredFunction("vrsq-spread-16k.bin", 0xd0118081, 3);
+  measuredFunction("vsqrt-spread-16k.bin", 0xd0168081, 4);
+  measuredFunction("vexp2-spread-16k.bin", 0xd0148081, 5);
+  measuredFunction("vrexp2-spread-16k.bin", 0xd01c8081, 6);
+  measuredFunction("vsin-spread-16k.bin", 0xd0128081, 8);
+  measuredFunction("vnsin-spread-16k.bin", 0xd01a8081, 9);
+  measuredFunction("vcos-spread-16k.bin", 0xd0138081, 10);
+  measuredFunction("vasin-spread-16k.bin", 0xd0178081, 11);
+  auto belowFour = [](uint32_t x) { return x < 0x4080'0000 || x >= 0x7f80'0000; };  //all but positive x >= 4
+  measuredFunction("vlog2-spread-16k.bin", 0xd0158081, 7, belowFour);
+  measuredSweep("vlog2-half-2-1k.bin", 0xd0158081, 0x3f00'0000);
+  measuredTinyProducts();
+  measuredDivide();
+  uint32_t upper = measuredFpuState();
+  measuredConvert("fpu-convert.bin", upper);
+  measuredConvert("fpu-convert-safe.bin", upper);
+  measuredFpuArithmetic("fpu-arith.bin", false, upper);
+  measuredFpuArithmetic("fpu-arith-safe.bin", true, upper);
+}
+
+}

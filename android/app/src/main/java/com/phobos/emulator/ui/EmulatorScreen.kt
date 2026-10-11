@@ -85,6 +85,7 @@ import com.phobos.emulator.input.InputBindings
 import com.phobos.emulator.input.comboUsesDpad
 import com.phobos.emulator.input.mapKeyCodeToBit
 import com.phobos.emulator.input.matchingHotkeys
+import com.phobos.emulator.launch.LaunchSystems
 import com.phobos.emulator.ui.hud.PerformanceHudOverlay
 import com.phobos.emulator.ui.hud.hudConfig
 import com.phobos.emulator.ui.hud.hudPlacement
@@ -99,6 +100,7 @@ import com.phobos.emulator.ui.touch.TouchLayouts
 import com.phobos.emulator.ui.touch.isHidden
 import com.phobos.emulator.ui.touch.touchLayoutKey
 import com.phobos.emulator.util.DisplayRefresh
+import com.phobos.emulator.util.pictureMultiple
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -600,6 +602,12 @@ private fun GamePicture(
                 (baseWidth * scale).toDp() to (baseHeight * scale).toDp()
             }
         }
+        // The PSP's picture is drawn at the whole multiple of its size nearest the view's, so the compositor's own
+        // (bilinear) scaling of it is slight and its one-pixel lines stay sharp and even (util/PspVideo.kt).
+        val multiple = if (systemName == LaunchSystems.PSP) {
+            with(density) { pictureMultiple(baseWidth, baseHeight, width.toPx(), height.toPx()) }
+        } else 1
+        LaunchedEffect(multiple) { PhobosCore.setPictureMultiple(multiple) }
 
         AndroidView(
             factory = { ctx ->

@@ -44,6 +44,9 @@ import kotlin.math.roundToInt
 import com.phobos.emulator.LogLevel
 import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.RegionPreference
+import com.phobos.emulator.util.PspDrawingThreads
+import com.phobos.emulator.util.PspRenderer
+import com.phobos.emulator.util.PspResolution
 import com.phobos.emulator.util.ZxTape
 import com.phobos.emulator.ui.theme.LegibleText
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
@@ -53,11 +56,11 @@ import com.phobos.emulator.ui.theme.sunsetPlate
 import com.phobos.emulator.ui.theme.neonGlow
 import com.phobos.emulator.ui.theme.pillShape
 
-/** A titled group of settings rows on a rounded card. */
+/** A titled group of settings rows on a rounded card; [badge] as in [SectionHeader]. */
 @Composable
-fun SettingsCategory(title: String, content: @Composable ColumnScope.() -> Unit) {
+fun SettingsCategory(title: String, badge: (@Composable () -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     Column {
-        SectionHeader(title)
+        SectionHeader(title, badge = badge)
         SettingsCard(content = content)
     }
 }
@@ -65,10 +68,16 @@ fun SettingsCategory(title: String, content: @Composable ColumnScope.() -> Unit)
 /**
  * Section title in the primary color; uppercase neon with retrowave effects, on a soft plate and
  * outlined where it is drawn straight on the backdrop ([onBackdrop]; false inside panels such as the
- * pause menu).
+ * pause menu). [badge] sits right after the title and brings its own spacing, [trailing] at the row's end.
  */
 @Composable
-fun SectionHeader(title: String, modifier: Modifier = Modifier, onBackdrop: Boolean = true, trailing: (@Composable () -> Unit)? = null) {
+fun SectionHeader(
+    title: String,
+    modifier: Modifier = Modifier,
+    onBackdrop: Boolean = true,
+    badge: (@Composable () -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
+) {
     val scheme = MaterialTheme.colorScheme
     val primary = scheme.primary
     val theme = LocalPhobosTheme.current
@@ -95,6 +104,7 @@ fun SectionHeader(title: String, modifier: Modifier = Modifier, onBackdrop: Bool
             } else {
                 Text(text, style = style, color = primary)
             }
+            badge?.invoke()
             solid?.sectionRule()?.let { rule ->
                 Spacer(Modifier.padding(start = 12.dp).weight(1f).height(8.dp).then(rule))
             }
@@ -468,6 +478,42 @@ fun MsxLoadSpeedItem(current: Int, onSelect: (Int) -> Unit) {
         current = current,
         options = LOAD_SPEEDS,
         label = ::loadSpeedLabel,
+        onSelect = onSelect,
+    )
+}
+
+@Composable
+fun PspRendererItem(current: Int, onSelect: (Int) -> Unit) {
+    SettingsDropdownItem(
+        title = "PSP Renderer",
+        description = "Who draws a PSP game's pictures. ${PspRenderer.description(PspRenderer.forCore(current))} Vulkan uses the driver chosen in the Driver Manager; if it can't start or stops, the software renderer takes over and says so. Applies when a game starts.",
+        current = PspRenderer.forCore(current),
+        options = PspRenderer.choices,
+        label = PspRenderer::label,
+        onSelect = onSelect,
+    )
+}
+
+@Composable
+fun PspResolutionItem(current: Int, onSelect: (Int) -> Unit) {
+    SettingsDropdownItem(
+        title = "PSP Resolution",
+        description = "How many times over the Vulkan renderer draws each of the PSP's pixels. Native is the PSP's own, exact; higher is sharper on a large screen and costs the GPU more. What games read back stays exact. Applies when a game starts.",
+        current = PspResolution.forCore(current),
+        options = PspResolution.choices,
+        label = PspResolution::label,
+        onSelect = onSelect,
+    )
+}
+
+@Composable
+fun PspDrawingThreadsItem(current: Int, onSelect: (Int) -> Unit) {
+    SettingsDropdownItem(
+        title = "PSP Drawing Threads",
+        description = "How many of the device's cores draw a PSP game's pictures. Every choice draws the very same picture; more draw it sooner. Applies when a game starts.",
+        current = PspDrawingThreads.forCore(current),
+        options = PspDrawingThreads.choices,
+        label = PspDrawingThreads::label,
         onSelect = onSelect,
     )
 }

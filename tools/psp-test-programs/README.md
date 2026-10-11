@@ -1,0 +1,57 @@
+# psp-test-programs
+
+Real PSP programs for the PSP core's host tests, built from source whenever they're needed, and a script that
+compares the pictures Phobos's PSP core draws with PPSSPP's.
+
+## Why they were needed
+
+Most of the core's tests feed it small pieces written by hand: a few instructions, one system call, one display
+list. That checks each piece on its own, but not what happens when a real program built with the PSP's own toolchain
+runs: the loader taking an ELF, PRX or EBOOT apart; pspsdk's start-up code and its C library calling dozens of
+system functions; files, controls, the GE driver and drawing, all together. These programs supply that.
+
+The programs are built from source with pspdev's free toolchain. Since 2026-10-06 the built ones are also kept in
+[tests/psp/programs](../../tests/psp/programs/README.md), at the owner's request, so that every checkout and CI runs
+the tests that need them; the repository holds no PSP games or firmware. pspsdk's own GU samples are well-known real programs whose pictures can be checked.
+PPSSPP's software renderer gives an outside reference for the drawing: it's only run as a program to compare
+against, and none of its code is in Phobos.
+
+## What's here
+
+| Program | What it does | Tests |
+|---|---|---|
+| `hello/` | Prints a line and leaves. Even that uses some 45 system functions from 11 libraries, as pspsdk's start-up code and the C library set themselves up: a first test of the loader and the HLE kernel. Built three ways: as an ELF, a PRX and an EBOOT.PBP. | `tests/psp/loader.cpp`, `kernel.cpp` |
+| `system/` | Writes a file and reads it back, reads one the host put there, lists the folder, then waits for a button and reports the analog stick, all through the C library. | `tests/psp/files.cpp` |
+| `disc/` | Booted from a disc image the test makes, reads it every way games do: a file by its path, its status and first sector, a run of sectors by number (`sce_lbn`), `umd0:` a sector at a time, a folder's listing, a relative path; and waits for the drive first. | `tests/psp/ares` |
+| `gu/` | Drives the GE through pspsdk's GU library: clears the screen, has its signal and finish callbacks called, calls one display list from another, copies a picture into VRAM. | `tests/psp/ge.cpp` |
+| pspsdk's samples | `copy`, `blit`, `clut`, `blend`, `doublelist`, `cube`, `celshading` and `envmap`, from the toolchain's own examples: copying pictures, textures, palettes, blending, 3D, lighting, environment mapping. | `tests/psp/ge.cpp`, `draw.cpp` |
+| `pspmeasure.elf` | [tools/psp-measure](../psp-measure/README.md)'s program, run in the core: its menu, and its GE tests to compare with a real PSP's results. | `tests/psp/measure.cpp` |
+
+- `build.sh` builds them all into a folder.
+- `compare-ppsspp.sh` runs `clut`, `blend`, `cube`, `celshading` and `envmap` for one second of the PSP's time in
+  both Phobos and PPSSPP's software renderer, and compares the pictures pixel by pixel (taking the closest of three
+  frames, since the two start programs at slightly different times).
+
+## Using them
+
+In the `phobos-linux` container, which has pspdev in `/opt/pspdev`:
+
+```
+tools/psp-test-programs/build.sh /tmp/programs
+PSP_TEST_PROGRAMS=/tmp/programs tests/psp/run-tests.sh
+```
+
+The test scripts use `tests/psp/programs` unless `PSP_TEST_PROGRAMS` names another folder (empty: none, and the
+tests that need the programs are skipped). When the programs' sources change, rebuild them into `tests/psp/programs`
+in the same commit (its README has a command using pspdev's Docker image). With `PSP_PICTURES` set to a folder, the samples' pictures are saved there.
+
+`compare-ppsspp.sh <programs folder>` needs PPSSPPHeadless, built from PPSSPP's source in the container at
+`/opt/tools/ppsspp` (CMake with `HEADLESS=ON`, `HEADLESS_CROSS=ON`, `LIBRETRO=OFF`, a release build).
+
+## What they show so far
+
+- `blit` and `doublelist` draw their pictures pixel for pixel.
+- Against PPSSPP's software renderer, after the core took the PSP's measured rules where PPSSPP's differ (round 3's
+  fixes): within 2 levels on 99.88% of `blend`'s pixels, 99.64% of `clut`'s, 99.44% of `cube`'s, 99.10% of
+  `celshading`'s and 98.42% of `envmap`'s. (Before those rules, `celshading` was identical, `cube` and `envmap`
+  within 1 level and `blend` within 2 on every pixel, and `clut` within 2 on 99.94%.)

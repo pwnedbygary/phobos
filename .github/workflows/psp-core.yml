@@ -1,0 +1,63 @@
+name: PSP Core Tests
+
+# The PSP core (ares/psp) isn't in the app yet; its parts are tested on the host, here with the address and
+# undefined-behavior sanitizers.
+
+on:
+  push:
+    branches: [ master ]
+    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', 'tests/psp/**', 'desktop/PspDiscInfo.*', 'thirdparty/ffmpeg/**', '.github/workflows/psp-core.yml' ]
+  pull_request:
+    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', 'tests/psp/**', 'desktop/PspDiscInfo.*', 'thirdparty/ffmpeg/**', '.github/workflows/psp-core.yml' ]
+  workflow_dispatch:
+
+concurrency:
+  group: psp-core-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  allegrex:
+    name: Allegrex CPU tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run the tests
+        run: tests/allegrex/run-tests.sh
+
+  system:
+    name: PSP system tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # FFmpeg's decoders for the host (thirdparty/ffmpeg/build.sh, run by the test script), built once and kept:
+      # keyed on the build's own name (the script, the system and the compiler), so a runner's new compiler makes a
+      # new build that's kept in turn
+      - name: Name the FFmpeg build
+        id: ffmpeg
+        run: echo "name=$(thirdparty/ffmpeg/build.sh --name host)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: .cache/ffmpeg
+          key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
+          restore-keys: ffmpeg-${{ runner.os }}-host-
+
+      # The GPU renderer's tests (tests/psp/gpu.cpp) on Mesa's Vulkan driver that draws on the CPU (lavapipe), which
+      # the renderer takes only when asked (PSP_GPU_ON_CPU)
+      - name: Install Mesa's software Vulkan driver
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers libvulkan1
+
+      - name: Run the tests
+        env:
+          PSP_GPU_ON_CPU: 1
+        run: tests/psp/run-tests.sh

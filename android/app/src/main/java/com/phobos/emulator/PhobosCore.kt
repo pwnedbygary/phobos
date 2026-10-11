@@ -11,6 +11,8 @@ object PhobosCore {
     external fun enumerateSystems(): List<String>
     external fun getSystemExtensions(systemName: String): List<String>
     external fun loadRom(systemName: String, uriString: String, romName: String): Boolean
+    /** Why the last [loadRom] failed, when the game's medium said (a sentence for the player); empty otherwise. */
+    external fun loadProblem(): String
     external fun loadSecondaryRom(systemName: String, uriString: String): Boolean
     external fun unloadSystem()
     external fun setEmulationRunning(running: Boolean)
@@ -51,6 +53,11 @@ object PhobosCore {
     external fun setMuteAudio(muted: Boolean)
     external fun setShader(path: String): Boolean
     external fun saveState(path: String): Boolean
+    /**
+     * Saves a state to [path]: 1, or 0 when there's none to save (a game that ended by itself, such as a PSP program
+     * that left, or a core stuck in a frame for two seconds), or -1 when it couldn't be written.
+     */
+    external fun trySaveState(path: String): Int
     external fun loadState(path: String): Boolean
     /** The loaded game's battery saves, one "name\tsize\tpath" entry each (N64: save.eeprom, save.ram, save.flash, save.pak). */
     external fun getSaveFiles(): Array<String>
@@ -65,6 +72,8 @@ object PhobosCore {
     external fun setLogLevel(level: Int)
     external fun setRomFd(fd: Int)
     external fun setSecondaryRomFd(fd: Int)
+    /** A PSP disc's title, disc ID, region and icon (ICON0.PNG) read from its image; null if it isn't a PSP disc. */
+    external fun pspDiscInfo(fd: Int): PspDiscInfo?
     /** A file the next load (or disc change) opens by path where it is, instead of copying the descriptor's. */
     external fun setRomPath(path: String)
     external fun setSecondaryRomPath(path: String)
@@ -75,6 +84,20 @@ object PhobosCore {
     external fun setSavesPath(path: String)
     /** The folder name for the next game's PS1 memory cards: its name without the disc number. */
     external fun setMemoryCardKey(key: String)
+    /** The PSP's memory stick: a folder the user picked, or "" for the shared one in the saves folder. */
+    external fun setPspMemoryStickPath(path: String)
+    /** The PSP's system fonts: the folder of the user's own copies (util/PspFonts.kt), or "" for none. */
+    external fun setPspFontsPath(path: String)
+    /** How many threads draw the PSP's pictures (the core's "GE Threads", as a game starts): 0 for Auto. */
+    external fun setPspDrawingThreads(threads: Int)
+    /** Who draws the PSP's pictures (the core's "Renderer", as a game starts): util/PspVideo.kt's [PspRenderer]. */
+    external fun setPspRenderer(renderer: Int)
+    /** The Vulkan renderer's internal resolution (the core's "Resolution", as a game starts): [PspResolution]. */
+    external fun setPspResolution(scale: Int)
+    /** What the PSP's core has to tell the user, once (its Vulkan renderer didn't start, or stopped); "" if none. */
+    external fun takePspNotice(): String
+    /** The whole multiple native code draws the PSP's picture at (util/PspVideo.kt's pictureMultiple()). */
+    external fun setPictureMultiple(multiple: Int)
     external fun setVulkanCachePath(path: String)
     external fun setNativeLibraryDir(path: String)
     external fun setFirmwarePath(path: String)
@@ -206,3 +229,13 @@ data class PhobosSetting(
     val value: String,
     val options: List<String> = emptyList()
 )
+
+data class PspDiscInfo(
+    val titleBytes: ByteArray,
+    val discId: String,
+    val region: String,
+    val icon: ByteArray
+) {
+    /** The title as UTF-8: the SFO's bytes, decoded here (not by the JNI, which can't check UTF-8). */
+    val title: String get() = String(titleBytes, Charsets.UTF_8)
+}

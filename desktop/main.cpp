@@ -3,6 +3,7 @@
 #include "Input.hpp"
 #include "Library.hpp"
 #include "Platform.hpp"
+#include "PspDiscInfo.hpp"
 #include "Settings.hpp"
 #include "PhobosHost.hpp"
 #include "PhobosRunner.hpp"
@@ -11,6 +12,7 @@
 #include <SDL3/SDL_main.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <functional>
 #include <map>
@@ -18,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -38,6 +41,15 @@ constexpr Color shadeColor{0, 0, 0, 170};
 constexpr float glyph = 8.0f;
 
 enum class Screen { Library, Playing, Menu };
+
+// What a folder picked in the system's dialog is for.
+enum class Pick { Games, PspFonts, PspMemoryStick };
+
+// The PSP's drawing-threads choices, as the Android app offers them (PspDrawingThreads): 0 is all cores but one.
+constexpr int pspDrawingThreads[] = {0, 1, 2, 4, 6, 8};
+// Who draws the PSP's pictures (the core's "Renderer"), as the app's PspRenderer: 0 software, 1 Vulkan (accurate),
+// 2 Vulkan (fast).
+constexpr const char* pspRenderers[] = {"Software", "Vulkan (accurate)", "Vulkan (fast)"};
 
 struct MenuItem {
   std::string label;
@@ -71,7 +83,10 @@ private:
   auto setup(int argc, char* argv[]) -> bool;
   auto applySettings() -> void;
   auto rescan() -> void;
-  auto chooseFolder() -> void;
+  auto startPspTitles() -> void;
+  auto stopPspTitles() -> void;
+  auto chooseFolder(Pick pick) -> void;
+  auto picked(Pick pick, const std::string& folder) -> void;
   auto open(const std::string& path) -> void;
   auto launch(const Game& entry) -> void;
   auto unloadGame() -> void;
@@ -82,9 +97,12 @@ private:
   auto statePath() const -> std::string;
   auto saveState() -> void;
   auto loadState() -> void;
+  auto takeScreenshot() -> void;
   auto changeDisc(int direction) -> void;
   auto toggleFullscreen() -> void;
   auto menuItems() -> std::vector<MenuItem>;
+  auto pspMenuItems(std::vector<MenuItem>& items) -> void;
+  auto setPspFonts(const std::string& picked) -> std::string;
   auto handleKey(const SDL_KeyboardEvent& key) -> void;
   auto update() -> void;
   auto render() -> void;
@@ -102,6 +120,11 @@ private:
   std::uint32_t frameWidth = 0;
   std::uint32_t frameHeight = 0;
   std::uint64_t frameSerial = 0;
+  // The whole multiple the runner was last told to draw the PSP's picture at (0: not yet told).
+  int pictureMultiple = 0;
+  // The PSP fonts' item, worked out as the setting is applied or changed: the folder may be a slow or vanished share,
+  // which the menu, drawn each frame, mustn't list.
+  std::string pspFontsHeld = "none";
 
   Settings settings;
   Input input;
@@ -134,9 +157,17 @@ private:
   Uint64 messageUntil = 0;
 
   std::mutex pickedMutex;
+  Pick picking = Pick::Games;
   std::optional<std::string> pickedFolder;
   bool pickerFailed = false;
   bool quit = false;
+
+  // The PSP's titles, filled in after the list shows (PspDiscInfo): the thread that fills them, the scan's
+  // generation (a rescan supersedes its unfinished work), and the lock the list, the launch and the fill share.
+  std::mutex gamesMutex;
+  std::atomic<int> scanGeneration{0};
+  std::thread pspTitlesThread;
+  std::atomic<bool> quitting{false};
 };
 
 // Boot ROMs (System) and game databases (Database) ship beside the program: in the build folder
@@ -174,13 +205,12 @@ auto Shell::run(int argc, char* argv[]) -> int {
     {
       std::lock_guard<std::mutex> lock(pickedMutex);
       if (pickedFolder) {
-        gamesFolder = *pickedFolder;
-        settings.setText("games", gamesFolder);
+        picked(picking, *pickedFolder);
         pickedFolder.reset();
-        rescan();
       }
       if (pickerFailed) {
-        show("No folder picker here: start Phobos with the games folder as its argument");
+        show(picking == Pick::Games ? "No folder picker here: start Phobos with the games folder as its argument"
+                                    : "No folder picker here: set the folder in " + dataFolder + "settings.ini");
         pickerFailed = false;
       }
     }
@@ -190,6 +220,9 @@ auto Shell::run(int argc, char* argv[]) -> int {
     if (!vsync) SDL_DelayNS(8'000'000);
   }
   if (game) quitGame();
+  // The titles' thread, stopped and joined (it's at most one disc open in flight when it checks next).
+  quitting = true;
+  if (pspTitlesThread.joinable()) pspTitlesThread.join();
   input.close();
   if (frameTexture) SDL_DestroyTexture(frameTexture);
   SDL_DestroyRenderer(renderer);
@@ -268,20 +301,93 @@ auto Shell::applySettings() -> void {
   ares::setPs1AnalogMode(settings.flag("ps1.analog", true));
   ares::setVideoSettings(settings.flag("video.overscan", false), settings.flag("video.colorEmulation", true),
                          settings.flag("video.interframeBlending", true));
+  // The PSP's memory stick (a folder picked, else the one all games share in the saves folder, as on Android), the
+  // user's own system fonts (none unless a folder is picked), its drawing threads (0: all cores but one), its
+  // renderer and the Vulkan renderer's internal resolution (1, native, to 10 times).
+  ares::setPspMemoryStickPath(settings.text("psp.memoryStick").c_str());
+  setPspFonts(settings.text("psp.fonts"));
+  ares::setPspDrawingThreads(settings.number("psp.drawingThreads", 0));
+  ares::setPspRenderer(settings.number("psp.renderer", 0));
+  ares::setPspResolution(settings.number("psp.resolution", 1));
 }
 
 auto Shell::rescan() -> void {
-  games = scanLibrary(gamesFolder);
-  cursor = std::clamp(cursor, 0, std::max(0, (int)games.size() - 1));
+  {
+    std::lock_guard<std::mutex> lock(gamesMutex);
+    games = scanLibrary(gamesFolder);
+    cursor = std::clamp(cursor, 0, std::max(0, (int)games.size() - 1));
+    ++scanGeneration;
+  }
+  startPspTitles();
 }
 
-auto Shell::chooseFolder() -> void {
+//The PSP's titles, filled in after the list shows (a CHD's open takes a while, so the list isn't held for it),
+//on a thread of their own. The old thread, if one's running, is joined (so it can't outlive the Shell) before
+//the new one starts; its work is superseded by the rescan's generation. No titles are filled in while a game
+//runs: the thread stops when a game starts and restarts when the Library shows.
+auto Shell::startPspTitles() -> void {
+  if (pspTitlesThread.joinable()) pspTitlesThread.join();
+  std::vector<std::string> files;
+  {
+    std::lock_guard<std::mutex> lock(gamesMutex);
+    for (auto& game : games)
+      if (game.system == "PlayStation Portable" && pspDiscImage(game.discs.front()))
+        files.push_back(game.discs.front());
+  }
+  pspTitlesThread = std::thread([this, files, generation = scanGeneration.load()] {
+    auto cache = PspIconCache(dataFolder + "psp-icons");
+    for (auto& file : files) {
+      //The scan gives up when it's superseded (a rescan) or Phobos is quitting: the disc's reader returns 0,
+      //so its result isn't read to the end or cached.
+      auto title = listTitle(pspDiscTitle(file, cache, quitting, generation, scanGeneration,
+                                          [](bool q, int g, std::atomic<int>& sg) -> bool {
+                                            return q || g != sg.load();
+                                          }));
+      std::lock_guard<std::mutex> lock(gamesMutex);
+      if (generation != scanGeneration.load()) break;
+      for (auto& game : games)
+        if (game.discs.front() == file) game.discTitle = title;
+    }
+  });
+}
+
+//The titles' thread, stopped while a game runs (joined, so it can't outlive the Shell).
+auto Shell::stopPspTitles() -> void {
+  if (pspTitlesThread.joinable()) pspTitlesThread.join();
+}
+
+auto Shell::chooseFolder(Pick pick) -> void {
+  std::string from = pick == Pick::Games ? gamesFolder
+                   : pick == Pick::PspFonts ? settings.text("psp.fonts") : settings.text("psp.memoryStick");
+  {
+    std::lock_guard<std::mutex> lock(pickedMutex);
+    picking = pick;
+  }
   SDL_ShowOpenFolderDialog([](void* userdata, const char* const* files, int) {
     auto* shell = (Shell*)userdata;
     std::lock_guard<std::mutex> lock(shell->pickedMutex);
     if (!files) shell->pickerFailed = true;
     else if (files[0]) shell->pickedFolder = std::string(files[0]);
-  }, this, window, gamesFolder.empty() ? nullptr : gamesFolder.c_str(), false);
+  }, this, window, from.empty() ? nullptr : from.c_str(), false);
+}
+
+auto Shell::picked(Pick pick, const std::string& folder) -> void {
+  switch (pick) {
+  case Pick::Games:
+    gamesFolder = folder;
+    settings.setText("games", gamesFolder);
+    rescan();
+    return;
+  case Pick::PspFonts: {
+    if (pspFontFolder(folder).empty()) return show("No PSP fonts (jpn0, ltn0-ltn15, kr0.pgf) in that folder");
+    settings.setText("psp.fonts", folder);
+    return show(setPspFonts(folder) + " of the PSP's 18 fonts: they're read as a game starts");
+  }
+  case Pick::PspMemoryStick:
+    settings.setText("psp.memoryStick", folder);
+    ares::setPspMemoryStickPath(folder.c_str());
+    return show("The PSP's memory stick is that folder from the next start");
+  }
 }
 
 // A dropped or passed path: a folder becomes the games folder, a file starts.
@@ -314,14 +420,18 @@ auto Shell::launch(const Game& entry) -> void {
   ares::setPause(false);
   ares::setRomPath(file.c_str());
   auto fileName = fromPath(toPath(file).filename());
+  if (entry.system == "PlayStation Portable") fileName = pspProgramName(fileName, fromPath(toPath(file).parent_path().filename()));
   if (!ares::initialize(entry.system.c_str(), file.c_str(), fileName.c_str())) {
-    return show("Couldn't start " + entry.title + " (" + entry.system + ")");
+    std::string problem = (const char*)ares::lastLoadProblem();
+    return show(problem.empty() ? "Couldn't start " + entry.title + " (" + entry.system + ")" : problem);
   }
   game = entry;
   disc = 0;
   screen = Screen::Playing;
+  stopPspTitles();
   frameSerial = 0;
   frameWidth = frameHeight = 0;
+  pictureMultiple = 0;
   fastForward = fastForwardKey = fastForwardApplied = false;
   ares::setFastForward(false);
   muted = false;
@@ -338,6 +448,7 @@ auto Shell::unloadGame() -> void {
   ares::unloadSystem();
   game.reset();
   screen = Screen::Library;
+  startPspTitles();
   SDL_SetWindowTitle(window, "Phobos");
 }
 
@@ -387,6 +498,19 @@ auto Shell::loadState() -> void {
   show(loaded ? "Loaded state " + std::to_string(stateSlot) : "No state " + std::to_string(stateSlot) + " to load");
 }
 
+auto Shell::takeScreenshot() -> void {
+  if (!game) return;
+  // The core's own frame as a PNG, numbered after the last one so no earlier picture is replaced.
+  auto folder = dataFolder + "screenshots/" + game->system;
+  std::error_code error;
+  fs::create_directories(toPath(folder), error);
+  std::string path;
+  for (int number = 1; path.empty() || fs::exists(toPath(path), error); number++) {
+    path = folder + "/" + game->title + " (" + std::to_string(number) + ").png";
+  }
+  show(ares::takeScreenshot(path.c_str()) ? "Saved screenshot" : "Couldn't save a screenshot");
+}
+
 auto Shell::changeDisc(int direction) -> void {
   int count = (int)game->discs.size();
   int next = (disc + direction + count) % count;
@@ -413,6 +537,7 @@ auto Shell::menuItems() -> std::vector<MenuItem> {
   items.push_back({"Save state", [this](int d) { if (d == 0) saveState(); }});
   items.push_back({"Load state", [this](int d) { if (d == 0) loadState(); }});
   items.push_back({"State slot: " + std::to_string(stateSlot), [this](int d) { stateSlot = (stateSlot - 1 + (d < 0 ? 8 : 1)) % 9 + 1; }});
+  items.push_back({"Screenshot", [this](int d) { if (d == 0) takeScreenshot(); }});
   items.push_back({"Reset", [this](int d) { if (d == 0) { ares::resetSystem(); closeMenu(); } }});
   items.push_back({"Fast forward: " + onOff(fastForward), [this](int) { fastForward = !fastForward; }});
   items.push_back({"Mute: " + onOff(muted), [this](int) { muted = !muted; ares::setMuteAudio(muted); }});
@@ -450,9 +575,62 @@ auto Shell::menuItems() -> std::vector<MenuItem> {
       settings.setFlag("ps1.analog", ares::togglePs1AnalogMode());
     }});
   }
+  if (game->system == "PlayStation Portable") pspMenuItems(items);
   items.push_back({"Fullscreen: " + onOff(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN), [this](int) { toggleFullscreen(); }});
   items.push_back({launchedWithGame ? "Quit" : "Quit to library", [this](int d) { if (d == 0) quitGame(); }});
   return items;
+}
+
+// Gives the runner the fonts in (or under) the folder picked, and keeps how many there are for the menu ("12 of 18",
+// "none"); returns the count.
+auto Shell::setPspFonts(const std::string& picked) -> std::string {
+  auto fonts = pspFontFolder(picked);
+  ares::setPspFontsPath(fonts.c_str());
+  auto count = std::to_string(pspFontCount(fonts));
+  pspFontsHeld = fonts.empty() ? std::string("none") : count + " of 18";
+  return count;
+}
+
+// The PSP's settings, taken as a game starts. A picks a folder for the fonts or the memory stick; left or right
+// goes back to none, or to the shared memory stick.
+auto Shell::pspMenuItems(std::vector<MenuItem>& items) -> void {
+  items.push_back({"PSP fonts: " + pspFontsHeld + " (next start)", [this](int d) {
+    if (d == 0) return chooseFolder(Pick::PspFonts);
+    settings.setText("psp.fonts", "");
+    setPspFonts("");
+  }});
+  auto stick = settings.text("psp.memoryStick");
+  auto stickName = stick.empty() ? std::string("shared") : fromPath(toPath(stick).filename());
+  items.push_back({"PSP memory stick: " + stickName + " (next start)", [this](int d) {
+    if (d == 0) return chooseFolder(Pick::PspMemoryStick);
+    settings.setText("psp.memoryStick", "");
+    ares::setPspMemoryStickPath("");
+  }});
+  int threads = settings.number("psp.drawingThreads", 0);
+  items.push_back({"PSP drawing threads: " + (threads ? std::to_string(threads) : std::string("Auto")) + " (next start)",
+                   [this, threads](int d) {
+    constexpr int count = (int)std::size(pspDrawingThreads);
+    auto at = std::find(std::begin(pspDrawingThreads), std::end(pspDrawingThreads), threads);
+    int index = at == std::end(pspDrawingThreads) ? 0 : (int)(at - std::begin(pspDrawingThreads));
+    int next = pspDrawingThreads[(index + (d < 0 ? count - 1 : 1)) % count];
+    settings.setNumber("psp.drawingThreads", next);
+    ares::setPspDrawingThreads(next);
+  }});
+  int renderer = settings.number("psp.renderer", 0);
+  if(renderer < 0 || renderer >= (int)std::size(pspRenderers)) renderer = 0;  //(what the core is told: Software)
+  items.push_back({std::string("PSP renderer: ") + pspRenderers[renderer] + " (next start)", [this, renderer](int d) {
+    int next = (renderer + (d < 0 ? (int)std::size(pspRenderers) - 1 : 1)) % (int)std::size(pspRenderers);
+    settings.setNumber("psp.renderer", next);
+    ares::setPspRenderer(next);
+  }});
+  //(the window shows the GPU's picture read back at up to 4 times the PSP's size: the core's MostShown)
+  int resolution = std::clamp(settings.number("psp.resolution", 1), 1, 10);
+  items.push_back({"PSP resolution (Vulkan): " + (resolution == 1 ? std::string("Native") :
+                   std::to_string(resolution) + "x") + " (next start)", [this, resolution](int d) {
+    int next = (resolution - 1 + (d < 0 ? 9 : 1)) % 10 + 1;
+    settings.setNumber("psp.resolution", next);
+    ares::setPspResolution(next);
+  }});
 }
 
 auto Shell::handleKey(const SDL_KeyboardEvent& key) -> void {
@@ -462,7 +640,7 @@ auto Shell::handleKey(const SDL_KeyboardEvent& key) -> void {
     if (key.scancode == SDL_SCANCODE_F11) return toggleFullscreen();
     switch (screen) {
     case Screen::Library:
-      if (key.scancode == SDL_SCANCODE_F3) chooseFolder();
+      if (key.scancode == SDL_SCANCODE_F3) chooseFolder(Pick::Games);
       if (key.scancode == SDL_SCANCODE_F5) rescan();
       return;
     case Screen::Menu:
@@ -473,6 +651,7 @@ auto Shell::handleKey(const SDL_KeyboardEvent& key) -> void {
       if (key.scancode == SDL_SCANCODE_F12 || (key.scancode == SDL_SCANCODE_ESCAPE && !msx)) return openMenu();
       if (key.scancode == SDL_SCANCODE_F5 && !msx) return saveState();
       if (key.scancode == SDL_SCANCODE_F9) return loadState();
+      if (key.scancode == SDL_SCANCODE_F8) return takeScreenshot();
       if (key.scancode == SDL_SCANCODE_TAB && !computer) {
         fastForwardKey = true;
         return;
@@ -490,6 +669,11 @@ auto Shell::handleKey(const SDL_KeyboardEvent& key) -> void {
 }
 
 auto Shell::update() -> void {
+  // (the PSP's Vulkan renderer couldn't start, or stopped: said once, the software renderer drawing instead)
+  if (game) {
+    auto notice = ares::takePspNotice();
+    if (!notice.empty()) show(notice);
+  }
   bool computer = game && isKeyboardComputer(game->system);
   bool n64 = game && game->system == "Nintendo 64";
   auto pad = input.poll(screen != Screen::Playing || !computer, screen == Screen::Playing && n64);
@@ -532,16 +716,21 @@ auto Shell::update() -> void {
     return;
   }
   case Screen::Library: {
-    if (pressed(PadY)) chooseFolder();
+    if (pressed(PadY)) chooseFolder(Pick::Games);
     if (pressed(PadX)) rescan();
-    int count = (int)games.size();
-    if (!count) return;
-    constexpr int page = 10;
-    if (navUp) cursor = (cursor + count - 1) % count;
-    if (navDown) cursor = (cursor + 1) % count;
-    if (navLeft || pressed(PadL1)) cursor = std::max(0, cursor - page);
-    if (navRight || pressed(PadR1)) cursor = std::min(count - 1, cursor + page);
-    if (confirm) launch(games[cursor]);
+    Game entry;
+    {
+      std::lock_guard<std::mutex> lock(gamesMutex);
+      int count = (int)games.size();
+      if (!count) return;
+      constexpr int page = 10;
+      if (navUp) cursor = (cursor + count - 1) % count;
+      if (navDown) cursor = (cursor + 1) % count;
+      if (navLeft || pressed(PadL1)) cursor = std::max(0, cursor - page);
+      if (navRight || pressed(PadR1)) cursor = std::min(count - 1, cursor + page);
+      entry = games[cursor];
+    }
+    if (confirm) launch(entry);
     return;
   }
   }
@@ -576,6 +765,15 @@ auto Shell::render() -> void {
       h = (float)outputHeight;
       w = h * aspect;
     }
+    // The PSP's 480x272 comes drawn at the whole multiple of its size nearest the window's, each pixel repeated, and
+    // is scaled smoothly the little rest of the way, so its one-pixel lines stay sharp and even ("sharp bilinear", as
+    // the Android app draws it); the other systems' pictures are scaled by nearest pixels.
+    bool psp = game->system == "PlayStation Portable";
+    if (psp && geometry.height > 0) {
+      int multiple = std::clamp((int)std::lround(h / geometry.height), 1, 4);
+      if (multiple != pictureMultiple) ares::setPictureMultiple(pictureMultiple = multiple);
+    }
+    SDL_SetTextureScaleMode(frameTexture, psp ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
     SDL_FRect target{(outputWidth - w) / 2, (outputHeight - h) / 2, w, h};
     SDL_RenderTexture(renderer, frameTexture, nullptr, &target);
   }
@@ -595,6 +793,7 @@ auto Shell::render() -> void {
 }
 
 auto Shell::drawLibrary(float width, float height) -> void {
+  std::lock_guard<std::mutex> lock(gamesMutex);
   fill(0, 0, width, 22, panelColor);
   print(8, 7, "PHOBOS", textColor);
   print(72, 7, gamesFolder.empty() ? "No games folder" : gamesFolder, dimColor, width - 80);
@@ -626,7 +825,9 @@ auto Shell::drawLibrary(float width, float height) -> void {
     if (i == cursor) fill(4, y - 2, width - 8, rowHeight, highlightColor);
     const auto& entry = games[i];
     float systemWidth = entry.system.size() * glyph;
-    print(10, y, entry.title, textColor, width - systemWidth - 36);
+    // The disc's own title when it's there and the font can draw it, the file's name when it isn't; the states
+    // and saves keep their key in the file's name (entry.title).
+    print(10, y, entry.discTitle.empty() ? entry.title : entry.discTitle, textColor, width - systemWidth - 36);
     print(width - systemWidth - 10, y, entry.system, i == cursor ? textColor : dimColor);
   }
 }

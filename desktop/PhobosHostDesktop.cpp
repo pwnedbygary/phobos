@@ -137,4 +137,8 @@ auto loadVulkan(const char*, const char*, const char*) -> bool {
   return ::Vulkan::Context::init_loader(nullptr, true);
 }
 
+auto vulkanLoader() -> void* {
+  return (void*)::Vulkan::Context::get_instance_proc_addr();
+}
+
 }

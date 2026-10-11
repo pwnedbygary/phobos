@@ -58,6 +58,9 @@ namespace ares {
   auto setZxTapeAuto(bool enabled) -> void;
   auto setN64DebugLogging(bool enabled) -> void;
   auto saveState(const char* path) -> bool;
+  // 1 saved, 0 nothing to save (a game that ended by itself, a core stuck in a frame for two seconds), -1 not
+  // written.
+  auto trySaveState(const char* path) -> int;
   auto loadState(const char* path) -> bool;
   auto getSaveFiles() -> std::vector<string>;
   auto getButtonNames() -> std::vector<string>;
@@ -108,6 +111,22 @@ namespace ares {
   auto setSavesPath(const char* path) -> void;
   // The folder name for the next game's PS1 memory cards (its name without the disc number).
   auto setMemoryCardKey(const char* key) -> void;
+  // The PSP's memory stick: a folder the user picked, or empty for the shared one in the saves folder.
+  auto setPspMemoryStickPath(const char* path) -> void;
+  // The PSP's system fonts: the folder holding the user's copies of their PSP's flash0 fonts, or empty for none.
+  auto setPspFontsPath(const char* path) -> void;
+  // How many threads draw the PSP's pictures (its core's "GE Threads", as a game starts): 0 for all cores but one.
+  auto setPspDrawingThreads(s32 threads) -> void;
+  // Who draws the PSP's pictures (its core's "Renderer", as a game starts): 0 the software renderer, 1 Vulkan's
+  // (accurate), 2 Vulkan's fast mode.
+  auto setPspRenderer(s32 renderer) -> void;
+  // The Vulkan renderer's internal resolution (its core's "Resolution", as a game starts): 1, the PSP's, to 10 times.
+  auto setPspResolution(s32 scale) -> void;
+  // What the PSP's core has to tell the user, once (its Vulkan renderer couldn't start, or stopped): taken, and put
+  // in the log; empty if nothing.
+  auto takePspNotice() -> std::string;
+  // The whole multiple the PSP's picture is drawn at in the window (1 to 4), so the compositor scales it little.
+  auto setPictureMultiple(s32 multiple) -> void;
   auto setVulkanCachePath(const char* path) -> void;
   auto setNativeLibraryDir(const char* path) -> void;
   auto setFirmwarePath(const char* path) -> void;
@@ -115,6 +134,11 @@ namespace ares {
   // Firmware keys [system] can't start without that aren't set ("fw_mcd" for any Mega CD BIOS);
   // empty when nothing is missing or the system has no such check.
   auto missingFirmware(const char* system) -> std::vector<string>;
+  // Why the last initialize() failed, when the game's medium said (a sentence for the player); empty otherwise.
+  auto lastLoadProblem() -> string;
+  // Whether the file at [path] is a PSP game by what's in it, as mia's PSP medium tells (the PlayStation's games share
+  // .iso, .chd and .pbp with the PSP's): an ISO for a "PSP GAME", a DVD's CHD, a PSP program's EBOOT.PBP or ELF.
+  auto isPspGame(const char* path) -> bool;
   auto setCustomDriverPath(const char* path) -> void;
   auto loadSecondaryRom(const char* systemName, const char* uri) -> bool;
   // The sides of the LaserActive disc being played (its .mmi's media, in order); empty for other systems.

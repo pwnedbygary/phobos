@@ -15,7 +15,8 @@ NALL_HEADER_INLINE auto map(u32 size, bool executable) -> void* {
     flags |= MAP_JIT;
     #endif
   }
-  return mmap(nullptr, size, prot, flags, -1, 0);
+  void* target = mmap(nullptr, size, prot, flags, -1, 0);
+  return target != MAP_FAILED ? target : nullptr;  //callers test for nullptr, as with VirtualAlloc
   #else
   return nullptr;
   #endif

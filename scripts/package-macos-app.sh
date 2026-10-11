@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Packages the macOS build as Phobos.app, with MoltenVK (macOS has no Vulkan loader) in
+# Packages the macOS build as Phobos.app, with MoltenVK (macOS has no Vulkan loader) and, in a
+# build with them, FFmpeg's libavcodec and libavutil (the PSP's music and movies) in
 # Contents/Frameworks, and zips it as dist/Phobos-<version>-macos.zip.
 #   scripts/package-macos-app.sh [build directory]
 # Signing is optional: MACOS_CERTIFICATE_NAME names a Developer ID identity in the keychain, and
@@ -29,6 +30,22 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources"
 cp "$BUILD/phobos" "$APP/Contents/MacOS/Phobos"
 cp "$MOLTENVK" "$APP/Contents/Frameworks/libMoltenVK.dylib"
+# FFmpeg's libraries sit beside the program in the build, which finds them by its run path
+# (@rpath/libavcodec.63.dylib, CMakeLists.txt); in the app they're in Frameworks, each a file of
+# its own that can be swapped for another build (the LGPL's terms, as LICENSE describes).
+if otool -L "$BUILD/phobos" | grep -q '@rpath/libav'; then
+  for library in avcodec avutil; do
+    file="$(cd "$BUILD" && ls lib$library.[0-9]*.dylib 2>/dev/null || true)"
+    test -n "$file" || { echo "phobos needs FFmpeg's lib$library, which isn't beside it in $BUILD" >&2; exit 1; }
+    for arch in $(lipo -archs "$BUILD/phobos"); do
+      lipo -archs "$BUILD/$file" | tr ' ' '\n' | grep -qx "$arch" ||
+        { echo "$file has no $arch, which phobos is built for" >&2; exit 1; }
+    done
+    cp "$BUILD/$file" "$APP/Contents/Frameworks/$file"
+  done
+  install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/Phobos"
+  install_name_tool -delete_rpath @executable_path "$APP/Contents/MacOS/Phobos"
+fi
 cp -R "$BUILD/Database" "$BUILD/System" "$APP/Contents/Resources/"
 cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 if [[ -f "$ROOT/COPYING" ]]; then cp "$ROOT/COPYING" "$APP/Contents/Resources/COPYING"; fi
@@ -65,10 +82,12 @@ cat > "$APP/Contents/Info.plist" <<EOF
 EOF
 
 if [[ -n "${MACOS_CERTIFICATE_NAME:-}" ]]; then
-  codesign --force --options runtime --timestamp --sign "$MACOS_CERTIFICATE_NAME" "$APP/Contents/Frameworks/libMoltenVK.dylib"
+  for library in "$APP"/Contents/Frameworks/*.dylib; do
+    codesign --force --options runtime --timestamp --sign "$MACOS_CERTIFICATE_NAME" "$library"
+  done
   codesign --force --options runtime --timestamp --sign "$MACOS_CERTIFICATE_NAME" "$APP"
 else
-  codesign --force --sign - "$APP/Contents/Frameworks/libMoltenVK.dylib"
+  for library in "$APP"/Contents/Frameworks/*.dylib; do codesign --force --sign - "$library"; done
   codesign --force --sign - "$APP"
 fi
 
@@ -83,4 +102,7 @@ fi
 ditto -c -k --keepParent "$APP" "$OUTPUT"
 
 echo "Architectures: $(lipo -archs "$APP/Contents/MacOS/Phobos")"
+for library in "$APP"/Contents/Frameworks/libav*.dylib; do
+  if [[ -f "$library" ]]; then echo "$(basename "$library"): $(lipo -archs "$library")"; fi
+done
 echo "$OUTPUT"

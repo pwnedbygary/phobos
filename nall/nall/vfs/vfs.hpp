@@ -9,5 +9,6 @@
 #include <nall/vfs/file.hpp>
 #include <nall/vfs/cdrom.hpp>
 #include <nall/vfs/disk.hpp>
+#include <nall/vfs/descriptor.hpp>
 #include <nall/vfs/memory.hpp>
 #include <nall/vfs/directory.hpp>

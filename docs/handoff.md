@@ -25,6 +25,1168 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Library: the PlayStation Portable's own console art — 2026-10-11
+
+Branch `cursor/psp-console-art-2b67`, begun on #205's `cursor/psp-speed7-2b67` (`671072d6f`), so it ships with the
+Experimental PSP core. The Systematic pack (BAXY Square's, MIT) has no PSP, so `systematicAssetFor`
+(`ui/LibraryScreen.kt`) gave the PSP's tile the PlayStation's console.
+- **The art**: `assets/platforms/psp.svg`, drawn for Phobos in the set's style (LICENSE says so after the Systematic
+  notice): a PSP-1000 from the front, with its wide pill body and 16:9 screen, the D-pad's four buttons with the nub
+  below, the face buttons' triangle, circle, cross and square, the row under the screen, L and R along the top corners,
+  and the speakers and power light where the PSP-1000's manual puts them. It uses the set's 256 grid shown at 4/3, its
+  greys and its 8-unit white halo at half opacity; it's 330.667 x 165.333, slimmer than the GBA's 186.667, as a PSP is.
+  The D-pad, nub and marks are lighter than mid-grey, since the recolor takes darker greys below a dark theme's tile,
+  where the Game Gear's controls vanish into its body.
+- **Code**: the `psp` -> `psx` alias is gone and `psp` is in `SYSTEMATIC_ASSETS`; nothing else gave the PSP the
+  PlayStation's art (the Phobos, Pixel and Manga packs keep their own `psp` glyph).
+- **Checked**: `:app:compileModernReleaseKotlin` and `:app:testModernDebugUnitTest` (273 tests, none failing;
+  `ConsoleArtTest` recolors the new SVG in every theme). Previews outside the repo drew it beside the GBA's, Game Gear's
+  and PlayStation's art at 120-315 px, in grey and through the app's own `ConsoleArtPalette` mapping for all 39 theme
+  variants. Not yet seen on a device.
+
+## PSP: God of War faster in every renderer — a move's stencil in one draw, the GE's PRIMs cheaper, logic operations in fours — 2026-10-11
+
+Branch `cursor/psp-speed7-2b67`, begun on #200's `cursor/psp-gow-vk-2b67` with #201's `cursor/psp-measure6-2b67`
+merged under it, then #204's `cursor/psp-experimental-2b67` (#181, #202, #203 and #204: the desktop's disc titles, the
+README, PGD in states, the Experimental mark; none touches the core's speed); the RP6 measured against #201's tip
+`055029692` (#201 changes no GE, renderer or CPU code; the
+M1's and some earlier RP6 checks were against `c86461ec6`, as part 67 says). docs/psp-core.md, part 67, has the evidence;
+docs/psp-gpu-renderers.md's "Two targets over the same pages", "A texture running into the frame buffer below" and
+upscaling's uploads the design. Clean room: no PPSSPP code copied or translated, JPCSP's not read. Save states
+unchanged (24).
+- **Pictures**: the software renderer's byte for byte the base's (the measure harness's 137; every frame and end state
+  of the bench scenes and God of War's two at 1 and 7 threads on the M1, but MC3's menu's end state, which differs
+  between runs of the base's own runner too; every end state the same on the RP6). Every Vulkan frame
+  of the bench scenes and God of War's two, in all four configurations, the base's at 1x, and at 4x but Midnight Club
+  3's menu (on the RP6 76 of 80 comparisons identical, the four MC3's 4x): its frame buffer below now keeps the GPU's
+  own pixels where part 65's round trip kept one of each pixel's sixteen; against the software renderer as close or
+  closer by the blocks' means and three of four samples (RP6 49.9 -> 52.2% identical by the means), 0.7 points further
+  by the top-left one.
+- **Changes** (each its own commit, with its tests): moves and fills above 1x give the stencil with the colors in one
+  draw where the driver has `VK_EXT_shader_stencil_export` (both of the RP6's), else draw only the bits the format
+  keeps, none for 5650; a texture over two targets is moved into one only where the PRIM doesn't draw over the pages
+  moved (MC3's menu: no moves, part 63's two-part copy); logic operations four pixels at a time in the software
+  renderer; and for God of War's 37,600 PRIMs a frame at 1x: a PRIM's 3D settings kept and worked out again only where
+  their words change, vertices in a row asked about at once, the renderer's page scans skipped while nothing changed,
+  list words read without asking twice, the backend's dynamic state set only where it differs, fills a row at a time,
+  the GE time's triangle areas cut only where they cross.
+- **RP6, means of two rounds, each runner first in one** (fps, Turnip accurate / fast, Qualcomm's accurate / fast):
+  God of War's battle at 1x 16.8 / 17.0 / 15.8 / 15.8 -> 22.1 / 22.4 / 20.5 / 20.6 (+30-32%, the emulation thread
+  59-63 -> 44-48 ms a frame), its menu 73.6 / 76.4 / 66.4 / 67.1 -> 101.7 / 104.8 / 88.2 / 90.6 (+33-38%); at 4x the
+  battle 8.46 / 14.3 / 10.9 / 10.0 -> 9.93 / 18.8 / 13.9 / 12.5 (+17-32%; the GPU's moves 17.3 -> 3.6 ms a frame on
+  Turnip, 22.6 -> 6.3 on Qualcomm's), the menu 17.9 / 23.0 / 20.5 / 19.7 -> 21.2 / 28.9 / 26.1 / 24.5 (+18-27%).
+  MC3's menu at 1x 103.1 / 108.4 / 93.5 / 97.8 -> 113.0 / 119.3 / 107.7 / 112.9 (+10-15%, past part 63's 105 on
+  Qualcomm's), at 4x +26-35%. The other bench scenes at 1x +5-7% (Killzone's menu and the 2D two about the same).
+  The software renderer: God of War's battle 4.29 -> 4.32 at 1 thread, 8.41 -> 8.73 at 7, the bench scenes within 2%;
+  logic operations 2.4-3.3 times as fast.
+- **Checks**: tests/psp 431/0 (sanitized; three new groups and cases in the moves, scaled and stacked texture groups,
+  which broken versions fail), tests/allegrex 58/0, tests/psp/ares 307/0; the GPU tests on the RP6 31/0 on both
+  drivers (one skips itself on Qualcomm's); GCC 11 and 13 as the base (four.cpp's maybe-uninitialized warnings at
+  -O1-O3, the base's the same). An independent review found no correctness bug (two test gaps filled, a comment
+  corrected); a delta review no bug (its two points taken).
+- **Left**: the draws at 4x (God of War's scene about five times a vblank, 16 times the pixels; 93 ms a frame on
+  Turnip's accurate mode); `transform()`'s arithmetic (exactly, lane by lane, not attempted); the GE's real speed; two
+  older GPU renderer differences found writing the tests (a 5650 target's stencil test, clear mode's full 8-bit
+  stencil on 5551/4444).
+- Scratch: `~/phobos-work/scratch/speed7`; nothing left on the RP6.
+
+## Android: the PlayStation Portable marked Experimental — 2026-10-11
+
+Branch `cursor/psp-experimental-2b67`, on top of `cursor/psp-pgd-states-2b67` (PGD in states, on #202's README). Once the PSP is on master,
+the owner releases it as an Experimental core in the nightly builds, before a tagged v2.0; this is how the app and the
+nightly's notes say so. Display only: "PlayStation Portable" stays the system's name wherever it's a key (the core,
+LaunchSystems, folders such as `firmware/PlayStation Portable/font`, saves, states, settings, PerformanceHud,
+TouchLayouts).
+- **What**: `ui/ExperimentalSystems.kt` holds `experimentalSystems` (the PSP alone) and `ExperimentalBadge`, a small
+  pill reading "Experimental" in the style's pill shape and the theme's tertiary container colors (AA-checked by
+  ThemeContrastTest). It sits under the name on the Library's tiles (all five tile styles), after it in Platform
+  Visibility, and after the "PlayStation Portable" header in Settings → Emulation (`SettingsCategory` and
+  `SectionHeader` take a `badge`). The nightly release notes say the core is experimental, as the README does (#202:
+  the Systems table's experimental row and the PSP's own section).
+- **Checks**: `:app:compileModernReleaseKotlin`; `:app:testModernDebugUnitTest` 273/0 (the app's unit tests run for
+  the debug variants only), with `ExperimentalSystemsTest`: an experimental system must be named as the Library lists
+  it (it fails on "Playstation Portable"). The workflow's YAML parsed, its nightly step through `bash -n`. Not on the
+  RP6 (busy measuring), so the badge hasn't been seen on a screen yet.
+- **Left**: dropping the mark is taking the PSP out of `experimentalSystems`, the sentence out of the nightly's notes,
+  and README.md's experimental row and wording. Unmarked on purpose: the system's game list, the running game's card,
+  the firmware table's PSP fonts row, the touch layout list and a launch's system choice.
+
+## PSP states: open files keep their PGD decryption (layout 25) — 2026-10-11
+
+Branch `cursor/psp-pgd-states-2b67`, on top of #201's `cursor/psp-measure6-2b67` (`055029692`). Save states only; the
+PGD code (pgd.cpp, io.cpp's ioctls and sceNpDrm) is untouched.
+- **What**: each open file's PGD fields (e014f4a34's: whether it's set up, its version key, whether its descriptor is
+  decrypted, the data's key, size and block size, where the data starts) are saved and loaded. A state saved while a
+  game had a PGD file open used to load with that file reading its raw bytes. StateVersion 25; layouts 15 to 24 load
+  with no file's PGD decryption set up (each read as it is). Loading refuses a descriptor decrypted with nothing set
+  up, and a folder set up as PGD (neither ioctl nor sceNpDrmEdataSetupKey takes one); a descriptor closed
+  asynchronously keeps its file's fields (sceIoCloseAsync leaves them), and loads.
+- **Checks**: "state fields" changes each of the seven fields on a disc file and round-trips them, refuses the two
+  damaged states and loads the two real ones; "older layouts load" makes a layout-24 state, and takes the new bytes
+  out of its older states too. Versions with the fields left unsaved, the checks gone, the layout gate at 24, or the
+  kernel's default layout left at 24 fail them. tests/psp 428/0 (sanitized; the checks are in existing groups),
+  tests/allegrex 58/0, tests/psp/ares 307/0.
+
+## README brought up to date, with the pixel-art logo — 2026-10-11
+
+Branch `cursor/psp-readme-2b67`, at the owner's request before the PSP chain merges into `master`. Docs and the logo
+only; no code change.
+- **Logo**: `docs/images/phobos-logo.png`, built by `tools/logo/build_banner.py` from the launcher icon's
+  `moon-greenscreen.png`: the moon sampled once per art pixel (its grid is 10.2 image pixels, phase 5.3 and 8.6), and
+  "phobos" in Avenir Next Bold Italic rasterized onto the same grid in the old logo's purple (six bands, dark outline,
+  drop shadow), scaled 4x with nearest neighbour. The README shows it at 502 px wide, 2 screen pixels to the art pixel
+  (4 on a 2x display), so it stays crisp. The old logo (`ares/ares/resource/logo@2x.png`) is unchanged: ares's
+  resources compile it in.
+- **README**: a Download section (channels, the Modern and Legacy flavors, the desktop packages); the systems table
+  moved up, with the PlayStation Portable as an experimental row and in the known issues; new sections for the PSP
+  core (no firmware, the CPU, the three renderers, discs, sound, saves, compatibility, tests) and the desktop program;
+  the app's themes, shaders, Performance Monitor, touch controls, remapping, hotkeys and GPU Driver Manager; CI's
+  desktop and PSP test runs; the desktop build's presets; the components list. The existing technical sections are
+  kept as they were.
+
+## PSP measure: round 6 — the GE's time, lighting's cosine, the reciprocal's chords, patches — 2026-10-10
+
+Branch `cursor/psp-measure6-2b67`, on top of #200's `cursor/psp-gow-vk-2b67` (`c86461ec6`). docs/psp-core.md, part 66,
+says what each test is for and what result would settle what. Only `tools/psp-measure`, `tests/psp/measure.cpp`, the
+rebuilt `tests/psp/programs/pspmeasure.elf` and docs; no core change. Clean room: no PPSSPP code read for it, JPCSP's
+not read.
+- **What**: a new first menu line, "Round 6: the GE's time, lighting, reciprocal, curves (about 7 MB)", 36 tests into
+  `results/ge` (`manifest6.txt`): seven timing tests (lists of known work queued alone, every run timed to its finish
+  callback, at the clocks found and at 333/166 MHz: commands, primitives of every kind, fills in every state and texture
+  format, primitive sizes, block transfers, the texture cache, a SIGNAL); lighting's products in full at four normals
+  (round 5's `light-share-*` fit no one share a normal: 15 of 16 normals' intervals are empty), 8 sweeps of 1024 normals
+  with 64 products each, lights added up; the reciprocal's chords read off texels at pixels (13- and 14-bit qs, the
+  latter through the texture matrix, also measuring that path and q of 0 and below) and at vertices (constant-w cells at
+  every chord, and as sprites), and how far the GE keeps a texture coordinate's low bits; PATCH_CULL_ENABLE in 256
+  combinations and at the scissor's edges and the planes, and timed off-screen; divisions past 64 along v, one to a
+  test, last (four expected to stall, each reset after 5 s); the driver's statuses while a list draws and with its
+  FINISH's interrupt held off.
+- **Checks**: the measure test drives round 6 in the core: every file, the timing records whole and every run finished,
+  and self-checks that the products and chord pictures read what they're meant to in the core's own arithmetic; with a
+  PSP's results it prints round 6 against them. tests/psp 425/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0.
+  pspmeasure.elf rebuilt in the pinned image, byte for byte reproducible. An independent read-only review found the
+  timed primitives "outside the scissor rectangle" drawn on screen (the timed lists' scissor spans 512 columns),
+  `recip-pixels` missing 16 qs and `ge-statuses` able to run out of looks, with smaller points: all fixed; a delta
+  review found the fixes right.
+- **Owner**: `.local/psp-round6/` (EBOOT.PBP SHA-256 `bb59b7ab11e913693f20d851048af62b19a8ffdce2471d082c418ea2cce6ba0b`,
+  HOW-TO.md); not on the RP6 yet (it wasn't attached in this session: `~/phobos-work/scratch/measure6/push-rp6.sh`
+  pushes it to `/sdcard/Download/PSPMEASURE-ROUND6` and checks the SHA-256 there, under the RP6 lock): run round 6
+  (about two minutes), bring `results/ge` back to the RP6's `Download/PSPMEASURE/results`.
+- **Left**: fitting it all once the PSP's files are back (part 64's time model, lighting's multiply and cosine, every
+  chord, what PATCH_CULL_ENABLE does, v past 64). In the core `recip-vertex-*` read 0 (it clamps texture coordinates at
+  65536 texels; `texel-range` will show the PSP's range).
+- Scratch: `~/phobos-work/scratch/measure6` (build.sh, the pinned image's build; quick.sh, the measure group alone;
+  times.py and topng.py read the files; share*.py, round 5's light-share taken again).
+
+## PSP GPU: God of War in Vulkan without waiting for the GPU; part 63's open risks closed — 2026-10-10
+
+Branch `cursor/psp-gow-vk-2b67`, on top of #199's `cursor/psp-gow-sw-2b67` (#198 under it; measured against #198's
+`e9c98f3b9`). docs/psp-core.md, part 65, has the evidence; docs/psp-gpu-renderers.md's "Frame buffers side by side",
+"Owned until needed", "Two targets over the same pages", "Block transfers" and "Render to texture" the design.
+Software untouched (its pictures byte for byte, every frame of the bench scenes and God of War's the same); every
+Vulkan frame of the seven bench scenes, Peace Walker's title and God of War's two scenes byte for byte as before, so
+the accuracy is the base's. Clean room: no PPSSPP code copied or translated, JPCSP's not read. Save states unchanged
+(23). - **Changes** (each its own commit, with its tests): a PRIM the GPU refuses is drawn at once, not left in the
+drawing threads' batch (part 63's risk was real: the new test failed three ways on the base); God of War's frame
+buffers side by side are parts of one target, its copies kept for their place and held to what each PRIM takes, pixels
+another target drew moved on the GPU as a finish and a fill would leave them, bytes block transfers write over the
+GPU's pixels memory's at once, and `drawnOver()` asking each page's owner; the CPU's stores over the GPU's pixels
+likewise memory's at once (LCS's list over its picture); a state refused for its fonts says which (Peace Walker's
+bench states: the RP6's fonts folder was gone); CI runs the GPU tests on Mesa's lavapipe, and builds again (GCC 13
+refused two tests' lambdas). - **RP6, means of two rounds, each runner first in one** (fps, Turnip accurate / fast,
+Qualcomm's accurate / fast): God of War's battle 3.97 / 4.51 / 3.71 / 3.67 -> 11.82 / 11.92 / 10.91 / 10.93, its menu
+2.08 / 2.30 / 2.02 / 2.05 -> 8.50 / 8.66 / 7.54 / 7.61, finishes 129 and 322 a frame -> 2 in 150 frames; at 4x (the
+GPU the bound there) the battle 1.66 / 1.70 / 1.46 / 1.44 -> 5.49 / 9.79 / 7.08 / 6.49 and the menu 0.76 / 1.00 / 0.75
+/ 0.81 -> 1.72 / 2.22 / 1.98 / 1.90. LCS's city and woods 5-12% faster (76 finishes in 300 frames -> 2), WipEout
+12-36% (600 -> 300); MC3's menu 6% slower on Qualcomm's driver, 1% on Turnip (two moves a frame where part 63 took a
+copy); the rest level. - **Checks**: tests/psp 421/0 (sanitized; eight new groups, which broken versions fail, but for
+a copy not held to what a tile takes), tests/allegrex 58/0, tests/psp/ares 307/0; CI (GCC 13, lavapipe) 421/0 on the
+last commit, its GPU groups 8.8 minutes; the GPU tests on the RP6 pass on Turnip and Qualcomm's driver (30 groups
+each); GCC 11 builds the GPU code and tests with -Werror at -O1-O3 (the GE too, but for twelve maybe-uninitialized
+warnings in four.cpp, the base's the same). An independent review found one correctness bug (a move left its target's
+dead and beside ranges over the pixels it moved in), and a delta review its neighbor (beside bytes a move grows the
+drawn rectangle over): both fixed, with a test group that fails without them; the rest of its points taken but one
+(frame buffers shown from inside a target aren't shown from the GPU: left). - **Left**: God of War now bound by the
+emulation thread at 1x (83-132 ms a frame) and by the GPU at 4x in three of the four configurations (each move a
+render pass of ten draws); MC3's menu's two moves a frame; WipEout's one finish a frame (the CPU reads the bloom's
+pixels); Killzone's menu at 4x; one rectangle of changes a target; dead and beside ranges 16 a target; GCC 11's
+maybe-uninitialized warnings in `four.cpp` (the base's too). Scratch: `~/phobos-work/scratch/gowvk`; on the RP6 only
+the fonts folder beside the harness is left, which Peace Walker's scenes need.
+
+## PSP GE: God of War in the software renderer — the GE's time, its bloom batched, its stencil in fours — 2026-10-10
+
+Branch `cursor/psp-gow-sw-2b67`, on top of #198's `cursor/psp-vk-speed6-2b67` (`e9c98f3b9`). docs/psp-core.md, part 64,
+has the evidence. Clean room: pspautotests' recordings and Sony's published figures for the GE; nothing of PPSSPP's or
+JPCSP's read.
+- **Why the menu drew 28 million fours**: God of War's loop never waits for the vertical blank; it waits only in
+  sceGeListSync for the last frame's list, flips at once and queues the next whole frame. Our GE took no time, so the
+  menu drew its scene 27 times a vblank and the battle 8 (the game times itself by the clock: its speed was right).
+- **Changes** (each its own commit, with tests): a list is done for the program only once a PSP's GE would have drawn
+  it (its pixels at four a clock, or its primitives at 166/35 clocks each, at the bus's clock: Sony's peaks, so a
+  lower bound) and its FINISH comes as an interrupt (not while interrupts are held off, nor ahead of a GE callback),
+  as pspautotests' gpu/signals and gpu/ge/intrsuspend recorded; save states version 24, layouts 15-23 loading.
+  drawsOver() compares a texture's rows with the pixel rows, so God of War's bloom (levels side by side in one buffer)
+  is batched instead of drained; jobs with a deferred texture (in a batch), and with the stencil test, are drawn four
+  at a time. Pictures unchanged: the measure harness's 136 pictures byte for byte, every bench frame of commits 2-4
+  the same.
+- **Review**: an independent read-only review found two crashes (sceGeBreak(0) leaving a FINISH waiting for no list; a
+  deferred texture drawn at once four at a time with no copy) and a PAUSE's moved stall address lost; each fixed in
+  its commit with a test, with its smaller points (a line owed only its pixels inside the scissor, a list GU ends
+  reading as drawing while its FINISH waits, comments). A second review read the fixes.
+- **RP6** (fps, pinned as the app pins it; before → after): God of War's battle at 7 threads 4.67 → 8.99, its menu 1.73
+  → 22.2; at 1 thread 2.20 → 4.44 and 0.68 → 8.80. The final build: the same frames and end states as commit 4, the
+  same speed beside it in a later (slower) session.
+- **Checks**: tests/psp 417/0 (sanitized; four new groups), tests/allegrex 58/0, tests/psp/ares 307/0; each commit
+  builds and passes its groups; 47 broken versions each fail a test; the GE driver programs 9 of 22 matching (7
+  before); a state saved with a FINISH waiting carries on exactly. Library (all 266 beside the base's runner, then the
+  final runner beside that): Chains of Olympus no longer times out (its difficulty menu at 3600; 11.1 fps with all of
+  it); games show some frame a step or a few frames apart (the runner itself isn't the same from run to run), none
+  less than before.
+- **Left**: the GE's real speed (a measuring round for the owner's PSP would let the model be the PSP's rather than a
+  lower bound); God of War's battle is now its pixels and the emulation thread's setup; logic operations a pixel at a
+  time. Scratch: `~/phobos-work/scratch/gow-sw`; nothing of it left on the RP6.
+
+## PSP GPU: Vulkan faster — copies of what changed, a texture from two frame buffers, texels kept — 2026-10-10
+
+Branch `cursor/psp-vk-speed6-2b67`, on top of `3de4a0514` (`cursor/psp-ge-speed5-2b67`, #196 in; PR #197's).
+docs/psp-core.md, part 63, has the evidence; docs/psp-gpu-renderers.md's "Owned until needed", "Render to texture" and
+"The texture cache" the design. Software untouched (its pictures byte for byte, every frame of the bench scenes the
+same); every Vulkan frame of the seven bench scenes byte for byte as before, so the accuracy is the base's. Clean
+room: nothing of PPSSPP's read for it, nor JPCSP's. Save states unchanged (23).
+- **Changes** (each its own commit, with its tests): a render-to-texture copy taken again copies only the part of the
+  target changed since (Killzone's menu blurs a strip right of its picture 1,100 times a frame, each a copy of the
+  whole 512x512 picture); a texture running into the frame buffer below is copied from both targets (MC3's menu's
+  texture reached one row of the next frame buffer: a finish every frame); a new texture's texels go from the GE's
+  copy to the GPU without a copy of their own; a finish puts back only the pages each target drew in (an older bug
+  the review found: the CPU's bytes between two PRIMs far apart were overwritten).
+- **RP6, means of two rounds, each runner first in one** (fps, Turnip accurate / fast, Qualcomm's accurate / fast):
+  Killzone's menu 30.2 / 38.6 / 29.6 / 29.5 -> 48.6 / 73.1 / 42.7 / 42.6, at 4x 4.4 / 4.9 / 4.5 / 4.5 -> 12.9 / 17.0 /
+  14.0 / 14.0; MC3's menu 78.6 / 80.9 / 76.0 / 75.2 -> 110.7 / 115.0 / 105.0 / 108.7, at 4x 40.6 / 50.1 / 42.4 / 39.0
+  -> 57.1 / 78.9 / 71.2 / 63.6; MC3's race, LCS's city and woods level (-0.4% to +1.3%), WipEout 3% faster with the
+  last commit; Lumines' 2D within its noise; God of War unchanged (3.5-4.4).
+- **Checks**: tests/psp 413/0 (sanitized; five new groups, which fifteen broken versions each fail), tests/allegrex
+  58/0, tests/psp/ares 307/0; the GPU tests on the RP6 pass on Turnip and Qualcomm's driver (22 groups each); GCC 11
+  builds the GPU code and tests with -Werror at -O1-O3. An independent review found no correctness bug in the first
+  three commits (its test gaps filled, its wording taken; the older bug it reproduced is the last commit), and a
+  second review of everything since found none either.
+- **Left**: God of War in Vulkan (130-320 finishes a frame from small frame buffers sharing pages and the same memory
+  as 5650 and 8888, 2,400 copies and 100 textures a frame); WipEout's two finishes a frame (a depth read, a blur
+  spilling into the next buffer); LCS's every fourth frame (a list written over a picture); Killzone's menu at 4x
+  (still 1,100 passes a frame); one rectangle of changes a target; no GPU test in CI; the drawing threads' settle
+  giving the GPU's busy pages back to the CPU (older, the review's, untested); Peace Walker's states don't load on this
+  stack. Scratch: `~/phobos-work/scratch/vkspeed6`; nothing of it left on the RP6.
+
+## PSP GE: the software renderer faster — copies wait only for what they touch, bands listed, runs — 2026-10-10
+
+Branch `cursor/psp-ge-speed5-2b67`, on top of #196's `cursor/psp-hle-games14-2b67` (#195 under it). docs/psp-core.md, part 61, has the
+evidence. Nothing drawn changed: every measured picture, and every bench scene's frames and end state at 1 and 7
+threads, byte for byte as before. Clean room: nothing of PPSSPP's or JPCSP's read. Save states unchanged (22).
+- **Changes** (each its own commit): a triangle's fours in runs of three passes (depth tests, then the survivors'
+  texel axes side by side, then their pixels), the chain to the texels no longer holding up each four; each band of
+  a batch keeps the list of its jobs, and bands are 4 rows, not 8 (a slow core holds up a wait less); a block
+  transfer waits only for the batches drawing over, or decoding a texture from, what it reads or writes (God of War
+  streams its textures into VRAM with 1,750-2,250 copies a frame, each of which drew everything waiting).
+- **RP6, the emulation thread pinned as the app pins it, medians of three** (fps, 7 threads; 1 thread): MC3 race 49.6
+  → 49.2; 21.8 → 22.9 — MC3 menu 63.7 → 65.0; 27.0 → 28.6 — LCS city 75.5 → 76.7; 35.1 → 37.1 — woods 74.3 → 78.1;
+  35.1 → 37.1 — Lumines 192.5 → 192.5; 98.1 → 103.2 — God of War's battle 3.67 → 4.42; 2.14 → 2.19 — its menu 1.50
+  → 1.65; 0.63 → 0.68. Unpinned at 7 threads LCS gains 18-21%. At 1 thread more than half of part 60's cost is back.
+- **Checks**: tests/psp 404/0 (sanitized; new "ge transfers among batches", which seven broken versions of the rule
+  each fail), tests/allegrex 58/0, tests/psp/ares 307/0; GCC 11 builds the GE with -Werror and passes every draw3d
+  group. An independent review found no correctness problem; its points (a test of a copy not waiting, numbers, the
+  Vulkan wording) were taken.
+- **Left**: God of War's 32 primitives a frame drawing over their own texture, each a drain; its menu's 28 million
+  fours a frame (maybe drawn more than once a frame, the GE taking no time); MC3's race at 7 threads is the emulation
+  thread's own work. Scratch: `~/phobos-work/scratch/speed5` (God of War's two scenes, the RP6's scripts rp6-run5.sh
+  and rp6-run6.sh, the logging patches); nothing of it left on the RP6.
+
+## PSP core: Sony's plain modules, sceIoGetFdList, GETSIZE's NO_DATA, a restart with all of RAM — 2026-10-10
+
+Branch `cursor/psp-hle-games14-2b67`, on top of #195's `cursor/psp-hle-games13-2b67`. docs/psp-core.md, part 62, has the
+evidence; docs/psp-compatibility.md's summary and changed rows are updated. Clean room: uOFW and PPSSPP's savedata
+code read only as descriptions of the PSP; JPCSP not read.
+- **Fixes** (each its own commit, with tests): a plain module of Sony's whose functions the kernel has none of runs as
+  the game's own (scesupPreAcc was Sony's LIBSUPPREACC.PRX, carried by Persona 3 Portable and both Dissidias);
+  sceIoGetFdList as uOFW describes it, descriptors in the order opened (Crush); the savedata size mode answers NO_DATA
+  for a save not there, as Def Jam's code expects (its first save works; Hot Shots Golf 2 saves instead of calling its
+  save corrupted); a program asking, before its first frame, for more than the whole 24 MiB partition is started again
+  with all of RAM (Melodie, chosen); the disc's folders are read once (Ghost of Sparta's PGD retry loop no longer
+  times out); the runner's WAV header is the standard 44 bytes.
+- **Numbers** (against part 59 on the merged stack): menu or gameplay 187 -> 188, movie 71, loading 0, black or hang 6
+  (Melodie out, Ghost of Sparta in, black on PGD), timed out 2 -> 1 (Chains of Olympus: the GE's, 68% of the
+  emulation thread in GE::flush at block transfers). Ultimate Ghosts 'n Goblins and Me & My Katamari take a fresh
+  stick's way now (its "no game data" prompt; its opening). No function missing in any game.
+- **Checks**: tests/psp 407/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0, runner-test.sh passes; each commit
+  builds and passes its groups alone. Save states version 23 (each open file's place in the opening order); layouts 15
+  to 22 load, files in number order; the base runner's version-22 states carry on, Lumines', Patapon 2's and GTA's byte
+  for byte, Crush's one frame apart (it calls sceIoGetFdList, refused on the base). An independent read-only review
+  found two bugs (the ares suite's hand-made open file without its place; a negative size compared unsigned in
+  sceIoGetFdList) and a test gap (the restart's once-only guard); all its findings are fixed.
+- **Left / for others**: PGD (six games); Chains of Olympus's speed (the GE, part 61); sceIoChstat (imported by
+  LIBSUPPREACC.PRX, never called in the runs); the restart and sceIoGetFdList's standard stream numbers are chosen.
+- Scratch: `~/phobos-work/scratch/hle14` (run.sh, lib.sh, survey.sh; sync-dbg.sh builds the debug tree
+  `~/phobos-work/wt/dbg-hle14` with apply-hooks.py's traces: PSP_TRACE, PSP_SAVEDATA, PSP_SFO, PSP_PROGRAM,
+  PSP_SAVE_MODULES, PSP_BREAK/STEP/WATCH; tools/prxinfo.py and prxdis.py read a plain PRX; lib-new is this branch's
+  library run, cmp-new.tsv its comparison with hle13/lib-merged).
+
+## PSP core: the black games with nothing missing — descriptors, the drive, async requests, SAS, the movie ring — 2026-10-09
+
+Branch `cursor/psp-hle-games13-2b67`, on top of #194's `cursor/psp-hle-games12-2b67` (merged in; its PR's base).
+docs/psp-core.md, part 59, has the evidence; docs/psp-compatibility.md's changed rows are updated. Clean room: no
+PPSSPP or JPCSP source read. The GE's agent worked the same list from the GE's side (#192); nothing here touches
+`ares/psp/ge/`.
+- **Fixes** (each its own commit, with tests): file descriptors handed out lowest free first, 3 to 63 (Crush: its
+  per-descriptor table; Jak and Daxter: The Lost Frontier); sceUmdActivate waits a mount's sector read (Def Jam: Fight
+  for NY's file thread ran too late); an asynchronous read's bytes land as it's done (Dead or Alive Paradise's marker);
+  sceIoDread's short names laid out by the program's SDK, as io/shortname recorded (Need for Speed: ProStreet's stack,
+  and Metal Gear Solid: Portable Ops, Ops Plus and MX vs. ATV: On the Edge, stuck loading); SysClock2USec with no seconds
+  pointer gives the whole count (Tekken: Dark Resurrection's frame limiter); a file holds one asynchronous result at a
+  time, a request over one not taken refused (Valhalla Knights' seek made again); __sceSasCore waits 300 microseconds
+  for its grain (PaRappa the Rapper's top-priority sound thread); sceMpegRingbufferAvailableSize counts in the ring its
+  library reads, as ringbuffer/avail's crash and refusal show (Ridge Racer's movie thread holds a copy of its ring).
+- **Re-judged**: MACH (menu: its 3600 falls in a fade) and Street Supremacy (movie: a loading screen inside its intro).
+- **Numbers** (against part 55's): menu or gameplay 178 -> 186, movie 63 -> 69 (Need for Speed: Carbon - Own the City
+  among them, from its notice to its title and, after the run's Cross, its intro), loading 4 -> 0, black or hang 19 ->
+  9. The whole library run on both runners: every other game the same scene, or a few frames apart; two logo movies now
+  play through. None worse.
+- **On the stack** (merged onto #194, parts 57, 58 and 60 under it): the whole library again, the same scenes as this
+  branch's own run but #194's three rows (Need for Speed: Most Wanted 5-1-0, both Monster Hunter Portable 3rds) and
+  part 60's few pixels in 3D; none worse than on either branch. Menu or gameplay 187, movie 71, loading 0, black or
+  hang 6, timed out 2.
+- **Checks**: tests/psp 383/0 (sanitized) on the branch, 403/0 on the stack; tests/allegrex 58/0; tests/psp/ares 307/0;
+  two independent reviews, their findings fixed (the first fix for Valhalla Knights, seeks done at once, was undone
+  after the library run found Patapon 2 and 3 black with it). Save states version 22, after #194's 21 (files numbered
+  afresh, a pending read's bytes); layouts 15 to 21 load ("older layouts load" makes a 21 and a 20), and version 20
+  states from the base runner carry on (Lumines, Patapon 2, GTA: Liberty City Stories). The branch's own 21 from
+  before the merge is neither a 22 nor #194's 21: only test runs made such states.
+- **Left / for others**: God of War: Chains of Olympus is slow in the GE (TRANSFER START flushes: the GE's part); Ghost
+  of Sparta retries a PGD file (the PGD agent's); Def Jam's first save (WRITEDATASECURE into no save: no recording);
+  Crush's sceIoGetFdList (the libraries'); the runner's WAV tags carry a NUL each (the runner's); the 300 µs grain and
+  the mount's 1.6 ms are chosen, not measured (pspautotests' new audio/timing probes have no recording yet).
+- Scratch: `~/phobos-work/scratch/hle13` (run.sh and lib.sh run the report's way; compare.py and pairs.py compare two
+  library runs; statecheck.sh carries a base runner's state on in both runners; quick-tests.sh builds chosen test
+  groups; build-commit.py split the commits; mipsdis.py disassembles a memory dump; the debug tree
+  `~/phobos-work/wt/dbg-hle13` traces calls by frame).
+
+## PSP core: sceJpeg, scePauth, the PS3's memory and the last missing functions — 2026-10-09
+
+Branch `cursor/psp-hle-games12-2b67`, on top of #189's `cursor/psp-hle-games11-2b67` (its PR targets that branch).
+docs/psp-core.md, part 58, has the evidence; docs/psp-compatibility.md's changed rows and tables are updated. Clean
+room: no PPSSPP or JPCSP source read.
+- **Added** (each its own commit, with tests): the sceJpeg library (a baseline decoder of our own from T.81; every
+  function as pspautotests' jpeg tests recorded, six of the eleven exactly, the conversions' sums fitted to their 40
+  colours, the Media Engine's 8-byte transfers and its waits); sceMpegAvcConvertToYuv420; scePauth_98B83B5D (type 5 with
+  the game's key as a second key: the one way the digest checks out); scePowerCheckWlanCoexistenceClock (uOFW's docs:
+  1, a PSP-2000); a program bigger than the user partition given all of RAM (Monster Hunter Portable 3rd HD); sceMt19937
+  with the kernel's MT contexts as hash/mt19937ctx recorded (older states' contexts carried on); the sceRtcTickAdd
+  family as rtc/arithmetic recorded (and sceRtcGetTick's microseconds past a second, and its years past 9999 refused, as
+  rtc/convert recorded); sceHprm's callbacks (as scePower's, the shape Soulcalibur calls them in); the ATRAC low level
+  (followed through Corpse Party's CRI library); sceP3da's mix (Sol Trigger).
+- **Games**: both Monster Hunter Portable 3rds black to their intro movies, titles and game menus (and, merged with part 57's
+  GE fix for a RET with no CALL, the PSP version's whole character creation screen); Corpse Party and Sol Trigger have their
+  music; Genso Suikoden, Soulcalibur, Tekken 6, Final Fantasy Type-0, Kingdom Hearts BBS and Dragon Ball Z miss nothing.
+  The report's missing functions are down to scesupPreAcc (3 games, none held by it). The base commit's runner and this
+  branch's on 35 games: every other frame the same, or moved by the runner's timing under load.
+- **Checks**: tests/psp 392/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0 (merged with #193: 396/0, 58/0,
+  307/0); twenty-one deliberately broken
+  versions each caught; pspautotests' rtc/arithmetic, hash/mt19937ctx and six jpeg programs print what the PSP printed.
+  Independent read-only review: fourteen findings, each fixed or answered in part 58 (older MT contexts mid-round, a
+  picture's data read only as far as used, the IDCT held to 0-255 before rounding, the Media Engine's misaligned writes
+  done at once, a state's JPEG width checked, years past 9999, test and doc claims, sceHprm's sources), the fixes then
+  reviewed again. Save states version 21 (layout 21: sceJpeg, sceHprm's callbacks, ATRAC low-level IDs); 15 to 20 load.
+- **Left**: scesupPreAcc; P3DA's placing (unknown); whether
+  sceMpegAvcConvertToYuv420 widens the movie's sample range (unrecorded); Melodie's 40 MiB request (a PSP-2000 refuses
+  it too); PGD; the runner's WAV tags carry a stray NUL (`tools/psp-runner`).
+- Scratch: `~/phobos-work/scratch/hle12` (sync-dbg.sh and apply-hooks.py for a traced runner; at/run.sh runs a
+  pspautotests program against its recording; quick-tests.sh builds chosen test groups, scratch ones in qtests/;
+  mutate.py and mutate2.sh the broken versions; compare.sh/compare.py the two runners' runs; jpegcmp/ the libjpeg-turbo
+  check; pauth/ the digest search; cmp1/ and cmp2/ the comparison runs; build-commit.py the commits' split).
+
+## PSP GE: perspective texels by the GE's reciprocal; patch divisions — 2026-10-09
+
+Branch `cursor/psp-ge-fits3-2b67`, on top of #192's `cursor/psp-ge-lists-2b67` (#191 under it). docs/psp-core.md, part
+60. 3D triangles divide by a 128-chord reciprocal and step s, t and q as colors: persp-wall 2662→23, persp-divide
+3172→211, persp-floor 6026→351, persp-w3 33040→18944, with the older wall and floor pictures; no division at a pixel.
+It costs the software renderer on the RP6 3-7% in 3D scenes with 7 drawing threads and 8-10% with one (part 60's
+table); a 2D scene is 6% faster. Round 4 again (the owner's `psp-round5b`): #191's reset freed the PSP's GE
+every time; PATCH_DIVISION's counts are 7 bits, and past 64 the GE hangs, so the core draws nothing of such a surface.
+Lighting, sprites, lines and the near-plane split are unchanged; no measured picture got worse.
+
+## PSP core: the GE's RET with no CALL, and what the GE driver's callers see — 2026-10-09
+
+Branch `cursor/psp-ge-lists-2b67`, on top of #189's `cursor/psp-hle-games11-2b67`. docs/psp-core.md, part 57, has the
+evidence; docs/psp-compatibility.md's changed rows are updated. Clean room: no PPSSPP or JPCSP source read.
+- **Fixes** (each its own commit, with tests): the GE passes over a RET with no CALL to return from (Need for Speed:
+  Most Wanted runs its CALLable frame buffer settings in place; it waited for good in sceGeDrawSync, black, and now
+  reaches its title on Software, Vulkan and Vulkan (fast)); from pspautotests' gpu/ge and gpu/signals recordings, the
+  driver's answers: sceGeDrawSync(1) no longer counts a list whose finish callback runs, "stalled" is the GE at the
+  list's own stall address, sceGeSaveContext saves from a callback that stopped the GE; a list queued twice is BUSY
+  for SDK 2.00 and later; programs built with SDKs up to 2.00.10 (or saying none) get the older driver's ways
+  (callbacks told no list address, a suspending signal's list paused in its callback, sceGeContinue's -1); a list
+  can't be queued at the head ahead of a paused list the GE still has (it would start over: unmeasured, chosen).
+- **The report's other black games**: none stuck in the GE. What each showed from the GE's side went to the notes
+  shared with the kernel side (`~/phobos-work/scratch/compat-notes.md`), whose parallel branch found and fixed the
+  causes: Def Jam (sceUmdActivate taking no time), Crush and Jak and Daxter (descriptors never reused), DOA Paradise
+  (an async read's bytes landing early), Tekken DR (clock conversion with no seconds pointer), Valhalla Knights (async
+  seeks), PaRappa (__sceSasCore taking no time), ProStreet's crash (sceIoDread's d_private layout). Ridge Racer draws
+  a clear a frame after its stub movie (not found). MACH isn't stuck (frame 3600 is a transition; judged again: menu).
+- **Numbers** (against part 55): menu or gameplay 178 -> 180, black or hang 19 -> 17. pspautotests' 22 GE driver
+  programs: 3 -> 7 printing what the PSP printed; gpu/signals' differing lines 147 -> 23 of 622.
+- **Checks**: tests/psp 382/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0; each new test fails without its
+  fix. No new saved state (version 20 still). 30 working games (14 of older SDKs) on both runners, Software, and 4 on
+  Vulkan: the same pictures but for run-to-run variation each runner shows on its own. An independent read-only
+  review; its findings fixed (the NFS row, the head enqueue, claims worded as unmeasured or as kernel-side findings).
+- **Left**: the GE's time (statuses a callback sees while a list draws), the state buffer's PSP layout, sceGeGetStack,
+  a SIGNAL call's stack in use refused, a third CALL, transfers past VRAM's end; God of War: Chains of Olympus's speed
+  (every TRANSFER_START flushes all pending drawing: the kernel side's profile).
+- Scratch: `~/phobos-work/scratch/ge-lists` (survey/ the black games' runs, at/ the pspautotests runs before and
+  after, regress/ the base and branch runners' frames, ge-hooks.py and dbg-hooks-1.patch for a traced runner).
+
+## PSP measure: a GE stall no longer freezes the owner's PSP — 2026-10-09
+
+Branch `cursor/psp-measure-stall-2b67`, on top of #189's `cursor/psp-hle-games11-2b67`. Only `tools/psp-measure`,
+`tests/psp/measure.cpp`, the rebuilt `tests/psp/programs/pspmeasure.elf` and docs; no core change.
+- **Why**: in round 4 the owner's PSP froze at `curves-count` and `curves-count-128` (patches cut past 64 times),
+  most likely the GE never finishing while `finishList` waited in `sceGeDrawSync(0)` for good; each test cost two
+  power-offs.
+- **What**: the GE gets 5 s a list (`waitForGe`); a stall is written to `<test>.stalled`, the GE reset
+  (`sceGuBreak(GU_BREAK_CANCEL)`, then `sceGuTerm`/`sceGuInit`), the test saved as the GE left it, and the round goes
+  on. A test whose reset itself froze the PSP is given up on at the next start. Counts past 64 are a test each
+  (`curves-count-65`, `-100`, `-128`, `-200`, `-255`); the earlier program's leftovers for them are cleared once
+  (`curves-count.timed`). A new `stall-check` resets the GE on purpose the first time round 4 runs in a results
+  folder (docs/psp-core.md, part 48, "Round 4 again").
+- **Owner**: `.local/psp-round5b/` (EBOOT.PBP SHA-256
+  `2c5c3343cf1e1ecf56eb4deb4fdc4eb5d1dbf1312ae7896d0d90bdcbbbd0a173`, HOW-TO.md): round 4 again, restart, then
+  round 5; bring back `results/ge`. Whether the reset frees a GE stuck inside a patch is what that run will show.
+
+## PSP core: character conversion, thread-local storage, lent stacks; PGD holds five black games — 2026-10-09
+
+Branch `cursor/psp-hle-games11-2b67`, on top of #188's `cursor/psp-gpu-fast3-2b67` (#187, #185 and #184 under it). PR #189.
+docs/psp-core.md, part 55, has the evidence; docs/psp-compatibility.md's changed rows are updated. Clean room: no
+PPSSPP or JPCSP source read.
+- **Fixes** (each its own commit, with tests): sceCcc, the character conversions, as ccc/convertstring recorded (The
+  King of Fighters - Orochi Saga: black to its autosave notice); thread-local storage pools and
+  sceKernelTryLockLwMutex_600, as threads/tls and threads/lwmutex/try600 recorded (God Eater 2: black to its fan
+  translation's notice that its DLC file isn't on the stick); sceKernelExtendThreadStack (part 51's) with its review's
+  two findings fixed, module_stop's argument kept past a lent stack's end and the trampoline rewritten as states load
+  (Dragon Ball Z: Tenkaichi Tag Team: its autosave notice, then PGD).
+- **Re-judged**: Persona 3 Portable reaches its title; frame 3600 falls on its attract loop's loading screen.
+- **Numbers** (against the report): menu or gameplay 175 -> 178, loading 5 -> 4, black or hang 21 -> 19. The base
+  commit's runner and this branch's on 53 games: every other game's frames the same, or an animation step apart.
+- **Checks**: tests/psp 373/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0; two independent reviews, their
+  findings fixed. Save states version 20 (18 sceCcc, 19 TLS pools, 20 lent stacks); a version 17 state from the base
+  runner loads and carries on byte for byte (Lumines, Patapon 2).
+- **Left**: PGD decryption holds Black Wolves Saga, Dragon Ball Z, Shining Blade, Valkyria Chronicles III and Naruto
+  Shippuden: Ultimate Ninja Impact (AMCTRL's cipher has no allowed description, and its checks need keys not committed:
+  an owner's call). scePauth/sceJpeg (both Monster Hunter Portable 3rds; the HD one also needs 26.5 MiB of user memory).
+  Need for Speed: Most Wanted's GE RET with no CALL (the GE's part). Def Jam, Ridge Racer, Crush, Tekken DR and the
+  rest of the report's black list; ProStreet's crash; scePower 0xa85880d0, scesupPreAcc, sceMt19937.
+- Scratch: `~/phobos-work/scratch/hle11` (apply-hooks.py and sync-dbg.sh for a traced runner; at/run.sh runs a
+  pspautotests program against its recording; quick-tests.sh builds chosen test groups in seconds; build-commit.py split
+  the commits; evidence/ has both runners' frames; survey/ the traces).
+
+## PSP Vulkan pipelines kept between sessions — 2026-10-09
+
+Branch `cursor/psp-gpu-fast3-2b67`, on top of part 53's `cursor/psp-gpu-fast2-2b67`. docs/psp-core.md, part 54;
+docs/psp-gpu-renderers.md, the pipelines' paragraph and "Speed" (part 54). Software untouched; no picture changes.
+- **What:** System's option "Pipeline Cache" (the app's `psp_vulkan_pipeline_cache.bin` in its Vulkan cache folder,
+  beside the N64's; `psp-runner --pipeline-cache FILE`): the driver's pipeline cache read at the renderer's start and
+  written when pipelines were made (game end, every 600 frames, renderer let go), behind a header of our own (device,
+  driver version and cache UUID, pointer size, size, CRC-32) so damaged or foreign data never reaches the driver; a
+  cached renderer failing its check is made again without the file.
+- **RP6, second session against first** (driver's ms making pipelines; fps over 450 frames from a state): Turnip
+  fast, MC3 race 2,589 → 1.2 ms, 49.2 → 67.1; LCS city 1,074 → 0.6 ms, 85.5 → 103.6; Qualcomm fast, race 2,587 →
+  23 ms, 47.8 → 63.9. In the app, MC3's race start: 619/335/226 ms stalls → none over 30 ms.
+
+## PSP renderer "Vulkan (fast)": the GPU transforms and lights 3D — 2026-10-09
+
+Branch `cursor/psp-gpu-fast2-2b67`, on top of part 52's `cursor/psp-gpu-fast-2b67`. docs/psp-core.md, part 53, has
+the story and numbers; docs/psp-gpu-renderers.md "Vulkan (fast)" the design, "Accuracy" and "Speed" the tables.
+PPSSPP's hardware transform informed the design; none of its code is used (JPCSP's not read). Software stays the
+default and exact; Vulkan (accurate) is the path as it was, its pictures unchanged.
+- **The choice:** Settings' "PSP Renderer" is "Software (exact)", "Vulkan (accurate)" or "Vulkan (fast)", each
+  described; the desktop's menu likewise; the core's "Renderer" takes "Vulkan (fast)"; `psp-runner --renderer
+  Vulkan-fast`. The saved 1 is accurate (as Vulkan was), 2 fast. Fallbacks to Software as before, said once.
+- **Fast mode** (`ares/psp/ge/gpu/shaders/transform.vert`, `gpu.cpp`'s `meshes()`/`mesh()`, `draw.cpp`'s
+  `GE::meshTriangles()`): 3D PRIMs of 16 vertices or more go to the GPU untransformed; the shader skins,
+  transforms, lights, fogs and maps them in the GE's arithmetic; the GE still decides which triangles are drawn and
+  cuts the near plane's itself; each PRIM's settings a storage-buffer block, so PRIMs drawn alike are one draw; the
+  GPU's own blending. Both modes: eight slots, two frames in flight.
+- **RP6, medians of three, fps after warm-up** (Turnip accurate / fast; Qualcomm accurate / fast; Software 7
+  threads): MC3 race 62.3 / 67.1; 59.1 / 63.2; 53.8 — LCS city 92.3 / 105.1; 87.4 / 96.5; 70.1 — woods 93.8 / 126.5;
+  110.8 / 99.5; 71.3 — Peace Walker play 121.5 / 125.0; 114.8 / 113.7; 103.1 — WipEout 39.6 / 79.7; 75.5 / 76.5;
+  17.1. Whole runs from a state include the first pipelines (fast makes more): part 54 keeps them on disk.
+- **Accuracy** (pixels identical to Software, accurate / fast): MC3 menu 97.0 / 88.0%, race 95.0 / 71.5%, LCS city
+  95.4 / 57.8%, Peace Walker play 99.2 / 55.0% (its 16-bit blends a different dither); mostly a level or two;
+  nothing missing or misplaced, in the harness or in the app (MC3, both GTAs, Burnout, WipEout's menus, Peace
+  Walker, MotorStorm, Ridge Racer 2, all at 60 but MC3's race at 51-53).
+- **Left:** a pipeline cache on disk (part 54); bones in a block of their own (Peace Walker's small skinned PRIMs to
+  the GPU); Qualcomm's driver's GPU time in fast mode; textures decoded on the GPU; block transfers on the GPU.
+
+## PSP Vulkan renderer faster: its own waste, found with a profile — 2026-10-09
+
+Branch `cursor/psp-gpu-fast-2b67`, on top of #184's `cursor/psp-vk-play-2b67`. docs/psp-core.md, part 52, has the
+profile and numbers; docs/psp-gpu-renderers.md the design and the speed table. Original code: nothing of PPSSPP's or
+JPCSP's used. Software stays the default and exact; Vulkan (accurate)'s pictures byte for byte as before.
+- **Fixes** (`ares/psp/ge/gpu/gpu.cpp`, `draw.cpp`, `texture.cpp`, `system.cpp`): memory told of the GPU's drawing
+  once a finish, not once a PRIM (2.7 ms a frame); 2D sprites' exact texture reach for render to texture (Midnight
+  Club 3's bloom: 300 finishes in 300 frames → 5); decoded textures kept when their page is written but their bytes
+  aren't (25 textures a frame decoded again → none; both renderers); lists submitted at their end only with 32
+  commands; "Late Frames" / `--late-frames` to time the GPU as the app presents.
+- **RP6, late frames, medians of three** (fps, Turnip / Qualcomm; Software 7 threads): MC3 race 52.6 / 46.9 (53.2),
+  menu 68.0 / 64.0 (69.2), LCS city 76.3 / 75.7 (71.8), woods 79.0 / 94.7 (70.9), Peace Walker play 105.8 / 93.3
+  (98.1), WipEout 36.2 / 60.9 (16.2). Before: race 34.5 / 33.1, LCS city 63.3 / 59.9, WipEout 18.9 / 21.0.
+- **Checks:** tests/psp 345/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0, GPU tests on the RP6 both
+  drivers; Software's frames and state identical in all seven scenes at 1 and 7 threads. Independent review: fixes
+  taken (release(), lost reports, source copies bounded, ...).
+- **Next:** Vulkan (fast), part 53 (the GPU's transform); block transfers on the GPU; a disk pipeline cache.
+- Scratch: `~/phobos-work/scratch/gpu-fast` (build.sh, speed.sh, rounds.sh, perf.sh, callers.py, texlog-patch.py,
+  warm-patch.py, m1-acc.sh, m1-hashes.sh, quick-tests.sh); RP6 `/data/local/tmp/gpu-fast`. Hold `~/phobos-work/rp6.lock`.
+
+## PSP Vulkan renderer: in play on the RP6, blending without rasterization order, the 8x line — 2026-10-09
+
+Branch `cursor/psp-vk-play-2b67`, on top of #186's `cursor/psp-hle-games10-2b67` (#183, #182 and #180 under it). PR #184. docs/psp-core.md, part
+49, has what was seen and measured; docs/psp-gpu-renderers.md the design and the accuracy and speed tables. Original
+code: nothing of PPSSPP's or JPCSP's used. Software stays the default; Native stays exact on Turnip.
+- **In the app** (Turnip, in order): Midnight Club 3, both GTAs, both Burnouts, WipEout, Peace Walker, MotorStorm and
+  Ace Combat played past their menus at Native, LCS at 4x and 10x too: pictures right, no crash; home and back and a
+  window resize while presenting kept going. Killzone not started (it saves to the owner's stick); Ridge Racer 2's
+  profile loop (kernel; #183 fixes it) left only its menus. Rotation untestable (the RP6 forces landscape).
+- **Fixes** (`ares/psp/ge/gpu/`, `ares/psp/system/system.cpp`): without rasterization order, 8888 blending is the
+  GPU's again (Midnight Club 3's race 1.3 → 38 fps on the M1, 13 → 32 on Qualcomm's driver), with the PSP's
+  whole-number source term (`TERM`); masks, logic, absolute difference, doubled alphas and 16-bit blends read;
+  Qualcomm's own driver reads nothing (stale reads in game-sized frame buffers), the start-up check has a game-sized
+  case and falls back to reading nothing; no barrier between draws in order; above 1x a 2D triangle's texels held
+  inside its corners (Ridge Racer 2's 8x line). Tests: `gpuBlendingApart`, `gpuSeams`, `gpuCheck`. tests/psp
+  342/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0; independent review passed with fixes, all taken.
+- **Accuracy, RP6** (Software vs Vulkan, pixels identical, Lumines / Peace Walker / MC3 menu / MC3 race / GTA city /
+  woods): system driver from adb 73.0 / 40.4 / 88.7 / 67.1 / 52.2 / 49.3%; Turnip 97.8 / 100.0 / 97.5 / 87.8 / 73.4 /
+  80.6%.
+- **Next**: Vulkan at Native is now behind seven software threads in the 3D games (emulation thread: recording and
+  read-back waits; WipEout's 209 submits a frame); Qualcomm's 16-bit blending; sprites' edges above 1x.
+- Scratch: `~/phobos-work/scratch/vk-play` (build.sh, m1-acc.sh, rp6-acc.sh, rp6-speed.sh, cmp.py, hal-patch.py,
+  blendlog-patch.py, edgelog-patch.py, gpu-tests/), `~/phobos-work/scratch/hw3/rp6` (the app's scripts); RP6
+  `/data/local/tmp/vk-play`. Hold `~/phobos-work/rp6.lock` and time only while the app isn't running.
+
+## PSP core: the library run again on the whole stack — three regressions fixed, the common blockers — 2026-10-09
+
+Branch `cursor/psp-hle-games10-2b67`, on top of #183's `cursor/psp-hle-games9-2b67` (its PR targets that branch).
+docs/psp-core.md, part 51, has the evidence for each fix; docs/psp-compatibility.md the new report. Clean room: no
+PPSSPP or JPCSP source read.
+- **The run**: the owner's 266 games, as the report's run went (Software, 7 GE threads, 3600 frames, Start at 120,
+  Cross at 1800, PNGs at 60/300/1200/3600), on #183's tip (run 1), on this branch part way (run 2) and at its end
+  (run 3); judged by eye, compared row for row with the report (`b27f084a5`), whose runs pressed nothing (the
+  presses were broken then), so every worse-looking game was run again without presses on both commits.
+- **Regressions**: Mega Man Maverick Hunter X and Juiced: Eliminator, black since scePsmf (#160): a ring fed past
+  the movie's end, a frame width of 0, and sound drained past its end. Patapon 2, deadlocked by this branch's own
+  memory stick fix: a semaphore's CB wait now runs its callbacks first when it has no timeout and nobody in line.
+- **Fixes** (each its own commit, with tests): the memory stick callback told the stick is in; PGD-less files after
+  a key; FPL alignment 0; module info of section-less static EBOOTs; the program's start thread as a module's;
+  sceUtilityLoadUsbModule; write-data needs a save; the three movie fixes; sceRtc's day of week, 64-bit time and
+  clock-set times; sceKernelStopUnloadSelfModule; sceIoAssign; sceImposeSetUMDPopup; sceUsb start/activate;
+  sceDisplayIsForeground; sceKernelReferSystemStatus; sceUtilitySetSystemParamInt; the savedata sizes mode without
+  names; a PRX program at 0x08804000; the semaphore CB order; rings over 4096 packets; sceMpegAvcDecodeDetail's
+  width and height; a game's own library's 44-byte ring; utility modules 0x107/0x108; a movie ended once its whole
+  stream is given.
+- **Numbers** (against the report, gameplay as menu, hang as black): menu 141 -> 175, movie 35 -> 63, loading
+  13 -> 5, black 73 -> 21, timed out 4 -> 2; 81 games further along; 14 stop at a missing function, where 77 did.
+  Of the report's 22 menu-to-black games, 18 show something; the 4 still black: Black Wolves Saga (PGD install data),
+  The King of Fighters - Orochi Saga (sceCcc), Melodie (40 MiB block), Ridge Racer (black after its movie, cause
+  not found).
+- **Checks**: tests/psp 362/0 (sanitized), tests/psp/ares 307/0, tests/allegrex 58/0; independent reviews for
+  every batch, their findings fixed. Save states still version 17.
+- **Left**: sceCcc (pspautotests' ccc/convertstring records it), TLS pools (God Eater 2), scePauth/sceJpeg (MHP3rd),
+  scesupPreAcc (Persona 3 Portable), PGD decryption (Black Wolves Saga), a dozen black screens with no missing
+  function (Ridge Racer and others, listed in the report), ProStreet's crash. sceKernelExtendThreadStack is written
+  and reviewed in the worktree `~/phobos-work/wt/games10-b9` (not in this branch): fix the review's two findings
+  first (module_stop's argument when a program unloads itself from a lent call; rewriting the trampoline when an
+  older state loads); Dragon Ball Z stays black with it.
+- **Vulkan** (MoltenVK, the 11 gameplay games to frame 2400): the same pictures as Software (differences are a frame
+  of animation apart), but slow in 3D scenes: Seen in Liberty City 3 fps against 83, Star Wars Battlefront II 27
+  against 344, The Sims 2 18 against 158, GTA Sindacco Chronicles under 3 against 72; Mega Man Powered Up faster.
+- Scratch: `~/phobos-work/scratch/games10` (batch.py, judge2.py/judge3.py, report3.py, run1/ run2/ run3/ with every
+  game's PNGs, analysis/ with the judgements, dbg/ with the traces, vk3/ with the Vulkan frames).
+
+## PSP core: Ridge Racer 2's driver profile — the keyboard's answer — 2026-10-08
+
+Branch `cursor/psp-hle-games9-2b67`, on top of #182's `cursor/psp-ge-fits2-2b67` (#180 under it). PR #183. docs/psp-core.md,
+part 50, has the trace, the game's code and the evidence. Clean room: no PPSSPP or JPCSP source read.
+- **The cause**: after "Please create your driver profile" and OK, the game opens the system keyboard (sceUtilityOsk*)
+  with its default name, "DAMACY", in the field. The kernel answered a field that wasn't empty UNCHANGED (0); Ridge
+  Racer 2 takes anything but CHANGED (2) as the player backing out, and went back to its title. No other utility or
+  I/O call was involved, and nothing was missing.
+- **The fix** (`ares/psp/kernel/utility.cpp`'s `keyboard()`): every field answered CHANGED, its text as before, as a
+  PSP is taken to say of a field the player confirms: a player keeping the game's own default name would otherwise
+  never get a profile. Killzone and Space Invaders Extreme also act only on CHANGED, Midnight Club 3 on anything but
+  CANCELLED; nothing recorded (pspsdk, pspautotests, the wiki) says more. Test: "utility keyboard". No new state:
+  version 17 still.
+- **Now**, in the runner: the name confirmed, the profile saved (`PSP/SAVEDATA/UCES00422000/DATA.BIN`) and found at
+  the next boot (CONTINUE), autosave on, Arcade, and a race, in Software and in Vulkan (MoltenVK) alike.
+- **Checks**: tests/psp 340/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0; an independent
+  review.
+- Scratch: `~/phobos-work/scratch/rr2` (race.script from boot to the race, evidence/ PNGs, trace.patch: the scratch
+  build's log of every utility call).
+
+## PSP GE: colors, fog and depth stepped as the PSP steps them; measurement round 5 — 2026-10-08
+
+Branch `cursor/psp-ge-fits2-2b67`, on top of #180 (`cursor/psp-cpu-speed4-2b67`, a4a63b13f). docs/psp-core.md,
+part 48, has the rule, the numbers and what's open. Clean room: the owner's measurements only, no PPSSPP or JPCSP
+source read.
+- **Fitted** (`ares/psp/ge/draw.cpp`'s `stepped()`, `raster.cpp`, `four.cpp`): a triangle's colors, shine, fog and
+  depth are stepped from its leftmost corner (topmost of two), a step a sixteenth across and down in 16384ths, rounded
+  down, through the reciprocal of twice its area kept to 16 bits. The near plane's cut draws its four corners as
+  0, 1, 3 and 1, 2, 3 of its walk (`transform.cpp`): the PSP's split in the one case measured (third corner past).
+  Now identical to the PSP: `ramp-colors` (was 1712 pixels apart), `-vertical` (1359), `-3d` (6992), `ramp-fog`
+  (240), `3d-floor-fog` (497), `3d-floor-depth` (1388), `3d-clip` (1512), `bezier-flat` (15368); curved patches
+  closer (`bezier-curved` 1494 to 1056, `bezier-divide-8` 938 to 721, `spline-edges-0` 787 to 782), the rest in the
+  GE's own patch vertices. Nothing worse. Vulkan can't mirror the steps (GPU interpolation); the cut is shared.
+- **Still open**: lighting's share isn't 256ths (finer: the GE's own cosine, off either way); perspective texels look
+  like a per-pixel divide of limited precision. Lines aren't changed (unmeasured; round 4 has them).
+- **Round 5** (`tools/psp-measure`, first menu line, 12 tests, about 3 MB): random triangles' colors and depths, the
+  cut with each corner past the plane each way round, lighting's share at 16 normals (192 products each),
+  perspective texels with a repeating texture to the texel in thousands. `pspmeasure.elf` rebuilt (same pspdev
+  image; README hash); `tests/psp/measure.cpp` drives the new line. #178's never-run probes replaced.
+- **For the owner**: `.local/psp-round5/` (EBOOT.PBP, its SHA-256, HOW-TO.md). Round 4 hasn't been run either.
+- **Tests**: "draw steps" (new), checks in "draw3d clipping" and "draw3d fog", hand-worked; seven broken versions
+  each fail them. tests/psp 341/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0. An independent read-only
+  review (two passes) found no bug in the core; its doc, probe and comment findings were fixed.
+- Scratch: `~/phobos-work/scratch/ge-fits2` (the dumping core in `inst/`, the fitters in `fit/` and `py/`).
+
+## PSP core: the emulation thread faster again — no drawing for its own textures, batches in a ring — 2026-10-08
+
+Branch `cursor/psp-cpu-speed4-2b67`, on top of #178's `cursor/psp-ge-fits-2b67` (72443bc4d). docs/psp-core.md, part 47,
+has the profile, the waits, every number and what's left. Clean room: no PPSSPP or JPCSP source read.
+- **The GE** (`ares/psp/ge/`), five commits: deferred (render-to-texture) decodes stay with their batch, their pages
+  busy for the CPU till decoded (part 46's could go stale, and ran `memory.watch()` off the emulation thread); a 2D
+  sprite's texture rows exactly as its pixels reach them; batches in a ring of eight, the CPU waiting only for the
+  drawing it touches; a primitive that can't change any pixel isn't drawn; 2D sprites drawing over their own texture
+  drawn from a copy where none reads a texel it has drawn (Midnight Club 3's bloom).
+- **Exact**: the six scenes, 300 frames at 1 and 7 GE threads, every frame's picture and VRAM, RAM and the whole state
+  identical to 72443bc4d after each commit; RP6 end states match unsettled. tests/psp 335/0 (sanitized; 340/0 with #179's
+  desktop tests, merged in after), tests/allegrex 58/0, tests/psp/ares 307/0. Three independent reviews; their findings fixed (one change to a result: a skipped
+  primitive's unmapped texel reads, which a state counts, now guarded).
+- **Faster** on the RP6 (medians, the app not running): at 7 GE threads Midnight Club 3's race 34.0 to 53.5 fps (the
+  emulation thread 26.0 to 18.5 ms a frame), its menu 33.3 to 71.9, GTA's city 55.1 to 78.8, its woods 53.3 to 71.8,
+  Peace Walker's title 213.7 to 224.5, Lumines 171.3 to 182.7; at 1 thread the menu 25.6 to 30.5, the race, city and
+  woods 1.5-2% faster, Peace Walker and Lumines the same.
+- **Next**: at 7 threads the emulation thread is now the CPU (compiled code; VFPU with prefixes interpreted) and the
+  GE's setup (project's divisions, lighting, vertex and job copies); at 1 thread the rasterizer, bound by exact
+  divisions.
+- Scratch: `~/phobos-work/scratch/cpu-speed` (build4.sh, build-android4.sh, rp6-run4.sh, rp6-measure4.sh, rp6-hold.sh,
+  ge-inst4-patch.py); RP6 `/data/local/tmp/cpu-bench4`. The RP6 is shared: hold `~/phobos-work/rp6.lock` (a live PID:
+  rp6-hold.sh in the background), and time only while the Phobos app isn't running.
+
+## PSP GE: fog amount fixed at each corner (measurement fits) — 2026-10-08
+
+Branch `cursor/psp-ge-fits-2b67`, on `cursor/psp-vfpu-fits-2b67` (#177; #175 and #172 under it). PR #178. Clean room: Phobos measurement data only
+(`tests/psp/measurements/ge-round3`, `docs/psp-core.md`); no PPSSPP. Does not touch VFPU / `ares/psp/cpu/` /
+`docs/psp-vfpu-measurements.md`.
+
+- **Fitted:** fog is converted to 0–255 at each vertex (`fogAmount`), then that amount is blended across the
+  triangle or line as a color channel (software path, SIMD fours, and the Vulkan attribute). Measured on
+  `ramp-fog` (18976 → 240 pixels a level apart) and `3d-floor-fog` (6257 → 497). Unit tests `draw3d fog` and
+  `draw3d lines` updated to the same arithmetic.
+- **Tried and not taken:** stepping perspective u/w and 1/w like 2D's `shortStep` made `3d-wall-texels` worse
+  (307 → 2423); left as the edge-weight divide. Color ramps and lighting's last six product cells (level 32 at
+  cosine 56/65, level 64 at 72/97) still have no rule the data pin down.
+- **Probes (source only):** `tools/psp-measure/ge.c` `round5()` / `geRound(5)` —
+  `ramp-color-probes`, `light-product-probes`, `texel-wall-probe`, `texel-floor-probe`. Not on the menu or in the
+  committed EBOOT yet (so the host measure test keeps its line numbers).
+- **Checks:** `tests/psp` 330/0, `tests/allegrex` 58/0, `tests/psp/ares` 315/0.
+
+## PSP core: the adder's carry (GTA: Liberty City Stories' twitching limbs) — 2026-10-08
+
+On `cursor/psp-vfpu-fits-2b67` (#177), for the stack above to merge up. The owner saw the player's limbs twitch
+standing by a car in Portland (RP6, Vulkan). It was #177's `vfpuDot`: when the final round to nearest carried out of
+the 24-bit mantissa, the exponent stayed, so a sum just under a power of two came out half of it. GTA's skinning
+dots unit vectors with themselves (`vmmul`, some `vcrsp`) and got 1/2 for 1, about eight times a frame standing still.
+
+- **Found:** the psp-runner from a state of the player beside the car, frame-to-frame differences over him: #169,
+  #172 and #175 identical and smooth; #177, #178 and #180 with a limb out for a frame 17 times in 80 frames, the same
+  in Software, Vulkan (MoltenVK) and with the interpreter; walking, a frame with his torso collapsed. Every result
+  the carry changed, logged in the game (1,305 in 160 frames): 1 → 1/2, or −1 → −1/2.
+- **Fix:** `vfpuDot` raises the exponent on that carry (interpreter-vfpu.cpp). The recompiler's `vdot` helper
+  (recompiler-vfpu.cpp) still summed in doubles, off the PSP on 19% of `vdot-spread`'s quads, so the engines
+  disagreed (#177's note had the recompiler calling the interpreter for the VFPU; vdot it didn't): it goes through
+  `vfpuDot` now.
+- **Measurements:** no measured adder input carries (4,730,624 results), so `compare.sh`'s tables are byte for byte
+  the same; `vdot-spread` is exact on both engines (262,144 quads), and `measured.cpp` now checks that file.
+- **Tests:** `vfpu edges` (the game's vector to 1; two measured `vdot-spread` quads, which the double sum misses on
+  the recompiler) and `vfpu matrices` (`vmmul` to 1) fail without their half of the fix; `measured on a PSP` checks
+  all of `vdot-spread` (interpreter). Allegrex 58/0 (sanitizers), PSP suite (ASan) 335/0, tests/psp/ares 307/0.
+- **Open:** a measured carry case (a probe in psp-vfpu-measurements.md's Next); `measured.cpp` still leaves out
+  `vlog2` from 4 up, which #177 fitted.
+
+## PSP core: VFPU measurement fits (vlog2 above 4 and the adders) — 2026-10-08
+
+Branch `cursor/psp-vfpu-fits-2b67`, on `cursor/psp-gpu-vk-acc-2b67` (#175; #172 under it). PR #177. Does not touch `ares/psp/ge/` or
+OpenGL. Co-authored with Cursor; independent review before the commit.
+
+- **`vlog2`:** coefficient cutting by level `d` and truncation to step `2^(d+2)` in units of `2^-24` (linear term
+  kept full width until then). Exact on every measured binade above 4, on `[1/2, 2)`, and on the spread-out file.
+- **Adders:** `vfpuDot` (2 extra bits, round-to-odd products, align+truncate, nearest-even sum). Used by `vdot`,
+  `vhdp`, `vfad`, `vavg` (weights `±1/size`), `vdet`, `vcrsp`, `vqmul`, `vmmul`, `vtfm`, `vhtfm`. Exact on every
+  round-2 adder file and on `vdot-spread`.
+- **Recorder:** ops.bin 1216/1216; ops3.bin 260/284 (24 open: swizzles past the size in `vcmp` / `vcrs` / `vcrsp` /
+  `vdet` / `vsocp` — probes sketched in `tools/psp-measure/vfpu.c`).
+- **Docs:** `docs/psp-vfpu-measurements.md` (fits section), Part 3 in `docs/psp-core.md`.
+- **Tests:** Allegrex 58/0; PSP suite (ASan) 330/0. Interpreter and recompiler match (recompiler still calls the
+  interpreter for VFPU). Independent review PASS (manifest/diff hashes in
+  `phobos-work/scratch/psp-vfpu-fits-review/`).
+- **Stack:** VFPU only; do not merge to master from here.
+
+## Desktop Library: the PSP's disc titles — 2026-10-08
+
+Branch `local/psp-desktop-disc-info-2`, on top of `cursor/psp-gpu-hw4-2b67` (#179's merge, part 45). The desktop's
+Library now shows a PSP disc's own title, as the Android app does (docs/psp-core.md, part 39's consumers).
+- **The display** (`desktop/main.cpp`'s `drawLibrary`): the list's line shows the disc's title (its PARAM.SFO's
+  TITLE) when there's one, the file's name when there isn't. The file's name stays the game's key: the states,
+  the saves and the memory card are keyed by it, as before.
+- **The fill** (`desktop/PspDiscInfo.cpp`): the list shows at once; the PSP's disc images' titles fill in after,
+  on a thread of their own (a CHD's open takes a while, so the UI isn't held), each from the cache or the shared
+  reader (`ares/psp/kernel/disc-info.cpp`), and a rescan supersedes the unfinished scan. No titles fill in while
+  a game runs: the thread stops when a game starts and restarts when the Library shows.
+- **The cache**: the title, disc ID and icon (its ICON0.PNG's bytes) beside the settings (`dataFolder`'s
+  `psp-icons/`), under a SHA-256 of the file's path+size+mtime, as the Android app's `psp-icons/` cache: a
+  second visit doesn't re-open the disc. The icon is cached, not drawn: the list's 8x8 font has no place for
+  it. A title the font can't draw has its characters dropped; only when none are left is the file's name shown.
+- **Tests**: `tests/psp/desktop-disc-info.cpp` (the key, the key's collision, the disc image's file choice, the
+  title's choice, the cache's round trip, the title served from the cache without re-opening the disc, and a
+  cancelled scan, before it starts and mid-read).
+- **Checked**: tests/psp (with the new desktop groups).
+- **Left**: the icon's draw (the list's rows are 12 px and the font 8x8: no place for it); the game's window
+  title (the launch keeps the file's name).
+- **Round 2 review fixes** (2026-10-08): (1) the reader gives up (returns 0) when the scan is superseded, so a
+  cancelled disc isn't read to the end or cached; (2) the cache key's parts are joined with `|` separators (the
+  `"\0"` was an empty C string, so it appended nothing); (3) the cache files are written to a temporary name and
+  renamed over the real one, so a crash mid-write can't leave a truncated title that counts as a hit; a `.info`
+  without both lines is a miss; (4) the title thread stops while a game runs and restarts when the Library shows;
+  (5) `desktop/PspDiscInfo.*` added to the PSP Core Tests workflow's paths; (6) `listTitle` drops the characters
+  the 8x8 font can't draw instead of rejecting the whole title, falling back to the file name only when nothing
+  printable is left; the test's scratch folder is removed when the program ends.
+- **Round 3 review fixes** (2026-10-08): (1) the `.png` write's rename is guarded by its `open` too (the `.info`
+  branch already was), so a temp file that never opened is never renamed over the icon; (2) a direct test that
+  the key's `|` separators disambiguate (two files whose path+size+mtime merge into the same string get
+  different keys); (3) a test of a scan cancelled mid-read: it gives up at its first sector and caches nothing;
+  (4) note, no code change: a title with a newline shows its parts joined (the 8x8 font can't draw the newline,
+  so `listTitle` drops it).
+
+## PSP core: blending in the shader — 2026-10-08
+
+Branch `cursor/psp-gpu-hw4-2b67`, on top of part 44's `cursor/psp-gpu-hw3-2b67` (#171 under it). Opened as #172.
+docs/psp-core.md, part 45, and docs/psp-gpu-renderers.md's "Shader blending" describe it; PPSSPP stayed a guide only.
+- **Shader blending**: draws that blend, use a logic operation or a partial write mask read the frame buffer
+  (an input attachment) and do pixel.cpp's arithmetic in `draw.frag`; 16-bit frame buffers keep their own bits.
+  A barrier before each reading draw; overlapping primitives kept in one draw where the driver has
+  rasterization-order access (Turnip; every pipeline asks), else split into separate draws (M1, Qualcomm's driver).
+  A check failing in order is retried split. Native exact, Software the default.
+- **Review fix**: the shader's write mask keeps stencil/alpha bits too (was only RGB).
+- **Tests**: new `gpuBlending` byte-exact in four formats at 1x and 2x; pspsdk's blend sample 100% (from 68.7%); the
+  sanitized PSP suite passes on the M1 (325 groups, Allegrex 58).
+- **RP6** (Turnip, in order): Lumines 60 fps at Native, Burnout Legends' menu 60 at Native and 51.4 at 4x. The
+  first build failed Turnip's start-up check (only reading pipelines asked for the order, no barrier); fixed. The
+  GPU tests built for Android pass on Qualcomm's driver. Settings put back to Software (resolution left at 3x;
+  Software ignores it).
+- **Next**: Software/7-thread remaining waits and Vulkan accuracy (OpenGL parked; Software covers devices without Vulkan).
+
+## PSP core: upscaling, and presenting without reading back — 2026-10-08
+
+Branch `cursor/psp-gpu-hw3-2b67`, on top of part 46's `cursor/psp-cpu-speed3-2b67` (#176 under it). docs/psp-core.md, part 44, and
+docs/psp-gpu-renderers.md's "Upscaling" and "Presenting" describe it; PPSSPP stayed a guide only, none of its code used.
+- **The setting**: "PSP Resolution" (Native, the default and exact, then 2x-10x) in the app's PSP settings and the
+  desktop's menu, given to the core as its "Resolution" option when a game loads; Vulkan's alone.
+- **Upscaling**: targets, depth and stencil at N times; uploads drawn larger, read-backs for the CPU and GE shrunk to
+  the PSP's size first so memory stays exact; render to texture keeps the scale. New test `gpuScaled`; the sanitized
+  PSP suite passes on the M1 (322 groups, the GPU groups run).
+- **Presenting** (Android): the frame drawn straight onto a swapchain on the app's window, no read-back; screenshots
+  from a shrunk copy; a failing surface falls back to the read-back. The desktop reads back at up to 4x. Review fix:
+  when present fails (background, acquire timeout), the frame goes the read-back way instead of leaving a stale screen.
+- **RP6**: Lumines 59.4/59.3/50.6/39.2 fps at Native/4x/8x/9x (9x GPU ~74% busy); Ridge Racer 2's menu 60/46.5 at
+  Native/8x. The fallback toast seen at last (`adb shell setprop debug.phobos.psp.failcheck 1`; set back to 0).
+  Backgrounding then returning kept presenting (Lumines ~30 fps after). 10x is in the menu but its row sits under
+  the app's nav bar, so it wasn't selected from adb. Still to check: 10x in play, 3D past menus, rotation, the 8x line.
+- **Next**: shader blending (#172); OpenGL parked.
+
+## PSP core: render-to-texture decode later (emulation thread) — 2026-10-08
+
+Branch `cursor/psp-cpu-speed3-2b67`, on top of part 43's `cursor/psp-cpu-speed2-2b67` (with #165 disc-info).
+docs/psp-core.md, part 46. PR #176.
+- **The GE** (`ares/psp/ge/texture.cpp`, `threads.cpp`, `draw.cpp`): a texture whose bytes a batch still draws over
+  (render to texture) is not decoded on the GE's thread. The source batch is launched if it's being filled; the
+  Look waits in the next batch (`deferRows`, CLUT snapshot when indexed); `ensureDecoded` runs as that batch
+  starts drawing. Texture cache shared with workers (`textures.mutex`).
+- **Exact**: tests/allegrex 58 groups, tests/psp 328 groups (0 failures), including `geThreads` RTT. Six cpu-speed
+  scenes remade at StateVersion 17; 300 frames `HASHES=1` at 1 and 7 GE threads identical to parent
+  (`eeba5028e`). RP6 race/menu end states match unsettled too.
+- **Faster** on the RP6 at 7 GE threads (four rounds): MC3's race about 37 → 39 fps (medians 37.3 → 38.1);
+  menu about 36 either way. Emulation thread on the race still ~24 ms.
+- **Next**: primitives drawn at once / textures read from memory as drawn.
+- Scratch: `~/phobos-work/scratch/cpu-speed` (v17 scenes); RP6 `/data/local/tmp/cpu-bench3`; take
+  `~/phobos-work/rp6.lock`.
+
+## PSP core: the emulation thread faster again — drawing off it, registers held — 2026-10-08
+
+Branch `cursor/psp-cpu-speed2-2b67`, on top of part 42's `cursor/psp-hle-games8-2b67` (#169; measured from part 38's
+4ebc59d97). docs/psp-core.md, part 43, has the profile, the waits and every number. Opened as #170.
+- **The GE** (`ares/psp/ge/`): a list starting waits only for the batch it's to fill, not for everything the last
+  list left being drawn (b0af46594); lighting's light-by-material products once a primitive (3292c775f).
+- **The recompiler** (`ares/psp/cpu/`): a block holds the game's registers in host registers, written through, so
+  `ipu.r[]` is always current (5a5fc5d0c); lwl, lwr, swl and swr natively (e06caa086).
+- **Exact**: tests/allegrex (58 groups, on ARM64 and as an x86-64 build under Rosetta) and tests/psp (319, the
+  hardware renderer's included) pass. The six scenes, 300 frames at 1 and 7 GE threads: every frame's picture and
+  VRAM, RAM and the whole serialized state identical to 4ebc59d97's; on the RP6 the end states match unsettled too.
+- **Faster** on the RP6 at 7 GE threads: MC3's race 24.2 to 32.3 fps (the emulation thread 34.4 to 26.8 ms a
+  frame), its menu 30.4 to 36.2, Lumines 137 to 177; GTA's city and woods unchanged; Peace Walker's title 226 to 216.
+  At 1 thread the CPU's time is 2-9% lower (Peace Walker's the same) and the frame rates the same.
+- **Next**: addressed in part 46 (RTT decode deferred). Then primitives drawn at once, textures read from memory
+  as they're drawn.
+- Scratch tools and states are in `~/phobos-work/scratch/cpu-speed` (never committed); the RP6 copy is
+  `/data/local/tmp/cpu-bench3`. The RP6 is shared: take `~/phobos-work/rp6.lock` first, and time only while the
+  Phobos app isn't running.
+
+## PSP core: Killzone's movie, the dialogs' sizes and statuses — 2026-10-08
+
+Branch `cursor/psp-hle-games8-2b67`, on top of `cursor/psp-gpu-hw2-2b67` (#168, the Vulkan renderer in Phobos).
+docs/psp-core.md, part 42, describes it; one commit per fix, each with its tests.
+- **Killzone: Liberation**: its jump into VRAM at frame 1547 came from its movie being told no picture came at the
+  first decode, which made it clear its target through a null pointer. With a game's own sceMpeg library (stood in
+  for) each access unit now gives its picture at once; the firmware's library still holds the first back
+  (video/mpeg/basic). Killzone plays its intro and reaches its main menu.
+- **Dialogs**: each kind takes only its recorded parameter sizes; InitStart only while no dialog is current;
+  Update INVALID_STATUS outside running and finished; sceUtilityMsgDialogAbort finishes after 8 Updates. Save
+  state version 16.
+- **Equal corner colors losing a level**: kept exact in a trial, psp measure didn't move, so left as it is.
+- **scePower 0xa85880d0**: no game here calls it; nothing names it. Left for a game that does.
+- **Checks**: tests/psp 321 groups with and without sanitizers, tests/psp/ares 306 checks, none failing; the ten
+  priority games the same sound and screens against the Killzone commit.
+- **Left**: the 21 menu-to-black games (not yet copied over); scePower 0xa85880d0; the web browser's own state and
+  memory, and the Screenshot and NpSignin dialogs.
+
+## PSP core: the Vulkan renderer in the app and the desktop — 2026-10-07
+
+Branch `cursor/psp-gpu-hw2-2b67`, on top of part 38's `cursor/psp-cpu-speed-2b67`. docs/psp-core.md, part 41, and
+docs/psp-gpu-renderers.md's "In Phobos (part 41)" describe it; PPSSPP stayed a guide only, none of its code used.
+- **The setting**: "PSP Renderer" (Software, the default, or Vulkan) in the app's PSP settings and the desktop's
+  menu, given to the core as its "Renderer" option when a game loads. The hosts hand over the `vkGetInstanceProcAddr`
+  their `loadVulkan` got (the system's or a custom driver's on Android, MoltenVK on the macOS desktop).
+- **Fallbacks**: a start-up check (sprites byte for byte, triangles within a bound) in a machine of its own; a
+  renderer that fails it, or loses its device later, gives way to the software renderer, said once in the log and
+  the UI. The shown frame is read straight from its target (no finish), memory's picture the fallback.
+- **Bytes beside the pixels**: busy VRAM pages asked about to the byte, so a display list beside the frame buffer
+  doesn't wait for the GPU (Brave Story on the RP6 18.6 to 59.5 fps). A new test; the PSP system tests pass on the
+  M1 (sanitized, the GPU groups run).
+- **Measured in the app** (RP6): Midnight Club 3's title 54.3 fps with the installed Turnip, 49.6 with Qualcomm's,
+  35.6 software; its race 39.0, 36.0, 29.0; the 2D scenes at 60. Twenty-two games on Vulkan: none crash; three
+  black as with software (the core's). Not seen: the app's fallback toast (nothing failed).
+- **Next**: upscaling (presenting without reading back), then accuracy (shader blending), then OpenGL.
+- `tools/psp-runner` builds again (Vulkan's headers) and takes `--renderer`.
+
+## PSP core: the emulation thread faster, the CPU's recompiler first — 2026-10-07
+
+Branch `cursor/psp-cpu-speed-2b67`, on top of `cursor/psp-hle-games7-2b67` (part 37; measured from part 33's
+70b239ac6). docs/psp-core.md, part 38, has the profiles, the scenes and every number.
+- **The recompiler** (`ares/psp/cpu/`), six commits: the FPU natively (`recompiler-fpu.cpp`, new); multiply,
+  divide, trapping sums and bit fields; blocks chaining to the next by themselves, then to successors known at
+  compile time; loads and stores with the page tables in saved registers; the VFPU's common instructions with the
+  prefixes at rest (`recompiler-vfpu.cpp`, new). Every block still starts and ends where it did (the run loop's
+  check points decide when interrupts and kernel events land), and anything unusual (NaN results, FCSR not at its
+  default, division by 0 or -1, overflow, VFPU prefixes set) goes to the interpreter as before.
+- **Tried and reverted**: GE vertices' matrices four at a time (b75298198, reverted by d4b896d4f). Exact without
+  skinning, but no faster on the host or the RP6.
+- **Exact**: tests/allegrex (58 groups, 2,000 generated programs and the new "chained runs") and tests/psp (308)
+  pass. Six scenes (Midnight Club 3's menu and race, GTA LCS's city and woods, Peace Walker's title, Lumines' demo),
+  300 frames at 1 and 7 GE threads: every frame's picture and VRAM, RAM and the whole serialized state identical
+  to the base's.
+- **Faster**: the CPU's own time a frame down 30-45% in the 3D scenes (MC3's race 12.8 to 8.4 ms on the RP6). On the
+  RP6 at 7 GE threads, MC3's race 21.6 to 25.2 fps, its menu 28.4 to 31.8, GTA's city 43.6 to 57.2; at 1 thread
+  19.7 to 21.6, 24.3 to 25.9 and 36.4 to 39.7.
+- **Next**: the GE's setup is now most of the emulation thread (lighting's per-light numbers once a primitive, the
+  emulation thread's share of drawing at settles); in the recompiler, MIPS registers kept in host registers within a
+  block, and lwl/lwr/swl/swr natively.
+- Scratch tools, states and memory sticks are in `~/phobos-work/scratch/cpu-speed` on the Mac (never committed);
+  the RP6 copy is `/data/local/tmp/cpu-bench2`.
+
+## PSP core: the stuck games, and the runner's presses — 2026-10-07
+
+Branch `cursor/psp-hle-games7-2b67`, on top of `cursor/psp-gpu-hw-2b67` (#164, the hardware renderer, part 36).
+docs/psp-core.md, part 37, describes it; one commit per fix, each with its tests.
+- **Killzone: Liberation**: its boot program loads and starts the game's module, then unloads itself
+  (sceKernelStopUnloadSelfModuleWithStatus), which the kernel took as the program leaving. Now the program goes as a
+  module would (`programAsModule()`), its module_stop run, the game's threads running on; code in no module gets
+  CAN_NOT_STOP. It reaches its language menu and, with presses, its autosave notice; after that it loads
+  `mpeg.prx` and jumps into VRAM at frame 1547 (not looked into yet).
+- **Ace Combat: Joint Assault**: utility module 0x308 loads (0x309 refused); the gamedata install dialog's five
+  functions. It reaches its autosave notice, and with presses its legal notice.
+- **MotorStorm: Arctic Edge**: the drive notifies its callback on activate and deactivate (umd/callbacks, umd/wait,
+  umd/register); the save state version is 15. It reaches its warnings, its logos and its intro movie.
+- **Chili Con Carnage**: corners at one depth keep that depth at every pixel (65535 had become 65534 at some, and
+  the logo lost stripes under GEQUAL). The logo draws whole.
+- **Points past z / w ±1** aren't drawn: psp measure's 3d-rules 6 to 4 pixels apart, nothing else changed.
+- **The runner**: `--press` lists were never split at their commas, so no run with one (the compatibility
+  report's 266 included) had any input; and "program: ended" was lost on unload. Both fixed.
+- **The 22 menu-to-black games**: not the unload change (it's older than both runs; Killzone was black at
+  de6e6dcb7 too). With no input in either run, a re-run with the fixed runner is the way to sort them.
+- **Checks**: tests/psp 312 groups with and without sanitizers, tests/psp/ares 302 checks, none failing; the ten
+  priority games the same pictures and sound against the base, but two frames a moment apart.
+- **Left**: Killzone's jump into VRAM; the other dialogs' sizes and the Screenshot and NpSignin dialogs; equal
+  corner colors losing a level; scePower 0xa85880d0, the report's one top missing function still missing.
+
+## PSP core: a hardware renderer on Vulkan — 2026-10-07
+
+Branch `cursor/psp-gpu-hw-2b67`, on top of `cursor/psp-ge-curves-2b67` (#162). docs/psp-core.md, part 36, and
+docs/psp-gpu-renderers.md (rewritten) describe it. The owner stopped the exact compute renderer (parts 34-35, on
+their own branches) for a PPSSPP-style hardware renderer; PPSSPP's GPU backends informed the design, none of their
+code is used.
+- **The renderer** (`ares/psp/ge/gpu`): the GE transforms, lights, clips and decodes textures as before and hands
+  each PRIM's settings and primitives to `GE::Renderer`; `gpu.cpp` draws them with the GPU's rasterizer, texture
+  units and blending into frame buffers kept on the GPU (read back only when their pages are needed), with render to
+  texture by copies on the GPU, the GE's decoded textures cached, and a pipeline per mix of settings (a fragment
+  shader specialized by 15 constants). `vulkan.cpp` runs it through the host's `vkGetInstanceProcAddr` (custom
+  drivers included; its own tables, volk untouched). Not in the app or the desktop program yet.
+- **Measured** (the six verified scenes, the RP6's Adreno 740): 1.5-2.3 times the seven-thread software renderer
+  (Midnight Club 3's race 37.5 fps against 24.2, Liberty City Stories' woods 94.4 against 54.5). Not exact: 28-65% of
+  pixels identical to the software renderer's, nearly all the rest a level or two apart (blending's rounding). 2D
+  sprites and render to texture are byte for byte, as `tests/psp/gpu.cpp` checks.
+- **Next**: upscaling and presenting from the GPU, then OpenGL, then the app wiring (Settings' "PSP Renderer:
+  Software / Vulkan / OpenGL", Software the default; the host's `vkGetInstanceProcAddr` and `loadVulkan` for the PSP;
+  a sanity check; measuring in the app with the system and a custom driver, none installed or deleted without asking).
+- **After review** (part 36's "After review"): builds with GCC (two conditionals' types); a PRIM the renderer can't
+  take (past VRAM's end, no target, a lost GPU, a texture read from memory) is drawn by the software renderer instead
+  of lost; render-to-texture copies bounded (32, one for each target and size); the depth buffer's pages watched
+  apart from the colors; long PRIMs handed over in pieces; `GE::setRenderer()` has a renderer forget the machine
+  before. Three new tests; the PSP system tests pass on the M1 (sanitized, the GPU groups run) and with g++ 13.
+## PSP disc info: title, disc ID, region and icon — 2026-10-08
+
+Branch `local/psp-disc-info`, on top of `cursor/psp-ge-curves-2b67` (#162). docs/psp-core.md, part 39, describes it.
+- **The reader** (`ares/psp/kernel/disc-info.hpp` / `.cpp`): a PSP disc's title, disc ID (NPD ID), region and
+  icon (PSP_GAME/ICON0.PNG), read off its image (ISO, CSO, ZSO, DAX, JSO, or CHD) a few sectors at a time, every
+  size bounded (PARAM.SFO over 64 KiB, ICON0 over 1 MiB, taken as none). Region from the disc ID's third letter:
+  J Japan, U US, E Europe, else Unknown. CHD read through libchdr when `ARES_ENABLE_CHD` is defined; without it,
+  a CHD is taken as none. `sfoValue` and `paramSFO` moved here from `psp-runner` and `mia`, which now share them.
+- **Consumers**: `psp-runner`'s `discInfo()` and `mia`'s `load()` call the shared reader; the Android app's
+  `PhobosCore.pspDiscInfo(fd)` (JNI) reads title+icon together, and the Library's `MainViewModel` caches the
+  icon keyed by URI+size+mtime, showing title and icon in `SystemDetailScreen`.
+- **Tests**: `tests/psp/disc-info.cpp` (ISO, CSO, CHD, damaged images, SFO values, regions) and
+  `PspDiscInfoTest.kt` (title choice, cache key).
+- **Checked**: tests/psp (with the new disc-info groups), tests/psp/ares, Android unit tests and release build
+  (`-Pphobos.ffmpeg=OFF`).
+- **Round 2 review fixes** (2026-10-08): (1) the disc's descriptor is closed by the caller (`pfd.fd`, not
+  `detachFd()`); (2) the icon is downsampled to 160 px at cache time (refused past 512 px), so the list's
+  decode is small and safe; (3) the plain list shows first, then titles and icons fill in a separate job, cached
+  under a SHA-256 of URI+size+mtime in `cacheDir/psp-icons/` (the title and disc ID beside the icon), so a
+  second visit doesn't re-open the disc; the previous Library scan (list and title fill) is cancelled; (4) the SFO's offsets are 64-bit,
+  the title capped at 128 bytes with controls dropped, and passed as bytes into Kotlin's UTF-8; (5) size/mtime
+  captured only for PSP discs; (6) a single-disc .m3u shows the playlist's name; (7) a CHD disc-info case in
+  `tests/psp/ares/system.cpp`; (8) the CATEGORY isn't read (the Library shows the title and icon, not the
+  category).
+- **Left**: cost measurement on 20+ real images (to be done on the handheld); RP6 fd-count check (no device
+  access on the host). The desktop's Library shows the same titles (the entry above).
+
+## PSP core: curved surfaces (BEZIER and SPLINE) — 2026-10-07
+
+Branch `cursor/psp-ge-curves-2b67`, on top of `cursor/psp-hle-games6-2b67` (#161, part 32; parts 31 and 30, #160
+and #159, underneath). docs/psp-core.md, part 33, describes it.
+- **The GE** (`ares/psp/ge/curves.cpp`): BEZIER and SPLINE drawn, the control points read as PRIM reads vertices;
+  Bézier patches of 4x4 points (3N + 1 a way, the rest left out), cubic B-splines with open or closed ends (SPLINE's
+  bits 16-19), PATCH_DIVISION per patch or piece (0 as 1), PATCH_PRIMITIVE's strips, line strips and points;
+  positions, colors (rounded up), texture coordinates (made up from 0 to 1 when the vertex type has none), normals
+  (from the slopes when it has none, out of PATCH_FACING's front) and weights blended. The vertices then go through
+  `draw.cpp`'s new `drawVertices()`, PRIM's own path (transform, lighting, culling, jobs, threads, four pixels at a
+  time), which PRIM now uses unchanged. More than 131072 vertices aren't drawn (noted). No state change (version 13).
+- **Against the PSP**: pspautotests' gpu/primitives/bezier and spline pictures covered pixel for pixel (points, flat
+  shading's colors, lines, texels exact; smooth gradients within a level); round 3's Bézier patches the same pixels
+  as the owner's PSP, every channel within a level (bezier-curved 1494 pixels apart, from 42624 undrawn), the
+  closed spline but 4 edge pixels. gpu/exact/curves: 2 of 16 checksums (its knife-edge points and depths need the
+  GE's own fixed-point arithmetic, which nothing tried matched). Found and left: the PSP drops points past z / w ±1
+  even with DEPTH_CLIP_ENABLE on (round 2's 3d-rules, and a third checksum), which the core draws; changing it would
+  change more than curves.
+- **The measuring program's round 4** gained fourteen curve cases (vertices' places to the sixteenth, colors, depths,
+  texels, made-up texture coordinates and normals, culling, counts): built in pspdev's Docker image,
+  `tests/psp/programs/pspmeasure.elf` replaced (README checksum); the PSP's EBOOT is outside the repository at
+  `/tmp/psp-measure-round4-curves/PSP/GAME/PSPMEASURE/EBOOT.PBP` (SHA-256 bc6e90b4...e69343f2).
+- **Checked**: tests/psp 297 groups (6 new) with ASan and UBSan, none failing, "psp measure" identical but for round
+  3's curve files; tests/psp/ares 294 checks; 7 broken versions each caught. Games: none of the 22 here (the
+  handheld's 22) drew a curve in 7200 frames (a probe build); Macross Ace Frontier and its sequels aren't here.
+  Scenes without curves (4 scenes from states, 1 and 7 threads, the builds taking turns): every frame's picture the
+  same; speed within the shared Mac's noise (part 33's table).
+- **Left**: the GE's exact arithmetic (round 4 records it), PATCH_CULL_ENABLE, the made-up normals' direction and
+  texture coordinates (chosen), points past z / w ±1, morphing and skinning on control points.
+- **After review** (independent, clean room and bounds confirmed, builds reproduced): round 4's strip joins are
+  `curves-joins`, run before the counts, and the counts past 64 cuts run last, split three ways (`curves-count-128`,
+  `-200`, `-255`), so a GE stall there loses only its own test (34 files, about 8 MB; ELF and EBOOT rebuilt, the
+  SHA-256 above). `GE::patch()` checks its vertex budget before allocating anything, and gives back
+  `patchVertices`' room past 4096 vertices once drawn. Checks as above, none failing.
+
+## PSP core: the next functions games stop at (run status, ID lists, LoadExec, the memory stick) — 2026-10-07
+
+Branch `cursor/psp-hle-games6-2b67`, on top of `cursor/psp-psmf-2b67` (part 31): commit 17ea2d8a0 (code and tests),
+then the docs (9b580b37c), then the re-run's list (code, tests and docs together), the PSMF branch merged in, then
+the review's fixes (#161).
+docs/psp-core.md, part 32, describes it. Sources: pspsdk's headers, pspautotests' programs and the results they
+recorded on a PSP, uOFW's export lists, the games' own calls; no other emulator's code read.
+The owner's re-run of the compatibility report hadn't landed at first; every function the old report names was here.
+- **ThreadManForUser 0xffc36a14, sceKernelReferThreadRunStatus**: the 44-byte run status (status, priority, wait,
+  wakeups) with real run figures, which threads now keep: time on the CPU, interruptions by calls into the program,
+  preemptions by better threads, releases from waits. The full thread status gives them too.
+- **0x94416130 sceKernelGetThreadmanIdList, 0x57cf62dd sceKernelGetThreadmanIdType**: every kind the kernel has
+  objects of (threads, semaphores, event flags, mailboxes, both pools, pipes, callbacks, alarms, virtual timers,
+  both mutexes; threads by state), the refusals as threads/threads/threadmanidlist and threadmanidtype recorded.
+- **LoadExecForUser's sceKernelLoadExec**: WipEout's next stop (its launcher starts each of its games as a program
+  of its own). The program named starts in the caller's place on a cleared machine, with the argument given, and the
+  call never returns, as modules/loadexec/loader recorded. KDebugForKernel's Kprintf, which that test prints with,
+  is sceKernelPrintf's.
+- **The memory stick's room**: Chili Con Carnage's and Ace Combat X's sizes request (the free space alone) was told
+  there was no save, the kernel looking for one by the request's empty save name; the save measured is msData's, as
+  utility/savedata/sizes recorded, and with none the answer is 0. The size mode (22) now answers. One stick told
+  everywhere (the capacity devctl, both modes): 2 GB with 1,792 MiB free, its bytes within 31 bits (games add sizes
+  up in 32-bit words; pspautotests' PSP had 16 GiB free, which would wrap there).
+- **Part 28's recorded differences**: the event flag's and semaphore's status size words (52, 56; every status now
+  copied as far as its size word says); their creates (NULL names, attributes, any semaphore counts); the lightweight
+  mutex's status (both functions, 64 bytes; the work area's holder 0 while free); the thread status's size by SDK
+  (104, or 108 refusing larger after 2.60) and its exit status (DORMANT, then NOT_DORMANT);
+  sceDisplayAdjustAccumulatedHcount (31 bits, from 0x7fffffff to 0). State version 14.
+- **Checked**: tests/psp 296 groups (7 new) with ASan and UBSan and without, tests/psp/ares 298 checks, none failed;
+  12 broken versions each caught. pspautotests: of threads/ and intr/'s 167 recorded programs, 72 printed exactly
+  what the PSP printed before and 83 after; elsewhere 75 and 76 of 192; none worse; modules/loadexec/loader as
+  recorded. Games on this Mac: Ace Combat X from "Checking Memory Stick" for good to its title and attract movie;
+  Chili Con Carnage from "Not enough free space" to its profile menu; WipEout lists its threads and, through its
+  menus, starts WipEout Pure to its title. The 14 others the same pictures (frames 600 to 3000) and sound, Snoopy vs.
+  the Red Baron's screens the same at moments apart (its two NULL-named semaphores now refused, as recorded).
+- **On the RP6** (build 105300): Chili Con Carnage to its main menu with a new profile, Ace Combat X to the first
+  operation's briefing, WipEout Pure started from the collection to its menu's opening, all at 60 fps.
+- **The re-run's list** (PR #158, `local/psp-rerun`: 77 of 266 games stopping at a missing function, from 149; its
+  state column unreliable): sceDisplayWaitVblankStartMulti and its CB form (0x40f1469c, 0x77ed8b3a), as
+  display/vblankmulti recorded; sceKernelCheckThreadStack (0xd13bde95), as threads/threads/stackfree recorded;
+  sceRtcGetAccumulativeTime (0x011f03c1, and Sony's spelling 0x029ca3b3); sceHprmIsHeadphoneExist (0x7e69eda4) and
+  the rest of sceHprm but its callbacks (nothing plugged in); sceNpDrmSetLicenseeKey (0xa1336091) and the user DRM
+  library's other four, with no DRM (keys taken, a game's files read as they are, their size their own). Names from
+  candidate names' NIDs (pspsdk, uOFW). scePower 0xa85880d0 left out: no name, no recording, no game here calls it.
+  The report's per-game table names no functions, so nothing else could be counted across three games. Checked:
+  tests/psp 299 groups (3 new, one extended) with ASan and UBSan and without, tests/psp/ares 298 checks, none
+  failed, 6 broken versions caught; vblankmulti and stackfree now exactly as the PSP printed; the 14 other games
+  and the three above the same pictures and sound (Snoopy's frame 600 and Chili's sound vary run to run anyway).
+  Five games of the device's not here before: Joint Assault quits at utility module 0x308, Killzone's boot program
+  unloading itself ends the game it started, MotorStorm waits on blanks, Ape Escape and Ridge Racer 2 run on.
+- **Left**: threads' attributes as recorded (0x800000ff added), where a preempted thread goes back in line, the
+  blank's timing (display/hcount's lowest and highest lines), thread-local storage pools, the lightweight mutex's
+  other recorded differences, PARAM.SFO in saves and the list mode's pattern, Chili Con Carnage's logo and menu art
+  drawn in broken stripes (a GE matter), the imported-but-uncalled functions part 32 lists, scePower 0xa85880d0,
+  a program unloading itself while a module it started runs on (Killzone), utility module 0x308 (Joint Assault).
+- **After review** (with #160's PSMF fixes and #159's faster GE merged in; the audit found the clean room held and
+  LoadExec sound): the size mode's needed and overwrite figures are now the shortfall past the free space (0 for
+  any save that fits; their text written only then), not the files' whole size; sceKernelSignalSema's limit check
+  adds in 64 bits (0x7fffffff onto a count of 1 had wrapped past it); a thread's time is no longer counted twice
+  when an interrupt's handler ends the game (a state saved after then failed to load). State version 14 still.
+  Checked: tests/psp 302 groups with the sanitizers and without, tests/psp/ares 298 checks, none failed;
+  each fix undone, caught.
+
+## PSP core: movies through scePsmf and scePsmfPlayer, in a clean room — 2026-10-07
+
+Branch `cursor/psp-psmf-2b67`, on top of `cursor/psp-ge-features-2b67` (#157, part 29): commit 18c58f968 (code and
+tests), then the docs; local only, not pushed. docs/psp-core.md, part 31, describes it. Made in a clean room the
+owner approved: a separate agent read other emulators and wrote a facts-only specification (from their behaviour,
+pspautotests' recordings and the movies' headers); this was written from that, from pspautotests' video/psmfplayer
+programs and recordings directly, the movies' own bytes and the games' behaviour, the specification's sources never
+seen and no emulator's code read.
+- **scePsmf** (`kernel/psmf.cpp`, 25 functions): the header, stream table and EP map through the game's 32-byte
+  structure (copies work on their own). Peace Walker's four (SetPsmf, GetNumberOfSpecificStreams, the start and end
+  times) are there.
+- **scePsmfPlayer** (`kernel/psmfplayer.cpp`, 28 functions): one player, its statuses and every refusal the
+  recordings show, the movie read through a game file descriptor and decoded with the existing decoders, start-up on
+  the third GetVideoData, a picture due two Updates after the last, sound kept in step, the end on the second Update
+  after the last picture (or at the caller's next wait when the player's priority is worse), looping, slow motion,
+  pause, step frame, fast forward and rewind, pictures with zero alpha (sceMpeg's stays opaque: no recording shows
+  it). A new wait kind, `Wait::Psmf`. State version 13.
+- **Modules**: no new rule. Peace Walker's psmf.prx and libpsmfplayer.prx are `scePsmf_library` and
+  `scePsmfP_library` (stood in for, as Sony's); the player's other names (libpsmfplayer, psmf_jk, jkPsmfP_library)
+  load as game code, but the kernel's functions win the linking, so their games reach the kernel's player too.
+- **Checked**: pspautotests' video/psmfplayer, 19 of 22 exactly as the PSP printed (basic, configplayer and playmode
+  differ only in the PSP's own addresses, its USB-paced file reading and its data cache; part 31 says how);
+  tests/psp 289 groups (8 new) with ASan and UBSan, with FFmpeg and `PSP_FFMPEG=0`; tests/psp/ares 294 checks both
+  ways; none failed; 11 broken versions each caught. Games: all 14 on this Mac the same pictures at frames 1200,
+  2400 and 3000 and the same sound before and after; Peace Walker now plays its opening movie (all 2368 pictures,
+  with sound) after pressing Cross on its title, where it had given it up at the missing scePsmfSetPsmf. None of the
+  14 uses scePsmfPlayer; the report's 8 player games aren't on this Mac.
+- **On the RP6** (build 105200): Peace Walker plays its opening movie by itself after the Kant quote, through the
+  stood-in psmf.prx, at 60 fps with its sound running; Chili Con Carnage (not on this Mac) loads psmf.prx too and
+  now plays its opening movie and the Eidos logo to a Memory Stick warning (black in the compatibility run). Ace
+  Combat X and WipEout stop at ThreadManForUser 0xffc36a14 and 0x94416130; no game tried loads the player's library.
+- **After review** (617d34e48; the audit's findings in the owner's words, its report unread): an EP map's size in 64
+  bits and the map kept inside the header (a wrapped count had copied host memory and walked 429 million entries);
+  an access unit cut at 2 MiB and its end searched for once (it had grown without limit, searched quadratically),
+  and sound frames without headers passed over once; an end before the start taken as the start. New group "psmf
+  malformed movies"; tests/psp 290 groups, tests/psp/ares 294, none failed; pspautotests and Peace Walker unchanged.
+- **Left**: the player meeting a game (the report's 8 player games are neither here nor among the device's games
+  tried), LocoRoco 2's GetPsmfInfo variant, PCM sound, marks, the unknown NID 0x340c12cb's real behaviour, the
+  start-up's and loops' real timing, and the choices on the specification's uncertainties (part 31 lists them),
+  which a measuring round with a movie that has sound and an EP map would settle.
+
+## PSP compatibility re-run — 2026-10-07
+
+Branch `local/psp-rerun`, cut from `origin/cursor/psp-ge-features-2b67` (tip
+`b27f084a5`, PR #157). Re-runs all 266 PSP games against the three PRs since
+the old run—#153 (music/movies through FFmpeg's decoders), #156 (41 kernel
+functions, missing 149→77), and #157 (GE line/box drawing, DXT; no curved
+surfaces, anti-aliased lines drawn without anti-aliasing)—and updates
+`docs/psp-compatibility.md`.
+
+- **Result:** 66 improved (black → menu), 22 went from menu to black (why
+  isn't checked yet; the report names them),
+  35 shifted to movie (dark intro frames the old rule lumped into black,
+  so the Before column's 155 "black" overstates the old run's true-black
+  total). Menu: 104 → 141. Movie: 35 (new category). Black: 155 → 73.
+  Loading: 4 → 13. Timeout: 3 → 4 (The Legend of Nayuta added).
+- **Missing functions:** 149/266 (56 %) → 77/266 (29 %). The GE functions that
+  dominated the old top list (`sceGe_user`, `ThreadManForUser`) are gone; the
+  new top gaps are `scePsmf`/`scePsmfPlayer` (video playback, 79 hits) and
+  `scePspNpDrm_user` (DRM, 13 hits).
+- **Speed:** 172 of 266 games now run above 200 fps (was 166). 8 very slow
+  (< 30 fps), down from 13.
+- **Report:** `docs/psp-compatibility.md` updated with the new commit,
+  counts, per-game table, top missing functions, and a "Since de6e6dcb7"
+  section.
+- **No changes to `ares/psp`** beyond what the tool strictly needs.
+
+Checks: `tests/psp/run-tests.sh` (281 groups, 0 failures),
+`tests/psp/ares/run-tests.sh` (290 checks, 0 failed),
+`tests/psp/ares/runner-test.sh` (passing). Builds clean
+(`-Wall -Wextra -Werror`).
+
+## PSP runner and compatibility report — 2026-10-06
+
+Branch `local/psp-runner`, cut from `origin/cursor/psp-test-data-2b67` (tip
+`de6e6dcb7`). Adds `tools/psp-runner/` (a headless PSP game runner) and
+`docs/psp-compatibility.md` (the compatibility report for 266 games).
+
+- **Runner** (`tools/psp-runner/runner.cpp`): mirrors `tests/psp/ares/system.cpp`'s
+  `TestPlatform` (pak, video, input, audio callbacks) with a CLI, PNG/WAV
+  writers, and an exit summary. `discInfo()` reads the NPID and title from the
+  SFO's `DISC_ID` and `TITLE` fields via `sfoValue()`. `build.sh` reuses the
+  build recipe from `tests/psp/ares/run-tests.sh` (same objects: `psp.cpp`,
+  `android_globals.cpp`, `ares-runtime.cpp`, `nall`, sljit, libchdr, zlib,
+  libco).
+- **Test** (`tests/psp/ares/runner-test.sh`): runs `cube.elf` for 60 frames,
+  checks the summary and PNGs. Passing.
+- **Batch**: all 266 games ran through the runner with
+  `--frames 3600 --press "120:Start,123:Start!,1800:Cross,1803:Cross!"
+  --png-at 60,300,1200,3600 --wav dir/sound.wav --ge-threads 2 --fonts
+  <fonts>`. 3 timeouts (Ys - The Oath in Felghana, God of War - Ghost of
+  Sparta, God of War - Chains of Olympus). PNGs are named by the frame run
+  (the runner waits for the screen to present a new picture after each
+  frame that wants one); 100 games' final frame is `frame-001200.png`
+  (the screen hadn't presented by frame 3600).
+- **Report** (`docs/psp-compatibility.md`): per-game table (title, NPID,
+  fps, state, last note), summary counts, top missing functions, timed-out
+  games, and next missing functions. 149 of 266 games (56 %) hit at least one
+  unimplemented function. Top gaps: `ThreadManForUser` (130+ games),
+  `sceCtrl a7144800` (32), `sceGe_user b77905ea` (17), GE feature emulation
+  (29 games: DXT textures, bounding-box tests, line drawing).
+- **No changes to `ares/psp`** beyond what the tool strictly needs.
+
+Checks: `tests/psp/run-tests.sh` (236 groups, 0 failures),
+`tests/psp/ares/run-tests.sh` (278 checks, 0 failed),
+`tests/psp/ares/runner-test.sh` (passing). Builds clean
+(`-Wall -Wextra -Werror`).
+
 **Active work (2026-09-25):** branch `feature/n64-accuracy-neutral-perf-2026-09`
 ([PR #4](https://github.com/pwnedbygary/phobos/pull/4), commits `c02166932` and `ffe337ceb`).
 Stacked on it: branch `feature/perf-hud-2026-09` ([PR #5](https://github.com/pwnedbygary/phobos/pull/5))
@@ -867,6 +2029,1612 @@ the details; the user chose a data tape per game in its save folder.
   (the game's tape never started, so nothing was recorded). The same steps by hand and two full scripted runs
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
+
+## PSP core: the GE faster again, four pixels at a time — 2026-10-07
+
+Branch `cursor/psp-ge-speed2-2b67`, on top of `cursor/psp-ge-features-2b67` (#157, the entry below): seven commits,
+5a22092a0 to 1e63ea36a, then the docs; local only, not pushed. docs/psp-core.md, part 30, describes it. The owner's
+priority: the software renderer as fast as humanly possible, every picture the same. Original code; no PPSSPP or
+JPCSP source read.
+- **What:** triangles' and sprites' rows drawn four pixels at a time in SIMD lanes (`ares/psp/ge/four.cpp`: GCC's and
+  Clang's vector types, NEON on ARM64, SSE on x86-64), each lane the scalar arithmetic exactly (the same float
+  expressions with a vector in every product, so ARM64's fused multiply-adds fall as before), the depth test before
+  the texture (exact without the stencil test); textures decoded a row at a time and the palette's hash 8 bytes at a
+  time; jobs a union of their kinds (584 to 256 bytes) and directional lights once a primitive; textures read as drawn
+  (drawing over themselves) read straight from the host's memory; a vertex's depth flags once a vertex.
+- **Found by ThreadSanitizer and fixed** (its own commit): a row's partial four wrote back its outside lanes' bytes,
+  another row's where a stride is within three pixels of the width drawn; such fours now touch only their own lanes.
+- **Speed** (host M1, the Android build's flags, 300 frames a scene, best of 3, part 29's and this taking turns; 1 GE
+  thread and 7): MC3 night race 11.6 -> 27.8 and 26.6 -> 40.9 fps, its profile menu 11.6 -> 32.0 and 29.0 -> 51.7, LCS
+  in the city 29.0 -> 77.5 and 75.8 -> 131.5, LCS in the woods 20.6 -> 47.4 and 60.7 -> 108.2, Peace Walker's title
+  29.2 -> 106.2 and 135.2 -> 487.9, Lumines' demo 59.0 -> 111.9 and 197.7 -> 341.8. On the RP6 (part 29's app put back
+  for "before", data kept): MC3's menu 21-23 -> 36-37 fps, its race 17-19 -> 30-34 (the Quick Race differs run to
+  run); Peace Walker, Lumines, LCS's intro 60 -> 60. At 7 threads the GE's own thread is the limit now.
+- **Same pixels:** six scenes (MC3 race and menu, LCS city and woods, Peace Walker's title, Lumines' demo): every
+  frame's picture and VRAM and RAM at the end identical to part 29's at 1 and 7 threads; part 24's differential fuzzer
+  against part 29's GE (thousands of lists, 1-8 threads, ASan/UBSan and TSan); new group "draw3d four pixels at a time
+  against one" (20,000 random primitives, fours on and off; 19 broken versions caught); tests/psp 282 groups with both
+  sanitizers ("psp measure" the same line for line), tests/psp/ares 290 checks.
+- **Dropped:** handing batches over at 2^17-2^18 pixels of work, workers spinning before sleeping (no gain: the GE's
+  own thread is the longest path at 7 threads).
+- **Next:** the GE's thread (the CPU's emulation most of it, then vertex setup: 117,000 vertices a frame in MC3's
+  race), four at a time for textures drawn over themselves where provably safe, shorter waits for render targets read
+  back.
+- Scratch, outside the repository: `/tmp/ge2-bench` (runner, states, scripts, profiles), `/tmp/ge2-fuzz`,
+  `/tmp/ge2-mut` (broken versions), `/tmp/ge2-device` (RP6 screenshots and stats).
+
+## PSP core: lines, bounding boxes, DXT textures and sceGeBreak — 2026-10-06
+
+Branch `cursor/psp-ge-features-2b67`, on top of `cursor/psp-hle-games5-2b67` (#156, the entry below): commits
+bb1da6c0a (the GE's code and tests) and 5892da700 (the measuring program's round 4), then the docs; local only, not
+pushed. docs/psp-core.md, part 29, describes it. Written from pspsdk's headers and GU library, pspautotests'
+programs and the results (and screenshots) they recorded on a PSP, public S3TC descriptions and the owner's games;
+no PPSSPP or JPCSP source read.
+- **Lines** (PRIM 1 and 2), in 2D and 3D (cut at the near plane), colors, depth, fog, textures, blending, through
+  the same pipeline, threads and decoded textures: the "diamond exit" rule, its edges fitted to every picture of lines
+  pspautotests recorded (gpu/primitives/lines, linestrip, indices: now pixel for pixel). Not the PSP's in every pixel:
+  gpu/exact/lines' CRCs match neither it nor any variant tried. Anti-aliasing isn't emulated.
+- **Bounding boxes** (BBOX, BJUMP): screen-space, the scissor and region a pixel wider on the left and top, held to
+  the 4096 screen, z against w with DEPTH_CLIP_ENABLE, the count's quirks: every case of pspautotests' gpu/bounding
+  (count, planes, viewport, vertexaddr's results) as the PSP printed them. Out of sight only past one edge for every
+  vertex (chosen). State version 12.
+- **DXT1/3/5**: the PSP's own block layout (colors first, indices then the two 565 colors with red on top, DXT3/5's
+  alpha after), colors widened by shifting, thirds and halves rounded down: all 2216 results of gpu/texcolors/dxt1,
+  dxt3, dxt5. The layout came from those programs and recordings; the blocks' order is S3TC's, taken (no DXT game on
+  this Mac). Kept decoded like other textures.
+- **sceGeBreak**: as gpu/ge/break and breakwait recorded (refusals and their order, mode 0 breaking off the running
+  list for sceGeContinue, mode 1 throwing all away, waiters left waiting).
+- **Also, from pspautotests' pictures**: 8-bit positions in through mode read as 0; index format 3 is 32-bit indices,
+  their low 16 bits taken.
+- **Measuring program, round 4** (lines at every sixteenth, short lines, strips, colors, depth and texels along lines,
+  3D lines, 256 bounding boxes, DXT colors, alphas and block order): built in pspdev's Docker image;
+  `tests/psp/programs/pspmeasure.elf` replaced (hash in its README). The owner's EBOOT.PBP for the PSP isn't
+  committed (kept in the owner's `.local/psp-round4/`). Running it in the core caught a mistake of its own first
+  (memory taken inside an object let the GE reach an unaimed BJUMP).
+- **Checked**: tests/psp 280 groups with ASan and UBSan, tests/psp/ares 290 checks, none failed; the comparison with
+  the owner's PSP (rounds 2 and 3) the same, line for line; 16 broken versions each caught. Speed within a couple of
+  percent either way in six scenes, 1 and 7 threads. Games: Space Invaders Extreme's title gains its line box,
+  Sindacco a line across the sky; Dominator, LCS, SOCOM, Snoopy, VCS, Peace Walker unchanged in the frames captured;
+  pictures in `/tmp/gef-pictures`.
+- **Left**: curved surfaces (Macross); the exact line rule, anti-aliased lines, the DXT block order, boxes past
+  different edges (round 4 will tell); breakwait's wake order; sceGeSaveContext's layout; gpu/exact/coverage's tall
+  triangles; PRIM kind 7.
+- **After review**: clean room, hostile inputs (ASan) and round 4 in the core all fine. Fixed the one Low finding:
+  sceGeBreak(1) now drops the GE's callbacks waiting their turn and has one running return to no GE (else a stale
+  callback could end the list that took its ID before that list's own callback); unmeasured. GE callbacks are a call
+  kind of their own (`Call::Ge`; state version 12 still). Test "ge break and callbacks", both engines, a state round
+  trip. tests/psp 281 groups, tests/psp/ares 290 checks, none failed. The round-4 EBOOT stays out of the repository
+  (the owner keeps it in `.local/psp-round4/`). RP6: Space Invaders Extreme's title shows its box of lines at 60 fps,
+  GTA LCS's intro unchanged at 60 fps.
+
+## PSP core: kernel mutexes, alarms, virtual timers, and the clock in system calls — 2026-10-06
+
+Branch `cursor/psp-hle-games5-2b67`, on top of `cursor/psp-desktop-2b67` (#155, the entry below): commit 3133b63b2
+(code and tests) and the docs after it; local only, not pushed. docs/psp-core.md, part 28, describes it. Written from
+pspsdk's headers and pspautotests' programs and recordings; no PPSSPP or JPCSP source read.
+- **Functions** (41, the ones the owner's 266-game report, `origin/local/psp-runner`'s docs/psp-compatibility.md,
+  finds missing most): kernel mutexes (8: priority or first come, recursive counts, timeouts, callbacks, a holder
+  ending, delete and cancel waking waiters), alarms (4) and virtual timers (14), their handlers called as interrupt
+  handlers; sceKernelReleaseWaitThread, sceKernelCancelWakeupThread (the report's 0xfccfad26), CancelSema,
+  CancelEventFlag; sceCtrl's idle thresholds, sceGeEdramSetAddrTranslation, the memory blocks by the NIDs games
+  import (0xfe707fdf, 0x50f61d8a, 0xdb83a952), sceImposeGetLanguageMode and GetBatteryIconStatus, DevkitVersion,
+  USec2SysClock and its wide form. The lightweight mutex now honours its priority attribute.
+- **Time in system calls**: the clock catches up at each syscall with the instructions run (it had stood still
+  through a CPU go, up to a frame), each syscall ends the go at the next thing due, the thread manager's timeouts last
+  max(t, 205) + 35 microseconds as waittimeouts recorded (1 times out "at once"), and timers go off no sooner than
+  215 microseconds after the call that sets them. States: version 11.
+- **Checked**: pspautotests through the HLE kernel, before and after: threads/ and intr/ 36 to 72 of 167 matching
+  (all of mutex and vtimers, alarm's four, mutexhandoff, waittimeouts, release, semaphores' cancel, callbacks'), the
+  other areas 48 to 55 of 192 (ctrl/idle, sysmem/memblock, misc/timeconv, audio and ctrl timing), gpu/ge/edram;
+  one line worse (msgpipe/trysend, 9 ms left for 8). tests/psp 272 groups (13 new) with and without ASan and UBSan,
+  tests/psp/ares 286 checks, tests/allegrex 56 groups, none failed; five broken versions each caught. The ten games
+  (Burnout Legends and Dominator, LCS, VCS, Peace Walker, Lumines, Midnight Club 3, SOCOM, Snoopy, Gunhound EX), 3600
+  frames in `origin/local/psp-runner`'s runner (a scratch copy) built from this tree and from #155's: the same
+  screens, no missing function called; five import functions added here but don't call them in that minute.
+- **Left**: scePsmf and scePsmfPlayer (19 games): no allowed source for the PSMF container or the player's states;
+  what calls and handlers cost (alarmcosts, preemptuser); event flags' and semaphores' create and status, the
+  lightweight mutex's status, sceDisplayAdjustAccumulatedHcount (seen in pspautotests, not changed); next seen in the
+  owner's games' imports: sceKernelReferThreadRunStatus, sceKernelGetThreadmanIdList, sceGeBreak.
+- **Not checked**: the RP6; the app and the desktop program built whole (the core was built in the runner and the
+  tests); a game that calls the new functions (none here does in its first minute).
+- **After review** (the commit after the docs; part 28's "After review"): a mutex tried from an interrupt handler
+  while no thread ran was left held by nobody (no thread could free it, a state saved then wouldn't load), and one
+  tried from a handler that interrupted a thread went to that thread; now trying, unlocking, cancelling and making
+  one held, kernel or lightweight, are refused outside a thread (ILLEGAL_CONTEXT), as locking was in a handler. The
+  recompiler now gives the clock its exact count at a syscall inside a block, so both engines read the same time.
+  The battery icon's and the cancels' negative-count comments say why. tests/psp 274 groups (2 new, each failing
+  with its fix undone) with and without the sanitizers, tests/psp/ares 286 checks, tests/allegrex 56 groups, none
+  failed; pspautotests' threads/ and intr/ unchanged. The reviewer ran this branch's build on the RP6: Peace Walker,
+  GTA LCS and Burnout Dominator at 60 fps, as on #155's.
+
+## PSP core: the PSP in the desktop program, with FFmpeg on Linux, macOS and Windows — 2026-10-06
+
+Branch `cursor/psp-desktop-2b67` (#155), on top of `cursor/psp-codecs-2b67` (#153, the entry below), with #153
+merged in as 8501415c7 and the review's fixes on top; CI's desktop build then passed on Linux, macOS and Windows,
+packages included (run 37544580853). docs/psp-core.md, part 27, describes it. Original front-end code in the desktop
+program's style; no PPSSPP or JPCSP source read.
+- **Library**: PSP games from a `psp` folder or any folder: the PSP's extensions (iso, cso, zso, dax, jso, chd, pbp,
+  elf); `.iso`, `.chd` and `.pbp`, shared with the PlayStation, are the PSP's when mia's PSP medium takes them (the
+  runner's new `ares::isPspGame`, which reads the file's head: "PSP GAME" ISOs, DVD CHDs, EBOOT.PBPs not of category
+  "ME", MIPS ELFs). An EBOOT.PBP goes by its folder's name, as in the app; PSP discs are listed one by one.
+- **Settings** (pause menu while a PSP game runs, and `settings.ini`; each from the next start): the memory stick (the
+  shared `<saves>/PlayStation Portable/Memory Stick` by default, or a folder picked), the user's fonts (none by
+  default; the folder picked, its `font` or its `flash0/font`, with how many of the 18 it holds), drawing threads
+  (Auto = all cores but one, 1-8). A failed start shows the medium's reason (`lastLoadProblem`).
+- **Controls and picture**: the pad by position (Cross south, Circle east, Square west, Triangle north, L/R, Start,
+  Select, D-pad, left stick); the keyboard's arrows, X/Z/S/A, Q/W, Enter, right Shift, and I/J/K/L now push the left
+  stick. F8 (and the menu's "Screenshot", new) saves the core's frame as a PNG in the data folder's `screenshots`.
+  The picture is drawn at the whole multiple of 480x272 nearest the window (1-4), then scaled bilinearly.
+- **FFmpeg**: `thirdparty/ffmpeg/build.sh` gains `host` for Linux and MSYS2 UCRT64 (`--target-os=mingw32` there),
+  `macos ARCH...` (each architecture, then `lipo`; `@rpath` names; macOS 11+) and `windows TOOL-PREFIX` (MinGW-w64
+  from Linux, which also needs a host C compiler); the desktop branch of CMakeLists.txt runs it, links the two shared
+  libraries, defines `ARES_ENABLE_FFMPEG`, and copies them beside `phobos` (run paths `$ORIGIN`, `@executable_path`).
+  `-DPHOBOS_FFMPEG=OFF` turns it off. The packages carry them as separate files (AppImage `usr/lib`, Phobos.app
+  `Contents/Frameworks`, beside Phobos.exe), each script checking them; desktop.yml installs nasm etc., caches the
+  build by its name and uploads FFmpeg's tarball with each package and to a tag's release. `LICENSE`'s notice says
+  where the libraries are in each package and how to swap them; README mentions the desktop's PSP and the switch.
+- **Checked (host Mac)**: Burnout Legends from boot to racing at 60 fps (menu movie, soundtrack, profile saved to the
+  memory stick, every face button, D-pad, stick, F5/F9 state round trip, the pause menu); Liberty City Stories to
+  play after its opening cutscene at 60; Midnight Club 3's title movie and profile menu (25 fps there, the core's
+  pixel filling); Space Invaders Extreme's name entry and Lumines' title at 60. The universal Phobos.app (arm64 and
+  x86_64, FFmpeg's too) ran Burnout natively and under Rosetta at 60, the libraries from Frameworks; a copy with
+  libavcodec swapped and re-signed ran too. Library scan and font folder rules checked by scratch programs.
+- **Windows and Linux (Docker, targeted: 2 GB is too little for the whole core)**: FFmpeg built by CMake for MinGW-w64
+  and for Linux arm64; the changed sources and the runner compiled for both; a program linked as Phobos.exe is
+  passed `package-windows.sh` (after linking FFmpeg's DLLs `-static`: they had needed libwinpthread-1.dll), and one
+  beside the Linux libraries found them by `$ORIGIN`. Full builds and packages are CI's.
+- **Tests**: tests/psp 259 groups, tests/psp/ares 282 checks, the app's 264 unit tests, none failed; modern release
+  APK built (23,604,918 bytes).
+- **Review and CI fixes** (CI on 8501415c7 failed only at Linux's AppImage): linuxdeploy now runs with the build
+  folder on `LD_LIBRARY_PATH` (it couldn't find libavutil for libavcodec), and the script checks both libraries are
+  files in `usr/lib` that the program and each other find by run path (checked in an x86-64 Docker container with a
+  stand-in program: the AppImage's copy found ATRAC3plus); `LICENSE` gains the MinGW-w64 runtime and winpthreads
+  notice (in LicenseNoticesTest's list, and a test of its texts); the PSP fonts label is counted when the setting
+  changes, not twice a frame; `build.sh`'s stale-lock takeover is atomic (a `takeover` mkdir inside the lock;
+  8 builds at once, 3 rounds, one takeover each). Burnout Legends again at 60 on the Mac; the app's 265 unit tests.
+- **Not checked**: a real gamepad, real PSP fonts, a PlayStation CHD in the library, the whole program run on Linux
+  and Windows, and the fixed AppImage step in CI's whole build (next push).
+
+## PSP core: music and movies through FFmpeg — 2026-10-06
+
+Branch `cursor/psp-codecs-2b67`, on top of #152 (`cursor/psp-test-data-2b67`, the entry below, which carries
+master's desktop build and the GPL-3.0-or-later license), PR #153: commits fffd26303 (FFmpeg's build), c0f2625e4
+(sceAtrac3plus), 332015eaa (sceMp3), e772d44a2 (movies) and the docs; then the merges of #152 and master, and the
+review's fixes. docs/psp-core.md, part 26, describes it. Original code; no PPSSPP or JPCSP source read (pspsdk,
+pspautotests' programs and recorded results, the PSP Developer Wiki, public container formats, FFmpeg's API
+documentation, the games' behavior).
+- **Licensing setup (the owner's choice: FFmpeg's LGPL decoders).** `thirdparty/ffmpeg/build.sh` downloads FFmpeg
+  9.0.2's official tarball, checks its SHA-256, and builds it unmodified with `--disable-gpl --disable-nonfree
+  --disable-version3 --disable-everything --disable-autodetect` and only the decoders atrac3, atrac3p, mp3float and
+  h264, as two shared libraries (libavcodec, libavutil); no FFmpeg binary or source is committed. The root
+  CMakeLists.txt (option `PHOBOS_FFMPEG`, on; `-Pphobos.ffmpeg=OFF` from Gradle) builds it for arm64-v8a with the
+  NDK, cached in `.cache/ffmpeg`, defines `ARES_ENABLE_FFMPEG` for `phobos_core` and links it into `phobos_android`
+  (the desktop program builds without it for now); the APK carries the two `.so` files beside Phobos's, so they can
+  be replaced (the LGPL's relinking terms). CI caches the build (keyed on the build's own name) and puts the tarball
+  in `android/dist` to be published with each release (the complete corresponding source). `LICENSE` (Settings,
+  About, Open-source licenses) has FFmpeg's notice, origin, hash, build script, how to swap the libraries, the
+  Independent JPEG Group's credit and the LGPL 2.1 text; the About screen says "This software uses libraries from the
+  FFmpeg project under the LGPLv2.1"; `LicenseNoticesTest` checks it all against the script. Without the define
+  (`PSP_FFMPEG=0` for the host tests) the core builds with no decoders, the streams refused as before. The README's
+  build section lists what the build needs (bash, make, curl, xz; the network the first time), the Gradle switch
+  and `PHOBOS_FFMPEG_TARBALL`.
+- **APK**: 23,604,722 bytes against 22,574,705 built with `-Pphobos.ffmpeg=OFF`: +1.03 MB (4.6%) for FFmpeg.
+- **Decoded**: ATRAC3 and ATRAC3plus (sceAtrac3plus: whole, halfway and streamed files, loops, the second buffer,
+  resets, every query; pspautotests' atrac programs match but for the low-level and sas modes), MP3 (sceMp3: both
+  handles, its buffers' halves, loops, resets; no game of the owner's uses it), movies (the PSMF header read; H.264
+  pictures by sceMpegAvcDecode or sceMpegAvcDecodeYCbCr plus sceMpegAvcCsc, converted by BT.601 into the game's pixel
+  format; their ATRAC3plus sound by sceMpegGetAtracAu and sceMpegAtracDecode). sceAac, scePsmf(Player) and sceSas's
+  ATRAC3 voices aren't done: no game of the owner's imports them but Peace Walker four scePsmf functions, not seen
+  called.
+- **Heard and seen** (host, from boot; WAVs and frames under `/tmp/codecs-runner/out`; pitch checked against the
+  decoded streams, matching): Burnout Legends' EA movie, FMV and title over its movie, music -11.8 dBFS (0.34% of
+  samples clipped in the game's own mix); Dominator's logo movies and title over its movie (-18.4 dBFS); the GTAs'
+  and Midnight Club 3's logo, title and credits movies with sound (-15 to -18 dBFS, next to no clipping); Space
+  Invaders Extreme's music (-15.9 dBFS at its title, -10.6 in its stage) and its stage's background movie, black
+  before; SOCOM's menu music (-29.4 dBFS) and Brave Story's (-25.8).
+- **CPU** (host): 90 microseconds an ATRAC3plus frame (0.2% of a core a stream), 600 a movie picture decoded and
+  converted (1.8% at 30 a second); 1.9-2.8% of the game's time in movie scenes. On the RP6: Burnout Legends' opening
+  movie and its profile screen over the menus' movie at 60 fps (HUD CPU 72%, 54%), no decoding errors in the log.
+- **Checks**: `tests/psp/run-tests.sh` 259 groups with both sanitizers, no failures (new: atrac.cpp's 12, mp3.cpp's
+  4, movies.cpp's 8; state fields and refusals for all three; real FFmpeg decodes of pspautotests' sample.at3 and
+  sample.mp3 with `PSP_AUTOTESTS`; #152's six media groups); `tests/psp/ares` 282 checks, none failed; both again
+  with `PSP_FFMPEG=0`; the app's 264 unit tests. State version 10 (9 refused); decoders are made afresh after a load,
+  the sound's primed with the frame decoded last.
+- **The review's findings, fixed** (each with a test that fails without its fix; part 26 has the details):
+  sceMpegAvcCsc's part clamp overflowed in 32 bits (a host heap over-read, or a 4 GiB row): it compares with what's
+  left of the picture now. atracParse looped for ever on a chunk length that wrapped its 32-bit walk: it walks in 64
+  bits, and refuses data or sample counts past 32 bits (0x80630008). The IJG's credit is in FFmpeg's notice.
+  sceMpegCreate starts the Media Engine's state afresh. The runtime's limits are the loader's (pictures at most 1024
+  each way, the H.264 decoder held to it; fmt extras 64 bytes). The movie's last sound frame is saved and primes its
+  decoder after a load, and pictures start again from I pictures that aren't IDR ones too. build.sh checks a download
+  before keeping it and tries once more, takes over a lock whose process is gone, and prints its build's name for
+  CI's cache keys; Gradle has `-Pphobos.ffmpeg=OFF`. The unused decoders aac, atrac3al and atrac3pal are gone.
+- **Loads mid-movie** (host): Liberty City Stories, saved at frame 1100 in its logos movie, gave the same frames as
+  the run that went on from frame 1260 and the same sound; Burnout Legends' menu movie from 1440. Both the same
+  with the old IDR-only rule, so the I-picture rule is checked by its test only.
+- **RP6** (this build, installed over the last): Liberty City Stories' logo movies and Space Invaders Extreme's
+  title screen (its music, on the host) at 60 fps, the sound's stream steady in both (no underruns after the
+  start); not listened to. Force-stopped after.
+- **Uncertain / next**: the decode wait (300 microseconds) is chosen, not measured; the Media Engine's colour
+  rounding isn't measured; a PSP's mixer may or may not clip Burnout's title as much; MP3's first frame after a load
+  loses the bits it borrowed; sceAtrac's low-level and sas modes, sceSas ATRAC3 voices, sceAac and scePsmf are left
+  for a game that needs them; Snoopy's movies weren't reached in the runs.
+
+## PSP tests: the test programs and the PSP's GE measurements in the repository — 2026-10-06
+
+Branch `cursor/psp-test-data-2b67`, on top of `cursor/psp-hle-games4-2b67` (#151). At the owner's request, the
+PSP core's built test programs (`tests/psp/programs`: hello, system, disc, gu, pspsdk's GU samples and
+pspmeasure, 13 MB, built from `tools/psp-test-programs` with pspdev on 2026-10-04 and -05, the very files the tests
+have run with) and their PSP's round-3 GE measurements (`tests/psp/measurements/ge-round3`, 90 files, 21 MB, from
+the owner's PSP on firmware 6.61) are kept in the repository, so another machine (and CI) runs every test with no
+PSP toolchain. `tests/psp/run-tests.sh` and `tests/psp/ares/run-tests.sh` use them unless `PSP_TEST_PROGRAMS` or
+`PSP_GE_RESULTS` name other folders (empty: none). The VFPU's measurements (about 670 MB a round) stay with the
+owner, copied where they're needed. Each folder's README says where its files come from (the programs' licenses:
+pspsdk's and newlib's BSD-style ones; their SHA-256) and how to rebuild them; `.gitattributes` marks them binary;
+`docs/development-process.md` records the authorization.
+- **Checks:** both test scripts with no variables set, so with these folders: tests/psp 236 groups (ASan+UBSan;
+  "psp measure" compares pspmeasure's GE results with these), tests/psp/ares 278 checks (the program checks run,
+  none skipped).
+
+## PSP core: the games further still — 2026-10-06
+
+Branch `cursor/psp-hle-games4-2b67`: `cursor/psp-ge-speed-2b67` (the entry below) with `cursor/psp-fonts-2b67`
+merged in (commit 53fc621b1, both sides kept, state version 8), not pushed. docs/psp-core.md, part 25, describes
+it. Original code; no PPSSPP or JPCSP source read (pspsdk, pspautotests' programs and recorded results, the PSP
+Developer Wiki, the games' own behavior).
+- **Burnout Dominator's GE hang: not the GE's.** Part 22's runner resumed from a state saved before
+  sceKernelVolatileMemLock existed; the game asks for the volatile memory as its first race loads (frame 3908), got
+  NOT_YET_LINKED and no address, and laid its race out from that: textures read from 0x00f79aac, its data over its
+  display lists, and from frame 5496 the GE ran vertex data as commands until a JUMP, relative to an ORIGIN among
+  them, sent it to 0x03c0de64, running zeros every frame. Reproduced exactly with the function taken out of a
+  scratch build (GE trace); with it, and from boot on this branch, the race plays. Test: "power volatile memory
+  locked at once".
+- **Space Invaders Extreme: past "NOW LOADING" into its stages.** Its background movie's thread (the best priority)
+  asked for an access unit, feeding the ringbuffer, in a loop that never waits: with movies that never had any
+  data, it starved every other thread. Movies are now fed and taken apart as pspautotests' video/mpeg/basic
+  recorded (sceMpegRingbufferPut calls the game's callback on its thread; sceMpegGetAvcAu cuts the MPEG-2 program
+  stream's video into access units with their time stamps; packets freed as taken; a picture from the second
+  decoded on; nothing drawn); basic's own movie run through the HLE gave all 180 recorded frames and the callback's
+  181 calls exactly. sceMpegAvcDecodeDetail answers 0 (the game waits for its first picture). Headers are still
+  refused, so the games that check skip their movies as before; Burnout's callbacks give nothing, as before.
+- **Where each game gets now** (frames under `/tmp/games4-runner/out`, states in `/tmp/games4-runner/states`):
+  Dominator racing its first race (`dom-c`); Peace Walker past its install and the optional DATA INSTALL (NO) to
+  the beach training, Snake controllable (`pw-f`, `pw-g`); LCS driving Vincenzo to the safehouse (`lcs-e`); VCS Vic
+  at the army base (`vcs-d`); Sindacco in Paulie's car to Atlantic Quays (`sind-d`); Burnout Legends lap 2 of 3
+  (`burnout-b`); Midnight Club 3 racing (`mc3-a`); SOCOM deployed in its first mission (`socom-d`); Snoopy's flying
+  lessons (`snoopy-b`); Gunhound EX Mission 01 (`gun-b`); Brave Story's prologue (`brave-b`); Lumines Challenge
+  (`lumines-c`); Space Invaders Extreme's first stage, then END GAME back to its title, its movie stopped
+  (`invaders-e`, `invaders-h`). Boots of all twelve checked with the movie change (`*-boot`).
+- **Checks**: `tests/psp/run-tests.sh` 236 groups with both sanitizers, no failures; `tests/psp/ares` 278 checks,
+  none failed (both run on the merge too, and after the review's fixes). New groups "mpeg movie fed and taken
+  apart", "mpeg movie thread waits for its picture", "mpeg ringbuffer callback states", "power volatile memory
+  locked at once" (programs on both engines, state round trips), and the review's six below; "state fields" checks
+  a ringbuffer's callback part way through (five refusals). State version 9 (version 8 refused).
+- **Review:** a general-purpose reviewer; the clean-room check found the mpeg code independent; four low findings,
+  all fixed, each with a test that failed before it. sceMpegRingbufferPut trusted the game-written ring (0x7fffffff
+  packets with 0x80000000 filled overflowed, UBSan; 8192 packets or -200 filled had the callback asked for 5000 or
+  4296, and a state saved as it waited was refused by a fresh machine): a ring that couldn't be one is given
+  nothing now, sceMpegGetAvcAu's guard ("mpeg ringbuffer that isn't one given nothing"). The callback's $gp came
+  from ring offset 44, past pspsdk's 44-byte SceMpegRingbuffer: Put's caller's now ("mpeg ringbuffer callback with
+  the caller's global pointer"). Missing groups added: a callback giving more than asked (clamped), one returning
+  an error (Put returns what came before), a feeder terminated asleep in its callback (state round trip), seeded
+  random packs through sceMpegGetAvcAu (read below the packets, filled within them); taking out the clamp, the
+  `gave <= 0` check, or either mpegAbandoned call fails one (deleteThread's only via a loaded state in which a
+  dormant thread still has a feeding: every live thread is ended before it's deleted). The counts here (227 and
+  268) were out of date. State layout unchanged.
+- **Speed** (host Mac, scratch runner, 600 frames of play, GE on 7 threads / 1): Gunhound 213 / 138 fps, Dominator
+  193 / 104, Brave Story 168 / 94, Lumines 117 / 44, Burnout Legends 97 / 54, VCS 86 / 40, LCS 78 / 31, Sindacco
+  73 / 35, Snoopy 61 / 38, Peace Walker 60 / 33, Midnight Club 3 7.3 / 2.1. Midnight Club 3 racing at night is
+  bound by filling pixels (its 32-bit framebuffer's triangle and sprite loops take nearly all of seven threads):
+  part 24's SIMD and setup work is where its time is.
+- **Uncertain / next**: lines (PRIM 1, 2) aren't drawn (LCS's route, SIE, SOCOM, Dominator): needs a measurement;
+  bounding boxes all in sight; Dominator's race start shows torn dark bands a moment (a bloom pass reading the
+  framebuffer it writes); sceKernelDevkitVersion missing (Peace Walker carries on); Peace Walker's YES to the
+  optional install not followed through; movie headers still refused, ATRAC3plus access units never come, and
+  sceMpegAvcDecodeStop doesn't hand back the held picture. The codecs (FFmpeg's LGPL decoders, the owner's choice)
+  would make movies seen: the access units are there now.
+
+## PSP core: the CI's PSP system tests made green — 2026-10-06
+
+Branch `cursor/psp-ge-speed-2b67` (#150). The workflow `.github/workflows/psp-core.yml` runs `tests/psp/run-tests.sh`
+(the whole test built with `-Wall -Wextra -Werror` and the address and undefined sanitizers, then run); its PSP
+system tests job failed (run 37483407156, exit 1). Two defects in the tests' own code, found one after the other:
+- **What:** `tests/psp/audio.cpp:695` printed the `s64` pair (nall's `int64_t`, a `long int` on this host) with
+  `%lld`, which the compiler's `-Werror=format=` rejects; fixed with `static_cast<long long>`, the repo's own
+  precedent (`ares/n64/vulkan/parallel-rdp/vulkan/query_pool.cpp:212`). `tests/psp/disc-image.hpp:121` copied every
+  file with `std::memcpy` from `file.data.data()`, null for an empty file (the test disc's `EMPTY.BIN`), which UBSan
+  flags as UB; the no-op copy is now skipped.
+- **Checks:** `tests/psp/run-tests.sh` with both sanitizers: 226 groups, 0 failures (before: the build failed at
+  `audio.cpp:695`, then the binary aborted at `disc-image.hpp:121`).
+- **Then:** the same two lines sat in the heads of the open PSP PRs #140-#151 (the memcpy line from #140 on, the
+  `%lld` line from #147 on). Each fix was made where it first appears (#140's memcpy, #147's `%lld`, the same
+  change as here) and every stacked branch merged the one below it, up to #151, so each PR's head carries both.
+
+## PSP core: the GE made fast, every pixel the same — 2026-10-06
+
+Branch `cursor/psp-ge-speed-2b67`, on top of `cursor/psp-hle-games3-2b67`, with `cursor/psp-fonts-2b67` (#149, the
+entry below) merged underneath, not pushed. docs/psp-core.md, part 24, describes it (part 23 is the fonts'); the
+owner's decision (the software renderer as fast as possible and exactly as accurate, the reference; Vulkan and
+OpenGL renderers later) is in its Decisions. Original code; no PPSSPP or JPCSP source read.
+- **What:** textures kept decoded, dropped the moment their memory changes (the GE watches their pages; the CPU's
+  compiled stores keep off watched pages); primitives set up once as jobs and drawn row by row with the very same
+  arithmetic; drawn in bands of 8 rows by several threads, each band in the list's order (option "GE Threads": 0,
+  the default, one fewer than the host's cores; 1, as before); in 2D, regions and texture rows exact; a leaner pixel
+  pipeline, texture function and filter; drawing going on while the CPU runs and the next batch is set up, nobody
+  seeing it half drawn (`Memory::pointer()`, states and power wait for the VRAM pages it uses, the CPU's page tables
+  lose them meanwhile); cheaper vertex reads and screen picture.
+- **Speed** (host M1, the Android build's flags, 300 frames a scene, before -> after with 7 threads): GTA LCS in the
+  city 20.4 -> 83.4 fps (4.1x), Peace Walker's title 13.5 -> 129.8 (9.6x), Lumines' demo 31.3 -> 192.8 (6.2x),
+  Burnout Legends racing 26.8 -> 85.9 (3.2x), Midnight Club 3 racing 6.2 -> 27.9 (4.5x), Gunhound EX 123 -> 229
+  (1.9x); single-threaded 1.4-2.1x.
+- **Same pixels:** every frame's picture and VRAM (and RAM at the end) in the six scenes identical to the old core's
+  with 1, 2, 4, 7 and 8 threads and on the interpreter; a scratch differential fuzzer against the old GE (thousands
+  of random lists, every setting; 1, 4 and 8 threads; with the address, undefined-behavior and thread sanitizers);
+  the parts' 213 groups (the PSP's measured results unchanged) with both sanitizers and under ThreadSanitizer, the
+  ares system's 254 checks. New groups "draw textures kept decoded" and "ge drawn on several threads"; 16 broken
+  versions each failed them.
+- **Peace Walker's stripes:** not the core's (an NDK build in a Linux arm64 container draws every frame as the host
+  does), but the presentation: the app handed Android the 480x272 frame and the compositor scaled it 3.97 times,
+  bilinearly, the title's one-pixel lines becoming soft bands of drifting strength. The PSP's picture now goes into
+  the window at the whole multiple of its size nearest the view's (4 sideways: 1920x1088, scaled 0.993 by the
+  compositor; 2 upright; exact with Integer Scaled), each line sharp and even ("sharp bilinear"). Screenshots
+  outside the repository: `/tmp/gefix-device/pw-before.png`, `pw-after-25s.png`, crops in `crops/`.
+- **Review:** a general-purpose reviewer; the clean-room spot check found the new code original; one medium and four
+  low findings, all fixed, each with a test that failed before; a pre-existing fill-rule function rewritten
+  clean-room. Medium: a quarter-turned 2D sprite's first column could take texture rows outside the decoded copy (a
+  heap read past it, 24 pixels unlike memory's); each turned pair now widens the rows reached, fetch() asserts in
+  debug builds, and a new group compares 4000 random primitives drawn with textures kept decoded against one that
+  decodes nothing (thread counts can't catch cache bugs). Lows: the screen's picture formed a pointer from null
+  (VRAM's second copy); the cache keyed on rows reached (now one copy a texture, grown as needed, unused-longest
+  dropped first from a list); "GE Threads" unbounded (now at most twice the cores and 64); the renderers' decision
+  twice in the docs, and a claim about drawing over one's own texture that wasn't measured. The fill rule
+  (rightOrBottom(), with a truncating division) is now the top-left convention on the edge functions' directions,
+  exact: the comparison with the owner's PSP unchanged line for line; GTA, Burnout and Midnight Club differ by 1-4
+  pixels in some frames (slivers' right edges the old division misjudged and drew twice), the other scenes
+  identical; kept.
+- **Merged with #149 (the fonts):** only system.cpp's options and the docs clashed; states stay version 8.
+- **In the app:** Settings, Emulation, Performance, "PSP Drawing Threads" (Auto, the owner's default: all cores but
+  one; or 1, 2, 4, 6, 8), handed to the core as "GE Threads" as a game loads.
+- **On the RP6** (installed over the app, data kept; overlay after about 40 s; force-stopped): Peace Walker's title
+  10.6 -> 60.0 fps, GTA LCS 16.6 -> 60.0, Lumines' demo 24.0 -> 59.9, Burnout Legends' title 60 -> 60 (before: the
+  fonts' build without part 24; before tonight's work, GTA 17.7, Peace Walker 9.5, Lumines about 40).
+- **Checks:** tests/psp 226 groups with both sanitizers and under ThreadSanitizer, tests/psp/ares 274 checks, the
+  app's 262 unit tests and its release build.
+- **Next:** setting up for less and drawing bands as primitives arrive (the GE's thread is GTA's and Burnout's
+  longest path now), SIMD four pixels at a time, the GPU renderers.
+
+## PSP core: the system fonts — 2026-10-06
+
+Branch `cursor/psp-fonts-2b67`, on top of `cursor/psp-hle-games3-2b67` (the entry below), not pushed.
+docs/psp-core.md, part 23, describes it. sceLibFont draws the PSP's own fonts (the PGF files of flash0:/font) where
+part 20's stand-in found none, so games that print with them show their text. Written from the owner's own fonts
+(read field by field with scratch scripts) and pspautotests' font programs and the results they recorded on a PSP;
+no other emulator's code read (PPSSPP's and JPCSP's PGF readers weren't opened).
+- **How the user gives Phobos the fonts**: they're Sony's firmware, never in the repository, the APK, a commit or
+  a backup. Copy them from your own PSP with `tools/psp-flash0-dump` (it leaves `PSP/GAME/FLASH0DUMP/flash0/` on
+  the memory stick) and put the `FLASH0DUMP` folder in the device's Download folder: while the app has fewer than
+  the eighteen, it finds them there by itself (at start, before a PSP game loads, and as Settings, Firmware opens)
+  and copies those it hasn't got, where Android lets it read there (a folder grant that covers it, or a device that
+  allows it, as the RP6 does). Otherwise, or from any other folder: Settings, Firmware, "PSP fonts (from your PSP's
+  flash0)", and pick `flash0/font` (or `flash0`, or the `FLASH0DUMP` folder: the font folder is found inside).
+  Either way only the eighteen by name (any case), 1 byte to 4 MiB each, go into the app's own files
+  (`firmware/PlayStation Portable/font`), and the row says how many are there and whether they were found by
+  themselves ("found in Download/FLASH0DUMP") or picked ("copied"); picking again replaces them. The runner hands
+  that folder to the core as a PSP game loads (core option "Fonts"); with none there the library is the stand-in.
+  Android's backups leave the app's `firmware/` folder out, so after a restore the fonts are imported again
+  (by themselves if they're still in Download/FLASH0DUMP and readable there).
+- **What's there**: a PGF reader (`ares/psp/kernel/pgf.cpp`: header, tables, character maps, glyphs, run-length
+  pictures by rows and columns, shadows, the Korean font's composites; every offset and size checked against the
+  file, a damaged glyph missing on its own); the library (`font.cpp`): NewLib/DoneLib, the font list, FindOptimumFont
+  and FindFont, Open, OpenUserFile, OpenUserMemory, Close, GetFontInfo(ByIndexNumber), character and shadow info,
+  image rectangles and glyph images (whole and clipped, the 4- and 8-bit formats drawing, fractions of a pixel across
+  shared as recorded), the alternative character, SetResolution and the four conversions. The game's alloc and free
+  are called for every block, in the sizes and order recorded, the calling thread running them as callbacks run.
+- **States**: version 8 (1 to 7 refused): libraries, open fonts and calls part way through saved and checked;
+  fonts read again from where they came from on loading, the state refused if one is missing or differs.
+- **On the host** with the owner's fonts (frames in `/tmp/fonts-runner/final`, not in the repository): Gunhound EX's
+  save notice in Japanese (a black screen before); Peace Walker's "Checking Memory Stick™", its MSF disclaimer, its
+  player's name ("Is this name OK?"), control scheme, BUTTON CONFIG, DATA INSTALL and "Installing... (Progress: N%)",
+  all of which had shown none of their words.
+- **Checks**: `tests/psp/run-tests.sh` 221 groups with both sanitizers (ten new: "pgf read back", "pgf damaged",
+  "fonts memory", "fonts found", "fonts measured", "fonts drawn", "fonts of the program's own", "fonts resolution",
+  "fonts states", "fonts folder"; "state fields" refuses seventeen more states); `tests/psp/ares` 264 checks (the
+  option; a version 7 state refused); the app's unit tests (251, `PspFontsTest` new) and the modern release build.
+  Twelve broken versions each failed a test. On the RP6: the build installed over the app (data kept); the new row,
+  given `Download/FLASH0DUMP`, found `flash0/font` and copied the eighteen ("18 of 18 fonts copied", Complete). No
+  game was started there (quitting would have written its auto state).
+- **Review:** a general-purpose reviewer; the clean-room spot check found `pgf.cpp` and `font.cpp` independent; one
+  medium and four low findings, all fixed, each with a test that failed before it. Medium: a state could say a font
+  of the game's memory was read whole (mode 1), which sceFontOpenUserMemory never makes, and a call part way through
+  opening one then ended as a whole file's open, writing through a block it never asked for (the address
+  sanitizer's heap overflow); refused now, and an open's ending asks where the font came from before its mode.
+  Lows: a game's font file opened by a path relative to its working folder was kept as given and read again on
+  loading before the working folder was back, so a fresh session refused the state (kept whole now); a font in
+  memory given a length past its end (-1) was copied to the end of RAM at every open and state load (8 MiB at most
+  now, and one open at that address shared without reading memory again); the picker copied any .pgf of any size,
+  and one unreadable file stopped the rest and was reported as none found (the eighteen by name, 1 byte to 4 MiB,
+  each failure kept to its file, its part copy removed, and named apart from none found; the core skips a font
+  file over 4 MiB); Android's backups took the copies (the firmware folder is left out now: `backup_rules.xml`,
+  `data_extraction_rules.xml`, cloud and device transfer). The state's layout didn't change: still version 8.
+  Then the owner's choice of the same night: the fonts found by themselves in Download/FLASH0DUMP, as above.
+- **Checks after the review**: `tests/psp/run-tests.sh` 221 groups with both sanitizers (checks added to "fonts of
+  the program's own", "fonts states" and "fonts folder"; "state fields" refuses eighteen states); `tests/psp/ares`
+  264 checks; the app's unit tests 259 (`PspFontsTest` 15: the eighteen by name and size, failures kept apart and
+  reported, and the dump found by itself in fake storage, only missing fonts copied, nothing read with all eighteen
+  or from a folder the app can't read) and the modern release build. On the RP6 (installed over the app, data
+  kept; the picker's grant on the dump's folder gone with the update): at start "all 18 here, none looked for"; as
+  Settings, Firmware opened, the row "18 of 18 fonts copied", Complete, and the dump's folder found by itself and
+  readable without any grant ("18 in /storage/emulated/0/Download/FLASH0DUMP/flash0/font, readable": the app has no
+  storage permission and the files are a file manager's, so the RP6's own Android allows it). The automatic copy
+  itself wasn't seen there, since the app already had all eighteen and nothing may delete them on the device; the
+  host tests cover it. No game was started.
+- **Uncertain**: shadow flags reported raw (the PSP's differ: their meaning isn't known); kr0's country; a game's
+  font file opened a piece at a time is read through the kernel's files, not the game's callbacks; drawing borrows
+  no memory from the game; the order of a few frees; see part 23's list. Whether other devices let the app read
+  Download/FLASH0DUMP without a grant as the RP6 does (stock Android doesn't, for another app's files).
+- **Next**: try more games that use the system fonts; Peace Walker's and Gunhound's text on the device. Then, as
+  the owner chose, after the GE's speed (another branch's): the stuck games further (Dominator's GE hang, Peace
+  Walker after its install, the GTAs into play), then the codecs (FFmpeg's LGPL decoders), then the Vulkan and
+  OpenGL renderers (docs/psp-core.md, Decisions).
+
+## PSP core: the games, further — 2026-10-06
+
+Branch `cursor/psp-hle-games3-2b67`, on top of `cursor/psp-hle-games2-2b67` (#146) and, merged since, of
+`cursor/psp-sound-2b67` (#147, the entry below, itself on #146), not pushed. docs/psp-core.md, part 22, describes it
+(part 21, the sound worker's, describes #147; part 22's end, the merge). The stalls part 20 couldn't explain, traced
+with the scratch host runner (never committed; now with write and read watchpoints, symbols for llvm-objdump over
+memory dumps, saved states at menus, the stick, a memory stick folder per run) and fixed from pspautotests'
+recorded results and the games' behavior; no other emulator's code read:
+- **GTA LCS, VCS, Sindacco at 85%**: synchronous sceIoRead took no time, so GTA's streaming thread (0x20) finished a
+  request and called its callback before the main thread (0x38) had noted it, and the callback dropped it as
+  cancelled. Synchronous reads and writes now wait their device's time (part 20's rates), refused where a thread
+  can't wait, as intr/waits recorded.
+- **Brave Story on its logo**: its sound thread (0x10) took the CPU while the game held interrupts off, found every
+  blocking output refused, and spun at the top priority. With interrupts held off nothing now takes the CPU and
+  every wait refuses (intr/waits, intr/mfic); a thread taking the CPU has interrupts on.
+- Then what the games asked for next: the keyboard accepts a name (an empty field gets "PSP": Peace Walker),
+  sceIoRename keeps the file in its folder (io/file/rename: Peace Walker's install), sceRtcGetWin32FileTime (Midnight
+  Club 3), sceRtcSetTick (Peace Walker), sceKernelVolatileMemLock (Dominator), and delays as long as a PSP's (205
+  microseconds at least, plus 25: delaylen; Brave Story's 1-microsecond polls cost the host 25% of its time).
+- **On the host** (frames in `/tmp/hle3-runner/final`, states in `/tmp/hle3-runner/states`, not in the repository):
+  GTA LCS and VCS play their openings in the city, Sindacco is in its first mission; Brave Story names its heroes and
+  plays its prologue; Gunhound EX starts Mission 01; Snoopy is in its flying lesson; SOCOM saves a profile and deploys
+  into its first mission; Burnout Legends and Midnight Club 3 race; Burnout Dominator's first race loads, then its GE
+  runs off a display list's end (to look into); Peace Walker gets its name, button configuration and data install,
+  whose menus need the system's fonts. Peace Walker's title is GE-bound (11.5 fps here, drawing correctly: the
+  handheld's 9.5 fps is the software GE's per-pixel cost; its garbling there doesn't show on the host).
+- **Checks**: the parts' 196 groups with both sanitizers (eight new: files synchronous reads wait and wait state,
+  interrupts held off keep the CPU, utility keyboard, files rename, rtc file times and ticks, power volatile memory
+  waited for, kernel thread delays' lengths; "state fields" refuses nine more states); `tests/psp/ares` 236. Broken
+  versions failed the new groups. States stayed version 5 then (two new waits, no new fields); see the review.
+- **Review:** a general-purpose reviewer; the clean-room spot check found every area independent; one medium and
+  five low findings, all fixed, each with a test that failed before it. Medium: a thread holding interrupts (or
+  dispatching) off lost the CPU when it rotated its own line or changed its own priority (both made it ready, and
+  the switch turned interrupts on); it keeps the CPU now, giving way once they're back. Lows: a handler that left
+  interrupts off passed that on to the thread it interrupted (back on as it returns); the keyboard's limit of 0 cut
+  the nickname to nothing and a roomless field got a NUL (0 is no limit; nothing written); sceIoIoctl's disc reads
+  took no time (refused and timed as sceIoRead's); the interrupt flag's meaning changed under state version 5
+  (version 6, older refused, the flag checked); mfic and mtic used a flag apart from the kernel's, reading 0 at the
+  start where intr/mfic recorded 1 (one flag now, the CPU's, on at power, mtic's lowest bit alone;
+  sceKernelCpuResumeIntrWithSync listed as sceKernelCpuResumeIntr). New groups "interrupts back on after a handler"
+  and "interrupts one flag, mfic's and the kernel's"; four groups grown. 198 groups, `tests/psp/ares` 240.
+- **Merged with #147 (sound)**, which this branch now sits on: only the state's version (7, each side having made a
+  6 of its own), the ares test's list of refused versions and the docs clashed; part 21 comes before part 22 in
+  docs/psp-core.md, this entry before sound's. Then `__sceSasCore` (and `__sceSasCoreWithMix`) refuse where no thread
+  may wait, as intr/delays recorded. Checks: 211 groups with both sanitizers, `tests/psp/ares` 254; states are
+  version 7, versions 1-6 refused. On the host from boot (scratch runner, frames and WAVs in
+  `/tmp/stallfix-runner/out`): GTA LCS reaches the city, Brave Story its intro, Burnout Legends its title, as before,
+  all silent there (ATRAC music, no voice keyed on); the Street Fighter III port sounds as part 21's capture, 4 s
+  later (its 4.4 MB of boot reads now take the disc's 3.2 s).
+- **Next**: Dominator's GE path; sceLibFont from flash0 (Peace Walker's and Gunhound's menus); wait timeouts as
+  waittimeouts recorded; a thread started with dispatching held off running at once (dispatchwake); the GE's speed.
+
+## PSP core: sound — 2026-10-06
+
+Branch `cursor/psp-sound-2b67`, on top of `cursor/psp-hle-games2-2b67` (the entry below). Games are heard:
+sceAudio's eight mixer channels and its SRC channel are added up into the system's 44.1 kHz stream where the DMA
+timing model hears them (volumes over 0x8000, mono on both sides, the SRC rates converted by linear interpolation,
+sums clamped to 16 bits), and sceSasCore's VAG and PCM voices sound: the SPU's ADPCM decoded, pitches interpolated,
+the recorded envelope, volumes and dry/wet sums, written in stereo or multichannel's four planes, or mixed into the
+game's buffer. Written from pspsdk, pspautotests' audio/sascore programs and their recorded results (reproduced
+sample for sample), psx-spx and part 17's specification; no PPSSPP or JPCSP code read. docs/psp-core.md, part 21,
+describes it. Reverb is a pass-through (no reverb added); noise, waves and sas's ATRAC3 voices stay silent.
+- **Found in the recordings**: VAG's guess rounds down (no half added, unlike psx-spx's SPU); filters 5-15 read past
+  the PSP's table; VAG samples are heard a sample late, PCM's at their place; multichannel is four planes;
+  __sceSasCoreWithMix scales the buffer by its volumes and refuses multichannel (0x80000004); dry is on from
+  __sceSasInit; and end marks are whole bytes (music.vag's header flags 0x41/0x75 play on), which changed part 20's
+  `& 7` reading (0x41 and 0x87 no longer end a voice).
+- **On the host** (a scratch runner writing the stream to WAVs, never committed; 40 s each, measured per second):
+  Lumines' demo stage from 25 s (sas effects and a music voice, -18 to -34 dBFS, peak 19255); the Street Fighter III
+  port from the start (four sceAudio channels, -17.5 to -31 dBFS, peak 23517, 44.1 kHz pacing); Space Invaders
+  Extreme's effects (sas into the SRC channel, peak 7999); Burnout Legends and SOCOM silent at their titles (ATRAC3+
+  music) and their menus' sas effects after Start (peaks 8006, 9979). Nothing clipped in any; sound added no
+  measurable time (Lumines' 2400 frames in 48-50 s either way).
+- **States**: version 6 (the output not yet taken, the SRC channel's place, VAG decoders), each checked on loading;
+  versions 1-5 refused.
+- **Checks**: the parts' 197 groups with both sanitizers (nine new: "audio mixed", "audio src heard", "audio output
+  in states", "sas vag as recorded", "sas vag decoded", "sas pcm heard", "sas output modes", "sas voices mixed", "sas
+  voices in states"; "state fields" with the new fields and 7 more refusals); `tests/psp/ares` 250 checks (a
+  version 5 state refused; the stream heard: a mixer buffer sample for sample, 735.7 frames a frame). Eleven broken
+  versions each failed (VAG's guess with a half added, part 20's `& 7`, no VAG lag, the envelope after its step, dry
+  off, multichannel interleaved, the mixer's volume rounded towards zero, no clamp, the SRC channel's nearest sample,
+  its place left out of states, the old silent stream).
+- **Review:** a general-purpose reviewer; the clean-room spot check found the code independent; one medium and one
+  low finding, both fixed, each with a test that failed before it. Medium: an SRC buffer armed once the slots had
+  freed, while the last one's final 100 µs were still to be heard, was timed from the moment it was armed but heard
+  after them, so a program draining the channel before each buffer drifted 4.4 frames ahead per buffer: silence for
+  good from 21.9 s (1024 samples at 44.1 kHz) and states the loader refused. Such a buffer is now timed from where
+  it's heard (it retires a whole buffer after the last one's end); the output's ring never moves its first frame not
+  taken past the clock (what doesn't fit is left out at the far end); loading wants the SRC channel 7 frames ahead at
+  most. Part 17's output2 results still hold ("audio src rest" and "audio draining" now pause a millisecond where
+  the PSP's own runs print lines); the usual two-buffer stream is unchanged (same frames and return times at eight
+  sizes and rates), and the 40 s captures of Space Invaders Extreme (SRC channel), the Street Fighter III port and
+  Lumines are bit-identical to the old code's. Low: no test pinned the standard VAG ending (a block marked 1, then
+  `00 07 77 77...`). New groups: "audio src drained between buffers" (30 s at 1024/44.1 kHz and 4096/48 kHz: lead
+  bounded, every frame taken and as the buffers make it, states round-trip), "audio output kept from a channel
+  ahead", "sas vag endings" (the flag-1 ending, 3 ending a voice that doesn't loop, a loop back to a 4); "state
+  fields" tries the new bounds. Checks: 200 groups, `tests/psp/ares` 250; the state's layout is unchanged (version 6).
+- **Next**: an ATRAC3+ decoder (Burnout's, SOCOM's and Invaders' music), sas reverb, noise and waves; the RP6 run.
+
+## PSP core: more functions games ask for — 2026-10-05
+
+Branch `cursor/psp-hle-games2-2b67`, on top of `cursor/psp-hle-games-2b67` (#145, the entry below). What the RP6 run
+had the owner's games asking for, written from pspsdk's headers, pspautotests' tests and their recorded results, and
+the games' behavior on a scratch host runner (never committed); no other emulator's code read. docs/psp-core.md,
+part 20, describes it: files' asynchronous requests (done after the time the UMD drive or the memory stick takes,
+polled or waited for, CB waits running callbacks), a silent sceSasCore (voices' envelopes and ends as recorded, no
+mixing), message pipes and mailboxes, sceMpeg set up but finding no movie it can play (games skip them),
+sceAtrac3plus refusing every stream, the network libraries with the WLAN switch off, sceLibFont with no fonts
+installed, and sceRtc, sceOpenPSID, display, thread, Kernel_Library, power and utility odds and ends. Peace Walker
+found two faults: a free lightweight mutex's CB lock ran a callback (it never enters the kernel on a PSP), and
+threads' kernel area at the top of the stack wasn't zeroed. States are version 5.
+- **On the host** (1800-2400 frames each; frames in `/tmp/hle2-runner/out`, not in the repository): Lumines to its
+  gameplay demo; Burnout Legends, Burnout Dominator and Midnight Club 3 to their titles and, with Start, their
+  profile menus; SOCOM past its "no data" screen to its credits; Snoopy to its "no save file" warning (it had
+  exited); Space Invaders Extreme to its title (first time); Peace Walker to its title screen (no system-font text);
+  GTA Liberty City Stories, Vice City Stories and Sindacco Chronicles past their movies to their loading screens,
+  where they stop at about 85% (the main thread waits for a queue to drain, polling an event flag: not traced
+  further); Gunhound EX past its logo to a black screen (likely its system-font text); Brave Story on its Game
+  Republic logo, reading slowly; the Street Fighter III port as before.
+- **Next**: what GTA's loading waits for; Brave Story's logo; sceLibFont from the owner's flash0 fonts; mixing
+  sceSas and sceAudio into the speakers; ATRAC3plus and the movies' decoders.
+- **Checks**: the parts' 180 groups with both sanitizers (new files: async, sas, messages, media; "state fields"
+  changing every new field and refusing 36 more states); `tests/psp/ares` 236 checks (a version 4 state refused).
+  Broken versions each failed their tests (requests done at once; a sender out of line; transfers' counts unwritten;
+  sceSas's 32-sample start dropped; the kernel area left as 0xff).
+- **Review:** a general-purpose reviewer; the clean-room spot check found every file independent; three medium and
+  six low findings, all fixed (each with a test that failed before it) or recorded. Medium: a pipe without a buffer
+  copied direct transfers through a host buffer sized by the guest's counts before any address check (1 GiB moved on
+  a 32 MiB machine): messages and buffers need memory behind them all (ILLEGAL_ADDR), bytes go memory to memory, and
+  loading checks each pipe waiter's rest; a send or receive with callbacks ran the callbacks of the higher-priority
+  thread it woke: the caller's start first now; __sceSasSetVoicePCM left a voice past fewer samples, the machine's
+  own state refused: it's brought inside them. Low: two threads waiting on one request, or a CB wait whose callback
+  polled the result, left a thread waiting for good: every waiter ends now (the first to wait with the result, the
+  rest NOASYNC), and loading checks only threads really waiting; sceIoIoctlAsync timed by the output's length (due
+  in 52 minutes): by the bytes moved now; sceFontSetResolution kept 1e10 and infinities: refused now, NaN too
+  (INVALID_VALUE); with dispatching held off, waits were refused only after a lightweight mutex's waiter count or a
+  pipe's bytes changed, and rotating switched threads: waits are refused first (as pspautotests' intr/waits
+  recorded), rotating keeps the CPU; a lightweight mutex deleted while its waiter's callbacks ran left the waiter for
+  good: its wait ends deleted. Recorded, not changed: which of pipe attributes 0x100 and 0x1000 orders senders
+  (pspsdk names neither). Every group of this branch now ends with a save, load and save giving the same state.
+  Checks: 188 groups (eight new), `tests/psp/ares` 236; the state's layout is unchanged (version 5).
+- **On the RP6** (build 104649): Space Invaders Extreme reaches its title screen at 60 fps; Peace Walker reaches its
+  title scene but drawn garbled (striped) and at 9.5 fps (16%), a GE drawing and speed problem to look into; Burnout
+  Legends, Midnight Club 3, SOCOM and Lumines ran with no missing functions noted.
+
+## PSP core: the functions retail games ask for — 2026-10-05
+
+Branch `cursor/psp-hle-games-2b67`, on top of `cursor/psp-retail-load-2b67` (two entries below), and since then of
+#144 (`cursor/psp-decrypt-2b67`, the entry below), merged in. The HLE kernel gains
+what Lumines, Space Invaders Extreme, Brave Story, GTA: Sindacco Chronicles and the Street Fighter III port asked for
+next, found with a scratch host runner (never committed) that boots a CHD, traces every system call and dumps frames:
+SDK version setters (explicit NIDs for those whose NIDs aren't their names' hashes), aligned partition blocks (the
+C++ abort and the "can't allocate memory"), the 24 MiB user partition the emulated 64 MiB PSP-2000/3000 gives a
+program unless PARAM.SFO's MEMSIZE is 1, callbacks that run in *CB waits, the vertical blank's functions and interrupt
+handlers, sound output's channels with the driver's timing (silence for now), power, memory pools, the system's
+dialogs with real saves on the memory stick, optional modules, and thread and clock odds and ends; all in save
+states. docs/psp-core.md, part 17, describes it and what each game does now.
+- **Checks:** the parts' 123 groups with both sanitizers (new files: callbacks, power, audio, utility, pools);
+  `tests/psp/ares` 195 checks. A broken version (waits not resumed after callbacks) failed 18 checks.
+- **Review fixes:** a save's game, save and data file names were joined to the host's paths unchecked (only climbing
+  above the memory stick was stopped): a reviewer read /etc/hosts into the program's memory, and a delete with the
+  game "" took every save, with ".." PSP/ and its homebrew, with "../.." the memory stick folder itself. Each name
+  must now be one plain name, the save's folder one of SAVEDATA's own and its file one of the folder's, links
+  followed; the buffer must be in the program's memory; ERASE takes the data file alone; the sizes and list modes no
+  longer throw. Pools loaded from a state are checked (a fixed pool with blocks of 0 bytes divided by zero on a
+  free, which is guarded too); a CB wait that needn't wait runs the callbacks already notified; states are version
+  2; the docs' user partition is the PSP-2000/3000's; pools.cpp cites pspautotests and the RTC dates credit Howard
+  Hinnant's algorithm. Each fix has a test that failed before it (the parts' groups: 128; `tests/psp/ares`: 199).
+- **On the host:** Lumines reaches its title screen and menu (and writes its save); the Street Fighter III port its
+  title screen at 60 frames a second; Space Invaders Extreme and GTA wait on the module manager (sceKernelLoadModule,
+  sceKernelLoadModuleByID: another branch's work); Brave Story stops after sceSas fails. Next: sceSas, asynchronous
+  file functions, message pipes and mailboxes. Not checked on the RP6 then (build 104648's results are below).
+- **Merged with #144** (the entry below), which now sits under this branch: states are version 3 (each branch's
+  version 2 had a layout of its own; both, and version 1, are refused by the header).
+  `sceKernelStopUnloadSelfModuleWithStatus` calls `unloadSelf(arg(0), arg(1), arg(2), arg(4))`, so a module calling
+  it unloads itself and the game goes on (the program calling it still ends), and `sceKernelTerminateThread` deletes
+  a module's module_start or module_stop thread as `sceKernelExitThread` does. Also: callbacks return to the
+  trampoline's fourth syscall (#144 took the third), #144's thread deletion is this branch's `deleteThread()`, and
+  states refuse a module whose block is a pool's. Checks: 158 groups (new: "modules unload with a status",
+  "modules terminated threads"), `tests/psp/ares` 228; part 17's last paragraph has the rest.
+- **Review:** a general-purpose reviewer of the merged branch: one medium and five low findings, all fixed, each
+  in its own commit with a test that failed before it; the merge, the clean-room code and the savedata fixes checked
+  out. Medium: states took thread stacks unchecked, and sceKernelGetThreadStackFreeSize copied the whole stack per
+  call (a state's 0xfffff000-byte stack would have cost 4 GiB): the stack is read in place, and loading wants each
+  stack a block of its own, of its size, and every block inside the user partition. Low: a pool's or semaphore's
+  waiter leaving unserved (timeout, termination) now has those behind it served (`waiterLeft()`); a vertical blank
+  stays pending while the last one's handlers are queued or running (two 20 ms handlers had 97 calls queued by
+  frame 120, saved in states); every block one owner at most among threads' stacks, pools, modules and the program
+  (two pools on a block, or a pool in a stack or the program's block, loaded); the SRC channel's first buffer from
+  idle retires 100 µs short of its length, as pspautotests' audio/output2/rest recorded ("13XX µs", where this read
+  1452); sceKernelPrintf cuts a width to the field's room before snprintf (two fields 400,000,000 wide took 129 ms).
+  sceKernelFreePartitionMemory refuses blocks the kernel holds, so the machine's own states stay loadable. States
+  are version 4 (each call into the program marks a vertical blank's handler). Checks: 162 groups (new: "kernel
+  semaphores served past waiters that left", "pools served past waiters that left", "interrupts handlers longer
+  than a frame", "audio src rest"), `tests/psp/ares` 232 (a version 3 state refused). Found on the way, not changed:
+  a program spinning on the clock sees it move only between the CPU's runs (each to the next thing due).
+- **On the RP6** (the whole stack, launched from the user's CHDs): all ten of the user's priority games now start
+  (nine tried with build 104648, decrypting their programs; Lumines with build 104647). SOCOM Fireteam Bravo reaches
+  its own "No SOCOM Fireteam Bravo Data was found on the Memory Stick Duo" screen at 60 fps (then asks for
+  sceAtrac3plus); Burnout Legends reaches its LOADING screen (asks for sceIoChangeAsyncPriority, sceIoPollAsync,
+  sceIoReadAsync); Lumines runs to its log-in menus at about 40 fps (asks for sceSasCore); GTA Vice City Stories and
+  Liberty City Stories, and Midnight Club 3, ask for sceMpeg (video) and async I/O; Peace Walker asks for sceRtc
+  e7c27d1b, sceOpenPSID, sceDisplay 210eab3a and message pipes (ThreadManForUser 7c0dc2a0/74829b76); Burnout Dominator
+  and Snoopy ask for async I/O and ad-hoc networking (sceNet*); Gunhound EX asks for sceLibFont and scePower 469989ad.
+  Next: async I/O, a silent sceSas, message pipes, sceMpeg stubs that let games skip videos, networking reported off.
+
+## PSP core: retail programs decrypted, and modules loaded — 2026-10-05
+
+Branch `cursor/psp-decrypt-2b67`, stacked on `cursor/psp-retail-load-2b67` (commit `08b08ab64`; for stack #106),
+worked in its own worktree because another worker had uncommitted changes in the main checkout. Shop-bought games'
+programs are decrypted: AES-128 (`ares/psp/kernel/aes.cpp`), the KIRK engine's commands 1, 7 and 0xb
+(`kirk.cpp`, SHA-1 moved there from `Kernel::nid()`), the published keys and the table of tags (`keys.cpp`), and the
+`~PSP` format's types 0, 1, 2, 5 and 6 with gzip unpacking (`decrypt.cpp`), written from docs/psp-core.md's new part
+18. The loader decrypts before reading an ELF, and a disc's EBOOT.BIN starts decrypted, BOOT.BIN only when it can't
+(the reason reported). Modules load from the disc and the memory stick (`modules.cpp`, part 19: ModuleMgrForUser's
+load, load by ID, start, stop, unload, the IDs and information), linked to each other's exports and the program's,
+module_start run on its own thread; Sony's modules that games carry are stood in for by the HLE kernel. The state's
+version is now 2.
+- **Checks:** the parts' 118 groups with both sanitizers (new: five "crypto", five "decrypt", ten "modules"; "state
+  fields" and "loader refusals" extended); `tests/psp/ares` (220 checks: the disc program encrypted as EBOOT.BIN
+  boots and reads its disc; undecryptable ones report why, and a plain BOOT.BIN starts instead). Broken versions each
+  failed a test (listed in parts 18 and 19).
+- **Review:** a general-purpose reviewer found the code an independent implementation in a clean-room audit, plus two
+  medium and five low findings, all fixed (parts 18 and 19 say how; each fix's test failed before it):
+  `sceKernelLoadModuleByID` refuses a ~PSP size under 0x150 or over 64 MiB, and reads of an open file ask the host
+  for no more than the file has left (a 4 KiB file had asked for 4 GiB); a module unloading itself ends its calling
+  thread, runs its module_stop and goes, the program running on (it ended the game); the program's exports are
+  offered to modules' imports; a module without a module_start runs its entry point, and modules' own thread
+  parameters are read; a module_start or module_stop ending in `sceKernelExitThread` has its thread deleted; states'
+  modules are checked (thread, block, ID); the keys' SHA-1 digests are pinned in `tests/psp/crypto.cpp`. The
+  self-unloading is `Kernel::unloadSelf(exit status, argument size, argument, options)`: when
+  `cursor/psp-hle-games-2b67` merges, its `sceKernelStopUnloadSelfModuleWithStatus` (0x8f2df740, which Gunhound EX
+  calls) should call it too, `unloadSelf(arg(0), arg(1), arg(2), arg(4))`, rather than end the program, and its
+  `sceKernelTerminateThread` should delete a thread `madeForModule()` as `sceKernelExitThread` now does.
+- **Against the user's games** (CHDs pulled read-only from the RP6 to /tmp on the Mac; nothing kept or committed):
+  every EBOOT.BIN and module on Lumines, Burnout Legends, GTA Liberty City Stories, Midnight Club 3, SOCOM Fireteam
+  Bravo, Snoopy vs. the Red Baron, Gunhound EX and Peace Walker decrypts into a sane MIPS ELF (tags 0x08000000 type 0,
+  0xc0cb167c type 1, 0xd91613f0 type 2; modules 0x00000000, 0x03000000, 0x4467415d, 0x3ace4dce), except the
+  firmware updaters (tag 0x02000000, not in the table) and two splash modules packed with KL4E. Run through the system
+  on the Mac, all eight start their EBOOT.BIN and run their own code to HLE functions not written yet; Burnout loads
+  its fourteen modules and GTA its three (by ID, behind ~SCE headers), all stood in for, as they still do with the
+  review's fixes.
+- **Not checked:** the RP6 (the app wasn't built); types 5 and 6 and the module manager on a real game's own module
+  (none of these games carry one: every module on them is Sony's), so a module unloading itself only on the tests'
+  modules (Splinter Cell Essentials, which does it, isn't among the user's games).
+
+## PSP core: one block for a program's memory; "nothing will run" noted once — 2026-10-05
+
+Branch `cursor/psp-retail-load-2b67`, stacked on `cursor/psp-disc-formats-2b67` (for stack #106). The loader gave
+each of a program's segments a block of its own, rounded to 256 bytes, so a retail PRX whose data starts right after
+its code (Lumines': 8 bytes after, inside the code's last 256-byte step) was refused as overlapping memory already
+handed out. A program now gets one block from its first segment to the end of its last, as the PSP's loader gives a
+module one; segments whose bytes overlap are still refused, with a message of their own. And the kernel's note that
+nothing will run again (no threads left, or every one waiting on another) comes once rather than every frame (the
+RP6's log had 500 a launch), and again only after something has run since. The user's choices of what comes next are
+in docs/psp-core.md's decisions: decryption and module loading, then HLE functions, sound, and sceFont; and their
+games to test against first.
+- **Review:** a general-purpose reviewer (no bugs; three low test gaps: the refusal of a block that can't go where
+  the program is had lost its test, the segments' sorting and the empty ones passed over had none, nor the note's
+  reset on a fresh start; all three tests added, each checked by the reviewer against a broken copy).
+- **Checks:** the parts' 98 groups with both sanitizers ("kernel program memory": a program whose data starts 8
+  bytes after its code, in the code's last 256-byte step, loads into one block covering both, which the old code
+  refused, with the data listed first or last and an empty segment among them; a program linked into kernel memory
+  refused, as no block can go there; overlapping segments refused with their own message; new "kernel stuck note":
+  with no threads, two runs note it once, after a thread has run and gone once more, and after a fresh start again).
+- **On the RP6** (build 104645): Lumines, Space Invaders Extreme, Brave Story and GTA Sindacco Chronicles now load
+  from their CHDs and run their own code, stopping at functions the HLE kernel doesn't have yet: Lumines at
+  sceDisplayWaitVblankStartCB; Space Invaders Extreme at SysMemUserForUser's SDK version calls, then a C++ runtime
+  abort and ModuleMgrForUser 8f2df740; Brave Story at the SDK version calls, sceUtilityLoadModule, then its graphics
+  library's "can't allocate memory (1056)", a load from address 8, and ThreadManForUser's message pipes and
+  variable pools (c07bb470, d979e9bf, 68da9e36) and InterruptManager ca04a2b9; GTA Sindacco Chronicles at the SDK
+  version calls, sceIoChangeAsyncPriority, ModuleMgrForUser b7f46618 and scePowerRegisterCallback. Those are the
+  HLE work after decryption.
+
+## PSP core: CHD, CSO v2, ZSO, DAX and JSO disc images — 2026-10-05
+
+Branch `cursor/psp-disc-formats-2b67`, stacked on `cursor/psp-states-2b67` (for stack #106). The PSP reads CHDs (the
+user keeps PSP games as CHDs) and the scene's other compressed forms of an ISO: CSO version 2, ZSO, DAX and JSO, with
+LZ4 and LZO decoders of our own (`ares/psp/kernel/unpack.cpp`). nall's CHD reader (`nall/nall/decode/chd.hpp`), which
+read only CDs and only by name, now reads a DVD's CHD too (chdman `createdvd`) and can read through a function, so the
+PSP reads a CHD through the app's descriptor, never copied; the CD systems' path is as it was (`vfs::cdrom` refuses a
+DVD's CHD). mia and the app take .zso, .dax, .jso and .chd for the PSP; the PSP's discs aren't gathered into
+multi-disc sets. docs/psp-core.md, part 16, describes it.
+- **Review:** a general-purpose reviewer (one medium: ZSO and CSO version 2 images written with an index shift pad
+  their blocks, as maxcso's description allows, and LZ4's unpacking read the padding as more sequences and failed;
+  two low: a damaged DAX could claim millions of uncompressed areas, a huge table and a scan long enough to look like
+  a hang, and the message for a CD's CHD never reached the app, mia refusing the file first; all fixed: LZ4 ends once
+  the block is whole, DAX's areas must fit the disc and become a table of frames, and the runner passes a medium's
+  reason to the app's "Game Didn't Start"). The twelfth review of the save states branch (one low, wording) is fixed
+  here too.
+- **Checks:** the parts' 97 groups with both sanitizers (new: "disc formats", "disc formats damaged", "unpackers");
+  `tests/psp/ares` (195 checks: every form boots the disc program, which reads its disc exactly; a CD's CHD and one
+  needing its parent refused; its script builds libchdr); the app's unit tests (`LaunchSystemsTest`: .zso, .dax, .jso
+  to the PSP alone, a .chd by its folder). Broken versions each failed a test (CSO v2's stored blocks, LZO's 3-byte
+  match distance and its H bit, LZ4's distance 0 and its padding read as a sequence, DAX's uncompressed areas and
+  areas adding up past the disc, JSO's short last block, and a DVD sector's place in its hunk).
+- **On the RP6** (build 104643, launched by file URI from the SD card's `ROMs/psp`): all eight of the user's CHDs
+  tried opened and read, up to 1.2 GB (Ace Combat - Joint Assault). Street Fighter III 3rd Strike's port starts from
+  its CHD and runs at 60 frames a second (it asks for sound and utility functions that aren't written yet). Peace
+  Walker, Gunhound EX, WipEout's collection and Ace Combat's EBOOT.BINs are encrypted, and say so. Lumines, Space
+  Invaders Extreme, Brave Story and GTA Sindacco Chronicles have plain BOOT.BINs (PRXs), which the loader refuses:
+  each segment takes its own block rounded to 256 bytes, and Lumines' data segment starts 8 bytes after its code ends,
+  inside the code's last block. Next branch: one block for the whole module, then the HLE functions those games ask
+  for. Also next: "no threads left to run" is logged every frame once a program has stopped. Build 104644 (the
+  review's fixes): a CD's CHD (made on the host) launched as a PSP game shows "It's a CD's CHD. A PSP game's CHD is
+  made from its ISO with chdman createdvd." in "Game Didn't Start"; Street Fighter III and Lumines as before.
+- **Not checked:** DAX, JSO and ZSO images made by their own tools (the test's are made to the formats'
+  descriptions, and the unpackers checked against minilzo's and lz4's own output); a CHD made with zstd hunks (the
+  user's use zlib, LZMA, Huffman and FLAC); a CHD read through a descriptor on the RP6 (the app could read the SD
+  card's paths, so it read them by name, as with part 14's images).
+
+## PSP core: save states — 2026-10-05
+
+Branch `cursor/psp-states-2b67`, stacked on `cursor/psp-umd-2b67` (for stack #106). Save states for the PSP: each part
+saves and loads itself (the CPU's registers, memory 4 KiB at a time with empty pieces left out, the GE's commands,
+palette, list and matrices, and the kernel's program, threads, objects, open files by path, controller, display,
+calls and GE lists), behind a header naming the machine and the program the state was made with. Loading checks what
+it reads (with no fixed limits: a list that claims too much runs out of state instead), refusing what no machine
+could hold, and a bad state leaves the machine as it was, open files and all. A program that has ended makes no
+state, and the app doesn't auto-save one, nor a game whose core is stuck in a frame (`PhobosCore.trySaveState()`). In
+the app, #139's stand-in that left states out for the PSP is gone, and a PSP program in an `EBOOT.PBP` takes its
+folder's name, so homebrew programs' states don't collide. Found on the way: a display list that never ends no longer
+holds everything up (the GE runs a million commands a frame at most however often it stops, time passes while it
+works, and its callbacks can't pile up); IDs and file numbers stop short of 2^31 rather than come round again; folder
+listings leave out host names no PSP path can name. docs/psp-core.md, part 15, describes it. Both test scripts now
+use the address sanitizer on macOS too.
+- **Review:** a general-purpose reviewer (one high finding: every homebrew `EBOOT.PBP` had one name, so one set of
+  states; two medium: the reader's list limits sat below what the kernel can make, and the tests couldn't catch a
+  field left out; three low: range checks, files on a disc no longer in the drive, docs; all fixed). Then a delta
+  review (one high: loading read the running thread after freeing it, which macOS's tests, built without the address
+  sanitizer, missed; four medium: values loaded that would crash or corrupt memory later (a disc file open for
+  writing, IDs handed out twice, display lists the driver couldn't have queued) or hang the machine (endless sound
+  owed, a clock or controller timer far behind); four low: the memory-use claim, test gaps, files removed while open
+  lost by an undone load, and external launches still named "EBOOT.PBP"; all fixed). Then a second delta review
+  (seven low: a loaded state's folder names reaching outside the memory stick, the app's folder naming for providers
+  whose paths are IDs, untested ID and open-file checks, auto-save of a program that had ended, stale script headers
+  and doc wording, an endless display list holding a frame forever (older than this branch), and three files for the
+  next branch in the working tree, kept out of this commit; all fixed). Then a third delta review (one medium: IDs
+  counted past 2^32 came round and handed out one in use; four low: lists that stop every few commands still never
+  let go, a host name with a '\' made the machine's own states unloadable, ".." alone at a device's top untested, and
+  the app's check before an auto-save waiting for ever on a stuck core; all fixed). Then a fourth delta review (four
+  low: a frame could still run between the app's check and its save, an endless display list still took seconds a
+  frame beside a thread that woke often, mutants the tests missed, and a group count in the docs; all fixed, the check
+  and the save now one step: `trySaveState()`). Then a fifth delta review (five low: a save asked for into the Auto
+  slot told nothing when there was nothing to save, the GE's frame budget left out of the state, its refill at each
+  vertical blank untested, a list that draws big primitives over and over still slow to end a frame (left as a stated
+  limit until the GE's timing counts drawing), and stale comments; all fixed). Then a sixth delta review (one low: a
+  states folder that couldn't make the state's file, or gave no way to write it, failed the save without a word or
+  claimed it saved, older than this branch; fixed: both now fail as any other failure does). Then a seventh (two low:
+  a multi-disc game's disc note written outside the save's error handling, so a failure crashed a save asked for or
+  failed the auto-save without a word, older than this branch; and "Not checked" not saying the new failure paths
+  never ran; both fixed) and an eighth (four low: the disc note's copy beside the state still best effort (older than
+  this branch: left as it was, see "Known"), the temporary note left behind when a save is called off, and two
+  handoff lines; the rest fixed), a ninth (three low: a save whose screen went away still logged as a failed
+  auto-save, a leftover variable, and "Not checked"; all fixed), a tenth and an eleventh (two low each, all wording;
+  fixed), and a twelfth (one low: two messages about a save cut short blamed a screen going away, where only the
+  activity finishing cuts one short; fixed on the disc formats branch).
+- **Checks:** the parts' 94 groups with both sanitizers (new: "state fields", where each of 212 fields reaches the
+  state and comes back and 54 values no machine could hold are refused; "kernel states"; "kernel ids run out"; "ge
+  endless list", with four kinds of list that never end, a thread that wakes often, and callbacks), `tests/psp/ares`
+  (163
+  checks on arm64 and x86-64, and with the address sanitizer: cube carries on exactly after a load on both engines and
+  in a fresh session; bad states, cut short by 4 KiB or 4 bytes or owing endless sound, refused with every byte of the
+  machine as it was and a file removed from the host while open still reading; another program refuses cube's state;
+  hello, once it has left, makes no state; cube from a disc image takes its state back and another disc refuses it),
+  the Allegrex tests' 56 groups with both sanitizers, the app's unit tests (`LaunchSystemsTest`: an `EBOOT.PBP` takes
+  its folder's name; a launch's folder from its path, document ID or a URI ending in the file's name). Twenty-six
+  broken versions each failed a test. On the RP6: with build 104631, hello's `EBOOT.PBP`, launched as
+  `Hello/EBOOT.PBP` the way another app launches a game, ran as "Hello.pbp" and auto-saved as `Hello.pbp.state.auto`
+  (216 KB); cube
+  auto-saved (1.59 MB), and saved to slot 0 and loaded from it through the menu, carrying on from where it was saved.
+  With build 104633: leaving hello (which had ended) made no auto state and no failure message; cube saved to slot 0
+  (1.62 MB) and loaded from it through the menu. With build 104634 (the app's check before an auto-save now waits two
+  seconds at most): leaving hello made no auto state again, and leaving cube auto-saved it (1.57 MB). With build
+  104635 (the check and the save one step): leaving hello found nothing to save, saying nothing; leaving cube
+  auto-saved it (1.58 MB). Builds 104636 (quiet only for the auto-save as a game quits) and 104637 (a states folder
+  that can't take the state fails the save) did the same. Build 104638 (a multi-disc note written inside the save's
+  error handling): leaving cube auto-saved it (1.56 MB); hello wasn't left. Build 104639 (the temporary note deleted
+  however a save ends): leaving hello found nothing to save, saying nothing; leaving cube auto-saved it (1.58 MB).
+  Build 104640 (a save whose screen went away no longer logged as failed) did the same (1.57 MB).
+- **Not checked:** the Library's scan naming programs on the RP6 (it uses the same function as the launch, which
+  ran); loading on the interpreter on the RP6; a damaged state whose undoing fails too (the game then starts afresh,
+  but no test can make the machine's own state fail to load); a states folder that can't take the state, and a save
+  asked for with nothing to save (no test or RP6 run made either happen; the app's save code has no unit test); a
+  multi-disc game's save with these builds, and a disc note that can't be written; a save asked for, or the
+  auto-save before a load, whose screen goes away while it runs, so that its message, saved or failed, may not show
+  (the activity finishing).
+- **Known, older than this branch:** a multi-disc game's disc note is copied beside its state as best effort, as the
+  preview is: should that copy fail, the save still says it saved, and the slot keeps the note from its last state,
+  so loading it would put the wrong disc in. Worth fixing with the app's save code's own tests.
+- **Left on the RP6:** hello's `EBOOT.PBP` in the app's `files/psp-test/Hello` folder; `Hello.pbp.state.auto`,
+  `cube.elf.state0` and `cube.elf.state.auto` (each with its thumbnail) in the states folder's `PlayStation
+  Portable`. (The `cube.elf` states
+  from build 104631's run were gone from the folder by build 104633's.)
+
+## PSP core: disc images (ISO and CSO), the disc's files and the drive — 2026-10-05
+
+Branch `cursor/psp-umd-2b67`, stacked on `cursor/psp-app-2b67` (for stack #106). The PSP's disc as an image: an ISO
+or CSO reader with the ISO 9660 file system (`ares/psp/kernel/disc.cpp`), disc0: on it in the kernel's file calls
+(paths, `sce_lbn` sector runs) and umd0: as the whole disc, sceIoIoctl and sceIoDevctl (the disc's, and the memory
+stick's), sceUmdUser, and booting PSP_GAME/SYSDIR/EBOOT.BIN (or a plain BOOT.BIN when EBOOT.BIN is encrypted). In the
+app, .iso and .cso are back, and a disc image the app can't read by path is read through its descriptor instead of
+copied (mia's medium, `/proc/self/fd/<n>`, through `nall::vfs::descriptor`, new). docs/psp-core.md, part 14,
+describes it. Behavior from PPSSPP's notes on the hardware (the ioctl and devctl codes, the drive's states and
+timeouts, `sce_lbn` paths, umd0:), our own code.
+- **Review:** a general-purpose reviewer (one medium finding: `sce_lbn` numbers are always hexadecimal; thirteen
+  low: maxcso's padded last block, a failed block left cached, a damaged index able to ask for 186 GB, umd0: with a
+  path after it, read-only opens that create, "." and ".." and short names in disc listings, the 1-microsecond
+  timeout, trimmed images, a blank BOOT.BIN, the runner's descriptor route for a pipe, pread's EINTR, a test that
+  never ran, wording; all fixed), then a fresh reviewer's delta review (nine low: `sce_lbn` runs with slashes and
+  their status, a program cut short by a truncated image refused, a damaged folder size read whole, the status of a
+  device's top, umd0:'s sizes in sectors, the spare status words, two ioctl errors, an untested kernel path, two
+  stale comments, the descriptor route for a URI without the game's name; all fixed).
+- **Checks:** `tests/psp/disc.cpp` (new: four groups; ISO and CSO images made by `tests/psp/disc-image.hpp`), the
+  parts' 90 groups, `tests/psp/ares` (127 checks: the new `disc` program booted from an ISO and a CSO reads every
+  path right; `vfs::descriptor`), the app's unit tests; thirteen broken versions each failed (six only after tests
+  were tightened). On the RP6: the `disc` program from an ISO and a CSO printed what the host expects, and cube runs
+  from a CSO at 60 frames a second. The descriptor route ran on the host only (the RP6's app reads the SD card by
+  path, and the shell can't hand the app a document).
+- **Left on the RP6:** our test images and programs in the app's own `files/psp-test` folder (no games).
+
+## PSP in the app: the core as an ares system, in Phobos's Android app — 2026-10-05
+
+Branch `cursor/psp-app-2b67`, stacked on `cursor/psp-flash0-dump-2b67` (for stack #106). At the user's request ("the
+remainder of the emulator core so that it can be hooked into the Phobos front end"; integration first, homebrew in
+the app before retail games): the PSP as an ares system (`ares/psp/psp.cpp` and `system/`: node tree, frame loop,
+controls, memory stick, the recompiler with the interpreter as fallback), mia's PSP medium and system, and the
+Android app's entry (runner, JNI table, launch names, touch layout, icon, HUD label, a PSP Memory Stick path
+setting). docs/psp-core.md, part 13, describes it.
+- **Found on the way:** libchdr's `MIN`/`MAX` macros (Android's builds read CD images) collide with the Allegrex's
+  instructions, so psp.hpp undefines them; the runner wrote empty states as saved (now refused for any core); the
+  kernel kept the last game's mounts (the system now clears them at power-on); building sljit's C file and the C++
+  with different build modes (sljitConfigPre.h's `SLJIT_DEBUG`) crashed the recompiler in a scratch host build, so
+  the new test builds everything with `BUILD_DEBUG`, as the parts' tests do. nall's `memory::map()` passed `mmap`'s
+  `MAP_FAILED` on as a pointer, so no bump allocator could see a refused mapping: it returns null now.
+- **Review:** a general-purpose reviewer (three medium findings: the recompiler's fallback could never trigger, the
+  `MAP_FAILED` above; every PSP quit would have said "Save Failed!" with Auto-Save State on, so the app now leaves
+  states out for the PSP; ISO and CSO files listed but never run, so they're off the Library until the core reads
+  them; ten low: the machine kept after unloading, a crash logged every frame, sceDisplaySetMode trusting any size,
+  .prx modules in the Library, a copied program's disc being the shared cache, zipped programs refused, tests and
+  docs claiming more than they checked, `ms0:/./` paths, two statements doing nothing, a dated comment; all fixed).
+- **Checks:** `tests/psp/ares/run-tests.sh` (new; 93 checks), the parts' 86 groups, the CPU's 56, and the app's unit
+  tests. On the RP6 (installed with `install -r`, data kept): cube, beginobject, controller and
+  hello at 60 frames a second, from the app's own files folder through a launch intent (`am start` with the `psp`
+  system extra); the memory stick folder was made under the user's saves path. The test programs pushed there
+  (`Android/data/com.phobos.emulator/files/psp-test`) are ours, built from pspsdk's samples.
+- **Not yet:** ISO/CSO images, save states, sceAudio, retail games (decryption, more HLE modules), sceFont.
+
+## PSP tools: a flash0 dumper for the user's PSP — 2026-10-04
+
+Branch `cursor/psp-flash0-dump-2b67`, stacked on `cursor/psp-ge-lighting-2b67` (for stack #106). At the user's
+request (they'll provide their PSP's firmware files this way, for the fonts sceFont reads and the optional firmware
+modules): `tools/psp-flash0-dump`, a homebrew program that walks flash0 and copies every file to `flash0/` beside its
+EBOOT.PBP, with `SHA256SUMS` (checkable with `shasum -a 256 -c`) and `failed.txt`; it also tries the raw image
+(`lflash0:0,0`), which user-mode homebrew is expected to be refused (PPSSPP refuses it with 0x80020321). SHA-256 is
+our own, from FIPS 180-4. The dump is the user's copyrighted firmware: it stays on their devices, never committed.
+- **Checks:** the SHA-256 code matches `shasum -a 256` on the empty input, "abc", sizes around each padding boundary
+  and a megabyte fed in uneven pieces. The `SMOKE=1` build in PPSSPP's headless build copied a 23-file sample tree
+  (PPSSPP's own fonts, nested folders, an empty file, exact and multi-piece sizes) with every copy verifying against
+  `SHA256SUMS`; PPSSPP's virtual flash0 can't list its folders, hence the sample. Both builds compile without
+  warnings. The release EBOOT.PBP (SHA-256 960b2db7dbc6ebbab6b929b3f2f5fc5003be75377b820a0febfd52e96ced3647) is in
+  `.local/psp-flash0-dump` and on the RP6 at `Download/FLASH0DUMP/EBOOT.PBP`; it hasn't run on a PSP yet. Review: a
+  general-purpose reviewer (seven low findings: the root folder made with a trailing slash, a listing error ending
+  the walk silently, unchecked writes to SHA256SUMS and failed.txt, no `make clean` note, flash0 said to hold the
+  settings, a button-wait comment, the image cap overshooting; all fixed), then a delta review with no findings.
+
+## PSP core: lighting's share in 256ths, as the PSP measured it — 2026-10-04
+
+Branch `cursor/psp-ge-lighting-2b67`, stacked on `cursor/psp-ge-round3-fixes-2b67` (for stack #106). From round 3's
+lighting files (exact cosines, several material and light colors): a light's share counts 256ths, and the two colors
+times the share shift down 18 bits (ge/lighting.cpp `share()` and `light()`), where PPSSPP (and the core) had
+512ths, rounded up and one more, shifted 19. Fitted with a scratch script outside the repository against the values
+with normals (a, 0, b) (`light-cosines` rows 0 and 8, all of `light-materials` and `light-colors`): 1620 of 1632
+(PPSSPP's: 1494); no constant offset to the rounding fits the last 12 (two cases, level 32 at a cosine of 56/65 and
+64 at 72/97, in six cells of each file, a level lower on the PSP). No measured share lands on a whole 256th, so
+rounding up there (rather than down and one more; PPSSPP's rule agrees at the tests' 0.5 and 0.75) is assumed;
+negative (darkening) shares are PPSSPP's reading carried over to 256ths, unmeasured, and now subtract 256 for a full
+one (255 before).
+- **Checks:** against the PSP's files: `light-cosines`, `light-powered`, `light-shine` and round 2's `light-specular`
+  now identical; `light-materials` and `light-colors` 1536 pixels apart (were 15616); round 2's `light-diffuse`
+  12288 (was 28160; the rest in its 64 and 192 channels at shares its white channel confirms, as `light-materials`'
+  12), `light-point` 9728 (was 30720), `light-spot` 768 (was 2560), all a level each; every other file unchanged.
+  Unit tests: the lighting tests' hand-worked values restated in 256ths (all unchanged), plus two cases where the
+  rules differ (cosine 0.28 on white: 71; red 32 at 0.8: 25), which PPSSPP's rule fails, and a darkening spotlight.
+  PSP tests 86 groups, 0 failures, on arm64 and x86_64 (Rosetta).
+- Also refreshed: the comparisons with PPSSPP's software renderer in psp-core.md and the test programs' README,
+  stale since the core took the PSP's measured rules (`compare-ppsspp.sh` in the container now: within 2 levels on
+  99.88% of `blend`'s pixels, 99.64% of `clut`'s, 99.44% of `cube`'s, 99.10% of `celshading`'s, 98.42% of
+  `envmap`'s; the same with this change and without it, and at #135 the 3D ones were a little further). Review: a
+  general-purpose reviewer (one medium finding: what's left of `light-diffuse`, `light-point` and `light-spot`
+  blamed on cosines the data clears; six low: the misfits' count, "rounded up" and negative shares stated as
+  measured, the broken-versions list, a percentage's wording, wrapping; all fixed), then delta reviews (three low
+  and one cosmetic, on the docs, fixed) ending with no findings.
+
+## PSP core: the GE's rounding, 3D sprites and depth layout, as the PSP measured them — 2026-10-04
+
+Branch `cursor/psp-ge-round3-fixes-2b67`, stacked on `cursor/psp-vfpu-round3-fixes-2b67` (for stack #106). From
+round 3's GE data:
+- The rounding onto the screen (ge/transform.cpp `project()`): a position's distance from screen coordinate 2048 is
+  cut to a sixteenth toward 2048 (was PPSSPP's +0.375 then toward zero), in doubles. Off the screen: outside 0-65535
+  once cut (a sixteenth or more left of 0, or 4096 or more), which follows from the rounding but wasn't measured.
+  Whether it's 2048 or the viewport's center isn't settled (they were the same in the case).
+- 3D sprites (ge/draw.cpp `rectangle()`, now told whether it's 3D): the fog split at the middle column, each half
+  taking the fog of the corner on the other side (measured with the first corner at the top left; either order, as
+  PPSSPP's rule has it, read for behavior; the middle halfway rounded down, the right half winning a column on it:
+  assumed); texels with u / w and 1 / w across x and v / w down y, then divided. A turned 3D sprite isn't measured:
+  the same rule with the coordinates swapped; a corner with no w in front of the camera falls back on 2D stepping.
+- The depth buffer's layout (memory/memory.cpp, ge/pixel.cpp): VRAM's second copy flips offset bits 6 and 13, the
+  fourth first turns bits 5-9 round by one place, and the GE reaches its depth buffer as the fourth copy shows it.
+  `pointer()` maps those copies (a range must stay in one 32-byte piece), `copyIn()`/`copyOut()`/`fill()` go piece by
+  piece there, and `changed()` reports each copy where it sees the change (16 KiB blocks for longer changes). The HLE
+  kernel checks game buffers with the new `reaches()` (the range inside one area or copy), as `pointer()` would now
+  refuse a long one through a rearranging copy; and `read()`/`write()` take an access that crosses a piece of one (an
+  HLE function's, at a game's unaligned address) a byte at a time. Columns 256-511 land in the gaps the measurement
+  left, by the rule; not measured.
+- **Checks:** against the PSP's round-3 files (tests/psp with `PSP_GE_RESULTS`): `3d-rounding-middle`,
+  `3d-sprite-fog`, `3d-sprite-flat` and all four `depth-layout` files now identical, `3d-sprite-texels` 72 pixels a
+  level apart (was 20304), round 2's `3d-sprite` 53 (was 10152), `3d-floor-depth` 1388 by 1 (was 17424 by up to
+  255), `3d-clip` 1512 (was 1535); every other file unchanged (60 identical, was 54). Unit tests: the rounding both
+  sides of 2048 and the screen's edges once cut; a 3D sprite's fog halves in either vertex order and where its
+  middle falls (even and odd widths); its perspective texels upright, turned, and with a corner behind the camera;
+  the copies' mapping (exhaustively, each way the other's reverse, and against the measured formulas), reads, change
+  reports (a long change through the first copy too), bulk copies and an unaligned word through them, and
+  `sceCtrlPeekLatch` into an unaligned buffer in the fourth copy; the depth helpers read through the fourth copy.
+  PSP tests 86 groups, 0 failures, on arm64 and x86_64 (Rosetta), the comparison identical on both; Allegrex tests
+  56, 0 failures. Sixteen mutations (the old rounding or screen bounds; the fog unsplit, by vertex order, its middle
+  rounded up or its tie to the left; affine, swapped-when-turned or unguarded 3D texels; linear depth; no
+  rearranging; the fourth copy like the second; bulk copies in one piece, which crashes the sanitizer build; changes
+  at one offset, or the long path keyed on the source alone; no byte-at-a-time writes) each fail them. Review: a
+  general-purpose reviewer (eight low findings: the off-screen test against the cut position, the screen bounds and
+  the fog's tie and vertex order stated as measured, HLE buffer checks refusing the rearranging copies, a latent
+  overflow in the bulk copies' range check, "512 KiB" for 1.5 MiB, test gaps, two short lines; all fixed), then
+  delta reviews (unaligned HLE accesses across a piece, and long lines; fixed) ending with no findings.
+
+## PSP core: the VFPU's tiny products and round 3's prefix rules — 2026-10-04
+
+Branch `cursor/psp-vfpu-round3-fixes-2b67`, stacked on `cursor/psp-fpu-measured-2b67` (for stack #106). From round
+3's VFPU data (ares/psp/cpu/interpreter-vfpu.cpp; the recompiler hands VFPU instructions to the interpreter):
+- Tiny results: `vfpuBits()` rounds a result to 24 bits as if exponents went on below 2^-126, then flushes it to a
+  zero of its sign if it's still below, judged on the bits (an x87 FPU can keep a float wider). `vmul`, `vscl`,
+  `vmscl` and `vcrs` hand it their exact products (doubles), `vdiv` its quotient to 53 bits (assumed to round the
+  same way; not measured), instead of float results the host had already rounded as denormals.
+- The math functions (`vrsq`, `vsqrt`, `vsin`, `vcos`, `vasin`, `vexp2`, `vlog2`, `vnrcp`, `vnsin`, `vrexp2`) take
+  prefixes as `vrcp` does: `vrcp`'s code became the template `vfpuLastLaneFirst()`. The negating three ignore the
+  negate setting.
+- The adders (`vdot`, `vhdp`, `vfad`, `vavg`) add up all four lanes whatever the size, each read through its own
+  prefix lane (`vfpuReadFour()`), leaving out a lane whose swizzle names a lane past the size (`outsideLanes()`, now
+  over four lanes). The independent review found this (my first version zeroed only the lanes within the size and
+  wrongly wrote that the data contradicted zeroing in `vfad` and `vavg`).
+- `vavg`'s t prefix only negates; the sum is divided by the size (weighing by the constant 1/3 fit round 2's
+  `vavg.t` worse). Found by fitting a weight per lane against every run, with a scratch tool outside the repository.
+- A swizzle past the size gives 0 in `vf2i`'s, `vi2f`'s and `vbfy1`'s lane, a 0 half float in `vf2h`, and in `vh2f`
+  a 0 that the negate setting makes -0 before it's split.
+- Left open, documented in psp-vfpu-measurements.md: 32 of the second recorder list's 284 entries (`vavg` where its
+  terms cancel, `vcmp`, `vcrs`, `vcrsp`, `vdet`, `vsocp`), all from its part built for swizzles past the size.
+  Reading such lanes as 0 in every instruction was tried: it fixed `vh2f` and some `vf2h` and `vbfy1` entries (kept,
+  per instruction) and made others worse.
+- **Checks:** compare.sh: the second recorder list went from 36 exact (and 7 rounding only) to 198 (and 54), round 2's
+  from 1157 to 1158 exact (its `vscl` entry; 49 rounding only, as before), `vmul-tiny` from 85.35% to 100%; every
+  other row is unchanged. The measured group replays `vmul-tiny` (all 262144 results); the edge group gains a
+  tiny-products case, a tiny-quotient case (the assumption above), and twenty recorded runs, one per rule (each math
+  function's last lane, the three ignored negates, `vavg`'s t prefix, the adders' four lanes, and the stray lanes of
+  `vdot`, `vhdp`, `vf2iz`, `vi2f`, `vh2f`, `vf2h` and `vbfy1`). Allegrex tests 56 groups, 0 failures, on arm64 and
+  x86_64 (Rosetta); PSP tests 85, 0 failures. 22 mutations, each undoing one rule, fail them on both engines (the
+  tiny-products one fails the replay too). One run of the suite, just before the mutations, failed the `vbfy1` case
+  with the value the core gave before its rule, though the source had the rule; every run since (the 22 mutation
+  builds and the full runs after them) passed. The reviewer found that case's code path deterministic; the likeliest
+  cause is an overlapping build replacing the test binary, which every run links at the same path
+  (`${TMPDIR:-/tmp}/phobos-allegrex-tests/allegrex`), so runs side by side need a `TMPDIR` each. Review: a
+  general-purpose reviewer (two medium findings: the adders' four lanes, which it found by experiment, and recorded
+  runs too few to guard every rule; four low: `vdiv`'s tiny quotients, `vavg`'s weight 1/3, the flush judged with a
+  float compare, the edge test's header; all fixed), then delta reviews (two low, on the docs, fixed) ending with no
+  findings.
+
+## PSP core: the FPU as the PSP measured it — 2026-10-04
+
+Branch `cursor/psp-fpu-measured-2b67`, stacked on `cursor/psp-measured-r3-2b67` (for stack #106). From round 3's
+FPU data (ares/psp/cpu/interpreter-fpu.cpp; the recompiler hands FPU instructions to the interpreter):
+- `add.s`, `sub.s`, `mul.s`, `div.s` and `sqrt.s` round as FCSR's mode says, and `cvt.s.w` too (as MIPS documents;
+  not measured): `rounded()` switches the host's rounding (`fesetround`) for the one operation when the mode isn't
+  the nearest, with the inputs and result in volatile variables so the compiler keeps the arithmetic between the
+  switches; the nearest costs nothing extra.
+- Their NaNs are picked as the PSP's (`pickNaN`: the first signaling input made quiet, else the first quiet one,
+  else 0x7fc00000): x86 hosts give 0xffc00000 for invalid operations and pass on their first operand, which failed
+  the replay on x86 (found in review; checked under Rosetta).
+- The conversions out of range saturate by sign: 0x80000000 for negative numbers and -infinity (0x7fffffff for the
+  rest and NaNs, as before).
+- `cfc1` from register 0 (FIR) reads 0x00003351; a thread starts with FCSR 0x00000e00 (kernel/threads.cpp).
+- FCSR's exception flags, enables and causes stay kept but unused (documented: the PSP's enabled ones end a program).
+- **Checks:** the measured group now also replays `fpu-convert`, `fpu-convert-safe`, `fpu-arith` and
+  `fpu-arith-safe` (all 4 x 81920 results, every mode, now exact) and FIR; unit tests for each mode (1 + 2^-30,
+  1 - 1, 1/3, 2^24 + 1) and the negative conversion; a kernel test for the starting FCSR. Allegrex tests 56 groups,
+  0 failures, on arm64 and on x86_64 (Rosetta); PSP tests 85, 0 failures; mutations (the old negative conversion,
+  the mode ignored) fail them on both engines. compare.sh's 80 FPU rows all 100%. Not measured: flush to zero in the
+  directed modes, `cvt.s.w`'s rounding. Review: a general-purpose reviewer (one high finding, the x86 NaNs, which it
+  reproduced with GCC on amd64 and clang under Rosetta; four low; all fixed), then a delta review with no findings.
+
+## PSP: what the user's PSP measured in round 3 — 2026-10-04
+
+Branch `cursor/psp-measured-r3-2b67`, stacked on `cursor/psp-ge-round3-2b67` (for stack #106). The user ran round 3
+(VFPU and GE), the FPU probes and rounds 1 and 2 again with tools/psp-measure; the results are in
+`.local/psp-measure-2026-10-04-round3/results` (not in the repository). Nothing stopped the PSP, round 2's two FPU
+tests finished this time (why isn't known), and every repeated result file is identical to the earlier sessions'
+(the manifests differ in wording, and `controller-timing.bin`'s times are measured).
+Published: docs/psp-vfpu-measurements.md ("Round 3") and docs/psp-core.md ("Round 3's results"); the SHA-256 of
+every new file (`tests/allegrex/measured/SHA256SUMS3`, `tests/psp/measured/SHA256SUMS3`), both manifests, `ops3.txt`,
+and, packed with xz (360 KB), `fpu-state`, the four FPU files and `vmul-tiny`. Findings, to be fixed next:
+- FPU: FCSR starts as 0x00000e00 (overflow, divide-by-zero, invalid enabled); IEEE 754-2008 NaNs (the core already
+  matches); arithmetic follows the rounding mode (the core rounds to nearest); conversions out of range saturate by
+  sign (the core gives 0x7fffffff for negatives too).
+- VFPU: products rounded to 24 bits, then flushed below 2^-126 (kept up to j = 1448; the core keeps 2^-126 for j
+  from 1449 to 2048 too, and round 2's one `vscl` lane fits); the second recorder list matches in 36 of 284 entries
+  (+7 by rounding).
+- GE: screen positions truncated toward 2048 (here both the viewport's center and the middle of the GE's space;
+  which one counts is still open; fits every cell of `3d-rounding-middle`); a 3D sprite's fog split across its
+  middle as PPSSPP does (the core fogs it all with the second corner's), its texels stepped as u/w, 1/w across x
+  and v/w down y; the depth buffer in order only through VRAM's fourth copy (formulas for the others fit all 16384
+  values); ambient, and plain diffuse with exact cosines, the core's in all but two cells; the rest of lighting and
+  the ramps a level apart in places (lower on the PSP but both ways in the vertical ramps); curves drawn.
+- **Checks:** compare.sh and the host tests (85 groups, 0 failures) on the new files; the reruns compared byte for
+  byte with the first sessions'; the depth formulas and the tiny products' model checked against every value.
+  Review: a general-purpose reviewer checking every claim against the data (13 findings, two high: a 3D sprite's fog
+  is split as PPSSPP does, not left off, and the tiny products are kept up to j = 1448; all fixed), then delta
+  reviews (four low, fixed; then no findings).
+
+## PSP tools: the GE's third round — 2026-10-04
+
+Branch `cursor/psp-ge-round3-2b67`, stacked on `cursor/psp-measure-menu-2b67` (for stack #106). tools/psp-measure
+gets "Round 3: the GE" on its menu (ge.c's round3, about 7 MB into results/ge, `manifest3.txt`), for what round 2
+left open (docs/psp-core.md, "Round 3, ready for the PSP"):
+- lighting with exact cosines, from normals built of Pythagorean triples and quadruples (also scaled by 2, 1/2, 64
+  and 1/64 and turned toward y; the light's direction 1 and 3 long): plain diffuse (`light-cosines`), powered
+  diffuse (`light-powered`: the GE's light kind 2, which `sceGuLight` sends for `GU_POWERED_DIFFUSE`; round 2's
+  diffuse cases were kind 0, as `GU_DIFFUSE` gives, checked in pspsdk's disassembly), and the shine
+  (`light-shine`), at powers 1 and 2; material, light and ambient levels (`light-materials`, `light-colors`,
+  `light-ambient`);
+- `ramp-colors`, `ramp-colors-vertical`, `ramp-colors-3d` (corners between pixels) and `ramp-fog` (w kept at 1):
+  16 slopes each;
+- `3d-rounding-middle` (edges 0 to 15 256ths past the pixel middle: truncated or rounded), `3d-wall-texels`
+  (perspective along x), `3d-sprite-fog`, `3d-sprite-texels`, `3d-sprite-flat`;
+- `bezier-flat`, `bezier-curved`, `bezier-divide-8`, `spline-edges-0`, `spline-edges-3` (the core doesn't draw
+  curves yet);
+- `depth-layout-0` to `-3`: a 256x64 area of depths y * 256 + x, the whole depth buffer (512x256 values) read back
+  through each of VRAM's copies, last in the round.
+
+The host test runs round 3 in the core too (every file written; the curves empty). Against PPSSPP's software
+renderer (the SMOKE build), the core matches on the six lighting cases, the flat sprite and the four depth reads,
+and differs on the ramps, the 3D edges, the wall, the sprite's fog and texels, and the curves.
+- **Checks:** `make` and `make SMOKE=1`, no warnings; the SMOKE build in PPSSPPHeadless writes all 24 round-3 files
+  (and round 2's, unchanged); PSP host tests 85 groups, 0 failures, still 52 of 63 round-2 pictures as the PSP's.
+  Review: a general-purpose reviewer (eight low findings, all fixed: the depth case now sets its own depth range and
+  reads the whole depth buffer, the host test says when the reference lacks a file, `GU_POWERED_DIFFUSE` by name,
+  wording and widths), then delta reviews (one more width finding, fixed; then no findings).
+- **Not checked:** anything on a PSP: that's the user's next session (round 3's VFPU and GE lines, then the
+  probes).
+
+## PSP tools: one measuring program, with a menu — 2026-10-04
+
+Branch `cursor/psp-measure-menu-2b67`, stacked on `cursor/psp-vfpu-round3-2b67` (for stack #106). At the user's
+request the two measuring programs are one, `tools/psp-measure` (moved with git mv: tools/psp-vfpu-measure's main.c
+is vfpu.c, tools/psp-ge-measure's is ge.c, the host tools came along), and it no longer leaves after a round:
+- main.c: a menu (up and down pick a line, X runs it) of every round of both: round 3's VFPU and FPU tests, the FPU
+  probes, round 2's VFPU and FPU tests, round 2's GE tests, round 1; start afresh; leave. After a round, X goes back
+  to the menu.
+- Start afresh asks first, then renames `results` to `results-1` (or the next number free) and starts an empty one:
+  every test runs again, nothing is deleted.
+- results.c: the results folder and each test's file as the VFPU program had them (`.part` renamed to `.bin`, one
+  more try after a stop, then `.stopped`), now for the GE's tests too, which are skipped once done. Files go to
+  `results/vfpu` and `results/ge` (both programs wrote a `manifest.txt`).
+- The SMOKE build runs round 3's VFPU and FPU tests, the probes and the GE's tests (PPSSPPHeadless with
+  `-i --graphics=software`); its files are the two old programs', byte for byte, but for the manifests' wording and
+  `controller-timing.bin` (measured times; the same reads waited).
+- What round 1 and round 3 record "as found" (the generator's state, FCSR) is taken when the program starts
+  (`vfpuStart`): round 1's `vrnd` runs only while the generator is still as it started (otherwise it says to start
+  the program again and skips that test), and `fpu-state.bin` holds FCSR from the start.
+- tests/psp/measure.cpp ("psp measure") drives the menu in the core: GE round 2, start afresh, again (the same
+  pictures as the first time), a third time (nothing rewritten), the probes, leave; still 52 of 63 pictures as the
+  PSP's. build.sh builds pspmeasure.elf.
+- Paths updated in the docs and comments; the committed manifests (the old programs wrote them) and older entries
+  here keep the old names. compare.sh and fit.py take the results folder or its `vfpu/`.
+- **Checks:** `make` and `make SMOKE=1` with `-Wall`, no warnings; the SMOKE build in PPSSPPHeadless against the old
+  programs' SMOKE files (as above); `tools/psp-test-programs/build.sh`, then `PSP_TEST_PROGRAMS=/tmp/psp-programs
+  PSP_GE_RESULTS=.local/psp-measure-2026-10-04/ge tests/psp/run-tests.sh`: 85 groups, 0 failures, 52 of 63 pictures
+  as the PSP's (unchanged); ops.py regenerates ops.h and ops3.h byte for byte. Review: a general-purpose reviewer (one
+  medium finding, the "as found" state above; eight low ones, all fixed), then delta reviews (one more low finding,
+  the round 1 note's wording, fixed; then no findings).
+- **Not checked:** the menu, `choose()` and starting afresh (a directory renamed with `sceIoRename`) on a PSP or in
+  PPSSPP (the SMOKE build skips the menu); they've run only in this core's HLE, whose rename is
+  `std::filesystem::rename`.
+Docker Desktop wedged part way (`docker exec` and `docker cp` hung on the shared folder); quitting and reopening it
+fixed that, with the container and its files intact.
+
+## PSP tools: the VFPU measurement's third round and the FPU probes — 2026-10-04
+
+Branch `cursor/psp-vfpu-round3-2b67`, stacked on `cursor/psp-ge-filter-2b67` (for stack #106). tools/psp-vfpu-measure
+gets round 3 (square) and the FPU probes (triangle), for the user's PSP:
+- `fpu-convert-safe`, `fpu-arith-safe`: round 2's FPU tests on inputs that can't stop the PSP (no NaNs, infinities,
+  denormals, too-big or too-small results); `fpu-state`: FCSR and FIR as a program finds them;
+- `vmul-tiny`: products a sliver below the smallest normal number, 2^-126 (1 - j^2 2^-46), telling three answers
+  apart: all 0 (flushed before rounding), 2^-126 up to j = 1448 (rounded to 24 bits, then flushed), or up to j =
+  2048 (rounded as IEEE denormals, then flushed: the core today);
+- `ops3.bin`: a second recorder list (ops.py's `entries3`, 284 entries, `ops3.h`): the math functions with prefixes,
+  swizzles past the size in instructions that don't work lane by lane, vavg and vfad with t prefixes. ops.h is
+  unchanged (its own seed);
+- seventeen FPU probes, one value each, run once with flush to zero off (the three -fs ones with it on): a probe that
+  stops the PSP is given up on at the next start (`beginTrying` with no retry). NaNs in MIPS's encoding (quiet: top
+  fraction bit clear).
+Reviews: Bugbot (three passes) and a general-purpose reviewer with a strict findings-only answer, which found what
+Bugbot didn't (-2^31 in the safe inputs, mislabeled NaNs, tiny products that couldn't answer their question, an
+unchecked rename, stale docs). From now on that reviewer gives the independent review docs/development-process.md
+asks for (with delta reviews after edits); Bugbot is an optional second opinion, read in full.
+compare.cpp reads all of it (`reportFpu` for the state and the probes). Built with pspdev; the SMOKE build runs to
+the end in PPSSPPHeadless with `-i` (its ARM64 JIT asserts on an ops3 entry: PPSSPP's bug, not the program's).
+
+## PSP core: the GE's filter and near-plane cut, as the PSP measured them — 2026-10-04
+
+Branch `cursor/psp-ge-filter-2b67`, stacked on `cursor/psp-ge-sampling-2b67` (for stack #106). From the user's
+PSP's pictures (docs/psp-core.md, "Fixed since"):
+- the bilinear filter drops the fraction at each step, top pair, bottom pair, then between them (texture.cpp): all
+  three `filter-magnify` files identical; a unit check in "draw filter" (0, 15 / 0, 17 at the middle gives 7, not 8);
+- a triangle cut at the near plane blends its new corners from the kept corner (transform.cpp), as part 11 first
+  had it, not PPSSPP's way: `3d-clip` 8410 pixels apart down to 1535 (no unit test pins the way round: on the
+  tests' small canvas the corners' level of difference doesn't reach a pixel; the measured file shows it);
+- 52 of 63 pictures identical. Tried and taken back: stepping vertex colors like texture coordinates (in 65536ths:
+  no better; in 256ths: worse). Lighting fits no simple arithmetic (best about 60 of 768 values in light-diffuse
+  off); the PSP's cosine looks a little off, as an approximate normalization would. Both written up as cases for the
+  third measuring program.
+
+Checks: PSP system tests 85 groups with the test programs; the measuring program against the PSP's results.
+
+## PSP core: where the GE samples, as the PSP measured it — 2026-10-04
+
+Branch `cursor/psp-ge-sampling-2b67`, stacked on `cursor/psp-vfpu-prefixes-2b67` (for stack #106). From the GE
+pictures the user's PSP drew (docs/psp-core.md, "Fixed since"), in ares/psp/ge/draw.cpp:
+- triangles are covered, and their colors, depth and texture coordinates blended, at each pixel's middle (8/16), not
+  PPSSPP's 7/16: `coverage-triangles` identical in all 256 cells, `shared-edges`, `gouraud`, `3d-rounding`,
+  `3d-cull` too;
+- sprites: the top-left rule at the middle, the left edge a sixteenth further left (`coverage-sprites`);
+- texture coordinates stepped from the leftmost corner with steps cut short to 1/65536 when inexact (`shortStep`):
+  all four `texels-*` files identical, `filter-shrink` kept;
+- 49 of 63 pictures identical (40 before). tests/psp's triangle, clipping and fog expectations moved to the middle
+  sample point.
+
+Next (GE): the filter's weights, lighting's and fog's rounding, perspective texels, the 3D sprite, the depth layout.
+Idea: commit the 49 identical pictures (about 1.1 MB with xz) and make the measure test fail if one changes.
+
+Checks: PSP system tests 84 groups with the test programs (the samples still within a level of PPSSPP); the measure
+comparison against the PSP's results.
+
+## PSP core: the VFPU's prefixes, as the PSP measured them — 2026-10-04
+
+Branch `cursor/psp-vfpu-prefixes-2b67`, stacked on `cursor/psp-vfpu-nans-2b67` (for stack #106). The recorder's 240
+random prefix combinations, worked out entry by entry (docs/psp-vfpu-measurements.md, round 2, "Prefixes"), in
+ares/psp/cpu/interpreter-vfpu.cpp:
+- `vrcp` takes the prefixes on its last lane alone with lane 0's settings (lanes 0-2 plain; a constant setting
+  honoured, one naming another lane giving 0; the destination's mask and clamp on lane 3), like `vrndi`.
+- `vfad`: t forced to constants (1, or 1/3 with the absolute bit, signs kept); `vhdp`: s's last lane forced the
+  same way; `vscl`: t's swizzle ignored, its other settings per lane.
+- `outsideLanes`: a swizzle past the operand's size gives 0 as that lane's result, in the lane-by-lane instructions
+  (the helpers, vabs, vneg, vmin, vmax, vscmp, vscl).
+- The recorder: 1157 of 1216 entries match, 49 more only by rounding; the last 10 are the adders' rounding beyond 4
+  ulps and one vscl lane that may be flushed before rounding. Unmeasured, for a third round: the other math
+  functions with prefixes, out-of-range swizzles in sums and conversions, vavg with prefixes.
+
+Checks: Allegrex tests 56 groups (prefix cases from recorded runs in `vfpu edges`); PSP system tests; mutations of
+vrcp's rule, the out-of-range rule and vfad's t prefix each fail the tests.
+
+## PSP core: the VFPU's NaNs, denormals and comparisons, as the PSP measured them — 2026-10-04
+
+Branch `cursor/psp-vfpu-nans-2b67`, stacked on `cursor/psp-vfpu-fixes-2b67` (for stack #106). Rules worked out from
+the recorder's inputs and checked on every recorded run (docs/psp-vfpu-measurements.md, round 2), all in
+ares/psp/cpu/interpreter-vfpu.cpp:
+- `vfpuOrder`: how `vmin`, `vmax`, `vsrt1`-`vsrt4`, `vsgn` and `vscmp` order values (sign and magnitude, denormals
+  as zero, a NaN past the infinity of its sign); they give back the lanes' own bits. Ties: t's lane for `vmin` and
+  `vmax`; for the sorts, the pair's first lane in both (vsrt1, vsrt2) or its second (vsrt3, vsrt4).
+- `vsat0`/`vsat1` keep NaNs and in-range lanes (denormals too; vsat0 zeroes a set sign bit); `vmov` copies bits;
+  `vsbz` leaves denormals; `vlgb` of a NaN moves its low byte up 16 bits (7 of 7 recorded).
+- The VFPU's NaN for `vavg`, `vbfy1`/`vbfy2`, `vcrs` (product sign), `vcrsp`, `vdet`, `vfad`, `vhdp`, `vhtfm`,
+  `vmmul`, `vmscl` and `vscl` (product sign), `vocp`, `vqmul`, `vsocp`, `vtfm`; an infinity's sine and cosine are
+  NaN (vsin, vcos, vnsin, vrot).
+- compare.cpp counts each recorder entry's differing words by kind, and says how many entries differ only by
+  rounding. The recorder: 1129 of 1216 entries match (963 before), 38 more only by the adders' rounding; the rest
+  are prefixed entries.
+- docs: the published finding that `vsgn`/`vscmp` see denormals was wrong (it's NaNs); corrected.
+
+Checks: Allegrex tests 56 groups (a `vfpu edges` case for each rule, interpreter and recompiler); PSP system tests;
+mutations of `vfpuOrder`'s denormal rule, vsrt3's tie and the sine of infinity each fail the tests.
+
+## PSP core: the VFPU's matrices and divu by zero, as the PSP measured them — 2026-10-04
+
+Branch `cursor/psp-vfpu-fixes-2b67`, stacked on `cursor/psp-measured-2b67` (for stack #106). The first two fixes
+from round 2 (docs/psp-vfpu-measurements.md):
+- `vmmul` is rs turned on its side times rt (rd[r][c] = the sum of rs[k][r] * rt[k][c]), and `vtfm`/`vhtfm` dot the
+  matrix's columns with the vector (ares/psp/cpu/interpreter-vfpu.cpp). Replayed against the recorder, every run
+  without a NaN or infinity in its inputs now matches up to the adders' rounding (it differed in 59-64 of 64 before).
+  The matrix test's second matrix isn't symmetric any more (twice the identity hid the order), and a case is
+  encoded as pspdev's assembler encodes `vmmul` (rs transposed).
+- `divu` by zero gives lo 0xffff for a dividend below 0x10000 (interpreter-ipu.cpp). `ipu-divide.bin` is in
+  tests/allegrex/measured/ (xz, 100 KB), and the measured test group replays its 8192 pairs.
+
+Checks: Allegrex tests 54 groups (interpreter and recompiler), PSP system tests 84 groups with the test programs;
+the old `vmmul` order and a wrong `divu` boundary (0x8000) each fail the tests.
+
+## PSP core: the user's measurements, round 2 and the GE — 2026-10-04
+
+Branch `cursor/psp-measured-2b67`, stacked on `cursor/psp-vfpu-awake-2b67` (for stack #106). The user ran VFPU
+rounds 1 and 2 and the GE program on their PSP; the raw results are in `.local/psp-measure-2026-10-04/` (not in the
+repository), their SHA-256 and manifests in `tests/allegrex/measured/` (`SHA256SUMS2`, `manifest2.txt`, `ops.txt`)
+and `tests/psp/measured/`. Findings written up in docs/psp-vfpu-measurements.md ("Round 2") and docs/psp-core.md
+("Results from the user's PSP"):
+- round 1 repeats byte for byte; `vh2f`/`vf2h` exact; division by zero's results (the core's `divu` LO is wrong);
+  both FPU tests switched the PSP off twice and were given up on (likely special inputs; a probe is next);
+- the recorder: 963 of 1216 entries match. The core reads matrix operands the other way round (`vmmul` gives
+  M000 × M100 where the core gives M100 × M000; `vtfm`/`vhtfm` dot columns, the core rows), the most important fix;
+  then NaN results, kept denormals, NaNs in comparisons, some prefixes (6 entries where the core leaves a lane
+  unwritten), and rounding; `vlog2` above 4 and the adders now have the data for their fits;
+- the GE: 40 of 63 picture files identical (blending, texture functions, dithering, stencil, formats), the controller
+  as uOFW reads it; of the 23 that differ, 21 differ from PPSSPP's software renderer at the same pixels: coverage,
+  the rounding onto the screen (PPSSPP's +0.375 is wrong), interpolation, the filter, lighting's rounding by a level,
+  and a depth buffer laid out differently in VRAM. Sprite edges measured: columns at 9/16, rows top 8/16, bottom 9/16.
+
+Next: the fixes, one at a time against these files, the matrix orientation first.
+
+## PSP core: the VFPU measurement keeps the PSP awake — 2026-10-04
+
+Branch `cursor/psp-vfpu-awake-2b67`, stacked on `cursor/psp-lighting-2b67` (for stack #106). The user's first round-2
+run switched the PSP off around the divide step. The divide is the bare instruction (checked in the built program), so
+the likelier causes are the power-save timer or a crash in the FPU tests after it, which no PSP had run. The program
+now keeps the PSP awake (`scePowerTick`), names each test as it starts, runs the FPU tests last, and retries a test
+that didn't finish once before giving up on it (`<name>.stopped`), so a test that stops the PSP can't hold up the rest.
+Its files are unchanged (byte for byte in PPSSPPHeadless), and the retry and give-up paths were tried there with
+planted `.part` and `.again` files. Five Bugbot passes, each read in full (every summary said "no bugs"). Four
+findings were fixed: the retry marker written before the file opened, a failed write counting as the PSP stopping,
+long tests between progress ticks, and a marker that can't be written letting a test retry forever. The fifth (a
+retry that stops between its last write and the rename to `.bin` is given up on) was left: the window is one close and
+one rename, and giving up renames the file rather than deleting it, so a complete `.stopped` can be renamed by hand.
+The revised EBOOT.PBP is on the RP6 in `Download/VFPUMEASURE2` from 10:19; the last two fixes wait for the next time
+it's connected (neither changes a normal run).
+
+## PSP core, part 12: lighting — 2026-10-04
+
+Branch `cursor/psp-lighting-2b67`, stacked on `cursor/psp-3d-measure-2b67` (for stack #106). `ares/psp/ge/lighting.cpp`:
+- the material (emissive, ambient, diffuse, specular, coefficient; the vertex's color standing in by MATERIAL_COLOR);
+- the ambient light and four lights (directional, point, spot; diffuse, specular, powered), with fading and cones;
+- the GE's arithmetic (2c + 1 colors, shares in 512ths rounded up, its quick power, the coefficient's 4-bit fraction);
+- the shine kept apart and added after texturing (LIGHT_MODE 1);
+- environment mapping's texture coordinates from two lights.
+
+Checks:
+- 84 groups on the Mac (UBSan), with five lighting groups worked out by hand;
+- pspsdk's "celshading" matches PPSSPP's software renderer pixel for pixel, "envmap" within 1 level;
+- 21 broken versions each failed the tests (two only after a case at a cosine of 0.501 was added).
+
+Not yet: lines, mipmaps, curved surfaces, bounding boxes, PRIM kind 7.
+
+A second commit adds five lighting cases to `tools/psp-ge-measure` (diffuse and the shine across the angles, a
+spotlight's direction either way, a point light's fading, environment mapping), all identical to PPSSPP's software
+renderer here; 61 of the program's 64 files now match it. While they were being written, an unfinished set of lighting
+cases appeared in `main.c` from another writer (a Cursor agent worker is registered for this folder). The user said
+nothing else was running, so the two sets were merged into one: the other set's cell helper, its finer angle sweep
+and its resets in `start()`, with these halves and cases. Copies of both versions are kept outside the repository in
+`.local/`. The refreshed EBOOT.PBP replaces the one on the RP6 in `Download/GEMEASURE`.
+
+## PSP core: measuring 3D on a PSP — 2026-10-04
+
+Branch `cursor/psp-3d-measure-2b67`, stacked on `cursor/psp-3d-2b67` (for stack #106). `tools/psp-ge-measure` gains
+nine 3D cases (perspective texels, depths and fog on a receding floor; a 3D sprite; the screen rounding; the near
+plane's cut with DEPTH_CLIP_ENABLE on and off; which depths stop triangles, points and sprites; culling). Against
+PPSSPP's software renderer 56 of the 59 files match; the three that differ are for the PSP to settle (docs/psp-core.md).
+The cases found a rounding difference in part 11's clipping, fixed there (a second commit on `cursor/psp-3d-2b67`).
+The updated EBOOT.PBP replaces the one on the RP6 in `Download/GEMEASURE`.
+
+## PSP core, part 11: drawing in 3D — 2026-10-04
+
+Branch `cursor/psp-3d-2b67`, stacked on `cursor/psp-ge-measure-2b67` (for stack #106). The GE draws outside through
+mode:
+- vertices scaled to fractions, morphed and skinned;
+- the world, view and projection matrices, the viewport and the GE's rounding to the sixteenth;
+- the rules for what isn't drawn (off the screen, depths, z / w, negative w), with DEPTH_CLIP_ENABLE's clamp;
+- triangles cut at the near plane;
+- culling (strips flipping);
+- perspective-correct texture coordinates, with the texture matrix's projection and TEX_SCALE/TEX_OFFSET;
+- fog, the depth range test, and 3D sprites and points.
+
+Checks:
+- 77 groups pass on the Mac (UBSan) and in `phobos-linux` (ASan and UBSan, with the programs);
+- pspsdk's "cube" sample is within 1 level of PPSSPP's software renderer on every pixel;
+- 26 broken versions each failed the tests (five only after new tests).
+
+The `PSP_TEST_PROGRAMS` readers now treat an empty value as unset; the loader's test hit undefined behavior on one.
+Not yet: lighting, environment mapping, PRIM kind 7, lines, mipmaps, curved surfaces. Next: lighting (PPSSPP's
+Lighting.cpp and TransformCommon read for behavior; "celshading" and "envmap" samples to compare).
+
+## PSP core: measuring the GE and the controller on a PSP — 2026-10-04
+
+Branch `cursor/psp-ge-measure-2b67`, stacked on `cursor/psp-draw-2b67` (for stack #106). `tools/psp-ge-measure` is a
+homebrew program that records what a real PSP's GE draws where parts 8-10 follow PPSSPP or uOFW instead of our own
+measurements: blending's and the texture functions' rounding, the filter, which pixels sprites and triangles cover,
+dithering, the stencil's steps, the 16-bit formats both ways, texel mapping, and the controller's timing (the latch
+question). 51 files, about 13 MB. `tests/psp/measure.cpp` runs the same program in the core and, with
+`PSP_GE_RESULTS`, lists what differs from a results folder (docs/psp-core.md, "Measuring the GE and the controller on
+a PSP"). Checks: 67 groups on the Mac (UBSan) and in `phobos-linux` (ASan and UBSan) with the programs; against
+PPSSPP's software renderer 48 of the 50 result files match (first written here as "49 of 51", counting the
+manifest), and the two that differ (a sprite edge exactly through pixel middles, a shrunk sprite's texels) are for the
+PSP to settle. `HostFolder` and `testProgram` moved into `tests/psp/kernel-machine.hpp` so the test files share them.
+The EBOOT.PBP went to the RP6 in `Download/GEMEASURE` for the user to run with the VFPU's round 2 (since replaced by
+the version with 3D cases, above).
+
+## PSP core, part 10: drawing in 2D — 2026-10-03
+
+Branch `cursor/psp-draw-2b67`, stacked on `cursor/psp-ge-2b67` (for stack #106). The GE draws in through mode:
+sprites (with the corner order's quarter turn), triangles, strips, fans and points; textures in every format but DXT,
+with the palette, swizzling, repeat and clamp, nearest and filtered; the texture functions; the whole pixel pipeline
+(alpha, color, stencil and depth tests, blending, dithering, logic operations, masks). Arithmetic as PPSSPP's software
+renderer has it (checked by its authors on PSPs). Checks: 66 groups on the Mac (UBSan) and in `phobos-linux`; pspsdk's
+"blit" (three ways) and "doublelist" pixel-exact; `tools/psp-test-programs/compare-ppsspp.sh` puts "blend" within 2
+levels of PPSSPP's software renderer everywhere and "clut" on 99.94% of pixels; fifteen broken versions each failed.
+The test script now turns off the address sanitizer's stack-use-after-return check, which made the per-pixel code
+hundreds of times slower (95 seconds instead of 18 minutes in the container).
+Not yet: lines, DXT, mipmaps, 3D. Next: 3D (transforms, clipping, lighting).
+
+## PSP core, part 9: the GE's display lists — 2026-10-03
+
+Branch `cursor/psp-ge-2b67`, stacked on `cursor/psp-files-2b67` (for GitHub stack #106, which the user keeps). The GE
+(`ares/psp/ge/`) runs display lists by itself: commands kept for `sceGeGetCmd`, matrices, BASE and offset addressing,
+two levels of CALL, stall addresses, FINISH/SIGNAL/END; every vertex layout; clearing and block transfers drawn (the
+rest of drawing is next). Its driver (`kernel/ge.cpp`) follows uOFW's reading of the PSP's: the queue of 64 lists,
+syncing and waiting, callbacks, the SIGNAL kinds (SUSPEND holds the GE until its callback returns), saved state. Calls
+into the program (`kernel/interrupts.cpp`) run as interrupt handlers on top of whatever thread is running, held back
+by `sceKernelCpuSuspendIntr`, unable to wait. Also event flags, exit callbacks, the clocks and `sceRtc` ticks, and
+`Kernel::picture()` (the screen's pixels). Checks: 53 groups on the Mac (UBSan) and in `phobos-linux` (ASan and
+UBSan, with the real programs: a GU program of Phobos's own and pspsdk's sample `copy`, built from source);
+twenty-six broken versions each failed. Reviews (read in full): the PAUSE callback's id, BASE being cleared for the
+next list, and the next list running before a finish callback fixed; event flags checked
+against pspautotests' results from a PSP (a failed poll does tell the bits, as a reviewer doubted; the check order,
+timeouts, deletion and zero timeouts fixed to match); two findings were the PSP driver's own behavior per uOFW, now
+commented. Found on the way: the sample `copy` never waits, so a fixed number of frames took the
+address sanitizer's interpreter minutes; it now runs until the screen has swapped four times. Next: drawing (textures,
+blending, the tests) for pspsdk's other 2D samples.
+
+## PSP core, part 8: files and controls — 2026-10-03
+
+Branch `cursor/psp-files-2b67`, stacked on `cursor/psp-hle-2b67` (to be added to GitHub stack #106, which the user
+keeps; the API can't add to stacks). Devices are host folders (`Kernel::mount()`), with paths normalized inside the
+kernel so nothing outside a device's folder can be reached, names found whatever their case, and 15 file and folder
+functions; the controller, following uOFW's ctrl.c, is sampled at each vertical blank or on the program's own
+timer and keeps its last 64 samples (peek, read with how many are new, negative, latch, analog stick, one waiting
+reader). `Kernel::run()` now budgets the PSP's time rather than instructions. A second test program
+(`tools/psp-test-programs/system`) uses files and the controls through newlib and runs from start to end. Checks: 34
+groups on the Mac (UBSan) and in `phobos-linux` (ASan and UBSan, with the real programs); fourteen broken versions
+each failed (the case one on Linux only, macOS's file system ignoring case itself). Reviews (read in full) found
+symlinks leading out of a device's folder, an overflowing controller sample count, the sampling cycle unused (now a
+timer) and backslashed program paths, all fixed; the last found the latch emptied for a second waiting thread, and
+uOFW showed the latch read doesn't wait and buffer reads wait only when nothing is new (always waiting halved the
+speed of a program that waits for the frame and then reads), so the controller was reworked. Their claim about
+`sceIoLseek`'s registers was disproved by psp-gcc's own code (offset in a2/a3, whence in t0). Open for the PSP: does
+a second latch read in one sampling cycle wait (pspsdk's notes) or not (uOFW)? Next: the GE (phase 5).
+
+## PSP core, part 7: the first HLE functions — 2026-10-03
+
+Branch `cursor/psp-hle-2b67`, stacked on `cursor/psp-loader-2b67`: `ares/psp/kernel/` gets the HLE kernel. NIDs
+are computed from names (SHA-1; all 46 of hello world's imports matched pspsdk's names), 54 functions (threads,
+semaphores, lightweight mutexes, memory, standard output, display, exit), a priority scheduler with saved contexts,
+and a clock at 333 MHz with the vertical blank. pspdev's hello world (now also printing to standard output, which
+the tests read) runs from start to end on the host, as a static executable, a PRX and an EBOOT, on both engines.
+Error codes pspsdk lacks come from uOFW's `errors.h` (recollected values were wrong, and corrected before commit).
+A second Bugbot review (its full answer read, as the user asked for every review; the returned summary showed one
+of the three) found start arguments copied past a thread's stack or from bad addresses, and the program's memory
+reserved elsewhere when taken; a third, that loading after an exit ran nothing and a failed load left memory
+reserved (load() now starts afresh, and resets again if it fails); a fourth, the program's path passed to its first
+thread without the same check (now up to 4 KiB): all fixed, with tests the old code fails. Checks: 22 groups on the Mac (UBSan) and in
+`phobos-linux` (GCC 13, ASan and UBSan, with the real programs); four broken versions each failed. Next: files
+(`sceIo*` on a host folder), controls, then the GE (phase 5).
+
+## PSP core, part 6: the loader — 2026-10-03
+
+Branch `cursor/psp-loader-2b67`, stacked on `cursor/psp-memory-2b67`: `ares/psp/kernel/loader.cpp` loads static
+executables, PRXs (relocations: 26-bit jumps, pointers, `lui` with its lower halves) and `EBOOT.PBP`'s program; reads
+the module info; patches each import's stub to `jr ra; syscall n`; lists the exports; refuses with a reason
+(encrypted programs named from their `~PSP` header, per the PSP Developer Wiki page the user saved). Checked against a
+real hello world built by pspdev (`tools/psp-test-programs/build.sh`, source only; `PSP_TEST_PROGRAMS`), which shows
+what part 7 needs: about 45 functions from 11 libraries. Checks: 12 groups on the Mac (UBSan) and in `phobos-linux`
+(ASan and UBSan, with the real programs); three broken versions each failed. Open: whether relocation segment numbers
+add a segment's address or its displacement, which only multi-segment retail modules can show (phase 7).
+
+## PSP core, part 5: the memory map — 2026-10-03
+
+Branch `cursor/psp-memory-2b67`, stacked on `cursor/psp-vfpu-round2-2b67`: `ares/psp/memory/` (the scratchpad,
+VRAM and its four copies, 32 or 64 MiB of main RAM, the four address windows; `written()` for the recompiler,
+`unmapped()` for accesses with nothing behind them; the page table; copies for the loader and HLE). The PSP
+system gets its own test suite, `tests/psp/run-tests.sh` (6 groups, in the PSP Core Tests workflow as a second
+job). Bugbot found that VRAM's copies in the page table let a compiled store through one copy change code compiled
+from another unseen; now only the first copy is listed, and the recompiler interprets code wherever the table has
+nothing (a rule written into the CPU's `pages` comment). Checks: passes on the Mac (UBSan) and in `phobos-linux`
+(GCC 13, ASan and UBSan); four broken versions each failed it; the CPU's 54 groups still pass on both. Next in
+phase 4: the ELF/PRX/PBP loader, then the first HLE functions.
+
+## PSP core: a second round of VFPU measurements — 2026-10-03
+
+Branch `cursor/psp-vfpu-round2-2b67`, stacked on `cursor/psp-vfpu-exact-2b67`. `tools/psp-vfpu-measure` now asks
+which round to run (O: the first; X: the second, about 230 MB, `manifest2.txt`). Round 2 records what round 1
+couldn't settle: `vlog2` over a whole binade per result size above 4; dot products, sums and averages built to show
+how the VFPU adds several numbers; every half float through `vh2f` and a million floats through `vf2h`; `div` and
+`divu` (by zero too) and the FPU's conversions and arithmetic in each rounding mode; and the instruction recorder:
+every VFPU instruction, size and immediate pspdev's assembler accepts (1216 entries in `ops.h`, generated by
+`ops.py`), each copied into a stub and run on 64 random register states, recording matrix 2 and the condition
+codes. The recorder runs last, since a PSP stops a program at an instruction it doesn't have. `compare.sh` checks
+whatever a folder holds from either round. Tried first in PPSSPP's PPSSPPHeadless (`make SMOKE=1`; built in
+`phobos-linux` at `/opt/tools/ppsspp` without SDL, `HEADLESS_CROSS=ON`): every file written at its expected size
+and parsed by `compare.sh`. Waiting on the user's PSP run.
+
+## PSP core: VFPU log2 exact below 4 — 2026-10-03
+
+A third commit on `cursor/psp-vfpu-exact-2b67`. `vlog2`'s table is fixed point (units of 2^-24 over [1, 2)),
+which the same interpolator fits; the core adds the exponent as a whole number and truncates to 22 bits after the
+point and 23 significant bits. Below 1 the PSP takes a cheaper path, found from the full sweep: a straight line
+per segment (the table's first value cut to 17 bits after the point, its slope missing its low 9 bits, no squared
+term) and the magnitude truncated to 15 bits after the point, whatever its size; `fit.py` checks it against all
+2^23 results below 1. Exact on all 16.8 million results from 1/2 up to 2 and on every spread-out input below 4;
+from 4 up about half are one unit high (88.35% of the spread-out set overall), which needs whole binades above 4
+from a second round of measurements. The measured group replays vlog2's spread-out sample (inputs below 4) and
+every 1024th result from 1/2 up to 2.
+
+## PSP core: VFPU sine and cosine exact — 2026-10-03
+
+A second commit on `cursor/psp-vfpu-exact-2b67`: the table behind `vsin` and `vcos` turned out to be cosine's (sine
+is it read backwards), which fits the same interpolator; very large arguments wrap as the hardware's 5-bit shift
+does (a shift of exactly 32, 64 or 96 gives 0). `vsin`, `vcos`, `vnsin` and `vrot` now use it: exact on every
+full-range and spread-out input. Ten math instructions are exact; `vlog2` and `vdot` remain. Checks: 54 groups pass
+on the Mac and in `phobos-linux`; the measured group replays the first 16384 results of each of the ten.
+
+## PSP core: seven VFPU math functions exact — 2026-10-03
+
+Branch `cursor/psp-vfpu-exact-2b67`, stacked on the measurements. `tools/psp-vfpu-measure/fit.py` fits the
+quadratic interpolator published about the hardware to the user's PSP's results, and the core now computes `vrcp`,
+`vnrcp`, `vrsq`, `vsqrt`, `vexp2`, `vrexp2` and `vasin` with those coefficients (`ares/psp/cpu/vfpu-segments.hpp`,
+generated): exact on all of their full-range results and on a million spread-out inputs each.
+
+- **Found on the way:** `vsqrt`/`vrsq` ignore the input's lowest bit; `vrexp2` reads `vexp2`'s table backwards,
+  as `vexp2` does for negative inputs; `vcos` is `vsin` backwards; `vsqrt(-0)` is +0; `vsin` is fixed point and
+  doesn't fit the model yet (nor does `vlog2`).
+- **Checks run:** `tests/allegrex/run-tests.sh`, all 54 groups pass on the Mac (UBSan, which caught an
+  out-of-range shift in the first version) and in `phobos-linux`; the measured group now also replays the first
+  16384 spread-out results of each of the seven (0.2 MB). `compare.sh` on the full data: the table in
+  psp-vfpu-measurements.md.
+
+## PSP core: the VFPU against the user's PSP — 2026-10-03
+
+Branch `cursor/psp-vfpu-measured-2b67`, stacked on the measurement program. The user ran it (firmware 6.61) and
+left `results/` (455 MB) on the RP6; it's in `.local/psp-vfpu-measure/results/`, outside the repository.
+
+- **Findings** ([psp-vfpu-measurements.md](psp-vfpu-measurements.md)): the random number generator matches all
+  263,944 words; `vadd`, `vsub`, `vmul`, `vdiv` match every non-NaN result; the VFPU's NaN is always `0x7f800001`
+  with a sign that depends on the instruction (now in the core, `NaNSign`, so those four match fully); the math
+  functions keep 22 bits and work on fixed-point arguments (sine, cosine, arcsine), and `vdot` sums differently.
+- **In the repository**, as the user chose: the write-up, `tools/psp-vfpu-measure/compare.sh` (checks the core
+  against a results folder), and in `tests/allegrex/measured/` the manifest, the SHA-256 of all 27 files and the
+  generator and arithmetic files (5.2 MB compressed), which a new test group checks the core against. The math
+  tables stay with the user.
+- **Checks run:** `tests/allegrex/run-tests.sh`, all 54 groups pass on the Mac and in `phobos-linux`; reverting
+  `vadd`'s NaN rule fails the new group.
+- **Firmware:** the user chose targeted reverse engineering of their own firmware where measurements can't answer
+  a question, written up as specifications, never code, with the firmware kept out of the repository.
+
+## PSP core: measuring the VFPU on a real PSP — 2026-10-03
+
+`tools/psp-vfpu-measure`, a homebrew program that records what a PSP's VFPU computes (math functions over their
+whole reduced ranges and a million spread-out inputs, the random number generator from 64 seeds, arithmetic edge
+cases), for exact math functions fitted from our own data, as the user chose. Built in `phobos-linux` with
+pspdev's ARM64 toolchain (installed in `/opt/pspdev`); the build is in `.local/psp-vfpu-measure/EBOOT.PBP`, not in
+the repository. Its VFPU instructions were checked in the disassembly against the core's decoder. Waiting on the
+user to run it on their PSP and bring back `results/` (about 450 MB). psp-core.md has the details.
+
+## PSP core: the VFPU's random number generator — 2026-10-03
+
+Branch `cursor/psp-vfpu-random-2b67`, stacked on part 4. The user chose, for the VFPU's accuracy: the real random
+number generator, implemented from the published research (fp64's, PPSSPP issue 16946) with no PPSSPP code; and
+exact math functions from measurements on the user's own PSP (a dump program comes next).
+
+- **What it is:** `vfpuRandom()`, `VRNDS`, `VRNDI`, `VRNDF` in `interpreter-vfpu.cpp`, plus the RCX registers'
+  power-on values and their 20-bit width. psp-core.md has the details.
+- **Checks run:** `tests/allegrex/run-tests.sh`, all 53 groups pass on the Mac (UBSan) and in `phobos-linux`; the
+  new group checks the generator's state after 3, 4, 14 and 19 draws against the states fp64 recovered from a PSP,
+  the seeding layout, the lane order and the prefix quirk.
+
+## PSP core, part 4: loads and stores straight to RAM — 2026-10-03
+
+Branch `cursor/psp-fastmem-2b67`, stacked on part 3. The user approved parts 1-3 and asked for the whole PSP feature
+to be stacked and merged at once, so the stack stays open as it grows.
+
+- **What it is:** compiled loads and stores look up a page table the CPU's owner provides (`Allegrex::pages`) and
+  reach host memory directly, with the interpreter as the slow path (misaligned addresses, hardware registers, and
+  stores into pages holding compiled code, which `writePages` leaves out so the store drops that code).
+  [psp-core.md](psp-core.md#the-recompiler) has the details.
+- **Checks run:** `tests/allegrex/run-tests.sh`, all 51 groups pass on the Mac (UBSan) and in `phobos-linux` (GCC
+  13, ASan and UBSan). The test machine's page table leaves one RAM page out, which the generated programs also
+  load and store through, and a test counts that only the store to that page reached write(). Three deliberate
+  mistakes (stores allowed into pages with compiled code, `lh` without sign extension, no alignment check) each
+  failed the tests.
+- **Speed:** the benchmark loop runs at 1206 million instructions a second on the Mac, against 505 without the page
+  table and 150 on the interpreter (`SANITIZE= ALLEGREX_BENCHMARK=1 tests/allegrex/run-tests.sh`).
+
+## PSP core, part 3: the VFPU — 2026-10-03
+
+Branch `cursor/psp-vfpu-ares-2b67`, stacked on part 2 (`cursor/psp-recompiler-2b67`), for the user to review.
+[psp-core.md](psp-core.md#part-3-the-vfpu) has what it covers and assumes.
+
+- **What it is:** `ares/psp/cpu/interpreter-vfpu.cpp`, every VFPU instruction in ares's style (one function per
+  mnemonic, decoder tables in `interpreter.cpp`), from the earlier stashed work rewritten. Two of its old test
+  expectations were wrong and are fixed: vcst 8 is pi/2 (the constants are numbered from 1), and a prefix
+  constant is picked by the swizzle and absolute bits together. The recompiler runs it through the interpreter.
+- **Checks run:** `tests/allegrex/run-tests.sh`, all 51 groups pass on the Mac (UBSan) and in `phobos-linux` (GCC
+  13, ASan and UBSan): ten VFPU groups on both engines, and the generated programs now mix in VFPU instructions.
+- **Prefixes, from a review:** an instruction that raises an exception leaves the prefixes, and `vmfvc`/`vmtvc`
+  don't use them up (as in PPSSPP, where pspdev's documentation is silent), so `vmtvc` can set one; `vnop` does use
+  them up, as the documentation says.
+- **The stashes** of the VFPU work before the rewrite were dropped, with copies kept outside the repository.
+
+## PSP core, part 2: the recompiler — 2026-10-03
+
+Branch `cursor/psp-recompiler-2b67`, stacked on part 1 (`cursor/psp-core-2b67`), for the user to review. As the user
+directed, the Allegrex gets a recompiler from the start, with the interpreter as its fallback and reference.
+[psp-core.md](psp-core.md#the-recompiler) has the design and what it doesn't do yet.
+
+- **What it is:** `ares/psp/cpu/recompiler.cpp` and `recompiler-ipu.cpp`, on ares's sljit framework like the N64 CPU.
+  The common integer instructions and the branches are native; everything else, including every instruction that
+  can raise an exception, calls the interpreter's own path (`execute()`).
+- **Checks run:** `tests/allegrex/run-tests.sh` runs every test group on both engines, recompiler cases, and 500
+  generated programs that must end in the same state on both; all 31 groups pass on the Mac (ARM64, UBSan) and in
+  the `phobos-linux` container (Ubuntu 24.04 ARM64, GCC 13, ASan and UBSan). sljit's own call checks are on in the
+  tests. Four deliberately broken versions of the recompiler each failed the tests. The x86-64 backend runs first in
+  CI (the PSP Core Tests workflow, on x86-64 runners).
+- **The `phobos-linux` container** (Docker, at the user's suggestion, kept for later Linux checks): Ubuntu 24.04 with
+  GCC 13, CMake and Python, the repository mounted read-only at `/phobos`; run
+  `docker exec phobos-linux bash -c 'cd /phobos && tests/allegrex/run-tests.sh'`. It was created with
+  `--security-opt seccomp=unconfined` because Docker Engine 20.10.8 blocks the `clone3` call Ubuntu 24.04's C
+  library uses (fixed in 20.10.10).
+
+## PSP core, part 1: the Allegrex CPU — 2026-10-03
+
+Branch `cursor/psp-core-2b67`, for the user to review. The user chose an original PSP core over PPSSPP (whose GPL
+can't cover the firmware compiled into the native library), with PPSSPP readable as a reference, the published keys
+for retail executables, and firmware optional per module family. [psp-core.md](psp-core.md) has the decisions,
+sources, design and phases.
+
+- **Part 1:** `ares/psp/cpu/`, an interpreter for the Allegrex's integer and FPU instructions. It sits under
+  `ares/` as the other systems do, written in ares's style (nall types, mnemonic-named instruction functions,
+  macro decoder tables, memory through virtual `read()`/`write()` like the ARM7TDMI) with plain-language comments,
+  as the user asked. Not in the app.
+- **Next, as the user directed:** a recompiler from the start, on ares's sljit framework like the N64 CPU, with this
+  interpreter as its reference and fallback, and its MIPS-generic parts reusable by other MIPS systems; then the
+  VFPU. psp-core.md has the plan.
+- **Checks run:** `tests/allegrex/run-tests.sh` on the Mac, 14 groups pass with the undefined-behavior sanitizer
+  (the address sanitizer's runtime hangs at start on this macOS, so the script uses it on Linux only); the new
+  PSP Core Tests workflow runs both sanitizers. The CPU is built against nall and ares's types alone
+  (`tests/allegrex/prelude.hpp`). The binutils Allegrex test's assembled examples serve as vectors.
+- **Not checked against hardware:** division by zero, FPU arithmetic outside round-to-nearest, conversions of NaN
+  or out-of-range values (psp-core.md lists what the code assumes).
 
 ## N64 hack bugs narrowed — 2026-10-03
 

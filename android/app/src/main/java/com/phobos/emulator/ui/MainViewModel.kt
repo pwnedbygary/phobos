@@ -20,6 +20,7 @@ import com.phobos.emulator.LogEntry
 import com.phobos.emulator.LogLevel
 import com.phobos.emulator.PerformanceStats
 import com.phobos.emulator.PhobosCore
+import com.phobos.emulator.PspDiscInfo
 import com.phobos.emulator.input.ActiveControls
 import com.phobos.emulator.input.ControlCapture
 import com.phobos.emulator.input.ControlLevel
@@ -43,6 +44,7 @@ import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.data.UiEffects
 import com.phobos.emulator.data.XmbBackdropScene
 import com.phobos.emulator.launch.LaunchRequest
+import com.phobos.emulator.launch.LaunchSystems
 import com.phobos.emulator.launch.LaunchTarget
 import com.phobos.emulator.launch.resolveLaunch
 import com.phobos.emulator.ui.hud.HudEdit
@@ -56,6 +58,7 @@ import com.phobos.emulator.ui.touch.TouchFamily
 import com.phobos.emulator.ui.touch.TouchLayoutCodec
 import com.phobos.emulator.ui.touch.TouchPrefs
 import com.phobos.emulator.ui.touch.touchLayoutKey
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -109,6 +112,10 @@ import com.phobos.emulator.util.N64SaveImportPlan
 import com.phobos.emulator.util.N64SaveKind
 import com.phobos.emulator.util.N64SaveRead
 import com.phobos.emulator.util.N64SaveTransfer
+import com.phobos.emulator.util.PspDrawingThreads
+import com.phobos.emulator.util.PspRenderer
+import com.phobos.emulator.util.PspResolution
+import com.phobos.emulator.util.PspFonts
 import com.phobos.emulator.util.ZxTape
 import com.phobos.emulator.util.cueTracks
 import com.phobos.emulator.util.cueWithTracksIn
@@ -125,6 +132,7 @@ import com.phobos.emulator.util.newerDriverRelease
 import com.phobos.emulator.util.romTitle
 import com.phobos.emulator.util.withoutDiscNumber
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -537,6 +545,22 @@ class MainViewModel(
         settingsStore.setMsxLoadSpeed(speed)
         PhobosCore.setMsxLoadSpeed(speed)
     }
+    /** How many threads draw a PSP game's pictures: [PspDrawingThreads], taken by the core as a game starts. */
+    fun setPspDrawingThreads(threads: Int) = viewModelScope.launch {
+        settingsStore.setPspDrawingThreads(threads)
+        PhobosCore.setPspDrawingThreads(PspDrawingThreads.forCore(threads))
+    }
+
+    /** Who draws a PSP game's pictures: [PspRenderer], taken by the core as a game starts. */
+    fun setPspRenderer(renderer: Int) = viewModelScope.launch {
+        settingsStore.setPspRenderer(renderer)
+        PhobosCore.setPspRenderer(PspRenderer.forCore(renderer))
+    }
+    /** The Vulkan renderer's internal resolution: [PspResolution], taken by the core as a game starts. */
+    fun setPspResolution(scale: Int) = viewModelScope.launch {
+        settingsStore.setPspResolution(scale)
+        PhobosCore.setPspResolution(PspResolution.forCore(scale))
+    }
     fun setZxTapeAuto(enabled: Boolean) = viewModelScope.launch {
         settingsStore.setZxTapeAuto(enabled)
         PhobosCore.setZxTapeAuto(enabled)
@@ -642,6 +666,7 @@ class MainViewModel(
     fun setSavesPath(path: String) = viewModelScope.launch { settingsStore.setGlobalPath(SettingsStore.SAVES_PATH, path) }
     fun setStatesPath(path: String) = viewModelScope.launch { settingsStore.setGlobalPath(SettingsStore.STATES_PATH, path) }
     fun setScreenshotsPath(path: String) = viewModelScope.launch { settingsStore.setGlobalPath(SettingsStore.SCREENSHOTS_PATH, path) }
+    fun setPspMemoryStickPath(path: String) = viewModelScope.launch { settingsStore.setGlobalPath(SettingsStore.PSP_MEMORY_STICK_PATH, path) }
 
     /**
      * Vulkan Cache Path (Task 40): persists the SAF URI and pushes the resolved
@@ -719,7 +744,11 @@ class MainViewModel(
         if (sysName.isEmpty()) return
         // The snapshot comes BEFORE any teardown, while the core is still alive.
         if (autoSave && settings.value.autoSaveState && romName.isNotEmpty()) {
-            try { performSaveState(sysName, romName, AUTO_STATE_SLOT) } catch (e: Exception) {
+            try {
+                performSaveState(sysName, romName, AUTO_STATE_SLOT, quiet = true)
+            } catch (e: CancellationException) {
+                Log.i("Phobos", "Auto-save: the activity finished during the save; its message may not have shown")
+            } catch (e: Exception) {
                 Log.e("Phobos", "Auto-save failed: ${e.message}")
             }
         }
@@ -836,28 +865,41 @@ class MainViewModel(
     // Shared save logic (also used by Auto-Save State, Task 17 — slot < 0 = "Auto").
     // Must run on Dispatchers.IO; performs the native snapshot + copies the result
     // to the configured SAF path (or internal fallback). Returns success.
-    private suspend fun performSaveState(systemName: String, romName: String, slot: Int): Boolean {
+    // quiet: a save the player didn't ask for (Auto-Save State as the game quits), which says nothing when there's no
+    // state to save.
+    private suspend fun performSaveState(
+        systemName: String, romName: String, slot: Int, quiet: Boolean = false,
+    ): Boolean {
         // Per-call temp files, so a concurrent load or save can't replace this state before it is copied.
         val tempFile = File(context.cacheDir, "state-save-${System.nanoTime()}.tmp")
         val tempThumb = File(context.cacheDir, "state-thumb-${System.nanoTime()}.tmp")
+        val tempDisc = File(context.cacheDir, "state-disc-${System.nanoTime()}.tmp")
         try {
-            return saveStateFromTemp(systemName, romName, slot, tempFile, tempThumb)
+            return saveStateFromTemp(systemName, romName, slot, tempFile, tempThumb, tempDisc, quiet)
         } finally {
             tempFile.delete()
             tempThumb.delete()
+            tempDisc.delete()
         }
     }
 
     private suspend fun saveStateFromTemp(
-        systemName: String, romName: String, slot: Int, tempFile: File, tempThumb: File,
+        systemName: String, romName: String, slot: Int, tempFile: File, tempThumb: File, tempDisc: File,
+        quiet: Boolean,
     ): Boolean {
         val fileName = stateFileName(romName, slot)
         val slotLabel = slotLabel(slot)
         val sanitizedName = getSanitizedSystemName(systemName)
 
-        // 1. Tell native to save to a local accessible path
-        val nativeSuccess = PhobosCore.saveState(tempFile.absolutePath)
-        if (!nativeSuccess) {
+        // 1. Tell native to save to a local accessible path. There may be none to save: a game that ended by itself
+        // has nothing to carry on from (Auto-Load would bring back where it stopped), and a core stuck in a frame
+        // never hands its state over. A save the player didn't ask for then just isn't made.
+        val made = PhobosCore.trySaveState(tempFile.absolutePath)
+        if (made == 0 && quiet) {
+            Log.i("Phobos", "Auto-save as the game quits: nothing to save")
+            return false
+        }
+        if (made <= 0) {
             Log.e("Phobos", "Native saveState failed")
             withContext(Dispatchers.Main) {
                 Toast.makeText(context, "Save Failed!", Toast.LENGTH_SHORT).show()
@@ -867,9 +909,10 @@ class MainViewModel(
 
         // Best effort: a failed capture only drops the slot's preview, never the save.
         val thumb = tempThumb.takeIf { capturePreview(it) }
-        // A multi-disc game's state notes its disc, so loading it puts that disc back.
+        // A multi-disc game's state notes its disc, so loading it puts that disc back. The note is made below, where
+        // failing to make it fails the save with its message; its copy beside the state is best effort, as the
+        // preview's is.
         val disc = _currentDisc.value.takeIf { it >= 0 && romName == currentRomName && _loadedDiscs.value.size > 1 }
-        val discNote = disc?.let { File(context.cacheDir, "state-disc-${System.nanoTime()}.tmp").apply { writeText("${it + 1}") } }
 
         // 2. Copy from local path to the user's selected SAF path.
         //    Task 41: fall back to internal storage when no SAF path is
@@ -877,25 +920,27 @@ class MainViewModel(
         val baseUriString = settings.value.statesPath
         val internalStatesDir = File(context.filesDir, "states/$sanitizedName")
         val saved = try {
+            val discNote = disc?.let { tempDisc.apply { writeText("${it + 1}") } }
             if (baseUriString.isNotEmpty()) {
                 val baseUri = Uri.parse(baseUriString)
                 val rootDir = DocumentFile.fromTreeUri(context, baseUri)
                 val systemDir = rootDir?.findFile(sanitizedName) ?: rootDir?.createDirectory(sanitizedName)
+                // A folder that can't make the file (its permission revoked, or the folder gone), or gives no way
+                // to write it, fails the save as anything else does: below, with its message.
                 val stateFile = systemDir?.findFile(fileName) ?: systemDir?.createFile("application/octet-stream", fileName)
-                if (stateFile != null) {
-                    context.contentResolver.openOutputStream(stateFile.uri, "wt")?.use { output ->
-                        tempFile.inputStream().use { input -> input.copyTo(output) }
-                    }
-                    systemDir?.let {
-                        writeSafSidecar(it, thumbnailName(fileName), thumb)
-                        writeSafSidecar(it, discName(fileName), discNote)
-                    }
-                    Log.i("Phobos", "Synced state to SAF: ${stateFile.uri}")
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "Saved state to $slotLabel", Toast.LENGTH_SHORT).show()
-                    }
-                    true
-                } else false
+                    ?: throw IOException("the states folder can't hold $fileName")
+                val output = context.contentResolver.openOutputStream(stateFile.uri, "wt")
+                    ?: throw IOException("the states folder gives no way to write $fileName")
+                output.use { tempFile.inputStream().use { input -> input.copyTo(it) } }
+                systemDir?.let {
+                    writeSafSidecar(it, thumbnailName(fileName), thumb)
+                    writeSafSidecar(it, discName(fileName), discNote)
+                }
+                Log.i("Phobos", "Synced state to SAF: ${stateFile.uri}")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Saved state to $slotLabel", Toast.LENGTH_SHORT).show()
+                }
+                true
             } else {
                 // Internal fallback: filesDir/states/<system>/<file>
                 if (!internalStatesDir.exists()) internalStatesDir.mkdirs()
@@ -910,6 +955,10 @@ class MainViewModel(
                 }
                 true
             }
+        } catch (e: CancellationException) {
+            // The activity finished during the save; the cancel takes effect here, once the state is written: the
+            // save stands, and at most its message is lost.
+            throw e
         } catch (e: Exception) {
             Log.e("Phobos", "Failed to sync state to SAF: ${e.message}")
             withContext(Dispatchers.Main) {
@@ -917,7 +966,6 @@ class MainViewModel(
             }
             false
         }
-        discNote?.delete()
         if (saved) _stateRevision.update { it + 1 }
         return saved
     }
@@ -1397,6 +1445,9 @@ class MainViewModel(
     private val _currentDisc = MutableStateFlow(-1)
     val currentDisc: StateFlow<Int> = _currentDisc.asStateFlow()
 
+    /** The Library scan: lists files, then (for PSP) fills titles and icons. Cancelled when another scan starts. */
+    private var romScanJob: Job? = null
+
     /** The disc a multi-disc game last ran from, preselected when it starts again. */
     fun lastDisc(systemName: String, game: RomFile): Int =
         (settings.value.lastDisc["$systemName/${game.name}"] ?: 0).coerceIn(0, (game.discs.size - 1).coerceAtLeast(0))
@@ -1671,7 +1722,8 @@ class MainViewModel(
         if (!_isLoaded.value) _leaveToFrontend.trySend(Unit)
     }
 
-    private fun startExternal(system: String, rom: RomFile) {
+    private fun startExternal(system: String, launched: RomFile) {
+        val rom = namedFor(system, launched)
         externalSession = true
         if (_isLoaded.value && currentSystemName == system && currentRomName == rom.name) {
             // The game that's running (a frontend's resume): it carries on where it is.
@@ -1680,6 +1732,17 @@ class MainViewModel(
         }
         startLoad(context, system, rom)
         navigateTo("emulator/${Uri.encode(system)}/${Uri.encode(rom.name)}")
+    }
+
+    /** [rom] under the name the Library gives it on [system]: a PSP program in an EBOOT.PBP goes by its folder. */
+    fun namedFor(system: String, rom: RomFile): RomFile {
+        if (system != LaunchSystems.PSP) return rom
+        val uri = rom.uri
+        val primaryRoot = Environment.getExternalStorageDirectory().absolutePath
+        val folder = LaunchSystems.parentFolderName(
+            uri.scheme, uri.authority, uri.pathSegments, uri.path, primaryRoot, rom.name,
+        )
+        return rom.copy(name = LaunchSystems.pspProgramName(rom.name, folder))
     }
 
     /** After quitting or a failed load: true when the game came from another app, which Phobos returns to. */
@@ -1791,6 +1854,9 @@ class MainViewModel(
             PhobosCore.setNgcdLoadSpeed(settings.value.ngcdLoadSpeed)
             PhobosCore.setZxLoadSpeed(settings.value.zxLoadSpeed)
             PhobosCore.setMsxLoadSpeed(settings.value.msxLoadSpeed)
+            PhobosCore.setPspDrawingThreads(PspDrawingThreads.forCore(settings.value.pspDrawingThreads))
+            PhobosCore.setPspRenderer(PspRenderer.forCore(settings.value.pspRenderer))
+            PhobosCore.setPspResolution(PspResolution.forCore(settings.value.pspResolution))
             PhobosCore.setZxTapeAuto(settings.value.zxTapeAuto)
             PhobosCore.setN64DebugLogging(settings.value.n64DebugLogging)
             PhobosCore.setN64CountPerOp(if (settings.value.n64UseDefaultCountPerOp) 2 else settings.value.n64CountPerOp)
@@ -1832,6 +1898,15 @@ class MainViewModel(
                         }
                     } else null
                     if (geometry != _videoGeometry.value) _videoGeometry.value = geometry
+
+                    if (_isLoaded.value) {
+                        // The PSP's core says once when its Vulkan renderer couldn't start or stopped (the software
+                        // renderer drawing instead); the log has it too.
+                        val pspNotice = PhobosCore.takePspNotice()
+                        if (pspNotice.isNotEmpty()) {
+                            withContext(Dispatchers.Main) { Toast.makeText(context, pspNotice, Toast.LENGTH_LONG).show() }
+                        }
+                    }
 
                     if (_isLoaded.value && !_isPaused.value) {
                         val stats = PhobosCore.getPerformanceStats()
@@ -2308,6 +2383,93 @@ class MainViewModel(
     }
 
     /**
+     * How many of the PSP's eighteen system fonts the app holds ([PspFonts]), and whether they were found by
+     * themselves in Download/FLASH0DUMP, for Settings → Firmware.
+     */
+    private val _pspFonts = MutableStateFlow(PspFonts.Held(0, false))
+    val pspFonts: StateFlow<PspFonts.Held> = _pspFonts
+
+    init {
+        viewModelScope.launch(Dispatchers.IO) { findPspFonts() }
+    }
+
+    /**
+     * The PSP's fonts found by themselves ([PspFonts.autoImport]): when the app has fewer than the eighteen, those it
+     * hasn't got are copied from tools/psp-flash0-dump's folder in the device's Download folder, if Android lets the
+     * app read it there (the app has no access to all files: a folder grant that covers it lets it in, and some
+     * devices, the RP6 among them, let it read there without one; where it can't, the picker in Settings → Firmware
+     * remains). At start, before a PSP game loads, and as Settings → Firmware opens; with all eighteen it reads
+     * nothing outside the app's own files.
+     */
+    private fun findPspFonts() {
+        val copies = PspFonts.folder(context.filesDir)
+        val found = try {
+            PspFonts.autoImport(Environment.getExternalStorageDirectory(), copies)
+        } catch (e: Exception) {
+            Log.e("Phobos", "PSP fonts: looking in ${PspFonts.DUMP_FOLDER} failed: ${e.message}")
+            return
+        }
+        if (found == null) {
+            Log.i("Phobos", "PSP fonts: all 18 here, none looked for")
+            return
+        }
+        if (found.from == null) {
+            Log.i("Phobos", "PSP fonts: none the app can read in ${PspFonts.DUMP_FOLDER}; Settings can pick them")
+            return
+        }
+        val failed = if (found.failed.isEmpty()) "" else ", couldn't copy ${found.failed.joinToString()}"
+        Log.i("Phobos", "PSP fonts: found in ${found.from}, copied ${found.copied}$failed")
+        _pspFonts.value = PspFonts.held(copies)
+    }
+
+    fun refreshPspFonts() = viewModelScope.launch(Dispatchers.IO) {
+        findPspFonts()
+        val held = PspFonts.held(PspFonts.folder(context.filesDir))
+        _pspFonts.value = held
+        // Where the dump's folder stands, for the log: whether the app can read it, and how many fonts it holds.
+        val dump = runCatching { PspFonts.dumpFonts(Environment.getExternalStorageDirectory()) }.getOrNull()
+        val there = dump?.listFiles().orEmpty().count { it.isFile && PspFonts.isFont(it.name) }
+        Log.i(
+            "Phobos",
+            "PSP fonts: ${held.count} of 18 here${if (held.found) ", found by themselves" else ""}; " +
+                if (dump == null) "none the app can read in ${PspFonts.DUMP_FOLDER}" else "$there in $dump, readable",
+        )
+    }
+
+    /**
+     * Copies the PSP's fonts from a folder the user picked (their flash0 dump's font folder, its flash0, or the dump
+     * itself: [PspFonts.fontFolder]) into the app's own files, where the PSP core reads them at each load. Picking
+     * another folder later copies its fonts over these.
+     */
+    fun importPspFonts(context: Context, tree: Uri) = viewModelScope.launch(Dispatchers.IO) {
+        val copies = PspFonts.folder(context.filesDir)
+        val result = try {
+            val root = DocumentFile.fromTreeUri(context, tree)
+            val children = { folder: DocumentFile ->
+                folder.listFiles().map { Triple(it.name.orEmpty(), it.isDirectory, it) }
+            }
+            val fonts = root?.let { PspFonts.fontFolder(it, children) }
+            val files = fonts?.listFiles().orEmpty().filter { it.isFile && PspFonts.isFont(it.name.orEmpty()) }
+            val sources = files.map { file ->
+                PspFonts.Source(file.name.orEmpty(), file.length().takeIf { it > 0 } ?: -1) {
+                    context.contentResolver.openInputStream(file.uri)
+                }
+            }
+            PspFonts.copyPicked(sources, copies)
+        } catch (e: Exception) {
+            Log.e("Phobos", "PSP fonts: couldn't read that folder: ${e.message}")
+            null
+        }
+        val held = PspFonts.held(copies)
+        _pspFonts.value = held
+        val failed = result?.failed.orEmpty()
+        Log.i("Phobos", "PSP fonts: copied ${result?.copied ?: 0}, couldn't copy $failed, now ${held.count} of 18")
+        withContext(Dispatchers.Main) {
+            Toast.makeText(context, PspFonts.pickedMessage(result, held.count), Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /**
      * Fills firmware slots from the firmware folder by what each file is, whatever its name: every slot whose
      * file isn't a known-good dump gets one from the folder ([firmwareAssignments]).
      */
@@ -2405,22 +2567,34 @@ class MainViewModel(
     }
 
     fun scanRoms(context: Context, systemName: String, directoryUris: List<Uri>) {
-        viewModelScope.launch {
+        romScanJob?.cancel()
+        romScanJob = viewModelScope.launch {
             val extensions = PhobosCore.getSystemExtensions(systemName)
-            // CD systems also list .m3u playlists, which gather a game's discs.
-            val discSystem = "cue" in extensions || "chd" in extensions
+            // CD systems also list .m3u playlists, which gather a game's discs. (The PSP takes CHDs too, but its
+            // discs can't be swapped yet, so each is listed on its own.)
+            val discSystem = systemName != LaunchSystems.PSP && ("cue" in extensions || "chd" in extensions)
             val foundRoms = withContext(Dispatchers.IO) {
                 val result = mutableListOf<RomFile>()
                 directoryUris.forEach { uri ->
                     val rootDir = DocumentFile.fromTreeUri(context, uri)
                     if (rootDir != null) {
-                        scanRecursive(rootDir, if (discSystem) extensions + "m3u" else extensions, result)
+                        scanRecursive(rootDir, if (discSystem) extensions + "m3u" else extensions, result,
+                            pspNames = systemName == LaunchSystems.PSP)
                     }
                 }
                 val files = result.distinctBy { it.uri }
-                (if (discSystem) withDiscSets(context, files) else files).sortedBy { it.name }
+                val withDiscs = if (discSystem) withDiscSets(context, files) else files
+                withDiscs.sortedBy { it.name }
             }
+            ensureActive()
             _roms.value = foundRoms
+            // Plain list first; titles and icons filled in on the same job so a superseded scan can't clobber
+            // another system's list after a late finish.
+            if (systemName == LaunchSystems.PSP) {
+                val enriched = withContext(Dispatchers.IO) { withPspDiscInfo(context, foundRoms) }
+                ensureActive()
+                _roms.value = enriched
+            }
         }
     }
 
@@ -2459,19 +2633,90 @@ class MainViewModel(
         else -> null
     }
 
-    private fun scanRecursive(directory: DocumentFile, extensions: List<String>, result: MutableList<RomFile>) {
+    /** [pspNames]: name the files as PSP programs (see [LaunchSystems.pspProgramName]); their size and time too,
+     *  for the icon cache key (the other systems don't cache icons, so they don't pay for it). */
+    private fun scanRecursive(
+        directory: DocumentFile, extensions: List<String>, result: MutableList<RomFile>, pspNames: Boolean = false,
+    ) {
         directory.listFiles().forEach { file ->
             if (file.isDirectory) {
-                scanRecursive(file, extensions, result)
+                scanRecursive(file, extensions, result, pspNames)
             } else {
                 val name = file.name?.lowercase() ?: ""
                 val ext = name.substringAfterLast('.', "")
                 if (ext.isNotEmpty() && (extensions.contains(ext) || ext == "zip")) {
-                    result.add(RomFile(file.name ?: "Unknown", file.uri, directory.uri))
+                    val fileName = file.name ?: "Unknown"
+                    val romName = if (pspNames) LaunchSystems.pspProgramName(fileName, directory.name) else fileName
+                    val size = if (pspNames) file.length() else 0
+                    val mtime = if (pspNames) file.lastModified() else 0
+                    result.add(RomFile(romName, file.uri, directory.uri, size = size, mtime = mtime))
                 }
             }
         }
     }
+
+    /** PSP disc images: read their title and icon from the image (or the cache), caching both in the app's cache.
+     *  A cached disc isn't re-opened, so a second visit is fast. Checks for cancellation between discs, so a
+     *  superseded scan stops before it writes its stale results. */
+    private suspend fun withPspDiscInfo(context: Context, files: List<RomFile>): List<RomFile> {
+        return files.map { rom ->
+            delay(0)  //a suspension point: a cancelled job throws here, so a superseded scan stops
+            if (rom.name.endsWith(".pbp", ignoreCase = true)) return@map rom
+            val key = com.phobos.emulator.util.iconCacheKey(rom.uri.toString(), rom.size, rom.mtime)
+            val cached = cachedPspInfo(context, key)
+            if (cached != null) {
+                return@map rom.copy(title = cached.title.takeIf { it.isNotBlank() }, iconPath = cached.iconPath)
+            }
+            val info = readPspDiscInfo(context, rom) ?: return@map rom
+            val iconPath = cacheIcon(context, key, info)
+            rom.copy(title = info.title.takeIf { it.isNotBlank() }, iconPath = iconPath)
+        }
+    }
+
+    /** The disc's title, disc ID and icon, cached from a previous visit (under the same key as the icon).
+     *  The title and disc ID are on separate lines (a title's `|` wouldn't split the line). */
+    private fun cachedPspInfo(context: Context, key: String): PspInfoCache? {
+        val dir = File(context.cacheDir, "psp-icons")
+        val hash = com.phobos.emulator.util.sha256Hex(key)
+        val infoFile = File(dir, "$hash.info")
+        if (!infoFile.exists()) return null
+        val parsed = runCatching {
+            com.phobos.emulator.util.parsePspInfoCache(infoFile.readText())
+        }.getOrNull() ?: return null
+        val iconFile = File(dir, "$hash.png")
+        val iconPath = if (iconFile.exists()) iconFile.path else null
+        return PspInfoCache(parsed.first, parsed.second, iconPath)
+    }
+
+    private fun readPspDiscInfo(context: Context, rom: RomFile): PspDiscInfo? {
+        return runCatching {
+            context.contentResolver.openFileDescriptor(rom.uri, "r")?.use { pfd ->
+                PhobosCore.pspDiscInfo(pfd.fd)
+            }
+        }.getOrNull()
+    }
+
+    /** Caches the disc's icon (downsampled to a menu size) and its title and disc ID (so a next visit
+     *  doesn't re-open the disc). The icon is refused if its PNG declares a size past [ICON_REFUSE_PX]. */
+    private fun cacheIcon(context: Context, key: String, info: PspDiscInfo): String? {
+        val dir = File(context.cacheDir, "psp-icons")
+        val hash = com.phobos.emulator.util.sha256Hex(key)
+        return try {
+            dir.mkdirs()
+            val iconFile = File(dir, "$hash.png")
+            val bitmap = com.phobos.emulator.util.decodeIcon(info.icon)
+            if (bitmap != null) {
+                iconFile.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                bitmap.recycle()
+            }
+            File(dir, "$hash.info").writeText("${info.title}\n${info.discId}")
+            if (iconFile.exists()) iconFile.path else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private data class PspInfoCache(val title: String, val discId: String, val iconPath: String?)
 
     /** [disc] is the disc a multi-disc game starts from. */
     fun loadRom(context: Context, systemName: String, rom: RomFile, disc: Int = 0) {
@@ -2674,6 +2919,19 @@ class MainViewModel(
                 ?: File(context.filesDir, "saves").absolutePath
             PhobosCore.setSavesPath(savesDir)
             Log.i("Phobos", "Saves path resolved: $savesDir")
+            // The PSP's memory stick: the folder the user picked, else native code's shared one under the saves path.
+            PhobosCore.setPspMemoryStickPath(resolveSafPath(currentSettings.pspMemoryStickPath) ?: "")
+            // How many threads draw its pictures (Settings → Emulation), the core's "GE Threads" as the game starts.
+            PhobosCore.setPspDrawingThreads(PspDrawingThreads.forCore(currentSettings.pspDrawingThreads))
+            // Who draws them: the software renderer, or Vulkan's with the driver loaded for the game.
+            PhobosCore.setPspRenderer(PspRenderer.forCore(currentSettings.pspRenderer))
+            // How many times over it draws each pixel (Vulkan's alone): Native, or 2x to 10x.
+            PhobosCore.setPspResolution(PspResolution.forCore(currentSettings.pspResolution))
+            // Its system fonts: the copies of the user's own PSP's flash0 fonts (picked in Settings → Firmware, or
+            // found by themselves in Download/FLASH0DUMP while any are missing), if any.
+            val pspFonts = PspFonts.folder(context.filesDir)
+            if (effectiveSystem == LaunchSystems.PSP) findPspFonts()
+            PhobosCore.setPspFontsPath(if (PspFonts.installed(pspFonts) > 0) pspFonts.absolutePath else "")
             PhobosCore.setMemoryCardKey(withoutDiscNumber(romTitle(rom.name)))
 
             // Vulkan pipeline cache dir (Task 40): user-configured path, else
@@ -2827,7 +3085,8 @@ class MainViewModel(
                             if (ngBiosPresent) _neoGeoRomLoadFailed.value = effectiveSystem
                             else _biosRequired.value = effectiveSystem
                         } else {
-                            _gameLoadFailed.value = GameLoadFailed(effectiveSystem, rom.name)
+                            _gameLoadFailed.value =
+                                GameLoadFailed(effectiveSystem, rom.name, PhobosCore.loadProblem().ifEmpty { null })
                         }
                     }
                 } else {
@@ -2987,6 +3246,9 @@ class MainViewModel(
         val extensions = PhobosCore.enumerateSystems().flatMap { PhobosCore.getSystemExtensions(it) }.toSet() + "zip" + "7z"
         tempDir.listFiles { file -> file.isFile && file.extension.lowercase() in extensions && file.name != "neogeo.zip" && file.name != "aleck64.zip" && !file.name.startsWith("fw_") }
             ?.forEach { if (it.delete()) Log.i("Phobos", "Removed stale temp copy ${it.name}") }
+        // PSP programs are copied into a folder of their own, which stands for the program's disc.
+        File(tempDir, "psp").listFiles { file -> file.isFile }
+            ?.forEach { if (it.delete()) Log.i("Phobos", "Removed stale temp copy psp/${it.name}") }
     }
     
     private fun extractAssets() {
@@ -3099,4 +3361,12 @@ data class RomFile(
     val parentUri: Uri? = null,
     /** A multi-disc game's discs in order, from an .m3u playlist or "(Disc N)" files; [name] is then the game's. */
     val discs: List<RomFile> = emptyList(),
+    /** The disc's own title (from its PARAM.SFO), if it has one. */
+    val title: String? = null,
+    /** The path to the disc's cached icon (ICON0.PNG), if read. */
+    val iconPath: String? = null,
+    /** The file's size in bytes, for the icon cache key. */
+    val size: Long = 0,
+    /** The file's last modification time, for the icon cache key. */
+    val mtime: Long = 0,
 )

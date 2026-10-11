@@ -2,7 +2,8 @@
 # Packages the Linux x86-64 build as dist/Phobos-<version>-x86_64.AppImage plus its .zsync, the
 # file AppImageUpdate reads to fetch only the changed blocks of a newer release.
 #   scripts/package-linux-appimage.sh [build directory]
-# GPU drivers stay on the host: Phobos opens the system's libvulkan.so.1 at run time.
+# GPU drivers stay on the host: Phobos opens the system's libvulkan.so.1 at run time. FFmpeg's
+# libavcodec and libavutil (the PSP's music and movies), in a build with them, go in usr/lib.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="$(cd "${1:-$ROOT/build/linux-x64}" && pwd)"
@@ -34,10 +35,37 @@ cp -R "$BUILD/Database" "$BUILD/System" "$APPDIR/usr/share/phobos/"
 cp "$ROOT/LICENSE" "$APPDIR/usr/share/doc/phobos/"
 if [[ -f "$ROOT/COPYING" ]]; then cp "$ROOT/COPYING" "$APPDIR/usr/share/doc/phobos/"; fi
 cp "$ROOT/ares/ares/resource/icon@2x.png" "$ROOT/build/phobos.png"
-"$TOOLS/linuxdeploy-x86_64.AppImage" --appdir "$APPDIR" \
-  --executable "$BUILD/phobos" \
+# FFmpeg's libraries sit beside the program in the build (its run path is $ORIGIN, CMakeLists.txt);
+# linuxdeploy puts them in usr/lib, each a file of its own that can be swapped for another build
+# (the LGPL's terms, as LICENSE describes). linuxdeploy looks for each library's own dependencies
+# (libavcodec's libavutil) on the system's search path, so the build folder goes on it.
+ffmpeg=()
+for library in "$BUILD"/libavutil.so.* "$BUILD"/libavcodec.so.*; do
+  if [[ -f "$library" ]]; then ffmpeg+=(--library "$library"); fi
+done
+LD_LIBRARY_PATH="$BUILD${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$TOOLS/linuxdeploy-x86_64.AppImage" --appdir "$APPDIR" \
+  --executable "$BUILD/phobos" ${ffmpeg[@]+"${ffmpeg[@]}"} \
   --desktop-file "$ROOT/desktop/linux/phobos.desktop" \
   --icon-file "$ROOT/build/phobos.png"
+# Each FFmpeg library phobos needs is in usr/lib, a file of its own, and is found there at run time: the
+# program's run path leads to usr/lib, and libavcodec's (linuxdeploy's $ORIGIN) to libavutil beside it.
+needs() { readelf -d "$1" | sed -n 's/.*Shared library: \[\(libav[a-z]*\.so\.[0-9]*\)\]/\1/p'; }
+runpath() { readelf -d "$1" | sed -n 's/.*R\(UN\)\{0,1\}PATH.*\[\(.*\)\]/\2/p'; }
+for needed in $(needs "$APPDIR/usr/bin/phobos"); do
+  test -f "$APPDIR/usr/lib/$needed" && ! test -L "$APPDIR/usr/lib/$needed" ||
+    { echo "phobos needs $needed, which isn't a file in the AppImage's usr/lib" >&2; exit 1; }
+  for library in "$APPDIR/usr/bin/phobos" "$APPDIR/usr/lib/$needed"; do
+    for dependency in $(needs "$library"); do
+      found=
+      for folder in $(runpath "$library" | tr ':' ' '); do
+        folder="${folder//\$ORIGIN/$(dirname "$library")}"
+        if [[ -f "$folder/$dependency" ]]; then found=1; fi
+      done
+      test -n "$found" ||
+        { echo "$(basename "$library") wouldn't find $dependency by its run path ($(runpath "$library"))" >&2; exit 1; }
+    done
+  done
+done
 
 rm -f "$OUTPUT" "$OUTPUT.zsync"
 (cd "$DIST" && "$TOOLS/appimagetool-x86_64.AppImage" --no-appstream \

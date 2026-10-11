@@ -23,7 +23,8 @@ struct PadState {
   float lx = 0, ly = 0, rx = 0, ry = 0;
 };
 
-// Every connected gamepad and the keyboard drive player 1, as one controller.
+// Every connected gamepad and the keyboard drive player 1, as one controller. The keyboard's
+// keys (keyboardPad in Input.cpp) press the bits; I, J, K and L push the left stick.
 struct Input {
   auto openConnected() -> void;
   auto handle(const SDL_Event& event) -> void;

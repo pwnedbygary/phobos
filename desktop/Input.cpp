@@ -75,11 +75,15 @@ auto Input::poll(bool keyboardIsPad, bool latchSticks) -> PadState {
       if (keys[key]) state.buttons |= bit;
     }
     state.buttons |= keyboardTaps;
+    // I, J, K and L push the left stick all the way (the PSP's analog stick, the N64's, a DualShock's left one).
+    state.lx = (float)keys[SDL_SCANCODE_L] - (float)keys[SDL_SCANCODE_J];
+    state.ly = (float)keys[SDL_SCANCODE_K] - (float)keys[SDL_SCANCODE_I];
   }
   state.buttons |= padTaps;
   keyboardTaps = padTaps = 0;
 
-  float strongest = 0.0f;
+  // A stick pushed from the keyboard holds unless a pad's is pushed as far.
+  float strongest = std::max(std::abs(state.lx), std::abs(state.ly));
   float leftTrigger = 0.0f, rightTrigger = 0.0f;
   for (auto* pad : pads) {
     for (auto [button, bit] : padButtons) {

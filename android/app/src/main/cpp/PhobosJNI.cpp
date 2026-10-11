@@ -3,6 +3,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <ares/ares.hpp>
+#include <ares/psp/kernel/disc-info.hpp>
 #include "PhobosRunner.hpp"
 
 using namespace nall;
@@ -34,6 +35,8 @@ static std::map<string, std::vector<string>> systemExtensions = {
     {"Mega CD", {"cue", "chd", "iso"}},
     {"Mega CD 32X", {"cue", "chd", "iso"}},
     {"PlayStation", {"cue", "chd", "exe", "ps-exe", "pbp", "iso", "mdf", "img"}},
+    // No .prx: mostly modules beside an EBOOT.PBP, not programs.
+    {"PlayStation Portable", {"iso", "cso", "zso", "dax", "jso", "chd", "pbp", "elf"}},
     {"Neo Geo", {"ng", "neo"}},
     {"Neo Geo CD", {"ngc", "cue", "chd", "iso", "bin", "zip"}},
     {"Neo Geo Pocket", {"ngp", "nap"}},
@@ -81,6 +84,11 @@ Java_com_phobos_emulator_PhobosCore_loadRom(JNIEnv* env, jobject, jstring system
     if (nativeRomName[0]) env->ReleaseStringUTFChars(romName, nativeRomName);
 
     return success ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_phobos_emulator_PhobosCore_loadProblem(JNIEnv* env, jobject) {
+    return env->NewStringUTF((const char*)ares::lastLoadProblem());
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -179,6 +187,14 @@ Java_com_phobos_emulator_PhobosCore_saveState(JNIEnv* env, jobject, jstring path
     bool success = ares::saveState(nativePath);
     env->ReleaseStringUTFChars(path, nativePath);
     return success ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_phobos_emulator_PhobosCore_trySaveState(JNIEnv* env, jobject, jstring path) {
+    const char* nativePath = env->GetStringUTFChars(path, 0);
+    int result = ares::trySaveState(nativePath);
+    env->ReleaseStringUTFChars(path, nativePath);
+    return result;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -569,6 +585,45 @@ Java_com_phobos_emulator_PhobosCore_setSavesPath(JNIEnv* env, jobject, jstring p
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setPspMemoryStickPath(JNIEnv* env, jobject, jstring path) {
+    const char* nativePath = env->GetStringUTFChars(path, 0);
+    ares::setPspMemoryStickPath(nativePath);
+    env->ReleaseStringUTFChars(path, nativePath);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setPspFontsPath(JNIEnv* env, jobject, jstring path) {
+    const char* nativePath = env->GetStringUTFChars(path, 0);
+    ares::setPspFontsPath(nativePath);
+    env->ReleaseStringUTFChars(path, nativePath);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setPspDrawingThreads(JNIEnv* env, jobject, jint threads) {
+    ares::setPspDrawingThreads((s32)threads);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setPspRenderer(JNIEnv* env, jobject, jint renderer) {
+    ares::setPspRenderer((s32)renderer);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setPspResolution(JNIEnv* env, jobject, jint scale) {
+    ares::setPspResolution((s32)scale);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_phobos_emulator_PhobosCore_takePspNotice(JNIEnv* env, jobject) {
+    return env->NewStringUTF(ares::takePspNotice().c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setPictureMultiple(JNIEnv* env, jobject, jint multiple) {
+    ares::setPictureMultiple((s32)multiple);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setMemoryCardKey(JNIEnv* env, jobject, jstring key) {
     const char* nativeKey = env->GetStringUTFChars(key, 0);
     ares::setMemoryCardKey(nativeKey);
@@ -684,4 +739,29 @@ Java_com_phobos_emulator_PhobosCore_getVideoGeometry(JNIEnv* env, jobject) {
     jfloatArray result = env->NewFloatArray(2);
     if (result) env->SetFloatArrayRegion(result, 0, 2, values);
     return result;
+}
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_phobos_emulator_PhobosCore_pspDiscInfo(JNIEnv* env, jobject, jint fd) {
+    auto file = vfs::descriptor::open((int)fd);
+    if(!file) return nullptr;
+    auto read = [file](u64 offset, void* data, u64 size) -> u64 {
+        if(offset >= file->size()) return 0;
+        size = std::min<u64>(size, file->size() - offset);
+        if(auto bytes = file->data()) memcpy(data, bytes + offset, size);
+        else { file->seek(offset); file->read({(u8*)data, size}); }
+        return size;
+    };
+    std::string problem;
+    auto info = ares::PlayStationPortable::readDiscInfo(read, file->size(), problem);
+    if(info.title.empty() && info.discId.empty()) return nullptr;
+    jclass cls = env->FindClass("com/phobos/emulator/PspDiscInfo");
+    jmethodID constructor = env->GetMethodID(cls, "<init>", "([BLjava/lang/String;Ljava/lang/String;[B)V");
+    jbyteArray jTitle = env->NewByteArray((jsize)info.title.size());
+    if(!info.title.empty()) env->SetByteArrayRegion(jTitle, 0, (jsize)info.title.size(), (const jbyte*)info.title.data());
+    jstring jDiscId = env->NewStringUTF(info.discId.c_str());
+    jstring jRegion = env->NewStringUTF(info.region.c_str());
+    jbyteArray jIcon = env->NewByteArray((jsize)info.icon.size());
+    if(!info.icon.empty()) env->SetByteArrayRegion(jIcon, 0, (jsize)info.icon.size(), (const jbyte*)info.icon.data());
+    return env->NewObject(cls, constructor, jTitle, jDiscId, jRegion, jIcon);
 }

@@ -1,0 +1,771 @@
+//Host tests for the VFPU (ares/psp/cpu/interpreter-vfpu.cpp). Encodings and expected results follow pspdev's VFPU
+//documentation. Like the CPU tests, they run on the interpreter and again on the recompiler.
+
+#include "harness.hpp"
+
+//Inside the harness's namespace, so register names like s1 win over ares's integer types of the same name.
+namespace allegrex_test {
+namespace {
+
+//Register numbers. A single is row * 32 + matrix * 4 + column; a vector's bit 5 picks a row over a column and its
+//low two bits which one; a matrix's bit 5 transposes it.
+constexpr auto S(uint32_t matrix, uint32_t column, uint32_t row) { return row << 5 | matrix << 2 | column; }
+constexpr auto C(uint32_t matrix, uint32_t column) { return matrix << 2 | column; }           //quad column
+constexpr auto Rw(uint32_t matrix, uint32_t row) { return 1u << 5 | matrix << 2 | row; }      //quad row
+constexpr auto M(uint32_t matrix) { return matrix << 2; }
+constexpr auto E(uint32_t matrix) { return 1u << 5 | matrix << 2; }
+
+//Encoders.
+constexpr auto alu(uint32_t opcode, uint32_t size, uint32_t rd, uint32_t rs, uint32_t rt) -> uint32_t {
+  return opcode << 23 | rt << 16 | (size >= 3 ? 1u : 0u) << 15 | rs << 8 | (size == 2 || size == 4 ? 1u : 0u) << 7 | rd;
+}
+constexpr auto memory(uint32_t opcode, uint32_t reg, int32_t offset, uint32_t base, uint32_t low) -> uint32_t {
+  return opcode << 26 | base << 21 | (reg & 31) << 16 | ((uint32_t)offset & 0xfffc) | low;
+}
+constexpr auto lvs(uint32_t reg, int32_t offset, uint32_t base) { return memory(0x32, reg, offset, base, reg >> 5 & 3); }
+constexpr auto svs(uint32_t reg, int32_t offset, uint32_t base) { return memory(0x3a, reg, offset, base, reg >> 5 & 3); }
+constexpr auto lvq(uint32_t reg, int32_t offset, uint32_t base) { return memory(0x36, reg, offset, base, reg >> 5 & 1); }
+constexpr auto svq(uint32_t reg, int32_t offset, uint32_t base) { return memory(0x3e, reg, offset, base, reg >> 5 & 1); }
+constexpr auto lvlq(uint32_t reg, int32_t offset, uint32_t base) { return memory(0x35, reg, offset, base, reg >> 5 & 1); }
+constexpr auto lvrq(uint32_t reg, int32_t offset, uint32_t base) { return memory(0x35, reg, offset, base, 2 | (reg >> 5 & 1)); }
+constexpr auto mtv(uint32_t gpr, uint32_t reg) { return 0x48e00000u | gpr << 16 | reg; }
+constexpr auto mfv(uint32_t gpr, uint32_t reg) { return 0x48600000u | gpr << 16 | reg; }
+constexpr auto vpfxs(uint32_t prefix) { return 0xdc000000u | prefix; }
+constexpr auto vpfxt(uint32_t prefix) { return 0xdd000000u | prefix; }
+constexpr auto vpfxd(uint32_t prefix) { return 0xde000000u | prefix; }
+constexpr auto bvt(uint32_t bit, int32_t offset) { return 0x49010000u | bit << 18 | ((uint32_t)offset & 0xffff); }
+constexpr auto bvf(uint32_t bit, int32_t offset) { return 0x49000000u | bit << 18 | ((uint32_t)offset & 0xffff); }
+constexpr auto vcmp(uint32_t condition, uint32_t size, uint32_t rs, uint32_t rt) { return alu(0b011011000, size, condition, rs, rt); }
+constexpr auto unary(uint32_t code, uint32_t size, uint32_t rd, uint32_t rs) { return alu(0b110100000, size, rd, rs, code); }
+constexpr auto viim(uint32_t rd, uint32_t value) { return 0xdf000000u | rd << 16 | (value & 0xffff); }
+constexpr auto vfim(uint32_t rd, uint32_t value) { return 0xdf800000u | rd << 16 | (value & 0xffff); }
+constexpr uint32_t vnop = 0xffff0000;
+enum : uint32_t {
+  Vadd = 0b011000000, Vsub = 0b011000001, Vdiv = 0b011000111, Vmul = 0b011001000, Vdot = 0b011001001,
+  Vscl = 0b011001010, Vhdp = 0b011001100, Vcrs = 0b011001101, Vdet = 0b011001110, Vmin = 0b011011010,
+  Vmax = 0b011011011, Vslt = 0b011011111, Vcrsp = 0b111100101, Vmmul = 0b111100000, Vtfm4 = 0b111100011,
+  Vmscl = 0b111100100, Vmatrix = 0b111100111,
+};
+enum : uint32_t {  //unary codes, in the rt field
+  Vmov = 0x00, Vabs = 0x01, Vneg = 0x02, Vidt = 0x03, Vsat0 = 0x04, Vzero = 0x06, Vone = 0x07, Vrcp = 0x10,
+  Vrsq = 0x11, Vsin = 0x12, Vcos = 0x13, Vexp2 = 0x14, Vlog2 = 0x15, Vsqrt = 0x16, Vasin = 0x17, Vf2h = 0x32,
+  Vh2f = 0x33, Vi2uc = 0x3c, Vsrt1 = 0x40, Vbfy1 = 0x42, Vocp = 0x44, Vfad = 0x46, Vavg = 0x47, Vsgn = 0x4a,
+  Vt5650 = 0x5b,
+};
+
+auto f(uint32_t bits) -> float { return std::bit_cast<float>(bits); }
+
+//Close enough for the transcendental functions, which the hardware approximates too.
+auto near(uint32_t actual, float expected) -> bool { return std::fabs(f(actual) - expected) < 1e-5f; }
+
+auto setQuad(Allegrex& s, uint32_t reg, std::initializer_list<float> values) -> void {
+  //quad columns and rows, through the addressing under test
+  uint32_t base = (reg >> 2 & 7) * 4, index = reg & 3, k = 0;
+  bool row = reg >> 5 & 1;
+  for(float value : values) {
+    s.vfpu.r[row ? base + k + 32 * index : base + index + 32 * k] = bits(value);
+    k++;
+  }
+}
+
+auto addressing() -> void {
+  //lv.q into a column fills one column of a matrix; into a row, one row. A single's number is its own index.
+  Machine m;
+  for(uint32_t i = 0; i < 8; i++) m.ram.write32(Data + 4 * i, bits((float)(i + 1)));
+  m.run({lui(s0, Data >> 16), ori(s0, s0, Data & 0xffff), lvq(C(1, 2), 0, s0), lvq(Rw(3, 1), 16, s0),
+         lvs(S(5, 3, 2), 4, s0), svs(S(5, 3, 2), 64, s0)});
+  CHECK(m.ram.read32(Data + 64), bits(2.0f));
+  for(uint32_t k = 0; k < 4; k++) {
+    CHECK(m.cpu.vfpu.r[1 * 4 + 2 + 32 * k], bits((float)(k + 1)));      //C120: matrix 1, column 2, rows 0-3
+    CHECK(m.cpu.vfpu.r[3 * 4 + k + 32 * 1], bits((float)(k + 5)));      //R301: matrix 3, row 1, columns 0-3
+  }
+  CHECK(m.cpu.vfpu.r[2 * 32 + 5 * 4 + 3], bits(2.0f));
+
+  //sv.q writes a row out in order, and pairs and triples start where bit 6 says.
+  Machine store;
+  store.run({lui(s0, Data >> 16), ori(s0, s0, Data & 0xffff), svq(Rw(2, 3), 0, s0)},
+            [](Allegrex& s) { setQuad(s, Rw(2, 3), {9.0f, 8.0f, 7.0f, 6.0f}); });
+  for(uint32_t k = 0; k < 4; k++) CHECK(store.ram.read32(Data + 4 * k), bits(9.0f - (float)k));
+
+  //vmov.p C002 (bit 6: rows 2 and 3 of column 0) to R020 (row 0... columns 2 and 3).
+  Machine pair;
+  pair.run({unary(Vmov, 2, 1u << 6 | 1u << 5 | C(1, 0), 1u << 6 | C(0, 0))},
+           [](Allegrex& s) { s.vfpu.r[S(0, 0, 2)] = bits(5.0f); s.vfpu.r[S(0, 0, 3)] = bits(6.0f); });
+  CHECK(pair.cpu.vfpu.r[S(1, 2, 0)], bits(5.0f));
+  CHECK(pair.cpu.vfpu.r[S(1, 3, 0)], bits(6.0f));
+
+  //A triple with bit 6 starts one row down.
+  Machine triple;
+  triple.run({unary(Vmov, 3, C(2, 1), 1u << 6 | C(0, 1))},
+             [](Allegrex& s) { for(uint32_t r = 0; r < 4; r++) s.vfpu.r[S(0, 1, r)] = bits((float)r); });
+  CHECK(triple.cpu.vfpu.r[S(2, 1, 0)], bits(1.0f));
+  CHECK(triple.cpu.vfpu.r[S(2, 1, 2)], bits(3.0f));
+}
+
+auto arithmetic() -> void {
+  Machine m;
+  m.run({alu(Vadd, 4, Rw(0, 0), Rw(1, 0), Rw(2, 0)), alu(Vsub, 4, Rw(0, 1), Rw(1, 0), Rw(2, 0)),
+         alu(Vmul, 4, Rw(0, 2), Rw(1, 0), Rw(2, 0)), alu(Vdiv, 4, Rw(0, 3), Rw(1, 0), Rw(2, 0)),
+         alu(Vmin, 2, Rw(3, 0), Rw(1, 0), Rw(2, 0)), alu(Vmax, 2, Rw(3, 1), Rw(1, 0), Rw(2, 0))},
+        [](Allegrex& s) {
+          setQuad(s, Rw(1, 0), {1.0f, -2.0f, 6.0f, 8.0f});
+          setQuad(s, Rw(2, 0), {4.0f, 2.0f, 3.0f, -0.5f});
+        });
+  const float sums[] = {5, 0, 9, 7.5f}, differences[] = {-3, -4, 3, 8.5f}, products[] = {4, -4, 18, -4},
+              quotients[] = {0.25f, -1, 2, -16};
+  for(uint32_t k = 0; k < 4; k++) {
+    CHECK(m.cpu.vfpu.r[k], bits(sums[k]));
+    CHECK(m.cpu.vfpu.r[k + 32], bits(differences[k]));
+    CHECK(m.cpu.vfpu.r[k + 64], bits(products[k]));
+    CHECK(m.cpu.vfpu.r[k + 96], bits(quotients[k]));
+  }
+  CHECK(m.cpu.vfpu.r[12], bits(1.0f));
+  CHECK(m.cpu.vfpu.r[13], bits(-2.0f));
+  CHECK(m.cpu.vfpu.r[12 + 32], bits(4.0f));
+  CHECK(m.cpu.vfpu.r[13 + 32], bits(2.0f));
+
+  //Denormals count as zero, in and out.
+  Machine flush;
+  flush.run({alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0))},
+            [](Allegrex& s) { s.vfpu.r[S(1, 0, 0)] = 0x00000001; s.vfpu.r[S(2, 0, 0)] = 0x80000000; });
+  CHECK(flush.cpu.vfpu.r[S(0, 0, 0)] & 0x7fffffff, 0);
+}
+
+auto prefixes() -> void {
+  //rs: swizzle w, z, y, x with lane 0 negated; rt: lane 1 the constant 3, lane 2 |z|; rd: lane 0 saturated to
+  //0..1, lane 3 masked.
+  Machine m;
+  uint32_t swizzleReverse = 3 | 2 << 2 | 1 << 4 | 0 << 6;
+  uint32_t constantThree = (0xe4 & ~(3u << 2)) | 1 << (8 + 1) | 1 << (12 + 1);  //lane 1: swizzle 0, absolute bit
+  m.run({vpfxs(swizzleReverse | 1 << 16), vpfxt(constantThree | 1 << (8 + 2)),
+         vpfxd(1 << 0 | 1 << (8 + 3)), alu(Vadd, 4, Rw(0, 0), Rw(1, 0), Rw(2, 0)),
+         alu(Vadd, 4, Rw(0, 1), Rw(1, 0), Rw(2, 0))},
+        [](Allegrex& s) {
+          setQuad(s, Rw(1, 0), {1.0f, 2.0f, 3.0f, 4.0f});
+          setQuad(s, Rw(2, 0), {10.0f, 20.0f, -30.0f, 40.0f});
+          s.vfpu.r[3] = bits(99.0f);
+        });
+  CHECK(m.cpu.vfpu.r[0], bits(1.0f));        //-4 + 10 = 6, saturated to 1
+  CHECK(m.cpu.vfpu.r[1], bits(6.0f));        //3 + the constant 3
+  CHECK(m.cpu.vfpu.r[2], bits(32.0f));       //2 + |-30|
+  CHECK(m.cpu.vfpu.r[3], bits(99.0f));       //masked
+  //The prefixes apply once: the next vadd is plain.
+  CHECK(m.cpu.vfpu.r[32], bits(11.0f));
+  CHECK(m.cpu.vfpu.r[35], bits(44.0f));
+  CHECK(m.cpu.vfpu.pfxs, 0xe4);
+  CHECK(m.cpu.vfpu.pfxd, 0);
+
+  //Saturation to -1..1 turns -0 into 0 only for 0..1; constants can be negated.
+  Machine negative;
+  negative.run({vpfxs(0xe4 | 1 << 12 | 1 << 16), vpfxd(3), alu(Vmul, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0))},
+               [](Allegrex& s) { s.vfpu.r[S(2, 0, 0)] = bits(5.0f); });
+  CHECK(negative.cpu.vfpu.r[S(0, 0, 0)], bits(-0.0f));  //-(constant 0) * 5, within -1..1
+}
+
+auto products() -> void {
+  Machine m;
+  m.run({alu(Vdot, 4, S(3, 0, 0), Rw(1, 0), Rw(2, 0)), alu(Vhdp, 4, S(3, 1, 0), Rw(1, 0), Rw(2, 0)),
+         alu(Vscl, 4, Rw(4, 0), Rw(1, 0), S(2, 0, 0)), alu(Vcrsp, 3, Rw(5, 0), Rw(1, 0), Rw(2, 0)),
+         alu(Vcrs, 3, Rw(5, 1), Rw(1, 0), Rw(2, 0)), alu(Vdet, 2, S(3, 2, 0), Rw(1, 0), Rw(2, 0))},
+        [](Allegrex& s) {
+          setQuad(s, Rw(1, 0), {1.0f, 2.0f, 3.0f, 4.0f});
+          setQuad(s, Rw(2, 0), {5.0f, 6.0f, 7.0f, 8.0f});
+        });
+  CHECK(m.cpu.vfpu.r[S(3, 0, 0)], bits(70.0f));        //5 + 12 + 21 + 32
+  CHECK(m.cpu.vfpu.r[S(3, 1, 0)], bits(46.0f));        //5 + 12 + 21 + 8
+  CHECK(m.cpu.vfpu.r[S(4, 0, 0)], bits(5.0f));         //scaled by rt's first lane
+  CHECK(m.cpu.vfpu.r[S(4, 3, 0)], bits(20.0f));
+  CHECK(m.cpu.vfpu.r[S(5, 0, 0)], bits(-4.0f));        //(1,2,3) x (5,6,7) = (-4, 8, -4)
+  CHECK(m.cpu.vfpu.r[S(5, 1, 0)], bits(8.0f));
+  CHECK(m.cpu.vfpu.r[S(5, 2, 0)], bits(-4.0f));
+  CHECK(m.cpu.vfpu.r[S(5, 0, 1)], bits(14.0f));        //vcrs: 2 * 7
+  CHECK(m.cpu.vfpu.r[S(5, 1, 1)], bits(15.0f));        //3 * 5
+  CHECK(m.cpu.vfpu.r[S(5, 2, 1)], bits(6.0f));         //1 * 6
+  CHECK(m.cpu.vfpu.r[S(3, 2, 0)], bits(-4.0f));        //1 * 6 - 2 * 5
+}
+
+auto comparisons() -> void {
+  //vcmp.q LT sets a bit per lane, bit 4 for any and bit 5 for all; bvt branches on one of them; vcmovt moves the
+  //lanes whose own bit is set (selector 6).
+  Machine m;
+  m.run({vcmp(2, 4, Rw(1, 0), Rw(2, 0)), vnop, bvt(4, 2), nop, addiu(s0, zero, 1), bvf(5, 2), nop,
+         addiu(s1, zero, 1), alu(0b110100101, 4, Rw(3, 0), Rw(1, 0), 0x20 | 6)},
+        [](Allegrex& s) {
+          setQuad(s, Rw(1, 0), {1.0f, 5.0f, 2.0f, 9.0f});
+          setQuad(s, Rw(2, 0), {2.0f, 4.0f, 3.0f, 9.0f});
+          setQuad(s, Rw(3, 0), {-1.0f, -1.0f, -1.0f, -1.0f});
+        });
+  CHECK(m.cpu.vfpu.cc, 0b010101);
+  CHECK(m.gpr(s0), 0);  //bvt 4 taken
+  CHECK(m.gpr(s1), 0);  //bvf 5 taken (not every lane)
+  CHECK(m.cpu.vfpu.r[S(3, 0, 0)], bits(1.0f));
+  CHECK(m.cpu.vfpu.r[S(3, 1, 0)], bits(-1.0f));
+  CHECK(m.cpu.vfpu.r[S(3, 2, 0)], bits(2.0f));
+  CHECK(m.cpu.vfpu.r[S(3, 3, 0)], bits(-1.0f));
+
+  //A pair keeps the bits of lanes 2 and 3.
+  Machine pair;
+  pair.run({vcmp(4, 2, Rw(1, 0), Rw(2, 0))}, [](Allegrex& s) { s.vfpu.cc = 0b001100; });
+  CHECK(pair.cpu.vfpu.cc, 0b111111);
+
+  Machine slt;
+  slt.run({alu(Vslt, 2, Rw(3, 0), Rw(1, 0), Rw(2, 0))},
+          [](Allegrex& s) { setQuad(s, Rw(1, 0), {1, 3, 0, 0}); setQuad(s, Rw(2, 0), {2, 2, 0, 0}); });
+  CHECK(slt.cpu.vfpu.r[S(3, 0, 0)], bits(1.0f));
+  CHECK(slt.cpu.vfpu.r[S(3, 1, 0)], bits(0.0f));
+}
+
+auto conversions() -> void {
+  Machine m;
+  m.run({alu(0b110100101, 2, Rw(3, 0), Rw(1, 0), 4),        //vi2f.p by 2^-4
+         alu(0b110100100, 4, Rw(4, 0), Rw(2, 0), 0x20 | 1), //vf2iz.q by 2^1
+         alu(0b110100100, 4, Rw(5, 0), Rw(2, 0), 0x00 | 0), //vf2in.q
+         alu(0b110100100, 4, Rw(6, 0), Rw(2, 0), 0x40 | 0), //vf2iu.q
+         alu(0b110100100, 4, Rw(7, 0), Rw(2, 0), 0x60 | 0), //vf2id.q
+         viim(S(3, 0, 1), (uint32_t)-5), vfim(S(3, 1, 1), 0x3c00), alu(0b110100000, 4, Rw(3, 2), 0, 0x60 | 8)},
+        [](Allegrex& s) {
+          s.vfpu.r[S(1, 0, 0)] = 48;
+          s.vfpu.r[S(1, 1, 0)] = (uint32_t)-16;
+          setQuad(s, Rw(2, 0), {2.5f, -2.5f, 1e10f, -3.7f});
+        });
+  CHECK(m.cpu.vfpu.r[S(3, 0, 0)], bits(3.0f));
+  CHECK(m.cpu.vfpu.r[S(3, 1, 0)], bits(-1.0f));
+  CHECK(m.cpu.vfpu.r[S(4, 0, 0)], 5);                     //2.5 * 2, truncated
+  CHECK(m.cpu.vfpu.r[S(4, 1, 0)], (uint32_t)-5);
+  CHECK(m.cpu.vfpu.r[S(4, 2, 0)], 0x7fffffff);            //saturated
+  CHECK(m.cpu.vfpu.r[S(4, 3, 0)], (uint32_t)-7);
+  CHECK(m.cpu.vfpu.r[S(5, 0, 0)], 2);                     //to nearest even
+  CHECK(m.cpu.vfpu.r[S(5, 1, 0)], (uint32_t)-2);
+  CHECK(m.cpu.vfpu.r[S(6, 0, 0)], 3);                     //up
+  CHECK(m.cpu.vfpu.r[S(6, 3, 0)], (uint32_t)-3);
+  CHECK(m.cpu.vfpu.r[S(7, 0, 0)], 2);                     //down
+  CHECK(m.cpu.vfpu.r[S(7, 3, 0)], (uint32_t)-4);
+  CHECK(m.cpu.vfpu.r[S(3, 0, 1)], bits(-5.0f));           //viim
+  CHECK(m.cpu.vfpu.r[S(3, 1, 1)], bits(1.0f));            //vfim 0x3c00 = 1.0 in half precision
+  for(uint32_t k = 0; k < 4; k++) CHECK(m.cpu.vfpu.r[S(3, k, 2)], 0x3fc90fdb);  //vcst 8: pi/2 (numbered from 1)
+
+  //Half floats there and back.
+  Machine half;
+  half.run({unary(Vf2h, 4, Rw(3, 0), Rw(1, 0)), unary(Vh2f, 2, Rw(4, 0), Rw(3, 0))},
+           [](Allegrex& s) { setQuad(s, Rw(1, 0), {1.5f, -2.0f, 65504.0f, 1e-10f}); });
+  CHECK(half.cpu.vfpu.r[S(3, 0, 0)], 0xc0003e00u);
+  CHECK(half.cpu.vfpu.r[S(4, 0, 0)], bits(1.5f));
+  CHECK(half.cpu.vfpu.r[S(4, 1, 0)], bits(-2.0f));
+  CHECK(half.cpu.vfpu.r[S(4, 2, 0)], bits(65504.0f));
+  CHECK(half.cpu.vfpu.r[S(4, 3, 0)], 0);                  //too small: zero
+
+  //vi2uc.q packs the top bits of four positive integers, negative ones as 0; vt5650.q packs colors.
+  Machine pack;
+  pack.run({unary(Vi2uc, 4, S(3, 0, 0), Rw(1, 0)), unary(Vt5650, 4, Rw(4, 0), Rw(2, 0))},
+           [](Allegrex& s) {
+             s.vfpu.r[S(1, 0, 0)] = 0x7f800000; s.vfpu.r[S(1, 1, 0)] = 0x80000000;
+             s.vfpu.r[S(1, 2, 0)] = 0x01000000; s.vfpu.r[S(1, 3, 0)] = 0x3fffffff;
+             s.vfpu.r[S(2, 0, 0)] = 0xffffffff; s.vfpu.r[S(2, 1, 0)] = 0x000000f8;
+             s.vfpu.r[S(2, 2, 0)] = 0x0000fc00; s.vfpu.r[S(2, 3, 0)] = 0x00f80000;
+           });
+  CHECK(pack.cpu.vfpu.r[S(3, 0, 0)], 0x7f0200ffu);
+  CHECK(pack.cpu.vfpu.r[S(4, 0, 0)], 0x001fffffu);
+  CHECK(pack.cpu.vfpu.r[S(4, 1, 0)], 0xf80007e0u);
+}
+
+auto functions() -> void {
+  Machine m;
+  m.run({unary(Vsin, 1, S(3, 0, 0), S(1, 0, 0)), unary(Vcos, 1, S(3, 1, 0), S(1, 1, 0)),
+         unary(Vcos, 1, S(3, 2, 0), S(1, 0, 0)), unary(Vrcp, 1, S(3, 3, 0), S(1, 2, 0)),
+         unary(Vrsq, 1, S(3, 0, 1), S(1, 2, 0)), unary(Vsqrt, 1, S(3, 1, 1), S(1, 3, 0)),
+         unary(Vexp2, 1, S(3, 2, 1), S(1, 0, 1)), unary(Vlog2, 1, S(3, 3, 1), S(1, 1, 1)),
+         unary(Vasin, 1, S(3, 0, 2), S(1, 0, 0)), unary(Vsgn, 4, Rw(4, 0), Rw(2, 0)),
+         unary(Vocp, 1, S(3, 1, 2), S(1, 2, 0)), unary(Vabs, 1, S(3, 2, 2), S(2, 1, 0)),
+         unary(Vneg, 1, S(3, 3, 2), S(1, 0, 0)), unary(Vsat0, 4, Rw(5, 0), Rw(2, 0))},
+        [](Allegrex& s) {
+          s.vfpu.r[S(1, 0, 0)] = bits(1.0f); s.vfpu.r[S(1, 1, 0)] = bits(0.0f); s.vfpu.r[S(1, 2, 0)] = bits(4.0f);
+          s.vfpu.r[S(1, 3, 0)] = bits(9.0f); s.vfpu.r[S(1, 0, 1)] = bits(3.0f); s.vfpu.r[S(1, 1, 1)] = bits(8.0f);
+          setQuad(s, Rw(2, 0), {-3.0f, -0.25f, 0.0f, 7.0f});
+        });
+  CHECK(near(m.cpu.vfpu.r[S(3, 0, 0)], 1.0f), 1);   //sin of one quarter turn
+  CHECK(near(m.cpu.vfpu.r[S(3, 1, 0)], 1.0f), 1);   //cos 0
+  CHECK(near(m.cpu.vfpu.r[S(3, 2, 0)], 0.0f), 1);   //cos of a quarter turn
+  CHECK(m.cpu.vfpu.r[S(3, 3, 0)], bits(0.25f));
+  CHECK(near(m.cpu.vfpu.r[S(3, 0, 1)], 0.5f), 1);
+  CHECK(m.cpu.vfpu.r[S(3, 1, 1)], bits(3.0f));
+  CHECK(m.cpu.vfpu.r[S(3, 2, 1)], bits(8.0f));
+  CHECK(m.cpu.vfpu.r[S(3, 3, 1)], bits(3.0f));
+  CHECK(near(m.cpu.vfpu.r[S(3, 0, 2)], 1.0f), 1);   //asin(1) is one quarter turn
+  CHECK(m.cpu.vfpu.r[S(4, 0, 0)], bits(-1.0f));
+  CHECK(m.cpu.vfpu.r[S(4, 2, 0)], bits(0.0f));
+  CHECK(m.cpu.vfpu.r[S(4, 3, 0)], bits(1.0f));
+  CHECK(m.cpu.vfpu.r[S(3, 1, 2)], bits(-3.0f));     //1 - 4
+  CHECK(m.cpu.vfpu.r[S(3, 2, 2)], bits(0.25f));
+  CHECK(m.cpu.vfpu.r[S(3, 3, 2)], bits(-1.0f));
+  CHECK(m.cpu.vfpu.r[S(5, 0, 0)], bits(0.0f));
+  CHECK(m.cpu.vfpu.r[S(5, 3, 0)], bits(1.0f));
+
+  //Reductions and the sorting and butterfly passes.
+  Machine reduce;
+  reduce.run({unary(Vfad, 4, S(3, 0, 0), Rw(1, 0)), unary(Vavg, 4, S(3, 1, 0), Rw(1, 0)),
+              unary(Vsrt1, 4, Rw(4, 0), Rw(1, 0)), unary(Vbfy1, 4, Rw(5, 0), Rw(1, 0))},
+             [](Allegrex& s) { setQuad(s, Rw(1, 0), {4.0f, 1.0f, 2.0f, 9.0f}); });
+  CHECK(reduce.cpu.vfpu.r[S(3, 0, 0)], bits(16.0f));
+  CHECK(reduce.cpu.vfpu.r[S(3, 1, 0)], bits(4.0f));
+  const float sorted[] = {1, 4, 2, 9}, butterfly[] = {5, 3, 11, -7};
+  for(uint32_t k = 0; k < 4; k++) {
+    CHECK(reduce.cpu.vfpu.r[S(4, k, 0)], bits(sorted[k]));
+    CHECK(reduce.cpu.vfpu.r[S(5, k, 0)], bits(butterfly[k]));
+  }
+}
+
+auto matrices() -> void {
+  //vmidt.q gives the identity. vmmul, vtfm and vhtfm as a PSP computes them (measured, docs/psp-vfpu-measurements.md,
+  //round 2): vmmul.q's rd[r][c] = sum of rs[k][r] * rt[k][c], rs turned on its side times rt; vtfm4 and vhtfm4 dot
+  //the matrix's columns with the vector. Matrix 2 isn't symmetric, so the order of the product shows.
+  auto setup = [](Allegrex& s) {
+    for(uint32_t r = 0; r < 4; r++) {
+      for(uint32_t c = 0; c < 4; c++) {
+        s.vfpu.r[4 + c + 32 * r] = bits((float)(r * 4 + c + 1));                    //matrix 1: 1..16 by rows
+        s.vfpu.r[8 + c + 32 * r] = bits(r == c ? 2.0f : c == r + 1 ? 1.0f : 0.0f);   //matrix 2: 2s, 1s right of them
+      }
+    }
+    setQuad(s, Rw(5, 0), {1.0f, 0.0f, 0.0f, 1.0f});
+  };
+  auto m1 = [](uint32_t r, uint32_t c) { return (float)(r * 4 + c + 1); };
+  Machine m;
+  m.run({alu(Vmatrix, 4, M(0), 0, Vidt), alu(Vmmul, 4, M(3), M(1), M(2)), alu(Vtfm4, 4, Rw(4, 0), M(1), Rw(5, 0)),
+         alu(Vtfm4, 3, Rw(4, 1), M(1), Rw(5, 0)), alu(Vmscl, 2, M(6), M(1), S(5, 0, 0)),
+         alu(Vmatrix, 3, M(7), 0, Vone), alu(Vmatrix, 2, M(7), 0, Vzero)},
+        setup);
+  for(uint32_t r = 0; r < 4; r++) {
+    for(uint32_t c = 0; c < 4; c++) {
+      CHECK(m.cpu.vfpu.r[c + 32 * r], bits(r == c ? 1.0f : 0.0f));
+      //rd[r][c] = sum over k of m1[k][r] * m2[k][c] = 2 * m1[c][r] + m1[c - 1][r]
+      CHECK(m.cpu.vfpu.r[12 + c + 32 * r], bits(2.0f * m1(c, r) + (c ? m1(c - 1, r) : 0.0f)));
+    }
+  }
+  //each lane: a column of matrix 1, (i + 1, i + 5, i + 9, i + 13), dotted with (1, 0, 0, 1)
+  const float transformed[] = {1 + 13, 2 + 14, 3 + 15, 4 + 16};
+  for(uint32_t k = 0; k < 4; k++) CHECK(m.cpu.vfpu.r[16 + k], bits(transformed[k]));
+  //vhtfm4 (size field t): columns dotted with (1, 0, 0) plus their last element, the same here
+  for(uint32_t k = 0; k < 4; k++) CHECK(m.cpu.vfpu.r[16 + k + 32], bits(transformed[k]));
+  CHECK(m.cpu.vfpu.r[24 + 0], bits(1.0f));   //vmscl.p M600 = M100 * 1
+  CHECK(m.cpu.vfpu.r[24 + 1 + 32], bits(6.0f));
+  CHECK(m.cpu.vfpu.r[28 + 0], bits(0.0f));   //vmone.t then vmzero.p
+  CHECK(m.cpu.vfpu.r[28 + 2 + 64], bits(1.0f));
+
+  //Encoded as pspdev's assembler encodes "vmmul.q M300, M100, M200" (it sets rs's transpose bit), the product is
+  //matrix 1 times matrix 2: rd[r][c] = 2 * m1[r][c] + m1[r][c - 1].
+  Machine product;
+  product.run({alu(Vmmul, 4, M(3), E(1), M(2))}, setup);
+  for(uint32_t r = 0; r < 4; r++) {
+    for(uint32_t c = 0; c < 4; c++) {
+      CHECK(product.cpu.vfpu.r[12 + c + 32 * r], bits(2.0f * m1(r, c) + (c ? m1(r, c - 1) : 0.0f)));
+    }
+  }
+
+  //vmmul.q of a matrix with itself, rs turned on its side as above: its first column, a unit vector, dotted with
+  //itself rounds up to exactly 1 (the adder's carry, as GTA: Liberty City Stories' skinning needs it; vdot's case in
+  //edges()).
+  Machine unit;
+  unit.run({alu(Vmmul, 4, M(3), M(1), M(1))}, [](Allegrex& s) {
+    const uint32_t column[4] = {0x3f024ba3, 0x3f024ba3, 0xbefb5343, 0x3efb5343};
+    for(uint32_t k = 0; k < 4; k++) s.vfpu.r[4 + 32 * k] = column[k];
+  });
+  CHECK(unit.cpu.vfpu.r[12], bits(1.0f));
+
+  //A transposed operand reads columns where the plain one reads rows.
+  Machine transposed;
+  transposed.run({alu(Vmatrix, 4, M(3), E(1), Vmov)},
+                 [](Allegrex& s) { for(uint32_t i = 0; i < 4; i++) s.vfpu.r[4 + i] = bits((float)(i + 1)); });
+  for(uint32_t r = 0; r < 4; r++) CHECK(transposed.cpu.vfpu.r[12 + 32 * r], bits((float)(r + 1)));
+
+  //vrot.q: cosine in lane 0 and sine in lane 1 of half a quarter turn.
+  Machine rotation;
+  rotation.run({alu(0b111100111, 4, Rw(3, 0), S(1, 0, 0), 0x20 | 0 | 1 << 2)},
+               [](Allegrex& s) { s.vfpu.r[S(1, 0, 0)] = bits(0.5f); });
+  CHECK(near(rotation.cpu.vfpu.r[S(3, 0, 0)], 0.70710678f), 1);
+  CHECK(near(rotation.cpu.vfpu.r[S(3, 1, 0)], 0.70710678f), 1);
+  CHECK(rotation.cpu.vfpu.r[S(3, 2, 0)], 0);
+}
+
+auto moves() -> void {
+  //mtv and mfv move a register to and from a GPR; mtvc and mfvc reach the control registers (128 + n).
+  Machine m;
+  m.run({mtv(t0, S(2, 1, 3)), mfv(t1, S(2, 1, 3)), mtv(t2, 128 + 0), mfv(t3, 128 + 0), mfv(t4, 128 + 3),
+         mtv(t5, 128 + 2), mfv(t6, 128 + 2)},
+        [](Allegrex& s) {
+          s.ipu.r[t0] = 0x12345678; s.ipu.r[t2] = 0x1b; s.ipu.r[t5] = 0xffffffff; s.vfpu.cc = 0x2a;
+        });
+  CHECK(m.cpu.vfpu.r[S(2, 1, 3)], 0x12345678);
+  CHECK(m.gpr(t1), 0x12345678);
+  CHECK(m.gpr(t3), 0x1b);
+  CHECK(m.gpr(t4), 0x2a);
+  CHECK(m.gpr(t6), 0xfff);   //vpfxd keeps 12 bits
+
+  //lvr.q and lvl.q together load an unaligned quad.
+  Machine unaligned;
+  for(uint32_t i = 0; i < 8; i++) unaligned.ram.write32(Data + 4 * i, 100 + i);
+  unaligned.run({lui(s0, Data >> 16), ori(s0, s0, (Data & 0xffff) + 4), lvrq(Rw(1, 0), 0, s0), lvlq(Rw(1, 0), 12, s0)});
+  for(uint32_t k = 0; k < 4; k++) CHECK(unaligned.cpu.vfpu.r[4 + k], 101 + k);
+
+  //lv.q needs 16-byte alignment.
+  Machine misaligned;
+  misaligned.run({lui(s0, Data >> 16), ori(s0, s0, (Data & 0xffff) + 4), lvq(Rw(1, 0), 0, s0)});
+  CHECK(misaligned.exceptions.empty() ? 0 : (uint32_t)misaligned.exceptions[0].first, (uint32_t)Exception::AddressLoad);
+}
+
+}
+
+//Instructions whose results follow directly from pspdev's descriptions, worked out by hand.
+auto more() -> void {
+  //vsbn.s puts rt's integer as rs's exponent (1.5 scaled to 2^3); vsbz.s takes the exponent away again; vlgb.s
+  //reads it.
+  Machine exponents;
+  exponents.run({alu(0b011000010, 1, S(3, 0, 0), S(1, 0, 0), S(1, 1, 0)), unary(0x36, 1, S(3, 1, 0), S(1, 2, 0)),
+                 unary(0x37, 1, S(3, 2, 0), S(1, 2, 0)), unary(0x37, 1, S(3, 3, 0), S(1, 3, 0))},
+                [](Allegrex& s) {
+                  s.vfpu.r[S(1, 0, 0)] = bits(1.5f); s.vfpu.r[S(1, 1, 0)] = 3;
+                  s.vfpu.r[S(1, 2, 0)] = bits(12.0f); s.vfpu.r[S(1, 3, 0)] = bits(0.5f);
+                });
+  CHECK(exponents.cpu.vfpu.r[S(3, 0, 0)], bits(12.0f));
+  CHECK(exponents.cpu.vfpu.r[S(3, 1, 0)], bits(1.5f));
+  CHECK(exponents.cpu.vfpu.r[S(3, 2, 0)], bits(3.0f));
+  CHECK(exponents.cpu.vfpu.r[S(3, 3, 0)], bits(-1.0f));
+
+  //Bytes and halfwords spread into lanes, and packed back.
+  Machine spread;
+  spread.run({unary(0x39, 1, Rw(3, 0), S(1, 0, 0)),   //vc2i.s
+              unary(0x38, 1, Rw(4, 0), S(1, 1, 0)),   //vuc2ifs.s
+              unary(0x3b, 2, Rw(5, 0), Rw(2, 0)),     //vs2i.p
+              unary(0x3a, 1, Rw(6, 0), S(1, 2, 0)),   //vus2i.s
+              unary(0x3f, 4, Rw(7, 0), Rw(5, 0)),     //vi2s.q, of what vs2i.p made
+              unary(0x3e, 2, S(1, 3, 3), Rw(2, 2))},  //vi2us.p
+             [](Allegrex& s) {
+               s.vfpu.r[S(1, 0, 0)] = 0x80402010; s.vfpu.r[S(1, 1, 0)] = 0x000000ff; s.vfpu.r[S(1, 2, 0)] = 0xffff8000;
+               s.vfpu.r[S(2, 0, 0)] = 0x22221111; s.vfpu.r[S(2, 1, 0)] = 0x44443333;
+               s.vfpu.r[S(2, 0, 2)] = 0x40000000; s.vfpu.r[S(2, 1, 2)] = 0x80000000;
+             });
+  const uint32_t topBytes[] = {0x10000000, 0x20000000, 0x40000000, 0x80000000};
+  const uint32_t halves[] = {0x11110000, 0x22220000, 0x33330000, 0x44440000};
+  for(uint32_t k = 0; k < 4; k++) {
+    CHECK(spread.cpu.vfpu.r[S(3, k, 0)], topBytes[k]);
+    CHECK(spread.cpu.vfpu.r[S(5, k, 0)], halves[k]);
+  }
+  CHECK(spread.cpu.vfpu.r[S(4, 0, 0)], 0x7fffffff);  //0xff repeated down the lane
+  CHECK(spread.cpu.vfpu.r[S(4, 1, 0)], 0);
+  CHECK(spread.cpu.vfpu.r[S(6, 0, 0)], 0x40000000);  //0x8000 scaled up by 2^15
+  CHECK(spread.cpu.vfpu.r[S(6, 1, 0)], 0x7fff8000);
+  CHECK(spread.cpu.vfpu.r[S(7, 0, 0)], 0x22221111);
+  CHECK(spread.cpu.vfpu.r[S(7, 1, 0)], 0x44443333);
+  CHECK(spread.cpu.vfpu.r[S(1, 3, 3)], 0x00008000);  //the negative lane gives 0
+
+  //Colors: 8 bits a channel (red lowest) into 4444 and 5551.
+  Machine colors;
+  colors.run({unary(0x59, 4, Rw(3, 0), Rw(1, 0)), unary(0x5a, 4, Rw(4, 0), Rw(1, 0))},
+             [](Allegrex& s) { s.vfpu.r[S(1, 0, 0)] = 0x80402010; s.vfpu.r[S(1, 1, 0)] = 0xffffffff; });
+  CHECK(colors.cpu.vfpu.r[S(3, 0, 0)], 0xffff8421u);
+  CHECK(colors.cpu.vfpu.r[S(3, 1, 0)], 0);
+  CHECK(colors.cpu.vfpu.r[S(4, 0, 0)], 0xffffa082u);
+
+  //vqmul.q: i times j is k, and (0, 0, 0, 1) is the identity.
+  Machine quaternions;
+  quaternions.run({alu(0b111100101, 4, Rw(3, 0), Rw(1, 0), Rw(2, 0)), alu(0b111100101, 4, Rw(3, 1), Rw(1, 1), Rw(2, 1))},
+                  [](Allegrex& s) {
+                    setQuad(s, Rw(1, 0), {1, 0, 0, 0}); setQuad(s, Rw(2, 0), {0, 1, 0, 0});
+                    setQuad(s, Rw(1, 1), {0, 0, 0, 1}); setQuad(s, Rw(2, 1), {1, 2, 3, 4});
+                  });
+  const float k[] = {0, 0, 1, 0};
+  for(uint32_t lane = 0; lane < 4; lane++) {
+    CHECK(quaternions.cpu.vfpu.r[S(3, lane, 0)], bits(k[lane]));
+    CHECK(quaternions.cpu.vfpu.r[S(3, lane, 1)], bits((float)(lane + 1)));
+  }
+
+  //vsocp.s, vbfy2.q, the other sorting passes, vscmp and vsge.
+  Machine lanes;
+  lanes.run({unary(0x45, 1, Rw(3, 0), S(1, 0, 0)), unary(0x43, 4, Rw(4, 0), Rw(2, 0)),
+             unary(0x41, 4, Rw(5, 0), Rw(2, 1)), unary(0x48, 4, Rw(6, 0), Rw(2, 2)), unary(0x49, 4, Rw(7, 0), Rw(2, 3)),
+             alu(0b011011101, 3, Rw(3, 1), Rw(1, 1), Rw(1, 2)), alu(0b011011110, 3, Rw(3, 2), Rw(1, 1), Rw(1, 2))},
+            [](Allegrex& s) {
+              s.vfpu.r[S(1, 0, 0)] = bits(0.25f);
+              setQuad(s, Rw(2, 0), {1, 2, 3, 4}); setQuad(s, Rw(2, 1), {9, 2, 1, 4});
+              setQuad(s, Rw(2, 2), {1, 4, 2, 9}); setQuad(s, Rw(2, 3), {1, 2, 4, 9});
+              setQuad(s, Rw(1, 1), {1, 2, 3, 0}); setQuad(s, Rw(1, 2), {2, 2, 2, 0});
+            });
+  CHECK(lanes.cpu.vfpu.r[S(3, 0, 0)], bits(0.75f));
+  CHECK(lanes.cpu.vfpu.r[S(3, 1, 0)], bits(0.25f));
+  const float butterfly[] = {4, 6, -2, -2}, second[] = {4, 1, 2, 9}, third[] = {4, 1, 9, 2}, fourth[] = {9, 4, 2, 1};
+  const float signs[] = {-1, 0, 1}, atLeast[] = {0, 1, 1};
+  for(uint32_t lane = 0; lane < 4; lane++) {
+    CHECK(lanes.cpu.vfpu.r[S(4, lane, 0)], bits(butterfly[lane]));
+    CHECK(lanes.cpu.vfpu.r[S(5, lane, 0)], bits(second[lane]));
+    CHECK(lanes.cpu.vfpu.r[S(6, lane, 0)], bits(third[lane]));
+    CHECK(lanes.cpu.vfpu.r[S(7, lane, 0)], bits(fourth[lane]));
+  }
+  for(uint32_t lane = 0; lane < 3; lane++) {
+    CHECK(lanes.cpu.vfpu.r[S(3, lane, 1)], bits(signs[lane]));
+    CHECK(lanes.cpu.vfpu.r[S(3, lane, 2)], bits(atLeast[lane]));
+  }
+
+  //svr.q and svl.q together store a quad at an address aligned to 4 but not 16; vmtvc and vmfvc reach the
+  //control registers (3 is the condition codes).
+  Machine stores;
+  stores.run({lui(s0, Data >> 16), ori(s0, s0, (Data & 0xffff) + 4),
+              memory(0x3d, Rw(1, 0), 0, s0, 2 | 1), memory(0x3d, Rw(1, 0), 12, s0, 1),
+              alu(0b110100000, 1, 3, S(2, 0, 0), 0x51), alu(0b110100000, 1, S(2, 1, 0), 3, 0x50)},
+             [](Allegrex& s) { setQuad(s, Rw(1, 0), {5, 6, 7, 8}); s.vfpu.r[S(2, 0, 0)] = 0x2a; });
+  for(uint32_t lane = 0; lane < 4; lane++) CHECK(stores.ram.read32(Data + 4 + 4 * lane), bits((float)(lane + 5)));
+  CHECK(stores.cpu.vfpu.cc, 0x2a);
+  CHECK(stores.cpu.vfpu.r[S(2, 1, 0)], 0x2a);
+
+  //Which instructions use up the prefixes. vpfxs here negates rs's lane 0, so a vadd.s of 1 and 2 that still sees
+  //it gives 1, and one after the prefixes were used up gives 3.
+  auto oneAndTwo = [](Allegrex& s) { s.vfpu.r[S(1, 0, 0)] = bits(1.0f); s.vfpu.r[S(2, 0, 0)] = bits(2.0f); };
+  uint32_t negateX = 0xe4 | 1 << 16;
+  //vnop uses them up, as pspdev's documentation says.
+  Machine nop;
+  nop.run({vpfxs(negateX), vnop, alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0))}, oneAndTwo);
+  CHECK(nop.cpu.vfpu.r[S(0, 0, 0)], bits(3.0f));
+  //vmfvc doesn't, and vmtvc can set one (control register 128 is rs's prefix).
+  Machine control;
+  control.run({vpfxs(negateX), alu(0b110100000, 1, S(3, 0, 0), 3, 0x50), alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0)),
+               alu(0b110100000, 1, 0, S(3, 1, 0), 0x51), alu(Vadd, 1, S(0, 1, 0), S(1, 0, 0), S(2, 0, 0))},
+              [&](Allegrex& s) { oneAndTwo(s); s.vfpu.r[S(3, 1, 0)] = negateX; });
+  CHECK(control.cpu.vfpu.r[S(0, 0, 0)], bits(1.0f));  //still negated after vmfvc
+  CHECK(control.cpu.vfpu.r[S(0, 1, 0)], bits(1.0f));  //negated by the prefix vmtvc set
+  //An instruction that raises an exception instead of running leaves them: here a reserved encoding of the vadd
+  //group, and vcrs, which only exists for triples, used on a quad.
+  for(uint32_t reserved : {0x61800000u, alu(Vcrs, 4, Rw(0, 0), Rw(1, 0), Rw(2, 0))}) {
+    Machine fault;
+    fault.run({vpfxs(negateX), reserved}, oneAndTwo);
+    CHECK(fault.exceptions.size(), 1);
+    CHECK(fault.cpu.vfpu.pfxs, negateX);
+  }
+}
+
+//The random number generator. From power on, its state after each draw must be the one fp64 recovered from a
+//PSP's output (PPSSPP issue 16946), unpacked here from the eight RCX registers into its five parts.
+auto random() -> void {
+  struct State { uint32_t a, b, c, d, e; };
+  auto unpack = [](const Allegrex& cpu) -> State {
+    auto& r = cpu.vfpu.rcx;
+    State s{(r[0] & 0xffff) | r[4] << 16, (r[1] & 0xffff) | r[5] << 16, (r[2] & 0xffff) | r[6] << 16,
+            (r[3] & 0xffff) | r[7] << 16, 0};
+    for(uint32_t n = 0; n < 8; n++) s.e |= (r[n] >> 16 & 15) << (4 * n);
+    return s;
+  };
+  auto vrndi = [](uint32_t size, uint32_t rd) { return unary(0x21, size, rd, 0); };
+
+  const struct { uint32_t draws; State state; } recovered[] = {
+    { 3, {0xc35937cc, 0x2998d882, 0x00000030, 0x00000074, 0}},
+    { 4, {0x2e130a5d, 0x6398b906, 0x00000074, 0x00000118, 0}},
+    {14, {0x22dc176b, 0xbc304c24, 0x000be744, 0x001cbcc0, 0}},
+    {19, {0x9e3c9a7c, 0x1a7acf35, 0x03d038f0, 0x0934cf34, 0}},
+  };
+  for(auto& [draws, state] : recovered) {
+    Machine m;
+    std::vector<uint32_t> program(draws, vrndi(1, S(3, 0, 0)));
+    m.run(program);
+    State s = unpack(m.cpu);
+    CHECK(s.a, state.a);
+    CHECK(s.b, state.b);
+    CHECK(s.c, state.c);
+    CHECK(s.d, state.d);
+    CHECK(s.e, state.e);
+    CHECK(m.cpu.vfpu.r[S(3, 0, 0)], state.a + state.b + state.d);  //each draw gives a + b + d
+  }
+
+  //The registers start as 1, 2, 4 and 8 for c and d's low halves (and a's and b's), and always read 0x3f8 on top.
+  Machine fresh;
+  fresh.run({});
+  CHECK(fresh.cpu.vfpu.rcx[0], 0x3f800001);
+  CHECK(fresh.cpu.vfpu.rcx[3], 0x3f800008);
+  CHECK(fresh.cpu.vfpu.rcx[7], 0x3f800000);
+
+  //vrnds.s spreads the seed over the registers: a half each (low for 0-3, high for 4-7) and one nibble each.
+  Machine seed;
+  seed.run({alu(0b110100000, 1, 0, S(1, 0, 0), 0x20), mtv(t0, 128 + 8 + 2), mfv(t1, 128 + 8 + 2)},
+           [](Allegrex& s) { s.vfpu.r[S(1, 0, 0)] = 0x12345678; s.ipu.r[t0] = 0xffffffff; });
+  const uint32_t seeded[8] = {0x3f885678, 0x3f875678, 0x3f865678, 0x3f855678,
+                              0x3f841234, 0x3f831234, 0x3f821234, 0x3f811234};
+  for(uint32_t n = 0; n < 8; n++) if(n != 2) CHECK(seed.cpu.vfpu.rcx[n], seeded[n]);
+  CHECK(seed.gpr(t1), 0x3f8fffff);  //mtvc keeps 20 bits of an RCX register
+
+  //vrndi.q fills its lanes from the last back, and its destination prefix (here masking lane 0) applies to the
+  //last lane only.
+  Machine quad, singles, masked;
+  quad.run({vrndi(4, Rw(3, 0))});
+  singles.run({vrndi(1, S(2, 0, 0)), vrndi(1, S(2, 1, 0)), vrndi(1, S(2, 2, 0)), vrndi(1, S(2, 3, 0))});
+  for(uint32_t lane = 0; lane < 4; lane++) CHECK(quad.cpu.vfpu.r[S(3, lane, 0)], singles.cpu.vfpu.r[S(2, 3 - lane, 0)]);
+  masked.run({vpfxd(1 << 8), vrndi(2, Rw(3, 0))}, [](Allegrex& s) { setQuad(s, Rw(3, 0), {7, 7, 7, 7}); });
+  CHECK(masked.cpu.vfpu.r[S(3, 0, 0)], singles.cpu.vfpu.r[S(2, 1, 0)]);  //the second number drawn
+  CHECK(masked.cpu.vfpu.r[S(3, 1, 0)], bits(7.0f));                      //masked
+}
+
+//What a PSP does with NaNs, infinities, denormals and prefixes where the instructions above don't show it, from the
+//second and third rounds of measurements (docs/psp-vfpu-measurements.md); most values are from the recorder's runs
+//(tests/allegrex/measured/ops.txt and ops3.txt list its entries), the tiny products built from round 3's rule, the
+//adder's from round 1's vdot-spread.bin and a game. Each case is instruction words as pspdev's assembler encoded them
+//for the recorder, on C000 (s) and C100 (t, S100 being its first lane), the result read from C200, whose unwritten
+//lanes keep their 0xdead marks.
+auto edges() -> void {
+  using Quad = std::array<uint32_t, 4>;
+  constexpr uint32_t mark = 0xdead0000, one = 0x3f80'0000, minusOne = 0xbf80'0000, nan = 0x7f80'0001;
+  struct Case { const char* name; uint32_t word; Quad s, t, d; };
+  const Case cases[] = {
+    //vmin and vmax: a NaN is past the infinity of its sign; two denormals, or a denormal and a zero, tie, which
+    //gives t's lane; the lane comes out bits and all.
+    {"vmin.q", 0x6d048088, {0x00009879, 0x404179e6, 0x7aa84a08, 0x80000000},
+     {0x0000e999, 0xffffb986, 0x4119caa8, 0x00001ec1}, {0x0000e999, 0xffffb986, 0x4119caa8, 0x00001ec1}},
+    {"vmax.q", 0x6d848088, {0x00009879, 0x404179e6, 0x7aa84a08, 0x80000000},
+     {0x0000e999, 0xffffb986, 0x4119caa8, 0x00001ec1}, {0x0000e999, 0x404179e6, 0x7aa84a08, 0x00001ec1}},
+    {"vmax.q, infinities", 0x6d848088, {0x7f800000, 0x7fc00000, 0xff800000, 0x00000000},
+     {0x7f800001, 0x7f800000, 0xffffffff, 0x80000000}, {0x7f800001, 0x7fc00000, 0xff800000, 0x80000000}},
+    //The clamps keep a NaN and what's in range, denormals too; vsat0 makes a set sign bit 0.
+    {"vsat0.q", 0xd0048088, {0x7fffffff, 0x0000eca3, 0x807fffff, 0x80000000}, {}, {0x7fffffff, 0x0000eca3, 0, 0}},
+    {"vsat1.q", 0xd0058088, {0xffffd267, 0xff800000, 0x807fffff, 0x3f800001}, {},
+     {0xffffd267, minusOne, 0x807fffff, one}},
+    //The sorts: on a tie both lanes of the pair get the same one, the first for vsrt1 and 2, the second for 3 and 4.
+    {"vsrt1.q", 0xd0408088, {0x0000a160, 0x00003192, 0x00005a94, 0x41a824e6}, {},
+     {0x0000a160, 0x0000a160, 0x00005a94, 0x41a824e6}},
+    {"vsrt2.q", 0xd0418088, {0x000056d2, 0x0000f1d4, 0x0000fe26, 0x00009848}, {},
+     {0x000056d2, 0x0000f1d4, 0x0000f1d4, 0x000056d2}},
+    {"vsrt3.q", 0xd0488088, {0xbe9d2995, 0xbb9a288f, 0x00005399, 0x00005533}, {},
+     {0xbb9a288f, 0xbe9d2995, 0x00005533, 0x00005533}},
+    {"vsrt4.q", 0xd0498088, {0x00006657, 0x80000000, 0x3e55cb7b, 0x0000b165}, {},
+     {0x0000b165, 0x3e55cb7b, 0x80000000, 0x0000b165}},
+    //vsgn and vscmp order values as vmin and vmax do: a NaN has a sign, a denormal is zero.
+    {"vsgn.q", 0xd04a8088, {0x7fc00000, 0xffffd267, 0x0000c379, 0x80000000}, {}, {one, minusOne, 0, 0}},
+    {"vscmp.q", 0x6e848088, {0x7fc00000, 0x0000655b, 0xff800000, 0x3f800000},
+     {0x7f800000, 0x0000577b, 0xffc00000, 0x3f800000}, {one, 0, one, 0}},
+    //vmov copies bits; vsbz leaves a denormal alone; vlgb of a NaN moves its low byte up.
+    {"vmov.q", 0xd0008088, {0x00002879, 0x7f800001, 0x80000001, one}, {}, {0x00002879, 0x7f800001, 0x80000001, one}},
+    {"vsbz.s, denormal", 0xd0360008, {0x0000629e}, {}, {0x0000629e, mark | 1, mark | 2, mark | 3}},
+    {"vsbz.s", 0xd0360008, {0x40490fdb}, {}, {0x3fc90fdb, mark | 1, mark | 2, mark | 3}},
+    {"vlgb.s, NaN", 0xd0370008, {0xfffffa52}, {}, {0xffd20000, mark | 1, mark | 2, mark | 3}},
+    {"vlgb.s, its NaN", 0xd0370008, {0x7f800001}, {}, {0x7f810000, mark | 1, mark | 2, mark | 3}},
+    {"vlgb.s", 0xd0370008, {0x41c7d163}, {}, {0x40800000, mark | 1, mark | 2, mark | 3}},
+    {"vlgb.s, denormal", 0xd0370008, {0x0000c9a0}, {}, {0xff800000, mark | 1, mark | 2, mark | 3}},
+    //The VFPU's own NaN: the sign of the product for vscl, vmscl and vcrs; positive for the others.
+    {"vscl.q", 0x65048088, {0x7fc00000, one, 0xffc00000, 0x40000000}, {minusOne},
+     {nan | 0x8000'0000, minusOne, nan, 0xc0000000}},
+    {"vmscl.q", 0xf2048088, {0x7fc00000, one, 0xffc00000, 0x40000000}, {minusOne},
+     {nan | 0x8000'0000, minusOne, nan, 0xc0000000}},
+    {"vcrs.t", 0x66848008, {0x40000000, 0xffc00000, 0x40400000}, {minusOne, 0x40a00000, 0x40800000},
+     {nan | 0x8000'0000, 0xc0400000, 0x41200000, mark | 3}},
+    {"vocp.q", 0xd0448088, {0xffc00000, 0x3e800000, 0x7f800001, 0}, {}, {nan, 0x3f400000, nan, one}},
+    {"vsocp.p", 0xd0450088, {0xffc00000, 0x3e800000}, {}, {nan, nan, 0x3f400000, 0x3e800000}},
+    {"vfad.q", 0xd0468088, {one, 0xffc00000, 0x40000000, 0x40400000}, {}, {nan, mark | 1, mark | 2, mark | 3}},
+    {"vbfy1.q", 0xd0428088, {0xffc00000, one, 0x40000000, one}, {}, {nan, nan, 0x40400000, one}},
+    {"vhdp.q", 0x66048088, {one, 0x40000000, 0x40400000, 0}, {0xffc00000, one, one, one}, {nan, mark | 1, mark | 2, mark | 3}},
+    {"vdet.p", 0x67040088, {0xffc00000, one}, {one, one}, {nan, mark | 1, mark | 2, mark | 3}},
+    //An infinity has no sine or cosine: the NaN takes the sign vsin, vcos and vnsin give a NaN.
+    {"vsin.q", 0xd0128088, {0x7f800000, 0xff800000, 0xffc00000, 0}, {}, {nan, nan | 0x8000'0000, nan | 0x8000'0000, 0}},
+    {"vcos.q", 0xd0138088, {0x7f800000, 0xff800000, 0, 0}, {}, {nan, nan, one, one}},
+    {"vnsin.q", 0xd01a8088, {0x7f800000, 0xff800000, 0x7f800000, 0xff800000}, {},
+     {nan | 0x8000'0000, nan, nan | 0x8000'0000, nan}},
+    //Products a sliver below 2^-126, the smallest normal number, are rounded to 24 bits first: kept where that
+    //reaches 2^-126 (2^-126 (1 - j² 2^-46) for j = 1448, and j = 1), and otherwise a zero of their sign (j = 1449;
+    //and 2^-126 - 2^-150, which IEEE's denormals would round up to 2^-126).
+    {"vmul.q, tiny products", 0x64048088, {0x3f7ff4b0, 0xbf7ff4ae, 0x3f7fffff, 0xbf7ffffe},
+     {0x008005a8, 0x008005a9, 0x00800000, 0x00800001}, {0x00800000, 0x80000000, 0, 0x80800000}},
+    //A quotient is taken to round the same way (not measured): 2^-126 - 2^-150 again.
+    {"vdiv.s, a tiny quotient", 0x63840008, {0x3f7fffff}, {0x7e800000}, {0, mark | 1, mark | 2, mark | 3}},
+    //The adder on two of vdot-spread.bin's quads (measured), where a sum in doubles comes out a unit higher.
+    {"vdot.q, measured", 0x64848088, {0xf1fbf9d7, 0x51c54d4a, 0x8c795c21, 0xb886c70c},
+     {0xbec1d6fb, 0x2671e01e, 0x727148e5, 0x4d97e500}, {0x713ecaf4, mark | 1, mark | 2, mark | 3}},
+    {"vdot.q, measured again", 0x64848088, {0x257544df, 0x969b4cb2, 0x4042c469, 0x4855c2b4},
+     {0x17f18e83, 0x9d466206, 0xd6a651ad, 0x61510728}, {0x6a2e89ee, mark | 1, mark | 2, mark | 3}},
+    //A unit vector dotted with itself, as GTA: Liberty City Stories' skinning does: the truncated sum is a sliver
+    //below 1, and rounding it carries into the exponent: 1, not 1/2 (not measured; the carry is any adder's).
+    {"vdot.q, rounding up to 1", 0x64848088, {0x3f024ba3, 0x3f024ba3, 0xbefb5343, 0x3efb5343},
+     {0x3f024ba3, 0x3f024ba3, 0xbefb5343, 0x3efb5343}, {one, mark | 1, mark | 2, mark | 3}},
+  };
+  //Prefixes as a PSP applies them, one recorded run each: the math functions take them on their last lane alone,
+  //with lane 0's settings (a constant; a setting naming another lane gives 0; the absolute value; the write mask),
+  //and the negating ones (vnrcp, vnsin, vrexp2) ignore the negate setting; vfad's t prefix only picks constants,
+  //vavg's only negates; vhdp's last s lane is forced to one; vscl's t prefix always takes rt; a swizzle past the
+  //operand's size gives 0 in its lane (vh2f splits a 0 that its negate setting can make -0), or leaves the adders'
+  //product out; and the adders add up all four lanes, whatever the size.
+  struct Prefixed { const char* name; std::vector<uint32_t> words; Quad s, t, d; };
+  const Prefixed prefixed[] = {
+    {"vrcp.q, constant", {0xdc0cb310, 0xd0108088}, {0x85ffd1ef, 0x3feba3f9, 0x0844e493, 0xbe17e23d}, {},
+     {0xf900170c, 0x3f0b0f2c, 0x76a66cf0, 0x3eaaaaa8}},
+    {"vrcp.q, another lane", {0xdc01ef02, 0xd0108088}, {0x127a075f, 0x00002ae9, 0x3fa53903, 0xffffe02d}, {},
+     {0x6c830e90, 0x7f800000, 0x3f465384, 0}},
+    {"vrcp.q, masked", {0xdc08c19d, 0xdd0ccc31, 0xde0001bb, 0xd0108088},
+     {0xe091319f, 0xbcc70f29, 0xec23e743, 0xadc7e86d}, {}, {0x9e61af3c, 0xc2249d44, 0x92c7ec34, mark | 3}},
+    {"vfad.q, t prefix", {0xdd0b4f9f, 0xd0468088}, {0x437f0000, 0xc31d8ec0, 0xbf2065f2, 0x43466df4}, {},
+     {0xc2c5aa67, mark | 1, mark | 2, mark | 3}},
+    {"vhdp.q, prefixes", {0xdc0b66f4, 0xdd0df9c9, 0x66048088}, {0xe3754950, 0x00000001, 0xbe5f0984, 0x3e58e156},
+     {0xf1852df0, 0x313dbca2, 0xb94be824, 0x3eb958f6}, {0xe2a38636, mark | 1, mark | 2, mark | 3}},
+    {"vscl.q, t prefix", {0xdd0d2f6c, 0xde0004c0, 0x65048088}, {0x87bbe026, 0xb834ca48, 0x5b9b92ba, 0x3c6eddfc},
+     {0x2d5f3fc6, 0x40000000, 0x3f0e1c5a, 0x4f81389c}, {0, 0xb90797b6, mark | 2, 0xaa504ee0}},
+    {"vadd.s, past the size", {0xdc00c46a, 0x60040008}, {0x661b2e33, 0x3b03fcdd, 0xbc298317, 0xf3dbf761},
+     {0xb9f4cc53, 0xfb80dffd, 0x3e3af337, 0x2caa7c81}, {0, mark | 1, mark | 2, mark | 3}},
+    {"vmov.p, past the size", {0xdc0d4292, 0xdd0a1e62, 0xde000430, 0xd0000088},
+     {0xf0d9556c, 0xbf1c5d7e, 0, 0xbef4f992}, {}, {0, 0x70d9556c, mark | 2, mark | 3}},
+    {"vmov.t, past the size", {0xdc07e5bb, 0xdd0656bc, 0xd0008008}, {0x21061cf5, 0xc35952ef, 0x305dccf9, 0x205df593},
+     {}, {0, 0xc0000000, 0xbe2aaaab, mark | 3}},
+    {"vsqrt.q, the last lane's absolute value", {0xdc0c2b24, 0xd0168088},
+     {0xbed7cad3, 0x0000e27d, 0x000099b7, 0xc0bd6701}, {}, {nan, 0, 0, 0x401bb408}},
+    {"vnsin.q, negate unused", {0xdc0377c8, 0xd01a8088}, {0xbe040651, 0x3ef570ab, 0x0000fe15, 0x397b710f}, {},
+     {0x3e4df814, 0xbf2f0f90, 0x80000000, one}},
+    {"vavg.p, t prefix", {0xdd0a36fe, 0xde000af4, 0xd0470088}, {0x0000e201, 0xbc16b7db, 0x414a3cc5, 0x7141133f}, {},
+     {0x3b96b7db, mark | 1, mark | 2, mark | 3}},
+    {"vdot.p, past the size", {0xdc00cede, 0x64840088}, {0x3c948af5, 0x73e7f0ef, 0x534c1af9, 0xbfb77393},
+     {0x39baba15, 0xbf0c8d0f, 0x4192ac19, 0xffffc1b3}, {0, mark | 1, mark | 2, mark | 3}},
+    {"vf2iz.t, past the size", {0xdc058813, 0xd2208008}, {0x00003d12, 0xc056f214, 0x40152866, 0xc01c7c88}, {},
+     {0, 0, 3, mark | 3}},
+    {"vnrcp.q, negate unused", {0xdc03df4b, 0xd0188088}, {0x3e231fb8, 0x322639aa, 0x7f800000, 0xc002627e}, {},
+     {0xc0c8e0c0, 0xccc5214c, 0x80000000, 0xc0bffffc}},
+    {"vrexp2.q, negate unused", {0xdc05de02, 0xd01c8088}, {0x3f01ed4f, 0xc3263659, 0x4b800000, 0xbfb96a9d}, {},
+     {0x3f3413c8, 0x7f800000, 0, 0x3e7ffffc}},
+    {"vrsq.q, the last lane", {0xdc0317a9, 0xd0118088}, {0x3f8f1afb, 0x00002ce5, 0x0000185f, 0x000063e9}, {},
+     {0x3f721cc4, 0x7f800000, 0x7f800000, 0xff800001}},
+    {"vexp2.q, the last lane", {0xdc041e3d, 0xde000c6a, 0xd0148088}, {0x3f625372, 0xb7263774, one, 0x427c67e8}, {},
+     {0x3fec3c70, 0x3f7fff88, 0x40000000, 0x40000000}},
+    {"vlog2.q, the last lane", {0xdc02b08c, 0xd0158088}, {0x3e6de892, 0x4f000000, 0x0000cbe6, 0x979c6c08}, {},
+     {0xc006c400, 0x41f80000, 0xff800000, 0xff800000}},
+    {"vsin.q, the last lane", {0xdc0bb3d7, 0xd0128088}, {0xbf2c0fcb, 0xbc7b8a35, 0x4121722f, 0x3eb56e39}, {},
+     {0xbf5eca3c, 0xbcc58a00, 0xbe10e208, 0xbe8483e8}},
+    {"vcos.q, the last lane", {0xdc091f4f, 0xde000db9, 0xd0138088}, {0x3eff4842, 0xffff94c4, 0x0000ce96, 0x3f800001},
+     {}, {0x3f356ae0, nan, one, mark | 3}},
+    {"vasin.q, the last lane", {0xdc0f5010, 0xde000efe, 0xd0178088}, {0x3ef5cc24, 0x37d0dcf6, 0x00006f98, 0x0000748a},
+     {}, {0x3ea33718, 0x37846a00, 0, 0x80000000}},
+    {"vi2f.p, past the size", {0xdc068c9f, 0xd2800088}, {0xffffe069, 0x807fffff, 0x00002dad, 0xb8937c67}, {},
+     {0, 0, mark | 2, mark | 3}},
+    {"vhdp.p, past the size", {0xdd02591d, 0x66040088}, {0x439f1259, 0xc06341f3, 0xbeb2069d, 0x0000f2d7},
+     {0x3cd25379, 0xffffc013, 0xffffc9bd, 0x3f7fffff}, {0x42d41877, mark | 1, mark | 2, mark | 3}},
+    {"vfad.p, all four lanes", {0xdc05827e, 0xde000a8e, 0xd0460088}, {0x0000049b, 0x8693e785, 0xffffcbff, 0x3c857889},
+     {}, {one, mark | 1, mark | 2, mark | 3}},
+    {"vavg.t, all four lanes", {0xdc07f554, 0xdd08160b, 0xd0478008}, {0x00002edb, 0x0000cbc5, 0xbcbe7a3f, 0x3fc580c9},
+     {}, {0xbfe38e39, mark | 1, mark | 2, mark | 3}},
+    {"vh2f.s, past the size", {0xdc0d4bdd, 0xd0330008}, {0x00006dc5, 0x00006c3f, 0x000042c9, 0x476f7be3}, {},
+     {0, 0x80000000, mark | 2, mark | 3}},
+    {"vf2h.p, past the size", {0xdc0a415f, 0xd0320088}, {0xffffb473, 0xffff9d1d, 0x00004d57, 0x3e5d7ba1}, {},
+     {0, mark | 1, mark | 2, mark | 3}},
+    {"vbfy1.p, past the size", {0xdc0505ea, 0xd0420088}, {0x0000530d, 0xbcc4a8c7, 0x3e531891, 0x00007ceb}, {},
+     {0, 0, mark | 2, mark | 3}},
+  };
+  auto test = [&](const char* name, const std::vector<uint32_t>& words, const Quad& s, const Quad& t, const Quad& d) {
+    Machine m;
+    m.run(words, [&](Allegrex& cpu) {
+      for(uint32_t k = 0; k < 4; k++) {
+        cpu.vfpu.r[32 * k] = s[k];
+        cpu.vfpu.r[4 + 32 * k] = t[k];
+        cpu.vfpu.r[8 + 32 * k] = mark | k;
+      }
+    });
+    for(uint32_t k = 0; k < 4; k++) check(__LINE__, name, m.cpu.vfpu.r[8 + 32 * k], d[k]);
+  };
+  for(auto& c : cases) test(c.name, {c.word}, c.s, c.t, c.d);
+  for(auto& c : prefixed) test(c.name, c.words, c.s, c.t, c.d);
+}
+
+auto vfpuTests() -> Tests {
+  return {
+    {"vfpu addressing", addressing}, {"vfpu arithmetic", arithmetic}, {"vfpu prefixes", prefixes},
+    {"vfpu products", products}, {"vfpu comparisons", comparisons}, {"vfpu conversions", conversions},
+    {"vfpu functions", functions}, {"vfpu matrices", matrices}, {"vfpu moves", moves}, {"vfpu more", more},
+    {"vfpu random", random}, {"vfpu edges", edges},
+  };
+}
+
+}

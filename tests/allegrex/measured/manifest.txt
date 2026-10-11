@@ -1,0 +1,29 @@
+psp-vfpu-measure 1
+firmware devkit version 06060110
+spread-out inputs: state = state * 1664525 + 1013904223 from the seed, taking each new state
+vrcp-1-2.bin: 8388608 results; vrcp.q of 0x3f800000 + k, k < 2^23 (every float from 1 up to 2)
+vrsq-1-4.bin: 16777216 results; vrsq.q of 0x3f800000 + k, k < 2^24 (from 1 up to 4)
+vsqrt-1-4.bin: 16777216 results; vsqrt.q of 0x3f800000 + k, k < 2^24 (from 1 up to 4)
+vexp2-1-2.bin: 8388608 results; vexp2.q of 0x3f800000 + k, k < 2^23 (from 1 up to 2)
+vrexp2-1-2.bin: 8388608 results; vrexp2.q of 0x3f800000 + k, k < 2^23 (from 1 up to 2)
+vlog2-half-2.bin: 16777216 results; vlog2.q of 0x3f000000 + k, k < 2^24 (from 1/2 up to 2)
+vsin-fixed.bin: 8388608 results; vsin.q of k / 2^23, k < 2^23 (a quarter turn in 2^23 steps)
+vcos-fixed.bin: 8388608 results; vcos.q of k / 2^23, k < 2^23
+vasin-fixed.bin: 8388612 results; vasin.q of k / 2^23, k < 2^23 + 4 (0 to 1, and a little past)
+vrcp-spread.bin: 1048576 results; vrcp.q of spread-out inputs, seed 1
+vnrcp-spread.bin: 1048576 results; vnrcp.q of spread-out inputs, seed 2
+vrsq-spread.bin: 1048576 results; vrsq.q of spread-out inputs, seed 3
+vsqrt-spread.bin: 1048576 results; vsqrt.q of spread-out inputs, seed 4
+vexp2-spread.bin: 1048576 results; vexp2.q of spread-out inputs, seed 5
+vrexp2-spread.bin: 1048576 results; vrexp2.q of spread-out inputs, seed 6
+vlog2-spread.bin: 1048576 results; vlog2.q of spread-out inputs, seed 7
+vsin-spread.bin: 1048576 results; vsin.q of spread-out inputs, seed 8
+vnsin-spread.bin: 1048576 results; vnsin.q of spread-out inputs, seed 9
+vcos-spread.bin: 1048576 results; vcos.q of spread-out inputs, seed 10
+vasin-spread.bin: 1048576 results; vasin.q of spread-out inputs, seed 11
+vadd-spread.bin: 262144 results; vadd.q of spread-out pairs, seed 12: per quad, the 4 lanes of s, then of t
+vsub-spread.bin: 262144 results; vsub.q of spread-out pairs, seed 13: per quad, the 4 lanes of s, then of t
+vmul-spread.bin: 262144 results; vmul.q of spread-out pairs, seed 14: per quad, the 4 lanes of s, then of t
+vdiv-spread.bin: 262144 results; vdiv.q of spread-out pairs, seed 15: per quad, the 4 lanes of s, then of t
+vdot-spread.bin: 262144 results; vdot.q of spread-out pairs of quads, seed 16: per result, the 4 lanes of s, then of t
+vrnd.bin: the RCX registers (8 words) at start and 256 vrndi.s draws; then for 64 seeds (16 chosen, then the generator from 17): the seed, the RCX registers after vrnds.s, 4096 vrndi.s draws; then after seeding 0x12345678, 256 vrndi.q (4 words each, lane 0 first)

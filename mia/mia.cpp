@@ -2,6 +2,7 @@
 
 #include <TZXFile.h>
 #include <android/log.h>
+#include <ares/psp/kernel/disc-info.hpp>
 
 namespace mia {
 
@@ -142,6 +143,7 @@ auto construct() -> void {
   media.push_back("PC Engine CD");
   media.push_back("PC Engine LD");
   media.push_back("PlayStation");
+  media.push_back("PlayStation Portable");
   media.push_back("Pocket Challenge V2");
   media.push_back("Saturn");
   media.push_back("SC-3000");

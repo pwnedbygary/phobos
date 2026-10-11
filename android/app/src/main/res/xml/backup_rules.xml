@@ -1,13 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
+   What Android's backups take of the app's data (Android 11 and older; data_extraction_rules.xml is Android 12's
+   and later): everything but the firmware folder, which holds copies of the user's own firmware (the PSP's fonts
+   from their PSP's flash0), and firmware never leaves the user's devices through Phobos. After a restore the fonts
+   are imported again: by themselves from Download/FLASH0DUMP where the app can read it, else from Settings.
    See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude domain="file" path="firmware/" />
 </full-backup-content>

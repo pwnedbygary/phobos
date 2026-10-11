@@ -112,7 +112,7 @@ fun EmulationMenu(
     val laserActive = systemName == "Mega LD" || systemName == "PC Engine LD"
     val discLabel = when {
         systemName.contains("Nintendo 64") -> "Disk"
-        systemName.contains("PlayStation") -> "Disc"
+        systemName == "PlayStation" -> "Disc"
         laserActive -> "Side"
         else -> null
     }
@@ -232,7 +232,7 @@ fun EmulationMenu(
                             item { N64Section(viewModel, settings, onOpenExperimental = { experimentalOpen = true }) }
                             saveTransfer?.let { transfer -> item { SaveDataSection(transfer) } }
                         }
-                        if (systemName.contains("PlayStation", ignoreCase = true)) {
+                        if (systemName == "PlayStation") {
                             item {
                                 MenuSection("DualShock") {
                                     var ps1Analog by remember { mutableStateOf(settings.ps1AnalogMode) }

@@ -1,6 +1,7 @@
 package com.phobos.emulator.ui.touch
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -30,6 +31,7 @@ class TouchLayoutsTest {
 
     @Test fun librarySystemsMapToFamilies() {
         assertEquals(TouchFamily.PS1, TouchFamily.of("PlayStation"))
+        assertEquals(TouchFamily.PSP, TouchFamily.of("PlayStation Portable"))
         assertEquals(TouchFamily.GB, TouchFamily.of("Game Boy Color"))
         assertEquals(TouchFamily.MEGA_DRIVE, TouchFamily.of("Mega CD"))
         assertEquals(TouchFamily.MEGA_DRIVE, TouchFamily.of("Mega 32X"))
@@ -49,13 +51,26 @@ class TouchLayoutsTest {
     }
 
     @Test fun playStationFaceButtonsMatchNativeBits() {
-        val face = TouchLayouts.forFamily(TouchFamily.PS1).elements.first { it.id == "face" } as ButtonCluster
-        val bitsByGlyph = face.buttons.associate { it.glyph to it.bits }
-        // PhobosRunner resolveButtonBit(): Cross = A, Circle = B, Square = X, Triangle = Y.
-        assertEquals(com.phobos.emulator.PhobosCore.Input.A, bitsByGlyph[Glyph.PS_CROSS])
-        assertEquals(com.phobos.emulator.PhobosCore.Input.B, bitsByGlyph[Glyph.PS_CIRCLE])
-        assertEquals(com.phobos.emulator.PhobosCore.Input.X, bitsByGlyph[Glyph.PS_SQUARE])
-        assertEquals(com.phobos.emulator.PhobosCore.Input.Y, bitsByGlyph[Glyph.PS_TRIANGLE])
+        // The PSP's buttons have the PlayStation's names, so resolveButtonBit() maps them alike.
+        for (family in listOf(TouchFamily.PS1, TouchFamily.PSP)) {
+            val face = TouchLayouts.forFamily(family).elements.first { it.id == "face" } as ButtonCluster
+            val bitsByGlyph = face.buttons.associate { it.glyph to it.bits }
+            // PhobosRunner resolveButtonBit(): Cross = A, Circle = B, Square = X, Triangle = Y.
+            assertEquals(com.phobos.emulator.PhobosCore.Input.A, bitsByGlyph[Glyph.PS_CROSS])
+            assertEquals(com.phobos.emulator.PhobosCore.Input.B, bitsByGlyph[Glyph.PS_CIRCLE])
+            assertEquals(com.phobos.emulator.PhobosCore.Input.X, bitsByGlyph[Glyph.PS_SQUARE])
+            assertEquals(com.phobos.emulator.PhobosCore.Input.Y, bitsByGlyph[Glyph.PS_TRIANGLE])
+        }
+    }
+
+    @Test fun thePspHasOneShoulderEachSideAndItsStick() {
+        val elements = TouchLayouts.forFamily(TouchFamily.PSP).elements
+        val bits = elements.filterIsInstance<ButtonCluster>().flatMap { it.buttons }.map { it.bits }
+        // PhobosRunner resolveButtonBit(): L = L1, R = R1; the PSP has no L2, R2, L3 or R3.
+        val input = com.phobos.emulator.PhobosCore.Input
+        assertTrue(input.L1 in bits && input.R1 in bits)
+        assertFalse(input.L2 in bits || input.R2 in bits || input.L3 in bits || input.R3 in bits)
+        assertEquals(listOf(Stick.LEFT), elements.filterIsInstance<AnalogElement>().map { it.stick })
     }
 
     @Test fun defaultLayoutsDoNotOverlap() {

@@ -64,7 +64,9 @@ are excluded; copying the portable template elsewhere requires explicit adoption
 - No blind timing, cache-coherency, renderer or RSP replacement. Profiling must be
   bounded, opt-in and overhead-tested; preserve normal release behavior.
 - Never publish keys, private workspace metadata, copyrighted games/firmware,
-  raw captures or diagnostic binaries without explicit appropriate authorization.
+  raw captures or diagnostic binaries without explicit appropriate authorization. Authorized by the owner on
+  2026-10-06: the PSP core's built test programs (`tests/psp/programs`, built from `tools/psp-test-programs`) and
+  their PSP's round-3 GE measurements (`tests/psp/measurements/ge-round3`), kept so any machine runs every test.
   Do not uninstall or clear app data to run a comparison.
 
 See [coordinator prompt](coordinator-prompt.md),

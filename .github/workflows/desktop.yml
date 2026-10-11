@@ -4,6 +4,11 @@ name: Desktop Build
 # Linux x86-64 AppImage with its .zsync, a Windows x64 Phobos.exe and a universal macOS
 # Phobos.app. A version tag attaches them to that tag's GitHub Release, where the AppImage's
 # update information looks for the .zsync. The Android APKs stay on android.yml.
+#
+# Each carries FFmpeg's libavcodec and libavutil for the PSP's music and movies, built by CMake
+# with thirdparty/ffmpeg/build.sh from FFmpeg's release, which is kept (the build named by its
+# own name: the script, the system, the compiler) and published beside each package: the
+# libraries' complete source, as the LGPL asks (LICENSE, FFmpeg).
 
 # Branches build through their pull requests; a push trigger for them too would run every
 # commit twice.
@@ -38,13 +43,24 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            g++ ninja-build pkg-config file \
+            g++ ninja-build pkg-config file nasm curl xz-utils \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev \
             libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev \
             libdrm-dev libgbm-dev libegl1-mesa-dev libgl1-mesa-dev \
             libasound2-dev libpulse-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev \
             libgtk-3-dev
           pip install --user cmake==3.31.6
+
+      - name: Name the FFmpeg build
+        id: ffmpeg
+        run: echo "name=$(bash thirdparty/ffmpeg/build.sh --name host)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: .cache/ffmpeg
+          key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
+          restore-keys: ffmpeg-${{ runner.os }}-host-
 
       - name: Build
         run: |
@@ -54,6 +70,9 @@ jobs:
       - name: Package AppImage and zsync
         run: bash scripts/package-linux-appimage.sh build/linux-x64
 
+      - name: Stage FFmpeg's source
+        run: cp .cache/ffmpeg/ffmpeg-*.tar.xz dist/
+
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
@@ -61,6 +80,7 @@ jobs:
           path: |
             dist/*.AppImage
             dist/*.AppImage.zsync
+            dist/ffmpeg-*.tar.xz
           if-no-files-found: error
 
   windows:
@@ -76,6 +96,7 @@ jobs:
           fetch-depth: 0
           filter: blob:none
 
+      # make, diffutils, curl and xz build FFmpeg (thirdparty/ffmpeg/build.sh, run by CMake), nasm its x86 assembly.
       - name: Set up MSYS2 (UCRT64)
         uses: msys2/setup-msys2@v2
         with:
@@ -83,10 +104,26 @@ jobs:
           update: true
           install: >-
             git
+            make
+            diffutils
+            curl
+            xz
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-nasm
             mingw-w64-ucrt-x86_64-python
+
+      - name: Name the FFmpeg build
+        id: ffmpeg
+        run: echo "name=$(bash thirdparty/ffmpeg/build.sh --name host)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: .cache/ffmpeg
+          key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
+          restore-keys: ffmpeg-${{ runner.os }}-host-
 
       - name: Build
         run: |
@@ -96,11 +133,16 @@ jobs:
       - name: Package Phobos.exe
         run: bash scripts/package-windows.sh build/windows-x64
 
+      - name: Stage FFmpeg's source
+        run: cp .cache/ffmpeg/ffmpeg-*.tar.xz dist/
+
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: phobos-windows-x64
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/ffmpeg-*.tar.xz
           if-no-files-found: error
 
   macos:
@@ -113,8 +155,21 @@ jobs:
           fetch-depth: 0
           filter: blob:none
 
-      - name: Install Ninja
-        run: brew install ninja
+      # nasm assembles FFmpeg's x86 code for the app's x86_64 half.
+      - name: Install Ninja and nasm
+        run: brew install ninja nasm
+
+      # As CMakePresets.json's macos-universal asks: both architectures, macOS 11 and later.
+      - name: Name the FFmpeg build
+        id: ffmpeg
+        run: echo "name=$(MACOSX_DEPLOYMENT_TARGET=11.0 bash thirdparty/ffmpeg/build.sh --name macos arm64 x86_64)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: .cache/ffmpeg
+          key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
+          restore-keys: ffmpeg-${{ runner.os }}-macos-
 
       - name: Build
         run: |
@@ -158,11 +213,16 @@ jobs:
           NOTARY_KEYCHAIN_PROFILE: ${{ steps.signing.outputs.notary }}
         run: bash scripts/package-macos-app.sh build/macos-universal
 
+      - name: Stage FFmpeg's source
+        run: cp .cache/ffmpeg/ffmpeg-*.tar.xz dist/
+
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: phobos-macos-universal
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/ffmpeg-*.tar.xz
           if-no-files-found: error
 
   release:
