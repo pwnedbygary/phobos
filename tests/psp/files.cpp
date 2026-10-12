@@ -138,7 +138,6 @@ static auto fileFolders() -> void {
 //time zone and daylight saving time settings agree with the clock's local time.
 static auto fileDates() -> void {
   HostFolder folder;
-  folder.put("data/File.txt", "hello");
   KernelMachine m;
   m.kernel.mount("ms0", folder.path.string());
   using Date = std::array<u32, 6>;
@@ -147,12 +146,17 @@ static auto fileDates() -> void {
     for(u32 n = 0; n < 18; n++) read[n / 6][n % 6] = m.system.memory.read(2, at + n / 6 * 16 + n % 6 * 2);
     return read;
   };
-  auto dated = [&](s64 changed, s64 clock) {  //the file changed (seconds since 1970), the clock's now: its dates
+  //A file made afresh and changed (seconds since 1970, before now, so that its made date, its birth time where the
+  //host keeps one but no later than the change, is the change too), the clock's now: its dates.
+  u32 files = 0;
+  auto dated = [&](s64 changed, s64 clock) {
+    std::string name = "data/F" + std::to_string(files++) + ".TXT";
+    folder.put(name, "hello");
     utimbuf times{std::time_t(changed), std::time_t(changed)};
-    utime((folder.path / "data/File.txt").c_str(), &times);
+    utime((folder.path / name).c_str(), &times);
     m.kernel.startTime = u64(clock) * 1'000'000;
     m.system.memory.fill(Buffer, 0xcc, 88);
-    CHECK(m.call("sceIoGetstat", {m.string("ms0:/data/File.txt"), Buffer}), 0);
+    CHECK(m.call("sceIoGetstat", {m.string("ms0:/" + name), Buffer}), 0);
     return dates(Buffer + 16);
   };
   auto all = [](const Date& date) { return std::array<Date, 3>{date, date, date}; };
@@ -180,8 +184,8 @@ static auto fileDates() -> void {
     CHECK((dated(Winter, Winter + Day) == all({2026, 1, 15, 7, 0, 0})), true);
     CHECK(setting(6), u32(-300));
     CHECK(setting(7), 0);
-    //2026-11-01 05:30 UTC is 01:30 EDT; 06:10 UTC, 01:10 EST
-    CHECK((dated(1'793'511'000, 1'793'513'400) == all({2026, 11, 1, 1, 10, 0})), true);
+    //2025-11-02 05:30 UTC is 01:30 EDT; 06:10 UTC, 01:10 EST
+    CHECK((dated(1'762'061'400, 1'762'063'800) == all({2025, 11, 2, 1, 10, 0})), true);
     CHECK((dated(172'065'600, Summer) == all({1980, 1, 1, 0, 0, 0})), true);  //1975-06-15
     CHECK((dated(315'532'800, Summer) == all({1980, 1, 1, 0, 0, 0})), true);  //1979-12-31 19:00 EST
     CHECK((dated(315'550'801, Summer) == all({1980, 1, 1, 0, 0, 1})), true);

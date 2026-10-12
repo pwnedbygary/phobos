@@ -105,11 +105,12 @@ modes' clusters and KB. Where the app shows the dialogs, what they answer withou
 request isn't traced: a dialog backed out of, the notices that there's nothing to load or
 delete, and the deletes from a list. Names are quoted, their bytes outside printable ASCII
 written `\xNN`. For example (After Burner: Black Falcon's autoload, then Brandish: The Dark
-Revenant's load from a list):
+Revenant's save to a list on an empty stick, and in another run its load from the list):
 
 ```
 [002138] savedata: mode 0 (autoload), size 1536, game "ULUS10244", save "0000", file "AFTRBURN.BIN", buffer 0x09c5b570 of 16368, data 16368, "ULUS102440000" there -> 0x00000000, read 16368
-[000451] savedata: mode 4 (listload), size 1536, game "NPUH10195", save "0001", list "0001" "0002" "0003" "0004" "0005" "0006" "0007" "0008" (99 in all), chosen "0001", file "SAVEDATA.DAT", buffer 0x09dbc7b0 of 105260, data 0, "NPUH101950001" there -> 0x00000000, read 105260, save "0001"
+[000474] savedata: mode 5 (listsave), size 1536, game "NPUH10195", save "", list "0001" "0002" "0003" "0004" "0005" "0006" "0007" "0008" (99 in all), focus 3, chosen "0001", file "SAVEDATA.DAT", buffer 0x09dd8cd0 of 105260, data 105260, "NPUH101950001" not there, title "Brandish The Dark Revenant" -> 0x00000000, save "0001"
+[000451] savedata: mode 4 (listload), size 1536, game "NPUH10195", save "", list "0001" "0002" "0003" "0004" "0005" "0006" "0007" "0008" (99 in all), focus 3, chosen "0001", file "SAVEDATA.DAT", buffer 0x09dbc7b0 of 105260, data 0, "NPUH101950001" there -> 0x00000000, read 105260, save "0001"
 ```
 
 The frames the PNGs name are the frames the screen presented, one after another from the

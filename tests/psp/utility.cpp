@@ -869,7 +869,7 @@ static auto savedataListAnswers() -> void {
     check(__LINE__, "nothing", saved() == "" && m.system.memory.readString(Buffer, 8) == "bad" && folders() == before,
           true);
   }
-  stick.put("PSP/SAVEDATA/NPJH50459DATA01/OTHER.BIN", "other");  //broken: its data file isn't there
+  std::filesystem::remove(stick.path / "PSP/SAVEDATA/NPJH50459DATA01/DATA.BIN");  //(the list save's) broken
   listed(4, "", list, 1);  //the first there, broken: the first that isn't
   CHECK(runSave(m), 0);
   CHECK(m.system.memory.readString(Buffer, 8) == "third" && saved() == "DATA03", true);
