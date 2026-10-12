@@ -95,6 +95,10 @@ polished.
   [Building](#building-phobos)).
 - **Saves and states:** the memory stick is a folder, shared by every game or at a path you choose. Save states are
   versioned, so states saved by earlier builds keep loading.
+- **The system's dialogs:** a game's messages, its on-screen keyboard and its save and load screens appear as the
+  app's own dialogs over the running game, answered by touch or a controller (the confirm button the game uses:
+  circle in many Japanese games): Yes/No questions, names typed with Android's keyboard, and lists of saves with their
+  icons, titles, dates and sizes to load, save over or delete. The desktop program answers them at once, as before.
 - **Controls:** the PSP's own touch layout, and controllers mapped as on every other system, whose right stick can
   be the PSP's face buttons, its D-pad or its analog stick (PSP Right Stick, in Settings and the pause menu).
 - **Compatibility:** in the [compatibility report](docs/psp-compatibility.md)'s runs (each of 266 retail games run
