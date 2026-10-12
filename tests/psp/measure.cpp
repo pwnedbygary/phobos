@@ -245,16 +245,12 @@ static auto describeStatuses(const std::vector<u32>& ours, const std::vector<u32
   std::printf("  %-24s here %s\n  %-24s there %s\n", "ge-statuses", summary(ours).c_str(), "", summary(theirs).c_str());
 }
 
-//The GE's reciprocal as the core takes it (docs/psp-core.md, part 60: 128 chords, two starts two counts low), for
-//q in [0.5, 1) given as its 13 or 14 fraction bits: the chord's 16-bit value (q's reciprocal in units of 2^-15).
+//The GE's reciprocal as the core takes it (docs/psp-core.md, part 75: 128 chords, each the straight line whose worst
+//error is least, chord 0 starting at exactly 1), for q in [0.5, 1) given as its 13 or 14 fraction bits: the chord's
+//16-bit value (q's reciprocal in units of 2^-15). (measured6.cpp checks each chord against the true reciprocal.)
 static auto chordValue(u32 fraction, u32 bits) -> u32 {
-  s32 starts[129];
-  for(u32 s = 0; s < 128; s++) starts[s] = s32((16'777'216 + (128 + s) / 2) / (128 + s));
-  starts[128] = 65536;
   u32 chord = fraction >> (bits - 7), at = fraction << (15 - bits) & 255;
-  s32 run = starts[chord + 1] - starts[chord], whole = run >> 2, quarters = run & 3;
-  s32 slope = whole + (quarters == 3 || (quarters == 2 && (whole & 1)));
-  s32 start = starts[chord] - (chord == 5 || chord == 58 ? 2 : 0);
+  auto [start, slope] = GE::reciprocalChord(chord);
   return u32((64 * start + 63 + slope * s32(at)) >> 7);
 }
 
@@ -292,6 +288,42 @@ static auto move(KernelMachine& m, u32 from, u32 to) -> void {
 static auto waitFor(KernelMachine& m, u32 frames, const std::function<bool()>& done) -> bool {
   for(u32 frame = 0; frame < frames && !done() && !m.kernel.exited; frame++) m.kernel.run(Kernel::VblankCycles);
   return done();
+}
+
+//Round 6's files as this core writes them, for measured6.cpp's comparisons with the owner's PSP: the measure test's
+//run hands its over; otherwise the program's round 6 alone (its menu's first line, chosen as it starts) runs once, in
+//a machine of its own, the first time they're asked for. None without the program.
+static std::unique_ptr<HostFolder> round6Kept;
+static auto keepRound6(const std::filesystem::path& results) -> void {
+  round6Kept = std::make_unique<HostFolder>();
+  std::vector<std::string> names = {"ge-statuses", "manifest6"};
+  for(auto& file : measureFiles6) names.push_back(file.name);
+  for(auto& file : timingFiles6) names.push_back(file.name);
+  for(auto& name : names) {
+    auto file = name == "manifest6" ? name + ".txt" : name + ".bin";
+    std::error_code error;
+    std::filesystem::copy_file(results / file, round6Kept->path / file, error);
+  }
+}
+auto round6Files() -> std::filesystem::path {
+  if(round6Kept) return round6Kept->path;
+  auto program = testProgram("pspmeasure.elf");
+  if(program.empty()) return {};
+  HostFolder stick;
+  auto game = stick.path / "PSP/GAME/PSPMEASURE";
+  std::filesystem::create_directories(game);
+  KernelMachine m;
+  m.system.recompiler.enabled = true;
+  m.kernel.mount("ms0", stick.path.string());
+  std::string error;
+  bool loaded = m.kernel.load(program.data(), program.size(), "ms0:/PSP/GAME/PSPMEASURE/EBOOT.PBP", error);
+  CHECK(loaded, true);
+  if(!loaded) return {};
+  auto results = game / "results" / "ge";
+  press(m, Cross);
+  CHECK(waitFor(m, 20000, [&] { return std::filesystem::exists(results / "curves-count-v-255.bin"); }), true);
+  keepRound6(results);
+  return round6Kept->path;
 }
 
 static auto pspMeasure() -> void {
@@ -412,13 +444,13 @@ static auto pspMeasure() -> void {
   CHECK(waitFor(m, 3000, exists(results / "persp-sprite.bin")), true);
   press(m, Cross);
   onlyStallCheckStalled();
-  //the GE's round 6, its patch divisions past 64 along v last (the core draws nothing of such a surface, so none
-  //stalls here)
+  //the GE's round 6, its patch divisions past 64 along v last (drawn, as on the PSP: none stalls)
   move(m, GeRound5Line, GeRound6Line);
   press(m, Cross);
   CHECK(waitFor(m, 20000, exists(results / "curves-count-v-255.bin")), true);
   press(m, Cross);
   onlyStallCheckStalled();
+  keepRound6(results);
   //leaving
   move(m, GeRound6Line, LeaveLine);
   press(m, Cross);

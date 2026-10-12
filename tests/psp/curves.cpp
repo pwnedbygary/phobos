@@ -634,8 +634,8 @@ static auto curvesMalformed() -> void {
   wide.patch(GE::Spline, 0x19f, 255 | 4 << 8 | 3 << 16 | 3 << 18, row);
   wide.run();
   CHECK(wide.pixel(240, 120), 0x00ff00u);
-  //The division counts are 7 bits, and more than 64 draws nothing (round 4's curves-count tests: docs/psp-core.md,
-  //part 60). A 4x4 Bezier as points in through mode, across x 16.1 to 208.1 on row 10 (each lit pixel one vertex,
+  //The division counts are 7 bits, and more than 64 along u draws nothing (round 4's curves-count tests:
+  //docs/psp-core.md, part 60). A 4x4 Bezier as points in through mode, across x 16.1 to 208.1 on row 10 (each lit pixel one vertex,
   //the lit pixels counted): 64 divisions along u light 65 pixels; 128 divides as 0, so as 1, lighting the 2 ends;
   //65 and 127 (and 200, which is 72) light none, but their points are still read.
   for(u32 divisions : {64u, 128u, 65u, 127u, 200u}) {
@@ -651,6 +651,22 @@ static auto curvesMalformed() -> void {
     for(u32 x = 0; x < 480; x++) lit += d.pixel(x, 10) != 0;
     CHECK(lit, divisions == 64 ? 65u : divisions == 128 ? 2u : 0u);
     CHECK(d.ge.vertexAddress, PatchPoints + 16 * 24);
+  }
+  //Along v any count is drawn, past 64 in 64ths from both ends (round 6's curves-count-v: docs/psp-core.md, part 75):
+  //the same Bezier turned, down column 300 from 16.1 to 208.1, lights a pixel each 64th, 65, for 64, 65, 100 and 200
+  //(72) divisions alike.
+  for(u32 divisions : {64u, 65u, 100u, 200u}) {
+    Surface d;
+    std::vector<FloatPoint> points;
+    for(u32 j = 0; j < 4; j++) {
+      for(u32 i = 0; i < 4; i++) points.push_back({0, 0, 0xffff'ffff, 300, 16.1f + j * 64, 0});
+    }
+    d.put(GE::PatchPrimitive, 2), d.put(GE::PatchDivision, 1 | divisions << 8);
+    d.patch(GE::Bezier, 0x80'019f, 4 | 4 << 8, points);
+    d.run();
+    u32 lit = 0;
+    for(u32 y = 0; y < 272; y++) lit += d.pixel(300, y) != 0;
+    CHECK(lit, 65u);
   }
   //not numbers: nothing drawn (3D: not on the screen; through mode: held to the GE's range, off this one), the
   //colors still worked out
