@@ -1797,7 +1797,8 @@ static auto geOwnTexture() -> void {
 //its picture, each into one half of it from the other (filtered, one reaching a texel past the right edge, which
 //repeats round to column 0, where it doesn't draw), one taking columns it doesn't draw in its own rows, and those it
 //can't: one taking rows it draws, two taking a row or a column it draws by a filter's second texel, one cut at the
-//near plane, one in perspective (w 1 to 2), and a PRIM of two triangles, the second taking the first's pixels. It
+//near plane, one in perspective (w 1 to 2), one whose q is -1 (every pixel the last texel, which it draws), and a
+//PRIM of two triangles, the second taking the first's pixels. It
 //comes out as reading every texture from memory as it's drawn (a machine without watching()) does on one thread,
 //with 1, 2, 4 and 8 threads, batches shared out however small.
 static auto geOwnTexture3D() -> void {
@@ -1820,6 +1821,7 @@ static auto geOwnTexture3D() -> void {
     for(u32 n : {0, 4, 8}) ge.world[n] = ge.view[n] = 0x3f'8000;
     for(u32 n : {0, 5}) ge.projection[n] = 0x3f'8000;
     ge.projection[11] = 0xbf'8000;  //w = -z, and z 0: a corner past the near plane is one behind the camera
+    ge.textureMatrix[0] = ge.textureMatrix[4] = 0x3f'8000, ge.textureMatrix[11] = 0xbf'8000;  //s = u, t = v, q = -1
     auto& c = ge.commands;
     auto f24 = [](float value) { return std::bit_cast<u32>(value) >> 8; };
     c[GE::ViewportXScale] = c[GE::ViewportYScale] = c[GE::ViewportZScale] = f24(1);
@@ -1865,6 +1867,12 @@ static auto geOwnTexture3D() -> void {
                                     {q.u0 / 64, q.v1 / 64, 0xffc0'e0ff, q.x0 * w0, q.y1 * w0, q.z0},
                                     {q.u1 / 64, q.v1 / 64, 0xffc0'e0ff, q.x1 * w1, q.y1 * w1, q.z1}});
     }
+    //a quad whose q is -1 at every corner (the texture matrix's), each pixel taking the last texel of a 16x16 view of
+    //the picture, which it draws in its row 15
+    list.put(GE::TextureSize0, 4 << 8 | 4), list.put(GE::TextureFilter, 0), list.put(GE::TextureMapMode, 1 | 1 << 8);
+    put(GE::TriangleStrip, 0x19f, {{0.1f, 0.55f, 0xffc0'e0ff, 0, 10, -1}, {0.3f, 0.55f, 0xffc0'e0ff, 32, 10, -1},
+                                  {0.1f, 0.8f, 0xffc0'e0ff, 0, 20, -1}, {0.3f, 0.8f, 0xffc0'e0ff, 32, 20, -1}});
+    list.put(GE::TextureMapMode, 0), list.put(GE::TextureSize0, 6 << 8 | 6);
     //two triangles, the second taking texels where the first draws, each apart from its own
     list.put(GE::TextureFilter, 0);
     put(GE::Triangles, 0x19f, {{40.0f / 64, 8.0f / 64, 0xffff'ffff, 0, 40, -1},

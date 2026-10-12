@@ -9856,19 +9856,19 @@ fell below 85 frames a second on the Mac; its slow scene wasn't found.
    buffer in strips 16 and 32 wide, each deferred). Anything else (a q that changes, or one of 0 or below, whose pixels
    all take the held coordinate since part 75; 2D triangles, lines, points) marks the whole texture, as before.
 2. **3D triangles over their own texture from a copy where their reads and writes are apart** (`draw.cpp`'s
-   `readsApart()`, `triangleJob()`). A primitive drawing over its own texture (`drawsOver()`, by its scissor
-   rectangle) was drawn at once on the GE's thread, a pixel at a time, reading each texel from memory, after
-   everything waiting was drawn (part 47). Killzone's menus blur their picture so: about 800 3D quads a frame into a
-   strip right of the 480 columns shown, from one half of the strip into the other, then back over the screen in
-   eight strips. Now, without a hardware renderer, 3D vertices are transformed before the texture is decoded, and
-   `readsApart()` sets the primitive's triangles up as `triangle()` would draw them (its setup is `triangleJob()`,
-   shared) and asks `drawsOver()` of each triangle's pixels (its box) against each rectangle of texels any of them may
-   take (`texelSpan()`, `texelRuns()`): where no byte any may write (in its rows, or its depth buffer where it writes
-   depth) is one any may read, no pixel takes a texel the primitive has drawn by then, so a copy taken just before it
-   draws the same as memory read as it draws, and it's decoded (or deferred) and batched like any other. Triangles cut
-   at the near plane, a q that changes, swizzled or DXT textures and anything but triangles stay as before. Of
-   Killzone's quads, 7 a frame read pixels they draw and stay at once (the strip's first pass, wrapping round to the
-   strip, and one screen strip reaching it).
+   `readsApart()`, `triangleJob()`). A primitive drawing over its own texture (`drawsOver()`, by its scissor rectangle)
+   was drawn at once on the GE's thread, a pixel at a time, reading each texel from memory, after everything waiting was
+   drawn (part 47). Killzone's menus blur their picture so: about 800 3D quads a frame into a strip right of the 480
+   columns shown, from one half of the strip into the other, then back over the screen in eight strips. Now, without a
+   hardware renderer, 3D vertices are transformed before the texture is decoded, and `readsApart()` sets the primitive's
+   triangles up as `triangle()` would draw them (its setup is `triangleJob()`, shared) and asks `drawsOver()` of each
+   triangle's pixels (its box) against each rectangle of texels any of them may take (`texelSpan()`, `texelRuns()`):
+   where no byte any may write (in its rows, or its depth buffer where it writes depth) is one any may read, no pixel
+   takes a texel the primitive has drawn by then, so a copy taken just before it draws the same as memory read as it
+   draws, and it's decoded (or deferred) and batched like any other. Triangles cut at the near plane, a q that changes
+   or one of 0 or below, swizzled or DXT textures and anything but triangles stay as before. Of Killzone's quads, 7 a
+   frame read pixels they draw and stay at once (the strip's first pass, wrapping round to the strip, and one screen
+   strip reaching it).
 3. **Deferred copies decoded into the room of earlier ones** (`GE::spares`, `clearBatch()`). Each deferred copy took a
    buffer of its rows by the texture's width and cleared it: 280 KB for each of Killzone's 800 blur passes. The texels'
    room of copies done with is kept, four at most, behind one pointer (the machine grows by 8 bytes, which the states
@@ -9965,13 +9965,14 @@ Every change is the host's alone; nothing a game can see moves.
   pinned, every frame's picture and all of VRAM hashed with drawing settled, then RAM and the machine's state, are
   identical over all 3600 frames, at `21753bfb1` and again at the last commit.
 - Master moved on while this was open: #221 (part 73, the dialogs) and #222 (part 75, round 6's pictures), merged in.
-  Part 75 holds a pixel's coordinates at the texture's last texel where its q is 0 or below, which `texelSpan()`
-  didn't know: a triangle whose q is the same at every pixel and 0 or below would have had its deferred texture
-  decoded where R(q) put its coordinates, not at that texel. Neither branch alone has it; the merge's next commit
-  (`387c19c45`) decodes such a triangle's texture whole, and the deferred-texture group draws one (a quad projected by
-  the texture matrix to q = -1), which fails without it. Then the merged branch against master (`caee1a26f`) in all 24
-  scenes the same way, 60 frames at 7 threads and at 1: identical, every one. The library runs above are of the
-  branch before the merges.
+  Part 75 holds a pixel's coordinates at the texture's last texel where its q is 0 or below, which `texelSpan()` didn't
+  know: a triangle whose q is the same at every pixel and 0 or below would have had its deferred texture decoded where
+  R(q) put its coordinates, not at that texel, and could have been drawn from a copy over its own texture while drawing
+  that texel (`readsApart()` asks `texelSpan()` too). Neither branch alone has it; the merge's next commit (`387c19c45`)
+  decodes such a triangle's texture whole and draws it at once over its own, and both new groups draw one (a quad
+  projected by the texture matrix to q = -1), each failing without it. Then the merged branch against master
+  (`caee1a26f`) in all 24 scenes the same way, 60 frames at 7 threads and at 1: identical, every one. The library runs
+  above are of the branch before the merges.
 
 ### Checks
 
@@ -9981,13 +9982,13 @@ Every change is the host's alone; nothing a game can see moves.
   and 2D sprites (two of one PRIM far apart), each over a picture redrawn a little other before it, so that a copy
   decoded into an earlier one's room shows a texel left out; at 1 thread and at 2, 4 and 8, fours on and off; Looks
   sharing a copy, and one of 25 pieces, checked directly), "ge 3D triangles over their own texture" (quads apart and
-  not, cut at the near plane, in perspective, a PRIM whose second triangle reads what its first draws; against a machine
-  that never decodes; a lone quad apart checked to wait in a batch, decoded) and "ge FINISH after a quiet function" (a
-  FINISH's callback at the same count of a spin polling a quiet function as polling one that isn't, on both engines;
-  each of the twelve dispatched as quiet and making nothing due sooner; one not marked, one taking a FINISH and one
-  starting a call not quiet). `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 307
-  checks before the merges and 318 after, 0 failed. `ares/psp/psp.cpp` compiles for arm64 with NDK 28.2, and with GCC 11
-  as the base does (four.cpp's known warnings).
+  not, cut at the near plane, in perspective, one whose q is -1 drawing the texel all its pixels take, a PRIM whose
+  second triangle reads what its first draws; against a machine that never decodes; a lone quad apart checked to wait in
+  a batch, decoded) and "ge FINISH after a quiet function" (a FINISH's callback at the same count of a spin polling a
+  quiet function as polling one that isn't, on both engines; each of the twelve dispatched as quiet and making nothing
+  due sooner; one not marked, one taking a FINISH and one starting a call not quiet). `tests/allegrex/run-tests.sh` 58
+  groups, 0 failures; `tests/psp/ares/run-tests.sh` 307 checks before the merges and 318 after, 0 failed.
+  `ares/psp/psp.cpp` compiles for arm64 with NDK 28.2, and with GCC 11 as the base does (four.cpp's known warnings).
 - Broken versions, each in a copy of the tree, that the new groups fail: all eleven of the reach's (the filtered second
   texel left out, the first texel one on, the decode's last row or last column left out, a q that changes taken as one,
   a repeat taken as held, the second run round the edge dropped, a corner left out, sharing Looks taking only the
@@ -10010,8 +10011,8 @@ Every change is the host's alone; nothing a game can see moves.
   rasterizer itself, or the Vulkan renderer.
 - Killzone's blur: its passes each read the one before, so each batch waits for the last to be drawn, and 7 quads a
   frame still read pixels they draw and are drawn at once.
-- A triangle cut at the near plane, a q that changes, 2D triangles, lines and points still decode a deferred texture
-  whole, and stay drawn at once over their own texture.
+- A triangle cut at the near plane, a q that changes or one of 0 or below, 2D triangles, lines and points still decode a
+  deferred texture whole, and stay drawn at once over their own texture.
 - MX vs. ATV Reflex's races and On the Edge's slow scene weren't reached (above).
 - Chinatown Wars' long frames weren't seen on the Mac, where the auto-save notice runs at 106 to 112 frames a second
   with one list every other frame and no file read; they're to be traced on the RP6 (the app's presentation, or its

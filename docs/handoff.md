@@ -67,9 +67,9 @@ software renderer's every picture, VRAM, RAM and the machine's end state are the
   other 28 hash identical to the base's at every one of 3600 frames. Review: no bug; its test gaps and nits fixed; a
   delta review passed, its points fixed; a delta review of the last commit and the docs passed, its points fixed.
 - **Merged with master** (#221, #222): round 6 holds a pixel's coordinates at the last texel where q is 0 or below,
-  which the reach didn't know; the commit after the merge decodes such a triangle's texture whole (a new check fails
-  without it). The merged branch hashes identical to master (`caee1a26f`) in all 24 scenes at 7 and 1 threads; the
-  library runs are of the branch before the merges.
+  which the reach didn't know; the commit after the merge decodes such a triangle's texture whole and draws it at once
+  over its own texture (checks in both new groups fail without it). The merged branch hashes identical to master
+  (`caee1a26f`) in all 24 scenes at 7 and 1 threads; the library runs are of the branch before the merges.
 - **On the RP6, to measure**: base `5b2a564fa` (2.0.0-test-1's code) against this branch, Software at 7 threads, the
   scenes in `~/phobos-work/scratch/speed9/scenes` (a scene's `state` is an app save state's bytes; part 74's table says
   where each is from boot): expect Killzone's menu, Death Jr. II's character select, Sonic Rivals' stage, Activision
