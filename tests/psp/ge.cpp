@@ -1738,6 +1738,101 @@ static auto geOwnTexture() -> void {
   }
 }
 
+//3D triangles drawing over their own texture, from a copy where none of their pixels can take a texel any of them may
+//write (ge/draw.cpp's readsApart()): a 64x64 picture made in place, then quads with one w, as Killzone's menu blurs
+//its picture, each into one half of it from the other (filtered, one reaching a texel past the right edge, which
+//repeats round to column 0, where it doesn't draw), one taking columns it doesn't draw in its own rows, and those it
+//can't: one taking rows it draws, two taking a row or a column it draws by a filter's second texel, one cut at the
+//near plane, one in perspective (w 1 to 2), and a PRIM of two triangles, the second taking the first's pixels. It
+//comes out as reading every texture from memory as it's drawn (a machine without watching()) does on one thread,
+//with 1, 2, 4 and 8 threads, batches shared out however small.
+static auto geOwnTexture3D() -> void {
+  constexpr u32 Picture = 0x10'0000;  //(VRAM offset: 64 by 64, 8888)
+  //(each quad's left and right edges at a z of their own, its w -z: z above 0 is behind the camera)
+  struct Quad { float x0, y0, x1, y1, u0, v0, u1, v1, z0, z1; u32 filter; };
+  constexpr Quad Quads[] = {
+    {0, 32, 64, 64, 0.03f, 0.5f, 64.03f, 31.5f, -1, -1, 0x101},    //the top half into the bottom
+    {0, 0, 64, 32, 0.03f, 32.5f, 64.03f, 63.5f, -1, -1, 0x101},    //and back
+    {40, 32, 64, 64, 40.05f, 0.5f, 64.05f, 31.5f, -1, -1, 0x101},  //(the last column's second texel: column 0)
+    {0, 10, 20, 30, 30, 10, 50, 30, -1, -1, 0},                   //columns right of it in its own rows
+    {8, 8, 40, 40, 10, 30, 42, 62, -1, -1, 0x101},                //rows it draws
+    {0, 32, 32, 64, 0.03f, 1.5f, 32.03f, 32.5f, -1, -1, 0x101},   //its own first row, filtered, at its last
+    {32, 0, 64, 32, 1.5f, 0.03f, 32.5f, 32.03f, -1, -1, 0x101},   //its own first column likewise
+    {0, 32, 32, 64, 0.03f, 1.5f, 32.03f, 32.5f, -1, -1, 0x101},   //its own first row, filtered, at its last
+    {32, 0, 64, 32, 1.5f, 0.03f, 32.5f, 32.03f, -1, -1, 0x101},   //its own first column likewise
+    {44, 0, 60, 16, 44, 20, 60, 36, -1, 0.5f, 0},                 //cut at the near plane
+    {20, 40, 44, 60, 20, 4, 44, 24, -1, -2, 0x101},               //in perspective
+  };
+  auto build = [&](Memory& memory, GE& ge) {
+    for(u32 n = 0; n < 16; n++) ge.projection[n] = 0;
+    for(u32 n : {0, 4, 8}) ge.world[n] = ge.view[n] = 0x3f'8000;
+    for(u32 n : {0, 5}) ge.projection[n] = 0x3f'8000;
+    ge.projection[11] = 0xbf'8000;  //w = -z, and z 0: a corner past the near plane is one behind the camera
+    auto& c = ge.commands;
+    auto f24 = [](float value) { return std::bit_cast<u32>(value) >> 8; };
+    c[GE::ViewportXScale] = c[GE::ViewportYScale] = c[GE::ViewportZScale] = f24(1);
+    c[GE::ViewportXCenter] = c[GE::ViewportYCenter] = f24(2048), c[GE::ViewportZCenter] = f24(100);
+    c[GE::OffsetX] = c[GE::OffsetY] = 2048 << 4;
+    c[GE::TextureScaleU] = c[GE::TextureScaleV] = f24(1);
+    c[GE::MaxZ] = 0xffff;
+    ListWriter list{memory, ListA};
+    u32 vertex = Vertices;
+    struct V { float u, v; u32 color; float x, y, z; };
+    auto put = [&](u32 kind, u32 type, std::initializer_list<V> vertices) {
+      list.put(GE::VertexType, type);
+      list.to(GE::VertexAddress, vertex);
+      for(auto& v : vertices) {
+        for(float value : {v.u, v.v}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+        memory.write(4, vertex, v.color), vertex += 4;
+        for(float value : {v.x, v.y, v.z}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+      }
+      list.put(GE::Primitive, kind << 16 | vertices.size());
+    };
+    list.put(GE::FrameBufferPointer, Picture), list.put(GE::FrameBufferWidth, 64);
+    list.put(GE::FrameBufferPixelFormat, 3), list.put(GE::ShadeMode, 1);
+    list.put(GE::Scissor2, 63 | 63 << 10), list.put(GE::Region2, 63 | 63 << 10);
+    for(u32 n = 0; n < 12; n++) {
+      float x = n * 13 % 50, y = n * 7 % 40;
+      put(GE::Triangles, 0x80'019f, {{0, 0, 0xff10'2030 * (n + 1), x, y, 0}, {0, 0, 0x8000'ff00, x + 30, y + 9, 0},
+                                     {0, 0, 0xffff'0000, x + 11, y + 28, 0}});
+    }
+    list.put(GE::TextureMappingEnable, 1), list.put(GE::TextureAddress0, Picture);
+    list.put(GE::TextureBufferWidth0, 0x04 << 16 | 64), list.put(GE::TextureSize0, 6 << 8 | 6);
+    list.put(GE::TextureFormat, 3), list.put(GE::TextureFunction, 0);  //modulated
+    for(auto& q : Quads) {
+      list.put(GE::TextureFilter, q.filter);
+      float w0 = -q.z0, w1 = -q.z1;  //(x and y as far from the middle as w is, so that they land there)
+      put(GE::TriangleStrip, 0x19f, {{q.u0 / 64, q.v0 / 64, 0xffc0'e0ff, q.x0 * w0, q.y0 * w0, q.z0},
+                                    {q.u1 / 64, q.v0 / 64, 0xffc0'e0ff, q.x1 * w1, q.y0 * w1, q.z1},
+                                    {q.u0 / 64, q.v1 / 64, 0xffc0'e0ff, q.x0 * w0, q.y1 * w0, q.z0},
+                                    {q.u1 / 64, q.v1 / 64, 0xffc0'e0ff, q.x1 * w1, q.y1 * w1, q.z1}});
+    }
+    //two triangles, the second taking texels where the first draws, each apart from its own
+    list.put(GE::TextureFilter, 0);
+    put(GE::Triangles, 0x19f, {{40.0f / 64, 8.0f / 64, 0xffff'ffff, 0, 40, -1},
+                              {56.0f / 64, 8.0f / 64, 0xffff'ffff, 16, 40, -1},
+                              {40.0f / 64, 24.0f / 64, 0xffff'ffff, 0, 56, -1},
+                              {1.0f / 64, 41.0f / 64, 0xffff'ffff, 20, 40, -1},
+                              {9.0f / 64, 41.0f / 64, 0xffff'ffff, 36, 40, -1},
+                              {1.0f / 64, 49.0f / 64, 0xffff'ffff, 20, 56, -1}});
+    list.put(GE::Finish), list.put(GE::End);
+  };
+  auto drawn = [&](u32 threads, u64 shared, bool decoding) {
+    KernelMachine m;
+    if(!decoding) m.system.memory.watching = nullptr;  //(nothing kept decoded: Memory::canWatch())
+    m.system.ge.setThreads(threads);
+    m.system.ge.drawing.shared = shared;
+    build(m.system.memory, m.system.ge);
+    m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
+    m.system.ge.settle();
+    return m.system.memory.vram;
+  };
+  auto read = drawn(1, 8192, false);
+  for(u32 threads : {1u, 2u, 4u, 8u}) {
+    for(u64 shared : {u64(0), u64(8192)}) CHECK(drawn(threads, shared, true) == read, true);
+  }
+}
+
 //Block transfers among batches (ge/threads.cpp's drawnBefore()): each waits only for the drawing that writes what it
 //reads, or reads or writes what it writes, the rest going on being drawn or waiting in the batch being filled. A list
 //uploads two textures in turn into one place in VRAM nothing draws, each drawn with between (as God of War streams
@@ -2565,7 +2660,8 @@ auto geTests() -> Tests {
     {"ge deferred texture busy", geDeferredBusy}, {"ge deferred texture's texels as its jobs take them", geDeferredReach},
     {"ge loads through the depth buffer's views wait for the threads",
     geDepthViewLoads}, {"ge batches round the ring", geRing},
-    {"ge drawn over its own texture", geOwnTexture}, {"ge transfers among batches", geTransfers},
+    {"ge drawn over its own texture", geOwnTexture}, {"ge 3D triangles over their own texture", geOwnTexture3D},
+    {"ge transfers among batches", geTransfers},
     {"ge callbacks", geCallbacks}, {"ge suspend", geSuspend}, {"ge finish order", geFinishOrder},
     {"ge pause", gePause}, {"ge callbacks see the ge stopped", geCallbackState}, {"ge pause window", gePauseWindow},
     {"ge lists queued twice", geQueuedTwice}, {"ge suspending signals' callbacks", geSuspendedCallbacks},

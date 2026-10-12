@@ -427,9 +427,13 @@ struct GE {
   auto submit(Job& job) -> void;
   auto spriteJob(const Look& look, const Vertex& from, const Vertex& to, bool perspective, Job& job) const -> bool;
   auto readsAhead(const Look& look, const std::vector<Vertex>& vertices, u32 count) const -> bool;
+  auto readsApart(const Look& look, const Transform& t, const std::vector<Vertex>& vertices, u32 kind, u32 strip,
+                  s32 facing) const -> bool;
   auto rectangle(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto triangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing, bool perspective)
     -> void;
+  auto triangleJob(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, bool perspective,
+                   Job& job) const -> void;
   auto point(const Look& look, const Vertex& at) -> void;
   auto line(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto readVertices(u32 count, const VertexFormat& format) -> void;
