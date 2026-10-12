@@ -760,6 +760,7 @@ struct Kernel {
       u32 time = 0;              //when it was taken, in microseconds
       u32 buttons = 0;
       u8 x = 128, y = 128;       //the stick (centred unless sampling was analog)
+      u8 rightX = 128, rightY = 128;  //the host's right stick, the same way (not the PSP's: ctrl.cpp; not in states)
     };
     struct Latch {                 //since the latch was last read:
       u32 made = 0, broken = 0;    //buttons pressed, and let go
@@ -768,6 +769,7 @@ struct Kernel {
     };
     u32 buttons = 0;                  //what the player holds now (PSP_CTRL_* bits): the system sets these
     u8 analogX = 128, analogY = 128;  //the stick, 0-255 on each axis, 128 when left alone
+    u8 rightX = 128, rightY = 128;    //the host's right stick, the same way (a convention: ctrl.cpp; not in states)
     u32 cycle = 0, mode = 0;          //sampling cycle (0: at each vertical blank; else microseconds) and mode
     u64 nextSample = 0;               //with a cycle: when the next sample is due
     Sample samples[64];               //the last 64 samples, a ring: the next one goes over samples[next], the oldest

@@ -139,6 +139,8 @@ auto System::run() -> void {
   kernel.controller.buttons = controls.buttons();
   kernel.controller.analogX = controls.stick(controls.x);
   kernel.controller.analogY = controls.stick(controls.y);
+  kernel.controller.rightX = controls.stick(controls.rightX);
+  kernel.controller.rightY = controls.stick(controls.rightY);
   if(!kernel.exited) kernel.run(Kernel::VblankCycles);
 
   //Where the GPU presents on the host's window itself, the frame is shown there (present()), and the screen only
@@ -830,17 +832,18 @@ auto System::Controls::load(Node::Object parent) -> void {
   r        = node->append<Node::Input::Button>("R");
   select   = node->append<Node::Input::Button>("Select");
   start    = node->append<Node::Input::Button>("Start");
-  //named as the PlayStation's DualShock names its left stick, so front ends map it the same way
+  //named as the PlayStation's DualShock names its sticks, so front ends map them the same way
   x        = node->append<Node::Input::Axis>("L-Stick X");
   y        = node->append<Node::Input::Axis>("L-Stick Y");
+  rightX   = node->append<Node::Input::Axis>("R-Stick X");
+  rightY   = node->append<Node::Input::Axis>("R-Stick Y");
 }
 
 auto System::Controls::poll() -> void {
   for(auto& button : {up, down, left, right, triangle, circle, cross, square, l, r, select, start}) {
     platform->input(button);
   }
-  platform->input(x);
-  platform->input(y);
+  for(auto& axis : {x, y, rightX, rightY}) platform->input(axis);
 }
 
 //pspsdk's PSP_CTRL_* bits (pspctrl.h).

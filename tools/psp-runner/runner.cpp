@@ -15,7 +15,7 @@
 //  options:
 //    --frames N                 how many frames to run (default 3600, a minute of the PSP's time)
 //    --press "F:C,F:C,..."      the controls: F:C presses and holds C at frame F (a button, or a stick's value:
-//                                L-StickX:12345); F:C! releases C at frame F
+//                                L-StickX:12345, or the right stick's, R-StickY:-32768); F:C! releases C at frame F
 //    --script FILE              the presses in a file, one F:C per line ("#" begins a comment)
 //    --png-every K              write a PNG every K frames, into --out's folder
 //    --png-at F1,F2,...         write a PNG at each of these frames, into --out's folder
@@ -258,12 +258,15 @@ auto numberText(u32 number) -> std::string {
 
 //A press item, "F:C": the frame, and the control it names: a button (its node's name, "!" after it for a
 //release), or a stick's axis with its value ("L-StickX:V", the value -32768 to 32767, the front end's range, as
-//the system takes it).
+//the system takes it), the right stick's too ("R-StickX:V", "R-StickY:V": the one games read from SceCtrlData's
+//bytes 10 and 11, ares/psp/kernel/ctrl.cpp), each axis's node named with a space ("L-Stick X").
 struct Press {
   u32 frame = 0;
   std::string name;
   s64 value = 1;
 };
+
+static const char* stickAxes[] = {"L-StickX:", "L-StickY:", "R-StickX:", "R-StickY:"};
 
 auto parsePress(const std::string& item, std::string& problem) -> Press {
   Press press;
@@ -279,8 +282,10 @@ auto parsePress(const std::string& item, std::string& problem) -> Press {
     return press;
   }
   auto control = item.substr(colon + 1);
-  if(control.rfind("L-StickX:", 0) == 0 || control.rfind("L-StickY:", 0) == 0) {
-    press.name = control.rfind("L-StickX:", 0) == 0 ? "L-Stick X" : "L-Stick Y";
+  auto axis = std::find_if(std::begin(stickAxes), std::end(stickAxes),
+                           [&](const char* prefix) { return control.rfind(prefix, 0) == 0; });
+  if(axis != std::end(stickAxes)) {
+    press.name = std::string(*axis, 7) + " " + (*axis)[7];  //("L-Stick X")
     try {
       press.value = std::stol(control.substr(9));
     } catch(...) {
@@ -446,7 +451,7 @@ auto main(int argc, char** argv) -> int {
       std::fprintf(stderr, "%s\n", problem.c_str());
       return 1;
     }
-    if(press.name == "L-Stick X" || press.name == "L-Stick Y") {
+    if(press.name.find("-Stick ") != std::string::npos) {
       if(press.value < -32768 || press.value > 32767) {
         std::fprintf(stderr, "the stick's value is -32768 to 32767: %s\n", item.c_str());
         return 1;

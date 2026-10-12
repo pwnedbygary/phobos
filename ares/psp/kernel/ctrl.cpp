@@ -5,6 +5,15 @@
 //between reads, so a program polling now and then still sees a button tapped in between.
 //
 //How each call behaves follows uOFW's reading of the PSP's own controller driver (ctrl.c).
+//
+//A right stick, which a PSP hasn't got: a compatibility convention the owner chose, not the hardware's behavior. A
+//PSP leaves SceCtrlData's six bytes after the stick (pspsdk's Rsrv) at zero; PPSSPP reports a second stick in the
+//first two of them, X at byte 10 and Y at 11, centred at 128, and fan patches made for it read them there: the
+//Armored Core "True Analogs" mods turn and look with them, and read zeros as the stick held up and left (the camera
+//stuck on the sky, the AC turning on its own). So every sample carries the host's right stick there, 128 each way
+//when it's left alone, whatever the game: centred too unless sampling is analog, as the stick is, and the last four
+//bytes stay zero. The system sets it each frame from the front end's "R-Stick X" and "R-Stick Y". It isn't in save
+//states (the layout stays as it was): a loaded state's samples read it centred until the next sample.
 
 //The buttons a game sees: the pad, the four face buttons, the shoulders, start and select, the hold switch, and
 //0x10000, which tells it the system has taken the controls (for its HOME menu). The rest (volume, the screen and
@@ -18,7 +27,7 @@ auto Kernel::sampleController() -> bool {
   u32 buttons = c.buttons & GameButtons;
   bool analog = c.mode == 1;
   c.samples[c.next] = {u32(cycles / (CPUFrequency / 1'000'000)), buttons, analog ? c.analogX : u8(128),
-                       analog ? c.analogY : u8(128)};
+                       analog ? c.analogY : u8(128), analog ? c.rightX : u8(128), analog ? c.rightY : u8(128)};
   c.next = (c.next + 1) % 64;
   c.unread = std::min(c.unread + 1, 63u);  //the 64th would be the one being overwritten
 
@@ -40,7 +49,8 @@ auto Kernel::sampleController() -> bool {
 }
 
 //count SceCtrlData (16 bytes each) from the samples kept, starting with samples[first]: the time in microseconds,
-//the buttons held (or, negative, those not held), and the stick's two axes.
+//the buttons held (or, negative, those not held), the stick's two axes, the right stick's (the convention above) and
+//four zeros. Every call that returns samples writes them here.
 auto Kernel::writeSamples(u32 address, u32 first, u32 count, bool negative) -> void {
   for(u32 n = 0; n < count; n++) {
     auto& sample = controller.samples[(first + n) % 64];
@@ -49,7 +59,9 @@ auto Kernel::writeSamples(u32 address, u32 first, u32 count, bool negative) -> v
     memory.write(4, at + 4, negative ? ~sample.buttons : sample.buttons);
     memory.write(1, at + 8, sample.x);
     memory.write(1, at + 9, sample.y);
-    memory.fill(at + 10, 0, 6);
+    memory.write(1, at + 10, sample.rightX);
+    memory.write(1, at + 11, sample.rightY);
+    memory.fill(at + 12, 0, 4);
   }
 }
 

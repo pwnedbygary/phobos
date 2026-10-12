@@ -6,8 +6,8 @@
 //
 //Open files are saved by their PSP paths: on loading, a host file is opened again where the devices are then, at
 //the position it had (one that's gone since is dropped, and the program's next use of it fails as for any bad file).
-//Not saved: the devices and the disc in the drive (the system gives them when it powers on: the same game's), and
-//the table of functions (the kernel's own).
+//Not saved: the devices and the disc in the drive (the system gives them when it powers on: the same game's), the
+//table of functions (the kernel's own), and the host's right stick (ctrl.cpp: no PSP has one).
 //
 //Loading checks what it reads. Only a machine like this one makes states, so a value none could have (a position
 //past the end of what it's a position in, a list the GE driver can't have queued, a display mode there isn't, a clock
@@ -945,6 +945,9 @@ auto Kernel::serialize(serializer& s) -> bool {
   auto& c = controller;
   s(c.buttons); s(c.analogX); s(c.analogY); s(c.cycle); s(c.mode); s(c.nextSample);
   for(auto& sample : c.samples) { s(sample.time); s(sample.buttons); s(sample.x); s(sample.y); }
+  //(the host's right stick isn't kept, as the PSP has none: ctrl.cpp. The samples loaded read it centred, and the
+  //system sets the stick itself again before the next frame runs.)
+  if(s.reading()) for(auto& sample : c.samples) sample.rightX = sample.rightY = 128;
   s(c.next); s(c.unread); s(c.sampled);
   s(c.latch.made); s(c.latch.broken); s(c.latch.held); s(c.latch.released); s(c.latch.samples);
   s(c.idleReset); s(c.idleBack);
