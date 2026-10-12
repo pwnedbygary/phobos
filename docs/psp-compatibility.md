@@ -450,7 +450,7 @@ and now, and what the last frames showed or why a game stops.
 | Lumines - Puzzle Fusion | ULUS10002 | 183 | menu | gameplay | gameplay | demo play |
 | Lumines II | ULUS10183 | 394 | menu | gameplay | gameplay | demo play |
 | Lunar - Silver Star Harmony | ULUS10482 | 312 | menu | menu | menu | autosave notice |
-| MACH | ULES00565 | 245 | menu | black | menu | title "Press START Button" from 2100, then its attract movie (3900-5100) and the title again (part 57: judged again with a frame every 300 to 5400; frame 3600 falls on the black between title and movie) |
+| MACH | ULES00565 | 245 | menu | black | menu | its title, then Start (or Cross) takes it to its profile handling and memory stick notice: the title reads all 64 controller samples each frame, which Phobos refused until 2026-10-11, so no button reached it (the scripted Start at 120 came before the title; earlier: title from 2100, its attract movie 3900-5100) |
 | Macross - Ace Frontier [Japan] | ULJS00158 | 579 | menu | menu | menu | title |
 | Macross - Triangle Frontier [Japan] | ULJS00321 | 604 | black | black | menu | autosave notice, then a soundtrack folder prompt (black before: utility module 0x108 refused) |
 | Macross - Ultimate Frontier [Japan] | NPJH50050 | 683 | menu | menu | menu | soundtrack folder prompt |
