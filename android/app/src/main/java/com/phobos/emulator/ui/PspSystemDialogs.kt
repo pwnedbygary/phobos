@@ -385,8 +385,11 @@ private fun PspSaveDialog(
     val saves = request.saves
     val listed = request.listed()
     var row by remember(request.id) { mutableIntStateOf(request.focus.coerceIn(0, (saves.size - 1).coerceAtLeast(0))) }
-    var asked by remember(request.id) { mutableStateOf(if (listed || request.nothingThere()) null else 0) }
-    var yes by remember(request.id) { mutableStateOf(true) }
+    val single = if (listed || request.nothingThere() || saves.isEmpty()) null else 0
+    var asked by remember(request.id) { mutableStateOf(single) }
+    var yes by remember(request.id) {
+        mutableStateOf(single?.let { pspSaveQuestion(request.mode, saves[it])?.second != true } ?: true)
+    }
     val input = remember { PspDialogInput() }
     val question = asked?.let { pspSaveQuestion(request.mode, saves[it]) }
     val notice = question?.first == "The data is corrupted."

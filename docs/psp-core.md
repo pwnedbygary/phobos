@@ -9657,9 +9657,10 @@ are the app's own `PhobosAlertDialog`s, so they take each theme's colours and ed
   address keyboard for a URL field, OK or Done to enter, Cancel to back out;
 - saving and loading: a list (each save's ICON0, its save title, detail, date and size, a broken one marked
   corrupted, "New Data" with the game's icon among a save list's), the chosen save first; choosing asks a PSP's
-  question where it asks (saving over a save, deleting one; No goes back to the list), and a single load, save or
-  delete starts at its question; "There is no save data." and "The data is corrupted." as the PSP's notices, the
-  latter giving the load's error; after a deletion the list comes back saying so.
+  question where it asks (saving over a save, deleting one, No chosen first; No goes back to the list), and a single
+  load, save or delete starts at its question (No chosen first there too for saving over a save and deleting);
+  "There is no save data." and "The data is corrupted." as the PSP's notices, the latter giving the load's error;
+  after a deletion the list comes back saying so.
 A controller works them as on a PSP: the D-pad moves the choice, and the PSP buttons the user mapped confirm and back
 out, circle confirming where the game says so (its dialogs' buttonSwap 0, as Japanese games often have it) and cross
 otherwise, with the PSP's ✕ and ○ shown at each dialog's foot; Start enters the keyboard's text; the user's pause
@@ -9715,7 +9716,7 @@ times ~300, overflowed it. The machine is now made on the heap, and the frame is
 307 and 11 new). Android: `:app:compileModernReleaseKotlin` and `:app:testModernDebugUnitTest`, 299 tests, 0 failures
 (`PspDialogsTest`'s 8 among them). `ares/psp/psp.cpp`, `PhobosRunner.cpp` and `PhobosJNI.cpp` built with NDK 28.2's
 clang for arm64 (API 26) with the Android build's definitions and include paths, and the release APK built from these
-sources (`:app:assembleModernRelease -PversionCode=205222 -PversionName=2.0.0-psp-dialogs`: SHA-256 ec3987bb…849b3,
+sources (`:app:assembleModernRelease -PversionCode=205223 -PversionName=2.0.0-psp-dialogs`: SHA-256 cd8f6b30…80779,
 signed with the repository's release key, the three JNI functions exported). The new groups: "dialogs front end": a
 message (every size's buttons and Back, the
 result 0 while it asks, asked once, answers refused that aren't its own or are second), one aborted, the messages a PSP
@@ -9753,7 +9754,11 @@ findings) found them resolved, reran the suites and the comparison, reverted eac
 and asked for two statements to be corrected (a list save without a list offering new data is chosen, not PPSSPP's;
 the release APK had been built before the fixes) and five nits: wording, the focus tried for a second rather than 30
 frames, the keyboard's focus on its first field taking text, and a request the app can't read hiding the one before.
-All were taken; the delta reviews' verdicts are in the commit message.
+All were taken, and a third delta review passed them (the first two commits). After that, the dialogs' screenshots
+showed a single save over a save, and a single delete, opening at their question with Yes chosen, where a list's
+choice had No first: they now start at No, as a PSP and the list do, and the scratch Robolectric test has the case
+(answered "overwrite" by one confirm before, and backed out of after). That fix and its delta review are the third
+commit, whose message has the verdict.
 
 **Left, and why.**
 - The PSP's progress screens ("Saving... Please wait", "Save completed", "Load completed") aren't shown: the answer

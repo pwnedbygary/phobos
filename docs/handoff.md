@@ -70,18 +70,20 @@ Save states go to StateVersion 26 (15 to 25 still load).
   scratch Robolectric test sends a controller's keys to each dialog's window: all answered. No device used.
 - **Review**: an independent reviewer found NEEDS CHANGES (a list mode without a list offered nothing; the dialogs
   took the focus too early for a controller; the docs' checks; the comparison's build; and lows), all resolved; a
-  delta review then asked for two statements corrected and five nits, all taken (psp-core.md part 73, "Review"); the
-  delta reviews' verdicts are in the commit message.
-- **APK for the RP6**: the release build of these sources, version code 205222 (above the installed 205182 and
+  delta review then asked for two statements corrected and five nits, all taken, and a third passed. A later fix (a
+  single save's overwrite and delete questions now start at No, as on a PSP) had its own delta review (psp-core.md
+  part 73, "Review"); the verdicts are in the commit messages.
+- **APK for the RP6**: the release build of these sources, version code 205223 (above the installed 205182 and
   master's nightly-205221), named 2.0.0-psp-dialogs, signed with the repository's release key, so it installs over
   the current app keeping its data. SHA-256
-  ec3987bb3eee47b85a8ed3a2b65d12eafefbefa4a1af9ff6790e6040aca849b3; on the Mac (not published) in
+  cd8f6b307d90292540bb325f7cb830badc4d03a31d894e137bdf0dbe65e80779; on the Mac (not published) in
   `~/phobos-work/scratch/dialogs/apk-tree/android/app/build/outputs/apk/modern/release/`.
 - **On the RP6, to check**: (1) Kenka Bancho, LOAD GAME on an empty stick: "There is no save data." appears over the
   game; OK (or the back button) closes it and the game shows its own error, Cancel and return goes to the title.
   (2) Ridge Racer 2's first boot: "Driver Name (7 CHAR MAX.)" opens with XEVIOUS and Android's keyboard; no more than
   7 characters go in; OK keeps the typed name (seen in its profile), Cancel goes back to its title; then "Do you want
-  to save this data?" for its first save. (3) Daxter (Start, then Cross at its menu) or Resistance: Retribution: a
+  to save this data?" for its first save, Yes chosen first; if a later save asks "Do you want to overwrite this
+  data?", No must be chosen first. (3) Daxter (Start, then Cross at its menu) or Resistance: Retribution: a
   list of save slots, all "New Data"; choose one, then on the next boot the same list shows the save with its icon,
   title, detail, date and size, and choosing it asks "Do you want to overwrite this data?" with No first; No goes back
   to the list. (4) A list load with saves (Disgaea Infinite, Ys Seven or Cladun after saving): the list, the newest
