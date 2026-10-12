@@ -2215,6 +2215,67 @@ struct DrawingList {
   auto finish(u32 id = 0) -> void { list.put(GE::Finish, id); list.put(GE::End); }
 };
 
+//A quiet function (kernel.cpp's Function::quiet) leaves the CPU's go as the kernel would have cut it: a program
+//polling one (sceKernelGetSystemTimeLow) while a list (with no callback) finishes and starts the one queued behind,
+//whose FINISH then falls due in a spin with no system call, sees that FINISH's callback at the same count of the spin
+//as polling a function that isn't quiet but changes nothing either (sceKernelGetThreadExitStatus of no thread), on
+//each engine. And the same with no list behind, the spin running to its end.
+static auto geQuietFunctions() -> void {
+  constexpr u32 Count = KernelMachine::Results + 0x40, Seen = KernelMachine::Results + 0x50;
+  auto spun = [&](const char* polled, bool recompile, bool behind) {
+    KernelMachine m;
+    auto& memory = m.system.memory;
+    Assembler f{m, 0x0880'4000};  //the finish callback: the spin's count where its FINISH's argument says
+    f.li(t0, Count); f.put(lw(t1, 0, t0));
+    f.li(t0, Seen); f.put(sll(t2, a0, 2)); f.put(addu(t0, t0, t2)); f.put(sw(t1, 0, t0));
+    f.put(jr(ra));
+    f.put(nop);
+    memory.write(4, Callbacks + 8, 0x0880'4000);
+    DrawingList a{memory, ListA, Vertices};
+    a.draw(GE::Sprites, {{0, 0}, {64, 32}});  //1536 cycles
+    a.finish(1);
+    DrawingList b{memory, ListB, Vertices + 0x1000};
+    b.draw(GE::Sprites, {{0, 0}, {256, 64}});  //12288
+    b.finish(2);
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, Callbacks); main.call("sceGeSetCallback");
+    main.put(addu(s1, v0, zero));
+    for(u32 list : {ListA, ListB}) {  //(A without a callback: its FINISH starts no call)
+      if(list == ListB && !behind) break;
+      main.li(a0, list); main.li(a1, 0);
+      if(list == ListA) main.li(a2, 0xffff'ffff);
+      else main.put(addu(a2, s1, zero));
+      main.li(a3, 0);
+      main.call("sceGeListEnQueue");
+    }
+    main.li(s2, 400);  //(some 3200 cycles: A's FINISH taken at the end of one of these)
+    u32 poll = main.here();
+    main.li(a0, 0); main.call(polled);
+    main.put(addiu(s2, s2, -1));
+    main.put(bne(s2, zero, s32(poll - main.here() - 4) / 4));
+    main.put(nop);
+    main.li(t3, 0); main.li(t1, Count);
+    u32 spin = main.here();
+    main.put(addiu(t3, t3, 1));
+    main.put(sw(t3, 0, t1));
+    main.put(sltiu(t4, t3, 6000));
+    main.put(bne(t4, zero, s32(spin - main.here() - 4) / 4));
+    main.put(nop);
+    main.call("sceKernelExitGame");
+    runMain(m, recompile);
+    return std::vector<u32>{memory.read(4, Seen + 4), memory.read(4, Seen + 8), memory.read(4, Count)};
+  };
+  for(bool recompile : {false, true}) {
+    for(bool behind : {true, false}) {
+      auto quiet = spun("sceKernelGetSystemTimeLow", recompile, behind);
+      CHECK(quiet == spun("sceKernelGetThreadExitStatus", recompile, behind), true);
+      CHECK(quiet[0], 0u);  //A's FINISH calling nothing
+      if(behind) CHECK(quiet[1] > 0 && quiet[1] < 6000, true);  //B's in the spin
+      CHECK(quiet[2], 6000u);
+    }
+  }
+}
+
 //The GE's time (kernel/ge.cpp's geTime()): a list is done for the program only once a PSP's GE would have drawn it, by
 //Sony's peak figures at the bus's clock (four pixels a clock, or 166/35 clocks a primitive, the longer), counted in
 //the CPU's 333 MHz: a 64x32 sprite at the bus's first 111 MHz in 2048 * 35 * 333 / (140 * 111) = 1536 cycles, at
@@ -2667,6 +2728,7 @@ auto geTests() -> Tests {
     {"ge lists queued twice", geQueuedTwice}, {"ge suspending signals' callbacks", geSuspendedCallbacks},
     {"ge calls and threads", geCallsAndThreads}, {"ge break", geBreak},
     {"ge break and callbacks", geBreakCallbacks}, {"ge time", geTime}, {"ge time's interrupt", geTimeInterrupts},
+    {"ge FINISH after a quiet function", geQuietFunctions},
     {"ge 3D settings kept from PRIM to PRIM", geTransformKept}, {"ge vertices and lists drawn first", geVerticesDrawn},
     {"event flags", eventFlags}, {"event flag waiting", eventFlagWaiting}, {"display picture", displayPicture},
     {"gu program", guProgram}, {"copy sample", copySample},

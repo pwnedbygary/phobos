@@ -833,6 +833,17 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
     add("sceMp3", name, handler);
   }
   codecDecoders(*this);
+  //Functions that only look, or put what they find in memory, changing nothing that has a time to come (what
+  //untilNextEvent() looks at: threads' waits, timers, sound, files' requests, the GE, the controller's sampling): after
+  //one, the CPU's go needn't be cut shorter (syscall()). Games poll some of them in a loop.
+  for(auto& function : functions) {
+    for(auto name : {"sceKernelGetThreadId", "sceKernelReferThreadStatus", "sceKernelReferThreadRunStatus",
+                     "sceKernelGetThreadCurrentPriority", "sceDisplayGetVcount", "sceKernelGetSystemTime",
+                     "sceKernelGetSystemTimeLow", "sceKernelGetSystemTimeWide", "sceRtcGetCurrentTick",
+                     "sceKernelSysClock2USec", "sceKernelSysClock2USecWide", "sceMpegRingbufferAvailableSize"}) {
+      if(!std::strcmp(function.name, name)) function.quiet = true;
+    }
+  }
   cpu.syscallHook = [this](u32 code) { return syscall(code); };
   ge.log = [this](const std::string& text) { note("GE: " + text); };
 }
@@ -1118,18 +1129,22 @@ auto Kernel::importCode(const std::string& library, u32 nid) -> u32 {
 //(which a thread running from one wait to the next a whole frame long had seen till then: a timer set 2.5 ms on
 //went off at once, its moment already passed). The count is the instructions before the syscall, which both engines
 //give alike (the recompiler's block as far as it has got), so a program sees the same time with either. Then the go
-//ends by whatever the function made due.
+//ends by whatever the function made due. A quiet function (Function::quiet), followed by no FINISH taken nor call
+//started, made nothing due sooner: the go already stops by the next thing due, which keeps its time, so it's left
+//as it is (untilNextEvent() looks through every thread, timer and file, after each of the hundreds of thousands of
+//calls a frame of games polling one of these in a loop).
 auto Kernel::syscall(u32 code) -> bool {
   u64 before = cpu.instructionsBefore();
   if(before > counted) cycles += before - counted;
   counted = before;
-  bool handled = dispatch(code);
-  runUntilNextEvent();
+  bool quiet = false;
+  bool handled = dispatch(code, quiet);
+  if(!quiet) runUntilNextEvent();
   return handled;
 }
 
-//The function a syscall's code stands for.
-auto Kernel::dispatch(u32 code) -> bool {
+//The function a syscall's code stands for. quiet: it was a quiet function, after which nothing else changed.
+auto Kernel::dispatch(u32 code, bool& quiet) -> bool {
   if(code == ThreadReturnCode) {
     threadReturned();
     return true;
@@ -1173,9 +1188,11 @@ auto Kernel::dispatch(u32 code) -> bool {
     result(ErrorNotYetLinked);
     return true;
   }
+  bool looks = import.function->quiet;  //(read first: a function loading a module adds imports, moving them)
   (this->*import.function->handler)();
-  geInterrupt();  //(a display list's FINISH, met by the GE in it)
-  startCall();    //what the function set off (a display list finishing) may call into the program now
+  bool taken = geInterrupt();  //(a display list's FINISH, met by the GE in it)
+  bool started = startCall();  //what the function set off (a display list finishing) may call into the program now
+  quiet = looks && !taken && !started;
   return true;
 }
 
