@@ -3592,13 +3592,13 @@ static void round6(void) {
 //---- round 7: anti-aliased lines (docs/psp-core.md, part 76), which round 4's lines-smooth pinned only for white,
 //opaque lines falling to the right, blended over black, untextured, in through mode
 
-//The line of cell (i, j) (cell = j * 16 + i) of the 16x16 cells, its two vertices at v: from i and j sixteenths past
-//the cell's pixel (8 - dx / 2, 8 - dy / 2), so every direction fits, to (dx, dy) further; its color, and its texture
-//coordinates from (u0, v0) to (u1, v1).
-static void aaCell(FloatVertex* v, int cell, float dx, float dy, unsigned int color, float u0, float v0, float u1,
-                   float v1) {
-  int i = cell & 15, j = cell >> 4;
-  float x = i * 16 + 8 - dx / 2 + i / 16.0f, y = j * 16 + 8 - dy / 2 + j / 16.0f;
+//The line of cell (i, k) (cell = k * 16 + i) of the 16x16 cells, its two vertices at v: from (8 - dx / 2 + i / 16,
+//8 - dy / 2 + j / 16) pixels into the cell, so every direction fits, to (dx, dy) further; its color, and its texture
+//coordinates from (u0, v0) to (u1, v1). A line and its reverse at the same i and j are the same segment.
+static void aaCell(FloatVertex* v, int cell, int j, float dx, float dy, unsigned int color, float u0, float v0,
+                   float u1, float v1) {
+  int i = cell & 15, k = cell >> 4;
+  float x = i * 16 + 8 - dx / 2 + i / 16.0f, y = k * 16 + 8 - dy / 2 + j / 16.0f;
   v[0] = (FloatVertex){u0, v0, color, x, y, 0};
   v[1] = (FloatVertex){u1, v1, color, x + dx, y + dy, 0};
 }
@@ -3621,9 +3621,10 @@ static void overBlack(void) {
   sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
 }
 
-//Every way a line can go: row k's lines in direction k (shallow and steep, falling and rising, each way, at two
-//slopes: slopes[k]), white blended over black by its alpha (as lines-smooth), cell (i, k) starting i and k
-//sixteenths into its pixel: the coverage of every octant.
+//Every way a line can go: row k's lines in direction k (shallow and steep, falling and rising, at two slopes, each
+//pair of rows one direction and its reverse: slopes[k]), white blended over black by its alpha (as lines-smooth),
+//cell (i, k)'s line i and (k with its low bit clear) sixteenths along (aaCell), so a pair's lines are the same
+//segments drawn each way: the coverage of every octant, and which end it's stepped from.
 static const float slopes[16][2] = {
   {7.5f, 2.25f}, {-7.5f, -2.25f}, {7.5f, -2.25f}, {-7.5f, 2.25f}, {2.25f, 7.5f}, {-2.25f, -7.5f}, {2.25f, -7.5f},
   {-2.25f, 7.5f}, {7.5f, 5.5f}, {-7.5f, -5.5f}, {7.5f, -5.5f}, {-7.5f, 5.5f}, {5.5f, 7.5f}, {-5.5f, -7.5f},
@@ -3634,14 +3635,16 @@ static void aaSlopes(const char* name) {
   overBlack();
   FloatVertex* v = sceGuGetMemory(256 * 2 * sizeof(FloatVertex));
   for(int cell = 0; cell < 256; cell++) {
-    aaCell(v + cell * 2, cell, slopes[cell >> 4][0], slopes[cell >> 4][1], 0xffffffff, 0, 0, 0, 0);
+    int k = cell >> 4;
+    aaCell(v + cell * 2, cell, k & ~1, slopes[k][0], slopes[k][1], 0xffffffff, 0, 0, 0, 0);
   }
   sceGuDrawArray(GU_LINES, FloatVertexType, 512, 0, v);
   endSmooth(name);
 }
 
-//The vertices' alpha against the coverage: lines-smooth's lines (cell (i, j) i and j sixteenths in), each cell's
-//vertex alpha its number (0 to 255), white blended over black: whether the coverage replaces the alpha or scales it.
+//The vertices' alpha against the coverage: lines-smooth's lines (cell (i, j)'s from (4 + i / 16, 4 + j / 16) pixels
+//into the cell to (7.5, 2.25) further), each cell's vertex alpha its number (0 to 255), white blended over black:
+//whether the coverage replaces the alpha or scales it.
 static void aaAlpha(const char* name) {
   if(!beginSmooth(name, zero)) return;
   overBlack();
@@ -3657,8 +3660,8 @@ static void aaAlpha(const char* name) {
 }
 
 //Blending with the coverage over a known background (0x80c06020: alpha 0x80): rows 2m and 2m + 1 in mode m below,
-//the second with the alpha test (above 0) on; the line 0xff20a0e0, shallow and falling, cell (i, j) i and j
-//sixteenths in. Mode 7 is clear mode (color, stencil and depth written), with blending off.
+//the second with the alpha test (above 0) on; the line 0xff20a0e0, (7.5, 2.25), cell (i, j)'s i and j sixteenths
+//along (aaCell). Mode 7 is clear mode (color, stencil and depth written), with blending off.
 static unsigned int aaBackground(int x, int y) { (void)x; (void)y; return 0x80c06020; }
 static void aaBlend(const char* name) {
   static const int modes[7][3] = {
@@ -3679,7 +3682,7 @@ static void aaBlend(const char* name) {
     else sceGuDisable(GU_ALPHA_TEST);
     if(mode == 7) sceGuSendCommandi(0xd3, 1 | 7 << 8);  //CLEAR_MODE
     FloatVertex* v = sceGuGetMemory(16 * 2 * sizeof(FloatVertex));
-    for(int i = 0; i < 16; i++) aaCell(v + i * 2, row * 16 + i, 7.5f, 2.25f, 0xff20a0e0, 0, 0, 0, 0);
+    for(int i = 0; i < 16; i++) aaCell(v + i * 2, row * 16 + i, row, 7.5f, 2.25f, 0xff20a0e0, 0, 0, 0, 0);
     sceGuDrawArray(GU_LINES, FloatVertexType, 32, 0, v);
     if(mode == 7) sceGuSendCommandi(0xd3, 0);
   }
@@ -3689,27 +3692,31 @@ static void aaBlend(const char* name) {
 }
 
 //Textured anti-aliased lines over the texture texelAA (texel (x, y) is x | y << 8 | 0x80 << 16, its alpha x ^ y),
-//shallow and falling, cell (i, j) i and j sixteenths in, which texels they take: rows 0-3 every vertex at texel
-//(200.5, 100.5), replace, RGB; rows 4-7 from texel (0, 0) to (255, 255), replace, RGBA (the texel's alpha against
-//the coverage); rows 8-11 at (200.5, 100.5), modulate, RGBA, white, blended over black; rows 12-15 at (200.5, 100.5),
-//bilinear, replace, RGB. Blending off but in rows 8-11, so each pixel's alpha is the one written.
+//(7.5, 2.25), cell (i, j)'s i and j sixteenths along (aaCell), which texels they take: rows 0-3 every vertex at texel
+//(200.5, 100.5), replace, RGB; rows 4-7 from texel (0, 0) to (255, 255), replace, RGBA, over white by the source's
+//alpha alone (the fixed 0 for the source, its alpha for the target), so each channel is the alpha: the texel's
+//against the coverage; rows 8-11 at (200.5, 100.5), modulate, RGBA, white, blended over black; rows 12-15 at
+//(200.5, 100.5), bilinear, replace, RGB. (The frame buffer's alpha is the stencil's, untouched without the stencil
+//test: a pixel's alpha shows only through blending.)
 static unsigned int texelAA(int x, int y) { return x | y << 8 | 0x80 << 16 | (unsigned int)((x ^ y) & 0xff) << 24; }
+static unsigned int aaTexturedFill(int x, int y) { (void)x; return y >= 64 && y < 128 ? 0xffffffff : 0; }
 static void aaTextured(const char* name) {
   if(!beginTest(name)) return;
   fillTexture(texelAA);
-  fillTarget(zero, 0);
+  fillTarget(aaTexturedFill, 0);
   start(GU_PSM_8888);
   sceGuEnable(GU_LINE_SMOOTH);
   for(int group = 0; group < 4; group++) {
     useTexture(group == 2 ? GU_TFX_MODULATE : GU_TFX_REPLACE, group == 1 || group == 2 ? GU_TCC_RGBA : GU_TCC_RGB);
     if(group == 3) sceGuTexFilter(GU_LINEAR, GU_LINEAR);
-    if(group == 2) overBlack();
+    if(group == 1) sceGuEnable(GU_BLEND), sceGuBlendFunc(GU_ADD, GU_FIX, GU_SRC_ALPHA, 0, 0);
+    else if(group == 2) overBlack();
     else sceGuDisable(GU_BLEND);
     FloatVertex* v = sceGuGetMemory(64 * 2 * sizeof(FloatVertex));
     for(int n = 0; n < 64; n++) {
       int cell = group * 64 + n;
-      if(group == 1) aaCell(v + n * 2, cell, 7.5f, 2.25f, 0xffffffff, 0, 0, 255, 255);
-      else aaCell(v + n * 2, cell, 7.5f, 2.25f, 0xffffffff, 200.5f, 100.5f, 200.5f, 100.5f);
+      if(group == 1) aaCell(v + n * 2, cell, cell >> 4, 7.5f, 2.25f, 0xffffffff, 0, 0, 255, 255);
+      else aaCell(v + n * 2, cell, cell >> 4, 7.5f, 2.25f, 0xffffffff, 200.5f, 100.5f, 200.5f, 100.5f);
     }
     sceGuDrawArray(GU_LINES, FloatVertexType, 128, 0, v);
   }
@@ -3718,29 +3725,34 @@ static void aaTextured(const char* name) {
   endSmooth(name);
 }
 
-//Anti-aliased lines in 3D (lines3D's, without the lens): rows 0-7 red to blue, blended over black; rows 8-15
-//textured (texelAA, every vertex at (200.5, 100.5) / 256, replace, RGB), blending off: whether 3D lines' coverage and
-//texels are through mode's.
+//Anti-aliased lines in 3D (lines3D's, without the lens: cell (i, j)'s from (4 + i / 16, 4 + j / 16) pixels into the
+//cell to (7.5, 2.25) further): rows 0-7 red to blue, blended over black; rows 8-15 textured (texelAA, every vertex
+//at (200.5, 100.5) / 256, replace, RGB), blending off, rows 12-15 with the texture scaled by a half and offset by
+//(0.25, 0.125): whether 3D lines' coverage and texels are through mode's, and whether the texels go through the
+//scale and offset.
 static void aa3D(const char* name) {
   if(!beginTest(name)) return;
   fillTexture(texelAA);
   start3D(&identity, 1);
   sceGuEnable(GU_LINE_SMOOTH);
+  for(int quarter = 0; quarter < 4; quarter++) {
+    int textured = quarter >= 2;
+    if(textured) useTexture(GU_TFX_REPLACE, GU_TCC_RGB), sceGuDisable(GU_BLEND);
+    else overBlack();
+    sceGuTexScale(quarter == 3 ? 0.5f : 1, quarter == 3 ? 0.5f : 1);
+    sceGuTexOffset(quarter == 3 ? 0.25f : 0, quarter == 3 ? 0.125f : 0);
+    FloatVertex* v = sceGuGetMemory(64 * 2 * sizeof(FloatVertex));
+    for(int n = 0; n < 64; n++) {
+      int cell = quarter * 64 + n;
+      float x = (cell & 15) * 16 + 4 + (cell & 15) / 16.0f, y = (cell >> 4) * 16 + 4 + (cell >> 4) / 16.0f;
+      float u = textured ? 200.5f / 256 : 0, t = textured ? 100.5f / 256 : 0;
+      v[n * 2] = (FloatVertex){u, t, textured ? 0xffffffff : 0xff0000ff, ndcX(x), ndcY(y), 0.5f};
+      v[n * 2 + 1] = (FloatVertex){u, t, textured ? 0xffffffff : 0xffff0000, ndcX(x + 7.5f), ndcY(y + 2.25f), -0.5f};
+    }
+    sceGuDrawArray(GU_LINES, FloatVertexType3D, 128, 0, v);
+  }
   sceGuTexScale(1, 1);
   sceGuTexOffset(0, 0);
-  for(int half = 0; half < 2; half++) {
-    if(half) useTexture(GU_TFX_REPLACE, GU_TCC_RGB), sceGuDisable(GU_BLEND);
-    else overBlack();
-    FloatVertex* v = sceGuGetMemory(128 * 2 * sizeof(FloatVertex));
-    for(int n = 0; n < 128; n++) {
-      int cell = half * 128 + n;
-      float x = (cell & 15) * 16 + 4 + (cell & 15) / 16.0f, y = (cell >> 4) * 16 + 4 + (cell >> 4) / 16.0f;
-      float u = half ? 200.5f / 256 : 0, t = half ? 100.5f / 256 : 0;
-      v[n * 2] = (FloatVertex){u, t, half ? 0xffffffff : 0xff0000ff, ndcX(x), ndcY(y), 0.5f};
-      v[n * 2 + 1] = (FloatVertex){u, t, half ? 0xffffffff : 0xffff0000, ndcX(x + 7.5f), ndcY(y + 2.25f), -0.5f};
-    }
-    sceGuDrawArray(GU_LINES, FloatVertexType3D, 256, 0, v);
-  }
   sceGuDisable(GU_BLEND);
   sceGuDisable(GU_TEXTURE_2D);
   endSmooth(name);
@@ -3754,18 +3766,21 @@ static void writeManifest7(void) {
   static const char text[] =
     "psp-measure's GE tests, round 7 (tools/psp-measure/ge.c in Phobos says what each test draws; docs/psp-core.md,\n"
     "part 76, what each is for): anti-aliased lines (GU_LINE_SMOOTH). Pictures: the target's pixels after one test, a\n"
-    "little-endian 32-bit word each, row by row, 256x256, 16x16 cells of a line each, cell (i, j)'s starting i and j\n"
-    "sixteenths into its pixel.\n"
+    "little-endian 32-bit word each, row by row, 256x256, 16x16 cells of a line each. In aa-slopes, aa-blend and\n"
+    "aa-textured cell (i, j)'s line (d its direction) starts (8 - dx / 2 + i / 16, 8 - dy / 2 + j / 16) pixels into\n"
+    "the cell; in aa-alpha and aa-3d, (4 + i / 16, 4 + j / 16), going (7.5, 2.25).\n"
     "aa-slopes: white over black by its alpha, row k in direction k: (7.5, 2.25) and (7.5, 5.5) and each turned and\n"
-    "mirrored (ge.c's slopes).\n"
+    "mirrored (ge.c's slopes), each pair of rows one direction and its reverse over the same segments (j = k & ~1).\n"
     "aa-alpha: round 4's lines-smooth with each cell's vertex alpha its number (0-255).\n"
     "aa-blend: 0xff20a0e0 over 0x80c06020 in 8 modes, two rows each (the second with the alpha test above 0): none,\n"
     "src alpha / 1 - src alpha, src alpha / fixed white, fixed white / 1 - src alpha, reverse subtract src alpha /\n"
     "fixed white, dst alpha / 1 - dst alpha, double src alpha / 1 - double src alpha, clear mode.\n"
     "aa-textured: texel (x, y) x | y << 8 | 0x80 << 16, alpha x ^ y; rows 0-3 at texel (200.5, 100.5) replace RGB,\n"
-    "4-7 (0, 0) to (255, 255) replace RGBA, 8-11 (200.5, 100.5) modulate RGBA over black, 12-15 (200.5, 100.5)\n"
-    "bilinear replace RGB.\n"
-    "aa-3d: in 3D (identity matrices), rows 0-7 red to blue over black, 8-15 textured at (200.5, 100.5) / 256.\n"
+    "4-7 (0, 0) to (255, 255) replace RGBA over white by the alpha alone (fixed 0, source alpha: each channel the\n"
+    "alpha), 8-11 (200.5, 100.5) modulate RGBA over black, 12-15 (200.5, 100.5) bilinear replace RGB; blending off\n"
+    "but in rows 4-11 (the frame buffer's alpha byte is the stencil's).\n"
+    "aa-3d: in 3D (identity matrices), rows 0-7 red to blue over black, 8-15 textured at (200.5, 100.5) / 256,\n"
+    "rows 12-15 with the texture scale 0.5 and offset (0.25, 0.125).\n"
     "<name>.stalled: the GE hadn't finished the test's list after 5 s and was reset (manifest4.txt says more).\n"
     "<name>.stopped: a test that stopped the PSP twice, given up on.\n";
   sceIoWrite(file, text, sizeof(text) - 1);

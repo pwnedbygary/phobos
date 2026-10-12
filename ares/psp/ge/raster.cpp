@@ -225,7 +225,7 @@ auto GE::linePixels(const Job& job, s32 fromY, s32 toY, std::vector<LinePixel>& 
   };
   //An anti-aliased line's pixel's alpha, in place of its color's (measured, docs/psp-core.md, part 76: round 4's
   //lines-smooth, every pixel): where the line is across the pixel at its middle along x, in 256ths of a pixel from
-  //its top edge, rounded up, the line stepped from its left end by its slope cut toward zero to 65536ths (14 or
+  //its top edge, rounded up, the line stepped from its left end by its slope cut toward zero to 65536ths (13 or
   //more bits fit, 12 don't); then the distance to the nearer edge, 0 to 128. So a line through a pixel's middle
   //gives it 128, one along its edge 0. Measured only for a shallow line falling to the right: a steep one is that
   //turned, as the pixels it lights are; a rising one's cut (toward zero, not down) isn't pinned.
@@ -251,10 +251,10 @@ auto GE::linePixels(const Job& job, s32 fromY, s32 toY, std::vector<LinePixel>& 
       v = l.v[0] + f64(s) / 16 * l.vStep;
     }
     u32 fog = p.fog ? u32(std::clamp(s32((l.fog[0] * w0 + l.fog[1] * w1) / total), 0, 255)) : 255;
-    //Anti-aliased, its texel is the one at the pixel's own middle, whatever its ends' coordinates: unmeasured, as
-    //PPSSPP describes the PSP, and what Dead or Alive Paradise's edge pass needs (its models' edges drawn over them
-    //with their frame buffer for the texture, which blends each pixel with itself; their own coordinates would
-    //blend in other parts of the screen).
+    //Anti-aliased, its texel is the one at the pixel's own middle, whatever its ends' coordinates: unmeasured
+    //(PPSSPP's software renderer also takes the pixel's own place, by its own note a guess), and what Dead or Alive
+    //Paradise's edge pass needs (its models' edges drawn over them with their frame buffer for the texture, which
+    //blends each pixel with itself; their own coordinates would blend in other parts of the screen).
     if(l.smooth) {
       color = (color & 0xff'ffff) | coverage(l.steep ? x : y, middle) << 24;
       if(look.textured) u = x + 0.5f, v = y + 0.5f;

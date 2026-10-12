@@ -616,14 +616,16 @@ static auto drawLinesSmooth() -> void {
   tested.draw(GE::Lines, {{0, 0, 0xffff'ffff, 4.5f, 4, 0}, {0, 0, 0xffff'ffff, 12, 6.25f, 0}});
   CHECK(tested.pixel(4, 4), 0u);
   CHECK(tested.pixel(9, 5) & 0xff'ffff, 0xff'ffffu);
-  //textured, the texel at each pixel's middle (u x + 0.5, v y + 0.5), whatever the ends' coordinates (0, 0)
+  //textured, the texel at each pixel's middle (u x + 0.5, v y + 0.5), whatever the ends' coordinates (0, 0); clamped,
+  //so the rows decoded must reach past the ends' (row 12, where the vertices' v would take the first 8 rows alone)
   Canvas textured;
   smooth(textured, false);
   textured.texture(3, 16, 16, 16);
   textured.ge.commands[GE::TextureFunction] = 3;  //replace, the color's alpha kept (the coverage)
+  textured.ge.commands[GE::TextureWrap] = 0x101;
   for(u32 n = 0; n < 256; n++) textured.memory.write(4, Texture + n * 4, n % 16 | n / 16 << 8 | 0xff00'0000);
-  textured.draw(GE::Lines, {{0, 0, 0, 0, 2.5f, 0}, {0, 0, 0, 8, 2.5f, 0}});
-  for(u32 x = 0; x < 8; x++) CHECK(textured.pixel(x, 2) & 0xff'ffff, x | 2 << 8);
+  textured.draw(GE::Lines, {{0, 0, 0, 0, 12.5f, 0}, {0, 0, 0, 8, 12.5f, 0}});
+  for(u32 x = 0; x < 8; x++) CHECK(textured.pixel(x, 12) & 0xff'ffff, x | 12 << 8);
 }
 
 //Shapes whose corners are all at one depth draw every pixel at that depth: Chili Con Carnage's logo, a fan at depth

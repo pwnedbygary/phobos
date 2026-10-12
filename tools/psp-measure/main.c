@@ -38,7 +38,7 @@ static unsigned int choose(unsigned int buttons) {
 enum { Vfpu, Ge, Afresh, Leave };
 typedef struct { const char* text; int what, round; const char* note; } Choice;
 static const Choice choices[] = {
-  {"Round 7: the GE's anti-aliased lines (about 2 MB)", Ge, 7, 0},
+  {"Round 7: the GE's anti-aliased lines (about 1.3 MB)", Ge, 7, 0},
   {"Round 6: the GE's time, lighting, reciprocal, curves (about 7 MB)", Ge, 6,
    "Four tests near the end stop the GE on purpose: each waits 5\n"
    "seconds, then says \"the GE stalled: reset\" and goes on. The timing\n"

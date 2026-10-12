@@ -168,10 +168,11 @@ static auto gpuRenderToTexture() -> void {
   hardware.ge.setRenderer(nullptr);
 }
 
-//Anti-aliased lines (raster.cpp's linePixels()) over random sprites, without blending, so each pixel's coverage is
-//what the frame buffer's alpha keeps, the alpha test (above 0) dropping those of none: flat, then textured from the
-//frame buffer they draw into (Dead or Alive Paradise's edge pass), each pixel its own texel; one line a PRIM, so none
-//samples a pixel another drew. The GPU's pixels are the software renderer's, byte for byte.
+//Anti-aliased lines (raster.cpp's linePixels()) over random sprites, without blending, so the coverage shows only
+//through the alpha test: each line's above 0, 31, 63 or 95 in turn, which keeps a pixel or drops it by its coverage.
+//Flat, then textured from the frame buffer they draw into (Dead or Alive Paradise's edge pass), modulated by their
+//colors so that each pixel shows it was drawn; one line a PRIM, so none samples a pixel drawn in its own. The GPU's
+//pixels are the software renderer's, byte for byte.
 static auto gpuSmoothLines() -> void {
   auto gpu = renderer();
   if(!gpu) return;
@@ -200,11 +201,15 @@ static auto gpuSmoothLines() -> void {
     for(auto& one : background) sprite(*s, one);
     auto& c = s->ge.commands;
     c[GE::AntiAliasEnable] = 1;
-    c[GE::AlphaTestEnable] = 1, c[GE::AlphaTest] = 6 | 0xff << 16;
-    for(u32 n = 0; n < 40; n++) line(*s, lines[n].first, lines[n].second);
-    texture(*s, Memory::VRAMBase, 64, 64, 64);
-    c[GE::TextureFunction] = 3;  //replace, the coverage kept for the alpha
-    for(u32 n = 40; n < 80; n++) line(*s, lines[n].first, lines[n].second);
+    c[GE::AlphaTestEnable] = 1;
+    for(u32 n = 0; n < 80; n++) {
+      if(n == 40) {
+        texture(*s, Memory::VRAMBase, 64, 64, 64);
+        c[GE::TextureFunction] = 0;  //modulate, the coverage kept for the alpha
+      }
+      c[GE::AlphaTest] = 6 | (n % 4 * 32 - (n % 4 != 0)) << 8 | 0xff << 16;
+      line(*s, lines[n].first, lines[n].second);
+    }
   }
   u32 bytes = apart(software, hardware);
   CHECK(bytes, 0u);
