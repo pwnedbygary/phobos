@@ -91,16 +91,21 @@ start, a memory stick folder that isn't there) go to standard error, as on the h
 
 With `--trace-savedata`, each savedata request (sceUtilitySavedataInitStart's parameters, done
 at its Update) adds a line: the mode (pspsdk's name), the structure's size, the game's and the
-save's names, a list mode's names (the first 8, and how many in all) and the save chosen from
-it (`chosen`: for a load, what the save dialog would focus among the saves there; for a
-save, the list's first name; either already written into the request's save name), the data
+save's names as the game gave them, a list mode's names (the first 8, and how many in all), a
+list dialog's `focus` (in the sizes that have it) and the save chosen from the list
+(`chosen`: the player's, where the app shows the dialog; otherwise, for a load, the save the
+dialog would focus among the saves there, or the first that isn't broken if that one is, and
+for a save the list's first name, unless that's `"<>"`, the game's folder alone), the data
 file's name, the buffer's address and size and the data's size, and whether the save is on
 the memory stick; the sizes mode's msData, the list and files modes' most, the size mode's
-files, a save mode's title; then after `->` the result (the system's savedata errors named) and what came back: a
-load's bytes read, a list load's or save's save name, the list mode's saves, the files mode's
-counts, the sizes modes' clusters and KB. Names are quoted, their bytes outside printable
-ASCII written `\xNN`. For example (After Burner: Black Falcon's autoload, then Brandish: The
-Dark Revenant's load from a list):
+files, a save mode's title; then after `->` the result (the system's savedata errors named)
+and what came back: a load's bytes read, a list load's or save's save name (the chosen one,
+written back into the request), the list mode's saves, the files mode's counts, the sizes
+modes' clusters and KB. Where the app shows the dialogs, what they answer without doing a
+request isn't traced: a dialog backed out of, the notices that there's nothing to load or
+delete, and the deletes from a list. Names are quoted, their bytes outside printable ASCII
+written `\xNN`. For example (After Burner: Black Falcon's autoload, then Brandish: The Dark
+Revenant's load from a list):
 
 ```
 [002138] savedata: mode 0 (autoload), size 1536, game "ULUS10244", save "0000", file "AFTRBURN.BIN", buffer 0x09c5b570 of 16368, data 16368, "ULUS102440000" there -> 0x00000000, read 16368

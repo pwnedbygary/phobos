@@ -6,6 +6,7 @@
 #include "../../ares/psp/kernel/kernel.hpp"
 
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <random>
@@ -123,6 +124,21 @@ struct HostFolder {
   auto get(const std::string& name) -> std::string {
     std::ifstream file(path / name, std::ios::binary);
     return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  }
+};
+
+//The host's time zone for a while (TZ: a POSIX rule, so no zone files are needed), then as it was.
+struct HostZone {
+  std::string kept;
+  bool had = false;
+  HostZone(const char* zone) {
+    if(auto given = std::getenv("TZ")) kept = given, had = true;
+    setenv("TZ", zone, 1);
+    tzset();
+  }
+  ~HostZone() {
+    had ? setenv("TZ", kept.c_str(), 1) : unsetenv("TZ");
+    tzset();
   }
 };
 

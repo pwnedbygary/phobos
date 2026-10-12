@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <ctime>
 #include <deque>
@@ -246,7 +247,9 @@ struct Kernel {
   std::function<auto (const std::string& text) -> void> output;
   std::function<auto (const std::string& text) -> void> log;
   //Each savedata request with its answer, a line of text, for a host tracing the games' saves (the runner's
-  //--trace-savedata): nothing is traced without one. Not part of the machine's state.
+  //--trace-savedata): nothing is traced without one. Not part of the machine's state. With a front end's dialogs
+  //(dialogs.cpp), what they answer without doing a request isn't traced: a dialog backed out of, the notices that
+  //there's nothing to load or delete, and the deletes from a list.
   std::function<auto (const std::string& text) -> void> savedataTrace;
 
   //kernel.cpp
@@ -666,6 +669,7 @@ struct Kernel {
   auto resolveOnDisc(const std::string& path, Disc::Entry& entry, std::string& normalized,
                      std::vector<std::string>& names) -> u32;
   auto writeStat(u32 address, const std::string& host) -> void;
+  static auto hostTimes(const std::string& host) -> std::array<s64, 3>;
   auto writeTimes(u32 address, const std::string& host) -> void;
   auto writeStat(u32 address, const Disc::Entry& entry) -> void;
   auto openOnDisc(const std::string& path, u32 flags) -> u32;
@@ -2029,9 +2033,9 @@ struct Kernel {
   auto dialogWithdraw() -> void;
   auto dialogMessage(u32 parameters, DialogRequest& request) -> u32;
   auto dialogKeyboard(u32 parameters, DialogRequest& request) -> void;
-  auto dialogSaves(u32 parameters, DialogRequest& request) -> void;
+  auto dialogSaves(u32 parameters, DialogRequest& request, bool details = true) -> void;
   auto dialogAnswered(const DialogRequest& asked, const DialogAnswer& given) -> void;
-  auto dialogSaved(const DialogRequest& asked, const DialogAnswer& given) -> std::optional<u32>;
+  auto dialogSaved(u32 parameters, const DialogRequest& asked, const DialogAnswer& given) -> std::optional<u32>;
   auto savedataUnshown(u32 parameters) -> u32;
 
   //power.cpp: the battery, the clocks, the power switch's callbacks, the volatile memory
@@ -2107,6 +2111,7 @@ struct Kernel {
   auto sceRtcGetTickResolution() -> void;
   auto sceRtcGetAccumulativeTime() -> void;
   auto sceKernelCacheUnneeded() -> void;
+  static auto localSeconds(s64 seconds, s64& local, bool* daylight = nullptr) -> bool;
   auto writeDate(u32 address, u64 microseconds, bool local) -> bool;
   struct Exec {  //sceKernelLoadExec's program, put in as the kernel's loop next goes round (never kept in states)
     bool pending = false;

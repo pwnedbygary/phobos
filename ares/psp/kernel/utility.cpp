@@ -26,8 +26,8 @@
 //    folder, erasing a data file the file alone (and its name from PARAM.SFO's list). Names that would lead out of
 //    the save's folder, and buffers outside the program's memory, are refused. The PSP also encrypts the secure files
 //    and hashes them in PARAM.SFO: not done here (the files are only Phobos's to read; the hashes are zeros). A
-//    list's load that names no save takes the one its dialog would focus, a list's save the list's first name, the
-//    name written back either way (savedataUnshown()).
+//    list's load that names no save takes the one its dialog would focus (or, that one broken, the first that isn't),
+//    a list's save the list's first name, the name written back either way (savedataUnshown()).
 //  - A message: answered at once, as if the player pressed Yes (or OK), the message noted.
 //  - The keyboard: each field's text entered as it is, an empty one given the console's nickname, each CHANGED
 //    (keyboard()).
@@ -448,13 +448,17 @@ auto Kernel::savePath(const std::string& folder, const std::string& file) -> std
 }
 
 //Does what a savedata request asks (savedataMode()), traced for a host that traces them (savedataTrace): the request
-//as savedataMode() takes it (a list's choice, the player's or the automatic answer's, already written into its save
-//name), then its answer.
+//as the game made it, with the save chosen from its list where one was (by a front end's player or the automatic
+//answer), then its answer. A chosen save's name is written into the request's save name first, as a PSP's dialog
+//writes it (PPSSPP's notes: loads and saves from a list copy it back).
 auto Kernel::savedata(u32 p, const std::string* chosen) -> u32 {
-  if(!savedataTrace) return savedataMode(p, chosen);
-  std::string request = savedataRequest(p, chosen);
+  std::string request = savedataTrace ? savedataRequest(p, chosen) : std::string{};
+  if(chosen) {
+    memory.fill(p + 76, 0, 20);
+    memory.copyIn(p + 76, chosen->data(), std::min<u64>(chosen->size(), 19));
+  }
   u32 answer = savedataMode(p, chosen);
-  savedataTrace(request + " -> " + savedataAnswer(p, answer));
+  if(savedataTrace) savedataTrace(request + " -> " + savedataAnswer(p, answer));
   return answer;
 }
 
@@ -473,10 +477,11 @@ namespace {
 }
 
 //A savedata request as the trace gives it: its mode (pspsdk's name), the structure's size, the game's and the save's
-//names, a list's names (8 of them, and how many in all) and the save chosen from it (by a front end's player or the
-//automatic answer), the data file's name, the buffer, its size and the data's, and whether the save it names (with none
-//chosen, a list's first, as savedataMode() takes it) is on the memory stick; the sizes mode's msData, the list mode's
-//most, the files mode's most of each kind, the size mode's files; a save mode's title.
+//names (as the game gave them), a list's names (8 of them, and how many in all), a list dialog's focus (in the sizes
+//that have it) and the save chosen from the list (by a front end's player or the automatic answer), the data file's
+//name, the buffer, its size and the data's, and whether the save it names (with none chosen, a list's first, as
+//savedataMode() takes it) is on the memory stick; the sizes mode's msData, the list mode's most, the files mode's most
+//of each kind, the size mode's files; a save mode's title.
 auto Kernel::savedataRequest(u32 p, const std::string* chosen) -> std::string {
   //(the parameters' words where they're in memory: a read past it is noted and counted in the machine's state)
   auto word = [&](u32 at) -> u32 { return memory.reaches(p + at, 4) ? memory.read(4, p + at) : 0; };
@@ -501,6 +506,7 @@ auto Kernel::savedataRequest(u32 p, const std::string* chosen) -> std::string {
     }
     text += count ? count > 8 ? " (" + std::to_string(count) + " in all)" : std::string{} : std::string{" empty"};
   }
+  if(mode >= 4 && mode <= 7 && size > 1480) text += ", focus " + std::to_string(word(1480));  //(as dialogSaves())
   if(chosen) {
     text += ", chosen " + traceName(*chosen);
     used = *chosen;

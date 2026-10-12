@@ -635,8 +635,10 @@ static auto savedataParamSFO() -> void {
   for(u32 at = 0; at < 16; at += 4) CHECK(memory.read(4, Entries + 36 + at), memory.read(4, Stat + 48 + at));
   CHECK(m.call("sceIoGetstat", {m.string("ms0:/PSP/SAVEDATA/ULUS99999SLOT3"), Stat}), 0);
   for(u32 at = 0; at < 16; at += 4) CHECK(memory.read(4, Entries + 3 * 72 + 36 + at), memory.read(4, Stat + 48 + at));
-  CHECK(memory.read(2, Entries + 36) != memory.read(2, Entries + 3 * 72 + 36) || memory.read(2, Entries + 40) !=
-        memory.read(2, Entries + 3 * 72 + 40), true);
+  //(the whole dates, 24 hours apart: in local time, across the night daylight saving time ends, on the same day)
+  bool apart = false;
+  for(u32 at = 0; at < 12; at += 2) apart |= memory.read(2, Entries + 36 + at) != memory.read(2, Entries + 252 + at);
+  CHECK(apart, true);
   //deleting takes PARAM.SFO with the save
   saveParameters(m, 10, "ULUS99999", "SLOT0", 0);
   CHECK(runSave(m), 0);
@@ -801,10 +803,11 @@ static auto savedataMemstick() -> void {
 
 //A list's load or save answered with no front end, naming no save of its own: a load takes what a PSP's dialog shows
 //first, the focused save among those there (7th Dragon 2020 lists DATA00 to DATA49; its DATA03 loads), nothing there
-//NO_DATA; a save the list's first name ("<>" the game's folder alone, whatever else of the game's is there). A loaded
-//or saved name is written back into the request's save name, as a choice is (Brandish: The Dark Revenant's loads
-//went on only with it). A request naming its save takes it; a list with no first name is refused, as before, a save
-//making nothing and a load reading nothing, the game's folder there or not.
+//NO_DATA, and the focused one broken, the first that isn't (the focused one where all are); a save the list's first
+//name ("<>" the game's folder alone, whatever else of the game's is there). A loaded or saved name is written back
+//into the request's save name, as a choice is (Brandish: The Dark Revenant's loads went on only with it). A request
+//naming its save takes it; a list with no first name, and a game's name that isn't plain, are refused, as before, a
+//save making nothing and a load reading nothing, the game's folder there or not.
 static auto savedataListAnswers() -> void {
   HostFolder stick;
   KernelMachine m;
@@ -852,39 +855,96 @@ static auto savedataListAnswers() -> void {
   listed(4, "", {""}, 0);  //no first name, the game's folder there
   CHECK(runSave(m), 0x8011'0308);
   CHECK(m.system.memory.readString(Buffer, 8) == "", true);
+  auto folders = [&] {
+    u32 count = 0;
+    for(auto& entry : std::filesystem::directory_iterator(stick.path / "PSP/SAVEDATA")) count += entry.is_directory();
+    return count;
+  };
+  u32 before = folders();
+  for(u32 mode : {4u, 5u}) {  //a game's name that isn't plain: nothing read, made or written back
+    listed(mode, "", list, 0);
+    m.system.memory.copyIn(Parameters + 60, "NPJH:0459", 10);
+    m.system.memory.copyIn(Buffer, "bad", 3);
+    check(__LINE__, "refused", runSave(m), mode == 4 ? 0x8011'0308 : 0x8011'0388);
+    check(__LINE__, "nothing", saved() == "" && m.system.memory.readString(Buffer, 8) == "bad" && folders() == before,
+          true);
+  }
+  stick.put("PSP/SAVEDATA/NPJH50459DATA01/OTHER.BIN", "other");  //broken: its data file isn't there
+  listed(4, "", list, 1);  //the first there, broken: the first that isn't
+  CHECK(runSave(m), 0);
+  CHECK(m.system.memory.readString(Buffer, 8) == "third" && saved() == "DATA03", true);
+  listed(4, "", {"DATA00", "DATA01"}, 0);  //all there broken: the focused one
+  CHECK(runSave(m), 0x8011'0309);
+  CHECK(saved() == "DATA01", true);
 }
 
-//The savedata trace (the runner's --trace-savedata): each request a line, as it came, then its answer; nothing traced
+//The savedata trace (the runner's --trace-savedata): each request a line, as the game made it, the save chosen from
+//its list beside it, then its answer: an autosave; a list load and a list save naming no save (the save chosen
+//written back; the list save's dialog focusing a new slot); a refused save with a quote and a control character in
+//its name; a load of no save; the sizes, list, files and size modes, each with its own fields. Nothing is traced
 //without a host taking it.
 static auto savedataTrace() -> void {
+  constexpr u32 Sizes = 0x0895'0200, Files = 0x0895'0300;
   HostFolder stick;
   KernelMachine m;
   m.kernel.mount("ms0", stick.path.string());
+  auto& memory = m.system.memory;
   std::vector<std::string> lines;
   m.kernel.savedataTrace = [&](const std::string& text) { lines.push_back(text); };
-  m.system.memory.copyIn(Buffer, "data", 4);
+  memory.copyIn(Buffer, "data", 4);
   saveParameters(m, 1, "ULUS99999", "SLOT0", 4);
   CHECK(runSave(m), 0);
   saveParameters(m, 4, "ULUS99999", "", 0);
-  m.system.memory.fill(Buffer + 0x100, 0, 60);
-  m.system.memory.copyIn(Buffer + 0x100, "SLOT9", 5);
-  m.system.memory.copyIn(Buffer + 0x114, "SLOT0", 5);
-  m.system.memory.write(4, Parameters + 96, Buffer + 0x100);
+  memory.fill(Buffer + 0x100, 0, 60);
+  memory.copyIn(Buffer + 0x100, "SLOT9", 5);
+  memory.copyIn(Buffer + 0x114, "SLOT0", 5);
+  memory.write(4, Parameters + 96, Buffer + 0x100);
   CHECK(runSave(m), 0);
   saveParameters(m, 3, "ULUS99999", "A\"\x01", 4);
   CHECK(runSave(m), 0x8011'0388);
   saveParameters(m, 2, "ULUS99999", "SLOT1", 0);
   CHECK(runSave(m), 0x8011'0307);
+  saveParameters(m, 5, "ULUS99999", "<>", 4);
+  memory.write(4, Parameters + 96, Buffer + 0x100);
+  memory.write(4, Parameters + 1480, 7);  //the first new
+  CHECK(runSave(m), 0);
+  saveParameters(m, 8, "ULUS99999", "SLOT0", 4);
+  CHECK(runSave(m), 0);
+  saveParameters(m, 11, "ULUS99999", "", 0);
+  CHECK(runSave(m), 0);
+  saveParameters(m, 12, "ULUS99999", "SLOT0", 0);
+  fileList(m, 10, 10, 10);
+  CHECK(runSave(m), 0);
+  saveParameters(m, 22, "ULUS99999", "SLOT0", 0);
+  memory.write(4, Parameters + 1532, Sizes);
+  memory.fill(Sizes, 0, 64);
+  memory.fill(Files, 0, 24);
+  memory.write(4, Files, 100);  //a secure file of 100 bytes
+  memory.write(4, Sizes, 1);
+  memory.write(4, Sizes + 8, Files);
+  CHECK(runSave(m), 0);
   std::vector<std::string> expected = {
     "mode 1 (autosave), size 1536, game \"ULUS99999\", save \"SLOT0\", file \"DATA.BIN\", buffer 0x08930000 of 4096, "
     "data 4, \"ULUS99999SLOT0\" not there, title \"\" -> 0x00000000",
-    "mode 4 (listload), size 1536, game \"ULUS99999\", save \"SLOT0\", list \"SLOT9\" \"SLOT0\", chosen \"SLOT0\", "
+    "mode 4 (listload), size 1536, game \"ULUS99999\", save \"\", list \"SLOT9\" \"SLOT0\", focus 0, chosen \"SLOT0\", "
     "file \"DATA.BIN\", buffer 0x08930000 of 4096, data 0, \"ULUS99999SLOT0\" there -> 0x00000000, read 4, "
     "save \"SLOT0\"",
     "mode 3 (save), size 1536, game \"ULUS99999\", save \"A\\x22\\x01\", file \"DATA.BIN\", buffer 0x08930000 of 4096, "
     "data 4, \"ULUS99999A\\x22\\x01\" not there, title \"\" -> 0x80110388 (save: bad parameter)",
     "mode 2 (load), size 1536, game \"ULUS99999\", save \"SLOT1\", file \"DATA.BIN\", buffer 0x08930000 of 4096, "
-    "data 0, \"ULUS99999SLOT1\" not there -> 0x80110307 (load: no data)"};
+    "data 0, \"ULUS99999SLOT1\" not there -> 0x80110307 (load: no data)",
+    "mode 5 (listsave), size 1536, game \"ULUS99999\", save \"<>\", list \"SLOT9\" \"SLOT0\", focus 7, "
+    "chosen \"SLOT9\", file \"DATA.BIN\", buffer 0x08930000 of 4096, data 4, \"ULUS99999SLOT9\" not there, "
+    "title \"\" -> 0x00000000, save \"SLOT9\"",
+    "mode 8 (sizes), size 1536, game \"ULUS99999\", save \"SLOT0\", file \"DATA.BIN\", buffer 0x08930000 of 4096, "
+    "data 4, msData \"ULUS99999\" \"SLOT0\" -> 0x00000000, free 57344 clusters, msData 3 clusters, needed 3 clusters",
+    "mode 11 (list), size 1536, game \"ULUS99999\", save \"\", file \"DATA.BIN\", buffer 0x08930000 of 4096, data 0, "
+    "most 10 -> 0x00000000, listed 2 \"SLOT0\" \"SLOT9\"",
+    "mode 12 (files), size 1536, game \"ULUS99999\", save \"SLOT0\", file \"DATA.BIN\", buffer 0x08930000 of 4096, "
+    "data 0, \"ULUS99999SLOT0\" there, most 10 secure 10 normal 10 system -> 0x00000000, listed 1 secure 0 normal "
+    "1 system",
+    "mode 22 (getsize), size 1536, game \"ULUS99999\", save \"SLOT0\", file \"DATA.BIN\", buffer 0x08930000 of 4096, "
+    "data 0, \"ULUS99999SLOT0\" there, files 1 secure 0 normal -> 0x00000000, needed 0 KB, overwrite 0 KB"};
   CHECK(lines.size(), expected.size());
   for(u32 n = 0; n < std::min(lines.size(), expected.size()); n++) {
     if(lines[n] != expected[n]) std::printf("  trace line %u: %s\n", n, lines[n].c_str());

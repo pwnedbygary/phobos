@@ -92,25 +92,6 @@ static auto fileFolders() -> void {
   CHECK(m.system.memory.read(4, Buffer + 8), 5);
   CHECK(m.system.memory.read(2, Buffer + 48) >= 2020, true);  //the year it was changed
   CHECK(m.call("sceIoGetstat", {m.string("ms0:/data/none"), Buffer}), Kernel::ErrorFileNotFound);
-  {
-    //its dates in local time, as a memory stick's FAT keeps them: 4 hours west of Greenwich, changed at 12:34:56 UTC
-    //is 08:34:56, as the clock's local time has it
-    std::string zone = std::getenv("TZ") ? std::getenv("TZ") : "";
-    bool zoned = std::getenv("TZ");
-    setenv("TZ", "WEST+4", 1);
-    tzset();
-    utimbuf changed{1'791'290'096, 1'791'290'096};  //2026-10-06 12:34:56 UTC
-    utime((folder.path / "data/File.txt").c_str(), &changed);
-    CHECK(m.call("sceIoGetstat", {m.string("ms0:/data/File.txt"), Buffer}), 0);
-    std::array<u32, 6> date;
-    for(u32 n = 0; n < 6; n++) date[n] = m.system.memory.read(2, Buffer + 48 + n * 2);
-    CHECK((date == std::array<u32, 6>{2026, 10, 6, 8, 34, 56}), true);
-    m.kernel.startTime = 1'791'290'096'000'000ull;
-    CHECK(m.call("sceRtcGetCurrentClockLocalTime", {Buffer}), 0);
-    CHECK(m.system.memory.read(2, Buffer + 6), 8);
-    zoned ? setenv("TZ", zone.c_str(), 1) : unsetenv("TZ");
-    tzset();
-  }
 
   auto list = [&](const char* path) {
     std::vector<std::string> names;
@@ -146,6 +127,73 @@ static auto fileFolders() -> void {
   CHECK(m.call("sceIoRemove", {m.string("ms0:/saves")}), Kernel::ErrorIsDirectory);
   CHECK(m.call("sceIoRmdir", {m.string("ms0:/data")}), 0);
   CHECK(std::filesystem::exists(folder.path / "data"), false);
+}
+
+//A file's dates (sceIoGetstat's, as the savedata lists give them too) are in local time, as a memory stick's FAT
+//keeps them and as the clock's local time has it: 4 hours west of Greenwich, and in a zone with daylight saving time,
+//summer and winter. None is later than the PSP's clock as local times go: with the clock an hour behind the file (a
+//state saved earlier loaded), and in the hour daylight saving time gives back (the file changed in its first pass,
+//the clock in its second, later in UTC but earlier in local time), the date is the clock's now. Before 1980 (in local
+//time), or for a file that isn't there, it's 1980-01-01 00:00:00: no FAT stick holds an earlier date. The system's
+//time zone and daylight saving time settings agree with the clock's local time.
+static auto fileDates() -> void {
+  HostFolder folder;
+  folder.put("data/File.txt", "hello");
+  KernelMachine m;
+  m.kernel.mount("ms0", folder.path.string());
+  using Date = std::array<u32, 6>;
+  auto dates = [&](u32 at) {  //a SceIoStat's three: made, read, changed
+    std::array<Date, 3> read;
+    for(u32 n = 0; n < 18; n++) read[n / 6][n % 6] = m.system.memory.read(2, at + n / 6 * 16 + n % 6 * 2);
+    return read;
+  };
+  auto dated = [&](s64 changed, s64 clock) {  //the file changed (seconds since 1970), the clock's now: its dates
+    utimbuf times{std::time_t(changed), std::time_t(changed)};
+    utime((folder.path / "data/File.txt").c_str(), &times);
+    m.kernel.startTime = u64(clock) * 1'000'000;
+    m.system.memory.fill(Buffer, 0xcc, 88);
+    CHECK(m.call("sceIoGetstat", {m.string("ms0:/data/File.txt"), Buffer}), 0);
+    return dates(Buffer + 16);
+  };
+  auto all = [](const Date& date) { return std::array<Date, 3>{date, date, date}; };
+  auto setting = [&](u32 which) {
+    m.system.memory.write(4, Buffer, 0xcccc'cccc);
+    CHECK(m.call("sceUtilityGetSystemParamInt", {which, Buffer}), 0);
+    return m.system.memory.read(4, Buffer);
+  };
+  constexpr s64 Changed = 1'791'290'096, Day = 86'400;  //2026-10-06 12:34:56 UTC
+  {
+    HostZone zone("WEST+4");
+    CHECK((dated(Changed, Changed + Day) == all({2026, 10, 6, 8, 34, 56})), true);
+    CHECK((dated(Changed, Changed - 3'600) == all({2026, 10, 6, 7, 34, 56})), true);
+    CHECK(m.call("sceRtcGetCurrentClockLocalTime", {Buffer}), 0);
+    CHECK((dates(Buffer)[0] == Date{2026, 10, 6, 7, 34, 56}), true);
+    CHECK(setting(6), u32(-240));
+    CHECK(setting(7), 0);
+  }
+  {
+    HostZone zone("EST5EDT,M3.2.0,M11.1.0");
+    constexpr s64 Summer = 1'782'907'200, Winter = 1'768'478'400;  //2026-07-01 and 2026-01-15, 12:00 UTC
+    CHECK((dated(Summer, Summer + Day) == all({2026, 7, 1, 8, 0, 0})), true);
+    CHECK(setting(6), u32(-300));
+    CHECK(setting(7), 1);
+    CHECK((dated(Winter, Winter + Day) == all({2026, 1, 15, 7, 0, 0})), true);
+    CHECK(setting(6), u32(-300));
+    CHECK(setting(7), 0);
+    //2026-11-01 05:30 UTC is 01:30 EDT; 06:10 UTC, 01:10 EST
+    CHECK((dated(1'793'511'000, 1'793'513'400) == all({2026, 11, 1, 1, 10, 0})), true);
+    CHECK((dated(172'065'600, Summer) == all({1980, 1, 1, 0, 0, 0})), true);  //1975-06-15
+    CHECK((dated(315'532'800, Summer) == all({1980, 1, 1, 0, 0, 0})), true);  //1979-12-31 19:00 EST
+    CHECK((dated(315'550'801, Summer) == all({1980, 1, 1, 0, 0, 1})), true);
+    m.system.memory.fill(Buffer, 0xcc, 48);
+    m.kernel.writeTimes(Buffer, (folder.path / "data/none").string());
+    CHECK((dates(Buffer) == all({1980, 1, 1, 0, 0, 0})), true);
+  }
+  {
+    HostZone zone("JST-9");
+    CHECK(setting(6), 540);
+    CHECK(setting(7), 0);
+  }
 }
 
 //Paths stay inside their device's folder; unmounted devices, aliases and backslashes.
@@ -674,7 +722,9 @@ static auto fileList() -> void {
 
 auto fileTests() -> Tests {
   return {
-    {"files basics", fileBasics}, {"files folders", fileFolders}, {"files containment", fileContainment},
+    {"files basics", fileBasics}, {"files folders", fileFolders},
+    {"files dates in local time, none after the clock or before 1980; the system's time zone", fileDates},
+    {"files containment", fileContainment},
     {"files rename", fileRename}, {"files numbered lowest free first", fileNumbers},
     {"files listed in the order they were opened", fileList},
     {"files short names", fileShortNames}, {"controller peek", controllerPeek}, {"controller latch", controllerLatch},
