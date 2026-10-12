@@ -4,7 +4,8 @@
 //Dialogs. One at a time, each through four functions: InitStart (with its parameters, a structure in the program's
 //memory that also takes the answer), GetStatus, Update (called every frame while it shows) and ShutdownStart. Its
 //status goes 1 (starting) for a while, 2 (running: Update does its work, then) 3 (finished: the answer is in the
-//parameters), and after ShutdownStart 4 (shutting down) for a while, then 0 (none). The whiles are PPSSPP's
+//parameters), and after ShutdownStart 4 (shutting down) for a while, then 0 (none); a save dialog closed from a
+//thread worse than its own threads and 0x20 goes to 0 at once (dialogShutdown()). The whiles are PPSSPP's
 //(200 ms to start a save dialog, 300 for a message, 2 ms to close a save dialog...). A dialog asked about while
 //another kind was started last is the wrong type. As pspautotests' utility/dialog tests recorded (status, sizes,
 //abort, priority): a dialog starts only while none is current, not even one shutting down (INVALID_STATUS, asked
@@ -49,6 +50,7 @@ namespace {
   constexpr u32 DialogCancelled = 1;  //a dialog's result when the player backs out
   constexpr u32 KeyboardChanged = 2;  //a keyboard field's result when the player enters its text
   constexpr u32 MessageAbortUpdates = 8;  //(utility/dialog/abort: that many Updates from the start, less any already)
+  constexpr u32 SavedataClosePriority = 0x20;  //a save dialog's last closing step's (utility/savedata/shutdownstatus)
   //Whether InitStart takes a kind's parameters at this size (their common part's first word): the sizes
   //utility/dialog/sizes skipped as the ones each kind takes (every other size up to 0x800 refused), and those
   //utility/dialog/htmlviewer found the web browser takes.
@@ -156,17 +158,38 @@ auto Kernel::dialogUpdate(u32 kind) -> void {
   result(0);
 }
 
-//Closes a finished dialog.
+//Closes a finished dialog. A save dialog closes in the utility's own threads, last at priority 0x20, without waiting:
+//a caller worse than them has no dialog by the time it runs again. pspautotests' utility/savedata/shutdownstatus
+//recorded callers at 33 to 36 and 111 reading NONE at their first look after ShutdownStart, and one at 32 SHUTDOWN,
+//then NONE (the dialog's graphics and access threads at 17 and 19; its font and sound threads' priorities made no
+//difference). Before that last step the threads run at the graphics and access threads' priorities its parameters
+//give (the common part's words at 12 and 16), PPSSPP's description has it, so a caller better than either sees it
+//closing too. A caller worse than all three finds the dialog closed at once here, the closing's time taken by the
+//utility's threads, not counted; a priority no thread can have (outside 1 to 0x7f) holds no caller off. Crash Tag
+//Team Racing's main thread, at 0x3f, closes its save dialog and starts the next one at once: refused as still
+//closing, it waited for that dialog for good. A caller the utility's threads can't take the CPU from (interrupts or
+//dispatching held off, a call into the program) or none sees the dialog closing for its while, and the other dialogs
+//close as before (utility/dialog/priority: a message closed from 111 still read SHUTDOWN).
 auto Kernel::dialogShutdown(u32 kind) -> void {
   if(dialog.kind != kind) return result(UtilityWrongType);
   dialogDue();
   if(dialog.status != DialogFinished) return result(UtilityInvalidStatus);
+  result(0);
+  auto holds = [&](u32 offset) {  //a thread's priority from the parameters, or 0
+    u32 priority = memory.read(4, dialog.parameters + offset);
+    return priority >= 0x01 && priority <= 0x7f ? priority : 0;
+  };
+  if(kind == DialogSavedata && current && !interrupting && !dispatchSuspended && interruptsEnabled
+  && current->priority > std::max({holds(12), holds(16), SavedataClosePriority})) {
+    dialog.status = DialogNone;
+    dialog.changeAt = 0;
+    return;
+  }
   u32 start, close;
   dialogTimes(kind, start, close);
   dialog.status = DialogClosing;
   dialog.next = DialogNone;
   dialog.changeAt = cycles + u64(close) * (CPUFrequency / 1'000'000);
-  result(0);
 }
 
 //The keyboard (psputility_osk.h's SceUtilityOskParams: the common part, then how many fields and where their
