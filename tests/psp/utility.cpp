@@ -1,10 +1,10 @@
 //The system's utilities (ares/psp/kernel/utility.cpp): a dialog's statuses and their timing, saves made, loaded,
 //sized, listed, erased and deleted in a memory stick folder (names that would reach elsewhere and buffers outside
 //the program's memory refused), their files listed secure, normal and the system's, their PARAM.SFO written and read
-//back, saves without one (v2.0.0's) still loading, the memory stick's free space told alike everywhere, a message
-//answered yes, the keyboard's fields entered (an empty one given the nickname), network settings cancelled, the wrong
-//type and the wrong status refused; a game's data install cancelled; optional modules loaded and unloaded; the
-//nickname. Called directly, the clock moved on by hand.
+//back, saves without one (v2.0.0's) still loading, a game's save beside its own files through memstick:, the memory
+//stick's free space told alike everywhere, a message answered yes, the keyboard's fields entered (an empty one given
+//the nickname), network settings cancelled, the wrong type and the wrong status refused; a game's data install
+//cancelled; optional modules loaded and unloaded; the nickname. Called directly, the clock moved on by hand.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -688,6 +688,116 @@ static auto savedataOlder() -> void {
         true);
 }
 
+//Colin McRae Rally 2005 Plus's save, its calls as the game makes them (traced): memstick: assigned to the memory
+//stick's file system; at boot, its save looked for through it, CMR5TS.DAT opened for reading asynchronously and the
+//request polled: FILE_NOT_FOUND (none there, not NO_SUCH_DEVICE); an autosave (mode 1) in the parameters' second size
+//(1500 bytes), OPTIONS.DAT named but no data given, with ICON0 and PIC1, making the save's folder, PARAM.SFO and
+//icons; the game's own files opened in the folder through memstick:, each asynchronously and polled, TIMES.DAT and
+//CMR5TS.DAT made (write, create, truncate), then TIMES.DAT again (read, write, create); the autosave again with
+//OPTIONS.DAT's data. On the next boot (another machine on the same stick) CMR5TS.DAT is opened twice, the same way,
+//the autoload (mode 0, no titles or icons given) reads OPTIONS.DAT, and TIMES.DAT is opened once. What the files are
+//given and read here is the test's (sceIoWrite, sceIoRead), as are the checks after the second boot's calls:
+//memstick: whatever its case, its files' status and folders, a rename to ms0: (the same device), a relative open from
+//a working folder on it, and memstick: with no sceIoAssign at all (the stick all the same: deviceName()'s choice).
+static auto savedataMemstick() -> void {
+  constexpr u32 Icon0 = 0x0898'0000, Pic1 = 0x0898'1000, Polled = 0x0898'2000;
+  HostFolder stick;
+  std::string folder = "memstick:/PSP/SAVEDATA/ULES001110000/";
+  auto request = [&](KernelMachine& m, u32 mode, u32 buffer, u32 size) {
+    auto& memory = m.system.memory;
+    saveParameters(m, mode, "ULES00111", "0000", size);
+    memory.write(4, Parameters, 1500);
+    memory.write(4, Parameters + 56, mode == 1);  //overwrite
+    fileName(m, "OPTIONS.DAT");
+    memory.write(4, Parameters + 116, buffer);
+    memory.write(4, Parameters + 120, buffer ? 0x1000 : 0);
+  };
+  auto autosave = [&](KernelMachine& m, u32 buffer, u32 size) {
+    auto& memory = m.system.memory;
+    request(m, 1, buffer, size);
+    saveTitles(m, "Colin McRae Rally 2005 plus", "", "Save game for Colin McRae Rally 2005 Plus", 2);
+    memory.copyIn(Icon0, "ICON0", 5);
+    memory.copyIn(Pic1, "PIC1", 4);
+    for(auto [at, data, length] : {std::tuple{1412u, Icon0, 5u}, std::tuple{1444u, Pic1, 4u}}) {
+      memory.write(4, Parameters + at, data);
+      memory.write(4, Parameters + at + 4, length);
+      memory.write(4, Parameters + at + 8, length);
+    }
+  };
+  //an asynchronous open, its request polled once it's done: the request's result (the file, or why it wasn't opened)
+  auto openAsync = [&](KernelMachine& m, const std::string& path, u32 flags) -> u32 {
+    u32 file = m.call("sceIoOpenAsync", {m.string(path), flags, 0x1ff});
+    CHECK(file >= 3 && file < 0x8000'0000, true);
+    m.kernel.cycles = m.kernel.files[file].asyncDoneAt;
+    m.kernel.events();
+    m.system.memory.fill(Polled, 0xcc, 8);
+    CHECK(m.call("sceIoPollAsync", {file, Polled}), 0);
+    return m.system.memory.read(4, Polled);
+  };
+  auto write = [&](KernelMachine& m, u32 file, const char* text) {
+    m.system.memory.copyIn(Buffer, text, strlen(text));
+    CHECK(m.call("sceIoWrite", {file, Buffer, u32(strlen(text))}), strlen(text));
+    CHECK(m.call("sceIoClose", {file}), 0);
+  };
+  auto read = [&](KernelMachine& m, u32 file) -> std::string {
+    m.system.memory.fill(Buffer, 0, 16);
+    u32 count = m.call("sceIoRead", {file, Buffer, 16});
+    CHECK(m.call("sceIoClose", {file}), 0);
+    return count <= 16 ? m.system.memory.readString(Buffer, count) : std::string{};
+  };
+  auto open = [&](KernelMachine& m, const std::string& path) { return m.call("sceIoOpen", {m.string(path), 1, 0}); };
+  auto assign = [&](KernelMachine& m) {
+    CHECK(m.call("sceIoAssign", {m.string("memstick:"), m.string("msstor0p1:/"), m.string("fatms0:"), 0, 0, 0}), 0);
+  };
+  {
+    KernelMachine m;
+    m.kernel.mount("ms0", stick.path.string());
+    assign(m);
+    CHECK(openAsync(m, folder + "CMR5TS.DAT", 0x0001), Kernel::ErrorFileNotFound);
+    CHECK(m.system.memory.read(4, Polled + 4), 0xffff'ffff);
+    autosave(m, 0, 0);
+    CHECK(runSave(m), 0);
+    CHECK(stick.get("PSP/SAVEDATA/ULES001110000/ICON0.PNG") == "ICON0", true);
+    CHECK(stick.get("PSP/SAVEDATA/ULES001110000/PIC1.PNG") == "PIC1", true);
+    CHECK(sfoField(stick.get("PSP/SAVEDATA/ULES001110000/PARAM.SFO"), "TITLE").starts_with("Colin McRae"), true);
+    CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/ULES001110000/OPTIONS.DAT"), true);  //no data: empty
+    CHECK(stick.get("PSP/SAVEDATA/ULES001110000/OPTIONS.DAT").empty(), true);
+    write(m, openAsync(m, folder + "TIMES.DAT", 0x0602), "times");
+    write(m, openAsync(m, folder + "CMR5TS.DAT", 0x0602), "cmr5");
+    CHECK(read(m, openAsync(m, folder + "TIMES.DAT", 0x0203)) == "times", true);
+    m.system.memory.copyIn(Buffer, "options", 7);
+    autosave(m, Buffer, 7);
+    CHECK(runSave(m), 0);
+    CHECK(stick.get("PSP/SAVEDATA/ULES001110000/OPTIONS.DAT") == "options", true);
+    CHECK(stick.get("PSP/SAVEDATA/ULES001110000/TIMES.DAT") == "times", true);
+    CHECK(stick.get("PSP/SAVEDATA/ULES001110000/CMR5TS.DAT") == "cmr5", true);
+  }
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  assign(m);
+  for(u32 n = 0; n < 2; n++) CHECK(read(m, openAsync(m, folder + "CMR5TS.DAT", 0x0001)) == "cmr5", true);
+  request(m, 0, Buffer, 0);  //the autoload
+  m.system.memory.fill(Buffer, 0, 16);
+  CHECK(runSave(m), 0);
+  CHECK(m.system.memory.readString(Buffer, 16) == "options", true);
+  CHECK(m.system.memory.read(4, Parameters + 124), 7);
+  CHECK(read(m, openAsync(m, folder + "TIMES.DAT", 0x0001)) == "times", true);
+  CHECK(m.call("sceIoGetstat", {m.string(folder + "TIMES.DAT"), Stat}), 0);
+  CHECK(m.system.memory.read(4, Stat + 8), 5);
+  CHECK(read(m, open(m, "MEMSTICK:/PSP/SAVEDATA/ULES001110000/CMR5TS.DAT")) == "cmr5", true);
+  u32 listing = m.call("sceIoDopen", {m.string(folder)});
+  CHECK(listing >= 3 && listing < 0x8000'0000, true);
+  CHECK(m.call("sceIoDclose", {listing}), 0);
+  CHECK(m.call("sceIoRename", {m.string(folder + "TIMES.DAT"), m.string("ms0:/PSP/TIMES.BAK")}), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULES001110000/TIMES.BAK") == "times", true);
+  CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/ULES001110000/TIMES.DAT"), false);
+  CHECK(m.call("sceIoChdir", {m.string("memstick:/PSP/SAVEDATA/ULES001110000")}), 0);
+  CHECK(read(m, open(m, "TIMES.BAK")) == "times", true);
+  KernelMachine unassigned;
+  unassigned.kernel.mount("ms0", stick.path.string());
+  CHECK(read(unassigned, open(unassigned, folder + "CMR5TS.DAT")) == "cmr5", true);
+}
+
 //A save missing a file, as utility/savedata/loadbroken and deletebroken recorded (a save made, then its data file
 //taken away): loads FILE_NOT_FOUND (0x80110309), reads and erases the reads' (0x80110329); the files mode lists what's
 //left; deleting takes it. One whose PARAM.SFO isn't one is broken: loads DATA_BROKEN (0x80110306), reads, erases and
@@ -1349,6 +1459,7 @@ auto utilityTests() -> Tests {
     {"utility savedata erase", savedataErase}, {"utility savedata files", savedataFiles},
     {"utility savedata PARAM.SFO", savedataParamSFO}, {"utility savedata without PARAM.SFO (v2.0.0's)", savedataOlder},
     {"utility savedata broken saves", savedataBroken},
+    {"utility savedata through memstick: (Colin McRae Rally 2005 Plus)", savedataMemstick},
     {"memory stick free space", stickSpace}, {"utility dialogs", dialogs},
     {"utility keyboard", keyboard}, {"utility modules", modules},
     {"utility game data install", gamedataInstall}, {"utility dialog sizes and statuses", dialogStatuses},
