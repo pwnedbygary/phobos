@@ -79,6 +79,17 @@ software renderer's every picture, VRAM, RAM and the machine's end state are the
   Edge's slow scene not reached; Chinatown Wars' long frames not seen on the Mac (to trace on the RP6).
 - Scratch: `~/phobos-work/scratch/speed9`.
 
+## Version codes for 2.1 — 2026-10-12
+
+Branch `cursor/version-base-21-2b67`, on `master` after #221 (the system dialogs) and #222 (round 6's pictures), before
+the v2.1.0 tag. The version code is now 210000 + the commit count (`android/app/build.gradle.kts`): test builds on the
+owner's RP6 went up to 205231 (the dialogs' 205223, then 205230 with round 6's time model and 205231 with the dialogs
+alone, built with -PversionCode), level with what 200000 + the count gives master around the tag (205,229 to 205,232),
+and Android refuses a lower code over a higher one without an uninstall (which loses the app's data). Every earlier
+build, release, nightly or test build is below 210000, so nobody's update becomes a downgrade; nightly tags become
+`nightly-215xxx` and up. README.md and the implementation plan's updater row say so. A later release can raise the
+base again the same way if a stray build gets ahead of it.
+
 ## PSP: round 6's pictures — lighting's two multiplies, the reciprocal's chords, patches along v — 2026-10-12
 
 Branch `cursor/psp-round6-fits-2b67` (#222), on master (`2a7019c84`). The owner ran round 6 of `tools/psp-measure` on
