@@ -530,6 +530,7 @@ auto Kernel::sceGeContinue() -> void {
   if(list.pausing || geRunning == s32(index)) return result(ErrorBusy);
   list.state = GeList::State::Running;
   if(list.context && !list.started) geSaveContext(list.context);
+  if(!list.started) geOwe(GE::Cost::List);
   list.started = true;
   geLoad(list);
   geRunning = index;

@@ -604,6 +604,14 @@ auto states(const fs::path& programs) -> void {
       serializer fresh{state.data(), state.size()};
       CHECK(root->unserialize(fresh), "the state loads in a fresh session");
       CHECK(play(root) == first, "and carries on exactly as it did");
+      //as layout 26 (#221's, the dialogs'): the state without the GE's cached texture, the kernel's last field (13
+      //bytes, before the sound owed and the count of unmapped accesses reported), which loads with none held
+      std::vector<u8> older(state.data(), state.data() + state.size());
+      older.erase(older.end() - 25, older.end() - 12);
+      older[4] = 26;
+      serializer layout26{older.data(), u32(older.size())};
+      CHECK(root->unserialize(layout26), "a state of layout 26 loads");
+      CHECK(!psp.kernel.ge.cachedTexture.held && play(root) == first, "and carries on as it did, no texture held");
     }
 
     //not a state, states cut short, and one owing endless sound: refused, the whole machine as it was. Cut by 4 KiB,
@@ -645,8 +653,8 @@ auto states(const fs::path& programs) -> void {
     //the display's count of lines adjusted (part 32); version 14, before the disc drive kept whether it was
     //deactivated (part 37). Layouts 15 and 16 load with the message-dialog abort counters defaulted (part 42).
     //Each older layout is refused by its header, before anything is touched (even the compiled code, which any load
-    //throws away); so are 26 and 27, other branches' layouts with fields of their own, and a newer one.
-    for(u8 version : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 26, 27, 29}) {
+    //throws away); so is 27, another branch's layout with fields of its own, and a newer one.
+    for(u8 version : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 27, 29}) {
       bytes.assign(state.data(), state.data() + state.size());
       bytes[4] = version, bytes[5] = bytes[6] = bytes[7] = 0;
       serializer old{bytes.data(), u32(bytes.size())};

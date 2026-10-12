@@ -226,7 +226,8 @@ auto GE::patch(bool spline, u32 argument) -> void {
 
   //Drawn as PATCH_PRIMITIVE says: the rows two at a time as strips, of triangles, lines or points. The GE's time
   //(Cost): the surface's own and its vertices'; with PATCH_CULL_ENABLE, a surface that draws no pixel takes only its
-  //own, and its points' fetch (readVertices()): the GE drops it before making its vertices.
+  //own, and its points' fetch (readVertices()): the GE drops it before making its vertices. (Lights and weights are
+  //counted for the strips' vertices, an inner row's twice, as drawVertices() meets them: round 6 timed unlit patches.)
   u32 kind = commands[PatchPrimitive] & 3;
   auto& vertices = patchVertices;
   vertices.clear();

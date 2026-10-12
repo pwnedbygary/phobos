@@ -1079,8 +1079,9 @@ static auto draw3dTimeCounted() -> void {
                                 static_cast<GE::Renderer*>(&transforming)}) {
     Scene c;
     c.ge.setRenderer(renderer);
-    auto counted = [&](u64 pixels, u64) {
+    auto counted = [&](u64 pixels, u64 primitives) {
       CHECK(c.ge.owed.pixels, pixels);
+      CHECK(c.ge.owed.back >= f64(primitives) * GE::Cost::Primitive, true);
       backs[which].push_back(c.ge.owed.back);
       c.ge.owed = {};
     };

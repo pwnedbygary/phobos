@@ -1572,7 +1572,8 @@ static auto idsRunOut() -> void {
   CHECK(n.kernel.nextUID, Kernel::LastUID + 1);
 }
 
-//States of the layouts before this one load: 25's (no texture held in the GE's cache, for its time), 24's (nor any
+//States of the layouts before this one load: 26's (no texture held in the GE's cache, for its time), 25's (nor the
+//dialog's error and deleted save), 24's (nor any
 //file's PGD decryption), 23's (nor GE time: when the GE will
 //have drawn what it was given, and whether its list's FINISH waits), 22's (nor any file's place in the order files
 //were opened), 21's (nor part 58's sceJpeg, sceHprm and low-level ATRAC fields, with files' count still kept and no
@@ -1668,6 +1669,7 @@ static auto olderLayouts() -> void {
     n.kernel.atracs[1].lowLevel = true;
     n.kernel.geDoneAt = 12345;
     n.kernel.ge.cachedTexture = {0x0400'0000, 3, 0x505, true};
+    n.kernel.dialog.error = 1, n.kernel.dialog.deleted = true;
     n.kernel.stateLayout = layout;
     serializer s{bytes.data(), u32(bytes.size())};
     bool loaded = n.kernel.serialize(s) && s.size() == bytes.size();

@@ -572,7 +572,7 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //no sceHprm callbacks and no ATRAC low-level IDs, 15 to 21 with their files' count passed over and no read's
 //bytes still to come, 15 to 22 with their files opened in the order of their numbers, 15 to 23 with the GE
 //having nothing left to draw, 15 to 24 with no file's PGD decryption set up (each read as it is), and 15 to 25 with
-//no error for an aborted message and no save deleted from a list, and 15 to 27 with no texture held in the GE's cache
+//no error for an aborted message and no save deleted from a list, and 15 to 26 with no texture held in the GE's cache
 //(for its time); older layouts are refused. 27 is another branch's layout, with fields of its own that this one
 //doesn't read: refused until it's merged (the merge takes that out).
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
@@ -586,12 +586,12 @@ auto System::hash(std::span<const u8> bytes) -> u64 {
   return value;
 }
 
-//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 25 (the
-//dialog's abort counters default to 0, no sceCcc tables, no thread-local storage pools, no stacks lent, sceJpeg not
-//started, no sceHprm callbacks, no ATRAC low-level IDs, the files' count passed over, no read's bytes still to
-//come, files opened in the order of their numbers, the GE with nothing left to draw, no file's PGD decryption set
-//up, no aborted message's error or list delete's deleted save, no texture in the GE's cache): the owner's accuracy
-//scenes were saved at 15 before part 42.
+//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 26, not
+//27 (the dialog's abort counters default to 0, no sceCcc tables, no thread-local storage pools, no stacks lent,
+//sceJpeg not started, no sceHprm callbacks, no ATRAC low-level IDs, the files' count passed over, no read's bytes
+//still to come, files opened in the order of their numbers, the GE with nothing left to draw, no file's PGD
+//decryption set up, no aborted message's error or list delete's deleted save, no texture in the GE's cache): the
+//owner's accuracy scenes were saved at 15 before part 42.
 auto System::header(serializer& s) -> bool {
   u32 signature = StateSignature, version = StateVersion, ramSize = memory.ram.size();
   u64 program = programHash;

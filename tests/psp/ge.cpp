@@ -2011,9 +2011,9 @@ struct DrawingList {
 //256 * 0.535 = 35068.79, the longer: at 111 MHz 105206 cycles, at 166 MHz 70348. List B's hundred one-pixel sprites
 //take its front end 27.36 + 2400 * 0.515 = 1263.36 (its back end 100 * (7.03 + 1.65)), at 166 MHz 2534 cycles. A
 //64x32 sprite with its list's first 10 words takes 7.03 + 32 * 64 * 0.535 = 1102.71 clocks, 2212 cycles; a 32x32 one
-//after it, with the FINISH, 7.03 + 32 * 32 * 0.319 = 333.686, 669; an 8x8 one 7.03 + 8 * 1.65 = 20.23 clocks (its
-//rows' least), 40 cycles at most with its words. A list a SIGNAL stops runs in two goes, each the longer of its ends:
-//its first 9 words, to the SIGNAL's END, 20.52 clocks, 41 cycles, then the rest.
+//after it, with the FINISH, 7.03 + 32 * 32 * 0.319 = 333.686, 669; an 8x8 one 7.03 + 8 * 8 * 0.319 = 27.446 clocks,
+//its list's 12 words and two vertices 39.72 the longer, 79 cycles at most. A list a SIGNAL stops runs in two goes,
+//each the longer of its ends: its first 9 words, to the SIGNAL's END, 20.52 clocks, 41 cycles, then the rest.
 //The pixels are drawn at once; the list reads as drawing for sceGeListSync and sceGeDrawSync till then. A list
 //queued behind is taken up as the GE is done with the one before; a list given in parts takes each up as it comes,
 //or once the GE is done with the last, whichever is later. A list whose stall address is just past its END reads as
@@ -2090,7 +2090,7 @@ static auto geTime() -> void {
     m.kernel.run(4000);
     CHECK(m.call("sceGeListSync", {id, 1}), 0);
   }
-  //a list stalled before its last words, moved on to its end: done inside the call, its 8x8 sprite's 40 cycles
+  //a list stalled before its last words, moved on to its end: done inside the call, its 8x8 sprite's 79 cycles
   //within the driver's 510, so done as the call returns (Cube queues the same list again just after: busy, else)
   DrawingList e{memory, ListA + 0x1000, Vertices + 0x5000};
   e.draw(GE::Sprites, {{0, 0}, {8, 8}});
@@ -2139,6 +2139,15 @@ static auto geTime() -> void {
   CHECK(memory.read(4, VRAM + (7 * 512 + 307) * 4), 0xffu);
   CHECK(m.call("sceGeListSync", {id, 1}), 2);
   m.kernel.run(100);
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+
+  //a list put at the head of an empty queue waits, paused, for sceGeContinue, which starts it: a list's start too
+  id = m.call("sceGeListEnQueueHead", {ListA, 0, 0xffff'ffff, 0});
+  CHECK(m.call("sceGeListSync", {id, 1}), 4);
+  start = m.kernel.cycles;
+  CHECK(m.call("sceGeContinue", {}), 0);
+  CHECK(m.kernel.geDoneAt, start + 4353 + 70348);
+  past(start + 4353 + 70348);
   CHECK(m.call("sceGeListSync", {id, 1}), 0);
 
   id = enqueue(ListA);

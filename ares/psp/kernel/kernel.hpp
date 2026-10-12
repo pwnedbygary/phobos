@@ -967,7 +967,7 @@ struct Kernel {
   s32 geFinishing = -1;     //the list whose finish callback runs: the rest of its ending waits for it
   u64 geLeft = GeBudget;    //commands the GE may still run this frame (each vertical blank gives it GeBudget again)
   u64 geCommands = 0;       //commands the GE has run since power on (not saved: a count for tests and notes)
-  static constexpr u64 GeEnqueueCycles = 5200;  //the CPU's own cycles sceGeListEnQueue takes (geDriven())
+  static constexpr u64 GeEnqueueCycles = 5200;  //the CPU's own cycles sceGeListEnQueue (or Head) takes (geDriven())
   static constexpr u64 GeStallCycles = 510;     //and sceGeListUpdateStallAddr
   u64 geDoneAt = 0;         //when (cycles) a PSP's GE would have drawn all it has been given (geTime())
   bool geFinishDue = false; //the list it runs met its FINISH: its interrupt is taken from geDoneAt on (geInterrupt())
