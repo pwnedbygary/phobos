@@ -442,6 +442,12 @@ auto GE::ensureDecoded(Batch& batch) -> void {
     auto entry = std::make_shared<Decoded>();
     entry->key = {t.address, t.bufferWidth, t.format, width, t.swizzled, 0, 0, 0, 0, 0};
     entry->rows = rows;
+    entry->deferred = true;
+    //(into an earlier copy's room where there's one: its texels the jobs can't take stay as that left them)
+    {
+      std::lock_guard lock(spares->mutex);
+      if(!spares->texels.empty()) entry->texels = std::move(spares->texels.back()), spares->texels.pop_back();
+    }
     entry->texels.resize(width * rows);
     u32 low, high;
     textureBytes(t, rows, low, high);

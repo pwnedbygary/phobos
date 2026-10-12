@@ -401,7 +401,19 @@ auto GE::clearBatch(Batch& batch) -> void {
     for(s32 band = batch.top / BandRows; band <= batch.bottom / BandRows; band++) batch.bandJobs[band].clear();
   }
   batch.jobs.clear();
+  //(its deferred copies' texels, each once, to decode into again: no Look outside the batch holds one)
+  std::vector<std::shared_ptr<Decoded>> copies;
+  for(auto& look : batch.looks) {
+    if(!look.decoded || !look.decoded->deferred) continue;
+    if(std::find(copies.begin(), copies.end(), look.decoded) == copies.end()) copies.push_back(look.decoded);
+  }
   batch.looks.clear();
+  if(!copies.empty()) {
+    std::lock_guard lock(spares->mutex);
+    for(auto& copy : copies) {
+      if(spares->texels.size() < SpareCopies) spares->texels.push_back(std::move(copy->texels));
+    }
+  }
   batch.work = 0;
   batch.top = 0, batch.bottom = -1;
   batch.targeted = false;

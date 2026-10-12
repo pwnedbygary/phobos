@@ -219,6 +219,7 @@ struct GE {
     //(textureWritten()): looked at again before it's next drawn with
     std::vector<u8> source;
     bool suspect = false;
+    bool deferred = false;  //decoded for one batch alone (ensureDecoded()), not kept
   };
   struct TextureCache {
     std::unordered_map<TextureKey, std::shared_ptr<Decoded>, TextureKey::Hash> entries;
@@ -365,6 +366,11 @@ struct GE {
   u64 clutHash = 0;        //its contents' hash, and a version that goes up whenever they change
   u32 clutVersion = 0;
   TextureCache textures;   //textures kept decoded (texture.cpp)
+  //The texels' room of deferred copies done with (clearBatch()), to decode into again (ensureDecoded(), on whichever
+  //thread starts a batch), rather than taking and clearing a texture's worth each time.
+  struct Spares { std::mutex mutex; std::vector<std::vector<u32>> texels; };
+  std::unique_ptr<Spares> spares = std::make_unique<Spares>();
+  static constexpr u32 SpareCopies = 4;
   bool fourPixels = true;  //rows drawn four pixels at a time where they may be (four.cpp; tests compare without)
   Registers list;
   u32 vertexAddress = 0, indexAddress = 0;  //where the next vertex and index are read
