@@ -9541,3 +9541,237 @@ differ too.
 - Scratch: `~/phobos-work/scratch/mga2` (tools/: the script, display list and texture decoders and the contact
   sheets; trace-patch/: the scratch runner's tracing and the vnop counter; after1 and after2, the runs above; lib-fix
   and count, the library runs).
+
+## Part 75: round 6's pictures — lighting's two multiplies, every chord of the reciprocal, patches along v
+
+On branch `cursor/psp-round6-fits-2b67`, on master (`2a7019c84`, with #212 to #219 as #220). The task: compare the
+core with round 6 of `tools/psp-measure` (part 66's 36 tests), which the owner ran on his PSP (a PSP-1000 with 32
+MiB, ARK custom firmware on Sony's 6.60/6.61: the console of every round), and make the GE match it. Clean room: no PPSSPP code was read for this part (what part 60 and earlier carried over
+stays as it was), and JPCSP was not read.
+
+This part is what round 6 showed of the GE's pictures. Its timing files (`time-*`, 906 timed lists) and the driver's
+statuses (`ge-statuses`) are in the repository with the rest, but the GE's time is still part 64's here: a time model
+fitted to them, with the driver's own CPU time, made some games draw far fewer frames and polling games slower on the
+RP6, and is kept apart, on a branch of its own, until round 7 says whether a PSP does the same. So nothing here changes
+how long a list takes or what a save state holds (layout 25 still).
+
+The round came back whole: part 66's 36 files, rounds 3 to 5B's files byte for byte as they were, `results/vfpu`
+unchanged, and `stall-check.stalled` the only stall noted. The four tests that were to stall if v behaves as u does
+(`curves-count-v-65`, `-100`, `-200`, `-255`) drew instead (below).
+
+### In the repository
+
+- `tests/psp/measurements/ge-round6`: the 36 files packed with xz (`xz -9e`: 7.3 MB as 1.5 MB, as
+  `tests/allegrex/measured`'s are), `manifest6.txt`, and `SHA256SUMS` of the unpacked files (checked against the
+  owner's). `tests/psp/run-tests.sh` unpacks them into its build folder (`PSP_GE_ROUND6`, unless that names another
+  folder), as the owner asked (`docs/development-process.md`, `tests/psp/measurements/README.md`).
+- `tests/psp/measured6.cpp`: five groups that compare the core's run of round 6 (the measure group's, or round 6
+  alone, run once, `measure.cpp`'s `round6Files()`) with the PSP's pictures: "measured round 6 lighting",
+  "reciprocal", "texel range", "patch culling" and "divisions along v". Each pins what's left (every picture's pixels
+  apart, or where they are), so a change that moves one is seen.
+
+What each picture showed against the core, before (`5b2a564fa`) and after, in pixels apart of 65536:
+
+| Test | Before | After |
+| --- | --- | --- |
+| `light-products-0` (the cosine 1) | 0 | 0 |
+| `light-products-1`, `-2`, `-3` | 36775, 34068, 20598 | 0, 0, 0 |
+| `light-sweep-0` to `-7` | 30765 to 34704 each | 285, 120, 345, 287, 293, 293, 226, 274 |
+| `light-sum` | 34316 | 0 |
+| `recip-pixels` | 18220 | 0 |
+| `recip-projected` | 23491 | 0 |
+| `recip-vertex-0`, `-1`, `-2` | 43408, 42752, 43408 | 0, 0, 0 |
+| `recip-sprites` | 43408 | 0 |
+| `texel-range` | 25856 | 0 |
+| `patch-cull` | 1836 | 0 |
+| `patch-cull-edges` | 20 | 20 |
+| `curves-count-v` (16, 63, 64) | 316 | 72 |
+| `curves-count-v-65`, `-100`, `-128`, `-200`, `-255` | 130, 130, 0, 130, 130 | 0 each |
+
+And the earlier rounds' pictures that moved (every other one is as it was):
+
+| Test | Before | After |
+| --- | --- | --- |
+| `light-share-0` to `-3` (round 5) | 43520, 39424, 42240, 36096 | 0 each |
+| `light-materials`, `light-colors` (round 3) | 1536, 1536 | 0, 0 |
+| `light-diffuse`, `light-point`, `light-spot` (round 2) | 12288, 9728, 768 | 0, 0, 0 |
+| `persp-wall`, `persp-divide`, `persp-floor` (round 5) | 23, 211, 351 | 0, 0, 0 |
+| `3d-wall-texels` (round 3), `3d-floor-texels` (round 2) | 23, 64 | 0, 0 |
+| `3d-sprite` (round 2), `3d-sprite-texels` (round 3) | 53, 72 | 7, 10 |
+| `persp-sprite` (round 5) | 1204 | 77 |
+| `curves-lit` (round 4) | 394 | 205 |
+| `persp-w3` (round 5) | 18944 | 23552 |
+
+### Lighting: a level, times a level
+
+The core took a light's part as the light's color times the material's, (2L + 1)(2M + 1), times a share in 256ths
+rounded up, shifted down 18 bits. `light-products-1` to `-3` (every light level on every material level, at three of
+round 5's normals) show a different shape: the product is made a level first, P = (2L + 1)(2M + 1) >> 10, and that
+level is multiplied by the cosine's share the same way, (2P + 1)(2S + 1) >> 10, the share itself a level: 256 times
+the cosine, rounded down, at most 255. Every pixel of the three fits that, with one share for each picture's normal
+(`light-products-0`, the cosine 1, is the share 255, which leaves a level as it is). `light-sweep-0` to `-7`'s 8192
+normals then pin each normal's share: it is floor(256 x cosine) with the cosine worked out in floats as the core
+works it out, but for 37 normals where the PSP's share is a level the other way; at each of those, 256 x cosine lies
+within 0.007 of a whole level, so the PSP's own cosine arithmetic (unmeasured in that detail) rounds the other side.
+Their blocks are the 2123 pixels left in the eight sweeps; the group checks every one of them is in such a block.
+`light-sum` (one to four lights alike): each light's part is a whole level before they're added.
+
+A point light's or spotlight's fading (its attenuation, its spot) is a share of its own, a third multiply of the same
+kind (`lighting.cpp`'s `add()`: the product's level, times the cosine's share, times the fading's): round 2's
+`light-point` and `light-spot`, 9728 and 768 pixels apart with the fading folded into the cosine's share, are exact.
+Which of the two shares comes first, no picture tells (both orders draw every measured pixel alike). The ambient part
+takes the fading alone, the shine its own share (the quick power of the halfway cosine) and the fading. A spotlight's
+share below 0 (PPSSPP's reading, carried over, unmeasured) darkens by as much as the same share above 0 lights.
+
+The Vulkan renderer's fast mode lights in its vertex shader (`shaders/transform.vert`, `shaders.hpp` made again with
+`compile.sh`): the same shares and multiplies. Its tests ("gpu fast mode: 3D transformed by the GPU, near the software
+renderer") pass on MoltenVK.
+
+### The reciprocal, every chord read
+
+`recip-pixels` and `recip-projected` read the reciprocal's 16-bit value at all 16383 of the 16384 14-bit qs in
+[0.5, 1) (the last is the strip's corner), the same in every binade measured, either way along a strip and down v.
+Part 60's formula (each chord from round(2^17 / (1 + s/128)) to the next, its slope the run over 256 rounded half to
+even, chords 5 and 58 two low) was a unit or two off at 4857 of those qs: 71 starts and 16 slopes differ. What the
+PSP has instead: each chord is the straight line whose worst error against the true reciprocal over its positions is
+least, but for chord 0, which starts at exactly 1, so that a power of two's reciprocal is exact. `draw.cpp`'s
+`ReciprocalChords` is that table, the PSP's, start and slope for each of the 128 chords (131072 down to 65793; -254 to
+-64). Chord 127's start can't be told from one less by any picture (its odd positions, which `recip-vertex-1` reads, go
+through 15 bits that drop the difference): it's the least error's too. The group checks the pictures, every chord
+against the true reciprocal (no start or slope within 2 of the table's has a smaller worst error, chord 0 kept at 1),
+and that all 16383 qs read in `recip-projected` are `GE::reciprocal()`'s.
+
+`recip-projected`'s rows 128-191 give the q the core had left alone: a q of +0, -0, a tiny one below 0, or -0.375 to
+-3 at every corner takes texel (255, 255) of the repeating 256x256 texture at every pixel. So a pixel whose q is 0 or
+below has both coordinates held at their largest, 2^22 - 1 texels (`HeldCoordinate`: the last texel each way); the
+core had divided by it. (Whether a clamped texture takes its last texel there too isn't measured.)
+
+`recip-vertex-0` to `-2` (constant-w triangles, a w a cell) are part 60's path, s = u x R(w) and q = R(w) cut to 15
+bits at the corners and R(q) at the pixel: exact with the table, once texture coordinates were read as far out as the
+GE reads them (`texel-range`, below: the core held them to 2^16 texels, a guard of its own, and these reach 2^17).
+
+`recip-sprites` (the same cells as 3D sprites): a 3D sprite divides as a triangle does. Each corner's s = u x R(w),
+t = v x R(w) and q = R(w) are cut to float24 and made 15-bit integers (`spriteJob()`); across x, s and q go from the
+left corner's to the right one's, down y t from the top corner's to the bottom one's, each floored at a pixel's middle;
+a pixel's coordinates are s and t times R(q), each product kept to 24 bits (`raster.cpp`'s `spriteRows()`, `four.cpp`'s
+`spriteFours()`, the same numbers). The core had blended 1 / w in doubles. Round 2's `3d-sprite` (53 to 7), round 3's
+`3d-sprite-texels` (72 to 10) and round 5's `persp-sprite` (1204 to 77) come closer; what's left of them is a texel
+here and there, each of those sprites with its corners at different w, whose stepping no picture pins (here a
+straight blend, floored). The
+Vulkan renderer draws a 3D sprite's corners with the same s, q and t (`GPU::sprite()`), the GPU dividing.
+
+With the table, round 5's `persp-wall`, `persp-divide` and `persp-floor` and the older wall and floor are exact (part
+60's two corrected chords were the formula's misses those pictures happened to sample). `persp-w3` (w 3 at every corner,
+u from 0 to 1024 across) goes from 18944 to 23552 pixels apart: its pixels divide by q = R(3) on chord 42, which the PSP
+has a unit lower than the formula at the positions this picture samples. What's left is all one way: every pixel apart
+is a texel low, in 92 columns of the right half, the same in every row. Part 60 saw the stepper's gradient a hair short
+of the true slope there; the formula's high chord had covered part of that on the right and overshot on the left (4608
+pixels a texel high). The stepper's precision for texture coordinates over a long run is round 7's (below).
+
+### Texture coordinates' range
+
+`texel-range` (through-mode sprites whose coordinates are 2^k plus a known part, k 8 to 23, either sign): a through-mode
+coordinate keeps 15 significant bits, cut toward zero (`draw.cpp`'s `keep15()`, as the vertex is read): from 2^15 on
+it loses its lowest bits, a texel more for each doubling, up to 2^23; one below 0 loses them from its magnitude. And
+the GE reads texels that far: the core's guard (texels held to 65536) is 2^22 now (`texelSpot()`, `texelAxisLanes()`),
+the furthest the pictures read. (In 3D, s, t and q keep 15 bits on their own terms, as part 60 found.)
+
+### Patches: culling, normals, divisions along v
+
+`patch-cull` (256 patches: PATCH_CULL_ENABLE, PATCH_FACING, mirrored control points, normals none, toward the viewer,
+away and edge on, culling off, CW, CCW, or lit, as triangles and as points) and `patch-cull-edges` (64 patches against
+their cells' scissor rectangles, across them, past the near and far planes): PATCH_CULL_ENABLE changes no pixel. What
+did: the lit cells with normals given lit their patches as the cells without, by facing and strip direction alone.
+A patch's own normals don't count: where a normal is wanted (lighting, environment mapping, the texture matrix from the
+normal), it's always made from the surface's slopes, pointing out of the face PATCH_FACING says (`curves.cpp`). That
+clears `patch-cull`'s 1836 pixels and takes round 4's `curves-lit` from 394 to 205 (its patches with normals given now
+lit as the PSP lit them; what's left are edge pixels and a level here and there, 193 of them as before).
+`patch-cull-edges` keeps 20 pixels, in two cells (56 and 57: points, the right half past the far plane) where five
+vertices at a w near 4 land a row higher on the PSP: their screen positions are whole rows, which the PSP's own divide
+by w puts a hair above and the core's exact divide doesn't (positions aren't round 6's: round 7). PATCH_CULL_ENABLE
+does save time on a PSP (`time-primitives`' cases 28 and 29: a surface wholly out of sight takes only its own time and
+its control points' fetch with it on), which part 64's time doesn't count. The note that it isn't emulated is gone.
+
+`curves-count-v` and its five companions (round 4's counts, turned: the points of a points-patch added up down each
+column) settle along v:
+- **Points are the strips' vertices.** A points patch (PATCH_PRIMITIVE 2 or 3) is drawn as the triangle strips'
+  vertices, two rows at a time, so every row between two strips is drawn twice: a column cut 16 times along v counts
+  32 points (its two ends once, the 15 rows between twice), 63 counts 126, 64 counts 128. The core drew each vertex
+  once (316 pixels apart in `curves-count-v`).
+- **v takes any count.** None of 65, 100, 200 (72 in 7 bits) and 255 (127) stalled: they drew 130, 200, 144 and 254
+  points a column (128 is 0, so 1: 2). Along u past 64 the GE hangs (round 4's `curves-count-65` and the rest); along
+  v it doesn't. So the GE holds a row along u while it makes the next, 65 vertices at most, and goes down v a row at a
+  time, as many rows as asked. The core drew nothing past 64 either way; now only u past 64 is refused (a note).
+- **Past 64, v steps a 64th.** Where the rows fall: the rows up to the middle (k up to divisions / 2) at k / 64 from the
+  piece's start, the rest at (divisions - k) / 64 from its end (`divisionAt()`), so past 64 rows from the two ends
+  cross and fall on each other. That's every pixel of all five pictures.
+- 63 divisions still put a few points elsewhere on the PSP (`curves-count-v`'s column 1, 72 pixels, each column's count
+  right): where a count that isn't a power of two places its rows, round 4's along u too, isn't pinned (round 7).
+
+### Checks
+
+- `tests/psp/run-tests.sh` (sanitizers on): 454 groups, 0 failures (449 before: the five round 6 groups); the Vulkan
+  groups (33 of them) ran on MoltenVK, and `compile.sh --check` passes. `tests/allegrex/run-tests.sh`: 58 groups, 0
+  failures. `tests/psp/ares/run-tests.sh`: 307 checks, 0 failed (as before).
+- Tests changed besides measured6: lighting's numbers in "draw3d lighting" (a level times a share: 0x80 where 0x7f
+  was, the fading's own multiply, the share 255 for a cosine of 1); "curves malformed" checks 64, 65, 100 and 200
+  divisions along v (65 points down a column each); `measure.cpp`'s chords are `GE::reciprocalChord()`'s.
+
+### Library
+
+The whole library the report's way (3600 frames, Start at 120 and Cross at 1800, the software renderer at 7 threads,
+three games at a time), with this branch's runner, beside the final run (`be543afba`): all 266 finish their 3600
+frames, none missing a function (Killzone, killed at 900 s on a machine loaded by other runs, was run again alone: 1129
+s, the final run's 691). 155 are the same at all four captures, 75 differ by a mean of at most 1 of 255 a channel, 36
+by more. The 111 that differ, run again with this runner and with the base's (master before this part):
+- 61 differ between this runner's own two runs: the runs' own timing (the host's threads), as the final run and the
+  base differ too (Battlefront II's random map, LocoRoco's and Shepherd's Crossing's title animations, Juiced's and
+  Cars: Race-O-Rama's intros, Monster Hunter Portable 3rd, Space Invaders Extreme, Growlanser IV, Macross...).
+- 19 are the base's frames exactly: #212 to #219's changes or the base's own difference from the final run (both Metal
+  Gear Acids, Final Fantasy IV, Crash Tag Team Racing, Lunar, Star Ocean, Virtua Tennis 3, Star Trek...).
+- 31 are the same in both of this runner's runs and differ from the base, each by a mean of at most 1.32 of 255 (lit
+  3D and 3D sprites a level or a texel here and there: Bubble Bobble Evolution 1.32, Gurumin 1.29, PaRappa 0.55, Cube
+  0.46, both God of Wars 0.34 and 0.20, the rest under 0.2): the same scenes at the same moments, this part's pictures.
+No game takes the runner's presses differently and none runs at another pace: the GE's time is part 64's (Killzone,
+Super Stardust Portable, Brave Story and ModNation Racers are the final run's frames, or noise). One thing the
+pictures do change for the time: a points patch now draws its inner rows twice and a patch past 64 divisions along v
+is drawn, so such lists owe part 64's time for those pixels (no game in the library was seen drawing either).
+
+### Review
+
+An independent read-only review of this part's diff (a reviewer agent) found no bug: the time model, the kernel and
+the save-state layout are master's byte for byte; the lighting formula reproduces every pixel of `light-products`, the
+chord table all 16383 qs of `recip-projected`, recomputed from the PSP's files; `shaders.hpp` regenerates byte for
+byte; the one-at-a-time and four-at-a-time paths agree. Its points, fixed: the q of 0 or below is held as measured with
+nearest filtering (a linear filter blends the last two texels), and `keep15()`'s cut of integer coordinates, filter
+sixteenths and fractions is taken, not measured (both said so); `round6Files()` reports a program that won't load;
+stale comments (`four.cpp`'s 1 / w, the measure test's and curves test's "past 64 draws nothing"); the GPU's clamp is
+`texelSpot()`'s at 1x; `.gitattributes` keeps the `.xz` files binary and `SHA256SUMS` LF; `run-tests.sh` asks for
+xz up front and names a file that doesn't match; a curves check past 64 along v that needs no data; wording.
+
+### Left for round 7
+
+What a measurement can't settle from round 6's pictures, and the owner's PSP could:
+1. **The stepper over a long run** (`persp-w3`): s stepped across a 1024-texel run comes out a hair short on the right
+   (92 columns a texel low). Constant-w strips of several widths, each pixel reading its s's low bits (as
+   `recip-pixels` reads R), would pin the stepper's precision for texture coordinates.
+2. **Positions divided by w** (`patch-cull-edges`' 20 pixels): vertices at a known w whose screen rows are whole
+   numbers, as `recip-vertex` did for texture coordinates, would show the GE's divide for positions.
+3. **Lighting's cosine**: the 37 normals whose share falls the other way, each within 0.007 of a level; and which of
+   the cosine's and the fading's shares multiplies first (a point light whose two shares both have fractions where
+   the two orders differ).
+4. **Divisions that aren't a power of two**: where 63 (or 48, 100 along u) divisions put their rows to the sixteenth.
+5. **A q of 0 or below with a clamped texture**, and with s below 0 (`recip-projected` used a repeating texture).
+6. **Through mode's 15 bits**: whether u and v keep their bits each on its own (taken so) or on the larger one's
+   exponent: sprites with u large and v small.
+7. **Chord 127's start**: no picture tells it from one less (a q just below 2 read at 14 bits would).
+
+(The GE's time has questions of its own, with the time model's branch.)
+
+### Scratch
+
+`~/phobos-work/scratch/round6`: `quick.sh` and `quick2.sh` (unsanitized builds of the measure group alone, and of the
+GE, draw, 3D, curves, states and measure groups), `py/` (the analyses: `countv*.py` along v, `patchcull*.py`,
+`texrange.py`, `rpix*.py`, `rproj*.py`, `fitchords.py` and `minimax.py` the chords, `lprod*.py`, `sweep*.py` and
+`lsum.py` lighting), `ours-base` and `ours-a` (the core's run of every round before and after), `lib-a` (the library
+run), `lib-base` (the base's runs of the games that differ), `sheet-a*.png` (their captures side by side).
