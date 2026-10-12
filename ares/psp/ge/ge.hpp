@@ -295,8 +295,9 @@ struct GE {
     std::vector<u8> deferClut;
     u32 deferFirst = 0, deferLast = 0;
     //The texels of that deferred texture its jobs can take (record(): texelReach()), in the rows and columns marked;
-    //or any of them (reach.all), where a job's can't be told.
-    Reach reach;
+    //or any of them (reach->all), where a job's can't be told. None until a job is recorded. (Kept apart: a Look is
+    //made and moved for every primitive, and few are deferred.)
+    std::unique_ptr<Reach> reach;
   };
 
   //A primitive set up for drawing (draw.cpp): everything about it worked out once, so that any of its rows can be
@@ -438,8 +439,8 @@ struct GE {
   auto rectangle(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto triangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing, bool perspective)
     -> void;
-  auto triangleJob(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, bool perspective,
-                   Job& job) const -> void;
+  auto triangleJob(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, const s64 (&x)[3],
+                   const s64 (&y)[3], s64 area, bool perspective) const -> Job;
   auto point(const Look& look, const Vertex& at) -> void;
   auto line(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto readVertices(u32 count, const VertexFormat& format) -> void;

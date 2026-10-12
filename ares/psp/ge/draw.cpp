@@ -836,11 +836,10 @@ auto GE::readsApart(const Look& look, const Transform& t, const std::vector<Vert
     if(a.clip[3] < 0 && b.clip[3] < 0 && c.clip[3] < 0) return;
     auto nearer = [](const Vertex& v) { return v.clip[2] + v.clip[3]; };
     if(nearer(a) < 0 || nearer(b) < 0 || nearer(c) < 0 || jobs.size() == 256) return void(whole = false);
-    s64 x0 = fixed(a.x), y0 = fixed(a.y);
-    s64 area = (fixed(b.x) - x0) * (fixed(c.y) - y0) - (fixed(b.y) - y0) * (fixed(c.x) - x0);  //(as triangle())
+    s64 x[3] = {fixed(a.x), fixed(b.x), fixed(c.x)}, y[3] = {fixed(a.y), fixed(b.y), fixed(c.y)};
+    s64 area = (x[1] - x[0]) * (y[2] - y[0]) - (y[1] - y[0]) * (x[2] - x[0]);  //(as triangle())
     if(area == 0 || (facing && (area > 0) != (facing > 0))) return;
-    Job job;
-    triangleJob(look, a, b, c, true, job);
+    Job job = triangleJob(look, a, b, c, x, y, area, true);
     if(job.firstX <= job.lastX && job.firstY <= job.lastY) jobs.push_back(job);
   };
   u32 count = vertices.size();
@@ -944,21 +943,20 @@ auto GE::triangle(const Look& look, const Vertex& a, const Vertex& b, const Vert
   if(facing && (area > 0) != (facing > 0)) return;
   owe(pixelsInside({x[0], x[1], x[2]}, {y[0], y[1], y[2]}, look.pixel));
   if(hardware) return renderer->triangle(a, b, c);
-  Job job;
-  triangleJob(look, a, b, c, perspective, job);
+  Job job = triangleJob(look, a, b, c, x, y, area, perspective);
   submit(job);
 }
 
-//The job of a triangle triangle() draws (its area not 0), set up.
-auto GE::triangleJob(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, bool perspective,
-                     Job& job) const -> void {
+//The job of a triangle triangle() draws, set up: its corners (sixteenths) and area (not 0) as triangle() works them
+//out.
+auto GE::triangleJob(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, const s64 (&x)[3],
+                     const s64 (&y)[3], s64 area, bool perspective) const -> Job {
   auto& pixel = look.pixel;
   struct Corner { s64 x, y; const Vertex* vertex; };
-  Corner p[3] = {{fixed(a.x), fixed(a.y), &a}, {fixed(b.x), fixed(b.y), &b}, {fixed(c.x), fixed(c.y), &c}};
-  s64 area = (p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[1].y - p[0].y) * (p[2].x - p[0].x);
+  Corner p[3] = {{x[0], y[0], &a}, {x[1], y[1], &b}, {x[2], y[2], &c}};
   if(area < 0) std::swap(p[1], p[2]), area = -area;  //the same corners, turned the way the edges are worked out for
   //(which pixels on its edges it draws: triangleRows(), raster.cpp)
-  job = Job{};
+  Job job{};
   job.kind = Job::Kind::Triangle;
   job.look = &look;
   auto& r = job.triangle;
@@ -1037,6 +1035,7 @@ auto GE::triangleJob(const Look& look, const Vertex& a, const Vertex& b, const V
     r.uStart = u.start, r.uAcross = u.across, r.uDown = u.down;
     r.vStart = v.start, r.vAcross = v.across, r.vDown = v.down;
   }
+  return job;
 }
 
 auto GE::point(const Look& look, const Vertex& at) -> void {

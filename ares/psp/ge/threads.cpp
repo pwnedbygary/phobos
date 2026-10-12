@@ -557,7 +557,10 @@ auto GE::record(const Job& job) -> void {
   //a deferred texture's texels this job can take, for ensureDecoded() to decode no more than its jobs take
   Look& look = batch.looks.back();
   assert(&look == job.look);
-  if(look.deferRows) texelReach(job, look.reach);
+  if(look.deferRows) {
+    if(!look.reach) look.reach = std::make_unique<Reach>();
+    texelReach(job, *look.reach);
+  }
   if(batch.top > batch.bottom) batch.top = job.firstY, batch.bottom = job.lastY;
   batch.top = std::min(batch.top, job.firstY), batch.bottom = std::max(batch.bottom, job.lastY);
 }

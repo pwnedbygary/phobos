@@ -421,8 +421,10 @@ auto GE::ensureDecoded(Batch& batch) -> void {
     for(auto other = look; other != batch.looks.end(); other++) {
       if(!same(*other)) continue;
       rows = std::max(rows, std::min({other->deferRows, other->texture.height, 512u}));
-      reach.all |= other->reach.all;
-      for(u32 n = 0; n < 8; n++) reach.rows[n] |= other->reach.rows[n], reach.columns[n] |= other->reach.columns[n];
+      if(!other->reach) continue;  //(no job recorded: no texel taken)
+      auto& taken = *other->reach;
+      reach.all |= taken.all;
+      for(u32 n = 0; n < 8; n++) reach.rows[n] |= taken.rows[n], reach.columns[n] |= taken.columns[n];
     }
     //each run of marked rows (up to rows) and of marked columns, first to last; and the rows kept, up to the last one
     //(at least one, which none marked leaves undecoded)

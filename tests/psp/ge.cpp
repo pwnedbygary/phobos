@@ -1618,8 +1618,10 @@ static auto geDeferredReach() -> void {
   for(Rectangle reach : {Rectangle{2, 10, 30, 40}, Rectangle{40, 50, 3, 9}, Rectangle{0, 0, 0, 0}}) {
     auto& look = batch.looks.emplace_back();
     look.textured = true, look.texture = ge.sampler(), look.deferRows = 64;
-    if(reach.bottom) GE::Reach::mark(look.reach.rows, reach.top, reach.bottom);
-    if(reach.right) GE::Reach::mark(look.reach.columns, reach.left, reach.right);
+    if(!reach.bottom && !reach.right) continue;
+    look.reach = std::make_unique<GE::Reach>();
+    if(reach.bottom) GE::Reach::mark(look.reach->rows, reach.top, reach.bottom);
+    if(reach.right) GE::Reach::mark(look.reach->columns, reach.left, reach.right);
   }
   ge.ensureDecoded(batch);
   auto& t = batch.looks[0].texture;
@@ -1636,9 +1638,10 @@ static auto geDeferredReach() -> void {
   for(u32 n = 0; n < 64 * 64; n++) m.system.memory.write(4, VRAM + Offscreen + n * 4, n * 0x0102'0304 + 9);
   auto& many = batch.looks.emplace_back();
   many.textured = true, many.texture = ge.sampler(), many.deferRows = 64;
+  many.reach = std::make_unique<GE::Reach>();
   for(u32 n = 0; n < 5; n++) {
-    GE::Reach::mark(many.reach.rows, 1 + n * 10, 3 + n * 10);
-    GE::Reach::mark(many.reach.columns, 2 + n * 11, 4 + n * 11);
+    GE::Reach::mark(many.reach->rows, 1 + n * 10, 3 + n * 10);
+    GE::Reach::mark(many.reach->columns, 2 + n * 11, 4 + n * 11);
   }
   ge.ensureDecoded(batch);
   auto& u = many.texture;
