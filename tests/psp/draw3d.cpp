@@ -1061,24 +1061,28 @@ struct NothingDrawn : GE::Renderer {
   auto meshes(GE&, const GE::Transform&, u32) -> bool override { return transforms; }
 };
 
-//What a primitive costs the GE's time (GE::owe(), for kernel/ge.cpp's geTime()), counted as it's set up, the same
-//whichever renderer then draws it: the software renderer, one that draws nothing, and one that transforms 3D
+//What a primitive costs the GE's time (GE::owePrimitive(), for kernel/ge.cpp's geTime()), counted as it's set up, the
+//same whichever renderer then draws it: the software renderer, one that draws nothing, and one that transforms 3D
 //triangles itself. A triangle counts its area inside the scissor rectangle (32 pixels; a 6x6 scissor cuts its corner
 //off: 28; one of 20 cut below row 6 alone: 16.8), a sprite its rectangle there (16; one of 7x8 cut to 4x5: 20), a
 //line the pixels it lights there (8 of the 8 columns it crosses; cut, 5; leaving the rectangle across it, the 4 the
-//software renderer lights; past it, none), a point one if it's inside (3 of 4); and each set up, one primitive (the
-//point outside isn't).
+//software renderer lights; past it, none), a point one if it's inside (3 of 4; the point outside isn't set up). The
+//back end's clocks for each (GE::Cost) are the same for the three: the first triangle's 7.03 + 8 rows * 1.65 (their
+//least, 4 pixels a row at 0.319 being less) + 32 * 0.266 for the depth test, 28.742; the first sprite's 7.03 + 4 *
+//1.65 + 16 * 0.266, 17.886.
 static auto draw3dTimeCounted() -> void {
   NothingDrawn nothing, transforming;
   transforming.transforms = true;
+  std::vector<f64> backs[3];
+  u32 which = 0;
   for(GE::Renderer* renderer : {static_cast<GE::Renderer*>(nullptr), static_cast<GE::Renderer*>(&nothing),
                                 static_cast<GE::Renderer*>(&transforming)}) {
     Scene c;
     c.ge.setRenderer(renderer);
-    auto counted = [&](u64 pixels, u64 primitives) {
-      CHECK(c.ge.owedPixels, pixels);
-      CHECK(c.ge.owedPrimitives, primitives);
-      c.ge.owedPixels = c.ge.owedPrimitives = 0;
+    auto counted = [&](u64 pixels, u64) {
+      CHECK(c.ge.owed.pixels, pixels);
+      backs[which].push_back(c.ge.owed.back);
+      c.ge.owed = {};
     };
     u32 white = 0xffff'ffff;
     auto triangle = [&] {
@@ -1115,7 +1119,45 @@ static auto draw3dTimeCounted() -> void {
                         {0, 0, white, 7, 2, 0.1f}});
     counted(3, 3);
     c.ge.setRenderer(nullptr);
+    which++;
   }
+  CHECK(backs[0] == backs[1] && backs[0] == backs[2], true);
+  CHECK(std::abs(backs[0][0] - 28.742) < 1e-9 && std::abs(backs[0][1] - 17.886) < 1e-9, true);
+}
+
+//A texture of more than 64 KiB from RAM (GE::owePrimitive(), docs/psp-core.md part 76), a 512x512 8888 one: at the
+//slower rates drawn 256 texels across, as every measurement drew such a texture; at the cache's in a strip 64 texels
+//across, as games draw a big picture. Through-mode sprites 16 rows high, a texel a pixel, the depth test on: each
+//one's back end is its setup, its rows (a box over 32 pixels wide: Pixel32), the depth test's pixels and its
+//texture's bytes, swizzled or not.
+static auto draw3dTextureTime() -> void {
+  NothingDrawn nothing;
+  Scene c;
+  c.ge.setRenderer(&nothing);
+  auto& k = c.ge.commands;
+  k[GE::VertexType] = 0x80'019f;  //through mode: positions are pixels, texture coordinates texels
+  k[GE::TextureMappingEnable] = 1;
+  k[GE::TextureAddress0] = Texture3D & 0xff'ffff;
+  k[GE::TextureBufferWidth0] = (Texture3D >> 24 & 0xf) << 16 | 512;
+  k[GE::TextureSize0] = 9 << 8 | 9;
+  k[GE::TextureFormat] = 3;
+  using Cost = GE::Cost;
+  for(u32 swizzled : {0, 1}) {
+    k[GE::TextureMode] = swizzled;
+    for(u32 across : {256, 64}) {
+      c.ge.owed = {};
+      float right = across;
+      c.draw(GE::Sprites, {{0, 0, 0xffff'ffff, 0, 0, 0}, {right, 16, 0xffff'ffff, right, 16, 0}});
+      f64 pixels = across * 16;
+      f64 perByte = across > 128 ? (swizzled ? Cost::BigTexelByteSwizzled : Cost::BigTexelByte)
+                                 : (swizzled ? Cost::TexelByteSwizzled : Cost::TexelByte);
+      f64 expected = Cost::Primitive + 16 * std::max(Cost::Row, across * Cost::Pixel32) + pixels * Cost::DepthPixel +
+                     pixels * 4 * perByte;
+      CHECK(c.ge.owed.pixels, u64(pixels));
+      CHECK(std::abs(c.ge.owed.back - expected) < 1e-6, true);
+    }
+  }
+  c.ge.setRenderer(nullptr);
 }
 
 auto draw3dTests() -> Tests {
@@ -1130,6 +1172,7 @@ auto draw3dTests() -> Tests {
     {"draw3d lines", draw3dLines}, {"draw3d bounding boxes", draw3dBoundingBoxes},
     {"draw3d four pixels at a time against one", draw3dFours},
     {"draw3d the GE's time, any renderer", draw3dTimeCounted},
+    {"draw3d the GE's time for a big texture, wide and in strips", draw3dTextureTime},
   };
 }
 

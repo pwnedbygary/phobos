@@ -505,9 +505,11 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a
 //signature, the version of its layout, RAM's size and the program it was made with, all of which must be the
 //machine's; then memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a
-//field means: 25 since each open file keeps its PGD decryption (the version key it was given, where its data starts,
-//and its header's descriptor once decrypted); 24 since the GE driver keeps when the GE will have drawn what it was
-//given and whether the list it runs has met its FINISH, a list being done for the program only then (part 64); 23
+//field means: 28 since the GE keeps the texture its cache holds whole, which its time counts (part 76; 26 and 27
+//are other branches'); 25 since each open file keeps its PGD decryption (the version key it was given, where its
+//data starts, and its header's descriptor once decrypted); 24 since the GE driver keeps when the GE will have drawn
+//what it was given and whether the list it runs has met its FINISH, a list being done for the program only then
+//(part 64); 23
 //since each open file keeps its place in the order the program opened them, sceIoGetFdList's (part 62); 22 since
 //files are numbered lowest free first, the count of numbers handed out gone, and an asynchronous read under way
 //keeps where its bytes go as it's done (part 59); 21 since the kernel keeps sceJpeg's
@@ -543,10 +545,11 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //set, 15 to 18 with no thread-local storage pools, 15 to 19 with no stacks lent, 15 to 20 with sceJpeg not started,
 //no sceHprm callbacks and no ATRAC low-level IDs, 15 to 21 with their files' count passed over and no read's
 //bytes still to come, 15 to 22 with their files opened in the order of their numbers, 15 to 23 with the GE
-//having nothing left to draw, and 15 to 24 with no file's PGD decryption set up (each read as it is); older layouts
-//are refused.
+//having nothing left to draw, 15 to 24 with no file's PGD decryption set up (each read as it is), and 15 to 25 with
+//no texture held in the GE's cache (for its time); older layouts are refused. 26 and 27 are other branches' layouts,
+//each with fields of its own that this one doesn't read: refused until they're merged (the merge takes that out).
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
-static constexpr u32 StateVersion = 25;
+static constexpr u32 StateVersion = 28;
 
 //The program that started, to tell it from any other: an FNV-1a hash of all its bytes. A state is only loaded into
 //the program it was made with, as another's memory, threads and files mean nothing to it.
@@ -556,11 +559,11 @@ auto System::hash(std::span<const u8> bytes) -> u64 {
   return value;
 }
 
-//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 24 (the
+//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 25 (the
 //dialog's abort counters default to 0, no sceCcc tables, no thread-local storage pools, no stacks lent, sceJpeg not
 //started, no sceHprm callbacks, no ATRAC low-level IDs, the files' count passed over, no read's bytes still to
 //come, files opened in the order of their numbers, the GE with nothing left to draw, no file's PGD decryption set
-//up): the owner's accuracy scenes were saved at 15 before part 42.
+//up, no texture in the GE's cache): the owner's accuracy scenes were saved at 15 before part 42.
 auto System::header(serializer& s) -> bool {
   u32 signature = StateSignature, version = StateVersion, ramSize = memory.ram.size();
   u64 program = programHash;
@@ -570,8 +573,8 @@ auto System::header(serializer& s) -> bool {
   s(program);
   if(s.reading()) {
     kernel.stateLayout = version;
-    return signature == StateSignature && version >= 15 && version <= StateVersion &&
-           ramSize == memory.ram.size() && program == programHash;
+    return signature == StateSignature && version >= 15 && version <= StateVersion && version != 26 &&
+           version != 27 && ramSize == memory.ram.size() && program == programHash;
   }
   return signature == StateSignature && version == StateVersion && ramSize == memory.ram.size() &&
          program == programHash;

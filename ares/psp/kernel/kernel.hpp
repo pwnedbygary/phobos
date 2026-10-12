@@ -965,10 +965,14 @@ struct Kernel {
   s32 geFinishing = -1;     //the list whose finish callback runs: the rest of its ending waits for it
   u64 geLeft = GeBudget;    //commands the GE may still run this frame (each vertical blank gives it GeBudget again)
   u64 geCommands = 0;       //commands the GE has run since power on (not saved: a count for tests and notes)
+  static constexpr u64 GeEnqueueCycles = 5200;  //the CPU's own cycles sceGeListEnQueue takes (geDriven())
+  static constexpr u64 GeStallCycles = 510;     //and sceGeListUpdateStallAddr
   u64 geDoneAt = 0;         //when (cycles) a PSP's GE would have drawn all it has been given (geTime())
   bool geFinishDue = false; //the list it runs met its FINISH: its interrupt is taken from geDoneAt on (geInterrupt())
   auto geIndex(u32 id) const -> s32;
-  auto geTime() -> void;
+  auto geTime(u64 commands) -> void;
+  auto geOwe(f64 clocks) -> void;
+  auto geDriven(u64 cpuCycles) -> void;
   auto geInterrupt() -> void;
   auto geEnqueue(bool head) -> void;
   auto geLoad(GeList& list) -> void;
@@ -1890,7 +1894,7 @@ struct Kernel {
     u32 abortUpdates = 0;  //an aborted message's Updates still to come before it finishes (0: not aborted)
     u32 runningUpdates = 0;  //Updates while Running, before an abort (utility/dialog/abort's fade length)
   } dialog;
-  u32 stateLayout = 25;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 28;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;

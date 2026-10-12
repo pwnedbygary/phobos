@@ -156,7 +156,8 @@ static auto stateFields() -> void {
     auto& bytes = m.kernel.systemFonts[1].pgf->data();
     m.system.memory.copyIn(fontBytes, bytes.data(), bytes.size());
   };
-  KernelMachine a;
+  auto aMachine = std::make_unique<KernelMachine>();  //(on the heap: this function's frame is large)
+  auto& a = *aMachine;
   devices(a);
   auto& k = a.kernel;
   auto& cpu = a.system;
@@ -671,6 +672,10 @@ static auto stateFields() -> void {
     {"geRunning", [&] { k.geRunning = list2; }}, {"geBusy", [&] { k.geBusy = true; }},
     {"geSuspended", [&] { k.geSuspended = true; }}, {"geFinishing", [&] { k.geFinishing = list2; }},
     {"geLeft", [&] { k.geLeft = 12345; }},
+    {"ge cachedTexture address", [&] { ge.cachedTexture.address ^= 0x100; }},
+    {"ge cachedTexture format", [&] { ge.cachedTexture.format ^= 1; }},
+    {"ge cachedTexture size", [&] { ge.cachedTexture.size ^= 0x101; }},
+    {"ge cachedTexture held", [&] { ge.cachedTexture.held = !ge.cachedTexture.held; }},
   };
   //the codecs (part 26): each change leaves what a machine could have (ID 1, by then ATRAC3's, handed out; the stream
   //looping before its end, then gone on into its second buffer, then ended; the mp3 handle uninitialized last)
@@ -819,7 +824,8 @@ static auto stateFields() -> void {
     check(__LINE__, field.c_str(), save(a) != before, true);
   }
 
-  KernelMachine b;
+  auto bMachine = std::make_unique<KernelMachine>();
+  auto& b = *bMachine;
   devices(b);
   auto state = save(a);
   CHECK(load(b, state), true);
@@ -830,7 +836,8 @@ static auto stateFields() -> void {
   ghost.uid = 0x7777;
   auto refuses = [&](const char* what, auto&& damage) {
     damage();
-    KernelMachine fresh;
+    auto freshMachine = std::make_unique<KernelMachine>();
+    auto& fresh = *freshMachine;
     devices(fresh);
     check(__LINE__, what, load(fresh, save(a)), false);
     CHECK(load(a, state), true);
@@ -869,7 +876,8 @@ static auto stateFields() -> void {
   {
     k.files[discReader].pgdReady = false;
     k.files[other].pgd = k.files[other].pgdReady = true;
-    KernelMachine fresh;
+    auto freshMachine = std::make_unique<KernelMachine>();
+    auto& fresh = *freshMachine;
     devices(fresh);
     CHECK(load(fresh, save(a)), true);  //as a machine has it: loads
     CHECK(load(a, state), true);
@@ -915,7 +923,8 @@ static auto stateFields() -> void {
   };
   {
     readWait(k.cycles + 1000);
-    KernelMachine fresh;
+    auto freshMachine = std::make_unique<KernelMachine>();
+    auto& fresh = *freshMachine;
     devices(fresh);
     CHECK(load(fresh, save(a)), true);  //as a machine has it: loads
     CHECK(load(a, state), true);
@@ -936,7 +945,8 @@ static auto stateFields() -> void {
   };
   {
     volatileWait();
-    KernelMachine fresh;
+    auto freshMachine = std::make_unique<KernelMachine>();
+    auto& fresh = *freshMachine;
     devices(fresh);
     CHECK(load(fresh, save(a)), true);  //as a machine has it: loads
     CHECK(load(a, state), true);
@@ -957,7 +967,8 @@ static auto stateFields() -> void {
   };
   {
     codecWait(k.cycles + 1000);
-    KernelMachine fresh;
+    auto freshMachine = std::make_unique<KernelMachine>();
+    auto& fresh = *freshMachine;
     devices(fresh);
     CHECK(load(fresh, save(a)), true);  //as a machine has it: loads
     CHECK(load(a, state), true);
@@ -1029,7 +1040,8 @@ static auto stateFields() -> void {
     for(; !thread.extensions.empty(); thread.extensions.pop_back()) {
       thread.stackBlock = thread.extensions.back().stack, thread.stackSize = thread.extensions.back().size;
     }
-    KernelMachine fresh;
+    auto freshMachine = std::make_unique<KernelMachine>();
+    auto& fresh = *freshMachine;
     devices(fresh);
     CHECK(load(fresh, save(a)), true);
     CHECK(load(a, state), true);
@@ -1216,7 +1228,8 @@ static auto stateFields() -> void {
     auto& thread = *k.threads.at(two);  //a SetPsmfCB's wait, callbacks running: loads
     thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Psmf, thread.callbacks = true;
     thread.wakeAt = k.cycles + 1000;
-    KernelMachine fresh;
+    auto freshMachine = std::make_unique<KernelMachine>();
+    auto& fresh = *freshMachine;
     devices(fresh);
     CHECK(load(fresh, save(a)), true);
     CHECK(load(a, state), true);
@@ -1241,7 +1254,8 @@ static auto stateFields() -> void {
   };
   {
     systemOne();
-    KernelMachine fresh;
+    auto freshMachine = std::make_unique<KernelMachine>();
+    auto& fresh = *freshMachine;
     devices(fresh);
     CHECK(load(fresh, save(a)), true);  //as a machine has it: loads
     CHECK(load(a, state), true);
@@ -1286,7 +1300,8 @@ static auto stateFields() -> void {
     call.opening.index = 1, call.opening.hash = k.systemFonts[1].hash;
   });
   {
-    KernelMachine without;
+    auto withoutMachine = std::make_unique<KernelMachine>();
+    auto& without = *withoutMachine;
     without.kernel.mount("ms0", stick.path.string());
     without.kernel.disc = discOf(image.bytes);
     CHECK(load(without, save(a)), false);  //no fonts installed
@@ -1443,7 +1458,8 @@ static auto stateFields() -> void {
   };
   {
     waitsForMutex(*k.threads.at(two), 1);
-    KernelMachine fresh;
+    auto freshMachine = std::make_unique<KernelMachine>();
+    auto& fresh = *freshMachine;
     devices(fresh);
     CHECK(load(fresh, save(a)), true);  //as a machine has it: loads
     CHECK(load(a, state), true);
@@ -1554,7 +1570,8 @@ static auto idsRunOut() -> void {
   CHECK(n.kernel.nextUID, Kernel::LastUID + 1);
 }
 
-//States of the layouts before this one load: 24's (no file's PGD decryption), 23's (nor GE time: when the GE will
+//States of the layouts before this one load: 25's (no texture held in the GE's cache, for its time), 24's (nor any
+//file's PGD decryption), 23's (nor GE time: when the GE will
 //have drawn what it was given, and whether its list's FINISH waits), 22's (nor any file's place in the order files
 //were opened), 21's (nor part 58's sceJpeg, sceHprm and low-level ATRAC fields, with files' count still kept and no
 //read's bytes to come) and 20's (none of those either). Each is this layout's state with the newer fields taken out
@@ -1610,6 +1627,9 @@ static auto olderLayouts() -> void {
   m.kernel.geFinishDue = true;
   u32 geFinish = where(kernelState(), state);
   m.kernel.geFinishDue = false;
+  m.kernel.ge.cachedTexture.address = 1;
+  u32 cached = where(kernelState(), state), cachedEnd = cached + 13;  //(its address, format, size and whether held)
+  m.kernel.ge.cachedTexture.address = 0;
   auto node = m.kernel.files.extract(file);
   node.key() = file + 1;
   m.kernel.files.insert(std::move(node));
@@ -1620,7 +1640,7 @@ static auto olderLayouts() -> void {
   CHECK(kernelState() == state, true);
   bool ordered = jpeg < files && files < asyncData && asyncData < opened && opened + 8 <= pgd && pgd < pgdEnd
               && pgdEnd <= workingDirectory && workingDirectory < geDone && geFinish == geDone + 8
-              && geFinish < state.size();
+              && cached == geFinish + 1 && cachedEnd <= state.size();
   CHECK(ordered, true);
   if(!ordered) return;
 
@@ -1632,6 +1652,7 @@ static auto olderLayouts() -> void {
     n.kernel.hprmCallbacks[3] = 1;
     n.kernel.atracs[1].lowLevel = true;
     n.kernel.geDoneAt = 12345;
+    n.kernel.ge.cachedTexture = {0x0400'0000, 3, 0x505, true};
     n.kernel.stateLayout = layout;
     serializer s{bytes.data(), u32(bytes.size())};
     bool loaded = n.kernel.serialize(s) && s.size() == bytes.size();
@@ -1640,10 +1661,13 @@ static auto olderLayouts() -> void {
     n.kernel.serialize(again);
     return loaded && std::vector<u8>{again.data(), again.data() + again.size()} == state;
   };
-  auto layout24 = state;
+  auto layout25 = state;  //(26 and 27 are other branches' layouts)
+  layout25.erase(layout25.begin() + cached, layout25.begin() + cachedEnd);
+  CHECK(loads(25, layout25), true);
+  auto layout24 = layout25;
   layout24.erase(layout24.begin() + pgd, layout24.begin() + pgdEnd);
   CHECK(loads(24, layout24), true);
-  auto untimed = state;  //no GE time, the file's fields all there
+  auto untimed = layout25;  //no GE time, the file's fields all there
   untimed.erase(untimed.begin() + geDone, untimed.begin() + geFinish + 1);
   auto layout23 = untimed;
   layout23.erase(layout23.begin() + pgd, layout23.begin() + pgdEnd);
@@ -1678,7 +1702,7 @@ static auto olderLayouts() -> void {
   m.kernel.geDoneAt = 0;
   CHECK(places[0] < places[1] && places[1] < geAt, true);
   if(!(places[0] < places[1] && places[1] < geAt)) return;
-  twoFiles.erase(twoFiles.begin() + geAt, twoFiles.begin() + geAt + 9);
+  twoFiles.erase(twoFiles.begin() + geAt, twoFiles.begin() + geAt + 9 + 13);  //(the GE's time and cached texture)
   for(u32 at : {places[1], places[0]}) {  //each file's place, and its PGD decryption after it
     twoFiles.erase(twoFiles.begin() + at, twoFiles.begin() + at + (pgdEnd - opened));
   }

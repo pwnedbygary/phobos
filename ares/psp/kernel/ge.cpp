@@ -68,11 +68,11 @@ auto Kernel::geRun() -> void {
       return;
     }
     u64 ran = 0;
-    ge.owedPixels = ge.owedPrimitives = 0;
+    ge.owed = {};
     auto stop = ge.run(geLeft, ran);
     geLeft -= ran;
     geCommands += ran;
-    geTime();
+    geTime(ran);
     switch(stop) {
     case GE::Stop::Stalled:  return;
     case GE::Stop::Busy:     geBusy = true; return;
@@ -89,20 +89,30 @@ auto Kernel::geRun() -> void {
   }
 }
 
-//What the GE has just been given to draw (GE::owedPixels, GE::owedPrimitives) takes a PSP's GE at least this long,
-//by Sony's figures for it (its Hot Chips 2004 paper): at 166 MHz, 664 million pixels a second (four a clock) and 35
-//million polygons a second through its geometry and its setup. Those are its peaks, at the bus's clock, which is the
-//GE's (half the PLL's: 95, 111, 133 or 166 MHz, power.cpp); so it takes at least a clock for every four pixels, or
-//166/35 clocks for every primitive, whichever is longer (the two may go on at once). What no figure gives counts for
-//nothing: the commands themselves, primitives dropped before they're set up, block transfers. The GE takes it up once
-//it's done with what came before, or now.
-auto Kernel::geTime() -> void {
-  u64 pixels = ge.owedPixels, primitives = ge.owedPrimitives;
-  ge.owedPixels = ge.owedPrimitives = 0;
-  if(!pixels && !primitives) return;
+//What the GE has just been given (commands words of the list, and GE::owed: what its front end and its back end make
+//of them) takes a PSP's GE this long, as the owner's PSP took it (GE::Cost, docs/psp-core.md part 76): the longer of
+//its two ends, which go on at once, in clocks of the bus, which is the GE's (half the PLL's: 95, 111, 133 or 166 MHz,
+//power.cpp). The GE takes it up once it's done with what came before, or now.
+auto Kernel::geTime(u64 commands) -> void {
+  f64 clocks = std::max(ge.owed.front + commands * GE::Cost::Command, ge.owed.back);
+  ge.owed = {};
+  geOwe(clocks);
+}
+
+//The driver's own work in a call, the CPU's, which the call takes before it returns, the GE drawing meanwhile, so a
+//list done by then has its finish callback before the program goes on: sceGeListEnQueue's about 5200 of the CPU's
+//cycles (round 6's timed lists: it returned 23.5 microseconds after it was called at 222 MHz, 15.5 at 333, the list
+//alone; an empty list's callback came 18 microseconds in, the call returning at 33), sceGeListUpdateStallAddr's about
+//510 (ge-statuses: nine of them, GU drawing eight sprites and finishing, took the PSP 21 microseconds more than the
+//core at 222 MHz). (docs/psp-core.md, part 76; the driver's other calls take nothing, unmeasured.)
+auto Kernel::geDriven(u64 cpuCycles) -> void {
+  cycles += cpuCycles * CPUFrequency / (u64(std::clamp<u32>(powerState.cpu, 1, 333)) * 1'000'000);
+}
+
+auto Kernel::geOwe(f64 clocks) -> void {
+  if(!(clocks > 0)) return;
   u64 bus = std::clamp<u32>(powerState.bus, 1, 166);
-  u64 owed = std::max(pixels * 35, primitives * 664) * (CPUFrequency / 1'000'000) / (140 * bus);
-  geDoneAt = std::max(geDoneAt, cycles) + owed;
+  geDoneAt = std::max(geDoneAt, cycles) + u64(clocks * (CPUFrequency / 1'000'000) / bus);
 }
 
 //The FINISH of the list the GE runs, met (geFinishDue): the GE has stopped at its END and raised its interrupt, which
@@ -221,6 +231,7 @@ auto Kernel::geStartNext() -> void {
   if(next.state == GeList::State::Paused) return;
   next.state = GeList::State::Running;
   if(next.context && !next.started) geSaveContext(next.context);
+  if(!next.started) geOwe(GE::Cost::List);  //(a list's own time as it starts: GE::Cost)
   next.started = true;
   geLoad(next);
   geRunning = index;
@@ -393,19 +404,21 @@ auto Kernel::geEnqueue(bool head) -> void {
     if(!geQueue.empty()) geLists[geQueue.front()].state = GeList::State::Queued;
     list.state = GeList::State::Paused;
     geQueue.push_front(index);
-    return;
+    return geDriven(GeEnqueueCycles);
   }
   geQueue.push_back(index);
   if(geQueue.size() > 1) {
     list.state = GeList::State::Queued;
-    return;
+    return geDriven(GeEnqueueCycles);
   }
   list.state = GeList::State::Running;
   list.started = true;
   if(context) geSaveContext(context);
   ge.list = list.registers;  //BASE stays as it was
   geRunning = index;
+  geOwe(GE::Cost::List);  //(a list's own time as it starts: GE::Cost)
   geRun();
+  geDriven(GeEnqueueCycles);
 }
 
 //Takes a list out of the queue, unless the GE has started it.
@@ -430,11 +443,13 @@ auto Kernel::sceGeListUpdateStallAddr() -> void {
     list.registers.stall = stall;
     if(geRunning == index) ge.list.stall = stall;
     result(0);
-    return geRun();
+    geRun();
+    return geDriven(GeStallCycles);
   case GeList::State::Queued:
   case GeList::State::Paused:
     list.registers.stall = stall;
-    return result(0);
+    result(0);
+    return geDriven(GeStallCycles);
   case GeList::State::Completed:
     return result(ErrorAlready);
   default:

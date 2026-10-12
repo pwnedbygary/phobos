@@ -89,6 +89,7 @@ auto GE::sampler() const -> Sampler {
 auto GE::loadClut() -> void {
   u32 address = (commands[ClutAddress] & 0xff'fff0) | (commands[ClutAddressUpper] << 8 & 0x0f00'0000);
   u32 bytes = std::min<u32>((commands[ClutLoad] & 0x3f) * 32, sizeof(clut));
+  owed.back += bytes * Cost::PaletteByte;
   drawnFirst(address, bytes);  //(from VRAM primitives waiting to be drawn draw over: threads.cpp)
   u8 before[sizeof(clut)];
   std::memcpy(before, clut, sizeof(clut));

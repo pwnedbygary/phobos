@@ -1,10 +1,10 @@
-//Round 6 of tools/psp-measure against the owner's PSP (docs/psp-core.md, part 75): its files as this core writes
-//them (measure.cpp's round6Files(): the measuring program itself, run in the core) beside the PSP's own
+//Round 6 of tools/psp-measure against the owner's PSP (docs/psp-core.md, parts 75 and 76): its files as this core
+//writes them (measure.cpp's round6Files(): the measuring program itself, run in the core) beside the PSP's own
 //(tests/psp/measurements/ge-round6, which run-tests.sh unpacks into PSP_GE_ROUND6). Lighting's products, sweeps and
 //sums; the reciprocal at pixels, through the texture matrix, at vertices and on sprites, and its chords read off the
-//PSP's pictures; texture coordinates far past the texture; PATCH_CULL_ENABLE and patches at the edges; and points
-//added up along v. What the core still draws otherwise is pinned, each with what it is. (Round 6's timing files and
-//driver statuses are unpacked and written too, but not compared here.)
+//PSP's pictures; texture coordinates far past the texture; PATCH_CULL_ENABLE and patches at the edges; points added
+//up along v; the GE's time over 453 lists of known work, each at 222/111 and 333/166 MHz; and the driver's statuses
+//while a list draws. What the core still draws otherwise is pinned, each with what it is.
 #include "kernel-machine.hpp"
 
 #include <cstdlib>
@@ -199,13 +199,130 @@ auto measuredDivisionsAlongV() -> void {
   CHECK(counted, true);
 }
 
+//A timing file's records (ge.c's timeCases(): the case, the size, the clocks, repeats | values << 16, the runs'
+//times), each with its runs' middle finish time and middle return from sceGeListEnQueue.
+struct Timed { u32 test, size, bus; f64 middle, returned; std::vector<u32> times; };
+auto timed(const std::vector<u32>& w) -> std::vector<Timed> {
+  std::vector<Timed> records;
+  for(size_t at = 0; at + 4 <= w.size();) {
+    u32 repeats = w[at + 3] & 0xffff, values = w[at + 3] >> 16;
+    if(w.size() - at - 4 < size_t(repeats) * values) return {};
+    Timed record{w[at], w[at + 1], w[at + 2] & 0xffff, 0, 0, {}};
+    std::vector<u32> finishes, returns;
+    for(u32 run = 0; run < repeats && values >= 2; run++) {
+      finishes.push_back(w[at + 4 + run * values]);
+      returns.push_back(w[at + 5 + run * values]);
+    }
+    for(u32 n = 0; n < repeats * values; n++) record.times.push_back(w[at + 4 + n]);
+    std::sort(finishes.begin(), finishes.end());
+    std::sort(returns.begin(), returns.end());
+    record.middle = finishes.empty() ? 0 : finishes[finishes.size() / 2];
+    record.returned = returns.empty() ? 0 : returns[returns.size() / 2];
+    records.push_back(std::move(record));
+    at += 4 + size_t(repeats) * values;
+  }
+  return records;
+}
+
+//The GE's time (GE::Cost) against every record of the seven timing tests: each list's middle finish time here and
+//on the PSP, 906 of them (both clock settings). As fitted: half within 5%, nearly three quarters within 10%, nine in
+//ten within 25%, none off by as much again as it is; and the lists the model's terms rest on: JUMPs, small
+//triangles, indexed vertices, four point lights, flat fills into 32- and 16-bit frame buffers and with the depth
+//test, a 256x256 copy, a new texture each sprite and the SIGNAL's list within 6%, 65536 NOPs within 20% (the PSP's
+//NOP comes cheaper than the other words the command's time rests on) and a strip within 30% (its triangles, sharing
+//corners, set up quicker than lone ones). An empty list is done inside sceGeListEnQueue: the PSP's callback came
+//inside the call (18 microseconds in at 222 MHz, the call returning at 33), here as the call returns (23 in, its
+//reading at most a microsecond before the program's), interrupts being taken once a system function is done.
+auto measuredTime() -> void {
+  struct Key { const char* test; u32 which, size, bus; f64 within; };
+  const Key keys[] = {
+    {"time-commands", 1, 65536, 111, 0.2}, {"time-commands", 5, 16384, 111, 0.05},
+    {"time-primitives", 0, 4096, 111, 0.06}, {"time-primitives", 2, 4096, 166, 0.3},
+    {"time-primitives", 9, 4096, 111, 0.04}, {"time-primitives", 13, 4096, 111, 0.02},
+    {"time-fill", 0, 4, 111, 0.02}, {"time-fill", 1, 4, 166, 0.04}, {"time-fill", 27, 4, 111, 0.02},
+    {"time-transfers", 0, 256, 111, 0.04}, {"time-texcache", 50, 64, 111, 0.02}, {"time-signals", 0, 16, 166, 0.04},
+  };
+  std::vector<f64> errors;
+  f64 worst = 0;
+  for(auto name : {"time-commands", "time-primitives", "time-fill", "time-sizes", "time-transfers", "time-texcache",
+                   "time-signals"}) {
+    auto core = ours(name);
+    if(core.empty()) return;
+    auto here = timed(core), there = timed(theirs(name));
+    CHECK(here.size(), there.size());
+    if(here.size() != there.size()) continue;
+    for(u32 n = 0; n < here.size(); n++) {
+      CHECK(here[n].test == there[n].test && here[n].size == there[n].size && here[n].bus == there[n].bus, true);
+      f64 error = here[n].middle / there[n].middle - 1;
+      errors.push_back(std::abs(error));
+      worst = std::max(worst, std::abs(error));
+      for(auto& key : keys) {
+        if(std::string(key.test) != name || key.which != here[n].test || key.size != here[n].size) continue;
+        if(key.bus != here[n].bus) continue;
+        if(std::abs(error) > key.within) {
+          std::printf("  %s case %u size %u: %+.1f%%\n", name, key.which, key.size, error * 100);
+        }
+        CHECK(std::abs(error) <= key.within, true);
+      }
+      if(std::string(name) == "time-commands" && here[n].test == 0) {
+        CHECK(there[n].middle < there[n].returned, true);
+        CHECK(here[n].middle <= here[n].returned && here[n].middle + 1 >= here[n].returned, true);
+      }
+      //the SIGNAL's callback, before the list's finish, here as on the PSP
+      if(here[n].times.size() == 16 * 3) {
+        for(u32 run = 0; run < 16; run++) CHECK(here[n].times[run * 3 + 2] <= here[n].times[run * 3], true);
+      }
+    }
+  }
+  CHECK(errors.size(), 906u);
+  if(errors.empty()) return;
+  std::sort(errors.begin(), errors.end());
+  auto within = [&](f64 bound) {
+    return f64(std::upper_bound(errors.begin(), errors.end(), bound) - errors.begin()) / errors.size();
+  };
+  CHECK(errors[errors.size() / 2] <= 0.05, true);
+  CHECK(within(0.10) >= 0.7, true);
+  CHECK(within(0.25) >= 0.9, true);
+  CHECK(worst < 1, true);
+}
+
+//ge-statuses (ge.c's geStatuses()): a slow list (16 layers of an unswizzled 8888 texture from RAM, half a second on the
+//PSP) looked at every 50 microseconds for 1024 looks: drawing (2) to sceGeListSync and sceGeDrawSync alike all along,
+//here as on the PSP, its finish callback within a tenth of the PSP's time; and a list GU ends, its 8 such layers
+//drawn with interrupts held off for 20 ms: drawing all the while, and still drawing once they're let through, done
+//within a tenth of the PSP's time. Its first look comes after GU's nine stall updates (eight sprites and the FINISH),
+//22 microseconds in on the PSP, within a few here: the driver's time for each (Kernel::GeStallCycles).
+auto measuredStatuses() -> void {
+  auto core = ours("ge-statuses"), psp = theirs("ge-statuses");
+  constexpr u32 Looks = 1024, Held = 128, Words = 2 + Looks * 3 + 4 + Held * 2;
+  if(core.empty()) return;
+  CHECK(core.size() == Words && psp.size() == Words, true);
+  if(core.size() != Words || psp.size() != Words) return;
+  for(auto* w : {&core, &psp}) {
+    auto& s = *w;
+    bool drawing = true;
+    for(u32 n = 0; n < std::min(s[0], Looks); n++) drawing &= s[3 + n * 3] == 2 && s[4 + n * 3] == 2;
+    CHECK(drawing, true);
+    const u32* part2 = s.data() + 2 + Looks * 3;
+    drawing = part2[2] == 2;
+    for(u32 n = 0; n < std::min(part2[0], Held); n++) drawing &= part2[5 + n * 2] == 2;
+    CHECK(drawing, true);
+  }
+  CHECK(std::abs(f64(core[1]) / psp[1] - 1) < 0.1, true);
+  u32 firstLook = 2 + Looks * 3 + 4;
+  CHECK(std::abs(s64(core[firstLook]) - s64(psp[firstLook])) <= 3, true);
+  u32 done = 2 + Looks * 3 + 3;
+  CHECK(std::abs(f64(core[done]) / psp[done] - 1) < 0.1, true);
+}
+
 }
 
 auto measured6Tests() -> Tests {
   return {
     {"measured round 6 lighting", measuredLighting}, {"measured round 6 reciprocal", measuredReciprocal},
     {"measured round 6 texel range", measuredTexelRange}, {"measured round 6 patch culling", measuredPatchCulling},
-    {"measured round 6 divisions along v", measuredDivisionsAlongV},
+    {"measured round 6 divisions along v", measuredDivisionsAlongV}, {"measured round 6 GE time", measuredTime},
+    {"measured round 6 driver statuses", measuredStatuses},
   };
 }
 
