@@ -9,6 +9,8 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -1893,6 +1895,8 @@ struct Kernel {
     u32 parameters = 0;    //where its parameters are
     u32 abortUpdates = 0;  //an aborted message's Updates still to come before it finishes (0: not aborted)
     u32 runningUpdates = 0;  //Updates while Running, before an abort (utility/dialog/abort's fade length)
+    u32 error = 0;         //what an aborted message finishes with: 0, or the error of one a PSP doesn't show
+    bool deleted = false;  //a save was deleted from its list, which asks the front end again (dialogs.cpp)
   } dialog;
   u32 stateLayout = 28;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
@@ -1902,9 +1906,10 @@ struct Kernel {
   auto dialogUpdate(u32 kind) -> void;
   auto dialogShutdown(u32 kind) -> void;
   auto keyboard(u32 parameters) -> u32;
+  auto keyboardField(u32 field, std::vector<u16> text) -> void;
   static auto hexWord(u32 value) -> std::string;
   auto savePath(const std::string& folder, const std::string& file = {}) -> std::string;
-  auto savedata(u32 parameters) -> u32;
+  auto savedata(u32 parameters, const std::string* chosen = nullptr) -> u32;
   auto savedataWritten(u32 parameters, const std::string& folder, const std::string& file, bool secure) -> bool;
   auto savedataIcons(u32 parameters, const std::string& folder) -> void;
   auto savedataClusters(const std::string& folder, const std::vector<std::string>& secure) -> u64;
@@ -1952,6 +1957,77 @@ struct Kernel {
   auto sceUtilityGetSystemParamString() -> void;
   auto sceUtilitySetSystemParamString() -> void;
   auto sceUtilitySetSystemParamInt() -> void;
+
+  //dialogs.cpp: the dialogs a front end shows itself (docs/psp-core.md, part 73), with the option "Dialogs". What
+  //it's asked to show (the texts UTF-8):
+  struct DialogRequest {
+    u32 id = 0;            //which request (0: none), a number of its own for its answer to name
+    u32 kind = 0;          //1 saving or loading, 2 a message, 3 the keyboard (utility.cpp's kinds)
+    u32 language = 1;      //the dialog's (its common part's: psputility_sysparam.h's numbers, 1 English)
+    bool circle = false;   //circle confirms and cross backs out, as in Japan (the common part's buttonSwap 0)
+    //a message: its text, or for an error's (text empty) the error's number; its buttons, 0 none (the game takes
+    //it down), 1 OK, 2 Yes and No; No chosen at first; whether the cancel button, Back, answers it; and the
+    //buttons' own names, where the game gives them (empty: the system's)
+    std::string text;
+    u32 error = 0;
+    u32 buttons = 0;
+    bool firstNo = false;
+    bool back = false;
+    std::string ok, cancel;
+    //the keyboard: each field's description and text at first, the most characters it takes (UTF-16 units, as the
+    //PSP counts them), which characters (psputility_osk.h's input types, 0 for any), its lines and its language
+    struct Field {
+      std::string description, text;
+      u32 most = 0, input = 0, lines = 1, language = 0;
+    };
+    std::vector<Field> fields;
+    //saving and loading: the mode (2 load, 3 save, 4 load from a list, 5 save to a list, 6 delete from a list, 7
+    //delete any of the memory stick's saves, 10 delete), the saves to choose from, the one chosen at first, and
+    //whether a save was just deleted from this list
+    u32 mode = 0;
+    struct Save {
+      std::string name;    //the save's name after the game's (for mode 7, its folder's)
+      std::string folder;  //its folder in SAVEDATA, which a list delete deletes (the kernel's: not in the byte form)
+      std::string title, saveTitle, detail;  //its PARAM.SFO's TITLE, SAVEDATA_TITLE and SAVEDATA_DETAIL
+      bool there = false;  //on the memory stick (else new data, which a save mode makes)
+      bool broken = false; //there, but loading it would fail (its PARAM.SFO broken, or no data file of the name)
+      u64 size = 0;        //its files' bytes
+      s64 time = 0;        //when it was saved (its PARAM.SFO's time): seconds since 1970, UTC
+      std::vector<u8> icon;  //its ICON0.PNG, or for new data the game's icon for it
+    };
+    std::vector<Save> saves;
+    u32 focus = 0;
+    bool deleted = false;
+  };
+  //And its answer: for a message the button, 1 Yes (or OK), 2 No, 3 Back; for the keyboard each field's text, or
+  //backed out of; for a save dialog the save chosen (its place in saves), or -1 for none (backed out of, or the
+  //notice that there's nothing to load or delete closed).
+  struct DialogAnswer {
+    u32 id = 0;
+    u32 button = 0;
+    bool cancelled = false;
+    std::vector<std::string> texts;
+    s32 choice = -1;
+  };
+  bool frontDialogs = false;  //a front end shows the dialogs (the option "Dialogs"); power() leaves it
+  auto dialogShown() -> DialogRequest;
+  auto dialogShownID() -> u32;
+  auto dialogAnswer(const DialogAnswer& answer) -> bool;
+  static auto dialogBytes(const DialogRequest& request) -> std::vector<u8>;
+  static auto dialogAnswerFrom(const std::vector<u8>& bytes, DialogAnswer& answer) -> bool;
+  std::mutex dialogMutex;
+  DialogRequest dialogAsked;                 //(dialogMutex's) the request outstanding, id 0 for none
+  std::optional<DialogAnswer> dialogGiven;  //(dialogMutex's) its answer, once given
+  u32 dialogRequests = 0;                    //(dialogMutex's) the last request's number
+  auto dialogAsks(u32 kind) -> bool;
+  auto dialogAsk() -> void;
+  auto dialogPost(DialogRequest request) -> void;
+  auto dialogWithdraw() -> void;
+  auto dialogMessage(u32 parameters, DialogRequest& request) -> u32;
+  auto dialogKeyboard(u32 parameters, DialogRequest& request) -> void;
+  auto dialogSaves(u32 parameters, DialogRequest& request) -> void;
+  auto dialogAnswered(const DialogRequest& asked, const DialogAnswer& given) -> void;
+  auto dialogSaved(const DialogRequest& asked, const DialogAnswer& given) -> std::optional<u32>;
 
   //power.cpp: the battery, the clocks, the power switch's callbacks, the volatile memory
   struct Power {

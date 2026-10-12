@@ -536,6 +536,7 @@ static auto stateFields() -> void {
     {"dialog parameters", [&] { k.dialog.parameters = 0x0880'0000; }},
     {"dialog abortUpdates", [&] { k.dialog.abortUpdates = 3; }},
     {"dialog runningUpdates", [&] { k.dialog.runningUpdates = 2; }},
+    {"dialog error", [&] { k.dialog.error = 0x8011'0501; }}, {"dialog deleted", [&] { k.dialog.deleted = true; }},
     {"utilityModules", [&] { k.utilityModules.push_back(0x301); }},
     {"ccc jisToUnicode", [&] { k.ccc.jisToUnicode = 0x0890'0000; }},
     {"ccc unicodeToJis", [&] { k.ccc.unicodeToJis = 0x0892'0000; }},
@@ -836,10 +837,11 @@ static auto stateFields() -> void {
   ghost.uid = 0x7777;
   auto refuses = [&](const char* what, auto&& damage) {
     damage();
-    auto freshMachine = std::make_unique<KernelMachine>();
-    auto& fresh = *freshMachine;
-    devices(fresh);
-    check(__LINE__, what, load(fresh, save(a)), false);
+    //(on the heap: each call is a copy of this lambda of its own, and with the address sanitizer the ~300 machines
+    //held here took their own room each in this function's frame, more than the main thread's 8 MiB stack)
+    auto fresh = std::make_unique<KernelMachine>();
+    devices(*fresh);
+    check(__LINE__, what, load(*fresh, save(a)), false);
     CHECK(load(a, state), true);
   };
   u64 period = 5555 * (Kernel::CPUFrequency / 1'000'000);  //the sampling cycle's, in cycles
@@ -1627,6 +1629,12 @@ static auto olderLayouts() -> void {
   m.kernel.geFinishDue = true;
   u32 geFinish = where(kernelState(), state);
   m.kernel.geFinishDue = false;
+  m.kernel.dialog.error = 1;
+  u32 dialogError = where(kernelState(), state);
+  m.kernel.dialog.error = 0;
+  m.kernel.dialog.deleted = true;
+  u32 dialogDeleted = where(kernelState(), state);
+  m.kernel.dialog.deleted = false;
   m.kernel.ge.cachedTexture.address = 1;
   u32 cached = where(kernelState(), state), cachedEnd = cached + 13;  //(its address, format, size and whether held)
   m.kernel.ge.cachedTexture.address = 0;
@@ -1638,11 +1646,18 @@ static auto olderLayouts() -> void {
   node.key() = file;
   m.kernel.files.insert(std::move(node));
   CHECK(kernelState() == state, true);
-  bool ordered = jpeg < files && files < asyncData && asyncData < opened && opened + 8 <= pgd && pgd < pgdEnd
+  bool ordered = dialogDeleted == dialogError + 4 && dialogDeleted < jpeg
+              && jpeg < files && files < asyncData && asyncData < opened && opened + 8 <= pgd && pgd < pgdEnd
               && pgdEnd <= workingDirectory && workingDirectory < geDone && geFinish == geDone + 8
               && cached == geFinish + 1 && cachedEnd <= state.size();
   CHECK(ordered, true);
   if(!ordered) return;
+  //Layouts before 26 have no dialog error and deleted save (5 bytes, before everything else changed here, so taken out
+  //of each older state last).
+  auto before26 = [&](std::vector<u8> bytes) {
+    bytes.erase(bytes.begin() + dialogError, bytes.begin() + dialogDeleted + 1);
+    return bytes;
+  };
 
   u32 current = m.kernel.stateLayout;
   auto loads = [&](u32 layout, std::vector<u8> bytes) {
@@ -1661,29 +1676,31 @@ static auto olderLayouts() -> void {
     n.kernel.serialize(again);
     return loaded && std::vector<u8>{again.data(), again.data() + again.size()} == state;
   };
-  auto layout25 = state;  //(26 and 27 are other branches' layouts)
-  layout25.erase(layout25.begin() + cached, layout25.begin() + cachedEnd);
-  CHECK(loads(25, layout25), true);
-  auto layout24 = layout25;
+  auto layout26 = state;  //no texture held in the GE's cache (27 is another branch's layout)
+  layout26.erase(layout26.begin() + cached, layout26.begin() + cachedEnd);
+  CHECK(loads(26, layout26), true);
+  CHECK(loads(25, before26(layout26)), true);
+  CHECK(loads(current, before26(layout26)), false);
+  auto layout24 = layout26;
   layout24.erase(layout24.begin() + pgd, layout24.begin() + pgdEnd);
-  CHECK(loads(24, layout24), true);
-  auto untimed = layout25;  //no GE time, the file's fields all there
+  CHECK(loads(24, before26(layout24)), true);
+  auto untimed = layout26;  //no GE time, the file's fields all there
   untimed.erase(untimed.begin() + geDone, untimed.begin() + geFinish + 1);
   auto layout23 = untimed;
   layout23.erase(layout23.begin() + pgd, layout23.begin() + pgdEnd);
-  CHECK(loads(23, layout23), true);
+  CHECK(loads(23, before26(layout23)), true);
   auto layout22 = layout23;
   layout22.erase(layout22.begin() + opened, layout22.begin() + opened + 8);
-  CHECK(loads(22, layout22), true);
+  CHECK(loads(22, before26(layout22)), true);
   std::vector<u8> counted = {0x45, 0x23, 0x01, 0x00};  //numbers handed out once, passed over
   auto layout21 = untimed;
   layout21.insert(layout21.begin() + workingDirectory, counted.begin(), counted.end());
   layout21.erase(layout21.begin() + asyncData, layout21.begin() + workingDirectory);
   auto layout20 = layout21;
   layout20.erase(layout20.begin() + jpeg, layout20.begin() + files);
-  CHECK(loads(21, layout21), true);
-  CHECK(loads(20, layout20), true);
-  CHECK(loads(current, layout21), false);  //read as this layout, it's another state
+  CHECK(loads(21, before26(layout21)), true);
+  CHECK(loads(20, before26(layout20)), true);
+  CHECK(loads(current, before26(layout21)), false);  //read as this layout, it's another state
 
   //another file opened, then the first closed and opened again: its number is the lower, its place the later
   CHECK(m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0}), file + 1);
@@ -1700,12 +1717,17 @@ static auto olderLayouts() -> void {
   m.kernel.geDoneAt = 1;
   u32 geAt = where(kernelState(), twoFiles);
   m.kernel.geDoneAt = 0;
+  m.kernel.dialog.error = 1;
+  u32 dialogAt = where(kernelState(), twoFiles);
+  m.kernel.dialog.error = 0;
   CHECK(places[0] < places[1] && places[1] < geAt, true);
   if(!(places[0] < places[1] && places[1] < geAt)) return;
   twoFiles.erase(twoFiles.begin() + geAt, twoFiles.begin() + geAt + 9 + 13);  //(the GE's time and cached texture)
   for(u32 at : {places[1], places[0]}) {  //each file's place, and its PGD decryption after it
     twoFiles.erase(twoFiles.begin() + at, twoFiles.begin() + at + (pgdEnd - opened));
   }
+  CHECK(dialogAt < places[0], true);
+  twoFiles.erase(twoFiles.begin() + dialogAt, twoFiles.begin() + dialogAt + 5);
   KernelMachine n;
   machine(n);
   n.kernel.stateLayout = 22;

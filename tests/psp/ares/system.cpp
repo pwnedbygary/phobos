@@ -847,6 +847,59 @@ auto systemFonts(const fs::path& programs) -> void {
   PlayStationPortable::option("Fonts", "");
 }
 
+//The system's dialogs shown by the front end (option "Dialogs", taken at the next power on; part 73): without it the
+//kernel answers them, with it a message the program starts asks through the system's functions (dialogID(),
+//dialog(), dialogBytes(), the byte form the kernel writes), takes the answer in byte form once (answer()), and
+//finishes with it; a request outstanding is gone once the game unloads.
+auto frontDialogs(const fs::path& programs) -> void {
+  std::printf("the system's dialogs from the Dialogs option\n");
+  PlayStationPortable::option("Memory Stick", (scratch / "stick").string().c_str());
+  host.game = programPak(programs / "hello.elf", "program.elf");
+  Node::System root;
+  constexpr u32 Parameters = 0x0900'0000;
+  auto message = [&] {  //(a message's parameters, the second size, Yes and No, started and running)
+    psp.memory.fill(Parameters, 0, 0x244);
+    psp.memory.write(4, Parameters, 0x244);
+    psp.memory.write(4, Parameters + 8, 1);
+    psp.memory.write(4, Parameters + 52, 1);
+    psp.memory.copyIn(Parameters + 60, "Continue?", 10);
+    psp.memory.write(4, Parameters + 572, 0x11);
+    psp.cpu.ipu.r[4] = Parameters;
+    psp.kernel.sceUtilityMsgDialogInitStart();
+    psp.kernel.cycles += 300 * (PlayStationPortable::Kernel::CPUFrequency / 1000);
+    psp.kernel.sceUtilityMsgDialogUpdate();
+  };
+  PlayStationPortable::option("Dialogs", "false");
+  if(CHECK(start(root), "the PSP starts without the Dialogs option")) {
+    CHECK(!psp.kernel.frontDialogs, "dialogs answered at once without it");
+    message();
+    CHECK(PlayStationPortable::dialogID() == 0 && psp.memory.read(4, Parameters + 576) == 1, "a message answered Yes");
+    root->unload();
+  }
+  PlayStationPortable::option("Dialogs", "true");
+  if(CHECK(start(root), "the PSP starts with the Dialogs option")) {
+    CHECK(psp.kernel.frontDialogs, "dialogs shown by the front end with it");
+    message();
+    u32 id = PlayStationPortable::dialogID();
+    auto request = PlayStationPortable::dialog();
+    CHECK(id && request.id == id && request.text == "Continue?" && request.buttons == 2, "the message asks");
+    CHECK(PlayStationPortable::dialogBytes() == PlayStationPortable::Kernel::dialogBytes(request), "in byte form too");
+    std::vector<u8> no = {1, 0, 0, 0, u8(id), u8(id >> 8), u8(id >> 16), u8(id >> 24), 2, 0, 0, 0,
+                          0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0};
+    CHECK(PlayStationPortable::answer(no) && !PlayStationPortable::answer(no), "answered No in byte form, once");
+    psp.kernel.sceUtilityMsgDialogUpdate();
+    CHECK(psp.memory.read(4, Parameters + 576) == 2 && !PlayStationPortable::dialogID(), "finished with No");
+    psp.kernel.cycles += 30 * (PlayStationPortable::Kernel::CPUFrequency / 1000);
+    psp.kernel.sceUtilityMsgDialogShutdownStart();
+    psp.kernel.cycles += 30 * (PlayStationPortable::Kernel::CPUFrequency / 1000);
+    message();
+    CHECK(PlayStationPortable::dialogID() != 0, "asked again");
+    root->unload();
+    CHECK(PlayStationPortable::dialogID() == 0 && PlayStationPortable::dialogBytes().empty(), "none once unloaded");
+  }
+  PlayStationPortable::option("Dialogs", "false");
+}
+
 }
 
 auto main() -> int {
@@ -874,6 +927,7 @@ auto main() -> int {
     states(fs::path{programs});
     sound(fs::path{programs});
     systemFonts(fs::path{programs});
+    frontDialogs(fs::path{programs});
   } else {
     std::printf("PSP_TEST_PROGRAMS isn't set (or has no hello.elf): the checks that run a program are skipped\n");
   }
