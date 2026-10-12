@@ -9132,3 +9132,179 @@ reports.
   in larger pieces, might help a busy card, but nothing here measured that.
 - Scratch: `~/phobos-work/scratch/hangs` (run.sh, sheet.py, the trace patch `trace-only.patch`, quick-test.sh and
   quick-main.cpp for the utility tests alone, `lib-final/` the library run, `cmp-final.tsv`).
+
+## Part 70: savedata's files mode, PARAM.SFO beside every save, and the second boot that called its save corrupted
+
+On branch `cursor/psp-savename-2b67`, on `master` (v2.0.0) after the branch's first commit, `5fd162d75` ("<>" names
+no save of its own). Sources: pspautotests' recordings (utility/savedata/filelist, loadbroken, deletebroken,
+loademptyfilename, saveemptyfilename, deleteemptyfilename, deletedata, loaddata, makedata, secureversion, getsize,
+sizes), pspsdk's psputility_savedata.h, PPSSPP's savedata code read as a description of the PSP (SavedataParam.cpp,
+PSPSaveDialog.cpp, ParamSFO.cpp; nothing copied), and the games, traced with a scratch runner (each savedata call's
+mode, names, sizes and answer). JPCSP was not read. Part 69 is another agent's. Save states are unchanged
+(StateVersion 25): the kernel gains no state.
+
+**The problem** (the owner's report). On the device, many games made their save, then at their next check called it
+corrupted and made it again. Valkyria Chronicles II on the Mac, two boots on one memory stick: the first asks the files
+mode (FILES, 12: NO_DATA) and the size mode (22: NO_DATA), makes its save (MAKEDATASECURE, 13) and writes DATA0 to
+DATA4 into it (WRITEDATASECURE, 17). The second asks FILES first, which `savedata()` answered 0 from its `default:`
+case without filling the file list: a save with no files. The game asked "Delete corrupted save data?", deleted it
+(10), said "Save data not found." and made it all again. Valkyria Chronicles III and Shining Blade make the same calls
+in the same order and did the same; and Phobos wrote no PARAM.SFO, so nothing could have told FILES which files were
+secure.
+
+**1. The files mode** (`utility.cpp`, `savedataFiles()`). FILES fills the SceUtilitySavedataFileListInfo at 1528 of
+the 1536-byte parameters (pspsdk: idList at 1524, fileList at 1528, sizeInfo at 1532, the offsets the list and size
+modes already used): the most of each kind to list, how many were listed, and where each kind's 80-byte entries go:
+secure, normal, system. utility/savedata/filelist made a save with MAKEDATASECURE (DATA.BIN), wrote OTHER.BIN into it
+with WRITEDATA, then asked FILES: one secure entry (DATA.BIN), one normal (OTHER.BIN), one system (PARAM.SFO), each
+first entry's mode 0x21ff, the secure entry's next word (st_attr, set to 0x1337 by the test) untouched, and `bind`
+set to 0x3fd, 1021. So an entry is a SceIoStat's first 64 bytes, the word after the mode left alone, the 64-bit size
+and the three dates as sceIoGetstat gives them for the same file (`io.cpp`'s time conversion is now `writeTimes()`,
+shared), a secure file's size its data's (PPSSPP's notes: the 16 bytes a PSP's encryption adds are left out; here a
+secure file has none), then the name in 16 bytes. The system files are PARAM.SFO, ICON0.PNG, ICON1.PMF, PIC1.PNG and
+SND0.AT3; the secure ones those PARAM.SFO's SAVEDATA_FILE_LIST names; the rest normal. Each kind's count is how many
+were listed, never more than its most, and none with no entries to fill. No save is NO_DATA (0x80110327: deletedata,
+deleteemptyfilename); loadbroken asked FILES of a save whose PARAM.SFO had been removed: DATA_BROKEN (0x80110326), the
+counts left as they were (its file list is on the stack, its counts unset: the "System:" line with no name is the
+previous call's count, untouched). From PPSSPP's notes on the PSP: asking for more than 99 secure files, 8192 normal
+ones, or (a program built with SDK 2.60 or later) 5 system files is a bad parameter (0x80110328), and names with small
+letters aren't listed. Chosen: links aren't listed, nor names no request could give (over 12 characters, or not
+plain); the entries come in the names' order (the PSP lists a folder in its own order, which a host doesn't keep); with
+no list to fill (none given, or the smaller structure), the answers are the same. Valkyria Chronicles II asks with no
+normal or system list and gets its five secure files.
+
+**2. PARAM.SFO** (`SaveSFO`, `savedataWritten()`). Every save mode (1, 3, 5, 13, 14, 17, 18) now leaves a PARAM.SFO
+beside the files it writes, as a PSP does (makedata and filelist: the make modes leave one; saveemptyfilename: the save
+modes too, with no data file named), in the format the disc reader parses (`disc-info.cpp`'s `sfoValue()` reads its
+title): the head ("\0PSF", version 1.1), 16 bytes for each value, the keys (sorted, as the PSP writes them, padded to
+4 bytes), then each value in its room. A save's eight: CATEGORY "MS" (room 4), PARENTAL_LEVEL (a number),
+SAVEDATA_DETAIL (1024), SAVEDATA_DIRECTORY (the folder's name, 64), SAVEDATA_FILE_LIST (99 entries of 32 bytes: a name
+in 13, the file's hash in 16), SAVEDATA_PARAMS (128 bytes), SAVEDATA_TITLE and TITLE (128 each), the rooms PPSSPP gives
+them: 4912 bytes in all. The titles and parental level come from the parameters' sfoParam (from 128: the title, the
+save's own title, its detail, then a byte); a request with no title keeps the save's (PPSSPP's rule: games write
+their data with sfoParam left empty). The file list names each secure file written, its hash zeros, as Phobos doesn't
+encrypt; SAVEDATA_PARAMS is 128 zeros, which is also PPSSPP's mark of a save it didn't encrypt. Which writes are
+secure: MAKEDATASECURE and WRITEDATASECURE, and the save modes, with or without a key: secureversion's saves with no
+key (secure version 1) have SAVEDATA_PARAMS say 0x01, the mark of mode 1's encryption, which takes no game key, so a
+PSP encrypts, and lists, every file a save mode writes. MAKEDATA and WRITEDATA write normal files (filelist: OTHER.BIN
+normal); chosen: a file written normally over a secure one leaves the list, so the list names what's secure on the
+stick. Erasing a file takes its name out (PPSSPP's notes); deleting a save takes the folder, PARAM.SFO with it. The
+save modes also write the icons' and sound's files they're given (ICON0.PNG, ICON1.PMF, PIC1.PNG, SND0.AT3, from 1412
+on), as a PSP's saves hold them and PPSSPP writes them; chosen: one whose buffer is smaller than its file, or outside
+the program's memory, is left out, the save still made. Loads (0, 2, 4, 15, 16) copy TITLE, SAVEDATA_TITLE and
+SAVEDATA_DETAIL back into sfoParam, each field cleared to its size, and PARENTAL_LEVEL into its byte, and set `bind` to
+1021 (PPSSPP's notes, both). The list mode (11) dates each save by its PARAM.SFO, as PPSSPP does (the request names no
+file to date it by), a save without one by its folder (chosen); it had left the dates zero. A PARAM.SFO that isn't an
+SFO (not its head; a key, a value or its room outside the file; more room all together than its values' part holds;
+over 64 KiB) is broken, none of it kept, and the next save mode writes it afresh, as it does one too big to write
+again with a save's values (only a hand-made one could be); it's written through a file beside it renamed over it, so
+a save cut off while writing leaves the last one. FILES knows a save's secure files from its PARAM.SFO on the stick,
+across boots and in save states alike (the stick's files aren't state).
+
+**3. Saves made by v2.0.0** (no PARAM.SFO). A PSP calls a save without PARAM.SFO broken: loadbroken took it away from a
+save and every load answered LOAD_DATA_BROKEN (0x80110306), every read and FILES RW_DATA_BROKEN (0x80110326), and
+deletebroken every erase RW_DATA_BROKEN, the data file there or not (its deletes, 9, 10 and 21, answering 0). Taken so,
+no save v2.0.0 made would load again. Chosen, as the evidence allows of the two: their files are normal ones, as if
+their PARAM.SFO named none secure, which is the PSP's own rule for a file its PARAM.SFO doesn't name (filelist's
+OTHER.BIN); the PSP's treatment of a missing PARAM.SFO would lose the saves. So a save without PARAM.SFO loads and reads
+as before, sfoParam left as the game had it (nothing is known of its titles), FILES lists its files as normal, erases
+work, and the next save mode to write into it gives it a PARAM.SFO naming the file it writes. A game that checks its
+files' kinds therefore calls such a save corrupted once: Valkyria Chronicles II's own save with its PARAM.SFO and icons
+taken away (what v2.0.0 left, in the folder it uses now), booted with this branch, is found with no secure file, deleted
+and made again, then found and read on the boot after. (Its real v2.0.0 saves, and Valkyria Chronicles III's and Shining
+Blade's, are in "<>" folders, which nothing since the branch's first commit looks in; v2.0.0 called them corrupted at
+every boot anyway.)
+
+**4. The other modes.** Loads and reads: no save is NO_DATA as before (loaddata); as loadbroken and loademptyfilename
+recorded, a save whose data file is missing answers FILE_NOT_FOUND (0x80110309 for loads, 0x80110329 for reads), where
+Phobos said NO_DATA; a broken PARAM.SFO is DATA_BROKEN before the file is looked for (loadbroken's third case, both
+gone: DATA_BROKEN); with no data file named the answer is 0 and nothing is read (it was NO_DATA). Erasing (19, 20)
+answers in the read/write group, as deletebroken recorded (DATA_BROKEN 0x80110326, FILE_NOT_FOUND 0x80110329), so its
+bad parameter is that group's 0x80110328 and a save not there 0x80110327 (PPSSPP's notes; it was the delete group's
+0x80110348 and 0x80110347). The sizes modes count a secure file as a PSP stores it: encrypted, 16 bytes longer (the
+16 bytes in front of its data: PPSSPP's notes on the PSP's encryption). The sizes mode (8) measures msData's save with
+its PARAM.SFO's secure files 16 bytes longer, and what saving would take counts the data as a save mode's file,
+encrypted, and no data with no file named (PPSSPP's notes); the size mode (22) counts the game's secure files 16 bytes
+longer. A file within 16 bytes of a cluster's end (a 32 or 64 KiB buffer saved whole) takes a cluster more, as on a
+PSP; 2 MiB of data now takes 67 clusters, not 66. The size mode's file counts are the game's own list (getsize: the
+PSP writes nothing there), so it needs nothing of the save. The `default:` case answers only modes not known now.
+
+**The games**, each booted twice on one memory stick (`two-boots.sh`: 9000 frames, Cross every 5 s), with v2.0.0's
+runner (the final library run's, `be543afba`: its core is v2.0.0's), the branch's base (`5fd162d75`, the "<>" fix)
+and this branch. For a game whose saves have names of their own (no "<>"), v2.0.0 and the base are the same code, and
+Def Jam and Mega Man weren't run with v2.0.0's:
+
+| Game | v2.0.0, second boot | Base, second boot | Now, second boot |
+|---|---|---|---|
+| Valkyria Chronicles II | its save in ULUS10515<>; FILES empty: "Delete corrupted save data?", "Save data not found.", made again | the same, in ULUS10515 | FILES lists DATA0-DATA4, it reads them: its intro, title and opening |
+| Valkyria Chronicles III [English v1.0.8] | (NPJH50491<>) FILES empty: deleted, "no save data", made again | the same | its nine secure files found and read: SEGA's logo and its opening |
+| Shining Blade [gugule] | (NPJH50530<>) "Save data is corrupted.", "Creating save data requires 1376KB... create?" | the same | "Save data has been loaded.", its intro and title |
+| Space Invaders Extreme | (ULUS10346<>) its save loaded, play | its save loaded, play | the same |
+| Hot Shots Golf - Open Tee 2 | "Loading of game data complete." | the same | the same |
+| Def Jam - Fight for NY - The Takeover | (as the base) | its save read (READDATASECURE) | the same |
+| Mega Man Powered Up [UNDUB v1.3] | (as the base) | its system data loaded | the same |
+| Monster Hunter Portable 3rd [English v6.1.0] | no save made (its opening, its attract loop): the first boot again | the same | the same |
+| Crash Tag Team Racing | "Checking Memory Stick Duo" from 1200 to the end | the same | the same |
+
+Crash Tag Team Racing (another agent's too) makes one savedata call, an autoload of CRASH.BIN in save "0000" (NO_DATA,
+rightly, on a fresh stick), and then waits at its "Checking Memory Stick Duo" screen to the end on every runner: what
+it waits for isn't the savedata utility's answers. Monster Hunter Portable 3rd only looks for its own, Monster Hunter
+2nd G's and Monster Hunter i's saves (NO_DATA) and asks the sizes mode, then plays its opening and attract loop; with
+Start at its title (about 4200) and Circle, which confirms in this Japanese release, it reaches its character creation,
+the keyboard naming the hunter "PSP", but no scripted run got it through those menus to a save, so its second boot is
+its first. Disgaea Infinite, Riviera, Metal Slug XX, Tekken 6 and Need for Speed: Carbon, whose first frames show save
+notices, make no save within 9000 frames, with the base's runner or this branch's. The "<>" games (Space Invaders
+Extreme, the Valkyria Chronicles and Shining Blade) used folders such as ULUS10346<> before the branch's first commit:
+a Mac's file system takes them, a PSP's memory stick doesn't, and the device's storage may not either.
+
+**The library** (the report's run: 3600 frames, Start at 120 and Cross at 1800, three at a time, the software
+renderer at 7 threads, a fresh stick for each game), this branch's runner beside the final run (`be543afba`,
+`~/phobos-work/scratch/final/lib-top`): every game shows the scene it showed there at each capture, in the same
+category (menu or gameplay 194, movie 71, black 1, stuck loading 0), and none misses a function. God of War: Ghost of
+Sparta and Killzone reached the 900-second limit with other work on the machine (the base's runner, run again then,
+reached it with Killzone too); run again on a quiet machine they finish (366 and 560 s), every capture the final run's.
+79 games differ from the final run at some capture, so the base's runner was run again on them, and this branch's
+beside it at the same time (Ghost of Sparta and Killzone aside, 77). 41 of the 77 match exactly: their frames follow
+when and how they run, not the code (PixelJunk Monsters' title sky is the time of day, and the final run's capture of
+it was made just before four in the morning). The others differ where runs of either runner differ among themselves:
+the same scene a movie frame, a fade step or a blink apart (Battlefront II's random map, Shepherd's Crossing's
+animals); the six whose captures split most cleanly by runner (Monster Hunter Portable 3rd HD, Syphon Filter: Dark
+Mirror, Manhunt 2, Lumines, Macross: Ace Frontier, Tales of Phantasia), run three times more with each runner, mix both
+runners' frames at every capture, and of all the differing captures only one splits by runner, Valkyria Chronicles
+II's at 300 (a step of its loading icon apart), in a run that makes no savedata call. On a fresh stick these games'
+savedata calls are answered as before (loads, lists, sizes and FILES of saves not there); of the 23 that save in the
+run (traced with this branch's runner: Lumines, Space Invaders Extreme, Mega Man Powered Up, Hot Shots Golf 2, Def Jam
+and Final Fantasy III among them), those that read again get what a PSP's answers now give them (their titles in
+sfoParam, bind, the list's dates, sizes 16 bytes longer), and no capture shows it.
+
+**Review.** An independent read-only review (a separate agent, the snapshot's hashes recomputed, the recordings
+checked claim by claim, a fuzzer over SaveSFO built with the sanitizers) found a blocker: a PARAM.SFO's value rooms,
+taken from the file unchecked, let a crafted file make the next save write gigabytes past a buffer (reproduced under
+ASan). Each room is now bounded by the file, their total by the values' part, a write by 64 KiB, and crafted files are
+tested. Its minor findings (comments citing a recording for what is PPSSPP's, the v2.0.0 choice to be called chosen
+with its consequence, the list mode's fallback date not through `savePath()`, test gaps: three icons, a 13-character
+name, every title field, a full list, an erase leaving its file) were all fixed. Three delta reviews, each PASS: the
+first with one minor finding (a hand-made file the reader takes but can't write again blocked every later save: now
+written afresh, tested), the second with a nit (only a rewrite too big is written afresh, so a write failing for a
+moment can't reset the list: taken), the third with nothing left; and a review of these docs, whose findings are
+taken.
+
+**Checks**, on the commit's code (`340649d14`). `tests/psp/run-tests.sh` (sanitized): 443 groups, none failing (439
+before: "utility savedata files", "utility savedata PARAM.SFO", "utility savedata without PARAM.SFO (v2.0.0's)" and
+"utility savedata broken saves" are new; "utility savedata", "names", "unnamed", "erase" and "memory stick free space"
+changed). `tests/allegrex/run-tests.sh`: 58, none failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing.
+`ares/psp/psp.cpp` built with NDK 28.2's clang for arm64 (API 26) with the Android build's flags. With the base's
+kernel the nine new and changed groups fail (78 failing checks) and the rest pass; with the bounds taken out, two of the
+crafted PARAM.SFO cases fail (the count past the file and the key without an end were refused before), and the
+too-big one fails without its rewrite afresh.
+
+**Left, and why.** No encryption: secure files are plain, PARAM.SFO's hashes zeros, so these saves don't load on a PSP,
+and a save copied in from a PSP or PPSSPP, encrypted, isn't read here; the sizes modes would count such a save's
+secure files 16 bytes longer twice. Loads don't fill the icons' buffers from the save (PPSSPP does, for a game it
+names). DELETEDATA (21) with no save still answers the delete group's NO_DATA (PPSSPP's notes give the read/write
+group's): outside this change. A v2.0.0 save of a game that checks its files' kinds is called corrupted once (above).
+Crash Tag Team Racing's wait at "Checking Memory Stick Duo" is another agent's.
+- Scratch: `~/phobos-work/scratch/savename` (two-boots.sh, boots-chain.sh, long-boots.sh, mhp3-save.sh; lib-list.sh,
+  lib.sh's run for a list of games; runner-trace and runner-new-trace2, the base's and this branch's runners with a
+  [save] trace of every savedata call; review1-5, the review snapshots; lib-new, lib-final, lib-basecheck, lib-final2,
+  lib-final-slow and rep-*, the library runs; cmp-*.png, the second boots; the suites' logs).

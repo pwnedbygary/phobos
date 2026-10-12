@@ -186,7 +186,14 @@ auto Kernel::writeStat(u32 address, const std::string& host) -> void {
   memory.write(4, address + 4, folder ? 0x0017 : 0x0027);
   memory.write(4, address + 8, u32(size));
   memory.write(4, address + 12, u32(size >> 32));
-  auto putTime = [&](u32 at, nall::inode::time which) {  //ScePspDateTime: year, month, day, hour, minute, second
+  writeTimes(address + 16, host);
+}
+
+//When a host file or folder was made, read and changed: three ScePspDateTimes (year, month, day, hour, minute,
+//second, then microseconds, left 0), one after another, as a SceIoStat and the savedata utility's lists hold them.
+auto Kernel::writeTimes(u32 address, const std::string& host) -> void {
+  auto putTime = [&](u32 at, nall::inode::time which) {
+    memory.fill(at, 0, 16);
     std::time_t seconds = std::time_t(nall::inode::timestamp(host.c_str(), which));
     if(auto when = std::gmtime(&seconds)) {
       memory.write(2, at + 0, when->tm_year + 1900);
@@ -197,9 +204,9 @@ auto Kernel::writeStat(u32 address, const std::string& host) -> void {
       memory.write(2, at + 10, when->tm_sec);
     }
   };
-  putTime(address + 16, nall::inode::time::create);
-  putTime(address + 32, nall::inode::time::access);
-  putTime(address + 48, nall::inode::time::modify);
+  putTime(address, nall::inode::time::create);
+  putTime(address + 16, nall::inode::time::access);
+  putTime(address + 32, nall::inode::time::modify);
 }
 
 //A path on the disc to what it names, its normalized form ("disc0:/PSP_GAME/SYSDIR") and its names. Returns 0, or

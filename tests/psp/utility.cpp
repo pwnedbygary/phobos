@@ -1,9 +1,10 @@
 //The system's utilities (ares/psp/kernel/utility.cpp): a dialog's statuses and their timing, saves made, loaded,
 //sized, listed, erased and deleted in a memory stick folder (names that would reach elsewhere and buffers outside
-//the program's memory refused), the memory stick's free space told alike everywhere, a message answered yes, the
-//keyboard's fields entered (an empty one given the nickname), network settings cancelled, the wrong type and the
-//wrong status refused; a game's data install cancelled; optional modules loaded and unloaded; the nickname. Called
-//directly, the clock moved on by hand.
+//the program's memory refused), their files listed secure, normal and the system's, their PARAM.SFO written and read
+//back, saves without one (v2.0.0's) still loading, the memory stick's free space told alike everywhere, a message
+//answered yes, the keyboard's fields entered (an empty one given the nickname), network settings cancelled, the wrong
+//type and the wrong status refused; a game's data install cancelled; optional modules loaded and unloaded; the
+//nickname. Called directly, the clock moved on by hand.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -11,6 +12,7 @@ namespace allegrex_test::psp {
 namespace {
 constexpr u32 Parameters = 0x0892'0000, Buffer = 0x0893'0000, Free = 0x0894'0000, Used = 0x0894'0100;
 constexpr u32 Needed = 0x0894'0200, List = 0x0894'0300, Entries = 0x0894'0400;
+constexpr u32 FileList = 0x0896'0000, FileEntries = 0x0896'1000, Stat = 0x0897'0000;
 
 //A SceUtilitySavedataParam for (mode, game, save, file, the data's size), its answers' structures pointed at, the
 //sizes mode's save to measure (msData's names) the same save.
@@ -59,6 +61,62 @@ auto runSave(KernelMachine& m) -> u32 {
   CHECK(m.call("sceUtilitySavedataGetStatus", {}), 0);
   return m.system.memory.read(4, Parameters + 28);
 }
+
+//The save's titles in the parameters' sfoParam: the title, the save's own, its detail, the parental level.
+auto saveTitles(KernelMachine& m, const char* title, const char* saveTitle, const char* detail, u8 parental) -> void {
+  m.system.memory.fill(Parameters + 128, 0, 1284);
+  m.system.memory.copyIn(Parameters + 128, title, strlen(title));
+  m.system.memory.copyIn(Parameters + 256, saveTitle, strlen(saveTitle));
+  m.system.memory.copyIn(Parameters + 384, detail, strlen(detail));
+  m.system.memory.write(1, Parameters + 1408, parental);
+}
+
+//The files mode's SceUtilitySavedataFileListInfo at FileList, the parameters pointing at it: the most of each kind to
+//list (secure, normal, system), the counts 0xcccccccc, each kind's entries 0x800 apart from FileEntries, every
+//entry's first two words 0x1337 and the rest 0, to see what's written.
+auto fileList(KernelMachine& m, u32 secure, u32 normal, u32 system) -> void {
+  auto& memory = m.system.memory;
+  memory.write(4, Parameters + 1528, FileList);
+  memory.fill(FileList + 12, 0xcc, 12);
+  u32 most[] = {secure, normal, system};
+  for(u32 kind : {0u, 1u, 2u}) {
+    memory.write(4, FileList + kind * 4, most[kind]);
+    memory.write(4, FileList + 24 + kind * 4, FileEntries + kind * 0x800);
+    memory.fill(FileEntries + kind * 0x800, 0, 0x800);
+    for(u32 at = FileEntries + kind * 0x800; at < FileEntries + (kind + 1) * 0x800 - 80; at += 80) {
+      memory.write(4, at, 0x1337);
+      memory.write(4, at + 4, 0x1337);
+    }
+  }
+}
+
+//A file the files mode listed: its kind (0 secure, 1 normal, 2 system) and place; its name.
+auto listedFile(KernelMachine& m, u32 kind, u32 n) -> std::string {
+  return m.system.memory.readString(FileEntries + kind * 0x800 + n * 80 + 64, 16);
+}
+
+//A PARAM.SFO's value by its key: its bytes (as long as its length), and its format and room; empty if it isn't there.
+auto sfoField(const std::string& sfo, const std::string& key, u32* format = nullptr, u32* room = nullptr)
+-> std::string {
+  auto word = [&](u64 at) -> u32 {
+    if(at + 4 > sfo.size()) return 0;
+    return u8(sfo[at]) | u8(sfo[at + 1]) << 8 | u8(sfo[at + 2]) << 16 | u32(u8(sfo[at + 3])) << 24;
+  };
+  for(u64 entry = 20; entry < 20 + u64(word(16)) * 16 && entry + 16 <= sfo.size(); entry += 16) {
+    u64 name = u64(word(8)) + (word(entry) & 0xffff), at = u64(word(12)) + word(entry + 12), length = word(entry + 4);
+    if(name >= sfo.size() || sfo.compare(name, key.size() + 1, key.c_str(), key.size() + 1)) continue;
+    if(format) *format = word(entry) >> 16;
+    if(room) *room = word(entry + 8);
+    return at <= sfo.size() ? sfo.substr(at, length) : std::string{};
+  }
+  return {};
+}
+
+//The name in entry n of a SAVEDATA_FILE_LIST (32 bytes each, a name in the first 13); empty past the list's end.
+auto listName(const std::string& list, u32 n) -> std::string {
+  if(n * 32 + 32 > list.size()) return {};
+  return {list.c_str() + n * 32, strnlen(list.c_str() + n * 32, 13)};
+}
 }
 
 //Saves: none to load at first; one saved (its data file in PSP/SAVEDATA/<game><save>), loaded back, sized (the
@@ -86,7 +144,7 @@ static auto savedata() -> void {
   CHECK(m.system.memory.read(4, Free + 8), Kernel::StickFreeClusters * 32);
   CHECK(m.system.memory.readString(Free + 12, 8) == "1 GB", true);
   CHECK(m.system.memory.readString(Used + 16, 20) == "SLOT0", true);
-  CHECK(m.system.memory.read(4, Used + 36), 2);    //one cluster of data, and the folder's
+  CHECK(m.system.memory.read(4, Used + 36), 3);    //one cluster of data, its PARAM.SFO's, and the folder's
   CHECK(m.system.memory.read(4, Needed), 4);       //40000 bytes take two, its PARAM.SFO one, the folder one
   CHECK(m.system.memory.read(4, Needed + 4), 128);
   saveParameters(m, 11, "ULUS99999", "", 0);  //list
@@ -161,12 +219,12 @@ static auto savedataNames() -> void {
   refused(15, "ULUS99999", "SLOT0", "..", 0x8011'0328);
   refused(1, "ULUS99999", "SLOT0", "..\\..\\X", 0x8011'0388);
   refused(3, "ULUS99999", "SLOT0", "C:X", 0x8011'0388);
-  refused(20, "ULUS99999", "SLOT0", "../DATA.BIN", 0x8011'0348);
+  refused(20, "ULUS99999", "SLOT0", "../DATA.BIN", 0x8011'0328);
   //data files that are links leading out of their folders, into the stick and out of it: as if not there
   refused(1, "ULUS99999", "SLOT1", "DATA.BIN", 0x8011'0385);
-  refused(0, "ULUS99999", "SLOT1", "DATA.BIN", 0x8011'0307);
-  refused(0, "ULUS99999", "SLOT2", "DATA.BIN", 0x8011'0307);
-  refused(20, "ULUS99999", "SLOT2", "DATA.BIN", 0x8011'0347);
+  refused(0, "ULUS99999", "SLOT1", "DATA.BIN", 0x8011'0309);
+  refused(0, "ULUS99999", "SLOT2", "DATA.BIN", 0x8011'0309);
+  refused(20, "ULUS99999", "SLOT2", "DATA.BIN", 0x8011'0329);
   CHECK(fs::is_symlink(savedata / "ULUS99999SLOT2/DATA.BIN"), true);
   //the game's and the save's names, the save's from a list too
   refused(1, "../GAME/HB", "", "EBOOT.PBP", 0x8011'0388);
@@ -204,6 +262,39 @@ static auto savedataNames() -> void {
   refused(6, "ULUS99999", "/../..", "", 0x8011'0348);
   refused(7, "ULUS99999", "SLOT0\\..\\..", "", 0x8011'0348);
   refused(9, "../..", "", "", 0x8011'0348);
+}
+
+//"<>" names no save: as the save's name, or as the list's choice in the list modes, the save's folder is the game's
+//name alone, and a sizes request's msData "<>" measures that folder. No folder with "<>" in its name is made.
+static auto savedataUnnamed() -> void {
+  HostFolder stick;
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  m.system.memory.copyIn(Buffer, "game alone", 10);
+  saveParameters(m, 1, "ULUS99999", "<>", 10);  //autosave
+  CHECK(runSave(m), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS99999/DATA.BIN") == "game alone", true);
+  CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/ULUS99999<>"), false);
+  m.system.memory.fill(Buffer, 0, 16);
+  saveParameters(m, 2, "ULUS99999", "<>", 0);  //load
+  CHECK(runSave(m), 0);
+  CHECK(m.system.memory.readString(Buffer, 16) == "game alone", true);
+  saveParameters(m, 8, "ULUS99999", "<>", 0);  //sizes: msData's "<>" is the same folder
+  CHECK(runSave(m), 0);
+  CHECK(m.system.memory.read(4, Used + 36), 3);
+  //a list save: "<>" as the save's name takes the list's first name, and "<>" there is the game's name alone
+  m.system.memory.copyIn(Buffer, "from a list", 11);
+  saveParameters(m, 5, "ULUS99999", "<>", 11);
+  m.system.memory.copyIn(Buffer + 0x100, "SLOT9", 6);
+  m.system.memory.write(4, Parameters + 96, Buffer + 0x100);
+  CHECK(runSave(m), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS99999SLOT9/DATA.BIN") == "from a list", true);
+  saveParameters(m, 5, "ULUS99998", "<>", 11);
+  m.system.memory.copyIn(Buffer + 0x100, "<>", 3);
+  m.system.memory.write(4, Parameters + 96, Buffer + 0x100);
+  CHECK(runSave(m), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS99998/DATA.BIN") == "from a list", true);
+  CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/ULUS99998<>"), false);
 }
 
 //The program's buffer must be in its memory as far as what's copied in or out: a save from memory that isn't there
@@ -270,8 +361,9 @@ static auto savedataLoops() -> void {
   CHECK(m.system.memory.readString(Entries + 52, 20) == "SLOT0", true);
 }
 
-//Erasing (modes 19 and 20) takes the data file named and nothing else, and with none named, nothing; one that isn't
-//there is no data. Deleting a save (modes 6, 7, 9, 10 and 21) takes its folder and all it holds.
+//Erasing (modes 19 and 20) takes the data file named and nothing else, and with none named, nothing; in the reads'
+//group of errors (utility/savedata/deletebroken), one that isn't there is FILE_NOT_FOUND, and no save NO_DATA.
+//Deleting a save (modes 6, 7, 9, 10 and 21) takes its folder and all it holds.
 static auto savedataErase() -> void {
   HostFolder stick;
   KernelMachine m;
@@ -285,11 +377,13 @@ static auto savedataErase() -> void {
     CHECK(std::filesystem::exists(folder / "DATA.BIN"), false);
     CHECK(stick.get("PSP/SAVEDATA/ULUS99999SLOT0/OTHER.BIN") == "other", true);
     saveParameters(m, mode, "ULUS99999", "SLOT0", 0);
-    CHECK(runSave(m), 0x8011'0347);
+    CHECK(runSave(m), 0x8011'0329);
     saveParameters(m, mode, "ULUS99999", "SLOT0", 0);
     fileName(m, "");
     CHECK(runSave(m), 0);
     CHECK(stick.get("PSP/SAVEDATA/ULUS99999SLOT0/OTHER.BIN") == "other", true);
+    saveParameters(m, mode, "ULUS99999", "NONE", 0);
+    CHECK(runSave(m), 0x8011'0327);
   }
   for(u32 mode : {6u, 7u, 9u, 10u, 21u}) {
     stick.put("PSP/SAVEDATA/ULUS99999SLOT0/DATA.BIN", "data");
@@ -300,17 +394,402 @@ static auto savedataErase() -> void {
   }
 }
 
+//The files mode (12): a save's files in three lists, the secure ones (those the save modes and the secure data modes
+//wrote), the normal ones and the system's (PARAM.SFO and the icons), each entry a SceIoStat's first 64 bytes (the word
+//after the mode left as it was) and the name, and bind 1021, as utility/savedata/filelist recorded. Each list no
+//longer than its most, and none without entries to fill; names with small letters (PPSSPP's notes), folders, links and
+//names over 12 characters left out. Asking for more than 99 secure files, 8192 normal ones or (built with SDK 2.60 on)
+//5 system ones is a bad parameter (PPSSPP's notes); no save is NO_DATA (deletedata), a PARAM.SFO that isn't one
+//DATA_BROKEN (loadbroken), nothing written either way; with no list to fill, the answers are the same. The icons a save
+//mode is given are written, but one whose buffer is smaller than its file or outside memory.
+static auto savedataFiles() -> void {
+  namespace fs = std::filesystem;
+  HostFolder stick;
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  auto& memory = m.system.memory;
+  constexpr u32 RAMEnd = 0x0a00'0000;  //the test machine's 32 MiB
+  memory.copyIn(Buffer, "0123456789abcdef", 16);
+  saveParameters(m, 13, "ULUS99999", "SLOT0", 16);  //make data secure: DATA.BIN, and the icons
+  for(auto [n, buffer, room, size] : std::initializer_list<std::tuple<u32, u32, u32, u32>>{
+      {0, Buffer, 16, 4},        //ICON0.PNG: "0123"
+      {1, Buffer, 4, 8},         //ICON1.PMF: 8 bytes in a 4-byte buffer: left out
+      {2, RAMEnd - 8, 16, 16},   //PIC1.PNG: past memory's end: left out
+      {3, Buffer + 4, 6, 6}}) {  //SND0.AT3: "456789"
+    memory.write(4, Parameters + 1412 + n * 16, buffer);
+    memory.write(4, Parameters + 1416 + n * 16, room);
+    memory.write(4, Parameters + 1420 + n * 16, size);
+  }
+  CHECK(runSave(m), 0);
+  auto save = stick.path / "PSP/SAVEDATA/ULUS99999SLOT0";
+  CHECK(stick.get("PSP/SAVEDATA/ULUS99999SLOT0/ICON0.PNG") == "0123", true);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS99999SLOT0/SND0.AT3") == "456789", true);
+  CHECK(fs::exists(save / "ICON1.PMF") || fs::exists(save / "PIC1.PNG"), false);
+  saveParameters(m, 18, "ULUS99999", "SLOT0", 5);  //write data: OTHER.BIN, normal
+  fileName(m, "OTHER.BIN");
+  CHECK(runSave(m), 0);
+  saveParameters(m, 17, "ULUS99999", "SLOT0", 7);  //write data secure: A.BIN
+  fileName(m, "A.BIN");
+  CHECK(runSave(m), 0);
+  stick.put("PSP/SAVEDATA/ULUS99999SLOT0/lower.bin", "small letters");
+  stick.put("PSP/SAVEDATA/ULUS99999SLOT0/ABCDEFGHI.BIN", "thirteen characters");
+  fs::create_directories(save / "FOLDER");
+  fs::create_symlink(save / "OTHER.BIN", save / "LINK");
+  saveParameters(m, 12, "ULUS99999", "SLOT0", 0);
+  fileList(m, 10, 10, 10);
+  CHECK(runSave(m), 0);
+  CHECK(memory.read(4, Parameters + 52), 1021);
+  CHECK(memory.read(4, FileList + 12), 2);
+  CHECK(memory.read(4, FileList + 16), 1);
+  CHECK(memory.read(4, FileList + 20), 3);
+  CHECK(listedFile(m, 0, 0) == "A.BIN" && listedFile(m, 0, 1) == "DATA.BIN", true);
+  CHECK(listedFile(m, 1, 0) == "OTHER.BIN", true);
+  CHECK(listedFile(m, 2, 0) == "ICON0.PNG" && listedFile(m, 2, 1) == "PARAM.SFO", true);
+  CHECK(listedFile(m, 2, 2) == "SND0.AT3", true);
+  CHECK(memory.read(4, FileEntries + 0x800 + 80), 0x1337);  //nothing more
+  //an entry: a file's mode, the next word as it was, the size, and the dates sceIoGetstat gives
+  u32 entry = FileEntries + 80;  //DATA.BIN
+  CHECK(memory.read(4, entry), 0x21ff);
+  CHECK(memory.read(4, entry + 4), 0x1337);
+  CHECK(memory.read(4, entry + 8), 16);
+  CHECK(memory.read(4, entry + 12), 0);
+  CHECK(m.call("sceIoGetstat", {m.string("ms0:/PSP/SAVEDATA/ULUS99999SLOT0/DATA.BIN"), Stat}), 0);
+  for(u32 at : {16u, 20u, 24u, 28u, 48u, 52u, 56u, 60u}) CHECK(memory.read(4, entry + at), memory.read(4, Stat + at));
+  CHECK(memory.read(4, FileEntries + 2 * 0x800 + 80 + 8), 4912);  //PARAM.SFO's size, as a PSP's
+  //each list no longer than its most; with no entries to fill, none listed
+  fileList(m, 1, 10, 10);
+  memory.write(4, FileList + 28, 0);
+  CHECK(runSave(m), 0);
+  CHECK(memory.read(4, FileList + 12), 1);
+  CHECK(listedFile(m, 0, 0) == "A.BIN", true);
+  CHECK(memory.read(4, FileEntries + 80), 0x1337);
+  CHECK(memory.read(4, FileList + 16), 0);
+  CHECK(memory.read(4, FileList + 20), 3);
+  //too many asked for: a bad parameter, nothing written
+  for(auto [kind, most] : {std::pair{0u, 100u}, {1u, 8193u}}) {
+    fileList(m, 10, 10, 10);
+    memory.write(4, FileList + kind * 4, most);
+    memory.write(4, Parameters + 52, 0);
+    CHECK(runSave(m), 0x8011'0328);
+    CHECK(memory.read(4, FileList + 12), 0xcccc'cccc);
+    CHECK(memory.read(4, Parameters + 52), 0);
+  }
+  fileList(m, 99, 8192, 6);  //six system files: too many only for SDK 2.60 on
+  CHECK(runSave(m), 0);
+  m.kernel.sdkVersion = 0x0206'0010;
+  CHECK(runSave(m), 0x8011'0328);
+  fileList(m, 99, 8192, 5);
+  CHECK(runSave(m), 0);
+  memory.write(4, FileList + 8, 6);  //(but with no entries to fill, the most is no matter)
+  memory.write(4, FileList + 32, 0);
+  CHECK(runSave(m), 0);
+  m.kernel.sdkVersion = 0;
+  //no save: NO_DATA; a PARAM.SFO that isn't one: DATA_BROKEN; nothing written
+  saveParameters(m, 12, "ULUS99999", "NONE", 0);
+  fileList(m, 10, 10, 10);
+  CHECK(runSave(m), 0x8011'0327);
+  CHECK(memory.read(4, FileList + 12), 0xcccc'cccc);
+  CHECK(memory.read(4, Parameters + 52), 0);
+  stick.put("PSP/SAVEDATA/ULUS99999SLOT1/DATA.BIN", "data");
+  stick.put("PSP/SAVEDATA/ULUS99999SLOT1/PARAM.SFO", std::string("\0PSF\1\1\0\0", 8));
+  saveParameters(m, 12, "ULUS99999", "SLOT1", 0);
+  fileList(m, 10, 10, 10);
+  CHECK(runSave(m), 0x8011'0326);
+  CHECK(memory.read(4, FileList + 12), 0xcccc'cccc);
+  CHECK(memory.read(4, Parameters + 52), 0);
+  //no list to fill (none given, or the smaller structure's): the same answers
+  saveParameters(m, 12, "ULUS99999", "SLOT0", 0);
+  CHECK(runSave(m), 0);
+  CHECK(memory.read(4, Parameters + 52), 1021);
+  fileList(m, 10, 10, 10);
+  memory.write(4, Parameters, 1500);
+  CHECK(runSave(m), 0);
+  CHECK(memory.read(4, FileList + 12), 0xcccc'cccc);
+  saveParameters(m, 12, "ULUS99999", "NONE", 0);
+  CHECK(runSave(m), 0x8011'0327);
+}
+
+//PARAM.SFO, written beside a save as a PSP writes it, in the disc's format (the disc's reader reads its title), its
+//keys in order and 4912 bytes: CATEGORY "MS", PARENTAL_LEVEL, SAVEDATA_DETAIL, SAVEDATA_DIRECTORY (the folder's
+//name), SAVEDATA_FILE_LIST naming the secure files (their hashes zeros), SAVEDATA_PARAMS (zeros), SAVEDATA_TITLE and
+//TITLE, the titles from the request's sfoParam; a request with no title keeps the save's. Loads give the titles back
+//in sfoParam (with no file named too, nothing read, 0); erasing a file takes its name out of the list, and writing it
+//as a normal file; the list mode dates a save by its PARAM.SFO; deleting takes it with the save.
+static auto savedataParamSFO() -> void {
+  namespace fs = std::filesystem;
+  HostFolder stick;
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  auto& memory = m.system.memory;
+  memory.copyIn(Buffer, "saved bytes", 11);
+  saveParameters(m, 1, "ULUS99999", "SLOT0", 11);  //autosave, with no key: still secure
+  saveTitles(m, "Game", "Chapter 1", "A detail\nin two lines", 3);
+  CHECK(runSave(m), 0);
+  auto sfo = stick.get("PSP/SAVEDATA/ULUS99999SLOT0/PARAM.SFO");
+  CHECK(sfo.size(), 4912);
+  if(sfo.size() != 4912) return;
+  CHECK(sfo.compare(0, 8, std::string("\0PSF\1\1\0\0", 8)), 0);
+  CHECK(ares::PlayStationPortable::sfoValue({sfo.begin(), sfo.end()}, "TITLE") == "Game", true);
+  u32 format = 0, room = 0, at = 20;
+  for(auto [key, kind, space] : std::initializer_list<std::tuple<const char*, u32, u32>>{
+      {"CATEGORY", 0x0204, 4}, {"PARENTAL_LEVEL", 0x0404, 4}, {"SAVEDATA_DETAIL", 0x0204, 1024},
+      {"SAVEDATA_DIRECTORY", 0x0204, 64}, {"SAVEDATA_FILE_LIST", 0x0004, 3168}, {"SAVEDATA_PARAMS", 0x0004, 128},
+      {"SAVEDATA_TITLE", 0x0204, 128}, {"TITLE", 0x0204, 128}}) {
+    u32 name = 148 + u8(sfo[at]) + u8(sfo[at + 1]) * 256;
+    check(__LINE__, key, name < sfo.size() && sfo.compare(name, strlen(key) + 1, key, strlen(key) + 1) == 0, true);
+    sfoField(sfo, key, &format, &room);
+    check(__LINE__, key, format, kind);
+    check(__LINE__, key, room, space);
+    at += 16;
+  }
+  CHECK(sfoField(sfo, "CATEGORY") == std::string("MS\0", 3), true);
+  CHECK(sfoField(sfo, "PARENTAL_LEVEL") == std::string("\3\0\0\0", 4), true);
+  CHECK(sfoField(sfo, "SAVEDATA_DETAIL") == std::string("A detail\nin two lines\0", 22), true);
+  CHECK(sfoField(sfo, "SAVEDATA_DIRECTORY") == std::string("ULUS99999SLOT0\0", 15), true);
+  CHECK(sfoField(sfo, "SAVEDATA_TITLE") == std::string("Chapter 1\0", 10), true);
+  CHECK(sfoField(sfo, "TITLE") == std::string("Game\0", 5), true);
+  CHECK(sfoField(sfo, "SAVEDATA_PARAMS") == std::string(128, '\0'), true);
+  auto list = sfoField(sfo, "SAVEDATA_FILE_LIST");
+  CHECK(listName(list, 0) == "DATA.BIN" && list.find_first_not_of('\0', 8) == list.npos, true);
+  //loaded: the titles in sfoParam, and bind 1021; with no file named, 0, the same, nothing read
+  for(const char* file : {"DATA.BIN", ""}) {
+    saveParameters(m, 0, "ULUS99999", "SLOT0", 0);
+    fileName(m, file);
+    memory.fill(Buffer, 0, 16);
+    memory.fill(Parameters + 128, 0xcc, 1284);
+    CHECK(runSave(m), 0);
+    CHECK(memory.readString(Buffer, 16) == (*file ? "saved bytes" : ""), true);
+    CHECK(memory.read(4, Parameters + 124), *file ? 11 : 0);
+    CHECK(memory.readString(Parameters + 128, 128) == "Game", true);
+    CHECK(memory.readString(Parameters + 256, 128) == "Chapter 1", true);
+    CHECK(memory.readString(Parameters + 384, 1024) == "A detail\nin two lines", true);
+    for(u32 end : {256u, 384u, 1408u}) CHECK(memory.read(4, Parameters + end - 4), 0);  //the rest of each cleared
+    CHECK(memory.read(1, Parameters + 1408), 3);
+    CHECK(memory.read(1, Parameters + 1409), 0xcc);
+    CHECK(memory.read(4, Parameters + 52), 1021);
+  }
+  //writing data with no title keeps the save's titles, with one takes them; a normal file isn't listed
+  saveParameters(m, 18, "ULUS99999", "SLOT0", 5);
+  fileName(m, "OTHER.BIN");
+  CHECK(runSave(m), 0);
+  sfo = stick.get("PSP/SAVEDATA/ULUS99999SLOT0/PARAM.SFO");
+  CHECK(sfoField(sfo, "SAVEDATA_TITLE") == std::string("Chapter 1\0", 10), true);
+  CHECK(sfoField(sfo, "SAVEDATA_FILE_LIST").find("OTHER.BIN"), std::string::npos);
+  saveParameters(m, 17, "ULUS99999", "SLOT0", 5);
+  fileName(m, "SECURE.BIN");
+  saveTitles(m, "Game", "Chapter 2", "Later", 0);
+  CHECK(runSave(m), 0);
+  sfo = stick.get("PSP/SAVEDATA/ULUS99999SLOT0/PARAM.SFO");
+  CHECK(sfoField(sfo, "SAVEDATA_TITLE") == std::string("Chapter 2\0", 10), true);
+  CHECK(sfoField(sfo, "PARENTAL_LEVEL") == std::string(4, '\0'), true);
+  list = sfoField(sfo, "SAVEDATA_FILE_LIST");
+  CHECK(listName(list, 0) == "DATA.BIN" && listName(list, 1) == "SECURE.BIN", true);
+  //erased, a secure file's name goes from the list; written as a normal file, so does it (chosen)
+  saveParameters(m, 19, "ULUS99999", "SLOT0", 0);
+  CHECK(runSave(m), 0);
+  list = sfoField(stick.get("PSP/SAVEDATA/ULUS99999SLOT0/PARAM.SFO"), "SAVEDATA_FILE_LIST");
+  CHECK(list.size() == 3168 && list.find("DATA.BIN") == list.npos && list.find("SECURE.BIN") == 32, true);
+  saveParameters(m, 18, "ULUS99999", "SLOT0", 5);
+  fileName(m, "SECURE.BIN");
+  CHECK(runSave(m), 0);
+  list = sfoField(stick.get("PSP/SAVEDATA/ULUS99999SLOT0/PARAM.SFO"), "SAVEDATA_FILE_LIST");
+  CHECK(list == std::string(3168, '\0'), true);
+  //made, a non-secure save's file isn't listed either; a save with no file named still has its PARAM.SFO
+  saveParameters(m, 14, "ULUS99999", "SLOT1", 11);
+  CHECK(runSave(m), 0);
+  CHECK(sfoField(stick.get("PSP/SAVEDATA/ULUS99999SLOT1/PARAM.SFO"), "SAVEDATA_FILE_LIST") == std::string(3168, '\0'),
+        true);
+  saveParameters(m, 3, "ULUS99999", "SLOT2", 0);
+  fileName(m, "");
+  CHECK(runSave(m), 0);
+  CHECK(sfoField(stick.get("PSP/SAVEDATA/ULUS99999SLOT2/PARAM.SFO"), "CATEGORY") == std::string("MS\0", 3), true);
+  //a full list (99 secure files, the PSP's most) takes no more: the hundredth is a normal file
+  for(u32 n = 0; n < 100; n++) {
+    char name[16];
+    std::snprintf(name, sizeof(name), "F%02u.BIN", n);
+    saveParameters(m, n ? 17 : 13, "ULUS99998", "FULL", 5);
+    fileName(m, name);
+    check(__LINE__, name, runSave(m), 0);
+  }
+  list = sfoField(stick.get("PSP/SAVEDATA/ULUS99998FULL/PARAM.SFO"), "SAVEDATA_FILE_LIST");
+  CHECK(listName(list, 0) == "F00.BIN" && listName(list, 98) == "F98.BIN" && list.find("F99.BIN") == list.npos, true);
+  constexpr u32 Many = 0x0898'0000;  //(room for 99 entries)
+  saveParameters(m, 12, "ULUS99998", "FULL", 0);
+  fileList(m, 99, 10, 0);
+  memory.write(4, FileList + 24, Many);
+  CHECK(runSave(m), 0);
+  CHECK(memory.read(4, FileList + 12) == 99 && memory.read(4, FileList + 16) == 1, true);
+  CHECK(memory.readString(Many + 98 * 80 + 64, 16) == "F98.BIN" && listedFile(m, 1, 0) == "F99.BIN", true);
+  //the list mode: each save dated by its PARAM.SFO (the dates sceIoGetstat gives it), one without by its folder
+  auto older = [&](const fs::path& path, int hours) {
+    fs::last_write_time(path, fs::last_write_time(path) - std::chrono::hours(hours));
+  };
+  older(stick.path / "PSP/SAVEDATA/ULUS99999SLOT0/PARAM.SFO", 48);
+  fs::create_directories(stick.path / "PSP/SAVEDATA/ULUS99999SLOT3");
+  older(stick.path / "PSP/SAVEDATA/ULUS99999SLOT3", 72);
+  saveParameters(m, 11, "ULUS99999", "", 0);
+  CHECK(runSave(m), 0);
+  CHECK(memory.read(4, List + 4), 4);
+  CHECK(m.call("sceIoGetstat", {m.string("ms0:/PSP/SAVEDATA/ULUS99999SLOT0/PARAM.SFO"), Stat}), 0);
+  for(u32 at = 0; at < 16; at += 4) CHECK(memory.read(4, Entries + 36 + at), memory.read(4, Stat + 48 + at));
+  CHECK(m.call("sceIoGetstat", {m.string("ms0:/PSP/SAVEDATA/ULUS99999SLOT3"), Stat}), 0);
+  for(u32 at = 0; at < 16; at += 4) CHECK(memory.read(4, Entries + 3 * 72 + 36 + at), memory.read(4, Stat + 48 + at));
+  CHECK(memory.read(2, Entries + 36) != memory.read(2, Entries + 3 * 72 + 36) || memory.read(2, Entries + 40) !=
+        memory.read(2, Entries + 3 * 72 + 40), true);
+  //deleting takes PARAM.SFO with the save
+  saveParameters(m, 10, "ULUS99999", "SLOT0", 0);
+  CHECK(runSave(m), 0);
+  CHECK(fs::exists(stick.path / "PSP/SAVEDATA/ULUS99999SLOT0"), false);
+}
+
+//A save without PARAM.SFO is v2.0.0's, from before Phobos wrote them (a PSP would call it broken): it still loads,
+//every load and read taking its data as before, the titles in the parameters left as they were; the files mode
+//lists its files as normal ones (no PARAM.SFO names any secure); erasing works; and a save mode writing into it
+//gives it its PARAM.SFO, naming the file it writes.
+static auto savedataOlder() -> void {
+  HostFolder stick;
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  auto& memory = m.system.memory;
+  stick.put("PSP/SAVEDATA/ULUS99999SLOT0/DATA.BIN", "older save");
+  stick.put("PSP/SAVEDATA/ULUS99999SLOT0/OTHER.BIN", "other");
+  for(u32 mode : {0u, 2u, 4u, 15u, 16u}) {
+    saveParameters(m, mode, "ULUS99999", "SLOT0", 0);
+    saveTitles(m, "Kept", "Kept too", "", 1);
+    memory.fill(Buffer, 0, 16);
+    check(__LINE__, "mode", runSave(m), 0);
+    check(__LINE__, "data", memory.readString(Buffer, 16) == "older save", true);
+    check(__LINE__, "titles", memory.readString(Parameters + 128, 128) == "Kept", true);
+    check(__LINE__, "titles", memory.readString(Parameters + 256, 128) == "Kept too", true);
+    check(__LINE__, "level", memory.read(1, Parameters + 1408), 1);
+  }
+  saveParameters(m, 12, "ULUS99999", "SLOT0", 0);
+  fileList(m, 10, 10, 10);
+  CHECK(runSave(m), 0);
+  CHECK(memory.read(4, FileList + 12), 0);
+  CHECK(memory.read(4, FileList + 16), 2);
+  CHECK(memory.read(4, FileList + 20), 0);
+  CHECK(listedFile(m, 1, 0) == "DATA.BIN" && listedFile(m, 1, 1) == "OTHER.BIN", true);
+  saveParameters(m, 20, "ULUS99999", "SLOT0", 0);
+  fileName(m, "OTHER.BIN");
+  CHECK(runSave(m), 0);
+  CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/ULUS99999SLOT0/OTHER.BIN"), false);
+  CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/ULUS99999SLOT0/PARAM.SFO"), false);
+  memory.copyIn(Buffer, "new", 3);
+  saveParameters(m, 17, "ULUS99999", "SLOT0", 3);
+  fileName(m, "NEW.BIN");
+  CHECK(runSave(m), 0);
+  auto list = sfoField(stick.get("PSP/SAVEDATA/ULUS99999SLOT0/PARAM.SFO"), "SAVEDATA_FILE_LIST");
+  CHECK(listName(list, 0) == "NEW.BIN" && list.find_first_not_of('\0', 7) == list.npos, true);
+  saveParameters(m, 12, "ULUS99999", "SLOT0", 0);
+  fileList(m, 10, 10, 10);
+  CHECK(runSave(m), 0);
+  CHECK(listedFile(m, 0, 0) == "NEW.BIN" && listedFile(m, 1, 0) == "DATA.BIN" && listedFile(m, 2, 0) == "PARAM.SFO",
+        true);
+}
+
+//A save missing a file, as utility/savedata/loadbroken and deletebroken recorded (a save made, then its data file
+//taken away): loads FILE_NOT_FOUND (0x80110309), reads and erases the reads' (0x80110329); the files mode lists what's
+//left; deleting takes it. One whose PARAM.SFO isn't one is broken: loads DATA_BROKEN (0x80110306), reads, erases and
+//the files mode the reads' (0x80110326), its file there or not, and left there; deleting takes it. Broken too, and
+//none of it kept, is a PARAM.SFO whose values' rooms reach past the file, or past its values' part all together, whose
+//count is past the file, or whose key has no end: the next save mode writes it afresh.
+static auto savedataBroken() -> void {
+  HostFolder stick;
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  auto& memory = m.system.memory;
+  auto make = [&](bool data, bool sfo) {
+    memory.copyIn(Buffer, "0123456789abcdef", 16);
+    saveParameters(m, 13, "TEST99901", "ABC", 16);
+    CHECK(runSave(m), 0);
+    if(!data) std::filesystem::remove(stick.path / "PSP/SAVEDATA/TEST99901ABC/DATA.BIN");
+    if(!sfo) stick.put("PSP/SAVEDATA/TEST99901ABC/PARAM.SFO", "broken");
+  };
+  auto trial = [&](u32 mode, u32 answer, bool data, bool sfo) {
+    make(data, sfo);
+    saveParameters(m, mode, "TEST99901", "ABC", 16);
+    check(__LINE__, "mode", runSave(m), answer);
+  };
+  for(u32 mode : {0u, 2u, 4u}) trial(mode, 0x8011'0309, false, true);
+  for(u32 mode : {15u, 16u, 19u, 20u}) trial(mode, 0x8011'0329, false, true);
+  make(false, true);
+  saveParameters(m, 12, "TEST99901", "ABC", 0);
+  fileList(m, 5, 5, 5);
+  CHECK(runSave(m), 0);
+  CHECK(memory.read(4, FileList + 12) == 0 && memory.read(4, FileList + 16) == 0, true);
+  CHECK(memory.read(4, FileList + 20) == 1 && listedFile(m, 2, 0) == "PARAM.SFO", true);
+  for(bool data : {false, true}) {
+    for(u32 mode : {0u, 2u, 4u}) trial(mode, 0x8011'0306, data, false);
+    for(u32 mode : {12u, 15u, 16u, 19u, 20u}) {
+      trial(mode, 0x8011'0326, data, false);
+      check(__LINE__, "left", std::filesystem::exists(stick.path / "PSP/SAVEDATA/TEST99901ABC/DATA.BIN"), data);
+    }
+    for(u32 mode : {9u, 10u, 21u}) {
+      trial(mode, 0, data, false);
+      check(__LINE__, "deleted", std::filesystem::exists(stick.path / "PSP/SAVEDATA/TEST99901ABC"), false);
+    }
+  }
+  //written into, a broken PARAM.SFO is made afresh
+  make(true, false);
+  saveParameters(m, 17, "TEST99901", "ABC", 16);
+  CHECK(runSave(m), 0);
+  saveParameters(m, 15, "TEST99901", "ABC", 16);
+  CHECK(runSave(m), 0);
+  //PARAM.SFOs that only look like one: broken, and written afresh, 4912 bytes, by the next save mode
+  make(true, true);
+  auto clean = stick.get("PSP/SAVEDATA/TEST99901ABC/PARAM.SFO");
+  CHECK(clean.size(), 4912);
+  if(clean.size() != 4912) return;
+  auto put = [](std::string& sfo, u32 at, u32 word) { for(u32 n = 0; n < 4; n++) sfo[at + n] = char(word >> 8 * n); };
+  std::string noEnd = std::string("\0PSF\1\1\0\0", 8) + std::string(12, '\0') + std::string(16, '\0') + "....TITLE";
+  put(noEnd, 8, 40), put(noEnd, 12, 36), put(noEnd, 16, 1), put(noEnd, 24, 4), put(noEnd, 28, 4);
+  std::vector<std::pair<const char*, std::string>> crafted = {
+    {"a room of 4 GiB", clean}, {"rooms past the values' part", clean}, {"a count past the file", clean},
+    {"a key with no end", noEnd}};
+  put(crafted[0].second, 20 + 8, 0xffff'f000);  //CATEGORY's room
+  put(crafted[1].second, 20 + 8, 4912 - 264);   //CATEGORY's room the whole values' part, the others besides
+  put(crafted[2].second, 16, 0xffff'ffff);
+  for(auto& [name, sfo] : crafted) {
+    stick.put("PSP/SAVEDATA/TEST99901ABC/PARAM.SFO", sfo);
+    saveParameters(m, 0, "TEST99901", "ABC", 16);
+    check(__LINE__, name, runSave(m), 0x8011'0306);
+    saveParameters(m, 17, "TEST99901", "ABC", 16);
+    check(__LINE__, name, runSave(m), 0);
+    auto written = stick.get("PSP/SAVEDATA/TEST99901ABC/PARAM.SFO");
+    check(__LINE__, name, written.size(), 4912);
+    check(__LINE__, name, listName(sfoField(written, "SAVEDATA_FILE_LIST"), 0) == "DATA.BIN", true);
+  }
+  //an SFO, but too big to write again with a save's values (64 KiB, its one key's room the rest): it loads, and the
+  //next save mode writes it afresh
+  std::string big(64_KiB, '\0');
+  big.replace(0, 8, std::string("\0PSF\1\1\0\0", 8));
+  put(big, 8, 36), put(big, 12, 40), put(big, 16, 1);
+  put(big, 20, 0x0004'0000), put(big, 24, 1), put(big, 28, 64_KiB - 40);  //"Z", raw bytes, 1 of them
+  big[36] = 'Z';
+  stick.put("PSP/SAVEDATA/TEST99901ABC/PARAM.SFO", big);
+  saveParameters(m, 0, "TEST99901", "ABC", 16);
+  CHECK(runSave(m), 0);
+  saveParameters(m, 17, "TEST99901", "ABC", 16);
+  CHECK(runSave(m), 0);
+  auto rewritten = stick.get("PSP/SAVEDATA/TEST99901ABC/PARAM.SFO");
+  CHECK(rewritten.size(), 4912);
+  CHECK(listName(sfoField(rewritten, "SAVEDATA_FILE_LIST"), 0) == "DATA.BIN", true);
+}
+
 //The memory stick's free space, the same wherever it's told (a 2 GB stick, mostly empty: io.cpp): the capacity
 //request (clusters, those free, a sector's bytes and a cluster's sectors) and the savedata utility's sizes modes.
 //The sizes mode (8), as utility/savedata/sizes recorded: with the free space alone asked (Chili Con Carnage's and
 //Ace Combat X's request) it answers 0; the save measured is msData's (its own game and save names, the request's save
 //name ignored), its files in clusters and the folder's own (three small files, 4); msData naming none there is no
-//data, the rest still answered; what saving would take counts the data, the icons' and sound's files the request
-//carries, its PARAM.SFO and the folder. The size mode (22), as utility/savedata/getsize recorded: the free space in
-//32 KiB "sectors", and with no files listed nothing else written; with files, what they take in whole clusters past
-//the free space (none for 128 KiB, its text left alone; 256 MiB for a 2 GiB file); not in the smaller structure of
-//before firmware 2.00; 0 for a save that's there, and NO_DATA for one that isn't, the sizes written all the same (Def
-//Jam: Fight for NY makes its save on that answer). Sizes as text in whole units: KB, MB, GB.
+//data, the rest still answered; what saving would take counts the data (if a file's named), the icons' and sound's
+//files the request carries, its PARAM.SFO and the folder. The size mode (22), as utility/savedata/getsize recorded:
+//the free space in 32 KiB "sectors", and with no files listed nothing else written; with files, what they take in
+//whole clusters past the free space (none for 128 KiB, its text left alone; 256 MiB for a 2 GiB file); not in the
+//smaller structure of before firmware 2.00; 0 for a save that's there, and NO_DATA for one that isn't, the sizes
+//written all the same (Def Jam: Fight for NY makes its save on that answer). Secure files count as a PSP stores them,
+//encrypted, 16 bytes longer: a save's (its PARAM.SFO names them), a save mode's data, and the size mode's secure
+//list. Sizes as text in whole units: KB, MB, GB.
 static auto stickSpace() -> void {
   HostFolder stick;
   KernelMachine m;
@@ -365,10 +844,25 @@ static auto stickSpace() -> void {
   CHECK(memory.readString(Used + 44, 8) == "128 KB", true);
   CHECK(memory.read(4, Needed), 3);
   CHECK(memory.readString(Needed + 8, 8) == "96 KB", true);
-  saveParameters(m, 8, "ULUS99999", "ABC", 2_MiB);  //2 MiB of data: 66 clusters, 2112 KiB
+  saveParameters(m, 8, "ULUS99999", "ABC", 2_MiB);  //2 MiB of data, 16 bytes more stored: 67 clusters, 2144 KiB
   CHECK(runSave(m), 0);
-  CHECK(memory.read(4, Needed + 4), 2112);
+  CHECK(memory.read(4, Needed + 4), 2144);
   CHECK(memory.readString(Needed + 8, 8) == "2 MB", true);
+  fileName(m, "");  //no file named: no data, its PARAM.SFO and the folder
+  CHECK(runSave(m), 0);
+  CHECK(memory.read(4, Needed), 2);
+  //a save's secure file of 32 KiB takes two clusters, as a PSP stores it; a normal one, one
+  memory.fill(Buffer, 's', 32_KiB);
+  saveParameters(m, 13, "ULUS99999", "SECURE", 32_KiB);
+  memory.write(4, Parameters + 120, 32_KiB);
+  CHECK(runSave(m), 0);
+  saveParameters(m, 18, "ULUS99999", "SECURE", 32_KiB);
+  memory.write(4, Parameters + 120, 32_KiB);
+  fileName(m, "OTHER.BIN");
+  CHECK(runSave(m), 0);
+  saveParameters(m, 8, "ULUS99999", "SECURE", 0);
+  CHECK(runSave(m), 0);
+  CHECK(memory.read(4, Used + 36), 2 + 1 + 1 + 1);  //DATA.BIN, OTHER.BIN, PARAM.SFO, the folder
   //with no names of the request's own (Valhalla Knights 2's), answered just the same; a save not there, no data
   saveParameters(m, 8, "", "", 16);
   memory.copyIn(Used, "ULUS99999", 10);
@@ -421,6 +915,12 @@ static auto stickSpace() -> void {
   memory.fill(Sizes + 36, 0xcc, 24);
   CHECK(runSave(m), 0);
   for(u32 at : {36u, 48u}) CHECK(memory.read(4, Sizes + at), 262'144);
+  //a secure file of 2 GiB is 16 bytes longer stored: a cluster more, 262,176 KiB past the free space
+  memory.write(4, Sizes, 1);
+  memory.write(4, Sizes + 4, 0);
+  memory.write(4, Sizes + 8, Files + 48);
+  CHECK(runSave(m), 0);
+  for(u32 at : {36u, 48u}) CHECK(memory.read(4, Sizes + at), 262'176);
   //with no size information to fill in, the same answers
   memory.write(4, Parameters + 1532, 0);
   CHECK(runSave(m), 0);
@@ -844,8 +1344,12 @@ static auto modules() -> void {
 auto utilityTests() -> Tests {
   return {
     {"utility savedata", savedata}, {"utility savedata names", savedataNames},
+    {"utility savedata unnamed (\"<>\")", savedataUnnamed},
     {"utility savedata buffers", savedataBuffers}, {"utility savedata loops", savedataLoops},
-    {"utility savedata erase", savedataErase}, {"memory stick free space", stickSpace}, {"utility dialogs", dialogs},
+    {"utility savedata erase", savedataErase}, {"utility savedata files", savedataFiles},
+    {"utility savedata PARAM.SFO", savedataParamSFO}, {"utility savedata without PARAM.SFO (v2.0.0's)", savedataOlder},
+    {"utility savedata broken saves", savedataBroken},
+    {"memory stick free space", stickSpace}, {"utility dialogs", dialogs},
     {"utility keyboard", keyboard}, {"utility modules", modules},
     {"utility game data install", gamedataInstall}, {"utility dialog sizes and statuses", dialogStatuses},
     {"utility save dialog closed by priority", savedataClosing},
