@@ -415,26 +415,30 @@ auto GE::ensureDecoded(Batch& batch) -> void {
              (!indexed || (o.clutFormat == t.clutFormat && o.clutShift == t.clutShift && o.clutMask == t.clutMask &&
                            o.clutOffset == t.clutOffset && other.deferClut == look->deferClut));
     };
-    //and of those rows, the texels their jobs can take (record()): all of them, or those inside one rectangle
+    //and of those rows, the texels their jobs can take (record()): all of them, or those in rows and columns marked
     u32 rows = 0, width = std::min<u32>(t.width, 512);
-    bool all = false;
-    s32 top = 0, bottom = -1, left = 0, right = -1;
+    Reach reach;
     for(auto other = look; other != batch.looks.end(); other++) {
       if(!same(*other)) continue;
       rows = std::max(rows, std::min({other->deferRows, other->texture.height, 512u}));
-      all |= other->reachAll;
-      if(other->reachTop > other->reachBottom) continue;
-      bool none = top > bottom;
-      top = none ? other->reachTop : std::min(top, other->reachTop);
-      bottom = none ? other->reachBottom : std::max(bottom, other->reachBottom);
-      left = none ? other->reachLeft : std::min(left, other->reachLeft);
-      right = none ? other->reachRight : std::max(right, other->reachRight);
+      reach.all |= other->reach.all;
+      for(u32 n = 0; n < 8; n++) reach.rows[n] |= other->reach.rows[n], reach.columns[n] |= other->reach.columns[n];
     }
-    u32 from = 0, first = 0, last = width;
-    if(!all) {  //(none at all where its jobs draw nothing: no texel decoded, a row kept)
-      rows = top > bottom ? 1 : std::min<u32>(rows, bottom + 1);
-      from = top > bottom ? rows : top, first = left, last = right + 1;
-    }
+    //each run of marked rows (up to rows) and of marked columns, first to last; and the rows kept, up to the last one
+    //(at least one, which none marked leaves undecoded)
+    auto runs = [](const std::array<u64, 8>& bits, u32 end) {
+      std::vector<std::pair<u32, u32>> found;
+      for(u32 n = 0; n < end; n++) {
+        if(!(bits[n / 64] >> n % 64 & 1)) continue;
+        if(found.empty() || found.back().second + 1 != n) found.push_back({n, n});
+        else found.back().second = n;
+      }
+      return found;
+    };
+    std::vector<std::pair<u32, u32>> rowRuns{{0, rows - 1}}, columnRuns{{0, width - 1}};
+    if(!reach.all) rowRuns = runs(reach.rows, rows), columnRuns = runs(reach.columns, width);
+    if(rowRuns.empty() || columnRuns.empty()) rowRuns.clear(), columnRuns.clear();
+    rows = rowRuns.empty() ? 1 : rowRuns.back().second + 1;
     auto entry = std::make_shared<Decoded>();
     entry->key = {t.address, t.bufferWidth, t.format, width, t.swizzled, 0, 0, 0, 0, 0};
     entry->rows = rows;
@@ -442,7 +446,15 @@ auto GE::ensureDecoded(Batch& batch) -> void {
     u32 low, high;
     textureBytes(t, rows, low, high);
     const u8* palette = indexed ? look->deferClut.data() : nullptr;  //(only indices look at the palette)
-    decodeTexels(t, palette, low, high, width, from, rows, entry->texels.data(), first, last);
+    for(auto [top, bottom] : rowRuns) {
+      for(auto [left, right] : columnRuns) {
+        decodeTexels(t, palette, low, high, width, top, bottom + 1, entry->texels.data(), left, right + 1);
+      }
+    }
+    //(for fetch()'s check: the rectangle round them)
+    u32 from = rowRuns.empty() ? rows : rowRuns.front().first;
+    u32 first = columnRuns.empty() ? 0 : columnRuns.front().first;
+    u32 last = columnRuns.empty() ? 0 : columnRuns.back().second + 1;
     for(auto other = look; other != batch.looks.end(); other++) {
       if(other != look && !same(*other)) continue;
       other->decoded = entry;

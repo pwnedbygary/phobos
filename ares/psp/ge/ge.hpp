@@ -269,6 +269,15 @@ struct GE {
   struct Batch;  //(threads.cpp)
   struct Renderer;
 
+  //Texels of a texture inside it (at most 512 by 512), by row and by column: those in a marked row and a marked
+  //column; or all of them.
+  struct Reach {
+    std::array<u64, 8> rows{}, columns{};
+    bool all = false;
+    auto none() const -> bool { return !all && rows == std::array<u64, 8>{}; }
+    static auto mark(std::array<u64, 8>& bits, u32 first, u32 last) -> void;  //(first to last, inclusive)
+  };
+
   //What a primitive is drawn with, shared by the jobs it makes: the pixel pipeline's settings, and the texture
   //with the texture function's (or none), all taken from the commands as the primitive met them.
   struct Look {
@@ -284,11 +293,9 @@ struct GE {
     u32 deferRows = 0;
     std::vector<u8> deferClut;
     u32 deferFirst = 0, deferLast = 0;
-    //The texels of that deferred texture its jobs can take (record(): texelReach()), rows reachTop to reachBottom
-    //and columns reachLeft to reachRight, none while bottom is above top; or any of them (reachAll), where a job's
-    //can't be told.
-    s32 reachTop = 0, reachBottom = -1, reachLeft = 0, reachRight = -1;
-    bool reachAll = false;
+    //The texels of that deferred texture its jobs can take (record(): texelReach()), in the rows and columns marked;
+    //or any of them (reachAll), where a job's can't be told.
+    Reach reach;
   };
 
   //A primitive set up for drawing (draw.cpp): everything about it worked out once, so that any of its rows can be
@@ -449,7 +456,9 @@ struct GE {
                                     float u, float v, u32 fog) -> void;
   template<u32 Format> auto spriteRows(const Job& job, s32 fromY, s32 toY) -> void;
   template<u32 Format> auto triangleRows(const Job& job, s32 fromY, s32 toY) -> void;
-  auto texelReach(const Job& job, s32 (&rows)[2], s32 (&columns)[2]) const -> bool;
+  auto texelSpan(const Job& job, s32 (&rows)[2], s32 (&columns)[2]) const -> bool;
+  static auto texelRuns(const s32 (&span)[2], u32 size, bool clamp, s32 (&runs)[2][2]) -> u32;
+  auto texelReach(const Job& job, Reach& reach) const -> void;
   struct LinePixel { s32 x, y; u32 z, color, specular, fog; float u, v; };
   auto linePixels(const Job& job, s32 fromY, s32 toY, std::vector<LinePixel>& pixels) -> void;
   template<u32 Format> auto lineRows(const Job& job, s32 fromY, s32 toY) -> void;

@@ -1568,7 +1568,8 @@ static auto geDeferredReach() -> void {
     list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 64);
     list.put(GE::TextureAddress0, Offscreen), list.put(GE::TextureBufferWidth0, 0x04 << 16 | 64);
     list.put(GE::TextureFilter, 0x101);
-    put(GE::Triangles, 0x19f, {{10.0f / 64, 41.0f / 64, 0xffff'ffff, 34, 49, -1}, {30.0f / 64, 44.5f / 64, 0xffff'ffff, 63, 52, -1},
+    put(GE::Triangles, 0x19f, {{10.0f / 64, 41.0f / 64, 0xffff'ffff, 34, 49, -1},
+                              {30.0f / 64, 44.5f / 64, 0xffff'ffff, 63, 52, -1},
                               {18.0f / 64, 60.0f / 64, 0xffff'ffff, 45, 63, -1}});
     list.put(GE::Finish), list.put(GE::End);
   };
@@ -1597,19 +1598,20 @@ static auto geDeferredReach() -> void {
   ge.commands[GE::TextureAddress0] = Offscreen, ge.commands[GE::TextureBufferWidth0] = 0x04 << 16 | 64;
   ge.commands[GE::TextureSize0] = 6 << 8 | 6, ge.commands[GE::TextureFormat] = 3;
   auto& batch = ge.drawing.batches[0];
-  struct Reach { s32 top, bottom, left, right; };
-  for(Reach reach : {Reach{2, 10, 30, 40}, Reach{40, 50, 3, 9}, Reach{0, -1, 0, -1}}) {
+  struct Rectangle { u32 top, bottom, left, right; };
+  for(Rectangle reach : {Rectangle{2, 10, 30, 40}, Rectangle{40, 50, 3, 9}, Rectangle{0, 0, 0, 0}}) {
     auto& look = batch.looks.emplace_back();
     look.textured = true, look.texture = ge.sampler(), look.deferRows = 64;
-    look.reachTop = reach.top, look.reachBottom = reach.bottom, look.reachLeft = reach.left, look.reachRight = reach.right;
+    if(reach.bottom) GE::Reach::mark(look.reach.rows, reach.top, reach.bottom);
+    if(reach.right) GE::Reach::mark(look.reach.columns, reach.left, reach.right);
   }
   ge.ensureDecoded(batch);
   auto& t = batch.looks[0].texture;
   CHECK(t.decoded && t.decoded == batch.looks[1].texture.decoded && t.decoded == batch.looks[2].texture.decoded, true);
   CHECK(t.decodedRows, 51u), CHECK(t.decodedTop, 2u), CHECK(t.decodedLeft, 3u), CHECK(t.decodedRight, 41u);
   u32 wrong = 0;
-  for(u32 y = 2; y <= 50; y++) {
-    for(u32 x = 3; x <= 40; x++) wrong += t.decoded[y * 64 + x] != (y * 64 + x) * 0x0101'0101 + 7;
+  for(u32 y : {2, 3, 9, 10, 40, 41, 49, 50}) {
+    for(u32 x : {3, 4, 8, 9, 30, 31, 39, 40}) wrong += t.decoded[y * 64 + x] != (y * 64 + x) * 0x0101'0101 + 7;
   }
   CHECK(wrong, 0u);
   ge.clearBatch(batch);
