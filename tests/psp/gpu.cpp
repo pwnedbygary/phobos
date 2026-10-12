@@ -168,6 +168,49 @@ static auto gpuRenderToTexture() -> void {
   hardware.ge.setRenderer(nullptr);
 }
 
+//Anti-aliased lines (raster.cpp's linePixels()) over random sprites, without blending, so each pixel's coverage is
+//what the frame buffer's alpha keeps, the alpha test (above 0) dropping those of none: flat, then textured from the
+//frame buffer they draw into (Dead or Alive Paradise's edge pass), each pixel its own texel; one line a PRIM, so none
+//samples a pixel another drew. The GPU's pixels are the software renderer's, byte for byte.
+static auto gpuSmoothLines() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::mt19937 random{20261012};
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  auto background = randomSprites(random, 30, false);
+  struct End { float x, y; u32 color; };
+  std::vector<std::pair<End, End>> lines;
+  for(u32 n = 0; n < 80; n++) {
+    auto end = [&] { return End{(random() % 1024) / 16.0f, (random() % 768) / 16.0f, u32(random()) | 0xff00'0000}; };
+    lines.push_back({end(), end()});
+  }
+  auto line = [](System& s, const End& a, const End& b) {
+    u32 to = GPUVertices;
+    for(auto& end : {a, b}) {
+      for(float value : {0.0f, 0.0f}) s.memory.write(4, to, bitsOf(value)), to += 4;
+      s.memory.write(4, to, end.color), to += 4;
+      for(float value : {end.x, end.y, 0.0f}) s.memory.write(4, to, bitsOf(value)), to += 4;
+    }
+    s.ge.vertexAddress = GPUVertices;
+    s.ge.primitive(GE::Lines, 2);
+  };
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, 0, 3);
+    for(auto& one : background) sprite(*s, one);
+    auto& c = s->ge.commands;
+    c[GE::AntiAliasEnable] = 1;
+    c[GE::AlphaTestEnable] = 1, c[GE::AlphaTest] = 6 | 0xff << 16;
+    for(u32 n = 0; n < 40; n++) line(*s, lines[n].first, lines[n].second);
+    texture(*s, Memory::VRAMBase, 64, 64, 64);
+    c[GE::TextureFunction] = 3;  //replace, the coverage kept for the alpha
+    for(u32 n = 40; n < 80; n++) line(*s, lines[n].first, lines[n].second);
+  }
+  u32 bytes = apart(software, hardware);
+  CHECK(bytes, 0u);
+  hardware.ge.setRenderer(nullptr);
+}
+
 //pspsdk's samples (PSP_TEST_PROGRAMS) run by two machines alike but for the renderer, frame by frame for a second
 //and a half of the PSP's time: how many pixels are the same, and how far apart the rest are (each channel's
 //difference: 1-2 is blending's rounding, the GPU's sum against the PSP's terms each truncated), printed. Every
@@ -2166,6 +2209,7 @@ auto gpuTests() -> Tests {
     {"gpu sprites against the software renderer", gpuSprites},
     {"gpu the stencil as each 16-bit format keeps it: 5650's tests against 0, clears and replaces", gpuStencilFormats},
     {"gpu render to texture against the software renderer", gpuRenderToTexture},
+    {"gpu anti-aliased lines against the software renderer", gpuSmoothLines},
     {"gpu render to texture from a frame buffer taller than its picture, nothing finished", gpuTallTexture},
     {"gpu samples near the software renderer", gpuSamples},
     {"gpu fast mode: 3D transformed by the GPU, near the software renderer", gpuFast},
