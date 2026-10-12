@@ -607,6 +607,11 @@ auto Kernel::serialize(serializer& s) -> bool {
   else s(dialog.abortUpdates);
   if(s.reading() && stateLayout < 17) dialog.runningUpdates = 0;
   else s(dialog.runningUpdates);
+  //(layout 26 on) the error an aborted message finishes with, and a list delete's deleted save (dialogs.cpp); none in
+  //older states. A front end's request isn't state: loaded, a dialog asks again at its next Update.
+  if(s.reading() && stateLayout < 26) dialog.error = 0, dialog.deleted = false;
+  else s(dialog.error), s(dialog.deleted);
+  if(s.reading()) dialogWithdraw();
   vector(utilityModules, [&](u32& module) { s(module); });
   s(imposeLanguage); s(imposeButton);
   //character code conversion's tables and error characters (ccc.cpp): layout 18 on, none set in older states

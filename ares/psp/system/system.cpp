@@ -30,7 +30,9 @@ auto load(Node::System& node, string name) -> bool {
 //Frames", "true" for a host that reads the GPU's frames back to show them but can take them a frame or two late
 //(at 1x): nothing is waited for each frame, as when the GPU presents on Android's window (the runner, to time it so).
 //"Pipeline Cache", a host file the Vulkan renderer keeps its pipelines in between sessions (none: made afresh each
-//game, a stutter the first time each is met).
+//game, a stutter the first time each is met). "Dialogs", "true" for a host that shows the system's dialogs itself
+//(dialogID(), dialog(), answer(); taken at the next power on): a message, the keyboard and the save dialogs that ask
+//the player wait for its answer; without it (the default) they're answered at once, as they always were.
 auto option(string name, string value) -> bool {
   if(name == "Memory Stick") system.memoryStick = value;
   if(name == "Fonts") system.fonts = value;
@@ -44,6 +46,7 @@ auto option(string name, string value) -> bool {
   if(name == "Renderer Check") system.failCheck = value == "Fail";
   if(name == "Late Frames") system.lateFrames = value.boolean();
   if(name == "Pipeline Cache") system.pipelineCache = value;
+  if(name == "Dialogs") system.dialogs = value.boolean();
   return true;
 }
 
@@ -99,6 +102,28 @@ auto notice() -> string {
   string text = system.pendingNotice.c_str();
   system.pendingNotice.clear();
   return text;
+}
+
+auto dialogID() -> u32 {
+  return system.kernel.dialogShownID();
+}
+
+auto dialog() -> Kernel::DialogRequest {
+  return system.kernel.dialogShown();
+}
+
+auto answer(const Kernel::DialogAnswer& answer) -> bool {
+  return system.kernel.dialogAnswer(answer);
+}
+
+auto dialogBytes() -> std::vector<u8> {
+  auto request = system.kernel.dialogShown();
+  return request.id ? Kernel::dialogBytes(request) : std::vector<u8>{};
+}
+
+auto answer(const std::vector<u8>& bytes) -> bool {
+  Kernel::DialogAnswer given;
+  return Kernel::dialogAnswerFrom(bytes, given) && system.kernel.dialogAnswer(given);
 }
 
 System system;
@@ -364,6 +389,7 @@ auto System::power(bool reset) -> void {
   kernel.output = [this](const std::string& text) { report(false, text); };
   kernel.log = [this](const std::string& text) { report(true, text); };
   kernel.power();
+  kernel.frontDialogs = dialogs;
   //The devices are the system's to give: the memory stick here, the disc in startProgram(); none left from the game
   //before.
   kernel.devices.clear();
@@ -505,7 +531,8 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a
 //signature, the version of its layout, RAM's size and the program it was made with, all of which must be the
 //machine's; then memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a
-//field means: 25 since each open file keeps its PGD decryption (the version key it was given, where its data starts,
+//field means: 26 since the dialog keeps an aborted message's error and whether a list delete has deleted a save
+//(part 73); 25 since each open file keeps its PGD decryption (the version key it was given, where its data starts,
 //and its header's descriptor once decrypted); 24 since the GE driver keeps when the GE will have drawn what it was
 //given and whether the list it runs has met its FINISH, a list being done for the program only then (part 64); 23
 //since each open file keeps its place in the order the program opened them, sceIoGetFdList's (part 62); 22 since
@@ -543,10 +570,10 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //set, 15 to 18 with no thread-local storage pools, 15 to 19 with no stacks lent, 15 to 20 with sceJpeg not started,
 //no sceHprm callbacks and no ATRAC low-level IDs, 15 to 21 with their files' count passed over and no read's
 //bytes still to come, 15 to 22 with their files opened in the order of their numbers, 15 to 23 with the GE
-//having nothing left to draw, and 15 to 24 with no file's PGD decryption set up (each read as it is); older layouts
-//are refused.
+//having nothing left to draw, 15 to 24 with no file's PGD decryption set up (each read as it is), and 15 to 25 with
+//no error for an aborted message and no save deleted from a list; older layouts are refused.
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
-static constexpr u32 StateVersion = 25;
+static constexpr u32 StateVersion = 26;
 
 //The program that started, to tell it from any other: an FNV-1a hash of all its bytes. A state is only loaded into
 //the program it was made with, as another's memory, threads and files mean nothing to it.
@@ -556,11 +583,12 @@ auto System::hash(std::span<const u8> bytes) -> u64 {
   return value;
 }
 
-//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 24 (the
+//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 25 (the
 //dialog's abort counters default to 0, no sceCcc tables, no thread-local storage pools, no stacks lent, sceJpeg not
 //started, no sceHprm callbacks, no ATRAC low-level IDs, the files' count passed over, no read's bytes still to
 //come, files opened in the order of their numbers, the GE with nothing left to draw, no file's PGD decryption set
-//up): the owner's accuracy scenes were saved at 15 before part 42.
+//up, no aborted message's error or list delete's deleted save): the owner's accuracy scenes were saved at 15 before
+//part 42.
 auto System::header(serializer& s) -> bool {
   u32 signature = StateSignature, version = StateVersion, ramSize = memory.ram.size();
   u64 program = programHash;

@@ -9541,3 +9541,242 @@ differ too.
 - Scratch: `~/phobos-work/scratch/mga2` (tools/: the script, display list and texture decoders and the contact
   sheets; trace-patch/: the scratch runner's tracing and the vnop counter; after1 and after2, the runs above; lib-fix
   and count, the library runs).
+
+## Part 73: the system's dialogs shown by the app — messages, the keyboard, saving and loading, answered by the player
+
+On branch `cursor/psp-dialogs-2b67`, on `cursor/psp-merge-212-219-2b67` (master with #212 to #219, PR #220, which
+master has since merged as `2a7019c84` with the same tree). The
+owner's request: the PSP's system dialogs as real dialogs the player answers, where the kernel had answered every one
+at its first Update. Sources: pspautotests' recordings (utility/msgdialog/dialog and abort; utility/dialog/abort;
+utility/savedata/loaddata, loadbroken, loademptyfilename, saveemptyfilename, deletedata, deleteemptyfilename and
+deletebroken, several of whose list modes a person answered on the PSP), pspsdk's psputility_msgdialog.h, osk.h and
+savedata.h, PPSSPP's dialog code read only as a description of the PSP's dialogs (PSPMsgDialog, PSPOskDialog,
+PSPSaveDialog and SavedataParam; nothing copied or translated), the PSP Developer Wiki (searched: it has no page on the
+utility dialogs or their results), and Kenka Bancho's own code, traced with a scratch runner and disassembled from a
+dump of its memory. JPCSP was not read. Save states go to StateVersion 26.
+
+**What it did before.** `dialogUpdate()` answered at once: a message Yes (or OK), even "Delete?" and "Overwrite?"; the
+keyboard each field's text as it came (an empty one "PSP"), CHANGED; the save modes that ask the player did their work
+on the request's own save, a list load or save on its first name, list deletes on the request's save; network
+settings, game sharing and the web browser cancelled. A player couldn't type a name, choose a save, or say no.
+
+**What a PSP does.** A dialog that asks stays running (status 2) for as long as the player takes, the game calling
+Update every frame (utility/msgdialog/dialog's dialogs ran to their abort, 60 frames on). A message's result is 0 from
+the time it runs, and it finishes with the button pressed: Yes 1, No 2, Back 3 where it has Yes and No or is of the
+third size (0x2c4) and 0 otherwise, nothing written in the first size (0x23c), which ends before the button (the
+values PPSSPP's notes). Messages a PSP doesn't show finish by themselves, their result never 0 meanwhile: options it
+doesn't take (in the second size a text's 0x200, in the third an error's or a text's 0x200) BADOPTION, 0x80110501,
+and an error's number without its top bit ERRORCODEINVALID, 0x80110502, status 3 after the 9th Update (recorded); the
+second size doesn't look at an error's options, and the third takes OK (0x20) with a custom name (recorded). Which
+options each size takes otherwise, which give Yes and No, OK and no cancel button, and that the third size refuses No
+first without Yes and No, are PPSSPP's notes. The keyboard has no recording: confirmed, each field CHANGED with its text
+cut to the most it takes (as part 54 found the games need: Ridge Racer 2 treats UNCHANGED as backing out); backed out
+of, CANCELLED (pspsdk's result, which Ridge Racer 2 also handles), the common result 0 with it chosen (no recording
+has a keyboard backed out of, and PPSSPP's notes don't back out). The save dialogs, from the recordings a person
+answered: a list load lists the saves there and, its chosen save broken, finishes with the load's error
+(loadbroken's list loads: FILE_NOT_FOUND 0x80110309 without the data file, DATA_BROKEN 0x80110306 without PARAM.SFO);
+a list delete goes on after deleting until it's backed out of or nothing's left, and then finishes with the delete
+group's NO_DATA, 0x80110347 (deletedata and deleteemptyfilename each deleted the test's one save that way, the files
+mode after it finding nothing; deletebroken's list deletes give the same 0x80110347, which its second and third
+broken saves, without PARAM.SFO, would give even with nothing listed from the start, and nothing after them shows a
+deletion), while a list all delete finished CANCEL (1) with the PSP's other
+saves left (deletedata); a single load of a save not there LOAD_NO_DATA (loaddata). PPSSPP's notes have the rest: a
+single load asks "Load this data?", a save "Do you want to save this data?" or, over a save, "Do you want to overwrite
+the data?" (No first), a delete "This save data will be deleted. Are you sure?" (No first); backing out is CANCEL;
+with nothing to load or delete, "There is no data", closed LOAD_NO_DATA or DELETE_NO_DATA; a list save lists every
+name, those not there as new data with the request's newData icon and title; "<>" in a list stands for a save of the
+game's, one not yet listed for each "<>" (marked there as unsure); mode 7 lists every save on the memory stick; the
+chosen save's name is copied back into the request; and the focus values (0 the request's save, 1 and 2 the first
+and last, 3 and 4 the latest and oldest, 5 and 6 the first and last there, 7 and 8 the first and last new).
+
+**Kenka Bancho's LOAD GAME on an empty memory stick.** Traced: a list load (mode 4) of save "SGL", its list SGL001 to
+SGL007, focus 3 (the latest), file PLAYDATA.BIN, buttonSwap 1 (cross confirms). The game reads the result at
+0x089148c0: 0 is a load, 1 takes it back to its title, and anything else gives its own "An error has occurred. Retry /
+Cancel and return". Answered in the runner with 1 the game went back to its title; with 0x80110301, 0x80110305,
+0x80110306, 0x80110307 or 0x80110309, its error. What a PSP returns there has no recording (no test lists nothing to
+load), but every neighbouring case gives the group's NO_DATA once nothing's there: the list deletes that emptied their
+list, the single load of a save not there, and PPSSPP's notes ("There is no data", then LOAD_NO_DATA). So a PSP shows
+its own "There is no save data." and then gives LOAD_NO_DATA, and the game's error follows it there as it does here:
+the result code was right, and is kept; what was missing is the PSP's notice, which the app now shows. (Retry asks
+again; Cancel and return goes back to the title.) What does differ from a PSP, without a front end, is which save a
+list load reads: utility.cpp's answer takes the request's own save name, "SGL", where a PSP lists SGL001 to SGL007; a
+save made with the app (in SGL001, as a PSP would) isn't found by the runner's or the desktop's answers, and one they
+made (in SGL) is listed by the app beside the list's (below).
+
+**The kernel** (`dialogs.cpp`, new; `utility.cpp`'s Update and message Abort; `serialization.cpp`). With the option
+"Dialogs" (`frontDialogs`), a message, the keyboard and the save modes that ask the player (2 to 7, and 10) don't
+answer at their first Update: the dialog posts a request (`DialogRequest`: what to show) and runs on, asking once,
+until the front end's answer (`DialogAnswer`) comes; the next Update takes it and finishes the dialog with what the
+player's choice gives on a PSP, as above. The request and the answer pass through a mailbox under a mutex, which the
+front end reads and fills from its own thread (`dialogShown()`, `dialogShownID()`, `dialogAnswer()`; for a front end in
+another language, the byte form of `dialogBytes()` and `dialogAnswerFrom()`). Each request has a number of its own, and
+an answer is taken only for the request outstanding and only if it's one of its choices (a button the message has,
+texts for each field, a save listed or -1), once. The request is withdrawn when the dialog finishes, when the game
+aborts its message (sceUtilityMsgDialogAbort: at once, then the abort's 8 Updates as before, its result 0), on a reset
+or unload (`power()`), and when a state loads; a dialog still running then asks again at its next Update, with a new
+number, and a stale answer is refused. A message a PSP doesn't show posts nothing and finishes with its error at its
+9th Update, through the abort's count (its error kept in the state). Everything else, and every dialog without the
+option, is answered as before: the automatic path's code is the same, `keyboard()`'s field writing only moved into
+`keyboardField()` for the answers to share. The saves a save dialog shows come from the memory stick as the request
+names them (each as its PARAM.SFO describes it: TITLE, SAVEDATA_TITLE, SAVEDATA_DETAIL; its files' size; its
+PARAM.SFO's time, else its folder's; its ICON0.PNG; broken for the loads where its PARAM.SFO is broken or the data
+file named isn't there), new data with the game's icon and titles for it; a list mode given no list (none, or its
+first name empty) shows the request's own save alone, where it's there as PPSSPP's notes do, and where it isn't as
+new data to save to (chosen, so a list save has somewhere to save: PPSSPP's notes list nothing then); "<>" in a list
+shows every save of the game's not otherwise listed (chosen: PPSSPP's notes take one for each "<>"); chosen beside a
+PSP's, a list load or delete also lists the request's own save where it's there and not listed, which the answers
+without a front end save to. A save without PARAM.SFO isn't broken here, as the answers without a front end have it
+since part 70 (v2.0.0's saves, made without one, load), where loadbroken has a PSP give DATA_BROKEN; the dialogs keep
+that choice, so such a save is listed and loads (a save missing its data file gives FILE_NOT_FOUND, as on a PSP). A
+list's choice loads or saves through `savedata()` with that save named (`savedata()` takes it in place of the
+request's), its name written into the request's; a list delete deletes the save and asks again with the list without
+it (and says so).
+`dialogs.cpp`'s file comment and each function's say which behaviour comes from which source.
+
+**Save states** (StateVersion 26): the dialog keeps the error an aborted message finishes with (0, or a refused
+message's) and whether a list delete has deleted a save (so the request made again after loading still says so);
+layouts 15 to 25 load with neither. The mailbox isn't state: a dialog waiting for its answer is simply a dialog still
+running, which asks again once loaded where there's a front end, and is answered at its next Update where there isn't
+(a state saved on the phone mid-dialog and loaded in the runner finishes as the runner's answers do).
+
+**The app** (`util/PspDialogs.kt`, `ui/PspSystemDialogs.kt`, `MainViewModel.followPspDialogs()`, `EmulatorScreen`;
+JNI `pspDialogId()`, `pspDialog()`, `answerPspDialog()`, and `PhobosRunner.cpp` setting "Dialogs" for the PSP). The view
+model asks the core for the request's number every 50 ms while a PSP game runs, reads a new request's bytes once and
+parses them (`parsePspDialog()`; one it can't read is tried again each second, and logged), and shows it over the
+running game in place of any before it, behind the pause menu and the layout editors; the answer goes back as bytes
+(`PspDialogAnswer.encode()`), the dialog closing at once (and coming back if the core didn't take it). The dialogs
+are the app's own `PhobosAlertDialog`s, so they take each theme's colours and edges (retrowave's among them), with
+`DialogSystemBars` keeping a game's full screen:
+- a message: its text (or "An error has occurred." and the error's number), Yes and No (No chosen first where the game
+  asks), OK, or no button at all (the game takes it down), with the game's own button names where it gives them;
+  Back (the back button, Android's back) unless the game took it away, a button of its own only where it's the one
+  answer (Disgaea Infinite's notice names it "Confirm"), as a PSP shows it beside Yes and No or OK only in its hints;
+- the keyboard: a text field for each of the game's fields, the field's description its title (or label), Android's
+  keyboard shown at once, no more characters than the game takes (counted as the PSP counts them, characters it hasn't
+  left out; line breaks only in a field of several lines), digits alone and a number pad for a field of digits, a web
+  address keyboard for a URL field, OK or Done to enter, Cancel to back out;
+- saving and loading: a list (each save's ICON0, its save title, detail, date and size, a broken one marked
+  corrupted, "New Data" with the game's icon among a save list's), the chosen save first; choosing asks a PSP's
+  question where it asks (saving over a save, deleting one, No chosen first; No goes back to the list), and a single
+  load, save or delete starts at its question (No chosen first there too for saving over a save and deleting);
+  "There is no save data." and "The data is corrupted." as the PSP's notices, the latter giving the load's error;
+  after a deletion the list comes back saying so.
+A controller works them as on a PSP: the D-pad moves the choice, and the PSP buttons the user mapped confirm and back
+out, circle confirming where the game says so (its dialogs' buttonSwap 0, as Japanese games often have it) and cross
+otherwise, with the PSP's ✕ and ○ shown at each dialog's foot; Start enters the keyboard's text; the user's pause
+hotkey opens the pause menu, the dialog waiting behind it. A Dialog window takes the keys, so nothing reaches the game
+meanwhile, and the game's held buttons are let go of as one opens. The keys reach a dialog only where its own
+composition has the focus (a Dialog has a window and a composition of its own), so each takes it from inside its
+content once that's placed (`PspTakeFocus`: tried each frame for up to a second, logged if it fails; in the
+keyboard, its first field taking text, else the dialog itself), and the keyboard shows Android's keyboard through the
+dialog window's controller then. Touch works throughout.
+
+**The games** without a front end (the runner, the tests, the desktop and libretro hosts): unchanged. Nine runs with
+the base's runner and this branch's (`~/phobos-work/scratch/dialogs/runs.sh`: Kenka Bancho, Gundam vs. Gundam NEXT
+PLUS, Valkyria Chronicles II, Ridge Racer 2 and Dissidia the report's way; Kenka's LOAD GAME; Valkyria Chronicles II
+booted twice on one stick; Ridge Racer 2 with Cross every 2 s to its profile, name and first save), each runner built
+with the same scratch patch (`cmp.patch`: the clock started at a fixed time, and every sceUtility dialog call logged
+with its result and the answers it left in the game's memory): the notes, every dialog call's log line (message,
+keyboard, savedata list, sizes, files, loads, saves, autoloads), and every file each run left on its memory stick, byte
+for byte, are the same. Only PNGs differ, at the frames where two runs of the base's runner differ too (the runner
+waits at most two seconds for the screen's thread). Without the fixed clock, the saves' bytes differ between any two
+runs (Ridge Racer 2's and Valkyria Chronicles II's save their date and time). Made again with the final code after
+the review (`newcmp4`: `cmp-tree` synced from the final sources, the patch's 43 marked lines in `kernel.cpp` its only
+difference from them; `cmp.patch` SHA-256 3165f0bd…3b59d, runner ba645470…74d39): against the base's runs, the
+notes, the dialog logs (0 to 56 lines a run) and the memory sticks are the same in all nine, and PNGs differ at 5
+frames, by at most 1.18 of 255 on average over a frame, where two runs of the base's runner differ at 9, by up to
+19.86.
+
+**The games with a front end**, in a scratch runner answering requests from a script (`frontrunner/`): Kenka Bancho's
+LOAD GAME asks a list load with nothing listed (frames 3490 to 3550, where the app shows "There is no save data."), and
+closing it gives the game its error screen, as on a PSP. Ridge Racer 2 asks for its driver's name ("Driver Name (7
+CHAR MAX.)", XEVIOUS, at most 7), then its first save as a single save of new data ("RIDGE RACER 2", "Game Data");
+answered PHOBOS and yes, its save holds PHOBOS where the runs without a front end hold XEVIOUS; backed out of, it goes
+back to its title (PRESS START BUTTON), and a new game asks again, suggesting RALLY X. Daxter's first boot
+asks a list save of ten slots, all new; DATA00 chosen, it's saved with its PARAM.SFO and icon, and the second boot's
+list shows it ("Daxter™", "HAVEN CITY STREETS", "% of game complete") beside nine new slots. Gundam vs. Gundam NEXT
+PLUS asks for a name early on, an 8-character field of Japanese input types with circle confirming (its buttonSwap 0);
+the answer taken, it asks again with the name filled in. Space Invaders Extreme says "There is no game data" and
+"Autosave feature turned off.", Disgaea Infinite its auto-save notice (circle confirming, its one button named
+"Confirm") and later an empty list load, Ys Seven an empty list load, The Sims 2 and Bubble Bobble Evolution single
+loads of saves not there (Bubble Bobble then says "Load failed." and tries again, as it would after a PSP's "There is
+no save data."): each goes on once answered. In the library's report
+runs (part 70's traces), list loads come up within the first minute in seven games (Disgaea Infinite, Ys Seven,
+Cladun, Dead to Rights, Angus Hates Aliens, Star Wars Battlefront: Renegade Squadron among them), list saves in Daxter
+and Resistance: Retribution, single loads in The Sims 2 and Bubble Bobble Evolution and single saves in four (Mega
+Man Powered Up, Space Invaders Extreme among them): on the phone those now ask the player.
+
+**A test that was near the stack's end.** With the sanitizers, `tests/psp/states.cpp`'s "state fields" held a fresh
+machine for each of its ~300 refusals in its own frame (its `refuses` lambda is generic, so each call inlines a copy):
+8,326,592 bytes on master, 62 KB short of the main thread's 8 MiB, and the kernel's 312 bytes more for the mailbox,
+times ~300, overflowed it. The machine is now made on the heap, and the frame is 377,504 bytes.
+
+**Checks.** `tests/psp/run-tests.sh` (sanitizers): 461 groups, 0 failures (the base's 449 and 12 new).
+`tests/allegrex/run-tests.sh`: 58 groups, 0 failures. `tests/psp/ares/run-tests.sh`: 318 checks, 0 failed (the base's
+307 and 11 new). Android: `:app:compileModernReleaseKotlin` and `:app:testModernDebugUnitTest`, 299 tests, 0 failures
+(`PspDialogsTest`'s 8 among them). `ares/psp/psp.cpp`, `PhobosRunner.cpp` and `PhobosJNI.cpp` built with NDK 28.2's
+clang for arm64 (API 26) with the Android build's definitions and include paths, and the release APK built from these
+sources (`:app:assembleModernRelease -PversionCode=205223 -PversionName=2.0.0-psp-dialogs`: SHA-256 cd8f6b30…80779,
+signed with the repository's release key, the three JNI functions exported). The new groups: "dialogs front end": a
+message (every size's buttons and Back, the
+result 0 while it asks, asked once, answers refused that aren't its own or are second), one aborted, the messages a PSP
+doesn't show (each error at the 9th Update, one saved mid-count finishing alike in another machine), the keyboard
+(fields as given, UTF-8 to UTF-16 cut to their most, CANCELLED; half a surrogate pair shown as U+FFFD, a room past
+1024 kept to 1024, an answer's bytes that aren't UTF-8 left out), list load (Kenka Bancho's request: nothing listed
+then LOAD_NO_DATA; saves listed in order with their titles, sizes, times and icons, the latest first, loaded, a broken
+one FILE_NOT_FOUND, the request's own save listed), list save (new data with newData's icon and title, focus 7 and 8,
+saved and named), list delete (asking again until nothing's left, DELETE_NO_DATA, a state saved between deletions,
+mode 7 across games), lists without a list (the request's own save alone), a dialog whose parameters change while it
+asks (its mode; its game's name, a list delete still deleting the save it showed), the smallest size's focus left
+unread, one save's load, save and delete, the dialogs still answered at once, states (withdrawn and asked again, a
+stale answer refused, answered at once with no front end, a reset), and the byte form against the Android tests'
+files; "the system's dialogs from the Dialogs option" (tests/psp/ares) the option through the system's functions and
+the byte form; "state fields" and "older layouts load" the two new fields and layout 25.
+
+**Review.** An independent read-only reviewer (a separate agent, given the base, the manifest and diff with their
+hashes, the brief and the sources) recomputed the hashes, ran the suites again (`tests/psp` with the sanitizers, 460
+groups then; `tests/psp/ares`, 318; Android, 299; the NDK build), took the mailbox's withdrawals and its number check
+out one at a time (each failed a dialog test), and found NEEDS CHANGES. (M1) A list mode given no list offered
+nothing to choose: it now shows the request's own save. (M2) Each dialog took the focus from the composable opening
+it, before the Dialog's window and composition were there, so a controller's keys might never reach it: each now
+takes it from inside its content (`PspTakeFocus`). A scratch Robolectric test sending a controller's keys to the
+dialog's own window (No first then Yes by cross, circle confirming and cross backing out, a list load's choice and
+question, Start entering text) had no answer from any of its four cases before, and all four after; a fifth, a
+keyboard whose field takes nothing (so can't take the focus), is answered too, the dialog then taking it. (M3) These
+checks, filled in. (M4) The comparison without a front end, made again with the final code (above). (L1) A room past
+1024 is kept to 1024, and the app reads the most as unsigned. (L2, L3, L4, L6) The citations above corrected: "<>"
+listing every save is chosen, deletebroken doesn't show a deletion, the dialogs keep part 70's rule for saves without
+PARAM.SFO, and the keyboard's result backed out of is chosen. (L5) A request the app can't read is tried again. (N1) A
+list delete deletes the folder it listed. (N2) Line breaks are kept in a field of several lines. (N3) Kept: a message
+whose one answer is Back takes the confirm button for it too. Of its suggestions, the tests for bytes that aren't
+UTF-8 and for half a surrogate pair were added. A delta review of the fixes (a fresh reviewer, given the first's
+findings) found them resolved, reran the suites and the comparison, reverted each kernel fix to see its test fail,
+and asked for two statements to be corrected (a list save without a list offering new data is chosen, not PPSSPP's;
+the release APK had been built before the fixes) and five nits: wording, the focus tried for a second rather than 30
+frames, the keyboard's focus on its first field taking text, and a request the app can't read hiding the one before.
+All were taken, and a third delta review passed them (the first two commits). After that, the dialogs' screenshots
+showed a single save over a save, and a single delete, opening at their question with Yes chosen, where a list's
+choice had No first: they now start at No, as a PSP and the list do, and the scratch Robolectric test has the case
+(answered "overwrite" by one confirm before, and backed out of after). That fix and its delta review are the third
+commit, whose message has the verdict.
+
+**Left, and why.**
+- The PSP's progress screens ("Saving... Please wait", "Save completed", "Load completed") aren't shown: the answer
+  saves or loads at the next Update and the dialog closes. A PSP's fades aren't counted either.
+- The keyboard narrows only to digits (and a URL keyboard); the PSP's other input types (Latin capitals, Japanese
+  kana and kanji) don't limit what Android's keyboard types. No recording shows CANCELLED on a PSP.
+- Without a front end, the list modes still use the request's own save name before the list (above); kept, as the
+  answers without a front end were to stay as they were. The app lists such a save, so a save made there stays
+  reachable.
+- Mode 7 (list all delete) lists, and can delete, every game's saves, as PPSSPP's notes and deletedata have a PSP do.
+- A game that rewrites its parameters while its dialog asks (none is known to): the dialog keeps asking, and a list
+  delete deletes the save it showed, but a load or save answered then follows the rewritten parameters (its mode, its
+  game's name), as `savedata()` reads them.
+- Not run on a device (the RP6 was in use); the owner's checklist is in the handoff. The dialogs were drawn on the
+  Mac with Robolectric in a scratch copy (`~/phobos-work/scratch/dialogs/shots`), not in the repository, and the
+  controller's keys tested there too (`shot-tree/android/app/src/test/.../PspDialogFocus.kt`): the app's unit tests
+  have no Robolectric, and adding it to the build is the owner's call.
+- Scratch: `~/phobos-work/scratch/dialogs` (`ref/`, the PPSSPP files read; `kenka/`, the trace, dump and disassembly
+  and the result sheets; `runs.sh`, `runs-cmp.sh`, `compare.sh`, `cmp.patch` and `before*`, `after1`, `basecmp*`,
+  `newcmp*`, the runs without a front end; `frontrunner/` and `e2e/`, the runs with one; `quick/`, the utility, dialog
+  and state tests alone; `ndk-check.sh`, the arm64 build of the touched files).

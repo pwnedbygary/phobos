@@ -125,6 +125,12 @@ namespace ares {
   // What the PSP's core has to tell the user, once (its Vulkan renderer couldn't start, or stopped): taken, and put
   // in the log; empty if nothing.
   auto takePspNotice() -> std::string;
+  // The PSP's system dialog waiting for the player (docs/psp-core.md, part 73): its request's number (0: none), the
+  // request in the core's byte form (empty: none), and the answer to it in that form (false: not this request's).
+  // Any thread.
+  auto pspDialogId() -> u32;
+  auto pspDialog() -> std::vector<u8>;
+  auto answerPspDialog(const std::vector<u8>& answer) -> bool;
   // The whole multiple the PSP's picture is drawn at in the window (1 to 4), so the compositor scales it little.
   auto setPictureMultiple(s32 multiple) -> void;
   auto setVulkanCachePath(const char* path) -> void;
