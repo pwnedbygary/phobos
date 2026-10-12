@@ -561,6 +561,13 @@ auto more() -> void {
            [&](Allegrex& s) { oneAndTwo(s); s.ipu.r[t0] = negateX; });
   CHECK(word.cpu.vfpu.r[S(0, 0, 0)], bits(3.0f));
   CHECK(word.cpu.vfpu.r[S(0, 1, 0)], bits(1.0f));
+  //A prefix set before a VFPU branch taken applies in its delay slot (which the block may run itself).
+  Machine branch;
+  branch.run({mtv(zero, 128 + 3), vpfxs(negateX), bvf(0, 2), alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0)), halt,
+              alu(Vadd, 1, S(0, 1, 0), S(1, 0, 0), S(2, 0, 0))},
+             oneAndTwo);
+  CHECK(branch.cpu.vfpu.r[S(0, 0, 0)], bits(1.0f));  //negated
+  CHECK(branch.cpu.vfpu.r[S(0, 1, 0)], bits(3.0f));  //the target's, plain
   //The matrix group's other instructions use them up too: vcrsp.
   Machine cross;
   cross.run({vpfxs(negateX), alu(Vcrsp, 3, Rw(5, 0), Rw(1, 0), Rw(2, 0)), alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0))},

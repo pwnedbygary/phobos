@@ -575,7 +575,9 @@ struct Allegrex {
 
     bool enabled = false;
     bool chains = true;  //blocks go on to the next by themselves (emitChain()); tests turn it off to compare
-    bool calls = false;  //the block being compiled calls the interpreter somewhere (emitInterpreter())
+    //The block being compiled calls the interpreter somewhere (emitInterpreter()), which may halt the CPU. (Calls
+    //that halt it only by an exception, after which the block leaves, needn't say so: emitVFPUCall().)
+    bool calls = false;
     //How many instructions the last block ran, not yet counted in instructionsRun: each block sets it as it leaves
     //for run() (0 when it counted them itself, going on to the next: emitChain()), and as it calls the interpreter
     //for one (counting that one), so during that call it says how far the block has got.

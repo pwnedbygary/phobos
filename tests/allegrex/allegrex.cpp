@@ -626,6 +626,12 @@ auto recompilerCases() -> void {
   CHECK(coprocessor.gpr(s2), 0);
   CHECK(coprocessor.gpr(s3), 1);
 
+  // A store that rewrites the delay slot of an FPU branch taken later in its block: the new instruction runs.
+  Machine slot;
+  slot.run({lui(t0, Base >> 16), lui(t1, addiu(s0, s0, 2) >> 16), ori(t1, t1, addiu(s0, s0, 2) & 0xffff),
+            mtc1(zero, 0), ccond(CondEq, 0, 0), sw(t1, 0x1c, t0), bc1(Bc1t, 2), addiu(s0, s0, 1), halt, halt});
+  CHECK(slot.gpr(s0), 2);
+
   // The same function called through two mirrors of the memory: the return address it makes follows the mirror.
   std::vector<uint32_t> calls = {
     jal(Base + 0x40), nop, or_(s1, s0, zero),                 // through 0x08800000
@@ -670,7 +676,7 @@ auto recompilerCases() -> void {
 // instructions it stopped after when each block left for run(), as where a run stops decides when interrupts and
 // events land. A loop of blocks (an interpreted instruction, a syscall, a fall into the next section, a call, a
 // likely branch both ways, a store that drops its own section's code, a jump through a register, an FPU branch
-// taken, which ends its block before its delay slot; the page after the syscall's taken out of the page table now
+// taken; the page after the syscall's taken out of the page table now
 // and then) runs in short runs of 1 to 37 instructions on two recompilers,
 // one chaining and one not: each run must end at the same count, the same pc and pd and the same registers, and
 // each syscall see the same count of instructions before it.
@@ -792,6 +798,9 @@ auto coprocessorBranchesTaken() -> void {
     bool same = a == b && chained.ipu.pc == unchained.ipu.pc && chained.ipu.pd == unchained.ipu.pd &&
                 chained.scc.halted == unchained.scc.halted;
     for(uint32_t r = 0; r < 32; r++) same = same && chained.ipu.r[r] == unchained.ipu.r[r];
+    for(uint32_t r = 0; r < 32; r++) same = same && chained.fpu.r[r] == unchained.fpu.r[r];
+    same = same && chained.fpu.csr == unchained.fpu.csr && chained.vfpu.cc == unchained.vfpu.cc &&
+           runs[0].m.ram.bytes == runs[1].m.ram.bytes;
     if(!same && ++mismatches <= 3) {
       std::printf("FAIL %s: run %u of %u: %llu vs %llu instructions, pc %08x vs %08x\n", currentTest, round, limit,
                   (unsigned long long)a, (unsigned long long)b, chained.ipu.pc, unchained.ipu.pc);

@@ -163,7 +163,8 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
       //A native branch sets pc and pd for its delay slot, which the block then includes. A branch in the last word
       //of a section would need its delay slot from the next one, so the interpreter runs it instead; if it's
       //taken, pd won't be pc + 4 afterwards, and run() has the interpreter take the delay slot as well. The
-      //coprocessors' branches end the block where the interpreter's did, before their delay slots, likewise.
+      //coprocessors' branches end the block at the branch, as the interpreter's did (taken, the block may go on
+      //through the delay slot to the target by itself: emitCoprocessorBranch()).
       if(instruction >> 26 == 0x11 || instruction >> 26 == 0x12) {
         emitCoprocessorBranch(address, instruction, count);
         going = Next::Done;

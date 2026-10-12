@@ -587,14 +587,21 @@ auto Allegrex::Recompiler::emitCoprocessorBranch(u32 address, u32 instruction, u
   setLabel(taken);
   mov32(PC, imm(address + 4));
   mov32(PD, imm(target));
-  u32 delaySlot = self.read(Word, address + 4);
-  if(!chains || target == address + 8 || address % SectionSize == SectionSize - 4 || isBranch(delaySlot) ||
-     endsBlock(delaySlot)) {
+  auto leaveForRun = [&] {
     mov32(field(&executed), imm(count));
-    return jumpEpilog();
-  }
+    jumpEpilog();
+  };
+  if(!chains || target == address + 8 || address % SectionSize == SectionSize - 4) return leaveForRun();
+  u32 delaySlot = self.read(Word, address + 4);
+  if(isBranch(delaySlot) || endsBlock(delaySlot)) return leaveForRun();
   std::vector<sljit_jump*> leave;
   emitCounted(count, leave);
+  //A store earlier in this block may have rewritten the delay slot (dropping the section the block was compiled
+  //into): then run() takes it from memory, as before.
+  u32 index = (address & 0x1fff'ffff) / SectionSize;
+  mov64(reg(1), field(&table));
+  mov64(reg(1), mem(reg(1), index * sizeof(Section*)));
+  leave.push_back(sljit_emit_cmp(compiler, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, (sljit_sw)sectionTable[index]));
   mov32(PC, imm(target));
   mov32(PD, imm(target + 4));
   if(!emitInstruction(address + 4, delaySlot, 1, true)) emitInterpreter(address + 4, delaySlot, 1, true);
