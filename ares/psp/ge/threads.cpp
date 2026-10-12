@@ -401,7 +401,19 @@ auto GE::clearBatch(Batch& batch) -> void {
     for(s32 band = batch.top / BandRows; band <= batch.bottom / BandRows; band++) batch.bandJobs[band].clear();
   }
   batch.jobs.clear();
+  //(its deferred copies' texels, each once, to decode into again: no Look outside the batch holds one)
+  std::vector<std::shared_ptr<Decoded>> copies;
+  for(auto& look : batch.looks) {
+    if(!look.decoded || !look.decoded->deferred) continue;
+    if(std::find(copies.begin(), copies.end(), look.decoded) == copies.end()) copies.push_back(look.decoded);
+  }
   batch.looks.clear();
+  if(!copies.empty()) {
+    std::lock_guard lock(spares->mutex);
+    for(auto& copy : copies) {
+      if(spares->texels.size() < SpareCopies) spares->texels.push_back(std::move(copy->texels));
+    }
+  }
   batch.work = 0;
   batch.top = 0, batch.bottom = -1;
   batch.targeted = false;
@@ -542,6 +554,13 @@ auto GE::record(const Job& job) -> void {
   for(s32 band = job.firstY / BandRows; band <= job.lastY / BandRows; band++) batch.bandJobs[band].push_back(index);
   batch.jobs.push_back(job);
   batch.work += u64(job.lastX - job.firstX + 1) * u64(job.lastY - job.firstY + 1);
+  //a deferred texture's texels this job can take, for ensureDecoded() to decode no more than its jobs take
+  Look& look = batch.looks.back();
+  assert(&look == job.look);
+  if(look.deferRows) {
+    if(!look.reach) look.reach = std::make_unique<Reach>();
+    texelReach(job, *look.reach);
+  }
   if(batch.top > batch.bottom) batch.top = job.firstY, batch.bottom = job.lastY;
   batch.top = std::min(batch.top, job.firstY), batch.bottom = std::max(batch.bottom, job.lastY);
 }
