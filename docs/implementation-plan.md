@@ -169,7 +169,9 @@ lands as its own PR; the inventory rows below have the details.
    bundled resources"). The core's progress since is in psp-core.md, part by
    part; part 73 (2026-10-12, branch `cursor/psp-dialogs-2b67`) has the app
    show the PSP's system dialogs (messages, the keyboard, saving and loading)
-   for the player to answer, where the kernel answered them itself.
+   for the player to answer, where the kernel answered them itself; part 77
+   (branch `cursor/psp-colinsave-2b67`) has memstick: reach the memory stick,
+   which Colin McRae Rally 2005 Plus saves through.
 8. **Desktop builds** (requested 2026-10-02): a Linux x86-64 AppImage with its
    .zsync, a Windows x64 Phobos.exe and a universal macOS app, running the same
    cores and runner without the Turnip installer. First cut on branch
