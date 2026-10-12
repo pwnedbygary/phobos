@@ -602,8 +602,9 @@ alwaysinline auto GE::texelAxis(float coordinate, u32 size, bool clamp, bool lin
 //texelAxis() before the texels are put inside the texture: the texel the coordinate is in, or (linear) the first of
 //the two whose middles it lies between, and how far toward the second, in sixteenths.
 alwaysinline auto GE::texelSpot(float coordinate, bool linear) -> TexelSpot {
-  //wild coordinates, from garbage (or none at all, from a division by zero)
-  float held = std::isnan(coordinate) ? 0.0f : std::clamp(coordinate, -65536.0f, 65536.0f);
+  //coordinates as far out as the GE reads them (2^22 texels: round 6's texel-range and recip-vertex read texels at
+  //2^17 and past 2^21), wild ones (from garbage, or none at all, from a division by zero) held there
+  float held = std::isnan(coordinate) ? 0.0f : std::clamp(coordinate, -4194304.0f, 4194304.0f);
   if(!linear) return {s32(std::floor(held)), 0};
   s32 base = s32(std::floor(held * 256)) - 128;
   return {base >> 8, base >> 4 & 15};

@@ -85,7 +85,11 @@ converts (`gpu.cpp`'s `vertex()`):
   in a grid across Liberty City Stories' text and HUD.) A sprite turned a quarter swaps the axes; a sprite whose fog
   differs from half to half is drawn as two.
 - **3D sprites** have their corners at the pixel edges, with w and the texture coordinates times w set so that the
-  GPU's perspective interpolation is the GE's straight lines in 1/w.
+  GPU's perspective interpolation is the GE's straight lines in q and s across and t down (each corner's u, v and q
+  taken through the GE's reciprocal of w and made 15-bit integers, as `spriteJob()` does: docs/psp-core.md, part 75),
+  the GPU dividing by q with its own divide. Where q is 0 or below, the software renderer holds both coordinates at
+  the texture's last texel, as the PSP does with nearest filtering; the GPU doesn't (a sprite's corner there takes
+  w = 1, and a triangle's pixels are the GPU's own divide), which no game is known to draw.
 - **Points and lines** are pixel-sized squares, each with its own values.
 
 Consecutive primitives with the same settings go into one draw.
@@ -517,8 +521,10 @@ the design; none of its code is used, copied or translated.
   its vertices out, morph targets blended by the GE as it reads them (`GPU::Model`: position, normal, texture
   coordinates, color, eight weights, and its PRIM's settings' index), untransformed. `transform.vert` does what
   `transform.cpp` and `lighting.cpp` do: skinning (up to eight bone matrices), the world, view and projection
-  matrices, the GE's lighting in its own whole numbers (the 2c + 1 factors, products shifted down 10 bits, shares in
-  256ths rounded up, the quick power from a float's bits, four lights of every kind, the shine kept apart or added),
+  matrices, the GE's lighting in its own whole numbers (the 2c + 1 factors, products shifted down 10 bits into a
+  level, then times the cosine's share and the fading's, each a level of its own, 256 times the amount rounded down,
+  as round 6 measured it: docs/psp-core.md, part 75; the quick power from a float's bits, four lights of every kind,
+  the shine kept apart or added),
   texture coordinates (scaled, by the texture matrix from any source, or environment-mapped from two lights) and
   fog; then the screen position cut to the GE's sixteenths of a pixel toward 2048, as `project()` cuts it, and the
   depth held to 0-65535 at each corner, as `project()` holds it (the GE steps the held depths between the corners;

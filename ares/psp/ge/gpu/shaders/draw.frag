@@ -149,7 +149,7 @@ uvec4 sampleTexture(vec2 at, bool linear) {
     at *= float(push.textureScale), width *= push.textureScale, height *= push.textureScale;
   }
   bool heldU = (CLAMP & 1u) != 0u, heldV = (CLAMP & 2u) != 0u;
-  vec2 held = clamp(at, vec2(-65536.0), vec2(65536.0));
+  vec2 held = clamp(at, vec2(-4194304.0), vec2(4194304.0));  //(as texelSpot() holds them, at 1x)
   if(isnan(at.x)) held.x = 0.0;
   if(isnan(at.y)) held.y = 0.0;
   if(!linear) return fetch(inside(int(floor(held.x)), width, heldU), inside(int(floor(held.y)), height, heldV));

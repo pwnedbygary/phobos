@@ -22,14 +22,17 @@
 //With LIGHT_MODE 1 the shine is kept apart, as a second color added after texturing (so a dark texture doesn't dull
 //it); otherwise it's added in. Each channel ends held to 0-255.
 //
-//The arithmetic is the GE's: an 8-bit color c counts as 2c + 1, so that white times white is white; two colors
-//multiply and shift down 10 bits; a light's share counts 256ths, rounded up (times the two colors, then down 18
-//bits). "To the power of" is the GE's own quick approximation, exact at powers of two and a little low between them,
-//and the coefficient keeps only the top four bits of its fraction. (As PPSSPP reads it from tests on the PSP, but for
-//the share, which PPSSPP counts in 512ths, rounded up and one more: the PSP's own pictures settled 256ths, round 3's
-//lighting files in docs/psp-core.md. Rounding up at a whole 256th is assumed, no measured share landing on one; and
-//a few products come out a level lower on the PSP than this: part 48 found the PSP's share finer than a 256th, its
-//own cosine, off the true one either way, which round 5 of tools/psp-measure measures.)
+//The arithmetic is the GE's: an 8-bit level c counts as 2c + 1, so that white times white is white, and two levels
+//multiply and shift down 10 bits. A light's color times the material's makes a level; that times how squarely the
+//light falls (or its shine) makes another, and that times its fading and spot (strength, below) the light's part: each
+//share a level itself, 256 times the amount rounded down, at most 255, multiplied the same way (times()). Measured
+//(docs/psp-core.md, part 75): round 6's light-products, every light level on every material level at four normals,
+//and light-sweep's 8192 normals, every product they lit; each light's part a whole level before they're added
+//(light-sum); and with the fading its own multiply, round 2's light-point and light-spot, every pixel. (Which comes
+//first, the cosine or the fading, no picture tells.) The cosine is worked out in floats, which the PSP's own
+//arithmetic puts the other side of a level in 37 of the 8192 normals, each within 0.007 of a level. "To the power of"
+//is the GE's own quick approximation, exact at powers of two and a little low between them, and the coefficient keeps
+//only the top four bits of its fraction (as PPSSPP reads it from tests on the PSP).
 //
 //Environment mapping (TEXTURE_MAP_MODE 2) takes texture coordinates from two lights (TEXTURE_SHADE_MAPPING bits 0-1
 //for u, 8-9 for v), lit or not: (the cosine between the normal and the direction to that light, or with a shining
@@ -38,13 +41,20 @@
 //A color's channel n (0 red, 1 green, 2 blue, 3 alpha) as the GE multiplies it: 2c + 1.
 static auto factor(u32 color, u32 n) -> s32 { return s32(color >> n * 8 & 0xff) * 2 + 1; }
 
-//A light's share in 256ths, rounded up, at most 256. A spotlight's can be below 0 (its power of a cosine below 0
-//stays below 0), which darkens; it can't be below -1 (here -256). (The darkening is PPSSPP's reading, carried over to
-//256ths: not measured.)
+//A light's share as a level: 256 times the amount, rounded down, at most 255. A spotlight's can be below 0 (its power
+//of a cosine below 0 stays below 0), which darkens, as much as the same share above 0 lights; not below -255. (The
+//darkening is PPSSPP's reading, carried over: not measured.)
 static auto share(float amount) -> s32 {
-  float value = std::ceil(256 * amount);
+  float value = std::floor(256 * std::abs(amount));
   if(std::isnan(value)) return 0;
-  return value < 256 ? s32(std::max(value, -256.0f)) : 256;
+  s32 level = value < 255 ? s32(value) : 255;
+  return amount < 0 ? -level : level;
+}
+
+//A level times a share, as the GE multiplies them: (2l + 1)(2s + 1) >> 10; a share below 0 takes away as much.
+static auto times(s32 level, s32 share) -> s32 {
+  s32 lit = (2 * std::abs(level) + 1) * (2 * std::abs(share) + 1) >> 10;
+  return (level < 0) != (share < 0) ? -lit : lit;
 }
 
 //The GE's x to the power e for x above 0: 2 to the e × log2(x), with log2 and its inverse each taken as straight
@@ -124,8 +134,8 @@ auto GE::lightingState(Transform& t) const -> void {
     light.diffuse = commands[Light0Ambient + index * 3 + 1] & 0xff'ffff;
     light.shine = commands[Light0Ambient + index * 3 + 2] & 0xff'ffff;
     //Its colors times the material's, the same at every vertex unless a vertex's own color stands for the
-    //material's (light() then works them out there): the products light() would make, 511 × 511 at most, which a
-    //share of 256 at most leaves far inside 32 bits, so multiplying by the share after is the same sum.
+    //material's (light() then works them out there): the products light() would make, 511 × 511 at most, which
+    //light() makes a level and multiplies by the shares there (add()).
     for(u32 n = 0; n < 4; n++) {
       light.products[0][n] = factor(light.ambient, n) * factor(t.materialAmbient, n);
       light.products[1][n] = factor(light.diffuse, n) * factor(t.materialDiffuse, n);
@@ -148,8 +158,9 @@ auto GE::light(Vertex& vertex, const float world[3], const float normal[3], cons
     sum[n] = own & 1 ? channel(t.materialEmissive, n) + (factor(vertex.color, n) * factor(t.ambientLight, n) >> 10)
                      : t.unlit[n];
   }
-  auto add = [](s32* total, const s32* product, s32 share) {
-    for(u32 n = 0; n < 4; n++) total[n] += product[n] * share >> 18;
+  //a light's part: its color times the material's (product, (2l + 1)(2m + 1)) made a level, times each share
+  auto add = [](s32* total, const s32* product, s32 share, s32 fade = 255) {
+    for(u32 n = 0; n < 4; n++) total[n] += times(times(product[n] >> 10, share), fade);
   };
   for(auto& light : t.lights) {
     if(!light.enabled) continue;
@@ -179,10 +190,11 @@ auto GE::light(Vertex& vertex, const float world[3], const float normal[3], cons
       float spot = along >= light.cutoff ? lightPower(along, light.exponent) : 0.0f;
       strength *= std::isnan(spot) ? 0.0f : spot;
     }
-    add(sum, products[0], share(strength));
+    s32 fade = share(strength);
+    add(sum, products[0], fade);
     float facing = dot3(toLight, normal);
     if(light.powered) facing = lightPower(facing, t.specularPower);
-    if(facing > 0) add(sum, products[1], share(strength * facing));
+    if(facing > 0) add(sum, products[1], share(facing), fade);
     if(light.specular && facing >= 0) {
       float halfway[3] = {light.halfway[0], light.halfway[1], light.halfway[2]};
       if(!light.directional) {
@@ -190,7 +202,7 @@ auto GE::light(Vertex& vertex, const float world[3], const float normal[3], cons
         normalize3(halfway);
       }
       float gleam = lightPower(dot3(halfway, normal), t.specularPower);
-      if(gleam > 0) add(shine, products[2], share(strength * gleam));
+      if(gleam > 0) add(shine, products[2], share(gleam), fade);
     }
   }
   if(t.separateSpecular) {
