@@ -25,6 +25,54 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: the host's right stick for patched games, the keyboard in a field's own characters, 7th Dragon 2020-II past its certificate — 2026-10-12
+
+Branch `cursor/psp-input-b00-2b67`, on master (`6ab2c5583`, merged with `b7ea296f4`, #227). docs/psp-core.md, part 81,
+has the evidence. Items 3 and 4 of the deep-play batch 00 report (`~/phobos-work/deepplay/batch-00-report.md`). Clean
+room: pspsdk's psputility_osk.h and pspctrl.h, the games' own code traced with a scratch runner, PPSSPP read only as a
+description of the PSP (its right-stick convention, its note on a negative ATRAC size); JPCSP not read. Save states
+unchanged (StateVersion 26). Begun by one agent, finished by another (the first stopped on finding the second in its
+worktrees); both agents' commits are on the branch.
+- **Right stick** (the owner's decision: a compatibility convention, not the hardware's behaviour): every
+  SceCtrlData sample carries the host's right stick in bytes 10 (X) and 11 (Y), 128 when centred, in every game and
+  every sceCtrl read, whatever the PSP Right Stick setting (Off, the default, then does nothing else); centred in
+  digital sampling as the left stick is; the last four bytes 0; not in states. The core takes it from "R-Stick X" and
+  "R-Stick Y"; the app hands the right stick to it in every choice (with Analog stick it is the PSP's stick and the
+  patched games' second one at once: the setting's description says Off suits those games). The runner takes
+  `R-StickX:` and `R-StickY:` in `--press` and `--script` (README). The four Armored Core True Analogs images read it:
+  Formula Front International's camera now rests level behind the AC after "GO!!!" and turns and pitches with the
+  right stick (it pitched up at the sky and the AC turned left on its own).
+- **Keyboard**: `keyboardConform()` (utility.cpp) gives text as a field of PSP_UTILITY_OSK_INPUTTYPE_* types and lines
+  takes it (the other width, case or kana where one fits, else left out; spaces full-width only where only full-width
+  types; line breaks only in fields of several lines). The automatic answer's nickname goes through it: both 7th
+  Dragon games' name fields are full-width letters only (0x0c00), so "PSP" is now U+FF30 U+FF33 U+FF30 (2020's hero
+  was nameless). The app's keyboard shows what's typed as Android's keyboard composes it and enters it converted (a
+  line under the field shows the form entered where it differs); the core converts the app's answer again.
+- **7th Dragon 2020-II's certificate** (found by the first agent): the name wasn't what froze it; the game hands
+  `sceAtracSetDataAndGetID` the size 0xffffffff for a sound read whole into its buffer, which was refused. A size with
+  its top bit set now reaches to the end of the buffer's memory (none: refused as before). The game goes on into its
+  story.
+- **Checks**: `tests/psp/run-tests.sh` (sanitizers) 472 groups, 0 failures on `04b274924`; the final commit's run and
+  `tests/allegrex`, `tests/psp/ares` and the Android unit tests: see the commit that completes this entry.
+- **Library**: running (base: master `b7ea296f4`'s runner; `lib.sh RUNNER OUTROOT 1 900`): the comparison completes this
+  entry.
+- **Review**: the first agent's independent review (`~/phobos-work/scratch/hle-b00/review-pr-a.md`: the app's keyboard
+  converting keys under Android's composition, a state test, comments, line breaks, a negative size on no memory) had
+  its points taken in `04b274924`; a second independent review of the branch (PASS, no High or Medium) had its Low and
+  Nit points taken in `e743fbcff` (all four ATRAC setters given the whole file take a negative size; the app's field
+  holding nothing past its limit, and saying so when nothing will be entered; no control characters in a field of any
+  type; comments and docs).
+- **On the RP6, to check**: (1) An Armored Core True Analogs image (Formula Front International, 3 Portable, Last
+  Raven or Silent Line Portable) with the PSP Right Stick setting on Off and a controller whose right stick is bound
+  (R-Up/Down/Left/Right, as by default): in a battle, after "GO!!!" and with the right stick untouched, the camera stays
+  level behind the AC and the radar's heading holds; right stick right and left turns the AC, up and down tilts the
+  view (it stays where it's left, as the mod has it). With Analog stick chosen, the right stick moves the AC and the
+  camera at once (expected). (2) 7th Dragon 2020 and 2020-II, a new game: on the name screen, NAME opens the keyboard;
+  typing "Bob" shows "Bob" with "Ｂｏｂ" under it, OK enters "Ｂｏｂ", the game shows the name; 2020-II's certificate
+  then passes into the story. (3) Japanese typed by romaji in a kana field composes normally. (4) Another game's
+  keyboard (Ridge Racer 2's driver name) as before.
+- Scratch: `~/phobos-work/scratch/hle-b00` (runners in `bin/`, the runs in `runs/`, the library runs `lib-*`).
+
 ## PSP: memstick: is the memory stick — Colin McRae Rally 2005 Plus's save — 2026-10-12
 
 Branch `cursor/psp-colinsave-2b67`, begun on `cursor/psp-dialogs-2b67` (#221) and merged with master (#221, #222, #224
