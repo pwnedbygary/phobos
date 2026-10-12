@@ -325,10 +325,31 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
       heldRows = std::min<u32>(rows, reached), heldColumns = std::min<u32>(columns, across);
     }
   }
-  //(a 2D sprite drawing over its own texture is still decoded where a copy taken first draws the same: readsAhead())
-  struct Ahead { GE& ge; const Look& look; const std::vector<Vertex>& vertices; u32 count; bool sprites; };
-  Ahead ahead{*this, look, vertices, count, format.through && kind == Sprites};
-  auto copyDraws = [&ahead] { return ahead.sprites && ahead.ge.readsAhead(ahead.look, ahead.vertices, ahead.count); };
+  //(3D's settings: the last PRIM's kept, worked out again where they've changed, with this PRIM's own set; 2D uses
+  //none of them)
+  Transform& t = format.through ? keptTransform.transform : transformKept();
+  s32 facing = (commands[CullFaceEnable] & 1) && !pixel.clear ? (commands[Cull] & 1 ? 1 : -1) : 0;
+  if(!format.through) {
+    t.weights = format.weightFormat ? format.weights : 0;
+    t.textureWidth = texture.width, t.textureHeight = texture.height;
+    t.vertexColor = format.colorFormat != 0;
+  }
+  //Without a renderer to hand them to (which may transform its own), 3D vertices are transformed before the texture
+  //is decoded: whether a primitive drawing over its own texture draws the same from a copy goes by where they land.
+  bool transformed = !format.through && !hardware;
+  if(transformed) transformAll(vertices, t);
+  //(a primitive drawing over its own texture is still decoded where a copy taken first draws the same: readsAhead()
+  //for 2D sprites, readsApart() for 3D triangles)
+  struct Ahead {
+    GE& ge; const Look& look; const std::vector<Vertex>& vertices; u32 count; bool sprites, triangles;
+    const Transform& t; u32 kind, strip; s32 facing;
+  };
+  Ahead ahead{*this, look, vertices, count, format.through && kind == Sprites, transformed, t, kind, strip, facing};
+  auto copyDraws = [&ahead] {
+    auto& a = ahead;
+    if(a.sprites) return a.ge.readsAhead(a.look, a.vertices, a.count);
+    return a.triangles && a.ge.readsApart(a.look, a.t, a.vertices, a.kind, a.strip, a.facing);
+  };
   if(textured && !skipping && !(hardware && renderer->holds(*this, look.texture, heldRows, heldColumns))) {
     //Hardware keeps its own copy of a frame buffer: don't defer a software-batch wait for it.
     decode(look, hardware ? Region{0, 0, -1, -1} : region, drawnRows, !hardware, copyDraws);
@@ -353,14 +374,7 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   if(drawing.recording && drawn.deferRows) {  //(the CPU waits for its texture's pages till it's decoded: threads.cpp)
     for(u32 page = drawn.deferFirst >> 12; page <= drawn.deferLast >> 12; page++) drawing.batch->reads.set(page);
   }
-  //(3D's settings: the last PRIM's kept, worked out again where they've changed, with this PRIM's own set; 2D uses
-  //none of them)
-  Transform& t = format.through ? keptTransform.transform : transformKept();
-  s32 facing = (commands[CullFaceEnable] & 1) && !pixel.clear ? (commands[Cull] & 1 ? 1 : -1) : 0;
-  if(!format.through) {
-    t.weights = format.weightFormat ? format.weights : 0;
-    t.textureWidth = texture.width, t.textureHeight = texture.height;
-    t.vertexColor = format.colorFormat != 0;
+  if(!format.through && !transformed) {
     //(a renderer transforming its own: the triangles the GE would draw whole handed over as they are)
     bool triangles = kind == Triangles || kind == TriangleStrip || kind == TriangleFan;
     if(hardware && triangles && renderer->meshes(*this, t, count)) {
@@ -851,6 +865,76 @@ auto GE::readsAhead(const Look& look, const std::vector<Vertex>& vertices, u32 c
   return true;
 }
 
+//Whether a 3D primitive drawing over its own texture (texture.cpp's drawsOver(), by its scissor rectangle) comes out
+//the same drawn from a copy of it taken just before it as reading it from memory as it draws: so when no byte any of
+//its triangles' pixels may write (in each one's rows and columns, and its depth buffer where it writes depth) is one
+//any of them may take a texel from (texelSpan(), each axis's texels put inside the texture as texelAxis() puts them:
+//texelRuns()), which drawsOver() tells, given those texels' rows. Its vertices transformed (transformAll()), its
+//triangles are those clipTriangle() hands triangle() whole, set up as triangle() sets them up (triangleJob()).
+//Looked into only for triangles (a primitive with one cut at the near plane isn't), and a texture in one of VRAM's
+//plain copies, laid out in rows (not swizzled nor DXT).
+auto GE::readsApart(const Look& look, const Transform& t, const std::vector<Vertex>& vertices, u32 kind, u32 strip,
+                    s32 facing) const -> bool {
+  auto& tex = look.texture;
+  if(kind != Triangles && kind != TriangleStrip && kind != TriangleFan) return false;
+  if(tex.swizzled || tex.format >= 8) return false;
+  u32 physical = tex.address & 0x1fff'ffff;
+  if(physical < Memory::VRAMBase || physical - Memory::VRAMBase >= Memory::VRAMWindow) return false;
+  if((physical - Memory::VRAMBase) / Memory::VRAMSize & 1) return false;  //(a copy that rearranges VRAM)
+  u32 texture = (physical - Memory::VRAMBase) % Memory::VRAMSize;
+  u32 bits = TexelBits[tex.format], pitch = tex.bufferWidth * bits / 8;
+  std::vector<Job> jobs;
+  bool whole = true;  //every triangle looked into
+  auto consider = [&](const Vertex& a, const Vertex& b, const Vertex& c, s32 facing) {
+    if(!whole || outOfSight(t.depthClamp, {&a, &b, &c})) return;
+    if(a.clip[3] < 0 && b.clip[3] < 0 && c.clip[3] < 0) return;
+    auto nearer = [](const Vertex& v) { return v.clip[2] + v.clip[3]; };
+    if(nearer(a) < 0 || nearer(b) < 0 || nearer(c) < 0 || jobs.size() == 256) return void(whole = false);
+    s64 x[3] = {fixed(a.x), fixed(b.x), fixed(c.x)}, y[3] = {fixed(a.y), fixed(b.y), fixed(c.y)};
+    s64 area = (x[1] - x[0]) * (y[2] - y[0]) - (y[1] - y[0]) * (x[2] - x[0]);  //(as triangle())
+    if(area == 0 || (facing && (area > 0) != (facing > 0))) return;
+    Job job = triangleJob(look, a, b, c, x, y, area, true);
+    if(job.firstX <= job.lastX && job.firstY <= job.lastY) jobs.push_back(job);
+  };
+  u32 count = vertices.size();
+  if(kind == Triangles) {
+    for(u32 n = 0; n + 2 < count; n += 3) consider(vertices[n], vertices[n + 1], vertices[n + 2], facing);
+  } else if(kind == TriangleStrip) {
+    for(u32 first = 0; first < count; first += strip) {
+      u32 end = std::min(first + strip, count);
+      for(u32 n = first; n + 2 < end; n++) {
+        consider(vertices[n], vertices[n + 1], vertices[n + 2], (n - first) & 1 ? -facing : facing);
+      }
+    }
+  } else {
+    for(u32 n = 1; n + 1 < count; n++) consider(vertices[0], vertices[n], vertices[n + 1], facing);
+  }
+  if(!whole) return false;
+  //every texel any of them may take, in rectangles of rows by columns, as drawsOver() takes them (offsets in VRAM)
+  std::vector<TexelRows> taken;
+  for(auto& job : jobs) {
+    s32 span[2][2], rows[2][2], columns[2][2];  //(span: rows, then columns)
+    if(!texelSpan(job, span[0], span[1])) return false;
+    u32 rowRuns = texelRuns(span[0], tex.height, tex.clampV, rows);
+    u32 columnRuns = texelRuns(span[1], tex.width, tex.clampU, columns);
+    for(u32 r = 0; r < rowRuns; r++) {
+      for(u32 c = 0; c < columnRuns; c++) {
+        u32 first = texture + rows[r][0] * pitch + columns[c][0] * bits / 8;
+        u32 rowBytes = ((columns[c][1] + 1) * bits + 7) / 8 - columns[c][0] * bits / 8;
+        u32 count = rows[r][1] - rows[r][0] + 1;
+        if(rowBytes > pitch || u64(first) + u64(count - 1) * pitch + rowBytes > Memory::VRAMSize) return false;
+        taken.push_back({first, first + (count - 1) * pitch + rowBytes - 1, pitch, rowBytes, count});
+      }
+    }
+  }
+  for(auto& job : jobs) {
+    for(auto& texels : taken) {
+      if(drawsOver(look.pixel, texels, job.firstX, job.firstY, job.lastX, job.lastY)) return false;
+    }
+  }
+  return true;
+}
+
 //A sprite's job (rectangle()): false if it covers no area at all (its corners in one row or column of sixteenths).
 auto GE::spriteJob(const Look& look, const Vertex& from, const Vertex& to, bool perspective, Job& job) const -> bool {
   auto& pixel = look.pixel;
@@ -914,14 +998,23 @@ auto GE::spriteJob(const Look& look, const Vertex& from, const Vertex& to, bool 
 //only counterclockwise. perspective: 3D, its texture coordinates blended as the perspective has them.
 auto GE::triangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing,
                   bool perspective) -> void {
-  auto& pixel = look.pixel;
-  struct Corner { s64 x, y; const Vertex* vertex; };
-  Corner p[3] = {{fixed(a.x), fixed(a.y), &a}, {fixed(b.x), fixed(b.y), &b}, {fixed(c.x), fixed(c.y), &c}};
-  s64 area = (p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[1].y - p[0].y) * (p[2].x - p[0].x);  //above 0: clockwise
+  s64 x[3] = {fixed(a.x), fixed(b.x), fixed(c.x)}, y[3] = {fixed(a.y), fixed(b.y), fixed(c.y)};
+  s64 area = (x[1] - x[0]) * (y[2] - y[0]) - (y[1] - y[0]) * (x[2] - x[0]);  //above 0: clockwise
   if(area == 0) return;
   if(facing && (area > 0) != (facing > 0)) return;
-  owe(pixelsInside({p[0].x, p[1].x, p[2].x}, {p[0].y, p[1].y, p[2].y}, pixel));
+  owe(pixelsInside({x[0], x[1], x[2]}, {y[0], y[1], y[2]}, look.pixel));
   if(hardware) return renderer->triangle(a, b, c);
+  Job job = triangleJob(look, a, b, c, x, y, area, perspective);
+  submit(job);
+}
+
+//The job of a triangle triangle() draws, set up: its corners (sixteenths) and area (not 0) as triangle() works them
+//out.
+auto GE::triangleJob(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, const s64 (&x)[3],
+                     const s64 (&y)[3], s64 area, bool perspective) const -> Job {
+  auto& pixel = look.pixel;
+  struct Corner { s64 x, y; const Vertex* vertex; };
+  Corner p[3] = {{x[0], y[0], &a}, {x[1], y[1], &b}, {x[2], y[2], &c}};
   if(area < 0) std::swap(p[1], p[2]), area = -area;  //the same corners, turned the way the edges are worked out for
   //(which pixels on its edges it draws: triangleRows(), raster.cpp)
   Job job{};
@@ -1003,7 +1096,7 @@ auto GE::triangle(const Look& look, const Vertex& a, const Vertex& b, const Vert
     r.uStart = u.start, r.uAcross = u.across, r.uDown = u.down;
     r.vStart = v.start, r.vAcross = v.across, r.vDown = v.down;
   }
-  submit(job);
+  return job;
 }
 
 auto GE::point(const Look& look, const Vertex& at) -> void {

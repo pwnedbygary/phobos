@@ -56,6 +56,17 @@ auto Allegrex::execute(u32 address, u32 instruction) -> u32 {
   return pipeline.exception;
 }
 
+//execute() for a syscall, which compiled code knows it is: SYSCALL() without the decoder finding it (system functions
+//are called hundreds of thousands of times a frame by games that poll one in a loop).
+auto Allegrex::executeSyscall(u32 address, u32 instruction) -> u32 {
+  pipeline.address = address;
+  pipeline.instruction = instruction;
+  pipeline.exception = 0;
+  SYSCALL();
+  ipu.r[0] = 0;
+  return pipeline.exception;
+}
+
 //Runs at least the given number of instructions, stopping early if the CPU halts, or once it reaches a runLimit a
 //syscall brought forward; returns how many ran. With the recompiler, whole blocks run at a time, so it may run a few
 //more than asked.

@@ -9781,6 +9781,308 @@ commit, whose message has the verdict.
   `newcmp*`, the runs without a front end; `frontrunner/` and `e2e/`, the runs with one; `quick/`, the utility, dialog
   and state tests alone; `ndk-check.sh`, the arm64 build of the touched files).
 
+## Part 74: the slowest games faster — render to texture decoded only where it's taken, a blur from a copy, polled system functions cheaper
+
+On branch `cursor/psp-speed9-2b67`, on `cursor/psp-merge-212-219-2b67` (`5b2a564fa`: master and #212 to #219, merged
+into master as #220), the base of every number here. The task: the slowest games of the owner's library faster, the
+software renderer's every picture as it was. Their speeds on the RP6 at 7 drawing threads, from the owner's runs of
+2.0.0: Killzone: Liberation about 4 frames a second in its menus, God of War: Ghost of Sparta about 5, Activision Hits
+Remixed 5.6 in its game-select room, Sonic Rivals about 7 in a stage, Death Jr. II 8.9 at its character select, the
+three MX vs. ATVs 15 to 18, Hot Wheels: Ultimate Racing 16 racing, Chains of Olympus 21 at its difficulty menu, the two
+Need for Speeds 23, Super Monkey Ball Adventures 14 to 23 in its story menu, Army of Two 26 (dips to 8), Fat Princess
+36, Twisted Metal: Head-On 37, Disaster Report 3 44, the two Armored Cores 52 and 55, and Chinatown Wars' long frames.
+Clean room: no PPSSPP code read for any of it, JPCSP not read. Save states are unchanged by it (StateVersion 26, part
+73's): nothing new is kept (a Look's reach lives only while its batch is filled and drawn, and the spare copies, kept
+between batches, aren't serialized).
+
+### How it was measured
+
+Each game reached from boot with presses in the headless runner (`tools/psp-runner`, a scratch copy built at -O3 with
+thin LTO as Android builds it, a state saved every 300 frames), and the slow scene kept as a state: 24 scenes, listed
+with how to reach each in "On the RP6". Then, from each state: frames a second, the emulation thread's CPU time and the
+whole process's CPU time a frame; every system call counted and timed (a scratch patch); the GE's work counted (PRIMs,
+jobs and their boxes' pixels, those drawn at once, batches launched and flushed, deferred decodes and their texels, the
+emulation thread's time waiting for a batch); macOS's `sample` for call graphs; 7 drawing threads against 1. The Mac
+(an M1) was shared throughout with other agents (load averages up to 300, other whole-library runs among them), so
+every comparison takes turns, three rounds, medians; the counts don't move.
+
+### Where the time went
+
+| Game, scene | What bounds it (base) | The counts behind it (a frame) |
+| --- | --- | --- |
+| Killzone, language and title menus | the GE, at once on the emulation thread | 811 PRIMs drawn at once, a pixel at a time from memory (8 million pixels of boxes): its blur |
+| Activision Hits Remixed, game-select room | deferred decodes | 184 of a 512x512 CLUT32 picture, 47 million texels |
+| Sonic Rivals, a stage | deferred decodes | 93, 24 million texels (the same engine as the two above) |
+| Death Jr. II, character select | deferred decodes | 92, 24 million texels |
+| MX vs. ATV Untamed, free ride and its pause menu | deferred decodes | 30 of 2D strips, 4.1 million texels; 117 launches, 150 flushes |
+| Need for Speed Most Wanted 5-1-0, profile; Underground Rivals, title | system calls (the CPU's side) | 500,000: an idle thread's loop of three functions |
+| Death Jr. II's notices, AHR's logo, Twisted Metal's, Disaster Report 3's and both Armored Cores' intros | system calls in a movie | 120,000 to 400,000: the movie's ring polled |
+| Ghost of Sparta, menu | the GE's pixels | 18,500 PRIMs, 28 million pixels of boxes, 89 deferred decodes (2.3 million texels) |
+| Chains of Olympus, difficulty menu | the GE's pixels | 6,200 PRIMs, 23 million pixels; 2 or 3 scenes a vblank (part 64's GE time) |
+| Army of Two, main menu | the GE's pixels | 84,000 jobs, 13 million pixels; 65 deferred decodes |
+| Super Monkey Ball Adventures, story menu | the GE's setup and pixels | 50,000 PRIMs, 13 million pixels |
+| Hot Wheels, a race | the GE's setup and pixels | 22,000 PRIMs, 15 million pixels |
+| Fat Princess, EULA | the GE's pixels | 11 million pixels in 650 jobs (whole-screen layers) |
+| Chinatown Wars, the auto-save notice | (light) | one list every other frame (4.5 ms of setup at sceGeListEnQueue), 1.2 million pixels, no polling, no file read |
+
+(Pixels of boxes: each job's bounding box, so a triangle counts about twice its pixels.) MX vs. ATV Reflex was reached
+as far as its profile screens (52 to 56 frames a second on the Mac, the slowest it showed); its races need a profile
+made with its on-screen keyboard first, and weren't reached. MX vs. ATV On the Edge, from boot through its menus, never
+fell below 85 frames a second on the Mac; its slow scene wasn't found.
+
+### What was done
+
+1. **A deferred texture decoded only where its jobs take texels** (`texture.cpp`'s `ensureDecoded()`, `raster.cpp`'s
+   `texelSpan()`, `texelRuns()`, `texelReach()`, `threads.cpp`'s `record()`). Render to texture defers a texture's
+   decode until its batch starts (part 47), and that decode took every row up to the primitive's reach and every
+   column: all 512 rows for a 3D primitive. Backbone's engine (Death Jr. II, Sonic Rivals, Activision Hits Remixed)
+   draws its screen in 32x34 tiles of 3D quads, each taking its own tile of a 512x512 CLUT32 picture through a palette
+   of its own (a colour pass a channel), so each tile decoded the whole picture again, on one thread while the others
+   waited. Now each recorded job marks the texels it can take in its Look (`Reach`: rows and columns), and the decode
+   fills each marked row run by each marked column run (more than 16 such pieces, as sprites from all over a font's
+   picture make, are decoded as the rectangle round them). The reach is allocated with a deferred Look's first
+   recorded job, apart from the Look: a Look is made and moved for every primitive (376 bytes, the base's 352 and the
+   decoded rectangle's bounds), and with the two masks inside it (504) the triangle-heavy games' emulation thread ran
+   a few percent slower than the base's. For a 3D triangle whose q is the same at every pixel (texQ
+   steps by nothing, as at corners with one w and one q), the texels are found from the same steps as
+   `triangleRows()` and `triangleFours()` take: s and t are planes stepped exactly from a corner, every pixel drawn
+   has its middle inside the triangle and inside the job's box, so each plane's value there lies between its values at
+   the three corners and between those at the middles of the box's corner pixels; a pixel's coordinate is that value
+   floored times one factor (the unit and R(q)), and `texelSpot()` the texel, each step never going back; so the
+   coordinates and texels (a filter's second one too, whatever its weight) lie between those of the least and
+   greatest values both bounds allow. `texelRuns()` puts them inside the texture as `texelAxis()` does: held at the
+   edges, or repeating round as one run or two (Killzone's quads fetch a texel at 512 with weight 0, which repeats to
+   column 0). A 2D sprite's job marks what `spriteReach()` finds (MX vs. ATV Untamed copies its picture through a 5650
+   buffer in strips 16 and 32 wide, each deferred). Anything else (a q that changes, or one of 0 or below, whose pixels
+   all take the held coordinate since part 75; 2D triangles, lines, points) marks the whole texture, as before.
+2. **3D triangles over their own texture from a copy where their reads and writes are apart** (`draw.cpp`'s
+   `readsApart()`, `triangleJob()`). A primitive drawing over its own texture (`drawsOver()`, by its scissor rectangle)
+   was drawn at once on the GE's thread, a pixel at a time, reading each texel from memory, after everything waiting was
+   drawn (part 47). Killzone's menus blur their picture so: about 800 3D quads a frame into a strip right of the 480
+   columns shown, from one half of the strip into the other, then back over the screen in eight strips. Now, without a
+   hardware renderer, 3D vertices are transformed before the texture is decoded, and `readsApart()` sets the primitive's
+   triangles up as `triangle()` would draw them (its setup is `triangleJob()`, shared) and asks `drawsOver()` of each
+   triangle's pixels (its box) against each rectangle of texels any of them may take (`texelSpan()`, `texelRuns()`):
+   where no byte any may write (in its rows, or its depth buffer where it writes depth) is one any may read, no pixel
+   takes a texel the primitive has drawn by then, so a copy taken just before it draws the same as memory read as it
+   draws, and it's decoded (or deferred) and batched like any other. Triangles cut at the near plane, a q that changes
+   or one of 0 or below, swizzled or DXT textures and anything but triangles stay as before. Of Killzone's quads, 7 a
+   frame read pixels they draw and stay at once (the strip's first pass, wrapping round to the strip, and one screen
+   strip reaching it).
+3. **Deferred copies decoded into the room of earlier ones** (`GE::spares`, `clearBatch()`). Each deferred copy took a
+   buffer of its rows by the texture's width and cleared it: 280 KB for each of Killzone's 800 blur passes. The texels'
+   room of copies done with is kept, four at most, behind one pointer (the machine grows by 8 bytes, which the states
+   test's frame takes), and decoded into again; texels a copy's jobs can't take keep what the last left there, and
+   none of them is used (a four whose lanes are all dropped reads the first two, and drops them).
+4. **System functions polled in a loop cheaper on the host** (`kernel.cpp`'s `syscall()`, `dispatch()`; `allegrex.cpp`'s
+   `executeSyscall()`). The emulated time is the same however long the host takes, so this is the host's cost of each
+   call: a compiled syscall calls SYSCALL() directly, not through the interpreter's decoders; a status structure
+   (`Report`) is built on the stack, not the heap (most of sceKernelReferThreadStatus's cost, the allocator's own
+   clock read included); and after a quiet function (`Function::quiet`, twelve that only look, or put what they find
+   in memory: the thread ID, priority and status functions, the system time and RTC tick, the vertical blank count,
+   the clock conversions, the movie ring's available size) whose end took no FINISH and started no call,
+   `runUntilNextEvent()` isn't run. That function looks through every thread, timer and file to bring the CPU's go to
+   an end sooner if something has become due sooner; after a function that changed nothing it looks at, nothing has,
+   and the go already stops by the next thing due, whose time (counted from the go's start) hasn't moved: an event in
+   the future keeps its absolute time, and one already due is at or past the go's limit, which every change that made
+   it due had brought forward. A syscall is always the last instruction of its compiled block, so a FINISH taken or a
+   call started at its end is followed at once by the block's check of that limit anyway: a program can't tell those
+   two conditions from none, and the test asks `dispatch()` directly.
+
+**Tried and dropped:** drawing a small batch on the GE's thread whenever nothing is being drawn (not only when no
+batch is launched), and larger thresholds for it: Killzone's 800 dependent batches a frame no faster (each batch's
+decode and drawing on one thread cost about what handing it to the workers does); a deferred copy left uninitialized
+outside its texels (no faster than the spare copies on the M1, and a texel left undefined); a spare buffer kept in
+each batch (192 bytes more in the machine, past what the states test's frame takes).
+
+### Numbers
+
+The Mac, base (`5b2a564fa`) -> the last commit (`0b252c2d4`), the bench runners from the scenes' states, the software
+renderer at 7 threads, medians of three rounds taking turns. The CPU time a frame (the whole process's, the workers'
+drawing included, and the emulation thread's) is the measure: the Mac's load fell from 113 to 19 during the rounds, and
+frames a second followed it (a GE-bound scene's swing of 20 to 40% either way, as Army of Two's and Fat Princess's,
+came with the same process time in each round). Frames a second are given for the scenes the branch changes.
+
+| Scene | Process ms a frame | Emulation thread ms a frame | Frames a second |
+| --- | --- | --- | --- |
+| Killzone, language menu | 318.4 -> 180.1 | 291.3 -> 39.6 | 1.9 -> 8.9 |
+| Activision Hits Remixed, room | 143.3 -> 39.6 | 22.0 -> 13.7 | 11.4 -> 49.6 |
+| Activision Hits Remixed, logo movie | 32.7 -> 25.0 | 32.4 -> 24.7 | 19.0 -> 34.2 |
+| Sonic Rivals, stage | 61.1 -> 20.5 | 10.5 -> 7.8 | 22.4 -> 79.4 |
+| Death Jr. II, character select | 56.7 -> 10.1 | 5.1 -> 2.4 | 28.4 -> 188.0 |
+| Death Jr. II, Konami logo | 27.6 -> 21.1 | 25.5 -> 20.5 | 31.3 -> 35.5 |
+| MX vs. ATV Untamed, free ride | 43.4 -> 29.9 | 16.4 -> 15.7 | 28.3 -> 43.1 |
+| MX vs. ATV Untamed, pause menu | 49.5 -> 34.2 | 16.9 -> 16.1 | 30.3 -> 40.0 |
+| Need for Speed Most Wanted, profile | 41.9 -> 28.5 | 35.7 -> 21.9 | 24.1 -> 42.0 |
+| Need for Speed Underground Rivals, title | 46.3 -> 30.8 | 35.8 -> 20.9 | 22.5 -> 47.2 |
+| Twisted Metal, logo movie | 22.6 -> 18.5 | 22.4 -> 18.4 | 44.2 -> 54.2 |
+| Disaster Report 3, intro movie | 12.9 -> 8.4 | 12.6 -> 8.2 | 64.8 -> 117.2 |
+| Armored Core Formula Front, intro movie | 15.3 -> 13.0 | 13.3 -> 11.1 | 61.4 -> 65.9 |
+| Armored Core Silent Line, intro movie | 14.3 -> 12.0 | 12.6 -> 10.2 | 69.8 -> 95.9 |
+| Ghost of Sparta, logo | 171.7 -> 167.1 | 33.2 -> 31.1 | |
+| Ghost of Sparta, menu | 282.0 -> 283.9 | 59.5 -> 62.1 | |
+| Chains of Olympus, difficulty menu | 125.4 -> 125.8 | 26.6 -> 25.7 | |
+| Army of Two, main menu | 201.3 -> 204.6 | 57.8 -> 59.9 | |
+| Super Monkey Ball Adventures, story menu | 197.5 -> 195.5 | 54.4 -> 61.2 | |
+| Hot Wheels, a race | 152.9 -> 151.9 | 36.3 -> 38.4 | |
+| Fat Princess, EULA | 44.5 -> 44.9 | 7.0 -> 6.8 | |
+| MX vs. ATV Reflex, profile / keyboard | 6.5 -> 7.1 / 9.4 -> 8.8 | 1.5 -> 1.8 / 2.3 -> 2.0 | |
+| Chinatown Wars, auto-save notice | 7.6 -> 8.0 | 1.6 -> 1.7 | |
+
+The GE-bound scenes' process times are within 3% of the base's (the rounds' own spread; Ghost of Sparta's logo the
+most, 2.7% less), and so are the light ones' but for MX vs. ATV Reflex's profile (6.5 -> 7.1 ms) and Chinatown Wars'
+notice (7.6 -> 8.0), a few hundred microseconds a frame, which the counts don't explain (the same work) and the
+rounds' spread at that size covers. Their emulation thread's time
+moves more, either way (Super Monkey Ball's 54 -> 61, Chains of Olympus' 27 -> 26): in a GE-bound scene it waits for a
+batch by drawing bands of it itself (`reclaim()`), so its time is the pixels' too and follows which thread took which
+band. With one drawing thread the same scenes came out a few percent either way from run to run, Army of Two 2 to 4%
+slower; at 7 its process time (the same pixels) doesn't show it. An earlier round (the
+commit before the last, four rounds, the Mac's load steadier) gave Killzone 2.5 -> 8.3 frames a second, Death Jr. II's
+character select 24.4 -> 135.1, Sonic Rivals 20.0 -> 68.7, the room 11.3 -> 35.8 and Untamed's ride 31.0 -> 40.1.
+
+### Accuracy
+
+Every change is the host's alone; nothing a game can see moves.
+- Each commit against the base, from the scenes' states: 120 frames (60 for some) with every frame's picture and all of
+  VRAM hashed, drawing settled, then RAM and the machine's whole serialized state, at 7 drawing threads and at 1:
+  Killzone's menu, Death Jr. II's character select and notices, Sonic Rivals' stage, Activision Hits Remixed's room and
+  logo, both Need for Speeds, Twisted Metal's, Disaster Report 3's and Formula Front's intros, and MX vs. ATV Untamed's
+  ride and pause menu, identical. The last commit (`0b252c2d4`) against the base in all 24 scenes the same way, 60
+  frames at 7 threads and at 1: identical, every one.
+- The whole library the report's way (3600 frames, Start at 120 and Cross at 1800, the software renderer at 7 threads,
+  three games at a time, `21753bfb1`'s runner; the commits after it are tests and the last commit, checked by the
+  hashes above and below) beside the final run (`lib-top`): all 266 finish (Ghost of Sparta, killed at 900 s with the
+  Mac at a load of about 300, finishes in 751 to 1169 s run again), none missing a function, and 188 show the final
+  run's pictures at all four captures. The other 78 differ at some capture, as two runs of one runner do. Run again
+  with the base's runner and this branch's side by side, the base and the branch differ in 49 of them, the branch and
+  its own first run in 57, the base and the final run in 54; of 17 where both of the branch's runs agreed against the
+  base's at some capture, three more runs of each runner mix both runners' pictures at every capture that comes out
+  the same twice at all (two never do: Resistance's at 1200 and Battlefront II's random map at 3600).
+- Why runs differ: the kernel's clock starts at the host's time (whole seconds), which some games' pictures follow,
+  and the runner's PNG is whatever picture the screen's thread presented last after the frame's run, which under load
+  is a frame or two behind. With the clock pinned in both runners (a scratch patch), 50 of the 78 match at all four
+  captures. The other 28, run from boot the same way on the base's and the branch's bench runners with the clock
+  pinned, every frame's picture and all of VRAM hashed with drawing settled, then RAM and the machine's state, are
+  identical over all 3600 frames, at `21753bfb1` and again at the last commit.
+- Master moved on while this was open: #221 (part 73, the dialogs) and #222 (part 75, round 6's pictures), merged in.
+  Part 75 holds a pixel's coordinates at the texture's last texel where its q is 0 or below, which `texelSpan()` didn't
+  know: a triangle whose q is the same at every pixel and 0 or below would have had its deferred texture decoded where
+  R(q) put its coordinates, not at that texel, and could have been drawn from a copy over its own texture while drawing
+  that texel (`readsApart()` asks `texelSpan()` too). Neither branch alone has it; the merge's next commit (`387c19c45`)
+  decodes such a triangle's texture whole and draws it at once over its own, and the two texture groups draw one (a quad
+  projected by the texture matrix to q = -1), each failing without it. Then the merged branch against master
+  (`caee1a26f`) in all 24 scenes the same way, 60 frames at 7 threads and at 1: identical, every one. The library runs
+  above are of the branch before the merges.
+
+### Checks
+
+- `tests/psp/run-tests.sh` (sanitizers on) 452 groups, 0 failures before the merges, 469 after them (master's 466 and
+  these three); the three new: "ge deferred texture's texels as its jobs take them" (3D quads nearest and filtered, held
+  and repeating round an edge, one in perspective, a CLUT32 view, a lone triangle, a quad whose q is -1 at every corner,
+  and 2D sprites (two of one PRIM far apart), each over a picture redrawn a little other before it, so that a copy
+  decoded into an earlier one's room shows a texel left out; at 1 thread and at 2, 4 and 8, fours on and off; Looks
+  sharing a copy, and one of 25 pieces, checked directly), "ge 3D triangles over their own texture" (quads apart and
+  not, cut at the near plane, in perspective, one whose q is -1 drawing the texel all its pixels take, a PRIM whose
+  second triangle reads what its first draws; against a machine that never decodes; a lone quad apart checked to wait in
+  a batch, decoded) and "ge FINISH after a quiet function" (a FINISH's callback at the same count of a spin polling a
+  quiet function as polling one that isn't, on both engines; each of the twelve dispatched as quiet and making nothing
+  due sooner; one not marked, one taking a FINISH and one starting a call not quiet). `tests/allegrex/run-tests.sh` 58
+  groups, 0 failures; `tests/psp/ares/run-tests.sh` 307 checks before the merges and 318 after, 0 failed.
+  `ares/psp/psp.cpp` compiles for arm64 with NDK 28.2, and with GCC 11 as the base does (four.cpp's known warnings).
+- Broken versions, each in a copy of the tree, that the new groups fail: all eleven of the reach's (the filtered second
+  texel left out, the first texel one on, the decode's last row or last column left out, a q that changes taken as one,
+  a repeat taken as held, the second run round the edge dropped, a corner left out, sharing Looks taking only the
+  first's, a reach made afresh for each job, a q of 0 or below taken as any other) and both of the cap's; the sprite
+  reach's three; `readsApart()` always refusing and five of six more; the quiet functions' four (every function quiet,
+  none, and each of the two guards). One passes: a triangle cut at the near plane looked into as if whole (the test's
+  cut quad comes out apart either way).
+- An independent read-only review of the branch found no bug. Its points were fixed: the copies' recycled room could
+  hide a texel left out of a decode (the picture is redrawn other each time now), the copy path and the quiet
+  functions weren't checked directly, the pieces of a decode were unbounded, `Reach::mark()` took any range, and
+  comments. A delta review of those passed; its two test gaps (the guards, the test's setup) and three comments were
+  fixed. A delta review of the last commit (the reach kept apart, the triangle set up once) and these docs passed: no
+  behaviour changed; its test gap (one Look's jobs taking texels apart) and the docs' points were fixed.
+
+### Left, and why
+
+- The games bound by the GE's work are as they were: both God of Wars, Army of Two, Super Monkey Ball Adventures (its
+  setup too, 50,000 PRIMs a frame on the CPU: the same in every renderer on the RP6), Hot
+  Wheels and Fat Princess draw 11 to 28 million pixels of boxes a frame, on the workers. The next step there is the
+  rasterizer itself, or the Vulkan renderer.
+- Killzone's blur: its passes each read the one before, so each batch waits for the last to be drawn, and 7 quads a
+  frame still read pixels they draw and are drawn at once.
+- A triangle cut at the near plane, a q that changes or one of 0 or below, 2D triangles, lines and points still decode a
+  deferred texture whole, and stay drawn at once over their own texture.
+- MX vs. ATV Reflex's races and On the Edge's slow scene weren't reached (above).
+- Chinatown Wars' long frames weren't seen on the Mac, where the auto-save notice runs at 106 to 112 frames a second
+  with one list every other frame and no file read; they're to be traced on the RP6 (the app's presentation, or its
+  waits).
+- With Vulkan, a render-to-texture picture the renderer doesn't hold is still decoded at its primitive, every row its
+  primitive may reach at the full width, whenever the texture cache misses (as Backbone's tiles' palettes make it); the
+  owner's runs have Backbone's games as slow in Vulkan as in Software, so that is the next place to look for them
+  there (not measured here).
+- Not measured on the RP6 (the owner's, below).
+
+### On the RP6
+
+To compare: the base (`5b2a564fa`, #220's branch, the code of 2.0.0-test-1, 205182) and this branch, the Software
+renderer at 7 threads, each scene's frames a second over several seconds, base, branch, base again. The scenes are the
+headless runner's states, `~/phobos-work/scratch/speed9/scenes/NAME` (`state`; the game's name in `game`; the memory
+stick it was made with in `stick`). The app's save states are the same bytes (`root->serialize(true)`), so a scene's
+`state` can stand in for a slot's file: save a state of the game in a slot, put the scene's `state` in that file's
+place, and load the slot. Or reach the scene from boot:
+
+| Scene | Game: where | RP6, 2.0.0 | Mac, base -> branch |
+| --- | --- | --- | --- |
+| kz-lang | Killzone: Liberation: the language menu at boot | about 4 | 1.9 -> 8.9 |
+| gos-logo | Ghost of Sparta: the Ready at Dawn logo | | GE-bound, as was |
+| gos-menu | Ghost of Sparta: the main menu | about 5 | GE-bound, as was |
+| ahr-logo | Activision Hits Remixed: the ACTIVISION logo movie | | 19.0 -> 34.2 |
+| ahr-room | Activision Hits Remixed: the game-select room's TV menu | 5.6 | 11.4 -> 49.6 |
+| sr-play | Sonic Rivals: the first stage, after Knuckles' talk | about 7 | 22.4 -> 79.4 |
+| dj2-copy | Death Jr. II: the Konami logo | | 31.3 -> 35.5 |
+| dj2-char | Death Jr. II: Choose Your Character | 8.9 | 28.4 -> 188.0 |
+| mxu-ride | MX vs. ATV Untamed: free ride | 18 | 28.3 -> 43.1 |
+| mxu-pause | MX vs. ATV Untamed: free ride's pause menu | | 30.3 -> 40.0 |
+| mxr-profile | MX vs. ATV Reflex: Profile Management | 15 (racing) | light, as was |
+| mxr-kbd | MX vs. ATV Reflex: the profile name's keyboard | | light, as was |
+| hw-race | Hot Wheels Ultimate Racing: a race, lap 1 of 3 | 16 | GE-bound, as was |
+| coo-diff | Chains of Olympus: the difficulty menu | 21 | GE-bound, as was |
+| nfsmw-profile | Need for Speed Most Wanted 5-1-0: the profile screen | 23 | 24.1 -> 42.0 |
+| smba-story | Super Monkey Ball Adventures: the Story Mode menu | 14 to 23 | GE-bound, as was |
+| nfsur-title | Need for Speed Underground Rivals: the title, Press START | 23 | 22.5 -> 47.2 |
+| a2-menu | Army of Two: the main menu | 26 (dips to 8) | GE-bound, as was |
+| fp-eula | Fat Princess: the EULA | 36 | GE-bound, as was |
+| tm-logo | Twisted Metal: Head-On: the Incog Inc logo movie | 37 | 44.2 -> 54.2 |
+| dr3-intro | Disaster Report 3: the intro movie | 44 | 64.8 -> 117.2 |
+| acff-intro | Armored Core Formula Front: the intro movie's credits | 52 | 61.4 -> 65.9 |
+| acsl-intro | Armored Core Silent Line: the intro movie | 55 | 69.8 -> 95.9 |
+| ctw-notice | Chinatown Wars: the auto-save notice | long frames | light, as was |
+
+The owner's RP6 runs of 2.0.0 in each renderer, given after this was measured, agree with the split above: Vulkan (fast)
+brings the GE-bound games up (Killzone 58, Ghost of Sparta 27, Chains of Olympus 53, MX vs. ATV Untamed and Reflex 60,
+Hot Wheels, Fat Princess and Chinatown Wars 60, Death Jr. II 23, Army of Two 36), while Sonic Rivals, both Need for
+Speeds, Super Monkey Ball, Twisted Metal, Me & My Katamari, Disaster Report 3 and Activision Hits Remixed are the same
+in every renderer, bound by the CPU's side; the two Armored Cores and Colin McRae are slower in Vulkan than in Software.
+Of those CPU-bound ones, the branch speeds up Sonic Rivals, both Need for Speeds, Twisted Metal, Disaster Report 3 and
+Activision Hits Remixed in Software. The system-call change is the CPU's side and holds in every renderer (the Need for
+Speeds' and the movies' polling). The decode changes are the software renderer's batches only: with a hardware renderer
+nothing is recorded, and a texture it doesn't hold (it holds no CLUT format) is decoded at once, at its full width over
+every row its primitive may reach (`drawnRows`: all 512 for a 3D one), each time the texture cache misses, as each of
+Backbone's tiles, with a palette of its own, makes it. So Backbone's games (Sonic Rivals, Activision Hits Remixed, Death
+Jr. II) in Vulkan don't get them; whether that decode is what holds them to Software's speed there wasn't measured
+(no device here, and the bench runner has no Vulkan). Super Monkey Ball's story menu is the GE's setup on the CPU, not
+changed; Me & My Katamari and Colin McRae weren't among the scenes measured. On the RP6, then: Software for every scene,
+and Vulkan as well for the Need for Speeds and the movie intros.
+
+Expected: the scenes the branch speeds up on the Mac (Killzone, the Backbone games, MX vs. ATV Untamed, the Need for
+Speeds, the movie intros) faster on the RP6 too, by less where the RP6's base is bound elsewhere; the GE-bound ones
+(both God of Wars, Army of Two, Super Monkey Ball Adventures, Hot Wheels, Fat Princess) as they were.
+
+Scratch: `~/phobos-work/scratch/speed9` (scenes/, the states; build.sh, measure.sh and medians.py, the bench runners
+and their measurements; hashcmp.sh and libhash.sh, the hash comparisons; lib/, the library runs; mutate.py, the broken
+versions; patches/, the scratch runner's patches, clock-patch.py among them).
+
 ## Part 75: round 6's pictures — lighting's two multiplies, every chord of the reciprocal, patches along v
 
 On branch `cursor/psp-round6-fits-2b67`, on master (`2a7019c84`, with #212 to #219 as #220). The task: compare the
@@ -10018,14 +10320,14 @@ run), `lib-base` (the base's runs of the games that differ), `sheet-a*.png` (the
 ## Part 77: memstick: is the memory stick — Colin McRae Rally 2005 Plus's save
 
 On branch `cursor/psp-colinsave-2b67`, begun on `cursor/psp-dialogs-2b67` (PR #221, the system's dialogs; part 73) and
-merged with master since (#221, #222 and #225). Parts 74, 76 and 78 are other branches', and 79 is kept for another. Sources: the game itself,
-traced with a scratch runner (each savedata call's parameters and answer, the files on the stick after it, every
-system call over the frames around the save with its caller, and every file it opened); pspsdk's psputility_savedata.h
-and pspiofilemgr.h; pspautotests' utility/savedata tests (none saves without a data buffer); uOFW's iofilemgr.c (the
-PSP's sceIoAssign() makes a name an alias over a file system and a block device, and alias names are compared whatever
-their case: `strcmp_bs`); PPSSPP read only as a description of the PSP (its file system's names for the memory stick,
-its savedata notes; nothing copied). JPCSP was not read. Save states are unchanged (StateVersion 26): the kernel gains
-no state.
+merged with master since (#221, #222, #224 and #225). Part 74 is #224's; 76 and 78 are other branches', and 79 is kept
+for another. Sources: the game itself, traced with a scratch runner (each savedata call's parameters and answer, the
+files on the stick after it, every system call over the frames around the save with its caller, and every file it
+opened); pspsdk's psputility_savedata.h and pspiofilemgr.h; pspautotests' utility/savedata tests (none saves without a
+data buffer); uOFW's iofilemgr.c (the PSP's sceIoAssign() makes a name an alias over a file system and a block device,
+and alias names are compared whatever their case: `strcmp_bs`); PPSSPP read only as a description of the PSP (its file
+system's names for the memory stick, its savedata notes; nothing copied). JPCSP was not read. Save states are unchanged
+(StateVersion 26): the kernel gains no state.
 
 **The problem** (a play-tester's batch report, item 2). Answering Yes to "Do you wish to create an Auto-Save file?"
 gave "Save failed! Check Memory Stick Duo™ in the Memory Stick Duo™ slot and please try again."; the folder
