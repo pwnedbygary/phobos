@@ -1491,11 +1491,12 @@ static auto geDeferredBusy() -> void {
 
 //3D triangles drawing with a texture the batch before them still draws (render to texture), each decoded as its batch
 //starts, of the texels its jobs can take only (ge/raster.cpp's texelReach()): a 64x64 picture of texels each its own
-//drawn again before each quad, so that each quad's decode is deferred, then 3D quads (one w, one q) taking parts of
-//it, nearest and filtered, held at the edges past them, magnified and shrunk, a quad repeating round an edge, one in
-//perspective, one with its own CLUT32 view of the picture, and a triangle by itself; then the same with the
-//four-pixel path off (whose fetch() checks each texel is one decoded). It comes out as on one thread, where nothing
-//is deferred. And Looks sharing a copy (ensureDecoded()) have it decoded over all of their texels.
+//drawn again before each quad (each time a little other), so that each quad's decode is deferred, then 3D quads (one
+//w, one q) taking parts of it, nearest and filtered, held at the edges past them, magnified and shrunk, a quad
+//repeating round an edge, one in perspective, one with its own CLUT32 view of the picture, a triangle by itself, and
+//2D sprites (spriteReach()); then the same with the four-pixel path off (whose fetch() checks each texel lies where
+//the copy was decoded). It comes out as on one thread, where nothing is deferred. And Looks sharing a copy
+//(ensureDecoded()) have it decoded over all of their texels.
 static auto geDeferredReach() -> void {
   constexpr u32 Offscreen = 0x15'4000, Picture = Image, Palette = Image + 0x4000;  //(Offscreen: a VRAM offset)
   struct Quad { float x0, y0, x1, y1, u0, v0, u1, v1, w1; u32 filter, wrap, format; };
@@ -1538,6 +1539,18 @@ static auto geDeferredReach() -> void {
       }
       list.put(GE::Primitive, kind << 16 | vertices.size());
     };
+    //the picture drawn into Offscreen again from RAM, in the batch being filled, each time a little other (modulated by
+    //a color of its own), so that a copy decoded into an earlier one's room shows a texel left out
+    u32 passes = 0;
+    auto redraw = [&] {
+      list.put(GE::FrameBufferPointer, Offscreen), list.put(GE::FrameBufferWidth, 64);
+      list.put(GE::TextureAddress0, Picture & 0xff'ffff), list.put(GE::TextureBufferWidth0, (Picture >> 24) << 16 | 64);
+      list.put(GE::TextureFormat, 3), list.put(GE::TextureFilter, 0), list.put(GE::TextureWrap, 0x101);
+      list.put(GE::TextureFunction, 0);
+      u32 color = 0xff80'8080 | (++passes * 0x0d'1f29 & 0x7f'7f7f);
+      put(GE::Sprites, 0x80'019f, {{0, 0, color, 0, 0, 0}, {64, 64, color, 64, 64, 0}});
+      list.put(GE::TextureFunction, 3);
+    };
     //(a 3D primitive may draw anywhere in the scissor rectangle, which a batch's rows mustn't run past: 64 wide)
     list.put(GE::Scissor2, 63 | 63 << 10), list.put(GE::Region2, 63 | 63 << 10);
     list.put(GE::ShadeMode, 1), list.put(GE::FrameBufferPixelFormat, 3), list.put(GE::TextureFunction, 3);
@@ -1545,11 +1558,7 @@ static auto geDeferredReach() -> void {
     list.to(GE::ClutAddress, Palette), list.put(GE::ClutAddressUpper, Palette >> 8 & 0xf'0000);
     list.put(GE::ClutFormat, 3 | 8 << 2 | 0xff << 8), list.put(GE::ClutLoad, 32);  //(32-bit entries, index bits 8-15)
     for(auto& q : Quads) {
-      //the picture drawn into Offscreen again, from RAM (the same texels each time), in the batch being filled
-      list.put(GE::FrameBufferPointer, Offscreen), list.put(GE::FrameBufferWidth, 64);
-      list.put(GE::TextureAddress0, Picture & 0xff'ffff), list.put(GE::TextureBufferWidth0, (Picture >> 24) << 16 | 64);
-      list.put(GE::TextureFormat, 3), list.put(GE::TextureFilter, 0), list.put(GE::TextureWrap, 0x101);
-      put(GE::Sprites, 0x80'019f, {{0, 0, 0, 0, 0, 0}, {64, 64, 0, 64, 64, 0}});
+      redraw();
       //then a quad taking part of it, into the picture at VRAM's start
       list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 64);
       list.put(GE::TextureAddress0, Offscreen), list.put(GE::TextureBufferWidth0, 0x04 << 16 | 64);
@@ -1561,10 +1570,7 @@ static auto geDeferredReach() -> void {
                                     {q.u1 / 64, q.v1 / 64, 0xffff'ffff, q.x1 * q.w1, q.y1 * q.w1, z1}});
     }
     //and a triangle by itself, each corner with a coordinate the others don't reach
-    list.put(GE::FrameBufferPointer, Offscreen), list.put(GE::FrameBufferWidth, 64);
-    list.put(GE::TextureAddress0, Picture & 0xff'ffff), list.put(GE::TextureBufferWidth0, (Picture >> 24) << 16 | 64);
-    list.put(GE::TextureFormat, 3), list.put(GE::TextureFilter, 0), list.put(GE::TextureWrap, 0x101);
-    put(GE::Sprites, 0x80'019f, {{0, 0, 0, 0, 0, 0}, {64, 64, 0, 64, 64, 0}});
+    redraw();
     list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 64);
     list.put(GE::TextureAddress0, Offscreen), list.put(GE::TextureBufferWidth0, 0x04 << 16 | 64);
     list.put(GE::TextureFilter, 0x101);
@@ -1575,10 +1581,7 @@ static auto geDeferredReach() -> void {
     struct Sprite { float x0, y0, u0, v0, x1, y1, u1, v1; u32 filter; };
     for(Sprite s : {Sprite{0, 0, 40, 10, 16, 32, 56, 42, 0}, Sprite{16, 32, 3.5f, 20.25f, 40, 48, 27.5f, 36.25f, 0x101},
                     Sprite{40, 0, 30, -8, 63, 20, 50, 12, 0x101}, Sprite{40, 63, 10, 50, 63, 40, 30, 60, 0}}) {
-      list.put(GE::FrameBufferPointer, Offscreen), list.put(GE::FrameBufferWidth, 64);
-      list.put(GE::TextureAddress0, Picture & 0xff'ffff), list.put(GE::TextureBufferWidth0, (Picture >> 24) << 16 | 64);
-      list.put(GE::TextureFormat, 3), list.put(GE::TextureFilter, 0), list.put(GE::TextureWrap, 0x101);
-      put(GE::Sprites, 0x80'019f, {{0, 0, 0, 0, 0, 0}, {64, 64, 0, 64, 64, 0}});
+      redraw();
       list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 64);
       list.put(GE::TextureAddress0, Offscreen), list.put(GE::TextureBufferWidth0, 0x04 << 16 | 64);
       list.put(GE::TextureFilter, s.filter);
@@ -1625,6 +1628,24 @@ static auto geDeferredReach() -> void {
   u32 wrong = 0;
   for(u32 y : {2, 3, 9, 10, 40, 41, 49, 50}) {
     for(u32 x : {3, 4, 8, 9, 30, 31, 39, 40}) wrong += t.decoded[y * 64 + x] != (y * 64 + x) * 0x0101'0101 + 7;
+  }
+  CHECK(wrong, 0u);
+  ge.clearBatch(batch);
+  //Past 16 pieces (row runs by column runs), the rectangle round them, the gaps between them too, in one go. (The
+  //texture other now: the copy's room, the last one's, can't hold these texels already.)
+  for(u32 n = 0; n < 64 * 64; n++) m.system.memory.write(4, VRAM + Offscreen + n * 4, n * 0x0102'0304 + 9);
+  auto& many = batch.looks.emplace_back();
+  many.textured = true, many.texture = ge.sampler(), many.deferRows = 64;
+  for(u32 n = 0; n < 5; n++) {
+    GE::Reach::mark(many.reach.rows, 1 + n * 10, 3 + n * 10);
+    GE::Reach::mark(many.reach.columns, 2 + n * 11, 4 + n * 11);
+  }
+  ge.ensureDecoded(batch);
+  auto& u = many.texture;
+  CHECK(u.decodedRows, 44u), CHECK(u.decodedTop, 1u), CHECK(u.decodedLeft, 2u), CHECK(u.decodedRight, 49u);
+  wrong = 0;
+  for(u32 y : {1, 2, 7, 25, 43}) {
+    for(u32 x : {2, 3, 8, 30, 48}) wrong += u.decoded[y * 64 + x] != (y * 64 + x) * 0x0102'0304 + 9;
   }
   CHECK(wrong, 0u);
   ge.clearBatch(batch);
@@ -1771,8 +1792,6 @@ static auto geOwnTexture3D() -> void {
     {8, 8, 40, 40, 10, 30, 42, 62, -1, -1, 0x101},                //rows it draws
     {0, 32, 32, 64, 0.03f, 1.5f, 32.03f, 32.5f, -1, -1, 0x101},   //its own first row, filtered, at its last
     {32, 0, 64, 32, 1.5f, 0.03f, 32.5f, 32.03f, -1, -1, 0x101},   //its own first column likewise
-    {0, 32, 32, 64, 0.03f, 1.5f, 32.03f, 32.5f, -1, -1, 0x101},   //its own first row, filtered, at its last
-    {32, 0, 64, 32, 1.5f, 0.03f, 32.5f, 32.03f, -1, -1, 0x101},   //its own first column likewise
     {44, 0, 60, 16, 44, 20, 60, 36, -1, 0.5f, 0},                 //cut at the near plane
     {20, 40, 44, 60, 20, 4, 44, 24, -1, -2, 0x101},               //in perspective
   };
@@ -1801,17 +1820,23 @@ static auto geOwnTexture3D() -> void {
       }
       list.put(GE::Primitive, kind << 16 | vertices.size());
     };
-    list.put(GE::FrameBufferPointer, Picture), list.put(GE::FrameBufferWidth, 64);
-    list.put(GE::FrameBufferPixelFormat, 3), list.put(GE::ShadeMode, 1);
-    list.put(GE::Scissor2, 63 | 63 << 10), list.put(GE::Region2, 63 | 63 << 10);
+    auto frame = [&] {
+      list.put(GE::FrameBufferPointer, Picture), list.put(GE::FrameBufferWidth, 64);
+      list.put(GE::FrameBufferPixelFormat, 3), list.put(GE::ShadeMode, 1);
+      list.put(GE::Scissor2, 63 | 63 << 10), list.put(GE::Region2, 63 | 63 << 10);
+    };
+    auto texture = [&] {
+      list.put(GE::TextureMappingEnable, 1), list.put(GE::TextureAddress0, Picture);
+      list.put(GE::TextureBufferWidth0, 0x04 << 16 | 64), list.put(GE::TextureSize0, 6 << 8 | 6);
+      list.put(GE::TextureFormat, 3), list.put(GE::TextureFunction, 0);  //modulated
+    };
+    frame();
     for(u32 n = 0; n < 12; n++) {
       float x = n * 13 % 50, y = n * 7 % 40;
       put(GE::Triangles, 0x80'019f, {{0, 0, 0xff10'2030 * (n + 1), x, y, 0}, {0, 0, 0x8000'ff00, x + 30, y + 9, 0},
                                      {0, 0, 0xffff'0000, x + 11, y + 28, 0}});
     }
-    list.put(GE::TextureMappingEnable, 1), list.put(GE::TextureAddress0, Picture);
-    list.put(GE::TextureBufferWidth0, 0x04 << 16 | 64), list.put(GE::TextureSize0, 6 << 8 | 6);
-    list.put(GE::TextureFormat, 3), list.put(GE::TextureFunction, 0);  //modulated
+    texture();
     for(auto& q : Quads) {
       list.put(GE::TextureFilter, q.filter);
       float w0 = -q.z0, w1 = -q.z1;  //(x and y as far from the middle as w is, so that they land there)
@@ -1829,6 +1854,16 @@ static auto geOwnTexture3D() -> void {
                               {9.0f / 64, 41.0f / 64, 0xffff'ffff, 36, 40, -1},
                               {1.0f / 64, 49.0f / 64, 0xffff'ffff, 20, 56, -1}});
     list.put(GE::Finish), list.put(GE::End);
+    //and the first quad again, in a list of its own
+    list.address = ListB;
+    frame(), texture();
+    auto& q = Quads[0];
+    list.put(GE::TextureFilter, q.filter);
+    put(GE::TriangleStrip, 0x19f, {{q.u0 / 64, q.v0 / 64, 0xffc0'e0ff, q.x0, q.y0, -1},
+                                  {q.u1 / 64, q.v0 / 64, 0xffc0'e0ff, q.x1, q.y0, -1},
+                                  {q.u0 / 64, q.v1 / 64, 0xffc0'e0ff, q.x0, q.y1, -1},
+                                  {q.u1 / 64, q.v1 / 64, 0xffc0'e0ff, q.x1, q.y1, -1}});
+    list.put(GE::Finish), list.put(GE::End);
   };
   auto drawn = [&](u32 threads, u64 shared, bool decoding) {
     KernelMachine m;
@@ -1844,6 +1879,24 @@ static auto geOwnTexture3D() -> void {
   for(u32 threads : {1u, 2u, 4u, 8u}) {
     for(u64 shared : {u64(0), u64(8192)}) CHECK(drawn(threads, shared, true) == read, true);
   }
+  //The first quad, by itself on two threads, is decoded and waits in a batch (launched, the CPU's guard over VRAM
+  //keeping it so), not drawn at once. (In the list above, the two triangles drawn at once at its end draw every batch
+  //first.)
+  KernelMachine m;
+  m.system.ge.setThreads(2);
+  m.system.ge.drawing.shared = 0;
+  build(m.system.memory, m.system.ge);
+  m.call("sceGeListEnQueue", {ListB, 0, 0xffff'ffff, 0});
+  bool batched = false;
+  for(auto& batch : m.system.ge.drawing.batches) {
+    if(!batch.launched) continue;
+    for(auto& look : batch.looks) {
+      batched |= look.textured && look.pixel.frameBuffer == Picture && look.texture.decoded &&
+                 (look.texture.address & 0x1fff'ffff) == Memory::VRAMBase + Picture;
+    }
+  }
+  CHECK(batched, true);
+  m.system.ge.settle();
 }
 
 //Block transfers among batches (ge/threads.cpp's drawnBefore()): each waits only for the drawing that writes what it
@@ -2232,7 +2285,9 @@ struct DrawingList {
 //polling one (sceKernelGetSystemTimeLow) while a list (with no callback) finishes and starts the one queued behind,
 //whose FINISH then falls due in a spin with no system call, sees that FINISH's callback at the same count of the spin
 //as polling a function that isn't quiet but changes nothing either (sceKernelGetThreadExitStatus of no thread), on
-//each engine. And the same with no list behind, the spin running to its end.
+//each engine. And the same with no list behind, the spin running to its end. (The FINISH taken at the end of a quiet
+//function's syscall, which ends its compiled block, is followed by the block's check of the go's limit anyway: the
+//test can't tell syscall()'s guard for it from none.)
 static auto geQuietFunctions() -> void {
   constexpr u32 Count = KernelMachine::Results + 0x40, Seen = KernelMachine::Results + 0x50;
   auto spun = [&](const char* polled, bool recompile, bool behind) {
@@ -2286,6 +2341,40 @@ static auto geQuietFunctions() -> void {
       if(behind) CHECK(quiet[1] > 0 && quiet[1] < 6000, true);  //B's in the spin
       CHECK(quiet[2], 6000u);
     }
+  }
+  //Each quiet function is dispatched as one, and changes nothing untilNextEvent() looks at: with a thread delayed, an
+  //alarm set, a list's FINISH to come and the controller sampled on a cycle, the next thing's time is where it was
+  //after each.
+  KernelMachine m;
+  auto& memory = m.system.memory;
+  s32 uid = m.kernel.createThread("delayed", 0x0880'1000, 0x10, 0x1000, 0, 0);
+  auto& delayed = *m.kernel.threads[uid];
+  delayed.status = Kernel::Status::Waiting, delayed.wait = Kernel::Wait::Delay, delayed.wakeAt = 90'000;
+  CHECK(m.call("sceKernelSetAlarm", {400, 0x0880'4000, 0}) > 0, true);
+  DrawingList a{memory, ListA, Vertices};
+  a.draw(GE::Sprites, {{0, 0}, {64, 32}});
+  a.finish();
+  m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
+  m.call("sceCtrlSetSamplingCycle", {5555});
+  constexpr u32 Out = KernelMachine::Results + 0x200;
+  memory.write(4, Out, 108), memory.write(4, Out + 0x80, 44);
+  struct Call { const char* name; std::initializer_list<u32> arguments; };
+  for(auto& call : {Call{"sceKernelGetThreadId", {}}, Call{"sceKernelReferThreadStatus", {u32(uid), Out}},
+                    Call{"sceKernelReferThreadRunStatus", {u32(uid), Out + 0x80}},
+                    Call{"sceKernelGetThreadCurrentPriority", {}}, Call{"sceDisplayGetVcount", {}},
+                    Call{"sceKernelGetSystemTime", {Out + 0x100}}, Call{"sceKernelGetSystemTimeLow", {}},
+                    Call{"sceKernelGetSystemTimeWide", {}}, Call{"sceRtcGetCurrentTick", {Out + 0x110}},
+                    Call{"sceKernelSysClock2USec", {Out + 0x100, Out + 0x120, Out + 0x124}},
+                    Call{"sceKernelSysClock2USecWide", {123'456'789, 0, Out + 0x128, Out + 0x12c}},
+                    Call{"sceMpegRingbufferAvailableSize", {Out + 0x140}}}) {
+    u32 n = 0;
+    for(u32 value : call.arguments) m.system.ipu.r[n < 4 ? 4 + n : 8 + n - 4] = value, n++;
+    u64 next = m.kernel.cycles + m.kernel.untilNextEvent();
+    bool quiet = false;
+    m.kernel.dispatch(m.kernel.importCode("test", Kernel::nid(call.name)), quiet);
+    if(!quiet || m.kernel.cycles + m.kernel.untilNextEvent() != next) std::printf("  %s\n", call.name);
+    CHECK(quiet, true);
+    CHECK(m.kernel.cycles + m.kernel.untilNextEvent(), next);
   }
 }
 

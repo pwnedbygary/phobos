@@ -438,6 +438,11 @@ auto GE::ensureDecoded(Batch& batch) -> void {
     std::vector<std::pair<u32, u32>> rowRuns{{0, rows - 1}}, columnRuns{{0, width - 1}};
     if(!reach.all) rowRuns = runs(reach.rows, rows), columnRuns = runs(reach.columns, width);
     if(rowRuns.empty() || columnRuns.empty()) rowRuns.clear(), columnRuns.clear();
+    //(many pieces, as sprites from all over a font's picture make: the rectangle round them, decoded in one go)
+    if(rowRuns.size() * columnRuns.size() > 16) {
+      rowRuns = {{rowRuns.front().first, rowRuns.back().second}};
+      columnRuns = {{columnRuns.front().first, columnRuns.back().second}};
+    }
     rows = rowRuns.empty() ? 1 : rowRuns.back().second + 1;
     auto entry = std::make_shared<Decoded>();
     entry->key = {t.address, t.bufferWidth, t.format, width, t.swizzled, 0, 0, 0, 0, 0};

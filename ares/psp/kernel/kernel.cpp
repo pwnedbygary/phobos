@@ -834,8 +834,9 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   }
   codecDecoders(*this);
   //Functions that only look, or put what they find in memory, changing nothing that has a time to come (what
-  //untilNextEvent() looks at: threads' waits, timers, sound, files' requests, the GE, the controller's sampling): after
-  //one, the CPU's go needn't be cut shorter (syscall()). Games poll some of them in a loop.
+  //untilNextEvent() looks at: the vertical blank, threads' waits, timers, sound, files' requests, the GE, the
+  //controller's sampling): after one, the CPU's go needn't be cut shorter (syscall()). Games poll some of them in a
+  //loop.
   for(auto& function : functions) {
     for(auto name : {"sceKernelGetThreadId", "sceKernelReferThreadStatus", "sceKernelReferThreadRunStatus",
                      "sceKernelGetThreadCurrentPriority", "sceDisplayGetVcount", "sceKernelGetSystemTime",

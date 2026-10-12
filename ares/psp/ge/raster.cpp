@@ -268,6 +268,7 @@ auto GE::texelReach(const Job& job, Reach& reach) const -> void {
 }
 
 auto GE::Reach::mark(std::array<u64, 8>& bits, u32 first, u32 last) -> void {
+  assert(first <= last && last < 512);
   for(u32 word = first / 64; word <= last / 64; word++) {
     u32 from = word == first / 64 ? first % 64 : 0, to = word == last / 64 ? last % 64 : 63;
     bits[word] |= ~0ull >> (63 - to) & ~0ull << from;

@@ -179,8 +179,8 @@ struct GE {
     const u32* decoded;  //its texels already decoded (Decoded), decodedWidth to a row; or none: read from memory
     u32 decodedWidth;
     u32 decodedRows;     //the rows the primitive may take texels from (draw.cpp), all of them decoded
-    //of those, the rows from decodedTop and the columns decodedLeft to decodedRight (not including) are the texels
-    //it can take; a deferred copy (ensureDecoded()) has only those decoded
+    //of those, the rows from decodedTop and the columns decodedLeft to decodedRight (not including) hold every texel it
+    //can take; a deferred copy (ensureDecoded()) has only those decoded, which may be fewer (fetch() checks these)
     u32 decodedTop, decodedLeft, decodedRight;
     const u8* bytes;     //read from memory: where its bytes are in the host's memory, when they're all there
   };
@@ -275,7 +275,6 @@ struct GE {
   struct Reach {
     std::array<u64, 8> rows{}, columns{};
     bool all = false;
-    auto none() const -> bool { return !all && rows == std::array<u64, 8>{}; }
     static auto mark(std::array<u64, 8>& bits, u32 first, u32 last) -> void;  //(first to last, inclusive)
   };
 
@@ -295,7 +294,7 @@ struct GE {
     std::vector<u8> deferClut;
     u32 deferFirst = 0, deferLast = 0;
     //The texels of that deferred texture its jobs can take (record(): texelReach()), in the rows and columns marked;
-    //or any of them (reachAll), where a job's can't be told.
+    //or any of them (reach.all), where a job's can't be told.
     Reach reach;
   };
 
