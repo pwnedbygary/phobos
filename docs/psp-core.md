@@ -10316,3 +10316,78 @@ GE, draw, 3D, curves, states and measure groups), `py/` (the analyses: `countv*.
 `texrange.py`, `rpix*.py`, `rproj*.py`, `fitchords.py` and `minimax.py` the chords, `lprod*.py`, `sweep*.py` and
 `lsum.py` lighting), `ours-base` and `ours-a` (the core's run of every round before and after), `lib-a` (the library
 run), `lib-base` (the base's runs of the games that differ), `sheet-a*.png` (their captures side by side).
+
+## Part 77: memstick: is the memory stick — Colin McRae Rally 2005 Plus's save
+
+On branch `cursor/psp-colinsave-2b67`, begun on `cursor/psp-dialogs-2b67` (PR #221, the system's dialogs; part 73) and
+merged with master since (#221, #222, #224 and #225). Part 74 is #224's; 76 and 78 are other branches', and 79 is kept
+for another. Sources: the game itself, traced with a scratch runner (each savedata call's parameters and answer, the
+files on the stick after it, every system call over the frames around the save with its caller, and every file it
+opened); pspsdk's psputility_savedata.h and pspiofilemgr.h; pspautotests' utility/savedata tests (none saves without a
+data buffer); uOFW's iofilemgr.c (the PSP's sceIoAssign() makes a name an alias over a file system and a block device,
+and alias names are compared whatever their case: `strcmp_bs`); PPSSPP read only as a description of the PSP (its file
+system's names for the memory stick, its savedata notes; nothing copied). JPCSP was not read. Save states are unchanged
+(StateVersion 26): the kernel gains no state.
+
+**The problem** (a play-tester's batch report, item 2). Answering Yes to "Do you wish to create an Auto-Save file?"
+gave "Save failed! Check Memory Stick Duo™ in the Memory Stick Duo™ slot and please try again."; the folder
+`PSP/SAVEDATA/ULES001110000/` was there with PARAM.SFO (4912 bytes), ICON0.PNG (15912) and PIC1.PNG (65891), but
+OPTIONS.DAT was 0 bytes, and the next boot found no save and asked again.
+
+**What the game asks for.** One savedata call, an autosave (mode 1) in the parameters' second size (1500 bytes, 0x5dc:
+no key, no secure version), game ULES00111, save "0000", file OPTIONS.DAT, overwrite 1, with no data: dataBuf 0,
+dataBufSize 0, dataSize 0; sfoParam's title "Colin McRae Rally 2005 plus", detail "Save game for Colin McRae Rally 2005
+Plus", parental level 2, ICON0 and PIC1 given (their sizes the files'). The kernel made the folder, the icons and
+PARAM.SFO, wrote OPTIONS.DAT with the 0 bytes it was given, and answered 0, which the game took: the save utility's
+part was done. What failed came after it. At boot the game had assigned a device of its own,
+`sceIoAssign("memstick:", "msstor0p1:/", "fatms0:", 0)` (the stick's FAT file system, read and write), which the
+kernel answers 0 and forgets (the devices here have their names for good); four frames after the autosave it opens
+`memstick:/PSP/SAVEDATA/ULES001110000/TIMES.DAT` (sceIoOpenAsync, write, create, truncate), polls it, and closes it:
+the open had failed as no such device (0x80010013, the descriptor kept only to hold that result), the poll took the
+result and the descriptor went with it, so the close was BAD_FILE (0x80020323), and the game showed "Save failed!".
+At boot, likewise, it looks for its save by opening `memstick:/.../CMR5TS.DAT` for reading (asynchronously too, as
+every open of its own files is): no device, so no save, whatever the stick held. On a PSP the assignment makes
+memstick: an alias of the stick's file system, as fatms0: is, its name matched whatever its case (uOFW); PPSSPP's file
+system takes memstick: as ms0: (by its notes, whatever was assigned), and the kernel's own devctl already answered
+memstick:'s stick questions (inserted, formatted) as the stick's.
+
+**The fix** (`io.cpp`, `deviceName()`): memstick: is ms0:, beside fatms0: and ms:, so every file call (open, read,
+write, the asynchronous ones, status, folders, removing, renaming, the working folder) reaches the stick through it,
+whatever its case. Chosen: memstick: is the stick whether a game assigned it or not (on a PSP there's no memstick:
+before the assignment). Keeping what sceIoAssign assigned would be state (a list of names in the save states) for no
+game that needs it, and the assignments the games make (Metal Gear Acid's and Ridge Racer's disc0: through isofs0:,
+this one) name devices the kernel has anyway. What stays apart from a PSP, none of it met by a known game: memstick:
+answers before any assignment, assigning it elsewhere is ignored, and sceIoAssign answers 0 where a PSP's says
+ALIAS_USED for a name in use (as before).
+
+**The game now** (the play-tester's fresh.txt on an empty stick, then reload.txt on the same stick, with the base's
+runner and this branch's, both clean): before, frame 2460 "Save failed!", the stick holding PARAM.SFO 4912, ICON0.PNG
+15912, PIC1.PNG 65891 and OPTIONS.DAT 0, and the second boot's "AUTO-SAVE." question again at 2100. Now, after the
+empty autosave, the game writes TIMES.DAT (3,897,120 bytes) and CMR5TS.DAT (28) itself, both opened asynchronously,
+then autosaves again with its data (dataBuf given, 228,760 bytes of OPTIONS.DAT), and goes on to its loading screen.
+The second boot opens CMR5TS.DAT, says "AUTO-LOAD. Loading data. Do not remove Memory Stick Duo™ or switch off the
+system." (2100), autoloads OPTIONS.DAT (mode 0: 228,760 bytes read, bind 1021), reads TIMES.DAT and reaches its main
+menu (CHALLENGES - CHAMPIONSHIP - CAREER, 3000 on); the stick's six files are as the first boot left them. A stick
+holding the broken save the base left (OPTIONS.DAT empty, no TIMES.DAT or CMR5TS.DAT) needs no clearing: the first
+boot asks again, Yes writes all six files at a fresh stick's sizes, and the next boot autoloads (the review's run).
+
+**A save mode given no data** is left as it was: the kernel writes the named file empty (and lists it secure in
+PARAM.SFO), where PPSSPP's notes write no data file at all without a buffer and leave it out of SAVEDATA_FILE_LIST
+(their note on it names mode 13, but the condition holds for every save mode). No pspautotests recording saves
+without a buffer, and here the game's second autosave writes OPTIONS.DAT over it 31 frames later, so nothing it does
+depends on which.
+
+**Other games** (`two-boots.sh`: each booted twice on one stick, Cross every 5 s, with the base's runner and this
+branch's): twelve early-saving games, of which five write a save in that time (Valkyria Chronicles II and III, Shining
+Blade, Daxter, Ridge Racer 2); every one of the 24 boots leaves the same files at the same sizes with either runner,
+and the captures that differ are mid-movie frames. The test (`utility savedata through memstick: (Colin McRae Rally
+2005 Plus)`) makes the game's calls as traced (each open asynchronous, polled), and beyond them its files' status and a folder
+listing through memstick:, memstick: in capitals,
+a rename to ms0: (the same device), a relative open from a working folder on memstick:, and memstick: with no
+assignment.
+
+**Checks.** On the branch merged with master (340857fe9): `tests/psp/run-tests.sh` 467 groups, 0 failures;
+`tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. Colin McRae
+again with the merged runner, fresh.txt then reload.txt: the same six files at the same sizes as before the merge,
+"AUTO-LOAD." at 2100 and the main menu at 3000. The scratch (the scratch runner, the scripts, the runs and their
+captures) is in `~/phobos-work/scratch/colinsave/` on the Mac it was made on, not in the repository.
