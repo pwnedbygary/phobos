@@ -352,6 +352,10 @@ struct GE {
       //pixel's middle, rounded down: (y[0] * along + rise * (16x + 8 - x[0])) / (16 * along).
       s64 x[2], y[2], along, rise;  //along: x[1] - x[0], never 0; rise: y[1] - y[0]
       bool steep;
+      //Anti-aliased (ANTI_ALIAS_ENABLE, not in clear mode): each pixel's alpha its coverage, its texel its own place
+      //(raster.cpp's linePixels()); slope: rise / along in 65536ths, cut toward zero, what the coverage steps by
+      bool smooth;
+      s64 slope;
       s32 first, last;
       bool flat, shines, perspective;
       u32 flatColor, flatSpecular;

@@ -33,11 +33,12 @@ on a real PSP, reads back the exact pixels and saves them, so the core can be co
    `/opt/pspdev`, with `psp-config` on the PATH): `make` gives `EBOOT.PBP`. `make SMOKE=1` gives a quick version for
    trying in an emulator first, PPSSPP's PPSSPPHeadless, with `-i` (its ARM64 JIT trips an assertion on one of
    round 3's recorder entries) and `--graphics=software`. It runs round 3's VFPU and FPU tests (the big ones cut
-   short), the FPU probes and the GE's tests (rounds 2-6) at once, then leaves; its results say nothing about a
+   short), the FPU probes and the GE's tests (rounds 2-7) at once, then leaves; its results say nothing about a
    PSP. Run `make clean` when switching between the two.
 2. On a PSP with custom firmware that runs homebrew, copy `EBOOT.PBP` to a folder under `PSP/GAME` on the memory
    stick (say `PSP/GAME/PSPMEASURE`) and start it. Keep the charger in. Up and down pick a line of the menu, and X
    runs it:
+   - Round 7: the GE's anti-aliased lines (about 1.5 MB)
    - Round 6: the GE's time, lighting, reciprocal, curves (about 7 MB)
    - Round 5: the GE's steps, lighting's share, texels (about 3 MB)
    - Round 4: the GE's lines, boxes, DXT and curves (about 8 MB)
@@ -248,14 +249,34 @@ Round 6 (about 7 MB, `manifest6.txt`, which also lists every timing case) takes 
   last, where the GE may stall on purpose).
 - **The driver's statuses** while a list draws, and with its FINISH's interrupt held off (`ge-statuses`).
 
+Round 7 (about 1.5 MB, `manifest7.txt`) takes anti-aliased lines (`GU_LINE_SMOOTH`) past round 4's
+`lines-smooth`, which pinned their coverage only for white, opaque lines falling to the right over black
+(docs/psp-core.md, part 78):
+
+- **Every octant** (`aa-slopes`): shallow and steep, falling and rising, at two slopes, each starting at every
+  sixteenth along x and drawn both ways over the same segments, white over black: the coverage of every direction,
+  and which end it's stepped from.
+- **Level, upright and diagonal lines** (`aa-axes`): each both ways, at every sixteenth across (a level line from
+  along its row's edge, where the core gives it no coverage, to through its pixels' middles), long and short.
+- **The vertices' alpha** (`aa-alpha`): `lines-smooth`'s lines with each cell's vertex alpha its number, 0 to 255:
+  whether the coverage replaces the alpha or scales it.
+- **Blending over a known background** (`aa-blend`): a colored line over 0x80c06020 in eight modes (none, the usual
+  source alpha over, additive, fixed and reverse-subtract factors, the destination's alpha, twice the source alpha,
+  clear mode), each with and without the alpha test above 0.
+- **Textures** (`aa-textured`): every vertex at one texel, or a texel ramp, in replace, modulate and bilinear: which
+  texels a line's pixels take (Dead or Alive Paradise's edge pass samples the frame buffer it draws into), and the
+  texel's alpha against the coverage (read through blending: the frame buffer's alpha is the stencil's).
+- **In 3D** (`aa-3d`): colored and textured lines under identity matrices, against through mode's, some with the
+  texture scaled and offset.
+
 ### How the GE's comparison works
 
 The program computes nothing itself. `tests/psp/measure.cpp` runs the same program in Phobos's core, through its
 menu as a person would (the GE's tests, starting afresh, the tests again, round 3, the probes, round 4, round 4
-again over counts left as the earlier program left them, round 5, round 6, leaving), and checks every file is written
-(that the stall check got past its stall, and round 6's timing records are whole); with `PSP_GE_RESULTS` set to a
-`results/ge` folder, it lists what differs from that folder, and for round 6's timing files each case's middle times
-here and there (`PSP_GE_OURS` keeps the core's own files for a closer look):
+again over counts left as the earlier program left them, round 5, round 6, round 7, leaving), and checks every file
+is written (that the stall check got past its stall, and round 6's timing records are whole); with `PSP_GE_RESULTS`
+set to a `results/ge` folder, it lists what differs from that folder, and for round 6's timing files each case's
+middle times here and there (`PSP_GE_OURS` keeps the core's own files for a closer look):
 
 ```
 tools/psp-test-programs/build.sh /tmp/programs   # builds pspmeasure.elf among the test programs

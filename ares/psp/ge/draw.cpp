@@ -23,7 +23,8 @@
 //  - Points: the pixel each vertex is in.
 //  - Lines (each two vertices, or a strip): a pixel wide, by the "diamond exit" rule (see line()), colors, depth, fog
 //    and texture coordinates blended along them, straight (unmeasured: not stepped as triangles' are). In 3D they're
-//    cut at the near plane too.
+//    cut at the near plane too. Anti-aliased, a pixel's alpha is its coverage, its texel the one at its own place
+//    (raster.cpp's linePixels()).
 //A vertex without a color takes the material's ambient color (AMBIENT_COLOR, AMBIENT_ALPHA).
 //(Coverage, the sample points and how texture coordinates are stepped were measured on a PSP (docs/psp-core.md,
 //tools/psp-measure), where PPSSPP's software renderer, which the rest follows, has triangles sampled 7/16 in. Lines
@@ -271,12 +272,14 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     u32 height = std::min<u32>(texture.height, 512);
     bool filters = commands[TextureFilter] & 0x101;
     float lowest = kind == Sprites || kind == Points ? (filters ? 0.5f : 0.0f) : 2.0f;
-    if((minV >= lowest || texture.clampV) && maxV + 2 < height) {
+    //(anti-aliased lines, as line() marks them, take the texels at their pixels, not at their vertices: all of them)
+    bool smooth = (kind == Lines || kind == LineStrip) && (commands[AntiAliasEnable] & 1) && !pixel.clear;
+    if(!smooth && (minV >= lowest || texture.clampV) && maxV + 2 < height) {
       u32 reach = maxV + 2 > 0 ? u32(maxV + 2) : 0;  //(all of them below the top, held at it)
       rows = std::min<u32>((reach + 8) & ~7u, height);
     }
     u32 width = std::min<u32>(texture.width, 512);
-    if((minU >= lowest || texture.clampU) && maxU + 2 < width) {
+    if(!smooth && (minU >= lowest || texture.clampU) && maxU + 2 < width) {
       u32 reach = maxU + 2 > 0 ? u32(maxU + 2) : 0;
       columns = std::min<u32>((reach + 8) & ~7u, width);
     }
@@ -399,7 +402,6 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     break;
   case Lines:
   case LineStrip:
-    if(commands[AntiAliasEnable] & 1) note("anti-aliased lines (ANTI_ALIAS_ENABLE) are drawn aliased");
     for(u32 first = 0; first < count; first += strip) {
       u32 end = std::min(first + strip, count);
       for(u32 n = first; n + 1 < end; n += kind == Lines ? 2 : 1) {
@@ -1161,8 +1163,8 @@ static auto leavesDiamond(s64 ax, s64 ay, s64 bx, s64 by, s64 x, s64 y) -> bool 
 //middle column (its middle row, along y), held to its ends; with flat shading it takes its second vertex's color;
 //in 2D, texture coordinates are stepped from the left (top) end, as for sprites and triangles (shortStep()).
 //pspautotests' gpu/exact/lines checks lines by CRCs of whole pictures, which this rule doesn't meet: the PSP's rule
-//differs somewhere it doesn't say. Anti-aliasing (ANTI_ALIAS_ENABLE) isn't emulated: that program found it changing
-//nothing without blending, and what alpha it gives isn't known.
+//differs somewhere it doesn't say. Anti-aliased lines (ANTI_ALIAS_ENABLE) light the same pixels, each with its
+//coverage for its alpha (raster.cpp's linePixels()).
 auto GE::line(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void {
   auto& pixel = look.pixel;
   s64 x0 = fixed(from.x), y0 = fixed(from.y), x1 = fixed(to.x), y1 = fixed(to.y);
@@ -1222,6 +1224,8 @@ auto GE::line(const Look& look, const Vertex& from, const Vertex& to, bool persp
   if(along < 0) std::swap(x0, x1), std::swap(y0, y1), std::swap(ends[0], ends[1]), along = -along, rise = -rise;
   l.x[0] = x0, l.x[1] = x1, l.y[0] = y0, l.y[1] = y1, l.along = along, l.rise = rise;
   l.steep = steep;
+  l.smooth = (commands[AntiAliasEnable] & 1) && !pixel.clear;
+  l.slope = rise * 65536 / along;  //(C++'s division cuts toward zero)
   l.first = s32(first), l.last = s32(last);
   s64 acrossFirst = acrossAt(first), acrossLast = acrossAt(last);
   s32 lowest = s32(std::min(acrossFirst, acrossLast)), highest = s32(std::max(acrossFirst, acrossLast));

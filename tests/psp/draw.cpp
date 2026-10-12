@@ -566,6 +566,68 @@ static auto drawLines() -> void {
   for(u32 x = 0; x < 8; x++) CHECK(c.pixel(x, 2), x | 3 << 8);
 }
 
+//Anti-aliased lines (ANTI_ALIAS_ENABLE; raster.cpp's linePixels()): five of round 4's lines-smooth cells as the owner's
+//PSP drew them (tools/psp-measure's lineCells(): cell (i, j)'s white line from i and j sixteenths past (4, 4) to
+//7.5 and 2.25 pixels further, blended by its alpha over black, each pixel's red its alpha), every pixel the same
+//and none other lit: cells 93 and 173 start past their first column's middle (the slope cut short shows there), cell
+//8 has a pixel of 128 and one of 0. Unmeasured, and checked as chosen: the coverage replaces the color's alpha, a
+//steep line is a shallow one turned, and a textured one takes the texel at its pixel's middle.
+static auto drawLinesSmooth() -> void {
+  struct Lit { u32 x, y, alpha; };
+  struct Cell { u32 i, j; std::vector<Lit> lit; };
+  std::vector<Cell> cells = {
+    {0, 0, {{4, 4, 39}, {5, 4, 116}, {6, 4, 64}, {7, 5, 13}, {8, 5, 90}, {9, 5, 89}, {10, 5, 12}}},
+    {13, 5, {{4, 4, 57}, {5, 4, 123}, {6, 4, 46}, {7, 5, 31}, {8, 5, 108}, {9, 5, 72}, {10, 6, 5}, {11, 6, 82}}},
+    {13, 10, {{4, 4, 119}, {5, 4, 43}, {6, 5, 34}, {7, 5, 111}, {8, 5, 68}, {9, 6, 8}, {10, 6, 85}, {11, 6, 94}}},
+    {15, 15, {{5, 5, 28}, {6, 5, 104}, {7, 5, 75}, {8, 6, 2}, {9, 6, 79}, {10, 6, 100}, {11, 6, 24}}},
+    {8, 0, {{4, 4, 0}, {5, 4, 77}, {6, 4, 102}, {7, 4, 25}, {8, 5, 52}, {9, 5, 128}, {10, 5, 51}, {11, 6, 26}}},
+  };
+  auto smooth = [](Canvas& c, bool blend) {
+    c.ge.commands[GE::AntiAliasEnable] = 1;
+    c.ge.commands[GE::AlphaBlendEnable] = blend;
+    c.ge.commands[GE::BlendMode] = 2 | 3 << 4;  //the source's alpha, and one minus it
+  };
+  for(bool steep : {false, true}) {
+    for(u32 alpha : {0xffu, 0x20u}) {
+      for(auto& cell : cells) {
+        Canvas c;
+        smooth(c, true);
+        float x = 4 + cell.i / 16.0f, y = 4 + cell.j / 16.0f;
+        u32 white = alpha << 24 | 0xff'ffff;
+        if(!steep) c.draw(GE::Lines, {{0, 0, white, x, y, 0}, {0, 0, white, x + 7.5f, y + 2.25f, 0}});
+        else c.draw(GE::Lines, {{0, 0, white, y, x, 0}, {0, 0, white, y + 2.25f, x + 7.5f, 0}});
+        u32 expected[16][16] = {};
+        for(auto& p : cell.lit) expected[p.y][p.x] = p.alpha;
+        bool same = true;
+        for(u32 py = 0; py < 16; py++) {
+          for(u32 px = 0; px < 16; px++) {
+            same &= ((steep ? c.pixel(py, px) : c.pixel(px, py)) & 0xff'ffff) == expected[py][px] * 0x01'0101;
+          }
+        }
+        CHECK(same, true);
+      }
+    }
+  }
+  //the alpha test drops a pixel of no coverage (the game's: above 0); the one through its pixel's middle is drawn
+  Canvas tested;
+  smooth(tested, false);
+  tested.ge.commands[GE::AlphaTestEnable] = 1;
+  tested.ge.commands[GE::AlphaTest] = 6 | 0xff << 16;
+  tested.draw(GE::Lines, {{0, 0, 0xffff'ffff, 4.5f, 4, 0}, {0, 0, 0xffff'ffff, 12, 6.25f, 0}});
+  CHECK(tested.pixel(4, 4), 0u);
+  CHECK(tested.pixel(9, 5) & 0xff'ffff, 0xff'ffffu);
+  //textured, the texel at each pixel's middle (u x + 0.5, v y + 0.5), whatever the ends' coordinates (0, 0); clamped,
+  //so the rows decoded must reach past the ends' (row 12, where the vertices' v would take the first 8 rows alone)
+  Canvas textured;
+  smooth(textured, false);
+  textured.texture(3, 16, 16, 16);
+  textured.ge.commands[GE::TextureFunction] = 3;  //replace, the color's alpha kept (the coverage)
+  textured.ge.commands[GE::TextureWrap] = 0x101;
+  for(u32 n = 0; n < 256; n++) textured.memory.write(4, Texture + n * 4, n % 16 | n / 16 << 8 | 0xff00'0000);
+  textured.draw(GE::Lines, {{0, 0, 0, 0, 12.5f, 0}, {0, 0, 0, 8, 12.5f, 0}});
+  for(u32 x = 0; x < 8; x++) CHECK(textured.pixel(x, 12) & 0xff'ffff, x | 12 << 8);
+}
+
 //Shapes whose corners are all at one depth draw every pixel at that depth: Chili Con Carnage's logo, a fan at depth
 //65535 drawn with the depth test "at least as near" (7) over a background at 65535, at each of the sizes its frames
 //draw it, lost stripes of pixels to depths blended a hair under 65535 and cut to 65534. Each fan, and a line at that
@@ -1491,7 +1553,8 @@ auto drawTests() -> Tests {
     {"draw texture functions", drawTextureFunctions}, {"draw pixel tests", drawPixelTests}, {"draw blending", drawBlending},
     {"draw dither and masks", drawDitherAndMasks}, {"draw triangles", drawTriangles}, {"draw steps", drawSteps},
     {"draw texel steps", drawTexelSteps}, {"draw ambient and filters", drawAmbientAndFilters},
-    {"draw lines", drawLines}, {"draw corners at one depth", drawOneDepth}, {"draw DXT textures", drawDXT},
+    {"draw lines", drawLines}, {"draw anti-aliased lines", drawLinesSmooth},
+    {"draw corners at one depth", drawOneDepth}, {"draw DXT textures", drawDXT},
     {"draw vertex formats", drawVertexFormats},
     {"blit sample", blitSample}, {"doublelist sample", doublelistSample}, {"clut sample", clutSample},
     {"blend sample", blendSample}, {"cube sample", cubeSample}, {"celshading sample", celshadingSample},
