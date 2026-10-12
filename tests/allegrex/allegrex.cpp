@@ -552,6 +552,29 @@ auto recompilerCases() -> void {
   rewrite.run(rewriting);
   CHECK(rewrite.gpr(s0), 11);
 
+  // The same for a function whose page the owner takes out of the page table after it was compiled (as the PSP's
+  // memory does with VRAM a renderer holds), rewrites, and puts back: the code compiled there is forgotten all the
+  // same.
+  constexpr uint32_t Function = Base + 0x2000;
+  Machine unlisted;
+  unlisted.cpu.syscallHook = [&](u32) -> bool {
+    uint32_t page = (Function & 0x1fffffff) >> 12;
+    auto listed = unlisted.cpu.table[page];
+    unlisted.cpu.table[page] = nullptr;
+    unlisted.ram.write32(Function, addiu(s0, s0, 10));
+    unlisted.cpu.recompiler.invalidateRange(Function, 4);
+    unlisted.cpu.table[page] = listed;
+    return true;
+  };
+  unlisted.run({jal(Function), nop, syscall(1), jal(Function), nop},
+               [](Allegrex& s) {
+                 auto& ram = static_cast<TestCPU&>(s).ram;
+                 ram.write32(Function, addiu(s0, s0, 1));
+                 ram.write32(Function + 4, jr(ra));
+                 ram.write32(Function + 8, nop);
+               });
+  CHECK(unlisted.gpr(s0), 11);
+
   // A branch in the last word of a 4 KiB section, so its delay slot is in the next one: taken, not taken, and a
   // likely branch not taken, which skips the delay slot.
   for(auto [branch, delaySlotRuns, nextRuns] : {std::tuple{beq(zero, zero, 2), 1u, 0u},

@@ -47,14 +47,21 @@ auto Allegrex::Recompiler::invalidate(u32 address) -> void {
   writable(index);  //no code there now: stores may go straight to it again
 }
 
+//A page the page table leaves out has nothing to do here unless code was compiled from it while it was listed (code
+//is only compiled from pages it lists: run()), and its store table entry is already none (whoever takes a page out
+//of the table tells writable()). Memory reports every
+//change to VRAM for all four of its copies, three of which the table never lists, and a hardware renderer's every
+//primitive changes VRAM pages that it holds out of the table (God of War: Ghost of Sparta's 18,500 a frame).
 auto Allegrex::Recompiler::invalidateRange(u32 address, u32 size) -> void {
   if(sections.empty() || !size) return;
   u32 first = (address & 0x1fff'ffff) / SectionSize;
   u32 last = ((address + size - 1) & 0x1fff'ffff) / SectionSize;
   for(u32 index = first;; index = (index + 1) % SectionCount) {
-    sections[index].reset();
-    sectionTable[index] = nullptr;
-    writable(index);
+    if(sections[index] || !self.pages || self.pages[index]) {
+      sections[index].reset();
+      sectionTable[index] = nullptr;
+      writable(index);
+    }
     if(index == last) break;
   }
 }
