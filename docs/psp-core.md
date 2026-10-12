@@ -10392,3 +10392,75 @@ assignment.
 again with the merged runner, fresh.txt then reload.txt: the same six files at the same sizes as before the merge,
 "AUTO-LOAD." at 2100 and the main menu at 3000. The scratch (the scratch runner, the scripts, the runs and their
 captures) is in `~/phobos-work/scratch/colinsave/` on the Mac it was made on, not in the repository.
+
+## Part 81: input — a right stick for patched games, the keyboard's input types, 7th Dragon 2020-II past its certificate
+
+On branch `cursor/psp-input-b00-2b67`, on master (`6ab2c5583`, then `b7ea296f4`). The task: items 2 and 5 of the
+play-testers' batch 00 (Armored Core's True Analogs images, the 7th Dragon games' names). Clean room: PPSSPP read as a
+guide to the PSP's behaviour only (its convention for a right stick, its note on a negative ATRAC size), no code
+copied or translated; JPCSP not read. Save states keep their layout (26).
+
+### A right stick for games patched to read one (a convention, not the PSP's)
+
+The "True Analogs" mods of the four Armored Core Portable games (Formula Front International, 3, Silent Line, Last
+Raven) read a second stick from bytes 10 and 11 of each SceCtrlData sample, as PPSSPP fills them from the host's
+right stick (128 centred); pspsdk calls them reserved, and a PSP, having no right stick, leaves them 0. Read as 0
+(up and left held fully), the mods' camera pitched up at the sky from "GO!!!" on and the AC turned left on its own.
+
+The core now fills them so, as the owner chose (a compatibility convention, not hardware): `ctrl.cpp` keeps the
+host's right stick beside the left one in each sample, and every read that returns SceCtrlData (peek and read,
+positive and negative, up to 64 samples) writes it at 10 and 11, 128 centred, the last four bytes 0. Digital
+sampling centres it as it centres the left stick. It comes from the node tree's "R-Stick X" and "R-Stick Y" (the
+same -32768 to 32767 the left stick takes, as 0 to 255). States don't hold it: it's the host's, not the PSP's, and a
+loaded state's samples read 128 until the next sample takes the stick as it is.
+
+Android hands the right stick to the core whatever the PSP "Right stick" setting is: Off presses nothing else, and
+Face buttons, D-pad and Analog keep doing what they did; a game that reads bytes 10 and 11 gets the stick either way
+(`GameInputState.kt`, the setting's description). `PhobosRunner.cpp` already gave setInput()'s rx and ry to an axis
+named "R-Stick X"/"R-Stick Y". The runner takes `R-StickX:` and `R-StickY:` in `--press` and `--script`, as it takes
+the left stick (`tools/psp-runner/README.md`).
+
+Checked with Formula Front International from its Central Menu state into a battle (`c1.txt`, then the right stick):
+at rest the camera stays level behind the AC and its heading holds; the right stick held right turns the AC round,
+down looks at the ground, up looks back up past the horizon.
+
+### The keyboard's answer as the field's input types take it
+
+A field's input types (SceUtilityOskData's at 16: pspsdk's PSP_UTILITY_OSK_INPUTTYPE_*, 0 for all) are the
+character sets the PSP's keyboard offers for it, and a PSP's keyboard types nothing else. The automatic answer gave
+an empty field ASCII "PSP" whatever they were; both 7th Dragon games ask for their hero's name in an empty field of
+full-width Latin letters alone (0x0c00, limit 8), and their font shows no ASCII: 2020's hero was nameless.
+
+`keyboardConform()` (utility.cpp) now takes text as a field's types allow, as typing it on the PSP's keyboard would:
+each character the field doesn't take becomes one it does where there's one (the other width of an ASCII letter,
+digit or sign, the other case, the other kana) and is left out where there isn't; a space is full-width (U+3000)
+where the field takes full-width characters and no half-width ones, and none where it takes digits alone; line breaks
+stay. The automatic answer's nickname goes through it (0x0c00: U+FF30 U+FF33 U+FF30), and a field taking none of its
+letters (digits alone, kana alone) keeps its own text; a field of full-width spaces is blank too. The game's own text
+at first stays as it was (Ridge Racer 2's "DAMACY"). The app's keyboard (part 73) does the same as the player types
+(`PspKeyboardField.accept()`), and the core conforms the app's answer again. Phobos's choice for what the PSP's
+keyboard would do; no recording shows a PSP's answer to a field's types.
+
+7th Dragon 2020's name screen shows "PSP" and the voice screen after it too (`v-7d1-name/frame-000200.png`,
+`frame-000800.png`).
+
+### 7th Dragon 2020-II past its certificate: a negative ATRAC size
+
+With the name taken, 2020-II's "Murakumo Certificate" still froze for good (frame 1320 on). Traced: as the card
+shows, the game reads a sound file whole into a buffer and hands it to `sceAtracSetDataAndGetID` with the size
+0xffffffff; Phobos refused it (0x80630006: the size doesn't fit memory), and the game waited for that sound for good.
+PPSSPP notes the same of Tales of VS, so the PSP's library evidently takes such a size; Phobos now takes a size whose
+top bit is set as reaching to the end of the memory the buffer is in (`atrac.cpp`). The card then passes and the
+story goes on (`v-7d2-cert/frame-001560.png`, the Diet chamber; `frame-003600.png`, the first conversation). The name
+wasn't what stopped it.
+
+### Tests
+
+- `tests/psp/files.cpp` "controller right stick": centred in digital sampling; the stick in peek and read, positive
+  and negative, the last four bytes 0; through a state, 128 until the next sample. `tests/psp/ares/system.cpp`: the
+  node tree's "R-Stick X"/"R-Stick Y" reach the kernel, 128 untouched.
+- `tests/psp/utility.cpp` "utility keyboard input types": the nickname for 0x0c00, full-width spaces, a limit, lower
+  case alone, ASCII among the types, URL, digits alone, hiragana alone, a game's own text, types not known.
+- `tests/psp/dialogs.cpp` "dialogs front end: keyboard": the app's answer conformed (digits alone; 0x0c00).
+- `tests/psp/atrac.cpp` "atrac setting": 0xffffffff takes the whole file.
+- Android: `PspDialogsTest.keyboardFieldsTakeOnlyTheirInputTypes`, `PspRightStickTest`.
