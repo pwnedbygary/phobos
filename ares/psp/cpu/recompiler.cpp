@@ -144,7 +144,7 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
   mov64(sreg(2), imm((sljit_sw)writePages.data()));
   auto bodyLabel = sljit_emit_label(compiler);
   calls = false;
-  prefixesAtRest = false;  //(not known as a block starts: recompiler-vfpu.cpp)
+  prefixes = {};  //(not known as a block starts: recompiler-vfpu.cpp)
   forgetAll();  //(nor is anything held: a block before it may have left anything in those registers)
   u32 count = 0;          //instructions in the block so far
   bool pcStored = false;  //whether ipu.pc and ipu.pd already say where to go after the last instruction

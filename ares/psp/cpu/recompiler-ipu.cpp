@@ -56,7 +56,7 @@ auto Allegrex::Recompiler::emitNative(u32 address, u32 instruction, u32 count, b
   case 0x12: return emitCOP2(instruction);
 
   //the VFPU (recompiler-vfpu.cpp)
-  case 0x18: case 0x19: case 0x1b: case 0x34: case 0x3c: case 0x3f:
+  case 0x18: case 0x19: case 0x1b: case 0x34: case 0x37: case 0x3c: case 0x3f:
     return emitVFPU(address, instruction, count, delaySlot);
 
   //CACHE: nothing to do, as in the interpreter

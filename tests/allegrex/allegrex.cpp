@@ -943,7 +943,7 @@ auto matchesInterpreter() -> void {
       uint32_t byteOffset = region + random(256);
       uint32_t word = 0;
       uint32_t vd = random(128), vs = random(128), vt = random(128), size = 1 + random(4);
-      switch(random(58)) {
+      switch(random(62)) {
       case  0: word = addiu(d, s, immediate); break;
       case  1: word = slti(d, s, immediate); break;
       case  2: word = sltiu(d, s, immediate); break;
@@ -1040,6 +1040,27 @@ auto matchesInterpreter() -> void {
       case 57: {  // vnop, vsync, vflush, cache
         const uint32_t waits[] = {0xffff0000u, 0xffff0320u, 0xffff040du};
         word = random(4) ? waits[random(3)] : 0xbc000000u | random(0x400000);
+        break;
+      }
+      case 58: word = 0xdf000000u | random(2) << 23 | vt << 16 | random(0x10000); break;  // viim, vfim
+      case 59: {  // vsbn, vhdp, vcrs, vdet, vscmp
+        const uint32_t operations[] = {0xc2, 0xcc, 0xcd, 0xce, 0xdd};
+        word = vfpuOp(operations[random(5)], size, vd, vs, vt);
+        break;
+      }
+      case 60: {  // vmscl, vcrsp and vqmul; vmmov, vmidt, vmzero, vmone and vrot (and group 7's reserved codes)
+        const uint32_t codes[] = {0x00, 0x03, 0x06, 0x07, 0x01, 0x20};
+        uint32_t operation = random(3) ? 0x1e7 : 0x1e4 + random(2);
+        uint32_t code = codes[random(6)];
+        word = vfpuOp(operation, size, vd, vs, operation == 0x1e7 ? code | (code == 0x20 ? random(32) : 0) : vt);
+        break;
+      }
+      case 61: {  // vf2i, vcmov, and more of the unary group: vidt, vrsq, vsin, vcos, vf2h, vh2f, vs2i, vi2s, vcst
+        const uint32_t codes[] = {0x03, 0x11, 0x12, 0x13, 0x32, 0x33, 0x3b, 0x3f, 0x60};
+        uint32_t kind = random(4);
+        if(kind == 0) word = vfpuOp(0x1a4, size, vd, vs, random(128));                         // vf2in ... vf2id
+        else if(kind == 1) word = vfpuOp(0x1a5, size, vd, vs, 0x20 | random(2) << 3 | random(8));  // vcmovt, vcmovf
+        else word = vfpuOp(0x1a0, size, vd, vs, codes[random(9)] | (random(9) == 8 ? random(32) : 0));
         break;
       }
       }

@@ -459,7 +459,11 @@ struct Allegrex {
   template<u32 Size> auto vfpuRestCompare(u32 condition, u32 vs, u32 vt) -> void;
   template<u32 Size, u32 Op> auto vfpuRestBits(u32 vd, u32 vs, u32) -> void;
   template<u32 Size> auto vfpuRestToFloat(u32 vd, u32 vs, u32 scale) -> void;
+  template<u32 Size, bool Max> auto vfpuRestMinMax(u32 vd, u32 vs, u32 vt) -> void;
+  template<u32 Size, bool Less> auto vfpuRestSet(u32 vd, u32 vs, u32 vt) -> void;
+  template<u32 Size> auto vfpuRestHalfDot(u32 vd, u32 vs, u32 vt) -> void;
   auto vfpuMatrix(u32 which, u32 registers, u32 size) -> void;
+  template<u32 Op> auto executeVFPU(u32 address, u32 instruction) -> u32;
 
   //exceptions.cpp
   auto exception(Exception) -> void;
@@ -552,10 +556,17 @@ struct Allegrex {
 
     //recompiler-vfpu.cpp
     auto emitVFPU(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
+    auto emitVFPUCall(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
     auto emitPrefixesBusy() -> sljit_jump*;
     auto prefixesAfter(u32 instruction) -> void;
     auto emitMFVC(u32 instruction) -> void;
-    bool prefixesAtRest = false;  //the block being compiled knows the prefixes are at rest here (recompiler-vfpu.cpp)
+    //What the block being compiled knows of the prefixes here: each one's value, where it's known (recompiler-vfpu.cpp).
+    struct Prefixes {
+      bool known[3] = {};  //pfxs, pfxt, pfxd
+      u32 value[3] = {};
+      auto atRest() const -> bool;
+      auto busy() const -> bool;
+    } prefixes;
 
     //recompiler-memory.cpp
     auto emitLoadStore(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
