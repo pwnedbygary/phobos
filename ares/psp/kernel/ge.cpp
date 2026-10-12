@@ -112,14 +112,17 @@ auto Kernel::geTime() -> void {
 //recorded: a SIGNAL's callback that lets the GE go on finds its list drawing still, its FINISH run already
 //(gpu/signals/continue, simple), and with interrupts held off a list stays drawing however long the CPU spins
 //(gpu/ge/intrsuspend). It's taken at the end of a system function, or as the kernel's loop goes round; then the
-//next list runs.
-auto Kernel::geInterrupt() -> void {
+//next list runs. Returns whether one was taken.
+auto Kernel::geInterrupt() -> bool {
+  bool taken = false;
   while(geFinishDue && !interrupting && interruptsEnabled && cycles >= geDoneAt) {
-    if(std::any_of(calls.begin(), calls.end(), [](const Call& call) { return call.kind == Call::Ge; })) return;
+    if(std::any_of(calls.begin(), calls.end(), [](const Call& call) { return call.kind == Call::Ge; })) break;
     geFinishDue = false;
     geFinished();
     geRun();
+    taken = true;
   }
+  return taken;
 }
 
 //A list's callback: its finish or signal function, with id, its argument and where the list had got to (0 for an

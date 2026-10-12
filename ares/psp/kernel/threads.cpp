@@ -435,7 +435,7 @@ auto Kernel::sceKernelGetThreadId() -> void {
 //and a size short of a field leaves it as it was, 82 copying the half of the word at 80 below 82.
 auto Kernel::report(u32 address, const Report& structure) -> void {
   u32 size = memory.read(4, address);
-  memory.copyIn(address, structure.bytes.data(), std::min<u64>(size, structure.bytes.size()));
+  memory.copyIn(address, structure.bytes, std::min<u64>(size, structure.size));
 }
 
 //What a thread's status says it is (PspThreadStatus): running 1, ready 2, waiting 4, dormant 16; suspended adds 8,

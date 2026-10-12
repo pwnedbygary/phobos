@@ -1096,7 +1096,7 @@ static auto drawCopiedTexture() -> void {
       }
       CHECK(copied.ge.readsAhead(look, corners, corners.size()), test.ahead);
       //(decode() takes the copy where readsAhead() says so, and only there)
-      GE::Look decoding = look;
+      GE::Look decoding = std::move(look);
       copied.ge.decode(decoding, GE::Region{pixel.left, pixel.top, pixel.right, pixel.bottom}, 512, false,
                        [&] { return copied.ge.readsAhead(decoding, corners, corners.size()); });
       CHECK(decoding.texture.decoded != nullptr, test.ahead);
