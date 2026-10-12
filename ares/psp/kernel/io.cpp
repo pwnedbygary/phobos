@@ -26,10 +26,13 @@ static u8 npdrmLicenseeKey[16];
 static bool npdrmLicenseeKeySet = false;
 
 //The device a name stands for: the PSP knows the disc as umd0: and disc0:, and the memory stick as ms0: and fatms0:.
+//memstick: is the stick too: Colin McRae Rally 2005 Plus assigns it to the stick's file system (sceIoAssign()) and
+//writes its saves' files through it; PPSSPP's notes map it to ms0: as well. Chosen: known whether a game assigned it
+//or not, as the kernel keeps no assigned names (they would be state).
 static auto deviceName(std::string name) -> std::string {
   for(auto& c : name) c = std::tolower(u8(c));
   if(name == "umd0" || name == "umd1" || name == "umd") return "disc0";
-  if(name == "fatms0" || name == "ms") return "ms0";
+  if(name == "fatms0" || name == "ms" || name == "memstick") return "ms0";
   return name;
 }
 
@@ -698,7 +701,7 @@ auto Kernel::sceIoChdir() -> void {
 //(name, block device, file system, mode, ...): a device named for a block device's file system (pspiofilemgr.h's
 //example assigns flash0: to lflash0:0,0 through flashfat0:). The devices here have their names for good
 //(deviceName()), so it changes nothing: Metal Gear Acid and Ridge Racer assign disc0: to umd0: through isofs0:,
-//which it already is.
+//which it already is, and Colin McRae Rally 2005 Plus memstick: to msstor0p1:/ through fatms0:, the memory stick.
 auto Kernel::sceIoAssign() -> void {
   result(0);
 }
