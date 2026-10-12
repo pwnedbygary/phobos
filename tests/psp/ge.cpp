@@ -1571,6 +1571,19 @@ static auto geDeferredReach() -> void {
     put(GE::Triangles, 0x19f, {{10.0f / 64, 41.0f / 64, 0xffff'ffff, 34, 49, -1},
                               {30.0f / 64, 44.5f / 64, 0xffff'ffff, 63, 52, -1},
                               {18.0f / 64, 60.0f / 64, 0xffff'ffff, 45, 63, -1}});
+    //and 2D sprites (ge/draw.cpp's spriteReach()), nearest, filtered, held past the top edge, and one turned
+    struct Sprite { float x0, y0, u0, v0, x1, y1, u1, v1; u32 filter; };
+    for(Sprite s : {Sprite{0, 0, 40, 10, 16, 32, 56, 42, 0}, Sprite{16, 32, 3.5f, 20.25f, 40, 48, 27.5f, 36.25f, 0x101},
+                    Sprite{40, 0, 30, -8, 63, 20, 50, 12, 0x101}, Sprite{40, 63, 10, 50, 63, 40, 30, 60, 0}}) {
+      list.put(GE::FrameBufferPointer, Offscreen), list.put(GE::FrameBufferWidth, 64);
+      list.put(GE::TextureAddress0, Picture & 0xff'ffff), list.put(GE::TextureBufferWidth0, (Picture >> 24) << 16 | 64);
+      list.put(GE::TextureFormat, 3), list.put(GE::TextureFilter, 0), list.put(GE::TextureWrap, 0x101);
+      put(GE::Sprites, 0x80'019f, {{0, 0, 0, 0, 0, 0}, {64, 64, 0, 64, 64, 0}});
+      list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 64);
+      list.put(GE::TextureAddress0, Offscreen), list.put(GE::TextureBufferWidth0, 0x04 << 16 | 64);
+      list.put(GE::TextureFilter, s.filter);
+      put(GE::Sprites, 0x80'019f, {{s.u0, s.v0, 0xffff'ffff, s.x0, s.y0, 0}, {s.u1, s.v1, 0xffff'ffff, s.x1, s.y1, 0}});
+    }
     list.put(GE::Finish), list.put(GE::End);
   };
   auto drawn = [&](u32 threads, bool fours) {

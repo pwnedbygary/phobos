@@ -247,12 +247,18 @@ auto GE::texelRuns(const s32 (&span)[2], u32 size, bool clamp, s32 (&runs)[2][2]
   return 2;
 }
 
-//The texels a job can take (texelSpan(), texelRuns()) marked in reach; all of them where that can't be told.
+//The texels a job can take marked in reach (a 2D sprite's: spriteReach(), draw.cpp; a triangle's: texelSpan() and
+//texelRuns()); all of them where that can't be told.
 auto GE::texelReach(const Job& job, Reach& reach) const -> void {
   if(reach.all) return;
   s32 rows[2], columns[2], runs[2][2];
-  if(!texelSpan(job, rows, columns)) return void(reach.all = true);
   auto& t = job.look->texture;
+  if(job.kind == Job::Kind::Sprite) {
+    if(!spriteReach(job, t, rows, columns)) return void(reach.all = true);
+    Reach::mark(reach.rows, rows[0], rows[1]), Reach::mark(reach.columns, columns[0], columns[1]);
+    return;
+  }
+  if(!texelSpan(job, rows, columns)) return void(reach.all = true);
   for(u32 n = 0, count = texelRuns(rows, t.height, t.clampV, runs); n < count; n++) {
     Reach::mark(reach.rows, runs[n][0], runs[n][1]);
   }
