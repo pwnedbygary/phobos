@@ -124,6 +124,7 @@ import com.phobos.emulator.util.cueWithTracksIn
 import com.phobos.emulator.util.firmwareAssignments
 import com.phobos.emulator.util.firmwareContentOf
 import com.phobos.emulator.util.gameFileRoute
+import com.phobos.emulator.util.gameTitle
 import com.phobos.emulator.util.groupDiscSets
 import com.phobos.emulator.util.isZipSignature
 import com.phobos.emulator.util.m3uEntries
@@ -218,6 +219,10 @@ class MainViewModel(
     // The loaded game, as the level its controls resolve at; null with none loaded.
     private val _loadedGame = MutableStateFlow<ControlLevel.Game?>(null)
     val loadedGame: StateFlow<ControlLevel.Game?> = _loadedGame.asStateFlow()
+
+    // The loaded game's name for the pause menu (see gameTitle); null with none loaded.
+    private val _loadedTitle = MutableStateFlow<String?>(null)
+    val loadedTitle: StateFlow<String?> = _loadedTitle.asStateFlow()
 
     /**
      * The button bindings and hotkeys every input path reads: the loaded game's, else the global
@@ -770,6 +775,7 @@ class MainViewModel(
         _isPaused.value = false
         _loadedGame.value = null
         _pspStartSettings.value = null
+        _loadedTitle.value = null
         _runningFrame.value = null
         PhobosCore.setEmulationRunning(false)
         PhobosCore.unloadSystem()
@@ -2959,6 +2965,7 @@ class MainViewModel(
             _isPaused.value = false
             _isLoaded.value = false
             _loadedGame.value = null
+            _loadedTitle.value = null
             PhobosCore.setPause(false)
 
             // Set writable temp directory for MIA
@@ -3070,6 +3077,7 @@ class MainViewModel(
                         currentSystemName = effectiveSystem
                         currentRomName = rom.name
                         _loadedGame.value = ControlLevel.Game(effectiveSystem, rom.name)
+                        _loadedTitle.value = gameTitle(rom.name, rom.title)
                         _loadedDiscs.value = rom.discs
                         _currentDisc.value = discIndex
                         _laserdiscSide.value = null
