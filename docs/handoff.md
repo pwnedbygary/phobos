@@ -25,6 +25,30 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: memstick: is the memory stick — Colin McRae Rally 2005 Plus's save — 2026-10-12
+
+Branch `cursor/psp-colinsave-2b67`, begun on `cursor/psp-dialogs-2b67` (#221) and merged with master (#221, #222 and
+#225). docs/psp-core.md, part 77, has the evidence. Clean room: the game's own calls (traced with a scratch runner),
+pspsdk's headers, pspautotests' savedata tests, uOFW's iofilemgr.c, PPSSPP's notes read only as a description of the
+PSP; JPCSP not read. Save states are unchanged (StateVersion 26).
+- **Before**: answering Yes to Colin McRae Rally 2005 Plus's "Do you wish to create an Auto-Save file?" gave "Save
+  failed!", the save's folder holding an empty OPTIONS.DAT, and the next boot asked again. The game assigns memstick:
+  to the stick's file system at boot (sceIoAssign) and, after the save utility's autosave (which gives no data: the
+  folder, PARAM.SFO and icons), opens its own TIMES.DAT and CMR5TS.DAT through it; the kernel knew no memstick:, so
+  every such open failed as no device (0x80010013), and the boot's look for CMR5TS.DAT never found a save.
+- **The fix** (`ares/psp/kernel/io.cpp`, `deviceName()`): memstick: is ms0:, whatever its case, assigned or not (no
+  assignments kept: they would be state). `tests/psp/utility.cpp` has the game's calls as traced.
+- **The game now**: after the autosave it writes TIMES.DAT (3.9 MB) and CMR5TS.DAT, autosaves again with OPTIONS.DAT's
+  228,760 bytes and goes on; the second boot says "AUTO-LOAD.", loads, and reaches the main menu. A stick holding the
+  old broken save needs no clearing: the game asks again and Yes writes the whole save. Twelve early-saving games
+  booted twice on one stick (five of which save in that time) leave the same files with the base's runner and this one.
+- **Checks** before the merge: `tests/psp/run-tests.sh` 462 groups, 0 failures (of two runs, one had the
+  timing-dependent GE group "loads through the depth buffer's views wait for the threads" fail on the loaded Mac);
+  `tests/allegrex/run-tests.sh` 58, 0; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed.
+- **Review**: an independent read-only review found no blocker or major point and asked for minor ones (the test to
+  open files as the game does, a garbled comment, the docs' quote, base and numbering, and nits), all taken in the
+  commit after the fix.
+
 ## PSP: the system's dialogs shown by the app — messages, the keyboard, saving and loading — 2026-10-12
 
 Branch `cursor/psp-dialogs-2b67`, on `cursor/psp-merge-212-219-2b67` (master with #212 to #219, PR #220, which master
