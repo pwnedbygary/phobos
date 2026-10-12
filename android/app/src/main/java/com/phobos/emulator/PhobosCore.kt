@@ -96,6 +96,12 @@ object PhobosCore {
     external fun setPspResolution(scale: Int)
     /** What the PSP's core has to tell the user, once (its Vulkan renderer didn't start, or stopped); "" if none. */
     external fun takePspNotice(): String
+    /** The number of the PSP's system dialog waiting for the player (util/PspDialogs.kt); 0 for none. */
+    external fun pspDialogId(): Int
+    /** That dialog's request in the core's byte form ([com.phobos.emulator.util.parsePspDialog]); null for none. */
+    external fun pspDialog(): ByteArray?
+    /** The player's answer ([com.phobos.emulator.util.PspDialogAnswer.encode]); false if it isn't the request's. */
+    external fun answerPspDialog(answer: ByteArray): Boolean
     /** The whole multiple native code draws the PSP's picture at (util/PspVideo.kt's pictureMultiple()). */
     external fun setPictureMultiple(multiple: Int)
     external fun setVulkanCachePath(path: String)

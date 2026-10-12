@@ -12,8 +12,10 @@
 //before the size), and only with one of its kind's parameter sizes (INVALID_PARAM_SIZE, which leaves the kind as it
 //was); Update does its work only while the dialog runs (starting, or after it's gone: INVALID_STATUS); a message
 //aborted while it runs finishes once 8 Updates have come since it ran (at least one after the abort; one still
-//running here has had none, its first answering it), its result 0 and its button untouched. The answers given
-//here, with nothing drawn on the screen yet:
+//running here has had none, its first answering it), its result 0 and its button untouched. A front end that shows
+//the dialogs itself (the option "Dialogs") is asked by those a PSP shows the player, which run until it answers
+//(dialogs.cpp). The answers given here, with nothing drawn on the screen, to every other dialog and to all of them
+//without such a front end:
 //  - Saving and loading (savedata): a save is a folder on the memory stick, PSP/SAVEDATA/<game name><save name>,
 //    holding its data files, the PARAM.SFO the PSP writes beside them (the save's titles, and which of its files are
 //    secure: those the save modes and the secure data modes wrote) and the icons the game gave. Loading reads a data
@@ -61,6 +63,8 @@ namespace {
   constexpr u32 SavedataSizesParameter = 0x8011'03c8;
   constexpr u32 DialogCancelled = 1;  //a dialog's result when the player backs out
   constexpr u32 KeyboardChanged = 2;  //a keyboard field's result when the player enters its text
+  //the keyboard's fields (SceUtilityOskData), and bounds of ours on them (pspsdk gives no limits)
+  constexpr u32 KeyboardFieldSize = 52, KeyboardFields = 16, KeyboardMostText = 1024;
   constexpr u32 MessageAbortUpdates = 8;  //(utility/dialog/abort: that many Updates from the start, less any already)
   constexpr u32 SavedataClosePriority = 0x20;  //a save dialog's last closing step's (utility/savedata/shutdownstatus)
   //Whether InitStart takes a kind's parameters at this size (their common part's first word): the sizes
@@ -105,6 +109,18 @@ namespace {
     if(name.empty() || name.size() >= field || name == "." || name == "..") return false;
     if(name.find_first_of("/\\:") != std::string::npos) return false;
     return std::none_of(name.begin(), name.end(), [](char c) { return u8(c) < 0x20; });
+  }
+
+  //A keyboard field's text in the program's memory (UTF-16, ending in a NUL): as far as it goes there, and no more
+  //than KeyboardMostText characters; none from address 0.
+  auto keyboardText(Memory& memory, u32 address) -> std::vector<u16> {
+    std::vector<u16> text;
+    for(u32 at = address; address && text.size() < KeyboardMostText && memory.reaches(at, 2); at += 2) {
+      u16 character = memory.read(2, at);
+      if(!character) break;
+      text.push_back(character);
+    }
+    return text;
   }
 
   //A save's PARAM.SFO, in the disc's format (disc-info.cpp's sfoValue()): a head ("\0PSF", version 1.1, where the
@@ -291,6 +307,8 @@ auto Kernel::dialogStart(u32 kind) -> void {
   dialog.changeAt = cycles + u64(start) * (CPUFrequency / 1'000'000);
   dialog.abortUpdates = 0;
   dialog.runningUpdates = 0;
+  dialog.error = 0;
+  dialog.deleted = false;
   result(0);
 }
 
@@ -301,7 +319,8 @@ auto Kernel::dialogStatus(u32 kind) -> void {
 }
 
 //Called every frame while it shows: running, it gives its answer and finishes (an aborted message counts its Updates
-//down first). Finished, there's nothing more to do.
+//down first), or asks a front end that shows it and waits for its answer (dialogs.cpp). Finished, there's nothing
+//more to do.
 auto Kernel::dialogUpdate(u32 kind) -> void {
   if(dialog.kind != kind) return result(UtilityWrongType);
   dialogDue();
@@ -309,9 +328,11 @@ auto Kernel::dialogUpdate(u32 kind) -> void {
   if(dialog.status == DialogRunning && !dialog.abortUpdates) dialog.runningUpdates++;
   if(dialog.status == DialogRunning && dialog.abortUpdates) {
     if(--dialog.abortUpdates == 0) {
-      memory.write(4, dialog.parameters + 28, 0);
+      memory.write(4, dialog.parameters + 28, dialog.error);
       dialog.status = DialogFinished;
     }
+  } else if(dialog.status == DialogRunning && frontDialogs && (dialogShownID() || dialogAsks(kind))) {
+    dialogAsk();
   } else if(dialog.status == DialogRunning) {
     u32 answer = DialogCancelled;
     if(kind == DialogSavedata) answer = savedata(dialog.parameters);
@@ -376,31 +397,30 @@ auto Kernel::dialogShutdown(u32 kind) -> void {
 //cut the nickname to nothing), and a field with no room gets nothing written, not even its NUL. Returns the common
 //part's result: 0.
 auto Kernel::keyboard(u32 parameters) -> u32 {
-  static constexpr u32 FieldSize = 52, MostFields = 16, MostText = 1024;  //(pspsdk gives no limits: bounds of ours)
   u32 count = memory.read(4, parameters + 48), fields = memory.read(4, parameters + 52);
-  for(u32 n = 0; n < std::min(count, MostFields); n++) {
-    u32 field = fields + n * FieldSize;
-    if(!memory.reaches(field, FieldSize)) break;
-    u32 initial = memory.read(4, field + 32), room = memory.read(4, field + 36), output = memory.read(4, field + 40);
-    u32 limit = memory.read(4, field + 48);
-    std::vector<u16> text;
-    for(u32 at = initial; initial && text.size() < MostText && memory.reaches(at, 2); at += 2) {
-      u16 character = memory.read(2, at);
-      if(!character) break;
-      text.push_back(character);
-    }
+  for(u32 n = 0; n < std::min(count, KeyboardFields); n++) {
+    u32 field = fields + n * KeyboardFieldSize;
+    if(!memory.reaches(field, KeyboardFieldSize)) break;
+    std::vector<u16> text = keyboardText(memory, memory.read(4, field + 32));
     bool blank = std::all_of(text.begin(), text.end(), [](u16 character) { return character == ' '; });
     if(blank) text = {'P', 'S', 'P'};
-    u64 most = room ? room - 1 : 0;
-    if(limit) most = std::min<u64>(most, limit);
-    text.resize(std::min<u64>(text.size(), most));
-    if(room && output && memory.reaches(output, (text.size() + 1) * 2)) {
-      for(u32 at = 0; at < text.size(); at++) memory.write(2, output + at * 2, text[at]);
-      memory.write(2, output + text.size() * 2, 0);
-    }
+    keyboardField(field, text);
     memory.write(4, field + 44, KeyboardChanged);
   }
   return 0;
+}
+
+//A field's text into its output (SceUtilityOskData's outtext), as far as its room (outtextlength, the NUL among it)
+//and its limit (outtextlimit, 0 for none) allow; nothing written where it has no room.
+auto Kernel::keyboardField(u32 field, std::vector<u16> text) -> void {
+  u32 room = memory.read(4, field + 36), output = memory.read(4, field + 40), limit = memory.read(4, field + 48);
+  u64 most = room ? room - 1 : 0;
+  if(limit) most = std::min<u64>(most, limit);
+  text.resize(std::min<u64>(text.size(), most));
+  if(room && output && memory.reaches(output, (text.size() + 1) * 2)) {
+    for(u32 at = 0; at < text.size(); at++) memory.write(2, output + at * 2, text[at]);
+    memory.write(2, output + text.size() * 2, 0);
+  }
 }
 
 //A word as eight hexadecimal digits.
@@ -438,8 +458,9 @@ auto Kernel::savePath(const std::string& folder, const std::string& file) -> std
 //out, the save's can), and the paths where a save belongs (savePath()). The buffer must be in the program's memory as
 //far as what's copied in or out, which memory's size bounds: a load reads no more than the buffer takes. What isn't
 //so is refused as a bad parameter, before anything is made, read or deleted. The sizes mode reads no names of its
-//own, so none are asked of it: the save it measures is msData's, whose names are checked there.
-auto Kernel::savedata(u32 p) -> u32 {
+//own, so none are asked of it: the save it measures is msData's, whose names are checked there. chosen: the save a
+//front end's player chose from a list (dialogs.cpp), taken in place of the request's own.
+auto Kernel::savedata(u32 p, const std::string* chosen) -> u32 {
   namespace fs = std::filesystem;
   u32 mode = memory.read(4, p + 48);
   std::string game = memory.readString(p + 60, 13), save = memory.readString(p + 76, 20);
@@ -454,7 +475,9 @@ auto Kernel::savedata(u32 p) -> u32 {
   //Blade, Space Invaders Extreme and Valkyria Chronicles II made a save and called it corrupted.
   auto unnamed = [](std::string& name) { if(name == "<>") name.clear(); };
   unnamed(save);
-  if((mode == 4 || mode == 5) && save.empty() && memory.read(4, p + 96)) {  //from a list: its first name
+  if(chosen) {
+    save = *chosen;
+  } else if((mode == 4 || mode == 5) && save.empty() && memory.read(4, p + 96)) {  //from a list: its first name
     save = memory.readString(memory.read(4, p + 96), 20);
     if(save.empty()) return refused;
     unnamed(save);
@@ -845,7 +868,8 @@ auto Kernel::sceUtilityMsgDialogGetStatus() -> void { dialogStatus(DialogMessage
 auto Kernel::sceUtilityMsgDialogUpdate() -> void { dialogUpdate(DialogMessage); }
 auto Kernel::sceUtilityMsgDialogShutdownStart() -> void { dialogShutdown(DialogMessage); }
 
-//The game taking its message down while it runs: it fades out over Updates, then finishes (dialogUpdate()).
+//The game taking its message down while it runs: it fades out over Updates, then finishes (dialogUpdate()). A front
+//end showing it takes it down at once.
 auto Kernel::sceUtilityMsgDialogAbort() -> void {
   if(dialog.kind != DialogMessage) return result(UtilityWrongType);
   dialogDue();
@@ -855,6 +879,7 @@ auto Kernel::sceUtilityMsgDialogAbort() -> void {
     dialog.abortUpdates = dialog.runningUpdates < MessageAbortUpdates
       ? MessageAbortUpdates - dialog.runningUpdates : 1;
   }
+  dialogWithdraw();
   result(0);
 }
 auto Kernel::sceUtilityOskInitStart() -> void { dialogStart(DialogKeyboard); }
