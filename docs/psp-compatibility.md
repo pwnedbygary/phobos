@@ -21,7 +21,9 @@ runner (docs/psp-core.md, part 64). And the final run (2026-10-11, `be543afba`, 
 `3cae0f907`): Crash Tag Team Racing's row, from the whole library run again beside the final run (docs/psp-core.md,
 part 69). And part 70 (2026-10-11, branch `cursor/psp-savename-2b67`, on `master` after v2.0.0): the savedata files
 mode and PARAM.SFO, the whole library run again beside the final run, and the games that save early booted twice on
-one memory stick (docs/psp-core.md, part 70). The other rows are the report's.
+one memory stick (docs/psp-core.md, part 70). And part 71 (branch `cursor/psp-kenka-2b67`, on `master` at v2.0.0):
+Kenka Bancho's and Final Fantasy IV's rows, from the whole library run again beside the final run (docs/psp-core.md,
+part 71). The other rows are the report's.
 
 ## Method
 
@@ -57,13 +59,24 @@ game that looked worse was run again without presses on both commits before call
 
 ## Summary
 
-| Category | Before (`b27f084a5`) | Run 1 (#183's tip) | Now | Part 55 | Part 57 | Part 58 | Part 59 | Part 62 | Part 64 | Final | Part 70 | Change since Before |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Menu or gameplay | 141 | 148 | 175 | 178 | 180 | 180 | 187 | 188 | 189 | 194 | 194 | +53 |
-| Movie | 35 | 43 | 63 | 63 | 63 | 65 | 71 | 71 | 71 | 71 | 71 | +36 |
-| Stuck loading | 13 | 8 | 5 | 4 | 4 | 4 | 0 | 0 | 0 | 0 | 0 | -13 |
-| Black or hang | 73 | 64 | 21 | 19 | 17 | 15 | 6 | 6 | 6 | 1 | 1 | -72 |
-| Timed out | 4 | 3 | 2 | 2 | 2 | 2 | 2 | 1 | 0 | 0 | 0 | -4 |
+| Category | Before (`b27f084a5`) | Run 1 (#183's tip) | Now | Part 55 | Part 57 | Part 58 | Part 59 | Part 62 | Part 64 | Final | Part 70 | Part 71 | Change since Before |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Menu or gameplay | 141 | 148 | 175 | 178 | 180 | 180 | 187 | 188 | 189 | 194 | 194 | 195 | +54 |
+| Movie | 35 | 43 | 63 | 63 | 63 | 65 | 71 | 71 | 71 | 71 | 71 | 70 | +35 |
+| Stuck loading | 13 | 8 | 5 | 4 | 4 | 4 | 0 | 0 | 0 | 0 | 0 | 0 | -13 |
+| Black or hang | 73 | 64 | 21 | 19 | 17 | 15 | 6 | 6 | 6 | 1 | 1 | 1 | -72 |
+| Timed out | 4 | 3 | 2 | 2 | 2 | 2 | 2 | 1 | 0 | 0 | 0 | 0 | -4 |
+
+Part 71 (2026-10-11, on `master` at v2.0.0) moves one row: Final Fantasy IV, which stayed on a white screen for good
+after its title movie, shows its title at 3600 (then its attract movie; pressed on, its menus and opening). It and
+Kenka Bancho: Badass Rumble stop the movie player's two modules after a movie and wait for a stop to give 0, as a PSP
+gives, where the kernel gave the module's ID (docs/psp-core.md, part 71). Kenka Bancho's row stays a movie (its intro
+still plays at 3600 with the report's presses), but past the intro, skipped or played out, it now reaches its title,
+menu and a new game in the runner, where it was black for good (on the owner's RP6 too). The whole library was run
+again the same way beside the final run: all 266 finish (Killzone run again with a longer limit, the Mac at a load of
+about 220 from other jobs), none stops at a missing function, and the 70 other games with a frame shown differently
+show the same scenes a few frames apart, the runner's own (64 of them never stop a module; the six that do act alike
+on both runners).
 
 Part 70 (2026-10-11, the savedata utility's files mode and the PARAM.SFO written beside every save) moves no row: the
 whole library run again with its runner shows every game's scenes as the final run did, in the same categories.
@@ -420,7 +433,7 @@ and now, and what the last frames showed or why a game stops.
 | Final Fantasy - 20th Anniversary Edition | ULUS10251 | 454 | movie | menu | menu | title |
 | Final Fantasy II - 20th Anniversary Edition | ULUS10263 | 367 | black | menu | menu | title, press start |
 | Final Fantasy III | NPUH10125 | 324 | movie | movie | movie | intro movie |
-| Final Fantasy IV | ULUS10560 | 428 | movie | movie | movie | white fade after the title movie |
+| Final Fantasy IV | ULUS10560 | 428 | movie | movie | menu | its title, PRESS ANY BUTTON, from about 2100, then its attract movie; pressed on, the collection's menu and Final Fantasy IV's own title and opening (part 71: a module's stop gives 0; white for good after the title movie before) |
 | Final Fantasy Tactics - War of the Lions Tweak [v2.52] | ULUS10297 | 224 | menu | menu | menu | title |
 | Final Fantasy Type 0 | NPJH50443 | 254 | menu | menu | menu | autosave notice (scePower a85880d0, missing before, since part 58) |
 | Full Auto 2 - Battlelines | ULUS10220 | 215 | menu | menu | menu | profile menu |
@@ -457,7 +470,7 @@ and now, and what the last frames showed or why a game stops.
 | Jeanne d'Arc | UCUS98700 | 172 | menu | menu | menu | title menu |
 | Juiced - Eliminator | ULUS10090 | 254 | loading | black | movie | loading screen, THQ movie, then the intro movie |
 | Juiced 2 - Hot Import Nights | ULUS10312 | 123 | black | timeout | movie | intro and a 3D club scene (159 fps) |
-| Kenka Bancho - Badass Rumble | ULUS10442 | 364 | black | movie | movie | intro scenes |
+| Kenka Bancho - Badass Rumble | ULUS10442 | 364 | black | movie | movie | intro scenes; past them, skipped with Start or played out (by about 7800 then), its title, main menu and a new game's name entry (part 71: a module's stop gives 0; black for good after the intro before, on the RP6 too) |
 | Key Of Heaven | UCES00178 | 184 | menu | menu | menu | language select |
 | Kidou Senshi Gundam Gundam vs. Gundam NEXT PLUS [English] | NPJH50107 | 238 | menu | menu | menu | pilot name notice |
 | Killzone - Liberation | UCUS98646 | 3 | black | gameplay | gameplay | in the first level (4.8 fps) |

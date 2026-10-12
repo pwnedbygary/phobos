@@ -25,6 +25,40 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: a module's stop gives 0 — Kenka Bancho past its intro movie — 2026-10-11
+
+Branch `cursor/psp-kenka-2b67`, on `master` as v2.0.0 shipped (`3cae0f907`). docs/psp-core.md, part 71, has the
+evidence. Clean room: pspautotests' modules/unloadfill and its PSP recording, uOFW's module manager, pspsdk's error
+codes and the game's own code; no PPSSPP or JPCSP source read. Save states unchanged (StateVersion 25). Docs part 71,
+after the two branches in flight that take parts 69 and 70 and StateVersion 26 (`cursor/psp-hangs-2b67`,
+`cursor/psp-savename-2b67`), so the three merge in any order but for the docs' part numbers.
+- **The bug**: the owner's RP6 test of v2.0.0 found Kenka Bancho: Badass Rumble black for good after Start skipped
+  its intro (60 fps, idle). When its movie ends, skipped or played out, the game's module thread stops the movie
+  player's two modules (Sony's PSMF.PRX and LIBPSMFPLAYER.PRX, which the kernel stands in for) once a frame until
+  `sceKernelStopModule` gives exactly 0, then unloads them. The kernel gave the module's ID, then ALREADY_STOPPED, for
+  good. A PSP gives 0 (unloadfill recorded `sceKernelStopModule: 00000000`; uOFW's stop command has 0 too), the ID
+  only for a start and an unload.
+- **The fix** (`ares/psp/kernel/modules.cpp`): a stop's caller gets 0, whether the module stopped at once (a
+  stand-in, no module_stop) or after its module_stop ran while the caller waited; module_stop's result still goes
+  where asked. The game now reaches its title from about frame 2900 with Start at 2700 (frame 7800 with the movie
+  played out, black from 7500 for good before), its main menu, and NEW GAME's difficulty, name entry and hometown map.
+  LOAD GAME on an empty stick shows the game's own "An error has occurred" (the savedata list load answers
+  LOAD_NO_DATA at once: the savedata utility's part).
+- **Final Fantasy IV: The Complete Collection** had the same bug (the same module thread): white for good after its
+  title movie, now its title, the collection's menu and Final Fantasy IV's opening.
+- **Checks**: tests/psp 440/0 (sanitized; `master`'s 438 here and the new "modules stops give 0", the game's sequence
+  on both engines, and "modules state while stopping"), tests/allegrex 58/0, tests/psp/ares 307/0; with the old
+  kernel the two new groups and the three updated ones fail. An independent read-only review: correct on every path,
+  its nits taken (a state saved mid-stop tested, comments, part 19's lines).
+- **Library** (the report's run against the final run): all 266 finish (Killzone, killed at 900 s with the Mac at a
+  load of ~220, finishes run again), no missing functions; Final Fantasy IV movie -> menu; the 70 others that differ
+  show the same scenes a few frames apart (the runner's PNG a picture early under load): 64 never call
+  sceKernelStopModule, and the six that do act alike on both runners. Counts: menu or gameplay 195, movie 70.
+- **Left**: by uOFW a module_stop returning non-zero keeps its module running (the caller told CAN_NOT_STOP or the
+  value), and a module_start returning NO_RESIDENT or an error gets its module unloaded; here neither, as before (no
+  recording, no game seen needing it).
+- Scratch: `~/phobos-work/scratch/kenka`; nothing run on the RP6.
+
 ## PSP: savedata's files mode and PARAM.SFO — the second boot that called its save corrupted — 2026-10-11
 
 Branch `cursor/psp-savename-2b67`, on `master` (v2.0.0): the "<>" fix (`5fd162d75`), then this (`340649d14`).
