@@ -25,6 +25,17 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Version codes for 2.1 — 2026-10-12
+
+Branch `cursor/version-base-21-2b67`, on `master` after #221 (the system dialogs), before the v2.1.0 tag. The version
+code is now 210000 + the commit count (`android/app/build.gradle.kts`): test builds on the owner's RP6 went up to
+205231 (the dialogs' 205223, then 205230 with round 6's time model and 205231 with the dialogs alone, built with
+-PversionCode), past what 200000 + the count gives v2.1.0 (205,22x), and Android refuses a lower code over a higher
+one without an uninstall (which loses the app's data). Every earlier build, release, nightly or test
+build is below 210000, so nobody's update becomes a downgrade; nightly tags become `nightly-215xxx` and up. README.md
+and the implementation plan's updater row say so. A later release can raise the base again the same way if a stray
+build gets ahead of it.
+
 ## PSP: the system's dialogs shown by the app — messages, the keyboard, saving and loading — 2026-10-12
 
 Branch `cursor/psp-dialogs-2b67`, on `cursor/psp-merge-212-219-2b67` (master with #212 to #219, PR #220, which master
