@@ -1494,7 +1494,7 @@ static auto geDeferredBusy() -> void {
 //drawn again before each quad (each time a little other), so that each quad's decode is deferred, then 3D quads (one
 //w, one q) taking parts of it, nearest and filtered, held at the edges past them, magnified and shrunk, a quad
 //repeating round an edge, one in perspective, one with its own CLUT32 view of the picture, a triangle by itself, and
-//2D sprites (spriteReach()); then the same with the four-pixel path off (whose fetch() checks each texel lies in the
+//2D sprites (spriteReach()), two of them in one PRIM far apart; then the same with the four-pixel path off (whose fetch() checks each texel lies in the
 //rectangle round what the copy decoded). It comes out as on one thread, where nothing is deferred. And Looks sharing a
 //copy (ensureDecoded()) have it decoded over all of their texels.
 static auto geDeferredReach() -> void {
@@ -1587,6 +1587,13 @@ static auto geDeferredReach() -> void {
       list.put(GE::TextureFilter, s.filter);
       put(GE::Sprites, 0x80'019f, {{s.u0, s.v0, 0xffff'ffff, s.x0, s.y0, 0}, {s.u1, s.v1, 0xffff'ffff, s.x1, s.y1, 0}});
     }
+    //and two sprites of one PRIM (one Look, two jobs) taking texels far apart: the Look's reach is both jobs'
+    redraw();
+    list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 64);
+    list.put(GE::TextureAddress0, Offscreen), list.put(GE::TextureBufferWidth0, 0x04 << 16 | 64);
+    list.put(GE::TextureFilter, 0);
+    put(GE::Sprites, 0x80'019f, {{2, 2, 0xffff'ffff, 0, 40, 0}, {14, 14, 0xffff'ffff, 12, 52, 0},
+                                 {48, 48, 0xffff'ffff, 50, 20, 0}, {60, 60, 0xffff'ffff, 62, 32, 0}});
     list.put(GE::Finish), list.put(GE::End);
   };
   auto drawn = [&](u32 threads, bool fours) {
