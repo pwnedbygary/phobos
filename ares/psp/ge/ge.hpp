@@ -180,7 +180,8 @@ struct GE {
     u32 decodedWidth;
     u32 decodedRows;     //the rows the primitive may take texels from (draw.cpp), all of them decoded
     //of those, the rows from decodedTop and the columns decodedLeft to decodedRight (not including) hold every texel it
-    //can take; a deferred copy (ensureDecoded()) has only those decoded, which may be fewer (fetch() checks these)
+    //can take (fetch() checks these); a deferred copy (ensureDecoded()) has every texel it can take decoded, but not
+    //necessarily all of that rectangle
     u32 decodedTop, decodedLeft, decodedRight;
     const u8* bytes;     //read from memory: where its bytes are in the host's memory, when they're all there
   };

@@ -1494,9 +1494,9 @@ static auto geDeferredBusy() -> void {
 //drawn again before each quad (each time a little other), so that each quad's decode is deferred, then 3D quads (one
 //w, one q) taking parts of it, nearest and filtered, held at the edges past them, magnified and shrunk, a quad
 //repeating round an edge, one in perspective, one with its own CLUT32 view of the picture, a triangle by itself, and
-//2D sprites (spriteReach()); then the same with the four-pixel path off (whose fetch() checks each texel lies where
-//the copy was decoded). It comes out as on one thread, where nothing is deferred. And Looks sharing a copy
-//(ensureDecoded()) have it decoded over all of their texels.
+//2D sprites (spriteReach()); then the same with the four-pixel path off (whose fetch() checks each texel lies in the
+//rectangle round what the copy decoded). It comes out as on one thread, where nothing is deferred. And Looks sharing a
+//copy (ensureDecoded()) have it decoded over all of their texels.
 static auto geDeferredReach() -> void {
   constexpr u32 Offscreen = 0x15'4000, Picture = Image, Palette = Image + 0x4000;  //(Offscreen: a VRAM offset)
   struct Quad { float x0, y0, x1, y1, u0, v0, u1, v1, w1; u32 filter, wrap, format; };
@@ -2286,8 +2286,8 @@ struct DrawingList {
 //whose FINISH then falls due in a spin with no system call, sees that FINISH's callback at the same count of the spin
 //as polling a function that isn't quiet but changes nothing either (sceKernelGetThreadExitStatus of no thread), on
 //each engine. And the same with no list behind, the spin running to its end. (The FINISH taken at the end of a quiet
-//function's syscall, which ends its compiled block, is followed by the block's check of the go's limit anyway: the
-//test can't tell syscall()'s guard for it from none.)
+//function's syscall, which ends its compiled block, is followed by the block's check of the go's limit anyway: a
+//program can't tell syscall()'s guard for it from none, so dispatch() is asked directly.)
 static auto geQuietFunctions() -> void {
   constexpr u32 Count = KernelMachine::Results + 0x40, Seen = KernelMachine::Results + 0x50;
   auto spun = [&](const char* polled, bool recompile, bool behind) {
@@ -2342,9 +2342,8 @@ static auto geQuietFunctions() -> void {
       CHECK(quiet[2], 6000u);
     }
   }
-  //Each quiet function is dispatched as one, and changes nothing untilNextEvent() looks at: with a thread delayed, an
-  //alarm set, a list's FINISH to come and the controller sampled on a cycle, the next thing's time is where it was
-  //after each.
+  //Each quiet function is dispatched as one, and makes nothing due sooner: with a thread delayed, an alarm set, a
+  //list's FINISH to come and the controller sampled on a cycle, the next thing's time is where it was after each.
   KernelMachine m;
   auto& memory = m.system.memory;
   s32 uid = m.kernel.createThread("delayed", 0x0880'1000, 0x10, 0x1000, 0, 0);
@@ -2356,6 +2355,8 @@ static auto geQuietFunctions() -> void {
   a.finish();
   m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
   m.call("sceCtrlSetSamplingCycle", {5555});
+  CHECK(m.kernel.geFinishDue && m.kernel.geDoneAt > m.kernel.cycles, true);
+  CHECK(m.kernel.alarms.size(), 1u), CHECK(m.kernel.controller.cycle, 5555u);
   constexpr u32 Out = KernelMachine::Results + 0x200;
   memory.write(4, Out, 108), memory.write(4, Out + 0x80, 44);
   struct Call { const char* name; std::initializer_list<u32> arguments; };
@@ -2376,6 +2377,21 @@ static auto geQuietFunctions() -> void {
     CHECK(quiet, true);
     CHECK(m.kernel.cycles + m.kernel.untilNextEvent(), next);
   }
+  //But not one that isn't marked, nor one that took the list's FINISH as it ended, nor one that started a call into
+  //the program.
+  bool quiet = true;
+  m.system.ipu.r[4] = 0;
+  m.kernel.dispatch(m.kernel.importCode("test", Kernel::nid("sceKernelGetThreadExitStatus")), quiet);
+  CHECK(quiet, false), CHECK(m.kernel.geFinishDue, true);
+  auto timeLow = m.kernel.importCode("test", Kernel::nid("sceKernelGetSystemTimeLow"));
+  m.kernel.cycles = m.kernel.geDoneAt;
+  quiet = true;
+  m.kernel.dispatch(timeLow, quiet);
+  CHECK(quiet, false), CHECK(m.kernel.geFinishDue, false);
+  m.kernel.queueCall(0x0880'4000, 0, 1, 2, 3);
+  quiet = true;
+  m.kernel.dispatch(timeLow, quiet);
+  CHECK(quiet, false), CHECK(m.kernel.interrupting, true);
 }
 
 //The GE's time (kernel/ge.cpp's geTime()): a list is done for the program only once a PSP's GE would have drawn it, by
