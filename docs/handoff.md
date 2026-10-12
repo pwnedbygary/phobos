@@ -25,6 +25,19 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Merged into master: #212 to #219 — 2026-10-11
+
+Branch `cursor/psp-merge-212-219-2b67`: master plus #212 (speed 8), #213 (64 controller samples), #214 (PSP pause-menu
+section, right stick), #215 (Crash's save dialog), #216 (the game's name in the pause menu), #218 (savedata files mode,
+PARAM.SFO), #217 (a module's stop gives 0) and #219 (vnop keeps the VFPU prefixes), merged in the docs' part order.
+Conflicts were docs only, plus #214 and #216 each adding a line after `_loadedGame.value = null` (both kept): the
+handoff entries newest first, parts 68 to 72 in order, and one summary table in docs/psp-compatibility.md with columns
+for parts 70, 71 and 72 (197 menu or gameplay, 68 movie, 1 black; README the same). The code is the same as the test
+build installed on the owner's RP6 as 2.0.0-test-1 (205182): suites 449/0, 58/0, 307/0 on it; on the RP6 MACH, Lunar,
+Crash Tag Team Racing, Kenka Bancho, Final Fantasy IV and both Metal Gear Acids pass the screens that stopped them,
+Valkyria Chronicles II and III and Shining Blade find their saves on a second boot, and the pause menu shows the game's
+name, the PSP section and Restart to Apply.
+
 ## PSP: the Metal Gear Acids' titles and menus — vnop leaves the VFPU's prefixes — 2026-10-11
 
 Branch `cursor/psp-mga2-2b67`, on master (`3cae0f907`, v2.0.0). The owner's run of 2.0 on the RP6 left Metal Gear Acid
