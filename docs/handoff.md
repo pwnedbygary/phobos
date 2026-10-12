@@ -25,6 +25,46 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: sound — every ATRAC ID's context kept current (Angus Hates Aliens past NEW GAME), and sceVaudio — 2026-10-12
+
+Branch `cursor/psp-audio-b00-2b67`, on master (`b7ea296f4`). docs/psp-core.md, part 82, has the evidence. Items 2 and 5
+of the deep-play batch 00 report. Clean room: pspautotests' audio/atrac (the states its tests force, sas) and
+audio/blocking/vaudio recordings, pspsdk's pspatrac3.h and pspvaudio.h, pspautotests' sascore.h, PPSSPP read only as a
+description of the PSP (sceVaudio on the SRC channel), the games' own code traced and disassembled; JPCSP not read.
+**Save states go to StateVersion 31** (sceVaudio's hold; 15 to 26 still load; 27 to 30 are other branches' layouts,
+refused until they merge: whoever merges them puts them together).
+- **Angus Hates Aliens**: its music goes through sceSas's ATRAC3 voices with a wrapper (the one pspautotests'
+  audio/atrac/sas copies) that sets its ID's context state to 16 and, to stop the music (NEW GAME), unsets the voice
+  only while the context still says 16, asking again for good when refused. `_sceAtracGetContextAddress` rewrote the
+  whole context at every call, so the 16 went back to 2: the black screen, the runner's time all in that call. Now
+  every ID's context is in kernel memory (0x08030000), written at power on and whenever the library changes the ID,
+  only read by `_sceAtracGetContextAddress`; a state a program sets (8, 16) refuses calls needing a file with the
+  recorded errors; `__sceSasSetVoiceATRAC3` keeps the context in the voice's word in the SasCore, where the game's
+  streaming reads it (the 16 loads through address 0 at boot). The game now loads and reaches its first level.
+  Still silent: sceSas's ATRAC3 voices don't decode (they didn't before).
+- **sceVaudio**: reserve, release, blocking output, the effect and level control setters, on the SRC channel, as
+  pspautotests' vaudio recorded (an output returns its count; a reservation refused while Output2 holds the channel
+  still holds sceVaudio; the release waits for a buffer playing); buffers copied as pairs into two kernel buffers
+  (0x08031000). Battle vs. Chess's music thread plays its MP3 music through it now. **Its moves still aren't carried
+  out**: not sceVaudio. Traced: the confirm reaches the game's pad code; its chess thread runs its engine only when
+  a request word is set, which nothing sets on the confirm; nothing else in its memory changes but the lit squares'
+  colours, and no system call differs (no file, thread or missing function). The prototype's own move code wasn't
+  followed to the end (part 82 has the leads).
+- **Checks**: `tests/psp/run-tests.sh` (sanitizers) 473 groups, 0 failures on the final code; `tests/allegrex` and
+  `tests/psp/ares`: see the commit that completes this entry.
+- **Library**: running (base: master `b7ea296f4`'s runner; `lib.sh RUNNER OUTROOT 1 900`): the comparison completes this
+  entry.
+- **Review**: an independent review found NEEDS CHANGES (two state refusals with no check behind them; sceVaudio acting
+  on a channel another caller held after its refused reservation; and lows: a bad rate leaving it held, contexts written
+  on refused calls, the MAX values, untested refusals, wording), all taken in `930c6e2db`; a delta review passed, its
+  two points (the SRC family's release of sceVaudio's channel documented and tested, a test's leftover) taken in
+  `97fac6653`.
+- **On the RP6, to check**: (1) Angus Hates Aliens: NEW GAME passes the loading screen into the first level (black
+  before); its music is still silent. (2) Battle vs. Chess: menu and board music plays (silent before); a move is
+  still refused. (3) Save and load a state in a game playing music (any ATRAC game) and in Battle vs. Chess: it plays
+  on; a state made by this build is refused by builds before it (StateVersion 31).
+- Scratch: `~/phobos-work/scratch/hle-b00`.
+
 ## PSP: memstick: is the memory stick — Colin McRae Rally 2005 Plus's save — 2026-10-12
 
 Branch `cursor/psp-colinsave-2b67`, begun on `cursor/psp-dialogs-2b67` (#221) and merged with master (#221, #222, #224
