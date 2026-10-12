@@ -94,8 +94,8 @@ static const MeasureFile measureFiles6[] = {
 
 //Round 7's pictures (part 78: anti-aliased lines in every octant, with vertex alphas, blend modes, textures, in 3D).
 static const MeasureFile measureFiles7[] = {
-  {"aa-slopes", 256, 256}, {"aa-alpha", 256, 256}, {"aa-blend", 256, 256}, {"aa-textured", 256, 256},
-  {"aa-3d", 256, 256},
+  {"aa-slopes", 256, 256}, {"aa-axes", 256, 256}, {"aa-alpha", 256, 256}, {"aa-blend", 256, 256},
+  {"aa-textured", 256, 256}, {"aa-3d", 256, 256},
 };
 
 //Round 6's timing tests (tools/psp-measure/ge.c's tables): how many records (each case's sizes, at two clock

@@ -10069,10 +10069,12 @@ which leaves it as it was); clear mode draws as before.
 
 ### Round 7
 
-`tools/psp-measure`'s new first menu line, "Round 7: the GE's anti-aliased lines", writes five pictures
-(`manifest7.txt`) for what's chosen above: `aa-slopes` (16 directions, shallow and steep, falling and rising, each both
-ways, at every sixteenth), `aa-alpha` (`lines-smooth`'s lines at every vertex alpha: replaced or scaled), `aa-blend` (a
-colored line over a known background in eight modes, with and without the alpha test, clear mode among them),
+`tools/psp-measure`'s new first menu line, "Round 7: the GE's anti-aliased lines", writes six pictures
+(`manifest7.txt`) for what's chosen above: `aa-slopes` (8 slopes, shallow and steep, falling and rising, each drawn
+both ways over the same segments, at every sixteenth along x), `aa-axes` (level, upright and diagonal lines, each both
+ways, at every sixteenth across, a level line from along its row's edge to through its pixels' middles), `aa-alpha`
+(`lines-smooth`'s lines at every vertex alpha: replaced or scaled), `aa-blend` (a colored line over a known
+background in eight modes, with and without the alpha test, clear mode among them),
 `aa-textured` (every vertex at one texel or a ramp of them, replace, modulate and bilinear: which texels the pixels
 take, and the texel's alpha against the coverage) and `aa-3d`. `tests/psp/measure.cpp` drives it and compares with a
 PSP's files where there are any. `pspmeasure.elf` was rebuilt in the pinned pspdev image (master's source rebuilds
@@ -10101,19 +10103,24 @@ Acids' titles, part 72).
 
 ### Checks
 
-- `tests/psp/run-tests.sh` (sanitized) 451 groups, 0 failures: "draw anti-aliased lines" (five measured cells, shallow
+- `tests/psp/run-tests.sh` (sanitized) 468 groups, 0 failures (on master `529fbf403`): "draw anti-aliased lines" (five measured cells, shallow
   and turned steep, at vertex alphas 0xff and 0x20, the alpha test dropping a pixel of no coverage, a clamped textured
   line's texels from rows its ends' coordinates wouldn't decode) and "gpu anti-aliased lines against the software
   renderer" (flat, then textured from the frame buffer they draw into and modulated, each line's alpha test above 0,
   31, 63 or 95, byte for byte) are new; "psp measure" runs round 7. With `PSP_GE_RESULTS` set to the owner's round 4 to
   6 results, `lines-smooth` is "same".
-- `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 307 checks, 0 failed.
+- `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed.
 - An independent read-only review found no bug in the core. Its points were fixed: round 7's replace-RGBA rows read
   the alpha from the frame buffer's alpha byte, which is the stencil's (now read through blending, over white); the
   GPU test saw the coverage only as zero or not and its textured half wrote back what it read; the draw test never
   reached the texture rows past the ends'; aa-slopes' reversed rows weren't the same segments; aa-3d didn't try the
   texture scale and offset; comments and sizes. Left as it is: the texture reach could stop at the drawn region rather
   than the whole texture (fewer rows for the Vulkan renderer to copy; 3D already takes the whole texture).
+- A second independent review, of the whole branch, found no bug either. Its points were taken: `aa-axes` added to
+  round 7 (level, upright and diagonal lines, which aa-slopes' two slopes didn't try, and where a level line on a row's
+  edge falls); above 1x the Vulkan renderer's textured anti-aliased pixels take a texel per GPU pixel, as a copy of the
+  frame buffer at that resolution has them, not one per square; through mode's texture reach no longer guesses rows
+  for anti-aliased lines but takes the whole texture; the GPU test checks that the GPU drew its lines; comments.
 
 ### Left, and why
 

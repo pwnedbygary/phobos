@@ -228,12 +228,13 @@ auto GE::linePixels(const Job& job, s32 fromY, s32 toY, std::vector<LinePixel>& 
   auto acrossAt = [&](s64 column) {
     return floorDivide64(l.y[0] * l.along + l.rise * (column * 16 + 8 - l.x[0]), l.along * 16);
   };
-  //An anti-aliased line's pixel's alpha, in place of its color's (measured, docs/psp-core.md, part 78: round 4's
-  //lines-smooth, every pixel): where the line is across the pixel at its middle along x, in 256ths of a pixel from
-  //its top edge, rounded up, the line stepped from its left end by its slope cut toward zero to 65536ths (13 or
-  //more bits fit, 12 don't); then the distance to the nearer edge, 0 to 128. So a line through a pixel's middle
-  //gives it 128, one along its edge 0. Measured only for a shallow line falling to the right: a steep one is that
-  //turned, as the pixels it lights are; a rising one's cut (toward zero, not down) isn't pinned.
+  //An anti-aliased line's pixel's coverage (measured, docs/psp-core.md, part 78: round 4's lines-smooth, every
+  //pixel), which takes the place of its color's alpha (chosen: lines-smooth's alpha was 0xff, where replacing and
+  //scaling agree; PPSSPP describes it replaced): where the line is across the pixel at its middle along x, in 256ths
+  //of a pixel from its top edge, rounded up, the line stepped from its left end by its slope cut toward zero to
+  //65536ths (13 or more bits fit, 12 don't); then the distance to the nearer edge, 0 to 128. So a line through a
+  //pixel's middle gives it 128, one along its edge 0. Measured only for a shallow line falling to the right: a steep
+  //one is that turned, as the pixels it lights are; a rising one's cut (toward zero, not down) isn't pinned.
   auto coverage = [&](s64 across, s64 middle) -> u32 {
     s64 scaled = 16 * 65536 * (l.y[0] - across * 16) + 16 * l.slope * (middle - l.x[0]);  //(256ths, times 65536)
     s64 g = scaled >= 0 ? (scaled + 65535) / 65536 : -(-scaled / 65536);

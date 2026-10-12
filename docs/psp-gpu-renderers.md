@@ -92,7 +92,8 @@ converts (`gpu.cpp`'s `vertex()`):
   w = 1, and a triangle's pixels are the GPU's own divide), which no game is known to draw.
 - **Points and lines** are pixel-sized squares, each with its own values. An anti-aliased line's pixels come from
   `linePixels()` with their coverage for the alpha and the texel at their own middle (docs/psp-core.md, part 78), so
-  the GPU draws them as the software renderer does without knowing of anti-aliasing.
+  the GPU draws them as the software renderer does without knowing of anti-aliasing; above 1x a textured one's square
+  spreads its texture coordinates across it, each of the GPU's pixels taking the texel at its own place.
 
 Consecutive primitives with the same settings go into one draw.
 

@@ -272,16 +272,14 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     u32 height = std::min<u32>(texture.height, 512);
     bool filters = commands[TextureFilter] & 0x101;
     float lowest = kind == Sprites || kind == Points ? (filters ? 0.5f : 0.0f) : 2.0f;
-    //(anti-aliased lines, as line() marks them, take the texels at their pixels, not their vertices': every row and
-    //column)
+    //(anti-aliased lines, as line() marks them, take the texels at their pixels, not at their vertices: all of them)
     bool smooth = (kind == Lines || kind == LineStrip) && (commands[AntiAliasEnable] & 1) && !pixel.clear;
-    if(smooth) minU = minV = -65536, maxU = maxV = 65536;
-    if((minV >= lowest || texture.clampV) && maxV + 2 < height) {
+    if(!smooth && (minV >= lowest || texture.clampV) && maxV + 2 < height) {
       u32 reach = maxV + 2 > 0 ? u32(maxV + 2) : 0;  //(all of them below the top, held at it)
       rows = std::min<u32>((reach + 8) & ~7u, height);
     }
     u32 width = std::min<u32>(texture.width, 512);
-    if((minU >= lowest || texture.clampU) && maxU + 2 < width) {
+    if(!smooth && (minU >= lowest || texture.clampU) && maxU + 2 < width) {
       u32 reach = maxU + 2 > 0 ? u32(maxU + 2) : 0;
       columns = std::min<u32>((reach + 8) & ~7u, width);
     }

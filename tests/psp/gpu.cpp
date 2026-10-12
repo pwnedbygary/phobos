@@ -177,6 +177,7 @@ static auto gpuSmoothLines() -> void {
   auto gpu = renderer();
   if(!gpu) return;
   std::mt19937 random{20261012};
+  auto before = gpu->statistics.primitives;
   System software, hardware;
   hardware.ge.setRenderer(gpu);
   auto background = randomSprites(random, 30, false);
@@ -213,6 +214,7 @@ static auto gpuSmoothLines() -> void {
   }
   u32 bytes = apart(software, hardware);
   CHECK(bytes, 0u);
+  CHECK(gpu->statistics.primitives > before + 80, true);  //(the GPU drew the lines, not the GE in its place)
   hardware.ge.setRenderer(nullptr);
 }
 

@@ -3642,6 +3642,27 @@ static void aaSlopes(const char* name) {
   endSmooth(name);
 }
 
+//Level, upright and diagonal lines, the directions aa-slopes leaves out: row k in direction axes[k] (rows 0-7 7.5
+//pixels long, 6 each way for the diagonals, rows 8-15 4 and 3), each pair of rows one direction and its reverse,
+//white over black by its alpha; cell (i, k)'s line i sixteenths along x (aaCell), and a level one i sixteenths down
+//too (j = i, else 0): each line i sixteenths across, a level one along its row's edge at i = 0 and through its
+//pixels' middles at i = 8, an upright one likewise.
+static const float axes[16][2] = {
+  {7.5f, 0}, {-7.5f, 0}, {0, 7.5f}, {0, -7.5f}, {6, 6}, {-6, -6}, {6, -6}, {-6, 6},
+  {4, 0}, {-4, 0}, {0, 4}, {0, -4}, {3, 3}, {-3, -3}, {3, -3}, {-3, 3},
+};
+static void aaAxes(const char* name) {
+  if(!beginSmooth(name, zero)) return;
+  overBlack();
+  FloatVertex* v = sceGuGetMemory(256 * 2 * sizeof(FloatVertex));
+  for(int cell = 0; cell < 256; cell++) {
+    int k = cell >> 4;
+    aaCell(v + cell * 2, cell, axes[k][1] == 0 ? cell & 15 : 0, axes[k][0], axes[k][1], 0xffffffff, 0, 0, 0, 0);
+  }
+  sceGuDrawArray(GU_LINES, FloatVertexType, 512, 0, v);
+  endSmooth(name);
+}
+
 //The vertices' alpha against the coverage: lines-smooth's lines (cell (i, j)'s from (4 + i / 16, 4 + j / 16) pixels
 //into the cell to (7.5, 2.25) further), each cell's vertex alpha its number (0 to 255), white blended over black:
 //whether the coverage replaces the alpha or scales it.
@@ -3766,11 +3787,13 @@ static void writeManifest7(void) {
   static const char text[] =
     "psp-measure's GE tests, round 7 (tools/psp-measure/ge.c in Phobos says what each test draws; docs/psp-core.md,\n"
     "part 78, what each is for): anti-aliased lines (GU_LINE_SMOOTH). Pictures: the target's pixels after one test, a\n"
-    "little-endian 32-bit word each, row by row, 256x256, 16x16 cells of a line each. In aa-slopes, aa-blend and\n"
-    "aa-textured cell (i, j)'s line (d its direction) starts (8 - dx / 2 + i / 16, 8 - dy / 2 + j / 16) pixels into\n"
-    "the cell; in aa-alpha and aa-3d, (4 + i / 16, 4 + j / 16), going (7.5, 2.25).\n"
+    "little-endian 32-bit word each, row by row, 256x256, 16x16 cells of a line each. In aa-slopes, aa-axes,\n"
+    "aa-blend and aa-textured, cell (i, j)'s line (d its direction) starts (8 - dx / 2 + i / 16, 8 - dy / 2 + j / 16)\n"
+    "pixels into the cell; in aa-alpha and aa-3d, (4 + i / 16, 4 + j / 16), going (7.5, 2.25).\n"
     "aa-slopes: white over black by its alpha, row k in direction k: (7.5, 2.25) and (7.5, 5.5) and each turned and\n"
     "mirrored (ge.c's slopes), each pair of rows one direction and its reverse over the same segments (j = k & ~1).\n"
+    "aa-axes: as aa-slopes, row k in direction axes[k] (level, upright, diagonal, each way; rows 8-15 shorter), j 0\n"
+    "but for level lines (j = i): a level line along its row's edge at i = 0, through the pixels' middles at i = 8.\n"
     "aa-alpha: round 4's lines-smooth with each cell's vertex alpha its number (0-255).\n"
     "aa-blend: 0xff20a0e0 over 0x80c06020 in 8 modes, two rows each (the second with the alpha test above 0): none,\n"
     "src alpha / 1 - src alpha, src alpha / fixed white, fixed white / 1 - src alpha, reverse subtract src alpha /\n"
@@ -3790,6 +3813,7 @@ static void writeManifest7(void) {
 static void round7(void) {
   writeManifest7();
   aaSlopes("aa-slopes");
+  aaAxes("aa-axes");
   aaAlpha("aa-alpha");
   aaBlend("aa-blend");
   aaTextured("aa-textured");

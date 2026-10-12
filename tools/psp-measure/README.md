@@ -38,7 +38,7 @@ on a real PSP, reads back the exact pixels and saves them, so the core can be co
 2. On a PSP with custom firmware that runs homebrew, copy `EBOOT.PBP` to a folder under `PSP/GAME` on the memory
    stick (say `PSP/GAME/PSPMEASURE`) and start it. Keep the charger in. Up and down pick a line of the menu, and X
    runs it:
-   - Round 7: the GE's anti-aliased lines (about 1.3 MB)
+   - Round 7: the GE's anti-aliased lines (about 1.5 MB)
    - Round 6: the GE's time, lighting, reciprocal, curves (about 7 MB)
    - Round 5: the GE's steps, lighting's share, texels (about 3 MB)
    - Round 4: the GE's lines, boxes, DXT and curves (about 8 MB)
@@ -249,13 +249,15 @@ Round 6 (about 7 MB, `manifest6.txt`, which also lists every timing case) takes 
   last, where the GE may stall on purpose).
 - **The driver's statuses** while a list draws, and with its FINISH's interrupt held off (`ge-statuses`).
 
-Round 7 (about 1.3 MB, `manifest7.txt`) takes anti-aliased lines (`GU_LINE_SMOOTH`) past round 4's
+Round 7 (about 1.5 MB, `manifest7.txt`) takes anti-aliased lines (`GU_LINE_SMOOTH`) past round 4's
 `lines-smooth`, which pinned their coverage only for white, opaque lines falling to the right over black
 (docs/psp-core.md, part 78):
 
 - **Every octant** (`aa-slopes`): shallow and steep, falling and rising, at two slopes, each starting at every
-  sixteenth and drawn both ways over the same segments, white over black: the coverage of every direction, and which
-  end it's stepped from.
+  sixteenth along x and drawn both ways over the same segments, white over black: the coverage of every direction,
+  and which end it's stepped from.
+- **Level, upright and diagonal lines** (`aa-axes`): each both ways, at every sixteenth across (a level line from
+  along its row's edge, where the core gives it no coverage, to through its pixels' middles), long and short.
 - **The vertices' alpha** (`aa-alpha`): `lines-smooth`'s lines with each cell's vertex alpha its number, 0 to 255:
   whether the coverage replaces the alpha or scales it.
 - **Blending over a known background** (`aa-blend`): a colored line over 0x80c06020 in eight modes (none, the usual
