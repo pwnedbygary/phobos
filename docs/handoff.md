@@ -28,7 +28,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 ## PSP: anti-aliased lines — Dead or Alive Paradise's wireframe gone — 2026-10-12
 
 Branch `cursor/psp-aalines-2b67`, on master (`2a7019c84`). The play-test's batch 1, item 1: every girl's model in Dead
-or Alive Paradise covered in a coloured wireframe, both renderers. docs/psp-core.md, part 76, has the evidence. Clean
+or Alive Paradise covered in a coloured wireframe, both renderers. docs/psp-core.md, part 78, has the evidence. Clean
 room: the owner's PSP's round 4 pictures, a trace of the game's lists, PPSSPP's rasterizer read for its description
 of the PSP only; JPCSP not read. Save states unchanged.
 - **Cause**: the game draws its models' edges again as anti-aliased 3D line strips, textured with the frame buffer
@@ -45,8 +45,6 @@ of the PSP only; JPCSP not read. Save states unchanged.
   The beach, pool and volleyball scenes are clean in both renderers, software and Vulkan a mean of 0.1-0.2 apart. The
   whole library beside the final run: 265 finish (Killzone stopped at 900 s on a busy Mac); of the three games that
   draw anti-aliased lines, MotorStorm: Arctic Edge's menu panels' edges are now graded, the others unchanged.
-- **Note for merging**: #223 (not ready) also calls its docs/psp-core.md section "Part 76"; whichever merges second
-  renumbers.
 
 ## Merged into master: #212 to #219 — 2026-10-11
 

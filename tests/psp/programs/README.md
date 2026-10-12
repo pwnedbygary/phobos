@@ -25,7 +25,7 @@ They were built on 2026-10-04 (`disc.elf` on 2026-10-05) with pspdev's toolchain
 was rebuilt on 2026-10-06 with its round 4 (docs/psp-core.md, part 29), again on 2026-10-07 with round 4's curved
 surfaces (part 33), again on 2026-10-08 with round 5 (part 48), again on 2026-10-09 with the GE's waits timed
 (a stall is reset and recorded, rather than freezing the PSP), again on 2026-10-10 with round 6 (part 66), and
-again on 2026-10-12 with round 7 (part 76), in pspdev's Docker image
+again on 2026-10-12 with round 7 (part 78), in pspdev's Docker image
 (`ghcr.io/pspdev/pspdev@sha256:54895e6f5afb71b8f4f6915ee6d5023e1e087ca7afdf2dcb1d7a694a5233e45f`), the rest left as
 they were. They hold no Sony code, no game and no firmware. Their parts come from:
 - Phobos's own sources (the programs in `tools/psp-test-programs` and `tools/psp-measure`);

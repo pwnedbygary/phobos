@@ -92,7 +92,7 @@ static const MeasureFile measureFiles6[] = {
   {"curves-count-v-128", 256, 256}, {"curves-count-v-200", 256, 256}, {"curves-count-v-255", 256, 256},
 };
 
-//Round 7's pictures (part 76: anti-aliased lines in every octant, with vertex alphas, blend modes, textures, in 3D).
+//Round 7's pictures (part 78: anti-aliased lines in every octant, with vertex alphas, blend modes, textures, in 3D).
 static const MeasureFile measureFiles7[] = {
   {"aa-slopes", 256, 256}, {"aa-alpha", 256, 256}, {"aa-blend", 256, 256}, {"aa-textured", 256, 256},
   {"aa-3d", 256, 256},

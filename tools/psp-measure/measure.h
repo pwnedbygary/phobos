@@ -49,5 +49,5 @@ void vfpuStart(void);      //first thing when the program starts: what round 1 a
 int vfpuRound(int round);  //1-3, or 4 for the FPU probes
 int geRound(int round);    //2: the GE's first tests and the controller's timing; 3: what they left open; 4:
                            //parts 29's and 33's; 5: what part 48 left open; 6: what parts 60 and 64 left open;
-                           //7: anti-aliased lines (part 76)
+                           //7: anti-aliased lines (part 78)
 void geEnd(void);          //lets the GE go before the program leaves

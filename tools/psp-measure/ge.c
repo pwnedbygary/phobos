@@ -18,7 +18,7 @@
 //perspective texels to the texel in thousands. Round 6 takes what parts 60 and 64 left open: how long the GE takes to
 //draw (lists of known work timed), lighting's cosine (the products in full, normals swept), the reciprocal's chords
 //read off texels, what PATCH_CULL_ENABLE does, patch divisions past 64 along v, and the driver's statuses while the
-//GE draws. Round 7 takes anti-aliased lines past round 4's one case (part 76): every octant, the vertices' alpha,
+//GE draws. Round 7 takes anti-aliased lines past round 4's one case (part 78): every octant, the vertices' alpha,
 //blending over a known background, textures, 3D. Each round is picked from the menu (main.c).
 //
 //Each test draws into VRAM (away from the text on the screen), reads the pixels back as they are and writes them to
@@ -3589,7 +3589,7 @@ static void round6(void) {
   }
 }
 
-//---- round 7: anti-aliased lines (docs/psp-core.md, part 76), which round 4's lines-smooth pinned only for white,
+//---- round 7: anti-aliased lines (docs/psp-core.md, part 78), which round 4's lines-smooth pinned only for white,
 //opaque lines falling to the right, blended over black, untextured, in through mode
 
 //The line of cell (i, k) (cell = k * 16 + i) of the 16x16 cells, its two vertices at v: from (8 - dx / 2 + i / 16,
@@ -3765,7 +3765,7 @@ static void writeManifest7(void) {
   if(file < 0) return;
   static const char text[] =
     "psp-measure's GE tests, round 7 (tools/psp-measure/ge.c in Phobos says what each test draws; docs/psp-core.md,\n"
-    "part 76, what each is for): anti-aliased lines (GU_LINE_SMOOTH). Pictures: the target's pixels after one test, a\n"
+    "part 78, what each is for): anti-aliased lines (GU_LINE_SMOOTH). Pictures: the target's pixels after one test, a\n"
     "little-endian 32-bit word each, row by row, 256x256, 16x16 cells of a line each. In aa-slopes, aa-blend and\n"
     "aa-textured cell (i, j)'s line (d its direction) starts (8 - dx / 2 + i / 16, 8 - dy / 2 + j / 16) pixels into\n"
     "the cell; in aa-alpha and aa-3d, (4 + i / 16, 4 + j / 16), going (7.5, 2.25).\n"

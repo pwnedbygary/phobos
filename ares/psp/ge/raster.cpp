@@ -223,7 +223,7 @@ auto GE::linePixels(const Job& job, s32 fromY, s32 toY, std::vector<LinePixel>& 
   auto acrossAt = [&](s64 column) {
     return floorDivide64(l.y[0] * l.along + l.rise * (column * 16 + 8 - l.x[0]), l.along * 16);
   };
-  //An anti-aliased line's pixel's alpha, in place of its color's (measured, docs/psp-core.md, part 76: round 4's
+  //An anti-aliased line's pixel's alpha, in place of its color's (measured, docs/psp-core.md, part 78: round 4's
   //lines-smooth, every pixel): where the line is across the pixel at its middle along x, in 256ths of a pixel from
   //its top edge, rounded up, the line stepped from its left end by its slope cut toward zero to 65536ths (13 or
   //more bits fit, 12 don't); then the distance to the nearer edge, 0 to 128. So a line through a pixel's middle

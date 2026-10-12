@@ -3734,7 +3734,7 @@ named below through this core, before and after.
   the screen, depths outside the range), and cut where it reaches past the near plane (the new end blended from the
   kept one, as a triangle's; with flat shading, a cut-away second end keeps its color). None of that is measured but
   2D's pictures. Anti-aliasing (ANTI_ALIAS_ENABLE, `GU_LINE_SMOOTH`) isn't emulated, and noted once: `gpu/exact/lines`
-  shows it changes nothing without blending; what alpha it gives with blending isn't known. (Since part 76 it is:
+  shows it changes nothing without blending; what alpha it gives with blending isn't known. (Since part 78 it is:
   each pixel's alpha its coverage, measured by round 4's `lines-smooth`.)
 
 **Bounding boxes** (`draw.cpp`'s `boundingBox()`, `list.cpp`'s BOUNDING_BOX and BJUMP). BOUNDING_BOX tests the count
@@ -9543,7 +9543,7 @@ differ too.
   sheets; trace-patch/: the scratch runner's tracing and the vnop counter; after1 and after2, the runs above; lib-fix
   and count, the library runs).
 
-## Part 76: anti-aliased lines — the coverage for the alpha, measured; Dead or Alive Paradise's wireframe gone
+## Part 78: anti-aliased lines — the coverage for the alpha, measured; Dead or Alive Paradise's wireframe gone
 
 The play-test (batch 1, item 1) found every girl's 3D model in Dead or Alive Paradise (ULUS10521) covered in a
 wireframe of coloured 1-pixel lines along its mesh edges, in every 3D scene, with both renderers, from the frame the

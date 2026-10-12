@@ -251,7 +251,7 @@ Round 6 (about 7 MB, `manifest6.txt`, which also lists every timing case) takes 
 
 Round 7 (about 1.3 MB, `manifest7.txt`) takes anti-aliased lines (`GU_LINE_SMOOTH`) past round 4's
 `lines-smooth`, which pinned their coverage only for white, opaque lines falling to the right over black
-(docs/psp-core.md, part 76):
+(docs/psp-core.md, part 78):
 
 - **Every octant** (`aa-slopes`): shallow and steep, falling and rising, at two slopes, each starting at every
   sixteenth and drawn both ways over the same segments, white over black: the coverage of every direction, and which
