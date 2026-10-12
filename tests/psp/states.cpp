@@ -524,9 +524,10 @@ static auto stateFields() -> void {
     //sceVaudio holding the SRC channel (its count one sceVaudio takes), its buffers single samples, an effect and
     //the level control
     {"vaudio reserved", [&] { k.audio.vaudio.reserved = true, k.audio.src.sampleCount = 256; }},
-    {"vaudio mono", [&] { k.audio.vaudio.mono = true; }}, {"vaudio effect", [&] { k.audio.vaudio.effect = 4; }},
+    {"vaudio ownsSrc", [&] { k.audio.vaudio.ownsSrc = true; }},
+    {"vaudio mono", [&] { k.audio.vaudio.mono = true; }}, {"vaudio effect", [&] { k.audio.vaudio.effect = 5; }},
     {"vaudio effectVolume", [&] { k.audio.vaudio.effectVolume = 0x8000; }},
-    {"vaudio alc", [&] { k.audio.vaudio.alc = 1; }},
+    {"vaudio alc", [&] { k.audio.vaudio.alc = 2; }},
     {"vblank handler function", [&] { k.vblankSubs[3].function = 0x0880'3000; }},
     {"vblank handler argument", [&] { k.vblankSubs[3].argument = 1; }},
     {"vblank handler gp", [&] { k.vblankSubs[3].gp = 4; }},
@@ -1094,13 +1095,13 @@ static auto stateFields() -> void {
   refuses("the SRC channel somewhere with nothing armed", [&] { k.audio.src.armed = 0; });
   refuses("the SRC channel more than SrcAhead frames ahead", [&] { k.audio.src.renderedTo++; });
   refuses("the SRC channel a ring ahead", [&] { k.audio.src.renderedTo = k.sampleFrame(k.cycles) + 4096; });
-  refuses("sceVaudio holding the SRC channel with 17 samples a buffer", [&] { k.audio.src.sampleCount = 17; });
-  refuses("sceVaudio holding a released SRC channel", [&] {
+  refuses("sceVaudio owning a released SRC channel", [&] {
     k.audio.src.reserved = false, k.audio.src.armed = 0, k.audio.src.position = 0;
   });
-  refuses("a sceVaudio effect past 4", [&] { k.audio.vaudio.effect = 5; });
+  refuses("sceVaudio owning the SRC channel without holding it", [&] { k.audio.vaudio.reserved = false; });
+  refuses("a sceVaudio effect past 5", [&] { k.audio.vaudio.effect = 6; });
   refuses("a sceVaudio effect louder than 0x8000", [&] { k.audio.vaudio.effectVolume = 0x8001; });
-  refuses("a sceVaudio level control of 2", [&] { k.audio.vaudio.alc = 2; });
+  refuses("a sceVaudio level control of 3", [&] { k.audio.vaudio.alc = 3; });
   //(each refusal loads the machine again, threads and all: they're looked up afresh)
   auto waitsOnAudio = [&](Kernel::Thread& waiter, u32 id) {
     waiter.status = Kernel::Status::Waiting, waiter.wait = Kernel::Wait::Audio, waiter.waitID = id;
@@ -1114,6 +1115,14 @@ static auto stateFields() -> void {
   refuses("a thread waiting for an SRC buffer with only one armed", [&] {
     k.audio.src.armed = 1;
     waitsOnAudio(*k.threads.at(one), Kernel::Audio::WaitSrc);
+  });
+  refuses("a thread waiting to release sceVaudio's channel with nothing armed", [&] {
+    k.audio.src.armed = 0, k.audio.src.position = 0;
+    waitsOnAudio(*k.threads.at(one), Kernel::Audio::WaitVaudioRelease);
+  });
+  refuses("a thread waiting to release sceVaudio's channel when it isn't sceVaudio's", [&] {
+    k.audio.vaudio.ownsSrc = false;
+    waitsOnAudio(*k.threads.at(one), Kernel::Audio::WaitVaudioRelease);
   });
   refuses("a vertical blank handler on sub-interrupt 18, the display driver's", [&] {
     k.vblankSubs[18].function = 0x0880'3000;
@@ -1644,7 +1653,7 @@ static auto olderLayouts() -> void {
   node.key() = file;
   m.kernel.files.insert(std::move(node));
   CHECK(kernelState() == state, true);
-  bool ordered = vaudio + 14 <= dialogError && dialogDeleted == dialogError + 4 && dialogDeleted < jpeg
+  bool ordered = vaudio + 15 <= dialogError && dialogDeleted == dialogError + 4 && dialogDeleted < jpeg
               && jpeg < files && files < asyncData && asyncData < opened && opened + 8 <= pgd && pgd < pgdEnd
               && pgdEnd <= workingDirectory && workingDirectory < geDone && geFinish == geDone + 8
               && geFinish < state.size();
@@ -1656,9 +1665,9 @@ static auto olderLayouts() -> void {
     bytes.erase(bytes.begin() + dialogError, bytes.begin() + dialogDeleted + 1);
     return bytes;
   };
-  //and layouts before 31 no sceVaudio (14 bytes in the sound's part, before all the others, so taken out last)
+  //and layouts before 31 no sceVaudio (15 bytes in the sound's part, before all the others, so taken out last)
   auto before31 = [&](std::vector<u8> bytes) {
-    bytes.erase(bytes.begin() + vaudio, bytes.begin() + vaudio + 14);
+    bytes.erase(bytes.begin() + vaudio, bytes.begin() + vaudio + 15);
     return bytes;
   };
 
@@ -1731,9 +1740,9 @@ static auto olderLayouts() -> void {
   for(u32 at : {places[1], places[0]}) {  //each file's place, and its PGD decryption after it
     twoFiles.erase(twoFiles.begin() + at, twoFiles.begin() + at + (pgdEnd - opened));
   }
-  CHECK(vaudioAt + 14 <= dialogAt && dialogAt < places[0], true);
+  CHECK(vaudioAt + 15 <= dialogAt && dialogAt < places[0], true);
   twoFiles.erase(twoFiles.begin() + dialogAt, twoFiles.begin() + dialogAt + 5);
-  twoFiles.erase(twoFiles.begin() + vaudioAt, twoFiles.begin() + vaudioAt + 14);
+  twoFiles.erase(twoFiles.begin() + vaudioAt, twoFiles.begin() + vaudioAt + 15);
   KernelMachine n;
   machine(n);
   n.kernel.stateLayout = 22;

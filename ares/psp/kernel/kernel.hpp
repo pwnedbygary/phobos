@@ -1158,7 +1158,8 @@ struct Kernel {
     //sceVaudio's channel: the SRC channel, held by sceVaudioChReserve; its buffers, single samples or pairs, copied
     //as pairs into the kernel's two (VaudioMemory) and armed from there (audio.cpp)
     struct Vaudio {
-      bool reserved = false;
+      bool reserved = false;          //held by sceVaudioChReserve (even where the SRC channel refused it: audio.cpp)
+      bool ownsSrc = false;           //and the SRC channel reserved for it
       bool mono = false;              //its buffers single samples (format 1), else pairs (2)
       s32 effect = 0, effectVolume = 0, alc = 0;  //sceVaudioSetEffectType's and sceVaudioSetAlcMode's: kept, not heard
     } vaudio;

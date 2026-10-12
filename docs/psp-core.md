@@ -10427,9 +10427,10 @@ fileDataEnd and secondBuffer).
 **What a PSP does.** Its library's contexts are its state itself, there from the start and current after every call;
 `_sceAtracGetContextAddress` only says where one is (pspautotests' shared.cpp: "Need to call this every time to get
 the values updated - but only in the emulator!"). Programs write them, and the library honours it: getremainframe,
-getsoundsample, resetpos, resetting and second recorded every call that needs a file refusing an ID whose state the
-test set to 8 (0x80630031) or 16 (0x80630040), and taking it again set back to 2. The sas recording shows nothing in
-the context moving as sceSas plays it but the buffer, which the first grain clears.
+getsoundsample, resetpos, resetting and second recorded the calls they make (GetRemainFrame, GetSoundSample,
+ResetPlayPosition, GetBufferInfoForResetting, GetSecondBufferInfo, IsSecondBufferNeeded, SetSecondBuffer) refusing an
+ID whose state the test set to 8 (0x80630031) or 16 (0x80630040). The sas recording shows nothing in the context
+moving as sceSas plays it but the buffer, which the first grain clears.
 
 **The fix** (`atrac.cpp`, `sas.cpp`):
 - Every ID's 256 bytes are in kernel memory (`Kernel::AtracContextMemory`, 0x08030000: chosen, as a PSP's are in its
@@ -10437,12 +10438,16 @@ the context moving as sceSas plays it but the buffer, which the first grain clea
   whenever the library changes the ID (set, decoded, added to, reset, released, its loops or second buffer set, a
   low-level decode's error). `_sceAtracGetContextAddress` writes nothing and gives the address of an ID handed out
   (0 for one that isn't, as before).
-- The state a program wrote there is what every call needing a file looks at first: 8 refuses it with 0x80630031, 16
-  with 0x80630040. A low-level ID's context says 8 (so those calls on one now give 0x80630031 where they gave
-  NO_DATA). The rest of what a program writes stays until the library next changes that ID.
+- The state a program wrote there is what every call needing a file looks at first (chosen for those the recordings
+  didn't make): 8 refuses it with 0x80630031, 16 with 0x80630040, and set back the ID is taken again (no recording
+  calls after that). A low-level ID's context says 8 (so those calls on one now give 0x80630031 where they gave
+  NO_DATA). The rest of what a program writes stays until the library next changes that ID: a set refused before it
+  changes anything, or a decode after the end, writes nothing.
 - `__sceSasSetVoiceATRAC3` writes the context's address into the voice's first word in the SasCore.
 - States: the contexts travel in memory. A state from before (no memory of their own: 0) has them written as it
-  loads; one where a program had asked (a block of the user partition) keeps them there.
+  loads; one where a program had asked (a block of the user partition) keeps them there, as fresh as that last
+  asking, which wrote them then: each is written again as the library next changes its ID, a state the program set
+  kept meanwhile (Angus's state at its title needs its 16 kept).
 
 **The game now** (the scratch runner, the tester's `st-title.bin`, Cross at 30): the stop goes through at once, a
 loading screen from frame 100, and the first level from about 750, Angus in his cell: "MY HEAD HURTS. THE LAST THING I
@@ -10465,12 +10470,16 @@ channel's release is, but waits for it to be heard (a buffer's time) and then re
 256 to 2048 samples a buffer, mono (1) or stereo (2), the rates, the four effects and the level control.
 
 **The implementation** (`audio.cpp`): sceVaudioChReserve, ChRelease, OutputBlocking, SetEffectType and SetAlcMode, as
-recorded and, where not, chosen: each buffer copied as pairs (a mono sample heard on both sides) into whichever of two
-kernel buffers (`Kernel::VaudioMemory`) isn't armed, and armed on the SRC channel from there, its blocking and pace the
-SRC channel's; the release's wait a thread state of its own (`Audio::WaitVaudioRelease`), the release made as the
-last buffer retires; a count outside 256 to 2048 INVALID_SIZE and a format but 1 or 2 INVALID_FORMAT, before
-sceVaudio is held; the effect (0 to 4, at 0 to 0x8000, the volume returned) and the level control (0 or 1) kept and
-not heard. The state keeps whether sceVaudio holds the channel, its format, effect and level control (layout 31).
+recorded and, where not, chosen: its outputs and release act on the SRC channel only where its own reservation took
+it (held on a refused one, they're NOT_RESERVED whoever has the channel, and the release lets go of the hold alone);
+each buffer is copied as pairs (a mono sample heard on both sides) into whichever of two kernel buffers
+(`Kernel::VaudioMemory`) isn't armed, and armed on the SRC channel from there, its blocking and pace the SRC
+channel's; the release's wait is a thread state of its own (`Audio::WaitVaudioRelease`), the release made as the last
+buffer retires (100 microseconds before its end is heard, as a drain returns); a count outside 256 to 2048 is
+INVALID_SIZE, a format but 1 or 2 INVALID_FORMAT and a rate the SRC channel hasn't got INVALID_FREQUENCY, all before
+sceVaudio is held; the effect (0 to 5 and the level control 0 to 2, pspvaudio.h's MAX values among them, the effect at
+0 to 0x8000, the volume returned) is kept and not heard. The state keeps whether sceVaudio is held and whether the
+channel is its own, its format, effect and level control (layout 31).
 
 **Battle vs. Chess now** (the tester's `script.txt` from boot, then `gameplay.txt`'s presses at 5820): its music thread
 (SceMainSampleBgmMp3) reserves 1152 samples at 44,100 Hz at frame 607 and plays its MP3 music through sceVaudio, an

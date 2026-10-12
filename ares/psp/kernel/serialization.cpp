@@ -343,13 +343,15 @@ auto Kernel::serialize(serializer& s) -> bool {
     check(src.retireAt > cycles ? src.retireAt - cycles <= latest : cycles - src.retireAt < VblankCycles);
   }
   //sceVaudio (layout 31 on; not held in older states): whether it's held (a reservation the SRC channel refused holds
-  //it too: audio.cpp), its buffers' format, its effect and level control as sceVaudioSetEffectType and
-  //sceVaudioSetAlcMode take them
+  //it too: audio.cpp) and whether the SRC channel is reserved for it, then only while it's held and the channel
+  //reserved; its buffers' format, its effect and level control as sceVaudioSetEffectType and sceVaudioSetAlcMode take
+  //them
   auto& vaudio = audio.vaudio;
   if(s.reading() && stateLayout < 31) vaudio = {};
-  else s(vaudio.reserved), s(vaudio.mono), s(vaudio.effect), s(vaudio.effectVolume), s(vaudio.alc);
-  check(vaudio.effect >= 0 && vaudio.effect <= 4 && vaudio.effectVolume >= 0 && vaudio.effectVolume <= 0x8000);
-  check(vaudio.alc == 0 || vaudio.alc == 1);
+  else s(vaudio.reserved), s(vaudio.ownsSrc), s(vaudio.mono), s(vaudio.effect), s(vaudio.effectVolume), s(vaudio.alc);
+  check(!vaudio.ownsSrc || (vaudio.reserved && src.reserved));
+  check(vaudio.effect >= 0 && vaudio.effect <= 5 && vaudio.effectVolume >= 0 && vaudio.effectVolume <= 0x8000);
+  check(vaudio.alc >= 0 && vaudio.alc <= 2);
   //what the channels have added to the output and the system hasn't taken yet: frames from the first not taken
   //(heard by now at the latest) to one past the last added to, a ring's worth at most, each sum no bigger than eight
   //channels and the SRC channel at their loudest make (2^21), so adding to it can't overflow; and where the SRC
@@ -386,7 +388,7 @@ auto Kernel::serialize(serializer& s) -> bool {
         check(src.armed == 2 && !srcWaited);
         srcWaited = true;
       } else if(t->waitID == Audio::WaitVaudioRelease) {
-        check(src.armed && src.reserved && vaudio.reserved);
+        check(src.armed && vaudio.ownsSrc);
       } else {
         check(t->waitID == Audio::WaitSrcDrain && src.armed);
       }
@@ -1078,8 +1080,10 @@ auto Kernel::serialize(serializer& s) -> bool {
       }
     }
   }
-  //(a state from before the ATRAC contexts had memory of their own: theirs written now, from all that's loaded)
-  if(s.reading() && !atracContexts) {
+  //(a state from before the ATRAC contexts had memory of their own: theirs written now, from all that's loaded. One
+  //where a program had asked for them keeps them in its block as they were then, as fresh as that last asking, which
+  //wrote them: they're written again as the library next changes each ID, a state the program set kept meanwhile.)
+  if(s.reading() && !atracContexts && valid) {
     atracContexts = AtracContextMemory;
     for(u32 id : range(6)) atracContext(id);
   }

@@ -633,10 +633,10 @@ static auto atracLowLevelState() -> void {
 //The contexts (pspautotests' atrac.h): every ID's 256 bytes in kernel memory from power on (no file: state 1, the ID
 //at the end), written whenever the library changes the ID (set, decoded, released), without
 //_sceAtracGetContextAddress, which only says where (0 for an ID not handed out) and writes nothing: what the program
-//wrote stays until the library next changes the ID. A state the program set to 8 or 16 refuses each call that needs
-//a file, 0x80630031 and 0x80630040 (getremainframe, getsoundsample, resetpos, resetting and second recorded), and set
-//back to 2 the ID is taken again. A low-level ID's says 8. A state keeps them; one from before they had memory of
-//their own (0 for it) has them written as it loads.
+//wrote stays until the library next changes the ID (a set refused before it changes, a decode after the end, don't).
+//A state the program set to 8 or 16 refuses each call that needs a file, 0x80630031 and 0x80630040 (getremainframe,
+//getsoundsample, resetpos, resetting and second recorded), and set back to 2 the ID is taken again. A low-level ID's
+//says 8. A state keeps them; one from before they had memory of their own (0 for it) has them written as it loads.
 static auto atracContexts() -> void {
   Machine m;
   auto at3 = file();
@@ -657,6 +657,8 @@ static auto atracContexts() -> void {
   m.system.memory.write(4, context(0) + 128 + 60, ~0u);
   CHECK(m.call("_sceAtracGetContextAddress", {0}), context(0));
   CHECK(field(0, 40) == 30 && field(0, 60) == ~0u, true);
+  CHECK(m.call("sceAtracSetData", {0, File + 0x10000, 0x1000}), 0x8063'0006);  //(refused before the ID changes)
+  CHECK(field(0, 40) == 30 && field(0, 60) == ~0u, true);
   //the state it sets
   auto remain = [&] { return m.call("sceAtracGetRemainFrame", {0, R}); };
   for(auto [forced, error] : {std::pair{8u, 0x8063'0031u}, {16u, 0x8063'0040u}}) {
@@ -670,6 +672,10 @@ static auto atracContexts() -> void {
   CHECK(remain() == 0 && s32(word(m, R)) == -1, true);
   CHECK(decode(m, 0).count, 2048);
   CHECK(field(0, 0) == 6144 && field(0, 40) == 0 && field(0, 60) == 0, true);  //the library's again, as it changed
+  while(!decode(m, 0).ended) {}
+  m.system.memory.write(4, context(0) + 128 + 40, 77);
+  CHECK(decode(m, 0).result, 0x8063'0024);  //(after the end: nothing changes, nothing's written)
+  CHECK(field(0, 40), 77);
   CHECK(roundTrip(m), true);
   CHECK(m.call("sceAtracReleaseAtracID", {0}), 0);
   CHECK(state(0) == 1 && field(0, 0) == 0 && field(0, 124) == 0, true);
@@ -693,7 +699,7 @@ static auto atracContexts() -> void {
   CHECK(n.system.memory.read(1, context(0) + 128 + 21) == 8 && n.system.memory.read(1, context(1) + 128 + 21) == 2,
         true);
   CHECK(word(n, context(1) + 128) == 2416 && word(n, context(5) + 252) == 5, true);
-  CHECK(m.notes.size(), 0);
+  CHECK(m.notes.size() == 0 && n.notes.size() == 0, true);
 }
 
 //Angus Hates Aliens' music: its sound code (a wrapper over sceSas's ATRAC3 voices, which pspautotests' audio/atrac/sas

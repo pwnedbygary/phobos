@@ -885,10 +885,11 @@ static auto outputKept() -> void {
 //release with a buffer playing waits for it, then releases. Reserving takes a count of 256 to 2048, the format 1 or
 //2 and a rate the SRC channel takes, and reserves that channel at it. Its buffers are copied as pairs into the
 //kernel's two, so a mono sample is heard on both sides and the program's buffer is its own once the call returns;
-//volumes are the SRC channel's. From a thread, its outputs return their sample count and pace as the SRC channel's
-//(the first at once, then a buffer apart less the 100-microsecond lead), counted by sceAudioOutput2GetRestSample; the
-//release returns once the last is heard. The effect and the level control are kept, the effect's volume returned;
-//out of range, refused. A state keeps it all.
+//volumes are the SRC channel's. Held on a refused reservation, its outputs and release leave the channel to whoever
+//has it. From a thread, its outputs return their sample count and pace as the SRC channel's (the first at once, then
+//a buffer apart less the 100-microsecond lead), counted by sceAudioOutput2GetRestSample; the release returns as the
+//last retires. The effect and the level control are kept, the effect's volume returned; out of range, refused. A
+//state keeps it all.
 static auto vaudio() -> void {
   KernelMachine m;
   CHECK(m.call("sceVaudioOutputBlocking", {0x8000, Buffer}), Kernel::ErrorAudioChannelNotReserved);
@@ -917,13 +918,24 @@ static auto vaudio() -> void {
   CHECK(m.call("sceVaudioChRelease", {}), Kernel::ErrorAudioChannelNotReserved);
   CHECK(m.call("sceVaudioChReserve", {2048, 44'100, 2}), 0);
   CHECK(m.call("sceVaudioChRelease", {}), 0);
+  //held on a refused reservation while sceAudioOutput2 still has the channel: neither an output nor the release
+  //touches it
+  CHECK(m.call("sceAudioOutput2Reserve", {2048}), 0);
+  CHECK(m.call("sceVaudioChReserve", {2048, 44'100, 2}), Kernel::ErrorAudioChannelAlreadyReserved);
+  CHECK(m.call("sceVaudioOutputBlocking", {0x8000, Buffer}), Kernel::ErrorAudioChannelNotReserved);
+  CHECK(m.kernel.audio.src.armed, 0);
+  CHECK(m.call("sceVaudioChRelease", {}), Kernel::ErrorAudioChannelNotReserved);
+  CHECK(m.kernel.audio.src.reserved, true);
+  CHECK(m.call("sceAudioOutput2Release", {}), 0);
   CHECK(m.call("sceVaudioSetEffectType", {2, 0x4000}), 0x4000);
-  CHECK(m.call("sceVaudioSetEffectType", {5, 0x4000}), Kernel::ErrorInvalidValue);
+  CHECK(m.call("sceVaudioSetEffectType", {5, 0x8000}), 0x8000);  //(pspvaudio.h's PSP_VAUDIO_EFFECT_MAX, listed)
+  CHECK(m.call("sceVaudioSetEffectType", {6, 0x4000}), Kernel::ErrorInvalidValue);
   CHECK(m.call("sceVaudioSetEffectType", {0, 0x8001}), Kernel::ErrorInvalidValue);
   CHECK(m.call("sceVaudioSetAlcMode", {1}), 0);
-  CHECK(m.call("sceVaudioSetAlcMode", {2}), Kernel::ErrorInvalidValue);
-  CHECK(m.kernel.audio.vaudio.effect == 2 && m.kernel.audio.vaudio.effectVolume == 0x4000, true);
-  CHECK(m.kernel.audio.vaudio.alc, 1);
+  CHECK(m.call("sceVaudioSetAlcMode", {2}), 0);
+  CHECK(m.call("sceVaudioSetAlcMode", {3}), Kernel::ErrorInvalidValue);
+  CHECK(m.kernel.audio.vaudio.effect == 5 && m.kernel.audio.vaudio.effectVolume == 0x8000, true);
+  CHECK(m.kernel.audio.vaudio.alc, 2);
 
   //mono at 44.1 kHz and half volume: a sample a frame, on both sides; the program's buffer changed after the call
   //isn't heard (called directly, the output can't wait for its completion: CAN_NOT_WAIT, its buffer armed all the
