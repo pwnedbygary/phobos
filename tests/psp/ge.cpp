@@ -1519,6 +1519,7 @@ static auto geDeferredReach() -> void {
     for(u32 n : {0, 4, 8}) ge.world[n] = ge.view[n] = 0x3f'8000;
     for(u32 n : {0, 5}) ge.projection[n] = 0x3f'8000;
     ge.projection[11] = 0xbf'8000;  //w = -z, and z 0
+    ge.textureMatrix[0] = ge.textureMatrix[4] = 0x3f'8000, ge.textureMatrix[11] = 0xbf'8000;  //s = u, t = v, q = -1
     auto& c = ge.commands;
     auto f24 = [](float value) { return std::bit_cast<u32>(value) >> 8; };
     c[GE::ViewportXScale] = c[GE::ViewportYScale] = c[GE::ViewportZScale] = f24(1);
@@ -1577,6 +1578,15 @@ static auto geDeferredReach() -> void {
     put(GE::Triangles, 0x19f, {{10.0f / 64, 41.0f / 64, 0xffff'ffff, 34, 49, -1},
                               {30.0f / 64, 44.5f / 64, 0xffff'ffff, 63, 52, -1},
                               {18.0f / 64, 60.0f / 64, 0xffff'ffff, 45, 63, -1}});
+    //and a quad whose q is -1 at every corner (the texture matrix's, from u and v), whose pixels all hold their
+    //coordinates: the texture's last texel each way
+    redraw();
+    list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 64);
+    list.put(GE::TextureAddress0, Offscreen), list.put(GE::TextureBufferWidth0, 0x04 << 16 | 64);
+    list.put(GE::TextureFilter, 0), list.put(GE::TextureWrap, 0), list.put(GE::TextureMapMode, 1 | 1 << 8);
+    put(GE::TriangleStrip, 0x19f, {{0.1f, 0.2f, 0xffff'ffff, 4, 52, -1}, {0.3f, 0.2f, 0xffff'ffff, 20, 52, -1},
+                                   {0.1f, 0.4f, 0xffff'ffff, 4, 62, -1}, {0.3f, 0.4f, 0xffff'ffff, 20, 62, -1}});
+    list.put(GE::TextureMapMode, 0);
     //and 2D sprites (ge/draw.cpp's spriteReach()), nearest, filtered, held past the top edge, and one turned
     struct Sprite { float x0, y0, u0, v0, x1, y1, u1, v1; u32 filter; };
     for(Sprite s : {Sprite{0, 0, 40, 10, 16, 32, 56, 42, 0}, Sprite{16, 32, 3.5f, 20.25f, 40, 48, 27.5f, 36.25f, 0x101},

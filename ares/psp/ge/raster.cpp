@@ -206,11 +206,13 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
 //value there lies between its values at the three corners, and between those at the middles of the box's corner
 //pixels; a pixel's coordinate is that value floored, times one factor (the unit and R(q)), and texelSpot() takes the
 //texel from it, each step never going back. So the coordinates, and the texels (the next one too, filtered), lie
-//between those of the least and greatest values both allow. False for any other job.
+//between those of the least and greatest values both allow. False for any other job, and for one whose q is 0 or
+//below, whose every pixel holds its coordinates (HeldCoordinate) instead.
 auto GE::texelSpan(const Job& job, s32 (&rows)[2], s32 (&columns)[2]) const -> bool {
   if(job.kind != Job::Kind::Triangle) return false;
   auto& r = job.triangle;
   if(!job.look->textured || !r.perspective || r.texQ.across || r.texQ.down) return false;
+  if(s64(r.texQ.start) >> 14 <= 0) return false;
   float reciprocal = geReciprocal(float(s64(r.texQ.start) >> 14) * r.qUnit);
   auto span = [&](const Job::Stepped& c, float unit, s32 (&out)[2]) -> bool {
     auto at = [&](s64 x, s64 y) { return s128(c.start) + s128(x - r.startX) * c.across + s128(y - r.startY) * c.down; };
