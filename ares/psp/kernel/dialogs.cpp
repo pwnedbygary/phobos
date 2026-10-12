@@ -460,6 +460,37 @@ auto Kernel::dialogSaved(const DialogRequest& asked, const DialogAnswer& given) 
   return savedata(p, &chosen.name);
 }
 
+//A save dialog no front end shows, answered as a PSP's player who confirms what it shows first. A list's load naming
+//no save of its own takes the save the dialog focuses among those it shows (only saves that are there), its name
+//written into the request's save name, as a choice is (dialogSaved()); a list's save naming none takes the list's
+//first name (chosen: where the automatic answer's later loads will find it), written back too. Every other mode, a
+//list request that names its save (chosen: that save), a list with no first name, a game's name that isn't a plain
+//one, and a list the dialog would show nothing from, are answered by savedata() as before (no data to load, or a
+//name refused). Taking the list's first name whether there or not, a load from a list whose first save wasn't made
+//found no data with others there (7th Dragon 2020 lists DATA00 to DATA49); with no name written back, Brandish: The
+//Dark Revenant made nothing of a load from a list.
+auto Kernel::savedataUnshown(u32 p) -> u32 {
+  u32 mode = memory.read(4, p + 48), names = memory.read(4, p + 96);
+  std::string game = memory.readString(p + 60, 13), save = memory.readString(p + 76, 20);
+  std::string first = names && memory.reaches(names, 20) ? memory.readString(names, 20) : std::string{};
+  bool unnamed = save.empty() || save == "<>";
+  if((mode != 4 && mode != 5) || first.empty() || !unnamed || !plainName(game, 13)) return savedata(p);
+  if(mode == 5) {
+    if(first != "<>" && plainName(first, 20)) {
+      memory.fill(p + 76, 0, 20);
+      memory.copyIn(p + 76, first.data(), first.size());
+    }
+    return savedata(p);
+  }
+  DialogRequest request;
+  request.kind = DialogSavedata;
+  dialogSaves(p, request);
+  if(request.saves.empty()) return savedata(p);
+  DialogAnswer given;
+  given.choice = s32(request.focus);
+  return dialogSaved(request, given).value_or(DialogCancelled);
+}
+
 //The byte form of a request, for a front end in another language (Phobos's Android app, through ares's
 //PlayStationPortable::dialogBytes()): little-endian words, a text as its length and its bytes (UTF-8), the same for
 //an icon. Version 1, id, kind, language, flags (1: circle confirms); the message's text, error, buttons, flags (1 No

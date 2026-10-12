@@ -3,8 +3,11 @@
 #include "kernel-machine.hpp"
 #include "disc-image.hpp"
 
+#include <array>
 #include <cstdlib>
+#include <ctime>
 #include <fstream>
+#include <utime.h>
 
 namespace allegrex_test::psp {
 
@@ -89,6 +92,25 @@ static auto fileFolders() -> void {
   CHECK(m.system.memory.read(4, Buffer + 8), 5);
   CHECK(m.system.memory.read(2, Buffer + 48) >= 2020, true);  //the year it was changed
   CHECK(m.call("sceIoGetstat", {m.string("ms0:/data/none"), Buffer}), Kernel::ErrorFileNotFound);
+  {
+    //its dates in local time, as a memory stick's FAT keeps them: 4 hours west of Greenwich, changed at 12:34:56 UTC
+    //is 08:34:56, as the clock's local time has it
+    std::string zone = std::getenv("TZ") ? std::getenv("TZ") : "";
+    bool zoned = std::getenv("TZ");
+    setenv("TZ", "WEST+4", 1);
+    tzset();
+    utimbuf changed{1'791'290'096, 1'791'290'096};  //2026-10-06 12:34:56 UTC
+    utime((folder.path / "data/File.txt").c_str(), &changed);
+    CHECK(m.call("sceIoGetstat", {m.string("ms0:/data/File.txt"), Buffer}), 0);
+    std::array<u32, 6> date;
+    for(u32 n = 0; n < 6; n++) date[n] = m.system.memory.read(2, Buffer + 48 + n * 2);
+    CHECK((date == std::array<u32, 6>{2026, 10, 6, 8, 34, 56}), true);
+    m.kernel.startTime = 1'791'290'096'000'000ull;
+    CHECK(m.call("sceRtcGetCurrentClockLocalTime", {Buffer}), 0);
+    CHECK(m.system.memory.read(2, Buffer + 6), 8);
+    zoned ? setenv("TZ", zone.c_str(), 1) : unsetenv("TZ");
+    tzset();
+  }
 
   auto list = [&](const char* path) {
     std::vector<std::string> names;

@@ -10082,3 +10082,79 @@ and the captures that differ are mid-movie frames. The test (`utility savedata t
 2005 Plus)`) makes the game's calls as traced (each open asynchronous, polled), and beyond them memstick: in capitals,
 a rename to ms0: (the same device), a relative open from a working folder on memstick:, and memstick: with no
 assignment.
+
+## Part 80: the savedata trace — After Burner's dates, the list modes' automatic answer (Brandish, 7th Dragon 2020)
+
+On branch `cursor/psp-savedata2-2b67`, begun on `cursor/psp-colinsave-2b67` (part 77) after its merge of master. Parts
+76 to 79 are other branches'. Sources: the games themselves, traced with the new option; pspsdk's
+psputility_savedata.h (the modes and the parameters' layout); pspautotests' utility/savedata tests; FAT's directory
+entries (a file's dates in local time, with no zone); PPSSPP read only as a description of the PSP (its notes on the
+save dialog's lists copying the chosen name back; nothing copied). JPCSP was not read. Save states are unchanged
+(StateVersion 26): the trace is the host's, and nothing else gains state.
+
+**The problem** (the play-testers' deep-play batch 00, suspected bug 1): three games' saves failed with no savedata
+note. After Burner: Black Falcon wrote `ULUS102440000` in full, then went back to pilot selection after its story,
+forever, and on the next boot its autoload said "No game data was found."; 7th Dragon 2020 [English v0.91]'s progress
+save was never written and its title's LOAD GAME found nothing; Brandish: The Dark Revenant wrote `NPUH101950001`, and
+its loads, from the title and in play, dimmed the screen and did nothing.
+
+**The trace** (`tools/psp-runner --trace-savedata`; `Kernel::savedataTrace`, empty unless a host sets it): each savedata
+request a line with its frame, as `savedataMode()` takes it (the mode by pspsdk's name, the structure's size, the game's
+and the save's names, a list's names and the save chosen from it, already written into the save's name, the data file,
+the buffer and the data's size, whether the save's folder is there, and the modes' own fields), then its answer (the
+result, named, and what came back). `savedata()` traces and calls `savedataMode()`, the modes as they were; the trace
+reads only the parameters' words that are in memory (a read past it would be noted and counted in the machine's state).
+The runner's README has the format and real lines. With Colin McRae's fix (part 77) alone none of the three games was
+fixed.
+
+**After Burner: Black Falcon (ULUS10244).** The trace showed its autoload (mode 0, save "0000", AFTRBURN.BIN, 16368
+bytes) answered in full on some runs, and on others no request at all before "No game data was found.": the runs
+differed only in the save's files' dates. A copy that kept the play-tester's dates (00:53 that morning) loaded; a copy
+dated at once, or a save the game had just written, didn't. The kernel gave a file's dates (sceIoGetstat, sceIoDread,
+the savedata list and files modes) in UTC, and the PSP's clock (sceRtcGetCurrentClockLocalTime) in the host's local
+time: on a Mac 4 hours behind UTC a save made in the last 4 hours was dated after now, and the game, which looks at its
+save's files itself before asking the utility (their dates, it seems: nothing else differed), took it for none. The same
+check after the story, on the save it had just written, sent it back to pilot selection. With TZ=UTC (the two zones the
+same) the fresh copy loaded, unchanged code. **The fix** (`io.cpp`, `writeTimes()`): the dates in local time, through
+`writeDate()` as the clock's are (a time before 1970, or none, as 1970's start); a memory stick's FAT keeps local times
+(chosen: no recording of a PSP's dates in another zone). **Now**: the story ends, the game saves (a list save to 0000 at
+frame 9232) and goes on to its MAIN MENU (Missions, Showroom, Pilot Stats, Multiplayer, Options, Save); the next boot,
+on that save, autoloads it ("CONTINUE WITH PILOT N00b").
+
+**Brandish: The Dark Revenant (NPUH10195).** Its loads and saves are list requests (modes 4 and 5) with no save name of
+its own and a list of 99 or more names, "0001" first; the save it wrote is 0001. The kernel's automatic answer (no front
+end: the runner, and the app without its dialogs) took the list's first name and loaded it in full (105,260 bytes), but
+left the request's save name empty, and the game, finding no name, made nothing of it (in play it asked again at each
+press). A PSP's dialog writes the chosen save's name into the request (PPSSPP's notes: loads and saves from a list copy
+it back), as the front end's path here already did (`dialogSaved()`). **7th Dragon 2020 (NPJH50459).** Its title's LOAD
+GAME is a list load of DATA00 to DATA49, no save name; the kernel took DATA00, there or not, so a save in any other slot
+would never load (the dialog shows only the saves there). **The fix** (`dialogs.cpp`, `savedataUnshown()`, from
+`dialogUpdate()`), for a list request answered with no front end that names no save of its own (empty or "<>"): a load
+is answered as a PSP's player who confirms what the dialog shows first, the save the dialog focuses (the parameters'
+focus) among the saves there, through `dialogSaved()`, which writes the name back; a save takes the list's first name as
+before (chosen: where the automatic answer's own loads find it, and "<>" still the game's folder alone, not one of its
+saves), the name written back. A request naming its save (chosen: taken as before), a list with no first name, a game's
+name that isn't a plain one, a load with no save there, and the other modes are answered by `savedata()` as before.
+**Now**: Brandish's in-game load asks once and the game returns to the ruins with the save's character (HP 1/20, as its
+PARAM.SFO says), and from the title LOAD GAME loads it too; a save made with the fix on an empty stick reloads from the
+title. 7th Dragon's LOAD GAME, with a save in DATA03 (a copy of its system data put there), loads DATA03 and goes on
+into play.
+
+**7th Dragon's progress save is not fixed: the game never asked for one.** The play-tester's save (camp menu, Select for
+the Option screen, Start, "Create a save?", YES) is one save request, mode 3 to `NPJH50459DATA` (the system data,
+SECURE.BIN, 26 bytes, titled "システムデータ"), answered 0; no other savedata call follows, nor any list or size query. The
+Option screen's save data section has LOAD and DELETE but no save of the game, and the camp menu has none either, so at
+this point of the game (its prologue in the Shinjuku streets) the progress save isn't offered, it seems; a save point
+later in the game wasn't reached. Its title's LOAD GAME on that stick is right to find nothing.
+
+**Tests.** `utility savedata lists answered with no front end (7th Dragon 2020, Brandish)`: list loads taking the
+focused save among those there (DATA03 first, DATA05 last, the game's saves through "<>"), NO_DATA with none (the name
+left empty), a named save as before; list saves to the list's first name whatever the focus, "<>" to the game's folder
+alone with its other saves there; a list with no first name refused, a save making nothing and a load reading nothing
+with the game's folder there; each loaded or saved name written back. `utility savedata trace`: a save, a list load, a
+refused save with a quote and a control character in its name, and a load of no save, each line exact; nothing traced
+without a host. `files folders` (files.cpp): with the host's zone 4 hours west of Greenwich, a file changed at 12:34:56
+UTC is dated 08:34:56, as the clock's local time.
+
+**Scratch** (the runs, their stick copies, traces and captures; `run.sh` gives each run its own memory stick folder):
+`~/phobos-work/scratch/savedata2/` on the Mac it was made on, not in the repository.

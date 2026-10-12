@@ -245,6 +245,9 @@ struct Kernel {
   //function it doesn't have, a thread that will never wake). The system shows or logs them.
   std::function<auto (const std::string& text) -> void> output;
   std::function<auto (const std::string& text) -> void> log;
+  //Each savedata request with its answer, a line of text, for a host tracing the games' saves (the runner's
+  //--trace-savedata): nothing is traced without one. Not part of the machine's state.
+  std::function<auto (const std::string& text) -> void> savedataTrace;
 
   //kernel.cpp
   static auto nid(const std::string& name) -> u32;
@@ -1906,6 +1909,9 @@ struct Kernel {
   static auto hexWord(u32 value) -> std::string;
   auto savePath(const std::string& folder, const std::string& file = {}) -> std::string;
   auto savedata(u32 parameters, const std::string* chosen = nullptr) -> u32;
+  auto savedataMode(u32 parameters, const std::string* chosen) -> u32;
+  auto savedataRequest(u32 parameters, const std::string* chosen) -> std::string;
+  auto savedataAnswer(u32 parameters, u32 answer) -> std::string;
   auto savedataWritten(u32 parameters, const std::string& folder, const std::string& file, bool secure) -> bool;
   auto savedataIcons(u32 parameters, const std::string& folder) -> void;
   auto savedataClusters(const std::string& folder, const std::vector<std::string>& secure) -> u64;
@@ -2024,6 +2030,7 @@ struct Kernel {
   auto dialogSaves(u32 parameters, DialogRequest& request) -> void;
   auto dialogAnswered(const DialogRequest& asked, const DialogAnswer& given) -> void;
   auto dialogSaved(const DialogRequest& asked, const DialogAnswer& given) -> std::optional<u32>;
+  auto savedataUnshown(u32 parameters) -> u32;
 
   //power.cpp: the battery, the clocks, the power switch's callbacks, the volatile memory
   struct Power {

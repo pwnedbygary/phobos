@@ -72,6 +72,8 @@ The options, and what each does:
   removed with the run, by default)
 - `--fonts DIR` — the PSP's system fonts (the `.pgf` files of a PSP's `flash0:`), for the
   game's text
+- `--trace-savedata` — each savedata request the system answers, with its answer, as a line
+  `[frame] savedata: ...` on standard output (below)
 
 The buttons by name are `Select`, `Start`, `Up`, `Down`, `Left`, `Right`, `Triangle`,
 `Circle`, `Cross`, `Square`, `L` and `R`; the stick's axes are `L-StickX` and `L-StickY`,
@@ -86,6 +88,24 @@ At the end it prints a summary: the frames run, whether the program ended, the f
 second, the unique missing functions with their counts (the notes that begin
 `not implemented yet:`), and the last note. The system's own messages (a disc that can't
 start, a memory stick folder that isn't there) go to standard error, as on the host.
+
+With `--trace-savedata`, each savedata request (sceUtilitySavedataInitStart's parameters, done
+at its Update) adds a line: the mode (pspsdk's name), the structure's size, the game's and the
+save's names, a list mode's names (the first 8, and how many in all) and the save chosen from
+it (`chosen`: for a load, what the save dialog would focus among the saves there; for a
+save, the list's first name; either already written into the request's save name), the data
+file's name, the buffer's address and size and the data's size, and whether the save is on
+the memory stick; the sizes mode's msData, the list and files modes' most, the size mode's
+files, a save mode's title; then after `->` the result (the system's savedata errors named) and what came back: a
+load's bytes read, a list load's or save's save name, the list mode's saves, the files mode's
+counts, the sizes modes' clusters and KB. Names are quoted, their bytes outside printable
+ASCII written `\xNN`. For example (After Burner: Black Falcon's autoload, then Brandish: The
+Dark Revenant's load from a list):
+
+```
+[002138] savedata: mode 0 (autoload), size 1536, game "ULUS10244", save "0000", file "AFTRBURN.BIN", buffer 0x09c5b570 of 16368, data 16368, "ULUS102440000" there -> 0x00000000, read 16368
+[000451] savedata: mode 4 (listload), size 1536, game "NPUH10195", save "0001", list "0001" "0002" "0003" "0004" "0005" "0006" "0007" "0008" (99 in all), chosen "0001", file "SAVEDATA.DAT", buffer 0x09dbc7b0 of 105260, data 0, "NPUH101950001" there -> 0x00000000, read 105260, save "0001"
+```
 
 The frames the PNGs name are the frames the screen presented, one after another from the
 first: the picture a frame's run shows reaches the screen's own thread a step behind, so a

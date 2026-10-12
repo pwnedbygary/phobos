@@ -25,6 +25,27 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: the savedata trace; After Burner's save dates, the list modes' automatic answer — 2026-10-12
+
+Branch `cursor/psp-savedata2-2b67`, begun on `cursor/psp-colinsave-2b67` (Colin McRae's memstick:, part 77) after its
+merge of master; its PR holds that branch's commits until that PR merges. docs/psp-core.md, part 80, has the evidence.
+Clean room: the games' own requests (traced), pspsdk's psputility_savedata.h, pspautotests' savedata tests, FAT's
+format, PPSSPP's notes only as a description of the PSP; JPCSP not read. Save states are unchanged (StateVersion 26).
+- **The trace**: `tools/psp-runner --trace-savedata` prints each savedata request and its answer, a line with its
+  frame (`Kernel::savedataTrace`, empty unless a host sets it; the runner's README has the format).
+- **After Burner: Black Falcon** (autoload "No game data was found.", and the loop back to pilot selection after its
+  story): the kernel dated the stick's files in UTC against a clock in local time, so on a host west of Greenwich a
+  save made in the last hours was dated in the future and the game took it for none. Fix (`io.cpp`, `writeTimes()`):
+  local time, as a FAT memory stick keeps. Now: the story ends in the MAIN MENU, and the next boot autoloads.
+- **Brandish: The Dark Revenant** (loads did nothing) and **7th Dragon 2020** (LOAD GAME): with no front end, a list
+  load or save naming no save took the list's first name, there or not, and didn't write it back into the request.
+  Fix (`dialogs.cpp`, `savedataUnshown()`): a list load takes the save the dialog would focus among those there, a
+  list save the list's first name as before; the name written back either way, as a choice is. Now: Brandish loads from the title and in play; 7th Dragon loads a save that isn't its list's
+  first.
+- **Not fixed**: 7th Dragon's progress save. The game never asks for one where the play-tester tried (its Option
+  screen's Start saves the 26-byte system data, as asked); a save point further in wasn't reached.
+- **Checks**: see part 80.
+
 ## PSP: memstick: is the memory stick — Colin McRae Rally 2005 Plus's save — 2026-10-12
 
 Branch `cursor/psp-colinsave-2b67`, begun on `cursor/psp-dialogs-2b67` (#221) and merged with master (#221, #222 and

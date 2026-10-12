@@ -195,18 +195,15 @@ auto Kernel::writeStat(u32 address, const std::string& host) -> void {
 
 //When a host file or folder was made, read and changed: three ScePspDateTimes (year, month, day, hour, minute,
 //second, then microseconds, left 0), one after another, as a SceIoStat and the savedata utility's lists hold them.
+//In local time, the clock's (sceRtcGetCurrentClockLocalTime's) zone: a memory stick's FAT keeps a file's local time,
+//no zone. Given in UTC, a save made in the last hours west of Greenwich was dated after the clock's now: After Burner:
+//Black Falcon, on a host 4 hours behind UTC, said "No game data was found" for a save made in those 4 hours without
+//asking the savedata utility for it, and found it once dated in the past.
 auto Kernel::writeTimes(u32 address, const std::string& host) -> void {
   auto putTime = [&](u32 at, nall::inode::time which) {
     memory.fill(at, 0, 16);
-    std::time_t seconds = std::time_t(nall::inode::timestamp(host.c_str(), which));
-    if(auto when = std::gmtime(&seconds)) {
-      memory.write(2, at + 0, when->tm_year + 1900);
-      memory.write(2, at + 2, when->tm_mon + 1);
-      memory.write(2, at + 4, when->tm_mday);
-      memory.write(2, at + 6, when->tm_hour);
-      memory.write(2, at + 8, when->tm_min);
-      memory.write(2, at + 10, when->tm_sec);
-    }
+    s64 seconds = s64(nall::inode::timestamp(host.c_str(), which));
+    writeDate(at, u64(std::max<s64>(seconds, 0)) * 1'000'000, true);
   };
   putTime(address, nall::inode::time::create);
   putTime(address + 16, nall::inode::time::access);
