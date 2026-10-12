@@ -542,6 +542,21 @@ auto GE::record(const Job& job) -> void {
   for(s32 band = job.firstY / BandRows; band <= job.lastY / BandRows; band++) batch.bandJobs[band].push_back(index);
   batch.jobs.push_back(job);
   batch.work += u64(job.lastX - job.firstX + 1) * u64(job.lastY - job.firstY + 1);
+  //a deferred texture's texels this job can take, for ensureDecoded() to decode no more than its jobs take
+  Look& look = batch.looks.back();
+  assert(&look == job.look);
+  if(look.deferRows && !look.reachAll) {
+    s32 rows[2], columns[2];
+    if(!texelReach(job, rows, columns)) {
+      look.reachAll = true;
+    } else {
+      bool none = look.reachTop > look.reachBottom;
+      look.reachTop = none ? rows[0] : std::min(look.reachTop, rows[0]);
+      look.reachBottom = none ? rows[1] : std::max(look.reachBottom, rows[1]);
+      look.reachLeft = none ? columns[0] : std::min(look.reachLeft, columns[0]);
+      look.reachRight = none ? columns[1] : std::max(look.reachRight, columns[1]);
+    }
+  }
   if(batch.top > batch.bottom) batch.top = job.firstY, batch.bottom = job.lastY;
   batch.top = std::min(batch.top, job.firstY), batch.bottom = std::max(batch.bottom, job.lastY);
 }

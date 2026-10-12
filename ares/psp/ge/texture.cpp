@@ -184,12 +184,12 @@ static auto texelFrom(const GE::Sampler& t, const u8* clut, s32 u, s32 v, const 
   return widen16(clut[entry * 2] | clut[entry * 2 + 1] << 8, t.clutFormat);
 }
 
-//texelFrom() for rows from up to rows (not including) of a texture of format 0-7, width texels each, whose bytes lie
-//side by side in the host's memory, base being where address low is: into out, each texel exactly as texelFrom()
-//reads it, with what doesn't change along a row worked out once a row, and what a palette's entry becomes once an
-//entry (once an index, for indices of 4 or 8 bits).
+//texelFrom() for rows from up to rows (not including) of a texture of format 0-7, width texels each (into out; of
+//each row only columns left up to right), whose bytes lie side by side in the host's memory, base being where
+//address low is: each texel exactly as texelFrom() reads it, with what doesn't change along a row worked out once a
+//row, and what a palette's entry becomes once an entry (once an index, for indices of 4 or 8 bits).
 static auto decodeRows(const GE::Sampler& t, const u8* clut, const u8* base, u32 low, u32 width, u32 from, u32 rows,
-                       u32* out) -> void {
+                       u32* out, u32 left, u32 right) -> void {
   u32 bits = TexelBits[t.format], rowBytes = t.bufferWidth * bits / 8;
   const u8* first = base + (t.address - low);
   u32 limit = t.clutFormat == 3 ? 0xff : 0x1ff, offset = t.clutOffset & limit;
@@ -212,12 +212,12 @@ static auto decodeRows(const GE::Sampler& t, const u8* clut, const u8* base, u32
     auto read32 = [&](u32 byte) { u32 value; std::memcpy(&value, at(byte), 4); return value; };
     u32* texels = out + v * width;
     switch(t.format) {
-    case 0: case 1: case 2: for(u32 u = 0; u < width; u++) texels[u] = widen16(read16(u * 2), t.format); break;
-    case 3: for(u32 u = 0; u < width; u++) texels[u] = read32(u * 4); break;
-    case 4: for(u32 u = 0; u < width; u++) texels[u] = indices[*at(u / 2) >> (u & 1) * 4 & 15]; break;
-    case 5: for(u32 u = 0; u < width; u++) texels[u] = indices[*at(u)]; break;
+    case 0: case 1: case 2: for(u32 u = left; u < right; u++) texels[u] = widen16(read16(u * 2), t.format); break;
+    case 3: for(u32 u = left; u < right; u++) texels[u] = read32(u * 4); break;
+    case 4: for(u32 u = left; u < right; u++) texels[u] = indices[*at(u / 2) >> (u & 1) * 4 & 15]; break;
+    case 5: for(u32 u = left; u < right; u++) texels[u] = indices[*at(u)]; break;
     case 6: case 7:
-      for(u32 u = 0; u < width; u++) {
+      for(u32 u = left; u < right; u++) {
         u32 index = t.format == 6 ? read16(u * 2) : read32(u * 4);
         texels[u] = entries[(((index >> t.clutShift) & t.clutMask) | offset) & limit];
       }
@@ -415,42 +415,60 @@ auto GE::ensureDecoded(Batch& batch) -> void {
              (!indexed || (o.clutFormat == t.clutFormat && o.clutShift == t.clutShift && o.clutMask == t.clutMask &&
                            o.clutOffset == t.clutOffset && other.deferClut == look->deferClut));
     };
-    u32 rows = 0;
+    //and of those rows, the texels their jobs can take (record()): all of them, or those inside one rectangle
+    u32 rows = 0, width = std::min<u32>(t.width, 512);
+    bool all = false;
+    s32 top = 0, bottom = -1, left = 0, right = -1;
     for(auto other = look; other != batch.looks.end(); other++) {
-      if(same(*other)) rows = std::max(rows, std::min({other->deferRows, other->texture.height, 512u}));
+      if(!same(*other)) continue;
+      rows = std::max(rows, std::min({other->deferRows, other->texture.height, 512u}));
+      all |= other->reachAll;
+      if(other->reachTop > other->reachBottom) continue;
+      bool none = top > bottom;
+      top = none ? other->reachTop : std::min(top, other->reachTop);
+      bottom = none ? other->reachBottom : std::max(bottom, other->reachBottom);
+      left = none ? other->reachLeft : std::min(left, other->reachLeft);
+      right = none ? other->reachRight : std::max(right, other->reachRight);
+    }
+    u32 from = 0, first = 0, last = width;
+    if(!all) {  //(none at all where its jobs draw nothing: no texel decoded, a row kept)
+      rows = top > bottom ? 1 : std::min<u32>(rows, bottom + 1);
+      from = top > bottom ? rows : top, first = left, last = right + 1;
     }
     auto entry = std::make_shared<Decoded>();
-    entry->key = {t.address, t.bufferWidth, t.format, std::min<u32>(t.width, 512), t.swizzled, 0, 0, 0, 0, 0};
+    entry->key = {t.address, t.bufferWidth, t.format, width, t.swizzled, 0, 0, 0, 0, 0};
     entry->rows = rows;
-    entry->texels.resize(entry->key.width * rows);
+    entry->texels.resize(width * rows);
     u32 low, high;
     textureBytes(t, rows, low, high);
     const u8* palette = indexed ? look->deferClut.data() : nullptr;  //(only indices look at the palette)
-    decodeTexels(t, palette, low, high, entry->key.width, 0, rows, entry->texels.data());
+    decodeTexels(t, palette, low, high, width, from, rows, entry->texels.data(), first, last);
     for(auto other = look; other != batch.looks.end(); other++) {
       if(other != look && !same(*other)) continue;
       other->decoded = entry;
       other->texture.decoded = entry->texels.data();
-      other->texture.decodedWidth = entry->key.width;
+      other->texture.decodedWidth = width;
       other->texture.decodedRows = rows;
+      other->texture.decodedTop = from, other->texture.decodedLeft = first, other->texture.decodedRight = last;
       other->deferRows = 0;
     }
   }
   for(auto& look : batch.looks) look.deferClut.clear();
 }
 
-//The texture's rows from up to rows (not including) decoded into texels, width to a row, from palette: the bytes from
-//low to high read straight from where they are in the host's memory, or (through VRAM's copies that rearrange it)
-//through memory.read(), each texel exactly as texel() reads it.
+//The texture's rows from up to rows (not including) decoded into texels, width to a row (of each, the columns left up
+//to right), from palette: the bytes from low to high read straight from where they are in the host's memory, or
+//(through VRAM's copies that rearrange it) through memory.read(), each texel exactly as texel() reads it.
 auto GE::decodeTexels(const Sampler& t, const u8* palette, u32 low, u32 high, u32 width, u32 from, u32 rows,
-                      u32* texels) -> void {
+                      u32* texels, u32 left, u32 right) -> void {
+  right = std::min(right, width);
   auto decodeWith = [&](const auto& read) {
     for(u32 v = from; v < rows; v++) {
-      for(u32 u = 0; u < width; u++) texels[v * width + u] = texelFrom(t, palette, u, v, read);
+      for(u32 u = left; u < right; u++) texels[v * width + u] = texelFrom(t, palette, u, v, read);
     }
   };
   if(const u8* base = memory.pointer(low, high - low); base && t.format < 8) {
-    decodeRows(t, palette, base, low, width, from, rows, texels);
+    decodeRows(t, palette, base, low, width, from, rows, texels, left, right);
   } else if(base) {
     decodeWith([&](u32 size, u32 at) -> u32 {
       const u8* bytes = base + (at - low);
@@ -538,6 +556,7 @@ auto GE::fillDecoded(Look& look, u32 rows) -> void {
   t.decoded = entry->texels.data();
   t.decodedWidth = key.width;
   t.decodedRows = rows;
+  t.decodedTop = 0, t.decodedLeft = 0, t.decodedRight = key.width;
 }
 
 //Memory::watchedWritten(): the page changed, so every texture decoded from it may be stale: each is looked at again
@@ -610,9 +629,10 @@ alwaysinline auto GE::texelSpot(float coordinate, bool linear) -> TexelSpot {
 }
 
 //The texel at (x, y), inside the texture: decoded already, or read from memory. (A row past those draw.cpp worked
-//out the primitive may reach isn't in the decoded copy.)
+//out the primitive may reach isn't in the decoded copy, nor in a deferred one a texel its jobs can't take.)
 alwaysinline auto GE::fetch(const Sampler& t, s32 x, s32 y) -> u32 {
-  assert(!t.decoded || u32(y) < t.decodedRows);
+  assert(!t.decoded || (u32(y) < t.decodedRows && u32(y) >= t.decodedTop && u32(x) >= t.decodedLeft &&
+                        u32(x) < t.decodedRight));
   return t.decoded ? t.decoded[y * t.decodedWidth + x] : texel(t, x, y);
 }
 

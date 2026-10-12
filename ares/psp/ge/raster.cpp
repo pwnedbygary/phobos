@@ -193,6 +193,40 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
   }
 }
 
+//The texels a job's pixels can take from its texture, rows and columns, first to last, each inside the texture:
+//found for a 3D triangle whose q is the same at every pixel (texQ steps by nothing, as at corners with one w and one
+//q), as triangleRows() and triangleFours() work its coordinates out. There s and t are planes stepped from a corner,
+//exactly linear in a pixel's middle, and every pixel the job draws has its middle inside the triangle, so each plane's
+//value there lies between its values at the three corners; a pixel's coordinate is that value floored, times one
+//factor (the unit and R(q)), and texelSpot() takes the texel from it, each step never going back. So the coordinates,
+//and the texels (the next one too, filtered), lie between those of the planes' least and greatest values. False for
+//any other job, or where those texels reach past an edge that repeats round.
+auto GE::texelReach(const Job& job, s32 (&rows)[2], s32 (&columns)[2]) const -> bool {
+  if(job.kind != Job::Kind::Triangle) return false;
+  auto& r = job.triangle;
+  auto& t = job.look->texture;
+  if(!job.look->textured || !r.perspective || r.texQ.across || r.texQ.down) return false;
+  float reciprocal = geReciprocal(float(s64(r.texQ.start) >> 14) * r.qUnit);
+  auto reach = [&](const Job::Stepped& c, float unit, u32 size, bool clamp, s32 (&out)[2]) -> bool {
+    s64 least = 0, greatest = 0;
+    for(u32 k = 0; k < 3; k++) {
+      s128 value = s128(c.start) + s128(r.x[k] - r.startX) * c.across + s128(r.y[k] - r.startY) * c.down;
+      if(value < s128(std::numeric_limits<s64>::min()) || value > s128(std::numeric_limits<s64>::max())) return false;
+      if(k == 0 || s64(value) < least) least = s64(value);
+      if(k == 0 || s64(value) > greatest) greatest = s64(value);
+    }
+    float low = trunc24(f64(least >> 14) * unit * reciprocal), high = trunc24(f64(greatest >> 14) * unit * reciprocal);
+    if(low > high) std::swap(low, high);
+    s32 first = texelSpot(low, job.linear).first, last = texelSpot(high, job.linear).first + (job.linear ? 1 : 0);
+    s32 edge = std::min<s32>(size, 512) - 1;
+    if(clamp) first = std::clamp(first, 0, edge), last = std::clamp(last, 0, edge);
+    else if(first < 0 || last > edge) return false;
+    out[0] = first, out[1] = last;
+    return true;
+  };
+  return reach(r.texS, r.sUnit, t.width, t.clampU, columns) && reach(r.texT, r.tUnit, t.height, t.clampV, rows);
+}
+
 //A line's pixels in rows fromY to toY (draw.cpp's line() says which): along x (y when it's steep) from its first
 //to its last, each in the row (column) where it crosses the pixel's middle. Its colors, depth, fog and texture
 //coordinates are blended from its ends by how far along x that middle is, held to its ends, as triangles' were

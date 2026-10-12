@@ -179,6 +179,9 @@ struct GE {
     const u32* decoded;  //its texels already decoded (Decoded), decodedWidth to a row; or none: read from memory
     u32 decodedWidth;
     u32 decodedRows;     //the rows the primitive may take texels from (draw.cpp), all of them decoded
+    //of those, the rows from decodedTop and the columns decodedLeft to decodedRight (not including) are the texels
+    //it can take; a deferred copy (ensureDecoded()) has only those decoded
+    u32 decodedTop, decodedLeft, decodedRight;
     const u8* bytes;     //read from memory: where its bytes are in the host's memory, when they're all there
   };
 
@@ -281,6 +284,11 @@ struct GE {
     u32 deferRows = 0;
     std::vector<u8> deferClut;
     u32 deferFirst = 0, deferLast = 0;
+    //The texels of that deferred texture its jobs can take (record(): texelReach()), rows reachTop to reachBottom
+    //and columns reachLeft to reachRight, none while bottom is above top; or any of them (reachAll), where a job's
+    //can't be told.
+    s32 reachTop = 0, reachBottom = -1, reachLeft = 0, reachRight = -1;
+    bool reachAll = false;
   };
 
   //A primitive set up for drawing (draw.cpp): everything about it worked out once, so that any of its rows can be
@@ -441,6 +449,7 @@ struct GE {
                                     float u, float v, u32 fog) -> void;
   template<u32 Format> auto spriteRows(const Job& job, s32 fromY, s32 toY) -> void;
   template<u32 Format> auto triangleRows(const Job& job, s32 fromY, s32 toY) -> void;
+  auto texelReach(const Job& job, s32 (&rows)[2], s32 (&columns)[2]) const -> bool;
   struct LinePixel { s32 x, y; u32 z, color, specular, fog; float u, v; };
   auto linePixels(const Job& job, s32 fromY, s32 toY, std::vector<LinePixel>& pixels) -> void;
   template<u32 Format> auto lineRows(const Job& job, s32 fromY, s32 toY) -> void;
@@ -472,7 +481,7 @@ struct GE {
   auto ensureDecoded(Batch& batch) -> void;
   auto fillDecoded(Look& look, u32 rows) -> void;
   auto decodeTexels(const Sampler& t, const u8* palette, u32 low, u32 high, u32 width, u32 from, u32 rows,
-                    u32* texels) -> void;
+                    u32* texels, u32 left = 0, u32 right = ~0u) -> void;
   auto textureWritten(u32 page) -> void;
   auto forget(Decoded* entry) -> void;
   auto dropTextures() -> void;
