@@ -26,26 +26,36 @@
 //    are at t = k / divisions, neighbours sharing the vertices on their common edge. (The colors down a 4x5 Bezier
 //    and a 4x5 spline, in those pictures, step where 4 divisions of each patch and of each piece of curve put them.)
 //    The counts are 7 bits: round 4's curves-count-128 drew 128 divisions along u as 0, so as 1 (its four points).
-//    More than 64 never finishes: curves-count-65, -100, -200 (72) and -255 (127) left the PSP's GE drawing, not a
-//    point drawn, until tools/psp-measure reset it (docs/psp-core.md, part 60). Such a surface draws nothing here,
-//    and the list goes on. (Only u was measured past 64; v is taken to be the same.)
+//    More than 64 along u never finishes: curves-count-65, -100, -200 (72) and -255 (127) left the PSP's GE drawing,
+//    not a point drawn, until tools/psp-measure reset it (docs/psp-core.md, part 60). Such a surface draws nothing
+//    here, and the list goes on. Along v any count is drawn (round 6's curves-count-v-65 to -255, part 75), but the
+//    GE steps no finer than a 64th: past 64, the rows up to the middle (k up to divisions / 2) fall at k / 64 from
+//    the piece's start, and the rest at (divisions - k) / 64 from its end, so some fall on others (divisionAt()).
+//    The GE holds a row along u while it makes the next, its 65 vertices at most, it seems, and goes down v a row at
+//    a time.
 //  - PATCH_PRIMITIVE (bits 0-1), as gpu/primitives/bezier and spline recorded: 0 triangles, the vertices' rows two at
 //    a time as triangle strips along u, (u0, v0), (u0, v1), (u1, v0), (u1, v1)... (so with flat shading a quad's top
 //    left triangle takes its top right vertex's color); 1 lines, those strips' vertices as line strips (a line down
-//    each column, and up to the next column's top); 2 and 3 points, a vertex each.
+//    each column, and up to the next column's top); 2 and 3 points, those strips' vertices as points, so a row
+//    between two strips is drawn twice (round 6's curves-count-v: added up, a column cut 16 times along v counts 32
+//    points, its ends one each and the 15 rows between two).
 //  - Colors are worked out per channel and rounded up: a channel at 223.125 is 224 (gpu/primitives/bezier's flat
 //    shaded patches). Rounding up also fits round 3's smooth patches far better than to the nearest, down, or than
 //    keeping fractions: 319 to 561 pixels a level apart in each channel of bezier-curved and bezier-divide-8 (where
 //    the core's blending across triangles rounds a little differently from the PSP's, as round 3's color ramps
 //    found), against 11,000 to 37,700 otherwise. A value within PatchSlack above a whole level counts as that level.
 //  - Without texture coordinates in the vertex type, they're made up: u from 0 to 1 across the surface, v down it
-//    (chosen, unmeasured). Without a normal, where one is wanted (lighting, environment mapping, the texture matrix
-//    from the normal), it's made from the surface's slopes, the cross product of the slope along u and the slope
-//    along v (pspautotests' gpu/exact/curves names normals from the tangents), pointing out of the front face
-//    PATCH_FACING says: 0 (pspsdk's GU_CW) the side from which a strip's first triangle, (u0, v0), (u0, v1),
-//    (u1, v0), runs clockwise; 1 the other (chosen: that program records only checksums of such lighting).
+//    (chosen, unmeasured). Where a normal is wanted (lighting, environment mapping, the texture matrix from the
+//    normal), it's made from the surface's slopes, the cross product of the slope along u and the slope along v
+//    (pspautotests' gpu/exact/curves names normals from the tangents), pointing out of the front face PATCH_FACING
+//    says: 0 (pspsdk's GU_CW) the side from which a strip's first triangle, (u0, v0), (u0, v1), (u1, v0), runs
+//    clockwise; 1 the other. The vertex type's own normals don't count: round 6's patch-cull lit flat patches with
+//    normals toward the light, away, edge on and none alike, by their facing and which way their strips run, and
+//    round 4's curves-lit gave its patches with normals given the brightness of those without (part 75).
 //  - The triangles are culled as any are (CULL_FACE_ENABLE and CULL), every other one of a strip the other way round.
-//    What PATCH_CULL_ENABLE does isn't known: it's noted, not emulated.
+//    PATCH_CULL_ENABLE changes no pixel (round 6's patch-cull and patch-cull-edges: every patch the same with it or
+//    without, a patch across the scissor rectangle's edges, the near plane or the far one included). (What it saves
+//    the GE, the time of making a patch wholly out of sight, isn't counted here.)
 //
 //Positions are worked out in doubles, then transformed as any vertex is: that draws exactly the pixels a PSP covered
 //in all of round 3's Bezier pictures and pspautotests' two, and all but 4 edge pixels of round 3's spline with both
@@ -119,6 +129,13 @@ static auto patchColumns(bool spline, u32 count, u32 divisions) -> u64 {
   return pieces * divisions + 1;
 }
 
+//Where the k-th of a piece's divisions falls along it, 0 to 1: k / divisions, but past 64 the GE's step is a 64th,
+//taken from the piece's start up to its middle row and from its end after (round 6's curves-count-v-65 to -255).
+static auto divisionAt(u32 k, u32 divisions) -> f64 {
+  if(divisions <= 64) return f64(k) / divisions;
+  return k <= divisions / 2 ? k / 64.0 : 1 - (divisions - k) / 64.0;
+}
+
 static auto patchSteps(bool spline, u32 count, u32 ends, u32 divisions, std::vector<PatchStep>& steps) -> void {
   steps.clear();
   if(count < 4) return;
@@ -134,10 +151,10 @@ static auto patchSteps(bool spline, u32 count, u32 ends, u32 divisions, std::vec
   for(u32 n = 0; n <= total; n++) {
     auto& step = steps[n];
     u32 piece = std::min(n / divisions, pieces - 1);
-    f64 t = f64(n - piece * divisions) / divisions;
+    f64 t = divisionAt(n - piece * divisions, divisions);
     if(spline) step.first = piece, splineStep(knots, piece + 3, piece + t, step);
     else step.first = piece * 3, bezierStep(t, step);
-    step.along = f64(n) / total;
+    step.along = divisions <= 64 ? f64(n) / total : (piece + t) / pieces;
   }
 }
 
@@ -149,7 +166,7 @@ auto GE::patch(bool spline, u32 argument) -> void {
   if(!format.positionFormat) return;
   u32 divisionsU = std::max(commands[PatchDivision] & 0x7f, 1u);
   u32 divisionsV = std::max(commands[PatchDivision] >> 8 & 0x7f, 1u);
-  if(divisionsU > 64 || divisionsV > 64) return note("a curved surface cut more than 64 times (the PSP's GE hangs)");
+  if(divisionsU > 64) return note("a curved surface cut more than 64 times along u (the PSP's GE hangs)");
   //The budget is checked before anything is worked out, so a surface past it allocates nothing.
   u64 columns = patchColumns(spline, ucount, divisionsU), rows = patchColumns(spline, vcount, divisionsV);
   if(!columns || !rows) return;
@@ -157,14 +174,12 @@ auto GE::patch(bool spline, u32 argument) -> void {
   std::vector<PatchStep> across, down;
   patchSteps(spline, ucount, spline ? argument >> 16 & 3 : 0, divisionsU, across);
   patchSteps(spline, vcount, spline ? argument >> 18 & 3 : 0, divisionsV, down);
-  if(commands[PatchCullEnable] & 1) note("PATCH_CULL_ENABLE isn't emulated");
 
-  //What the vertices need: the parts the vertex type has, and a normal made from the slopes where one is wanted
-  //but the vertex type has none.
+  //What the vertices need: the parts the vertex type has (but its normal), and a normal made from the slopes where
+  //one is wanted.
   u32 mapMode = commands[TextureMapMode] & 3, mapSource = commands[TextureMapMode] >> 8 & 3;
-  bool wantsNormal = !format.through &&
-                     ((commands[LightingEnable] & 1) || mapMode == 2 || (mapMode == 1 && mapSource >= 2));
-  bool normals = format.normalFormat != 0, slopes = !normals && wantsNormal;
+  bool slopes = !format.through &&
+                ((commands[LightingEnable] & 1) || mapMode == 2 || (mapMode == 1 && mapSource >= 2));
   bool textured = format.textureFormat != 0, weighted = format.weightFormat != 0;
   bool clockwise = !(commands[PatchFacing] & 1);
   auto& points = primitiveVertices;
@@ -173,7 +188,7 @@ auto GE::patch(bool spline, u32 argument) -> void {
     auto& v = down[r];
     for(u32 c = 0; c < columns; c++) {
       auto& u = across[c];
-      f64 position[3] = {}, color[4] = {}, texture[2] = {}, normal[3] = {}, weights[8] = {};
+      f64 position[3] = {}, color[4] = {}, texture[2] = {}, weights[8] = {};
       f64 slopeU[3] = {}, slopeV[3] = {};
       for(u32 j = 0; j < 4; j++) {
         for(u32 i = 0; i < 4; i++) {
@@ -183,7 +198,6 @@ auto GE::patch(bool spline, u32 argument) -> void {
           for(u32 k = 0; k < 3; k++) position[k] += w * xyz[k];
           for(u32 k = 0; k < 4; k++) color[k] += w * f64(point.color >> k * 8 & 0xff);
           if(textured) texture[0] += w * point.u, texture[1] += w * point.v;
-          if(normals) for(u32 k = 0; k < 3; k++) normal[k] += w * point.normal[k];
           if(weighted) for(u32 k = 0; k < format.weights; k++) weights[k] += w * point.weights[k];
           if(slopes) {
             for(u32 k = 0; k < 3; k++) {
@@ -200,7 +214,6 @@ auto GE::patch(bool spline, u32 argument) -> void {
       }
       if(textured) vertex.u = texture[0], vertex.v = texture[1];
       else vertex.u = u.along, vertex.v = v.along;
-      if(normals) for(u32 k = 0; k < 3; k++) vertex.normal[k] = normal[k];
       if(slopes) {
         f64 cross[3] = {slopeU[1] * slopeV[2] - slopeU[2] * slopeV[1], slopeU[2] * slopeV[0] - slopeU[0] * slopeV[2],
                         slopeU[0] * slopeV[1] - slopeU[1] * slopeV[0]};
@@ -210,22 +223,17 @@ auto GE::patch(bool spline, u32 argument) -> void {
     }
   }
 
-  //Drawn as PATCH_PRIMITIVE says: the rows two at a time as strips (triangles or lines), or each vertex a point.
+  //Drawn as PATCH_PRIMITIVE says: the rows two at a time as strips, of triangles, lines or points.
   u32 kind = commands[PatchPrimitive] & 3;
   auto& vertices = patchVertices;
-  if(kind >= 2) {
-    vertices = std::move(grid);
-    drawVertices(Points, format, vertices, vertices.size());
-  } else {
-    vertices.clear();
-    for(u32 r = 0; r + 1 < rows; r++) {
-      for(u32 c = 0; c < columns; c++) {
-        vertices.push_back(grid[r * columns + c]);
-        vertices.push_back(grid[(r + 1) * columns + c]);
-      }
+  vertices.clear();
+  for(u32 r = 0; r + 1 < rows; r++) {
+    for(u32 c = 0; c < columns; c++) {
+      vertices.push_back(grid[r * columns + c]);
+      vertices.push_back(grid[(r + 1) * columns + c]);
     }
-    drawVertices(kind == 0 ? TriangleStrip : LineStrip, format, vertices, columns * 2);
   }
+  drawVertices(kind == 0 ? TriangleStrip : kind == 1 ? LineStrip : Points, format, vertices, columns * 2);
   //A huge surface's vertices (up to tens of MB at the budget) aren't kept once drawn: drawVertices() is done with
   //them (what it defers, it copies), and only room for an ordinary surface's stays for the next.
   if(vertices.capacity() > PatchKept) std::vector<Vertex>().swap(vertices);

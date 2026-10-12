@@ -73,12 +73,22 @@ uint channel(uint color, uint n) { return color >> (n * 8u) & 255u; }
 //lighting.cpp's factor(): a channel as the GE multiplies it, 2c + 1
 int factor(uint color, uint n) { return int(channel(color, n)) * 2 + 1; }
 
-//lighting.cpp's share(): a light's share in 256ths, rounded up, -256 to 256
+//lighting.cpp's share(): a light's share as a level, 256 times the amount rounded down, -255 to 255
 int share(float amount) {
-  float value = ceil(256.0 * amount);
+  float value = floor(256.0 * abs(amount));
   if(isnan(value)) return 0;
-  return value < 256.0 ? int(max(value, -256.0)) : 256;
+  int level = value < 255.0 ? int(value) : 255;
+  return amount < 0.0 ? -level : level;
 }
+
+//lighting.cpp's times(): levels times a share, (2l + 1)(2s + 1) >> 10, a share below 0 taking away as much
+ivec4 times(ivec4 level, int share) {
+  ivec4 lit = (2 * abs(level) + 1) * (2 * abs(share) + 1) >> 10;
+  return mix(lit, -lit, notEqual(lessThan(level, ivec4(0)), bvec4(share < 0)));
+}
+
+//lighting.cpp's add(): a light's color times the material's (2l + 1)(2m + 1) made a level, times each share
+ivec4 part(ivec4 product, int share, int fade) { return times(times(product >> 10, share), fade); }
 
 //lighting.cpp's quickPower() and lightPower(): the GE's x to the power e, from a float's bits
 float quickPower(float x, float e) {
@@ -140,14 +150,15 @@ void light(uint own, vec3 world, vec3 normal, inout uint colored, out uint shone
       float spot = along >= l.direction.w ? lightPower(along, l.attenuation.w) : 0.0;
       strength *= isnan(spot) ? 0.0 : spot;
     }
-    sum += products[0] * share(strength) >> 18;
+    int fade = share(strength);
+    sum += part(products[0], fade, 255);
     float facing = dot(toLight, normal);
     if((kinds & 16u) != 0u) facing = lightPower(facing, t.viewDirection.w);
-    if(facing > 0.0) sum += products[1] * share(strength * facing) >> 18;
+    if(facing > 0.0) sum += part(products[1], share(facing), fade);
     if((kinds & 8u) != 0u && facing >= 0.0) {
       vec3 halfway = normalized(toLight + t.viewDirection.xyz, false);
       float gleam = lightPower(dot(halfway, normal), t.viewDirection.w);
-      if(gleam > 0.0) shine += products[2] * share(strength * gleam) >> 18;
+      if(gleam > 0.0) shine += part(products[2], share(gleam), fade);
     }
   }
   if((t.modes.w & 2u) != 0u) {

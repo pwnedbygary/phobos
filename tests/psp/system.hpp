@@ -71,6 +71,7 @@ auto drawTests() -> Tests;
 auto draw3dTests() -> Tests;
 auto curvesTests() -> Tests;
 auto measureTests() -> Tests;
+auto measured6Tests() -> Tests;
 auto gpuTests() -> Tests;
 auto discTests() -> Tests;
 auto discFormatTests() -> Tests;
