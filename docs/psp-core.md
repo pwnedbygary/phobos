@@ -10478,6 +10478,12 @@ than 1 of 255 apart a channel) can't come from this change, which touches only a
 fades and titles a few frames apart as two runs differ, and what master changed since the final run (the Metal Gear
 Acids' titles, part 72).
 
+After the merge with master (`529fbf403`) and the second review's fixes the library ran again, one game at a time
+(`lib2`, `lib2-compare.tsv`): all 266 finish, Killzone too. 28 games have a frame more than 1 of 255 apart from the
+final run's. MotorStorm: Arctic Edge's frame 1200 is again the only one from the lines (0.47), Persona 3 Portable and
+Virtua Tennis: World Tour are the same, and the six games new to the list (Jeanne d'Arc, Kenka Bancho, Metal Slug XX,
+Super Stardust Portable, Syphon Filter: Dark Mirror, The Sims 2: Pets, 1.75 to 5.87) draw no anti-aliased line.
+
 ### Checks
 
 - `tests/psp/run-tests.sh` (sanitized) 468 groups, 0 failures (on master `529fbf403`): "draw anti-aliased lines" (five measured cells, shallow

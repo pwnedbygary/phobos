@@ -46,6 +46,8 @@ of the PSP only; JPCSP not read. Save states unchanged.
   The beach, pool and volleyball scenes are clean in both renderers, software and Vulkan a mean of 0.1-0.2 apart. The
   whole library beside the final run: 265 finish (Killzone stopped at 900 s on a busy Mac); of the three games that
   draw anti-aliased lines, MotorStorm: Arctic Edge's menu panels' edges are now graded, the others unchanged.
+  Again after the merge, one game at a time: all 266 finish, 28 differ from the final run, none from the lines but
+  MotorStorm's frame 1200.
 
 ## PSP: memstick: is the memory stick — Colin McRae Rally 2005 Plus's save — 2026-10-12
 
