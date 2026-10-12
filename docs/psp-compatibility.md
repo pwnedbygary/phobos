@@ -23,7 +23,9 @@ part 69). And part 70 (2026-10-11, branch `cursor/psp-savename-2b67`, on `master
 mode and PARAM.SFO, the whole library run again beside the final run, and the games that save early booted twice on
 one memory stick (docs/psp-core.md, part 70). And part 71 (branch `cursor/psp-kenka-2b67`, on `master` at v2.0.0):
 Kenka Bancho's and Final Fantasy IV's rows, from the whole library run again beside the final run (docs/psp-core.md,
-part 71). The other rows are the report's.
+part 71). And part 72 (branch `cursor/psp-mga2-2b67`, on v2.0.0's
+`3cae0f907`): the two Metal Gear Acid rows, from the whole library run again beside the final run (docs/psp-core.md,
+part 72). The other rows are the report's.
 
 ## Method
 
@@ -59,13 +61,24 @@ game that looked worse was run again without presses on both commits before call
 
 ## Summary
 
-| Category | Before (`b27f084a5`) | Run 1 (#183's tip) | Now | Part 55 | Part 57 | Part 58 | Part 59 | Part 62 | Part 64 | Final | Part 70 | Part 71 | Change since Before |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Menu or gameplay | 141 | 148 | 175 | 178 | 180 | 180 | 187 | 188 | 189 | 194 | 194 | 195 | +54 |
-| Movie | 35 | 43 | 63 | 63 | 63 | 65 | 71 | 71 | 71 | 71 | 71 | 70 | +35 |
-| Stuck loading | 13 | 8 | 5 | 4 | 4 | 4 | 0 | 0 | 0 | 0 | 0 | 0 | -13 |
-| Black or hang | 73 | 64 | 21 | 19 | 17 | 15 | 6 | 6 | 6 | 1 | 1 | 1 | -72 |
-| Timed out | 4 | 3 | 2 | 2 | 2 | 2 | 2 | 1 | 0 | 0 | 0 | 0 | -4 |
+| Category | Before (`b27f084a5`) | Run 1 (#183's tip) | Now | Part 55 | Part 57 | Part 58 | Part 59 | Part 62 | Part 64 | Final | Part 70 | Part 71 | Part 72 | Change since Before |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Menu or gameplay | 141 | 148 | 175 | 178 | 180 | 180 | 187 | 188 | 189 | 194 | 194 | 195 | 197 | +56 |
+| Movie | 35 | 43 | 63 | 63 | 63 | 65 | 71 | 71 | 71 | 71 | 71 | 70 | 68 | +33 |
+| Stuck loading | 13 | 8 | 5 | 4 | 4 | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | -13 |
+| Black or hang | 73 | 64 | 21 | 19 | 17 | 15 | 6 | 6 | 6 | 1 | 1 | 1 | 1 | -72 |
+| Timed out | 4 | 3 | 2 | 2 | 2 | 2 | 2 | 1 | 0 | 0 | 0 | 0 | 0 | -4 |
+
+Part 72 (2026-10-11, on v2.0.0) moves two rows from movie to menu, both Metal Gear Acids: Metal Gear Acid shows its
+title (its "static picture" was the title's background alone) and Metal Gear Acid 2 its Memory Stick check, its Solid
+Eye notice and its title, where its intro art had sat with every press seemingly ignored; with Start each opens its main
+menu, and with Circle a game begins. Both clip their sprites with the VFPU and need a prefix kept through two vnops,
+which the CPU had used up, so every sprite inside the screen was culled (docs/psp-core.md, part 72). In the categories, after
+part 71's Final Fantasy IV, menu or gameplay 195 -> 197 and movie 70 -> 68. The whole library run again beside the final run: every other game
+shows at each frame the scene the final run showed, or the same sequence a few frames apart (fades, animation steps,
+movies further on or behind, Battlefront II's random map, and PixelJunk Monsters' title, whose sky follows the clock);
+all 266 finish their 3600 frames, none missing a function. Only four games run a vnop with a prefix pending at all,
+counted: the two Metal Gear Acids, and Metal Gear Solid: Portable Ops and Portable Ops Plus, whose frames are unchanged.
 
 Part 71 (2026-10-11, on `master` at v2.0.0) moves one row: Final Fantasy IV, which stayed on a white screen for good
 after its title movie, shows its title at 3600 (then its attract movie; pressed on, its menus and opening). It and
@@ -105,8 +118,8 @@ Ghost of Sparta its difficulty menu, and Naruto, Shining Blade and Valkyria Chro
 before their menus. Black Wolves Saga, black at 3600, is loading its opening there: run to 7200 frames, it plays it
 from about 4200 and shows its title by 5400. Eighteen other games show some frame differently from part 64's run, each
 the same scene a few frames apart (a fade, an animation step, a movie further on), as two runs of one runner differ
-too; no game shows less than it did. All 266 finish their 3600 frames (the slowest, Ghost of Sparta, in 639 s, three
-at a time beside other work), and none stops at a missing function.
+too; no game shows less than it did. All 266 finish their 3600 frames (the slowest, Killzone, in 691 s, three at a
+time beside other work), and none stops at a missing function.
 
 Part 64 moves one row: God of War: Chains of Olympus, which had timed out, finishes its 3600 frames, its difficulty
 menu at 3600 (the Cross at 1800 took New Game): its loop drew its scene as fast as the GE let it, and our GE took no
@@ -498,8 +511,8 @@ and now, and what the last frames showed or why a game stops.
 | Mega Man Powered Up [UNDUB v1.3] | ULUS10091 | 396 | menu | gameplay | gameplay | demo at 1200, loading at 3600 |
 | Melodie (Prototype) | PETR00010 | 263 | black | black | menu | its loading screen, then its menus: PLAY, SELECT TRACK, ARENA, and CONTINUE, MUSIC ANALYSIS, CREATURE VIEWER (part 62: asking first thing for a 40 MiB heap, more than the 24 MiB partition holds, it's started again with all of RAM; refused before, it stopped there, black) |
 | Mercury Meltdown | ULUS10133 | 292 | menu | menu | menu | title |
-| Metal Gear Acid | ULUS10006 | 529 | movie | movie | movie | static picture |
-| Metal Gear Acid 2 | ULUS10077 | 789 | movie | movie | movie | intro art |
+| Metal Gear Acid | ULUS10006 | 529 | movie | movie | menu | title, PRESS START BUTTON (part 72: vnop keeps the VFPU's prefixes; the game's sprite clipping had culled all but its title's background, the static picture before); with Start its main menu, with Circle its first scene's dialogue |
+| Metal Gear Acid 2 | ULUS10077 | 789 | movie | movie | menu | title, PRESS START BUTTON, after its Memory Stick check, Solid Eye notice and logos (part 72: vnop keeps the VFPU's prefixes; its sprite clipping had culled every sprite inside the screen, leaving its title's art); with Start its main menu, with Circle a new game's tutorial (its intro art before, presses changing nothing to be seen) |
 | Metal Gear Solid - Digital Graphic Novel | ULUS10108 | 260 | black | movie | movie | intro |
 | Metal Gear Solid - Peace Walker [v2.00] | ULUS10509 | 201 | movie | movie | movie | opening quote |
 | Metal Gear Solid - Portable Ops | ULUS10202 | 545 | movie | loading | menu | intro, then PRESS START BUTTON (part 59: sceIoDread's short names laid out by its SDK) |

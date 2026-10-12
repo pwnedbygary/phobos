@@ -3,7 +3,9 @@
 //Most instructions follow one pattern: read the operands' lanes (through the source prefixes), do the same math on
 //each lane, and write the results (through the destination prefix). vfpuUnary() and vfpuBinary() do that, given
 //the math for one lane. After each VFPU instruction the prefixes go back to doing nothing; the decoder sees to
-//that (vfpuPrefixesUsed()), except after vpfxs, vpfxt and vpfxd, which set them.
+//that (vfpuPrefixesUsed()), except after vpfxs, vpfxt and vpfxd, which set them, and vnop, vsync, vflush, the loads,
+//stores, branches, and moves to and from integer and control registers, which leave them (but a move to a prefix's
+//own control register, 128 to 130, sets it).
 //
 //The VFPU has no denormals (numbers too tiny for the normal float format): they count as zero, keeping their
 //sign, both read and written. It always rounds to the nearest. On the hardware its functions (sine, 2^x and so
@@ -1181,9 +1183,11 @@ auto Allegrex::VNEG(u8 vd, u8 vs, u32 size) -> void {
   vfpuWrite(vd, size, s, vfpu.pfxd);
 }
 
-//vnop does nothing, but it does use up the prefixes: pspdev's documentation says so.
+//vnop does nothing, and leaves the prefixes for the instruction after it, as vsync and vflush do. pspdev's
+//documentation says it uses them up, but none of its tests shows that, and both Metal Gear Acids' sprite clipping
+//needs them kept: vpfxt, vnop, vnop, mfvc, then the vcmp the prefix is for (were vnop to use it up, the games would
+//cull every sprite inside the screen, their titles and menus among them). PPSSPP keeps them too.
 auto Allegrex::VNOP() -> void {
-  vfpuPrefixesUsed();
 }
 
 //-1/x
@@ -1448,8 +1452,8 @@ auto Allegrex::VSUB(u8 vd, u8 vs, u8 vt, u32 size) -> void {
 }
 
 //vsync and vflush wait for the VFPU's pipeline, or its writes to memory, to finish: there's nothing to wait for
-//here. pspdev's documentation doesn't say whether they use up the prefixes; they don't in PPSSPP, nor here. (PPSSPP
-//keeps the prefixes through vnop too, but the documentation, which rests on tests on hardware, says otherwise.)
+//here. pspdev's documentation doesn't say whether they use up the prefixes; they don't in PPSSPP, nor here (nor does
+//vnop: VNOP()).
 auto Allegrex::VSYNC() -> void {
 }
 
