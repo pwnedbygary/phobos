@@ -30,25 +30,25 @@ auto GE::spriteRows(const Job& job, s32 fromY, s32 toY) -> void {
   s32 firstY = std::max(job.firstY, fromY), lastY = std::min(job.lastY, toY);
   auto fogAt = [&](s32 x) { return x * 16 + 8 + 1 >= s.middle ? s.rightFog : s.leftFog; };
   if(s.divided && look.textured) {
-    //Across x, 1 / w and the coordinate across x go from the left corner's to the right one's: a column's are its
-    //own, as is the texel its coordinate across falls in; down y, the coordinate down y over w is a row's own. What's
-    //left for each pixel is that over the column's 1 / w.
+    //Across x, s and q go from the left corner's to the right one's: a column's are its own, and so are R(q) and the
+    //texel its coordinate across falls in; down y, t is a row's own. What's left for each pixel is t times the
+    //column's R(q). (A column whose q is 0 or below holds both coordinates: HeldCoordinate.)
     auto& t = look.texture;
-    struct Column { f64 inverse; TexelAxis across; };
+    struct Column { float reciprocal; bool held; TexelAxis across; };
     Column columns[1024];
     for(s32 x = job.firstX; x <= job.lastX; x++) {
-      f64 alongX = f64(x * 16 + 8 - s.left) / (s.right - s.left);
-      f64 inverse = s.leftInverse + (s.rightInverse - s.leftInverse) * alongX;
-      float acrossX = (s.leftAcross + (s.rightAcross - s.leftAcross) * alongX) / inverse;
-      columns[x - job.firstX] = {inverse, s.turned ? texelAxis(acrossX, t.height, t.clampV, job.linear)
-                                                   : texelAxis(acrossX, t.width, t.clampU, job.linear)};
+      s32 q = spriteAt(s.leftQ, s.rightQ, x, s.left, s.right);
+      float reciprocal = q > 0 ? geReciprocal(float(q) * s.qUnit) : 0.0f;
+      float acrossX = q > 0 ? trunc24(f64(spriteAt(s.leftS, s.rightS, x, s.left, s.right)) * s.sUnit * reciprocal)
+                            : HeldCoordinate;
+      columns[x - job.firstX] = {reciprocal, q <= 0, s.turned ? texelAxis(acrossX, t.height, t.clampV, job.linear)
+                                                              : texelAxis(acrossX, t.width, t.clampU, job.linear)};
     }
     for(s32 y = firstY; y <= lastY; y++) {
-      f64 alongY = f64(y * 16 + 8 - s.top) / (s.bottom - s.top);
-      f64 downOverW = s.topDown + (s.bottomDown - s.topDown) * alongY;
+      s32 downT = spriteAt(s.topT, s.bottomT, y, s.top, s.bottom);
       for(s32 x = job.firstX; x <= job.lastX; x++) {
         auto& column = columns[x - job.firstX];
-        float downY = downOverW / column.inverse;
+        float downY = column.held ? HeldCoordinate : trunc24(f64(downT) * s.tUnit * column.reciprocal);
         TexelAxis down = s.turned ? texelAxis(downY, t.width, t.clampU, job.linear)
                                   : texelAxis(downY, t.height, t.clampV, job.linear);
         const TexelAxis& u = s.turned ? down : column.across;
@@ -178,10 +178,15 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
       for(u32 k = 0; k < uses; k++) values[used[k]] += steps[used[k]];
       float u = 0, v = 0;
       if(look.textured && r.perspective) {
-        //s, t and q stepped from the corner (draw.cpp); the coordinate is the floored unit times R(q)
-        float reciprocal = geReciprocal(float(qAt >> 14) * r.qUnit);
-        u = trunc24(f64(sAt >> 14) * r.sUnit * reciprocal);
-        v = trunc24(f64(tAt >> 14) * r.tUnit * reciprocal);
+        //s, t and q stepped from the corner (draw.cpp); the coordinate is the floored unit times R(q), or held where
+        //q is 0 or below (HeldCoordinate)
+        if(qAt >> 14 > 0) {
+          float reciprocal = geReciprocal(float(qAt >> 14) * r.qUnit);
+          u = trunc24(f64(sAt >> 14) * r.sUnit * reciprocal);
+          v = trunc24(f64(tAt >> 14) * r.tUnit * reciprocal);
+        } else {
+          u = v = HeldCoordinate;
+        }
         sAt += sStep, tAt += tStep, qAt += qStep;
       } else if(look.textured) {
         s64 middleX = s64(x) * 16 + 8;

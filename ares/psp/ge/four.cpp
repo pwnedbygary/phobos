@@ -57,8 +57,8 @@ static alwaysinline auto heldLanes(GE::f32x4 value, float low, float high) -> GE
   value = pickLanes(value < low, GE::f32x4{} + low, value);
   return pickLanes(value > high, GE::f32x4{} + high, value);
 }
-//s32(std::floor(value)) of each lane, for values within 2^24 of zero (texelAxis() holds them there). Cut toward zero,
-//then one less where that went up: the conversions are exact there, so this is the floor.
+//s32(std::floor(value)) of each lane, for values within 2^31 of zero (texelAxis() holds them to 2^30). Cut toward
+//zero, then one less where that went up: the conversions are exact there, so this is the floor.
 static alwaysinline auto floorLanes(GE::f32x4 value) -> GE::s32x4 {
   GE::s32x4 cut = __builtin_convertvector(value, GE::s32x4);
   return cut + (__builtin_convertvector(cut, GE::f32x4) > value);  //(a comparison that holds is -1)
@@ -211,7 +211,7 @@ static alwaysinline auto texelAxisLanes(GE::f32x4 coordinate, u32 size, bool cla
   -> void {
   s32 last = std::min<s32>(size, 512) - 1;
   auto inside = [&](GE::s32x4 c) { return clamp ? heldLanes(c, 0, last) : c & last; };
-  GE::f32x4 held = pickLanes(coordinate != coordinate, GE::f32x4{}, heldLanes(coordinate, -65536.0f, 65536.0f));
+  GE::f32x4 held = pickLanes(coordinate != coordinate, GE::f32x4{}, heldLanes(coordinate, -4194304.0f, 4194304.0f));
   if(!linear) {
     axis[0] = inside(floorLanes(held)), axis[1] = axis[2] = GE::s32x4{};
     return;
@@ -477,8 +477,8 @@ alwaysinline auto GE::pixelsFour(const PixelState& p, s32 x, s32 y, Four& four) 
 }
 
 //A sprite's rows, four pixels at a time: spriteRows() (raster.cpp), lane by lane. Its depth and color are the same
-//at every pixel; across x, its texture coordinate's texel axes (and in 3D, its 1 / w) are worked out once a column,
-//down y once a row (in 3D the coordinate down y over the column's 1 / w, at every pixel).
+//at every pixel; across x, its texture coordinate's texel axes (and in 3D, its R(q)) are worked out once a column,
+//down y once a row (in 3D t times the column's R(q), at every pixel).
 template<u32 Format>
 auto GE::spriteFours(const Job& job, s32 fromY, s32 toY) -> void {
   auto& s = job.sprite;
@@ -488,20 +488,21 @@ auto GE::spriteFours(const Job& job, s32 fromY, s32 toY) -> void {
   s32 firstY = std::max(job.firstY, fromY), lastY = std::min(job.lastY, toY);
   s32 firstX = job.firstX & ~3, columns = ((job.lastX | 3) - firstX + 1);  //(the fours' columns)
   bool textured = look.textured, divided = s.divided && textured;
-  //the columns' texel axes across x, and in 3D their 1 / w (as spriteRows() works them out, for the extra
-  //columns of the first and last fours too)
-  alignas(16) s32 acrossFirst[1032], acrossSecond[1032], acrossFraction[1032];
-  alignas(16) f64 inverses[1032];
+  //the columns' texel axes across x, and in 3D their R(q) and whether it's held (as spriteRows() works them out,
+  //for the extra columns of the first and last fours too)
+  alignas(16) s32 acrossFirst[1032], acrossSecond[1032], acrossFraction[1032], heldColumns[1032];
+  alignas(16) float reciprocals[1032];
   if(textured) {
     for(s32 x = firstX; x < firstX + columns; x++) {
       TexelAxis axis;
       if(divided) {
-        f64 alongX = f64(x * 16 + 8 - s.left) / (s.right - s.left);
-        f64 inverse = s.leftInverse + (s.rightInverse - s.leftInverse) * alongX;
-        float acrossX = (s.leftAcross + (s.rightAcross - s.leftAcross) * alongX) / inverse;
+        s32 q = spriteAt(s.leftQ, s.rightQ, x, s.left, s.right);
+        float reciprocal = q > 0 ? geReciprocal(float(q) * s.qUnit) : 0.0f;
+        float acrossX = q > 0 ? trunc24(f64(spriteAt(s.leftS, s.rightS, x, s.left, s.right)) * s.sUnit * reciprocal)
+                              : HeldCoordinate;
         axis = s.turned ? texelAxis(acrossX, t.height, t.clampV, job.linear)
                         : texelAxis(acrossX, t.width, t.clampU, job.linear);
-        inverses[x - firstX] = inverse;
+        reciprocals[x - firstX] = reciprocal, heldColumns[x - firstX] = q <= 0 ? -1 : 0;
       } else {
         float column = spriteAxis(s.columnFirst, s.columnStep, s.columnStart, x);
         axis = s.turned ? texelAxis(column, t.height, t.clampV, job.linear)
@@ -518,10 +519,9 @@ auto GE::spriteFours(const Job& job, s32 fromY, s32 toY) -> void {
   bool downClamp = s.turned ? t.clampU : t.clampV;
   for(s32 y = firstY; y <= lastY; y++) {
     s32x4 downAxis[3];
-    f64 downOverW = 0;
+    s32 downT = 0;
     if(textured && divided) {
-      f64 alongY = f64(y * 16 + 8 - s.top) / (s.bottom - s.top);
-      downOverW = s.topDown + (s.bottomDown - s.topDown) * alongY;
+      downT = spriteAt(s.topT, s.bottomT, y, s.top, s.bottom);
     } else if(textured) {
       float row = spriteAxis(s.rowFirst, s.rowStep, s.rowStart, y);
       TexelAxis axis = texelAxis(row, downSize, downClamp, job.linear);
@@ -542,12 +542,12 @@ auto GE::spriteFours(const Job& job, s32 fromY, s32 toY) -> void {
         std::memcpy(&acrossAxis[0], acrossFirst + at, 16);
         std::memcpy(&acrossAxis[1], acrossSecond + at, 16);
         std::memcpy(&acrossAxis[2], acrossFraction + at, 16);
-        if(divided) {  //float downY = downOverW / column.inverse, a lane at a time in doubles, two by two
-          f64x2 over = f64x2{} + downOverW, near, far;
-          std::memcpy(&near, inverses + at, 16);
-          std::memcpy(&far, inverses + at + 2, 16);
-          f64x2 nearDown = over / near, farDown = over / far;
-          f32x4 downY = {float(nearDown[0]), float(nearDown[1]), float(farDown[0]), float(farDown[1])};
+        if(divided) {  //t times each column's R(q), or held (spriteRows())
+          f32x4 reciprocal;
+          s32x4 held;
+          std::memcpy(&reciprocal, reciprocals + at, 16);
+          std::memcpy(&held, heldColumns + at, 16);
+          f32x4 downY = pickLanes(held, f32x4{} + HeldCoordinate, productLanes(splatLanes(downT), s.tUnit, reciprocal));
           texelAxisLanes(downY, downSize, downClamp, job.linear, downAxis);
         }
         s32x4 texel[4];
@@ -664,8 +664,9 @@ auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
           s32x4 sAt = s32x4(texLanes[0] + k * texSteps[0]) >> 14, tAt = s32x4(texLanes[1] + k * texSteps[1]) >> 14;
           s32x4 qAt = s32x4(texLanes[2] + k * texSteps[2]) >> 14;
           f32x4 reciprocal = reciprocalLanes(__builtin_convertvector(qAt, f32x4) * r.qUnit);
-          u = productLanes(sAt, r.sUnit, reciprocal);
-          v = productLanes(tAt, r.tUnit, reciprocal);
+          s32x4 held = qAt <= 0;  //(HeldCoordinate)
+          u = pickLanes(held, f32x4{} + HeldCoordinate, productLanes(sAt, r.sUnit, reciprocal));
+          v = pickLanes(held, f32x4{} + HeldCoordinate, productLanes(tAt, r.tUnit, reciprocal));
         } else {  //(in doubles, two lanes at a time; each lane's difference is a whole number, exact as a double)
           f64 across = f64(s64(x) * 16 + 8 - r.startX);
           f64x2 near = f64x2{across, across + 16}, far = f64x2{across + 32, across + 48};

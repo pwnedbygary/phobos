@@ -75,6 +75,38 @@ software renderer's every picture, VRAM, RAM and the machine's end state are the
   Edge's slow scene not reached; Chinatown Wars' long frames not seen on the Mac (to trace on the RP6).
 - Scratch: `~/phobos-work/scratch/speed9`.
 
+## PSP: round 6's pictures — lighting's two multiplies, the reciprocal's chords, patches along v — 2026-10-12
+
+Branch `cursor/psp-round6-fits-2b67` (#222), on master (`2a7019c84`). The owner ran round 6 of `tools/psp-measure` on
+his PSP (a PSP-1000, ARK on 6.60/6.61, the console of every round); the GE's pictures now match it. docs/psp-core.md,
+part 75, has the evidence, every picture before and after. Clean room: no PPSSPP code read, JPCSP not read. The GE's
+time and the save-state layout (25) are unchanged: the time model fitted to round 6's timing files is a branch of its
+own (`cursor/psp-round6-time-2b67`, not ready to merge: on the RP6 it slowed polling games and made Killzone and Super
+Stardust Portable draw far fewer frames, unconfirmed on a PSP).
+- **Data**: `tests/psp/measurements/ge-round6` (all 36 files packed with xz, 1.5 MB; run-tests.sh unpacks and checks
+  them), and `tests/psp/measured6.cpp`, five groups comparing the core's run of round 6's pictures with them.
+- **Lighting**: a light's color times the material's is made a level, then times the cosine's share, a level too
+  (floor(256 x cosine), at most 255), then times the fading's: three multiplies of (2a + 1)(2b + 1) >> 10.
+  `light-products`, `light-sum`, round 5's `light-share-*` and round 2's point light and spotlight are exact; the eight
+  sweeps keep 2123 pixels, the 37 of 8192 normals whose cosine the PSP rounds the other side. The Vulkan fast mode's
+  vertex shader does the same.
+- **Reciprocal**: its 128 chords read whole (16383 qs): each the straight line of least worst error, chord 0 starting
+  at 1. A q of 0 or below takes the texture's last texel. 3D sprites divide as triangles do, texture coordinates are
+  read out to 2^22 texels, through mode keeps 15 significant bits. Every reciprocal picture is exact, round 5's
+  perspective pictures too but `persp-w3`, worse (the right chord shows the stepper's shortfall over a long run).
+- **Patches**: PATCH_CULL_ENABLE changes no pixel; a patch's own normals don't count, its slopes make them. Along v any
+  count is drawn, by 64ths past 64 from both ends; a points patch draws the strips' vertices. Along u past 64 hangs.
+- **Checks**: tests/psp 454/0 (sanitized; the Vulkan groups on MoltenVK), tests/allegrex 58/0, tests/psp/ares 307/0.
+- **Library** (beside the final run, run twice, and the base's runner for every game that differs): all 266 finish,
+  none missing a function; 155 the same, 75 within 1 of 255, 36 more. Of the 111 that differ, 61 differ between this
+  runner's own two runs, 19 are the base's frames, and 31 are this part's pictures (a level or a texel in lit 3D and 3D
+  sprites, at most 1.32 of 255): no game's pace or presses change.
+- **Review**: an independent read-only review found no bug; its points (filtering and integer coordinates said to be
+  unmeasured, a program that won't load reported, stale comments, `.gitattributes`, the unpack's messages, a curves
+  check without data) are fixed. The measurements' README gives every round's console as a PSP-1000.
+- **Round 7** (part 75's list): the stepper over a long run, positions divided by w, the cosine's last bits,
+  non-power-of-two divisions, q of 0 with a clamped texture, through mode's shared exponent, chord 127's start.
+
 ## PSP: the system's dialogs shown by the app — messages, the keyboard, saving and loading — 2026-10-12
 
 Branch `cursor/psp-dialogs-2b67`, on `cursor/psp-merge-212-219-2b67` (master with #212 to #219, PR #220, which master

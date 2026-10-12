@@ -11,6 +11,38 @@ export PSP_TEST_PROGRAMS=${PSP_TEST_PROGRAMS-$ROOT/tests/psp/programs}
 export PSP_GE_RESULTS=${PSP_GE_RESULTS-$ROOT/tests/psp/measurements/ge-round3}
 OUT=${TMPDIR:-/tmp}/phobos-psp-tests
 mkdir -p "$OUT"
+#round 6 of the PSP's GE measurements (packed with xz, as tests/allegrex/measured's are), unpacked once, unless
+#PSP_GE_ROUND6 names another folder (empty: none); each file through a temporary one, so one cut short isn't kept,
+#and all of them again if they don't match SHA256SUMS (another checkout's left in the same TMPDIR, say)
+if [[ -z ${PSP_GE_ROUND6+set} ]]; then
+  export PSP_GE_ROUND6="$OUT/ge-round6"
+  mkdir -p "$PSP_GE_ROUND6"
+  MEASURED6="$HERE/measurements/ge-round6"
+  unpack6() {
+    for packed in "$MEASURED6"/*.xz; do
+      unpacked="$PSP_GE_ROUND6/$(basename "$packed" .xz)"
+      if [[ ${1:-} == all || ! -f $unpacked || $packed -nt $unpacked ]]; then
+        if xz -dc "$packed" > "$unpacked.part"; then mv "$unpacked.part" "$unpacked"; else rm -f "$unpacked.part"; fi
+      fi
+    done
+    cp "$MEASURED6/manifest6.txt" "$PSP_GE_ROUND6/"
+  }
+  sums6() {
+    local sum=(shasum -a 256)
+    if command -v sha256sum > /dev/null; then sum=(sha256sum); fi
+    (cd "$PSP_GE_ROUND6" && "${sum[@]}" -c "$MEASURED6/SHA256SUMS") > "$OUT/ge-round6.sums" 2>&1
+  }
+  command -v xz > /dev/null || { echo "tests/psp/measurements/ge-round6 needs xz to unpack" >&2; exit 1; }
+  unpack6
+  if ! sums6; then
+    unpack6 all
+    if ! sums6; then
+      grep -v ': OK$' "$OUT/ge-round6.sums" >&2
+      echo "tests/psp/measurements/ge-round6: unpacked, the files don't match SHA256SUMS" >&2
+      exit 1
+    fi
+  fi
+fi
 
 CC=${CC:-cc}
 CXX=${CXX:-c++}
@@ -74,7 +106,7 @@ $CXX -std=c++20 -O1 -g -Wall -Wextra -Werror $SANITIZE "${SYSROOT[@]}" "${DEFINE
   "$HERE/disc-formats.cpp" "$HERE/disc-info.cpp" "$HERE/desktop-disc-info.cpp" "$HERE/crypto.cpp" \
   "$HERE/decrypt.cpp" "$HERE/pgd.cpp" "$HERE/modules.cpp" "$ROOT/desktop/PspDiscInfo.cpp" \
   "$HERE/states.cpp" "$HERE/ge.cpp" "$HERE/draw.cpp" "$HERE/draw3d.cpp" "$HERE/curves.cpp" \
-  "$HERE/measure.cpp" "$ROOT/ares/psp/ge/gpu/gpu.cpp" "$HERE/gpu.cpp" \
+  "$HERE/measure.cpp" "$HERE/measured6.cpp" "$ROOT/ares/psp/ge/gpu/gpu.cpp" "$HERE/gpu.cpp" \
   "$NALL" "$SLJIT" "$ALLOCATOR" \
   "${LIBRARIES[@]}" -o "$OUT/psp"
 "$OUT/psp"

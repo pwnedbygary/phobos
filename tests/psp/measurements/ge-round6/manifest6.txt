@@ -1,0 +1,188 @@
+psp-measure's GE tests, round 6 (tools/psp-measure/ge.c in Phobos says what each test draws; docs/psp-core.md,
+part 66, what each is for). Pictures: the target's pixels after one test, a little-endian 32-bit word each, row
+by row, 256x256.
+light-products-0..3: a lit point a pixel, row y's light (y, 255 - y, y) on column x's material (x, x, 255 - x),
+normals (0, 0, 1), (33, 0, 56), (65, 0, 72), (101, 0, 26). light-sweep-0..7: 1024 normals in 8x8 blocks, each
+with 64 products (light per row, material per pixel, levels 96-255 from a fixed sequence, white in each block's
+first row and column). light-sum: 1 to 4 lights alike, 64 rows each.
+recip-pixels, recip-projected: texels showing the GE's reciprocal at pixels (the chord's low 8 bits).
+recip-vertex-0..2, recip-sprites: 4096 cells of 4x4 pixels at one w each (in [1, 2)), u 512.
+texel-range: sprites whose texture coordinates are +-2^k plus a known part, k 8 to 23 (red: u mod 256).
+patch-cull: 256 patches (PATCH_CULL_ENABLE, PATCH_FACING, mirroring, normals, culling, lighting, points);
+patch-cull-edges: 64 patches against their cells' scissor rectangles, the near and far planes.
+curves-count-v: points added up along v at 16, 63 and 64 divisions (columns 0-2), -v-65, -v-100, -v-128,
+-v-200, -v-255 at that many (columns 3-7), one to a test.
+time-*: the GE's drawing time. Records of words: case, size, CPU MHz << 16 | bus MHz, repeats | values << 16,
+then per run `values` times in microseconds from just before sceGeListEnQueue: to the finish callback, to
+sceGeListEnQueue's return, (time-signals) to the signal callback; 0xffffffff for a run not finished (a stall,
+see <name>.stalled; a list sceGeListEnQueue refused: 0xffffffff, then its error). Each test at 222/111 MHz, then
+at 333/166 (the clocks as found put back after). The cases (case: what; size):
+time-commands 0: an empty list: FINISH and END; commands
+time-commands 1: NOP; commands
+time-commands 2: TEXTURE_ENV_COLOR, a register, each a new value; commands
+time-commands 3: TEX_FLUSH; commands
+time-commands 4: the world matrix: WORLD_MATRIX_NUMBER 0 and 12 WORLD_MATRIX_DATA (the identity); matrices
+time-commands 5: JUMP to the next word; jumps
+time-commands 6: CALL to a RET elsewhere; calls
+time-primitives 0: through mode: triangles of about 2 pixels (color, float position); triangles
+time-primitives 1: through mode: triangles covering no pixel's middle; triangles
+time-primitives 2: through mode: a triangle strip (count + 2 vertices); triangles
+time-primitives 3: through mode: a triangle fan (count + 2 vertices); triangles
+time-primitives 4: through mode: sprites 2x2 pixels; sprites
+time-primitives 5: through mode: lines 2 pixels long; lines
+time-primitives 6: through mode: a line strip (count + 1 vertices); lines
+time-primitives 7: through mode: points; points
+time-primitives 8: through mode: textured triangles (a 32x32 8888 texture, nearest); triangles
+time-primitives 9: through mode: triangles through 16-bit indices; triangles
+time-primitives 10: 3D: triangles (identity matrices, w 1); triangles
+time-primitives 11: 3D: textured triangles in perspective (the lens, w 2); triangles
+time-primitives 12: 3D: lit triangles, one directional light; triangles
+time-primitives 13: 3D: lit triangles, four point lights fading, with their shine; triangles
+time-primitives 14: 3D: skinned triangles, 8 float weights; triangles
+time-primitives 15: 3D: skinned triangles, 2 float weights; triangles
+time-primitives 16: 3D: morphed triangles, 2 vertices each; triangles
+time-primitives 17: 3D: triangles culled as back faces; triangles
+time-primitives 18: 3D: triangles outside the scissor rectangle; triangles
+time-primitives 19: 3D: triangles past the near plane; triangles
+time-primitives 20: 3D: triangles cut by the near plane (one corner past it); triangles
+time-primitives 21: 3D: triangles, their vertices in VRAM; triangles
+time-primitives 22: 3D: sprites 2x2 pixels; sprites
+time-primitives 23: 3D: lines 2 pixels long; lines
+time-primitives 24: 3D: points; points
+time-primitives 25: 3D: a triangle strip; triangles
+time-primitives 26: 3D: triangles through 16-bit indices; triangles
+time-primitives 27: 3D: Bezier patches 8x8 pixels, 4x4 points, cut 4x4; patches
+time-primitives 28: 3D: the same patches outside the scissor rectangle, PATCH_CULL_ENABLE off; patches
+time-primitives 29: 3D: the same, PATCH_CULL_ENABLE on; patches
+time-primitives 30: 3D: Bezier patches 16x16 pixels, cut 16x16; patches
+time-fill 0: flat color, 8888 target; layers
+time-fill 1: flat color, 5650 target; layers
+time-fill 2: flat color, 5551 target; layers
+time-fill 3: flat color, 4444 target; layers
+time-fill 4: 8888 texture, not swizzled; layers
+time-fill 5: 8888 texture; layers
+time-fill 6: 8888 texture in VRAM, not swizzled; layers
+time-fill 7: 8888 texture in VRAM; layers
+time-fill 8: 5650 texture; layers
+time-fill 9: 5551 texture; layers
+time-fill 10: 4444 texture; layers
+time-fill 11: CLUT8 texture (8888 palette); layers
+time-fill 12: CLUT4 texture (8888 palette); layers
+time-fill 13: CLUT8 texture, not swizzled; layers
+time-fill 14: CLUT4 texture, not swizzled; layers
+time-fill 15: DXT1 texture; layers
+time-fill 16: DXT3 texture; layers
+time-fill 17: DXT5 texture; layers
+time-fill 18: 8888 texture, bilinear, half a texel off (four texels a pixel); layers
+time-fill 19: 8888 texture 64x64 magnified 4 times, nearest; layers
+time-fill 20: 8888 texture 64x64 magnified 4 times, bilinear; layers
+time-fill 21: 8888 texture shrunk 2 times (four 128x128 sprites), nearest; layers
+time-fill 22: 8888 texture shrunk 2 times, bilinear; layers
+time-fill 23: CLUT8 texture, bilinear, half a texel off; layers
+time-fill 24: 8888 texture, MODULATE; layers
+time-fill 25: blending (source alpha, 1 - source alpha), flat color alpha 0x80, 8888 target; layers
+time-fill 26: blending, flat color alpha 0x80, 5650 target; layers
+time-fill 27: depth test GEQUAL passing (depths 0, z 0), writing; layers
+time-fill 28: depth test GEQUAL failing (depths 0xffff, z 0); layers
+time-fill 29: depth test GEQUAL passing, not writing; layers
+time-fill 30: alpha test GREATER 0 passing; layers
+time-fill 31: alpha test GREATER 255 failing; layers
+time-fill 32: stencil test ALWAYS, INCR, 8888 target; layers
+time-fill 33: logic operation XOR; layers
+time-fill 34: dithering, 5650 target; layers
+time-fill 35: pixel mask 0x00ff00ff; layers
+time-fill 36: 3D: two triangles, flat color (identity matrices); layers
+time-fill 37: 3D: the same with fog; layers
+time-fill 38: 3D: two triangles, 8888 texture, w 1; layers
+time-fill 39: 3D: two triangles, 8888 texture, w 1 at the left to 4 at the right (the lens); layers
+time-fill 40: through mode: two triangles, flat shading; layers
+time-fill 41: through mode: two triangles, colors across (smooth shading); layers
+time-fill 42: clear mode: color, stencil and depth; layers
+time-fill 43: 5650 texture, 5650 target; layers
+time-sizes 0: sprites 2x2; layers
+time-sizes 1: sprites 4x4; layers
+time-sizes 2: sprites 8x8; layers
+time-sizes 3: sprites 16x16; layers
+time-sizes 4: sprites 32x32; layers
+time-sizes 5: sprites 64x64; layers
+time-sizes 6: sprites 128x128; layers
+time-sizes 7: sprites 256x1 (rows); layers
+time-sizes 8: sprites 1x256 (columns); layers
+time-sizes 9: sprites 3x3 (255x255 pixels); layers
+time-sizes 10: sprites 17x17 (255x255 pixels); layers
+time-sizes 11: triangles, squares 2x2; layers
+time-sizes 12: triangles, squares 4x4; layers
+time-sizes 13: triangles, squares 8x8; layers
+time-sizes 14: triangles, squares 16x16; layers
+time-sizes 15: triangles, squares 32x32; layers
+time-sizes 16: triangles, squares 64x64; layers
+time-sizes 17: triangles, squares 128x128; layers
+time-transfers 0: RAM to VRAM, 32-bit; pixels square (a side)
+time-transfers 1: RAM to VRAM, 16-bit; pixels square (a side)
+time-transfers 2: VRAM to VRAM, 32-bit; pixels square (a side)
+time-transfers 3: VRAM to VRAM, 16-bit; pixels square (a side)
+time-transfers 4: VRAM to RAM, 32-bit; pixels square (a side)
+time-transfers 5: RAM to RAM, 32-bit; pixels square (a side)
+time-transfers 6: RAM to VRAM, 32-bit, 4 pixels wide; rows
+time-transfers 7: RAM to VRAM, 32-bit, one row; pixels
+time-transfers 8: RAM to VRAM, 32-bit, then TEXSYNC; pixels square (a side)
+time-texcache 0: 8888, not swizzled, 8x8; layers
+time-texcache 1: 8888, not swizzled, 16x16; layers
+time-texcache 2: 8888, not swizzled, 32x32; layers
+time-texcache 3: 8888, not swizzled, 64x64; layers
+time-texcache 4: 8888, not swizzled, 128x128; layers
+time-texcache 5: 8888, not swizzled, 256x256; layers
+time-texcache 6: 8888, swizzled, 8x8; layers
+time-texcache 7: 8888, swizzled, 16x16; layers
+time-texcache 8: 8888, swizzled, 32x32; layers
+time-texcache 9: 8888, swizzled, 64x64; layers
+time-texcache 10: 8888, swizzled, 128x128; layers
+time-texcache 11: 8888, swizzled, 256x256; layers
+time-texcache 12: 5650, not swizzled, 8x8; layers
+time-texcache 13: 5650, not swizzled, 16x16; layers
+time-texcache 14: 5650, not swizzled, 32x32; layers
+time-texcache 15: 5650, not swizzled, 64x64; layers
+time-texcache 16: 5650, not swizzled, 128x128; layers
+time-texcache 17: 5650, not swizzled, 256x256; layers
+time-texcache 18: 5650, swizzled, 8x8; layers
+time-texcache 19: 5650, swizzled, 16x16; layers
+time-texcache 20: 5650, swizzled, 32x32; layers
+time-texcache 21: 5650, swizzled, 64x64; layers
+time-texcache 22: 5650, swizzled, 128x128; layers
+time-texcache 23: 5650, swizzled, 256x256; layers
+time-texcache 24: CLUT8, not swizzled, 8x8; layers
+time-texcache 25: CLUT8, not swizzled, 16x16; layers
+time-texcache 26: CLUT8, not swizzled, 32x32; layers
+time-texcache 27: CLUT8, not swizzled, 64x64; layers
+time-texcache 28: CLUT8, not swizzled, 128x128; layers
+time-texcache 29: CLUT8, not swizzled, 256x256; layers
+time-texcache 30: CLUT8, swizzled, 8x8; layers
+time-texcache 31: CLUT8, swizzled, 16x16; layers
+time-texcache 32: CLUT8, swizzled, 32x32; layers
+time-texcache 33: CLUT8, swizzled, 64x64; layers
+time-texcache 34: CLUT8, swizzled, 128x128; layers
+time-texcache 35: CLUT8, swizzled, 256x256; layers
+time-texcache 36: CLUT4, not swizzled, 8x8; layers
+time-texcache 37: CLUT4, not swizzled, 16x16; layers
+time-texcache 38: CLUT4, not swizzled, 32x32; layers
+time-texcache 39: CLUT4, not swizzled, 64x64; layers
+time-texcache 40: CLUT4, not swizzled, 128x128; layers
+time-texcache 41: CLUT4, not swizzled, 256x256; layers
+time-texcache 42: CLUT4, swizzled, 8x8; layers
+time-texcache 43: CLUT4, swizzled, 16x16; layers
+time-texcache 44: CLUT4, swizzled, 32x32; layers
+time-texcache 45: CLUT4, swizzled, 64x64; layers
+time-texcache 46: CLUT4, swizzled, 128x128; layers
+time-texcache 47: CLUT4, swizzled, 256x256; layers
+time-texcache 48: again: one 32x32 8888 texture, set once; sprites
+time-texcache 49: again: the same, TEX_FLUSH before each sprite; sprites
+time-texcache 50: new: a 32x32 8888 texture of its own for each sprite (RAM, 4 KiB apart); sprites
+time-texcache 51: new: the same in VRAM; sprites
+time-texcache 52: again: a 32x32 CLUT8 texture, its 256-color palette loaded before each sprite; sprites
+time-texcache 53: again: the same, the palette loaded once; sprites
+time-texcache 54: again: one 64x64 8888 texture (16 KiB), set once, 64x64 sprites; sprites
+time-texcache 55: again: the same, TEX_FLUSH before each sprite; sprites
+time-signals 0: flat layers, a SIGNAL that lets the GE go on, as many flat layers; layers each side
+ge-statuses: the driver's statuses while a list draws, and with interrupts held off (layout in ge.c).
+<name>.stalled: the GE hadn't finished the test's list after 5 s and was reset (manifest4.txt says more).
+<name>.stopped: a test that stopped the PSP twice, given up on.
