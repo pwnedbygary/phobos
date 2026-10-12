@@ -9853,8 +9853,8 @@ fell below 85 frames a second on the Mac; its slow scene wasn't found.
    greatest values both bounds allow. `texelRuns()` puts them inside the texture as `texelAxis()` does: held at the
    edges, or repeating round as one run or two (Killzone's quads fetch a texel at 512 with weight 0, which repeats to
    column 0). A 2D sprite's job marks what `spriteReach()` finds (MX vs. ATV Untamed copies its picture through a 5650
-   buffer in strips 16 and 32 wide, each deferred). Anything else (a q that changes, 2D triangles, lines, points)
-   marks the whole texture, as before.
+   buffer in strips 16 and 32 wide, each deferred). Anything else (a q that changes, or one of 0 or below, whose pixels
+   all take the held coordinate since part 75; 2D triangles, lines, points) marks the whole texture, as before.
 2. **3D triangles over their own texture from a copy where their reads and writes are apart** (`draw.cpp`'s
    `readsApart()`, `triangleJob()`). A primitive drawing over its own texture (`drawsOver()`, by its scissor
    rectangle) was drawn at once on the GE's thread, a pixel at a time, reading each texel from memory, after
@@ -9964,27 +9964,37 @@ Every change is the host's alone; nothing a game can see moves.
   captures. The other 28, run from boot the same way on the base's and the branch's bench runners with the clock
   pinned, every frame's picture and all of VRAM hashed with drawing settled, then RAM and the machine's state, are
   identical over all 3600 frames, at `21753bfb1` and again at the last commit.
+- Master moved on while this was open: #221 (part 73, the dialogs) and #222 (part 75, round 6's pictures), merged in.
+  Part 75 holds a pixel's coordinates at the texture's last texel where its q is 0 or below, which `texelSpan()`
+  didn't know: a triangle whose q is the same at every pixel and 0 or below would have had its deferred texture
+  decoded where R(q) put its coordinates, not at that texel. Neither branch alone has it; the merge's next commit
+  (`387c19c45`) decodes such a triangle's texture whole, and the deferred-texture group draws one (a quad projected by
+  the texture matrix to q = -1), which fails without it. Then the merged branch against master (`caee1a26f`) in all 24
+  scenes the same way, 60 frames at 7 threads and at 1: identical, every one. The library runs above are of the
+  branch before the merges.
 
 ### Checks
 
-- `tests/psp/run-tests.sh` (sanitizers on) 452 groups, 0 failures: the base's 449 and three new, "ge deferred texture's
-  texels as its jobs take them" (3D quads nearest and filtered, held and repeating round an edge, one in perspective, a
-  CLUT32 view, a lone triangle and 2D sprites (two of one PRIM far apart), each over a picture redrawn a little other
-  before it, so that a copy decoded into an earlier one's room shows a texel left out; at 1 thread and at 2, 4 and 8,
-  fours on and off; Looks sharing a copy, and one of 25 pieces, checked directly), "ge 3D triangles over their own
-  texture" (quads apart and not, cut at the near plane, in perspective, a PRIM whose second triangle reads what its
-  first draws; against a machine that never decodes; a lone quad apart checked to wait in a batch, decoded) and "ge
-  FINISH after a quiet function" (a FINISH's callback at the same count of a spin polling a quiet function as polling
-  one that isn't, on both engines; each of the twelve dispatched as quiet and making nothing due sooner; one not marked,
-  one taking a FINISH and one starting a call not quiet). `tests/allegrex/run-tests.sh` 58 groups, 0 failures;
-  `tests/psp/ares/run-tests.sh` 307 checks, 0 failed. `ares/psp/psp.cpp` compiles for arm64 with NDK 28.2, and with GCC
-  11 as the base does (four.cpp's known warnings).
-- Broken versions, each in a copy of the tree, that the new groups fail: all ten of the reach's (the filtered second
+- `tests/psp/run-tests.sh` (sanitizers on) 452 groups, 0 failures before the merges, 469 after them (master's 466 and
+  these three); the three new: "ge deferred texture's texels as its jobs take them" (3D quads nearest and filtered, held
+  and repeating round an edge, one in perspective, a CLUT32 view, a lone triangle, a quad whose q is -1 at every corner,
+  and 2D sprites (two of one PRIM far apart), each over a picture redrawn a little other before it, so that a copy
+  decoded into an earlier one's room shows a texel left out; at 1 thread and at 2, 4 and 8, fours on and off; Looks
+  sharing a copy, and one of 25 pieces, checked directly), "ge 3D triangles over their own texture" (quads apart and
+  not, cut at the near plane, in perspective, a PRIM whose second triangle reads what its first draws; against a machine
+  that never decodes; a lone quad apart checked to wait in a batch, decoded) and "ge FINISH after a quiet function" (a
+  FINISH's callback at the same count of a spin polling a quiet function as polling one that isn't, on both engines;
+  each of the twelve dispatched as quiet and making nothing due sooner; one not marked, one taking a FINISH and one
+  starting a call not quiet). `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 307
+  checks before the merges and 318 after, 0 failed. `ares/psp/psp.cpp` compiles for arm64 with NDK 28.2, and with GCC 11
+  as the base does (four.cpp's known warnings).
+- Broken versions, each in a copy of the tree, that the new groups fail: all eleven of the reach's (the filtered second
   texel left out, the first texel one on, the decode's last row or last column left out, a q that changes taken as one,
   a repeat taken as held, the second run round the edge dropped, a corner left out, sharing Looks taking only the
-  first's, a reach made afresh for each job) and both of the cap's; the sprite reach's three; `readsApart()` always
-  refusing and five of six more; the quiet functions' four (every function quiet, none, and each of the two guards). One
-  passes: a triangle cut at the near plane looked into as if whole (the test's cut quad comes out apart either way).
+  first's, a reach made afresh for each job, a q of 0 or below taken as any other) and both of the cap's; the sprite
+  reach's three; `readsApart()` always refusing and five of six more; the quiet functions' four (every function quiet,
+  none, and each of the two guards). One passes: a triangle cut at the near plane looked into as if whole (the test's
+  cut quad comes out apart either way).
 - An independent read-only review of the branch found no bug. Its points were fixed: the copies' recycled room could
   hide a texel left out of a decode (the picture is redrawn other each time now), the copy path and the quiet
   functions weren't checked directly, the pieces of a decode were unbounded, `Reach::mark()` took any range, and

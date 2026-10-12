@@ -59,13 +59,17 @@ software renderer's every picture, VRAM, RAM and the machine's end state are the
   in every renderer; the decode changes are Software's batches only (Vulkan decodes a texture it doesn't hold, every
   row its primitive may reach, at each texture-cache miss, the next place to look for Backbone's games there).
 - **Checks**: tests/psp 452/0 (sanitized; three new groups, which broken versions fail), tests/allegrex 58/0,
-  tests/psp/ares 307/0; arm64 with NDK 28.2 and GCC 11 compile it as they do the base. Every frame's picture and VRAM
-  hash, then RAM and the end state, identical to the base's in every scene at 7 and 1 threads. The library the report's
-  way: all 266 finish, none missing a function, 188 with the final run's pictures at all four captures; the other 78
-  differ as runs of one runner do (the clock, which starts at the host's time, and the runner's PNG a picture behind
-  under load): with the clock pinned 50 match, and the other 28 hash identical to the base's at every one of 3600
-  frames. Review: no bug; its test gaps and nits fixed; a delta review passed, its points fixed; a delta review
-  of the last commit and the docs passed, its points fixed.
+  tests/psp/ares 307/0, and with master merged in (#221, #222) 469/0, 58/0 and 318/0; arm64 with NDK 28.2 and GCC 11
+  compile it as they do the base. Every frame's picture and VRAM hash, then RAM and the end state, identical to the
+  base's in every scene at 7 and 1 threads. The library the report's way: all 266 finish, none missing a function, 188
+  with the final run's pictures at all four captures; the other 78 differ as runs of one runner do (the clock, which
+  starts at the host's time, and the runner's PNG a picture behind under load): with the clock pinned 50 match, and the
+  other 28 hash identical to the base's at every one of 3600 frames. Review: no bug; its test gaps and nits fixed; a
+  delta review passed, its points fixed; a delta review of the last commit and the docs passed, its points fixed.
+- **Merged with master** (#221, #222): round 6 holds a pixel's coordinates at the last texel where q is 0 or below,
+  which the reach didn't know; the commit after the merge decodes such a triangle's texture whole (a new check fails
+  without it). The merged branch hashes identical to master (`caee1a26f`) in all 24 scenes at 7 and 1 threads; the
+  library runs are of the branch before the merges.
 - **On the RP6, to measure**: base `5b2a564fa` (2.0.0-test-1's code) against this branch, Software at 7 threads, the
   scenes in `~/phobos-work/scratch/speed9/scenes` (a scene's `state` is an app save state's bytes; part 74's table says
   where each is from boot): expect Killzone's menu, Death Jr. II's character select, Sonic Rivals' stage, Activision
