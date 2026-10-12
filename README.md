@@ -95,7 +95,8 @@ polished.
   [Building](#building-phobos)).
 - **Saves and states:** the memory stick is a folder, shared by every game or at a path you choose. Save states are
   versioned, so states saved by earlier builds keep loading.
-- **Controls:** the PSP's own touch layout, and controllers mapped as on every other system.
+- **Controls:** the PSP's own touch layout, and controllers mapped as on every other system, whose right stick can
+  be the PSP's face buttons, its D-pad or its analog stick (PSP Right Stick, in Settings and the pause menu).
 - **Compatibility:** in the [compatibility report](docs/psp-compatibility.md)'s runs (each of 266 retail games run
   headless for a minute of PSP time), 194 reach a menu or gameplay and 71 play their opening movies, and the last plays
   its opening a few seconds later; none stops at a missing system function. Speed is measured on a Retroid Pocket 6

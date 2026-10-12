@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.Button
@@ -80,11 +81,13 @@ import androidx.compose.ui.unit.dp
 import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.input.ControlLevel
+import com.phobos.emulator.launch.LaunchSystems
 import com.phobos.emulator.ui.hud.hudConfig
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.neonGlow
 import com.phobos.emulator.ui.theme.pillShape
 import com.phobos.emulator.util.N64SaveFormat
+import com.phobos.emulator.util.PspStartSettings
 import com.phobos.emulator.util.ZX_SCHEMES
 import com.phobos.emulator.util.zxScheme
 import kotlinx.coroutines.launch
@@ -151,6 +154,14 @@ fun EmulationMenu(
     }
     // Composed here, not in the list, so the list can't dispose its pickers' results or dialogs.
     val saveTransfer = if (systemName.contains("Nintendo 64", ignoreCase = true)) rememberSaveTransfer(viewModel, settings) else null
+    var confirmingPspRestart by remember { mutableStateOf(false) }
+    if (confirmingPspRestart) {
+        PspRestartDialog(
+            fullScreen = settings.fullScreenMode,
+            onDismiss = { confirmingPspRestart = false },
+            onRestart = { confirmingPspRestart = false; viewModel.reloadGame(context, autoLoad = false) },
+        )
+    }
     // The N64 Experimental, Performance Monitor and controller pages replace the main list (with a
     // back arrow) to keep the menu short.
     var experimentalOpen by remember { mutableStateOf(false) }
@@ -242,6 +253,9 @@ fun EmulationMenu(
                                     }
                                 }
                             }
+                        }
+                        if (systemName == LaunchSystems.PSP) {
+                            item { PspSection(viewModel, settings, onRestart = { confirmingPspRestart = true }) }
                         }
                         if (systemName.contains("ZX Spectrum", ignoreCase = true)) {
                             item { ZxKeyboardSection(viewModel, settings, showKeyboard, onKeyboardToggle, zxControlScheme, onZxControlScheme) }
@@ -431,6 +445,47 @@ private fun N64Section(viewModel: MainViewModel, settings: EmulatorSettings, onO
             modifier = Modifier.focusRing(MaterialTheme.colorScheme.primary).clickable(onClick = onOpenExperimental),
         )
     }
+}
+
+/**
+ * Settings → Emulation's PSP settings. The core takes the renderer, resolution and drawing threads as the game starts,
+ * so once they differ from those the running game started with, a row offers to restart it with them ([onRestart]).
+ */
+@Composable
+private fun PspSection(viewModel: MainViewModel, settings: EmulatorSettings, onRestart: () -> Unit) {
+    val started by viewModel.pspStartSettings.collectAsState()
+    val chosen = PspStartSettings.of(settings.pspRenderer, settings.pspResolution, settings.pspDrawingThreads)
+    MenuSection("PlayStation Portable") {
+        PspRendererItem(settings.pspRenderer) { viewModel.setPspRenderer(it) }
+        PspResolutionItem(settings.pspResolution) { viewModel.setPspResolution(it) }
+        PspDrawingThreadsItem(settings.pspDrawingThreads) { viewModel.setPspDrawingThreads(it) }
+        if (started?.runsAs(chosen) == false) {
+            ListItem(
+                headlineContent = { Text("Restart to Apply") },
+                supportingContent = { Text("Starts the game over with these settings; Reset keeps the ones it started with") },
+                leadingContent = { Icon(Icons.Default.RestartAlt, null) },
+                colors = transparentListItemColors(),
+                modifier = Modifier.focusRing(MaterialTheme.colorScheme.primary).clickable(onClick = onRestart),
+            )
+        }
+        PspRightStickItem(settings.pspRightStick) { viewModel.setPspRightStick(it) }
+    }
+}
+
+@Composable
+private fun PspRestartDialog(fullScreen: Boolean, onDismiss: () -> Unit, onRestart: () -> Unit) {
+    PhobosAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { DialogSystemBars(fullScreen, inGame = true); Text("Restart the game?") },
+        text = { Text("It starts over with the new renderer, resolution and drawing threads. Progress since your last save is lost.") },
+        confirmButton = {
+            TextButton(
+                onClick = onRestart,
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+            ) { Text("Restart") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /** N64 save import and export: [pickImport] opens the file picker, [chooseExport] the format dialog. */

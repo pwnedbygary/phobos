@@ -3,6 +3,7 @@ package com.phobos.emulator.input
 import android.view.InputDevice
 import android.view.MotionEvent
 import com.phobos.emulator.PhobosCore
+import com.phobos.emulator.launch.LaunchSystems
 import kotlin.math.abs
 
 /**
@@ -24,6 +25,11 @@ object GameInputState {
     var ry = 0f
     var hwButtons = 0
     var virtualButtons = 0
+    /** What the right stick presses in a PSP game ([PspRightStick]): apart from [hwButtons], so each lets go alone. */
+    var rightStickButtons = 0
+        private set
+    /** The right stick's latched directions ([stickDirections]). */
+    private var rightStickDirections = 0
 
     // Hotkey support: many controllers report the D-pad as HAT axes (motion events), not
     // KEYCODE_DPAD_* keys, so the emulator screen's key-only pressedKeys tracker never sees the
@@ -58,13 +64,15 @@ object GameInputState {
     /** Last latched press state per digital bit driven by an axis binding. */
     private val axisDigitalState = HashMap<Int, Boolean>()
 
-    val buttons: Int get() = hwButtons or virtualButtons
+    val buttons: Int get() = hwButtons or virtualButtons or rightStickButtons
 
     /** Reset all state (used when leaving the emulator / starting a new session). */
     fun reset() {
         lx = 0f; ly = 0f; rx = 0f; ry = 0f
         hwButtons = 0
         virtualButtons = 0
+        rightStickButtons = 0
+        rightStickDirections = 0
         axisDigitalState.clear()
         hotkeyKeys.clear()
         lastHatBits = 0
@@ -77,9 +85,11 @@ object GameInputState {
      */
     fun releaseAllButtons() {
         lastHatBits = 0
-        if (hwButtons != 0 || virtualButtons != 0) {
+        rightStickDirections = 0
+        if (hwButtons != 0 || virtualButtons != 0 || rightStickButtons != 0) {
             hwButtons = 0
             virtualButtons = 0
+            rightStickButtons = 0
             axisDigitalState.clear()
             push()
         }
@@ -108,11 +118,12 @@ object GameInputState {
     /**
      * Processes a joystick MotionEvent using the user's input mappings: resolves each stick axis
      * through its binding (falling back to the platform default axis), latches axis-mapped
-     * digital buttons with hysteresis and pushes the combined state.
+     * digital buttons with hysteresis and pushes the combined state. [pspRightStick] is Settings'
+     * PSP Right Stick, for a PSP game.
      *
      * @return true if the event was a joystick move and was consumed.
      */
-    fun handleMotionEvent(event: MotionEvent, mappings: Map<Int, String>, systemName: String): Boolean {
+    fun handleMotionEvent(event: MotionEvent, mappings: Map<Int, String>, systemName: String, pspRightStick: PspRightStick): Boolean {
         if ((event.source and InputDevice.SOURCE_JOYSTICK) != InputDevice.SOURCE_JOYSTICK) return false
         if (event.action != MotionEvent.ACTION_MOVE) return false
         val bindings = InputBindings.of(mappings)
@@ -124,8 +135,8 @@ object GameInputState {
         val newRy = stickAxis(event, bindings, PhobosCore.Input.RS_UP, PhobosCore.Input.RS_DOWN, MotionEvent.AXIS_RZ)
 
         // Only the N64 latches stick-as-button bits (17-24): its right stick drives the
-        // C-buttons. Every other system treats the right stick as purely analog (e.g. the PS1
-        // DualShock camera), so stick bits are left alone there.
+        // C-buttons. Every other system leaves stick bits alone: the right stick is analog there
+        // (e.g. the PS1 DualShock camera), or what the PSP's Right Stick makes it (updateSticks).
         val latchStickBits = systemName.contains("Nintendo 64", ignoreCase = true)
 
         var axisButtonPressed = false
@@ -135,21 +146,48 @@ object GameInputState {
             val value = event.getAxisValue(binding.axis)
             val magnitude = if (binding.positive) value else -value
             val wasPressed = axisDigitalState[binding.bit] ?: false
-            val pressed = magnitude > if (wasPressed) RELEASE_THRESHOLD else PRESS_THRESHOLD
+            val pressed = axisPressed(magnitude, wasPressed)
             axisDigitalState[binding.bit] = pressed
             hwButtons = if (pressed) hwButtons or binding.bit else hwButtons and binding.bit.inv()
             if (pressed && !wasPressed) axisButtonPressed = true
         }
 
-        lx = newLx
-        ly = newLy
-        rx = newRx
-        ry = newRy
+        updateSticks(newLx, newLy, newRx, newRy, systemName, pspRightStick)
         push()
 
         val stickActive = maxOf(abs(newLx), abs(newLy), abs(newRx), abs(newRy)) > PHYSICAL_ACTIVITY_THRESHOLD
         if (hatActive || axisButtonPressed || stickActive) onPhysicalInput?.invoke()
         return true
+    }
+
+    /**
+     * Takes the sticks' positions, as the user's bindings give them, for a game of [systemName]; the
+     * caller pushes. A PSP game has one analog stick, so [pspRightStick] can make the right stick
+     * press buttons, or be that stick.
+     */
+    internal fun updateSticks(newLx: Float, newLy: Float, newRx: Float, newRy: Float, systemName: String, pspRightStick: PspRightStick) {
+        val rightStick = if (systemName == LaunchSystems.PSP) pspRightStick else PspRightStick.OFF
+        rightStickDirections = stickDirections(newRx, newRy, rightStickDirections)
+        rightStickButtons = rightStick.buttons(rightStickDirections)
+        if (rightStick == PspRightStick.ANALOG) {
+            lx = newRx; ly = newRy; rx = newLx; ry = newLy
+        } else {
+            lx = newLx; ly = newLy; rx = newRx; ry = newRy
+        }
+    }
+
+    /** Whether a button an axis drives is down at [magnitude], its direction's deflection, with the hysteresis above. */
+    internal fun axisPressed(magnitude: Float, wasPressed: Boolean): Boolean =
+        magnitude > if (wasPressed) RELEASE_THRESHOLD else PRESS_THRESHOLD
+
+    /**
+     * The directions (D-pad bits) a stick at [x], [y] holds, each latched from those it [held] as
+     * [axisPressed] latches a button: a diagonal holds two, and a stick resting near the edge doesn't chatter.
+     */
+    internal fun stickDirections(x: Float, y: Float, held: Int): Int {
+        fun latch(direction: Int, magnitude: Float) = if (axisPressed(magnitude, (held and direction) != 0)) direction else 0
+        return latch(PhobosCore.Input.UP, -y) or latch(PhobosCore.Input.DOWN, y) or
+            latch(PhobosCore.Input.LEFT, -x) or latch(PhobosCore.Input.RIGHT, x)
     }
 
     /** Push the combined sticks + buttons to the native core. */
