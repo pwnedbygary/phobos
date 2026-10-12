@@ -509,6 +509,7 @@ struct Allegrex {
     auto emit(u32 address, u8*& body) -> u8*;
     auto emitChain(u32 count) -> void;
     auto emitChainTo(u32 count, u32 target) -> void;
+    auto emitCounted(u32 count, std::vector<sljit_jump*>& leave) -> void;
     auto emitInterpreter(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
     auto emitFallback(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
     auto isBranch(u32 instruction) const -> bool;

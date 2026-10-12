@@ -564,6 +564,12 @@ auto Allegrex::Recompiler::emitBranch(u32 address, u32 instruction, u32 count) -
 //branch leaves pc and pd as the interpreter's would: pc at the delay slot and pd at the target or past the delay
 //slot, or both past the delay slot for a likely branch not taken; run() then has the interpreter take a delay slot
 //before a taken branch's target, as before. Not taken, the block goes on to the next by itself (emitChainTo()).
+//Taken, it does what run() would do next by itself too: Allegrex::run()'s round (the block counted, the run stopping
+//there if it's done), then the interpreter's step, which moves pc and pd past the delay slot and runs it, counted on
+//its own, then the round again and the target's block (emitChainTo()). Its delay slot is compiled as any other
+//instruction is, but where run() wouldn't take that step (a target just past the delay slot, where pd is pc + 4
+//and run() starts a block at the delay slot instead) or the delay slot isn't one the block could hold (in the next
+//section, a branch, or one that ends blocks): those leave for run() as before.
 auto Allegrex::Recompiler::emitCoprocessorBranch(u32 address, u32 instruction, u32 count) -> void {
   u32 target = address + 4 + s16(instruction) * 4;
   if(instruction >> 26 == 0x11) test32(field(&self.fpu.csr), imm(1 << 23), set_z);
@@ -581,7 +587,21 @@ auto Allegrex::Recompiler::emitCoprocessorBranch(u32 address, u32 instruction, u
   setLabel(taken);
   mov32(PC, imm(address + 4));
   mov32(PD, imm(target));
-  mov32(field(&executed), imm(count));
+  u32 delaySlot = self.read(Word, address + 4);
+  if(!chains || target == address + 8 || address % SectionSize == SectionSize - 4 || isBranch(delaySlot) ||
+     endsBlock(delaySlot)) {
+    mov32(field(&executed), imm(count));
+    return jumpEpilog();
+  }
+  std::vector<sljit_jump*> leave;
+  emitCounted(count, leave);
+  mov32(PC, imm(target));
+  mov32(PD, imm(target + 4));
+  if(!emitInstruction(address + 4, delaySlot, 1, true)) emitInterpreter(address + 4, delaySlot, 1, true);
+  emitChainTo(1, target);
+  auto here = sljit_emit_label(compiler);
+  for(auto jump : leave) sljit_set_label(jump, here);
+  mov32(field(&executed), imm(0));
   jumpEpilog();
 }
 
