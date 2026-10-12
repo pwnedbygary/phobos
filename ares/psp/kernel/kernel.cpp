@@ -55,6 +55,7 @@ namespace ares::PlayStationPortable {
 #include "ccc.cpp"
 #include "jpeg.cpp"
 #include "utility.cpp"
+#include "dialogs.cpp"
 #include "power.cpp"
 #include "system.cpp"
 #include "mt19937.cpp"
@@ -905,6 +906,7 @@ auto Kernel::power() -> void {
   jpeg = {};
   for(auto& callback : hprmCallbacks) callback = 0;
   dialog = {};
+  dialogWithdraw();
   utilityModules.clear();
   imposeLanguage = imposeButton = 1;
   geTranslation = 0x400;

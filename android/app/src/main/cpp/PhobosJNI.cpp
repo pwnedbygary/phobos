@@ -618,6 +618,28 @@ Java_com_phobos_emulator_PhobosCore_takePspNotice(JNIEnv* env, jobject) {
     return env->NewStringUTF(ares::takePspNotice().c_str());
 }
 
+extern "C" JNIEXPORT jint JNICALL
+Java_com_phobos_emulator_PhobosCore_pspDialogId(JNIEnv* env, jobject) {
+    return (jint)ares::pspDialogId();
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_phobos_emulator_PhobosCore_pspDialog(JNIEnv* env, jobject) {
+    auto bytes = ares::pspDialog();
+    if (bytes.empty()) return nullptr;
+    jbyteArray result = env->NewByteArray((jsize)bytes.size());
+    if (result) env->SetByteArrayRegion(result, 0, (jsize)bytes.size(), (const jbyte*)bytes.data());
+    return result;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_phobos_emulator_PhobosCore_answerPspDialog(JNIEnv* env, jobject, jbyteArray answer) {
+    if (!answer) return JNI_FALSE;
+    std::vector<u8> bytes(env->GetArrayLength(answer));
+    if (!bytes.empty()) env->GetByteArrayRegion(answer, 0, (jsize)bytes.size(), (jbyte*)bytes.data());
+    return ares::answerPspDialog(bytes) ? JNI_TRUE : JNI_FALSE;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setPictureMultiple(JNIEnv* env, jobject, jint multiple) {
     ares::setPictureMultiple((s32)multiple);

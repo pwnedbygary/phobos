@@ -166,7 +166,10 @@ lands as its own PR; the inventory rows below have the details.
    first. **Parked 2026-10-03:** the user keeps the firmware ares ships, which
    can't go under the GPL, so no GPL core (PPSSPP, Flycast) comes in for now.
    Phobos's own code goes under GPL-3.0-or-later on its own (row "Licenses of
-   bundled resources").
+   bundled resources"). The core's progress since is in psp-core.md, part by
+   part; part 73 (2026-10-12, branch `cursor/psp-dialogs-2b67`) has the app
+   show the PSP's system dialogs (messages, the keyboard, saving and loading)
+   for the player to answer, where the kernel answered them itself.
 8. **Desktop builds** (requested 2026-10-02): a Linux x86-64 AppImage with its
    .zsync, a Windows x64 Phobos.exe and a universal macOS app, running the same
    cores and runner without the Turnip installer. First cut on branch

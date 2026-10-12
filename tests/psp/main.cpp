@@ -12,6 +12,7 @@ int main() {
   for(auto& test : audioTests()) tests.push_back(test);
   for(auto& test : sasTests()) tests.push_back(test);
   for(auto& test : utilityTests()) tests.push_back(test);
+  for(auto& test : dialogTests()) tests.push_back(test);
   for(auto& test : poolTests()) tests.push_back(test);
   for(auto& test : messageTests()) tests.push_back(test);
   for(auto& test : mutexTests()) tests.push_back(test);

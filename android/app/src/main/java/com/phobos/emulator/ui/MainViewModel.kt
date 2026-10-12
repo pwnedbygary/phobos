@@ -113,6 +113,8 @@ import com.phobos.emulator.util.N64SaveImportPlan
 import com.phobos.emulator.util.N64SaveKind
 import com.phobos.emulator.util.N64SaveRead
 import com.phobos.emulator.util.N64SaveTransfer
+import com.phobos.emulator.util.PspDialogAnswer
+import com.phobos.emulator.util.PspDialogRequest
 import com.phobos.emulator.util.PspDrawingThreads
 import com.phobos.emulator.util.PspRenderer
 import com.phobos.emulator.util.PspResolution
@@ -132,6 +134,7 @@ import com.phobos.emulator.util.m3uEntryPath
 import com.phobos.emulator.util.MsxDeck
 import com.phobos.emulator.util.msxTapeFirmware
 import com.phobos.emulator.util.newerDriverRelease
+import com.phobos.emulator.util.parsePspDialog
 import com.phobos.emulator.util.romTitle
 import com.phobos.emulator.util.withoutDiscNumber
 import kotlinx.coroutines.Job
@@ -1458,6 +1461,61 @@ class MainViewModel(
     // The PSP settings the running PSP game started with; the pause menu offers a restart when Settings' differ.
     private val _pspStartSettings = MutableStateFlow<PspStartSettings?>(null)
     val pspStartSettings: StateFlow<PspStartSettings?> = _pspStartSettings.asStateFlow()
+    // The PSP's system dialog waiting for the player (a message, the keyboard, saving or loading), shown over the
+    // running game; null when none is, or once answered until the core asks again.
+    private val _pspDialog = MutableStateFlow<PspDialogRequest?>(null)
+    val pspDialog: StateFlow<PspDialogRequest?> = _pspDialog.asStateFlow()
+    // The request last read, and the one last answered (outstanding until the game's next Update takes the answer).
+    @Volatile private var pspDialogSeen = 0
+    @Volatile private var pspDialogAnswered = 0
+
+    /** The player's answer to the PSP's dialog; the dialog closes if the core takes it. */
+    fun answerPspDialog(answer: PspDialogAnswer) {
+        if (_pspDialog.value?.id != answer.id) return
+        pspDialogAnswered = answer.id
+        _pspDialog.value = null
+        viewModelScope.launch(Dispatchers.IO) {
+            if (PhobosCore.answerPspDialog(answer.encode())) return@launch
+            // Not taken: asked afresh meanwhile (the next poll shows that), or not this request's; shown again if
+            // it's still the one outstanding.
+            Log.w("Phobos", "PSP dialog ${answer.id}: answer not taken")
+            pspDialogAnswered = 0
+            pspDialogSeen = 0
+        }
+    }
+
+    /**
+     * Follows the PSP core's dialog requests while a PSP game is loaded: each new one is read and shown in place of
+     * the one before. One whose bytes aren't the form expected is tried again a second later, as the game waits on
+     * it; one gone or replaced by the time it's read, at the next poll.
+     */
+    private suspend fun followPspDialogs() {
+        var unread = 0
+        while (true) {
+            val psp = _isLoaded.value && currentSystemName == LaunchSystems.PSP
+            val id = if (psp) PhobosCore.pspDialogId() else 0
+            var wait = if (psp) 50L else 500L
+            if (id == 0) {
+                pspDialogSeen = 0
+                if (_pspDialog.value != null) _pspDialog.value = null
+            } else if (id != pspDialogSeen && id != pspDialogAnswered) {
+                val bytes = PhobosCore.pspDialog()
+                val request = bytes?.let(::parsePspDialog)
+                if (request?.id == id) {
+                    pspDialogSeen = id
+                    _pspDialog.value = request
+                } else {
+                    _pspDialog.value = null
+                    if (bytes != null && request == null) {
+                        if (unread != id) Log.w("Phobos", "PSP dialog $id: not read; trying again")
+                        unread = id
+                        wait = 1000L
+                    }
+                }
+            }
+            delay(wait)
+        }
+    }
 
     /** The Library scan: lists files, then (for PSP) fills titles and icons. Cancelled when another scan starts. */
     private var romScanJob: Job? = null
@@ -1894,6 +1952,8 @@ class MainViewModel(
                 // Initialize systems list in background
                 _systems.value = PhobosCore.enumerateSystems().sorted()
             }
+
+            launch(Dispatchers.Default) { followPspDialogs() }
 
             // Move log collection to background to avoid janking the main thread
             launch(Dispatchers.Default) {
