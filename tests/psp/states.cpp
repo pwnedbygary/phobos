@@ -521,9 +521,8 @@ static auto stateFields() -> void {
     {"output samples", [&] { k.audio.output.samples[k.audio.output.start % Kernel::Audio::OutputFrames * 2] = 5; }},
     {"src renderedTo", [&] { k.audio.src.renderedTo = k.sampleFrame(k.cycles) + Kernel::Audio::SrcAhead; }},
     {"src position", [&] { k.audio.src.position = 3 * 44'100; }},
-    //sceVaudio holding the SRC channel (its count one sceVaudio takes), its buffers single samples, an effect and
-    //the level control
-    {"vaudio reserved", [&] { k.audio.vaudio.reserved = true, k.audio.src.sampleCount = 256; }},
+    //sceVaudio holding the SRC channel, its buffers single samples, an effect and the level control
+    {"vaudio reserved", [&] { k.audio.vaudio.reserved = true; }},
     {"vaudio ownsSrc", [&] { k.audio.vaudio.ownsSrc = true; }},
     {"vaudio mono", [&] { k.audio.vaudio.mono = true; }}, {"vaudio effect", [&] { k.audio.vaudio.effect = 5; }},
     {"vaudio effectVolume", [&] { k.audio.vaudio.effectVolume = 0x8000; }},

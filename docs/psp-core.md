@@ -10484,4 +10484,14 @@ channel is its own, its format, effect and level control (layout 31).
 **Battle vs. Chess now** (the tester's `script.txt` from boot, then `gameplay.txt`'s presses at 5820): its music thread
 (SceMainSampleBgmMp3) reserves 1152 samples at 44,100 Hz at frame 607 and plays its MP3 music through sceVaudio, an
 output every 26 ms, releasing and starting the next track at 4412. The moves still aren't carried out: the pawn is
-picked and its squares light up, the confirm on a lit square does nothing.
+picked and its squares light up, the confirm on a lit square does nothing, as before; so sceVaudio wasn't the cause.
+
+**What the move does instead**, traced with the scratch runner from the tester's `state.bin` (every system call
+around the confirm, and the game's memory 40 frames before, 10 before, 20 after and 100 after it): the press
+reaches the game, whose pad code (0x0888fc6c) maps a fresh Cross to the first of its actions; its "chess thread"
+wakes every 100 ms and runs its engine only when a request word (0x0899f2ac) says 1, which stays 0; between the
+frames before and after the confirm nothing in its memory changes but the lit squares' colours and its frame-rate
+count; and no system function is called differently (no file, no thread, nothing missing). The game's own move code
+(its states name an ST_COMMIT_MOVE) wasn't followed to where it gives up. Leads not checked: the engine loads an
+opening book, `openings.fbk`, by a path relative to the working directory as the match starts (whether that opens
+here isn't known); and the prototype's code may simply not finish its moves.

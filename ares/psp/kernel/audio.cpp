@@ -610,7 +610,8 @@ auto Kernel::sceAudioOutput2ChangeLength() -> void {
 //NOT_RESERVED; and releasing with a buffer still playing isn't refused, as the SRC channel's release is, but waits
 //for it (a buffer's time), then releases (0). Chosen, beside those:
 //- sceVaudio's outputs and release act on the SRC channel only where its own reservation took it (ownsSrc): held on a
-//  refused one, they're NOT_RESERVED whoever has the channel now, and the release lets go of the hold alone.
+//  refused one, or after sceAudioOutput2Release or sceAudioSRCChRelease let its channel go, they're NOT_RESERVED
+//  whoever has the channel now, and the release lets go of the hold alone.
 //- Each buffer is copied as pairs (a single sample heard on both sides) into whichever of the kernel's two
 //  (VaudioMemory) isn't armed, and armed from there, as a library working its effects on the sound would: the
 //  program's buffer is its own again as the call returns.
