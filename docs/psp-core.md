@@ -10471,7 +10471,8 @@ channel's release is, but waits for it to be heard (a buffer's time) and then re
 
 **The implementation** (`audio.cpp`): sceVaudioChReserve, ChRelease, OutputBlocking, SetEffectType and SetAlcMode, as
 recorded and, where not, chosen: its outputs and release act on the SRC channel only where its own reservation took
-it (held on a refused one, they're NOT_RESERVED whoever has the channel, and the release lets go of the hold alone);
+it (held on a refused one, or once the SRC family's release has let its channel go, they're NOT_RESERVED whoever has
+the channel, and the release lets go of the hold alone);
 each buffer is copied as pairs (a mono sample heard on both sides) into whichever of two kernel buffers
 (`Kernel::VaudioMemory`) isn't armed, and armed on the SRC channel from there, its blocking and pace the SRC
 channel's; the release's wait is a thread state of its own (`Audio::WaitVaudioRelease`), the release made as the last
