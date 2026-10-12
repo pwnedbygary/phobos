@@ -19,8 +19,9 @@ and what each test draws.
 Round 6 of the same program's GE tests (its menu's first line), run on the same PSP and brought in on 2026-10-11: 36
 files, 28 pictures (256x256, a 32-bit word a pixel), seven timing files (`time-*`: lists' times in microseconds, at
 222/111 and then 333/166 MHz) and the driver's statuses (`ge-statuses`), laid out as `manifest6.txt` describes.
-`docs/psp-core.md` says what each test is for (part 66) and what the PSP showed (part 75). Each `.bin` is packed with
-xz (`xz -9e`, 7.3 MB as 1.5 MB), as `tests/allegrex/measured`'s are; `SHA256SUMS` holds the unpacked files' sums.
+`docs/psp-core.md` says what each test is for (part 66) and what the PSP showed (parts 75 and 76). Each `.bin` is
+packed with xz (`xz -9e`, 7.3 MB as 1.5 MB), as `tests/allegrex/measured`'s are; `SHA256SUMS` holds the unpacked
+files' sums.
 `tests/psp/run-tests.sh` unpacks them into its build folder (`PSP_GE_ROUND6`, unless that names another folder), and
 `tests/psp/measured6.cpp` compares the core's run of round 6 with them.
 

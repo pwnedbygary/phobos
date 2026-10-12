@@ -25,6 +25,29 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: round 6's time — the GE's time model, the driver's CPU time (not ready to merge) — 2026-10-12
+
+Branch `cursor/psp-round6-time-2b67`, on #222's `cursor/psp-round6-fits-2b67` (round 6's pictures), with #221's
+`cursor/psp-dialogs-2b67` merged in (as the owner's combined branch resolves it). docs/psp-core.md, part 76, has the
+evidence and every timing case's error. **Not ready to merge**: on the RP6 (Vulkan fast, 5x) Resistance went from
+59.9/60.0 to 40.4/29.8 fps (mean/10th percentile) and NFS Shift from 45.3/25.5 to 32.9/20.4, the GE polled as long as
+a PSP's draws; Killzone (25.1 to 59.9) and Super Stardust Portable (45.4 to 59.8) keep up only because they now draw
+far fewer frames (Killzone's language menu about 15 a second, Super Stardust's intro 30), unconfirmed on a PSP (part
+76's round 7 items 6 and 7). The speed work is to look at the polling (a CPU loop that only polls the GE, skipped,
+keeping what the game sees); not done here.
+- **Time**: a fitted front end (words, jumps, vertex bytes, indices, lights, weights, cuts, patches) against a back end
+  (primitives, rows, pixels by width and format, depth, texture bytes by size, swizzling and place, an 8 KiB cache,
+  DXT, palettes, transfers), the longer of the two, a list's start, sceGeListEnQueue's 23 microseconds and a stall
+  update's 2.3 of the driver's CPU time: half of the 906 lists within 4.2%, 72% within 10%, 92% within 25%. The slow
+  big-texture rate only past 128 texels across (Armored Core's movies), the stall update's time (Cube).
+- **States**: layout 28 (the cached texture); 26 (#221's) and every older one load, 27 is refused.
+- **Checks**: tests/psp 469/0 (sanitized, with #221's groups), tests/allegrex 58/0, tests/psp/ares 330/0.
+- **Library**: all 266 finish; against the final run 104 the same, 67 within 1 of 255, 95 more, the same scenes at
+  other moments but Killzone, Super Stardust, Brave Story and ModNation Racers, which take the runner's presses
+  differently. Host time: Resistance 81 s against 17 with part 75's runner, NFS Shift 203 against 41.
+- **Review**: one bug (a head-queued list started by sceGeContinue owed no start time), fixed and tested; a layout 26
+  state loading now tested; the rest comments and documented limits.
+
 ## PSP: round 6's pictures — lighting's two multiplies, the reciprocal's chords, patches along v — 2026-10-12
 
 Branch `cursor/psp-round6-fits-2b67` (#222), on master (`2a7019c84`). The owner ran round 6 of `tools/psp-measure` on

@@ -10014,3 +10014,440 @@ GE, draw, 3D, curves, states and measure groups), `py/` (the analyses: `countv*.
 `texrange.py`, `rpix*.py`, `rproj*.py`, `fitchords.py` and `minimax.py` the chords, `lprod*.py`, `sweep*.py` and
 `lsum.py` lighting), `ours-base` and `ours-a` (the core's run of every round before and after), `lib-a` (the library
 run), `lib-base` (the base's runs of the games that differ), `sheet-a*.png` (their captures side by side).
+
+## Part 76: round 6's time — the GE's time model, the driver's CPU time, the texture cache (not ready to merge)
+
+On branch `cursor/psp-round6-time-2b67`, on part 75's (`cursor/psp-round6-fits-2b67`), with #221's branch
+(`cursor/psp-dialogs-2b67`, the dialogs, state layout 26) merged in. The time half of round 6 (part 75 is its pictures):
+the GE's time fitted to round 6's 906 timed lists, the driver's own CPU time, and the texture the GE's cache holds,
+kept in save states. Clean room as part 75. **Not ready to merge**: on the RP6 it slows the games that poll the GE, and
+two games draw far fewer frames under it, which a PSP may or may not do (below, and round 7's questions).
+
+Save states go to layout 28 (the cached texture); every older layout loads, 26 (#221's: the dialog's error and deleted
+save) included, the cached texture none; 27, another branch's layout, is refused until it's merged. The merge with
+#221 is resolved as on the owner's combined branch (`cursor/psp-combined-test2-2b67`, `d7dec3497` and `559971cf2`).
+
+### The GE's time
+
+Part 64's model owed a list `max(pixels / 4, primitives x 166/35)` bus clocks, Sony's peaks, and nothing for commands,
+vertices, culled primitives or transfers; against round 6's 906 timed lists (seven tests, each list's middle finish
+time of 8 or 16 runs, at 222/111 and 333/166 MHz) it came out a median 77% short, none of them within 10%. The PSP's
+times scale with the bus clock, as the model has them: at 333/166 the PSP took 0.651 of its 222/111 time (the middle
+of the 171 lists over a millisecond; 0.641 to 0.665 for nine in ten of them), against 111/166 = 0.669, so the core's
+lists run about 2.5% slow there.
+
+**The model** (`GE::Cost`, in the GE's clocks, which are the bus's). The GE reads its list and fetches, transforms and
+lights vertices (its front end) while it draws what it has set up (its back end); each run of a list, as far as the
+driver lets it go, takes the longer of the two (`Kernel::geTime()`), and the GE takes it up once it's done with what
+came before. The terms, counted as the GE meets the work, whichever renderer then draws it:
+
+| Term | Clocks | What |
+| --- | --- | --- |
+| `List` | 2170 | a list, as the GE starts it (`geEnqueue()`, `geStartNext()`) |
+| `Command` | 2.28 | each word of the list run (front) |
+| `Jump`, `Call` | 42.7, 23.5 | a JUMP or a BJUMP taken; a CALL or a RET: the list fetched afresh (front) |
+| `VertexByte` | 0.515 | each byte of the vertices read in order (front) |
+| `IndexedVertex` | 37.6 | each vertex read through an index (front) |
+| `DirectionalLight`, `PointLight` | 1.26, 18.3 | each vertex lit, for each light of the kind (front) |
+| `Weight` | 3.69 | each vertex's skinning weight (front) |
+| `Cut` | 26.3 | a triangle cut at the near plane (front) |
+| `Patch`, `PatchVertex` | 120, 14.5 | a curved surface, and each vertex it makes (front) |
+| `Primitive` | 7.03 | a primitive set up (back) |
+| `Row` | 1.65 | the least a row of a primitive's pixels takes (back) |
+| `NarrowPixel` | 0.319 | a pixel of a primitive at most 32 pixels wide (back) |
+| `Pixel32`, `Pixel16` | 0.535, 0.34 | a pixel of a wider one, into a 32- or 16-bit frame buffer (back) |
+| `DepthPixel` | 0.266 | more with the depth test, or clear mode's depth (back) |
+| `TexelByteSwizzled`, `TexelByte` | 0.368, 1.38 | a byte of a texture over 8 KiB from RAM, swizzled or not (back) |
+| `BigTexelByteSwizzled`, `BigTexelByte` | 2.4, 13.2 | of one over 64 KiB, drawn over 128 texels across (back) |
+| `VRAMTexelByte` | 1.93 | from VRAM (back) |
+| `CompressedTexel` | 17.3 | a DXT texel (back) |
+| `LoadByteSwizzled`, `LoadByte`, `LoadVRAMByte` | 0.6, 1.41, 0.51 | a texture of 8 KiB at most, loaded whole into the cache once (back) |
+| `PaletteByte` | 0.28 | CLUT_LOAD's bytes (back) |
+| `TransferRow` | 24.5 | a block transfer's row (back) |
+| `TransferByte` | 0.917, 0.662, 0.353, 0.382 | its bytes: RAM to RAM, RAM to VRAM, VRAM to RAM, VRAM to VRAM (back) |
+
+A primitive's rows each take the longer of `Row` and their pixels' time (the rate by its box's width, which decides how
+fast they go: the PSP fills a primitive at most 32 pixels wide at 0.319 a pixel whatever the frame buffer), so small
+primitives are bound by their rows. Its texture brings in the texels its pixels cover (its texels' area over its
+pixels', at most 2 a pixel), but those a texture repeating across the primitive takes again come from the cache. A
+texture over 64 KiB came from RAM far slower in every measurement, each drawn 256 texels across (13.2 clocks a byte not
+swizzled: `ge-statuses`' 16 layers took the PSP 538 ms); drawn in strips 128 texels across or narrower, as games draw a
+big picture to keep the cache's help, it's taken at the smaller texture's rate. That isn't measured, but the slower rate
+can't be right there: Armored Core's movies (68-texel strips of a 512x512 8888 texture in RAM, three screens' worth a
+list) took 64 ms of the GE's time a list at it, longer than the frames last, and the game's movie stalled for good
+behind its sound; at the cache's rate they play as before. The cache (`GE::CachedTexture`, saved in states) holds a
+texture of 8 KiB or less whole: loaded once (`Load*`), kept until another is drawn with or TEX_FLUSH empties it
+(`time-texcache`: the same 32x32 texture again costs nothing, with TEX_FLUSH before each sprite a load each). The
+driver's own CPU time comes in too: `sceGeListEnQueue` takes 5200 of the CPU's cycles before it returns
+(`Kernel::GeEnqueueCycles`; the PSP's calls returned about 23.5 microseconds after they were made at 222 MHz, 15.5 at
+333, over 4000 runs at each), the GE drawing meanwhile, so a short list is done, and its finish callback run, before the
+program goes on, as on the PSP (an empty list's callback came 18 microseconds in, inside the call, which returned at 33;
+here the callback comes as the call returns, 23 microseconds in, interrupts being taken once a system function is done).
+`List` is less than the driver's time at any clocks (the bus is at least half the CPU's clock), so a list of up to a
+couple of hundred words' work is done before the call returns at any setting. `sceGeListUpdateStallAddr` takes about 510
+of the CPU's cycles the same way (`Kernel::GeStallCycles`), an estimate from `ge-statuses`' second part: its first look
+comes after GU's nine stall updates (eight sprites and the FINISH, interrupts held off), 22 microseconds in on the PSP
+and 1 in the core without them, so 2.3 microseconds each at 222 MHz; with them it comes 22 microseconds in. GU calls it
+after each draw it sends straight to the GE (GU_DIRECT), so each such draw takes those 2.3 microseconds of the CPU's;
+the gap may hold some of GU's own code too, which runs faster in the core than on a PSP, so it may overstate the
+driver's share. Without that time Cube stalled for good: it moves a list's stall address to its end and queues the same
+list again 236 cycles later, which on a PSP finds the list done (the call's own time covers the list's last words); here
+the list was 44 cycles from done, the second queueing was refused as busy (the same list still in the queue), and the
+game went on with a list it didn't have (loads and stores at null, a white screen from frame 300). The driver's other
+calls take no time (unmeasured).
+
+**The fit.** A scratch copy of the core, instrumented, counted each timed list's work as the GE met it (words, jumps,
+vertices and their bytes, lights, weights, cuts, patches, primitives with their pixels, rows and boxes, textures and
+their bytes, transfers) in the core's own run of round 6. A weighted least squares on relative error then fitted the
+coefficients, each list on its longer end, alternating until no list changed ends; the rates of rows and pixels were
+searched on a grid around that. The kernel's model is that fit: the core's own run of the seven tests gives the fit's
+errors, nine lists in ten within half a percent of them. The exceptions: the patches PATCH_CULL_ENABLE drops
+(`time-primitives` case 29, left out of the fit; with the saving above 1 to 34% short, where the fit's terms would
+make them 24 to 131% long) and the empty list (5 or 6 microseconds long, 25 to 33%, its callback at the call's
+return; the fit's 9%).
+
+**How close.** Of the 906 lists, half come within 4.2% of the PSP's time (a mean of 9.1%), 53% within 5%, 72% within
+10%, 92% within 25%; the furthest out, 95% long. By test (the middle error at 222/111 and 333/166 MHz):
+`time-commands` 14% and 13%, `time-primitives` 7.5% and 8.4%, `time-fill` 2.9% and 4.1%, `time-sizes` 5.9% and 8.1%,
+`time-transfers` 11% and 9.1%, `time-texcache` 1.8% and 1.8%, `time-signals` 0.7% and 3.1%. The lists the terms rest
+on are close: 16384 JUMPs 4% long, small triangles 5%, indexed vertices 3%, four point lights 0%, flat fills 0 to 3%,
+a 256x256 copy 2.5%, a new texture each sprite -1.5%, the SIGNAL's 3%. What the model can't follow, as simple as it is:
+- **Short lists come out short, long ones long.** The smallest size of most cases is 25 to 45% short, the largest a few
+  percent long: past the empty list's 18 microseconds, a list doing anything had 25 to 55 microseconds of its own on
+  the PSP (1024 NOPs took 68 microseconds at 222/111, of which the NOPs' own 1.9 clocks each make 17), which no term
+  here has. The fit is the least error between the two; 65536 NOPs 18% long, and a strip of 4096 triangles 26% long
+  at 166 MHz (its triangles, sharing corners, set up quicker than lone ones).
+- **A fan** of 1024 or 4096 triangles takes 50 to 59% too long (the PSP draws a fan's thin triangles quicker).
+- **Perspective textures**: two triangles textured from w 1 at the left to 4 at the right (`time-fill` case 39) take
+  nearly twice the PSP's time (88% long at 111, 95% at 166). The model counts a triangle's texels by its average, a
+  texel a pixel here; on the PSP the left half, magnified, comes from the cache. The same term,
+  `BigTexelByteSwizzled`, leaves a big swizzled texture drawn 1:1 22% short (cases 5, 8 to 10, 24 and 43, and
+  `time-texcache` 11 and 23): the fit's least error between those.
+- **Bilinear and shrunk textures** (cases 18, 21 and 22) are 25 to 35% short, sprites 1x256 (columns) 21% short and
+  17x17 19% short, a transfer 4 pixels wide 28 to 47% short and one row of 512 pixels 40 to 47% short.
+The whole table, every case at every size and both clock settings, is below (the signed error in percent, the
+sizes in order).
+
+**The driver.** `ge-statuses`: a slow list (16 layers of a 256x256 8888 texture in RAM, not swizzled) looked at every
+50 microseconds read "drawing" (2) for both `sceGeListSync` and `sceGeDrawSync` until done, here as on the PSP, but it
+was done at 2.4 ms here (504 now, the PSP's 538); and the list GU ends, drawn with interrupts held off for 20 ms, read
+"done" here as interrupts came back (the drawing long over) where the PSP read "drawing" till 270 ms: now "drawing"
+till 253 ms. The group checks both looks and both times within 10%. (The round ran at the clocks it found, which
+ARK's settings decide; the core's 222/111 give times this close, so most likely those.) The SIGNAL's callback came 26
+to 76 microseconds into the PSP's list whatever the drawing before it (1, 4 or 16 layers): the front end runs ahead of
+the back end, as the core has it (here at the call's return, 23 microseconds in); the finish is the drawing's, within
+4%.
+
+**What it changes for the program.** A list is done (its finish callback, `sceGeListSync`, `sceGeDrawSync`) only once
+its time has passed, which is now much longer than part 64's: a frame's lists take their PSP time, texture fetches,
+commands and transfers included, every sceGeListEnQueue takes the driver's 23.5 microseconds and every stall update
+2.3 (at 222 MHz). The tests that drove the driver step by step (`tests/psp/ge.cpp`) now let a list's time pass where
+they expect it done, and pin the new numbers (a 256x256 sprite's list 6510 + 105206 cycles at 222/111, 4353 + 70348
+at 333/166; a SIGNAL's run 41 cycles; a stall update 510 cycles at 333, and a list's last words done inside it).
+**PATCH_CULL_ENABLE's time.** It changes no pixel (part 75), but saves time (`time-primitives`' cases 28 and 29): with
+it on, a surface that draws no pixel takes only its own time and its control points' fetch (`patch()` puts the GE's
+time back to before its vertices, but for those). Lights and weights are counted for the strips' vertices, an inner
+row's twice, as `drawVertices()` meets them (round 6 timed unlit patches).
+
+### Checks
+
+- `tests/psp/run-tests.sh` (sanitizers on): 469 groups, 0 failures; `tests/allegrex/run-tests.sh`: 58 groups, 0 failures;
+  `tests/psp/ares/run-tests.sh`: 330 checks, 0 failed. With #221's groups; this part's: measured6's "GE time" and "driver
+  statuses", "draw3d the GE's time, any renderer" (the back end's clocks the same for every renderer, and each
+  primitive's setup), "draw3d the GE's time for a big texture, wide and in strips", "ge time" (the new numbers, a
+  stall update's time, a list's last words done inside it, a list put at the head started by sceGeContinue with its
+  start's time) and "ge time's interrupt", the driver's tests letting a list's time pass, "older layouts load"
+  (layouts 26 and 25 without the cached texture, the dialog's fields defaulted below 26) and "state fields", and in
+  tests/psp/ares a layout 26 state loading and playing on as it did, 27 and 29 refused.
+
+### Library
+
+The whole library the report's way with this branch's runner (the merge with #221, before the review's fixes: the
+head-queued list's start time below, comments and tests), beside the final run (`be543afba`): all 266 finish their
+3600 frames, none missing a function. 104 the same at all four captures, 67 within 1 of 255, 95 more; against the
+first run of this model (#222 before the split, without #221's dialogs, which are off by default), 177 the same, 54
+within 1, 35 more (the runs' own timing), Killzone, Super Stardust Portable and ModNation Racers alike. Of those that
+differ from the final run beyond part 75's, all but four show the scenes the final run shows, at another moment: a
+frame now takes the GE's time, so logos, fades, movies the engine draws, demos and titles' animations go on more slowly
+or a few frames apart (Disgaea's fade, Dragon Ball Z, Burnout Legends and Dominator, Blitz, both Juiceds, Driver 76,
+The Force Unleashed, both Tekkens, Need for Speed: Carbon and Shift, GTA: Liberty City Stories, God of War: Ghost of
+Sparta, Persona 2, Cube's logos and more). Four take the runner's presses differently:
+- Killzone's language menu draws its background, a 512x512 8888 texture in RAM, not swizzled, as one sprite 480
+  pixels wide: 62 ms of the GE's time a frame at the slow rate, so the menu runs at about 15 frames a second and the
+  runner's Cross, held 3 frames, falls between two of its looks at the controller: it stays on the menu. Held 20
+  frames, the Cross takes it on. Whether a PSP's GE takes as long over that sprite is round 7's (below).
+- Super Stardust Portable's intro runs at 30 frames a second (its bloom passes, 512x512 textures in VRAM shrunk 2
+  times, taken at 2 texels a pixel: 2.6 million clocks a frame), its logos twice as long, so the Cross at 1800 comes
+  before its title, which it stays on. Whether a PSP runs that intro at 60 is round 7's.
+- Brave Story: New Traveler shows its title at 3600 where the final run was still in its intro, and ModNation Racers
+  its menu where the final run showed its title: the Cross at 1800 found each at a moment it takes effect.
+
+Two games stalled for good on the way, both fixed above: Armored Core's four (its movies, in strips of a big texture)
+and Cube (the stall update's time).
+
+**Host time.** Side by side with part 75's runner (the same machine, other runs beside both): Resistance: Retribution
+took 81 s against 17, Need for Speed: Shift 203 against 41; Killzone 86 against 1129 and God of War: Ghost of Sparta
+122 against 664, as they draw fewer frames. The polling games call the GE's sync functions thousands of times a frame
+(Shift sceGeDrawSync(1) some 7000 times, with about 765 cycles of its own work between calls), which they now do for
+as long as a PSP's GE draws; before, the GE was done at once and they went on to wait for the vertical blank, which the
+kernel skips through. Each stall update is also a run of its own, whose front end can't overlap the run before's back
+end, which may add to it.
+
+**On the RP6** (the owner's Retroid Pocket 6, Snapdragon 8 Gen 2, Vulkan fast at 5x; master + #221 + #222 against
+master + #221, 150 s each, mean and 10th-percentile host frames a second):
+
+| Game | Without | With |
+| --- | --- | --- |
+| Resistance: Retribution | 59.9 / 60.0 | 40.4 / 29.8 |
+| Need for Speed: Shift | 45.3 / 25.5 | 32.9 / 20.4 |
+| Burnout Dominator | 60.0 / 60.0 | 59.4 / 56.9 |
+| Killzone | 25.1 / 13.4 | 59.9 / 59.9 |
+| Super Stardust Portable | 45.4 / 43.0 | 59.8 / 59.9 |
+
+So it isn't ready: (1) the polling games' cost, which the speed work will look at (skipping a CPU loop that only polls
+the GE, keeping what the game sees), not this part; (2) Killzone and Super Stardust keep up only because they now draw
+far fewer frames (Killzone's language menu about 15 a second, Super Stardust's intro 30), which round 7 has to confirm
+on a PSP before the model is taken.
+
+### Review
+
+Before the split, an independent read-only review of the whole of #222 found no arithmetic bug (part 75's review, and
+a delta review of the stall update's time). After it, a second review of this branch's diff and its merge with #221
+found one bug: a list put at the head of an empty queue and started by sceGeContinue never owed a list's start time
+(fixed, and tested). Its other points, fixed: tests/psp/ares checks that a layout 26 state loads (only refusals were
+checked), the older-layouts test defaults the dialog's fields below 26, comments with the wrong numbers (an 8x8
+sprite's 79 cycles, the layouts read). Left as they are, and said so: a patch's lights and weights are counted for its
+strips' vertices (unmeasured); the Vulkan fast mode works out a triangle's texels in doubles where the others use
+floats, so right at 128 texels across a big texture's rate may differ between renderers; builds whose floating point
+contracts differently may move a list's end by a cycle. A layout 28 state from the branch before the merge with #221
+(the original #222, test builds only) lacks the dialog's 5 bytes and is refused (cut short) rather than loaded.
+
+### Left for round 7
+
+1. **A list's own time**: lists of 0, 1, 2, 4, ..., 1024 NOPs and a few PRIMs, to see where an empty list's 18
+   microseconds become 25 to 55.
+2. **The driver's CPU time** in `sceGeListUpdateStallAddr` (estimated from `ge-statuses` at 2.3 microseconds, which may
+   hold some of GU's own code), `sceGeContinue`, `sceGeListSync` and `sceGeDrawSync` (which polling games call
+   thousands of times a frame), and from a FINISH to its callback.
+3. **The misses**: fans, perspective and bilinear textures, minified ones, thin columns and narrow transfers, with the
+   textures' texels per pixel known by region.
+4. **The GE's clock at 333/166** (0.651 of the 222/111 time, not 0.669), and how far the front end runs ahead (the
+   SIGNAL's callback 76 microseconds in behind 16 layers, 26 behind one).
+5. **The clocks a round runs at**: `ge-statuses` ran at the clocks the program found; recording them would settle it.
+6. **A big texture in strips and whole** (Killzone): a 512x512 texture in RAM drawn 1:1 in strips 16, 32, 64, 128 and
+   256 texels across, swizzled or not, 8888 and 5650, and drawn whole 480 across as Killzone's menu does (62 ms a frame
+   here): the rate for strips (the smaller texture's, unmeasured) and what decides the slower one.
+7. **Textures shrunk, from VRAM** (Super Stardust): a 512x512 texture in VRAM drawn at 2 and 4 texels a pixel, nearest
+   and bilinear (the model takes 2 texels a pixel at the VRAM rate: its intro at 30 frames a second here).
+
+### Scratch
+
+`~/phobos-work/scratch/round6`: `py/terms.py`, `model.py` and `fit5.py` (the fit), `errstats.py`, `pertest.py` and
+`percase.py` (its errors), `instr/` (the instrumented core), `acff-*` and `cube-*` (Armored Core's movie and Cube),
+`lib-r6d` and `lib-b` (the library runs), `cmp-b-*.tsv` (their comparisons).
+
+### Every timing case
+
+The error of the core's time against the PSP's, in percent (the core's middle time over the PSP's, less 1), at each
+size in order, at 222/111 and at 333/166 MHz.
+
+`time-commands`
+
+| Case | What (sizes) | 222/111 MHz | 333/166 MHz |
+| --- | --- | --- | --- |
+| 0 | an empty list: FINISH and END (0 commands) | +28 | +25 |
+| 1 | NOP (1024, 4096, 16384, 65536 commands) | -40 -15 +7 +18 | -40 -14 +10 +22 |
+| 2 | TEXTURE_ENV_COLOR, a register, each a new value (1024, 4096, 16384, 65536 commands) | -40 -14 +7 +18 | -35 -13 +10 +22 |
+| 3 | TEX_FLUSH (1024, 4096, 16384, 65536 commands) | -40 -15 -2 +5 | -38 -14 +1 +7 |
+| 4 | the world matrix: WORLD_MATRIX_NUMBER 0 and 12 WORLD_MATRIX_DATA (the identity) (64, 256, 1024, 4096 matrices) | -36 -19 +4 +17 | -39 -16 +7 +21 |
+| 5 | JUMP to the next word (256, 1024, 4096, 16384 jumps) | -15 -1 +4 +4 | -13 +1 +6 +7 |
+| 6 | CALL to a RET elsewhere (256, 1024, 4096, 16384 calls) | -13 -1 +4 +3 | -11 +2 +6 +6 |
+
+`time-primitives`
+
+| Case | What (sizes) | 222/111 MHz | 333/166 MHz |
+| --- | --- | --- | --- |
+| 0 | through mode: triangles of about 2 pixels (color, float position) (256, 1024, 4096 triangles) | -26 -7 +5 | -24 -5 +9 |
+| 1 | through mode: triangles covering no pixel's middle (256, 1024, 4096 triangles) | -26 -6 +6 | -25 -4 +9 |
+| 2 | through mode: a triangle strip (count + 2 vertices) (256, 1024, 4096 triangles) | -37 -6 +22 | -37 -4 +26 |
+| 3 | through mode: a triangle fan (count + 2 vertices) (256, 1024, 4096 triangles) | +0 +59 +50 | +2 +59 +51 |
+| 4 | through mode: sprites 2x2 pixels (256, 1024, 4096 sprites) | -33 -13 +3 | -32 -12 +6 |
+| 5 | through mode: lines 2 pixels long (256, 1024, 4096 lines) | -32 -13 +3 | -32 -12 +6 |
+| 6 | through mode: a line strip (count + 1 vertices) (256, 1024, 4096 lines) | -43 -19 +2 | -41 -18 +5 |
+| 7 | through mode: points (256, 1024, 4096 points) | -43 -19 +1 | -43 -16 +4 |
+| 8 | through mode: textured triangles (a 32x32 8888 texture, nearest) (256, 1024, 4096 triangles) | -43 -13 +3 | -41 -10 +7 |
+| 9 | through mode: triangles through 16-bit indices (256, 1024, 4096 triangles) | -10 +1 +3 | -7 +4 +7 |
+| 10 | 3D: triangles (identity matrices, w 1) (256, 1024, 4096 triangles) | -27 -7 +5 | -23 -4 +9 |
+| 11 | 3D: textured triangles in perspective (the lens, w 2) (256, 1024, 4096 triangles) | -42 -13 +3 | -40 -10 +7 |
+| 12 | 3D: lit triangles, one directional light (256, 1024, 4096 triangles) | -14 +8 +17 | -12 -5 -3 |
+| 13 | 3D: lit triangles, four point lights fading, with their shine (256, 1024, 4096 triangles) | +0 +0 +0 | +0 +0 +0 |
+| 14 | 3D: skinned triangles, 8 float weights (256, 1024, 4096 triangles) | -10 -9 -9 | -9 -8 -8 |
+| 15 | 3D: skinned triangles, 2 float weights (256, 1024, 4096 triangles) | +4 +12 +14 | +6 +13 +15 |
+| 16 | 3D: morphed triangles, 2 vertices each (256, 1024, 4096 triangles) | -18 +1 +8 | -16 +4 +11 |
+| 17 | 3D: triangles culled as back faces (256, 1024, 4096 triangles) | -25 -6 +6 | -24 -4 +9 |
+| 18 | 3D: triangles outside the scissor rectangle (256, 1024, 4096 triangles) | -25 -6 +6 | -23 -4 +9 |
+| 19 | 3D: triangles past the near plane (256, 1024, 4096 triangles) | -25 -6 +6 | -23 -4 +9 |
+| 20 | 3D: triangles cut by the near plane (one corner past it) (256, 1024, 4096 triangles) | -2 +0 +1 | -2 +1 +2 |
+| 21 | 3D: triangles, their vertices in VRAM (256, 1024, 4096 triangles) | +3 +10 +12 | +4 +13 +16 |
+| 22 | 3D: sprites 2x2 pixels (256, 1024, 4096 sprites) | -33 -16 +3 | -30 -10 +6 |
+| 23 | 3D: lines 2 pixels long (256, 1024, 4096 lines) | -33 -13 +3 | -31 -10 +6 |
+| 24 | 3D: points (256, 1024, 4096 points) | -42 -20 +0 | -43 -17 +4 |
+| 25 | 3D: a triangle strip (256, 1024, 4096 triangles) | -38 -8 +22 | -38 -5 +26 |
+| 26 | 3D: triangles through 16-bit indices (256, 1024, 4096 triangles) | -10 +1 +3 | -7 +5 +7 |
+| 27 | 3D: Bezier patches 8x8 pixels, 4x4 points, cut 4x4 (16, 64, 256 patches) | -4 +0 +2 | -4 +1 +3 |
+| 28 | 3D: the same patches outside the scissor rectangle, PATCH_CULL_ENABLE off (16, 64, 256 patches) | -5 +0 +2 | -5 +1 +3 |
+| 29 | 3D: the same, PATCH_CULL_ENABLE on (16, 64, 256 patches) | -34 -17 -4 | -33 -14 -1 |
+| 30 | 3D: Bezier patches 16x16 pixels, cut 16x16 (4, 16, 64 patches) | -3 +0 +1 | -2 +1 +1 |
+
+`time-fill`
+
+| Case | What (sizes) | 222/111 MHz | 333/166 MHz |
+| --- | --- | --- | --- |
+| 0 | flat color, 8888 target (1, 2, 4 layers) | -2 +0 +0 | +1 +2 +3 |
+| 1 | flat color, 5650 target (1, 2, 4 layers) | -2 +0 +1 | +0 +3 +3 |
+| 2 | flat color, 5551 target (1, 2, 4 layers) | -3 +0 +0 | +0 +2 +3 |
+| 3 | flat color, 4444 target (1, 2, 4 layers) | -2 +0 +1 | -1 +2 +3 |
+| 4 | 8888 texture, not swizzled (1, 2, 4 layers) | -6 -6 -6 | -4 -4 -4 |
+| 5 | 8888 texture (1, 2, 4 layers) | -23 -23 -23 | -21 -21 -21 |
+| 6 | 8888 texture in VRAM, not swizzled (1, 2, 4 layers) | +3 +3 +3 | +5 +5 +6 |
+| 7 | 8888 texture in VRAM (1, 2, 4 layers) | -6 -6 -6 | -4 -4 -4 |
+| 8 | 5650 texture (1, 2, 4 layers) | -21 -22 -21 | -19 -19 -19 |
+| 9 | 5551 texture (1, 2, 4 layers) | -22 -21 -22 | -19 -18 -19 |
+| 10 | 4444 texture (1, 2, 4 layers) | -21 -22 -22 | -19 -18 -19 |
+| 11 | CLUT8 texture (8888 palette) (1, 2, 4 layers) | -1 +2 +2 | +1 +5 +6 |
+| 12 | CLUT4 texture (8888 palette) (1, 2, 4 layers) | -1 +2 +5 | +1 +5 +7 |
+| 13 | CLUT8 texture, not swizzled (1, 2, 4 layers) | -1 -1 +0 | +2 +3 +3 |
+| 14 | CLUT4 texture, not swizzled (1, 2, 4 layers) | +1 +3 +3 | +3 +6 +7 |
+| 15 | DXT1 texture (1, 2, 4 layers) | +10 +10 +10 | +12 +12 +12 |
+| 16 | DXT3 texture (1, 2, 4 layers) | -8 -7 -7 | -5 -5 -5 |
+| 17 | DXT5 texture (1, 2, 4 layers) | -8 -8 -7 | -5 -5 -5 |
+| 18 | 8888 texture, bilinear, half a texel off (four texels a pixel) (1, 2, 4 layers) | -35 -34 -34 | -32 -32 -32 |
+| 19 | 8888 texture 64x64 magnified 4 times, nearest (1, 2, 4 layers) | -3 -1 +0 | -1 +1 +2 |
+| 20 | 8888 texture 64x64 magnified 4 times, bilinear (1, 2, 4 layers) | -10 -5 -2 | -8 -3 +0 |
+| 21 | 8888 texture shrunk 2 times (four 128x128 sprites), nearest (1, 2, 4 layers) | -25 -25 -25 | -23 -23 -23 |
+| 22 | 8888 texture shrunk 2 times, bilinear (1, 2, 4 layers) | -25 -25 -25 | -23 -23 -23 |
+| 23 | CLUT8 texture, bilinear, half a texel off (1, 2, 4 layers) | -2 +2 +2 | +0 +4 +6 |
+| 24 | 8888 texture, MODULATE (1, 2, 4 layers) | -23 -23 -23 | -21 -21 -21 |
+| 25 | blending (source alpha, 1 - source alpha), flat color alpha 0x80, 8888 target (1, 2, 4 layers) | -1 +0 +0 | +0 +2 +3 |
+| 26 | blending, flat color alpha 0x80, 5650 target (1, 2, 4 layers) | -3 +0 +1 | +1 +3 +3 |
+| 27 | depth test GEQUAL passing (depths 0, z 0), writing (1, 2, 4 layers) | -2 -1 -1 | +1 +1 +2 |
+| 28 | depth test GEQUAL failing (depths 0xffff, z 0) (1, 2, 4 layers) | -1 -1 -1 | +0 +1 +2 |
+| 29 | depth test GEQUAL passing, not writing (1, 2, 4 layers) | -2 -1 -1 | +1 +1 +2 |
+| 30 | alpha test GREATER 0 passing (1, 2, 4 layers) | -1 +0 +0 | +0 +2 +3 |
+| 31 | alpha test GREATER 255 failing (1, 2, 4 layers) | -2 +0 +0 | +0 +2 +3 |
+| 32 | stencil test ALWAYS, INCR, 8888 target (1, 2, 4 layers) | -2 +0 +0 | +0 +2 +3 |
+| 33 | logic operation XOR (1, 2, 4 layers) | -2 +0 +0 | +0 +2 +3 |
+| 34 | dithering, 5650 target (1, 2, 4 layers) | -3 +0 +1 | +1 +1 +3 |
+| 35 | pixel mask 0x00ff00ff (1, 2, 4 layers) | -1 +0 +0 | +1 +2 +3 |
+| 36 | 3D: two triangles, flat color (identity matrices) (1, 2, 4 layers) | -8 -7 -6 | -6 -5 -4 |
+| 37 | 3D: the same with fog (1, 2, 4 layers) | -8 -7 -6 | -6 -5 -4 |
+| 38 | 3D: two triangles, 8888 texture, w 1 (1, 2, 4 layers) | +2 +1 +1 | +5 +5 +5 |
+| 39 | 3D: two triangles, 8888 texture, w 1 at the left to 4 at the right (the lens) (1, 2, 4 layers) | +88 +88 +88 | +95 +95 +95 |
+| 40 | through mode: two triangles, flat shading (1, 2, 4 layers) | -7 -7 -6 | -5 -4 -4 |
+| 41 | through mode: two triangles, colors across (smooth shading) (1, 2, 4 layers) | -7 -7 -6 | -5 -4 -4 |
+| 42 | clear mode: color, stencil and depth (1, 2, 4 layers) | -2 -1 +0 | +1 +1 +2 |
+| 43 | 5650 texture, 5650 target (1, 2, 4 layers) | -24 -25 -24 | -22 -21 -22 |
+
+`time-sizes`
+
+| Case | What (sizes) | 222/111 MHz | 333/166 MHz |
+| --- | --- | --- | --- |
+| 0 | sprites 2x2 (1, 2, 4 layers) | +6 +7 +6 | +12 +12 +12 |
+| 1 | sprites 4x4 (1, 2, 4 layers) | +3 +6 +6 | +6 +10 +12 |
+| 2 | sprites 8x8 (1, 2, 4 layers) | +9 +9 +10 | +10 +11 +11 |
+| 3 | sprites 16x16 (1, 2, 4 layers) | +1 +3 +3 | +3 +5 +6 |
+| 4 | sprites 32x32 (1, 2, 4 layers) | +4 +6 +7 | +7 +8 +10 |
+| 5 | sprites 64x64 (1, 2, 4 layers) | +1 +3 +3 | +3 +5 +6 |
+| 6 | sprites 128x128 (1, 2, 4 layers) | +0 +1 +1 | +2 +3 +4 |
+| 7 | sprites 256x1 (rows) (1, 2, 4 layers) | +4 +5 +5 | +6 +8 +8 |
+| 8 | sprites 1x256 (columns) (1, 2, 4 layers) | -21 -21 -21 | -20 -19 -20 |
+| 9 | sprites 3x3 (255x255 pixels) (1, 2, 4 layers) | +6 +8 +8 | +9 +12 +11 |
+| 10 | sprites 17x17 (255x255 pixels) (1, 2, 4 layers) | -20 -19 -19 | -18 -18 -17 |
+| 11 | triangles, squares 2x2 (1, 2, 4 layers) | +6 +7 +7 | +12 +11 +12 |
+| 12 | triangles, squares 4x4 (1, 2, 4 layers) | +8 +7 +6 | +11 +10 +12 |
+| 13 | triangles, squares 8x8 (1, 2, 4 layers) | +0 +5 +7 | +3 +8 +11 |
+| 14 | triangles, squares 16x16 (1, 2, 4 layers) | -2 -1 +0 | -1 +2 +2 |
+| 15 | triangles, squares 32x32 (1, 2, 4 layers) | -6 -4 -4 | -3 -2 -1 |
+| 16 | triangles, squares 64x64 (1, 2, 4 layers) | -7 -6 -6 | -5 -4 -4 |
+| 17 | triangles, squares 128x128 (1, 2, 4 layers) | -10 -9 -9 | -8 -7 -7 |
+
+`time-transfers`
+
+| Case | What (sizes) | 222/111 MHz | 333/166 MHz |
+| --- | --- | --- | --- |
+| 0 | RAM to VRAM, 32-bit (16, 64, 128, 256 pixels square (a side)) | +16 -11 +3 +2 | +25 -9 +5 +5 |
+| 1 | RAM to VRAM, 16-bit (16, 64, 128, 256 pixels square (a side)) | +18 -17 +1 +4 | +13 -15 +4 +6 |
+| 2 | VRAM to VRAM, 32-bit (16, 64, 128, 256 pixels square (a side)) | +44 -2 -7 -10 | +50 -2 -4 -8 |
+| 3 | VRAM to VRAM, 16-bit (16, 64, 128, 256 pixels square (a side)) | +39 +2 +0 -5 | +42 +5 +2 -3 |
+| 4 | VRAM to RAM, 32-bit (16, 64, 128, 256 pixels square (a side)) | +35 -14 -3 +0 | +50 -11 -1 +2 |
+| 5 | RAM to RAM, 32-bit (16, 64, 128, 256 pixels square (a side)) | +19 -12 +1 -2 | +17 -9 +3 +2 |
+| 6 | RAM to VRAM, 32-bit, 4 pixels wide (64, 128, 256 rows) | -45 -38 -28 | -45 -38 -28 |
+| 7 | RAM to VRAM, 32-bit, one row (64, 256, 512 pixels) | +26 +18 -47 | +33 +21 -40 |
+| 8 | RAM to VRAM, 32-bit, then TEXSYNC (16, 64, 128, 256 pixels square (a side)) | +26 -11 +3 +2 | +25 -9 +5 +5 |
+
+`time-texcache`
+
+| Case | What (sizes) | 222/111 MHz | 333/166 MHz |
+| --- | --- | --- | --- |
+| 0 | 8888, not swizzled, 8x8 (1, 3 layers) | -2 +0 | +0 +2 |
+| 1 | 8888, not swizzled, 16x16 (1, 3 layers) | -4 -1 | -2 +2 |
+| 2 | 8888, not swizzled, 32x32 (1, 3 layers) | -5 -1 | -3 +1 |
+| 3 | 8888, not swizzled, 64x64 (1, 3 layers) | -2 -1 | +0 +1 |
+| 4 | 8888, not swizzled, 128x128 (1, 3 layers) | -9 -8 | -5 -5 |
+| 5 | 8888, not swizzled, 256x256 (1, 3 layers) | -6 -6 | -4 -4 |
+| 6 | 8888, swizzled, 8x8 (1, 3 layers) | -2 +0 | +0 +2 |
+| 7 | 8888, swizzled, 16x16 (1, 3 layers) | -2 +0 | +0 +2 |
+| 8 | 8888, swizzled, 32x32 (1, 3 layers) | -4 -1 | -2 +2 |
+| 9 | 8888, swizzled, 64x64 (1, 3 layers) | -6 -3 | -4 +0 |
+| 10 | 8888, swizzled, 128x128 (1, 3 layers) | -6 -5 | -4 -1 |
+| 11 | 8888, swizzled, 256x256 (1, 3 layers) | -23 -23 | -21 -21 |
+| 12 | 5650, not swizzled, 8x8 (1, 3 layers) | -2 +0 | +0 +2 |
+| 13 | 5650, not swizzled, 16x16 (1, 3 layers) | -3 +0 | -1 +2 |
+| 14 | 5650, not swizzled, 32x32 (1, 3 layers) | -4 -1 | -1 +1 |
+| 15 | 5650, not swizzled, 64x64 (1, 3 layers) | -4 -1 | -1 +1 |
+| 16 | 5650, not swizzled, 128x128 (1, 3 layers) | -2 -1 | +1 +2 |
+| 17 | 5650, not swizzled, 256x256 (1, 3 layers) | +9 +9 | +12 +12 |
+| 18 | 5650, swizzled, 8x8 (1, 3 layers) | -1 +0 | +0 +2 |
+| 19 | 5650, swizzled, 16x16 (1, 3 layers) | -2 +0 | +0 +2 |
+| 20 | 5650, swizzled, 32x32 (1, 3 layers) | -3 +0 | -1 +2 |
+| 21 | 5650, swizzled, 64x64 (1, 3 layers) | -2 +0 | +1 +2 |
+| 22 | 5650, swizzled, 128x128 (1, 3 layers) | -5 -2 | -3 +1 |
+| 23 | 5650, swizzled, 256x256 (1, 3 layers) | -21 -22 | -19 -19 |
+| 24 | CLUT8, not swizzled, 8x8 (1, 3 layers) | -3 +0 | +0 +2 |
+| 25 | CLUT8, not swizzled, 16x16 (1, 3 layers) | -3 +0 | +0 +2 |
+| 26 | CLUT8, not swizzled, 32x32 (1, 3 layers) | -4 -1 | -1 +2 |
+| 27 | CLUT8, not swizzled, 64x64 (1, 3 layers) | -3 -1 | +0 +2 |
+| 28 | CLUT8, not swizzled, 128x128 (1, 3 layers) | +0 +1 | +2 +5 |
+| 29 | CLUT8, not swizzled, 256x256 (1, 3 layers) | -1 +0 | +2 +3 |
+| 30 | CLUT8, swizzled, 8x8 (1, 3 layers) | -2 +0 | +0 +2 |
+| 31 | CLUT8, swizzled, 16x16 (1, 3 layers) | -2 +0 | +0 +3 |
+| 32 | CLUT8, swizzled, 32x32 (1, 3 layers) | -3 +0 | +0 +2 |
+| 33 | CLUT8, swizzled, 64x64 (1, 3 layers) | -2 +0 | +0 +2 |
+| 34 | CLUT8, swizzled, 128x128 (1, 3 layers) | -3 +2 | -1 +4 |
+| 35 | CLUT8, swizzled, 256x256 (1, 3 layers) | -1 +3 | +1 +6 |
+| 36 | CLUT4, not swizzled, 8x8 (1, 3 layers) | -3 +0 | +0 +2 |
+| 37 | CLUT4, not swizzled, 16x16 (1, 3 layers) | -3 -1 | +0 +2 |
+| 38 | CLUT4, not swizzled, 32x32 (1, 3 layers) | -3 -1 | -1 +2 |
+| 39 | CLUT4, not swizzled, 64x64 (1, 3 layers) | -3 +0 | -1 +2 |
+| 40 | CLUT4, not swizzled, 128x128 (1, 3 layers) | +0 +0 | +1 +3 |
+| 41 | CLUT4, not swizzled, 256x256 (1, 3 layers) | +1 +3 | +3 +6 |
+| 42 | CLUT4, swizzled, 8x8 (1, 3 layers) | -2 +0 | +0 +2 |
+| 43 | CLUT4, swizzled, 16x16 (1, 3 layers) | -3 +0 | +0 +2 |
+| 44 | CLUT4, swizzled, 32x32 (1, 3 layers) | -2 +0 | +0 +2 |
+| 45 | CLUT4, swizzled, 64x64 (1, 3 layers) | -1 +0 | +0 +2 |
+| 46 | CLUT4, swizzled, 128x128 (1, 3 layers) | +2 +1 | +4 +4 |
+| 47 | CLUT4, swizzled, 256x256 (1, 3 layers) | -1 +4 | +1 +7 |
+| 48 | again: one 32x32 8888 texture, set once (16, 64 sprites) | -22 -11 | -20 -9 |
+| 49 | again: the same, TEX_FLUSH before each sprite (16, 64 sprites) | -2 -1 | +0 +1 |
+| 50 | new: a 32x32 8888 texture of its own for each sprite (RAM, 4 KiB apart) (16, 64 sprites) | -2 -2 | +1 +1 |
+| 51 | new: the same in VRAM (16, 64 sprites) | -1 +0 | +2 +3 |
+| 52 | again: a 32x32 CLUT8 texture, its 256-color palette loaded before each sprite (16, 64 sprites) | -10 +6 | -9 +9 |
+| 53 | again: the same, the palette loaded once (16, 64 sprites) | -18 -8 | -16 -6 |
+| 54 | again: one 64x64 8888 texture (16 KiB), set once, 64x64 sprites (16, 64 sprites) | -2 -2 | +1 +1 |
+| 55 | again: the same, TEX_FLUSH before each sprite (16, 64 sprites) | -2 -2 | +1 +1 |
+
+`time-signals`
+
+| Case | What (sizes) | 222/111 MHz | 333/166 MHz |
+| --- | --- | --- | --- |
+| 0 | flat layers, a SIGNAL that lets the GE go on, as many flat layers (1, 4, 16 layers each side) | +0 +1 +1 | +2 +3 +3 |
