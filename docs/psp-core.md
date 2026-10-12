@@ -1053,7 +1053,8 @@ PSP medium (`mia/medium/playstation-portable.cpp`); and the Android app's entry 
 - **The node tree**, what front ends see: the system "PlayStation Portable" ("[Sony] PlayStation Portable"); a
   480x272 screen at 59.94 Hz, its pixels as the GE keeps them (red in the low byte) through a palette of 2^24 colors;
   stereo sound at 44.1 kHz (silence until sceAudio); the controls, named as the PlayStation's are (Up, Down, Left,
-  Right, Triangle, Circle, Cross, Square, L, R, Select, Start, and the stick as "L-Stick X" and "L-Stick Y"), so
+  Right, Triangle, Circle, Cross, Square, L, R, Select, Start, and the stick as "L-Stick X" and "L-Stick Y", with
+  the host's right stick as "R-Stick X" and "R-Stick Y" for games patched to read one: part 81), so
   front ends map them alike; and a "UMD Drive" port (type "Universal Media Disc") taking a "PlayStation Portable
   Disc" (front ends give a peripheral whose name ends in "Disc" the game's medium).
 - **A frame**: `run()` reads the controls into the HLE kernel (pspsdk's PSP_CTRL_* bits; the stick from -32768 to

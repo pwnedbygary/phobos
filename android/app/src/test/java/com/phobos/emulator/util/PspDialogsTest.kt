@@ -99,6 +99,25 @@ class PspDialogsTest {
     }
 
     @Test
+    fun keyboardFieldsTakeOnlyTheirInputTypes() {
+        // 7th Dragon 2020's name: full-width letters alone, at most 8 (ASCII typed full-width, the space too, the digit
+        // left out: no full-width digits)
+        val name = PspKeyboardField("Input name.", "", 8, 0x0c00, 1, 1)
+        assertEquals("\uff22\uff4f\uff42\u3000\uff21", name.accept("Bob 7A"))
+        assertEquals("\uff30\uff33\uff30", name.accept("\uff30\uff33\uff30"))  // (already full-width)
+        assertEquals("\uff21\uff22\uff23\uff24\uff25\uff26\uff27\uff28", name.accept("ABCDEFGHIJ"))
+        assertEquals("\uff50\uff53\uff50", PspKeyboardField("", "", 8, PSP_INPUT_JAPANESE_LOWER, 1, 1).accept("PSP"))
+        assertEquals("ps p", PspKeyboardField("", "", 8, PSP_INPUT_LATIN_LOWER, 1, 0).accept("\uff30S P"))
+        assertEquals("PSP 1", PspKeyboardField("", "", 8, 0x0f, 1, 0).accept("\uff30SP\u30001"))
+        assertEquals("\uff11\uff12", PspKeyboardField("", "", 8, PSP_INPUT_JAPANESE_DIGIT, 1, 1).accept("1 2"))
+        assertEquals("\u30ab\u30ca", PspKeyboardField("", "", 8, PSP_INPUT_KATAKANA, 1, 1).accept("\u304b\u306a"))
+        assertEquals("\u0434\u0430", PspKeyboardField("", "", 8, PSP_INPUT_RUSSIAN_LOWER, 1, 0).accept("\u0414a\u0410"))
+        assertEquals("a/b?9", PspKeyboardField("", "", 8, PSP_INPUT_URL, 1, 0).accept("a/b?9\u3042"))
+        assertEquals("a\nb", PspKeyboardField("", "", 8, PSP_INPUT_LATIN_LOWER, 2, 0).accept("a\nb"))
+        assertEquals("\u2606a", PspKeyboardField("", "", 8, 0x40_0000, 1, 0).accept("\u2606a"))  // (no type known: all)
+    }
+
+    @Test
     fun confirmFollowsTheGamesConvention() {
         val cross = request(PspDialogRequest.SAVE_LOAD, emptyList())
         assertEquals(PhobosCore.Input.A, cross.confirmBit())  // (the app's A is the PSP's cross)

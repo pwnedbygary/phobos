@@ -157,27 +157,108 @@ fun parsePspDialog(bytes: ByteArray): PspDialogRequest? {
     }
 }
 
-/** The PSP's input types (psputility_osk.h) the keyboard narrows to: digits alone, or a web address. */
+/**
+ * The PSP's input types (psputility_osk.h's PSP_UTILITY_OSK_INPUTTYPE_*, 0 for all): which a character is typed in.
+ * Full-width letters, digits and signs (U+FF01-FF5E, and U+3000-303F's spaces and marks) are the Japanese ones; the
+ * URL keyboard types every printable ASCII character. As ares/psp/kernel/utility.cpp's keyboardTypes().
+ */
 const val PSP_INPUT_LATIN_DIGIT = 0x1
+const val PSP_INPUT_LATIN_SYMBOL = 0x2
+const val PSP_INPUT_LATIN_LOWER = 0x4
+const val PSP_INPUT_LATIN_UPPER = 0x8
 const val PSP_INPUT_JAPANESE_DIGIT = 0x100
+const val PSP_INPUT_JAPANESE_SYMBOL = 0x200
+const val PSP_INPUT_JAPANESE_LOWER = 0x400
+const val PSP_INPUT_JAPANESE_UPPER = 0x800
+const val PSP_INPUT_HIRAGANA = 0x1000
+const val PSP_INPUT_HALF_KATAKANA = 0x2000
+const val PSP_INPUT_KATAKANA = 0x4000
+const val PSP_INPUT_KANJI = 0x8000
+const val PSP_INPUT_RUSSIAN_LOWER = 0x10000
+const val PSP_INPUT_RUSSIAN_UPPER = 0x20000
+const val PSP_INPUT_KOREAN = 0x40000
 const val PSP_INPUT_URL = 0x80000
+private const val PSP_INPUT_KNOWN = 0xfff0f
+private const val PSP_INPUT_DIGITS = PSP_INPUT_LATIN_DIGIT or PSP_INPUT_JAPANESE_DIGIT
+private const val PSP_INPUT_HALF_WIDTH = PSP_INPUT_LATIN_DIGIT or PSP_INPUT_LATIN_SYMBOL or PSP_INPUT_LATIN_LOWER or
+    PSP_INPUT_LATIN_UPPER or PSP_INPUT_URL
+private const val PSP_INPUT_FULL_WIDTH = PSP_INPUT_JAPANESE_DIGIT or PSP_INPUT_JAPANESE_SYMBOL or
+    PSP_INPUT_JAPANESE_LOWER or PSP_INPUT_JAPANESE_UPPER or PSP_INPUT_HIRAGANA or PSP_INPUT_KATAKANA or PSP_INPUT_KANJI
+
+private fun pspInputTypes(c: Char): Int = when (c) {
+    in '0'..'9' -> PSP_INPUT_LATIN_DIGIT or PSP_INPUT_URL
+    in 'a'..'z' -> PSP_INPUT_LATIN_LOWER or PSP_INPUT_URL
+    in 'A'..'Z' -> PSP_INPUT_LATIN_UPPER or PSP_INPUT_URL
+    in ' '..'~' -> PSP_INPUT_LATIN_SYMBOL or PSP_INPUT_URL
+    in '\uff10'..'\uff19' -> PSP_INPUT_JAPANESE_DIGIT
+    in '\uff41'..'\uff5a' -> PSP_INPUT_JAPANESE_LOWER
+    in '\uff21'..'\uff3a' -> PSP_INPUT_JAPANESE_UPPER
+    in '\uff01'..'\uff5e', in '\u3000'..'\u303f' -> PSP_INPUT_JAPANESE_SYMBOL
+    '\u30fc' -> PSP_INPUT_HIRAGANA or PSP_INPUT_KATAKANA  // (the long vowel mark, in both)
+    in '\u3041'..'\u309f' -> PSP_INPUT_HIRAGANA
+    in '\u30a0'..'\u30ff' -> PSP_INPUT_KATAKANA
+    in '\uff61'..'\uff9f' -> PSP_INPUT_HALF_KATAKANA
+    in '\u4e00'..'\u9fff', in '\u3400'..'\u4dbf' -> PSP_INPUT_KANJI
+    in '\u0430'..'\u044f', '\u0451' -> PSP_INPUT_RUSSIAN_LOWER
+    in '\u0410'..'\u042f', '\u0401' -> PSP_INPUT_RUSSIAN_UPPER
+    in '\uac00'..'\ud7a3', in '\u1100'..'\u11ff', in '\u3130'..'\u318f' -> PSP_INPUT_KOREAN
+    else -> 0
+}
+
+private fun pspOtherWidth(c: Char): Char = when (c) {
+    in '!'..'~' -> c + 0xfee0
+    in '\uff01'..'\uff5e' -> c - 0xfee0
+    else -> c
+}
+
+private fun pspOtherForm(c: Char): Char = when (c) {  // the other case, or kana
+    in 'a'..'z', in '\uff41'..'\uff5a', in '\u0430'..'\u044f' -> c - 0x20
+    in 'A'..'Z', in '\uff21'..'\uff3a', in '\u0410'..'\u042f' -> c + 0x20
+    '\u0451' -> '\u0401'
+    '\u0401' -> '\u0451'
+    in '\u3041'..'\u3096' -> c + 0x60
+    in '\u30a1'..'\u30f6' -> c - 0x60
+    else -> c
+}
+
+/** The field's input types, 0 if it takes everything (0, or none of the types known). */
+private val PspKeyboardField.inputTypes: Int get() = inputType and PSP_INPUT_KNOWN
 
 /** Whether a field takes digits alone (its input types are only the digits'). */
-fun PspKeyboardField.digitsOnly(): Boolean =
-    inputType != 0 && inputType and (PSP_INPUT_LATIN_DIGIT or PSP_INPUT_JAPANESE_DIGIT).inv() == 0
+fun PspKeyboardField.digitsOnly(): Boolean = inputTypes != 0 && inputTypes and PSP_INPUT_DIGITS.inv() == 0
+
+/**
+ * [c] as the field's input types take it, as typed on a PSP's keyboard, which has only those characters: itself, or
+ * the other width of an ASCII letter, digit or sign, the other case, the other kana; null where none is taken. A space
+ * (which every keyboard but the digits' has) is full-width where the field takes full-width characters and no
+ * half-width ones. As ares/psp/kernel/utility.cpp's keyboardConform().
+ */
+private fun PspKeyboardField.conform(c: Char): Char? {
+    val types = inputTypes
+    if (types == 0) return c
+    if (c == ' ' || c == '\u3000') {
+        if (types and PSP_INPUT_DIGITS.inv() == 0) return null
+        val full = types and PSP_INPUT_FULL_WIDTH != 0 && types and PSP_INPUT_HALF_WIDTH == 0
+        return if (full) '\u3000' else ' '
+    }
+    val other = pspOtherForm(c)
+    return listOf(c, pspOtherWidth(c), other, pspOtherWidth(other)).firstOrNull { pspInputTypes(it) and types != 0 }
+}
 
 /**
  * [text] as the field takes it: characters the PSP doesn't have (past U+FFFF, which take two UTF-16 units, and
- * control characters but a field of several lines' line breaks) left out, as are all but digits for a field of
- * digits; no more than its [PspKeyboardField.maxLength].
+ * control characters but a field of several lines' line breaks) left out, the rest as its input types take them
+ * ([conform]: ASCII letters full-width for a field of full-width letters, say, digits alone for a field of digits);
+ * no more than its [PspKeyboardField.maxLength].
  */
 fun PspKeyboardField.accept(text: String): String {
     val kept = StringBuilder()
     for (c in text) {
-        if (Character.isSurrogate(c) || (Character.isISOControl(c) && !(c == '\n' && lines > 1))) continue
-        if (digitsOnly() && c !in '0'..'9') continue
+        if (Character.isSurrogate(c)) continue
+        val typed = if (Character.isISOControl(c)) c.takeIf { c == '\n' && lines > 1 } else conform(c)
+        if (typed == null) continue
         if (kept.length >= maxLength) break
-        kept.append(c)
+        kept.append(typed)
     }
     return kept.toString()
 }

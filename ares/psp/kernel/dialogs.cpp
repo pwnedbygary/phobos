@@ -406,13 +406,14 @@ auto Kernel::dialogAnswered(const DialogRequest& asked, const DialogAnswer& give
     memory.write(4, p + 28, 0);
   }
   if(asked.kind == DialogKeyboard) {
-    //each field's text, as keyboard() writes them, CHANGED; backed out of, each CANCELLED (pspsdk's result) and its
+    //each field's text, as keyboard() writes them (as the field's input types take it: keyboardConform()), CHANGED;
+    //backed out of, each CANCELLED (pspsdk's result) and its
     //output as it was, the common result 0 (chosen: no recording shows a PSP's keyboard backed out of)
     u32 count = memory.read(4, p + 48), fields = memory.read(4, p + 52);
     for(u32 n = 0; n < std::min<u64>(count, asked.fields.size()); n++) {
       u32 field = fields + n * KeyboardFieldSize;
       if(!memory.reaches(field, KeyboardFieldSize)) break;
-      if(!given.cancelled) keyboardField(field, utf16(given.texts[n]));
+      if(!given.cancelled) keyboardField(field, keyboardConform(utf16(given.texts[n]), memory.read(4, field + 16)));
       memory.write(4, field + 44, given.cancelled ? KeyboardCancelled : KeyboardChanged);
     }
     memory.write(4, p + 28, 0);

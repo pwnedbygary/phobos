@@ -545,8 +545,19 @@ static auto atracSetAndGetID(Kernel& kernel, u32 buffer, u32 readSize, u32 buffe
   return AtracErrorNoID;
 }
 
+//A size the library takes as negative (its top bit set) is taken as reaching to the end of the memory the buffer is in:
+//7th Dragon 2020-II gives 0xffffffff for the file it plays on its character's certificate, read whole into the
+//buffer, and waits for good for the sound the library would refuse (Tales of VS does the same, PPSSPP notes).
 auto Kernel::sceAtracSetDataAndGetID() -> void {
-  result(atracSetAndGetID(*this, arg(0), arg(1), arg(1), false));
+  u32 buffer = arg(0), size = arg(1);
+  if(s32(size) < 0) {
+    u32 reach = 0;
+    for(u32 bit = 1u << 30; bit; bit >>= 1) {
+      if(memory.reaches(buffer, reach | bit)) reach |= bit;
+    }
+    size = reach;
+  }
+  result(atracSetAndGetID(*this, buffer, size, size, false));
 }
 
 auto Kernel::sceAtracSetHalfwayBufferAndGetID() -> void {

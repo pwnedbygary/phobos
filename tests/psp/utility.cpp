@@ -1293,6 +1293,66 @@ static auto keyboard() -> void {
   CHECK(roundTrip(m), true);
 }
 
+//The nickname as each field's input types (SceUtilityOskData's at 16) take it, as a PSP's keyboard types it: full-width
+//where only full-width letters are taken (7th Dragon 2020 and 2020-II, 0x0c00, their ASCII "PSP" a nameless hero and
+//a certificate stuck for good), in the one case taken, ASCII where ASCII is among them; a field of full-width spaces
+//is blank too; one taking none of its letters (digits, hiragana) keeps its own text. A game's own text stays as it is.
+static auto keyboardInputTypes() -> void {
+  KernelMachine m;
+  u64 millisecond = Kernel::CPUFrequency / 1000;
+  constexpr u32 Fields = Buffer, Texts = Buffer + 0x400;
+  auto write16 = [&](u32 at, const std::u16string& text) {
+    for(u32 n = 0; n < text.size(); n++) m.system.memory.write(2, at + n * 2, text[n]);
+    m.system.memory.write(2, at + text.size() * 2, 0);
+  };
+  auto read16 = [&](u32 at) {
+    std::u16string text;
+    for(u16 c; (c = m.system.memory.read(2, at)) && text.size() < 64; at += 2) text.push_back(c);
+    return text;
+  };
+  struct Field { std::u16string initial; u32 input, limit; std::u16string expected; };
+  std::vector<Field> fields = {
+    {u"", 0x0c00, 8, u"\uff30\uff33\uff30"},
+    {u"\u3000\u3000\u3000", 0x0c00, 8, u"\uff30\uff33\uff30"},
+    {u"", 0x0c00, 2, u"\uff30\uff33"},
+    {u"", 0x0400, 8, u"\uff50\uff53\uff50"},
+    {u"", 0x0004, 8, u"psp"},
+    {u"", 0x0c0f, 8, u"PSP"},
+    {u"", 0x80000, 8, u"PSP"},
+    {u"", 0x0001, 8, u""},
+    {u"  ", 0x1000, 8, u"  "},
+    {u"Bob", 0x0c00, 8, u"Bob"},
+    {u"", 0x40'0000, 8, u"PSP"},  //(no type known: all)
+  };
+  m.system.memory.fill(Parameters, 0, 64);
+  m.system.memory.write(4, Parameters, 64);
+  m.system.memory.write(4, Parameters + 48, fields.size());
+  m.system.memory.write(4, Parameters + 52, Fields);
+  for(u32 n = 0; n < fields.size(); n++) {
+    u32 at = Fields + n * 52, in = Texts + n * 0x100, out = in + 0x80;
+    m.system.memory.fill(at, 0, 52);
+    write16(in, fields[n].initial);
+    m.system.memory.fill(out, 0xcc, 0x40);
+    m.system.memory.write(4, at + 8, 1);
+    m.system.memory.write(4, at + 16, fields[n].input);
+    m.system.memory.write(4, at + 20, 1);
+    m.system.memory.write(4, at + 32, in);
+    m.system.memory.write(4, at + 36, 48);
+    m.system.memory.write(4, at + 40, out);
+    m.system.memory.write(4, at + 48, fields[n].limit);
+  }
+  CHECK(m.call("sceUtilityOskInitStart", {Parameters}), 0);
+  m.kernel.cycles += 300 * millisecond;
+  m.kernel.events();
+  CHECK(m.call("sceUtilityOskUpdate", {1}), 0);
+  CHECK(m.call("sceUtilityOskGetStatus", {}), 3);
+  for(u32 n = 0; n < fields.size(); n++) {
+    CHECK(read16(Texts + n * 0x100 + 0x80) == fields[n].expected, true);
+    CHECK(m.system.memory.read(4, Fields + n * 52 + 44), 2);
+  }
+  CHECK(m.notes.size(), 0);
+}
+
 //Optional modules: loaded once (again: already loaded), unloaded once (again: not loaded), 0x107, 0x108 and 0x308
 //among them, numbers that aren't a module refused, the older network numbers standing for 0x100-0x106 and the older
 //USB numbers for 0x200-0x203; the nickname.
@@ -1350,7 +1410,7 @@ auto utilityTests() -> Tests {
     {"utility savedata PARAM.SFO", savedataParamSFO}, {"utility savedata without PARAM.SFO (v2.0.0's)", savedataOlder},
     {"utility savedata broken saves", savedataBroken},
     {"memory stick free space", stickSpace}, {"utility dialogs", dialogs},
-    {"utility keyboard", keyboard}, {"utility modules", modules},
+    {"utility keyboard", keyboard}, {"utility keyboard input types", keyboardInputTypes}, {"utility modules", modules},
     {"utility game data install", gamedataInstall}, {"utility dialog sizes and statuses", dialogStatuses},
     {"utility save dialog closed by priority", savedataClosing},
   };

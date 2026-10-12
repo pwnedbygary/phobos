@@ -283,7 +283,8 @@ private fun PspMessageDialog(
 
 /**
  * The keyboard: a text field for each of the game's fields (its description the title, or each one's label), with
- * Android's own keyboard, each taking no more than the game allows (and digits alone where it asks for digits). OK,
+ * Android's own keyboard, each taking no more than the game allows, and only what its input types take (digits alone
+ * where it asks for digits, letters typed in ASCII made full-width where it takes only full-width ones). OK,
  * Done or the confirm button (or Start) enters the text; Cancel or the back button backs out.
  */
 @Composable
