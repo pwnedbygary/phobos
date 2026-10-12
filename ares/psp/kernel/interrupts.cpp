@@ -19,14 +19,17 @@ auto Kernel::queueCall(u32 function, u32 gp, u32 a0, u32 a1, u32 a2, bool resume
 //The next call starts, if one may: none is running and interrupts aren't held off. A vertical blank held off till
 //now comes first: its handlers join the queue, once however many blanks went by (vblankInterrupt()); unless the
 //last blank's still wait their turn there, when it stays pending. A thread it interrupts counts it in its run
-//figures, its time stopping while the call runs (threads.cpp).
-auto Kernel::startCall() -> void {
-  if(interrupting || !interruptsEnabled) return;
+//figures, its time stopping while the call runs (threads.cpp). Returns whether anything changed: handlers queued, or
+//a call started.
+auto Kernel::startCall() -> bool {
+  if(interrupting || !interruptsEnabled) return false;
+  bool queued = false;
   if(vblankPending && !vblankQueued()) {
     vblankPending = false;
     queueVblankHandlers();
+    queued = true;
   }
-  if(calls.empty()) return;
+  if(calls.empty()) return queued;
   auto call = calls.front();
   calls.pop_front();
   if(current) {
@@ -48,6 +51,7 @@ auto Kernel::startCall() -> void {
   cpu.ipu.pc = call.function;
   cpu.ipu.pd = call.function + 4;
   cpu.scc.halted = 0;
+  return true;
 }
 
 //The trampoline's syscall: the function returned. The CPU goes back as it was, interrupts on as the call found them

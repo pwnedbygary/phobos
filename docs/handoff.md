@@ -25,6 +25,71 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: the slowest games faster — render to texture decoded where it's taken, Killzone's blur from a copy, polled system functions cheaper — 2026-10-12
+
+Branch `cursor/psp-speed9-2b67`, on `cursor/psp-merge-212-219-2b67` (`5b2a564fa`, master and #212 to #219, since merged
+as #220). docs/psp-core.md, part 74, has the evidence (part 73 is the dialogs branch's). Clean room: no PPSSPP code
+read, JPCSP not read. Save states unchanged by it (StateVersion 26, #221's). Every change is the host's alone: the
+software renderer's every picture, VRAM, RAM and the machine's end state are the base's.
+- **Where the time went** (24 scenes reached from boot and kept as states; the GE's work and every system call
+  counted, macOS's sample): render to texture decoded whole for each small primitive taking a little of it (Death Jr.
+  II's character select, Sonic Rivals' stages and Activision Hits Remixed's room, Backbone's engine drawing the screen
+  in 32x34 tiles each through its own CLUT32 palette: 24 to 47 million texels a frame; MX vs. ATV Untamed's 2D strips,
+  4.1 million); Killzone's menu blur, 800 3D quads a frame over their own texture, drawn at once a pixel at a time from
+  memory on the emulation thread; and system functions polled 120,000 to 500,000 times a frame (the two Need for
+  Speeds' idle thread, the movie intros' ring). Both God of Wars, Army of Two, Super Monkey Ball Adventures (its
+  setup too), Hot Wheels and Fat Princess are bound by the GE's work (11 to 28 million pixels of boxes a frame), not
+  touched here.
+- **Changes** (each its own commit, with tests): a deferred texture decoded only where its jobs take texels (3D
+  triangles with one q by their stepped planes' bounds, 2D sprites by spriteReach(), round the edges as texelAxis()
+  repeats them); 3D triangles over their own texture decoded and batched where no byte they may write is one they may
+  read; deferred copies decoded into the room of earlier ones; and the host's cost of a system call (compiled syscalls
+  straight to SYSCALL(), status structures on the stack, no look through every thread and timer after twelve quiet
+  functions that change nothing whose time comes).
+- **Numbers** (the Mac, base -> branch, medians of three rounds taking turns; frames a second, and the process's CPU
+  ms a frame, which the Mac's shifting load doesn't move): Killzone's menu 1.9 -> 8.9 (318 -> 180 ms), Activision Hits
+  Remixed's room 11.4 -> 49.6 (143 -> 40), Sonic Rivals' stage 22.4 -> 79.4 (61 -> 21), Death Jr. II's character
+  select 28.4 -> 188 (57 -> 10), MX vs. ATV Untamed's ride 28.3 -> 43.1 (43 -> 30), Need for Speed Most Wanted 24.1 ->
+  42.0 (42 -> 29) and Underground Rivals 22.5 -> 47.2 (46 -> 31), Disaster Report 3's intro 64.8 -> 117 (12.9 -> 8.4),
+  Twisted Metal's 44.2 -> 54.2, the Armored Cores' intros 61 -> 66 and 70 -> 96. The GE-bound scenes' process time
+  within 3% of the base's.
+- **The owner's RP6 renderer runs** (given after): Vulkan brings the GE-bound games up; Sonic Rivals, the Need for
+  Speeds, Super Monkey Ball, Twisted Metal, Me & My Katamari, Disaster Report 3 and Activision Hits Remixed are the
+  same in every renderer (CPU-bound); the Armored Cores and Colin McRae slower in Vulkan. The system-call change holds
+  in every renderer; the decode changes are Software's batches only (Vulkan decodes a texture it doesn't hold, every
+  row its primitive may reach, at each texture-cache miss, the next place to look for Backbone's games there).
+- **Checks**: tests/psp 452/0 (sanitized; three new groups, which broken versions fail), tests/allegrex 58/0,
+  tests/psp/ares 307/0, and with master merged in (#221, #222) 469/0, 58/0 and 318/0; arm64 with NDK 28.2 and GCC 11
+  compile it as they do the base. Every frame's picture and VRAM hash, then RAM and the end state, identical to the
+  base's in every scene at 7 and 1 threads. The library the report's way: all 266 finish, none missing a function, 188
+  with the final run's pictures at all four captures; the other 78 differ as runs of one runner do (the clock, which
+  starts at the host's time, and the runner's PNG a picture behind under load): with the clock pinned 50 match, and the
+  other 28 hash identical to the base's at every one of 3600 frames. Review: no bug; its test gaps and nits fixed; a
+  delta review passed, its points fixed; a delta review of the last commit and the docs passed, its points fixed.
+- **Merged with master** (#221, #222): round 6 holds a pixel's coordinates at the last texel where q is 0 or below,
+  which the reach didn't know; the commit after the merge decodes such a triangle's texture whole and draws it at once
+  over its own texture (checks in the two new texture groups fail without it). The merged branch hashes identical to
+  master (`caee1a26f`) in all 24 scenes at 7 and 1 threads; the library runs are of the branch before the merges.
+- **On the RP6, to measure**: base `5b2a564fa` (2.0.0-test-1's code) against this branch, Software at 7 threads, the
+  scenes in `~/phobos-work/scratch/speed9/scenes` (a scene's `state` is an app save state's bytes; part 74's table says
+  where each is from boot): expect Killzone's menu, Death Jr. II's character select, Sonic Rivals' stage, Activision
+  Hits Remixed's room, MX vs. ATV Untamed, the two Need for Speeds and the movie intros faster; the GE-bound games as
+  they were. In Vulkan too for the Need for Speeds and the movie intros (the system calls).
+- **Left**: the GE-pixel-bound games (the rasterizer itself next, or Vulkan); MX vs. ATV Reflex's races and On the
+  Edge's slow scene not reached; Chinatown Wars' long frames not seen on the Mac (to trace on the RP6).
+- Scratch: `~/phobos-work/scratch/speed9`.
+
+## Version codes for 2.1 — 2026-10-12
+
+Branch `cursor/version-base-21-2b67`, on `master` after #221 (the system dialogs) and #222 (round 6's pictures), before
+the v2.1.0 tag. The version code is now 210000 + the commit count (`android/app/build.gradle.kts`): test builds on the
+owner's RP6 went up to 205231 (the dialogs' 205223, then 205230 with round 6's time model and 205231 with the dialogs
+alone, built with -PversionCode), level with what 200000 + the count gives master around the tag (205,229 to 205,232),
+and Android refuses a lower code over a higher one without an uninstall (which loses the app's data). Every earlier
+build, release, nightly or test build is below 210000, so nobody's update becomes a downgrade; nightly tags become
+`nightly-215xxx` and up. README.md and the implementation plan's updater row say so. A later release can raise the
+base again the same way if a stray build gets ahead of it.
+
 ## PSP: round 6's pictures — lighting's two multiplies, the reciprocal's chords, patches along v — 2026-10-12
 
 Branch `cursor/psp-round6-fits-2b67` (#222), on master (`2a7019c84`). The owner ran round 6 of `tools/psp-measure` on

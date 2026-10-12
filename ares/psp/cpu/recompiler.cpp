@@ -358,7 +358,8 @@ auto Allegrex::Recompiler::emitInterpreter(u32 address, u32 instruction, u32 cou
     mov32(field(&self.ipu.pd), imm(address + 8));
   }
   mov32(field(&executed), imm(count));
-  callf(&Allegrex::execute, imm(address), imm(instruction));
+  bool syscall = instruction >> 26 == 0x00 && (instruction & 0x3f) == 0x0c;
+  callf(syscall ? &Allegrex::executeSyscall : &Allegrex::execute, imm(address), imm(instruction));
   testJumpEpilog();
   forgetAll();  //(it may have written any register)
 }
