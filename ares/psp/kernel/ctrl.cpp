@@ -6,14 +6,14 @@
 //
 //How each call behaves follows uOFW's reading of the PSP's own controller driver (ctrl.c).
 //
-//A right stick, which a PSP hasn't got: a compatibility convention the owner chose, not the hardware's behavior. A
-//PSP leaves SceCtrlData's six bytes after the stick (pspsdk's Rsrv) at zero; PPSSPP reports a second stick in the
-//first two of them, X at byte 10 and Y at 11, centred at 128, and fan patches made for it read them there: the
-//Armored Core "True Analogs" mods turn and look with them, and read zeros as the stick held up and left (the camera
-//stuck on the sky, the AC turning on its own). So every sample carries the host's right stick there, 128 each way
-//when it's left alone, whatever the game: centred too unless sampling is analog, as the stick is, and the last four
-//bytes stay zero. The system sets it each frame from the front end's "R-Stick X" and "R-Stick Y". It isn't in save
-//states (the layout stays as it was): a loaded state's samples read it centred until the next sample.
+//A right stick, which a PSP hasn't got: a compatibility convention, not the hardware's behavior. A PSP leaves
+//SceCtrlData's six bytes after the stick (pspsdk's Rsrv) at zero; PPSSPP reports a second stick in the first two of
+//them, X at byte 10 and Y at 11, centred at 128, and fan patches made for it read them there: the Armored Core "True
+//Analogs" mods turn and look with them, and take zeros for the stick held up and left (the camera stuck on the sky,
+//the AC turning on its own). Every sample carries the host's right stick there, 128 each way when it's left alone,
+//whatever the game: centred too unless sampling is analog, as the stick is, and the last four bytes stay zero. The
+//system sets it each frame from the front end's "R-Stick X" and "R-Stick Y". It isn't in save states: a loaded
+//state's samples read it centred until the next sample.
 
 //The buttons a game sees: the pad, the four face buttons, the shoulders, start and select, the hold switch, and
 //0x10000, which tells it the system has taken the controls (for its HOME menu). The rest (volume, the screen and

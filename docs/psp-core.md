@@ -10395,8 +10395,8 @@ captures) is in `~/phobos-work/scratch/colinsave/` on the Mac it was made on, no
 
 ## Part 81: input — a right stick for patched games, the keyboard's input types, 7th Dragon 2020-II past its certificate
 
-On branch `cursor/psp-input-b00-2b67`, on master (`6ab2c5583`, then `b7ea296f4`). The task: items 2 and 5 of the
-play-testers' batch 00 (Armored Core's True Analogs images, the 7th Dragon games' names). Clean room: PPSSPP read as a
+On branch `cursor/psp-input-b00-2b67`, on master (`6ab2c5583`, then `b7ea296f4`). The task: items 3 and 4 of the
+play-testers' batch 00 report (the 7th Dragon games' names, Armored Core's True Analogs images). Clean room: PPSSPP read as a
 guide to the PSP's behaviour only (its convention for a right stick, its note on a negative ATRAC size), no code
 copied or translated; JPCSP not read. Save states keep their layout (26).
 
@@ -10416,7 +10416,8 @@ loaded state's samples read 128 until the next sample takes the stick as it is.
 
 Android hands the right stick to the core whatever the PSP "Right stick" setting is: Off presses nothing else, and
 Face buttons, D-pad and Analog keep doing what they did; a game that reads bytes 10 and 11 gets the stick either way
-(`GameInputState.kt`, the setting's description). `PhobosRunner.cpp` already gave setInput()'s rx and ry to an axis
+(`GameInputState.kt`). With Analog stick the right stick is the PSP's stick and the patched games' second one at
+once, so the setting's description says Off suits those games. `PhobosRunner.cpp` already gave setInput()'s rx and ry to an axis
 named "R-Stick X"/"R-Stick Y". The runner takes `R-StickX:` and `R-StickY:` in `--press` and `--script`, as it takes
 the left stick (`tools/psp-runner/README.md`).
 
@@ -10434,12 +10435,19 @@ full-width Latin letters alone (0x0c00, limit 8), and their font shows no ASCII:
 `keyboardConform()` (utility.cpp) now takes text as a field's types allow, as typing it on the PSP's keyboard would:
 each character the field doesn't take becomes one it does where there's one (the other width of an ASCII letter,
 digit or sign, the other case, the other kana) and is left out where there isn't; a space is full-width (U+3000)
-where the field takes full-width characters and no half-width ones, and none where it takes digits alone; line breaks
-stay. The automatic answer's nickname goes through it (0x0c00: U+FF30 U+FF33 U+FF30), and a field taking none of its
-letters (digits alone, kana alone) keeps its own text; a field of full-width spaces is blank too. The game's own text
-at first stays as it was (Ridge Racer 2's "DAMACY"). The app's keyboard (part 73) does the same as the player types
-(`PspKeyboardField.accept()`), and the core conforms the app's answer again. Phobos's choice for what the PSP's
-keyboard would do; no recording shows a PSP's answer to a field's types.
+where the field takes full-width characters and no half-width ones, and none where it takes digits alone; a line
+break stays in a field of several lines and goes in a field of one; the web address keyboard takes every printable
+ASCII character, digits too. The automatic answer's nickname goes through it (0x0c00: U+FF30 U+FF33 U+FF30), and a
+field taking none of its letters (digits alone, kana alone) keeps its own text; a field of full-width spaces is blank
+too. The automatic answer keeps the game's own text at first as it was (Ridge Racer 2's "DAMACY"). The app's keyboard
+(part 73) shows the game's text and what the player types as Android's keyboard composes it, leaving out only what
+the PSP has no character for and nothing past the field's limit once entered (`PspKeyboardField.typing()`), and
+enters it all, the game's own text with it, through the same conversion (`accept()`), showing under the field what
+will be entered where that differs; the core takes the app's answer through `keyboardConform()` again, with the
+field's types and lines as the request showed them. (Converting each character as it was typed, as a first version
+did, changed Android's text under its keyboard: romaji on its way to kana lost its letters in a field of kana, and
+kanji conversion stopped.) Phobos's choice for what the PSP's keyboard would do; no recording shows a PSP's answer to
+a field's types.
 
 7th Dragon 2020's name screen shows "PSP" and the voice screen after it too (`v-7d1-name/frame-000200.png`,
 `frame-000800.png`).
@@ -10450,7 +10458,8 @@ With the name taken, 2020-II's "Murakumo Certificate" still froze for good (fram
 shows, the game reads a sound file whole into a buffer and hands it to `sceAtracSetDataAndGetID` with the size
 0xffffffff; Phobos refused it (0x80630006: the size doesn't fit memory), and the game waited for that sound for good.
 PPSSPP notes the same of Tales of VS, so the PSP's library evidently takes such a size; Phobos now takes a size whose
-top bit is set as reaching to the end of the memory the buffer is in (`atrac.cpp`). The card then passes and the
+top bit is set as reaching to the end of the memory the buffer is in (`atrac.cpp`), a buffer with no memory behind it
+refused as before (0x80630006). The card then passes and the
 story goes on (`v-7d2-cert/frame-001560.png`, the Diet chamber; `frame-003600.png`, the first conversation). The name
 wasn't what stopped it.
 

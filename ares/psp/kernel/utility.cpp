@@ -156,15 +156,20 @@ namespace {
     return 0;
   }
 
-  //Text as a field of input types `input` takes it, as typed on a PSP's keyboard, which has only those characters:
-  //each character it doesn't take becomes one it does where there's one (the other width of an ASCII letter, digit or
-  //sign, the other case, the other kana), and is left out where there isn't. A space, which every keyboard but the
-  //digits' has, is full-width (U+3000) where the field takes full-width characters and no half-width ones. A field
-  //taking all (0, or none of the types known) takes everything. Phobos's choice, as is the PSP's keyboard's
-  //behaviour for a field's own text: the field's text at first is the game's and kept as it is (keyboard()).
-  auto keyboardConform(const std::vector<u16>& text, u32 input) -> std::vector<u16> {
+  //Text as a field of input types `input` and that many lines takes it, as typed on a PSP's keyboard, which has only
+  //those characters: each character it doesn't take becomes one it does where there's one (the other width of an
+  //ASCII letter, digit or sign, the other case, the other kana), and is left out where there isn't. A space, which
+  //every keyboard but the digits' has, is full-width (U+3000) where the field takes full-width characters and no
+  //half-width ones; a line break stays in a field of several lines, whatever its types. A field taking all (0, or
+  //none of the types known) takes everything else. Phobos's choice: the automatic answer keeps a field's own text,
+  //the game's, as it is (keyboard()); a front end's answer, the game's text among it, is typed so (dialogs.cpp).
+  auto keyboardConform(const std::vector<u16>& text, u32 input, u32 lines) -> std::vector<u16> {
+    std::vector<u16> conformed;
     input &= InputKnown;
-    if(!input) return text;
+    if(!input) {
+      for(u16 c : text) if(c != '\n' || lines > 1) conformed.push_back(c);
+      return conformed;
+    }
     auto takes = [&](u16 c) { return (keyboardTypes(c) & input) != 0; };
     auto width = [](u16 c) -> u16 {
       if(c >= 0x21 && c <= 0x7e) return c + 0xfee0;
@@ -180,9 +185,11 @@ namespace {
       if(c >= 0x30a1 && c <= 0x30f6) return c - 0x60;
       return c;
     };
-    std::vector<u16> conformed;
     for(u16 c : text) {
-      if(c == '\n') { conformed.push_back(c); continue; }  //(a field of several lines' breaks, whatever its types)
+      if(c == '\n') {
+        if(lines > 1) conformed.push_back(c);
+        continue;
+      }
       if(c == ' ' || c == 0x3000) {
         if(!(input & ~InputDigits)) continue;
         bool full = (input & InputFullWidth) && !(input & InputHalfWidth);
@@ -463,9 +470,9 @@ auto Kernel::dialogShutdown(u32 kind) -> void {
 //console's nickname, "PSP", as a player asked for a name would type one (Peace Walker, asking for its player's name
 //in an empty field, refused an empty answer, "at least 1 characters", and asked again for good). The nickname is
 //typed as the field's input types allow (keyboardConform()): 7th Dragon 2020 and 2020-II take only full-width
-//letters (0x0c00) and get it full-width (U+FF30 U+FF33 U+FF30), where ASCII "PSP" left the first's hero nameless
-//and stopped the second at its certificate for good; a field taking none of its letters (digits alone, kana) keeps
-//its own. Each field's result is CHANGED (2), as a PSP is taken to say of every field the player confirms, edited
+//letters (0x0c00) and get it full-width (U+FF30 U+FF33 U+FF30), where ASCII "PSP" left the first's hero nameless;
+//a field taking none of its letters (digits alone, kana) keeps its own. Each field's result is CHANGED (2), as a
+//PSP is taken to say of every field the player confirms, edited
 //or not: Ridge Racer 2 fills its field with a default driver name, "DAMACY", and takes UNCHANGED (0) as it takes
 //CANCELLED (1), going back to its title without a profile, which every player keeping that name would meet if a PSP
 //said UNCHANGED. (Killzone and Space Invaders Extreme also act only on CHANGED; Midnight Club 3 takes anything but
@@ -479,7 +486,7 @@ auto Kernel::keyboard(u32 parameters) -> u32 {
     if(!memory.reaches(field, KeyboardFieldSize)) break;
     std::vector<u16> text = keyboardText(memory, memory.read(4, field + 32));
     bool blank = std::all_of(text.begin(), text.end(), [](u16 c) { return c == ' ' || c == 0x3000; });
-    std::vector<u16> nickname = keyboardConform({'P', 'S', 'P'}, memory.read(4, field + 16));
+    std::vector<u16> nickname = keyboardConform({'P', 'S', 'P'}, memory.read(4, field + 16), 1);
     if(blank && !nickname.empty()) text = nickname;
     keyboardField(field, text);
     memory.write(4, field + 44, KeyboardChanged);

@@ -547,10 +547,11 @@ static auto atracSetAndGetID(Kernel& kernel, u32 buffer, u32 readSize, u32 buffe
 
 //A size the library takes as negative (its top bit set) is taken as reaching to the end of the memory the buffer is in:
 //7th Dragon 2020-II gives 0xffffffff for the file it plays on its character's certificate, read whole into the
-//buffer, and waits for good for the sound the library would refuse (Tales of VS does the same, PPSSPP notes).
+//buffer, and waits for good for the sound the library would refuse (Tales of VS does the same, PPSSPP notes). A
+//buffer where there's no memory is refused as before, as no file.
 auto Kernel::sceAtracSetDataAndGetID() -> void {
   u32 buffer = arg(0), size = arg(1);
-  if(s32(size) < 0) {
+  if(s32(size) < 0 && memory.reaches(buffer, 1)) {
     u32 reach = 0;
     for(u32 bit = 1u << 30; bit; bit >>= 1) {
       if(memory.reaches(buffer, reach | bit)) reach |= bit;

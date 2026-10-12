@@ -317,21 +317,24 @@ static auto controllerRightStick() -> void {
   CHECK(right(0) == (192 << 8 | 64) && right(1) == 0x8080 && right(2) == 0x8080, true);
   CHECK(zeros(0) && zeros(1) && zeros(2), true);
   CHECK(m.system.memory.read(4, Buffer + 4), ~0u);              //(negative: nothing held)
-  //a state: the samples it holds read centred once loaded; the next takes the stick
+  //a state holds none of it (saved again after the stick and every sample's right values change, it's the same
+  //bytes); loaded back into this machine, whose newest sample holds 1 and 2, its samples read centred; the next takes
+  //the stick
   m.kernel.controller.rightX = 1, m.kernel.controller.rightY = 2;
   vblank();
   auto state = saveState(m);
-  KernelMachine loaded;
-  CHECK(loadState(loaded, state), true);
-  CHECK(saveState(loaded) == state, true);                      //(the layout as it was: nothing more in it)
-  loaded.call("sceCtrlPeekBufferPositive", {Buffer, 1});
-  CHECK(loaded.system.memory.read(1, Buffer + 10) == 128 && loaded.system.memory.read(1, Buffer + 11) == 128, true);
-  CHECK(loaded.system.memory.read(1, Buffer + 8), 200);         //(the left stick is kept)
-  loaded.kernel.controller.rightX = 3, loaded.kernel.controller.rightY = 4;
-  loaded.kernel.cycles = loaded.kernel.nextVblank;
-  loaded.kernel.events();
-  loaded.call("sceCtrlPeekBufferPositive", {Buffer, 1});
-  CHECK(loaded.system.memory.read(1, Buffer + 10) == 3 && loaded.system.memory.read(1, Buffer + 11) == 4, true);
+  m.kernel.controller.rightX = 99;
+  for(auto& sample : m.kernel.controller.samples) sample.rightX = 7, sample.rightY = 9;
+  CHECK(saveState(m) == state, true);
+  for(auto& sample : m.kernel.controller.samples) sample.rightX = 1, sample.rightY = 2;
+  CHECK(loadState(m, state), true);
+  m.call("sceCtrlPeekBufferPositive", {Buffer, 1});
+  CHECK(right(0), 0x8080);
+  CHECK(m.system.memory.read(1, Buffer + 8), 200);              //(the left stick is kept)
+  m.kernel.controller.rightX = 3, m.kernel.controller.rightY = 4;
+  vblank();
+  m.call("sceCtrlPeekBufferPositive", {Buffer, 1});
+  CHECK(right(0), 4 << 8 | 3);
 }
 
 //The latch: presses and releases between reads, the buttons held and not held at some sample meanwhile, and how many

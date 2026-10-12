@@ -268,9 +268,9 @@ static auto frontMessageRefused() -> void {
 
 //The keyboard: each field as the game gave it (its description and text as UTF-8, the most it takes: its room less
 //the NUL, or its limit where that's less, its input types, lines and language); answered, each field's text as
-//entered (UTF-8 to UTF-16, characters the PSP hasn't left out, as its input types take it, cut to its most), CHANGED
-//and the result 0; backed out
-//of, each CANCELLED and its output as it was. Texts for another count of fields are refused.
+//entered (UTF-8 to UTF-16, characters the PSP hasn't left out, as its input types and lines take it, cut to its
+//most), CHANGED and the result 0; backed out of, each CANCELLED and its output as it was. Texts for another count of
+//fields are refused.
 static auto frontKeyboard() -> void {
   FrontMachine m;
   auto& memory = m.system.memory;
@@ -361,19 +361,22 @@ static auto frontKeyboard() -> void {
   CHECK(m.kernel.dialogAnswer(answer) && !m.update("sceUtilityOsk"), true);
   CHECK(output(0) == u"ab" && result(0) == 2, true);
   CHECK(m.close("sceUtilityOsk"), true);
-  //as each field's input types take it (7th Dragon 2020's name: full-width letters alone): ASCII letters full-width,
-  //the space too, the digit (no full-width digits here) left out; a web address's digits and signs as they are; a
-  //field of small Latin letters taking a full-width capital as a small ASCII one
-  fields = {{u"Input name.", u"", 0x0c00, 1, 48, 8}, {u"URL", u"", 0x8'0000, 1, 48, 16}, {u"ID", u"", 4, 1, 48, 8}};
+  //as each field's input types and lines take it (7th Dragon 2020's name: full-width letters alone): ASCII letters
+  //full-width, the space too, the digit (no full-width digits here) left out; a web address's digits and signs as
+  //they are; a field of small Latin letters taking a full-width capital as a small ASCII one, a line break not in
+  //one line; in two, and in a field taking all, the break kept
+  fields = {{u"Input name.", u"", 0x0c00, 1, 48, 8}, {u"URL", u"", 0x8'0000, 1, 48, 16}, {u"ID", u"", 4, 1, 48, 8},
+            {u"Note", u"", 4, 2, 48, 8}, {u"Any", u"", 0, 1, 48, 8}, {u"Any2", u"", 0, 2, 48, 8}};
   setUp();
   CHECK(m.start("sceUtilityOsk") && !m.update("sceUtilityOsk"), true);
   answer = {};
   answer.id = m.kernel.dialogShownID();
-  answer.texts = {"Bob 7", "a.b/1?x=2", "\xef\xbc\xb0Sp"};
+  answer.texts = {"Bob 7", "a.b/1?x=2", "\xef\xbc\xb0S\np", "a\nb", "a\nb", "a\nb"};
   CHECK(m.kernel.dialogAnswer(answer) && !m.update("sceUtilityOsk"), true);
   CHECK(output(0) == u"\uff22\uff4f\uff42\u3000" && result(0) == 2, true);
   CHECK(output(1) == u"a.b/1?x=2" && result(1) == 2, true);
   CHECK(output(2) == u"psp" && result(2) == 2, true);
+  CHECK(output(3) == u"a\nb" && output(4) == u"ab" && output(5) == u"a\nb", true);
   CHECK(m.close("sceUtilityOsk"), true);
 }
 

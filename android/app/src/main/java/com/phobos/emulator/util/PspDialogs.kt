@@ -245,20 +245,40 @@ private fun PspKeyboardField.conform(c: Char): Char? {
     return listOf(c, pspOtherWidth(c), other, pspOtherWidth(other)).firstOrNull { pspInputTypes(it) and types != 0 }
 }
 
+/** Whether the PSP has [c] at all: not half of a pair (past U+FFFF), not a control character but a line break. */
+private fun PspKeyboardField.holds(c: Char): Boolean =
+    !Character.isSurrogate(c) && (!Character.isISOControl(c) || (c == '\n' && lines > 1))
+
 /**
- * [text] as the field takes it: characters the PSP doesn't have (past U+FFFF, which take two UTF-16 units, and
- * control characters but a field of several lines' line breaks) left out, the rest as its input types take them
- * ([conform]: ASCII letters full-width for a field of full-width letters, say, digits alone for a field of digits);
- * no more than its [PspKeyboardField.maxLength].
+ * [text] as the field takes it, as it's entered: characters the PSP doesn't have ([holds]) left out, the rest as its
+ * input types take them ([conform]: ASCII letters full-width for a field of full-width letters, say, digits alone
+ * for a field of digits); no more than its [PspKeyboardField.maxLength].
  */
 fun PspKeyboardField.accept(text: String): String {
     val kept = StringBuilder()
     for (c in text) {
-        if (Character.isSurrogate(c)) continue
-        val typed = if (Character.isISOControl(c)) c.takeIf { c == '\n' && lines > 1 } else conform(c)
-        if (typed == null) continue
+        if (!holds(c)) continue
+        val typed = if (Character.isISOControl(c)) c else conform(c) ?: continue
         if (kept.length >= maxLength) break
         kept.append(typed)
+    }
+    return kept.toString()
+}
+
+/**
+ * [text] as the field holds it while the player types: what the PSP doesn't have left out, and nothing past what
+ * makes [PspKeyboardField.maxLength] once entered ([accept]), but the rest as typed, so that Android's keyboard
+ * composes as it does (romaji into kana, kanji, words), its text not changed under it key by key.
+ */
+fun PspKeyboardField.typing(text: String): String {
+    val kept = StringBuilder()
+    var entered = 0
+    for (c in text) {
+        if (!holds(c)) continue
+        val counts = Character.isISOControl(c) || conform(c) != null
+        if (counts && entered >= maxLength) break
+        kept.append(c)
+        if (counts) entered++
     }
     return kept.toString()
 }

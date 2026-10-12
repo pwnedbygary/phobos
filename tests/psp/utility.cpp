@@ -1404,9 +1404,9 @@ static auto keyboard() -> void {
 }
 
 //The nickname as each field's input types (SceUtilityOskData's at 16) take it, as a PSP's keyboard types it: full-width
-//where only full-width letters are taken (7th Dragon 2020 and 2020-II, 0x0c00, their ASCII "PSP" a nameless hero and
-//a certificate stuck for good), in the one case taken, ASCII where ASCII is among them; a field of full-width spaces
-//is blank too; one taking none of its letters (digits, hiragana) keeps its own text. A game's own text stays as it is.
+//where only full-width letters are taken (7th Dragon 2020 and 2020-II, 0x0c00: their ASCII "PSP" a nameless hero), in
+//the one case taken, ASCII where ASCII is among them; a field of full-width spaces is blank too; one taking none of
+//its letters (digits, hiragana) keeps its own text. A game's own text stays as it is.
 static auto keyboardInputTypes() -> void {
   KernelMachine m;
   u64 millisecond = Kernel::CPUFrequency / 1000;

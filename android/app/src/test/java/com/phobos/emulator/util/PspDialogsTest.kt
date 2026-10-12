@@ -118,6 +118,22 @@ class PspDialogsTest {
     }
 
     @Test
+    fun keyboardFieldsHoldWhatsTypedUntilEntered() {
+        // While typing, the field holds what Android's keyboard composes, so romaji on its way to kana stays as typed
+        // in a field of hiragana; only what the PSP hasn't got at all goes, and nothing past what the limit enters.
+        val kana = PspKeyboardField("", "", 4, PSP_INPUT_HIRAGANA, 1, 1)
+        assertEquals("\u3042k", kana.typing("\u3042k"))
+        assertEquals("", kana.accept("k"))
+        val name = PspKeyboardField("Input name.", "", 3, 0x0c00, 1, 1)
+        assertEquals("Bob", name.typing("Bob"))  // (entered full-width, as the field takes it)
+        assertEquals("\uff22\uff4f\uff42", name.accept(name.typing("Bob")))
+        assertEquals("B7ob", name.typing("B7obby"))  // (the digit counts nothing: the field drops it)
+        assertEquals("ab", name.typing("a\uD83C\uDFAE\nb"))  // (a game pad and a line break: not in one line)
+        assertEquals("a\nb", PspKeyboardField("", "", 8, 0, 2, 0).typing("a\nb"))
+        assertEquals("", PspKeyboardField("", "", 0, 0, 1, 0).typing("anything"))
+    }
+
+    @Test
     fun confirmFollowsTheGamesConvention() {
         val cross = request(PspDialogRequest.SAVE_LOAD, emptyList())
         assertEquals(PhobosCore.Input.A, cross.confirmBit())  // (the app's A is the PSP's cross)

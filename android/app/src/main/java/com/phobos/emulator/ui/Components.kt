@@ -523,7 +523,7 @@ fun PspDrawingThreadsItem(current: Int, onSelect: (Int) -> Unit) {
 fun PspRightStickItem(current: PspRightStick, onSelect: (PspRightStick) -> Unit) {
     SettingsDropdownItem(
         title = "PSP Right Stick",
-        description = "What a controller's right stick does in a PSP game, since a PSP has one stick. ${current.description} Whatever the choice, games patched to read a second stick (such as Armored Core's True Analogs mods) read it too. Applies immediately.",
+        description = "What a controller's right stick does in a PSP game, since a PSP has one stick. ${current.description} Whatever the choice, games patched to read a second stick (such as Armored Core's True Analogs mods) read it too, so Off suits them: with Analog stick it would move both. Applies immediately.",
         current = current,
         options = PspRightStick.entries,
         label = { it.label },

@@ -258,8 +258,8 @@ auto numberText(u32 number) -> std::string {
 
 //A press item, "F:C": the frame, and the control it names: a button (its node's name, "!" after it for a
 //release), or a stick's axis with its value ("L-StickX:V", the value -32768 to 32767, the front end's range, as
-//the system takes it), the right stick's too ("R-StickX:V", "R-StickY:V": the one games read from SceCtrlData's
-//bytes 10 and 11, ares/psp/kernel/ctrl.cpp), each axis's node named with a space ("L-Stick X").
+//the system takes it), the right stick's too ("R-StickX:V", "R-StickY:V": the one patched games read from
+//SceCtrlData's bytes 10 and 11, ares/psp/kernel/ctrl.cpp), each axis's node named with a space ("L-Stick X").
 struct Press {
   u32 frame = 0;
   std::string name;
