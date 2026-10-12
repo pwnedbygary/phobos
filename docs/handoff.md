@@ -57,6 +57,81 @@ Stardust Portable draw far fewer frames, unconfirmed on a PSP).
 - **Round 7** (part 75's list): the stepper over a long run, positions divided by w, the cosine's last bits,
   non-power-of-two divisions, q of 0 with a clamped texture, through mode's shared exponent, chord 127's start.
 
+## PSP: the system's dialogs shown by the app — messages, the keyboard, saving and loading — 2026-10-12
+
+Branch `cursor/psp-dialogs-2b67`, on `cursor/psp-merge-212-219-2b67` (master with #212 to #219, PR #220, which master
+has since merged with the same tree). docs/psp-core.md, part 73, has the evidence. Clean room: pspautotests'
+recordings, pspsdk's headers, PPSSPP's dialog code read only as a description of the PSP's dialogs, Kenka Bancho's own
+code; JPCSP not read.
+Save states go to StateVersion 26 (15 to 25 still load).
+- **Before**: the kernel answered every dialog at its first Update: messages Yes, the keyboard the field's own text
+  (or "PSP"), the save dialogs that ask on their own (a list's first name), so a player couldn't type a name, choose a
+  save or say no.
+- **The kernel** (`ares/psp/kernel/dialogs.cpp`, the option "Dialogs"): a message, the keyboard and the save modes
+  that ask the player (load, save and delete from a list, list all delete, and one save's load, save and delete) post
+  a request (`dialogID()`, `dialog()`, `dialogBytes()`) and run until the front end answers (`answer()`), the game
+  updating every frame meanwhile; the answer finishes the dialog with the PSP's results (the message's button by its
+  size's rules, the keyboard's texts and CHANGED or CANCELLED, the chosen save loaded, saved or deleted, its name
+  written back, LOAD_NO_DATA and DELETE_NO_DATA after "There is no save data.", CANCEL for backing out, a list delete
+  going on until nothing's left); messages a PSP doesn't show finish with BADOPTION or ERRORCODEINVALID at their 9th
+  Update, as recorded. Each request has its own number; answers to another, or not among its choices, are refused. An
+  abort, a reset or a loaded state withdraws it, a dialog still running asking again at its next Update. Without the
+  option (the runner, the tests, the desktop and libretro hosts) every answer is as before.
+- **Kenka Bancho's empty stick**: its LOAD GAME is a list load of "SGL" (SGL001 to SGL007); its code takes 0 as a
+  load, 1 back to its title, anything else as its "An error has occurred". No recording lists nothing to load, but a
+  PSP's neighbouring cases (list deletes that emptied their list, a single load of nothing) and PPSSPP's notes give
+  the group's NO_DATA after the PSP's own "There is no save data.": so LOAD_NO_DATA is kept (it was right), and what
+  was missing, the PSP's notice, is now the app's. The game's error then follows, as on a PSP.
+- **The app**: `ui/PspSystemDialogs.kt` draws them as the app's `PhobosAlertDialog`s over the running game (every
+  theme, retrowave too): a message with Yes/No (No first where asked), OK or no button, and Back; the keyboard as text
+  fields with Android's keyboard, the field's description as the title, its length limit and digits-only fields kept;
+  saving and loading as a list of saves (ICON0, save title, detail, date, size; "New Data" with the game's icon), with
+  the PSP's questions (overwrite, delete), "There is no save data." and "The data is corrupted.". The D-pad moves, the
+  mapped PSP buttons confirm and back out with circle confirming where the game says so (its buttonSwap 0), Start
+  enters text, the pause hotkey opens the pause menu (the dialog waits behind it); touch works throughout.
+  `MainViewModel.followPspDialogs()` polls the request's number every 50 ms; JNI `pspDialogId()`, `pspDialog()`,
+  `answerPspDialog()` carry the core's byte form (`util/PspDialogs.kt` parses and answers it). Each dialog takes the
+  focus from inside its own window's content, as a controller's keys need.
+- **Checks**: `tests/psp/run-tests.sh` (sanitizers) 461 groups, 0 failures; `tests/allegrex/run-tests.sh` 58, 0;
+  `tests/psp/ares/run-tests.sh` 318 checks, 0 failed; Android `:app:compileModernReleaseKotlin
+  :app:testModernDebugUnitTest` 299 tests, 0 failures; the touched native files built with NDK 28.2 for arm64. Without
+  a front end, nine runner runs (Kenka Bancho, Gundam vs. Gundam NEXT PLUS, Valkyria Chronicles II twice, Ridge Racer
+  2 twice, Dissidia) leave the same notes, dialog-call logs and memory-stick bytes as the base's runner, the clock
+  pinned. With a scripted front end, Kenka Bancho, Ridge Racer 2 (named, saved, backed out of), Daxter, Gundam, Space
+  Invaders Extreme, Disgaea Infinite, Ys Seven, The Sims 2 and Bubble Bobble Evolution each go on once answered. A
+  scratch Robolectric test sends a controller's keys to each dialog's window: all answered. No device used.
+- **Review**: an independent reviewer found NEEDS CHANGES (a list mode without a list offered nothing; the dialogs
+  took the focus too early for a controller; the docs' checks; the comparison's build; and lows), all resolved; a
+  delta review then asked for two statements corrected and five nits, all taken, and a third passed. A later fix (a
+  single save's overwrite and delete questions now start at No, as on a PSP) had its own delta review (psp-core.md
+  part 73, "Review"); the verdicts are in the commit messages.
+- **APK for the RP6**: the release build of these sources, version code 205223 (above the installed 205182 and
+  master's nightly-205221), named 2.0.0-psp-dialogs, signed with the repository's release key, so it installs over
+  the current app keeping its data. SHA-256
+  cd8f6b307d90292540bb325f7cb830badc4d03a31d894e137bdf0dbe65e80779; on the Mac (not published) in
+  `~/phobos-work/scratch/dialogs/apk-tree/android/app/build/outputs/apk/modern/release/`.
+- **On the RP6, to check**: (1) Kenka Bancho, LOAD GAME on an empty stick: "There is no save data." appears over the
+  game; OK (or the back button) closes it and the game shows its own error, Cancel and return goes to the title.
+  (2) Ridge Racer 2's first boot: "Driver Name (7 CHAR MAX.)" opens with XEVIOUS and Android's keyboard; no more than
+  7 characters go in; OK keeps the typed name (seen in its profile), Cancel goes back to its title; then "Do you want
+  to save this data?" for its first save, Yes chosen first; if a later save asks "Do you want to overwrite this
+  data?", No must be chosen first. (3) Daxter (Start, then Cross at its menu) or Resistance: Retribution: a
+  list of save slots, all "New Data"; choose one, then on the next boot the same list shows the save with its icon,
+  title, detail, date and size, and choosing it asks "Do you want to overwrite this data?" with No first; No goes back
+  to the list. (4) A list load with saves (Disgaea Infinite, Ys Seven or Cladun after saving): the list, the newest
+  first, D-pad up and down, confirm loads. (5) A message: Dissidia's "This game has an autosave function." with OK; a
+  Yes/No question in any game, the D-pad moving between them. (6) The confirm button: Gundam vs. Gundam NEXT PLUS
+  (Japanese, its dialogs set circle to confirm) asks for a name early on (an 8-character keyboard): its foot shows
+  "○ Enter ✕ Cancel" and circle enters; in Ridge Racer 2 (English) cross enters. (7) The pause hotkey with a dialog
+  up opens the pause menu, and resuming brings the dialog back; Save State while a dialog waits, then Load State: the
+  dialog comes back. (8) The
+  dialogs in two or three themes (retrowave, a pixel theme, a light one), full screen and not, portrait and
+  landscape; touch alone. (9) A game with no dialog runs as before (nothing appears). (10) The controller first:
+  as each kind of dialog opens (a message, the keyboard, a save list), don't touch the screen; the D-pad must move
+  the ring and confirm and back must answer at once, and the keyboard must open Android's keyboard by itself. If the
+  controller does nothing, logcat (tag Phobos) says "PSP dialog N: no focus, so no controller".
+- Scratch: `~/phobos-work/scratch/dialogs`.
+
 ## Merged into master: #212 to #219 — 2026-10-11
 
 Branch `cursor/psp-merge-212-219-2b67`: master plus #212 (speed 8), #213 (64 controller samples), #214 (PSP pause-menu

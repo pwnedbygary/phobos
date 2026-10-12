@@ -45,4 +45,17 @@ namespace ares::PlayStationPortable {
 
 namespace ares::PlayStationPortable {
   #include <psp/system/system.hpp>
+
+  //The system's dialogs shown by the host (docs/psp-core.md, part 73), where it set the option "Dialogs" before
+  //loading. dialogID(): the number of the request outstanding (0: none), cheap enough to ask every frame; dialog():
+  //the request (Kernel::DialogRequest: what to show); answer(): the player's answer to it, false if it answers no
+  //request outstanding (taken down, made afresh, or answered already) or isn't one of the request's choices. The
+  //dialog runs, the game with it, until it's answered. dialogBytes() and answer(bytes): the same in the byte form
+  //Kernel::dialogBytes() and dialogAnswerFrom() describe (no bytes: none outstanding), for a host in another language.
+  //Any thread.
+  auto dialogID() -> u32;
+  auto dialog() -> Kernel::DialogRequest;
+  auto answer(const Kernel::DialogAnswer& answer) -> bool;
+  auto dialogBytes() -> std::vector<u8>;
+  auto answer(const std::vector<u8>& bytes) -> bool;
 }

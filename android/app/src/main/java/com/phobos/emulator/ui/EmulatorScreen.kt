@@ -116,6 +116,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     val perfStats by viewModel.perfStats.collectAsState()
     val currentSlot by viewModel.currentSlot.collectAsState()
     val videoGeometry by viewModel.videoGeometry.collectAsState()
+    val pspDialog by viewModel.pspDialog.collectAsState()
 
     var showQuitDialog by remember { mutableStateOf(false) }
     var editingTouchLayout by remember { mutableStateOf(false) }
@@ -299,6 +300,24 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             viewModel.emulatorScreenGone(screen)
             // The game stays loaded (paused) when leaving the screen — the swap-screen hotkey
             // relies on it. Unloading only happens through the quit dialog.
+        }
+    }
+
+    // The PSP's system dialog the game waits on (a message, the keyboard, saving or loading), over the running game;
+    // hidden while the pause menu (which its pause hotkey opens) or a layout editor is up. The game's buttons are let
+    // go of as it opens, and the game takes the controller back once it's answered.
+    val shownPspDialog = pspDialog?.takeIf { isLoaded && !isPaused && !editingTouchLayout && !editingHud }
+    LaunchedEffect(shownPspDialog?.id) {
+        if (shownPspDialog != null) {
+            GameInputState.releaseAllButtons()
+            pressedKeys = emptySet()
+        } else if (isLoaded && !isPaused) {
+            takeFocus()
+        }
+    }
+    shownPspDialog?.let { request ->
+        PspSystemDialog(request, controls, settings.fullScreenMode, onPause = { viewModel.setPause(true) }) {
+            viewModel.answerPspDialog(it)
         }
     }
 
