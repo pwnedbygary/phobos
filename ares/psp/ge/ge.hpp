@@ -301,9 +301,12 @@ struct GE {
       //starts (in sixteenths), by a step a pixel
       f64 columnFirst, columnStep, rowFirst, rowStep;
       s32 columnStart, rowStart;
-      //3D: the corners' sixteenths, 1 / w across x, the coordinate across x over w, the one down y over w
+      //3D: the corners' sixteenths; s (the coordinate across x over w) and q (its divisor) at the left and right
+      //corners, and t (the one down y over w) at the top and bottom ones, each as 15-bit integers on its unit, as a
+      //triangle's corners take them (draw.cpp)
       s32 left, right, top, bottom;
-      f64 leftInverse, rightInverse, leftAcross, rightAcross, topDown, bottomDown;
+      s32 leftS, rightS, leftQ, rightQ, topT, bottomT;
+      float sUnit, qUnit, tUnit;
     };
     //A color channel, the fog or the depth stepped across a triangle (draw.cpp's stepped()): its value at (startX,
     //startY), and its steps a sixteenth of a pixel across and down, all in 16384ths of a level (or a depth).
@@ -643,6 +646,9 @@ struct GE {
   //a float's rounding).
   u64 owedPixels = 0, owedPrimitives = 0;
   auto owe(u64 pixels) -> void { owedPixels += pixels, owedPrimitives++; }
+  //The GE's reciprocal (draw.cpp's geReciprocal()), and one of its chords' start and slope, for the tests.
+  static auto reciprocal(float x) -> float;
+  static auto reciprocalChord(u32 chord) -> std::pair<s32, s32>;
 
   Stop pending = Stop::Ended;  //what the next END means: a FINISH or SIGNAL before it changes it
   std::set<std::string> noted;

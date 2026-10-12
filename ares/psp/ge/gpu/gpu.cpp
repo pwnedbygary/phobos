@@ -911,8 +911,9 @@ auto GPU::triangle(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c
 //A sprite: two triangles over exactly the pixels the GE's rectangle() covers (its job's), with its depth, color and
 //fog (each half its own: draw.cpp), the texture turned a quarter for bottom-left and top-right corners. In 2D its
 //texture coordinates are stepped in the shader as the GE steps them (Vertex's first, step and start); in 3D they
-//follow the perspective as the GE's do: 1 / w and the coordinate across x over w running straight across x, the
-//one down y over w straight down y, which is what the GPU's interpolation does with these corners' values.
+//follow the perspective as the GE's do: q (about 1 / w) and s (the coordinate across x over w) running straight
+//across x, t (the one down y over w) straight down y (the GE's corners' values, spriteJob()), which is what the
+//GPU's interpolation does with these corners' values, dividing by q with its own divide.
 auto GPU::sprite(const GE::Job& job) -> void {
   if(!drawing || job.firstX > job.lastX || job.firstY > job.lastY) return;
   auto& s = job.sprite;
@@ -932,10 +933,10 @@ auto GPU::sprite(const GE::Job& job) -> void {
     v.x = x + s32(column), v.y = y + s32(row);
     if(divided) {
       f64 alongX = f64(x * 16 - s.left) / (s.right - s.left), alongY = f64(y * 16 - s.top) / (s.bottom - s.top);
-      f64 inverse = s.leftInverse + (s.rightInverse - s.leftInverse) * alongX;
-      f64 across = s.leftAcross + (s.rightAcross - s.leftAcross) * alongX;
-      f64 down = s.topDown + (s.bottomDown - s.topDown) * alongY;
-      v.w = 1 / inverse;
+      f64 q = (s.leftQ + (s.rightQ - s.leftQ) * alongX) * s.qUnit;
+      f64 across = (s.leftS + (s.rightS - s.leftS) * alongX) * s.sUnit;
+      f64 down = (s.topT + (s.bottomT - s.topT) * alongY) * s.tUnit;
+      v.w = q > 0 ? 1 / q : 1;
       v.u = (s.turned ? down : across) * v.w, v.v = (s.turned ? across : down) * v.w;
     }
     return v;
