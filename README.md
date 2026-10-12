@@ -41,7 +41,7 @@
 | Neo Geo (MVS/AES) | ✅ Graphics, controls and audio (KOF2003 verified @59.2 FPS); per-title compat matrix → [docs/neo-geo-compatibility.md](docs/neo-geo-compatibility.md) |
 | Neo Geo CD | ✅ Boots, renders and has sound (Samurai Shodown verified), with the CDZ's double-speed drive and an optional faster loading speed |
 | **Experimental (new in 2.0)** | |
-| PlayStation Portable | 🧪 Phobos's own core: an exact software renderer and two Vulkan renderers, ISO/CSO/CHD and more, sound, music and movies, save states. Of 266 retail games run in the test runner, 194 reach a menu or gameplay and 71 play their opening movies → [PlayStation Portable](#playstation-portable-experimental) |
+| PlayStation Portable | 🧪 Phobos's own core: an exact software renderer and two Vulkan renderers, ISO/CSO/CHD and more, sound, music and movies, save states. Of 266 retail games run in the test runner, 197 reach a menu or gameplay and 68 play their opening movies → [PlayStation Portable](#playstation-portable-experimental) |
 | **Added, not yet tried with a game on-device** | |
 | Mega CD 32X, Super Game Boy, Arcade (Aleck64, SG-1000A) | Load paths, firmware slots and touch layouts are in |
 | LaserActive (Mega LD, PC Engine LD) | `.mmi` discs read straight from the SD card; both PAC BIOSes boot (60 FPS on the RP6), and Side in the pause menu turns the disc over |
@@ -95,9 +95,10 @@ polished.
   [Building](#building-phobos)).
 - **Saves and states:** the memory stick is a folder, shared by every game or at a path you choose. Save states are
   versioned, so states saved by earlier builds keep loading.
-- **Controls:** the PSP's own touch layout, and controllers mapped as on every other system.
+- **Controls:** the PSP's own touch layout, and controllers mapped as on every other system, whose right stick can
+  be the PSP's face buttons, its D-pad or its analog stick (PSP Right Stick, in Settings and the pause menu).
 - **Compatibility:** in the [compatibility report](docs/psp-compatibility.md)'s runs (each of 266 retail games run
-  headless for a minute of PSP time), 194 reach a menu or gameplay and 71 play their opening movies, and the last plays
+  headless for a minute of PSP time), 197 reach a menu or gameplay and 68 play their opening movies, and the last plays
   its opening a few seconds later; none stops at a missing system function. Speed is measured on a Retroid Pocket 6
   (Snapdragon 8 Gen 2) as the work goes; docs/psp-core.md has the tables.
 - **Tested in CI:** the Allegrex's instructions, the kernel's functions, the GE against the PSP's measurements, save

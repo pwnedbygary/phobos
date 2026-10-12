@@ -99,7 +99,8 @@ auto Memory::serialize(serializer& s) -> void {
 
 //Where the size bytes from address are in the host's memory, or nullptr if any of them has nothing behind it (or
 //they run past the end of an area, or past a 32-byte piece of VRAM's second or fourth copy, which rearrange them).
-auto Memory::pointer(u32 address, u32 size) -> u8* {
+//load: they're about to be read, not written (read()).
+auto Memory::pointer(u32 address, u32 size, bool load) -> u8* {
   u32 physical = address & 0x1fff'ffff;
   if(physical >= RAMBase && physical - RAMBase < ram.size()) {
     u32 offset = physical - RAMBase;
@@ -108,10 +109,11 @@ auto Memory::pointer(u32 address, u32 size) -> u8* {
   if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow) {
     if(!knownDrawn && vramBusy) {  //(the first and third copies: the bytes; others: the 16 KiB they rearrange)
       u32 seen = (physical - VRAMBase) % VRAMSize, last = std::min<u32>(seen + size, VRAMSize) - 1;
-      if((physical - VRAMBase) / VRAMSize & 1) seen &= ~0x3fffu, last |= 0x3fff;
+      bool depthView = (physical - VRAMBase) / VRAMSize & 1;
+      if(depthView) seen &= ~0x3fffu, last |= 0x3fff;
       for(u32 page = seen / PageSize; page <= last / PageSize; page++) {
         if(!vramPageBusy(page)) continue;
-        if(vramDrawnOver && !vramDrawnOver(seen, last)) break;
+        if(vramDrawnOver && !vramDrawnOver(seen, last, load && depthView)) break;
         if(finishDrawingOver) finishDrawingOver(seen, last);
         else finishDrawing();
         break;
@@ -146,7 +148,7 @@ auto Memory::reaches(u32 address, u32 size) -> bool {
 //functions use them too, at whatever address a game gave, so an access can cross a 32-byte piece of VRAM's second or
 //fourth copy: that one goes a byte at a time.
 auto Memory::read(u32 size, u32 address) -> u32 {
-  u8* bytes = pointer(address, size);
+  u8* bytes = pointer(address, size, true);
   if(!bytes && size > 1 && reaches(address, size)) {
     u32 value = 0;
     for(u32 n = 0; n < size; n++) value |= read(1, address + n) << 8 * n;

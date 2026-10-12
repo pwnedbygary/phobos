@@ -471,6 +471,7 @@ private:
   auto own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;
   auto textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken) -> u32;
   auto settings(const GE::Look& look) -> void;
+  auto clearStencil(u32 color) -> void;
   auto emit(const Vertex* vertices, u32 count) -> void;
   auto vertex(const GE::Vertex& v, bool perspective) const -> Vertex;
   auto transformed(const GE::Transform& t) -> u32;  //(mesh()'s Transformed block for t: its index in transforms)

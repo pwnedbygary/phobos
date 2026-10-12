@@ -231,10 +231,10 @@ them for changes to `ares/psp/`, nall or ares's types).
 one function each, named after their mnemonics. The register file is eight 4x4 matrices of floats; a 7-bit
 register number names a single, a row or column vector (pair, triple, quad) or a matrix, by the operand size
 (`vfpuLine()`, `vfpuSquare()`). Source prefixes swizzle, take absolute values, negate or substitute constants;
-the destination prefix saturates or masks; every VFPU instruction but the prefix ones uses them up. As a PSP does
-it, the math functions take the prefixes on their last lane alone (`vfpuLastLaneFirst()`); a swizzle past an
-operand's size gives 0 in its lane, or leaves that lane's product out of the adders (`vdot`, `vhdp`, `vfad` and
-`vavg`), which add up all four lanes whatever the size (`outsideLanes()`, `vfpuReadFour()`).
+the destination prefix saturates or masks; every VFPU arithmetic instruction uses them up (which others do, below).
+As a PSP does it, the math functions take the prefixes on their last lane alone (`vfpuLastLaneFirst()`); a swizzle
+past an operand's size gives 0 in its lane, or leaves that lane's product out of the adders (`vdot`, `vhdp`, `vfad`
+and `vavg`), which add up all four lanes whatever the size (`outsideLanes()`, `vfpuReadFour()`).
 Denormals count as zero both ways: a result is rounded to a float's 24 bits as if exponents went on below 2^-126, the
 smallest normal number, then flushed to a zero of its sign if it's still below (`vfpuBits()`; measured on products,
 taken to hold for quotients). Only round-to-nearest exists. The rest was measured too (psp-vfpu-measurements.md,
@@ -260,10 +260,11 @@ Stories' characters twitched).
 
 Not checked against hardware: `vrot` on its own (it uses vsin's and vcos's), `vwbn` (implemented from its
 description; no test), and what reserved size combinations do (they raise ReservedInstruction, and leave the
-prefixes). Which instructions use up the prefixes: every VFPU
-arithmetic instruction, and `vnop`, as pspdev's documentation says (PPSSPP keeps them through `vnop`, but the
-documentation rests on tests on hardware); not `vsync`, `vflush`, `vmfvc` and `vmtvc`, which the documentation
-doesn't cover, as in PPSSPP; nor the loads, stores and moves to integer registers.
+prefixes). Which instructions use up the prefixes: every VFPU arithmetic instruction (`viim` and `vfim` too); not
+`vsync`, `vflush`, `vmfvc` and `vmtvc`, which the documentation doesn't cover, as in PPSSPP; not `vnop` either (since
+part 72: the documentation says it does, but none of its tests shows it, and Metal Gear Acid 2's code needs a prefix
+kept through two of them, as PPSSPP keeps it); nor the loads, stores, VFPU branches, and moves to and from integer
+registers.
 
 Tests: `tests/allegrex/vfpu.cpp`, twelve groups (addressing, arithmetic, prefixes, products, comparisons,
 conversions, functions, matrices, moves, more instructions worked out by hand from the descriptions, the random
@@ -1837,8 +1838,9 @@ a module); our own code.
   third syscall in the kernel's trampoline, which ends and deletes its thread; one that ends with
   `sceKernelExitThread` instead, or that another thread terminates (part 17's `sceKernelTerminateThread` and
   `sceKernelTerminateDeleteThread`), is deleted all the same, as the PSP's module manager deletes the thread it made
-  however it ends. The calling thread waits meanwhile, and then gets the module's ID, the function's result (or its
-  exit status) written where it asked. A module without the function starts (or stops) at once.
+  however it ends. The calling thread waits meanwhile, and then gets the module's ID (a stop's caller 0 since part
+  71, as a PSP gives), the function's result (or its exit status) written where it asked. A module without the
+  function starts (or stops) at once.
 - **Unloading** (`sceKernelUnloadModule`): a module never started, or stopped; its memory goes back to the user
   partition, and stubs linked to it go back to the kernel.
 - **Unloading itself** (`sceKernelSelfStopUnloadModule(exit status, argument size, argument)`, through
@@ -1905,7 +1907,8 @@ module_start and a module_stop; TESTUSER imports the function):
   started it gets its ID and 1. Refused while its module_start sleeps on another thread. The program, or code in no
   module, calling it leaves.
 - "modules exit threads": module_start and module_stop ending with `sceKernelExitThread(5)` and `(6)`: the caller
-  gets 5 and 6 as their results, and both threads and their stacks are gone, on both engines.
+  gets 5 and 6 as their results, where it asked for them, and both threads and their stacks are gone, on both
+  engines.
 - "modules entry points": a module without a module_start runs its ELF entry point when that's in it, and starts at
   once when it isn't; a module's thread parameters (three for module_start, two for module_stop) make its functions'
   threads, the options going over them but for their zeros.
@@ -8778,3 +8781,763 @@ of two rounds taking turns, God of War's battle 150 frames and its menu 60), Vul
 - Scratch: `~/phobos-work/scratch/speed7` (build-vk.sh; rp6.sh, rp6-all.sh and push/, the RP6's sessions; gputime-
   and the count patches; acc-host.sh, soft-all.sh, cmp4.py; tables67.py; mutate.sh, quick-tests.sh; logicbench.cpp;
   gcc.sh). Nothing of it is left on the RP6.
+
+## Part 68: WipEout without waiting for the GPU, the stencil as each format keeps it, and the emulation thread at 1x
+
+On branch `cursor/psp-speed8-2b67`, on top of speed 7's `cursor/psp-speed7-2b67` (part 67), whose tip `671072d6f` (with
+`cursor/psp-experimental-2b67` merged into it: PSP states layout 25) is the base of every number here. The task: the
+last wait for the GPU in WipEout Pure removed, each Vulkan frame of the bench scenes as it was (or, where that can't
+be, its accuracy against the software renderer no worse and what differs said); the emulation thread at 1x faster
+(profiled on the RP6: transform, vertex reading, the GE's commands, triangle setup, the CPU), behaviour exact; and two
+older differences of the GPU renderer's stencil (part 67's "Left"). Clean room: no PPSSPP code copied or translated,
+JPCSP's not read. Save states unchanged (StateVersion 25): nothing new is saved.
+
+### WipEout's last wait
+
+Part 65 left WipEout finishing the GPU once a frame (300 finishes in 300 frames of its race), the cause given as the
+CPU reading through VRAM's fourth copy where the bloom's buffers lie; no block transfer waits any more (the blur's
+five rows into the next buffer are a move since part 65). Logged (a scratch patch: every system call, each GE run
+and where it stopped, each wait in `Memory::pointer()` and what it read): just after a SIGNAL in its frame's list,
+after the 3D pass and before the bloom, the game reads its depth buffer (0x110000, 512 wide) through the fourth copy
+at the screen's middle (0x047321e0: 240, 136) and at a few more points, 17 loads a frame. Its bloom's buffers
+(0x110000 and 0x132000, 256 pixels wide, 8888) lie over those bytes, and the GPU had drawn them, so the first load
+finished everything: the waits and the read backs of five targets were 12.8% of the emulation thread on the RP6
+(`GPU::fill()`, `GPU::finish()`, the backend's run, `Kernel::picture()`).
+
+What the loads find: in the software renderer, the depth the 3D pass has just written (0x16 mostly, 0x539 to 0x546
+elsewhere). With the GPU, whose depth never reaches memory, the finish gave them the colors of the bloom of the frame
+before, put back over the depth buffer's bytes: 0 in all but 130 of 3,400 loads in 200 frames (0x505, 0x303, ...). So
+finishing never gave them what they ask for. Now (`Memory::pointer()`, `GE::drawnOver()`) a load through
+`Memory::read()` (the CPU's, an HLE function's small reads) through VRAM's second or fourth copy, the views the GE
+keeps its depth buffer in, waits only where drawing that writes memory's depth reaches it, the drawing threads'
+batches (exact, as before; with a renderer about, that wait finishes it too, as any did), and reads memory's bytes
+past a hardware renderer's pixels: 0 in every load of the bench scene, at 1x and 4x (the base's at 4x: 0 in all 1,700
+of 100 frames). Stores, loads through the first and third copies, and copies in and out (block transfers, HLE
+functions' buffers) wait as before. The rule goes by the view, not by what the bytes are: a game reading colors
+through those views (none known) would now read memory's older bytes. WipEout's race on the M1: 120 finishes in 120
+frames -> 1 (its first), 119 frames shown from the GPU (none before).
+
+At 1x every frame is as it was. At 4x it isn't, as a frame shown from memory isn't one shown from the GPU: the base
+finished every frame, and the picture shown was memory's, one of each pixel's 4x4 samples, scaled up (every 4x4
+block of its frames one color, 100%: WipEout was never shown above 1x); now it's the GPU's own, as every other
+game's is. See "Accuracy".
+
+### The stencil as each format keeps it
+
+- **A 5650 frame buffer with the stencil test on** (`GPU::settings()`): the GE's test reads its stencil as 0, so
+  one failing against 0 drops every pixel, its depth too; the GPU drew them as if there were no test. The
+  comparison is worked out once a PRIM: failing, the GPU's test never passes; passing, there's no test, as before.
+- **Clear mode or a REPLACE on a 5551 or 4444 frame buffer**: the PSP keeps one or four bits, read back as 0 or 255
+  and as the four twice over, which is how fills and moves hold them in the GPU's eight bits (part 67) for its tests
+  to compare as the GE's do; but clear mode's alpha and a REPLACE's reference went in whole. Now the reference is the
+  stencil as the format keeps it (`keptStencil()`): clear mode's, whose test always passes, from each primitive's
+  color (a triangle's last corner's, a sprite's, a point's, each pixel's of a line; points and lines had left it 0, in
+  every format, which the review found); a REPLACE's where its comparison comes out the same with it (never, always,
+  or the same bits where it looks), else in 5551 made on the top bit against the kept reference, which gives the same
+  at 0 and 255, and in 4444 left the GE's (its REPLACE writing all eight bits, as before). MASK_ALPHA's bits for a
+  16-bit one go with their copies, and a REPLACE's color alpha is the kept stencil. Increments and decrements of a
+  16-bit stencil still step it by one where the PSP's steps a 5551 one to 255 or 0 and a 4444 one by 16 (left).
+
+Both are in the settings every draw takes, in either mode; no bench scene draws either way (their frames are the
+same), and the cost is a comparison or two a PRIM.
+
+### The emulation thread at 1x
+
+simpleperf on the RP6's emulation thread (cpu-clock at 4 kHz, the thread pinned to the X3 as Phobos pins it, a
+`-g` build, the NDK's llvm-symbolizer for lines; dwarf call graphs for libc's callers), Turnip's accurate mode, the
+base:
+
+| Scene | Thread, ms a frame | The core | The CPU's compiled code | libc | Turnip, kernel |
+| --- | --- | --- | --- | --- | --- |
+| God of War, battle | 43.9 | 72% | 16% | 7.7% | 4.1% |
+| WipEout Pure, race | 9.3 | 57% | 21% | 11.7% | 9.6% |
+| Midnight Club 3, race | 17.2 | 60% | 29% | 5.1% | 5.1% |
+| Liberty City Stories, city | 10.0 | 70% | 19% | 6.3% | 4.4% |
+
+- **God of War's battle**: `project()` 10.9%, `transform()` 10.6% (lighting inlined in it), `readVertices()` and
+  the vertices' decoding 8.5%, memcpy 5.8% (`GPU::emit()`'s append of each triangle's three vertices half of
+  `__memcpy`; the backend's copies into staging most of `memcpy_opt`, then block transfers), `GPU::settings()` 2.9%,
+  `transformKept()` 2.7% and its memcmp 1.2%, `GE::triangle()` 2.6%, `geRun()` (the list's words) 2.5%, the GE's
+  time's `pixelsInside()` 2.2%, `GPU::triangle()` 2.0%, `Memory::pointer()` 1.9%, atomic steps on the decoded
+  texture's shares 2.7% (`decode()` and the Look going), `GPU::emit()` 1.8%, `GPU::begin()` 1.7%,
+  `clipTriangle()` 1.6%: a vertex's arithmetic, then the PRIM's and the triangle's own steps, none large.
+- **Midnight Club 3 and Liberty City Stories**: `project()` and `transform()` 9-10%, the vertices' reading 7%, the
+  triangle's steps 10%, and the VFPU's helpers the compiled code calls (`vfpuDot()`, the adder's exact sum, 3.9% and
+  5.7%; the matrix instructions' operand reads and writes 2-4% more).
+- **The CPU**: 16-29% of the thread is the recompiler's code itself (it keeps the PSP's registers in memory and
+  compiles an instruction at a time); what's handed to the interpreter is a fraction of a percent (part 67).
+
+`project()`'s hot instruction (10% of the core's samples) waits on its divisions, their conversions to doubles and
+the comparisons after; the X3's divider isn't the bound (a benchmark on the X3: a float division about every 0.35 ns
+in independent chains, a square root every 0.28 ns; 4-lane forms barely faster a lane), the waiting is. So:
+
+1. **A PRIM's vertices transformed a stage at a time** (`transformAll()`, `transformPlace()`, `projected()`,
+   `transformRest()`): their places (skinned, in the world, in clip space), then each onto the screen, then the
+   rest (normal, texture coordinates, fog, lighting), 64 vertices at a time, so that one vertex's waiting overlaps
+   the next's work. Each vertex's statements are `transform()`'s own, multiply-adds as the compiler fuses them
+   included, so the arithmetic is the same; `transform()` runs the same three parts for one vertex (clipped corners,
+   fast mode's). Profiled after it, `project()`'s hot instruction went from 10.3% of the core's samples to 3.0%, and
+   the waiting moved to the normal's three divisions and lighting's chains: God of War's battle 22.98 -> 23.25 fps
+   in two rounds of its own (the thread 43.25 -> 42.75 ms), MC3's race 58.9 -> 59.3, LCS's city 100.7 -> 101.8; later,
+   the device warmer, 16 runs each of the final code against the base: the battle 21.61 -> 21.75 on Turnip and
+   19.99 -> 20.08 on Qualcomm's driver (the thread 46.01 -> 45.69 and 49.73 -> 49.49 ms). Small, and within the
+   tables' rounding below.
+
+**Tried and dropped** (each measured on the RP6, two or more rounds taking turns, kept only where faster):
+- The vertices read straight into the PRIM's vector, their bytes looked up once a PRIM: the copy and the per-vertex
+  `Memory::pointer()` went, the time moved into the decoding (`readTarget()` 3.0 -> 5.7% of the samples); no frame
+  faster.
+- The texture cache's lookup taking one share in the decoded texture, for the Look, instead of five or six: the
+  atomic steps went from 2.8% of the samples to 1.4%, no frame faster.
+- A list's words read straight from the page `run()` knows has nothing drawn over it, and `transformKept()`'s
+  ranges of commands compared and copied as blocks: no change.
+- `vfpuDot()` without its checks where no lane is an infinity or NaN (200 million random cases the same as
+  before): slower, LCS's city -2.2% and MC3's race -1.8% (16 runs each).
+
+What's left of the thread is spread over the vertex's arithmetic and the PRIM's and triangle's steps, each a few
+percent; see "Left".
+
+### Numbers
+
+The RP6 (Adreno 740), the runner from adb's shell, its emulation thread pinned to the X3 (cpu7), late frames and
+the pipelines kept (part 63); frames a second over 150 frames of God of War's scenes and 300 of the others', the means
+of two rounds with the base (`671072d6f`) and the branch taking turns to go first (the device warms over a session,
+which costs whichever runs second 0-2%). The branch here is `9a88846bd`; the review's fix after it (clear mode's points
+and lines) changes no frame these scenes draw, and the accuracy runs below are of it, `515e48f65`.
+
+Vulkan, 1x:
+
+| Scene | Turnip accurate | Turnip fast | Qualcomm accurate | Qualcomm fast |
+| --- | --- | --- | --- | --- |
+| God of War, battle | 21.9 -> 21.9 | 22.0 -> 22.1 | 20.3 -> 20.3 | 20.3 -> 20.3 |
+| God of War, menu | 100.5 -> 101.4 | 103.2 -> 103.5 | 87.2 -> 87.9 | 89.2 -> 89.7 |
+| WipEout Pure, race | 99.8 -> 135.4 (+36%) | 105.4 -> 141.8 (+34%) | 94.8 -> 125.9 (+33%) | 96.3 -> 127.6 (+33%) |
+| Midnight Club 3, race | 57.8 -> 58.2 | 66.2 -> 65.7 | 55.6 -> 55.9 | 63.0 -> 62.9 |
+| Midnight Club 3, menu | 114.0 -> 114.6 | 120.4 -> 119.7 | 108.8 -> 109.6 | 114.4 -> 113.8 |
+| Liberty City Stories, city | 97.5 -> 98.6 | 113.7 -> 112.7 | 93.6 -> 94.9 | 108.4 -> 108.2 |
+
+Vulkan, 4x:
+
+| Scene | Turnip accurate | Turnip fast | Qualcomm accurate | Qualcomm fast |
+| --- | --- | --- | --- | --- |
+| God of War, battle | 9.9 -> 9.9 | 18.7 -> 18.5 | 13.9 -> 14.0 | 12.5 -> 12.5 |
+| God of War, menu | 21.2 -> 21.2 | 28.9 -> 28.9 | 26.1 -> 26.1 | 24.5 -> 24.5 |
+| WipEout Pure, race | 38.7 -> 46.3 (+20%) | 59.8 -> 87.1 (+46%) | 43.1 -> 67.4 (+56%) | 39.3 -> 63.9 (+63%) |
+| Midnight Club 3, race | 50.4 -> 50.3 | 58.5 -> 57.8 | 50.2 -> 49.8 | 55.1 -> 54.7 |
+| Midnight Club 3, menu | 56.9 -> 56.9 | 78.5 -> 78.4 | 64.9 -> 64.9 | 58.3 -> 58.2 |
+| Liberty City Stories, city | 79.1 -> 79.0 | 100.5 -> 100.0 | 82.9 -> 83.3 | 82.5 -> 82.5 |
+
+WipEout at 4x on Turnip's accurate mode gains least: the GPU is its bound there, and its frames, shown from memory's
+picture at the PSP's size before, are shown from its 4x target now.
+
+The emulation thread at 1x, ms a frame (Turnip accurate / fast, Qualcomm's accurate / fast): God of War's battle
+45.5 / 45.1 / 49.0 / 48.9 -> 45.4 / 45.0 / 48.9 / 48.9, its menu 9.86 / 9.60 / 11.4 / 11.1 -> 9.78 / 9.57 / 11.3 /
+11.0, WipEout 9.09 / 8.75 / 10.1 / 9.89 -> 7.31 / 7.00 / 7.88 / 7.76, MC3's race 17.2 / 15.0 / 17.9 / 15.8 -> 17.1 /
+15.1 / 17.8 / 15.8, LCS's city 10.2 / 8.74 / 10.6 / 9.15 -> 10.1 / 8.81 / 10.5 / 9.17.
+
+The software renderer (`bench`, part 61's), the same way, frames a second at 7 and 1 GE threads, every end state the
+base's:
+
+| Scene | 7 threads | 1 thread |
+| --- | --- | --- |
+| God of War, battle | 8.66 -> 8.75 | 4.30 -> 4.31 |
+| God of War, menu | 21.56 -> 21.61 | 8.62 -> 8.64 |
+| WipEout Pure, race | 21.91 -> 21.92 | 18.09 -> 18.13 |
+| Midnight Club 3, race | 48.88 -> 49.07 | 22.00 -> 22.11 |
+| Midnight Club 3, menu | 69.09 -> 69.34 | 27.68 -> 27.77 |
+| Liberty City Stories, city | 76.59 -> 77.81 (+1.6%) | 36.12 -> 36.28 |
+| Liberty City Stories, woods | 78.21 -> 79.12 | 36.11 -> 36.25 |
+
+(God of War: 150 frames of the battle and 100 of the menu at 7 threads, 100 and 30 at 1.)
+
+### Accuracy
+
+- **Software**: untouched. The measure harness's 173 files and its log are byte for byte the base's. On the M1 the
+  bench scenes', WipEout's, Peace Walker's title's and God of War's two scenes' every frame (picture and VRAM) and end
+  state are the base's at 7 and 1 threads, but MC3's menu's end state, which differs from run to run of the base's own
+  runner too (its frames don't); on the RP6 every Software run's end state above was the base's.
+- **Vulkan**: 10 frames from each of ten scenes' states (God of War's two, WipEout, MC3's two, LCS's two, Killzone's
+  menu, Lumines, Peace Walker's title) in all four configurations at 1x and 4x on the RP6: 76 runs of 80 byte for
+  byte the base's; the four others are WipEout at 4x. On the M1, nine scenes in both modes at 1x and 4x: every frame
+  the base's but WipEout's at 4x (9 of 10 in each mode, the first being shown from memory in both).
+- **WipEout at 4x** differs as its frames are now the GPU's 4x pictures, not memory's at the PSP's size scaled up
+  (the base's frames all 4x4 blocks of one color): its loads read 0 in both, so it draws the same, and at 1x every
+  frame is the same. Against the software renderer, each 4x frame brought to the PSP's pixels, 10 frames on the M1,
+  the accurate mode: identical 35.77% (the base's, any way it's sampled) -> 35.71% and 35.64% by the two middle
+  samples of each 4x4 block, 33.44% by its mean, 25.8% by the two corner samples; the fast mode 35.82% -> 35.76%,
+  35.68%, 33.49%; at 1x 77.4% in both.
+
+### Checks
+
+- `tests/psp/run-tests.sh` (sanitizers on): 437 groups, 0 failures (the base's 434 and three new: "ge loads through
+  the depth buffer's views wait for the threads", compiled loads and the interpreter's at 2 and 4 threads, the batch
+  checked to be still drawing as they load; "gpu loads through the depth buffer's views: memory's, without waiting",
+  through the second and fourth copies, a store through the fourth still finishing; "gpu the stencil as each 16-bit
+  format keeps it", in both modes at 1x and 2x, which all six accurate-mode runs fail on the base; it draws clear
+  mode's points, lines and a triangle too, and 8888's). `tests/allegrex/run-tests.sh` 58 groups, 0 failures;
+  `tests/psp/ares/run-tests.sh` 307 checks, 0 failed. The GPU tests built for Android pass on the RP6 on Turnip and on
+  Qualcomm's driver (33 groups each; one skips itself on Qualcomm's, which doesn't read the frame buffer). GCC 11
+  (ubuntu:22.04) and 13 (ubuntu:24.04): the kernel and the changed tests compile, `gpu.cpp` and `memory.cpp` at -O1,
+  -O2 and -O3 with -Wall -Wextra -Werror, the GE likewise but for `four.cpp`'s maybe-uninitialized warnings (part
+  61's; 12, 12 and 16, the base's the same).
+- The states test's `stateFields()` holds about 200 machines' worth of slots under the address sanitizer, its frame
+  8,337,696 bytes of the main thread's 8 MB: the first versions here, with a callback more in Memory and a vector
+  more in the GE (72 bytes a machine), took it to 8,352,512 and the suite aborted in it; as committed, the machine is
+  the base's size and the frame the base's to the byte (`-fstack-usage`).
+- Broken versions each fail a test: a depth view's load waiting for the renderer again, one not waiting for the
+  threads, a store taken as a load (the two depth view groups); 5650's comparison left out, clear mode's alpha or a
+  REPLACE's reference whole, MASK_ALPHA's bits without their copies, 5551's comparison on the top bit left out, the
+  never-or-always case and the same-bits case each left out, clear mode's point or line left at the PRIM's
+  reference (the stencil group). A REPLACE's color alpha left whole isn't caught: the stencil itself is what's read
+  back, and a 16-bit frame buffer's blending reads the alpha through its format.
+- An independent review of the branch found no correctness bug: it tried every comparison, reference, mask, the keep,
+  zero, replace and invert operations in each slot, eight MASK_ALPHAs and depth passing and failing against
+  `pixel.cpp`'s rules, 620 million 5551 cases and 717 million 4444 ones outside the case left, all the same, and 5650's
+  every case. Its points were taken: clear mode's points and lines (above), the GE group's batch checked to be still
+  drawing, the docs' wording (the rule is `Memory::read()`'s, by the view, a batch's wait finishing the renderer too)
+  and two of the handoff's numbers. A delta review of those fixes found no bug (its scratch builds without the
+  point's or the line's call failed the stencil group in all eight runs); its points were taken: the group draws an
+  8888 frame buffer and a flat line too, and the docs' lines are wrapped.
+
+### Left, and why
+
+- **The emulation thread at 1x** is spread over many small steps: the vertex's arithmetic (its divisions and
+  lighting, waiting on themselves; 4-lane forms would have to be the same operations in the same order, lane by
+  lane), its reading and decoding, each PRIM's settings worked out afresh (`GPU::settings()`, `pixelState()`,
+  `lookFor()`, `transformKept()`), each triangle's steps (`GE::triangle()`, the GE's time's `pixelsInside()`,
+  `clipTriangle()`, `GPU::triangle()` converting each corner again, a strip's vertices three times over, and
+  `GPU::emit()` appending them), and the CPU's compiled code. A GE running beside the CPU on a thread of its own, as a
+  PSP's does, would take most of it off the emulation thread; a large change (the driver's syncs, signals, the GE's
+  time and the CPU's reads of what it draws all meet there).
+- **The recompiler** keeps the PSP's registers in memory and compiles an instruction at a time: registers kept in the
+  host's across a block is where its 16-29% of the thread would go down.
+- **A 16-bit stencil's increments and decrements** step it by one on the GPU (above), and a 4444 REPLACE whose
+  comparison takes the reference's low four bits writes all eight.
+- **WipEout's depth loads** read memory's bytes (0 in the bench scene), not the depth the GPU drew, as the GPU's depth
+  isn't read back: the software renderer's loads see the 3D pass's depth, which a lens flare or the like would use.
+  Reading the GPU's depth back would mean waiting for it, as before.
+- Scratch: `~/phobos-work/scratch/speed8` (build-vk.sh, rp6.sh, rp6-perf.sh, rp6-final.sh and push/, the RP6's
+  sessions and profiles; patches/: why-, hletrace- and depthread-patch.py, the finishes' causes and the depth loads;
+  hotlines.py, callers.py, tables8.py; bench/divbench.cpp, the divider, and dotcheck.cpp, `vfpuDot()`'s random
+  cases; mutants.sh, quick-tests.sh, gcc.sh, measure.sh, soft-all.sh, acc-host.sh, cmp4.py). Nothing of it is left on
+  the RP6.
+
+## Part 69: the RP6's two stuck games — a save dialog closed from a worse thread, and a loading behind a copy
+
+On branch `cursor/psp-hangs-2b67`, on master (`3cae0f907`, v2.0.0). The owner's run of v2.0.0 on the RP6
+(`~/phobos-work/scratch/rp6play/findings.md`) left two games looking stuck: Crash Tag Team Racing at "Checking Memory
+Stick Duo..." and Dragon Ball Z: Tenkaichi Tag Team at "Now Loading". Sources: pspautotests' recordings
+(utility/savedata/shutdownstatus and initstatus, utility/dialog/priority), PPSSPP's dialog code read as a description
+of the PSP's dialog threads (nothing copied), the RP6's logs and screenshots, and the games' own calls traced with a
+scratch runner (every call with its arguments, result and the calling thread's priority; every 60 frames the wall
+time and the disc image's reads). JPCSP was not read. The PGD code is untouched. Nothing here used the RP6.
+
+**1. Crash Tag Team Racing: a save dialog closed from a worse thread** (`utility.cpp`, `dialogShutdown()`). The runner
+showed what the RP6 showed: from frame 1500 (25 s on the RP6) the notice and its turning gear, for good (9,000 frames
+run with the RP6's presses; the gear turns throughout. The RP6's "last change" at 46 s was its touch controls fading:
+its script counts a screen changed when the mean absolute difference between successive 160x90 grey copies reaches 1,
+which the gear's turn doesn't). Its main thread, user_main at priority 0x3f, looks for its saves through the save
+dialog: AUTOLOAD (mode 0) of ULUS10044's slot 0000, CRASH.BIN, none on a fresh stick. It gives the volatile memory back
+when the dialog says it's starting (sceKernelVolatileMemUnlock at status 1), and once it's finished calls ShutdownStart,
+sceKernelVolatileMemLock and InitStart for the next slot one after another, never looking at the status. The kernel kept
+a save dialog closing (4) for 2 ms whoever closed it, so that InitStart was refused (INVALID_STATUS, 0x80110001); the
+game doesn't check, and polled GetStatus, 0, for good.
+
+A PSP closes a save dialog in the utility's own threads, last at priority 0x20, without waiting:
+utility/savedata/shutdownstatus recorded callers at 33 to 36 and 111 reading NONE at their first look after
+ShutdownStart, and one at 32 SHUTDOWN, then NONE, the dialog's graphics and access threads at 17 and 19 (its font and
+sound threads' priorities made no difference; the test's notes name NFL Street 3, which starts its next dialog straight
+after from 111). PPSSPP's description has those threads run at the graphics and access threads' priorities before that
+last step. So Crash's 0x3f doesn't get the CPU back before its dialog has closed. (PPSSPP's dialog threads also borrow
+the volatile memory while a dialog runs, which would be why the game gives it back at status 1 and takes it again after
+closing; the kernel doesn't model that: no recording shows it, and with the caller worse than the threads nothing would
+wait on it.)
+
+Now a caller worse than 0x20 and than the graphics and access threads' priorities (the words at 12 and 16 of the
+dialog's parameters) finds a save dialog closed at once, the closing's time the utility's threads', not counted; a
+priority no thread can have (outside 1 to 0x7f) holds no caller off. A caller at 0x20, or better than either thread,
+one the utility's threads can't take the CPU from (interrupts or dispatching held off, a call into the program such
+as an alarm's handler) and a call with no thread see it closing for 2 ms as before, and the other dialogs close as
+they did (utility/dialog/priority: a message closed from 111 still read SHUTDOWN, and a save dialog started straight
+after was refused). Chosen: no time passes for the caller. A first version made it wait the 2 ms; the review found
+that a released wait would end ShutdownStart with an error and that any thread, worse ones too, could run in between,
+where a PSP's busy utility threads hold the worse ones off.
+
+Crash now looks through its five slots and sizes the stick (mode 8) by frame 1500, shows "Loading", its intro, its title
+and its attract race; a Start takes its intro or race to the title, and a second one opens its menus: NEW GAME, the name
+entry, Single Player, ENTER THE PARK and its prompt. It makes its save (`PSP/SAVEDATA/ULUS100440004/CRASH.BIN`), and
+booted again with it goes from "Loading" through its intro to its title and its menu, RESUME GAME selected.
+
+**2. Dragon Ball Z: Tenkaichi Tag Team: not stuck, but loading behind a copy** (no change). In the runner, with presses
+as the RP6 had them, the title menu (New Game, Load Game, Install Data) left alone for about 30 s goes to an attract
+demo: black from about 7020, "Now Loading" from 7050 to 7600, black at 7620, the demo from 7640 (Start goes back to the
+title). The loading reads a dozen plain files, five of 1.1 to 1.3 MB each in one sceIoRead and one of 2 MB in 64 KiB
+pieces (4,838 reads of the CHD file, about 6 MB, mostly in order); the game's PGD file, opened every 243 frames, isn't
+among them. The RP6's log has the emulation running 2.6 to 5.2 frames a second from 08:13:07 to 08:13:54 (11 to 60
+after), single frames of 3.2, 11.6 and 19.9 s, and its overlay the emulation thread at 0-3% of a core (blocked, not
+busy; 25-29% at the title). Its frames add up to about 600 by the run's end (08:14:10), and its last picture, black at
+60 frames a second, is about the runner's frame 7620, the black between the loading and the demo: it was loading at
+about a sixth of the PSP's speed (a seventeenth for its first 47 s), not stuck. DBZ was phase B's first game (08:11),
+and phase B's other 236 games were being copied onto the same SD card meanwhile (adb push, mostly 19 to 26 MB/s, done at
+09:49): each of the 33 games run during the copy (08:11 to 09:51) has frames of 1 to 20 s in its log, and none of the 34
+run after it (09:53 to 11:22) a frame longer than 0.8 s. In the runner New Game goes on too: the name prompt, its first
+save (`PSP/SAVEDATA/ULUS10537DAT0/DATA.BIN`), the main menu, Dragon Walker, and a stage's "Now Loading" (with its
+mini-game) into its story.
+
+**Save states.** Unchanged (version 25): nothing new is kept.
+
+**The games.** The report's run over the whole library (266 games, 3600 frames, Start at 120 and Cross at 1800, PNGs at
+60, 300, 1200 and 3600, the software renderer at 7 threads, three at a time, each killed at 900 s) with this branch's
+runner (and a line to standard error at each save dialog's closing, nothing else), beside the final run (`be543afba`; no
+core change since). 179 games close a save dialog within their minute, 81 of them from a thread worse than 0x20 and its
+threads (callers from 0x21 to 0x74), which now find it closed at once. Crash Tag Team Racing moves: its attract race at
+3600, where it had sat at its Memory Stick check notice (gameplay; the notice had counted as a menu, so the categories'
+counts stay as they were: docs/psp-compatibility.md). Of the other 80, 59 show all four frames as the final run did,
+Super Monkey Ball Adventures' run was cut short (below), and 20 show some frame differently, each the same scene a few
+frames apart (a fade, an animation step, a movie further on: PixelJunk Monsters' title fading in, Gitaroo Man's intro).
+14 of those differed the same way between the final run and part 64's. Of the other six, master's runner run again also
+differs from the final run on three (Sega Rally Revo at the same frame, the same picture as here; Ridge Racer 2 and Full
+Auto 2 at other frames): they vary from run to run. Sonic Rivals 2 and Pursuit Force (their titles' backgrounds a step
+apart at 3600) and Gran Turismo (a logo's fade at 1200), which master's runner shows as the final run did, follow the
+closing now taking no time. 38 more games show some frame differently without closing a save dialog that way, their code
+the final run's: the same kinds of differences (Battlefront II's random map, Virtua Tennis 3's and Space Invaders
+Extreme's titles a step apart), most of them in the final run's own comparison too. 265 finished; Super Monkey Ball
+Adventures was killed at 900 s with the Mac shared with other jobs (load averages of 230 to 275 just after). Run again
+by itself with no limit, the Mac still busy, it finished in 971 s (314 s in the final run), its four frames the final
+run's; side by side with master's runner it ran its first 1500 frames at the same speed (43.5 frames a second each), the
+same picture at 1500. None stops at a missing function.
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 439 groups, 0 failures (master's 438 here and the new "utility save
+dialog closed by priority": save dialogs closed from callers at 0x21, 0x6f and 0x20, better than the graphics or the
+access thread, with priorities no thread can have, with interrupts or dispatching held off and from an alarm's handler
+interrupting a worse thread, and a message closed from 0x6f, on both engines; a state saved while a dialog closes
+carries on in another machine to the same answers). `tests/allegrex/run-tests.sh` 58 groups, 0 failures;
+`tests/psp/ares/run-tests.sh` 307 checks, 0 failed. Broken versions each fail the new group: no closing at once, a
+caller at 0x20 closing at once too, the graphics or the access thread's priority left out, priorities taken as they
+come, and the interrupt, dispatching, call-into-the-program and dialog kind conditions each left out. An independent
+review of the first version (the caller waited the 2 ms) found no bug in what it did; its points were that a released
+wait would end ShutdownStart with an error and let other threads run in between (hence closing at once), that invalid
+priorities in the parameters would turn the fix off (now ignored), that the comment gave PPSSPP's description as a
+recording's (now said), and two test gaps (dispatching held off and a call into the program; a loaded state not run on),
+all taken. A delta review of the rewritten commit and of these docs found the earlier points resolved and no new bug; it
+corrected the docs' figures (the library's tallies, the six games master varies on, DBZ's speed, the copy's rates, the
+RP6 script's measure) and asked for Crash's boot with its save to be checked on the final code, which this part now
+reports.
+
+**Left, and why.**
+- The dialog threads' borrowing of the volatile memory (PPSSPP's description, unrecorded): a game closing a save dialog
+  from a thread at 0x20 or better, then locking the volatile memory and starting the next dialog at once, would still
+  be refused here; none has been seen.
+- The dialogs' whiles stay PPSSPP's (200 ms to start a save dialog, 2 ms to close it, ...).
+- Dragon Ball Z on the RP6: worth running again with nothing copying onto its card. Its disc image, a CHD on the SD
+  card read through a memory map a 2 KiB hunk at a time on the emulation thread, gave frames of up to 20 s while the
+  card was being written (the loading's single reads are of up to 1.3 MB); reading it through its descriptor, or ahead
+  in larger pieces, might help a busy card, but nothing here measured that.
+- Scratch: `~/phobos-work/scratch/hangs` (run.sh, sheet.py, the trace patch `trace-only.patch`, quick-test.sh and
+  quick-main.cpp for the utility tests alone, `lib-final/` the library run, `cmp-final.tsv`).
+
+## Part 70: savedata's files mode, PARAM.SFO beside every save, and the second boot that called its save corrupted
+
+On branch `cursor/psp-savename-2b67`, on `master` (v2.0.0) after the branch's first commit, `5fd162d75` ("<>" names
+no save of its own). Sources: pspautotests' recordings (utility/savedata/filelist, loadbroken, deletebroken,
+loademptyfilename, saveemptyfilename, deleteemptyfilename, deletedata, loaddata, makedata, secureversion, getsize,
+sizes), pspsdk's psputility_savedata.h, PPSSPP's savedata code read as a description of the PSP (SavedataParam.cpp,
+PSPSaveDialog.cpp, ParamSFO.cpp; nothing copied), and the games, traced with a scratch runner (each savedata call's
+mode, names, sizes and answer). JPCSP was not read. Part 69 is another agent's. Save states are unchanged
+(StateVersion 25): the kernel gains no state.
+
+**The problem** (the owner's report). On the device, many games made their save, then at their next check called it
+corrupted and made it again. Valkyria Chronicles II on the Mac, two boots on one memory stick: the first asks the files
+mode (FILES, 12: NO_DATA) and the size mode (22: NO_DATA), makes its save (MAKEDATASECURE, 13) and writes DATA0 to
+DATA4 into it (WRITEDATASECURE, 17). The second asks FILES first, which `savedata()` answered 0 from its `default:`
+case without filling the file list: a save with no files. The game asked "Delete corrupted save data?", deleted it
+(10), said "Save data not found." and made it all again. Valkyria Chronicles III and Shining Blade make the same calls
+in the same order and did the same; and Phobos wrote no PARAM.SFO, so nothing could have told FILES which files were
+secure.
+
+**1. The files mode** (`utility.cpp`, `savedataFiles()`). FILES fills the SceUtilitySavedataFileListInfo at 1528 of
+the 1536-byte parameters (pspsdk: idList at 1524, fileList at 1528, sizeInfo at 1532, the offsets the list and size
+modes already used): the most of each kind to list, how many were listed, and where each kind's 80-byte entries go:
+secure, normal, system. utility/savedata/filelist made a save with MAKEDATASECURE (DATA.BIN), wrote OTHER.BIN into it
+with WRITEDATA, then asked FILES: one secure entry (DATA.BIN), one normal (OTHER.BIN), one system (PARAM.SFO), each
+first entry's mode 0x21ff, the secure entry's next word (st_attr, set to 0x1337 by the test) untouched, and `bind`
+set to 0x3fd, 1021. So an entry is a SceIoStat's first 64 bytes, the word after the mode left alone, the 64-bit size
+and the three dates as sceIoGetstat gives them for the same file (`io.cpp`'s time conversion is now `writeTimes()`,
+shared), a secure file's size its data's (PPSSPP's notes: the 16 bytes a PSP's encryption adds are left out; here a
+secure file has none), then the name in 16 bytes. The system files are PARAM.SFO, ICON0.PNG, ICON1.PMF, PIC1.PNG and
+SND0.AT3; the secure ones those PARAM.SFO's SAVEDATA_FILE_LIST names; the rest normal. Each kind's count is how many
+were listed, never more than its most, and none with no entries to fill. No save is NO_DATA (0x80110327: deletedata,
+deleteemptyfilename); loadbroken asked FILES of a save whose PARAM.SFO had been removed: DATA_BROKEN (0x80110326), the
+counts left as they were (its file list is on the stack, its counts unset: the "System:" line with no name is the
+previous call's count, untouched). From PPSSPP's notes on the PSP: asking for more than 99 secure files, 8192 normal
+ones, or (a program built with SDK 2.60 or later) 5 system files is a bad parameter (0x80110328), and names with small
+letters aren't listed. Chosen: links aren't listed, nor names no request could give (over 12 characters, or not
+plain); the entries come in the names' order (the PSP lists a folder in its own order, which a host doesn't keep); with
+no list to fill (none given, or the smaller structure), the answers are the same. Valkyria Chronicles II asks with no
+normal or system list and gets its five secure files.
+
+**2. PARAM.SFO** (`SaveSFO`, `savedataWritten()`). Every save mode (1, 3, 5, 13, 14, 17, 18) now leaves a PARAM.SFO
+beside the files it writes, as a PSP does (makedata and filelist: the make modes leave one; saveemptyfilename: the save
+modes too, with no data file named), in the format the disc reader parses (`disc-info.cpp`'s `sfoValue()` reads its
+title): the head ("\0PSF", version 1.1), 16 bytes for each value, the keys (sorted, as the PSP writes them, padded to
+4 bytes), then each value in its room. A save's eight: CATEGORY "MS" (room 4), PARENTAL_LEVEL (a number),
+SAVEDATA_DETAIL (1024), SAVEDATA_DIRECTORY (the folder's name, 64), SAVEDATA_FILE_LIST (99 entries of 32 bytes: a name
+in 13, the file's hash in 16), SAVEDATA_PARAMS (128 bytes), SAVEDATA_TITLE and TITLE (128 each), the rooms PPSSPP gives
+them: 4912 bytes in all. The titles and parental level come from the parameters' sfoParam (from 128: the title, the
+save's own title, its detail, then a byte); a request with no title keeps the save's (PPSSPP's rule: games write
+their data with sfoParam left empty). The file list names each secure file written, its hash zeros, as Phobos doesn't
+encrypt; SAVEDATA_PARAMS is 128 zeros, which is also PPSSPP's mark of a save it didn't encrypt. Which writes are
+secure: MAKEDATASECURE and WRITEDATASECURE, and the save modes, with or without a key: secureversion's saves with no
+key (secure version 1) have SAVEDATA_PARAMS say 0x01, the mark of mode 1's encryption, which takes no game key, so a
+PSP encrypts, and lists, every file a save mode writes. MAKEDATA and WRITEDATA write normal files (filelist: OTHER.BIN
+normal); chosen: a file written normally over a secure one leaves the list, so the list names what's secure on the
+stick. Erasing a file takes its name out (PPSSPP's notes); deleting a save takes the folder, PARAM.SFO with it. The
+save modes also write the icons' and sound's files they're given (ICON0.PNG, ICON1.PMF, PIC1.PNG, SND0.AT3, from 1412
+on), as a PSP's saves hold them and PPSSPP writes them; chosen: one whose buffer is smaller than its file, or outside
+the program's memory, is left out, the save still made. Loads (0, 2, 4, 15, 16) copy TITLE, SAVEDATA_TITLE and
+SAVEDATA_DETAIL back into sfoParam, each field cleared to its size, and PARENTAL_LEVEL into its byte, and set `bind` to
+1021 (PPSSPP's notes, both). The list mode (11) dates each save by its PARAM.SFO, as PPSSPP does (the request names no
+file to date it by), a save without one by its folder (chosen); it had left the dates zero. A PARAM.SFO that isn't an
+SFO (not its head; a key, a value or its room outside the file; more room all together than its values' part holds;
+over 64 KiB) is broken, none of it kept, and the next save mode writes it afresh, as it does one too big to write
+again with a save's values (only a hand-made one could be); it's written through a file beside it renamed over it, so
+a save cut off while writing leaves the last one. FILES knows a save's secure files from its PARAM.SFO on the stick,
+across boots and in save states alike (the stick's files aren't state).
+
+**3. Saves made by v2.0.0** (no PARAM.SFO). A PSP calls a save without PARAM.SFO broken: loadbroken took it away from a
+save and every load answered LOAD_DATA_BROKEN (0x80110306), every read and FILES RW_DATA_BROKEN (0x80110326), and
+deletebroken every erase RW_DATA_BROKEN, the data file there or not (its deletes, 9, 10 and 21, answering 0). Taken so,
+no save v2.0.0 made would load again. Chosen, as the evidence allows of the two: their files are normal ones, as if
+their PARAM.SFO named none secure, which is the PSP's own rule for a file its PARAM.SFO doesn't name (filelist's
+OTHER.BIN); the PSP's treatment of a missing PARAM.SFO would lose the saves. So a save without PARAM.SFO loads and reads
+as before, sfoParam left as the game had it (nothing is known of its titles), FILES lists its files as normal, erases
+work, and the next save mode to write into it gives it a PARAM.SFO naming the file it writes. A game that checks its
+files' kinds therefore calls such a save corrupted once: Valkyria Chronicles II's own save with its PARAM.SFO and icons
+taken away (what v2.0.0 left, in the folder it uses now), booted with this branch, is found with no secure file, deleted
+and made again, then found and read on the boot after. (Its real v2.0.0 saves, and Valkyria Chronicles III's and Shining
+Blade's, are in "<>" folders, which nothing since the branch's first commit looks in; v2.0.0 called them corrupted at
+every boot anyway.)
+
+**4. The other modes.** Loads and reads: no save is NO_DATA as before (loaddata); as loadbroken and loademptyfilename
+recorded, a save whose data file is missing answers FILE_NOT_FOUND (0x80110309 for loads, 0x80110329 for reads), where
+Phobos said NO_DATA; a broken PARAM.SFO is DATA_BROKEN before the file is looked for (loadbroken's third case, both
+gone: DATA_BROKEN); with no data file named the answer is 0 and nothing is read (it was NO_DATA). Erasing (19, 20)
+answers in the read/write group, as deletebroken recorded (DATA_BROKEN 0x80110326, FILE_NOT_FOUND 0x80110329), so its
+bad parameter is that group's 0x80110328 and a save not there 0x80110327 (PPSSPP's notes; it was the delete group's
+0x80110348 and 0x80110347). The sizes modes count a secure file as a PSP stores it: encrypted, 16 bytes longer (the
+16 bytes in front of its data: PPSSPP's notes on the PSP's encryption). The sizes mode (8) measures msData's save with
+its PARAM.SFO's secure files 16 bytes longer, and what saving would take counts the data as a save mode's file,
+encrypted, and no data with no file named (PPSSPP's notes); the size mode (22) counts the game's secure files 16 bytes
+longer. A file within 16 bytes of a cluster's end (a 32 or 64 KiB buffer saved whole) takes a cluster more, as on a
+PSP; 2 MiB of data now takes 67 clusters, not 66. The size mode's file counts are the game's own list (getsize: the
+PSP writes nothing there), so it needs nothing of the save. The `default:` case answers only modes not known now.
+
+**The games**, each booted twice on one memory stick (`two-boots.sh`: 9000 frames, Cross every 5 s), with v2.0.0's
+runner (the final library run's, `be543afba`: its core is v2.0.0's), the branch's base (`5fd162d75`, the "<>" fix)
+and this branch. For a game whose saves have names of their own (no "<>"), v2.0.0 and the base are the same code, and
+Def Jam and Mega Man weren't run with v2.0.0's:
+
+| Game | v2.0.0, second boot | Base, second boot | Now, second boot |
+|---|---|---|---|
+| Valkyria Chronicles II | its save in ULUS10515<>; FILES empty: "Delete corrupted save data?", "Save data not found.", made again | the same, in ULUS10515 | FILES lists DATA0-DATA4, it reads them: its intro, title and opening |
+| Valkyria Chronicles III [English v1.0.8] | (NPJH50491<>) FILES empty: deleted, "no save data", made again | the same | its nine secure files found and read: SEGA's logo and its opening |
+| Shining Blade [gugule] | (NPJH50530<>) "Save data is corrupted.", "Creating save data requires 1376KB... create?" | the same | "Save data has been loaded.", its intro and title |
+| Space Invaders Extreme | (ULUS10346<>) its save loaded, play | its save loaded, play | the same |
+| Hot Shots Golf - Open Tee 2 | "Loading of game data complete." | the same | the same |
+| Def Jam - Fight for NY - The Takeover | (as the base) | its save read (READDATASECURE) | the same |
+| Mega Man Powered Up [UNDUB v1.3] | (as the base) | its system data loaded | the same |
+| Monster Hunter Portable 3rd [English v6.1.0] | no save made (its opening, its attract loop): the first boot again | the same | the same |
+| Crash Tag Team Racing | "Checking Memory Stick Duo" from 1200 to the end | the same | the same |
+
+Crash Tag Team Racing (another agent's too) makes one savedata call, an autoload of CRASH.BIN in save "0000" (NO_DATA,
+rightly, on a fresh stick), and then waits at its "Checking Memory Stick Duo" screen to the end on every runner: what
+it waits for isn't the savedata utility's answers. Monster Hunter Portable 3rd only looks for its own, Monster Hunter
+2nd G's and Monster Hunter i's saves (NO_DATA) and asks the sizes mode, then plays its opening and attract loop; with
+Start at its title (about 4200) and Circle, which confirms in this Japanese release, it reaches its character creation,
+the keyboard naming the hunter "PSP", but no scripted run got it through those menus to a save, so its second boot is
+its first. Disgaea Infinite, Riviera, Metal Slug XX, Tekken 6 and Need for Speed: Carbon, whose first frames show save
+notices, make no save within 9000 frames, with the base's runner or this branch's. The "<>" games (Space Invaders
+Extreme, the Valkyria Chronicles and Shining Blade) used folders such as ULUS10346<> before the branch's first commit:
+a Mac's file system takes them, a PSP's memory stick doesn't, and the device's storage may not either.
+
+**The library** (the report's run: 3600 frames, Start at 120 and Cross at 1800, three at a time, the software
+renderer at 7 threads, a fresh stick for each game), this branch's runner beside the final run (`be543afba`,
+`~/phobos-work/scratch/final/lib-top`): every game shows the scene it showed there at each capture, in the same
+category (menu or gameplay 194, movie 71, black 1, stuck loading 0), and none misses a function. God of War: Ghost of
+Sparta and Killzone reached the 900-second limit with other work on the machine (the base's runner, run again then,
+reached it with Killzone too); run again on a quiet machine they finish (366 and 560 s), every capture the final run's.
+79 games differ from the final run at some capture, so the base's runner was run again on them, and this branch's
+beside it at the same time (Ghost of Sparta and Killzone aside, 77). 41 of the 77 match exactly: their frames follow
+when and how they run, not the code (PixelJunk Monsters' title sky is the time of day, and the final run's capture of
+it was made just before four in the morning). The others differ where runs of either runner differ among themselves:
+the same scene a movie frame, a fade step or a blink apart (Battlefront II's random map, Shepherd's Crossing's
+animals); the six whose captures split most cleanly by runner (Monster Hunter Portable 3rd HD, Syphon Filter: Dark
+Mirror, Manhunt 2, Lumines, Macross: Ace Frontier, Tales of Phantasia), run three times more with each runner, mix both
+runners' frames at every capture, and of all the differing captures only one splits by runner, Valkyria Chronicles
+II's at 300 (a step of its loading icon apart), in a run that makes no savedata call. On a fresh stick these games'
+savedata calls are answered as before (loads, lists, sizes and FILES of saves not there); of the 23 that save in the
+run (traced with this branch's runner: Lumines, Space Invaders Extreme, Mega Man Powered Up, Hot Shots Golf 2, Def Jam
+and Final Fantasy III among them), those that read again get what a PSP's answers now give them (their titles in
+sfoParam, bind, the list's dates, sizes 16 bytes longer), and no capture shows it.
+
+**Review.** An independent read-only review (a separate agent, the snapshot's hashes recomputed, the recordings
+checked claim by claim, a fuzzer over SaveSFO built with the sanitizers) found a blocker: a PARAM.SFO's value rooms,
+taken from the file unchecked, let a crafted file make the next save write gigabytes past a buffer (reproduced under
+ASan). Each room is now bounded by the file, their total by the values' part, a write by 64 KiB, and crafted files are
+tested. Its minor findings (comments citing a recording for what is PPSSPP's, the v2.0.0 choice to be called chosen
+with its consequence, the list mode's fallback date not through `savePath()`, test gaps: three icons, a 13-character
+name, every title field, a full list, an erase leaving its file) were all fixed. Three delta reviews, each PASS: the
+first with one minor finding (a hand-made file the reader takes but can't write again blocked every later save: now
+written afresh, tested), the second with a nit (only a rewrite too big is written afresh, so a write failing for a
+moment can't reset the list: taken), the third with nothing left; and a review of these docs, whose findings are
+taken.
+
+**Checks**, on the commit's code (`340649d14`). `tests/psp/run-tests.sh` (sanitized): 443 groups, none failing (439
+before: "utility savedata files", "utility savedata PARAM.SFO", "utility savedata without PARAM.SFO (v2.0.0's)" and
+"utility savedata broken saves" are new; "utility savedata", "names", "unnamed", "erase" and "memory stick free space"
+changed). `tests/allegrex/run-tests.sh`: 58, none failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing.
+`ares/psp/psp.cpp` built with NDK 28.2's clang for arm64 (API 26) with the Android build's flags. With the base's
+kernel the nine new and changed groups fail (78 failing checks) and the rest pass; with the bounds taken out, two of the
+crafted PARAM.SFO cases fail (the count past the file and the key without an end were refused before), and the
+too-big one fails without its rewrite afresh.
+
+**Left, and why.** No encryption: secure files are plain, PARAM.SFO's hashes zeros, so these saves don't load on a PSP,
+and a save copied in from a PSP or PPSSPP, encrypted, isn't read here; the sizes modes would count such a save's
+secure files 16 bytes longer twice. Loads don't fill the icons' buffers from the save (PPSSPP does, for a game it
+names). DELETEDATA (21) with no save still answers the delete group's NO_DATA (PPSSPP's notes give the read/write
+group's): outside this change. A v2.0.0 save of a game that checks its files' kinds is called corrupted once (above).
+Crash Tag Team Racing's wait at "Checking Memory Stick Duo" is another agent's.
+- Scratch: `~/phobos-work/scratch/savename` (two-boots.sh, boots-chain.sh, long-boots.sh, mhp3-save.sh; lib-list.sh,
+  lib.sh's run for a list of games; runner-trace and runner-new-trace2, the base's and this branch's runners with a
+  [save] trace of every savedata call; review1-5, the review snapshots; lib-new, lib-final, lib-basecheck, lib-final2,
+  lib-final-slow and rep-*, the library runs; cmp-*.png, the second boots; the suites' logs).
+
+## Part 71: a module's stop gives 0 — Kenka Bancho past its intro movie
+
+On branch `cursor/psp-kenka-2b67`, on `master` as v2.0.0 shipped (`3cae0f907`). The owner's test of his library on
+the RP6 found Kenka Bancho: Badass Rumble black for good once Start had cut its intro movie short (at 45 s), the
+emulator at a steady 60 frames a second with about 0.8 ms of work a frame, and no press after it changing anything:
+the game idle-waiting, not crashed or busy. Sources: pspautotests' modules/unloadfill and its recording (a PSP's),
+uOFW's module manager (`src/kd/modulemgr`: `start-stopModule.c`, and `modulemgr.c`'s `exe_thread()` and
+`_StopModule()`), pspsdk's error codes, and the game itself, traced with a scratch runner (its calls by frame, the
+threads' waits, wakes and ends, and its code around the calls, disassembled from a dump of its memory). No PPSSPP or
+JPCSP source was read. Save states are unchanged (StateVersion 25): nothing new is kept, a waiting caller's answer
+following from the module's status, which states carry. (Parts 69 and 70 and StateVersion 26 are two other
+branches', `cursor/psp-hangs-2b67` and `cursor/psp-savename-2b67`; this one takes no state version.)
+
+**What the game waited on.** The intro plays through Sony's movie player library, which the game carries
+(`disc0:/PSP_GAME/USRDIR/MODULE/PSMF.PRX` and `LIBPSMFPLAYER.PRX`: scePsmf_library and scePsmfP_library, encrypted,
+which the HLE kernel stands in for; IDs 0x125 and 0x126 in the trace). Whether Start cuts the movie short or it plays
+to its end (its closing logo at about frame 7200 in the runner), the game ends it the same way: its main thread
+starts a thread, MyThread-MovieStop, which stops the player, lets the movie go and deletes the player a frame apart
+(scePsmfPlayerStop, ReleasePsmf, Delete, each answered as part 31 has them) and ends; main deletes it, finishes
+sceMpeg and wakes MyThread-DevModule, its module manager, then polls it in 50-microsecond delays. That thread unloads
+the utility's MPEG module (`sceUtilityUnloadModule(0x303)`) and goes through a table of eight module slots once a
+vertical blank, each with a state: a slot to stop calls `sceKernelStopModule(id, 0, NULL, NULL, NULL)` and goes on to
+unloading only on a result of exactly 0 (`bnezl v0` back to the same state otherwise); a slot to unload calls
+`sceKernelUnloadModule(id)` and is done on a result above 0. The kernel answered the first stop with the module's ID
+(0x125, 0x126), so the game stopped it again a frame later and was told ALREADY_STOPPED (0x80020135), and again,
+for good, nothing drawn: in the runner frame 3000 on was black with Start at 2700, and with no presses at all, the
+movie played to its end, frame 7500 on (to 12000).
+
+**What a PSP gives.** pspautotests' modules/unloadfill, recorded on a PSP, stops a module of its own that has a
+module_stop and prints what the stop gave: `sceKernelStopModule: 00000000`. uOFW's module manager has the same: its
+stop command's result is 0 (SCE_ERROR_OK) once the module has stopped (its module_stop returned
+SCE_KERNEL_STOP_SUCCESS, or it has none), while its start command's is the module's ID (for one that stays resident),
+and its unload command's the ID. Part 19 gave a stop's caller the ID, as a start's.
+
+**The fix** (`modules.cpp`): a stop's caller gets 0, whether the module stops at once (a stand-in, or a module with no
+module_stop) or once its module_stop has run on a thread of its own while the caller waited (`moduleThreadEnded()`).
+module_stop's result still goes where the caller asked for it, a start's caller still gets the ID, an unload's the
+ID, and the refusals are as they were (ALREADY_STOPPED for a stopped module, NOT_STARTED for one not started). The
+game's two stops give 0 at the first try, its two unloads 0x125 and 0x126, and it goes on.
+
+**The game now** (the runner, the software renderer at 7 threads, a fresh memory stick). Start at 2700 cuts the intro
+short, a "Bancho 101" loading tip shows, and its title, PRESS START BUTTON, is there from about 2900. Cross gives its
+main menu (NEW GAME, LOAD GAME, NIGHT OUT), Circle goes back to the title, and NEW GAME goes on to the difficulty, a
+loading tip, the name entry and the hometown map ("Hokkaido - Is this okay?"). With no presses the movie plays to its
+closing logo at 7200 and the title follows by 7800; Start, Left and Cross there give the same menu, difficulty and
+name entry. LOAD GAME on the fresh stick asks the savedata utility for a list load (mode 4) of SGL, which answers
+LOAD_NO_DATA (0x80110307) at once, with no dialog, and the game shows its own "An error has occurred. Retry / Cancel
+and return" (the savedata utility's part; no recording here of a list load with nothing to list).
+
+**Final Fantasy IV: The Complete Collection** has the same module thread (its threads named as Kenka Bancho's,
+MyThread-Main and MyThread-DevModule) and stops the same two modules once its title movie is over (frame 1855 in the
+report's run), again and again till a stop gives 0: white for good from about 2100 before (the report's "white fade
+after the title movie", to 7200 at least), its title, PRESS ANY BUTTON, from 2100 now, and with no press its attract
+movie from about 3900. Pressed on, it gives the collection's menu, Final Fantasy IV's own title (New Game, Load Game,
+Bestiary) and, with New Game, its opening over the world map.
+
+**The library** (the report's run, `~/phobos-work/scratch/final/lib.sh`'s way: 3600 frames, Start at 120, Cross at
+1800, three at a time, the software renderer at 7 threads; compared with the final run, `be543afba`, whose core is
+`master`'s). All 266 finish their 3600 frames, none at a missing function (Killzone: Liberation, at 5 frames a second,
+was killed at the 900-second limit with the Mac at a load of about 220 from other jobs, its first three frames the
+same; run again with a longer limit it finishes, every frame the final run's). 72 show some frame differently:
+- **Final Fantasy IV** is further on, movie -> menu: its title at 3600 where the final run had the white screen.
+- **Killzone**, the time limit above.
+- **70 others** show the same scene at each frame, or the same sequence a few frames apart (a fade, a movie, an
+  animated title, Battlefront II's random map): the runner waits at most two seconds for the screen's thread before it
+  writes a PNG, so with the Mac this loaded a picture is sometimes the one before. 64 of them never call
+  sceKernelStopModule in their 3600 frames (a scratch runner noting each call), so the change can't reach them. Of the
+  six that do: Gitaroo Man Lives!, Ghostbusters and Grand Theft Auto: Liberty City Stories differ only at frames before
+  their first stop; Grand Theft Auto: Sindacco Chronicles (three MPEG modules, at frame 13) and Metal Gear Acid (its
+  own mgp_stage, a module_stop waited for, at 300) unload what they stop whatever the stop gives, their calls
+  through frame 1250 the same as the base runner's but for the stop's result, and their library command run again
+  with both runners gives the final run's frames byte for byte; Metal Slug Anthology's run again gives the same frames
+  from both runners (at 3600 the final run is the odd one out).
+- Run side by side, base and branch at the same moment, 39 of the 71 (the 70 and Final Fantasy IV) still differed
+  somewhere, mostly at other frames
+  than in the library run (Star Ocean at 1200, Ridge Racer 2 at 1200, Macross: Ultimate Frontier at 60, none of which
+  stops a module); only Final Fantasy IV differed every time.
+
+In the report's categories: menu or gameplay 194 -> 195, movie 71 -> 70 (Final Fantasy IV), the rest as they were.
+Kenka Bancho's row stays a movie: with the report's presses its intro is still playing at 3600.
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 440 groups, 0 failures (`master`'s 438 in this environment and
+the new "modules stops give 0" and "modules state while stopping"). `tests/allegrex/run-tests.sh`: 58, none
+failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failed. "modules stops give 0" does what the game does, on
+both engines: the movie player's two modules as the game carries them (Sony's, encrypted, stood in for) and a module
+of its own whose module_stop runs while the caller waits are each started (the ID back), stopped (0), stopped again a
+frame later (ALREADY_STOPPED) and unloaded (the ID). "modules state while stopping" saves a state while a module_stop
+waits in a delay, its caller waiting for it, and loads it into another machine: both carry on alike, the caller given
+0 and module_stop's result where it asked. "modules start and link", "modules stand-ins" and "modules exit threads"
+take a stop's 0 where they took the ID. With the old kernel all five groups fail (17 checks: both engines, a
+stand-in's stop and a stop waited for, and the loaded state's). An independent read-only review found the change
+right on every path (stand-ins, module_stop waited for, a module unloading itself from module_start or module_stop,
+terminated threads, states saved mid-stop) and nothing else in the kernel relying on what a stop returns. Its points
+were taken: the state saved mid-stop is tested; a comment says a stop called with no thread has its result unseen
+(the CPU goes to module_stop's thread at once); the new test's comment is put right; uOFW's module_stop failure is
+noted beside `moduleThreadEnded()`; and part 19's description says now that a stop's caller gets 0, and its "modules
+exit threads" line where 5 and 6 go.
+
+**Left, and why.** uOFW's module manager has module_stop's own result decide whether the module stops: 1
+(SCE_KERNEL_STOP_FAIL) leaves it running and the caller gets CAN_NOT_STOP, another value leaves it running and the
+caller gets that value. Here a module stops whatever its module_stop returns, as before (the test modules' return 3
+or exit with 6, and would change with it); no recording covers it, and no game here has been seen to need it. Likewise a
+module_start returning 1 (SCE_KERNEL_NO_RESIDENT) or an error has a PSP unload the module at once, its caller getting
+0 or the error, where here the module stays, started, its caller getting the ID; a stop asked for while module_stop
+runs is ALREADY_STOPPING (0x8002013f) by uOFW, NOT_STARTED here; and unloadfill's stop took 1-5 ms on the PSP, a
+stand-in's none here. The savedata list load with nothing to list (above) is the savedata utility's.
+- Scratch: `~/phobos-work/scratch/kenka` (`ktrace.patch`, the temporary tracing; `t1` to `t5`, `ff4t-*`, `gtat-*`
+  and `mga-*`, the traces and memory dumps; `skip-fix`, `newgame-fix`, `natural-base`, `natural-fix`, `ff4-*` and
+  their sheets; `lib.sh` and `lib-list.sh`, the library script with its temporary files kept here; `lib-fix`, the
+  library run, and `cmp-lib.tsv`; `lib-stopnote`, the runs noting each stop; `pairs` and `binchk`, the runs again;
+  `ref/`, the uOFW, pspsdk and pspautotests files read). Nothing was run on the RP6.
+
+## Part 72: the Metal Gear Acids' titles and menus — vnop leaves the VFPU's prefixes for the next instruction
+
+On branch `cursor/psp-mga2-2b67`, on v2.0.0's `3cae0f907`. The task: Metal Gear Acid 2 (ULUS10077), which on the
+owner's RP6 showed the Kojima Productions logo and then, from about 45 s, a still yellow-and-black picture (Snake's
+silhouette, Venus below it) for the rest of the run, Start, Cross, Circle and the pad changing nothing, at a steady
+60 fps; the Mac's runner showed the same (the logo at 1800, a yellow screen at 2400, the picture from 3000 to 10800,
+Start and Cross pressed every 400 frames from 3700). Sources: pspdev's VFPU documentation and its tests on hardware
+(github.com/pspdev/vfpu-docs), and the game's own code, traced with a scratch runner (its kernel calls, its stage
+overlay's script, its memory, its display lists, its CPU's calls). No PPSSPP code was read for this part; JPCSP was
+not read. Save states are unchanged: the prefixes were saved already, and nothing is added to the kernel.
+
+### What the game waited for
+
+Nothing the kernel held back. Traced, the main thread ran its frame loop at 30 frames a second, waiting only for the
+vertical blank and the GE, and read the controller each time; the sound threads played the title's music; no file,
+module, font, callback or semaphore was outstanding. The title's logic is in a stage overlay (`mgp_stage`, loaded from
+the disc's raw sectors at frame 516) as a script for the engine's interpreter (its commands and names hashed to 24
+bits, read off the interpreter's code): a state machine showing a notice, the KONAMI and Kojima Productions logos and
+then the title, whose actor waits for Start (the newly pressed 0x8 of its first virtual pad), opens the main menu on
+it, and after 60 s with nothing pressed has the opening movie played. Start was taken: the actor went to its menu and
+the script to its menu state, and Circle and Cross worked the menu (Circle confirms, Cross goes back, so the
+reproduction's Start then Cross opened and closed it every 800 frames). None of it showed. The frame's display list
+set up the textures of the title's logo and its copyright line but drew nothing with them, and the menu, "PRESS START
+BUTTON", the Memory Stick check's box (a thin line at frame 300) and the Solid Eye notice before the logos (the 12
+seconds of black at frames 559-1290) were missing too; only full-screen pictures and fades were drawn.
+
+The game's sprite routine clips each sprite against the screen first, with the VFPU, and culls one whose corners are
+all outside on the same side:
+
+    lv.q    C100, 0(a0)          the corner (x, y, z, w)
+    lv.q    C110, 0(sp)          the screen: right 480, left 0, bottom 272, top 0
+    vpfxt   [x, z, z, w]
+    vcmp.q  GT, C100, C110       x > right, y > bottom
+    vpfxt   [y, w, z, w]         (for the vcmp below)
+    vnop
+    vnop
+    mfvc    v0, $131             the first vcmp's condition codes (the vnops wait out its latency)
+    vcmp.q  LT, C100, C110       x < left, y < top
+    vnop; vnop; vnop
+    mfvc    a1, $131
+
+The second prefix is set before the vnops that wait out the first vcmp's condition codes, and is meant for the second
+vcmp. Both engines used it up at the first vnop, as pspdev's documentation says vnop does, so the second vcmp compared
+x with the right edge: every corner left of x 480 was "left of the screen", every sprite inside the screen was culled,
+and only a picture reaching x 480 (a full-screen one) was drawn. (The notice's text, a fan from x 0 to 480, was drawn,
+but cut by the clipper at the edge it took it to cross, which left its u running from 65524 to 468: nothing showed.)
+
+### The fix
+
+`vnop` leaves the prefixes for the instruction after it, as `vsync` and `vflush` already did (`interpreter-vfpu.cpp`;
+in the recompiler, `recompiler-vfpu.cpp`, compiled code no longer resets them, and the block no longer takes them as at
+rest after a vnop). pspdev's documentation says vnop uses them up, but none of its tests shows it (they clear the
+prefixes with a `vadd.s` between two vnops), and a retail game built with Sony's tools needs them kept: it could not
+show its title on a PSP otherwise. PPSSPP keeps them too. That mfvc leaves them was already so (the documentation's
+tests show it). This reverses part 3's choice, which followed the documentation.
+
+### The game now
+
+The reproduction's run (10800 frames, Start and Cross every 400 frames from 3700, a PNG every 600): the notice ("SOLID
+OFF! Don't attach the SOLID EYE yet."), the KONAMI and Kojima Productions logos, then the title with its logo down the
+left, "©1987 2006 KONAMI" and a blinking "PRESS START BUTTON"; each Start opens the main menu (NEW GAME, LOAD GAME,
+CONTINUE, OPTIONS, PASSWORD, ARENA, MGS3 SUBSISTENCE LINK), each Cross closes it. With Start and then Circle: NEW
+GAME, its difficulty, the offer to carry over Metal Gear Acid's save ("Insert a Memory Stick™ containing save data",
+"Unable to load", "The game will begin without transferring data"), then its first scene and the nano-chip training
+("Okay, Snake. From here on out, you'll have to do as I say."), by frame 8400. Left at its title, it plays its opening
+movie a minute later ("Kojima Productions presents", the credits), from frame 6000.
+
+Metal Gear Acid, the first game, clips its sprites the same way, and its row's "static picture" was its title's
+background alone: it now shows its title (the logo, its two heroes, "PRESS START BUTTON"), its menu on Start, and with
+Circle its first scene's dialogue.
+
+### The library
+
+The whole library the report's way (3600 frames, Start at 120 and Cross at 1800, the software renderer at 7 threads,
+three games at a time) beside the final run (`be543afba`, whose core is master's): all 266 finish their 3600 frames
+(the slowest, Killzone, in 622 s), none missing a function. Two rows move, both from movie to menu: Metal Gear Acid's
+title at 1200 and 3600 where its background alone was, and Metal Gear Acid 2's Memory Stick check at 300, its Solid Eye
+notice at 1200 and its title at 3600 (above). In the report's categories, menu or gameplay 194 -> 196 and movie
+71 -> 69. Of the other games, 38 differ at some frame by a mean of at most 1 of 255 a channel, and 26 by more, each
+showing the scene the final run showed, a few frames apart or as the clock has it: movies further on or behind (IL-2
+Sturmovik's intro at 3600, Mega Man Maverick Hunter X's, Virtua Tennis 3's, Tales of Eternia's, Kenka Bancho's), fades
+and logos a step apart (Star Ocean: Second Evolution, Dissidia, Syphon Filter, Fuuun Shinsengumi's notice, Dragon Ball
+Z: Another Road, The Legend of Heroes III, Virtua Tennis: World Tour, Final Fantasy Tactics, Gitaroo Man's KOEI logo,
+The Sims 2's logo), titles' animations and blinking PRESS STARTs (Shepherd's Crossing, Space Invaders Extreme, LocoRoco
+and LocoRoco 2, Lumines, Star Trek, Metal Slug Anthology, Gran Turismo's and Hot Shots Golf: Open Tee 2's menus),
+Battlefront II's random map (Coruscant loading at 3600, a snow map in the final run), and PixelJunk Monsters' title,
+which follows the clock: an evening sky now, a night one in the final run (made at 4 a.m.).
+
+Which games the change touches at all: a scratch runner counting every vnop run with a prefix pending (its vnops all
+sent to the interpreter), over the library the same way, all 266 to their 3600 frames. Four run one: both Metal Gear
+Acids (113,060 and 102,212 times) and Metal Gear Solid: Portable Ops and Portable Ops Plus (6,024 and 5,880 times),
+whose frames are the same as the final run's at all four captures. No other game does, and up to a game's first such
+vnop the two runners run it alike, so the other games' differences above are the runs' own, as two runs of one runner
+differ too.
+
+### Checks
+
+- `tests/allegrex/run-tests.sh` 58 groups, 0 failures. "vfpu more" (both engines) now checks that all three prefixes
+  outlive vnop, vsync and vflush and that a vadd after each still sees one, runs a vnop in a branch's delay slot with
+  the vadd after it starting the next compiled block, and runs the game's clipping sequence above on a corner at
+  (48, 241): 0x18 and 0x14 from the two mfvc (0x15 from the second with the prefix used up). The old vnop fails it on
+  both engines, and so does a vnop resetting only the destination prefix, or resetting them only in a delay slot; the
+  random programs that compare the engines take vflush too.
+- `tests/psp/run-tests.sh` (sanitizers on) 438 groups, 0 failures; `tests/psp/ares/run-tests.sh` 307 checks, 0 failed.
+- An independent read-only review found no bug. Its points were fixed: rt's and rd's prefixes through vnop, vsync and
+  vflush, a vnop in a delay slot and vflush in the random programs had gone untested (a vnop resetting rd's prefix
+  alone passed every test), and the comments and part 3's lines listing what uses up the prefixes were stale. A delta
+  review of those found no bug either; its points (the report's summary column and README's counts, wording here)
+  were fixed too.
+
+### Left, and why
+
+- Not checked on a PSP (none here). The game shows a PSP keeping rt's prefix through two vnops; that rs's and rd's stay
+  too is taken from the same rule (and PPSSPP's), not seen.
+- Scratch: `~/phobos-work/scratch/mga2` (tools/: the script, display list and texture decoders and the contact
+  sheets; trace-patch/: the scratch runner's tracing and the vnop counter; after1 and after2, the runs above; lib-fix
+  and count, the library runs).

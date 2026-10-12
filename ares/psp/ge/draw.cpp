@@ -353,7 +353,7 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
       meshTriangles(drawn, t, kind, strip, facing, vertices);
       return void(hardware = false);
     }
-    for(auto& vertex : vertices) transform(vertex, t);
+    transformAll(vertices, t);
   }
   auto drawTriangle = [&](const Vertex& a, const Vertex& b, const Vertex& c, s32 facing) {
     if(format.through) triangle(drawn, a, b, c, facing, false);

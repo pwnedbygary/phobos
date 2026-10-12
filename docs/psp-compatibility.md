@@ -17,7 +17,15 @@ commit's runner (docs/psp-core.md, part 59); and part 62 (branch `cursor/psp-hle
 the merged stack (docs/psp-core.md, part 62); and part 64 (branch `cursor/psp-gow-sw-2b67`, on #198's
 `cursor/psp-vk-speed6-2b67`): the rows its GE changes moved, from the whole library run again beside the base commit's
 runner (docs/psp-core.md, part 64). And the final run (2026-10-11, `be543afba`, the stack's top before the merge into
-`master`): the whole library run again beside part 64's run. The other rows are the report's.
+`master`): the whole library run again beside part 64's run. And part 69 (branch `cursor/psp-hangs-2b67`, on v2.0.0's
+`3cae0f907`): Crash Tag Team Racing's row, from the whole library run again beside the final run (docs/psp-core.md,
+part 69). And part 70 (2026-10-11, branch `cursor/psp-savename-2b67`, on `master` after v2.0.0): the savedata files
+mode and PARAM.SFO, the whole library run again beside the final run, and the games that save early booted twice on
+one memory stick (docs/psp-core.md, part 70). And part 71 (branch `cursor/psp-kenka-2b67`, on `master` at v2.0.0):
+Kenka Bancho's and Final Fantasy IV's rows, from the whole library run again beside the final run (docs/psp-core.md,
+part 71). And part 72 (branch `cursor/psp-mga2-2b67`, on v2.0.0's
+`3cae0f907`): the two Metal Gear Acid rows, from the whole library run again beside the final run (docs/psp-core.md,
+part 72). The other rows are the report's.
 
 ## Method
 
@@ -53,13 +61,55 @@ game that looked worse was run again without presses on both commits before call
 
 ## Summary
 
-| Category | Before (`b27f084a5`) | Run 1 (#183's tip) | Now | Part 55 | Part 57 | Part 58 | Part 59 | Part 62 | Part 64 | Final | Change since Before |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| Menu or gameplay | 141 | 148 | 175 | 178 | 180 | 180 | 187 | 188 | 189 | 194 | +53 |
-| Movie | 35 | 43 | 63 | 63 | 63 | 65 | 71 | 71 | 71 | 71 | +36 |
-| Stuck loading | 13 | 8 | 5 | 4 | 4 | 4 | 0 | 0 | 0 | 0 | -13 |
-| Black or hang | 73 | 64 | 21 | 19 | 17 | 15 | 6 | 6 | 6 | 1 | -72 |
-| Timed out | 4 | 3 | 2 | 2 | 2 | 2 | 2 | 1 | 0 | 0 | -4 |
+| Category | Before (`b27f084a5`) | Run 1 (#183's tip) | Now | Part 55 | Part 57 | Part 58 | Part 59 | Part 62 | Part 64 | Final | Part 70 | Part 71 | Part 72 | Change since Before |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Menu or gameplay | 141 | 148 | 175 | 178 | 180 | 180 | 187 | 188 | 189 | 194 | 194 | 195 | 197 | +56 |
+| Movie | 35 | 43 | 63 | 63 | 63 | 65 | 71 | 71 | 71 | 71 | 71 | 70 | 68 | +33 |
+| Stuck loading | 13 | 8 | 5 | 4 | 4 | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | -13 |
+| Black or hang | 73 | 64 | 21 | 19 | 17 | 15 | 6 | 6 | 6 | 1 | 1 | 1 | 1 | -72 |
+| Timed out | 4 | 3 | 2 | 2 | 2 | 2 | 2 | 1 | 0 | 0 | 0 | 0 | 0 | -4 |
+
+Part 72 (2026-10-11, on v2.0.0) moves two rows from movie to menu, both Metal Gear Acids: Metal Gear Acid shows its
+title (its "static picture" was the title's background alone) and Metal Gear Acid 2 its Memory Stick check, its Solid
+Eye notice and its title, where its intro art had sat with every press seemingly ignored; with Start each opens its main
+menu, and with Circle a game begins. Both clip their sprites with the VFPU and need a prefix kept through two vnops,
+which the CPU had used up, so every sprite inside the screen was culled (docs/psp-core.md, part 72). In the categories, after
+part 71's Final Fantasy IV, menu or gameplay 195 -> 197 and movie 70 -> 68. The whole library run again beside the final run: every other game
+shows at each frame the scene the final run showed, or the same sequence a few frames apart (fades, animation steps,
+movies further on or behind, Battlefront II's random map, and PixelJunk Monsters' title, whose sky follows the clock);
+all 266 finish their 3600 frames, none missing a function. Only four games run a vnop with a prefix pending at all,
+counted: the two Metal Gear Acids, and Metal Gear Solid: Portable Ops and Portable Ops Plus, whose frames are unchanged.
+
+Part 71 (2026-10-11, on `master` at v2.0.0) moves one row: Final Fantasy IV, which stayed on a white screen for good
+after its title movie, shows its title at 3600 (then its attract movie; pressed on, its menus and opening). It and
+Kenka Bancho: Badass Rumble stop the movie player's two modules after a movie and wait for a stop to give 0, as a PSP
+gives, where the kernel gave the module's ID (docs/psp-core.md, part 71). Kenka Bancho's row stays a movie (its intro
+still plays at 3600 with the report's presses), but past the intro, skipped or played out, it now reaches its title,
+menu and a new game in the runner, where it was black for good (on the owner's RP6 too). The whole library was run
+again the same way beside the final run: all 266 finish (Killzone run again with a longer limit, the Mac at a load of
+about 220 from other jobs), none stops at a missing function, and the 70 other games with a frame shown differently
+show the same scenes a few frames apart, the runner's own (64 of them never stop a module; the six that do act alike
+on both runners).
+
+Part 70 (2026-10-11, the savedata utility's files mode and the PARAM.SFO written beside every save) moves no row: the
+whole library run again with its runner shows every game's scenes as the final run did, in the same categories.
+Seventy-nine games differ at some capture; run again with the base commit's runner and this one at the same time, 41 of
+77 match exactly (PixelJunk Monsters' title sky follows the time of day), and the rest are the same scene a frame or a
+step apart, as two runs of one runner differ; God of War: Ghost of Sparta and Killzone, which reached the time limit
+with other work on the machine, finish alone with the final run's frames. Three rows gain a note: Valkyria Chronicles II
+and III and Shining Blade, booted again on the same memory stick, find their saves, where each had called its save
+corrupted and made it again (docs/psp-core.md, part 70).
+
+Part 69 (2026-10-11, on v2.0.0) moves no category. Crash Tag Team Racing, which sat at its Memory Stick check notice
+(counted as a menu), plays its intro and shows its attract race at 3600: its main thread starts its next save dialog
+straight after closing one, and a PSP has the dialog closed by then (docs/psp-core.md, part 69). Dragon Ball Z:
+Tenkaichi Tag Team, which looked stuck at "Now Loading" on the RP6, was loading its attract demo while the RP6's SD card
+was being written by a copy; its row is unchanged. The whole library run again beside the final run: 81 games close a
+save dialog from a thread worse than 0x20 and the dialog's own threads within their minute; every game but Crash shows
+at each frame the scene the final run showed, or the same sequence a few frames apart (three titles a step apart from
+the closing taking no time now), none missing a function. Super Monkey Ball Adventures hit the 900 s limit with the Mac
+shared with other jobs; run again with no limit, its four frames are the final run's, and side by side with master's
+runner it runs at the same speed.
 
 The final run (2026-10-11), the whole library again on the stack's top before it merged into `master` (`be543afba`:
 part 67's speedups, #205, and the owner's PGD fix, #206, on part 64's), moves six rows, the six black games, all of which
@@ -68,8 +118,8 @@ Ghost of Sparta its difficulty menu, and Naruto, Shining Blade and Valkyria Chro
 before their menus. Black Wolves Saga, black at 3600, is loading its opening there: run to 7200 frames, it plays it
 from about 4200 and shows its title by 5400. Eighteen other games show some frame differently from part 64's run, each
 the same scene a few frames apart (a fade, an animation step, a movie further on), as two runs of one runner differ
-too; no game shows less than it did. All 266 finish their 3600 frames (the slowest, Ghost of Sparta, in 639 s, three
-at a time beside other work), and none stops at a missing function.
+too; no game shows less than it did. All 266 finish their 3600 frames (the slowest, Killzone, in 691 s, three at a
+time beside other work), and none stops at a missing function.
 
 Part 64 moves one row: God of War: Chains of Olympus, which had timed out, finishes its 3600 frames, its difficulty
 menu at 3600 (the Cross at 1800 took New Game): its loop drew its scene as fast as the GE let it, and our GE took no
@@ -361,7 +411,7 @@ and now, and what the last frames showed or why a game stops.
 | Cladun - This Is An RPG | NPUH10072 | 393 | menu | menu | menu | title menu |
 | Colin McRae Rally 2005 Plus [Europe] | ULES00111 | 50 | menu | menu | menu | auto-save prompt |
 | Corpse Party - Sweet Sachikos Hysteric Birthday Bash [English 04-29-2026] | ULJM06114 | 295 | menu | menu | menu | title, press start; its music from about 35 s on since part 58 (the ATRAC low level, missing before) |
-| Crash Tag Team Racing | ULUS10044 | 134 | black | black | menu | Memory Stick check notice (black after the legal screen before) |
+| Crash Tag Team Racing | ULUS10044 | 134 | black | black | gameplay | its attract race at 3600, after its intro and title (part 69: its main thread, at 0x3f, starts its next save dialog straight after closing one, and refused as the first still closed, it had polled for good at its Memory Stick check notice); with Start at the title, its menus and name entry, its save made (black after the legal screen before) |
 | Crazy Taxi - Fare Wars | ULUS10273 | 299 | menu | menu | menu | title |
 | Crimson Gem Saga | ULUS10400 | 129 | menu | menu | menu | system data notice |
 | Crisis Core - Final Fantasy VII | ULUS10336 | 138 | black | black | menu | title menu |
@@ -396,7 +446,7 @@ and now, and what the last frames showed or why a game stops.
 | Final Fantasy - 20th Anniversary Edition | ULUS10251 | 454 | movie | menu | menu | title |
 | Final Fantasy II - 20th Anniversary Edition | ULUS10263 | 367 | black | menu | menu | title, press start |
 | Final Fantasy III | NPUH10125 | 324 | movie | movie | movie | intro movie |
-| Final Fantasy IV | ULUS10560 | 428 | movie | movie | movie | white fade after the title movie |
+| Final Fantasy IV | ULUS10560 | 428 | movie | movie | menu | its title, PRESS ANY BUTTON, from about 2100, then its attract movie; pressed on, the collection's menu and Final Fantasy IV's own title and opening (part 71: a module's stop gives 0; white for good after the title movie before) |
 | Final Fantasy Tactics - War of the Lions Tweak [v2.52] | ULUS10297 | 224 | menu | menu | menu | title |
 | Final Fantasy Type 0 | NPJH50443 | 254 | menu | menu | menu | autosave notice (scePower a85880d0, missing before, since part 58) |
 | Full Auto 2 - Battlelines | ULUS10220 | 215 | menu | menu | menu | profile menu |
@@ -433,7 +483,7 @@ and now, and what the last frames showed or why a game stops.
 | Jeanne d'Arc | UCUS98700 | 172 | menu | menu | menu | title menu |
 | Juiced - Eliminator | ULUS10090 | 254 | loading | black | movie | loading screen, THQ movie, then the intro movie |
 | Juiced 2 - Hot Import Nights | ULUS10312 | 123 | black | timeout | movie | intro and a 3D club scene (159 fps) |
-| Kenka Bancho - Badass Rumble | ULUS10442 | 364 | black | movie | movie | intro scenes |
+| Kenka Bancho - Badass Rumble | ULUS10442 | 364 | black | movie | movie | intro scenes; past them, skipped with Start or played out (by about 7800 then), its title, main menu and a new game's name entry (part 71: a module's stop gives 0; black for good after the intro before, on the RP6 too) |
 | Key Of Heaven | UCES00178 | 184 | menu | menu | menu | language select |
 | Kidou Senshi Gundam Gundam vs. Gundam NEXT PLUS [English] | NPJH50107 | 238 | menu | menu | menu | pilot name notice |
 | Killzone - Liberation | UCUS98646 | 3 | black | gameplay | gameplay | in the first level (4.8 fps) |
@@ -450,7 +500,7 @@ and now, and what the last frames showed or why a game stops.
 | Lumines - Puzzle Fusion | ULUS10002 | 183 | menu | gameplay | gameplay | demo play |
 | Lumines II | ULUS10183 | 394 | menu | gameplay | gameplay | demo play |
 | Lunar - Silver Star Harmony | ULUS10482 | 312 | menu | menu | menu | autosave notice |
-| MACH | ULES00565 | 245 | menu | black | menu | title "Press START Button" from 2100, then its attract movie (3900-5100) and the title again (part 57: judged again with a frame every 300 to 5400; frame 3600 falls on the black between title and movie) |
+| MACH | ULES00565 | 245 | menu | black | menu | its title, then Start (or Cross) takes it to its profile handling and memory stick notice: the title reads all 64 controller samples each frame, which Phobos refused until 2026-10-11, so no button reached it (the scripted Start at 120 came before the title; earlier: title from 2100, its attract movie 3900-5100) |
 | Macross - Ace Frontier [Japan] | ULJS00158 | 579 | menu | menu | menu | title |
 | Macross - Triangle Frontier [Japan] | ULJS00321 | 604 | black | black | menu | autosave notice, then a soundtrack folder prompt (black before: utility module 0x108 refused) |
 | Macross - Ultimate Frontier [Japan] | NPJH50050 | 683 | menu | menu | menu | soundtrack folder prompt |
@@ -461,8 +511,8 @@ and now, and what the last frames showed or why a game stops.
 | Mega Man Powered Up [UNDUB v1.3] | ULUS10091 | 396 | menu | gameplay | gameplay | demo at 1200, loading at 3600 |
 | Melodie (Prototype) | PETR00010 | 263 | black | black | menu | its loading screen, then its menus: PLAY, SELECT TRACK, ARENA, and CONTINUE, MUSIC ANALYSIS, CREATURE VIEWER (part 62: asking first thing for a 40 MiB heap, more than the 24 MiB partition holds, it's started again with all of RAM; refused before, it stopped there, black) |
 | Mercury Meltdown | ULUS10133 | 292 | menu | menu | menu | title |
-| Metal Gear Acid | ULUS10006 | 529 | movie | movie | movie | static picture |
-| Metal Gear Acid 2 | ULUS10077 | 789 | movie | movie | movie | intro art |
+| Metal Gear Acid | ULUS10006 | 529 | movie | movie | menu | title, PRESS START BUTTON (part 72: vnop keeps the VFPU's prefixes; the game's sprite clipping had culled all but its title's background, the static picture before); with Start its main menu, with Circle its first scene's dialogue |
+| Metal Gear Acid 2 | ULUS10077 | 789 | movie | movie | menu | title, PRESS START BUTTON, after its Memory Stick check, Solid Eye notice and logos (part 72: vnop keeps the VFPU's prefixes; its sprite clipping had culled every sprite inside the screen, leaving its title's art); with Start its main menu, with Circle a new game's tutorial (its intro art before, presses changing nothing to be seen) |
 | Metal Gear Solid - Digital Graphic Novel | ULUS10108 | 260 | black | movie | movie | intro |
 | Metal Gear Solid - Peace Walker [v2.00] | ULUS10509 | 201 | movie | movie | movie | opening quote |
 | Metal Gear Solid - Portable Ops | ULUS10202 | 545 | movie | loading | menu | intro, then PRESS START BUTTON (part 59: sceIoDread's short names laid out by its SDK) |
@@ -518,7 +568,7 @@ and now, and what the last frames showed or why a game stops.
 | Sega Rally Revo | ULUS10311 | 129 | black | black | menu | autosave notice, then the title (an assert at its 4800-packet ring before) |
 | Sheperds Crossing | ULUS10499 | 86 | black | menu | menu | title, press start |
 | Shin Megami Tensei - Persona 3 Portable | ULUS10512 | 755 | movie | loading | menu | logo, intro and title, PRESS ANY BUTTON (2100 to 3000), then its attract loop starts over: a loading screen at 3600 (judged again in part 55; scesupPreAcc 86debd66, a function of Sony's LIBSUPPREACC.PRX, which the game loads, runs since part 62) |
-| Shining Blade [gugule] | NPJH50530 | 526 | black | black | menu | its autosave notice at 1200, "There is no save data." at 3600: DATA.BIN decrypts (#206) |
+| Shining Blade [gugule] | NPJH50530 | 526 | black | black | menu | its autosave notice at 1200, "There is no save data." at 3600: DATA.BIN decrypts (#206); booted again on the same stick, "Save data has been loaded." (part 70: before, "Save data is corrupted." and made again) |
 | Shining Hearts [English MT v1.2] | NPJH50342 | 302 | menu | menu | menu | system data prompt |
 | Shining Hearts [English] | NPJH50342 | 314 | menu | menu | menu | system data prompt |
 | Shinobido - Tales of the Ninja [Europe] [Undub 2021-06-28] | UCES00421 | 269 | menu | menu | menu | title |
@@ -579,8 +629,8 @@ and now, and what the last frames showed or why a game stops.
 | Umineko no Nakukoro ni Portable [English v1.0] | ULJM05968 | 205 | menu | black | menu | title menu |
 | Valhalla Knights | ULUS10230 | 373 | menu | black | movie | autosave notice, XSEED and Marvelous logos, then its intro (part 59: a file holds one asynchronous result at a time; its seek, made again over the first's result not taken, had been under way again at each poll, for good) |
 | Valhalla Knights 2 | ULUS10366 | 416 | menu | menu | movie | intro |
-| Valkyria Chronicles II | ULUS10515 | 278 | loading | menu | menu | autosave notices |
-| Valkyria Chronicles III [English v1.0.8] | ULJM05957 | 546 | black | black | menu | its autosave and Media Storage notices at 1200 and 3600: DATA.BIN decrypts (#206) |
+| Valkyria Chronicles II | ULUS10515 | 278 | loading | menu | menu | autosave notices; booted again on the same stick, its save found and read, its title and opening (part 70: before, "Delete corrupted save data?" and made again) |
+| Valkyria Chronicles III [English v1.0.8] | ULJM05957 | 546 | black | black | menu | its autosave and Media Storage notices at 1200 and 3600: DATA.BIN decrypts (#206); booted again on the same stick, its save found and read (part 70: before, deleted as corrupted and made again) |
 | Valkyrie Profile Lennth | ULUS10107 | 78 | loading | menu | menu | new game difficulty select |
 | Virtua Tennis - World Tour | ULUS10037 | 193 | menu | menu | menu | title at 1200, white at 3600 after Cross |
 | Virtua Tennis 3 | ULUS10246 | 341 | menu | menu | menu | title |

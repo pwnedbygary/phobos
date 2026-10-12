@@ -883,7 +883,8 @@ auto matchesInterpreter() -> void {
         break;
       }
       case 49: word = ccond(random(16), random(32), random(32)); break;
-      // the VFPU, which the recompiler also leaves to the interpreter
+      // the VFPU, which the recompiler compiles in part (the rest, and any instruction with a prefix set, it leaves to
+      // the interpreter)
       case 50: {
         const uint32_t operations[] = {0xc0, 0xc1, 0xc7, 0xc8, 0xc9, 0xca, 0xda, 0xdb, 0xde, 0xdf};  // vadd ... vslt
         word = vfpuOp(operations[random(10)], size, vd, vs, vt);
@@ -912,9 +913,11 @@ auto matchesInterpreter() -> void {
         word = vfpuOp(operation, size, vd, vs, operation == 0x1a5 ? random(32) : vt);
         break;
       }
-      case 57:  // vnop, vsync, cache
-        word = random(3) == 0 ? 0xffff0000u : random(2) ? 0xffff0320u : 0xbc000000u | random(0x400000);
+      case 57: {  // vnop, vsync, vflush, cache
+        const uint32_t waits[] = {0xffff0000u, 0xffff0320u, 0xffff040du};
+        word = random(4) ? waits[random(3)] : 0xbc000000u | random(0x400000);
         break;
+      }
       }
       code.push_back(word);
     }

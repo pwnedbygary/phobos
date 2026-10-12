@@ -25,7 +25,7 @@ GE::GE(Memory& memory) : memory(memory) {
   };
   memory.finishDrawing = [this] { settleAll(); };  //(threads.cpp)
   memory.finishDrawingOver = [this](u32 first, u32 last) { settleOver(first, last); };
-  memory.vramDrawnOver = [this](u32 first, u32 last) { return drawnOver(first, last); };
+  memory.vramDrawnOver = [this](u32 first, u32 last, bool depthLoad) { return drawnOver(first, last, !depthLoad); };
   memory.vramChangedBusy = [this](u32 first, u32 last) {
     if(renderer) renderer->besideChanged(*this, first, last);
   };

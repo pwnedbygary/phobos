@@ -175,7 +175,12 @@ or another frame buffer's drawn there, are newer than its pixels. Decoded textur
 change when the pages are first owned, as they do of the software renderer's drawing. The depth buffer isn't read back
 (the GPU's depth stays the GPU's; a game that reads depth with the CPU, or samples it as a texture, sees what memory
 had; and a PRIM the software renderer draws, above, tests against memory's depth): PPSSPP makes the same choice by
-default, and it's on the list below.
+default, and it's on the list below. So a load (`Memory::read()`: the CPU's, an HLE function's) through VRAM's second
+or fourth copy, the views the GE keeps its depth buffer in, doesn't finish the renderer (part 68:
+`Memory::vramDrawnOver`'s `depthLoad`): finishing couldn't give it the GPU's depth, only the colors of a frame buffer
+drawn over the same bytes. (Stores, and copies in or out through those views, still finish.) WipEout reads its depth
+buffer at the screen's middle and a few more points as it draws, where its bloom's buffers are: one finish a frame,
+and its pixels read back, for the colors of the bloom of the frame before.
 
 **Bytes beside the pixels.** A page is 4 KiB, two rows of a 512-wide 8888 frame buffer, and games keep their own
 bytes in the same pages: Brave Story keeps its display list in the 32 unused columns right of its 480-pixel picture,
@@ -306,7 +311,15 @@ What the GPU does with the GPU's own units, and how near the PSP it comes:
 - **Stencil**: the GPU's 8-bit stencil, with the GE's comparison, reference, masks and operations (keep, zero,
   replace, invert, increment and decrement clamped). The alpha written to the color follows the stencil where the pass
   operation's result is known in advance (replace, zero), so blending by the frame buffer's alpha reads it; the
-  stencil itself is what's read back as the alpha.
+  stencil itself is what's read back as the alpha. A 16-bit frame buffer's stencil is held as the GE reads it (part
+  68): a 5551 one's bit as 0 or 255, a 4444 one's four bits twice over, as fills and moves put it there, and so do
+  clear mode's alpha (a triangle's last corner's for all of it, a sprite's, a point's, each pixel's of a line), a
+  replace's reference and MASK_ALPHA's bits (each kept bit with its copies); where a replace's
+  comparison takes bits the format doesn't keep, a 5551 one's is made on its top bit against the kept reference
+  (the same at 0 and 255), and a 4444 one's stays the GE's, its replace then writing all eight bits. Increment and
+  decrement still step a 16-bit one's stencil by one, where the PSP's steps a 5551 one to 255 or 0 and a 4444 one by
+  16. A 5650 frame buffer has none, which the GE's test reads as 0: a test failing against 0 drops every pixel (a
+  never-passing test on the GPU), one passing is no test.
 - **Write masks**: per channel, where a channel's mask is all or nothing (as games use them); the GPU has no bitwise
   color mask, so a partial mask writes the whole channel.
 - **Blending**: the GE's factors map onto the GPU's: the frame buffer's color or alpha as the GPU's destination

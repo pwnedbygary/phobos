@@ -129,8 +129,7 @@ auto Allegrex::Recompiler::prefixesAfter(u32 instruction) -> void {
   case 0x37:
     prefixesAtRest = (instruction >> 24 & 3) == 3;  //viim and vfim use them up; vpfxs, vpfxt and vpfxd set them
     return;
-  case 0x3f:
-    if(instruction == 0xffff'0000) prefixesAtRest = true;  //vnop (vsync and vflush leave them alone)
+  case 0x3f:  //vnop, vsync and vflush leave them alone
     return;
   case 0x12:
     if((instruction >> 21 & 31) == 0x07 && instruction & 0x80) prefixesAtRest = false;  //mtvc
@@ -189,14 +188,8 @@ auto Allegrex::Recompiler::emitVFPU(u32 address, u32 instruction, u32 count, boo
     callf(&Allegrex::vfpuMatrix, imm(which), imm(vd | vs << 8 | vt << 16), imm(group == 0 ? size : matrix));
     prefixesAtRest = true;
     return true;
-  } else if(instruction == 0xffff'0000) {  //vnop: the prefixes go back to rest
-    mov32(field(&self.vfpu.pfxs), imm(PrefixIdentity));
-    mov32(field(&self.vfpu.pfxt), imm(PrefixIdentity));
-    mov32(field(&self.vfpu.pfxd), imm(0));
-    prefixesAtRest = true;
-    return true;
-  } else if(instruction == 0xffff'0320 || instruction == 0xffff'040d) {  //vsync, vflush: nothing to wait for
-    return true;
+  } else if(instruction == 0xffff'0000 || instruction == 0xffff'0320 || instruction == 0xffff'040d) {
+    return true;  //vnop, vsync, vflush: nothing to do or wait for, and the prefixes stay for the next instruction
   }
   #undef Sized
   if(!helper && !constant) return false;

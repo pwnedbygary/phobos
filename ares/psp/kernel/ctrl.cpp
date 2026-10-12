@@ -101,14 +101,14 @@ auto Kernel::sceCtrlGetSamplingMode() -> void {
   result(0);
 }
 
-//How many samples a program asked for: the PSP takes the count as a byte, and keeps 64 samples, so 64 or more is too
-//many.
+//How many samples a program asked for: the PSP takes the count as a byte, and keeps 64 samples, so up to 64 may be
+//asked for and more is too many. (MACH reads all 64 every frame at its title: refused, it never saw Start.)
 static auto sampleCount(u32 argument) -> u32 { return argument & 0xff; }
 
 //(data, count): the last count samples, oldest first; returns count.
 auto Kernel::peekController(bool negative) -> void {
   u32 address = arg(0), count = sampleCount(arg(1));
-  if(count >= 64) return result(ErrorInvalidSize);
+  if(count > 64) return result(ErrorInvalidSize);
   if(count && !memory.reaches(address, count * 16)) return result(ErrorIllegalAddress);
   writeSamples(address, (controller.next + 64 - count) % 64, count, negative);
   result(count);
@@ -120,7 +120,7 @@ auto Kernel::peekController(bool negative) -> void {
 //whether the thread may wait (intr/waits recorded it so in an interrupt handler and with dispatching held off).
 auto Kernel::readController(bool negative) -> void {
   u32 address = arg(0), count = sampleCount(arg(1));
-  if(count >= 64) return result(ErrorInvalidSize);
+  if(count > 64) return result(ErrorInvalidSize);
   if(!mayWait()) return;
   if(count && !memory.reaches(address, count * 16)) return result(ErrorIllegalAddress);
   if(controller.unread) return result(readSamples(address, count, negative));

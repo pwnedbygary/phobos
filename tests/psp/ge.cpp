@@ -1355,6 +1355,65 @@ static auto geThreads() -> void {
   }
 }
 
+//A load through VRAM's fourth copy (the depth buffer as the GE has it) of depths a batch still draws, and through its
+//second copy: the batch is waited for, as for a load through the first copy (only a hardware renderer's depth isn't
+//memory's to wait for: Memory::vramDrawnOver's depthLoad). The depths found are those drawing it all on one thread
+//writes, compiled loads and the interpreter's alike.
+static auto geDepthViewLoads() -> void {
+  constexpr u32 Depth = 0x11'0000;  //(VRAM offset: 512 depths a row)
+  auto build = [&](Memory& memory) {
+    ListWriter list{memory, ListA};
+    u32 vertex = Vertices;
+    struct V { float u, v; u32 color; float x, y, z; };
+    auto put = [&](std::initializer_list<V> vertices) {
+      list.to(GE::VertexAddress, vertex);
+      for(auto& v : vertices) {
+        for(float value : {v.u, v.v}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+        memory.write(4, vertex, v.color), vertex += 4;
+        for(float value : {v.x, v.y, v.z}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+      }
+      list.put(GE::Primitive, GE::Sprites << 16 | vertices.size());
+    };
+    list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 512), list.put(GE::FrameBufferPixelFormat, 3);
+    list.put(GE::DepthBufferPointer, Depth), list.put(GE::DepthBufferWidth, 512);
+    list.put(GE::Scissor2, 479 | 271 << 10), list.put(GE::Region2, 479 | 271 << 10);
+    list.put(GE::VertexType, 0x80'019f), list.put(GE::ShadeMode, 1);
+    list.put(GE::DepthTestEnable, 1), list.put(GE::DepthTest, 1);  //(always: each sprite's depth written)
+    for(u32 n = 0; n < 30; n++) {
+      float x = n * 37 % 200, y = n * 23 % 100;
+      put({{0, 0, 0, x, y, 0}, {0, 0, 0xff00'0000 + n * 0x10'2030, x + 280, y + 172, 1000.0f + n * 2000}});
+    }
+    list.put(GE::Finish), list.put(GE::End);
+  };
+  u32 middle = Depth + (136 * 512 + 240) * 2, corner = Depth + (60 * 512 + 300) * 2;
+  auto loads = [&](u32 threads, bool recompile) {
+    KernelMachine m;
+    m.system.ge.setThreads(threads);
+    m.system.ge.drawing.shared = 0;
+    build(m.system.memory);
+    m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
+    if(threads > 1) {  //(a batch drawing the depths still being drawn: else the loads wait for nothing)
+      bool drawing = false;
+      for(auto& batch : m.system.ge.drawing.batches) {
+        drawing |= GE::unfinished(batch) && batch.pending[Memory::vramOffset(3, middle) >> 12];
+      }
+      CHECK(drawing, true);
+    }
+    u32 fourth = 0x0460'0000 + middle, second = 0x0420'0000 + Memory::vramSeen(1, Memory::vramOffset(3, corner));
+    m.system.runProgram(0x0890'0000, {lui(t0, fourth >> 16), ori(t0, t0, fourth & 0xffff), lhu(t1, 0, t0),
+                                      lui(t2, second >> 16), ori(t2, t2, second & 0xffff), lhu(t3, 0, t2),
+                                      lui(t4, 0x0892), sw(t1, 0, t4), sw(t3, 4, t4)}, recompile);
+    m.system.ge.settle();
+    return std::array<u32, 2>{m.system.memory.read(4, 0x0892'0000), m.system.memory.read(4, 0x0892'0004)};
+  };
+  auto one = loads(1, false);
+  CHECK(one[0], 59000u);  //(the last sprite over each, its depth written as it was drawn)
+  CHECK(one[1], 57000u);
+  for(u32 threads : {2u, 4u}) {
+    for(bool recompile : {false, true}) CHECK(loads(threads, recompile) == one, true);
+  }
+}
+
 //A picture drawn off the screen and then drawn with (render to texture), its decode left till its batch starts
 //(ge/threads.cpp): till then the texture's pages stay busy for the CPU, as the pages a batch draws over do, and the
 //CPU's store into the picture just after the list lands after the sprite drew with it, its load of the sprite's pixel
@@ -2375,7 +2434,8 @@ auto geTests() -> Tests {
     {"ge commands", geCommands}, {"ge moving", geMoving}, {"ge stops", geStops}, {"ge vertices", geVertices},
     {"ge clear", geClear}, {"ge transfer", geTransfer}, {"ge driver", geDriver}, {"ge base kept", geBaseKept},
     {"ge saved state", geSaved}, {"ge endless list", geEndless}, {"ge drawn on several threads", geThreads},
-    {"ge deferred texture busy", geDeferredBusy}, {"ge batches round the ring", geRing},
+    {"ge deferred texture busy", geDeferredBusy}, {"ge loads through the depth buffer's views wait for the threads",
+    geDepthViewLoads}, {"ge batches round the ring", geRing},
     {"ge drawn over its own texture", geOwnTexture}, {"ge transfers among batches", geTransfers},
     {"ge callbacks", geCallbacks}, {"ge suspend", geSuspend}, {"ge finish order", geFinishOrder},
     {"ge pause", gePause}, {"ge callbacks see the ge stopped", geCallbackState}, {"ge pause window", gePauseWindow},

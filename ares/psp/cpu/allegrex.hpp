@@ -301,7 +301,9 @@ struct Allegrex {
   //The prefixes change how the next instruction reads its operands and writes its result, and are used up by it:
   //vpfxs sets the one for rs, vpfxt for rt and vpfxd for rd. A source prefix can reorder the lanes (a "swizzle"),
   //take their absolute values, negate them, or put a constant such as 1 or 1/2 in a lane instead; the destination
-  //prefix can clamp results to 0..1 or -1..1 ("saturate"), or leave lanes unwritten ("mask").
+  //prefix can clamp results to 0..1 or -1..1 ("saturate"), or leave lanes unwritten ("mask"). vnop, vsync, vflush,
+  //the loads, stores, branches, and moves to and from integer and control registers don't use them: they stay for
+  //the next instruction that does (but a move to a prefix's own control register, 128 to 130, sets it).
   //
   //The condition codes (cc) hold vcmp's results, a bit per lane plus "any lane" and "every lane", which bvt and
   //bvf branch on and vcmovt and vcmovf choose by.

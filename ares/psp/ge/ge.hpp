@@ -391,6 +391,12 @@ struct GE {
   auto settingsState(Transform& t) const -> void;
   auto transformKept() -> Transform&;
   auto transform(Vertex& vertex, const Transform& t) -> void;
+  auto transformAll(std::vector<Vertex>& vertices, const Transform& t) -> void;
+  //(transform()'s stages: a vertex's place in its model, skinned, in the world and its depth in the view, from the
+  //first to the last)
+  struct Placing { float model[3], world[3], viewZ; };
+  inline auto transformPlace(Vertex& vertex, const Transform& t, Placing& placing) -> void;
+  inline auto transformRest(Vertex& vertex, const Transform& t, const Placing& placing) -> void;
   auto project(Vertex& vertex, const Transform& t, bool clipped) const -> void;
   auto clipTriangle(const Look& look, const Transform& t, const Vertex& a, const Vertex& b, const Vertex& c,
                     s32 facing) -> void;
@@ -499,7 +505,7 @@ struct GE {
   auto drawnFirst(u32 address, u32 size) -> void;
   auto undrawnPage(u32 address) -> bool;
   auto drawnBefore(const std::bitset<VRAMPages>& read, const std::bitset<VRAMPages>& written) -> void;
-  auto drawnOver(u32 first, u32 last) -> bool;
+  auto drawnOver(u32 first, u32 last, bool rendered = true) -> bool;
   auto defer(const PixelState& pixel, const Region& region) -> bool;
   auto record(const Job& job) -> void;
   auto drawBands(Batch& batch) -> void;

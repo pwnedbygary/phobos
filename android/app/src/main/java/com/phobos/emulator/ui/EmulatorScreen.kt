@@ -615,7 +615,9 @@ private fun GamePicture(
                     setZOrderMediaOverlay(true)
                     isFocusable = false
                     setOnGenericMotionListener { _, event ->
-                        GameInputState.handleMotionEvent(event, viewModel.activeControls.value.mappings, systemName)
+                        GameInputState.handleMotionEvent(
+                            event, viewModel.activeControls.value.mappings, systemName, viewModel.settings.value.pspRightStick,
+                        )
                     }
                     holder.addCallback(object : SurfaceHolder.Callback {
                         override fun surfaceCreated(h: SurfaceHolder) {

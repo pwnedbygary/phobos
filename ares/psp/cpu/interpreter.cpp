@@ -107,7 +107,7 @@ auto Allegrex::decoderEXECUTE() -> void {
     if(OPCODE & 2) return SVRQ(VTQ, RS, IMMv);
     return SVLQ(VTQ, RS, IMMv);
   op(0x3e, SVQ, VTQ, RS, IMMv);
-  jp(0x3f, VFPU7);  //vnop, vsync and vflush, which see to the prefixes themselves
+  jp(0x3f, VFPU7);  //vnop, vsync and vflush, which leave the prefixes for the next instruction
   }
   INVALID();
 }

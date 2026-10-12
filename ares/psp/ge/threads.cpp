@@ -475,9 +475,10 @@ auto GE::drawnBefore(const std::bitset<VRAMPages>& read, const std::bitset<VRAMP
 }
 
 //Whether drawing still going on reaches VRAM's bytes first to last (offsets in VRAM): all of a page a batch being
-//drawn draws in, or has yet to read a deferred texture from (not one all drawn already), or a hardware renderer's
-//pixels themselves (Memory::vramDrawnOver, for whoever touches busy pages).
-auto GE::drawnOver(u32 first, u32 last) -> bool {
+//drawn draws in, or has yet to read a deferred texture from (not one all drawn already), or (rendered) a hardware
+//renderer's pixels themselves (Memory::vramDrawnOver, for whoever touches busy pages; the batches alone for a load
+//through the depth buffer's views).
+auto GE::drawnOver(u32 first, u32 last, bool rendered) -> bool {
   for(auto& batch : drawing.batches) {
     if(!unfinished(batch)) continue;
     bool reading = !batch.readsDone.load(std::memory_order_acquire);
@@ -485,7 +486,7 @@ auto GE::drawnOver(u32 first, u32 last) -> bool {
       if(batch.pending[page] || (reading && batch.reads[page])) return true;
     }
   }
-  return renderer && renderer->drawnOver(*this, first, last);
+  return rendered && renderer && renderer->drawnOver(*this, first, last);
 }
 
 //Whether a primitive drawn with these settings, inside region, may wait in the batch (see the top of this file):

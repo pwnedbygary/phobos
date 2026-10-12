@@ -25,6 +25,253 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Merged into master: #212 to #219 — 2026-10-11
+
+Branch `cursor/psp-merge-212-219-2b67`: master plus #212 (speed 8), #213 (64 controller samples), #214 (PSP pause-menu
+section, right stick), #215 (Crash's save dialog), #216 (the game's name in the pause menu), #218 (savedata files mode,
+PARAM.SFO), #217 (a module's stop gives 0) and #219 (vnop keeps the VFPU prefixes), merged in the docs' part order.
+Conflicts were docs only, plus #214 and #216 each adding a line after `_loadedGame.value = null` (both kept): the
+handoff entries newest first, parts 68 to 72 in order, and one summary table in docs/psp-compatibility.md with columns
+for parts 70, 71 and 72 (197 menu or gameplay, 68 movie, 1 black; README the same). The code is the same as the test
+build installed on the owner's RP6 as 2.0.0-test-1 (205182): suites 449/0, 58/0, 307/0 on it; on the RP6 MACH, Lunar,
+Crash Tag Team Racing, Kenka Bancho, Final Fantasy IV and both Metal Gear Acids pass the screens that stopped them,
+Valkyria Chronicles II and III and Shining Blade find their saves on a second boot, and the pause menu shows the game's
+name, the PSP section and Restart to Apply.
+
+## PSP: the Metal Gear Acids' titles and menus — vnop leaves the VFPU's prefixes — 2026-10-11
+
+Branch `cursor/psp-mga2-2b67`, on master (`3cae0f907`, v2.0.0). The owner's run of 2.0 on the RP6 left Metal Gear Acid
+2 on a still yellow-and-black picture after the Kojima Productions logo, every press seemingly ignored; investigated
+and fixed on the Mac alone (the RP6 was busy). docs/psp-core.md, part 72, has the evidence. Clean room: pspdev's VFPU
+documentation and its tests, the game's own code; no PPSSPP code read, JPCSP not read. Save states unchanged (25).
+- **Cause**: the game wasn't waiting for anything: it took Start at its title and opened its menu, but drew none of
+  its sprites. It clips each one with `vpfxt; vcmp; vpfxt; vnop; vnop; mfvc; vcmp`, the second prefix meant for the
+  second vcmp; both CPU engines used it up at the vnop (as pspdev's documentation says, against what the game's code
+  needs), so every sprite inside the screen read as left of it and was culled: the logo, PRESS START, the menus, the
+  Solid Eye notice's text. Only full-screen pictures showed.
+- **Fix** (`interpreter-vfpu.cpp`, `recompiler-vfpu.cpp`): vnop, like vsync and vflush, leaves the prefixes for the
+  next instruction. This reverses part 3's reading of the documentation (its tests never showed vnop using them up;
+  PPSSPP keeps them too).
+- **The game now**: the notice, the logos, the title with its logo and PRESS START BUTTON, the main menu on Start (Cross
+  closes it, Circle confirms), and with Start then Circle a new game's carry-over prompts and its tutorial. Metal Gear
+  Acid, which clips the same way, shows its title, menu and first scene where its row had a "static picture".
+- **Checks**: tests/allegrex 58/0 ("vfpu more" now pins all three prefixes through vnop, vsync and vflush, a vnop in a
+  delay slot, and the game's clipping sequence, on both engines), tests/psp 438/0 (sanitized), tests/psp/ares 307/0.
+  The whole library the report's way beside the final run: both Metal Gear Acids move from movie to menu (menu or
+  gameplay 194 -> 196, movie 71 -> 69); every other game shows the final run's scenes, a fade, an animation step, a
+  movie's frame, Battlefront II's random map or PixelJunk Monsters' clock-coloured sky apart where they differ; all 266
+  finish, none missing a function. Counted, only four games run a vnop with a prefix pending at all: the two Metal
+  Gear Acids, and Portable Ops and Portable Ops Plus, whose frames don't change; the other differences are the runs'
+  own. An independent review found no bug; its test gaps (rt's and rd's prefixes
+  through the three, a delay slot, vflush in the random programs) and stale comments were fixed; a delta review found
+  no bug either, and its points (the report's summary column, README's counts, wording) were fixed.
+- **Left**: not checked on a PSP; rs's and rd's prefixes surviving vnop is the same rule, not seen. The report's summary
+  gains a Part 72 column on the final run's numbers, and README's counts follow it (196 and 69); parts 70 and 71, on
+  their own branches, add columns too (part 71 moves Final Fantasy IV to menu), so whichever merges later sums them.
+- Scratch: `~/phobos-work/scratch/mga2`.
+
+## PSP core: a module's stop gives 0 — Kenka Bancho past its intro movie — 2026-10-11
+
+Branch `cursor/psp-kenka-2b67`, on `master` as v2.0.0 shipped (`3cae0f907`). docs/psp-core.md, part 71, has the
+evidence. Clean room: pspautotests' modules/unloadfill and its PSP recording, uOFW's module manager, pspsdk's error
+codes and the game's own code; no PPSSPP or JPCSP source read. Save states unchanged (StateVersion 25). Docs part 71,
+after the two branches in flight that take parts 69 and 70 and StateVersion 26 (`cursor/psp-hangs-2b67`,
+`cursor/psp-savename-2b67`), so the three merge in any order but for the docs' part numbers.
+- **The bug**: the owner's RP6 test of v2.0.0 found Kenka Bancho: Badass Rumble black for good after Start skipped
+  its intro (60 fps, idle). When its movie ends, skipped or played out, the game's module thread stops the movie
+  player's two modules (Sony's PSMF.PRX and LIBPSMFPLAYER.PRX, which the kernel stands in for) once a frame until
+  `sceKernelStopModule` gives exactly 0, then unloads them. The kernel gave the module's ID, then ALREADY_STOPPED, for
+  good. A PSP gives 0 (unloadfill recorded `sceKernelStopModule: 00000000`; uOFW's stop command has 0 too), the ID
+  only for a start and an unload.
+- **The fix** (`ares/psp/kernel/modules.cpp`): a stop's caller gets 0, whether the module stopped at once (a
+  stand-in, no module_stop) or after its module_stop ran while the caller waited; module_stop's result still goes
+  where asked. The game now reaches its title from about frame 2900 with Start at 2700 (frame 7800 with the movie
+  played out, black from 7500 for good before), its main menu, and NEW GAME's difficulty, name entry and hometown map.
+  LOAD GAME on an empty stick shows the game's own "An error has occurred" (the savedata list load answers
+  LOAD_NO_DATA at once: the savedata utility's part).
+- **Final Fantasy IV: The Complete Collection** had the same bug (the same module thread): white for good after its
+  title movie, now its title, the collection's menu and Final Fantasy IV's opening.
+- **Checks**: tests/psp 440/0 (sanitized; `master`'s 438 here and the new "modules stops give 0", the game's sequence
+  on both engines, and "modules state while stopping"), tests/allegrex 58/0, tests/psp/ares 307/0; with the old
+  kernel the two new groups and the three updated ones fail. An independent read-only review: correct on every path,
+  its nits taken (a state saved mid-stop tested, comments, part 19's lines).
+- **Library** (the report's run against the final run): all 266 finish (Killzone, killed at 900 s with the Mac at a
+  load of ~220, finishes run again), no missing functions; Final Fantasy IV movie -> menu; the 70 others that differ
+  show the same scenes a few frames apart (the runner's PNG a picture early under load): 64 never call
+  sceKernelStopModule, and the six that do act alike on both runners. Counts: menu or gameplay 195, movie 70.
+- **Left**: by uOFW a module_stop returning non-zero keeps its module running (the caller told CAN_NOT_STOP or the
+  value), and a module_start returning NO_RESIDENT or an error gets its module unloaded; here neither, as before (no
+  recording, no game seen needing it).
+- Scratch: `~/phobos-work/scratch/kenka`; nothing run on the RP6.
+
+## PSP: savedata's files mode and PARAM.SFO — the second boot that called its save corrupted — 2026-10-11
+
+Branch `cursor/psp-savename-2b67`, on `master` (v2.0.0): the "<>" fix (`5fd162d75`), then this (`340649d14`).
+docs/psp-core.md, part 70, has the evidence; docs/psp-compatibility.md's rows are updated. Clean room: pspautotests'
+recordings, pspsdk, PPSSPP's savedata code read only as a description of the PSP; JPCSP not read.
+- **The fix** (`utility.cpp`, with tests): the files mode (12), which answered 0 with an empty list, fills it, secure,
+  normal and system files apart (utility/savedata/filelist); every save mode writes the PARAM.SFO a PSP writes (4912
+  bytes: titles, SAVEDATA_FILE_LIST naming the secure files, hashes zero) and the icons it's given; loads fill sfoParam
+  from it, the list mode dates saves by it; loads, reads and erases answer as loadbroken, deletebroken and
+  loademptyfilename recorded (FILE_NOT_FOUND, DATA_BROKEN, 0 with no file named; erases in the read/write group); the
+  sizes modes count a secure file 16 bytes longer, as a PSP stores it. Saves made by v2.0.0 (no PARAM.SFO) still load,
+  their files normal (chosen: a PSP calls such a save broken), so a game checking its files' kinds calls one corrupted
+  once. No new state (StateVersion 25).
+- **Games**, two boots on one stick: Valkyria Chronicles II and III and Shining Blade find their saves on the second
+  boot (they called them corrupted, deleted them and made them again); Space Invaders Extreme, Hot Shots Golf 2, Def
+  Jam and Mega Man Powered Up load theirs, as before; Monster Hunter Portable 3rd makes no save in the runs; Crash Tag
+  Team Racing waits at "Checking Memory Stick Duo" on every runner, its one savedata call answered rightly (another
+  agent's).
+- **Library** (the report's run, this branch's runner beside the final run's `lib-top`): every game's scenes and
+  categories as there (menu or gameplay 194, movie 71, black 1), no function missing. 79 differ at some capture, all
+  as two runs of one runner differ: run again with both runners at the same time, 41 of 77 match exactly, and the six
+  closest to splitting by runner mix both runners' frames over three more runs each. Ghost of Sparta and Killzone, at
+  the 900-second limit with other work on the machine, finish alone with the final run's frames.
+- **Checks**: tests/psp 443/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0; ares/psp/psp.cpp built with NDK
+  28.2 for arm64. Review: NEEDS CHANGES (a crafted PARAM.SFO's value rooms unbounded: a write far past a buffer), fixed
+  with its minor findings; three delta reviews, the last PASS with nothing left.
+- **Left**: no encryption (these saves don't load on a PSP; encrypted ones copied in aren't read); loads don't fill
+  the icon buffers; DELETEDATA's no-save answer (outside this change).
+- Scratch: `~/phobos-work/scratch/savename` (two-boots.sh, the runners with a [save] trace, review1-4, the library
+  runs).
+
+## Pause menu: the running game's name beside "Emulation Paused" — 2026-10-11
+
+Branch `cursor/pause-title-2b67`, on `master`, at the owner's request, so the pause menu always says which game is
+paused. `MainViewModel.loadedTitle` is set when a game loads and cleared with `loadedGame`: `gameTitle()`
+(`util/RomNames.kt`) gives the disc's own title when the library read one (a PSP disc's PARAM.SFO title) and the file's
+name without its extension otherwise; a game started from outside the library (a frontend's intent) has no disc title,
+so it shows its file's name. `EmulationMenu`'s `PausedHeader` puts it beside the heading when the menu is at least
+480 dp wide (one line, ellipsized) and below it in narrower menus (portrait, split screen); TalkBack reads both as one.
+Independent review: no High/Medium; its Lows on right-to-left placement, narrow windows and accessibility are taken.
+Unit tests: 275 passed (two new in `RomNamesTest`); not yet seen on a device.
+
+## PSP: the RP6's two stuck games — Crash's save dialog closed from a worse thread, DBZ loading behind a copy — 2026-10-11
+
+Branch `cursor/psp-hangs-2b67`, on master (`3cae0f907`, v2.0.0). The owner's run of 2.0 on the RP6 left Crash Tag Team
+Racing at "Checking Memory Stick Duo..." and Dragon Ball Z: Tenkaichi Tag Team at "Now Loading"; investigated on the
+Mac alone (the RP6 was busy). docs/psp-core.md, part 69, has the evidence. Clean room: pspautotests' recordings, PPSSPP
+read only as a description of the PSP's dialog threads, JPCSP not read; the PGD code untouched. Save states unchanged
+(25).
+- **Crash** (fixed, `utility.cpp`'s `dialogShutdown()`): its main thread (priority 0x3f) closes its save dialog and
+  starts the next one at once, without looking at the status; the kernel kept a save dialog closing for 2 ms whoever
+  closed it, refused that start (INVALID_STATUS), and the game polled for good. A PSP closes a save dialog in the
+  utility's threads, last at 0x20, without waiting (pspautotests' utility/savedata/shutdownstatus: callers at 33-36
+  and 111 read NONE at once, 32 SHUTDOWN): a caller worse than 0x20 and the dialog's graphics and access threads now
+  finds it closed at once. Crash reaches its title, attract race, menus and name entry, and makes and loads its save.
+- **DBZ** (no change): not stuck. Its "Now Loading" is the title menu's attract demo loading (about 570 frames in the
+  runner, then the demo); on the RP6 it ran at about a sixth of the PSP's speed, frames of up to 20 s with the
+  emulation thread blocked, while phase B's other 236 games were being copied onto the same SD card (every game run
+  during the copy shows such frames, none after it). Its 600 frames by the run's end reached about the runner's frame
+  7620, the black before the demo. New Game, its first save and a stage's loading all go on in the runner.
+- **Checks**: tests/psp 439/0 (sanitized; master's 438 here and a new group, "utility save dialog closed by priority",
+  which each broken version of the fix fails), tests/allegrex 58/0, tests/psp/ares 307/0. The whole library the
+  report's way beside the final run: 81 games close a save dialog from such a thread now; Crash's row moves (its
+  attract race at 3600, still "menu or gameplay"); every other game's frames are the same scenes as before, a fade or
+  an animation step apart where they differ (three titles a step apart from the closing taking no time now); none
+  missing a function. Super Monkey Ball Adventures hit the 900 s limit with the Mac shared with other jobs; run again
+  with no limit its frames match, and beside master's runner it runs at the same speed. An independent review of a
+  first version (the caller waited the 2 ms) led to closing at once, invalid priorities ignored, the comment's evidence
+  split from PPSSPP's description, and two more test cases; a delta review found no new bug and corrected the docs'
+  figures.
+- **Left**: the dialog threads' borrowing of the volatile memory (PPSSPP's description, unrecorded); DBZ to run again
+  on the RP6 with nothing copying onto the card.
+- Scratch: `~/phobos-work/scratch/hangs`.
+
+## Android: a PSP section in the pause menu, and the right stick — 2026-10-11
+
+Branch `cursor/psp-pause-menu-2b67`, on `master` after v2.0.0 (`3cae0f907`), at the owner's request from playing PSP
+games on the RP6. App only: no native or core change.
+- **Pause menu**: a PlayStation Portable section while a PSP game runs (`PspSection`, `ui/EmulationMenu.kt`), with
+  Settings → Emulation's PSP Renderer, Resolution, Drawing Threads and the new Right Stick: the same items
+  (`ui/Components.kt`) and the same global settings, as the N64's, the PS1's and the Neo Geo CD's pause-menu options
+  are (only the ZX control scheme and the Controller pages keep a game's own). The core takes the renderer, resolution
+  and drawing threads only as a game loads (`PhobosRunner.cpp` hands them over as `option()`s before
+  `PlayStationPortable::load`; the menu's Reset is `power(true)`, which keeps them), so the view model keeps what the
+  running PSP game started with (`pspStartSettings`; `PspStartSettings` in `util/PspVideo.kt`). Once Settings' differ
+  (a resolution under the software renderer, which draws at Native, doesn't count), a Restart to Apply row appears
+  ("Reset keeps the ones it started with"). After a warning that progress since the last save is lost, it reloads the
+  game as the Reload hotkey does, but without Auto-Load State's state (`reloadGame(context, autoLoad = false)`): that
+  state is from the last quit, and a game carrying on from it could save over newer memory-stick saves.
+- **Right stick** (`input/PspRightStick.kt`, `GameInputState.updateSticks`): Off (as before); Face buttons (up
+  Triangle, right Circle, down Cross, left Square: the Y, B, A and X bits `resolveButtonBit` reads them from), for
+  twin-stick shooters such as Super Stardust Portable; D-pad, for a camera on the D-pad; Analog stick (the right stick
+  is the PSP's stick, and the left takes the right's place, which the PSP doesn't read). The directions come from
+  rx/ry as the user's bindings give them (the R-Up/Down/Left/Right rows, at any level), each latched with the N64
+  C-buttons' hysteresis (one `axisPressed`: press past 0.5, let go at 0.4), so a diagonal presses two. The stick's
+  buttons are a mask of their own (`rightStickButtons`), OR'd with the pad's and the touch controls': a button held on
+  both lets go only when both do; pausing (`releaseAllButtons`) and `reset()` release it. A changed choice applies at
+  the stick's next move. The PSP touch layout has no right stick, so the touch controls are unchanged (its one stick is
+  the PSP's in every choice). Stored as `psp_right_stick`, an enum name; one this build doesn't know reads as Off.
+  Global, like the other pause-menu options; a game's own choice could come later, through the Controller pages.
+- **SettingsStore** takes its DataStore (`SettingsStore(context)` opens the app's, as before), so a JVM test runs the
+  real store on a file.
+- **Checks**: `:app:compileModernReleaseKotlin`; `:app:testModernDebugUnitTest` 289/0 (16 new): `PspRightStickTest`
+  (each choice, diagonals, the thresholds, the pad's and the touch controls' presses with the stick's, a choice changed
+  mid-hold, other systems, reset), `PspSettingsTest` (the store on a DataStore file, reopened: the default, each
+  choice, an unknown or mistyped value, every PSP setting), `PspVideoTest` (when a restart changes how the game runs).
+  Three deliberate breaks (the right stick left out of the settings read, the stick's buttons folded into the pad's
+  mask, no release threshold) each failed the tests meant for them. An independent read-only review found no bug (its
+  points taken: the restart's Auto-Load State, Reset against Restart in the row, the dialog outside the list, a name,
+  two test names); the delta review passed. Not run on a device: the RP6 was busy with a long test.
+- **On the RP6, to check**: the section shows for PSP games only; changing the renderer (or the resolution under
+  Vulkan, or the threads) shows Restart to Apply, which restarts into the new renderer, and changing it back hides the
+  row; with Auto-Load State on, the restart still starts the game over. Right Stick: Face buttons in Super Stardust
+  Portable (aiming and firing, a diagonal firing two buttons); D-pad in a game that turns the camera with it (Monster
+  Hunter Freedom Unite); a face button held on the pad while the stick presses the same one, then either let go
+  first; Analog stick moving the PSP's stick from the right, the left stick doing nothing; Off as before; a PS1 game's
+  right stick still analog; the choice the same in Settings and the pause menu.
+
+## PSP: a read of all 64 controller samples (MACH's title takes Start) — 2026-10-11
+
+Branch `cursor/psp-ctrl64-2b67`, on `master` (v2.0.0). The owner found MACH ignoring Start at its title on the RP6.
+Its title loop reads all 64 kept samples each frame (sceCtrlReadBufferPositive with a count of 64), which
+`ares/psp/kernel/ctrl.cpp` refused as too many (INVALID_SIZE), so no button ever reached it; the library runs never
+showed it, their Start coming before the title. Up to 64 may now be asked for, more refused, in the peek and read
+functions alike. In the runner, Start/Cross at the title now takes MACH to its profile handling. tests/psp's controller
+group asks for 64 (and 65, refused); tests/psp 438/0.
+
+## PSP: WipEout without waiting for the GPU, the stencil as each format keeps it, the emulation thread at 1x — 2026-10-11
+
+Branch `cursor/psp-speed8-2b67`, on top of speed 7's `cursor/psp-speed7-2b67` (part 67), measured against its tip
+`671072d6f` (#204's Experimental merge in it). docs/psp-core.md, part 68, has the evidence; docs/psp-gpu-renderers.md's
+"Owned until needed" and "Depth, stencil, blending and logic operations" the design. Clean room: no PPSSPP code copied
+or translated, JPCSP's not read. Save states unchanged (25).
+- **Changes** (each its own commit, with its tests): WipEout's one finish a frame was a CPU load of its depth buffer
+  through VRAM's fourth copy (the screen's middle, after a SIGNAL mid-list), where its bloom's buffers lie: the GPU's
+  depth never reaches memory, so the finish only gave it the last bloom's colors; a load through VRAM's second or
+  fourth copy (through `Memory::read()`) now waits only where the drawing threads (which write memory's depth) reach
+  it, not for a hardware renderer (`Memory::vramDrawnOver`'s `depthLoad`). The GPU renderer's stencil: a 5650 frame
+  buffer's test compared with 0 (failing, nothing drawn), and a 5551 or 4444 one's held as the GE keeps it after
+  clear mode (points' and lines' too, which had left it 0), a REPLACE and MASK_ALPHA (a 5551 REPLACE's comparison
+  made on the top bit where it must). A PRIM's vertices transformed a stage
+  at a time over 64 of them (the same arithmetic per vertex).
+- **RP6, means of two rounds, each runner first in one** (fps, Turnip accurate / fast, Qualcomm's accurate / fast):
+  WipEout's race at 1x 99.8 / 105.4 / 94.8 / 96.3 -> 135.4 / 141.8 / 125.9 / 127.6 (+33-36%, the emulation thread
+  8.75-10.1 -> 7.0-7.9 ms), at 4x 38.7 / 59.8 / 43.1 / 39.3 -> 46.3 / 87.1 / 67.4 / 63.9 (+20-63%); God of War, MC3 and
+  LCS within 1.5% at 1x and 4x (the staged transform +0.5-1.2% in God of War's battle, in rounds of its own); the
+  software renderer within 1.6%, every end state the base's.
+- **Pictures**: the software renderer's byte for byte (the measure harness's 173 files; every frame and end state of
+  nine scenes at 1 and 7 threads on the M1, but MC3's menu's end state, which differs between runs of the base's own
+  runner too; every end state on the RP6). Vulkan: 76 of 80 RP6 comparisons (ten scenes, four configurations, 1x and
+  4x) byte for byte; the four others WipEout at 4x, now shown from the GPU's 4x target instead of memory's picture at
+  the PSP's size scaled up (it was never shown above 1x before); it draws the same (its loads read 0 either way), and
+  against the software renderer it's as close by the 4x4 blocks' middle samples (35.77 -> 35.71 and 35.64%).
+- **Emulation thread profile** (simpleperf, -g, the RP6): the time is spread: the vertex's arithmetic (its divisions
+  and lighting waiting on themselves; the X3's divider measured, not the bound), its reading, each PRIM's settings,
+  each triangle's steps, the CPU's compiled code (16-29%). Tried and dropped, as no faster: vertices read in place,
+  the texture cache's lookup without shares, the list's words straight from the page, `transformKept()`'s blocks;
+  `vfpuDot()` without its checks was slower.
+- **Checks**: tests/psp 437/0 (sanitized; three new groups, which broken versions fail, but a REPLACE's color alpha
+  left whole), tests/allegrex 58/0, tests/psp/ares 307/0; the GPU tests on the RP6 33/0 on both drivers (one skips
+  itself on Qualcomm's); GCC 11 and 13 as the base (four.cpp's maybe-uninitialized warnings, the base's the same).
+  The states test's frame under the address sanitizer is within a few KB of the main thread's 8 MB: a machine 72
+  bytes bigger overflowed it (fixed: the machine is the base's size).
+- **Left**: the emulation thread's many small steps (a GE on a thread of its own would take most of them off it); the
+  recompiler's registers kept in memory; a 16-bit stencil's increments and decrements; WipEout's depth loads read
+  memory, not the GPU's depth.
+- Scratch: `~/phobos-work/scratch/speed8`; nothing left on the RP6.
+
 ## Version codes for 2.x — 2026-10-11
 
 Branch `cursor/version-base-2x-2b67`, on `master` after the PSP stack merged (#208, #210), at the owner's request before

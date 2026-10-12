@@ -659,6 +659,7 @@ struct Kernel {
   auto resolveOnDisc(const std::string& path, Disc::Entry& entry, std::string& normalized,
                      std::vector<std::string>& names) -> u32;
   auto writeStat(u32 address, const std::string& host) -> void;
+  auto writeTimes(u32 address, const std::string& host) -> void;
   auto writeStat(u32 address, const Disc::Entry& entry) -> void;
   auto openOnDisc(const std::string& path, u32 flags) -> u32;
   auto runOnDisc(const std::string& path, u32& first, u64& bytes) const -> bool;
@@ -1900,9 +1901,12 @@ struct Kernel {
   static auto hexWord(u32 value) -> std::string;
   auto savePath(const std::string& folder, const std::string& file = {}) -> std::string;
   auto savedata(u32 parameters) -> u32;
-  auto savedataClusters(const std::string& folder) -> u64;
+  auto savedataWritten(u32 parameters, const std::string& folder, const std::string& file, bool secure) -> bool;
+  auto savedataIcons(u32 parameters, const std::string& folder) -> void;
+  auto savedataClusters(const std::string& folder, const std::vector<std::string>& secure) -> u64;
   auto savedataNeeded(u32 parameters, u32 dataSize) -> u64;
   auto savedataList(u32 parameters, const std::string& game) -> u32;
+  auto savedataFiles(u32 info, const std::string& host, const std::vector<std::string>& secure) -> void;
   auto sceUtilitySavedataInitStart() -> void;
   auto sceUtilitySavedataGetStatus() -> void;
   auto sceUtilitySavedataUpdate() -> void;
