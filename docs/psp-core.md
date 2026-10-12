@@ -10018,7 +10018,7 @@ run), `lib-base` (the base's runs of the games that differ), `sheet-a*.png` (the
 ## Part 77: memstick: is the memory stick — Colin McRae Rally 2005 Plus's save
 
 On branch `cursor/psp-colinsave-2b67`, begun on `cursor/psp-dialogs-2b67` (PR #221, the system's dialogs; part 73) and
-merged with master since (#221, #222 and #225). Parts 74, 76, 78 and 79 are other branches'. Sources: the game itself,
+merged with master since (#221, #222 and #225). Parts 74, 76 and 78 are other branches', and 79 is kept for another. Sources: the game itself,
 traced with a scratch runner (each savedata call's parameters and answer, the files on the stick after it, every
 system call over the frames around the save with its caller, and every file it opened); pspsdk's psputility_savedata.h
 and pspiofilemgr.h; pspautotests' utility/savedata tests (none saves without a data buffer); uOFW's iofilemgr.c (the
@@ -10079,6 +10079,13 @@ depends on which.
 branch's): twelve early-saving games, of which five write a save in that time (Valkyria Chronicles II and III, Shining
 Blade, Daxter, Ridge Racer 2); every one of the 24 boots leaves the same files at the same sizes with either runner,
 and the captures that differ are mid-movie frames. The test (`utility savedata through memstick: (Colin McRae Rally
-2005 Plus)`) makes the game's calls as traced (each open asynchronous, polled), and beyond them memstick: in capitals,
+2005 Plus)`) makes the game's calls as traced (each open asynchronous, polled), and beyond them its files' status and a folder
+listing through memstick:, memstick: in capitals,
 a rename to ms0: (the same device), a relative open from a working folder on memstick:, and memstick: with no
 assignment.
+
+**Checks.** On the branch merged with master (340857fe9): `tests/psp/run-tests.sh` 467 groups, 0 failures;
+`tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. Colin McRae
+again with the merged runner, fresh.txt then reload.txt: the same six files at the same sizes as before the merge,
+"AUTO-LOAD." at 2100 and the main menu at 3000. The scratch (the scratch runner, the scripts, the runs and their
+captures) is in `~/phobos-work/scratch/colinsave/` on the Mac it was made on, not in the repository.

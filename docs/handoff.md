@@ -42,12 +42,16 @@ PSP; JPCSP not read. Save states are unchanged (StateVersion 26).
   228,760 bytes and goes on; the second boot says "AUTO-LOAD.", loads, and reaches the main menu. A stick holding the
   old broken save needs no clearing: the game asks again and Yes writes the whole save. Twelve early-saving games
   booted twice on one stick (five of which save in that time) leave the same files with the base's runner and this one.
-- **Checks** before the merge: `tests/psp/run-tests.sh` 462 groups, 0 failures (of two runs, one had the
-  timing-dependent GE group "loads through the depth buffer's views wait for the threads" fail on the loaded Mac);
-  `tests/allegrex/run-tests.sh` 58, 0; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed.
-- **Review**: an independent read-only review found no blocker or major point and asked for minor ones (the test to
-  open files as the game does, a garbled comment, the docs' quote, base and numbering, and nits), all taken in the
-  commit after the fix.
+- **Checks** on the branch merged with master: `tests/psp/run-tests.sh` 467 groups, 0 failures;
+  `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed; the game's
+  two boots as before. (Before the merge, on the fix's first commit d63474454, 462 groups; of two runs one had the
+  timing-dependent group "ge loads through the depth buffer's views wait for the threads" fail on the loaded Mac.)
+- **Review**: an independent read-only review of the fix (d63474454) and the docs' draft found no blocker or major
+  point; its minor points were taken in 7d16e1301 (the test opening files as the game does, a garbled comment) and
+  69b0bfe45 (the docs' quote, base and numbering). The merged branch was reviewed again (minor: these docs, and the
+  test's nits), its points taken in the commit that records it.
+- **Not done**: no APK built, nothing run on the RP6 (the Mac's runner only). On the RP6, to check: Colin McRae Rally
+  2005 Plus, Yes to the Auto-Save question, then a second boot shows AUTO-LOAD and reaches the main menu.
 
 ## Version codes for 2.1 — 2026-10-12
 

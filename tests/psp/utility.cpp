@@ -694,11 +694,11 @@ static auto savedataOlder() -> void {
 //(1500 bytes), OPTIONS.DAT named but no data given, with ICON0 and PIC1, making the save's folder, PARAM.SFO and
 //icons; the game's own files opened in the folder through memstick:, each asynchronously and polled, TIMES.DAT and
 //CMR5TS.DAT made (write, create, truncate), then TIMES.DAT again (read, write, create); the autosave again with
-//OPTIONS.DAT's data. On the next boot (another machine on the same stick) CMR5TS.DAT is opened twice and TIMES.DAT
-//once, the same way, and the autoload (mode 0, no titles or icons given) reads OPTIONS.DAT. What the files are given
-//and read here is the test's (sceIoWrite, sceIoRead), as are the checks after the second boot's calls: memstick:
-//whatever its case, its files' status and folders, a rename to ms0: (the same device), a relative open from a working
-//folder on it, and memstick: with no sceIoAssign at all (the stick all the same: deviceName()'s choice).
+//OPTIONS.DAT's data. On the next boot (another machine on the same stick) CMR5TS.DAT is opened twice, the same way,
+//the autoload (mode 0, no titles or icons given) reads OPTIONS.DAT, and TIMES.DAT is opened once. What the files are
+//given and read here is the test's (sceIoWrite, sceIoRead), as are the checks after the second boot's calls:
+//memstick: whatever its case, its files' status and folders, a rename to ms0: (the same device), a relative open from
+//a working folder on it, and memstick: with no sceIoAssign at all (the stick all the same: deviceName()'s choice).
 static auto savedataMemstick() -> void {
   constexpr u32 Icon0 = 0x0898'0000, Pic1 = 0x0898'1000, Polled = 0x0898'2000;
   HostFolder stick;
@@ -730,6 +730,7 @@ static auto savedataMemstick() -> void {
     CHECK(file >= 3 && file < 0x8000'0000, true);
     m.kernel.cycles = m.kernel.files[file].asyncDoneAt;
     m.kernel.events();
+    m.system.memory.fill(Polled, 0xcc, 8);
     CHECK(m.call("sceIoPollAsync", {file, Polled}), 0);
     return m.system.memory.read(4, Polled);
   };
@@ -759,6 +760,8 @@ static auto savedataMemstick() -> void {
     CHECK(stick.get("PSP/SAVEDATA/ULES001110000/ICON0.PNG") == "ICON0", true);
     CHECK(stick.get("PSP/SAVEDATA/ULES001110000/PIC1.PNG") == "PIC1", true);
     CHECK(sfoField(stick.get("PSP/SAVEDATA/ULES001110000/PARAM.SFO"), "TITLE").starts_with("Colin McRae"), true);
+    CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/ULES001110000/OPTIONS.DAT"), true);  //no data: empty
+    CHECK(stick.get("PSP/SAVEDATA/ULES001110000/OPTIONS.DAT").empty(), true);
     write(m, openAsync(m, folder + "TIMES.DAT", 0x0602), "times");
     write(m, openAsync(m, folder + "CMR5TS.DAT", 0x0602), "cmr5");
     CHECK(read(m, openAsync(m, folder + "TIMES.DAT", 0x0203)) == "times", true);
@@ -787,6 +790,7 @@ static auto savedataMemstick() -> void {
   CHECK(m.call("sceIoDclose", {listing}), 0);
   CHECK(m.call("sceIoRename", {m.string(folder + "TIMES.DAT"), m.string("ms0:/PSP/TIMES.BAK")}), 0);
   CHECK(stick.get("PSP/SAVEDATA/ULES001110000/TIMES.BAK") == "times", true);
+  CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/ULES001110000/TIMES.DAT"), false);
   CHECK(m.call("sceIoChdir", {m.string("memstick:/PSP/SAVEDATA/ULES001110000")}), 0);
   CHECK(read(m, open(m, "TIMES.BAK")) == "times", true);
   KernelMachine unassigned;
