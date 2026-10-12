@@ -1793,14 +1793,13 @@ static auto geOwnTexture() -> void {
 }
 
 //3D triangles drawing over their own texture, from a copy where none of their pixels can take a texel any of them may
-//write (ge/draw.cpp's readsApart()): a 64x64 picture made in place, then quads with one w, as Killzone's menu blurs
-//its picture, each into one half of it from the other (filtered, one reaching a texel past the right edge, which
-//repeats round to column 0, where it doesn't draw), one taking columns it doesn't draw in its own rows, and those it
-//can't: one taking rows it draws, two taking a row or a column it draws by a filter's second texel, one cut at the
-//near plane, one in perspective (w 1 to 2), one whose q is -1 (every pixel the last texel, which it draws), and a
-//PRIM of two triangles, the second taking the first's pixels. It
-//comes out as reading every texture from memory as it's drawn (a machine without watching()) does on one thread,
-//with 1, 2, 4 and 8 threads, batches shared out however small.
+//write (ge/draw.cpp's readsApart()): a 64x64 picture made in place, then quads with one w, as Killzone's menu blurs its
+//picture, each into one half of it from the other (filtered, one reaching a texel past the right edge, which repeats
+//round to column 0, where it doesn't draw), one taking columns it doesn't draw in its own rows, and those it can't: one
+//taking rows it draws, two taking a row or a column it draws by a filter's second texel, one cut at the near plane, one
+//in perspective (w 1 to 2), one whose q is -1 (every pixel the last texel, which it draws), and a PRIM of two
+//triangles, the second taking the first's pixels. It comes out as reading every texture from memory as it's drawn (a
+//machine without watching()) does on one thread, with 1, 2, 4 and 8 threads, batches shared out however small.
 static auto geOwnTexture3D() -> void {
   constexpr u32 Picture = 0x10'0000;  //(VRAM offset: 64 by 64, 8888)
   //(each quad's left and right edges at a z of their own, its w -z: z above 0 is behind the camera)

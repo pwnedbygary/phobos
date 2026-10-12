@@ -9969,7 +9969,7 @@ Every change is the host's alone; nothing a game can see moves.
   know: a triangle whose q is the same at every pixel and 0 or below would have had its deferred texture decoded where
   R(q) put its coordinates, not at that texel, and could have been drawn from a copy over its own texture while drawing
   that texel (`readsApart()` asks `texelSpan()` too). Neither branch alone has it; the merge's next commit (`387c19c45`)
-  decodes such a triangle's texture whole and draws it at once over its own, and both new groups draw one (a quad
+  decodes such a triangle's texture whole and draws it at once over its own, and the two texture groups draw one (a quad
   projected by the texture matrix to q = -1), each failing without it. Then the merged branch against master
   (`caee1a26f`) in all 24 scenes the same way, 60 frames at 7 threads and at 1: identical, every one. The library runs
   above are of the branch before the merges.
