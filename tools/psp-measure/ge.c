@@ -18,12 +18,13 @@
 //perspective texels to the texel in thousands. Round 6 takes what parts 60 and 64 left open: how long the GE takes to
 //draw (lists of known work timed), lighting's cosine (the products in full, normals swept), the reciprocal's chords
 //read off texels, what PATCH_CULL_ENABLE does, patch divisions past 64 along v, and the driver's statuses while the
-//GE draws. Each round is picked from the menu (main.c).
+//GE draws. Round 7 takes anti-aliased lines past round 4's one case (part 76): every octant, the vertices' alpha,
+//blending over a known background, textures, 3D. Each round is picked from the menu (main.c).
 //
 //Each test draws into VRAM (away from the text on the screen), reads the pixels back as they are and writes them to
 //results/ge/<test>.bin: little-endian 32-bit words, one per pixel, row by row (a 16-bit frame buffer's pixels in the
-//low half); round 6's timing tests write times instead. manifest.txt (round 2), manifest3.txt to manifest6.txt (rounds
-//3-6) say what each test drew. A test whose file is there is skipped, and one that stops the PSP is given up on, as
+//low half); round 6's timing tests write times instead. manifest.txt (round 2), manifest3.txt to manifest7.txt (rounds
+//3-7) say what each test drew. A test whose file is there is skipped, and one that stops the PSP is given up on, as
 //results.c has it. A list the GE hasn't finished after 5 seconds is a stall: the GE is reset, <test>.stalled says so,
 //and the round goes on (waitForGe). The program computes nothing: the host runs the same program in Phobos's core
 //(tests/psp/measure.cpp) and compares the files.
@@ -3588,6 +3589,198 @@ static void round6(void) {
   }
 }
 
+//---- round 7: anti-aliased lines (docs/psp-core.md, part 76), which round 4's lines-smooth pinned only for white,
+//opaque lines falling to the right, blended over black, untextured, in through mode
+
+//The line of cell (i, j) (cell = j * 16 + i) of the 16x16 cells, its two vertices at v: from i and j sixteenths past
+//the cell's pixel (8 - dx / 2, 8 - dy / 2), so every direction fits, to (dx, dy) further; its color, and its texture
+//coordinates from (u0, v0) to (u1, v1).
+static void aaCell(FloatVertex* v, int cell, float dx, float dy, unsigned int color, float u0, float v0, float u1,
+                   float v1) {
+  int i = cell & 15, j = cell >> 4;
+  float x = i * 16 + 8 - dx / 2 + i / 16.0f, y = j * 16 + 8 - dy / 2 + j / 16.0f;
+  v[0] = (FloatVertex){u0, v0, color, x, y, 0};
+  v[1] = (FloatVertex){u1, v1, color, x + dx, y + dy, 0};
+}
+
+//Starts an anti-aliased test: the target filled, a list begun, ANTI_ALIAS_ENABLE on.
+static int beginSmooth(const char* name, unsigned int (*fill)(int x, int y)) {
+  if(!beginTest(name)) return 0;
+  fillTarget(fill, 0);
+  start(GU_PSM_8888);
+  sceGuEnable(GU_LINE_SMOOTH);
+  return 1;
+}
+static void endSmooth(const char* name) {
+  sceGuDisable(GU_LINE_SMOOTH);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+static void overBlack(void) {
+  sceGuEnable(GU_BLEND);
+  sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
+}
+
+//Every way a line can go: row k's lines in direction k (shallow and steep, falling and rising, each way, at two
+//slopes: slopes[k]), white blended over black by its alpha (as lines-smooth), cell (i, k) starting i and k
+//sixteenths into its pixel: the coverage of every octant.
+static const float slopes[16][2] = {
+  {7.5f, 2.25f}, {-7.5f, -2.25f}, {7.5f, -2.25f}, {-7.5f, 2.25f}, {2.25f, 7.5f}, {-2.25f, -7.5f}, {2.25f, -7.5f},
+  {-2.25f, 7.5f}, {7.5f, 5.5f}, {-7.5f, -5.5f}, {7.5f, -5.5f}, {-7.5f, 5.5f}, {5.5f, 7.5f}, {-5.5f, -7.5f},
+  {5.5f, -7.5f}, {-5.5f, 7.5f},
+};
+static void aaSlopes(const char* name) {
+  if(!beginSmooth(name, zero)) return;
+  overBlack();
+  FloatVertex* v = sceGuGetMemory(256 * 2 * sizeof(FloatVertex));
+  for(int cell = 0; cell < 256; cell++) {
+    aaCell(v + cell * 2, cell, slopes[cell >> 4][0], slopes[cell >> 4][1], 0xffffffff, 0, 0, 0, 0);
+  }
+  sceGuDrawArray(GU_LINES, FloatVertexType, 512, 0, v);
+  endSmooth(name);
+}
+
+//The vertices' alpha against the coverage: lines-smooth's lines (cell (i, j) i and j sixteenths in), each cell's
+//vertex alpha its number (0 to 255), white blended over black: whether the coverage replaces the alpha or scales it.
+static void aaAlpha(const char* name) {
+  if(!beginSmooth(name, zero)) return;
+  overBlack();
+  FloatVertex* v = sceGuGetMemory(256 * 2 * sizeof(FloatVertex));
+  for(int cell = 0; cell < 256; cell++) {
+    float x = (cell & 15) * 16 + 4 + (cell & 15) / 16.0f, y = (cell >> 4) * 16 + 4 + (cell >> 4) / 16.0f;
+    unsigned int color = (unsigned int)cell << 24 | 0xffffff;
+    v[cell * 2] = (FloatVertex){0, 0, color, x, y, 0};
+    v[cell * 2 + 1] = (FloatVertex){0, 0, color, x + 7.5f, y + 2.25f, 0};
+  }
+  sceGuDrawArray(GU_LINES, FloatVertexType, 512, 0, v);
+  endSmooth(name);
+}
+
+//Blending with the coverage over a known background (0x80c06020: alpha 0x80): rows 2m and 2m + 1 in mode m below,
+//the second with the alpha test (above 0) on; the line 0xff20a0e0, shallow and falling, cell (i, j) i and j
+//sixteenths in. Mode 7 is clear mode (color, stencil and depth written), with blending off.
+static unsigned int aaBackground(int x, int y) { (void)x; (void)y; return 0x80c06020; }
+static void aaBlend(const char* name) {
+  static const int modes[7][3] = {
+    {-1, 0, 0}, {GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA}, {GU_ADD, GU_SRC_ALPHA, GU_FIX},
+    {GU_ADD, GU_FIX, GU_ONE_MINUS_SRC_ALPHA}, {GU_REVERSE_SUBTRACT, GU_SRC_ALPHA, GU_FIX},
+    {GU_ADD, GU_DST_ALPHA, GU_ONE_MINUS_DST_ALPHA}, {GU_ADD, 6, 7},  //(6, 7: twice the source alpha, 1 minus it)
+  };
+  if(!beginSmooth(name, aaBackground)) return;
+  for(int row = 0; row < 16; row++) {
+    int mode = row >> 1;
+    if(mode < 7 && modes[mode][0] >= 0) {
+      sceGuEnable(GU_BLEND);
+      sceGuBlendFunc(modes[mode][0], modes[mode][1], modes[mode][2], 0xffffff, 0xffffff);
+    } else {
+      sceGuDisable(GU_BLEND);
+    }
+    if(row & 1) sceGuEnable(GU_ALPHA_TEST), sceGuAlphaFunc(GU_GREATER, 0, 0xff);
+    else sceGuDisable(GU_ALPHA_TEST);
+    if(mode == 7) sceGuSendCommandi(0xd3, 1 | 7 << 8);  //CLEAR_MODE
+    FloatVertex* v = sceGuGetMemory(16 * 2 * sizeof(FloatVertex));
+    for(int i = 0; i < 16; i++) aaCell(v + i * 2, row * 16 + i, 7.5f, 2.25f, 0xff20a0e0, 0, 0, 0, 0);
+    sceGuDrawArray(GU_LINES, FloatVertexType, 32, 0, v);
+    if(mode == 7) sceGuSendCommandi(0xd3, 0);
+  }
+  sceGuDisable(GU_ALPHA_TEST);
+  sceGuDisable(GU_BLEND);
+  endSmooth(name);
+}
+
+//Textured anti-aliased lines over the texture texelAA (texel (x, y) is x | y << 8 | 0x80 << 16, its alpha x ^ y),
+//shallow and falling, cell (i, j) i and j sixteenths in, which texels they take: rows 0-3 every vertex at texel
+//(200.5, 100.5), replace, RGB; rows 4-7 from texel (0, 0) to (255, 255), replace, RGBA (the texel's alpha against
+//the coverage); rows 8-11 at (200.5, 100.5), modulate, RGBA, white, blended over black; rows 12-15 at (200.5, 100.5),
+//bilinear, replace, RGB. Blending off but in rows 8-11, so each pixel's alpha is the one written.
+static unsigned int texelAA(int x, int y) { return x | y << 8 | 0x80 << 16 | (unsigned int)((x ^ y) & 0xff) << 24; }
+static void aaTextured(const char* name) {
+  if(!beginTest(name)) return;
+  fillTexture(texelAA);
+  fillTarget(zero, 0);
+  start(GU_PSM_8888);
+  sceGuEnable(GU_LINE_SMOOTH);
+  for(int group = 0; group < 4; group++) {
+    useTexture(group == 2 ? GU_TFX_MODULATE : GU_TFX_REPLACE, group == 1 || group == 2 ? GU_TCC_RGBA : GU_TCC_RGB);
+    if(group == 3) sceGuTexFilter(GU_LINEAR, GU_LINEAR);
+    if(group == 2) overBlack();
+    else sceGuDisable(GU_BLEND);
+    FloatVertex* v = sceGuGetMemory(64 * 2 * sizeof(FloatVertex));
+    for(int n = 0; n < 64; n++) {
+      int cell = group * 64 + n;
+      if(group == 1) aaCell(v + n * 2, cell, 7.5f, 2.25f, 0xffffffff, 0, 0, 255, 255);
+      else aaCell(v + n * 2, cell, 7.5f, 2.25f, 0xffffffff, 200.5f, 100.5f, 200.5f, 100.5f);
+    }
+    sceGuDrawArray(GU_LINES, FloatVertexType, 128, 0, v);
+  }
+  sceGuDisable(GU_BLEND);
+  sceGuDisable(GU_TEXTURE_2D);
+  endSmooth(name);
+}
+
+//Anti-aliased lines in 3D (lines3D's, without the lens): rows 0-7 red to blue, blended over black; rows 8-15
+//textured (texelAA, every vertex at (200.5, 100.5) / 256, replace, RGB), blending off: whether 3D lines' coverage and
+//texels are through mode's.
+static void aa3D(const char* name) {
+  if(!beginTest(name)) return;
+  fillTexture(texelAA);
+  start3D(&identity, 1);
+  sceGuEnable(GU_LINE_SMOOTH);
+  sceGuTexScale(1, 1);
+  sceGuTexOffset(0, 0);
+  for(int half = 0; half < 2; half++) {
+    if(half) useTexture(GU_TFX_REPLACE, GU_TCC_RGB), sceGuDisable(GU_BLEND);
+    else overBlack();
+    FloatVertex* v = sceGuGetMemory(128 * 2 * sizeof(FloatVertex));
+    for(int n = 0; n < 128; n++) {
+      int cell = half * 128 + n;
+      float x = (cell & 15) * 16 + 4 + (cell & 15) / 16.0f, y = (cell >> 4) * 16 + 4 + (cell >> 4) / 16.0f;
+      float u = half ? 200.5f / 256 : 0, t = half ? 100.5f / 256 : 0;
+      v[n * 2] = (FloatVertex){u, t, half ? 0xffffffff : 0xff0000ff, ndcX(x), ndcY(y), 0.5f};
+      v[n * 2 + 1] = (FloatVertex){u, t, half ? 0xffffffff : 0xffff0000, ndcX(x + 7.5f), ndcY(y + 2.25f), -0.5f};
+    }
+    sceGuDrawArray(GU_LINES, FloatVertexType3D, 256, 0, v);
+  }
+  sceGuDisable(GU_BLEND);
+  sceGuDisable(GU_TEXTURE_2D);
+  endSmooth(name);
+}
+
+static void writeManifest7(void) {
+  char path[320];
+  snprintf(path, sizeof(path), "%s/manifest7.txt", folder);
+  SceUID file = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+  if(file < 0) return;
+  static const char text[] =
+    "psp-measure's GE tests, round 7 (tools/psp-measure/ge.c in Phobos says what each test draws; docs/psp-core.md,\n"
+    "part 76, what each is for): anti-aliased lines (GU_LINE_SMOOTH). Pictures: the target's pixels after one test, a\n"
+    "little-endian 32-bit word each, row by row, 256x256, 16x16 cells of a line each, cell (i, j)'s starting i and j\n"
+    "sixteenths into its pixel.\n"
+    "aa-slopes: white over black by its alpha, row k in direction k: (7.5, 2.25) and (7.5, 5.5) and each turned and\n"
+    "mirrored (ge.c's slopes).\n"
+    "aa-alpha: round 4's lines-smooth with each cell's vertex alpha its number (0-255).\n"
+    "aa-blend: 0xff20a0e0 over 0x80c06020 in 8 modes, two rows each (the second with the alpha test above 0): none,\n"
+    "src alpha / 1 - src alpha, src alpha / fixed white, fixed white / 1 - src alpha, reverse subtract src alpha /\n"
+    "fixed white, dst alpha / 1 - dst alpha, double src alpha / 1 - double src alpha, clear mode.\n"
+    "aa-textured: texel (x, y) x | y << 8 | 0x80 << 16, alpha x ^ y; rows 0-3 at texel (200.5, 100.5) replace RGB,\n"
+    "4-7 (0, 0) to (255, 255) replace RGBA, 8-11 (200.5, 100.5) modulate RGBA over black, 12-15 (200.5, 100.5)\n"
+    "bilinear replace RGB.\n"
+    "aa-3d: in 3D (identity matrices), rows 0-7 red to blue over black, 8-15 textured at (200.5, 100.5) / 256.\n"
+    "<name>.stalled: the GE hadn't finished the test's list after 5 s and was reset (manifest4.txt says more).\n"
+    "<name>.stopped: a test that stopped the PSP twice, given up on.\n";
+  sceIoWrite(file, text, sizeof(text) - 1);
+  sceIoClose(file);
+}
+
+static void round7(void) {
+  writeManifest7();
+  aaSlopes("aa-slopes");
+  aaAlpha("aa-alpha");
+  aaBlend("aa-blend");
+  aaTextured("aa-textured");
+  aa3D("aa-3d");
+}
+
 //---- the rounds
 
 static int guReady;  //whether sceGuInit has set the GE up: once, on the first round, kept until geEnd
@@ -3661,9 +3854,9 @@ static void round2(void) {
   controllerTiming("controller-timing");
 }
 
-//A round of the GE's tests (2 to 6) into results/ge. Returns 0 if something couldn't be written.
+//A round of the GE's tests (2 to 7) into results/ge. Returns 0 if something couldn't be written.
 int geRound(int round) {
-  if(round < 2 || round > 6) return 1;
+  if(round < 2 || round > 7) return 1;
   if(!guReady) {
     sceGuInit();
     guReady = 1;
@@ -3674,7 +3867,8 @@ int geRound(int round) {
   else if(round == 3) round3();
   else if(round == 4) round4();
   else if(round == 5) round5();
-  else round6();
+  else if(round == 6) round6();
+  else round7();
   return !failed;
 }
 
