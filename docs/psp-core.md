@@ -10458,8 +10458,9 @@ With the name taken, 2020-II's "Murakumo Certificate" still froze for good (fram
 shows, the game reads a sound file whole into a buffer and hands it to `sceAtracSetDataAndGetID` with the size
 0xffffffff; Phobos refused it (0x80630006: the size doesn't fit memory), and the game waited for that sound for good.
 PPSSPP notes the same of Tales of VS, so the PSP's library evidently takes such a size; Phobos now takes a size whose
-top bit is set as reaching to the end of the memory the buffer is in (`atrac.cpp`), a buffer with no memory behind it
-refused as before (0x80630006). The card then passes and the
+top bit is set as reaching to the end of the memory the buffer is in (`atrac.cpp`'s `atracWholeSize()`, in the four
+functions given the whole file: SetData, SetMOutData and their AndGetID), a buffer with no memory behind it refused as
+before (0x80630006). The card then passes and the
 story goes on (`v-7d2-cert/frame-001560.png`, the Diet chamber; `frame-003600.png`, the first conversation). The name
 wasn't what stopped it.
 
@@ -10470,6 +10471,11 @@ wasn't what stopped it.
   node tree's "R-Stick X"/"R-Stick Y" reach the kernel, 128 untouched.
 - `tests/psp/utility.cpp` "utility keyboard input types": the nickname for 0x0c00, full-width spaces, a limit, lower
   case alone, ASCII among the types, URL, digits alone, hiragana alone, a game's own text, types not known.
-- `tests/psp/dialogs.cpp` "dialogs front end: keyboard": the app's answer conformed (digits alone; 0x0c00).
-- `tests/psp/atrac.cpp` "atrac setting": 0xffffffff takes the whole file.
-- Android: `PspDialogsTest.keyboardFieldsTakeOnlyTheirInputTypes`, `PspRightStickTest`.
+- `tests/psp/dialogs.cpp` "dialogs front end: keyboard": the app's answer conformed (digits alone; 0x0c00; a web
+  address's digits; full-width capitals in a field of small letters; line breaks in one line and in two, and other
+  control characters, in typed and untyped fields).
+- `tests/psp/atrac.cpp` "atrac setting": 0xffffffff takes the whole file; a file ending where memory ends taken to
+  the byte with 0x80000000; SetData, SetMOutData and SetMOutDataAndGetID the same; no RIFF header there, and no memory
+  there, refused (0x80630006).
+- Android: `PspDialogsTest.keyboardFieldsTakeOnlyTheirInputTypes` and `keyboardFieldsHoldWhatsTypedUntilEntered` (what
+  the field holds while typing: romaji kept in a field of kana, the limit counted as entered), `PspRightStickTest`.

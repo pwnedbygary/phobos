@@ -160,14 +160,18 @@ namespace {
   //those characters: each character it doesn't take becomes one it does where there's one (the other width of an
   //ASCII letter, digit or sign, the other case, the other kana), and is left out where there isn't. A space, which
   //every keyboard but the digits' has, is full-width (U+3000) where the field takes full-width characters and no
-  //half-width ones; a line break stays in a field of several lines, whatever its types. A field taking all (0, or
-  //none of the types known) takes everything else. Phobos's choice: the automatic answer keeps a field's own text,
-  //the game's, as it is (keyboard()); a front end's answer, the game's text among it, is typed so (dialogs.cpp).
+  //half-width ones; a line break stays in a field of several lines, whatever its types, and no other control
+  //character anywhere. Half-width katakana are taken only as they come (no other kana becomes one). A field taking
+  //all (0, or none of the types known) takes everything else. Phobos's choice: the automatic answer keeps a field's
+  //own text, the game's, as it is (keyboard()); a front end's answer, the game's text among it, is typed so
+  //(dialogs.cpp).
   auto keyboardConform(const std::vector<u16>& text, u32 input, u32 lines) -> std::vector<u16> {
     std::vector<u16> conformed;
     input &= InputKnown;
     if(!input) {
-      for(u16 c : text) if(c != '\n' || lines > 1) conformed.push_back(c);
+      for(u16 c : text) {
+        if(c == '\n' ? lines > 1 : c >= 0x20 && !(c >= 0x7f && c <= 0x9f)) conformed.push_back(c);
+      }
       return conformed;
     }
     auto takes = [&](u16 c) { return (keyboardTypes(c) & input) != 0; };

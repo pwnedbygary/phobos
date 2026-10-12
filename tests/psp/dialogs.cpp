@@ -364,14 +364,14 @@ static auto frontKeyboard() -> void {
   //as each field's input types and lines take it (7th Dragon 2020's name: full-width letters alone): ASCII letters
   //full-width, the space too, the digit (no full-width digits here) left out; a web address's digits and signs as
   //they are; a field of small Latin letters taking a full-width capital as a small ASCII one, a line break not in
-  //one line; in two, and in a field taking all, the break kept
+  //one line; in two the break kept, and in a field taking all too, no other control character in either
   fields = {{u"Input name.", u"", 0x0c00, 1, 48, 8}, {u"URL", u"", 0x8'0000, 1, 48, 16}, {u"ID", u"", 4, 1, 48, 8},
             {u"Note", u"", 4, 2, 48, 8}, {u"Any", u"", 0, 1, 48, 8}, {u"Any2", u"", 0, 2, 48, 8}};
   setUp();
   CHECK(m.start("sceUtilityOsk") && !m.update("sceUtilityOsk"), true);
   answer = {};
   answer.id = m.kernel.dialogShownID();
-  answer.texts = {"Bob 7", "a.b/1?x=2", "\xef\xbc\xb0S\np", "a\nb", "a\nb", "a\nb"};
+  answer.texts = {"Bob 7", "a.b/1?x=2", "\xef\xbc\xb0S\np", "a\nb", "a\t\nb", "a\nb"};
   CHECK(m.kernel.dialogAnswer(answer) && !m.update("sceUtilityOsk"), true);
   CHECK(output(0) == u"\uff22\uff4f\uff42\u3000" && result(0) == 2, true);
   CHECK(output(1) == u"a.b/1?x=2" && result(1) == 2, true);

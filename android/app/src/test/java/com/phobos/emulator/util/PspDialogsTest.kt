@@ -128,6 +128,7 @@ class PspDialogsTest {
         assertEquals("Bob", name.typing("Bob"))  // (entered full-width, as the field takes it)
         assertEquals("\uff22\uff4f\uff42", name.accept(name.typing("Bob")))
         assertEquals("B7ob", name.typing("B7obby"))  // (the digit counts nothing: the field drops it)
+        assertEquals("Bob", name.typing("Bob123"))  // (and nothing goes in once the limit's reached)
         assertEquals("ab", name.typing("a\uD83C\uDFAE\nb"))  // (a game pad and a line break: not in one line)
         assertEquals("a\nb", PspKeyboardField("", "", 8, 0, 2, 0).typing("a\nb"))
         assertEquals("", PspKeyboardField("", "", 0, 0, 1, 0).typing("anything"))

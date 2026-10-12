@@ -488,10 +488,26 @@ auto Kernel::sceAtracReinit() -> void {
 //The setting functions, sharing atracSet(): on an ID (refused for one not handed out, or of the other codec), or
 //on an ID of the file's codec they hand out (none free: 0x80630003). Setting decodes the frames priming the file's
 //first sample.
+//
+//The whole file's size, as the four that take the whole file (SetData, SetMOutData and their AndGetID) are given it:
+//one the library takes as negative (its top bit set) reaches to the end of the memory the buffer is in. 7th Dragon
+//2020-II gives sceAtracSetDataAndGetID 0xffffffff for the file it plays on its character's certificate, read whole
+//into the buffer, and waits for good for the sound the library would refuse. A buffer where there's no memory is
+//refused as before, as no file.
+static auto atracWholeSize(Memory& memory, u32 buffer, u32 size) -> u32 {
+  if(s32(size) >= 0 || !memory.reaches(buffer, 1)) return size;
+  u32 reach = 0;
+  for(u32 bit = 1u << 30; bit; bit >>= 1) {
+    if(memory.reaches(buffer, reach | bit)) reach |= bit;
+  }
+  return reach;
+}
+
 auto Kernel::sceAtracSetData() -> void {
   u32 id = arg(0);
   if(!atracFind(id, false)) return;
-  u32 error = atracSet(id, arg(1), arg(2), arg(2), false);
+  u32 size = atracWholeSize(memory, arg(1), arg(2));
+  u32 error = atracSet(id, arg(1), size, size, false);
   atracContext(id);
   result(error);
   if(!error) codecWait(AtracDecodeMicroseconds);
@@ -509,7 +525,8 @@ auto Kernel::sceAtracSetHalfwayBuffer() -> void {
 auto Kernel::sceAtracSetMOutData() -> void {
   u32 id = arg(0);
   if(!atracFind(id, false)) return;
-  u32 error = atracSet(id, arg(1), arg(2), arg(2), true);
+  u32 size = atracWholeSize(memory, arg(1), arg(2));
+  u32 error = atracSet(id, arg(1), size, size, true);
   atracContext(id);
   result(error);
   if(!error) codecWait(AtracDecodeMicroseconds);
@@ -545,20 +562,9 @@ static auto atracSetAndGetID(Kernel& kernel, u32 buffer, u32 readSize, u32 buffe
   return AtracErrorNoID;
 }
 
-//A size the library takes as negative (its top bit set) is taken as reaching to the end of the memory the buffer is in:
-//7th Dragon 2020-II gives 0xffffffff for the file it plays on its character's certificate, read whole into the
-//buffer, and waits for good for the sound the library would refuse (Tales of VS does the same, PPSSPP notes). A
-//buffer where there's no memory is refused as before, as no file.
 auto Kernel::sceAtracSetDataAndGetID() -> void {
-  u32 buffer = arg(0), size = arg(1);
-  if(s32(size) < 0 && memory.reaches(buffer, 1)) {
-    u32 reach = 0;
-    for(u32 bit = 1u << 30; bit; bit >>= 1) {
-      if(memory.reaches(buffer, reach | bit)) reach |= bit;
-    }
-    size = reach;
-  }
-  result(atracSetAndGetID(*this, buffer, size, size, false));
+  u32 size = atracWholeSize(memory, arg(0), arg(1));
+  result(atracSetAndGetID(*this, arg(0), size, size, false));
 }
 
 auto Kernel::sceAtracSetHalfwayBufferAndGetID() -> void {
@@ -566,7 +572,8 @@ auto Kernel::sceAtracSetHalfwayBufferAndGetID() -> void {
 }
 
 auto Kernel::sceAtracSetMOutDataAndGetID() -> void {
-  result(atracSetAndGetID(*this, arg(0), arg(1), arg(1), true));
+  u32 size = atracWholeSize(memory, arg(0), arg(1));
+  result(atracSetAndGetID(*this, arg(0), size, size, true));
 }
 
 auto Kernel::sceAtracSetMOutHalfwayBufferAndGetID() -> void {

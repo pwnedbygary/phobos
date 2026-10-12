@@ -367,7 +367,13 @@ private fun PspTextField(
         supportingText = {
             val entered = field.accept(value)
             val count = "${entered.length} / ${field.maxLength}"
-            Text(if (entered == value) count else "$entered  $count")
+            Text(
+                when {
+                    entered == value -> count
+                    entered.isEmpty() -> "(nothing entered)  $count"
+                    else -> "$entered  $count"
+                }
+            )
         },
         keyboardOptions = KeyboardOptions(
             capitalization = KeyboardCapitalization.Sentences,

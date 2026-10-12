@@ -266,8 +266,8 @@ fun PspKeyboardField.accept(text: String): String {
 }
 
 /**
- * [text] as the field holds it while the player types: what the PSP doesn't have left out, and nothing past what
- * makes [PspKeyboardField.maxLength] once entered ([accept]), but the rest as typed, so that Android's keyboard
+ * [text] as the field holds it while the player types: what the PSP doesn't have left out, and nothing once it holds
+ * what makes [PspKeyboardField.maxLength] entered ([accept]), but the rest as typed, so that Android's keyboard
  * composes as it does (romaji into kana, kanji, words), its text not changed under it key by key.
  */
 fun PspKeyboardField.typing(text: String): String {
@@ -275,10 +275,9 @@ fun PspKeyboardField.typing(text: String): String {
     var entered = 0
     for (c in text) {
         if (!holds(c)) continue
-        val counts = Character.isISOControl(c) || conform(c) != null
-        if (counts && entered >= maxLength) break
+        if (entered >= maxLength) break
         kept.append(c)
-        if (counts) entered++
+        if (Character.isISOControl(c) || conform(c) != null) entered++
     }
     return kept.toString()
 }
