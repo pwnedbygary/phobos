@@ -150,6 +150,19 @@ auto GE::lookFor(const PixelState& pixel, const Sampler* texture) const -> Look 
   return look;
 }
 
+//A through-mode texture coordinate as the GE keeps it: 15 significant bits, cut toward zero (round 6's texel-range:
+//coordinates of 2^15 and more lose their lowest bits, a texel more for each doubling, up to 2^23; one below 0 loses
+//them from its magnitude). In 3D, s, t and q keep 15 bits on their own terms (triangle()). Only whole texels in
+//floats were measured: the same cut of an 8- or 16-bit coordinate of 32768 or more, of a linear filter's sixteenths
+//from 2048 texels on, and of a fraction's low bits (a sprite's steps from 100.1, say) is taken, not seen.
+static auto keep15(float coordinate) -> float {
+  u32 bits;
+  std::memcpy(&bits, &coordinate, 4);
+  if((bits >> 23 & 255) != 255) bits &= ~0x1ffu;  //(infinities and not a number as they are)
+  std::memcpy(&coordinate, &bits, 4);
+  return coordinate;
+}
+
 //PRIM's (and BOUNDING_BOX's) count vertices into primitiveVertices, as the vertex type lays them out, from the vertex
 //address or by the indices at the index address; then the next carries on where this one stopped: after its
 //indices if it had them, else after its vertices.
@@ -178,6 +191,7 @@ auto GE::readVertices(u32 count, const VertexFormat& format) -> void {
     if(!together) drawnFirst(address, format.size);
     vertices.push_back(readVertex(address, format));
     if(!format.colorFormat) vertices.back().color = ambient;
+    if(format.through) vertices.back().u = keep15(vertices.back().u), vertices.back().v = keep15(vertices.back().v);
   }
   if(format.indexFormat) indexAddress += count * indexBytes;
   else vertexAddress += count * format.size;
@@ -542,22 +556,41 @@ static auto chooseFilter(u32 filter, float texelsPerPixel) -> bool {
 //and which way a step going down (to the left or up) is cut, aren't pinned down; this fits every measurement.
 static auto shortStep(f64 step) -> f64 { return std::trunc(step * 65536) / 65536; }
 
-//The GE's reciprocal's 128 straight chords (geReciprocal()): where chord s starts, round(2^17 / (1 + s/128)) (131072
-//down to 65793, never a half), and its slope over its 256 positions, the run to the next start over 4, rounded half
-//to even (half away from zero suits persp-floor better, 305 pixels apart against 351, and round 3's floor, 20 against
-//64, but leaves persp-wall 246 apart, not 23, and persp-w3 28928, not 18944). Two chords sit one unit high where
-//round 5's persp-divide and persp-floor sample them, so their starts are two counts low; their slopes are the
-//unadjusted ones (part 60).
+//The GE's reciprocal's 128 straight chords (geReciprocal()): where chord s starts (in half units) and its slope
+//over its 256 positions, as the owner's PSP's round 6 read every one at every other position (recip-pixels and
+//recip-projected: q's reciprocal at all 16383 of 16384 14-bit qs, the same in every binade, either way along a strip
+//and down v; docs/psp-core.md, part 75). Each chord is the straight line whose worst error against the true
+//reciprocal over its positions is least, but for chord 0, which starts at exactly 1, so that a power of two's
+//reciprocal is exact; chord 127's start, which no picture tells from one less (its odd positions, which recip-vertex-1
+//reads, go through 15 bits that drop the difference), is the least error's too. (Part 60 took the starts as
+//round(2^17 / (1 + s/128)) and the slopes from them, which leaves 71 chords a unit or two off at some positions.)
 struct ReciprocalChords {
   struct Chord { s32 start, slope; } chords[128];
   constexpr ReciprocalChords() : chords() {
-    for(u32 s = 0; s < 128; s++) chords[s].start = s32((16'777'216 + (128 + s) / 2) / (128 + s));
-    for(u32 s = 0; s < 128; s++) {
-      s32 run = (s < 127 ? chords[s + 1].start : 65536) - chords[s].start;  //(below zero)
-      s32 whole = run >> 2, quarters = run & 3;  //run / 4 is whole + quarters / 4, whole rounded down
-      chords[s].slope = whole + (quarters == 3 || (quarters == 2 && (whole & 1)));
-    }
-    chords[5].start -= 2, chords[58].start -= 2;
+    constexpr s32 starts[128] = {
+      131072, 130055, 129054, 128071, 127099, 126143, 125203, 124274, 123361, 122461, 121574, 120700,
+      119836, 118986, 118150, 117323, 116508, 115704, 114913, 114130, 113358, 112599, 111847, 111107,
+      110375, 109654, 108943, 108239, 107545, 106861, 106184, 105517, 104858, 104206, 103563, 102927,
+      102300, 101680, 101067, 100463, 99865, 99273, 98689, 98113, 97542, 96977, 96421, 95869,
+      95326, 94786, 94255, 93727, 93207, 92691, 92182, 91680, 91180, 90688, 90201, 89717,
+      89240, 88769, 88302, 87838, 87381, 86928, 86481, 86037, 85599, 85164, 84732, 84307,
+      83885, 83468, 83055, 82646, 82241, 81839, 81442, 81049, 80659, 80275, 79892, 79513,
+      79138, 78766, 78398, 78033, 77673, 77315, 76960, 76608, 76260, 75914, 75574, 75234,
+      74898, 74564, 74236, 73908, 73584, 73264, 72944, 72628, 72316, 72005, 71697, 71393,
+      71090, 70789, 70493, 70197, 69906, 69615, 69327, 69042, 68759, 68479, 68200, 67925,
+      67650, 67378, 67109, 66841, 66577, 66313, 66052, 65793,
+    };
+    constexpr s32 slopes[128] = {
+      -254, -250, -246, -243, -239, -235, -232, -228, -225, -222, -219, -216, -212, -209, -207, -204,
+      -201, -198, -196, -193, -190, -188, -185, -183, -180, -178, -176, -173, -171, -169, -167, -165,
+      -163, -161, -159, -157, -155, -153, -151, -150, -148, -146, -144, -143, -141, -139, -138, -136,
+      -135, -133, -132, -130, -129, -127, -126, -125, -123, -122, -121, -119, -118, -117, -116, -114,
+      -113, -112, -111, -110, -109, -108, -106, -105, -104, -103, -102, -101, -100, -99, -98, -97,
+      -96, -96, -95, -94, -93, -92, -91, -90, -90, -89, -88, -87, -86, -85, -85, -84,
+      -83, -82, -82, -81, -80, -80, -79, -78, -78, -77, -76, -76, -75, -74, -74, -73,
+      -73, -72, -71, -71, -70, -70, -69, -69, -68, -67, -67, -66, -66, -65, -65, -64,
+    };
+    for(u32 s = 0; s < 128; s++) chords[s] = {starts[s], slopes[s]};
   }
 };
 static constexpr ReciprocalChords reciprocalChords;
@@ -584,6 +617,12 @@ static alwaysinline auto geReciprocal(float x) -> float {
   return bits >> 31 ? -value : value;
 }
 
+auto GE::reciprocal(float x) -> float { return geReciprocal(x); }
+auto GE::reciprocalChord(u32 chord) -> std::pair<s32, s32> {
+  auto& line = reciprocalChords.chords[chord & 127];
+  return {line.start, line.slope};
+}
+
 //A float with its low 8 fraction bits cut off (the GE's float24): toward zero.
 static auto cutLowBits(float x) -> float {
   u32 bits;
@@ -605,6 +644,19 @@ static alwaysinline auto trunc24(f64 x) -> float {
   bits &= ~u64(0) << 29;
   std::memcpy(&x, &bits, 8);
   return float(x);
+}
+
+//A pixel whose q is 0 or below takes the texture's last texel each way (round 6's recip-projected: a q of +0, -0, a
+//tiny one below 0, and -0.375 to -3, at every corner, all gave texel (255, 255) of a repeating 256x256 texture): its
+//coordinates held at their largest, 2^22 - 1 texels (texelSpot()'s limit's last whole texel, every low bit set).
+//(Measured with nearest filtering: a linear filter there blends the last two texels each way, the coordinate being
+//on a texel's edge. Whether a clamped texture takes its last texel there too isn't measured.)
+static constexpr float HeldCoordinate = 4'194'303;
+
+//A 3D sprite's s, q or t at a column's (or row's) middle at: from its value at sixteenth start to its value at end,
+//floored (spriteJob()).
+static alwaysinline auto spriteAt(s32 from, s32 to, s32 at, s32 start, s32 end) -> s32 {
+  return s32(std::floor(from + (to - from) * (f64(at * 16 + 8 - start) / (end - start))));
 }
 
 //Three values as 15-bit integers on the unit of the largest one's exponent (the largest's leading one is the
@@ -689,11 +741,13 @@ static auto stepped(const s64 (&x)[3], const s64 (&y)[3], StepScale scale, const
 //    Where the middle falls to the sixteenth isn't measured either (the case allows anywhere in a column): here it's
 //    halfway, rounded down, and the right half's left edge reaches a sixteenth further left, as any sprite's does,
 //    so a column on the middle is the right half's.
-//  - Its texture coordinates follow the perspective: across x, u / w and 1 / w go from the left corner's to the right
-//    corner's; down y, v / w goes from the top corner's to the bottom one's; and each pixel takes (u / w) / (1 / w)
-//    and (v / w) / (1 / w). That's within a texel of every pixel measured; how a PSP steps and rounds them isn't
-//    pinned down. A turned sprite isn't measured: its coordinate running across x is taken as u is, the one running
-//    down y as v is.
+//  - Its texture coordinates follow the perspective, through the GE's own divide, as a triangle's do (round 6's
+//    recip-sprites, 4096 sprites each at a w of its own, is recip-vertex-0's triangles pixel for pixel): each
+//    corner's s = u * R(w), t = v * R(w) and q = R(w) cut to float24 and made 15-bit integers (triangle()); across x,
+//    s and q go from the left corner's to the right corner's, down y t goes from the top corner's to the bottom one's,
+//    each floored at a pixel's middle; and a pixel's coordinates are s and t times R(q) (raster.cpp). How a PSP steps
+//    them across a sprite whose corners' w differ isn't pinned down (here a straight blend, then floored). A turned
+//    sprite isn't measured: its coordinate running across x is taken as u is, the one running down y as v is.
 //In 2D, texture coordinates are taken at each pixel's middle, stepped from the left (or top) edge's towards the
 //other's (raster.cpp).
 auto GE::rectangle(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void {
@@ -839,17 +893,24 @@ auto GE::spriteJob(const Look& look, const Vertex& from, const Vertex& to, bool 
   };
   axis(turned ? from.v : from.u, turned ? to.v : to.u, x0, x1, s.columnFirst, s.columnStep, s.columnStart);
   axis(turned ? from.u : from.v, turned ? to.u : to.v, y0, y1, s.rowFirst, s.rowStep, s.rowStart);
-  //In 3D, the coordinate running across x (u, or v when turned) and the one running down y, each over w at the
-  //corners; and 1 / w, which runs across x. A corner with no w in front of the camera falls back on 2D's way.
+  //In 3D, the coordinate running across x (u, or v when turned) and its divisor, and the one running down y, over w
+  //at the corners by the GE's reciprocal, as triangle() takes them. A corner with no w in front of the camera falls
+  //back on 2D's way.
   s.divided = perspective && from.clip[3] > 0 && to.clip[3] > 0;
   const Vertex& topCorner = y0 < y1 ? from : to;
   const Vertex& bottomCorner = y0 < y1 ? to : from;
   s.left = left, s.right = right, s.top = top, s.bottom = bottom;
-  s.leftInverse = 1.0 / leftCorner.clip[3], s.rightInverse = 1.0 / rightCorner.clip[3];
-  s.leftAcross = (turned ? leftCorner.v : leftCorner.u) * s.leftInverse;
-  s.rightAcross = (turned ? rightCorner.v : rightCorner.u) * s.rightInverse;
-  s.topDown = (turned ? topCorner.u : topCorner.v) / topCorner.clip[3];
-  s.bottomDown = (turned ? bottomCorner.u : bottomCorner.v) / bottomCorner.clip[3];
+  if(s.divided) {
+    auto over = [](const Vertex& corner, float value) { return cutLowBits(value * geReciprocal(corner.clip[3])); };
+    float across[3] = {over(leftCorner, turned ? leftCorner.v : leftCorner.u),
+                       over(rightCorner, turned ? rightCorner.v : rightCorner.u), 0};
+    float divisor[3] = {over(leftCorner, leftCorner.q), over(rightCorner, rightCorner.q), 0};
+    float down[3] = {over(topCorner, turned ? topCorner.u : topCorner.v),
+                     over(bottomCorner, turned ? bottomCorner.u : bottomCorner.v), 0};
+    s32 a[3], q[3], d[3];
+    s.sUnit = quantize15(across, a), s.qUnit = quantize15(divisor, q), s.tUnit = quantize15(down, d);
+    s.leftS = a[0], s.rightS = a[1], s.leftQ = q[0], s.rightQ = q[1], s.topT = d[0], s.bottomT = d[1];
+  }
   return true;
 }
 

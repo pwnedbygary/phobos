@@ -95,6 +95,10 @@ polished.
   [Building](#building-phobos)).
 - **Saves and states:** the memory stick is a folder, shared by every game or at a path you choose. Save states are
   versioned, so states saved by earlier builds keep loading.
+- **The system's dialogs:** a game's messages, its on-screen keyboard and its save and load screens appear as the
+  app's own dialogs over the running game, answered by touch or a controller (the confirm button the game uses:
+  circle in many Japanese games): Yes/No questions, names typed with Android's keyboard, and lists of saves with their
+  icons, titles, dates and sizes to load, save over or delete. The desktop program answers them at once, as before.
 - **Controls:** the PSP's own touch layout, and controllers mapped as on every other system, whose right stick can
   be the PSP's face buttons, its D-pad or its analog stick (PSP Right Stick, in Settings and the pause menu).
 - **Compatibility:** in the [compatibility report](docs/psp-compatibility.md)'s runs (each of 266 retail games run
@@ -187,7 +191,7 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 - GitHub Actions builds **release-only** APKs (legacy + modern flavors) on every commit. A version tag (`v1.2.3`) publishes a GitHub Release, and every push to `master` publishes a nightly pre-release; both carry `update.json` for the in-app updater (Settings → About), which installs the newer build of the installed flavor through Android's installer. Debug builds are never published.
 - The desktop program is built for Linux (AppImage + zsync), Windows and macOS for every pull request and on `master`, and attached to tagged releases.
 - The PSP core's tests (the Allegrex CPU tests, and the PSP system tests with the Vulkan renderer's on Mesa's software driver) run on every change to it.
-- Every build is numbered from git history, locally and on CI alike: version code 200000 + the commit count (100000 + it before 2.0), version name the tag on a tagged commit and `<tag>-<commits since>-g<hash>` otherwise.
+- Every build is numbered from git history, locally and on CI alike: version code 210000 + the commit count from 2.1 (200000 + it for 2.0, 100000 + it before 2.0), version name the tag on a tagged commit and `<tag>-<commits since>-g<hash>` otherwise.
 
 ---
 

@@ -3619,6 +3619,8 @@ else if (port->type() == "Keyboard") {
       #endif
       if (failCheck) LOGI("PSP: the renderer's start-up check made to fail (debug.phobos.psp.failcheck)");
       ::ares::PlayStationPortable::option("Renderer Check", failCheck ? "Fail" : "Pass");
+      // The system's dialogs (messages, the keyboard, saving and loading) wait for the app's own (pspDialog()).
+      ::ares::PlayStationPortable::option("Dialogs", "true");
       success = ::ares::PlayStationPortable::load(root, "[Sony] PlayStation Portable");
     } else if (identifiedSystem == "Game Boy Advance") {
       success = ::ares::GameBoyAdvance::load(root, "[Nintendo] Game Boy Advance");
@@ -4721,6 +4723,9 @@ else if (port->type() == "Keyboard") {
     if (!text.empty()) addLog(LogLevel::Warn, {"PSP: ", text.c_str()});
     return text;
   }
+  auto pspDialogId() -> u32 { return ::ares::PlayStationPortable::dialogID(); }
+  auto pspDialog() -> std::vector<u8> { return ::ares::PlayStationPortable::dialogBytes(); }
+  auto answerPspDialog(const std::vector<u8>& answer) -> bool { return ::ares::PlayStationPortable::answer(answer); }
   auto setPictureMultiple(s32 multiple) -> void { pictureMultiple = std::clamp(multiple, 1, 4); }
   auto setVulkanCachePath(const char* path) -> void {
     vulkanCachePath = path ? (string)path : "";

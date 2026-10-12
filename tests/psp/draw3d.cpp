@@ -522,10 +522,11 @@ static auto draw3dLightingAmbient() -> void {
 }
 
 //A directional light (toward +z: its position (0, 0, 2) is only a direction), white diffuse, on a material diffuse
-//(128, 64, 0): squarely, 511 * 257 * 256 >> 18 = 128 and 64; at a cosine of 0.8, a share of 205: 102 and 51 (the
-//normal made one long first); from behind (NORMAL_REVERSE), nothing. With MATERIAL_COLOR bit 1 the vertex's color
-//(red) is the diffuse. A "powered" diffuse (kind 2) raises the cosine to the coefficient, 2: 0.75 becomes 0.5, a
-//share of 128: 64 and 32.
+//(128, 64, 0), each product a level, 511 * 257 >> 10 = 128 and 64, times the cosine's share, a level too (lighting.cpp,
+//docs/psp-core.md part 75): squarely 255, 257 * 511 >> 10 = 128 and 64; at a cosine of 0.8, 204: 257 * 409 >> 10 = 102
+//and 51 (the normal made one long first); from behind (NORMAL_REVERSE), nothing. With MATERIAL_COLOR bit 1 the
+//vertex's color (red) is the diffuse. A "powered" diffuse (kind 2) raises the cosine to the coefficient, 2: 0.75
+//becomes 0.5, a share of 128: 64 and 32.
 static auto draw3dLightingDiffuse() -> void {
   Scene c;
   c.ge.commands[GE::LightingEnable] = 1;
@@ -547,10 +548,8 @@ static auto draw3dLightingDiffuse() -> void {
   c.ge.commands[GE::MaterialSpecularCoefficient] = f24(2);
   CHECK(litPoint(c, 0.6614378f, 0, 0.75f), 0x0000'2040);
   c.ge.commands[GE::LightType0] = 0;
-  //a share rounded up: at a cosine of 0.501, 256 * 0.501 = 128.26 makes 129: on a white material,
-  //261121 * 129 >> 18 = 128 (128 would give 127). In 256ths, where PPSSPP has 512ths and one more, as a PSP showed
-  //(round 3): at a cosine of 0.28 a share of 72, 261121 * 72 >> 18 = 71 (PPSSPP's 145 would give 72); red 32 at
-  //0.8, 511 * 65 * 205 >> 18 = 25
+  //a share rounded down: at a cosine of 0.501, 256 * 0.501 = 128.26 makes 128: on a white material, a level of 255,
+  //511 * 257 >> 10 = 128; at a cosine of 0.28 a share of 71, 511 * 143 >> 10 = 71; red 32 at 0.8, 65 * 409 >> 10 = 25
   c.ge.commands[GE::MaterialDiffuse] = 0xff'ffff;
   CHECK(litPoint(c, 0.8654485f, 0, 0.501f), 0x0080'8080);
   CHECK(litPoint(c, 0.96f, 0, 0.28f), 0x0047'4747);
@@ -561,8 +560,10 @@ static auto draw3dLightingDiffuse() -> void {
   CHECK(litPoint(c, 0, 0, 1, 0xff00'00ff), 0x0000'00ff);
 }
 
-//A point light 2 above, fading as 1 / (linear d): half, a share of 128: 261121 * 128 >> 18 = 127. A spotlight there
-//pointing along +z (the cosine with the direction to the light 1, past the cutoff 0.5): full; pointing along -z: none.
+//A point light 2 above, fading as 1 / (linear d): white on white, a level of 255, times the cosine's share (255: 255)
+//and then the fading's, half, 128: 511 * 257 >> 10 = 128 (its own multiply, as round 2's light-point measured it). A
+//spotlight there pointing along +z (the cosine with the direction to the light 1, past the cutoff 0.5): full;
+//pointing along -z: none.
 static auto draw3dLightingPointAndSpot() -> void {
   Scene c;
   c.ge.commands[GE::LightingEnable] = 1;
@@ -572,7 +573,7 @@ static auto draw3dLightingPointAndSpot() -> void {
   c.ge.commands[GE::Light0ConstantAttenuation + 1] = f24(1);  //linear
   c.ge.commands[GE::Light0Ambient + 1] = 0xff'ffff;
   c.ge.commands[GE::MaterialDiffuse] = 0xff'ffff;
-  CHECK(litPoint(c, 0, 0, 1), 0x007f'7f7f);
+  CHECK(litPoint(c, 0, 0, 1), 0x0080'8080);
   c.ge.commands[GE::LightType0] = 2 << 8;  //a spotlight
   c.ge.commands[GE::Light0ConstantAttenuation] = f24(1), c.ge.commands[GE::Light0ConstantAttenuation + 1] = 0;
   c.ge.commands[GE::Light0CutoffAttenuation] = f24(0.5f);
@@ -582,22 +583,23 @@ static auto draw3dLightingPointAndSpot() -> void {
   c.ge.commands[GE::Light0DirectionX + 2] = f24(-1);
   CHECK(litPoint(c, 0, 0, 1), 0);
   //A spotlight darkens where the cosine with its direction is below 0 and its cutoff lets that in (PPSSPP's reading,
-  //carried over to 256ths; not measured): pointing away, cutoff -1, the strength -1, a share of -256. From emissive
-  //white plus white ambient (255 + (511 * 511 >> 10) = 510), the light's black ambient takes
-  //1 * 511 * -256 >> 18 = -1 and its white diffuse 261121 * -256 >> 18 = -256: 253.
+  //carried over; not measured): pointing away, cutoff -1, the strength -1, a share of -255. From emissive gray plus
+  //white ambient (128 + (511 * 511 >> 10) = 383), the light's black ambient takes nothing (a level of 0) and its white
+  //diffuse 255 (a level of 255 times the cosine's 255, then the fading's -255): 128.
   c.ge.commands[GE::Light0CutoffAttenuation] = f24(-1);
-  c.ge.commands[GE::MaterialEmissive] = 0xff'ffff;
+  c.ge.commands[GE::MaterialEmissive] = 0x80'8080;
   c.ge.commands[GE::AmbientColor] = 0xff'ffff;
   c.ge.commands[GE::AmbientLightColor] = 0xff'ffff;
-  CHECK(litPoint(c, 0, 0, 1), 0x00fd'fdfd);
+  CHECK(litPoint(c, 0, 0, 1), 0x0080'8080);
 }
 
 //The shine: a directional light toward +z that shines (white specular, no diffuse), the viewer along +z, coefficient
 //2. With the normal at a cosine of 0.75 to the half-way direction, the GE's quick power makes 0.75 squared 0.5 (not
-//0.5625): a share of 128, 127. A coefficient of 1.03125 keeps only the top four bits of its fraction: 1, so 0.75, a
-//share of 192, 191 (not 189). With the view turned so the viewer is along +x, the half-way direction is between +z
-//and +x: a normal there takes the whole shine. Kept apart (LIGHT_MODE 1), the shine is added after the texture
-//(replace: texel (0, 0), blue 0x80): (127, 127, 255); added in, the texture replaces it.
+//0.5625): a share of 128, 511 * 257 >> 10 = 128. A coefficient of 1.03125 keeps only the top four bits of its
+//fraction: 1, so 0.75, a share of 192, 192 (0.5625 would give 144). With the view turned so the viewer is along +x,
+//the half-way direction is between +z and +x: a normal there takes the whole shine. Kept apart (LIGHT_MODE 1), the
+//shine is added after the texture (replace: texel (0, 0), blue 0x80): (128, 128, 255); added in, the texture replaces
+//it.
 static auto draw3dLightingSpecular() -> void {
   Scene c;
   c.ge.commands[GE::LightingEnable] = 1;
@@ -607,9 +609,9 @@ static auto draw3dLightingSpecular() -> void {
   c.ge.commands[GE::Light0Ambient + 2] = 0xff'ffff;  //specular white
   c.ge.commands[GE::MaterialSpecular] = 0xff'ffff;
   c.ge.commands[GE::MaterialSpecularCoefficient] = f24(2);
-  CHECK(litPoint(c, 0.6614378f, 0, 0.75f), 0x007f'7f7f);
+  CHECK(litPoint(c, 0.6614378f, 0, 0.75f), 0x0080'8080);
   c.ge.commands[GE::MaterialSpecularCoefficient] = f24(1.03125f);
-  CHECK(litPoint(c, 0.6614378f, 0, 0.75f), 0x00bf'bfbf);
+  CHECK(litPoint(c, 0.6614378f, 0, 0.75f), 0x00c0'c0c0);
   //the view: world x to view z, y to y, z to -x, moved so the vertex stays where it was
   u32 turned[12] = {0, 0, f24(1), 0, f24(1), 0, f24(-1), 0, 0, f24(5), 0, f24(-5)};
   for(u32 n = 0; n < 12; n++) c.ge.view[n] = turned[n];
@@ -619,7 +621,7 @@ static auto draw3dLightingSpecular() -> void {
   c.texture();
   CHECK(litPoint(c, 0.6614378f, 0, 0.75f), 0x0080'0000);
   c.ge.commands[GE::LightMode] = 1;
-  CHECK(litPoint(c, 0.6614378f, 0, 0.75f), 0x00ff'7f7f);
+  CHECK(litPoint(c, 0.6614378f, 0, 0.75f), 0x00ff'8080);
 }
 
 //Environment mapping (TEXTURE_MAP_MODE 2): u from light 0 (directional, toward +x), v from light 1 (toward +y), lit
