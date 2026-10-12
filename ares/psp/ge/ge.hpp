@@ -179,6 +179,10 @@ struct GE {
     const u32* decoded;  //its texels already decoded (Decoded), decodedWidth to a row; or none: read from memory
     u32 decodedWidth;
     u32 decodedRows;     //the rows the primitive may take texels from (draw.cpp), all of them decoded
+    //of those, the rows from decodedTop and the columns decodedLeft to decodedRight (not including) hold every texel it
+    //can take (fetch() checks these); a deferred copy (ensureDecoded()) has every texel it can take decoded, but not
+    //necessarily all of that rectangle
+    u32 decodedTop, decodedLeft, decodedRight;
     const u8* bytes;     //read from memory: where its bytes are in the host's memory, when they're all there
   };
 
@@ -216,6 +220,7 @@ struct GE {
     //(textureWritten()): looked at again before it's next drawn with
     std::vector<u8> source;
     bool suspect = false;
+    bool deferred = false;  //decoded for one batch alone (ensureDecoded()), not kept
   };
   struct TextureCache {
     std::unordered_map<TextureKey, std::shared_ptr<Decoded>, TextureKey::Hash> entries;
@@ -266,6 +271,14 @@ struct GE {
   struct Batch;  //(threads.cpp)
   struct Renderer;
 
+  //Texels of a texture inside it (at most 512 by 512), by row and by column: those in a marked row and a marked
+  //column; or all of them.
+  struct Reach {
+    std::array<u64, 8> rows{}, columns{};
+    bool all = false;
+    static auto mark(std::array<u64, 8>& bits, u32 first, u32 last) -> void;  //(first to last, inclusive)
+  };
+
   //What a primitive is drawn with, shared by the jobs it makes: the pixel pipeline's settings, and the texture
   //with the texture function's (or none), all taken from the commands as the primitive met them.
   struct Look {
@@ -281,6 +294,10 @@ struct GE {
     u32 deferRows = 0;
     std::vector<u8> deferClut;
     u32 deferFirst = 0, deferLast = 0;
+    //The texels of that deferred texture its jobs can take (record(): texelReach()), in the rows and columns marked;
+    //or any of them (reach->all), where a job's can't be told. None until a job is recorded. (Kept apart: a Look is
+    //made and moved for every primitive, and few are deferred.)
+    std::unique_ptr<Reach> reach;
   };
 
   //A primitive set up for drawing (draw.cpp): everything about it worked out once, so that any of its rows can be
@@ -357,6 +374,11 @@ struct GE {
   u64 clutHash = 0;        //its contents' hash, and a version that goes up whenever they change
   u32 clutVersion = 0;
   TextureCache textures;   //textures kept decoded (texture.cpp)
+  //The texels' room of deferred copies done with (clearBatch()), to decode into again (ensureDecoded(), on whichever
+  //thread starts a batch), rather than taking and clearing a texture's worth each time.
+  struct Spares { std::mutex mutex; std::vector<std::vector<u32>> texels; };
+  std::unique_ptr<Spares> spares = std::make_unique<Spares>();
+  static constexpr u32 SpareCopies = 4;
   bool fourPixels = true;  //rows drawn four pixels at a time where they may be (four.cpp; tests compare without)
   Registers list;
   u32 vertexAddress = 0, indexAddress = 0;  //where the next vertex and index are read
@@ -419,9 +441,13 @@ struct GE {
   auto submit(Job& job) -> void;
   auto spriteJob(const Look& look, const Vertex& from, const Vertex& to, bool perspective, Job& job) const -> bool;
   auto readsAhead(const Look& look, const std::vector<Vertex>& vertices, u32 count) const -> bool;
+  auto readsApart(const Look& look, const Transform& t, const std::vector<Vertex>& vertices, u32 kind, u32 strip,
+                  s32 facing) const -> bool;
   auto rectangle(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto triangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing, bool perspective)
     -> void;
+  auto triangleJob(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, const s64 (&x)[3],
+                   const s64 (&y)[3], s64 area, bool perspective) const -> Job;
   auto point(const Look& look, const Vertex& at) -> void;
   auto line(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto readVertices(u32 count, const VertexFormat& format) -> void;
@@ -448,6 +474,9 @@ struct GE {
                                     float u, float v, u32 fog) -> void;
   template<u32 Format> auto spriteRows(const Job& job, s32 fromY, s32 toY) -> void;
   template<u32 Format> auto triangleRows(const Job& job, s32 fromY, s32 toY) -> void;
+  auto texelSpan(const Job& job, s32 (&rows)[2], s32 (&columns)[2]) const -> bool;
+  static auto texelRuns(const s32 (&span)[2], u32 size, bool clamp, s32 (&runs)[2][2]) -> u32;
+  auto texelReach(const Job& job, Reach& reach) const -> void;
   struct LinePixel { s32 x, y; u32 z, color, specular, fog; float u, v; };
   auto linePixels(const Job& job, s32 fromY, s32 toY, std::vector<LinePixel>& pixels) -> void;
   template<u32 Format> auto lineRows(const Job& job, s32 fromY, s32 toY) -> void;
@@ -479,7 +508,7 @@ struct GE {
   auto ensureDecoded(Batch& batch) -> void;
   auto fillDecoded(Look& look, u32 rows) -> void;
   auto decodeTexels(const Sampler& t, const u8* palette, u32 low, u32 high, u32 width, u32 from, u32 rows,
-                    u32* texels) -> void;
+                    u32* texels, u32 left = 0, u32 right = ~0u) -> void;
   auto textureWritten(u32 page) -> void;
   auto forget(Decoded* entry) -> void;
   auto dropTextures() -> void;

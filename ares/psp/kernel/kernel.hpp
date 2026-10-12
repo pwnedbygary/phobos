@@ -256,7 +256,7 @@ struct Kernel {
   auto run(u64 budget) -> u64;
   auto importCode(const std::string& library, u32 nid) -> u32;
   auto syscall(u32 code) -> bool;
-  auto dispatch(u32 code) -> bool;
+  auto dispatch(u32 code, bool& quiet) -> bool;
   auto runUntilNextEvent() -> void;
   auto arg(u32 n) const -> u32;
   auto result(u32 value) -> void;
@@ -282,6 +282,7 @@ struct Kernel {
     const char* name;
     auto (Kernel::*handler)() -> void;
     u32 nid;
+    bool quiet = false;  //it makes nothing due sooner (syscall())
   };
   struct Import {
     std::string library;
@@ -420,11 +421,12 @@ struct Kernel {
   auto waitSemaphore(bool callbacks) -> void;
 
   struct Report {  //a status structure built for the program, as report() copies it
-    std::vector<u8> bytes;
-    explicit Report(u32 size) : bytes(size) { word(0, size); }
+    u8 bytes[108] = {};  //(the largest, a thread's: sceKernelReferThreadStatus())
+    u32 size;
+    explicit Report(u32 size) : size(size) { assert(size <= sizeof(bytes)); word(0, size); }
     auto word(u32 offset, u32 value) -> void { for(u32 n = 0; n < 4; n++) bytes[offset + n] = value >> n * 8; }
     auto name(u32 offset, const std::string& text) -> void {  //a 32-byte field, its last byte a NUL
-      std::copy_n(text.begin(), std::min<size_t>(text.size(), 31), bytes.begin() + offset);
+      std::copy_n(text.begin(), std::min<size_t>(text.size(), 31), bytes + offset);
     }
   };
   auto report(u32 address, const Report& structure) -> void;
@@ -856,7 +858,7 @@ struct Kernel {
   bool interruptedHalted = false;
   bool callResumesGe = false;
   auto queueCall(u32 function, u32 gp, u32 a0, u32 a1, u32 a2, bool resumesGe = false) -> void;
-  auto startCall() -> void;
+  auto startCall() -> bool;
   auto callReturned() -> void;
   auto mayWait() -> bool;
   auto fromThread() -> bool;
@@ -971,7 +973,7 @@ struct Kernel {
   bool geFinishDue = false; //the list it runs met its FINISH: its interrupt is taken from geDoneAt on (geInterrupt())
   auto geIndex(u32 id) const -> s32;
   auto geTime() -> void;
-  auto geInterrupt() -> void;
+  auto geInterrupt() -> bool;
   auto geEnqueue(bool head) -> void;
   auto geLoad(GeList& list) -> void;
   auto geRestoreBase(u32 word) -> void;

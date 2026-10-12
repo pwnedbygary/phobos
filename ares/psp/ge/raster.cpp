@@ -198,6 +198,90 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
   }
 }
 
+//The texels a job's pixels can take from its texture, rows and columns, first to last, as texelSpot() gives them
+//(before texelAxis() puts them inside the texture): found for a 3D triangle whose q is the same at every pixel (texQ
+//steps by nothing, as at corners with one w and one q), as triangleRows() and triangleFours() work its coordinates
+//out. There s and t are planes stepped from a corner, exactly linear in a pixel's middle, and every pixel the job
+//draws has its middle inside the triangle and inside its box (firstX to lastX, firstY to lastY), so each plane's
+//value there lies between its values at the three corners, and between those at the middles of the box's corner
+//pixels; a pixel's coordinate is that value floored, times one factor (the unit and R(q)), and texelSpot() takes the
+//texel from it, each step never going back. So the coordinates, and the texels (the next one too, filtered), lie
+//between those of the least and greatest values both allow. False for any other job, and for one whose q is 0 or
+//below, whose every pixel holds its coordinates (HeldCoordinate) instead.
+auto GE::texelSpan(const Job& job, s32 (&rows)[2], s32 (&columns)[2]) const -> bool {
+  if(job.kind != Job::Kind::Triangle) return false;
+  auto& r = job.triangle;
+  if(!job.look->textured || !r.perspective || r.texQ.across || r.texQ.down) return false;
+  if(s64(r.texQ.start) >> 14 <= 0) return false;
+  float reciprocal = geReciprocal(float(s64(r.texQ.start) >> 14) * r.qUnit);
+  auto span = [&](const Job::Stepped& c, float unit, s32 (&out)[2]) -> bool {
+    auto at = [&](s64 x, s64 y) { return s128(c.start) + s128(x - r.startX) * c.across + s128(y - r.startY) * c.down; };
+    s128 low = at(r.x[0], r.y[0]), high = low;
+    for(u32 k : range(1, 3)) low = std::min(low, at(r.x[k], r.y[k])), high = std::max(high, at(r.x[k], r.y[k]));
+    s64 left = s64(job.firstX) * 16 + 8, right = s64(job.lastX) * 16 + 8;
+    s64 top = s64(job.firstY) * 16 + 8, bottom = s64(job.lastY) * 16 + 8;
+    s128 boxLow = at(left, top), boxHigh = boxLow;
+    for(s128 value : {at(right, top), at(left, bottom), at(right, bottom)}) {
+      boxLow = std::min(boxLow, value), boxHigh = std::max(boxHigh, value);
+    }
+    low = std::max(low, boxLow), high = std::min(high, boxHigh);
+    //(the corners' values, and so these, within 64 bits: fourFriendly(), four.cpp)
+    if(low > high || low < s128(std::numeric_limits<s64>::min()) || high > s128(std::numeric_limits<s64>::max())) {
+      return false;
+    }
+    float least = trunc24(f64(s64(low) >> 14) * unit * reciprocal);
+    float greatest = trunc24(f64(s64(high) >> 14) * unit * reciprocal);
+    if(least > greatest) std::swap(least, greatest);
+    out[0] = texelSpot(least, job.linear).first, out[1] = texelSpot(greatest, job.linear).first + (job.linear ? 1 : 0);
+    return true;
+  };
+  return span(r.texS, r.sUnit, columns) && span(r.texT, r.tUnit, rows);
+}
+
+//The texels inside a texture of size texels (each side at most 512) that texelAxis() puts span's texels at: held at
+//the edges, one run; repeating round, one run, or two where the span crosses an edge (the end and the start), or all
+//of them. Returns how many runs (first to last).
+auto GE::texelRuns(const s32 (&span)[2], u32 size, bool clamp, s32 (&runs)[2][2]) -> u32 {
+  s32 edge = std::min<s32>(size, 512) - 1;  //(a power of two, less one)
+  if(clamp) {
+    runs[0][0] = std::clamp(span[0], 0, edge), runs[0][1] = std::clamp(span[1], 0, edge);
+    return 1;
+  }
+  if(span[1] - span[0] >= edge) return runs[0][0] = 0, runs[0][1] = edge, 1;
+  s32 first = span[0] & edge, last = span[1] & edge;
+  if(first <= last) return runs[0][0] = first, runs[0][1] = last, 1;
+  runs[0][0] = first, runs[0][1] = edge, runs[1][0] = 0, runs[1][1] = last;
+  return 2;
+}
+
+//The texels a job can take marked in reach (a 2D sprite's: spriteReach(), draw.cpp; a triangle's: texelSpan() and
+//texelRuns()); all of them where that can't be told.
+auto GE::texelReach(const Job& job, Reach& reach) const -> void {
+  if(reach.all) return;
+  s32 rows[2], columns[2], runs[2][2];
+  auto& t = job.look->texture;
+  if(job.kind == Job::Kind::Sprite) {
+    if(!spriteReach(job, t, rows, columns)) return void(reach.all = true);
+    Reach::mark(reach.rows, rows[0], rows[1]), Reach::mark(reach.columns, columns[0], columns[1]);
+    return;
+  }
+  if(!texelSpan(job, rows, columns)) return void(reach.all = true);
+  for(u32 n = 0, count = texelRuns(rows, t.height, t.clampV, runs); n < count; n++) {
+    Reach::mark(reach.rows, runs[n][0], runs[n][1]);
+  }
+  for(u32 n = 0, count = texelRuns(columns, t.width, t.clampU, runs); n < count; n++) {
+    Reach::mark(reach.columns, runs[n][0], runs[n][1]);
+  }
+}
+
+auto GE::Reach::mark(std::array<u64, 8>& bits, u32 first, u32 last) -> void {
+  assert(first <= last && last < 512);
+  for(u32 word = first / 64; word <= last / 64; word++) {
+    u32 from = word == first / 64 ? first % 64 : 0, to = word == last / 64 ? last % 64 : 63;
+    bits[word] |= ~0ull >> (63 - to) & ~0ull << from;
+  }
+}
+
 //A line's pixels in rows fromY to toY (draw.cpp's line() says which): along x (y when it's steep) from its first
 //to its last, each in the row (column) where it crosses the pixel's middle. Its colors, depth, fog and texture
 //coordinates are blended from its ends by how far along x that middle is, held to its ends, as triangles' were
