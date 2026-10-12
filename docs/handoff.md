@@ -25,6 +25,29 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: anti-aliased lines — Dead or Alive Paradise's wireframe gone — 2026-10-12
+
+Branch `cursor/psp-aalines-2b67`, on master (`2a7019c84`). The play-test's batch 1, item 1: every girl's model in Dead
+or Alive Paradise covered in a coloured wireframe, both renderers. docs/psp-core.md, part 76, has the evidence. Clean
+room: the owner's PSP's round 4 pictures, a trace of the game's lists, PPSSPP's rasterizer read for its description
+of the PSP only; JPCSP not read. Save states unchanged.
+- **Cause**: the game draws its models' edges again as anti-aliased 3D line strips, textured with the frame buffer
+  they draw into, blended by alpha, alpha test above 0. The core drew anti-aliased lines aliased and opaque, each pixel
+  at the model's own texture coordinates, so other parts of the screen showed along every edge.
+- **Fix** (`draw.cpp`, `raster.cpp`): an anti-aliased line's pixels are the aliased line's, each with its coverage
+  for its alpha (0 to 128, measured: round 4's `lines-smooth` matches word for word) and, textured, the texel at its
+  own middle (unmeasured, PPSSPP's description); the GPU draws them from `linePixels()` alike. The edge pass now blends
+  each pixel with itself and doesn't show. Chosen where unmeasured: the alpha replaced, not scaled; steep lines as
+  shallow ones turned; clear mode as before.
+- **Round 7** (`tools/psp-measure`, new first menu line, `pspmeasure.elf` rebuilt): `aa-slopes`, `aa-alpha`,
+  `aa-blend`, `aa-textured`, `aa-3d`, for what's chosen. Not run on a PSP yet: the next thing to ask the owner for.
+- **Checks**: tests/psp 451/0 (sanitized; two new groups, round 7 driven), tests/allegrex 58/0, tests/psp/ares 307/0.
+  The beach, pool and volleyball scenes are clean in both renderers, software and Vulkan a mean of 0.1-0.2 apart. The
+  whole library beside the final run: 265 finish (Killzone stopped at 900 s on a busy Mac); of the three games that
+  draw anti-aliased lines, MotorStorm: Arctic Edge's menu panels' edges are now graded, the others unchanged.
+- **Note for merging**: #223 (not ready) also calls its docs/psp-core.md section "Part 76"; whichever merges second
+  renumbers.
+
 ## Merged into master: #212 to #219 — 2026-10-11
 
 Branch `cursor/psp-merge-212-219-2b67`: master plus #212 (speed 8), #213 (64 controller samples), #214 (PSP pause-menu

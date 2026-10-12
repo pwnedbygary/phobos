@@ -86,7 +86,9 @@ converts (`gpu.cpp`'s `vertex()`):
   differs from half to half is drawn as two.
 - **3D sprites** have their corners at the pixel edges, with w and the texture coordinates times w set so that the
   GPU's perspective interpolation is the GE's straight lines in 1/w.
-- **Points and lines** are pixel-sized squares, each with its own values.
+- **Points and lines** are pixel-sized squares, each with its own values. An anti-aliased line's pixels come from
+  `linePixels()` with their coverage for the alpha and the texel at their own middle (docs/psp-core.md, part 76), so
+  the GPU draws them as the software renderer does without knowing of anti-aliasing.
 
 Consecutive primitives with the same settings go into one draw.
 
