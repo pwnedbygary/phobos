@@ -43,6 +43,20 @@
 //waits meanwhile (the tests' checkpoints saw other threads run during each): here the calling thread waits
 //AtracDecodeMicroseconds (chosen: the PSP's time isn't measured) after a call that decoded, when it may wait and the
 //call returns 0. sceAtracSetDataAndGetID, returning an ID, doesn't wait.
+//
+//The contexts. Each of the six IDs has 256 bytes of the library's memory: 128 of its decoder's (the last error, 8
+//bytes in), then 128 of its own, laid out as pspautotests' atrac.h reads them (where decoding is, the file's frames,
+//the buffers, the state). On a PSP they're the library's state itself, there from the start and current after every
+//call; _sceAtracGetContextAddress only says where an ID's is. Programs read them, and write them: pspautotests'
+//getremainframe, getsoundsample, resetpos, resetting and second recorded every call that needs a file refusing an
+//ID whose state the program set to 8 (the low-level decoder's: 0x80630031) or 16 (sceSas's: 0x80630040), and taking
+//it again once set back. Angus Hates Aliens' sound code, a wrapper over sceSas's ATRAC3 voices (the one
+//pspautotests' audio/atrac/sas copies), sets 16, moves the buffer and curFileOff on, puts the voice in loopNum and
+//-1 in secondBuffer, and stops the voice only while the state still says 16: it asked again for good when the state
+//it had set was written over. Here each context is written whenever the library changes its ID, and at power on,
+//into kernel memory (AtracContextMemory: chosen, as a PSP's are in its library's module, in the user partition, and
+//no game's memory need go to them here); the state a program wrote there is what every call that needs a file looks
+//at first, and the rest of what it wrote stays until the library next changes that ID.
 
 namespace {
   //sceAtrac3plus's errors, as audio/atrac's tests recorded them
@@ -65,6 +79,8 @@ namespace {
   constexpr u32 AtracErrorSecondNotNeeded = 0x8063'0022;
   constexpr u32 AtracErrorEmpty = 0x8063'0023;            //no frame in the buffer to decode
   constexpr u32 AtracErrorAllDecoded = 0x8063'0024;
+  constexpr u32 AtracErrorIsLowLevel = 0x8063'0031;       //an ID whose context says 8, the low-level decoder's
+  constexpr u32 AtracErrorIsForSas = 0x8063'0040;         //and 16, sceSas's
   constexpr u32 AtracCodecError = 0x20b;                  //sceAtracGetInternalErrorInfo after a bad frame (stream)
   constexpr u32 AtracPlus = 0x1000, AtracClassic = 0x1001;
   constexpr u32 AtracIDs = 6;
@@ -140,10 +156,15 @@ static auto atracRestart(const Kernel::Atrac& a, u32& count) -> u32 {
   return atracFrameOffset(a, first);
 }
 
-//An ID handed out, holding a file when needData; else the error is the result.
+//An ID handed out, holding a file when needData; else the error is the result. Its state is first its context's,
+//which the program may have set (above): 8 or 16 refuse a call that needs a file.
 auto Kernel::atracFind(u32 id, bool needData) -> Atrac* {
   if(id >= AtracIDs || !atracs[id].codec) return result(AtracErrorBadID), nullptr;
-  if(needData && atracs[id].state == NoData) return result(AtracErrorNoData), nullptr;
+  if(!needData) return &atracs[id];
+  u32 state = memory.read(1, atracContexts + id * 256 + 128 + 21);
+  if(state == 8) return result(AtracErrorIsLowLevel), nullptr;
+  if(state == 16) return result(AtracErrorIsForSas), nullptr;
+  if(atracs[id].state == NoData) return result(AtracErrorNoData), nullptr;
   return &atracs[id];
 }
 
@@ -426,27 +447,28 @@ auto Kernel::atracNextSamples(Atrac& a) -> u32 {
   return count;
 }
 
-//An ID's context, where _sceAtracGetContextAddress showed it: 128 bytes of its decoder's (the last error, 8 bytes
-//in), then 128 of its own, laid out as pspautotests' atrac.h reads them.
+//An ID's context written from what the library holds (above): 128 bytes of its decoder's (the last error, 8 bytes
+//in), then 128 of its own, laid out as pspautotests' atrac.h reads them; the state 1 with no file, 8 for the
+//low-level decoder's frames.
 auto Kernel::atracContext(u32 id) -> void {
-  if(!atracContexts || id >= AtracIDs) return;
-  u32 at = atracContexts + id * 256;
-  for(u32 n = 0; n < 256; n += 4) memory.write(4, at + n, 0);
+  if(id >= AtracIDs) return;
   auto& a = atracs[id];
-  memory.write(4, at + 8, a.error);
-  at += 128;
+  u8 bytes[256] = {};
+  auto put = [&](u32 at, u32 value, u32 size) { for(u32 n = 0; n < size; n++) bytes[at + n] = value >> n * 8; };
+  put(8, a.error, 4);
   u32 words[] = {a.decodePos, a.endSample, a.loopStart, a.loopEnd, a.firstValidSample};
-  for(u32 n = 0; n < 5; n++) memory.write(4, at + n * 4, words[n]);
-  memory.write(1, at + 20, a.framesToSkip);
-  memory.write(1, at + 21, a.state == NoData ? 1 : a.state);
-  memory.write(1, at + 22, a.curBuffer);
-  memory.write(1, at + 23, a.channels);
-  memory.write(2, at + 24, a.frameBytes);
-  memory.write(2, at + 26, a.state == NoData ? 0 : a.codec);
+  for(u32 n = 0; n < 5; n++) put(128 + n * 4, words[n], 4);
+  put(128 + 20, a.framesToSkip, 1);
+  put(128 + 21, a.lowLevel ? 8 : a.state == NoData ? 1 : a.state, 1);
+  put(128 + 22, a.curBuffer, 1);
+  put(128 + 23, a.channels, 1);
+  put(128 + 24, a.frameBytes, 2);
+  put(128 + 26, a.state == NoData ? 0 : a.codec, 2);
   u32 more[] = {a.dataOff, a.curFileOff, a.fileDataEnd, u32(a.loopNum), a.streamDataByte, a.streamOff,
                 a.secondStreamOff, a.buffer, a.secondBuffer, a.bufferByte, a.secondBufferByte};
-  for(u32 n = 0; n < 11; n++) memory.write(4, at + 28 + n * 4, more[n]);
-  memory.write(4, at + 124, id);
+  for(u32 n = 0; n < 11; n++) put(128 + 28 + n * 4, more[n], 4);
+  put(128 + 124, id, 4);
+  memory.copyIn(atracContexts + id * 256, bytes, sizeof(bytes));
 }
 
 //(codec: 0x1000 ATRAC3plus, 0x1001 ATRAC3): the lowest ID free of those sceAtracReinit gave the codec (two each at
@@ -908,18 +930,11 @@ auto Kernel::sceAtracSetSecondBuffer() -> void {
   result(0);
 }
 
-//(ID): where the ID's context is (atracContext()), in memory the library keeps for them all, taken from the user
-//partition the first time a program asks (none of the games tried does: pspautotests' tests read it); 0 for an ID
-//not handed out.
+//(ID): where the ID's context is (above); 0 for an ID not handed out. Nothing is written: the context is current
+//already, and what the program wrote there stays.
 auto Kernel::_sceAtracGetContextAddress() -> void {
   u32 id = arg(0);
   if(id >= AtracIDs || !atracs[id].codec) return result(0);
-  if(!atracContexts) {
-    auto block = allocate(AtracIDs * 256, 1, 0, "atrac contexts");
-    if(!block) return result(0);
-    atracContexts = block->address;
-  }
-  atracContext(id);
   result(atracContexts + id * 256);
 }
 
@@ -991,10 +1006,12 @@ auto Kernel::sceAtracLowLevelDecode() -> void {
   s32 made = a->decoder->decode(frame.data(), frame.size(), decoded.data(), a->frameSamples);
   if(made < 0) {
     a->error = AtracCodecError;
+    atracContext(id);
     return result(AtracErrorFailed);
   }
   a->error = 0;
   a->recent = std::move(frame);
+  atracContext(id);
   std::vector<s16> samples(a->frameSamples * a->outputChannels, 0);
   for(u32 n = 0; n < std::min<u32>(made, a->frameSamples); n++) {
     for(u32 c = 0; c < a->outputChannels; c++) {

@@ -10391,3 +10391,88 @@ assignment.
 again with the merged runner, fresh.txt then reload.txt: the same six files at the same sizes as before the merge,
 "AUTO-LOAD." at 2100 and the main menu at 3000. The scratch (the scratch runner, the scripts, the runs and their
 captures) is in `~/phobos-work/scratch/colinsave/` on the Mac it was made on, not in the repository.
+
+## Part 82: sound — every ATRAC ID's context kept current (Angus Hates Aliens past NEW GAME), and sceVaudio
+
+On branch `cursor/psp-audio-b00-2b67`, on master (`b7ea296f4`). The task: items 2 and 5 of the play-testers' batch 00
+report (Angus Hates Aliens black after NEW GAME; Battle vs. Chess's missing sceVaudio). Sources: pspautotests'
+audio/atrac recordings (getremainframe, getsoundsample, resetpos, resetting and second with a state the test forces;
+sas, a context a program changes for sceSas) and audio/blocking/vaudio, pspsdk's pspatrac3.h and pspvaudio.h,
+pspautotests' sascore.h (the SasCore's layout), PPSSPP read only as a description of the PSP (sceVaudio on the SRC
+channel), and the games' own code, traced with a scratch runner and disassembled from their memory. No code copied or
+translated; JPCSP not read. Save states go to StateVersion 31 (27 to 30 are other branches' layouts, refused here).
+
+### Angus Hates Aliens: the contexts
+
+**The report.** Black for good after NEW GAME, the runner at 4 to 8 fps with nearly all its time in
+`_sceAtracGetContextAddress`, and 16 loads from 0xa0, 0xa4 and 0xbc between boot frames 500 and 550.
+
+**What the game does.** It imports three of sceAtrac3plus's functions (SetDataAndGetID, `_sceAtracGetContextAddress`,
+ReleaseAtracID) and plays its music through sceSas's ATRAC3 voices, with a wrapper of its own (0x0885d09c on; the
+one pspautotests' audio/atrac/sas copies, Sol Trigger's in its comments). Setting a voice: the ID's context, checked
+for one channel, ATRAC3, no loop and a state of 2 to 4, gets the state 16; `__sceSasSetVoiceATRAC3` takes it for
+voice 31; then the wrapper moves the context's buffer on by streamOff and curFileOff by streamDataByte, puts the voice
+in loopNum and, for a stream, -1 in secondBuffer. Streaming, it reads the context back from the voice's first word in
+the SasCore (20 bytes of the core's own, then 56 a voice: sascore.h; the word where a VAG voice's samples are), and
+compares curFileOff with fileDataEnd and secondBuffer with 0 to know whether to hand over more. Stopping the music, as
+NEW GAME does, it takes the context again and unsets the voice only while its state says 16, then sets 1 and
+releases the ID; refused (0x80420102), it asks again, for good (0x08804a3c).
+
+**Why it stopped.** `_sceAtracGetContextAddress` wrote the whole context afresh from the library's own record each
+time it was asked: the 16 the wrapper had set went back to 2, the stop was refused for ever, and the 256 bytes
+written at every one of its calls were where the runner's time went. And `__sceSasSetVoiceATRAC3` kept the context
+nowhere in the SasCore: the streaming code read 0 there and loaded through it (0xa0, 0xa4, 0xbc are curFileOff,
+fileDataEnd and secondBuffer).
+
+**What a PSP does.** Its library's contexts are its state itself, there from the start and current after every call;
+`_sceAtracGetContextAddress` only says where one is (pspautotests' shared.cpp: "Need to call this every time to get
+the values updated - but only in the emulator!"). Programs write them, and the library honours it: getremainframe,
+getsoundsample, resetpos, resetting and second recorded every call that needs a file refusing an ID whose state the
+test set to 8 (0x80630031) or 16 (0x80630040), and taking it again set back to 2. The sas recording shows nothing in
+the context moving as sceSas plays it but the buffer, which the first grain clears.
+
+**The fix** (`atrac.cpp`, `sas.cpp`):
+- Every ID's 256 bytes are in kernel memory (`Kernel::AtracContextMemory`, 0x08030000: chosen, as a PSP's are in its
+  library's module, in the user partition, and no game's memory need go to them here), written at power on and
+  whenever the library changes the ID (set, decoded, added to, reset, released, its loops or second buffer set, a
+  low-level decode's error). `_sceAtracGetContextAddress` writes nothing and gives the address of an ID handed out
+  (0 for one that isn't, as before).
+- The state a program wrote there is what every call needing a file looks at first: 8 refuses it with 0x80630031, 16
+  with 0x80630040. A low-level ID's context says 8 (so those calls on one now give 0x80630031 where they gave
+  NO_DATA). The rest of what a program writes stays until the library next changes that ID.
+- `__sceSasSetVoiceATRAC3` writes the context's address into the voice's first word in the SasCore.
+- States: the contexts travel in memory. A state from before (no memory of their own: 0) has them written as it
+  loads; one where a program had asked (a block of the user partition) keeps them there.
+
+**The game now** (the scratch runner, the tester's `st-title.bin`, Cross at 30): the stop goes through at once, a
+loading screen from frame 100, and the first level from about 750, Angus in his cell: "MY HEAD HURTS. THE LAST THING I
+REMEMBER IS BEING TAKEN PRISONER BY SOME STRANGE ALIENS THAT LANDED ON MY FARM." From boot (`s1.txt`) the same, and no
+load through address 0. Still not done: sceSas's ATRAC3 voices play silence and take nothing from their stream, so
+the music isn't heard (it wasn't before), and the game, its voice never asking for more by its secondBuffer, hands
+over the whole file at once and then an empty piece every other frame, where a PSP would take it as it plays.
+
+### sceVaudio
+
+**The report.** Battle vs. Chess (a prototype) calls sceVaudioChReserve at boot and sceVaudioOutputBlocking once as a
+match starts, neither there; moves are never carried out, a suspect.
+
+**What the PSP does** (pspautotests' audio/blocking/vaudio, recorded): an output of 2048 samples returns 0x800, and
+the SRC channel's `sceAudioOutput2GetRestSample` counts its buffer: sceVaudio is the SRC channel (part 21's) under
+another name. Reserving while `sceAudioOutput2Reserve` holds it is ALREADY_RESERVED, and sceVaudio is held all the
+same: reserving again, once the channel is free, is BUSY, an output NOT_RESERVED, the release NOT_RESERVED.
+Releasing what isn't reserved is NOT_RESERVED; releasing with a buffer still playing isn't refused, as the SRC
+channel's release is, but waits for it to be heard (a buffer's time) and then releases. pspvaudio.h gives the rest:
+256 to 2048 samples a buffer, mono (1) or stereo (2), the rates, the four effects and the level control.
+
+**The implementation** (`audio.cpp`): sceVaudioChReserve, ChRelease, OutputBlocking, SetEffectType and SetAlcMode, as
+recorded and, where not, chosen: each buffer copied as pairs (a mono sample heard on both sides) into whichever of two
+kernel buffers (`Kernel::VaudioMemory`) isn't armed, and armed on the SRC channel from there, its blocking and pace the
+SRC channel's; the release's wait a thread state of its own (`Audio::WaitVaudioRelease`), the release made as the
+last buffer retires; a count outside 256 to 2048 INVALID_SIZE and a format but 1 or 2 INVALID_FORMAT, before
+sceVaudio is held; the effect (0 to 4, at 0 to 0x8000, the volume returned) and the level control (0 or 1) kept and
+not heard. The state keeps whether sceVaudio holds the channel, its format, effect and level control (layout 31).
+
+**Battle vs. Chess now** (the tester's `script.txt` from boot, then `gameplay.txt`'s presses at 5820): its music thread
+(SceMainSampleBgmMp3) reserves 1152 samples at 44,100 Hz at frame 607 and plays its MP3 music through sceVaudio, an
+output every 26 ms, releasing and starting the next track at 4412. The moves still aren't carried out: the pawn is
+picked and its squares light up, the confirm on a lit square does nothing.

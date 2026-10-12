@@ -320,6 +320,11 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceAudio",          "sceAudioSRCChReserve",          &Kernel::sceAudioSRCChReserve);
   add("sceAudio",          "sceAudioSRCOutputBlocking",     &Kernel::sceAudioSRCOutputBlocking);
   add("sceAudio",          "sceAudioSRCChRelease",          &Kernel::sceAudioSRCChRelease);
+  add("sceVaudio",         "sceVaudioChReserve",            &Kernel::sceVaudioChReserve);
+  add("sceVaudio",         "sceVaudioChRelease",            &Kernel::sceVaudioChRelease);
+  add("sceVaudio",         "sceVaudioOutputBlocking",       &Kernel::sceVaudioOutputBlocking);
+  add("sceVaudio",         "sceVaudioSetEffectType",        &Kernel::sceVaudioSetEffectType);
+  add("sceVaudio",         "sceVaudioSetAlcMode",           &Kernel::sceVaudioSetAlcMode);
   add("sceSasCore",        "__sceSasInit",                  &Kernel::__sceSasInit);
   add("sceSasCore",        "__sceSasCore",                  &Kernel::__sceSasCore);
   add("sceSasCore",        "__sceSasCoreWithMix",           &Kernel::__sceSasCoreWithMix);
@@ -890,7 +895,8 @@ auto Kernel::power() -> void {
   sas = {};
   for(auto& atrac : atracs) atrac = {};
   atracPlusIDs = atracClassicIDs = 2;
-  atracContexts = 0;
+  atracContexts = AtracContextMemory;
+  for(u32 id = 0; id < 6; id++) atracContext(id);
   for(auto& mp3 : mp3s) mp3 = {};
   mp3Terminated = false;
   dispatchSuspended = false;

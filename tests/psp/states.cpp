@@ -521,6 +521,12 @@ static auto stateFields() -> void {
     {"output samples", [&] { k.audio.output.samples[k.audio.output.start % Kernel::Audio::OutputFrames * 2] = 5; }},
     {"src renderedTo", [&] { k.audio.src.renderedTo = k.sampleFrame(k.cycles) + Kernel::Audio::SrcAhead; }},
     {"src position", [&] { k.audio.src.position = 3 * 44'100; }},
+    //sceVaudio holding the SRC channel (its count one sceVaudio takes), its buffers single samples, an effect and
+    //the level control
+    {"vaudio reserved", [&] { k.audio.vaudio.reserved = true, k.audio.src.sampleCount = 256; }},
+    {"vaudio mono", [&] { k.audio.vaudio.mono = true; }}, {"vaudio effect", [&] { k.audio.vaudio.effect = 4; }},
+    {"vaudio effectVolume", [&] { k.audio.vaudio.effectVolume = 0x8000; }},
+    {"vaudio alc", [&] { k.audio.vaudio.alc = 1; }},
     {"vblank handler function", [&] { k.vblankSubs[3].function = 0x0880'3000; }},
     {"vblank handler argument", [&] { k.vblankSubs[3].argument = 1; }},
     {"vblank handler gp", [&] { k.vblankSubs[3].gp = 4; }},
@@ -1088,6 +1094,13 @@ static auto stateFields() -> void {
   refuses("the SRC channel somewhere with nothing armed", [&] { k.audio.src.armed = 0; });
   refuses("the SRC channel more than SrcAhead frames ahead", [&] { k.audio.src.renderedTo++; });
   refuses("the SRC channel a ring ahead", [&] { k.audio.src.renderedTo = k.sampleFrame(k.cycles) + 4096; });
+  refuses("sceVaudio holding the SRC channel with 17 samples a buffer", [&] { k.audio.src.sampleCount = 17; });
+  refuses("sceVaudio holding a released SRC channel", [&] {
+    k.audio.src.reserved = false, k.audio.src.armed = 0, k.audio.src.position = 0;
+  });
+  refuses("a sceVaudio effect past 4", [&] { k.audio.vaudio.effect = 5; });
+  refuses("a sceVaudio effect louder than 0x8000", [&] { k.audio.vaudio.effectVolume = 0x8001; });
+  refuses("a sceVaudio level control of 2", [&] { k.audio.vaudio.alc = 2; });
   //(each refusal loads the machine again, threads and all: they're looked up afresh)
   auto waitsOnAudio = [&](Kernel::Thread& waiter, u32 id) {
     waiter.status = Kernel::Status::Waiting, waiter.wait = Kernel::Wait::Audio, waiter.waitID = id;
@@ -1557,7 +1570,8 @@ static auto idsRunOut() -> void {
   CHECK(n.kernel.nextUID, Kernel::LastUID + 1);
 }
 
-//States of the layouts before this one load: 24's (no file's PGD decryption), 23's (nor GE time: when the GE will
+//States of the layouts before this one load: 26's (no sceVaudio), 25's (nor the dialog's error and deleted save),
+//24's (nor any file's PGD decryption), 23's (nor GE time: when the GE will
 //have drawn what it was given, and whether its list's FINISH waits), 22's (nor any file's place in the order files
 //were opened), 21's (nor part 58's sceJpeg, sceHprm and low-level ATRAC fields, with files' count still kept and no
 //read's bytes to come) and 20's (none of those either). Each is this layout's state with the newer fields taken out
@@ -1619,6 +1633,9 @@ static auto olderLayouts() -> void {
   m.kernel.dialog.deleted = true;
   u32 dialogDeleted = where(kernelState(), state);
   m.kernel.dialog.deleted = false;
+  m.kernel.audio.vaudio.reserved = true;
+  u32 vaudio = where(kernelState(), state);
+  m.kernel.audio.vaudio.reserved = false;
   auto node = m.kernel.files.extract(file);
   node.key() = file + 1;
   m.kernel.files.insert(std::move(node));
@@ -1627,7 +1644,7 @@ static auto olderLayouts() -> void {
   node.key() = file;
   m.kernel.files.insert(std::move(node));
   CHECK(kernelState() == state, true);
-  bool ordered = dialogDeleted == dialogError + 4 && dialogDeleted < jpeg
+  bool ordered = vaudio + 14 <= dialogError && dialogDeleted == dialogError + 4 && dialogDeleted < jpeg
               && jpeg < files && files < asyncData && asyncData < opened && opened + 8 <= pgd && pgd < pgdEnd
               && pgdEnd <= workingDirectory && workingDirectory < geDone && geFinish == geDone + 8
               && geFinish < state.size();
@@ -1639,6 +1656,11 @@ static auto olderLayouts() -> void {
     bytes.erase(bytes.begin() + dialogError, bytes.begin() + dialogDeleted + 1);
     return bytes;
   };
+  //and layouts before 31 no sceVaudio (14 bytes in the sound's part, before all the others, so taken out last)
+  auto before31 = [&](std::vector<u8> bytes) {
+    bytes.erase(bytes.begin() + vaudio, bytes.begin() + vaudio + 14);
+    return bytes;
+  };
 
   u32 current = m.kernel.stateLayout;
   auto loads = [&](u32 layout, std::vector<u8> bytes) {
@@ -1648,6 +1670,7 @@ static auto olderLayouts() -> void {
     n.kernel.hprmCallbacks[3] = 1;
     n.kernel.atracs[1].lowLevel = true;
     n.kernel.geDoneAt = 12345;
+    n.kernel.audio.vaudio.effect = 3;
     n.kernel.stateLayout = layout;
     serializer s{bytes.data(), u32(bytes.size())};
     bool loaded = n.kernel.serialize(s) && s.size() == bytes.size();
@@ -1656,28 +1679,30 @@ static auto olderLayouts() -> void {
     n.kernel.serialize(again);
     return loaded && std::vector<u8>{again.data(), again.data() + again.size()} == state;
   };
-  CHECK(loads(25, before26(state)), true);
+  CHECK(loads(26, before31(state)), true);
+  CHECK(loads(current, before31(state)), false);
+  CHECK(loads(25, before31(before26(state))), true);
   CHECK(loads(current, before26(state)), false);
   auto layout24 = state;
   layout24.erase(layout24.begin() + pgd, layout24.begin() + pgdEnd);
-  CHECK(loads(24, before26(layout24)), true);
+  CHECK(loads(24, before31(before26(layout24))), true);
   auto untimed = state;  //no GE time, the file's fields all there
   untimed.erase(untimed.begin() + geDone, untimed.begin() + geFinish + 1);
   auto layout23 = untimed;
   layout23.erase(layout23.begin() + pgd, layout23.begin() + pgdEnd);
-  CHECK(loads(23, before26(layout23)), true);
+  CHECK(loads(23, before31(before26(layout23))), true);
   auto layout22 = layout23;
   layout22.erase(layout22.begin() + opened, layout22.begin() + opened + 8);
-  CHECK(loads(22, before26(layout22)), true);
+  CHECK(loads(22, before31(before26(layout22))), true);
   std::vector<u8> counted = {0x45, 0x23, 0x01, 0x00};  //numbers handed out once, passed over
   auto layout21 = untimed;
   layout21.insert(layout21.begin() + workingDirectory, counted.begin(), counted.end());
   layout21.erase(layout21.begin() + asyncData, layout21.begin() + workingDirectory);
   auto layout20 = layout21;
   layout20.erase(layout20.begin() + jpeg, layout20.begin() + files);
-  CHECK(loads(21, before26(layout21)), true);
-  CHECK(loads(20, before26(layout20)), true);
-  CHECK(loads(current, before26(layout21)), false);  //read as this layout, it's another state
+  CHECK(loads(21, before31(before26(layout21))), true);
+  CHECK(loads(20, before31(before26(layout20))), true);
+  CHECK(loads(current, before31(before26(layout21))), false);  //read as this layout, it's another state
 
   //another file opened, then the first closed and opened again: its number is the lower, its place the later
   CHECK(m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0}), file + 1);
@@ -1697,14 +1722,18 @@ static auto olderLayouts() -> void {
   m.kernel.dialog.error = 1;
   u32 dialogAt = where(kernelState(), twoFiles);
   m.kernel.dialog.error = 0;
+  m.kernel.audio.vaudio.reserved = true;
+  u32 vaudioAt = where(kernelState(), twoFiles);
+  m.kernel.audio.vaudio.reserved = false;
   CHECK(places[0] < places[1] && places[1] < geAt, true);
   if(!(places[0] < places[1] && places[1] < geAt)) return;
   twoFiles.erase(twoFiles.begin() + geAt, twoFiles.begin() + geAt + 9);
   for(u32 at : {places[1], places[0]}) {  //each file's place, and its PGD decryption after it
     twoFiles.erase(twoFiles.begin() + at, twoFiles.begin() + at + (pgdEnd - opened));
   }
-  CHECK(dialogAt < places[0], true);
+  CHECK(vaudioAt + 14 <= dialogAt && dialogAt < places[0], true);
   twoFiles.erase(twoFiles.begin() + dialogAt, twoFiles.begin() + dialogAt + 5);
+  twoFiles.erase(twoFiles.begin() + vaudioAt, twoFiles.begin() + vaudioAt + 14);
   KernelMachine n;
   machine(n);
   n.kernel.stateLayout = 22;

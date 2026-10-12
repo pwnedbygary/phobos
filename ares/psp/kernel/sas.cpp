@@ -459,12 +459,16 @@ auto Kernel::__sceSasSetSteepWave() -> void {
 }
 
 //(core, voice, ATRAC3 context): the voice plays an ATRAC3 stream fed to it (__sceSasConcatenateATRAC3), until it's
-//keyed off; unset, it has no samples.
+//keyed off; unset, it has no samples. The context's address goes in the voice's first word in the SasCore (20 bytes
+//of the core's own, then 56 bytes a voice, as pspautotests' sascore.h lays it out; where a VAG voice's samples are),
+//where a PSP keeps it: Angus Hates Aliens' sound code reads it back from there to stream the voice's data (through
+//the context's curFileOff, fileDataEnd and secondBuffer: atrac.cpp), and read nothing but zeros before.
 auto Kernel::__sceSasSetVoiceATRAC3() -> void {
   auto voice = sasVoice(arg(1));
   if(!voice) return;
   voice->source = Sas::Source::Atrac;
   voice->address = arg(2);
+  if(u32 slot = arg(0) + 20 + arg(1) * 56; memory.reaches(slot, 4)) memory.write(4, slot, arg(2));
   result(0);
 }
 

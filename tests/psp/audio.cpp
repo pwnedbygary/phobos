@@ -879,6 +879,161 @@ static auto outputKept() -> void {
   CHECK(k.audio.output.start, k.sampleFrame(k.cycles));
 }
 
+//sceVaudio, the SRC channel under another name, as pspautotests' audio/blocking/vaudio recorded: releasing what isn't
+//reserved is NOT_RESERVED; a reservation while sceAudioOutput2Reserve holds the channel ALREADY_RESERVED, sceVaudio
+//held all the same (reserving again BUSY, an output NOT_RESERVED, the release NOT_RESERVED, and then free); a
+//release with a buffer playing waits for it, then releases. Reserving takes a count of 256 to 2048, the format 1 or
+//2 and a rate the SRC channel takes, and reserves that channel at it. Its buffers are copied as pairs into the
+//kernel's two, so a mono sample is heard on both sides and the program's buffer is its own once the call returns;
+//volumes are the SRC channel's. From a thread, its outputs return their sample count and pace as the SRC channel's
+//(the first at once, then a buffer apart less the 100-microsecond lead), counted by sceAudioOutput2GetRestSample; the
+//release returns once the last is heard. The effect and the level control are kept, the effect's volume returned;
+//out of range, refused. A state keeps it all.
+static auto vaudio() -> void {
+  KernelMachine m;
+  CHECK(m.call("sceVaudioOutputBlocking", {0x8000, Buffer}), Kernel::ErrorAudioChannelNotReserved);
+  CHECK(m.call("sceVaudioChRelease", {}), Kernel::ErrorAudioChannelNotReserved);
+  CHECK(m.call("sceVaudioChReserve", {255, 44'100, 2}), Kernel::ErrorInvalidSize);
+  CHECK(m.call("sceVaudioChReserve", {2049, 44'100, 2}), Kernel::ErrorInvalidSize);
+  CHECK(m.call("sceVaudioChReserve", {1024, 44'100, 0}), Kernel::ErrorAudioInvalidFormat);
+  CHECK(m.call("sceVaudioChReserve", {1024, 44'100, 3}), Kernel::ErrorAudioInvalidFormat);
+  CHECK(m.call("sceVaudioChReserve", {1152, 22'050, 2}), 0);
+  CHECK(m.kernel.audio.src.reserved && m.kernel.audio.src.rate == 22'050 && m.kernel.audio.src.sampleCount == 1152,
+        true);
+  CHECK(m.call("sceVaudioChReserve", {1152, 22'050, 2}), Kernel::ErrorBusy);
+  CHECK(m.call("sceAudioSRCChReserve", {1024, 44'100, 2}), Kernel::ErrorAudioChannelAlreadyReserved);
+  CHECK(m.call("sceAudioOutput2Reserve", {1024}), Kernel::ErrorAudioChannelAlreadyReserved);
+  CHECK(m.call("sceVaudioChRelease", {}), 0);
+  CHECK(m.kernel.audio.src.reserved, false);
+  CHECK(m.call("sceVaudioChRelease", {}), Kernel::ErrorAudioChannelNotReserved);
+  //shared with sceAudioOutput2 (the recording's sequence)
+  CHECK(m.call("sceAudioOutput2Reserve", {2048}), 0);
+  CHECK(m.call("sceVaudioChReserve", {2048, 44'100, 2}), Kernel::ErrorAudioChannelAlreadyReserved);
+  CHECK(m.call("sceAudioOutput2Release", {}), 0);
+  CHECK(m.call("sceVaudioChReserve", {2048, 44'100, 2}), Kernel::ErrorBusy);
+  CHECK(m.call("sceVaudioOutputBlocking", {0x8000, Buffer}), Kernel::ErrorAudioChannelNotReserved);
+  CHECK(m.call("sceVaudioChRelease", {}), Kernel::ErrorAudioChannelNotReserved);
+  CHECK(m.call("sceVaudioChReserve", {1024, 22'000, 2}), Kernel::ErrorAudioInvalidFrequency);
+  CHECK(m.call("sceVaudioChRelease", {}), Kernel::ErrorAudioChannelNotReserved);
+  CHECK(m.call("sceVaudioChReserve", {2048, 44'100, 2}), 0);
+  CHECK(m.call("sceVaudioChRelease", {}), 0);
+  CHECK(m.call("sceVaudioSetEffectType", {2, 0x4000}), 0x4000);
+  CHECK(m.call("sceVaudioSetEffectType", {5, 0x4000}), Kernel::ErrorInvalidValue);
+  CHECK(m.call("sceVaudioSetEffectType", {0, 0x8001}), Kernel::ErrorInvalidValue);
+  CHECK(m.call("sceVaudioSetAlcMode", {1}), 0);
+  CHECK(m.call("sceVaudioSetAlcMode", {2}), Kernel::ErrorInvalidValue);
+  CHECK(m.kernel.audio.vaudio.effect == 2 && m.kernel.audio.vaudio.effectVolume == 0x4000, true);
+  CHECK(m.kernel.audio.vaudio.alc, 1);
+
+  //mono at 44.1 kHz and half volume: a sample a frame, on both sides; the program's buffer changed after the call
+  //isn't heard (called directly, the output can't wait for its completion: CAN_NOT_WAIT, its buffer armed all the
+  //same, as the SRC channel's)
+  KernelMachine mono;
+  for(u32 n = 0; n < 256; n++) mono.system.memory.write(2, Buffer + n * 2, u16(s32(n) * 100 - 12000));
+  CHECK(mono.call("sceVaudioChReserve", {256, 44'100, 1}), 0);
+  CHECK(mono.call("sceVaudioOutputBlocking", {0x4000, Buffer}), Kernel::ErrorCanNotWait);
+  CHECK(mono.kernel.audio.src.buffers[0].address, Kernel::VaudioMemory);
+  mono.system.memory.fill(Buffer, 0x55, 512);
+  auto frames = heard(mono, Kernel::CPUFrequency / 100);
+  bool exact = frames.size() == 441 * 2;
+  for(u32 n = 0; n < 441 && exact; n++) {
+    s64 sample = n < 256 ? floorDiv(s32(n) * 100 - 12000, 2) : 0;
+    if(frames[n * 2] != sample || frames[n * 2 + 1] != sample) exact = false;
+  }
+  CHECK(exact, true);
+  CHECK(roundTrip(mono), true);
+
+  //stereo at 22050 Hz, two buffers armed one after the other from the kernel's two, a pair each
+  KernelMachine two;
+  putStereo(two, Buffer, 256, [](u32) { return std::pair{1000, -1000}; });
+  putStereo(two, Buffer + 0x1000, 256, [](u32) { return std::pair{3000, -3000}; });
+  CHECK(two.call("sceVaudioChReserve", {256, 22'050, 2}), 0);
+  CHECK(two.call("sceVaudioOutputBlocking", {0x8000, Buffer}), Kernel::ErrorCanNotWait);
+  CHECK(two.call("sceVaudioOutputBlocking", {0x8000, Buffer + 0x1000}), Kernel::ErrorCanNotWait);
+  CHECK(two.call("sceVaudioOutputBlocking", {0x8000, Buffer}), Kernel::ErrorAudioChannelBusy);
+  CHECK(two.kernel.audio.src.buffers[0].address == Kernel::VaudioMemory, true);
+  CHECK(two.kernel.audio.src.buffers[1].address == Kernel::VaudioMemory + Kernel::VaudioBufferBytes, true);
+  CHECK(two.call("sceVaudioChRelease", {}), Kernel::ErrorCanNotWait);  //(it would wait: none can here)
+  CHECK(two.kernel.audio.src.reserved && two.kernel.audio.vaudio.reserved, true);
+  CHECK(roundTrip(two), true);
+  frames = heard(two, Kernel::CPUFrequency * 3 / 100);  //30 ms: 1323 frames, the two buffers' 1024 among them
+  CHECK(frames.size(), 1323 * 2);
+  if(frames.size() == 1323 * 2) {
+    CHECK(frames[0] == 1000 && frames[1] == -1000 && frames[510 * 2] == 1000, true);
+    CHECK(frames[511 * 2] == 2000 && frames[512 * 2] == 3000 && frames[1022 * 2 + 1] == -3000, true);
+    CHECK(frames[1023 * 2] == 1500 && frames[1024 * 2] == 0, true);  //(the last halfway to silence)
+  }
+  CHECK(two.kernel.audio.src.armed, 0);
+  CHECK(two.call("sceVaudioChRelease", {}), 0);
+
+  //from a thread: three outputs of 1024 at 44.1 kHz, the rest, the release (waiting for the third to be heard), the
+  //rest after it and a release again; then the same with a null output draining first
+  for(bool recompile : {false, true}) {
+    for(bool drain : {false, true}) {
+      KernelMachine t;
+      Assembler main{t, 0x0880'1000};
+      main.li(a0, 1024); main.li(a1, 44'100); main.li(a2, 2);
+      main.call("sceVaudioChReserve");
+      main.call("sceKernelGetSystemTimeLow");
+      main.put(addu(s0, v0, zero));
+      main.li(s1, R);
+      for(u32 n = 0; n < 4; n++) {
+        if(n < 3) {
+          main.li(a0, 0x8000); main.li(a1, Buffer);
+          main.call("sceVaudioOutputBlocking");
+        } else {
+          main.call("sceAudioOutput2GetRestSample");
+          main.put(sw(v0, 0x40, s1));
+          if(drain) { main.li(a0, 0x8000); main.li(a1, 0); main.call("sceVaudioOutputBlocking"); }
+          main.call("sceVaudioChRelease");
+        }
+        main.put(sw(v0, 0x20 + n * 4, s1));
+        main.call("sceKernelGetSystemTimeLow");
+        main.put(subu(v0, v0, s0));
+        main.put(sw(v0, n * 4, s1));
+      }
+      main.call("sceAudioOutput2GetRestSample");
+      main.put(sw(v0, 0x44, s1));
+      main.call("sceVaudioChRelease");
+      main.put(sw(v0, 0x48, s1));
+      main.call("sceKernelExitGame");
+      t.runProgram(0x0880'1000, recompile);
+      CHECK(t.kernel.exited, true);
+      double buffer = 1024.0 * 1'000'000 / 44'100;
+      double expected[] = {0, buffer - Lead, 2 * buffer - Lead, 3 * buffer - Lead};
+      for(u32 n = 0; n < 4; n++) {
+        u32 measured = t.system.memory.read(4, R + n * 4);
+        CHECK(near(measured, expected[n]), true);
+        if(!near(measured, expected[n])) std::printf("  call %u returned at %u, not %.0f\n", n, measured, expected[n]);
+        CHECK(t.system.memory.read(4, R + 0x20 + n * 4), n < 3 ? 1024u : 0u);
+      }
+      CHECK(t.system.memory.read(4, R + 0x40), 1024);
+      CHECK(t.system.memory.read(4, R + 0x44), Kernel::ErrorAudioChannelNotReserved);
+      CHECK(t.system.memory.read(4, R + 0x48), Kernel::ErrorAudioChannelNotReserved);
+      CHECK(t.notes.size(), 0);
+    }
+  }
+  //a state while the release waits: kept, and it releases once the buffer's heard
+  KernelMachine w;
+  Assembler main{w, 0x0880'1000};
+  main.li(a0, 1024); main.li(a1, 44'100); main.li(a2, 2);
+  main.call("sceVaudioChReserve");
+  main.li(a0, 0x8000); main.li(a1, Buffer);
+  main.call("sceVaudioOutputBlocking");
+  main.call("sceVaudioChRelease");
+  main.li(s1, R);
+  main.put(sw(v0, 0, s1));
+  main.call("sceKernelExitGame");
+  w.system.memory.write(4, R, 0x1337);
+  w.runProgram(0x0880'1000, false, 0);
+  w.kernel.run(Kernel::CPUFrequency / 100);  //10 ms: the release waits for the buffer (23 ms)
+  CHECK(w.kernel.exited, false);
+  CHECK(w.kernel.audio.src.armed == 1 && w.kernel.audio.vaudio.reserved, true);
+  CHECK(roundTrip(w), true);
+  w.kernel.run(Kernel::CPUFrequency / 50);
+  CHECK(w.kernel.exited && w.system.memory.read(4, R) == 0 && !w.kernel.audio.src.reserved, true);
+}
+
 auto audioTests() -> Tests {
   return {
     {"audio channels", channels}, {"audio blocking timing", blockingTiming}, {"audio src channel", sourceChannel},
@@ -886,6 +1041,7 @@ auto audioTests() -> Tests {
     {"audio waits refused", contexts}, {"audio src rest", sourceRest}, {"audio mixed", mixing},
     {"audio src heard", sourceOutput}, {"audio output in states", outputState},
     {"audio src drained between buffers", sourceDrained}, {"audio output kept from a channel ahead", outputKept},
+    {"audio vaudio", vaudio},
   };
 }
 
