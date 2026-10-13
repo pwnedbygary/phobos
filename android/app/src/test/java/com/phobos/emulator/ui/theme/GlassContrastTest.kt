@@ -235,7 +235,7 @@ class GlassContrastTest {
         GlassScene.SUNSET -> sunsetScene(v)
         GlassScene.CITY -> cityScene(v)
         GlassScene.WAVES -> waveScene(v, XmbBackdropScene.WAVES)
-        GlassScene.DEEP -> waveScene(v, XmbBackdropScene.DEEP)
+        GlassScene.DEEP -> deepScene(v)
     }
 
     /** The aurora's gradient, at every eighth of the way between its stops. */
@@ -269,6 +269,29 @@ class GlassContrastTest {
             }
         }
         return (sky + lit).distinct()
+    }
+
+    /**
+     * Deep: its gradient under its pool of light at every quarter of its strength; and across the band its
+     * sheets reach, every point under the strands stacked to every eighth of [WaveColors.STRAND_STACK]
+     * strands, and a sparkle, its halo under it, at every quarter of its brightness.
+     */
+    private fun deepScene(v: Variant): List<Int> {
+        val waves = WaveColors(v.scheme, v.isDark, XmbBackdropScene.DEEP)
+        fun layer(color: Color, alpha: Double, under: Int) = composite(argb(color), under, paint(alpha.toFloat()))
+        val steps = (0..8).map { it / 8.0 }
+        val quarters = (0..4).map { it / 4.0 }
+        val sky = listOf(waves.top, waves.middle, waves.bottom).map(::argb).zipWithNext().flatMap { (a, b) -> steps.map { lerp(a, b, it) } }
+        val band = WaveColors.DEEP_BAND
+        val under = (0..16).map { argb(waves.skyAt(band.start + (band.endInclusive - band.start) * it / 16f)) }
+        val pooled = (sky + under).flatMap { base -> quarters.map { layer(waves.pool, waves.pool.alpha * it, base) } }
+        val strands = under.flatMap { base -> quarters.map { layer(waves.pool, waves.pool.alpha * it, base) } }.flatMap { base ->
+            steps.map { layer(waves.strand, minOf(1.0, waves.strand.alpha * WaveColors.STRAND_STACK * it), base) }
+        }
+        val sparkles = strands.flatMap { base ->
+            quarters.map { layer(waves.sparkle, waves.sparkle.alpha * it, layer(waves.sparkle, waves.sparkle.alpha * it * 0.25, base)) }
+        }
+        return (pooled + strands + sparkles).distinct()
     }
 
     /** The background under every combination of glows, each at every tenth of its strength, in drawing order. */

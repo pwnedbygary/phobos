@@ -21,7 +21,7 @@ data class Glow(val color: Color, val alpha: Float, val x: Float, val y: Float, 
 
 /**
  * What the glass panels sit over: soft glows, the aurora or the mesh; Retrowave's sunset (its grid
- * too, the sunset without the sun) or night city; or the XMB waves (calm ones too) or deep ones.
+ * too, the sunset without the sun) or night city; or the XMB waves (calm ones too) or Deep's strands.
  */
 enum class GlassScene { GLOWS, AURORA, MESH, SUNSET, CITY, WAVES, DEEP }
 
@@ -181,7 +181,7 @@ internal class GlassBuilder(
         GlassScene.SUNSET -> sunsetScene(SunsetColors(scheme, isDark))
         GlassScene.CITY -> cityScene(CityColors(scheme, isDark))
         GlassScene.WAVES -> waveScene(WaveColors(scheme, isDark))
-        GlassScene.DEEP -> waveScene(WaveColors(scheme, isDark, XmbBackdropScene.DEEP))
+        GlassScene.DEEP -> deepScene(WaveColors(scheme, isDark, XmbBackdropScene.DEEP))
     }
 
     /** The aurora down its gradient. */
@@ -206,6 +206,23 @@ internal class GlassBuilder(
             }
         }
         return (sky + lit).distinct()
+    }
+
+    /**
+     * Deep's colors: its gradient, under its pool of light; and across the band its sheets reach, each
+     * point under the strands' light stacked up to [WaveColors.STRAND_STACK] strands, and a sparkle at its
+     * brightest, halo and all, on top.
+     */
+    private fun deepScene(waves: WaveColors): List<Color> {
+        val sky = gradient(waves.top, waves.middle) + gradient(waves.middle, waves.bottom)
+        val pooled = sky + sky.map { over(waves.pool, it) }
+        val band = WaveColors.DEEP_BAND
+        val under = (0..BAND_SAMPLES).map { Color(waves.skyAt(band.start + (band.endInclusive - band.start) * it / BAND_SAMPLES).toArgb()) }
+        val lit = under.flatMap { listOf(it, over(waves.pool, it)) }.flatMap { base ->
+            val strands = GLOW_SAMPLES.map { over(waves.strand, (waves.strand.alpha * WaveColors.STRAND_STACK * it).coerceAtMost(1f), base) }
+            (listOf(base) + strands).flatMap { listOf(it, over(waves.sparkle, over(waves.sparkle, waves.sparkle.alpha * 0.25f, it))) }
+        }
+        return (pooled + lit).distinct()
     }
 
     /** The least opaque panel alpha from the floor up (in hundredths) at which [text] passes over every backdrop. */

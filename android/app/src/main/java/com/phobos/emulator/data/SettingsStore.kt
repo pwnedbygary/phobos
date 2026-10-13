@@ -124,8 +124,8 @@ enum class GlassBackdropScene(val label: String, val description: String) {
 /** XMB wave backdrop variants. */
 enum class XmbBackdropScene(val label: String, val description: String) {
     WAVES("Waves", "Slow ribbons of light over a color gradient"),
-    CALM("Calm", "Quieter waves with a deeper gradient"),
-    DEEP("Deep", "Stronger ribbons over a darker depth"),
+    CALM("Calm", "One faint ribbon drifting over the gradient"),
+    DEEP("Deep", "Sheets of fine strands turning over a darker depth, with sparkles drifting up"),
 }
 
 /** Idle screensaver that shows only the current backdrop until interrupted. */
