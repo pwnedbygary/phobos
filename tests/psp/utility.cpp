@@ -1,7 +1,8 @@
 //The system's utilities (ares/psp/kernel/utility.cpp): a dialog's statuses and their timing, saves made, loaded,
 //sized, listed, erased and deleted in a memory stick folder (names that would reach elsewhere and buffers outside
 //the program's memory refused), their files listed secure, normal and the system's, their PARAM.SFO written and read
-//back, saves without one (v2.0.0's) still loading, a game's save beside its own files through memstick:, the memory
+//back, saves without one (v2.0.0's) still loading, a game's save beside its own files through memstick:, list loads
+//and saves answered with no front end as a PSP's dialog would be, each request traced for a host, the memory
 //stick's free space told alike everywhere, a message answered yes, the keyboard's fields entered (an empty one given
 //the nickname), network settings cancelled, the wrong type and the wrong status refused; a game's data install
 //cancelled; optional modules loaded and unloaded; the nickname. Called directly, the clock moved on by hand.
@@ -634,8 +635,10 @@ static auto savedataParamSFO() -> void {
   for(u32 at = 0; at < 16; at += 4) CHECK(memory.read(4, Entries + 36 + at), memory.read(4, Stat + 48 + at));
   CHECK(m.call("sceIoGetstat", {m.string("ms0:/PSP/SAVEDATA/ULUS99999SLOT3"), Stat}), 0);
   for(u32 at = 0; at < 16; at += 4) CHECK(memory.read(4, Entries + 3 * 72 + 36 + at), memory.read(4, Stat + 48 + at));
-  CHECK(memory.read(2, Entries + 36) != memory.read(2, Entries + 3 * 72 + 36) || memory.read(2, Entries + 40) !=
-        memory.read(2, Entries + 3 * 72 + 40), true);
+  //(the whole dates, 24 hours apart: in local time, across the night daylight saving time ends, on the same day)
+  bool apart = false;
+  for(u32 at = 0; at < 12; at += 2) apart |= memory.read(2, Entries + 36 + at) != memory.read(2, Entries + 252 + at);
+  CHECK(apart, true);
   //deleting takes PARAM.SFO with the save
   saveParameters(m, 10, "ULUS99999", "SLOT0", 0);
   CHECK(runSave(m), 0);
@@ -796,6 +799,173 @@ static auto savedataMemstick() -> void {
   KernelMachine unassigned;
   unassigned.kernel.mount("ms0", stick.path.string());
   CHECK(read(unassigned, open(unassigned, folder + "CMR5TS.DAT")) == "cmr5", true);
+}
+
+//A list's load or save answered with no front end, naming no save of its own: a load takes what a PSP's dialog shows
+//first, the focused save among those there (7th Dragon 2020 lists DATA00 to DATA49; its DATA03 loads), nothing there
+//NO_DATA, and the focused one broken, the one the same focus takes among those that aren't (the latest left of a
+//broken latest; the focused one where all are); a save the list's first name ("<>" the game's folder alone, whatever
+//else of the game's is there). A loaded or saved name is written back into the request's save name, as a choice is
+//(Brandish: The Dark Revenant's loads went on only with it). A request naming its save takes it; a list with no first
+//name, and a game's name that isn't plain, are refused, as before, a save making nothing and a load reading nothing,
+//the game's folder there or not.
+static auto savedataListAnswers() -> void {
+  HostFolder stick;
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  stick.put("PSP/SAVEDATA/NPJH50459DATA03/DATA.BIN", "third");
+  stick.put("PSP/SAVEDATA/NPJH50459DATA05/DATA.BIN", "fifth");
+  stick.put("PSP/SAVEDATA/NPJH50459OTHER/DATA.BIN", "other");
+  auto listed = [&](u32 mode, const char* save, std::vector<const char*> names, u32 focus) {
+    saveParameters(m, mode, "NPJH50459", save, mode == 5 ? 3 : 0);
+    m.system.memory.fill(Buffer + 0x100, 0, 0x400);
+    for(u32 n = 0; n < names.size(); n++) m.system.memory.copyIn(Buffer + 0x100 + n * 20, names[n], strlen(names[n]));
+    m.system.memory.write(4, Parameters + 96, Buffer + 0x100);
+    m.system.memory.write(4, Parameters + 1480, focus);
+    m.system.memory.fill(Buffer, 0, 8);
+  };
+  auto saved = [&] { return m.system.memory.readString(Parameters + 76, 20); };
+  std::vector<const char*> list = {"DATA00", "DATA01", "DATA02", "DATA03", "DATA04", "DATA05"};
+  listed(4, "", list, 0);
+  CHECK(runSave(m), 0);
+  CHECK(m.system.memory.readString(Buffer, 8) == "third" && saved() == "DATA03", true);
+  listed(4, "<>", list, 2);  //the last there
+  CHECK(runSave(m), 0);
+  CHECK(m.system.memory.readString(Buffer, 8) == "fifth" && saved() == "DATA05", true);
+  listed(4, "", {"DATA00", "DATA01"}, 0);
+  CHECK(runSave(m), 0x8011'0307);
+  CHECK(saved() == "", true);
+  listed(4, "DATA01", list, 0);  //its own save, not there
+  CHECK(runSave(m), 0x8011'0307);
+  listed(4, "", {"<>"}, 0);  //the game's saves: DATA03 first
+  CHECK(runSave(m), 0);
+  CHECK(saved() == "DATA03", true);
+  listed(5, "", {""}, 0);  //no first name
+  m.system.memory.copyIn(Buffer, "new", 3);
+  CHECK(runSave(m), 0x8011'0388);
+  CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/NPJH50459"), false);
+  listed(5, "", {"DATA01", "DATA02"}, 7);  //the first name, whatever the focus
+  m.system.memory.copyIn(Buffer, "new", 3);
+  CHECK(runSave(m), 0);
+  CHECK(stick.get("PSP/SAVEDATA/NPJH50459DATA01/DATA.BIN") == "new" && saved() == "DATA01", true);
+  listed(5, "<>", {"<>"}, 0);  //the game's folder alone, DATA03 and the rest there
+  m.system.memory.copyIn(Buffer, "own", 3);
+  CHECK(runSave(m), 0);
+  CHECK(stick.get("PSP/SAVEDATA/NPJH50459/DATA.BIN") == "own", true);
+  CHECK(stick.get("PSP/SAVEDATA/NPJH50459DATA03/DATA.BIN") == "third", true);
+  listed(4, "", {""}, 0);  //no first name, the game's folder there
+  CHECK(runSave(m), 0x8011'0308);
+  CHECK(m.system.memory.readString(Buffer, 8) == "", true);
+  auto folders = [&] {
+    u32 count = 0;
+    for(auto& entry : std::filesystem::directory_iterator(stick.path / "PSP/SAVEDATA")) count += entry.is_directory();
+    return count;
+  };
+  u32 before = folders();
+  for(u32 mode : {4u, 5u}) {  //a game's name that isn't plain: nothing read, made or written back
+    listed(mode, "", list, 0);
+    m.system.memory.copyIn(Parameters + 60, "NPJH:0459", 10);
+    m.system.memory.copyIn(Buffer, "bad", 3);
+    check(__LINE__, "refused", runSave(m), mode == 4 ? 0x8011'0308 : 0x8011'0388);
+    check(__LINE__, "nothing", saved() == "" && m.system.memory.readString(Buffer, 8) == "bad" && folders() == before,
+          true);
+  }
+  //the focused save broken (its data file gone): the one the same focus takes among those that aren't
+  auto saves = stick.path / "PSP/SAVEDATA";
+  std::filesystem::remove(saves / "NPJH50459DATA05/DATA.BIN");
+  auto dated = [&](const char* path, int hours) {  //(a save's date: its PARAM.SFO's, else its folder's)
+    std::filesystem::last_write_time(saves / path, std::filesystem::file_time_type::clock::now() -
+                                     std::chrono::hours(hours));
+  };
+  dated("NPJH50459DATA01/PARAM.SFO", 3), dated("NPJH50459DATA03", 2), dated("NPJH50459DATA05", 1);
+  listed(4, "", list, 3);  //the latest, DATA05, broken: DATA03, not the oldest
+  CHECK(runSave(m), 0);
+  CHECK(m.system.memory.readString(Buffer, 8) == "third" && saved() == "DATA03", true);
+  std::filesystem::remove(saves / "NPJH50459DATA01/DATA.BIN");
+  listed(4, "", list, 1);  //the first, DATA01, broken
+  CHECK(runSave(m), 0);
+  CHECK(m.system.memory.readString(Buffer, 8) == "third" && saved() == "DATA03", true);
+  listed(4, "", {"DATA01", "DATA05"}, 2);  //all there broken: the focused one, the last
+  CHECK(runSave(m), 0x8011'0309);
+  CHECK(saved() == "DATA05", true);
+}
+
+//The savedata trace (the runner's --trace-savedata): each request a line, as the game made it, the save chosen from
+//its list beside it, then its answer: an autosave; a list load and a list save naming no save (the save chosen
+//written back; the list save's dialog focusing a new slot); a refused save with a quote and a control character in
+//its name; a load of no save; the sizes, list, files and size modes, each with its own fields. Nothing is traced
+//without a host taking it.
+static auto savedataTrace() -> void {
+  constexpr u32 Sizes = 0x0895'0200, Files = 0x0895'0300;
+  HostFolder stick;
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  auto& memory = m.system.memory;
+  std::vector<std::string> lines;
+  m.kernel.savedataTrace = [&](const std::string& text) { lines.push_back(text); };
+  memory.copyIn(Buffer, "data", 4);
+  saveParameters(m, 1, "ULUS99999", "SLOT0", 4);
+  CHECK(runSave(m), 0);
+  saveParameters(m, 4, "ULUS99999", "", 0);
+  memory.fill(Buffer + 0x100, 0, 60);
+  memory.copyIn(Buffer + 0x100, "SLOT9", 5);
+  memory.copyIn(Buffer + 0x114, "SLOT0", 5);
+  memory.write(4, Parameters + 96, Buffer + 0x100);
+  CHECK(runSave(m), 0);
+  saveParameters(m, 3, "ULUS99999", "A\"\x01", 4);
+  CHECK(runSave(m), 0x8011'0388);
+  saveParameters(m, 2, "ULUS99999", "SLOT1", 0);
+  CHECK(runSave(m), 0x8011'0307);
+  saveParameters(m, 5, "ULUS99999", "<>", 4);
+  memory.write(4, Parameters + 96, Buffer + 0x100);
+  memory.write(4, Parameters + 1480, 7);  //the first new
+  CHECK(runSave(m), 0);
+  saveParameters(m, 8, "ULUS99999", "SLOT0", 4);
+  CHECK(runSave(m), 0);
+  saveParameters(m, 11, "ULUS99999", "", 0);
+  CHECK(runSave(m), 0);
+  saveParameters(m, 12, "ULUS99999", "SLOT0", 0);
+  fileList(m, 10, 10, 10);
+  CHECK(runSave(m), 0);
+  saveParameters(m, 22, "ULUS99999", "SLOT0", 0);
+  memory.write(4, Parameters + 1532, Sizes);
+  memory.fill(Sizes, 0, 64);
+  memory.fill(Files, 0, 24);
+  memory.write(4, Files, 100);  //a secure file of 100 bytes
+  memory.write(4, Sizes, 1);
+  memory.write(4, Sizes + 8, Files);
+  CHECK(runSave(m), 0);
+  std::vector<std::string> expected = {
+    "mode 1 (autosave), size 1536, game \"ULUS99999\", save \"SLOT0\", file \"DATA.BIN\", buffer 0x08930000 of 4096, "
+    "data 4, \"ULUS99999SLOT0\" not there, title \"\" -> 0x00000000",
+    "mode 4 (listload), size 1536, game \"ULUS99999\", save \"\", list \"SLOT9\" \"SLOT0\", focus 0, chosen \"SLOT0\", "
+    "file \"DATA.BIN\", buffer 0x08930000 of 4096, data 0, \"ULUS99999SLOT0\" there -> 0x00000000, read 4, "
+    "save \"SLOT0\"",
+    "mode 3 (save), size 1536, game \"ULUS99999\", save \"A\\x22\\x01\", file \"DATA.BIN\", buffer 0x08930000 of 4096, "
+    "data 4, \"ULUS99999A\\x22\\x01\" not there, title \"\" -> 0x80110388 (save: bad parameter)",
+    "mode 2 (load), size 1536, game \"ULUS99999\", save \"SLOT1\", file \"DATA.BIN\", buffer 0x08930000 of 4096, "
+    "data 0, \"ULUS99999SLOT1\" not there -> 0x80110307 (load: no data)",
+    "mode 5 (listsave), size 1536, game \"ULUS99999\", save \"<>\", list \"SLOT9\" \"SLOT0\", focus 7, "
+    "chosen \"SLOT9\", file \"DATA.BIN\", buffer 0x08930000 of 4096, data 4, \"ULUS99999SLOT9\" not there, "
+    "title \"\" -> 0x00000000, save \"SLOT9\"",
+    "mode 8 (sizes), size 1536, game \"ULUS99999\", save \"SLOT0\", file \"DATA.BIN\", buffer 0x08930000 of 4096, "
+    "data 4, msData \"ULUS99999\" \"SLOT0\" -> 0x00000000, free 57344 clusters, msData 3 clusters, needed 3 clusters",
+    "mode 11 (list), size 1536, game \"ULUS99999\", save \"\", file \"DATA.BIN\", buffer 0x08930000 of 4096, data 0, "
+    "most 10 -> 0x00000000, listed 2 \"SLOT0\" \"SLOT9\"",
+    "mode 12 (files), size 1536, game \"ULUS99999\", save \"SLOT0\", file \"DATA.BIN\", buffer 0x08930000 of 4096, "
+    "data 0, \"ULUS99999SLOT0\" there, most 10 secure 10 normal 10 system -> 0x00000000, listed 1 secure 0 normal "
+    "1 system",
+    "mode 22 (getsize), size 1536, game \"ULUS99999\", save \"SLOT0\", file \"DATA.BIN\", buffer 0x08930000 of 4096, "
+    "data 0, \"ULUS99999SLOT0\" there, files 1 secure 0 normal -> 0x00000000, needed 0 KB, overwrite 0 KB"};
+  CHECK(lines.size(), expected.size());
+  for(u32 n = 0; n < std::min(lines.size(), expected.size()); n++) {
+    if(lines[n] != expected[n]) std::printf("  trace line %u: %s\n", n, lines[n].c_str());
+    CHECK(lines[n] == expected[n], true);
+  }
+  m.kernel.savedataTrace = nullptr;
+  saveParameters(m, 2, "ULUS99999", "SLOT0", 0);
+  CHECK(runSave(m), 0);
+  CHECK(lines.size(), expected.size());
 }
 
 //A save missing a file, as utility/savedata/loadbroken and deletebroken recorded (a save made, then its data file
@@ -1460,6 +1630,8 @@ auto utilityTests() -> Tests {
     {"utility savedata PARAM.SFO", savedataParamSFO}, {"utility savedata without PARAM.SFO (v2.0.0's)", savedataOlder},
     {"utility savedata broken saves", savedataBroken},
     {"utility savedata through memstick: (Colin McRae Rally 2005 Plus)", savedataMemstick},
+    {"utility savedata lists answered with no front end (7th Dragon 2020, Brandish)", savedataListAnswers},
+    {"utility savedata trace", savedataTrace},
     {"memory stick free space", stickSpace}, {"utility dialogs", dialogs},
     {"utility keyboard", keyboard}, {"utility modules", modules},
     {"utility game data install", gamedataInstall}, {"utility dialog sizes and statuses", dialogStatuses},
