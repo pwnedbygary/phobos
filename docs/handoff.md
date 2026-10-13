@@ -71,18 +71,23 @@ plan by #244). Build scripts only: no core, app or test source changes.
   among several ignored; the old rule (the source's time alone); flags out of the key; the environment out of the
   key; one program name for every configuration; objects written in place; one folder for all checkouts; a gone
   file taken as unchanged: each of the 13 fails at least one case.
-- **Checks** (the Mac, bash 3.2, Apple clang 21, `PHOBOS_JOBS=3`, a TMPDIR of its own, the final scripts):
+- **Checks** (the Mac, bash 3.2, Apple clang 21, `PHOBOS_JOBS=3`, a TMPDIR of its own, the scripts at `86a5a80d0`):
   `tests/objects-test.sh` 21/21, twice; `tests/allegrex` cold 7 compiles (60/0), warm 0, after touching
   `ares/psp/cpu/allegrex.hpp` 4 (the four that include it; 60/0); `tests/ngcd` cold 13 (2835/0), warm 0;
   `tests/psp/ares` cold 25 (318/0), warm 0; `runner-test.sh` cold 42 s, warm 4 s, its program `psp-runner-<hash>`
   and the copy left in `phobos-psp-runner/`. CI on the reviewed scripts (run 38448696924 at `a476470ec`; Linux, GCC
   13, bash 5): `tests/objects-test.sh` 18 cases, 0 failures (the case within the second ran), Allegrex 60/0, the
   system suite 497/0 (every source its own object now), the ares system 318/0, the runner's test passing; NGCD
-  2835/0 (run 38448696864). CI on the final scripts (run 38454888271 at `86a5a80d0`): `tests/objects-test.sh` 21
-  cases, 0 failures (the case within the second ran), Allegrex 60/0, the system suite 502/0 (#243's five groups
-  more), the ares system 318/0, the runner's test passing; NGCD 2835/0 (run 38454887111). A second delta review
-  passed it; its nit taken: the leftovers' pattern is the 16 hex digits and a process number, so a folder's own
-  files of a like name aren't taken.
+  2835/0 (run 38448696864). CI at `86a5a80d0` (run 38454888271): `tests/objects-test.sh` 21 cases, 0 failures (the case
+  within the second ran), Allegrex 60/0, the system suite 502/0 (#243's five groups more), the ares system 318/0, the
+  runner's test passing; NGCD 2835/0 (run 38454887111). A second delta review passed it; its nit taken: the leftovers'
+  pattern is the 16 hex digits and a process number, so a folder's own files of a like name aren't taken. At
+  `fefce4e5f`, with that pattern: on the Mac, `tests/objects-test.sh` 21/21, and the pattern alone under bash 3.2
+  removing the six kinds of leftover (`psp-runner`, `allegrex`, `psp`, `psp-ares`, `ngcd`, the test's `program`) and
+  keeping the eleven like names tried (the old pattern's false match; 16 letters that aren't hex digits; uppercase hex
+  digits; 15 or 17 of them; none; no number after `.part-`; a name with spaces; one under two hours old; one in a
+  subfolder; a folder); CI run 38461715565: `tests/objects-test.sh` 21/0, Allegrex 60/0, the system suite 505/0
+  (master's #230 three groups more), the ares system 328/0, the runner's test passing; NGCD 2835/0 (run 38461715535).
 - **Review**: an independent read-only review found a major hole (a word after the first in CC or CXX wasn't in
   the key: `CC="cc -DEXTRA=9"` after `cc` compiled nothing and ran the old program), and minor ones: a header edited
   during a compile never rebuilt, the stale-file cleanup reaching anything in a folder handed to NGCD, an exported
@@ -93,7 +98,11 @@ plan by #244). Build scripts only: no core, app or test source changes.
   right in code, and the whole-second mutation caught only by chance (the two times not pinned), the environment's
   keys and the per-configuration names untested, a cut-short link's leftovers no longer cleaned, and the docs behind;
   all taken: the times pinned, two cases added, programs' leftovers cleaned by their hashed names, the folder's file
-  named `.phobos-checkout` (a folder handed to NGCD may have a `checkout`), the README's line and these checks.
+  named `.phobos-checkout` (a folder handed to NGCD may have a `checkout`), the README's line and these checks. A
+  recheck at `fefce4e5f`, after #241's merge of master's #230: PASS. Its two trivial nits: "the final scripts" for
+  checks run before the leftovers' pattern changed (taken: each check names its commit now), and the pattern checking
+  only the first character after `.part-` (left: such a name would also need 16 lowercase hex digits right before
+  `.part-`, be two hours old and sit in the suite's own build folder).
 
 ## CI: the PSP core as an ares system, the headless runner and the Neo Geo CD's checks in CI; the triggers complete — 2026-10-13
 
