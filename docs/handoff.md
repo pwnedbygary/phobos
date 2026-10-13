@@ -27,9 +27,9 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## CI: the PSP core as an ares system, the headless runner and the Neo Geo CD's checks in CI; the triggers complete — 2026-10-13
 
-Branch `cursor/test-plan-05-2b67`, on master (`9333a8d7a`, #235). Package 05 of the 2026-10-13 test and performance
-plan (an outside audit of master `b3507c1db`, triaged against `9333a8d7a`; package 01's PR indexes it in the
-implementation plan). CI only: no core, app or test code changes.
+Branch `cursor/test-plan-05-2b67` (PR #241), on master (`4788125f1`, #236). Package 05 of the 2026-10-13 test and
+performance plan (an outside audit of master `b3507c1db`, triaged against `9333a8d7a`; #244, package 01, indexes it
+in the implementation plan). CI only: no core, app or test code changes.
 - **The gap**: three suites ran only by hand: `tests/psp/ares/run-tests.sh` (the whole PSP core as an ares system,
   318 checks on the last recorded runs), `tests/psp/ares/runner-test.sh` (the headless runner built and running
   cube.elf) and `tests/ngcd/run-tests.sh` (the Neo Geo CD's layout and state checks). PSP Core Tests' paths also
@@ -46,8 +46,15 @@ implementation plan). CI only: no core, app or test code changes.
 - **Not done here**: a workflow whose paths don't match doesn't run, which shows as no check rather than as a passing
   one; and Android's release and nightly don't wait for these workflows (they are separate; package 20 or a later
   change can gate them explicitly).
-- **Checks**: actionlint 1.7.12 on both workflows (clean). CI on the PR and a negative control (a failing check in
-  each suite on a disposable branch): below once run.
+- **Checks**: actionlint 1.7.12 on both workflows (clean). CI on #241 (runs 38439422378 and 38439422290, at
+  `f1d3915f4`): Allegrex 60/0, the system suite 497/0, the ares system 318/0, the runner's test passing, NGCD
+  2835/0, each count in the run's summary. Its first run's summary steps failed (the suites passed): an apostrophe
+  inside `${HEAD_SHA:+...}` that bash took for a quote; fixed in `f1d3915f4`.
+- **Negative control** (a disposable branch with one failing check in each suite: run 38436478270, dispatched, and
+  draft #242 for the new NGCD workflow, which a dispatch can't run before it's on master; both deleted after): every
+  lane failed: Allegrex "60 groups, 1 failure", the ares system "319 checks, 1 failed", the system suite "491 groups,
+  1 failure", the runner's test on its frame count, NGCD "2836 checks, 1 failures" (each through `tee`, the step
+  failing).
 
 ## PSP: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces — 2026-10-13
 
