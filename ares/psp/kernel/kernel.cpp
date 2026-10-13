@@ -59,6 +59,7 @@ namespace ares::PlayStationPortable {
 #include "power.cpp"
 #include "system.cpp"
 #include "mt19937.cpp"
+#include "md5.cpp"
 #include "rtc.cpp"
 #include "modules.cpp"
 #include "serialization.cpp"
@@ -232,6 +233,14 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("UtilsForUser",      "sceKernelUtilsMt19937UInt",     &Kernel::sceKernelUtilsMt19937UInt);
   add("sceMt19937",        "sceMt19937Init",                &Kernel::sceMt19937Init);
   add("sceMt19937",        "sceMt19937UInt",                &Kernel::sceMt19937UInt);
+  add("UtilsForUser",      "sceKernelUtilsMd5Digest",       &Kernel::sceKernelUtilsMd5Digest);
+  add("UtilsForUser",      "sceKernelUtilsMd5BlockInit",    &Kernel::sceKernelUtilsMd5BlockInit);
+  add("UtilsForUser",      "sceKernelUtilsMd5BlockUpdate",  &Kernel::sceKernelUtilsMd5BlockUpdate);
+  add("UtilsForUser",      "sceKernelUtilsMd5BlockResult",  &Kernel::sceKernelUtilsMd5BlockResult);
+  add("sceMd5",            "sceMd5Digest",                  &Kernel::sceMd5Digest);
+  add("sceMd5",            "sceMd5BlockInit",               &Kernel::sceMd5BlockInit);
+  add("sceMd5",            "sceMd5BlockUpdate",             &Kernel::sceMd5BlockUpdate);
+  add("sceMd5",            "sceMd5BlockResult",             &Kernel::sceMd5BlockResult);
   add("UtilsForUser",      "sceKernelSetGPO",               &Kernel::sceKernelSetGPO);
   add("UtilsForUser",      "sceKernelGetGPI",               &Kernel::sceKernelGetGPI);
   //the CPU's caches: an emulator has none to write back or throw away
@@ -250,6 +259,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceRtc",            "sceRtcCompareTick",             &Kernel::sceRtcCompareTick);
   add("sceRtc",            "sceRtcGetCurrentClock",         &Kernel::sceRtcGetCurrentClock);
   add("sceRtc",            "sceRtcGetCurrentClockLocalTime", &Kernel::sceRtcGetCurrentClockLocalTime);
+  add("sceRtc",            "sceRtcConvertUtcToLocalTime",   &Kernel::sceRtcConvertUtcToLocalTime);
+  add("sceRtc",            "sceRtcConvertLocalTimeToUTC",   &Kernel::sceRtcConvertLocalTimeToUTC);
   add("sceRtc",            "sceRtcGetTime_t",               &Kernel::sceRtcGetTime_t);
   add("sceRtc",            "sceRtcGetTime64_t",             &Kernel::sceRtcGetTime64_t);
   add("sceRtc",            "sceRtcGetDayOfWeek",            &Kernel::sceRtcGetDayOfWeek);
@@ -628,6 +639,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceMpeg",           "sceMpegInit",                   &Kernel::sceMpegInit);
   add("sceMpeg",           "sceMpegFinish",                 &Kernel::sceMpegFinish);
   add("sceMpeg",           "sceMpegRingbufferQueryMemSize", &Kernel::sceMpegRingbufferQueryMemSize);
+  add("sceMpeg",           "sceMpegRingbufferQueryPackNum", &Kernel::sceMpegRingbufferQueryPackNum);
   add("sceMpeg",           "sceMpegQueryMemSize",           &Kernel::sceMpegQueryMemSize);
   add("sceMpeg",           "sceMpegRingbufferConstruct",    &Kernel::sceMpegRingbufferConstruct);
   add("sceMpeg",           "sceMpegRingbufferDestruct",     &Kernel::sceMpegRingbufferDestruct);

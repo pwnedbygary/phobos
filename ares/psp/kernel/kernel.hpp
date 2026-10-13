@@ -1365,6 +1365,7 @@ struct Kernel {
   auto sceMpegInit() -> void;
   auto sceMpegFinish() -> void;
   auto sceMpegRingbufferQueryMemSize() -> void;
+  auto sceMpegRingbufferQueryPackNum() -> void;
   auto sceMpegQueryMemSize() -> void;
   auto sceMpegRingbufferConstruct() -> void;
   auto sceMpegRingbufferDestruct() -> void;
@@ -1858,6 +1859,19 @@ struct Kernel {
   auto sceKernelUtilsMt19937UInt() -> void;
   auto sceMt19937Init() -> void;
   auto sceMt19937UInt() -> void;
+  //md5.cpp: MD5, the kernel's and its library's (sceMd5)
+  auto md5Init(u32 context) -> u32;
+  auto md5Update(u32 context, u32 data, u32 size) -> u32;
+  auto md5Result(u32 context, u32 digest) -> u32;
+  auto md5Digest(u32 data, u32 size, u32 digest) -> u32;
+  auto sceKernelUtilsMd5Digest() -> void;
+  auto sceKernelUtilsMd5BlockInit() -> void;
+  auto sceKernelUtilsMd5BlockUpdate() -> void;
+  auto sceKernelUtilsMd5BlockResult() -> void;
+  auto sceMd5Digest() -> void;
+  auto sceMd5BlockInit() -> void;
+  auto sceMd5BlockUpdate() -> void;
+  auto sceMd5BlockResult() -> void;
 
   //p3da.cpp: sound channels mixed into stereo (sceP3da)
   auto sceP3daBridgeInit() -> void;
@@ -2121,6 +2135,9 @@ struct Kernel {
   static auto localSeconds(s64 seconds, s64& local) -> bool;
   static auto hostZone(s64 seconds, s32& minutes, bool& daylight) -> void;
   auto writeDate(u32 address, u64 microseconds, bool local) -> bool;
+  auto rtcConvertZone(bool toLocal) -> void;
+  auto sceRtcConvertUtcToLocalTime() -> void;
+  auto sceRtcConvertLocalTimeToUTC() -> void;
   struct Exec {  //sceKernelLoadExec's program, put in as the kernel's loop next goes round (never kept in states)
     bool pending = false;
     std::string path;

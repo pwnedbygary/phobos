@@ -502,6 +502,26 @@ auto Kernel::sceRtcGetCurrentClockLocalTime() -> void {
   result(writeDate(arg(0), now, true) ? 0 : ErrorInvalidPointer);
 }
 
+//A tick moved by the host's time zone's offset from UTC at a moment (its daylight saving time too), as the clock's
+//local dates have it: added for a UTC tick (toLocal), taken off a local one, whose moment is taken to be the one its
+//time would be in UTC (an hour out only across a change of daylight saving time). From the address at arg(0) to the
+//one at arg(1); 0, or INVALID_POINTER for an address the program's memory doesn't hold. God Eater 2 asks once it has
+//made its first save.
+auto Kernel::rtcConvertZone(bool toLocal) -> void {
+  if(!memory.reaches(arg(0), 8) || !memory.reaches(arg(1), 8)) return result(ErrorInvalidPointer);
+  u64 tick = memory.read(4, arg(0)) | u64(memory.read(4, arg(0) + 4)) << 32;
+  s64 seconds = s64(tick / 1'000'000) - s64(From1To1970 / 1'000'000), local = seconds;
+  if(!localSeconds(seconds, local)) local = seconds;
+  tick += u64(toLocal ? local - seconds : seconds - local) * 1'000'000;
+  memory.write(4, arg(1), u32(tick));
+  memory.write(4, arg(1) + 4, u32(tick >> 32));
+  result(0);
+}
+
+//(UTC tick, where to put the local tick) and (local tick, where to put the UTC tick).
+auto Kernel::sceRtcConvertUtcToLocalTime() -> void { rtcConvertZone(true); }
+auto Kernel::sceRtcConvertLocalTimeToUTC() -> void { rtcConvertZone(false); }
+
 //A ScePspDateTime's seconds since 1970, its microseconds left out.
 auto Kernel::dateSeconds(u32 date) -> s64 {
   s64 days = daysFromYearOne(memory.read(2, date), memory.read(2, date + 2), memory.read(2, date + 4))
