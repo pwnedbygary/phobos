@@ -75,17 +75,20 @@ import com.phobos.emulator.util.PspDialogAnswer
 import com.phobos.emulator.util.PspDialogRequest
 import com.phobos.emulator.util.PspKeyboardField
 import com.phobos.emulator.util.PspSave
-import com.phobos.emulator.util.accept
 import com.phobos.emulator.util.backBit
 import com.phobos.emulator.util.backGlyph
 import com.phobos.emulator.util.confirmBit
 import com.phobos.emulator.util.confirmGlyph
 import com.phobos.emulator.util.digitsOnly
+import com.phobos.emulator.util.entered
+import com.phobos.emulator.util.keyboardAnswer
+import com.phobos.emulator.util.keyboardTexts
 import com.phobos.emulator.util.listed
 import com.phobos.emulator.util.nothingThere
 import com.phobos.emulator.util.pspSaveHeading
 import com.phobos.emulator.util.pspSaveQuestion
 import com.phobos.emulator.util.pspSaveSize
+import com.phobos.emulator.util.typing
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -283,8 +286,11 @@ private fun PspMessageDialog(
 
 /**
  * The keyboard: a text field for each of the game's fields (its description the title, or each one's label), with
- * Android's own keyboard, each taking no more than the game allows (and digits alone where it asks for digits). OK,
- * Done or the confirm button (or Start) enters the text; Cancel or the back button backs out.
+ * Android's own keyboard, holding the game's own text at first. Each takes no more than the game allows, and what's
+ * typed is entered as its input types take it (digits alone where it asks for digits, letters typed in ASCII made
+ * full-width where it takes only full-width ones), while the game's own text left as it was is entered as it is: the
+ * field shows what's typed, as Android's keyboard composes it, and below it what will be entered where that differs.
+ * OK, Done or the confirm button (or Start) enters the text; Cancel or the back button backs out.
  */
 @Composable
 private fun PspKeyboardDialog(
@@ -294,8 +300,8 @@ private fun PspKeyboardDialog(
     onAnswer: (PspDialogAnswer) -> Unit,
 ) {
     val fields = request.fields
-    var texts by remember(request.id) { mutableStateOf(fields.map { it.accept(it.text) }) }
-    fun enter() = onAnswer(PspDialogAnswer(request.id, texts = texts))
+    var texts by remember(request.id) { mutableStateOf(request.keyboardTexts()) }
+    fun enter() = onAnswer(request.keyboardAnswer(texts))
     fun cancel() = onAnswer(PspDialogAnswer(request.id, cancelled = true))
     val input = remember { PspDialogInput() }
     val first = fields.indexOfFirst { it.maxLength > 0 }  //(the field taking the focus; with none, the dialog does)
@@ -324,7 +330,7 @@ private fun PspKeyboardDialog(
                         label = if (fields.size > 1) field.description else null,
                         last = index == fields.size - 1,
                         modifier = if (index == first) Modifier.pspFocus(input) else Modifier,
-                        onValue = { value -> texts = texts.toMutableList().also { it[index] = field.accept(value) } },
+                        onValue = { value -> texts = texts.toMutableList().also { it[index] = field.typing(value) } },
                         onDone = ::enter,
                     )
                 }
@@ -359,7 +365,18 @@ private fun PspTextField(
         label = label?.let { { Text(it) } },
         singleLine = field.lines <= 1,
         maxLines = field.lines.coerceIn(1, 6),
-        supportingText = { Text("${value.length} / ${field.maxLength}") },
+        supportingText = {
+            // (the core cuts the game's own text so, but for a pair at the cut, shown as two U+FFFD: it leaves it out)
+            val entered = field.entered(value).take(field.maxLength)
+            val count = "${entered.length} / ${field.maxLength}"
+            Text(
+                when {
+                    entered == value -> count
+                    entered.isEmpty() -> "(nothing entered)  $count"
+                    else -> "$entered  $count"
+                }
+            )
+        },
         keyboardOptions = KeyboardOptions(
             capitalization = KeyboardCapitalization.Sentences,
             keyboardType = type,

@@ -1,14 +1,15 @@
 name: PSP Core Tests
 
 # The PSP core (ares/psp) isn't in the app yet; its parts are tested on the host, here with the address and
-# undefined-behavior sanitizers.
+# undefined-behavior sanitizers. The files the core's tests share with the app's (android/app/src/test/resources/psp-*:
+# the dialogs' byte form, the keyboard's cases) run them too.
 
 on:
   push:
     branches: [ master ]
-    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', 'tests/psp/**', 'desktop/PspDiscInfo.*', 'thirdparty/ffmpeg/**', '.github/workflows/psp-core.yml' ]
+    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', 'tests/psp/**', 'desktop/PspDiscInfo.*', 'thirdparty/ffmpeg/**', 'android/app/src/test/resources/psp-*', '.github/workflows/psp-core.yml' ]
   pull_request:
-    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', 'tests/psp/**', 'desktop/PspDiscInfo.*', 'thirdparty/ffmpeg/**', '.github/workflows/psp-core.yml' ]
+    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', 'tests/psp/**', 'desktop/PspDiscInfo.*', 'thirdparty/ffmpeg/**', 'android/app/src/test/resources/psp-*', '.github/workflows/psp-core.yml' ]
   workflow_dispatch:
 
 concurrency:
