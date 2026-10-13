@@ -1300,6 +1300,7 @@ struct Kernel {
   std::vector<s32> sasSums;        //a grain's dry and wet sums as it's made (working room, not saved)
   std::vector<s16> sasSamples;     //and the 16-bit samples it writes
   auto sasVoice(u32 number) -> Sas::Voice*;
+  auto sasVoiceWord(u32 core, u32 number, u32 value) -> void;
   auto sasEnvelope(Sas::Voice& voice) -> void;
   auto sasBlock(Sas::Voice& voice, u32 block, u8* bytes) -> bool;
   auto sasNext(Sas::Voice& voice, u8* bytes) -> bool;
@@ -1618,7 +1619,7 @@ struct Kernel {
   Atrac atracs[6];
   u32 atracPlusIDs = 2, atracClassicIDs = 2;  //how sceAtracReinit shares the six IDs between the codecs
   u32 atracContexts = AtracContextMemory;  //where the six IDs' contexts are, 256 bytes each (atrac.cpp)
-  auto atracFind(u32 id, bool needData = true) -> Atrac*;
+  auto atracFind(u32 id, bool needData = true, bool byContext = false) -> Atrac*;
   auto atracParse(Atrac& atrac, u32 buffer, u32 size) -> u32;
   auto atracSet(u32 id, u32 buffer, u32 readSize, u32 bufferSize, bool mono) -> u32;
   auto atracFrame(Atrac& atrac, u32& address) -> u32;

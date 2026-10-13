@@ -58,6 +58,7 @@
 //the channel left as it was.
 
 static constexpr u32 AudioStereo = 0x00, AudioMono = 0x10;
+static constexpr s32 VaudioVolumeMost = 0x8000;  //pspvaudio.h's PSP_VAUDIO_VOLUME_MAX: the sound as it is
 
 //A mixer channel's sample count: a multiple of 64, from 64 to 65472.
 static auto mixerSamplesValid(u32 samples) -> bool {
@@ -615,9 +616,14 @@ auto Kernel::sceAudioOutput2ChangeLength() -> void {
 //- Each buffer is copied as pairs (a single sample heard on both sides) into whichever of the kernel's two
 //  (VaudioMemory) isn't armed, and armed from there, as a library working its effects on the sound would: the
 //  program's buffer is its own again as the call returns.
-//- A volume is the SRC channel's, 0 to 0xFFFFF, 0x8000 the sound as it is (pspvaudio.h's most). Reserving: a sample
-//  count outside pspvaudio.h's 256-2048 is INVALID_SIZE, a format but 1 or 2 INVALID_FORMAT and a rate the SRC
-//  channel hasn't got INVALID_FREQUENCY, all before sceVaudio is held, so only the channel being taken leaves it held.
+//- An output's volume is 0 to pspvaudio.h's PSP_VAUDIO_VOLUME_MAX, 0x8000, the sound as it is: "It must be a value
+//  between 0 and PSP_VAUDIO_VOLUME_MAX", as sceVaudioSetEffectType's must, which takes no more either. One out of that
+//  is refused (after NOT_RESERVED, before anything's armed) as the SRC channel refuses one out of its own wider range,
+//  INVALID_VOLUME: refused rather than clamped, the header's "must" (its call returning an error where it fails); no
+//  recording tries one past 0x8000.
+//- Reserving: a sample count outside pspvaudio.h's 256-2048 is INVALID_SIZE, a format but 1 or 2 INVALID_FORMAT and a
+//  rate the SRC channel hasn't got INVALID_FREQUENCY, all before sceVaudio is held, so only the channel being taken
+//  leaves it held.
 //- The release returns as the last buffer armed retires, 100 microseconds before its end is heard, as a drain does.
 //- The effect (0, off, to 5, pspvaudio.h's PSP_VAUDIO_EFFECT_MAX among them, at a volume of 0 to 0x8000, which the
 //  call returns) and the level control (0 to 2, PSP_VAUDIO_ALC_MODE_MAX among them) are kept, others refused
@@ -659,7 +665,8 @@ auto Kernel::sceVaudioOutputBlocking() -> void {
   u32 buffer = arg(1);
   auto& src = audio.src;
   if(!audio.vaudio.ownsSrc) return result(ErrorAudioChannelNotReserved);
-  if(buffer && volume >= 0 && volume <= 0xf'ffff && src.armed < 2) {
+  if(volume < 0 || volume > VaudioVolumeMost) return result(ErrorAudioInvalidVolume);
+  if(buffer && src.armed < 2) {
     u32 slot = VaudioMemory;
     if(src.armed && src.buffers[0].address == slot) slot += VaudioBufferBytes;
     u32 count = src.sampleCount, size = audio.vaudio.mono ? 2 : 4;
@@ -679,7 +686,7 @@ auto Kernel::sceVaudioOutputBlocking() -> void {
 //(effect, volume): the volume
 auto Kernel::sceVaudioSetEffectType() -> void {
   s32 effect = s32(arg(0)), volume = s32(arg(1));
-  if(effect < 0 || effect > 5 || volume < 0 || volume > 0x8000) return result(ErrorInvalidValue);
+  if(effect < 0 || effect > 5 || volume < 0 || volume > VaudioVolumeMost) return result(ErrorInvalidValue);
   audio.vaudio.effect = effect;
   audio.vaudio.effectVolume = volume;
   result(volume);

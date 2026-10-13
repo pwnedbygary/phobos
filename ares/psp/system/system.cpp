@@ -532,8 +532,10 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //signature, the version of its layout, RAM's size and the program it was made with, all of which must be the
 //machine's; then memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a
 //field means: 31 since the kernel keeps sceVaudio's hold on the SRC channel, its buffers' format, effect and level
-//control (part 82; 27 to 30 are other branches' layouts, refused here until they're merged); 26 since the dialog
-//keeps an aborted message's error and whether a list delete has deleted a save (part 73); 25 since each open file keeps its PGD decryption (the version key it was given, where its data starts,
+//control (part 82; 27 to 30 are skipped, other branches' layouts, refused here: a branch with one of them landing
+//after this renumbers its layout past 31 and updates tests/psp/ares/system.cpp's list of refused versions); 26 since
+//the dialog keeps an aborted message's error and whether a list delete has deleted a save (part 73); 25 since each
+//open file keeps its PGD decryption (the version key it was given, where its data starts,
 //and its header's descriptor once decrypted); 24 since the GE driver keeps when the GE will have drawn what it was
 //given and whether the list it runs has met its FINISH, a list being done for the program only then (part 64); 23
 //since each open file keeps its place in the order the program opened them, sceIoGetFdList's (part 62); 22 since

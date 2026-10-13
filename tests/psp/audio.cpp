@@ -885,7 +885,8 @@ static auto outputKept() -> void {
 //release with a buffer playing waits for it, then releases. Reserving takes a count of 256 to 2048, the format 1 or
 //2 and a rate the SRC channel takes, and reserves that channel at it. Its buffers are copied as pairs into the
 //kernel's two, so a mono sample is heard on both sides and the program's buffer is its own once the call returns;
-//volumes are the SRC channel's. Held on a refused reservation, or once sceAudioOutput2Release lets its channel go, its
+//an output's volume is 0 to pspvaudio.h's 0x8000, more refused. Held on a refused reservation, or once
+//sceAudioOutput2Release lets its channel go, its
 //outputs and release leave the channel to whoever has it. From a thread, its outputs return their sample count and
 //pace as the SRC channel's (the first at once, then a buffer apart less the 100-microsecond lead), counted by
 //sceAudioOutput2GetRestSample; the release returns as the last retires. The effect and the level control are kept,
@@ -944,6 +945,15 @@ static auto vaudio() -> void {
   CHECK(m.call("sceVaudioSetAlcMode", {3}), Kernel::ErrorInvalidValue);
   CHECK(m.kernel.audio.vaudio.effect == 5 && m.kernel.audio.vaudio.effectVolume == 0x8000, true);
   CHECK(m.kernel.audio.vaudio.alc, 2);
+  //an output's volume past pspvaudio.h's PSP_VAUDIO_VOLUME_MAX (0x8000), or below 0, refused: nothing armed (not
+  //reserved, NOT_RESERVED first)
+  CHECK(m.call("sceVaudioOutputBlocking", {0x8001, Buffer}), Kernel::ErrorAudioChannelNotReserved);
+  CHECK(m.call("sceVaudioChReserve", {256, 44'100, 2}), 0);
+  for(u32 volume : {0x8001u, 0xf'ffffu, 0x10'0000u, ~0u}) {
+    CHECK(m.call("sceVaudioOutputBlocking", {volume, Buffer}), Kernel::ErrorAudioInvalidVolume);
+  }
+  CHECK(m.kernel.audio.src.armed, 0);
+  CHECK(m.call("sceVaudioChRelease", {}), 0);
 
   //mono at 44.1 kHz and half volume: a sample a frame, on both sides; the program's buffer changed after the call
   //isn't heard (called directly, the output can't wait for its completion: CAN_NOT_WAIT, its buffer armed all the

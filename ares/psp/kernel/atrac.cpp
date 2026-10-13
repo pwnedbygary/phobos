@@ -51,14 +51,15 @@
 //getremainframe, getsoundsample, resetpos, resetting and second recorded the calls they make (GetRemainFrame,
 //GetSoundSample, ResetPlayPosition, GetBufferInfoForResetting, GetSecondBufferInfo, IsSecondBufferNeeded,
 //SetSecondBuffer) refusing an ID whose state the test set to 8 (the low-level decoder's: 0x80630031) or 16 (sceSas's:
-//0x80630040); here every call that needs a file does, and takes the ID again once it's set back (chosen: no recording
-//calls after that). Angus Hates Aliens' sound code, a wrapper over sceSas's ATRAC3 voices (the one
-//pspautotests' audio/atrac/sas copies), sets 16, moves the buffer and curFileOff on, puts the voice in loopNum and
-//-1 in secondBuffer, and stops the voice only while the state still says 16: it asked again for good when the state
-//it had set was written over. Here each context is written whenever the library changes its ID, and at power on,
-//into kernel memory (AtracContextMemory: chosen, as a PSP's are in its library's module, in the user partition, and
-//no game's memory need go to them here); the state a program wrote there is what every call that needs a file looks
-//at first, and the rest of what it wrote stays until the library next changes that ID.
+//0x80630040); here those seven do, and take the ID again once it's set back (chosen: no recording calls after that),
+//while every other call answers as it did before the contexts were kept (none recorded with such a state: a low-level
+//ID, whose context says 8, still NO_DATA where a file is needed). Angus Hates Aliens' sound code, a wrapper over
+//sceSas's ATRAC3 voices (the one pspautotests' audio/atrac/sas copies), sets 16, moves the buffer and curFileOff on,
+//puts the voice in loopNum and -1 in secondBuffer, and stops the voice only while the state still says 16: it asked
+//again for good when the state it had set was written over. Here each context is written whenever the library
+//changes its ID, and at power on, into kernel memory (AtracContextMemory: chosen, as a PSP's are in its library's
+//module, in the user partition, and no game's memory need go to them here); the state a program wrote there is what
+//those seven calls look at first, and the rest of what it wrote stays until the library next changes that ID.
 
 namespace {
   //sceAtrac3plus's errors, as audio/atrac's tests recorded them
@@ -158,12 +159,12 @@ static auto atracRestart(const Kernel::Atrac& a, u32& count) -> u32 {
   return atracFrameOffset(a, first);
 }
 
-//An ID handed out, holding a file when needData; else the error is the result. Its state is first its context's,
-//which the program may have set (above): 8 or 16 refuse a call that needs a file.
-auto Kernel::atracFind(u32 id, bool needData) -> Atrac* {
+//An ID handed out, holding a file when needData; else the error is the result. For the seven calls recorded with a
+//state the program set (byContext, above), the state is first its context's: 8 or 16 refuse it.
+auto Kernel::atracFind(u32 id, bool needData, bool byContext) -> Atrac* {
   if(id >= AtracIDs || !atracs[id].codec) return result(AtracErrorBadID), nullptr;
   if(!needData) return &atracs[id];
-  u32 state = memory.read(1, atracContexts + id * 256 + 128 + 21);
+  u32 state = byContext ? memory.read(1, atracContexts + id * 256 + 128 + 21) : 0;
   if(state == 8) return result(AtracErrorIsLowLevel), nullptr;
   if(state == 16) return result(AtracErrorIsForSas), nullptr;
   if(atracs[id].state == NoData) return result(AtracErrorNoData), nullptr;
@@ -650,7 +651,7 @@ auto Kernel::sceAtracDecodeData() -> void {
 
 //(ID, where to put the frames left): atracRemain().
 auto Kernel::sceAtracGetRemainFrame() -> void {
-  auto a = atracFind(arg(0));
+  auto a = atracFind(arg(0), true, true);
   if(!a) return;
   if(memory.reaches(arg(1), 4)) memory.write(4, arg(1), atracRemain(*a));
   result(0);
@@ -730,7 +731,7 @@ auto Kernel::sceAtracGetMaxSample() -> void {
 
 //(ID, where to put the last sample, the loop's start and its end): the file's count; -1 and -1 with no loop.
 auto Kernel::sceAtracGetSoundSample() -> void {
-  auto a = atracFind(arg(0));
+  auto a = atracFind(arg(0), true, true);
   if(!a) return;
   u32 values[3] = {a->endSample - a->firstValidSample, ~0u, ~0u};
   if(a->looped) values[1] = a->loopStart - a->firstValidSample, values[2] = a->loopEnd - a->firstValidSample;
@@ -800,7 +801,7 @@ auto Kernel::sceAtracGetInternalErrorInfo() -> void {
 //first priming frame on, as much as fits in whole frames and the file has). The second set is for the second buffer:
 //nothing. A sample past the file's last, or before its first priming frame's start, is refused (0x80630015).
 auto Kernel::sceAtracGetBufferInfoForResetting() -> void {
-  auto a = atracFind(arg(0));
+  auto a = atracFind(arg(0), true, true);
   if(!a) return;
   s64 raw = s64(s32(arg(1))) + a->firstValidSample;
   if(raw < 0 || raw > a->endSample) return result(AtracErrorBadSample);
@@ -833,7 +834,7 @@ auto Kernel::sceAtracGetBufferInfoForResetting() -> void {
 //audio/atrac/resetpos recorded). A sample whose priming would start before the file fails (0x80630002).
 auto Kernel::sceAtracResetPlayPosition() -> void {
   u32 id = arg(0), firstBytes = arg(2), secondBytes = arg(3);
-  auto a = atracFind(id);
+  auto a = atracFind(id, true, true);
   if(!a) return;
   s64 raw = s64(s32(arg(1))) + a->firstValidSample;
   if(raw < 0 || raw > a->endSample) return result(AtracErrorBadSample);
@@ -891,7 +892,7 @@ auto Kernel::sceAtracResetPlayPosition() -> void {
 
 //(ID): 1 for a stream looping before its end, whose rest needs the second buffer, else 0.
 auto Kernel::sceAtracIsSecondBufferNeeded() -> void {
-  auto a = atracFind(arg(0));
+  auto a = atracFind(arg(0), true, true);
   if(!a) return;
   result(a->state == StreamedWithSecond);
 }
@@ -899,7 +900,7 @@ auto Kernel::sceAtracIsSecondBufferNeeded() -> void {
 //(ID, where to put where in the file, and how many bytes): what the second buffer holds, the frames after the loop's
 //last to the file's end; for any other file, 0 and 0, and 0x80630022 (audio/atrac/second/getinfo).
 auto Kernel::sceAtracGetSecondBufferInfo() -> void {
-  auto a = atracFind(arg(0));
+  auto a = atracFind(arg(0), true, true);
   if(!a) return;
   u32 from = 0, bytes = 0;
   if(a->state == StreamedWithSecond) {
@@ -916,7 +917,7 @@ auto Kernel::sceAtracGetSecondBufferInfo() -> void {
 //(0x80630022); its address isn't checked (audio/atrac/second/setbuffer).
 auto Kernel::sceAtracSetSecondBuffer() -> void {
   u32 id = arg(0), address = arg(1), bytes = arg(2);
-  auto a = atracFind(id);
+  auto a = atracFind(id, true, true);
   if(!a) return;
   u32 least = 3 * a->frameBytes;
   if(a->state == StreamedWithSecond) {
