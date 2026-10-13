@@ -1926,7 +1926,7 @@ struct Kernel {
   auto savedataIcons(u32 parameters, const std::string& folder) -> void;
   auto savedataClusters(const std::string& folder, const std::vector<std::string>& secure) -> u64;
   auto savedataNeeded(u32 parameters, u32 dataSize) -> u64;
-  auto savedataList(u32 parameters, const std::string& game) -> u32;
+  auto savedataList(u32 parameters, const std::string& game, const std::string& save) -> u32;
   auto savedataFiles(u32 info, const std::string& host, const std::vector<std::string>& secure) -> void;
   auto sceUtilitySavedataInitStart() -> void;
   auto sceUtilitySavedataGetStatus() -> void;
