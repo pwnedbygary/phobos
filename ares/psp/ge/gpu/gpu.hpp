@@ -124,9 +124,13 @@ struct GPU : GE::Renderer {
     //Transformed block's to say: each a constant would multiply the pipelines. The GE has culled and clipped:
     //meshTriangles().)
     u8 transformed, flat;
+    //draw.frag's INDEXED: a texture of palette indices taken from a frame buffer (render to texture: textureFor()),
+    //each texel the index its bits are, 1 those of a 16-bit frame buffer's (in texels' format), 2 an 8888 one's,
+    //looked up in the palette Push::palette names; 0 none
+    u8 indexed;
     auto operator==(const Pipeline&) const -> bool = default;
   };
-  static_assert(sizeof(Pipeline) == 35);
+  static_assert(sizeof(Pipeline) == 36);
   //draw.frag's push constants
   struct Push {
     float scale[2];
@@ -142,6 +146,10 @@ struct GPU : GE::Renderer {
     //(0: the copy's own)
     u32 held = 0;
     u32 origin = 0;  //the row of the target its frame buffer's first is (targetFor()), where the dither starts
+    //Pipeline::indexed's palette and how an index is taken from a texel's bits (texture.cpp's texelFrom()): the
+    //palette's row (Backend::makePalette()) in bits 0-9, CLUT_FORMAT's shift in 10-14, its mask in 15-22, its
+    //offset's 5 bits in 23-27, and in 28 a 16-bit palette's 512 entries (else 256)
+    u32 palette = 0;
     auto operator==(const Push&) const -> bool = default;
   };
   //A draw's settings, all of them
@@ -227,6 +235,9 @@ struct GPU : GE::Renderer {
     bool transforms = false;
     //Whether it moves pixels from one target into another (Command::Move: the driver took move.frag's pipelines)
     bool moves = false;
+    //Whether it looks palettes up in the shader (makePalette(): a texture of palette indices from a frame buffer,
+    //Pipeline::indexed)
+    bool palettes = false;
     //Whether a shader gives the stencil's value (VK_EXT_shader_stencil_export): pixels put into a target above 1x
     //(Upload) or moved into one (Move) are drawn with their stencil at once, not a bit at a time (the tests turn it
     //off to draw the bits)
@@ -250,6 +261,10 @@ struct GPU : GE::Renderer {
     virtual auto makeTexture(u32 width, u32 height, const u32* texels, std::shared_ptr<const void> owner = {})
       -> u32 = 0;
     virtual auto dropTexture(u32 texture) -> void = 0;  //(once the GPU is done with it)
+    //A palette for draws after to look up (Pipeline::indexed): its 512 entries as 8888 (red in the low byte), on the
+    //GPU before the next run's draws; its row of the palettes' picture (Push::palette), 0 where there's no room
+    virtual auto makePalette(const u32* entries) -> u32 { (void)entries; return 0; }
+    virtual auto dropPalette(u32 palette) -> void { (void)palette; }  //(once the GPU is done with it)
     //Whether draws of this pipeline can be made (the driver took its shaders): fast mode's 3D asks before it records
     //one (mesh()), so that a driver refusing them leaves the GE to transform those PRIMs itself
     virtual auto drawable(const Pipeline&) -> bool { return true; }
@@ -347,6 +362,7 @@ struct GPU : GE::Renderer {
   auto written(GE& ge, u32 page) -> void override;
   auto forget(GE& ge) -> void override;
   auto holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns) -> bool override;
+  auto memoryRows(GE& ge, const GE::Sampler& texture) -> u32 override;
   auto drawnOver(GE& ge, u32 first, u32 last) -> bool override;
   auto besideChanged(GE& ge, u32 first, u32 last) -> void override;
   auto overwritten(GE& ge, u32 first, u32 last) -> void override;
@@ -425,10 +441,21 @@ private:
   u64 uses = 0;
   //A texture in a target the GPU has drawn (holds()), for the next PRIM: where, and the texture it's copied into
   //(one for each place and size, kept with the target); its rows from split on in next, from that one's first, where
-  //it runs on into the frame buffer below
-  struct Held { Target* target; s32 x, y; u32 width, rows, format; Target* next = nullptr; u32 split = 0; };
+  //it runs on into the frame buffer below; palette indices' palette (paletteFor(), 0 for a texture of colors)
+  struct Held {
+    Target* target; s32 x, y; u32 width, rows, format; Target* next = nullptr; u32 split = 0; u32 palette = 0;
+  };
   std::optional<Held> held;
-  auto take(const GE::Sampler& texture, u32 offset, u64 end, u32 width, u32 rows, bool direct) -> bool;
+  auto take(const GE::Sampler& texture, u32 offset, u64 end, u32 width, u32 rows, bool direct, bool exact) -> bool;
+  //Palettes on the GPU (Backend::makePalette()), for textures of palette indices taken from frame buffers: one for
+  //each palette the GE has had (its format and bytes, by the GE's hash), the one unused longest let go past
+  //MostPalettes (Death Jr. II's colors go through a palette of their own for each of 32 strips of its screen)
+  struct Palette { u32 id; u64 hash; u32 format; u64 used; std::array<u8, 1024> bytes; };
+  std::vector<Palette> palettes;
+  u64 paletteUses = 0;
+  struct { u32 id = 0, version = 0, format = 0; } lastPalette;  //(the last found, for the GE's palette version)
+  static constexpr u32 MostPalettes = 192;
+  auto paletteFor(const GE::Sampler& texture) -> u32;  //(the GE's palette now: its row, 0 where there's no room)
   //(one for each target and place copied from, its width and rows, and the rectangle of the target changed since,
   //left, top, right, bottom in its pixels, none where left is past right: taken again, only that part is copied, so
   //an effect drawing again and again into one corner of the frame buffer it samples copies the corner, not the
@@ -475,7 +502,7 @@ private:
   auto move(Target& from, Target& t, const Moving& m) -> void;
   auto keepBeside(Target& t, u32 first, u32 last) -> void;  //(Target::beside's first to last added)
   auto own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;
-  auto textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken) -> u32;
+  auto textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken, u8& indexed, u32& palette) -> u32;
   auto settings(const GE::Look& look) -> void;
   auto clearStencil(u32 color) -> void;
   auto emit(const Vertex* vertices, u32 count) -> void;

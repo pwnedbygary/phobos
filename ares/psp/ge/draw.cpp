@@ -355,6 +355,7 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   };
   if(textured && !skipping && !(hardware && renderer->holds(*this, look.texture, heldRows, heldColumns))) {
     //Hardware keeps its own copy of a frame buffer: don't defer a software-batch wait for it.
+    if(hardware && rows == ~0u) drawnRows = renderer->memoryRows(*this, look.texture);
     decode(look, hardware ? Region{0, 0, -1, -1} : region, drawnRows, !hardware, copyDraws);
     if(!look.texture.decoded && !look.deferRows) look.texture.bytes = direct(look.texture);
   }

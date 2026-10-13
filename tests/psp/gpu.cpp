@@ -707,6 +707,120 @@ static auto gpuTextureAtVRAMsEnd() -> void {
   hardware.ge.setRenderer(nullptr);
 }
 
+//A frame buffer the GPU drew sampled as palette indices, looked up on the GPU (Death Jr. II takes each of its
+//picture's colors through a palette so): CLUT32 of an 8888 one and CLUT16 of each 16-bit one, through 8888 and 16-bit
+//palettes, each with a shift, a mask and an offset (the index's bits the colors', not the stencil's); by a sprite,
+//whose rows are known, and by 2D triangles from the top, whose rows aren't, from a texture running on past the
+//picture into another frame buffer's pages (of another row width) just below, which isn't taken. The GPU's pixels
+//are the software renderer's, byte for byte, nothing finished.
+static auto gpuPalettes() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  if(!gpu->backend->palettes) return void(std::printf("  skipped: no palettes on the GPU\n"));
+  constexpr u32 Palette = 0x0897'0000;
+  struct Case { u32 format, clutFormat, shift, mask, offset; };
+  Case cases[] = {{3, 3, 8, 0xff, 0}, {3, 1, 0, 0xff, 0x100}, {3, 2, 13, 0x7f, 0x80}, {0, 0, 5, 0x3f, 0x40},
+                  {0, 3, 8, 0xff, 0}, {1, 3, 2, 0xff, 0}, {1, 1, 10, 0x1f, 0x1e0}, {2, 2, 4, 0xff, 0x10}};
+  std::mt19937 random{20261085};
+  for(auto& k : cases) {
+    for(bool triangles : {false, true}) {
+      System software, hardware;
+      hardware.ge.setRenderer(gpu);
+      auto drawn = randomSprites(random, 40, false);
+      u32 entries[256];
+      for(auto& entry : entries) entry = u32(random());
+      u32 rowBytes = k.format == 3 ? 256 : 128, picture = 0x3000 / rowBytes;  //(rows to the next page: 48 or 96)
+      GPU::Statistics before;
+      for(System* s : {&software, &hardware}) {
+        auto& c = s->ge.commands;
+        for(u32 n = 0; n < 256; n++) s->memory.write(4, Palette + n * 4, entries[n]);
+        prepare(*s, 0, k.format);
+        c[GE::Scissor2] = 63 | (picture - 1) << 10;
+        for(auto& one : drawn) {
+          sprite(*s, {{{0, 0, one.at[0][2], one.at[0][3] * 2}, {0, 0, one.at[1][2], one.at[1][3] * 2}}, one.color});
+        }
+        prepare(*s, 0x3000, 3);  //(below the picture, 32 pixels wide)
+        c[GE::FrameBufferWidth] = 32, c[GE::Scissor2] = 31 | 15 << 10;
+        sprite(*s, {{{0, 0, 0, 0}, {0, 0, 32, 16}}, 0x5a12'3456});
+        prepare(*s, 0x2'0000, 3);
+        c[GE::Scissor2] = 63 | 63 << 10;
+        c[GE::ClutAddress] = Palette & 0xff'ffff, c[GE::ClutAddressUpper] = Palette >> 8 & 0xf'0000;
+        c[GE::ClutLoad] = 32;
+        s->ge.loadClut();
+        c[GE::ClutFormat] = k.clutFormat | k.shift << 2 | k.mask << 8 | k.offset >> 4 << 16;
+        texture(*s, Memory::VRAMBase, 64, 128, 64, k.format == 3 ? 7 : 6);
+        if(s == &hardware) before = gpu->statistics;
+        u32 rows = std::min(picture, 64u);
+        if(!triangles) {
+          sprite(*s, {{{0, 0, 0, 0}, {64, f32(rows), 64, f32(rows)}}, 0});
+          continue;
+        }
+        struct Corner { float u, v; };  //(a texel to a pixel, at their middles: the GE's texels and the GPU's alike)
+        f32 v = rows;
+        Corner corners[6] = {{0, 0}, {64, 0}, {0, v}, {64, 0}, {64, v}, {0, v}};
+        u32 to = GPUVertices;
+        for(auto& corner : corners) {
+          for(float value : {corner.u, corner.v}) s->memory.write(4, to, bitsOf(value)), to += 4;
+          s->memory.write(4, to, 0xffff'ffff), to += 4;
+          for(float value : {corner.u, corner.v, 0.0f}) s->memory.write(4, to, bitsOf(value)), to += 4;
+        }
+        s->ge.vertexAddress = GPUVertices;
+        s->ge.primitive(GE::Triangles, 6);
+      }
+      bool taken = gpu->statistics.finishes == before.finishes && gpu->statistics.copies > before.copies;
+      u32 bytes = apart(software, hardware);
+      if(!taken || bytes) {
+        std::printf("  format %u, palette %u >> %u & %02x | %03x, %s: %u bytes apart, %s\n", k.format, k.clutFormat,
+                    k.shift, k.mask, k.offset, triangles ? "triangles" : "a sprite", bytes,
+                    taken ? "taken" : "not taken from the GPU");
+      }
+      CHECK(taken, true);
+      CHECK(bytes, 0u);
+      hardware.ge.setRenderer(nullptr);
+    }
+  }
+}
+
+//A texture whose first rows are memory's (the CPU's picture) and whose rows then run on into a frame buffer the GPU
+//is drawing (another row width), by 2D triangles from the top, whose rows aren't known: the GE decodes the rows
+//before that frame buffer's pages alone, without waiting for the GPU, and the GPU's pixels are the software
+//renderer's. (Death Jr. II's bloom samples its picture, read back for the CPU, as a texture 512 rows tall, into the
+//smaller frame buffer below it: each of its tiles finished drawing.)
+static auto gpuMemorysRows() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  std::mt19937 random{20261086};
+  std::vector<u32> picture(64 * 48);
+  for(auto& pixel : picture) pixel = u32(random());
+  GPU::Statistics before;
+  for(System* s : {&software, &hardware}) {
+    auto& c = s->ge.commands;
+    for(u32 n = 0; n < picture.size(); n++) s->memory.write(4, Memory::VRAMBase + n * 4, picture[n]);
+    prepare(*s, 0x3000, 3);  //(right below it, 32 pixels wide)
+    c[GE::FrameBufferWidth] = 32, c[GE::Scissor2] = 31 | 15 << 10;
+    sprite(*s, {{{0, 0, 0, 0}, {0, 0, 32, 16}}, 0x5a65'4321});
+    prepare(*s, 0x2'0000, 3);
+    texture(*s, Memory::VRAMBase, 64, 128, 64);
+    if(s == &hardware) before = gpu->statistics;
+    struct Corner { float u, v; };
+    Corner corners[6] = {{0, 0}, {64, 0}, {0, 48}, {64, 0}, {64, 48}, {0, 48}};
+    u32 to = GPUVertices;
+    for(auto& corner : corners) {
+      for(float value : {corner.u, corner.v}) s->memory.write(4, to, bitsOf(value)), to += 4;
+      s->memory.write(4, to, 0xffff'ffff), to += 4;
+      for(float value : {corner.u, corner.v, 0.0f}) s->memory.write(4, to, bitsOf(value)), to += 4;
+    }
+    s->ge.vertexAddress = GPUVertices;
+    s->ge.primitive(GE::Triangles, 6);
+  }
+  CHECK(gpu->statistics.finishes, before.finishes);
+  CHECK(hardware.memory.vramBusy, true);
+  CHECK(apart(software, hardware), 0u);
+  hardware.ge.setRenderer(nullptr);
+}
+
 //Render to texture from many places and sizes (a strip further down each time, wider or taller): the GPU's copies
 //of them are kept to a bound, the oldest let go, and every picture is still the software renderer's.
 static auto gpuCopies() -> void {
@@ -2453,6 +2567,9 @@ auto gpuTests() -> Tests {
     {"gpu lost: the software renderer draws instead", gpuLost},
     {"gpu refused primitives drawn by the software renderer", gpuRefused},
     {"gpu a frame buffer near VRAM's end sampled as a texture declared past it, nothing finished", gpuTextureAtVRAMsEnd},
+    {"gpu a frame buffer it drew sampled as palette indices: looked up on the GPU, nothing finished", gpuPalettes},
+    {"gpu a texture memory has the first rows of, then a frame buffer it draws: those rows decoded alone",
+     gpuMemorysRows},
     {"gpu render-to-texture copies kept to a bound", gpuCopies},
     {"gpu render to texture taken again in part: the strip an effect draws into", gpuPartialCopies},
     {"gpu render to texture from two frame buffers, one below the other, nothing finished", gpuStackedTexture},
