@@ -52,9 +52,10 @@ scripts and CI only: the app's build and its flags are unchanged.
   `Four::depth` in `spriteFours()`'s `Four four;` and for `downAxis[]`. They're false positives, which `-Werror`
   turns into an error (the review's reading): `four.depth` is read only by `writeDepth()`, which runs only where the
   depth is written (a clear's depth, or `depthWrite`), and `depthFirst()`, always run first, assigns all four lanes
-  whenever the depth is tested; `depthWrite` is only ever on with `depthTest` (`pixel.cpp:93`), which GCC can't see
-  through two separate flags. `downAxis[]` is read only for a textured sprite, and every textured path assigns all
-  three. Only sprites warn because `triangleFours()` already sets `four.depth = s32x4{};` before `depthFirst()`.
+  whenever the depth is tested, or cleared; `depthWrite` is only ever on with `depthTest` (`pixel.cpp:93`), which
+  GCC can't see through two separate flags. `downAxis[]` is read only for a textured sprite, and every textured path
+  assigns all three. Only sprites warn because `triangleFours()` already sets `four.depth = s32x4{};` before
+  `depthFirst()`.
   Apple clang 21 compiles the same `ge.cpp` at the same flags with `-Werror` cleanly (silent even with
   `-Wconditional-uninitialized`), and the app is built by the NDK's clang with `-w`. The review's suggested fix,
   `four.depth = s32x4{};` in `spriteFours()` as triangles do and `s32x4 downAxis[3] = {};` (not `Four four{}`, which
@@ -65,13 +66,14 @@ scripts and CI only: the app's build and its flags are unchanged.
   4 of the 51 files. Beside `ge.cpp` (`four.cpp`, as above), three fail with `-Wstringop-overflow`, each reading as
   a false positive too (the review's reading, not checked with a compiler): `kernel.cpp` at `serialization.cpp:976`
   (64 times, "writing 2 bytes into a region of size 0"), a range-for over `Sample samples[64]` that writes in bounds,
-  added by master's right stick (`2b5a9209a`, merged with #230 since; `kernel.cpp` compiled before it);
-  `desktop/PspDiscInfo.cpp` in nall's string allocator (`memory.hpp:137`, 24 bytes into 8, through `pspIconKey()`'s
-  `Hash::digest()` and `hex()`), though `reserve()` allocates only past the 23-character inline buffer; and
-  `tests/psp/crypto.cpp:29`, `put32()` inlined into `kirkPrivate()`, writing where GCC takes the vector's data for
-  address zero, a copy of `input` at least 0x8f bytes long. The last two were there before, never reached. None is
-  fixed here: `four.cpp`'s wants measuring (above), #229 is changing the kernel's serialization, and nall is shared
-  with every ares system.
+  added by master's right stick (`2b5a9209a`, merged with #230 since; `kernel.cpp` compiled cleanly in the earlier
+  runs, before that commit); `desktop/PspDiscInfo.cpp` in nall's string allocator (`memory.hpp:137`, 24 bytes into
+  8, through `pspIconKey()`'s `Hash::digest()` and `hex()`), though `reserve()` allocates only past the 23-character
+  inline buffer; and `tests/psp/crypto.cpp:29`, `put32()` inlined into `kirkPrivate()`, writing into `other`, a copy
+  of `input` at least 0x8f bytes long (0x180 here), whose data GCC takes for address zero. The last two were there
+  before, never reached. None is fixed here: `four.cpp`'s wants measuring (above), #229 is changing the kernel's
+  serialization, nall is shared with every ares system, and a change to `crypto.cpp` alone wouldn't turn the lane
+  green.
 - **Checks** (the Mac, arm64, Apple clang 21): `PHOBOS_TESTS_MODE=release tests/allegrex/run-tests.sh` 60/0 (7
   objects of its own, 18 s with the run); `tests/rsp-vu-neon/run-tests.sh 3000 0x5253505655`: 10,420,000 checks, no
   NEON or reference mismatch; actionlint on the workflows. CI on #247 (run 38439997353): Allegrex 60/0 sanitized and
@@ -87,10 +89,12 @@ scripts and CI only: the app's build and its flags are unchanged.
   and `ge.cpp` at the release flags on the Mac. It found these notes wrong on `four.cpp` (they called the warnings
   indeterminate reads; above, corrected) and on the asserts' count, and the heading claiming the system's tests built
   as the app is; all corrected. Its suggestions taken: the ARM64 lane checks its host; the workflow's note on the kept
-  results says which runs keep them. A delta review, with #249's run of every file in, found the finding stale (it
-  said GCC's other findings would show once `four.cpp` was settled; the four files above, from that review's reading
-  of the log, checked against it) and "every host suite was a sanitized `-O1` build" wrong (the ares system's suite
-  and the runner aren't sanitized); both corrected.
+  results says which runs keep them. A delta review, after #249's run compiled every file, found the finding stale
+  (it said GCC's other findings would show once `four.cpp` was settled; the four files above, from that review's
+  reading of the log, checked against it) and "every host suite was a sanitized `-O1` debug build" wrong (the ares
+  system's suite and the runner aren't sanitized); both corrected. The next delta review: PASS; its points, all
+  wording, are taken (clears in `depthFirst()`'s condition, `crypto.cpp`'s reason, `other` named, which runs
+  compiled `kernel.cpp`).
 
 ## Tests: a skip says what's missing, and fails where the lane must have it; the Allegrex measurements unpacked by content — 2026-10-13
 
