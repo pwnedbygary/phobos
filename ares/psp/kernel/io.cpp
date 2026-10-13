@@ -195,8 +195,8 @@ auto Kernel::writeStat(u32 address, const std::string& host) -> void {
 
 //When a host file or folder was made, read and changed, in seconds since 1970 (all 0 if it isn't there), as
 //nall::inode::timestamp() has them: made, where the host keeps it (Windows' ctime; the BSDs' and macOS's birth time,
-//unless later than the change), else changed; read no earlier than changed. Through stat() itself: GCC (CI's tests
-//build with -Werror) takes the nall::string that nall::inode::timestamp() is given for a read of an unset field.
+//unless later than the change), else changed; read no earlier than changed. Through stat() itself: the nall::string
+//that nall::inode::timestamp() takes trips GCC 13's -Wmaybe-uninitialized here, which CI's tests build with -Werror.
 auto Kernel::hostTimes(const std::string& host) -> std::array<s64, 3> {
   struct stat data{};
   if(stat(host.c_str(), &data)) return {};

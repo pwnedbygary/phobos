@@ -372,29 +372,39 @@ auto Kernel::dialogSaves(u32 p, DialogRequest& request, bool details) -> void {
       request.saves.erase(request.saves.begin() + n);
     }
   }
-  auto& shown = request.saves;
-  u32 count = shown.size(), chosen = 0;
+  request.focus = dialogFocus(p, request.saves, save);
+}
+
+//Which of the saves shown a save dialog focuses at first, by its focus (dialogSaves()); unbroken, which it would among
+//the saves that aren't broken alone (the first of them where there's none such), the others passed over; 0 with none.
+auto Kernel::dialogFocus(u32 p, const std::vector<DialogRequest::Save>& shown, const std::string& save,
+                         bool unbroken) -> u32 {
   u32 focus = memory.read(4, p) > 1480 ? memory.read(4, p + 1480) : 0;  //(the smallest size, 0x5c8, ends before it)
+  std::vector<u32> taken;
+  for(u32 n = 0; n < shown.size(); n++) if(!unbroken || !shown[n].broken) taken.push_back(n);
+  u32 count = taken.size(), chosen = 0;
+  auto at = [&](u32 n) -> const DialogRequest::Save& { return shown[taken[n]]; };
   auto first = [&](bool there, bool last) {
     for(u32 n = 0; n < count; n++) {
-      u32 at = last ? count - 1 - n : n;
-      if(shown[at].there == there) return at;
+      u32 index = last ? count - 1 - n : n;
+      if(at(index).there == there) return index;
     }
     return 0u;
   };
+  if(!count) return 0;
   if(focus == 0) {
-    for(u32 n = 0; n < count; n++) if(shown[n].name == save) { chosen = n; break; }
+    for(u32 n = 0; n < count; n++) if(at(n).name == save) { chosen = n; break; }
   }
-  if(focus == 2 && count) chosen = count - 1;
+  if(focus == 2) chosen = count - 1;
   if(focus == 3 || focus == 4) {
     for(u32 n = 0, found = 0; n < count; n++) {
-      if(!shown[n].there) continue;
-      bool better = focus == 3 ? shown[n].time > shown[chosen].time : shown[n].time < shown[chosen].time;
+      if(!at(n).there) continue;
+      bool better = focus == 3 ? at(n).time > at(chosen).time : at(n).time < at(chosen).time;
       if(!found++ || better) chosen = n;
     }
   }
   if(focus >= 5 && focus <= 8) chosen = first(focus <= 6, focus == 6 || focus == 8);
-  request.focus = chosen;
+  return taken[chosen];
 }
 
 //The front end's answer applied: the dialog finishes with what a PSP's player's choice gives, or (deleting from a
@@ -465,17 +475,18 @@ auto Kernel::dialogSaved(u32 p, const DialogRequest& asked, const DialogAnswer& 
 
 //A save dialog no front end shows, answered as a PSP's player who confirms what it shows first. A list's load naming
 //no save of its own takes the save the dialog focuses among those it shows (only saves that are there), or, that one
-//broken, the first that isn't (chosen: a player told it's corrupted takes another; the focused one if all are); a
-//list's save naming none takes the list's first name, whatever the focus (chosen: where the automatic answer's later
-//loads will find it; a dialog focusing a new slot, 7 or 8, would spread the saves over the list, and a load focusing
-//the first would then take the oldest). Either name is written into the request's save name, as a choice is
-//(savedata()). Every other mode, a list request that names its save (chosen: that save), a list with no first name,
-//a game's name that isn't a plain one, a list save to "<>" (the game's folder alone) and a list the dialog would show
-//nothing from are answered by savedata() as before (no data to load, or a name refused). Taking the list's first name
-//whether there or not, a load from a list whose first save wasn't made found no data with others there (7th Dragon
-//2020 lists DATA00 to DATA49); with no name written back, Brandish: The Dark Revenant made nothing of a load from a
-//list. Only which saves are there, broken or not, and their dates are looked at, not their sizes or icons: this runs
-//on the emulation thread, and Brandish lists 99 names.
+//broken, the one the same focus takes among those that aren't (chosen: a player told it's corrupted takes another,
+//the latest still where the latest was focused; the focused one if all are broken); a list's save naming none takes
+//the list's first name, whatever the focus (chosen: where the automatic answer's later loads will find it; a dialog
+//focusing a new slot, 7 or 8, would spread the saves over the list, and a load focusing the first would then take the
+//oldest). Either name is written into the request's save name, as a choice is (savedata()). Every other mode, a list
+//request that names its save (chosen: that save), a list with no first name, a game's name that isn't a plain one, a
+//list save to "<>" (the game's folder alone) and a list the dialog would show nothing from are answered by savedata()
+//as before (no data to load, or a name refused). Taking the list's first name whether there or not, a load from a
+//list whose first save wasn't made found no data with others there (7th Dragon 2020 lists DATA00 to DATA49); with no
+//name written back, Brandish: The Dark Revenant made nothing of a load from a list. Only which saves are there, broken
+//or not, and their dates are looked at, not their sizes or icons: this runs on the emulation thread, and Brandish
+//lists 99 names.
 auto Kernel::savedataUnshown(u32 p) -> u32 {
   u32 mode = memory.read(4, p + 48), names = memory.read(4, p + 96);
   std::string game = memory.readString(p + 60, 13), save = memory.readString(p + 76, 20);
@@ -489,8 +500,9 @@ auto Kernel::savedataUnshown(u32 p) -> u32 {
   if(request.saves.empty()) return savedata(p);
   DialogAnswer given;
   given.choice = s32(request.focus);
-  for(u32 n = 0; request.saves[request.focus].broken && n < request.saves.size(); n++) {
-    if(!request.saves[n].broken) { given.choice = s32(n); break; }
+  if(request.saves[request.focus].broken) {
+    u32 other = dialogFocus(p, request.saves, {}, true);
+    if(!request.saves[other].broken) given.choice = s32(other);
   }
   return dialogSaved(p, request, given).value_or(DialogCancelled);
 }

@@ -135,7 +135,8 @@ static auto fileFolders() -> void {
 //state saved earlier loaded), and in the hour daylight saving time gives back (the file changed in its first pass,
 //the clock in its second, later in UTC but earlier in local time), the date is the clock's now. Before 1980 (in local
 //time), or for a file that isn't there, it's 1980-01-01 00:00:00: no FAT stick holds an earlier date. The system's
-//time zone and daylight saving time settings agree with the clock's local time.
+//time zone and daylight saving time settings agree with the clock's local time: the zone without daylight saving
+//time, in both hemispheres, and in Ireland's rules, whose winter is the zone files' "daylight saving" time.
 static auto fileDates() -> void {
   HostFolder folder;
   KernelMachine m;
@@ -165,23 +166,23 @@ static auto fileDates() -> void {
     CHECK(m.call("sceUtilityGetSystemParamInt", {which, Buffer}), 0);
     return m.system.memory.read(4, Buffer);
   };
-  constexpr s64 Changed = 1'791'290'096, Day = 86'400;  //2026-10-06 12:34:56 UTC
+  //2025-10-06 12:34:56 UTC; 2025-07-01 and 2025-01-15, 12:00 UTC
+  constexpr s64 Changed = 1'759'754'096, Summer = 1'751'371'200, Winter = 1'736'942'400, Day = 86'400;
   {
     HostZone zone("WEST+4");
-    CHECK((dated(Changed, Changed + Day) == all({2026, 10, 6, 8, 34, 56})), true);
-    CHECK((dated(Changed, Changed - 3'600) == all({2026, 10, 6, 7, 34, 56})), true);
+    CHECK((dated(Changed, Changed + Day) == all({2025, 10, 6, 8, 34, 56})), true);
+    CHECK((dated(Changed, Changed - 3'600) == all({2025, 10, 6, 7, 34, 56})), true);
     CHECK(m.call("sceRtcGetCurrentClockLocalTime", {Buffer}), 0);
-    CHECK((dates(Buffer)[0] == Date{2026, 10, 6, 7, 34, 56}), true);
+    CHECK((dates(Buffer)[0] == Date{2025, 10, 6, 7, 34, 56}), true);
     CHECK(setting(6), u32(-240));
     CHECK(setting(7), 0);
   }
   {
     HostZone zone("EST5EDT,M3.2.0,M11.1.0");
-    constexpr s64 Summer = 1'782'907'200, Winter = 1'768'478'400;  //2026-07-01 and 2026-01-15, 12:00 UTC
-    CHECK((dated(Summer, Summer + Day) == all({2026, 7, 1, 8, 0, 0})), true);
+    CHECK((dated(Summer, Summer + Day) == all({2025, 7, 1, 8, 0, 0})), true);
     CHECK(setting(6), u32(-300));
     CHECK(setting(7), 1);
-    CHECK((dated(Winter, Winter + Day) == all({2026, 1, 15, 7, 0, 0})), true);
+    CHECK((dated(Winter, Winter + Day) == all({2025, 1, 15, 7, 0, 0})), true);
     CHECK(setting(6), u32(-300));
     CHECK(setting(7), 0);
     //2025-11-02 05:30 UTC is 01:30 EDT; 06:10 UTC, 01:10 EST
@@ -192,6 +193,16 @@ static auto fileDates() -> void {
     m.system.memory.fill(Buffer, 0xcc, 48);
     m.kernel.writeTimes(Buffer, (folder.path / "data/none").string());
     CHECK((dates(Buffer) == all({1980, 1, 1, 0, 0, 0})), true);
+  }
+  for(auto [rules, zone, summer] : {std::tuple{"AEST-10AEDT,M10.1.0,M4.1.0/3", 600u, Winter},  //Sydney
+                                    std::tuple{"IST-1GMT0,M10.5.0,M3.5.0/1", 0u, Summer}}) {  //Ireland
+    HostZone zoned(rules);
+    m.kernel.startTime = u64(summer) * 1'000'000;
+    check(__LINE__, rules, setting(6), zone);
+    check(__LINE__, rules, setting(7), 1);
+    m.kernel.startTime = u64(summer == Summer ? Winter : Summer) * 1'000'000;
+    check(__LINE__, rules, setting(6), zone);
+    check(__LINE__, rules, setting(7), 0);
   }
   {
     HostZone zone("JST-9");

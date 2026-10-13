@@ -2034,6 +2034,8 @@ struct Kernel {
   auto dialogMessage(u32 parameters, DialogRequest& request) -> u32;
   auto dialogKeyboard(u32 parameters, DialogRequest& request) -> void;
   auto dialogSaves(u32 parameters, DialogRequest& request, bool details = true) -> void;
+  auto dialogFocus(u32 parameters, const std::vector<DialogRequest::Save>& shown, const std::string& save,
+                   bool unbroken = false) -> u32;
   auto dialogAnswered(const DialogRequest& asked, const DialogAnswer& given) -> void;
   auto dialogSaved(u32 parameters, const DialogRequest& asked, const DialogAnswer& given) -> std::optional<u32>;
   auto savedataUnshown(u32 parameters) -> u32;
@@ -2111,7 +2113,8 @@ struct Kernel {
   auto sceRtcGetTickResolution() -> void;
   auto sceRtcGetAccumulativeTime() -> void;
   auto sceKernelCacheUnneeded() -> void;
-  static auto localSeconds(s64 seconds, s64& local, bool* daylight = nullptr) -> bool;
+  static auto localSeconds(s64 seconds, s64& local) -> bool;
+  static auto hostZone(s64 seconds, s32& minutes, bool& daylight) -> void;
   auto writeDate(u32 address, u64 microseconds, bool local) -> bool;
   struct Exec {  //sceKernelLoadExec's program, put in as the kernel's loop next goes round (never kept in states)
     bool pending = false;

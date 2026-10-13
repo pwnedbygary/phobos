@@ -110,18 +110,15 @@ auto Kernel::sceKernelStopUnloadSelfModule() -> void {
 }
 
 //(which setting, where to put it): the system's settings (psputility_sysparam.h). The time zone and daylight saving
-//time are the host's at the clock's now, as the clock's local time and the memory stick's dates have them: the zone
-//as pspsdk has it, its offset from UTC in minutes without daylight saving time ("EST = -300"), and daylight saving
-//time a setting of its own, 1 while it's kept (an hour on top). Language 1 is English; button swap 1 means the cross
-//button confirms, as outside Japan; anything else reads 0.
+//time are the host's at the clock's now (hostZone()), as the clock's local time and the memory stick's dates have
+//them. Language 1 is English; button swap 1 means the cross button confirms, as outside Japan; anything else reads 0.
 auto Kernel::sceUtilityGetSystemParamInt() -> void {
   u32 which = arg(0), value = 0;
   if(which == 6 || which == 7) {  //PSP_SYSTEMPARAM_ID_INT_TIMEZONE, PSP_SYSTEMPARAM_ID_INT_DAYLIGHTSAVINGS
-    s64 now = s64((startTime + cycles / (CPUFrequency / 1'000'000)) / 1'000'000), local = now;
+    s32 minutes = 0;
     bool daylight = false;
-    if(!localSeconds(now, local, &daylight)) local = now;
-    if(which == 6) value = u32(s32((local - now) / 60 - (daylight ? 60 : 0)));
-    if(which == 7) value = daylight;
+    hostZone(s64((startTime + cycles / (CPUFrequency / 1'000'000)) / 1'000'000), minutes, daylight);
+    value = which == 6 ? u32(minutes) : u32(daylight);
   }
   if(which == 8) value = 1;  //PSP_SYSTEMPARAM_ID_INT_LANGUAGE
   if(which == 9) value = 1;  //PSP_SYSTEMPARAM_ID_INT_BUTTON_SWAP
@@ -449,15 +446,35 @@ static auto hostCalendar(s64 seconds, bool local, std::tm& when) -> bool {
 }
 
 //A moment (seconds since 1970) as the host's local date and time, given as the seconds since 1970 that date and time
-//would be in UTC: the zone's offset then is the difference (std::tm has no portable field for it). daylight: whether
-//the zone keeps daylight saving time then. False if the host can't tell.
-auto Kernel::localSeconds(s64 seconds, s64& local, bool* daylight) -> bool {
+//would be in UTC: the zone's offset then is the difference (std::tm has no portable field for it). False if the host
+//can't tell.
+auto Kernel::localSeconds(s64 seconds, s64& local) -> bool {
   std::tm when{};
   if(!hostCalendar(seconds, true, when)) return false;
   s64 days = daysFromYearOne(when.tm_year + 1900, when.tm_mon + 1, when.tm_mday) - daysFromYearOne(1970, 1, 1);
   local = days * 86'400 + when.tm_hour * 3'600 + when.tm_min * 60 + when.tm_sec;
-  if(daylight) *daylight = when.tm_isdst > 0;
   return true;
+}
+
+//The host's time zone at a moment (seconds since 1970) as a PSP's settings keep one (pspsdk): the zone, its offset
+//from UTC in minutes without daylight saving time ("EST = -300"), and daylight saving time, a setting of its own, an
+//hour on top while it's kept. The zone is the lesser of its offsets on the year's first of January and of July, which
+//takes both hemispheres alike, and Ireland's too, whose zone files keep its winter as the "daylight saving" time;
+//daylight saving time is kept while the offset is more (a zone whose daylight saving time isn't an hour, as Lord
+//Howe Island's, can't be told exactly). UTC where the host can't tell.
+auto Kernel::hostZone(s64 seconds, s32& minutes, bool& daylight) -> void {
+  minutes = 0, daylight = false;
+  s64 local = 0, year = 0;
+  u32 month = 0, day = 0;
+  if(!localSeconds(seconds, local)) return;
+  dateFromYearOne(daysFromYearOne(1970, 1, 1) + (local - (local < 0 ? 86'399 : 0)) / 86'400, year, month, day);
+  auto offset = [&](u32 first) -> s64 {  //on the year's first of that month
+    s64 at = (daysFromYearOne(year, first, 1) - daysFromYearOne(1970, 1, 1)) * 86'400, there = at;
+    return localSeconds(at, there) ? there - at : 0;
+  };
+  s64 standard = std::min(offset(1), offset(7));
+  minutes = s32(standard / 60);
+  daylight = local - seconds > standard;
 }
 
 //A ScePspDateTime (psprtc.h: year, month, day, hour, minute and second as 16-bit numbers, then microseconds) at an

@@ -26,8 +26,9 @@
 //    folder, erasing a data file the file alone (and its name from PARAM.SFO's list). Names that would lead out of
 //    the save's folder, and buffers outside the program's memory, are refused. The PSP also encrypts the secure files
 //    and hashes them in PARAM.SFO: not done here (the files are only Phobos's to read; the hashes are zeros). A
-//    list's load that names no save takes the one its dialog would focus (or, that one broken, the first that isn't),
-//    a list's save the list's first name, the name written back either way (savedataUnshown()).
+//    list's load that names no save takes the one its dialog would focus (that one broken, the one the same focus
+//    takes among those that aren't), a list's save the list's first name, the name written back either way
+//    (savedataUnshown()).
 //  - A message: answered at once, as if the player pressed Yes (or OK), the message noted.
 //  - The keyboard: each field's text entered as it is, an empty one given the console's nickname, each CHANGED
 //    (keyboard()).

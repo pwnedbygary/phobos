@@ -94,8 +94,9 @@ at its Update) adds a line: the mode (pspsdk's name), the structure's size, the 
 save's names as the game gave them, a list mode's names (the first 8, and how many in all), a
 list dialog's `focus` (in the sizes that have it) and the save chosen from the list
 (`chosen`: the player's, where the app shows the dialog; otherwise, for a load, the save the
-dialog would focus among the saves there, or the first that isn't broken if that one is, and
-for a save the list's first name, unless that's `"<>"`, the game's folder alone), the data
+dialog would focus among the saves there, or if that one is broken the one the same focus
+takes among those that aren't, and for a save the list's first name, unless that's `"<>"`,
+the game's folder alone), the data
 file's name, the buffer's address and size and the data's size, and whether the save is on
 the memory stick; the sizes mode's msData, the list and files modes' most, the size mode's
 files, a save mode's title; then after `->` the result (the system's savedata errors named)

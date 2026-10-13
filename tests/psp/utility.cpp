@@ -803,11 +803,12 @@ static auto savedataMemstick() -> void {
 
 //A list's load or save answered with no front end, naming no save of its own: a load takes what a PSP's dialog shows
 //first, the focused save among those there (7th Dragon 2020 lists DATA00 to DATA49; its DATA03 loads), nothing there
-//NO_DATA, and the focused one broken, the first that isn't (the focused one where all are); a save the list's first
-//name ("<>" the game's folder alone, whatever else of the game's is there). A loaded or saved name is written back
-//into the request's save name, as a choice is (Brandish: The Dark Revenant's loads went on only with it). A request
-//naming its save takes it; a list with no first name, and a game's name that isn't plain, are refused, as before, a
-//save making nothing and a load reading nothing, the game's folder there or not.
+//NO_DATA, and the focused one broken, the one the same focus takes among those that aren't (the latest left of a
+//broken latest; the focused one where all are); a save the list's first name ("<>" the game's folder alone, whatever
+//else of the game's is there). A loaded or saved name is written back into the request's save name, as a choice is
+//(Brandish: The Dark Revenant's loads went on only with it). A request naming its save takes it; a list with no first
+//name, and a game's name that isn't plain, are refused, as before, a save making nothing and a load reading nothing,
+//the game's folder there or not.
 static auto savedataListAnswers() -> void {
   HostFolder stick;
   KernelMachine m;
@@ -869,13 +870,24 @@ static auto savedataListAnswers() -> void {
     check(__LINE__, "nothing", saved() == "" && m.system.memory.readString(Buffer, 8) == "bad" && folders() == before,
           true);
   }
-  std::filesystem::remove(stick.path / "PSP/SAVEDATA/NPJH50459DATA01/DATA.BIN");  //(the list save's) broken
-  listed(4, "", list, 1);  //the first there, broken: the first that isn't
+  //the focused save broken (its data file gone): the one the same focus takes among those that aren't
+  auto saves = stick.path / "PSP/SAVEDATA";
+  std::filesystem::remove(saves / "NPJH50459DATA05/DATA.BIN");
+  auto dated = [&](const char* path, int hours) {  //(a save's date: its PARAM.SFO's, else its folder's)
+    std::filesystem::last_write_time(saves / path, std::filesystem::file_time_type::clock::now() -
+                                     std::chrono::hours(hours));
+  };
+  dated("NPJH50459DATA01/PARAM.SFO", 3), dated("NPJH50459DATA03", 2), dated("NPJH50459DATA05", 1);
+  listed(4, "", list, 3);  //the latest, DATA05, broken: DATA03, not the oldest
   CHECK(runSave(m), 0);
   CHECK(m.system.memory.readString(Buffer, 8) == "third" && saved() == "DATA03", true);
-  listed(4, "", {"DATA00", "DATA01"}, 0);  //all there broken: the focused one
+  std::filesystem::remove(saves / "NPJH50459DATA01/DATA.BIN");
+  listed(4, "", list, 1);  //the first, DATA01, broken
+  CHECK(runSave(m), 0);
+  CHECK(m.system.memory.readString(Buffer, 8) == "third" && saved() == "DATA03", true);
+  listed(4, "", {"DATA01", "DATA05"}, 2);  //all there broken: the focused one, the last
   CHECK(runSave(m), 0x8011'0309);
-  CHECK(saved() == "DATA01", true);
+  CHECK(saved() == "DATA05", true);
 }
 
 //The savedata trace (the runner's --trace-savedata): each request a line, as the game made it, the save chosen from

@@ -136,6 +136,8 @@ struct HostZone {
     setenv("TZ", zone, 1);
     tzset();
   }
+  HostZone(const HostZone&) = delete;
+  auto operator=(const HostZone&) -> HostZone& = delete;
   ~HostZone() {
     had ? setenv("TZ", kept.c_str(), 1) : unsetenv("TZ");
     tzset();
