@@ -945,7 +945,9 @@ auto delaySlotsEachWay() -> void {
 // target's code goes: a function a call site has linked to, rewritten by the program itself halfway; a loop that
 // rewrites its own first instruction on every round, with a larger constant each time (its block, running on from a
 // section that went, mustn't go on to its old self); and a function called through two mirrors in turn (its section
-// compiled afresh for each). The recompiler must end as the interpreter does, links made and waiting, also with code
+// compiled afresh for each), which keeps the address bgezal links (as it runs through either mirror), called also from
+// a site first compiled right after a call through the other mirror (whose exit mustn't take the code compiled for
+// that mirror). The recompiler must end as the interpreter does, links made and waiting, also with code
 // memory small enough to start afresh every few blocks; and runs of a few instructions at a time, chained and not, must
 // stop in the same places.
 auto linkedBlocks() -> void {
@@ -956,16 +958,19 @@ auto linkedBlocks() -> void {
       for(uint32_t word : words) m.ram.write32(address, word), address += 4;
     };
     //main: 40 rounds of calling the function, rewriting its first word at round 20, every third call through the
-    //uncached mirror; then the self-rewriting loop
+    //uncached mirror, and at round 30, right after a call through the mirror, a call from a site compiled only then;
+    //then the self-rewriting loop
     put(Base, {addiu(s0, zero, 0), lui(t7, Function >> 16), ori(t7, t7, Function & 0xffff), lui(t3, Mirrored >> 16),
                ori(t3, t3, Mirrored & 0xffff), lui(t6, addiu(s1, s1, 100) >> 16),
                ori(t6, t6, addiu(s1, s1, 100) & 0xffff), addiu(t5, zero, 20),
                /*32, a round:*/ addiu(s0, s0, 1), bne(s0, t5, 2), nop, sw(t6, 0, t7),
                /*48:*/ addiu(t4, zero, 3), div_(s0, t4), mfhi(t4), beq(t4, zero, 5), nop,
-               /*68:*/ jal(Function), nop, j(Base + 96), nop,
-               /*84:*/ jalr(ra, t3), nop, nop,
-               /*96:*/ slti(t0, s0, 40), bne(t0, zero, -18), nop, j(Loop), nop});
-    put(Function, {addiu(s1, s1, 1), jr(ra), nop});
+               /*68:*/ jal(Function), nop, j(Base + 92), nop,
+               /*84:*/ jalr(ra, t3), nop,
+               /*92:*/ addiu(t9, zero, 30), bne(s0, t9, 3), nop, jal(Function), nop,
+               /*112:*/ slti(t0, s0, 40), bne(t0, zero, -22), nop, j(Loop), nop});
+    //the function: what bgezal links, its own address through the mirror it runs from, goes into s4
+    put(Function, {addiu(s1, s1, 1), addu(t2, ra, zero), bgezal(zero, 1), nop, xor_(s4, s4, ra), jr(t2), nop});
     //the loop: its first word becomes addiu s2,s2,50 by the store in it, then 51, 52 and so on, a round each
     put(Loop, {lui(t8, addiu(s2, s2, 50) >> 16), ori(t8, t8, addiu(s2, s2, 50) & 0xffff), lui(t9, (Loop + 16) >> 16),
                ori(t9, t9, (Loop + 16) & 0xffff), /*16:*/ addiu(s2, s2, 1), sw(t8, 0, t9), addiu(t8, t8, 1),
@@ -985,8 +990,8 @@ auto linkedBlocks() -> void {
   CHECK(same, 1);
   CHECK(runs[0].cpu.scc.halted, 1);
   CHECK(runs[1].cpu.scc.halted, 1);
-  CHECK(runs[0].gpr(s1), 19 + 21 * 100);  //(round 20's call already took the rewritten word)
-  CHECK(runs[1].gpr(s1), 19 + 21 * 100);
+  CHECK(runs[0].gpr(s1), 19 + 22 * 100);  //(round 20's call already took the rewritten word; round 30 called twice)
+  CHECK(runs[1].gpr(s1), 19 + 22 * 100);
   CHECK(runs[0].gpr(s2), 1 + (50 + 78) * 29 / 2);  //(round r took the word round r - 1 stored: 50 + r - 2)
   CHECK(runs[1].gpr(s2), 1 + (50 + 78) * 29 / 2);
   //(links were made: the call site's to the function, and j Loop's waits since the loop's first block went)
@@ -1019,7 +1024,7 @@ auto linkedBlocks() -> void {
     }
   }
   CHECK(mismatches, 0);
-  CHECK(runs[1].gpr(s1), 19 + 21 * 100);
+  CHECK(runs[1].gpr(s1), 19 + 22 * 100);
   CHECK(runs[1].gpr(s2), 1 + (50 + 78) * 29 / 2);
 }
 
