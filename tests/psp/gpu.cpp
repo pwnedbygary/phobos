@@ -2532,7 +2532,8 @@ static auto gpuBlendingApart() -> void {
     hardware.ge.setRenderer(nullptr);
   }
   //and dithered, by the source's alpha or a fixed factor, adding or subtracting: the dither goes in the source term
-  //(draw.frag's TERM), at least 85% of the channels the same (undithered, only the matrix's one 0 would be); those far
+  //(draw.frag's TERM), at least 75% of the channels the same (the M1's 87%, Mesa's lavapipe's 81%, as GPUs round their
+  //own blending's sums a little differently; undithered, only the matrix's one 0 would be); those far
   //off, no more than 1 in 100, are dark blends layered over each other, where the term with a dither below 0 is held
   //at 0 by the GPU (Death Jr. II's glow is a dithered blend whose matrix is all ones and twos)
   {
@@ -2559,7 +2560,7 @@ static auto gpuBlendingApart() -> void {
     std::printf("  the GPU's own blending, dithered: of %llu channels %llu the same, %llu more than 8 off\n",
                 (unsigned long long)channels, (unsigned long long)same, (unsigned long long)far);
     CHECK(far * 100 <= channels, true);
-    CHECK(same * 20 >= channels * 17, true);
+    CHECK(same * 4 >= channels * 3, true);
     CHECK(gpu->statistics.readingDraws, before.readingDraws);
     hardware.ge.setRenderer(nullptr);
   }
