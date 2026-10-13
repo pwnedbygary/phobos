@@ -323,6 +323,7 @@ auto System::unload() -> void {
   cpu.recompiler.sectionTable.clear();  //(compiled code reads it, so it mustn't outlive the sections it points at)
   cpu.recompiler.sectionTable.shrink_to_fit();
   cpu.recompiler.table = nullptr;
+  cpu.recompiler.exits = {}, cpu.recompiler.into = {}, cpu.recompiler.waiting = {}, cpu.recompiler.outOf = {};
   cpu.recompiler.allocator.reset();
   pixels = {};
   latePixels = {}, lateWidth = lateHeight = 0;
