@@ -40,8 +40,11 @@ evidence. Clean room: PPSSPP not read (its CPU, JIT and IR code not at all), JPC
   block, the FPU's keeping the registers held, loads and stores in 7 to 8 host instructions; the lane-by-lane VFPU
   instructions with their prefixes worked out as the block is compiled (vfpuEach), the math functions and vf2i at rest;
   blocks linked straight to the blocks they go on to, unlinked when those blocks' code goes.
-- **Numbers** (Mac, medians of rounds taking turns, the load 25 to 300: the host instructions carry it): see part
-  86 (the rounds are under way as this is written).
+- **Numbers** (Mac, Vulkan fast, the emulation thread's host instructions and ms a frame, medians of three rounds
+  taking turns; the load 30 to 300, so the instructions carry it): Super Monkey Ball's story 636 -> 520 M (-18%, 60 ->
+  49 ms), Disaster Report 3 playing 52 -> 38 M (-26%, 4.4 -> 3.4 ms), the Need for Speeds, Twisted Metal's logo and the
+  Armored Cores' intros 8 to 11% fewer, Colin McRae, the Armored Cores and Twisted Metal playing 8 to 19%, the GE-bound
+  scenes 2 to 5%; the software renderer alike where the CPU counts.
 - **Exact**: the 21 scenes' hashes identical to master's in the software renderer (100 frames, every frame's picture
   and VRAM, then RAM and the machine's state), Vulkan fast and Vulkan accurate (200 frames, the end's RAM and state);
   the NEON adder against vfpuDot on 72 million random results; 62 broken versions of the changes, 59 caught by

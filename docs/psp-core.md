@@ -11119,27 +11119,55 @@ the Need for Speeds' idle thread rotating its queue 175,000 times a frame, goes 
 The Mac, master (`b3507c1db`) against this branch (`ae85b27b0`: the review's changes after it change no compiled code),
 the bench runners from the scenes' states, medians of three rounds taking turns in Vulkan fast (MoltenVK, 1x) and two in
 the software renderer (4 drawing threads). "Fps it allows" is 1000 over the emulation thread's ms. The Mac's load
-average was 34 to 144 (up to 300 at times) through these rounds (three other agents, and the Cursor app's own renderer
+average was 30 to 144 (up to 300 at times) through these rounds (three other agents, and the Cursor app's own renderer
 at up to 3.5 cores), so the times swing with the cores the thread got; the host instructions a frame hardly move with
 that, and carry the comparison.
 
-(The rounds of master against the branch are being measured as this is written; their table follows in the
-next commit.)
+| Scene | Vulkan fast: emulation thread ms a frame (fps it allows) | M host instructions | Software: emulation thread ms | M host instructions |
+| --- | --- | --- | --- | --- |
+| Death Jr. II, playing | 31.2 -> 28.9 (32 -> 35), -7% | 389 -> 383 (-2%) | 15.0 -> 15.7 (+4%) | 162 -> 165 (+2%) |
+| Sonic Rivals, a stage | 30.1 -> 24.3 (33 -> 41), -19% | 277 -> 273 (-2%) | 9.9 -> 9.2 (-7%) | 107 -> 104 (-3%) |
+| Activision Hits Remixed, Atlantis | 23.1 -> 26.9 (43 -> 37), +16% | 269 -> 265 (-2%) | 7.0 -> 6.9 (-2%) | 67 -> 61 (-9%) |
+| Ghost of Sparta, menu | 46.3 -> 42.6 (22 -> 23), -8% | 431 -> 423 (-2%) | 88.4 -> 87.7 (-1%) | 935 -> 932 (-0%) |
+| NFS Most Wanted, race | 21.3 -> 19.0 (47 -> 53), -11% | 320 -> 290 (-9%) | 23.5 -> 22.6 (-4%) | 351 -> 320 (-9%) |
+| NFS Most Wanted, profile | 20.3 -> 19.2 (49 -> 52), -5% | 329 -> 302 (-8%) | 20.9 -> 20.1 (-4%) | 332 -> 305 (-8%) |
+| NFS Underground Rivals, title | 19.2 -> 17.6 (52 -> 57), -8% | 323 -> 295 (-9%) | 20.2 -> 18.6 (-8%) | 307 -> 279 (-9%) |
+| Super Monkey Ball Adventures, story | 59.7 -> 49.2 (17 -> 20), -18% | 636 -> 520 (-18%) | 64.1 -> 54.1 (-16%) | 686 -> 576 (-16%) |
+| Army of Two, playing | 66.4 -> 61.1 (15 -> 16), -8% | 585 -> 556 (-5%) | 94.6 -> 86.9 (-8%) | 1015 -> 978 (-4%) |
+| Colin McRae 2005 | 15.1 -> 14.0 (66 -> 71), -7% | 178 -> 162 (-9%) | 21.2 -> 20.9 (-1%) | 214 -> 200 (-7%) |
+| Armored Core Formula Front, playing | 10.3 -> 9.6 (97 -> 104), -6% | 95 -> 88 (-8%) | 8.4 -> 7.2 (-14%) | 71 -> 63 (-11%) |
+| Armored Core Silent Line, playing | 2.2 -> 1.8 (454 -> 568), -20% | 18 -> 15 (-19%) | 2.3 -> 2.0 (-16%) | 21 -> 18 (-14%) |
+| Disaster Report 3, playing | 4.4 -> 3.4 (230 -> 293), -22% | 52 -> 38 (-26%) | 6.3 -> 5.7 (-10%) | 61 -> 51 (-16%) |
+| Twisted Metal, playing | 3.9 -> 3.3 (258 -> 299), -14% | 42 -> 37 (-10%) | 4.6 -> 4.0 (-11%) | 47 -> 43 (-7%) |
+| Twisted Metal, logo movie | 15.9 -> 14.6 (63 -> 69), -8% | 317 -> 286 (-10%) | 17.0 -> 15.2 (-11%) | 317 -> 286 (-10%) |
+| Disaster Report 3, intro | 8.2 -> 7.8 (122 -> 128), -5% | 158 -> 147 (-7%) | 8.9 -> 8.2 (-7%) | 160 -> 148 (-7%) |
+| Armored Core Formula Front, intro | 11.9 -> 12.0 (84 -> 83), +1% | 165 -> 147 (-11%) | 10.6 -> 10.0 (-6%) | 166 -> 148 (-11%) |
+| Armored Core Silent Line, intro | 13.4 -> 12.6 (74 -> 80), -7% | 154 -> 137 (-11%) | 9.8 -> 9.2 (-6%) | 158 -> 141 (-11%) |
+
+Super Monkey Ball's story and Disaster Report 3's play, where the VFPU's matrix products run, take 18 and 26% fewer
+host instructions (49 and 3.4 ms a frame from 60 and 4.4); the Need for Speeds, Twisted Metal's logo movie and the
+Armored Cores' intros, polling system functions in tiny blocks, 8 to 11% (the links, and the delay slots' stores);
+Colin McRae, the Armored Cores and Twisted Metal playing 8 to 19%; the GE-bound scenes (Death Jr. II, Sonic Rivals, Hits
+Remixed, Ghost of Sparta, Army of Two) 2 to 5%. In the software renderer the emulation thread also draws the bands it
+takes while it waits for the drawing threads (part 74), so its instructions follow the bands it took too (Death Jr. II
+2% more); the CPU-heavy scenes come out as in Vulkan. The last code's runner (`3878e0db3`, the review's changes) against
+`ae85b27b0` on four scenes: the same instructions a frame within 0.05%.
 
 Where each change counts (Vulkan fast, M host instructions a frame, one round each, the six scenes the CPU matters in):
 
 | Scene | Master | VFPU adder in NEON | delay slots each way | cold code, loads and stores | prefixes compiled (vfpuEach) | blocks linked |
 | --- | --- | --- | --- | --- | --- | --- |
-| Super Monkey Ball Adventures, story | 636 | 542 (-14.8%) | 534 (-1.2%) | 527 (-1.1%) | 525 (-0.4%) |  |
-| Disaster Report 3, playing | 52 | 45 (-12.9%) | 44 (-2.2%) | 43 (-1.8%) | 39 (-7.3%) |  |
-| Colin McRae 2005 | 179 | 173 (-3.0%) | 170 (-1.9%) | 166 (-2.0%) | 165 (-0.5%) |  |
-| Armored Core Formula Front, playing | 95 | 91 (-4.3%) | 90 (-1.3%) | 89 (-1.1%) | 89 (+0.5%) |  |
-| NFS Most Wanted, race | 319 | 315 (-1.4%) | 305 (-3.1%) | 301 (-1.2%) | 301 (+0.1%) |  |
-| Army of Two, playing | 585 | 573 (-2.0%) | 566 (-1.2%) | 562 (-0.8%) | 560 (-0.3%) |  |
+| Super Monkey Ball Adventures, story | 636 | 542 (-14.8%) | 534 (-1.2%) | 527 (-1.1%) | 525 (-0.4%) | 520 (-0.8%) |
+| Disaster Report 3, playing | 52 | 45 (-12.7%) | 44 (-2.3%) | 43 (-1.8%) | 39 (-7.3%) | 38 (-2.0%) |
+| Colin McRae 2005 | 179 | 173 (-2.9%) | 170 (-1.9%) | 166 (-2.0%) | 165 (-0.5%) | 162 (-1.7%) |
+| Armored Core Formula Front, playing | 95 | 91 (-4.1%) | 90 (-1.3%) | 89 (-1.2%) | 89 (+0.5%) | 88 (-1.8%) |
+| NFS Most Wanted, race | 320 | 315 (-1.5%) | 305 (-3.1%) | 301 (-1.2%) | 301 (+0.1%) | 290 (-3.6%) |
+| Army of Two, playing | 585 | 573 (-2.0%) | 566 (-1.2%) | 562 (-0.8%) | 560 (-0.3%) | 556 (-0.6%) |
 
 The NEON adder is most of it where the VFPU's matrix products run (Super Monkey Ball's eight vtfm.q a vertex batch,
 Disaster Report 3's), the prefixes compiled most of the rest of Disaster Report 3 (its frustum test); the compiled
-code's own changes take 1 to 3% each from every scene that runs much guest code.
+code's own changes take 1 to 4% each from every scene that runs much guest code, the links most from the polling
+scenes.
 
 ### Accuracy
 
