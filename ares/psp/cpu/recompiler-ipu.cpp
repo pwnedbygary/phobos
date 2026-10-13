@@ -198,7 +198,8 @@ auto Allegrex::Recompiler::emitSPECIAL3(u32 instruction) -> bool {
 //ADD Rd,Rs,Rt, ADDI Rt,Rs,i16 and SUB Rd,Rs,Rt: ADDU's, ADDIU's and SUBU's results, but a result that overflows a
 //signed 32-bit number raises an exception and leaves the destination as it was. The result goes into a host
 //register first, and on an overflow the instruction runs through the interpreter from the start (nothing written
-//yet), which raises the exception exactly as it always has. rd is the destination's number (rt's, for ADDI).
+//yet: cold code), which raises the exception exactly as it always has. rd is the destination's number (rt's, for
+//ADDI).
 auto Allegrex::Recompiler::emitTrapping(u32 address, u32 instruction, u32 count, bool delaySlot, u32 rd,
                                         bool subtract) -> void {
   mov32(reg(0), Rs);
@@ -207,10 +208,7 @@ auto Allegrex::Recompiler::emitTrapping(u32 address, u32 instruction, u32 count,
   else add32(reg(0), reg(0), Rt, set_o);
   auto overflow = jump(flag_o);
   if(rd) mov32(def(rd), reg(0));
-  auto done = jump();
-  setLabel(overflow);
-  emitFallback(address, instruction, count, delaySlot);
-  setLabel(done);
+  emitColdFallback({overflow}, address, instruction, count, delaySlot);
 }
 
 //MULT, MULTU, MADD, MADDU, MSUB and MSUBU Rs,Rt: the 64-bit product of rs and rt (each widened by its sign, or
@@ -356,11 +354,7 @@ auto Allegrex::Recompiler::emitSPECIAL(u32 address, u32 instruction, u32 count, 
     sljit_emit_op0(compiler, isSigned ? SLJIT_DIVMOD_S32 : SLJIT_DIVMOD_U32);  //r0: the quotient; r1: the remainder
     mov32(Lo, reg(0));
     mov32(Hi, reg(1));
-    auto done = jump();
-    setLabel(byZero);
-    if(byMinusOne) setLabel(byMinusOne);
-    emitFallback(address, instruction, count, delaySlot);
-    setLabel(done);
+    emitColdFallback({byZero, byMinusOne}, address, instruction, count, delaySlot);
     return true;
   }
 

@@ -173,6 +173,7 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
   mov64(sreg(2), imm((sljit_sw)writePages.data()));
   auto bodyLabel = sljit_emit_label(compiler);
   calls = false;
+  cold.clear();
   prefixes = {};  //(not known as a block starts: recompiler-vfpu.cpp)
   forgetAll();  //(nor is anything held: a block before it may have left anything in those registers)
   u32 count = 0;       //instructions in the block so far
@@ -231,6 +232,8 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
   } else if(going == Next::Unknown) {
     emitEnd(count, false, 0);
   }
+  for(auto& code : cold) code();
+  cold.clear();
 
   //(endFunction() as nall has it, but for the body's address, which is only known in between)
   memory::jitprotect(false);
@@ -401,6 +404,31 @@ auto Allegrex::Recompiler::emitFallback(u32 address, u32 instruction, u32 count,
   for(u32 k = 0; k < Held; k++) {
     if(holding.pending[k] >= 0) mov32(sreg(3 + k), gpr(holding.pending[k]));
   }
+}
+
+//Cold code: the jumps given go to code, out of the block's straight line, which then comes back here, to the end of
+//the instruction's fast path. It's emitted after the block's end (emit()), holding what the block holds here and
+//knowing where a delay slot goes (destination), as if it were here; so the registers the instruction reads must be
+//read before the first of the jumps.
+auto Allegrex::Recompiler::emitCold(std::initializer_list<sljit_jump*> jumps, const std::function<void ()>& code)
+  -> void {
+  auto back = sljit_emit_label(compiler);
+  std::vector<sljit_jump*> from;
+  for(auto jump : jumps) if(jump) from.push_back(jump);
+  cold.push_back([this, back, from, code, kept = holding, where = destination] {
+    auto here = sljit_emit_label(compiler);
+    for(auto jump : from) sljit_set_label(jump, here);
+    holding = kept, destination = where;
+    code();
+    sljit_set_label(sljit_emit_jump(compiler, SLJIT_JUMP), back);
+  });
+}
+
+//emitFallback() as cold code.
+auto Allegrex::Recompiler::emitColdFallback(std::initializer_list<sljit_jump*> jumps, u32 address, u32 instruction,
+                                            u32 count, bool delaySlot) -> void {
+  calls = true;
+  emitCold(jumps, [=, this] { emitFallback(address, instruction, count, delaySlot); });
 }
 
 //The game's registers in host registers: within a block, a register's value once read stays in a host register,

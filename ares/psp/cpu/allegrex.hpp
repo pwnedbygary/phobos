@@ -529,6 +529,13 @@ struct Allegrex {
     auto emitPC(u32 address, bool delaySlot) -> void;
     auto emitInterpreter(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
     auto emitFallback(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
+    //Code a native instruction rarely takes (an access off the fast path, an overflow, a division the host can't
+    //make, an FPU mode or result its native code leaves to the interpreter, the VFPU's prefixes not at rest), kept
+    //out of the block's straight line: emitted after the block's end, each from its jumps and back (emitCold()).
+    std::vector<std::function<void ()>> cold;
+    auto emitCold(std::initializer_list<sljit_jump*> jumps, const std::function<void ()>& code) -> void;
+    auto emitColdFallback(std::initializer_list<sljit_jump*> jumps, u32 address, u32 instruction, u32 count,
+                          bool delaySlot) -> void;
     auto isBranch(u32 instruction) const -> bool;
     //Where the delay slot being compiled goes after it, when that's known as it's compiled (emitDelaySlot()): pc and
     //pd aren't stored before such a delay slot, so its calls into the interpreter store them first (emitPC()).

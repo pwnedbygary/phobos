@@ -88,8 +88,7 @@ template<u32 Terms> static inline auto vfpuDots(const uint32x4_t a[], const uint
   uint32x4_t half = vshlq_u32(one, vsubq_s32(adjust, vreinterpretq_s32_u32(one)));
   uint32x4_t up = vcgtq_u32(vaddq_u32(dropped, vandq_u32(mantissa, one)), half);
   mantissa = vsubq_u32(mantissa, vandq_u32(up, vcgtzq_s32(adjust)));
-  uint32x4_t carry = vshrq_n_u32(mantissa, 24);
-  mantissa = vshlq_u32(mantissa, vnegq_s32(vreinterpretq_s32_u32(carry)));
+  uint32x4_t carry = vshrq_n_u32(mantissa, 24);  //(rounded up to exactly 2^24, whose fraction is 0 like 2^23's)
   int32x4_t e = vaddq_s32(vaddq_s32(highest, adjust), vreinterpretq_s32_u32(carry));
   //(a sum of 0 flushes whatever its exponent, so the flush comes after the overflow)
   uint32x4_t flush = vorrq_u32(vcleq_s32(e, vdupq_n_s32(-127)), vceqzq_u32(magnitude));
@@ -501,12 +500,7 @@ auto Allegrex::Recompiler::emitVFPU(u32 address, u32 instruction, u32 count, boo
     auto lanes = self.vfpuLine(vd, written);
     for(u32 i : range(written)) mov32(field(&self.vfpu.r[lanes[i]]), imm(constants[i]));
   }
-  if(busy) {
-    auto done = jump();
-    setLabel(busy);
-    emitVFPUCall(address, instruction, count, delaySlot);
-    setLabel(done);
-  }
+  if(busy) emitCold({busy}, [=, this] { emitVFPUCall(address, instruction, count, delaySlot); });
   return true;
 }
 
