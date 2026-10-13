@@ -91,6 +91,49 @@ commits are on the branch, and a third's with an independent review's points.
   `~/phobos-work/scratch/review-b00` (the review's points: the runners, the runs in `runs/`, the scratch front end in
   `front/`).
 
+## PSP: modules from downloads — sceKernelLoadModuleNpDrm, packed relocations, imported variables; God Eater 2 in English — 2026-10-13
+
+Branch `cursor/psp-npdrm-modules-2b67`, on master (`0a9a7fa75`, #234), merged with master since (#235, #236).
+docs/psp-core.md, part 88, has the evidence. Clean room: uOFW's module manager and loadcore, pspsdk's headers,
+pspautotests' recordings, RFC 1321, PPSSPP's notes read only as a description of the PSP; JPCSP not read. StateVersion
+28 (each module keeps its imported variables; 27 is part 87's). The owner's PGD/NPDRM code (pgd.cpp, pgd.hpp, io.cpp's
+sceNpDrm functions) is unchanged and wasn't needed.
+- **Before**: God Eater 2 (NPJH50832) with RedArtz's English patch v2.0 and its folder `PSP/GAME/NPJH50832` on the stick
+  stopped at the patch's "your DLC file is corrupted or missing": ModuleMgrForUser 0xf2d8d1b4 missing.
+- **The folder**: its 45 `.sprx` modules are plain ELFs, its EDATs plain too: nothing needs NPDRM decryption (the
+  owner's sceNpDrmEdataSetupKey leaves the plain PATCH.EDAT as it is, as before).
+- **sceKernelLoadModuleNpDrm**: uOFW's checks and errors (ILLEGAL_CONTEXT from an interrupt, ILLEGAL_ADDR, a '%' is
+  UNKNOWN_MODULE_FILE, options ILLEGAL_ADDR or ILLEGAL_SIZE, then sceIoOpen's own error); an NPDRM module as sold
+  (EDATA) refused, UNSUPPORTED_PRX_TYPE (chosen), its key (npdrm's module key, derived from the EDATA and the licensee
+  key, and the `~PSP` decryption with it) not derived: that's what's missing for store-bought download modules; any
+  other file loads as sceKernelLoadModule's do (a plain one, as custom firmware and emulators load it: chosen).
+- **The loader**: packed relocations (PT_PSP_REL2), read as uOFW's loadcore does, the steps its decompilation loses
+  settled by the modules (all 459,660 relocations of the 45 land in their segments, every jump in its code); imported
+  variables linked as modules load, unload and move (`linkImports()`, `relinkVariable()`), the program's included.
+- **What the game asked for next**: sceMpegRingbufferQueryPackNum (packnum recorded), MD5 (sceMd5 and UtilsForUser's,
+  the context as hash/md5ctx recorded), sceRtcConvertUtcToLocalTime and back.
+- **PBOOT.PBP**: not booted by the core (it boots the disc's EBOOT.BIN); not needed here: the disc image already is the
+  1.30 update, its EBOOT.BIN the patched one; the folder's PBOOT.PBP is Sony's encrypted program (tag 0x2e5e10f0, a key
+  the core hasn't). Not done.
+- **The game now** (fresh stick with the folder): title, the game's install notice in English, the Main Menu, Character
+  Entry, the appearance screen, the first save, the opening with English subtitles, the update's English hints, and the
+  base, where the player walks and Fran talks in English. A mission not reached (the story first sends the player
+  about).
+- **Checks** (`5a7c2452b`, merged with master): tests/psp 502/0 (five new groups; of two local runs one had the
+  timing-dependent group "ge loads through the depth buffer's views wait for the threads" fail on the loaded Mac, as
+  before; CI's passed), tests/allegrex 60/0, tests/psp/ares 318/0. God Eater 2 without the folder as before (the same
+  pictures, its log but the loader's old note); twelve other games (nine PSN releases, three that load modules) with the
+  base's runner and this one: the same pictures but animation steps and Kenka Bancho's movie timing, which two base runs
+  show too; their logs the same. The game's chain again on the merged code: 108 of 111 captures as before, the rest a
+  moment apart.
+- **Review**: an independent read-only review found two blockers, both fixed (`1998c3014`, `5a7c2452b`): MD5 copying
+  from an empty message's null pointer (GCC's UBSan stopped CI's first run), and master's font states test reading
+  layout 28 as 26 with the variables count in; and minor points, all taken (the clock zones by the settings' minutes for
+  every tick, as uOFW's rtc, tested in fixed zones; state fields; the kernel's own libraries' variables noted; counts
+  and uOFW's slips in part 88; loadcore's segment run; unchanged words not rewritten; broken tables' reasons; relinked
+  code run again). Its remark on the owner's EDATA path (io.cpp's `pgdDescriptor()` reads the PGD header at offset 0,
+  sceNpDrmEdataSetupKey puts the data at 0x90) goes to the owner.
+
 ## PSP: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces — 2026-10-13
 
 Branch `cursor/psp-font-b03-2b67`, on master (`b3507c1db`), PR #236. docs/psp-core.md, part 87, has the evidence. Clean
