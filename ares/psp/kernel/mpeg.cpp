@@ -157,6 +157,13 @@ auto Kernel::sceMpegRingbufferQueryMemSize() -> void {
   result(arg(0) * RingbufferPacketMemory);
 }
 
+//(memory size): how many packets a ringbuffer that size holds, 0x868 bytes each, the size taken unsigned
+//(video/mpeg/ringbuffer/packnum recorded 0xffffffff giving 0x1e741a, and 0x80000000 0xf3a0d). God Eater 2's movie
+//module asks it before it plays a movie.
+auto Kernel::sceMpegRingbufferQueryPackNum() -> void {
+  result(arg(0) / RingbufferPacketMemory);
+}
+
 //(mode): the memory sceMpegCreate needs.
 auto Kernel::sceMpegQueryMemSize() -> void {
   result(LibraryMemory);
