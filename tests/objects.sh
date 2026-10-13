@@ -30,7 +30,8 @@ mkdir -p "$BUILD/objects"
 printf '%s\n' "$ROOT" > "$BUILD/.phobos-checkout"
 #(what compiles and links cut short left, once no run could still be writing it: objects, and programs by their names)
 find "$BUILD/objects" -type f -name '*.part-*' -mmin +120 -exec rm -f {} + 2> /dev/null || true
-find "$BUILD" -maxdepth 1 -type f -name '*-????????????????.part-*' -mmin +120 -exec rm -f {} + 2> /dev/null || true
+OBJECTS_HEX16=$(printf '[0-9a-f]%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)
+find "$BUILD" -maxdepth 1 -type f -name "*-$OBJECTS_HEX16.part-[0-9]*" -mmin +120 -exec rm -f {} + 2> /dev/null || true
 
 PHOBOS_JOBS=${PHOBOS_JOBS:-1}
 OBJECTS=()

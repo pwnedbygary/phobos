@@ -5,14 +5,14 @@ name: PSP Core Tests
 # Phobos builds it (tests/psp/ares/run-tests.sh); and the headless runner, built and running a test program
 # (tests/psp/ares/runner-test.sh). Their paths are what those builds compile or read: the core, nall, ares's framework
 # and libco, sljit and its configuration, Vulkan's headers, libchdr, FFmpeg's build, the runner, the desktop's disc
-# reader, the tests, and the byte files the PSP's tests share with the app's (android/app/src/test/resources/psp-*).
-# The CPU's suite runs on an ARM64 host too, and again built as the app's release builds are
-# (PHOBOS_TESTS_MODE=release), beside the sanitized runs.
+# reader, the tests, and the files the PSP's tests share with the app's (android/app/src/test/resources/psp-*: the
+# dialogs' byte form, the keyboard's cases). The CPU's suite runs on an ARM64 host too, and again built as the app's
+# release builds are (PHOBOS_TESTS_MODE=release), beside the sanitized runs.
 # A version tag runs every suite (a tag's push takes no path filter). The runners are pinned to Ubuntu 24.04 (its
 # GCC 13), so a new image is a change made on purpose. Each suite's last line, its count, goes in the run's summary
-# with the commit; the Allegrex and system lanes keep their groups' results (pass, FAIL or skip with why) as an
-# artifact. What a lane must have is named in PHOBOS_TESTS_REQUIRE (tests/allegrex/harness.hpp's skip()): without it,
-# a group that needs it fails instead of skipping.
+# with the commit; the x86-64 Allegrex lane's sanitized run and the system lane keep their groups' results (pass, FAIL
+# or skip with why) as an artifact. What a lane must have is named in PHOBOS_TESTS_REQUIRE
+# (tests/allegrex/harness.hpp's skip()): without it, a group that needs it fails instead of skipping.
 
 on:
   push:
@@ -102,6 +102,7 @@ jobs:
         run: |
           uname -m
           c++ --version | head -1
+          [[ $(uname -m) == aarch64 ]] || { echo "this lane is for an ARM64 host; it got $(uname -m)"; exit 1; }
 
       - name: Run the tests
         shell: bash
@@ -162,7 +163,8 @@ jobs:
         env:
           PSP_GPU_ON_CPU: 1
           PHOBOS_TESTS_REQUIRE: >-
-            vulkan,vulkan-fast,vulkan-transforms,vulkan-palettes,vulkan-moves,vulkan-reads,vulkan-2x,vulkan-3x,vulkan-stencil-export,programs,ge-round3,ge-round6
+            vulkan, vulkan-fast, vulkan-transforms, vulkan-palettes, vulkan-moves, vulkan-reads, vulkan-2x, vulkan-3x,
+            vulkan-stencil-export, programs, ge-round3, ge-round6
           PHOBOS_TESTS_REPORT: ${{ runner.temp }}/psp-report.tsv
         run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
 

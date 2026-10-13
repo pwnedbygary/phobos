@@ -131,7 +131,9 @@ static auto atracIDs() -> void {
 
 //Setting a file (audio/atrac/setdata, headerfields): one of the other codec, an ID not handed out, no bytes, bytes
 //that aren't a RIFF file, and a header whose samples, offset and decoder delay need more frames than its data holds
-//are refused; sceAtracSetDataAndGetID hands out an ID of the file's codec. Without decoders (a build without FFmpeg)
+//are refused; sceAtracSetDataAndGetID hands out an ID of the file's codec. The four given the whole file, and a
+//halfway one said to be read as far as its buffer goes, take a size whose top bit is set as far as memory goes (none
+//at all: no file). Without decoders (a build without FFmpeg)
 //every file is refused as unreadable, as before there were any.
 static auto atracSetting() -> void {
   Machine m;
@@ -155,6 +157,33 @@ static auto atracSetting() -> void {
   m.system.memory.write(4, File + 0x50, 251904 - 2048 - 368 + 1);
   CHECK(m.call("sceAtracSetDataAndGetID", {File, u32(at3.size())}), 0x8063'0008);
   m.system.memory.write(4, File + 0x50, 247501);
+  //a size taken as negative reaches to the end of memory (7th Dragon 2020-II's 0xffffffff): the whole file there,
+  //and a file ending where memory does all of it (the reach found to the byte)
+  CHECK(m.call("sceAtracSetDataAndGetID", {File, 0xffff'ffff}), 1);
+  m.call("sceAtracGetSoundSample", {1, R, R + 4, R + 8});
+  CHECK(word(m, R), 247500);
+  m.call("sceAtracGetRemainFrame", {1, R});
+  CHECK(word(m, R), ~0u);  //(all of it loaded)
+  m.call("sceAtracReleaseAtracID", {1});
+  u32 last = 0x0800'0000 + u32(m.system.memory.ram.size()) - u32(at3.size());
+  m.system.memory.copyIn(last, at3.data(), at3.size());
+  CHECK(m.call("sceAtracSetDataAndGetID", {last, 0x8000'0000}), 1);
+  m.call("sceAtracGetRemainFrame", {1, R});
+  CHECK(word(m, R), ~0u);
+  m.call("sceAtracReleaseAtracID", {1});
+  //the same for the others given the whole file: on an ID, and the mono ones (the file read: a stereo one refused);
+  //and a halfway buffer said to be read as far as it goes
+  CHECK(m.call("sceAtracSetData", {plus, File, 0xffff'ffff}), 0);
+  m.call("sceAtracGetRemainFrame", {plus, R});
+  CHECK(word(m, R), ~0u);
+  CHECK(m.call("sceAtracSetHalfwayBuffer", {plus, File, 0xffff'ffff, 0xffff'ffff}), 0);
+  m.call("sceAtracGetRemainFrame", {plus, R});
+  CHECK(word(m, R), ~0u);
+  CHECK(m.call("sceAtracSetMOutData", {plus, File, 0xffff'ffff}), 0x8063'0019);
+  CHECK(m.call("sceAtracSetMOutDataAndGetID", {File, 0xffff'ffff}), 0x8063'0019);
+  CHECK(m.call("sceAtracSetDataAndGetID", {File + 0x10000, 0x8000'0000}), 0x8063'0006);  //(no RIFF header there)
+  CHECK(m.call("sceAtracSetDataAndGetID", {0, 0xffff'ffff}), 0x8063'0006);  //(no memory there)
+  CHECK(m.call("sceAtracSetDataAndGetID", {0x0400'0000, 0xffff'ffff}), 0x8063'0006);
   Machine none;
   none.kernel.audioDecoders = {};
   none.system.memory.copyIn(File, at3.data(), at3.size());
