@@ -502,6 +502,30 @@ auto Kernel::sceRtcGetCurrentClockLocalTime() -> void {
   result(writeDate(arg(0), now, true) ? 0 : ErrorInvalidPointer);
 }
 
+//A tick moved by the minutes the system's settings put between UTC and local time: its time zone, and an hour more
+//while daylight saving time is kept, the same for every tick (uOFW's rtc moves it by the two settings with
+//sceRtcTickAddMinutes, as its local clock is), here the settings sceUtilityGetSystemParamInt reports (the host's zone
+//now: hostZone()). Added for a UTC tick (toLocal), taken off a local one. The tick at the address at arg(0), the
+//result at arg(1), as pspsdk's psprtc.h has them (chosen: uOFW's decompilation hands the two to TickAddMinutes the
+//other way round, unverified, and no recording shows either); 0, or INVALID_POINTER for an address the program's
+//memory doesn't hold, as the tick arithmetic's (chosen). God Eater 2 asks once it has made its first save.
+auto Kernel::rtcConvertZone(bool toLocal) -> void {
+  if(!memory.reaches(arg(0), 8) || !memory.reaches(arg(1), 8)) return result(ErrorInvalidPointer);
+  s32 minutes = 0;
+  bool daylight = false;
+  hostZone(s64((startTime + cycles / (CPUFrequency / 1'000'000)) / 1'000'000), minutes, daylight);
+  s64 offset = s64(minutes + (daylight ? 60 : 0)) * 60'000'000;
+  u64 tick = memory.read(4, arg(0)) | u64(memory.read(4, arg(0) + 4)) << 32;
+  tick += u64(toLocal ? offset : -offset);
+  memory.write(4, arg(1), u32(tick));
+  memory.write(4, arg(1) + 4, u32(tick >> 32));
+  result(0);
+}
+
+//(UTC tick, where to put the local tick) and (local tick, where to put the UTC tick).
+auto Kernel::sceRtcConvertUtcToLocalTime() -> void { rtcConvertZone(true); }
+auto Kernel::sceRtcConvertLocalTimeToUTC() -> void { rtcConvertZone(false); }
+
 //A ScePspDateTime's seconds since 1970, its microseconds left out.
 auto Kernel::dateSeconds(u32 date) -> s64 {
   s64 days = daysFromYearOne(memory.read(2, date), memory.read(2, date + 2), memory.read(2, date + 4))
