@@ -2,8 +2,8 @@
 
 **Last reconciled: 2026-10-13** (this opening, the evidence boundary below and the
 [test and performance plan](#test-and-performance-plan-2026-10-13), against master
-`4788125f1`; the 2026-09-25 update of tasks 50 and 72 with device-measured N64
-performance and aspect/preview work, in the
+`4788125f1`, that plan's waits since brought to `542da5a28`; the 2026-09-25 update of
+tasks 50 and 72 with device-measured N64 performance and aspect/preview work, in the
 [performance audit](performance-audit.md#2026-09-25-device-profiling-retroid-pocket-6-and-changes),
 task dispositions and safeguards from 2026-09-24 for the touch-controls/performance work
 in the [handoff](handoff.md#touch-controls-overhaul-and-performance-scan--2026-09-24-in-progress)
@@ -55,7 +55,7 @@ entry, or a part of [psp-core.md](psp-core.md), overrides this summary.
   The PSP core's speed on the RP6 is measured in many of its parts (both Vulkan modes on
   Turnip and Qualcomm's driver in 53, 54, 63, 65, 67 and 68, 4x among them; the software
   renderer in 61, 64, 67 and 68, and beside Vulkan in 52 and 53; earlier rounds from part
-  24), the tables of parts 36, 41, 49, 52, 53, 54 and 63 gathered in
+  24), the tables of parts 36, 49, 52, 53, 54 and 63 and part 41's figures gathered in
   [psp-gpu-renderers.md](psp-gpu-renderers.md#speed); its other RP6 reports
   (stuck or black games, among them parts 69, 71 and 72) are in those parts and the
   handoff.
@@ -311,10 +311,10 @@ alone.
 | 12 | Test historical PSP state compatibility | P1 | Later | #223 and #229 settling the layout (28 on master since #243; #223's own 28 must move) | — |
 | 13 | Measure the actual Android driver | P0 | Later, on the RP6 | 09, 10 | — |
 | 14 | Expand replayable JIT differential tests | P1 | Later | #237, 06 | — |
-| 15 | Retain PSP dialog interaction tests | P1 | Later | #230, 02 | — |
+| 15 | Retain PSP dialog interaction tests | P1 | Later | 02 (#230 merged since) | — |
 | 16 | Protect settings and input persistence | P2 | Later | #231, #232 | — |
 | 17 | Test Android launch and storage | P2 | Later | 15 | — |
-| 18 | Test native save failure safety | P1 | Later | #230 (`PhobosRunner.cpp`) | — |
+| 18 | Test native save failure safety | P1 | Later | nothing now: #230 (`PhobosRunner.cpp`) merged since; ready to schedule | — |
 | 19 | Fuzz PSP input boundaries | P2 | Later | 04 | — |
 | 20 | Test APK update artifact contracts | P1 | Later | 02 | — |
 | 21 | Smoke-test packaged desktop builds | P2 | Later | 05 | — |
