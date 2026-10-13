@@ -31,9 +31,9 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## Docs: the plan's opening and evidence brought up to date; the 2026-10-13 test and performance plan indexed — 2026-10-13
 
-Branch `cursor/test-plan-01-2b67` (PR #244), on master (`4788125f1`, #236), master merged in since (`542da5a28`, #230).
-Package 01 of the 2026-10-13 test and performance plan, an outside audit of master `b3507c1db` given to the owner as a
-plan bundle (not kept in the repository). Documentation only.
+Branch `cursor/test-plan-01-2b67` (PR #244), on master (`4788125f1`, #236), with #243 and #230 merged in since
+(`542da5a28`). Package 01 of the 2026-10-13 test and performance plan, an outside audit of master `b3507c1db` given
+to the owner as a plan bundle (not kept in the repository). Documentation only.
 - **The stale summaries**: the implementation plan opened with "Last reconciled: 2026-09-25" and "zero fresh native
   performance runs", and this file's entry point with September's next action, though later sections record the
   RP6's N64 measurements (from 2026-09-25), the 2026-10-02 presentation comparison with Mupen64Plus-AE, the desktop
@@ -45,7 +45,7 @@ plan bundle (not kept in the repository). Documentation only.
   N64 regressions kept, and no comparison is presented as new. Nothing historical is removed.
 - **The plan indexed**: the implementation plan's "Test and performance plan (2026-10-13)" lists the 25 packages
   with their dispositions (eight now, 08 pulled forward from the triage's later ones; 15 later, each waiting on a
-  named PR or package except 18, whose #230 has merged since; two not now), what each waits on, and its PR.
+  named PR or package except 18, whose only wait, #230, has merged since; two not now), what each waits on, and its PR.
 - **Baseline at triage** (master `9333a8d7a`): the libadrenotools submodule at `8fae8ce25`; open PRs #223, #229,
   #230, #231, #232, #236 and #237, and two agents' branches without PRs (GE headroom and NpDrm modules, since #240
   and #243); CI on `0a9a7fa75` (v2.2.0's commit): PSP Core Tests 60/0 and 489/0, Desktop Build green, Android Build
@@ -69,8 +69,11 @@ plan bundle (not kept in the repository). Documentation only.
   speed tables' parts, the tag build's note, the desktop runs' dates, one list of what CI doesn't run, the part
   count), and master's #230 merged in. A third delta review found two facts left stale by that merge: the part count
   (#230 added part 81) and rows 15 and 18 still waiting on #230; both taken, with its suggestions (#230 in this
-  entry's opening and its "Since", the plan's waits dated, part 41's speed figures named as prose). Row 18 now waits
-  on nothing: #229 also edits `PhobosRunner.cpp`, but only a comment at the axis slots.
+  entry's opening and its "Since", the plan's waits dated, part 41's speed figures no longer called a table). Row 18
+  now waits on nothing: no open PR changes `PhobosRunner.cpp` against master (GitHub's diff of #229 shows #230's
+  comment at the axis slots only because it still compares #229 with `49fec7215`, and #229 has #230's branch
+  merged). A fourth delta review found this sentence had first called that comment #229's own edit; fixed, with its
+  suggestions (#243 in the opening, row 18's adaptation, clearer wording).
 
 ## PSP: the host's right stick for patched games, the keyboard in a field's own characters, 7th Dragon 2020-II past its certificate — 2026-10-12
 

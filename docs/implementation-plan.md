@@ -68,10 +68,10 @@ entry, or a part of [psp-core.md](psp-core.md), overrides this summary.
 The current testing priority is the PSP: throughput and fast-forward, and Vulkan at 1x,
 2x, 4x and 5x, accurate and fast modes measured apart. The N64 and Mario Tennis
 regressions stay protected, and the ranked roadmap below (its P0, the matched Mario
-Tennis comparison, included) stands as it was. No matched native comparison with the reference below
-(same device, driver, ROM, scene, settings and traces) has been made, and no overall
-speedup or parity is claimed. Historical device reports remain regression targets, not
-current measurements.
+Tennis comparison, included) stands as it was. No matched native comparison with the
+reference below (same device, driver, ROM, scene, settings and traces) has been made, and
+no overall speedup or parity is claimed. Historical device reports remain regression
+targets, not current measurements.
 
 The user-supplied reference is:
 
@@ -314,7 +314,7 @@ alone.
 | 15 | Retain PSP dialog interaction tests | P1 | Later | 02 (#230 merged since) | — |
 | 16 | Protect settings and input persistence | P2 | Later | #231, #232 | — |
 | 17 | Test Android launch and storage | P2 | Later | 15 | — |
-| 18 | Test native save failure safety | P1 | Later | nothing now: #230 (`PhobosRunner.cpp`) merged since; ready to schedule | — |
+| 18 | Test native save failure safety | P1 | Later (adapted: an extracted write helper first) | nothing now: #230 (`PhobosRunner.cpp`) merged since; ready to schedule | — |
 | 19 | Fuzz PSP input boundaries | P2 | Later | 04 | — |
 | 20 | Test APK update artifact contracts | P1 | Later | 02 | — |
 | 21 | Smoke-test packaged desktop builds | P2 | Later | 05 | — |
