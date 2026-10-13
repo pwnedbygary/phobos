@@ -356,6 +356,7 @@ auto System::power(bool reset) -> void {
   cpu.pages = pageTable.data();
   cpu.watched = memory.watched.data();
   memory.watching = [this](u32 page) { cpu.recompiler.protect(page); };
+  memory.unwatched = [this](u32 page) { cpu.recompiler.unwatched(page); };
   memory.vramGuard = [this](bool busy) {  //(the pages the GE's workers draw over: memory.hpp)
     for(u32 offset = 0; offset < Memory::VRAMSize; offset += Memory::PageSize) {
       if(!memory.vramPageBusy(offset / Memory::PageSize)) continue;

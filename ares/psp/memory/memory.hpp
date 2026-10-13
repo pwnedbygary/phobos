@@ -74,11 +74,13 @@ struct Memory {
   //The CPU's compiled stores skip write() and changed() (they go straight through the page table), so whoever
   //owns the CPU sets watching(), which watch() calls for each newly watched page: the owner then sends compiled
   //stores to that page through write() from then on, as it does for pages holding compiled code. Without
-  //watching() nobody promises that, and the GE keeps nothing decoded (canWatch()).
+  //watching() nobody promises that, and the GE keeps nothing decoded (canWatch()). unwatched() is told of each page
+  //no longer watched, after watchedWritten(): the owner may let compiled stores go straight to it again.
   std::vector<u8> watched;
   u32 watchedPages = 0;  //how many are watched: none, and changed() needn't look
   std::function<auto (u32 page) -> void> watching;
   std::function<auto (u32 page) -> void> watchedWritten;
+  std::function<auto (u32 page) -> void> unwatched;
 
   //VRAM while the GE's workers still draw into it (ge/threads.cpp: a list's last primitives go on being drawn while
   //the CPU runs on): the pages they draw over (busyPages, of VRAM's 512) are theirs, and anyone else touching one

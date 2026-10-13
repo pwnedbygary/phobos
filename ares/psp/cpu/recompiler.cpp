@@ -19,6 +19,7 @@ auto Allegrex::Recompiler::reset() -> void {
   sections.clear();
   writePages.clear();
   sectionTable.clear();
+  compiled.clear();
   table = nullptr;
   if(!enabled) return;
   if(!allocator) allocator.resize(codeMemory, bump_allocator::executable);
@@ -31,6 +32,7 @@ auto Allegrex::Recompiler::reset() -> void {
   sections.resize(SectionCount);
   writePages.resize(SectionCount);
   sectionTable.assign(SectionCount, nullptr);
+  compiled.assign(SectionCount / 64, 0);
   table = sectionTable.data();
   for(u32 index = 0; index < SectionCount; index++) writable(index);
 }
@@ -41,29 +43,48 @@ auto Allegrex::Recompiler::reset() -> void {
 //running from there runs on to its end, as compiled; no block goes on to one from there after that.)
 auto Allegrex::Recompiler::invalidate(u32 address) -> void {
   if(sections.empty()) return;
-  u32 index = (address & 0x1fff'ffff) / SectionSize;
-  sections[index].reset();
-  sectionTable[index] = nullptr;
-  writable(index);  //no code there now: stores may go straight to it again
+  drop((address & 0x1fff'ffff) / SectionSize);
 }
 
-//A page the page table leaves out has nothing to do here unless code was compiled from it while it was listed (code
-//is only compiled from pages it lists: run()), and its store table entry is already none (whoever takes a page out
-//of the table tells writable()). Memory reports every
-//change to VRAM for all four of its copies, three of which the table never lists, and a hardware renderer's every
-//primitive changes VRAM pages that it holds out of the table (God of War: Ghost of Sparta's 18,500 a frame).
+//invalidate() for every section size bytes from address reach. Only those there are need anything (compiled: memory
+//reports every change to VRAM for all four of its copies, three of which the table never lists, and a hardware
+//renderer's every primitive changes VRAM's pages); a page without one has its store table entry as writable() makes
+//it already, having been told of each change to what that looks at (the page table's entry: vramGuard; its watch:
+//protect(), unwatched()). Without a page table, every one goes.
 auto Allegrex::Recompiler::invalidateRange(u32 address, u32 size) -> void {
   if(sections.empty() || !size) return;
   u32 first = (address & 0x1fff'ffff) / SectionSize;
   u32 last = ((address + size - 1) & 0x1fff'ffff) / SectionSize;
-  for(u32 index = first;; index = (index + 1) % SectionCount) {
-    if(sections[index] || !self.pages || self.pages[index]) {
-      sections[index].reset();
-      sectionTable[index] = nullptr;
-      writable(index);
+  if(!self.pages) {
+    for(u32 index = first;; index = (index + 1) % SectionCount) {
+      drop(index);
+      if(index == last) break;
     }
-    if(index == last) break;
+    return;
   }
+  //(the range, round the end of memory's 512 MiB to its start if it goes past: one or two runs of sections)
+  auto run = [&](u32 from, u32 to) {
+    for(u32 word = from / 64; word <= to / 64; word++) {
+      u64 bits = compiled[word];
+      if(word == from / 64) bits &= ~0ull << from % 64;
+      if(word == to / 64 && to % 64 != 63) bits &= (2ull << to % 64) - 1;
+      while(bits) {
+        u32 index = word * 64 + std::countr_zero(bits);
+        bits &= bits - 1;
+        drop(index);
+      }
+    }
+  };
+  if(first <= last) return run(first, last);
+  run(first, SectionCount - 1), run(0, last);
+}
+
+//The section's code goes: no block starts there now, nor goes on to one, and stores may go straight to it again.
+auto Allegrex::Recompiler::drop(u32 index) -> void {
+  sections[index].reset();
+  sectionTable[index] = nullptr;
+  compiled[index / 64] &= ~(1ull << index % 64);
+  writable(index);
 }
 
 //The owner watches page now (Allegrex::watched): compiled stores to it must go through write() from here on.
@@ -71,11 +92,17 @@ auto Allegrex::Recompiler::protect(u32 page) -> void {
   if(page < writePages.size()) writePages[page] = nullptr;
 }
 
-//Compiled stores may go straight to page index again, unless it holds compiled code (block() takes it out again as
-//it compiles there) or the owner watches it.
+//The owner watches page no more: compiled stores may go straight to it again (writable()).
+auto Allegrex::Recompiler::unwatched(u32 page) -> void {
+  writable(page);
+}
+
+//Compiled stores may go straight to page index again, unless it holds compiled code (block() takes it out as it
+//compiles there) or the owner watches it.
 auto Allegrex::Recompiler::writable(u32 index) -> void {
-  if(!self.pages || index >= writePages.size()) return;
-  writePages[index] = self.watched && self.watched[index] ? nullptr : self.pages[index];
+  if(!self.pages || index >= writePages.size() || index >= sections.size()) return;
+  bool kept = (self.watched && self.watched[index]) || sections[index];
+  writePages[index] = kept ? nullptr : self.pages[index];
 }
 
 //Runs one block, or one instruction in the interpreter where no block can start; returns how many instructions
@@ -121,6 +148,7 @@ auto Allegrex::Recompiler::block(u32 address) -> u8* {
     section = std::make_unique<Section>();
     section->mirror = address >> 29;
     sectionTable[index] = section.get();
+    compiled[index / 64] |= 1ull << index % 64;
   }
   u32 word = address % SectionSize / 4;
   auto& code = section->blocks[word];

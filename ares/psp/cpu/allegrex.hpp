@@ -507,7 +507,9 @@ struct Allegrex {
     auto reset() -> void;
     auto invalidate(u32 address) -> void;
     auto invalidateRange(u32 address, u32 size) -> void;
+    auto drop(u32 index) -> void;
     auto protect(u32 page) -> void;
+    auto unwatched(u32 page) -> void;
     auto writable(u32 index) -> void;
     auto run() -> u32;
     auto block(u32 address) -> u8*;
@@ -590,6 +592,8 @@ struct Allegrex {
     //The same sections, as plain pointers in a table of their own for compiled code to look the next block up in
     //(emitChain()): table points at sectionTable's first.
     std::vector<Section*> sectionTable;
+    //A bit for each section there is (sections[index] set), 64 to a word: the only ones invalidateRange() visits.
+    std::vector<u64> compiled;
     Section** table = nullptr;
 
     //The page table compiled stores use: the CPU's (pages above), except that pages holding compiled code are
