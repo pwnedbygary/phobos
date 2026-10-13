@@ -10512,6 +10512,352 @@ Super Stardust Portable, Syphon Filter: Dark Mirror, The Sims 2: Pets, 1.75 to 5
 - Scratch: `~/phobos-work/scratch/aalines` (fit2.py, the fit; sbs/, the pictures; lib/, the library run;
   lib-compare.tsv).
 
+## Part 79: where the slow games' emulation thread goes, and making it faster — the GPU's palette pictures decoded where taken, memory's changes only where there's code, calm system calls, more of the CPU compiled
+
+On branch `cursor/psp-cpu-speed5-2b67`, on master (`6ab2c5583`, #224 merged in). The task: on the owner's Retroid
+Pocket 6 (Snapdragon 8 Gen 2), PPSSPP holds about 60 frames a second with Vulkan in 22 games where Phobos (Vulkan
+fast, 1x) is far behind in the CPU-bound ones: Need for Speed Most Wanted 5-1-0 22, Underground Rivals 21, Super
+Monkey Ball Adventures 20, Activision Hits Remixed 13, Sonic Rivals 42, Twisted Metal 40, Army of Two 33, God of War:
+Ghost of Sparta 24, Death Jr. II 23, Me & My Katamari 52, Disaster Report 3 52, the two Armored Cores 44 to 46 and
+Colin McRae 41. Find where the emulation thread's time goes in them and make it much faster, every emulated result
+(pictures, sound, saves) the same. Clean room: PPSSPP wasn't read (its CPU, JIT and IR code not at all), JPCSP not
+read. Save states are unchanged (layout 26): nothing new is kept.
+
+The work came in two sessions: the first (four commits, before #224 merged) took the CPU's side; the second merged
+master, measured again with #224 in, and found most of the remaining time outside the CPU.
+
+### How it was measured
+
+On the Mac (an M1), with the headless runner built as Android builds it (O3, thin LTO) and patched in scratch only to
+report the emulation thread's CPU time and its retired host instructions and cycles (the thread's counters), from
+save states in each game (`~/phobos-work/scratch/cpu-speed2/scenes`, listed in "On the RP6"), in Vulkan-fast through
+MoltenVK and in the software renderer. A counting build (scratch) gave each scene's work a frame: guest instructions,
+blocks entered, instructions the interpreter ran from compiled code by kind, loads and stores off the fast path by
+reason, system calls by function, thread switches, the GE's commands, PRIMs and vertices by path, the renderer's
+finishes and read-backs; macOS's `sample` gave each scene's call graph. The Mac was shared with other agents the whole
+time, its load average between 20 and 190, so the emulation thread's retired host instructions a frame, which the load
+hardly moves, carry the comparisons, and its CPU time is given beside them: base and new in turn, three rounds,
+medians.
+
+### Where the time goes (master with #224, Vulkan-fast, before this part's second session)
+
+The share of the emulation thread's samples (macOS's `sample`, inclusive where a part calls others) and the counting
+build's work a frame. "Guest" is the instructions the PSP's CPU ran; "kernel" what the system calls took, from the
+compiled syscall in (the dispatch, the functions, untilNextEvent()); "GE" the display lists run on the emulation
+thread (vertices read, transformed and checked, the renderer's setup, textures decoded); "finishes" the renderer
+waiting for the GPU and reading its pictures back (within GE where a decode asked for it).
+
+| Scene | Host instructions / ms a frame | Guest a frame | Compiled code | Kernel | GE | Finishes | Most of the rest |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Death Jr. II, playing | 1,016 M / 127 | 0.7 M | 1% | 0 | 97% | 53%: 31 a frame (waits 30%) | texture decodes 29%, read-backs' copies |
+| Sonic Rivals, a stage | 632 M / 80 | 0.35 M | 2% | 0 | 95% | 69%: 31 a frame (waits 44%) | decodes 16% |
+| Activision Hits Remixed, Atlantis | 714 M / 87 | 1.0 M | 1% | 0 | 94% | 94%: 61 a frame (waits 61%) | 1 MiB compared after each |
+| Ghost of Sparta, menu | 540 M / 59 | 1.6 M | 10% | 0 | 86% | 0 | forgetting compiled code 17% (GPU::own()), transform 11%, lighting 5% |
+| Army of Two, playing | 590 M / 80 | 4.7 M | 22% | 0 | 71% | 0 | meshTriangles 19%, reading vertices 15%, project() 7% |
+| Super Monkey Ball Adventures, story | 648 M / 73 | 5.0 M | 20% (VFPU helpers 14%) | 0 | 61% | 0 | 50,700 small PRIMs: setup, transform 7%, GPU::begin 15% |
+| Colin McRae 2005 | 190 M / 23 | 2.9 M | 30% | 0 | 56% | 25%: 2 a frame (waits 17%) | |
+| Armored Core Formula Front, playing | 96 M / 16 | 1.1 M | 23% | 0 | 72% | 52%: 5 a frame (waits 33%) | block transfers reading VRAM the GPU drew |
+| Disaster Report 3, playing | 56 M / 7 | 0.95 M | 30% (VFPU helpers 18%) | 0 | 29% | 0 | |
+| Twisted Metal, playing | 45 M / 7 | 0.4 M | 20% | 0 | 49% | 0 | |
+| Need for Speed Most Wanted, race | 431 M / 39 | 5.5 M | 29% | 62%: 526,000 calls | 9% | 0 | untilNextEvent() 18%, the thread status's report 12% |
+| Need for Speed Underground Rivals, title | 433 M / 35 | 5.3 M | 23% | 74%: 502,000 | 0 | 0 | the same three functions |
+| Twisted Metal, logo movie | 407 M / 29 | 5.6 M | 24% | 74%: 370,000 | 0 | 0 | the movie ring's size and a semaphore; Memory::pointer() 18% |
+| Disaster Report 3, intro movie | 185 M / 13 | 2.1 M | 18% | 76%: 212,000 | 0 | 0 | the ring's size and the vertical blank count |
+| Armored Core Formula Front, intro | 195 M / 16 | 3.9 M | 31% | 60%: 139,000 | 0 | 0 | the ring and a semaphore |
+| Armored Core Silent Line, intro | 186 M / 16 | 3.7 M | 28% | 59%: 127,000 | 0 | 0 | the ring and a semaphore |
+
+By the owner's other headings: the interpreter from compiled code runs, a frame, only the syscalls themselves in the
+polling scenes and under 2,000 instructions elsewhere (Disaster Report 3's 49,000 VFPU instructions, its vpfxt and
+vmin/vmax/vsge/vslt, and Colin McRae's 41,000 were the first session's, now compiled); loads and stores off the fast
+path are a handful a frame (stores to watched pages, a texture's); blocks leave for the dispatcher a few hundred times
+a frame (Monkey Ball's 165,000 coprocessor branches taken were the first session's), the rest chained, 0.1 to 2
+million block entries a frame; thread switches are 17 to 150 a frame and the scheduler's look through the threads
+matters only where it follows each call (the Need for Speeds' rotation); sound (SAS mixing) is under 1%.
+Me & My Katamari has no scene: its explorations, in the software renderer, ran the emulation thread at 5 to 6 ms a
+frame, and its slow spots on the RP6 weren't found on the Mac.
+
+
+So in most of these games the CPU's emulation isn't where the time goes:
+- **The renderer waiting for the GPU** (Backbone's engine: Death Jr. II, Sonic Rivals, Activision Hits Remixed): their
+  glow is drawn in tiles of 3D quads, each taking 32x34 texels of a 512x512 CLUT32 picture (the frame the GPU just
+  drew, read as palette indices) through a palette of its own, a channel at a time, into a frame buffer whose bytes
+  lie inside the picture's last rows. A palette texture is one the GPU can't take from its own copy, so the GE
+  decodes it, and with a hardware renderer that decode took every row a 3D primitive may reach at full width, after
+  finishing the GPU's work over any of those bytes: each tile finished the GPU, read two targets back and decoded
+  262,144 texels (31 finishes a frame in Death Jr. II and Sonic Rivals; Hits Remixed finds the decoded copy cached but
+  "suspect", its pages drawn into, and checked all 1 MiB of it after a finish, 61 times a frame). Armored Core
+  Formula Front (5 a frame) and Colin McRae (2) wait the same way, for block transfers.
+- **The GE's work on the CPU** (Super Monkey Ball, Army of Two, Ghost of Sparta): reading, transforming and checking
+  vertices to the GE's rules, and handing triangles to the GPU (Monkey Ball's 50,000 small PRIMs a frame, below the
+  16 vertices fast mode transforms on the GPU; Army of Two's 665,000 vertices). Ghost of Sparta spent 17% more in the
+  recompiler forgetting compiled code for each primitive's VRAM change, though there was none.
+- **Polling system functions** (both Need for Speeds; the intro movies of Twisted Metal, Disaster Report 3 and the
+  Armored Cores): 130,000 to 530,000 calls a frame, each a few hundred host instructions. #224 made them cheaper; a
+  third to half still looked through every thread, timer and file afterwards.
+- **The CPU itself**, compiled code and the VFPU's helpers, is a fifth to a third of the thread where the guest runs
+  millions of instructions a frame (Monkey Ball, Army of Two, Colin McRae, Disaster Report 3), less elsewhere.
+
+### What was done
+
+1. **A texture the GPU drew, decoded only where each 3D triangle takes it** (`draw.cpp`'s `texelBox()`,
+   `texture.cpp`'s `fillDecoded()`, `Decoded::part`, the backends' `makeTexturePart()`). For a 3D triangle mapped by UV
+   (TEXTURE_MAP_MODE 0), every pixel the GPU draws, at any resolution, has its middle inside the triangle and takes
+   its texture coordinates mixed from the corners' by weights of 0 to 1 (draw.frag divides by q, which is 1 at every
+   corner; clipping makes corners on the edges), and its texels are where texelAxis() puts those: the coordinate's,
+   or a filter's two round it. So the texels a PRIM's triangles can take lie between the floors of its corners' least
+   and greatest s and t (u and v by the scale and offset, in texels, as transformRest() and transform.vert make them),
+   less one and more one for a filter. A rasterizer works a pixel's weights out from the same snapped corners it finds
+   the pixel inside by, so they leave 0 to 1 by its rounding alone: two texels more on each side, and a 256th of the
+   reach's length, leave room for that. Held at the edges
+   where the texture holds, or the box isn't known where it would repeat round; nor for a larger texture, the texture
+   matrix's or the environment's mapping, NaN or far-off coordinates; nor for 2D, sprites, lines or points, whose
+   pixels can reach past their corners' coordinates (a sprite's left edge a sixteenth of a pixel further, and above 1x
+   a pixel's middle between two of the GE's: a fraction of a pixel's step, which for a shrunk sprite is many texels).
+   Only a texture in VRAM can be one the GPU drew, and the box is worked out only where a copy in the cache doesn't
+   serve the PRIM as it is (none, one suspect or a part, or one of fewer rows): Army of Two's 650,000 mesh vertices a
+   frame, its textures found in the cache, pay nothing for it. With that box, `fillDecoded()` needs only the bytes of
+   the box's rows:
+   - a copy in the cache whose pages were written since ("suspect": the GPU drew into the texture's other rows) is
+     taken where those bytes, waited for, are as it was decoded from; it stays suspect, its other rows unseen (Hits
+     Remixed);
+   - a texture that decoded whole would wait for the GPU (some byte of it drawn there since the last finish: render to
+     texture, its rows reaching what the GPU draws in) is decoded only in the box, as a part, after what the GPU drew
+     in the box's rows alone; the part's texels are packed, and the backend puts that rectangle alone on the GPU
+     (Vulkan's `makeTexturePart()`: the image is the texture's size, the rest never written nor taken; another backend
+     gets it made whole). The GE never draws from a part (its sampler says none of it is the GE's); a PRIM the renderer
+     refuses, or any other that it doesn't hold, decodes afresh.
+   Every pixel the GPU draws takes the same texels as before, so nothing drawn changes; only the finishes it didn't
+   need, and the texels no pixel takes, are gone. Of Death Jr. II's 31 finishes a frame, 10 are left: the bottom row
+   of tiles reaches the picture's row 272 (its corners' t is exactly 272, and the box adds the GPU's margin), the
+   first row of the frame buffer the tiles draw into, so those wait (column by column, as the tiles go).
+2. **Memory's changes look only at sections with compiled code** (`recompiler.cpp`'s `invalidateRange()`, `drop()`,
+   `unwatched()`; `Memory::unwatched`). A hardware renderer reports each primitive's VRAM change, which memory reports
+   for all four of VRAM's copies, and `invalidateRange()` went through every 4 KiB section of each, setting the store
+   table entry of every page the table lists again (after the first session's change, which skipped unlisted pages
+   without code). Now the recompiler keeps a bit for each section that has one (`compiled`) and drops only those in
+   the range. A page without code has its store table entry right already: what `writable()` looks at is the page
+   table's entry (vramGuard tells the recompiler of each change) and the page's watch, whose end memory now tells the
+   CPU's owner of (`Memory::unwatched`, after `watchedWritten()`), which lets compiled stores go straight to the page
+   again. (That end was what the old walk was for.) `writable()` itself keeps a page holding code out of the table now:
+   vramGuard listing a busy VRAM page again listed it whatever it held, which only the old walk's next pass put right.
+   Without a page table every section in the range goes.
+3. **A rotation or a signal that changed nothing to come leaves the CPU's go as it is** (`Kernel::calm`). After a
+   syscall the kernel looks through every thread, timer and file for something made due sooner, unless the function
+   is quiet (#224's twelve that only look). A function may now say a call was calm: it changed nothing that has a
+   time to come. `sceKernelRotateThreadReadyQueue` is when no other thread took the CPU, even for a moment
+   (`Kernel::switched` counts `switchTo()`'s changes): one taking it may be a thread woken from a wait only to run its
+   callbacks, which with none notified goes back to that wait, its timeout now counted, and the caller runs again (the
+   review's case, now a test). `sceKernelSignalSema` is when it wakes no thread and none took the CPU; both when they
+   refuse. The two Need for Speeds' idle thread
+   rotates its own line 175,000 times a frame, alone in it; the intros of Twisted Metal and both Armored Cores signal
+   a semaphore 47,000 to 185,000 times a frame, polling the movie's ring.
+4. **(First session) Code forgotten only where there could be some**: `invalidateRange()` skipped sections without
+   code whose page the table leaves out (Ghost of Sparta's menu −17.6% host instructions then; the rest of its
+   26% is change 2).
+5. **(First session) A coprocessor branch taken goes on to its target in the block**: bc1t/bc1f, bvt/bvf and their
+   likely forms used to leave the block when taken, for run()'s interpreter step to run the delay slot. With chaining,
+   the taken path does what run() would: counts the branch and stops at the run's limit there (`emitCounted()`),
+   compiles the delay slot, and chains to the target, so every run stops after the same instructions as before. It
+   still leaves for a target just past the delay slot, a branch in a section's last word, delay slots that are
+   branches or end blocks, and, checked as it runs, when a store earlier in the block rewrote the delay slot (its
+   section dropped). Super Monkey Ball's story takes 165,000 a frame.
+6. **(First session) More of the VFPU compiled**: vpfxs/vpfxt/vpfxd store their prefix and viim/vfim their constant;
+   the block follows each prefix's value (what vpfx* set, at rest after an instruction that uses them up, unknown
+   after mtvc or vmtvc), so a prefixed instruction it knows about skips the check; vmin, vmax, vsge, vslt and vhdp at
+   rest run helpers of their own; vmscl and group 7's vmmov, vmidt, vmzero and vmone join the matrix helper; every
+   other VFPU instruction calls `executeVFPU<op>()`, the interpreter for that group without the top-level decode,
+   keeping the host registers held. Disaster Report 3, Monkey Ball and Colin McRae run tens of thousands a frame.
+
+### Numbers
+
+The Mac, master (`6ab2c5583`) against this branch, the bench runners from the scenes' states, medians of three rounds
+taking turns in Vulkan-fast (MoltenVK, 1x; the branch's last code) and two in the software renderer (4 drawing
+threads; the branch's first build, before the review's fixes, none of which touch the software renderer's path).
+"Fps it allows" is 1000 over the emulation thread's ms: what the frame rate would be with that thread the only bound.
+The Mac's load average was 20 to 190 through these rounds (other agents), so the times swing with which cores the
+thread got (as low as 70% of its cycles on the performance cores), most in the short scenes (Silent Line playing,
+3 ms a frame); the host instructions a frame hardly move with that, and carry the comparison.
+
+| Scene | Vulkan-fast: emulation thread ms a frame (fps it allows) | process ms | M host instructions | Software: emulation thread ms | process ms |
+| --- | --- | --- | --- | --- | --- |
+| Death Jr. II, playing | 70.1 -> 33.4 (14 -> 30), -52% | 77.2 -> 38.2 | 983 -> 388 (-60%) | 14.2 -> 14.0 (-1%) | 36.2 -> 35.5 |
+| Sonic Rivals, a stage | 41.9 -> 19.1 (24 -> 52), -54% | 46.6 -> 21.5 | 641 -> 275 (-57%) | 9.9 -> 8.1 (-18%) | 21.5 -> 20.7 |
+| Activision Hits Remixed, Atlantis | 56.6 -> 26.0 (18 -> 38), -54% | 65.7 -> 30.2 | 711 -> 268 (-62%) | 6.6 -> 6.0 (-9%) | 20.1 -> 19.8 |
+| Ghost of Sparta, menu | 41.4 -> 30.2 (24 -> 33), -27% | 44.3 -> 33.5 | 648 -> 429 (-34%) | 86.8 -> 84.2 (-3%) | 264.7 -> 269.0 |
+| NFS Most Wanted, race | 22.9 -> 18.4 (44 -> 54), -20% | 23.3 -> 18.8 | 369 -> 319 (-14%) | 28.9 -> 22.4 (-23%) | 40.7 -> 34.3 |
+| NFS Most Wanted, profile | 24.7 -> 23.4 (41 -> 43), -5% | 25.2 -> 23.9 | 364 -> 329 (-10%) | 26.1 -> 20.2 (-23%) | 31.6 -> 25.9 |
+| NFS Underground Rivals, title | 23.2 -> 20.4 (43 -> 49), -12% | 23.6 -> 20.9 | 362 -> 322 (-11%) | 24.1 -> 20.1 (-17%) | 33.4 -> 29.2 |
+| Twisted Metal, logo movie | 20.8 -> 17.9 (48 -> 56), -14% | 21.2 -> 18.3 | 359 -> 317 (-12%) | 20.5 -> 17.2 (-16%) | 20.8 -> 17.5 |
+| Armored Core Formula Front, intro | 11.4 -> 11.3 (88 -> 89), -1% | 11.9 -> 11.9 | 176 -> 164 (-6%) | 12.0 -> 11.8 (-2%) | 14.6 -> 14.3 |
+| Armored Core Silent Line, intro | 12.3 -> 11.1 (81 -> 90), -10% | 12.8 -> 11.6 | 165 -> 154 (-7%) | 11.9 -> 11.0 (-7%) | 14.4 -> 13.4 |
+| Disaster Report 3, intro | 9.4 -> 9.3 (106 -> 108), -2% | 10.0 -> 9.8 | 158 -> 158 (+0%) | 9.2 -> 9.2 (+0%) | 9.7 -> 9.6 |
+| Disaster Report 3, playing | 6.4 -> 5.8 (156 -> 171), -9% | 7.3 -> 6.8 | 62 -> 52 (-16%) | 7.1 -> 6.2 (-12%) | 21.9 -> 20.2 |
+| Colin McRae 2005 | 18.6 -> 17.2 (54 -> 58), -8% | 20.6 -> 18.7 | 187 -> 178 (-4%) | 21.2 -> 22.3 (+5%) | 67.2 -> 66.7 |
+| Super Monkey Ball Adventures, story | 52.3 -> 48.7 (19 -> 21), -7% | 56.5 -> 52.8 | 662 -> 635 (-4%) | 77.5 -> 67.3 (-13%) | 224.8 -> 213.4 |
+| Army of Two, playing | 57.1 -> 57.6 (18 -> 17), +1% | 64.9 -> 64.8 | 589 -> 584 (-1%) | 97.0 -> 99.3 (+2%) | 217.9 -> 218.9 |
+| Armored Core Formula Front, playing | 9.9 -> 9.3 (101 -> 108), -6% | 11.3 -> 10.5 | 96 -> 95 (-1%) | 8.8 -> 8.4 (-4%) | 22.7 -> 22.1 |
+| Armored Core Silent Line, playing | 2.8 -> 3.2 (358 -> 316), +13% | 3.4 -> 3.8 | 19 -> 18 (-3%) | 2.7 -> 2.4 (-9%) | 6.4 -> 6.0 |
+| Twisted Metal, playing | 4.6 -> 4.1 (216 -> 242), -10% | 5.7 -> 4.9 | 42 -> 42 (-1%) | 4.9 -> 4.8 (-2%) | 12.6 -> 12.1 |
+
+Backbone's three games take less than half the time in Vulkan, two fifths of the host instructions; Ghost of Sparta's
+menu three quarters of the time, two thirds of the instructions; the Need for Speeds and the intro movies 86 to 94%
+of the instructions; Disaster Report 3 playing 84% (the first session's VFPU). In the software
+renderer, which draws Backbone's tiles in its batches (#224's deferred decodes already took only their texels), the
+polled calls and the CPU's changes show. Super Monkey Ball and Army of Two are where they were. Taken again with the
+Mac at a load of 15 to 20, master, the first session's commits (the merge) and this branch, three rounds each: Army
+of Two 589, 583 and 584 M host instructions a frame, 164 M cycles in each; Monkey Ball 662, 632 and 636 M
+instructions, 147, 147 and 143 to 154 M cycles as its runs got the performance cores (83 to 93% of them). The
+software renderer's Ghost of Sparta and Army of Two are bound by their drawing, whose bands the emulation thread
+draws too while it waits (part 74), so its time there follows the bands it took.
+
+On the RP6, where the emulation thread is what holds these games back, the frame rate should follow its time: Death
+Jr. II, Sonic Rivals and Hits Remixed two to three times as fast in Vulkan (more where the GPU's round trips cost more
+than MoltenVK's: two thirds of their finishes are gone), Ghost of Sparta's menu a third, the Need for Speeds and the
+intro movies 10 to 20%. Super Monkey Ball, Army of Two and Colin McRae won't move much: their time is the GE's
+display lists on the CPU (below).
+
+### Accuracy
+
+Every change is the host's alone; nothing a game can see moves.
+- The branch against master from the 21 scenes' states (the table's and Death Jr. II's character select, Hits
+  Remixed's game-select room, Army of Two's menu): in the software renderer, 100 frames with every frame's picture
+  and all of VRAM hashed, drawing settled, then RAM and the machine's whole serialized state; in Vulkan-fast, 200
+  frames, then RAM and the machine's state (VRAM, read back from the GPU, among it): identical, every one, in both.
+  (Per-frame hashes in Vulkan would finish the GPU each frame, which is what the first change avoids.)
+- The library (266 games, 3600 frames, Start at 120 and Cross at 1800, PNGs at 60, 300, 1200 and 3600, the software
+  renderer, two games at a time): master 1d9308714 and this branch, then the 63 games whose pictures differed run again
+  with both. 203 are identical at all four captures; Ghost of Sparta reaches the 900 seconds in both (its retries). Of
+  the 63, in 50 a run of master and a run of the branch agree at every capture, and in 11 master's own two runs differ
+  where the branch does (Battlefront II's random map, LocoRoco's and Sonic Rivals' attract scenes among them). The last
+  two, Crash Tag Team Racing's logo fade at 1200 and Snoopy vs. the Red Baron's clouds at 3600, came out alike in each
+  runner's two runs, both made under a heavy load; run side by side again with the library's options under a light
+  one, the two runners make the same pictures at all four captures and the same sound. No game differs for the branch.
+- The first session's 23 broken versions of its changes (a scratch script, `mutate.py`, each in a copy of the tree
+  running tests/allegrex): 21 caught; the two that aren't change nothing (a "known busy" shortcut whose run-time check
+  then sends the instruction the same way, and an exclusion that execute()'s result makes anyway).
+
+### Checks
+
+- `tests/psp/run-tests.sh` (sanitizers on): 472 groups, 0 failures (master's 469 and these three): "gpu render to
+  texture through palettes: each 3D tile decodes its texels alone, as decoded whole" (the glow's tiles, nearest and
+  filtered, texels 1:1 and not, at 1x and 2x, accurate and fast, against the same with the box off, `GE::boxes`:
+  every byte of VRAM the same, one finish against one a tile; on a Vulkan GPU, skipped without one), "gpu render to
+  texture through palettes, pretend: the box decoded, waiting only for its rows" (a pretend backend: each tile's
+  part, its place and size, its texels through its palette from memory's bytes, one finish for the GPU's picture,
+  none for the tiles after; a whole copy serving a tile after the GPU drew in its other rows, nothing decoded or made
+  again; a byte changed in that tile's box decoding it again, as parts; a part refused to a tile it doesn't hold; a
+  box past a repeating edge not known, the texture decoded whole, and past a held edge stopping there), and "memory
+  and the recompiler: watched pages' stores, sections dropped by a change" (a watched page's stores through write()
+  until a change ends its watch, then straight again, a page with code kept out until a change drops it; sections
+  dropped through VRAM's fourth copy and round memory's end, those outside kept, none left marked); and the quiet
+  functions' group checks the calm calls (each case dispatched as quiet, the next thing's time where it was,
+  dispatching held off among them; a rotation handing the CPU to an equal, a signal waking a thread, and a rotation
+  to an equal woken for callbacks that goes straight back to its delay, the caller running again and that delay's
+  end now sooner, not). The UB sanitizer caught the box's row pitch looked up in the texel-size table before DXT
+  formats were ruled out; fixed.
+- `tests/allegrex/run-tests.sh`: 60 groups, 0 failures (the first session's two new ones among them; its taken
+  coprocessor branches' chained and unchained runs now take a VFPU delay slot too, at rest and with a prefix set
+  before the branch, and compare the VFPU's registers and prefixes).
+- `tests/psp/ares/run-tests.sh`: 318 checks, 0 failed.
+
+### Left, and why
+
+- **The GE's work on the CPU** is now the biggest shared cost: Super Monkey Ball's story, Army of Two and Ghost of
+  Sparta spend 60 to 85% of the emulation thread in display lists (Monkey Ball's 50,700 PRIMs a frame of about six
+  vertices each, below fast mode's 16 that the GPU transforms, read, transformed, clipped and handed over a triangle at
+  a time; Army of Two's 665,000 vertices read and placed by meshTriangles() to the GE's rules; Ghost of Sparta's
+  187,000 transformed and lit). The next steps there, all exact: reading a run of vertices through one pointer for
+  the common formats, each corner's place on the screen worked out once per PRIM rather than per triangle sharing it,
+  and handing small PRIMs over in runs. (A lower fast-mode threshold would move them to the GPU but changes what's
+  drawn, which this task doesn't allow.)
+- **The polled system calls**: the Need for Speeds are about 10% faster (untilNextEvent() after the rotation gone);
+  what's left of each call is the compiled code around it (blocks of 2.8 instructions, each a lookup of the next),
+  the dispatch, the scheduler's look through the threads after each rotation (9%), and the thread status's report
+  copied through memory's general path (17%). Each is a few percent; none moves them near 60 frames a second alone.
+  A syscall costs the PSP's clock a single cycle here, which is why the idle loop spins 175,000 times a frame; giving
+  calls their real time would change every game's timing, and isn't measured.
+- **Death Jr. II's and Sonic Rivals' last 10 finishes a frame**: the bottom tiles' box reaches the picture's row 272
+  (exactly their corners' t, plus the GPU's margin), the frame buffer's first row. Proving the GPU never takes that
+  row would need each pixel's place, not only the corners'. Their 2D passes (8888 textures from a 128-pixel target)
+  are decoded too, as before, where the GPU won't take them from its copy.
+- **The CPU's compiled code**: a fifth to a third of the thread in Monkey Ball, Army of Two, Colin McRae and the
+  polling scenes. Every result is stored as each instruction ends, every block looks the next up through three
+  tables, and the VFPU's arithmetic goes through helpers that read each lane by its register number (vfpuDot() is
+  the PSP's own adder, exact, and slow). Keeping results in host registers across a block and linking blocks directly
+  are the next steps; the VFPU's common operations in native code after that.
+- **A guard for the box**: a part's fetches clamped to its rectangle in draw.frag (as `Push::held` holds a copy's),
+  so that a rasterizer whose weights strayed past its rounding would take the edge's texel rather than one never
+  written. It needs a push constant more in every pipeline; no rasterizer makes the case.
+- Me & My Katamari wasn't measured (no slow scene on the Mac), nor anything on the RP6 (no device here).
+
+### On the RP6
+
+To compare: master (`6ab2c5583`, #224) and this branch, Vulkan fast at 1x as the owner ran them, each scene's frames a
+second over several seconds, base, branch, base again. The scenes are the headless runner's states in
+`~/phobos-work/scratch/cpu-speed2/scenes/NAME` (`state`; the game in `game`; the memory stick it was made with in
+`stick`); an app save state is the same bytes, so a scene's `state` can stand in for a slot's file (save a state in a
+slot, put the scene's `state` in its place, load the slot).
+
+| Scene | Game: where | Expect |
+| --- | --- | --- |
+| dj2-gp | Death Jr. II: playing, the first level | much faster (2.5x less emulation thread on the Mac) |
+| dj2-char | Death Jr. II: Choose Your Character | much faster |
+| sr-play | Sonic Rivals: the first stage | much faster |
+| ahr-gp | Activision Hits Remixed: Atlantis, playing | much faster |
+| ahr-room | Activision Hits Remixed: the game-select room | much faster |
+| gos-menu | God of War: Ghost of Sparta: the main menu | faster (a third less) |
+| nfsmw-race | Need for Speed Most Wanted 5-1-0: a race | about 10% |
+| nfsmw-profile | Need for Speed Most Wanted 5-1-0: the profile screen | about 10% |
+| nfsur-title | Need for Speed Underground Rivals: the title | about 10% |
+| tm-logo | Twisted Metal: Head-On: the Incog Inc logo movie | about 10% |
+| acff-intro, acsl-intro | the Armored Cores' intro movies | a few percent |
+| smba-story | Super Monkey Ball Adventures: the story menu | a few percent (the first session's) |
+| dr3-gp | Disaster Report 3: playing | the first session's (15%) |
+| a2-gp, cmr-gp, acff-gp, acsl-gp, tm-play, dr3-intro | Army of Two, Colin McRae, the Armored Cores and Twisted Metal playing, Disaster Report 3's intro | little |
+
+### Review
+
+An independent read-only review of the whole branch against master (all eight commits) found no change to emulated
+results, and checked exact: the coprocessor branches' counts and stops, the VFPU's helpers against the interpreter,
+the prefixes' tracking, the bitmap's upkeep, the calm calls against what untilNextEvent() reads, the box's formula
+against transform.vert's and the shaders' fetches, the suspect copy's offsets, and the partial upload. Its points:
+- `writable()` didn't keep a page holding code out of the store table, so vramGuard listing a busy VRAM page again
+  could let compiled stores skip write() over code there (master's too; with the bitmap, nothing else put it right
+  later). Fixed: `writable()` checks for code, `unwatched()` just calls it.
+- The box assumes the GPU's weights leave 0 to 1 by its rounding alone; a long sliver could overshoot a fixed margin
+  if a driver's weights strayed. The margin now grows with the reach's length (a 256th). (A shader clamp to the box
+  was its other suggestion; it would change the shaders' push constants for a case no rasterizer makes.)
+- `makeTexturePart()`'s fallback could copy past its buffer for a part outside the texture (no caller makes one):
+  both versions now refuse it.
+- Test gaps, filled: a changed byte in a box, a part refused to a tile it doesn't hold, the edges' boxes, VFPU delay
+  slots in the chained comparison, calm with dispatching held off and with a thread woken for callbacks. That last
+  one failed: a rotation that hands the CPU to such a thread, which finds no callback and goes straight back to its
+  delay, ends with the caller running again, and the delay's end now counted; "the caller keeps the CPU" had called
+  it calm. Fixed: calm means no switch at all (`Kernel::switched`).
+- Comments: the box's wording (a part when decoding whole would wait, not "every row"), history and narration
+  removed, the coprocessor branches' header now opening with what the taken path does.
+- Not done: a packed source copy for parts, so that a suspect part could be kept by its box (Backbone's tiles never
+  reuse one: each has a palette of its own).
+
+The box was then worked out only where a copy in the cache doesn't serve the PRIM as it is: Army of Two's textures are
+in VRAM, and the box of every textured PRIM had cost it 1% more host instructions (its 650,000 mesh vertices a frame
+looked through); now it's the merge's (583.7 against 583.0 M a frame).
+
+A delta review of those fixes and of the box worked out so found no bugs, and checked the boxes' expected rectangles
+by hand and that the old calm rule fails the new test. Its points: a test of vramGuard listing again a busy VRAM page
+that holds code (added: the page stays out of the store table till a change drops the code), a bound in `writable()`
+(added), lines past 120 columns (wrapped). Left: a check of the margin with thin, steep triangles over a long reach,
+and a box whose margin passes 3 texels, which the tests' small boxes can't tell from a fixed 2.05.
+
+### Scratch
+
+`~/phobos-work/scratch/cpu-speed2`: `build.sh` (the bench runners from a revision or the worktree, at most four
+compiles at once; `patches/`: counters, clock, states, the counting build's `stats-patch2.py`, `r2t-patch.py` and
+`why-patch.py` for the finishes' causes), `run.sh`, `bench2.sh` and `benchsum2.py`, `part79table.py` (the rounds:
+`bench2/final1.tsv`, `final3.tsv`, `iso.tsv`), `hashcmp.sh` (`hash/`), `sample.sh`, `prof2.sh` and `sampletop.py`
+(`prof/*-merged-vkf.top`), `stats-all.sh` (`stats/*-merged-vkf.txt`), `breakdown.py`, `tests1.sh` (a filtered copy of
+tests/psp), `lib1.sh` and `lib/` (the library subset), `scenes/` (the states), `commit/` (these notes' drafts).
+
 ## Part 80: the savedata trace — After Burner's dates, the list modes' automatic answer (Brandish, 7th Dragon 2020)
 
 On branch `cursor/psp-savedata2-2b67`, begun on `cursor/psp-colinsave-2b67` (part 77) after its merge of master. Parts

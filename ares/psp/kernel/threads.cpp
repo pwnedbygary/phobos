@@ -194,6 +194,7 @@ auto Kernel::switchTo(Thread* next) -> void {
     next->status = Status::Running;
     cpu.scc.halted = 0;
   } else {
+    switched++;
     if(current) {
       save(current->context);
       current->runCycles += cycles - ranSince;
@@ -751,30 +752,36 @@ auto Kernel::sceKernelDeleteSema() -> void {
 
 //Hands the semaphore's count to the threads waiting on it, the longest-waiting first, while there's enough for the
 //next one: as it's signalled, and as a waiter leaves without its count (waiterLeft()).
-auto Kernel::signalSemaphores(Semaphore& semaphore) -> void {
+auto Kernel::signalSemaphores(Semaphore& semaphore) -> bool {
+  bool woke = false;
   while(true) {
     Thread* next = nullptr;
     for(auto& [uid, thread] : threads) {
       if(thread->status != Status::Waiting || thread->wait != Wait::Semaphore || thread->waitID != semaphore.uid) continue;
       if(!next || thread->readySince < next->readySince) next = thread.get();
     }
-    if(!next || s32(next->waitCount) > semaphore.count) return;
+    if(!next || s32(next->waitCount) > semaphore.count) return woke;
     semaphore.count -= next->waitCount;
     ready(*next, 0);
+    woke = true;
   }
 }
 
+//Waking no thread, and no other taking the CPU, this changes nothing that has a time to come (calm): a count alone.
+//Twisted Metal's and both Armored Cores' intro movies signal one 47,000 to 185,000 times a frame, polling the ring.
 auto Kernel::sceKernelSignalSema() -> void {
   auto found = semaphores.find(arg(0));
-  if(found == semaphores.end()) return result(ErrorUnknownSemaphore);
+  if(found == semaphores.end()) return calm = true, result(ErrorUnknownSemaphore);
   auto& semaphore = found->second;
   s32 count = s32(arg(1));
   //(in 64 bits: a semaphore may hold any count, so the sum can pass what 32 hold)
-  if(count <= 0 || s64(semaphore.count) + count > semaphore.maximum) return result(ErrorSemaphoreOverflow);
+  if(count <= 0 || s64(semaphore.count) + count > semaphore.maximum) return calm = true, result(ErrorSemaphoreOverflow);
   semaphore.count += count;
   result(0);
-  signalSemaphores(semaphore);
+  u64 before = switched;
+  bool woke = signalSemaphores(semaphore);
   reschedule();
+  calm = !woke && switched == before;
 }
 
 //(semaphore, count, timeout)
@@ -1267,16 +1274,24 @@ auto Kernel::sceKernelGetThreadCurrentPriority() -> void {
 //caller's own, the caller does, giving way to its equals, unless interrupts or dispatching are held off: then it
 //keeps the CPU (reschedule()). A user thread's priorities (0x08-0x77) and 0 are taken, anything else is
 //ILLEGAL_PRIORITY, as pspautotests' threads/threads/rotate recorded.
+//With no other thread taking the CPU, even for a moment, this changes nothing that has a time to come (calm): the
+//threads' order in line alone. (One taking it may be woken from a wait to run its callbacks, and go back to that wait
+//and its timeout at once, the caller running again.) The two Need for Speeds' idle thread rotates its own line
+//175,000 times a frame, alone in it.
 auto Kernel::sceKernelRotateThreadReadyQueue() -> void {
+  u64 before = switched;
   u32 priority = arg(0);
   if(priority == 0 && current) priority = current->priority;
-  if(priority < 0x08 || priority > 0x77) return result(ErrorIllegalPriority);
+  if(priority < 0x08 || priority > 0x77) return calm = true, result(ErrorIllegalPriority);
   result(0);
   if(current && current->status == Status::Running && current->priority == priority) {
     current->status = Status::Ready;  //reschedule() picks between it and its equals afresh
     current->readySince = ++readySequence;
-    return reschedule();
+    reschedule();
+    calm = switched == before;
+    return;
   }
+  calm = true;
   Thread* first = nullptr;
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Ready || thread->priority != priority) continue;

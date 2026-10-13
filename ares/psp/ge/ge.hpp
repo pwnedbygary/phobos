@@ -221,6 +221,11 @@ struct GE {
     std::vector<u8> source;
     bool suspect = false;
     bool deferred = false;  //decoded for one batch alone (ensureDecoded()), not kept
+    //A hardware renderer's part (fillDecoded()): only the texels in rows top to rows - 1 and columns left to right -
+    //1 decoded, packed (right - left to a row, from row top), the source the bytes of those rows alone. The GE never
+    //draws from one: the renderer takes it, or the GE decodes the texture afresh for itself.
+    bool part = false;
+    u32 top = 0, left = 0, right = 0;
   };
   struct TextureCache {
     std::unordered_map<TextureKey, std::shared_ptr<Decoded>, TextureKey::Hash> entries;
@@ -270,6 +275,13 @@ struct GE {
   struct Region { s32 left, top, right, bottom; };
   struct Batch;  //(threads.cpp)
   struct Renderer;
+
+  //The texels a hardware renderer may take for a primitive (draw.cpp's texelBox()): rows top to bottom and columns
+  //left to right, inclusive, inside the texture (at most 512 by 512); or, not known, any of them. (Made with {}.)
+  struct TexelBox {
+    bool known;
+    u32 top, bottom, left, right;
+  };
 
   //Texels of a texture inside it (at most 512 by 512), by row and by column: those in a marked row and a marked
   //column; or all of them.
@@ -504,11 +516,12 @@ struct GE {
   //over it has been drawn (render to texture: threads.cpp).
   //copyDraws: whether a primitive drawing over its texture draws the same from a copy taken first (readsAhead()).
   auto decode(Look& look, const Region& region, u32 rows, bool allowDefer = false,
-              const std::function<auto () -> bool>& copyDraws = {}) -> void;
+              const std::function<auto () -> bool>& copyDraws = {},
+              const std::function<auto () -> TexelBox>& boxOf = {}) -> void;
   auto ensureDecoded(Batch& batch) -> void;
-  auto fillDecoded(Look& look, u32 rows) -> void;
+  auto fillDecoded(Look& look, u32 rows, const std::function<auto () -> TexelBox>& boxOf = {}) -> void;
   auto decodeTexels(const Sampler& t, const u8* palette, u32 low, u32 high, u32 width, u32 from, u32 rows,
-                    u32* texels, u32 left = 0, u32 right = ~0u) -> void;
+                    u32* texels, u32 left = 0, u32 right = ~0u, u32 outTop = 0, u32 outLeft = 0) -> void;
   auto textureWritten(u32 page) -> void;
   auto forget(Decoded* entry) -> void;
   auto dropTextures() -> void;
@@ -667,6 +680,8 @@ struct GE {
   auto setRenderer(Renderer* next) -> void;  //ge.cpp
   bool hardware = false;  //the primitive being drawn goes to the renderer (drawVertices())
   bool skipping = false;  //the primitive being drawn changes no pixel: set up, not drawn (drawVertices())
+  bool boxes = true;      //a renderer's textures decoded only as far as its triangles take them (texelBox()); tests
+                          //turn it off to compare
   std::vector<LinePixel> hardwareLine;
   std::vector<Vertex> placed;  //meshTriangles()'s: its corners' clip positions, on the screen
   std::vector<u32> handed;     //and the run of triangles it hands to the renderer
