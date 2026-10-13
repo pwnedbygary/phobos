@@ -1,7 +1,7 @@
 //tools/psp-measure's program (see its main.c) in Phobos's core, driven through its menu as a person would. With
 //PSP_TEST_PROGRAMS holding pspmeasure.elf, its GE tests must run to the end and write every file, start afresh (the
 //first files kept in results-1), run again and draw the same, and skip what's done on a third run; the GE's rounds
-//3 to 6 and the FPU probes must write theirs (round 4's stall check getting past a list the GE doesn't finish, its
+//3 to 7 and the FPU probes must write theirs (round 4's stall check getting past a list the GE doesn't finish, its
 //counts running again over what the program before left of them, not over what this one leaves; round 6's timing
 //records complete, every run finished); then it must leave. With PSP_GE_RESULTS set to the results folder
 //(results/ge) a real PSP (or another emulator) wrote, each file is compared with that folder's, and what differs is
@@ -90,6 +90,12 @@ static const MeasureFile measureFiles6[] = {
   {"patch-cull-edges", 256, 256},
   {"curves-count-v", 256, 256}, {"curves-count-v-65", 256, 256}, {"curves-count-v-100", 256, 256},
   {"curves-count-v-128", 256, 256}, {"curves-count-v-200", 256, 256}, {"curves-count-v-255", 256, 256},
+};
+
+//Round 7's pictures (part 78: anti-aliased lines in every octant, with vertex alphas, blend modes, textures, in 3D).
+static const MeasureFile measureFiles7[] = {
+  {"aa-slopes", 256, 256}, {"aa-axes", 256, 256}, {"aa-alpha", 256, 256}, {"aa-blend", 256, 256},
+  {"aa-textured", 256, 256}, {"aa-3d", 256, 256},
 };
 
 //Round 6's timing tests (tools/psp-measure/ge.c's tables): how many records (each case's sizes, at two clock
@@ -263,8 +269,8 @@ static const char* probeFiles[] = {
 
 //The menu's lines (tools/psp-measure/main.c), counted from the top, and the buttons that move through it.
 enum : u32 {
-  GeRound6Line = 0, GeRound5Line = 1, GeRound4Line = 2, GeRound3Line = 4, ProbesLine = 5, GeRound2Line = 7,
-  AfreshLine = 9, LeaveLine = 10
+  GeRound7Line = 0, GeRound6Line = 1, GeRound5Line = 2, GeRound4Line = 3, GeRound3Line = 5, ProbesLine = 6,
+  GeRound2Line = 8, AfreshLine = 10, LeaveLine = 11
 };
 enum : u32 { Up = 0x0010, Down = 0x0040, Cross = 0x4000 };
 
@@ -291,7 +297,7 @@ static auto waitFor(KernelMachine& m, u32 frames, const std::function<bool()>& d
 }
 
 //Round 6's files as this core writes them, for measured6.cpp's comparisons with the owner's PSP: the measure test's
-//run hands its over; otherwise the program's round 6 alone (its menu's first line, chosen as it starts) runs once, in
+//run hands its over; otherwise the program's round 6 alone (its menu's second line) runs once, in
 //a machine of its own, the first time they're asked for. None without the program.
 static std::unique_ptr<HostFolder> round6Kept;
 static auto keepRound6(const std::filesystem::path& results) -> void {
@@ -320,6 +326,7 @@ auto round6Files() -> std::filesystem::path {
   CHECK(loaded, true);
   if(!loaded) return {};
   auto results = game / "results" / "ge";
+  move(m, 0, GeRound6Line);
   press(m, Cross);
   CHECK(waitFor(m, 20000, [&] { return std::filesystem::exists(results / "curves-count-v-255.bin"); }), true);
   keepRound6(results);
@@ -451,8 +458,14 @@ static auto pspMeasure() -> void {
   press(m, Cross);
   onlyStallCheckStalled();
   keepRound6(results);
+  //the GE's round 7
+  move(m, GeRound6Line, GeRound7Line);
+  press(m, Cross);
+  CHECK(waitFor(m, 3000, exists(results / "aa-3d.bin")), true);
+  press(m, Cross);
+  onlyStallCheckStalled();
   //leaving
-  move(m, GeRound6Line, LeaveLine);
+  move(m, GeRound7Line, LeaveLine);
   press(m, Cross);
   CHECK(waitFor(m, 100, [&] { return m.kernel.exited; }), true);
 
@@ -460,12 +473,13 @@ static auto pspMeasure() -> void {
   const char* copy = std::getenv("PSP_GE_OURS");
   if(copy) std::filesystem::create_directories(copy);
   //each file against the reference's; one the reference lacks is said to be missing (one given up on there, say),
-  //but for round 3's, 4's or 5's when the reference has none of that round (its manifest3.txt, manifest4.txt or
-  //manifest5.txt), as a PSP that hasn't run it
+  //but for a round's (3 to 7) when the reference has none of that round (its manifest3.txt to manifest7.txt), as a
+  //PSP that hasn't run it
   bool referenceRound3 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest3.txt");
   bool referenceRound4 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest4.txt");
   bool referenceRound5 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest5.txt");
   bool referenceRound6 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest6.txt");
+  bool referenceRound7 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest7.txt");
   auto look = [&](const MeasureFile& file, const std::vector<u32>& ours, bool expected) {
     std::string name = std::string(file.name) + ".bin";
     if(reference && std::filesystem::exists(std::filesystem::path(reference) / name)) {
@@ -555,6 +569,12 @@ static auto pspMeasure() -> void {
                                std::filesystem::copy_options::overwrite_existing);
   }
   CHECK(std::filesystem::exists(results / "manifest6.txt"), true);
+  for(auto& file : measureFiles7) {
+    auto ours = readWords(results / (std::string(file.name) + ".bin"));
+    CHECK(ours.size(), file.width * file.height);
+    look(file, ours, referenceRound7);
+  }
+  CHECK(std::filesystem::exists(results / "manifest7.txt"), true);
   for(auto name : probeFiles) CHECK(readWords(vfpu / (std::string(name) + ".bin")).size(), 4);
 
   //what the files hold, from end to end: the sprite drawn top-left to bottom-right shows its 4x4 texture (texel n,
