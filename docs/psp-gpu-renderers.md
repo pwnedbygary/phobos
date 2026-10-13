@@ -198,9 +198,12 @@ drawn rectangle, row by row), and reaches the rest at once. A change to such byt
 are busy) is kept by the target over them (`beside`, at most 16 ranges), which takes them from memory again before it
 draws over them, shows them, moves them or lends them as a texture (part 65: those ranges filled from memory, not the
 target afresh after a finish), and after its next finish; so are a page's bytes written while the target hadn't drawn
-in it. Past 16 ranges (part 83), those kept are filled from memory there and then, as one rectangle round them where
-it reaches none of the target's drawn pixels, and the new range kept: before, the ranges were taken together as one,
-which reached the pixels, and the target went stale, a finish (Brave Story writes its list in 24 pieces). Each page's owner is asked (part 65), its answer kept until something is drawn or owned afresh: God of War's GE
+in it. Past 16 ranges (part 83) they're kept all the same, and all of them filled before the target is next drawn
+into, shown, lent or moved from (`Target::besideFull`; not inside memory's notice of the change, where a fill would
+watch pages again in the middle of memory's going through them), as one rectangle round them where they're many or
+close together and it reaches none of the target's drawn pixels; past 256 the target is filled afresh. (Taken together
+as one range, before, they reached the pixels and the target went stale, a finish: Brave Story writes its list in 24
+pieces.) Each page's owner is asked (part 65), its answer kept until something is drawn or owned afresh: God of War's GE
 reads 700,000 vertices a frame from pages the GPU has drawn in.
 (The drawing threads' busy pages stay whole pages: their batches draw anywhere in them.) Brave Story's title, on the
 M1: 53 frames a second before, 90-96 after (the software renderer: 178), its waits for the GPU from 26,000 to 5,700
@@ -217,8 +220,9 @@ row, a move covers whole rows of the target and `move.frag` gives each pixel the
 they're inside the source's rectangle, else it's left), so a frame buffer drawn as 480 pixels wide and then as 256
 over the same memory moves on the GPU. Colin McRae Rally 2005 Plus draws its 5551 picture's memory as a 256-pixel
 frame buffer for its effects, Dirt 2 a 128-pixel 5551 one's as a 64-pixel 4444 one, Brave Story a 256-pixel 8888
-one's as a 128-pixel one: each was a finish (Colin McRae's race two a frame, five read backs). Where the shader can't
-give the stencil such moves aren't taken: the per-bit draws would lose the stencil of the pixels they don't reach.
+one's as a 128-pixel one: each was a finish (Colin McRae's race two a frame, five read backs). Into a target that keeps
+a stencil, such moves are taken only where the shader gives the stencil with the colors (`Backend::moveExport`): the
+per-bit draws would lose the stencil of the pixels they don't reach.
 A move draws the colors and the stencil in one draw where a shader can give the stencil (part 67:
 `VK_EXT_shader_stencil_export`, `move.frag`'s EXPORT build), else the colors and then the stencil's bits a draw each,
 only those the target's format keeps (one for 5551, four for 4444, eight for 8888; `stencilBits()`); a 5650 target has
@@ -278,12 +282,14 @@ from the texel's bits in the target's format, applies the shift, mask and offset
 and looks the entry up in the palette on the GPU: a picture of 256 rows of 512 entries (`makePalette()`), a row for each
 palette the GE has had (found again by the GE's palette hash and its bytes, at most 192 kept, the one unused longest
 let go), a 16-bit palette's entries widened as texels are, set 1's second binding. Death Jr. II takes each strip of its
-picture through a palette of its own; each was a finish, 31 a frame.
+picture through a palette of its own.
 
 **What a PRIM takes** (part 83): the GE gives `holds()` the rectangle of texels the PRIM may take, from its vertices'
-u and v (2D two texels round them; 3D where they're the vertices' own coordinates, scaled and offset as `transform()`
-maps them, the texels the GPU's filter takes between them, its weights in sixteenths), held inside the texture where
-it's held there. A copy is copied again only where the target's changes since meet that rectangle; elsewhere the PRIM
+u and v (2D two texels round them, a sprite's more by 0.6 of its step, as its GPU quads cover whole pixels and reach
+past the GE's middles above 1x; 3D triangles' where they're the vertices' own coordinates, scaled and offset as
+`transform()` maps them: the texels the GPU's filter takes between them, its weights in sixteenths, with 2^-13 of the
+coordinates for the GE's 15-bit fractions; a 3D sprite's or line's, whose pixels may lie past its corners, the whole
+texture), held inside the texture where it's held there, and worked out only once the renderer holds the texture. A copy is copied again only where the target's changes since meet that rectangle; elsewhere the PRIM
 takes it as it is, the changes kept for one that reads them. Killzone's menus blur a strip right of the picture, 800
 3D quads a frame each reading one half of it while writing the other: a copy (an ended render pass, a copy, a pass
 begun) for each, now for each turn from one half to the other, 817 a frame to 456.
@@ -303,17 +309,21 @@ target the GPU hasn't drawn are filled from memory before the copy.
 In Midnight Club 3's race this took the render passes from 82 a frame to 12-16 and the GPU's wait from 15.9 ms to
 1.6-2 ms a frame (M1).
 
-**Where the rows aren't known** (part 83: a 3D PRIM's, as `holds()` has them): a texture declared past VRAM's end has
-its rows inside VRAM copied, those past held at the last of them (on the PSP they'd be VRAM's first rows); Castlevania
+**Where the rows aren't known** (part 83: a 3D PRIM's, as `holds()` has them, or a 2D one's whose coordinates may
+repeat round), rows past those a texture's frame buffer has are held at the last of them (`holdable()`): in fast mode,
+and in accurate mode only where the texels the PRIM may take stop before them, which leaves the picture exact. A
+texture declared past VRAM's end has its rows inside VRAM copied, those past held (on the PSP they'd be VRAM's first
+rows); Castlevania
 samples the frame buffer at 0x154000 as 512 rows for its background blur, and refused, the software renderer drew the
 blur against memory's depth, which isn't the GPU's, and none of it showed. A texture whose rows run on into another
 frame buffer's pages that can't be its second part (another row width or format) has only the rows before them copied,
 the rest held at the last: Death Jr. II's palette passes take its 272-row picture as 512 rows, which run on into its
 bloom's frame buffers. And one the renderer doesn't hold whose first rows are memory's, running on into a frame buffer
 the GPU is drawing, is decoded by the GE only as far as that frame buffer's first page (`memoryRows()`), not finished
-for: Death Jr. II's bloom, after the CPU has read its picture back, samples it into the smaller frame buffer below,
-a finish for each tile, 30 a frame. A PRIM taking those rows would find the last row held (the PSP's would be the
-other frame buffer's bytes); none was seen to.
+for: Death Jr. II's bloom, after the CPU has read its picture back, samples it into the smaller frame buffer below. A
+PRIM taking those rows would find the last row held (the PSP's would be the other frame buffer's bytes), which fast
+mode allows: Death Jr. II's palette passes reach the frame buffer below by their corners, at a weight of 0, and in
+accurate mode they're decoded from memory again, a finish each.
 
 **A texture running into the frame buffer below** (part 63): its pages one target's and then, from a page on,
 another's, of the same row width and format, which begins on a row of the first, the first owning none of the second's
@@ -357,10 +367,12 @@ are looked up on the GPU since part 83 (above); a swizzled or 4- and 8-bit one s
 What the GPU does with the GPU's own units, and how near the PSP it comes:
 - **Depth test and write**: the GPU's, on the GE's 16-bit depth (0-65535) kept as a float; the comparisons are the
   GE's, and the depth range test (MIN_Z, MAX_Z) is done in the shader. Clear mode writes depth where the GE does.
-  Since part 83 the shader writes the depth as the GE's whole number (the interpolated depth rounded down: `DEPTH`)
-  wherever the pipeline tests or writes depth, so two surfaces at one GE depth meet as the GE's do: Daxter draws its
-  shadow twice over the floor with "at most", and with float depths a little apart on the GPU the second layer didn't
-  darken it again.
+  Since part 83 the shader writes the depth as the GE's whole number (the interpolated depth rounded down), in
+  65,536ths, exactly as memory's depths are filled (`copy.frag`, the 1x upload), wherever the depth test or write
+  depends on it, so two surfaces at one GE depth meet as the GE's do: Daxter draws its shadow twice over the floor
+  with "at most", and with float depths a little apart on the GPU the second layer didn't darken it again. That's
+  `draw.frag`'s `DEPTHS` build; the other pipelines take the build without the write, which may keep a GPU from
+  testing depth before the shader runs.
 - **Stencil**: the GPU's 8-bit stencil, with the GE's comparison, reference, masks and operations (keep, zero,
   replace, invert, increment and decrement clamped). The alpha written to the color follows the stencil where the pass
   operation's result is known in advance (replace, zero), so blending by the frame buffer's alpha reads it; the
@@ -752,12 +764,13 @@ What differs after shader blending:
 - **Blending's rounding**, the dithering of blended pixels, and the 8 bits kept between draws of a 16-bit frame
   buffer are gone where the GPU reads the frame buffer (part 45); pspsdk's blend sample is 100% the same. Where the
   GPU blends (in 8888 without rasterization order; everything on Qualcomm's own driver), its rounding is mostly the
-  PSP's (`TERM`) and the rest a level apart, but blended pixels aren't dithered, and on Qualcomm's driver a 16-bit
-  frame buffer keeps 8 bits between blends.
+  PSP's (`TERM`, the dither in it since part 83) and the rest a level apart, and on Qualcomm's driver a 16-bit frame
+  buffer keeps 8 bits between blends.
 - **Known approximations** still: the depth buffer not read back (so the CPU, a texture or a PRIM the software
   renderer draws sees memory's depth, not the GPU's); a change to the depth buffer's bytes refills all of each 16
   KiB it touches; a PRIM's pixels past its frame buffer's row end cut at the row; textures past a frame buffer's
-  row; and, for a backend that can't read the frame buffer, the older blending and logic approximations.
+  row; in fast mode, a texture's rows past its frame buffer's held at its last where the PRIM's rows aren't known
+  (part 83); and, for a backend that can't read the frame buffer, the older blending and logic approximations.
 
 The pictures look the same to the eye in the scenes measured; nothing is missing or misplaced.
 

@@ -10728,36 +10728,49 @@ and branch, and move 10-15% between rounds; the process's CPU time a frame moves
   was gone (both modes on the M1: accurate mode blends 8888 with the GPU's units there). Daxter's shadow is drawn twice
   over the floor with "at most": the GE's depths of the two layers are the same whole number, the GPU's floats weren't.
 
-**The changes** (each its own commit, with tests that fail on the commit before it):
+**The changes** (in seven commits, the last the review's points, each with tests that fail without it; the
+textures kept, below, tested with the review's):
 1. **The dither in the GPU's blending** (`draw.frag`'s `TERM`): the PSP dithers the blended color, so the shader adds
    the dither to the source term it hands the GPU, and subtracts it where the GPU subtracts the term (TERM 3). **Depth
-   as the GE's whole numbers** (`DEPTH`, constant 19): wherever the pipeline tests or writes depth the shader writes the
-   interpolated depth rounded down. Its cost at 1x, measured on the M1: 0-3%, 2-7% at 4x.
+   as the GE's whole numbers** (`draw.frag`'s `DEPTHS` build, since the review): wherever the depth test or write
+   depends on it the shader writes the interpolated depth rounded down, in 65,536ths, exactly as memory's depths are
+   filled; pipelines that don't use depth take the build without the write, which may keep a GPU from testing depth
+   before the shader runs. Its cost at 1x, measured on the M1 (written by every pipeline then): 0-3%, 2-7% at 4x.
 2. **Moves across row widths** (`movable()`, `intoRows()`, `move()`, `move.frag`): where both targets' pages hold whole
    rows of each, each starting a row, a move covers whole rows of the target and each pixel takes the source's pixel at
    its bytes, where they're inside the source's rectangle (else it's left); the moves of one width are the same
    arithmetic. Not taken where the shader can't give the stencil: per-bit draws would lose the stencil they don't reach.
 3. **Past VRAM's end**: a texture whose rows aren't known (3D) declared past VRAM's end has its rows inside VRAM taken,
-   those past held at the last (the PSP's would be VRAM's first rows). **Depth changes kept** for the next PRIM that
-   tests or writes depth. **Beside, past 16 ranges**: those kept are filled from memory there and then, as one rectangle
-   where it reaches none of the target's pixels (`Target::merged` gone).
+   those past held at the last (the PSP's would be VRAM's first rows), as `holdable()` allows (below). **Depth changes
+   kept** for the next PRIM that tests or writes depth. **Beside, past 16 ranges**: kept all the same, and all filled
+   from memory before the target is next drawn, shown, lent or moved from (not inside memory's notice of the change,
+   where a fill's watching pages again would come in the middle of memory's going through them), as one rectangle
+   where they're many or close together and it reaches none of the target's pixels; past 256, the target is filled
+   afresh (`Target::merged` gone).
 4. **Palettes on the GPU** (`paletteFor()`, `makePalette()`, `draw.frag`'s `INDEXED`): a CLUT16 texture over a 16-bit
    target or a CLUT32 one over an 8888 target, whose index's bits are the colors' and not the stencil's, is the GPU's
    copy of the target, each texel's bits taken as the index, the shift, mask and offset applied as `texelFrom()` does,
    and the entry looked up in a 512x256 picture of palettes on the GPU (a row a palette, found again by the GE's palette
    hash and bytes, at most 192, set 1's second binding). **Rows not known, running into another frame buffer**: only the
    rows before its pages are taken (`take()`'s `exact`), and a texture the renderer doesn't hold whose first rows are
-   memory's is decoded only as far as the frame buffer the GPU is drawing (`Renderer::memoryRows()`), not finished for.
+   memory's is decoded only as far as the frame buffer the GPU is drawing (`Renderer::memoryRows()`), not finished for:
+   in fast mode, and in accurate mode where the texels the PRIM may take stop before those rows (`holdable()`), so the
+   rows held are none it takes.
 5. **What a PRIM takes** (`holds()`' `takes`): the GE gives the rectangle of texels a PRIM may take, from its vertices'
-   u and v (2D two texels round them; 3D where they're the vertices' own coordinates, scaled and offset as `transform()`
-   maps them, the texels the GPU's filter takes in sixteenths between them), and a copy is copied again only where the
-   target's changes since meet it. **Barriers only before overlapping reads** (accurate mode without rasterization
+   u and v (2D two texels round them, a sprite's more by 0.6 of its step for the GPU's whole-pixel quads above 1x; 3D
+   triangles' where they're the vertices' own coordinates, scaled and offset as `transform()` maps them, the texels the
+   GPU's filter takes in sixteenths between them, with 2^-13 of the coordinates for the GE's 15-bit fractions; worked
+   out only where the renderer holds the texture), and a copy is copied again only where the target's changes since
+   meet it. **Barriers only before overlapping reads** (accurate mode without rasterization
    order): a reading primitive waits for a barrier only where it overlaps one drawn into its target since the last.
 6. **Textures kept for the next of their size** (`spareTextures`): a texture let go of, once its runs are done, is
    taken by the next texture of its width and height, its picture, memory, view and set as they are (a movie made and
    destroyed them every frame, each a call into the driver's kernel on Android); at most 16 and 32 MiB.
 
-Every change is in both modes: none of them cuts a corner that fast mode alone may take. The ideas weighed and not
+Every change is in both modes but one: rows past those a texture's own frame buffer has (another frame buffer of
+another row width below, VRAM's end, a decode's last rows) are held at the last kept in fast mode wherever the PRIM's
+rows aren't known, and in accurate mode only where its texels stop before them, which is exact (the review's point;
+the PSP's would be the other frame buffer's bytes, at a weight of 0 in the scenes seen). The ideas weighed and not
 taken: a read back a frame late in fast mode (what still finishes is the CPU's own loads of a picture, Death Jr. II's
 conversion of its 8888 frame to the 5650 one it shows and Darkstalkers' stores beside its depth buffer, which need the
 bytes then, and late frames already show without waiting); merging draws, caching pipelines and descriptors and

@@ -38,13 +38,14 @@ Save states unchanged (StateVersion 26). The software renderer untouched.
   (Death Jr. II, Castlevania, whose blur didn't show), depth fills (Darkstalkers), a copy and a render pass for each of
   Killzone's 800 blur quads. The Armored Cores' intros are bound by the movie's polling in both renderers on the M1;
   Army of Two and Dirt 2 by the GE's front end.
-- **Changes** (six commits, each with tests that fail without it): the GE's dither in the GPU's blending and depth as
-  the GE's whole numbers (Death Jr. II's glow, Daxter's shadow); moves between frame buffers of other row widths; a
-  texture past VRAM's end taken, depth changes kept for PRIMs that use depth, beside ranges past 16 filled as one;
-  palette indices over a frame buffer looked up on the GPU, rows not known cut at the next frame buffer, memory's rows
-  decoded alone; a copy taken again only where a PRIM's texels meet the changes (the GE gives `holds()` the texels a
-  PRIM may take, 3D too), barriers only before overlapping reads; textures kept for the next of their size. All in both
-  modes.
+- **Changes** (seven code commits, the last the review's points, with tests that fail without them): the GE's dither
+  in the GPU's blending and depth as the GE's whole numbers (Death Jr. II's glow, Daxter's shadow); moves between
+  frame buffers of other row widths; a texture past VRAM's end taken, depth changes kept for PRIMs that use depth,
+  beside ranges past 16 kept and filled at the target's next use; palette indices over a frame buffer looked up on the
+  GPU, rows not known cut at the next frame buffer, memory's rows decoded alone; a copy taken again only where a
+  PRIM's texels meet the changes (the GE gives `holds()` the texels a PRIM may take, 3D triangles too), barriers only
+  before overlapping reads; textures kept for the next of their size; the depth write its own shader build. All in
+  both modes, but that accurate mode holds rows past a texture's frame buffer only where the PRIM takes none of them.
 - **Numbers** (the M1, fast mode, base -> branch): Death Jr. II's woods 9.7 -> 67.8 frames a second and its character
   select 21 -> 170, Activision Hits Remixed's room 10 -> 84, Sonic Rivals 14 -> 113, Castlevania 103 -> 354,
   Darkstalkers 49 -> 122, Brothers in Arms 23 -> 39, Killzone 11 -> 20, Colin McRae 43 -> 57, Brave Story 156 -> 216;
