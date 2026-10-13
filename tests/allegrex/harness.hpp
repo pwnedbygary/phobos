@@ -5,6 +5,7 @@
 #include "prelude.hpp"
 #include "../../ares/psp/cpu/allegrex.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -251,52 +252,100 @@ inline auto check(int line, const char* what, uint64_t actual, uint64_t expected
 
 //What a group (or a part of one) couldn't run here, and why: skip() names what it needs, a capability ("vulkan", a
 //Vulkan GPU; "programs", the test programs; ...), and the group then reports "skip" with the reasons rather than
-//"pass" (a failure in it still reports FAIL). A capability PHOBOS_TESTS_REQUIRE names (a comma-separated list; CI
-//names each lane's) is a failure instead, so a lane that must have it can't go green without it.
-inline std::string skipped;
+//"pass" (a failure in it still reports FAIL). A capability PHOBOS_TESTS_REQUIRE names (a comma-separated list, spaces
+//around a name left out; CI names each lane's) is a failure instead, once a group for each reason, so a lane that
+//must have it can't go green without it.
+inline std::string skipped, missing;  //the group's reasons: skipped, and required but missing (its failures)
 inline int skippedGroups = 0;
 
-inline auto required(const std::string& capability) -> bool {
+//The capabilities the tests skip for: PHOBOS_TESTS_REQUIRE naming another is a mistake (a typo would leave what it
+//meant not required), which checkRequired() fails.
+inline const std::vector<std::string> capabilities = {"vulkan", "vulkan-fast", "vulkan-transforms", "vulkan-palettes",
+  "vulkan-moves", "vulkan-reads", "vulkan-unordered-reads", "vulkan-2x", "vulkan-3x", "vulkan-stencil-export",
+  "programs", "ge-round3", "ge-round6"};
+
+inline auto requiredList() -> std::vector<std::string> {
+  std::vector<std::string> names;
   const char* list = std::getenv("PHOBOS_TESTS_REQUIRE");
-  return list && ("," + std::string(list) + ",").find("," + capability + ",") != std::string::npos;
+  std::string text = list ? list : "";
+  for(size_t start = 0; start <= text.size();) {
+    size_t end = std::min(text.find(',', start), text.size());
+    auto name = text.substr(start, end - start);
+    name.erase(0, name.find_first_not_of(" \t\r\n"));
+    name.erase(name.find_last_not_of(" \t\r\n") + 1);
+    if(!name.empty()) names.push_back(name);
+    start = end + 1;
+  }
+  return names;
+}
+
+inline auto required(const std::string& capability) -> bool {
+  auto names = requiredList();
+  return std::find(names.begin(), names.end(), capability) != names.end();
+}
+
+//A reason added to a group's list unless it's there already: whether it was added.
+inline auto addReason(std::string& list, const std::string& reason) -> bool {
+  if(("; " + list + "; ").find("; " + reason + "; ") != std::string::npos) return false;
+  list += (list.empty() ? "" : "; ") + reason;
+  return true;
 }
 
 inline auto skip(const std::string& capability, const std::string& why) -> void {
-  if(required(capability)) {
-    failures++;
-    std::printf("FAIL %s: %s is required here (PHOBOS_TESTS_REQUIRE), and %s\n", currentTest, capability.c_str(),
-                why.c_str());
-    return;
+  if(!required(capability)) return void(addReason(skipped, capability + ": " + why));
+  if(!addReason(missing, "required " + capability + ": " + why)) return;
+  failures++;
+  std::printf("FAIL %s: %s is required here (PHOBOS_TESTS_REQUIRE), and %s\n", currentTest, capability.c_str(),
+              why.c_str());
+}
+
+//A line of PHOBOS_TESTS_REPORT's file, if one is named (result, what and reasons, a tab between; the file begun again
+//by the run's first line).
+inline auto reportLine(const char* result, const char* what, const std::string& reasons) -> void {
+  static bool begun = false, said = false;
+  const char* file = std::getenv("PHOBOS_TESTS_REPORT");
+  if(!file || !*file) return;
+  if(FILE* out = std::fopen(file, begun ? "a" : "w")) {
+    std::fprintf(out, "%s\t%s\t%s\n", result, what, reasons.c_str());
+    std::fclose(out);
+  } else if(!said) {
+    said = true;
+    std::printf("(the report can't be written: %s)\n", file);
   }
-  auto reason = capability + ": " + why;
-  if(("; " + skipped + "; ").find("; " + reason + "; ") != std::string::npos) return;
-  skipped += (skipped.empty() ? "" : "; ") + reason;
+  begun = true;
+}
+
+//Before the groups: PHOBOS_TESTS_REQUIRE naming no capability a test skips for fails the run.
+inline auto checkRequired() -> void {
+  for(auto& name : requiredList()) {
+    if(std::find(capabilities.begin(), capabilities.end(), name) != capabilities.end()) continue;
+    failures++;
+    std::printf("FAIL PHOBOS_TESTS_REQUIRE names %s, which no test skips for (a typo?)\n", name.c_str());
+    reportLine("FAIL", "PHOBOS_TESTS_REQUIRE", name + ": no test skips for it");
+  }
 }
 
 //A group's result, after it ran with failures at `before` when it began: its line (FAIL, skip with its reasons, or
-//pass), and the same as a line of PHOBOS_TESTS_REPORT's file, if one is named (result, group and reasons, a tab
-//between; the file begun again by the run's first group).
+//pass, with what was required and missing first), and the same as a line of PHOBOS_TESTS_REPORT's file.
 inline auto report(int before) -> void {
   const char* result = failures != before ? "FAIL" : !skipped.empty() ? "skip" : "pass";
-  if(skipped.empty()) std::printf("%s %s\n", result, currentTest);
-  else std::printf("%s %s (%s)\n", result, currentTest, skipped.c_str());
+  auto reasons = missing + (!missing.empty() && !skipped.empty() ? "; " : "") + skipped;
+  if(reasons.empty()) std::printf("%s %s\n", result, currentTest);
+  else std::printf("%s %s (%s)\n", result, currentTest, reasons.c_str());
   skippedGroups += failures == before && !skipped.empty();
-  static bool begun = false;
-  if(const char* file = std::getenv("PHOBOS_TESTS_REPORT"); file && *file) {
-    if(FILE* out = std::fopen(file, begun ? "a" : "w")) {
-      std::fprintf(out, "%s\t%s\t%s\n", result, currentTest, skipped.c_str());
-      std::fclose(out);
-    }
-    begun = true;
-  }
+  reportLine(result, currentTest, reasons);
   skipped.clear();
+  missing.clear();
 }
 
-//The run's last line: its groups and failures, and the groups skipped where there are any.
+//The run's last line: its groups and failures, and the groups skipped where there are any; the report's last line too
+//(a report without it is of a run that didn't finish).
 inline auto summary(size_t groups) -> void {
-  std::printf("%zu groups, %d failure%s", groups, failures, failures == 1 ? "" : "s");
-  if(skippedGroups) std::printf(", %d skipped", skippedGroups);
-  std::printf("\n");
+  auto line = std::to_string(groups) + " groups, " + std::to_string(failures);
+  line += failures == 1 ? " failure" : " failures";
+  if(skippedGroups) line += ", " + std::to_string(skippedGroups) + " skipped";
+  std::printf("%s\n", line.c_str());
+  reportLine("summary", line.c_str(), "");
 }
 
 inline auto bits(float value) -> uint32_t { return std::bit_cast<uint32_t>(value); }

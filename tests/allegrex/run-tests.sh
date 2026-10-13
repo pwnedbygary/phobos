@@ -32,8 +32,9 @@ INCLUDES=(-isystem "$ROOT/nall" -isystem "$ROOT/ares" -isystem "$ROOT" -isystem 
 #Results measured on a real PSP (measured.cpp), unpacked into this checkout's folder, each file through a temporary
 #one, so one cut short isn't kept; xz checks a packed file's own integrity as it unpacks it, failing on a damaged one.
 #A file is unpacked again when its packed file's SHA-256, kept beside it, changes: a tree copied with its times kept
-#can hold older packed files than the folder's. (SHA256SUMS* beside them are the sums of the PSP's whole files, of
-#which some are kept here in part: their provenance, not this folder's list.)
+#can hold older packed files than the folder's. SHA256SUMS* beside them are the sums of the PSP's own files, of which
+#some are kept here whole and the rest in part (the 16k sets) or not at all: those kept whole are checked against
+#them.
 sha256() {
   if command -v sha256sum > /dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
 }
@@ -52,6 +53,17 @@ for packed in "$HERE"/measured/*.xz; do
     mv -f "$unpacked.part-$$" "$unpacked"
     echo "$sum" > "$unpacked.sha256"
   fi
+done
+for sums in "$HERE"/measured/SHA256SUMS*; do
+  while read -r sum name; do
+    file="$MEASURED/$name"
+    [[ -f $file ]] || file="$HERE/measured/$name"
+    [[ -f $file ]] || continue  #(a file of the PSP's not kept here)
+    if [[ $(sha256 "$file") != "$sum" ]]; then
+      echo "tests/allegrex/measured: $name isn't the file the PSP made ($(basename "$sums"))" >&2
+      exit 1
+    fi
+  done < "$sums"
 done
 
 #nall, sljit and sljit's allocator: built without the sanitizers (their lines say so as they're compiled)
