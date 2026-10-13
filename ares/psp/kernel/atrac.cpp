@@ -43,6 +43,23 @@
 //waits meanwhile (the tests' checkpoints saw other threads run during each): here the calling thread waits
 //AtracDecodeMicroseconds (chosen: the PSP's time isn't measured) after a call that decoded, when it may wait and the
 //call returns 0. sceAtracSetDataAndGetID, returning an ID, doesn't wait.
+//
+//The contexts. Each of the six IDs has 256 bytes of the library's memory: 128 of its decoder's (the last error, 8
+//bytes in), then 128 of its own, laid out as pspautotests' atrac.h reads them (where decoding is, the file's frames,
+//the buffers, the state). On a PSP they're the library's state itself, there from the start and current after every
+//call; _sceAtracGetContextAddress only says where an ID's is. Programs read them, and write them: pspautotests'
+//getremainframe, getsoundsample, resetpos, resetting and second recorded the calls they make (GetRemainFrame,
+//GetSoundSample, ResetPlayPosition, GetBufferInfoForResetting, GetSecondBufferInfo, IsSecondBufferNeeded,
+//SetSecondBuffer) refusing an ID whose state the test set to 8 (the low-level decoder's: 0x80630031) or 16 (sceSas's:
+//0x80630040); here those seven do, and take the ID again once it's set back (chosen: no recording calls after that),
+//while every other call answers as it did before the contexts were kept (none recorded with such a state: a low-level
+//ID, whose context says 8, still NO_DATA where a file is needed). Angus Hates Aliens' sound code, a wrapper over
+//sceSas's ATRAC3 voices (the one pspautotests' audio/atrac/sas copies), sets 16, moves the buffer and curFileOff on,
+//puts the voice in loopNum and -1 in secondBuffer, and stops the voice only while the state still says 16: it asked
+//again for good when the state it had set was written over. Here each context is written whenever the library
+//changes its ID, and at power on, into kernel memory (AtracContextMemory: chosen, as a PSP's are in its library's
+//module, in the user partition, and no game's memory need go to them here); the state a program wrote there is what
+//those seven calls look at first, and the rest of what it wrote stays until the library next changes that ID.
 
 namespace {
   //sceAtrac3plus's errors, as audio/atrac's tests recorded them
@@ -65,6 +82,8 @@ namespace {
   constexpr u32 AtracErrorSecondNotNeeded = 0x8063'0022;
   constexpr u32 AtracErrorEmpty = 0x8063'0023;            //no frame in the buffer to decode
   constexpr u32 AtracErrorAllDecoded = 0x8063'0024;
+  constexpr u32 AtracErrorIsLowLevel = 0x8063'0031;       //an ID whose context says 8, the low-level decoder's
+  constexpr u32 AtracErrorIsForSas = 0x8063'0040;         //and 16, sceSas's
   constexpr u32 AtracCodecError = 0x20b;                  //sceAtracGetInternalErrorInfo after a bad frame (stream)
   constexpr u32 AtracPlus = 0x1000, AtracClassic = 0x1001;
   constexpr u32 AtracIDs = 6;
@@ -140,10 +159,15 @@ static auto atracRestart(const Kernel::Atrac& a, u32& count) -> u32 {
   return atracFrameOffset(a, first);
 }
 
-//An ID handed out, holding a file when needData; else the error is the result.
-auto Kernel::atracFind(u32 id, bool needData) -> Atrac* {
+//An ID handed out, holding a file when needData; else the error is the result. For the seven calls recorded with a
+//state the program set (byContext, above), the state is first its context's: 8 or 16 refuse it.
+auto Kernel::atracFind(u32 id, bool needData, bool byContext) -> Atrac* {
   if(id >= AtracIDs || !atracs[id].codec) return result(AtracErrorBadID), nullptr;
-  if(needData && atracs[id].state == NoData) return result(AtracErrorNoData), nullptr;
+  if(!needData) return &atracs[id];
+  u32 state = byContext ? memory.read(1, atracContexts + id * 256 + 128 + 21) : 0;
+  if(state == 8) return result(AtracErrorIsLowLevel), nullptr;
+  if(state == 16) return result(AtracErrorIsForSas), nullptr;
+  if(atracs[id].state == NoData) return result(AtracErrorNoData), nullptr;
   return &atracs[id];
 }
 
@@ -221,10 +245,26 @@ auto Kernel::atracParse(Atrac& a, u32 buffer, u32 size) -> u32 {
   return 0;
 }
 
+//The size of a buffer read whole (the four setters given the whole file, SetData, SetMOutData and their AndGetID, and
+//a halfway one said to be read as far as its buffer goes): one the library takes as negative (its top bit set)
+//reaches to the end of the memory the buffer is in. 7th Dragon 2020-II gives sceAtracSetDataAndGetID 0xffffffff for
+//the file it plays on its character's certificate, read whole into the buffer, and waits for good for the sound the
+//library would refuse (PPSSPP notes the same of Tales of VS). The other three, and the halfway case, are Phobos's
+//choice, as no recording or game shows them. A buffer where there's no memory is refused as before, as no file.
+static auto atracWholeSize(Memory& memory, u32 buffer, u32 size) -> u32 {
+  if(s32(size) >= 0 || !memory.reaches(buffer, 1)) return size;
+  u32 reach = 0;
+  for(u32 bit = 1u << 30; bit; bit >>= 1) {
+    if(memory.reaches(buffer, reach | bit)) reach |= bit;
+  }
+  return reach;
+}
+
 //Sets a file on an ID handed out for its codec: readSize bytes of it at buffer, in a buffer of bufferSize bytes
 //(sceAtracSetData's buffer is its data), the output mono if mono. 0, or why it's refused.
 auto Kernel::atracSet(u32 id, u32 buffer, u32 readSize, u32 bufferSize, bool mono) -> u32 {
   if(!audioDecoders) return AtracErrorUnknownFormat;
+  if(readSize == bufferSize) readSize = bufferSize = atracWholeSize(memory, buffer, bufferSize);
   Atrac a;
   if(u32 error = atracParse(a, buffer, readSize)) return error;
   if(a.codec != atracs[id].codec) return AtracErrorWrongCodec;
@@ -271,6 +311,7 @@ auto Kernel::atracSet(u32 id, u32 buffer, u32 readSize, u32 bufferSize, bool mon
   if(!atracPrime(set) && set.error) {
     set = {};
     set.codec = codec;
+    atracContext(id);
     return AtracErrorFailed;
   }
   if(streamed(set.state)) {
@@ -286,6 +327,7 @@ auto Kernel::atracSet(u32 id, u32 buffer, u32 readSize, u32 bufferSize, bool mon
     }
     atracWriterAt(set);
   }
+  atracContext(id);
   return 0;
 }
 
@@ -426,27 +468,28 @@ auto Kernel::atracNextSamples(Atrac& a) -> u32 {
   return count;
 }
 
-//An ID's context, where _sceAtracGetContextAddress showed it: 128 bytes of its decoder's (the last error, 8 bytes
-//in), then 128 of its own, laid out as pspautotests' atrac.h reads them.
+//An ID's context written from what the library holds (above): 128 bytes of its decoder's (the last error, 8 bytes
+//in), then 128 of its own, laid out as pspautotests' atrac.h reads them; the state 1 with no file, 8 for the
+//low-level decoder's frames.
 auto Kernel::atracContext(u32 id) -> void {
-  if(!atracContexts || id >= AtracIDs) return;
-  u32 at = atracContexts + id * 256;
-  for(u32 n = 0; n < 256; n += 4) memory.write(4, at + n, 0);
+  if(id >= AtracIDs) return;
   auto& a = atracs[id];
-  memory.write(4, at + 8, a.error);
-  at += 128;
+  u8 bytes[256] = {};
+  auto put = [&](u32 at, u32 value, u32 size) { for(u32 n = 0; n < size; n++) bytes[at + n] = value >> n * 8; };
+  put(8, a.error, 4);
   u32 words[] = {a.decodePos, a.endSample, a.loopStart, a.loopEnd, a.firstValidSample};
-  for(u32 n = 0; n < 5; n++) memory.write(4, at + n * 4, words[n]);
-  memory.write(1, at + 20, a.framesToSkip);
-  memory.write(1, at + 21, a.state == NoData ? 1 : a.state);
-  memory.write(1, at + 22, a.curBuffer);
-  memory.write(1, at + 23, a.channels);
-  memory.write(2, at + 24, a.frameBytes);
-  memory.write(2, at + 26, a.state == NoData ? 0 : a.codec);
+  for(u32 n = 0; n < 5; n++) put(128 + n * 4, words[n], 4);
+  put(128 + 20, a.framesToSkip, 1);
+  put(128 + 21, a.lowLevel ? 8 : a.state == NoData ? 1 : a.state, 1);
+  put(128 + 22, a.curBuffer, 1);
+  put(128 + 23, a.channels, 1);
+  put(128 + 24, a.frameBytes, 2);
+  put(128 + 26, a.state == NoData ? 0 : a.codec, 2);
   u32 more[] = {a.dataOff, a.curFileOff, a.fileDataEnd, u32(a.loopNum), a.streamDataByte, a.streamOff,
                 a.secondStreamOff, a.buffer, a.secondBuffer, a.bufferByte, a.secondBufferByte};
-  for(u32 n = 0; n < 11; n++) memory.write(4, at + 28 + n * 4, more[n]);
-  memory.write(4, at + 124, id);
+  for(u32 n = 0; n < 11; n++) put(128 + 28 + n * 4, more[n], 4);
+  put(128 + 124, id, 4);
+  memory.copyIn(atracContexts + id * 256, bytes, sizeof(bytes));
 }
 
 //(codec: 0x1000 ATRAC3plus, 0x1001 ATRAC3): the lowest ID free of those sceAtracReinit gave the codec (two each at
@@ -492,7 +535,6 @@ auto Kernel::sceAtracSetData() -> void {
   u32 id = arg(0);
   if(!atracFind(id, false)) return;
   u32 error = atracSet(id, arg(1), arg(2), arg(2), false);
-  atracContext(id);
   result(error);
   if(!error) codecWait(AtracDecodeMicroseconds);
 }
@@ -501,7 +543,6 @@ auto Kernel::sceAtracSetHalfwayBuffer() -> void {
   u32 id = arg(0);
   if(!atracFind(id, false)) return;
   u32 error = atracSet(id, arg(1), std::min(arg(2), arg(3)), arg(3), false);
-  atracContext(id);
   result(error);
   if(!error) codecWait(AtracDecodeMicroseconds);
 }
@@ -510,7 +551,6 @@ auto Kernel::sceAtracSetMOutData() -> void {
   u32 id = arg(0);
   if(!atracFind(id, false)) return;
   u32 error = atracSet(id, arg(1), arg(2), arg(2), true);
-  atracContext(id);
   result(error);
   if(!error) codecWait(AtracDecodeMicroseconds);
 }
@@ -519,7 +559,6 @@ auto Kernel::sceAtracSetMOutHalfwayBuffer() -> void {
   u32 id = arg(0);
   if(!atracFind(id, false)) return;
   u32 error = atracSet(id, arg(1), std::min(arg(2), arg(3)), arg(3), true);
-  atracContext(id);
   result(error);
   if(!error) codecWait(AtracDecodeMicroseconds);
 }
@@ -528,6 +567,7 @@ auto Kernel::sceAtracSetMOutHalfwayBuffer() -> void {
 static auto atracSetAndGetID(Kernel& kernel, u32 buffer, u32 readSize, u32 bufferSize, bool mono) -> u32 {
   Kernel::Atrac parsed;
   if(!kernel.audioDecoders) return AtracErrorUnknownFormat;
+  if(readSize == bufferSize) readSize = bufferSize = atracWholeSize(kernel.memory, buffer, bufferSize);
   if(u32 error = kernel.atracParse(parsed, buffer, readSize)) return error;
   u32 from = parsed.codec == AtracPlus ? 0 : kernel.atracPlusIDs;
   u32 to = parsed.codec == AtracPlus ? kernel.atracPlusIDs : from + kernel.atracClassicIDs;
@@ -537,9 +577,9 @@ static auto atracSetAndGetID(Kernel& kernel, u32 buffer, u32 readSize, u32 buffe
     kernel.atracs[id].codec = parsed.codec;
     if(u32 error = kernel.atracSet(id, buffer, readSize, bufferSize, mono)) {
       kernel.atracs[id] = {};
+      kernel.atracContext(id);
       return error;
     }
-    kernel.atracContext(id);
     return id;
   }
   return AtracErrorNoID;
@@ -574,14 +614,14 @@ auto Kernel::sceAtracDecodeData() -> void {
     if(memory.reaches(count, 4)) memory.write(4, count, samples);
     if(memory.reaches(finish, 4)) memory.write(4, finish, ended);
     if(memory.reaches(remain, 4)) memory.write(4, remain, atracRemain(*a));
-    atracContext(id);
   };
-  if(a->ended) return answer(0, true), result(AtracErrorAllDecoded);
+  if(a->ended) return answer(0, true), result(AtracErrorAllDecoded);  //(nothing changed: the context as it was)
   std::vector<s16> samples(a->frameSamples * 2);
   if(!atracPrime(*a) || atracDecodeFrame(*a, samples.data()) < 0) {
     u32 address = 0;
     u32 missing = atracFrame(*a, address);
     answer(0, false);
+    atracContext(id);
     return result(missing ? missing : AtracErrorFailed);
   }
   bool looping;
@@ -621,13 +661,14 @@ auto Kernel::sceAtracDecodeData() -> void {
     a->decodePos += a->frameSamples - a->decodePos % a->frameSamples;
   }
   answer(made, a->ended);
+  atracContext(id);
   result(0);
   codecWait(AtracDecodeMicroseconds);
 }
 
 //(ID, where to put the frames left): atracRemain().
 auto Kernel::sceAtracGetRemainFrame() -> void {
-  auto a = atracFind(arg(0));
+  auto a = atracFind(arg(0), true, true);
   if(!a) return;
   if(memory.reaches(arg(1), 4)) memory.write(4, arg(1), atracRemain(*a));
   result(0);
@@ -707,7 +748,7 @@ auto Kernel::sceAtracGetMaxSample() -> void {
 
 //(ID, where to put the last sample, the loop's start and its end): the file's count; -1 and -1 with no loop.
 auto Kernel::sceAtracGetSoundSample() -> void {
-  auto a = atracFind(arg(0));
+  auto a = atracFind(arg(0), true, true);
   if(!a) return;
   u32 values[3] = {a->endSample - a->firstValidSample, ~0u, ~0u};
   if(a->looped) values[1] = a->loopStart - a->firstValidSample, values[2] = a->loopEnd - a->firstValidSample;
@@ -777,7 +818,7 @@ auto Kernel::sceAtracGetInternalErrorInfo() -> void {
 //first priming frame on, as much as fits in whole frames and the file has). The second set is for the second buffer:
 //nothing. A sample past the file's last, or before its first priming frame's start, is refused (0x80630015).
 auto Kernel::sceAtracGetBufferInfoForResetting() -> void {
-  auto a = atracFind(arg(0));
+  auto a = atracFind(arg(0), true, true);
   if(!a) return;
   s64 raw = s64(s32(arg(1))) + a->firstValidSample;
   if(raw < 0 || raw > a->endSample) return result(AtracErrorBadSample);
@@ -810,7 +851,7 @@ auto Kernel::sceAtracGetBufferInfoForResetting() -> void {
 //audio/atrac/resetpos recorded). A sample whose priming would start before the file fails (0x80630002).
 auto Kernel::sceAtracResetPlayPosition() -> void {
   u32 id = arg(0), firstBytes = arg(2), secondBytes = arg(3);
-  auto a = atracFind(id);
+  auto a = atracFind(id, true, true);
   if(!a) return;
   s64 raw = s64(s32(arg(1))) + a->firstValidSample;
   if(raw < 0 || raw > a->endSample) return result(AtracErrorBadSample);
@@ -868,7 +909,7 @@ auto Kernel::sceAtracResetPlayPosition() -> void {
 
 //(ID): 1 for a stream looping before its end, whose rest needs the second buffer, else 0.
 auto Kernel::sceAtracIsSecondBufferNeeded() -> void {
-  auto a = atracFind(arg(0));
+  auto a = atracFind(arg(0), true, true);
   if(!a) return;
   result(a->state == StreamedWithSecond);
 }
@@ -876,7 +917,7 @@ auto Kernel::sceAtracIsSecondBufferNeeded() -> void {
 //(ID, where to put where in the file, and how many bytes): what the second buffer holds, the frames after the loop's
 //last to the file's end; for any other file, 0 and 0, and 0x80630022 (audio/atrac/second/getinfo).
 auto Kernel::sceAtracGetSecondBufferInfo() -> void {
-  auto a = atracFind(arg(0));
+  auto a = atracFind(arg(0), true, true);
   if(!a) return;
   u32 from = 0, bytes = 0;
   if(a->state == StreamedWithSecond) {
@@ -893,7 +934,7 @@ auto Kernel::sceAtracGetSecondBufferInfo() -> void {
 //(0x80630022); its address isn't checked (audio/atrac/second/setbuffer).
 auto Kernel::sceAtracSetSecondBuffer() -> void {
   u32 id = arg(0), address = arg(1), bytes = arg(2);
-  auto a = atracFind(id);
+  auto a = atracFind(id, true, true);
   if(!a) return;
   u32 least = 3 * a->frameBytes;
   if(a->state == StreamedWithSecond) {
@@ -908,18 +949,11 @@ auto Kernel::sceAtracSetSecondBuffer() -> void {
   result(0);
 }
 
-//(ID): where the ID's context is (atracContext()), in memory the library keeps for them all, taken from the user
-//partition the first time a program asks (none of the games tried does: pspautotests' tests read it); 0 for an ID
-//not handed out.
+//(ID): where the ID's context is (above); 0 for an ID not handed out. Nothing is written: the context is current
+//already, and what the program wrote there stays.
 auto Kernel::_sceAtracGetContextAddress() -> void {
   u32 id = arg(0);
   if(id >= AtracIDs || !atracs[id].codec) return result(0);
-  if(!atracContexts) {
-    auto block = allocate(AtracIDs * 256, 1, 0, "atrac contexts");
-    if(!block) return result(0);
-    atracContexts = block->address;
-  }
-  atracContext(id);
   result(atracContexts + id * 256);
 }
 
@@ -991,10 +1025,12 @@ auto Kernel::sceAtracLowLevelDecode() -> void {
   s32 made = a->decoder->decode(frame.data(), frame.size(), decoded.data(), a->frameSamples);
   if(made < 0) {
     a->error = AtracCodecError;
+    atracContext(id);
     return result(AtracErrorFailed);
   }
   a->error = 0;
   a->recent = std::move(frame);
+  atracContext(id);
   std::vector<s16> samples(a->frameSamples * a->outputChannels, 0);
   for(u32 n = 0; n < std::min<u32>(made, a->frameSamples); n++) {
     for(u32 c = 0; c < a->outputChannels; c++) {
