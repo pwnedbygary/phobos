@@ -4,6 +4,7 @@
 #include <bit>
 #include <cfenv>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <unordered_map>
 
