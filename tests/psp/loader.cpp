@@ -181,7 +181,10 @@ static auto prx() -> void {
       CHECK(s.memory.read(Allegrex::Word, Base + 0x2ac), syscall(0x102));
       CHECK(s.memory.read(Allegrex::Word, Base + 0x2b4), syscall(0x103));
     }
-    CHECK(module.skipped.size(), 1);  //ThreadManForUser's variable
+    //ThreadManForUser's variable: its entry's table (at 0x2b8, left empty) read, for the kernel to link
+    CHECK(module.skipped.empty(), true);
+    CHECK(module.variables.size() == 1 && module.variables[0].library == "ThreadManForUser", true);
+    if(module.variables.size() == 1) CHECK(module.variables[0].list, 0);
 
     CHECK(module.exports.size(), 2);
     if(module.exports.size() == 2) {
