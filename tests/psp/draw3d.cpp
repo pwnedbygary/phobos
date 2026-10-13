@@ -1055,7 +1055,7 @@ struct NothingDrawn : GE::Renderer {
   auto finish(GE&) -> void override {}
   auto written(GE&, u32) -> void override {}
   auto forget(GE&) -> void override {}
-  auto holds(GE&, const GE::Sampler&, u32, u32) -> bool override { return false; }
+  auto holds(GE&, const GE::Sampler&, u32, u32, const GE::Region&) -> bool override { return false; }
   auto drawnOver(GE&, u32, u32) -> bool override { return false; }
   auto besideChanged(GE&, u32, u32) -> void override {}
   auto meshes(GE&, const GE::Transform&, u32) -> bool override { return transforms; }

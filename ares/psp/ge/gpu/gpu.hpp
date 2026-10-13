@@ -198,6 +198,7 @@ struct GPU : GE::Renderer {
     u16 sourceX = 0, sourceY = 0, sourceWidth = 0, sourceHeight = 0;
     s32 delta = 0;
     u32 rowBytes = 0, sourceRowBytes = 0;
+    bool barrier = false;  //Draw: what the pass drew before made visible to its reading first (emit())
   };
   struct Recorded {
     std::vector<Command> commands;
@@ -361,7 +362,7 @@ struct GPU : GE::Renderer {
   auto finish(GE& ge) -> void override;
   auto written(GE& ge, u32 page) -> void override;
   auto forget(GE& ge) -> void override;
-  auto holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns) -> bool override;
+  auto holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns, const GE::Region& takes) -> bool override;
   auto memoryRows(GE& ge, const GE::Sampler& texture) -> u32 override;
   auto drawnOver(GE& ge, u32 first, u32 last) -> bool override;
   auto besideChanged(GE& ge, u32 first, u32 last) -> void override;
@@ -441,9 +442,11 @@ private:
   u64 uses = 0;
   //A texture in a target the GPU has drawn (holds()), for the next PRIM: where, and the texture it's copied into
   //(one for each place and size, kept with the target); its rows from split on in next, from that one's first, where
-  //it runs on into the frame buffer below; palette indices' palette (paletteFor(), 0 for a texture of colors)
+  //it runs on into the frame buffer below; palette indices' palette (paletteFor(), 0 for a texture of colors); and
+  //the texels the PRIM may take, left, top, right, bottom in the target's pixels (holds()' takes)
   struct Held {
     Target* target; s32 x, y; u32 width, rows, format; Target* next = nullptr; u32 split = 0; u32 palette = 0;
+    s32 takes[4] = {};
   };
   std::optional<Held> held;
   auto take(const GE::Sampler& texture, u32 offset, u64 end, u32 width, u32 rows, bool direct, bool exact) -> bool;
@@ -459,9 +462,10 @@ private:
   //(one for each target and place copied from, its width and rows, and the rectangle of the target changed since,
   //left, top, right, bottom in its pixels, none where left is past right: taken again, only that part is copied, so
   //an effect drawing again and again into one corner of the frame buffer it samples copies the corner, not the
-  //picture, as Killzone's menu blurs a strip right of its picture 1,100 times a frame. A PRIM taking fewer rows or
-  //columns from the place takes them from it too (Push::held). At most MostCopies, the one unused longest let go for
-  //another, and none unused for CopyAge PRIMs: release().)
+  //picture, as Killzone's menu blurs a strip right of its picture 1,100 times a frame; and only where the PRIM's
+  //texels meet it, so a PRIM reading one part of the frame buffer while those before it wrote another takes the copy
+  //as it is. A PRIM taking fewer rows or columns from the place takes them from it too (Push::held). At most
+  //MostCopies, the one unused longest let go for another, and none unused for CopyAge PRIMs: release().)
   struct Copied { u32 texture; u32 width, rows; u64 used; s32 dirty[4] = {0, 0, -1, -1}; };
   std::map<std::tuple<u32, s32, s32>, Copied> copies;  //(target, x, y)
   auto changed(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;  //(Target::changes)
@@ -476,10 +480,11 @@ private:
   auto reached() -> void;
   static constexpr u32 MostCopies = 32;
   static constexpr u64 CopyAge = 1 << 14;
-  //The current draw's primitives' boxes (left, top, right, bottom in the target's pixels, at most MostBoxes), where
-  //it reads the frame buffer without the GPU keeping their order (Backend::readsInOrder): one overlapping them
-  //begins another draw
+  //Where draws read the frame buffer without the GPU keeping their order (Backend::readsInOrder): the boxes of the
+  //primitives drawn into boxesTarget since the backend's last barrier there (left, top, right, bottom in its pixels,
+  //at most MostBoxes, the last grown to take more), which a primitive reading inside one waits for (emit())
   std::vector<std::array<float, 4>> boxes;
+  u32 boxesTarget = 0;
   static constexpr u32 MostBoxes = 64;
   //(a PRIM's vertices handed to the GPU, without waiting for its end, once there are this many: a long line's
   //pixels are six each)

@@ -821,6 +821,60 @@ static auto gpuMemorysRows() -> void {
   hardware.ge.setRenderer(nullptr);
 }
 
+//3D quads each reading the top of the frame buffer they draw into while writing its bottom (Killzone's menus blur a
+//strip so, reading one half while writing the other): the texels they take (their corners' u and v, the texture
+//held at its edges) miss what those before them drew, so the copy taken for the first serves them all, the target's
+//changes since left uncopied; then one reading what they drew is copied again. In each renderer, the pictures the
+//software renderer's.
+static auto gpuCopiesKept() -> void {
+  if(!renderer()) return;
+  auto f24 = [](float value) { return bitsOf(value) >> 8; };
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(!gpu) continue;
+    std::mt19937 random{20261087};
+    auto drawn = randomSprites(random, 30, false);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    //(a quad from x0 to x1 and y0 to y1 of the frame buffer, its texels the same columns' from row v0 on, 1:1:
+    //orthographic, texels and pixels meeting at their middles)
+    auto quad = [&](System& s, f32 x0, f32 x1, f32 y0, f32 y1, f32 v0) {
+      u32 to = GPUVertices;
+      for(u32 corner : {0u, 1u, 3u, 0u, 3u, 2u}) {
+        f32 x = corner & 1 ? x1 : x0, y = corner >> 1 ? y1 : y0, v = v0 + y - y0;
+        for(u32 word : {bitsOf(x / 64), bitsOf(v / 32), 0xffff'ffffu, 0u, 0u, bitsOf(1), bitsOf(x / 32 - 1),
+                        bitsOf(1 - y / 24), 0u}) {
+          s.memory.write(4, to, word), to += 4;
+        }
+      }
+      s.ge.vertexAddress = GPUVertices;
+      s.ge.primitive(GE::Triangles, 6);
+    };
+    GPU::Statistics before, between;
+    for(System* s : {&software, &hardware}) {
+      auto& c = s->ge.commands;
+      prepare(*s, 0, 3);
+      for(auto& one : drawn) sprite(*s, one);
+      texture(*s, Memory::VRAMBase, 64, 32, 64);
+      c[GE::TextureWrap] = 0x101, c[GE::VertexType] = 0x1ff, c[GE::MaxZ] = 0xffff;
+      c[GE::TextureScaleU] = c[GE::TextureScaleV] = f24(1);
+      for(u32 n = 0; n < 12; n++) s->ge.world[n] = s->ge.view[n] = f24(n % 4 == 0 ? 1 : 0);
+      for(u32 n = 0; n < 16; n++) s->ge.projection[n] = f24(n % 5 == 0 ? 1 : 0);
+      c[GE::ViewportXScale] = f24(32), c[GE::ViewportYScale] = f24(-24), c[GE::ViewportZScale] = f24(30000);
+      c[GE::ViewportXCenter] = f24(2048), c[GE::ViewportYCenter] = f24(2048), c[GE::ViewportZCenter] = f24(32768);
+      c[GE::OffsetX] = (2048 - 32) << 4, c[GE::OffsetY] = (2048 - 24) << 4;
+      if(s == &hardware) before = gpu->statistics;
+      for(u32 n = 0; n < 8; n++) quad(*s, n * 8, n * 8 + 8, 26, 48, 0);
+      if(s == &hardware) between = gpu->statistics;
+      quad(*s, 0, 32, 0, 22, 24);  //(reading what they drew)
+    }
+    CHECK(between.copies - before.copies, 1u);
+    CHECK(gpu->statistics.copies - between.copies, 1u);
+    CHECK(gpu->statistics.finishes, before.finishes);
+    CHECK(apart(software, hardware), 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+}
+
 //Render to texture from many places and sizes (a strip further down each time, wider or taller): the GPU's copies
 //of them are kept to a bound, the oldest let go, and every picture is still the software renderer's.
 static auto gpuCopies() -> void {
@@ -2571,6 +2625,7 @@ auto gpuTests() -> Tests {
     {"gpu a texture memory has the first rows of, then a frame buffer it draws: those rows decoded alone",
      gpuMemorysRows},
     {"gpu render-to-texture copies kept to a bound", gpuCopies},
+    {"gpu a copy serves PRIMs whose texels miss what those before them drew", gpuCopiesKept},
     {"gpu render to texture taken again in part: the strip an effect draws into", gpuPartialCopies},
     {"gpu render to texture from two frame buffers, one below the other, nothing finished", gpuStackedTexture},
     {"gpu a texture decoded again before the GPU has the first: its texels kept till then", gpuTexelsKept},

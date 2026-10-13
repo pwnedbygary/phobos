@@ -1241,9 +1241,10 @@ struct VulkanBackend : GPU::Backend {
           set = {true, scissor, s.stencilReference, s.stencilCompareMask, s.stencilWriteMask, s.blendConstant, s.push};
           lastState = c.state;
         }
-        //(what the draws before wrote, made visible to its reading, where the GPU doesn't keep the order: in
-        //rasterization order every pipeline of the subpass asks for it, which orders the draws before too)
-        if(s.pipeline.reads && !(readsInOrder && orderedPass)) {
+        //(what the draws before wrote, made visible to its reading, where the GPU doesn't keep the order and it
+        //reads where they drew (GPU::emit()): in rasterization order every pipeline of the subpass asks for it, which
+        //orders the draws before too)
+        if(c.barrier && s.pipeline.reads && !(readsInOrder && orderedPass)) {
           auto barrier = made<VkMemoryBarrier>(VK_STRUCTURE_TYPE_MEMORY_BARRIER);
           barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
           barrier.dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;

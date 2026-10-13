@@ -493,6 +493,8 @@ auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken, u
     if(found != copies.end() && !h.next && found->second.width >= h.width && found->second.rows >= h.rows) {
       auto& copied = found->second;
       if(copied.width != h.width || copied.rows != h.rows) taken = h.width | h.rows << 16;
+      auto& d = copied.dirty;
+      if(d[0] > h.takes[2] || h.takes[0] > d[2] || d[1] > h.takes[3] || h.takes[1] > d[3]) return copied.texture;
       s32 left = std::max(copied.dirty[0], h.x), top = std::max(copied.dirty[1], h.y);
       s32 right = std::min({copied.dirty[2], h.x + s32(copied.width) - 1, s32(h.target->stride) - 1});
       s32 bottom = std::min(copied.dirty[3], h.y + s32(copied.rows) - 1);
@@ -871,25 +873,30 @@ auto GPU::emit(const Vertex* vertices, u32 count) -> void {
   }
   reach.box[0] = std::min(reach.box[0], box[0]), reach.box[1] = std::min(reach.box[1], box[1]);
   reach.box[2] = std::max(reach.box[2], box[2]), reach.box[3] = std::max(reach.box[3], box[3]);
-  //A draw that reads the frame buffer, where the GPU doesn't keep its primitives' order (Backend::readsInOrder),
-  //takes no primitive overlapping one it has: that one begins another draw, after a barrier (the backend's), so
-  //it reads what the one before wrote. (Boxes in the target's pixels: a pixel's middle inside both overlaps.)
-  if(state.pipeline.reads && !backend->readsInOrder) {
-    if(joined) {
-      bool overlaps = boxes.size() >= MostBoxes;
-      for(auto& b : boxes) {
-        overlaps |= box[0] < b[2] && b[0] < box[2] && box[1] < b[3] && b[1] < box[3];
-      }
-      if(overlaps) joined = false, statistics.splits++;
+  //A primitive that reads the frame buffer, where the GPU doesn't keep the primitives' order (Backend::readsInOrder),
+  //sees what was drawn before it in the pass only past a barrier (the backend's: Command::barrier). One goes before
+  //it where it overlaps a primitive drawn since the last (beginning another draw), none where it overlaps nothing
+  //drawn since: Brandish's 880 draws a frame, its map's tiles and its sprites, had a barrier each. (Boxes in the
+  //target's pixels: a pixel's middle inside both overlaps. Another target begins another pass, after whose start
+  //the one before's are seen: the render pass's dependency.)
+  bool barrier = false;
+  if(backend->reads && !backend->readsInOrder) {
+    if(boxesTarget != state.target) boxes.clear(), boxesTarget = state.target;
+    if(state.pipeline.reads) {
+      for(auto& b : boxes) barrier |= box[0] < b[2] && b[0] < box[2] && box[1] < b[3] && b[1] < box[3];
     }
-    if(!joined) boxes.clear();
-    boxes.push_back(box);
+    if(barrier) statistics.splits += joined, joined = false, boxes.clear();
+    if(boxes.size() < MostBoxes) boxes.push_back(box);
+    else {
+      auto& b = boxes.back();
+      b = {std::min(b[0], box[0]), std::min(b[1], box[1]), std::max(b[2], box[2]), std::max(b[3], box[3])};
+    }
   }
   if(joined) {
     commands.back().count += count;
   } else {
     Command c{Command::Kind::Draw, state.target};
-    c.state = index, c.first = first, c.count = count;
+    c.state = index, c.first = first, c.count = count, c.barrier = barrier;
     commands.push_back(c);
     statistics.draws++;
   }
@@ -1317,7 +1324,7 @@ auto GPU::written(GE& ge, u32 page) -> void {
 //render to texture), or palette indices of as many bits as its pixels, none of them its stencil's (CLUT16 of a
 //16-bit frame buffer, CLUT32 of an 8888 one: Death Jr. II takes each of its picture's colors through a palette so),
 //looked up on the GPU; else the GE decodes it from memory, which finishes drawing first.
-auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns) -> bool {
+auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns, const GE::Region& takes) -> bool {
   this->ge = &ge;
   held.reset();
   if(!ready()) return false;
@@ -1395,6 +1402,10 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns) -> bo
   //(palette indices with their palette on the GPU, where it has room for it)
   auto taken = [&] {
     if(!take(texture, offset, end, width, rows, direct || indexed, exact)) return false;
+    auto& h = *held;  //(texels past those held are the last held's)
+    s32 right = h.width - 1, bottom = h.rows - 1;
+    h.takes[0] = h.x + std::min(takes.left, right), h.takes[1] = h.y + std::min(takes.top, bottom);
+    h.takes[2] = h.x + std::min(takes.right, right), h.takes[3] = h.y + std::min(takes.bottom, bottom);
     if(direct) return true;
     held->palette = paletteFor(texture);
     if(!held->palette) held.reset();
