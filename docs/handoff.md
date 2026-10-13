@@ -27,8 +27,8 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## Tests: a skip says what's missing, and fails where the lane must have it; the Allegrex measurements unpacked by content — 2026-10-13
 
-Branch `cursor/test-plan-04-2b67`, stacked on `cursor/test-plan-03-2b67` (package 03, itself on #241). Package 04 of
-the 2026-10-13 test and performance plan (indexed in the implementation plan by package 01's PR). Test harness, test
+Branch `cursor/test-plan-04-2b67` (PR #246), stacked on `cursor/test-plan-03-2b67` (#245, itself on #241). Package 04
+of the 2026-10-13 test and performance plan (indexed in the implementation plan by #244). Test harness, test
 scripts and CI only: no core or app change, no check loosened.
 - **The problem**: with no Vulkan GPU, `tests/psp/gpu.cpp` said "skipped" once and every GPU group then printed
   "pass"; the groups needing the test programs or the GE's measurement rounds returned early, silently, without
@@ -56,9 +56,16 @@ scripts and CI only: no core or app change, no check loosened.
   were.
 - **Checks** (the Mac): the changed test sources compile with `-Wall -Wextra -Werror` (syntax-only, both flag sets);
   `tests/allegrex` 60/0 with its report (60 pass lines), a second run unpacking nothing, and a disposable copy with one
-  packed file damaged: exit 1, "tests/allegrex/measured/vadd-spread.bin.xz doesn't unpack (damaged?)". CI on the PR
-  and the negative controls (Vulkan off while required, a missing program while required, Vulkan off and optional):
-  below once run.
+  packed file damaged: exit 1, "tests/allegrex/measured/vadd-spread.bin.xz doesn't unpack (damaged?)". CI on #246
+  (run 38439504812, at `60e8f1e14`): the system suite "497 groups, 0 failures, 1 skipped" (vulkan-unordered-reads:
+  lavapipe reads in order), with every requirement met; the ares system 318/0; Allegrex 60/0; the runner's test
+  passing; the reports kept.
+- **Negative controls** (run 38439595119, dispatched on a disposable branch whose workflow ran the lanes these ways;
+  deleted after): `cube.elf` missing from the programs while they're required: "497 groups, 3 failures, 1 skipped",
+  each FAIL naming it ("programs is required here (PHOBOS_TESTS_REQUIRE), and cube.elf isn't in
+  PSP_TEST_PROGRAMS"); the ares lane with no programs while required: "33 checks, 1 failed, the programs' checks
+  skipped"; Vulkan off (`PSP_GPU=0`) with nothing required: passes, "497 groups, 0 failures, 45 skipped", each GPU
+  group `skip ... (vulkan: PSP_GPU=0)`; Vulkan off while required: below once run.
 
 ## Tests: the host suites' objects kept by what they include and how they're compiled, a checkout's apart — 2026-10-13
 
