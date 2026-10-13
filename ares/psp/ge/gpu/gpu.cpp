@@ -264,14 +264,15 @@ auto GPU::takeDepth(Target& t, const GE::PixelState& p) -> void {
 //blended by: from memory's depth (not the GPU's) the sky covered the whole race. A read back of those depths alone,
 //waited for (each target's own changes from memory filled into it first, so none is lost); the targets' pixels and
 //pages stay the GPU's. Memory hears of the bytes changed (decoded textures, the recompiler), and so do the targets
-//over them, but those whose depth is what was put there. (The second and fourth copies rearrange each 16 KiB: all of
-//each 16 KiB they touch is taken.)
+//over them, which fill them again, but those whose depth is what was put there, where no newer depth put after
+//reaches it: their changes from memory are kept as they were. (The second and fourth copies rearrange each 16 KiB:
+//all of each 16 KiB they touch is taken.)
 auto GPU::putDepth(u32 first, u32 last) -> void {
   first &= ~0x3fffu, last |= 0x3fff;
-  auto reaches = [&](const Target& t) {
-    u32 low = t.depthBuffer & ~0x3fffu, high = (t.depthBuffer + t.depthRows * t.depthStride * 2 - 1) | 0x3fff;
-    return low <= last && first <= high;
+  auto bytes = [](const Target& t) -> std::pair<u32, u32> {
+    return {t.depthBuffer & ~0x3fffu, (t.depthBuffer + t.depthRows * t.depthStride * 2 - 1) | 0x3fff};
   };
+  auto reaches = [&](const Target& t) { return bytes(t).first <= last && first <= bytes(t).second; };
   std::vector<Target*> put;  //(the newest over each depth buffer, where memory hasn't it)
   for(auto& t : targets) {
     if(!t->depthAt || t->depthKept || !t->depthRows || !t->depthStride || !reaches(*t)) continue;
@@ -314,18 +315,27 @@ auto GPU::putDepth(u32 first, u32 last) -> void {
     }
     statistics.depthsPut++;
   }
+  std::vector<std::pair<u32, u32>> changes;  //(each target's changes from memory, as they were)
+  for(auto& t : targets) changes.push_back({t->depthChangedFrom, t->depthChangedTo});
   for(auto* t : put) {
-    u32 low = t->depthBuffer & ~0x3fffu;
-    u32 high = std::min<u32>((t->depthBuffer + t->depthRows * t->depthStride * 2 - 1) | 0x3fff, Memory::VRAMSize - 1);
-    memory.changed(Memory::VRAMBase + low, high - low + 1);
+    auto [low, high] = bytes(*t);
+    memory.changed(Memory::VRAMBase + low, std::min<u32>(high, Memory::VRAMSize - 1) - low + 1);
   }
-  for(auto* t : put) {
-    for(auto& other : targets) {  //(the depths memory has now)
-      if(other->depthBuffer != t->depthBuffer || other->depthStride != t->depthStride) continue;
-      if(other->depthAt != t->depthAt) continue;
-      other->depthKept = true, other->depthChangedFrom = other->depthChangedTo = 0;
+  for(u32 n = 0; n < put.size(); n++) {
+    Target& t = *put[n];
+    bool over = false;  //(a newer depth put after reaches its bytes: those of its depth buffer fill them again)
+    for(u32 later = n + 1; later < put.size(); later++) {
+      over |= bytes(*put[later]).first <= bytes(t).second && bytes(t).first <= bytes(*put[later]).second;
     }
-    memory.watch(Memory::VRAMBase + 3 * Memory::VRAMSize + t->depthBuffer, t->depthRows * t->depthStride * 2);
+    for(u32 i = 0; i < targets.size(); i++) {
+      auto& other = *targets[i];
+      if(other.depthBuffer != t.depthBuffer || other.depthStride != t.depthStride || other.depthAt != t.depthAt) {
+        continue;
+      }
+      other.depthKept = true;
+      if(!over) other.depthChangedFrom = changes[i].first, other.depthChangedTo = changes[i].second;
+    }
+    memory.watch(Memory::VRAMBase + 3 * Memory::VRAMSize + t.depthBuffer, t.depthRows * t.depthStride * 2);
   }
   release();
 }
