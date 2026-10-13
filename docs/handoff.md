@@ -25,6 +25,42 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP GE: the front end faster — vertices read a part at a time, fast mode's corners four at a time in vectors, each corner placed once — 2026-10-13
+
+Branch `cursor/psp-ge-headroom-2b67`, on master (with #233, #234 and #235 in it).
+docs/psp-core.md, part 85, has the evidence. Clean room: no PPSSPP code read, JPCSP not read. Save states unchanged
+(StateVersion 26).
+- **Measured first** (the M1, the bench runner at -O3 with thin LTO and the emulation thread's counters, `sample`
+  profiles by line): Army of Two's 650,000 vertices a frame went to placing fast mode's corners (17%, each corner
+  projected again at every triangle) and reading vertices (18%); Super Monkey Ball's 50,000 small PRIMs a frame to
+  their setup, the command loop and the guest's VFPU; Ghost of Sparta's menu to `transformAll()`, `GPU::own()` (10%)
+  and MoltenVK's submissions.
+- **Changes**: vertices read a part at a time from the host's bytes; fast mode's corners placed once a corner and four
+  at a time in vectors (NEON), skinned ones after their scalar bone sums; fast mode's models not zeroed first;
+  `GPU::own()` passing over pages already its own and busy, memory's changes over unwatched pages eight at once; a
+  list's words from the host's bytes; the kept settings' bones only for skinning PRIMs; each 3D triangle's corners
+  placed once a vertex (`Renderer::triangleAt()`). `transformAll()` four at a time was tried and taken back: timed
+  alone it was slower than base's scalar code, which the compiler already vectorizes (gathering and spreading the
+  fields cost more than the lanes saved); `meshTriangles()`, which keeps only each corner's place, gains from them.
+- **Numbers** (the M1, MoltenVK, the emulation thread, base -> branch, two rounds taking turns at a load of 20-120;
+  fps it allows; instructions steadier): Vulkan (fast) Army of Two playing 14 -> 19 (587 -> 369 M instructions a
+  frame) and its menu 20 -> 27, Ghost of Sparta's menu 25 -> 29, Colin McRae 60 -> 68, Monkey Ball 15 -> 16; Vulkan
+  (accurate) Army of Two 17 -> 19, Ghost of Sparta 25 -> 33, Monkey Ball 19 -> 21; Software Army of Two 9 -> 10,
+  Monkey Ball 15 -> 16; Death Jr. II, Sonic Rivals and Activision Hits Remixed 1-9% fewer instructions.
+- **Exact**: base against the final code from the 21 scenes' states, 100 frames, every frame's picture and VRAM, then
+  RAM and the machine's state: identical in all three renderers. Lanes written in the scalar code's expression shapes
+  (Clang's fused multiply-adds); skinned bone sums kept scalar; `transformAll()` bit-identical to base's, not-a-numbers
+  included.
+- **Checks** (the final code, #234's reconciled branch merged): tests/psp 494/0 (sanitized), tests/allegrex 60/0,
+  tests/psp/ares 318/0; GCC 14 builds the GE and its tests with -Wall -Wextra -Werror.
+- **Review**: a fresh read-only review; two blockers (a not-a-number's sign in the four-lane `transformAll()`, gone
+  with it; an enumerator and an int in a conditional, an error under GCC's -Wextra -Werror: 0u) and minor points,
+  all taken but an ARM64 CI job.
+- **What's left**: Ghost of Sparta's 1,350 GPU draws a frame, 91% split by #234's push constant `held` alone;
+  Army of Two's draws split by texture and its models built on the CPU; Monkey Ball's PRIMs' setup (a Look kept from
+  the last PRIM) and its VFPU (the CPU's); `light()`, now Ghost of Sparta's biggest function; the software renderer's
+  triangle setup; an ARM64 CI job.
+
 ## PSP: savedata's patterns — Dissidia's Load Game, Final Fantasy Type-0's list; Disgaea Infinite's New was Continue — 2026-10-13
 
 Branch `cursor/psp-savedata3-2b67`, on master (1d9308714, #228). docs/psp-core.md, part 84, has the evidence. Clean
