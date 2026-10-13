@@ -188,9 +188,9 @@ jobs:
 
   # tests/psp again built as the app's release builds are (PHOBOS_TESTS_MODE=release: BUILD_RELEASE, -O3, no
   # sanitizers), with the same requirements. Red until GCC 13 at -O3 -Werror passes the four files it rejects now,
-  # each read as a false positive: ge.cpp (four.cpp's maybe-uninitialized reads), kernel.cpp (serialization.cpp's
-  # right stick), desktop/PspDiscInfo.cpp (nall's string allocator) and tests/psp/crypto.cpp (the handoff's package
-  # 06 entry).
+  # each read as a false positive (the handoff's package 06 entry): ares/psp/ge/ge.cpp (four.cpp's
+  # maybe-uninitialized reads), ares/psp/kernel/kernel.cpp (serialization.cpp's right stick),
+  # desktop/PspDiscInfo.cpp (nall's string allocator) and tests/psp/crypto.cpp (put32() in kirkPrivate()).
   system-release:
     name: PSP system tests, built as the app is
     runs-on: ubuntu-24.04
