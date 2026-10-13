@@ -5,7 +5,8 @@ name: PSP Core Tests
 # Phobos builds it (tests/psp/ares/run-tests.sh); and the headless runner, built and running a test program
 # (tests/psp/ares/runner-test.sh). Their paths are what those builds compile or read: the core, nall, ares's framework
 # and libco, sljit and its configuration, Vulkan's headers, libchdr, FFmpeg's build, the runner, the desktop's disc
-# reader, the tests, and the byte files the PSP's tests share with the app's (android/app/src/test/resources/psp-*).
+# reader, the tests, and the files the PSP's tests share with the app's (android/app/src/test/resources/psp-*: the
+# dialogs' byte form, the keyboard's cases).
 # A version tag runs every suite (a tag's push takes no path filter). The runners are pinned to Ubuntu 24.04 (its
 # GCC 13), so a new image is a change made on purpose. Each suite's last line, its count, goes in the
 # run's summary with the commit.

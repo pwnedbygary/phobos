@@ -139,9 +139,9 @@ class PspRightStickTest {
         move(-0.8f, 0.6f, ANALOG, lx = 0.3f, ly = 0.1f)
         assertEquals(-0.8f, GameInputState.lx, 0f)
         assertEquals(0.6f, GameInputState.ly, 0f)
-        // The left stick takes the right's place, which the PSP doesn't read.
-        assertEquals(0.3f, GameInputState.rx, 0f)
-        assertEquals(0.1f, GameInputState.ry, 0f)
+        // The right stick is still itself too, for games patched to read a second stick; the left goes nowhere.
+        assertEquals(-0.8f, GameInputState.rx, 0f)
+        assertEquals(0.6f, GameInputState.ry, 0f)
 
         move(-0.8f, 0.6f, OFF, lx = 0.3f, ly = 0.1f)
         assertEquals(0.3f, GameInputState.lx, 0f)
@@ -150,6 +150,20 @@ class PspRightStickTest {
         move(-0.8f, 0.6f, ANALOG, system = "PlayStation", lx = 0.3f, ly = 0.1f)
         assertEquals(0.3f, GameInputState.lx, 0f)
         assertEquals(0.6f, GameInputState.ry, 0f)
+    }
+
+    @Test
+    fun theRightStickReachesThePspCoreInEveryChoice() {
+        // The core reports it in SceCtrlData's bytes 10 and 11 for patched games (the True Analogs mods), whatever the
+        // choice; at rest it's 0, which the core reads as 128, centred.
+        for (choice in PspRightStick.entries) {
+            move(0.25f, -0.75f, choice, lx = 0.5f, ly = 0.5f)
+            assertEquals("$choice", 0.25f, GameInputState.rx, 0f)
+            assertEquals("$choice", -0.75f, GameInputState.ry, 0f)
+            move(0f, 0f, choice, lx = 0.5f, ly = 0.5f)
+            assertEquals("$choice", 0f, GameInputState.rx, 0f)
+            assertEquals("$choice", 0f, GameInputState.ry, 0f)
+        }
     }
 
     @Test
