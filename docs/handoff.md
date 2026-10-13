@@ -39,22 +39,31 @@ in the implementation plan). CI only: no core, app or test code changes.
   build cached as the system job has it), and a new workflow, Neo Geo CD Tests, runs `tests/ngcd/run-tests.sh` on
   changes to the Neo Geo core, the 68000, the Z80, ymfm, ares's framework, nall, libco or the tests. PSP Core Tests'
   paths add `ares/ares/**`, `libco/**`, `thirdparty/sljit/**` and `thirdparty/sljit*`, `thirdparty/Vulkan-Headers/**`,
-  `thirdparty/libchdr/**`, `tools/psp-runner/**` and `android/app/src/test/resources/psp-*` (the last as #230 adds it,
-  so that line's conflict resolves to this one). Both workflows also run for version tags (a tag's push takes no path
+  `thirdparty/libchdr/**`, `tools/psp-runner/**`, `desktop/Platform.hpp` (which `desktop/PspDiscInfo.cpp`
+  includes) and `android/app/src/test/resources/psp-*` (the last as #230 adds it, so that line's conflict resolves
+  to this one); Neo Geo CD Tests' include sljit's (ares.hpp includes `sljit.h`). Both workflows also run for version tags (a tag's push takes no path
   filter). Every suite's last line, its count, goes in the run's summary with the commit; the suites' output goes
-  through `tee`, so their steps run as `shell: bash` (pipefail) to keep a failure failing.
+  through `tee`, so their steps run as `shell: bash` (pipefail) to keep a failure failing, and a suite that left no
+  output says so in the summary. Both workflows' runners are pinned to Ubuntu 24.04 (ubuntu-latest moves to 26 on
+  2026-10-19: a new GCC, a new FFmpeg build, maybe new `-Werror` warnings, taken on purpose instead), each job has a
+  time limit (20 to 60 minutes), and only a PR's newer push cancels its run: every master and tag run finishes.
 - **Not done here**: a workflow whose paths don't match doesn't run, which shows as no check rather than as a passing
   one; and Android's release and nightly don't wait for these workflows (they are separate; package 20 or a later
   change can gate them explicitly).
 - **Checks**: actionlint 1.7.12 on both workflows (clean). CI on #241 (runs 38439422378 and 38439422290, at
   `f1d3915f4`): Allegrex 60/0, the system suite 497/0, the ares system 318/0, the runner's test passing, NGCD
-  2835/0, each count in the run's summary. Its first run's summary steps failed (the suites passed): an apostrophe
-  inside `${HEAD_SHA:+...}` that bash took for a quote; fixed in `f1d3915f4`.
-- **Negative control** (a disposable branch with one failing check in each suite: run 38436478270, dispatched, and
-  draft #242 for the new NGCD workflow, which a dispatch can't run before it's on master; both deleted after): every
-  lane failed: Allegrex "60 groups, 1 failure", the ares system "319 checks, 1 failed", the system suite "491 groups,
-  1 failure", the runner's test on its frame count, NGCD "2836 checks, 1 failures" (each through `tee`, the step
-  failing).
+  2835/0, each count in the run's summary. A run's summary steps failed at `a2483e36c` (the suites passed): an
+  apostrophe inside `${HEAD_SHA:+...}` that bash took for a quote; fixed in `f1d3915f4`.
+- **Negative control** (a disposable branch from this PR's first commit `1bf7afd26`, on master `9333a8d7a`, hence
+  491 groups, with one failing check in each suite: run 38436478270, dispatched, and draft #242 for the new NGCD
+  workflow, which a dispatch can't run before it's on master; #242 closed and the branch deleted after): every lane
+  failed: Allegrex "60 groups, 1 failure", the ares system "319 checks, 1 failed", the system suite "491 groups, 1
+  failure", the runner's test on its frame count, NGCD "2836 checks, 1 failures" (each through `tee`, the step
+  failing; the test steps are the same in `f1d3915f4`).
+- **Review**: an independent read-only review (it scanned every source the five builds compile against the paths)
+  found sljit's headers missing from NGCD's paths and `desktop/Platform.hpp` from PSP's, and this entry calling the
+  control's branch deleted when it wasn't yet; all fixed, with its suggestions taken (the Ubuntu pin, time limits,
+  master's runs not cancelled, the empty-log case).
 
 ## PSP: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces — 2026-10-13
 
