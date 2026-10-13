@@ -210,19 +210,21 @@ auto GE::primitive(u32 kind, u32 count) -> void {
 //curved surface's (curves.cpp), whose rows are strips of strip vertices each, drawn one after another as if each were
 //a PRIM of its own (a strip, or points, of all of them: strip as many as there are).
 //The texels a PRIM may take (drawVertices()' takes), from u and v between low and high, held inside the texture where
-//it holds them there, all of it where they may repeat round: two texels round them (2D's filter and stepping), or
-//tight, those the GPU's filter takes at any u and v between (its weights in sixteenths: a second texel at a sixteenth
-//or more; filtered, either way it may be), a 256th of a texel round them for its arithmetic.
+//it holds them there, all of it where they may repeat round: margin texels round them, or tight (margin 0), those
+//the GPU's filter takes at any u and v between (its weights in sixteenths: a second texel at a sixteenth or more;
+//filtered, either way it may be), a 256th of a texel round them for its arithmetic and 2^-13 of their size for the
+//GE's (a 3D corner's coordinates are cut to 15 bits of fraction).
 static auto texelsInside(GE::Region& takes, const GE::Sampler& texture, bool filtered, f64 lowU, f64 highU, f64 lowV,
-                         f64 highV, bool tight) -> void {
+                         f64 highV, f64 margin) -> void {
   auto axis = [&](f64 low, f64 high, s32 size, bool held, s32& first, s32& last) {
     if(!(low <= high)) return;  //(not a number)
-    f64 from = std::floor(low) - 2, to = std::floor(high) + 2;
-    if(tight && filtered) {
-      low -= 0.5 + 1.0 / 256, high -= 0.5 - 1.0 / 256;
+    f64 from = std::floor(low - margin), to = std::floor(high + margin);
+    f64 hair = 1.0 / 256 + std::max(std::abs(low), std::abs(high)) / 8192;
+    if(!margin && filtered) {
+      low -= 0.5 + hair, high -= 0.5 - hair;
       from = std::floor(low), to = std::floor(high) + (high - std::floor(high) >= 1.0 / 16);
-    } else if(tight) {
-      from = std::floor(low - 1.0 / 256), to = std::floor(high + 1.0 / 256);
+    } else if(!margin) {
+      from = std::floor(low - hair), to = std::floor(high + hair);
     }
     if(!held && (from < 0 || to >= size)) return;
     first = s32(std::clamp<f64>(from, 0, size - 1)), last = s32(std::clamp<f64>(to, 0, size - 1));
@@ -309,7 +311,15 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
       u32 reach = maxU + 2 > 0 ? u32(maxU + 2) : 0;
       columns = std::min<u32>((reach + 8) & ~7u, width);
     }
-    if(!smooth) texelsInside(takes, texture, filtered, minU, maxU, minV, maxV, false);
+    //(two texels round 2D's coordinates for the filter and stepping; a sprite's GPU quads cover whole pixels, above
+    //1x past the GE's middles by half of one, which takes as much more of a step as a pixel's is)
+    f64 step = 0;
+    for(u32 n = 0; renderer && kind == Sprites && n + 1 < count; n += 2) {
+      auto &from = vertices[n], &to = vertices[n + 1];
+      f64 across = std::max(std::min(std::abs(f64(to.x) - from.x), std::abs(f64(to.y) - from.y)), 1.0);
+      step = std::max(step, std::max(std::abs(f64(to.u) - from.u), std::abs(f64(to.v) - from.v)) / across);
+    }
+    if(renderer && !smooth) texelsInside(takes, texture, filtered, minU, maxU, minV, maxV, 2 + std::ceil(0.6 * step));
   }
   //With a hardware renderer (ge.hpp's Renderer) the primitives go to it, their settings first. Its texture is the
   //renderer's own where it's in a frame buffer the GPU has drawn (render to texture), else always decoded, even one
@@ -364,15 +374,16 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     t.textureWidth = texture.width, t.textureHeight = texture.height;
     t.vertexColor = format.colorFormat != 0;
   }
-  //(3D's texels where they're the vertices' own coordinates, scaled and offset as transform() maps them: every
-  //pixel's lie between its corners', as their perspective weighs them, and clipping cuts along its edges. Killzone's
-  //menus blur a strip so, 800 quads a frame, each reading one half of it while writing the other. Worked out only
-  //where the renderer holds the texture.)
-  bool smooth = (kind == Lines || kind == LineStrip) && (commands[AntiAliasEnable] & 1) && !pixel.clear;
+  //(3D triangles' texels where they're the vertices' own coordinates, scaled and offset as transform() maps them:
+  //every pixel's lie between its corners', as their perspective weighs them, and clipping cuts along its edges; a
+  //sprite's or a line's pixels may lie past them, which leaves the whole texture. Killzone's menus blur a strip so,
+  //800 quads a frame, each reading one half of it while writing the other. Worked out only where the renderer holds
+  //the texture.)
   struct Taken {
     Region takes; const Sampler& texture; const Transform& t; const std::vector<Vertex>& vertices; bool filtered, own;
   };
-  Taken taken{takes, texture, t, vertices, filtered, !format.through && t.mapMode == 0 && !smooth && !vertices.empty()};
+  bool triangles = kind == Triangles || kind == TriangleStrip || kind == TriangleFan;
+  Taken taken{takes, texture, t, vertices, filtered, !format.through && t.mapMode == 0 && triangles && !vertices.empty()};
   auto texelsTaken = [&taken]() -> Region {
     auto& a = taken;
     Region takes = a.takes;
@@ -383,7 +394,7 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
       f64 v = (vertex.v * a.t.textureScale[1] + a.t.textureOffset[1]) * a.texture.height;
       lowU = std::min(lowU, u), highU = std::max(highU, u), lowV = std::min(lowV, v), highV = std::max(highV, v);
     }
-    texelsInside(takes, a.texture, a.filtered, lowU, highU, lowV, highV, true);
+    texelsInside(takes, a.texture, a.filtered, lowU, highU, lowV, highV, 0);
     return takes;
   };
   //Without a renderer to hand them to (which may transform its own), 3D vertices are transformed before the texture
@@ -404,7 +415,7 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   };
   if(textured && !skipping && !(hardware && renderer->holds(*this, look.texture, heldRows, heldColumns, texelsTaken))) {
     //Hardware keeps its own copy of a frame buffer: don't defer a software-batch wait for it.
-    if(hardware && rows == ~0u) drawnRows = renderer->memoryRows(*this, look.texture);
+    if(hardware && rows == ~0u) drawnRows = renderer->memoryRows(*this, look.texture, texelsTaken);
     decode(look, hardware ? Region{0, 0, -1, -1} : region, drawnRows, !hardware, copyDraws);
     if(!look.texture.decoded && !look.deferRows) look.texture.bytes = direct(look.texture);
   }

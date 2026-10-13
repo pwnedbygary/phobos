@@ -52,14 +52,10 @@ layout(constant_id = 17) const uint TERM = 0u;
 //Fast mode's 3D (transform.vert): flat shading's colors are the triangle's first corner's, which mesh() makes the
 //GE's last
 layout(constant_id = 18) const uint FLAT = 0u;
-//The depth the GPU tests and writes is the GE's whole number, the interpolated depth rounded down as the GE steps it
-//(raster.cpp), where the pipeline tests or writes depth: two surfaces at one depth meet as the GE's do (Daxter's
-//shadow, drawn twice over the floor with "at most", darkens twice)
-layout(constant_id = 19) const uint DEPTH = 0u;
 //A texture of palette indices taken from a frame buffer (render to texture: gpu.cpp's textureFor()): each texel the
 //index its bits are (1: a 16-bit frame buffer's, in TEXELS' format; 2: an 8888 one's), CLUT_FORMAT's shift, mask and
 //offset taken as texture.cpp's texelFrom() takes them, looked up in its palette (palettes' row push.palette names)
-layout(constant_id = 20) const uint INDEXED = 0u;
+layout(constant_id = 19) const uint INDEXED = 0u;
 
 layout(push_constant) uniform Push {
   vec2 scale;
@@ -295,7 +291,13 @@ void main() {
     chosen = texels <= 1.0 ? (push.filtering >> 8 & 1u) != 0u : (push.filtering & 1u) != 0u;
   }
   float depth = clamp(vertexDepth, 0.0, 65535.0);
-  if(DEPTH != 0u) gl_FragDepth = floor(depth) / 65535.0;
+#ifdef DEPTHS
+  //(DEPTHS: compile.sh, for pipelines whose depth test or write the depth decides) the depth the GPU tests and writes
+  //is the GE's whole number, the interpolated depth rounded down as the GE steps it (raster.cpp), in 65,536ths, as
+  //memory's are filled: two surfaces at one GE depth meet as the GE's do. Built apart: a shader that writes the depth
+  //may keep the GPU from testing it before the shader runs.
+  gl_FragDepth = floor(depth) * (1.0 / 65536.0);
+#endif
   if(DEPTH_RANGE != 0u) {
     uint z = uint(depth);
     if(z < (push.depthRange & 0xffffu) || z > push.depthRange >> 16) discard;

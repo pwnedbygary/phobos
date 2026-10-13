@@ -243,6 +243,10 @@ struct GPU : GE::Renderer {
     //(Upload) or moved into one (Move) are drawn with their stencil at once, not a bit at a time (the tests turn it
     //off to draw the bits)
     bool stencilExport = false;
+    //Whether a move draws the stencil with the colors (move.frag's EXPORT build, with stencilExport): a move between
+    //frame buffers of other row widths, which leaves the pixels it doesn't reach, needs it (movable())
+    bool moveExport = false;
+    u64 texturesKept = 0;  //textures made from one let go of (makeTexture(): the tests')
     //Whether the last run put a picture on the window: a Present's swapchain image acquired and presented (not
     //where there's no window, or the acquiring timed out: the host shows the frame itself then)
     bool presented = false;
@@ -305,8 +309,10 @@ struct GPU : GE::Renderer {
     //VRAM's bytes (offsets, inclusive) someone reached in its pages while the GPU drew in them, not over what it
     //drew (drawnOver()), or changed in pages it hasn't drawn in since the last finish (written()): memory's, maybe
     //changed, so they're filled again from memory before it draws, shows or lends a texture over any of them
-    //(revive()). (At most 16 ranges: with no room for another, those it has are filled from memory first.)
+    //(revive()). Past 16 ranges (keepBeside()) they're kept all the same, and full: all of them filled before the
+    //target is next used, as though they reached what it's used for (besideReaches()).
     std::vector<std::pair<u32, u32>> beside;
+    bool besideFull = false;
     //VRAM's bytes (offsets, inclusive) in its drawn rows a block transfer or the CPU has written whole since it
     //drew there (overwritten()): memory's, not put back, and filled again before a PRIM draws over them or they're
     //copied or shown or moved (revive()). (At most 16; where there'd be more, the write waits for a finish.)
@@ -333,6 +339,7 @@ struct GPU : GE::Renderer {
     u64 copied = 0;    //the targets' pixels those copies took (render to texture: textureFor())
     u64 pictures = 0;  //frames shown straight from a target (picture())
     u64 readingDraws = 0, splits = 0;  //draws blended in the shader; those begun as their primitives overlapped
+    u64 barriers = 0;  //reading draws after a barrier, without rasterization order (emit())
     u64 presents = 0, presentsFromMemory = 0;  //frames presented on the window (show()): from a target, memory's
     u64 meshes = 0;    //3D PRIMs the GPU transformed (fast mode: mesh(), the first of each PRIM's runs)
     u64 moves = 0;     //rectangles moved from one target into another on the GPU (move()), not put back and filled
@@ -364,7 +371,8 @@ struct GPU : GE::Renderer {
   auto forget(GE& ge) -> void override;
   auto holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns,
              const std::function<auto () -> GE::Region>& takes) -> bool override;
-  auto memoryRows(GE& ge, const GE::Sampler& texture) -> u32 override;
+  auto memoryRows(GE& ge, const GE::Sampler& texture, const std::function<auto () -> GE::Region>& takes)
+    -> u32 override;
   auto drawnOver(GE& ge, u32 first, u32 last) -> bool override;
   auto besideChanged(GE& ge, u32 first, u32 last) -> void override;
   auto overwritten(GE& ge, u32 first, u32 last) -> void override;
@@ -450,7 +458,13 @@ private:
     s32 takes[4] = {};
   };
   std::optional<Held> held;
-  auto take(const GE::Sampler& texture, u32 offset, u64 end, u32 width, u32 rows, bool direct, bool exact) -> bool;
+  auto take(const GE::Sampler& texture, u32 offset, u64 end, u32 width, u32 rows, bool direct, bool exact,
+            const std::function<auto () -> GE::Region>& takes) -> bool;
+  //(whether rows past a texture's first kept may be held at the last kept one: in fast mode, or where the PRIM takes
+  //none of them)
+  auto holdable(u32 kept, const std::function<auto () -> GE::Region>& takes) const -> bool {
+    return fast || takes().bottom < s32(kept);
+  }
   //Palettes on the GPU (Backend::makePalette()), for textures of palette indices taken from frame buffers: one for
   //each palette the GE has had (its format and bytes, by the GE's hash), the one unused longest let go past
   //MostPalettes (Death Jr. II's colors go through a palette of their own for each of 32 strips of its screen)
@@ -507,6 +521,7 @@ private:
   auto intoRows(const Target& from, const Target& t, const s32 (&box)[4]) const -> std::pair<s32, s32>;
   auto move(Target& from, Target& t, const Moving& m) -> void;
   auto keepBeside(Target& t, u32 first, u32 last) -> void;  //(Target::beside's first to last added)
+  static constexpr u32 MostBeside = 256;
   auto own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;
   auto textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken, u8& indexed, u32& palette) -> u32;
   auto settings(const GE::Look& look) -> void;

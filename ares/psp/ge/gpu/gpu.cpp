@@ -241,20 +241,25 @@ static auto widen(s32 (&box)[4], s32 left, s32 top, s32 right, s32 bottom) -> vo
 //memory's too (Brave Story's list, written beside its picture a row at a time, is 16 ranges of 32 pixels).
 auto GPU::revive(Target& t, std::vector<std::pair<u32, u32>>& ranges) -> void {
   if(&ranges == &t.dead) drawnSerial++;  //(drawn bytes again)
+  if(&ranges == &t.beside) t.besideFull = false;
   u32 bytes = t.bytes(), rowBytes = t.stride * bytes;
+  //(many ranges, or ranges close together, as one rectangle round them where it reaches none of its pixels)
   if(&ranges == &t.beside && ranges.size() > 1 && t.rows) {
     s32 box[4] = {0, 0, -1, -1};
+    u64 kept = 0;  //(the ranges' pixels)
     for(auto [first, last] : ranges) {
       first = std::max(first, t.address), last = std::min(last, t.end() - 1);
       if(first > last) continue;
       s32 top = (first - t.address) / rowBytes, bottom = (last - t.address) / rowBytes;
       s32 left = (first - t.address) % rowBytes / bytes, right = (last - t.address) % rowBytes / bytes;
       if(top >= s32(t.rows)) continue;
+      kept += (last - first) / bytes + 1;
       if(top != bottom) left = 0, right = t.stride - 1;
       widen(box, left, top, right, std::min<s32>(bottom, t.rows - 1));
     }
     bool apart = !t.drawn() || box[2] < t.left || t.right < box[0] || box[3] < t.top || t.bottom < box[1];
-    if(box[0] <= box[2] && box[1] <= box[3] && apart) {
+    u64 area = u64(box[2] - box[0] + 1) * (box[3] - box[1] + 1);
+    if(box[0] <= box[2] && box[1] <= box[3] && apart && (ranges.size() > 8 || area <= kept * 4)) {
       fill(t, box[1], box[3] + 1, {}, 1, box[0], box[2]);
       return ranges.clear();
     }
@@ -361,7 +366,7 @@ auto GPU::movable(const Target& from, const Target& t, u32 first, u32 last, s32 
   }
   //(rows of another width take whole rows of t, its pixels the box's bytes don't reach left as they are: their
   //stencils too, which needs the shader to give the stencil, where t has one)
-  if(rowBytes != fromRow && t.format && !backend->stencilExport) return false;
+  if(rowBytes != fromRow && t.format && !(backend->stencilExport && backend->moveExport)) return false;
   box[0] = from.left, box[2] = from.right;
   if(from.bytes() < t.bytes()) box[0] &= ~1, box[2] |= 1;
   box[1] = std::max<s32>(from.top, (s32(first * Memory::PageSize) - s32(from.address)) / s32(fromRow));
@@ -804,6 +809,7 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   if(!alone && moving.empty()) t->alone = {first, last, drawnSerial};
   for(auto& m : moving) {
     s32 box[4];
+    if(m.from->besideFull) revive(*m.from, m.from->beside);
     if(movable(*m.from, *t, m.first, m.last, box)) continue;
     finish(ge), moving.clear();
     break;
@@ -814,8 +820,7 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   //for another depth buffer; neither replaces the other's newer pixels on the GPU. A frame buffer that's part of
   //another's target, which doesn't reach its depth buffer, leaves the target's depth as it is: God of War's four
   //side by side don't fill it afresh each in turn. So does a PRIM that neither tests nor writes depth, its changes
-  //kept for the next that does: Darkstalkers' CPU writes its sprites beside the depth buffer between its 2D
-  //PRIMs, and each PRIM filled 32 rows of depth again, 90 times a frame.)
+  //kept for the next that does: Darkstalkers' CPU writes beside its depth buffer between its 2D PRIMs.)
   if(t->stale) t->rows = 0, t->stale = false, t->beside.clear(), t->dead.clear();
   bool depth = !column && !row && (p.clear ? p.clearDepth : p.depthTest);
   if(depth && (t->depthBuffer != p.depthBuffer || t->depthStride != p.depthStride)) {
@@ -876,9 +881,9 @@ auto GPU::emit(const Vertex* vertices, u32 count) -> void {
   //A primitive that reads the frame buffer, where the GPU doesn't keep the primitives' order (Backend::readsInOrder),
   //sees what was drawn before it in the pass only past a barrier (the backend's: Command::barrier). One goes before
   //it where it overlaps a primitive drawn since the last (beginning another draw), none where it overlaps nothing
-  //drawn since: Brandish's 880 draws a frame, its map's tiles and its sprites, had a barrier each. (Boxes in the
-  //target's pixels: a pixel's middle inside both overlaps. Another target begins another pass, after whose start
-  //the one before's are seen: the render pass's dependency.)
+  //drawn since. (Boxes in the target's pixels: a pixel's middle inside both overlaps. Another target begins another
+  //pass, after whose start the one before's are seen: the render pass's dependency. Fast mode's meshes, which enter
+  //no box, read nothing: Backend::reads is off there.)
   bool barrier = false;
   if(backend->reads && !backend->readsInOrder) {
     if(boxesTarget != state.target) boxes.clear(), boxesTarget = state.target;
@@ -898,7 +903,7 @@ auto GPU::emit(const Vertex* vertices, u32 count) -> void {
     Command c{Command::Kind::Draw, state.target};
     c.state = index, c.first = first, c.count = count, c.barrier = barrier;
     commands.push_back(c);
-    statistics.draws++;
+    statistics.draws++, statistics.barriers += barrier;
   }
   recorded.vertices.insert(recorded.vertices.end(), vertices, vertices + count);
   statistics.primitives++;
@@ -1334,17 +1339,19 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns,
   u32 offset = physical - Memory::VRAMBase, bytes = texture.format == 3 || texture.format == 7 ? 4 : 2;
   bool direct = !texture.swizzled && texture.format <= 3;
   bool indexed = !texture.swizzled && (texture.format == 6 || texture.format == 7) && backend->palettes;
-  bool exact = rows != ~0u;  //(the rows a 2D PRIM's vertices reach; a 3D one's aren't known)
+  bool exact = rows != ~0u;  //(the rows a 2D PRIM's vertices reach; a 3D one's, and others', aren't known)
+  std::optional<GE::Region> texels;
+  std::function<auto () -> GE::Region> taking = [&] { if(!texels) texels = takes(); return *texels; };
   u32 width = std::min<u32>({columns, texture.width, 512});
   rows = std::min<u32>({rows, texture.height, 512});
-  //(a texture declared past VRAM's end, as a 3D PRIM's reach isn't known: its rows inside VRAM taken, those past it,
-  //where the PSP's addresses run round to VRAM's start, held at the last of them. Castlevania's background blur samples
-  //its frame buffer near VRAM's end as a texture 512 rows tall; refused, the software renderer drew it against
-  //memory's depth, which isn't the GPU's, and none of it was drawn)
+  //(a texture declared past VRAM's end, its rows not known: its rows inside VRAM taken, those past it, where the
+  //PSP's addresses run round to VRAM's start, held at the last of them, as holdable() allows)
   u64 rowBytes64 = u64(texture.bufferWidth) * bytes;
   if(!exact && rows && rowBytes64 && offset + u64(width) * bytes <= Memory::VRAMSize &&
      offset + (rows - 1) * rowBytes64 + u64(width) * bytes > Memory::VRAMSize) {
-    rows = (Memory::VRAMSize - offset - u64(width) * bytes) / rowBytes64 + 1;
+    u32 inside = (Memory::VRAMSize - offset - u64(width) * bytes) / rowBytes64 + 1;
+    if(!holdable(inside, taking)) return false;
+    rows = inside;
   }
   u64 end = offset + (u64(rows - 1) * texture.bufferWidth + width) * bytes;
   if(!rows || end > Memory::VRAMSize) return false;
@@ -1373,6 +1380,7 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns,
     }
     for(auto& m : moving) {
       s32 box[4];
+      if(m.from->besideFull) revive(*m.from, m.from->beside);
       if(home->stale || !movable(*m.from, *home, m.first, m.last, box)) { moving.clear(); break; }
     }
   }
@@ -1402,9 +1410,9 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns,
   };
   //(palette indices with their palette on the GPU, where it has room for it)
   auto taken = [&] {
-    if(!take(texture, offset, end, width, rows, direct || indexed, exact)) return false;
+    if(!take(texture, offset, end, width, rows, direct || indexed, exact, taking)) return false;
     auto& h = *held;  //(texels past those held are the last held's)
-    auto r = takes();
+    auto r = taking();
     s32 right = h.width - 1, bottom = h.rows - 1;
     h.takes[0] = h.x + std::min(r.left, right), h.takes[1] = h.y + std::min(r.top, bottom);
     h.takes[2] = h.x + std::min(r.right, right), h.takes[3] = h.y + std::min(r.bottom, bottom);
@@ -1422,9 +1430,10 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns,
 
 //(a texture it doesn't hold, the GE decodes from memory, which finishes first where its rows reach pixels the GPU
 //has drawn since. Where the PRIM's rows aren't known and the first of them are memory's, it gets those before the
-//first such page alone, as take() cuts: Death Jr. II's bloom samples its picture, read back for the CPU, as a texture
-//512 rows tall, which runs on into the smaller frame buffer the bloom is drawing; each tile was a finish, 30 a frame)
-auto GPU::memoryRows(GE& ge, const GE::Sampler& texture) -> u32 {
+//first such page alone, as take() cuts, where holdable() allows: Death Jr. II's bloom samples its picture, read back
+//for the CPU, as a texture 512 rows tall, which runs on into the smaller frame buffer the bloom is drawing)
+auto GPU::memoryRows(GE& ge, const GE::Sampler& texture, const std::function<auto () -> GE::Region>& takes)
+  -> u32 {
   static constexpr u32 bits[8] = {16, 16, 16, 32, 4, 8, 16, 32};
   this->ge = &ge;
   u32 physical = texture.address & 0x1fff'ffff;
@@ -1438,13 +1447,13 @@ auto GPU::memoryRows(GE& ge, const GE::Sampler& texture) -> u32 {
     u32 high = std::min<u64>(end - 1, (page + 1) * Memory::PageSize - 1);
     if(!owner || !owner->drawnBytes(low, high)) continue;
     u32 before = low > offset ? (low - offset) / rowBytes : 0;
-    return before ? before : ~0u;
+    return before && holdable(before, takes) ? before : ~0u;
   }
   return ~0u;
 }
 
 //The GE's palette as the GPU has it, for a texture of palette indices (holds()): its 512 entries as 8888, a 16-bit
-//palette's widened as texels are, an 8888 one's 256 and the same again (indices past 255 are held to it); found among
+//palette's widened as texels are, an 8888 one's 256 and the same again (its indices are taken to 255); found among
 //those kept by the GE's hash and its bytes, or made (the one unused longest let go past MostPalettes).
 auto GPU::paletteFor(const GE::Sampler& texture) -> u32 {
   u32 format = texture.clutFormat & 3;
@@ -1485,12 +1494,12 @@ auto GPU::paletteFor(const GE::Sampler& texture) -> u32 {
 //The texture held from the targets that drew its pages (holds()), where its pages are one target's, or a target's
 //and then, from a page on, another's: next. (A page's owner that drew none of the texture's bytes in it, a page
 //holding rows of both, hasn't the newest of them: God of War's shadows, 64 rows each, end in the page the frame
-//buffer below them starts in.) Where the rows its PRIM takes aren't known exactly (a 3D one's), and its rows run on
-//into other frame buffers' that can't be taken as a second part, only those before the first of their pages are
-//taken, those past held at the last of them: Death Jr. II's palette passes take its picture as a texture 512 rows
-//tall, which runs on into its bloom's smaller frame buffers, and refused, each was a finish, 31 a frame.
-auto GPU::take(const GE::Sampler& texture, u32 offset, u64 end, u32 width, u32 rows, bool direct, bool exact)
-  -> bool {
+//buffer below them starts in.) Where the rows its PRIM takes aren't known exactly (exact: a 3D one's, a 2D one's whose
+//coordinates may repeat round), and its rows run on into other frame buffers' that can't be taken as a second part,
+//only those before the first of their pages are taken, those past held at the last of them, where holdable() allows:
+//Death Jr. II's palette passes take its picture as a texture 512 rows tall, which runs on into its bloom's.
+auto GPU::take(const GE::Sampler& texture, u32 offset, u64 end, u32 width, u32 rows, bool direct, bool exact,
+               const std::function<auto () -> GE::Region>& takes) -> bool {
   u32 bytes = texture.format == 3 || texture.format == 7 ? 4 : 2;
   Target *t = nullptr, *next = nullptr, *last = nullptr;
   u32 firstOwned = 0;  //(next's first page)
@@ -1523,7 +1532,7 @@ auto GPU::take(const GE::Sampler& texture, u32 offset, u64 end, u32 width, u32 r
   if(x >= t->stride) return false;
   auto cut = [&] {  //(the rows before next's first page alone, where they aren't known exactly)
     u32 before = (firstOwned * Memory::PageSize - offset) / rowBytes;
-    if(exact || !next || !before) return false;
+    if(exact || !next || !before || !holdable(before, takes)) return false;
     rows = std::min(rows, before), next = nullptr;
     return true;
   };
@@ -1595,6 +1604,7 @@ auto GPU::Target::reaches(u32 first, u32 last, s32 left, s32 top, s32 right, s32
 }
 
 auto GPU::Target::besideReaches(s32 left, s32 top, s32 right, s32 bottom) const -> bool {
+  if(besideFull) return true;
   for(auto& [first, last] : beside) {
     if(reaches(first, last, left, top, right, bottom)) return true;
   }
@@ -1652,8 +1662,12 @@ auto GPU::Target::touch(u32 first, u32 last) -> bool {
 //already, those are filled from memory first (memory has every change to them: the bytes are changed as they're
 //heard of). Brave Story writes its display list beside its picture, at times in more than 16 pieces; taken together
 //as one range, as they were, it reached the picture's pixels, and the frame buffer was put back and filled afresh.
+//(not filled here: memory tells of the change while it goes through its pages, and a fill watches them again. At
+//MostBeside the target is filled afresh instead.)
 auto GPU::keepBeside(Target& t, u32 first, u32 last) -> void {
-  if(!t.touch(first, last)) revive(t, t.beside), t.touch(first, last);
+  if(t.touch(first, last)) return;
+  if(t.beside.size() >= MostBeside) return void(t.stale = true);
+  t.beside.push_back({first, last}), t.besideFull = true;
 }
 
 //Memory's VRAM replaced whole (or another machine's: GE::setRenderer()): what the GPU drew since the last finish put

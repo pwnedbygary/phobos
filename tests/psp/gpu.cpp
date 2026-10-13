@@ -688,6 +688,7 @@ static auto gpuTextureAtVRAMsEnd() -> void {
     sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff10'1010}, 30000);
     if(s == &hardware) finishes = gpu->statistics.finishes;
     texture(*s, Memory::VRAMBase + Near, 64, 512, 64, 0);
+    c[GE::TextureWrap] = 0x101;  //(held at the edges: its texels stop inside VRAM, which accurate mode needs to hold)
     c[GE::DepthMask] = 1, c[GE::DepthTest] = 6;  //(greater, not written)
     struct Corner { float u, v, x, y; };  //(a texel to a pixel, at their middles: the GE's texels and the GPU's alike)
     Corner corners[6] = {{0, 0, 4, 2}, {56, 0, 60, 2}, {0, 42, 4, 44}, {56, 0, 60, 2}, {56, 42, 60, 44}, {0, 42, 4, 44}};
@@ -755,8 +756,12 @@ static auto gpuPalettes() -> void {
           sprite(*s, {{{0, 0, 0, 0}, {64, f32(rows), 64, f32(rows)}}, 0});
           continue;
         }
-        struct Corner { float u, v; };  //(a texel to a pixel, at their middles: the GE's texels and the GPU's alike)
-        f32 v = rows;
+        //(a texel to a pixel, at their middles: the GE's texels and the GPU's alike; held at the texture's edges, and
+        //short of the frame buffer below by more than the two texels round 2D's coordinates, so that accurate mode
+        //may hold the rows past it too)
+        struct Corner { float u, v; };
+        c[GE::TextureWrap] = 0x101;
+        f32 v = rows - 4;
         Corner corners[6] = {{0, 0}, {64, 0}, {0, v}, {64, 0}, {64, v}, {0, v}};
         u32 to = GPUVertices;
         for(auto& corner : corners) {
@@ -781,6 +786,98 @@ static auto gpuPalettes() -> void {
   }
 }
 
+//The palettes kept on the GPU found again: a frame buffer sampled through palette A, then B, then A again (the GE's
+//palette version moving on each time, its bytes A's again the third), each picture the software renderer's.
+static auto gpuPalettesAgain() -> void {
+  auto gpu = renderer();
+  if(!gpu || !gpu->backend->palettes) return;
+  constexpr u32 Palette = 0x0897'0000;
+  std::mt19937 random{20261088};
+  auto drawn = randomSprites(random, 40, false);
+  u32 palettes[2][256];
+  for(auto& palette : palettes) for(auto& entry : palette) entry = u32(random());
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  GPU::Statistics before;
+  for(System* s : {&software, &hardware}) {
+    auto& c = s->ge.commands;
+    prepare(*s, 0, 3);
+    for(auto& one : drawn) sprite(*s, one);
+    prepare(*s, 0x2'0000, 3);
+    texture(*s, Memory::VRAMBase, 64, 64, 64, 7);
+    if(s == &hardware) before = gpu->statistics;
+    for(u32 n = 0; n < 3; n++) {
+      for(u32 k = 0; k < 256; k++) s->memory.write(4, Palette + k * 4, palettes[n & 1][k]);
+      c[GE::ClutAddress] = Palette & 0xff'ffff, c[GE::ClutAddressUpper] = Palette >> 8 & 0xf'0000;
+      c[GE::ClutLoad] = 32;
+      s->ge.loadClut();
+      c[GE::ClutFormat] = 3 | 8 << 2 | 0xff << 8;
+      f32 top = n * 16;
+      sprite(*s, {{{0, top, 0, top}, {64, top + 16, 64, top + 16}}, 0});
+    }
+  }
+  CHECK(gpu->statistics.finishes, before.finishes);
+  CHECK(apart(software, hardware), 0u);
+  hardware.ge.setRenderer(nullptr);
+}
+
+//Without rasterization order (Backend::readsInOrder off), a primitive that reads the frame buffer (blending in a
+//16-bit one does) waits for a barrier only where it overlaps what was drawn into it since the last: eight sprites
+//side by side, each its own draw (its own fixed blend color), over the background drawn before them one, the first;
+//then one over all of them one more. The pictures the software renderer's.
+static auto gpuBarriers() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  if(!gpu->backend->reads || gpu->backend->readsInOrder) {
+    return void(std::printf("  skipped: the GPU reads in order, or reads nothing\n"));
+  }
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  GPU::Statistics before, between;
+  for(System* s : {&software, &hardware}) {
+    auto& c = s->ge.commands;
+    prepare(*s, 0, 1);
+    sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff20'4060});
+    c[GE::AlphaBlendEnable] = 1, c[GE::BlendMode] = 10 | 10 << 4;  //(fixed A and B, added)
+    c[GE::BlendFixedB] = 0x80'8080;
+    if(s == &hardware) before = gpu->statistics;
+    for(u32 n = 0; n < 8; n++) {
+      c[GE::BlendFixedA] = 0x10'1010 * (n + 1);
+      sprite(*s, {{{0, 0, f32(n * 8), 8}, {0, 0, f32(n * 8 + 8), 24}}, 0xff80'40c0});
+    }
+    if(s == &hardware) between = gpu->statistics;
+    sprite(*s, {{{0, 0, 4, 12}, {0, 0, 60, 30}}, 0xff10'2030});
+    c[GE::AlphaBlendEnable] = 0;
+  }
+  CHECK(between.barriers - before.barriers, 1u);
+  CHECK(gpu->statistics.barriers - between.barriers, 1u);
+  CHECK(between.draws - before.draws, 8u);
+  CHECK(apart(software, hardware), 0u);
+  hardware.ge.setRenderer(nullptr);
+}
+
+//Textures the GPU let go of taken again for the next of their size: a texture in RAM changed between sprites, each
+//time a texture decoded and made afresh, its runs finished between; the pictures the software renderer's.
+static auto gpuTexturesKept() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  u64 kept = gpu->backend->texturesKept;
+  for(u32 n = 0; n < 4; n++) {
+    for(System* s : {&software, &hardware}) {
+      if(!n) prepare(*s, 0, 3);
+      for(u32 k = 0; k < 32 * 32; k++) s->memory.write(4, GPUTexture + k * 4, u32((k + n * 77) * 0x9e37'79b9));
+      texture(*s, GPUTexture, 32, 32, 32);
+      sprite(*s, {{{0, 0, f32(n * 16), 0}, {32, 32, f32(n * 16 + 16), 32}}, 0});
+      s->ge.settleAll();
+    }
+  }
+  CHECK(gpu->backend->texturesKept > kept, true);
+  CHECK(apart(software, hardware), 0u);
+  hardware.ge.setRenderer(nullptr);
+}
+
 //A texture whose first rows are memory's (the CPU's picture) and whose rows then run on into a frame buffer the GPU
 //is drawing (another row width), by 2D triangles from the top, whose rows aren't known: the GE decodes the rows
 //before that frame buffer's pages alone, without waiting for the GPU, and the GPU's pixels are the software
@@ -803,9 +900,10 @@ static auto gpuMemorysRows() -> void {
     sprite(*s, {{{0, 0, 0, 0}, {0, 0, 32, 16}}, 0x5a65'4321});
     prepare(*s, 0x2'0000, 3);
     texture(*s, Memory::VRAMBase, 64, 128, 64);
+    c[GE::TextureWrap] = 0x101;  //(held at the edges, short of the frame buffer below: see gpuPalettes)
     if(s == &hardware) before = gpu->statistics;
     struct Corner { float u, v; };
-    Corner corners[6] = {{0, 0}, {64, 0}, {0, 48}, {64, 0}, {64, 48}, {0, 48}};
+    Corner corners[6] = {{0, 0}, {64, 0}, {0, 44}, {64, 0}, {64, 44}, {0, 44}};
     u32 to = GPUVertices;
     for(auto& corner : corners) {
       for(float value : {corner.u, corner.v}) s->memory.write(4, to, bitsOf(value)), to += 4;
@@ -821,6 +919,34 @@ static auto gpuMemorysRows() -> void {
   hardware.ge.setRenderer(nullptr);
 }
 
+//3D for the tests below: a 64x48 frame buffer seen through an orthographic camera, its pixels' middles at the
+//GE's, the texture 64 texels wide and rows tall, held at its edges (clamp), filtered nearest; and a quad over it
+//from x0 to x1 and y0 to y1, its texels the same columns' from row v0 on, 1:1.
+static auto orthographic(System& s, u32 rows) -> void {
+  auto f24 = [](float value) { return bitsOf(value) >> 8; };
+  auto& c = s.ge.commands;
+  texture(s, Memory::VRAMBase, 64, rows, 64);
+  c[GE::TextureWrap] = 0x101, c[GE::VertexType] = 0x1ff, c[GE::MaxZ] = 0xffff;
+  c[GE::TextureScaleU] = c[GE::TextureScaleV] = f24(1);
+  for(u32 n = 0; n < 12; n++) s.ge.world[n] = s.ge.view[n] = f24(n % 4 == 0 ? 1 : 0);
+  for(u32 n = 0; n < 16; n++) s.ge.projection[n] = f24(n % 5 == 0 ? 1 : 0);
+  c[GE::ViewportXScale] = f24(32), c[GE::ViewportYScale] = f24(-24), c[GE::ViewportZScale] = f24(30000);
+  c[GE::ViewportXCenter] = f24(2048), c[GE::ViewportYCenter] = f24(2048), c[GE::ViewportZCenter] = f24(32768);
+  c[GE::OffsetX] = (2048 - 32) << 4, c[GE::OffsetY] = (2048 - 24) << 4;
+}
+static auto quad3D(System& s, u32 rows, f32 x0, f32 x1, f32 y0, f32 y1, f32 v0) -> void {
+  u32 to = GPUVertices;
+  for(u32 corner : {0u, 1u, 3u, 0u, 3u, 2u}) {
+    f32 x = corner & 1 ? x1 : x0, y = corner >> 1 ? y1 : y0, v = v0 + y - y0;
+    for(u32 word : {bitsOf(x / 64), bitsOf(v / rows), 0xffff'ffffu, 0u, 0u, bitsOf(1), bitsOf(x / 32 - 1),
+                    bitsOf(1 - y / 24), 0u}) {
+      s.memory.write(4, to, word), to += 4;
+    }
+  }
+  s.ge.vertexAddress = GPUVertices;
+  s.ge.primitive(GE::Triangles, 6);
+}
+
 //3D quads each reading the top of the frame buffer they draw into while writing its bottom (Killzone's menus blur a
 //strip so, reading one half while writing the other): the texels they take (their corners' u and v, the texture
 //held at its edges) miss what those before them drew, so the copy taken for the first serves them all, the target's
@@ -828,49 +954,61 @@ static auto gpuMemorysRows() -> void {
 //software renderer's.
 static auto gpuCopiesKept() -> void {
   if(!renderer()) return;
-  auto f24 = [](float value) { return bitsOf(value) >> 8; };
   for(GPU* gpu : {renderer(), fastRenderer()}) {
     if(!gpu) continue;
     std::mt19937 random{20261087};
     auto drawn = randomSprites(random, 30, false);
     System software, hardware;
     hardware.ge.setRenderer(gpu);
-    //(a quad from x0 to x1 and y0 to y1 of the frame buffer, its texels the same columns' from row v0 on, 1:1:
-    //orthographic, texels and pixels meeting at their middles)
-    auto quad = [&](System& s, f32 x0, f32 x1, f32 y0, f32 y1, f32 v0) {
-      u32 to = GPUVertices;
-      for(u32 corner : {0u, 1u, 3u, 0u, 3u, 2u}) {
-        f32 x = corner & 1 ? x1 : x0, y = corner >> 1 ? y1 : y0, v = v0 + y - y0;
-        for(u32 word : {bitsOf(x / 64), bitsOf(v / 32), 0xffff'ffffu, 0u, 0u, bitsOf(1), bitsOf(x / 32 - 1),
-                        bitsOf(1 - y / 24), 0u}) {
-          s.memory.write(4, to, word), to += 4;
-        }
-      }
-      s.ge.vertexAddress = GPUVertices;
-      s.ge.primitive(GE::Triangles, 6);
-    };
     GPU::Statistics before, between;
     for(System* s : {&software, &hardware}) {
-      auto& c = s->ge.commands;
       prepare(*s, 0, 3);
       for(auto& one : drawn) sprite(*s, one);
-      texture(*s, Memory::VRAMBase, 64, 32, 64);
-      c[GE::TextureWrap] = 0x101, c[GE::VertexType] = 0x1ff, c[GE::MaxZ] = 0xffff;
-      c[GE::TextureScaleU] = c[GE::TextureScaleV] = f24(1);
-      for(u32 n = 0; n < 12; n++) s->ge.world[n] = s->ge.view[n] = f24(n % 4 == 0 ? 1 : 0);
-      for(u32 n = 0; n < 16; n++) s->ge.projection[n] = f24(n % 5 == 0 ? 1 : 0);
-      c[GE::ViewportXScale] = f24(32), c[GE::ViewportYScale] = f24(-24), c[GE::ViewportZScale] = f24(30000);
-      c[GE::ViewportXCenter] = f24(2048), c[GE::ViewportYCenter] = f24(2048), c[GE::ViewportZCenter] = f24(32768);
-      c[GE::OffsetX] = (2048 - 32) << 4, c[GE::OffsetY] = (2048 - 24) << 4;
+      orthographic(*s, 32);
       if(s == &hardware) before = gpu->statistics;
-      for(u32 n = 0; n < 8; n++) quad(*s, n * 8, n * 8 + 8, 26, 48, 0);
+      for(u32 n = 0; n < 8; n++) quad3D(*s, 32, n * 8, n * 8 + 8, 26, 48, 0);
       if(s == &hardware) between = gpu->statistics;
-      quad(*s, 0, 32, 0, 22, 24);  //(reading what they drew)
+      quad3D(*s, 32, 0, 32, 0, 22, 24);  //(reading what they drew)
     }
     CHECK(between.copies - before.copies, 1u);
     CHECK(gpu->statistics.copies - between.copies, 1u);
     CHECK(gpu->statistics.finishes, before.finishes);
     CHECK(apart(software, hardware), 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+}
+
+//A texture's rows past its frame buffer's, where another frame buffer (of another row width) begins, held at the
+//last of its own only where that can't change the picture (holdable()): in fast mode, or where the PRIM's texels stop
+//before them. A 3D quad taking rows past them: in accurate mode decoded from memory after a finish, the picture the
+//software renderer's; in fast mode held, nothing finished.
+static auto gpuHeldRows() -> void {
+  if(!renderer()) return;
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(!gpu) continue;
+    std::mt19937 random{20261089};
+    auto drawn = randomSprites(random, 30, false);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    GPU::Statistics before;
+    for(System* s : {&software, &hardware}) {
+      auto& c = s->ge.commands;
+      prepare(*s, 0, 3);
+      for(auto& one : drawn) sprite(*s, one);
+      prepare(*s, 0x3000, 3);  //(below the picture's 48 rows, 48 pixels wide: rows that don't fill pages, not moved)
+      c[GE::FrameBufferWidth] = 48, c[GE::Scissor2] = 47 | 15 << 10;
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 48, 16}}, 0x5a12'3456});
+      prepare(*s, 0x2'0000, 3);
+      orthographic(*s, 64);
+      if(s == &hardware) before = gpu->statistics;
+      quad3D(*s, 64, 0, 64, 0, 40, 16);  //(rows 16 to 55)
+    }
+    if(!gpu->fast) {
+      CHECK(gpu->statistics.finishes > before.finishes, true);
+      CHECK(apart(software, hardware), 0u);
+    } else {
+      CHECK(gpu->statistics.finishes, before.finishes);
+    }
     hardware.ge.setRenderer(nullptr);
   }
 }
@@ -2352,9 +2490,9 @@ static auto gpuBlending() -> void {
   gpu->backend->readsBlending = readsBlending;
 }
 
-//Without rasterization order (Backend::readsInOrder off, as here on any GPU that reads), each draw that reads waits
-//for the ones before and holds no overlapping primitives, so games' blending, thousands of draws a frame, would be
-//thousands of draws and barriers: the GPU blends with its own units then, and only what they can't come close to
+//Without rasterization order (Backend::readsInOrder off, as here on any GPU that reads), a primitive that reads waits
+//for those before it that it overlaps, a draw and a barrier each, so games' blending, thousands of primitives a frame
+//over each other, would be thousands of draws and barriers: the GPU blends with its own units then, and only what they can't come close to
 //reads. Blending in 8888 with the factors and operations the GPU has draws nothing in the shader and splits nothing,
 //close to the software renderer (the source term pixel.cpp's whole number, draw.frag's TERM: at least 85% of the
 //channels the same, no more than 3 in 1000 more than 8 off), as on a GPU that reads nothing at all; a write mask
@@ -2624,8 +2762,12 @@ auto gpuTests() -> Tests {
     {"gpu a frame buffer it drew sampled as palette indices: looked up on the GPU, nothing finished", gpuPalettes},
     {"gpu a texture memory has the first rows of, then a frame buffer it draws: those rows decoded alone",
      gpuMemorysRows},
+    {"gpu palettes on the GPU found again: A, then B, then A", gpuPalettesAgain},
+    {"gpu without rasterization order, barriers only where reading primitives overlap", gpuBarriers},
+    {"gpu textures let go of taken again for the next of their size", gpuTexturesKept},
     {"gpu render-to-texture copies kept to a bound", gpuCopies},
     {"gpu a copy serves PRIMs whose texels miss what those before them drew", gpuCopiesKept},
+    {"gpu rows past a texture's frame buffer held at its last only where that can't change the picture", gpuHeldRows},
     {"gpu render to texture taken again in part: the strip an effect draws into", gpuPartialCopies},
     {"gpu render to texture from two frame buffers, one below the other, nothing finished", gpuStackedTexture},
     {"gpu a texture decoded again before the GPU has the first: its texels kept till then", gpuTexelsKept},

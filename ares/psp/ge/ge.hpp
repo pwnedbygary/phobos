@@ -645,8 +645,10 @@ struct GE {
     virtual auto holds(GE& ge, const Sampler& texture, u32 rows, u32 columns,
                        const std::function<auto () -> Region>& takes) -> bool = 0;
     //Of a texture it doesn't hold, whose PRIM's rows aren't known (a 3D one's), the rows memory gives: all, or those
-    //before the pages of a frame buffer it has drawn since, the rest held at the last of them (its copies' way).
-    virtual auto memoryRows(GE&, const Sampler& /*texture*/) -> u32 { return ~0u; }
+    //before the pages of a frame buffer it has drawn since, the rest held at the last of them (its copies' way),
+    //where the texels the PRIM may take (takes) allow.
+    virtual auto memoryRows(GE&, const Sampler& /*texture*/, const std::function<auto () -> Region>& /*takes*/)
+      -> u32 { return ~0u; }
     //Whether what it has drawn since it last finished reaches any of VRAM's bytes first to last (offsets in VRAM,
     //inclusive): its pixels' own bytes, row by row, not the unused columns right of a picture in the same pages,
     //where games keep lists and textures (as drawsOver() has it for the drawing threads, texture.cpp).

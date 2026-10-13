@@ -173,15 +173,17 @@ struct VulkanBackend : GPU::Backend {
   VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
   VkSampler sampler = VK_NULL_HANDLE;
   VkShaderModule vertexModule = VK_NULL_HANDLE, fragmentModule = VK_NULL_HANDLE;
+  VkShaderModule fragmentDepthModule = VK_NULL_HANDLE;  //(draw.frag's DEPTHS build)
   VkShaderModule transformModule = VK_NULL_HANDLE;  //(fast mode's: transform.vert)
   VkPipelineCache pipelineCache = VK_NULL_HANDLE;
   VkCommandPool commandPool = VK_NULL_HANDLE;
   std::map<std::array<u8, sizeof(GPU::Pipeline)>, VkPipeline> pipelineCache_;  //(VK_NULL_HANDLE: it failed)
   std::unordered_map<u32, Target> targetImages;
   std::unordered_map<u32, Texture> textureImages;  //0: a blank one, bound for untextured draws
-  //Textures let go of, once their runs are done, kept for a texture of their size to take (makeTexture()): a picture,
-  //its memory, view and set made and destroyed for every frame of a movie, each a call into the driver's kernel on
-  //Android. At most MostSpares, SpareBytes of pictures in all, the one kept longest destroyed first.
+  //Textures let go of, once their runs are done, kept for a texture of their size to take (makeTexture()), rather
+  //than a picture, its memory, view and set made and destroyed for each (a movie's every frame; each a call into the
+  //driver's kernel on Android). At most MostSpares, SpareBytes of pictures in all, the one kept longest destroyed
+  //first.
   std::vector<Texture> spareTextures;
   static constexpr u32 MostSpares = 16;
   static constexpr u64 SpareBytes = 32 << 20;
@@ -311,6 +313,7 @@ struct VulkanBackend : GPU::Backend {
       if(vertexModule) vk.vkDestroyShaderModule(device, vertexModule, nullptr);
       if(transformModule) vk.vkDestroyShaderModule(device, transformModule, nullptr);
       if(fragmentModule) vk.vkDestroyShaderModule(device, fragmentModule, nullptr);
+      if(fragmentDepthModule) vk.vkDestroyShaderModule(device, fragmentDepthModule, nullptr);
       if(sampler) vk.vkDestroySampler(device, sampler, nullptr);
       if(descriptorPool) vk.vkDestroyDescriptorPool(device, descriptorPool, nullptr);
       if(pipelineLayout) vk.vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
@@ -545,7 +548,7 @@ struct VulkanBackend : GPU::Backend {
     });
     if(kept != spareTextures.end()) {  //(its layout undefined again, as a new one's)
       t = std::move(*kept), spareTextures.erase(kept);
-      t.fresh = true;
+      t.fresh = true, texturesKept++;
     } else {
       t.width = width, t.height = height;
       if(!make(t.image, width, height, VK_FORMAT_R8G8B8A8_UNORM,
@@ -679,19 +682,20 @@ struct VulkanBackend : GPU::Backend {
     std::memcpy(key.data(), &k, sizeof(k));
     if(auto found = pipelineCache_.find(key); found != pipelineCache_.end()) return found->second;
     if(k.transformed && !transformModule) return pipelineCache_[key] = VK_NULL_HANDLE;
-    //(DEPTH, the GE's whole-number depth, wherever the GPU tests or writes depth)
-    u32 constants[21] = {k.textured, k.function, k.alphaTest, k.colorTest, k.fog, k.depthRange, k.clear, k.source,
+    u32 constants[20] = {k.textured, k.function, k.alphaTest, k.colorTest, k.fog, k.depthRange, k.clear, k.source,
                          k.destination, k.alphaOut, k.dither, k.quantize, k.logic, k.clamp, k.texels, k.reads,
-                         k.blending, k.term, k.flat, u32(k.depthTest || k.depthWrite), k.indexed};
-    VkSpecializationMapEntry entries[21];
-    for(u32 n = 0; n < 21; n++) entries[n] = {n, n * 4, 4};
-    VkSpecializationInfo specialization{21, entries, sizeof(constants), constants};
+                         k.blending, k.term, k.flat, k.indexed};
+    VkSpecializationMapEntry entries[20];
+    for(u32 n = 0; n < 20; n++) entries[n] = {n, n * 4, 4};
+    VkSpecializationInfo specialization{20, entries, sizeof(constants), constants};
+    //(the GE's whole-number depth, draw.frag's DEPTHS, where the depth decides the test or is written)
+    bool depths = k.depthWrite || (k.depthTest && k.depthCompare > 1);
     //(fast mode's 3D: transform.vert, taking the GE's vertices)
     VkPipelineShaderStageCreateInfo stages[2] = {
       {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT,
        k.transformed ? transformModule : vertexModule, "main", nullptr},
       {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT,
-       fragmentModule, "main", &specialization}};
+       depths ? fragmentDepthModule : fragmentModule, "main", &specialization}};
     using V = GPU::Vertex;
     using M = GPU::Model;
     VkVertexInputBindingDescription binding{0, k.transformed ? u32(sizeof(M)) : u32(sizeof(V)),
@@ -1176,6 +1180,7 @@ struct VulkanBackend : GPU::Backend {
 
     Target* pass = nullptr;  //the target whose render pass is open
     u32 lastState = ~0u;
+    bool owed = false;  //(a barrier a draw left out had, for the next that reads)
     VkPipeline boundPipeline = VK_NULL_HANDLE;
     VkDescriptorSet boundSet = VK_NULL_HANDLE;
     //(the dynamic state and push constants set in the open pass, which a draw with the same doesn't set again: every
@@ -1233,7 +1238,7 @@ struct VulkanBackend : GPU::Backend {
         if(c.state != lastState) {
           if(!lastPipeline || !(s.pipeline == lastKey)) lastPipeline = pipelineFor(s.pipeline), lastKey = s.pipeline;
           VkPipeline pipeline = lastPipeline;
-          if(!pipeline) continue;
+          if(!pipeline) { owed |= c.barrier; continue; }
           if(pipeline != boundPipeline) {
             vk.vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline), boundPipeline = pipeline;
           }
@@ -1273,7 +1278,8 @@ struct VulkanBackend : GPU::Backend {
         //(what the draws before wrote, made visible to its reading, where the GPU doesn't keep the order and it
         //reads where they drew (GPU::emit()): in rasterization order every pipeline of the subpass asks for it, which
         //orders the draws before too)
-        if(c.barrier && s.pipeline.reads && !(readsInOrder && orderedPass)) {
+        if((c.barrier || owed) && s.pipeline.reads && !(readsInOrder && orderedPass)) {
+          owed = false;
           auto barrier = made<VkMemoryBarrier>(VK_STRUCTURE_TYPE_MEMORY_BARRIER);
           barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
           barrier.dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
@@ -1342,11 +1348,11 @@ struct VulkanBackend : GPU::Backend {
         for(u32 n = 0; n < count && depthed; n++) {
           u16 z;
           std::memcpy(&z, in + c.depth + n * 2, 2);
-          if(depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT) {
-            f32 value = z / 65535.0f;
+          if(depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT) {  //(in 65,536ths, exactly as draw.frag writes them)
+            f32 value = z * (1.0f / 65536);
             std::memcpy(&depth[n], &value, 4);
-          } else {
-            depth[n] = u32((u64(z) * 0xff'ffff + 32767) / 65535);
+          } else {  //(the GPU's rounding of those to 24 bits)
+            depth[n] = u32((u64(z) * 0xff'ffff + 32768) >> 16);
           }
         }
         transition(commands, t.color.image, VK_IMAGE_ASPECT_COLOR_BIT, ColorLayout, Destination);
@@ -2201,10 +2207,14 @@ struct VulkanBackend : GPU::Backend {
     Code vertexCode{GPUShaders::vertexSPIRV, sizeof(GPUShaders::vertexSPIRV)};
     Code fragmentCode = dualSource ? Code{GPUShaders::fragmentSPIRV, sizeof(GPUShaders::fragmentSPIRV)}
                                    : Code{GPUShaders::fragmentSingleSPIRV, sizeof(GPUShaders::fragmentSingleSPIRV)};
+    Code fragmentDepthCode = dualSource
+      ? Code{GPUShaders::fragmentDepthSPIRV, sizeof(GPUShaders::fragmentDepthSPIRV)}
+      : Code{GPUShaders::fragmentSingleDepthSPIRV, sizeof(GPUShaders::fragmentSingleDepthSPIRV)};
     Code copyVertexCode{GPUShaders::copyVertexSPIRV, sizeof(GPUShaders::copyVertexSPIRV)};
     Code copyFragmentCode{GPUShaders::copyFragmentSPIRV, sizeof(GPUShaders::copyFragmentSPIRV)};
     Code presentCode{GPUShaders::presentSPIRV, sizeof(GPUShaders::presentSPIRV)};
     for(auto [code, module] : {std::pair{vertexCode, &vertexModule}, std::pair{fragmentCode, &fragmentModule},
+                               std::pair{fragmentDepthCode, &fragmentDepthModule},
                                std::pair{copyVertexCode, &copyVertexModule},
                                std::pair{copyFragmentCode, &copyFragmentModule},
                                std::pair{presentCode, &presentModule}}) {
@@ -2249,8 +2259,7 @@ struct VulkanBackend : GPU::Backend {
                                         copyExportModule, copyLayout);
     stencilExport = copyExportPipeline;
     moves = makeMoves();
-    //(moves over rows of another width leave the stencils of the pixels they don't reach: only with the shader's)
-    if(moves && !moveExportPipeline) stencilExport = false;
+    moveExport = moveExportPipeline != VK_NULL_HANDLE;
     auto commandPoolInfo = made<VkCommandPoolCreateInfo>(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
     commandPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     commandPoolInfo.queueFamilyIndex = family;
