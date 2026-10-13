@@ -100,12 +100,13 @@ static_assert(commandsIn(LightingCommands) == GE::KeptTransform::Lighting);
 //words alone (a matrix's floats from its words, the viewport's, texture mapping's and fog's settings from their
 //commands, lighting's from its commands and the view matrix), so only the parts whose words have changed are worked
 //out again. Most PRIMs share their 3D settings with the one before, but for the world matrix; and they're compared,
-//not told of, as a list, a context or a state loaded, and the tests all set them.
-auto GE::transformKept() -> Transform& {
+//not told of, as a list, a context or a state loaded, and the tests all set them. The bone matrices are looked at
+//only for a PRIM that skins (skinned): one that doesn't takes none of them, and keeps those of the last that did.
+auto GE::transformKept(bool skinned) -> Transform& {
   auto& k = keptTransform;
   auto& t = k.transform;
-  auto renew = [&](u32* kept, const u32* now, u32 count, float* floats) {
-    if(k.valid && !std::memcmp(kept, now, count * 4)) return false;
+  auto renew = [&](u32* kept, const u32* now, u32 count, float* floats, bool valid) {
+    if(valid && !std::memcmp(kept, now, count * 4)) return false;
     std::memcpy(kept, now, count * 4);
     toFloats(now, floats, count);
     return true;
@@ -119,11 +120,11 @@ auto GE::transformKept() -> Transform& {
     }
     return !same;
   };
-  renew(k.world, world, 12, t.world);
-  bool viewed = renew(k.view, view, 12, t.view);
-  renew(k.projection, projection, 16, t.projection);
-  renew(k.textureMatrix, textureMatrix, 12, t.textureMatrix);
-  renew(k.bones, bones, 96, t.bones);
+  renew(k.world, world, 12, t.world, k.valid);
+  bool viewed = renew(k.view, view, 12, t.view, k.valid);
+  renew(k.projection, projection, 16, t.projection, k.valid);
+  renew(k.textureMatrix, textureMatrix, 12, t.textureMatrix, k.valid);
+  if(skinned) renew(k.bones, bones, 96, t.bones, k.bonesValid), k.bonesValid = true;
   if(gathered(SettingsCommands, k.settings)) settingsState(t);
   if(gathered(LightingCommands, k.lighting) || viewed) lightingState(t);
   k.valid = true;

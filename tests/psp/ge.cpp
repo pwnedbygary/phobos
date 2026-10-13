@@ -2927,8 +2927,9 @@ static auto geVertexRuns() -> void {
 //The 3D settings kept from one PRIM to the next (transformKept()), taken after a few of the GE's commands (any of the
 //256) and matrix elements are changed at random, round after round: field for field (floats bit for bit) the
 //Transform transformState() works out afresh. (Changes to the world matrix alone, most PRIMs' in a 3D game, are as
-//many as all the rest; a quarter of the values are infinities or not numbers as floats.)
-static auto sameTransform(const GE::Transform& a, const GE::Transform& b) -> bool {
+//many as all the rest; a quarter of the values are infinities or not numbers as floats.) Asked for a PRIM that doesn't
+//skin (a third of the rounds), all of it but the bones, which stay the last skinning PRIM's, then all again.
+static auto sameTransform(const GE::Transform& a, const GE::Transform& b, bool bones = true) -> bool {
   static_assert(sizeof(GE::Transform) == 1292);  //(a field added is compared here too)
   auto bits = [](const auto& x, const auto& y) { return !std::memcmp(&x, &y, sizeof(x)); };
   for(u32 n = 0; n < 4; n++) {
@@ -2940,7 +2941,7 @@ static auto sameTransform(const GE::Transform& a, const GE::Transform& b) -> boo
        !bits(p.halfway, q.halfway) || !bits(p.products, q.products)) return false;
   }
   return bits(a.world, b.world) && bits(a.view, b.view) && bits(a.projection, b.projection) &&
-         bits(a.textureMatrix, b.textureMatrix) && bits(a.bones, b.bones) && a.weights == b.weights &&
+         bits(a.textureMatrix, b.textureMatrix) && (!bones || bits(a.bones, b.bones)) && a.weights == b.weights &&
          bits(a.scale, b.scale) && bits(a.center, b.center) && bits(a.offsetX, b.offsetX) &&
          bits(a.offsetY, b.offsetY) && a.depthClamp == b.depthClamp && a.mapMode == b.mapMode &&
          a.mapSource == b.mapSource && bits(a.textureScale, b.textureScale) &&
@@ -2973,7 +2974,9 @@ static auto geTransformKept() -> void {
         matrices[matrix][random() % sizes[matrix]] = value;
       }
     }
-    if(!sameTransform(ge.transformKept(), ge.transformState()) && differing++ < 4) {
+    bool skinned = random() % 3;
+    auto kept = ge.transformKept(skinned);
+    if(!sameTransform(kept, ge.transformState(), skinned) && differing++ < 4) {
       std::printf("  round %u: not the same\n", round);
     }
   }

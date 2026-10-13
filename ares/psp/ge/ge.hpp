@@ -432,7 +432,7 @@ struct GE {
   //transform.cpp
   auto transformState() const -> Transform;
   auto settingsState(Transform& t) const -> void;
-  auto transformKept() -> Transform&;
+  auto transformKept(bool skinned = true) -> Transform&;
   auto transform(Vertex& vertex, const Transform& t) -> void;
   auto transformAll(std::vector<Vertex>& vertices, const Transform& t) -> void;
   //(transform()'s stages: a vertex's place in its model, skinned, in the world and its depth in the view, from the
@@ -567,7 +567,7 @@ struct GE {
   //sets its own on it too: its weights, its texture's size, whether its vertices have colors.)
   struct KeptTransform {
     static constexpr u32 Settings = 17, Lighting = 77;
-    bool valid = false;
+    bool valid = false, bonesValid = false;
     u32 bones[96], world[12], view[12], projection[16], textureMatrix[12];
     u32 settings[Settings], lighting[Lighting];
     Transform transform{};

@@ -451,7 +451,7 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   }
   //(3D's settings: the last PRIM's kept, worked out again where they've changed, with this PRIM's own set; 2D uses
   //none of them)
-  Transform& t = format.through ? keptTransform.transform : transformKept();
+  Transform& t = format.through ? keptTransform.transform : transformKept(format.weightFormat != 0);
   s32 facing = (commands[CullFaceEnable] & 1) && !pixel.clear ? (commands[Cull] & 1 ? 1 : -1) : 0;
   if(!format.through) {
     t.weights = format.weightFormat ? format.weights : 0;
@@ -1469,7 +1469,7 @@ auto GE::boundingBox(u32 count) -> bool {
   auto pixel = pixelState();
   s64 left = (pixel.left - 1) * 16, right = (pixel.right + 1) * 16;
   s64 top = (pixel.top - 1) * 16, bottom = (pixel.bottom + 1) * 16;
-  Transform& t = format.through ? keptTransform.transform : transformKept();
+  Transform& t = format.through ? keptTransform.transform : transformKept(format.weightFormat != 0);
   if(!format.through) t.weights = format.weightFormat ? format.weights : 0;
   //(on the screen in sixteenths, held to it: something not a number at its left or top edge)
   auto screen = [](float position) -> s64 {
