@@ -1120,6 +1120,277 @@ static auto draw3dTimeCounted() -> void {
   }
 }
 
+//Whether two vertices are the same, field for field, floats bit for bit.
+static auto sameVertex(const GE::Vertex& p, const GE::Vertex& q) -> bool {
+  auto bits = [](const auto& x, const auto& y) { return !std::memcmp(&x, &y, sizeof(x)); };
+  return bits(p.weights, q.weights) && bits(p.u, q.u) && bits(p.v, q.v) && p.color == q.color &&
+         bits(p.normal, q.normal) && bits(p.x, q.x) && bits(p.y, q.y) && bits(p.z, q.z) && bits(p.clip, q.clip) &&
+         bits(p.q, q.q) && bits(p.fog, q.fog) && p.outside == q.outside && p.far == q.far && p.near == q.near &&
+         p.specular == q.specular;
+}
+
+//Random 3D settings for the GE: every matrix element and the commands transformState() reads at random (a tenth of
+//the matrices' elements infinities or not numbers, as float24s), or (camera) a plausible camera: the identity world
+//and view, a perspective projection, the viewport and offset of a 480x272 screen, DEPTH_CLIP_ENABLE either way; and a
+//PRIM's vertices, each part at random (positions within 3 of 0, some not numbers, a camera's from 6 in front of it to
+//2 behind).
+struct Random3D {
+  std::mt19937 random{20261013};
+  auto number(float scale) -> float {
+    u32 pick = random() % 30;
+    if(pick == 0) return INFINITY;
+    if(pick == 1) return -INFINITY;
+    if(pick == 2) return NAN;
+    return (f32(random() >> 8) / 16777216.0f * 2 - 1) * scale;
+  }
+  auto settings(GE& ge, bool camera) -> void {
+    auto element = [&](float scale) { return random() % 10 ? f24(number(scale)) : u32(random() & 0xff'ffff) | 0x7f'8000; };
+    for(u32 n = 0; n < 12; n++) ge.world[n] = element(2), ge.view[n] = element(2), ge.textureMatrix[n] = element(2);
+    for(u32 n = 0; n < 16; n++) ge.projection[n] = element(2);
+    for(u32 n = 0; n < 96; n++) ge.bones[n] = element(1.5f);
+    for(u32 command : {0x17u, 0x18u, 0x19u, 0x1au, 0x1bu, 0x1cu, 0x1fu, 0x51u, 0x53u, 0x54u, 0x55u, 0x56u, 0x57u, 0x58u,
+                       0x5bu, 0x5cu, 0x5du, 0x5eu, 0xc0u, 0xc1u, 0xcdu, 0xceu}) {
+      ge.commands[command] = random() & 0xff'ffff;
+    }
+    for(u32 command = 0x42; command <= 0x4d; command++) ge.commands[command] = f24(number(2048));
+    for(u32 command = 0x5f; command <= 0x9a; command++) ge.commands[command] = f24(number(4));
+    ge.commands[GE::TextureMapMode] = (random() % 3) | (random() % 4) << 8;
+    if(!camera) return;
+    for(u32 n = 0; n < 12; n++) ge.world[n] = ge.view[n] = 0;
+    for(u32 n : {0, 4, 8}) ge.world[n] = ge.view[n] = f24(1);
+    for(u32 n = 0; n < 16; n++) ge.projection[n] = 0;
+    float near = 0.5f, far = 100;
+    ge.projection[0] = f24(1.4f), ge.projection[5] = f24(2.4f);
+    ge.projection[10] = f24(-(far + near) / (far - near)), ge.projection[11] = f24(-1);
+    ge.projection[14] = f24(-2 * far * near / (far - near));
+    ge.commands[GE::ViewportXScale] = f24(240), ge.commands[GE::ViewportYScale] = f24(-136);
+    ge.commands[GE::ViewportZScale] = f24(-32767.5f);
+    ge.commands[GE::ViewportXCenter] = f24(2048), ge.commands[GE::ViewportYCenter] = f24(2048);
+    ge.commands[GE::ViewportZCenter] = f24(32767.5f);
+    ge.commands[GE::OffsetX] = (2048 - 240) << 4, ge.commands[GE::OffsetY] = (2048 - 136) << 4;
+    ge.commands[GE::DepthClipEnable] = random() % 2;
+  }
+  auto vertices(u32 count, bool camera) -> std::vector<GE::Vertex> {
+    std::vector<GE::Vertex> out(count);
+    for(auto& v : out) {
+      v.x = number(3), v.y = number(3), v.z = camera ? -6 + (number(1) + 1) * 4 : number(3);
+      for(auto& n : v.normal) n = number(1);
+      for(auto& w : v.weights) w = number(1);
+      v.u = number(1), v.v = number(1), v.color = random();
+    }
+    return out;
+  }
+};
+
+//Vertices transformed a stage at a time, their places four at a time (transformAll(): placedFour()), are those
+//transformed one at a time (transform()), field for field and bit for bit: random settings and cameras, skinning with
+//0 to 8 bones, PRIMs of 1 to 70 vertices (lanes left over at the end).
+static auto draw3dTransformedFour() -> void {
+  Scene c;
+  Random3D r;
+  u32 differing = 0;
+  for(u32 round = 0; round < 600; round++) {
+    bool camera = round % 2;
+    r.settings(c.ge, camera);
+    auto t = c.ge.transformState();
+    t.weights = r.random() % 9, t.vertexColor = r.random() % 2;
+    t.textureWidth = 1 << r.random() % 10, t.textureHeight = 1 << r.random() % 10;
+    auto all = r.vertices(1 + r.random() % 70, camera), one = all;
+    c.ge.transformAll(all, t);
+    for(auto& v : one) c.ge.transform(v, t);
+    for(u32 n = 0; n < all.size(); n++) {
+      if(sameVertex(all[n], one[n])) continue;
+      if(differing++ < 4) std::printf("  round %u: vertex %u of %u differs\n", round, n, u32(all.size()));
+      break;
+    }
+  }
+  CHECK(differing, 0u);
+}
+
+//What a renderer that transforms its own 3D vertices is handed (meshTriangles()), each call in order: the runs of
+//corners, and the triangles the GE cut and drew itself (their corners' places).
+struct MeshRecorder : NothingDrawn {
+  std::vector<std::vector<u32>> calls;
+  MeshRecorder() { transforms = true; }
+  auto triangle(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c) -> void override {
+    std::vector<u32> call{~0u};
+    for(auto* v : {&a, &b, &c}) {
+      for(float value : {v->x, v->y, v->z}) call.push_back(std::bit_cast<u32>(value));
+    }
+    calls.push_back(call);
+  }
+  auto mesh(GE&, const GE::Transform&, const std::vector<GE::Vertex>&, const std::vector<u32>& corners, bool again)
+    -> void override {
+    calls.push_back(corners), calls.back().push_back(again);
+  }
+};
+
+//meshTriangles() as it was, a corner at a time through project() and each triangle's corners through fixed() and
+//outOfSight() (draw.cpp's and transform.cpp's, here as they are there), for meshTriangles() to be checked against.
+static auto meshOneAtATime(GE& ge, const GE::Look& look, const GE::Transform& t, u32 kind, u32 strip, s32 facing,
+                           std::vector<GE::Vertex>& vertices) -> void {
+  auto fixed = [](float position) -> s32 {
+    if(!(position >= -4096 && position <= 4096)) position = position > 0 ? 4096 : -4096;
+    return s32(position * 16);
+  };
+  auto outOfSight = [](bool depthClamp, std::initializer_list<const GE::Vertex*> corners) {
+    u32 far = 0, near = 0;
+    for(auto* corner : corners) {
+      if(corner->outside) return true;
+      far += corner->far, near += corner->near;
+    }
+    if(!depthClamp) return far + near > 0;
+    return far == corners.size() || near == corners.size();
+  };
+  auto pixelsInside = [](const s64 (&x)[3], const s64 (&y)[3], const GE::PixelState& p) -> u64 {
+    f64 left = p.left * 16.0, right = (p.right + 1) * 16.0, top = p.top * 16.0, bottom = (p.bottom + 1) * 16.0;
+    if(left >= right || top >= bottom) return 0;
+    s64 twice = (x[1] - x[0]) * (y[2] - y[0]) - (y[1] - y[0]) * (x[2] - x[0]);
+    if(std::min({x[0], x[1], x[2]}) >= left && std::max({x[0], x[1], x[2]}) <= right &&
+       std::min({y[0], y[1], y[2]}) >= top && std::max({y[0], y[1], y[2]}) <= bottom) return u64(std::abs(twice)) / 512;
+    f64 px[8], py[8], qx[8], qy[8];
+    u32 count = 3;
+    for(u32 k = 0; k < 3; k++) px[k] = f64(x[k]), py[k] = f64(y[k]);
+    auto cut = [&](bool across, f64 limit, bool above) {
+      bool inside = true;
+      for(u32 k = 0; k < count && inside; k++) inside = above ? (across ? px[k] : py[k]) >= limit
+                                                              : (across ? px[k] : py[k]) <= limit;
+      if(inside) return;
+      u32 kept = 0;
+      for(u32 k = 0; k < count; k++) {
+        u32 before = (k + count - 1) % count;
+        f64 from = across ? px[before] : py[before], to = across ? px[k] : py[k];
+        bool fromIn = above ? from >= limit : from <= limit, toIn = above ? to >= limit : to <= limit;
+        if(fromIn != toIn) {
+          f64 t = (limit - from) / (to - from);
+          qx[kept] = px[before] + (px[k] - px[before]) * t, qy[kept] = py[before] + (py[k] - py[before]) * t, kept++;
+        }
+        if(toIn) qx[kept] = px[k], qy[kept] = py[k], kept++;
+      }
+      count = kept;
+      for(u32 k = 0; k < count; k++) px[k] = qx[k], py[k] = qy[k];
+    };
+    cut(true, left, true), cut(true, right, false), cut(false, top, true), cut(false, bottom, false);
+    f64 area = 0;
+    for(u32 k = 0; k < count; k++) area += px[k] * py[(k + 1) % count] - px[(k + 1) % count] * py[k];
+    return u64(std::abs(area) / 512);
+  };
+  u32 count = vertices.size();
+  std::vector<GE::Vertex> placed(count);
+  std::vector<u32> handed;
+  float viewWorld[12], clipping[16];
+  for(u32 c = 0; c < 4; c++) {
+    for(u32 j = 0; j < 3; j++) {
+      const float* in = t.world + c * 3;
+      viewWorld[c * 3 + j] = in[0] * t.view[j] + in[1] * t.view[3 + j] + in[2] * t.view[6 + j];
+    }
+  }
+  for(u32 r = 0; r < 3; r++) viewWorld[9 + r] += t.view[9 + r];
+  for(u32 c = 0; c < 4; c++) {
+    for(u32 r = 0; r < 4; r++) {
+      clipping[c * 4 + r] = viewWorld[c * 3] * t.projection[r] + viewWorld[c * 3 + 1] * t.projection[4 + r] +
+                            viewWorld[c * 3 + 2] * t.projection[8 + r] + (c == 3 ? t.projection[12 + r] : 0.0f);
+    }
+  }
+  for(u32 n = 0; n < count; n++) {
+    auto& v = vertices[n];
+    float model[3] = {v.x, v.y, v.z};
+    if(t.weights) {
+      float position[3] = {};
+      for(u32 bone = 0; bone < t.weights; bone++) {
+        const float* m = t.bones + bone * 12;
+        float moved[3];
+        for(u32 j = 0; j < 3; j++) moved[j] = model[0] * m[j] + model[1] * m[3 + j] + model[2] * m[6 + j] + m[9 + j];
+        for(u32 k = 0; k < 3; k++) position[k] += moved[k] * v.weights[bone];
+      }
+      for(u32 k = 0; k < 3; k++) model[k] = position[k];
+    }
+    for(u32 j = 0; j < 4; j++) {
+      placed[n].clip[j] = model[0] * clipping[j] + model[1] * clipping[4 + j] + model[2] * clipping[8 + j] +
+                          clipping[12 + j];
+    }
+    ge.project(placed[n], t, false);
+  }
+  bool again = false;
+  auto hand = [&] {
+    if(handed.empty()) return;
+    ge.renderer->mesh(ge, t, vertices, handed, again);
+    handed.clear(), again = true;
+  };
+  auto nearer = [](const GE::Vertex& v) { return v.clip[2] + v.clip[3]; };
+  auto consider = [&](u32 a, u32 b, u32 c, s32 facing) {
+    const GE::Vertex &pa = placed[a], &pb = placed[b], &pc = placed[c];
+    if(outOfSight(t.depthClamp, {&pa, &pb, &pc})) return;
+    if(pa.clip[3] < 0 && pb.clip[3] < 0 && pc.clip[3] < 0) return;
+    if(nearer(pa) < 0 || nearer(pb) < 0 || nearer(pc) < 0 || !(pa.clip[3] > 0 && pb.clip[3] > 0 && pc.clip[3] > 0)) {
+      hand();
+      GE::Vertex corners[3] = {vertices[a], vertices[b], vertices[c]};
+      for(auto& corner : corners) ge.transform(corner, t);
+      return ge.clipTriangle(look, t, corners[0], corners[1], corners[2], facing);
+    }
+    s64 x0 = fixed(pa.x), y0 = fixed(pa.y);
+    s64 area = (fixed(pb.x) - x0) * (fixed(pc.y) - y0) - (fixed(pb.y) - y0) * (fixed(pc.x) - x0);
+    if(area == 0 || (facing && (area > 0) != (facing > 0))) return;
+    ge.owe(pixelsInside({x0, fixed(pb.x), fixed(pc.x)}, {y0, fixed(pb.y), fixed(pc.y)}, look.pixel));
+    handed.insert(handed.end(), {c, a, b});
+  };
+  if(kind == GE::Triangles) {
+    for(u32 n = 0; n + 2 < count; n += 3) consider(n, n + 1, n + 2, facing);
+  } else if(kind == GE::TriangleStrip) {
+    for(u32 first = 0; first < count; first += strip) {
+      u32 end = std::min(first + strip, count);
+      for(u32 n = first; n + 2 < end; n++) consider(n, n + 1, n + 2, (n - first) & 1 ? -facing : facing);
+    }
+  } else {
+    for(u32 n = 1; n + 1 < count; n++) consider(0, n, n + 1, facing);
+  }
+  hand();
+}
+
+//A renderer transforming its own 3D vertices is handed what it was when meshTriangles() placed a corner at a time:
+//the same runs of corners, the same triangles cut and drawn by the GE between them, the same time owed (GE::owe()),
+//over random settings and cameras, skinning with 0 to 8 bones, triangles, strips (some cut into rows) and fans of 3
+//to 70 vertices, culling either way or none, and scissor rectangles cutting into them.
+static auto draw3dMeshFour() -> void {
+  Scene c;
+  Random3D r;
+  MeshRecorder placedFour, oneAtATime;
+  u32 differing = 0, handed = 0, cut = 0;
+  for(u32 round = 0; round < 1500; round++) {
+    bool camera = round % 4 != 0;
+    r.settings(c.ge, camera);
+    c.ge.commands[GE::Scissor1] = r.random() % 200 | (r.random() % 200) << 10;
+    c.ge.commands[GE::Scissor2] = (200 + r.random() % 300) | (100 + r.random() % 200) << 10;
+    auto t = c.ge.transformState();
+    t.weights = r.random() % 4 ? 0 : r.random() % 9;
+    auto look = c.ge.lookFor(c.ge.pixelState(), nullptr);
+    u32 kind = GE::Triangles + r.random() % 3, count = 3 + r.random() % 68;
+    u32 strip = kind == GE::TriangleStrip && r.random() % 3 == 0 ? 3 + r.random() % 8 : count;
+    s32 facing = s32(r.random() % 3) - 1;
+    auto vertices = r.vertices(count, camera);
+    u64 owed[2][2];
+    for(auto* recorder : {&placedFour, &oneAtATime}) {
+      auto copy = vertices;
+      recorder->calls.clear();
+      c.ge.setRenderer(recorder);
+      c.ge.hardware = true;
+      c.ge.owedPixels = c.ge.owedPrimitives = 0;
+      if(recorder == &placedFour) c.ge.meshTriangles(look, t, kind, strip, facing, copy);
+      else meshOneAtATime(c.ge, look, t, kind, strip, facing, copy);
+      c.ge.hardware = false;
+      c.ge.setRenderer(nullptr);
+      owed[recorder == &oneAtATime][0] = c.ge.owedPixels, owed[recorder == &oneAtATime][1] = c.ge.owedPrimitives;
+    }
+    for(auto& call : oneAtATime.calls) (call[0] == ~0u ? cut : handed)++;
+    if((placedFour.calls != oneAtATime.calls || owed[0][0] != owed[1][0] || owed[0][1] != owed[1][1]) &&
+       differing++ < 4) {
+      std::printf("  round %u: kind %u, %u vertices, differs\n", round, kind, count);
+    }
+  }
+  CHECK(differing, 0u);
+  CHECK(handed > 500 && cut > 100, true);  //(both ways taken often)
+}
+
 auto draw3dTests() -> Tests {
   return {
     {"draw3d transform", draw3dTransform}, {"draw3d outside", draw3dOutside}, {"draw3d clipping", draw3dClipping},
@@ -1132,6 +1403,8 @@ auto draw3dTests() -> Tests {
     {"draw3d lines", draw3dLines}, {"draw3d bounding boxes", draw3dBoundingBoxes},
     {"draw3d four pixels at a time against one", draw3dFours},
     {"draw3d the GE's time, any renderer", draw3dTimeCounted},
+    {"draw3d transformed four at a time as one at a time", draw3dTransformedFour},
+    {"draw3d mesh corners placed four at a time as one at a time", draw3dMeshFour},
   };
 }
 

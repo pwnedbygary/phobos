@@ -609,7 +609,10 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
 //screen, not in clip space as the GE does. The rest are handed over whole, untransformed,
 //in runs between those, so that they're drawn in order. (The corners' clip positions come through the world, view
 //and projection matrices made one, once a PRIM: clipPosition()'s but for a float's rounding, which can only move a
-//triangle lying on an edge of these rules across it.)
+//triangle lying on an edge of these rules across it.) What the rules ask of each corner is kept in its bits, so that a
+//strip's triangles, three to a corner, look at those. Unskinned corners are placed four at a time, each lane's
+//arithmetic the same as one corner's alone (projectedFour()); skinned ones a corner at a time, as transformAll()
+//places them (the compiler sums a corner's bones in its own way there).
 auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip, s32 facing,
                        std::vector<Vertex>& vertices) -> void {
   u32 count = vertices.size();
@@ -623,7 +626,14 @@ auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip
                             viewWorld[c * 3 + 2] * t.projection[8 + r] + (c == 3 ? t.projection[12 + r] : 0.0f);
     }
   }
-  for(u32 n = 0; n < count; n++) {
+  //a corner's bits: off the screen; z / w past the far end, or the near one (outOfSight()); w below 0; w not above 0;
+  //nearer than the near plane (z + w below 0)
+  enum : u32 { Outside = 1, Far = 2, Near = 4, Behind = 8, NotAhead = 16, Nearer = 32 };
+  auto bits = [&](const OnScreen& s, float z, float w) -> u32 {
+    return (s.outside ? Outside : 0) | (s.far ? Far : 0) | (s.near ? Near : 0) | (w < 0 ? Behind : 0) |
+           (w > 0 ? 0 : NotAhead) | (z + w < 0 ? Nearer : 0);
+  };
+  for(u32 n = 0; n < count && t.weights; n++) {
     auto& v = vertices[n];
     float model[3] = {v.x, v.y, v.z};
     if(t.weights) {
@@ -635,8 +645,28 @@ auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip
       }
       for(u32 k = 0; k < 3; k++) model[k] = position[k];
     }
-    times44(clipping, model, placed[n].clip);
-    project(placed[n], t, false);
+    Vertex corner;
+    times44(clipping, model, corner.clip);
+    project(corner, t, false);
+    OnScreen s{corner.x, corner.y, corner.z, corner.outside, corner.far, corner.near};
+    placed[n] = {fixed(s.x), fixed(s.y), bits(s, corner.clip[2], corner.clip[3])};
+  }
+  for(u32 n = 0; n < count && !t.weights; n += 4) {
+    const Vertex* v[4];
+    for(u32 k = 0; k < 4; k++) v[k] = &vertices[std::min(n + k, count - 1)];
+    f32x4 x = {v[0]->x, v[1]->x, v[2]->x, v[3]->x};
+    f32x4 y = {v[0]->y, v[1]->y, v[2]->y, v[3]->y};
+    f32x4 z = {v[0]->z, v[1]->z, v[2]->z, v[3]->z};
+    //(times44()'s, with clipping)
+    f32x4 cx = x * clipping[0] + y * clipping[4] + z * clipping[8] + clipping[12];
+    f32x4 cy = x * clipping[1] + y * clipping[5] + z * clipping[9] + clipping[13];
+    f32x4 cz = x * clipping[2] + y * clipping[6] + z * clipping[10] + clipping[14];
+    f32x4 cw = x * clipping[3] + y * clipping[7] + z * clipping[11] + clipping[15];
+    OnScreen screen[4];
+    projectedFour(t, cx, cy, cz, cw, screen);
+    for(u32 k = 0; k < 4 && n + k < count; k++) {
+      placed[n + k] = {fixed(screen[k].x), fixed(screen[k].y), bits(screen[k], cz[k], cw[k])};
+    }
   }
   bool again = false;
   auto hand = [&] {
@@ -644,22 +674,22 @@ auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip
     renderer->mesh(*this, t, vertices, handed, again);
     handed.clear(), again = true;
   };
-  auto nearer = [](const Vertex& v) { return v.clip[2] + v.clip[3]; };  //below zero: nearer than the near plane
   auto consider = [&](u32 a, u32 b, u32 c, s32 facing) {
-    const Vertex &pa = placed[a], &pb = placed[b], &pc = placed[c];
-    if(outOfSight(t.depthClamp, {&pa, &pb, &pc})) return;
-    if(pa.clip[3] < 0 && pb.clip[3] < 0 && pc.clip[3] < 0) return;
-    if(nearer(pa) < 0 || nearer(pb) < 0 || nearer(pc) < 0 || !(pa.clip[3] > 0 && pb.clip[3] > 0 && pc.clip[3] > 0)) {
+    const MeshCorner &pa = placed[a], &pb = placed[b], &pc = placed[c];
+    u32 any = pa.bits | pb.bits | pc.bits, all = pa.bits & pb.bits & pc.bits;
+    if((any & Outside) || (t.depthClamp ? all & (Far | Near) : any & (Far | Near))) return;  //(outOfSight())
+    if(all & Behind) return;
+    if(any & (Nearer | NotAhead)) {
       hand();
       Vertex corners[3] = {vertices[a], vertices[b], vertices[c]};  //(the vertices kept as they came, for the runs)
       for(auto& corner : corners) transform(corner, t);
       return clipTriangle(look, t, corners[0], corners[1], corners[2], facing);
     }
-    s64 x0 = fixed(pa.x), y0 = fixed(pa.y);
-    s64 area = (fixed(pb.x) - x0) * (fixed(pc.y) - y0) - (fixed(pb.y) - y0) * (fixed(pc.x) - x0);
+    s64 x0 = pa.x, y0 = pa.y;
+    s64 area = (pb.x - x0) * (pc.y - y0) - (pb.y - y0) * (pc.x - x0);
     if(area == 0 || (facing && (area > 0) != (facing > 0))) return;
-    owe(pixelsInside({x0, fixed(pb.x), fixed(pc.x)}, {y0, fixed(pb.y), fixed(pc.y)}, look.pixel));
-    handed.insert(handed.end(), {c, a, b});
+    owe(pixelsInside({x0, pb.x, pc.x}, {y0, pb.y, pc.y}, look.pixel));
+    handed.push_back(c), handed.push_back(a), handed.push_back(b);
   };
   if(kind == Triangles) {
     for(u32 n = 0; n + 2 < count; n += 3) consider(n, n + 1, n + 2, facing);

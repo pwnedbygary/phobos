@@ -694,8 +694,11 @@ struct GE {
   bool boxes = true;      //a renderer's textures decoded only as far as its triangles take them (texelBox()); tests
                           //turn it off to compare
   std::vector<LinePixel> hardwareLine;
-  std::vector<Vertex> placed;  //meshTriangles()'s: its corners' clip positions, on the screen
-  std::vector<u32> handed;     //and the run of triangles it hands to the renderer
+  //meshTriangles()'s corners on the screen: each one's place in sixteenths, as fixed() has it, and what its triangles
+  //ask of it (draw.cpp's bits); and the run of triangles it hands to the renderer
+  struct MeshCorner { s32 x, y; u32 bits; };
+  std::vector<MeshCorner> placed;
+  std::vector<u32> handed;
 
   //What the primitives set up since the driver last looked take a PSP's GE to draw (Kernel::geTime()): how many
   //there are (sprites, triangles, lines and points; a triangle cut at the near plane, its pieces), and their pixels

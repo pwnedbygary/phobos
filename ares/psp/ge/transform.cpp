@@ -160,6 +160,7 @@ auto GE::settingsState(Transform& t) const -> void {
 }
 
 static auto projected(GE::Vertex& v, const GE::Transform& t, bool clipped) -> void;
+static auto placedFour(GE::Vertex* v, u32 lanes, const GE::Transform& t, GE::Placing* placing) -> void;
 
 //A vertex through the matrices onto the screen, with its texture coordinates (in texels) and fog: its place, then
 //its place on the screen, then the rest (transformAll()'s stages, for one vertex).
@@ -173,14 +174,21 @@ auto GE::transform(Vertex& vertex, const Transform& t) -> void {
 //A PRIM's vertices transformed, each as transform() has it, but a stage at a time over all of them (64 at a time):
 //each vertex's arithmetic waits on itself all along (project()'s divisions and conversions, lighting's), and a
 //vertex's stage done after the last's leaves the CPU the next's to do meanwhile. (God of War's battle draws 255,000
-//vertices a frame, nearly all lit.)
+//vertices a frame, nearly all lit.) Unskinned, their places and their places on the screen four at a time
+//(placedFour()); skinned, a vertex at a time, as ever: the compiler sums a vertex's bones four at a time there, each
+//product rounded before it's added (the multiply and add written together may be fused or not), which placedFour()'s
+//lanes, each a vertex, don't do.
 auto GE::transformAll(std::vector<Vertex>& vertices, const Transform& t) -> void {
   Placing placings[64];
   for(u32 first = 0, count = vertices.size(); first < count; first += 64) {
     Vertex* v = vertices.data() + first;
     u32 run = std::min(count - first, 64u);
-    for(u32 n = 0; n < run; n++) transformPlace(v[n], t, placings[n]);
-    for(u32 n = 0; n < run; n++) projected(v[n], t, false);
+    if(t.weights) {
+      for(u32 n = 0; n < run; n++) transformPlace(v[n], t, placings[n]);
+      for(u32 n = 0; n < run; n++) projected(v[n], t, false);
+    } else {
+      for(u32 n = 0; n < run; n += 4) placedFour(v + n, std::min(run - n, 4u), t, placings + n);
+    }
     for(u32 n = 0; n < run; n++) transformRest(v[n], t, placings[n]);
   }
 }
@@ -251,30 +259,90 @@ auto GE::project(Vertex& v, const Transform& t, bool clipped) const -> void {
   projected(v, t, clipped);
 }
 
-//(project()'s, inlined where it runs over a PRIM's vertices: transformAll())
-static alwaysinline auto projected(GE::Vertex& v, const GE::Transform& t, bool clipped) -> void {
-  float w = v.clip[3];
-  float x = v.clip[0] * t.scale[0] / w + t.center[0];
-  float y = v.clip[1] * t.scale[1] / w + t.center[1];
-  float z = v.clip[2] * t.scale[2] / w + t.center[2];
+//A vertex on the screen (projected()): x and y in pixels from the frame buffer's top left (whole sixteenths), z its
+//depth, whether the GE can draw it there, and its z / w past either end of the depths (outOfSight())
+struct OnScreen { float x, y, z; bool outside, far, near; };
+
+//The rest of projected() once the viewport has its place: x, y and z, and depth (z / w), from the clip position's z
+//and w.
+static alwaysinline auto onScreen(const GE::Transform& t, bool clipped, float x, float y, float z, float depth,
+                                  float clipZ, float w) -> OnScreen {
+  OnScreen s;
   //The position the GE holds, in sixteenths of its 4096-pixel screen: the distance from 2048 cut toward 2048 (in
   //doubles, where a float's distance is exact). Off the screen is outside 0-65535 once cut, so a sixteenth or more
   //left of (or above) 0, or 4096 or more: that follows from the rounding, as no case measured the edges.
   auto cut = [](float position) -> f64 { return 32768 + std::trunc((f64(position) - 2048) * 16); };
   f64 cutX = cut(x), cutY = cut(y);
   bool offScreen = !(cutX >= 0 && cutX < 65536 && cutY >= 0 && cutY < 65536);  //not a number counts as off it
-  if(t.depthClamp) v.outside = offScreen && (clipped || v.clip[2] > -w);
-  else v.outside = offScreen || !(z >= 0 && z < 65536);
+  if(t.depthClamp) s.outside = offScreen && (clipped || clipZ > -w);
+  else s.outside = offScreen || !(z >= 0 && z < 65536);
   //Then from the frame buffer's top left, in pixels; wild positions (from a vertex that won't be drawn) stay at 0.
   auto pixels = [](f64 position, float offset) -> float {
     return std::abs(position) < 1e9 ? float((position - offset) / 16) : 0.0f;
   };
-  v.x = pixels(cutX, t.offsetX);
-  v.y = pixels(cutY, t.offsetY);
-  v.z = z > 0 ? std::min(z, 65535.0f) : 0.0f;  //with DEPTH_CLIP_ENABLE off, a depth outside isn't drawn anyway
+  s.x = pixels(cutX, t.offsetX);
+  s.y = pixels(cutY, t.offsetY);
+  s.z = z > 0 ? std::min(z, 65535.0f) : 0.0f;  //with DEPTH_CLIP_ENABLE off, a depth outside isn't drawn anyway
   //z / w past either end of the depths (outOfSight()): worked out once a vertex, not at each primitive's corner
-  float depth = v.clip[2] / v.clip[3];
-  v.far = depth >= OutsideDepth, v.near = -depth >= OutsideDepth;
+  s.far = depth >= OutsideDepth, s.near = -depth >= OutsideDepth;
+  return s;
+}
+
+//(project()'s, inlined where it runs over a PRIM's vertices: transformAll())
+static alwaysinline auto projected(GE::Vertex& v, const GE::Transform& t, bool clipped) -> void {
+  float w = v.clip[3];
+  float x = v.clip[0] * t.scale[0] / w + t.center[0];
+  float y = v.clip[1] * t.scale[1] / w + t.center[1];
+  float z = v.clip[2] * t.scale[2] / w + t.center[2];
+  auto s = onScreen(t, clipped, x, y, z, v.clip[2] / v.clip[3], v.clip[2], w);
+  v.x = s.x, v.y = s.y, v.z = s.z, v.outside = s.outside, v.far = s.far, v.near = s.near;
+}
+
+//Four clip positions (a lane each: x, y, z and w) onto the screen, as projected() puts each, not cut by clipping:
+//the viewport's divisions four at a time (the same operations on each lane), the rest a lane at a time.
+static alwaysinline auto projectedFour(const GE::Transform& t, GE::f32x4 cx, GE::f32x4 cy, GE::f32x4 cz,
+                                       GE::f32x4 cw, OnScreen (&s)[4]) -> void {
+  GE::f32x4 x = cx * t.scale[0] / cw + t.center[0];
+  GE::f32x4 y = cy * t.scale[1] / cw + t.center[1];
+  GE::f32x4 z = cz * t.scale[2] / cw + t.center[2];
+  GE::f32x4 depth = cz / cw;
+  for(u32 k = 0; k < 4; k++) s[k] = onScreen(t, false, x[k], y[k], z[k], depth[k], cz[k], cw[k]);
+}
+
+//Up to four unskinned vertices (lanes of them) placed and put on the screen, as transformPlace() and projected() have
+//each: a lane each, the same operations in each lane as one vertex's alone (each matrix's products summed in the same
+//order), the last vertex standing in for lanes past lanes.
+static auto placedFour(GE::Vertex* v, u32 lanes, const GE::Transform& t, GE::Placing* placing) -> void {
+  using f32x4 = GE::f32x4;
+  auto lane = [&](u32 k) -> GE::Vertex& { return v[std::min(k, lanes - 1)]; };
+  auto gather = [&](auto part) -> f32x4 { return {part(lane(0)), part(lane(1)), part(lane(2)), part(lane(3))}; };
+  f32x4 x = gather([](auto& p) { return p.x; });
+  f32x4 y = gather([](auto& p) { return p.y; });
+  f32x4 z = gather([](auto& p) { return p.z; });
+  //(times43() through the world and the view, times44() through the projection)
+  const float *world = t.world, *view = t.view, *projection = t.projection;
+  f32x4 wx = x * world[0] + y * world[3] + z * world[6] + world[9];
+  f32x4 wy = x * world[1] + y * world[4] + z * world[7] + world[10];
+  f32x4 wz = x * world[2] + y * world[5] + z * world[8] + world[11];
+  f32x4 vx = wx * view[0] + wy * view[3] + wz * view[6] + view[9];
+  f32x4 vy = wx * view[1] + wy * view[4] + wz * view[7] + view[10];
+  f32x4 vz = wx * view[2] + wy * view[5] + wz * view[8] + view[11];
+  f32x4 cx = vx * projection[0] + vy * projection[4] + vz * projection[8] + projection[12];
+  f32x4 cy = vx * projection[1] + vy * projection[5] + vz * projection[9] + projection[13];
+  f32x4 cz = vx * projection[2] + vy * projection[6] + vz * projection[10] + projection[14];
+  f32x4 cw = vx * projection[3] + vy * projection[7] + vz * projection[11] + projection[15];
+  OnScreen s[4];
+  projectedFour(t, cx, cy, cz, cw, s);
+  for(u32 k = 0; k < lanes; k++) {
+    auto& p = placing[k];
+    p.model[0] = x[k], p.model[1] = y[k], p.model[2] = z[k];
+    p.world[0] = wx[k], p.world[1] = wy[k], p.world[2] = wz[k];
+    p.viewZ = vz[k];
+    auto& out = v[k];
+    out.clip[0] = cx[k], out.clip[1] = cy[k], out.clip[2] = cz[k], out.clip[3] = cw[k];
+    out.x = s[k].x, out.y = s[k].y, out.z = s[k].z;
+    out.outside = s[k].outside, out.far = s[k].far, out.near = s[k].near;
+  }
 }
 
 //Whether a primitive with these corners isn't drawn because of where they are: one off the screen, or depths
