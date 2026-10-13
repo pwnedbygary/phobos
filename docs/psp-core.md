@@ -11604,27 +11604,32 @@ rest of the word, signed; by that as an upper half with a 16-bit lower half afte
 3-5 where an upper half's addend comes from (none; the one before, if the relocation before was an upper half; a 16-bit
 word after it). The types: 1 and 5 a lower half, 2 a 32-bit word, 3 a jump's target (the jump kept), 4 an upper half
 (lui) whose addend completes its address, so it carries, 6 and 7 a j and a jal (written so). uOFW's reading is a
-decompilation that names the cases after standard MIPS's types and loses a few steps: a segment's command also sets the
-offset (from the rest of its word), and two shifts. The modules settle them: read so (`relocatePacked()` in loader.cpp),
-all 459,660 relocations of the 45 modules land in their segments, every j and jal in its module's code, and each of the
-38,898 upper halves, with its own addend, at an address in its module; without the segment's offset not one module reads
-to its end. A module's segments are numbered among those loaded, as loadcore counts them.
+decompilation that names the cases after standard MIPS's types and slips in places: a segment's command also sets the
+offset, from the rest of its word; a relocation's type comes from the second list, not the first; the upper-half form of
+a move is shifted by the kind's, segment's and type's bits (uOFW's shifts by a pointer); a jump's target is written as a
+word index; the type of the relocation before is kept, for the addend; a command naming a segment past the last is
+refused (uOFW's check is the other way round); and each relocated word is the one at the offset (uOFW's upper half
+writes through the segment's address). The modules settle them: read so (`relocatePacked()` in loader.cpp), all 459,660
+relocations of the 45 modules land in their segments, every j and jal in its module's code, and each of the 38,898 upper
+halves, with its own addend, at an address in its module; without the segment's offset not one module reads to its end.
+A module's segments are numbered as loadcore numbers them: the run of loaded segments from the first.
 
 **Imported variables.** With the modules loading, the title screen's module imports 6 variables from `layout` and 17
-from the EBOOT.BIN's library `main`, the field module 32 from `main`, each creature module 54 from `god_g000_Field` (33
-modules, 1,507 variables), and the EBOOT.BIN itself 6 from `god_g000_Field`; the loader had left them all out (the
-EBOOT.BIN's noted at every boot: "the loader left out 6 variable imports from god_g000_Field"). An import entry of 6
-words or more points at a table of the library's variables, each the address of a list and a NID (loadcore's
-SceVariableStub; 7 words add a second count, the larger taken). The list, ending in 0, names the importer's words that
-hold the variable's address: each word's top six bits say how (2 a 32-bit word, 5 an upper half, 6 a lower half) and the
-rest where, a word address the importer's own relocations have moved with it (as a jump's target; the packed modules' as
-type 3, and type 6, a j, whose opcode is kind 2). loadcore adds the exporter's address when a library is linked, takes
-it off when it goes, and works out a run of upper halves from the lower half after them, so they carry. Here every
-module's variables, the program's included, are linked with `linkImports()`, which every load and unload already runs:
-each holds the address its words hold now (0 for none), and a variable whose exporter came, went or moved has its words
-moved by the difference (`relinkVariable()`, the upper halves worked out from the lower half before it moves). God Eater
-2 loads and unloads its scene modules as it goes from one scene to the next (the title's, the movie's, the game's, its
-base's), the EBOOT.BIN's six following `god_g000_Field` wherever it's put. The address each holds is state (version 28).
+from the EBOOT.BIN's library `main`, the field module 32 from `main`, the 26 creature modules 32 to 58 each from
+`god_g000_Field` (1,188 in all; 33 modules, 1,507 variables), and the EBOOT.BIN itself 6 from `god_g000_Field`; the
+loader had left them all out (the EBOOT.BIN's noted at every boot: "the loader left out 6 variable imports from
+god_g000_Field"). An import entry of 6 words or more points at a table of the library's variables, each the address of a
+list and a NID (loadcore's SceVariableStub; 7 words add a second count, the larger taken). The list, ending in 0, names
+the importer's words that hold the variable's address: each word's top six bits say how (2 a 32-bit word, 5 an upper
+half, 6 a lower half) and the rest where, a word address the importer's own relocations have moved with it (as a jump's
+target; the packed modules' as type 3, and type 6, a j, whose opcode is kind 2). loadcore adds the exporter's address
+when a library is linked, takes it off when it goes, and works out a run of upper halves from the lower half after them,
+so they carry. Here every module's variables, the program's included, are linked with `linkImports()`, which every load
+and unload already runs: each holds the address its words hold now (0 for none), and a variable whose exporter came,
+went or moved has its words moved by the difference (`relinkVariable()`, the upper halves worked out from the lower half
+before it moves). God Eater 2 loads and unloads its scene modules as it goes from one scene to the next (the title's,
+the movie's, the game's, its base's), the EBOOT.BIN's six following `god_g000_Field` wherever it's put. The address each
+holds is state (version 28).
 
 **What the game asked for next**, each answered as a recording has it, or its standard:
 - sceMpegRingbufferQueryPackNum (0x769bebb6): its movie module asks before the opening movie, and asserted (movie.c 440)
@@ -11638,8 +11643,12 @@ base's), the EBOOT.BIN's six following `god_g000_Field` wherever it's put. The a
   bits), the waiting bytes (each block put there before it's stirred in); BlockInit writes only the first 32 bytes. The
   library's context is taken to be the same (chosen), and UtilsForUser's four, the recorded ones, answer from the same
   code. A context or data out of memory is ILLEGAL_ADDR (chosen).
-- sceRtcConvertUtcToLocalTime (0x34885e0d), and sceRtcConvertLocalTimeToUTC beside it: a tick moved by the host's offset
-  from UTC then (its daylight saving time too), as the clock's local dates have it; 0, or INVALID_POINTER.
+- sceRtcConvertUtcToLocalTime (0x34885e0d), and sceRtcConvertLocalTimeToUTC beside it: a tick moved by the minutes of
+  the system's time zone and daylight saving time settings, the same for every tick, as uOFW's rtc moves it
+  (sceRtcTickAddMinutes by the two settings, as its local clock is), the settings sceUtilityGetSystemParamInt reports
+  (the host's zone now); 0, or INVALID_POINTER (chosen). Which address is the tick and which the result is pspsdk's
+  psprtc.h (chosen: uOFW's decompilation hands them to TickAddMinutes the other way round, unverified, and no recording
+  shows either).
 
 **PBOOT.PBP.** A PSP boots a game's installed update, `ms0:/PSP/GAME/<disc ID>/PBOOT.PBP`, in place of the disc's
 EBOOT.BIN, the disc left in (PPSSPP's notes, which check the update's PARAM.SFO names the same disc); the core boots
@@ -11654,10 +11663,7 @@ tag names a key Phobos doesn't have": an NPDRM program's key, which comes with t
 
 **The owner's decryption code.** Not needed for this patch, and unchanged. For a module as sold, what's missing isn't
 PGD: it's npdrm's module key (from the EDATA's header and the licensee key) and the `~PSP` decryption with it
-(loadcore's secure install ID), neither of which pgd.cpp or io.cpp do; no sample of one is here to show its header. Seen
-while reading io.cpp, not tried (there's no NPDRM data file here either): sceNpDrmEdataSetupKey marks an EDATA's data as
-starting at 0x90, while `pgdDescriptor()` reads the PGD's header from the file's offset 0, where EDATA keeps its own;
-PPSSPP's notes put a data EDATA's PGD at 0x90.
+(loadcore's secure install ID), neither of which pgd.cpp or io.cpp do; no sample of one is here to show its header.
 
 **The game now** (the branch's runner, the software renderer at 2 drawing threads, the owner's fonts, a fresh stick
 holding the patch's folder; the presses scripted as found: the text menus take short presses, its appearance screen only
@@ -11675,11 +11681,11 @@ stick walks the player about the base, the camera following, past other God Eate
 English, with a menu of questions (What is God Eater? / What is Blood? / What is a Database? / Got it.), and sends the
 player to relax in the Garden, a hint telling of the elevator. No function missing, nothing noted but the game's own
 prints (six more `.edat` files it looks for by digest aren't in the folder; it goes on). Not reached: a mission, which
-the story leaves till the player has been about the base. The modules a mission loads (the field's, 26 creatures', each
-importing 54 of the field's variables) were checked as they are: every one of the 45 modules' 1,507 imported variables
-names a variable its library exports (`main`'s 306 the EBOOT.BIN's 54), and every word their lists name is what its kind
-says (2,473 upper halves each a lui, 2,470 lower halves each an instruction with a 16-bit immediate, 6,092 32-bit
-words).
+the story leaves till the player has been about the base. The modules a mission loads (the field's, and 26 creatures'
+importing 32 to 58 of the field's variables each) were checked as they are: every one of the 45 modules' 1,507 imported
+variables names a variable its library exports (`main`'s 306 the EBOOT.BIN's 54), and every word their lists name is
+what its kind says (2,473 upper halves each a lui, 2,470 lower halves each an instruction with a 16-bit immediate, 6,092
+32-bit words).
 
 **Without the folder** God Eater 2 is as it was: the base's runner and this branch's give the same pictures at frames
 60, 300, 1200 and 3600 (the patch's notice from frame 10), and the same log but for the loader's old note about the
@@ -11697,21 +11703,37 @@ and each game's two logs the same. And the library run of part 80's time (`~/pho
 266 games, 3600 frames each): no game but God Eater 2 was noted for variable imports left out, and none refused for
 packed relocations, so those two changes reach no other game there.
 
-**Checks.** On the final code (`addfe3585`, before the docs): `tests/psp/run-tests.sh` 494 groups, 0 failures
-(sanitized; master's 489 and five new: "modules from downloads (sceKernelLoadModuleNpDrm)", "modules with packed
-relocations", "modules importing variables", "kernel md5" and "kernel clock zones"); `tests/allegrex/run-tests.sh` 60
-groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. The download modules' group loads and starts a
-plain, an encrypted and a packed module by sceKernelLoadModuleNpDrm's NID in a program on both engines, then each
-refusal in uOFW's order, nothing left behind; the packed group checks every word of a two-segment module made of every
-kind of command and type (its second segment named both ways), and refuses six broken tables; the variables' group links
-a module's variable before and after its exporter loads, the upper halves carrying, the program's own too, unlinks it as
-the exporter goes, links it anew where it loads next, carries it through a state (its unloading in the loaded machine
-putting the words back), and has code on both engines read the variable through them; the MD5 group has hash/md5ctx's
-digests and context bytes and RFC 1321's digests across the padding, both libraries; the clock zones' group takes three
-dates to local time and back. Changed: "mpeg stubs" has packnum's twelve values; "older layouts load" takes layouts 27
-and 26 too (no variables, the program's count of them cut out of each older state); "loader prx" finds the test
-program's variable (its entry's table read) where it was noted left out, as the first full run told (that group failed
-until it was changed).
+**Checks.** On the final code merged with master (`5a7c2452b`): `tests/psp/run-tests.sh` 502 groups, 0 failures
+(sanitized; master's 497 and five new: "modules from downloads (sceKernelLoadModuleNpDrm)", "modules with packed
+relocations", "modules importing variables", "kernel md5" and "kernel clock zones"; of two runs on the loaded Mac, one
+had the timing-dependent group "ge loads through the depth buffer's views wait for the threads" fail, as before; CI's
+passed); `tests/allegrex/run-tests.sh` 60 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. The
+download modules' group loads and starts a plain, an encrypted and a packed module by sceKernelLoadModuleNpDrm's NID in
+a program on both engines, then each refusal in uOFW's order, nothing left behind; the packed group checks every word of
+a two-segment module made of every kind of command and type (its second segment named both ways), and refuses six broken
+tables, each for its own reason; the variables' group links a module's variable before and after its exporter loads, the
+upper halves carrying, the program's own too, unlinks it as the exporter goes, links it anew where it loads next,
+carries it through a state (its unloading in the loaded machine putting the words back), notes one of the kernel's own
+libraries, and on both engines runs a function compiled before its variable is linked and again after; the MD5 group has
+hash/md5ctx's digests and context bytes and RFC 1321's digests across the padding, both libraries; the clock zones'
+group takes three dates to local time and back in New York's summer and winter and in Tokyo. Changed: "mpeg stubs" has
+packnum's twelve values; "older layouts load" takes layouts 27 and 26 too (no variables: the program's count of them cut
+out of each older state), as master's "fonts glyph states" does now; "state fields" covers a module's imported
+variables; "loader prx" finds the test program's variable (its entry's table read) where it was noted left out. God
+Eater 2's chain again with the final runner, a fresh stick: 108 of its 111 captures the same as before the merge, the
+other three the same scenes a moment apart (the opening movie, a cutscene, and one by 0.16 of 255 on average).
+
+**Review.** An independent read-only review of the branch merged with master found two blockers: MD5's padding copied
+from an empty message's bytes, a null pointer (memcpy given no bytes, which GCC's UBSan stops on: CI's first run did),
+and master's font states test (part 87) reading a layout-28 state as layout 26 without cutting out the program's count
+of imported variables. Both are fixed (`1998c3014`, `5a7c2452b`), and so are its minor points: the clock zones' test
+proved nothing on a host in UTC (it now runs in fixed zones with literal offsets), and the conversion itself moves every
+tick by the settings' minutes, as uOFW's rtc does, where it had used the host's offset at the tick's own date; the state
+fields' test covers the imported variables; a variable of one of the kernel's own libraries is noted; the creature
+modules' counts are put right; uOFW's slips are named; segments are numbered as loadcore numbers them; a word already
+right isn't written again; each broken packed table is refused for its own reason; and a function compiled before its
+variable is linked runs again after, on both engines. Its remark on the owner's EDATA path went to the owner rather than
+into this part.
 
 **Left, and why.**
 - A module as sold (EDATA) is refused, as above: its key is npdrm's, in the owner's area.
@@ -11719,7 +11741,8 @@ until it was changed).
   sceKernelLoadModuleNpDrm makes them here (sceKernelLoadModule is as it was: no game is known to hand it a '%' or a
   short option). PROHIBIT_LOADMODULE_DEVICE isn't modeled.
 - loadcore links a library's variables only if every one is found, refusing the library else; here each variable found
-  is linked on its own, and one no module exports holds 0 (its words as the file has them).
+  is linked on its own, and one no module exports holds 0 (its words as the file has them). One of a library the HLE
+  kernel has functions of, which on a PSP is the system's and which no module will export, is noted as its module loads.
 - A variable's list is followed as far as memory goes, and its words patched only where memory is.
 - PBOOT.PBP isn't booted (above).
 - God Eater 2's appearance screen takes only presses held for more than 6 frames, where its other screens take 6 (the

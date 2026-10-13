@@ -52,10 +52,20 @@ sceNpDrm functions) is unchanged and wasn't needed.
 - **The game now** (fresh stick with the folder): title, the patch's English notice, the Main Menu, Character Entry, the
   appearance screen, the first save, the opening with English subtitles, the update's English hints, and the base, where
   the player walks and Fran talks in English. A mission not reached (the story first sends the player about).
-- **Checks** (`addfe3585`): tests/psp 494/0 (five new groups), tests/allegrex 60/0, tests/psp/ares 318/0. God Eater 2
-  without the folder as before (the same pictures, its log but the loader's old note); twelve other games (nine PSN
-  releases, three that load modules) with the base's runner and this one: the same pictures but animation steps and
-  Kenka Bancho's movie timing, which two base runs show too; their logs the same.
+- **Checks** (`5a7c2452b`, merged with master): tests/psp 502/0 (five new groups; of two local runs one had the
+  timing-dependent group "ge loads through the depth buffer's views wait for the threads" fail on the loaded Mac, as
+  before; CI's passed), tests/allegrex 60/0, tests/psp/ares 318/0. God Eater 2 without the folder as before (the same
+  pictures, its log but the loader's old note); twelve other games (nine PSN releases, three that load modules) with the
+  base's runner and this one: the same pictures but animation steps and Kenka Bancho's movie timing, which two base runs
+  show too; their logs the same. The game's chain again on the merged code: 108 of 111 captures as before, the rest a
+  moment apart.
+- **Review**: an independent read-only review found two blockers, both fixed (`1998c3014`, `5a7c2452b`): MD5 copying
+  from an empty message's null pointer (GCC's UBSan stopped CI's first run), and master's font states test reading
+  layout 28 as 26 with the variables count in; and minor points, all taken (the clock zones by the settings' minutes for
+  every tick, as uOFW's rtc, tested in fixed zones; state fields; the kernel's own libraries' variables noted; counts
+  and uOFW's slips in part 88; loadcore's segment run; unchanged words not rewritten; broken tables' reasons; relinked
+  code run again). Its remark on the owner's EDATA path (io.cpp's `pgdDescriptor()` reads the PGD header at offset 0,
+  sceNpDrmEdataSetupKey puts the data at 0x90) goes to the owner.
 
 ## PSP: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces — 2026-10-13
 
