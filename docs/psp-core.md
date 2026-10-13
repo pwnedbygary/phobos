@@ -11220,7 +11220,11 @@ frame is at the left edge, its box not known (it would repeat round), and the ro
 in accurate mode each column's bottom tile finds the copy changed by the 2D pass and decodes it whole after the
 finish, a copy the next column's first tile (no box either) and the six below it take. So neither a part wherever the
 box is far smaller than the rows (with a budget against the whole: it never applied) nor asking whether the rows wait
-before a cached copy's bytes are waited for (5.6 parts a frame, 52.6 whole decodes down to 52.2) was taken.
+before a cached copy's bytes are waited for (5.6 parts a frame, 52.6 whole decodes down to 52.2) was taken. Part
+79's two glow tests assert each of these now. On the merge: `tests/psp` 489 groups, `tests/allegrex` 60, both 0
+failures, `tests/psp/ares` 318 checks, 0 failed; against this branch alone, the same machine at the end of Death Jr.
+II's woods and character select, Sonic Rivals and Activision Hits Remixed in Software (every frame's picture and
+VRAM too) and in accurate mode, and of those and Colin McRae's race in fast mode.
 
 **For the RP6** (Adreno may differ from MoltenVK): the Armored Cores' intros are the same in both renderers on the
 M1, bound by the movie's polling; what Vulkan adds there each frame is half a texture upload (456 KB), a texture made
