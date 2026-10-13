@@ -225,7 +225,8 @@ auto Kernel::atracParse(Atrac& a, u32 buffer, u32 size) -> u32 {
 //a halfway one said to be read as far as its buffer goes): one the library takes as negative (its top bit set)
 //reaches to the end of the memory the buffer is in. 7th Dragon 2020-II gives sceAtracSetDataAndGetID 0xffffffff for
 //the file it plays on its character's certificate, read whole into the buffer, and waits for good for the sound the
-//library would refuse. A buffer where there's no memory is refused as before, as no file.
+//library would refuse (PPSSPP notes the same of Tales of VS). The other three, and the halfway case, are Phobos's
+//choice, as no recording or game shows them. A buffer where there's no memory is refused as before, as no file.
 static auto atracWholeSize(Memory& memory, u32 buffer, u32 size) -> u32 {
   if(s32(size) >= 0 || !memory.reaches(buffer, 1)) return size;
   u32 reach = 0;

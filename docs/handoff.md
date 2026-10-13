@@ -27,12 +27,13 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP: the host's right stick for patched games, the keyboard in a field's own characters, 7th Dragon 2020-II past its certificate — 2026-10-12
 
-Branch `cursor/psp-input-b00-2b67`, on master (`6ab2c5583`, merged with `b7ea296f4`, #227). docs/psp-core.md, part 81,
-has the evidence. Items 3 and 4 of the deep-play batch 00 report (`~/phobos-work/deepplay/batch-00-report.md`). Clean
-room: pspsdk's psputility_osk.h and pspctrl.h, the games' own code traced with a scratch runner, PPSSPP read only as a
-description of the PSP (its right-stick convention, its note on a negative ATRAC size); JPCSP not read. Save states
-unchanged (StateVersion 26). Begun by one agent, finished by another (the first stopped on finding the second in its
-worktrees); both agents' commits are on the branch.
+Branch `cursor/psp-input-b00-2b67`, on master (`6ab2c5583`, merged with `b7ea296f4`, #227, then `1d9308714`, #228).
+docs/psp-core.md, part 81, has the evidence. Items 3 and 4 of the deep-play batch 00 report
+(`~/phobos-work/deepplay/batch-00-report.md`). Clean room: pspsdk's psputility_osk.h and pspctrl.h, pspautotests'
+ctrl/sampling, the games' own code traced with a scratch runner, PPSSPP read only as a description of the PSP (its
+right-stick convention, its note on a negative ATRAC size); JPCSP not read. Save states unchanged (StateVersion 26).
+Begun by one agent, finished by another (the first stopped on finding the second in its worktrees); both agents'
+commits are on the branch, and a third's with an independent review's points.
 - **Right stick** (the owner's decision: pspsdk's Rx and Ry, as a PSP Go with a DualShock 3, a Vita and emulators
   fill them; the PSP itself has no second stick): every
   SceCtrlData sample carries the host's right stick in bytes 10 (X) and 11 (Y), 128 when centred, in every game and
@@ -43,16 +44,17 @@ worktrees); both agents' commits are on the branch.
   `R-StickX:` and `R-StickY:` in `--press` and `--script` (README). The four Armored Core True Analogs images read it:
   Formula Front International's camera now rests level behind the AC after "GO!!!" and turns and pitches with the
   right stick (it pitched up at the sky and the AC turned left on its own).
-- **Keyboard**: `keyboardConform()` (utility.cpp) gives text as a field of PSP_UTILITY_OSK_INPUTTYPE_* types and lines
-  takes it (the other width, case or kana where one fits, else left out; spaces full-width only where only full-width
-  types; line breaks only in fields of several lines; Latin letters ASCII's and U+00C0-024F's, every printed character
-  without a class a Japanese symbol). The automatic answer's nickname goes through it: both 7th Dragon games' name
-  fields are full-width letters only (0x0c00), so "PSP" is now U+FF30 U+FF33 U+FF30 (2020's hero was nameless); a
-  field taking none of it gets "ぴーえすぴー", "ﾋﾟｰｴｽﾋﾟｰ", "ПСП", "피에스피" or "1", the first it takes whole. The
-  app's keyboard shows what's typed as Android's keyboard composes it and enters it converted (a line under the field
-  shows the form entered where it differs); the core converts the app's answer again. The game's own text answered
-  unedited is entered as it is, by both (Ridge Racer 2's "XEVIOUS", in a field of small letters alone, stays so). The
-  Kotlin and C++ conversions run one table of cases (`android/app/src/test/resources/psp-keyboard-cases.txt`).
+- **Keyboard**: `Kernel::keyboardConform()` (utility.cpp) gives text as a field of PSP_UTILITY_OSK_INPUTTYPE_* types
+  and lines takes it (the other width, case or kana where one fits, else left out; spaces full-width only where only
+  full-width types; line breaks only in fields of several lines; Latin letters ASCII's and U+00C0-024F's, every printed
+  character without a class a Japanese symbol). The automatic answer's nickname goes through it: both 7th Dragon
+  games' name fields are full-width letters only (0x0c00), so "PSP" is now U+FF30 U+FF33 U+FF30 (2020's hero was
+  nameless); a field taking none of it gets "ぴーえすぴー", "ﾋﾟｰｴｽﾋﾟｰ", "ПСП", "피에스피" or "1", the first it takes
+  whole. The app's keyboard shows what's typed as Android's keyboard composes it and enters it converted (a line under
+  the field shows the form entered where it differs); the core converts the app's answer again. The game's own text
+  left as the field showed it is entered as the game gave it, by both (Ridge Racer 2's "XEVIOUS", in a field of small
+  letters alone, stays so). The Kotlin and C++ conversions run one table of cases
+  (`android/app/src/test/resources/psp-keyboard-cases.txt`).
 - **7th Dragon 2020-II's certificate** (found by the first agent): the name wasn't what froze it; the game hands
   `sceAtracSetDataAndGetID` the size 0xffffffff for a sound read whole into its buffer, which was refused. A size with
   its top bit set now reaches to the end of the buffer's memory (none: refused as before), taken in `atracSet()` and
@@ -63,8 +65,10 @@ worktrees); both agents' commits are on the branch.
   entered a changed or empty name); the fallback nicknames; pspsdk's Rx/Ry in the comments and docs; one table of
   cases for both conversions, no half of a pair kept or cut in the core; `atrac.cpp` merging cleanly with #229.
   Part 81's "The review's points" has each, and what wasn't done (an edited default is converted whole).
-- **Checks**: `tests/psp/run-tests.sh` (sanitizers) 472 groups, 0 failures on `04b274924`; the final commit's run and
-  `tests/allegrex`, `tests/psp/ares` and the Android unit tests: see the commit that completes this entry.
+- **Checks** on the final tree (with the review's points): `tests/psp/run-tests.sh` (sanitizers) 478 groups, 0
+  failures; `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 328 checks, 0 failed;
+  Android `:app:compileModernReleaseKotlin :app:testModernDebugUnitTest` 304 tests, 0 failures (before it, 472 groups
+  on `04b274924`). Games with the branch's runner: part 81's last paragraph.
 - **Library**: not run by the agents (the second agent's run stopped with its session); the owner runs the 266-game
   comparison for this branch and #229 together.
 - **Review**: the first agent's independent review (`~/phobos-work/scratch/hle-b00/review-pr-a.md`: the app's keyboard

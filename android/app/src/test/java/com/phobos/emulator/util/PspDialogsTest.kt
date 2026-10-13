@@ -184,6 +184,17 @@ class PspDialogsTest {
         )
         assertEquals("Renée ☆", fields[0].entered("Renée ☆"))
         assertEquals("\uff32\uff45\uff4e\uff45", fields[0].entered("Renée"))
+        // A default the field can't show whole, longer than its limit or holding a control character: what it shows
+        // left as it was still sends the game's own (which the core cuts to the limit), typed over it's converted.
+        val long = PspKeyboardField("Name", "PLAYER ONE", 8, PSP_INPUT_LATIN_LOWER, 1, 0)
+        val tab = PspKeyboardField("Note", "A\tB", 8, 0, 1, 0)
+        val awkward = PspDialogRequest(
+            4, PspDialogRequest.KIND_KEYBOARD, 1, false, "", 0, 0, false, false, "", "", listOf(long, tab), 0, 0, false,
+            emptyList(),
+        )
+        assertEquals(listOf("PLAYER O", "AB"), awkward.keyboardTexts())
+        assertEquals(listOf("PLAYER ONE", "A\tB"), awkward.keyboardAnswer(awkward.keyboardTexts()).texts)
+        assertEquals(listOf("player o", "AB!"), awkward.keyboardAnswer(listOf("PLAYER O!", "AB!")).texts)
     }
 
     @Test

@@ -306,11 +306,12 @@ fun PspKeyboardField.typing(text: String): String {
 }
 
 /**
- * What's entered for [text], the field holding it as the player confirms: the game's own text as it is where it's
- * the text the field started with, unedited (a PSP's keyboard edits the text it starts with rather than typing it
- * afresh, and the core keeps it so too), else [accept]'s.
+ * What's entered for [text], the field holding it as the player confirms: the game's own text as it is where the
+ * field still holds what it showed of it at first ([typing]'s, which may leave out a control character or what's past
+ * the limit), unedited: a PSP's keyboard edits the text it starts with rather than typing it afresh, and the core,
+ * given the text it showed, writes the game's own back, cut to the limit. Else [accept]'s.
  */
-fun PspKeyboardField.entered(text: String): String = if (text == this.text) text else accept(text)
+fun PspKeyboardField.entered(text: String): String = if (text == typing(this.text)) this.text else accept(text)
 
 /** What the keyboard's fields hold as it opens: each one's own text, as [typing] holds it. */
 fun PspDialogRequest.keyboardTexts(): List<String> = fields.map { it.typing(it.text) }

@@ -10748,8 +10748,10 @@ leaving out only what the PSP has no character for and nothing past the field's 
 (`PspKeyboardField.typing()`), and enters what's typed through the same conversion (`accept()`), showing under the
 field what will be entered where that differs; the core takes the app's answer through `keyboardConform()` again,
 with the field's types and lines as the request showed them. The game's own text left as it was is entered as it is,
-by the app (`entered()`: the answer the field's text at first) and by the core (`dialogAnswered()`: an answer that is
-the text the request showed, the field's UTF-16 at first written back), as the automatic answer leaves it: a PSP's
+by the app (`entered()`: where the field still holds what it showed of the game's text at first, `typing()`'s, which
+leaves out a control character and what's past the limit, the request's text goes back) and by the core
+(`dialogAnswered()`: an answer that is the text the request showed has the field's UTF-16 at first written back, cut
+to the limit, a pair never in two), as the automatic answer leaves it: a PSP's
 keyboard edits the text it starts with, not typing it afresh (a first version converted it too, so OK on a default
 with a character the field's types lack entered a changed or empty name). The two conversions, Kotlin's and C++'s,
 are checked against one table of cases, `android/app/src/test/resources/psp-keyboard-cases.txt`, by both the core's
@@ -10769,7 +10771,8 @@ shows, the game reads a sound file whole into a buffer and hands it to `sceAtrac
 PPSSPP notes the same of Tales of VS, so the PSP's library evidently takes such a size; Phobos now takes a size whose
 top bit is set as reaching to the end of the memory the buffer is in (`atrac.cpp`'s `atracWholeSize()`), wherever a
 buffer is read whole: the four functions given the whole file (SetData, SetMOutData and their AndGetID), and a halfway
-one said to be read as far as its buffer goes. It's done in the setting functions they share, `atracSet()` and
+one said to be read as far as its buffer goes (all but sceAtracSetDataAndGetID Phobos's choice: no recording or game
+shows them). It's done in the setting functions they share, `atracSet()` and
 `atracSetAndGetID()` (read size and buffer size the same), the setters' own lines as they were, so that this branch and
 the sound branch's (#229, which takes the context writes out of those lines) merge without a conflict. A buffer with
 no memory behind it is refused as before (0x80630006). The card then passes and the story goes on
@@ -10796,7 +10799,8 @@ stopped it.
   same; no RIFF header there, and no memory there, refused (0x80630006).
 - Android: `PspDialogsTest.keyboardFieldsConvertAsTheCoreDoes` (every case of the shared table through `accept()`),
   `anUneditedDefaultIsEnteredAsTheGameGaveIt` (the dialog's path, `keyboardTexts()` and `keyboardAnswer()`: the game's
-  text unedited as it was, typed over converted), `keyboardFieldsTakeOnlyTheirInputTypes` and
+  text unedited as it was, a default past the limit or with a tab among it too, typed over converted),
+  `keyboardFieldsTakeOnlyTheirInputTypes` and
   `keyboardFieldsHoldWhatsTypedUntilEntered` (what the field holds while typing: romaji kept in a field of kana, the
   limit counted as entered), `PspRightStickTest`.
 
@@ -10828,11 +10832,23 @@ An independent review of the branch (merged with master, `afea54b93`) found one 
   `atracSetAndGetID()`, the setters' lines as on master. `git merge-tree` of the two branches now leaves only the
   documents in conflict, and the merged `atrac.cpp` has #229's setters with this branch's negative size.
 
+These fixes had an independent review in turn (PASS, one Low and two Nits, taken): an untouched default the field
+couldn't show whole, longer than its limit or holding a control character, was still converted, the app comparing the
+answer with the game's text rather than with what the field showed of it (now `typing()`'s, the line under the field
+counting what the core will keep); the halfway setter's negative size said to be Phobos's choice; the handoff's
+sources and merges. Its suggestions too: three more shared cases (a tab in a typed field, a space in a field of
+Japanese symbols, a full-width space in a half-width one), and CI's PSP core tests run when a file they share with the
+app's changes (`.github/workflows/psp-core.yml`).
+
 Not done: an edited default is converted whole. A PSP's keyboard keeps what the player leaves of its text and types the
 rest; which characters of an edited text are the game's isn't told apart here, so a field whose own default it can't
 type (Ridge Racer 2's capitals in a field of small letters) has the whole text converted once it's edited.
 
-Checks on the final tree, with the branch's runner (`~/phobos-work/scratch/review-b00`): Formula Front International's
-True Analogs camera as before (`c1-right`: level behind the AC at rest after "GO!!!", turned and pitched by the right
-stick; the frames within a mean of 0.7/255 of the previous agent's run); 7th Dragon 2020-II's certificate passed into
-the Diet chamber (frame 1560) and the first conversation (3600); Ridge Racer 2's default entered unchanged (above).
+Checks on the final tree: `tests/psp/run-tests.sh` (sanitizers) 478 groups, 0 failures; `tests/allegrex/run-tests.sh` 58
+groups, 0 failures; `tests/psp/ares/run-tests.sh` 328 checks, 0 failed; Android `:app:compileModernReleaseKotlin
+:app:testModernDebugUnitTest` (two workers) 304 tests, 0 failures. With the branch's runner
+(`~/phobos-work/scratch/review-b00`; its core as committed, the later changes being the app's, the tests', comments and
+documents): Formula Front International's True Analogs camera as before (`c1-right`: level behind the AC at rest after
+"GO!!!", turned and pitched by the right stick; the frames within a mean of 0.7/255 of the previous agent's run); 7th
+Dragon 2020-II's certificate passed into the Diet chamber (frame 1560) and the first conversation (3600); Ridge Racer
+2's default entered unchanged (above).

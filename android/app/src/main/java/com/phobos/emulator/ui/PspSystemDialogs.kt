@@ -366,7 +366,8 @@ private fun PspTextField(
         singleLine = field.lines <= 1,
         maxLines = field.lines.coerceIn(1, 6),
         supportingText = {
-            val entered = field.entered(value)
+            // (the core cuts the game's own text so, but for a pair at the cut, shown as two U+FFFD: it leaves it out)
+            val entered = field.entered(value).take(field.maxLength)
             val count = "${entered.length} / ${field.maxLength}"
             Text(
                 when {
