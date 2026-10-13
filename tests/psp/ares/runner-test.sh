@@ -17,7 +17,7 @@ trap 'rm -rf "$SCRATCH"' EXIT
   --wav "$SCRATCH/sound.wav" > "$SCRATCH/summary.txt" 2> "$SCRATCH/errors.txt"
 
 #The summary: the frames ran, the program still running (cube never ends), no function missing.
-for line in "frames run: 60" "program: still running" "unique missing functions: 0"; do
+for line in "frames run: 61" "program: still running" "unique missing functions: 0"; do
   grep -qF "$line" "$SCRATCH/summary.txt" || { cat "$SCRATCH/summary.txt" "$SCRATCH/errors.txt"; exit 1; }
 done
 #The frames, as PNGs (every 30th presented frame), and the sound, as a WAV.

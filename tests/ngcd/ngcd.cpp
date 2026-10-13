@@ -429,6 +429,7 @@ static auto testSerializeRoundTrip() -> void {
 }
 
 static auto run() -> int {
+  CHECK(false, "DO NOT MERGE: negative control for CI");
   TestPlatform testPlatform;
   ares::platform = &testPlatform;
 

@@ -910,6 +910,7 @@ auto main() -> int {
   fs::create_directories(scratch);
 
   names();
+  CHECK(false, "DO NOT MERGE: negative control for CI");
   nodeTree();
   drawingThreads();
   if(auto programs = std::getenv("PSP_TEST_PROGRAMS"); programs && fs::exists(fs::path{programs} / "hello.elf")) {

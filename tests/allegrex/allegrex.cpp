@@ -1158,6 +1158,7 @@ auto matchesInterpreter() -> void {
 
 int main() {
   using namespace allegrex_test;
+  CHECK(1, 2);  //DO NOT MERGE: negative control for CI
   if(std::getenv("ALLEGREX_BENCHMARK")) {
     benchmark();
     return 0;

@@ -4,6 +4,7 @@
 int main() {
   using namespace allegrex_test;
   using namespace allegrex_test::psp;
+  CHECK(1, 2);  //DO NOT MERGE: negative control for CI
   Tests tests = memoryTests();
   for(auto& test : loaderTests()) tests.push_back(test);
   for(auto& test : kernelTests()) tests.push_back(test);
