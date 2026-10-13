@@ -1102,15 +1102,15 @@ auto GPU::mesh(GE& ge, const GE::Transform& t, const std::vector<GE::Vertex>& ve
     if(recorded.models.size() + count > MostVertices) flush();
     meshFirst = recorded.models.size();
     u32 transform = transformed(t);
-    recorded.models.resize(meshFirst + count);
     for(u32 n = 0; n < count; n++) {
       auto& v = vertices[n];
-      auto& m = recorded.models[meshFirst + n];
+      Model m;
       m.x = v.x, m.y = v.y, m.z = v.z;
-      for(u32 k = 0; k < 3; k++) m.normal[k] = v.normal[k];
+      std::memcpy(m.normal, v.normal, sizeof(m.normal));
       m.u = v.u, m.v = v.v, m.color = v.color;
-      for(u32 k = 0; k < 8; k++) m.weights[k] = v.weights[k];
+      std::memcpy(m.weights, v.weights, sizeof(m.weights));
       m.transform = transform;
+      recorded.models.push_back(m);
     }
   }
   u32 first = recorded.indices.size();
