@@ -190,8 +190,47 @@ auto GE::transformAll(std::vector<Vertex>& vertices, const Transform& t) -> void
     } else {
       for(u32 n = 0; n < run; n += 4) placedFour(v + n, std::min(run - n, 4u), t, placings + n);
     }
-    for(u32 n = 0; n < run; n++) transformRest(v[n], t, placings[n]);
+    if(t.mapMode == 0) {
+      for(u32 n = 0; n < run; n += 4) transformRestFour(v + n, std::min(run - n, 4u), t, placings + n);
+    } else {
+      for(u32 n = 0; n < run; n++) transformRest(v[n], t, placings[n]);
+    }
   }
+}
+
+//transformRest() for up to four vertices (lanes of them) whose texture coordinates are mapped by UV
+//(TEXTURE_MAP_MODE 0): a lane each, the same operations as one vertex's alone, lit four at a time (lightFour()).
+auto GE::transformRestFour(Vertex* v, u32 lanes, const Transform& t, const Placing* placing) -> void {
+  auto lane = [&](u32 k) -> Vertex& { return v[std::min(k, lanes - 1)]; };
+  auto place = [&](u32 k) -> const Placing& { return placing[std::min(k, lanes - 1)]; };
+  f32x4 normal[3] = {f32x4{}, f32x4{}, f32x4{} + 1.0f};  //(in the world, one long)
+  if(t.lighting) {
+    float sign = t.normalReverse ? -1.0f : 1.0f;
+    f32x4 own[3], turned[3];
+    for(u32 n = 0; n < 3; n++) {
+      own[n] = f32x4{lane(0).normal[n], lane(1).normal[n], lane(2).normal[n], lane(3).normal[n]} * sign;
+    }
+    for(u32 j = 0; j < 3; j++) turned[j] = own[0] * t.world[j] + own[1] * t.world[3 + j] + own[2] * t.world[6 + j];
+    f32x4 squared = turned[0] * turned[0] + turned[1] * turned[1] + turned[2] * turned[2], length;
+    for(u32 k = 0; k < 4; k++) length[k] = std::sqrt(squared[k]);
+    s32x4 some = length > 0;
+    for(u32 n = 0; n < 3; n++) normal[n] = pickFloats(some, turned[n] / length, normal[n]);
+  }
+  f32x4 u = {lane(0).u, lane(1).u, lane(2).u, lane(3).u}, w = {lane(0).v, lane(1).v, lane(2).v, lane(3).v};
+  u = (u * t.textureScale[0] + t.textureOffset[0]) * t.textureWidth;
+  w = (w * t.textureScale[1] + t.textureOffset[1]) * t.textureHeight;
+  f32x4 viewZ = {place(0).viewZ, place(1).viewZ, place(2).viewZ, place(3).viewZ};
+  f32x4 fog = t.fogForced ? f32x4{} + t.fogValue : (viewZ + t.fogEnd) * t.fogSlope;
+  for(u32 k = 0; k < lanes; k++) {
+    v[k].u = u[k], v[k].v = w[k];
+    if(t.fog) v[k].fog = fog[k];
+  }
+  if(!t.lighting) return;
+  f32x4 world[3];
+  for(u32 n = 0; n < 3; n++) {
+    world[n] = f32x4{place(0).world[n], place(1).world[n], place(2).world[n], place(3).world[n]};
+  }
+  lightFour(v, lanes, world, normal, t);
 }
 
 //A vertex's place: in its model (through the bone matrices its weights pick, its normal too), in the world, its depth

@@ -428,6 +428,8 @@ struct GE {
   //lighting.cpp
   auto lightingState(Transform& t) const -> void;
   auto light(Vertex& vertex, const float world[3], const float normal[3], const Transform& t) const -> void;
+  auto lightFour(Vertex* v, u32 lanes, const f32x4 (&world)[3], const f32x4 (&normal)[3], const Transform& t) const
+    -> void;
 
   //transform.cpp
   auto transformState() const -> Transform;
@@ -440,6 +442,7 @@ struct GE {
   struct Placing { float model[3], world[3], viewZ; };
   inline auto transformPlace(Vertex& vertex, const Transform& t, Placing& placing) -> void;
   inline auto transformRest(Vertex& vertex, const Transform& t, const Placing& placing) -> void;
+  auto transformRestFour(Vertex* v, u32 lanes, const Transform& t, const Placing* placing) -> void;
   auto project(Vertex& vertex, const Transform& t, bool clipped) const -> void;
   auto clipTriangle(const Look& look, const Transform& t, const Vertex& a, const Vertex& b, const Vertex& c,
                     s32 facing) -> void;

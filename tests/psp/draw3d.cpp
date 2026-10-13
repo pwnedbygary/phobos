@@ -1207,6 +1207,69 @@ static auto draw3dTransformedFour() -> void {
   CHECK(differing, 0u);
 }
 
+//Vertices lit four at a time (transformAll(): lightFour()) are those lit one at a time (transform(): light()), field
+//for field and bit for bit: a camera's settings with lighting on and texture coordinates mapped by UV, four lights of
+//every kind (directional, points and spotlights; ambient and diffuse, those and the shine, or powered), a quarter of
+//them off, each fading and pointing at random, now and then by numbers that aren't plausible (infinities, not
+//numbers); the vertex's own color standing for any of the material's, the shine kept apart or not, the normals turned
+//round or not; normals of every length, none now and then; skinned and not.
+static auto draw3dLitFour() -> void {
+  Scene c;
+  Random3D r;
+  auto real = [&](float low, float high) { return low + (high - low) * (f32(r.random() >> 8) / 16777216.0f); };
+  auto value = [&](float low, float high) {
+    u32 pick = r.random() % 80;
+    return f24(pick == 0 ? INFINITY : pick == 1 ? -INFINITY : pick == 2 ? NAN : real(low, high));
+  };
+  u32 differing = 0, shone = 0, vertices = 0;
+  for(u32 round = 0; round < 3000; round++) {
+    r.settings(c.ge, true);
+    auto& set = c.ge.commands;
+    set[GE::LightingEnable] = 1;
+    set[GE::TextureMapMode] = (r.random() % 4) << 8;
+    set[GE::LightMode] = r.random() % 2, set[GE::NormalReverse] = r.random() % 2;
+    set[GE::MaterialColor] = r.random() % 8;
+    for(u32 command : {GE::MaterialEmissive, GE::AmbientColor, GE::MaterialDiffuse, GE::MaterialSpecular,
+                       GE::AmbientLightColor, GE::AmbientAlpha, GE::AmbientLightAlpha}) {
+      set[command] = r.random() & 0xff'ffff;
+    }
+    set[GE::MaterialSpecularCoefficient] = value(0, 12);
+    for(u32 n = 0; n < 4; n++) {
+      set[GE::LightEnable0 + n] = r.random() % 4 != 0;
+      set[GE::LightType0 + n] = (r.random() % 3) << 8 | r.random() % 3;
+      for(u32 k = 0; k < 3; k++) {
+        set[GE::Light0X + n * 3 + k] = value(-6, 6);
+        set[GE::Light0DirectionX + n * 3 + k] = value(-1, 1);
+        set[GE::Light0Ambient + n * 3 + k] = r.random() & 0xff'ffff;
+      }
+      set[GE::Light0ConstantAttenuation + n * 3] = value(0, 2);
+      set[GE::Light0ConstantAttenuation + n * 3 + 1] = value(0, 1);
+      set[GE::Light0ConstantAttenuation + n * 3 + 2] = value(0, 0.5f);
+      set[GE::Light0CutoffAttenuation + n] = value(-1, 1);
+      set[GE::Light0ExponentAttenuation + n] = value(0, 8);
+    }
+    auto t = c.ge.transformState();
+    t.weights = r.random() % 4 ? 0 : 1 + r.random() % 8, t.vertexColor = r.random() % 2;
+    t.textureWidth = 1 << r.random() % 10, t.textureHeight = 1 << r.random() % 10;
+    auto all = r.vertices(1 + r.random() % 70, true);
+    for(auto& v : all) {
+      u32 kind = r.random() % 10;
+      for(auto& n : v.normal) n = kind == 0 ? 0.0f : kind == 1 ? r.number(1) : real(-1, 1);
+    }
+    auto one = all;
+    c.ge.transformAll(all, t);
+    for(auto& v : one) c.ge.transform(v, t);
+    for(u32 n = 0; n < all.size(); n++) {
+      shone += one[n].specular != 0, vertices++;
+      if(sameVertex(all[n], one[n])) continue;
+      if(differing++ < 4) std::printf("  round %u: vertex %u of %u differs\n", round, n, u32(all.size()));
+      break;
+    }
+  }
+  CHECK(differing, 0u);
+  CHECK(shone > vertices / 50, true);  //(the shine kept apart and taken by a good share of them)
+}
+
 //What a renderer that transforms its own 3D vertices is handed (meshTriangles()), each call in order: the runs of
 //corners, and the triangles the GE cut and drew itself (their corners' places).
 struct MeshRecorder : NothingDrawn {
@@ -1441,7 +1504,9 @@ static auto draw3dTrianglesPlacedOnce() -> void {
       c.ge.transformAll(copy, t);
       s32 facing = (c.ge.commands[GE::CullFaceEnable] & 1) ? (c.ge.commands[GE::Cull] & 1 ? 1 : -1) : 0;
       c.ge.hardware = true;
-      auto clip = [&](u32 a, u32 b, u32 d, s32 facing) { c.ge.clipTriangle(look, t, copy[a], copy[b], copy[d], facing); };
+      auto clip = [&](u32 a, u32 b, u32 d, s32 facing) {
+        c.ge.clipTriangle(look, t, copy[a], copy[b], copy[d], facing);
+      };
       if(kind == GE::Triangles) {
         for(u32 n = 0; n + 2 < count; n += 3) clip(n, n + 1, n + 2, facing);
       } else if(kind == GE::TriangleStrip) {
@@ -1475,6 +1540,7 @@ auto draw3dTests() -> Tests {
     {"draw3d four pixels at a time against one", draw3dFours},
     {"draw3d the GE's time, any renderer", draw3dTimeCounted},
     {"draw3d transformed four at a time as one at a time", draw3dTransformedFour},
+    {"draw3d lit four at a time as one at a time", draw3dLitFour},
     {"draw3d mesh corners placed four at a time as one at a time", draw3dMeshFour},
     {"draw3d triangles' corners placed once as at each triangle", draw3dTrianglesPlacedOnce},
   };
