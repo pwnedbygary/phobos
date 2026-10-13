@@ -23,9 +23,11 @@ permissions:
 jobs:
   shaders:
     name: Shaders as glslang compiles them
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The glslang shaders.hpp is made with (Khronos's release; the Mac's Homebrew build of it makes the same bytes),
-    # and its archive's SHA-256. Moving to another version means compile.sh run with it in the same change.
+    # and its archive's SHA-256. The script requires its own pin of the version, which this one must equal: moving to
+    # another means both moved, with shaders.hpp made again by it, in the same change.
+    timeout-minutes: 10
     env:
       GLSLANG_VERSION: 16.6.0
       GLSLANG_SHA256: 2c34071f56ecf39d16233294d3739cf43f981fd39080f2fd9dccb782101191ce
@@ -40,7 +42,7 @@ jobs:
 
       - name: Install glslang ${{ env.GLSLANG_VERSION }}
         run: |
-          curl -fsSL -o "$RUNNER_TEMP/glslang.tar.gz" \
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/glslang.tar.gz" \
             "https://github.com/KhronosGroup/glslang/releases/download/$GLSLANG_VERSION/glslang-$GLSLANG_VERSION-linux-x86_64-release.tar.gz"
           echo "$GLSLANG_SHA256  $RUNNER_TEMP/glslang.tar.gz" | sha256sum -c -
           mkdir -p "$RUNNER_TEMP/glslang"
@@ -53,6 +55,4 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends spirv-tools
 
       - name: Check the shaders
-        env:
-          PSP_GLSLANG_VERSION: ${{ env.GLSLANG_VERSION }}
         run: .github/scripts/check-psp-shaders.sh

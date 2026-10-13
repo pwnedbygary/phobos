@@ -27,30 +27,39 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## CI: the PSP renderer's shaders compiled again by the glslang that made them, and validated — 2026-10-13
 
-Branch `cursor/test-plan-07-2b67`, on master (`9333a8d7a`, #235). Package 07 of the 2026-10-13 test and performance
-plan (an outside audit of master `b3507c1db`, triaged against `9333a8d7a`; package 01's PR indexes it in the
-implementation plan). CI and a check script only: `compile.sh`, the GLSL and `shaders.hpp` are untouched (the
+Branch `cursor/test-plan-07-2b67` (PR #239), on master (`4788125f1`, #236). Package 07 of the 2026-10-13 test and
+performance plan (an outside audit of master `b3507c1db`, triaged against `9333a8d7a`; #244, package 01, indexes it
+in the implementation plan). CI and a check script only: `compile.sh`, the GLSL and `shaders.hpp` are untouched (the
 sources' hash covers `compile.sh`, so changing it would have meant regenerating `shaders.hpp`).
 - **The gap**: `compile.sh --check` (run by `tests/psp/run-tests.sh`) always compares the sources' hash, but compiles
   again and compares `shaders.hpp` byte for byte only where a glslang happens to be installed, and CI installs none.
-  So CI never checked the SPIR-V itself: a changed word under an unchanged hash passed.
+  So CI never compared the SPIR-V with what its GLSL compiles to, nor validated it (the GPU tests run it on lavapipe):
+  a changed word under an unchanged hash that those tests don't notice passed.
 - **The pin**: glslang 16.6.0 makes `shaders.hpp` exactly, both Homebrew's build and Khronos's own macOS release
   (`compile.sh --check` with each: exit 0). Khronos's Linux release of it is
   `glslang-16.6.0-linux-x86_64-release.tar.gz`, SHA-256 `2c34071f…91ce`.
 - **The check** (`.github/scripts/check-psp-shaders.sh`, in a new workflow, PSP Shaders, on changes to the shaders,
   the script or the workflow): glslang must be found and be 16.6.0, then `compile.sh --check` (the hash, then every
   shader compiled again and compared), and each of the 12 modules in `shaders.hpp`, as its bytes, through `spirv-val
-  --target-env vulkan1.0` (compile.sh's target). Both parts run and report; either failing fails. A glslang upgrade is
-  a toolchain change: `shaders.hpp` made with it and the pin moved together.
+  --target-env vulkan1.0` (compile.sh's target); every array `shaders.hpp` declares must be one it reads, and every
+  word a 32-bit hex word. Both parts run and report; either failing fails. A glslang upgrade is a toolchain change:
+  `shaders.hpp` made with it, and the script's version, the workflow's version and SHA-256 and the doc's line moved
+  together (the workflow doesn't override the script's, so CI fails if they differ).
 - **Negative controls** (a disposable copy, the Mac, glslang 16.6.0 and SPIRV-Tools v2026.4): the copy as it is
   passes (12 valid); GLSL changed without regenerating: the hash fails; one word of `presentSPIRV` changed (still
   valid SPIR-V: spirv-val passes it) with the hash kept: the byte comparison fails; `presentSPIRV`'s id bound set to 1:
   the comparison and spirv-val both fail (11 valid); no glslang in PATH: fails; a glslang calling itself 16.5.0:
   fails.
-- **Checks**: actionlint 1.7.12 on the workflow (clean); the script on master's tree (pass); CI on #239 (run
-  38435975771, ubuntu-24.04): the image has no glslang of its own ("none"), the archive's SHA-256 matched, and
-  Khronos's Linux glslang 16.6.0 compiled `shaders.hpp` byte for byte; Ubuntu's SPIRV-Tools v2025.1 passed all 12
-  modules (16 s).
+- **Checks**: actionlint 1.7.12 with shellcheck 0.11.0 (clean); the script on master's tree (pass); CI on #239 (runs
+  38435975771, 19 s, and 38437980381 on the head merged with master, 16 s; ubuntu-24.04): the image has no glslang of
+  its own ("none"), the archive's SHA-256 matched, and Khronos's Linux glslang 16.6.0 compiled `shaders.hpp` byte for
+  byte; Ubuntu's SPIRV-Tools v2025.1 passed all 12 modules.
+- **Review**: an independent read-only review (PASS; it reproduced the pin, both CI runs and 14 negative controls)
+  found that an array declared another way (`static constexpr`, made with a changed compile.sh) went unvalidated (11
+  of 12), the version pinned in two places CI couldn't keep together, a malformed word dropped, `--version`'s failure
+  unexplained, and the first run's time misquoted; all taken: the declared arrays counted, every word checked, one pin
+  the workflow doesn't override, the error said, the runs cited; the workflow on `ubuntu-24.04` with a 10-minute limit
+  and curl's retries. The reviewer's three failing cases now fail with their reasons; the earlier controls as before.
 
 ## PSP: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces — 2026-10-13
 

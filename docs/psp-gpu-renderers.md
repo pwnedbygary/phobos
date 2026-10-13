@@ -112,8 +112,9 @@ can't do.
 alike). The tests' check compares the sources' hash everywhere, but compiles again only where a glslang is installed.
 CI's PSP Shaders workflow (`.github/scripts/check-psp-shaders.sh`) installs Khronos's 16.6.0, checked by its SHA-256,
 compiles everything again and compares, and validates each module in `shaders.hpp` for Vulkan 1.0 with spirv-val; it
-fails without that glslang. Another glslang is a toolchain change: `shaders.hpp` made with it, and the workflow's pin
-moved, in the same change.
+fails without that glslang. Another glslang is a toolchain change: `shaders.hpp` made with it, and the version moved
+in the same change wherever it's pinned (the script's default, the workflow's version and archive SHA-256, and this
+line).
 
 Every choice the GE's state makes there is a **specialization constant** (15: texturing, the texture function, the
 alpha and color tests' comparisons, fog, the depth range test, clear mode, the source and destination factors'
