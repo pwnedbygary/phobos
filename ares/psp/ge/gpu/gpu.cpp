@@ -336,12 +336,18 @@ auto GPU::own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
   for(auto& r : t.told) told |= left >= r[0] && top >= r[1] && right <= r[2] && bottom <= r[3];
   if(told) return;
   if(t.told.size() < MostTold) t.told.push_back({left, top, right, bottom});
+  //(not looked through where they're all its own and busy already: inside those it last went through, no page's owner
+  //changed since, which drawnSerial would say, nor any busy page cleared, which busyCleared would. Ghost of Sparta's
+  //menu fills told with small 2D PRIMs before its 3D ones, 17,000 a frame, each reaching 136 pages)
+  bool held = t.heldSerial == drawnSerial && t.heldBusy == memory.busyCleared && first >= t.heldFirst &&
+              last <= t.heldLast;
   bool added = false;
-  for(u32 page = first; page <= last; page++) {
+  for(u32 page = first; page <= last && !held; page++) {
     if(owners[page] == &t && memory.vramPageBusy(page)) continue;
     if(!memory.vramPageBusy(page)) added = true, memory.busyPages[page >> 6] |= 1ull << (page & 63);
     owners[page] = &t, drawnSerial++;
   }
+  if(!held) t.heldFirst = first, t.heldLast = last, t.heldSerial = drawnSerial, t.heldBusy = memory.busyCleared;
   if(added) {
     memory.vramBusy = true;
     if(memory.vramGuard) memory.vramGuard(true);

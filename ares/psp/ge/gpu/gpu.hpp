@@ -316,6 +316,9 @@ struct GPU : GE::Renderer {
     s32 changes[4] = {0, 0, -1, -1};  //changed since its copies last heard (textureFor()): left, top, right, bottom
     std::vector<std::array<s32, 4>> told;  //rectangles memory has heard were drawn over since then (own())
     u64 toldBusy = 0;                       //(Memory::busyCleared as they were told)
+    //VRAM's pages own() last made its own and busy, and drawnSerial and Memory::busyCleared as it left them
+    u32 heldFirst = 1, heldLast = 0;
+    u64 heldSerial = 0, heldBusy = 0;
     u64 used = 0;
     //VRAM's bytes (offsets, inclusive) someone reached in its pages while the GPU drew in them, not over what it
     //drew (drawnOver()), or changed in pages it hasn't drawn in since the last finish (written()): memory's, maybe
