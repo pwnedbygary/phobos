@@ -20,11 +20,10 @@
 //    syscall reaches the HLE kernel (Allegrex::syscallHook) with a code standing for that library and NID, which
 //    answers it and returns straight to the caller.
 //  - the exports: what the program offers others, at least module_start, where it begins.
+//Modules also import variables from one another: each such import names a list of the words in the importer that
+//hold the variable's address, which the kernel puts there once a module exporting it is loaded (modules.cpp).
 //
 //A retail game's programs come encrypted ("~PSP"): the loader has them decrypted first (decrypt.cpp).
-//
-//Not yet: the newer packed relocation format some retail modules use (PT_PSP_REL2), and imports of variables from
-//other modules.
 
 namespace ares::PlayStationPortable {
 
@@ -35,6 +34,8 @@ struct Module {
   struct Segment { u32 address, size; };  //a part of the program in memory: where, and how big
   struct Import { std::string library; u32 nid, stub; };
   struct Export { std::string library; u32 nid, address; bool variable; };
+  //an imported variable: the list of the words to put its address in, and the address put there now (0: none)
+  struct Variable { std::string library; u32 nid, list, linked = 0; };
 
   std::string name;        //from the module info
   u16 attributes = 0;      //PSP_MODULE_USER, KERNEL...
@@ -47,7 +48,8 @@ struct Module {
   std::vector<Segment> segments;
   std::vector<Import> imports;
   std::vector<Export> exports;
-  std::vector<std::string> skipped;  //what the loader left out (a variable import, say), worth reporting
+  std::vector<Variable> variables;
+  std::vector<std::string> skipped;  //what the loader left out (variable imports it can't find), worth reporting
 };
 
 struct Loader {

@@ -138,6 +138,10 @@ auto Kernel::serialize(serializer& s) -> bool {
     vector(m.segments, [&](Module::Segment& segment) { s(segment.address); s(segment.size); });
     vector(m.imports, [&](Module::Import& i) { text(i.library); s(i.nid); s(i.stub); });
     vector(m.exports, [&](Module::Export& e) { text(e.library); s(e.nid); s(e.address); s(e.variable); });
+    //the variables it imports, and the address each holds (layout 27 on: none in older states, whose builds linked
+    //none, so none is moved as modules come and go)
+    if(s.reading() && stateLayout < 27) m.variables.clear();
+    else vector(m.variables, [&](Module::Variable& v) { text(v.library); s(v.nid); s(v.list); s(v.linked); });
     vector(m.skipped, [&](std::string& skipped) { text(skipped); });
   };
   moduleFields(module);

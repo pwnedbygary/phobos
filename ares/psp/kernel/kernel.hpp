@@ -222,6 +222,7 @@ struct Kernel {
   //modules' (pspkerror.h)
   static constexpr u32 ErrorIllegalObject         = 0x8002'012d;  //not a module, or one the loader refuses
   static constexpr u32 ErrorUnknownModule         = 0x8002'012e;
+  static constexpr u32 ErrorUnknownModuleFile     = 0x8002'012f;  //a module's path with a '%' in it (uOFW)
   static constexpr u32 ErrorAlreadyStarted        = 0x8002'0133;
   static constexpr u32 ErrorNotStarted            = 0x8002'0134;
   static constexpr u32 ErrorAlreadyStopped        = 0x8002'0135;
@@ -1907,7 +1908,7 @@ struct Kernel {
     u32 error = 0;         //what an aborted message finishes with: 0, or the error of one a PSP doesn't show
     bool deleted = false;  //a save was deleted from its list, which asks the front end again (dialogs.cpp)
   } dialog;
-  u32 stateLayout = 26;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 27;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;
@@ -2176,6 +2177,7 @@ struct Kernel {
   auto programAsModule() -> void;
   auto unloadSelf(s32 exitStatus, u32 length, u32 argument, u32 options) -> void;
   auto linkImports() -> void;
+  auto relinkVariable(u32 list, u32 delta) -> void;
   auto moduleAt(u32 address) const -> u32;
   auto moduleFunction(const LoadedModule& loaded, u32 nid) const -> u32;
   auto threadParameters(const Module& module, u32 parameters, u32& priority, u32& stackSize, u32& attributes) const
@@ -2188,6 +2190,7 @@ struct Kernel {
   auto moduleReturned() -> void;
   auto sceKernelLoadModule() -> void;
   auto sceKernelLoadModuleByID() -> void;
+  auto sceKernelLoadModuleNpDrm() -> void;
   auto sceKernelStartModule() -> void;
   auto sceKernelStopModule() -> void;
   auto sceKernelUnloadModule() -> void;

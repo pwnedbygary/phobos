@@ -1619,6 +1619,9 @@ static auto olderLayouts() -> void {
   m.kernel.dialog.deleted = true;
   u32 dialogDeleted = where(kernelState(), state);
   m.kernel.dialog.deleted = false;
+  m.kernel.module.variables.push_back({"Lib", 1, 2, 0});
+  u32 variables = where(kernelState(), state);
+  m.kernel.module.variables.clear();
   auto node = m.kernel.files.extract(file);
   node.key() = file + 1;
   m.kernel.files.insert(std::move(node));
@@ -1627,16 +1630,22 @@ static auto olderLayouts() -> void {
   node.key() = file;
   m.kernel.files.insert(std::move(node));
   CHECK(kernelState() == state, true);
-  bool ordered = dialogDeleted == dialogError + 4 && dialogDeleted < jpeg
+  bool ordered = variables + 4 <= dialogError && dialogDeleted == dialogError + 4 && dialogDeleted < jpeg
               && jpeg < files && files < asyncData && asyncData < opened && opened + 8 <= pgd && pgd < pgdEnd
               && pgdEnd <= workingDirectory && workingDirectory < geDone && geFinish == geDone + 8
               && geFinish < state.size();
   CHECK(ordered, true);
   if(!ordered) return;
-  //Layouts before 26 have no dialog error and deleted save (5 bytes, before everything else changed here, so taken out
-  //of each older state last).
+  //Layouts before 26 have no dialog error and deleted save (5 bytes, before everything else changed here but the
+  //variables, so taken out of each older state after the rest).
   auto before26 = [&](std::vector<u8> bytes) {
     bytes.erase(bytes.begin() + dialogError, bytes.begin() + dialogDeleted + 1);
+    return bytes;
+  };
+  //Layouts before 27 have no imported variables: the program's count of them (4 bytes, before everything else, so
+  //taken out last of all).
+  auto before27 = [&](std::vector<u8> bytes) {
+    bytes.erase(bytes.begin() + variables, bytes.begin() + variables + 4);
     return bytes;
   };
 
@@ -1656,28 +1665,30 @@ static auto olderLayouts() -> void {
     n.kernel.serialize(again);
     return loaded && std::vector<u8>{again.data(), again.data() + again.size()} == state;
   };
-  CHECK(loads(25, before26(state)), true);
-  CHECK(loads(current, before26(state)), false);
+  CHECK(loads(26, before27(state)), true);
+  CHECK(loads(current, before27(state)), false);
+  CHECK(loads(25, before27(before26(state))), true);
+  CHECK(loads(current, before27(before26(state))), false);
   auto layout24 = state;
   layout24.erase(layout24.begin() + pgd, layout24.begin() + pgdEnd);
-  CHECK(loads(24, before26(layout24)), true);
+  CHECK(loads(24, before27(before26(layout24))), true);
   auto untimed = state;  //no GE time, the file's fields all there
   untimed.erase(untimed.begin() + geDone, untimed.begin() + geFinish + 1);
   auto layout23 = untimed;
   layout23.erase(layout23.begin() + pgd, layout23.begin() + pgdEnd);
-  CHECK(loads(23, before26(layout23)), true);
+  CHECK(loads(23, before27(before26(layout23))), true);
   auto layout22 = layout23;
   layout22.erase(layout22.begin() + opened, layout22.begin() + opened + 8);
-  CHECK(loads(22, before26(layout22)), true);
+  CHECK(loads(22, before27(before26(layout22))), true);
   std::vector<u8> counted = {0x45, 0x23, 0x01, 0x00};  //numbers handed out once, passed over
   auto layout21 = untimed;
   layout21.insert(layout21.begin() + workingDirectory, counted.begin(), counted.end());
   layout21.erase(layout21.begin() + asyncData, layout21.begin() + workingDirectory);
   auto layout20 = layout21;
   layout20.erase(layout20.begin() + jpeg, layout20.begin() + files);
-  CHECK(loads(21, before26(layout21)), true);
-  CHECK(loads(20, before26(layout20)), true);
-  CHECK(loads(current, before26(layout21)), false);  //read as this layout, it's another state
+  CHECK(loads(21, before27(before26(layout21))), true);
+  CHECK(loads(20, before27(before26(layout20))), true);
+  CHECK(loads(current, before27(before26(layout21))), false);  //read as this layout, it's another state
 
   //another file opened, then the first closed and opened again: its number is the lower, its place the later
   CHECK(m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0}), file + 1);
@@ -1703,8 +1714,9 @@ static auto olderLayouts() -> void {
   for(u32 at : {places[1], places[0]}) {  //each file's place, and its PGD decryption after it
     twoFiles.erase(twoFiles.begin() + at, twoFiles.begin() + at + (pgdEnd - opened));
   }
-  CHECK(dialogAt < places[0], true);
+  CHECK(variables + 4 <= dialogAt && dialogAt < places[0], true);
   twoFiles.erase(twoFiles.begin() + dialogAt, twoFiles.begin() + dialogAt + 5);
+  twoFiles.erase(twoFiles.begin() + variables, twoFiles.begin() + variables + 4);
   KernelMachine n;
   machine(n);
   n.kernel.stateLayout = 22;
