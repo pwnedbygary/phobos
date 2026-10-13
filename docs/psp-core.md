@@ -11546,11 +11546,12 @@ each regression game's `runs/<game>/cmp-<run>.png` (master, the branch, their di
 ## Part 86: the CPU, round 2 — the VFPU's adder in NEON, delay slots compiled each way, the rare ways out of line, prefixes worked out as blocks are compiled, blocks linked to each other
 
 On branch `cursor/psp-cpu-round2-2b67`, on master (`b3507c1db`, #233 merged), with master merged in again before the PR
-was done (`0a9a7fa75`, #234: see "Checks"). The task: round 2 of part 79's CPU work, for the owner's goal of PPSSPP's
-speed with room for fast-forward and upscaling on the Retroid Pocket 6 (ARM64): the VFPU's vector and matrix operations
-in NEON where that can be exact, the compiled code's own costs (block endings and linking, loads and stores, registers),
-wait loops, and whatever else profiling shows on the CPU's side; every emulated result the same. Clean room: PPSSPP not
-read (its CPU, JIT and IR code not at all), JPCSP not read. Save states are unchanged (layout 26): nothing new is kept.
+was done (`0a9a7fa75` with #234, then `4788125f1` with #235 and #236: see "Checks"). The task: round 2 of part 79's CPU
+work, for the owner's goal of PPSSPP's speed with room for fast-forward and upscaling on the Retroid Pocket 6 (ARM64):
+the VFPU's vector and matrix operations in NEON where that can be exact, the compiled code's own costs (block endings
+and linking, loads and stores, registers), wait loops, and whatever else profiling shows on the CPU's side; every
+emulated result the same. Clean room: PPSSPP not read (its CPU, JIT and IR code not at all), JPCSP not read. Save states
+are unchanged by this branch (master's layout, 27 since part 87): nothing new is kept.
 
 ### How it was measured
 
@@ -11740,6 +11741,10 @@ Every change is the host's alone; nothing a game can see moves.
   `std::memcpy` (the links' patching) used without `<cstring>`, which Apple's library brings in by itself, so the
   Rosetta build hadn't shown it; it's included now, and GitHub's tests pass (tests/allegrex 68/0 built by GCC for
   x86-64, sanitizers on; tests/psp; the desktop build).
+- With parts 84 and 87: master moved again (#235, savedata's dialogs, and #236, sceFont, whose states are layout 27;
+  master at `4788125f1`) and was merged in as well, the docs alone conflicting. That merge against that master: the 21
+  scenes' hashes identical in all three renderers again; tests/psp 497/0 and tests/psp/ares 318/0 on the Mac; GitHub's
+  tests (tests/allegrex 68/0 and tests/psp 497/0, built by GCC) and the desktop and Android builds pass.
 
 ### Left, and why
 
