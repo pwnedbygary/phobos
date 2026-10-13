@@ -105,7 +105,9 @@ exception, now works), only new options and new lines where they apply.
   above again, the same, and one whose program can't start (bytes that aren't an ELF): "a program the game asked for
   couldn't start, which ended the game ...", the program ended, the clock still the one asked for. A report folder
   that can't be made: said, exit 1, no scratch left; malformed numbers (`12abc`, `+5`, a leading space, a negative
-  that wraps to 1, a press's frame past 32 bits or `1x`) refused.
+  that wraps to 1, a press's frame past 32 bits or `1x`) refused. After the second delta review's changes:
+  `runner-test.sh` passes (14 s), the kits' chains as on master's runner, shellcheck clean; with the stick's old
+  read put back (`std::stol`), the test fails ("not refused: --press 1:L-StickX:12abc").
 - **Review**: an independent read-only review (it re-ran the smoke test and the kits' chains, read the restart
   path, and ran error cases) found two majors: the start time lost when a game starts itself again, while the
   report still showed the pinned clock; and text not always UTF-8 (a Shift-JIS note). Its minors: the report's
