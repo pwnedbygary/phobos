@@ -554,9 +554,31 @@ auto more() -> void {
               [&](Allegrex& s) { oneAndTwo(s); s.vfpu.r[S(3, 1, 0)] = negateX; });
   CHECK(control.cpu.vfpu.r[S(0, 0, 0)], bits(1.0f));  //still negated after vmfvc
   CHECK(control.cpu.vfpu.r[S(0, 1, 0)], bits(1.0f));  //negated by the prefix vmtvc set
+  //So can mtvc, after an instruction that used them up.
+  Machine word;
+  word.run({alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0)), mtv(t0, 128),
+            alu(Vadd, 1, S(0, 1, 0), S(1, 0, 0), S(2, 0, 0))},
+           [&](Allegrex& s) { oneAndTwo(s); s.ipu.r[t0] = negateX; });
+  CHECK(word.cpu.vfpu.r[S(0, 0, 0)], bits(3.0f));
+  CHECK(word.cpu.vfpu.r[S(0, 1, 0)], bits(1.0f));
+  //A prefix set before a VFPU branch taken applies in its delay slot (which the block may run itself).
+  Machine branch;
+  branch.run({mtv(zero, 128 + 3), vpfxs(negateX), bvf(0, 2), alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0)), halt,
+              alu(Vadd, 1, S(0, 1, 0), S(1, 0, 0), S(2, 0, 0))},
+             oneAndTwo);
+  CHECK(branch.cpu.vfpu.r[S(0, 0, 0)], bits(1.0f));  //negated
+  CHECK(branch.cpu.vfpu.r[S(0, 1, 0)], bits(3.0f));  //the target's, plain
+  //The matrix group's other instructions use them up too: vcrsp.
+  Machine cross;
+  cross.run({vpfxs(negateX), alu(Vcrsp, 3, Rw(5, 0), Rw(1, 0), Rw(2, 0)),
+             alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0))}, oneAndTwo);
+  CHECK(cross.cpu.vfpu.r[S(0, 0, 0)], bits(3.0f));
+  CHECK(cross.cpu.vfpu.pfxs, 0xe4);
   //An instruction that raises an exception instead of running leaves them: here a reserved encoding of the vadd
-  //group, and vcrs, which only exists for triples, used on a quad.
-  for(uint32_t reserved : {0x61800000u, alu(Vcrs, 4, Rw(0, 0), Rw(1, 0), Rw(2, 0))}) {
+  //group, vcrs, which only exists for triples, used on a quad, and vmscl, vmmov and vmidt on singles.
+  for(uint32_t reserved : {0x61800000u, alu(Vcrs, 4, Rw(0, 0), Rw(1, 0), Rw(2, 0)),
+                           alu(Vmscl, 1, M(6), M(1), S(5, 0, 0)), alu(Vmatrix, 1, M(6), M(1), 0x00),
+                           alu(Vmatrix, 1, M(6), 0, 0x03)}) {
     Machine fault;
     fault.run({vpfxs(negateX), reserved}, oneAndTwo);
     CHECK(fault.exceptions.size(), 1);

@@ -184,12 +184,13 @@ static auto texelFrom(const GE::Sampler& t, const u8* clut, s32 u, s32 v, const 
   return widen16(clut[entry * 2] | clut[entry * 2 + 1] << 8, t.clutFormat);
 }
 
-//texelFrom() for rows from up to rows (not including) of a texture of format 0-7, width texels each (into out; of
-//each row only columns left up to right), whose bytes lie side by side in the host's memory, base being where
-//address low is: each texel exactly as texelFrom() reads it, with what doesn't change along a row worked out once a
-//row, and what a palette's entry becomes once an entry (once an index, for indices of 4 or 8 bits).
+//texelFrom() for rows from up to rows (not including) of a texture of format 0-7 (into out, width texels a row from
+//row outTop and column outLeft; of each row only columns left up to right), whose bytes lie side by side in the
+//host's memory, base being where address low is: each texel exactly as texelFrom() reads it, with what doesn't change
+//along a row worked out once a row, and what a palette's entry becomes once an entry (once an index, for indices of
+//4 or 8 bits).
 static auto decodeRows(const GE::Sampler& t, const u8* clut, const u8* base, u32 low, u32 width, u32 from, u32 rows,
-                       u32* out, u32 left, u32 right) -> void {
+                       u32* out, u32 left, u32 right, u32 outTop = 0, u32 outLeft = 0) -> void {
   u32 bits = TexelBits[t.format], rowBytes = t.bufferWidth * bits / 8;
   const u8* first = base + (t.address - low);
   u32 limit = t.clutFormat == 3 ? 0xff : 0x1ff, offset = t.clutOffset & limit;
@@ -210,16 +211,18 @@ static auto decodeRows(const GE::Sampler& t, const u8* clut, const u8* base, u32
     auto at = [&](u32 byte) { return !t.swizzled ? row + byte : row + byte / 16 * 128 + byte % 16; };
     auto read16 = [&](u32 byte) { u16 value; std::memcpy(&value, at(byte), 2); return u32(value); };
     auto read32 = [&](u32 byte) { u32 value; std::memcpy(&value, at(byte), 4); return value; };
-    u32* texels = out + v * width;
+    u32* texels = out + (v - outTop) * width;
     switch(t.format) {
-    case 0: case 1: case 2: for(u32 u = left; u < right; u++) texels[u] = widen16(read16(u * 2), t.format); break;
-    case 3: for(u32 u = left; u < right; u++) texels[u] = read32(u * 4); break;
-    case 4: for(u32 u = left; u < right; u++) texels[u] = indices[*at(u / 2) >> (u & 1) * 4 & 15]; break;
-    case 5: for(u32 u = left; u < right; u++) texels[u] = indices[*at(u)]; break;
+    case 0: case 1: case 2:
+      for(u32 u = left; u < right; u++) texels[u - outLeft] = widen16(read16(u * 2), t.format);
+      break;
+    case 3: for(u32 u = left; u < right; u++) texels[u - outLeft] = read32(u * 4); break;
+    case 4: for(u32 u = left; u < right; u++) texels[u - outLeft] = indices[*at(u / 2) >> (u & 1) * 4 & 15]; break;
+    case 5: for(u32 u = left; u < right; u++) texels[u - outLeft] = indices[*at(u)]; break;
     case 6: case 7:
       for(u32 u = left; u < right; u++) {
         u32 index = t.format == 6 ? read16(u * 2) : read32(u * 4);
-        texels[u] = entries[(((index >> t.clutShift) & t.clutMask) | offset) & limit];
+        texels[u - outLeft] = entries[(((index >> t.clutShift) & t.clutMask) | offset) & limit];
       }
       break;
     }
@@ -346,7 +349,8 @@ static auto drawsOver(const GE::PixelState& p, const TexelRows& texels, s32 left
 //so the GE's thread never waits on the decode. The palette is kept as it is now (a later CLUT_LOAD must not change
 //what this primitive samples).
 auto GE::decode(Look& look, const Region& region, u32 rows, bool allowDefer,
-                const std::function<auto () -> bool>& copyDraws) -> void {
+                const std::function<auto () -> bool>& copyDraws,
+                const std::function<auto () -> TexelBox>& boxOf) -> void {
   Sampler& t = look.texture;
   const PixelState& pixel = look.pixel;
   look.decoded.reset();
@@ -389,7 +393,7 @@ auto GE::decode(Look& look, const Region& region, u32 rows, bool allowDefer,
       return;
     }
   }
-  fillDecoded(look, rows);
+  fillDecoded(look, rows, boxOf);
 }
 
 //Decodes every Look in the batch that was left for later (decode's allowDefer): the batches before this one are
@@ -481,19 +485,22 @@ auto GE::ensureDecoded(Batch& batch) -> void {
   for(auto& look : batch.looks) look.deferClut.clear();
 }
 
-//The texture's rows from up to rows (not including) decoded into texels, width to a row (of each, the columns left up
-//to right), from palette: the bytes from low to high read straight from where they are in the host's memory, or
-//(through VRAM's copies that rearrange it) through memory.read(), each texel exactly as texel() reads it.
+//The texture's rows from up to rows (not including) decoded into texels, width to a row from row outTop and column
+//outLeft (of each, the columns left up to right, within width plus outLeft), from palette: the bytes from low to high
+//read straight from where they are in the host's memory, or (through VRAM's copies that rearrange it) through
+//memory.read(), each texel exactly as texel() reads it.
 auto GE::decodeTexels(const Sampler& t, const u8* palette, u32 low, u32 high, u32 width, u32 from, u32 rows,
-                      u32* texels, u32 left, u32 right) -> void {
-  right = std::min(right, width);
+                      u32* texels, u32 left, u32 right, u32 outTop, u32 outLeft) -> void {
+  right = std::min(right, width + outLeft);
   auto decodeWith = [&](const auto& read) {
     for(u32 v = from; v < rows; v++) {
-      for(u32 u = left; u < right; u++) texels[v * width + u] = texelFrom(t, palette, u, v, read);
+      for(u32 u = left; u < right; u++) {
+        texels[(v - outTop) * width + u - outLeft] = texelFrom(t, palette, u, v, read);
+      }
     }
   };
   if(const u8* base = memory.pointer(low, high - low); base && t.format < 8) {
-    decodeRows(t, palette, base, low, width, from, rows, texels, left, right);
+    decodeRows(t, palette, base, low, width, from, rows, texels, left, right, outTop, outLeft);
   } else if(base) {
     decodeWith([&](u32 size, u32 at) -> u32 {
       const u8* bytes = base + (at - low);
@@ -509,7 +516,15 @@ auto GE::decodeTexels(const Sampler& t, const u8* palette, u32 low, u32 high, u3
 //Puts the decoded texture into look (look.decoded, look.texture.decoded): found in the cache, or decoded now from the
 //palette as it is, after anything waiting to be drawn over its bytes is drawn (threads.cpp), and kept. Only the GE's
 //thread keeps decoded textures (deferred ones are decoded apart: ensureDecoded()).
-auto GE::fillDecoded(Look& look, u32 rows) -> void {
+//
+//boxOf: the texels a hardware renderer may take (texelBox()), where they're known, asked for only where a copy in the
+//cache doesn't serve the PRIM as it is. Of a texture laid out in rows (not swizzled, not DXT), it needs only those:
+//the bytes of the box's rows, first to last, waited for and looked at. A copy whose pages were written since is
+//taken where those bytes are as it was decoded from (it stays suspect, its other rows unseen); and where decoding it
+//whole would wait for the GPU (some byte of it drawn there since the last finish: render to texture, as Backbone's
+//glow tiles, each taking 32x34 texels of a 512x512 picture whose last rows are the frame buffer they draw into), only
+//the box is decoded, as a part (Decoded::part).
+auto GE::fillDecoded(Look& look, u32 rows, const std::function<auto () -> TexelBox>& boxOf) -> void {
   Sampler& t = look.texture;
   rows = std::min({rows, t.height, 512u});
   u32 low, high;
@@ -525,11 +540,38 @@ auto GE::fillDecoded(Look& look, u32 rows) -> void {
     if(!std::memcmp(entry->palette.data(), clut, sizeof(clut))) entry->paletteChecked = clutVersion;
     else forget(entry.get()), entry.reset();  //another palette with the same hash: decoded afresh
   }
+  //(the box inside the rows the PRIM may take, and its rows' bytes: from boxLow up to boxHigh)
+  TexelBox box{};
+  if(boxOf && (!entry || entry->suspect || entry->part || entry->rows < rows)) box = boxOf();
+  bool boxed = box.known && !t.swizzled && t.format < 8 && box.top < rows;
+  u32 bottom = std::min(box.bottom, rows - 1), pitch = boxed ? t.bufferWidth * TexelBits[t.format] / 8 : 0;
+  u32 boxLow = 0, boxHigh = 0;
+  if(boxed) {
+    u32 first;
+    textureBytes(t, bottom + 1, first, boxHigh);
+    boxLow = t.address + box.top * pitch;
+  }
+  auto covers = [&](const Decoded& e) {
+    return e.top <= box.top && e.rows > bottom && e.left <= box.left && e.right > box.right;
+  };
+  if(entry && entry->part && !(boxed && covers(*entry))) forget(entry.get()), entry.reset();
+  if(entry && entry->suspect && boxed) {
+    bool same = false;
+    if(covers(*entry)) {
+      drawnFirst(boxLow, boxHigh - boxLow);  //(from VRAM primitives waiting to be drawn draw over: threads.cpp)
+      Memory::KnownDrawn known;
+      const u8* bytes = memory.pointer(boxLow, boxHigh - boxLow);
+      u32 at = boxLow - t.address - (entry->part ? entry->top * pitch : 0);  //(where they are in its source)
+      same = bytes && u64(at) + (boxHigh - boxLow) <= entry->source.size() &&
+             !std::memcmp(bytes, entry->source.data() + at, boxHigh - boxLow);
+    }
+    if(!same) forget(entry.get()), entry.reset();
+  }
   //One whose pages were written since (textureWritten()): kept if its bytes are still those it was decoded from (a
   //write beside it in the same 4 KiB, or the same bytes written again), watched again; else decoded afresh, as one
   //with more rows than this PRIM takes is (its other rows' bytes might wait for drawing this PRIM doesn't need).
-  if(entry && entry->suspect && entry->rows > rows) forget(entry.get()), entry.reset();
-  if(entry && entry->suspect) {
+  if(entry && entry->suspect && !boxed && entry->rows > rows) forget(entry.get()), entry.reset();
+  if(entry && entry->suspect && !boxed) {
     u32 kept, keptEnd;
     textureBytes(t, entry->rows, kept, keptEnd);
     drawnFirst(kept, keptEnd - kept);  //(from VRAM primitives waiting to be drawn draw over: threads.cpp)
@@ -544,22 +586,40 @@ auto GE::fillDecoded(Look& look, u32 rows) -> void {
   }
   //A texture is kept once, with as many rows as any primitive has reached: one reaching fewer draws from it as it
   //is, one reaching more gets a longer copy, the rows kept already copied into it (still as their memory is, or
-  //they'd be gone) and the rest decoded.
-  if(!entry || entry->rows < rows) {
+  //they'd be gone) and the rest decoded. A box is served by a copy holding it.
+  if(!entry || (boxed ? !covers(*entry) : entry->rows < rows)) {
     auto shorter = std::move(entry);
+    //(the whole waiting for the GPU's drawing: only the box decoded, after what the GPU drew in its rows alone)
+    u32 first, last;
+    bool part = boxed && renderer && memory.vramBusy && vramSpan(low, high - low, first, last) &&
+                renderer->drawnOver(*this, first, last);
+    if(part) {
+      if(shorter) forget(shorter.get()), shorter.reset();
+      low = boxLow, high = boxHigh;
+    }
     drawnFirst(low, high - low);  //(from VRAM primitives waiting to be drawn draw over: threads.cpp)
     Memory::KnownDrawn known;
     entry = std::make_shared<Decoded>();
     entry->key = key;
     entry->rows = rows;
-    entry->texels.resize(key.width * rows);
-    u32 from = 0;
-    if(shorter) {
-      std::copy(shorter->texels.begin(), shorter->texels.end(), entry->texels.begin());
-      from = shorter->rows;
-      forget(shorter.get());
+    entry->right = key.width;
+    if(part) {
+      entry->part = true, entry->top = box.top, entry->rows = bottom + 1;
+      entry->left = box.left, entry->right = box.right + 1;
+      u32 width = entry->right - entry->left;
+      entry->texels.resize(width * (entry->rows - entry->top));
+      decodeTexels(t, clut, t.address, high, width, entry->top, entry->rows, entry->texels.data(), entry->left,
+                   entry->right, entry->top, entry->left);
+    } else {
+      entry->texels.resize(key.width * rows);
+      u32 from = 0;
+      if(shorter) {
+        std::copy(shorter->texels.begin(), shorter->texels.end(), entry->texels.begin());
+        from = shorter->rows;
+        forget(shorter.get());
+      }
+      decodeTexels(t, clut, low, high, key.width, from, rows, entry->texels.data());
     }
-    decodeTexels(t, clut, low, high, key.width, from, rows, entry->texels.data());
     if(indexed) entry->palette.assign(clut, clut + sizeof(clut)), entry->paletteChecked = clutVersion;
     //(no copy bigger than the texels: a texture of rows longer than it is wide, as a frame buffer's part, goes as
     //its pages are written, as before)
@@ -580,8 +640,10 @@ auto GE::fillDecoded(Look& look, u32 rows) -> void {
   look.decoded = entry;
   t.decoded = entry->texels.data();
   t.decodedWidth = key.width;
-  t.decodedRows = rows;
+  t.decodedRows = std::min(rows, entry->rows);
   t.decodedTop = 0, t.decodedLeft = 0, t.decodedRight = key.width;
+  //(a part, packed, is the renderer's alone: none of it is the GE's to fetch, but it isn't read from memory either)
+  if(entry->part) t.decodedRows = 0, t.decodedRight = 0;
 }
 
 //Memory::watchedWritten(): the page changed, so every texture decoded from it may be stale: each is looked at again

@@ -290,6 +290,10 @@ struct Kernel {
     u32 nid;
     bool quiet = false;  //it makes nothing due sooner (syscall())
   };
+  //Set by a function that isn't always quiet but was this time: it changed nothing that has a time to come (dispatch()
+  //clears it before each)
+  bool calm = false;
+  u64 switched = 0;  //switchTo()'s changes of the thread in the CPU so far (calm calls tell none came by it; not saved)
   struct Import {
     std::string library;
     u32 nid;
@@ -417,7 +421,7 @@ struct Kernel {
   auto threadReturned() -> void;
   auto extendReturned() -> void;
   auto extensionsEnded(Thread& thread) -> void;
-  auto signalSemaphores(Semaphore& semaphore) -> void;
+  auto signalSemaphores(Semaphore& semaphore) -> bool;  //(whether it woke a thread)
   auto unlockLwMutex(u32 workArea) -> void;
   auto findThread(u32 uid) -> Thread*;
   auto deleteThread(Thread& thread) -> void;
@@ -1714,11 +1718,15 @@ struct Kernel {
     u32 mode = 0;               //1: read whole into the program's memory (else a piece at a time)
     u32 references = 0;         //handles holding it open
     std::vector<u32> blocks;    //the memory it took from the program, given back as its last handle closes
+    u32 held = 0;               //the glyph it last read, its number plus 1 (0: none), in two blocks of the
+    std::vector<u32> glyphBlocks;  //program's: its record and its picture (fontCharacter()), given back with blocks
     u64 hash = 0;               //its bytes' (a system font's or a file's): a state's must be the same
     std::shared_ptr<PGF> pgf;   //its glyphs (not saved: read again when a state is loaded)
   };
   struct FontCall {             //a library function part way through, calling the program's own alloc or free
-    enum Kind : u32 { NewLib = 1, Open, Give };  //Give: only gives memory back (a close, the library done with)
+    //Give: only gives memory back (a close, the library done with, a flush); Glyph: a character's info or picture,
+    //its glyph read into memory of the program's
+    enum Kind : u32 { NewLib = 1, Open, Give, Glyph };
     u32 kind = 0;
     Context caller{};           //the thread where it called the library: put back as the function returns
     u32 library = 0;            //the library (sceFontNewLib's: its parameters)
@@ -1731,6 +1739,9 @@ struct Kernel {
     bool ended = false;         //what it makes is made (fontEnd()): what's left is giving back, then returning
     u32 result = 0, error = 0;  //what it returns, and its error
     OpenFont opening;           //an open's font, made once its memory has all come
+    u32 font = 0, glyph = 0;    //a glyph's: the font (its ID) and the glyph's number, which the font then holds,
+    u32 what = 0, out = 0;      //what's asked of it (fontCharacter()'s what: 0, 2 or 3), where the answer goes,
+    u32 clip[4] = {};           //and _Clip's rectangle
   };
   std::map<u32, FontLibrary> fontLibraries;  //by address
   std::map<u32, OpenFont> openFonts;         //by ID
@@ -1745,7 +1756,8 @@ struct Kernel {
   auto fontCount(u32 library) -> u32;
   auto fontStyle(u32 address, const PGF& pgf, s32 system) -> void;
   auto systemFontStyle(u32 address, u32 index) -> void;
-  auto fontGlyph(const OpenFont& font, u32 code, PGF::Glyph& glyph, bool shadow) -> void;
+  auto fontGlyph(const OpenFont& font, u32 code, PGF::Glyph& glyph, bool shadow) -> s32;
+  auto fontAnswer(const PGF::Glyph& glyph, u32 what, u32 out, const u32 clip[4]) -> void;
   auto fontDraw(const PGF::Glyph& glyph, u32 image, s64 clipLeft, s64 clipTop, u64 clipWidth, u64 clipHeight)
     -> void;
   auto fontNext(FontCall& call) -> void;
@@ -1905,7 +1917,7 @@ struct Kernel {
     u32 error = 0;         //what an aborted message finishes with: 0, or the error of one a PSP doesn't show
     bool deleted = false;  //a save was deleted from its list, which asks the front end again (dialogs.cpp)
   } dialog;
-  u32 stateLayout = 26;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 27;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;
@@ -1925,7 +1937,7 @@ struct Kernel {
   auto savedataIcons(u32 parameters, const std::string& folder) -> void;
   auto savedataClusters(const std::string& folder, const std::vector<std::string>& secure) -> u64;
   auto savedataNeeded(u32 parameters, u32 dataSize) -> u64;
-  auto savedataList(u32 parameters, const std::string& game) -> u32;
+  auto savedataList(u32 parameters, const std::string& game, const std::string& save) -> u32;
   auto savedataFiles(u32 info, const std::string& host, const std::vector<std::string>& secure) -> void;
   auto sceUtilitySavedataInitStart() -> void;
   auto sceUtilitySavedataGetStatus() -> void;

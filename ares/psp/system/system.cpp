@@ -358,6 +358,7 @@ auto System::power(bool reset) -> void {
   cpu.pages = pageTable.data();
   cpu.watched = memory.watched.data();
   memory.watching = [this](u32 page) { cpu.recompiler.protect(page); };
+  memory.unwatched = [this](u32 page) { cpu.recompiler.unwatched(page); };
   memory.vramGuard = [this](bool busy) {  //(the pages the GE's workers draw over: memory.hpp)
     for(u32 offset = 0; offset < Memory::VRAMSize; offset += Memory::PageSize) {
       if(!memory.vramPageBusy(offset / Memory::PageSize)) continue;
@@ -572,10 +573,11 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //set, 15 to 18 with no thread-local storage pools, 15 to 19 with no stacks lent, 15 to 20 with sceJpeg not started,
 //no sceHprm callbacks and no ATRAC low-level IDs, 15 to 21 with their files' count passed over and no read's
 //bytes still to come, 15 to 22 with their files opened in the order of their numbers, 15 to 23 with the GE
-//having nothing left to draw, 15 to 24 with no file's PGD decryption set up (each read as it is), and 15 to 25 with
-//no error for an aborted message and no save deleted from a list; older layouts are refused.
+//having nothing left to draw, 15 to 24 with no file's PGD decryption set up (each read as it is), 15 to 25 with
+//no error for an aborted message and no save deleted from a list, and 15 to 26 with no glyph held by a font nor
+//being read into one; older layouts are refused.
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
-static constexpr u32 StateVersion = 26;
+static constexpr u32 StateVersion = 27;
 
 //The program that started, to tell it from any other: an FNV-1a hash of all its bytes. A state is only loaded into
 //the program it was made with, as another's memory, threads and files mean nothing to it.
@@ -585,12 +587,12 @@ auto System::hash(std::span<const u8> bytes) -> u64 {
   return value;
 }
 
-//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 25 (the
+//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 26 (the
 //dialog's abort counters default to 0, no sceCcc tables, no thread-local storage pools, no stacks lent, sceJpeg not
 //started, no sceHprm callbacks, no ATRAC low-level IDs, the files' count passed over, no read's bytes still to
 //come, files opened in the order of their numbers, the GE with nothing left to draw, no file's PGD decryption set
-//up, no aborted message's error or list delete's deleted save): the owner's accuracy scenes were saved at 15 before
-//part 42.
+//up, no aborted message's error or list delete's deleted save, no glyph held by a font nor being read into one): the
+//owner's accuracy scenes were saved at 15 before part 42.
 auto System::header(serializer& s) -> bool {
   u32 signature = StateSignature, version = StateVersion, ramSize = memory.ram.size();
   u64 program = programHash;

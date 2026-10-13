@@ -34,7 +34,7 @@ void main() {
   if(MODE == 0u) return;
   uvec4 bytes = uvec4(texel * 255.0 + 0.5);
   if(MODE == 1u) {
-    gl_FragDepth = float(bytes.r | bytes.g << 8) / 65535.0;
+    gl_FragDepth = float(bytes.r | bytes.g << 8) * (1.0 / 65536.0);  //(as draw.frag's DEPTHS has them)
   } else {
     gl_FragDepth = gl_FragCoord.z;
     if((bytes.a & push.bit) == 0u) discard;
