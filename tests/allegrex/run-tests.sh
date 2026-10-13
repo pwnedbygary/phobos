@@ -35,7 +35,12 @@ mkdir -p "$MEASURED"
 for packed in "$HERE"/measured/*.xz; do
   unpacked="$MEASURED/$(basename "$packed" .xz)"
   if [[ ! -f $unpacked || $packed -nt $unpacked ]]; then
-    xz -dc "$packed" > "$unpacked.part-$$" && mv -f "$unpacked.part-$$" "$unpacked"
+    if ! xz -dc "$packed" > "$unpacked.part-$$"; then
+      rm -f "$unpacked.part-$$"
+      echo "tests/allegrex/measured/$(basename "$packed") doesn't unpack" >&2
+      exit 1
+    fi
+    mv -f "$unpacked.part-$$" "$unpacked"
   fi
 done
 
@@ -52,6 +57,8 @@ for source in "$ROOT/ares/psp/cpu/allegrex.cpp" "$HERE/allegrex.cpp" "$HERE/vfpu
 done
 objects_done
 # shellcheck disable=SC2086
-$CXX $SANITIZE "${SYSROOT[@]}" "${OBJECTS[@]}" "${LIBRARIES[@]}" -o "$BUILD/allegrex.part-$$"
-mv -f "$BUILD/allegrex.part-$$" "$BUILD/allegrex"
-ALLEGREX_MEASURED="$MEASURED" "$BUILD/allegrex"
+objects_program allegrex $SANITIZE "${SYSROOT[@]}" "${LIBRARIES[@]}"
+# shellcheck disable=SC2086
+$CXX $SANITIZE "${SYSROOT[@]}" "${OBJECTS[@]}" "${LIBRARIES[@]}" -o "$REPLY.part-$$"
+mv -f "$REPLY.part-$$" "$REPLY"
+ALLEGREX_MEASURED="$MEASURED" "$REPLY"

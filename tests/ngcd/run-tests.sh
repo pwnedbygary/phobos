@@ -7,7 +7,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 #objects are kept between runs by tests/objects.sh, each compiled again when what it was built from changes (a
 #header it includes too) or its compile command does; each checkout gets its own default build dir
-BUILD=${1:-${TMPDIR:-/tmp}/phobos-ngcd-tests-$(printf %s "$ROOT" | cksum | cut -d' ' -f1)}
+OBJECTS_BUILD=${1:-${TMPDIR:-/tmp}/phobos-ngcd-tests-$(printf %s "$ROOT" | cksum | cut -d' ' -f1)}
 source "$ROOT/tests/objects.sh"
 
 CXX=${CXX:-g++}
@@ -33,6 +33,8 @@ objects_done
 LIBS=(-lpthread -ldl)
 if [[ $(uname) == Darwin ]]; then LIBS+=(-framework CoreFoundation); fi
 # shellcheck disable=SC2086
-$CXX ${LDFLAGS:-} -o "$BUILD/ngcd.part-$$" "${OBJECTS[@]}" "${LIBS[@]}"
-mv -f "$BUILD/ngcd.part-$$" "$BUILD/ngcd"
-"$BUILD/ngcd"
+objects_program ngcd ${LDFLAGS:-} "${LIBS[@]}"
+# shellcheck disable=SC2086
+$CXX ${LDFLAGS:-} -o "$REPLY.part-$$" "${OBJECTS[@]}" "${LIBS[@]}"
+mv -f "$REPLY.part-$$" "$REPLY"
+"$REPLY"
