@@ -60,6 +60,12 @@ Save states unchanged (StateVersion 26). The software renderer untouched.
 - **Library** (accurate Vulkan, 3600 frames, master against the final code): all 266 finish in both, 214 the same
   at all four captures, 32 within a level; of the 20 others, those nearer Software are the dither and depth fixes,
   those nearer master the same movie or demo a few frames apart (the clock follows the host's; part 83 lists them).
+- **With #233** (part 79, merged in after it reached master; part 83's "With part 79"): the palettes on the GPU take
+  Backbone's glow first; a texture the GPU doesn't hold is decoded as far as the frame buffer it's drawing, without
+  waiting, and cached for the next tile through the same palette; part 79's box only where those rows would still
+  wait, and its copies checked in the box alone (accurate mode: 27 to 56% fewer textures decoded than this branch).
+  The merge's code as it was, part 79's two glow tests rewritten for it: tests/psp 489/0, tests/allegrex 60/0,
+  tests/psp/ares 318/0; end states the same as this branch alone's in Software (every frame), accurate and fast.
 - **On the RP6, to measure**: Software against Vulkan (fast) in the Armored Cores' intros and first menus (the M1
   can't say why the RP6 was slower there: the GPU's per-frame work is half a texture upload, a present and a shot),
   Colin McRae's race, Death Jr. II, Sonic Rivals, Activision Hits Remixed, Brothers in Arms, Killzone's menus,

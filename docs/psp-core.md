@@ -11204,6 +11204,24 @@ Brothers in Arms' logo fading, Mega Man Powered Up's demo), as runs of one runne
 and the branch's run had the Mac at a load of 100 to 240, master's and Software's near 30. None shows anything
 drawn worse. (Run time 8,873 s for master, 10,088 s for the branch under that load.)
 
+**With part 79** (#233, merged in after it reached master): a texture of palette indices over a frame buffer is the
+GPU's first (`holds()`, the palette looked up there), so Backbone's glow decodes nothing in fast mode. One the GPU
+doesn't hold is decoded from memory: rows running on into a frame buffer it has drawn since its last finish only as
+far as that (`memoryRows()`), which waits for nothing and stays cached for the next PRIM through the same palette; and
+part 79's box, as a part, only where decoding the rows asked for would still wait: rows the GPU drew itself (the first
+tile after the picture, without the palettes), or rows accurate mode won't hold at the last because the PRIM takes
+them (the bottom tiles, reaching the 2D pass's buffer at the picture's row 272). The box does more in accurate mode
+than its parts: a cached copy whose pages were written since serves a tile whose box's bytes are as they were, so the
+six tiles above each column's bottom one take the copy, which this branch alone decoded again (textures decoded a
+frame, the branch alone against the merge, 200 frames: Death Jr. II's woods 78 -> 57 and its character select 75 ->
+33, Sonic Rivals 73 -> 45, Activision Hits Remixed 155 -> 75; the same finishes). On Death Jr. II's woods (decodes
+logged) parts have nothing more to save: without the palettes, the first tile through each of the three palettes a
+frame is at the left edge, its box not known (it would repeat round), and the rows it decodes serve every later tile;
+in accurate mode each column's bottom tile finds the copy changed by the 2D pass and decodes it whole after the
+finish, a copy the next column's first tile (no box either) and the six below it take. So neither a part wherever the
+box is far smaller than the rows (with a budget against the whole: it never applied) nor asking whether the rows wait
+before a cached copy's bytes are waited for (5.6 parts a frame, 52.6 whole decodes down to 52.2) was taken.
+
 **For the RP6** (Adreno may differ from MoltenVK): the Armored Cores' intros are the same in both renderers on the
 M1, bound by the movie's polling; what Vulkan adds there each frame is half a texture upload (456 KB), a texture made
 (now kept from the last), a present and a shot of the frame, which a tile-based GPU and Android's driver may weigh
