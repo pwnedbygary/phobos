@@ -62,7 +62,8 @@ sources' hash covers `compile.sh`, so changing it would have meant regenerating 
   workflow no longer overriding the script's version (two pins CI now keeps equal), the error said, the runs cited,
   the gap reworded, shellcheck run; and its suggestions (`ubuntu-24.04`, a 10-minute limit, curl's retries). A delta
   review (PASS) found an array written without `=` still unread: arrays are now found with or without it, and the
-  SPIR-V magic numbers in the file must match the arrays read.
+  SPIR-V magic numbers in the file must match the arrays read; CI on that head (run 38455036248 at `17c21468e`): the
+  12 modules read, compiled byte for byte and valid. A second delta review passed it.
 
 ## PSP: the host's right stick for patched games, the keyboard in a field's own characters, 7th Dragon 2020-II past its certificate — 2026-10-12
 
