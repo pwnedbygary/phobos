@@ -296,22 +296,17 @@ class GlassContrastTest {
         return (sunsetSky(sunset) + glowAtSun + sun + sunsetGround(sunset)).distinct()
     }
 
+    private val cityColors = HashMap<String, List<Int>>()
+
     /**
-     * Night city: the sunset's sky, floor, grid and horizon without the sun; the buildings; the horizon's
-     * glow at every strength over their feet, the sky and the floor, with its line on each; stars at every
-     * strength all the way down the sky in dark themes; and the antennas against the sky.
+     * Night city as it's drawn: every color of the picture at a landscape and a portrait size, cut down to
+     * the brightest and darkest 64 and every 50th of the rest (a panel's or a plate's luminance follows
+     * what's under it, so the extremes are the hardest).
      */
-    private fun cityScene(v: Variant): List<Int> {
-        val sunset = SunsetColors(v.scheme, v.isDark)
-        val steps = (0..4).map { it / 4.0 }
-        val sky = sunsetSky(sunset)
-        val horizon = listOf(sunset.silhouette, sunset.skyBottom, sunset.floorTop).map(::argb).flatMap { base ->
-            val glows = steps.map { composite(argb(sunset.horizonGlow), base, sunset.horizonGlow.alpha * it) }
-            glows + glows.map { composite(argb(sunset.horizonLine), it, sunset.horizonLine.alpha.toDouble()) }
-        }
-        val stars = if (sunset.isDark) sky.flatMap { under -> steps.map { composite(argb(sunset.star), under, 0.15 + (sunset.starMaxAlpha - 0.15) * it) } } else emptyList()
-        val antennas = sky.map { composite(argb(sunset.antenna), it, sunset.antenna.alpha.toDouble()) }
-        return (sky + sunsetGround(sunset) + horizon + stars + antennas).distinct()
+    private fun cityScene(v: Variant): List<Int> = cityColors.getOrPut(v.name) {
+        val colors = CityColors(v.scheme, v.isDark)
+        val sorted = listOf(640 to 360, 360 to 640).flatMap { (w, h) -> NightCity.render(w, h, colors).asIterable() }.distinct().sortedBy(::luminance)
+        (sorted.take(64) + sorted.takeLast(64) + sorted.filterIndexed { i, _ -> i % 50 == 0 }).distinct()
     }
 
     /** The sunset's sky across its gradient, and its stars in dark themes. */

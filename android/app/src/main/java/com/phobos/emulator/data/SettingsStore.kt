@@ -104,7 +104,7 @@ enum class RpgBackdropScene(val label: String, val description: String) {
 enum class RetrowaveBackdropScene(val label: String, val description: String) {
     SUNSET("Sunset", "Banded sun over a perspective grid floor"),
     GRID("Neon grid", "An endless neon floor grid without the sun"),
-    CITY("Night city", "A skyline silhouette under a neon sky"),
+    CITY("Night city", "A dense skyline of neon-lit towers glowing over the water"),
 }
 
 /** CRT terminal backdrop phosphor tint. */

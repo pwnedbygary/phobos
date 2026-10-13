@@ -179,7 +179,7 @@ internal class GlassBuilder(
         GlassScene.AURORA -> auroraScene(AuroraColors(scheme, isDark))
         GlassScene.MESH -> meshScene(meshLine(scheme, isDark))
         GlassScene.SUNSET -> sunsetScene(SunsetColors(scheme, isDark))
-        GlassScene.CITY -> cityScene(SunsetColors(scheme, isDark))
+        GlassScene.CITY -> cityScene(CityColors(scheme, isDark))
         GlassScene.WAVES -> waveScene(WaveColors(scheme, isDark))
         GlassScene.DEEP -> waveScene(WaveColors(scheme, isDark, XmbBackdropScene.DEEP))
     }
@@ -288,18 +288,19 @@ internal class GlassBuilder(
     }
 
     /**
-     * Night city's colors: the sunset's sky, floor, grid and horizon without the sun; the buildings;
-     * the horizon's glow over their feet, the sky and the floor, with its line on the glow's peak;
-     * stars all the way down the sky in dark themes; and antennas against the sky.
+     * Night city's colors: the sky down its gradient, plain and under the city's bloom; the towers from the
+     * farthest haze to the nearest dark; their windows; the neon, its cores, and white, where the light it
+     * spills stacks up; and the water mirroring all of them, from the waterline to the bottom. Light themes
+     * see them washed toward the background, as the city is drawn.
      */
-    private fun cityScene(sunset: SunsetColors): List<Color> {
-        val sky = sunsetSky(sunset)
-        val horizon = listOf(sunset.silhouette, sunset.skyBottom, sunset.floorTop).flatMap { base ->
-            val glow = over(sunset.horizonGlow, base)
-            gradient(base, glow) + over(sunset.horizonLine, base) + over(sunset.horizonLine, glow)
-        }
-        val stars = if (sunset.isDark) sky.map { over(sunset.star, sunset.starMaxAlpha, it) } else emptyList()
-        return (sky + sunsetGround(sunset) + horizon + stars + sky.map { over(sunset.antenna, it) }).distinct()
+    private fun cityScene(city: CityColors): List<Color> {
+        val sky = listOf(city.skyTop, city.skyMiddle, city.skyLow).zipWithNext().flatMap { (from, to) -> GLOW_SAMPLES.map { PixelKit.mix(from, to, it) } + from }
+        val bloom = sky.map { PixelKit.mix(it, city.neon[0], NightCity.BLOOM) }
+        val towers = NightCity.HAZE.map { PixelKit.mix(city.tower, city.haze, it) }
+        val lights = city.windows.toList() + city.neon.flatMap { listOf(it, city.core(it)) } + Color.White.toArgb()
+        val above = sky + bloom + towers + lights
+        val water = above.flatMap { listOf(PixelKit.mix(it, city.water, NightCity.SHALLOW), PixelKit.mix(it, city.water, NightCity.DEEP)) }
+        return (above + water).map { Color(city.shown(it)) }.distinct()
     }
 
     /** The sunset's sky, and its stars in dark themes. */
