@@ -93,7 +93,8 @@ for line in '"clock start": 1234567890' '"clock restarts": 0' '"start time": 150
   grep -qF "$line" "$SCRATCH/report-d.json" || { cat "$SCRATCH/report-d.json"; exit 1; }
 done
 #Numbers are decimal digits up to 32 bits: a start time past them is refused (not wrapped to 1970), and so are a
-#number with more after it and a press's frame past 32 bits.
+#number with more after it and a press's frame past 32 bits. A stick's value is digits too, a minus sign first below
+#0, within -32768 to 32767.
 refused() {  #refused MESSAGE OPTION...: the runner refuses the options, saying MESSAGE
   local message=$1; shift
   if "$RUNNER" "$PSP_TEST_PROGRAMS/cube.elf" --frames 1 "$@" > /dev/null 2> "$SCRATCH/errors-e.txt" ||
@@ -104,9 +105,15 @@ refused() {  #refused MESSAGE OPTION...: the runner refuses the options, saying 
 refused "--start-time is at most 4294967295" --start-time 4294967296
 refused "--start-time needs a number" --start-time 12abc
 refused "a press's frame is a number up to 4294967295" --press 4294967296:Cross
+refused "a stick's value is a number" --press 1:L-StickX:12abc
+refused "a stick's value is a number" --press "1:L-StickX: 5"
+refused "the stick's value is -32768 to 32767" --press 1:R-StickY:-32769
+"$RUNNER" "$PSP_TEST_PROGRAMS/cube.elf" --frames 1 --press "1:L-StickX:-32768,1:R-StickY:32767,1:L-StickY:0" \
+  > /dev/null 2> "$SCRATCH/errors-e.txt" || { echo "a stick's values refused"; cat "$SCRATCH/errors-e.txt"; exit 1; }
 #Captures with no new picture: the runner takes none from frame 20 on. Frame 19's PNG waits for a new picture (one
 #comes: the screen still presents); frame 20's has one only if it came while frame 19's was written; frame 40's
-#waits its 2 s for one that never comes. Each is fresh or stale as it was, said and counted so, with a PNG.
+#waits its 2 s for one that never comes. Each is fresh or stale as it was, said and counted so, with a PNG; 40's
+#shows 20's picture, the last before the screen stopped.
 "$RUNNER" "$PSP_TEST_PROGRAMS/cube.elf" --frames 40 --out "$SCRATCH/stopped" --png-at 19,20,40 --screen-stops-at 20 \
   --report "$SCRATCH/stopped.json" > "$SCRATCH/summary-stopped.txt" 2> "$SCRATCH/errors-stopped.txt"
 python3 - "$SCRATCH/stopped.json" "$SCRATCH/summary-stopped.txt" "$SCRATCH/errors-stopped.txt" <<'EOF' ||
@@ -124,6 +131,8 @@ EOF
 for png in frame-000019.png frame-000020.png frame-000040.png; do
   [[ -s $SCRATCH/stopped/$png ]] || { echo "no $png"; exit 1; }
 done
+cmp -s "$SCRATCH/stopped/frame-000020.png" "$SCRATCH/stopped/frame-000040.png" ||
+  { echo "frame 40's stale PNG isn't frame 20's picture"; exit 1; }
 #A capture with no picture at all (the screen stopped from the first frame): said, no PNG, and in the report (whose
 #folder the runner makes).
 "$RUNNER" "$PSP_TEST_PROGRAMS/cube.elf" --frames 1 --out "$SCRATCH/none" --png-at 1 --screen-stops-at 1 \

@@ -317,12 +317,14 @@ auto parsePress(const std::string& item, std::string& problem) -> Press {
                            [&](const char* prefix) { return control.rfind(prefix, 0) == 0; });
   if(axis != std::end(stickAxes)) {
     press.name = std::string(*axis, 7) + " " + (*axis)[7];  //("L-Stick X")
-    try {
-      press.value = std::stol(control.substr(9));
-    } catch(...) {
+    auto value = control.substr(9);
+    bool negative = !value.empty() && value[0] == '-';  //(a minus sign below 0, then digits only, as every number)
+    u64 magnitude = 0;
+    if(!readDigits(value.substr(negative), magnitude)) {
       problem = "a stick's value is a number: " + item;
       return press;
     }
+    press.value = negative ? -s64(magnitude) : s64(magnitude);
   } else if(!control.empty() && control.back() == '!') {
     press.name = control.substr(0, control.size() - 1);
     press.value = 0;

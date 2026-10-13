@@ -41,7 +41,8 @@ reads its `PSP_GAME/PARAM.SFO` and prints the title and the disc's NPID, which t
 compatibility report uses for its region and disc ID column.
 
 The options, and what each does (their numbers, a press's frame among them, are decimal digits
-up to 4294967295; the runner refuses anything else):
+up to 4294967295, and a stick's value is -32768 to 32767, with a minus sign below 0; the runner
+refuses anything else):
 
 - `--frames N` — how many frames to run (default 3600, a minute of the PSP's time)
 - `--press "F:C,..."` — `F:C` presses and holds `C` at frame `F` (a button, or a stick's
@@ -185,11 +186,11 @@ later layout gets another number):
   loaded state's), `TZ`, and the host's offset from UTC at that time (`+hhmm`), which the
   kernel's time zone follows;
 - `result`: the frames run, whether the program ended, the frame loop's seconds, its captures'
-  seconds, stale captures, `clock restarts` (with `--start-time`: how many times a game that
-  started itself again had the clock set back), `captures` (each PNG asked for: its `frame`, the
-  frame running when its picture arrived, `arrived in frame`, null with no picture, how long it
-  waited, `waited ms`, and whether the picture was new, `fresh`), the missing functions
-  (library, NID, count) and the last note;
+  seconds, stale captures, `clock restarts` (with `--start-time`: how many times the clock was
+  set back, after a game started itself again or a program it asked for couldn't start),
+  `captures` (each PNG asked for: its `frame`, the frame running when its picture arrived,
+  `arrived in frame`, null with no picture, how long it waited, `waited ms`, and whether the
+  picture was new, `fresh`), the missing functions (library, NID, count) and the last note;
 - `gpu`: the GPU renderer's counts (as the summary's `gpu:` line, with its pipelines), or null
   where the software renderer drew.
 
