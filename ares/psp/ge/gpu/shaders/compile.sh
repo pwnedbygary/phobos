@@ -2,7 +2,8 @@
 #Builds shaders.hpp, the hardware renderer's shaders as the program carries them, from the GLSL beside this script
 #(docs/psp-gpu-renderers.md, "Shaders"): SPIR-V for Vulkan from glslang, and the GLSL itself for OpenGL. The
 #fragment shader is built twice: with dual-source blending's second output, and without (SINGLE), for GPUs that
-#lack it; copy.vert, copy.frag and present.frag are upscaling's and the screen's; transform.vert is fast mode's;
+#lack it; and each again writing the depth (DEPTHS), for pipelines whose depth test or write depends on it;
+#copy.vert, copy.frag and present.frag are upscaling's and the screen's; transform.vert is fast mode's;
 #move.frag moves pixels from one target into another. copy.frag and move.frag are built again with the stencil given
 #by the shader (EXPORT), for GPUs that have VK_EXT_shader_stencil_export.
 #shaders.hpp is kept in the repository, so that building Phobos needs no shader compiler; it records the sources'
@@ -27,13 +28,16 @@ compileAll() {
   { echo '#version 450'; cat "$HERE/draw.vert"; } > "$work/draw.vert"
   { echo '#version 450'; cat "$HERE/draw.frag"; } > "$work/draw.frag"
   { echo '#version 450'; echo '#define SINGLE'; cat "$HERE/draw.frag"; } > "$work/single.frag"
+  { echo '#version 450'; echo '#define DEPTHS'; cat "$HERE/draw.frag"; } > "$work/depth.frag"
+  { echo '#version 450'; echo '#define SINGLE'; echo '#define DEPTHS'; cat "$HERE/draw.frag"; } \
+    > "$work/singleDepth.frag"
   for stage in copy.vert copy.frag present.frag transform.vert move.frag; do
     { echo '#version 450'; cat "$HERE/$stage"; } > "$work/$stage"
   done
   { echo '#version 450'; echo '#define EXPORT'; cat "$HERE/copy.frag"; } > "$work/copyExport.frag"
   { echo '#version 450'; echo '#define EXPORT'; cat "$HERE/move.frag"; } > "$work/moveExport.frag"
-  for stage in draw.vert draw.frag single.frag copy.vert copy.frag present.frag transform.vert move.frag \
-               copyExport.frag moveExport.frag; do
+  for stage in draw.vert draw.frag single.frag depth.frag singleDepth.frag copy.vert copy.frag present.frag \
+               transform.vert move.frag copyExport.frag moveExport.frag; do
     glslangValidator -V --target-env vulkan1.0 -o "$work/$stage.spv" "$work/$stage" > "$work/log" 2>&1 ||
       { cat "$work/log"; exit 1; }
   done
@@ -58,6 +62,10 @@ header() {
   echo "static const u32 fragmentSPIRV[] = {"; words "$work/draw.frag.spv"; echo "};"
   echo
   echo "static const u32 fragmentSingleSPIRV[] = {"; words "$work/single.frag.spv"; echo "};"
+  echo
+  echo "static const u32 fragmentDepthSPIRV[] = {"; words "$work/depth.frag.spv"; echo "};"
+  echo
+  echo "static const u32 fragmentSingleDepthSPIRV[] = {"; words "$work/singleDepth.frag.spv"; echo "};"
   echo
   echo "static const u32 copyVertexSPIRV[] = {"; words "$work/copy.vert.spv"; echo "};"
   echo

@@ -11019,6 +11019,221 @@ the game reads the clock.
 pins TZ to the Mac's own zone, America/New_York, as the stick's dates and the clock's local time follow it):
 `~/phobos-work/scratch/savedata2/` on the Mac it was made on, not in the repository.
 
+## Part 83: Vulkan's waits for its own pixels gone — moves across row widths, palettes on the GPU, copies kept
+
+On branch `cursor/psp-vulkan-speed-2b67`, on master (`1d9308714`, #228). Parts 81 and 82 are other branches'. Clean
+room: no PPSSPP code read (its GPU backend not opened at all), JPCSP not read; the PSP's behaviour relied on is the
+GE's own as the software renderer has it (pixel.cpp's blend and dither, texture.cpp's palette index, raster.cpp's
+whole-number depth). Save states are unchanged (StateVersion 26): everything here is the renderer's, which no state
+keeps. The software renderer is untouched: its pictures, VRAM and state are master's.
+
+**The problem.** On the owner's RP6 (Snapdragon 8 Gen 2) at 1x, Vulkan (fast) was slower than Software in the slowest
+games: Armored Core: Formula Front 52.8 -> 45.9 frames a second, Silent Line Portable 54.5 -> 44.4, Colin McRae Rally
+2005 Plus 53.3 -> 41.1 (accurate as slow), where PPSSPP holds about 60 in all 22 of them. The deep-play reports had
+Brandish at 15.9 in Vulkan against 116 in Software, Vulkan much slower in 8 of batch 00's 27 games, Brave Story's frames
+all read back to the CPU, Death Jr. II's glow and Castlevania: The Dracula X Chronicles' background blur missing in
+Vulkan, and Daxter's shadow and Colin McRae's terrain shadows differing between the renderers.
+
+**How it was measured.** The Mac (M1, MoltenVK 1.4.2), the headless runner built at -O3 with thin LTO as Android builds
+it, `--late-frames` (frames shown without waiting, as on Android's window) and 7 drawing threads, scenes kept as states
+in each game's slow part. A scratch build counted, a frame: draws, render passes, pipeline and set binds, pushes,
+barriers, vertices, staging bytes; fills, texture uploads, copies, moves and read backs with their bytes; each finish's
+stack (who made the renderer wait for its pixels: the CPU's load, a texture it couldn't take, a frame buffer it couldn't
+move, the display); and the emulation thread's time in the GE's lists, in recording, in submitting and in waiting. The
+Mac was shared with three other agents (load 10 to 27): the numbers below are means of two rounds taking turns, base
+and branch, and move 10-15% between rounds; the process's CPU time a frame moves less.
+
+**What made Vulkan slow** (fast mode unless said; the counts a frame):
+- **Finishes for frame buffers drawn at two row widths.** Colin McRae's race draws its 480-pixel 5551 picture's memory
+  as a 256-pixel frame buffer for its effects, and back: a move between targets needed rows of the same bytes, so each
+  turn was a finish, every target read back and filled again (2 finishes, 5 read backs, 3.3 ms waiting). Dirt 2 does
+  the same with a 128-pixel 5551 frame buffer and a 64-pixel 4444 one, Brave Story with 256- and 128-pixel 8888 ones.
+- **Textures Vulkan couldn't take from its frame buffers.** A texture of palette indices over a frame buffer (Death Jr.
+  II, Sonic Rivals and Activision Hits Remixed, one engine, take each strip of the picture through a CLUT32 palette of
+  its own; Brothers in Arms' passes too) was decoded from memory, a finish each: 31 a frame in Death Jr. II and Sonic
+  Rivals, 61 in Activision Hits Remixed, waiting 23 to 41 ms a frame. A 3D PRIM's texture declared 512 rows tall from a
+  272-row picture ran on into other frame buffers' pages (Death Jr. II's bloom), or past VRAM's end (Castlevania's
+  blur at 0x154000), and was refused; Castlevania's strips then drew in software against memory's depth, which isn't
+  the GPU's, and the blur never showed.
+- **Copies** for render to texture, each a render pass ended, a copy and a pass begun: Killzone's menus blur a strip
+  right of the picture with 800 3D quads a frame, each reading one half of it while writing the other, and every quad
+  took its copy again (817 copies, 823 passes a frame); the GPU was the bound (the emulation thread waited on fences
+  and in MoltenVK's encoding).
+- **Fills**: Darkstalkers' CPU writes beside its depth buffer between 2D PRIMs, and each write had the target's depth
+  filled again (90 passes a frame); Brave Story keeps its display list in 24 pieces beside its picture, past the 16
+  ranges kept, which made the target stale, a finish a frame.
+- **What isn't the renderer's.** The Armored Cores' intros are movies: 2 draws and half a texture upload a frame, the
+  emulation thread busy in the movie's polled ring (`sceMpegRingbufferAvailableSize`, `Memory::pointer`) in both
+  renderers alike (82.8 and 83.3 frames a second, Software 90-100 the same day). Army of Two's menu and Dirt 2 are
+  bound by the GE's front end (vertex reading, culling, recording: 37 and 14 ms of GE lists a frame). Accurate mode on
+  MoltenVK, which has no rasterization order, splits every overlapping blended primitive into a draw after a barrier:
+  Colin McRae's race 26,023 draws and 25,824 barriers a frame, 0.7 frames a second (Qualcomm's own driver reads
+  nothing without the order, part 49, so the RP6 never splits).
+- **Pictures**: Death Jr. II blends its bloom over the scene with the GE's dither (ones and twos), which the GPU's own
+  blending never added, and feeds the result back into the next frame's bloom, so it settled 13% darker and the glow
+  was gone (both modes on the M1: accurate mode blends 8888 with the GPU's units there). Daxter's shadow is drawn twice
+  over the floor with "at most": the GE's depths of the two layers are the same whole number, the GPU's floats weren't.
+
+**The changes** (in seven commits, the last the review's points, each with tests that fail without it; the
+textures kept, below, tested with the review's):
+1. **The dither in the GPU's blending** (`draw.frag`'s `TERM`): the PSP dithers the blended color, so the shader adds
+   the dither to the source term it hands the GPU, and subtracts it where the GPU subtracts the term (TERM 3). **Depth
+   as the GE's whole numbers** (`draw.frag`'s `DEPTHS` build, since the review): wherever the depth test or write
+   depends on it the shader writes the interpolated depth rounded down, in 65,536ths, as memory's depths are filled (the
+   same floats; the same 24-bit values on a GPU that rounds to nearest); a shader writing the depth may keep a GPU from
+   testing it before the shader runs, so pipelines that don't use depth take the build without the write. Its cost at
+   1x, measured on the M1 (written by every pipeline then): 0-3%, 2-7% at 4x.
+2. **Moves across row widths** (`movable()`, `intoRows()`, `move()`, `move.frag`): where both targets' pages hold whole
+   rows of each, each starting a row, a move covers whole rows of the target and each pixel takes the source's pixel at
+   its bytes, where they're inside the source's rectangle (else it's left); the moves of one width are the same
+   arithmetic. Not taken where the shader can't give the stencil: per-bit draws would lose the stencil they don't reach.
+3. **Past VRAM's end**: a texture whose rows aren't known (3D) declared past VRAM's end has its rows inside VRAM taken,
+   those past held at the last (the PSP's would be VRAM's first rows), as `holdable()` allows (below). **Depth changes
+   kept** for the next PRIM that tests or writes depth. **Beside, past 16 ranges**: kept all the same, and all filled
+   from memory before the target is next drawn, shown, lent or moved from (not inside memory's notice of the change,
+   where a fill's watching pages again would come in the middle of memory's going through them), as one rectangle
+   where they're many or close together and it reaches none of the target's pixels; past 256, the target is filled
+   afresh (`Target::merged` gone).
+4. **Palettes on the GPU** (`paletteFor()`, `makePalette()`, `draw.frag`'s `INDEXED`): a CLUT16 texture over a 16-bit
+   target or a CLUT32 one over an 8888 target, whose index's bits are the colors' and not the stencil's, is the GPU's
+   copy of the target, each texel's bits taken as the index, the shift, mask and offset applied as `texelFrom()` does,
+   and the entry looked up in a 512x256 picture of palettes on the GPU (a row a palette, found again by the GE's palette
+   hash and bytes, at most 192, set 1's second binding). **Rows not known, running into another frame buffer**: only the
+   rows before its pages are taken (`take()`'s `exact`), and a texture the renderer doesn't hold whose first rows are
+   memory's is decoded only as far as the frame buffer the GPU is drawing (`Renderer::memoryRows()`), not finished for:
+   in fast mode, and in accurate mode where the texels the PRIM may take stop before those rows (`holdable()`), so the
+   rows held are none it takes.
+5. **What a PRIM takes** (`holds()`' `takes`): the GE gives the rectangle of texels a PRIM may take, from its vertices'
+   u and v (2D two texels round them, a sprite's more by 0.6 of its step for the GPU's whole-pixel quads above 1x; 3D
+   triangles' where they're the vertices' own coordinates, scaled and offset as `transform()` maps them, the texels the
+   GPU's filter takes in sixteenths between them, with 2^-13 of the coordinates for the GE's 15-bit fractions; worked
+   out only where the renderer holds the texture), and a copy is copied again only where the target's changes since
+   meet it. **Barriers only before overlapping reads** (accurate mode without rasterization
+   order): a reading primitive waits for a barrier only where it overlaps one drawn into its target since the last.
+6. **Textures kept for the next of their size** (`spareTextures`): a texture let go of, once its runs are done, is
+   taken by the next texture of its width and height, its picture, memory, view and set as they are (a movie made and
+   destroyed them every frame, each a call into the driver's kernel on Android); at most 16 and 32 MiB.
+
+Every change is in both modes but one: rows past those a texture's own frame buffer has (another frame buffer of
+another row width below, VRAM's end, a decode's last rows) are held at the last kept in fast mode wherever the PRIM's
+rows aren't known, and in accurate mode only where its texels stop before them, which is exact (the review's point;
+the PSP's would be the other frame buffer's bytes, at a weight of 0 in the scenes seen). The ideas weighed and not
+taken: a read back a frame late in fast mode (what still finishes is the CPU's own loads of a picture, Death Jr. II's
+conversion of its 8888 frame to the 5650 one it shows and Darkstalkers' stores beside its depth buffer, which need the
+bytes then, and late frames already show without waiting); merging draws, caching pipelines and descriptors and
+batching vertex uploads (already so: draws join while the state stays, pipelines are cached by key, sets by texture,
+and a run's vertices go up in one staging buffer; binds were 0.1-2 per draw in every scene, never the bound).
+
+**Numbers** (the M1, MoltenVK; the final code, 4b2665616, against master, taking turns, two rounds each; frames a
+second, base -> branch; the process's CPU ms a frame; draws, finishes, read backs, copies and render passes a frame; the
+emulation thread's waits for the GPU, ms a frame). The Mac's load was 30 to 130 while they ran, which lowers every
+number and moves single runs by a fifth; the ratios and the counts are what to read. (A round before the review's
+points, at a load near 20: Death Jr. II's woods 9.7 -> 67.8, its character select 21 -> 170, Activision Hits
+Remixed 10 -> 84, Sonic Rivals 14 -> 113, Castlevania 103 -> 354, Darkstalkers 49 -> 122, Brothers in Arms 23 -> 39,
+Killzone 11 -> 20, Colin McRae 43 -> 57, Brave Story 156 -> 216.)
+
+| Scene | fps | CPU ms | Draws | Finishes | Read backs | Copies | Passes | Waits |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Colin McRae Rally 2005 Plus, race | 34.6 -> 56.0 | 21.9 -> 17.3 | 376 | 2 -> 0.01 | 5 -> 0.04 | 3 -> 4.5 | 9 -> 16 | 3.79 -> 0.02 |
+| Death Jr. II, woods | 5.6 -> 46.0 | 124 -> 15.6 | 737 | 31 -> 0.5 | 62 -> 2.5 | 0.5 -> 1.5 | 68 | 43.0 -> 5.7 |
+| Death Jr. II, character select | 10.2 -> 166.3 | 66.0 -> 5.2 | 217 | 30.5 -> 0.01 | 61.5 -> 0.03 | 0.5 -> 1 | 62 | 37.1 -> 0.05 |
+| Activision Hits Remixed, room | 4.2 -> 48.5 | 150 -> 15.9 | 947 | 61 -> 0.01 | 124 -> 0.03 | 1 -> 3 | 129 | 86.4 -> 0.03 |
+| Sonic Rivals, stage | 6.0 -> 66.3 | 106 -> 10.7 | 444 | 31 -> 0.5 | 62.5 -> 2.5 | 0.5 -> 1.5 | 64 | 60.4 -> 1.9 |
+| Brothers in Arms, play | 15.1 -> 23.4 | 42.2 -> 31.3 | 494 | 3.5 -> 0.01 | 12.8 -> 0.04 | 52 -> 56 | 59 | 19.3 -> 0.03 |
+| Killzone, language menu | 10.7 -> 16.6 | 68.9 -> 44.4 | 958 | 0.01 | 0.03 | 817 -> 456 | 823 -> 473 | 0.28 -> 0.11 |
+| Castlevania, stage 1 | 75.4 -> 177.1 | 9.7 -> 4.3 | 67 | 0.5 -> 0.01 | 1.5 -> 0.02 | 0.5 -> 1 | 2 | 1.76 -> 0.03 |
+| Brave Story, title | 86.3 -> 110.1 | 8.8 -> 6.9 | 140 | 1 -> 0.01 | 3 -> 0.03 | 10.5 -> 11 | 12 -> 14 | 2.34 -> 0.02 |
+| Darkstalkers, fight | 38.4 -> 71.1 | 18.7 -> 9.5 | 256 | 1.01 | 2.01 | 0 | 90 -> 10 | 4.79 -> 2.07 |
+| Dirt 2, race | 23.8 -> 29.4 | 30.1 -> 25.3 | 1145 | 2 -> 0.01 | 6 -> 0.04 | 3 | 22 -> 25 | 4.02 -> 0.03 |
+| Brandish, play | 262 -> 262 | 3.3 -> 3.2 | 41 | 0.01 | 0.03 | 1.5 | 4 | 0.04 -> 0.03 |
+| Daxter, shadow | 139 -> 123 | 6.5 | 90 | 0.01 | 0.02 | 1 | 3 | 0.04 -> 0.02 |
+| Armored Core: Formula Front, intro | 74.0 -> 62.2 | 13.5 -> 14.1 | 2 | 0 | 0.01 | 0 | 0 | 0.01 |
+| Armored Core: Silent Line Portable, intro | 80.3 -> 72.8 | 12.5 -> 13.0 | 2 | 0 | 0.01 | 0 | 0 | 0.01 |
+| Army of Two, main menu | 9.2 -> 8.3 | 78.7 -> 81.8 | 3022 | 0.01 | 0.04 | 81 | 114 | 0.07 |
+
+The last four are the same work on the GPU either way: Daxter's second round was 143 -> 141, and four more rounds of
+Formula Front's intro, taking turns, 31.0, 34.5, 35.5, 36.4 on master and 34.4, 36.1, 36.6, 35.4 on the branch (the
+Mac's load at 130 then), the emulation thread 14.7 and 14.5 ms a frame. Accurate mode: Castlevania 58 -> 144, Killzone
+11.7 -> 19.3, Death Jr. II's woods 4.0 -> 10.5 and its character select 8.1 -> 12.1, Sonic Rivals 5.8 -> 11.5,
+Activision Hits Remixed 3.7 -> 5.5 (their palette passes held only where exact: 8 to 16 finishes a frame, from 31 to
+61), Brandish 19.0 -> 18.9 (barriers 875 -> 852 a frame: its tiles overlap), Daxter 94.5 -> 97.3; Colin McRae's race 0.7
+either way before the review (25,824 -> 25,644 barriers a frame: without rasterization order MoltenVK splits its 3D
+blends). Death Jr. II's woods still finish every other frame: the game converts its 8888 picture to the 5650 one it
+shows with the CPU, which reads it (the frame shown is never a target's); Darkstalkers' one a frame is the CPU's stores
+beside its depth buffer.
+
+**Pictures**, the mean channel difference from Software at a frame (and master's): Death Jr. II's woods 1.70 in fast
+mode (8.8) and 0.85 in accurate (7.66), its glow there; Death Jr. II's character select 0.62 fast (1.88) and 0.05
+accurate (the same); Killzone 0.28 in both modes (fast 1.19, accurate the same). With the final code: Castlevania 0.155
+in accurate mode and 0.163 in fast (4.05 and 4.06: the blur drawn); Daxter 0.100 in both (0.147); Colin McRae's race
+0.89 accurate and 1.14 fast (1.19 and 1.44). Colin McRae's terrain shadows aren't changed: they take depth from frame
+buffers of another row width, and the GPU's depth isn't read back or moved (docs/psp-gpu-renderers.md, "Owned until
+needed").
+
+**The review.** An independent read-only review of the branch (to 50a9510a1) found no blocker and three major points,
+all taken (04e5d1c8a): accurate mode held a texture's rows past its frame buffer wherever the PRIM's rows weren't
+known (now only where its texels stop before them, `holdable()`); the texels a PRIM takes missed some for 3D sprites
+and lines and for 2D sprites above 1x (3D's tight bound now for triangles only, with the GE's 15-bit fractions;
+sprites widened by 0.6 of their step); and a full list of beside ranges was filled inside memory's notice of a change,
+where a fill's watching pages again comes in the middle of memory's going through them (now kept, and filled at the
+target's next use). Its minor points, taken too: a barrier handed on past a draw left out for want of its pipeline;
+kept ranges filled as one rectangle only where they're many or close; moves across row widths with their own flag,
+not turning the shader's stencil off for uploads; the depth write its own shader build, and depths in 65,536ths from
+the shader and from memory's fills alike (D32 and D24); fast mode's meshes' boxes stated; tests of palettes found
+again, of barriers counted, of textures kept, of rows held only where exact; comments and these docs. Death Jr. II's,
+Sonic Rivals' and Activision Hits Remixed's palette passes reach the frame buffer below by their corners (at a
+weight of 0), so in accurate mode they finish again since: 8 to 16 a frame, against 31 to 61 on master.
+
+**Checks.** On the final code (4b2665616): `tests/psp/run-tests.sh` 486 groups, 0 failures (sanitized; 11 new GPU
+groups, each failing without its change, among them the held rows' paths, checked by taking them out: 12 failures);
+`tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. CI on PR
+#234 green: the PSP system tests (GCC, Mesa's lavapipe), the Allegrex tests, and the Android, Windows, macOS and Linux
+builds. Its first run had failed one check that lavapipe's own blending rounds differently (the dithered blends' channels
+the same, 81% there against the M1's 87%; the check is at 75% now, the far ones still under 1%).
+
+**Library** (the report's way, `lib.sh` with `--renderer Vulkan`: accurate mode, 3600 frames each, one at a time,
+master's runner and the final code's, each with only the bench patch): all 266 games finish in both, none missing a
+function. 214 are the same at all four captures (frames 60, 300, 1200 and 3600); 32 differ by a mean of 1 level or
+less; 20 by more. Those 20 were run again in Software: where the branch's capture is nearer Software's, it's the
+dither and depth fixes (Gitaroo Man Lives!, Warriors of the Lost Empire, Tenchu: Shadow Assassins, Samurai Dou
+Portable, Grand Theft Auto: Vice City Stories, Metal Gear Solid: Portable Ops Plus, MX vs. ATV Untamed, PixelJunk
+Monsters, LocoRoco, Shepherd's Crossing: the branch's the same as Software's, or nearly); where master's is nearer,
+the captures show the same movie or demo a few frames apart (IL-2 Sturmovik's and Mega Man Maverick Hunter X's
+intros, Formula Front International's credits, Tales of the World: Radiant Mythology 2's and Persona 2's movies,
+Brothers in Arms' logo fading, Mega Man Powered Up's demo), as runs of one runner do: the clock follows the host's,
+and the branch's run had the Mac at a load of 100 to 240, master's and Software's near 30. None shows anything
+drawn worse. (Run time 8,873 s for master, 10,088 s for the branch under that load.)
+
+**With part 79** (#233, merged in after it reached master): a texture of palette indices over a frame buffer is the
+GPU's first (`holds()`, the palette looked up there), so Backbone's glow decodes nothing in fast mode. One the GPU
+doesn't hold is decoded from memory: rows running on into a frame buffer it has drawn since its last finish only as
+far as that (`memoryRows()`), which waits for nothing and stays cached for the next PRIM through the same palette; and
+part 79's box, as a part, only where decoding the rows asked for would still wait: rows the GPU drew itself (the first
+tile after the picture, without the palettes), or rows accurate mode won't hold at the last because the PRIM takes
+them (the bottom tiles, reaching the 2D pass's buffer at the picture's row 272). The box does more in accurate mode
+than its parts: a cached copy whose pages were written since serves a tile whose box's bytes are as they were, so the
+six tiles above each column's bottom one take the copy, which this branch alone decoded again (textures decoded a
+frame, the branch alone against the merge, 200 frames: Death Jr. II's woods 78 -> 57 and its character select 75 ->
+33, Sonic Rivals 73 -> 45, Activision Hits Remixed 155 -> 75; the same finishes). On Death Jr. II's woods (decodes
+logged) parts have nothing more to save: without the palettes, the first tile through each of the three palettes a
+frame is at the left edge, its box not known (it would repeat round), and the rows it decodes serve every later tile;
+in accurate mode each column's bottom tile finds the copy changed by the 2D pass and decodes it whole after the
+finish, a copy the next column's first tile (no box either) and the six below it take. So neither a part wherever the
+box is far smaller than the rows (with a budget against the whole: it never applied) nor asking whether the rows wait
+before a cached copy's bytes are waited for (5.6 parts a frame, 52.6 whole decodes down to 52.2) was taken. Part
+79's two glow tests assert each of these now. On the merge: `tests/psp` 489 groups, `tests/allegrex` 60, both 0
+failures, `tests/psp/ares` 318 checks, 0 failed; against this branch alone, the same machine at the end of Death Jr.
+II's woods and character select, Sonic Rivals and Activision Hits Remixed in Software (every frame's picture and
+VRAM too) and in accurate mode, and of those and Colin McRae's race in fast mode.
+
+**For the RP6** (Adreno may differ from MoltenVK): the Armored Cores' intros are the same in both renderers on the
+M1, bound by the movie's polling; what Vulkan adds there each frame is half a texture upload (456 KB), a texture made
+(now kept from the last), a present and a shot of the frame, which a tile-based GPU and Android's driver may weigh
+differently. Worth measuring there: the two Armored Cores' intros and first menus, Colin McRae's race, Death Jr. II's
+woods and character select, Sonic Rivals' stage, Activision Hits Remixed's room, Brothers in Arms, Killzone's menus,
+Castlevania's first stage, Brave Story's title and Darkstalkers, each in Software and Vulkan (fast), with the GPU's
+counters where the app can show them.
+
 ## Part 87: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces (the memory a glyph is read into)
 
 On branch `cursor/psp-font-b03-2b67`, on master (`b3507c1db`). Parts 81 to 86 are other branches'. Sources: the three
