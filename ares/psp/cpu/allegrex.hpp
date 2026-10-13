@@ -663,4 +663,9 @@ struct Allegrex {
   } recompiler{*this};
 };
 
+inline auto Allegrex::instructionsBefore() const -> u64 {
+  if(recompiler.inBlock) return instructionsRun + recompiler.executed - 1;
+  return instructionsRun;
+}
+
 }

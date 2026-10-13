@@ -203,9 +203,7 @@ auto Kernel::sceMpegRingbufferAvailableSize() -> void {
   u32 ringbuffer = arg(0);
   if(!memory.reaches(ringbuffer, 16)) return result(ErrorInvalidPointer);
   if(u32 library = memory.reaches(ringbuffer, 44) ? memory.read(4, ringbuffer + RingLibrary) : 0) {
-    if(!memory.reaches(library, LibraryState) || memory.readString(library, 8) != "LIBMPEG") {
-      return result(MpegErrorLibrary);
-    }
+    if(!mpegMarked(library)) return result(MpegErrorLibrary);
     u32 read = memory.read(4, library + LibraryRingbuffer);
     if(memory.reaches(read, 16)) ringbuffer = read;
   }
@@ -284,8 +282,7 @@ auto Kernel::mpegReturned() -> void {
   u32 given = std::min(u32(gave), call.asked);
   u32 at = memory.read(4, ringbuffer + RingData) + written * PacketSize;
   u32 library = memory.read(4, ringbuffer + RingLibrary);
-  bool known = memory.reaches(library, LibraryState) && memory.readString(library, 8) == "LIBMPEG"
-            && memory.reaches(at, given * PacketSize);
+  bool known = mpegMarked(library) && memory.reaches(at, given * PacketSize);
   u32 state = known ? memory.read(4, library + LibraryPacked) : 0;
   bool packed = state & 1, headed = state & 2;  //given a pack; a header came before the first
   u32 fed = known ? memory.read(4, library + LibraryFed) : 0;
@@ -319,7 +316,7 @@ auto Kernel::mpegReturned() -> void {
 //movie going round again, its access units whole).
 auto Kernel::mpegFinish(MpegCall& call) -> void {
   u32 library = memory.read(4, call.ringbuffer + RingLibrary);
-  if(memory.reaches(library, LibraryState) && memory.readString(library, 8) == "LIBMPEG") {
+  if(mpegMarked(library)) {
     u32 stream = memory.read(4, library + LibraryStream);
     bool whole = stream && memory.read(4, library + LibraryFed) == stream;
     memory.write(4, library + LibraryEnded, call.left > 0 || whole);
@@ -338,8 +335,23 @@ auto Kernel::mpegAbandoned(u32 thread) -> void {
 auto Kernel::mpegLibrary(u32 handle) -> u32 {
   if(!memory.reaches(handle, 4)) return 0;
   u32 library = memory.read(4, handle);
-  if(!memory.reaches(library, LibraryState) || memory.readString(library, 8) != "LIBMPEG") return 0;
+  if(!mpegMarked(library)) return 0;
   return library;
+}
+
+//Whether a library's memory (LibraryState bytes) is all there and starts with its "LIBMPEG" and the NUL after it, as
+//sceMpegCreate writes it: memory.readString(library, 8) == "LIBMPEG", without making the string.
+auto Kernel::mpegMarked(u32 library) -> bool {
+  if(!memory.reaches(library, LibraryState)) return false;
+  static constexpr char mark[8] = "LIBMPEG";
+  if(u32 ram = (library & 0x1fff'ffff) - Memory::RAMBase; ram < memory.ram.size()) {
+    return !std::memcmp(&memory.ram[ram], mark, sizeof(mark));
+  }
+  for(u32 n = 0; n < sizeof(mark); n++) {
+    u8* byte = memory.pointer(library + n);
+    if(!byte || *byte != u8(mark[n])) return false;
+  }
+  return true;
 }
 
 //Whether the game loaded its own copy of the library (a module of the disc's, stood in for: modules.cpp) rather

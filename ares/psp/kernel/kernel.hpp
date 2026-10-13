@@ -268,6 +268,7 @@ struct Kernel {
   auto importCode(const std::string& library, u32 nid) -> u32;
   auto syscall(u32 code) -> bool;
   auto dispatch(u32 code, bool& quiet) -> bool;
+  auto dispatchImport(u32 code, bool& quiet) -> bool;
   auto runUntilNextEvent() -> void;
   auto arg(u32 n) const -> u32;
   auto result(u32 value) -> void;
@@ -1379,6 +1380,7 @@ struct Kernel {
   auto mpegFinish(MpegCall& call) -> void;
   auto mpegAbandoned(u32 thread) -> void;
   auto mpegLibrary(u32 handle) -> u32;
+  auto mpegMarked(u32 library) -> bool;
   auto mpegHeaderWord(u32 address) -> u32;
   auto mpegFrameWidth(u32 handle, u32 frameWidth) -> u32;
   auto mpegOwnLibrary() -> bool;

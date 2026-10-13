@@ -1168,6 +1168,7 @@ auto Kernel::syscall(u32 code) -> bool {
 
 //The function a syscall's code stands for. quiet: it was a quiet function, after which nothing else changed.
 auto Kernel::dispatch(u32 code, bool& quiet) -> bool {
+  if(code >= FirstImportCode) return dispatchImport(code, quiet);
   if(code == ThreadReturnCode) {
     threadReturned();
     return true;
@@ -1196,7 +1197,14 @@ auto Kernel::dispatch(u32 code, bool& quiet) -> bool {
     extendReturned();
     return true;
   }
-  if(code < FirstImportCode || code - FirstImportCode >= imports.size()) {
+  note("a syscall (code " + std::to_string(code) + ") that no import stands for");
+  return false;
+}
+
+//A library function's code (FirstImportCode on). The FINISH and the call after the function are looked for only where
+//there may be one: geInterrupt() and startCall() return at once otherwise.
+auto Kernel::dispatchImport(u32 code, bool& quiet) -> bool {
+  if(code - FirstImportCode >= imports.size()) {
     note("a syscall (code " + std::to_string(code) + ") that no import stands for");
     return false;
   }
@@ -1214,8 +1222,9 @@ auto Kernel::dispatch(u32 code, bool& quiet) -> bool {
   bool looks = import.function->quiet;  //(read first: a function loading a module adds imports, moving them)
   calm = false;
   (this->*import.function->handler)();
-  bool taken = geInterrupt();  //(a display list's FINISH, met by the GE in it)
-  bool started = startCall();  //what the function set off (a display list finishing) may call into the program now
+  bool taken = geFinishDue && geInterrupt();  //(a display list's FINISH, met by the GE in it)
+  //what the function set off (a display list finishing) may call into the program now
+  bool started = !interrupting && interruptsEnabled && (vblankPending || !calls.empty()) && startCall();
   quiet = (looks || calm) && !taken && !started;
   return true;
 }
