@@ -6,7 +6,8 @@ name: PSP Core Tests
 # (tests/psp/ares/runner-test.sh). Their paths are what those builds compile or read: the core, nall, ares's framework
 # and libco, sljit and its configuration, Vulkan's headers, libchdr, FFmpeg's build, the runner, the desktop's disc
 # reader, the tests, and the byte files the PSP's tests share with the app's (android/app/src/test/resources/psp-*).
-# A version tag runs every suite (a tag's push takes no path filter). Each suite's last line, its count, goes in the
+# A version tag runs every suite (a tag's push takes no path filter). The runners are pinned to Ubuntu 24.04 (its
+# GCC 13), so a new image is a change made on purpose. Each suite's last line, its count, goes in the
 # run's summary with the commit.
 
 on:
@@ -15,18 +16,21 @@ on:
     tags: [ 'v*' ]
     paths: [ 'ares/psp/**', 'ares/ares/**', 'nall/**', 'libco/**', 'thirdparty/sljit/**', 'thirdparty/sljit*',
              'thirdparty/Vulkan-Headers/**', 'thirdparty/libchdr/**', 'thirdparty/ffmpeg/**', 'tools/psp-runner/**',
-             'tests/allegrex/**', 'tests/psp/**', 'tests/objects*.sh', 'desktop/PspDiscInfo.*',
-             'android/app/src/test/resources/psp-*', '.github/workflows/psp-core.yml' ]
+             'tests/allegrex/**', 'tests/psp/**', 'tests/objects*.sh', 'desktop/PspDiscInfo.*', 'desktop/Platform.hpp',
+             'android/app/src/test/resources/psp-*',
+             '.github/workflows/psp-core.yml' ]
   pull_request:
     paths: [ 'ares/psp/**', 'ares/ares/**', 'nall/**', 'libco/**', 'thirdparty/sljit/**', 'thirdparty/sljit*',
              'thirdparty/Vulkan-Headers/**', 'thirdparty/libchdr/**', 'thirdparty/ffmpeg/**', 'tools/psp-runner/**',
-             'tests/allegrex/**', 'tests/psp/**', 'tests/objects*.sh', 'desktop/PspDiscInfo.*',
-             'android/app/src/test/resources/psp-*', '.github/workflows/psp-core.yml' ]
+             'tests/allegrex/**', 'tests/psp/**', 'tests/objects*.sh', 'desktop/PspDiscInfo.*', 'desktop/Platform.hpp',
+             'android/app/src/test/resources/psp-*',
+             '.github/workflows/psp-core.yml' ]
   workflow_dispatch:
 
 concurrency:
   group: psp-core-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+  #(a PR's newer push replaces its run; master's and tags' runs all finish, each commit keeping its result)
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -34,7 +38,8 @@ permissions:
 jobs:
   allegrex:
     name: Allegrex CPU tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,11 +58,14 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          echo "- tests/allegrex at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
+          at="${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}"
+          last=$(tail -1 "$RUNNER_TEMP/suite.log" 2> /dev/null || echo "no output: the suite didn't run")
+          echo "- tests/allegrex at $at: $last" >> "$GITHUB_STEP_SUMMARY"
 
   system:
     name: PSP system tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -94,13 +102,16 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          echo "- tests/psp at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
+          at="${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}"
+          last=$(tail -1 "$RUNNER_TEMP/suite.log" 2> /dev/null || echo "no output: the suite didn't run")
+          echo "- tests/psp at $at: $last" >> "$GITHUB_STEP_SUMMARY"
 
   # The whole core as an ares system, with ares's node tree, libco and libchdr, as Phobos builds it: system.cpp's
   # checks, which boot the test programs in tests/psp/programs (no Vulkan: they draw with the software renderer)
   ares:
     name: PSP as an ares system
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -125,13 +136,16 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          echo "- tests/psp/ares at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
+          at="${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}"
+          last=$(tail -1 "$RUNNER_TEMP/suite.log" 2> /dev/null || echo "no output: the suite didn't run")
+          echo "- tests/psp/ares at $at: $last" >> "$GITHUB_STEP_SUMMARY"
 
   # tools/psp-runner built as tools/psp-runner/build.sh builds it, running cube.elf for 60 frames: its summary, PNGs
   # and WAV checked
   runner:
     name: Headless runner
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -156,4 +170,6 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          echo "- tests/psp/ares/runner-test.sh at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
+          at="${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}"
+          last=$(tail -1 "$RUNNER_TEMP/suite.log" 2> /dev/null || echo "no output: the suite didn't run")
+          echo "- tests/psp/ares/runner-test.sh at $at: $last" >> "$GITHUB_STEP_SUMMARY"
