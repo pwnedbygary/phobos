@@ -7,12 +7,13 @@ name: PSP Core Tests
 # and libco, sljit and its configuration, Vulkan's headers, libchdr, FFmpeg's build, the runner, the desktop's disc
 # reader, the tests, and the files the PSP's tests share with the app's (android/app/src/test/resources/psp-*: the
 # dialogs' byte form, the keyboard's cases). The CPU's suite runs on an ARM64 host too, and again built as the app's
-# release builds are (PHOBOS_TESTS_MODE=release), beside the sanitized runs.
-# A version tag runs every suite (a tag's push takes no path filter). The runners are pinned to Ubuntu 24.04 (its
+# release builds are (PHOBOS_TESTS_MODE=release), beside the sanitized runs; the system's, built so, is a lane of its
+# own. A version tag runs every suite (a tag's push takes no path filter). The runners are pinned to Ubuntu 24.04 (its
 # GCC 13), so a new image is a change made on purpose. Each suite's last line, its count, goes in the run's summary
-# with the commit; the x86-64 Allegrex lane's sanitized run and the system lane keep their groups' results (pass, FAIL
-# or skip with why) as an artifact. What a lane must have is named in PHOBOS_TESTS_REQUIRE
-# (tests/allegrex/harness.hpp's skip()): without it, a group that needs it fails instead of skipping.
+# with the commit; the x86-64 Allegrex lane's sanitized run and both system lanes keep their groups' results (pass,
+# FAIL or skip with why) as artifacts (allegrex-report, psp-report, psp-report-release). What a lane must have is
+# named in PHOBOS_TESTS_REQUIRE (tests/allegrex/harness.hpp's skip()): without it, a group that needs it fails
+# instead of skipping.
 
 on:
   push:
@@ -186,8 +187,10 @@ jobs:
           echo "- tests/psp at $at: ${last:-no output: the suite did not run}" >> "$GITHUB_STEP_SUMMARY"
 
   # tests/psp again built as the app's release builds are (PHOBOS_TESTS_MODE=release: BUILD_RELEASE, -O3, no
-  # sanitizers), with the same requirements. Red until ares/psp/ge/four.cpp's maybe-uninitialized reads are
-  # settled (GCC 13 -O3 -Werror; the handoff's package 06 entry).
+  # sanitizers), with the same requirements. Red until GCC 13 at -O3 -Werror passes the four files it rejects now,
+  # each read as a false positive: ge.cpp (four.cpp's maybe-uninitialized reads), kernel.cpp (serialization.cpp's
+  # right stick), desktop/PspDiscInfo.cpp (nall's string allocator) and tests/psp/crypto.cpp (the handoff's package
+  # 06 entry).
   system-release:
     name: PSP system tests, built as the app is
     runs-on: ubuntu-24.04
