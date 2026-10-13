@@ -193,24 +193,50 @@ auto Kernel::writeStat(u32 address, const std::string& host) -> void {
   writeTimes(address + 16, host);
 }
 
+//When a host file or folder was made, read and changed, in seconds since 1970 (all 0 if it isn't there), as
+//nall::inode::timestamp() has them: made, where the host keeps it (Windows' ctime; the BSDs' and macOS's birth time,
+//unless later than the change), else changed; read no earlier than changed. Through stat() itself: the nall::string
+//that nall::inode::timestamp() takes trips GCC 13's -Wmaybe-uninitialized here, which CI's tests build with -Werror.
+auto Kernel::hostTimes(const std::string& host) -> std::array<s64, 3> {
+  struct stat data{};
+  if(stat(host.c_str(), &data)) return {};
+  s64 changed = data.st_mtime, made = changed;
+  #if defined(PLATFORM_WINDOWS)
+  made = data.st_ctime;
+  #elif defined(PLATFORM_MACOS) || defined(PLATFORM_BSD)
+  if(data.st_birthtime > 0) made = std::min<s64>(data.st_birthtime, changed);
+  #endif
+  return {made, std::max<s64>(data.st_atime, changed), changed};
+}
+
 //When a host file or folder was made, read and changed: three ScePspDateTimes (year, month, day, hour, minute,
 //second, then microseconds, left 0), one after another, as a SceIoStat and the savedata utility's lists hold them.
+//In local time, the clock's (sceRtcGetCurrentClockLocalTime's) zone: a memory stick's FAT keeps a file's local time,
+//no zone. Given in UTC, a save made in the last hours west of Greenwich was dated after the clock's now: After Burner:
+//Black Falcon, on a host 4 hours behind UTC, said "No game data was found" for a save made in those 4 hours without
+//asking the savedata utility for it, and found it once dated in the past. No date is later than the clock's local
+//now either: the PSP's clock (startTime, a whole second, and the time the PSP has run) falls behind the host's while
+//the emulation is paused or slower than a PSP, and after a state saved earlier is loaded, and the hour daylight saving
+//time gives back comes twice; a file the host changed after the clock's now is dated now. A FAT stick holds no date
+//before 1980: a time before then, or none, is 1980-01-01 00:00:00.
 auto Kernel::writeTimes(u32 address, const std::string& host) -> void {
-  auto putTime = [&](u32 at, nall::inode::time which) {
+  static constexpr s64 From1970To1980 = 315'532'800;  //seconds
+  static constexpr u16 Earliest[6] = {1980, 1, 1, 0, 0, 0};
+  s64 now = s64((startTime + cycles / (CPUFrequency / 1'000'000)) / 1'000'000), nowLocal = 0;
+  bool clocked = localSeconds(now, nowLocal);
+  auto times = hostTimes(host);
+  for(u32 n : range(3)) {
+    u32 at = address + n * 16;
+    s64 seconds = times[n], local = 0;
+    if(!localSeconds(seconds, local)) local = 0;
+    if(clocked && local > nowLocal) seconds = now, local = nowLocal;
     memory.fill(at, 0, 16);
-    std::time_t seconds = std::time_t(nall::inode::timestamp(host.c_str(), which));
-    if(auto when = std::gmtime(&seconds)) {
-      memory.write(2, at + 0, when->tm_year + 1900);
-      memory.write(2, at + 2, when->tm_mon + 1);
-      memory.write(2, at + 4, when->tm_mday);
-      memory.write(2, at + 6, when->tm_hour);
-      memory.write(2, at + 8, when->tm_min);
-      memory.write(2, at + 10, when->tm_sec);
+    if(local >= From1970To1980) {
+      writeDate(at, u64(seconds) * 1'000'000, true);
+    } else if(memory.reaches(at, 16)) {
+      for(u32 field : range(6)) memory.write(2, at + field * 2, Earliest[field]);
     }
-  };
-  putTime(address, nall::inode::time::create);
-  putTime(address + 16, nall::inode::time::access);
-  putTime(address + 32, nall::inode::time::modify);
+  }
 }
 
 //A path on the disc to what it names, its normalized form ("disc0:/PSP_GAME/SYSDIR") and its names. Returns 0, or

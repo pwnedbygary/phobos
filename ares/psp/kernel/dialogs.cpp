@@ -250,8 +250,10 @@ auto Kernel::dialogKeyboard(u32 p, DialogRequest& request) -> void {
 //(at 1412), a list's newData's (its pointer at 1476: an icon's file data, then its title's pointer), with newData's
 //title, or a single save's own titles. The one chosen at first is by focus (at 1480, in the larger sizes; PPSSPP's
 //names): 0 the request's save, 1 the first, 2 the last, 3 and 4 the latest and oldest there, 5 and 6 the first and
-//last there, 7 and 8 the first and last new; the first where there's none such.
-auto Kernel::dialogSaves(u32 p, DialogRequest& request) -> void {
+//last there, 7 and 8 the first and last new; the first where there's none such. Without details (the automatic
+//answer, which looks only at which saves are there, broken or not, and when each was saved), no save's size or icon
+//is read.
+auto Kernel::dialogSaves(u32 p, DialogRequest& request, bool details) -> void {
   namespace fs = std::filesystem;
   u32 mode = memory.read(4, p + 48);
   std::string game = memory.readString(p + 60, 13), save = memory.readString(p + 76, 20);
@@ -304,7 +306,9 @@ auto Kernel::dialogSaves(u32 p, DialogRequest& request) -> void {
   }
   u64 icons = 0;
   auto memoryFile = [&](u32 buffer, u32 size) -> std::vector<u8> {
-    if(!buffer || !size || size > IconMost || icons + size > IconsMost || !memory.reaches(buffer, size)) return {};
+    if(!details || !buffer || !size || size > IconMost || icons + size > IconsMost || !memory.reaches(buffer, size)) {
+      return {};
+    }
     std::vector<u8> bytes(size);
     memory.copyOut(bytes.data(), buffer, size);
     icons += size;
@@ -342,14 +346,15 @@ auto Kernel::dialogSaves(u32 p, DialogRequest& request) -> void {
       std::string file = fileName.empty() ? std::string{} : savePath(entry.folder, fileName);
       entry.broken = broken || (!fileName.empty() && (file.empty() || !fs::is_regular_file(file, error)));
     }
+    if(described.empty() || !fs::is_regular_file(described, error)) described = host;
+    entry.time = hostTimes(described)[2];
+    if(!details) continue;
     for(fs::directory_iterator at(host, error), end; !error && at != end; at.increment(error)) {
       std::error_code unread;
       if(!at->is_regular_file(unread)) continue;
       u64 size = at->file_size(unread);
       if(!unread) entry.size += size;
     }
-    if(described.empty() || !fs::is_regular_file(described, error)) described = host;
-    entry.time = s64(nall::inode::timestamp(described.c_str(), nall::inode::time::modify));
     std::string icon = savePath(entry.folder, "ICON0.PNG");
     std::error_code unread;
     u64 iconSize = icon.empty() || !fs::is_regular_file(icon, unread) ? 0 : fs::file_size(icon, unread);
@@ -367,29 +372,39 @@ auto Kernel::dialogSaves(u32 p, DialogRequest& request) -> void {
       request.saves.erase(request.saves.begin() + n);
     }
   }
-  auto& shown = request.saves;
-  u32 count = shown.size(), chosen = 0;
+  request.focus = dialogFocus(p, request.saves, save);
+}
+
+//Which of the saves shown a save dialog focuses at first, by its focus (dialogSaves()); unbroken, which it would among
+//the saves that aren't broken alone (the first of them where there's none such), the others passed over; 0 with none.
+auto Kernel::dialogFocus(u32 p, const std::vector<DialogRequest::Save>& shown, const std::string& save,
+                         bool unbroken) -> u32 {
   u32 focus = memory.read(4, p) > 1480 ? memory.read(4, p + 1480) : 0;  //(the smallest size, 0x5c8, ends before it)
+  std::vector<u32> taken;
+  for(u32 n = 0; n < shown.size(); n++) if(!unbroken || !shown[n].broken) taken.push_back(n);
+  u32 count = taken.size(), chosen = 0;
+  auto at = [&](u32 n) -> const DialogRequest::Save& { return shown[taken[n]]; };
   auto first = [&](bool there, bool last) {
     for(u32 n = 0; n < count; n++) {
-      u32 at = last ? count - 1 - n : n;
-      if(shown[at].there == there) return at;
+      u32 index = last ? count - 1 - n : n;
+      if(at(index).there == there) return index;
     }
     return 0u;
   };
+  if(!count) return 0;
   if(focus == 0) {
-    for(u32 n = 0; n < count; n++) if(shown[n].name == save) { chosen = n; break; }
+    for(u32 n = 0; n < count; n++) if(at(n).name == save) { chosen = n; break; }
   }
-  if(focus == 2 && count) chosen = count - 1;
+  if(focus == 2) chosen = count - 1;
   if(focus == 3 || focus == 4) {
     for(u32 n = 0, found = 0; n < count; n++) {
-      if(!shown[n].there) continue;
-      bool better = focus == 3 ? shown[n].time > shown[chosen].time : shown[n].time < shown[chosen].time;
+      if(!at(n).there) continue;
+      bool better = focus == 3 ? at(n).time > at(chosen).time : at(n).time < at(chosen).time;
       if(!found++ || better) chosen = n;
     }
   }
   if(focus >= 5 && focus <= 8) chosen = first(focus <= 6, focus == 6 || focus == 8);
-  request.focus = chosen;
+  return taken[chosen];
 }
 
 //The front end's answer applied: the dialog finishes with what a PSP's player's choice gives, or (deleting from a
@@ -420,7 +435,7 @@ auto Kernel::dialogAnswered(const DialogRequest& asked, const DialogAnswer& give
     memory.write(4, p + 28, 0);
   }
   if(asked.kind == DialogSavedata) {
-    auto answer = dialogSaved(asked, given);
+    auto answer = dialogSaved(p, asked, given);
     if(!answer) return;
     memory.write(4, p + 28, *answer);
   }
@@ -433,11 +448,11 @@ auto Kernel::dialogAnswered(const DialogRequest& asked, const DialogAnswer& give
 //closed finishes LOAD_NO_DATA, and with nothing to delete DELETE_NO_DATA, whatever's answered; backed out of, CANCEL
 //(1); a save chosen (and its question answered yes), what loading, saving or deleting it gives (savedata(): 0, or
 //the error a broken save gives, as utility/savedata/loadbroken's list loads did), a list's choice written into the
-//request's save name first (PPSSPP's notes: loads and saves copy it back). Deleting from a list deletes the save and
-//asks again, the list without it, until it's backed out of (CANCEL) or there's nothing left to delete
+//request's save name first (savedata(); PPSSPP's notes: loads and saves copy it back). Deleting from a list deletes
+//the save and asks again, the list without it, until it's backed out of (CANCEL) or there's nothing left to delete
 //(DELETE_NO_DATA, as utility/savedata/deletedata's list delete of the test's one save finished).
-auto Kernel::dialogSaved(const DialogRequest& asked, const DialogAnswer& given) -> std::optional<u32> {
-  u32 p = dialog.parameters, mode = asked.mode;
+auto Kernel::dialogSaved(u32 p, const DialogRequest& asked, const DialogAnswer& given) -> std::optional<u32> {
+  u32 mode = asked.mode;
   bool none = asked.saves.empty() || ((mode == 2 || mode == 10) && !asked.saves[0].there);
   if(none && (mode == 2 || mode == 4)) return SavedataLoadNoData;
   if(none && (mode == 6 || mode == 7 || mode == 10)) return SavedataDeleteNoData;
@@ -457,9 +472,41 @@ auto Kernel::dialogSaved(const DialogRequest& asked, const DialogAnswer& given) 
     return {};
   }
   if(mode != 4 && mode != 5) return savedata(p);
-  memory.fill(p + 76, 0, 20);
-  memory.copyIn(p + 76, chosen.name.data(), std::min<u64>(chosen.name.size(), 19));
   return savedata(p, &chosen.name);
+}
+
+//A save dialog no front end shows, answered as a PSP's player who confirms what it shows first. A list's load naming
+//no save of its own takes the save the dialog focuses among those it shows (only saves that are there), or, that one
+//broken, the one the same focus takes among those that aren't (chosen: a player told it's corrupted takes another,
+//the latest still where the latest was focused; the focused one if all are broken); a list's save naming none takes
+//the list's first name, whatever the focus (chosen: where the automatic answer's later loads will find it; a dialog
+//focusing a new slot, 7 or 8, would spread the saves over the list, and a load focusing the first would then take the
+//oldest). Either name is written into the request's save name, as a choice is (savedata()). Every other mode, a list
+//request that names its save (chosen: that save), a list with no first name, a game's name that isn't a plain one, a
+//list save to "<>" (the game's folder alone) and a list the dialog would show nothing from are answered by savedata()
+//as before (no data to load, or a name refused). Taking the list's first name whether there or not, a load from a
+//list whose first save wasn't made found no data with others there (7th Dragon 2020 lists DATA00 to DATA49); with no
+//name written back, Brandish: The Dark Revenant made nothing of a load from a list. Only which saves are there, broken
+//or not, and their dates are looked at, not their sizes or icons: this runs on the emulation thread, and Brandish
+//lists 99 names.
+auto Kernel::savedataUnshown(u32 p) -> u32 {
+  u32 mode = memory.read(4, p + 48), names = memory.read(4, p + 96);
+  std::string game = memory.readString(p + 60, 13), save = memory.readString(p + 76, 20);
+  std::string first = names && memory.reaches(names, 20) ? memory.readString(names, 20) : std::string{};
+  bool unnamed = save.empty() || save == "<>";
+  if((mode != 4 && mode != 5) || first.empty() || !unnamed || !plainName(game, 13)) return savedata(p);
+  if(mode == 5) return first != "<>" && plainName(first, 20) ? savedata(p, &first) : savedata(p);
+  DialogRequest request;
+  request.kind = DialogSavedata;
+  dialogSaves(p, request, false);
+  if(request.saves.empty()) return savedata(p);
+  DialogAnswer given;
+  given.choice = s32(request.focus);
+  if(request.saves[request.focus].broken) {
+    u32 other = dialogFocus(p, request.saves, {}, true);
+    if(!request.saves[other].broken) given.choice = s32(other);
+  }
+  return dialogSaved(p, request, given).value_or(DialogCancelled);
 }
 
 //The byte form of a request, for a front end in another language (Phobos's Android app, through ares's

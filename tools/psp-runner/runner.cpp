@@ -34,6 +34,8 @@
 //    --pipeline-cache FILE      the Vulkan renderer's pipelines kept in FILE between runs, as the app keeps them
 //    --memory-stick DIR         the host folder standing for ms0: (a scratch folder by default)
 //    --fonts DIR                the PSP's system fonts (the .pgf files of a PSP's flash0), for the game's text
+//    --trace-savedata           each savedata request and its answer, a line with its frame: the mode, the game's
+//                                and the save's names, the data file's, the sizes and the result
 //
 //The frames its PNGs name are the frames the runner ran: after a frame's run, the runner waits for the screen's
 //own thread to present a new picture (with a timeout), then writes it as a PNG named by the frame run.
@@ -378,7 +380,7 @@ auto main(int argc, char** argv) -> int {
   std::vector<std::string> pressItems;
   bool lateFrames = false;
   std::string pipelineCache;
-  bool interpreter = false;
+  bool interpreter = false, traceSavedata = false;
   for(int i = 1; i < argc; i++) {
     auto option = std::string{argv[i]};
     auto next = [&]() -> std::string {
@@ -421,6 +423,7 @@ auto main(int argc, char** argv) -> int {
     else if(option == "--pipeline-cache") pipelineCache = next();
     else if(option == "--memory-stick") memoryStick = next();
     else if(option == "--fonts") fonts = next();
+    else if(option == "--trace-savedata") traceSavedata = true;
     else if(option[0] == '-' && option[1] == '-') {
       std::fprintf(stderr, "no such option: %s\n", option.c_str());
       return 1;
@@ -562,6 +565,11 @@ auto main(int argc, char** argv) -> int {
   };
   psp.kernel.output = [&](const std::string& text) { record(false, text); };
   psp.kernel.log = [&](const std::string& text) { record(true, text); };
+  if(traceSavedata) {
+    psp.kernel.savedataTrace = [&](const std::string& text) {
+      std::printf("[%06u] savedata: %s\n", frameNumber.load(), text.c_str());
+    };
+  }
 
   //A state loaded at once: the game booted, then the machine as it was when it was saved.
   if(!loadState.empty()) {
