@@ -65,10 +65,11 @@ scripts and CI only: no core or app change, no check loosened.
   (damaged?)". After the review: `PHOBOS_TESTS_REQUIRE="vulkan, programs ,ge-round3"` taken (60/0);
   `"vulkan,Programs"` fails before the groups ("names Programs, which no test skips for"); an unpacked file kept
   whole changed after unpacking fails ("fpu-arith-safe.bin isn't the file the PSP made (SHA256SUMS3)"), restored
-  60/0. CI on #246
-  (run 38439504812, at `60e8f1e14`): the system suite "497 groups, 0 failures, 1 skipped" (vulkan-unordered-reads:
-  lavapipe reads in order), with every requirement met; the ares system 318/0; Allegrex 60/0; the runner's test
-  passing; the reports kept.
+  60/0. CI on #246 (run 38439504812, at `60e8f1e14`): the system suite "497 groups, 0 failures, 1 skipped"
+  (vulkan-unordered-reads: lavapipe reads in order), with every requirement met; the ares system 318/0; Allegrex
+  60/0; the runner's test passing; the reports kept. After the review: run 38448816745 (`aa197ced0`, the stencil
+  export required too: 497/0, 1 skipped) and run 38454904089 (`0c44ebd4b`, with #243's groups: "502 groups, 0
+  failures, 1 skipped", the report 501 pass lines, 1 skip and its summary line).
 - **Negative controls** (run 38439595119, dispatched on a disposable branch whose workflow ran the lanes these ways;
   deleted after): `cube.elf` missing from the programs while they're required: "497 groups, 3 failures, 1 skipped",
   each FAIL naming it ("programs is required here (PHOBOS_TESTS_REQUIRE), and cube.elf isn't in
@@ -81,7 +82,8 @@ scripts and CI only: no core or app change, no check loosened.
   variable: with the folder set but a file missing, `curves.cpp` went on silently, and `measure.cpp` only describes;
   and that the requirement list was matched exactly (a space, a capital or a typo dropped a requirement), the report
   left the reason off FAIL lines, some scale loops and the stencil-export way were dropped silently, and these docs
-  were stale. All taken (above); its suggestion of checking the files kept whole against the PSP's sums too.
+  were stale. All taken (above); its suggestion of checking the files kept whole against the PSP's sums too. A delta
+  review passed it; its nit taken: `stencilFormats()`'s loop over the scales says its skip too.
 
 ## Tests: the host suites' objects kept by what they include and how they're compiled, a checkout's apart — 2026-10-13
 
