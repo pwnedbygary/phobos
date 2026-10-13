@@ -25,6 +25,40 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces — 2026-10-13
+
+Branch `cursor/psp-font-b03-2b67`, on master (`b3507c1db`), PR #236. docs/psp-core.md, part 87, has the evidence. Clean
+room: the games' own code and traces, pspautotests' recordings; PPSSPP read only as a description of the PSP (its issue
+5954, its sceFont's model of closing and of a character's memory), nothing copied; JPCSP not read. Save states: layout
+27 (26 and older load, their fonts holding no glyph).
+- **Jeanne d'Arc** (deep play batch 03, bug 1: "Loading..." for good at its first battle): two of its text objects close
+  one font handle twice; the HLE refused the second close, and the game, which takes a lock of its own around each call
+  into the library and gives it back only for a 0, then waited for that lock forever. A PSP answers 0 there (the game
+  loads its battles on one), so sceFontClose of a library's handle that's closed already now does nothing and returns 0
+  (a handle no library has is still refused). From its briefing state the first battle loads: its battle map, then the
+  Combat tutorial.
+- **Final Fantasy III** (batch 02, bug 2: none of its own text): its three fonts are in VRAM, which
+  sceFontOpenUserMemory didn't read (RAM only), so every open failed and the game drew with handle 0. A font in memory
+  is read from RAM, VRAM or the scratchpad now: from boot its name screen, battle windows and dialogue have their text
+  (its play-tester's state keeps the failed opens it was saved with).
+- **Hammerin' Hero** (batch 03, bug 3: words run together): the game spaces a line by its own rule, a space a quarter of
+  the space's advance (1.7 pixels) or, when the space's details are refused, a quarter of 18 (4.5). On a PSP its words
+  are spaced, so the details are refused there: a PSP's libfont reads each glyph into memory of the program's
+  (fonttest: the record and the picture, 71 and 210 bytes for jpn0's 'H'), a space's picture is 0 bytes, and this
+  game's alloc (a VPL) refuses 0 bytes. The HLE does the same now: a character's details and pictures read its glyph
+  into two blocks of the program's, the font holding the last one read and giving it back when another is read, on
+  closing, on sceFontFlush and with the library; a block not given fails the call (out of memory). Its text is spaced
+  as on a PSP. Choices where nothing shows the PSP (the order of giving back, the flush, shadows and picture sizes
+  reading nothing, opens keeping part 23's rule for a 0-byte block) are marked in the code and in part 87.
+- **Regression check** (master's runner against the branch's, PNGs compared): Growlanser IV from its state in play and
+  in its menu, and 21 more of the play-testers' sceFont games from boot (Gran Turismo's 5,508 glyphs read among them):
+  every frame the same pixel for pixel but one of Crush's, its title's background a step apart (the time its 811 reads
+  take now). The last three (Guilty Gear XX Accent Core Plus, both Hot Shots) were still running as this was written.
+- **Checks**: tests/psp 483 groups, 0 failures (five new font groups; the state fields' new ones), tests/allegrex 60/0,
+  tests/psp/ares 318/0.
+- **Scratch**: `~/phobos-work/scratch/font-b03/` on the Mac it was made on (runs, traces, comparison sheets, the scratch
+  tracer's patch), not in the repository.
+
 ## PSP: where the slow games' emulation thread goes — the GPU's palette pictures decoded where taken, code forgotten only where there is some, calm system calls, more of the CPU compiled — 2026-10-12
 
 Branch `cursor/psp-cpu-speed5-2b67`, on master (`6ab2c5583`, #224 merged in). docs/psp-core.md, part 79, has the
