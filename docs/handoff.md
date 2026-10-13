@@ -13,10 +13,14 @@ Read in order:
 3. [Performance audit](performance-audit.md) and [benchmark protocol](mario-tennis-benchmark.md).
 4. [Implementation history](implementation-history.md) only for relevant historical details.
 
-Next action: establish matched Phobos/v336 APK, device, driver, settings and scene
-identities, then collect baseline traces. No optimization or performance parity
-has been demonstrated. Do not resume the cancelled signing or audio-buffer tasks
-without new authorization. Preserve saves and do not assume APK update compatibility.
+Current focus (2026-10-13): the PSP core (its parts in [psp-core.md](psp-core.md), and the
+entries below, newest first) and the [test and performance plan](implementation-plan.md#test-and-performance-plan-2026-10-13):
+PSP throughput, fast-forward and Vulkan at 1x, 2x, 4x and 5x, accurate and fast modes
+measured apart, with the N64/Mario Tennis regressions kept. A matched Phobos/v336
+comparison (APK, device, driver, settings, scene and traces) has still not been made, and
+no overall speedup or parity is claimed. Do not resume the cancelled signing or
+audio-buffer tasks without new authorization. Preserve saves and do not assume APK update
+compatibility.
 
 Publication preparation: the plan reconciliation received independent PASS,
 including byte-for-byte preservation of the original plan in its archival appendix.
@@ -24,6 +28,29 @@ This follow-up corrects cancelled signing-task status and adds this portable ent
 point, and restores tracking of the existing `.gitmodules` file for fresh clones.
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
+
+## Docs: the plan's opening and evidence brought up to date; the 2026-10-13 test and performance plan indexed — 2026-10-13
+
+Branch `cursor/test-plan-01-2b67`, on master (`4788125f1`, #236). Package 01 of the 2026-10-13 test and performance
+plan, an outside audit of master `b3507c1db` given to the owner as a plan bundle (not kept in the repository).
+Documentation only.
+- **The stale summaries**: the implementation plan opened with "Last reconciled: 2026-09-25" and "zero fresh native
+  performance runs", and this file's entry point with September's next action, though later sections record the
+  RP6's N64 measurements (from 2026-09-25), the 2026-10-02 presentation comparison with Mupen64Plus-AE, the desktop
+  builds and the PSP core's parts (76 of them on master, up to part 87). Now the plan's opening and its evidence
+  boundary sort what's known by kind: checked on CI's hosts, measured on the RP6 (dated, linked), waiting for the
+  RP6, on branches, proposed. The current priority (the PSP's throughput, fast-forward and Vulkan scaling, accurate
+  and fast apart) is named, the N64 regressions kept, and no comparison is presented as new. Nothing historical is
+  removed.
+- **The plan indexed**: the implementation plan's "Test and performance plan (2026-10-13)" lists the 25 packages
+  with the triage's disposition (seven now, 16 later, each waiting on a named PR or package, two not now), what each
+  waits on, and its PR.
+- **Baseline at triage** (master `9333a8d7a`; now `4788125f1`): the libadrenotools submodule at `8fae8ce25`; open
+  PRs #223, #229-#232, #237, #240, #243 (the agents' own), and this plan's #238, #239, #241; CI on `0a9a7fa75`:
+  PSP Core Tests 60/0 and 489/0, Desktop Build green, Android Build cancelled in its SDK cache's post step after 37
+  minutes (package 02). The Mac: macOS 27.0.1, Apple clang 21.0.0, glslang 16.6.0, JDK 17.0.20.1.
+- **Checks**: `git diff --check`; the links' targets (the plan's new anchor, the audit's two sections, psp-core.md)
+  read back.
 
 ## PSP: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces — 2026-10-13
 
