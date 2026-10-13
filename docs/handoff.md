@@ -25,7 +25,7 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
-## CI: the CPU's tests on an ARM64 host, the RSP's NEON checked there; the CPU's and the system's tests built as the app is — 2026-10-13
+## CI: the CPU's tests on an ARM64 host and built as the app is, the RSP's NEON checked on ARM64; the system's tests can be built so too — 2026-10-13
 
 Branch `cursor/test-plan-06-2b67` (PR #247), stacked on `cursor/test-plan-04-2b67` (#246, on #245, on #241).
 Package 06 of the 2026-10-13 test and performance plan (indexed in the implementation plan by package 01's PR). Test
@@ -39,28 +39,45 @@ scripts and CI only: the app's build and its flags are unchanged.
   `tests/rsp-vu-neon/run-tests.sh 3000 0x5253505655` there on changes to the RSP, the harness or sse2neon. Their
   summaries name the host (`uname -m`, the compiler) and the commit.
 - **Built as the app is** (`PHOBOS_TESTS_MODE=release` in `tests/allegrex` and `tests/psp`): `BUILD_RELEASE`
-  (NDEBUG: the core's four asserts out, as in the app; no test uses assert), `SLJIT_DEBUG=0`, `-O3 -ftree-vectorize
+  (NDEBUG: the core's five asserts out, as in the app; no test uses assert), `SLJIT_DEBUG=0`, `-O3 -ftree-vectorize
   -funroll-loops -fno-math-errno -fno-trapping-math`, no sanitizers unless `SANITIZE` names some; not the app's
   link-time optimization (`-flto=thin` is clang's, CI's compiler is GCC). sljit's C file and the C++ files get the
   same mode. The default stays the sanitized debug build. CI runs it beside each sanitized run in both Allegrex jobs
-  (a second step).
-- **A finding: `tests/psp` built as the app is doesn't compile with GCC.** Its lane ("PSP system tests, built as the
+  (a second step); the ARM64 lane fails unless its host is `aarch64`. `tests/psp` takes the same switch, but its
+  lane is a draft of its own (#249) because the build doesn't get through GCC yet (below), so package 06's release
+  lane is met for the CPU's tests only until that's settled.
+- **A finding: `tests/psp` built as the app is doesn't get through GCC.** Its lane ("PSP system tests, built as the
   app is", run 38439997353) failed: GCC 13 at `-O3` with `-Werror` reports `-Wmaybe-uninitialized` in
-  `ares/psp/ge/four.cpp` (lines 44, 231, 243, 262, through `pickLanes()`, `texelsFour()` and `spriteFours()`): `Four
-  four;` is declared without a value and `pickLanes()` reads `four.depth`, and lanes of `downAxis[]`, where the mask
-  then drops them. The results look masked off, but those are reads of indeterminate values (undefined in C++).
-  Apple clang 21 compiles the same `ge.cpp` at the same flags with `-Werror` cleanly, and the app is built by the
-  NDK's clang with `-w`. The fix belongs in the software renderer's innermost loop (the GE, #240's area), with its
-  speed measured, so it isn't made here, and `-Werror` isn't loosened for the lane: the lane is in a draft PR of its
-  own (stacked on this one), red until `four.cpp` is settled.
+  `ares/psp/ge/four.cpp` (lines 44, 231, 243, 262, through `pickLanes()`, `texelsFour()` and `spriteFours()`), for
+  `Four::depth` in `spriteFours()`'s `Four four;` and for `downAxis[]`. They're false positives, which `-Werror`
+  turns into an error (the review's reading): `four.depth` is read only by `writeDepth()`, which runs only where the
+  depth is written (a clear's depth, or `depthWrite`), and `depthFirst()`, always run first, assigns all four lanes
+  whenever the depth is tested; `depthWrite` is only ever on with `depthTest` (`pixel.cpp:93`), which GCC can't see
+  through two separate flags. `downAxis[]` is read only for a textured sprite, and every textured path assigns all
+  three. Only sprites warn because `triangleFours()` already sets `four.depth = s32x4{};` before `depthFirst()`.
+  Apple clang 21 compiles the same `ge.cpp` at the same flags with `-Werror` cleanly (silent even with
+  `-Wconditional-uninitialized`), and the app is built by the NDK's clang with `-w`. The review's suggested fix,
+  `four.depth = s32x4{};` in `spriteFours()` as triangles do and `s32x4 downAxis[3] = {};` (not `Four four{}`, which
+  zeroes ten vectors per four), is `four.cpp`'s alone, outside #240's files; it isn't made here because it's the
+  software renderer's innermost loop and wants its speed measured. `-Werror` isn't loosened: the lane stays red in
+  its draft, and GCC stops at the first failed compile, so what else GCC finds at `-O3` (it compiled 5 of about 50
+  files) shows once `four.cpp` is settled.
 - **Checks** (the Mac, arm64, Apple clang 21): `PHOBOS_TESTS_MODE=release tests/allegrex/run-tests.sh` 60/0 (7
   objects of its own, 18 s with the run); `tests/rsp-vu-neon/run-tests.sh 3000 0x5253505655`: 10,420,000 checks, no
   NEON or reference mismatch; actionlint on the workflows. CI on #247 (run 38439997353): Allegrex 60/0 sanitized and
   60/0 built as the app is, on x86-64 and on `aarch64` (GCC 13.3); RSP NEON (run 38439997492, `aarch64`): 10,420,000
-  checks, no mismatch.
-- **Negative controls** (draft PR #248, deleted after): EOR emitted with ORR's encoding in sljit's ARM64 back end:
-  the ARM64 lane failed ("alu (recompiler)" and the recompiler against the interpreter, 0x16e mismatches; x86-64
-  doesn't build that back end); the RSP's NEON `ADD_4S` emitted as `SUB_4S`: "NEON differs from SSE" at VMADM, failed.
+  checks, no mismatch. Merged with the stack below: runs 38448910923 (`c2d54f724`) and 38454946526 (`014c037b1`),
+  every job green; RSP NEON 38454946627.
+- **Negative controls** (draft PR #248, closed and its branch deleted; runs 38440061339 and 38440061297): EOR emitted
+  with ORR's encoding in sljit's ARM64 back end: the ARM64 lane failed ("alu (recompiler)" and the recompiler against
+  the interpreter, 0x16e mismatches; x86-64 doesn't build that back end, and passed); the RSP's NEON `ADD_4S` emitted
+  as `SUB_4S`: "NEON differs from SSE" at VMADM, failed.
+- **Review**: an independent read-only review checked the mode switch (the default's flags, so its objects, are
+  unchanged), the workflows, the logs and both controls, and re-ran the release-built Allegrex suite, the RSP harness
+  and `ge.cpp` at the release flags on the Mac. It found these notes wrong on `four.cpp` (they called the warnings
+  indeterminate reads; above, corrected) and on the asserts' count, and the heading claiming the system's tests built
+  as the app is; all corrected. Its suggestions taken: the ARM64 lane checks its host; the workflow's note on the kept
+  results says which runs keep them.
 
 ## Tests: a skip says what's missing, and fails where the lane must have it; the Allegrex measurements unpacked by content — 2026-10-13
 
@@ -102,10 +119,11 @@ scripts and CI only: no core or app change, no check loosened.
   (damaged?)". After the review: `PHOBOS_TESTS_REQUIRE="vulkan, programs ,ge-round3"` taken (60/0);
   `"vulkan,Programs"` fails before the groups ("names Programs, which no test skips for"); an unpacked file kept
   whole changed after unpacking fails ("fpu-arith-safe.bin isn't the file the PSP made (SHA256SUMS3)"), restored
-  60/0. CI on #246
-  (run 38439504812, at `60e8f1e14`): the system suite "497 groups, 0 failures, 1 skipped" (vulkan-unordered-reads:
-  lavapipe reads in order), with every requirement met; the ares system 318/0; Allegrex 60/0; the runner's test
-  passing; the reports kept.
+  60/0. CI on #246 (run 38439504812, at `60e8f1e14`): the system suite "497 groups, 0 failures, 1 skipped"
+  (vulkan-unordered-reads: lavapipe reads in order), with every requirement met; the ares system 318/0; Allegrex
+  60/0; the runner's test passing; the reports kept. After the review: run 38448816745 (`aa197ced0`, the stencil
+  export required too: 497/0, 1 skipped) and run 38454904089 (`0c44ebd4b`, with #243's groups: "502 groups, 0
+  failures, 1 skipped", the report 501 pass lines, 1 skip and its summary line).
 - **Negative controls** (run 38439595119, dispatched on a disposable branch whose workflow ran the lanes these ways;
   deleted after): `cube.elf` missing from the programs while they're required: "497 groups, 3 failures, 1 skipped",
   each FAIL naming it ("programs is required here (PHOBOS_TESTS_REQUIRE), and cube.elf isn't in
@@ -118,7 +136,8 @@ scripts and CI only: no core or app change, no check loosened.
   variable: with the folder set but a file missing, `curves.cpp` went on silently, and `measure.cpp` only describes;
   and that the requirement list was matched exactly (a space, a capital or a typo dropped a requirement), the report
   left the reason off FAIL lines, some scale loops and the stencil-export way were dropped silently, and these docs
-  were stale. All taken (above); its suggestion of checking the files kept whole against the PSP's sums too.
+  were stale. All taken (above); its suggestion of checking the files kept whole against the PSP's sums too. A delta
+  review passed it; its nit taken: `stencilFormats()`'s loop over the scales says its skip too.
 
 ## Tests: the host suites' objects kept by what they include and how they're compiled, a checkout's apart — 2026-10-13
 
@@ -173,7 +192,11 @@ plan by #244). Build scripts only: no core, app or test source changes.
   and the copy left in `phobos-psp-runner/`. CI on the reviewed scripts (run 38448696924 at `a476470ec`; Linux, GCC
   13, bash 5): `tests/objects-test.sh` 18 cases, 0 failures (the case within the second ran), Allegrex 60/0, the
   system suite 497/0 (every source its own object now), the ares system 318/0, the runner's test passing; NGCD
-  2835/0 (run 38448696864). CI on this head: below once run.
+  2835/0 (run 38448696864). CI on the final scripts (run 38454888271 at `86a5a80d0`): `tests/objects-test.sh` 21
+  cases, 0 failures (the case within the second ran), Allegrex 60/0, the system suite 502/0 (#243's five groups
+  more), the ares system 318/0, the runner's test passing; NGCD 2835/0 (run 38454887111). A second delta review
+  passed it; its nit taken: the leftovers' pattern is the 16 hex digits and a process number, so a folder's own
+  files of a like name aren't taken.
 - **Review**: an independent read-only review found a major hole (a word after the first in CC or CXX wasn't in
   the key: `CC="cc -DEXTRA=9"` after `cc` compiled nothing and ran the old program), and minor ones: a header edited
   during a compile never rebuilt, the stale-file cleanup reaching anything in a folder handed to NGCD, an exported
@@ -228,6 +251,72 @@ in the implementation plan). CI only: no core, app or test code changes.
   master's runs not cancelled, the empty-log case). A delta review found that a concurrency group holds one waiting
   run, so a third quick push to master still cancelled the waiting one: non-PR runs now get a group each (the run's
   ID).
+
+## PSP: the host's right stick for patched games, the keyboard in a field's own characters, 7th Dragon 2020-II past its certificate — 2026-10-12
+
+Branch `cursor/psp-input-b00-2b67`, on master (`6ab2c5583`, merged with `b7ea296f4`, #227, then `1d9308714`, #228).
+docs/psp-core.md, part 81, has the evidence. Items 3 and 4 of the deep-play batch 00 report
+(`~/phobos-work/deepplay/batch-00-report.md`). Clean room: pspsdk's psputility_osk.h and pspctrl.h, pspautotests'
+ctrl/sampling, the games' own code traced with a scratch runner, PPSSPP read only as a description of the PSP (its
+right-stick convention, its note on a negative ATRAC size); JPCSP not read. Save states unchanged (StateVersion 26).
+Begun by one agent, finished by another (the first stopped on finding the second in its worktrees); both agents'
+commits are on the branch, and a third's with an independent review's points.
+- **Right stick** (the owner's decision: pspsdk's Rx and Ry, as a PSP Go with a DualShock 3, a Vita and emulators
+  fill them; the PSP itself has no second stick): every
+  SceCtrlData sample carries the host's right stick in bytes 10 (X) and 11 (Y), 128 when centred, in every game and
+  every sceCtrl read, whatever the PSP Right Stick setting (Off, the default, then does nothing else); centred in
+  digital sampling as the left stick is; the last four bytes 0; not in states. The core takes it from "R-Stick X" and
+  "R-Stick Y"; the app hands the right stick to it in every choice (with Analog stick it is the PSP's stick and the
+  patched games' second one at once: the setting's description says Off suits those games). The runner takes
+  `R-StickX:` and `R-StickY:` in `--press` and `--script` (README). The four Armored Core True Analogs images read it:
+  Formula Front International's camera now rests level behind the AC after "GO!!!" and turns and pitches with the
+  right stick (it pitched up at the sky and the AC turned left on its own).
+- **Keyboard**: `Kernel::keyboardConform()` (utility.cpp) gives text as a field of PSP_UTILITY_OSK_INPUTTYPE_* types
+  and lines takes it (the other width, case or kana where one fits, else left out; spaces full-width only where only
+  full-width types; line breaks only in fields of several lines; Latin letters ASCII's and U+00C0-024F's, every printed
+  character without a class a Japanese symbol). The automatic answer's nickname goes through it: both 7th Dragon
+  games' name fields are full-width letters only (0x0c00), so "PSP" is now U+FF30 U+FF33 U+FF30 (2020's hero was
+  nameless); a field taking none of it gets "ぴーえすぴー", "ﾋﾟｰｴｽﾋﾟｰ", "ПСП", "피에스피" or "1", the first it takes
+  whole. The app's keyboard shows what's typed as Android's keyboard composes it and enters it converted (a line under
+  the field shows the form entered where it differs); the core converts the app's answer again. The game's own text
+  left as the field showed it is entered as the game gave it, by both (Ridge Racer 2's "XEVIOUS", in a field of small
+  letters alone, stays so). The Kotlin and C++ conversions run one table of cases
+  (`android/app/src/test/resources/psp-keyboard-cases.txt`).
+- **7th Dragon 2020-II's certificate** (found by the first agent): the name wasn't what froze it; the game hands
+  `sceAtracSetDataAndGetID` the size 0xffffffff for a sound read whole into its buffer, which was refused. A size with
+  its top bit set now reaches to the end of the buffer's memory (none: refused as before), taken in `atracSet()` and
+  `atracSetAndGetID()` so that the sound branch (#229) merges with this one without a conflict in `atrac.cpp`. The game
+  goes on into its story.
+- **An independent review of the merged branch** (one Medium, four Lows), all taken by a third agent after the second
+  stopped: the game's own text unedited entered as it is and a wider classifier (the Medium: OK on a default had
+  entered a changed or empty name); the fallback nicknames; pspsdk's Rx/Ry in the comments and docs; one table of
+  cases for both conversions, no half of a pair kept or cut in the core; `atrac.cpp` merging cleanly with #229.
+  Part 81's "The review's points" has each, and what wasn't done (an edited default is converted whole).
+- **Checks** on the final tree (with the review's points): `tests/psp/run-tests.sh` (sanitizers) 478 groups, 0
+  failures; `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 328 checks, 0 failed;
+  Android `:app:compileModernReleaseKotlin :app:testModernDebugUnitTest` 304 tests, 0 failures (before it, 472 groups
+  on `04b274924`). Games with the branch's runner: part 81's last paragraph.
+- **Library**: not run by the agents (the second agent's run stopped with its session); the owner runs the 266-game
+  comparison for this branch and #229 together.
+- **Review**: the first agent's independent review (`~/phobos-work/scratch/hle-b00/review-pr-a.md`: the app's keyboard
+  converting keys under Android's composition, a state test, comments, line breaks, a negative size on no memory) had
+  its points taken in `04b274924`; a second independent review of the branch (PASS, no High or Medium) had its Low and
+  Nit points taken in `e743fbcff` (all four ATRAC setters given the whole file take a negative size; the app's field
+  holding nothing past its limit, and saying so when nothing will be entered; no control characters in a field of any
+  type; comments and docs).
+- **On the RP6, to check**: (1) An Armored Core True Analogs image (Formula Front International, 3 Portable, Last
+  Raven or Silent Line Portable) with the PSP Right Stick setting on Off and a controller whose right stick is bound
+  (R-Up/Down/Left/Right, as by default): in a battle, after "GO!!!" and with the right stick untouched, the camera stays
+  level behind the AC and the radar's heading holds; right stick right and left turns the AC, up and down tilts the
+  view (it stays where it's left, as the mod has it). With Analog stick chosen, the right stick moves the AC and the
+  camera at once (expected). (2) 7th Dragon 2020 and 2020-II, a new game: on the name screen, NAME opens the keyboard;
+  typing "Bob" shows "Bob" with "Ｂｏｂ" under it, OK enters "Ｂｏｂ", the game shows the name; 2020-II's certificate
+  then passes into the story. (3) Japanese typed by romaji in a kana field composes normally. (4) Ridge Racer 2's
+  driver name: OK on its default ("XEVIOUS" or another Namco title, in capitals) keeps it in capitals, with no line
+  under the field; typing over it shows the small letters it will be entered in.
+- Scratch: `~/phobos-work/scratch/hle-b00` (runners in `bin/`, the runs in `runs/`, the library runs `lib-*`);
+  `~/phobos-work/scratch/review-b00` (the review's points: the runners, the runs in `runs/`, the scratch front end in
+  `front/`).
 
 ## PSP: modules from downloads — sceKernelLoadModuleNpDrm, packed relocations, imported variables; God Eater 2 in English — 2026-10-13
 

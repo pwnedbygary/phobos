@@ -168,7 +168,8 @@ auto nodeTree() -> void {
                     "Start"}) {
     CHECK((bool)root->find<Node::Input::Button>(string{"Controls/", name}), std::string{"a button "} + name);
   }
-  for(auto name : {"L-Stick X", "L-Stick Y"}) {
+  //(the right stick no PSP has: kernel/ctrl.cpp's convention)
+  for(auto name : {"L-Stick X", "L-Stick Y", "R-Stick X", "R-Stick Y"}) {
     CHECK((bool)root->find<Node::Input::Axis>(string{"Controls/", name}), std::string{"an axis "} + name);
   }
   auto drive = root->find<Node::Port>("UMD Drive");
@@ -254,7 +255,15 @@ auto program(const fs::path& programs, bool recompile) -> void {
   host.held = {{"L-Stick X", 0}, {"L-Stick Y", -1}};
   root->run();
   CHECK(psp.kernel.controller.analogX == 128 && psp.kernel.controller.analogY == 127, "the stick's middle");
+  //the right stick the same way, apart from the left; 128 each way when left alone
+  CHECK(psp.kernel.controller.rightX == 128 && psp.kernel.controller.rightY == 128, "the right stick left alone");
+  host.held = {{"R-Stick X", 32767}, {"R-Stick Y", -32768}};
+  root->run();
+  CHECK(psp.kernel.controller.rightX == 255 && psp.kernel.controller.rightY == 0, "the right stick's far corner");
+  CHECK(psp.kernel.controller.analogX == 128 && psp.kernel.controller.analogY == 128, "the left stick left alone");
   host.held.clear();
+  root->run();
+  CHECK(psp.kernel.controller.rightX == 128 && psp.kernel.controller.rightY == 128, "the right stick let go");
 
   root->unload();
 }
