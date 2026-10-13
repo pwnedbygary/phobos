@@ -163,17 +163,19 @@ object GameInputState {
     /**
      * Takes the sticks' positions, as the user's bindings give them, for a game of [systemName]; the
      * caller pushes. A PSP game has one analog stick, so [pspRightStick] can make the right stick
-     * press buttons, or be that stick.
+     * press buttons, or be that stick. The right stick still goes to the core as itself in every
+     * choice: the PSP core hands it to games patched to read a second stick (ares/psp/kernel/ctrl.cpp).
      */
     internal fun updateSticks(newLx: Float, newLy: Float, newRx: Float, newRy: Float, systemName: String, pspRightStick: PspRightStick) {
         val rightStick = if (systemName == LaunchSystems.PSP) pspRightStick else PspRightStick.OFF
         rightStickDirections = stickDirections(newRx, newRy, rightStickDirections)
         rightStickButtons = rightStick.buttons(rightStickDirections)
         if (rightStick == PspRightStick.ANALOG) {
-            lx = newRx; ly = newRy; rx = newLx; ry = newLy
+            lx = newRx; ly = newRy
         } else {
-            lx = newLx; ly = newLy; rx = newRx; ry = newRy
+            lx = newLx; ly = newLy
         }
+        rx = newRx; ry = newRy
     }
 
     /** Whether a button an axis drives is down at [magnitude], its direction's deflection, with the hysteresis above. */
