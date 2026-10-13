@@ -173,6 +173,7 @@ auto Kernel::loadModule(const std::vector<u8>& file, const std::string& path) ->
   loaded.uid = newUID();
   if(!loaded.uid) return release(loaded.block), ErrorNoMemory;
   for(auto& skipped : loaded.module.skipped) note(path + ": the loader left out " + skipped);
+  noteSystemVariables(loaded.module, path + ": ");
   if(sonyModule(loaded.module.name, loaded.module.attributes)) {
     note(path + " is Sony's " + loaded.module.name + ", none of whose functions the HLE kernel has: it runs");
   }
@@ -219,21 +220,35 @@ auto Kernel::linkImports() -> void {
   for(auto& [uid, loaded] : modules) if(!loaded.standIn) link(loaded.module);
 }
 
+//Variables a module (or the program) imports from a library the HLE kernel has functions of, which on a PSP is the
+//system's own: no module will export them, so their words keep what the file has. Noted as it loads.
+auto Kernel::noteSystemVariables(const Module& m, const std::string& who) -> void {
+  for(auto& v : m.variables) {
+    if(std::none_of(functions.begin(), functions.end(), [&](auto& f) { return v.library == f.library; })) continue;
+    char text[160];
+    std::snprintf(text, sizeof(text), "imports variable %08x of %s, which the HLE kernel hasn't", v.nid,
+                  v.library.c_str());
+    note(who + text);
+  }
+}
+
 //An imported variable's words, moved by delta (the address they're to hold less the one they hold: either may be 0,
 //none). Its list, ending in a 0, names each word, with how it holds the address in the top six bits and where it is
 //in the rest (a word address, in the list's own 256 MiB), as uOFW's loadcore reads it: 2, a 32-bit word, the delta
 //added; 6, the lower half of an address, an instruction's 16 bits; 5, the upper half (a lui), several in a row sharing
 //the lower half in the entry after them, which completes the address, so the upper half carries as it should: worked
-//out from that lower half before the lower half itself moves. Any other kind is passed over, as loadcore does.
+//out from that lower half before the lower half itself moves. Any other kind is passed over, as loadcore does. A word
+//already right isn't written again (that would throw away the code compiled around it).
 auto Kernel::relinkVariable(u32 list, u32 delta) -> void {
   auto entry = [&](u32 n) { return memory.reaches(list + n * 4, 4) ? memory.read(4, list + n * 4) : 0; };
   auto place = [&](u32 word) { return (list & 0xf000'0000) | (word & 0x03ff'ffff) << 2; };
+  auto put = [&](u32 at, u32 value) { if(memory.read(4, at) != value) memory.write(4, at, value); };
   for(u32 n = 0; entry(n); n++) {
     u32 word = entry(n), at = place(word);
     if(!memory.reaches(at, 4)) continue;
     u32 value = memory.read(4, at);
-    if(word >> 26 == 2) memory.write(4, at, value + delta);
-    if(word >> 26 == 6) memory.write(4, at, (value & 0xffff'0000) | ((value + delta) & 0xffff));
+    if(word >> 26 == 2) put(at, value + delta);
+    if(word >> 26 == 6) put(at, (value & 0xffff'0000) | ((value + delta) & 0xffff));
     if(word >> 26 != 5) continue;
     u32 last = n, low = 0;
     while(entry(last + 1) >> 26 == 5) last++;
@@ -242,7 +257,7 @@ auto Kernel::relinkVariable(u32 list, u32 delta) -> void {
     u32 upper = ((value << 16) + low + delta + 0x8000) >> 16;
     for(; n <= last; n++) {
       u32 hi = place(entry(n));
-      if(memory.reaches(hi, 4)) memory.write(4, hi, (memory.read(4, hi) & 0xffff'0000) | (upper & 0xffff));
+      if(memory.reaches(hi, 4)) put(hi, (memory.read(4, hi) & 0xffff'0000) | (upper & 0xffff));
     }
     n = last;
   }

@@ -49,7 +49,7 @@ struct Module {
   std::vector<Import> imports;
   std::vector<Export> exports;
   std::vector<Variable> variables;
-  std::vector<std::string> skipped;  //what the loader left out (variable imports it can't find), worth reporting
+  std::vector<std::string> skipped;  //what the loader left out (variable imports whose table it can't read)
 };
 
 struct Loader {

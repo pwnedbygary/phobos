@@ -2203,6 +2203,7 @@ struct Kernel {
   auto unloadSelf(s32 exitStatus, u32 length, u32 argument, u32 options) -> void;
   auto linkImports() -> void;
   auto relinkVariable(u32 list, u32 delta) -> void;
+  auto noteSystemVariables(const Module& m, const std::string& who) -> void;
   auto moduleAt(u32 address) const -> u32;
   auto moduleFunction(const LoadedModule& loaded, u32 nid) const -> u32;
   auto threadParameters(const Module& module, u32 parameters, u32& priority, u32& stackSize, u32& attributes) const

@@ -502,17 +502,21 @@ auto Kernel::sceRtcGetCurrentClockLocalTime() -> void {
   result(writeDate(arg(0), now, true) ? 0 : ErrorInvalidPointer);
 }
 
-//A tick moved by the host's time zone's offset from UTC at a moment (its daylight saving time too), as the clock's
-//local dates have it: added for a UTC tick (toLocal), taken off a local one, whose moment is taken to be the one its
-//time would be in UTC (an hour out only across a change of daylight saving time). From the address at arg(0) to the
-//one at arg(1); 0, or INVALID_POINTER for an address the program's memory doesn't hold. God Eater 2 asks once it has
-//made its first save.
+//A tick moved by the minutes the system's settings put between UTC and local time: its time zone, and an hour more
+//while daylight saving time is kept, the same for every tick (uOFW's rtc moves it by the two settings with
+//sceRtcTickAddMinutes, as its local clock is), here the settings sceUtilityGetSystemParamInt reports (the host's zone
+//now: hostZone()). Added for a UTC tick (toLocal), taken off a local one. The tick at the address at arg(0), the
+//result at arg(1), as pspsdk's psprtc.h has them (chosen: uOFW's decompilation hands the two to TickAddMinutes the
+//other way round, unverified, and no recording shows either); 0, or INVALID_POINTER for an address the program's
+//memory doesn't hold, as the tick arithmetic's (chosen). God Eater 2 asks once it has made its first save.
 auto Kernel::rtcConvertZone(bool toLocal) -> void {
   if(!memory.reaches(arg(0), 8) || !memory.reaches(arg(1), 8)) return result(ErrorInvalidPointer);
+  s32 minutes = 0;
+  bool daylight = false;
+  hostZone(s64((startTime + cycles / (CPUFrequency / 1'000'000)) / 1'000'000), minutes, daylight);
+  s64 offset = s64(minutes + (daylight ? 60 : 0)) * 60'000'000;
   u64 tick = memory.read(4, arg(0)) | u64(memory.read(4, arg(0) + 4)) << 32;
-  s64 seconds = s64(tick / 1'000'000) - s64(From1To1970 / 1'000'000), local = seconds;
-  if(!localSeconds(seconds, local)) local = seconds;
-  tick += u64(toLocal ? local - seconds : seconds - local) * 1'000'000;
+  tick += u64(toLocal ? offset : -offset);
   memory.write(4, arg(1), u32(tick));
   memory.write(4, arg(1) + 4, u32(tick >> 32));
   result(0);

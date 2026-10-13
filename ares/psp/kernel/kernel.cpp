@@ -1048,6 +1048,7 @@ auto Kernel::start(const u8* data, u64 size, const std::string& path, std::strin
     }
   }
   for(auto& skipped : module.skipped) note("the loader left out " + skipped);
+  noteSystemVariables(module, "the program ");
   programUID = newUID();  //the program is a module too, the first
 
   //It starts where a module does (moduleFunction()): at the module_start it exports for itself, or else at its ELF

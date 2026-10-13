@@ -52,9 +52,12 @@ struct Placed { u32 address, fileSize; };
 //Sony's packed relocations (PT_PSP_REL2), which later SDKs write in place of the eight-byte entries: a program
 //header of their own after the segments, as God Eater 2's update modules have them. The PSP's loadcore reads them as
 //uOFW's loadelf.c sets out (sceKernelApplyPspRelSegment2). Its reverse engineering names the types after standard
-//MIPS's and loses a few steps (a segment's command setting the offset, two shifts), which the modules themselves
-//settle: read so, every one of the 45 modules' relocations lands in its segment, every jump in its module's code,
-//every upper half's address in its module.
+//MIPS's and slips in places, which the modules themselves settle: a segment's command also sets the offset, from the
+//rest of its word; a relocation's type comes from the second list, not the first; the upper-half form of a move is
+//shifted by the kind's, segment's and type's bits; a jump's target is written as a word index; the type of the
+//relocation before is kept, for the addend; a command naming a segment past the last is refused (not the other way
+//round); and each relocated word is the one at the offset. Read so, every one of the 45 modules' relocations lands in
+//its segment, every jump in its module's code, every upper half's address in its module.
 //
 //The table: two zero bytes; how many bits a command's kind takes, and its type; then two lists of bytes, each
 //starting with its own length (that byte counted): the kinds, and the types. Then the commands, 16-bit words, from
@@ -260,13 +263,14 @@ auto Loader::load(Memory& memory, const u8* data, u64 size, u32 base, const Impo
   //8-15) and the segment whose address is added to the word (bits 16-23): a relocated word holds an address
   //within that segment. (Sony's tools and pspdev's alike number segments by their program headers. pspdev's PRXs
   //have a single segment, starting at 0; retail modules with more will show the segment numbers matter.) A module
-  //with packed relocations has them alone (relocatePacked()), its segments numbered among those loaded.
+  //with packed relocations has them alone (relocatePacked()), its segments numbered among the run of those loaded.
   const Header* packed = nullptr;
   for(auto& segment : segments) if(segment.type == SonyPackedRelocations && !packed) packed = &segment;
   if(module.relocatable && packed) {
-    std::vector<Placed> placed;
+    std::vector<Placed> placed;  //loadcore's numbering: the run of loaded segments from the first
     for(auto& segment : segments) {
       if(segment.type == SegmentLoad) placed.push_back({relocation + segment.address, segment.fileSize});
+      else if(!placed.empty()) break;
     }
     if(auto why = relocatePacked(memory, file, packed->offset, packed->fileSize, placed); !why.empty()) return why;
   } else if(module.relocatable) {

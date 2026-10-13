@@ -52,7 +52,7 @@ auto md5Block(u32 h[4], const u8* block) -> void {
 //number, low byte first) and stirred in; the digest is the chaining words then, low byte first.
 auto md5Finish(u32 h[4], const u8* last, u32 count, u64 taken, u8 digest[16]) -> void {
   u8 tail[128] = {};
-  memcpy(tail, last, count);
+  if(count) memcpy(tail, last, count);  //(memcpy wants a real pointer even for no bytes; an empty message's may be 0)
   tail[count] = 0x80;
   u32 length = count < 56 ? 64 : 128;
   for(u32 n = 0; n < 8; n++) tail[length - 8 + n] = u8(taken * 8 >> n * 8);
