@@ -747,6 +747,8 @@ namespace ares {
       return b;
   }
 
+  // Slots 2 and 3 are setInput()'s rx and ry: the PSP's "R-Stick X"/"R-Stick Y" among them, which the PSP core
+  // hands to games patched to read a second stick (ares/psp/kernel/ctrl.cpp).
   static auto resolveAxisSlot(const string& lowerName) -> s32 {
       if (lowerName == "lx" || lowerName == "l-stick x" || lowerName == "left x" || lowerName == "x-axis" || lowerName == "x" || lowerName == "player 1 x-axis") return 0;
       if (lowerName == "ly" || lowerName == "l-stick y" || lowerName == "left y" || lowerName == "y-axis" || lowerName == "y" || lowerName == "player 1 y-axis") return 1;
