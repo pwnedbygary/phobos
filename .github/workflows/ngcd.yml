@@ -1,7 +1,8 @@
 name: Neo Geo CD Tests
 
 # The Neo Geo CD's layout and save state checks on the host (tests/ngcd/run-tests.sh: the Neo Geo core as ares builds
-# it, with ares's node tree, the 68000 and Z80 and ymfm's OPN), on changes to what they build. A version tag runs them
+# it, with ares's node tree, sljit's headers through ares.hpp, the 68000 and Z80 and ymfm's OPN), on changes to what
+# they build. A version tag runs them
 # too (a tag's push takes no path filter). The suite's last line, its count, goes in the run's summary with the commit.
 
 on:
@@ -9,17 +10,17 @@ on:
     branches: [ master ]
     tags: [ 'v*' ]
     paths: [ 'ares/ng/**', 'ares/ares/**', 'ares/component/processor/m68000/**', 'ares/component/processor/z80/**',
-             'nall/**', 'libco/**', 'thirdparty/ymfm/**', 'tests/ngcd/**', 'tests/objects.sh',
-             '.github/workflows/ngcd.yml' ]
+             'nall/**', 'libco/**', 'thirdparty/sljit/**', 'thirdparty/sljit*', 'thirdparty/ymfm/**', 'tests/ngcd/**',
+             'tests/objects.sh', '.github/workflows/ngcd.yml' ]
   pull_request:
     paths: [ 'ares/ng/**', 'ares/ares/**', 'ares/component/processor/m68000/**', 'ares/component/processor/z80/**',
-             'nall/**', 'libco/**', 'thirdparty/ymfm/**', 'tests/ngcd/**', 'tests/objects.sh',
-             '.github/workflows/ngcd.yml' ]
+             'nall/**', 'libco/**', 'thirdparty/sljit/**', 'thirdparty/sljit*', 'thirdparty/ymfm/**', 'tests/ngcd/**',
+             'tests/objects.sh', '.github/workflows/ngcd.yml' ]
   workflow_dispatch:
 
 concurrency:
   group: ngcd-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -27,12 +28,13 @@ permissions:
 jobs:
   ngcd:
     name: Neo Geo CD tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # (g++ 13 or later, which the script needs on Linux, is ubuntu-latest's; bash named, for pipefail through tee)
+      # (g++ 13 or later, which the script needs on Linux, is Ubuntu 24.04's; bash named, for pipefail through tee)
       - name: Run the tests
         shell: bash
         run: tests/ngcd/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
@@ -42,4 +44,6 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          echo "- tests/ngcd at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
+          at="${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}"
+          last=$(tail -1 "$RUNNER_TEMP/suite.log" 2> /dev/null || echo "no output: the suite didn't run")
+          echo "- tests/ngcd at $at: $last" >> "$GITHUB_STEP_SUMMARY"
