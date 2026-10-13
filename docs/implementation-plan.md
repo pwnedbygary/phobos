@@ -280,10 +280,10 @@ its own PR, whose evidence is in the handoff; this table says what is done with 
 |---|---|---|---|---|---|
 | 01 | Reconcile the current evidence | P0 | Done here | — | this change |
 | 02 | Gate Android builds with unit tests (and drop the SDK cache) | P0 | Do now | — | [#238](https://github.com/pwnedbygary/phobos/pull/238) |
-| 03 | Make host test builds trustworthy | P0 | Do now | stacked on 05 | in progress |
-| 04 | Make skipped coverage explicit | P0 | Do now | stacked on 03 | in progress |
+| 03 | Make host test builds trustworthy | P0 | Do now | stacked on 05 | [#245](https://github.com/pwnedbygary/phobos/pull/245) |
+| 04 | Make skipped coverage explicit | P0 | Do now | stacked on 03 | [#246](https://github.com/pwnedbygary/phobos/pull/246) |
 | 05 | Run the missing host suites in CI | P0 | Do now | — | [#241](https://github.com/pwnedbygary/phobos/pull/241) |
-| 06 | Exercise ARM64 and release paths | P0 | Do now | stacked on 04 | in progress |
+| 06 | Exercise ARM64 and release paths | P0 | Do now | stacked on 04 | [#247](https://github.com/pwnedbygary/phobos/pull/247) |
 | 07 | Verify compiled shader artifacts | P0 | Do now | — | [#239](https://github.com/pwnedbygary/phobos/pull/239) |
 | 08 | Make PSP runs reproducible | P0 | Later | 01-07; #230's and #243's runner/kernel changes | — |
 | 09 | Automate PSP throughput comparisons | P0 | Later | 08 | — |
