@@ -49,14 +49,13 @@ exception, now works), only new options and new lines where they apply.
   runs, and one that can't be made ends it (exit 1, said, no scratch left); the report is written beside its name,
   closed, checked and renamed, so a failed write fails the run (exit 1) without leaving part of one.
 - **`--start-time SECONDS`** (up to 4294967295; every number the runner reads, a press's frame too, is decimal digits
-  within 32 bits, and a stick's value digits after a minus sign below 0; anything else refused, not wrapped or cut
-  short):
-  the kernel's clock set right after power-on (`Kernel::power()` takes the host's time, the core's only read of the
-  host clock; local time follows `TZ`), before anything runs. A game that starts itself again (sceKernelLoadExec,
+  within 32 bits, and a stick's value digits after an optional minus sign; anything else refused, not wrapped or cut
+  short): the kernel's clock set right after power-on (`Kernel::power()` takes the host's time, the core's only read of
+  the host clock; local time follows `TZ`), before anything runs. A game that starts itself again (sceKernelLoadExec,
   largeRestart) powers the kernel on again, which takes the host's clock again: the kernel's run returns as the new
-  program is started, before it runs, and `System::run` calls it once a frame, so the runner sets the clock back at
-  the next frame's top (and after the last frame), says so on standard error and counts it (`clock restarts`). A
-  loaded state keeps its own clock (said on standard error); a restart after it takes the time asked for.
+  program is started, before it runs, and `System::run` calls it once a frame, so the runner sets the clock back at the
+  next frame's top (and after the last frame), says so on standard error and counts it (`clock restarts`). A loaded
+  state keeps its own clock (said on standard error); a restart after it takes the time asked for.
 - **Captures**: the summary adds `capture seconds:` (their time, and the speed without them) where there were any;
   a PNG with no picture presented since the last one within 2 s is said on standard error and counted (`stale
   captures: N`); with no picture at all yet there's no PNG (a 0-by-0 one was written before), said and counted.
@@ -74,19 +73,18 @@ exception, now works), only new options and new lines where they apply.
   patch in its folder) applies to this runner exactly where it applies to master's (`cpu-round2`, `ge-headroom`,
   `reconcile`, `vulkan-speed`; `cpu-speed2`'s bench-patch.py already fails on master's runner).
 - **`tests/psp/ares/runner-test.sh`** adds: the summary's speed on the one line with "frames per second" and the
-  captures' time on `capture seconds:`; the report checked (JSON; the options not given null; the software
-  renderer, the recompiler, no GPU lost; 60 frames, the program running on; both captures fresh, at frames 30 and
-  60, each picture arrived by its frame); three runs of cube.elf saving a state at frame 30, two started at
-  1234567890 (identical states, no clock restarts) and one at 1234567999 (another); the first state loaded with
-  another start time (the state's clock kept, said, not set again); a start time past 32 bits, a number with more
-  after it, a press's frame past 32 bits, and a stick's value with more after it, a space before it or below -32768
-  refused, and the sticks' extremes taken; captures at frames 19, 20 and 40 with `--screen-stops-at 20` (19's fresh,
-  as it waits for a picture before the screen stops; 40's stale; 20's either, as pictures came while 19's PNG was
-  written; each said and counted as it was, each with a PNG; 40's PNG the same as 20's, the last picture before the
-  screen stopped); a capture with no picture at all (said,
-  no PNG, in the report, whose new folder the runner made); and a game's name with a Latin-1 byte (the report still
-  JSON, the byte `\u00e9`), where the filesystem takes such a name (Linux's do; macOS's don't, and there it's left
-  out, said).
+  captures' time on `capture seconds:`; the report checked (JSON; the options not given null; the software renderer,
+  the recompiler, no GPU lost; 60 frames, the program running on; both captures fresh, at frames 30 and 60, each
+  picture arrived by its frame); three runs of cube.elf saving a state at frame 30, two started at 1234567890
+  (identical states, no clock restarts) and one at 1234567999 (another); the first state loaded with another start
+  time (the state's clock kept, said, not set again); a start time past 32 bits, a number with more after it, a
+  press's frame past 32 bits, and a stick's value with more after it, a space before it or below -32768 refused, and
+  the sticks' extremes taken; captures at frames 19, 20 and 40 with `--screen-stops-at 20` (19's fresh, as it waits
+  for a picture before the screen stops; 40's stale; 20's either, as pictures came while 19's PNG was written; each
+  said and counted as it was, each with a PNG; 40's PNG the same as 20's, the last picture before the screen
+  stopped); a capture with no picture at all (said, no PNG, in the report, whose new folder the runner made); and a
+  game's name with a Latin-1 byte (the report still JSON, the byte `\u00e9`), where the filesystem takes such a name
+  (Linux's do; macOS's don't, and there it's left out, said).
 - **Checks** (the Mac, `PHOBOS_JOBS=3`, its own TMPDIR): `runner-test.sh` passes (38 s with the core rebuilt after
   master's #230); the kits' patch chains as above. `jsonText()` alone, in a scratch harness, on 18 byte strings
   (UTF-8 of 2 to 4 bytes and U+10FFFF kept; Latin-1, Shift-JIS, overlong forms, a surrogate, past U+10FFFF, a lead
@@ -107,7 +105,8 @@ exception, now works), only new options and new lines where they apply.
   that can't be made: said, exit 1, no scratch left; malformed numbers (`12abc`, `+5`, a leading space, a negative
   that wraps to 1, a press's frame past 32 bits or `1x`) refused. After the second delta review's changes:
   `runner-test.sh` passes (14 s), the kits' chains as on master's runner, shellcheck clean; with the stick's old
-  read put back (`std::stol`), the test fails ("not refused: --press 1:L-StickX:12abc").
+  read put back (`std::stol`), the test fails ("not refused: --press 1:L-StickX:12abc"). After the third delta
+  review's wording: `runner-test.sh` passes (15 s), the kits' chains as on master's runner, shellcheck clean.
 - **Review**: an independent read-only review (it re-ran the smoke test and the kits' chains, read the restart
   path, and ran error cases) found two majors: the start time lost when a game starts itself again, while the
   report still showed the pinned clock; and text not always UTF-8 (a Shift-JIS note). Its minors: the report's
@@ -133,14 +132,17 @@ exception, now works), only new options and new lines where they apply.
   on a starved host (the three captures above); the README's `asked` and title; a program that couldn't start
   called a restart (said as what it is). A second delta review (PASS; the smoke test again, the three captures 10
   times, real failed starts at frames 1, 10 and 30, four ways a folder can't be made, and the stale check removed,
-  which the test catches) found five nits. Taken: a stick's value still read loosely (`12abc` ran as 12; now a
-  minus sign below 0, then digits, and the test refuses both kinds and takes the extremes); the bare file names
+  which the test catches) found five nits. Taken: a stick's value still read loosely (`12abc` ran as 12; now an
+  optional minus sign, then digits, and the test refuses both kinds and takes the extremes); the bare file names
   above unsaid; frame 40's PNG, always frame 20's picture, now compared; "16 real restarts" and the README's `clock
   restarts`. Left: a scratch script outside the repository that diffs two runs' summaries would count `capture
   seconds:`, a time, as a difference (`scratch/dialogs/compare.sh`, if it's used again: one more pattern for its
-  filter).
-- **CI**: PSP Core Tests green on each earlier head (runs 38443751682, 38449049095, 38454982676 and 38463437399,
-  the runner's test passing; on Linux the last ran the name not in UTF-8).
+  filter). A third delta review (PASS; 33 edge cases run against the runner, and no press script in the scratch
+  folders refused by the strict read) found three nits, all taken: two lines left short, a run missing below, and
+  `-0` read as 0 though the wording said a minus sign only below 0 (now an optional one; leading zeros are read as
+  every number's are).
+- **CI**: PSP Core Tests green on each earlier head (runs 38443751682, 38449049095, 38454982676, 38463437399,
+  38468789060 and 38471152830, the runner's test passing; on Linux the last three ran the name not in UTF-8).
 
 ## Tests: the host suites' objects kept by what they include and how they're compiled, a checkout's apart — 2026-10-13
 

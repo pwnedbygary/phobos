@@ -41,8 +41,8 @@ reads its `PSP_GAME/PARAM.SFO` and prints the title and the disc's NPID, which t
 compatibility report uses for its region and disc ID column.
 
 The options, and what each does (their numbers, a press's frame among them, are decimal digits
-up to 4294967295, and a stick's value is -32768 to 32767, with a minus sign below 0; the runner
-refuses anything else):
+up to 4294967295, and a stick's value is -32768 to 32767, digits after an optional minus sign;
+the runner refuses anything else):
 
 - `--frames N` — how many frames to run (default 3600, a minute of the PSP's time)
 - `--press "F:C,..."` — `F:C` presses and holds `C` at frame `F` (a button, or a stick's

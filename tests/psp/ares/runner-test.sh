@@ -93,8 +93,8 @@ for line in '"clock start": 1234567890' '"clock restarts": 0' '"start time": 150
   grep -qF "$line" "$SCRATCH/report-d.json" || { cat "$SCRATCH/report-d.json"; exit 1; }
 done
 #Numbers are decimal digits up to 32 bits: a start time past them is refused (not wrapped to 1970), and so are a
-#number with more after it and a press's frame past 32 bits. A stick's value is digits too, a minus sign first below
-#0, within -32768 to 32767.
+#number with more after it and a press's frame past 32 bits. A stick's value is digits too, after an optional minus
+#sign, within -32768 to 32767.
 refused() {  #refused MESSAGE OPTION...: the runner refuses the options, saying MESSAGE
   local message=$1; shift
   if "$RUNNER" "$PSP_TEST_PROGRAMS/cube.elf" --frames 1 "$@" > /dev/null 2> "$SCRATCH/errors-e.txt" ||
