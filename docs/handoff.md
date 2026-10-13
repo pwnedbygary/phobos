@@ -80,9 +80,10 @@ plan by #244). Build scripts only: no core, app or test source changes.
   header saved during the compile is newer than it. Objects and programs are written beside their place and renamed
   into it, so runs at once are safe and a killed build leaves nothing taken for finished; a program's name carries a
   hash of its objects and link flags, so runs of two configurations in one checkout each run their own. Each
-  checkout gets its own folder in the suite's (the cksum of its path, as the NGCD script already did; its `checkout`
-  file names the path), deletable between runs: per configuration a checkout keeps 21 MB (Allegrex), 34 MB (NGCD),
-  40 MB (the ares system) or 46 MB (the runner, with its copy) until then. What times can't tell is written down: a
+  checkout gets its own folder in the suite's (the cksum of its path, as the NGCD script already did; its
+  `.phobos-checkout` file names the path), deletable between runs: per configuration a checkout keeps 21 MB
+  (Allegrex), 34 MB (NGCD), 40 MB (the ares system) or 46 MB (the runner, with its copy) until then (`tests/psp`'s,
+  the largest, not measured). What times can't tell is written down: a
   new header shadowing another, a file replaced by an older-dated copy. Every source is its own object now, the
   test suites' too (they were one compile each run), and each compile's line says whether it's sanitized (in the
   sanitized suites nall and sljit aren't). `PHOBOS_JOBS=N` compiles N at once (1 by default).
@@ -90,33 +91,41 @@ plan by #244). Build scripts only: no core, app or test source changes.
   of this checkout's, which the build's last line names; `runner-test.sh` takes the latter); NGCD's build-dir
   argument; the FFmpeg cache; every flag. The round-6 and Allegrex measurements unpack into the checkout's folder,
   each file through a temporary one named by the run, a failed unpack stopping the run.
-- **`tests/objects-test.sh`** (in CI's Allegrex job; seconds; 18 cases): a small C program built cold (2 compiles),
+- **`tests/objects-test.sh`** (in CI's Allegrex job; seconds; 21 cases): a small C program built cold (2 compiles),
   warm (0), after its header changes (1, and the program sees it), and a header found as a system header (1), with a
   define added (2) and taken away (0: the first objects kept), with the compiler named with another word (`cc
   -DEXTRA=9`: 2, the word taken), the same compiler at the same path reporting another version (2), a header saved
   while its includer compiled (the compiler holding before it writes the object: compiled again next time), a header
-  changed within the second (where the file system keeps fractions; said as a skip where it doesn't), killed
+  changed within the second (its time and the object's pinned at .2 and .7 of one second; said as a skip where the
+  file system keeps whole seconds), killed
   mid-compile with the build (fails, then the same command compiles everything: nothing kept from the cut), with the
   first header on the include path gone (1, the next one taken), a compile failing among two at once (the build
-  fails), and two checkouts built at once into one folder (each its own program and folder). Negative controls,
-  each a disposable copy of the library: the compiler's name, or its version, out of the key; the object's time its
-  compile's end; `-MMD`; bash's whole-second `-nt`; a failed compile among several ignored; the old rule (the
-  source's time alone); flags out of the key; objects written in place; one folder for all checkouts; a gone file
-  taken as unchanged: each of the 11 fails at least one case.
-- **Checks** (the Mac, bash 3.2, Apple clang 21, `PHOBOS_JOBS=3`, a TMPDIR of its own): `tests/objects-test.sh` 11/11,
-  three times; `tests/allegrex` cold 7 compiles (60/0), warm 0 (60/0), after touching `ares/psp/cpu/allegrex.hpp` 4
-  (the four that include it; 60/0); `tests/ngcd` cold 13 (2835/0), warm 0; `tests/psp/ares` cold 25 (318/0), warm 0
-  (318/0); `runner-test.sh` cold 71 s (25 objects), warm 12 s, the copy left in `phobos-psp-runner/`. CI on #245
-  (runs 38439444461 and 38439444229, at `960d668da`; Linux, GCC 13, bash 5): `tests/objects-test.sh` 0 failures,
-  Allegrex 60/0, the system suite 497/0 (every source its own object now), the ares system 318/0, the runner's test
-  passing, NGCD 2835/0.
+  fails), a header found through `CPATH` and then another `CPATH` (compiled again), a program for each
+  configuration, and two checkouts built at once into one folder (each its own program and folder). Negative
+  controls, each a disposable copy of the library: the compiler's name, or its version, out of the key; the
+  object's time its compile's end; `-MMD`; bash's whole-second `-nt` (failing every run, 3 of 3); a failed compile
+  among several ignored; the old rule (the source's time alone); flags out of the key; the environment out of the
+  key; one program name for every configuration; objects written in place; one folder for all checkouts; a gone
+  file taken as unchanged: each of the 13 fails at least one case.
+- **Checks** (the Mac, bash 3.2, Apple clang 21, `PHOBOS_JOBS=3`, a TMPDIR of its own, the final scripts):
+  `tests/objects-test.sh` 21/21, twice; `tests/allegrex` cold 7 compiles (60/0), warm 0, after touching
+  `ares/psp/cpu/allegrex.hpp` 4 (the four that include it; 60/0); `tests/ngcd` cold 13 (2835/0), warm 0;
+  `tests/psp/ares` cold 25 (318/0), warm 0; `runner-test.sh` cold 42 s, warm 4 s, its program `psp-runner-<hash>`
+  and the copy left in `phobos-psp-runner/`. CI on the reviewed scripts (run 38448696924 at `a476470ec`; Linux, GCC
+  13, bash 5): `tests/objects-test.sh` 18 cases, 0 failures (the case within the second ran), Allegrex 60/0, the
+  system suite 497/0 (every source its own object now), the ares system 318/0, the runner's test passing; NGCD
+  2835/0 (run 38448696864). CI on this head: below once run.
 - **Review**: an independent read-only review found a major hole (a word after the first in CC or CXX wasn't in
   the key: `CC="cc -DEXTRA=9"` after `cc` compiled nothing and ran the old program), and minor ones: a header edited
   during a compile never rebuilt, the stale-file cleanup reaching anything in a folder handed to NGCD, an exported
   `BUILD` overriding the per-checkout folders, four mutations the test let through, the disk use unsaid, the
   include-path variables not keyed, a failed unpack carrying on, programs per checkout rather than per
   configuration. All taken (above): the cleanup only in the objects folder, the folder override named
-  `OBJECTS_BUILD`, the test's new cases each failing the mutation it was missing.
+  `OBJECTS_BUILD`, the test's new cases each failing the mutation it was missing. A delta review found every fix
+  right in code, and the whole-second mutation caught only by chance (the two times not pinned), the environment's
+  keys and the per-configuration names untested, a cut-short link's leftovers no longer cleaned, and the docs behind;
+  all taken: the times pinned, two cases added, programs' leftovers cleaned by their hashed names, the folder's file
+  named `.phobos-checkout` (a folder handed to NGCD may have a `checkout`), the README's line and these checks.
 
 ## CI: the PSP core as an ares system, the headless runner and the Neo Geo CD's checks in CI; the triggers complete — 2026-10-13
 
@@ -139,7 +148,8 @@ in the implementation plan). CI only: no core, app or test code changes.
   through `tee`, so their steps run as `shell: bash` (pipefail) to keep a failure failing, and a suite that left no
   output says so in the summary. Both workflows' runners are pinned to Ubuntu 24.04 (ubuntu-latest moves to 26 on
   2026-10-19: a new GCC, a new FFmpeg build, maybe new `-Werror` warnings, taken on purpose instead), each job has a
-  time limit (20 to 60 minutes), and only a PR's newer push cancels its run: every master and tag run finishes.
+  time limit (20 to 60 minutes), and only a PR's newer push cancels its run: every other run (master's, a tag's, a
+  dispatch) is a group of its own, so none is cancelled or left waiting behind another.
 - **Not done here**: a workflow whose paths don't match doesn't run, which shows as no check rather than as a passing
   one; and Android's release and nightly don't wait for these workflows (they are separate; package 20 or a later
   change can gate them explicitly).
@@ -156,7 +166,52 @@ in the implementation plan). CI only: no core, app or test code changes.
 - **Review**: an independent read-only review (it scanned every source the five builds compile against the paths)
   found sljit's headers missing from NGCD's paths and `desktop/Platform.hpp` from PSP's, and this entry calling the
   control's branch deleted when it wasn't yet; all fixed, with its suggestions taken (the Ubuntu pin, time limits,
-  master's runs not cancelled, the empty-log case).
+  master's runs not cancelled, the empty-log case). A delta review found that a concurrency group holds one waiting
+  run, so a third quick push to master still cancelled the waiting one: non-PR runs now get a group each (the run's
+  ID).
+
+## PSP: modules from downloads — sceKernelLoadModuleNpDrm, packed relocations, imported variables; God Eater 2 in English — 2026-10-13
+
+Branch `cursor/psp-npdrm-modules-2b67`, on master (`0a9a7fa75`, #234), merged with master since (#235, #236).
+docs/psp-core.md, part 88, has the evidence. Clean room: uOFW's module manager and loadcore, pspsdk's headers,
+pspautotests' recordings, RFC 1321, PPSSPP's notes read only as a description of the PSP; JPCSP not read. StateVersion
+28 (each module keeps its imported variables; 27 is part 87's). The owner's PGD/NPDRM code (pgd.cpp, pgd.hpp, io.cpp's
+sceNpDrm functions) is unchanged and wasn't needed.
+- **Before**: God Eater 2 (NPJH50832) with RedArtz's English patch v2.0 and its folder `PSP/GAME/NPJH50832` on the stick
+  stopped at the patch's "your DLC file is corrupted or missing": ModuleMgrForUser 0xf2d8d1b4 missing.
+- **The folder**: its 45 `.sprx` modules are plain ELFs, its EDATs plain too: nothing needs NPDRM decryption (the
+  owner's sceNpDrmEdataSetupKey leaves the plain PATCH.EDAT as it is, as before).
+- **sceKernelLoadModuleNpDrm**: uOFW's checks and errors (ILLEGAL_CONTEXT from an interrupt, ILLEGAL_ADDR, a '%' is
+  UNKNOWN_MODULE_FILE, options ILLEGAL_ADDR or ILLEGAL_SIZE, then sceIoOpen's own error); an NPDRM module as sold
+  (EDATA) refused, UNSUPPORTED_PRX_TYPE (chosen), its key (npdrm's module key, derived from the EDATA and the licensee
+  key, and the `~PSP` decryption with it) not derived: that's what's missing for store-bought download modules; any
+  other file loads as sceKernelLoadModule's do (a plain one, as custom firmware and emulators load it: chosen).
+- **The loader**: packed relocations (PT_PSP_REL2), read as uOFW's loadcore does, the steps its decompilation loses
+  settled by the modules (all 459,660 relocations of the 45 land in their segments, every jump in its code); imported
+  variables linked as modules load, unload and move (`linkImports()`, `relinkVariable()`), the program's included.
+- **What the game asked for next**: sceMpegRingbufferQueryPackNum (packnum recorded), MD5 (sceMd5 and UtilsForUser's,
+  the context as hash/md5ctx recorded), sceRtcConvertUtcToLocalTime and back.
+- **PBOOT.PBP**: not booted by the core (it boots the disc's EBOOT.BIN); not needed here: the disc image already is the
+  1.30 update, its EBOOT.BIN the patched one; the folder's PBOOT.PBP is Sony's encrypted program (tag 0x2e5e10f0, a key
+  the core hasn't). Not done.
+- **The game now** (fresh stick with the folder): title, the game's install notice in English, the Main Menu, Character
+  Entry, the appearance screen, the first save, the opening with English subtitles, the update's English hints, and the
+  base, where the player walks and Fran talks in English. A mission not reached (the story first sends the player
+  about).
+- **Checks** (`5a7c2452b`, merged with master): tests/psp 502/0 (five new groups; of two local runs one had the
+  timing-dependent group "ge loads through the depth buffer's views wait for the threads" fail on the loaded Mac, as
+  before; CI's passed), tests/allegrex 60/0, tests/psp/ares 318/0. God Eater 2 without the folder as before (the same
+  pictures, its log but the loader's old note); twelve other games (nine PSN releases, three that load modules) with the
+  base's runner and this one: the same pictures but animation steps and Kenka Bancho's movie timing, which two base runs
+  show too; their logs the same. The game's chain again on the merged code: 108 of 111 captures as before, the rest a
+  moment apart.
+- **Review**: an independent read-only review found two blockers, both fixed (`1998c3014`, `5a7c2452b`): MD5 copying
+  from an empty message's null pointer (GCC's UBSan stopped CI's first run), and master's font states test reading
+  layout 28 as 26 with the variables count in; and minor points, all taken (the clock zones by the settings' minutes for
+  every tick, as uOFW's rtc, tested in fixed zones; state fields; the kernel's own libraries' variables noted; counts
+  and uOFW's slips in part 88; loadcore's segment run; unchanged words not rewritten; broken tables' reasons; relinked
+  code run again). Its remark on the owner's EDATA path (io.cpp's `pgdDescriptor()` reads the PGD header at offset 0,
+  sceNpDrmEdataSetupKey puts the data at 0x90) goes to the owner.
 
 ## PSP: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces — 2026-10-13
 
