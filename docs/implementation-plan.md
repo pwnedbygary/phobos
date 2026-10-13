@@ -34,8 +34,9 @@ As of 2026-10-13 (master `4788125f1`), by kind of evidence. A later dated handof
 entry, or a part of [psp-core.md](psp-core.md), overrides this summary.
 
 - **Implemented on master:** the cores, the Android app and the desktop shell as the
-  handoff and [psp-core.md](psp-core.md) describe them. Some of it is only built: the
-  desktop packages are never launched, and the app's release APKs are built, not run.
+  handoff and [psp-core.md](psp-core.md) describe them. Some of it CI only builds: it
+  never launches the desktop packages or installs the APKs (runs on the device and the
+  desktops are recorded by date below and in the handoff).
 - **Checked on CI's hosts** (master `4788125f1`): Android Build builds both flavors'
   release APKs, without the app's 299 JVM tests; Desktop Build packages Linux, Windows
   and universal macOS; PSP Core Tests, on changes to its paths, runs `tests/allegrex`
@@ -43,17 +44,19 @@ entry, or a part of [psp-core.md](psp-core.md), overrides this summary.
   address and undefined-behavior sanitizers, no failures (run 38436364669), and checks
   the shaders' sources by hash only. Not yet in CI: the PSP core as an ares system, the
   runner, the Neo Geo CD checks, anything on ARM64, a recompile of the shaders (the
-  test plan's packages 02, 05, 06, 07 and 21). A build or a host suite is not device
-  evidence.
+  test plan's packages 02, 05, 06, 07 and 21: the JVM tests, the PSP core as an ares
+  system and the runner, nothing run on ARM64, the shaders compiled again, a desktop
+  package launched). A build or a host suite is not device evidence.
 - **Measured on the RP6, dated:** the N64 profiling and its changes from 2026-09-25
   on ([audit](performance-audit.md#2026-09-25-device-profiling-retroid-pocket-6-and-changes)),
   and one presentation comparison with Mupen64Plus-AE on 2026-10-02 (presented frames
   over 18 ms, different scenes and lengths:
   [audit](performance-audit.md#2026-10-02-follow-up-present-at-the-games-display-rate)).
-  The PSP core's speed on the RP6 (Turnip and Qualcomm's driver, 1x and 4x, Vulkan
-  accurate and fast, Software) is measured in parts 52, 61, 63, 65, 67 and 68 and
+  The PSP core's speed on the RP6 is measured in many of its parts (both Vulkan modes on
+  Turnip and Qualcomm's driver in 53, 54, 63, 65, 67 and 68, 4x among them; the software
+  renderer in 61 and 64; earlier rounds from part 24), the tables of parts 41 to 63
   gathered in [psp-gpu-renderers.md](psp-gpu-renderers.md#speed); its other RP6 reports
-  are in parts 49 (the Vulkan renderer in play) and 69 (two stuck games) and the
+  (stuck or black games, among them parts 69, 71 and 72) are in those parts and the
   handoff.
 - **Waiting for the RP6:** PSP speed work measured on the M1 (parts 74, 79 and 83 each
   list the scenes to measure) and whatever the handoff marks so.
@@ -287,8 +290,9 @@ One new finding: the Android job's SDK cache, whose post step took up to 59 minu
 a miss (run 38286832457), is removed by package 02. The numbers are the plan's own, and
 so is the priority column (P0 to P3 by its own scale, not this roadmap's ranks). Each
 package lands as its own PR, whose evidence is in the handoff; this table says what is
-done with each. The CI packages are stacked in the order they build on each other, 05
-first (its lanes run the others' scripts), then 03, 04 and 06, with 08 on 03.
+done with each. The stacked packages go in the order they build on each other, 05 first
+(its lanes run the others' scripts), then 03, 04 and 06, with 08 on 03; 02 and 07 stand
+alone.
 
 | # | Package | Prio. | Disposition | Waits on | PR |
 |---|---|---|---|---|---|
@@ -297,13 +301,13 @@ first (its lanes run the others' scripts), then 03, 04 and 06, with 08 on 03.
 | 03 | Make host test builds trustworthy | P0 | Do now | stacked on 05 | [#245](https://github.com/pwnedbygary/phobos/pull/245) |
 | 04 | Make skipped coverage explicit | P0 | Do now | stacked on 03 | [#246](https://github.com/pwnedbygary/phobos/pull/246) |
 | 05 | Run the missing host suites in CI | P0 | Do now | — | [#241](https://github.com/pwnedbygary/phobos/pull/241) |
-| 06 | Exercise ARM64 and release paths | P0 | Do now | stacked on 04 | [#247](https://github.com/pwnedbygary/phobos/pull/247); its system lane built as the app is in draft [#249](https://github.com/pwnedbygary/phobos/pull/249), red: GCC finds maybe-uninitialized reads in `ares/psp/ge/four.cpp` |
+| 06 | Exercise ARM64 and release paths | P0 | Do now | stacked on 04 | [#247](https://github.com/pwnedbygary/phobos/pull/247); its system lane, built as the app is, in draft [#249](https://github.com/pwnedbygary/phobos/pull/249) (red: GCC finds maybe-uninitialized reads in `ares/psp/ge/four.cpp`) |
 | 07 | Verify compiled shader artifacts | P0 | Do now | — | [#239](https://github.com/pwnedbygary/phobos/pull/239) |
-| 08 | Make PSP runs reproducible | P0 | Done, adapted (the runner only) | stacked on 03 | [#250](https://github.com/pwnedbygary/phobos/pull/250) |
+| 08 | Make PSP runs reproducible | P0 | Do now (pulled forward; adapted: the runner only) | stacked on 03 | [#250](https://github.com/pwnedbygary/phobos/pull/250) |
 | 09 | Automate PSP throughput comparisons | P0 | Later | 08 | — |
 | 10 | Protect high-resolution Vulkan output | P0 | Later | 04, 07; #240 | — |
 | 11 | Remove timing-sensitive thread tests | P1 | Later | #240 (`tests/psp/ge.cpp`) | — |
-| 12 | Test historical PSP state compatibility | P1 | Later | #229 and #243 settling the layout (27 on master since #236) | — |
+| 12 | Test historical PSP state compatibility | P1 | Later | #229 settling the layout (28 on master since #243) | — |
 | 13 | Measure the actual Android driver | P0 | Later, on the RP6 | 09, 10 | — |
 | 14 | Expand replayable JIT differential tests | P1 | Later | #237, 06 | — |
 | 15 | Retain PSP dialog interaction tests | P1 | Later | #230, 02 | — |
