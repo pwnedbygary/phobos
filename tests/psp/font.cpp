@@ -16,13 +16,16 @@ namespace {
 
 //Where the tests' programs keep things.
 constexpr u32 Code = 0x0880'0000, Alloc = 0x0880'4000, Free = 0x0880'4800, SlowAlloc = 0x0880'5000;
+constexpr u32 VplAlloc = 0x0880'5800, VplFree = 0x0880'6000;
 constexpr u32 Heap = 0x0894'0000, HeapTop = 0x0893'0000, Log = 0x0893'1000;
 constexpr u32 Parameters = 0x0893'8000, Style = 0x0893'9000, Image = 0x0893'a000, Buffer = 0x0893'b000;
 constexpr u32 Answer = 0x0893'e000, Error = 0x0893'e010;
 
 //The program's memory functions, as a game's: alloc(user data, size) hands out from a heap (16 bytes at a time,
 //after the last), free(user data, block) gives nothing back; both write what they did to the log (a count, the call
-//it fails at, then pairs: 1 and the size, or 2 and the block). The slow alloc waits 100 microseconds first.
+//it fails at, then pairs: 1 and the size, or 2 and the block). The slow alloc waits 100 microseconds first. The VPL's
+//are Hammerin' Hero's: they take and give back blocks of the VPL the user data names (sceKernelTryAllocateVpl, and
+//none when it refuses; sceKernelFreeVpl), logged the same.
 auto memoryFunctions(KernelMachine& m) -> void {
   auto logged = [&](Assembler& a, u32 kind, u32 value) {
     a.li(t0, Log);
@@ -70,6 +73,30 @@ auto memoryFunctions(KernelMachine& m) -> void {
   slow.put(lw(ra, 0, sp));
   slow.put(jr(ra));
   slow.put(addiu(sp, sp, 16));
+  Assembler vplAlloc{m, VplAlloc};
+  logged(vplAlloc, 1, a1);
+  vplAlloc.put(addiu(sp, sp, -16));
+  vplAlloc.put(sw(ra, 0, sp));
+  vplAlloc.put(sw(zero, 4, sp));
+  vplAlloc.put(addiu(a2, sp, 4));
+  vplAlloc.call("sceKernelTryAllocateVpl");
+  vplAlloc.put(bne(v0, zero, 4));  //refused: none
+  vplAlloc.put(nop);
+  vplAlloc.put(lw(v0, 4, sp));
+  vplAlloc.put(beq(zero, zero, 2));
+  vplAlloc.put(nop);
+  vplAlloc.put(addu(v0, zero, zero));
+  vplAlloc.put(lw(ra, 0, sp));
+  vplAlloc.put(jr(ra));
+  vplAlloc.put(addiu(sp, sp, 16));
+  Assembler vplFree{m, VplFree};
+  logged(vplFree, 2, a1);
+  vplFree.put(addiu(sp, sp, -16));
+  vplFree.put(sw(ra, 0, sp));
+  vplFree.call("sceKernelFreeVpl");
+  vplFree.put(lw(ra, 0, sp));
+  vplFree.put(jr(ra));
+  vplFree.put(addiu(sp, sp, 16));
   m.system.memory.write(4, HeapTop, Heap);
   m.system.memory.write(4, Log, 0);
   m.system.memory.write(4, Log + 4, 0);
@@ -1136,12 +1163,268 @@ static auto fontsInVram() -> void {
   CHECK(roundTrip(m, [&](KernelMachine& fresh) { fresh.kernel.fontsFrom(folder.path.string()); }), true);
 }
 
+//A character's details and its picture read its glyph into two blocks of the program's: its record past the 8 bytes
+//that lead it, then its picture, a byte a pixel (fonttest's 71 and 210 for jpn0's 'H'). The font holds the glyph it
+//last read: asked again, details or picture, it asks for nothing; another gives those two back first (its record,
+//then its picture) and asks for its own. A code below the font's first reads nothing; one it hasn't got reads its
+//alternative; a shadow, or a picture's size, reads nothing. sceFontFlush gives the glyph back; closing gives back the
+//tables, then the glyph's record and picture, as fonttest recorded, and so does sceFontDoneLib, before the library's
+//own. From no thread nothing is asked for, and the answer's the same.
+static auto fontsGlyphMemory() -> void {
+  FontFolder folder;
+  //what reading a glyph of font 1 asks for, from the record as made (its first 14 bits: its own part's length)
+  auto made = systemFont(1);
+  auto blocks = [&](u32 code) {
+    for(auto& glyph : made.glyphs) {
+      if(glyph.code != code) continue;
+      auto record = TestFont::record(glyph);
+      u32 length = (record[0] | record[1] << 8) & 0x3fff;
+      return std::vector<std::pair<u32, u32>>{{1, length - 8}, {1, glyph.width * glyph.height}};
+    }
+    return std::vector<std::pair<u32, u32>>{};
+  };
+  CHECK(blocks('A')[1].second == 16 * 17 && blocks(' ')[1].second == 0, true);
+  for(bool recompile : {false, true}) {
+    FontMachine f(folder);
+    auto& m = f.m;
+    u32 font = viaProgram(m, "sceFontOpen", {f.library, 1, 0, Error}, recompile);
+    CHECK(font != 0, true);
+    auto image = [&](u32 format = 2) {
+      m.system.memory.write(4, Image + 0x00, format);
+      m.system.memory.write(4, Image + 0x04, 0);
+      m.system.memory.write(4, Image + 0x08, 0);
+      m.system.memory.write(2, Image + 0x0c, 20);
+      m.system.memory.write(2, Image + 0x0e, 20);
+      m.system.memory.write(2, Image + 0x10, 20);
+      m.system.memory.write(4, Image + 0x14, Buffer);
+      m.system.memory.fill(Buffer, 0, 400);
+    };
+    //'A': its record, then its picture
+    u32 before = word(m, Log), record = word(m, HeapTop);
+    m.system.memory.fill(Buffer, 0xdd, 0x40);
+    CHECK(viaProgram(m, "sceFontGetCharInfo", {font, 'A', Buffer}, recompile), 0);
+    CHECK(logged(m, before) == blocks('A'), true);
+    CHECK(word(m, Buffer) == 16 && word(m, Buffer + 0x30) == 1138, true);
+    u32 picture = record + ((blocks('A')[0].second + 15) & ~15u);
+    //held: its details and its picture ask for nothing
+    before = word(m, Log);
+    CHECK(viaProgram(m, "sceFontGetCharInfo", {font, 'A', Buffer}, recompile), 0);
+    image();
+    CHECK(viaProgram(m, "sceFontGetCharGlyphImage", {font, 'A', Image}, recompile), 0);
+    CHECK(m.system.memory.read(1, Buffer + 6), 0x66);  //the recorded 'A', its first row
+    CHECK(word(m, Log), before);
+    //'B', drawn clipped: the 'A's two back, then its own
+    u32 recordB = word(m, HeapTop);
+    image();
+    CHECK(viaProgram(m, "sceFontGetCharGlyphImage_Clip", {font, 'B', Image, 0, 0, 20, 20}, recompile), 0);
+    auto expected = std::vector<std::pair<u32, u32>>{{2, record}, {2, picture}};
+    for(auto ask : blocks('B')) expected.push_back(ask);
+    CHECK(logged(m, before) == expected, true);
+    CHECK(m.system.memory.read(1, Buffer), 17);  //drawn: its first pixel, shade 1
+    u32 pictureB = recordB + ((blocks('B')[0].second + 15) & ~15u);
+    //nothing read: a code below the first (zeros), a shadow, a picture's size
+    before = word(m, Log);
+    m.system.memory.fill(Buffer, 0xdd, 0x40);
+    CHECK(viaProgram(m, "sceFontGetCharInfo", {font, 7, Buffer}, recompile), 0);
+    CHECK(word(m, Buffer) == 0 && word(m, Buffer + 0x30) == 0, true);
+    CHECK(viaProgram(m, "sceFontGetShadowInfo", {font, 'A', Buffer}, recompile), 0);
+    image();
+    CHECK(viaProgram(m, "sceFontGetShadowGlyphImage", {font, '_', Image}, recompile), 0);
+    CHECK(viaProgram(m, "sceFontGetCharImageRect", {font, 'A', Buffer}, recompile), 0);
+    CHECK(word(m, Log), before);
+    //one the font hasn't got reads the alternative ('_'); the space, its picture of 0 bytes (the heap gives one)
+    CHECK(viaProgram(m, "sceFontGetCharInfo", {font, 'C', Buffer}, recompile), 0);
+    expected = {{2, recordB}, {2, pictureB}};
+    for(auto ask : blocks('_')) expected.push_back(ask);
+    CHECK(logged(m, before) == expected, true);
+    before = word(m, Log);
+    CHECK(viaProgram(m, "sceFontGetCharInfo", {font, '_', Buffer}, recompile), 0);
+    CHECK(word(m, Log), before);
+    u32 recordSpace = word(m, HeapTop);
+    CHECK(viaProgram(m, "sceFontGetCharInfo", {font, ' ', Buffer}, recompile), 0);
+    CHECK(word(m, Buffer + 0x30), 416);
+    auto calls = logged(m, before);
+    CHECK(calls.size() == 4 && calls[2] == blocks(' ')[0] && calls[3] == std::pair(1u, 0u), true);
+    //from no thread: the same answer, nothing asked for, the space held still
+    before = word(m, Log);
+    m.system.memory.fill(Buffer, 0xdd, 0x40);
+    CHECK(m.call("sceFontGetCharInfo", {font, 'B', Buffer}), 0);
+    CHECK(word(m, Buffer) == 5 && word(m, Buffer + 0x30) == 700 && word(m, Log) == before, true);
+    //flushed: the space's two back; read again, asked for again
+    u32 pictureSpace = recordSpace + ((blocks(' ')[0].second + 15) & ~15u);
+    CHECK(viaProgram(m, "sceFontFlush", {font}, recompile), 0);
+    CHECK(logged(m, before) == (std::vector<std::pair<u32, u32>>{{2, recordSpace}, {2, pictureSpace}}), true);
+    CHECK(viaProgram(m, "sceFontFlush", {font}, recompile), 0);
+    CHECK(word(m, Log), before + 2);
+    CHECK(viaProgram(m, "sceFontGetCharInfo", {font, 'A', Buffer}, recompile), 0);
+    CHECK(word(m, Log), before + 4);
+    //closed: the tables, then the 'A's record and picture
+    u32 heldRecord = m.kernel.openFonts.begin()->second.glyphBlocks[0];
+    u32 heldPicture = m.kernel.openFonts.begin()->second.glyphBlocks[1];
+    before = word(m, Log);
+    CHECK(viaProgram(m, "sceFontClose", {font}, recompile), 0);
+    calls = logged(m, before);
+    CHECK(calls.size(), 11);
+    if(calls.size() == 11) {
+      CHECK(calls[9] == std::pair(2u, heldRecord) && calls[10] == std::pair(2u, heldPicture), true);
+    }
+    //the library done with, a font holding a glyph: its tables, its glyph, then the library's four
+    font = viaProgram(m, "sceFontOpen", {f.library, 2, 0, Error}, recompile);
+    CHECK(viaProgram(m, "sceFontGetCharGlyphImage", {font, 'B', Image}, recompile), 0);
+    heldRecord = m.kernel.openFonts.begin()->second.glyphBlocks[0];
+    heldPicture = m.kernel.openFonts.begin()->second.glyphBlocks[1];
+    before = word(m, Log);
+    CHECK(viaProgram(m, "sceFontDoneLib", {f.library}, recompile), 0);
+    calls = logged(m, before);
+    CHECK(calls.size(), 9 + 2 + 4);
+    if(calls.size() == 15) {
+      CHECK(calls[9] == std::pair(2u, heldRecord) && calls[10] == std::pair(2u, heldPicture), true);
+      CHECK(calls[14] == std::pair(2u, f.library), true);
+    }
+    CHECK(m.kernel.fontCalls.empty() && m.kernel.openFonts.empty(), true);
+  }
+}
+
+//An alloc that gives nothing for a glyph's block fails the call, out of memory, writing nothing, and what it gave goes
+//back, whatever the block's size: Hammerin' Hero's alloc is a VPL's, which refuses 0 bytes (pspautotests' vpl/try),
+//so its space, a picture of 0 bytes, has no details, and the game spaces its words by that (a quarter of the 18 pixels
+//it takes then: 4.5); with them its spaces were a quarter of the font's advance (1.7 pixels: "Startthegame"). Its
+//letters read as before.
+static auto fontsGlyphRefused() -> void {
+  FontFolder folder;
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    m.kernel.fontsFrom(folder.path.string());
+    memoryFunctions(m);
+    s32 vpl = m.call("sceKernelCreateVpl", {m.string("font heap"), 2, 0x4000, 0x4000, 0});  //high: past the code
+    CHECK(vpl > 0, true);
+    parameters(m, 1, VplAlloc, VplFree);
+    m.system.memory.write(4, Parameters + 0x00, vpl);
+    u32 library = viaProgram(m, "sceFontNewLib", {Parameters, Error}, recompile);
+    CHECK(library != 0 && word(m, Error) == 0, true);
+    auto bytes = systemFont(1).build();
+    m.system.memory.copyIn(0x0896'0000, bytes.data(), bytes.size());
+    u32 font = viaProgram(m, "sceFontOpenUserMemory", {library, 0x0896'0000, u32(bytes.size()), Error}, recompile);
+    CHECK(font != 0 && word(m, Error) == 0, true);
+    CHECK(m.call("sceKernelTryAllocateVpl", {u32(vpl), 0, Answer + 8}), 0x8002'01b7);  //0 bytes: refused
+    //the space: its record given, its picture refused; the record goes back, the details are left as they were
+    u32 before = word(m, Log);
+    m.system.memory.fill(Buffer, 0xdd, 0x40);
+    CHECK(viaProgram(m, "sceFontGetCharInfo", {font, ' ', Buffer}, recompile), 0x8046'0001);
+    auto calls = logged(m, before);
+    CHECK(calls.size() == 3 && calls[0] == std::pair(1u, 32u) && calls[1] == std::pair(1u, 0u), true);
+    if(calls.size() == 3) CHECK(calls[2].first, 2);
+    CHECK(word(m, Buffer) == 0xdddd'dddd && word(m, Buffer + 0x30) == 0xdddd'dddd, true);
+    CHECK(m.kernel.openFonts.begin()->second.held, 0);
+    m.system.memory.write(4, Image + 0x00, 2);
+    m.system.memory.write(2, Image + 0x0c, 20), m.system.memory.write(2, Image + 0x0e, 20);
+    m.system.memory.write(2, Image + 0x10, 20), m.system.memory.write(4, Image + 0x14, Buffer);
+    CHECK(viaProgram(m, "sceFontGetCharGlyphImage", {font, ' ', Image}, recompile), 0x8046'0001);
+    //its letters: their details and pictures as ever
+    CHECK(viaProgram(m, "sceFontGetCharInfo", {font, 'A', Buffer}, recompile), 0);
+    CHECK(word(m, Buffer + 0x30), 1138);
+    CHECK(viaProgram(m, "sceFontGetCharInfo", {font, 'B', Buffer}, recompile), 0);
+    CHECK(word(m, Buffer + 0x30), 700);
+    //every block back by the time the library's done with: the VPL as it was made
+    CHECK(viaProgram(m, "sceFontDoneLib", {library}, recompile), 0);
+    CHECK(m.kernel.pools.count(vpl), 1);
+    if(m.kernel.pools.count(vpl)) CHECK(m.kernel.pools[vpl].pieces.empty(), true);
+  }
+}
+
+//A glyph read part way through, the program's alloc waiting, carries on in another machine as it would have in the
+//first; a state of an older layout (26) loads, its font holding no glyph.
+static auto fontsGlyphStates() -> void {
+  FontFolder folder;
+  auto prepare = [&](KernelMachine& m) { m.kernel.fontsFrom(folder.path.string()); };
+  auto reading = [&](KernelMachine& m) {
+    memoryFunctions(m);
+    Assembler a{m, Code};
+    a.li(a0, parameters(m, 4));
+    a.li(a1, Error);
+    a.call("sceFontNewLib");
+    a.put(addu(s0, v0, zero));
+    a.put(addu(a0, v0, zero));
+    a.li(a1, 1);
+    a.li(a2, 0);
+    a.li(a3, Error);
+    a.call("sceFontOpen");
+    a.put(addu(s1, v0, zero));
+    a.li(t0, SlowAlloc);
+    a.put(sw(t0, 0x0c, s0));  //the library's alloc, the slow one from here on
+    a.put(addu(a0, s1, zero));
+    a.li(a1, 'A');
+    a.li(a2, Buffer);
+    a.call("sceFontGetCharInfo");
+    a.li(t9, Answer);
+    a.put(sw(v0, 0, t9));
+    a.call("sceKernelExitThread");
+    m.system.recompiler.enabled = false;
+    m.system.power(Code);
+    s32 uid = m.kernel.createThread("main", Code, 0x20, 0x4000, 0, 0);
+    m.kernel.startThread(*m.kernel.threads[uid], 0, 0);
+  };
+  KernelMachine whole;
+  prepare(whole);
+  reading(whole);
+  whole.kernel.run(Kernel::CPUFrequency / 10);
+  CHECK(word(whole, Answer) == 0 && word(whole, Buffer + 0x30) == 1138, true);
+  CHECK(whole.kernel.openFonts.size() == 1 && whole.kernel.openFonts.begin()->second.held == 2, true);
+  KernelMachine part;
+  prepare(part);
+  reading(part);
+  auto glyphCall = [&] {
+    return part.kernel.fontCalls.size() == 1 && part.kernel.fontCalls.begin()->second.kind == Kernel::FontCall::Glyph;
+  };
+  for(u32 step = 0; step < 2000 && !glyphCall(); step++) part.kernel.run(Kernel::CPUFrequency / 100'000);
+  CHECK(glyphCall(), true);
+  auto state = saveState(part);
+  KernelMachine fresh;
+  prepare(fresh);
+  CHECK(loadState(fresh, state), true);
+  CHECK(saveState(fresh) == state, true);
+  fresh.kernel.run(Kernel::CPUFrequency / 10);
+  CHECK(word(fresh, Answer) == 0 && word(fresh, Buffer + 0x30) == 1138, true);
+  CHECK(logged(fresh) == logged(whole) && fresh.kernel.fontCalls.empty(), true);
+  CHECK(fresh.kernel.openFonts.size() == 1 && fresh.kernel.openFonts.begin()->second.held == 2, true);
+
+  //layout 26: a font open, no glyph's fields (a font's held glyph and its blocks, 8 bytes when it holds none)
+  FontMachine f(folder);
+  CHECK(viaProgram(f.m, "sceFontOpen", {f.library, 5, 0, Error}) != 0, true);
+  auto kernelState = [](KernelMachine& m) {
+    serializer s;
+    m.kernel.serialize(s);
+    return std::vector<u8>{s.data(), s.data() + s.size()};
+  };
+  auto now = kernelState(f.m);
+  auto& open = f.m.kernel.openFonts.begin()->second;
+  open.held = 3;
+  auto changed = kernelState(f.m);
+  open.held = 0;
+  u32 at = 0;
+  while(at < now.size() && now[at] == changed[at]) at++;
+  CHECK(at + 8 <= now.size(), true);
+  if(at + 8 > now.size()) return;
+  auto older = now;
+  older.erase(older.begin() + at, older.begin() + at + 8);
+  KernelMachine n;
+  prepare(n);
+  u32 current = n.kernel.stateLayout;
+  n.kernel.stateLayout = 26;
+  serializer s{older.data(), u32(older.size())};
+  bool loaded = n.kernel.serialize(s) && s.size() == older.size();
+  n.kernel.stateLayout = current;
+  CHECK(loaded && kernelState(n) == now, true);
+  CHECK(n.kernel.openFonts.size() == 1 && n.kernel.openFonts.begin()->second.held == 0, true);
+}
+
 auto fontTests() -> Tests {
   return {{"pgf read back", pgfReadBack}, {"pgf damaged", pgfDamaged}, {"fonts memory", fontsMemory},
           {"fonts found", fontsFound}, {"fonts measured", fontsMeasured}, {"fonts drawn", fontsDrawn},
           {"fonts of the program's own", fontsOwn}, {"fonts resolution", fontsResolution},
           {"fonts states", fontsStates}, {"fonts folder", fontsFolder}, {"fonts closed twice", fontsClosedTwice},
-          {"fonts in VRAM", fontsInVram}};
+          {"fonts in VRAM", fontsInVram}, {"fonts glyph memory", fontsGlyphMemory},
+          {"fonts glyph memory refused", fontsGlyphRefused}, {"fonts glyph states", fontsGlyphStates}};
 }
 
 }

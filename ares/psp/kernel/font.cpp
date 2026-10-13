@@ -21,8 +21,9 @@
 //
 //Not as Sony's library does it: a font file opened a piece at a time (sceFontOpenUserFile's mode 0) is read through
 //the kernel's own files, not the game's open, read, seek and close callbacks (which must be set, as on a PSP, but
-//aren't called), so a game whose callbacks read an archive of its own wouldn't find its font; and drawing a glyph
-//asks the game for no memory (a PSP borrows two blocks a font, the glyph's bytes and its picture, till it closes).
+//aren't called), so a game whose callbacks read an archive of its own wouldn't find its font; the memory a glyph is
+//read into (fontCharacter()) is asked for and given back as a PSP does, but nothing is written in it (no game reads
+//it); and a shadow, or a picture's size, is answered without reading its glyph into any.
 
 namespace {
   constexpr u32 StandInLibrary = 0x0000'f001;  //the handle the stand-in gives (nothing a game reads through)
@@ -41,7 +42,7 @@ namespace {
   //list of them (0x44) and the alternative character (0x48, 16 bits). Each font open takes a handle (76 bytes) and
   //data (560) of the blocks sceFontNewLib asked for; what's in those no game reads, and they're left as they were.
   constexpr u32 HandleSize = 76, HandleDataSize = 560, MemoryFontSize = 12, MaxFonts = 9;
-  constexpr u32 StyleSize = 0xa8, InfoSize = 0x105, CharInfoSize = 0x3c;
+  constexpr u32 StyleSize = 0xa8, InfoSize = 0x105, CharInfoSize = 0x3c, GlyphImageSize = 0x18;
 
   //The most read of a font: a system font's file (the biggest of the PSP's, jpn0.pgf, is 1.5 MB), and of the game's
   //memory for a font held there (fontMemory()).
@@ -202,18 +203,18 @@ auto Kernel::systemFontStyle(u32 address, u32 index) -> void {
 //character's ('_' to start with: sceFontSetAltCharacterCode); or nothing at all (an empty glyph: no picture, every
 //measurement 0) for a code below the font's first, or when the alternative is missing too, as pspautotests'
 //charinfo, charglyphimage and altcharcode recorded. A damaged glyph counts as missing. A shadow is the character's
-//measurements with its shadow's picture and place.
-auto Kernel::fontGlyph(const OpenFont& font, u32 code, PGF::Glyph& glyph, bool shadow) -> void {
+//measurements with its shadow's picture and place. Returns the number of the glyph read (-1: none).
+auto Kernel::fontGlyph(const OpenFont& font, u32 code, PGF::Glyph& glyph, bool shadow) -> s32 {
   auto& pgf = *font.pgf;
   glyph = {};
-  if(code < pgf.firstCode) return;
+  if(code < pgf.firstCode) return -1;
   s32 index = pgf.glyphFor(code);
   if(index < 0 || !pgf.glyph(index, glyph)) {
     u32 alternative = memory.reaches(font.library + 0x48, 2) ? memory.read(2, font.library + 0x48) : 0x5f;
     index = alternative < pgf.firstCode ? -1 : pgf.glyphFor(alternative);
-    if(index < 0 || !pgf.glyph(index, glyph)) return void(glyph = {});
+    if(index < 0 || !pgf.glyph(index, glyph)) return glyph = {}, -1;
   }
-  if(!shadow) return;
+  if(!shadow) return index;
   PGF::Glyph picture;
   if(!pgf.shadow(glyph.shadowID, picture)) picture = {};
   glyph.width = picture.width;
@@ -221,6 +222,7 @@ auto Kernel::fontGlyph(const OpenFont& font, u32 code, PGF::Glyph& glyph, bool s
   glyph.left = picture.left;
   glyph.top = picture.top;
   glyph.pixels = std::move(picture.pixels);
+  return index;
 }
 
 //Draws a glyph's picture into the game's buffer, as the GlyphImage at image (24 bytes) says: the pixel format, the
@@ -272,12 +274,12 @@ auto Kernel::fontDraw(const PGF::Glyph& glyph, u32 image, s64 clipLeft, s64 clip
 }
 
 //Calls into the game. The library's functions that need memory (sceFontNewLib, the opens, sceFontClose and
-//sceFontDoneLib) ask the game's alloc for it, and give it back through the game's free, one call at a time. The
-//thread that called the library runs each from where it called the library, with its registers as they were there but
-//for the arguments (the parameters' user data, then a size or a block), a stack below its own, and a return to the
-//trampoline's sixth syscall. The game's function may wait or be interrupted, like any of its code. From there
-//(fontReturned()), the library does what's next: give back what's left to give, ask for what's left to ask for, then
-//its ending (fontEnd()), and return to the game (fontFinish()).
+//sceFontDoneLib, and those that read a glyph: fontCharacter()) ask the game's alloc for it, and give it back through
+//the game's free, one call at a time. The thread that called the library runs each from where it called the library,
+//with its registers as they were there but for the arguments (the parameters' user data, then a size or a block), a
+//stack below its own, and a return to the trampoline's sixth syscall. The game's function may wait or be
+//interrupted, like any of its code. From there (fontReturned()), the library does what's next: give back what's left
+//to give, ask for what's left to ask for, then its ending (fontEnd()), and return to the game (fontFinish()).
 auto Kernel::fontNext(FontCall& call) -> void {
   auto run = [&](u32 function, u32 argument) {
     restore(call.caller);
@@ -300,7 +302,8 @@ auto Kernel::fontNext(FontCall& call) -> void {
 
 //The trampoline's sixth syscall: the game's alloc or free returned to the library (alloc's block in v0). A block
 //alloc couldn't give (none, for a size above 0) ends the function: what it gave goes back, and the function fails,
-//out of memory, as pspautotests' newlib recorded.
+//out of memory, as pspautotests' newlib recorded. A glyph's blocks are wanted whatever their size: none given for
+//its picture of no pixels (0 bytes) fails the call too (fontCharacter()).
 auto Kernel::fontReturned() -> void {
   if(!current) return;
   auto found = fontCalls.find(current->uid);
@@ -311,9 +314,9 @@ auto Kernel::fontReturned() -> void {
     call.frees.erase(call.frees.begin());
   } else if(!call.ended && call.got.size() < call.asks.size()) {
     call.got.push_back(value);
-    if(!value && call.asks[call.got.size() - 1]) {
+    if(!value && (call.asks[call.got.size() - 1] || call.kind == FontCall::Glyph)) {
       call.ended = true;
-      call.result = 0;
+      call.result = call.kind == FontCall::Glyph ? FontOutOfMemory : 0;
       call.error = FontOutOfMemory;
       call.frees.assign(call.got.rbegin(), call.got.rend());
       if(call.kind == FontCall::Open) fontRelease(call);
@@ -423,17 +426,39 @@ auto Kernel::fontEnd(FontCall& call) -> void {
     openFonts[font.id] = std::move(font);
     return;
   }
+  if(call.kind == FontCall::Glyph) {
+    auto found = openFonts.find(call.font);
+    if(found == openFonts.end()) {  //closed meanwhile, by another thread
+      call.frees.assign(call.got.begin(), call.got.end());
+      call.result = FontInvalidParameter;
+      return;
+    }
+    //the font holds the glyph now (one another thread read into it meanwhile goes back), and answers with it
+    auto& font = found->second;
+    call.frees.assign(font.glyphBlocks.begin(), font.glyphBlocks.end());
+    font.held = call.glyph + 1;
+    font.glyphBlocks = call.got;
+    PGF::Glyph glyph;
+    if(!font.pgf->glyph(call.glyph, glyph)) glyph = {};
+    fontAnswer(glyph, call.what, call.out, call.clip);
+    call.result = 0;
+    return;
+  }
   call.result = 0;  //memory given back: closing, or the library done with
   call.error = 0;
 }
 
 //The memory a font took, in the order closing gives it back: a font read a piece at a time, as pspautotests' fonttest
 //recorded (the pointers, the character map, the two lists of ranges, the shadow map, then the four tables); the rest,
-//last taken first (an order not recorded).
+//last taken first (an order not recorded). Then the glyph it holds, its record and then its picture (fonttest's two
+//blocks for the 'H' it drew, given back after the tables).
 auto Kernel::fontGiveBack(const OpenFont& font) -> std::vector<u32> {
   auto& b = font.blocks;
-  if(b.size() == 9) return {b[8], b[7], b[5], b[6], b[4], b[0], b[1], b[2], b[3]};
-  return {b.rbegin(), b.rend()};
+  std::vector<u32> order;
+  if(b.size() == 9) order = {b[8], b[7], b[5], b[6], b[4], b[0], b[1], b[2], b[3]};
+  else order.assign(b.rbegin(), b.rend());
+  order.insert(order.end(), font.glyphBlocks.begin(), font.glyphBlocks.end());
+  return order;
 }
 
 //The memory sceFontOpen and sceFontOpenUserFile ask for: a file read whole (mode 1), its bytes and a 12-byte record
@@ -910,22 +935,64 @@ auto Kernel::fontCharInfo(const PGF::Glyph& glyph, u32 info) -> void {
 
 //The functions on one character of a font (its code, 16 bits): its details, its picture's size, the picture drawn
 //(whole, or clipped), and the same of its shadow. No font, or nowhere to put the answer: INVALID_PARAMETER.
+//
+//A character's details and its picture read its glyph into memory of the program's first, as a PSP does: two blocks,
+//its record past the 8 bytes that lead it, then its picture, a byte a pixel (pspautotests' fonttest: drawing jpn0's
+//'H', whose record is 79 bytes and picture 14 by 15, took 71, then 210). The font holds the glyph it last read:
+//reading another gives those two back first, in the same order; the one it holds asks for nothing, nor does a code
+//with no glyph to read. A block alloc doesn't give fails the call, out of memory, with nothing written, whatever its
+//size: a character with no pixels (a space) asks for a picture of 0 bytes, which a program's alloc may refuse.
+//Hammerin' Hero's does (a VPL's: pspautotests' vpl/try refused 0 bytes), and its text is spaced by it: a character
+//advances by its details' advance, but a space by a quarter of that, or of the 18 pixels it takes when they fail.
+//Its words are spaced as normal on a PSP (PPSSPP's issue 5954 compared pictures of one), so a space's details fail
+//there, and its spaces are 4.5 pixels wide, not 1.7. With no alloc or free to call, from an interrupt handler or from
+//a thread already in a library function (which can't run the program's functions this way), nothing is asked for. A
+//shadow, and a picture's size, are answered without reading the glyph into memory (nothing shows what they take).
 auto Kernel::fontCharacter(bool shadow, u32 what) -> void {
   if(!fontsInstalled()) return result(ErrorNotFound);
   auto font = fontFor(arg(0));
   u32 code = arg(1) & 0xffff, out = arg(2);
-  u32 size = what == 0 ? CharInfoSize : what == 1 ? 4 : 0x18;
+  u32 size = what == 0 ? CharInfoSize : what == 1 ? 4 : GlyphImageSize;
   if(!font || !out || !memory.reaches(out, size)) return result(FontInvalidParameter);
+  u32 clip[4] = {arg(3), arg(4), arg(5), arg(6)};
   PGF::Glyph glyph;
-  fontGlyph(*font, code, glyph, shadow);
+  s32 index = fontGlyph(*font, code, glyph, shadow);
+  u32 alloc = memory.read(4, font->library + 0x0c), free = memory.read(4, font->library + 0x10);
+  if(!shadow && what != 1 && index >= 0 && font->held != u32(index) + 1 && current && !interrupting &&
+     !fontCalls.count(current->uid) && fontCallable(alloc) && fontCallable(free)) {
+    FontCall call;
+    call.kind = FontCall::Glyph;
+    call.library = font->library;
+    call.userData = memory.read(4, font->library + 0x00);
+    call.alloc = alloc;
+    call.free = free;
+    call.asks = {std::max<u32>(glyph.recordLength, 8) - 8, glyph.width * glyph.height};
+    call.frees = font->glyphBlocks;
+    call.font = font->id;
+    call.glyph = index;
+    call.code = code;
+    call.what = what;
+    call.out = out;
+    std::copy(clip, clip + 4, call.clip);
+    font->held = 0;
+    font->glyphBlocks.clear();
+    fontStart(std::move(call));
+    return;
+  }
+  fontAnswer(glyph, what, out, clip);
+  result(0);
+}
+
+//What fontCharacter()'s what asks of a character, answered with its glyph: its details, its picture's size, or its
+//picture drawn, whole or clipped to clip (x, y, width and height).
+auto Kernel::fontAnswer(const PGF::Glyph& glyph, u32 what, u32 out, const u32 clip[4]) -> void {
   if(what == 0) fontCharInfo(glyph, out);
   if(what == 1) {
     memory.write(2, out + 0, glyph.width);
     memory.write(2, out + 2, glyph.height);
   }
   if(what == 2) fontDraw(glyph, out, 0, 0, ~0ull, ~0ull);
-  if(what == 3) fontDraw(glyph, out, s32(arg(3)), s32(arg(4)), arg(5), arg(6));
-  result(0);
+  if(what == 3) fontDraw(glyph, out, s32(clip[0]), s32(clip[1]), clip[2], clip[3]);
 }
 
 auto Kernel::sceFontGetCharInfo() -> void { fontCharacter(false, 0); }
@@ -937,9 +1004,25 @@ auto Kernel::sceFontGetShadowImageRect() -> void { fontCharacter(true, 1); }
 auto Kernel::sceFontGetShadowGlyphImage() -> void { fontCharacter(true, 2); }
 auto Kernel::sceFontGetShadowGlyphImage_Clip() -> void { fontCharacter(true, 3); }
 
-//(font handle): what Sony's library keeps of the glyphs it read goes; here nothing is kept. 0.
+//(font handle): what the library keeps of the glyphs it read goes: the glyph the font holds (fontCharacter()), its
+//memory given back (its record, then its picture), the next one asked for read afresh (as the name says: no
+//recording shows it). 0.
 auto Kernel::sceFontFlush() -> void {
   result(0);
+  if(!fontsInstalled()) return;
+  auto font = fontFor(arg(0));
+  u32 free = font ? memory.read(4, font->library + 0x10) : 0;
+  if(!font || font->glyphBlocks.empty() || !current || interrupting || fontCalls.count(current->uid) ||
+     !fontCallable(free)) return;
+  FontCall call;
+  call.kind = FontCall::Give;
+  call.library = font->library;
+  call.userData = memory.read(4, font->library + 0x00);
+  call.free = free;
+  call.frees = font->glyphBlocks;
+  font->held = 0;
+  font->glyphBlocks.clear();
+  fontStart(std::move(call));
 }
 
 //(library, a character code): the character drawn for those a font hasn't got, its low 16 bits (pspautotests'
