@@ -25,6 +25,28 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## CI: the Android unit tests in every build, the releases waiting for them; the SDK cache gone — 2026-10-13
+
+Branch `cursor/test-plan-02-2b67`, on master (`9333a8d7a`, #235). Package 02 of the 2026-10-13 test and performance
+plan (an outside audit of master `b3507c1db`, triaged against `9333a8d7a`; package 01's PR indexes it in the
+implementation plan). CI only: no app, core or test code changes.
+- **Unit tests in CI**: `.github/workflows/android.yml` gains a job beside the APK build, "Unit tests (legacy +
+  modern)": `./gradlew :app:testLegacyDebugUnitTest :app:testModernDebugUnitTest --continue` (the app's 42 test files,
+  299 `@Test`s, which no workflow ran before), their XML and HTML reports kept as the `unit-test-reports` artifact
+  whether they pass or fail. The release and nightly jobs now need it as well as the build, so a failing test
+  publishes nothing. It builds no APK and uploads none; no device or instrumented test is implied (none exist).
+- **The SDK cache removed** (the Android job's long post step): `Cache Android SDK` packed the runner image's whole
+  SDK folder, 4.6 GiB. After a miss its post step tars all of it: on master's six runs before `0a9a7fa75` that step
+  took 2 to 59 minutes (13 or more in four), master's run 38423938456 was cancelled in it after 37 minutes with every
+  real step green, and the run for `9333a8d7a` sat in it as this was written. Without it, the components install in
+  17-34 s (the platform and build tools are on the image; the NDK and CMake download). A hit cost 118 s to restore.
+  Two of its entries (9.2 GiB together) also filled most of the repository's 10 GB of cache, which GitHub trims by
+  evicting the least recently used (the Gradle and FFmpeg caches).
+- **Checks**: actionlint 1.7.12 on the workflow (clean); the job graph read back (release and nightly need build and
+  unit-tests). CI on the PR and a negative control (a failing test on a disposable branch): below once run.
+- **Left**: the unit tests run on the debug variants (release differs in `BuildConfig.DEBUG` and signing); the
+  dialogs', settings' and launch paths' UI tests are later packages (15-17).
+
 ## PSP: savedata's patterns — Dissidia's Load Game, Final Fantasy Type-0's list; Disgaea Infinite's New was Continue — 2026-10-13
 
 Branch `cursor/psp-savedata3-2b67`, on master (1d9308714, #228). docs/psp-core.md, part 84, has the evidence. Clean
