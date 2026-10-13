@@ -10672,3 +10672,152 @@ the game reads the clock.
 **Scratch** (the runs, their stick copies, traces and captures; `run.sh` gives each run its own memory stick folder, and
 pins TZ to the Mac's own zone, America/New_York, as the stick's dates and the clock's local time follow it):
 `~/phobos-work/scratch/savedata2/` on the Mac it was made on, not in the repository.
+
+## Part 84: savedata's patterns — Dissidia's Load Game, Final Fantasy Type-0's list; Disgaea Infinite's New was Continue
+
+On branch `cursor/psp-savedata3-2b67`, on master (1d9308714, #228: part 80). Parts 81 to 83 are other branches'.
+Sources: the games themselves, traced with `--trace-savedata`; Disgaea Infinite's own code, read from a dump of its RAM
+with LLVM's MIPS disassembler, and its variables and system calls followed frame by frame with a scratch runner (neither
+in the repository); pspsdk's psputility_savedata.h; pspautotests' utility/savedata/idlist (the list mode's "A?C", and
+an open of a path holding '?'); PPSSPP read only as a description of the PSP (its notes on what the list dialogs show).
+JPCSP was not read. Save states are unchanged (StateVersion 26): nothing gains state.
+
+**The problems** (the play-testers' deep-play batch 02, suspected bugs 1, 3 and 7): both Dissidias' Load Game went back
+to the title with a save on the stick; Disgaea Infinite's New faded out and back to its title for good on an empty
+stick, writing nothing; Final Fantasy Type-0's list request for "GAMEDATA*" was answered with its SYSTEMDATA.
+
+**Dissidia Final Fantasy (ULUS10437) and Dissidia 012 (ULUS10566).** Load Game is a list load (mode 4) of GameData00 to
+GameData19, focus 3 (the latest), whose save name is "GameData*", left in the parameters from the list request (mode
+11) the game makes just before, which takes it as a pattern. The kernel took a list's names only for a request naming
+no save ("" or "<>"; part 80), so it looked for a save named "GameData*" (a folder ULUS10437GameData*), found none,
+answered NO_DATA (0x80110307), and the game went quietly back to its title. A PSP's list dialog shows the list's saves
+there; the request's save name only names the save focus 0 picks (pspsdk's FOCUS_UNKNOWN; PPSSPP's notes take it as
+the request's save), so its player sees GameData00, the latest. **The fix** (utility.cpp, `savePattern()`): a save's
+name holding '*' or '?' is a pattern, which names no save a memory stick can hold (FAT takes neither character in a
+name, and idlist's open of a file in a folder whose name held '?' was 0x80010016, invalid, where one not there is
+0x80010002). In a list's load or save from a list (one with a first name) it names no save of its own, as "<>"
+doesn't (`savedataMode()`, the trace, and the dialog's saves, `dialogSaves()`), so the automatic answer
+(`savedataUnshown()`) takes the save the dialog focuses, GameData00, writes its name back and loads it. **Now**: Load
+Game loads GameData00 (286,328 bytes; 012's 257,224) and
+each game goes on where the play-tester saved, before its opening: Dissidia plays its opening movie and then its
+tutorial's pages, 012 its opening ("Two divine powers locked in an endless struggle").
+
+**The same mistake elsewhere.** Every mode that takes a save's name or a list of them was looked through.
+- A list's load naming a save of its own took that save before the list (chosen in part 80), though on a PSP the name
+  only says which save focus 0 picks. Disgaea Infinite's Continue is one (save "DIP000", its 32 slots, focus 0): with
+  a save in any slot but DIP000 (one a player made through the app's dialog, say) it found no data. Every list load
+  answered with no front end is now answered as its dialog would be: the save it focuses among those shown (the list's
+  saves there, and the request's own where it names one that's there, `dialogSaves()`' choice since part 73), focus 0
+  taking the request's own. In the game: a save Disgaea made (Start in its story) moved from DIP000 to DIP003,
+  Continue loads DIP003 and the story goes on where it was saved, where master's runner said no data and went back
+  to the title; left in DIP000, it loads as before.
+- A list's save naming a pattern saved under it, making a folder no PSP's stick can hold; it now takes the list's
+  first name, as one naming none does. One naming its own save takes it, as before (chosen in part 80: where the
+  automatic answer's loads naming it find it).
+- A pattern in a list was a save's name too: the app's dialog showed it, as new data to save to. It's now no save:
+  shown in no dialog (nor among the folders "<>" stands for), taken by no answer, and a list save led by one is
+  refused, as one led by a name that isn't plain is.
+- With no list (none, or no first name) a pattern is taken as the save's name, which no save has: a list load finds
+  none and a list save is refused. Chosen: taken as none, it would be the game's folder alone, a save the game may
+  keep there of its own (Dissidia's list requests all have their list).
+- A save under a pattern (the autosave, save, make and write modes) is refused as a name that isn't plain is, nothing
+  made (chosen: no recording saves under one; the write modes, 17 and 18, are so refused before they'd be NO_DATA for
+  want of a save); a load, read, files request or delete of one is answered as before (no PSP's stick holds such a
+  save). The app's dialog asks nothing for a save whose name is taken so (a single save's, or a list save's with no
+  list), refusing it at once as without the dialog; a load or delete of one shows its notice that there's nothing.
+- A list delete answered with no front end deletes the save it names, as before, so one naming a pattern deletes
+  nothing (chosen: an unshown delete takes no save of the list's); the app's dialog shows the list's saves there.
+- The sizes mode measures msData's save, whose names Dissidia gives resolved ("GameData00"); the trace says whether
+  the save a list request takes is there, the list's first where its save name is a pattern, as savedataMode() takes it.
+
+Chosen: a list's names are shown whatever the request's pattern takes. PPSSPP's notes show the list's names alone;
+whether a PSP also narrows them to the pattern isn't recorded anywhere here, and all twenty of Dissidia's names match
+"GameData*", so either reading loads its GameData00.
+
+**Final Fantasy Type-0 (NPJH50443).** Its list request (mode 11, most 1) for "GAMEDATA*" listed SYSTEMDATA: the list
+mode listed every folder whose name starts with the game's, whatever the save's name. idlist's "A?C" listed ABC, its
+one save, so the save's name is a pattern, not a save's name; that a PSP leaves out the saves the pattern doesn't take
+isn't recorded (that test made no other) and is chosen, as the games mean their patterns (Type-0 asks for "GAMEDATA*"
+beside its SYSTEMDATA). **The fix** (`savedataList()`, `patternTakes()`): the game's saves whose own names the pattern
+takes whole, '*' any run of characters (none too), '?' any one, any other character itself, as it's given (chosen: a
+FAT stick keeps names' case, and a game names its own folders), so a name with neither lists that save alone
+(chosen). An empty name and "<>" still list every save of the game's (chosen, as before: no recording lists with
+either, and neither names a save anywhere else). **Now**: listed 0 at frame 744 where master listed SYSTEMDATA; the
+game goes on as before (every frame the same but one of its opening movie's, by timing), its Load Game still told
+there's no save.
+
+**Disgaea Infinite (ULUS10522): no emulator bug; the play-tester's New was Continue.** The title's menu is New,
+Continue, Option, Extra, and its cursor starts on Continue: the cursor's index, a byte at 0x08a22afc, is 1 in the
+game's own data from the first frame, and nothing but the menu's Up and Down changes it (its writers, in the title's
+code from 0x08861464, besides one setting an index out of range to 0); the arrow points at its item from the upper
+left, so on Continue it sits by New. Pressing Down from there reaches Option, which the play-tester took for Down
+skipping Continue. Continue's case (index 1 of the title's switch at 0x08861428) is the game's load: a list load of
+its play slots DIP000 to DIP031 (save "DIP000", focus 0), then, loaded, an autoload. On an empty stick it got NO_DATA
+and the game went back to its title. Its step for that load (0x088733b8) and the flow after it (0x0886f774) go on only
+with 0: cancelled (1) and every error alike lead back to the title, so whether a PSP's dialog closes its "no data"
+notice as NO_DATA (as PPSSPP's notes have it, and the kernel answers) or as backed out, the game returns to its title
+the same, and it reads nothing else of the answer.
+New (index 0, Up once from where the cursor starts) asks for no save at all: on an empty stick the story begins ("What
+happens to me if I... die?") with master's runner as with this branch's, and the prologue plays to frame 12,000 with no
+savedata request. The system data its boot message promises isn't written at boot either: the boot's step lists DIS000
+(its system data, by the message just before), finds none, and ends; the game's only saving requests are its save's,
+which Cross alone through the prologue doesn't make. Start in its story does: a list save to DIP000 (naming it, focus
+0), then DIS000 autosaved (4,700 bytes), which the next boot lists and autoloads. Nothing here changed for New or for
+Continue on an empty stick; the list mode's fix narrows the boot's list of "DIS000" to DIS000 (master listed every save
+of the game's beside it).
+
+**Tests.** `utility savedata patterns (Dissidia, Final Fantasy Type-0)`: the list mode's patterns ("GameData*" the
+GameData saves and not the others, Type-0's "GAMEDATA*" none beside SYSTEMDATA, "A?C" ABC and not ABCD, "A*C*", "*0?"
+after a false start, "gamedata*" none (case as given), a name alone, "?" none, the most asked for; "", "<>" and "*"
+every save, the game's own folder too); Dissidia's list loads ("GameData*" and its 20 slots: focus 3 the latest, 4 the
+oldest, 0 the first there; with none there NO_DATA, the pattern left); a list save naming a pattern to the list's
+first name; with no list (none, or no first name), a list load naming one finding none beside the game's own folder,
+and a list save refused; a pattern in a list passed over, and a save to a list led by one refused; saves under a
+pattern refused in modes 1, 3, 13, 14, 17 and 18, nothing made, and loads, reads, files and deletes of one finding
+none; three trace lines, exact. `utility savedata lists answered with no front end`: a list load naming its own save
+takes it where focus 0 picks it and it's there, else the first there, the last with focus 2 though its own is there,
+and NO_DATA with none there, its name left (Disgaea's Continue on an empty stick). `dialogs front end: lists naming a
+pattern (Dissidia)`: the dialog of a list load naming "GameData*" shows the list's saves there, the latest focused,
+the player's choice loaded and written back; a pattern in a list shown neither in a load's dialog nor in a save's; a
+list delete naming one shows the list's saves; with no list, the load's dialog shows nothing (the game's own folder
+there), and a single save or a list save naming one is refused at once, nothing asked or made; "<>" in a list leaves
+out a host folder of the game's whose name holds a pattern. The matcher also agreed with a plain recursive one over
+every pattern of up to five of "ab*?" and every name of up to five of "ab" (85,995 pairs; scratch).
+
+**The games #228 fixed, again** (with this branch's runner and master's, each run on its own copy of the sticks
+part 80 used): After Burner's story, from its mid-story state, ends with its list save to 0000 and goes to its MAIN
+MENU, and its next boot autoloads 0000; Brandish saves to an empty stick (three list saves to 0001), then loads it from
+the title and in play; 7th Dragon's Option save writes its system data, and its LOAD GAME loads DATA03; Colin McRae's
+first boot autosaves (OPTIONS.DAT, 228,760 bytes) and the second autoloads it, reaching its main menu. Every request
+and answer traced, every file left and every capture is the same with both runners, but 7th Dragon's capture after its
+save, which two runs minutes apart gave differing in a band at its top and two made at once gave the same, one with
+each runner (the game reads the clock: part 80).
+
+**Checks.** `tests/psp/run-tests.sh` 477 groups, 0 failures (master's 475 and the two new);
+`tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. Built against
+master's kernel, the new and changed tests fail and nothing else does: their three groups (the list mode's patterns;
+Dissidia's loads; the saves under a pattern, whose folders master made; the list loads naming their save; a pattern in
+a list shown by the dialog). The games with this branch's runner and `--trace-savedata`, each run on its
+own copy of the play-testers' sticks: Dissidia's and 012's Load Game (Cross at 2100) load GameData00 at 2161 and play
+on to frame 6000; Type-0's boot (Circle at 700) lists nothing for "GAMEDATA*" at 744; Disgaea Infinite's Cross on its
+title from where the cursor starts gets NO_DATA at 1549 and the title again, as with master's runner, and New (Up,
+then Cross) starts its story; with a save it made (Start in its story) in DIP000, or moved to DIP003, the same Cross
+loads it at 1549 and the story resumes (master's runner: no data for DIP003, and the title).
+
+**The review's points** (an independent read-only review of the first draft, diff 47849322…; it reran the PSP tests,
+477 groups, none failing, and checked the runs and the disassembly above), all taken: a single save naming a pattern
+still asked the app's dialog and was refused only once the player confirmed (now refused at once, as is a list save's
+with no list); "case as given" untested (tested now); idlist's "A?C" shows a pattern, not that the saves it doesn't
+take are left out (reworded, that part chosen); the refusal of saves under a pattern unmarked as chosen, and the write
+modes' change from NO_DATA unsaid; "an open of a folder" (of a file in one); a pattern with no list taken as none, and
+so the game's own folder (now taken as a name, which no save has); a comment's wording. Its suggestions: a game run
+with a named list load and a save elsewhere in its list (Disgaea's DIP003, above: done), and host folders whose names
+hold '*' or '?', an older build's, left out of what "<>" stands for (done). Not taken: that a list delete answered with
+no front end and naming no save deletes the game's own folder, which may hold its system data (as before this change,
+and outside it); the list mode's and mode 7's lists of every save showing such folders (no game makes them now). Its
+delta review of those changes (diff 444ddaf3…) passed them; its notes, taken: the no-list case tested with no list's
+pointer too, the folder "<>" leaves out tested, a comment's wording, and a test's loop over pairs by reference.
+
+**Scratch** (the runs, their stick copies, traces and captures, the sheets, the scratch runner's patch and Disgaea
+Infinite's disassembly; `run.sh` gives each run its own stick, `recheck228.sh` and `final3.sh` are the runs above):
+`~/phobos-work/scratch/savedata3/` on the Mac it was made on, not in the repository.
