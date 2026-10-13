@@ -542,9 +542,28 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     }
     transformAll(vertices, t);
   }
-  auto drawTriangle = [&](const Vertex& a, const Vertex& b, const Vertex& c, s32 facing) {
-    if(format.through) triangle(drawn, a, b, c, facing, false);
-    else clipTriangle(drawn, t, a, b, c, facing);
+  //(3D triangles: each vertex's place in sixteenths, as triangle() works it out, and what clipTriangle() asks of it,
+  //as bits, once a vertex, not at each of the triangles it's a corner of: off the screen; z / w past the far end, or
+  //the near one (outOfSight()); w below 0; nearer than the near plane, z + w not at least 0. Those reaching past it are
+  //cut by clipTriangle() as ever.)
+  enum : u32 { Outside = 1, Far = 2, Near = 4, Behind = 8, Cut = 16 };
+  if(!format.through && (kind == Triangles || kind == TriangleStrip || kind == TriangleFan)) {
+    placed.resize(count);
+    for(u32 n = 0; n < count; n++) {
+      auto& v = vertices[n];
+      placed[n] = {fixed(v.x), fixed(v.y), (v.outside ? Outside : 0) | (v.far ? Far : 0) | (v.near ? Near : 0) |
+                   (v.clip[3] < 0 ? Behind : 0) | (v.clip[2] + v.clip[3] >= 0 ? 0 : Cut)};
+    }
+  }
+  auto drawTriangle = [&](u32 a, u32 b, u32 c, s32 facing) {
+    auto &va = vertices[a], &vb = vertices[b], &vc = vertices[c];
+    if(format.through) return triangle(drawn, va, vb, vc, facing, false);
+    auto &pa = placed[a], &pb = placed[b], &pc = placed[c];
+    u32 any = pa.bits | pb.bits | pc.bits, all = pa.bits & pb.bits & pc.bits;
+    if((any & Outside) || (t.depthClamp ? all & (Far | Near) : any & (Far | Near))) return;
+    if(all & Behind) return;
+    if(any & Cut) return clipTriangle(drawn, t, va, vb, vc, facing);
+    placedTriangle(drawn, va, vb, vc, facing, true, {pa.x, pb.x, pc.x}, {pa.y, pb.y, pc.y});
   };
   touched = {};
   switch(kind) {
@@ -567,18 +586,16 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     }
     break;
   case Triangles:
-    for(u32 n = 0; n + 2 < count; n += 3) drawTriangle(vertices[n], vertices[n + 1], vertices[n + 2], facing);
+    for(u32 n = 0; n + 2 < count; n += 3) drawTriangle(n, n + 1, n + 2, facing);
     break;
   case TriangleStrip:
     for(u32 first = 0; first < count; first += strip) {
       u32 end = std::min(first + strip, count);
-      for(u32 n = first; n + 2 < end; n++) {
-        drawTriangle(vertices[n], vertices[n + 1], vertices[n + 2], (n - first) & 1 ? -facing : facing);
-      }
+      for(u32 n = first; n + 2 < end; n++) drawTriangle(n, n + 1, n + 2, (n - first) & 1 ? -facing : facing);
     }
     break;
   case TriangleFan:
-    for(u32 n = 1; n + 1 < count; n++) drawTriangle(vertices[0], vertices[n], vertices[n + 1], facing);
+    for(u32 n = 1; n + 1 < count; n++) drawTriangle(0, n, n + 1, facing);
     break;
   case Sprites:
     for(u32 n = 0; n + 1 < count; n += 2) {
@@ -1186,12 +1203,18 @@ auto GE::spriteJob(const Look& look, const Vertex& from, const Vertex& to, bool 
 //only counterclockwise. perspective: 3D, its texture coordinates blended as the perspective has them.
 auto GE::triangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing,
                   bool perspective) -> void {
-  s64 x[3] = {fixed(a.x), fixed(b.x), fixed(c.x)}, y[3] = {fixed(a.y), fixed(b.y), fixed(c.y)};
+  placedTriangle(look, a, b, c, facing, perspective, {fixed(a.x), fixed(b.x), fixed(c.x)},
+                 {fixed(a.y), fixed(b.y), fixed(c.y)});
+}
+
+//triangle() with its corners' places in sixteenths (x, y) worked out already.
+auto GE::placedTriangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing,
+                        bool perspective, const s64 (&x)[3], const s64 (&y)[3]) -> void {
   s64 area = (x[1] - x[0]) * (y[2] - y[0]) - (y[1] - y[0]) * (x[2] - x[0]);  //above 0: clockwise
   if(area == 0) return;
   if(facing && (area > 0) != (facing > 0)) return;
-  owe(pixelsInside({x[0], x[1], x[2]}, {y[0], y[1], y[2]}, look.pixel));
-  if(hardware) return renderer->triangle(a, b, c);
+  owe(pixelsInside(x, y, look.pixel));
+  if(hardware) return renderer->triangleAt(a, b, c, x, y);
   Job job = triangleJob(look, a, b, c, x, y, area, perspective);
   submit(job);
 }

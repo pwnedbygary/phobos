@@ -1391,6 +1391,77 @@ static auto draw3dMeshFour() -> void {
   CHECK(handed > 500 && cut > 100, true);  //(both ways taken often)
 }
 
+//What a renderer is handed for 3D triangles the GE transforms (drawVertices(): each vertex's place and bits worked out
+//once) is what clipTriangle() hands it a triangle at a time, as drawVertices() did: the same triangles, cut ones
+//among them, at the same places (the GE's sixteenths too: triangleAt()), and the same time owed, over random settings
+//and cameras, triangles, strips and fans, culling either way or none.
+static auto draw3dTrianglesPlacedOnce() -> void {
+  struct Recorder : MeshRecorder {
+    Recorder() { transforms = false; }
+    auto triangleAt(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c, const s64 (&x)[3],
+                    const s64 (&y)[3]) -> void override {
+      triangle(a, b, c);
+      for(u32 k = 0; k < 3; k++) calls.back().push_back(u32(x[k])), calls.back().push_back(u32(y[k]));
+    }
+  };
+  Scene c;
+  Random3D r;
+  Recorder once, each;
+  u32 differing = 0, drawn = 0;
+  for(u32 round = 0; round < 1500; round++) {
+    bool camera = round % 4 != 0;
+    r.settings(c.ge, camera);
+    c.ge.commands[GE::Scissor1] = r.random() % 200 | (r.random() % 200) << 10;
+    c.ge.commands[GE::Scissor2] = (200 + r.random() % 300) | (100 + r.random() % 200) << 10;
+    c.ge.commands[GE::CullFaceEnable] = r.random() % 2, c.ge.commands[GE::Cull] = r.random() % 2;
+    c.ge.commands[GE::VertexType] = 0x19f;  //(float positions, 3D)
+    auto format = c.ge.vertexFormat();
+    u32 kind = GE::Triangles + r.random() % 3, count = 3 + r.random() % 68;
+    auto vertices = r.vertices(count, camera);
+    u64 owed[2][2];
+    //drawVertices(), then the same through transformAll() and clipTriangle() a triangle at a time
+    {
+      auto copy = vertices;
+      once.calls.clear();
+      c.ge.setRenderer(&once);
+      c.ge.owedPixels = c.ge.owedPrimitives = 0;
+      c.ge.drawVertices(kind, format, copy, count);
+      owed[0][0] = c.ge.owedPixels, owed[0][1] = c.ge.owedPrimitives;
+      c.ge.setRenderer(nullptr);
+    }
+    {
+      auto copy = vertices;
+      each.calls.clear();
+      c.ge.setRenderer(&each);
+      c.ge.owedPixels = c.ge.owedPrimitives = 0;
+      auto look = c.ge.lookFor(c.ge.pixelState(), nullptr);
+      auto& t = c.ge.transformKept(false);
+      auto texture = c.ge.sampler();
+      t.weights = 0, t.vertexColor = true, t.textureWidth = texture.width, t.textureHeight = texture.height;
+      c.ge.transformAll(copy, t);
+      s32 facing = (c.ge.commands[GE::CullFaceEnable] & 1) ? (c.ge.commands[GE::Cull] & 1 ? 1 : -1) : 0;
+      c.ge.hardware = true;
+      auto clip = [&](u32 a, u32 b, u32 d, s32 facing) { c.ge.clipTriangle(look, t, copy[a], copy[b], copy[d], facing); };
+      if(kind == GE::Triangles) {
+        for(u32 n = 0; n + 2 < count; n += 3) clip(n, n + 1, n + 2, facing);
+      } else if(kind == GE::TriangleStrip) {
+        for(u32 n = 0; n + 2 < count; n++) clip(n, n + 1, n + 2, n & 1 ? -facing : facing);
+      } else {
+        for(u32 n = 1; n + 1 < count; n++) clip(0, n, n + 1, facing);
+      }
+      c.ge.hardware = false;
+      owed[1][0] = c.ge.owedPixels, owed[1][1] = c.ge.owedPrimitives;
+      c.ge.setRenderer(nullptr);
+    }
+    drawn += each.calls.size();
+    if((once.calls != each.calls || owed[0][0] != owed[1][0] || owed[0][1] != owed[1][1]) && differing++ < 4) {
+      std::printf("  round %u: kind %u, %u vertices, differs\n", round, kind, count);
+    }
+  }
+  CHECK(differing, 0u);
+  CHECK(drawn > 5000, true);
+}
+
 auto draw3dTests() -> Tests {
   return {
     {"draw3d transform", draw3dTransform}, {"draw3d outside", draw3dOutside}, {"draw3d clipping", draw3dClipping},
@@ -1405,6 +1476,7 @@ auto draw3dTests() -> Tests {
     {"draw3d the GE's time, any renderer", draw3dTimeCounted},
     {"draw3d transformed four at a time as one at a time", draw3dTransformedFour},
     {"draw3d mesh corners placed four at a time as one at a time", draw3dMeshFour},
+    {"draw3d triangles' corners placed once as at each triangle", draw3dTrianglesPlacedOnce},
   };
 }
 

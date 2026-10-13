@@ -926,9 +926,10 @@ static auto fogAsAttribute(float fog) -> float {
   return float(u32(fog * 256)) / 256.0f;
 }
 
-auto GPU::vertex(const GE::Vertex& v, bool perspective) const -> Vertex {
+//A vertex for the GPU, at x and y, its place in sixteenths (targetFixed()).
+auto GPU::vertex(const GE::Vertex& v, bool perspective, s32 x, s32 y) const -> Vertex {
   Vertex o{};
-  o.x = targetFixed(v.x) / 16.0f + column, o.y = targetFixed(v.y) / 16.0f + row, o.z = v.z;
+  o.x = x / 16.0f + column, o.y = y / 16.0f + row, o.z = v.z;
   o.w = perspective ? v.clip[3] : 1.0f;
   o.u = v.u, o.v = v.v, o.q = perspective ? v.q : 1.0f;
   o.color = v.color, o.specular = v.specular;
@@ -940,16 +941,24 @@ auto GPU::vertex(const GE::Vertex& v, bool perspective) const -> Vertex {
 //3D its texture coordinates follow the perspective (a corner behind the camera, which clipping leaves only at its
 //edge, has them blended straight).
 auto GPU::triangle(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c) -> void {
+  triangleAt(a, b, c, {targetFixed(a.x), targetFixed(b.x), targetFixed(c.x)},
+             {targetFixed(a.y), targetFixed(b.y), targetFixed(c.y)});
+}
+
+//(its corners' places in sixteenths, x and y, the GE's: targetFixed())
+auto GPU::triangleAt(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c, const s64 (&x)[3],
+                     const s64 (&y)[3]) -> void {
   if(!drawing) return;
   bool perspective = !through && a.clip[3] > 0 && b.clip[3] > 0 && c.clip[3] > 0;
-  Vertex v[3] = {vertex(a, perspective), vertex(b, perspective), vertex(c, perspective)};
+  Vertex v[3] = {vertex(a, perspective, s32(x[0]), s32(y[0])), vertex(b, perspective, s32(x[1]), s32(y[1])),
+                 vertex(c, perspective, s32(x[2]), s32(y[2]))};
   if(!(shade & 1)) {
     for(auto& corner : v) corner.color = c.color, corner.specular = c.specular;
   }
   clearStencil(c.color);
   if(textured) {
-    f64 area = std::abs(f64(targetFixed(b.x) - targetFixed(a.x)) * (targetFixed(c.y) - targetFixed(a.y)) -
-                        f64(targetFixed(b.y) - targetFixed(a.y)) * (targetFixed(c.x) - targetFixed(a.x)));
+    f64 area = std::abs(f64(s32(x[1]) - s32(x[0])) * (s32(y[2]) - s32(y[0])) -
+                        f64(s32(y[1]) - s32(y[0])) * (s32(x[2]) - s32(x[0])));
     float texels = std::abs((b.u - a.u) * (c.v - a.v) - (b.v - a.v) * (c.u - a.u));
     bool linear = targetFilter(filter, std::sqrt(texels / (area / 256.0f)));
     for(auto& corner : v) corner.flags = linear;
@@ -1046,7 +1055,7 @@ static auto squareOf(GPU::Vertex base, s32 x, s32 y, GPU::Vertex (&v)[6]) -> voi
 auto GPU::point(const GE::Vertex& at) -> void {
   if(!drawing) return;
   clearStencil(at.color);
-  Vertex base = vertex(at, false), v[6];
+  Vertex base = vertex(at, false, targetFixed(at.x), targetFixed(at.y)), v[6];
   base.flags = textured && targetFilter(filter, 1.0f);
   squareOf(base, (targetFixed(at.x) >> 4) + s32(column), (targetFixed(at.y) >> 4) + s32(row), v);
   emit(v, 6);

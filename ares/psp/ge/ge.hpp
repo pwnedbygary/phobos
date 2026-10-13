@@ -460,6 +460,8 @@ struct GE {
   auto rectangle(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto triangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing, bool perspective)
     -> void;
+  auto placedTriangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing,
+                      bool perspective, const s64 (&x)[3], const s64 (&y)[3]) -> void;
   auto triangleJob(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, const s64 (&x)[3],
                    const s64 (&y)[3], s64 area, bool perspective) const -> Job;
   auto point(const Look& look, const Vertex& at) -> void;
@@ -648,6 +650,11 @@ struct GE {
     virtual auto ready() const -> bool = 0;
     virtual auto begin(GE& ge, const Look& look, bool through, const Region& region) -> bool = 0;
     virtual auto triangle(const Vertex& a, const Vertex& b, const Vertex& c) -> void = 0;
+    //(triangle() with its corners' places as the GE holds them, in sixteenths, which it worked out: draw.cpp's fixed())
+    virtual auto triangleAt(const Vertex& a, const Vertex& b, const Vertex& c, const s64 (&)[3], const s64 (&)[3])
+      -> void {
+      triangle(a, b, c);
+    }
     virtual auto sprite(const Job& job) -> void = 0;
     virtual auto point(const Vertex& at) -> void = 0;
     virtual auto line(const Job& job, const std::vector<LinePixel>& pixels) -> void = 0;
