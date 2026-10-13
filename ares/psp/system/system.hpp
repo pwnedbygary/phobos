@@ -23,11 +23,12 @@ struct System {
   VFS::Pak gamePak;           //the game's
 
   //The PSP's controls: the d-pad, the four face buttons, the two shoulder buttons, Select, Start and the analog
-  //stick.
+  //stick; and a right stick, which no PSP has (ctrl.cpp's convention).
   struct Controls {
     Node::Object node;
     Node::Input::Button up, down, left, right, triangle, circle, cross, square, l, r, select, start;
     Node::Input::Axis x, y;
+    Node::Input::Axis rightX, rightY;
 
     auto load(Node::Object parent) -> void;
     auto poll() -> void;

@@ -5,6 +5,19 @@
 //between reads, so a program polling now and then still sees a button tapped in between.
 //
 //How each call behaves follows uOFW's reading of the PSP's own controller driver (ctrl.c).
+//
+//A right stick, which the PSP itself hasn't got. pspsdk's pspctrl.h names SceCtrlData's bytes 10 and 11, after the
+//stick, Rx and Ry, a right stick's X and Y, "valid when using DualShock 3 on PSP GO, a PS VITA system, through
+//hardware/software hacking, or system emulation" (the four after them reserved, "unused by the firmware"; Rsrv, its
+//older name for all six, it marks deprecated). pspautotests' ctrl/sampling, recorded on a PSP, says "The PSP doesn't
+//natively support a right analog stick, but official emulators do", and zeroes their centred 128 so its results
+//compare. PPSSPP fills them from the host's right stick, centred at 128, and fan patches made for it read them there:
+//the Armored Core "True Analogs" mods turn and look with them, and take zeros for the stick held up and left (the
+//camera stuck on the sky, the AC turning on its own). Every sample carries the host's right stick there, 128 each way
+//when it's left alone, whatever the game (Phobos's choice: a PSP as those systems have it): centred too unless
+//sampling is analog, as the stick is, and the last four bytes stay zero. The system sets it each frame from the front
+//end's "R-Stick X" and "R-Stick Y". It isn't in save states: a loaded state's samples read it centred until the next
+//sample.
 
 //The buttons a game sees: the pad, the four face buttons, the shoulders, start and select, the hold switch, and
 //0x10000, which tells it the system has taken the controls (for its HOME menu). The rest (volume, the screen and
@@ -18,7 +31,7 @@ auto Kernel::sampleController() -> bool {
   u32 buttons = c.buttons & GameButtons;
   bool analog = c.mode == 1;
   c.samples[c.next] = {u32(cycles / (CPUFrequency / 1'000'000)), buttons, analog ? c.analogX : u8(128),
-                       analog ? c.analogY : u8(128)};
+                       analog ? c.analogY : u8(128), analog ? c.rightX : u8(128), analog ? c.rightY : u8(128)};
   c.next = (c.next + 1) % 64;
   c.unread = std::min(c.unread + 1, 63u);  //the 64th would be the one being overwritten
 
@@ -40,7 +53,8 @@ auto Kernel::sampleController() -> bool {
 }
 
 //count SceCtrlData (16 bytes each) from the samples kept, starting with samples[first]: the time in microseconds,
-//the buttons held (or, negative, those not held), and the stick's two axes.
+//the buttons held (or, negative, those not held), the stick's two axes, the right stick's (the convention above) and
+//four zeros. Every call that returns samples writes them here.
 auto Kernel::writeSamples(u32 address, u32 first, u32 count, bool negative) -> void {
   for(u32 n = 0; n < count; n++) {
     auto& sample = controller.samples[(first + n) % 64];
@@ -49,7 +63,9 @@ auto Kernel::writeSamples(u32 address, u32 first, u32 count, bool negative) -> v
     memory.write(4, at + 4, negative ? ~sample.buttons : sample.buttons);
     memory.write(1, at + 8, sample.x);
     memory.write(1, at + 9, sample.y);
-    memory.fill(at + 10, 0, 6);
+    memory.write(1, at + 10, sample.rightX);
+    memory.write(1, at + 11, sample.rightY);
+    memory.fill(at + 12, 0, 4);
   }
 }
 
