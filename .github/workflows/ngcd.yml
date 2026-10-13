@@ -9,10 +9,12 @@ on:
     branches: [ master ]
     tags: [ 'v*' ]
     paths: [ 'ares/ng/**', 'ares/ares/**', 'ares/component/processor/m68000/**', 'ares/component/processor/z80/**',
-             'nall/**', 'libco/**', 'thirdparty/ymfm/**', 'tests/ngcd/**', '.github/workflows/ngcd.yml' ]
+             'nall/**', 'libco/**', 'thirdparty/ymfm/**', 'tests/ngcd/**', 'tests/objects.sh',
+             '.github/workflows/ngcd.yml' ]
   pull_request:
     paths: [ 'ares/ng/**', 'ares/ares/**', 'ares/component/processor/m68000/**', 'ares/component/processor/z80/**',
-             'nall/**', 'libco/**', 'thirdparty/ymfm/**', 'tests/ngcd/**', '.github/workflows/ngcd.yml' ]
+             'nall/**', 'libco/**', 'thirdparty/ymfm/**', 'tests/ngcd/**', 'tests/objects.sh',
+             '.github/workflows/ngcd.yml' ]
   workflow_dispatch:
 
 concurrency:

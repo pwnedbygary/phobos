@@ -15,13 +15,13 @@ on:
     tags: [ 'v*' ]
     paths: [ 'ares/psp/**', 'ares/ares/**', 'nall/**', 'libco/**', 'thirdparty/sljit/**', 'thirdparty/sljit*',
              'thirdparty/Vulkan-Headers/**', 'thirdparty/libchdr/**', 'thirdparty/ffmpeg/**', 'tools/psp-runner/**',
-             'tests/allegrex/**', 'tests/psp/**', 'desktop/PspDiscInfo.*', 'android/app/src/test/resources/psp-*',
-             '.github/workflows/psp-core.yml' ]
+             'tests/allegrex/**', 'tests/psp/**', 'tests/objects*.sh', 'desktop/PspDiscInfo.*',
+             'android/app/src/test/resources/psp-*', '.github/workflows/psp-core.yml' ]
   pull_request:
     paths: [ 'ares/psp/**', 'ares/ares/**', 'nall/**', 'libco/**', 'thirdparty/sljit/**', 'thirdparty/sljit*',
              'thirdparty/Vulkan-Headers/**', 'thirdparty/libchdr/**', 'thirdparty/ffmpeg/**', 'tools/psp-runner/**',
-             'tests/allegrex/**', 'tests/psp/**', 'desktop/PspDiscInfo.*', 'android/app/src/test/resources/psp-*',
-             '.github/workflows/psp-core.yml' ]
+             'tests/allegrex/**', 'tests/psp/**', 'tests/objects*.sh', 'desktop/PspDiscInfo.*',
+             'android/app/src/test/resources/psp-*', '.github/workflows/psp-core.yml' ]
   workflow_dispatch:
 
 concurrency:
@@ -38,6 +38,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # tests/objects.sh, which keeps every suite's objects, on its own small program (seconds)
+      - name: Check the build scripts' object keeping
+        run: tests/objects-test.sh
 
       # (bash named, so a failing suite fails the step through tee: pipefail)
       - name: Run the tests

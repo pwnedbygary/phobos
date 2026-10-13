@@ -25,6 +25,43 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Tests: the host suites' objects kept by what they include and how they're compiled, a checkout's apart — 2026-10-13
+
+Branch `cursor/test-plan-03-2b67`, stacked on `cursor/test-plan-05-2b67` (#241, the CI lanes, so every script changed
+here runs in CI). Package 03 of the 2026-10-13 test and performance plan (indexed in the implementation plan by
+package 01's PR). Build scripts only: no core, app or test source changes.
+- **The problem** (on a Mac five agents share): the four PSP build scripts kept objects in one folder per suite in
+  `${TMPDIR:-/tmp}`, shared by every worktree, reused while their top source was older than them. A header edit,
+  another worktree's newer object, another compiler or sanitizer setting, all reused the old object; libco's was
+  never rebuilt; two worktrees' runs wrote the same test binary.
+- **`tests/objects.sh`** (sourced by `tests/allegrex`, `tests/psp`, `tests/psp/ares`, `tests/ngcd` and
+  `tools/psp-runner/build.sh`): an object is named by its compile command (the compiler's path and its `--version`,
+  every flag, the source's path), so another checkout, compiler, sanitizer or define makes its own; it's kept while
+  nothing on the compiler's own list of what it read (`-MD`, system headers included: ares's and nall's are
+  included as system headers) is newer than it, or gone, compared with `find -newer` (nanoseconds, where macOS's
+  bash 3.2 `-nt` takes whole seconds). Objects and programs are written beside their place and renamed into it, so
+  runs at once are safe and a killed build leaves nothing taken for finished. Each checkout gets its own folder in
+  the suite's (the cksum of its path, as the NGCD script already did). Every source is its own object now, the
+  test suites' too (they were one compile each run), and each compile's line says whether it's sanitized (in the
+  sanitized suites nall and sljit aren't). `PHOBOS_JOBS=N` compiles N at once (1 by default).
+- **Kept as they were**: `TMPDIR=X tools/psp-runner/build.sh` still leaves `X/phobos-psp-runner/psp-runner` (a copy
+  of this checkout's, which the build's last line names; `runner-test.sh` takes the latter); NGCD's build-dir
+  argument; the FFmpeg cache; every flag. The round-6 and Allegrex measurements unpack into the checkout's folder,
+  the latter now through a temporary file too.
+- **`tests/objects-test.sh`** (in CI's Allegrex job; seconds): a small C program built cold (2 compiles), warm (0),
+  after its header changes (1, and the program sees it), with a define added (2) and taken away (0: the first objects
+  kept), with a compiler reporting another version (2), killed mid-compile with the build (fails, then the same
+  command compiles everything: nothing kept from the cut), with the first header on the include path gone (1, the
+  next one taken), and two checkouts built at once into one folder (each its own program and folder). Negative
+  controls, each a disposable copy of the library: the old rule (the source's time alone), flags out of the key,
+  objects written in place, one folder for all checkouts, a gone file taken as unchanged, the compiler's version out
+  of the key: each fails at least one case.
+- **Checks** (the Mac, bash 3.2, Apple clang 21, `PHOBOS_JOBS=3`, a TMPDIR of its own): `tests/objects-test.sh` 11/11,
+  three times; `tests/allegrex` cold 7 compiles (60/0), warm 0 (60/0), after touching `ares/psp/cpu/allegrex.hpp` 4
+  (the four that include it; 60/0); `tests/ngcd` cold 13 (2835/0), warm 0; `tests/psp/ares` cold 25 (318/0), warm 0
+  (318/0); `runner-test.sh` cold 71 s (25 objects), warm 12 s, the copy left in `phobos-psp-runner/`. CI on the
+  PR: below once run.
+
 ## CI: the PSP core as an ares system, the headless runner and the Neo Geo CD's checks in CI; the triggers complete — 2026-10-13
 
 Branch `cursor/test-plan-05-2b67`, on master (`9333a8d7a`, #235). Package 05 of the 2026-10-13 test and performance
