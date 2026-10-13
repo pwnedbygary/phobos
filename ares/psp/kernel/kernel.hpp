@@ -284,6 +284,10 @@ struct Kernel {
     u32 nid;
     bool quiet = false;  //it makes nothing due sooner (syscall())
   };
+  //Set by a function that isn't always quiet but was this time: it changed nothing that has a time to come (dispatch()
+  //clears it before each)
+  bool calm = false;
+  u64 switched = 0;  //switchTo()'s changes of the thread in the CPU so far (calm calls tell none came by it; not saved)
   struct Import {
     std::string library;
     u32 nid;
@@ -411,7 +415,7 @@ struct Kernel {
   auto threadReturned() -> void;
   auto extendReturned() -> void;
   auto extensionsEnded(Thread& thread) -> void;
-  auto signalSemaphores(Semaphore& semaphore) -> void;
+  auto signalSemaphores(Semaphore& semaphore) -> bool;  //(whether it woke a thread)
   auto unlockLwMutex(u32 workArea) -> void;
   auto findThread(u32 uid) -> Thread*;
   auto deleteThread(Thread& thread) -> void;
