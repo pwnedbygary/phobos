@@ -10814,16 +10814,26 @@ An independent review of the branch (merged with master, `649a88137`) found five
   Corpse Party (20 seconds from the tester's state with `--wav`): its sound byte for byte master's runner's.
 - **27 to 30 skipped**: said above, in the handoff, beside StateVersion in `system.cpp` and in the test that refuses them.
 
-Left, and why: pspautotests' audio/sceaudio/reserve also recorded sceVaudio, and disagrees with two of this branch's
-choices. Its "Channel counts" refuse every format but 2 with 0x80000108, mono (1) among them, where pspvaudio.h lists
-mono, this branch takes it and refuses the rest with sceAudio's INVALID_FORMAT (0x80260007). And after a reservation refused while `sceAudioOutput2Reserve` held the channel, that
-channel released and reserved again by Output2, a "wrong" sceVaudioChRelease and a reservation that then succeeds (0)
-show the release freeing the SRC channel whoever holds it, where this branch's lets go of its hold alone (the first
-review's choice). Neither was among the review's points, and the second would undo an earlier review's decision; left
-for the owner. (Which format Battle vs. Chess reserves wasn't found.)
+These fixes had an independent review in turn (PASS, one Low and two Nits, taken): Battle vs. Chess's format, which
+the first agent's trace shows (below); the forced states' test given the two recorded calls it lacked
+(ResetPlayPosition, SetSecondBuffer); the recording's untried format and the handoff's merges.
 
-Checks on the final tree, with the branch's runner (`~/phobos-work/scratch/review-b00`): Angus Hates Aliens past NEW
-GAME from the tester's title state (the loading screen at frame 500, the first level and Angus's line at 1000) and from
-boot (`s1.txt`: the first level at 2400, as before); Battle vs. Chess as before (the tester's script, 7200 frames: every
-frame checked identical to the previous run's, and its sound, ten-second loudness by loudness, the same); Corpse Party's
-sound as master's (above).
+Left, and why: pspautotests' audio/sceaudio/reserve also recorded sceVaudio, and disagrees with two of this branch's
+choices. Its "Channel counts" refuse every format it tries but 2 with 0x80000108, mono (1) among them (4 isn't tried:
+the test skips it, as it never wakes the thread), where pspvaudio.h lists mono, this branch takes it and refuses the
+rest with sceAudio's INVALID_FORMAT (0x80260007). And after a reservation refused while `sceAudioOutput2Reserve` held
+the channel, that channel released and reserved again by Output2, a "wrong" sceVaudioChRelease and a reservation that
+then succeeds (0) show the release freeing the SRC channel whoever holds it, where this branch's lets go of its hold
+alone (the first review's choice). Neither was among the review's points, and the second would undo an earlier
+review's decision; left for the owner. Battle vs. Chess, the one game known to use sceVaudio, is touched by neither: it
+reserves stereo (the first agent's trace, `~/phobos-work/scratch/hle-b00/runs/Battle vs. Chess [Europe Proto]/full1`:
+`sceVaudioChReserve(0x480, 0xac44, 2)`), and its outputs' volume, fading in from 0, peaks at 0x35C1, within the new
+limit too.
+
+Checks on the final tree: `tests/psp/run-tests.sh` (sanitizers) 479 groups, 0 failures; `tests/allegrex/run-tests.sh` 58
+groups, 0 failures; `tests/psp/ares/run-tests.sh` 338 checks, 0 failed. With the branch's runner
+(`~/phobos-work/scratch/review-b00`; its core as committed, the later changes being the tests' and the documents'):
+Angus Hates Aliens past NEW GAME from the tester's title state (the loading screen at frame 500, the first level and
+Angus's line at 1000) and from boot (`s1.txt`: the first level at 2400, as before); Battle vs. Chess as before (the
+tester's script, 7200 frames: every frame checked identical to the previous run's, and its sound, ten-second loudness by
+loudness, the same); Corpse Party's sound as master's (above).

@@ -27,10 +27,11 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP: sound — every ATRAC ID's context kept current (Angus Hates Aliens past NEW GAME), and sceVaudio — 2026-10-12
 
-Branch `cursor/psp-audio-b00-2b67`, on master (`b7ea296f4`). docs/psp-core.md, part 82, has the evidence. Items 2 and 5
-of the deep-play batch 00 report. Clean room: pspautotests' audio/atrac (the states its tests force, sas) and
-audio/blocking/vaudio recordings, pspsdk's pspatrac3.h and pspvaudio.h, pspautotests' sascore.h, PPSSPP read only as a
-description of the PSP (sceVaudio on the SRC channel), the games' own code traced and disassembled; JPCSP not read.
+Branch `cursor/psp-audio-b00-2b67`, on master (`b7ea296f4`, then `1d9308714`, #228). docs/psp-core.md, part 82, has
+the evidence. Items 2 and 5 of the deep-play batch 00 report. Clean room: pspautotests' audio/atrac (the states its
+tests force, sas), audio/blocking/vaudio and audio/sceaudio/reserve recordings, pspsdk's pspatrac3.h and pspvaudio.h,
+pspautotests' sascore.h, PPSSPP read only as a description of the PSP (sceVaudio on the SRC channel), the games' own
+code traced and disassembled; JPCSP not read. Begun by one agent; an independent review's points taken by another.
 **Save states go to StateVersion 31** (sceVaudio's hold; 15 to 26 still load). **27 to 30 are skipped**: other open
 branches' layouts, refused here (as 32 is). Whoever lands one of those branches after this one must renumber its layout
 past 31 and update `tests/psp/ares/system.cpp`'s list of refused versions (27-30 and 32) and `tests/psp/states.cpp`'s
@@ -50,13 +51,15 @@ older layouts (part 82 says more).
   still holds sceVaudio; the release waits for a buffer playing); buffers copied as pairs into two kernel buffers
   (0x08031000); an output's volume 0 to pspvaudio.h's 0x8000, more refused. Two choices disagree with pspautotests'
   audio/sceaudio/reserve (mono refused there; a release freeing the SRC channel Output2 held): left for the owner, part
-  82 says how. Battle vs. Chess's music thread plays its MP3 music through it now. **Its moves still aren't carried
-  out**: not sceVaudio. Traced: the confirm reaches the game's pad code; its chess thread runs its engine only when
-  a request word is set, which nothing sets on the confirm; nothing else in its memory changes but the lit squares'
+  82 says how; Battle vs. Chess reserves stereo (format 2) and its outputs' volume, fading in from 0, peaks at 0x35C1,
+  so neither touches it. Battle vs. Chess's music thread plays its MP3 music through it now. **Its moves still aren't
+  carried out**: not sceVaudio. Traced: the confirm reaches the game's pad code; its chess thread runs its engine only
+  when a request word is set, which nothing sets on the confirm; nothing else in its memory changes but the lit squares'
   colours, and no system call differs (no file, thread or missing function). The prototype's own move code wasn't
   followed to the end (part 82 has the leads).
-- **Checks**: `tests/psp/run-tests.sh` (sanitizers) 473 groups, 0 failures on the final code; `tests/allegrex` and
-  `tests/psp/ares`: see the commit that completes this entry.
+- **Checks** on the final tree (with the review's points): `tests/psp/run-tests.sh` (sanitizers) 479 groups, 0
+  failures; `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 338 checks, 0 failed
+  (before it, 473 groups). Games with the branch's runner: part 82's last paragraph.
 - **Library**: not run by the agents (the first agent's run stopped with its session); the owner runs the 266-game
   comparison for this branch and #230 together.
 - **Review**: an independent review found NEEDS CHANGES (two state refusals with no check behind them; sceVaudio acting

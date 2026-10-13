@@ -672,6 +672,8 @@ static auto atracContexts() -> void {
     CHECK(m.call("sceAtracIsSecondBufferNeeded", {0}), error);
     CHECK(m.call("sceAtracGetBufferInfoForResetting", {0, 0, R + 0x40}), error);
     CHECK(m.call("sceAtracGetSecondBufferInfo", {0, R, R + 4}), error);
+    CHECK(m.call("sceAtracResetPlayPosition", {0, 0, 0, 0}), error);
+    CHECK(m.call("sceAtracSetSecondBuffer", {0, Second, 0x1000}), error);
     CHECK(m.call("sceAtracGetInternalErrorInfo", {0, R}), 0);  //(not among them: as before)
     CHECK(m.call("sceAtracGetBitrate", {0, R}), 0);
   }
