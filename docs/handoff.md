@@ -50,7 +50,7 @@ sources' hash covers `compile.sh`, so changing it would have meant regenerating 
 - **Checks**: actionlint 1.7.12 on the workflow (clean); the script on master's tree (pass); CI on #239 (run
   38435975771, ubuntu-24.04): the image has no glslang of its own ("none"), the archive's SHA-256 matched, and
   Khronos's Linux glslang 16.6.0 compiled `shaders.hpp` byte for byte; Ubuntu's SPIRV-Tools v2025.1 passed all 12
-  modules.
+  modules (16 s).
 
 ## PSP: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces — 2026-10-13
 
