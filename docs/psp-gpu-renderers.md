@@ -108,6 +108,13 @@ without alpha), specular shine, the alpha test, fog and the color test; then the
 pixel alone, dithering and the frame buffer's format where the GPU won't blend after, and the logic operations the GPU
 can't do.
 
+`shaders.hpp` is what **glslang 16.6.0** compiles the GLSL to, byte for byte (Homebrew's build and Khronos's release
+alike). The tests' check compares the sources' hash everywhere, but compiles again only where a glslang is installed.
+CI's PSP Shaders workflow (`.github/scripts/check-psp-shaders.sh`) installs Khronos's 16.6.0, checked by its SHA-256,
+compiles everything again and compares, and validates each module in `shaders.hpp` for Vulkan 1.0 with spirv-val; it
+fails without that glslang. Another glslang is a toolchain change: `shaders.hpp` made with it, and the workflow's pin
+moved, in the same change.
+
 Every choice the GE's state makes there is a **specialization constant** (15: texturing, the texture function, the
 alpha and color tests' comparisons, fog, the depth range test, clear mode, the source and destination factors'
 parts, the alpha written, dithering, the format to narrow to, the logic operation, clamping, and a texture's 16-bit
