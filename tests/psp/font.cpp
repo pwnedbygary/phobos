@@ -280,9 +280,10 @@ static auto pgfDamaged() -> void {
 //(newlib: 9, 10, 100 and -1 all take 8824 bytes; 4, 5644); it fills its own fields (the parameters as given, 128 dots
 //an inch, 18 fonts, '_' the alternative character) and the list. A font opened from its tables asks for each table
 //(open: each system font's total), one read whole for its length and 12, one of the program's memory for 12; one
-//loaded already, for nothing. Closing the last handle gives the tables back (fonttest's order), and sceFontDoneLib
-//closes what's open and gives the library's own back (its list, handles, data, then the library). A failing alloc
-//ends the function, out of memory, giving back what it was given; no alloc or free is refused.
+//loaded already, for nothing. Closing the last handle gives the tables back (fonttest's order), closing it again
+//gives nothing back, and sceFontDoneLib closes what's open and gives the library's own back (its list, handles,
+//data, then the library). A failing alloc ends the function, out of memory, giving back what it was given; no alloc
+//or free is refused.
 static auto fontsMemory() -> void {
   FontFolder folder;
   for(bool recompile : {false, true}) {
@@ -350,7 +351,9 @@ static auto fontsMemory() -> void {
     std::vector<std::pair<u32, u32>> order;
     for(u32 n : {8, 7, 5, 6, 4, 0, 1, 2, 3}) order.push_back({2, blocks[n]});
     CHECK(frees == order, true);
-    CHECK(viaProgram(m, "sceFontClose", {handle}, recompile), 0x8046'0003);  //closed already
+    before = word(m, Log);
+    CHECK(viaProgram(m, "sceFontClose", {handle}, recompile), 0);  //closed already: nothing more given back
+    CHECK(word(m, Log), before);
     //sceFontDoneLib: the two still open (whole: its 12 bytes, then its file; the third's tables), then the library's
     before = word(m, Log);
     CHECK(viaProgram(m, "sceFontDoneLib", {library}, recompile), 0);
@@ -1059,11 +1062,86 @@ static auto fontsFolder() -> void {
   CHECK(noted, true);
 }
 
+//A handle closed already closes again, doing nothing, and gives 0, as Jeanne d'Arc's first battle needs: two of its
+//text objects hold one handle, both close it, and the game waits for ever after any answer but 0 (on a lock of its
+//own it gives back only for a 0). Its font stays loaded for the handle still open, the handle opens again, and the
+//last handle closed twice gives the font's memory back once. A handle that's none of a library's is refused, and so
+//is one of a library done with.
+static auto fontsClosedTwice() -> void {
+  FontFolder folder;
+  for(bool recompile : {false, true}) {
+    FontMachine f(folder);
+    auto& m = f.m;
+    u32 kept = viaProgram(m, "sceFontOpen", {f.library, 6, 0, Error}, recompile);
+    u32 twice = viaProgram(m, "sceFontOpen", {f.library, 6, 0, Error}, recompile);
+    CHECK(kept != 0 && twice != 0 && kept != twice && m.kernel.openFonts.size() == 1, true);
+    u32 before = word(m, Log);
+    CHECK(viaProgram(m, "sceFontClose", {twice}, recompile), 0);
+    CHECK(viaProgram(m, "sceFontClose", {twice}, recompile), 0);
+    CHECK(word(m, Log), before);
+    CHECK(m.kernel.openFonts.size() == 1 && m.kernel.openFonts.begin()->second.references == 1, true);
+    CHECK(m.call("sceFontGetCharInfo", {kept, 'B', Buffer}), 0);
+    CHECK(word(m, Buffer + 0x10), 306);  //font 6's 'B'
+    CHECK(viaProgram(m, "sceFontOpen", {f.library, 6, 0, Error}, recompile), twice);
+    for(u32 handle : {0u, 0x1234u, twice + 4, f.library, kept + 4 * 76}) {
+      check(__LINE__, "a handle no library has", m.call("sceFontClose", {handle}), 0x8046'0003);
+    }
+    CHECK(viaProgram(m, "sceFontClose", {twice}, recompile), 0);
+    before = word(m, Log);
+    CHECK(viaProgram(m, "sceFontClose", {kept}, recompile), 0);
+    CHECK(word(m, Log) - before, 9);  //the font's tables
+    before = word(m, Log);
+    CHECK(viaProgram(m, "sceFontClose", {kept}, recompile), 0);
+    CHECK(viaProgram(m, "sceFontClose", {twice}, recompile), 0);
+    CHECK(word(m, Log) == before && m.kernel.openFonts.empty(), true);
+    CHECK(viaProgram(m, "sceFontDoneLib", {f.library}, recompile), 0);
+    CHECK(m.call("sceFontClose", {kept}), 0x8046'0003);
+  }
+}
+
+//A font the program keeps in VRAM opens from there as one in RAM does: Final Fantasy III's three are in VRAM
+//(0x041e5900, 0x041e0740 and 0x041c4e40), and with them refused it printed none of its own text. VRAM's uncached
+//view and its third copy reach the same bytes; a length past VRAM's end is read to the end of the copy it's in; the
+//scratchpad holds fonts too; an address with nothing behind it holds no PGF. A state brings a font in VRAM back from
+//VRAM.
+static auto fontsInVram() -> void {
+  FontFolder folder;
+  FontMachine f(folder, 9);
+  auto& m = f.m;
+  auto bytes = systemFont(3).build();
+  for(u32 at : {0x041e'5900u, 0x441e'5900u, 0x045e'5900u}) {
+    m.system.memory.copyIn(0x041e'5900, bytes.data(), bytes.size());
+    m.system.memory.write(4, Error, 0x1337);
+    u32 font = viaProgram(m, "sceFontOpenUserMemory", {f.library, at, u32(bytes.size()), Error});
+    check(__LINE__, "opened from VRAM", font != 0 && word(m, Error) == 0, true);
+    check(__LINE__, "its 'B'", m.call("sceFontGetCharInfo", {font, 'B', Buffer}), 0);
+    check(__LINE__, "font 3's", word(m, Buffer + 0x10), 303);
+  }
+  //to the end of VRAM: a length of -1 (openmem's) at its last 2 KiB holds no whole font
+  u32 end = 0x0420'0000 - u32(bytes.size());
+  m.system.memory.copyIn(end, bytes.data(), bytes.size());
+  u32 last = viaProgram(m, "sceFontOpenUserMemory", {f.library, end, ~0u, Error});
+  CHECK(last != 0 && word(m, Error) == 0, true);
+  u64 read = 0;
+  for(auto& [id, font] : m.kernel.openFonts) if(font.address == end) read = font.pgf->size();
+  CHECK(read, bytes.size());
+  CHECK(viaProgram(m, "sceFontOpenUserMemory", {f.library, 0x0420'0000 - 2048, ~0u, Error}), 0);
+  CHECK(word(m, Error), 0x8046'000a);
+  CHECK(bytes.size() <= 16_KiB, true);
+  m.system.memory.copyIn(0x0001'0000, bytes.data(), bytes.size());
+  u32 scratch = viaProgram(m, "sceFontOpenUserMemory", {f.library, 0x0001'0000, u32(bytes.size()), Error});
+  CHECK(scratch != 0 && word(m, Error) == 0, true);
+  CHECK(viaProgram(m, "sceFontOpenUserMemory", {f.library, 0x0200'0000, 100, Error}), 0);
+  CHECK(word(m, Error), 0x8046'000a);
+  CHECK(roundTrip(m, [&](KernelMachine& fresh) { fresh.kernel.fontsFrom(folder.path.string()); }), true);
+}
+
 auto fontTests() -> Tests {
   return {{"pgf read back", pgfReadBack}, {"pgf damaged", pgfDamaged}, {"fonts memory", fontsMemory},
           {"fonts found", fontsFound}, {"fonts measured", fontsMeasured}, {"fonts drawn", fontsDrawn},
           {"fonts of the program's own", fontsOwn}, {"fonts resolution", fontsResolution},
-          {"fonts states", fontsStates}, {"fonts folder", fontsFolder}};
+          {"fonts states", fontsStates}, {"fonts folder", fontsFolder}, {"fonts closed twice", fontsClosedTwice},
+          {"fonts in VRAM", fontsInVram}};
 }
 
 }

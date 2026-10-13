@@ -494,15 +494,22 @@ auto Kernel::fontCallable(u32 function) -> bool {
   return function && !(function & 3) && memory.reaches(function, 4);
 }
 
-//Copies the game's memory from address, length bytes, as far as RAM goes and no more than MemoryFontMost: a font it
-//holds there. Games may give a length far past the font's end (pspautotests' openmem opened one with -1), which
-//would otherwise copy the rest of RAM at every open and every state loaded.
+//Copies the game's memory from address, length bytes, as far as the memory there goes (RAM, VRAM or the scratchpad:
+//Final Fantasy III keeps its three fonts in VRAM) and no more than MemoryFontMost: a font it holds there. Games may
+//give a length far past the font's end (pspautotests' openmem opened one with -1), which would otherwise copy the
+//rest of RAM at every open and every state loaded.
 auto Kernel::fontMemory(u32 address, u32 length) -> std::vector<u8> {
   u32 physical = address & 0x1fff'ffff;
-  if(physical < Memory::RAMBase || physical - Memory::RAMBase >= memory.ram.size()) return {};
-  length = std::min<u64>({length, memory.ram.size() - (physical - Memory::RAMBase), MemoryFontMost});
-  std::vector<u8> bytes(length);
-  memory.copyOut(bytes.data(), address, length);
+  u64 there = 0;  //bytes from address to the end of its memory (of VRAM, the end of the copy it's in)
+  if(physical >= Memory::RAMBase && physical - Memory::RAMBase < memory.ram.size()) {
+    there = memory.ram.size() - (physical - Memory::RAMBase);
+  } else if(physical >= Memory::VRAMBase && physical - Memory::VRAMBase < Memory::VRAMWindow) {
+    there = Memory::VRAMSize - (physical - Memory::VRAMBase) % Memory::VRAMSize;
+  } else if(physical >= Memory::ScratchpadBase && physical - Memory::ScratchpadBase < Memory::ScratchpadSize) {
+    there = Memory::ScratchpadSize - (physical - Memory::ScratchpadBase);
+  }
+  std::vector<u8> bytes(std::min<u64>({length, there, MemoryFontMost}));
+  if(!memory.copyOut(bytes.data(), address, bytes.size())) return {};
   return bytes;
 }
 
@@ -596,13 +603,18 @@ auto Kernel::sceFontDoneLib() -> void {
   if(fontCallable(call.free)) fontStart(std::move(call));
 }
 
-//(font handle): the handle closes; the last of a font's handles to close gives its memory back (fontGiveBack()). A
-//handle that isn't open is refused (INVALID_PARAMETER: what a PSP does with it isn't known). 0.
+//(font handle): the handle closes; the last of a font's handles to close gives its memory back (fontGiveBack()). 0.
+//One of a library's handles that's closed already closes again, doing nothing: 0, as Jeanne d'Arc shows. Its two
+//text objects both hold the handle its first battle's loading closes twice, and its own code goes on only for a 0:
+//before each call into the library it takes a lock of its own, and gives it back only when the call returns 0, so
+//any other answer leaves the next call waiting for that lock for ever ("Loading..." for good). A handle that's none
+//of a library's is refused (INVALID_PARAMETER: nothing shows what a PSP does with it).
 auto Kernel::sceFontClose() -> void {
   if(!fontsInstalled()) return result(0);
   FontLibrary* library;
   u32 slot;
-  if(!fontHandle(arg(0), library, slot) || !library->open[slot]) return result(FontInvalidParameter);
+  if(!fontHandle(arg(0), library, slot)) return result(FontInvalidParameter);
+  if(!library->open[slot]) return result(0);
   library->open[slot] = false;
   result(0);
   auto found = openFonts.find(library->fonts[slot]);
@@ -643,9 +655,10 @@ auto Kernel::sceFontOpen() -> void {
   fontOpen(*library, std::move(font), errorAt);
 }
 
-//(library, a PGF in the game's memory, its length, where to put an error): a font the game holds, read where it is.
-//Its length counts as unsigned (pspautotests' openmem: -1 and longer than the font open), but 0 doesn't, nor does no
-//memory (INVALID_PARAMETER). Of a length past the font's end, 8 MiB at most are read (fontMemory()).
+//(library, a PGF in the game's memory, its length, where to put an error): a font the game holds, read where it is,
+//in RAM or VRAM (fontMemory()). Its length counts as unsigned (pspautotests' openmem: -1 and longer than the font
+//open), but 0 doesn't, nor does no memory (INVALID_PARAMETER). Of a length past the font's end, 8 MiB at most are
+//read.
 auto Kernel::sceFontOpenUserMemory() -> void {
   if(!fontsInstalled()) return standInOpen(arg(3));
   auto library = fontLibraryAt(arg(0));
