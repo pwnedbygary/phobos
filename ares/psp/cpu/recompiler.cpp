@@ -410,8 +410,7 @@ auto Allegrex::Recompiler::emitFallback(u32 address, u32 instruction, u32 count,
 //the instruction's fast path. It's emitted after the block's end (emit()), holding what the block holds here and
 //knowing where a delay slot goes (destination), as if it were here; so the registers the instruction reads must be
 //read before the first of the jumps.
-auto Allegrex::Recompiler::emitCold(std::initializer_list<sljit_jump*> jumps, const std::function<void ()>& code)
-  -> void {
+auto Allegrex::Recompiler::emitCold(const std::vector<sljit_jump*>& jumps, const std::function<void ()>& code) -> void {
   auto back = sljit_emit_label(compiler);
   std::vector<sljit_jump*> from;
   for(auto jump : jumps) if(jump) from.push_back(jump);
@@ -425,7 +424,7 @@ auto Allegrex::Recompiler::emitCold(std::initializer_list<sljit_jump*> jumps, co
 }
 
 //emitFallback() as cold code.
-auto Allegrex::Recompiler::emitColdFallback(std::initializer_list<sljit_jump*> jumps, u32 address, u32 instruction,
+auto Allegrex::Recompiler::emitColdFallback(const std::vector<sljit_jump*>& jumps, u32 address, u32 instruction,
                                             u32 count, bool delaySlot) -> void {
   calls = true;
   emitCold(jumps, [=, this] { emitFallback(address, instruction, count, delaySlot); });

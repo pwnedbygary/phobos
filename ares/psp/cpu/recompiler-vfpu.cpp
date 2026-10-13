@@ -247,6 +247,78 @@ template<u32 Size> auto Allegrex::vfpuRestHalfDot(u32 vd, u32 vs, u32 vt) -> voi
   #endif
 }
 
+//One lane of the instructions that work lane by lane, as the interpreter works it out (vfpuBinary(), VMIN(), VMAX(),
+//vfpuUnaryBits(), VI2F(), VF2I(), the math functions): Op 0 vadd, 1 vsub, 7 vdiv, 8 vmul (and vscl), 10 vmin,
+//11 vmax, 12 vsge, 13 vslt; 20 vmov, 21 vabs, 22 vneg; 30 vi2f (t the scale), 31 vf2i (t the scale, the rounding
+//mode above it); from 40, the math functions by their rt field (40 + rt - 0x10).
+template<u32 Op> auto Allegrex::vfpuLane(u32 s, u32 t) const -> u32 {
+  if constexpr(Op == 20) return s;
+  else if constexpr(Op == 21) return s & 0x7fff'ffff;
+  else if constexpr(Op == 22) return s ^ 0x8000'0000;
+  else if constexpr(Op == 10) return vfpuOrder(s) < vfpuOrder(t) ? s : t;
+  else if constexpr(Op == 11) return vfpuOrder(s) > vfpuOrder(t) ? s : t;
+  else if constexpr(Op == 30) return vfpuBits(std::ldexp((f64)s32(s), -(s32)t));
+  else if constexpr(Op == 31) return toInteger(vfpuFloat(s), t & 0xff, t >> 8);
+  else if constexpr(Op == 40) return vfpuReciprocal(s);
+  else if constexpr(Op == 41) return vfpuReciprocalSqrt(s);
+  else if constexpr(Op == 42) return vfpuSine(s);
+  else if constexpr(Op == 43) return vfpuCosine(s);
+  else if constexpr(Op == 44) return vfpuExp2(s);
+  else if constexpr(Op == 45) return vfpuLog2(s);
+  else if constexpr(Op == 46) return vfpuSqrt(s);
+  else if constexpr(Op == 47) return vfpuArcsine(s);
+  else if constexpr(Op == 48) return vfpuReciprocal(s) ^ 0x8000'0000;
+  else if constexpr(Op == 50) return vfpuSine(s) ^ 0x8000'0000;
+  else if constexpr(Op == 52) return vfpuReciprocalExp2(s);
+  else {
+    f32 a = vfpuFloat(s), b = vfpuFloat(t);
+    if constexpr(Op == 0) return vfpuNaN(vfpuBits(a + b), NaNSign::Positive, s, t);
+    if constexpr(Op == 1) return vfpuNaN(vfpuBits(a - b), NaNSign::Positive, s, t);
+    if constexpr(Op == 7) return vfpuNaN(vfpuBits((f64)a / b), NaNSign::Product, s, t);
+    if constexpr(Op == 8) return vfpuNaN(vfpuBits((f64)a * b), NaNSign::Product, s, t);
+    if constexpr(Op == 12) return vfpuNaN(vfpuBits(a >= b ? 1.0f : 0.0f), NaNSign::Unknown, s, t);
+    if constexpr(Op == 13) return vfpuNaN(vfpuBits(a < b ? 1.0f : 0.0f), NaNSign::Unknown, s, t);
+  }
+}
+
+//An operand's lane as compiled code describes it to vfpuEach(), its prefix applied as vfpuReadFour() applies one:
+//bits 0-6 its register, 7 taken without its sign, 8 negated, 9 a constant instead, numbered in bits 10-12.
+static auto describedLane(const u32* r, u32 lane) -> u32 {
+  u32 value = lane >> 9 & 1 ? PrefixConstants[lane >> 10 & 7] : r[lane & 0x7f] & ~((lane >> 7 & 1) << 31);
+  return value ^ (lane >> 8 & 1) << 31;
+}
+
+//A result's lane written as compiled code describes it to vfpuEach(), through the destination's prefix as
+//vfpuWrite() writes one: bits 0-6 its register, 7 masked (left as it was), 8 clamped (to 0..1; with 9 to -1..1).
+static auto describedWrite(u32* r, u32 lane, u32 value) -> void {
+  if(lane >> 7 & 1) return;
+  if(lane >> 8 & 1) {
+    f32 x = std::bit_cast<f32>(value);
+    f32 low = lane >> 9 & 1 ? -1.0f : 0.0f;
+    if(x > 1.0f) value = One;
+    else if(x <= low) value = std::bit_cast<u32>(low);
+  }
+  r[lane & 0x7f] = value;
+}
+
+//An instruction that works lane by lane (Op: vfpuLane()), each lane's reading and writing worked out as the block
+//was compiled, prefixes and all (emitEach()): s's lanes, and t's for the instructions with a second operand (Op below
+//20), a lane's description in each 16 bits (describedLane()); the others take t as it is. d says how each result is
+//written (describedWrite()), and its bit 10 a lane whose prefix took a lane past the size, whose result is 0. Every
+//lane is read before any is written; then the prefixes are at rest, as the interpreter's decoder leaves them.
+template<u32 Size, u32 Op> auto Allegrex::vfpuEach(u64 s, u64 t, u64 d) -> void {
+  u32 result[Size];
+  for(u32 i : range(Size)) {
+    u32 a = describedLane(vfpu.r, s >> 16 * i & 0xffff), b = u32(t);
+    if constexpr(Op < 20) b = describedLane(vfpu.r, t >> 16 * i & 0xffff);
+    result[i] = d >> (16 * i + 10) & 1 ? 0 : vfpuLane<Op>(a, b);
+  }
+  for(u32 i : range(Size)) describedWrite(vfpu.r, d >> 16 * i & 0xffff, result[i]);
+  vfpu.pfxs = PrefixIdentity;
+  vfpu.pfxt = PrefixIdentity;
+  vfpu.pfxd = 0;
+}
+
 //The matrix instructions, which leave the prefixes alone as they run: the interpreter's own, then the prefixes at
 //rest, as its decoder leaves them (vfpuPrefixesUsed(), after an instruction that raised no exception, as these
 //can't once decoded: emitVFPU() calls them only for the sizes they have). which: 0 vmmul, 1 vtfm, 2 vhtfm, 3 vmscl,
@@ -416,6 +488,10 @@ auto Allegrex::Recompiler::emitVFPU(u32 address, u32 instruction, u32 count, boo
   std::array<u32, 4> constants{};  //vzero, vone, vidt, viim, vfim: the lanes' values, written by the compiled code
   bool constant = false;
   u32 written = size;  //how many of vd's lanes the constants go in
+  //vfpuLane()'s op for an instruction vfpuEach() can run: with its prefixes as they are, or, for the math functions
+  //(which take prefixes their own way: vfpuLastLaneFirst()), at rest only
+  s32 each = -1;
+  bool restOnly = false;
 
   if(op == 0x37 && (instruction >> 24 & 3) != 3) {  //vpfxs, vpfxt, vpfxd: the bits decoderVFPU5() keeps
     u32 which = instruction >> 24 & 3;
@@ -430,25 +506,31 @@ auto Allegrex::Recompiler::emitVFPU(u32 address, u32 instruction, u32 count, boo
     if(group == 0) helper = Sized(vfpuRestBinary, 0);
     if(group == 1) helper = Sized(vfpuRestBinary, 1);
     if(group == 7) helper = Sized(vfpuRestBinary, 7);
+    each = group;
   } else if(op == 0x19 && group == 0) {  //vmul
-    helper = Sized(vfpuRestBinary, 8);
+    helper = Sized(vfpuRestBinary, 8), each = 8;
   } else if(op == 0x19 && group == 1) {  //vdot
     helper = Sized(vfpuRestDot), first = self.vfpuLine(vd, 1)[0];
   } else if(op == 0x19 && group == 2) {  //vscl
-    helper = Sized(vfpuRestScale), third = self.vfpuLine(vt, 1)[0];
+    helper = Sized(vfpuRestScale), third = self.vfpuLine(vt, 1)[0], each = 9;
   } else if(op == 0x19 && group == 4) {  //vhdp
     helper = Sized(vfpuRestHalfDot), first = self.vfpuLine(vd, 1)[0];
   } else if(op == 0x1b && group == 0) {  //vcmp
     helper = Sized(vfpuRestCompare), first = instruction & 15;
   } else if(op == 0x1b && (group == 2 || group == 3)) {  //vmin, vmax
     helper = group == 2 ? Sized(vfpuRestMinMax, false) : Sized(vfpuRestMinMax, true);
+    each = 8 + group;
   } else if(op == 0x1b && (group == 6 || group == 7)) {  //vsge, vslt
     helper = group == 6 ? Sized(vfpuRestSet, false) : Sized(vfpuRestSet, true);
+    each = 6 + group;
   } else if(op == 0x34 && group == 0 && instruction >> 24 != 0xd3 && instruction >> 16 != 0xd050 &&
             instruction >> 16 != 0xd051) {
     if(vt == 0x00) helper = Sized(vfpuRestBits, 0);  //vmov
     if(vt == 0x01) helper = Sized(vfpuRestBits, 1);  //vabs
     if(vt == 0x02) helper = Sized(vfpuRestBits, 2);  //vneg
+    if(vt <= 0x02) each = 20 + vt;
+    //vrcp, vrsq, vsin, vcos, vexp2, vlog2, vsqrt, vasin, vnrcp, vnsin, vrexp2
+    if((vt >= 0x10 && vt <= 0x18) || vt == 0x1a || vt == 0x1c) each = 40 + vt - 0x10, restOnly = true;
     if(vt == 0x06) constant = true;                   //vzero
     if(vt == 0x07) constant = true, constants.fill(One);  //vone
     if(vt == 0x03 && (size == 2 || size == 4)) {      //vidt (other sizes are reserved)
@@ -457,7 +539,9 @@ auto Allegrex::Recompiler::emitVFPU(u32 address, u32 instruction, u32 count, boo
       for(u32 i : range(size)) constants[i] = ((start + i) & 3) == position ? One : 0;
     }
   } else if(op == 0x34 && group == 5 && (instruction >> 21 & 3) == 0) {  //vi2f
-    helper = Sized(vfpuRestToFloat), third = instruction >> 16 & 31;
+    helper = Sized(vfpuRestToFloat), third = instruction >> 16 & 31, each = 30;
+  } else if(op == 0x34 && group == 4 && instruction >> 24 != 0xd3) {  //vf2in, vf2iz, vf2iu, vf2id
+    each = 31;
   } else if(op == 0x3c) {
     //The matrix instructions, if the size is one they have, as decoderVFPU6() picks them: vmmul (any but 1), vtfm
     //and vhtfm (the matrix's size, or one less), vmscl (any but 1), and group 7's vmmov, vmidt, vmzero and vmone
@@ -491,6 +575,9 @@ auto Allegrex::Recompiler::emitVFPU(u32 address, u32 instruction, u32 count, boo
     return true;  //vnop, vsync, vflush: nothing to do or wait for, and the prefixes stay for the next instruction
   }
   #undef Sized
+  if(each >= 0 && (prefixes.busy() ? !restOnly : !helper)) {
+    return emitEach(address, instruction, count, delaySlot, each, size);
+  }
   if((!helper && !constant) || prefixes.busy()) return emitVFPUCall(address, instruction, count, delaySlot);
 
   auto busy = emitPrefixesBusy();
@@ -501,6 +588,73 @@ auto Allegrex::Recompiler::emitVFPU(u32 address, u32 instruction, u32 count, boo
     for(u32 i : range(written)) mov32(field(&self.vfpu.r[lanes[i]]), imm(constants[i]));
   }
   if(busy) emitCold({busy}, [=, this] { emitVFPUCall(address, instruction, count, delaySlot); });
+  return true;
+}
+
+//A lane-by-lane VFPU instruction run by vfpuEach() (op: vfpuLane()'s), each lane's reading and writing worked out here
+//from the prefixes as the interpreter's vfpuRead(), outsideLanes() and vfpuWrite() use them: their values where the
+//block knows them, else at rest, checked as it runs (otherwise it's the interpreter's way, emitVFPUCall(), as cold
+//code). vscl reads rt's single in every lane, its prefix's absolute, constant and negate settings each lane's own, as
+//VSCL() does.
+auto Allegrex::Recompiler::emitEach(u32 address, u32 instruction, u32 count, bool delaySlot, u32 op, u32 size)
+  -> bool {
+  u8 vd = instruction & 0x7f, vs = instruction >> 8 & 0x7f, vt = instruction >> 16 & 0x7f;
+  u32 value[3];
+  std::vector<sljit_jump*> busy;
+  for(u32 p : range(3)) {
+    u32 rest = p == 2 ? 0 : PrefixIdentity;
+    value[p] = prefixes.known[p] ? prefixes.value[p] : rest;
+    if(prefixes.known[p]) continue;
+    auto prefix = field(p == 0 ? &self.vfpu.pfxs : p == 1 ? &self.vfpu.pfxt : &self.vfpu.pfxd);
+    busy.push_back(cmp32_jump(prefix, imm(rest), flag_ne));
+  }
+  //(describedLane())
+  auto described = [&](u8 reg, u32 prefix) -> u64 {
+    auto index = self.vfpuLine(reg, size);
+    u64 lanes = 0;
+    for(u32 i : range(size)) {
+      u32 swizzle = prefix >> 2 * i & 3, absolute = prefix >> (8 + i) & 1, negate = prefix >> (16 + i) & 1;
+      u32 lane = prefix >> (12 + i) & 1 ? 1 << 9 | (swizzle | absolute << 2) << 10 : index[swizzle] | absolute << 7;
+      lanes |= u64(lane | negate << 8) << 16 * i;
+    }
+    return lanes;
+  };
+  u64 s = described(vs, value[0]), t = 0;
+  u32 outside = outsideLanes(value[0], size);
+  if(op <= 8 || (op >= 10 && op <= 13)) {
+    t = described(vt, value[1]);
+    outside |= outsideLanes(value[1], size);
+  } else if(op == 9) {
+    u32 scale = self.vfpuLine(vt, 1)[0];
+    for(u32 i : range(size)) {
+      u32 absolute = value[1] >> (8 + i) & 1, negate = value[1] >> (16 + i) & 1;
+      u32 lane = value[1] >> (12 + i) & 1 ? 1 << 9 | (absolute << 2) << 10 : scale | absolute << 7;
+      t |= u64(lane | negate << 8) << 16 * i;
+    }
+    op = 8;  //(a lane of vmul)
+  } else if(op == 30) {
+    t = instruction >> 16 & 31;
+  } else if(op == 31) {
+    t = (instruction >> 16 & 31) | (instruction >> 21 & 3) << 8;
+  }
+  //(describedWrite(), and the lanes past the size)
+  auto index = self.vfpuLine(vd, size);
+  u64 d = 0;
+  for(u32 i : range(size)) {
+    u32 lane = index[i] | (value[2] >> (8 + i) & 1) << 7 | (value[2] >> 2 * i & 3) << 8 | (outside >> i & 1) << 10;
+    d |= u64(lane) << 16 * i;
+  }
+  using Each = void (Allegrex::*)(u64, u64, u64);
+  #define Op(n) case n: helper = size == 1 ? (Each)&Allegrex::vfpuEach<1, n> : size == 2 ? &Allegrex::vfpuEach<2, n> \
+    : size == 3 ? &Allegrex::vfpuEach<3, n> : &Allegrex::vfpuEach<4, n>; break;
+  Each helper = nullptr;
+  switch(op) {
+  Op(0) Op(1) Op(7) Op(8) Op(10) Op(11) Op(12) Op(13) Op(20) Op(21) Op(22) Op(30) Op(31)
+  Op(40) Op(41) Op(42) Op(43) Op(44) Op(45) Op(46) Op(47) Op(48) Op(50) Op(52)
+  }
+  #undef Op
+  callf(helper, imm64(s), imm64(t), imm64(d));
+  if(!busy.empty()) emitCold(busy, [=, this] { emitVFPUCall(address, instruction, count, delaySlot); });
   return true;
 }
 

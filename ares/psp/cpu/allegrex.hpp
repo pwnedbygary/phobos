@@ -469,6 +469,8 @@ struct Allegrex {
   template<u32 Size, bool Max> auto vfpuRestMinMax(u32 vd, u32 vs, u32 vt) -> void;
   template<u32 Size, bool Less> auto vfpuRestSet(u32 vd, u32 vs, u32 vt) -> void;
   template<u32 Size> auto vfpuRestHalfDot(u32 vd, u32 vs, u32 vt) -> void;
+  template<u32 Op> auto vfpuLane(u32 s, u32 t) const -> u32;
+  template<u32 Size, u32 Op> auto vfpuEach(u64 s, u64 t, u64 d) -> void;
   auto vfpuMatrix(u32 which, u32 registers, u32 size) -> void;
   template<u32 Size, bool Transposed, bool Homogeneous> auto vfpuTransform(u32 matrix, u32 t, u32 d) -> void;
   template<u32 Size, u32 Transposed> auto vfpuMultiply(u32 s, u32 t, u32 d) -> void;
@@ -533,8 +535,8 @@ struct Allegrex {
     //make, an FPU mode or result its native code leaves to the interpreter, the VFPU's prefixes not at rest), kept
     //out of the block's straight line: emitted after the block's end, each from its jumps and back (emitCold()).
     std::vector<std::function<void ()>> cold;
-    auto emitCold(std::initializer_list<sljit_jump*> jumps, const std::function<void ()>& code) -> void;
-    auto emitColdFallback(std::initializer_list<sljit_jump*> jumps, u32 address, u32 instruction, u32 count,
+    auto emitCold(const std::vector<sljit_jump*>& jumps, const std::function<void ()>& code) -> void;
+    auto emitColdFallback(const std::vector<sljit_jump*>& jumps, u32 address, u32 instruction, u32 count,
                           bool delaySlot) -> void;
     auto isBranch(u32 instruction) const -> bool;
     //Where the delay slot being compiled goes after it, when that's known as it's compiled (emitDelaySlot()): pc and
@@ -591,6 +593,7 @@ struct Allegrex {
     //recompiler-vfpu.cpp
     auto emitVFPU(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
     auto emitVFPUCall(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
+    auto emitEach(u32 address, u32 instruction, u32 count, bool delaySlot, u32 op, u32 size) -> bool;
     auto emitPrefixesBusy() -> sljit_jump*;
     auto prefixesAfter(u32 instruction) -> void;
     auto emitMFVC(u32 instruction) -> void;

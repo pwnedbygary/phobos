@@ -835,11 +835,59 @@ struct Values {
   }
 };
 
+//Both engines, side by side, each running programs from fresh addresses (no recompiler reset between them), from the
+//same registers and prefixes; whether every register, the prefixes and the condition codes come out the same.
+struct Engines {
+  Machine engines[2];
+  uint32_t at[2] = {Base, Base};
+  Engines() {
+    for(uint32_t e : range(2)) {
+      engines[e].cpu.recompiler.enabled = engines[e].recompile = e == 1;
+      engines[e].cpu.power(Base);
+    }
+  }
+  auto run(const std::vector<uint32_t>& words, const uint32_t (&registers)[128], uint32_t pfxs = 0xe4,
+           uint32_t pfxt = 0xe4, uint32_t pfxd = 0) -> bool {
+    for(uint32_t e : range(2)) {
+      auto& m = engines[e];
+      if(at[e] + 4 * words.size() + 4 > Data) m.cpu.power(Base), at[e] = Base;  //(compiled afresh from the start)
+      uint32_t address = at[e];
+      for(uint32_t word : words) m.ram.write32(address, word), address += 4;
+      m.ram.write32(address, halt);
+      for(uint32_t i : range(128)) m.cpu.vfpu.r[i] = registers[i];
+      m.cpu.vfpu.pfxs = pfxs, m.cpu.vfpu.pfxt = pfxt, m.cpu.vfpu.pfxd = pfxd, m.cpu.vfpu.cc = 0x15;
+      m.cpu.ipu.pc = at[e], m.cpu.ipu.pd = at[e] + 4, m.cpu.scc.halted = 0;
+      m.cpu.run(100);
+      at[e] = address + 4;
+    }
+    auto& a = engines[0].cpu.vfpu;
+    auto& b = engines[1].cpu.vfpu;
+    bool same = a.pfxs == b.pfxs && a.pfxt == b.pfxt && a.pfxd == b.pfxd && a.cc == b.cc;
+    for(uint32_t i : range(128)) same &= a.r[i] == b.r[i];
+    return same;
+  }
+  auto report(const char* name, const std::vector<uint32_t>& words) -> void {
+    auto& a = engines[0].cpu.vfpu;
+    auto& b = engines[1].cpu.vfpu;
+    std::printf("  %s:", name);
+    for(uint32_t word : words) std::printf(" %08x", word);
+    std::printf("\n");
+    for(uint32_t i : range(128)) {
+      if(a.r[i] != b.r[i]) std::printf("    register %u is %08x compiled, %08x interpreted\n", i, b.r[i], a.r[i]);
+    }
+    if(a.pfxs != b.pfxs || a.pfxt != b.pfxt || a.pfxd != b.pfxd || a.cc != b.cc) {
+      std::printf("    prefixes and cc %x %x %x %x compiled, %x %x %x %x interpreted\n", b.pfxs, b.pfxt, b.pfxd, b.cc,
+                  a.pfxs, a.pfxt, a.pfxd, a.cc);
+    }
+  }
+};
+
 //Compiled code's matrix and dot products (recompiler-vfpu.cpp: vmmul, vtfm, vhtfm, vdot and vhdp, which on ARM64
 //run the adder in NEON) against the interpreter's: random instructions of each kind and size, on any registers
 //(matrices in place or not, transposed or not, vectors along rows or columns, results over their own operands),
-//from random registers (Values). Each runs from a fresh address on both engines, and every register, the prefixes
-//and the condition codes must come out the same.
+//from random registers (Values), with prefixes set before them now and then (in the block, or only in the state it
+//starts from), which the matrix products leave at rest and the others take. Every register, the prefixes and the
+//condition codes must come out the same.
 auto compiledProducts() -> void {
   if(!useRecompiler) return;  //(it runs both engines itself)
   struct Kind { const char* name; uint32_t opcode, size; };
@@ -850,41 +898,78 @@ auto compiledProducts() -> void {
     {"vdot.p", Vdot, 2}, {"vdot.t", Vdot, 3}, {"vdot.q", Vdot, 4}, {"vhdp.p", Vhdp, 2}, {"vhdp.t", Vhdp, 3},
     {"vhdp.q", Vhdp, 4},
   };
-  Machine engines[2];
-  uint32_t at[2] = {Base, Base};
-  for(uint32_t e : range(2)) {
-    engines[e].cpu.recompiler.enabled = engines[e].recompile = e == 1;
-    engines[e].cpu.power(Base);
-  }
-  auto run = [&](uint32_t e, uint32_t word, const uint32_t (&registers)[128]) {
-    auto& m = engines[e];
-    if(at[e] + 8 > Data) m.cpu.power(Base), at[e] = Base;  //(code from the start again, compiled afresh)
-    m.ram.write32(at[e], word);
-    m.ram.write32(at[e] + 4, halt);
-    for(uint32_t i : range(128)) m.cpu.vfpu.r[i] = registers[i];
-    m.cpu.vfpu.pfxs = m.cpu.vfpu.pfxt = 0xe4, m.cpu.vfpu.pfxd = 0, m.cpu.vfpu.cc = 0x15;
-    m.cpu.ipu.pc = at[e], m.cpu.ipu.pd = at[e] + 4, m.cpu.scc.halted = 0;
-    m.cpu.run(100);
-    at[e] += 8;
-  };
+  Engines engines;
   Values values(0x5eed'0001);
   uint32_t registers[128];
   for(auto& kind : kinds) {
     uint32_t differences = 0;
     for(uint32_t trial = 0; trial < 3000; trial++) {
-      uint32_t word = alu(kind.opcode, kind.size, values.next() & 0x7f, values.next() & 0x7f, values.next() & 0x7f);
+      std::vector<uint32_t> words;
+      uint32_t state[3] = {0xe4, 0xe4, 0};
+      if(values.next() % 4 == 0) {
+        uint32_t which = values.next() % 3, value = values.next() & (which == 2 ? 0xfff : 0xf'ffff);
+        if(values.next() % 2) words.push_back((0xdc + which) << 24 | value);
+        else state[which] = value;
+      }
+      words.push_back(alu(kind.opcode, kind.size, values.next() & 0x7f, values.next() & 0x7f, values.next() & 0x7f));
       values.fill(registers);
-      run(0, word, registers);
-      run(1, word, registers);
-      auto& a = engines[0].cpu.vfpu;
-      auto& b = engines[1].cpu.vfpu;
-      bool same = a.pfxs == b.pfxs && a.pfxt == b.pfxt && a.pfxd == b.pfxd && a.cc == b.cc;
-      for(uint32_t i : range(128)) same &= a.r[i] == b.r[i];
-      if(!same && differences++ < 3) {
-        for(uint32_t i : range(128)) {
-          if(a.r[i] != b.r[i]) std::printf("  %s %08x: register %u is %08x compiled, %08x interpreted\n", kind.name,
-                                           word, i, b.r[i], a.r[i]);
-        }
+      if(!engines.run(words, registers, state[0], state[1], state[2]) && differences++ < 3) {
+        engines.report(kind.name, words);
+      }
+    }
+    check(__LINE__, kind.name, differences, 0);
+  }
+}
+
+//Compiled code's lane-by-lane instructions (recompiler-vfpu.cpp's vfpuEach(): vadd, vsub, vdiv, vmul, vscl, vmin,
+//vmax, vsge, vslt, vmov, vabs, vneg, vi2f and vf2i with any prefixes; the math functions at rest) against the
+//interpreter's: random instructions of each kind and size, on any registers, from random registers (Values), with
+//random prefixes set in the block before them (which the block then knows), or only in the state it starts from
+//(which it takes to be at rest, and checks), or none. Every register, the prefixes and the condition codes must come
+//out the same.
+auto compiledLanes() -> void {
+  if(!useRecompiler) return;  //(it runs both engines itself)
+  struct Kind { const char* name; uint32_t opcode, rt; bool restOnly; };
+  //(rt: a unary instruction's code, or for vi2f and vf2i a part of the scale's field kept from the random one)
+  const Kind kinds[] = {
+    {"vadd", Vadd, 0x80, 0}, {"vsub", Vsub, 0x80, 0}, {"vdiv", Vdiv, 0x80, 0}, {"vmul", Vmul, 0x80, 0},
+    {"vscl", Vscl, 0x80, 0}, {"vmin", Vmin, 0x80, 0}, {"vmax", Vmax, 0x80, 0}, {"vsge", 0b011011110, 0x80, 0},
+    {"vslt", Vslt, 0x80, 0}, {"vmov", 0b110100000, Vmov, 0}, {"vabs", 0b110100000, Vabs, 0},
+    {"vneg", 0b110100000, Vneg, 0}, {"vi2f", 0b110100101, 0x100, 0}, {"vf2i", 0b110100100, 0x200, 0},
+    {"vrcp", 0b110100000, Vrcp, 1}, {"vrsq", 0b110100000, Vrsq, 1}, {"vsin", 0b110100000, Vsin, 1},
+    {"vcos", 0b110100000, Vcos, 1}, {"vexp2", 0b110100000, Vexp2, 1}, {"vlog2", 0b110100000, Vlog2, 1},
+    {"vsqrt", 0b110100000, Vsqrt, 1}, {"vasin", 0b110100000, Vasin, 1}, {"vnrcp", 0b110100000, 0x18, 1},
+    {"vnsin", 0b110100000, 0x1a, 1}, {"vrexp2", 0b110100000, 0x1c, 1},
+  };
+  Engines engines;
+  Values values(0x5eed'0002);
+  uint32_t registers[128];
+  for(auto& kind : kinds) {
+    uint32_t differences = 0;
+    for(uint32_t trial = 0; trial < 1500; trial++) {
+      uint32_t size = 1 + values.next() % 4, rt = values.next() & 0x7f;
+      if(kind.rt < 0x80) rt = kind.rt;
+      if(kind.rt == 0x100) rt &= 0x1f;  //vi2f: the scale
+      if(kind.rt == 0x200) rt = (rt & 0x1f) | (values.next() & 3) << 5;  //vf2i: the scale, and the mode
+      std::vector<uint32_t> words;
+      uint32_t state[3] = {0xe4, 0xe4, 0};  //the prefixes as the program starts
+      auto prefix = [&](uint32_t which) {
+        uint32_t r = values.next(), value = values.next() & (which == 2 ? 0xfff : 0xf'ffff);
+        if(r % 4 == 0) value &= 0x000ff;  //swizzles alone
+        if(r % 4 == 1 && which != 2) value = 0xe4 | (value & 0xf'0f00);  //in place, made absolute or negated
+        return value;
+      };
+      uint32_t mode = values.next() % 4;  //0: none, 1: in the block, 2: in the state only, 3: some of each
+      for(uint32_t which : range(3)) {
+        if(mode == 0 || values.next() % 3 == 0) continue;
+        uint32_t value = prefix(which);
+        if(mode == 1 || (mode == 3 && values.next() % 2)) words.push_back((0xdc + which) << 24 | value);
+        else state[which] = value;
+      }
+      words.push_back(alu(kind.opcode, size, values.next() & 0x7f, values.next() & 0x7f, rt));
+      values.fill(registers);
+      if(!engines.run(words, registers, state[0], state[1], state[2]) && differences++ < 3) {
+        engines.report(kind.name, words);
       }
     }
     check(__LINE__, kind.name, differences, 0);
@@ -897,6 +982,7 @@ auto vfpuTests() -> Tests {
     {"vfpu products", products}, {"vfpu comparisons", comparisons}, {"vfpu conversions", conversions},
     {"vfpu functions", functions}, {"vfpu matrices", matrices}, {"vfpu moves", moves}, {"vfpu more", more},
     {"vfpu random", random}, {"vfpu edges", edges}, {"vfpu compiled products", compiledProducts},
+    {"vfpu compiled lanes", compiledLanes},
   };
 }
 
