@@ -11234,6 +11234,315 @@ woods and character select, Sonic Rivals' stage, Activision Hits Remixed's room,
 Castlevania's first stage, Brave Story's title and Darkstalkers, each in Software and Vulkan (fast), with the GPU's
 counters where the app can show them.
 
+## Part 84: savedata's patterns — Dissidia's Load Game, Final Fantasy Type-0's list; Disgaea Infinite's New was Continue
+
+On branch `cursor/psp-savedata3-2b67`, on master (1d9308714, #228: part 80). Parts 81 to 83 are other branches'.
+Sources: the games themselves, traced with `--trace-savedata`; Disgaea Infinite's own code, read from a dump of its RAM
+with LLVM's MIPS disassembler, and its variables and system calls followed frame by frame with a scratch runner (neither
+in the repository); pspsdk's psputility_savedata.h; pspautotests' utility/savedata/idlist (the list mode's "A?C", and
+an open of a path holding '?'); PPSSPP read only as a description of the PSP (its notes on what the list dialogs show).
+JPCSP was not read. Save states are unchanged (StateVersion 26): nothing gains state.
+
+**The problems** (the play-testers' deep-play batch 02, suspected bugs 1, 3 and 7): both Dissidias' Load Game went back
+to the title with a save on the stick; Disgaea Infinite's New faded out and back to its title for good on an empty
+stick, writing nothing; Final Fantasy Type-0's list request for "GAMEDATA*" was answered with its SYSTEMDATA.
+
+**Dissidia Final Fantasy (ULUS10437) and Dissidia 012 (ULUS10566).** Load Game is a list load (mode 4) of GameData00 to
+GameData19, focus 3 (the latest), whose save name is "GameData*", left in the parameters from the list request (mode
+11) the game makes just before, which takes it as a pattern. The kernel took a list's names only for a request naming
+no save ("" or "<>"; part 80), so it looked for a save named "GameData*" (a folder ULUS10437GameData*), found none,
+answered NO_DATA (0x80110307), and the game went quietly back to its title. A PSP's list dialog shows the list's saves
+there; the request's save name only names the save focus 0 picks (pspsdk's FOCUS_UNKNOWN; PPSSPP's notes take it as
+the request's save), so its player sees GameData00, the latest. **The fix** (utility.cpp, `savePattern()`): a save's
+name holding '*' or '?' is a pattern, which names no save a memory stick can hold (FAT takes neither character in a
+name, and idlist's open of a file in a folder whose name held '?' was 0x80010016, invalid, where one not there is
+0x80010002). In a list's load or save from a list (one with a first name) it names no save of its own, as "<>"
+doesn't (`savedataMode()`, the trace, and the dialog's saves, `dialogSaves()`), so the automatic answer
+(`savedataUnshown()`) takes the save the dialog focuses, GameData00, writes its name back and loads it. **Now**: Load
+Game loads GameData00 (286,328 bytes; 012's 257,224) and
+each game goes on where the play-tester saved, before its opening: Dissidia plays its opening movie and then its
+tutorial's pages, 012 its opening ("Two divine powers locked in an endless struggle").
+
+**The same mistake elsewhere.** Every mode that takes a save's name or a list of them was looked through.
+- A list's load naming a save of its own took that save before the list (chosen in part 80), though on a PSP the name
+  only says which save focus 0 picks. Disgaea Infinite's Continue is one (save "DIP000", its 32 slots, focus 0): with
+  a save in any slot but DIP000 (one a player made through the app's dialog, say) it found no data. Every list load
+  answered with no front end is now answered as its dialog would be: the save it focuses among those shown (the list's
+  saves there, and the request's own where it names one that's there, `dialogSaves()`' choice since part 73), focus 0
+  taking the request's own. In the game: a save Disgaea made (Start in its story) moved from DIP000 to DIP003,
+  Continue loads DIP003 and the story goes on where it was saved, where master's runner said no data and went back
+  to the title; left in DIP000, it loads as before.
+- A list's save naming a pattern saved under it, making a folder no PSP's stick can hold; it now takes the list's
+  first name, as one naming none does. One naming its own save takes it, as before (chosen in part 80: where the
+  automatic answer's loads naming it find it).
+- A pattern in a list was a save's name too: the app's dialog showed it, as new data to save to. It's now no save:
+  shown in no dialog (nor among the folders "<>" stands for), taken by no answer, and a list save led by one is
+  refused, as one led by a name that isn't plain is.
+- With no list (none, or no first name) a pattern is taken as the save's name, which no save has: a list load finds
+  none and a list save is refused. Chosen: taken as none, it would be the game's folder alone, a save the game may
+  keep there of its own (Dissidia's list requests all have their list).
+- A save under a pattern (the autosave, save, make and write modes) is refused as a name that isn't plain is, nothing
+  made (chosen: no recording saves under one; the write modes, 17 and 18, are so refused before they'd be NO_DATA for
+  want of a save); a load, read, files request or delete of one is answered as before (no PSP's stick holds such a
+  save). The app's dialog asks nothing for a save whose name is taken so (a single save's, or a list save's with no
+  list), refusing it at once as without the dialog; a load or delete of one shows its notice that there's nothing.
+- A list delete answered with no front end deletes the save it names, as before, so one naming a pattern deletes
+  nothing (chosen: an unshown delete takes no save of the list's); the app's dialog shows the list's saves there.
+- The sizes mode measures msData's save, whose names Dissidia gives resolved ("GameData00"); the trace says whether
+  the save a list request takes is there, the list's first where its save name is a pattern, as savedataMode() takes it.
+
+Chosen: a list's names are shown whatever the request's pattern takes. PPSSPP's notes show the list's names alone;
+whether a PSP also narrows them to the pattern isn't recorded anywhere here, and all twenty of Dissidia's names match
+"GameData*", so either reading loads its GameData00.
+
+**Final Fantasy Type-0 (NPJH50443).** Its list request (mode 11, most 1) for "GAMEDATA*" listed SYSTEMDATA: the list
+mode listed every folder whose name starts with the game's, whatever the save's name. idlist's "A?C" listed ABC, its
+one save, so the save's name is a pattern, not a save's name; that a PSP leaves out the saves the pattern doesn't take
+isn't recorded (that test made no other) and is chosen, as the games mean their patterns (Type-0 asks for "GAMEDATA*"
+beside its SYSTEMDATA). **The fix** (`savedataList()`, `patternTakes()`): the game's saves whose own names the pattern
+takes whole, '*' any run of characters (none too), '?' any one, any other character itself, as it's given (chosen: a
+FAT stick keeps names' case, and a game names its own folders), so a name with neither lists that save alone
+(chosen). An empty name and "<>" still list every save of the game's (chosen, as before: no recording lists with
+either, and neither names a save anywhere else). **Now**: listed 0 at frame 744 where master listed SYSTEMDATA; the
+game goes on as before (every frame the same but one of its opening movie's, by timing), its Load Game still told
+there's no save.
+
+**Disgaea Infinite (ULUS10522): no emulator bug; the play-tester's New was Continue.** The title's menu is New,
+Continue, Option, Extra, and its cursor starts on Continue: the cursor's index, a byte at 0x08a22afc, is 1 in the
+game's own data from the first frame, and nothing but the menu's Up and Down changes it (its writers, in the title's
+code from 0x08861464, besides one setting an index out of range to 0); the arrow points at its item from the upper
+left, so on Continue it sits by New. Pressing Down from there reaches Option, which the play-tester took for Down
+skipping Continue. Continue's case (index 1 of the title's switch at 0x08861428) is the game's load: a list load of
+its play slots DIP000 to DIP031 (save "DIP000", focus 0), then, loaded, an autoload. On an empty stick it got NO_DATA
+and the game went back to its title. Its step for that load (0x088733b8) and the flow after it (0x0886f774) go on only
+with 0: cancelled (1) and every error alike lead back to the title, so whether a PSP's dialog closes its "no data"
+notice as NO_DATA (as PPSSPP's notes have it, and the kernel answers) or as backed out, the game returns to its title
+the same, and it reads nothing else of the answer.
+New (index 0, Up once from where the cursor starts) asks for no save at all: on an empty stick the story begins ("What
+happens to me if I... die?") with master's runner as with this branch's, and the prologue plays to frame 12,000 with no
+savedata request. The system data its boot message promises isn't written at boot either: the boot's step lists DIS000
+(its system data, by the message just before), finds none, and ends; the game's only saving requests are its save's,
+which Cross alone through the prologue doesn't make. Start in its story does: a list save to DIP000 (naming it, focus
+0), then DIS000 autosaved (4,700 bytes), which the next boot lists and autoloads. Nothing here changed for New or for
+Continue on an empty stick; the list mode's fix narrows the boot's list of "DIS000" to DIS000 (master listed every save
+of the game's beside it).
+
+**Tests.** `utility savedata patterns (Dissidia, Final Fantasy Type-0)`: the list mode's patterns ("GameData*" the
+GameData saves and not the others, Type-0's "GAMEDATA*" none beside SYSTEMDATA, "A?C" ABC and not ABCD, "A*C*", "*0?"
+after a false start, "gamedata*" none (case as given), a name alone, "?" none, the most asked for; "", "<>" and "*"
+every save, the game's own folder too); Dissidia's list loads ("GameData*" and its 20 slots: focus 3 the latest, 4 the
+oldest, 0 the first there; with none there NO_DATA, the pattern left); a list save naming a pattern to the list's
+first name; with no list (none, or no first name), a list load naming one finding none beside the game's own folder,
+and a list save refused; a pattern in a list passed over, and a save to a list led by one refused; saves under a
+pattern refused in modes 1, 3, 13, 14, 17 and 18, nothing made, and loads, reads, files and deletes of one finding
+none; three trace lines, exact. `utility savedata lists answered with no front end`: a list load naming its own save
+takes it where focus 0 picks it and it's there, else the first there, the last with focus 2 though its own is there,
+and NO_DATA with none there, its name left (Disgaea's Continue on an empty stick). `dialogs front end: lists naming a
+pattern (Dissidia)`: the dialog of a list load naming "GameData*" shows the list's saves there, the latest focused,
+the player's choice loaded and written back; a pattern in a list shown neither in a load's dialog nor in a save's; a
+list delete naming one shows the list's saves; with no list, the load's dialog shows nothing (the game's own folder
+there), and a single save or a list save naming one is refused at once, nothing asked or made; "<>" in a list leaves
+out a host folder of the game's whose name holds a pattern. The matcher also agreed with a plain recursive one over
+every pattern of up to five of "ab*?" and every name of up to five of "ab" (85,995 pairs; scratch).
+
+**The games #228 fixed, again** (with this branch's runner and master's, each run on its own copy of the sticks
+part 80 used): After Burner's story, from its mid-story state, ends with its list save to 0000 and goes to its MAIN
+MENU, and its next boot autoloads 0000; Brandish saves to an empty stick (three list saves to 0001), then loads it from
+the title and in play; 7th Dragon's Option save writes its system data, and its LOAD GAME loads DATA03; Colin McRae's
+first boot autosaves (OPTIONS.DAT, 228,760 bytes) and the second autoloads it, reaching its main menu. Every request
+and answer traced, every file left and every capture is the same with both runners, but 7th Dragon's capture after its
+save, which two runs minutes apart gave differing in a band at its top and two made at once gave the same, one with
+each runner (the game reads the clock: part 80).
+
+**Checks.** `tests/psp/run-tests.sh` 477 groups, 0 failures (master's 475 and the two new);
+`tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. Built against
+master's kernel, the new and changed tests fail and nothing else does: their three groups (the list mode's patterns;
+Dissidia's loads; the saves under a pattern, whose folders master made; the list loads naming their save; a pattern in
+a list shown by the dialog). The games with this branch's runner and `--trace-savedata`, each run on its
+own copy of the play-testers' sticks: Dissidia's and 012's Load Game (Cross at 2100) load GameData00 at 2161 and play
+on to frame 6000; Type-0's boot (Circle at 700) lists nothing for "GAMEDATA*" at 744; Disgaea Infinite's Cross on its
+title from where the cursor starts gets NO_DATA at 1549 and the title again, as with master's runner, and New (Up,
+then Cross) starts its story; with a save it made (Start in its story) in DIP000, or moved to DIP003, the same Cross
+loads it at 1549 and the story resumes (master's runner: no data for DIP003, and the title).
+
+**The review's points** (an independent read-only review of the first draft, diff 47849322…; it reran the PSP tests,
+477 groups, none failing, and checked the runs and the disassembly above), all taken: a single save naming a pattern
+still asked the app's dialog and was refused only once the player confirmed (now refused at once, as is a list save's
+with no list); "case as given" untested (tested now); idlist's "A?C" shows a pattern, not that the saves it doesn't
+take are left out (reworded, that part chosen); the refusal of saves under a pattern unmarked as chosen, and the write
+modes' change from NO_DATA unsaid; "an open of a folder" (of a file in one); a pattern with no list taken as none, and
+so the game's own folder (now taken as a name, which no save has); a comment's wording. Its suggestions: a game run
+with a named list load and a save elsewhere in its list (Disgaea's DIP003, above: done), and host folders whose names
+hold '*' or '?', an older build's, left out of what "<>" stands for (done). Not taken: that a list delete answered with
+no front end and naming no save deletes the game's own folder, which may hold its system data (as before this change,
+and outside it); the list mode's and mode 7's lists of every save showing such folders (no game makes them now). Its
+delta review of those changes (diff 444ddaf3…) passed them; its notes, taken: the no-list case tested with no list's
+pointer too, the folder "<>" leaves out tested, a comment's wording, and a test's loop over pairs by reference.
+
+**Scratch** (the runs, their stick copies, traces and captures, the sheets, the scratch runner's patch and Disgaea
+Infinite's disassembly; `run.sh` gives each run its own stick, `recheck228.sh` and `final3.sh` are the runs above):
+`~/phobos-work/scratch/savedata3/` on the Mac it was made on, not in the repository.
+
+## Part 87: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces (the memory a glyph is read into)
+
+On branch `cursor/psp-font-b03-2b67`, on master (`b3507c1db`). Parts 81 to 86 are other branches'. Sources: the three
+games themselves (each traced with a scratch runner's system-call trace and thread dumps, and its code read from RAM
+dumps with LLVM's MIPS disassembler; nothing of them is in the repository); pspautotests' font tests (fonttest's calls
+to the program's alloc and free, open's handles closed twice, charinfo) and threads/vpl/try (a VPL refusing 0 bytes);
+PPSSPP read only as a description of the PSP: its issue 5954 (Hammerin' Hero's words run together in PPSSPP, spaced in a
+reporter's pictures of a PSP), and its sceFont.cpp's notes on closing a handle that isn't open and on the memory a
+character's details take (nothing copied or translated). JPCSP was not read. Save states: layout 27 (layout 26 and older
+load, their fonts holding no glyph and no call reading one).
+
+**Jeanne d'Arc (UCUS98700): "Loading..." for good as its first battle loads.** The play-tester's report (batch 03, bug
+1): Sortie on the "Stage 1 A Voice from Heaven" briefing, then "Loading..." forever, animating, and the game's own line
+`Error sceFontClose: 0x80460003` (INVALID_PARAMETER) at that moment. The trace: two of the game's text objects close the
+same font handle, one after the other (the library's second handle, a temporary one; its first, held since boot, holds
+the same font, ltn5); each keeps a handle, closes it and sets it to 0 (one through a count of its own, the other
+whenever it isn't 0), and both held this one. The first close was answered 0, the second refused: the handle wasn't
+open. The game then opened the font again, asked for its details, and from there its main thread called
+sceKernelDelayThread(1000) in a loop forever, its FontListThread asleep. The loop is the game's own lock: each of its
+wrappers of a library call (open, close, and the rest) waits for a byte to be 0 (0x08a788d4), sets it to 1, calls the
+library, and sets it back to 0 only if the call returned 0; any other answer prints the error and returns with the byte
+still 1, so the next call into the library waits for it forever. **What a PSP does**: the game loads its battles on a
+PSP, so a PSP's sceFontClose answers 0 for a handle closed already (pspautotests' open test closes two handles twice
+each with no crash recorded, but not what the closes return; PPSSPP's sceFont answers 0 for a font that isn't open). A
+handle that's none of a library's, or one of a library done with, is still refused (INVALID_PARAMETER: chosen, nothing
+shows it). **The change** (`sceFontClose()`): a library's handle that's closed already closes again, doing nothing, and
+returns 0; one never opened is answered the same (chosen: nothing shows it).
+
+**Final Fantasy III (NPUH10125): none of its own text drawn** (batch 02, bug 2). The game keeps its three fonts (from
+its files: 108,252, 20,872 and 112,892 bytes) in VRAM, at 0x041e5900, 0x041e0740 and 0x041c4e40, and opens them with
+sceFontOpenUserMemory. The HLE copied a font in memory only from RAM: each open was refused as no PGF (INVALID_DATA),
+the game kept 0 for its handles, and it drew every character with handle 0 (sceFontGetCharGlyphImage_Clip, refused:
+INVALID_PARAMETER), leaving every window empty. A PSP draws its text, so its library reads the font where the program
+has it, VRAM included. **The change** (`fontMemory()`): a font in memory is read from RAM, VRAM (any of its four copies,
+to the end of the copy it starts in) or the scratchpad, as far as that memory goes, 8 MiB at most as before; a state
+reads it again from there.
+
+**Hammerin' Hero (ULUS10392): its words run together** (batch 03, bug 3: "Startthegamefromthebeginning.", "I don't
+havetime tobeplaying with you,Boy."). The game opens a font of its own from memory ("Kick Assinger", 20 points at 72
+dots an inch), keeps each character's sceFontGetCharInfo and picture, and spaces a line by a rule of its own (its
+function at 0x08917e38): a character advances by its details' advance (sfp26AdvanceH, in 64ths of a pixel); a space (a
+code whose low byte is 0x20) by a quarter of that; and when the details are refused, by a quarter of 18 pixels (its
+text's width, which the PSP's button symbols it draws take whole). Its space's advance is 444, 6.9 pixels, so 1.7: words
+run together, as in PPSSPP before (its issue 5954), and on a PSP they don't: the reporter's pictures of one show them
+spaced. So a PSP refuses the space's details, and the space is 4.5 pixels. **Why a PSP refuses them**: a PSP's libfont
+reads each glyph into memory it asks the program's alloc for (pspautotests' fonttest: drawing jpn0's 'H' asked for 71
+bytes and then 210, its record of 79 bytes less the 8 that lead it (the fixed fields' 64 bits: 14 + 7 + 7 + 7 + 7 + 6 +
+7 + 9) and its picture of 14 by 15, given back after the font's tables and before the library's own blocks) and asks for
+blocks of 0 bytes without passing over them (fonttest: two, a revision 2 font's empty lists of ranges, as it opened); a
+space's picture is 0 by 0. Hammerin' Hero's alloc is sceKernelTryAllocateVpl on a VPL of 16 KiB, which a PSP refuses 0
+bytes (pspautotests' vpl/try: "0 bytes: Failed (800201B7)"); its alloc then gives nothing, and the call fails. Jeanne
+d'Arc's alloc gives 4 bytes for 0 (its own rule), so its spaces are details like any. PPSSPP's sceFont models the same
+(a character's details take its picture, width times height, of the program's alloc; none given: OUT_OF_MEMORY). A
+scratch build that refused the details of every character with no pixels showed Hammerin' Hero's text spaced first; the
+model below does it as the PSP does. **The change** (`fontCharacter()`, a library call of a kind of its own,
+`FontCall::Glyph`): a character's details and its picture (sceFontGetCharInfo, sceFontGetCharGlyphImage and its _Clip)
+read its glyph into two blocks of the program's first, its record past the 8 bytes that lead it and then its picture, a
+byte a pixel. A block the program's alloc doesn't give fails the call, whatever its size. Chosen, as nothing shows them:
+the failure is OUT_OF_MEMORY (0x80460001, newlib's for an alloc that gives nothing), with nothing written and what was
+given given back, the font then holding no glyph; each font holds the glyph it last read (its handles sharing it), and
+reading another gives those two back first, in the same order as closing gives them (the least memory at once); the one
+it holds asks for nothing, nor does a code with no glyph to read (below the font's first; one it hasn't got reads its
+alternative's); a library's cache (its parameters' third word) changes nothing (fonttest's had none, nor have Hammerin'
+Hero's and Jeanne d'Arc's: the check below lists the others'); and a read whose font closes meanwhile, on another
+thread, gives its blocks back and fails, INVALID_PARAMETER. Closing a font's last handle gives back its tables, then its
+glyph's record and picture (fonttest's order), and so does sceFontDoneLib, before the library's own; sceFontFlush gives
+the glyph back (chosen, by its name; PPSSPP's flush does the same), and the next one is read afresh. What's in the two
+blocks isn't written (no game reads them: chosen, as for the handles' data). Not changed, as nothing shows what they
+take: a shadow's functions and a picture's size (sceFontGetCharImageRect) read no glyph into memory, and an open still
+takes a 0-byte block alloc didn't give as given (part 23's choice; a game whose alloc refuses 0 bytes and opens a system
+font a piece at a time would show it). With no alloc or free to call, with no thread, from an interrupt handler or from
+a thread already in a library function, nothing is asked for, as before.
+
+**Tests** (`tests/psp/font.cpp`, six groups more; `tests/psp/states.cpp`). `fonts closed twice`: a handle closed twice
+gives 0 both times and nothing more back, its font still loaded for the handle open (its details as before) and opened
+again into the same handle; the last handle closed twice gives the tables back once; a handle never opened closes the
+same, nothing given back; handles of no library (0, a stray number, between two handles, the library's own address, past
+its count) and one of a library done with refused. `fonts in VRAM`: a font where Final Fantasy III keeps its first
+(0x041e5900), and through VRAM's uncached view and third copy, opened and measured; one at VRAM's very end opened with a
+length of -1, read to the end and no further, and 2 KiB there holding no font (INVALID_DATA); one in the scratchpad;
+nothing behind the address, INVALID_DATA; the machine's state round trips, the font read again from VRAM. `fonts glyph
+memory` (both engines): 'A' asks for its record past 8 bytes and its 16-by-17 picture (sizes from the record as the font
+maker makes it), held: its details again and its picture ask for nothing; 'B' drawn clipped to its second and third
+columns (those two drawn, the rest not) gives the 'A''s two back (record, then picture) and asks for its own; a code
+below the first (zeros), a shadow's details and picture and a picture's size ask for nothing; 'C', which the font hasn't
+got, reads the '_'; the space asks for a picture of 0 bytes (the heap gives a block, and its details come); from no
+thread the answer is the same and nothing is asked for; sceFontFlush gives the held glyph back, again nothing; closing
+gives the tables, then the glyph's record and picture; sceFontDoneLib a font's tables, its glyph's two, then the
+library's four. `fonts glyph memory refused` (both engines): Hammerin' Hero's alloc and free, a VPL's: the space's
+record given, its 0-byte picture refused (the kernel's VPL as pspautotests recorded, 0x800201B7), the call OUT_OF_MEMORY
+with its details left as they were and its record given back, its picture refused the same, the letters' details as
+ever, and every block back in the VPL once the library's done with. `fonts glyph memory meanwhile`: a read on one
+thread, its alloc a VPL's that waits, while another thread closes the font (the read fails, INVALID_PARAMETER, its
+blocks given back), reads another glyph of it (the later to end holds its glyph, the other's given back), is done with
+the library, or ends the reading thread (its record stays given); FreeVpl refuses no block (none given back twice), and
+the VPL ends empty but for the ended thread's record. `fonts glyph states`: a machine saved while its alloc waits part
+way through reading 'A' loads into another and carries on to the same answer and the same calls; a layout 26 state of a
+machine with a font open loads, the font holding no glyph, and saves as layout 27's, and so does one with sceFontNewLib
+part way through (without the call's glyph fields and its font's). `fonts memory`'s second close of a handle is 0 now,
+with nothing given back. `state fields` changes a font's held glyph and its blocks and each field of a call made one
+reading a glyph, and refuses a glyph held in one block, none held in two, a glyph the font hasn't got, a font being
+opened holding one, and a call reading one that asks for three blocks, asks a picture's size, reads a glyph its font
+hasn't got, reads one of no font or of a font not handed out yet, has somewhere for an error, or answers where nothing
+is.
+
+**Checks.** `tests/psp/run-tests.sh` 484 groups, 0 failures (both sanitizers; 478 before); `tests/allegrex/run-tests.sh`
+60 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed (each on the review's fixes too; merged with
+master's #234, 495 groups, its eleven new among them, and 318 checks, none failing). CI on the merge (1d22b81c2) is all
+green: the PSP system tests with GCC, the Allegrex tests, and the Android, Linux, Windows and macOS builds. The repros,
+each with a runner built from the branch (and master's, `b3507c1db`, for before), on an empty stick or a copy of the
+play-tester's: Jeanne d'Arc from its briefing state with Cross (`sortie.txt`), its battle map at frame 300 and the
+Combat tutorial from 600 to 2400, no error line (master: "Loading..." to the end, the error at 154); Hammerin' Hero's
+`t1.txt` from boot, "Start the game from the beginning." (frame 1320), "Start the game on this setting?" (1800) and "I
+don't have time to be playing with you, Boy." (3000), its words spaced; Final Fantasy III's `script.txt` from boot, the
+name screen's text (4100), the battle's command and party windows (6000) and its dialogue (8500). Final Fantasy III's
+own state from the play-tester (frame 9400) keeps its empty text: it was saved after the game's three opens had failed,
+with 0 for its handles.
+
+**The regression check.** The play-testers' other sceFont games, master's runner (with the scratch trace, which counted
+each game's calls into the library) against the branch's, each on its own stick: Growlanser IV from its state in play
+(`play.txt`, 1800 frames: its dialogue, 9 characters' details and pictures read) and in its field menu (`menu.txt`, 11),
+and 21 games from boot, 2400 frames with no buttons pressed, PNGs at frames 600, 1200, 1800 and 2400: Ace Combat X (198
+characters' details and pictures), Ace Combat: Joint Assault (516), Archer Maclean's Mercury (a font opened, none read),
+Battle vs. Chess (168 details and 84 clipped pictures, of six fonts its files hold), both BlazBlues (23 and 26), Crush
+(811 details of a font in its memory), Darkstalkers Chronicle (a font opened), Disaster Report 3 (28, a font in its
+memory), Cars, both Dissidias (a font opened each), both Dragonball Z Shin Budokais (45 details and 362 pictures, 49 and
+730), Ghost in the Shell (256 details, 97 pictures), God Eater 2 (48, a font in its memory), Gran Turismo (5,508 details
+and pictures, 36 opens), Growlanser IV (2), Guilty Gear Judgment (none), Guilty Gear XX Accent Core Plus and Hot Shots
+Golf Open Tee 2 (a font opened each) and Hot Shots Tennis (28). Every frame is the same pixel for pixel but two. Crush's
+at 2400 (and at 1200 run again without the GE's threads) differs by 0.25 a channel, no pixel by more than 24: its
+title's animated background a step apart, from the time its 811 reads take now that each calls the game's alloc and
+free. Guilty Gear XX's at 600 (9.78, its intro's flying cubes) is the runner's capture a frame behind, from the GE's
+threads: that picture is master's own at 598 and 599, master shows it in none of eight runs and the branch's runner in
+two of eight, and without the GE's threads (`--ge-threads` left out) the branch's six runs are all master's picture; the
+game makes no call the branch changed (sceFontNewLib and an open). With the branch's runner and the trace (the review's
+question below), no game but Hammerin' Hero has a glyph read refused: Gran Turismo's 5,508 reads, Crush's 767,
+Dragonball Z's 356 and 715, Ghost in the Shell's 291, Final Fantasy III's 541 (its `script.txt`), Jeanne d'Arc's 48 (its
+alloc gives 4 bytes for 0) and the rest all give their blocks; Hammerin' Hero (`t1.txt`, 3000 frames) has 33,284 of its
+33,365 refused, every one its space (a record of 4 bytes, then a picture of 0), which the game asks for again each frame
+as it can't keep it. Every game's library has no cache (its parameters' third word 0).
+
+**The review's points** (an independent read-only reviewer of the branch at 7b2cf6836, which found no high-severity bug
+and traced the blocks' ownership through closes, sceFontDoneLib, flushes, two threads reading one font and a close or
+the library done with part way through a read, with no block given back twice or lost but where a thread ends part way),
+all taken: the medium one, whether the change refuses other games' glyphs (counted above: none but Hammerin' Hero's
+spaces) and what a library's cache does (none of the games has one: chosen, as changing nothing); the untested paths,
+now `fonts glyph memory meanwhile`; three holes in what a damaged state may say (a font being opened holding a glyph, a
+glyph's call of a font not handed out yet or with somewhere for an error), now refused; the choices stated as facts in
+`fontCharacter()`'s comment, now marked, and the top comment's list put right (what a shadow takes isn't known, not
+known to differ); a handle never opened closing to 0 too, now said; the call's character code, saved but never read,
+dropped (layout 27 isn't out yet); `fontStart()`'s answer no longer taken for granted (a read that couldn't start keeps
+the font's glyph and answers without one); a narrow clip for the _Clip read and the layout 26 test with a call part way
+through; and the comments' and part 87's omissions.
+
+**Scratch** (the runs and their PNGs, the traces, the comparison sheets, the scratch tracer's patch and the RAM dumps'
+disassembly helpers): `~/phobos-work/scratch/font-b03/` on the Mac it was made on, not in the repository. The before and
+after pictures: `runs/Jeanne d'Arc/sheet-mine-x.png` (and master's hang, the play-tester's `sheet-x.png`),
+`runs/Hammerin Hero/cmp-mine-t1.png` (master left, the branch right), `runs/Final Fantasy III/sheet-mine-f1.png`, and
+each regression game's `runs/<game>/cmp-<run>.png` (master, the branch, their difference times four).
+
 ## Part 86: the CPU, round 2 — the VFPU's adder in NEON, delay slots compiled each way, the rare ways out of line, prefixes worked out as blocks are compiled, blocks linked to each other
 
 On branch `cursor/psp-cpu-round2-2b67`, on master (`b3507c1db`, #233 merged), with master merged in again before the PR
