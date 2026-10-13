@@ -213,7 +213,7 @@ auto GE::primitive(u32 kind, u32 count) -> void {
 //it holds them there, all of it where they may repeat round: margin texels round them, or tight (margin 0), those
 //the GPU's filter takes at any u and v between (its weights in sixteenths: a second texel at a sixteenth or more;
 //filtered, either way it may be), a 256th of a texel round them for its arithmetic and 2^-13 of their size for the
-//GE's (a 3D corner's coordinates are cut to 15 bits of fraction).
+//GE's (a 3D corner's coordinates keep 15 significant bits).
 static auto texelsInside(GE::Region& takes, const GE::Sampler& texture, bool filtered, f64 lowU, f64 highU, f64 lowV,
                          f64 highV, f64 margin) -> void {
   auto axis = [&](f64 low, f64 high, s32 size, bool held, s32& first, s32& last) {
@@ -312,14 +312,23 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
       columns = std::min<u32>((reach + 8) & ~7u, width);
     }
     //(two texels round 2D's coordinates for the filter and stepping; a sprite's GPU quads cover whole pixels, above
-    //1x past the GE's middles by half of one, which takes as much more of a step as a pixel's is)
+    //1x past the GE's middles by half of one, which takes as much more of a step as a pixel's is, u's along x and
+    //v's along y, or the other way round for a sprite turned a quarter. A coordinate that's not a number takes all.)
     f64 step = 0;
-    for(u32 n = 0; renderer && kind == Sprites && n + 1 < count; n += 2) {
-      auto &from = vertices[n], &to = vertices[n + 1];
-      f64 across = std::max(std::min(std::abs(f64(to.x) - from.x), std::abs(f64(to.y) - from.y)), 1.0);
-      step = std::max(step, std::max(std::abs(f64(to.u) - from.u), std::abs(f64(to.v) - from.v)) / across);
+    bool numbers = true;
+    for(u32 n = 0; renderer && n < vertices.size(); n++) {
+      numbers &= vertices[n].u == vertices[n].u && vertices[n].v == vertices[n].v;
     }
-    if(renderer && !smooth) texelsInside(takes, texture, filtered, minU, maxU, minV, maxV, 2 + std::ceil(0.6 * step));
+    for(u32 n = 0; renderer && textured && kind == Sprites && n + 1 < count; n += 2) {
+      auto &from = vertices[n], &to = vertices[n + 1];
+      f64 x = std::max(std::abs(f64(to.x) - from.x), 1.0), y = std::max(std::abs(f64(to.y) - from.y), 1.0);
+      f64 u = std::abs(f64(to.u) - from.u), v = std::abs(f64(to.v) - from.v);
+      bool turned = (to.x < from.x) != (to.y < from.y);
+      step = std::max({step, u / (turned ? y : x), v / (turned ? x : y)});
+    }
+    if(renderer && !smooth && numbers) {
+      texelsInside(takes, texture, filtered, minU, maxU, minV, maxV, 2 + std::ceil(0.6 * step));
+    }
   }
   //With a hardware renderer (ge.hpp's Renderer) the primitives go to it, their settings first. Its texture is the
   //renderer's own where it's in a frame buffer the GPU has drawn (render to texture), else always decoded, even one
@@ -382,8 +391,8 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   struct Taken {
     Region takes; const Sampler& texture; const Transform& t; const std::vector<Vertex>& vertices; bool filtered, own;
   };
-  bool triangles = kind == Triangles || kind == TriangleStrip || kind == TriangleFan;
-  Taken taken{takes, texture, t, vertices, filtered, !format.through && t.mapMode == 0 && triangles && !vertices.empty()};
+  bool flat = kind == Triangles || kind == TriangleStrip || kind == TriangleFan;  //(triangles, whose texels are inside)
+  Taken taken{takes, texture, t, vertices, filtered, !format.through && t.mapMode == 0 && flat && !vertices.empty()};
   auto texelsTaken = [&taken]() -> Region {
     auto& a = taken;
     Region takes = a.takes;
@@ -392,6 +401,7 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     for(auto& vertex : a.vertices) {
       f64 u = (vertex.u * a.t.textureScale[0] + a.t.textureOffset[0]) * a.texture.width;
       f64 v = (vertex.v * a.t.textureScale[1] + a.t.textureOffset[1]) * a.texture.height;
+      if(u != u || v != v) return takes;  //(not a number: the whole texture)
       lowU = std::min(lowU, u), highU = std::max(highU, u), lowV = std::min(lowV, v), highV = std::max(highV, v);
     }
     texelsInside(takes, a.texture, a.filtered, lowU, highU, lowV, highV, 0);

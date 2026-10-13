@@ -4,7 +4,7 @@
 
 namespace ares::PlayStationPortable::GPUShaders {
 
-static constexpr char SourceHash[] = "28a19590577e4b2f3ca665ba7a64dfc14abe7e9e5a70274c6612f4fb96760b98";
+static constexpr char SourceHash[] = "2faaf85b6e7975edea9e2618260f5b82f60a25b5aca965fa8b1f41117a3e28f2";
 
 static const u32 vertexSPIRV[] = {
   0x07230203, 0x00010000, 0x0008000b, 0x00000060,

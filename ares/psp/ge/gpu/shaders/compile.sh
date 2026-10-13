@@ -2,7 +2,8 @@
 #Builds shaders.hpp, the hardware renderer's shaders as the program carries them, from the GLSL beside this script
 #(docs/psp-gpu-renderers.md, "Shaders"): SPIR-V for Vulkan from glslang, and the GLSL itself for OpenGL. The
 #fragment shader is built twice: with dual-source blending's second output, and without (SINGLE), for GPUs that
-#lack it; and each again writing the depth (DEPTHS), for pipelines that test or write it; copy.vert, copy.frag and present.frag are upscaling's and the screen's; transform.vert is fast mode's;
+#lack it; and each again writing the depth (DEPTHS), for pipelines whose depth test or write depends on it;
+#copy.vert, copy.frag and present.frag are upscaling's and the screen's; transform.vert is fast mode's;
 #move.frag moves pixels from one target into another. copy.frag and move.frag are built again with the stencil given
 #by the shader (EXPORT), for GPUs that have VK_EXT_shader_stencil_export.
 #shaders.hpp is kept in the repository, so that building Phobos needs no shader compiler; it records the sources'
@@ -28,7 +29,8 @@ compileAll() {
   { echo '#version 450'; cat "$HERE/draw.frag"; } > "$work/draw.frag"
   { echo '#version 450'; echo '#define SINGLE'; cat "$HERE/draw.frag"; } > "$work/single.frag"
   { echo '#version 450'; echo '#define DEPTHS'; cat "$HERE/draw.frag"; } > "$work/depth.frag"
-  { echo '#version 450'; echo '#define SINGLE'; echo '#define DEPTHS'; cat "$HERE/draw.frag"; } > "$work/singleDepth.frag"
+  { echo '#version 450'; echo '#define SINGLE'; echo '#define DEPTHS'; cat "$HERE/draw.frag"; } \
+    > "$work/singleDepth.frag"
   for stage in copy.vert copy.frag present.frag transform.vert move.frag; do
     { echo '#version 450'; cat "$HERE/$stage"; } > "$work/$stage"
   done

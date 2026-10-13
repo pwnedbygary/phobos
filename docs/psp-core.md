@@ -10733,9 +10733,9 @@ textures kept, below, tested with the review's):
 1. **The dither in the GPU's blending** (`draw.frag`'s `TERM`): the PSP dithers the blended color, so the shader adds
    the dither to the source term it hands the GPU, and subtracts it where the GPU subtracts the term (TERM 3). **Depth
    as the GE's whole numbers** (`draw.frag`'s `DEPTHS` build, since the review): wherever the depth test or write
-   depends on it the shader writes the interpolated depth rounded down, in 65,536ths, exactly as memory's depths are
-   filled; pipelines that don't use depth take the build without the write, which may keep a GPU from testing depth
-   before the shader runs. Its cost at 1x, measured on the M1 (written by every pipeline then): 0-3%, 2-7% at 4x.
+   depends on it the shader writes the interpolated depth rounded down, in 65,536ths, as memory's depths are filled
+   (the same floats; the same 24-bit values on a GPU that rounds to nearest); a shader writing the depth may keep a GPU
+   from testing it before the shader runs, so pipelines that don't use depth take the build without the write. Its cost at 1x, measured on the M1 (written by every pipeline then): 0-3%, 2-7% at 4x.
 2. **Moves across row widths** (`movable()`, `intoRows()`, `move()`, `move.frag`): where both targets' pages hold whole
    rows of each, each starting a row, a move covers whole rows of the target and each pixel takes the source's pixel at
    its bytes, where they're inside the source's rectangle (else it's left); the moves of one width are the same
@@ -10811,6 +10811,20 @@ mode (8.8) and 0.85 in accurate (7.66), its glow there; Death Jr. II's character
 accurate (the same); Daxter 0.148 (0.293); Killzone 0.28 in both modes (fast 1.19, accurate the same); Castlevania's
 blur drawn in both modes. Colin McRae's terrain shadows aren't changed: they take depth from frame buffers of another row
 width, and the GPU's depth isn't read back or moved (docs/psp-gpu-renderers.md, "Owned until needed").
+
+**The review.** An independent read-only review of the branch (to 50a9510a1) found no blocker and three major points,
+all taken (04e5d1c8a): accurate mode held a texture's rows past its frame buffer wherever the PRIM's rows weren't
+known (now only where its texels stop before them, `holdable()`); the texels a PRIM takes missed some for 3D sprites
+and lines and for 2D sprites above 1x (3D's tight bound now for triangles only, with the GE's 15-bit fractions;
+sprites widened by 0.6 of their step); and a full list of beside ranges was filled inside memory's notice of a change,
+where a fill's watching pages again comes in the middle of memory's going through them (now kept, and filled at the
+target's next use). Its minor points, taken too: a barrier handed on past a draw left out for want of its pipeline;
+kept ranges filled as one rectangle only where they're many or close; moves across row widths with their own flag,
+not turning the shader's stencil off for uploads; the depth write its own shader build, and depths in 65,536ths from
+the shader and from memory's fills alike (D32 and D24); fast mode's meshes' boxes stated; tests of palettes found
+again, of barriers counted, of textures kept, of rows held only where exact; comments and these docs. Death Jr. II's,
+Sonic Rivals' and Activision Hits Remixed's palette passes reach the frame buffer below by their corners (at a
+weight of 0), so in accurate mode they finish again since: 8 to 16 a frame, against 31 to 61 on master.
 
 **Library**: (filled in below, after the runs).
 

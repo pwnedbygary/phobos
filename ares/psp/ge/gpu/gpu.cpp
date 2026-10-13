@@ -787,7 +787,7 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
     uLeft = std::min(uLeft, t->left), uTop = std::min(uTop, t->top);
     uRight = std::max(uRight, t->right), uBottom = std::max(uBottom, t->bottom);
   }
-  if(t->besideReaches(uLeft, uTop, uRight, uBottom)) revive(*t, t->beside);
+  if(!t->stale && t->besideReaches(uLeft, uTop, uRight, uBottom)) revive(*t, t->beside);  //(a stale one's filled anew)
   //Another target drawn on the GPU in the pages this PRIM draws in, or that fill this one from memory: its pixels
   //there moved into this one on the GPU where they're the same bytes in its rows (move(): God of War's effects draw
   //the same memory as 8888 and 5650 frame buffers in turn, Colin McRae and Dirt 2 as frame buffers of two widths),

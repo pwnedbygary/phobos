@@ -190,25 +190,24 @@ drawn over the same bytes. (Stores, and copies in or out through those views, st
 buffer at the screen's middle and a few more points as it draws, where its bloom's buffers are: one finish a frame,
 and its pixels read back, for the colors of the bloom of the frame before.
 
-**Bytes beside the pixels.** A page is 4 KiB, two rows of a 512-wide 8888 frame buffer, and games keep their own
-bytes in the same pages: Brave Story keeps its display list in the 32 unused columns right of its 480-pixel picture,
-and writes and runs it every frame. So busy pages are asked about to the byte (`Memory::vramDrawnOver`, the GE's
-`drawnOver()`): memory finishes the renderer only for bytes the GPU drew over since its last finish (each target's
-drawn rectangle, row by row), and reaches the rest at once. A change to such bytes (`Memory::changed()` while pages
-are busy) is kept by the target over them (`beside`, at most 16 ranges), which takes them from memory again before it
-draws over them, shows them, moves them or lends them as a texture (part 65: those ranges filled from memory, not the
-target afresh after a finish), and after its next finish; so are a page's bytes written while the target hadn't drawn
-in it. Past 16 ranges (part 83) they're kept all the same, and all of them filled before the target is next drawn
-into, shown, lent or moved from (`Target::besideFull`; not inside memory's notice of the change, where a fill would
-watch pages again in the middle of memory's going through them), as one rectangle round them where they're many or
-close together and it reaches none of the target's drawn pixels; past 256 the target is filled afresh. (Taken together
-as one range, before, they reached the pixels and the target went stale, a finish: Brave Story writes its list in 24
-pieces.) Each page's owner is asked (part 65), its answer kept until something is drawn or owned afresh: God of War's GE
-reads 700,000 vertices a frame from pages the GPU has drawn in.
-(The drawing threads' busy pages stay whole pages: their batches draw anywhere in them.) Brave Story's title, on the
-M1: 53 frames a second before, 90-96 after (the software renderer: 178), its waits for the GPU from 26,000 to 5,700
-in 2,400 frames. What's left are textures sampled across two targets (its bloom passes), which the renderer can't
-lend (below), and the uploads that follow.
+**Bytes beside the pixels.** A page is 4 KiB, two rows of a 512-wide 8888 frame buffer, and games keep their own bytes
+in the same pages: Brave Story keeps its display list in the 32 unused columns right of its 480-pixel picture, and
+writes and runs it every frame. So busy pages are asked about to the byte (`Memory::vramDrawnOver`, the GE's
+`drawnOver()`): memory finishes the renderer only for bytes the GPU drew over since its last finish (each target's drawn
+rectangle, row by row), and reaches the rest at once. A change to such bytes (`Memory::changed()` while pages are busy)
+is kept by the target over them (`beside`, 16 ranges, more as below), which takes them from memory again before it draws
+over them, shows them, moves them or lends them as a texture (part 65: those ranges filled from memory, not the target
+afresh after a finish), and after its next finish; so are a page's bytes written while the target hadn't drawn in it.
+Past 16 ranges (part 83) they're kept all the same, and all of them filled before the target is next drawn into, shown,
+lent or moved from (`Target::besideFull`; not inside memory's notice of the change, where a fill would watch pages again
+in the middle of memory's going through them), as one rectangle round them where they're many or close together and it
+reaches none of the target's drawn pixels; past 256 the target is filled afresh. (Taken together as one range, before,
+they reached the pixels and the target went stale, a finish: Brave Story writes its list in 24 pieces.) Each page's
+owner is asked (part 65), its answer kept until something is drawn or owned afresh: God of War's GE reads 700,000
+vertices a frame from pages the GPU has drawn in. (The drawing threads' busy pages stay whole pages: their batches draw
+anywhere in them.) Brave Story's title, on the M1: 53 frames a second before, 90-96 after (the software renderer: 178),
+its waits for the GPU from 26,000 to 5,700 in 2,400 frames. What's left are textures sampled across two targets (its
+bloom passes), which the renderer can't lend (below), and the uploads that follow.
 
 **Two targets over the same pages** (a frame buffer drawn as 5650 then 8888, or a smaller buffer inside a larger one):
 before a PRIM draws into, or fills, rows whose pages another target owns, the other's pixels there go into its target
@@ -289,8 +288,10 @@ u and v (2D two texels round them, a sprite's more by 0.6 of its step, as its GP
 past the GE's middles above 1x; 3D triangles' where they're the vertices' own coordinates, scaled and offset as
 `transform()` maps them: the texels the GPU's filter takes between them, its weights in sixteenths, with 2^-13 of the
 coordinates for the GE's 15-bit fractions; a 3D sprite's or line's, whose pixels may lie past its corners, the whole
-texture), held inside the texture where it's held there, and worked out only once the renderer holds the texture. A copy is copied again only where the target's changes since meet that rectangle; elsewhere the PRIM
-takes it as it is, the changes kept for one that reads them. Killzone's menus blur a strip right of the picture, 800
+texture), held inside the texture where it's held there, and worked out only where it's needed (once the renderer
+holds the texture, or in accurate mode to know whether rows may be held, below). A copy is copied again only where
+the target's changes since meet that rectangle; elsewhere the PRIM takes it as it is, the changes kept for one that
+reads them. Killzone's menus blur a strip right of the picture, 800
 3D quads a frame each reading one half of it while writing the other: a copy (an ended render pass, a copy, a pass
 begun) for each, now for each turn from one half to the other, 817 a frame to 456.
 
@@ -309,20 +310,19 @@ target the GPU hasn't drawn are filled from memory before the copy.
 In Midnight Club 3's race this took the render passes from 82 a frame to 12-16 and the GPU's wait from 15.9 ms to
 1.6-2 ms a frame (M1).
 
-**Where the rows aren't known** (part 83: a 3D PRIM's, as `holds()` has them, or a 2D one's whose coordinates may
-repeat round), rows past those a texture's frame buffer has are held at the last of them (`holdable()`): in fast mode,
-and in accurate mode only where the texels the PRIM may take stop before them, which leaves the picture exact. A
-texture declared past VRAM's end has its rows inside VRAM copied, those past held (on the PSP they'd be VRAM's first
-rows); Castlevania
-samples the frame buffer at 0x154000 as 512 rows for its background blur, and refused, the software renderer drew the
-blur against memory's depth, which isn't the GPU's, and none of it showed. A texture whose rows run on into another
-frame buffer's pages that can't be its second part (another row width or format) has only the rows before them copied,
-the rest held at the last: Death Jr. II's palette passes take its 272-row picture as 512 rows, which run on into its
-bloom's frame buffers. And one the renderer doesn't hold whose first rows are memory's, running on into a frame buffer
-the GPU is drawing, is decoded by the GE only as far as that frame buffer's first page (`memoryRows()`), not finished
-for: Death Jr. II's bloom, after the CPU has read its picture back, samples it into the smaller frame buffer below. A
-PRIM taking those rows would find the last row held (the PSP's would be the other frame buffer's bytes), which fast
-mode allows: Death Jr. II's palette passes reach the frame buffer below by their corners, at a weight of 0, and in
+**Where the rows aren't known** (part 83: a 3D PRIM's, as `holds()` has them, or a 2D one's whose coordinates may repeat
+round), rows past those a texture's frame buffer has are held at the last of them (`holdable()`): in fast mode, and in
+accurate mode only where the texels the PRIM may take stop before them, which leaves the picture exact. A texture
+declared past VRAM's end has its rows inside VRAM copied, those past held (on the PSP they'd be VRAM's first rows);
+Castlevania samples the frame buffer at 0x154000 as 512 rows for its background blur, and refused, the software renderer
+drew the blur against memory's depth, which isn't the GPU's, and none of it showed. A texture whose rows run on into
+another frame buffer's pages that can't be its second part (another row width or format) has only the rows before them
+copied, the rest held at the last: Death Jr. II's palette passes take its 272-row picture as 512 rows, which run on into
+its bloom's frame buffers. And one the renderer doesn't hold whose first rows are memory's, running on into a frame
+buffer the GPU is drawing, is decoded by the GE only as far as that frame buffer's first page (`memoryRows()`), not
+finished for: Death Jr. II's bloom, after the CPU has read its picture back, samples it into the smaller frame buffer
+below. A PRIM taking those rows would find the last row held (the PSP's would be the other frame buffer's bytes), which
+fast mode allows: Death Jr. II's palette passes reach the frame buffer below by their corners, at a weight of 0, and in
 accurate mode they're decoded from memory again, a finish each.
 
 **A texture running into the frame buffer below** (part 63): its pages one target's and then, from a page on,
@@ -368,11 +368,12 @@ What the GPU does with the GPU's own units, and how near the PSP it comes:
 - **Depth test and write**: the GPU's, on the GE's 16-bit depth (0-65535) kept as a float; the comparisons are the
   GE's, and the depth range test (MIN_Z, MAX_Z) is done in the shader. Clear mode writes depth where the GE does.
   Since part 83 the shader writes the depth as the GE's whole number (the interpolated depth rounded down), in
-  65,536ths, exactly as memory's depths are filled (`copy.frag`, the 1x upload), wherever the depth test or write
-  depends on it, so two surfaces at one GE depth meet as the GE's do: Daxter draws its shadow twice over the floor
-  with "at most", and with float depths a little apart on the GPU the second layer didn't darken it again. That's
-  `draw.frag`'s `DEPTHS` build; the other pipelines take the build without the write, which may keep a GPU from
-  testing depth before the shader runs.
+  65,536ths, as memory's depths are filled (`copy.frag`, the 1x upload: the same floats, and the same 24-bit values
+  on a GPU that rounds to nearest, as Vulkan asks), wherever the depth test or write depends on it, so two surfaces at
+  one GE depth meet as the GE's do: Daxter draws its shadow twice over the floor with "at most", and with float depths
+  a little apart on the GPU the second layer didn't darken it again. That's `draw.frag`'s `DEPTHS` build: a shader
+  that writes the depth may keep a GPU from testing it before the shader runs, so the other pipelines take the build
+  without the write.
 - **Stencil**: the GPU's 8-bit stencil, with the GE's comparison, reference, masks and operations (keep, zero,
   replace, invert, increment and decrement clamped). The alpha written to the color follows the stencil where the pass
   operation's result is known in advance (replace, zero), so blending by the frame buffer's alpha reads it; the
@@ -501,22 +502,22 @@ keeps rasterization order; without it, since part 49, only those the GPU's own b
   write mask bit by bit in the format's packing (`packed()`, `unpacked()`). The GPU's own blending and logic
   operations are off for those draws.
 - **Order**: a pixel's read has to see the primitive before's write. Where the driver offers rasterization-order
-  attachment access (`VK_EXT_rasterization_order_attachment_access`, or ARM's before it) the subpass and pipelines
-  ask for it, every pipeline too, and a draw's overlapping primitives stay in one draw (`readsInOrder`). Part 45
-  also had every reading draw wait for the ones before (a `BY_REGION` barrier, a self-dependency of the subpass):
-  with only the reading pipelines asking for the order, Turnip on the RP6 had failed the start-up check without it.
-  Since every pipeline of the subpass asks, the order covers the draws before a reading one too, and part 49 drops
-  the barrier in order: Turnip passes the check and the tests without it, and in a run before and after (from adb's
-  shell, an earlier build) GTA's woods ran 59 frames a second with it, 71 without. Without that access a reading
-  primitive has to come after a barrier wherever it reads what was drawn before it in the pass: `GPU::emit()` keeps
-  the boxes, in the target's pixels, of the primitives drawn into it since the last barrier (at most `MostBoxes`, 64,
-  the last grown to take more), and a reading primitive overlapping one of them begins another draw with a barrier
-  before it (`Command::barrier`); one overlapping none joins the draw, or begins one without a barrier (part 83:
-  before, every reading draw had one). Another target begins another render pass, whose start makes the one before's
-  writes visible. The M1's MoltenVK has no such access, nor the Adreno's own driver; there only what the GPU's own blending
-  can't come close to reads ("Without rasterization order", below), and on the Adreno's driver nothing. Where the
-  start-up check fails in order, it's run again with the GPU blending and the rest split (nothing read where reading
-  apart can't be trusted), then with nothing read (`System::startRenderer()`), and the log says how it draws.
+  attachment access (`VK_EXT_rasterization_order_attachment_access`, or ARM's before it) the subpass and pipelines ask
+  for it, every pipeline too, and a draw's overlapping primitives stay in one draw (`readsInOrder`). Part 45 also had
+  every reading draw wait for the ones before (a `BY_REGION` barrier, a self-dependency of the subpass): with only the
+  reading pipelines asking for the order, Turnip on the RP6 had failed the start-up check without it. Since every
+  pipeline of the subpass asks, the order covers the draws before a reading one too, and part 49 drops the barrier in
+  order: Turnip passes the check and the tests without it, and in a run before and after (from adb's shell, an earlier
+  build) GTA's woods ran 59 frames a second with it, 71 without. Without that access a reading primitive has to come
+  after a barrier wherever it reads what was drawn before it in the pass: `GPU::emit()` keeps the boxes, in the target's
+  pixels, of the primitives drawn into it since the last barrier (at most `MostBoxes`, 64, the last grown to take more),
+  and a reading primitive overlapping one of them begins another draw with a barrier before it (`Command::barrier`); one
+  overlapping none joins the draw, or begins one without a barrier (part 83: before, every reading draw had one).
+  Another target begins another render pass, whose start makes the one before's writes visible. The M1's MoltenVK has no
+  such access, nor the Adreno's own driver; there only what the GPU's own blending can't come close to reads ("Without
+  rasterization order", below), and on the Adreno's driver nothing. Where the start-up check fails in order, it's run
+  again with the GPU blending and the rest split (nothing read where reading apart can't be trusted), then with nothing
+  read (`System::startRenderer()`), and the log says how it draws.
 - **Clears** of a 16-bit frame buffer are narrowed to its format too, so a reading draw over a cleared pixel reads
   memory's color.
 - **Native stays exact**, the software renderer the default; at a scale above 1 the same arithmetic runs on each of

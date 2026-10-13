@@ -1351,7 +1351,7 @@ struct VulkanBackend : GPU::Backend {
           if(depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT) {  //(in 65,536ths, exactly as draw.frag writes them)
             f32 value = z * (1.0f / 65536);
             std::memcpy(&depth[n], &value, 4);
-          } else {  //(the GPU's rounding of those to 24 bits)
+          } else {  //(those rounded to 24 bits, as the GPU rounds to nearest)
             depth[n] = u32((u64(z) * 0xff'ffff + 32768) >> 16);
           }
         }
