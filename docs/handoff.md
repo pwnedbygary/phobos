@@ -136,7 +136,11 @@ plan by #244). Build scripts only: no core, app or test source changes.
   and the copy left in `phobos-psp-runner/`. CI on the reviewed scripts (run 38448696924 at `a476470ec`; Linux, GCC
   13, bash 5): `tests/objects-test.sh` 18 cases, 0 failures (the case within the second ran), Allegrex 60/0, the
   system suite 497/0 (every source its own object now), the ares system 318/0, the runner's test passing; NGCD
-  2835/0 (run 38448696864). CI on this head: below once run.
+  2835/0 (run 38448696864). CI on the final scripts (run 38454888271 at `86a5a80d0`): `tests/objects-test.sh` 21
+  cases, 0 failures (the case within the second ran), Allegrex 60/0, the system suite 502/0 (#243's five groups
+  more), the ares system 318/0, the runner's test passing; NGCD 2835/0 (run 38454887111). A second delta review
+  passed it; its nit taken: the leftovers' pattern is the 16 hex digits and a process number, so a folder's own
+  files of a like name aren't taken.
 - **Review**: an independent read-only review found a major hole (a word after the first in CC or CXX wasn't in
   the key: `CC="cc -DEXTRA=9"` after `cc` compiled nothing and ran the old program), and minor ones: a header edited
   during a compile never rebuilt, the stale-file cleanup reaching anything in a folder handed to NGCD, an exported
@@ -191,6 +195,72 @@ in the implementation plan). CI only: no core, app or test code changes.
   master's runs not cancelled, the empty-log case). A delta review found that a concurrency group holds one waiting
   run, so a third quick push to master still cancelled the waiting one: non-PR runs now get a group each (the run's
   ID).
+
+## PSP: the host's right stick for patched games, the keyboard in a field's own characters, 7th Dragon 2020-II past its certificate — 2026-10-12
+
+Branch `cursor/psp-input-b00-2b67`, on master (`6ab2c5583`, merged with `b7ea296f4`, #227, then `1d9308714`, #228).
+docs/psp-core.md, part 81, has the evidence. Items 3 and 4 of the deep-play batch 00 report
+(`~/phobos-work/deepplay/batch-00-report.md`). Clean room: pspsdk's psputility_osk.h and pspctrl.h, pspautotests'
+ctrl/sampling, the games' own code traced with a scratch runner, PPSSPP read only as a description of the PSP (its
+right-stick convention, its note on a negative ATRAC size); JPCSP not read. Save states unchanged (StateVersion 26).
+Begun by one agent, finished by another (the first stopped on finding the second in its worktrees); both agents'
+commits are on the branch, and a third's with an independent review's points.
+- **Right stick** (the owner's decision: pspsdk's Rx and Ry, as a PSP Go with a DualShock 3, a Vita and emulators
+  fill them; the PSP itself has no second stick): every
+  SceCtrlData sample carries the host's right stick in bytes 10 (X) and 11 (Y), 128 when centred, in every game and
+  every sceCtrl read, whatever the PSP Right Stick setting (Off, the default, then does nothing else); centred in
+  digital sampling as the left stick is; the last four bytes 0; not in states. The core takes it from "R-Stick X" and
+  "R-Stick Y"; the app hands the right stick to it in every choice (with Analog stick it is the PSP's stick and the
+  patched games' second one at once: the setting's description says Off suits those games). The runner takes
+  `R-StickX:` and `R-StickY:` in `--press` and `--script` (README). The four Armored Core True Analogs images read it:
+  Formula Front International's camera now rests level behind the AC after "GO!!!" and turns and pitches with the
+  right stick (it pitched up at the sky and the AC turned left on its own).
+- **Keyboard**: `Kernel::keyboardConform()` (utility.cpp) gives text as a field of PSP_UTILITY_OSK_INPUTTYPE_* types
+  and lines takes it (the other width, case or kana where one fits, else left out; spaces full-width only where only
+  full-width types; line breaks only in fields of several lines; Latin letters ASCII's and U+00C0-024F's, every printed
+  character without a class a Japanese symbol). The automatic answer's nickname goes through it: both 7th Dragon
+  games' name fields are full-width letters only (0x0c00), so "PSP" is now U+FF30 U+FF33 U+FF30 (2020's hero was
+  nameless); a field taking none of it gets "ぴーえすぴー", "ﾋﾟｰｴｽﾋﾟｰ", "ПСП", "피에스피" or "1", the first it takes
+  whole. The app's keyboard shows what's typed as Android's keyboard composes it and enters it converted (a line under
+  the field shows the form entered where it differs); the core converts the app's answer again. The game's own text
+  left as the field showed it is entered as the game gave it, by both (Ridge Racer 2's "XEVIOUS", in a field of small
+  letters alone, stays so). The Kotlin and C++ conversions run one table of cases
+  (`android/app/src/test/resources/psp-keyboard-cases.txt`).
+- **7th Dragon 2020-II's certificate** (found by the first agent): the name wasn't what froze it; the game hands
+  `sceAtracSetDataAndGetID` the size 0xffffffff for a sound read whole into its buffer, which was refused. A size with
+  its top bit set now reaches to the end of the buffer's memory (none: refused as before), taken in `atracSet()` and
+  `atracSetAndGetID()` so that the sound branch (#229) merges with this one without a conflict in `atrac.cpp`. The game
+  goes on into its story.
+- **An independent review of the merged branch** (one Medium, four Lows), all taken by a third agent after the second
+  stopped: the game's own text unedited entered as it is and a wider classifier (the Medium: OK on a default had
+  entered a changed or empty name); the fallback nicknames; pspsdk's Rx/Ry in the comments and docs; one table of
+  cases for both conversions, no half of a pair kept or cut in the core; `atrac.cpp` merging cleanly with #229.
+  Part 81's "The review's points" has each, and what wasn't done (an edited default is converted whole).
+- **Checks** on the final tree (with the review's points): `tests/psp/run-tests.sh` (sanitizers) 478 groups, 0
+  failures; `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 328 checks, 0 failed;
+  Android `:app:compileModernReleaseKotlin :app:testModernDebugUnitTest` 304 tests, 0 failures (before it, 472 groups
+  on `04b274924`). Games with the branch's runner: part 81's last paragraph.
+- **Library**: not run by the agents (the second agent's run stopped with its session); the owner runs the 266-game
+  comparison for this branch and #229 together.
+- **Review**: the first agent's independent review (`~/phobos-work/scratch/hle-b00/review-pr-a.md`: the app's keyboard
+  converting keys under Android's composition, a state test, comments, line breaks, a negative size on no memory) had
+  its points taken in `04b274924`; a second independent review of the branch (PASS, no High or Medium) had its Low and
+  Nit points taken in `e743fbcff` (all four ATRAC setters given the whole file take a negative size; the app's field
+  holding nothing past its limit, and saying so when nothing will be entered; no control characters in a field of any
+  type; comments and docs).
+- **On the RP6, to check**: (1) An Armored Core True Analogs image (Formula Front International, 3 Portable, Last
+  Raven or Silent Line Portable) with the PSP Right Stick setting on Off and a controller whose right stick is bound
+  (R-Up/Down/Left/Right, as by default): in a battle, after "GO!!!" and with the right stick untouched, the camera stays
+  level behind the AC and the radar's heading holds; right stick right and left turns the AC, up and down tilts the
+  view (it stays where it's left, as the mod has it). With Analog stick chosen, the right stick moves the AC and the
+  camera at once (expected). (2) 7th Dragon 2020 and 2020-II, a new game: on the name screen, NAME opens the keyboard;
+  typing "Bob" shows "Bob" with "Ｂｏｂ" under it, OK enters "Ｂｏｂ", the game shows the name; 2020-II's certificate
+  then passes into the story. (3) Japanese typed by romaji in a kana field composes normally. (4) Ridge Racer 2's
+  driver name: OK on its default ("XEVIOUS" or another Namco title, in capitals) keeps it in capitals, with no line
+  under the field; typing over it shows the small letters it will be entered in.
+- Scratch: `~/phobos-work/scratch/hle-b00` (runners in `bin/`, the runs in `runs/`, the library runs `lib-*`);
+  `~/phobos-work/scratch/review-b00` (the review's points: the runners, the runs in `runs/`, the scratch front end in
+  `front/`).
 
 ## PSP: modules from downloads — sceKernelLoadModuleNpDrm, packed relocations, imported variables; God Eater 2 in English — 2026-10-13
 

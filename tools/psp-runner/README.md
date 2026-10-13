@@ -44,7 +44,7 @@ The options, and what each does:
 
 - `--frames N` — how many frames to run (default 3600, a minute of the PSP's time)
 - `--press "F:C,..."` — `F:C` presses and holds `C` at frame `F` (a button, or a stick's
-  value: `L-StickX:12345`); `F:C!` releases `C` at frame `F`
+  value: `L-StickX:12345`, or the right stick's: `R-StickX:-20000`); `F:C!` releases `C` at frame `F`
 - `--script FILE` — the presses in a file, one `F:C` per line (`#` begins a comment)
 - `--png-every K` — write a PNG every K presented frames, into `--out`'s folder
 - `--png-at F1,F2,...` — write a PNG at each of these presented frames, into `--out`'s folder
@@ -82,8 +82,20 @@ The options, and what each does:
 
 The buttons by name are `Select`, `Start`, `Up`, `Down`, `Left`, `Right`, `Triangle`,
 `Circle`, `Cross`, `Square`, `L` and `R`; the stick's axes are `L-StickX` and `L-StickY`,
-their values -32768 to 32767, as the front end takes them. A press holds its control from its
-frame on, until a later `!` releases it.
+their values -32768 to 32767 (left or up to right or down), as the front end takes them. A press
+holds its control from its frame on, until a later `!` releases it; a stick stays where it was
+put until another value for its axis (`0` centres it).
+
+The right stick, `R-StickX` and `R-StickY` (the same values), is one the PSP itself hasn't got:
+the core reports it in bytes 10 and 11 of every SceCtrlData a game reads, 128 each way when it's
+left alone, as PPSSPP does, for fan patches made for a second stick (the Armored Core "True
+Analogs" mods turn and look with it). pspsdk's pspctrl.h names those bytes Rx and Ry, valid on a
+PSP Go with a DualShock 3, a PS Vita, or in emulation (docs/psp-core.md, part 81). For example,
+to turn right for a second from frame 600, then look up for half a second:
+
+```sh
+psp-runner GAME --press "600:R-StickX:32767,660:R-StickX:0,700:R-StickY:-32768,730:R-StickY:0"
+```
 
 ## The report
 

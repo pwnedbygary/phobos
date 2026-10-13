@@ -774,6 +774,7 @@ struct Kernel {
       u32 time = 0;              //when it was taken, in microseconds
       u32 buttons = 0;
       u8 x = 128, y = 128;       //the stick (centred unless sampling was analog)
+      u8 rightX = 128, rightY = 128;  //the host's right stick, the same way (not the PSP's: ctrl.cpp; not in states)
     };
     struct Latch {                 //since the latch was last read:
       u32 made = 0, broken = 0;    //buttons pressed, and let go
@@ -782,6 +783,7 @@ struct Kernel {
     };
     u32 buttons = 0;                  //what the player holds now (PSP_CTRL_* bits): the system sets these
     u8 analogX = 128, analogY = 128;  //the stick, 0-255 on each axis, 128 when left alone
+    u8 rightX = 128, rightY = 128;    //the host's right stick, the same way (a convention: ctrl.cpp; not in states)
     u32 cycle = 0, mode = 0;          //sampling cycle (0: at each vertical blank; else microseconds) and mode
     u64 nextSample = 0;               //with a cycle: when the next sample is due
     Sample samples[64];               //the last 64 samples, a ring: the next one goes over samples[next], the oldest
@@ -1937,6 +1939,7 @@ struct Kernel {
   auto dialogStatus(u32 kind) -> void;
   auto dialogUpdate(u32 kind) -> void;
   auto dialogShutdown(u32 kind) -> void;
+  static auto keyboardConform(const std::vector<u16>& text, u32 input, u32 lines) -> std::vector<u16>;
   auto keyboard(u32 parameters) -> u32;
   auto keyboardField(u32 field, std::vector<u16> text) -> void;
   static auto hexWord(u32 value) -> std::string;
@@ -2010,10 +2013,12 @@ struct Kernel {
     bool back = false;
     std::string ok, cancel;
     //the keyboard: each field's description and text at first, the most characters it takes (UTF-16 units, as the
-    //PSP counts them), which characters (psputility_osk.h's input types, 0 for any), its lines and its language
+    //PSP counts them), which characters (psputility_osk.h's input types, 0 for any), its lines and its language; and
+    //its text at first as the program's UTF-16 (the kernel's: not in the byte form)
     struct Field {
       std::string description, text;
       u32 most = 0, input = 0, lines = 1, language = 0;
+      std::vector<u16> units = {};
     };
     std::vector<Field> fields;
     //saving and loading: the mode (2 load, 3 save, 4 load from a list, 5 save to a list, 6 delete from a list, 7
