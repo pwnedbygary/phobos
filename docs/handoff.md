@@ -49,9 +49,10 @@ sceNpDrm functions) is unchanged and wasn't needed.
 - **PBOOT.PBP**: not booted by the core (it boots the disc's EBOOT.BIN); not needed here: the disc image already is the
   1.30 update, its EBOOT.BIN the patched one; the folder's PBOOT.PBP is Sony's encrypted program (tag 0x2e5e10f0, a key
   the core hasn't). Not done.
-- **The game now** (fresh stick with the folder): title, the patch's English notice, the Main Menu, Character Entry, the
-  appearance screen, the first save, the opening with English subtitles, the update's English hints, and the base, where
-  the player walks and Fran talks in English. A mission not reached (the story first sends the player about).
+- **The game now** (fresh stick with the folder): title, the game's install notice in English, the Main Menu, Character
+  Entry, the appearance screen, the first save, the opening with English subtitles, the update's English hints, and the
+  base, where the player walks and Fran talks in English. A mission not reached (the story first sends the player
+  about).
 - **Checks** (`5a7c2452b`, merged with master): tests/psp 502/0 (five new groups; of two local runs one had the
   timing-dependent group "ge loads through the depth buffer's views wait for the threads" fail on the loaded Mac, as
   before; CI's passed), tests/allegrex 60/0, tests/psp/ares 318/0. God Eater 2 without the folder as before (the same

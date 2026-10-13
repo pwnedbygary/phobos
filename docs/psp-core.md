@@ -11668,11 +11668,11 @@ PGD: it's npdrm's module key (from the EDATA's header and the licensee key) and 
 **The game now** (the branch's runner, the software renderer at 2 drawing threads, the owner's fonts, a fresh stick
 holding the patch's folder; the presses scripted as found: the text menus take short presses, its appearance screen only
 longer ones). The notice and the publishers' logos, the intro movie, the title (PRESS START BUTTON) at 1900; Start gives
-the patch's English notice ("GOD EATER 2 game data is not installed on the recording media, to enjoy comfortable play.
-Please install the game data from the title menu.", 2400) and the Main Menu (New Game, Continue Single and Multi, Trade
-Avatar In Sleep Mode, Import Save Data, Game Data Install: 2800). New Game: Character Entry (Name, Code Name, Gender,
-Next), the game's kana keyboard, the appearance screen (Hairstyle to Voice, Random, Decide) with the character drawn in
-3D; "Is this character okay?" Yes saves (MAKEDATASECURE, 426,064 bytes of SECURE.BIN in
+the game's install notice in the patch's English ("GOD EATER 2 game data is not installed on the recording media, to
+enjoy comfortable play. Please install the game data from the title menu.", 2400) and the Main Menu (New Game, Continue
+Single and Multi, Trade Avatar In Sleep Mode, Import Save Data, Game Data Install: 2800). New Game: Character Entry
+(Name, Code Name, Gender, Next), the game's kana keyboard, the appearance screen (Hairstyle to Voice, Random, Decide)
+with the character drawn in 3D; "Is this character okay?" Yes saves (MAKEDATASECURE, 426,064 bytes of SECURE.BIN in
 `PSP/SAVEDATA/NPJH50832099c645531020001000`); the opening movie; the opening in the game's engine with English subtitles
 ("The Restless God already knows all about your nascent potential... Hehehe!"); the update's hints in English ("As a
 bonus of the update. Reward money for all mission increased to 1.1 times.", "Release some of the pre-delivered content:
