@@ -362,7 +362,8 @@ struct GPU : GE::Renderer {
   auto finish(GE& ge) -> void override;
   auto written(GE& ge, u32 page) -> void override;
   auto forget(GE& ge) -> void override;
-  auto holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns, const GE::Region& takes) -> bool override;
+  auto holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns,
+             const std::function<auto () -> GE::Region>& takes) -> bool override;
   auto memoryRows(GE& ge, const GE::Sampler& texture) -> u32 override;
   auto drawnOver(GE& ge, u32 first, u32 last) -> bool override;
   auto besideChanged(GE& ge, u32 first, u32 last) -> void override;

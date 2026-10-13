@@ -1324,7 +1324,8 @@ auto GPU::written(GE& ge, u32 page) -> void {
 //render to texture), or palette indices of as many bits as its pixels, none of them its stencil's (CLUT16 of a
 //16-bit frame buffer, CLUT32 of an 8888 one: Death Jr. II takes each of its picture's colors through a palette so),
 //looked up on the GPU; else the GE decodes it from memory, which finishes drawing first.
-auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns, const GE::Region& takes) -> bool {
+auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns,
+                const std::function<auto () -> GE::Region>& takes) -> bool {
   this->ge = &ge;
   held.reset();
   if(!ready()) return false;
@@ -1403,9 +1404,10 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns, const
   auto taken = [&] {
     if(!take(texture, offset, end, width, rows, direct || indexed, exact)) return false;
     auto& h = *held;  //(texels past those held are the last held's)
+    auto r = takes();
     s32 right = h.width - 1, bottom = h.rows - 1;
-    h.takes[0] = h.x + std::min(takes.left, right), h.takes[1] = h.y + std::min(takes.top, bottom);
-    h.takes[2] = h.x + std::min(takes.right, right), h.takes[3] = h.y + std::min(takes.bottom, bottom);
+    h.takes[0] = h.x + std::min(r.left, right), h.takes[1] = h.y + std::min(r.top, bottom);
+    h.takes[2] = h.x + std::min(r.right, right), h.takes[3] = h.y + std::min(r.bottom, bottom);
     if(direct) return true;
     held->palette = paletteFor(texture);
     if(!held->palette) held.reset();
