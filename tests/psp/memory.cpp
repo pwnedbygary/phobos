@@ -58,6 +58,23 @@ static auto areas() -> void {
     }
   }
 
+  //main RAM's last bytes (memory.hpp's way to RAM): a half in its last two works; an HLE function's word whose last
+  //two bytes are past it reads 0 and goes nowhere, unmapped() hearing of each, as anywhere with nothing behind it
+  s.unmapped.clear();
+  s.memory.write(Allegrex::Half, 0x09ff'fffe, 0xabcd);
+  CHECK(s.memory.read(Allegrex::Half, 0x09ff'fffe), 0xabcd);
+  CHECK(s.memory.reaches(0x09ff'fffe, 2), true), CHECK(s.memory.reaches(0x09ff'fffe, 4), false);
+  CHECK(s.memory.pointer(0x09ff'fffe, 4) == nullptr, true);
+  CHECK(s.unmapped.size(), 0);
+  s.memory.write(Allegrex::Word, 0x89ff'fffe, 0x1234'5678);
+  CHECK(s.memory.read(Allegrex::Word, 0x09ff'fffe), 0);
+  CHECK(s.memory.read(Allegrex::Half, 0x09ff'fffe), 0xabcd);
+  CHECK(s.unmapped.size(), 2);
+  if(s.unmapped.size() == 2) {
+    CHECK(s.unmapped[0].first, 0x89ff'fffe), CHECK(s.unmapped[0].second, true);
+    CHECK(s.unmapped[1].first, 0x09ff'fffe), CHECK(s.unmapped[1].second, false);
+  }
+
   //later models' 64 MiB
   System big(64_MiB);
   CHECK(big.memory.ram.size(), 64_MiB);
