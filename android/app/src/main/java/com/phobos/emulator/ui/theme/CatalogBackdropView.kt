@@ -59,9 +59,9 @@ fun CatalogBackdropView(
         CatalogBackdrop.PIXEL_PLAINS -> PixelBackdrop(scheme, theme.isDark, PixelBackdropScene.PLAINS, modifier)
         CatalogBackdrop.PIXEL_NIGHT_DRIVE -> PixelBackdrop(scheme, theme.isDark, PixelBackdropScene.NIGHT_DRIVE, modifier)
 
-        CatalogBackdrop.MANGA_TONE -> MangaBackdrop(scheme, theme.isDark, MangaBackdropScene.TONE, modifier)
-        CatalogBackdrop.MANGA_SPEED_LINES -> MangaBackdrop(scheme, theme.isDark, MangaBackdropScene.SPEED_LINES, modifier)
-        CatalogBackdrop.MANGA_SPLASH -> MangaBackdrop(scheme, theme.isDark, MangaBackdropScene.SPLASH, modifier)
+        CatalogBackdrop.MANGA_TONE -> MangaBackdrop(theme.scheme, theme.isDark, MangaBackdropScene.TONE, modifier)
+        CatalogBackdrop.MANGA_SPEED_LINES -> MangaBackdrop(theme.scheme, theme.isDark, MangaBackdropScene.SPEED_LINES, modifier)
+        CatalogBackdrop.MANGA_SPLASH -> MangaBackdrop(theme.scheme, theme.isDark, MangaBackdropScene.SPLASH, modifier)
 
         CatalogBackdrop.RPG_LATTICE -> RpgBackdrop(scheme, theme.isDark, RpgBackdropScene.LATTICE, modifier)
         CatalogBackdrop.RPG_STARS -> RpgBackdrop(scheme, theme.isDark, RpgBackdropScene.STARS, modifier)

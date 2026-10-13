@@ -88,9 +88,9 @@ enum class PlatformIconPack(val label: String, val description: String) {
 
 /** Manga ink backdrop variants. */
 enum class MangaBackdropScene(val label: String, val description: String) {
-    TONE("Screentone", "Paper with a screentone that densifies toward the bottom"),
-    SPEED_LINES("Speed lines", "Radial ink speed lines bursting from the center"),
-    SPLASH("Splash page", "A bold ink splash with sparse tone at the edges"),
+    TONE("Screentone", "A halftone screentone rising from the bottom, with scratched highlights"),
+    SPEED_LINES("Speed lines", "Focus lines converging on a clear space in the middle"),
+    SPLASH("Splash page", "An impact burst flashing out of a screentone field"),
 }
 
 /** 16-bit RPG backdrop variants. */
