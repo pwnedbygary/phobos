@@ -369,7 +369,7 @@ static auto frontKeyboard() -> void {
 //describe it, the latest chosen first; one chosen is loaded (its data read, its titles in sfoParam, its name written
 //into the request's), backing out is CANCEL, and a save without the data file named is broken, chosen
 //FILE_NOT_FOUND (utility/savedata/loadbroken's list load). The request's own save, there and not listed (where
-//answers without a front end load from), is listed after the list's.
+//answers without a front end save to), is listed after the list's.
 static auto frontListLoad() -> void {
   HostFolder stick;
   FrontMachine m;
@@ -603,6 +603,74 @@ static auto frontListDelete() -> void {
   CHECK(finished(m, choice(m.kernel.dialogShown(), -1)), 1);
 }
 
+//A list's dialog whose request names a pattern (Dissidia's Load Game keeps "GameData*" from the list mode) shows the
+//list's saves there and no save of the pattern's own, the latest first; the player's choice is loaded and its name
+//written back. A pattern in the list is no save, in a load or a save (no new data of its name); a list delete naming
+//one shows the list's saves there. With no list the pattern is the save's name, which no save has: a load shows
+//nothing, not the game's own folder; a save to it, single or a list's, is refused at once, nothing asked or made.
+//"<>" in a list leaves out a host folder of the game's whose name holds a pattern (an older build's).
+static auto frontPatterns() -> void {
+  namespace fs = std::filesystem;
+  HostFolder stick;
+  FrontMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  auto& memory = m.system.memory;
+  CHECK(makeSave(m, "ULUS10437", "GameData00", "latest", "Latest"), true);
+  CHECK(makeSave(m, "ULUS10437", "GameData03", "older", "Older"), true);
+  auto saves = stick.path / "PSP/SAVEDATA";
+  fs::last_write_time(saves / "ULUS10437GameData03/PARAM.SFO",
+                      fs::last_write_time(saves / "ULUS10437GameData00/PARAM.SFO") - std::chrono::hours(48));
+  saveParameters(m, 4, "ULUS10437", "GameData*", 0, {"GameData00", "GameData01", "Game*", "GameData03"});
+  memory.write(4, Parameters + 1480, 3);  //focus: the latest
+  memory.fill(Buffer, 0, 16);
+  auto request = asked(m);
+  CHECK(request.saves.size(), 2);
+  if(request.saves.size() != 2) return;
+  CHECK(request.saves[0].name == "GameData00" && request.saves[1].name == "GameData03" && request.focus == 0, true);
+  CHECK(finished(m, choice(request, 1)), 0);
+  CHECK(memory.readString(Buffer, 8) == "older" && memory.readString(Parameters + 76, 20) == "GameData03", true);
+  saveParameters(m, 5, "ULUS10437", "GameData*", 3, {"GameData00", "Game?", "GameData01"});
+  memory.write(4, Parameters + 1480, 7);  //the first new
+  request = asked(m);
+  CHECK(request.saves.size(), 2);
+  if(request.saves.size() != 2) return;
+  CHECK(request.saves[0].name == "GameData00" && request.saves[0].there, true);
+  CHECK(request.saves[1].name == "GameData01" && !request.saves[1].there && request.focus == 1, true);
+  CHECK(finished(m, choice(request, -1)), 1);
+  saveParameters(m, 6, "ULUS10437", "GameData*", 0, {"GameData00", "GameData03"});
+  request = asked(m);
+  CHECK(request.mode == 6 && request.saves.size() == 2, true);
+  CHECK(finished(m, choice(request, -1)), 1);
+  CHECK(fs::exists(saves / "ULUS10437GameData00") && fs::exists(saves / "ULUS10437GameData03"), true);
+  //with no list (no first name) the pattern is taken as the save's name: a load shows nothing (not the game's own
+  //folder, there), and a save to it, a single save's or a list save's, is refused at once, asking nothing
+  CHECK(makeSave(m, "ULUS10437", "", "own", "Own"), true);
+  saveParameters(m, 4, "ULUS10437", "GameData*", 0, {""});
+  request = asked(m);
+  CHECK(request.id != 0 && request.saves.empty(), true);
+  CHECK(finished(m, choice(request, -1)), 0x8011'0307);
+  for(const auto& [mode, list] : {std::pair{3u, std::vector<const char*>{}},
+                                  std::pair{5u, std::vector<const char*>{""}}}) {
+    saveParameters(m, mode, "ULUS10437", "GameData*", 3, list);
+    memory.copyIn(Buffer, "new", 3);
+    check(__LINE__, "at once", m.start("sceUtilitySavedata") && !m.update("sceUtilitySavedata")
+          && m.status("sceUtilitySavedata") == 3 && !m.kernel.dialogShownID(), true);
+    check(__LINE__, "refused", memory.read(4, Parameters + 28), 0x8011'0388);
+    check(__LINE__, "closed", m.close("sceUtilitySavedata"), true);
+  }
+  for(auto& entry : fs::directory_iterator(saves)) {
+    CHECK(entry.path().filename().string().find_first_of("*?"), std::string::npos);
+  }
+  CHECK(stick.get("PSP/SAVEDATA/ULUS10437/DATA.BIN") == "own", true);
+  //"<>" in a list stands for the game's saves, a host folder whose name holds a pattern (an older build's) left out
+  stick.put("PSP/SAVEDATA/ULUS10437Game*/DATA.BIN", "host");
+  saveParameters(m, 4, "ULUS10437", "", 0, {"<>"});
+  request = asked(m);
+  CHECK(request.saves.size(), 3);
+  for(auto& shown : request.saves) CHECK(shown.name == "Game*", false);
+  CHECK(finished(m, choice(request, -1)), 1);
+}
+
 //One save's load, save and delete: the save the request names (there or not, as its PARAM.SFO describes it; a new
 //save as the request's own titles and icon describe it); a load or delete of a save not there finishes NO_DATA in its
 //group whatever's answered (a PSP's "There is no save data."), backing out is CANCEL, and saying yes loads, saves
@@ -786,6 +854,7 @@ auto dialogTests() -> Tests {
     {"dialogs front end: messages a PSP doesn't show", frontMessageRefused},
     {"dialogs front end: keyboard", frontKeyboard}, {"dialogs front end: list load", frontListLoad},
     {"dialogs front end: list save", frontListSave}, {"dialogs front end: list delete", frontListDelete},
+    {"dialogs front end: lists naming a pattern (Dissidia)", frontPatterns},
     {"dialogs front end: lists without a list, parameters rewritten", frontListless},
     {"dialogs front end: one save's load, save and delete", frontSingleSaves},
     {"dialogs front end: dialogs answered at once", frontOthers}, {"dialogs front end: states", frontStates},

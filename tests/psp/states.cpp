@@ -431,6 +431,21 @@ static auto stateFields() -> void {
     {"font call slot", [&] { library.open[1] = false, library.open[3] = true, fontCall.slot = 3; }},
     {"font call ended", [&] { fontCall.ended = true, library.open[3] = false; }},
     {"font call kind", [&] { fontCall.kind = Kernel::FontCall::Give, fontCall.asks.clear(), fontCall.got.clear(); }},
+    //part 87's: the font holding a glyph (its 'A'), and the call made one reading the space into it, each of its
+    //fields changed, then a closing's again
+    {"font held", [&] { openFont.held = 2, openFont.glyphBlocks = {0x0899'4000, 0x0899'4100}; }},
+    {"font glyph blocks", [&] { openFont.glyphBlocks[1] ^= 0x10; }},
+    {"font call reading a glyph", [&] {
+      fontCall.kind = Kernel::FontCall::Glyph, fontCall.ended = false, fontCall.asks = {32, 0};
+      fontCall.errorAt = 0, fontCall.font = 1, fontCall.out = 0x0896'2000;
+    }},
+    {"font call font", [&] { fontCall.font = 7; }}, {"font call glyph", [&] { fontCall.glyph = 2; }},
+    {"font call what", [&] { fontCall.what = 3; }}, {"font call out", [&] { fontCall.out += 0x40; }},
+    {"font call clip", [&] { fontCall.clip[2] = 5; }},
+    {"font call giving again", [&] {
+      fontCall.kind = Kernel::FontCall::Give, fontCall.ended = true, fontCall.asks.clear();
+      fontCall.font = fontCall.glyph = fontCall.what = fontCall.out = fontCall.clip[2] = 0;
+    }},
     {"mpeg call ringbuffer", [&] { mpegCall.ringbuffer ^= 0x40; }}, {"mpeg call left", [&] { mpegCall.left = 6; }},
     {"mpeg call asked", [&] { mpegCall.asked = 4; }}, {"mpeg call put", [&] { mpegCall.put = 1; }},
     {"thread name", [&] { t.name += "x"; }}, {"thread entry", [&] { t.entry ^= 4; }},
@@ -1303,6 +1318,34 @@ static auto stateFields() -> void {
   });
   refuses("an mpeg call feeding a ringbuffer nowhere", [&] { k.mpegCalls.at(one).ringbuffer = 0x1000; });
   refuses("a font call given more than it asked for", [&] { k.fontCalls.at(two).got.push_back(1); });
+  //a font's glyph, and a call reading one, as no machine has them
+  refuses("a font holding a glyph in one block", [&] { fontOne().glyphBlocks.pop_back(); });
+  refuses("a font holding no glyph in two blocks", [&] { fontOne().held = 0; });
+  refuses("a font holding a glyph it hasn't got", [&] { fontOne().held = 100; });
+  auto glyphCall = [&]() -> Kernel::FontCall& {  //thread two's call made one reading the font's space
+    auto& call = k.fontCalls.at(two);
+    call.kind = Kernel::FontCall::Glyph, call.ended = false, call.asks = {32, 0}, call.got.clear();
+    call.errorAt = 0, call.font = 1, call.glyph = 0, call.what = 0, call.out = 0x0896'2000;
+    return call;
+  };
+  {
+    glyphCall();
+    KernelMachine fresh;
+    devices(fresh);
+    CHECK(load(fresh, save(a)), true);  //as a machine has it: loads
+    CHECK(load(a, state), true);
+  }
+  refuses("a glyph call asking for three blocks", [&] { glyphCall().asks.push_back(4); });
+  refuses("a glyph call asking a picture's size", [&] { glyphCall().what = 1; });
+  refuses("a glyph call answering where nothing is", [&] { glyphCall().out = 0x0000'1000; });
+  refuses("a glyph call reading a glyph its font hasn't got", [&] { glyphCall().glyph = 50; });
+  refuses("a glyph call of no font", [&] { glyphCall().font = 0; });
+  refuses("a glyph call of a font not handed out yet", [&] { glyphCall().font = k.nextFontID; });
+  refuses("a glyph call with somewhere for an error", [&] { glyphCall().errorAt = 0x0896'0800; });
+  refuses("a font call's font being opened holding a glyph", [&] {
+    auto& opening = k.fontCalls.at(two).opening;
+    opening.held = 1, opening.glyphBlocks = {0x0899'5000, 0x0899'5100};
+  });
   refuses("a font call opening into a handle it doesn't hold", [&] {
     auto& call = k.fontCalls.at(two);
     call.kind = Kernel::FontCall::Open, call.ended = false, call.slot = 3;
@@ -1687,6 +1730,7 @@ static auto olderLayouts() -> void {
     n.kernel.serialize(again);
     return loaded && std::vector<u8>{again.data(), again.data() + again.size()} == state;
   };
+  CHECK(loads(27, before31(state)), true);  //(no font open here, so 27's glyph fields add nothing)
   CHECK(loads(26, before31(state)), true);
   CHECK(loads(current, before31(state)), false);
   CHECK(loads(25, before31(before26(state))), true);

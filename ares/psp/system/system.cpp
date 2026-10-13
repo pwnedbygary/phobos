@@ -356,6 +356,7 @@ auto System::power(bool reset) -> void {
   cpu.pages = pageTable.data();
   cpu.watched = memory.watched.data();
   memory.watching = [this](u32 page) { cpu.recompiler.protect(page); };
+  memory.unwatched = [this](u32 page) { cpu.recompiler.unwatched(page); };
   memory.vramGuard = [this](bool busy) {  //(the pages the GE's workers draw over: memory.hpp)
     for(u32 offset = 0; offset < Memory::VRAMSize; offset += Memory::PageSize) {
       if(!memory.vramPageBusy(offset / Memory::PageSize)) continue;
@@ -532,8 +533,9 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //signature, the version of its layout, RAM's size and the program it was made with, all of which must be the
 //machine's; then memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a
 //field means: 31 since the kernel keeps sceVaudio's hold on the SRC channel, its buffers' format, effect and level
-//control (part 82; 27 to 30 are skipped, other branches' layouts, refused here: a branch with one of them landing
-//after this renumbers its layout past 31 and updates tests/psp/ares/system.cpp's list of refused versions); 26 since
+//control (part 82; 28 to 30 are skipped, other branches' layouts, refused here: a branch with one of them landing
+//after this renumbers its layout past 31 and updates tests/psp/ares/system.cpp's list of refused versions); 27 since
+//a font keeps the glyph it holds and the memory it was read into (part 87); 26 since
 //the dialog keeps an aborted message's error and whether a list delete has deleted a save (part 73); 25 since each
 //open file keeps its PGD decryption (the version key it was given, where its data starts,
 //and its header's descriptor once decrypted); 24 since the GE driver keeps when the GE will have drawn what it was
@@ -574,8 +576,9 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //no sceHprm callbacks and no ATRAC low-level IDs, 15 to 21 with their files' count passed over and no read's
 //bytes still to come, 15 to 22 with their files opened in the order of their numbers, 15 to 23 with the GE
 //having nothing left to draw, 15 to 24 with no file's PGD decryption set up (each read as it is), 15 to 25 with
-//no error for an aborted message and no save deleted from a list, and 15 to 26 with sceVaudio holding nothing; older
-//layouts are refused.
+//no error for an aborted message and no save deleted from a list, 15 to 26 with no glyph held by a font nor being
+//read into one, and 15 to 27 with sceVaudio holding nothing; 28 to 30 (other branches' layouts) and older layouts
+//are refused.
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
 static constexpr u32 StateVersion = 31;
 
@@ -591,8 +594,9 @@ auto System::hash(std::span<const u8> bytes) -> u64 {
 //dialog's abort counters default to 0, no sceCcc tables, no thread-local storage pools, no stacks lent, sceJpeg not
 //started, no sceHprm callbacks, no ATRAC low-level IDs, the files' count passed over, no read's bytes still to
 //come, files opened in the order of their numbers, the GE with nothing left to draw, no file's PGD decryption set
-//up, no aborted message's error or list delete's deleted save, sceVaudio holding nothing): the owner's accuracy
-//scenes were saved at 15 before part 42. Not 27 to 30, other branches' layouts.
+//up, no aborted message's error or list delete's deleted save, no glyph held by a font nor being read into one) and
+//27 (sceVaudio holding nothing): the owner's accuracy scenes were saved at 15 before part 42. Not 28 to 30, other
+//branches' layouts.
 auto System::header(serializer& s) -> bool {
   u32 signature = StateSignature, version = StateVersion, ramSize = memory.ram.size();
   u64 program = programHash;
@@ -602,7 +606,7 @@ auto System::header(serializer& s) -> bool {
   s(program);
   if(s.reading()) {
     kernel.stateLayout = version;
-    bool known = version >= 15 && version <= StateVersion && (version <= 26 || version >= 31);
+    bool known = version >= 15 && version <= StateVersion && (version <= 27 || version >= 31);
     return signature == StateSignature && known && ramSize == memory.ram.size() && program == programHash;
   }
   return signature == StateSignature && version == StateVersion && ramSize == memory.ram.size() &&

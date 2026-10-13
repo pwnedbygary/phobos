@@ -10512,6 +10512,352 @@ Super Stardust Portable, Syphon Filter: Dark Mirror, The Sims 2: Pets, 1.75 to 5
 - Scratch: `~/phobos-work/scratch/aalines` (fit2.py, the fit; sbs/, the pictures; lib/, the library run;
   lib-compare.tsv).
 
+## Part 79: where the slow games' emulation thread goes, and making it faster — the GPU's palette pictures decoded where taken, memory's changes only where there's code, calm system calls, more of the CPU compiled
+
+On branch `cursor/psp-cpu-speed5-2b67`, on master (`6ab2c5583`, #224 merged in). The task: on the owner's Retroid
+Pocket 6 (Snapdragon 8 Gen 2), PPSSPP holds about 60 frames a second with Vulkan in 22 games where Phobos (Vulkan
+fast, 1x) is far behind in the CPU-bound ones: Need for Speed Most Wanted 5-1-0 22, Underground Rivals 21, Super
+Monkey Ball Adventures 20, Activision Hits Remixed 13, Sonic Rivals 42, Twisted Metal 40, Army of Two 33, God of War:
+Ghost of Sparta 24, Death Jr. II 23, Me & My Katamari 52, Disaster Report 3 52, the two Armored Cores 44 to 46 and
+Colin McRae 41. Find where the emulation thread's time goes in them and make it much faster, every emulated result
+(pictures, sound, saves) the same. Clean room: PPSSPP wasn't read (its CPU, JIT and IR code not at all), JPCSP not
+read. Save states are unchanged (layout 26): nothing new is kept.
+
+The work came in two sessions: the first (four commits, before #224 merged) took the CPU's side; the second merged
+master, measured again with #224 in, and found most of the remaining time outside the CPU.
+
+### How it was measured
+
+On the Mac (an M1), with the headless runner built as Android builds it (O3, thin LTO) and patched in scratch only to
+report the emulation thread's CPU time and its retired host instructions and cycles (the thread's counters), from
+save states in each game (`~/phobos-work/scratch/cpu-speed2/scenes`, listed in "On the RP6"), in Vulkan-fast through
+MoltenVK and in the software renderer. A counting build (scratch) gave each scene's work a frame: guest instructions,
+blocks entered, instructions the interpreter ran from compiled code by kind, loads and stores off the fast path by
+reason, system calls by function, thread switches, the GE's commands, PRIMs and vertices by path, the renderer's
+finishes and read-backs; macOS's `sample` gave each scene's call graph. The Mac was shared with other agents the whole
+time, its load average between 20 and 190, so the emulation thread's retired host instructions a frame, which the load
+hardly moves, carry the comparisons, and its CPU time is given beside them: base and new in turn, three rounds,
+medians.
+
+### Where the time goes (master with #224, Vulkan-fast, before this part's second session)
+
+The share of the emulation thread's samples (macOS's `sample`, inclusive where a part calls others) and the counting
+build's work a frame. "Guest" is the instructions the PSP's CPU ran; "kernel" what the system calls took, from the
+compiled syscall in (the dispatch, the functions, untilNextEvent()); "GE" the display lists run on the emulation
+thread (vertices read, transformed and checked, the renderer's setup, textures decoded); "finishes" the renderer
+waiting for the GPU and reading its pictures back (within GE where a decode asked for it).
+
+| Scene | Host instructions / ms a frame | Guest a frame | Compiled code | Kernel | GE | Finishes | Most of the rest |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Death Jr. II, playing | 1,016 M / 127 | 0.7 M | 1% | 0 | 97% | 53%: 31 a frame (waits 30%) | texture decodes 29%, read-backs' copies |
+| Sonic Rivals, a stage | 632 M / 80 | 0.35 M | 2% | 0 | 95% | 69%: 31 a frame (waits 44%) | decodes 16% |
+| Activision Hits Remixed, Atlantis | 714 M / 87 | 1.0 M | 1% | 0 | 94% | 94%: 61 a frame (waits 61%) | 1 MiB compared after each |
+| Ghost of Sparta, menu | 540 M / 59 | 1.6 M | 10% | 0 | 86% | 0 | forgetting compiled code 17% (GPU::own()), transform 11%, lighting 5% |
+| Army of Two, playing | 590 M / 80 | 4.7 M | 22% | 0 | 71% | 0 | meshTriangles 19%, reading vertices 15%, project() 7% |
+| Super Monkey Ball Adventures, story | 648 M / 73 | 5.0 M | 20% (VFPU helpers 14%) | 0 | 61% | 0 | 50,700 small PRIMs: setup, transform 7%, GPU::begin 15% |
+| Colin McRae 2005 | 190 M / 23 | 2.9 M | 30% | 0 | 56% | 25%: 2 a frame (waits 17%) | |
+| Armored Core Formula Front, playing | 96 M / 16 | 1.1 M | 23% | 0 | 72% | 52%: 5 a frame (waits 33%) | block transfers reading VRAM the GPU drew |
+| Disaster Report 3, playing | 56 M / 7 | 0.95 M | 30% (VFPU helpers 18%) | 0 | 29% | 0 | |
+| Twisted Metal, playing | 45 M / 7 | 0.4 M | 20% | 0 | 49% | 0 | |
+| Need for Speed Most Wanted, race | 431 M / 39 | 5.5 M | 29% | 62%: 526,000 calls | 9% | 0 | untilNextEvent() 18%, the thread status's report 12% |
+| Need for Speed Underground Rivals, title | 433 M / 35 | 5.3 M | 23% | 74%: 502,000 | 0 | 0 | the same three functions |
+| Twisted Metal, logo movie | 407 M / 29 | 5.6 M | 24% | 74%: 370,000 | 0 | 0 | the movie ring's size and a semaphore; Memory::pointer() 18% |
+| Disaster Report 3, intro movie | 185 M / 13 | 2.1 M | 18% | 76%: 212,000 | 0 | 0 | the ring's size and the vertical blank count |
+| Armored Core Formula Front, intro | 195 M / 16 | 3.9 M | 31% | 60%: 139,000 | 0 | 0 | the ring and a semaphore |
+| Armored Core Silent Line, intro | 186 M / 16 | 3.7 M | 28% | 59%: 127,000 | 0 | 0 | the ring and a semaphore |
+
+By the owner's other headings: the interpreter from compiled code runs, a frame, only the syscalls themselves in the
+polling scenes and under 2,000 instructions elsewhere (Disaster Report 3's 49,000 VFPU instructions, its vpfxt and
+vmin/vmax/vsge/vslt, and Colin McRae's 41,000 were the first session's, now compiled); loads and stores off the fast
+path are a handful a frame (stores to watched pages, a texture's); blocks leave for the dispatcher a few hundred times
+a frame (Monkey Ball's 165,000 coprocessor branches taken were the first session's), the rest chained, 0.1 to 2
+million block entries a frame; thread switches are 17 to 150 a frame and the scheduler's look through the threads
+matters only where it follows each call (the Need for Speeds' rotation); sound (SAS mixing) is under 1%.
+Me & My Katamari has no scene: its explorations, in the software renderer, ran the emulation thread at 5 to 6 ms a
+frame, and its slow spots on the RP6 weren't found on the Mac.
+
+
+So in most of these games the CPU's emulation isn't where the time goes:
+- **The renderer waiting for the GPU** (Backbone's engine: Death Jr. II, Sonic Rivals, Activision Hits Remixed): their
+  glow is drawn in tiles of 3D quads, each taking 32x34 texels of a 512x512 CLUT32 picture (the frame the GPU just
+  drew, read as palette indices) through a palette of its own, a channel at a time, into a frame buffer whose bytes
+  lie inside the picture's last rows. A palette texture is one the GPU can't take from its own copy, so the GE
+  decodes it, and with a hardware renderer that decode took every row a 3D primitive may reach at full width, after
+  finishing the GPU's work over any of those bytes: each tile finished the GPU, read two targets back and decoded
+  262,144 texels (31 finishes a frame in Death Jr. II and Sonic Rivals; Hits Remixed finds the decoded copy cached but
+  "suspect", its pages drawn into, and checked all 1 MiB of it after a finish, 61 times a frame). Armored Core
+  Formula Front (5 a frame) and Colin McRae (2) wait the same way, for block transfers.
+- **The GE's work on the CPU** (Super Monkey Ball, Army of Two, Ghost of Sparta): reading, transforming and checking
+  vertices to the GE's rules, and handing triangles to the GPU (Monkey Ball's 50,000 small PRIMs a frame, below the
+  16 vertices fast mode transforms on the GPU; Army of Two's 665,000 vertices). Ghost of Sparta spent 17% more in the
+  recompiler forgetting compiled code for each primitive's VRAM change, though there was none.
+- **Polling system functions** (both Need for Speeds; the intro movies of Twisted Metal, Disaster Report 3 and the
+  Armored Cores): 130,000 to 530,000 calls a frame, each a few hundred host instructions. #224 made them cheaper; a
+  third to half still looked through every thread, timer and file afterwards.
+- **The CPU itself**, compiled code and the VFPU's helpers, is a fifth to a third of the thread where the guest runs
+  millions of instructions a frame (Monkey Ball, Army of Two, Colin McRae, Disaster Report 3), less elsewhere.
+
+### What was done
+
+1. **A texture the GPU drew, decoded only where each 3D triangle takes it** (`draw.cpp`'s `texelBox()`,
+   `texture.cpp`'s `fillDecoded()`, `Decoded::part`, the backends' `makeTexturePart()`). For a 3D triangle mapped by UV
+   (TEXTURE_MAP_MODE 0), every pixel the GPU draws, at any resolution, has its middle inside the triangle and takes
+   its texture coordinates mixed from the corners' by weights of 0 to 1 (draw.frag divides by q, which is 1 at every
+   corner; clipping makes corners on the edges), and its texels are where texelAxis() puts those: the coordinate's,
+   or a filter's two round it. So the texels a PRIM's triangles can take lie between the floors of its corners' least
+   and greatest s and t (u and v by the scale and offset, in texels, as transformRest() and transform.vert make them),
+   less one and more one for a filter. A rasterizer works a pixel's weights out from the same snapped corners it finds
+   the pixel inside by, so they leave 0 to 1 by its rounding alone: two texels more on each side, and a 256th of the
+   reach's length, leave room for that. Held at the edges
+   where the texture holds, or the box isn't known where it would repeat round; nor for a larger texture, the texture
+   matrix's or the environment's mapping, NaN or far-off coordinates; nor for 2D, sprites, lines or points, whose
+   pixels can reach past their corners' coordinates (a sprite's left edge a sixteenth of a pixel further, and above 1x
+   a pixel's middle between two of the GE's: a fraction of a pixel's step, which for a shrunk sprite is many texels).
+   Only a texture in VRAM can be one the GPU drew, and the box is worked out only where a copy in the cache doesn't
+   serve the PRIM as it is (none, one suspect or a part, or one of fewer rows): Army of Two's 650,000 mesh vertices a
+   frame, its textures found in the cache, pay nothing for it. With that box, `fillDecoded()` needs only the bytes of
+   the box's rows:
+   - a copy in the cache whose pages were written since ("suspect": the GPU drew into the texture's other rows) is
+     taken where those bytes, waited for, are as it was decoded from; it stays suspect, its other rows unseen (Hits
+     Remixed);
+   - a texture that decoded whole would wait for the GPU (some byte of it drawn there since the last finish: render to
+     texture, its rows reaching what the GPU draws in) is decoded only in the box, as a part, after what the GPU drew
+     in the box's rows alone; the part's texels are packed, and the backend puts that rectangle alone on the GPU
+     (Vulkan's `makeTexturePart()`: the image is the texture's size, the rest never written nor taken; another backend
+     gets it made whole). The GE never draws from a part (its sampler says none of it is the GE's); a PRIM the renderer
+     refuses, or any other that it doesn't hold, decodes afresh.
+   Every pixel the GPU draws takes the same texels as before, so nothing drawn changes; only the finishes it didn't
+   need, and the texels no pixel takes, are gone. Of Death Jr. II's 31 finishes a frame, 10 are left: the bottom row
+   of tiles reaches the picture's row 272 (its corners' t is exactly 272, and the box adds the GPU's margin), the
+   first row of the frame buffer the tiles draw into, so those wait (column by column, as the tiles go).
+2. **Memory's changes look only at sections with compiled code** (`recompiler.cpp`'s `invalidateRange()`, `drop()`,
+   `unwatched()`; `Memory::unwatched`). A hardware renderer reports each primitive's VRAM change, which memory reports
+   for all four of VRAM's copies, and `invalidateRange()` went through every 4 KiB section of each, setting the store
+   table entry of every page the table lists again (after the first session's change, which skipped unlisted pages
+   without code). Now the recompiler keeps a bit for each section that has one (`compiled`) and drops only those in
+   the range. A page without code has its store table entry right already: what `writable()` looks at is the page
+   table's entry (vramGuard tells the recompiler of each change) and the page's watch, whose end memory now tells the
+   CPU's owner of (`Memory::unwatched`, after `watchedWritten()`), which lets compiled stores go straight to the page
+   again. (That end was what the old walk was for.) `writable()` itself keeps a page holding code out of the table now:
+   vramGuard listing a busy VRAM page again listed it whatever it held, which only the old walk's next pass put right.
+   Without a page table every section in the range goes.
+3. **A rotation or a signal that changed nothing to come leaves the CPU's go as it is** (`Kernel::calm`). After a
+   syscall the kernel looks through every thread, timer and file for something made due sooner, unless the function
+   is quiet (#224's twelve that only look). A function may now say a call was calm: it changed nothing that has a
+   time to come. `sceKernelRotateThreadReadyQueue` is when no other thread took the CPU, even for a moment
+   (`Kernel::switched` counts `switchTo()`'s changes): one taking it may be a thread woken from a wait only to run its
+   callbacks, which with none notified goes back to that wait, its timeout now counted, and the caller runs again (the
+   review's case, now a test). `sceKernelSignalSema` is when it wakes no thread and none took the CPU; both when they
+   refuse. The two Need for Speeds' idle thread
+   rotates its own line 175,000 times a frame, alone in it; the intros of Twisted Metal and both Armored Cores signal
+   a semaphore 47,000 to 185,000 times a frame, polling the movie's ring.
+4. **(First session) Code forgotten only where there could be some**: `invalidateRange()` skipped sections without
+   code whose page the table leaves out (Ghost of Sparta's menu −17.6% host instructions then; the rest of its
+   26% is change 2).
+5. **(First session) A coprocessor branch taken goes on to its target in the block**: bc1t/bc1f, bvt/bvf and their
+   likely forms used to leave the block when taken, for run()'s interpreter step to run the delay slot. With chaining,
+   the taken path does what run() would: counts the branch and stops at the run's limit there (`emitCounted()`),
+   compiles the delay slot, and chains to the target, so every run stops after the same instructions as before. It
+   still leaves for a target just past the delay slot, a branch in a section's last word, delay slots that are
+   branches or end blocks, and, checked as it runs, when a store earlier in the block rewrote the delay slot (its
+   section dropped). Super Monkey Ball's story takes 165,000 a frame.
+6. **(First session) More of the VFPU compiled**: vpfxs/vpfxt/vpfxd store their prefix and viim/vfim their constant;
+   the block follows each prefix's value (what vpfx* set, at rest after an instruction that uses them up, unknown
+   after mtvc or vmtvc), so a prefixed instruction it knows about skips the check; vmin, vmax, vsge, vslt and vhdp at
+   rest run helpers of their own; vmscl and group 7's vmmov, vmidt, vmzero and vmone join the matrix helper; every
+   other VFPU instruction calls `executeVFPU<op>()`, the interpreter for that group without the top-level decode,
+   keeping the host registers held. Disaster Report 3, Monkey Ball and Colin McRae run tens of thousands a frame.
+
+### Numbers
+
+The Mac, master (`6ab2c5583`) against this branch, the bench runners from the scenes' states, medians of three rounds
+taking turns in Vulkan-fast (MoltenVK, 1x; the branch's last code) and two in the software renderer (4 drawing
+threads; the branch's first build, before the review's fixes, none of which touch the software renderer's path).
+"Fps it allows" is 1000 over the emulation thread's ms: what the frame rate would be with that thread the only bound.
+The Mac's load average was 20 to 190 through these rounds (other agents), so the times swing with which cores the
+thread got (as low as 70% of its cycles on the performance cores), most in the short scenes (Silent Line playing,
+3 ms a frame); the host instructions a frame hardly move with that, and carry the comparison.
+
+| Scene | Vulkan-fast: emulation thread ms a frame (fps it allows) | process ms | M host instructions | Software: emulation thread ms | process ms |
+| --- | --- | --- | --- | --- | --- |
+| Death Jr. II, playing | 70.1 -> 33.4 (14 -> 30), -52% | 77.2 -> 38.2 | 983 -> 388 (-60%) | 14.2 -> 14.0 (-1%) | 36.2 -> 35.5 |
+| Sonic Rivals, a stage | 41.9 -> 19.1 (24 -> 52), -54% | 46.6 -> 21.5 | 641 -> 275 (-57%) | 9.9 -> 8.1 (-18%) | 21.5 -> 20.7 |
+| Activision Hits Remixed, Atlantis | 56.6 -> 26.0 (18 -> 38), -54% | 65.7 -> 30.2 | 711 -> 268 (-62%) | 6.6 -> 6.0 (-9%) | 20.1 -> 19.8 |
+| Ghost of Sparta, menu | 41.4 -> 30.2 (24 -> 33), -27% | 44.3 -> 33.5 | 648 -> 429 (-34%) | 86.8 -> 84.2 (-3%) | 264.7 -> 269.0 |
+| NFS Most Wanted, race | 22.9 -> 18.4 (44 -> 54), -20% | 23.3 -> 18.8 | 369 -> 319 (-14%) | 28.9 -> 22.4 (-23%) | 40.7 -> 34.3 |
+| NFS Most Wanted, profile | 24.7 -> 23.4 (41 -> 43), -5% | 25.2 -> 23.9 | 364 -> 329 (-10%) | 26.1 -> 20.2 (-23%) | 31.6 -> 25.9 |
+| NFS Underground Rivals, title | 23.2 -> 20.4 (43 -> 49), -12% | 23.6 -> 20.9 | 362 -> 322 (-11%) | 24.1 -> 20.1 (-17%) | 33.4 -> 29.2 |
+| Twisted Metal, logo movie | 20.8 -> 17.9 (48 -> 56), -14% | 21.2 -> 18.3 | 359 -> 317 (-12%) | 20.5 -> 17.2 (-16%) | 20.8 -> 17.5 |
+| Armored Core Formula Front, intro | 11.4 -> 11.3 (88 -> 89), -1% | 11.9 -> 11.9 | 176 -> 164 (-6%) | 12.0 -> 11.8 (-2%) | 14.6 -> 14.3 |
+| Armored Core Silent Line, intro | 12.3 -> 11.1 (81 -> 90), -10% | 12.8 -> 11.6 | 165 -> 154 (-7%) | 11.9 -> 11.0 (-7%) | 14.4 -> 13.4 |
+| Disaster Report 3, intro | 9.4 -> 9.3 (106 -> 108), -2% | 10.0 -> 9.8 | 158 -> 158 (+0%) | 9.2 -> 9.2 (+0%) | 9.7 -> 9.6 |
+| Disaster Report 3, playing | 6.4 -> 5.8 (156 -> 171), -9% | 7.3 -> 6.8 | 62 -> 52 (-16%) | 7.1 -> 6.2 (-12%) | 21.9 -> 20.2 |
+| Colin McRae 2005 | 18.6 -> 17.2 (54 -> 58), -8% | 20.6 -> 18.7 | 187 -> 178 (-4%) | 21.2 -> 22.3 (+5%) | 67.2 -> 66.7 |
+| Super Monkey Ball Adventures, story | 52.3 -> 48.7 (19 -> 21), -7% | 56.5 -> 52.8 | 662 -> 635 (-4%) | 77.5 -> 67.3 (-13%) | 224.8 -> 213.4 |
+| Army of Two, playing | 57.1 -> 57.6 (18 -> 17), +1% | 64.9 -> 64.8 | 589 -> 584 (-1%) | 97.0 -> 99.3 (+2%) | 217.9 -> 218.9 |
+| Armored Core Formula Front, playing | 9.9 -> 9.3 (101 -> 108), -6% | 11.3 -> 10.5 | 96 -> 95 (-1%) | 8.8 -> 8.4 (-4%) | 22.7 -> 22.1 |
+| Armored Core Silent Line, playing | 2.8 -> 3.2 (358 -> 316), +13% | 3.4 -> 3.8 | 19 -> 18 (-3%) | 2.7 -> 2.4 (-9%) | 6.4 -> 6.0 |
+| Twisted Metal, playing | 4.6 -> 4.1 (216 -> 242), -10% | 5.7 -> 4.9 | 42 -> 42 (-1%) | 4.9 -> 4.8 (-2%) | 12.6 -> 12.1 |
+
+Backbone's three games take less than half the time in Vulkan, two fifths of the host instructions; Ghost of Sparta's
+menu three quarters of the time, two thirds of the instructions; the Need for Speeds and the intro movies 86 to 94%
+of the instructions; Disaster Report 3 playing 84% (the first session's VFPU). In the software
+renderer, which draws Backbone's tiles in its batches (#224's deferred decodes already took only their texels), the
+polled calls and the CPU's changes show. Super Monkey Ball and Army of Two are where they were. Taken again with the
+Mac at a load of 15 to 20, master, the first session's commits (the merge) and this branch, three rounds each: Army
+of Two 589, 583 and 584 M host instructions a frame, 164 M cycles in each; Monkey Ball 662, 632 and 636 M
+instructions, 147, 147 and 143 to 154 M cycles as its runs got the performance cores (83 to 93% of them). The
+software renderer's Ghost of Sparta and Army of Two are bound by their drawing, whose bands the emulation thread
+draws too while it waits (part 74), so its time there follows the bands it took.
+
+On the RP6, where the emulation thread is what holds these games back, the frame rate should follow its time: Death
+Jr. II, Sonic Rivals and Hits Remixed two to three times as fast in Vulkan (more where the GPU's round trips cost more
+than MoltenVK's: two thirds of their finishes are gone), Ghost of Sparta's menu a third, the Need for Speeds and the
+intro movies 10 to 20%. Super Monkey Ball, Army of Two and Colin McRae won't move much: their time is the GE's
+display lists on the CPU (below).
+
+### Accuracy
+
+Every change is the host's alone; nothing a game can see moves.
+- The branch against master from the 21 scenes' states (the table's and Death Jr. II's character select, Hits
+  Remixed's game-select room, Army of Two's menu): in the software renderer, 100 frames with every frame's picture
+  and all of VRAM hashed, drawing settled, then RAM and the machine's whole serialized state; in Vulkan-fast, 200
+  frames, then RAM and the machine's state (VRAM, read back from the GPU, among it): identical, every one, in both.
+  (Per-frame hashes in Vulkan would finish the GPU each frame, which is what the first change avoids.)
+- The library (266 games, 3600 frames, Start at 120 and Cross at 1800, PNGs at 60, 300, 1200 and 3600, the software
+  renderer, two games at a time): master 1d9308714 and this branch, then the 63 games whose pictures differed run again
+  with both. 203 are identical at all four captures; Ghost of Sparta reaches the 900 seconds in both (its retries). Of
+  the 63, in 50 a run of master and a run of the branch agree at every capture, and in 11 master's own two runs differ
+  where the branch does (Battlefront II's random map, LocoRoco's and Sonic Rivals' attract scenes among them). The last
+  two, Crash Tag Team Racing's logo fade at 1200 and Snoopy vs. the Red Baron's clouds at 3600, came out alike in each
+  runner's two runs, both made under a heavy load; run side by side again with the library's options under a light
+  one, the two runners make the same pictures at all four captures and the same sound. No game differs for the branch.
+- The first session's 23 broken versions of its changes (a scratch script, `mutate.py`, each in a copy of the tree
+  running tests/allegrex): 21 caught; the two that aren't change nothing (a "known busy" shortcut whose run-time check
+  then sends the instruction the same way, and an exclusion that execute()'s result makes anyway).
+
+### Checks
+
+- `tests/psp/run-tests.sh` (sanitizers on): 472 groups, 0 failures (master's 469 and these three): "gpu render to
+  texture through palettes: each 3D tile decodes its texels alone, as decoded whole" (the glow's tiles, nearest and
+  filtered, texels 1:1 and not, at 1x and 2x, accurate and fast, against the same with the box off, `GE::boxes`:
+  every byte of VRAM the same, one finish against one a tile; on a Vulkan GPU, skipped without one), "gpu render to
+  texture through palettes, pretend: the box decoded, waiting only for its rows" (a pretend backend: each tile's
+  part, its place and size, its texels through its palette from memory's bytes, one finish for the GPU's picture,
+  none for the tiles after; a whole copy serving a tile after the GPU drew in its other rows, nothing decoded or made
+  again; a byte changed in that tile's box decoding it again, as parts; a part refused to a tile it doesn't hold; a
+  box past a repeating edge not known, the texture decoded whole, and past a held edge stopping there), and "memory
+  and the recompiler: watched pages' stores, sections dropped by a change" (a watched page's stores through write()
+  until a change ends its watch, then straight again, a page with code kept out until a change drops it; sections
+  dropped through VRAM's fourth copy and round memory's end, those outside kept, none left marked); and the quiet
+  functions' group checks the calm calls (each case dispatched as quiet, the next thing's time where it was,
+  dispatching held off among them; a rotation handing the CPU to an equal, a signal waking a thread, and a rotation
+  to an equal woken for callbacks that goes straight back to its delay, the caller running again and that delay's
+  end now sooner, not). The UB sanitizer caught the box's row pitch looked up in the texel-size table before DXT
+  formats were ruled out; fixed.
+- `tests/allegrex/run-tests.sh`: 60 groups, 0 failures (the first session's two new ones among them; its taken
+  coprocessor branches' chained and unchained runs now take a VFPU delay slot too, at rest and with a prefix set
+  before the branch, and compare the VFPU's registers and prefixes).
+- `tests/psp/ares/run-tests.sh`: 318 checks, 0 failed.
+
+### Left, and why
+
+- **The GE's work on the CPU** is now the biggest shared cost: Super Monkey Ball's story, Army of Two and Ghost of
+  Sparta spend 60 to 85% of the emulation thread in display lists (Monkey Ball's 50,700 PRIMs a frame of about six
+  vertices each, below fast mode's 16 that the GPU transforms, read, transformed, clipped and handed over a triangle at
+  a time; Army of Two's 665,000 vertices read and placed by meshTriangles() to the GE's rules; Ghost of Sparta's
+  187,000 transformed and lit). The next steps there, all exact: reading a run of vertices through one pointer for
+  the common formats, each corner's place on the screen worked out once per PRIM rather than per triangle sharing it,
+  and handing small PRIMs over in runs. (A lower fast-mode threshold would move them to the GPU but changes what's
+  drawn, which this task doesn't allow.)
+- **The polled system calls**: the Need for Speeds are about 10% faster (untilNextEvent() after the rotation gone);
+  what's left of each call is the compiled code around it (blocks of 2.8 instructions, each a lookup of the next),
+  the dispatch, the scheduler's look through the threads after each rotation (9%), and the thread status's report
+  copied through memory's general path (17%). Each is a few percent; none moves them near 60 frames a second alone.
+  A syscall costs the PSP's clock a single cycle here, which is why the idle loop spins 175,000 times a frame; giving
+  calls their real time would change every game's timing, and isn't measured.
+- **Death Jr. II's and Sonic Rivals' last 10 finishes a frame**: the bottom tiles' box reaches the picture's row 272
+  (exactly their corners' t, plus the GPU's margin), the frame buffer's first row. Proving the GPU never takes that
+  row would need each pixel's place, not only the corners'. Their 2D passes (8888 textures from a 128-pixel target)
+  are decoded too, as before, where the GPU won't take them from its copy.
+- **The CPU's compiled code**: a fifth to a third of the thread in Monkey Ball, Army of Two, Colin McRae and the
+  polling scenes. Every result is stored as each instruction ends, every block looks the next up through three
+  tables, and the VFPU's arithmetic goes through helpers that read each lane by its register number (vfpuDot() is
+  the PSP's own adder, exact, and slow). Keeping results in host registers across a block and linking blocks directly
+  are the next steps; the VFPU's common operations in native code after that.
+- **A guard for the box**: a part's fetches clamped to its rectangle in draw.frag (as `Push::held` holds a copy's),
+  so that a rasterizer whose weights strayed past its rounding would take the edge's texel rather than one never
+  written. It needs a push constant more in every pipeline; no rasterizer makes the case.
+- Me & My Katamari wasn't measured (no slow scene on the Mac), nor anything on the RP6 (no device here).
+
+### On the RP6
+
+To compare: master (`6ab2c5583`, #224) and this branch, Vulkan fast at 1x as the owner ran them, each scene's frames a
+second over several seconds, base, branch, base again. The scenes are the headless runner's states in
+`~/phobos-work/scratch/cpu-speed2/scenes/NAME` (`state`; the game in `game`; the memory stick it was made with in
+`stick`); an app save state is the same bytes, so a scene's `state` can stand in for a slot's file (save a state in a
+slot, put the scene's `state` in its place, load the slot).
+
+| Scene | Game: where | Expect |
+| --- | --- | --- |
+| dj2-gp | Death Jr. II: playing, the first level | much faster (2.5x less emulation thread on the Mac) |
+| dj2-char | Death Jr. II: Choose Your Character | much faster |
+| sr-play | Sonic Rivals: the first stage | much faster |
+| ahr-gp | Activision Hits Remixed: Atlantis, playing | much faster |
+| ahr-room | Activision Hits Remixed: the game-select room | much faster |
+| gos-menu | God of War: Ghost of Sparta: the main menu | faster (a third less) |
+| nfsmw-race | Need for Speed Most Wanted 5-1-0: a race | about 10% |
+| nfsmw-profile | Need for Speed Most Wanted 5-1-0: the profile screen | about 10% |
+| nfsur-title | Need for Speed Underground Rivals: the title | about 10% |
+| tm-logo | Twisted Metal: Head-On: the Incog Inc logo movie | about 10% |
+| acff-intro, acsl-intro | the Armored Cores' intro movies | a few percent |
+| smba-story | Super Monkey Ball Adventures: the story menu | a few percent (the first session's) |
+| dr3-gp | Disaster Report 3: playing | the first session's (15%) |
+| a2-gp, cmr-gp, acff-gp, acsl-gp, tm-play, dr3-intro | Army of Two, Colin McRae, the Armored Cores and Twisted Metal playing, Disaster Report 3's intro | little |
+
+### Review
+
+An independent read-only review of the whole branch against master (all eight commits) found no change to emulated
+results, and checked exact: the coprocessor branches' counts and stops, the VFPU's helpers against the interpreter,
+the prefixes' tracking, the bitmap's upkeep, the calm calls against what untilNextEvent() reads, the box's formula
+against transform.vert's and the shaders' fetches, the suspect copy's offsets, and the partial upload. Its points:
+- `writable()` didn't keep a page holding code out of the store table, so vramGuard listing a busy VRAM page again
+  could let compiled stores skip write() over code there (master's too; with the bitmap, nothing else put it right
+  later). Fixed: `writable()` checks for code, `unwatched()` just calls it.
+- The box assumes the GPU's weights leave 0 to 1 by its rounding alone; a long sliver could overshoot a fixed margin
+  if a driver's weights strayed. The margin now grows with the reach's length (a 256th). (A shader clamp to the box
+  was its other suggestion; it would change the shaders' push constants for a case no rasterizer makes.)
+- `makeTexturePart()`'s fallback could copy past its buffer for a part outside the texture (no caller makes one):
+  both versions now refuse it.
+- Test gaps, filled: a changed byte in a box, a part refused to a tile it doesn't hold, the edges' boxes, VFPU delay
+  slots in the chained comparison, calm with dispatching held off and with a thread woken for callbacks. That last
+  one failed: a rotation that hands the CPU to such a thread, which finds no callback and goes straight back to its
+  delay, ends with the caller running again, and the delay's end now counted; "the caller keeps the CPU" had called
+  it calm. Fixed: calm means no switch at all (`Kernel::switched`).
+- Comments: the box's wording (a part when decoding whole would wait, not "every row"), history and narration
+  removed, the coprocessor branches' header now opening with what the taken path does.
+- Not done: a packed source copy for parts, so that a suspect part could be kept by its box (Backbone's tiles never
+  reuse one: each has a palette of its own).
+
+The box was then worked out only where a copy in the cache doesn't serve the PRIM as it is: Army of Two's textures are
+in VRAM, and the box of every textured PRIM had cost it 1% more host instructions (its 650,000 mesh vertices a frame
+looked through); now it's the merge's (583.7 against 583.0 M a frame).
+
+A delta review of those fixes and of the box worked out so found no bugs, and checked the boxes' expected rectangles
+by hand and that the old calm rule fails the new test. Its points: a test of vramGuard listing again a busy VRAM page
+that holds code (added: the page stays out of the store table till a change drops the code), a bound in `writable()`
+(added), lines past 120 columns (wrapped). Left: a check of the margin with thin, steep triangles over a long reach,
+and a box whose margin passes 3 texels, which the tests' small boxes can't tell from a fixed 2.05.
+
+### Scratch
+
+`~/phobos-work/scratch/cpu-speed2`: `build.sh` (the bench runners from a revision or the worktree, at most four
+compiles at once; `patches/`: counters, clock, states, the counting build's `stats-patch2.py`, `r2t-patch.py` and
+`why-patch.py` for the finishes' causes), `run.sh`, `bench2.sh` and `benchsum2.py`, `part79table.py` (the rounds:
+`bench2/final1.tsv`, `final3.tsv`, `iso.tsv`), `hashcmp.sh` (`hash/`), `sample.sh`, `prof2.sh` and `sampletop.py`
+(`prof/*-merged-vkf.top`), `stats-all.sh` (`stats/*-merged-vkf.txt`), `breakdown.py`, `tests1.sh` (a filtered copy of
+tests/psp), `lib1.sh` and `lib/` (the library subset), `scenes/` (the states), `commit/` (these notes' drafts).
+
 ## Part 80: the savedata trace — After Burner's dates, the list modes' automatic answer (Brandish, 7th Dragon 2020)
 
 On branch `cursor/psp-savedata2-2b67`, begun on `cursor/psp-colinsave-2b67` (part 77) after its merge of master. Parts
@@ -10684,12 +11030,13 @@ program changes for sceSas) and audio/blocking/vaudio, pspsdk's pspatrac3.h and 
 own code, traced with a scratch runner and disassembled from their memory. No code copied or translated; JPCSP not
 read.
 
-**Save states go to StateVersion 31, and 27 to 30 are skipped.** Those four are other open branches' layouts, and
-this one's loader refuses them (as it refuses 32, past it), so no state of theirs is ever read as this layout or this
-layout's as theirs. Whoever lands one of those branches after this one must renumber its layout past 31 (its loader
-then reading 31's states as the layout before it), and update `tests/psp/ares/system.cpp`'s list of refused versions
-(27 to 30, and 32: the one it takes falls out of the list) along with `tests/psp/states.cpp`'s older layouts; one
-landing before this one leaves this branch to do the same the other way round.
+**Save states go to StateVersion 31, and 28 to 30 are skipped.** 27 is the fonts' layout (part 87), which landed
+first: a 27 state loads as the layout before this one, sceVaudio holding nothing (`tests/psp/states.cpp` loads one).
+28 to 30 are other open branches' layouts, and this one's loader refuses them (as it refuses 32, past it), so no
+state of theirs is ever read as this layout or this layout's as theirs. Whoever lands one of those branches after
+this one must renumber its layout past 31 (its loader then reading 31's states as the layout before it), and update
+`tests/psp/ares/system.cpp`'s list of refused versions (28 to 30, and 32: the one it takes falls out of the list)
+along with `tests/psp/states.cpp`'s older layouts.
 
 ### Angus Hates Aliens: the contexts
 
@@ -10812,7 +11159,8 @@ An independent review of the branch (merged with master, `649a88137`) found five
 - **Low-level IDs refused every call needing a file** with 0x80630031, unrecorded ones too (sceAtracGetInternalErrorInfo
   was NO_DATA): the seven recorded calls alone look at the context's state now, the rest answering as before (above).
   Corpse Party (20 seconds from the tester's state with `--wav`): its sound byte for byte master's runner's.
-- **27 to 30 skipped**: said above, in the handoff, beside StateVersion in `system.cpp` and in the test that refuses them.
+- **28 to 30 skipped** (27 the fonts', loaded): said above, in the handoff, beside StateVersion in `system.cpp` and in the
+  test that refuses them.
 
 These fixes had an independent review in turn (PASS, one Low and two Nits, taken): Battle vs. Chess's format, which
 the first agent's trace shows (below); the forced states' test given the two recorded calls it lacked
@@ -10837,3 +11185,527 @@ Angus Hates Aliens past NEW GAME from the tester's title state (the loading scre
 Angus's line at 1000) and from boot (`s1.txt`: the first level at 2400, as before); Battle vs. Chess as before (the
 tester's script, 7200 frames: every frame checked identical to the previous run's, and its sound, ten-second loudness by
 loudness, the same); Corpse Party's sound as master's (above).
+
+## Part 83: Vulkan's waits for its own pixels gone — moves across row widths, palettes on the GPU, copies kept
+
+On branch `cursor/psp-vulkan-speed-2b67`, on master (`1d9308714`, #228). Parts 81 and 82 are other branches'. Clean
+room: no PPSSPP code read (its GPU backend not opened at all), JPCSP not read; the PSP's behaviour relied on is the
+GE's own as the software renderer has it (pixel.cpp's blend and dither, texture.cpp's palette index, raster.cpp's
+whole-number depth). Save states are unchanged (StateVersion 26): everything here is the renderer's, which no state
+keeps. The software renderer is untouched: its pictures, VRAM and state are master's.
+
+**The problem.** On the owner's RP6 (Snapdragon 8 Gen 2) at 1x, Vulkan (fast) was slower than Software in the slowest
+games: Armored Core: Formula Front 52.8 -> 45.9 frames a second, Silent Line Portable 54.5 -> 44.4, Colin McRae Rally
+2005 Plus 53.3 -> 41.1 (accurate as slow), where PPSSPP holds about 60 in all 22 of them. The deep-play reports had
+Brandish at 15.9 in Vulkan against 116 in Software, Vulkan much slower in 8 of batch 00's 27 games, Brave Story's frames
+all read back to the CPU, Death Jr. II's glow and Castlevania: The Dracula X Chronicles' background blur missing in
+Vulkan, and Daxter's shadow and Colin McRae's terrain shadows differing between the renderers.
+
+**How it was measured.** The Mac (M1, MoltenVK 1.4.2), the headless runner built at -O3 with thin LTO as Android builds
+it, `--late-frames` (frames shown without waiting, as on Android's window) and 7 drawing threads, scenes kept as states
+in each game's slow part. A scratch build counted, a frame: draws, render passes, pipeline and set binds, pushes,
+barriers, vertices, staging bytes; fills, texture uploads, copies, moves and read backs with their bytes; each finish's
+stack (who made the renderer wait for its pixels: the CPU's load, a texture it couldn't take, a frame buffer it couldn't
+move, the display); and the emulation thread's time in the GE's lists, in recording, in submitting and in waiting. The
+Mac was shared with three other agents (load 10 to 27): the numbers below are means of two rounds taking turns, base
+and branch, and move 10-15% between rounds; the process's CPU time a frame moves less.
+
+**What made Vulkan slow** (fast mode unless said; the counts a frame):
+- **Finishes for frame buffers drawn at two row widths.** Colin McRae's race draws its 480-pixel 5551 picture's memory
+  as a 256-pixel frame buffer for its effects, and back: a move between targets needed rows of the same bytes, so each
+  turn was a finish, every target read back and filled again (2 finishes, 5 read backs, 3.3 ms waiting). Dirt 2 does
+  the same with a 128-pixel 5551 frame buffer and a 64-pixel 4444 one, Brave Story with 256- and 128-pixel 8888 ones.
+- **Textures Vulkan couldn't take from its frame buffers.** A texture of palette indices over a frame buffer (Death Jr.
+  II, Sonic Rivals and Activision Hits Remixed, one engine, take each strip of the picture through a CLUT32 palette of
+  its own; Brothers in Arms' passes too) was decoded from memory, a finish each: 31 a frame in Death Jr. II and Sonic
+  Rivals, 61 in Activision Hits Remixed, waiting 23 to 41 ms a frame. A 3D PRIM's texture declared 512 rows tall from a
+  272-row picture ran on into other frame buffers' pages (Death Jr. II's bloom), or past VRAM's end (Castlevania's
+  blur at 0x154000), and was refused; Castlevania's strips then drew in software against memory's depth, which isn't
+  the GPU's, and the blur never showed.
+- **Copies** for render to texture, each a render pass ended, a copy and a pass begun: Killzone's menus blur a strip
+  right of the picture with 800 3D quads a frame, each reading one half of it while writing the other, and every quad
+  took its copy again (817 copies, 823 passes a frame); the GPU was the bound (the emulation thread waited on fences
+  and in MoltenVK's encoding).
+- **Fills**: Darkstalkers' CPU writes beside its depth buffer between 2D PRIMs, and each write had the target's depth
+  filled again (90 passes a frame); Brave Story keeps its display list in 24 pieces beside its picture, past the 16
+  ranges kept, which made the target stale, a finish a frame.
+- **What isn't the renderer's.** The Armored Cores' intros are movies: 2 draws and half a texture upload a frame, the
+  emulation thread busy in the movie's polled ring (`sceMpegRingbufferAvailableSize`, `Memory::pointer`) in both
+  renderers alike (82.8 and 83.3 frames a second, Software 90-100 the same day). Army of Two's menu and Dirt 2 are
+  bound by the GE's front end (vertex reading, culling, recording: 37 and 14 ms of GE lists a frame). Accurate mode on
+  MoltenVK, which has no rasterization order, splits every overlapping blended primitive into a draw after a barrier:
+  Colin McRae's race 26,023 draws and 25,824 barriers a frame, 0.7 frames a second (Qualcomm's own driver reads
+  nothing without the order, part 49, so the RP6 never splits).
+- **Pictures**: Death Jr. II blends its bloom over the scene with the GE's dither (ones and twos), which the GPU's own
+  blending never added, and feeds the result back into the next frame's bloom, so it settled 13% darker and the glow
+  was gone (both modes on the M1: accurate mode blends 8888 with the GPU's units there). Daxter's shadow is drawn twice
+  over the floor with "at most": the GE's depths of the two layers are the same whole number, the GPU's floats weren't.
+
+**The changes** (in seven commits, the last the review's points, each with tests that fail without it; the
+textures kept, below, tested with the review's):
+1. **The dither in the GPU's blending** (`draw.frag`'s `TERM`): the PSP dithers the blended color, so the shader adds
+   the dither to the source term it hands the GPU, and subtracts it where the GPU subtracts the term (TERM 3). **Depth
+   as the GE's whole numbers** (`draw.frag`'s `DEPTHS` build, since the review): wherever the depth test or write
+   depends on it the shader writes the interpolated depth rounded down, in 65,536ths, as memory's depths are filled (the
+   same floats; the same 24-bit values on a GPU that rounds to nearest); a shader writing the depth may keep a GPU from
+   testing it before the shader runs, so pipelines that don't use depth take the build without the write. Its cost at
+   1x, measured on the M1 (written by every pipeline then): 0-3%, 2-7% at 4x.
+2. **Moves across row widths** (`movable()`, `intoRows()`, `move()`, `move.frag`): where both targets' pages hold whole
+   rows of each, each starting a row, a move covers whole rows of the target and each pixel takes the source's pixel at
+   its bytes, where they're inside the source's rectangle (else it's left); the moves of one width are the same
+   arithmetic. Not taken where the shader can't give the stencil: per-bit draws would lose the stencil they don't reach.
+3. **Past VRAM's end**: a texture whose rows aren't known (3D) declared past VRAM's end has its rows inside VRAM taken,
+   those past held at the last (the PSP's would be VRAM's first rows), as `holdable()` allows (below). **Depth changes
+   kept** for the next PRIM that tests or writes depth. **Beside, past 16 ranges**: kept all the same, and all filled
+   from memory before the target is next drawn, shown, lent or moved from (not inside memory's notice of the change,
+   where a fill's watching pages again would come in the middle of memory's going through them), as one rectangle
+   where they're many or close together and it reaches none of the target's pixels; past 256, the target is filled
+   afresh (`Target::merged` gone).
+4. **Palettes on the GPU** (`paletteFor()`, `makePalette()`, `draw.frag`'s `INDEXED`): a CLUT16 texture over a 16-bit
+   target or a CLUT32 one over an 8888 target, whose index's bits are the colors' and not the stencil's, is the GPU's
+   copy of the target, each texel's bits taken as the index, the shift, mask and offset applied as `texelFrom()` does,
+   and the entry looked up in a 512x256 picture of palettes on the GPU (a row a palette, found again by the GE's palette
+   hash and bytes, at most 192, set 1's second binding). **Rows not known, running into another frame buffer**: only the
+   rows before its pages are taken (`take()`'s `exact`), and a texture the renderer doesn't hold whose first rows are
+   memory's is decoded only as far as the frame buffer the GPU is drawing (`Renderer::memoryRows()`), not finished for:
+   in fast mode, and in accurate mode where the texels the PRIM may take stop before those rows (`holdable()`), so the
+   rows held are none it takes.
+5. **What a PRIM takes** (`holds()`' `takes`): the GE gives the rectangle of texels a PRIM may take, from its vertices'
+   u and v (2D two texels round them, a sprite's more by 0.6 of its step for the GPU's whole-pixel quads above 1x; 3D
+   triangles' where they're the vertices' own coordinates, scaled and offset as `transform()` maps them, the texels the
+   GPU's filter takes in sixteenths between them, with 2^-13 of the coordinates for the GE's 15-bit fractions; worked
+   out only where the renderer holds the texture), and a copy is copied again only where the target's changes since
+   meet it. **Barriers only before overlapping reads** (accurate mode without rasterization
+   order): a reading primitive waits for a barrier only where it overlaps one drawn into its target since the last.
+6. **Textures kept for the next of their size** (`spareTextures`): a texture let go of, once its runs are done, is
+   taken by the next texture of its width and height, its picture, memory, view and set as they are (a movie made and
+   destroyed them every frame, each a call into the driver's kernel on Android); at most 16 and 32 MiB.
+
+Every change is in both modes but one: rows past those a texture's own frame buffer has (another frame buffer of
+another row width below, VRAM's end, a decode's last rows) are held at the last kept in fast mode wherever the PRIM's
+rows aren't known, and in accurate mode only where its texels stop before them, which is exact (the review's point;
+the PSP's would be the other frame buffer's bytes, at a weight of 0 in the scenes seen). The ideas weighed and not
+taken: a read back a frame late in fast mode (what still finishes is the CPU's own loads of a picture, Death Jr. II's
+conversion of its 8888 frame to the 5650 one it shows and Darkstalkers' stores beside its depth buffer, which need the
+bytes then, and late frames already show without waiting); merging draws, caching pipelines and descriptors and
+batching vertex uploads (already so: draws join while the state stays, pipelines are cached by key, sets by texture,
+and a run's vertices go up in one staging buffer; binds were 0.1-2 per draw in every scene, never the bound).
+
+**Numbers** (the M1, MoltenVK; the final code, 4b2665616, against master, taking turns, two rounds each; frames a
+second, base -> branch; the process's CPU ms a frame; draws, finishes, read backs, copies and render passes a frame; the
+emulation thread's waits for the GPU, ms a frame). The Mac's load was 30 to 130 while they ran, which lowers every
+number and moves single runs by a fifth; the ratios and the counts are what to read. (A round before the review's
+points, at a load near 20: Death Jr. II's woods 9.7 -> 67.8, its character select 21 -> 170, Activision Hits
+Remixed 10 -> 84, Sonic Rivals 14 -> 113, Castlevania 103 -> 354, Darkstalkers 49 -> 122, Brothers in Arms 23 -> 39,
+Killzone 11 -> 20, Colin McRae 43 -> 57, Brave Story 156 -> 216.)
+
+| Scene | fps | CPU ms | Draws | Finishes | Read backs | Copies | Passes | Waits |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Colin McRae Rally 2005 Plus, race | 34.6 -> 56.0 | 21.9 -> 17.3 | 376 | 2 -> 0.01 | 5 -> 0.04 | 3 -> 4.5 | 9 -> 16 | 3.79 -> 0.02 |
+| Death Jr. II, woods | 5.6 -> 46.0 | 124 -> 15.6 | 737 | 31 -> 0.5 | 62 -> 2.5 | 0.5 -> 1.5 | 68 | 43.0 -> 5.7 |
+| Death Jr. II, character select | 10.2 -> 166.3 | 66.0 -> 5.2 | 217 | 30.5 -> 0.01 | 61.5 -> 0.03 | 0.5 -> 1 | 62 | 37.1 -> 0.05 |
+| Activision Hits Remixed, room | 4.2 -> 48.5 | 150 -> 15.9 | 947 | 61 -> 0.01 | 124 -> 0.03 | 1 -> 3 | 129 | 86.4 -> 0.03 |
+| Sonic Rivals, stage | 6.0 -> 66.3 | 106 -> 10.7 | 444 | 31 -> 0.5 | 62.5 -> 2.5 | 0.5 -> 1.5 | 64 | 60.4 -> 1.9 |
+| Brothers in Arms, play | 15.1 -> 23.4 | 42.2 -> 31.3 | 494 | 3.5 -> 0.01 | 12.8 -> 0.04 | 52 -> 56 | 59 | 19.3 -> 0.03 |
+| Killzone, language menu | 10.7 -> 16.6 | 68.9 -> 44.4 | 958 | 0.01 | 0.03 | 817 -> 456 | 823 -> 473 | 0.28 -> 0.11 |
+| Castlevania, stage 1 | 75.4 -> 177.1 | 9.7 -> 4.3 | 67 | 0.5 -> 0.01 | 1.5 -> 0.02 | 0.5 -> 1 | 2 | 1.76 -> 0.03 |
+| Brave Story, title | 86.3 -> 110.1 | 8.8 -> 6.9 | 140 | 1 -> 0.01 | 3 -> 0.03 | 10.5 -> 11 | 12 -> 14 | 2.34 -> 0.02 |
+| Darkstalkers, fight | 38.4 -> 71.1 | 18.7 -> 9.5 | 256 | 1.01 | 2.01 | 0 | 90 -> 10 | 4.79 -> 2.07 |
+| Dirt 2, race | 23.8 -> 29.4 | 30.1 -> 25.3 | 1145 | 2 -> 0.01 | 6 -> 0.04 | 3 | 22 -> 25 | 4.02 -> 0.03 |
+| Brandish, play | 262 -> 262 | 3.3 -> 3.2 | 41 | 0.01 | 0.03 | 1.5 | 4 | 0.04 -> 0.03 |
+| Daxter, shadow | 139 -> 123 | 6.5 | 90 | 0.01 | 0.02 | 1 | 3 | 0.04 -> 0.02 |
+| Armored Core: Formula Front, intro | 74.0 -> 62.2 | 13.5 -> 14.1 | 2 | 0 | 0.01 | 0 | 0 | 0.01 |
+| Armored Core: Silent Line Portable, intro | 80.3 -> 72.8 | 12.5 -> 13.0 | 2 | 0 | 0.01 | 0 | 0 | 0.01 |
+| Army of Two, main menu | 9.2 -> 8.3 | 78.7 -> 81.8 | 3022 | 0.01 | 0.04 | 81 | 114 | 0.07 |
+
+The last four are the same work on the GPU either way: Daxter's second round was 143 -> 141, and four more rounds of
+Formula Front's intro, taking turns, 31.0, 34.5, 35.5, 36.4 on master and 34.4, 36.1, 36.6, 35.4 on the branch (the
+Mac's load at 130 then), the emulation thread 14.7 and 14.5 ms a frame. Accurate mode: Castlevania 58 -> 144, Killzone
+11.7 -> 19.3, Death Jr. II's woods 4.0 -> 10.5 and its character select 8.1 -> 12.1, Sonic Rivals 5.8 -> 11.5,
+Activision Hits Remixed 3.7 -> 5.5 (their palette passes held only where exact: 8 to 16 finishes a frame, from 31 to
+61), Brandish 19.0 -> 18.9 (barriers 875 -> 852 a frame: its tiles overlap), Daxter 94.5 -> 97.3; Colin McRae's race 0.7
+either way before the review (25,824 -> 25,644 barriers a frame: without rasterization order MoltenVK splits its 3D
+blends). Death Jr. II's woods still finish every other frame: the game converts its 8888 picture to the 5650 one it
+shows with the CPU, which reads it (the frame shown is never a target's); Darkstalkers' one a frame is the CPU's stores
+beside its depth buffer.
+
+**Pictures**, the mean channel difference from Software at a frame (and master's): Death Jr. II's woods 1.70 in fast
+mode (8.8) and 0.85 in accurate (7.66), its glow there; Death Jr. II's character select 0.62 fast (1.88) and 0.05
+accurate (the same); Killzone 0.28 in both modes (fast 1.19, accurate the same). With the final code: Castlevania 0.155
+in accurate mode and 0.163 in fast (4.05 and 4.06: the blur drawn); Daxter 0.100 in both (0.147); Colin McRae's race
+0.89 accurate and 1.14 fast (1.19 and 1.44). Colin McRae's terrain shadows aren't changed: they take depth from frame
+buffers of another row width, and the GPU's depth isn't read back or moved (docs/psp-gpu-renderers.md, "Owned until
+needed").
+
+**The review.** An independent read-only review of the branch (to 50a9510a1) found no blocker and three major points,
+all taken (04e5d1c8a): accurate mode held a texture's rows past its frame buffer wherever the PRIM's rows weren't
+known (now only where its texels stop before them, `holdable()`); the texels a PRIM takes missed some for 3D sprites
+and lines and for 2D sprites above 1x (3D's tight bound now for triangles only, with the GE's 15-bit fractions;
+sprites widened by 0.6 of their step); and a full list of beside ranges was filled inside memory's notice of a change,
+where a fill's watching pages again comes in the middle of memory's going through them (now kept, and filled at the
+target's next use). Its minor points, taken too: a barrier handed on past a draw left out for want of its pipeline;
+kept ranges filled as one rectangle only where they're many or close; moves across row widths with their own flag,
+not turning the shader's stencil off for uploads; the depth write its own shader build, and depths in 65,536ths from
+the shader and from memory's fills alike (D32 and D24); fast mode's meshes' boxes stated; tests of palettes found
+again, of barriers counted, of textures kept, of rows held only where exact; comments and these docs. Death Jr. II's,
+Sonic Rivals' and Activision Hits Remixed's palette passes reach the frame buffer below by their corners (at a
+weight of 0), so in accurate mode they finish again since: 8 to 16 a frame, against 31 to 61 on master.
+
+**Checks.** On the final code (4b2665616): `tests/psp/run-tests.sh` 486 groups, 0 failures (sanitized; 11 new GPU
+groups, each failing without its change, among them the held rows' paths, checked by taking them out: 12 failures);
+`tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. CI on PR
+#234 green: the PSP system tests (GCC, Mesa's lavapipe), the Allegrex tests, and the Android, Windows, macOS and Linux
+builds. Its first run had failed one check that lavapipe's own blending rounds differently (the dithered blends' channels
+the same, 81% there against the M1's 87%; the check is at 75% now, the far ones still under 1%).
+
+**Library** (the report's way, `lib.sh` with `--renderer Vulkan`: accurate mode, 3600 frames each, one at a time,
+master's runner and the final code's, each with only the bench patch): all 266 games finish in both, none missing a
+function. 214 are the same at all four captures (frames 60, 300, 1200 and 3600); 32 differ by a mean of 1 level or
+less; 20 by more. Those 20 were run again in Software: where the branch's capture is nearer Software's, it's the
+dither and depth fixes (Gitaroo Man Lives!, Warriors of the Lost Empire, Tenchu: Shadow Assassins, Samurai Dou
+Portable, Grand Theft Auto: Vice City Stories, Metal Gear Solid: Portable Ops Plus, MX vs. ATV Untamed, PixelJunk
+Monsters, LocoRoco, Shepherd's Crossing: the branch's the same as Software's, or nearly); where master's is nearer,
+the captures show the same movie or demo a few frames apart (IL-2 Sturmovik's and Mega Man Maverick Hunter X's
+intros, Formula Front International's credits, Tales of the World: Radiant Mythology 2's and Persona 2's movies,
+Brothers in Arms' logo fading, Mega Man Powered Up's demo), as runs of one runner do: the clock follows the host's,
+and the branch's run had the Mac at a load of 100 to 240, master's and Software's near 30. None shows anything
+drawn worse. (Run time 8,873 s for master, 10,088 s for the branch under that load.)
+
+**With part 79** (#233, merged in after it reached master): a texture of palette indices over a frame buffer is the
+GPU's first (`holds()`, the palette looked up there), so Backbone's glow decodes nothing in fast mode. One the GPU
+doesn't hold is decoded from memory: rows running on into a frame buffer it has drawn since its last finish only as
+far as that (`memoryRows()`), which waits for nothing and stays cached for the next PRIM through the same palette; and
+part 79's box, as a part, only where decoding the rows asked for would still wait: rows the GPU drew itself (the first
+tile after the picture, without the palettes), or rows accurate mode won't hold at the last because the PRIM takes
+them (the bottom tiles, reaching the 2D pass's buffer at the picture's row 272). The box does more in accurate mode
+than its parts: a cached copy whose pages were written since serves a tile whose box's bytes are as they were, so the
+six tiles above each column's bottom one take the copy, which this branch alone decoded again (textures decoded a
+frame, the branch alone against the merge, 200 frames: Death Jr. II's woods 78 -> 57 and its character select 75 ->
+33, Sonic Rivals 73 -> 45, Activision Hits Remixed 155 -> 75; the same finishes). On Death Jr. II's woods (decodes
+logged) parts have nothing more to save: without the palettes, the first tile through each of the three palettes a
+frame is at the left edge, its box not known (it would repeat round), and the rows it decodes serve every later tile;
+in accurate mode each column's bottom tile finds the copy changed by the 2D pass and decodes it whole after the
+finish, a copy the next column's first tile (no box either) and the six below it take. So neither a part wherever the
+box is far smaller than the rows (with a budget against the whole: it never applied) nor asking whether the rows wait
+before a cached copy's bytes are waited for (5.6 parts a frame, 52.6 whole decodes down to 52.2) was taken. Part
+79's two glow tests assert each of these now. On the merge: `tests/psp` 489 groups, `tests/allegrex` 60, both 0
+failures, `tests/psp/ares` 318 checks, 0 failed; against this branch alone, the same machine at the end of Death Jr.
+II's woods and character select, Sonic Rivals and Activision Hits Remixed in Software (every frame's picture and
+VRAM too) and in accurate mode, and of those and Colin McRae's race in fast mode.
+
+**For the RP6** (Adreno may differ from MoltenVK): the Armored Cores' intros are the same in both renderers on the
+M1, bound by the movie's polling; what Vulkan adds there each frame is half a texture upload (456 KB), a texture made
+(now kept from the last), a present and a shot of the frame, which a tile-based GPU and Android's driver may weigh
+differently. Worth measuring there: the two Armored Cores' intros and first menus, Colin McRae's race, Death Jr. II's
+woods and character select, Sonic Rivals' stage, Activision Hits Remixed's room, Brothers in Arms, Killzone's menus,
+Castlevania's first stage, Brave Story's title and Darkstalkers, each in Software and Vulkan (fast), with the GPU's
+counters where the app can show them.
+
+## Part 84: savedata's patterns — Dissidia's Load Game, Final Fantasy Type-0's list; Disgaea Infinite's New was Continue
+
+On branch `cursor/psp-savedata3-2b67`, on master (1d9308714, #228: part 80). Parts 81 to 83 are other branches'.
+Sources: the games themselves, traced with `--trace-savedata`; Disgaea Infinite's own code, read from a dump of its RAM
+with LLVM's MIPS disassembler, and its variables and system calls followed frame by frame with a scratch runner (neither
+in the repository); pspsdk's psputility_savedata.h; pspautotests' utility/savedata/idlist (the list mode's "A?C", and
+an open of a path holding '?'); PPSSPP read only as a description of the PSP (its notes on what the list dialogs show).
+JPCSP was not read. Save states are unchanged (StateVersion 26): nothing gains state.
+
+**The problems** (the play-testers' deep-play batch 02, suspected bugs 1, 3 and 7): both Dissidias' Load Game went back
+to the title with a save on the stick; Disgaea Infinite's New faded out and back to its title for good on an empty
+stick, writing nothing; Final Fantasy Type-0's list request for "GAMEDATA*" was answered with its SYSTEMDATA.
+
+**Dissidia Final Fantasy (ULUS10437) and Dissidia 012 (ULUS10566).** Load Game is a list load (mode 4) of GameData00 to
+GameData19, focus 3 (the latest), whose save name is "GameData*", left in the parameters from the list request (mode
+11) the game makes just before, which takes it as a pattern. The kernel took a list's names only for a request naming
+no save ("" or "<>"; part 80), so it looked for a save named "GameData*" (a folder ULUS10437GameData*), found none,
+answered NO_DATA (0x80110307), and the game went quietly back to its title. A PSP's list dialog shows the list's saves
+there; the request's save name only names the save focus 0 picks (pspsdk's FOCUS_UNKNOWN; PPSSPP's notes take it as
+the request's save), so its player sees GameData00, the latest. **The fix** (utility.cpp, `savePattern()`): a save's
+name holding '*' or '?' is a pattern, which names no save a memory stick can hold (FAT takes neither character in a
+name, and idlist's open of a file in a folder whose name held '?' was 0x80010016, invalid, where one not there is
+0x80010002). In a list's load or save from a list (one with a first name) it names no save of its own, as "<>"
+doesn't (`savedataMode()`, the trace, and the dialog's saves, `dialogSaves()`), so the automatic answer
+(`savedataUnshown()`) takes the save the dialog focuses, GameData00, writes its name back and loads it. **Now**: Load
+Game loads GameData00 (286,328 bytes; 012's 257,224) and
+each game goes on where the play-tester saved, before its opening: Dissidia plays its opening movie and then its
+tutorial's pages, 012 its opening ("Two divine powers locked in an endless struggle").
+
+**The same mistake elsewhere.** Every mode that takes a save's name or a list of them was looked through.
+- A list's load naming a save of its own took that save before the list (chosen in part 80), though on a PSP the name
+  only says which save focus 0 picks. Disgaea Infinite's Continue is one (save "DIP000", its 32 slots, focus 0): with
+  a save in any slot but DIP000 (one a player made through the app's dialog, say) it found no data. Every list load
+  answered with no front end is now answered as its dialog would be: the save it focuses among those shown (the list's
+  saves there, and the request's own where it names one that's there, `dialogSaves()`' choice since part 73), focus 0
+  taking the request's own. In the game: a save Disgaea made (Start in its story) moved from DIP000 to DIP003,
+  Continue loads DIP003 and the story goes on where it was saved, where master's runner said no data and went back
+  to the title; left in DIP000, it loads as before.
+- A list's save naming a pattern saved under it, making a folder no PSP's stick can hold; it now takes the list's
+  first name, as one naming none does. One naming its own save takes it, as before (chosen in part 80: where the
+  automatic answer's loads naming it find it).
+- A pattern in a list was a save's name too: the app's dialog showed it, as new data to save to. It's now no save:
+  shown in no dialog (nor among the folders "<>" stands for), taken by no answer, and a list save led by one is
+  refused, as one led by a name that isn't plain is.
+- With no list (none, or no first name) a pattern is taken as the save's name, which no save has: a list load finds
+  none and a list save is refused. Chosen: taken as none, it would be the game's folder alone, a save the game may
+  keep there of its own (Dissidia's list requests all have their list).
+- A save under a pattern (the autosave, save, make and write modes) is refused as a name that isn't plain is, nothing
+  made (chosen: no recording saves under one; the write modes, 17 and 18, are so refused before they'd be NO_DATA for
+  want of a save); a load, read, files request or delete of one is answered as before (no PSP's stick holds such a
+  save). The app's dialog asks nothing for a save whose name is taken so (a single save's, or a list save's with no
+  list), refusing it at once as without the dialog; a load or delete of one shows its notice that there's nothing.
+- A list delete answered with no front end deletes the save it names, as before, so one naming a pattern deletes
+  nothing (chosen: an unshown delete takes no save of the list's); the app's dialog shows the list's saves there.
+- The sizes mode measures msData's save, whose names Dissidia gives resolved ("GameData00"); the trace says whether
+  the save a list request takes is there, the list's first where its save name is a pattern, as savedataMode() takes it.
+
+Chosen: a list's names are shown whatever the request's pattern takes. PPSSPP's notes show the list's names alone;
+whether a PSP also narrows them to the pattern isn't recorded anywhere here, and all twenty of Dissidia's names match
+"GameData*", so either reading loads its GameData00.
+
+**Final Fantasy Type-0 (NPJH50443).** Its list request (mode 11, most 1) for "GAMEDATA*" listed SYSTEMDATA: the list
+mode listed every folder whose name starts with the game's, whatever the save's name. idlist's "A?C" listed ABC, its
+one save, so the save's name is a pattern, not a save's name; that a PSP leaves out the saves the pattern doesn't take
+isn't recorded (that test made no other) and is chosen, as the games mean their patterns (Type-0 asks for "GAMEDATA*"
+beside its SYSTEMDATA). **The fix** (`savedataList()`, `patternTakes()`): the game's saves whose own names the pattern
+takes whole, '*' any run of characters (none too), '?' any one, any other character itself, as it's given (chosen: a
+FAT stick keeps names' case, and a game names its own folders), so a name with neither lists that save alone
+(chosen). An empty name and "<>" still list every save of the game's (chosen, as before: no recording lists with
+either, and neither names a save anywhere else). **Now**: listed 0 at frame 744 where master listed SYSTEMDATA; the
+game goes on as before (every frame the same but one of its opening movie's, by timing), its Load Game still told
+there's no save.
+
+**Disgaea Infinite (ULUS10522): no emulator bug; the play-tester's New was Continue.** The title's menu is New,
+Continue, Option, Extra, and its cursor starts on Continue: the cursor's index, a byte at 0x08a22afc, is 1 in the
+game's own data from the first frame, and nothing but the menu's Up and Down changes it (its writers, in the title's
+code from 0x08861464, besides one setting an index out of range to 0); the arrow points at its item from the upper
+left, so on Continue it sits by New. Pressing Down from there reaches Option, which the play-tester took for Down
+skipping Continue. Continue's case (index 1 of the title's switch at 0x08861428) is the game's load: a list load of
+its play slots DIP000 to DIP031 (save "DIP000", focus 0), then, loaded, an autoload. On an empty stick it got NO_DATA
+and the game went back to its title. Its step for that load (0x088733b8) and the flow after it (0x0886f774) go on only
+with 0: cancelled (1) and every error alike lead back to the title, so whether a PSP's dialog closes its "no data"
+notice as NO_DATA (as PPSSPP's notes have it, and the kernel answers) or as backed out, the game returns to its title
+the same, and it reads nothing else of the answer.
+New (index 0, Up once from where the cursor starts) asks for no save at all: on an empty stick the story begins ("What
+happens to me if I... die?") with master's runner as with this branch's, and the prologue plays to frame 12,000 with no
+savedata request. The system data its boot message promises isn't written at boot either: the boot's step lists DIS000
+(its system data, by the message just before), finds none, and ends; the game's only saving requests are its save's,
+which Cross alone through the prologue doesn't make. Start in its story does: a list save to DIP000 (naming it, focus
+0), then DIS000 autosaved (4,700 bytes), which the next boot lists and autoloads. Nothing here changed for New or for
+Continue on an empty stick; the list mode's fix narrows the boot's list of "DIS000" to DIS000 (master listed every save
+of the game's beside it).
+
+**Tests.** `utility savedata patterns (Dissidia, Final Fantasy Type-0)`: the list mode's patterns ("GameData*" the
+GameData saves and not the others, Type-0's "GAMEDATA*" none beside SYSTEMDATA, "A?C" ABC and not ABCD, "A*C*", "*0?"
+after a false start, "gamedata*" none (case as given), a name alone, "?" none, the most asked for; "", "<>" and "*"
+every save, the game's own folder too); Dissidia's list loads ("GameData*" and its 20 slots: focus 3 the latest, 4 the
+oldest, 0 the first there; with none there NO_DATA, the pattern left); a list save naming a pattern to the list's
+first name; with no list (none, or no first name), a list load naming one finding none beside the game's own folder,
+and a list save refused; a pattern in a list passed over, and a save to a list led by one refused; saves under a
+pattern refused in modes 1, 3, 13, 14, 17 and 18, nothing made, and loads, reads, files and deletes of one finding
+none; three trace lines, exact. `utility savedata lists answered with no front end`: a list load naming its own save
+takes it where focus 0 picks it and it's there, else the first there, the last with focus 2 though its own is there,
+and NO_DATA with none there, its name left (Disgaea's Continue on an empty stick). `dialogs front end: lists naming a
+pattern (Dissidia)`: the dialog of a list load naming "GameData*" shows the list's saves there, the latest focused,
+the player's choice loaded and written back; a pattern in a list shown neither in a load's dialog nor in a save's; a
+list delete naming one shows the list's saves; with no list, the load's dialog shows nothing (the game's own folder
+there), and a single save or a list save naming one is refused at once, nothing asked or made; "<>" in a list leaves
+out a host folder of the game's whose name holds a pattern. The matcher also agreed with a plain recursive one over
+every pattern of up to five of "ab*?" and every name of up to five of "ab" (85,995 pairs; scratch).
+
+**The games #228 fixed, again** (with this branch's runner and master's, each run on its own copy of the sticks
+part 80 used): After Burner's story, from its mid-story state, ends with its list save to 0000 and goes to its MAIN
+MENU, and its next boot autoloads 0000; Brandish saves to an empty stick (three list saves to 0001), then loads it from
+the title and in play; 7th Dragon's Option save writes its system data, and its LOAD GAME loads DATA03; Colin McRae's
+first boot autosaves (OPTIONS.DAT, 228,760 bytes) and the second autoloads it, reaching its main menu. Every request
+and answer traced, every file left and every capture is the same with both runners, but 7th Dragon's capture after its
+save, which two runs minutes apart gave differing in a band at its top and two made at once gave the same, one with
+each runner (the game reads the clock: part 80).
+
+**Checks.** `tests/psp/run-tests.sh` 477 groups, 0 failures (master's 475 and the two new);
+`tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. Built against
+master's kernel, the new and changed tests fail and nothing else does: their three groups (the list mode's patterns;
+Dissidia's loads; the saves under a pattern, whose folders master made; the list loads naming their save; a pattern in
+a list shown by the dialog). The games with this branch's runner and `--trace-savedata`, each run on its
+own copy of the play-testers' sticks: Dissidia's and 012's Load Game (Cross at 2100) load GameData00 at 2161 and play
+on to frame 6000; Type-0's boot (Circle at 700) lists nothing for "GAMEDATA*" at 744; Disgaea Infinite's Cross on its
+title from where the cursor starts gets NO_DATA at 1549 and the title again, as with master's runner, and New (Up,
+then Cross) starts its story; with a save it made (Start in its story) in DIP000, or moved to DIP003, the same Cross
+loads it at 1549 and the story resumes (master's runner: no data for DIP003, and the title).
+
+**The review's points** (an independent read-only review of the first draft, diff 47849322…; it reran the PSP tests,
+477 groups, none failing, and checked the runs and the disassembly above), all taken: a single save naming a pattern
+still asked the app's dialog and was refused only once the player confirmed (now refused at once, as is a list save's
+with no list); "case as given" untested (tested now); idlist's "A?C" shows a pattern, not that the saves it doesn't
+take are left out (reworded, that part chosen); the refusal of saves under a pattern unmarked as chosen, and the write
+modes' change from NO_DATA unsaid; "an open of a folder" (of a file in one); a pattern with no list taken as none, and
+so the game's own folder (now taken as a name, which no save has); a comment's wording. Its suggestions: a game run
+with a named list load and a save elsewhere in its list (Disgaea's DIP003, above: done), and host folders whose names
+hold '*' or '?', an older build's, left out of what "<>" stands for (done). Not taken: that a list delete answered with
+no front end and naming no save deletes the game's own folder, which may hold its system data (as before this change,
+and outside it); the list mode's and mode 7's lists of every save showing such folders (no game makes them now). Its
+delta review of those changes (diff 444ddaf3…) passed them; its notes, taken: the no-list case tested with no list's
+pointer too, the folder "<>" leaves out tested, a comment's wording, and a test's loop over pairs by reference.
+
+**Scratch** (the runs, their stick copies, traces and captures, the sheets, the scratch runner's patch and Disgaea
+Infinite's disassembly; `run.sh` gives each run its own stick, `recheck228.sh` and `final3.sh` are the runs above):
+`~/phobos-work/scratch/savedata3/` on the Mac it was made on, not in the repository.
+
+## Part 87: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces (the memory a glyph is read into)
+
+On branch `cursor/psp-font-b03-2b67`, on master (`b3507c1db`). Parts 81 to 86 are other branches'. Sources: the three
+games themselves (each traced with a scratch runner's system-call trace and thread dumps, and its code read from RAM
+dumps with LLVM's MIPS disassembler; nothing of them is in the repository); pspautotests' font tests (fonttest's calls
+to the program's alloc and free, open's handles closed twice, charinfo) and threads/vpl/try (a VPL refusing 0 bytes);
+PPSSPP read only as a description of the PSP: its issue 5954 (Hammerin' Hero's words run together in PPSSPP, spaced in a
+reporter's pictures of a PSP), and its sceFont.cpp's notes on closing a handle that isn't open and on the memory a
+character's details take (nothing copied or translated). JPCSP was not read. Save states: layout 27 (layout 26 and older
+load, their fonts holding no glyph and no call reading one).
+
+**Jeanne d'Arc (UCUS98700): "Loading..." for good as its first battle loads.** The play-tester's report (batch 03, bug
+1): Sortie on the "Stage 1 A Voice from Heaven" briefing, then "Loading..." forever, animating, and the game's own line
+`Error sceFontClose: 0x80460003` (INVALID_PARAMETER) at that moment. The trace: two of the game's text objects close the
+same font handle, one after the other (the library's second handle, a temporary one; its first, held since boot, holds
+the same font, ltn5); each keeps a handle, closes it and sets it to 0 (one through a count of its own, the other
+whenever it isn't 0), and both held this one. The first close was answered 0, the second refused: the handle wasn't
+open. The game then opened the font again, asked for its details, and from there its main thread called
+sceKernelDelayThread(1000) in a loop forever, its FontListThread asleep. The loop is the game's own lock: each of its
+wrappers of a library call (open, close, and the rest) waits for a byte to be 0 (0x08a788d4), sets it to 1, calls the
+library, and sets it back to 0 only if the call returned 0; any other answer prints the error and returns with the byte
+still 1, so the next call into the library waits for it forever. **What a PSP does**: the game loads its battles on a
+PSP, so a PSP's sceFontClose answers 0 for a handle closed already (pspautotests' open test closes two handles twice
+each with no crash recorded, but not what the closes return; PPSSPP's sceFont answers 0 for a font that isn't open). A
+handle that's none of a library's, or one of a library done with, is still refused (INVALID_PARAMETER: chosen, nothing
+shows it). **The change** (`sceFontClose()`): a library's handle that's closed already closes again, doing nothing, and
+returns 0; one never opened is answered the same (chosen: nothing shows it).
+
+**Final Fantasy III (NPUH10125): none of its own text drawn** (batch 02, bug 2). The game keeps its three fonts (from
+its files: 108,252, 20,872 and 112,892 bytes) in VRAM, at 0x041e5900, 0x041e0740 and 0x041c4e40, and opens them with
+sceFontOpenUserMemory. The HLE copied a font in memory only from RAM: each open was refused as no PGF (INVALID_DATA),
+the game kept 0 for its handles, and it drew every character with handle 0 (sceFontGetCharGlyphImage_Clip, refused:
+INVALID_PARAMETER), leaving every window empty. A PSP draws its text, so its library reads the font where the program
+has it, VRAM included. **The change** (`fontMemory()`): a font in memory is read from RAM, VRAM (any of its four copies,
+to the end of the copy it starts in) or the scratchpad, as far as that memory goes, 8 MiB at most as before; a state
+reads it again from there.
+
+**Hammerin' Hero (ULUS10392): its words run together** (batch 03, bug 3: "Startthegamefromthebeginning.", "I don't
+havetime tobeplaying with you,Boy."). The game opens a font of its own from memory ("Kick Assinger", 20 points at 72
+dots an inch), keeps each character's sceFontGetCharInfo and picture, and spaces a line by a rule of its own (its
+function at 0x08917e38): a character advances by its details' advance (sfp26AdvanceH, in 64ths of a pixel); a space (a
+code whose low byte is 0x20) by a quarter of that; and when the details are refused, by a quarter of 18 pixels (its
+text's width, which the PSP's button symbols it draws take whole). Its space's advance is 444, 6.9 pixels, so 1.7: words
+run together, as in PPSSPP before (its issue 5954), and on a PSP they don't: the reporter's pictures of one show them
+spaced. So a PSP refuses the space's details, and the space is 4.5 pixels. **Why a PSP refuses them**: a PSP's libfont
+reads each glyph into memory it asks the program's alloc for (pspautotests' fonttest: drawing jpn0's 'H' asked for 71
+bytes and then 210, its record of 79 bytes less the 8 that lead it (the fixed fields' 64 bits: 14 + 7 + 7 + 7 + 7 + 6 +
+7 + 9) and its picture of 14 by 15, given back after the font's tables and before the library's own blocks) and asks for
+blocks of 0 bytes without passing over them (fonttest: two, a revision 2 font's empty lists of ranges, as it opened); a
+space's picture is 0 by 0. Hammerin' Hero's alloc is sceKernelTryAllocateVpl on a VPL of 16 KiB, which a PSP refuses 0
+bytes (pspautotests' vpl/try: "0 bytes: Failed (800201B7)"); its alloc then gives nothing, and the call fails. Jeanne
+d'Arc's alloc gives 4 bytes for 0 (its own rule), so its spaces are details like any. PPSSPP's sceFont models the same
+(a character's details take its picture, width times height, of the program's alloc; none given: OUT_OF_MEMORY). A
+scratch build that refused the details of every character with no pixels showed Hammerin' Hero's text spaced first; the
+model below does it as the PSP does. **The change** (`fontCharacter()`, a library call of a kind of its own,
+`FontCall::Glyph`): a character's details and its picture (sceFontGetCharInfo, sceFontGetCharGlyphImage and its _Clip)
+read its glyph into two blocks of the program's first, its record past the 8 bytes that lead it and then its picture, a
+byte a pixel. A block the program's alloc doesn't give fails the call, whatever its size. Chosen, as nothing shows them:
+the failure is OUT_OF_MEMORY (0x80460001, newlib's for an alloc that gives nothing), with nothing written and what was
+given given back, the font then holding no glyph; each font holds the glyph it last read (its handles sharing it), and
+reading another gives those two back first, in the same order as closing gives them (the least memory at once); the one
+it holds asks for nothing, nor does a code with no glyph to read (below the font's first; one it hasn't got reads its
+alternative's); a library's cache (its parameters' third word) changes nothing (fonttest's had none, nor have Hammerin'
+Hero's and Jeanne d'Arc's: the check below lists the others'); and a read whose font closes meanwhile, on another
+thread, gives its blocks back and fails, INVALID_PARAMETER. Closing a font's last handle gives back its tables, then its
+glyph's record and picture (fonttest's order), and so does sceFontDoneLib, before the library's own; sceFontFlush gives
+the glyph back (chosen, by its name; PPSSPP's flush does the same), and the next one is read afresh. What's in the two
+blocks isn't written (no game reads them: chosen, as for the handles' data). Not changed, as nothing shows what they
+take: a shadow's functions and a picture's size (sceFontGetCharImageRect) read no glyph into memory, and an open still
+takes a 0-byte block alloc didn't give as given (part 23's choice; a game whose alloc refuses 0 bytes and opens a system
+font a piece at a time would show it). With no alloc or free to call, with no thread, from an interrupt handler or from
+a thread already in a library function, nothing is asked for, as before.
+
+**Tests** (`tests/psp/font.cpp`, six groups more; `tests/psp/states.cpp`). `fonts closed twice`: a handle closed twice
+gives 0 both times and nothing more back, its font still loaded for the handle open (its details as before) and opened
+again into the same handle; the last handle closed twice gives the tables back once; a handle never opened closes the
+same, nothing given back; handles of no library (0, a stray number, between two handles, the library's own address, past
+its count) and one of a library done with refused. `fonts in VRAM`: a font where Final Fantasy III keeps its first
+(0x041e5900), and through VRAM's uncached view and third copy, opened and measured; one at VRAM's very end opened with a
+length of -1, read to the end and no further, and 2 KiB there holding no font (INVALID_DATA); one in the scratchpad;
+nothing behind the address, INVALID_DATA; the machine's state round trips, the font read again from VRAM. `fonts glyph
+memory` (both engines): 'A' asks for its record past 8 bytes and its 16-by-17 picture (sizes from the record as the font
+maker makes it), held: its details again and its picture ask for nothing; 'B' drawn clipped to its second and third
+columns (those two drawn, the rest not) gives the 'A''s two back (record, then picture) and asks for its own; a code
+below the first (zeros), a shadow's details and picture and a picture's size ask for nothing; 'C', which the font hasn't
+got, reads the '_'; the space asks for a picture of 0 bytes (the heap gives a block, and its details come); from no
+thread the answer is the same and nothing is asked for; sceFontFlush gives the held glyph back, again nothing; closing
+gives the tables, then the glyph's record and picture; sceFontDoneLib a font's tables, its glyph's two, then the
+library's four. `fonts glyph memory refused` (both engines): Hammerin' Hero's alloc and free, a VPL's: the space's
+record given, its 0-byte picture refused (the kernel's VPL as pspautotests recorded, 0x800201B7), the call OUT_OF_MEMORY
+with its details left as they were and its record given back, its picture refused the same, the letters' details as
+ever, and every block back in the VPL once the library's done with. `fonts glyph memory meanwhile`: a read on one
+thread, its alloc a VPL's that waits, while another thread closes the font (the read fails, INVALID_PARAMETER, its
+blocks given back), reads another glyph of it (the later to end holds its glyph, the other's given back), is done with
+the library, or ends the reading thread (its record stays given); FreeVpl refuses no block (none given back twice), and
+the VPL ends empty but for the ended thread's record. `fonts glyph states`: a machine saved while its alloc waits part
+way through reading 'A' loads into another and carries on to the same answer and the same calls; a layout 26 state of a
+machine with a font open loads, the font holding no glyph, and saves as layout 27's, and so does one with sceFontNewLib
+part way through (without the call's glyph fields and its font's). `fonts memory`'s second close of a handle is 0 now,
+with nothing given back. `state fields` changes a font's held glyph and its blocks and each field of a call made one
+reading a glyph, and refuses a glyph held in one block, none held in two, a glyph the font hasn't got, a font being
+opened holding one, and a call reading one that asks for three blocks, asks a picture's size, reads a glyph its font
+hasn't got, reads one of no font or of a font not handed out yet, has somewhere for an error, or answers where nothing
+is.
+
+**Checks.** `tests/psp/run-tests.sh` 484 groups, 0 failures (both sanitizers; 478 before); `tests/allegrex/run-tests.sh`
+60 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed (each on the review's fixes too; merged with
+master's #234, 495 groups, its eleven new among them, and 318 checks, none failing). CI on the merge (1d22b81c2) is all
+green: the PSP system tests with GCC, the Allegrex tests, and the Android, Linux, Windows and macOS builds. The repros,
+each with a runner built from the branch (and master's, `b3507c1db`, for before), on an empty stick or a copy of the
+play-tester's: Jeanne d'Arc from its briefing state with Cross (`sortie.txt`), its battle map at frame 300 and the
+Combat tutorial from 600 to 2400, no error line (master: "Loading..." to the end, the error at 154); Hammerin' Hero's
+`t1.txt` from boot, "Start the game from the beginning." (frame 1320), "Start the game on this setting?" (1800) and "I
+don't have time to be playing with you, Boy." (3000), its words spaced; Final Fantasy III's `script.txt` from boot, the
+name screen's text (4100), the battle's command and party windows (6000) and its dialogue (8500). Final Fantasy III's
+own state from the play-tester (frame 9400) keeps its empty text: it was saved after the game's three opens had failed,
+with 0 for its handles.
+
+**The regression check.** The play-testers' other sceFont games, master's runner (with the scratch trace, which counted
+each game's calls into the library) against the branch's, each on its own stick: Growlanser IV from its state in play
+(`play.txt`, 1800 frames: its dialogue, 9 characters' details and pictures read) and in its field menu (`menu.txt`, 11),
+and 21 games from boot, 2400 frames with no buttons pressed, PNGs at frames 600, 1200, 1800 and 2400: Ace Combat X (198
+characters' details and pictures), Ace Combat: Joint Assault (516), Archer Maclean's Mercury (a font opened, none read),
+Battle vs. Chess (168 details and 84 clipped pictures, of six fonts its files hold), both BlazBlues (23 and 26), Crush
+(811 details of a font in its memory), Darkstalkers Chronicle (a font opened), Disaster Report 3 (28, a font in its
+memory), Cars, both Dissidias (a font opened each), both Dragonball Z Shin Budokais (45 details and 362 pictures, 49 and
+730), Ghost in the Shell (256 details, 97 pictures), God Eater 2 (48, a font in its memory), Gran Turismo (5,508 details
+and pictures, 36 opens), Growlanser IV (2), Guilty Gear Judgment (none), Guilty Gear XX Accent Core Plus and Hot Shots
+Golf Open Tee 2 (a font opened each) and Hot Shots Tennis (28). Every frame is the same pixel for pixel but two. Crush's
+at 2400 (and at 1200 run again without the GE's threads) differs by 0.25 a channel, no pixel by more than 24: its
+title's animated background a step apart, from the time its 811 reads take now that each calls the game's alloc and
+free. Guilty Gear XX's at 600 (9.78, its intro's flying cubes) is the runner's capture a frame behind, from the GE's
+threads: that picture is master's own at 598 and 599, master shows it in none of eight runs and the branch's runner in
+two of eight, and without the GE's threads (`--ge-threads` left out) the branch's six runs are all master's picture; the
+game makes no call the branch changed (sceFontNewLib and an open). With the branch's runner and the trace (the review's
+question below), no game but Hammerin' Hero has a glyph read refused: Gran Turismo's 5,508 reads, Crush's 767,
+Dragonball Z's 356 and 715, Ghost in the Shell's 291, Final Fantasy III's 541 (its `script.txt`), Jeanne d'Arc's 48 (its
+alloc gives 4 bytes for 0) and the rest all give their blocks; Hammerin' Hero (`t1.txt`, 3000 frames) has 33,284 of its
+33,365 refused, every one its space (a record of 4 bytes, then a picture of 0), which the game asks for again each frame
+as it can't keep it. Every game's library has no cache (its parameters' third word 0).
+
+**The review's points** (an independent read-only reviewer of the branch at 7b2cf6836, which found no high-severity bug
+and traced the blocks' ownership through closes, sceFontDoneLib, flushes, two threads reading one font and a close or
+the library done with part way through a read, with no block given back twice or lost but where a thread ends part way),
+all taken: the medium one, whether the change refuses other games' glyphs (counted above: none but Hammerin' Hero's
+spaces) and what a library's cache does (none of the games has one: chosen, as changing nothing); the untested paths,
+now `fonts glyph memory meanwhile`; three holes in what a damaged state may say (a font being opened holding a glyph, a
+glyph's call of a font not handed out yet or with somewhere for an error), now refused; the choices stated as facts in
+`fontCharacter()`'s comment, now marked, and the top comment's list put right (what a shadow takes isn't known, not
+known to differ); a handle never opened closing to 0 too, now said; the call's character code, saved but never read,
+dropped (layout 27 isn't out yet); `fontStart()`'s answer no longer taken for granted (a read that couldn't start keeps
+the font's glyph and answers without one); a narrow clip for the _Clip read and the layout 26 test with a call part way
+through; and the comments' and part 87's omissions.
+
+**Scratch** (the runs and their PNGs, the traces, the comparison sheets, the scratch tracer's patch and the RAM dumps'
+disassembly helpers): `~/phobos-work/scratch/font-b03/` on the Mac it was made on, not in the repository. The before and
+after pictures: `runs/Jeanne d'Arc/sheet-mine-x.png` (and master's hang, the play-tester's `sheet-x.png`),
+`runs/Hammerin Hero/cmp-mine-t1.png` (master left, the branch right), `runs/Final Fantasy III/sheet-mine-f1.png`, and
+each regression game's `runs/<game>/cmp-<run>.png` (master, the branch, their difference times four).
