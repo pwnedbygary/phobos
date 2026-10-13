@@ -71,9 +71,9 @@ fun CatalogBackdropView(
         CatalogBackdrop.RETRO_GRID -> RetrowaveBackdrop(modifier, RetrowaveBackdropScene.GRID)
         CatalogBackdrop.RETRO_CITY -> RetrowaveBackdrop(modifier, RetrowaveBackdropScene.CITY)
 
-        CatalogBackdrop.CRT_GREEN -> CrtBackdrop(scheme, theme.isDark, CrtBackdropScene.GREEN, modifier)
-        CatalogBackdrop.CRT_AMBER -> CrtBackdrop(scheme, theme.isDark, CrtBackdropScene.AMBER, modifier)
-        CatalogBackdrop.CRT_BLUE -> CrtBackdrop(scheme, theme.isDark, CrtBackdropScene.BLUE, modifier)
+        CatalogBackdrop.CRT_GREEN -> CrtBackdrop(theme.scheme, theme.isDark, CrtBackdropScene.GREEN, modifier)
+        CatalogBackdrop.CRT_AMBER -> CrtBackdrop(theme.scheme, theme.isDark, CrtBackdropScene.AMBER, modifier)
+        CatalogBackdrop.CRT_BLUE -> CrtBackdrop(theme.scheme, theme.isDark, CrtBackdropScene.BLUE, modifier)
 
         CatalogBackdrop.GLASS_GLOWS -> GlassCatalogBackdrop(scheme, theme.isDark, GlassBackdropScene.GLOWS, modifier)
         CatalogBackdrop.GLASS_AURORA -> GlassCatalogBackdrop(scheme, theme.isDark, GlassBackdropScene.AURORA, modifier)

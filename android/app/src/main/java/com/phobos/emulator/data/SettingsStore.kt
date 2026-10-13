@@ -109,9 +109,9 @@ enum class RetrowaveBackdropScene(val label: String, val description: String) {
 
 /** CRT terminal backdrop phosphor tint. */
 enum class CrtBackdropScene(val label: String, val description: String) {
-    GREEN("Green phosphor", "Classic green bloom with scanlines"),
-    AMBER("Amber phosphor", "Warm amber bloom with scanlines"),
-    BLUE("Blue phosphor", "Cool blue bloom with scanlines"),
+    GREEN("Green phosphor", "A green-glowing tube: scanlines, curved corners, a rolling refresh band and burned-in boot text"),
+    AMBER("Amber phosphor", "A warm amber tube: scanlines, curved corners, a rolling refresh band and burned-in boot text"),
+    BLUE("Blue phosphor", "A cool blue tube: scanlines, curved corners, a rolling refresh band and burned-in boot text"),
 }
 
 /** Glass / default backdrop variants when no solid style owns the scene. */
