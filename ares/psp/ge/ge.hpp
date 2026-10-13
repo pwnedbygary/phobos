@@ -254,9 +254,9 @@ struct GE {
     u32 minDepth, maxDepth, fogColor;
   };
 
-  //Four pixels side by side in a row (four.cpp), or four vertices (transform.cpp, lighting.cpp), each in a lane of a
-  //vector: GCC's and Clang's own vector types, which they compile to the host's SIMD instructions (NEON on ARM64, SSE
-  //on x86-64).
+  //Four pixels side by side in a row (four.cpp), or four corners of a renderer's triangles (draw.cpp's
+  //meshTriangles()), each in a lane of a vector: GCC's and Clang's own vector types, which they compile to the host's
+  //SIMD instructions (NEON on ARM64, SSE on x86-64).
   using f32x4 = float __attribute__((vector_size(16)));
   using f64x2 = f64 __attribute__((vector_size(16)));
   using u64x2 = u64 __attribute__((vector_size(16)));
@@ -429,8 +429,6 @@ struct GE {
   //lighting.cpp
   auto lightingState(Transform& t) const -> void;
   auto light(Vertex& vertex, const float world[3], const float normal[3], const Transform& t) const -> void;
-  auto lightFour(Vertex* v, u32 lanes, const f32x4 (&world)[3], const f32x4 (&normal)[3], const Transform& t) const
-    -> void;
 
   //transform.cpp
   auto transformState() const -> Transform;
@@ -443,7 +441,6 @@ struct GE {
   struct Placing { float model[3], world[3], viewZ; };
   inline auto transformPlace(Vertex& vertex, const Transform& t, Placing& placing) -> void;
   inline auto transformRest(Vertex& vertex, const Transform& t, const Placing& placing) -> void;
-  auto transformRestFour(Vertex* v, u32 lanes, const Transform& t, const Placing* placing) -> void;
   auto project(Vertex& vertex, const Transform& t, bool clipped) const -> void;
   auto clipTriangle(const Look& look, const Transform& t, const Vertex& a, const Vertex& b, const Vertex& c,
                     s32 facing) -> void;

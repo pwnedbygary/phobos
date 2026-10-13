@@ -1190,10 +1190,10 @@ struct Random3D {
   }
 };
 
-//Vertices transformed a stage at a time, their places four at a time (transformAll(): placedFour()), are those
-//transformed one at a time (transform()), field for field and bit for bit (sameVertex()): random settings and cameras,
-//skinning with 0 to 8 bones, PRIMs of 1 to 70 vertices (lanes left over at the end).
-static auto draw3dTransformedFour() -> void {
+//Vertices transformed a stage at a time (transformAll()) are those transformed one at a time (transform()), field for
+//field and bit for bit (sameVertex()): random settings and cameras, skinning with 0 to 8 bones, PRIMs of 1 to 70
+//vertices (64 to a stage and the rest).
+static auto draw3dTransformedStages() -> void {
   Scene c;
   Random3D r;
   u32 differing = 0;
@@ -1215,13 +1215,13 @@ static auto draw3dTransformedFour() -> void {
   CHECK(differing, 0u);
 }
 
-//Vertices lit four at a time (transformAll(): lightFour()) are those lit one at a time (transform(): light()), field
-//for field and bit for bit: a camera's settings with lighting on and texture coordinates mapped by UV, four lights of
+//Vertices lit a stage at a time (transformAll()) are those lit one at a time (transform()), field for field and bit
+//for bit (sameVertex()): a camera's settings with lighting on and texture coordinates mapped by UV, four lights of
 //every kind (directional, points and spotlights; ambient and diffuse, those and the shine, or powered), a quarter of
 //them off, each fading and pointing at random, now and then by numbers that aren't plausible (infinities, not
 //numbers); the vertex's own color standing for any of the material's, the shine kept apart or not, the normals turned
 //round or not; normals of every length, none now and then; skinned and not.
-static auto draw3dLitFour() -> void {
+static auto draw3dLitStages() -> void {
   Scene c;
   Random3D r;
   auto real = [&](float low, float high) { return low + (high - low) * (f32(r.random() >> 8) / 16777216.0f); };
@@ -1547,8 +1547,8 @@ auto draw3dTests() -> Tests {
     {"draw3d lines", draw3dLines}, {"draw3d bounding boxes", draw3dBoundingBoxes},
     {"draw3d four pixels at a time against one", draw3dFours},
     {"draw3d the GE's time, any renderer", draw3dTimeCounted},
-    {"draw3d transformed four at a time as one at a time", draw3dTransformedFour},
-    {"draw3d lit four at a time as one at a time", draw3dLitFour},
+    {"draw3d transformed a stage at a time as one at a time", draw3dTransformedStages},
+    {"draw3d lit a stage at a time as one at a time", draw3dLitStages},
     {"draw3d mesh corners placed four at a time as one at a time", draw3dMeshFour},
     {"draw3d triangles' corners placed once as at each triangle", draw3dTrianglesPlacedOnce},
   };
