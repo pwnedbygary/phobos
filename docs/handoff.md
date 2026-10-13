@@ -46,7 +46,8 @@ in the implementation plan). CI only: no core, app or test code changes.
   through `tee`, so their steps run as `shell: bash` (pipefail) to keep a failure failing, and a suite that left no
   output says so in the summary. Both workflows' runners are pinned to Ubuntu 24.04 (ubuntu-latest moves to 26 on
   2026-10-19: a new GCC, a new FFmpeg build, maybe new `-Werror` warnings, taken on purpose instead), each job has a
-  time limit (20 to 60 minutes), and only a PR's newer push cancels its run: every master and tag run finishes.
+  time limit (20 to 60 minutes), and only a PR's newer push cancels its run: every other run (master's, a tag's, a
+  dispatch) is a group of its own, so none is cancelled or left waiting behind another.
 - **Not done here**: a workflow whose paths don't match doesn't run, which shows as no check rather than as a passing
   one; and Android's release and nightly don't wait for these workflows (they are separate; package 20 or a later
   change can gate them explicitly).
@@ -63,7 +64,9 @@ in the implementation plan). CI only: no core, app or test code changes.
 - **Review**: an independent read-only review (it scanned every source the five builds compile against the paths)
   found sljit's headers missing from NGCD's paths and `desktop/Platform.hpp` from PSP's, and this entry calling the
   control's branch deleted when it wasn't yet; all fixed, with its suggestions taken (the Ubuntu pin, time limits,
-  master's runs not cancelled, the empty-log case).
+  master's runs not cancelled, the empty-log case). A delta review found that a concurrency group holds one waiting
+  run, so a third quick push to master still cancelled the waiting one: non-PR runs now get a group each (the run's
+  ID).
 
 ## PSP: modules from downloads — sceKernelLoadModuleNpDrm, packed relocations, imported variables; God Eater 2 in English — 2026-10-13
 
