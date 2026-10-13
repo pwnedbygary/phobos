@@ -25,6 +25,49 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: the CPU, round 2 — the VFPU's adder in NEON, delay slots compiled each way, the rare ways out of line, prefixes compiled, blocks linked — 2026-10-13
+
+Branch `cursor/psp-cpu-round2-2b67`, on master (`b3507c1db`, #233 merged; merged in again at `0a9a7fa75`, #234, and at
+`4788125f1`, #235 and #236). docs/psp-core.md, part 86, has the evidence. Clean room: PPSSPP not read (its CPU, JIT and
+IR code not at all), JPCSP not read. Save states unchanged by this branch (master's layout, 27 since #236). Every change
+is the host's alone: pictures, VRAM, RAM and the machine's state are master's.
+- **Where it went** (Mac, Vulkan fast, xctrace sorted by compiled block): compiled code was 20 to 42% of the emulation
+  thread in the CPU-heavy scenes and flat (the busiest block under 1%): block endings and branches a third of it, loads
+  and stores a third; the VFPU's matrix products through the scalar adder 15% of Super Monkey Ball's thread (one loop
+  of eight vtfm.q), 25% of Disaster Report 3's with its prefixed compares through the interpreter.
+- **Changes** (each its own commit, with tests): the VFPU's adder (vfpuDot) in NEON integer instructions, four lanes at
+  once and bit for bit, for compiled vmmul, vtfm, vhtfm, vdot and vhdp on ARM64 (operands in place; inf and NaN lanes
+  and other hosts the scalar way); a branch's delay slot compiled along each way it goes, pc and pd stored only where
+  they're read; the rare ways (an access off the fast path, an FPU mode or NaN, an overflow) as cold code after the
+  block, the FPU's keeping the registers held, loads and stores in 7 to 8 host instructions; the lane-by-lane VFPU
+  instructions with their prefixes worked out as the block is compiled (vfpuEach), the math functions and vf2i at rest;
+  blocks linked straight to the blocks they go on to, unlinked when those blocks' code goes.
+- **Numbers** (Mac, Vulkan fast, the emulation thread's host instructions and ms a frame, medians of three rounds
+  taking turns; the load 30 to 300, so the instructions carry it): Super Monkey Ball's story 636 -> 520 M (-18%, 60 ->
+  49 ms), Disaster Report 3 playing 52 -> 38 M (-26%, 4.4 -> 3.4 ms), the Need for Speeds, Twisted Metal's logo and the
+  Armored Cores' intros 8 to 11% fewer, Colin McRae, the Armored Cores and Twisted Metal playing 8 to 19%, the GE-bound
+  scenes 2 to 5%; the software renderer alike where the CPU counts.
+- **Exact**: the 21 scenes' hashes identical to master's in the software renderer (100 frames, every frame's picture
+  and VRAM, then RAM and the machine's state), Vulkan fast and Vulkan accurate (200 frames, the end's RAM and state);
+  the NEON adder against vfpuDot on 72 million random results; 62 broken versions of the changes, 59 caught by
+  tests/allegrex, the other 3 changing nothing observable. pending (the whole library, before merging)
+- **Checks**: tests/allegrex 68/0 (sanitized; and 68/0 built for x86-64, run under Rosetta), tests/psp 478/0
+  (sanitized), tests/psp/ares 318/0. Merged with #234 (part 83): the hashes identical again in all three renderers,
+  tests/psp 489/0, tests/psp/ares 318/0; GitHub's Linux build (GCC) found a missing `<cstring>`, added, and its tests
+  pass. Merged with #235 and #236 (parts 84 and 87): the hashes identical again in all three, tests/psp 497/0,
+  tests/psp/ares 318/0, GitHub's tests and builds passing. An independent review found no change to emulated results;
+  its points (test gaps: the NEON vmmul's in-place cases, links never checked, code memory starting afresh mid-run, more
+  delay slot kinds; small fixes and comments) were all taken.
+- **Left**: the block endings' run count kept in a register (each ending's load and store of it chains the blocks
+  through memory), a cache of the last target for jumps through a register (Most Wanted's import stubs: 57% of its
+  compiled code is block endings), registers held across blocks with stores only where read, the VFPU's remaining
+  helpers (vf2h, vh2f, the integer packings, vdot/vhdp/vcmp with prefixes, vcrsp/vqmul/vdet), the polled kernel's
+  per-call work (Most Wanted: 72% of the thread), and the GE's display lists (another task's).
+- **On the RP6, to measure**: master against this branch, Vulkan fast at 1x, part 79's scenes: Super Monkey Ball and
+  Disaster Report 3 most (a fifth to a quarter fewer instructions on the emulation thread), Colin McRae, the Armored
+  Cores and the Need for Speeds 8 to 11% (Silent Line playing 19%), the GE-bound scenes 2 to 5%.
+- Scratch: `~/phobos-work/scratch/cpu-round2`.
+
 ## PSP: sound — every ATRAC ID's context kept current (Angus Hates Aliens past NEW GAME), and sceVaudio — 2026-10-12
 
 Branch `cursor/psp-audio-b00-2b67`, on master (`b7ea296f4`, then `1d9308714`, #228). docs/psp-core.md, part 82, has
