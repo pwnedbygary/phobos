@@ -104,6 +104,283 @@ backdrops. App only (Kotlin; no native or core change). The console icons follow
 - **For the owner**: whether the Manga and CRT backdrops stay (the PR's description has the verdict and previews);
   Sakura as the Pixel art default now that Space is gone.
 
+## PSP: the host's right stick for patched games, the keyboard in a field's own characters, 7th Dragon 2020-II past its certificate — 2026-10-12
+
+Branch `cursor/psp-input-b00-2b67`, on master (`6ab2c5583`, merged with `b7ea296f4`, #227, then `1d9308714`, #228).
+docs/psp-core.md, part 81, has the evidence. Items 3 and 4 of the deep-play batch 00 report
+(`~/phobos-work/deepplay/batch-00-report.md`). Clean room: pspsdk's psputility_osk.h and pspctrl.h, pspautotests'
+ctrl/sampling, the games' own code traced with a scratch runner, PPSSPP read only as a description of the PSP (its
+right-stick convention, its note on a negative ATRAC size); JPCSP not read. Save states unchanged (StateVersion 26).
+Begun by one agent, finished by another (the first stopped on finding the second in its worktrees); both agents'
+commits are on the branch, and a third's with an independent review's points.
+- **Right stick** (the owner's decision: pspsdk's Rx and Ry, as a PSP Go with a DualShock 3, a Vita and emulators
+  fill them; the PSP itself has no second stick): every
+  SceCtrlData sample carries the host's right stick in bytes 10 (X) and 11 (Y), 128 when centred, in every game and
+  every sceCtrl read, whatever the PSP Right Stick setting (Off, the default, then does nothing else); centred in
+  digital sampling as the left stick is; the last four bytes 0; not in states. The core takes it from "R-Stick X" and
+  "R-Stick Y"; the app hands the right stick to it in every choice (with Analog stick it is the PSP's stick and the
+  patched games' second one at once: the setting's description says Off suits those games). The runner takes
+  `R-StickX:` and `R-StickY:` in `--press` and `--script` (README). The four Armored Core True Analogs images read it:
+  Formula Front International's camera now rests level behind the AC after "GO!!!" and turns and pitches with the
+  right stick (it pitched up at the sky and the AC turned left on its own).
+- **Keyboard**: `Kernel::keyboardConform()` (utility.cpp) gives text as a field of PSP_UTILITY_OSK_INPUTTYPE_* types
+  and lines takes it (the other width, case or kana where one fits, else left out; spaces full-width only where only
+  full-width types; line breaks only in fields of several lines; Latin letters ASCII's and U+00C0-024F's, every printed
+  character without a class a Japanese symbol). The automatic answer's nickname goes through it: both 7th Dragon
+  games' name fields are full-width letters only (0x0c00), so "PSP" is now U+FF30 U+FF33 U+FF30 (2020's hero was
+  nameless); a field taking none of it gets "ぴーえすぴー", "ﾋﾟｰｴｽﾋﾟｰ", "ПСП", "피에스피" or "1", the first it takes
+  whole. The app's keyboard shows what's typed as Android's keyboard composes it and enters it converted (a line under
+  the field shows the form entered where it differs); the core converts the app's answer again. The game's own text
+  left as the field showed it is entered as the game gave it, by both (Ridge Racer 2's "XEVIOUS", in a field of small
+  letters alone, stays so). The Kotlin and C++ conversions run one table of cases
+  (`android/app/src/test/resources/psp-keyboard-cases.txt`).
+- **7th Dragon 2020-II's certificate** (found by the first agent): the name wasn't what froze it; the game hands
+  `sceAtracSetDataAndGetID` the size 0xffffffff for a sound read whole into its buffer, which was refused. A size with
+  its top bit set now reaches to the end of the buffer's memory (none: refused as before), taken in `atracSet()` and
+  `atracSetAndGetID()` so that the sound branch (#229) merges with this one without a conflict in `atrac.cpp`. The game
+  goes on into its story.
+- **An independent review of the merged branch** (one Medium, four Lows), all taken by a third agent after the second
+  stopped: the game's own text unedited entered as it is and a wider classifier (the Medium: OK on a default had
+  entered a changed or empty name); the fallback nicknames; pspsdk's Rx/Ry in the comments and docs; one table of
+  cases for both conversions, no half of a pair kept or cut in the core; `atrac.cpp` merging cleanly with #229.
+  Part 81's "The review's points" has each, and what wasn't done (an edited default is converted whole).
+- **Checks** on the final tree (with the review's points): `tests/psp/run-tests.sh` (sanitizers) 478 groups, 0
+  failures; `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 328 checks, 0 failed;
+  Android `:app:compileModernReleaseKotlin :app:testModernDebugUnitTest` 304 tests, 0 failures (before it, 472 groups
+  on `04b274924`). Games with the branch's runner: part 81's last paragraph.
+- **Library**: not run by the agents (the second agent's run stopped with its session); the owner runs the 266-game
+  comparison for this branch and #229 together.
+- **Review**: the first agent's independent review (`~/phobos-work/scratch/hle-b00/review-pr-a.md`: the app's keyboard
+  converting keys under Android's composition, a state test, comments, line breaks, a negative size on no memory) had
+  its points taken in `04b274924`; a second independent review of the branch (PASS, no High or Medium) had its Low and
+  Nit points taken in `e743fbcff` (all four ATRAC setters given the whole file take a negative size; the app's field
+  holding nothing past its limit, and saying so when nothing will be entered; no control characters in a field of any
+  type; comments and docs).
+- **On the RP6, to check**: (1) An Armored Core True Analogs image (Formula Front International, 3 Portable, Last
+  Raven or Silent Line Portable) with the PSP Right Stick setting on Off and a controller whose right stick is bound
+  (R-Up/Down/Left/Right, as by default): in a battle, after "GO!!!" and with the right stick untouched, the camera stays
+  level behind the AC and the radar's heading holds; right stick right and left turns the AC, up and down tilts the
+  view (it stays where it's left, as the mod has it). With Analog stick chosen, the right stick moves the AC and the
+  camera at once (expected). (2) 7th Dragon 2020 and 2020-II, a new game: on the name screen, NAME opens the keyboard;
+  typing "Bob" shows "Bob" with "Ｂｏｂ" under it, OK enters "Ｂｏｂ", the game shows the name; 2020-II's certificate
+  then passes into the story. (3) Japanese typed by romaji in a kana field composes normally. (4) Ridge Racer 2's
+  driver name: OK on its default ("XEVIOUS" or another Namco title, in capitals) keeps it in capitals, with no line
+  under the field; typing over it shows the small letters it will be entered in.
+- Scratch: `~/phobos-work/scratch/hle-b00` (runners in `bin/`, the runs in `runs/`, the library runs `lib-*`);
+  `~/phobos-work/scratch/review-b00` (the review's points: the runners, the runs in `runs/`, the scratch front end in
+  `front/`).
+
+## PSP: modules from downloads — sceKernelLoadModuleNpDrm, packed relocations, imported variables; God Eater 2 in English — 2026-10-13
+
+Branch `cursor/psp-npdrm-modules-2b67`, on master (`0a9a7fa75`, #234), merged with master since (#235, #236).
+docs/psp-core.md, part 88, has the evidence. Clean room: uOFW's module manager and loadcore, pspsdk's headers,
+pspautotests' recordings, RFC 1321, PPSSPP's notes read only as a description of the PSP; JPCSP not read. StateVersion
+28 (each module keeps its imported variables; 27 is part 87's). The owner's PGD/NPDRM code (pgd.cpp, pgd.hpp, io.cpp's
+sceNpDrm functions) is unchanged and wasn't needed.
+- **Before**: God Eater 2 (NPJH50832) with RedArtz's English patch v2.0 and its folder `PSP/GAME/NPJH50832` on the stick
+  stopped at the patch's "your DLC file is corrupted or missing": ModuleMgrForUser 0xf2d8d1b4 missing.
+- **The folder**: its 45 `.sprx` modules are plain ELFs, its EDATs plain too: nothing needs NPDRM decryption (the
+  owner's sceNpDrmEdataSetupKey leaves the plain PATCH.EDAT as it is, as before).
+- **sceKernelLoadModuleNpDrm**: uOFW's checks and errors (ILLEGAL_CONTEXT from an interrupt, ILLEGAL_ADDR, a '%' is
+  UNKNOWN_MODULE_FILE, options ILLEGAL_ADDR or ILLEGAL_SIZE, then sceIoOpen's own error); an NPDRM module as sold
+  (EDATA) refused, UNSUPPORTED_PRX_TYPE (chosen), its key (npdrm's module key, derived from the EDATA and the licensee
+  key, and the `~PSP` decryption with it) not derived: that's what's missing for store-bought download modules; any
+  other file loads as sceKernelLoadModule's do (a plain one, as custom firmware and emulators load it: chosen).
+- **The loader**: packed relocations (PT_PSP_REL2), read as uOFW's loadcore does, the steps its decompilation loses
+  settled by the modules (all 459,660 relocations of the 45 land in their segments, every jump in its code); imported
+  variables linked as modules load, unload and move (`linkImports()`, `relinkVariable()`), the program's included.
+- **What the game asked for next**: sceMpegRingbufferQueryPackNum (packnum recorded), MD5 (sceMd5 and UtilsForUser's,
+  the context as hash/md5ctx recorded), sceRtcConvertUtcToLocalTime and back.
+- **PBOOT.PBP**: not booted by the core (it boots the disc's EBOOT.BIN); not needed here: the disc image already is the
+  1.30 update, its EBOOT.BIN the patched one; the folder's PBOOT.PBP is Sony's encrypted program (tag 0x2e5e10f0, a key
+  the core hasn't). Not done.
+- **The game now** (fresh stick with the folder): title, the game's install notice in English, the Main Menu, Character
+  Entry, the appearance screen, the first save, the opening with English subtitles, the update's English hints, and the
+  base, where the player walks and Fran talks in English. A mission not reached (the story first sends the player
+  about).
+- **Checks** (`5a7c2452b`, merged with master): tests/psp 502/0 (five new groups; of two local runs one had the
+  timing-dependent group "ge loads through the depth buffer's views wait for the threads" fail on the loaded Mac, as
+  before; CI's passed), tests/allegrex 60/0, tests/psp/ares 318/0. God Eater 2 without the folder as before (the same
+  pictures, its log but the loader's old note); twelve other games (nine PSN releases, three that load modules) with the
+  base's runner and this one: the same pictures but animation steps and Kenka Bancho's movie timing, which two base runs
+  show too; their logs the same. The game's chain again on the merged code: 108 of 111 captures as before, the rest a
+  moment apart.
+- **Review**: an independent read-only review found two blockers, both fixed (`1998c3014`, `5a7c2452b`): MD5 copying
+  from an empty message's null pointer (GCC's UBSan stopped CI's first run), and master's font states test reading
+  layout 28 as 26 with the variables count in; and minor points, all taken (the clock zones by the settings' minutes for
+  every tick, as uOFW's rtc, tested in fixed zones; state fields; the kernel's own libraries' variables noted; counts
+  and uOFW's slips in part 88; loadcore's segment run; unchanged words not rewritten; broken tables' reasons; relinked
+  code run again). Its remark on the owner's EDATA path (io.cpp's `pgdDescriptor()` reads the PGD header at offset 0,
+  sceNpDrmEdataSetupKey puts the data at 0x90) goes to the owner.
+
+## PSP: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces — 2026-10-13
+
+Branch `cursor/psp-font-b03-2b67`, on master (`b3507c1db`), PR #236. docs/psp-core.md, part 87, has the evidence. Clean
+room: the games' own code and traces, pspautotests' recordings; PPSSPP read only as a description of the PSP (its issue
+5954, its sceFont's model of closing and of a character's memory), nothing copied; JPCSP not read. Save states: layout
+27 (26 and older load, their fonts holding no glyph).
+- **Jeanne d'Arc** (deep play batch 03, bug 1: "Loading..." for good at its first battle): two of its text objects close
+  one font handle twice; the HLE refused the second close, and the game, which takes a lock of its own around each call
+  into the library and gives it back only for a 0, then waited for that lock forever. A PSP answers 0 there (the game
+  loads its battles on one), so sceFontClose of a library's handle that's closed already now does nothing and returns 0
+  (a handle no library has is still refused). From its briefing state the first battle loads: its battle map, then the
+  Combat tutorial.
+- **Final Fantasy III** (batch 02, bug 2: none of its own text): its three fonts are in VRAM, which
+  sceFontOpenUserMemory didn't read (RAM only), so every open failed and the game drew with handle 0. A font in memory
+  is read from RAM, VRAM or the scratchpad now: from boot its name screen, battle windows and dialogue have their text
+  (its play-tester's state keeps the failed opens it was saved with).
+- **Hammerin' Hero** (batch 03, bug 3: words run together): the game spaces a line by its own rule, a space a quarter of
+  the space's advance (1.7 pixels) or, when the space's details are refused, a quarter of 18 (4.5). On a PSP its words
+  are spaced, so the details are refused there: a PSP's libfont reads each glyph into memory of the program's
+  (fonttest: the record and the picture, 71 and 210 bytes for jpn0's 'H'), a space's picture is 0 bytes, and this
+  game's alloc (a VPL) refuses 0 bytes. The HLE does the same now: a character's details and pictures read its glyph
+  into two blocks of the program's, the font holding the last one read and giving it back when another is read, on
+  closing, on sceFontFlush and with the library; a block not given fails the call (out of memory). Its text is spaced
+  as on a PSP. Choices where nothing shows the PSP (the order of giving back, the flush, shadows and picture sizes
+  reading nothing, opens keeping part 23's rule for a 0-byte block) are marked in the code and in part 87.
+- **Regression check** (master's runner against the branch's, PNGs compared): Growlanser IV from its state in play and
+  in its menu, and 21 more of the play-testers' sceFont games from boot (Gran Turismo's 5,508 glyphs read among them):
+  every frame the same pixel for pixel but two, Crush's title background a step apart (the time its 811 reads take
+  now) and Guilty Gear XX's intro a frame behind in one capture (the GE's threads: master's own picture of frames 598
+  and 599; the same with no GE threads). Traced, no game but Hammerin' Hero has a glyph read refused, and none gives its
+  library a cache.
+- **Review**: an independent read-only reviewer found no high-severity bug; its points (the count above, a test of
+  reads with another thread closing the font or the library meanwhile, three damaged-state checks, the choices marked as
+  choices, the never-opened handle, small cleanups) are all taken.
+- **Checks**: tests/psp 484/0 (six new font groups; the state fields' new ones; 495/0 merged with #234),
+  tests/allegrex 60/0, tests/psp/ares 318/0; CI green on the merge (1d22b81c2).
+- **Scratch**: `~/phobos-work/scratch/font-b03/` on the Mac it was made on (runs, traces, comparison sheets, the scratch
+  tracer's patch), not in the repository.
+
+## PSP: savedata's patterns — Dissidia's Load Game, Final Fantasy Type-0's list; Disgaea Infinite's New was Continue — 2026-10-13
+
+Branch `cursor/psp-savedata3-2b67`, on master (1d9308714, #228). docs/psp-core.md, part 84, has the evidence. Clean
+room: the games' own requests (traced), Disgaea Infinite's own code (a RAM dump read with LLVM's MIPS disassembler, a
+scratch runner following its variables), pspsdk's psputility_savedata.h, pspautotests' utility/savedata/idlist,
+PPSSPP's notes only as a description of the PSP; JPCSP not read. Save states are unchanged (StateVersion 26).
+- **Dissidia Final Fantasy and Dissidia 012** (Load Game back to the title): their list load keeps "GameData*", the
+  list mode's pattern, as its save name, and the kernel took a list only for a request naming no save, so it looked
+  for a save named "GameData*" and said NO_DATA. Fix (`utility.cpp`, `savePattern()`; `dialogs.cpp`): a save's name
+  with '*' or '?' is a pattern, naming no save (FAT holds neither character); in a list's load or save from a list it
+  names none, as "<>" doesn't. Now: GameData00 loads and both games go on where the save was made.
+- **The same mistake elsewhere**: every list load answered with no front end now takes what its dialog focuses, the
+  request's own save name only naming focus 0's pick (Disgaea's Continue names DIP000 beside 32 slots: with its save
+  moved to DIP003 it now loads it, where master said no data); a list save naming a pattern takes the list's first
+  name; a pattern in a list is no save; with no list a pattern is a name no save has (a load finds none, a save is
+  refused); no save is made under a pattern, and the app's dialog asks for none.
+- **Final Fantasy Type-0** (its "GAMEDATA*" list answered with SYSTEMDATA): the list mode listed every folder of the
+  game's. Fix (`savedataList()`, `patternTakes()`): the saves the pattern takes ('*' any run, '?' any one; idlist's
+  "A?C" listed its one save, ABC; leaving out the rest is chosen); "" and "<>" still list every save. Now: listed 0,
+  the game as before.
+- **Disgaea Infinite** (New back to the title): not an emulator bug. Its title's cursor starts on Continue (index 1
+  in the game's data; only Up and Down change it), so the play-tester's Cross was Continue: a list load of its slots
+  on an empty stick, NO_DATA, and the game's code goes back to the title for any answer but 0, a cancel included. New
+  (Up once) starts the story with master's runner as with this one. Nothing at boot writes its system data: its only
+  saving requests are its save's (Start in the story: a list save to DIP000, then DIS000 autosaved), and Continue
+  loads that save.
+- **The #228 games** (After Burner, Brandish, 7th Dragon 2020, Colin McRae Rally 2005 Plus) save and load as before:
+  every trace, file and capture the same with master's runner and this branch's.
+- **Review**: an independent read-only review's points are all taken (part 84 lists them); left as before: a list
+  delete answered with no front end and naming no save deletes the game's own folder.
+- **Checks**: see part 84.
+
+## PSP Vulkan: its waits for its own pixels gone — moves across row widths, palettes on the GPU, copies kept — 2026-10-13
+
+Branch `cursor/psp-vulkan-speed-2b67`, on master (`1d9308714`, #228). docs/psp-core.md, part 83, has the evidence;
+docs/psp-gpu-renderers.md the design. Clean room: no PPSSPP code read (its GPU backend not opened), JPCSP not read.
+Save states unchanged (StateVersion 26). The software renderer untouched.
+- **Measured first** (the M1, MoltenVK, a scratch build counting a frame's draws, passes, binds, barriers, uploads,
+  copies, moves, read backs and each finish's stack, and the emulation thread's time in the GE, recording, submitting
+  and waiting): the slow scenes waited for the GPU's own pixels. Frame buffers drawn at two row widths over one memory
+  (Colin McRae, Dirt 2, Brave Story), palette indices over a frame buffer (Death Jr. II, Sonic Rivals, Activision Hits
+  Remixed: 31 to 61 finishes a frame), 3D textures running past the picture into other frame buffers or past VRAM's end
+  (Death Jr. II, Castlevania, whose blur didn't show), depth fills (Darkstalkers), a copy and a render pass for each of
+  Killzone's 800 blur quads. The Armored Cores' intros are bound by the movie's polling in both renderers on the M1;
+  Army of Two and Dirt 2 by the GE's front end.
+- **Changes** (seven code commits, the last the review's points, with tests that fail without them): the GE's dither
+  in the GPU's blending and depth as the GE's whole numbers (Death Jr. II's glow, Daxter's shadow); moves between
+  frame buffers of other row widths; a texture past VRAM's end taken, depth changes kept for PRIMs that use depth,
+  beside ranges past 16 kept and filled at the target's next use; palette indices over a frame buffer looked up on the
+  GPU, rows not known cut at the next frame buffer, memory's rows decoded alone; a copy taken again only where a
+  PRIM's texels meet the changes (the GE gives `holds()` the texels a PRIM may take, 3D triangles too), barriers only
+  before overlapping reads; textures kept for the next of their size; the depth write its own shader build. All in
+  both modes, but that accurate mode holds rows past a texture's frame buffer only where the PRIM takes none of them.
+- **Numbers** (the M1, fast mode, base -> branch, at a load near 20): Death Jr. II's woods 9.7 -> 67.8 frames a second
+  and its character select 21 -> 170, Activision Hits Remixed's room 10 -> 84, Sonic Rivals 14 -> 113, Castlevania
+  103 -> 354, Darkstalkers 49 -> 122, Brothers in Arms 23 -> 39, Killzone 11 -> 20, Colin McRae 43 -> 57, Brave Story
+  156 -> 216; the Armored Cores, Army of Two, Daxter as they were; the final code's round (load 30-130) in part 83, the
+  same ratios. Accurate: Castlevania 58 -> 144, Killzone 11.7 -> 19.3, Death Jr. II's woods 4.0 -> 10.5 and Sonic
+  Rivals 5.8 -> 11.5 (their palette passes held only where exact: 8 finishes a frame, from 31).
+- **Checks** (the final code, 4b2665616): tests/psp 486/0 (sanitized; 11 new GPU groups), tests/allegrex 58/0,
+  tests/psp/ares 318/0; CI on #234 green (its first run failed a dithered-blending threshold lavapipe misses: 75% now).
+- **Review**: an independent read-only review (no blocker, three major points: accurate mode's held rows, texels a
+  PRIM takes for sprites, beside fills inside memory's callbacks) and a delta review (its tests in 3D so they reach the
+  held-row paths); all points taken (04e5d1c8a, 7099e35e3).
+- **Library** (accurate Vulkan, 3600 frames, master against the final code): all 266 finish in both, 214 the same
+  at all four captures, 32 within a level; of the 20 others, those nearer Software are the dither and depth fixes,
+  those nearer master the same movie or demo a few frames apart (the clock follows the host's; part 83 lists them).
+- **With #233** (part 79, merged in after it reached master; part 83's "With part 79"): the palettes on the GPU take
+  Backbone's glow first; a texture the GPU doesn't hold is decoded as far as the frame buffer it's drawing, without
+  waiting, and cached for the next tile through the same palette; part 79's box only where those rows would still
+  wait, and its copies checked in the box alone (accurate mode: 27 to 56% fewer textures decoded than this branch).
+  The merge's code as it was, part 79's two glow tests rewritten for it: tests/psp 489/0, tests/allegrex 60/0,
+  tests/psp/ares 318/0; end states the same as this branch alone's in Software (every frame), accurate and fast.
+- **On the RP6, to measure**: Software against Vulkan (fast) in the Armored Cores' intros and first menus (the M1
+  can't say why the RP6 was slower there: the GPU's per-frame work is half a texture upload, a present and a shot),
+  Colin McRae's race, Death Jr. II, Sonic Rivals, Activision Hits Remixed, Brothers in Arms, Killzone's menus,
+  Castlevania, Brave Story and Darkstalkers.
+- **Left**: Colin McRae's terrain shadows (depth from frame buffers of another row width); Killzone's blur still takes a
+  copy at each turn from one half of its strip to the other (456 a frame); accurate mode without rasterization order
+  splits overlapping blended primitives (MoltenVK: Colin McRae's race 0.7 frames a second); the GE's front end in the
+  3D games (Army of Two, Dirt 2).
+- Scratch: `~/phobos-work/scratch/vulkan-speed`.
+
+## PSP: where the slow games' emulation thread goes — the GPU's palette pictures decoded where taken, code forgotten only where there is some, calm system calls, more of the CPU compiled — 2026-10-12
+
+Branch `cursor/psp-cpu-speed5-2b67`, on master (`6ab2c5583`, #224 merged in). docs/psp-core.md, part 79, has the
+evidence. Clean room: PPSSPP not read (its CPU, JIT and IR code not at all), JPCSP not read. Save states unchanged
+(layout 26). Every change is the host's alone: pictures, VRAM, RAM and the machine's state are master's.
+- **Where it goes** (Mac, Vulkan-fast, from save states; master with #224): in most of the owner's slow games the
+  CPU's emulation isn't the bound. Backbone's games (Death Jr. II, Sonic Rivals, Activision Hits Remixed) finish the
+  GPU and read its pictures back 31 to 61 times a frame, for a palette texture (the frame the GPU drew, as CLUT32
+  indices) decoded whole for each glow tile; Super Monkey Ball, Army of Two and Ghost of Sparta spend 60 to 85% of
+  the thread in the GE's display lists on the CPU (Ghost of Sparta 17% more forgetting compiled code that wasn't
+  there); both Need for Speeds and the intro movies poll system functions 130,000 to 530,000 times a frame; compiled
+  code is a fifth to a third where the guest runs millions of instructions a frame.
+- **Changes** (each its own commit, with tests): a texture the GPU drew decoded only where each 3D triangle takes it
+  (a box from the corners' texture coordinates, conservative for what the GPU samples), waiting only for the GPU's
+  drawing in those rows, a cached copy drawn beside taken where its box's bytes are unchanged; memory's changes look
+  only at sections with compiled code (a bitmap; a page's store entry restored where its watch ends); a thread-queue
+  rotation or a semaphore signal that changed nothing to come leaves the CPU's go as it is (as #224's quiet
+  functions); and the first session's: code forgotten only where there could be some, a taken FPU/VFPU branch chained
+  to its target, more of the VFPU compiled with the prefixes followed through a block.
+- **Numbers** (Mac, Vulkan-fast, the emulation thread's ms a frame and host instructions, medians of three rounds
+  taking turns; the Mac's load 20 to 190): Death Jr. II playing 70 -> 33 ms (983 -> 388 M), Sonic Rivals 42 -> 19
+  (641 -> 275 M), Hits Remixed 57 -> 26 (711 -> 268 M), Ghost of Sparta's menu 41 -> 30 (648 -> 429 M), Most Wanted
+  racing 23 -> 18 (369 -> 319 M), Underground Rivals 23 -> 20, Twisted Metal's intro 21 -> 18, the Armored Cores'
+  intros 6 to 7% fewer instructions, Disaster Report 3 playing 16% fewer; Monkey Ball, Army of Two, Colin McRae and
+  the other play scenes within the Mac's noise (instructions 1 to 4% fewer). In the software renderer the polled
+  calls show most (the Need for Speeds 17 to 23% less time, Twisted Metal's intro 16%).
+- **Exact**: per-frame picture and VRAM hashes, then RAM and the machine, identical to master's in 21 scenes
+  (software renderer, 100 frames); end states identical in the same 21 (Vulkan-fast, 200 frames). pending (the whole library, before merging)
+- **Checks**: tests/psp 472/0 (sanitized; three new groups), tests/allegrex 60/0, tests/psp/ares 318/0. An
+  independent review of all eight commits found no change to emulated results; its points were fixed (writable()
+  keeps a page holding code out of the store table, which vramGuard could list again; the box's margin grows with its
+  length; makeTexturePart refuses a part outside the texture; test gaps, one of which showed the calm rule wrong: a
+  rotation handing the CPU to a thread woken for callbacks, which goes straight back to its delay, had counted as
+  calm; now calm means no switch at all). A delta review of the fixes found no bugs; its test gap (vramGuard and
+  code) filled. The box's margin rests on the rasterizer working a pixel's weights out from the corners it finds it
+  inside by; a shader clamp to the box would make that not matter (left, below).
+- **Left**: the GE's display lists on the CPU (Monkey Ball, Army of Two, Ghost of Sparta: reading vertices through one
+  pointer, each corner placed once a PRIM, small PRIMs handed over in runs); the polled calls' remaining compiled code,
+  dispatch and status reports; Death Jr. II's last 10 finishes a frame (its bottom tiles' box reaches the frame
+  buffer's first row); the CPU's compiled code (results kept in host registers across a block, blocks linked
+  directly, the VFPU in native code); a clamp of a part's fetches to its box in draw.frag, as a guard.
+- **On the RP6, to measure**: master against this branch, Vulkan fast at 1x, the scenes in
+  `~/phobos-work/scratch/cpu-speed2/scenes` (part 79's table): Backbone's games much faster, Ghost of Sparta's menu
+  about a third, the Need for Speeds and the intros 10 to 20%, Monkey Ball and Army of Two about as they were.
+- Scratch: `~/phobos-work/scratch/cpu-speed2`.
+
 ## PSP: the savedata trace; After Burner's save dates, the list modes' automatic answer — 2026-10-12
 
 Branch `cursor/psp-savedata2-2b67`, begun on `cursor/psp-colinsave-2b67` (Colin McRae's memstick:, part 77) after its

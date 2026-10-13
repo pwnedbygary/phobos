@@ -26,6 +26,7 @@ struct System : Allegrex {
     pages = table.data();
     watched = memory.watched.data();
     memory.watching = [this](u32 page) { recompiler.protect(page); };
+    memory.unwatched = [this](u32 page) { recompiler.unwatched(page); };
     memory.vramGuard = [this](bool busy) {
       for(u32 offset = 0; offset < Memory::VRAMSize; offset += Memory::PageSize) {
         if(!memory.vramPageBusy(offset / Memory::PageSize)) continue;

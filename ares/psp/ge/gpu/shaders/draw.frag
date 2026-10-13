@@ -44,12 +44,18 @@ layout(constant_id = 16) const uint BLENDING = 8u;
 //Where the GPU blends with output 0's color as it is (its source factor one), that color is the source term made as
 //pixel.cpp makes it, in whole numbers (TERM). The PSP drops each term's fraction and then adds, where the GPU adds
 //and rounds once: so the term goes a quarter of a step below itself where the GPU adds the destination's term (1),
-//above where it subtracts (2), which puts the GPU's rounding of the sum on the PSP's nearly always. 0 the color
-//weighed as floats.
+//above where it subtracts it (2) or subtracts the term from it (3), which puts the GPU's rounding of the sum on the
+//PSP's nearly always. The PSP dithers the blended color (DITHER): the matrix's value goes into the term, the other
+//way where the term is subtracted, so the GPU's sum has it too (but where the term with it falls below 0, which the
+//GPU holds at 0 before it blends). 0 the color weighed as floats.
 layout(constant_id = 17) const uint TERM = 0u;
 //Fast mode's 3D (transform.vert): flat shading's colors are the triangle's first corner's, which mesh() makes the
 //GE's last
 layout(constant_id = 18) const uint FLAT = 0u;
+//A texture of palette indices taken from a frame buffer (render to texture: gpu.cpp's textureFor()): each texel the
+//index its bits are (1: a 16-bit frame buffer's, in TEXELS' format; 2: an 8888 one's), CLUT_FORMAT's shift, mask and
+//offset taken as texture.cpp's texelFrom() takes them, looked up in its palette (palettes' row push.palette names)
+layout(constant_id = 19) const uint INDEXED = 0u;
 
 layout(push_constant) uniform Push {
   vec2 scale;
@@ -71,10 +77,13 @@ layout(push_constant) uniform Push {
   uint held;            //a copy of a target with more texels than taken: those taken, the width and, in bits 16-31,
                         //the rows (0: all of the copy's)
   uint origin;          //the target's row the frame buffer's first is, where the dither matrix starts
+  uint palette;         //(INDEXED) the palette's row in bits 0-9; the shift (10-14), mask (15-22) and offset's five
+                        //bits (23-27); 512 entries where bit 28 is set (a 16-bit palette's), else 256
 } push;
 
 layout(set = 0, binding = 0) uniform sampler2D texels;  //8888, red in the low byte (as the GE's decoded copies)
 layout(input_attachment_index = 0, set = 1, binding = 0) uniform subpassInput frameBuffer;  //(READS) the target's
+layout(set = 1, binding = 1) uniform sampler2D palettes;  //(INDEXED) 512 entries a row, 8888
 
 layout(location = 0) noperspective in vec4 vertexColor;
 layout(location = 1) noperspective in vec4 vertexSpecular;
@@ -136,6 +145,15 @@ uvec4 fetch(uint u, uint v) {
   if(push.held != 0u) size = min(size, ivec2(push.held & 0xffffu, push.held >> 16) * int(push.textureScale));
   ivec2 at = min(ivec2(u, v), size - 1);
   uvec4 t = uvec4(texelFetch(texels, at, 0) * 255.0 + 0.5);
+  if(INDEXED != 0u) {
+    uint index = INDEXED == 2u ? t.r | t.g << 8 | t.b << 16 | t.a << 24
+               : TEXELS == 0u ? t.r >> 3 | t.g >> 2 << 5 | t.b >> 3 << 11
+               : TEXELS == 1u ? t.r >> 3 | t.g >> 3 << 5 | t.b >> 3 << 10 | t.a >> 7 << 15
+               : t.r >> 4 | t.g >> 4 << 4 | t.b >> 4 << 8 | t.a >> 4 << 12;
+    uint entry = (index >> (push.palette >> 10 & 31u) & (push.palette >> 15 & 255u)) | (push.palette >> 23 & 31u) << 4;
+    entry &= (push.palette & 0x10000000u) != 0u ? 511u : 255u;
+    return uvec4(texelFetch(palettes, ivec2(entry, push.palette & 1023u), 0) * 255.0 + 0.5);
+  }
   if(TEXELS == 0u) t = uvec4(narrowed(t.r, 5u), narrowed(t.g, 6u), narrowed(t.b, 5u), 255u);
   if(TEXELS == 1u) t = uvec4(narrowed(t.r, 5u), narrowed(t.g, 5u), narrowed(t.b, 5u), t.a >= 128u ? 255u : 0u);
   if(TEXELS == 2u) t = uvec4(narrowed(t.r, 4u), narrowed(t.g, 4u), narrowed(t.b, 4u), narrowed(t.a, 4u));
@@ -273,6 +291,13 @@ void main() {
     chosen = texels <= 1.0 ? (push.filtering >> 8 & 1u) != 0u : (push.filtering & 1u) != 0u;
   }
   float depth = clamp(vertexDepth, 0.0, 65535.0);
+#ifdef DEPTHS
+  //(DEPTHS: compile.sh, for pipelines whose depth test or write the depth decides) the depth the GPU tests and writes
+  //is the GE's whole number, the interpolated depth rounded down as the GE steps it (raster.cpp), in 65,536ths, as
+  //memory's are filled: two surfaces at one GE depth meet as the GE's do. Built apart: a shader that writes the depth
+  //may keep the GPU from testing it before the shader runs.
+  gl_FragDepth = floor(depth) * (1.0 / 65536.0);
+#endif
   if(DEPTH_RANGE != 0u) {
     uint z = uint(depth);
     if(z < (push.depthRange & 0xffffu) || z > push.depthRange >> 16) discard;
@@ -359,9 +384,9 @@ void main() {
   if(DESTINATION == 4u) factor = vec3(min(2.0 * alpha, 1.0));
   if(DESTINATION == 5u) factor = vec3(max(1.0 - 2.0 * alpha, 0.0));
   outFactor = vec4(factor, 0.0);
-  //dithering and the frame buffer's format, where the GPU's blending won't change the color after (QUANTIZE 4 and
-  //DITHER 0 otherwise: blended, they're approximated by the 8888 the GPU keeps)
-  if(DITHER != 0u) {
+  //dithering and the frame buffer's format, where the GPU's blending won't change the color after (QUANTIZE 4
+  //otherwise: blended, the 8888 the GPU keeps; and the dither in the source term, TERM)
+  if(DITHER != 0u && TERM == 0u) {
     color.rgb = uvec3(clamp(ivec3(color.rgb) + dithered(), 0, 255));
     rgb = vec3(color.rgb) / 255.0;
   }
@@ -381,6 +406,7 @@ void main() {
     if(SOURCE == 4u) f = ivec3(255 - min(2 * a, 255));
     if(SOURCE == 5u) f = ivec3(uvec3(channel(push.fixedA, 0u), channel(push.fixedA, 1u), channel(push.fixedA, 2u)));
     vec3 term = vec3((s * 2 + 1) * (f * 2 + 1) >> 10);
+    if(DITHER != 0u) term += float(TERM == 3u ? -dithered() : dithered());
     outColor = vec4((term + (TERM == 1u ? -0.25 : 0.25)) / 255.0, stencil);
     return;
   }

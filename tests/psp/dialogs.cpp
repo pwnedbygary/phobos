@@ -268,8 +268,9 @@ static auto frontMessageRefused() -> void {
 
 //The keyboard: each field as the game gave it (its description and text as UTF-8, the most it takes: its room less
 //the NUL, or its limit where that's less, its input types, lines and language); answered, each field's text as
-//entered (UTF-8 to UTF-16, cut to its most, characters the PSP hasn't left out), CHANGED and the result 0; backed out
-//of, each CANCELLED and its output as it was. Texts for another count of fields are refused.
+//entered (UTF-8 to UTF-16, characters the PSP hasn't left out, as its input types and lines take it, cut to its
+//most; the game's own text, answered unedited, as it was), CHANGED and the result 0; backed out of, each CANCELLED
+//and its output as it was. Texts for another count of fields are refused.
 static auto frontKeyboard() -> void {
   FrontMachine m;
   auto& memory = m.system.memory;
@@ -332,7 +333,7 @@ static auto frontKeyboard() -> void {
   CHECK(m.kernel.dialogAnswer(answer), true);
   CHECK(m.update("sceUtilityOsk") == 0 && m.status("sceUtilityOsk") == 3, true);
   CHECK(output(0) == u"Big Boss" && result(0) == 2, true);
-  CHECK(output(1) == u"1\u260623" && result(1) == 2, true);
+  CHECK(output(1) == u"1234" && result(1) == 2, true);  //(digits alone: the star left out too)
   CHECK(memory.read(2, Texts + 2 * 0x200 + 0x100) == 0xcccc && result(2) == 2, true);  //(no room)
   CHECK(memory.read(4, Parameters + 28), 0);
   CHECK(m.close("sceUtilityOsk"), true);
@@ -360,6 +361,49 @@ static auto frontKeyboard() -> void {
   CHECK(m.kernel.dialogAnswer(answer) && !m.update("sceUtilityOsk"), true);
   CHECK(output(0) == u"ab" && result(0) == 2, true);
   CHECK(m.close("sceUtilityOsk"), true);
+  //as each field's input types and lines take it (7th Dragon 2020's name: full-width letters alone): ASCII letters
+  //full-width, the space too, the digit (no full-width digits here) left out; a web address's digits and signs as
+  //they are; a field of small Latin letters taking a full-width capital as a small ASCII one, a line break not in
+  //one line; in two the break kept, and in a field taking all too, no other control character in either
+  fields = {{u"Input name.", u"", 0x0c00, 1, 48, 8}, {u"URL", u"", 0x8'0000, 1, 48, 16}, {u"ID", u"", 4, 1, 48, 8},
+            {u"Note", u"", 4, 2, 48, 8}, {u"Any", u"", 0, 1, 48, 8}, {u"Any2", u"", 0, 2, 48, 8}};
+  setUp();
+  CHECK(m.start("sceUtilityOsk") && !m.update("sceUtilityOsk"), true);
+  answer = {};
+  answer.id = m.kernel.dialogShownID();
+  answer.texts = {"Bob 7", "a.b/1?x=2", "\xef\xbc\xb0S\np", "a\nb", "a\t\nb", "a\nb"};
+  CHECK(m.kernel.dialogAnswer(answer) && !m.update("sceUtilityOsk"), true);
+  CHECK(output(0) == u"\uff22\uff4f\uff42\u3000" && result(0) == 2, true);
+  CHECK(output(1) == u"a.b/1?x=2" && result(1) == 2, true);
+  CHECK(output(2) == u"psp" && result(2) == 2, true);
+  CHECK(output(3) == u"a\nb" && output(4) == u"ab" && output(5) == u"a\nb", true);
+  CHECK(m.close("sceUtilityOsk"), true);
+  //the game's own text answered as it was shown, unedited, entered as the game gave it, whatever the field's types
+  //(a PSP's keyboard edits the text it starts with): an accented letter and a star in a field of full-width letters,
+  //and a game pad (a pair, shown as U+FFFD twice) in a field taking all, kept whole, or where the limit falls inside
+  //it cut before it; answered otherwise, each as its field takes it
+  fields = {{u"Name", u"Ren\u00e9e \u2606", 0x0c00, 1, 48, 16}, {u"Pad", u"a\xd83c\xdfae", 0, 1, 48, 8},
+            {u"Cut", u"ab\xd83c\xdfae", 0, 1, 48, 3}};
+  setUp();
+  CHECK(m.start("sceUtilityOsk") && !m.update("sceUtilityOsk"), true);
+  request = m.kernel.dialogShown();
+  CHECK(request.fields.size() == 3 && request.fields[1].text == "a\xef\xbf\xbd\xef\xbf\xbd", true);
+  answer = {};
+  answer.id = request.id;
+  for(auto& shown : request.fields) answer.texts.push_back(shown.text);
+  CHECK(m.kernel.dialogAnswer(answer) && !m.update("sceUtilityOsk"), true);
+  CHECK(output(0) == u"Ren\u00e9e \u2606" && result(0) == 2, true);
+  CHECK(output(1) == u"a\xd83c\xdfae" && output(2) == u"ab", true);
+  CHECK(m.close("sceUtilityOsk"), true);
+  setUp();
+  CHECK(m.start("sceUtilityOsk") && !m.update("sceUtilityOsk"), true);
+  answer = {};
+  answer.id = m.kernel.dialogShownID();
+  answer.texts = {"Ren\xc3\xa9" "e \xe2\x98\x86!", "a\xef\xbf\xbd", "abcd"};
+  CHECK(m.kernel.dialogAnswer(answer) && !m.update("sceUtilityOsk"), true);
+  CHECK(output(0) == u"\uff32\uff45\uff4e\uff45\u3000" && result(0) == 2, true);
+  CHECK(output(1) == u"a\ufffd" && output(2) == u"abc", true);
+  CHECK(m.close("sceUtilityOsk"), true);
 }
 
 //Loading from a list (Kenka Bancho's LOAD GAME: save "SGL", its list SGL001 to SGL007, the latest first): with no save
@@ -369,7 +413,7 @@ static auto frontKeyboard() -> void {
 //describe it, the latest chosen first; one chosen is loaded (its data read, its titles in sfoParam, its name written
 //into the request's), backing out is CANCEL, and a save without the data file named is broken, chosen
 //FILE_NOT_FOUND (utility/savedata/loadbroken's list load). The request's own save, there and not listed (where
-//answers without a front end load from), is listed after the list's.
+//answers without a front end save to), is listed after the list's.
 static auto frontListLoad() -> void {
   HostFolder stick;
   FrontMachine m;
@@ -603,6 +647,74 @@ static auto frontListDelete() -> void {
   CHECK(finished(m, choice(m.kernel.dialogShown(), -1)), 1);
 }
 
+//A list's dialog whose request names a pattern (Dissidia's Load Game keeps "GameData*" from the list mode) shows the
+//list's saves there and no save of the pattern's own, the latest first; the player's choice is loaded and its name
+//written back. A pattern in the list is no save, in a load or a save (no new data of its name); a list delete naming
+//one shows the list's saves there. With no list the pattern is the save's name, which no save has: a load shows
+//nothing, not the game's own folder; a save to it, single or a list's, is refused at once, nothing asked or made.
+//"<>" in a list leaves out a host folder of the game's whose name holds a pattern (an older build's).
+static auto frontPatterns() -> void {
+  namespace fs = std::filesystem;
+  HostFolder stick;
+  FrontMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  auto& memory = m.system.memory;
+  CHECK(makeSave(m, "ULUS10437", "GameData00", "latest", "Latest"), true);
+  CHECK(makeSave(m, "ULUS10437", "GameData03", "older", "Older"), true);
+  auto saves = stick.path / "PSP/SAVEDATA";
+  fs::last_write_time(saves / "ULUS10437GameData03/PARAM.SFO",
+                      fs::last_write_time(saves / "ULUS10437GameData00/PARAM.SFO") - std::chrono::hours(48));
+  saveParameters(m, 4, "ULUS10437", "GameData*", 0, {"GameData00", "GameData01", "Game*", "GameData03"});
+  memory.write(4, Parameters + 1480, 3);  //focus: the latest
+  memory.fill(Buffer, 0, 16);
+  auto request = asked(m);
+  CHECK(request.saves.size(), 2);
+  if(request.saves.size() != 2) return;
+  CHECK(request.saves[0].name == "GameData00" && request.saves[1].name == "GameData03" && request.focus == 0, true);
+  CHECK(finished(m, choice(request, 1)), 0);
+  CHECK(memory.readString(Buffer, 8) == "older" && memory.readString(Parameters + 76, 20) == "GameData03", true);
+  saveParameters(m, 5, "ULUS10437", "GameData*", 3, {"GameData00", "Game?", "GameData01"});
+  memory.write(4, Parameters + 1480, 7);  //the first new
+  request = asked(m);
+  CHECK(request.saves.size(), 2);
+  if(request.saves.size() != 2) return;
+  CHECK(request.saves[0].name == "GameData00" && request.saves[0].there, true);
+  CHECK(request.saves[1].name == "GameData01" && !request.saves[1].there && request.focus == 1, true);
+  CHECK(finished(m, choice(request, -1)), 1);
+  saveParameters(m, 6, "ULUS10437", "GameData*", 0, {"GameData00", "GameData03"});
+  request = asked(m);
+  CHECK(request.mode == 6 && request.saves.size() == 2, true);
+  CHECK(finished(m, choice(request, -1)), 1);
+  CHECK(fs::exists(saves / "ULUS10437GameData00") && fs::exists(saves / "ULUS10437GameData03"), true);
+  //with no list (no first name) the pattern is taken as the save's name: a load shows nothing (not the game's own
+  //folder, there), and a save to it, a single save's or a list save's, is refused at once, asking nothing
+  CHECK(makeSave(m, "ULUS10437", "", "own", "Own"), true);
+  saveParameters(m, 4, "ULUS10437", "GameData*", 0, {""});
+  request = asked(m);
+  CHECK(request.id != 0 && request.saves.empty(), true);
+  CHECK(finished(m, choice(request, -1)), 0x8011'0307);
+  for(const auto& [mode, list] : {std::pair{3u, std::vector<const char*>{}},
+                                  std::pair{5u, std::vector<const char*>{""}}}) {
+    saveParameters(m, mode, "ULUS10437", "GameData*", 3, list);
+    memory.copyIn(Buffer, "new", 3);
+    check(__LINE__, "at once", m.start("sceUtilitySavedata") && !m.update("sceUtilitySavedata")
+          && m.status("sceUtilitySavedata") == 3 && !m.kernel.dialogShownID(), true);
+    check(__LINE__, "refused", memory.read(4, Parameters + 28), 0x8011'0388);
+    check(__LINE__, "closed", m.close("sceUtilitySavedata"), true);
+  }
+  for(auto& entry : fs::directory_iterator(saves)) {
+    CHECK(entry.path().filename().string().find_first_of("*?"), std::string::npos);
+  }
+  CHECK(stick.get("PSP/SAVEDATA/ULUS10437/DATA.BIN") == "own", true);
+  //"<>" in a list stands for the game's saves, a host folder whose name holds a pattern (an older build's) left out
+  stick.put("PSP/SAVEDATA/ULUS10437Game*/DATA.BIN", "host");
+  saveParameters(m, 4, "ULUS10437", "", 0, {"<>"});
+  request = asked(m);
+  CHECK(request.saves.size(), 3);
+  for(auto& shown : request.saves) CHECK(shown.name == "Game*", false);
+  CHECK(finished(m, choice(request, -1)), 1);
+}
+
 //One save's load, save and delete: the save the request names (there or not, as its PARAM.SFO describes it; a new
 //save as the request's own titles and icon describe it); a load or delete of a save not there finishes NO_DATA in its
 //group whatever's answered (a PSP's "There is no save data."), backing out is CANCEL, and saying yes loads, saves
@@ -736,7 +848,7 @@ static auto frontBytes() -> void {
   request.id = 7, request.kind = 1, request.language = 2, request.circle = true;
   request.text = "Caf\xc3\xa9?", request.error = 0x8002'0323, request.buttons = 2, request.firstNo = true;
   request.back = true, request.ok = "Hai", request.cancel = "Iya";
-  request.fields = {{"Name", "Snake", 8, 0x0f, 1, 2}, {"PIN", "", 4, 1, 1, 0}};
+  request.fields = {{"Name", "Snake", 8, 0x0f, 1, 2, {}}, {"PIN", "", 4, 1, 1, 0, {}}};
   request.mode = 5, request.focus = 1, request.deleted = true;
   Request::Save first;
   first.name = "SLOT0", first.title = "A game", first.saveTitle = "Chapter 3", first.detail = "Line one\nline two";
@@ -786,6 +898,7 @@ auto dialogTests() -> Tests {
     {"dialogs front end: messages a PSP doesn't show", frontMessageRefused},
     {"dialogs front end: keyboard", frontKeyboard}, {"dialogs front end: list load", frontListLoad},
     {"dialogs front end: list save", frontListSave}, {"dialogs front end: list delete", frontListDelete},
+    {"dialogs front end: lists naming a pattern (Dissidia)", frontPatterns},
     {"dialogs front end: lists without a list, parameters rewritten", frontListless},
     {"dialogs front end: one save's load, save and delete", frontSingleSaves},
     {"dialogs front end: dialogs answered at once", frontOthers}, {"dialogs front end: states", frontStates},

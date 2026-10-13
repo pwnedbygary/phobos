@@ -353,6 +353,75 @@ static auto controllerPeek() -> void {
   CHECK(m.call("sceCtrlReadBufferPositive", {Buffer, 64}) != Kernel::ErrorInvalidSize, true);
 }
 
+//The host's right stick in bytes 10 and 11 of every SceCtrlData (ctrl.cpp's convention, not a PSP's: a PSP writes
+//zeros there), 128 each way when left alone, in every call that gives samples: peek and read, positive and negative,
+//one sample or all 64; centred in digital mode, as the stick is; the last four bytes zero. A state doesn't keep it:
+//the samples loaded read it centred, the next one takes it again.
+static auto controllerRightStick() -> void {
+  KernelMachine m;
+  auto vblank = [&] { m.kernel.cycles = m.kernel.nextVblank; m.kernel.events(); };
+  auto filled = [&] { m.system.memory.fill(Buffer, 0xee, 64 * 16); };
+  auto right = [&](u32 sample) {
+    return m.system.memory.read(1, Buffer + sample * 16 + 10) | m.system.memory.read(1, Buffer + sample * 16 + 11) << 8;
+  };
+  auto zeros = [&](u32 sample) { return m.system.memory.read(4, Buffer + sample * 16 + 12) == 0; };
+  vblank();
+  filled();
+  CHECK(m.call("sceCtrlPeekBufferPositive", {Buffer, 1}), 1);  //digital, untouched: centred, then zeros
+  CHECK(right(0), 0x8080);
+  CHECK(zeros(0), true);
+  m.kernel.controller.rightX = 30, m.kernel.controller.rightY = 220;
+  vblank();
+  CHECK(m.call("sceCtrlPeekBufferPositive", {Buffer, 1}), 1);  //digital: centred, as the stick
+  CHECK(right(0), 0x8080);
+  CHECK(m.call("sceCtrlSetSamplingMode", {1}), 0);
+  vblank();
+  m.kernel.controller.analogX = 200, m.kernel.controller.analogY = 10;
+  vblank();
+  for(auto name : {"sceCtrlPeekBufferPositive", "sceCtrlPeekBufferNegative"}) {
+    filled();
+    CHECK(m.call(name, {Buffer, 64}), 64);
+    CHECK(right(61), 0x8080);                                   //sampled digital
+    CHECK(right(62) == (220 << 8 | 30) && right(63) == (220 << 8 | 30), true);
+    CHECK(m.system.memory.read(1, Buffer + 63 * 16 + 8) == 200 && m.system.memory.read(1, Buffer + 62 * 16 + 8) == 128,
+          true);                                                //(the left stick as it was at each)
+    CHECK(zeros(0) && zeros(62) && zeros(63), true);
+  }
+  m.kernel.controller.rightX = 255, m.kernel.controller.rightY = 0;
+  vblank();
+  filled();
+  CHECK(m.call("sceCtrlReadBufferPositive", {Buffer, 1}), 1);
+  CHECK(right(0), 0x00ff);
+  CHECK(zeros(0), true);
+  m.kernel.controller.rightX = 64, m.kernel.controller.rightY = 192;
+  vblank();
+  m.kernel.controller.rightX = m.kernel.controller.rightY = 128;  //let go
+  vblank();
+  filled();
+  CHECK(m.call("sceCtrlReadBufferNegative", {Buffer, 3}), 2);  //the two new ones, then the oldest kept
+  CHECK(right(0) == (192 << 8 | 64) && right(1) == 0x8080 && right(2) == 0x8080, true);
+  CHECK(zeros(0) && zeros(1) && zeros(2), true);
+  CHECK(m.system.memory.read(4, Buffer + 4), ~0u);              //(negative: nothing held)
+  //a state holds none of it (saved again after the stick and every sample's right values change, it's the same
+  //bytes); loaded back into this machine, whose newest sample holds 1 and 2, its samples read centred; the next takes
+  //the stick
+  m.kernel.controller.rightX = 1, m.kernel.controller.rightY = 2;
+  vblank();
+  auto state = saveState(m);
+  m.kernel.controller.rightX = 99;
+  for(auto& sample : m.kernel.controller.samples) sample.rightX = 7, sample.rightY = 9;
+  CHECK(saveState(m) == state, true);
+  for(auto& sample : m.kernel.controller.samples) sample.rightX = 1, sample.rightY = 2;
+  CHECK(loadState(m, state), true);
+  m.call("sceCtrlPeekBufferPositive", {Buffer, 1});
+  CHECK(right(0), 0x8080);
+  CHECK(m.system.memory.read(1, Buffer + 8), 200);              //(the left stick is kept)
+  m.kernel.controller.rightX = 3, m.kernel.controller.rightY = 4;
+  vblank();
+  m.call("sceCtrlPeekBufferPositive", {Buffer, 1});
+  CHECK(right(0), 4 << 8 | 3);
+}
+
 //The latch: presses and releases between reads, the buttons held and not held at some sample meanwhile, and how many
 //samples; reading starts it afresh, and doesn't wait for another sample.
 static auto controllerLatch() -> void {
@@ -742,7 +811,8 @@ auto fileTests() -> Tests {
     {"files containment", fileContainment},
     {"files rename", fileRename}, {"files numbered lowest free first", fileNumbers},
     {"files listed in the order they were opened", fileList},
-    {"files short names", fileShortNames}, {"controller peek", controllerPeek}, {"controller latch", controllerLatch},
+    {"files short names", fileShortNames}, {"controller peek", controllerPeek},
+    {"controller right stick", controllerRightStick}, {"controller latch", controllerLatch},
     {"controller new samples", controllerReadNew}, {"controller cycle", controllerCycle},
     {"controller read", controllerRead}, {"controller two readers", controllerTwoReaders},
     {"system program", systemProgram}, {"download DRM on a game's own files", downloadDrm},

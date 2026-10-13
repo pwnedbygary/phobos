@@ -6,8 +6,8 @@
 //
 //Open files are saved by their PSP paths: on loading, a host file is opened again where the devices are then, at
 //the position it had (one that's gone since is dropped, and the program's next use of it fails as for any bad file).
-//Not saved: the devices and the disc in the drive (the system gives them when it powers on: the same game's), and
-//the table of functions (the kernel's own).
+//Not saved: the devices and the disc in the drive (the system gives them when it powers on: the same game's), the
+//table of functions (the kernel's own), and the host's right stick (ctrl.cpp: no PSP has one).
 //
 //Loading checks what it reads. Only a machine like this one makes states, so a value none could have (a position
 //past the end of what it's a position in, a list the GE driver can't have queued, a display mode there isn't, a clock
@@ -138,6 +138,10 @@ auto Kernel::serialize(serializer& s) -> bool {
     vector(m.segments, [&](Module::Segment& segment) { s(segment.address); s(segment.size); });
     vector(m.imports, [&](Module::Import& i) { text(i.library); s(i.nid); s(i.stub); });
     vector(m.exports, [&](Module::Export& e) { text(e.library); s(e.nid); s(e.address); s(e.variable); });
+    //the variables it imports, and the address each holds (layout 28 on: none in older states, whose builds linked
+    //none, so none is moved as modules come and go)
+    if(s.reading() && stateLayout < 28) m.variables.clear();
+    else vector(m.variables, [&](Module::Variable& v) { text(v.library); s(v.nid); s(v.list); s(v.linked); });
     vector(m.skipped, [&](std::string& skipped) { text(skipped); });
   };
   moduleFields(module);
@@ -495,17 +499,23 @@ auto Kernel::serialize(serializer& s) -> bool {
   //its own library, or none yet while a call opening one goes on; a font counts the handles holding it, and its
   //memory is what its kind of open asked for (a font of the program's memory is read where it is: never whole into
   //it, which only a system font or a file can be); a call is a living thread's, part way through what its kind does.
+  //(Layout 27 on) a font holds the glyph it last read, one of its own, in two blocks, and a call may be reading one
+  //(fontCharacter()): none in older states.
   map(fontLibraries, [&](FontLibrary& library) {
     s(library.address); s(library.slots); s(library.handles); s(library.data); s(library.list);
     s(library.fonts); s(library.open);
     check(library.slots <= MaxFonts);
   });
+  bool glyphs = !s.reading() || stateLayout >= 27;
   auto fontFields = [&](OpenFont& font) {
     s(font.id); s(font.library); s(font.source); s(font.index); text(font.path); s(font.address); s(font.length);
     s(font.mode); s(font.references);
     vector(font.blocks, [&](u32& block) { s(block); });
+    if(glyphs) s(font.held), vector(font.glyphBlocks, [&](u32& block) { s(block); });
+    else font.held = 0, font.glyphBlocks.clear();
     s(font.hash);
     check(font.source <= 2 && font.mode <= 1 && (font.source != 2 || font.mode == 0) && font.blocks.size() <= 9);
+    check(font.glyphBlocks.size() == (font.held ? 2 : 0));
   };
   map(openFonts, fontFields);
   s(nextFontID);
@@ -518,9 +528,17 @@ auto Kernel::serialize(serializer& s) -> bool {
     vector(call.frees, [&](u32& block) { s(block); });
     s(call.ended); s(call.result); s(call.error);
     fontFields(call.opening);
-    check(call.kind >= FontCall::NewLib && call.kind <= FontCall::Give && call.slot < MaxFonts);
-    check(call.slots <= MaxFonts && call.asks.size() <= 9 && call.got.size() <= call.asks.size());
-    check(call.frees.size() <= MaxFonts * 9 + 4);
+    if(glyphs) s(call.font), s(call.glyph), s(call.what), s(call.out), s(call.clip);
+    else call.font = call.glyph = call.what = call.out = 0, std::fill_n(call.clip, 4, 0);
+    check(call.kind >= FontCall::NewLib && call.kind <= (glyphs ? FontCall::Glyph : FontCall::Give));
+    check(call.slot < MaxFonts && call.slots <= MaxFonts && call.asks.size() <= 9);
+    //(what a call may give back: sceFontDoneLib's, each open font's 9 tables and its glyph's 2 blocks, then the 4 of
+    //the library's own)
+    check(call.got.size() <= call.asks.size() && call.frees.size() <= MaxFonts * (9 + 2) + 4);
+    //a font being opened holds no glyph yet; a glyph's call reads one of a font handed out, returning its error
+    check(!call.opening.held);
+    check(call.kind != FontCall::Glyph || (call.asks.size() == 2 && call.font && call.font < nextFontID &&
+                                           !call.errorAt && (call.what == 0 || call.what == 2 || call.what == 3)));
   });
   //a ringbuffer being fed, its callback running: it asked for a run of what's left (at most RingMostPackets)
   map(mpegCalls, [&](MpegCall& call) {
@@ -589,10 +607,18 @@ auto Kernel::serialize(serializer& s) -> bool {
       }
       check(holders && font.references == holders);
       if(valid) check(fontReloaded(font) && font.blocks.size() == fontAsks(*font.pgf, font.mode, font.source).size());
+      if(valid) check(font.held <= font.pgf->glyphCount);
     }
     for(auto& [thread, call] : fontCalls) {
       check(threads.count(thread) && (call.kind != FontCall::NewLib || call.asks.size() == 4));
       if(call.kind == FontCall::Give) check(call.asks.empty());
+      if(call.kind == FontCall::Glyph && !call.ended) {  //its font (if it's still open: closed, it gives back)
+        check(memory.reaches(call.out, call.what == 0 ? CharInfoSize : GlyphImageSize));
+        auto font = openFonts.find(call.font);
+        if(font != openFonts.end() && valid) {
+          check(font->second.library == call.library && call.glyph < font->second.pgf->glyphCount);
+        }
+      }
       if(call.kind != FontCall::Open || call.ended || !valid) continue;
       auto library = fontLibraryAt(call.library);
       check(library && call.slot < library->slots && library->open[call.slot] && !library->fonts[call.slot]);
@@ -945,6 +971,9 @@ auto Kernel::serialize(serializer& s) -> bool {
   auto& c = controller;
   s(c.buttons); s(c.analogX); s(c.analogY); s(c.cycle); s(c.mode); s(c.nextSample);
   for(auto& sample : c.samples) { s(sample.time); s(sample.buttons); s(sample.x); s(sample.y); }
+  //(the host's right stick isn't kept, as the PSP has none: ctrl.cpp. The samples loaded read it centred, and the
+  //system sets the stick itself again before the next frame runs.)
+  if(s.reading()) for(auto& sample : c.samples) sample.rightX = sample.rightY = 128;
   s(c.next); s(c.unread); s(c.sampled);
   s(c.latch.made); s(c.latch.broken); s(c.latch.held); s(c.latch.released); s(c.latch.samples);
   s(c.idleReset); s(c.idleBack);

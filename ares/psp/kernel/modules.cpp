@@ -173,6 +173,7 @@ auto Kernel::loadModule(const std::vector<u8>& file, const std::string& path) ->
   loaded.uid = newUID();
   if(!loaded.uid) return release(loaded.block), ErrorNoMemory;
   for(auto& skipped : loaded.module.skipped) note(path + ": the loader left out " + skipped);
+  noteSystemVariables(loaded.module, path + ": ");
   if(sonyModule(loaded.module.name, loaded.module.attributes)) {
     note(path + " is Sony's " + loaded.module.name + ", none of whose functions the HLE kernel has: it runs");
   }
@@ -187,17 +188,20 @@ auto Kernel::loadModule(const std::vector<u8>& file, const std::string& path) ->
 //have no library name), becomes "j address; nop" in place of the kernel's syscall: the caller's jal left ra pointing
 //back at it, so the function returns straight there. Every other import is the kernel's syscall, as the loader made
 //it, so a stub linked to a module since unloaded goes back to the kernel. A stub already right isn't written again
-//(that would throw away the code compiled around it).
+//(that would throw away the code compiled around it). An imported variable gets the address of the variable a
+//loaded module exports under its library and NID, or none (0) once none does, its words moved by the difference
+//from the address they hold (relinkVariable()): God Eater 2's EBOOT.BIN and update modules import dozens from one
+//another, its scene modules loaded and unloaded as the game goes from one scene to the next.
 auto Kernel::linkImports() -> void {
-  std::map<std::pair<std::string, u32>, u32> offered;
+  std::map<std::pair<std::string, u32>, u32> offered, variables;
   auto offer = [&](const Module& offering) {
     for(auto& e : offering.exports) {
-      if(!e.library.empty() && !e.variable) offered[{e.library, e.nid}] = e.address;
+      if(!e.library.empty()) (e.variable ? variables : offered)[{e.library, e.nid}] = e.address;
     }
   };
   offer(module);  //a game's modules may import from libraries its EBOOT.BIN exports
   for(auto& [uid, loaded] : modules) if(!loaded.standIn) offer(loaded.module);
-  auto link = [&](const Module& linked) {
+  auto link = [&](Module& linked) {
     for(auto& i : linked.imports) {
       bool kernels = std::any_of(functions.begin(), functions.end(), [&](auto& f) { return f.nid == i.nid; });
       auto found = offered.find({i.library, i.nid});
@@ -206,9 +210,57 @@ auto Kernel::linkImports() -> void {
       if(memory.read(4, i.stub) != first) memory.write(4, i.stub, first);
       if(memory.read(4, i.stub + 4) != second) memory.write(4, i.stub + 4, second);
     }
+    for(auto& v : linked.variables) {
+      auto found = variables.find({v.library, v.nid});
+      u32 address = found != variables.end() ? found->second : 0;
+      if(address != v.linked) relinkVariable(v.list, address - v.linked), v.linked = address;
+    }
   };
   link(module);
   for(auto& [uid, loaded] : modules) if(!loaded.standIn) link(loaded.module);
+}
+
+//Variables a module (or the program) imports from a library the HLE kernel has functions of, which on a PSP is the
+//system's own: no module will export them, so their words keep what the file has. Noted as it loads.
+auto Kernel::noteSystemVariables(const Module& m, const std::string& who) -> void {
+  for(auto& v : m.variables) {
+    if(std::none_of(functions.begin(), functions.end(), [&](auto& f) { return v.library == f.library; })) continue;
+    char text[160];
+    std::snprintf(text, sizeof(text), "imports variable %08x of %s, which the HLE kernel hasn't", v.nid,
+                  v.library.c_str());
+    note(who + text);
+  }
+}
+
+//An imported variable's words, moved by delta (the address they're to hold less the one they hold: either may be 0,
+//none). Its list, ending in a 0, names each word, with how it holds the address in the top six bits and where it is
+//in the rest (a word address, in the list's own 256 MiB), as uOFW's loadcore reads it: 2, a 32-bit word, the delta
+//added; 6, the lower half of an address, an instruction's 16 bits; 5, the upper half (a lui), several in a row sharing
+//the lower half in the entry after them, which completes the address, so the upper half carries as it should: worked
+//out from that lower half before the lower half itself moves. Any other kind is passed over, as loadcore does. A word
+//already right isn't written again (that would throw away the code compiled around it).
+auto Kernel::relinkVariable(u32 list, u32 delta) -> void {
+  auto entry = [&](u32 n) { return memory.reaches(list + n * 4, 4) ? memory.read(4, list + n * 4) : 0; };
+  auto place = [&](u32 word) { return (list & 0xf000'0000) | (word & 0x03ff'ffff) << 2; };
+  auto put = [&](u32 at, u32 value) { if(memory.read(4, at) != value) memory.write(4, at, value); };
+  for(u32 n = 0; entry(n); n++) {
+    u32 word = entry(n), at = place(word);
+    if(!memory.reaches(at, 4)) continue;
+    u32 value = memory.read(4, at);
+    if(word >> 26 == 2) put(at, value + delta);
+    if(word >> 26 == 6) put(at, (value & 0xffff'0000) | ((value + delta) & 0xffff));
+    if(word >> 26 != 5) continue;
+    u32 last = n, low = 0;
+    while(entry(last + 1) >> 26 == 5) last++;
+    u32 lower = entry(last + 1);
+    if(lower >> 26 == 6 && memory.reaches(place(lower), 4)) low = s16(memory.read(4, place(lower)));
+    u32 upper = ((value << 16) + low + delta + 0x8000) >> 16;
+    for(; n <= last; n++) {
+      u32 hi = place(entry(n));
+      if(memory.reaches(hi, 4)) put(hi, (memory.read(4, hi) & 0xffff'0000) | (upper & 0xffff));
+    }
+    n = last;
+  }
 }
 
 //The module whose segments hold an address (in any of memory's windows), the program's own included; or 0.
@@ -465,6 +517,39 @@ auto Kernel::sceKernelLoadModuleByID() -> void {
   }
   if(u32 error = readOpenFile(open, size, data)) return result(error);
   result(loadModule(data, open.path));
+}
+
+//(path, flags, options): a module that came with a game sold as a download, or with its downloaded content, from its
+//file. uOFW's module manager has the PSP's checks, in this order: not from an interrupt handler (ILLEGAL_CONTEXT, its
+//CANNOT_BE_CALLED_FROM_INTERRUPT); a path the program can read (ILLEGAL_ADDR) with no '%' in it
+//(UNKNOWN_MODULE_FILE, its guard against format strings); options, if any, the program can read (ILLEGAL_ADDR), a
+//SceKernelLMOption of 20 bytes as its first word says for a program built with SDK 2.80 or later (ILLEGAL_SIZE); and
+//the file, which is opened, refused as sceIoOpen refuses it (NOT_FOUND...). The flags are unused. Then a PSP has
+//npdrm give it the file's module key: a module as sold is NPDRM's EDATA ("\0PSPEDAT"), the PRX inside it encrypted
+//(~PSP) under a key npdrm derives from the file and the game's licensee key, which is passed to the decrypter with
+//it. Phobos doesn't derive that key: such a file is refused as an encrypted module that can't be decrypted is
+//(UNSUPPORTED_PRX_TYPE, chosen), and noted. Any other file loads as sceKernelLoadModule loads it (loadModule()):
+//God Eater 2's English translation carries the game's update modules decrypted, plain ELFs, which a PSP running
+//custom firmware loads, as emulators do. (Chosen: official firmware refuses a file that isn't NPDRM's, with an error
+//no recording shows.)
+auto Kernel::sceKernelLoadModuleNpDrm() -> void {
+  if(interrupting) return result(ErrorIllegalContext);
+  u32 at = arg(0), options = arg(2);
+  if(!at || !memory.reaches(at, 1)) return result(ErrorIllegalAddress);
+  std::string path = memory.readString(at, 1024);
+  if(path.find('%') != std::string::npos) return result(ErrorUnknownModuleFile);
+  if(options) {
+    if(!memory.reaches(options, 20)) return result(ErrorIllegalAddress);
+    if((sdkVersion & 0xffff'0000) >= 0x0208'0000 && memory.read(4, options) != 20) return result(ErrorIllegalSize);
+  }
+  std::vector<u8> data;
+  if(u32 error = readWhole(path, data)) return result(error);
+  if(data.size() >= 8 && !memcmp(data.data(), "\0PSPEDAT", 8)) {
+    note("can't load " + path + ": it's an NPDRM module (EDATA), its PRX encrypted with a key npdrm derives from the "
+         "file and the game's licensee key, which Phobos doesn't derive");
+    return result(ErrorUnsupportedPrxType);
+  }
+  result(loadModule(data, path));
 }
 
 //(module, argument size, argument, where to put module_start's result, options)

@@ -460,7 +460,11 @@ struct Allegrex {
   template<u32 Size> auto vfpuRestCompare(u32 condition, u32 vs, u32 vt) -> void;
   template<u32 Size, u32 Op> auto vfpuRestBits(u32 vd, u32 vs, u32) -> void;
   template<u32 Size> auto vfpuRestToFloat(u32 vd, u32 vs, u32 scale) -> void;
+  template<u32 Size, bool Max> auto vfpuRestMinMax(u32 vd, u32 vs, u32 vt) -> void;
+  template<u32 Size, bool Less> auto vfpuRestSet(u32 vd, u32 vs, u32 vt) -> void;
+  template<u32 Size> auto vfpuRestHalfDot(u32 vd, u32 vs, u32 vt) -> void;
   auto vfpuMatrix(u32 which, u32 registers, u32 size) -> void;
+  template<u32 Op> auto executeVFPU(u32 address, u32 instruction) -> u32;
 
   //exceptions.cpp
   auto exception(Exception) -> void;
@@ -503,13 +507,16 @@ struct Allegrex {
     auto reset() -> void;
     auto invalidate(u32 address) -> void;
     auto invalidateRange(u32 address, u32 size) -> void;
+    auto drop(u32 index) -> void;
     auto protect(u32 page) -> void;
+    auto unwatched(u32 page) -> void;
     auto writable(u32 index) -> void;
     auto run() -> u32;
     auto block(u32 address) -> u8*;
     auto emit(u32 address, u8*& body) -> u8*;
     auto emitChain(u32 count) -> void;
     auto emitChainTo(u32 count, u32 target) -> void;
+    auto emitCounted(u32 count, std::vector<sljit_jump*>& leave) -> void;
     auto emitInterpreter(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
     auto emitFallback(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
     auto isBranch(u32 instruction) const -> bool;
@@ -552,10 +559,18 @@ struct Allegrex {
 
     //recompiler-vfpu.cpp
     auto emitVFPU(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
+    auto emitVFPUCall(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
     auto emitPrefixesBusy() -> sljit_jump*;
     auto prefixesAfter(u32 instruction) -> void;
     auto emitMFVC(u32 instruction) -> void;
-    bool prefixesAtRest = false;  //the block being compiled knows the prefixes are at rest here (recompiler-vfpu.cpp)
+    //What the block being compiled knows of the prefixes here: each one's value, where it's known
+    //(recompiler-vfpu.cpp).
+    struct Prefixes {
+      bool known[3] = {};  //pfxs, pfxt, pfxd
+      u32 value[3] = {};
+      auto atRest() const -> bool;
+      auto busy() const -> bool;
+    } prefixes;
 
     //recompiler-memory.cpp
     auto emitLoadStore(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
@@ -564,7 +579,9 @@ struct Allegrex {
 
     bool enabled = false;
     bool chains = true;  //blocks go on to the next by themselves (emitChain()); tests turn it off to compare
-    bool calls = false;  //the block being compiled calls the interpreter somewhere (emitInterpreter())
+    //The block being compiled calls the interpreter somewhere (emitInterpreter()), which may halt the CPU. (Calls
+    //that halt it only by an exception, after which the block leaves, needn't say so: emitVFPUCall().)
+    bool calls = false;
     //How many instructions the last block ran, not yet counted in instructionsRun: each block sets it as it leaves
     //for run() (0 when it counted them itself, going on to the next: emitChain()), and as it calls the interpreter
     //for one (counting that one), so during that call it says how far the block has got.
@@ -576,6 +593,8 @@ struct Allegrex {
     //The same sections, as plain pointers in a table of their own for compiled code to look the next block up in
     //(emitChain()): table points at sectionTable's first.
     std::vector<Section*> sectionTable;
+    //A bit for each section there is (sections[index] set), 64 to a word: the only ones invalidateRange() visits.
+    std::vector<u64> compiled;
     Section** table = nullptr;
 
     //The page table compiled stores use: the CPU's (pages above), except that pages holding compiled code are

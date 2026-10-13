@@ -56,7 +56,7 @@ auto Allegrex::Recompiler::emitNative(u32 address, u32 instruction, u32 count, b
   case 0x12: return emitCOP2(instruction);
 
   //the VFPU (recompiler-vfpu.cpp)
-  case 0x18: case 0x19: case 0x1b: case 0x34: case 0x3c: case 0x3f:
+  case 0x18: case 0x19: case 0x1b: case 0x34: case 0x37: case 0x3c: case 0x3f:
     return emitVFPU(address, instruction, count, delaySlot);
 
   //CACHE: nothing to do, as in the interpreter
@@ -558,12 +558,17 @@ auto Allegrex::Recompiler::emitBranch(u32 address, u32 instruction, u32 count) -
 
 //The coprocessors' branches, BC1F, BC1T, BC1FL and BC1TL on the FPU's condition (FCSR bit 23), and BVF, BVT, BVFL
 //and BVTL on one of the VFPU's condition codes (bits 18-20 pick which); bit 16 branches when it's true, bit 17
-//makes the branch likely. The block ends right after one, as it did when the interpreter ran them: where blocks
-//end is where a run of the CPU may stop (Allegrex::run() checks its limit between blocks), so it decides when
-//interrupts and the HLE kernel's events land, and has to stay as it was for every run to come out the same. So the
-//branch leaves pc and pd as the interpreter's would: pc at the delay slot and pd at the target or past the delay
-//slot, or both past the delay slot for a likely branch not taken; run() then has the interpreter take a delay slot
-//before a taken branch's target, as before. Not taken, the block goes on to the next by itself (emitChainTo()).
+//makes the branch likely. Each ends its block's own instructions, the interpreter's way: where blocks end is where
+//a run of the CPU may stop (Allegrex::run() checks its limit between blocks), so it decides when interrupts and the
+//HLE kernel's events land, and has to stay put for every run to come out the same. The branch leaves pc and pd as
+//the interpreter's would: pc at the delay slot and pd at the target or past the delay slot, or both past the delay
+//slot for a likely branch not taken. Not taken, the block goes on to the next by itself (emitChainTo()). Taken, it
+//does what run() would do next by itself too: Allegrex::run()'s round (the block counted, the run stopping there if
+//it's done), then the interpreter's step, which moves pc and pd past the delay slot and runs it, counted on its own,
+//then the round again and the target's block (emitChainTo()). Its delay slot is compiled as any other instruction
+//is, but where run() wouldn't take that step (a target just past the delay slot, where pd is pc + 4 and run()
+//starts a block at the delay slot instead) or the delay slot isn't one the block could hold (in the next section, a
+//branch, or one that ends blocks), the block leaves for run(), whose interpreter takes the delay slot.
 auto Allegrex::Recompiler::emitCoprocessorBranch(u32 address, u32 instruction, u32 count) -> void {
   u32 target = address + 4 + s16(instruction) * 4;
   if(instruction >> 26 == 0x11) test32(field(&self.fpu.csr), imm(1 << 23), set_z);
@@ -581,7 +586,28 @@ auto Allegrex::Recompiler::emitCoprocessorBranch(u32 address, u32 instruction, u
   setLabel(taken);
   mov32(PC, imm(address + 4));
   mov32(PD, imm(target));
-  mov32(field(&executed), imm(count));
+  auto leaveForRun = [&] {
+    mov32(field(&executed), imm(count));
+    jumpEpilog();
+  };
+  if(!chains || target == address + 8 || address % SectionSize == SectionSize - 4) return leaveForRun();
+  u32 delaySlot = self.read(Word, address + 4);
+  if(isBranch(delaySlot) || endsBlock(delaySlot)) return leaveForRun();
+  std::vector<sljit_jump*> leave;
+  emitCounted(count, leave);
+  //A store earlier in this block may have rewritten the delay slot (dropping the section the block was compiled
+  //into): then run() takes it from memory.
+  u32 index = (address & 0x1fff'ffff) / SectionSize;
+  mov64(reg(1), field(&table));
+  mov64(reg(1), mem(reg(1), index * sizeof(Section*)));
+  leave.push_back(sljit_emit_cmp(compiler, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, (sljit_sw)sectionTable[index]));
+  mov32(PC, imm(target));
+  mov32(PD, imm(target + 4));
+  if(!emitInstruction(address + 4, delaySlot, 1, true)) emitInterpreter(address + 4, delaySlot, 1, true);
+  emitChainTo(1, target);
+  auto here = sljit_emit_label(compiler);
+  for(auto jump : leave) sljit_set_label(jump, here);
+  mov32(field(&executed), imm(0));
   jumpEpilog();
 }
 
