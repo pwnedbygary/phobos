@@ -57,7 +57,9 @@ for source in "$CHDR"/src/libchdr_*.c "$CHDR/deps/lzma-25.01/src/LzmaDec.c" "$CH
   object "$CC" "$source" -O1 -w "${SYSROOT[@]}" -I"$CHDR/include" -I"$CHDR/deps/zstd-1.5.7"
 done
 object "$CC" "$ROOT/libco/libco.c" -O1 -w "${SYSROOT[@]}" -I"$ROOT/libco"
-object "$CXX" "$HERE/runner.cpp" "${CXXFLAGS[@]}" -Wall -Wextra -Werror
+#the source it's built from, for its report: the commit (described from the latest tag), marked dirty with changes
+SOURCE=$(git -C "$ROOT" describe --tags --match 'v[0-9]*' --always --dirty --abbrev=12 2> /dev/null || echo unknown)
+object "$CXX" "$HERE/runner.cpp" "${CXXFLAGS[@]}" -Wall -Wextra -Werror "-DPHOBOS_RUNNER_SOURCE=\"$SOURCE\""
 objects_done
 
 $CXX "${SYSROOT[@]}" -o "$BUILD/psp-runner.part-$$" "${OBJECTS[@]}" "${LIBRARIES[@]}"

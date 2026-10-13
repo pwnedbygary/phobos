@@ -76,6 +76,13 @@ The options, and what each does:
   game's text
 - `--trace-savedata` — each savedata request the system answers, with its answer, as a line
   `[frame] savedata: ...` on standard output (below)
+- `--report FILE` — the run as JSON (below): for comparing runs by what ran, not only by their
+  speed
+- `--start-time SECONDS` — the PSP's clock starts there (seconds since 1970) rather than at the
+  host's time, so two runs see the same dates and can be compared byte for byte (the time zone
+  is the host's `TZ`: `TZ=UTC` pins it too). A loaded state keeps the clock it was saved with.
+- `--screen-stops-at F` — from frame F the runner takes no more pictures from the screen, as if it
+  had stopped presenting: for testing the runner's own capture timeout (`runner-test.sh`)
 
 The buttons by name are `Select`, `Start`, `Up`, `Down`, `Left`, `Right`, `Triangle`,
 `Circle`, `Cross`, `Square`, `L` and `R`; the stick's axes are `L-StickX` and `L-StickY`,
@@ -88,7 +95,10 @@ On standard output, the runner prints, each with the frame it happened on: the g
 output, and the kernel's notes (a function it doesn't have, a thread that will never wake).
 At the end it prints a summary: the frames run, whether the program ended, the frames per
 second, the unique missing functions with their counts (the notes that begin
-`not implemented yet:`), and the last note. The system's own messages (a disc that can't
+`not implemented yet:`), and the last note. The frames per second are the frame loop's, which
+includes its captures (the PNGs, waiting for each picture and writing it, and the save state);
+where there were any, a line after gives the speed without them and their time, and a capture
+whose wait ran out (`stale captures: N`, each said on standard error) is counted. The system's own messages (a disc that can't
 start, a memory stick folder that isn't there) go to standard error, as on the host.
 
 With `--trace-savedata`, each savedata request (sceUtilitySavedataInitStart's parameters, done
@@ -118,7 +128,30 @@ Revenant's save to a list on an empty stick, and in another run its load from th
 
 The frames the PNGs name are the frames the screen presented, one after another from the
 first: the picture a frame's run shows reaches the screen's own thread a step behind, so a
-PNG named `frame-000030.png` is the picture run 29 or 30 made.
+PNG named `frame-000030.png` is the picture run 29 or 30 made. If no picture has come since the
+last PNG and none comes within 2 s (a screen that stopped presenting, a host too loaded to keep
+up), the PNG shows the last one presented, and the runner says so on standard error (`frame N:
+the screen presented no new picture in 2 s`) and counts it in the summary's `stale captures`.
+
+With `--report FILE`, the run is also written as JSON, `"report": "phobos-psp-runner 1"` (a
+later layout gets another number):
+
+- `runner`: the source the runner was built from (`build.sh` passes `git describe`'s name for
+  the commit, `-dirty` with changes; `unknown` built otherwise);
+- `game`: its path, the kind the runner took it for (`disc.iso`, `program.elf`, ...), its title
+  and disc ID where it has them, its size in bytes;
+- `asked`: the renderer, resolution, engine (`recompiler` or `interpreter`), GE threads (0: the
+  core's choice), late frames, frames, start time and state to load, as the options gave them;
+- `ran`: what the run had: the renderer the core used (`Software` if Vulkan didn't start, as it
+  falls back), the GPU's device as its driver names it, the resolution, the GE's threads, the
+  clock it started at (seconds since 1970: the host's, the one asked for, or a loaded state's)
+  and `TZ`;
+- `result`: the frames run, whether the program ended, the frame loop's seconds, its captures'
+  seconds, stale captures, the missing functions (library, NID, count) and the last note;
+- `gpu`: the GPU renderer's counts (as the summary's `gpu:` line, with its pipelines), or null
+  where the software renderer drew.
+
+Values the run didn't have are null, not zero.
 
 ## An example
 

@@ -25,6 +25,42 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Runner: a JSON report of what ran, a pinned start time, captures timed apart and stale ones said — 2026-10-13
+
+Branch `cursor/test-plan-08-2b67`, stacked on `cursor/test-plan-03-2b67` (#245, which changes the runner's build
+script and smoke test; on #241). Package 08 of the 2026-10-13 test and performance plan, adapted (indexed in the
+implementation plan by #244). The runner only: no core change; every option, output line and default as before,
+only new options and new lines where they apply.
+- **The problem**: speed comparisons ran through private scratch patches; a run didn't record what it had actually
+  used (a Vulkan renderer that failed falls back to the software one); the PSP's clock started at the host's time,
+  so two runs of a game differed; the frame loop's time included its captures (waiting for each PNG's picture,
+  writing it, the save state); and a PNG whose wait ran out was written as if fresh.
+- **`--report FILE`**: the run as JSON, `"report": "phobos-psp-runner 1"`: the runner's source (`build.sh` passes
+  `git describe --match 'v[0-9]*' --dirty`), the game (path, kind, title, disc ID, size), what was asked (renderer,
+  resolution, engine, GE threads, late frames, frames, start time, state) and what ran (the renderer the core used,
+  the GPU's device as its driver names it, the resolution, the GE's threads, the clock it began at, `TZ`), the
+  result (frames, the program's end, the loop's seconds and its captures', stale captures, missing functions, last
+  note) and the GPU's counts; null where a run had none (README, "The report").
+- **`--start-time SECONDS`**: the kernel's clock set right after power-on (`Kernel::power()` takes the host's time,
+  the core's only read of the host clock; local time follows `TZ`), before anything runs. A loaded state keeps its
+  own (the clock is in states).
+- **Captures**: the summary adds "frames per second, captures left out" and their seconds where there were any;
+  a PNG with no picture presented since the last one within 2 s is said on standard error and counted (`stale
+  captures: N`). Which picture a PNG takes is as before (the first presented since the last PNG): the coordinator's
+  library comparisons keep their meaning. `--screen-stops-at F`, for the runner's own test, takes no pictures from
+  frame F on.
+- **Kept**: every line the speed kits' patches anchor on. Each kit's whole chain (bench-patch.py, then every other
+  patch in its folder) applies to this runner exactly where it applies to master's (`cpu-round2`, `ge-headroom`,
+  `reconcile`, `vulkan-speed`; `cpu-speed2`'s bench-patch.py already fails on master's runner).
+- **`tests/psp/ares/runner-test.sh`** adds: the report checked (JSON, the software renderer asked and run, the
+  recompiler, 60 frames, the program running on, both PNGs fresh and timed); three runs of cube.elf saving a state
+  at frame 30, two started at 1234567890 (identical states) and one at 1234567999 (another); and a capture after
+  `--screen-stops-at 20` (frame 40's PNG reported stale, frame 20's not).
+- **Checks** (the Mac, `PHOBOS_JOBS=3`, its own TMPDIR): `runner-test.sh` passes (23 s warm); the kits' patch chains
+  as above. Negative controls, each in a disposable copy: the start time not applied, "runs started at different
+  times saved the same state" (fails); the stale capture's detection removed, `stale captures: 1` missing (fails).
+  CI on the PR: below once run.
+
 ## Tests: the host suites' objects kept by what they include and how they're compiled, a checkout's apart — 2026-10-13
 
 Branch `cursor/test-plan-03-2b67`, stacked on `cursor/test-plan-05-2b67` (#241, the CI lanes, so every script changed
