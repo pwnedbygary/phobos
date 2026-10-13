@@ -252,7 +252,8 @@ static auto vfpuLog2(u32 bits) -> u32 {
 //matrix products). Each product keeps two extra bits with round-to-odd; the four terms are aligned to the largest
 //exponent and truncated; the integer sum rounds to nearest, ties to even, a carry out of that rounding raising the
 //exponent; subnormals flush after that. Order of the lanes does not matter (measured, docs/psp-vfpu-measurements.md,
-//round 2). (Compiled code's matrix products and dot products do the same in NEON: recompiler-vfpu.cpp.)
+//round 2). (On ARM64, compiled code's products of matrices in place, and its dot products, do the same in NEON:
+//recompiler-vfpu.cpp.)
 //
 //Its last step, vfpuDotRound(): the terms' sum (each product's 27 bits, aligned to the largest exponent, highest)
 //rounded to a float.

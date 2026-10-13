@@ -831,7 +831,11 @@ struct Values {
     uint32_t pool[6];
     bool pooled = next() % 3 == 0;
     for(auto& p : pool) p = value() & 0x7fff'ffff;
-    for(auto& x : r) x = pooled && next() % 8 ? pool[next() % 6] ^ (next() & 0x8000'0000) : value();
+    for(auto& x : r) {
+      if(!pooled || next() % 8 == 0) { x = value(); continue; }
+      uint32_t pick = next() % 6, sign = next() & 0x8000'0000;
+      x = pool[pick] ^ sign;
+    }
   }
 };
 
@@ -883,8 +887,9 @@ struct Engines {
 };
 
 //Compiled code's matrix and dot products (recompiler-vfpu.cpp: vmmul, vtfm, vhtfm, vdot and vhdp, which on ARM64
-//run the adder in NEON) against the interpreter's: random instructions of each kind and size, on any registers
-//(matrices in place or not, transposed or not, vectors along rows or columns, results over their own operands),
+//run the adder in NEON) against the interpreter's: first fixed cases of huge terms cancelling exactly, then random
+//instructions of each kind and size: three in four with their matrices in place (each operand transposed or not, every
+//combination in turn), the rest on any registers (vectors along rows or columns, results over their own operands),
 //from random registers (Values), with prefixes set before them now and then (in the block, or only in the state it
 //starts from), which the matrix products leave at rest and the others take. Every register, the prefixes and the
 //condition codes must come out the same.
@@ -939,7 +944,14 @@ auto compiledProducts() -> void {
         if(values.next() % 2) words.push_back((0xdc + which) << 24 | value);
         else state[which] = value;
       }
-      words.push_back(alu(kind.opcode, kind.size, values.next() & 0x7f, values.next() & 0x7f, values.next() & 0x7f));
+      uint32_t vd = values.next() & 0x7f, vs = values.next() & 0x7f, vt = values.next() & 0x7f;
+      if(trial % 4 != 3) {  //matrices in place, each transposed or not in turn (rd, rs, rt: the bits of trial / 4)
+        auto placed = [&](uint32_t turned) { uint32_t m = values.next() % 8; return turned ? E(m) : M(m); };
+        bool product = kind.opcode == Vmmul, transform = !product && kind.opcode >> 3 == 0b111100;
+        if(product) vd = placed(trial / 4 & 1), vt = placed(trial / 16 & 1);
+        if(product || transform) vs = placed(trial / 8 & 1);
+      }
+      words.push_back(alu(kind.opcode, kind.size, vd, vs, vt));
       values.fill(registers);
       if(!engines.run(words, registers, state[0], state[1], state[2]) && differences++ < 3) {
         engines.report(kind.name, words);
@@ -994,7 +1006,8 @@ auto compiledLanes() -> void {
         if(mode == 1 || (mode == 3 && values.next() % 2)) words.push_back((0xdc + which) << 24 | value);
         else state[which] = value;
       }
-      words.push_back(alu(kind.opcode, size, values.next() & 0x7f, values.next() & 0x7f, rt));
+      uint32_t vd = values.next() & 0x7f, vs = values.next() & 0x7f;
+      words.push_back(alu(kind.opcode, size, vd, vs, rt));
       values.fill(registers);
       if(!engines.run(words, registers, state[0], state[1], state[2]) && differences++ < 3) {
         engines.report(kind.name, words);

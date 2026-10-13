@@ -839,14 +839,16 @@ auto coprocessorBranchesTaken() -> void {
 // leaves or calls the interpreter (emitDelaySlot()). Every branch, taken and not (a likely one skipping its delay
 // slot then), and every jump, with a delay slot of each kind: native, interpreted, a syscall and a load raising an
 // exception (whose hooks record pc and pd as they are then, and the instructions run before), a syscall that moves pc
-// and pd (as a thread switch does: to the word after the delay slot, whichever way the branch went), and a load from
-// a page the page table leaves out. The interpreter and the recompiler must record the same and end the same, and
-// runs of 1 to 37 instructions at a time, chained and not, must stop in the same places.
+// and pd (as a thread switch does: to the word after the delay slot, whichever way the branch went), a load from a
+// page the page table leaves out, a division by zero and an FPU division giving NaN (cold code that comes back), a
+// VFPU instruction after mtvc set a prefix the block can't know (the interpreter's way, cold) and a reserved VFPU
+// encoding (which raises). The interpreter and the recompiler must record the same and end the same, and runs of 1 to
+// 37 instructions at a time, chained and not, must stop in the same places.
 auto delaySlotsEachWay() -> void {
   if(!useRecompiler) return;
-  enum : uint32_t { Taken = 44, Case = 64 };  //(each case: 16 words, the taken way's from word 11)
-  struct Form { uint32_t word; bool likely; int32_t a, b; };  //the branch at word 4, rs = t0 = a, rt = t1 = b
-  constexpr int32_t offset = (Taken - 20) / 4;
+  enum : uint32_t { Taken = 48, Case = 64 };  //(each case: 16 words, the taken way's from word 12)
+  struct Form { uint32_t word; bool likely; int32_t a, b; };  //the branch at word 5, rs = t0 = a, rt = t1 = b
+  constexpr int32_t offset = (Taken - 24) / 4;
   const Form forms[] = {
     {beq(t0, t1, offset), 0, 3, 3}, {beq(t0, t1, offset), 0, 3, 4}, {bne(t0, t1, offset), 0, 3, 4},
     {bne(t0, t1, offset), 0, 3, 3}, {blez(t0, offset), 0, -1, 0}, {blez(t0, offset), 0, 1, 0},
@@ -859,7 +861,11 @@ auto delaySlotsEachWay() -> void {
     {bgezl(t0, offset), 1, 2, 0}, {bgezl(t0, offset), 1, -2, 0}, {bltzall(t0, offset), 1, -5, 0},
     {bgezall(t0, offset), 1, -5, 0}, {j(0), 0, 0, 0}, {jal(0), 0, 0, 0}, {jr(t2), 0, 0, 0}, {jalr(t3, t2), 0, 0, 0},
   };
-  const uint32_t slots[] = {addiu(s2, s2, 3), bitrev(s3, t0), syscall(5), lw(t9, 1, s7), lw(t8, 0, s6), syscall(6)};
+  //each delay slot, and the word before the branch (mtvc t5 into pfxs for the VFPU instruction after it)
+  const uint32_t mtvc = 0x48e0'0080u | t5 << 16, vaddS = 0x6000'0000u | 1 << 16 | 2 << 8 | 3;
+  const std::pair<uint32_t, uint32_t> slots[] = {{nop, addiu(s2, s2, 3)}, {nop, bitrev(s3, t0)}, {nop, syscall(5)},
+    {nop, lw(t9, 1, s7)}, {nop, lw(t8, 0, s6)}, {nop, syscall(6)}, {nop, div_(t0, zero)}, {nop, fop(0x03, 2, 0, 1)},
+    {mtvc, vaddS}, {nop, 0xd019'0000u}};
   struct Event {
     uint32_t kind, what, pc, pd;
     uint64_t before;
@@ -874,13 +880,13 @@ auto delaySlotsEachWay() -> void {
     auto& events = runs[n].events;
     uint32_t at = Base, cases = 0;
     for(auto& form : forms) {
-      for(uint32_t slot : slots) {
+      for(auto [before, slot] : slots) {
         uint32_t next = at + Case;
         uint32_t word = form.word;
         if(word >> 26 == 0x02 || word >> 26 == 0x03) word |= (at + Taken) >> 2 & 0x03ff'ffff;
         uint32_t words[16] = {addiu(t0, zero, form.a), addiu(t1, zero, form.b), lui(t2, (at + Taken) >> 16),
-                              ori(t2, t2, (at + Taken) & 0xffff), word, slot, addiu(s0, s0, 1), j(next), nop, nop, nop,
-                              addiu(s1, s1, 1), j(next), nop, nop, nop};
+                              ori(t2, t2, (at + Taken) & 0xffff), before, word, slot, addiu(s0, s0, 1), j(next), nop,
+                              nop, nop, addiu(s1, s1, 1), j(next), nop, nop};
         for(uint32_t k : range(16)) m.ram.write32(at + 4 * k, words[k]);
         at = next, cases++;
       }
@@ -897,14 +903,17 @@ auto delaySlotsEachWay() -> void {
     m.cpu.recompiler.enabled = n != 0;
     m.cpu.recompiler.chains = n != 2;
     m.cpu.power(Base);
-    m.cpu.ipu.r[s7] = Data, m.cpu.ipu.r[s6] = Unmapped;
+    m.cpu.ipu.r[s7] = Data, m.cpu.ipu.r[s6] = Unmapped, m.cpu.ipu.r[t5] = 0x55;
     m.ram.write32(Unmapped, 0x1234'5678);
   }
   auto same = [&](uint32_t x, uint32_t y) {
     auto& a = runs[x].m.cpu;
     auto& b = runs[y].m.cpu;
     bool same = a.ipu.pc == b.ipu.pc && a.ipu.pd == b.ipu.pd && a.scc.halted == b.scc.halted;
-    for(uint32_t r : range(32)) same = same && a.ipu.r[r] == b.ipu.r[r];
+    same = same && a.ipu.hi == b.ipu.hi && a.ipu.lo == b.ipu.lo && a.fpu.csr == b.fpu.csr;
+    same = same && a.vfpu.pfxs == b.vfpu.pfxs && a.vfpu.pfxt == b.vfpu.pfxt && a.vfpu.pfxd == b.vfpu.pfxd;
+    for(uint32_t r : range(32)) same = same && a.ipu.r[r] == b.ipu.r[r] && a.fpu.r[r] == b.fpu.r[r];
+    for(uint32_t r : range(128)) same = same && a.vfpu.r[r] == b.vfpu.r[r];
     return same;
   };
   runs[0].m.cpu.run(100'000);
@@ -912,11 +921,11 @@ auto delaySlotsEachWay() -> void {
   CHECK(same(0, 1), 1);
   CHECK(runs[0].events == runs[1].events, 1);
   CHECK(runs[0].m.cpu.scc.halted, 1);
-  CHECK(runs[0].events.size(), 3 * std::size(forms) - 3 * 7);  //(the 7 likely branches not taken skip theirs)
+  CHECK(runs[0].events.size(), 4 * std::size(forms) - 4 * 7);  //(the 7 likely branches not taken skip theirs)
   //chained against unchained, a few instructions at a time (runs[1] again, from the start)
   runs[1].events.clear();
-  runs[1].m.cpu.ipu.pc = Base, runs[1].m.cpu.ipu.pd = Base + 4, runs[1].m.cpu.scc.halted = 0;
-  for(uint32_t r : range(32)) runs[1].m.cpu.ipu.r[r] = runs[2].m.cpu.ipu.r[r];
+  runs[1].m.cpu.ipu = runs[2].m.cpu.ipu, runs[1].m.cpu.fpu = runs[2].m.cpu.fpu, runs[1].m.cpu.vfpu = runs[2].m.cpu.vfpu;
+  runs[1].m.cpu.scc.halted = 0;
   uint32_t mismatches = 0;
   for(uint32_t round = 0; round < 20000 && !runs[1].m.cpu.scc.halted; round++) {
     uint32_t limit = 1 + round % 37;
@@ -936,8 +945,9 @@ auto delaySlotsEachWay() -> void {
 // target's code goes: a function a call site has linked to, rewritten by the program itself halfway; a loop that
 // rewrites its own first instruction on every round, with a larger constant each time (its block, running on from a
 // section that went, mustn't go on to its old self); and a function called through two mirrors in turn (its section
-// compiled afresh for each). The recompiler must end as the interpreter does, and runs of a few instructions at a
-// time, chained and not, must stop in the same places.
+// compiled afresh for each). The recompiler must end as the interpreter does, links made and waiting, also with code
+// memory small enough to start afresh every few blocks; and runs of a few instructions at a time, chained and not, must
+// stop in the same places.
 auto linkedBlocks() -> void {
   if(!useRecompiler) return;
   constexpr uint32_t Function = Base + 0x1000, Loop = Base + 0x2000, Mirrored = Function | 0x4000'0000;
@@ -979,6 +989,19 @@ auto linkedBlocks() -> void {
   CHECK(runs[1].gpr(s1), 19 + 21 * 100);
   CHECK(runs[0].gpr(s2), 1 + (50 + 78) * 29 / 2);  //(round r took the word round r - 1 stored: 50 + r - 2)
   CHECK(runs[1].gpr(s2), 1 + (50 + 78) * 29 / 2);
+  //(links were made: the call site's to the function, and j Loop's waits since the loop's first block went)
+  CHECK(runs[1].cpu.recompiler.into.empty(), 0);
+  CHECK(runs[1].cpu.recompiler.waiting.empty(), 0);
+  //with code memory so small it starts afresh every few blocks, links and all
+  Machine tight;
+  program(tight);
+  tight.cpu.recompiler.enabled = true;
+  tight.cpu.recompiler.codeMemory = 1_MiB + 8_KiB;  //(it starts afresh with under 1 MiB left)
+  tight.cpu.power(Base);
+  tight.cpu.run(100'000);
+  same = tight.cpu.scc.halted;
+  for(uint32_t r : range(32)) same = same && runs[0].cpu.ipu.r[r] == tight.cpu.ipu.r[r];
+  CHECK(same, 1);
   //chained against unchained, a few instructions at a time, from the start again
   for(uint32_t n : {1u, 2u}) {
     program(runs[n]);

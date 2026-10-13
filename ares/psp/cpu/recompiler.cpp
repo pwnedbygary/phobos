@@ -81,21 +81,21 @@ auto Allegrex::Recompiler::invalidateRange(u32 address, u32 size) -> void {
   run(first, SectionCount - 1), run(0, last);
 }
 
-//The section's code goes: no block starts there now, nor goes on to one, and stores may go straight to it again. Every
-//exit linked to its blocks goes back to its lookup, even one in dead code (a block still running from a section that
-//went runs on to its end), and the live ones wait for those blocks to be compiled again; its own blocks' exits are
-//dead code from now on.
+//The section's code goes: no block starts there now, nor goes on to one, and stores may go straight to it again. Its
+//own blocks' exits are dead code from now on; every exit linked to its blocks goes back to its lookup, even one in
+//dead code (a block still running from a section that went runs on to its end), and the live ones wait for those
+//blocks to be compiled again.
 auto Allegrex::Recompiler::drop(u32 index) -> void {
+  if(auto own = outOf.find(index); own != outOf.end()) {
+    for(u32 exit : own->second) exits[exit].live = false;
+    outOf.erase(own);
+  }
   if(auto linked = into.find(index); linked != into.end()) {
     for(u32 exit : linked->second) {
       patch(exits[exit].jump, exits[exit].lookup);
       if(exits[exit].live) waiting[exits[exit].target].push_back(exit);
     }
     into.erase(linked);
-  }
-  if(auto own = outOf.find(index); own != outOf.end()) {
-    for(u32 exit : own->second) exits[exit].live = false;
-    outOf.erase(own);
   }
   sections[index].reset();
   sectionTable[index] = nullptr;
@@ -198,6 +198,7 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
   calls = false;
   cold.clear();
   linking.clear();
+  destination = {};
   prefixes = {};  //(not known as a block starts: recompiler-vfpu.cpp)
   forgetAll();  //(nor is anything held: a block before it may have left anything in those registers)
   u32 count = 0;       //instructions in the block so far
@@ -256,7 +257,7 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
   } else if(going == Next::Unknown) {
     emitEnd(count, false, 0);
   }
-  for(auto& code : cold) code();
+  for(u32 n = 0; n < cold.size(); n++) cold[n]();  //(cold code may add cold code)
   cold.clear();
 
   //(endFunction() as nall has it, but for the body's address, which is only known in between)
@@ -345,17 +346,16 @@ auto Allegrex::Recompiler::emitEnd(u32 count, bool known, u32 target) -> void {
     mov32(field(&executed), imm(count));
     return jumpEpilog();
   }
-  if(known) return emitChainTo(count, target, false);
+  if(known) return emitChainTo(count, target);
   emitChain(count);
 }
 
-//emitChain() for a block that goes on to target, which the compiled code knows already (pc is target and pd the
-//word after it, as the branch or the end of the section set them, stored already or only where it leaves for run():
-//stored): its section and word are worked out here, and of run()'s checks only the page's is made as it runs, the
-//CPU's owner being free to change the table. Whether the CPU halted is only looked at if the block called the
-//interpreter, the only way it can halt (an exception leaves before this; a syscall, halt, break or eret ends its
-//block for run(), but for a syscall in a delay slot, which is such a call).
-auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target, bool stored) -> void {
+//emitChain() for a block that goes on to target, which the compiled code knows already: its section and word are worked
+//out here, and of run()'s checks only the page's is made as it runs, the CPU's owner being free to change the table.
+//pc and pd, target and the word after it, are stored only where it leaves for run(). Whether the CPU halted is only
+//looked at if the block called the interpreter, the only way it can halt (an exception leaves before this; a syscall,
+//halt, break or eret ends its block for run(), but for a syscall in a delay slot, which is such a call).
+auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target) -> void {
   std::vector<sljit_jump*> leave;
   auto unless = [&](sljit_jump* jump) { leave.push_back(jump); };
   emitCounted(count, leave);
@@ -374,10 +374,8 @@ auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target, bool stored) -> vo
 
   auto here = sljit_emit_label(compiler);
   for(auto jump : leave) sljit_set_label(jump, here);
-  if(!stored) {
-    mov32(field(&self.ipu.pc), imm(target));
-    mov32(field(&self.ipu.pd), imm(target + 4));
-  }
+  mov32(field(&self.ipu.pc), imm(target));
+  mov32(field(&self.ipu.pd), imm(target + 4));
   mov32(field(&executed), imm(0));
   jumpEpilog();
 }
@@ -404,12 +402,13 @@ auto Allegrex::Recompiler::emitLink(u32 target) -> void {
 }
 
 //The exits of the block just compiled (in section index), once its code is where it runs: each linked if its target
-//is compiled already, else waiting for it (block() links it then; a block going on to itself does so too).
+//is compiled already (a block going on to itself is: its body is known by now), else waiting for it (block() links it
+//then).
 auto Allegrex::Recompiler::addExits(u32 index) -> void {
   for(auto& [target, label] : linking) {
     u8* jump = (u8*)sljit_get_label_addr(label);
     u32 exit = exits.size();
-    exits.push_back({jump, jump + LinkSize, target, index, true});
+    exits.push_back({jump, jump + LinkSize, target, true});
     outOf[index].push_back(exit);
     auto& section = sections[(target & 0x1fff'ffff) / SectionSize];
     u8* body = section && section->mirror == target >> 29 ? section->bodies[target % SectionSize / 4] : nullptr;

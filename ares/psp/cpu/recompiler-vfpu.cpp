@@ -4,19 +4,20 @@
 //The interpreter's VFPU instructions (interpreter-vfpu.cpp) take every operand through the prefixes: each lane may be
 //swizzled, made absolute, negated or replaced by a constant, and each result clamped or left unwritten. Games
 //rarely set them, and while they're at rest (pfxs and pfxt in their own order, pfxd nothing) all that does nothing:
-//a lane is read as it is, and written as it is. So compiled code checks that they're at rest and calls a helper
-//below made for that case, which reads and writes the lanes by the register numbers the block worked out when it was
-//compiled, and does each lane's arithmetic exactly as the interpreter does (vfpuFloat(), vfpuBits(), vfpuNaN(), the
-//same operations in the same order; a dot product through the adder, vfpuDot()). With the prefixes anything else
-//the instruction is the interpreter's, as always, called by the block itself without the decoding (emitVFPUCall()).
-//Either way they're at rest afterwards: the interpreter uses them up, and the helpers found them so. The prefix
-//instructions are compiled too, each storing its value; the block keeps track of what it knows of each prefix
-//(prefixes), checks only when it doesn't know (in practice once, at the first VFPU instruction of a block that sets
-//no prefixes), and goes the interpreter's way at once after a vpfxs, vpfxt or vpfxd that sets one.
+//a lane is read as it is, and written as it is. So for most instructions compiled code checks that they're at rest
+//and calls a helper below made for that case, which reads and writes the lanes by the register numbers the block
+//worked out when it was compiled, and does each lane's arithmetic exactly as the interpreter does (vfpuFloat(),
+//vfpuBits(), vfpuNaN(), the same operations in the same order; a dot product through the adder, vfpuDot(), or the
+//same in NEON on ARM64). The lane-by-lane instructions take any prefixes the block knows: vfpuEach() reads and writes
+//each lane as the block worked it out from them. Any other instruction with the prefixes set is the interpreter's,
+//as always, called by the block itself without the decoding (emitVFPUCall()). Either way they're at rest afterwards:
+//the interpreter uses them up, the helpers found them so or put them so. The prefix instructions are compiled too,
+//each storing its value; the block keeps track of what it knows of each prefix (prefixes), and checks as it runs only
+//what it doesn't know (in practice once, at the first VFPU instruction of a block that sets no prefixes).
 //
 //The matrix instructions (vmmul, vtfm, vhtfm, vmscl, vmmov, vmidt, vmzero, vmone) don't read the prefixes at all;
-//compiled code calls them directly (skipping only the decoding) and leaves the prefixes at rest, as the
-//interpreter's decoder does after them.
+//compiled code calls them directly (skipping the decoding: the interpreter's own, or on ARM64 the products of
+//matrices in place in NEON) and leaves the prefixes at rest, as the interpreter's decoder does after them.
 
 //A vector operand's four lanes' register numbers (vfpuLine()), a byte each, as the helpers take them.
 static auto packLanes(const std::array<u8, 4>& lanes) -> u32 {
@@ -488,8 +489,8 @@ auto Allegrex::Recompiler::emitVFPU(u32 address, u32 instruction, u32 count, boo
   std::array<u32, 4> constants{};  //vzero, vone, vidt, viim, vfim: the lanes' values, written by the compiled code
   bool constant = false;
   u32 written = size;  //how many of vd's lanes the constants go in
-  //vfpuLane()'s op for an instruction vfpuEach() can run: with its prefixes as they are, or, for the math functions
-  //(which take prefixes their own way: vfpuLastLaneFirst()), at rest only
+  //an instruction emitEach() can compile (its op as vfpuLane() numbers them, and 9 for vscl): with its prefixes as they
+  //are, or, for the math functions (which take prefixes their own way: vfpuLastLaneFirst()), at rest only
   s32 each = -1;
   bool restOnly = false;
 
@@ -540,7 +541,7 @@ auto Allegrex::Recompiler::emitVFPU(u32 address, u32 instruction, u32 count, boo
     }
   } else if(op == 0x34 && group == 5 && (instruction >> 21 & 3) == 0) {  //vi2f
     helper = Sized(vfpuRestToFloat), third = instruction >> 16 & 31, each = 30;
-  } else if(op == 0x34 && group == 4 && instruction >> 24 != 0xd3) {  //vf2in, vf2iz, vf2iu, vf2id
+  } else if(op == 0x34 && group == 4) {  //vf2in, vf2iz, vf2iu, vf2id
     each = 31;
   } else if(op == 0x3c) {
     //The matrix instructions, if the size is one they have, as decoderVFPU6() picks them: vmmul (any but 1), vtfm
@@ -587,7 +588,10 @@ auto Allegrex::Recompiler::emitVFPU(u32 address, u32 instruction, u32 count, boo
     auto lanes = self.vfpuLine(vd, written);
     for(u32 i : range(written)) mov32(field(&self.vfpu.r[lanes[i]]), imm(constants[i]));
   }
-  if(busy) emitCold({busy}, [=, this] { emitVFPUCall(address, instruction, count, delaySlot); });
+  if(busy) emitCold({busy}, [=, this] {
+    [[maybe_unused]] bool called = emitVFPUCall(address, instruction, count, delaySlot);
+    assert(called);
+  });
   return true;
 }
 
@@ -654,7 +658,10 @@ auto Allegrex::Recompiler::emitEach(u32 address, u32 instruction, u32 count, boo
   }
   #undef Op
   callf(helper, imm64(s), imm64(t), imm64(d));
-  if(!busy.empty()) emitCold(busy, [=, this] { emitVFPUCall(address, instruction, count, delaySlot); });
+  if(!busy.empty()) emitCold(busy, [=, this] {
+    [[maybe_unused]] bool called = emitVFPUCall(address, instruction, count, delaySlot);
+    assert(called);
+  });
   return true;
 }
 
@@ -710,9 +717,9 @@ auto Allegrex::Recompiler::matrixProduct(u32 which, u8 vd, u8 vs, u8 vt, u32 siz
 }
 #endif
 
-//A VFPU instruction of an arithmetic group (or vpfx's, viim's and vfim's) with no native code above, or with the
-//prefixes set: the interpreter's own, as execute() runs it, but for decoderEXECUTE()'s choice of the group, which the
-//block makes (executeVFPU()). It writes no integer register, so what the host registers hold stays true, and it
+//A VFPU instruction of an arithmetic group (or vpfx's, viim's and vfim's) with no native code above, or with prefixes
+//set that its native code doesn't take: the interpreter's own, as execute() runs it, but for decoderEXECUTE()'s choice
+//of the group, which the block makes (executeVFPU()). It writes no integer register, so what the host registers hold stays true, and it
 //halts the CPU only by an exception, after which the block leaves. False for anything else (vmfvc and vmtvc, and
 //vnop's group), which goes to execute() as ever.
 auto Allegrex::Recompiler::emitVFPUCall(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool {

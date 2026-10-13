@@ -459,8 +459,10 @@ struct Allegrex {
   auto VWBN(u8 vd, u8 vs, u32 size, u8 scale) -> void;
   auto VZERO(u8 vd, u32 size) -> void;
 
-  //recompiler-vfpu.cpp: the VFPU's common instructions with the prefixes at rest, which compiled code calls with
-  //its operands' registers worked out (four to a word, a byte each)
+  //recompiler-vfpu.cpp: the VFPU's instructions compiled code calls with their operands worked out as the block was
+  //compiled: the common ones with the prefixes at rest, their registers four to a word (a byte each); the
+  //lane-by-lane ones with any prefixes (vfpuEach(): each lane described in 16 bits); and the matrix products of
+  //matrices in place (on ARM64, in NEON)
   template<u32 Size, u32 Op> auto vfpuRestBinary(u32 vd, u32 vs, u32 vt) -> void;
   template<u32 Size> auto vfpuRestDot(u32 vd, u32 vs, u32 vt) -> void;
   template<u32 Size> auto vfpuRestScale(u32 vd, u32 vs, u32 vt) -> void;
@@ -527,17 +529,16 @@ struct Allegrex {
     auto emit(u32 address, u8*& body) -> u8*;
     auto emitEnd(u32 count, bool known, u32 target) -> void;
     auto emitChain(u32 count) -> void;
-    auto emitChainTo(u32 count, u32 target, bool stored = true) -> void;
+    auto emitChainTo(u32 count, u32 target) -> void;
     auto emitCounted(u32 count, std::vector<sljit_jump*>& leave) -> void;
     //Direct links (emitChainTo()): a block's way on to a block it knows as it's compiled is a jump that goes to the
     //code after it (the lookup) until that block is compiled, then straight to its body, and back to the lookup when
     //that block's section goes. Each such jump is an exit: where it is in the code, where its lookup is, the guest
-    //address it goes to, its own block's section, and whether that block's code is live (not once its section goes).
+    //address it goes to, and whether its own block's code is live (not once its section goes).
     struct Exit {
       u8* jump;
       u8* lookup;
       u32 target;
-      u32 from;
       bool live;
     };
     std::vector<Exit> exits;
