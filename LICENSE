@@ -2759,7 +2759,12 @@ By BAXY Square, from the Systematic theme for RetroArch:
 https://github.com/baxysquare/baxy-retroarch-themes
 Obtained via RomM (https://github.com/rommapp/romm,
 frontend/assets/platforms/systematic), which renamed and reformatted them.
-Phobos recolors them at runtime.
+Phobos recolors them at runtime, and derives each style's consoles from
+them: the pixel art in android/app/src/main/java/com/phobos/emulator/ui/
+theme/ConsolePixels.kt (made by tools/console-art/pixelate.py) and the
+glass, neon, glossy, ink and phosphor looks drawn from the SVGs at runtime
+(ui/theme/ConsoleTreatment.kt). Those are derived from the icons and
+covered by this notice, all but the PSP's (the next notice).
 
 MIT License
 
@@ -2789,15 +2794,8 @@ Phobos PSP console art (android/app/src/main/assets/platforms/psp.svg)
 
 Drawn for Phobos in the style of the Systematic set above, which has no
 PSP: the one SVG in that folder that isn't BAXY Square's. It is Phobos's
-own work, under Phobos's license (the first notice).
-----------------------------------------------------------------------
-
-----------------------------------------------------------------------
-Phobos platform glyphs (ui/theme/PlatformGlyphs.kt, PlatformGlyphArt.kt)
-
-Original console silhouettes drawn for Phobos (Phobos / Pixel / Manga icon
-packs under Settings → Appearance → Platform icons). Not derived from the
-Systematic set above.
+own work, under Phobos's license (the first notice), as are the styles'
+PSPs derived from it.
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------

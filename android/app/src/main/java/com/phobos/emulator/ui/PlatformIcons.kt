@@ -1,7 +1,7 @@
 package com.phobos.emulator.ui
 
 /**
- * Resolves a library system name to the platform-art slug shared by asset and Canvas icon packs.
+ * Resolves a library system name to its platform-art slug, which [consoleArtFor] takes to the console drawn.
  *
  * The established names intentionally match the Systematic SVG basenames where those assets exist.
  */

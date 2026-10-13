@@ -74,16 +74,10 @@ private fun screensaverBackdropNamed(name: String): CatalogBackdrop {
     return removed?.toCatalog() ?: enumOrDefault(name, CatalogBackdrop.MATCH_APP)
 }
 
-/** Library console art pack (Settings → Appearance → Platform icons). */
+/** How the Library draws its consoles (Settings → Appearance → Platform icons). */
 enum class PlatformIconPack(val label: String, val description: String) {
-    MATCH_STYLE(
-        "Match style",
-        "Pixel with Pixel art and 16-bit RPG, Manga with Manga ink, Systematic otherwise",
-    ),
-    SYSTEMATIC("Systematic", "BAXY Square top-down consoles (MIT), recolored to the theme"),
-    PHOBOS("Phobos", "Original Phobos silhouettes for every system, including newer ones"),
-    PIXEL("Pixel", "Chunky pixel-art console glyphs"),
-    MANGA("Manga", "Ink-line console glyphs with screentone shading"),
+    MATCH_STYLE("Match style", "The consoles in the style's own look: glass, neon, pixel art, 16-bit, glossy, ink or phosphor"),
+    SYSTEMATIC("Systematic", "BAXY Square's top-down consoles (MIT) as drawn, recolored to the theme"),
 }
 
 /** Manga ink backdrop variants. */
@@ -165,7 +159,7 @@ data class EmulatorSettings(
     val crtBackdrop: CrtBackdropScene = CrtBackdropScene.GREEN,
     val glassBackdrop: GlassBackdropScene = GlassBackdropScene.GLOWS,
     val xmbBackdrop: XmbBackdropScene = XmbBackdropScene.WAVES,
-    val platformIconPack: PlatformIconPack = PlatformIconPack.SYSTEMATIC,
+    val platformIconPack: PlatformIconPack = PlatformIconPack.MATCH_STYLE,
     val screensaverDelay: ScreensaverDelay = ScreensaverDelay.OFF,
     /** Independent of the app style: which catalog backdrop the idle screensaver shows. */
     val screensaverBackdrop: CatalogBackdrop = CatalogBackdrop.MATCH_APP,
@@ -558,7 +552,8 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
             crtBackdrop = enumOrDefault(safeGetString(CRT_BACKDROP, ""), CrtBackdropScene.GREEN),
             glassBackdrop = enumOrDefault(safeGetString(GLASS_BACKDROP, ""), GlassBackdropScene.GLOWS),
             xmbBackdrop = enumOrDefault(safeGetString(XMB_BACKDROP, ""), XmbBackdropScene.WAVES),
-            platformIconPack = enumOrDefault(safeGetString(PLATFORM_ICON_PACK, ""), PlatformIconPack.SYSTEMATIC),
+            // The Phobos, Pixel and Manga packs, since removed, read as Match style.
+            platformIconPack = enumOrDefault(safeGetString(PLATFORM_ICON_PACK, ""), PlatformIconPack.MATCH_STYLE),
             screensaverDelay = enumOrDefault(safeGetString(SCREENSAVER_DELAY, ""), ScreensaverDelay.OFF),
             screensaverBackdrop = screensaverBackdropNamed(safeGetString(SCREENSAVER_BACKDROP, "")),
             glassEffects = enumOrDefault(safeGetString(GLASS_EFFECTS, GlassEffects.FULL.name), GlassEffects.FULL),
