@@ -27,9 +27,9 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## Tests: the host suites' objects kept by what they include and how they're compiled, a checkout's apart — 2026-10-13
 
-Branch `cursor/test-plan-03-2b67`, stacked on `cursor/test-plan-05-2b67` (#241, the CI lanes, so every script changed
-here runs in CI). Package 03 of the 2026-10-13 test and performance plan (indexed in the implementation plan by
-package 01's PR). Build scripts only: no core, app or test source changes.
+Branch `cursor/test-plan-03-2b67` (PR #245), stacked on `cursor/test-plan-05-2b67` (#241, the CI lanes, so every
+script changed here runs in CI). Package 03 of the 2026-10-13 test and performance plan (indexed in the implementation
+plan by #244). Build scripts only: no core, app or test source changes.
 - **The problem** (on a Mac five agents share): the four PSP build scripts kept objects in one folder per suite in
   `${TMPDIR:-/tmp}`, shared by every worktree, reused while their top source was older than them. A header edit,
   another worktree's newer object, another compiler or sanitizer setting, all reused the old object; libco's was
@@ -59,8 +59,10 @@ package 01's PR). Build scripts only: no core, app or test source changes.
 - **Checks** (the Mac, bash 3.2, Apple clang 21, `PHOBOS_JOBS=3`, a TMPDIR of its own): `tests/objects-test.sh` 11/11,
   three times; `tests/allegrex` cold 7 compiles (60/0), warm 0 (60/0), after touching `ares/psp/cpu/allegrex.hpp` 4
   (the four that include it; 60/0); `tests/ngcd` cold 13 (2835/0), warm 0; `tests/psp/ares` cold 25 (318/0), warm 0
-  (318/0); `runner-test.sh` cold 71 s (25 objects), warm 12 s, the copy left in `phobos-psp-runner/`. CI on the
-  PR: below once run.
+  (318/0); `runner-test.sh` cold 71 s (25 objects), warm 12 s, the copy left in `phobos-psp-runner/`. CI on #245
+  (runs 38439444461 and 38439444229, at `960d668da`; Linux, GCC 13, bash 5): `tests/objects-test.sh` 0 failures,
+  Allegrex 60/0, the system suite 497/0 (every source its own object now), the ares system 318/0, the runner's test
+  passing, NGCD 2835/0.
 
 ## CI: the PSP core as an ares system, the headless runner and the Neo Geo CD's checks in CI; the triggers complete — 2026-10-13
 
