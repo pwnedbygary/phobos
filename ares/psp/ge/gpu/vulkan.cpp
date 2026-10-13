@@ -779,9 +779,9 @@ struct VulkanBackend : GPU::Backend {
     return pipeline;
   }
 
-  //copy.frag's push constants
+  //copy.frag's push constants, and move.frag's
   struct CopyPush { s32 origin[2]; u32 scale, bit; };
-  struct MovePush { s32 origin[2]; u32 scale, bit, formats; };
+  struct MovePush { s32 origin[2]; u32 scale, bit, formats; s32 delta; u32 rowBytes, sourceRowBytes; s32 box[4]; };
 
   //move.frag's layout and pipelines, for moves (Backend::moves): false where the driver won't take them, and a
   //target's pixels go to another through memory, a finish between.
@@ -861,14 +861,8 @@ struct VulkanBackend : GPU::Backend {
     return true;
   }
 
-  //A Move's source pixels across (the target's are its width): one for two of a 16-bit frame buffer's from an
-  //8888 one's, two for one the other way, else one for one
-  static auto moved(const GPU::Command& c) -> u32 {
-    if((c.sourceFormat == 3) == (c.format == 3)) return c.width;
-    return c.format == 3 ? c.width * 2 : c.width / 2;
-  }
-  //(its stencils' rows in the staging buffer: bytes of each, whole words)
-  auto movedPitch(const GPU::Command& c) const -> u32 { return (moved(c) * scale + 3) & ~3u; }
+  //(a Move's source's stencils' rows in the staging buffer: bytes of each, whole words)
+  auto movedPitch(const GPU::Command& c) const -> u32 { return (c.sourceWidth * scale + 3) & ~3u; }
 
   //The target's stencil over area set from its pixels' alphas, after their colors are drawn, where no shader gives
   //it with them (stencilExport): cleared, then draw(bit, mask) for each bit its GE format keeps apart, a draw that
@@ -889,11 +883,11 @@ struct VulkanBackend : GPU::Backend {
   //A Move (move.frag): the source's rectangle, one of each pixel's colors and its stencils' rows through the
   //middle of each (as a read back for memory takes them), taken into pictures of the PSP's size, through the slot's
   //staging buffer at stencils for the stencils (none for a 5650 source, whose colors are all it takes), then drawn
-  //into the target's rectangle: the colors and the stencil at once (stencilExport), or the colors and then the
-  //stencil's bits (stencilBits()).
+  //into the target's rectangle, each pixel the source's at its bytes (where they're the rectangle's): the colors
+  //and the stencil at once (stencilExport), or the colors and then the stencil's bits (stencilBits()).
   auto move(VkCommandBuffer commands, Slot& slot, Target& t, Target& from, const GPU::Command& c, u64 stencils)
     -> void {
-    u32 width = moved(c), height = c.height, pitch = movedPitch(c);
+    u32 width = c.sourceWidth, height = c.sourceHeight, pitch = movedPitch(c);
     if(!moveStage(width, height, pitch)) return void(lost = true);
     constexpr auto DepthStencil = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
     constexpr auto Source = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, Destination = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -943,7 +937,9 @@ struct VulkanBackend : GPU::Backend {
     VkViewport viewport{f32(c.x * scale), f32(c.y * scale), f32(c.width * scale), f32(c.height * scale), 0, 1};
     vk.vkCmdSetViewport(commands, 0, 1, &viewport);
     vk.vkCmdSetScissor(commands, 0, 1, &area);
-    MovePush push{{c.x * s32(scale), c.y * s32(scale)}, scale, 0, u32(c.sourceFormat) | u32(c.format) << 8};
+    MovePush push{{c.x * s32(scale), c.y * s32(scale)}, scale, 0, u32(c.sourceFormat) | u32(c.format) << 8, c.delta,
+                  c.rowBytes, c.sourceRowBytes,
+                  {c.sourceX, c.sourceY, c.sourceX + c.sourceWidth - 1, c.sourceY + c.sourceHeight - 1}};
     //(everything bound again for each draw, as upload()'s are: the stencil's clearing may be a draw of the driver's
     //own, which MoltenVK leaves the set unbound after)
     auto draw = [&](VkPipeline pipeline) {
@@ -1012,7 +1008,7 @@ struct VulkanBackend : GPU::Backend {
       if(c.kind == GPU::Command::Kind::Upload) size = aligned(size) + aligned(u64(c.width) * c.height * 4) * 2 +
                                                       aligned(u64(c.width) * c.height);
       if(c.kind == GPU::Command::Kind::Present && !c.target) size = aligned(size) + u64(c.width) * c.height * 4;
-      if(c.kind == GPU::Command::Kind::Move) size = aligned(size) + u64(movedPitch(c)) * c.height;
+      if(c.kind == GPU::Command::Kind::Move) size = aligned(size) + u64(movedPitch(c)) * c.sourceHeight;
     }
     for(u32 id : uploading) {
       auto found = textureImages.find(id);
@@ -1233,11 +1229,11 @@ struct VulkanBackend : GPU::Backend {
       if(c.kind == GPU::Command::Kind::Move) {
         auto from = targetImages.find(c.source);
         if(from == targetImages.end() || from == found) continue;
-        if(!fit(commands, t, c.y + c.height) || !fit(commands, from->second, c.sourceY + c.height)) {
+        if(!fit(commands, t, c.y + c.height) || !fit(commands, from->second, c.sourceY + c.sourceHeight)) {
           return lost = true, false;
         }
         u64 stencils = aligned(at);
-        at = stencils + u64(movedPitch(c)) * c.height;
+        at = stencils + u64(movedPitch(c)) * c.sourceHeight;
         move(commands, slot, t, from->second, c, stencils);
         if(lost) return false;
         boundPipeline = VK_NULL_HANDLE, boundSet = VK_NULL_HANDLE, lastState = ~0u, transformsBound = false;
@@ -2166,6 +2162,8 @@ struct VulkanBackend : GPU::Backend {
                                         copyExportModule, copyLayout);
     stencilExport = copyExportPipeline;
     moves = makeMoves();
+    //(moves over rows of another width leave the stencils of the pixels they don't reach: only with the shader's)
+    if(moves && !moveExportPipeline) stencilExport = false;
     auto commandPoolInfo = made<VkCommandPoolCreateInfo>(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
     commandPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     commandPoolInfo.queueFamilyIndex = family;

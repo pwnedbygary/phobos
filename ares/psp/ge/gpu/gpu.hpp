@@ -162,9 +162,12 @@ struct GPU : GE::Renderer {
   //screen's picture presented on the window the backend shows on (Present: a target's top left, or with no target
   //memory's picture, uploaded), or only a shot of a target's top left taken for the host, as a Present takes one
   //(Shot); fast mode's 3D draws (Mesh: count of the indices from first, into the models, each model's settings
-  //its Transformed block); and a rectangle of another target's pixels put into a target as memory would have them
-  //(Move: from source's rectangle at sourceX, sourceY, the same bytes in its format, sourceFormat, as the target's,
-  //format). Every position and size is in the PSP's pixels: the backend has each of them Backend::scale times over.
+  //its Transformed block); and another target's pixels put into a target's rectangle as memory would have them
+  //(Move: source's rectangle at sourceX, sourceY, sourceWidth x sourceHeight, in its format, sourceFormat, the same
+  //bytes as those of the target's rectangle that it reaches, in the target's format: each of the rectangle's pixels
+  //the source's at the same bytes, its rectangle's first pixel delta bytes from source's first, rows of rowBytes in
+  //the target and sourceRowBytes in source). Every position and size is in the PSP's pixels: the backend has each of
+  //them Backend::scale times over.
   struct Command {
     enum class Kind : u8 { Draw, Upload, Readback, Copy, Present, Shot, Mesh, Move } kind;
     u32 target;
@@ -184,7 +187,9 @@ struct GPU : GE::Renderer {
                   //Upload, Move: the target's
     u8 sourceFormat = 3;            //Move
     u32 source = 0;
-    u16 sourceX = 0, sourceY = 0;
+    u16 sourceX = 0, sourceY = 0, sourceWidth = 0, sourceHeight = 0;
+    s32 delta = 0;
+    u32 rowBytes = 0, sourceRowBytes = 0;
   };
   struct Recorded {
     std::vector<Command> commands;
@@ -284,10 +289,8 @@ struct GPU : GE::Renderer {
     //VRAM's bytes (offsets, inclusive) someone reached in its pages while the GPU drew in them, not over what it
     //drew (drawnOver()), or changed in pages it hasn't drawn in since the last finish (written()): memory's, maybe
     //changed, so they're filled again from memory before it draws, shows or lends a texture over any of them
-    //(revive()). (At most 16 ranges; more are taken together, merged, which may take in its pixels between: then
-    //it's filled afresh, what it drew put back first.)
+    //(revive()). (At most 16 ranges: with no room for another, those it has are filled from memory first.)
     std::vector<std::pair<u32, u32>> beside;
-    bool merged = false;
     //VRAM's bytes (offsets, inclusive) in its drawn rows a block transfer or the CPU has written whole since it
     //drew there (overwritten()): memory's, not put back, and filled again before a PRIM draws over them or they're
     //copied or shown or moved (revive()). (At most 16; where there'd be more, the write waits for a finish.)
@@ -301,7 +304,7 @@ struct GPU : GE::Renderer {
     //gpu.cpp: whether VRAM's bytes first to last reach its pixels left-right, top-bottom (or those of beside's)
     auto reaches(u32 first, u32 last, s32 left, s32 top, s32 right, s32 bottom) const -> bool;
     auto besideReaches(s32 left, s32 top, s32 right, s32 bottom) const -> bool;
-    auto touch(u32 first, u32 last) -> void;  //(beside's: first to last added)
+    auto touch(u32 first, u32 last) -> bool;  //(beside's: first to last added; false, nothing added, where it's full)
     auto deadReaches(s32 left, s32 top, s32 right, s32 bottom) const -> bool;
     auto covered(u32 first, u32 last) const -> bool;  //(whether dead has every byte first to last)
     auto drawnBytes(u32 first, u32 last) const -> bool;  //(whether it drew any of them, not dead since)
@@ -468,7 +471,9 @@ private:
   struct Moving { Target* from; u32 first, last; };
   std::vector<Moving> moving;
   auto movable(const Target& from, const Target& t, u32 first, u32 last, s32 (&box)[4]) const -> bool;
+  auto intoRows(const Target& from, const Target& t, const s32 (&box)[4]) const -> std::pair<s32, s32>;
   auto move(Target& from, Target& t, const Moving& m) -> void;
+  auto keepBeside(Target& t, u32 first, u32 last) -> void;  //(Target::beside's first to last added)
   auto own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;
   auto textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken) -> u32;
   auto settings(const GE::Look& look) -> void;
