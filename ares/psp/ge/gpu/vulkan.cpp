@@ -179,6 +179,12 @@ struct VulkanBackend : GPU::Backend {
   std::map<std::array<u8, sizeof(GPU::Pipeline)>, VkPipeline> pipelineCache_;  //(VK_NULL_HANDLE: it failed)
   std::unordered_map<u32, Target> targetImages;
   std::unordered_map<u32, Texture> textureImages;  //0: a blank one, bound for untextured draws
+  //Textures let go of, once their runs are done, kept for a texture of their size to take (makeTexture()): a picture,
+  //its memory, view and set made and destroyed for every frame of a movie, each a call into the driver's kernel on
+  //Android. At most MostSpares, SpareBytes of pictures in all, the one kept longest destroyed first.
+  std::vector<Texture> spareTextures;
+  static constexpr u32 MostSpares = 16;
+  static constexpr u64 SpareBytes = 32 << 20;
   u32 nextId = 1;
   Slot slots[Slots];
   u32 next = 0;
@@ -264,6 +270,7 @@ struct VulkanBackend : GPU::Backend {
       vk.vkDeviceWaitIdle(device);
       for(auto& [id, t] : targetImages) destroy(t);
       for(auto& [id, t] : textureImages) destroy(t);
+      for(auto& t : spareTextures) destroy(t);
       for(auto& [key, pipeline] : pipelineCache_) if(pipeline) vk.vkDestroyPipeline(device, pipeline, nullptr);
       for(auto& r : retired) destroy(r);
       for(auto* staged : {&stagedColors, &stagedDepths}) {
@@ -533,21 +540,29 @@ struct VulkanBackend : GPU::Backend {
   auto makeTexture(u32 width, u32 height, const u32* texels, std::shared_ptr<const void> owner) -> u32 override {
     if(lost || !width || !height) return 0;
     Texture t;
-    t.width = width, t.height = height;
-    if(!make(t.image, width, height, VK_FORMAT_R8G8B8A8_UNORM,
-             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT)) {
-      return destroy(t), 0;
+    auto kept = std::find_if(spareTextures.begin(), spareTextures.end(), [&](const Texture& s) {
+      return s.width == width && s.height == height;
+    });
+    if(kept != spareTextures.end()) {  //(its layout undefined again, as a new one's)
+      t = std::move(*kept), spareTextures.erase(kept);
+      t.fresh = true;
+    } else {
+      t.width = width, t.height = height;
+      if(!make(t.image, width, height, VK_FORMAT_R8G8B8A8_UNORM,
+               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT)) {
+        return destroy(t), 0;
+      }
+      auto setInfo = made<VkDescriptorSetAllocateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
+      setInfo.descriptorPool = descriptorPool, setInfo.descriptorSetCount = 1, setInfo.pSetLayouts = &setLayout;
+      if(vk.vkAllocateDescriptorSets(device, &setInfo, &t.set) != VK_SUCCESS) {
+        return t.set = VK_NULL_HANDLE, destroy(t), 0;
+      }
+      VkDescriptorImageInfo image{sampler, t.image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+      auto write = made<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+      write.dstSet = t.set, write.descriptorCount = 1;
+      write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, write.pImageInfo = &image;
+      vk.vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     }
-    auto setInfo = made<VkDescriptorSetAllocateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
-    setInfo.descriptorPool = descriptorPool, setInfo.descriptorSetCount = 1, setInfo.pSetLayouts = &setLayout;
-    if(vk.vkAllocateDescriptorSets(device, &setInfo, &t.set) != VK_SUCCESS) {
-      return t.set = VK_NULL_HANDLE, destroy(t), 0;
-    }
-    VkDescriptorImageInfo image{sampler, t.image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    auto write = made<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-    write.dstSet = t.set, write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, write.pImageInfo = &image;
-    vk.vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     u32 id = nextId++;
     if(texels) {
       if(owner) t.pending = texels, t.owner = std::move(owner);
@@ -569,7 +584,21 @@ struct VulkanBackend : GPU::Backend {
   }
   auto dropPalette(u32 id) -> void override { paletteGraves.push_back({submitted + 1, id}); }
 
-  //Those let go of whose runs are done, destroyed.
+  //A texture let go of, its run done, kept for another of its size (spareTextures), or destroyed.
+  auto spare(Texture&& t) -> void {
+    auto bytes = [](const Texture& t) { return u64(t.width) * t.height * 4; };
+    t.pending = nullptr, t.owner.reset(), t.copied = {};
+    if(bytes(t) > SpareBytes / 4) return destroy(t);
+    u64 kept = bytes(t);
+    for(auto& s : spareTextures) kept += bytes(s);
+    while(!spareTextures.empty() && (spareTextures.size() >= MostSpares || kept > SpareBytes)) {
+      kept -= bytes(spareTextures.front());
+      destroy(spareTextures.front()), spareTextures.erase(spareTextures.begin());
+    }
+    spareTextures.push_back(std::move(t));
+  }
+
+  //Those let go of whose runs are done, destroyed (textures kept as spares).
   auto bury() -> void {
     for(auto grave = paletteGraves.begin(); grave != paletteGraves.end();) {
       if(grave->first > completed) { grave++; continue; }
@@ -583,7 +612,7 @@ struct VulkanBackend : GPU::Backend {
       if(grave->serial > completed) { grave++; continue; }
       if(grave->texture) {
         auto t = textureImages.find(grave->id);
-        if(t != textureImages.end()) destroy(t->second), textureImages.erase(t);
+        if(t != textureImages.end()) spare(std::move(t->second)), textureImages.erase(t);
       } else {
         auto t = targetImages.find(grave->id);
         if(t != targetImages.end()) destroy(t->second), targetImages.erase(t);
