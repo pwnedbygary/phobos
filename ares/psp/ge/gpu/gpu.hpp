@@ -265,6 +265,17 @@ struct GPU : GE::Renderer {
     //which they mustn't change under) 0: it couldn't
     virtual auto makeTexture(u32 width, u32 height, const u32* texels, std::shared_ptr<const void> owner = {})
       -> u32 = 0;
+    //One whose texels are known only from column left and row top, width x height of them (texels, packed): the rest
+    //are never taken (a GE::Decoded part). Made whole, the rest 0, where the backend has no better way. 0 for a part
+    //not inside the texture.
+    virtual auto makeTexturePart(u32 textureWidth, u32 textureHeight, const u32* texels, u32 left, u32 top,
+                                 u32 width, u32 height, std::shared_ptr<const void> owner) -> u32 {
+      (void)owner;
+      if(u64(left) + width > textureWidth || u64(top) + height > textureHeight) return 0;
+      std::vector<u32> whole(u64(textureWidth) * textureHeight);
+      for(u32 y = 0; y < height; y++) std::copy_n(texels + y * width, width, &whole[(top + y) * textureWidth + left]);
+      return makeTexture(textureWidth, textureHeight, whole.data());
+    }
     virtual auto dropTexture(u32 texture) -> void = 0;  //(once the GPU is done with it)
     //A palette for draws after to look up (Pipeline::indexed): its 512 entries as 8888 (red in the low byte), on the
     //GPU before the next run's draws; its row of the palettes' picture (Push::palette), 0 where there's no room

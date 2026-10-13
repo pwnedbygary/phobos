@@ -129,6 +129,9 @@ struct VulkanBackend : GPU::Backend {
     std::shared_ptr<const void> owner;
     std::vector<u32> copied;
     bool fresh = true;  //never written yet (its layout undefined)
+    //the texels pending, packed: those from column left and row top, partWidth x partHeight of them (makeTexturePart():
+    //the rest are never taken), or all of them
+    u32 left = 0, top = 0, partWidth = 0, partHeight = 0;
   };
   //A run's: its commands, the fence it signals, and the vertices and pictures it uploads; presenting's, the
   //semaphore the swapchain image's acquiring signals, and the shot of a picture it presents from a target (the
@@ -567,12 +570,28 @@ struct VulkanBackend : GPU::Backend {
       vk.vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     }
     u32 id = nextId++;
+    t.left = 0, t.top = 0, t.partWidth = width, t.partHeight = height;  //(a spare may have been a part)
     if(texels) {
       if(owner) t.pending = texels, t.owner = std::move(owner);
       else t.copied.assign(texels, texels + width * height), t.pending = t.copied.data();
       uploading.push_back(id);
     }
     textureImages[id] = std::move(t);
+    return id;
+  }
+  //(the part alone put on the GPU: its texels stay the owner's till then)
+  auto makeTexturePart(u32 textureWidth, u32 textureHeight, const u32* texels, u32 left, u32 top, u32 width,
+                       u32 height, std::shared_ptr<const void> owner) -> u32 override {
+    if(u64(left) + width > textureWidth || u64(top) + height > textureHeight) return 0;
+    if(!owner || !width || !height) {
+      return Backend::makeTexturePart(textureWidth, textureHeight, texels, left, top, width, height, owner);
+    }
+    u32 id = makeTexture(textureWidth, textureHeight, nullptr, {});
+    if(!id) return 0;
+    Texture& t = textureImages[id];
+    t.pending = texels, t.owner = std::move(owner);
+    t.left = left, t.top = top, t.partWidth = width, t.partHeight = height;
+    uploading.push_back(id);
     return id;
   }
   auto dropTexture(u32 id) -> void override { graves.push_back({submitted + 1, id, true}); }
@@ -1074,7 +1093,7 @@ struct VulkanBackend : GPU::Backend {
     for(u32 id : uploading) {
       auto found = textureImages.find(id);
       if(found != textureImages.end() && found->second.pending) {
-        size = aligned(size) + u64(found->second.width) * found->second.height * 4;
+        size = aligned(size) + u64(found->second.partWidth) * found->second.partHeight * 4;
       }
     }
     size += pendingPalettes.size() * (512 * 4 + 16);
@@ -1139,12 +1158,13 @@ struct VulkanBackend : GPU::Backend {
       auto found = textureImages.find(id);
       if(found == textureImages.end() || !found->second.pending) continue;
       Texture& t = found->second;
-      u64 bytes = u64(t.width) * t.height * 4;
+      u64 bytes = u64(t.partWidth) * t.partHeight * 4;
       at = aligned(at);
       std::memcpy(staging + at, t.pending, bytes);
       transition(commands, t.image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-      VkBufferImageCopy copy{at, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {t.width, t.height, 1}};
+      VkBufferImageCopy copy{at, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {s32(t.left), s32(t.top), 0},
+                             {t.partWidth, t.partHeight, 1}};
       vk.vkCmdCopyBufferToImage(commands, slot.staging.buffer, t.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                 1, &copy);
       transition(commands, t.image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,

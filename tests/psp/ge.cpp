@@ -2419,6 +2419,63 @@ static auto geQuietFunctions() -> void {
   quiet = true;
   m.kernel.dispatch(timeLow, quiet);
   CHECK(quiet, false), CHECK(m.kernel.interrupting, true);
+  //Calls calm this time (Kernel::calm), dispatched as quiet, the next thing's time where it was: rotating the caller's
+  //own line, alone in it, or another priority's, or none (an illegal priority); signalling a semaphore no thread waits
+  //for, or past its most. Not rotating to an equal that takes the CPU, nor a signal waking a thread.
+  KernelMachine k;
+  s32 caller = k.kernel.createThread("caller", 0x0880'1000, 0x20, 0x1000, 0, 0);
+  k.kernel.startThread(*k.kernel.threads[caller], 0, 0);
+  k.kernel.reschedule();
+  s32 sleeper = k.kernel.createThread("sleeper", 0x0880'2000, 0x30, 0x1000, 0, 0);
+  auto& asleep = *k.kernel.threads[sleeper];
+  asleep.status = Kernel::Status::Waiting, asleep.wait = Kernel::Wait::Delay, asleep.wakeAt = 80'000;
+  CHECK(k.kernel.current == k.kernel.threads[caller].get(), true);
+  s32 semaphore = s32(k.call("sceKernelCreateSema", {k.string("s"), 0, 0, 2, 0}));
+  CHECK(semaphore > 0, true);
+  auto calm = [&](const char* name, std::initializer_list<u32> arguments) {
+    u32 n = 0;
+    for(u32 value : arguments) k.system.ipu.r[n < 4 ? 4 + n : 8 + n - 4] = value, n++;
+    u64 next = k.kernel.cycles + k.kernel.untilNextEvent();
+    bool quiet = false;
+    k.kernel.dispatch(k.kernel.importCode("test", Kernel::nid(name)), quiet);
+    CHECK(k.kernel.cycles + k.kernel.untilNextEvent(), next);
+    return quiet;
+  };
+  CHECK(calm("sceKernelRotateThreadReadyQueue", {0}), true);
+  CHECK(calm("sceKernelRotateThreadReadyQueue", {0x30}), true);
+  CHECK(calm("sceKernelRotateThreadReadyQueue", {0x100}), true);
+  CHECK(calm("sceKernelSignalSema", {u32(semaphore), 1}), true);
+  CHECK(calm("sceKernelSignalSema", {u32(semaphore), 5}), true);
+  CHECK(k.kernel.current == k.kernel.threads[caller].get(), true);
+  s32 equal = k.kernel.createThread("equal", 0x0880'3000, 0x20, 0x1000, 0, 0);
+  k.kernel.startThread(*k.kernel.threads[equal], 0, 0);
+  k.kernel.dispatchSuspended = true;  //(the caller keeps the CPU, its equal waiting)
+  CHECK(calm("sceKernelRotateThreadReadyQueue", {0}), true);
+  CHECK(k.kernel.current == k.kernel.threads[caller].get(), true);
+  k.kernel.dispatchSuspended = false;
+  CHECK(calm("sceKernelRotateThreadReadyQueue", {0}), false);
+  CHECK(k.kernel.current == k.kernel.threads[equal].get(), true);
+  asleep.wait = Kernel::Wait::Semaphore, asleep.waitID = semaphore, asleep.waitCount = 2, asleep.wakeAt = 0;
+  CHECK(calm("sceKernelSignalSema", {u32(semaphore), 1}), false);
+  CHECK(asleep.status == Kernel::Status::Ready, true);
+  //A rotation handing the CPU to an equal woken from a delay only to run its callbacks: none notified, it goes back
+  //to its delay at once and the caller runs again, but that delay's end now comes sooner than the go's (not calm).
+  KernelMachine w;
+  s32 rotating = w.kernel.createThread("rotating", 0x0880'1000, 0x20, 0x1000, 0, 0);
+  w.kernel.startThread(*w.kernel.threads[rotating], 0, 0);
+  w.kernel.reschedule();
+  s32 woken = w.kernel.createThread("woken", 0x0880'2000, 0x20, 0x1000, 0, 0);
+  auto& delayed2 = *w.kernel.threads[woken];
+  delayed2.status = Kernel::Status::Ready, delayed2.readySince = 0;
+  delayed2.wait = Kernel::Wait::Delay, delayed2.wakeAt = w.kernel.cycles + 5000;
+  u64 next = w.kernel.cycles + w.kernel.untilNextEvent();
+  w.system.ipu.r[4] = 0;
+  bool still = true;
+  w.kernel.dispatch(w.kernel.importCode("test", Kernel::nid("sceKernelRotateThreadReadyQueue")), still);
+  CHECK(still, false);
+  CHECK(w.kernel.current == w.kernel.threads[rotating].get(), true);
+  CHECK(delayed2.status == Kernel::Status::Waiting, true);
+  CHECK(w.kernel.cycles + w.kernel.untilNextEvent() < next, true);
 }
 
 //The GE's time (kernel/ge.cpp's geTime()): a list is done for the program only once a PSP's GE would have drawn it, by

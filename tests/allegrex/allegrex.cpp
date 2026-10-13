@@ -552,6 +552,29 @@ auto recompilerCases() -> void {
   rewrite.run(rewriting);
   CHECK(rewrite.gpr(s0), 11);
 
+  // The same for a function whose page the owner takes out of the page table after it was compiled (as the PSP's
+  // memory does with VRAM a renderer holds), rewrites, and puts back: the code compiled there is forgotten all the
+  // same.
+  constexpr uint32_t Function = Base + 0x2000;
+  Machine unlisted;
+  unlisted.cpu.syscallHook = [&](u32) -> bool {
+    uint32_t page = (Function & 0x1fffffff) >> 12;
+    auto listed = unlisted.cpu.table[page];
+    unlisted.cpu.table[page] = nullptr;
+    unlisted.ram.write32(Function, addiu(s0, s0, 10));
+    unlisted.cpu.recompiler.invalidateRange(Function, 4);
+    unlisted.cpu.table[page] = listed;
+    return true;
+  };
+  unlisted.run({jal(Function), nop, syscall(1), jal(Function), nop},
+               [](Allegrex& s) {
+                 auto& ram = static_cast<TestCPU&>(s).ram;
+                 ram.write32(Function, addiu(s0, s0, 1));
+                 ram.write32(Function + 4, jr(ra));
+                 ram.write32(Function + 8, nop);
+               });
+  CHECK(unlisted.gpr(s0), 11);
+
   // A branch in the last word of a 4 KiB section, so its delay slot is in the next one: taken, not taken, and a
   // likely branch not taken, which skips the delay slot.
   for(auto [branch, delaySlotRuns, nextRuns] : {std::tuple{beq(zero, zero, 2), 1u, 0u},
@@ -586,6 +609,28 @@ auto recompilerCases() -> void {
   CHECK(threads.gpr(s1), 1);
   CHECK(threads.gpr(s2), 0);
   CHECK(threads.gpr(s3), 1);
+  // The same from a delay slot of an FPU branch taken (one the recompiler would otherwise go on to the target of).
+  Machine coprocessor;
+  coprocessor.cpu.syscallHook = [&](u32) -> bool {
+    coprocessor.cpu.ipu.pc = Base + 0x100;
+    coprocessor.cpu.ipu.pd = Base + 0x200;
+    return true;
+  };
+  coprocessor.ram.write32(Base + 0x100, addiu(s1, zero, 1));
+  coprocessor.ram.write32(Base + 0x104, addiu(s2, zero, 1));
+  coprocessor.ram.write32(Base + 0x200, addiu(s3, zero, 1));
+  coprocessor.ram.write32(Base + 0x204, halt);
+  coprocessor.run({mtc1(zero, 0), ccond(CondEq, 0, 0), bc1(Bc1t, 2), syscall(1), halt, addiu(s0, zero, 1), halt});
+  CHECK(coprocessor.gpr(s0), 0);
+  CHECK(coprocessor.gpr(s1), 1);
+  CHECK(coprocessor.gpr(s2), 0);
+  CHECK(coprocessor.gpr(s3), 1);
+
+  // A store that rewrites the delay slot of an FPU branch taken later in its block: the new instruction runs.
+  Machine slot;
+  slot.run({lui(t0, Base >> 16), lui(t1, addiu(s0, s0, 2) >> 16), ori(t1, t1, addiu(s0, s0, 2) & 0xffff),
+            mtc1(zero, 0), ccond(CondEq, 0, 0), sw(t1, 0x1c, t0), bc1(Bc1t, 2), addiu(s0, s0, 1), halt, halt});
+  CHECK(slot.gpr(s0), 2);
 
   // The same function called through two mirrors of the memory: the return address it makes follows the mirror.
   std::vector<uint32_t> calls = {
@@ -631,7 +676,7 @@ auto recompilerCases() -> void {
 // instructions it stopped after when each block left for run(), as where a run stops decides when interrupts and
 // events land. A loop of blocks (an interpreted instruction, a syscall, a fall into the next section, a call, a
 // likely branch both ways, a store that drops its own section's code, a jump through a register, an FPU branch
-// taken, which ends its block before its delay slot; the page after the syscall's taken out of the page table now
+// taken; the page after the syscall's taken out of the page table now
 // and then) runs in short runs of 1 to 37 instructions on two recompilers,
 // one chaining and one not: each run must end at the same count, the same pc and pd and the same registers, and
 // each syscall see the same count of instructions before it.
@@ -691,6 +736,103 @@ auto chainedRuns() -> void {
   CHECK(chained.ipu.r[s6], 25);
   CHECK(runs[0].befores == runs[1].befores, 1);
   CHECK(runs[0].befores.size(), 50);
+}
+
+// The coprocessors' branches taken: a chaining recompiler runs the delay slot and goes on to the target itself
+// (emitCoprocessorBranch()), where one that doesn't chain leaves for run(), which has the interpreter take the delay
+// slot. Every run must still stop after the same instructions, in the same state: FPU and VFPU branches, likely or
+// not, taken every other time round, with delay slots native, interpreted, storing, loading from a page the page
+// table leaves out, a syscall (which leaves for run() still), a target just past the delay slot (where run() starts
+// a block at the delay slot instead), a branch in a section's last word whose delay slot, in the next section, the
+// loop rewrites, and at the end a delay slot whose load raises an exception, taken.
+auto coprocessorBranchesTaken() -> void {
+  if(!useRecompiler) return;
+  constexpr uint32_t Loop = Base + 0x100, Edge = Base + 0xff8;
+  auto mtvc = [](uint32_t t, uint32_t index) { return 0x48e00000u | t << 16 | 0x80 | index; };
+  auto mtv = [](uint32_t t, uint32_t vd) { return 0x48e00000u | t << 16 | vd; };
+  auto vaddS = [](uint32_t vd, uint32_t vs, uint32_t vt) { return 0x60000000u | vt << 16 | vs << 8 | vd; };
+  auto bv = [](bool onTrue, bool likely, uint32_t bit, int32_t o) {
+    return 0x49000000u | likely << 17 | onTrue << 16 | bit << 18 | ((uint32_t)o & 0xffff);
+  };
+  struct Run {
+    Machine m;
+    std::vector<uint64_t> befores;
+  } runs[2];
+  for(uint32_t n = 0; n < 2; n++) {
+    auto& m = runs[n].m;
+    auto& befores = runs[n].befores;
+    auto put = [&](uint32_t address, std::initializer_list<uint32_t> words) {
+      for(uint32_t word : words) m.ram.write32(address, word), address += 4;
+    };
+    put(Base, {addiu(s0, zero, 0), lui(t2, Data >> 16), ori(t2, t2, Data & 0xffff), lui(t3, Unmapped >> 16),
+               ori(t3, t3, Unmapped & 0xffff), lui(t1, addiu(t6, t6, 1) >> 16), ori(t1, t1, addiu(t6, t6, 1) & 0xffff),
+               lui(a1, (Edge + 8) >> 16), ori(a1, a1, (Edge + 8) & 0xffff), lui(a3, 0x3f80), mtv(a3, 2), j(Loop), nop});
+    put(Loop, {
+      addiu(s0, s0, 1), andi(t0, s0, 1), mtc1(t0, 0), mtc1(zero, 1), ccond(CondEq, 0, 1),  //true when s0 is even
+      addu(a2, t1, t0), sw(a2, 0, a1),                             //the edge's delay slot, next section's, rewritten
+      bc1(Bc1t, 2), addiu(s1, s1, 1), addiu(s2, s2, 1),           //native delay slot
+      mtvc(t0, 3),                                                 //cc bit 0: s0 odd
+      bv(true, false, 0, 2), bitrev(s3, s0), addiu(s4, s4, 1),    //interpreted delay slot
+      bc1(Bc1fl, 2), sw(s0, 0, t2), addiu(s5, s5, 1),              //likely, a store in its delay slot
+      bv(false, true, 0, 2), lw(s6, 0, t3), addiu(s7, s7, 1),      //likely, a load through read()
+      bc1(Bc1f, 1), addiu(t4, t4, 1),                              //to just past its delay slot
+      bv(true, false, 0, 2), syscall(1), addiu(t5, t5, 1),         //a syscall in its delay slot
+      bv(true, false, 0, 2), vaddS(1, 1, 2), addiu(v0, v0, 1),     //a VFPU delay slot, the prefixes at rest
+      0xdc0100e4, bv(false, false, 0, 2), vaddS(3, 3, 2), addiu(v1, v1, 1),  //vpfxs (lane 0 negated) before it
+      j(Edge), nop,
+    });
+    put(Edge, {ccond(CondEq, 0, 1), bc1(Bc1t, 2), addiu(t6, t6, 1), addiu(t7, t7, 1),  //the last word, and across
+               slti(t9, s0, 60), bne(t9, zero, -(int32_t)((Edge + 24 - Loop) / 4)), nop,
+               bc1(Bc1t, 2), lw(t8, 2, t2), nop, halt});               //taken (60 is even), its load misaligned
+    m.ram.write32(Unmapped, 0x1234'5678);
+    m.cpu.syscallHook = [&m, &befores](u32) -> bool {
+      befores.push_back(m.cpu.instructionsBefore());
+      return true;
+    };
+    m.cpu.recompiler.enabled = true;
+    m.cpu.recompiler.chains = n == 0;
+    m.cpu.power(Base);
+  }
+  auto& chained = runs[0].m.cpu;
+  auto& unchained = runs[1].m.cpu;
+  uint32_t mismatches = 0;
+  for(uint32_t round = 0; round < 4000 && !(chained.scc.halted && unchained.scc.halted); round++) {
+    uint32_t limit = 1 + round % 23;
+    uint64_t a = chained.run(limit), b = unchained.run(limit);
+    bool same = a == b && chained.ipu.pc == unchained.ipu.pc && chained.ipu.pd == unchained.ipu.pd &&
+                chained.scc.halted == unchained.scc.halted;
+    for(uint32_t r = 0; r < 32; r++) same = same && chained.ipu.r[r] == unchained.ipu.r[r];
+    for(uint32_t r = 0; r < 32; r++) same = same && chained.fpu.r[r] == unchained.fpu.r[r];
+    for(uint32_t r = 0; r < 128; r++) same = same && chained.vfpu.r[r] == unchained.vfpu.r[r];
+    same = same && chained.fpu.csr == unchained.fpu.csr && chained.vfpu.cc == unchained.vfpu.cc &&
+           chained.vfpu.pfxs == unchained.vfpu.pfxs && chained.vfpu.pfxt == unchained.vfpu.pfxt &&
+           chained.vfpu.pfxd == unchained.vfpu.pfxd && runs[0].m.ram.bytes == runs[1].m.ram.bytes;
+    if(!same && ++mismatches <= 3) {
+      std::printf("FAIL %s: run %u of %u: %llu vs %llu instructions, pc %08x vs %08x\n", currentTest, round, limit,
+                  (unsigned long long)a, (unsigned long long)b, chained.ipu.pc, unchained.ipu.pc);
+    }
+  }
+  CHECK(mismatches, 0);
+  CHECK(chained.scc.halted, 1);
+  CHECK(chained.ipu.r[s0], 60);
+  CHECK(chained.ipu.r[s1], 60);  //every delay slot ran, taken or not, but the likely ones' not taken
+  CHECK(chained.ipu.r[s2], 30);
+  CHECK(chained.ipu.r[s4], 30);
+  CHECK(chained.ipu.r[s5], 30);
+  CHECK(chained.ipu.r[s7], 30);
+  CHECK(chained.ipu.r[t4], 60);
+  CHECK(chained.ipu.r[t5], 30);
+  CHECK(chained.ipu.r[t6], 90);  //1 when s0 is even, 2 when odd
+  CHECK(chained.ipu.r[t7], 30);
+  CHECK(chained.ipu.r[s6], 0x1234'5678);
+  CHECK(chained.ipu.r[v0], 30);  //(each VFPU branch not taken when s0 is odd, the other when it's even)
+  CHECK(chained.ipu.r[v1], 30);
+  CHECK(chained.vfpu.r[1], 0x4270'0000u);  //60.0: every VFPU delay slot ran
+  CHECK(runs[0].befores == runs[1].befores, 1);
+  CHECK(runs[0].befores.size(), 60);
+  CHECK(runs[0].m.exceptions.size(), 1);
+  CHECK(runs[0].m.exceptions == runs[1].m.exceptions, 1);
+  CHECK(runs[0].m.ram.read32(Data), 59);
 }
 
 // Not a test: with ALLEGREX_BENCHMARK set, times a loop of loads, stores and arithmetic on the interpreter, on the
@@ -819,7 +961,7 @@ auto matchesInterpreter() -> void {
       uint32_t byteOffset = region + random(256);
       uint32_t word = 0;
       uint32_t vd = random(128), vs = random(128), vt = random(128), size = 1 + random(4);
-      switch(random(58)) {
+      switch(random(62)) {
       case  0: word = addiu(d, s, immediate); break;
       case  1: word = slti(d, s, immediate); break;
       case  2: word = sltiu(d, s, immediate); break;
@@ -918,6 +1060,27 @@ auto matchesInterpreter() -> void {
         word = random(4) ? waits[random(3)] : 0xbc000000u | random(0x400000);
         break;
       }
+      case 58: word = 0xdf000000u | random(2) << 23 | vt << 16 | random(0x10000); break;  // viim, vfim
+      case 59: {  // vsbn, vhdp, vcrs, vdet, vscmp
+        const uint32_t operations[] = {0xc2, 0xcc, 0xcd, 0xce, 0xdd};
+        word = vfpuOp(operations[random(5)], size, vd, vs, vt);
+        break;
+      }
+      case 60: {  // vmscl, vcrsp and vqmul; vmmov, vmidt, vmzero, vmone and vrot (and group 7's reserved codes)
+        const uint32_t codes[] = {0x00, 0x03, 0x06, 0x07, 0x01, 0x20};
+        uint32_t operation = random(3) ? 0x1e7 : 0x1e4 + random(2);
+        uint32_t code = codes[random(6)];
+        word = vfpuOp(operation, size, vd, vs, operation == 0x1e7 ? code | (code == 0x20 ? random(32) : 0) : vt);
+        break;
+      }
+      case 61: {  // vf2i, vcmov, and more of the unary group: vidt, vrsq, vsin, vcos, vf2h, vh2f, vs2i, vi2s, vcst
+        const uint32_t codes[] = {0x03, 0x11, 0x12, 0x13, 0x32, 0x33, 0x3b, 0x3f, 0x60};
+        uint32_t kind = random(4);
+        if(kind == 0) word = vfpuOp(0x1a4, size, vd, vs, random(128));                         // vf2in ... vf2id
+        else if(kind == 1) word = vfpuOp(0x1a5, size, vd, vs, 0x20 | random(2) << 3 | random(8));  // vcmovt, vcmovf
+        else word = vfpuOp(0x1a0, size, vd, vs, codes[random(9)] | (random(9) == 8 ? random(32) : 0));
+        break;
+      }
       }
       code.push_back(word);
     }
@@ -1004,7 +1167,7 @@ int main() {
     {"loads/stores", loadsStores}, {"unaligned", unaligned}, {"branches", branches}, {"syscalls", syscalls},
     {"exceptions", exceptions}, {"fpu arithmetic", fpuArithmetic}, {"fpu conversions", fpuConversions},
     {"fpu compare", fpuCompare}, {"fpu memory", fpuMemory}, {"system", system}, {"recompiler", recompilerCases},
-    {"chained runs", chainedRuns},
+    {"chained runs", chainedRuns}, {"coprocessor branches taken", coprocessorBranchesTaken},
   };
   for(auto& test : vfpuTests()) tests.push_back(test);
   int groups = 0;

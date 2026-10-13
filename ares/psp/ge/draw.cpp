@@ -89,6 +89,47 @@ static auto spriteReach(const GE::Job& job, const GE::Sampler& t, s32 (&rows)[2]
   return true;
 }
 
+//The texels a hardware renderer may take for a PRIM (GE::TexelBox), where its vertices tell: 3D triangles mapped by
+//UV (TEXTURE_MAP_MODE 0), from each vertex's s and t, its u and v by the scale and offset in texels as
+//transformRest() and the GPU's transform.vert make them, q being 1. Every pixel the GPU draws of a triangle, at any
+//resolution, has its middle inside it and takes its coordinates mixed from the corners' by weights of 0 to 1
+//(draw.frag), as are a clipped corner's; its texels are where texelAxis() puts those: the coordinate's, or a filter's
+//two round it, half a texel either way. A rasterizer works out a pixel's weights from the same snapped corners it
+//finds the pixel inside by, so they're below 0 or above 1 by its rounding alone: two texels more on each side, and a
+//256th of the reach's length, leave room for that. Inside a texture at most 512 by 512: held at its edges, or not
+//past them where it repeats. Not known otherwise: a reach repeating round, coordinates far off or not numbers, a
+//larger texture, the texture matrix's or the environment's mapping; nor for 2D, sprites, lines or points, whose
+//pixels may reach a little past their corners' coordinates (a sprite's left edge a sixteenth of a pixel further, and
+//above 1x a pixel's middle between two of the GE's).
+static auto texelBox(const GE::Sampler& texture, u32 kind, bool through, const std::vector<GE::Vertex>& vertices,
+                     const GE::Transform& t) -> GE::TexelBox {
+  GE::TexelBox box{};
+  bool triangles = kind == GE::Triangles || kind == GE::TriangleStrip || kind == GE::TriangleFan;
+  if(through || !triangles || t.mapMode != 0 || vertices.empty() || texture.width > 512 || texture.height > 512) {
+    return box;
+  }
+  f64 low[2] = {1e9, 1e9}, high[2] = {-1e9, -1e9};
+  for(auto& v : vertices) {
+    f64 s = (v.u * t.textureScale[0] + t.textureOffset[0]) * texture.width;
+    f64 r = (v.v * t.textureScale[1] + t.textureOffset[1]) * texture.height;
+    if(std::isnan(s) || std::isnan(r)) return box;  //(the GPU takes texel 0 for one: draw.frag)
+    low[0] = std::min(low[0], s), high[0] = std::max(high[0], s);
+    low[1] = std::min(low[1], r), high[1] = std::max(high[1], r);
+  }
+  auto axis = [](f64 low, f64 high, u32 size, bool held, u32& first, u32& last) {
+    if(!(low >= -65536 && high <= 65536 && low <= high)) return false;
+    f64 margin = 2 + (high - low) / 256;
+    s32 from = s32(std::floor(low - margin)), to = s32(std::floor(high + margin)), end = s32(size) - 1;
+    if(held) from = std::clamp(from, 0, end), to = std::clamp(to, 0, end);
+    else if(from < 0 || to > end) return false;
+    first = from, last = to;
+    return true;
+  };
+  box.known = axis(low[0], high[0], texture.width, texture.clampU, box.left, box.right) &&
+              axis(low[1], high[1], texture.height, texture.clampV, box.top, box.bottom);
+  return box;
+}
+
 //Whether every pixel drawn with these settings is left as it was, whatever its color, depth and fog: blending keeps
 //the frame buffer's color (the source times a fixed 0, plus the destination times a fixed 255, which comes back
 //exactly: (2d + 1) * 511 >> 10 is d for every d up to 255), with no dithering or logic operation after it, the
@@ -424,9 +465,19 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     return a.triangles && a.ge.readsApart(a.look, a.t, a.vertices, a.kind, a.strip, a.facing);
   };
   if(textured && !skipping && !(hardware && renderer->holds(*this, look.texture, heldRows, heldColumns, texelsTaken))) {
-    //Hardware keeps its own copy of a frame buffer: don't defer a software-batch wait for it.
+    //Hardware keeps its own copy of a frame buffer: don't defer a software-batch wait for it. It takes texels only
+    //inside its box, where that's known (texelBox()): of a texture in VRAM, where the GPU may have drawn it.
     if(hardware && rows == ~0u) drawnRows = renderer->memoryRows(*this, look.texture, texelsTaken);
-    decode(look, hardware ? Region{0, 0, -1, -1} : region, drawnRows, !hardware, copyDraws);
+    struct Boxing {
+      const Sampler& texture; u32 kind; bool through; const std::vector<Vertex>& vertices; const Transform& t;
+    };
+    Boxing boxing{look.texture, kind, format.through, vertices, t};
+    std::function<auto () -> TexelBox> boxOf;
+    u32 physical = look.texture.address & 0x1fff'ffff;
+    if(hardware && boxes && physical - Memory::VRAMBase < Memory::VRAMWindow) {
+      boxOf = [&boxing] { return texelBox(boxing.texture, boxing.kind, boxing.through, boxing.vertices, boxing.t); };
+    }
+    decode(look, hardware ? Region{0, 0, -1, -1} : region, drawnRows, !hardware, copyDraws, boxOf);
     if(!look.texture.decoded && !look.deferRows) look.texture.bytes = direct(look.texture);
   }
   if(hardware && !renderer->begin(*this, look, format.through, region)) {

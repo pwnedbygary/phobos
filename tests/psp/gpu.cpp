@@ -2719,6 +2719,203 @@ static auto gpuPipelineCache() -> void {
   }
 }
 
+//Render to texture through palettes, as Backbone's engine draws its glow: a picture drawn into VRAM's start (rows of
+//64 8888 pixels), then taken as CLUT32 indices, a channel at a time through a palette of each tile's own, by 3D quads
+//(UV mapped) into a frame buffer inside the texture's 64 rows (from row 48), each quad's texels inside rows 3 to 43
+//and columns 8 to 56, added up. Nearest and filtered, texels 1:1 and not. (drawn: the picture's sprites; tiles: each
+//quad's place and texels, x and u's first column, v's first row, and its filter; palettes: three a tile.)
+struct GlowTile { u32 column, row; bool linear; float shift; };
+static constexpr u32 GlowInto = 48 * 64 * 4;  //(the frame buffer the quads draw into, the texture's row 48)
+static auto glowTiles(std::mt19937& random) -> std::vector<GlowTile> {
+  std::vector<GlowTile> tiles;
+  for(u32 k = 0; k < 6; k++) tiles.push_back({8 + k * 8, 3 + u32(random() % 28), k % 3 == 2, k % 2 ? 0.3f : 0.0f});
+  return tiles;
+}
+static auto glow(System& s, const std::vector<Corners>& drawn, const std::vector<GlowTile>& tiles,
+                 const std::vector<u32>& palettes) -> void {
+  auto f24 = [](float value) { return bitsOf(value) >> 8; };
+  auto& c = s.ge.commands;
+  prepare(s, 0, 3);
+  for(auto& one : drawn) sprite(s, one);
+  c[GE::FrameBufferPointer] = GlowInto, c[GE::Scissor2] = 63 | 15 << 10;
+  texture(s, Memory::VRAMBase, 64, 64, 64, 7);
+  c[GE::VertexType] = 0x19f;  //(float u and v, 8888 color, float position: 3D)
+  for(u32 n = 0; n < 12; n++) s.ge.world[n] = s.ge.view[n] = f24(n % 4 == 0 ? 1 : 0);
+  for(u32 n = 0; n < 16; n++) s.ge.projection[n] = f24(n % 5 == 0 ? 1 : 0);
+  c[GE::ViewportXScale] = f24(32), c[GE::ViewportYScale] = f24(-8), c[GE::ViewportZScale] = f24(30000);
+  c[GE::ViewportXCenter] = f24(2048), c[GE::ViewportYCenter] = f24(2048), c[GE::ViewportZCenter] = f24(32768);
+  c[GE::OffsetX] = (2048 - 32) << 4, c[GE::OffsetY] = (2048 - 8) << 4, c[GE::MaxZ] = 0xffff;
+  c[GE::TextureScaleU] = c[GE::TextureScaleV] = f24(1), c[GE::TextureOffsetU] = c[GE::TextureOffsetV] = 0;
+  c[GE::TextureMapMode] = 0;
+  c[GE::AlphaBlendEnable] = 1, c[GE::BlendMode] = 10 | 10 << 4, c[GE::BlendFixedA] = c[GE::BlendFixedB] = 0xff'ffff;
+  u32 palette = GPUTexture;
+  for(u32 n = 0; n < palettes.size(); n++) s.memory.write(4, palette + n * 4, palettes[n]);
+  for(u32 k = 0; k < tiles.size(); k++) {
+    auto& tile = tiles[k];
+    c[GE::TextureFilter] = tile.linear ? 1 | 1 << 8 : 0;
+    float x0 = tile.column / 32.0f - 1, x1 = (tile.column + 8) / 32.0f - 1;
+    float u0 = (tile.column + tile.shift) / 64, u1 = (tile.column + 8 + tile.shift) / 64;
+    float v0 = (tile.row + tile.shift) / 64, v1 = (tile.row + 12 + tile.shift) / 64;
+    for(u32 channel = 0; channel < 3; channel++) {
+      u32 at = palette + (k * 3 + channel) * 1024;
+      c[GE::ClutAddress] = at & 0xff'ffff, c[GE::ClutAddressUpper] = (at >> 24 & 0xf) << 16, c[GE::ClutLoad] = 32;
+      s.ge.loadClut();
+      c[GE::ClutFormat] = 3 | channel * 8 << 2 | 0xff << 8;
+      u32 to = GPUVertices;
+      const std::array<float, 4> corners[] = {{u0, v0, x0, 1.0f}, {u1, v0, x1, 1.0f}, {u0, v1, x0, -1.0f},
+                                              {u1, v1, x1, -1.0f}};
+      for(auto [u, v, x, y] : corners) {
+        for(u32 word : {bitsOf(u), bitsOf(v), 0xffff'ffffu, bitsOf(x), bitsOf(y), bitsOf(0.0f)}) {
+          s.memory.write(4, to, word), to += 4;
+        }
+      }
+      s.ge.vertexAddress = GPUVertices;
+      s.ge.primitive(GE::TriangleStrip, 4);
+    }
+  }
+}
+
+//The glow's tiles with a hardware renderer: each decodes only the texels its quad takes, not waiting for the GPU's
+//drawing in the texture's other rows (the frame buffer it draws into), and draws exactly what decoding the whole
+//texture (and finishing the GPU for it each time) draws: every byte of VRAM the same, at 1x and above, in the
+//accurate renderer and the fast one.
+static auto gpuGlowParts() -> void {
+  GPU* accurate = renderer();
+  if(!accurate) return;
+  std::mt19937 random{20261012};
+  auto drawn = randomSprites(random, 30, false);
+  auto tiles = glowTiles(random);
+  std::vector<u32> palettes(tiles.size() * 3 * 256);
+  for(auto& entry : palettes) entry = u32(random()) & 0x3f3f'3f3f;
+  for(GPU* gpu : {accurate, fastRenderer()}) {
+    for(u32 scale : {1u, 2u}) {
+      if(!gpu || scale > gpu->backend->mostScale) continue;
+      gpu->resolution(scale);
+      System whole, parts;
+      whole.ge.boxes = false;
+      u64 finishes[2];
+      for(System* s : {&whole, &parts}) {
+        s->ge.setRenderer(gpu);
+        auto before = gpu->statistics.finishes;
+        glow(*s, drawn, tiles, palettes);
+        finishes[s == &parts] = gpu->statistics.finishes - before;
+        s->ge.settleAll();
+        s->ge.setRenderer(nullptr);
+      }
+      u32 bytes = vramApart(whole, parts);
+      if(bytes || finishes[1] > 1) {
+        std::printf("  %s, %ux: %u bytes apart, finishes %llu whole and %llu in parts\n",
+                    gpu == accurate ? "accurate" : "fast", scale, bytes, (unsigned long long)finishes[0],
+                    (unsigned long long)finishes[1]);
+      }
+      CHECK(bytes, 0u);
+      CHECK(finishes[1] < finishes[0], true);
+      CHECK(finishes[1] <= 1, true);  //(the first tile's, for the picture's pixels)
+    }
+    gpu->resolution(1);
+  }
+}
+
+//The glow's tiles with a pretend renderer, which draws nothing: what each decodes, and when it finishes. A tile
+//whose texels the GPU has drawn waits for it and decodes its box alone (the texels its quad may take, and the
+//margin), each texel through its palette from memory's bytes; one not reaching what it has drawn since waits for
+//nothing; a whole texture decoded first (nothing drawn over it) serves a tile after the GPU draws in its other rows,
+//its texels there unchanged, without waiting or decoding again; a byte changed in that tile's box has it decoded
+//again, a part serves no tile it doesn't hold, and a box reaching past a repeating edge isn't known (decoded whole),
+//past a held one it stops there.
+static auto gpuGlowPretend() -> void {
+  struct Pretend : GPU::Backend {
+    u32 made = 0, finishes = 0;
+    struct Part { u32 left, top, width, height; std::vector<u32> texels; };
+    std::vector<Part> parts;
+    u32 wholes = 0;
+    auto name() const -> std::string override { return "pretend"; }
+    auto makeTarget(u32, u32) -> u32 override { return ++made; }
+    auto dropTarget(u32) -> void override {}
+    auto makeTexture(u32, u32, const u32*, std::shared_ptr<const void>) -> u32 override { return wholes++, ++made; }
+    auto makeTexturePart(u32, u32, const u32* texels, u32 left, u32 top, u32 width, u32 height,
+                         std::shared_ptr<const void>) -> u32 override {
+      parts.push_back({left, top, width, height, std::vector<u32>(texels, texels + width * height)});
+      return ++made;
+    }
+    auto dropTexture(u32) -> void override {}
+    auto submit(const GPU::Recorded&) -> bool override { return true; }
+    auto finish(const GPU::Recorded&) -> bool override { return finishes++, true; }
+    auto read(u32, const u32*&, const u8*&) -> bool override { return false; }
+  };
+  auto backend = std::make_unique<Pretend>();
+  auto& pretend = *backend;
+  GPU gpu(std::move(backend));
+  std::mt19937 random{20261013};
+  System s;
+  for(u32 n = 0; n < 64 * 64; n++) s.memory.write(4, Memory::VRAMBase + n * 4, u32(random()));
+  std::vector<u32> palettes(3 * 256 * 3);
+  for(auto& entry : palettes) entry = u32(random());
+  s.ge.setRenderer(&gpu);
+  //(a picture drawn by the GPU over rows 0-15: the first tile, reaching them, waits for it; the second doesn't)
+  glow(s, {{{{0, 0, 0, 0}, {0, 0, 64, 16}}, 0xff10'2030}}, {{8, 3, false, 0}, {16, 20, true, 0.3f}}, palettes);
+  CHECK(pretend.finishes, 1u);
+  CHECK(pretend.parts.size(), 6u);
+  if(pretend.parts.size() == 6) {
+    auto& first = pretend.parts[0];  //(s 8-16, t 3-15: columns 5-18, rows 0-17)
+    CHECK(first.left, 5u), CHECK(first.top, 0u), CHECK(first.width, 14u), CHECK(first.height, 18u);
+    auto& second = pretend.parts[3];  //(s 16.3-24.3, t 20.3-32.3: columns 14-26, rows 18-34)
+    CHECK(second.left, 14u), CHECK(second.top, 18u), CHECK(second.width, 13u), CHECK(second.height, 17u);
+    u32 wrong = 0;
+    for(u32 n = 0; n < 6; n++) {  //(each tile's three channels, each through its own palette)
+      auto& part = pretend.parts[n];
+      for(u32 y = 0; y < part.height; y++) {
+        for(u32 x = 0; x < part.width; x++) {
+          u32 index = s.memory.vram[((part.top + y) * 64 + part.left + x) * 4 + n % 3];
+          wrong += part.texels[y * part.width + x] != palettes[n * 256 + index];
+        }
+      }
+    }
+    CHECK(wrong, 0u);
+  }
+  //(a whole texture decoded with nothing drawn over it; the GPU then draws in rows 48-63, its frame buffer; a tile
+  //taking rows 30-44 of it after waits for nothing, and nothing's decoded again: its bytes there are as they were)
+  System again;
+  for(u32 n = 0; n < 64 * 64; n++) again.memory.write(4, Memory::VRAMBase + n * 4, u32(random()));
+  again.ge.setRenderer(&gpu);
+  again.ge.boxes = false;
+  glow(again, {}, {{0, 30, false, 0}}, palettes);  //(the frame buffer drawn into: rows 48-63)
+  u32 wholes = pretend.wholes, finishes = pretend.finishes, parts = pretend.parts.size();
+  again.ge.boxes = true;
+  glow(again, {}, {{40, 30, false, 0}}, palettes);
+  CHECK(pretend.finishes, finishes);
+  CHECK(pretend.wholes, wholes);
+  CHECK(pretend.parts.size(), parts);
+  //(a byte in that box written: the three channels' copies decoded again, each a part, the rest of the texture still
+  //waiting for the GPU; then a tile elsewhere, which those parts don't hold, decoded again too)
+  u32 changed = Memory::VRAMBase + (36 * 64 + 45) * 4;
+  again.memory.write(1, changed, again.memory.read(1, changed) ^ 1);
+  glow(again, {}, {{40, 30, false, 0}}, palettes);
+  CHECK(pretend.parts.size(), parts + 3);
+  CHECK(pretend.wholes, wholes);
+  if(pretend.parts.size() == parts + 3) {
+    auto& part = pretend.parts[parts];  //(s 40-48, t 30-42: columns 37-50, rows 27-44; the changed byte red's)
+    CHECK(part.left, 37u), CHECK(part.top, 27u), CHECK(part.width, 14u), CHECK(part.height, 18u);
+    u32 index = again.memory.vram[(36 * 64 + 45) * 4];
+    CHECK(part.texels[(36 - 27) * 14 + 45 - 37], palettes[index]);
+  }
+  glow(again, {}, {{24, 10, false, 0}}, palettes);
+  CHECK(pretend.parts.size(), parts + 6);
+  //(at the texture's left edge, repeating: no box, each channel decoded whole; held there, the box stops at column
+  //0, through palettes not decoded yet)
+  glow(again, {}, {{0, 10, false, 0}}, palettes);
+  CHECK(pretend.wholes, wholes + 3);
+  CHECK(pretend.parts.size(), parts + 6);
+  std::vector<u32> others(palettes.size());
+  for(auto& entry : others) entry = u32(random());
+  again.ge.commands[GE::TextureWrap] = 1 | 1 << 8;
+  glow(again, {}, {{0, 10, false, 0}}, others);
+  CHECK(pretend.wholes, wholes + 3);
+  CHECK(pretend.parts.size(), parts + 9);
+  if(pretend.parts.size() == parts + 9) CHECK(pretend.parts.back().left, 0u), CHECK(pretend.parts.back().width, 11u);
+  s.ge.setRenderer(nullptr), again.ge.setRenderer(nullptr);
+}
+
 auto gpuTests() -> Tests {
   return {
     {"gpu sprites against the software renderer", gpuSprites},
@@ -2768,6 +2965,8 @@ auto gpuTests() -> Tests {
     {"gpu at 2 and 3 times the resolution: memory's bytes exact", gpuScaled},
     {"gpu above 1x: 2D quads meeting at a seam keep to their texels", gpuSeams},
     {"gpu pipelines kept between sessions", gpuPipelineCache},
+    {"gpu render to texture through palettes: each 3D tile decodes its texels alone, as decoded whole", gpuGlowParts},
+    {"gpu render to texture through palettes, pretend: the box decoded, waiting only for its rows", gpuGlowPretend},
   };
 }
 

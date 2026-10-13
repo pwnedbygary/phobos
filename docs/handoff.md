@@ -67,6 +67,52 @@ Save states unchanged (StateVersion 26). The software renderer untouched.
   3D games (Army of Two, Dirt 2).
 - Scratch: `~/phobos-work/scratch/vulkan-speed`.
 
+## PSP: where the slow games' emulation thread goes — the GPU's palette pictures decoded where taken, code forgotten only where there is some, calm system calls, more of the CPU compiled — 2026-10-12
+
+Branch `cursor/psp-cpu-speed5-2b67`, on master (`6ab2c5583`, #224 merged in). docs/psp-core.md, part 79, has the
+evidence. Clean room: PPSSPP not read (its CPU, JIT and IR code not at all), JPCSP not read. Save states unchanged
+(layout 26). Every change is the host's alone: pictures, VRAM, RAM and the machine's state are master's.
+- **Where it goes** (Mac, Vulkan-fast, from save states; master with #224): in most of the owner's slow games the
+  CPU's emulation isn't the bound. Backbone's games (Death Jr. II, Sonic Rivals, Activision Hits Remixed) finish the
+  GPU and read its pictures back 31 to 61 times a frame, for a palette texture (the frame the GPU drew, as CLUT32
+  indices) decoded whole for each glow tile; Super Monkey Ball, Army of Two and Ghost of Sparta spend 60 to 85% of
+  the thread in the GE's display lists on the CPU (Ghost of Sparta 17% more forgetting compiled code that wasn't
+  there); both Need for Speeds and the intro movies poll system functions 130,000 to 530,000 times a frame; compiled
+  code is a fifth to a third where the guest runs millions of instructions a frame.
+- **Changes** (each its own commit, with tests): a texture the GPU drew decoded only where each 3D triangle takes it
+  (a box from the corners' texture coordinates, conservative for what the GPU samples), waiting only for the GPU's
+  drawing in those rows, a cached copy drawn beside taken where its box's bytes are unchanged; memory's changes look
+  only at sections with compiled code (a bitmap; a page's store entry restored where its watch ends); a thread-queue
+  rotation or a semaphore signal that changed nothing to come leaves the CPU's go as it is (as #224's quiet
+  functions); and the first session's: code forgotten only where there could be some, a taken FPU/VFPU branch chained
+  to its target, more of the VFPU compiled with the prefixes followed through a block.
+- **Numbers** (Mac, Vulkan-fast, the emulation thread's ms a frame and host instructions, medians of three rounds
+  taking turns; the Mac's load 20 to 190): Death Jr. II playing 70 -> 33 ms (983 -> 388 M), Sonic Rivals 42 -> 19
+  (641 -> 275 M), Hits Remixed 57 -> 26 (711 -> 268 M), Ghost of Sparta's menu 41 -> 30 (648 -> 429 M), Most Wanted
+  racing 23 -> 18 (369 -> 319 M), Underground Rivals 23 -> 20, Twisted Metal's intro 21 -> 18, the Armored Cores'
+  intros 6 to 7% fewer instructions, Disaster Report 3 playing 16% fewer; Monkey Ball, Army of Two, Colin McRae and
+  the other play scenes within the Mac's noise (instructions 1 to 4% fewer). In the software renderer the polled
+  calls show most (the Need for Speeds 17 to 23% less time, Twisted Metal's intro 16%).
+- **Exact**: per-frame picture and VRAM hashes, then RAM and the machine, identical to master's in 21 scenes
+  (software renderer, 100 frames); end states identical in the same 21 (Vulkan-fast, 200 frames). pending (the whole library, before merging)
+- **Checks**: tests/psp 472/0 (sanitized; three new groups), tests/allegrex 60/0, tests/psp/ares 318/0. An
+  independent review of all eight commits found no change to emulated results; its points were fixed (writable()
+  keeps a page holding code out of the store table, which vramGuard could list again; the box's margin grows with its
+  length; makeTexturePart refuses a part outside the texture; test gaps, one of which showed the calm rule wrong: a
+  rotation handing the CPU to a thread woken for callbacks, which goes straight back to its delay, had counted as
+  calm; now calm means no switch at all). A delta review of the fixes found no bugs; its test gap (vramGuard and
+  code) filled. The box's margin rests on the rasterizer working a pixel's weights out from the corners it finds it
+  inside by; a shader clamp to the box would make that not matter (left, below).
+- **Left**: the GE's display lists on the CPU (Monkey Ball, Army of Two, Ghost of Sparta: reading vertices through one
+  pointer, each corner placed once a PRIM, small PRIMs handed over in runs); the polled calls' remaining compiled code,
+  dispatch and status reports; Death Jr. II's last 10 finishes a frame (its bottom tiles' box reaches the frame
+  buffer's first row); the CPU's compiled code (results kept in host registers across a block, blocks linked
+  directly, the VFPU in native code); a clamp of a part's fetches to its box in draw.frag, as a guard.
+- **On the RP6, to measure**: master against this branch, Vulkan fast at 1x, the scenes in
+  `~/phobos-work/scratch/cpu-speed2/scenes` (part 79's table): Backbone's games much faster, Ghost of Sparta's menu
+  about a third, the Need for Speeds and the intros 10 to 20%, Monkey Ball and Army of Two about as they were.
+- Scratch: `~/phobos-work/scratch/cpu-speed2`.
+
 ## PSP: the savedata trace; After Burner's save dates, the list modes' automatic answer — 2026-10-12
 
 Branch `cursor/psp-savedata2-2b67`, begun on `cursor/psp-colinsave-2b67` (Colin McRae's memstick:, part 77) after its

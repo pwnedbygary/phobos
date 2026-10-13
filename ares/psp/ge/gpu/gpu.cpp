@@ -566,7 +566,10 @@ auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken, u
     backend->dropTexture(found->second.id);
     textures.erase(found);
   }
-  u32 id = backend->makeTexture(decoded->key.width, decoded->rows, decoded->texels.data(), look.decoded);
+  u32 id = decoded->part
+    ? backend->makeTexturePart(decoded->key.width, decoded->rows, decoded->texels.data(), decoded->left, decoded->top,
+                               decoded->right - decoded->left, decoded->rows - decoded->top, look.decoded)
+    : backend->makeTexture(decoded->key.width, decoded->rows, decoded->texels.data(), look.decoded);
   if(!id) return 0;
   textures[decoded] = {look.decoded, id, decoded->rows};
   statistics.textures++;

@@ -76,6 +76,7 @@ auto Memory::unwatchAll() -> void {
     watched[page] = 0;
     watchedPages--;
     if(watchedWritten) watchedWritten(page);
+    if(unwatched) unwatched(page);
   }
   watchedPages = 0;
 }
@@ -210,6 +211,7 @@ auto Memory::changed(u32 address, u32 size) -> void {
         watched[page] = 0;
         watchedPages--;
         if(watchedWritten) watchedWritten(page);
+        if(unwatched) unwatched(page);
       }
     }
   }
