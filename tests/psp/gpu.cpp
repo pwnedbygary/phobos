@@ -2179,6 +2179,154 @@ static auto gpuDepthViewLoads() -> void {
   hardware.ge.setRenderer(nullptr);
 }
 
+//A depth buffer two frame buffers draw with (Hammerin' Hero and Jeanne d'Arc draw their scene into the screen's,
+//then their characters into a frame buffer of their own, cleared without its depth, tested against the scene's): the
+//depth either drew is the other's next, as memory's is on the PSP, where each frame buffer's depth is its own on the
+//GPU (taken across on the GPU). The second frame buffer's sprite, behind what the first drew, is drawn only where the
+//first drew nothing; then the first's, behind what the second drew since, likewise. At 1x and 2x, in either mode.
+static auto sharedDepth(GPU* gpu) -> void {
+  for(u32 scale : {1u, 2u}) {
+    gpu->resolution(scale);
+    auto before = gpu->statistics;
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    for(System* s : {&software, &hardware}) {
+      auto& c = s->ge.commands;
+      prepare(*s, 0, 3);
+      c[GE::ClearMode] = 1 | 5 << 8;  //(its colors and depth)
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff20'2020});
+      c[GE::ClearMode] = 0, c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 1;  //(always, written)
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 32, 48}}, 0xff00'00ff}, 50000);
+      c[GE::FrameBufferPointer] = 0x1'0000;
+      c[GE::ClearMode] = 1 | 1 << 8;  //(its colors alone)
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff40'4040});
+      c[GE::ClearMode] = 0, c[GE::DepthTest] = 7;  //(greater or equal, written)
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff00'ff00}, 30000);
+      c[GE::DepthTest] = 1;
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 16}}, 0xffff'0000}, 60000);
+      c[GE::FrameBufferPointer] = 0, c[GE::DepthTest] = 7, c[GE::DepthMask] = 1;  //(not written)
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff00'ffff}, 55000);
+      c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0;
+    }
+    u32 bytes = apart(software, hardware);
+    if(bytes) std::printf("  %s %ux: %u bytes apart\n", gpu->fast ? "fast" : "accurate", scale, bytes);
+    CHECK(bytes, 0u);
+    auto green = [&](u32 buffer, u32 x, u32 y) { return u32(software.memory.vram[buffer + (y * 64 + x) * 4 + 1]); };
+    CHECK(green(0x1'0000, 8, 30), 0x40u), CHECK(green(0x1'0000, 40, 30), 0xffu);  //(behind the first's, and not)
+    CHECK(green(0, 8, 8), 0u), CHECK(green(0, 8, 30), 0xffu);  //(behind the second's, and not)
+    CHECK(gpu->statistics.depthsTaken - before.depthsTaken >= 2, true);
+    hardware.ge.setRenderer(nullptr);
+  }
+  gpu->resolution(1);
+}
+static auto gpuSharedDepth() -> void {
+  if(!renderer()) return;
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(gpu) sharedDepth(gpu);
+  }
+}
+
+//A 5551 frame buffer's stencil is a bit, which INCREMENT fills and DECREMENT empties (pixel.cpp), as the pass's
+//operation and as the fail's: then tested (equal to 255: a sprite drawn only where it's filled), read back as the
+//alpha, and taken as a texture's alpha into another frame buffer behind an alpha test (Hammerin' Hero and Jeanne
+//d'Arc mark their characters' pixels so, and put them on the screen by it), every byte the software renderer's. (The
+//texture takes only rows the pass's operations made: where a test fails no color is written, and the color's alpha
+//the GPU copies doesn't follow the stencil there.) At 1x and 2x, in either mode.
+static auto stencilBit(GPU* gpu) -> void {
+  for(u32 scale : {1u, 2u}) {
+    gpu->resolution(scale);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    for(System* s : {&software, &hardware}) {
+      auto& c = s->ge.commands;
+      prepare(*s, 0, 1);
+      c[GE::ClearMode] = 1 | 3 << 8;  //(the colors, and the stencil 0)
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0x0012'3456});
+      c[GE::ClearMode] = 0, c[GE::StencilTestEnable] = 1, c[GE::StencilTest] = 1 | 0x10 << 8 | 0xff << 16;  //(always)
+      c[GE::StencilOperation] = 4 << 16;  //(INCREMENT where it passes)
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 40, 48}}, 0x00ff'0000});
+      c[GE::StencilOperation] = 5 << 16;  //(DECREMENT)
+      sprite(*s, {{{0, 0, 20, 0}, {0, 0, 60, 20}}, 0x0000'ff00});
+      c[GE::StencilTest] = 0 | 0xff << 16, c[GE::StencilOperation] = 4;  //(never: INCREMENT where it fails)
+      sprite(*s, {{{0, 0, 48, 30}, {0, 0, 64, 48}}, 0x00ff'ffff});
+      c[GE::StencilTest] = 2 | 0xff << 8 | 0xff << 16, c[GE::StencilOperation] = 0;  //(equal to 255)
+      sprite(*s, {{{0, 0, 0, 40}, {0, 0, 64, 48}}, 0x0000'00ff});
+      c[GE::StencilTestEnable] = 0;
+      c[GE::FrameBufferPointer] = 0x1'0000, c[GE::FrameBufferPixelFormat] = 3;
+      c[GE::ClearMode] = 1 | 3 << 8;
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff80'8080});
+      c[GE::ClearMode] = 0, c[GE::AlphaTestEnable] = 1, c[GE::AlphaTest] = 6 | 0xff << 16;  //(its alpha above 0)
+      texture(*s, Memory::VRAMBase, 64, 64, 64, 1);
+      sprite(*s, {{{0, 0, 0, 0}, {64, 24, 64, 24}}, 0xffff'ffff});
+      c[GE::AlphaTestEnable] = 0, c[GE::TextureMappingEnable] = 0;
+    }
+    u32 bytes = apart(software, hardware);
+    if(bytes) std::printf("  %s %ux: %u bytes apart\n", gpu->fast ? "fast" : "accurate", scale, bytes);
+    CHECK(bytes, 0u);
+    auto bit = [&](u32 x, u32 y) { return software.memory.vram[(y * 64 + x) * 2 + 1] >> 7; };
+    CHECK(bit(10, 10), 1u), CHECK(bit(30, 10), 0u), CHECK(bit(56, 35), 1u), CHECK(bit(44, 35), 0u);
+    auto blue = [&](u32 x, u32 y) { return u32(software.memory.vram[0x1'0000 + (y * 64 + x) * 4 + 2]); };
+    CHECK(blue(10, 10), 0xffu), CHECK(blue(30, 22), 0xffu), CHECK(blue(30, 10), 0x80u);  //(taken where it's filled)
+    hardware.ge.setRenderer(nullptr);
+  }
+  gpu->resolution(1);
+}
+static auto gpuStencilBit() -> void {
+  if(!renderer()) return;
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(gpu) stencilBit(gpu);
+  }
+}
+
+//A depth buffer read as a texture through VRAM's depth views (Cars Race-O-Rama takes its race's depth through a
+//palette into the alpha its sky is blended by): the depth the GPU drew, put into memory first, each texel the
+//software renderer's, through the fourth copy (the depths in order) and the second (rearranged); put once, the second
+//read finding memory has it, and again once more depth is drawn. At 1x and 2x, in either mode.
+static auto depthAsTexture(GPU* gpu) -> void {
+  for(u32 scale : {1u, 2u}) {
+    gpu->resolution(scale);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    u64 put = gpu->statistics.depthsPut;
+    for(System* s : {&software, &hardware}) {
+      auto& c = s->ge.commands;
+      prepare(*s, 0, 3);
+      c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 1;  //(always, written)
+      for(u32 n = 0; n < 4; n++) {
+        sprite(*s, {{{0, 0, n * 16.0f, 0}, {0, 0, n * 16.0f + 16, 48}}, 0xff10'2030}, 0x1234 + n * 0x3456);
+      }
+      sprite(*s, {{{0, 0, 8, 8}, {0, 0, 40, 30}}, 0xff10'2030}, 0xfedc);
+      c[GE::DepthTestEnable] = 0, c[GE::FrameBufferPointer] = 0x1'0000;
+      texture(*s, 0x0460'0000 + 0x1f'0000, 64, 64, 64, 0);  //(through the fourth copy, as 5650's colors)
+      sprite(*s, {{{0, 0, 0, 0}, {64, 24, 64, 24}}, 0xffff'ffff});
+      texture(*s, 0x0420'0000 + 0x1f'0000, 64, 64, 64, 0);  //(the second)
+      sprite(*s, {{{0, 24, 0, 24}, {64, 48, 64, 48}}, 0xffff'ffff});
+      if(s == &hardware) CHECK(gpu->statistics.depthsPut - put, 1u);
+      c[GE::TextureMappingEnable] = 0, c[GE::FrameBufferPointer] = 0, c[GE::DepthTestEnable] = 1;
+      sprite(*s, {{{0, 0, 30, 20}, {0, 0, 60, 44}}, 0xff10'2030}, 0x0101);
+      c[GE::DepthTestEnable] = 0, c[GE::FrameBufferPointer] = 0x2'0000;
+      texture(*s, 0x0460'0000 + 0x1f'0000, 64, 64, 64, 0);
+      sprite(*s, {{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0xffff'ffff});
+      if(s == &hardware) CHECK(gpu->statistics.depthsPut - put, 2u);
+      c[GE::TextureMappingEnable] = 0;
+    }
+    u32 bytes = apart(software, hardware);
+    if(bytes) std::printf("  %s %ux: %u bytes apart\n", gpu->fast ? "fast" : "accurate", scale, bytes);
+    CHECK(bytes, 0u);
+    auto red = [&](u32 buffer, u32 x, u32 y) { return u32(software.memory.vram[buffer + (y * 64 + x) * 4]); };
+    CHECK(red(0x1'0000, 4, 4), u32(0x1234 & 31) << 3 | (0x1234 & 31) >> 2);  //(the first strip's depth, as 5650)
+    CHECK(red(0x2'0000, 40, 30), u32(0x0101 & 31) << 3 | (0x0101 & 31) >> 2);  //(the depth drawn since)
+    hardware.ge.setRenderer(nullptr);
+  }
+  gpu->resolution(1);
+}
+static auto gpuDepthAsTexture() -> void {
+  if(!renderer()) return;
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(gpu) depthAsTexture(gpu);
+  }
+}
+
 //Bytes beside the GPU's pixels, in the unused columns right of a picture (where games keep their lists): the CPU
 //writes and reads them without waiting for the GPU, a sprite beside them doesn't wait either, and a sprite over
 //them, once the GPU has its pixels from memory again, draws as the software renderer does.
@@ -3046,6 +3194,11 @@ auto gpuTests() -> Tests {
     {"gpu depth as the GE's whole numbers: a fraction of a step above meets the GE's comparisons", gpuDepthSteps},
     {"gpu memory's changes to depth kept past PRIMs that don't use it, for the next that does", gpuDepthUnused},
     {"gpu loads through the depth buffer's views: memory's, without waiting", gpuDepthViewLoads},
+    {"gpu a depth buffer two frame buffers draw with: the depth either drew taken by the other", gpuSharedDepth},
+    {"gpu a 5551 frame buffer's stencil bit filled by INCREMENT, emptied by DECREMENT, taken as a texture's alpha",
+     gpuStencilBit},
+    {"gpu a depth buffer read as a texture through VRAM's depth views: the depth it drew put into memory first",
+     gpuDepthAsTexture},
     {"gpu bytes beside its pixels are memory's, without waiting", gpuBeside},
     {"gpu start-up check passes on a GPU that draws right", gpuCheck},
     {"gpu at 2 and 3 times the resolution: memory's bytes exact", gpuScaled},
