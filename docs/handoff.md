@@ -57,6 +57,57 @@ PPSSPP's notes only as a description of the PSP; JPCSP not read. Save states are
   delete answered with no front end and naming no save deletes the game's own folder.
 - **Checks**: see part 84.
 
+## PSP Vulkan: its waits for its own pixels gone — moves across row widths, palettes on the GPU, copies kept — 2026-10-13
+
+Branch `cursor/psp-vulkan-speed-2b67`, on master (`1d9308714`, #228). docs/psp-core.md, part 83, has the evidence;
+docs/psp-gpu-renderers.md the design. Clean room: no PPSSPP code read (its GPU backend not opened), JPCSP not read.
+Save states unchanged (StateVersion 26). The software renderer untouched.
+- **Measured first** (the M1, MoltenVK, a scratch build counting a frame's draws, passes, binds, barriers, uploads,
+  copies, moves, read backs and each finish's stack, and the emulation thread's time in the GE, recording, submitting
+  and waiting): the slow scenes waited for the GPU's own pixels. Frame buffers drawn at two row widths over one memory
+  (Colin McRae, Dirt 2, Brave Story), palette indices over a frame buffer (Death Jr. II, Sonic Rivals, Activision Hits
+  Remixed: 31 to 61 finishes a frame), 3D textures running past the picture into other frame buffers or past VRAM's end
+  (Death Jr. II, Castlevania, whose blur didn't show), depth fills (Darkstalkers), a copy and a render pass for each of
+  Killzone's 800 blur quads. The Armored Cores' intros are bound by the movie's polling in both renderers on the M1;
+  Army of Two and Dirt 2 by the GE's front end.
+- **Changes** (seven code commits, the last the review's points, with tests that fail without them): the GE's dither
+  in the GPU's blending and depth as the GE's whole numbers (Death Jr. II's glow, Daxter's shadow); moves between
+  frame buffers of other row widths; a texture past VRAM's end taken, depth changes kept for PRIMs that use depth,
+  beside ranges past 16 kept and filled at the target's next use; palette indices over a frame buffer looked up on the
+  GPU, rows not known cut at the next frame buffer, memory's rows decoded alone; a copy taken again only where a
+  PRIM's texels meet the changes (the GE gives `holds()` the texels a PRIM may take, 3D triangles too), barriers only
+  before overlapping reads; textures kept for the next of their size; the depth write its own shader build. All in
+  both modes, but that accurate mode holds rows past a texture's frame buffer only where the PRIM takes none of them.
+- **Numbers** (the M1, fast mode, base -> branch, at a load near 20): Death Jr. II's woods 9.7 -> 67.8 frames a second
+  and its character select 21 -> 170, Activision Hits Remixed's room 10 -> 84, Sonic Rivals 14 -> 113, Castlevania
+  103 -> 354, Darkstalkers 49 -> 122, Brothers in Arms 23 -> 39, Killzone 11 -> 20, Colin McRae 43 -> 57, Brave Story
+  156 -> 216; the Armored Cores, Army of Two, Daxter as they were; the final code's round (load 30-130) in part 83, the
+  same ratios. Accurate: Castlevania 58 -> 144, Killzone 11.7 -> 19.3, Death Jr. II's woods 4.0 -> 10.5 and Sonic
+  Rivals 5.8 -> 11.5 (their palette passes held only where exact: 8 finishes a frame, from 31).
+- **Checks** (the final code, 4b2665616): tests/psp 486/0 (sanitized; 11 new GPU groups), tests/allegrex 58/0,
+  tests/psp/ares 318/0; CI on #234 green (its first run failed a dithered-blending threshold lavapipe misses: 75% now).
+- **Review**: an independent read-only review (no blocker, three major points: accurate mode's held rows, texels a
+  PRIM takes for sprites, beside fills inside memory's callbacks) and a delta review (its tests in 3D so they reach the
+  held-row paths); all points taken (04e5d1c8a, 7099e35e3).
+- **Library** (accurate Vulkan, 3600 frames, master against the final code): all 266 finish in both, 214 the same
+  at all four captures, 32 within a level; of the 20 others, those nearer Software are the dither and depth fixes,
+  those nearer master the same movie or demo a few frames apart (the clock follows the host's; part 83 lists them).
+- **With #233** (part 79, merged in after it reached master; part 83's "With part 79"): the palettes on the GPU take
+  Backbone's glow first; a texture the GPU doesn't hold is decoded as far as the frame buffer it's drawing, without
+  waiting, and cached for the next tile through the same palette; part 79's box only where those rows would still
+  wait, and its copies checked in the box alone (accurate mode: 27 to 56% fewer textures decoded than this branch).
+  The merge's code as it was, part 79's two glow tests rewritten for it: tests/psp 489/0, tests/allegrex 60/0,
+  tests/psp/ares 318/0; end states the same as this branch alone's in Software (every frame), accurate and fast.
+- **On the RP6, to measure**: Software against Vulkan (fast) in the Armored Cores' intros and first menus (the M1
+  can't say why the RP6 was slower there: the GPU's per-frame work is half a texture upload, a present and a shot),
+  Colin McRae's race, Death Jr. II, Sonic Rivals, Activision Hits Remixed, Brothers in Arms, Killzone's menus,
+  Castlevania, Brave Story and Darkstalkers.
+- **Left**: Colin McRae's terrain shadows (depth from frame buffers of another row width); Killzone's blur still takes a
+  copy at each turn from one half of its strip to the other (456 a frame); accurate mode without rasterization order
+  splits overlapping blended primitives (MoltenVK: Colin McRae's race 0.7 frames a second); the GE's front end in the
+  3D games (Army of Two, Dirt 2).
+- Scratch: `~/phobos-work/scratch/vulkan-speed`.
+
 ## PSP: where the slow games' emulation thread goes — the GPU's palette pictures decoded where taken, code forgotten only where there is some, calm system calls, more of the CPU compiled — 2026-10-12
 
 Branch `cursor/psp-cpu-speed5-2b67`, on master (`6ab2c5583`, #224 merged in). docs/psp-core.md, part 79, has the
