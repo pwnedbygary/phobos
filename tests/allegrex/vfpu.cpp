@@ -899,8 +899,36 @@ auto compiledProducts() -> void {
     {"vhdp.q", Vhdp, 4},
   };
   Engines engines;
-  Values values(0x5eed'0001);
   uint32_t registers[128];
+  //first, terms that cancel exactly, each 2^200: a sum of 0 flushes, whatever the exponent it was aligned to
+  {
+    constexpr uint32_t huge = 0x7180'0000, minusHuge = 0xf180'0000;  //±2^100
+    auto fixed = [&](const char* name, uint32_t word, std::initializer_list<std::pair<uint32_t, uint32_t>> set) {
+      for(auto& r : registers) r = 0;
+      for(auto& [index, value] : set) registers[index] = value;
+      bool same = engines.run({word}, registers);
+      if(!same) engines.report(name, {word});
+      check(__LINE__, name, same, 1);
+    };
+    fixed("vdot.q, huge terms cancelling", alu(Vdot, 4, S(2, 0, 0), C(0, 0), C(1, 0)),
+          {{S(0, 0, 0), huge}, {S(0, 0, 1), huge}, {S(1, 0, 0), huge}, {S(1, 0, 1), minusHuge}});
+    fixed("vhdp.q, huge terms cancelling", alu(Vhdp, 4, S(2, 0, 0), C(0, 0), C(1, 0)),
+          {{S(0, 0, 0), huge}, {S(0, 0, 1), huge}, {S(1, 0, 0), huge}, {S(1, 0, 1), minusHuge}});
+    for(uint32_t m : {M(0), E(0)}) {
+      std::vector<std::pair<uint32_t, uint32_t>> set{{S(1, 0, 0), huge}, {S(1, 0, 1), huge}};
+      for(uint32_t i : range(4)) {  //every element of the matrix's rows 0 and 1 (columns, transposed): ±2^100
+        set.push_back({m == M(0) ? S(0, i, 0) : S(0, 0, i), huge});
+        set.push_back({m == M(0) ? S(0, i, 1) : S(0, 1, i), minusHuge});
+      }
+      fixed(m == M(0) ? "vtfm4.q, huge terms cancelling" : "vtfm4.q on E000, huge terms cancelling",
+            alu(Vtfm4, 4, C(2, 0), m, C(1, 0)), {set[0], set[1], set[2], set[3], set[4], set[5], set[6], set[7],
+                                                 set[8], set[9]});
+    }
+    fixed("vmmul.q, huge terms cancelling", alu(Vmmul, 4, M(2), E(0), M(1)),  //(rs's element (k, r): S(0, k, r))
+          {{S(0, 0, 0), huge}, {S(0, 1, 0), huge}, {S(1, 0, 0), huge}, {S(1, 1, 0), huge}, {S(1, 0, 1), minusHuge},
+           {S(1, 1, 1), minusHuge}});
+  }
+  Values values(0x5eed'0001);
   for(auto& kind : kinds) {
     uint32_t differences = 0;
     for(uint32_t trial = 0; trial < 3000; trial++) {
