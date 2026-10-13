@@ -224,15 +224,49 @@ auto GE::readVertices(u32 count, const VertexFormat& format) -> void {
                    inside(Memory::VRAMBase, Memory::VRAMWindow)));
   if(together) drawnFirst(vertexAddress, count * format.size);
   Memory::KnownDrawn known{together};
-  for(u32 n = 0; n < count; n++) {
-    //(indices and vertices in VRAM that primitives waiting to be drawn draw over: they're drawn first, threads.cpp)
-    if(format.indexFormat) drawnFirst(indexAddress + n * indexBytes, indexBytes);
-    u32 index = format.indexFormat ? readIndex(n, format) : n;
-    u32 address = vertexAddress + index * format.size;
-    if(!together) drawnFirst(address, format.size);
-    vertices.push_back(readVertex(address, format));
-    if(!format.colorFormat) vertices.back().color = ambient;
-    if(format.through) vertices.back().u = keep15(vertices.back().u), vertices.back().v = keep15(vertices.back().v);
+  //(without morph targets, read part by part over all of them where their bytes are all in the host's memory: in a
+  //row, after the drawing above; or by indices, indices and vertices all in RAM, where drawnFirst() has nothing to
+  //ask and memory.read() takes the same bytes)
+  const u8* bytes = nullptr;
+  if(vertexRuns && format.morphs == 1 && count && format.size) {
+    auto& offsets = vertexOffsets;
+    offsets.resize(count);
+    auto inRAM = [&](u32 address, u64 size) -> const u8* {
+      u32 physical = address & 0x1fff'ffff;
+      if(physical < Memory::RAMBase || physical - Memory::RAMBase + size > memory.ram.size()) return nullptr;
+      return &memory.ram[physical - Memory::RAMBase];
+    };
+    if(!format.indexFormat) {
+      if(together) bytes = memory.pointer(vertexAddress, count * format.size);
+      for(u32 n = 0; n < count && bytes; n++) offsets[n] = n * format.size;
+    } else if(const u8* indices = inRAM(indexAddress, u64(count) * indexBytes)) {
+      u32 most = 0;
+      for(u32 n = 0; n < count; n++) {
+        u32 index;
+        if(indexBytes == 1) index = indices[n];
+        else if(indexBytes == 2) { u16 half; std::memcpy(&half, indices + n * 2, 2); index = half; }
+        else { std::memcpy(&index, indices + n * 4, 4); index &= 0xffff; }
+        offsets[n] = index * format.size, most = std::max(most, index);
+      }
+      bytes = inRAM(vertexAddress, (u64(most) + 1) * format.size);
+    }
+  }
+  if(bytes) {
+    vertices.resize(count);
+    readVerticesFrom(bytes, vertexOffsets.data(), count, format, vertices.data());
+  } else {
+    for(u32 n = 0; n < count; n++) {
+      //(indices and vertices in VRAM that primitives waiting to be drawn draw over: they're drawn first, threads.cpp)
+      if(format.indexFormat) drawnFirst(indexAddress + n * indexBytes, indexBytes);
+      u32 index = format.indexFormat ? readIndex(n, format) : n;
+      u32 address = vertexAddress + index * format.size;
+      if(!together) drawnFirst(address, format.size);
+      vertices.push_back(readVertex(address, format));
+    }
+  }
+  for(auto& vertex : vertices) {
+    if(!format.colorFormat) vertex.color = ambient;
+    if(format.through) vertex.u = keep15(vertex.u), vertex.v = keep15(vertex.v);
   }
   if(format.indexFormat) indexAddress += count * indexBytes;
   else vertexAddress += count * format.size;

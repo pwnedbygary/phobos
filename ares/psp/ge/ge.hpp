@@ -421,6 +421,8 @@ struct GE {
   auto vertexFormat() const -> VertexFormat;
   auto readVertex(u32 address, const VertexFormat& format) -> Vertex;
   template<typename Read> auto readVertexWith(const Read& read, u32 address, const VertexFormat& format) -> Vertex;
+  auto readVerticesFrom(const u8* bytes, const u32* offsets, u32 count, const VertexFormat& format, Vertex* out)
+    -> void;
   auto readIndex(u32 n, const VertexFormat& format) -> u32;
 
   //lighting.cpp
@@ -572,6 +574,8 @@ struct GE {
   } keptTransform;
 
   std::vector<Vertex> primitiveVertices;  //the primitive being drawn's (draw.cpp); a curved surface's points
+  std::vector<u32> vertexOffsets;         //(readVertices()': where each of them is, read in a run)
+  bool vertexRuns = true;  //vertices read in runs where they may be (readVertices(); tests compare without)
   std::vector<Vertex> patchVertices;      //the vertices a curved surface is cut into (curves.cpp)
 
   //The bytes of VRAM the primitive being drawn may draw over (draw.cpp): its frame buffer's, and its depth buffer's.

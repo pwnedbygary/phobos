@@ -2859,6 +2859,71 @@ static auto geVerticesDrawn() -> void {
   for(u32 threads : {1u, 2u, 4u, 8u}) CHECK(listed(threads), u32(GE::AmbientColor << 24 | 0x00'ff40));
 }
 
+//Vertices read in a run (readVertices() reading a part at a time over all of them, from the host's bytes) are those
+//read one at a time (GE::vertexRuns off), field for field and bit for bit: every vertex type but morph targets (which
+//are read one at a time), through mode and 3D, at random over random bytes (a quarter of the floats infinities or not
+//numbers), in a row and by indices of each size (the largest index's vertex last in RAM, then a byte past its end,
+//which leaves them one at a time), and in a row in VRAM, through its plain copy and the one that rearranges it.
+static auto geVertexRuns() -> void {
+  System s;
+  auto& ge = s.ge;
+  auto& memory = s.memory;
+  std::mt19937 random{20261013};
+  auto same = [](const std::vector<GE::Vertex>& a, const std::vector<GE::Vertex>& b) {
+    if(a.size() != b.size()) return false;
+    for(u32 n = 0; n < a.size(); n++) {
+      auto &p = a[n], &q = b[n];
+      auto bits = [](const auto& x, const auto& y) { return !std::memcmp(&x, &y, sizeof(x)); };
+      if(!bits(p.weights, q.weights) || !bits(p.u, q.u) || !bits(p.v, q.v) || p.color != q.color ||
+         !bits(p.normal, q.normal) || !bits(p.x, q.x) || !bits(p.y, q.y) || !bits(p.z, q.z) || !bits(p.clip, q.clip) ||
+         !bits(p.q, q.q) || !bits(p.fog, q.fog) || p.outside != q.outside || p.far != q.far || p.near != q.near ||
+         p.specular != q.specular) return false;
+    }
+    return true;
+  };
+  u32 differing = 0, runs = 0;
+  for(u32 round = 0; round < 3000; round++) {
+    u32 type = random() & 0x81'c7ff;  //(every field but the indices, set below, and morph targets)
+    u32 where = random() % 4, indexFormat = where == 1 ? 1 + random() % 3 : 0;
+    type |= indexFormat << 11;
+    ge.commands[GE::VertexType] = type;
+    ge.commands[GE::AmbientColor] = random() & 0xff'ffff, ge.commands[GE::AmbientAlpha] = random() & 0xff;
+    auto format = ge.vertexFormat();
+    if(!format.size) continue;
+    u32 count = 1 + random() % 40;
+    u32 address = where == 2 ? VRAM + 0x10'0000 : where == 3 ? VRAM + Memory::VRAMSize + 0x400 : Vertices;
+    u32 indices = Vertices + 0x8000, most = 0;
+    for(u32 n = 0; n < count && indexFormat; n++) {
+      u32 index = random() % 64;
+      if(indexFormat == 3) index |= random() << 16;  //(the GE takes the low 16 bits)
+      memory.write(indexFormat == 3 ? 4 : indexFormat, indices + n * (indexFormat == 3 ? 4 : indexFormat), index);
+      most = std::max(most, index & 0xffff);
+    }
+    u32 span = (indexFormat ? most + 1 : count) * format.size;
+    bool last = indexFormat && random() % 8 == 0;  //(its vertices end where RAM ends, or a byte past it)
+    if(last) address = Memory::RAMBase + memory.ram.size() - span + random() % 2;
+    for(u32 at = 0; at < span; at += 4) {
+      u32 word = random();
+      if(random() % 4 == 0) word |= 0x7f80'0000;
+      if(address + at - Memory::RAMBase + 4 <= memory.ram.size() || address < Memory::RAMBase) {
+        memory.write(4, address + at, word);
+      }
+    }
+    std::vector<GE::Vertex> read[2];
+    for(bool runs : {false, true}) {
+      ge.vertexRuns = runs;
+      ge.vertexAddress = address, ge.indexAddress = indices;
+      ge.readVertices(count, format);
+      read[runs] = ge.primitiveVertices;
+    }
+    runs += !last && where != 3;
+    if(!same(read[0], read[1]) && differing++ < 4) std::printf("  round %u (type %06x): not the same\n", round, type);
+  }
+  ge.vertexRuns = true;
+  CHECK(differing, 0u);
+  CHECK(runs > 1500, true);
+}
+
 //The 3D settings kept from one PRIM to the next (transformKept()), taken after a few of the GE's commands (any of the
 //256) and matrix elements are changed at random, round after round: field for field (floats bit for bit) the
 //Transform transformState() works out afresh. (Changes to the world matrix alone, most PRIMs' in a 3D game, are as
@@ -2932,6 +2997,7 @@ auto geTests() -> Tests {
     {"ge break and callbacks", geBreakCallbacks}, {"ge time", geTime}, {"ge time's interrupt", geTimeInterrupts},
     {"ge FINISH after a quiet function", geQuietFunctions},
     {"ge 3D settings kept from PRIM to PRIM", geTransformKept}, {"ge vertices and lists drawn first", geVerticesDrawn},
+    {"ge vertices read in runs as one at a time", geVertexRuns},
     {"event flags", eventFlags}, {"event flag waiting", eventFlagWaiting}, {"display picture", displayPicture},
     {"gu program", guProgram}, {"copy sample", copySample},
   };
