@@ -168,6 +168,7 @@ static auto stateFields() -> void {
   u32 programBlock = k.allocate(0x4100, 2, Kernel::UserMemory, "program")->uid;
   k.module.imports = {{"Lib", 0x1111, 0x0880'5000}};
   k.module.exports = {{"Lib", 0x2222, 0x0880'6000, false}};
+  k.module.variables = {{"Lib", 0x3333, 0x0880'7000, 0x0880'6000}};
   k.module.skipped = {"left out"};
   k.programUID = k.newUID();
   u32 otherProgramID = k.newUID();  //what the program's ID changes to below
@@ -337,6 +338,10 @@ static auto stateFields() -> void {
     {"export nid", [&] { k.module.exports[0].nid ^= 1; }},
     {"export address", [&] { k.module.exports[0].address ^= 4; }},
     {"export variable", [&] { k.module.exports[0].variable = true; }},
+    {"variable library", [&] { k.module.variables[0].library += "x"; }},
+    {"variable nid", [&] { k.module.variables[0].nid ^= 1; }},
+    {"variable list", [&] { k.module.variables[0].list ^= 4; }},
+    {"variable linked", [&] { k.module.variables[0].linked ^= 4; }},
     {"skipped", [&] { k.module.skipped[0] += "x"; }},
     {"import library", [&] { k.imports[0].library += "x"; }}, {"import nid", [&] { k.imports[0].nid ^= 1; }},
     {"import reported", [&] { k.imports[0].reported = true; }},

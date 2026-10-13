@@ -1762,22 +1762,24 @@ static auto packedRelocations() -> void {
     if(change) change(packed);
     return packed.build();
   };
-  std::vector<Bytes> broken;
-  broken.push_back(table({Packed::at(0, 0x008, 1, 4, Packed::Addend, 0x10)}, [](Packed& p) { p.header[1] = 1; }));
-  broken.push_back(table({Packed::at(0, 0x008, 1, 4, Packed::Addend, 0x10)}, [](Packed& p) {  //kind 3 of 3
+  std::vector<std::pair<Bytes, std::string>> broken;  //each table, and why it's refused
+  broken.push_back({table({Packed::at(0, 0x008, 1, 4, Packed::Addend, 0x10)}, [](Packed& p) { p.header[1] = 1; }),
+                    "the packed relocations' header is broken"});
+  broken.push_back({table({Packed::at(0, 0x008, 1, 4, Packed::Addend, 0x10)}, [](Packed& p) {  //kind 3 of 3
     p.header = {0, 0, 3, 4, 3, 0x00, 0x01, 9, 7, 4, 5, 6, 2, 3, 1, 0};
-  }));
-  broken.push_back(table({Packed::at(0, 0x008, 1, 4, Packed::Addend, 0x10)}, [](Packed& p) {  //type 2 of 2
+  }), "a packed relocation of a kind the table hasn't"});
+  broken.push_back({table({Packed::at(0, 0x008, 1, 4, Packed::Addend, 0x10)}, [](Packed& p) {  //type 2 of 2
     p.header = {0, 0, 3, 4, 8, 0x00, 0x01, 0x11, 0x03, 0x05, 0x09, 0x04, 2, 7};
-  }));
-  broken.push_back(table({Packed::at(0, 0x5fc, 0, 2), Packed::at(0, 0x600, 0, 2)}));  //past segment 0's 0x600 bytes
+  }), "a packed relocation of a type the table hasn't"});
+  broken.push_back({table({Packed::at(0, 0x5fc, 0, 2), Packed::at(0, 0x600, 0, 2)}),  //segment 0's file is 0x600
+                    "a packed relocation points outside its segment"});
   auto cut = table({Packed::at(0, 0x008, 0, 2), Packed::at(0, 0x400, 0, 2, Packed::Far)});
   cut.data.resize(cut.data.size() - 2);
-  broken.push_back(cut);
+  broken.push_back({cut, "a packed relocation is cut short"});
   auto unnamed = table({});
   unnamed.put16(unnamed.data.size(), 2 | 5 << 4);  //a 32-bit relocation, no segment named
-  broken.push_back(unnamed);
-  for(auto& bad : broken) {
+  broken.push_back({unnamed, "a packed relocation before its segment is named"});
+  for(auto& [bad, why] : broken) {
     HostFolder stick;
     put(stick, "BROKEN.PRX", packedModule(false, &bad));
     KernelMachine m;
@@ -1786,11 +1788,12 @@ static auto packedRelocations() -> void {
     u32 blocks = m.kernel.blocks.size();
     CHECK(m.call("sceKernelLoadModule", {m.string("ms0:/BROKEN.PRX"), 0, 0}), Kernel::ErrorIllegalObject);
     CHECK(m.kernel.modules.empty() && m.kernel.blocks.size() == blocks, true);
-    CHECK(m.notes.size() == 1 && m.notes[0].find("can't load ms0:/BROKEN.PRX") == 0, true);
+    CHECK(m.notes.size() == 1 && m.notes[0] == "can't load ms0:/BROKEN.PRX: " + why, true);
   }
 }
 
 static constexpr u32 VariableNID = 0x7a7a'0001;  //VarLib's variable
+static constexpr u32 WhereNID = 0x7a7a'0002;     //VarUserLib's where()
 
 //"VARLIB": exports VarLib's variable, at 0x580 in it: 0x1111'1111, then 0x2222'2222.
 static auto variableModule() -> TestModule {
@@ -1804,26 +1807,30 @@ static auto variableModule() -> TestModule {
 //"VARUSER": imports VarLib's variable, as God Eater 2's modules import dozens from one another: its module_start
 //reads the variable's second word through two luis sharing the lower half of the first lw (each lw at +4), storing
 //both at Results + 0x60 and + 0x64; a third lui's lw (at +0x7ffc) carries; a word of its data (0x590) holds the
-//variable's address and 8.
+//variable's address and 8; and VarUserLib's where() (at 0x2c) returns the address and 8, built with lui and addiu.
 static auto variableUserModule() -> TestModule {
   TestModule m;
   m.name = "VARUSER";
   m.start = 0;
   m.code = {lui(t0, 0), lui(t1, 0), lw(t2, 4, t0), lw(t3, 4, t1), lui(t4, 0), lw(t5, 0x7ffc, t4),
-            lui(t9, Results >> 16), sw(t2, 0x60, t9), sw(t3, 0x64, t9), jr(ra), addiu(v0, zero, 0)};
+            lui(t9, Results >> 16), sw(t2, 0x60, t9), sw(t3, 0x64, t9), jr(ra), addiu(v0, zero, 0),
+            lui(v0, 0), addiu(v0, v0, 8), jr(ra), nop};
   m.words = {{0x590, 8}};
+  m.exports = {{"VarUserLib", {{WhereNID, 0x2c}}}};
   m.imported = {{"VarLib", VariableNID, {{5, 0x00}, {5, 0x04}, {6, 0x08}, {6, 0x0c}, {5, 0x10}, {6, 0x14},
-                                          {2, 0x590}}}};
+                                          {2, 0x590}, {5, 0x2c}, {6, 0x30}}}};
   return m;
 }
 
 //Imported variables, as God Eater 2's EBOOT.BIN and update modules import them from one another (its scene modules
 //coming and going): VARUSER loaded before VARLIB holds nothing yet; once VARLIB loads, its words hold the variable's
-//address (the luis' upper halves completed by the lower half after them, the one at +0x7ffc carrying, the data word
-//the address and 8), as do the program's own (a word at 0x0880'2100, the address and 0x10); VARLIB unloaded, they go
-//back to what the files had; VARLIB loaded again elsewhere, they hold its new address; a state carries what each
-//holds (unloading VARLIB in the machine loaded from it puts them back). And a program on both engines loads VARLIB
-//and VARUSER and starts VARUSER, whose module_start reads the variable through them.
+//address (the luis' upper halves completed by the lower half after them, the one at +0x7ffc carrying, the data word the
+//address and 8), as do the program's own (a word at 0x0880'2100, the address and 0x10); VARLIB unloaded, they go back
+//to what the files had; VARLIB loaded again elsewhere, they hold its new address; a state carries what each holds
+//(unloading VARLIB in the machine loaded from it puts them back); a variable of one of the HLE kernel's libraries is
+//noted. And a program on both engines loads VARUSER, calls its where() (the file's 8), loads VARLIB and calls it again
+//(the address and 8: the code compiled the first time thrown away as it was relinked), then starts VARUSER, whose
+//module_start reads the variable through them.
 static auto importedVariables() -> void {
   HostFolder stick;
   put(stick, "VARLIB.PRX", variableModule().build());
@@ -1849,14 +1856,15 @@ static auto importedVariables() -> void {
   auto unlinked = [&] {
     return at(0x00) == lui(t0, 0) && at(0x04) == lui(t1, 0) && at(0x08) == lw(t2, 4, t0) && at(0x0c) == lw(t3, 4, t1)
         && at(0x10) == lui(t4, 0) && at(0x14) == lw(t5, 0x7ffc, t4) && at(0x590) == 8
-        && word(m.system, ProgramWord) == 0x10;
+        && at(0x2c) == lui(v0, 0) && at(0x30) == addiu(v0, v0, 8) && word(m.system, ProgramWord) == 0x10;
   };
   auto linked = [&](u32 v) {
     auto upper = [](u32 address) { return (address + 0x8000) >> 16; };
     return at(0x00) == lui(t0, upper(v + 4)) && at(0x04) == lui(t1, upper(v + 4))
         && at(0x08) == lw(t2, (v + 4) & 0xffff, t0) && at(0x0c) == lw(t3, (v + 4) & 0xffff, t1)
         && at(0x10) == lui(t4, upper(v + 0x7ffc)) && at(0x14) == lw(t5, (v + 0x7ffc) & 0xffff, t4)
-        && at(0x590) == v + 8 && word(m.system, ProgramWord) == v + 0x10;
+        && at(0x590) == v + 8 && at(0x2c) == lui(v0, upper(v + 8)) && at(0x30) == addiu(v0, v0, (v + 8) & 0xffff)
+        && word(m.system, ProgramWord) == v + 0x10;
   };
   CHECK(m.kernel.modules[user].module.variables.size(), 1);
   CHECK(unlinked(), true);
@@ -1889,22 +1897,49 @@ static auto importedVariables() -> void {
   CHECK(n.call("sceKernelUnloadModule", {library}), library);
   CHECK(word(n.system, base + 0x590) == 8 && word(n.system, base) == lui(t0, 0), true);
   CHECK(word(n.system, ProgramWord), 0x10);
+  //a variable of a library the HLE kernel has functions of, which no module will export: noted as it loads
+  TestModule system;
+  system.name = "SYSVAR";
+  system.words = {{0x590, 8}};
+  system.imported = {{"ThreadManForUser", 0x7a7a'0003, {{2, 0x590}}}};
+  put(stick, "SYSVAR.PRX", system.build());
+  n.notes.clear();
+  u32 sysvar = n.call("sceKernelLoadModule", {n.string("ms0:/SYSVAR.PRX"), 0, 0});
+  CHECK(n.kernel.modules.count(sysvar), 1);
+  CHECK(n.notes.size() == 1 && n.notes[0] == "ms0:/SYSVAR.PRX: imports variable 7a7a0003 of ThreadManForUser, "
+                                              "which the HLE kernel hasn't", true);
 
   for(bool recompile : {false, true}) {
     KernelMachine p;
     prepare(p);
+    constexpr u32 Info = Results + 0x200;  //VARUSER's module information, its segments' addresses from Info + 8
+    p.system.memory.write(Allegrex::Word, Info, 96);
     Assembler main{p, 0x0880'1000};
     main.li(s0, Results);
-    for(auto [path, at] : {std::pair{"ms0:/VARLIB.PRX", 0x100}, std::pair{"ms0:/VARUSER.PRX", 0x104}}) {
-      main.li(a0, p.string(path)); main.li(a1, 0); main.li(a2, 0);
-      main.call("sceKernelLoadModule");
-      main.put(sw(v0, at, s0));
-    }
-    main.put(lw(a0, 0x104, s0)); main.li(a1, 0); main.li(a2, 0); main.li(a3, 0); main.li(t0, 0);
+    main.li(a0, p.string("ms0:/VARUSER.PRX")); main.li(a1, 0); main.li(a2, 0);
+    main.call("sceKernelLoadModule");
+    main.put(addu(s1, v0, zero));
+    main.put(addu(a0, s1, zero)); main.li(a1, Info);
+    main.call("sceKernelQueryModuleInfo");
+    main.li(t0, Info); main.put(lw(s2, 8, t0)); main.put(addiu(s2, s2, 0x2c));
+    main.put(jalr(ra, s2)); main.put(nop);
+    main.put(sw(v0, 0x70, s0));
+    main.li(a0, p.string("ms0:/VARLIB.PRX")); main.li(a1, 0); main.li(a2, 0);
+    main.call("sceKernelLoadModule");
+    main.put(sw(v0, 0x100, s0));
+    main.put(jalr(ra, s2)); main.put(nop);
+    main.put(sw(v0, 0x74, s0));
+    main.put(addu(a0, s1, zero)); main.li(a1, 0); main.li(a2, 0); main.li(a3, 0); main.li(t0, 0);
     main.call("sceKernelStartModule");
     main.call("sceKernelExitGame");
     p.runProgram(0x0880'1000, recompile);
     CHECK(p.kernel.exited, true);
+    u32 exporter = word(p.system, Results + 0x100);
+    CHECK(p.kernel.modules.count(exporter), 1);
+    if(!p.kernel.modules.count(exporter)) continue;
+    u32 address = p.kernel.modules[exporter].module.segments.at(0).address + 0x580;
+    CHECK(word(p.system, Results + 0x70), 8);
+    CHECK(word(p.system, Results + 0x74), address + 8);
     CHECK(word(p.system, Results + 0x60), 0x2222'2222);
     CHECK(word(p.system, Results + 0x64), 0x2222'2222);
   }

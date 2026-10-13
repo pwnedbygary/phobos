@@ -976,28 +976,34 @@ static auto md5Hashes() -> void {
   }
 }
 
-//A tick moved between UTC and the host's local time (sceRtcConvertUtcToLocalTime, and the way back), by the host's
-//offset then as the clock's local dates have it (God Eater 2 asks once it has made its first save): to local and
-//back again gives the tick it started from; an address out of memory is INVALID_POINTER.
+//A tick moved between UTC and local time (sceRtcConvertUtcToLocalTime, and the way back) by the minutes the system's
+//settings give, the same for every tick, as uOFW's rtc moves it (God Eater 2 asks once it has made its first save):
+//with the host in New York in summer (EST5EDT: -300 minutes, daylight saving time kept) every tick moves by -4 hours,
+//whatever its own date, 1970's too; in winter by -5; in Tokyo (JST-9) by +9; and back again to the tick it started
+//from. An address out of memory is INVALID_POINTER.
 static auto clockZones() -> void {
-  KernelMachine m;
   constexpr u64 From1To1970 = 62'135'596'800ull * 1'000'000;
-  for(s64 seconds : {s64(1'791'290'096), s64(1'780'000'000), s64(0)}) {  //2026-10-06, 2026-05-28, 1970
-    std::time_t time = seconds;
-    std::tm local{};
-    localtime_r(&time, &local);
-    s64 offset = (s64(timegm(&local)) - seconds) * 1'000'000;
-    u64 utc = From1To1970 + u64(seconds) * 1'000'000 + 123'456;
-    m.system.memory.write(4, R, u32(utc));
-    m.system.memory.write(4, R + 4, u32(utc >> 32));
-    CHECK(m.call("sceRtcConvertUtcToLocalTime", {R, R + 8}), 0);
-    u64 converted = m.system.memory.read(4, R + 8) | u64(m.system.memory.read(4, R + 12)) << 32;
-    CHECK(converted, utc + offset);
-    CHECK(m.call("sceRtcConvertLocalTimeToUTC", {R + 8, R + 16}), 0);
-    CHECK(m.system.memory.read(4, R + 16) | u64(m.system.memory.read(4, R + 20)) << 32, utc);
+  struct Zone { const char* rule; u64 now; s64 hours; };  //the host's zone, the clock's now (seconds since 1970)
+  for(auto [rule, now, hours] : {Zone{"EST5EDT,M3.2.0,M11.1.0", 1'782'864'000, -4},  //2026-07-01
+                                 Zone{"EST5EDT,M3.2.0,M11.1.0", 1'768'435'200, -5},  //2026-01-15
+                                 Zone{"JST-9", 1'782'864'000, 9}}) {
+    HostZone host(rule);
+    KernelMachine m;
+    m.kernel.startTime = now * 1'000'000;
+    m.kernel.cycles = 0;
+    for(u64 seconds : {1'791'290'096ull, 1'768'435'200ull, 0ull}) {  //2026-10-06, 2026-01-15, 1970
+      u64 utc = From1To1970 + seconds * 1'000'000 + 123'456;
+      m.system.memory.write(4, R, u32(utc));
+      m.system.memory.write(4, R + 4, u32(utc >> 32));
+      CHECK(m.call("sceRtcConvertUtcToLocalTime", {R, R + 8}), 0);
+      u64 converted = m.system.memory.read(4, R + 8) | u64(m.system.memory.read(4, R + 12)) << 32;
+      CHECK(converted, utc + u64(hours * 3'600'000'000));
+      CHECK(m.call("sceRtcConvertLocalTimeToUTC", {R + 8, R + 16}), 0);
+      CHECK(m.system.memory.read(4, R + 16) | u64(m.system.memory.read(4, R + 20)) << 32, utc);
+    }
+    CHECK(m.call("sceRtcConvertUtcToLocalTime", {0, R + 8}), Kernel::ErrorInvalidPointer);
+    CHECK(m.call("sceRtcConvertLocalTimeToUTC", {R, 0x0a00'0000}), Kernel::ErrorInvalidPointer);
   }
-  CHECK(m.call("sceRtcConvertUtcToLocalTime", {0, R + 8}), Kernel::ErrorInvalidPointer);
-  CHECK(m.call("sceRtcConvertLocalTimeToUTC", {R, 0x0a00'0000}), Kernel::ErrorInvalidPointer);
 }
 
 auto powerTests() -> Tests {
