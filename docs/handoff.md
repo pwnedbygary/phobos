@@ -51,7 +51,7 @@ docs/psp-core.md, part 85, has the evidence. Clean room: no PPSSPP code read, JP
   RAM and the machine's state: identical in all three renderers. Lanes written in the scalar code's expression shapes
   (Clang's fused multiply-adds); skinned bone sums kept scalar; `transformAll()` bit-identical to base's, not-a-numbers
   included.
-- **Checks** (the final code, #234's reconciled branch merged): tests/psp 494/0 (sanitized), tests/allegrex 60/0,
+- **Checks** (the final code, #234's reconciled branch merged): tests/psp 496/0 (sanitized), tests/allegrex 60/0,
   tests/psp/ares 318/0; GCC 14 builds the GE and its tests with -Wall -Wextra -Werror.
 - **Review**: a fresh read-only review; two blockers (a not-a-number's sign in the four-lane `transformAll()`, gone
   with it; an enumerator and an int in a conditional, an error under GCC's -Wextra -Werror: 0u) and minor points,

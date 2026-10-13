@@ -11385,12 +11385,12 @@ Infinite's disassembly; `run.sh` gives each run its own stick, `recheck228.sh` a
 
 ## Part 85: the GE's front end faster — vertices read a part at a time, fast mode's corners four at a time in vectors, each corner placed once
 
-On branch `cursor/psp-ge-headroom-2b67`: master (`1d9308714`) with #233 (`cursor/psp-cpu-speed5-2b67`, part 79) and
-#234 (`cursor/psp-vulkan-speed-2b67`, part 83) merged in (`7b5bcdaf8`, which the numbers below call base), then #234's
-reconciled branch and master again as #233, #234 and #235 (part 84) went in. Parts 81 and 82 are other branches'. Clean room: no PPSSPP code read (nothing
-of it opened), JPCSP not read; the PSP's behaviour relied on is the GE's own as the code already had it. Every change
-is the host's: the same numbers worked out in the same order, so the same pictures, VRAM, RAM and machine state in all
-three renderers (checked below). Save states unchanged (StateVersion 26).
+On branch `cursor/psp-ge-headroom-2b67`: master (`1d9308714`) with #233 (`cursor/psp-cpu-speed5-2b67`, part 79) and #234
+(`cursor/psp-vulkan-speed-2b67`, part 83) merged in (`7b5bcdaf8`, which the numbers below call base), then #234's
+reconciled branch and master again as #233, #234 and #235 (part 84) went in. Parts 81 and 82 are other branches'. Clean
+room: no PPSSPP code read (nothing of it opened), JPCSP not read; the PSP's behaviour relied on is the GE's own as the
+code already had it. Every change is the host's: the same numbers worked out in the same order, so the same pictures,
+VRAM, RAM and machine state in all three renderers (checked below). Save states unchanged (StateVersion 26).
 
 **The problem.** On the owner's RP6 (Snapdragon 8 Gen 2), fast-forward ran Super Monkey Ball at 0.3x, Army of Two at
 0.5x, Killzone 1.1x, God of War: Chains of Olympus 1.7x, Ghost of Sparta 2.1x, GTA: Liberty City Stories 2.7x (scenes
@@ -11430,7 +11430,7 @@ the comparison.
    and what the rules ask of it kept as bits (`MeshCorner`), not worked out again at each of the three triangles of a
    strip it's a corner of; four corners at a time through the world, view and projection matrices made one, onto the
    screen (`projectedFour()`: `projected()`'s cut toward the screen's middle, its tests and the pixels from the frame
-   buffer's corner for four lanes, its doubles two at a time) and into sixteenths and bits (`fixedFour()`), GCC's and
+   buffer's corner for four lanes, its doubles two at a time), into sixteenths (`fixedFour()`) and bits, GCC's and
    Clang's vector types, NEON on ARM64. A skinned corner's bones are summed by the scalar code, as `transformAll()`
    sums them, and the rest goes four at a time.
 3. **Fast mode's models** built and added, not zeroed by the vector's growth and written again.
@@ -11452,21 +11452,26 @@ instructions there (x, y and z at once: base's `transformAll()` compiles to NEON
 gathering four vertices' fields into lanes and spreading every field back out (17 a vertex) cost more than the lanes
 saved. `meshTriangles()` keeps only each corner's place and bits, and there the lanes win: strips of 100 corners
 0.36 G cycles in base, 0.26 with the corners placed once a corner but a corner at a time, 0.20 four at a time; skinned
-by 3 bones 0.44, 0.34 and 0.26. So `transformAll()` is base's code again, and NEON is where it pays.
+by 3 bones 0.44, 0.34 and 0.26. So `transformAll()` is base's code again, and the lanes stay where they pay, in
+`meshTriangles()`.
 
 **Exact, and how that was made sure.** A lane gives what one corner alone gives only if every operation is the same,
 and with floats that includes which multiplies and adds are fused: Clang fuses a multiply and an add written in one
 expression (`-ffp-contract=on`, its default), so each lane's expressions are written in the same shape as the scalar
 ones (the same operands, in the same order, in the same statements); and skinned corners keep the scalar bone sums,
-which the compiler vectorizes its own way (across the bones, each product rounded before it's added, the bones left
-over fused), as no lane-a-corner form does. Which of two operands that aren't numbers a sum gives isn't the source's
+which the compiler may vectorize its own way (at -O3, across the bones, each product rounded before it's added, the
+bones left over fused), as no lane-a-corner form does: a skinned corner matches base's as long as the compiler builds
+the two copies of that loop alike, which the scenes below show at -O3. GCC, which the desktop builds use, fuses across
+statements too (`-ffp-contract=fast`, with FMA under `-march=native`); the lanes' only multiplies and adds are the
+matrix products, in the same order as `times44()`'s, and nothing in `projected()` or `fixed()` can fuse, so its lanes
+match its scalar code as well. Which of two operands that aren't numbers a sum gives isn't the source's
 to say (LLVM may swap them, in scalar code as in lanes), but nothing `meshTriangles()` keeps is a float: places in
 sixteenths (held to the screen, 0 where they aren't numbers) and bits. Made sure by: the tests of `meshTriangles()`
 against the corner-at-a-time code it was (the runs handed over, the triangles cut, the time owed) and of
 `drawVertices()`' corners against `clipTriangle()`; `transformAll()` against `transform()` (now base's own code both,
 kept as a guard: random settings, and lighting's every kind of light); scratch dumps of base's and the branch's
-`transformAll()` at O3 with thin LTO over 7 million vertices with infinities and not-a-numbers of either sign:
-identical, bit for bit; and the scenes, below.
+`transformAll()` at O3 with thin LTO over 200,000 PRIMs (7 million vertices) with infinities and not-a-numbers of
+either sign: identical, bit for bit; and the scenes, below.
 
 **Numbers** (the M1, MoltenVK; the final code against base, two rounds taking turns, the means; 150 frames from each
 scene's state; Software with 4 drawing threads; the emulation thread's ms a frame and the frame rate it allows, 1000
@@ -11501,12 +11506,12 @@ instructions under 1%. Colin McRae in Vulkan (accurate) isn't timed: without ras
 | Activision Hits Remixed, room | Software | 18.3 -> 16.4 (55 -> 61), -10% | 184 -> 172 (-6%) | 49 -> 45 (-8%) |
 | Colin McRae 2005, race | Software | 24.4 -> 22.3 (41 -> 45), -9% | 221 -> 201 (-9%) | 63 -> 58 (-7%) |
 
-Army of Two takes a quarter less time in Vulkan (fast) (37-40% fewer instructions: its corners and its vertex
-reading), an eighth less in accurate, a tenth less in Software; Ghost of Sparta's menu 15-20% less in both Vulkan
-modes (`own()`'s pages, the corners); Colin McRae's race 12% in fast; Monkey Ball 7-10%, its time being its PRIMs'
-setup and the guest's VFPU (below). Death Jr. II, Sonic Rivals and Activision Hits Remixed, bound elsewhere since
-#234, run 1-9% fewer instructions. The software renderer's frames are bound by its drawing, whose bands the emulation thread draws too
-while it waits (part 74), so its time there moves less than its front end's instructions.
+Army of Two takes a quarter less time in Vulkan (fast) (37-40% fewer instructions: its corners and its vertex reading),
+an eighth less in accurate, a tenth less in Software; Ghost of Sparta's menu 15-20% less in both Vulkan modes (`own()`'s
+pages, the corners); Colin McRae's race 12% in fast; Monkey Ball 7-10%, its time being its PRIMs' setup and the guest's
+VFPU (below). Death Jr. II, Sonic Rivals and Activision Hits Remixed, bound elsewhere since #234, run 1-9% fewer
+instructions. The software renderer's frames are bound by its drawing, whose bands the emulation thread draws too while
+it waits (part 74), so its time there moves less than its front end's instructions.
 
 **Accuracy.** Base against the branch's final code from the 21 scenes' states (part 79's), 100 frames, every frame's
 picture and all of VRAM hashed with drawing settled, then RAM and the machine's whole serialized state: identical
@@ -11515,29 +11520,31 @@ threads). Before the review's points the same check on the code then (the four-l
 identical in all 63 runs too, and the steps before it on the eight front-end scenes in all three renderers.
 
 **Checks.** On the final code, with #234's reconciled branch merged (its tests of #233's glow with #234's palettes,
-which failed 11 checks on the merge of the two before) and master's #235 after: `tests/psp/run-tests.sh` 494 groups, 0 failures (sanitized,
-and the GE's groups without the sanitizers too); `tests/allegrex/run-tests.sh` 60 groups, 0 failures;
-`tests/psp/ares/run-tests.sh` 318 checks, 0 failed; GCC 14 builds the GE, the renderer and their tests with -Wall
--Wextra -Werror. New tests: "ge vertices read in runs as one at a time" (the runs counted as read), "draw3d mesh
+which failed 11 checks on the merge of the two before) and master's #235 after: `tests/psp/run-tests.sh` 496 groups, 0
+failures (sanitized, and the GE's groups without the sanitizers too); `tests/allegrex/run-tests.sh` 60 groups, 0
+failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed; GCC 14 builds the GE, the renderer and their tests with
+-Wall -Wextra -Werror. New tests: "ge vertices read in runs as one at a time" (the runs counted as read), "draw3d mesh
 corners placed four at a time as one at a time", "draw3d triangles' corners placed once as at each triangle", "draw3d
 transformed a stage at a time as one at a time", "draw3d lit a stage at a time as one at a time", and "ge 3D settings
 kept from PRIM to PRIM" asking for unskinned PRIMs (the last skinning one's bones kept).
 
 **The review.** A fresh read-only review of the branch's nine commits checked each four-lane path against the scalar
 code operation by operation (in LLVM IR too), the list's words, the kept bones, the corners' bits against
-`clipTriangle()`, `own()`'s skip and memory's eight pages, and the vertex runs, and found them right, with two
-blockers. (1) Where two operands that aren't numbers met in one of the four-lane `transformAll()`'s sums, Clang put
-them the other way round from the scalar code, so such a result's sign could differ, and fog reads that sign: a 3D
-point or sprite at a place that isn't a number, with depth clamping and fog on, is drawn at the screen's corner with
-fog 0 or 255 by it. Looked into: base's scalar code, auto-vectorized, takes its own order too, so a vertex at a time
-where a lane isn't a number matched base less, not more (55,000 of 200,000 harness rounds differing in a
-not-a-number's bits, against 25,000); with `transformAll()` base's code again (above), none differ. (2) `cond ?
-Outside : 0` (an enumerator and an int) is an error under GCC's -Wextra -Werror, as CI builds the tests: 0u (GCC 14
-compiles the GE and its tests cleanly with -Wall -Wextra -Werror now). Its minor points, taken: the vertex runs test
-counts the runs read (`GE::vertexRunsRead`), not its own expectation; the kept settings test checks an unskinned
-PRIM keeps the last skinning one's bones; the four-at-a-time tests take one not-a-number as another; comments; vectors
-returned by their type for GCC. Not taken: an ARM64 CI job (a fused multiply and add written differently in a lane
-shows only there; the Mac's test runs are ARM64 and catch it).
+`clipTriangle()`, `own()`'s skip and memory's eight pages, and the vertex runs, and found them right, with two blockers.
+(1) Where two operands that aren't numbers met in one of the four-lane `transformAll()`'s sums, Clang put them the other
+way round from the scalar code, so such a result's sign could differ, and fog reads that sign: a 3D point or sprite at a
+place that isn't a number, with depth clamping and fog on, is drawn at the screen's corner with fog 0 or 255 by it.
+Looked into: base's scalar code, auto-vectorized, takes its own order too, so a vertex at a time where a lane isn't a
+number matched base less, not more (55,000 of 200,000 harness rounds differing in a not-a-number's bits, against
+25,000); with `transformAll()` base's code again (above), none differ. (2) `cond ? Outside : 0` (an enumerator and an
+int) is an error under GCC's -Wextra -Werror, as CI builds the tests: 0u (GCC 14 compiles the GE and its tests cleanly
+with -Wall -Wextra -Werror now). Its minor points, taken: the vertex runs test counts the runs read
+(`GE::vertexRunsRead`), not its own expectation; the kept settings test checks an unskinned PRIM keeps the last skinning
+one's bones; the stage-at-a-time tests take one not-a-number as another; comments; vectors returned by their type for
+GCC. Not taken: an ARM64 CI job (a fused multiply and add written differently in a lane shows only there; the Mac's test
+runs are ARM64 and catch it). A second fresh review, of the final diff after `transformAll()` went back to base's, found
+no blocker or major point; its minor ones taken: the GCC note above, the mesh test comparing each corner's place and
+bits too, the lighting test over all three mappings, a lane of depths nothing read, comments and the tests' names.
 
 **Where the time goes now** (the final code, `sample` of a -g build, the share of the emulation thread; taken at a
 load near 100, so as shares):
