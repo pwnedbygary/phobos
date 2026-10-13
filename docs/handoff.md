@@ -25,6 +25,31 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## CI: the CPU's tests on an ARM64 host, the RSP's NEON checked there; the CPU's and the system's tests built as the app is — 2026-10-13
+
+Branch `cursor/test-plan-06-2b67`, stacked on `cursor/test-plan-04-2b67` (package 04, on package 03, on #241).
+Package 06 of the 2026-10-13 test and performance plan (indexed in the implementation plan by package 01's PR). Test
+scripts and CI only: the app's build and its flags are unchanged.
+- **The gap**: the phones run the Allegrex recompiler's ARM64 code and the N64 RSP's NEON sequences, but CI ran only
+  x86-64 (where neither is executed), and every host suite was a sanitized `-O1` debug build, while the app is
+  `BUILD_RELEASE`, `SLJIT_DEBUG=0`, `-O3` with its math and loop flags (CMakeLists.txt).
+- **ARM64** (GitHub's `ubuntu-24.04-arm`, free for public repositories): PSP Core Tests gains "Allegrex CPU tests
+  (ARM64)", the suite sanitized and then built as the app is, each test on the interpreter and the recompiler (sljit's
+  ARM64 back end: Linux's ABI, not Android's); a new workflow, N64 RSP NEON Tests, runs
+  `tests/rsp-vu-neon/run-tests.sh 3000 0x5253505655` there on changes to the RSP, the harness or sse2neon. Their
+  summaries name the host (`uname -m`, the compiler) and the commit.
+- **Built as the app is** (`PHOBOS_TESTS_MODE=release` in `tests/allegrex` and `tests/psp`): `BUILD_RELEASE`
+  (NDEBUG: the core's four asserts out, as in the app; no test uses assert), `SLJIT_DEBUG=0`, `-O3 -ftree-vectorize
+  -funroll-loops -fno-math-errno -fno-trapping-math`, no sanitizers unless `SANITIZE` names some; not the app's
+  link-time optimization (`-flto=thin` is clang's, CI's compiler is GCC). sljit's C file and the C++ files get the
+  same mode. The default stays the sanitized debug build. CI runs it beside each sanitized run: a second step in both
+  Allegrex jobs, and "PSP system tests, built as the app is" beside the system lane, with the same requirements.
+- **Checks** (the Mac, arm64, Apple clang 21): `PHOBOS_TESTS_MODE=release tests/allegrex/run-tests.sh` 60/0 (7
+  objects of its own, 18 s with the run); `tests/rsp-vu-neon/run-tests.sh 3000 0x5253505655`: 10,420,000 checks, no
+  NEON or reference mismatch; actionlint on the workflows. CI and the negative controls (an ARM64 instruction
+  mis-encoded in sljit's back end, which the ARM64 lane must catch and x86-64 can't; a NEON sequence broken): below
+  once run.
+
 ## Tests: a skip says what's missing, and fails where the lane must have it; the Allegrex measurements unpacked by content — 2026-10-13
 
 Branch `cursor/test-plan-04-2b67`, stacked on `cursor/test-plan-03-2b67` (package 03, itself on #241). Package 04 of

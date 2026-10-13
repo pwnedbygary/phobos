@@ -1,0 +1,48 @@
+name: N64 RSP NEON Tests
+
+# The N64 RSP's vector instructions as the recompiler emits them in NEON (ares/n64/rsp/vu-neon.hpp), run on an ARM64
+# host and compared with the scalar and SSE references (tests/rsp-vu-neon/run-tests.sh), on changes to them: the
+# emitted code runs on Linux's ARM64 here, as on the phones' (Android's ABI isn't tested). The checks' count and seed
+# go in the run's summary with the host and the commit.
+
+on:
+  push:
+    branches: [ master ]
+    tags: [ 'v*' ]
+    paths: [ 'ares/n64/rsp/**', 'tests/rsp-vu-neon/**', 'thirdparty/sse2neon.h', '.github/workflows/rsp-neon.yml' ]
+  pull_request:
+    paths: [ 'ares/n64/rsp/**', 'tests/rsp-vu-neon/**', 'thirdparty/sse2neon.h', '.github/workflows/rsp-neon.yml' ]
+  workflow_dispatch:
+
+concurrency:
+  group: rsp-neon-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rsp-vu-neon:
+    name: RSP vector instructions in NEON (ARM64)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: The host
+        run: |
+          uname -m
+          c++ --version | head -1
+
+      # 3000 states per sequence from the harness's own seed (its defaults, named here so the summary's are these)
+      - name: Run the checks
+        shell: bash
+        run: tests/rsp-vu-neon/run-tests.sh 3000 0x5253505655 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          host="$(uname -m), $(c++ --version | head -1)"
+          echo "- tests/rsp-vu-neon on $host at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
