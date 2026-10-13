@@ -68,8 +68,13 @@ private val removedPixelScenes = mapOf(
 private fun pixelBackdropNamed(name: String): PixelBackdropScene =
     removedPixelScenes[name] ?: if (name == "SAKURA") PixelBackdropScene.SAKURA_NIGHT else enumOrDefault(name, PixelBackdropScene.SAKURA_CYCLE)
 
-/** The screensaver's backdrop stored as [name]: a removed Pixel art scene's entry reads as its scene does. */
+/** The Manga ink scene stored as [name]: Splash page, since redrawn as the magazine cover, reads as the cover. */
+private fun mangaBackdropNamed(name: String): MangaBackdropScene =
+    if (name == "SPLASH") MangaBackdropScene.COVER else enumOrDefault(name, MangaBackdropScene.TONE)
+
+/** The screensaver's backdrop stored as [name]: a removed Pixel art scene's entry reads as its scene does, Splash page's as the cover. */
 private fun screensaverBackdropNamed(name: String): CatalogBackdrop {
+    if (name == "MANGA_SPLASH") return CatalogBackdrop.MANGA_COVER
     val removed = if (name.startsWith("PIXEL_")) removedPixelScenes[name.removePrefix("PIXEL_")] else null
     return removed?.toCatalog() ?: enumOrDefault(name, CatalogBackdrop.MATCH_APP)
 }
@@ -90,7 +95,8 @@ enum class PlatformIconPack(val label: String, val description: String) {
 enum class MangaBackdropScene(val label: String, val description: String) {
     TONE("Screentone", "A halftone screentone rising from the bottom, with scratched highlights"),
     SPEED_LINES("Speed lines", "Focus lines converging on a clear space in the middle"),
-    SPLASH("Splash page", "An impact burst flashing out of a screentone field"),
+    COVER("Magazine cover", "Weekly Shonen Phobos announces the new series: ares, now on Android, and back to Windows and Linux"),
+    TRUCK("Truck-kun", "The isekai truck charges out of focus lines, headlights blazing"),
 }
 
 /** 16-bit RPG backdrop variants. */
@@ -552,7 +558,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
                 if (safeGet(RETROWAVE_EFFECTS, false)) UiEffects.RETROWAVE else UiEffects.NONE,
             ),
             pixelBackdrop = pixelBackdropNamed(safeGetString(PIXEL_BACKDROP, "")),
-            mangaBackdrop = enumOrDefault(safeGetString(MANGA_BACKDROP, ""), MangaBackdropScene.TONE),
+            mangaBackdrop = mangaBackdropNamed(safeGetString(MANGA_BACKDROP, "")),
             rpgBackdrop = enumOrDefault(safeGetString(RPG_BACKDROP, ""), RpgBackdropScene.LATTICE),
             retrowaveBackdrop = enumOrDefault(safeGetString(RETROWAVE_BACKDROP, ""), RetrowaveBackdropScene.SUNSET),
             crtBackdrop = enumOrDefault(safeGetString(CRT_BACKDROP, ""), CrtBackdropScene.GREEN),

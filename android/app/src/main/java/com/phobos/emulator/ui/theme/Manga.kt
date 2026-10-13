@@ -1,5 +1,6 @@
 package com.phobos.emulator.ui.theme
 
+import android.content.res.Resources
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -36,6 +37,7 @@ import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -109,9 +111,9 @@ private val CAPTION_REACH_X = 6.dp
 private val CAPTION_REACH_Y = 3.dp
 
 /**
- * The manga backdrop ([MangaPage]): a screentone page, focus lines, or an impact burst, in the theme's
- * ink tone on its paper. [scheme] should be the theme's final colors: the page is drawn again whenever
- * they change.
+ * The manga backdrop ([MangaPage]): a screentone page, focus lines, a magazine cover or Truck-kun, in the
+ * theme's ink tone on its paper. [scheme] should be the theme's final colors: the page is drawn again
+ * whenever they change.
  */
 @Composable
 fun MangaBackdrop(
@@ -122,7 +124,21 @@ fun MangaBackdrop(
 ) {
     val paper = scheme.background.toArgb()
     val ink = mangaTone(scheme, isDark).toArgb()
-    RenderedBackdrop(listOf("manga", paper, ink, scene), Color(paper), modifier) { width, height -> MangaPage.render(width, height, paper, ink, scene) }
+    val resources = LocalContext.current.resources
+    RenderedBackdrop(listOf("manga", paper, ink, scene), Color(paper), modifier) { width, height ->
+        val lettered = scene == MangaBackdropScene.COVER || scene == MangaBackdropScene.TRUCK
+        MangaPage.render(width, height, paper, ink, scene, if (lettered) MangaLettering.of(resources) else null)
+    }
+}
+
+/** Bangers' outlines for the lettered manga backdrops, read from its font resource the first time one is drawn. */
+private object MangaLettering {
+    @Volatile
+    private var loaded: Lettering? = null
+
+    fun of(resources: Resources): Lettering = loaded ?: synchronized(this) {
+        loaded ?: Lettering(TrueType(resources.openRawResource(R.font.bangers).use { it.readBytes() })).also { loaded = it }
+    }
 }
 
 /**
