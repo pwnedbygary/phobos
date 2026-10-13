@@ -11340,16 +11340,17 @@ hasn't got, reads one of no font or of a font not handed out yet, has somewhere 
 is.
 
 **Checks.** `tests/psp/run-tests.sh` 484 groups, 0 failures (both sanitizers; 478 before); `tests/allegrex/run-tests.sh`
-60 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed (each on the review's fixes too; CI on
-2ce1c070b: the PSP system tests with GCC, the Allegrex tests and the Linux and Windows builds green, the macOS build not
-started, no runner taking it). The repros, each with a runner built from the branch (and master's, `b3507c1db`, for
-before), on an empty stick or a copy of the play-tester's: Jeanne d'Arc from its briefing state with Cross
-(`sortie.txt`), its battle map at frame 300 and the Combat tutorial from 600 to 2400, no error line (master:
-"Loading..." to the end, the error at 154); Hammerin' Hero's `t1.txt` from boot, "Start the game from the beginning."
-(frame 1320), "Start the game on this setting?" (1800) and "I don't have time to be playing with you, Boy." (3000), its
-words spaced; Final Fantasy III's `script.txt` from boot, the name screen's text (4100), the battle's command and party
-windows (6000) and its dialogue (8500). Final Fantasy III's own state from the play-tester (frame 9400) keeps its empty
-text: it was saved after the game's three opens had failed, with 0 for its handles.
+60 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed (each on the review's fixes too; merged with
+master's #234, 495 groups, its eleven new among them, and 318 checks, none failing). CI on the merge (1d22b81c2) is all
+green: the PSP system tests with GCC, the Allegrex tests, and the Android, Linux, Windows and macOS builds. The repros,
+each with a runner built from the branch (and master's, `b3507c1db`, for before), on an empty stick or a copy of the
+play-tester's: Jeanne d'Arc from its briefing state with Cross (`sortie.txt`), its battle map at frame 300 and the
+Combat tutorial from 600 to 2400, no error line (master: "Loading..." to the end, the error at 154); Hammerin' Hero's
+`t1.txt` from boot, "Start the game from the beginning." (frame 1320), "Start the game on this setting?" (1800) and "I
+don't have time to be playing with you, Boy." (3000), its words spaced; Final Fantasy III's `script.txt` from boot, the
+name screen's text (4100), the battle's command and party windows (6000) and its dialogue (8500). Final Fantasy III's
+own state from the play-tester (frame 9400) keeps its empty text: it was saved after the game's three opens had failed,
+with 0 for its handles.
 
 **The regression check.** The play-testers' other sceFont games, master's runner (with the scratch trace, which counted
 each game's calls into the library) against the branch's, each on its own stick: Growlanser IV from its state in play

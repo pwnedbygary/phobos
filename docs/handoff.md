@@ -59,8 +59,8 @@ room: the games' own code and traces, pspautotests' recordings; PPSSPP read only
 - **Review**: an independent read-only reviewer found no high-severity bug; its points (the count above, a test of
   reads with another thread closing the font or the library meanwhile, three damaged-state checks, the choices marked as
   choices, the never-opened handle, small cleanups) are all taken.
-- **Checks**: tests/psp 484/0 (six new font groups; the state fields' new ones), tests/allegrex 60/0, tests/psp/ares
-  318/0.
+- **Checks**: tests/psp 484/0 (six new font groups; the state fields' new ones; 495/0 merged with #234),
+  tests/allegrex 60/0, tests/psp/ares 318/0; CI green on the merge (1d22b81c2).
 - **Scratch**: `~/phobos-work/scratch/font-b03/` on the Mac it was made on (runs, traces, comparison sheets, the scratch
   tracer's patch), not in the repository.
 
