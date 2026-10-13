@@ -161,6 +161,7 @@ auto GE::settingsState(Transform& t) const -> void {
 }
 
 static auto projected(GE::Vertex& v, const GE::Transform& t, bool clipped) -> void;
+static auto projectedFour(GE::Vertex* v, u32 lanes, const GE::Transform& t) -> void;
 static auto placedFour(GE::Vertex* v, u32 lanes, const GE::Transform& t, GE::Placing* placing) -> void;
 
 //A vertex through the matrices onto the screen, with its texture coordinates (in texels) and fog: its place, then
@@ -176,9 +177,10 @@ auto GE::transform(Vertex& vertex, const Transform& t) -> void {
 //each vertex's arithmetic waits on itself all along (project()'s divisions and conversions, lighting's), and a
 //vertex's stage done after the last's leaves the CPU the next's to do meanwhile. (God of War's battle draws 255,000
 //vertices a frame, nearly all lit.) Unskinned, their places and their places on the screen four at a time
-//(placedFour()); skinned, a vertex at a time, as ever: the compiler sums a vertex's bones four at a time there, each
-//product rounded before it's added (the multiply and add written together may be fused or not), which placedFour()'s
-//lanes, each a vertex, don't do.
+//(placedFour()); skinned, their places a vertex at a time, as ever: the compiler sums a vertex's bones four at a time
+//there, each product rounded before it's added (the multiply and add written together may be fused or not), which
+//placedFour()'s lanes, each a vertex, don't do; then their places on the screen four at a time (projectedFour()).
+//The rest four at a time where texture coordinates are mapped by UV (transformRestFour()).
 auto GE::transformAll(std::vector<Vertex>& vertices, const Transform& t) -> void {
   Placing placings[64];
   for(u32 first = 0, count = vertices.size(); first < count; first += 64) {
@@ -186,7 +188,7 @@ auto GE::transformAll(std::vector<Vertex>& vertices, const Transform& t) -> void
     u32 run = std::min(count - first, 64u);
     if(t.weights) {
       for(u32 n = 0; n < run; n++) transformPlace(v[n], t, placings[n]);
-      for(u32 n = 0; n < run; n++) projected(v[n], t, false);
+      for(u32 n = 0; n < run; n += 4) projectedFour(v + n, std::min(run - n, 4u), t);
     } else {
       for(u32 n = 0; n < run; n += 4) placedFour(v + n, std::min(run - n, 4u), t, placings + n);
     }
@@ -338,15 +340,63 @@ static alwaysinline auto projected(GE::Vertex& v, const GE::Transform& t, bool c
   v.x = s.x, v.y = s.y, v.z = s.z, v.outside = s.outside, v.far = s.far, v.near = s.near;
 }
 
+//Four vertices on the screen (projectedFour()), a lane each: OnScreen's, its yes as all bits set.
+struct OnScreenFour { GE::f32x4 x, y, z; GE::s32x4 outside, far, near; };
+
 //Four clip positions (a lane each: x, y, z and w) onto the screen, as projected() puts each, not cut by clipping:
-//the viewport's divisions four at a time (the same operations on each lane), the rest a lane at a time.
+//each lane the same operations as onScreen()'s on one, four at a time (its doubles two at a time).
 static alwaysinline auto projectedFour(const GE::Transform& t, GE::f32x4 cx, GE::f32x4 cy, GE::f32x4 cz,
-                                       GE::f32x4 cw, OnScreen (&s)[4]) -> void {
-  GE::f32x4 x = cx * t.scale[0] / cw + t.center[0];
-  GE::f32x4 y = cy * t.scale[1] / cw + t.center[1];
-  GE::f32x4 z = cz * t.scale[2] / cw + t.center[2];
-  GE::f32x4 depth = cz / cw;
-  for(u32 k = 0; k < 4; k++) s[k] = onScreen(t, false, x[k], y[k], z[k], depth[k], cz[k], cw[k]);
+                                       GE::f32x4 cw) -> OnScreenFour {
+  using f32x4 = GE::f32x4;
+  using f64x2 = GE::f64x2;
+  using f32x2 = float __attribute__((vector_size(8)));
+  using s32x2 = s32 __attribute__((vector_size(8)));
+  f32x4 x = cx * t.scale[0] / cw + t.center[0];
+  f32x4 y = cy * t.scale[1] / cw + t.center[1];
+  f32x4 z = cz * t.scale[2] / cw + t.center[2];
+  f32x4 depth = cz / cw;
+  //(onScreen()'s cut, its test for the screen and pixels() for half the lanes: 0 and 1, or 2 and 3)
+  auto cut = [](f32x4 position, u32 half) -> f64x2 {
+    f32x2 two{position[half * 2], position[half * 2 + 1]};
+    f64x2 sixteenths = (__builtin_convertvector(two, f64x2) - 2048) * 16;
+#if __has_builtin(__builtin_elementwise_trunc)
+    return 32768 + __builtin_elementwise_trunc(sixteenths);
+#else
+    return 32768 + f64x2{std::trunc(sixteenths[0]), std::trunc(sixteenths[1])};
+#endif
+  };
+  auto pixels = [](f64x2 position, float offset) -> f32x2 {
+    s32x2 tame = __builtin_convertvector((position < 1e9) & (position > -1e9), s32x2);
+    return (f32x2)((s32x2)__builtin_convertvector((position - offset) / 16, f32x2) & tame);
+  };
+  s32x2 on[2];
+  f32x2 across[2], down[2];
+  for(u32 half = 0; half < 2; half++) {
+    f64x2 cutX = cut(x, half), cutY = cut(y, half);
+    on[half] = __builtin_convertvector((cutX >= 0) & (cutX < 65536) & (cutY >= 0) & (cutY < 65536), s32x2);
+    across[half] = pixels(cutX, t.offsetX), down[half] = pixels(cutY, t.offsetY);
+  }
+  OnScreenFour s;
+  GE::s32x4 offScreen = ~GE::s32x4{on[0][0], on[0][1], on[1][0], on[1][1]};
+  s.outside = t.depthClamp ? offScreen & (cz > -cw) : offScreen | ~((z >= 0) & (z < 65536));
+  s.x = f32x4{across[0][0], across[0][1], across[1][0], across[1][1]};
+  s.y = f32x4{down[0][0], down[0][1], down[1][0], down[1][1]};
+  s.z = pickFloats(z > 0, pickFloats(65535.0f < z, f32x4{} + 65535.0f, z), f32x4{});
+  s.far = depth >= OutsideDepth, s.near = -depth >= OutsideDepth;
+  return s;
+}
+
+//Up to four placed vertices (lanes of them, their clip positions worked out) put on the screen, as projected() puts
+//each, the last vertex standing in for lanes past lanes.
+static auto projectedFour(GE::Vertex* v, u32 lanes, const GE::Transform& t) -> void {
+  auto lane = [&](u32 k) -> const GE::Vertex& { return v[std::min(k, lanes - 1)]; };
+  auto clip = [&](u32 n) -> GE::f32x4 { return {lane(0).clip[n], lane(1).clip[n], lane(2).clip[n], lane(3).clip[n]}; };
+  auto s = projectedFour(t, clip(0), clip(1), clip(2), clip(3));
+  for(u32 k = 0; k < lanes; k++) {
+    auto& out = v[k];
+    out.x = s.x[k], out.y = s.y[k], out.z = s.z[k];
+    out.outside = s.outside[k], out.far = s.far[k], out.near = s.near[k];
+  }
 }
 
 //Up to four unskinned vertices (lanes of them) placed and put on the screen, as transformPlace() and projected() have
@@ -371,8 +421,7 @@ static auto placedFour(GE::Vertex* v, u32 lanes, const GE::Transform& t, GE::Pla
   f32x4 cy = vx * projection[1] + vy * projection[5] + vz * projection[9] + projection[13];
   f32x4 cz = vx * projection[2] + vy * projection[6] + vz * projection[10] + projection[14];
   f32x4 cw = vx * projection[3] + vy * projection[7] + vz * projection[11] + projection[15];
-  OnScreen s[4];
-  projectedFour(t, cx, cy, cz, cw, s);
+  auto s = projectedFour(t, cx, cy, cz, cw);
   for(u32 k = 0; k < lanes; k++) {
     auto& p = placing[k];
     p.model[0] = x[k], p.model[1] = y[k], p.model[2] = z[k];
@@ -380,8 +429,8 @@ static auto placedFour(GE::Vertex* v, u32 lanes, const GE::Transform& t, GE::Pla
     p.viewZ = vz[k];
     auto& out = v[k];
     out.clip[0] = cx[k], out.clip[1] = cy[k], out.clip[2] = cz[k], out.clip[3] = cw[k];
-    out.x = s[k].x, out.y = s[k].y, out.z = s[k].z;
-    out.outside = s[k].outside, out.far = s[k].far, out.near = s[k].near;
+    out.x = s.x[k], out.y = s.y[k], out.z = s.z[k];
+    out.outside = s.outside[k], out.far = s.far[k], out.near = s.near[k];
   }
 }
 

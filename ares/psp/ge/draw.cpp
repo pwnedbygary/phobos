@@ -44,6 +44,12 @@ static auto fixed(float position) -> s32 {
   if(!(position >= -4096 && position <= 4096)) position = position > 0 ? 4096 : -4096;
   return s32(position * 16);
 }
+//fixed() of each lane.
+static alwaysinline auto fixedFour(GE::f32x4 position) -> GE::s32x4 {
+  GE::f32x4 held = pickFloats(position > 0, GE::f32x4{} + 4096, GE::f32x4{} - 4096);
+  GE::f32x4 kept = pickFloats((position >= -4096) & (position <= 4096), position, held);
+  return __builtin_convertvector(kept * 16, GE::s32x4);
+}
 
 static auto floorDivide(s32 value, s32 by) -> s32 { return value >= 0 ? value / by : -((-value + by - 1) / by); }
 static auto floorDivide64(s64 value, s64 by) -> s64 { return value >= 0 ? value / by : -((-value + by - 1) / by); }
@@ -143,13 +149,20 @@ static auto keepsPixels(const GE::PixelState& p) -> bool {
 
 //A triangle's pixels inside the scissor rectangle and drawing region, its corners in sixteenths, for the GE's time
 //(owe()): its area there. (It draws the pixels whose middles are inside it: as many, but for those along its edges.)
-static auto pixelsInside(const s64 (&x)[3], const s64 (&y)[3], const GE::PixelState& p) -> u64 {
+//One reaching past the rectangle is cut to it (pixelsCut()).
+static auto pixelsCut(const s64 (&x)[3], const s64 (&y)[3], f64 left, f64 right, f64 top, f64 bottom) -> u64;
+static alwaysinline auto pixelsInside(const s64 (&x)[3], const s64 (&y)[3], const GE::PixelState& p) -> u64 {
   f64 left = p.left * 16.0, right = (p.right + 1) * 16.0, top = p.top * 16.0, bottom = (p.bottom + 1) * 16.0;
   if(left >= right || top >= bottom) return 0;
   s64 twice = (x[1] - x[0]) * (y[2] - y[0]) - (y[1] - y[0]) * (x[2] - x[0]);
   if(std::min({x[0], x[1], x[2]}) >= left && std::max({x[0], x[1], x[2]}) <= right &&
      std::min({y[0], y[1], y[2]}) >= top && std::max({y[0], y[1], y[2]}) <= bottom) return u64(std::abs(twice)) / 512;
-  //cut at each side of the rectangle in turn (each cut adds a corner at most: seven), then what's left's area
+  return pixelsCut(x, y, left, right, top, bottom);
+}
+
+//pixelsInside()'s triangle reaching past the rectangle (in sixteenths): cut at each side of it in turn (each cut adds
+//a corner at most: seven), then what's left's area.
+static auto pixelsCut(const s64 (&x)[3], const s64 (&y)[3], f64 left, f64 right, f64 top, f64 bottom) -> u64 {
   f64 px[8], py[8], qx[8], qy[8];
   u32 count = 3;
   for(u32 k = 0; k < 3; k++) px[k] = f64(x[k]), py[k] = f64(y[k]);
@@ -627,9 +640,10 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
 //in runs between those, so that they're drawn in order. (The corners' clip positions come through the world, view
 //and projection matrices made one, once a PRIM: clipPosition()'s but for a float's rounding, which can only move a
 //triangle lying on an edge of these rules across it.) What the rules ask of each corner is kept in its bits, so that a
-//strip's triangles, three to a corner, look at those. Unskinned corners are placed four at a time, each lane's
-//arithmetic the same as one corner's alone (projectedFour()); skinned ones a corner at a time, as transformAll()
-//places them (the compiler sums a corner's bones in its own way there).
+//strip's triangles, three to a corner, look at those. Corners are put on the screen four at a time, each lane's
+//arithmetic the same as one corner's alone (projectedFour()), unskinned ones placed four at a time too; skinned ones
+//are placed a corner at a time, as transformAll() places them (the compiler sums a corner's bones in its own way
+//there).
 auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip, s32 facing,
                        std::vector<Vertex>& vertices) -> void {
   u32 count = vertices.size();
@@ -646,27 +660,33 @@ auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip
   //a corner's bits: off the screen; z / w past the far end, or the near one (outOfSight()); w below 0; w not above 0;
   //nearer than the near plane (z + w below 0)
   enum : u32 { Outside = 1, Far = 2, Near = 4, Behind = 8, NotAhead = 16, Nearer = 32 };
-  auto bits = [&](const OnScreen& s, float z, float w) -> u32 {
-    return (s.outside ? Outside : 0) | (s.far ? Far : 0) | (s.near ? Near : 0) | (w < 0 ? Behind : 0) |
-           (w > 0 ? 0 : NotAhead) | (z + w < 0 ? Nearer : 0);
+  //(four corners' clip positions, from the n-th on, onto the screen: their places and bits)
+  auto placeFour = [&](u32 n, f32x4 cx, f32x4 cy, f32x4 cz, f32x4 cw) {
+    auto screen = projectedFour(t, cx, cy, cz, cw);
+    s32x4 across = fixedFour(screen.x), down = fixedFour(screen.y);
+    s32x4 laneBits = (screen.outside & s32(Outside)) | (screen.far & s32(Far)) | (screen.near & s32(Near)) |
+                     ((cw < 0) & s32(Behind)) | (~(cw > 0) & s32(NotAhead)) | ((cz + cw < 0) & s32(Nearer));
+    for(u32 k = 0; k < 4 && n + k < count; k++) placed[n + k] = {across[k], down[k], u32(laneBits[k])};
   };
-  for(u32 n = 0; n < count && t.weights; n++) {
-    auto& v = vertices[n];
-    float model[3] = {v.x, v.y, v.z};
-    if(t.weights) {
+  for(u32 first = 0; first < count && t.weights; first += 64) {
+    u32 run = std::min(count - first, 64u);
+    float clip[64][4];
+    for(u32 n = 0; n < run; n++) {
+      auto& v = vertices[first + n];
+      float model[3] = {v.x, v.y, v.z};
       float position[3] = {};
       for(u32 bone = 0; bone < t.weights; bone++) {
         float moved[3];
         times43(t.bones + bone * 12, model, moved);
         for(u32 k = 0; k < 3; k++) position[k] += moved[k] * v.weights[bone];
       }
-      for(u32 k = 0; k < 3; k++) model[k] = position[k];
+      times44(clipping, position, clip[n]);
     }
-    Vertex corner;
-    times44(clipping, model, corner.clip);
-    project(corner, t, false);
-    OnScreen s{corner.x, corner.y, corner.z, corner.outside, corner.far, corner.near};
-    placed[n] = {fixed(s.x), fixed(s.y), bits(s, corner.clip[2], corner.clip[3])};
+    for(u32 n = 0; n < run; n += 4) {
+      auto lane = [&](u32 k, u32 part) { return clip[std::min(n + k, run - 1)][part]; };
+      auto part = [&](u32 p) -> f32x4 { return {lane(0, p), lane(1, p), lane(2, p), lane(3, p)}; };
+      placeFour(first + n, part(0), part(1), part(2), part(3));
+    }
   }
   for(u32 n = 0; n < count && !t.weights; n += 4) {
     const Vertex* v[4];
@@ -679,11 +699,7 @@ auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip
     f32x4 cy = x * clipping[1] + y * clipping[5] + z * clipping[9] + clipping[13];
     f32x4 cz = x * clipping[2] + y * clipping[6] + z * clipping[10] + clipping[14];
     f32x4 cw = x * clipping[3] + y * clipping[7] + z * clipping[11] + clipping[15];
-    OnScreen screen[4];
-    projectedFour(t, cx, cy, cz, cw, screen);
-    for(u32 k = 0; k < 4 && n + k < count; k++) {
-      placed[n + k] = {fixed(screen[k].x), fixed(screen[k].y), bits(screen[k], cz[k], cw[k])};
-    }
+    placeFour(n, cx, cy, cz, cw);
   }
   bool again = false;
   auto hand = [&] {
