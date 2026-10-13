@@ -25,6 +25,85 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Appearance: the Sakura cycle in phases, three Pixel art scenes gone, night city and XMB Deep redrawn, Manga and CRT redone — 2026-10-13
+
+Branch `cursor/themes-backdrops-2b67`, on master (`1d9308714`), from the owner's feedback on the styles and their
+backdrops. App only (Kotlin; no native or core change). The console icons follow in a second branch,
+`cursor/themes-console-icons-2b67`.
+- **Sakura cycle** (`PixelBackdropScene.SAKURA_CYCLE`, `ui/theme/PixelSakura.kt`): the sun and the moon were up
+  together, side by side, and popped in and out. `SakuraCycle` (plain math) runs a day and a night in 8 minutes (108 s
+  before) in eight phases: sunrise, day, sunset, dusk, moonrise, night, moonset, dawn. A body rises one diameter (and
+  its glow's reach), then follows an arc that climbs on at about the speed it rose at, and sets the same way; it's
+  drawn a whole pixel at a time and clipped at the first row the far ridge covers in every column, so it climbs out
+  from behind the mountains and sinks back behind them, its glow with it (`middleRow`'s reach). The sky and the light
+  are eased between keys (dawn, day, sunset, night): the sky is full night before the moon rises and until it sets,
+  dawn comes before the sun rises, and stars come out one by one at dusk (`StarField`'s `shown`). The landscape is
+  painted again only when the moment changes. Sakura day and Sakura night are unchanged pixel for pixel (3,120 frames
+  compared with the previous code: every theme, five sizes, live and still). With animations off the cycle shows the
+  sun touching the mountains as it sets.
+- **Pixel art scenes**: Space (with `Meteors`, `PixelScene` and `pixelSceneColors`), Underwater and Pixel castle are
+  gone; the list is Sakura (now the default), Sakura day, Sakura night, Pixel plains, Night drive. Stored names read
+  as the closest kept scene (`pixelBackdropNamed` and `screensaverBackdropNamed`, `data/SettingsStore.kt`): `SPACE`
+  and `CASTLE` as Sakura night, `UNDERWATER` as Sakura day, the screensaver's `PIXEL_SPACE`, `PIXEL_CASTLE` and
+  `PIXEL_UNDERWATER` the same way, the pre-split `SAKURA` as Sakura night; anything else unknown is Sakura (Match app
+  for the screensaver). `AppearanceSettingsTest` writes the old names into a real settings file.
+- **Night city** (`ui/theme/RetrowaveCity.kt`): the old row of dark boxes over the grid is now a dense neon
+  skyline over the water (the owner's photo reference used for the mood only): five layers of towers fading into a
+  lit haze, setbacks, needles, slanted roofs, lanterns and tapers, windows speckled or in lit floors, neon edges,
+  rings, rooflines, glyph-like signs and scan-lined screens whose light spills into the air, a landmark tower, and the
+  city mirrored and streaked in the water under a bright waterline. Neon from the theme's three accents and a violet
+  from its background; light themes get it washed toward the background. It's drawn in plain Kotlin through
+  `RenderedBackdrop` (new, `ui/theme/RenderedBackdrop.kt`: a still backdrop drawn off the main thread at its size, up
+  to a 1080p screen's pixels, keyed by value on the theme's final colors; the last three pictures are kept, so it's
+  back at once after a game or the screensaver; a new size's picture waits for the window to settle and shows the one
+  before, cropped, meanwhile), 70-300 ms for 1920x1080 on the Mac's JVM. The glass
+  search samples `CityColors` (white included, where the spilled light stacks up); panels come out about as opaque
+  as over the sunset (0.92-0.98 in the retrowave themes). `GlassContrastTest` checks against the city as drawn.
+- **XMB Deep** (`ui/theme/Xmb.kt`): it was Waves' three ribbons a little stronger. Now two sheets of fine strands
+  (`Sheet`, 18 and 10) sweep and turn over a darker gradient and a pool of light, fanning out where they lie flat and
+  gathering where they're edge on, with sparkles (`Sparkles`) drifting up through them; whole cycles of the 40 s loop.
+  Each sheet is one path, so its strands don't add up where they gather. Waves and Calm are as they were (Calm's
+  description no longer claims a deeper gradient). The glass search's `deepScene` samples the strands stacked to
+  `WaveColors.STRAND_STACK` and a sparkle with its halo; panels over Deep 0.90-0.97 in the themes looked at (Waves
+  0.80-0.93).
+- **Manga ink** (its own commit, so it can be dropped): `ui/theme/MangaPage.kt`, through `RenderedBackdrop`, in the
+  ink tone (`mangaTone`) on the paper and never denser than it: Screentone is a 45-degree halftone swelling from a
+  third of the way down along a wavy edge, cut by scratched highlights; Speed lines are 520 tapering focus lines around
+  a clear space; Splash page is an impact burst cut out of a screentone field (it was a grey star blob).
+- **CRT terminal** (its own commit, so it can be dropped): `ui/theme/CrtScreen.kt`, through `RenderedBackdrop`: a tube
+  at rest, the phosphor glowing in a pool below the middle (`bloomAt`, falling off over the shorter side so the top
+  bar's title stays on darker glass), rounded corners, soft scanlines in threes, a faint aperture grille on dark
+  themes, grain, a faint reflection, and boot text burned in at the bottom left in a 5x7 font. The scanlines and the
+  grille are drawn over the picture at the screen's own pixels (the picture is capped at 1080p and may be scaled); a
+  faint refresh band rolls down every 9 s (`RefreshBand`, 15 frames a second, off with animations off). The phosphor
+  leads its color now (80% of it in the primary, 60% before) and the bloom is stronger (0.22 dark, 0.1 light).
+- **Previews** (outside the repo, `~/phobos-work/scratch/themes/previews/`): `sakura-cycle-filmstrip-*.png` and
+  `sakura-cycle-horizon-*.png` (every phase, and the sunset and moonrise 4 s apart), `pixel-*.png` (each scene),
+  `retrowave-night-city*.png` and `retrowave-before-after.png`, `xmb-*.png`, `manga-before.png` and `manga-after*.png`,
+  `crt-before.png` and `crt-after*.png`. A local JVM test (not committed) ran the real Kotlin: the Pixel art scenes,
+  night city, Manga and CRT exactly; XMB and the kept Retrowave scenes through a Java2D port of their Compose drawing
+  with the real geometry and colors.
+- **Checks**: `:app:testModernDebugUnitTest` 318 pass (299 on master): new `SakuraCycleTest` (8: the phases' order,
+  never both up, rising out of the horizon a row at a time and sinking back, the drawn landscape unchanged at each
+  run's start and end, the arc, full night from moonrise to moonset, dusk and dawn without a jump, sunrise after
+  dawn), `AppearanceSettingsTest` (3), `NightCityTest` (4),
+  `XmbDeepTest` (3), `MangaPageTest` (3), `CrtScreenTest` (4); `PixelSceneTest` and `PixelArtTest`'s planet and
+  shooting-star tests went with Space. Reverting the Manga or the CRT commit alone leaves the app compiling and the
+  remaining tests passing (this entry then needs its bullet for it taken out). No APK built locally (CI builds them);
+  not yet seen on a device.
+- **Review**: an independent read-only review (a subagent) of the whole branch: NEEDS CHANGES, no High finding. Its
+  three Mediums are fixed: Deep's strands drew brighter than the glass search modeled where a sheet gathers (the fade's
+  gradient had 16 stops; now 64, and each sheet is one path); `RenderedBackdrop` drew again from scratch after every
+  game and the screensaver, stretched the old picture on rotation, let stale renders run and had no guard against
+  running out of memory; the CRT's scanlines and grille, baked into a picture scaled on screens over 1080p, beat
+  unevenly. So are its Lows: the glow appearing and vanishing at a run's ends, the cycle tested through a parallel
+  model rather than the drawing, the plan row's order, `CrtScreen.REFLECTION`'s and `SolidUi`'s KDoc, Deep's pool
+  under the top bar's title (`XmbContrastTest` takes it now), the band's cost (`CrtUi.animatedBackdrop`, 15 frames a
+  second), and MangaPage's per-pixel `hypot`s and edge scan (a 1920x1080 page now 130-320 ms). `CrtContrastTest` also
+  allows for a status bar above the top bar.
+- **For the owner**: whether the Manga and CRT backdrops stay (the PR's description has the verdict and previews);
+  Sakura as the Pixel art default now that Space is gone.
+
 ## PSP: the savedata trace; After Burner's save dates, the list modes' automatic answer — 2026-10-12
 
 Branch `cursor/psp-savedata2-2b67`, begun on `cursor/psp-colinsave-2b67` (Colin McRae's memstick:, part 77) after its
