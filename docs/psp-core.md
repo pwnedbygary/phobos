@@ -3735,7 +3735,8 @@ named below through this core, before and after.
   the screen, depths outside the range), and cut where it reaches past the near plane (the new end blended from the
   kept one, as a triangle's; with flat shading, a cut-away second end keeps its color). None of that is measured but
   2D's pictures. Anti-aliasing (ANTI_ALIAS_ENABLE, `GU_LINE_SMOOTH`) isn't emulated, and noted once: `gpu/exact/lines`
-  shows it changes nothing without blending; what alpha it gives with blending isn't known.
+  shows it changes nothing without blending; what alpha it gives with blending isn't known. (Since part 78 it is:
+  each pixel's alpha its coverage, measured by round 4's `lines-smooth`.)
 
 **Bounding boxes** (`draw.cpp`'s `boundingBox()`, `list.cpp`'s BOUNDING_BOX and BJUMP). BOUNDING_BOX tests the count
 vertices at the vertex address (pspsdk's `sceGuBeginObject` gives the corners of a box around what follows), and BJUMP
@@ -10392,6 +10393,125 @@ assignment.
 again with the merged runner, fresh.txt then reload.txt: the same six files at the same sizes as before the merge,
 "AUTO-LOAD." at 2100 and the main menu at 3000. The scratch (the scratch runner, the scripts, the runs and their
 captures) is in `~/phobos-work/scratch/colinsave/` on the Mac it was made on, not in the repository.
+
+## Part 78: anti-aliased lines — the coverage for the alpha, measured; Dead or Alive Paradise's wireframe gone
+
+The play-test (batch 1, item 1) found every girl's 3D model in Dead or Alive Paradise (ULUS10521) covered in a
+wireframe of coloured 1-pixel lines along its mesh edges, in every 3D scene, with both renderers, from the frame the
+first model appears, the same frame the core noted "anti-aliased lines (ANTI_ALIAS_ENABLE) are drawn aliased". Clean
+room: the owner's PSP's round 4 pictures, a trace of the game's own display lists, and PPSSPP's software rasterizer
+read for how it describes the PSP (none of its code copied or translated); JPCSP not read. Save states unchanged.
+
+### What the game draws
+
+A trace of the beach scene's lists: after each model's triangles the game draws its edges again as 3D line strips with
+ANTI_ALIAS_ENABLE, no vertex color (the material's ambient, 0xffffffff), u8 texture coordinates, 16-bit normals and
+skinning; blending source alpha over one minus it, the alpha test above 0, the depth test GEQUAL with depth writes,
+dithering, no lighting; texture function replace, RGB only, texture map mode UV, scale 1, offset 0; and for its texture
+0x04044000, 512x512 5551, rows of 512: the frame buffer itself (0x44000, 5551). Drawn as the core drew them, opaque,
+each pixel at the texel the model's own coordinates give, the lines showed other parts of the screen (sky, palms,
+sand) over the girls. On a PSP the pass doesn't show.
+
+### What the PSP does
+
+Round 4's `lines-smooth` (tools/psp-measure: in each of 16x16 cells a white line from (4 + i/16, 4 + j/16) pixels to
+(7.5, 2.25) further, GU_LINE_SMOOTH, blended source alpha over black; the owner's PSP ran round 4 three times, the
+same each time) has the anti-aliased line light exactly the pixels the aliased one does (`lines-shallow`), each grey
+level its alpha (the blend's arithmetic gives `(511 * (2a + 1)) >> 10 = a` for white over black). A pixel's alpha is
+found exactly, for all 1920 lit pixels (12 of them 0):
+
+- where the line crosses the pixel's middle column, as a fraction of the pixel from its top edge, in 256ths, rounded
+  up, the line stepped from its left end by its slope cut toward zero to 65536ths (13 or more fraction bits fit every
+  pixel; 10 and 12 miss 174; the slope rounded instead of cut misses 368);
+- then the distance to the nearer edge: min(g, 256 - g), held to 0 to 128. A line through a pixel's middle gives 128,
+  one along its edge 0.
+
+PPSSPP's rasterizer describes the PSP the same way in words: an anti-aliased line's alpha is replaced by its coverage,
+0 to 128. For a textured anti-aliased line it takes the texel at each pixel's own place on the screen, a rule its own
+comments call a naive guess.
+
+### The fix
+
+`GE::line()` marks a line anti-aliased (ANTI_ALIAS_ENABLE, not in clear mode) and keeps its slope in 65536ths;
+`linePixels()` (raster.cpp) gives each pixel's color the coverage for its alpha and, textured, the texel at the
+pixel's own middle; the through-mode texture reach (draw.cpp) takes the whole texture for such lines. The Vulkan
+renderer draws a line from `linePixels()`'s pixels, so it draws the same without a change of its own. The note is
+gone. Measured: the coverage of shallow lines falling to the right, through mode, untextured, vertex alpha 0xff.
+Chosen, and labelled so in the code: the coverage replaces the vertex's alpha (PPSSPP's description); a steep line is
+a shallow one turned, as the pixels it lights are; a rising line's slope is cut toward zero (not down); the texel at
+the pixel's own middle (PPSSPP's description, and what the game needs: its edge pass blends each pixel with itself,
+which leaves it as it was); clear mode draws as before.
+
+`lines-smooth` now matches the PSP's word for word; the other round 4 line pictures are as they were (only
+`lines-smooth` turns anti-aliasing on).
+
+### Round 7
+
+`tools/psp-measure`'s new first menu line, "Round 7: the GE's anti-aliased lines", writes six pictures
+(`manifest7.txt`) for what's chosen above: `aa-slopes` (8 slopes, shallow and steep, falling and rising, each drawn
+both ways over the same segments, at every sixteenth along x), `aa-axes` (level, upright and diagonal lines, each both
+ways, at every sixteenth across, a level line from along its row's edge to through its pixels' middles), `aa-alpha`
+(`lines-smooth`'s lines at every vertex alpha: replaced or scaled), `aa-blend` (a colored line over a known
+background in eight modes, with and without the alpha test, clear mode among them),
+`aa-textured` (every vertex at one texel or a ramp of them, replace, modulate and bilinear: which texels the pixels
+take, and the texel's alpha against the coverage) and `aa-3d`. `tests/psp/measure.cpp` drives it and compares with a
+PSP's files where there are any. `pspmeasure.elf` was rebuilt in the pinned pspdev image (master's source rebuilds
+there to the committed file byte for byte). Not run on a PSP yet.
+
+### The game now
+
+The play-tester's states, 300 frames, PNGs at 30 to 300, software and Vulkan (`~/phobos-work/scratch/aalines/sbs`:
+`bsw.png`, `bvk.png`, `sw.png`, `vk.png`, `zoom-270.png`, the play-tester's frames on the left), and the pool scene
+from `island.bin` with `pool.txt` at `q-pool.png`'s frames (`pool.png`): the girls' skin is smooth, no lines, at the
+beach, the pool and in the volleyball match, with both renderers. Software and Vulkan now differ by a mean of 0.09 to
+0.23 a channel (0.23 to 2.42 before, nearly all of it on the line pixels).
+
+### The library
+
+The whole library the report's way (3600 frames, Start at 120 and Cross at 1800, 7 GE threads, three games at a
+time) beside the final run (`lib-top`): 265 of 266 finish their 3600 frames; Killzone was stopped at the 900-second
+limit (691 s in the final run; the Mac was busy with other work, and nearly every game ran slower than in the final
+run). Three games draw anti-aliased lines in those frames (the final run's logs note it): MotorStorm: Arctic Edge,
+whose menu panels' slanted white edges were hard steps and are now graded (frame 1200, the only one that changes
+from the lines); Persona 3 Portable, no frame different; and Virtua Tennis: World Tour, whose frame 60 (the Memory
+Stick notice) differs by a step of its fade, the run's own timing. The other games' differences (45 with a frame more
+than 1 of 255 apart a channel) can't come from this change, which touches only anti-aliased lines: they're movies,
+fades and titles a few frames apart as two runs differ, and what master changed since the final run (the Metal Gear
+Acids' titles, part 72).
+
+After the merge with master (`529fbf403`) and the second review's fixes the library ran again, one game at a time
+(`lib2`, `lib2-compare.tsv`): all 266 finish, Killzone too. 28 games have a frame more than 1 of 255 apart from the
+final run's. MotorStorm: Arctic Edge's frame 1200 is again the only one from the lines (0.47), Persona 3 Portable and
+Virtua Tennis: World Tour are the same, and the six games new to the list (Jeanne d'Arc, Kenka Bancho, Metal Slug XX,
+Super Stardust Portable, Syphon Filter: Dark Mirror, The Sims 2: Pets, 1.75 to 5.87) draw no anti-aliased line.
+
+### Checks
+
+- `tests/psp/run-tests.sh` (sanitized) 468 groups, 0 failures (on master `529fbf403`): "draw anti-aliased lines" (five measured cells, shallow
+  and turned steep, at vertex alphas 0xff and 0x20, the alpha test dropping a pixel of no coverage, a clamped textured
+  line's texels from rows its ends' coordinates wouldn't decode) and "gpu anti-aliased lines against the software
+  renderer" (flat, then textured from the frame buffer they draw into and modulated, each line's alpha test above 0,
+  31, 63 or 95, byte for byte) are new; "psp measure" runs round 7. With `PSP_GE_RESULTS` set to the owner's round 4 to
+  6 results, `lines-smooth` is "same".
+- `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed.
+- An independent read-only review found no bug in the core. Its points were fixed: round 7's replace-RGBA rows read
+  the alpha from the frame buffer's alpha byte, which is the stencil's (now read through blending, over white); the
+  GPU test saw the coverage only as zero or not and its textured half wrote back what it read; the draw test never
+  reached the texture rows past the ends'; aa-slopes' reversed rows weren't the same segments; aa-3d didn't try the
+  texture scale and offset; comments and sizes. Left as it is: the texture reach could stop at the drawn region rather
+  than the whole texture (fewer rows for the Vulkan renderer to copy; 3D already takes the whole texture).
+- A second independent review, of the whole branch, found no bug either. Its points were taken: `aa-axes` added to
+  round 7 (level, upright and diagonal lines, which aa-slopes' two slopes didn't try, and where a level line on a row's
+  edge falls); above 1x the Vulkan renderer's textured anti-aliased pixels take a texel per GPU pixel, as a copy of the
+  frame buffer at that resolution has them, not one per square; through mode's texture reach no longer guesses rows
+  for anti-aliased lines but takes the whole texture; the GPU test checks that the GPU drew its lines; comments.
+
+### Left, and why
+
+- Round 7 on a PSP: whether the coverage replaces the alpha or scales it, every octant's rule, blending's and the alpha
+  test's use of it, which texels a textured line takes, 3D, clear mode.
+- Scratch: `~/phobos-work/scratch/aalines` (fit2.py, the fit; sbs/, the pictures; lib/, the library run;
+  lib-compare.tsv).
 
 ## Part 81: input — a right stick for patched games, the keyboard's input types, 7th Dragon 2020-II past its certificate
 
