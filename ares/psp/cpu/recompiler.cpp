@@ -17,6 +17,7 @@
 
 //Throws away every compiled block and starts the code memory afresh.
 auto Allegrex::Recompiler::reset() -> void {
+  exits.clear(), into.clear(), waiting.clear(), outOf.clear();
   sections.clear();
   writePages.clear();
   sectionTable.clear();
@@ -80,8 +81,22 @@ auto Allegrex::Recompiler::invalidateRange(u32 address, u32 size) -> void {
   run(first, SectionCount - 1), run(0, last);
 }
 
-//The section's code goes: no block starts there now, nor goes on to one, and stores may go straight to it again.
+//The section's code goes: no block starts there now, nor goes on to one, and stores may go straight to it again. Every
+//exit linked to its blocks goes back to its lookup, even one in dead code (a block still running from a section that
+//went runs on to its end), and the live ones wait for those blocks to be compiled again; its own blocks' exits are
+//dead code from now on.
 auto Allegrex::Recompiler::drop(u32 index) -> void {
+  if(auto linked = into.find(index); linked != into.end()) {
+    for(u32 exit : linked->second) {
+      patch(exits[exit].jump, exits[exit].lookup);
+      if(exits[exit].live) waiting[exits[exit].target].push_back(exit);
+    }
+    into.erase(linked);
+  }
+  if(auto own = outOf.find(index); own != outOf.end()) {
+    for(u32 exit : own->second) exits[exit].live = false;
+    outOf.erase(own);
+  }
   sections[index].reset();
   sectionTable[index] = nullptr;
   compiled[index / 64] &= ~(1ull << index % 64);
@@ -145,7 +160,8 @@ auto Allegrex::Recompiler::block(u32 address) -> u8* {
   //Code compiled through another mirror of this memory knows the wrong addresses (the return addresses it stores,
   //where its jumps go), so that section starts afresh. Games run their code through one mirror, so this doesn't
   //happen back and forth.
-  if(!section || section->mirror != address >> 29) {
+  if(section && section->mirror != address >> 29) drop(index);
+  if(!section) {
     section = std::make_unique<Section>();
     section->mirror = address >> 29;
     sectionTable[index] = section.get();
@@ -156,6 +172,12 @@ auto Allegrex::Recompiler::block(u32 address) -> u8* {
   if(!code) {
     code = emit(address, section->bodies[word]);
     writePages[index] = nullptr;  //this page holds compiled code now, so stores to it must go through write()
+    //(the exits waiting for this block go straight to it now)
+    if(auto waiters = waiting.find(address); waiters != waiting.end()) {
+      auto list = std::move(waiters->second);
+      waiting.erase(waiters);
+      for(u32 exit : list) if(exits[exit].live) link(exit, section->bodies[word]);
+    }
   }
   return code;
 }
@@ -172,8 +194,10 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
   mov64(sreg(1), imm((sljit_sw)self.pages));
   mov64(sreg(2), imm((sljit_sw)writePages.data()));
   auto bodyLabel = sljit_emit_label(compiler);
+  u32 index = (address & 0x1fff'ffff) / SectionSize;  //(a block never leaves its section)
   calls = false;
   cold.clear();
+  linking.clear();
   prefixes = {};  //(not known as a block starts: recompiler-vfpu.cpp)
   forgetAll();  //(nor is anything held: a block before it may have left anything in those registers)
   u32 count = 0;       //instructions in the block so far
@@ -240,6 +264,7 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
   auto code = (u8*)sljit_generate_code(compiler, 0, &allocator);
   body = (u8*)sljit_get_label_addr(bodyLabel);
   allocator.reserve(sljit_get_generated_code_size(compiler));
+  addExits(index);
   resetCompiler();
   memory::jitprotect(true);
   return code;
@@ -338,6 +363,7 @@ auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target, bool stored) -> vo
   if(self.pages) {
     unless(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_MEM1(SLJIT_S1), index * sizeof(u8*), SLJIT_IMM, 0));
   }
+  emitLink(target);  //(straight to the target's body once it's compiled; until then, the lookup)
   mov64(reg(1), field(&table));
   mov64(reg(1), mem(reg(1), index * sizeof(Section*)));
   unless(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0));
@@ -354,6 +380,71 @@ auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target, bool stored) -> vo
   }
   mov32(field(&executed), imm(0));
   jumpEpilog();
+}
+
+//An exit's jump (Exit): a jump of the host's own (ARM64's B, x86-64's JMP rel32) to the code right after it, which
+//link() and drop() rewrite. On other hosts there's none, and the lookup always runs.
+#if defined(ARCHITECTURE_ARM64)
+static constexpr u32 LinkSize = 4;
+#elif defined(ARCHITECTURE_AMD64)
+static constexpr u32 LinkSize = 5;
+#else
+static constexpr u32 LinkSize = 0;
+#endif
+auto Allegrex::Recompiler::emitLink(u32 target) -> void {
+  if(!LinkSize) return;
+  linking.push_back({target, sljit_emit_label(compiler)});
+  #if defined(ARCHITECTURE_ARM64)
+  u32 b = 0x1400'0001;  //B .+4
+  sljit_emit_op_custom(compiler, &b, sizeof(b));
+  #elif defined(ARCHITECTURE_AMD64)
+  u8 jmp[5] = {0xe9, 0, 0, 0, 0};  //JMP .+5
+  sljit_emit_op_custom(compiler, jmp, sizeof(jmp));
+  #endif
+}
+
+//The exits of the block just compiled (in section index), once its code is where it runs: each linked if its target
+//is compiled already, else waiting for it (block() links it then; a block going on to itself does so too).
+auto Allegrex::Recompiler::addExits(u32 index) -> void {
+  for(auto& [target, label] : linking) {
+    u8* jump = (u8*)sljit_get_label_addr(label);
+    u32 exit = exits.size();
+    exits.push_back({jump, jump + LinkSize, target, index, true});
+    outOf[index].push_back(exit);
+    auto& section = sections[(target & 0x1fff'ffff) / SectionSize];
+    u8* body = section && section->mirror == target >> 29 ? section->bodies[target % SectionSize / 4] : nullptr;
+    if(body) link(exit, body);
+    else waiting[target].push_back(exit);
+  }
+  linking.clear();
+}
+
+auto Allegrex::Recompiler::link(u32 exit, u8* body) -> void {
+  if(patch(exits[exit].jump, body)) into[(exits[exit].target & 0x1fff'ffff) / SectionSize].push_back(exit);
+}
+
+//Rewrites the jump at jump to go to to; false if that's too far for it (it's left as it was then).
+auto Allegrex::Recompiler::patch(u8* jump, u8* to) -> bool {
+  #if defined(ARCHITECTURE_ARM64)
+  s64 distance = (to - jump) / 4;
+  if(distance < -(1 << 25) || distance >= 1 << 25) return false;
+  u32 b = 0x1400'0000 | (u32(distance) & 0x3ff'ffff);
+  memory::jitprotect(false);
+  std::memcpy(jump, &b, sizeof(b));
+  memory::jitprotect(true);
+  SLJIT_CACHE_FLUSH(jump, jump + sizeof(b));
+  return true;
+  #elif defined(ARCHITECTURE_AMD64)
+  s64 distance = to - (jump + 5);
+  if(distance != s32(distance)) return false;
+  s32 rel = s32(distance);
+  memory::jitprotect(false);
+  std::memcpy(jump + 1, &rel, sizeof(rel));
+  memory::jitprotect(true);
+  return true;
+  #else
+  return false;
+  #endif
 }
 
 //Allegrex::run()'s round after count instructions, for emitChainTo() and a coprocessor branch taken

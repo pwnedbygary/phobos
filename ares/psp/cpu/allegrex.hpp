@@ -5,6 +5,7 @@
 #include <cfenv>
 #include <cmath>
 #include <limits>
+#include <unordered_map>
 
 //<termios.h>, which nall includes for its terminal code, defines VMIN (a terminal setting); here it's the VFPU's
 //vmin instruction.
@@ -528,6 +529,26 @@ struct Allegrex {
     auto emitChain(u32 count) -> void;
     auto emitChainTo(u32 count, u32 target, bool stored = true) -> void;
     auto emitCounted(u32 count, std::vector<sljit_jump*>& leave) -> void;
+    //Direct links (emitChainTo()): a block's way on to a block it knows as it's compiled is a jump that goes to the
+    //code after it (the lookup) until that block is compiled, then straight to its body, and back to the lookup when
+    //that block's section goes. Each such jump is an exit: where it is in the code, where its lookup is, the guest
+    //address it goes to, its own block's section, and whether that block's code is live (not once its section goes).
+    struct Exit {
+      u8* jump;
+      u8* lookup;
+      u32 target;
+      u32 from;
+      bool live;
+    };
+    std::vector<Exit> exits;
+    std::unordered_map<u32, std::vector<u32>> into;     //by section: the exits linked to its blocks
+    std::unordered_map<u32, std::vector<u32>> waiting;  //by guest address: the exits to a block not compiled yet
+    std::unordered_map<u32, std::vector<u32>> outOf;    //by section: its blocks' exits
+    std::vector<std::pair<u32, sljit_label*>> linking;  //the exits of the block being compiled: targets and places
+    auto emitLink(u32 target) -> void;
+    auto addExits(u32 index) -> void;
+    auto link(u32 exit, u8* body) -> void;
+    auto patch(u8* jump, u8* to) -> bool;
     auto emitPC(u32 address, bool delaySlot) -> void;
     auto emitInterpreter(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
     auto emitFallback(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;

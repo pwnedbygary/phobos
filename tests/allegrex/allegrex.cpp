@@ -932,6 +932,74 @@ auto delaySlotsEachWay() -> void {
   CHECK(runs[1].events.size(), runs[0].events.size());
 }
 
+// Blocks linked to each other (recompiler.cpp's exits: a jump straight to the target's body) unlinked when the
+// target's code goes: a function a call site has linked to, rewritten by the program itself halfway; a loop that
+// rewrites its own first instruction on every round, with a larger constant each time (its block, running on from a
+// section that went, mustn't go on to its old self); and a function called through two mirrors in turn (its section
+// compiled afresh for each). The recompiler must end as the interpreter does, and runs of a few instructions at a
+// time, chained and not, must stop in the same places.
+auto linkedBlocks() -> void {
+  if(!useRecompiler) return;
+  constexpr uint32_t Function = Base + 0x1000, Loop = Base + 0x2000, Mirrored = Function | 0x4000'0000;
+  auto program = [&](Machine& m) {
+    auto put = [&](uint32_t address, std::initializer_list<uint32_t> words) {
+      for(uint32_t word : words) m.ram.write32(address, word), address += 4;
+    };
+    //main: 40 rounds of calling the function, rewriting its first word at round 20, every third call through the
+    //uncached mirror; then the self-rewriting loop
+    put(Base, {addiu(s0, zero, 0), lui(t7, Function >> 16), ori(t7, t7, Function & 0xffff), lui(t3, Mirrored >> 16),
+               ori(t3, t3, Mirrored & 0xffff), lui(t6, addiu(s1, s1, 100) >> 16),
+               ori(t6, t6, addiu(s1, s1, 100) & 0xffff), addiu(t5, zero, 20),
+               /*32, a round:*/ addiu(s0, s0, 1), bne(s0, t5, 2), nop, sw(t6, 0, t7),
+               /*48:*/ addiu(t4, zero, 3), div_(s0, t4), mfhi(t4), beq(t4, zero, 5), nop,
+               /*68:*/ jal(Function), nop, j(Base + 96), nop,
+               /*84:*/ jalr(ra, t3), nop, nop,
+               /*96:*/ slti(t0, s0, 40), bne(t0, zero, -18), nop, j(Loop), nop});
+    put(Function, {addiu(s1, s1, 1), jr(ra), nop});
+    //the loop: its first word becomes addiu s2,s2,50 by the store in it, then 51, 52 and so on, a round each
+    put(Loop, {lui(t8, addiu(s2, s2, 50) >> 16), ori(t8, t8, addiu(s2, s2, 50) & 0xffff), lui(t9, (Loop + 16) >> 16),
+               ori(t9, t9, (Loop + 16) & 0xffff), /*16:*/ addiu(s2, s2, 1), sw(t8, 0, t9), addiu(t8, t8, 1),
+               addiu(s3, s3, 1), slti(t0, s3, 30), bne(t0, zero, -6), nop, halt});
+  };
+  Machine runs[3];  //the interpreter, the recompiler, the recompiler without chains
+  for(uint32_t n : range(3)) {
+    program(runs[n]);
+    runs[n].cpu.recompiler.enabled = n != 0;
+    runs[n].cpu.recompiler.chains = n != 2;
+    runs[n].cpu.power(Base);
+  }
+  runs[0].cpu.run(100'000);
+  runs[1].cpu.run(100'000);
+  bool same = true;
+  for(uint32_t r : range(32)) same = same && runs[0].cpu.ipu.r[r] == runs[1].cpu.ipu.r[r];
+  CHECK(same, 1);
+  CHECK(runs[0].cpu.scc.halted, 1);
+  CHECK(runs[1].cpu.scc.halted, 1);
+  CHECK(runs[0].gpr(s1), 19 + 21 * 100);  //(round 20's call already took the rewritten word)
+  CHECK(runs[1].gpr(s1), 19 + 21 * 100);
+  CHECK(runs[0].gpr(s2), 1 + (50 + 78) * 29 / 2);  //(round r took the word round r - 1 stored: 50 + r - 2)
+  CHECK(runs[1].gpr(s2), 1 + (50 + 78) * 29 / 2);
+  //chained against unchained, a few instructions at a time, from the start again
+  for(uint32_t n : {1u, 2u}) {
+    program(runs[n]);
+    runs[n].cpu.power(Base);
+  }
+  uint32_t mismatches = 0;
+  for(uint32_t round = 0; round < 20000 && !runs[1].cpu.scc.halted; round++) {
+    uint32_t limit = 1 + round % 37;
+    uint64_t a = runs[1].cpu.run(limit), b = runs[2].cpu.run(limit);
+    bool alike = a == b && runs[1].cpu.ipu.pc == runs[2].cpu.ipu.pc && runs[1].cpu.ipu.pd == runs[2].cpu.ipu.pd;
+    for(uint32_t r : range(32)) alike = alike && runs[1].cpu.ipu.r[r] == runs[2].cpu.ipu.r[r];
+    if(!alike && ++mismatches <= 3) {
+      std::printf("FAIL %s: run %u of %u: %llu vs %llu instructions, pc %08x vs %08x\n", currentTest, round, limit,
+                  (unsigned long long)a, (unsigned long long)b, runs[1].cpu.ipu.pc, runs[2].cpu.ipu.pc);
+    }
+  }
+  CHECK(mismatches, 0);
+  CHECK(runs[1].gpr(s1), 19 + 21 * 100);
+  CHECK(runs[1].gpr(s2), 1 + (50 + 78) * 29 / 2);
+}
+
 // Not a test: with ALLEGREX_BENCHMARK set, times a loop of loads, stores and arithmetic on the interpreter, on the
 // recompiler without a page table (its loads and stores call the interpreter), and on the recompiler. For numbers
 // that mean something, build without the sanitizers: SANITIZE= ALLEGREX_BENCHMARK=1 tests/allegrex/run-tests.sh
@@ -1265,7 +1333,7 @@ int main() {
     {"exceptions", exceptions}, {"fpu arithmetic", fpuArithmetic}, {"fpu conversions", fpuConversions},
     {"fpu compare", fpuCompare}, {"fpu memory", fpuMemory}, {"system", system}, {"recompiler", recompilerCases},
     {"chained runs", chainedRuns}, {"coprocessor branches taken", coprocessorBranchesTaken},
-    {"delay slots each way", delaySlotsEachWay},
+    {"delay slots each way", delaySlotsEachWay}, {"linked blocks", linkedBlocks},
   };
   for(auto& test : vfpuTests()) tests.push_back(test);
   int groups = 0;
