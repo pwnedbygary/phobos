@@ -99,6 +99,122 @@ class PspDialogsTest {
     }
 
     @Test
+    fun keyboardFieldsTakeOnlyTheirInputTypes() {
+        // 7th Dragon 2020's name: full-width letters alone, at most 8 (ASCII typed full-width, the space too, the digit
+        // left out: no full-width digits)
+        val name = PspKeyboardField("Input name.", "", 8, 0x0c00, 1, 1)
+        assertEquals("\uff22\uff4f\uff42\u3000\uff21", name.accept("Bob 7A"))
+        assertEquals("\uff30\uff33\uff30", name.accept("\uff30\uff33\uff30"))  // (already full-width)
+        assertEquals("\uff21\uff22\uff23\uff24\uff25\uff26\uff27\uff28", name.accept("ABCDEFGHIJ"))
+        assertEquals("\uff50\uff53\uff50", PspKeyboardField("", "", 8, PSP_INPUT_JAPANESE_LOWER, 1, 1).accept("PSP"))
+        assertEquals("ps p", PspKeyboardField("", "", 8, PSP_INPUT_LATIN_LOWER, 1, 0).accept("\uff30S P"))
+        assertEquals("PSP 1", PspKeyboardField("", "", 8, 0x0f, 1, 0).accept("\uff30SP\u30001"))
+        assertEquals("\uff11\uff12", PspKeyboardField("", "", 8, PSP_INPUT_JAPANESE_DIGIT, 1, 1).accept("1 2"))
+        assertEquals("\u30ab\u30ca", PspKeyboardField("", "", 8, PSP_INPUT_KATAKANA, 1, 1).accept("\u304b\u306a"))
+        assertEquals("\u0434\u0430", PspKeyboardField("", "", 8, PSP_INPUT_RUSSIAN_LOWER, 1, 0).accept("\u0414a\u0410"))
+        assertEquals("a/b?9", PspKeyboardField("", "", 8, PSP_INPUT_URL, 1, 0).accept("a/b?9\u3042"))
+        assertEquals("a\nb", PspKeyboardField("", "", 8, PSP_INPUT_LATIN_LOWER, 2, 0).accept("a\nb"))
+        assertEquals("\u2606a", PspKeyboardField("", "", 8, 0x40_0000, 1, 0).accept("\u2606a"))  // (no type known: all)
+    }
+
+    /**
+     * The conversion's cases, which tests/psp/utility.cpp runs through the core's own (keyboardConform()), so the two
+     * agree: each text as its field's input types and lines take it. A case is the types (hexadecimal), the lines, the
+     * text and what's entered, apart by tabs, with \uXXXX, \n, \t and \\ escaped (psp-keyboard-cases.txt says more).
+     */
+    @Test
+    fun keyboardFieldsConvertAsTheCoreDoes() {
+        val cases = String(resource("psp-keyboard-cases.txt"), Charsets.UTF_8).lines().withIndex()
+            .filter { (_, line) -> line.isNotEmpty() && !line.startsWith("#") }
+        assertTrue(cases.size >= 40)
+        for ((index, line) in cases) {
+            val parts = line.split('\t')
+            assertEquals("psp-keyboard-cases.txt line ${index + 1}", 4, parts.size)
+            val (types, lines, text, entered) = parts
+            val field = PspKeyboardField("", "", Int.MAX_VALUE, types.toInt(16), lines.toInt(), 0)
+            assertEquals("psp-keyboard-cases.txt line ${index + 1}", unescape(entered), field.accept(unescape(text)))
+        }
+    }
+
+    private fun unescape(text: String): String {
+        val unescaped = StringBuilder()
+        var at = 0
+        while (at < text.length) {
+            if (text[at] == '\\' && at + 1 < text.length) {
+                when (val escaped = text[at + 1]) {
+                    'u' -> {
+                        unescaped.append(text.substring(at + 2, at + 6).toInt(16).toChar())
+                        at += 6
+                        continue
+                    }
+                    'n' -> unescaped.append('\n')
+                    't' -> unescaped.append('\t')
+                    else -> unescaped.append(escaped)
+                }
+                at += 2
+            } else {
+                unescaped.append(text[at++])
+            }
+        }
+        return unescaped.toString()
+    }
+
+    @Test
+    fun anUneditedDefaultIsEnteredAsTheGameGaveIt() {
+        // As the keyboard dialog answers (keyboardTexts() as it opens, keyboardAnswer() as OK enters it): the game's
+        // own text, left as it was, goes back as it is (a PSP's keyboard edits the text it starts with), where
+        // converting it would have changed it (no full-width é or star) or emptied it (digits alone); typed over, each
+        // is converted.
+        val fields = listOf(
+            PspKeyboardField("Name", "Renée ☆", 16, 0x0c00, 1, 1),
+            PspKeyboardField("PIN", "Ünal", 4, PSP_INPUT_LATIN_DIGIT, 1, 0),
+        )
+        val keyboard = PspDialogRequest(
+            3, PspDialogRequest.KIND_KEYBOARD, 1, false, "", 0, 0, false, false, "", "", fields, 0, 0, false,
+            emptyList(),
+        )
+        val shown = keyboard.keyboardTexts()
+        assertEquals(listOf("Renée ☆", "Ünal"), shown)
+        val answer = keyboard.keyboardAnswer(shown)
+        assertEquals(3, answer.id)
+        assertEquals(listOf("Renée ☆", "Ünal"), answer.texts)
+        assertEquals(
+            listOf("\uff32\uff45\uff4e\uff45\uff45\u3000\uff58", "12"),
+            keyboard.keyboardAnswer(listOf("Renee ☆x", "Ünal12")).texts,
+        )
+        assertEquals("Renée ☆", fields[0].entered("Renée ☆"))
+        assertEquals("\uff32\uff45\uff4e\uff45", fields[0].entered("Renée"))
+        // A default the field can't show whole, longer than its limit or holding a control character: what it shows
+        // left as it was still sends the game's own (which the core cuts to the limit), typed over it's converted.
+        val long = PspKeyboardField("Name", "PLAYER ONE", 8, PSP_INPUT_LATIN_LOWER, 1, 0)
+        val tab = PspKeyboardField("Note", "A\tB", 8, 0, 1, 0)
+        val awkward = PspDialogRequest(
+            4, PspDialogRequest.KIND_KEYBOARD, 1, false, "", 0, 0, false, false, "", "", listOf(long, tab), 0, 0, false,
+            emptyList(),
+        )
+        assertEquals(listOf("PLAYER O", "AB"), awkward.keyboardTexts())
+        assertEquals(listOf("PLAYER ONE", "A\tB"), awkward.keyboardAnswer(awkward.keyboardTexts()).texts)
+        assertEquals(listOf("player o", "AB!"), awkward.keyboardAnswer(listOf("PLAYER O!", "AB!")).texts)
+    }
+
+    @Test
+    fun keyboardFieldsHoldWhatsTypedUntilEntered() {
+        // While typing, the field holds what Android's keyboard composes, so romaji on its way to kana stays as typed
+        // in a field of hiragana; only what the PSP hasn't got at all goes, and nothing past what the limit enters.
+        val kana = PspKeyboardField("", "", 4, PSP_INPUT_HIRAGANA, 1, 1)
+        assertEquals("\u3042k", kana.typing("\u3042k"))
+        assertEquals("", kana.accept("k"))
+        val name = PspKeyboardField("Input name.", "", 3, 0x0c00, 1, 1)
+        assertEquals("Bob", name.typing("Bob"))  // (entered full-width, as the field takes it)
+        assertEquals("\uff22\uff4f\uff42", name.accept(name.typing("Bob")))
+        assertEquals("B7ob", name.typing("B7obby"))  // (the digit counts nothing: the field drops it)
+        assertEquals("Bob", name.typing("Bob123"))  // (and nothing goes in once the limit's reached)
+        assertEquals("ab", name.typing("a\uD83C\uDFAE\nb"))  // (a game pad and a line break: not in one line)
+        assertEquals("a\nb", PspKeyboardField("", "", 8, 0, 2, 0).typing("a\nb"))
+        assertEquals("", PspKeyboardField("", "", 0, 0, 1, 0).typing("anything"))
+    }
+
+    @Test
     fun confirmFollowsTheGamesConvention() {
         val cross = request(PspDialogRequest.SAVE_LOAD, emptyList())
         assertEquals(PhobosCore.Input.A, cross.confirmBit())  // (the app's A is the PSP's cross)
