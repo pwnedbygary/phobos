@@ -11487,8 +11487,8 @@ exits, the mirrors, reset, jitprotect's nesting, the instruction cache, the jump
 - Test gaps: the NEON vmmul's in-place cases came up in about 1 trial in 512 for .p and .t (now three in four trials
   have their matrices in place, every transposition in turn); nothing showed that blocks link at all, or that code
   memory starting afresh mid-run is safe with links (now checked, and a run with code memory 8 KiB over the reserve
-  starts afresh three times with 20 links in place); more delay slot kinds (added); the random programs depended on
-  the order a compiler evaluates arguments in (now sequenced).
+  starts afresh three times with 20 links in place); more delay slot kinds (added); the random programs depended on the
+  order a compiler evaluates arguments in (now sequenced); the fixed cases all reported one line (now each its own).
 - drop() now marks a section's own exits dead before putting its links back, so its exits into itself don't wait;
   emitChainTo()'s leave path always stores pc and pd (its parameter was always false); cold code runs by index (cold
   code may add some); the VFPU's cold interpreter calls check they compiled; a block starts with no destination; a
