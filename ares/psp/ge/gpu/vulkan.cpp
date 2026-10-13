@@ -237,6 +237,10 @@ struct VulkanBackend : GPU::Backend {
   u32 shrunkWidth = 0, shrunkHeight = 0;
   struct Squeeze { u32 readback, width, height; };
   std::vector<Squeeze> squeezes;
+  //(the last finish()'s read backs of depths alone, Readback's parts 2: readback n's, its width and height; and the
+  //GE's 16-bit depths readDepth() made of one)
+  std::vector<Squeeze> depthReads;
+  std::vector<u16> depthsRead;
   std::vector<VkBufferImageCopy> rows;
   std::vector<Retired> retired;
   //Presenting: whether the instance and device can (canPresent); the window shown on (the host's, as handed over),
@@ -1115,7 +1119,8 @@ struct VulkanBackend : GPU::Backend {
     for(auto& c : r.commands) {
       if(c.kind != GPU::Command::Kind::Readback) continue;
       u64 pixels = u64(c.width) * c.height;
-      readbackSize = aligned(aligned(readbackSize + pixels * c.at * c.at * 4) + (c.at == 1 ? pixels * scale : 0));
+      if(c.parts == 2) readbackSize = aligned(readbackSize + pixels * scale * 4);  //(depths: a row of scale x each)
+      else readbackSize = aligned(aligned(readbackSize + pixels * c.at * c.at * 4) + (c.at == 1 ? pixels * scale : 0));
     }
     if(readbackSize > readback.size) {
       if(!make(readback, std::max<u64>(readbackSize, readback.size * 2), VK_BUFFER_USAGE_TRANSFER_DST_BIT, true)) {
@@ -1213,7 +1218,7 @@ struct VulkanBackend : GPU::Backend {
     auto endPass = [&] {
       if(pass) vk.vkCmdEndRenderPass(commands), pass = nullptr;
     };
-    readbacks.clear(), readbackSizes.clear(), squeezes.clear();
+    readbacks.clear(), readbackSizes.clear(), squeezes.clear(), depthReads.clear();
     u64 readAt = 0;
     bool presenting = false;
     for(auto& c : r.commands) {
@@ -1343,6 +1348,28 @@ struct VulkanBackend : GPU::Backend {
         boundPipeline = VK_NULL_HANDLE, boundSet = VK_NULL_HANDLE, lastState = ~0u, transformsBound = false;
         continue;
       }
+      if(c.kind == GPU::Command::Kind::Depth) {  //(the depth alone: the stencil is each frame buffer's own)
+        auto from = targetImages.find(c.source);
+        if(from == targetImages.end() || from == found) continue;
+        if(!fit(commands, t, c.y + c.height) || !fit(commands, from->second, c.y + c.height)) {
+          return lost = true, false;
+        }
+        constexpr auto Source = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        constexpr auto Destination = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        VkRect2D into = scaled(t, c.x, c.y, c.width, c.height);
+        VkRect2D out = scaled(from->second, c.x, c.y, c.width, c.height);
+        VkExtent3D extent{std::min(into.extent.width, out.extent.width), std::min(into.extent.height, out.extent.height),
+                          1};
+        if(!extent.width || !extent.height) continue;
+        VkOffset3D at{into.offset.x, into.offset.y, 0};
+        VkImageCopy region{{VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1}, at, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1}, at, extent};
+        transition(commands, from->second.depth.image, DepthStencil, DepthLayout, Source);
+        transition(commands, t.depth.image, DepthStencil, DepthLayout, Destination);
+        vk.vkCmdCopyImage(commands, from->second.depth.image, Source, t.depth.image, Destination, 1, &region);
+        transition(commands, from->second.depth.image, DepthStencil, Source, DepthLayout);
+        transition(commands, t.depth.image, DepthStencil, Destination, DepthLayout);
+        continue;
+      }
       if(!fit(commands, t, c.y + c.height)) return lost = true, false;
       u32 count = c.width * c.height;
       VkOffset3D offset{c.x * s32(scale), c.y * s32(scale), 0};
@@ -1403,6 +1430,19 @@ struct VulkanBackend : GPU::Backend {
         transition(commands, t.color.image, VK_IMAGE_ASPECT_COLOR_BIT, Source, ColorLayout);
         transition(commands, texture.image.image, VK_IMAGE_ASPECT_COLOR_BIT, Destination,
                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+      } else if(c.parts == 2) {  //(its depths alone, for memory: at a higher resolution, each pixel's middle row)
+        u64 depths = readAt;
+        readAt = aligned(depths + u64(count) * scale * 4);
+        readbacks.push_back({depths, depths});
+        depthReads.push_back({u32(readbacks.size() - 1), c.width, c.height});
+        transition(commands, t.depth.image, DepthStencil, DepthLayout, Source);
+        rows.resize(c.height);
+        for(u32 y = 0; y < c.height; y++) {
+          rows[y] = {depths + u64(y) * c.width * scale * 4, 0, 0, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1},
+                     {offset.x, s32((c.y + y) * scale + scale / 2), 0}, {extent.width, 1, 1}};
+        }
+        vk.vkCmdCopyImageToBuffer(commands, t.depth.image, Source, readback.buffer, rows.size(), rows.data());
+        transition(commands, t.depth.image, DepthStencil, Source, DepthLayout);
       } else {
         u32 times = std::clamp<u32>(c.at, 1, scale);
         u64 colors = readAt, stencils = aligned(colors + u64(count) * times * times * 4);
@@ -1924,6 +1964,30 @@ struct VulkanBackend : GPU::Backend {
     if(n >= readbacks.size()) return false;
     colors = (const u32*)(readback.mapped + readbacks[n].first);
     stencil = readback.mapped + readbacks[n].second;
+    return true;
+  }
+  //(the depth format's values as the GE's: 65,536ths, as draw.frag's DEPTHS and the uploads write them, or those
+  //rounded to 24 bits; at a higher resolution, each pixel's middle one)
+  auto readDepth(u32 n, const u16*& depths) -> bool override {
+    auto read = std::find_if(depthReads.begin(), depthReads.end(), [&](const Squeeze& s) { return s.readback == n; });
+    if(n >= readbacks.size() || read == depthReads.end()) return false;
+    const u8* in = readback.mapped + readbacks[n].first;
+    depthsRead.resize(u64(read->width) * read->height);
+    for(u32 y = 0, i = 0; y < read->height; y++) {
+      for(u32 x = 0; x < read->width; x++, i++) {
+        u32 word;
+        std::memcpy(&word, in + (u64(y) * read->width * scale + x * scale + scale / 2) * 4, 4);
+        if(depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT) {
+          f32 value;
+          std::memcpy(&value, &word, 4);
+          value = value * 65536 + 0.5f;
+          depthsRead[i] = value >= 65535 ? 65535 : value >= 0 ? u16(value) : 0;
+        } else {
+          depthsRead[i] = std::min<u32>(((word & 0xff'ffff) + 255) >> 8, 65535);
+        }
+      }
+    }
+    depths = depthsRead.data();
     return true;
   }
 

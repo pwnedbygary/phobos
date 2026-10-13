@@ -225,6 +225,111 @@ auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts, u
   statistics.uploads++;
 }
 
+//The newest depth drawn in t's depth buffer, where another target's depth has it (the last to draw with that depth
+//buffer and row width, not t), taken into t's depth on the GPU before t draws with it, for the rows that one has: the
+//PSP's depth buffer is memory, whichever frame buffer it's drawn with, where each target's depth is its own. Hammerin'
+//Hero and Jeanne d'Arc draw their scene into the screen's frame buffer, then their characters into a frame buffer of
+//their own, cleared without its depth, tested against the scene's: tested against that target's own depth (memory's,
+//then the characters' own of the frames before), all but a piece of each was lost. Memory's changes the other hasn't
+//filled yet are filled into it first, so what's taken is as new as memory's; t's own, in the rows taken, are those.
+auto GPU::takeDepth(Target& t, const GE::PixelState& p) -> void {
+  Target* newest = nullptr;
+  for(auto& other : targets) {
+    if(other.get() == &t || other->depthBuffer != t.depthBuffer || other->depthStride != t.depthStride) continue;
+    if(other->depthRows && other->depthAt > t.depthAt && (!newest || other->depthAt > newest->depthAt)) {
+      newest = other.get();
+    }
+  }
+  if(!newest) return;
+  Target& from = *newest;
+  if(from.depthChangedFrom < from.depthChangedTo) {
+    fill(from, from.depthChangedFrom, std::min(from.depthChangedTo, from.depthRows), p, 2);
+    from.depthChangedFrom = from.depthChangedTo = 0;
+  }
+  u32 rows = std::min(from.depthRows, t.height);
+  Command c{Command::Kind::Depth, t.id};
+  c.source = from.id, c.width = std::min({from.stride, t.stride, t.depthStride}), c.height = rows;
+  recorded.commands.push_back(c);
+  t.depthRows = std::max(t.depthRows, rows);
+  t.depthChangedFrom = std::max(t.depthChangedFrom, rows);
+  if(t.depthChangedFrom >= t.depthChangedTo) t.depthChangedFrom = t.depthChangedTo = 0;
+  t.depthAt = from.depthAt, t.depthKept = from.depthKept;
+  statistics.depthsTaken++;
+}
+
+//The newest depth the GPU drew in each depth buffer reaching VRAM's bytes first to last, where memory hasn't it, put
+//into memory's VRAM as the GE keeps its depth (through the fourth copy), the older depth buffers' first where two
+//reach the same bytes: a texture is about to be read from them through VRAM's depth views (holds()), which on the PSP
+//finds the depth drawn there. Cars Race-O-Rama takes its race's depth through a palette into the alpha its sky is
+//blended by: from memory's depth (not the GPU's) the sky covered the whole race. A read back of those depths alone,
+//waited for (each target's own changes from memory filled into it first, so none is lost); the targets' pixels and
+//pages stay the GPU's. Memory hears of the bytes changed (decoded textures, the recompiler), and so do the targets
+//over them, but those whose depth is what was put there. (The second and fourth copies rearrange each 16 KiB: all of
+//each 16 KiB they touch is taken.)
+auto GPU::putDepth(u32 first, u32 last) -> void {
+  first &= ~0x3fffu, last |= 0x3fff;
+  auto reaches = [&](const Target& t) {
+    u32 low = t.depthBuffer & ~0x3fffu, high = (t.depthBuffer + t.depthRows * t.depthStride * 2 - 1) | 0x3fff;
+    return low <= last && first <= high;
+  };
+  std::vector<Target*> put;  //(the newest over each depth buffer, where memory hasn't it)
+  for(auto& t : targets) {
+    if(!t->depthAt || t->depthKept || !t->depthRows || !t->depthStride || !reaches(*t)) continue;
+    bool newest = true;
+    for(auto& other : targets) {
+      if(other->depthBuffer != t->depthBuffer || other->depthStride != t->depthStride) continue;
+      newest &= other->depthAt < t->depthAt || (other->depthAt == t->depthAt && other.get() >= t.get());
+    }
+    if(newest) put.push_back(t.get());
+  }
+  if(put.empty() || !ready()) return;
+  std::sort(put.begin(), put.end(), [](Target* a, Target* b) { return a->depthAt < b->depthAt; });
+  for(auto* t : put) {
+    if(t->depthChangedFrom < t->depthChangedTo) {
+      fill(*t, t->depthChangedFrom, std::min(t->depthChangedTo, t->depthRows), {}, 2);
+      t->depthChangedFrom = t->depthChangedTo = 0;
+    }
+    Command c{Command::Kind::Readback, t->id};
+    c.width = std::min(t->stride, t->depthStride), c.height = t->depthRows, c.parts = 2;
+    recorded.commands.push_back(c);
+    recorded.readbacks++;
+  }
+  auto began = std::chrono::steady_clock::now();
+  bool finished = backend->finish(recorded);
+  statistics.waiting += std::chrono::duration_cast<std::chrono::nanoseconds>(
+    std::chrono::steady_clock::now() - began).count();
+  recorded.clear();
+  if(!finished) return lose();
+  auto& memory = ge->memory;
+  for(u32 n = 0; n < put.size(); n++) {
+    Target& t = *put[n];
+    const u16* depths;
+    if(!backend->readDepth(n, depths)) continue;
+    u32 width = std::min(t.stride, t.depthStride);
+    for(u32 y = 0; y < t.depthRows; y++) {
+      for(u32 x = 0; x < width; x++, depths++) {
+        u32 at = Memory::vramOffset(3, (t.depthBuffer + (y * t.depthStride + x) * 2) & (Memory::VRAMSize - 1));
+        memory.vram[at] = u8(*depths), memory.vram[at + 1] = u8(*depths >> 8);
+      }
+    }
+    statistics.depthsPut++;
+  }
+  for(auto* t : put) {
+    u32 low = t->depthBuffer & ~0x3fffu;
+    u32 high = std::min<u32>((t->depthBuffer + t->depthRows * t->depthStride * 2 - 1) | 0x3fff, Memory::VRAMSize - 1);
+    memory.changed(Memory::VRAMBase + low, high - low + 1);
+  }
+  for(auto* t : put) {
+    for(auto& other : targets) {  //(the depths memory has now)
+      if(other->depthBuffer != t->depthBuffer || other->depthStride != t->depthStride) continue;
+      if(other->depthAt != t->depthAt) continue;
+      other->depthKept = true, other->depthChangedFrom = other->depthChangedTo = 0;
+    }
+    memory.watch(Memory::VRAMBase + 3 * Memory::VRAMSize + t->depthBuffer, t->depthRows * t->depthStride * 2);
+  }
+  release();
+}
+
 //A rectangle (left, top, right, bottom; none: left past right) grown to take in another
 static auto widen(s32 (&box)[4], s32 left, s32 top, s32 right, s32 bottom) -> void {
   if(box[0] > box[2]) box[0] = left, box[1] = top, box[2] = right, box[3] = bottom;
@@ -644,17 +749,26 @@ auto GPU::settings(const GE::Look& look) -> void {
       //as the reference it compares with: where the comparison takes the two apart (by the bits it takes), a 5551
       //one's comparison (its stencil 0 or 255) is made on the top bit instead, against the kept reference, which
       //comes out the same at either stencil; a 4444 one's stays the GE's, its REPLACE writing all eight bits.
-      u32 kept = keptStencil(p.stencilReference, p.format);
+      //A 5551 one's stencil is a bit, which an INCREMENT fills and a DECREMENT empties (pixel.cpp), where the GPU's
+      //would step its 0 or 255 by one, the color's alpha left: those are a REPLACE of 255 and a ZERO (but an
+      //INCREMENT beside a REPLACE of 0, which one reference can't write both of). Hammerin' Hero and Jeanne d'Arc
+      //mark their characters' pixels so in a frame buffer of their own, then take them onto the screen by the alpha.
+      u32 kept = keptStencil(p.stencilReference, p.format), written = kept;
       bool replaces = k.stencilFail == Replace || k.stencilDepthFail == Replace || k.stencilPass == Replace;
-      if(replaces && kept != p.stencilReference) {
+      for(u8* o : {&k.stencilFail, &k.stencilDepthFail, &k.stencilPass}) {
+        if(p.format == 1 && *o == Decrement) *o = Clear;
+        if(p.format == 1 && *o == Increment && (!replaces || kept == 0xff)) *o = Replace, written = 0xff;
+      }
+      replaces = k.stencilFail == Replace || k.stencilDepthFail == Replace || k.stencilPass == Replace;
+      if(replaces && written != p.stencilReference) {
         u32 reference = p.stencilReference & p.stencilMask;
-        if(p.stencilFunction < 2 || (kept & p.stencilMask) == reference) {  //(never, always: no reference)
-          s.stencilReference = kept;
+        if(p.stencilFunction < 2 || (written & p.stencilMask) == reference) {  //(never, always: no reference)
+          s.stencilReference = written;
         } else if(p.format == 1) {
           bool zero = comparesTrue(p.stencilFunction, reference, 0);
           bool full = comparesTrue(p.stencilFunction, reference, 0xff & p.stencilMask);
-          s.stencilReference = kept, s.stencilCompareMask = 0x80;
-          k.stencilCompare = zero == full ? zero : zero == !kept ? 2 : 3;  //(always or never; equal, not equal)
+          s.stencilReference = written, s.stencilCompareMask = 0x80;
+          k.stencilCompare = zero == full ? zero : zero == !written ? 2 : 3;  //(always or never; equal, not equal)
         }
       }
       //The alpha the frame buffer keeps is the stencil; where the pass operation's result is known here, the
@@ -662,7 +776,7 @@ auto GPU::settings(const GE::Look& look) -> void {
       //itself is read back from the GPU's stencil, finish()).
       if(alphaWritable && (k.stencilPass == Replace || k.stencilPass == Clear)) {
         k.alphaOut = 1, k.colorMask |= 8;
-        s.push.stencil = k.stencilPass == Replace ? kept : 0;
+        s.push.stencil = k.stencilPass == Replace ? written : 0;
       }
     } else if(p.stencilTest && !comparesTrue(p.stencilFunction, p.stencilReference & p.stencilMask, 0)) {
       //A 5650 frame buffer's stencil reads as 0: a test that fails against it drops every pixel (and keeps the
@@ -829,7 +943,9 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   if(depth && (t->depthBuffer != p.depthBuffer || t->depthStride != p.depthStride)) {
     t->depthBuffer = p.depthBuffer, t->depthStride = p.depthStride, t->depthRows = 0;
     t->depthChangedFrom = t->depthChangedTo = 0;
+    t->depthAt = 0, t->depthKept = false;
   }
+  if(depth) takeDepth(*t, p);  //(the newest drawn in its depth buffer, where another target drew it)
   if(depth && t->depthChangedFrom < t->depthChangedTo) {
     fill(*t, t->depthChangedFrom, std::min(t->depthChangedTo, t->depthRows), p, 2);
     t->depthChangedFrom = t->depthChangedTo = 0;
@@ -844,6 +960,7 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   if(filled > t->rows) fill(*t, t->rows, filled, p, 1), t->rows = filled;
   if(t->deadReaches(left, top, right, bottom)) revive(*t, t->dead);  //(where it draws, as memory has it)
   if(depth && u32(bottom + 1) > t->depthRows) fill(*t, t->depthRows, bottom + 1, p, 2), t->depthRows = bottom + 1;
+  if(depth && (p.clear || p.depthWrite)) t->depthAt = ++depthSerial, t->depthKept = false;
   for(auto& m : moving) move(*m.from, *t, m);
   //(bytes beside its pixels the moves and this PRIM together take into its drawn rectangle, which neither did alone:
   //memory's, filled now, where they're no moved pixels')
@@ -1338,6 +1455,17 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns,
   held.reset();
   if(!ready()) return false;
   u32 physical = texture.address & 0x1fff'ffff;
+  //(through VRAM's second or fourth copy, the views the GE keeps its depth buffer in: the depth drawn there, the
+  //GPU's put into memory first, which the GE decodes it from)
+  if(physical - Memory::VRAMBase < Memory::VRAMWindow && ((physical - Memory::VRAMBase) / Memory::VRAMSize & 1) &&
+     texture.format <= 7) {
+    static constexpr u32 bits[8] = {16, 16, 16, 32, 4, 8, 16, 32};
+    u32 offset = (physical - Memory::VRAMBase) % Memory::VRAMSize;
+    u64 tall = (std::min<u32>({rows, texture.height, 512}) + 7) & ~7u;  //(a swizzled one's in rows of eight)
+    u64 end = offset + tall * texture.bufferWidth * bits[texture.format] / 8;
+    if(end > offset) putDepth(offset, std::min<u64>(end, Memory::VRAMSize) - 1);
+    return false;
+  }
   if(physical < Memory::VRAMBase || physical - Memory::VRAMBase >= Memory::VRAMSize) return false;
   u32 offset = physical - Memory::VRAMBase, bytes = texture.format == 3 || texture.format == 7 ? 4 : 2;
   bool direct = !texture.swizzled && texture.format <= 3;
