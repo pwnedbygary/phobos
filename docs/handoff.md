@@ -25,6 +25,37 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: modules from downloads — sceKernelLoadModuleNpDrm, packed relocations, imported variables; God Eater 2 in English — 2026-10-13
+
+Branch `cursor/psp-npdrm-modules-2b67`, on master (`0a9a7fa75`, #234). docs/psp-core.md, part 88, has the evidence.
+Clean room: uOFW's module manager and loadcore, pspsdk's headers, pspautotests' recordings, RFC 1321, PPSSPP's notes
+read only as a description of the PSP; JPCSP not read. StateVersion 27 (each module keeps its imported variables). The
+owner's PGD/NPDRM code (pgd.cpp, pgd.hpp, io.cpp's sceNpDrm functions) is unchanged and wasn't needed.
+- **Before**: God Eater 2 (NPJH50832) with RedArtz's English patch v2.0 and its folder `PSP/GAME/NPJH50832` on the stick
+  stopped at the patch's "your DLC file is corrupted or missing": ModuleMgrForUser 0xf2d8d1b4 missing.
+- **The folder**: its 45 `.sprx` modules are plain ELFs, its EDATs plain too: nothing needs NPDRM decryption (the
+  owner's sceNpDrmEdataSetupKey leaves the plain PATCH.EDAT as it is, as before).
+- **sceKernelLoadModuleNpDrm**: uOFW's checks and errors (ILLEGAL_CONTEXT from an interrupt, ILLEGAL_ADDR, a '%' is
+  UNKNOWN_MODULE_FILE, options ILLEGAL_ADDR or ILLEGAL_SIZE, then sceIoOpen's own error); an NPDRM module as sold
+  (EDATA) refused, UNSUPPORTED_PRX_TYPE (chosen), its key (npdrm's module key, derived from the EDATA and the licensee
+  key, and the `~PSP` decryption with it) not derived: that's what's missing for store-bought download modules; any
+  other file loads as sceKernelLoadModule's do (a plain one, as custom firmware and emulators load it: chosen).
+- **The loader**: packed relocations (PT_PSP_REL2), read as uOFW's loadcore does, the steps its decompilation loses
+  settled by the modules (all 459,660 relocations of the 45 land in their segments, every jump in its code); imported
+  variables linked as modules load, unload and move (`linkImports()`, `relinkVariable()`), the program's included.
+- **What the game asked for next**: sceMpegRingbufferQueryPackNum (packnum recorded), MD5 (sceMd5 and UtilsForUser's,
+  the context as hash/md5ctx recorded), sceRtcConvertUtcToLocalTime and back.
+- **PBOOT.PBP**: not booted by the core (it boots the disc's EBOOT.BIN); not needed here: the disc image already is the
+  1.30 update, its EBOOT.BIN the patched one; the folder's PBOOT.PBP is Sony's encrypted program (tag 0x2e5e10f0, a key
+  the core hasn't). Not done.
+- **The game now** (fresh stick with the folder): title, the patch's English notice, the Main Menu, Character Entry, the
+  appearance screen, the first save, the opening with English subtitles, the update's English hints, and the base, where
+  the player walks and Fran talks in English. A mission not reached (the story first sends the player about).
+- **Checks** (`addfe3585`): tests/psp 494/0 (five new groups), tests/allegrex 60/0, tests/psp/ares 318/0. God Eater 2
+  without the folder as before (the same pictures, its log but the loader's old note); twelve other games (nine PSN
+  releases, three that load modules) with the base's runner and this one: the same pictures but animation steps and
+  Kenka Bancho's movie timing, which two base runs show too; their logs the same.
+
 ## PSP Vulkan: its waits for its own pixels gone — moves across row widths, palettes on the GPU, copies kept — 2026-10-13
 
 Branch `cursor/psp-vulkan-speed-2b67`, on master (`1d9308714`, #228). docs/psp-core.md, part 83, has the evidence;
