@@ -477,6 +477,9 @@ static auto pspMeasure() -> void {
   //but for a round's (3 to 7) when the reference has none of that round (its manifest3.txt to manifest7.txt), as a
   //PSP that hasn't run it
   bool referenceRound3 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest3.txt");
+  if(reference && *reference && !referenceRound3) {
+    skip("ge-round3", "PSP_GE_RESULTS has no round 3 (manifest3.txt): its files compared with nothing");
+  }
   bool referenceRound4 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest4.txt");
   bool referenceRound5 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest5.txt");
   bool referenceRound6 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest6.txt");

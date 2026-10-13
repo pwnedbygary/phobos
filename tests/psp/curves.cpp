@@ -391,7 +391,10 @@ static auto curvesRound3() -> void {
                         {"spline-edges-3", curved, 4, 3, 0}};
   for(auto& test : cases) {
     auto theirs = load(test.name);
-    if(theirs.size() != 256 * 256) continue;
+    if(theirs.size() != 256 * 256) {
+      skip("ge-round3", std::string(test.name) + ".bin isn't in PSP_GE_RESULTS (or isn't 256x256)");
+      continue;
+    }
     //start3D(&identity, 1) and patch(): the viewport onto a 256x256 target 512 pixels wide, z / w -1 to 1 the depths
     //65535 to 0, DEPTH_CLIP_ENABLE on, the depth test passing all, each point a color of its own
     Surface c;

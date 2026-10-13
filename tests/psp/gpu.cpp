@@ -111,7 +111,17 @@ static auto apart(System& a, System& b) -> u32 {
 //The ways the backend sets a target's stencil from its pixels' alphas, above 1x and in moves, to try: a draw for each
 //of its bits, and, where a shader can give it (Backend::stencilExport), with the colors.
 static auto stencilWays(GPU* gpu) -> std::vector<bool> {
-  return gpu->backend->stencilExport ? std::vector<bool>{false, true} : std::vector<bool>{false};
+  if(gpu->backend->stencilExport) return {false, true};
+  skip("vulkan-stencil-export", "the GPU can't give the stencil from the shader: only the other way tested");
+  return {false};
+}
+
+//Whether the GPU takes a resolution, saying so as a skip of it where it doesn't.
+static auto scaleTaken(GPU* gpu, u32 scale) -> bool {
+  if(scale <= gpu->backend->mostScale) return true;
+  auto most = std::to_string(gpu->backend->mostScale);
+  skip("vulkan-" + std::to_string(scale) + "x", "the GPU takes at most " + most + "x");
+  return false;
 }
 
 //Sprites without blending or dithering, in each format: the GPU's pixels are the software renderer's, byte for
@@ -280,7 +290,9 @@ static auto gpuFast() -> void {
   CHECK((bool)gpu, true);
   if(!gpu) return;
   CHECK(gpu->fast && !gpu->backend->reads, true);
-  if(!gpu->backend->transforms) return skip("vulkan-transforms", "the driver didn't take transform.vert: 3D on the CPU");
+  if(!gpu->backend->transforms) {
+    return skip("vulkan-transforms", "the driver didn't take transform.vert: 3D on the CPU");
+  }
   auto before = gpu->statistics;
   std::string error;
   bool passed = gpu->check(error);
@@ -1034,7 +1046,7 @@ static auto gpuPartialCopies() -> void {
   if(!gpu) return;
   std::mt19937 random{20261010};
   for(u32 scale : {1u, 2u, 3u}) {
-    if(scale > gpu->backend->mostScale) break;
+    if(!scaleTaken(gpu, scale)) break;
     gpu->resolution(scale);
     System software, hardware;
     hardware.ge.setRenderer(gpu);
@@ -1066,7 +1078,7 @@ static auto gpuPartialCopies() -> void {
     hardware.ge.setRenderer(nullptr);
   }
   for(u32 scale : {1u, 2u}) {
-    if(scale > gpu->backend->mostScale) break;
+    if(!scaleTaken(gpu, scale)) break;
     gpu->resolution(scale);
     System software, hardware;
     hardware.ge.setRenderer(gpu);
@@ -1429,7 +1441,7 @@ static auto gpuMoves() -> void {
   for(bool exported : stencilWays(gpu)) {
     gpu->backend->stencilExport = exported;
     for(u32 scale : {1u, 2u, 3u}) {
-      if(scale > gpu->backend->mostScale) break;
+      if(!scaleTaken(gpu, scale)) break;
       gpu->resolution(scale);
       System software, hardware;
       hardware.ge.setRenderer(gpu);
@@ -1493,7 +1505,7 @@ static auto gpuStridedMoves() -> void {
   for(bool exported : stencilWays(gpu)) {
     gpu->backend->stencilExport = exported;
     for(u32 scale : {1u, 2u, 3u}) {
-      if(scale > gpu->backend->mostScale) break;
+      if(!scaleTaken(gpu, scale)) break;
       gpu->resolution(scale);
       System software, hardware;
       hardware.ge.setRenderer(gpu);
@@ -1963,7 +1975,7 @@ static auto gpuTiles() -> void {
   if(!gpu) return;
   std::mt19937 random{20261020};
   for(u32 scale : {1u, 2u, 3u}) {
-    if(scale > gpu->backend->mostScale) break;
+    if(!scaleTaken(gpu, scale)) break;
     gpu->resolution(scale);
     System software, hardware;
     hardware.ge.setRenderer(gpu);
@@ -2262,7 +2274,7 @@ static auto gpuCheck() -> void {
 static auto gpuScaled() -> void {
   auto gpu = renderer();
   if(!gpu) return;
-  if(gpu->backend->mostScale < 3) return skip("vulkan-3x", "the GPU takes at most " + std::to_string(gpu->backend->mostScale) + "x");
+  if(!scaleTaken(gpu, 3)) return;
   std::mt19937 random{20261012};
   for(u32 scale : {2u, 3u}) {
     gpu->resolution(scale);
@@ -2361,10 +2373,7 @@ static auto gpuSeams() -> void {
     s.ge.primitive(GE::Triangles, 6);
   };
   for(u32 scale : {1u, 2u, 3u}) {
-    if(scale > gpu->backend->mostScale) {
-      skip("vulkan-" + std::to_string(scale) + "x", "the GPU takes at most " + std::to_string(gpu->backend->mostScale) + "x");
-      continue;
-    }
+    if(!scaleTaken(gpu, scale)) continue;
     gpu->resolution(scale);
     System software, hardware;
     hardware.ge.setRenderer(gpu);
@@ -2412,7 +2421,7 @@ static auto gpuBlending() -> void {
   gpu->backend->readsBlending = true;
   std::mt19937 random{20261013};
   for(u32 scale : {1u, 2u}) {
-    if(scale > gpu->backend->mostScale) continue;
+    if(!scaleTaken(gpu, scale)) continue;
     gpu->resolution(scale);
     for(u32 format : {3u, 0u, 1u, 2u}) {
       System software, hardware;
@@ -2799,7 +2808,7 @@ static auto gpuGlowParts() -> void {
   u32 decodes = tiles.size() * 3;  //(a palette for each tile's channel)
   for(GPU* gpu : {accurate, fastRenderer()}) {
     for(u32 scale : {1u, 2u}) {
-      if(!gpu || scale > gpu->backend->mostScale) continue;
+      if(!gpu || !scaleTaken(gpu, scale)) continue;
       gpu->resolution(scale);
       System held, parts, whole;
       whole.ge.boxes = false;

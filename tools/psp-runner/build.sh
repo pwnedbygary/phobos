@@ -4,8 +4,9 @@
 #game, runs it a frame at a time, and reports what happens. Its objects are kept between builds outside the
 #repository by tests/objects.sh, this checkout's in its own folder, each compiled again when what it was built from
 #changes (any header it includes) or its compile command does.
-#usage: tools/psp-runner/build.sh   (the binary ends up in this checkout's build folder, named psp-runner, which the
-#last line names; a copy goes in ${TMPDIR:-/tmp}/phobos-psp-runner/psp-runner, the last one built there.
+#usage: tools/psp-runner/build.sh   (the binary ends up in this checkout's build folder, named psp-runner and a hash
+#of its configuration, which the last line names; a copy goes in ${TMPDIR:-/tmp}/phobos-psp-runner/psp-runner, the
+#last one built there.
 #PHOBOS_JOBS: compiles at once)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -60,8 +61,9 @@ object "$CC" "$ROOT/libco/libco.c" -O1 -w "${SYSROOT[@]}" -I"$ROOT/libco"
 object "$CXX" "$HERE/runner.cpp" "${CXXFLAGS[@]}" -Wall -Wextra -Werror
 objects_done
 
-$CXX "${SYSROOT[@]}" -o "$BUILD/psp-runner.part-$$" "${OBJECTS[@]}" "${LIBRARIES[@]}"
-mv -f "$BUILD/psp-runner.part-$$" "$BUILD/psp-runner"
-cp "$BUILD/psp-runner" "$OUT/psp-runner.part-$$"
+objects_program psp-runner "${SYSROOT[@]}" "${LIBRARIES[@]}"
+$CXX "${SYSROOT[@]}" -o "$REPLY.part-$$" "${OBJECTS[@]}" "${LIBRARIES[@]}"
+mv -f "$REPLY.part-$$" "$REPLY"
+cp "$REPLY" "$OUT/psp-runner.part-$$"
 mv -f "$OUT/psp-runner.part-$$" "$OUT/psp-runner"
-echo "built $BUILD/psp-runner"
+echo "built $REPLY"

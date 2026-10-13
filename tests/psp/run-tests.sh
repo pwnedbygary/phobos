@@ -5,9 +5,10 @@
 #from changes (a header it includes too) or its compile command does.
 #usage: tests/psp/run-tests.sh   (SANITIZE= turns the sanitizers off; PSP_TEST_PROGRAMS: see loader.cpp;
 #PSP_AUTOTESTS: a pspautotests checkout, whose sample files atrac.cpp and mp3.cpp decode with FFmpeg; PHOBOS_JOBS:
-#compiles at once; PHOBOS_TESTS_MODE=release: built as the app is, below; PHOBOS_TESTS_REQUIRE: what must be here, a group that needs it failing rather than skipping, as
-#vulkan,programs,ge-round3,ge-round6 (tests/allegrex/harness.hpp's skip(), tests/psp/gpu.cpp's capabilities);
-#PHOBOS_TESTS_REPORT: a file for each group's result, pass, FAIL or skip with why, a tab between)
+#compiles at once; PHOBOS_TESTS_MODE=release: built as the app is, below; PHOBOS_TESTS_REQUIRE: what must be here,
+#a group that needs it failing rather than skipping, as vulkan,programs,ge-round3,ge-round6
+#(tests/allegrex/harness.hpp's skip(), tests/psp/gpu.cpp's capabilities); PHOBOS_TESTS_REPORT: a file for each
+#group's result, pass, FAIL or skip with why, a tab between)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
@@ -27,10 +28,11 @@ if [[ -z ${PSP_GE_ROUND6+set} ]]; then
     for packed in "$MEASURED6"/*.xz; do
       unpacked="$PSP_GE_ROUND6/$(basename "$packed" .xz)"
       if [[ ${1:-} == all || ! -f $unpacked || $packed -nt $unpacked ]]; then
-        if xz -dc "$packed" > "$unpacked.part"; then mv "$unpacked.part" "$unpacked"; else rm -f "$unpacked.part"; fi
+        if xz -dc "$packed" > "$unpacked.part-$$"; then mv -f "$unpacked.part-$$" "$unpacked"; else rm -f "$unpacked.part-$$"; fi
       fi
     done
-    cp "$MEASURED6/manifest6.txt" "$PSP_GE_ROUND6/"
+    cp "$MEASURED6/manifest6.txt" "$PSP_GE_ROUND6/manifest6.txt.part-$$"
+    mv -f "$PSP_GE_ROUND6/manifest6.txt.part-$$" "$PSP_GE_ROUND6/manifest6.txt"
   }
   sums6() {
     local sum=(shasum -a 256)
@@ -122,6 +124,8 @@ for source in "$ROOT/ares/psp/cpu/allegrex.cpp" "$ROOT/ares/psp/memory/memory.cp
 done
 objects_done
 # shellcheck disable=SC2086
-$CXX $SANITIZE "${SYSROOT[@]}" "${OBJECTS[@]}" "${LIBRARIES[@]}" -o "$BUILD/psp.part-$$"
-mv -f "$BUILD/psp.part-$$" "$BUILD/psp"
-"$BUILD/psp"
+objects_program psp $SANITIZE "${SYSROOT[@]}" "${LIBRARIES[@]}"
+# shellcheck disable=SC2086
+$CXX $SANITIZE "${SYSROOT[@]}" "${OBJECTS[@]}" "${LIBRARIES[@]}" -o "$REPLY.part-$$"
+mv -f "$REPLY.part-$$" "$REPLY"
+"$REPLY"
