@@ -50,7 +50,7 @@ enum class PixelBackdropScene(val label: String, val description: String) {
     SPACE("Space", "Mars turning below the stars, with Phobos (D-pad moon) in orbit and occasional shooting stars"),
     NIGHT_DRIVE("Night drive", "A road racing toward a striped sun between the mountains"),
     PLAINS("Pixel plains", "A Mario-like stage: heroes run and jump, collect coins and stomp foes"),
-    SAKURA_CYCLE("Sakura", "Day↔night cycle: moon and sun rise and set while petals fall"),
+    SAKURA_CYCLE("Sakura", "A day and a night every eight minutes: the sun sets, the stars come out and the moon rises, while petals fall"),
     SAKURA_NIGHT("Sakura night", "Cherry blossom petals falling under a full moon"),
     SAKURA_DAY("Sakura day", "Cherry blossom petals falling under a bright sun"),
     UNDERWATER("Underwater", "Bubbles rising past a coral reef under a wavy surface"),

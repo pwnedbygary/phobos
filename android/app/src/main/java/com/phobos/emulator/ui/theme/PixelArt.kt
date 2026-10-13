@@ -156,9 +156,10 @@ internal class StarField(private val cols: Int, private val rows: Int, skyRows: 
         }
     }
 
-    /** The stars at rest, in [color]. */
-    fun paint(out: IntArray, color: Int) {
+    /** The stars at rest, in [color]: [shown] of them, from 0 to 1, the brightest first, as they come out at dusk. */
+    fun paint(out: IntArray, color: Int, shown: Float = 1f) {
         for (i in xs.indices) {
+            if (glow[i] < 1f - shown) continue
             val x = xs[i]
             val y = ys[i]
             when {
@@ -172,8 +173,8 @@ internal class StarField(private val cols: Int, private val rows: Int, skyRows: 
         }
     }
 
-    /** The stars twinkling at [time], over the stars at rest. */
-    fun twinkle(time: Long, out: IntArray, color: Int) {
+    /** The stars twinkling at [time], over the stars at rest; only those of the [shown] that are out. */
+    fun twinkle(time: Long, out: IntArray, color: Int, shown: Float = 1f) {
         if (xs.isEmpty()) return
         val slot = Math.floorDiv(time, TWINKLE_EVERY)
         for (k in slot - TWINKLE_LENGTH / TWINKLE_EVERY..slot) {
@@ -183,6 +184,7 @@ internal class StarField(private val cols: Int, private val rows: Int, skyRows: 
             val level = floor(sin(PI * phase).toFloat() * 4f) / 4f
             if (level <= 0f) continue
             val star = Math.floorMod(PixelKit.hash(k.toInt() * 31 + seed), xs.size)
+            if (glow[star] < 1f - shown) continue
             val x = xs[star]
             val y = ys[star]
             PixelKit.blend(out, cols, rows, x, y, color, 0.4f + 0.6f * level)
