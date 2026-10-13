@@ -622,12 +622,13 @@ struct VulkanBackend : GPU::Backend {
     std::memcpy(key.data(), &k, sizeof(k));
     if(auto found = pipelineCache_.find(key); found != pipelineCache_.end()) return found->second;
     if(k.transformed && !transformModule) return pipelineCache_[key] = VK_NULL_HANDLE;
-    u32 constants[19] = {k.textured, k.function, k.alphaTest, k.colorTest, k.fog, k.depthRange, k.clear, k.source,
+    //(DEPTH, the GE's whole-number depth, wherever the GPU tests or writes depth)
+    u32 constants[20] = {k.textured, k.function, k.alphaTest, k.colorTest, k.fog, k.depthRange, k.clear, k.source,
                          k.destination, k.alphaOut, k.dither, k.quantize, k.logic, k.clamp, k.texels, k.reads,
-                         k.blending, k.term, k.flat};
-    VkSpecializationMapEntry entries[19];
-    for(u32 n = 0; n < 19; n++) entries[n] = {n, n * 4, 4};
-    VkSpecializationInfo specialization{19, entries, sizeof(constants), constants};
+                         k.blending, k.term, k.flat, u32(k.depthTest || k.depthWrite)};
+    VkSpecializationMapEntry entries[20];
+    for(u32 n = 0; n < 20; n++) entries[n] = {n, n * 4, 4};
+    VkSpecializationInfo specialization{20, entries, sizeof(constants), constants};
     //(fast mode's 3D: transform.vert, taking the GE's vertices)
     VkPipelineShaderStageCreateInfo stages[2] = {
       {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT,

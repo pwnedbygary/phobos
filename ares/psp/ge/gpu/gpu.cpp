@@ -667,13 +667,11 @@ auto GPU::settings(const GE::Look& look) -> void {
       }
     }
     //(where the GPU's blending takes output 0 as it is and adds or subtracts, that's the source term in pixel.cpp's
-    //whole numbers: draw.frag's TERM; not where output 0's color is the destination's factor too, without dual-source
-    //blending)
+    //whole numbers: draw.frag's TERM, which takes the dither too, as the PSP dithers what it blended; not where output
+    //0's color is the destination's factor too, without dual-source blending)
     bool weighs = k.destinationFactor == SourceColor || k.destinationFactor == OneMinusSourceColor;
-    if(k.blend && k.sourceFactor == One && k.operation <= ReverseSubtract && !weighs) {
-      k.term = k.operation == Add ? 1 : 2;
-    }
-    k.dither = p.dither && !k.blend && !k.logicOp;
+    if(k.blend && k.sourceFactor == One && k.operation <= ReverseSubtract && !weighs) k.term = k.operation + 1;
+    k.dither = p.dither && !k.logicOp && (!k.blend || k.term);
     if(!k.blend && !k.logicOp && p.format < 3) k.quantize = p.format;
     if(reading) statistics.readingDraws++;
   }

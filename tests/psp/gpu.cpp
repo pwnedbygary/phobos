@@ -1677,6 +1677,56 @@ static auto gpuDepth() -> void {
   }
 }
 
+//The depth as the GE's whole numbers (draw.frag's DEPTH): 2D triangles a fraction of a step above a sprite's depth,
+//their corners 1000.2 to 1000.8 over 1000, have the GE's depth, those rounded down, 1000 at every pixel, so each of
+//the eight comparisons, each over a strip of its own, comes out as the GE's: equal, at most and at least draw them,
+//less and greater don't (the GPU's own depth, a fraction above, would pass greater and fail equal). And a triangle
+//writing such depths, over which the comparison of equal takes a sprite at 1000. In either mode.
+static auto depthSteps(GPU* gpu) -> void {
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  for(System* s : {&software, &hardware}) {
+    auto& c = s->ge.commands;
+    prepare(*s, 0, 3);
+    struct Corner { float x, y, z; };
+    auto triangles = [&](float left, float right, u32 color) {
+      Corner corners[6] = {{left, 0, 1000.2f}, {right, 0, 1000.5f}, {left, 48, 1000.6f},
+                           {right, 0, 1000.5f}, {right, 48, 1000.8f}, {left, 48, 1000.6f}};
+      u32 to = GPUVertices;
+      for(auto& corner : corners) {
+        for(float value : {0.0f, 0.0f}) s->memory.write(4, to, bitsOf(value)), to += 4;
+        s->memory.write(4, to, color), to += 4;
+        for(float value : {corner.x, corner.y, corner.z}) s->memory.write(4, to, bitsOf(value)), to += 4;
+      }
+      s->ge.vertexAddress = GPUVertices;
+      s->ge.primitive(GE::Triangles, 6);
+    };
+    c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 1;  //(always, written)
+    sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 40}}, 0xff10'2030}, 1000);
+    c[GE::DepthMask] = 1;  //(not written: each strip's comparison against the sprite's)
+    for(u32 n = 0; n < 8; n++) {
+      c[GE::DepthTest] = n;
+      triangles(n * 8.0f, n * 8.0f + 8, 0xff00'0000 | (n + 1) * 0x1f'2b37);
+    }
+    c[GE::DepthMask] = 0, c[GE::DepthTest] = 1;
+    triangles(0, 64, 0xff40'4040);
+    c[GE::DepthMask] = 1, c[GE::DepthTest] = 2;  //(equal: over the triangles' depths, 1000 where they're the GE's)
+    sprite(*s, {{{0, 0, 8, 40}, {0, 0, 56, 48}}, 0xffc0'e0f0}, 1000);
+    c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0;
+  }
+  u32 bytes = apart(software, hardware);
+  if(bytes) std::printf("  %s: %u bytes apart\n", gpu->fast ? "fast" : "accurate", bytes);
+  CHECK(bytes, 0u);
+  CHECK(u32(software.memory.vram[(44 * 64 + 20) * 4]), 0xf0u);  //(the last sprite drawn)
+  hardware.ge.setRenderer(nullptr);
+}
+static auto gpuDepthSteps() -> void {
+  if(!renderer()) return;
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(gpu) depthSteps(gpu);
+  }
+}
+
 //Loads through VRAM's second and fourth copies, the views the GE keeps its depth buffer in, of pixels the GPU drew
 //(WipEout reads its depth buffer where its bloom's buffers are): memory's bytes, without waiting, as the GPU's depth
 //isn't memory's to finish for; through the first copy another of the sprite's pixels finishes and finds the GPU's
@@ -2058,6 +2108,38 @@ static auto gpuBlendingApart() -> void {
     CHECK(gpu->statistics.splits, before.splits);
     hardware.ge.setRenderer(nullptr);
   }
+  //and dithered, by the source's alpha or a fixed factor, adding or subtracting: the dither goes in the source term
+  //(draw.frag's TERM), at least 85% of the channels the same (undithered, only the matrix's one 0 would be); those far
+  //off, no more than 1 in 100, are dark blends layered over each other, where the term with a dither below 0 is held
+  //at 0 by the GPU (Death Jr. II's glow is a dithered blend whose matrix is all ones and twos)
+  {
+    std::mt19937 dithering{20261083};  //(its own, so the rounds after are as they were)
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    auto before = gpu->statistics;
+    auto base = randomSprites(dithering, 12, false);
+    std::vector<Round> rounds;
+    for(u32 n = 0; n < 24; n++) {
+      static constexpr u32 sources[] = {2, 3, 7, 10}, destinations[] = {2, 3, 4, 5, 10};
+      u32 mode = sources[dithering() % 4] | destinations[dithering() % 5] << 4 | (dithering() % 3) << 8;
+      rounds.push_back({mode, u32(dithering()) & 0xff'ffff, u32(dithering()) & 0xff'ffff, 1, 3, 0,
+                        randomSprites(dithering, 8, false)});
+    }
+    for(System* s : {&software, &hardware}) draw(*s, 3, base, rounds);
+    software.ge.settleAll(), hardware.ge.settleAll();
+    u64 channels = 0, same = 0, far = 0;
+    for(u32 n = 0; n < 64 * 48 * 4; n++) {
+      if(n % 4 == 3) continue;
+      s32 off = std::abs(s32(software.memory.vram[n]) - s32(hardware.memory.vram[n]));
+      channels++, same += off == 0, far += off > 8;
+    }
+    std::printf("  the GPU's own blending, dithered: of %llu channels %llu the same, %llu more than 8 off\n",
+                (unsigned long long)channels, (unsigned long long)same, (unsigned long long)far);
+    CHECK(far * 100 <= channels, true);
+    CHECK(same * 20 >= channels * 17, true);
+    CHECK(gpu->statistics.readingDraws, before.readingDraws);
+    hardware.ge.setRenderer(nullptr);
+  }
   if(!gpu->backend->reads) {
     std::printf("  what reads skipped: the GPU doesn't read the frame buffer\n");
     gpu->backend->readsInOrder = readsInOrder, gpu->backend->readsBlending = readsBlending;
@@ -2241,6 +2323,7 @@ auto gpuTests() -> Tests {
     {"gpu memory's bytes in its pages taken again, not the target afresh", gpuRevived},
     {"gpu a texture's place taken by tiles reaching further: few copies, held to what each takes", gpuTiles},
     {"gpu depth buffer follows memory's changes", gpuDepth},
+    {"gpu depth as the GE's whole numbers: a fraction of a step above meets the GE's comparisons", gpuDepthSteps},
     {"gpu loads through the depth buffer's views: memory's, without waiting", gpuDepthViewLoads},
     {"gpu bytes beside its pixels are memory's, without waiting", gpuBeside},
     {"gpu start-up check passes on a GPU that draws right", gpuCheck},

@@ -116,7 +116,8 @@ struct GPU : GE::Renderer {
     //and blending its BLEND_MODE operation (0-7; 8 not blending: a logic operation or a write mask alone)
     u8 reads, blending;
     //draw.frag's TERM: output 0's color as pixel.cpp's source term, which the GPU's blending adds the destination's
-    //term to (1) or subtracts it from or the other way round (2); 0 the color weighed as floats
+    //term to (1), subtracts it from (2) or subtracts from it (3), dithered with the term where dither is; 0 the color
+    //weighed as floats
     u8 term;
     //Fast mode's 3D PRIMs (mesh()): transform.vert puts the vertices on the screen (transformed 1); draw.frag's FLAT
     //takes the corners' colors as the GE's flat shading does. (Skinning, lighting and texture mapping are the PRIM's

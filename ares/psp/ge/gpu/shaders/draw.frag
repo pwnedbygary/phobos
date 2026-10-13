@@ -44,12 +44,18 @@ layout(constant_id = 16) const uint BLENDING = 8u;
 //Where the GPU blends with output 0's color as it is (its source factor one), that color is the source term made as
 //pixel.cpp makes it, in whole numbers (TERM). The PSP drops each term's fraction and then adds, where the GPU adds
 //and rounds once: so the term goes a quarter of a step below itself where the GPU adds the destination's term (1),
-//above where it subtracts (2), which puts the GPU's rounding of the sum on the PSP's nearly always. 0 the color
-//weighed as floats.
+//above where it subtracts it (2) or subtracts the term from it (3), which puts the GPU's rounding of the sum on the
+//PSP's nearly always. The PSP dithers the blended color (DITHER): the matrix's value goes into the term, the other
+//way where the term is subtracted, so the GPU's sum has it too (but where the term with it falls below 0, which the
+//GPU holds at 0 before it blends). 0 the color weighed as floats.
 layout(constant_id = 17) const uint TERM = 0u;
 //Fast mode's 3D (transform.vert): flat shading's colors are the triangle's first corner's, which mesh() makes the
 //GE's last
 layout(constant_id = 18) const uint FLAT = 0u;
+//The depth the GPU tests and writes is the GE's whole number, the interpolated depth rounded down as the GE steps it
+//(raster.cpp), where the pipeline tests or writes depth: two surfaces at one depth meet as the GE's do (Daxter's
+//shadow, drawn twice over the floor with "at most", darkens twice)
+layout(constant_id = 19) const uint DEPTH = 0u;
 
 layout(push_constant) uniform Push {
   vec2 scale;
@@ -273,6 +279,7 @@ void main() {
     chosen = texels <= 1.0 ? (push.filtering >> 8 & 1u) != 0u : (push.filtering & 1u) != 0u;
   }
   float depth = clamp(vertexDepth, 0.0, 65535.0);
+  if(DEPTH != 0u) gl_FragDepth = floor(depth) / 65535.0;
   if(DEPTH_RANGE != 0u) {
     uint z = uint(depth);
     if(z < (push.depthRange & 0xffffu) || z > push.depthRange >> 16) discard;
@@ -359,9 +366,9 @@ void main() {
   if(DESTINATION == 4u) factor = vec3(min(2.0 * alpha, 1.0));
   if(DESTINATION == 5u) factor = vec3(max(1.0 - 2.0 * alpha, 0.0));
   outFactor = vec4(factor, 0.0);
-  //dithering and the frame buffer's format, where the GPU's blending won't change the color after (QUANTIZE 4 and
-  //DITHER 0 otherwise: blended, they're approximated by the 8888 the GPU keeps)
-  if(DITHER != 0u) {
+  //dithering and the frame buffer's format, where the GPU's blending won't change the color after (QUANTIZE 4
+  //otherwise: blended, the 8888 the GPU keeps; and the dither in the source term, TERM)
+  if(DITHER != 0u && TERM == 0u) {
     color.rgb = uvec3(clamp(ivec3(color.rgb) + dithered(), 0, 255));
     rgb = vec3(color.rgb) / 255.0;
   }
@@ -381,6 +388,7 @@ void main() {
     if(SOURCE == 4u) f = ivec3(255 - min(2 * a, 255));
     if(SOURCE == 5u) f = ivec3(uvec3(channel(push.fixedA, 0u), channel(push.fixedA, 1u), channel(push.fixedA, 2u)));
     vec3 term = vec3((s * 2 + 1) * (f * 2 + 1) >> 10);
+    if(DITHER != 0u) term += float(TERM == 3u ? -dithered() : dithered());
     outColor = vec4((term + (TERM == 1u ? -0.25 : 0.25)) / 255.0, stencil);
     return;
   }
