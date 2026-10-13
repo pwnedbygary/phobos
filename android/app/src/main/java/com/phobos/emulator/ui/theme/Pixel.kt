@@ -50,7 +50,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.translate
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.layout
@@ -301,26 +300,7 @@ object PixelUi : SolidUi() {
     override fun ProgressBar(progress: (() -> Float)?, modifier: Modifier) = PixelProgressBar(progress, modifier)
 }
 
-/** The pixel backdrop's colors for [scheme]: light themes get a paler, quieter scene. */
-internal fun pixelSceneColors(scheme: ColorScheme, isDark: Boolean): PixelSceneColors {
-    val strength = if (isDark) 1f else 0.55f
-    val background = scheme.background
-    val primary = scheme.primary
-    val planetLit = lerp(background, primary, 0.5f * strength)
-    val planetShade = lerp(background, primary, 0.32f * strength)
-    return PixelSceneColors(
-        skyTop = background.toArgb(),
-        skyBottom = lerp(background, primary, 0.2f * strength).toArgb(),
-        star = if (isDark) scheme.onBackground.toArgb() else lerp(background, scheme.onBackground, 0.35f).toArgb(),
-        planetLit = planetLit.toArgb(),
-        planetShade = planetShade.toArgb(),
-        crater = lerp(planetShade, if (isDark) Color.Black else background, 0.3f).toArgb(),
-        rim = lerp(primary, if (isDark) Color.White else background, 0.3f).toArgb(),
-        glow = lerp(background, primary, 0.6f * strength).toArgb(),
-    )
-}
-
-/** The theme's colors for the pixel backdrops besides space. */
+/** The theme's colors for the pixel backdrops; light themes get a paler, quieter scene ([PixelPalette.tint]). */
 internal fun pixelPalette(scheme: ColorScheme, isDark: Boolean) = PixelPalette(
     background = scheme.background.toArgb(),
     onBackground = scheme.onBackground.toArgb(),
@@ -470,7 +450,7 @@ fun pixelShadow(isDark: Boolean): Color = Color.Black.copy(alpha = if (isDark) 0
 
 /**
  * A hard-edged plate of [color] behind text drawn straight on the pixel backdrop, so it stays
- * readable where it passes over the planet ([PIXEL_PLATE_ALPHA]).
+ * readable over the scene's brightest parts ([PIXEL_PLATE_ALPHA]).
  */
 fun Modifier.pixelPlate(color: Color): Modifier = drawWithCache {
     val reach = PLATE_REACH.toPx()
@@ -484,8 +464,8 @@ fun Modifier.pixelPlate(color: Color): Modifier = drawWithCache {
 }
 
 /**
- * The pixel plate's alpha: solid, a label block, since at 0.9 the brightest stars and the planet's
- * rim showed through enough to take some themes' text below AA (PixelContrastTest).
+ * The pixel plate's alpha: solid, a label block, since at 0.9 a scene's brightest stars showed through
+ * enough to take some themes' text below AA (PixelContrastTest).
  */
 const val PIXEL_PLATE_ALPHA = 1f
 

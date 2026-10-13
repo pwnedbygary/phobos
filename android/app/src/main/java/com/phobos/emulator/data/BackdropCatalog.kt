@@ -17,14 +17,11 @@ enum class CatalogBackdrop(
         "Use whichever backdrop the active style currently has selected",
     ),
 
-    PIXEL_SPACE("Pixel art", PixelBackdropScene.SPACE.label, PixelBackdropScene.SPACE.description),
-    PIXEL_NIGHT_DRIVE("Pixel art", PixelBackdropScene.NIGHT_DRIVE.label, PixelBackdropScene.NIGHT_DRIVE.description),
-    PIXEL_PLAINS("Pixel art", PixelBackdropScene.PLAINS.label, PixelBackdropScene.PLAINS.description),
     PIXEL_SAKURA("Pixel art", PixelBackdropScene.SAKURA_CYCLE.label, PixelBackdropScene.SAKURA_CYCLE.description),
-    PIXEL_SAKURA_NIGHT("Pixel art", PixelBackdropScene.SAKURA_NIGHT.label, PixelBackdropScene.SAKURA_NIGHT.description),
     PIXEL_SAKURA_DAY("Pixel art", PixelBackdropScene.SAKURA_DAY.label, PixelBackdropScene.SAKURA_DAY.description),
-    PIXEL_UNDERWATER("Pixel art", PixelBackdropScene.UNDERWATER.label, PixelBackdropScene.UNDERWATER.description),
-    PIXEL_CASTLE("Pixel art", PixelBackdropScene.CASTLE.label, PixelBackdropScene.CASTLE.description),
+    PIXEL_SAKURA_NIGHT("Pixel art", PixelBackdropScene.SAKURA_NIGHT.label, PixelBackdropScene.SAKURA_NIGHT.description),
+    PIXEL_PLAINS("Pixel art", PixelBackdropScene.PLAINS.label, PixelBackdropScene.PLAINS.description),
+    PIXEL_NIGHT_DRIVE("Pixel art", PixelBackdropScene.NIGHT_DRIVE.label, PixelBackdropScene.NIGHT_DRIVE.description),
 
     MANGA_TONE("Manga ink", MangaBackdropScene.TONE.label, MangaBackdropScene.TONE.description),
     MANGA_SPEED_LINES("Manga ink", MangaBackdropScene.SPEED_LINES.label, MangaBackdropScene.SPEED_LINES.description),
@@ -51,7 +48,7 @@ enum class CatalogBackdrop(
     XMB_DEEP("XMB waves", XmbBackdropScene.DEEP.label, XmbBackdropScene.DEEP.description),
     ;
 
-    /** Label for dropdowns: "Pixel art · Space". */
+    /** Label for dropdowns: "Pixel art · Sakura". */
     val menuLabel: String get() = if (this == MATCH_APP) label else "$group · $label"
 
     companion object {
@@ -72,14 +69,11 @@ enum class CatalogBackdrop(
 }
 
 fun PixelBackdropScene.toCatalog(): CatalogBackdrop = when (this) {
-    PixelBackdropScene.SPACE -> CatalogBackdrop.PIXEL_SPACE
-    PixelBackdropScene.NIGHT_DRIVE -> CatalogBackdrop.PIXEL_NIGHT_DRIVE
-    PixelBackdropScene.PLAINS -> CatalogBackdrop.PIXEL_PLAINS
     PixelBackdropScene.SAKURA_CYCLE -> CatalogBackdrop.PIXEL_SAKURA
-    PixelBackdropScene.SAKURA_NIGHT -> CatalogBackdrop.PIXEL_SAKURA_NIGHT
     PixelBackdropScene.SAKURA_DAY -> CatalogBackdrop.PIXEL_SAKURA_DAY
-    PixelBackdropScene.UNDERWATER -> CatalogBackdrop.PIXEL_UNDERWATER
-    PixelBackdropScene.CASTLE -> CatalogBackdrop.PIXEL_CASTLE
+    PixelBackdropScene.SAKURA_NIGHT -> CatalogBackdrop.PIXEL_SAKURA_NIGHT
+    PixelBackdropScene.PLAINS -> CatalogBackdrop.PIXEL_PLAINS
+    PixelBackdropScene.NIGHT_DRIVE -> CatalogBackdrop.PIXEL_NIGHT_DRIVE
 }
 
 fun MangaBackdropScene.toCatalog(): CatalogBackdrop = when (this) {

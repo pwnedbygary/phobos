@@ -47,14 +47,31 @@ enum class UiEffects(val label: String, val description: String) {
 
 /** The scene the Pixel art style draws behind the pages (Settings → Appearance → Backdrop). */
 enum class PixelBackdropScene(val label: String, val description: String) {
-    SPACE("Space", "Mars turning below the stars, with Phobos (D-pad moon) in orbit and occasional shooting stars"),
-    NIGHT_DRIVE("Night drive", "A road racing toward a striped sun between the mountains"),
-    PLAINS("Pixel plains", "A Mario-like stage: heroes run and jump, collect coins and stomp foes"),
     SAKURA_CYCLE("Sakura", "A day and a night every eight minutes: the sun sets, the stars come out and the moon rises, while petals fall"),
-    SAKURA_NIGHT("Sakura night", "Cherry blossom petals falling under a full moon"),
     SAKURA_DAY("Sakura day", "Cherry blossom petals falling under a bright sun"),
-    UNDERWATER("Underwater", "Bubbles rising past a coral reef under a wavy surface"),
-    CASTLE("Pixel castle", "Torches flickering on a brick wall under a starry battlement"),
+    SAKURA_NIGHT("Sakura night", "Cherry blossom petals falling under a full moon"),
+    PLAINS("Pixel plains", "A Mario-like stage: heroes run and jump, collect coins and stomp foes"),
+    NIGHT_DRIVE("Night drive", "A road racing toward a striped sun between the mountains"),
+}
+
+/**
+ * Pixel art scenes since removed, each read as the kept one closest to it: Space and Pixel castle, starry
+ * nights, as Sakura night; Underwater, bright and blue, as Sakura day.
+ */
+private val removedPixelScenes = mapOf(
+    "SPACE" to PixelBackdropScene.SAKURA_NIGHT,
+    "CASTLE" to PixelBackdropScene.SAKURA_NIGHT,
+    "UNDERWATER" to PixelBackdropScene.SAKURA_DAY,
+)
+
+/** The Pixel art scene stored as [name]. Pre-split installs stored SAKURA for the moonlit scene. */
+private fun pixelBackdropNamed(name: String): PixelBackdropScene =
+    removedPixelScenes[name] ?: if (name == "SAKURA") PixelBackdropScene.SAKURA_NIGHT else enumOrDefault(name, PixelBackdropScene.SAKURA_CYCLE)
+
+/** The screensaver's backdrop stored as [name]: a removed Pixel art scene's entry reads as its scene does. */
+private fun screensaverBackdropNamed(name: String): CatalogBackdrop {
+    val removed = if (name.startsWith("PIXEL_")) removedPixelScenes[name.removePrefix("PIXEL_")] else null
+    return removed?.toCatalog() ?: enumOrDefault(name, CatalogBackdrop.MATCH_APP)
 }
 
 /** Library console art pack (Settings → Appearance → Platform icons). */
@@ -141,7 +158,7 @@ data class EmulatorSettings(
     // Paired themes (One Dark / One Light, ...) switch to their sibling to match the system.
     val themeFollowSystem: Boolean = false,
     val uiEffects: UiEffects = UiEffects.NONE,
-    val pixelBackdrop: PixelBackdropScene = PixelBackdropScene.SPACE,
+    val pixelBackdrop: PixelBackdropScene = PixelBackdropScene.SAKURA_CYCLE,
     val mangaBackdrop: MangaBackdropScene = MangaBackdropScene.TONE,
     val rpgBackdrop: RpgBackdropScene = RpgBackdropScene.LATTICE,
     val retrowaveBackdrop: RetrowaveBackdropScene = RetrowaveBackdropScene.SUNSET,
@@ -534,11 +551,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
                 safeGetString(UI_EFFECTS, ""),
                 if (safeGet(RETROWAVE_EFFECTS, false)) UiEffects.RETROWAVE else UiEffects.NONE,
             ),
-            // Pre-split installs stored SAKURA for the moonlit scene; SAKURA_CYCLE is the new day↔night option.
-            pixelBackdrop = when (val raw = safeGetString(PIXEL_BACKDROP, "")) {
-                "SAKURA" -> PixelBackdropScene.SAKURA_NIGHT
-                else -> enumOrDefault(raw, PixelBackdropScene.SPACE)
-            },
+            pixelBackdrop = pixelBackdropNamed(safeGetString(PIXEL_BACKDROP, "")),
             mangaBackdrop = enumOrDefault(safeGetString(MANGA_BACKDROP, ""), MangaBackdropScene.TONE),
             rpgBackdrop = enumOrDefault(safeGetString(RPG_BACKDROP, ""), RpgBackdropScene.LATTICE),
             retrowaveBackdrop = enumOrDefault(safeGetString(RETROWAVE_BACKDROP, ""), RetrowaveBackdropScene.SUNSET),
@@ -547,7 +560,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
             xmbBackdrop = enumOrDefault(safeGetString(XMB_BACKDROP, ""), XmbBackdropScene.WAVES),
             platformIconPack = enumOrDefault(safeGetString(PLATFORM_ICON_PACK, ""), PlatformIconPack.SYSTEMATIC),
             screensaverDelay = enumOrDefault(safeGetString(SCREENSAVER_DELAY, ""), ScreensaverDelay.OFF),
-            screensaverBackdrop = enumOrDefault(safeGetString(SCREENSAVER_BACKDROP, ""), CatalogBackdrop.MATCH_APP),
+            screensaverBackdrop = screensaverBackdropNamed(safeGetString(SCREENSAVER_BACKDROP, "")),
             glassEffects = enumOrDefault(safeGetString(GLASS_EFFECTS, GlassEffects.FULL.name), GlassEffects.FULL),
             regionPreference = enumOrDefault(safeGetString(REGION_PREFERENCE, ""), RegionPreference.NTSC_U_NTSC_J_PAL),
             fastBoot = safeGet(FAST_BOOT, false),
