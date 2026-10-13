@@ -1170,6 +1170,7 @@ int main() {
     {"chained runs", chainedRuns}, {"coprocessor branches taken", coprocessorBranchesTaken},
   };
   for(auto& test : vfpuTests()) tests.push_back(test);
+  checkRequired();
   int groups = 0;
   for(bool recompiler : {false, true}) {
     useRecompiler = recompiler;

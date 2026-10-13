@@ -933,8 +933,11 @@ auto main() -> int {
   } else {
     std::printf("PSP_TEST_PROGRAMS isn't set (or has no hello.elf): the checks that run a program are skipped\n");
     //(a failure where the run must have them: PHOBOS_TESTS_REQUIRE naming "programs", as CI's does)
-    const char* required = std::getenv("PHOBOS_TESTS_REQUIRE");
-    CHECK(!required || ("," + std::string(required) + ",").find(",programs,") == std::string::npos,
+    //(the names, spaces left out, as tests/allegrex/harness.hpp takes them)
+    std::string required = std::getenv("PHOBOS_TESTS_REQUIRE") ? std::getenv("PHOBOS_TESTS_REQUIRE") : "";
+    required.erase(std::remove_if(required.begin(), required.end(), [](char c) { return std::isspace(u8(c)); }),
+                   required.end());
+    CHECK(("," + required + ",").find(",programs,") == std::string::npos,
           "programs are required here (PHOBOS_TESTS_REQUIRE), and PSP_TEST_PROGRAMS has no hello.elf");
   }
 
