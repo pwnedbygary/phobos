@@ -112,7 +112,8 @@ jobs:
         env:
           PSP_GPU_ON_CPU: 1
           PHOBOS_TESTS_REQUIRE: >-
-            vulkan,vulkan-fast,vulkan-transforms,vulkan-palettes,vulkan-moves,vulkan-reads,vulkan-2x,vulkan-3x,vulkan-stencil-export,programs,ge-round3,ge-round6
+            vulkan, vulkan-fast, vulkan-transforms, vulkan-palettes, vulkan-moves, vulkan-reads, vulkan-2x, vulkan-3x,
+            vulkan-stencil-export, programs, ge-round3, ge-round6
           PHOBOS_TESTS_REPORT: ${{ runner.temp }}/psp-report.tsv
         run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
 

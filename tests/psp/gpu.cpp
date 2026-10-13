@@ -325,6 +325,7 @@ static auto stencilFormats(GPU* gpu) -> void {
   auto test = [](u32 comparison, u32 reference, u32 mask) { return comparison | reference << 8 | mask << 16; };
   auto replaceOn = [](bool pass) { return pass ? 2u << 16 : 2u; };
   for(u32 scale : {1u, 2u}) {
+    if(!scaleTaken(gpu, scale)) break;
     gpu->resolution(scale);
     for(u32 format : {0u, 1u, 2u, 3u}) {
       std::vector<Pass> passes;
