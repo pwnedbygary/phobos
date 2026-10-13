@@ -4,9 +4,10 @@
 #report: the summary it prints (the frames it ran, that the program ran on, that no function was
 #missing), the PNGs and the WAV it wrote, and its JSON report. Then the clock: two runs started at the
 #same time (--start-time) save the same state, and a run started at another time a different one; a state loaded
-#keeps its own clock, and a start time past 32 bits is refused. Then captures with no new picture to take
-#(--screen-stops-at: as a screen that stopped presenting): reported, not passed off as fresh, and with no picture at
-#all, no PNG. Then a game's name that isn't UTF-8 (where the filesystem takes one): the report is still JSON.
+#keeps its own clock. Numbers past 32 bits, or with more after them, are refused. Then captures with no new
+#picture to take (--screen-stops-at: as a screen that stopped presenting): reported, not passed off as fresh, and
+#with no picture at all, no PNG. Then a game's name that isn't UTF-8 (where the filesystem takes one): the report is
+#still JSON.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
@@ -22,10 +23,15 @@ RUNNER=${RUNNER#built }
 "$RUNNER" "$PSP_TEST_PROGRAMS/cube.elf" --frames 60 --out "$SCRATCH" --png-every 30 \
   --wav "$SCRATCH/sound.wav" --report "$SCRATCH/report.json" > "$SCRATCH/summary.txt" 2> "$SCRATCH/errors.txt"
 
-#The summary: the frames ran, the program still running (cube never ends), no function missing.
+#The summary: the frames ran, the program still running (cube never ends), no function missing, and the captures'
+#time on a line of its own (scripts take the speed from the one line with "frames per second" in it).
 for line in "frames run: 60" "program: still running" "unique missing functions: 0"; do
   grep -qF "$line" "$SCRATCH/summary.txt" || { cat "$SCRATCH/summary.txt" "$SCRATCH/errors.txt"; exit 1; }
 done
+if [[ $(grep -c "frames per second" "$SCRATCH/summary.txt") != 1 ]] ||
+   ! grep -q "^capture seconds: " "$SCRATCH/summary.txt"; then
+  cat "$SCRATCH/summary.txt"; exit 1
+fi
 #The frames, as PNGs (every 30th presented frame), and the sound, as a WAV.
 for file in frame-000030.png frame-000060.png sound.wav; do
   [[ -s "$SCRATCH/$file" ]] || { echo "no $file"; exit 1; }
@@ -86,20 +92,38 @@ grep -q "started itself again" "$SCRATCH/errors-d.txt" && { cat "$SCRATCH/errors
 for line in '"clock start": 1234567890' '"clock restarts": 0' '"start time": 1500000000'; do
   grep -qF "$line" "$SCRATCH/report-d.json" || { cat "$SCRATCH/report-d.json"; exit 1; }
 done
-#A start time past 32 bits is refused, not wrapped to 1970.
-if "$RUNNER" "$PSP_TEST_PROGRAMS/cube.elf" --frames 1 --start-time 4294967296 > /dev/null 2> "$SCRATCH/errors-e.txt" ||
-   ! grep -qF -- "--start-time is at most 4294967295" "$SCRATCH/errors-e.txt"; then
-  echo "a start time past 32 bits wasn't refused"; cat "$SCRATCH/errors-e.txt"; exit 1
-fi
-#A capture with no new picture: the runner takes none from frame 20 on, so frame 20's PNG has the pictures before it
-#(new since no capture) and frame 40's waits its 2 s for one that never comes.
-"$RUNNER" "$PSP_TEST_PROGRAMS/cube.elf" --frames 40 --out "$SCRATCH/stopped" --png-at 20,40 --screen-stops-at 20 \
-  > "$SCRATCH/summary-stopped.txt" 2> "$SCRATCH/errors-stopped.txt"
-grep -qF "stale captures: 1" "$SCRATCH/summary-stopped.txt" || { cat "$SCRATCH/summary-stopped.txt"; exit 1; }
-grep -qF "frame 40: the screen presented no new picture" "$SCRATCH/errors-stopped.txt" ||
-  { cat "$SCRATCH/errors-stopped.txt"; exit 1; }
-grep -q "frame 20" "$SCRATCH/errors-stopped.txt" && { cat "$SCRATCH/errors-stopped.txt"; exit 1; }
-[[ -s $SCRATCH/stopped/frame-000020.png && -s $SCRATCH/stopped/frame-000040.png ]] || { echo "no PNGs"; exit 1; }
+#Numbers are decimal digits up to 32 bits: a start time past them is refused (not wrapped to 1970), and so are a
+#number with more after it and a press's frame past 32 bits.
+refused() {  #refused MESSAGE OPTION...: the runner refuses the options, saying MESSAGE
+  local message=$1; shift
+  if "$RUNNER" "$PSP_TEST_PROGRAMS/cube.elf" --frames 1 "$@" > /dev/null 2> "$SCRATCH/errors-e.txt" ||
+     ! grep -qF -- "$message" "$SCRATCH/errors-e.txt"; then
+    echo "not refused: $*"; cat "$SCRATCH/errors-e.txt"; exit 1
+  fi
+}
+refused "--start-time is at most 4294967295" --start-time 4294967296
+refused "--start-time needs a number" --start-time 12abc
+refused "a press's frame is a number up to 4294967295" --press 4294967296:Cross
+#Captures with no new picture: the runner takes none from frame 20 on. Frame 19's PNG waits for a new picture (one
+#comes: the screen still presents); frame 20's has one only if it came while frame 19's was written; frame 40's
+#waits its 2 s for one that never comes. Each is fresh or stale as it was, said and counted so, with a PNG.
+"$RUNNER" "$PSP_TEST_PROGRAMS/cube.elf" --frames 40 --out "$SCRATCH/stopped" --png-at 19,20,40 --screen-stops-at 20 \
+  --report "$SCRATCH/stopped.json" > "$SCRATCH/summary-stopped.txt" 2> "$SCRATCH/errors-stopped.txt"
+python3 - "$SCRATCH/stopped.json" "$SCRATCH/summary-stopped.txt" "$SCRATCH/errors-stopped.txt" <<'EOF' ||
+import json, sys
+r = json.load(open(sys.argv[1], encoding="utf-8"))
+summary, errors = open(sys.argv[2]).read(), open(sys.argv[3]).read()
+captures = r["result"]["captures"]
+assert [c["frame"] for c in captures] == [19, 20, 40] and captures[0]["fresh"] and not captures[2]["fresh"], captures
+stale = [c["frame"] for c in captures if not c["fresh"]]
+assert r["result"]["stale captures"] == len(stale) and "stale captures: %d\n" % len(stale) in summary, summary
+for frame in (19, 20, 40):
+    assert ("frame %d: the screen presented no new picture" % frame in errors) == (frame in stale), errors
+EOF
+  { cat "$SCRATCH/summary-stopped.txt" "$SCRATCH/errors-stopped.txt" "$SCRATCH/stopped.json"; exit 1; }
+for png in frame-000019.png frame-000020.png frame-000040.png; do
+  [[ -s $SCRATCH/stopped/$png ]] || { echo "no $png"; exit 1; }
+done
 #A capture with no picture at all (the screen stopped from the first frame): said, no PNG, and in the report (whose
 #folder the runner makes).
 "$RUNNER" "$PSP_TEST_PROGRAMS/cube.elf" --frames 1 --out "$SCRATCH/none" --png-at 1 --screen-stops-at 1 \

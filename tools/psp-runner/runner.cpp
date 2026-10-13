@@ -288,6 +288,17 @@ struct Press {
 
 static const char* stickAxes[] = {"L-StickX:", "L-StickY:", "R-StickX:", "R-StickY:"};
 
+//A number as options and presses write it: decimal digits only (no sign, space or anything after them). False for
+//anything else; a value past 32 bits comes back as 0x1'0000'0000.
+auto readDigits(const std::string& text, u64& value) -> bool {
+  value = 0;
+  for(char c : text) {
+    if(c < '0' || c > '9') return false;
+    value = std::min<u64>(value * 10 + (c - '0'), 0x1'0000'0000);
+  }
+  return !text.empty();
+}
+
 auto parsePress(const std::string& item, std::string& problem) -> Press {
   Press press;
   auto colon = item.find(':');
@@ -295,12 +306,12 @@ auto parsePress(const std::string& item, std::string& problem) -> Press {
     problem = "a press is \"frame:control\", like 120:Start: " + item;
     return press;
   }
-  try {
-    press.frame = std::stoul(item.substr(0, colon));
-  } catch(...) {
-    problem = "a press's frame is a number: " + item;
+  u64 frame = 0;
+  if(!readDigits(item.substr(0, colon), frame) || frame > 0xffff'ffff) {
+    problem = "a press's frame is a number up to 4294967295: " + item;
     return press;
   }
+  press.frame = u32(frame);
   auto control = item.substr(colon + 1);
   auto axis = std::find_if(std::begin(stickAxes), std::end(stickAxes),
                            [&](const char* prefix) { return control.rfind(prefix, 0) == 0; });
@@ -410,13 +421,11 @@ auto jsonText(const std::string& text) -> std::string {
   return out + "\"";
 }
 
-//A number from an option's value: stoull's exceptions (a non-number, say) end the run with a message, as does a
-//number past 32 bits (a negative one wraps past them).
+//A number from an option's value: anything but digits (readDigits()), or a number past 32 bits, ends the run with a
+//message.
 auto parseUint(const std::string& text, const std::string& option) -> u32 {
-  unsigned long long value = 0;
-  try {
-    value = std::stoull(text);
-  } catch(...) {
+  u64 value = 0;
+  if(!readDigits(text, value)) {
     std::fprintf(stderr, "%s needs a number: %s\n", option.c_str(), text.c_str());
     std::exit(1);
   }
@@ -563,19 +572,24 @@ auto main(int argc, char** argv) -> int {
   if(title.empty()) title = game.stem().string();
   std::printf("game: %s\n", game.string().c_str());
 
+  //The folders the run writes to, made if they aren't there: the PNGs' folder, and the WAV's, the save-state file's
+  //and the report's. One that can't be made ends the run, before it has a scratch to leave behind.
+  for(auto& folder : {outDir, wav.parent_path(), saveStateFile.parent_path(), reportFile.parent_path()}) {
+    if(folder.empty()) continue;
+    std::error_code error;
+    fs::create_directories(folder, error);
+    if(error) {
+      std::fprintf(stderr, "the folder can't be made: %s (%s)\n", folder.string().c_str(), error.message().c_str());
+      return 1;
+    }
+  }
+
   //The run's scratch, a folder of the runner's own (the memory stick's default): gone with the run.
   auto scratch = fs::temp_directory_path() / ("phobos-psp-runner-" + std::to_string(::getpid()));
   fs::remove_all(scratch);
   fs::create_directories(scratch);
   bool memoryStickGiven = !memoryStick.empty();
   if(!memoryStickGiven) memoryStick = (scratch / "memory-stick").string();
-
-  //The folders the run writes to, made if they aren't there: the PNGs' folder, and the WAV's, the save-state file's
-  //and the report's.
-  if(!outDir.empty()) fs::create_directories(outDir);
-  if(!wav.empty()) fs::create_directories(wav.parent_path());
-  if(!saveStateFile.empty()) fs::create_directories(saveStateFile.parent_path());
-  if(reportFile.has_parent_path()) fs::create_directories(reportFile.parent_path());
 
   //The front end and the options, as the system takes them.
   RunnerPlatform host;
@@ -683,8 +697,9 @@ auto main(int argc, char** argv) -> int {
     if(psp.kernel.startTime != clockSeen || psp.kernel.cycles < cyclesSeen) {
       psp.kernel.startTime = u64(startTime) * 1'000'000;
       clockRestarts++;
-      std::fprintf(stderr, "frame %u: the game started itself again, which took the host's clock; the PSP's clock is "
-                           "the time asked for again\n", frame);
+      std::fprintf(stderr, "frame %u: %s the host's clock; the PSP's clock is the time asked for again\n", frame,
+                   psp.kernel.exited ? "a program the game asked for couldn't start, which ended the game and took"
+                                     : "the game started itself again, which took");
     }
     clockSeen = psp.kernel.startTime, cyclesSeen = psp.kernel.cycles;
   };
@@ -711,21 +726,22 @@ auto main(int argc, char** argv) -> int {
     if(host.pngEvery ? frame % host.pngEvery == 0 : host.pngAt.count(frame)) {
       auto pngStarted = std::chrono::steady_clock::now();
       auto deadline = pngStarted + std::chrono::seconds(2);
-      bool fresh = false;
       while(true) {
         u32 presented;
         {
           std::lock_guard lock{host.mutex};
           presented = host.presented;
         }
-        if((fresh = presented > lastPresented) || std::chrono::steady_clock::now() > deadline) break;
+        if(presented > lastPresented || std::chrono::steady_clock::now() > deadline) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
       }
       auto waited = std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - pngStarted).count();
       std::vector<u32> frameData;
       u32 w, h, arrivedIn;
+      bool fresh;  //(read with the picture it describes, under the same lock)
       {
         std::lock_guard lock{host.mutex};
+        fresh = host.presented > lastPresented;
         lastPresented = host.presented;
         frameData = host.frame;
         w = host.frameWidth;
@@ -776,7 +792,8 @@ auto main(int argc, char** argv) -> int {
 
   fs::remove_all(scratch);
 
-  //The summary: the frames run, the program's end, the speed, the missing functions, and the last note.
+  //The summary: the frames run, the program's end, the speed, the missing functions, and the last note. Scripts find
+  //its lines by their first words (or any line with "frames per second" in it), so a new line has words of its own.
   auto elapsed = std::chrono::duration<double>(end - start).count();
   std::printf("--\n");
   std::printf("frames run: %u\n", frames);
@@ -784,8 +801,8 @@ auto main(int argc, char** argv) -> int {
   std::printf("frames per second: %.2f\n", frames / elapsed);
   auto capturedSeconds = std::chrono::duration<double>(captured).count();
   if(capturedSeconds > 0) {
-    std::printf("frames per second, captures left out: %.2f (captures took %.3f s)\n",
-                frames / std::max(elapsed - capturedSeconds, 1e-9), capturedSeconds);
+    std::printf("capture seconds: %.3f (%.2f frames a second without them)\n", capturedSeconds,
+                frames / std::max(elapsed - capturedSeconds, 1e-9));
   }
   if(staleCaptures) std::printf("stale captures: %u\n", staleCaptures);
   if(gpu) {
@@ -799,7 +816,7 @@ auto main(int argc, char** argv) -> int {
                 (unsigned long long)gpu->pictures, frames ? gpu->waiting / 1e6 / frames : 0.0,
                 (unsigned long long)gpu->moves);
     std::printf("gpu pipelines: %llu made, %.1f ms making them\n", (unsigned long long)pipelines, making / 1e6);
-    if(gpuLost) std::printf("gpu: lost during the run; the software renderer drew from then on\n");
+    if(gpuLost) std::printf("gpu lost: the software renderer drew from then on\n");
   }
   std::printf("unique missing functions: %u\n", u32(missing.size()));
   auto byCount = [](auto& a, auto& b) {

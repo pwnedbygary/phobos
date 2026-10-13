@@ -40,7 +40,8 @@ PRX). It is named in its pak the way mia's PSP medium names it (`kind()`, reprod
 reads its `PSP_GAME/PARAM.SFO` and prints the title and the disc's NPID, which the
 compatibility report uses for its region and disc ID column.
 
-The options, and what each does:
+The options, and what each does (their numbers, a press's frame among them, are decimal digits
+up to 4294967295; the runner refuses anything else):
 
 - `--frames N` — how many frames to run (default 3600, a minute of the PSP's time)
 - `--press "F:C,..."` — `F:C` presses and holds `C` at frame `F` (a button, or a stick's
@@ -116,11 +117,13 @@ At the end it prints a summary: the frames run, whether the program ended, the f
 second, the unique missing functions with their counts (the notes that begin
 `not implemented yet:`), and the last note. The frames per second are the frame loop's, which
 includes its captures (the PNGs, waiting for each picture and writing it, and the save state);
-where there were any, a line after gives the speed without them and their time, and a capture
-whose wait ran out (`stale captures: N`, each said on standard error) is counted. If the GPU
-renderer stops answering during the run, a `gpu:` line says the software renderer drew from
-then on. The system's own messages (a disc that can't start, a memory stick folder that isn't
-there) go to standard error, as on the host.
+where there were any, `capture seconds:` gives their time and the speed without them, and a
+capture whose wait ran out (`stale captures: N`, each said on standard error) is counted. If the
+GPU renderer stops answering during the run, `gpu lost:` says the software renderer drew from
+then on. (Each line added to the summary begins with words of its own, and only the speed's
+has "frames per second" in it, as scripts find the lines by those.) The system's own messages
+(a disc that can't start, a memory stick folder that isn't there) go to standard error, as on
+the host.
 
 With `--trace-savedata`, each savedata request (sceUtilitySavedataInitStart's parameters, done
 at its Update) adds a line: the mode (pspsdk's name), the structure's size, the game's and the
@@ -167,12 +170,14 @@ later layout gets another number):
   (`debug` or `release`) and whether it has FFmpeg (`ffmpeg`: without, games' movies stay black
   and their ATRAC music silent);
 - `game`: its path, the kind the runner took it for (`disc.iso`, `program.elf`, ...), its title
-  and disc ID where it has them, its size in bytes;
-- `asked`: the options given, each null where it wasn't: the renderer, resolution, engine
-  (`interpreter` if asked), GE threads, late frames, frames, start time, state to load, how many
-  presses, the script, the PNGs' schedule (`png every`, `png at`) and folder, the WAV, the frame
-  of the state saved, the memory stick and fonts folders, the pipeline cache, and `screen stops
-  at`;
+  (a PBP's or a disc's own, else the file's name), its disc ID (null without one), its size in
+  bytes;
+- `asked`: the options given, each null where it wasn't (but `late frames`, `true` or `false`,
+  and `presses`, a count): the renderer (as the core names it: `Vulkan-fast` is `Vulkan (fast)`),
+  resolution, engine (`interpreter` if asked), GE threads, late frames, frames, start time, state
+  to load, how many presses, the script, the PNGs' schedule (`png every`, `png at`) and folder,
+  the WAV, the frame of the state saved, the memory stick and fonts folders, the pipeline cache,
+  and `screen stops at`;
 - `ran`: what the run had: the renderer the core used (`Software` if Vulkan didn't start, as it
   falls back), the GPU's device as its driver names it, whether the GPU was lost during the run
   (`gpu lost`: the software renderer drew from then on), the resolution, the engine, the GE's
@@ -205,13 +210,14 @@ game: tests/psp/programs/cube.elf
 --
 frames run: 60
 program: still running
-frames per second: 553.38
-frames per second, captures left out: 577.23 (captures took 0.004 s)
+frames per second: 1849.32
+capture seconds: 0.002 (1979.92 frames a second without them)
 unique missing functions: 0
 ```
 
 `tests/psp/ares/runner-test.sh` runs this with `--report`, and checks the summary, the PNGs, the
 WAV and the report. Then the clock: two runs started at the same time save the same state and
-one started at another time a different one, a loaded state keeps its own clock, and a start
-time past 32 bits is refused. Then a stale capture and one with no picture at all, and a game's
-name that isn't UTF-8, where the filesystem takes one (not macOS's).
+one started at another time a different one, and a loaded state keeps its own clock. Numbers
+past 32 bits, or with more after them, are refused. Then a stale capture and one with no
+picture at all, and a game's name that isn't UTF-8, where the filesystem takes one (not
+macOS's).
