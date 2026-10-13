@@ -199,7 +199,7 @@ auto PGF::record(u32 index, Glyph& glyph, bool composite) const -> bool {
   u64 start = glyphsAt + u64(entry(pointersAt, pointerBits, index)) * 4;
   if(start >= bytes.size()) return false;
   PgfBits bits{bytes.data() + start, bytes.size() - start};
-  bits.read(14);  //the character part's length: only a shadow is looked for past it
+  glyph.recordLength = bits.read(14);  //the character part's length: only a shadow is looked for past it
   glyph.width = bits.read(7);
   glyph.height = bits.read(7);
   glyph.left = bits.signed7();

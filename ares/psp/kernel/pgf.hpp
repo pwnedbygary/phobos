@@ -96,6 +96,7 @@ struct PGF {
     s32 bearingY[2] = {};
     s32 advance[2] = {};
     u32 shadowFlags = 0, shadowID = 0;
+    u32 recordLength = 0;         //its record's own part, in bytes (the 14 bits that lead it)
     std::vector<u8> pixels;       //width * height shades, 0 to 15, row by row
   };
 

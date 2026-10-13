@@ -222,6 +222,7 @@ struct Kernel {
   //modules' (pspkerror.h)
   static constexpr u32 ErrorIllegalObject         = 0x8002'012d;  //not a module, or one the loader refuses
   static constexpr u32 ErrorUnknownModule         = 0x8002'012e;
+  static constexpr u32 ErrorUnknownModuleFile     = 0x8002'012f;  //a module's path with a '%' in it (uOFW)
   static constexpr u32 ErrorAlreadyStarted        = 0x8002'0133;
   static constexpr u32 ErrorNotStarted            = 0x8002'0134;
   static constexpr u32 ErrorAlreadyStopped        = 0x8002'0135;
@@ -237,6 +238,10 @@ struct Kernel {
                                                   //the program's alloc or free called by sceLibFont; 40 on, a
                                                   //movie ring's callback; 48 on, a function on a lent stack)
   static constexpr u32 InterruptStack = 0x0802'0000;  //kernel memory: the top of the stack calls into the program use
+  static constexpr u32 AtracContextMemory = 0x0803'0000;  //kernel memory: the six ATRAC IDs' contexts (atrac.cpp)
+  static constexpr u32 VaudioMemory = 0x0803'1000;  //kernel memory: sceVaudio's two buffers, each with room for the
+                                                    //SRC channel's longest, 4111 pairs of samples (audio.cpp)
+  static constexpr u32 VaudioBufferBytes = 0x4100;
   static constexpr u32 UserMemory = 0x0880'0000;  //the user partition, games' memory, runs from here to the end of RAM
   static constexpr u32 ProgramBase = UserMemory + 0x4000;  //where a program that's a PRX goes (start())
 
@@ -340,8 +345,9 @@ struct Kernel {
     Wait wait = Wait::None;
     u32 waitID = 0;        //the semaphore, mutex (a kernel one's ID, a lightweight one's work area), thread, event
                            //flag, display list, module, message pipe, mailbox or thread-local storage pool waited
-                           //for; the sound channel (0-7 a mixer channel's, Audio::WaitSrc or WaitSrcDrain the SRC
-                           //channel's); the file whose asynchronous request is waited for, or that a synchronous
+                           //for; the sound channel (0-7 a mixer channel's, Audio::WaitSrc, WaitSrcDrain or
+                           //WaitVaudioRelease the SRC channel's); the file whose asynchronous request is waited for,
+                           //or that a synchronous
                            //read or write went to
     u32 waitCount = 0;     //how many a semaphore or mutex wait needs (the count a mutex is to be held with); the
                            //bits an event flag wait needs; a mixer output's left volume; the samples an SRC output's
@@ -773,6 +779,7 @@ struct Kernel {
       u32 time = 0;              //when it was taken, in microseconds
       u32 buttons = 0;
       u8 x = 128, y = 128;       //the stick (centred unless sampling was analog)
+      u8 rightX = 128, rightY = 128;  //the host's right stick, the same way (not the PSP's: ctrl.cpp; not in states)
     };
     struct Latch {                 //since the latch was last read:
       u32 made = 0, broken = 0;    //buttons pressed, and let go
@@ -781,6 +788,7 @@ struct Kernel {
     };
     u32 buttons = 0;                  //what the player holds now (PSP_CTRL_* bits): the system sets these
     u8 analogX = 128, analogY = 128;  //the stick, 0-255 on each axis, 128 when left alone
+    u8 rightX = 128, rightY = 128;    //the host's right stick, the same way (a convention: ctrl.cpp; not in states)
     u32 cycle = 0, mode = 0;          //sampling cycle (0: at each vertical blank; else microseconds) and mode
     u64 nextSample = 0;               //with a cycle: when the next sample is due
     Sample samples[64];               //the last 64 samples, a ring: the next one goes over samples[next], the oldest
@@ -1108,7 +1116,9 @@ struct Kernel {
     //n * CPUFrequency / 44100, which is n * FrameCycles / FrameRate with the fraction cut down (370000 / 49).
     static constexpr u64 FrameCycles = 370'000, FrameRate = 49;
     static_assert(FrameCycles * 44'100 == CPUFrequency * FrameRate);
-    static constexpr u32 WaitSrc = 8, WaitSrcDrain = 9;  //waitIDs on the SRC channel (0-7: the mixer channels)
+    //waitIDs on the SRC channel (0-7: the mixer channels): for a completion, for it to drain, and for it to drain so
+    //that sceVaudioChRelease can release it
+    static constexpr u32 WaitSrc = 8, WaitSrcDrain = 9, WaitVaudioRelease = 10;
     //An SRC buffer's slot frees as its transfer ends, 100 microseconds before its last samples are heard
     //(srcOutput()); the shortest buffer, 17 samples at 48 kHz, plays for 354.
     static constexpr u64 SrcLead = CPUFrequency / 10'000;
@@ -1159,6 +1169,14 @@ struct Kernel {
       u64 renderedTo = 0;
       u64 position = 0;
     } src;
+    //sceVaudio's channel: the SRC channel, held by sceVaudioChReserve; its buffers, single samples or pairs, copied
+    //as pairs into the kernel's two (VaudioMemory) and armed from there (audio.cpp)
+    struct Vaudio {
+      bool reserved = false;          //held by sceVaudioChReserve (even where the SRC channel refused it: audio.cpp)
+      bool ownsSrc = false;           //and the SRC channel reserved for it
+      bool mono = false;              //its buffers single samples (format 1), else pairs (2)
+      s32 effect = 0, effectVolume = 0, alc = 0;  //sceVaudioSetEffectType's and sceVaudioSetAlcMode's: kept, not heard
+    } vaudio;
   } audio;
   auto sampleFrame(u64 cycle, u32 fraction = 0) const -> u64;
   auto frameCycle(u64 frame) const -> u64;
@@ -1174,9 +1192,9 @@ struct Kernel {
   auto srcRender(u64 until, bool wholeBuffer = false) -> void;
   auto srcRetire() -> bool;
   auto audioOutput(std::vector<s16>& frames) -> void;
-  auto srcReserve(u32 samples, u32 rate, u32 channels) -> void;
-  auto srcRelease() -> void;
-  auto srcOutput() -> void;
+  auto srcReserve(u32 samples, u32 rate, u32 channels) -> u32;
+  auto srcRelease() -> u32;
+  auto srcOutput(s32 volume, u32 buffer) -> void;
   auto audioEvents() -> bool;
   auto nextAudioEvent() const -> u64;
   auto sceAudioChReserve() -> void;
@@ -1198,6 +1216,11 @@ struct Kernel {
   auto sceAudioSRCChReserve() -> void;
   auto sceAudioSRCOutputBlocking() -> void;
   auto sceAudioSRCChRelease() -> void;
+  auto sceVaudioChReserve() -> void;
+  auto sceVaudioChRelease() -> void;
+  auto sceVaudioOutputBlocking() -> void;
+  auto sceVaudioSetEffectType() -> void;
+  auto sceVaudioSetAlcMode() -> void;
 
   //messages.cpp: message pipes (bytes from thread to thread, through a buffer or straight across) and mailboxes
   //(packets the program keeps in its own memory, handed over by address)
@@ -1284,6 +1307,7 @@ struct Kernel {
   std::vector<s32> sasSums;        //a grain's dry and wet sums as it's made (working room, not saved)
   std::vector<s16> sasSamples;     //and the 16-bit samples it writes
   auto sasVoice(u32 number) -> Sas::Voice*;
+  auto sasVoiceWord(u32 core, u32 number, u32 value) -> void;
   auto sasEnvelope(Sas::Voice& voice) -> void;
   auto sasBlock(Sas::Voice& voice, u32 block, u8* bytes) -> bool;
   auto sasNext(Sas::Voice& voice, u8* bytes) -> bool;
@@ -1364,6 +1388,7 @@ struct Kernel {
   auto sceMpegInit() -> void;
   auto sceMpegFinish() -> void;
   auto sceMpegRingbufferQueryMemSize() -> void;
+  auto sceMpegRingbufferQueryPackNum() -> void;
   auto sceMpegQueryMemSize() -> void;
   auto sceMpegRingbufferConstruct() -> void;
   auto sceMpegRingbufferDestruct() -> void;
@@ -1601,8 +1626,8 @@ struct Kernel {
   };
   Atrac atracs[6];
   u32 atracPlusIDs = 2, atracClassicIDs = 2;  //how sceAtracReinit shares the six IDs between the codecs
-  u32 atracContexts = 0;        //the memory _sceAtracGetContextAddress hands out (made the first time it's asked)
-  auto atracFind(u32 id, bool needData = true) -> Atrac*;
+  u32 atracContexts = AtracContextMemory;  //where the six IDs' contexts are, 256 bytes each (atrac.cpp)
+  auto atracFind(u32 id, bool needData = true, bool byContext = false) -> Atrac*;
   auto atracParse(Atrac& atrac, u32 buffer, u32 size) -> u32;
   auto atracSet(u32 id, u32 buffer, u32 readSize, u32 bufferSize, bool mono) -> u32;
   auto atracFrame(Atrac& atrac, u32& address) -> u32;
@@ -1716,11 +1741,15 @@ struct Kernel {
     u32 mode = 0;               //1: read whole into the program's memory (else a piece at a time)
     u32 references = 0;         //handles holding it open
     std::vector<u32> blocks;    //the memory it took from the program, given back as its last handle closes
+    u32 held = 0;               //the glyph it last read, its number plus 1 (0: none), in two blocks of the
+    std::vector<u32> glyphBlocks;  //program's: its record and its picture (fontCharacter()), given back with blocks
     u64 hash = 0;               //its bytes' (a system font's or a file's): a state's must be the same
     std::shared_ptr<PGF> pgf;   //its glyphs (not saved: read again when a state is loaded)
   };
   struct FontCall {             //a library function part way through, calling the program's own alloc or free
-    enum Kind : u32 { NewLib = 1, Open, Give };  //Give: only gives memory back (a close, the library done with)
+    //Give: only gives memory back (a close, the library done with, a flush); Glyph: a character's info or picture,
+    //its glyph read into memory of the program's
+    enum Kind : u32 { NewLib = 1, Open, Give, Glyph };
     u32 kind = 0;
     Context caller{};           //the thread where it called the library: put back as the function returns
     u32 library = 0;            //the library (sceFontNewLib's: its parameters)
@@ -1733,6 +1762,9 @@ struct Kernel {
     bool ended = false;         //what it makes is made (fontEnd()): what's left is giving back, then returning
     u32 result = 0, error = 0;  //what it returns, and its error
     OpenFont opening;           //an open's font, made once its memory has all come
+    u32 font = 0, glyph = 0;    //a glyph's: the font (its ID) and the glyph's number, which the font then holds,
+    u32 what = 0, out = 0;      //what's asked of it (fontCharacter()'s what: 0, 2 or 3), where the answer goes,
+    u32 clip[4] = {};           //and _Clip's rectangle
   };
   std::map<u32, FontLibrary> fontLibraries;  //by address
   std::map<u32, OpenFont> openFonts;         //by ID
@@ -1747,7 +1779,8 @@ struct Kernel {
   auto fontCount(u32 library) -> u32;
   auto fontStyle(u32 address, const PGF& pgf, s32 system) -> void;
   auto systemFontStyle(u32 address, u32 index) -> void;
-  auto fontGlyph(const OpenFont& font, u32 code, PGF::Glyph& glyph, bool shadow) -> void;
+  auto fontGlyph(const OpenFont& font, u32 code, PGF::Glyph& glyph, bool shadow) -> s32;
+  auto fontAnswer(const PGF::Glyph& glyph, u32 what, u32 out, const u32 clip[4]) -> void;
   auto fontDraw(const PGF::Glyph& glyph, u32 image, s64 clipLeft, s64 clipTop, u64 clipWidth, u64 clipHeight)
     -> void;
   auto fontNext(FontCall& call) -> void;
@@ -1857,6 +1890,19 @@ struct Kernel {
   auto sceKernelUtilsMt19937UInt() -> void;
   auto sceMt19937Init() -> void;
   auto sceMt19937UInt() -> void;
+  //md5.cpp: MD5, the kernel's and its library's (sceMd5)
+  auto md5Init(u32 context) -> u32;
+  auto md5Update(u32 context, u32 data, u32 size) -> u32;
+  auto md5Result(u32 context, u32 digest) -> u32;
+  auto md5Digest(u32 data, u32 size, u32 digest) -> u32;
+  auto sceKernelUtilsMd5Digest() -> void;
+  auto sceKernelUtilsMd5BlockInit() -> void;
+  auto sceKernelUtilsMd5BlockUpdate() -> void;
+  auto sceKernelUtilsMd5BlockResult() -> void;
+  auto sceMd5Digest() -> void;
+  auto sceMd5BlockInit() -> void;
+  auto sceMd5BlockUpdate() -> void;
+  auto sceMd5BlockResult() -> void;
 
   //p3da.cpp: sound channels mixed into stereo (sceP3da)
   auto sceP3daBridgeInit() -> void;
@@ -1907,13 +1953,14 @@ struct Kernel {
     u32 error = 0;         //what an aborted message finishes with: 0, or the error of one a PSP doesn't show
     bool deleted = false;  //a save was deleted from its list, which asks the front end again (dialogs.cpp)
   } dialog;
-  u32 stateLayout = 26;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 31;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;
   auto dialogStatus(u32 kind) -> void;
   auto dialogUpdate(u32 kind) -> void;
   auto dialogShutdown(u32 kind) -> void;
+  static auto keyboardConform(const std::vector<u16>& text, u32 input, u32 lines) -> std::vector<u16>;
   auto keyboard(u32 parameters) -> u32;
   auto keyboardField(u32 field, std::vector<u16> text) -> void;
   static auto hexWord(u32 value) -> std::string;
@@ -1987,10 +2034,12 @@ struct Kernel {
     bool back = false;
     std::string ok, cancel;
     //the keyboard: each field's description and text at first, the most characters it takes (UTF-16 units, as the
-    //PSP counts them), which characters (psputility_osk.h's input types, 0 for any), its lines and its language
+    //PSP counts them), which characters (psputility_osk.h's input types, 0 for any), its lines and its language; and
+    //its text at first as the program's UTF-16 (the kernel's: not in the byte form)
     struct Field {
       std::string description, text;
       u32 most = 0, input = 0, lines = 1, language = 0;
+      std::vector<u16> units = {};
     };
     std::vector<Field> fields;
     //saving and loading: the mode (2 load, 3 save, 4 load from a list, 5 save to a list, 6 delete from a list, 7
@@ -2120,6 +2169,9 @@ struct Kernel {
   static auto localSeconds(s64 seconds, s64& local) -> bool;
   static auto hostZone(s64 seconds, s32& minutes, bool& daylight) -> void;
   auto writeDate(u32 address, u64 microseconds, bool local) -> bool;
+  auto rtcConvertZone(bool toLocal) -> void;
+  auto sceRtcConvertUtcToLocalTime() -> void;
+  auto sceRtcConvertLocalTimeToUTC() -> void;
   struct Exec {  //sceKernelLoadExec's program, put in as the kernel's loop next goes round (never kept in states)
     bool pending = false;
     std::string path;
@@ -2176,6 +2228,8 @@ struct Kernel {
   auto programAsModule() -> void;
   auto unloadSelf(s32 exitStatus, u32 length, u32 argument, u32 options) -> void;
   auto linkImports() -> void;
+  auto relinkVariable(u32 list, u32 delta) -> void;
+  auto noteSystemVariables(const Module& m, const std::string& who) -> void;
   auto moduleAt(u32 address) const -> u32;
   auto moduleFunction(const LoadedModule& loaded, u32 nid) const -> u32;
   auto threadParameters(const Module& module, u32 parameters, u32& priority, u32& stackSize, u32& attributes) const
@@ -2188,6 +2242,7 @@ struct Kernel {
   auto moduleReturned() -> void;
   auto sceKernelLoadModule() -> void;
   auto sceKernelLoadModuleByID() -> void;
+  auto sceKernelLoadModuleNpDrm() -> void;
   auto sceKernelStartModule() -> void;
   auto sceKernelStopModule() -> void;
   auto sceKernelUnloadModule() -> void;

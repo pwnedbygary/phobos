@@ -5,10 +5,11 @@ import com.phobos.emulator.PhobosCore.Input
 /**
  * The PSP's "Right stick" setting: what a controller's right stick does in a PSP game, which has one analog stick. As
  * buttons, its four directions are latched as the N64's C-buttons are ([GameInputState.stickDirections]), so a
- * diagonal presses two.
+ * diagonal presses two. Whatever the choice, the core also hands the stick itself to games patched to read a second
+ * one, such as Armored Core's True Analogs mods ([GameInputState.updateSticks]).
  */
 enum class PspRightStick(val label: String, val description: String) {
-    OFF("Off", "Off: it does nothing."),
+    OFF("Off", "Off: it presses nothing."),
     FACE_BUTTONS(
         "Face buttons",
         "Face buttons: up presses Triangle, right Circle, down Cross and left Square, to aim and fire in twin-stick shooters such as Super Stardust Portable.",
