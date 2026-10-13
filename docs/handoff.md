@@ -25,6 +25,58 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: sound — every ATRAC ID's context kept current (Angus Hates Aliens past NEW GAME), and sceVaudio — 2026-10-12
+
+Branch `cursor/psp-audio-b00-2b67`, on master (`b7ea296f4`, then `1d9308714`, #228). docs/psp-core.md, part 82, has
+the evidence. Items 2 and 5 of the deep-play batch 00 report. Clean room: pspautotests' audio/atrac (the states its
+tests force, sas), audio/blocking/vaudio and audio/sceaudio/reserve recordings, pspsdk's pspatrac3.h and pspvaudio.h,
+pspautotests' sascore.h, PPSSPP read only as a description of the PSP (sceVaudio on the SRC channel), the games' own
+code traced and disassembled; JPCSP not read. Begun by one agent; an independent review's points taken by another.
+**Save states go to StateVersion 31** (sceVaudio's hold; 15 to 28 still load, 27 and 28 being parts 87's and 88's
+layouts). **29 and 30 are skipped**: other open branches' layouts, refused here (as 32 is). Whoever lands one of
+those branches after this one must renumber its layout past 31 and update `tests/psp/ares/system.cpp`'s list of
+refused versions (29, 30 and 32) and `tests/psp/states.cpp`'s older layouts (part 82 says more).
+- **Angus Hates Aliens**: its music goes through sceSas's ATRAC3 voices with a wrapper (the one pspautotests'
+  audio/atrac/sas copies) that sets its ID's context state to 16 and, to stop the music (NEW GAME), unsets the voice
+  only while the context still says 16, asking again for good when refused. `_sceAtracGetContextAddress` rewrote the
+  whole context at every call, so the 16 went back to 2: the black screen, the runner's time all in that call. Now
+  every ID's context is in kernel memory (0x08030000), written at power on and whenever the library changes the ID,
+  only read by `_sceAtracGetContextAddress`; a state a program sets (8, 16) refuses the seven calls recorded so with
+  the recorded errors, the other calls answering as before; `__sceSasSetVoiceATRAC3` keeps the context in the voice's
+  word in the SasCore `__sceSasInit` set up (0 again on unset and on init), where the game's streaming reads it (the 16
+  loads through address 0 at boot). The game now loads and reaches its first level. Still silent: sceSas's ATRAC3
+  voices don't decode (they didn't before).
+- **sceVaudio**: reserve, release, blocking output, the effect and level control setters, on the SRC channel, as
+  pspautotests' vaudio recorded (an output returns its count; a reservation refused while Output2 holds the channel
+  still holds sceVaudio; the release waits for a buffer playing); buffers copied as pairs into two kernel buffers
+  (0x08031000); an output's volume 0 to pspvaudio.h's 0x8000, more refused. Two choices disagree with pspautotests'
+  audio/sceaudio/reserve (mono refused there; a release freeing the SRC channel Output2 held): left for the owner, part
+  82 says how; Battle vs. Chess reserves stereo (format 2) and its outputs' volume, fading in from 0, peaks at 0x35C1,
+  so neither touches it. Battle vs. Chess's music thread plays its MP3 music through it now. **Its moves still aren't
+  carried out**: not sceVaudio. Traced: the confirm reaches the game's pad code; its chess thread runs its engine only
+  when a request word is set, which nothing sets on the confirm; nothing else in its memory changes but the lit squares'
+  colours, and no system call differs (no file, thread or missing function). The prototype's own move code wasn't
+  followed to the end (part 82 has the leads).
+- **Checks** on the final tree (with the review's points): `tests/psp/run-tests.sh` (sanitizers) 479 groups, 0
+  failures; `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 338 checks, 0 failed
+  (before it, 473 groups). Games with the branch's runner: part 82's last paragraph.
+- **Library**: not run by the agents (the first agent's run stopped with its session); the owner runs the 266-game
+  comparison for this branch and #230 together.
+- **Review**: an independent review found NEEDS CHANGES (two state refusals with no check behind them; sceVaudio acting
+  on a channel another caller held after its refused reservation; and lows: a bad rate leaving it held, contexts written
+  on refused calls, the MAX values, untested refusals, wording), all taken in `930c6e2db`; a delta review passed, its
+  two points (the SRC family's release of sceVaudio's channel documented and tested, a test's leftover) taken in
+  `97fac6653`. A later independent review of the merged branch (five Lows), taken by another agent after the first
+  stopped: sceVaudio's volume to 0x8000; the SasCore's word only for the core set up, cleared on unset and init; the
+  older state's test; the context's state looked at by the seven recorded calls alone (Corpse Party's sound byte for
+  byte master's); 27 to 30 noted. Part 82's "The review's points" has each.
+- **On the RP6, to check**: (1) Angus Hates Aliens: NEW GAME passes the loading screen into the first level (black
+  before); its music is still silent. (2) Battle vs. Chess: menu and board music plays (silent before); a move is
+  still refused. (3) Save and load a state in a game playing music (any ATRAC game) and in Battle vs. Chess: it plays
+  on; a state made by this build is refused by builds before it (StateVersion 31).
+- Scratch: `~/phobos-work/scratch/hle-b00`; `~/phobos-work/scratch/review-b00` (the review's points: the runners, the
+  runs in `runs/`, the WAVs in `wav/`).
+
 ## PSP: the host's right stick for patched games, the keyboard in a field's own characters, 7th Dragon 2020-II past its certificate — 2026-10-12
 
 Branch `cursor/psp-input-b00-2b67`, on master (`6ab2c5583`, merged with `b7ea296f4`, #227, then `1d9308714`, #228).
