@@ -887,13 +887,127 @@ static auto tickArithmetic() -> void {
   CHECK(m.notes.size(), 0);
 }
 
+//MD5 in the program's memory, the kernel's and sceMd5's alike (God Eater 2's update hashes with the library), as
+//pspautotests' hash/md5ctx recorded the kernel's on a PSP: its text's digest, and its first half's, at once and by
+//blocks; the context written only to 32 bytes by BlockInit (the four chaining words, a word left alone, nothing
+//waiting, nothing taken), and to 96 by a whole block (the words stirred, as recorded, 64 taken, none waiting); five
+//bytes more wait at 32, 69 taken; two contexts at once; a context copied goes on alike. And the RFC's own digests,
+//across the block's padding; a context or data out of memory refused.
+static auto md5Hashes() -> void {
+  const std::string text = "Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt "
+                           "ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation.";
+  struct Names { const char *digest, *init, *update, *result; };
+  for(auto names : {Names{"sceKernelUtilsMd5Digest", "sceKernelUtilsMd5BlockInit", "sceKernelUtilsMd5BlockUpdate",
+                          "sceKernelUtilsMd5BlockResult"},
+                    Names{"sceMd5Digest", "sceMd5BlockInit", "sceMd5BlockUpdate", "sceMd5BlockResult"}}) {
+    KernelMachine m;
+    constexpr u32 Context = R + 0x100, Other = R + 0x200, Copy = R + 0x300, Digest = R + 0x400, Data = R + 0x1000;
+    u32 data = m.string(text), half = text.size() / 2;
+    auto hex = [&](u32 at) {
+      std::string out;
+      char pair[3];
+      for(u32 n = 0; n < 16; n++) {
+        std::snprintf(pair, sizeof(pair), "%02x", m.system.memory.read(1, at + n));
+        out += pair;
+      }
+      return out;
+    };
+    CHECK(m.call(names.digest, {data, u32(text.size()), Digest}), 0);
+    CHECK(hex(Digest) == "5c2cb4d92a89056f07e6ddda4e0e2120", true);
+    m.system.memory.fill(Context - 32, 0xcc, 96 + 64);
+    CHECK(m.call(names.init, {Context}), 0);
+    const u32 started[8] = {0x6745'2301, 0xefcd'ab89, 0x98ba'dcfe, 0x1032'5476, 0xcccc'cccc, 0, 0, 0};
+    for(u32 n = 0; n < 8; n++) CHECK(m.system.memory.read(4, Context + n * 4), started[n]);
+    CHECK(m.system.memory.read(4, Context + 32) == 0xcccc'cccc && m.system.memory.read(4, Context - 4) == 0xcccc'cccc,
+          true);
+    CHECK(m.call(names.update, {Context, data, 64}), 0);
+    const u32 block[8] = {0x632d'18d4, 0xcd1c'aeb8, 0x858d'cfd6, 0x0a93'9a01, 0xcccc'cccc, 0, 0x40, 0};
+    for(u32 n = 0; n < 8; n++) CHECK(m.system.memory.read(4, Context + n * 4), block[n]);
+    CHECK(m.system.memory.read(4, Context + 92) != 0xcccc'cccc && m.system.memory.read(4, Context + 96) == 0xcccc'cccc,
+          true);
+    CHECK(m.call(names.update, {Context, data + 64, 5}), 0);
+    CHECK(m.system.memory.read(4, Context + 20), 5);
+    CHECK(m.system.memory.read(4, Context + 24), 0x45);
+    CHECK(m.system.memory.read(4, Context + 32), m.system.memory.read(4, data + 64));
+    CHECK(m.call(names.update, {Context, data + 69, u32(text.size()) - 69}), 0);
+    CHECK(m.call(names.result, {Context, Digest}), 0);
+    CHECK(hex(Digest) == "5c2cb4d92a89056f07e6ddda4e0e2120", true);
+    //two at once, B the first half: neither disturbs the other
+    m.call(names.init, {Context});
+    m.call(names.init, {Other});
+    m.call(names.update, {Context, data, half});
+    m.call(names.update, {Other, data, half});
+    m.call(names.update, {Context, data + half, u32(text.size()) - half});
+    CHECK(m.call(names.result, {Other, Digest}), 0);
+    CHECK(hex(Digest) == "b08792c1ed6c9b29e05b1c5be22c7cd9", true);
+    CHECK(m.call(names.result, {Context, Digest}), 0);
+    CHECK(hex(Digest) == "5c2cb4d92a89056f07e6ddda4e0e2120", true);
+    //a context copied part way finishes as the original does
+    m.call(names.init, {Context});
+    m.call(names.update, {Context, data, half});
+    std::vector<u8> context(96);
+    m.system.memory.copyOut(context.data(), Context, 96);
+    m.system.memory.copyIn(Copy, context.data(), 96);
+    m.call(names.update, {Copy, data + half, u32(text.size()) - half});
+    CHECK(m.call(names.result, {Copy, Digest}), 0);
+    CHECK(hex(Digest) == "5c2cb4d92a89056f07e6ddda4e0e2120", true);
+    //RFC 1321's examples, the last two each side of a second padding block (55 and 56 bytes waiting)
+    for(auto [message, digest] : {std::pair{std::string{}, "d41d8cd98f00b204e9800998ecf8427e"},
+                                  {"abc", "900150983cd24fb0d6963f7d28e17f72"},
+                                  {std::string(55, 'a'), "ef1772b6dff9a122358552954ad0df65"},
+                                  {std::string(56, 'a'), "3b0c8ac703f828b04c6c197006d17218"},
+                                  {std::string(1000, 'a'), "cabe45dcc9ae5b66ba86600cca6b8ba8"}}) {
+      m.system.memory.copyIn(Data, message.data(), message.size());
+      CHECK(m.call(names.digest, {Data, u32(message.size()), Digest}), 0);
+      CHECK(hex(Digest) == digest, true);
+      m.call(names.init, {Context});
+      for(u32 at = 0; at < message.size(); at += 7) {
+        m.call(names.update, {Context, Data + at, std::min<u32>(7, message.size() - at)});
+      }
+      CHECK(m.call(names.result, {Context, Digest}), 0);
+      CHECK(hex(Digest) == digest, true);
+    }
+    CHECK(m.call(names.init, {0x0a00'0000}), Kernel::ErrorIllegalAddress);
+    CHECK(m.call(names.update, {Context, 0x0a00'0000, 4}), Kernel::ErrorIllegalAddress);
+    CHECK(m.call(names.update, {Context, 0x0a00'0000, 0}), 0);
+    CHECK(m.call(names.result, {Context, 0x0a00'0000}), Kernel::ErrorIllegalAddress);
+    CHECK(m.call(names.digest, {data, 4, 0x0a00'0000}), Kernel::ErrorIllegalAddress);
+    CHECK(m.notes.size(), 0);
+  }
+}
+
+//A tick moved between UTC and the host's local time (sceRtcConvertUtcToLocalTime, and the way back), by the host's
+//offset then as the clock's local dates have it (God Eater 2 asks once it has made its first save): to local and
+//back again gives the tick it started from; an address out of memory is INVALID_POINTER.
+static auto clockZones() -> void {
+  KernelMachine m;
+  constexpr u64 From1To1970 = 62'135'596'800ull * 1'000'000;
+  for(s64 seconds : {s64(1'791'290'096), s64(1'780'000'000), s64(0)}) {  //2026-10-06, 2026-05-28, 1970
+    std::time_t time = seconds;
+    std::tm local{};
+    localtime_r(&time, &local);
+    s64 offset = (s64(timegm(&local)) - seconds) * 1'000'000;
+    u64 utc = From1To1970 + u64(seconds) * 1'000'000 + 123'456;
+    m.system.memory.write(4, R, u32(utc));
+    m.system.memory.write(4, R + 4, u32(utc >> 32));
+    CHECK(m.call("sceRtcConvertUtcToLocalTime", {R, R + 8}), 0);
+    u64 converted = m.system.memory.read(4, R + 8) | u64(m.system.memory.read(4, R + 12)) << 32;
+    CHECK(converted, utc + offset);
+    CHECK(m.call("sceRtcConvertLocalTimeToUTC", {R + 8, R + 16}), 0);
+    CHECK(m.system.memory.read(4, R + 16) | u64(m.system.memory.read(4, R + 20)) << 32, utc);
+  }
+  CHECK(m.call("sceRtcConvertUtcToLocalTime", {0, R + 8}), Kernel::ErrorInvalidPointer);
+  CHECK(m.call("sceRtcConvertLocalTimeToUTC", {R, 0x0a00'0000}), Kernel::ErrorInvalidPointer);
+}
+
 auto powerTests() -> Tests {
   return {
     {"power callbacks", powerCallbacks}, {"power clocks", powerClocks}, {"power volatile memory", volatileMemory},
     {"power volatile memory waited for", volatileWaits},
     {"power volatile memory locked at once", volatileLockedAtOnce}, {"kernel thread delays' lengths", delayLengths},
     {"kernel thread control", threadControl}, {"kernel thread status", threadStatus}, {"kernel clocks", clocks},
-    {"kernel mersenne twister", mersenneTwister}, {"kernel odds and ends", oddsAndEnds},
+    {"kernel mersenne twister", mersenneTwister}, {"kernel md5", md5Hashes}, {"kernel clock zones", clockZones},
+    {"kernel odds and ends", oddsAndEnds},
     {"kernel thread priorities", threadPriorities}, {"kernel thread stack free", stackFree},
     {"remote and running time", remoteAndRunningTime},
     {"power the clock beside the wireless LAN", wlanClock},

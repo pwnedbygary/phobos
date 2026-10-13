@@ -27,7 +27,18 @@ static constexpr u32 StartParameters = 0x0f7c'276c, StopParameters = 0xcf0c'c697
 //0x200, export entries at 0x240, import entries at 0x2c0, export tables at 0x300, import NIDs at 0x380 and stubs at
 //0x3c0, names at 0x400, any more words from 0x500; 0x1000 bytes in memory.
 struct TestModule {
-  struct Library { std::string name; std::vector<std::pair<u32, u32>> functions; };  //NIDs and code offsets
+  //NIDs and offsets: its functions' code, and its variables' (after the functions in its table)
+  struct Library {
+    std::string name;
+    std::vector<std::pair<u32, u32>> functions, variables;
+    using Entries = std::vector<std::pair<u32, u32>>;
+    Library(std::string name, Entries functions, Entries variables = {})
+    : name(std::move(name)), functions(std::move(functions)), variables(std::move(variables)) {}
+  };
+  //an imported variable: an import entry of 6 words of its own, its table at 0x700 (the list's address and the NID)
+  //and its list from 0x740 on: each word's kind (2, 5 or 6) and offset, a word address that moves with the module
+  //(relocated as a jump's target is), then 0
+  struct Variable { std::string library; u32 nid; std::vector<std::pair<u32, u32>> words; };
   std::string name = "TESTMODULE";
   u16 attributes = 0;
   std::vector<u32> code;                              //at 0
@@ -38,6 +49,7 @@ struct TestModule {
   std::map<u32, u32> words;                           //more words, by offset (from 0x500)
   std::vector<Library> exports;
   std::vector<std::pair<std::string, u32>> imports;   //a stub for each, at 0x3c0 + 8n
+  std::vector<Variable> imported;                     //after the functions' import entries (two at most beside one)
 
   auto build() -> std::vector<u8> {
     ElfBuilder elf;
@@ -67,7 +79,8 @@ struct TestModule {
     entries.insert(entries.end(), exports.begin(), exports.end());
     for(auto& library : entries) {
       bool mine = library.name.empty();
-      u32 functions = library.functions.size(), count = functions + (mine ? ownVariables.size() : 0);
+      auto& offered = mine ? ownVariables : library.variables;
+      u32 functions = library.functions.size(), count = functions + offered.size();
       if(mine) b.put32(entry, 0); else pointer(entry, string(library.name));
       b.put32(entry + 4, mine ? 0x8000'0000 : 0x0001'0000);
       b.put32(entry + 8, 4 | (count - functions) << 8 | functions << 16);
@@ -76,9 +89,9 @@ struct TestModule {
         b.put32(table + n * 4, library.functions[n].first);
         pointer(table + (count + n) * 4, library.functions[n].second);
       }
-      for(u32 n = functions; n < count; n++) {  //its own variables, after the functions
-        b.put32(table + n * 4, ownVariables[n - functions].first);
-        pointer(table + (count + n) * 4, ownVariables[n - functions].second);
+      for(u32 n = functions; n < count; n++) {  //its variables, after the functions
+        b.put32(table + n * 4, offered[n - functions].first);
+        pointer(table + (count + n) * 4, offered[n - functions].second);
       }
       entry += 16, table += count * 8;
     }
@@ -100,6 +113,22 @@ struct TestModule {
         b.put32(0x3c0 + i * 8 + 4, nop);
       }
       entry += 20;
+    }
+    u32 tables = 0x700, lists = 0x740;
+    for(auto& variable : imported) {
+      pointer(entry, string(variable.library));
+      b.put32(entry + 4, 0x0011'0000);
+      b.put32(entry + 8, 6 | 1 << 8);  //no functions, one variable
+      pointer(entry + 20, tables);
+      pointer(tables, lists);
+      b.put32(tables + 4, variable.nid);
+      for(auto [kind, offset] : variable.words) {
+        b.put32(lists, kind << 26 | offset >> 2);
+        relocation(relocations, lists, 4);
+        lists += 4;
+      }
+      b.put32(lists, 0);
+      lists += 4, tables += 8, entry += 24;
     }
 
     b.put16(0x200, attributes);
@@ -368,6 +397,113 @@ static auto bootModule(u32 path) -> TestModule {
   m.code.insert(m.code.end(), {jr(ra), addiu(v0, zero, 0x77)});
   m.exports = {{"ProgLib", {{ProgramNID, function}}}};
   return m;
+}
+
+//Sony's packed relocations (PT_PSP_REL2, the loader's relocatePacked()), as this file writes them: 3 bits for a
+//command's kind and 4 for its type, so a two-segment module's commands keep 8 bits for an offset's move (-128 to 127).
+//The kinds, by index: 1 a segment named, the rest of the word its offset; 2 a relocation, moved by the rest; 3 the
+//same with a 16-bit addend after it; 4 moved by the rest as an upper half with a 16-bit lower half after it; 5 moved
+//to a 32-bit offset after it; 6 moved by the rest, the addend the one before if that was an upper half's; 7 a
+//segment named, a 32-bit offset after it. The types, by index: 1 jal, 2 an upper half, 3 a lower half, 4 j, 5 a
+//32-bit word, 6 a jump's target, 7 16 bits, 8 nothing.
+struct Packed {
+  enum Form { Near, Addend, Far, To, Kept };
+  struct Relocation { u32 segment, offset, target, type; Form form; u32 addend; };
+  static auto at(u32 segment, u32 offset, u32 target, u32 type, Form form = Near, u32 addend = 0) -> Relocation {
+    return {segment, offset, target, type, form, addend};
+  }
+  std::vector<u8> header = {0, 0, 3, 4, 8, 0x00, 0x01, 0x11, 0x03, 0x05, 0x09, 0x04, 9, 7, 4, 5, 6, 2, 3, 1, 0};
+  std::vector<Relocation> relocations;
+  bool farSegment = false;  //the second segment named with a 32-bit offset
+
+  auto build() -> Bytes {
+    Bytes table;
+    for(u8 byte : header) table.put8(table.data.size(), byte);
+    auto put16 = [&](u32 value) { table.put16(table.data.size(), value); };
+    auto put32 = [&](u32 value) { table.put32(table.data.size(), value); };
+    static constexpr u32 Types[] = {0, 7, 4, 5, 6, 2, 3, 1, 0};
+    u32 segment = ~0u, at = 0;
+    for(auto& r : relocations) {
+      if(r.segment != segment) {
+        if(r.segment && farSegment) put16(7 | r.segment << 3), put32(r.offset);
+        else put16(1 | r.segment << 3 | r.offset << 4);
+        segment = r.segment, at = r.offset;
+      }
+      u32 type = std::find(std::begin(Types) + 1, std::end(Types), r.type) - std::begin(Types);
+      s32 moved = s32(r.offset - at);
+      u32 kind = r.form == Near ? 2 : r.form == Addend ? 3 : r.form == Far ? 4 : r.form == To ? 5 : 6;
+      u32 rest = r.form == Far ? u32(moved) >> 16 : r.form == To ? 0 : u32(moved);
+      put16(kind | r.target << 3 | type << 4 | (rest & 0xff) << 8);
+      if(r.form == Far) put16(u32(moved) & 0xffff);
+      if(r.form == To) put32(r.offset);
+      if(r.form == Addend) put16(r.addend);
+      at = r.offset;
+    }
+    return table;
+  }
+};
+
+//"TESTPACKED", as God Eater 2's update modules are made: two segments, its code at 0 and its data at 0x1000 (0x40
+//bytes in the file, 0x80 in memory), its relocations packed, no sections (the module info found by the first
+//program header's physical address, a file offset). Its module_start builds an address in the data with lui and
+//addiu (an upper half with an addend), stores 0x600d there, calls fn with a jal (which writes 0xf00d at Results +
+//0x24), builds the data's address and 0x7ff0 twice, two luis sharing one addend (the second's kept; with the data's
+//0x1000, the upper half carries), stores both at Results + 0x28 and + 0x2c, and leaves through a j. Beside the code:
+//a jal relocated as a jump's target (0x120), 16 bits (0x130), and a word nothing relocates (0x140); in the data,
+//pointers to fn, to data + 0x20 and to text + 0x50. Its relocations name each kind of command (packed.relocations,
+//in the order written); a table given instead (one broken) goes in their place.
+static auto packedModule(bool farSegment = false, const Bytes* table = nullptr) -> std::vector<u8> {
+  constexpr u32 Data = 0x1000;
+  Bytes text, data;
+  u32 code[] = {addiu(sp, sp, -16), sw(ra, 12, sp), lui(t0, 0), addiu(t0, t0, 0x10), ori(t1, zero, 0x600d),
+                sw(t1, 0, t0), jal(0x100), nop, lui(t2, 0), lui(t3, 0), addiu(t2, t2, 0x7ff0), addiu(t3, t3, 0x7ff0),
+                lui(t9, Results >> 16), sw(t2, 0x28, t9), sw(t3, 0x2c, t9), lw(ra, 12, sp), j(0x50),
+                addiu(sp, sp, 16), nop, nop, jr(ra), addiu(v0, zero, 0)};
+  for(u32 n = 0; n < std::size(code); n++) text.put32(n * 4, code[n]);
+  u32 fn[] = {lui(t9, Results >> 16), ori(t1, zero, 0xf00d), sw(t1, 0x24, t9), jr(ra), nop};
+  for(u32 n = 0; n < std::size(fn); n++) text.put32(0x100 + n * 4, fn[n]);
+  text.put32(0x120, jal(0x100));
+  text.put32(0x130, ori(t0, zero, 0x44));
+  text.put32(0x140, 0x1234'5678);
+  //module info at 0x200 (gp 0x800 into the data), its own exports at 0x240 (module_start, module_info), their table
+  //at 0x300, no imports
+  text.put16(0x200, 0);
+  text.put8(0x202, 1);
+  text.putString(0x204, "TESTPACKED");
+  for(auto [at, value] : {std::pair{0x220u, 0x800u}, {0x224u, 0x240u}, {0x228u, 0x250u}, {0x22cu, 0x250u},
+                          {0x230u, 0x250u}}) text.put32(at, value);
+  text.put32(0x244, 0x8000'0000);
+  text.put32(0x248, 4 | 1 << 8 | 1 << 16);
+  text.put32(0x24c, 0x300);
+  for(auto [at, value] : {std::pair{0x300u, 0xd632'acdbu}, {0x304u, 0xf01d'73a7u}, {0x308u, 0u}, {0x30cu, 0x200u}}) {
+    text.put32(at, value);
+  }
+  text.at(0x600);
+  data.put32(0x00, 0x100);
+  data.put32(0x04, 0x20);
+  data.put32(0x08, 0x50);
+  data.at(0x40);
+  Packed packed;
+  packed.farSegment = farSegment;
+  auto at = &Packed::at;
+  auto far = Packed::Far, kept = Packed::Kept;
+  packed.relocations = {
+    at(0, 0x008, 1, 4, Packed::Addend, 0x10), at(0, 0x00c, 1, 5, Packed::Near, 0), at(0, 0x018, 0, 7, Packed::Near, 0),
+    at(0, 0x020, 1, 4, Packed::Addend, 0x7ff0), at(0, 0x024, 1, 4, kept, 0), at(0, 0x028, 1, 5, Packed::Near, 0),
+    at(0, 0x02c, 1, 5, kept, 0), at(0, 0x040, 0, 6, Packed::Near, 0), at(0, 0x120, 0, 3, far, 0),
+    at(0, 0x130, 0, 1, Packed::Near, 0), at(0, 0x140, 0, 0, Packed::Near, 0), at(0, 0x220, 1, 2, Packed::To, 0),
+    at(0, 0x224, 0, 2, far, 0), at(0, 0x228, 0, 2, Packed::Near, 0), at(0, 0x22c, 0, 2, Packed::Near, 0),
+    at(0, 0x230, 0, 2, Packed::Near, 0), at(0, 0x24c, 0, 2, Packed::Near, 0), at(0, 0x308, 0, 2, far, 0),
+    at(0, 0x30c, 0, 2, Packed::Near, 0), at(1, 0x000, 0, 2, Packed::Near, 0), at(1, 0x004, 1, 2, Packed::Near, 0),
+    at(1, 0x008, 0, 2, Packed::Near, 0),
+  };
+
+  ElfBuilder elf;
+  elf.withSections = false;
+  elf.segments.push_back({1, 0, 0xa0 + 0x200, text});  //the module info at file offset 0xa0 + 0x200
+  elf.segments.push_back({1, Data, 0, data, 0x80});
+  elf.segments.push_back({0x7000'00a1, 0, 0, table ? *table : packed.build()});
+  return elf.build();
 }
 
 //A machine whose own areas (the test program's code, its stubs, strings and results) are handed out first, so the
@@ -1470,6 +1606,310 @@ static auto unloadFromLentStack() -> void {
   }
 }
 
+static constexpr u32 NpDrmNID = 0xf2d8'd1b4;  //sceKernelLoadModuleNpDrm: not its name's hash (kernel.cpp's addNID)
+
+//sceKernelLoadModuleNpDrm called directly: (path, flags, options).
+static auto loadNpDrm(KernelMachine& m, u32 path, u32 flags = 0, u32 options = 0) -> u32 {
+  m.system.ipu.r[a0] = path, m.system.ipu.r[a1] = flags, m.system.ipu.r[a2] = options;
+  m.kernel.syscall(m.kernel.importCode("ModuleMgrForUser", NpDrmNID));
+  return m.system.ipu.r[v0];
+}
+
+//God Eater 2's update modules, loaded with sceKernelLoadModuleNpDrm from the game's folder on the memory stick, as its
+//English translation carries them, plain ELFs (here TESTLIB), by a program on both engines: loaded and started as
+//sceKernelLoadModule's are, module_start run; an encrypted module (TESTUSER, ~PSP) as the decrypter has it, its
+//import of add reaching TESTLIB's; one with packed relocations (TESTPACKED), whose module_start runs as relocated.
+//Refused, as uOFW's module manager checks, in its order: from an interrupt handler; a path of 0 or out of memory, or
+//with a '%' in it; options out of memory, or (for a program built with SDK 2.80 or later) not 20 bytes long; a file
+//that isn't there, or a folder, as sceIoOpen refuses it; an NPDRM module as sold (EDATA, whose key Phobos doesn't
+//derive), noted; and what isn't a module. Nothing refused leaves anything behind. Taken: options of 20 bytes, of 16
+//from an older SDK's program, any flags.
+static auto downloadModules() -> void {
+  HostFolder stick;
+  const std::string folder = "PSP/GAME/NPJH00000/";
+  put(stick, (folder + "LIB.SPRX").c_str(), libraryModule().build());
+  put(stick, (folder + "USER.SPRX").c_str(), psp_encrypt::encrypt(userModule().build()));
+  put(stick, (folder + "PACKED.SPRX").c_str(), packedModule());
+  std::string edata(0x200, 'e');
+  edata.replace(0, 8, std::string("\0PSPEDAT", 8));
+  stick.put(folder + "EDATA.SPRX", edata);
+  stick.put(folder + "TEXT.SPRX", "not a module at all");
+  stick.put(folder + "DIR/X", "x");
+  auto path = [&](KernelMachine& m, const char* name) { return m.string("ms0:/" + folder + name); };
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    machine(m);
+    m.kernel.mount("ms0", stick.path.string());
+    u32 stub = KernelMachine::Stubs + 0x800;  //a stub of its own, for a function known by its NID alone
+    m.system.memory.write(Allegrex::Word, stub, jr(ra));
+    m.system.memory.write(Allegrex::Word, stub + 4, syscall(m.kernel.importCode("ModuleMgrForUser", NpDrmNID)));
+    Assembler main{m, 0x0880'1000};
+    main.li(s0, Results);
+    for(auto [name, at] : {std::pair{"LIB.SPRX", 0x100}, std::pair{"USER.SPRX", 0x104},
+                           std::pair{"PACKED.SPRX", 0x108}}) {
+      main.li(a0, path(m, name)); main.li(a1, 0); main.li(a2, 0);
+      main.put(jal(stub));
+      main.put(nop);
+      main.put(sw(v0, at, s0));
+    }
+    for(auto [at, status, length] : {std::tuple{0x100, 0x140, 0}, std::tuple{0x104, 0x144, 4},
+                                     std::tuple{0x108, 0x148, 0}}) {
+      main.put(lw(a0, at, s0)); main.li(a1, length); main.li(a2, m.string("ARG")); main.li(a3, Results + status);
+      main.li(t0, 0);
+      main.call("sceKernelStartModule");
+    }
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+
+    u32 a = word(m.system, Results + 0x100), b = word(m.system, Results + 0x104);
+    u32 c = word(m.system, Results + 0x108);
+    CHECK(m.kernel.exited, true);
+    CHECK(m.kernel.modules.count(a) && m.kernel.modules.count(b) && m.kernel.modules.count(c), true);
+    if(!m.kernel.modules.count(a) || !m.kernel.modules.count(b) || !m.kernel.modules.count(c)) continue;
+    CHECK(m.kernel.modules[a].module.name == "TESTLIB" && m.kernel.modules[b].module.name == "TESTUSER", true);
+    CHECK(m.kernel.modules[a].path == "ms0:/" + folder + "LIB.SPRX", true);
+    CHECK(word(m.system, Results), 0xabcd);  //TESTLIB's module_start
+    CHECK(word(m.system, Results + 0x140), 7);
+    CHECK(word(m.system, Results + 8), 42);  //TESTUSER's add(40, 2), through TESTLIB's export
+    CHECK(word(m.system, Results + 12), 4);
+    u32 data = m.kernel.modules[c].module.segments.at(1).address;
+    CHECK(word(m.system, data + 0x10), 0x600d);  //TESTPACKED's module_start, as relocated
+    CHECK(word(m.system, Results + 0x24), 0xf00d);
+    CHECK(word(m.system, Results + 0x28), data + 0x7ff0);
+    CHECK(word(m.system, Results + 0x2c), data + 0x7ff0);
+    CHECK(m.kernel.threads.size(), 1);  //the program's own
+  }
+
+  KernelMachine m;
+  machine(m);
+  m.kernel.mount("ms0", stick.path.string());
+  u32 blocks = m.kernel.blocks.size();
+  m.kernel.interrupting = true;
+  CHECK(loadNpDrm(m, path(m, "LIB.SPRX")), Kernel::ErrorIllegalContext);
+  m.kernel.interrupting = false;
+  CHECK(loadNpDrm(m, 0), Kernel::ErrorIllegalAddress);
+  CHECK(loadNpDrm(m, 0x0a00'0000), Kernel::ErrorIllegalAddress);
+  CHECK(loadNpDrm(m, path(m, "%s.SPRX")), Kernel::ErrorUnknownModuleFile);
+  m.kernel.sdkVersion = 0x0606'0010;
+  constexpr u32 Options = Results + 0x200;
+  m.system.memory.write(Allegrex::Word, Options, 16);
+  CHECK(loadNpDrm(m, path(m, "LIB.SPRX"), 0, 0x0a00'0000), Kernel::ErrorIllegalAddress);
+  CHECK(loadNpDrm(m, path(m, "LIB.SPRX"), 0, Options), Kernel::ErrorIllegalSize);
+  CHECK(loadNpDrm(m, path(m, "NONE.SPRX")), Kernel::ErrorFileNotFound);
+  CHECK(loadNpDrm(m, path(m, "DIR")), Kernel::ErrorIsDirectory);
+  m.notes.clear();
+  CHECK(loadNpDrm(m, path(m, "EDATA.SPRX")), Kernel::ErrorUnsupportedPrxType);
+  CHECK(m.notes.size() == 1 && m.notes[0].find("NPDRM module (EDATA)") != std::string::npos, true);
+  CHECK(loadNpDrm(m, path(m, "TEXT.SPRX")), Kernel::ErrorIllegalObject);
+  CHECK(m.kernel.modules.empty() && m.kernel.blocks.size() == blocks, true);
+  m.system.memory.write(Allegrex::Word, Options, 20);
+  u32 taken = loadNpDrm(m, path(m, "LIB.SPRX"), 0, Options);
+  CHECK(m.kernel.modules.count(taken), 1);
+  m.kernel.sdkVersion = 0x0207'0010;
+  m.system.memory.write(Allegrex::Word, Options, 16);
+  taken = loadNpDrm(m, path(m, "LIB.SPRX"), 0x1234, Options);
+  CHECK(m.kernel.modules.count(taken), 1);
+}
+
+//Packed relocations (PT_PSP_REL2), as God Eater 2's update modules have them: TESTPACKED loaded (its second segment
+//named by a command's own bits, or by a 32-bit offset after it), every word as its command says: the upper halves
+//carrying (the second's addend kept from the first's), the lower halves, the jal, the j, a jump's target with its jal
+//kept, 16 bits, the word nothing relocates, the module info's pointers (its gp into the data) and its exports'
+//(module_start found), the data's pointers into either segment. (Its module_start runs in the test above.) Refused,
+//leaving nothing behind: a table not starting with two zero bytes, a command of a kind its list hasn't or a type its
+//list hasn't, an offset past its segment's bytes in the file, a table cut short, a relocation before any segment is
+//named.
+static auto packedRelocations() -> void {
+  for(bool farSegment : {false, true}) {
+    HostFolder stick;
+    put(stick, "PACKED.PRX", packedModule(farSegment));
+    KernelMachine m;
+    machine(m);
+    m.kernel.mount("ms0", stick.path.string());
+    u32 uid = m.call("sceKernelLoadModule", {m.string("ms0:/PACKED.PRX"), 0, 0});
+    CHECK(m.kernel.modules.count(uid), 1);
+    if(!m.kernel.modules.count(uid)) continue;
+    auto& loaded = m.kernel.modules[uid];
+    CHECK(loaded.module.name == "TESTPACKED" && loaded.module.segments.size() == 2, true);
+    if(loaded.module.segments.size() != 2) continue;
+    u32 text = loaded.module.segments[0].address, data = loaded.module.segments[1].address;
+    CHECK(data, text + 0x1000);
+    auto at = [&](u32 offset) { return word(m.system, text + offset); };
+    auto upper = [](u32 address) { return (address + 0x8000) >> 16; };
+    CHECK(at(0x08), lui(t0, upper(data + 0x10)));
+    CHECK(at(0x0c), addiu(t0, t0, (data + 0x10) & 0xffff));
+    CHECK(at(0x18), jal(text + 0x100));
+    CHECK(upper(data + 0x7ff0) != (data + 0x7ff0) >> 16, true);  //the lower half is negative: the upper carries
+    CHECK(at(0x20), lui(t2, upper(data + 0x7ff0)));
+    CHECK(at(0x24), lui(t3, upper(data + 0x7ff0)));
+    CHECK(at(0x28), addiu(t2, t2, (data + 0x7ff0) & 0xffff));
+    CHECK(at(0x2c), addiu(t3, t3, (data + 0x7ff0) & 0xffff));
+    CHECK(at(0x40), j(text + 0x50));
+    CHECK(at(0x120), jal(text + 0x100));
+    CHECK(at(0x130), ori(t0, zero, (text + 0x44) & 0xffff));
+    CHECK(at(0x140), 0x1234'5678);
+    CHECK(loaded.module.gp, data + 0x800);
+    CHECK(m.kernel.moduleFunction(loaded, 0xd632'acdb), text);  //module_start
+    CHECK(word(m.system, data), text + 0x100);
+    CHECK(word(m.system, data + 4), data + 0x20);
+    CHECK(word(m.system, data + 8), text + 0x50);
+    CHECK(m.notes.empty(), true);
+  }
+
+  auto table = [](std::vector<Packed::Relocation> relocations, std::function<void(Packed&)> change = {}) {
+    Packed packed;
+    packed.relocations = std::move(relocations);
+    if(change) change(packed);
+    return packed.build();
+  };
+  std::vector<Bytes> broken;
+  broken.push_back(table({Packed::at(0, 0x008, 1, 4, Packed::Addend, 0x10)}, [](Packed& p) { p.header[1] = 1; }));
+  broken.push_back(table({Packed::at(0, 0x008, 1, 4, Packed::Addend, 0x10)}, [](Packed& p) {  //kind 3 of 3
+    p.header = {0, 0, 3, 4, 3, 0x00, 0x01, 9, 7, 4, 5, 6, 2, 3, 1, 0};
+  }));
+  broken.push_back(table({Packed::at(0, 0x008, 1, 4, Packed::Addend, 0x10)}, [](Packed& p) {  //type 2 of 2
+    p.header = {0, 0, 3, 4, 8, 0x00, 0x01, 0x11, 0x03, 0x05, 0x09, 0x04, 2, 7};
+  }));
+  broken.push_back(table({Packed::at(0, 0x5fc, 0, 2), Packed::at(0, 0x600, 0, 2)}));  //past segment 0's 0x600 bytes
+  auto cut = table({Packed::at(0, 0x008, 0, 2), Packed::at(0, 0x400, 0, 2, Packed::Far)});
+  cut.data.resize(cut.data.size() - 2);
+  broken.push_back(cut);
+  auto unnamed = table({});
+  unnamed.put16(unnamed.data.size(), 2 | 5 << 4);  //a 32-bit relocation, no segment named
+  broken.push_back(unnamed);
+  for(auto& bad : broken) {
+    HostFolder stick;
+    put(stick, "BROKEN.PRX", packedModule(false, &bad));
+    KernelMachine m;
+    machine(m);
+    m.kernel.mount("ms0", stick.path.string());
+    u32 blocks = m.kernel.blocks.size();
+    CHECK(m.call("sceKernelLoadModule", {m.string("ms0:/BROKEN.PRX"), 0, 0}), Kernel::ErrorIllegalObject);
+    CHECK(m.kernel.modules.empty() && m.kernel.blocks.size() == blocks, true);
+    CHECK(m.notes.size() == 1 && m.notes[0].find("can't load ms0:/BROKEN.PRX") == 0, true);
+  }
+}
+
+static constexpr u32 VariableNID = 0x7a7a'0001;  //VarLib's variable
+
+//"VARLIB": exports VarLib's variable, at 0x580 in it: 0x1111'1111, then 0x2222'2222.
+static auto variableModule() -> TestModule {
+  TestModule m;
+  m.name = "VARLIB";
+  m.exports = {{"VarLib", {}, {{VariableNID, 0x580}}}};
+  m.words = {{0x580, 0x1111'1111}, {0x584, 0x2222'2222}};
+  return m;
+}
+
+//"VARUSER": imports VarLib's variable, as God Eater 2's modules import dozens from one another: its module_start
+//reads the variable's second word through two luis sharing the lower half of the first lw (each lw at +4), storing
+//both at Results + 0x60 and + 0x64; a third lui's lw (at +0x7ffc) carries; a word of its data (0x590) holds the
+//variable's address and 8.
+static auto variableUserModule() -> TestModule {
+  TestModule m;
+  m.name = "VARUSER";
+  m.start = 0;
+  m.code = {lui(t0, 0), lui(t1, 0), lw(t2, 4, t0), lw(t3, 4, t1), lui(t4, 0), lw(t5, 0x7ffc, t4),
+            lui(t9, Results >> 16), sw(t2, 0x60, t9), sw(t3, 0x64, t9), jr(ra), addiu(v0, zero, 0)};
+  m.words = {{0x590, 8}};
+  m.imported = {{"VarLib", VariableNID, {{5, 0x00}, {5, 0x04}, {6, 0x08}, {6, 0x0c}, {5, 0x10}, {6, 0x14},
+                                          {2, 0x590}}}};
+  return m;
+}
+
+//Imported variables, as God Eater 2's EBOOT.BIN and update modules import them from one another (its scene modules
+//coming and going): VARUSER loaded before VARLIB holds nothing yet; once VARLIB loads, its words hold the variable's
+//address (the luis' upper halves completed by the lower half after them, the one at +0x7ffc carrying, the data word
+//the address and 8), as do the program's own (a word at 0x0880'2100, the address and 0x10); VARLIB unloaded, they go
+//back to what the files had; VARLIB loaded again elsewhere, they hold its new address; a state carries what each
+//holds (unloading VARLIB in the machine loaded from it puts them back). And a program on both engines loads VARLIB
+//and VARUSER and starts VARUSER, whose module_start reads the variable through them.
+static auto importedVariables() -> void {
+  HostFolder stick;
+  put(stick, "VARLIB.PRX", variableModule().build());
+  put(stick, "VARUSER.PRX", variableUserModule().build());
+  put(stick, "LIB.PRX", libraryModule().build());
+  constexpr u32 ProgramList = 0x0880'2000, ProgramWord = 0x0880'2100;
+  auto prepare = [&](KernelMachine& m) {
+    machine(m);
+    m.kernel.mount("ms0", stick.path.string());
+  };
+  KernelMachine m;
+  prepare(m);
+  m.system.memory.write(Allegrex::Word, ProgramList, 2 << 26 | ProgramWord >> 2);
+  m.system.memory.write(Allegrex::Word, ProgramList + 4, 0);
+  m.system.memory.write(Allegrex::Word, ProgramWord, 0x10);
+  m.kernel.module.variables = {{"VarLib", VariableNID, ProgramList, 0}};
+  auto load = [&](const char* path) { return m.call("sceKernelLoadModule", {m.string(path), 0, 0}); };
+  u32 user = load("ms0:/VARUSER.PRX");
+  CHECK(m.kernel.modules.count(user), 1);
+  if(!m.kernel.modules.count(user)) return;
+  u32 base = m.kernel.modules[user].module.segments.at(0).address;
+  auto at = [&](u32 offset) { return word(m.system, base + offset); };
+  auto unlinked = [&] {
+    return at(0x00) == lui(t0, 0) && at(0x04) == lui(t1, 0) && at(0x08) == lw(t2, 4, t0) && at(0x0c) == lw(t3, 4, t1)
+        && at(0x10) == lui(t4, 0) && at(0x14) == lw(t5, 0x7ffc, t4) && at(0x590) == 8
+        && word(m.system, ProgramWord) == 0x10;
+  };
+  auto linked = [&](u32 v) {
+    auto upper = [](u32 address) { return (address + 0x8000) >> 16; };
+    return at(0x00) == lui(t0, upper(v + 4)) && at(0x04) == lui(t1, upper(v + 4))
+        && at(0x08) == lw(t2, (v + 4) & 0xffff, t0) && at(0x0c) == lw(t3, (v + 4) & 0xffff, t1)
+        && at(0x10) == lui(t4, upper(v + 0x7ffc)) && at(0x14) == lw(t5, (v + 0x7ffc) & 0xffff, t4)
+        && at(0x590) == v + 8 && word(m.system, ProgramWord) == v + 0x10;
+  };
+  CHECK(m.kernel.modules[user].module.variables.size(), 1);
+  CHECK(unlinked(), true);
+  u32 library = load("ms0:/VARLIB.PRX");
+  CHECK(m.kernel.modules.count(library), 1);
+  if(!m.kernel.modules.count(library)) return;
+  u32 v = m.kernel.modules[library].module.segments.at(0).address + 0x580;
+  CHECK(((v + 0x7ffc) & 0x8000) != 0, true);  //its lower half negative: the upper half carries
+  CHECK(linked(v), true);
+  CHECK(m.kernel.modules[user].module.variables.at(0).linked, v);
+  CHECK(m.kernel.module.variables.at(0).linked, v);
+  CHECK(m.call("sceKernelUnloadModule", {library}), library);
+  CHECK(unlinked(), true);
+  CHECK(m.kernel.modules[user].module.variables.at(0).linked, 0);
+  u32 filler = load("ms0:/LIB.PRX");
+  CHECK(m.kernel.modules.count(filler), 1);
+  library = load("ms0:/VARLIB.PRX");
+  CHECK(m.kernel.modules.count(library), 1);
+  if(!m.kernel.modules.count(library)) return;
+  u32 moved = m.kernel.modules[library].module.segments.at(0).address + 0x580;
+  CHECK(moved != v, true);
+  CHECK(linked(moved), true);
+  CHECK(m.notes.empty(), true);
+  CHECK(roundTrip(m, prepare), true);
+  auto state = saveState(m);
+  KernelMachine n;
+  prepare(n);
+  CHECK(loadState(n, state), true);
+  CHECK(n.kernel.modules.count(user) && n.kernel.modules[user].module.variables.at(0).linked == moved, true);
+  CHECK(n.call("sceKernelUnloadModule", {library}), library);
+  CHECK(word(n.system, base + 0x590) == 8 && word(n.system, base) == lui(t0, 0), true);
+  CHECK(word(n.system, ProgramWord), 0x10);
+
+  for(bool recompile : {false, true}) {
+    KernelMachine p;
+    prepare(p);
+    Assembler main{p, 0x0880'1000};
+    main.li(s0, Results);
+    for(auto [path, at] : {std::pair{"ms0:/VARLIB.PRX", 0x100}, std::pair{"ms0:/VARUSER.PRX", 0x104}}) {
+      main.li(a0, p.string(path)); main.li(a1, 0); main.li(a2, 0);
+      main.call("sceKernelLoadModule");
+      main.put(sw(v0, at, s0));
+    }
+    main.put(lw(a0, 0x104, s0)); main.li(a1, 0); main.li(a2, 0); main.li(a3, 0); main.li(t0, 0);
+    main.call("sceKernelStartModule");
+    main.call("sceKernelExitGame");
+    p.runProgram(0x0880'1000, recompile);
+    CHECK(p.kernel.exited, true);
+    CHECK(word(p.system, Results + 0x60), 0x2222'2222);
+    CHECK(word(p.system, Results + 0x64), 0x2222'2222);
+  }
+}
+
 auto moduleTests() -> Tests {
   return {
     {"modules unload themselves from a lent stack", unloadFromLentStack},
@@ -1482,6 +1922,8 @@ auto moduleTests() -> Tests {
     {"modules entry points", entryPoints}, {"modules state", stateWhileStarting},
     {"modules state while stopping", stateWhileStopping},
     {"programs started in another's place", loadExec}, {"programs unloading themselves", programUnloadsItself},
+    {"modules from downloads (sceKernelLoadModuleNpDrm)", downloadModules},
+    {"modules with packed relocations", packedRelocations}, {"modules importing variables", importedVariables},
   };
 }
 
