@@ -37,5 +37,7 @@ jobs:
 
       - name: Summary
         if: ${{ !cancelled() }}
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          echo "- tests/ngcd at ${GITHUB_SHA::9}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
+          echo "- tests/ngcd at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR's head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
