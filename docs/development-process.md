@@ -57,9 +57,10 @@ are excluded; copying the portable template elsewhere requires explicit adoption
   CMake 3.22.1; SDK setup requests NDK 28.2.13676358. Verify actual versions each run.
   Do not copy the supplied Mupen guide's Gradle 8.4 / AGP 8.2.2 or DD test commands.
 - Android unit tests (JVM, both flavors):
-  `bash scripts/build-replit.sh :app:testLegacyDebugUnitTest :app:testModernDebugUnitTest`
+  `bash scripts/build-replit.sh :app:testLegacyDebugUnitTest :app:testModernDebugUnitTest --continue`
   (or the same tasks with `./gradlew` in `android/`). CI's Android Build runs them on every
-  commit and PR, and publishes no release or nightly when they fail.
+  pull request, master push and tag, and publishes neither its release nor the nightly when
+  they fail.
 - Missing submodules/SDK/device are explicit blockers for their respective checks.
   Use repository tests applicable to touched paths; never invent suite results.
 - Keep Vulkan SyncFull waiting and DP interrupt order. Before any async proposal,

@@ -34,6 +34,8 @@ jobs:
   build:
     name: Build release APKs (legacy + modern)
     runs-on: ubuntu-latest
+    # (about 20 minutes; the limit ends a hung step rather than leaving it for hours)
+    timeout-minutes: 60
     steps:
       # The whole history, without file contents beyond this commit's: the build
       # numbers its version from the commit count and the latest tag.
@@ -60,9 +62,11 @@ jobs:
       # extra it needs on top. NOTE: the platform-37 package id is
       # "platforms;android-37.0" (Android 17, API level 37.0) — not "android-37".
       # Not cached: the runner's image has the platform and build tools, and the
-      # NDK and CMake download in about 20 s, while a cache of the SDK folder (the
-      # image's whole SDK, 4.6 GiB packed) took 2 minutes to restore and 19 to 37
-      # minutes to save after a miss, sometimes never finishing.
+      # NDK and CMake download in 20 s to a minute. A cache of the SDK folder (the
+      # image's whole SDK, 4.6 GiB packed) took 13 to 59 minutes to save after a
+      # miss (twice still saving when the next push cancelled the run, so that
+      # commit got no nightly), and on a hit 2 to 5 minutes to fail to restore (tar
+      # can't set the times and modes of the image's root-owned folders).
       - name: Install SDK components
         run: |
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
@@ -118,13 +122,14 @@ jobs:
           if-no-files-found: error
 
   # The app's JVM unit tests, each flavor's (the debug variants, as run locally:
-  # cd android && ./gradlew :app:testLegacyDebugUnitTest :app:testModernDebugUnitTest).
+  # cd android && ./gradlew :app:testLegacyDebugUnitTest :app:testModernDebugUnitTest --continue).
   # They load no native library, so no APK or NDK build is needed; --continue
   # runs the second flavor's even when the first fails. The XML and HTML reports
   # are kept as an artifact, failing or not. No APK is uploaded from this job.
   unit-tests:
     name: Unit tests (legacy + modern)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       # As the build checks out: the version comes from the history here too.
       - name: Checkout
