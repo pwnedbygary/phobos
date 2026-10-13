@@ -43,7 +43,11 @@ implementation plan). CI only: no app, core or test code changes.
   Two of its entries (9.2 GiB together) also filled most of the repository's 10 GB of cache, which GitHub trims by
   evicting the least recently used (the Gradle and FFmpeg caches).
 - **Checks**: actionlint 1.7.12 on the workflow (clean); the job graph read back (release and nightly need build and
-  unit-tests). CI on the PR and a negative control (a failing test on a disposable branch): below once run.
+  unit-tests). CI on #238 (run 38437970240): the unit-test job passed in 3 minutes, 299 tests in each flavor, none
+  failed or skipped (its reports). Negative control (run 38435701552, a disposable branch with one test asserting
+  1 == 2, dispatched): the unit-test job failed, each flavor ran 300 tests with exactly that one failing (`--continue`
+  ran the second flavor), and the reports were uploaded; the branch was deleted after. Release and nightly don't run
+  on a branch, so their gating is the job graph above.
 - **Left**: the unit tests run on the debug variants (release differs in `BuildConfig.DEBUG` and signing); the
   dialogs', settings' and launch paths' UI tests are later packages (15-17).
 
