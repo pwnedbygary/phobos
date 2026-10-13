@@ -5,9 +5,10 @@
 #from changes (a header it includes too) or its compile command does.
 #usage: tests/psp/run-tests.sh   (SANITIZE= turns the sanitizers off; PSP_TEST_PROGRAMS: see loader.cpp;
 #PSP_AUTOTESTS: a pspautotests checkout, whose sample files atrac.cpp and mp3.cpp decode with FFmpeg; PHOBOS_JOBS:
-#compiles at once; PHOBOS_TESTS_MODE=release: built as the app is, below; PHOBOS_TESTS_REQUIRE: what must be here, a group that needs it failing rather than skipping, as
-#vulkan,programs,ge-round3,ge-round6 (tests/allegrex/harness.hpp's skip(), tests/psp/gpu.cpp's capabilities);
-#PHOBOS_TESTS_REPORT: a file for each group's result, pass, FAIL or skip with why, a tab between)
+#compiles at once; PHOBOS_TESTS_MODE=release: built as the app is, below; PHOBOS_TESTS_REQUIRE: what must be here,
+#a group that needs it failing rather than skipping, as vulkan,programs,ge-round3,ge-round6
+#(tests/allegrex/harness.hpp's skip(), tests/psp/gpu.cpp's capabilities); PHOBOS_TESTS_REPORT: a file for each
+#group's result, pass, FAIL or skip with why, a tab between)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
