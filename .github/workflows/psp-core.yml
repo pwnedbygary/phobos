@@ -1,14 +1,27 @@
 name: PSP Core Tests
 
-# The PSP core (ares/psp) isn't in the app yet; its parts are tested on the host, here with the address and
-# undefined-behavior sanitizers.
+# The PSP core (ares/psp) tested on the host, in four suites: the Allegrex CPU's (tests/allegrex) and the system's
+# parts (tests/psp), both with the address and undefined-behavior sanitizers; the whole core as an ares system, as
+# Phobos builds it (tests/psp/ares/run-tests.sh); and the headless runner, built and running a test program
+# (tests/psp/ares/runner-test.sh). Their paths are what those builds compile or read: the core, nall, ares's framework
+# and libco, sljit and its configuration, Vulkan's headers, libchdr, FFmpeg's build, the runner, the desktop's disc
+# reader, the tests, and the byte files the PSP's tests share with the app's (android/app/src/test/resources/psp-*).
+# A version tag runs every suite (a tag's push takes no path filter). Each suite's last line, its count, goes in the
+# run's summary with the commit.
 
 on:
   push:
     branches: [ master ]
-    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', 'tests/psp/**', 'desktop/PspDiscInfo.*', 'thirdparty/ffmpeg/**', '.github/workflows/psp-core.yml' ]
+    tags: [ 'v*' ]
+    paths: [ 'ares/psp/**', 'ares/ares/**', 'nall/**', 'libco/**', 'thirdparty/sljit/**', 'thirdparty/sljit*',
+             'thirdparty/Vulkan-Headers/**', 'thirdparty/libchdr/**', 'thirdparty/ffmpeg/**', 'tools/psp-runner/**',
+             'tests/allegrex/**', 'tests/psp/**', 'desktop/PspDiscInfo.*', 'android/app/src/test/resources/psp-*',
+             '.github/workflows/psp-core.yml' ]
   pull_request:
-    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', 'tests/psp/**', 'desktop/PspDiscInfo.*', 'thirdparty/ffmpeg/**', '.github/workflows/psp-core.yml' ]
+    paths: [ 'ares/psp/**', 'ares/ares/**', 'nall/**', 'libco/**', 'thirdparty/sljit/**', 'thirdparty/sljit*',
+             'thirdparty/Vulkan-Headers/**', 'thirdparty/libchdr/**', 'thirdparty/ffmpeg/**', 'tools/psp-runner/**',
+             'tests/allegrex/**', 'tests/psp/**', 'desktop/PspDiscInfo.*', 'android/app/src/test/resources/psp-*',
+             '.github/workflows/psp-core.yml' ]
   workflow_dispatch:
 
 concurrency:
@@ -26,8 +39,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # (bash named, so a failing suite fails the step through tee: pipefail)
       - name: Run the tests
-        run: tests/allegrex/run-tests.sh
+        shell: bash
+        run: tests/allegrex/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          echo "- tests/allegrex at ${GITHUB_SHA::9}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
 
   system:
     name: PSP system tests
@@ -58,6 +78,70 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers libvulkan1
 
       - name: Run the tests
+        shell: bash
         env:
           PSP_GPU_ON_CPU: 1
-        run: tests/psp/run-tests.sh
+        run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          echo "- tests/psp at ${GITHUB_SHA::9}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
+
+  # The whole core as an ares system, with ares's node tree, libco and libchdr, as Phobos builds it: system.cpp's
+  # checks, which boot the test programs in tests/psp/programs (no Vulkan: they draw with the software renderer)
+  ares:
+    name: PSP as an ares system
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Name the FFmpeg build
+        id: ffmpeg
+        run: echo "name=$(thirdparty/ffmpeg/build.sh --name host)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: .cache/ffmpeg
+          key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
+          restore-keys: ffmpeg-${{ runner.os }}-host-
+
+      - name: Run the tests
+        shell: bash
+        run: tests/psp/ares/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          echo "- tests/psp/ares at ${GITHUB_SHA::9}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
+
+  # tools/psp-runner built as tools/psp-runner/build.sh builds it, running cube.elf for 60 frames: its summary, PNGs
+  # and WAV checked
+  runner:
+    name: Headless runner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Name the FFmpeg build
+        id: ffmpeg
+        run: echo "name=$(thirdparty/ffmpeg/build.sh --name host)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: .cache/ffmpeg
+          key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
+          restore-keys: ffmpeg-${{ runner.os }}-host-
+
+      - name: Run the test
+        shell: bash
+        run: tests/psp/ares/runner-test.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          echo "- tests/psp/ares/runner-test.sh at ${GITHUB_SHA::9}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"

@@ -25,6 +25,30 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## CI: the PSP core as an ares system, the headless runner and the Neo Geo CD's checks in CI; the triggers complete — 2026-10-13
+
+Branch `cursor/test-plan-05-2b67`, on master (`9333a8d7a`, #235). Package 05 of the 2026-10-13 test and performance
+plan (an outside audit of master `b3507c1db`, triaged against `9333a8d7a`; package 01's PR indexes it in the
+implementation plan). CI only: no core, app or test code changes.
+- **The gap**: three suites ran only by hand: `tests/psp/ares/run-tests.sh` (the whole PSP core as an ares system,
+  318 checks on the last recorded runs), `tests/psp/ares/runner-test.sh` (the headless runner built and running
+  cube.elf) and `tests/ngcd/run-tests.sh` (the Neo Geo CD's layout and state checks). PSP Core Tests' paths also
+  missed what its builds compile: sljit and its configuration, Vulkan's headers, ares's framework beyond `types.hpp`;
+  and the byte files `tests/psp/dialogs.cpp` reads from the app's test resources.
+- **Now**: PSP Core Tests has two more jobs, "PSP as an ares system" and "Headless runner" (each with the FFmpeg
+  build cached as the system job has it), and a new workflow, Neo Geo CD Tests, runs `tests/ngcd/run-tests.sh` on
+  changes to the Neo Geo core, the 68000, the Z80, ymfm, ares's framework, nall, libco or the tests. PSP Core Tests'
+  paths add `ares/ares/**`, `libco/**`, `thirdparty/sljit/**` and `thirdparty/sljit*`, `thirdparty/Vulkan-Headers/**`,
+  `thirdparty/libchdr/**`, `tools/psp-runner/**` and `android/app/src/test/resources/psp-*` (the last as #230 adds it,
+  so that line's conflict resolves to this one). Both workflows also run for version tags (a tag's push takes no path
+  filter). Every suite's last line, its count, goes in the run's summary with the commit; the suites' output goes
+  through `tee`, so their steps run as `shell: bash` (pipefail) to keep a failure failing.
+- **Not done here**: a workflow whose paths don't match doesn't run, which shows as no check rather than as a passing
+  one; and Android's release and nightly don't wait for these workflows (they are separate; package 20 or a later
+  change can gate them explicitly).
+- **Checks**: actionlint 1.7.12 on both workflows (clean). CI on the PR and a negative control (a failing check in
+  each suite on a disposable branch): below once run.
+
 ## PSP: savedata's patterns — Dissidia's Load Game, Final Fantasy Type-0's list; Disgaea Infinite's New was Continue — 2026-10-13
 
 Branch `cursor/psp-savedata3-2b67`, on master (1d9308714, #228). docs/psp-core.md, part 84, has the evidence. Clean
