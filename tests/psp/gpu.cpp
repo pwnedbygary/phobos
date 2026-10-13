@@ -794,7 +794,8 @@ static auto gpuPalettes() -> void {
 }
 
 //The palettes kept on the GPU found again: a frame buffer sampled through palette A, then B, then A again (the GE's
-//palette version moving on each time, its bytes A's again the third), each picture the software renderer's.
+//palette version moving on each time, its bytes A's again the third: found, not made again), each picture the
+//software renderer's.
 static auto gpuPalettesAgain() -> void {
   auto gpu = renderer();
   if(!gpu) return;
@@ -825,6 +826,7 @@ static auto gpuPalettesAgain() -> void {
     }
   }
   CHECK(gpu->statistics.finishes, before.finishes);
+  CHECK(gpu->statistics.palettes - before.palettes <= 2, true);
   CHECK(apart(software, hardware), 0u);
   hardware.ge.setRenderer(nullptr);
 }

@@ -340,6 +340,7 @@ struct GPU : GE::Renderer {
     u64 pictures = 0;  //frames shown straight from a target (picture())
     u64 readingDraws = 0, splits = 0;  //draws blended in the shader; those begun as their primitives overlapped
     u64 barriers = 0;  //reading draws after a barrier, without rasterization order (emit())
+    u64 palettes = 0;  //palettes put on the GPU (paletteFor(): those found again aren't)
     u64 presents = 0, presentsFromMemory = 0;  //frames presented on the window (show()): from a target, memory's
     u64 meshes = 0;    //3D PRIMs the GPU transformed (fast mode: mesh(), the first of each PRIM's runs)
     u64 moves = 0;     //rectangles moved from one target into another on the GPU (move()), not put back and filled

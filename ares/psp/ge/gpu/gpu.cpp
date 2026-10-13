@@ -1483,6 +1483,7 @@ auto GPU::paletteFor(const GE::Sampler& texture) -> u32 {
     }
     u32 id = backend->makePalette(entries);
     if(!id) return 0;
+    statistics.palettes++;
     found = &palettes.emplace_back(Palette{id, ge->clutHash, format, 0, {}});
     std::memcpy(found->bytes.data(), clut, found->bytes.size());
   }
