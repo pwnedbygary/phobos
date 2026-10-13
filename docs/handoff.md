@@ -46,11 +46,12 @@ Save states unchanged (StateVersion 26). The software renderer untouched.
   PRIM's texels meet the changes (the GE gives `holds()` the texels a PRIM may take, 3D triangles too), barriers only
   before overlapping reads; textures kept for the next of their size; the depth write its own shader build. All in
   both modes, but that accurate mode holds rows past a texture's frame buffer only where the PRIM takes none of them.
-- **Numbers** (the M1, fast mode, base -> branch): Death Jr. II's woods 9.7 -> 67.8 frames a second and its character
-  select 21 -> 170, Activision Hits Remixed's room 10 -> 84, Sonic Rivals 14 -> 113, Castlevania 103 -> 354,
-  Darkstalkers 49 -> 122, Brothers in Arms 23 -> 39, Killzone 11 -> 20, Colin McRae 43 -> 57, Brave Story 156 -> 216;
-  the Armored Cores, Army of Two, Daxter as they were. Accurate: Death Jr. II 8 -> 37, Castlevania 138 -> 426, Killzone
-  12 -> 21.
+- **Numbers** (the M1, fast mode, base -> branch, at a load near 20): Death Jr. II's woods 9.7 -> 67.8 frames a second
+  and its character select 21 -> 170, Activision Hits Remixed's room 10 -> 84, Sonic Rivals 14 -> 113, Castlevania
+  103 -> 354, Darkstalkers 49 -> 122, Brothers in Arms 23 -> 39, Killzone 11 -> 20, Colin McRae 43 -> 57, Brave Story
+  156 -> 216; the Armored Cores, Army of Two, Daxter as they were; the final code's round (load 30-130) in part 83, the
+  same ratios. Accurate: Castlevania 58 -> 144, Killzone 11.7 -> 19.3, Death Jr. II's woods 4.0 -> 10.5 and Sonic
+  Rivals 5.8 -> 11.5 (their palette passes held only where exact: 8 finishes a frame, from 31).
 - **Checks**: (below, filled in at the end.)
 - **On the RP6, to measure**: Software against Vulkan (fast) in the Armored Cores' intros and first menus (the M1
   can't say why the RP6 was slower there: the GPU's per-frame work is half a texture upload, a present and a shot),

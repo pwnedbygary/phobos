@@ -10733,9 +10733,10 @@ textures kept, below, tested with the review's):
 1. **The dither in the GPU's blending** (`draw.frag`'s `TERM`): the PSP dithers the blended color, so the shader adds
    the dither to the source term it hands the GPU, and subtracts it where the GPU subtracts the term (TERM 3). **Depth
    as the GE's whole numbers** (`draw.frag`'s `DEPTHS` build, since the review): wherever the depth test or write
-   depends on it the shader writes the interpolated depth rounded down, in 65,536ths, as memory's depths are filled
-   (the same floats; the same 24-bit values on a GPU that rounds to nearest); a shader writing the depth may keep a GPU
-   from testing it before the shader runs, so pipelines that don't use depth take the build without the write. Its cost at 1x, measured on the M1 (written by every pipeline then): 0-3%, 2-7% at 4x.
+   depends on it the shader writes the interpolated depth rounded down, in 65,536ths, as memory's depths are filled (the
+   same floats; the same 24-bit values on a GPU that rounds to nearest); a shader writing the depth may keep a GPU from
+   testing it before the shader runs, so pipelines that don't use depth take the build without the write. Its cost at
+   1x, measured on the M1 (written by every pipeline then): 0-3%, 2-7% at 4x.
 2. **Moves across row widths** (`movable()`, `intoRows()`, `move()`, `move.frag`): where both targets' pages hold whole
    rows of each, each starting a row, a move covers whole rows of the target and each pixel takes the source's pixel at
    its bytes, where they're inside the source's rectangle (else it's left); the moves of one width are the same
@@ -10777,40 +10778,51 @@ bytes then, and late frames already show without waiting); merging draws, cachin
 batching vertex uploads (already so: draws join while the state stays, pipelines are cached by key, sets by texture,
 and a run's vertices go up in one staging buffer; binds were 0.1-2 per draw in every scene, never the bound).
 
-**Numbers** (the M1, MoltenVK; frames a second, base -> branch; the process's CPU ms a frame; draws, finishes, read
-backs, copies and render passes a frame; the emulation thread's waits for the GPU, ms a frame):
+**Numbers** (the M1, MoltenVK; the final code, 4b2665616, against master, taking turns, two rounds each; frames a
+second, base -> branch; the process's CPU ms a frame; draws, finishes, read backs, copies and render passes a frame; the
+emulation thread's waits for the GPU, ms a frame). The Mac's load was 30 to 130 while they ran, which lowers every
+number and moves single runs by a fifth; the ratios and the counts are what to read. (A round before the review's
+points, at a load near 20: Death Jr. II's woods 9.7 -> 67.8, its character select 21 -> 170, Activision Hits
+Remixed 10 -> 84, Sonic Rivals 14 -> 113, Castlevania 103 -> 354, Darkstalkers 49 -> 122, Brothers in Arms 23 -> 39,
+Killzone 11 -> 20, Colin McRae 43 -> 57, Brave Story 156 -> 216.)
 
 | Scene | fps | CPU ms | Draws | Finishes | Read backs | Copies | Passes | Waits |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Colin McRae Rally 2005 Plus, race | 43.3 -> 56.6 | 19.8 -> 17.4 | 376 | 2 -> 0.01 | 5 -> 0.04 | 3 -> 4.5 | 9 -> 16 | 3.26 -> 0.02 |
-| Death Jr. II, woods | 9.7 -> 67.8 | 77.9 -> 11.1 | 737 | 31 -> 0.5 | 62 -> 2.5 | 0.5 -> 1.5 | 68 | 29.9 -> 5.0 |
-| Death Jr. II, character select | 21.2 -> 169.7 | 29.0 -> 3.4 | 217 | 30.5 -> 0.01 | 61.5 -> 0.03 | 0.5 -> 1 | 62 | 22.6 -> 0.06 |
-| Activision Hits Remixed, room | 10.1 -> 84.1 | 65.5 -> 11.3 | 947 | 61 -> 0.01 | 124 -> 0.03 | 1 -> 3 | 129 | 41.2 -> 0.03 |
-| Sonic Rivals, stage | 14.4 -> 113.3 | 48.9 -> 7.6 | 444 | 31 -> 0.5 | 62.5 -> 2.5 | 0.5 -> 1.5 | 64 | 22.9 -> 2.4 |
-| Brothers in Arms, play | 23.1 -> 39.4 | 30.4 -> 25.7 | 494 | 3.5 -> 0.01 | 12.8 -> 0.04 | 52 -> 56 | 59 | 14.4 -> 0.03 |
-| Killzone, language menu | 11.4 -> 20.0 | 50.5 -> 29.7 | 958 | 0.01 | 0.03 | 817 -> 456 | 823 -> 473 | 0.17 -> 0.13 |
-| Castlevania, stage 1 | 102.7 -> 353.6 | 8.2 -> 3.4 | 67 | 0.5 -> 0.01 | 1.5 -> 0.02 | 0.5 -> 1 | 2 | 1.02 -> 0.01 |
-| Brave Story, title | 155.9 -> 215.9 | 6.0 -> 5.3 | 140 | 1 -> 0.01 | 3 -> 0.03 | 10.5 -> 11 | 12 -> 14 | 1.03 -> 0.03 |
-| Darkstalkers, fight | 49.2 -> 122.1 | 14.9 -> 7.3 | 256 | 1.01 | 2.01 | 0 | 90 -> 10 | 5.86 -> 1.73 |
-| Dirt 2, race | 33.5 -> 39.3 | 25.4 -> 25.3 | 1145 | 2 -> 0.01 | 6 -> 0.04 | 3 | 22 -> 25 | 2.13 -> 0.03 |
-| Brandish, play | 289 -> 331 | 3.4 -> 3.3 | 41 | 0.01 | 0.03 | 1.5 | 4 | 0.01 |
-| Daxter, shadow | 192.6 -> 190.2 | 5.6 | 90 | 0.01 | 0.02 | 1 | 3 | 0.01 |
-| Armored Core: Formula Front, intro | 82.8 -> 81.5 | 11.9 -> 12.2 | 2 | 0 | 0.01 | 0 | 0 | 0.01 |
-| Armored Core: Silent Line Portable, intro | 83.3 -> 82.3 | 11.7 -> 11.9 | 2 | 0 | 0.01 | 0 | 0 | 0.01 |
-| Army of Two, main menu | 18.1 -> 18.1 | 57.0 -> 56.4 | 3022 | 0.01 | 0.04 | 81 | 114 | 0.02 |
+| Colin McRae Rally 2005 Plus, race | 34.6 -> 56.0 | 21.9 -> 17.3 | 376 | 2 -> 0.01 | 5 -> 0.04 | 3 -> 4.5 | 9 -> 16 | 3.79 -> 0.02 |
+| Death Jr. II, woods | 5.6 -> 46.0 | 124 -> 15.6 | 737 | 31 -> 0.5 | 62 -> 2.5 | 0.5 -> 1.5 | 68 | 43.0 -> 5.7 |
+| Death Jr. II, character select | 10.2 -> 166.3 | 66.0 -> 5.2 | 217 | 30.5 -> 0.01 | 61.5 -> 0.03 | 0.5 -> 1 | 62 | 37.1 -> 0.05 |
+| Activision Hits Remixed, room | 4.2 -> 48.5 | 150 -> 15.9 | 947 | 61 -> 0.01 | 124 -> 0.03 | 1 -> 3 | 129 | 86.4 -> 0.03 |
+| Sonic Rivals, stage | 6.0 -> 66.3 | 106 -> 10.7 | 444 | 31 -> 0.5 | 62.5 -> 2.5 | 0.5 -> 1.5 | 64 | 60.4 -> 1.9 |
+| Brothers in Arms, play | 15.1 -> 23.4 | 42.2 -> 31.3 | 494 | 3.5 -> 0.01 | 12.8 -> 0.04 | 52 -> 56 | 59 | 19.3 -> 0.03 |
+| Killzone, language menu | 10.7 -> 16.6 | 68.9 -> 44.4 | 958 | 0.01 | 0.03 | 817 -> 456 | 823 -> 473 | 0.28 -> 0.11 |
+| Castlevania, stage 1 | 75.4 -> 177.1 | 9.7 -> 4.3 | 67 | 0.5 -> 0.01 | 1.5 -> 0.02 | 0.5 -> 1 | 2 | 1.76 -> 0.03 |
+| Brave Story, title | 86.3 -> 110.1 | 8.8 -> 6.9 | 140 | 1 -> 0.01 | 3 -> 0.03 | 10.5 -> 11 | 12 -> 14 | 2.34 -> 0.02 |
+| Darkstalkers, fight | 38.4 -> 71.1 | 18.7 -> 9.5 | 256 | 1.01 | 2.01 | 0 | 90 -> 10 | 4.79 -> 2.07 |
+| Dirt 2, race | 23.8 -> 29.4 | 30.1 -> 25.3 | 1145 | 2 -> 0.01 | 6 -> 0.04 | 3 | 22 -> 25 | 4.02 -> 0.03 |
+| Brandish, play | 262 -> 262 | 3.3 -> 3.2 | 41 | 0.01 | 0.03 | 1.5 | 4 | 0.04 -> 0.03 |
+| Daxter, shadow | 139 -> 123 | 6.5 | 90 | 0.01 | 0.02 | 1 | 3 | 0.04 -> 0.02 |
+| Armored Core: Formula Front, intro | 74.0 -> 62.2 | 13.5 -> 14.1 | 2 | 0 | 0.01 | 0 | 0 | 0.01 |
+| Armored Core: Silent Line Portable, intro | 80.3 -> 72.8 | 12.5 -> 13.0 | 2 | 0 | 0.01 | 0 | 0 | 0.01 |
+| Army of Two, main menu | 9.2 -> 8.3 | 78.7 -> 81.8 | 3022 | 0.01 | 0.04 | 81 | 114 | 0.07 |
 
-(Dirt 2 and Brandish: means of three more turns each, taken after one turn of each had a load spike.)
-Accurate mode: Death Jr. II's woods 8.1 -> 37.2, Castlevania 138 -> 426, Killzone 12.1 -> 21.0, Brandish 21.2 -> 21.4
-(barriers 875 -> 852 a frame: its tiles overlap), Colin McRae's race 0.7 (25,824 -> 25,644 barriers), Daxter 252 ->
-242. Death Jr. II's woods still finish every other frame: the game converts its 8888 picture to the 5650 one it shows
-with the CPU, which reads it (the frame shown is never a target's); Darkstalkers' one a frame is the CPU's stores
+The last four are the same work on the GPU either way: Daxter's second round was 143 -> 141, and four more rounds of
+Formula Front's intro, taking turns, 31.0, 34.5, 35.5, 36.4 on master and 34.4, 36.1, 36.6, 35.4 on the branch (the
+Mac's load at 130 then), the emulation thread 14.7 and 14.5 ms a frame. Accurate mode: Castlevania 58 -> 144, Killzone
+11.7 -> 19.3, Death Jr. II's woods 4.0 -> 10.5 and its character select 8.1 -> 12.1, Sonic Rivals 5.8 -> 11.5,
+Activision Hits Remixed 3.7 -> 5.5 (their palette passes held only where exact: 8 to 16 finishes a frame, from 31 to
+61), Brandish 19.0 -> 18.9 (barriers 875 -> 852 a frame: its tiles overlap), Daxter 94.5 -> 97.3; Colin McRae's race 0.7
+either way before the review (25,824 -> 25,644 barriers a frame: without rasterization order MoltenVK splits its 3D
+blends). Death Jr. II's woods still finish every other frame: the game converts its 8888 picture to the 5650 one it
+shows with the CPU, which reads it (the frame shown is never a target's); Darkstalkers' one a frame is the CPU's stores
 beside its depth buffer.
 
-**Pictures**, the mean channel difference from Software at a frame (and the base's): Death Jr. II's woods 1.70 in fast
+**Pictures**, the mean channel difference from Software at a frame (and master's): Death Jr. II's woods 1.70 in fast
 mode (8.8) and 0.85 in accurate (7.66), its glow there; Death Jr. II's character select 0.62 fast (1.88) and 0.05
-accurate (the same); Daxter 0.148 (0.293); Killzone 0.28 in both modes (fast 1.19, accurate the same); Castlevania's
-blur drawn in both modes. Colin McRae's terrain shadows aren't changed: they take depth from frame buffers of another row
-width, and the GPU's depth isn't read back or moved (docs/psp-gpu-renderers.md, "Owned until needed").
+accurate (the same); Killzone 0.28 in both modes (fast 1.19, accurate the same). With the final code: Castlevania 0.155
+in accurate mode and 0.163 in fast (4.05 and 4.06: the blur drawn); Daxter 0.100 in both (0.147); Colin McRae's race
+0.89 accurate and 1.14 fast (1.19 and 1.44). Colin McRae's terrain shadows aren't changed: they take depth from frame
+buffers of another row width, and the GPU's depth isn't read back or moved (docs/psp-gpu-renderers.md, "Owned until
+needed").
 
 **The review.** An independent read-only review of the branch (to 50a9510a1) found no blocker and three major points,
 all taken (04e5d1c8a): accurate mode held a texture's rows past its frame buffer wherever the PRIM's rows weren't
