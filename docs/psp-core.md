@@ -1053,7 +1053,8 @@ PSP medium (`mia/medium/playstation-portable.cpp`); and the Android app's entry 
 - **The node tree**, what front ends see: the system "PlayStation Portable" ("[Sony] PlayStation Portable"); a
   480x272 screen at 59.94 Hz, its pixels as the GE keeps them (red in the low byte) through a palette of 2^24 colors;
   stereo sound at 44.1 kHz (silence until sceAudio); the controls, named as the PlayStation's are (Up, Down, Left,
-  Right, Triangle, Circle, Cross, Square, L, R, Select, Start, and the stick as "L-Stick X" and "L-Stick Y"), so
+  Right, Triangle, Circle, Cross, Square, L, R, Select, Start, and the stick as "L-Stick X" and "L-Stick Y", with
+  the host's right stick as "R-Stick X" and "R-Stick Y" for games patched to read one: part 81), so
   front ends map them alike; and a "UMD Drive" port (type "Universal Media Disc") taking a "PlayStation Portable
   Disc" (front ends give a peripheral whose name ends in "Disc" the game's medium).
 - **A frame**: `run()` reads the controls into the HLE kernel (pspsdk's PSP_CTRL_* bits; the stick from -32768 to
@@ -11019,6 +11020,185 @@ the game reads the clock.
 pins TZ to the Mac's own zone, America/New_York, as the stick's dates and the clock's local time follow it):
 `~/phobos-work/scratch/savedata2/` on the Mac it was made on, not in the repository.
 
+## Part 81: input — a right stick for patched games, the keyboard's input types, 7th Dragon 2020-II past its certificate
+
+On branch `cursor/psp-input-b00-2b67`, on master (`6ab2c5583`, then `b7ea296f4`, then `1d9308714`, #228). The task:
+items 3 and 4 of the play-testers' batch 00 report (the 7th Dragon games' names, Armored Core's True Analogs images);
+then an independent review's points (below, "The review's points"). Clean room: pspsdk's pspctrl.h and
+psputility_osk.h, pspautotests' ctrl/sampling, PPSSPP read as a guide to the PSP's behaviour only (its convention for
+a right stick, its note on a negative ATRAC size), no code copied or translated; JPCSP not read. Save states keep
+their layout (26).
+
+### A right stick for games patched to read one (a convention of the systems that have one, not the PSP's own)
+
+The "True Analogs" mods of the four Armored Core Portable games (Formula Front International, 3, Silent Line, Last
+Raven) read a second stick from bytes 10 and 11 of each SceCtrlData sample, as PPSSPP fills them from the host's
+right stick (128 centred). pspsdk's pspctrl.h names those bytes Rx and Ry, a right stick's axes, "valid when using
+DualShock 3 on PSP GO, a PS VITA system, through hardware/software hacking, or system emulation", the four after
+them reserved and "unused by the firmware", and marks Rsrv, its older name for all six, deprecated. The PSP itself
+has no second stick: pspautotests' ctrl/sampling, recorded on one, notes that "The PSP doesn't natively support a
+right analog stick, but official emulators do" and zeroes their centred 128 so its results compare. Read as 0 (up
+and left held fully), the mods' camera pitched up at the sky from "GO!!!" on and the AC turned left on its own.
+
+The core now fills them so, as the owner chose (as those systems have it, for every game): `ctrl.cpp` keeps the
+host's right stick beside the left one in each sample, and every read that returns SceCtrlData (peek and read,
+positive and negative, up to 64 samples) writes it at 10 and 11, 128 centred, the last four bytes 0. Digital
+sampling centres it as it centres the left stick. It comes from the node tree's "R-Stick X" and "R-Stick Y" (the
+same -32768 to 32767 the left stick takes, as 0 to 255). States don't hold it: it's the host's, not the PSP's, and a
+loaded state's samples read 128 until the next sample takes the stick as it is.
+
+Android hands the right stick to the core whatever the PSP "Right stick" setting is: Off presses nothing else, and
+Face buttons, D-pad and Analog keep doing what they did; a game that reads bytes 10 and 11 gets the stick either way
+(`GameInputState.kt`). With Analog stick the right stick is the PSP's stick and the patched games' second one at
+once, so the setting's description says Off suits those games. `PhobosRunner.cpp` already gave setInput()'s rx and ry to an axis
+named "R-Stick X"/"R-Stick Y". The runner takes `R-StickX:` and `R-StickY:` in `--press` and `--script`, as it takes
+the left stick (`tools/psp-runner/README.md`).
+
+Checked with Formula Front International from its Central Menu state into a battle (`c1.txt`, then the right stick):
+at rest the camera stays level behind the AC and its heading holds; the right stick held right turns the AC round,
+down looks at the ground, up looks back up past the horizon.
+
+### The keyboard's answer as the field's input types take it
+
+A field's input types (SceUtilityOskData's at 16: pspsdk's PSP_UTILITY_OSK_INPUTTYPE_*, 0 for all) are the
+character sets the PSP's keyboard offers for it, and a PSP's keyboard types nothing else. The automatic answer gave
+an empty field ASCII "PSP" whatever they were; both 7th Dragon games ask for their hero's name in an empty field of
+full-width Latin letters alone (0x0c00, limit 8), and their font shows no ASCII: 2020's hero was nameless.
+
+`Kernel::keyboardConform()` (utility.cpp) now takes text as a field's types allow, as typing it on the PSP's keyboard
+would: each character the field doesn't take becomes one it does where there's one (the other width of an ASCII
+letter, digit or sign, the other case of an ASCII, full-width or Russian letter, the other kana) and is left out where
+there isn't; a space is full-width (U+3000) where the field takes full-width characters and no half-width ones, and
+none where it takes digits alone; a line break stays in a field of several lines and goes in a field of one; the web
+address keyboard takes every printable ASCII character, digits too. What a character is typed in (`keyboardTypes()`):
+ASCII's letters and U+00C0-024F's (the accented letters: é, ñ, ü, ß, Ł) are the Latin ones, lower or upper by case
+(Unicode's general categories, a table of the 400 characters; any other letter there upper); the full-width forms and
+U+3000-303F are the Japanese ones, as are the kana's own marks (the voicing and iteration marks, the middle dot, the
+long vowel mark, kana too) and every other printed character classed nowhere else: JIS X 0208's other symbols (☆ ★ ♪
+※ → … ￥, Greek, box drawing) among them. Not printed, so in no field of a type: control characters, halves of pairs
+(characters past U+FFFF, which the PSP hasn't got, kept in no field at all), combining marks, the invisible format
+characters, variation selectors, private use, specials and noncharacters. (The first version's Latin was ASCII's
+alone and its Japanese symbols the full-width forms and U+3000-303F: é, ß and most symbols on a Japanese keyboard went
+from a field of any type.)
+
+The automatic answer's nickname goes through it (0x0c00: U+FF30 U+FF33 U+FF30); a field taking none of its letters
+gets the first nickname it takes whole of "PSP", "ぴーえすぴー" (katakana too, by the conversion), "ﾋﾟｰｴｽﾋﾟｰ",
+"ПСП", "피에스피" and "1" (Peace Walker refused an empty name and asked again for good: kana alone, digits alone,
+Russian or Korean alone had got "PSP" before the conversion, and nothing with its first version), and one taking none
+of them whole (kanji alone, symbols alone) keeps its own text; a field of full-width spaces is blank too. The automatic
+answer keeps the game's own text at first as it was (Ridge Racer 2's "DAMACY"), and a pair in it is never cut in two
+by the field's limit.
+
+The app's keyboard (part 73) shows the game's text and what the player types as Android's keyboard composes it,
+leaving out only what the PSP has no character for and nothing past the field's limit once entered
+(`PspKeyboardField.typing()`), and enters what's typed through the same conversion (`accept()`), showing under the
+field what will be entered where that differs; the core takes the app's answer through `keyboardConform()` again,
+with the field's types and lines as the request showed them. The game's own text left as it was is entered as it is,
+by the app (`entered()`: where the field still holds what it showed of the game's text at first, `typing()`'s, which
+leaves out a control character and what's past the limit, the request's text goes back) and by the core
+(`dialogAnswered()`: an answer that is the text the request showed has the field's UTF-16 at first written back, cut
+to the limit, a pair never in two), as the automatic answer leaves it: a PSP's
+keyboard edits the text it starts with, not typing it afresh (a first version converted it too, so OK on a default
+with a character the field's types lack entered a changed or empty name). The two conversions, Kotlin's and C++'s,
+are checked against one table of cases, `android/app/src/test/resources/psp-keyboard-cases.txt`, by both the core's
+tests and the app's (every character of U+00C0-024F among them, against the JVM's own Unicode data). (Converting each
+character as it was typed, as a first version did, changed Android's text under its keyboard: romaji on its way to
+kana lost its letters in a field of kana, and kanji conversion stopped.) Phobos's choice for what the PSP's keyboard
+would do; no recording shows a PSP's answer to a field's types.
+
+7th Dragon 2020's name screen shows "PSP" and the voice screen after it too (`v-7d1-name/frame-000200.png`,
+`frame-000800.png`).
+
+### 7th Dragon 2020-II past its certificate: a negative ATRAC size
+
+With the name taken, 2020-II's "Murakumo Certificate" still froze for good (frame 1320 on). Traced: as the card
+shows, the game reads a sound file whole into a buffer and hands it to `sceAtracSetDataAndGetID` with the size
+0xffffffff; Phobos refused it (0x80630006: the size doesn't fit memory), and the game waited for that sound for good.
+PPSSPP notes the same of Tales of VS, so the PSP's library evidently takes such a size; Phobos now takes a size whose
+top bit is set as reaching to the end of the memory the buffer is in (`atrac.cpp`'s `atracWholeSize()`), wherever a
+buffer is read whole: the four functions given the whole file (SetData, SetMOutData and their AndGetID), and a halfway
+one said to be read as far as its buffer goes (all but sceAtracSetDataAndGetID Phobos's choice: no recording or game
+shows them). It's done in the setting functions they share, `atracSet()` and
+`atracSetAndGetID()` (read size and buffer size the same), the setters' own lines as they were, so that this branch and
+the sound branch's (#229, which takes the context writes out of those lines) merge without a conflict. A buffer with
+no memory behind it is refused as before (0x80630006). The card then passes and the story goes on
+(`v-7d2-cert/frame-001560.png`, the Diet chamber; `frame-003600.png`, the first conversation). The name wasn't what
+stopped it.
+
+### Tests
+
+- `tests/psp/files.cpp` "controller right stick": centred in digital sampling; the stick in peek and read, positive
+  and negative, the last four bytes 0; through a state, 128 until the next sample. `tests/psp/ares/system.cpp`: the
+  node tree's "R-Stick X"/"R-Stick Y" reach the kernel, 128 untouched.
+- `tests/psp/utility.cpp` "utility keyboard input types": the nickname for 0x0c00, full-width spaces, a limit, lower
+  case alone, ASCII among the types, URL; the nicknames for digits alone (ASCII and full-width), hiragana alone (cut
+  by a limit), katakana, half-width katakana, Russian (either case), Korean, kana and digits; none for kanji alone or
+  symbols alone; a game's own text, whatever its characters; types not known. "utility keyboard conversion: the app's
+  cases": every case of `psp-keyboard-cases.txt` through `Kernel::keyboardConform()`.
+- `tests/psp/dialogs.cpp` "dialogs front end: keyboard": the app's answer conformed (digits alone; 0x0c00; a web
+  address's digits; full-width capitals in a field of small letters; line breaks in one line and in two, and other
+  control characters, in typed and untyped fields); the game's own text answered unedited entered as it was (an
+  accented letter and a star in a field of full-width letters, a pair kept whole, and cut before where the limit falls
+  inside it), and the same fields answered otherwise converted.
+- `tests/psp/atrac.cpp` "atrac setting": 0xffffffff takes the whole file; a file ending where memory ends taken to
+  the byte with 0x80000000; SetData, SetMOutData, SetMOutDataAndGetID and a halfway buffer read as far as it goes the
+  same; no RIFF header there, and no memory there, refused (0x80630006).
+- Android: `PspDialogsTest.keyboardFieldsConvertAsTheCoreDoes` (every case of the shared table through `accept()`),
+  `anUneditedDefaultIsEnteredAsTheGameGaveIt` (the dialog's path, `keyboardTexts()` and `keyboardAnswer()`: the game's
+  text unedited as it was, a default past the limit or with a tab among it too, typed over converted),
+  `keyboardFieldsTakeOnlyTheirInputTypes` and
+  `keyboardFieldsHoldWhatsTypedUntilEntered` (what the field holds while typing: romaji kept in a field of kana, the
+  limit counted as entered), `PspRightStickTest`.
+
+### The review's points
+
+An independent review of the branch (merged with master, `afea54b93`) found one Medium and four Lows, all taken:
+
+- **Medium: the app's keyboard rewrote the game's own text.** The field's input types converted its default too, and
+  the classifier knew too little: Latin was ASCII's letters alone, so é, ñ, ü and ß went from a field of letters, and
+  most symbols on a Japanese keyboard (☆ ★ ♪ ※ → … ・ ￥) from a field of symbols; OK on a default could enter a
+  changed or empty name, where the automatic answer leaves it alone and a PSP's keyboard edits it rather than typing it
+  afresh. Ridge Racer 2 is such a game: its driver name, "XEVIOUS" (a Namco game, by chance), is in a field of small
+  letters alone (input types 4), so the first version entered "xevious". Now the game's own text answered unedited is
+  entered as it is (the app's `entered()`, the core's `dialogAnswered()`: above), and the classifier takes U+00C0-024F's
+  letters and every printed character it had no class for (above). A scripted front end (a scratch runner answering as
+  the app does when OK is pressed on the text untouched) on Ridge Racer 2: the keyboard's "XEVIOUS" taken, the save
+  then made says "Player Name：XEVIOUS", and the game goes on into World Tours and a race.
+- **Low: a blank field taking no letter of "PSP"** (kana alone, digits alone, Russian or Korean alone) had its empty
+  text kept, which a name prompt refuses (Peace Walker asked again for good): it gets the first nickname it takes whole
+  (above), and only a field taking none of them keeps its own text.
+- **Low: pspsdk understated.** Its pspctrl.h names bytes 10 and 11 Rx and Ry, valid on a PSP Go with a DualShock 3, a
+  PS Vita, by hacking or in emulation, and marks Rsrv deprecated: `ctrl.cpp`'s comment, the runner's README and the
+  section above say so, and quote pspautotests' ctrl/sampling on the PSP itself.
+- **Low: two conversions with no shared cases** (and apart on characters past U+FFFF in a field taking all, which the
+  core kept and the app didn't; the core's cut at a field's limit could split a pair): one table of cases now, run by
+  both (above); the core keeps no half of a pair in what it converts, and never cuts a pair in two.
+- **Low: `atrac.cpp` against the sound branch** (#229, which takes `atracContext()` out of the setters' lines this
+  branch had changed, so that whichever merged second met a conflict): the negative size moved into `atracSet()` and
+  `atracSetAndGetID()`, the setters' lines as on master. `git merge-tree` of the two branches now leaves only the
+  documents in conflict, and the merged `atrac.cpp` has #229's setters with this branch's negative size.
+
+These fixes had an independent review in turn (PASS, one Low and two Nits, taken): an untouched default the field
+couldn't show whole, longer than its limit or holding a control character, was still converted, the app comparing the
+answer with the game's text rather than with what the field showed of it (now `typing()`'s, the line under the field
+counting what the core will keep); the halfway setter's negative size said to be Phobos's choice; the handoff's
+sources and merges. Its suggestions too: three more shared cases (a tab in a typed field, a space in a field of
+Japanese symbols, a full-width space in a half-width one), and CI's PSP core tests run when a file they share with the
+app's changes (`.github/workflows/psp-core.yml`).
+
+Not done: an edited default is converted whole. A PSP's keyboard keeps what the player leaves of its text and types the
+rest; which characters of an edited text are the game's isn't told apart here, so a field whose own default it can't
+type (Ridge Racer 2's capitals in a field of small letters) has the whole text converted once it's edited.
+
+Checks on the final tree: `tests/psp/run-tests.sh` (sanitizers) 478 groups, 0 failures; `tests/allegrex/run-tests.sh` 58
+groups, 0 failures; `tests/psp/ares/run-tests.sh` 328 checks, 0 failed; Android `:app:compileModernReleaseKotlin
+:app:testModernDebugUnitTest` (two workers) 304 tests, 0 failures. With the branch's runner
+(`~/phobos-work/scratch/review-b00`; its core as committed, the later changes being the app's, the tests', comments and
+documents): Formula Front International's True Analogs camera as before (`c1-right`: level behind the AC at rest after
+"GO!!!", turned and pitched by the right stick; the frames within a mean of 0.7/255 of the previous agent's run); 7th
+Dragon 2020-II's certificate passed into the Diet chamber (frame 1560) and the first conversation (3600); Ridge Racer
+2's default entered unchanged (above).
+
 ## Part 82: sound — every ATRAC ID's context kept current (Angus Hates Aliens past NEW GAME), and sceVaudio
 
 On branch `cursor/psp-audio-b00-2b67`, on master (`b7ea296f4`, then `1d9308714`, #228). The task: items 2 and 5 of
@@ -11030,13 +11210,13 @@ program changes for sceSas) and audio/blocking/vaudio, pspsdk's pspatrac3.h and 
 own code, traced with a scratch runner and disassembled from their memory. No code copied or translated; JPCSP not
 read.
 
-**Save states go to StateVersion 31, and 28 to 30 are skipped.** 27 is the fonts' layout (part 87), which landed
-first: a 27 state loads as the layout before this one, sceVaudio holding nothing (`tests/psp/states.cpp` loads one).
-28 to 30 are other open branches' layouts, and this one's loader refuses them (as it refuses 32, past it), so no
-state of theirs is ever read as this layout or this layout's as theirs. Whoever lands one of those branches after
-this one must renumber its layout past 31 (its loader then reading 31's states as the layout before it), and update
-`tests/psp/ares/system.cpp`'s list of refused versions (28 to 30, and 32: the one it takes falls out of the list)
-along with `tests/psp/states.cpp`'s older layouts.
+**Save states go to StateVersion 31, and 29 and 30 are skipped.** 27 and 28 are the fonts' and the downloads'
+modules' layouts (parts 87 and 88), which landed first: a 27 or 28 state loads as an older layout, sceVaudio holding
+nothing (`tests/psp/states.cpp` loads both). 29 and 30 are other open branches' layouts, and this one's loader
+refuses them (as it refuses 32, past it), so no state of theirs is ever read as this layout or this layout's as
+theirs. Whoever lands one of those branches after this one must renumber its layout past 31 (its loader then
+reading 31's states as the layout before it), and update `tests/psp/ares/system.cpp`'s list of refused versions
+(29, 30 and 32: the one it takes falls out of the list) along with `tests/psp/states.cpp`'s older layouts.
 
 ### Angus Hates Aliens: the contexts
 
@@ -11159,8 +11339,8 @@ An independent review of the branch (merged with master, `649a88137`) found five
 - **Low-level IDs refused every call needing a file** with 0x80630031, unrecorded ones too (sceAtracGetInternalErrorInfo
   was NO_DATA): the seven recorded calls alone look at the context's state now, the rest answering as before (above).
   Corpse Party (20 seconds from the tester's state with `--wav`): its sound byte for byte master's runner's.
-- **28 to 30 skipped** (27 the fonts', loaded): said above, in the handoff, beside StateVersion in `system.cpp` and in the
-  test that refuses them.
+- **29 and 30 skipped** (27 and 28, parts 87 and 88, loaded): said above, in the handoff, beside StateVersion in
+  `system.cpp` and in the test that refuses them.
 
 These fixes had an independent review in turn (PASS, one Low and two Nits, taken): Battle vs. Chess's format, which
 the first agent's trace shows (below); the forced states' test given the two recorded calls it lacked
@@ -11709,3 +11889,213 @@ disassembly helpers): `~/phobos-work/scratch/font-b03/` on the Mac it was made o
 after pictures: `runs/Jeanne d'Arc/sheet-mine-x.png` (and master's hang, the play-tester's `sheet-x.png`),
 `runs/Hammerin Hero/cmp-mine-t1.png` (master left, the branch right), `runs/Final Fantasy III/sheet-mine-f1.png`, and
 each regression game's `runs/<game>/cmp-<run>.png` (master, the branch, their difference times four).
+
+## Part 88: modules from downloads — sceKernelLoadModuleNpDrm, packed relocations and imported variables (God Eater 2 in English)
+
+On branch `cursor/psp-npdrm-modules-2b67`, on master (`0a9a7fa75`, #234), merged with master since (#235, #236, parts 84
+and 87). Parts 81 to 87 are other branches'. Sources: uOFW's module manager (`src/kd/modulemgr/loadModule.c`'s
+sceKernelLoadModuleNpDrm, `loadModuleChecks_inline.h`, `exports.exp`) and loadcore (`loadelf.c`'s
+sceKernelApplyPspRelSegment2, `loadcore.c`'s variable stubs, `include/loadcore.h`), read as a description of the PSP's,
+with its error codes (`include/common/errors.h`); pspsdk's `pspmodulemgr.h`, `psputils.h` and `psprtc.h`; pspautotests'
+recordings hash/md5ctx and video/mpeg/ringbuffer/packnum; RFC 1321; PPSSPP read only as a description of the PSP (its
+module loader's notes on NPDRM EDAT modules, its boot of an installed game update), nothing copied or translated; JPCSP
+not read; and the game itself, its files, and a scratch runner noting each module, file and NPDRM call with its
+arguments and result. The owner's PGD and NPDRM code (`pgd.cpp`, `pgd.hpp`, io.cpp's sceNpDrm functions) is unchanged,
+and nothing here needed it (below). Save states: StateVersion 28 (27 was part 87's, taken first), each module keeping
+the variables it imports and the address each holds; layouts 15 to 27 load with none known, as those builds linked none.
+
+**The problem.** God Eater 2 (NPJH50832, the PSN release made a disc image) with RedArtz's English patch v2.0 needs the
+patch's folder on the memory stick, `PSP/GAME/NPJH50832` (118 files). Without it the game shows the patch's notice ("It
+seems that your DLC file is corrupted or missing": part 55, and the deep-play batch's log, `openEdat ...
+PATCH.EDAT:80010002`). With it, the game found its files, then asked for ModuleMgrForUser 0xf2d8d1b4, which the kernel
+didn't have, and printed `npdrmModLoad : ret=0x8002013a` (the kernel's NOT_YET_LINKED) once a second under the same
+notice, for good.
+
+**What the folder holds**, by each file's first bytes: 45 modules (`.sprx`: god_m000_Boot to god_g999_Base, the scene
+modules; layout, system, tree and boku_menu; 26 creature_* modules), every one a plain ELF (`7f 45 4c 46`, type 0xffa0),
+none `~PSP` and none EDATA; 69 `.edat` files named by 32 hex digits, each 24 bytes, plain ("EntryKEY" and a number);
+PATCH.EDAT (117,325,824 bytes, "rdp ", the game's own archive) and SYSTEM_UPDATE.EDAT ("Pres"), plain too; PARAM.PBP
+(the downloaded content's title, BOOTABLE 0); and PBOOT.PBP (below). The patch carries the game's update decrypted:
+nothing in the folder needs NPDRM's decryption. The game sets its licensee key, opens PATCH.EDAT (flags 0x40000001) and
+calls sceNpDrmEdataSetupKey on it, which finds no "\0PSPEDAT" and leaves it plain, as before; sceNpDrmEdataGetDataSize
+gives the file's own size. Before each module it sets the key again, checks the module's name (sceNpDrmRenameCheck) and
+calls 0xf2d8d1b4 with the path, flags 0 and no options.
+
+**sceKernelLoadModuleNpDrm** (0xf2d8d1b4 in uOFW's export list; not its name's hash, so `addNID`). uOFW's module manager
+checks, in this order: not from an interrupt handler (CANNOT_BE_CALLED_FROM_INTERRUPT, 0x80020064, the kernel's
+ILLEGAL_CONTEXT); a user-mode caller (always, here); a path the program can read (ILLEGAL_ADDR, 0x800200d3) with no '%'
+in it (UNKNOWN_MODULE_FILE, 0x8002012f, its guard against format strings); options, if given, the program can read
+(ILLEGAL_ADDR), a SceKernelLMOption whose first word is its 20 bytes for a program built with SDK 2.80 or later
+(ILLEGAL_SIZE, 0x800201bc); then it opens the file, an error being sceIoOpen's own (NOT_FOUND 0x80010002 for a file that
+isn't there, the kernel's 0x80010015 for a folder). The flags are unused. Each of those is the function's here, from
+uOFW. Then a PSP has npdrm give it the file's module key (npDrmGetModuleKeyFunction), seeks to where the module starts
+and loads it with that key passed to the decrypter (the module's secure install ID); its PGD routines (the ioctls
+0x04100001 and 0x04100002) aren't on this path at all. A module as sold is EDATA, "\0PSPEDAT" with a `~PSP` PRX inside
+encrypted under that key, which npdrm derives from the file and the game's licensee key; Phobos derives no such key, so
+such a file is refused as an encrypted module that can't be decrypted is (UNSUPPORTED_PRX_TYPE, 0x80020148, chosen),
+with a note saying so. Any other file loads as sceKernelLoadModule loads it (`loadModule()`): a plain ELF (God Eater 2's
+patch, made for custom firmware, whose PSPs load decrypted modules, and for emulators), or an ordinary `~PSP` PRX the
+decrypter has a key for; what isn't a module is ILLEGAL_OBJECT, as there. Chosen: official firmware refuses a file that
+isn't NPDRM's, with an error no recording shows. Not done: uOFW's PROHIBIT_LOADMODULE_DEVICE (0x80020146), for a device
+modules may not come from (its ioctl 0x208002), as every device here may.
+
+**Packed relocations.** Every one of the 45 modules failed next: `packed relocations (PT_PSP_REL2) aren't supported yet`
+(ILLEGAL_OBJECT, 0x8002012d, which the game printed instead). Later SDKs pack a PRX's relocations into a program header
+of their own (type 0x700000a1, after the segments) in place of the eight-byte entries, and the loader didn't read it.
+uOFW's loadcore reads it in sceKernelApplyPspRelSegment2: two zero bytes; how many bits a command's kind and its type
+take; two lists of bytes, each starting with its own length; then 16-bit commands: a kind (an index into the first
+list), a segment (one bit for one or two loaded segments, two for more), and for a relocation its type (an index into
+the second) and the rest of the word. A kind with bit 0 clear names the segment offsets count from; with it set it
+relocates a word there by the address of the segment the command names, bits 1-2 saying how the offset moves (by the
+rest of the word, signed; by that as an upper half with a 16-bit lower half after it; to a 32-bit offset after it), bits
+3-5 where an upper half's addend comes from (none; the one before, if the relocation before was an upper half; a 16-bit
+word after it). The types: 1 and 5 a lower half, 2 a 32-bit word, 3 a jump's target (the jump kept), 4 an upper half
+(lui) whose addend completes its address, so it carries, 6 and 7 a j and a jal (written so). uOFW's reading is a
+decompilation that names the cases after standard MIPS's types and slips in places: a segment's command also sets the
+offset, from the rest of its word; a relocation's type comes from the second list, not the first; the upper-half form of
+a move is shifted by the kind's, segment's and type's bits (uOFW's shifts by a pointer); a jump's target is written as a
+word index; the type of the relocation before is kept, for the addend; a command naming a segment past the last is
+refused (uOFW's check is the other way round); and each relocated word is the one at the offset (uOFW's upper half
+writes through the segment's address). The modules settle them: read so (`relocatePacked()` in loader.cpp), all 459,660
+relocations of the 45 modules land in their segments, every j and jal in its module's code, and each of the 38,898 upper
+halves, with its own addend, at an address in its module; without the segment's offset not one module reads to its end.
+A module's segments are numbered as loadcore numbers them: the run of loaded segments from the first.
+
+**Imported variables.** With the modules loading, the title screen's module imports 6 variables from `layout` and 17
+from the EBOOT.BIN's library `main`, the field module 32 from `main`, the 26 creature modules 32 to 58 each from
+`god_g000_Field` (1,188 in all; 33 modules, 1,507 variables), and the EBOOT.BIN itself 6 from `god_g000_Field`; the
+loader had left them all out (the EBOOT.BIN's noted at every boot: "the loader left out 6 variable imports from
+god_g000_Field"). An import entry of 6 words or more points at a table of the library's variables, each the address of a
+list and a NID (loadcore's SceVariableStub; 7 words add a second count, the larger taken). The list, ending in 0, names
+the importer's words that hold the variable's address: each word's top six bits say how (2 a 32-bit word, 5 an upper
+half, 6 a lower half) and the rest where, a word address the importer's own relocations have moved with it (as a jump's
+target; the packed modules' as type 3, and type 6, a j, whose opcode is kind 2). loadcore adds the exporter's address
+when a library is linked, takes it off when it goes, and works out a run of upper halves from the lower half after them,
+so they carry. Here every module's variables, the program's included, are linked with `linkImports()`, which every load
+and unload already runs: each holds the address its words hold now (0 for none), and a variable whose exporter came,
+went or moved has its words moved by the difference (`relinkVariable()`, the upper halves worked out from the lower half
+before it moves). God Eater 2 loads and unloads its scene modules as it goes from one scene to the next (the title's,
+the movie's, the game's, its base's), the EBOOT.BIN's six following `god_g000_Field` wherever it's put. The address each
+holds is state (version 28).
+
+**What the game asked for next**, each answered as a recording has it, or its standard:
+- sceMpegRingbufferQueryPackNum (0x769bebb6): its movie module asks before the opening movie, and asserted (movie.c 440)
+  on the kernel's NOT_YET_LINKED. How many 0x868-byte packets the memory holds, the size unsigned, as ringbuffer/packnum
+  recorded (0xffffffff gives 0x1e741a, 0x80000000 0xf3a0d).
+- sceMd5BlockInit, BlockUpdate, BlockResult and Digest (libmd5.prx, Sony's sceMD5_Library, which the kernel stands in
+  for, had none of them): once the first save is made, the game names the downloaded content's files it looks for by MD5
+  digests, and asserted (god.c 2360) when it couldn't open the one it worked out from a digest that never came. MD5 as
+  RFC 1321 defines it (`md5.cpp`), its context in the program's memory as hash/md5ctx recorded the kernel's own: the
+  four chaining words, a word left alone, the bytes waiting for a block (16 bits, then 16 more, 0), the bytes taken (64
+  bits), the waiting bytes (each block put there before it's stirred in); BlockInit writes only the first 32 bytes. The
+  library's context is taken to be the same (chosen), and UtilsForUser's four, the recorded ones, answer from the same
+  code. A context or data out of memory is ILLEGAL_ADDR (chosen).
+- sceRtcConvertUtcToLocalTime (0x34885e0d), and sceRtcConvertLocalTimeToUTC beside it: a tick moved by the minutes of
+  the system's time zone and daylight saving time settings, the same for every tick, as uOFW's rtc moves it
+  (sceRtcTickAddMinutes by the two settings, as its local clock is), the settings sceUtilityGetSystemParamInt reports
+  (the host's zone now); 0, or INVALID_POINTER (chosen). Which address is the tick and which the result is pspsdk's
+  psprtc.h (chosen: uOFW's decompilation hands them to TickAddMinutes the other way round, unverified, and no recording
+  shows either).
+
+**PBOOT.PBP.** A PSP boots a game's installed update, `ms0:/PSP/GAME/<disc ID>/PBOOT.PBP`, in place of the disc's
+EBOOT.BIN, the disc left in (PPSSPP's notes, which check the update's PARAM.SFO names the same disc); the core boots
+`PSP_GAME/SYSDIR/EBOOT.BIN` alone (`startDiscProgram()`). This patch doesn't need it: the folder's PBOOT.PBP is Bandai
+Namco's update 1.30 ("GOD EATER 2 アップデートデータ(ver.1.30)", DISC_ID NPJH50832), its DATA.PSP Sony's encrypted program
+(`~PSP`, module "main", tag 0x2e5e10f0, 4,119,056 bytes, 4,103,904 unpacked), while the disc image already is that
+update: its PARAM.SFO is the update's own (APP_VER 01.30, the same PBOOT_TITLE), and its EBOOT.BIN a plain ELF of
+4,116,648 bytes holding the patch's own code (`patchpkg_notifier.c`, "It seems that your DLC file is corrupted or
+missing.", `npdrmModLoad`). Booting the PBOOT.PBP would put Sony's Japanese program in the patched one's place; and the
+core can't: started on its own, the decrypter refuses it ("an encrypted program (module "main", tag 0x2e5e10f0) whose
+tag names a key Phobos doesn't have": an NPDRM program's key, which comes with the game's licence). Not done.
+
+**The owner's decryption code.** Not needed for this patch, and unchanged. For a module as sold, what's missing isn't
+PGD: it's npdrm's module key (from the EDATA's header and the licensee key) and the `~PSP` decryption with it
+(loadcore's secure install ID), neither of which pgd.cpp or io.cpp do; no sample of one is here to show its header.
+
+**The game now** (the branch's runner, the software renderer at 2 drawing threads, the owner's fonts, a fresh stick
+holding the patch's folder; the presses scripted as found: the text menus take short presses, its appearance screen only
+longer ones). The notice and the publishers' logos, the intro movie, the title (PRESS START BUTTON) at 1900; Start gives
+the game's install notice in the patch's English ("GOD EATER 2 game data is not installed on the recording media, to
+enjoy comfortable play. Please install the game data from the title menu.", 2400) and the Main Menu (New Game, Continue
+Single and Multi, Trade Avatar In Sleep Mode, Import Save Data, Game Data Install: 2800). New Game: Character Entry
+(Name, Code Name, Gender, Next), the game's kana keyboard, the appearance screen (Hairstyle to Voice, Random, Decide)
+with the character drawn in 3D; "Is this character okay?" Yes saves (MAKEDATASECURE, 426,064 bytes of SECURE.BIN in
+`PSP/SAVEDATA/NPJH50832099c645531020001000`); the opening movie; the opening in the game's engine with English subtitles
+("The Restless God already knows all about your nascent potential... Hehehe!"); the update's hints in English ("As a
+bonus of the update. Reward money for all mission increased to 1.1 times.", "Release some of the pre-delivered content:
+Mission 「Poinsettia」 can now be selected in 「Christmas Pack」"); and the base, from about frame 22,200 of that run. The
+stick walks the player about the base, the camera following, past other God Eaters; Fran at the counter talks in
+English, with a menu of questions (What is God Eater? / What is Blood? / What is a Database? / Got it.), and sends the
+player to relax in the Garden, a hint telling of the elevator. No function missing, nothing noted but the game's own
+prints (six more `.edat` files it looks for by digest aren't in the folder; it goes on). Not reached: a mission, which
+the story leaves till the player has been about the base. The modules a mission loads (the field's, and 26 creatures'
+importing 32 to 58 of the field's variables each) were checked as they are: every one of the 45 modules' 1,507 imported
+variables names a variable its library exports (`main`'s 306 the EBOOT.BIN's 54), and every word their lists name is
+what its kind says (2,473 upper halves each a lui, 2,470 lower halves each an instruction with a 16-bit immediate, 6,092
+32-bit words).
+
+**Without the folder** God Eater 2 is as it was: the base's runner and this branch's give the same pictures at frames
+60, 300, 1200 and 3600 (the patch's notice from frame 10), and the same log but for the loader's old note about the
+EBOOT.BIN's six variables, gone.
+
+**Other games** (`regress.sh`: base and branch one after the other, the library runs' way: 3600 frames, Start at 120,
+Cross at 1800, captures at 60, 300, 1200 and 3600): the PSN releases Final Fantasy III, Brandish: The Dark Revenant,
+Fate/Extra CCC, Final Fantasy Type-0, 7th Dragon 2020, Genso Suikoden: Tsumugareshi Hyakunen no Toki, Cladun, Armored
+Core 3 Portable and Angus Hates Aliens, and three disc games that load modules of their own (Dissidia 012, Grand Theft
+Auto: Liberty City Stories, Kenka Bancho). Ten give the same pictures at every capture; Brandish's title differs at 1200
+by 0.15 of 255 on average and 7th Dragon 2020's save question at 3600 by 0.18, each the same scene an animation step
+apart (its glow, the pulsing NO); Kenka Bancho's intro movie is a few frames apart at 60, 1200 and 3600, as two runs of
+the base's runner are from each other (8.55 at 1200, against 4.84 from the branch's). No function missing in any run,
+and each game's two logs the same. And the library run of part 80's time (`~/phobos-work/scratch/hle-b00/lib-base3`, all
+266 games, 3600 frames each): no game but God Eater 2 was noted for variable imports left out, and none refused for
+packed relocations, so those two changes reach no other game there.
+
+**Checks.** On the final code merged with master (`5a7c2452b`): `tests/psp/run-tests.sh` 502 groups, 0 failures
+(sanitized; master's 497 and five new: "modules from downloads (sceKernelLoadModuleNpDrm)", "modules with packed
+relocations", "modules importing variables", "kernel md5" and "kernel clock zones"; of two runs on the loaded Mac, one
+had the timing-dependent group "ge loads through the depth buffer's views wait for the threads" fail, as before; CI's
+passed); `tests/allegrex/run-tests.sh` 60 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. The
+download modules' group loads and starts a plain, an encrypted and a packed module by sceKernelLoadModuleNpDrm's NID in
+a program on both engines, then each refusal in uOFW's order, nothing left behind; the packed group checks every word of
+a two-segment module made of every kind of command and type (its second segment named both ways), and refuses six broken
+tables, each for its own reason; the variables' group links a module's variable before and after its exporter loads, the
+upper halves carrying, the program's own too, unlinks it as the exporter goes, links it anew where it loads next,
+carries it through a state (its unloading in the loaded machine putting the words back), notes one of the kernel's own
+libraries, and on both engines runs a function compiled before its variable is linked and again after; the MD5 group has
+hash/md5ctx's digests and context bytes and RFC 1321's digests across the padding, both libraries; the clock zones'
+group takes three dates to local time and back in New York's summer and winter and in Tokyo. Changed: "mpeg stubs" has
+packnum's twelve values; "older layouts load" takes layouts 27 and 26 too (no variables: the program's count of them cut
+out of each older state), as master's "fonts glyph states" does now; "state fields" covers a module's imported
+variables; "loader prx" finds the test program's variable (its entry's table read) where it was noted left out. God
+Eater 2's chain again with the final runner, a fresh stick: 108 of its 111 captures the same as before the merge, the
+other three the same scenes a moment apart (the opening movie, a cutscene, and one by 0.16 of 255 on average).
+
+**Review.** An independent read-only review of the branch merged with master found two blockers: MD5's padding copied
+from an empty message's bytes, a null pointer (memcpy given no bytes, which GCC's UBSan stops on: CI's first run did),
+and master's font states test (part 87) reading a layout-28 state as layout 26 without cutting out the program's count
+of imported variables. Both are fixed (`1998c3014`, `5a7c2452b`), and so are its minor points: the clock zones' test
+proved nothing on a host in UTC (it now runs in fixed zones with literal offsets), and the conversion itself moves every
+tick by the settings' minutes, as uOFW's rtc does, where it had used the host's offset at the tick's own date; the state
+fields' test covers the imported variables; a variable of one of the kernel's own libraries is noted; the creature
+modules' counts are put right; uOFW's slips are named; segments are numbered as loadcore numbers them; a word already
+right isn't written again; each broken packed table is refused for its own reason; and a function compiled before its
+variable is linked runs again after, on both engines. Its remark on the owner's EDATA path went to the owner rather than
+into this part.
+
+**Left, and why.**
+- A module as sold (EDATA) is refused, as above: its key is npdrm's, in the owner's area.
+- uOFW's module manager makes the same checks in sceKernelLoadModule and the other LoadModule functions; only
+  sceKernelLoadModuleNpDrm makes them here (sceKernelLoadModule is as it was: no game is known to hand it a '%' or a
+  short option). PROHIBIT_LOADMODULE_DEVICE isn't modeled.
+- loadcore links a library's variables only if every one is found, refusing the library else; here each variable found
+  is linked on its own, and one no module exports holds 0 (its words as the file has them). One of a library the HLE
+  kernel has functions of, which on a PSP is the system's and which no module will export, is noted as its module loads.
+- A variable's list is followed as far as memory goes, and its words patched only where memory is.
+- PBOOT.PBP isn't booted (above).
+- God Eater 2's appearance screen takes only presses held for more than 6 frames, where its other screens take 6 (the
+  deep-play scripts' length); not looked into.
+- Scratch: `~/phobos-work/scratch/npdrm-modules` (`trace.patch`, the temporary tracing; `rel2.py`, `imports.py`,
+  `iso.py` and `chdcat.c`, the files' readers; `runs/trace*`, `runs/explore*`, the exploration; `runs/final1`,
+  `runs/final2`, `runs/final3a`, `runs/drive1`, `runs/final4a`, the final runs, and their states in `states/`;
+  `regress.sh` and `regress/`, the other games; `tests.sh`, the tests built a file at a time for iterating). Nothing was
+  run on the RP6.

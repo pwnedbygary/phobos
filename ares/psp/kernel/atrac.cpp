@@ -245,10 +245,26 @@ auto Kernel::atracParse(Atrac& a, u32 buffer, u32 size) -> u32 {
   return 0;
 }
 
+//The size of a buffer read whole (the four setters given the whole file, SetData, SetMOutData and their AndGetID, and
+//a halfway one said to be read as far as its buffer goes): one the library takes as negative (its top bit set)
+//reaches to the end of the memory the buffer is in. 7th Dragon 2020-II gives sceAtracSetDataAndGetID 0xffffffff for
+//the file it plays on its character's certificate, read whole into the buffer, and waits for good for the sound the
+//library would refuse (PPSSPP notes the same of Tales of VS). The other three, and the halfway case, are Phobos's
+//choice, as no recording or game shows them. A buffer where there's no memory is refused as before, as no file.
+static auto atracWholeSize(Memory& memory, u32 buffer, u32 size) -> u32 {
+  if(s32(size) >= 0 || !memory.reaches(buffer, 1)) return size;
+  u32 reach = 0;
+  for(u32 bit = 1u << 30; bit; bit >>= 1) {
+    if(memory.reaches(buffer, reach | bit)) reach |= bit;
+  }
+  return reach;
+}
+
 //Sets a file on an ID handed out for its codec: readSize bytes of it at buffer, in a buffer of bufferSize bytes
 //(sceAtracSetData's buffer is its data), the output mono if mono. 0, or why it's refused.
 auto Kernel::atracSet(u32 id, u32 buffer, u32 readSize, u32 bufferSize, bool mono) -> u32 {
   if(!audioDecoders) return AtracErrorUnknownFormat;
+  if(readSize == bufferSize) readSize = bufferSize = atracWholeSize(memory, buffer, bufferSize);
   Atrac a;
   if(u32 error = atracParse(a, buffer, readSize)) return error;
   if(a.codec != atracs[id].codec) return AtracErrorWrongCodec;
@@ -551,6 +567,7 @@ auto Kernel::sceAtracSetMOutHalfwayBuffer() -> void {
 static auto atracSetAndGetID(Kernel& kernel, u32 buffer, u32 readSize, u32 bufferSize, bool mono) -> u32 {
   Kernel::Atrac parsed;
   if(!kernel.audioDecoders) return AtracErrorUnknownFormat;
+  if(readSize == bufferSize) readSize = bufferSize = atracWholeSize(kernel.memory, buffer, bufferSize);
   if(u32 error = kernel.atracParse(parsed, buffer, readSize)) return error;
   u32 from = parsed.codec == AtracPlus ? 0 : kernel.atracPlusIDs;
   u32 to = parsed.codec == AtracPlus ? kernel.atracPlusIDs : from + kernel.atracClassicIDs;

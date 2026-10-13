@@ -32,10 +32,10 @@ the evidence. Items 2 and 5 of the deep-play batch 00 report. Clean room: pspaut
 tests force, sas), audio/blocking/vaudio and audio/sceaudio/reserve recordings, pspsdk's pspatrac3.h and pspvaudio.h,
 pspautotests' sascore.h, PPSSPP read only as a description of the PSP (sceVaudio on the SRC channel), the games' own
 code traced and disassembled; JPCSP not read. Begun by one agent; an independent review's points taken by another.
-**Save states go to StateVersion 31** (sceVaudio's hold; 15 to 27 still load, 27 being the fonts' layout of part 87).
-**28 to 30 are skipped**: other open branches' layouts, refused here (as 32 is). Whoever lands one of those branches
-after this one must renumber its layout past 31 and update `tests/psp/ares/system.cpp`'s list of refused versions
-(28-30 and 32) and `tests/psp/states.cpp`'s older layouts (part 82 says more).
+**Save states go to StateVersion 31** (sceVaudio's hold; 15 to 28 still load, 27 and 28 being parts 87's and 88's
+layouts). **29 and 30 are skipped**: other open branches' layouts, refused here (as 32 is). Whoever lands one of
+those branches after this one must renumber its layout past 31 and update `tests/psp/ares/system.cpp`'s list of
+refused versions (29, 30 and 32) and `tests/psp/states.cpp`'s older layouts (part 82 says more).
 - **Angus Hates Aliens**: its music goes through sceSas's ATRAC3 voices with a wrapper (the one pspautotests'
   audio/atrac/sas copies) that sets its ID's context state to 16 and, to stop the music (NEW GAME), unsets the voice
   only while the context still says 16, asking again for good when refused. `_sceAtracGetContextAddress` rewrote the
@@ -76,6 +76,115 @@ after this one must renumber its layout past 31 and update `tests/psp/ares/syste
   on; a state made by this build is refused by builds before it (StateVersion 31).
 - Scratch: `~/phobos-work/scratch/hle-b00`; `~/phobos-work/scratch/review-b00` (the review's points: the runners, the
   runs in `runs/`, the WAVs in `wav/`).
+
+## PSP: the host's right stick for patched games, the keyboard in a field's own characters, 7th Dragon 2020-II past its certificate — 2026-10-12
+
+Branch `cursor/psp-input-b00-2b67`, on master (`6ab2c5583`, merged with `b7ea296f4`, #227, then `1d9308714`, #228).
+docs/psp-core.md, part 81, has the evidence. Items 3 and 4 of the deep-play batch 00 report
+(`~/phobos-work/deepplay/batch-00-report.md`). Clean room: pspsdk's psputility_osk.h and pspctrl.h, pspautotests'
+ctrl/sampling, the games' own code traced with a scratch runner, PPSSPP read only as a description of the PSP (its
+right-stick convention, its note on a negative ATRAC size); JPCSP not read. Save states unchanged (StateVersion 26).
+Begun by one agent, finished by another (the first stopped on finding the second in its worktrees); both agents'
+commits are on the branch, and a third's with an independent review's points.
+- **Right stick** (the owner's decision: pspsdk's Rx and Ry, as a PSP Go with a DualShock 3, a Vita and emulators
+  fill them; the PSP itself has no second stick): every
+  SceCtrlData sample carries the host's right stick in bytes 10 (X) and 11 (Y), 128 when centred, in every game and
+  every sceCtrl read, whatever the PSP Right Stick setting (Off, the default, then does nothing else); centred in
+  digital sampling as the left stick is; the last four bytes 0; not in states. The core takes it from "R-Stick X" and
+  "R-Stick Y"; the app hands the right stick to it in every choice (with Analog stick it is the PSP's stick and the
+  patched games' second one at once: the setting's description says Off suits those games). The runner takes
+  `R-StickX:` and `R-StickY:` in `--press` and `--script` (README). The four Armored Core True Analogs images read it:
+  Formula Front International's camera now rests level behind the AC after "GO!!!" and turns and pitches with the
+  right stick (it pitched up at the sky and the AC turned left on its own).
+- **Keyboard**: `Kernel::keyboardConform()` (utility.cpp) gives text as a field of PSP_UTILITY_OSK_INPUTTYPE_* types
+  and lines takes it (the other width, case or kana where one fits, else left out; spaces full-width only where only
+  full-width types; line breaks only in fields of several lines; Latin letters ASCII's and U+00C0-024F's, every printed
+  character without a class a Japanese symbol). The automatic answer's nickname goes through it: both 7th Dragon
+  games' name fields are full-width letters only (0x0c00), so "PSP" is now U+FF30 U+FF33 U+FF30 (2020's hero was
+  nameless); a field taking none of it gets "ぴーえすぴー", "ﾋﾟｰｴｽﾋﾟｰ", "ПСП", "피에스피" or "1", the first it takes
+  whole. The app's keyboard shows what's typed as Android's keyboard composes it and enters it converted (a line under
+  the field shows the form entered where it differs); the core converts the app's answer again. The game's own text
+  left as the field showed it is entered as the game gave it, by both (Ridge Racer 2's "XEVIOUS", in a field of small
+  letters alone, stays so). The Kotlin and C++ conversions run one table of cases
+  (`android/app/src/test/resources/psp-keyboard-cases.txt`).
+- **7th Dragon 2020-II's certificate** (found by the first agent): the name wasn't what froze it; the game hands
+  `sceAtracSetDataAndGetID` the size 0xffffffff for a sound read whole into its buffer, which was refused. A size with
+  its top bit set now reaches to the end of the buffer's memory (none: refused as before), taken in `atracSet()` and
+  `atracSetAndGetID()` so that the sound branch (#229) merges with this one without a conflict in `atrac.cpp`. The game
+  goes on into its story.
+- **An independent review of the merged branch** (one Medium, four Lows), all taken by a third agent after the second
+  stopped: the game's own text unedited entered as it is and a wider classifier (the Medium: OK on a default had
+  entered a changed or empty name); the fallback nicknames; pspsdk's Rx/Ry in the comments and docs; one table of
+  cases for both conversions, no half of a pair kept or cut in the core; `atrac.cpp` merging cleanly with #229.
+  Part 81's "The review's points" has each, and what wasn't done (an edited default is converted whole).
+- **Checks** on the final tree (with the review's points): `tests/psp/run-tests.sh` (sanitizers) 478 groups, 0
+  failures; `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 328 checks, 0 failed;
+  Android `:app:compileModernReleaseKotlin :app:testModernDebugUnitTest` 304 tests, 0 failures (before it, 472 groups
+  on `04b274924`). Games with the branch's runner: part 81's last paragraph.
+- **Library**: not run by the agents (the second agent's run stopped with its session); the owner runs the 266-game
+  comparison for this branch and #229 together.
+- **Review**: the first agent's independent review (`~/phobos-work/scratch/hle-b00/review-pr-a.md`: the app's keyboard
+  converting keys under Android's composition, a state test, comments, line breaks, a negative size on no memory) had
+  its points taken in `04b274924`; a second independent review of the branch (PASS, no High or Medium) had its Low and
+  Nit points taken in `e743fbcff` (all four ATRAC setters given the whole file take a negative size; the app's field
+  holding nothing past its limit, and saying so when nothing will be entered; no control characters in a field of any
+  type; comments and docs).
+- **On the RP6, to check**: (1) An Armored Core True Analogs image (Formula Front International, 3 Portable, Last
+  Raven or Silent Line Portable) with the PSP Right Stick setting on Off and a controller whose right stick is bound
+  (R-Up/Down/Left/Right, as by default): in a battle, after "GO!!!" and with the right stick untouched, the camera stays
+  level behind the AC and the radar's heading holds; right stick right and left turns the AC, up and down tilts the
+  view (it stays where it's left, as the mod has it). With Analog stick chosen, the right stick moves the AC and the
+  camera at once (expected). (2) 7th Dragon 2020 and 2020-II, a new game: on the name screen, NAME opens the keyboard;
+  typing "Bob" shows "Bob" with "Ｂｏｂ" under it, OK enters "Ｂｏｂ", the game shows the name; 2020-II's certificate
+  then passes into the story. (3) Japanese typed by romaji in a kana field composes normally. (4) Ridge Racer 2's
+  driver name: OK on its default ("XEVIOUS" or another Namco title, in capitals) keeps it in capitals, with no line
+  under the field; typing over it shows the small letters it will be entered in.
+- Scratch: `~/phobos-work/scratch/hle-b00` (runners in `bin/`, the runs in `runs/`, the library runs `lib-*`);
+  `~/phobos-work/scratch/review-b00` (the review's points: the runners, the runs in `runs/`, the scratch front end in
+  `front/`).
+
+## PSP: modules from downloads — sceKernelLoadModuleNpDrm, packed relocations, imported variables; God Eater 2 in English — 2026-10-13
+
+Branch `cursor/psp-npdrm-modules-2b67`, on master (`0a9a7fa75`, #234), merged with master since (#235, #236).
+docs/psp-core.md, part 88, has the evidence. Clean room: uOFW's module manager and loadcore, pspsdk's headers,
+pspautotests' recordings, RFC 1321, PPSSPP's notes read only as a description of the PSP; JPCSP not read. StateVersion
+28 (each module keeps its imported variables; 27 is part 87's). The owner's PGD/NPDRM code (pgd.cpp, pgd.hpp, io.cpp's
+sceNpDrm functions) is unchanged and wasn't needed.
+- **Before**: God Eater 2 (NPJH50832) with RedArtz's English patch v2.0 and its folder `PSP/GAME/NPJH50832` on the stick
+  stopped at the patch's "your DLC file is corrupted or missing": ModuleMgrForUser 0xf2d8d1b4 missing.
+- **The folder**: its 45 `.sprx` modules are plain ELFs, its EDATs plain too: nothing needs NPDRM decryption (the
+  owner's sceNpDrmEdataSetupKey leaves the plain PATCH.EDAT as it is, as before).
+- **sceKernelLoadModuleNpDrm**: uOFW's checks and errors (ILLEGAL_CONTEXT from an interrupt, ILLEGAL_ADDR, a '%' is
+  UNKNOWN_MODULE_FILE, options ILLEGAL_ADDR or ILLEGAL_SIZE, then sceIoOpen's own error); an NPDRM module as sold
+  (EDATA) refused, UNSUPPORTED_PRX_TYPE (chosen), its key (npdrm's module key, derived from the EDATA and the licensee
+  key, and the `~PSP` decryption with it) not derived: that's what's missing for store-bought download modules; any
+  other file loads as sceKernelLoadModule's do (a plain one, as custom firmware and emulators load it: chosen).
+- **The loader**: packed relocations (PT_PSP_REL2), read as uOFW's loadcore does, the steps its decompilation loses
+  settled by the modules (all 459,660 relocations of the 45 land in their segments, every jump in its code); imported
+  variables linked as modules load, unload and move (`linkImports()`, `relinkVariable()`), the program's included.
+- **What the game asked for next**: sceMpegRingbufferQueryPackNum (packnum recorded), MD5 (sceMd5 and UtilsForUser's,
+  the context as hash/md5ctx recorded), sceRtcConvertUtcToLocalTime and back.
+- **PBOOT.PBP**: not booted by the core (it boots the disc's EBOOT.BIN); not needed here: the disc image already is the
+  1.30 update, its EBOOT.BIN the patched one; the folder's PBOOT.PBP is Sony's encrypted program (tag 0x2e5e10f0, a key
+  the core hasn't). Not done.
+- **The game now** (fresh stick with the folder): title, the game's install notice in English, the Main Menu, Character
+  Entry, the appearance screen, the first save, the opening with English subtitles, the update's English hints, and the
+  base, where the player walks and Fran talks in English. A mission not reached (the story first sends the player
+  about).
+- **Checks** (`5a7c2452b`, merged with master): tests/psp 502/0 (five new groups; of two local runs one had the
+  timing-dependent group "ge loads through the depth buffer's views wait for the threads" fail on the loaded Mac, as
+  before; CI's passed), tests/allegrex 60/0, tests/psp/ares 318/0. God Eater 2 without the folder as before (the same
+  pictures, its log but the loader's old note); twelve other games (nine PSN releases, three that load modules) with the
+  base's runner and this one: the same pictures but animation steps and Kenka Bancho's movie timing, which two base runs
+  show too; their logs the same. The game's chain again on the merged code: 108 of 111 captures as before, the rest a
+  moment apart.
+- **Review**: an independent read-only review found two blockers, both fixed (`1998c3014`, `5a7c2452b`): MD5 copying
+  from an empty message's null pointer (GCC's UBSan stopped CI's first run), and master's font states test reading
+  layout 28 as 26 with the variables count in; and minor points, all taken (the clock zones by the settings' minutes for
+  every tick, as uOFW's rtc, tested in fixed zones; state fields; the kernel's own libraries' variables noted; counts
+  and uOFW's slips in part 88; loadcore's segment run; unchanged words not rewritten; broken tables' reasons; relinked
+  code run again). Its remark on the owner's EDATA path (io.cpp's `pgdDescriptor()` reads the PGD header at offset 0,
+  sceNpDrmEdataSetupKey puts the data at 0x90) goes to the owner.
 
 ## PSP: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces — 2026-10-13
 

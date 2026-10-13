@@ -168,7 +168,8 @@ auto nodeTree() -> void {
                     "Start"}) {
     CHECK((bool)root->find<Node::Input::Button>(string{"Controls/", name}), std::string{"a button "} + name);
   }
-  for(auto name : {"L-Stick X", "L-Stick Y"}) {
+  //(the right stick no PSP has: kernel/ctrl.cpp's convention)
+  for(auto name : {"L-Stick X", "L-Stick Y", "R-Stick X", "R-Stick Y"}) {
     CHECK((bool)root->find<Node::Input::Axis>(string{"Controls/", name}), std::string{"an axis "} + name);
   }
   auto drive = root->find<Node::Port>("UMD Drive");
@@ -254,7 +255,15 @@ auto program(const fs::path& programs, bool recompile) -> void {
   host.held = {{"L-Stick X", 0}, {"L-Stick Y", -1}};
   root->run();
   CHECK(psp.kernel.controller.analogX == 128 && psp.kernel.controller.analogY == 127, "the stick's middle");
+  //the right stick the same way, apart from the left; 128 each way when left alone
+  CHECK(psp.kernel.controller.rightX == 128 && psp.kernel.controller.rightY == 128, "the right stick left alone");
+  host.held = {{"R-Stick X", 32767}, {"R-Stick Y", -32768}};
+  root->run();
+  CHECK(psp.kernel.controller.rightX == 255 && psp.kernel.controller.rightY == 0, "the right stick's far corner");
+  CHECK(psp.kernel.controller.analogX == 128 && psp.kernel.controller.analogY == 128, "the left stick left alone");
   host.held.clear();
+  root->run();
+  CHECK(psp.kernel.controller.rightX == 128 && psp.kernel.controller.rightY == 128, "the right stick let go");
 
   root->unload();
 }
@@ -645,9 +654,9 @@ auto states(const fs::path& programs) -> void {
     //the display's count of lines adjusted (part 32); version 14, before the disc drive kept whether it was
     //deactivated (part 37). Layouts 15 and 16 load with the message-dialog abort counters defaulted (part 42).
     //Each older layout is refused by its header, before anything is touched (even the compiled code, which any load
-    //throws away); so are 28 to 30, skipped (other branches' layouts: a branch landing one renumbers it past 31, and
-    //takes it out of this list), and 32, past this one. 27, the fonts' (part 87), loads.
-    for(u8 version : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 28, 29, 30, 32}) {
+    //throws away); so are 29 and 30, skipped (other branches' layouts: a branch landing one renumbers it past 31,
+    //and takes it out of this list), and 32, past this one. 27 and 28 (parts 87 and 88) load.
+    for(u8 version : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 29, 30, 32}) {
       bytes.assign(state.data(), state.data() + state.size());
       bytes[4] = version, bytes[5] = bytes[6] = bytes[7] = 0;
       serializer old{bytes.data(), u32(bytes.size())};
