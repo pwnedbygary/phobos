@@ -47,8 +47,10 @@ sources' hash covers `compile.sh`, so changing it would have meant regenerating 
   valid SPIR-V: spirv-val passes it) with the hash kept: the byte comparison fails; `presentSPIRV`'s id bound set to 1:
   the comparison and spirv-val both fail (11 valid); no glslang in PATH: fails; a glslang calling itself 16.5.0:
   fails.
-- **Checks**: actionlint 1.7.12 on the workflow (clean); the script on master's tree (pass); CI on the PR: below once
-  run.
+- **Checks**: actionlint 1.7.12 on the workflow (clean); the script on master's tree (pass); CI on #239 (run
+  38435975771, ubuntu-24.04): the image has no glslang of its own ("none"), the archive's SHA-256 matched, and
+  Khronos's Linux glslang 16.6.0 compiled `shaders.hpp` byte for byte; Ubuntu's SPIRV-Tools v2025.1 passed all 12
+  modules.
 
 ## PSP: savedata's patterns — Dissidia's Load Game, Final Fantasy Type-0's list; Disgaea Infinite's New was Continue — 2026-10-13
 
