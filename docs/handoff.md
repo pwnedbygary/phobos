@@ -57,6 +57,9 @@ Save states unchanged (StateVersion 26). The software renderer untouched.
 - **Review**: an independent read-only review (no blocker, three major points: accurate mode's held rows, texels a
   PRIM takes for sprites, beside fills inside memory's callbacks) and a delta review (its tests in 3D so they reach the
   held-row paths); all points taken (04e5d1c8a, 7099e35e3).
+- **Library** (accurate Vulkan, 3600 frames, master against the final code): all 266 finish in both, 214 the same
+  at all four captures, 32 within a level; of the 20 others, those nearer Software are the dither and depth fixes,
+  those nearer master the same movie or demo a few frames apart (the clock follows the host's; part 83 lists them).
 - **On the RP6, to measure**: Software against Vulkan (fast) in the Armored Cores' intros and first menus (the M1
   can't say why the RP6 was slower there: the GPU's per-frame work is half a texture upload, a present and a shot),
   Colin McRae's race, Death Jr. II, Sonic Rivals, Activision Hits Remixed, Brothers in Arms, Killzone's menus,
