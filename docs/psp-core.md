@@ -3734,7 +3734,8 @@ named below through this core, before and after.
   the screen, depths outside the range), and cut where it reaches past the near plane (the new end blended from the
   kept one, as a triangle's; with flat shading, a cut-away second end keeps its color). None of that is measured but
   2D's pictures. Anti-aliasing (ANTI_ALIAS_ENABLE, `GU_LINE_SMOOTH`) isn't emulated, and noted once: `gpu/exact/lines`
-  shows it changes nothing without blending; what alpha it gives with blending isn't known.
+  shows it changes nothing without blending; what alpha it gives with blending isn't known. (Since part 78 it is:
+  each pixel's alpha its coverage, measured by round 4's `lines-smooth`.)
 
 **Bounding boxes** (`draw.cpp`'s `boundingBox()`, `list.cpp`'s BOUNDING_BOX and BJUMP). BOUNDING_BOX tests the count
 vertices at the vertex address (pspsdk's `sceGuBeginObject` gives the corners of a box around what follows), and BJUMP
@@ -10317,6 +10318,200 @@ GE, draw, 3D, curves, states and measure groups), `py/` (the analyses: `countv*.
 `lsum.py` lighting), `ours-base` and `ours-a` (the core's run of every round before and after), `lib-a` (the library
 run), `lib-base` (the base's runs of the games that differ), `sheet-a*.png` (their captures side by side).
 
+## Part 77: memstick: is the memory stick — Colin McRae Rally 2005 Plus's save
+
+On branch `cursor/psp-colinsave-2b67`, begun on `cursor/psp-dialogs-2b67` (PR #221, the system's dialogs; part 73) and
+merged with master since (#221, #222, #224 and #225). Part 74 is #224's; 76 and 78 are other branches', and 79 is kept
+for another. Sources: the game itself, traced with a scratch runner (each savedata call's parameters and answer, the
+files on the stick after it, every system call over the frames around the save with its caller, and every file it
+opened); pspsdk's psputility_savedata.h and pspiofilemgr.h; pspautotests' utility/savedata tests (none saves without a
+data buffer); uOFW's iofilemgr.c (the PSP's sceIoAssign() makes a name an alias over a file system and a block device,
+and alias names are compared whatever their case: `strcmp_bs`); PPSSPP read only as a description of the PSP (its file
+system's names for the memory stick, its savedata notes; nothing copied). JPCSP was not read. Save states are unchanged
+(StateVersion 26): the kernel gains no state.
+
+**The problem** (a play-tester's batch report, item 2). Answering Yes to "Do you wish to create an Auto-Save file?"
+gave "Save failed! Check Memory Stick Duo™ in the Memory Stick Duo™ slot and please try again."; the folder
+`PSP/SAVEDATA/ULES001110000/` was there with PARAM.SFO (4912 bytes), ICON0.PNG (15912) and PIC1.PNG (65891), but
+OPTIONS.DAT was 0 bytes, and the next boot found no save and asked again.
+
+**What the game asks for.** One savedata call, an autosave (mode 1) in the parameters' second size (1500 bytes, 0x5dc:
+no key, no secure version), game ULES00111, save "0000", file OPTIONS.DAT, overwrite 1, with no data: dataBuf 0,
+dataBufSize 0, dataSize 0; sfoParam's title "Colin McRae Rally 2005 plus", detail "Save game for Colin McRae Rally 2005
+Plus", parental level 2, ICON0 and PIC1 given (their sizes the files'). The kernel made the folder, the icons and
+PARAM.SFO, wrote OPTIONS.DAT with the 0 bytes it was given, and answered 0, which the game took: the save utility's
+part was done. What failed came after it. At boot the game had assigned a device of its own,
+`sceIoAssign("memstick:", "msstor0p1:/", "fatms0:", 0)` (the stick's FAT file system, read and write), which the
+kernel answers 0 and forgets (the devices here have their names for good); four frames after the autosave it opens
+`memstick:/PSP/SAVEDATA/ULES001110000/TIMES.DAT` (sceIoOpenAsync, write, create, truncate), polls it, and closes it:
+the open had failed as no such device (0x80010013, the descriptor kept only to hold that result), the poll took the
+result and the descriptor went with it, so the close was BAD_FILE (0x80020323), and the game showed "Save failed!".
+At boot, likewise, it looks for its save by opening `memstick:/.../CMR5TS.DAT` for reading (asynchronously too, as
+every open of its own files is): no device, so no save, whatever the stick held. On a PSP the assignment makes
+memstick: an alias of the stick's file system, as fatms0: is, its name matched whatever its case (uOFW); PPSSPP's file
+system takes memstick: as ms0: (by its notes, whatever was assigned), and the kernel's own devctl already answered
+memstick:'s stick questions (inserted, formatted) as the stick's.
+
+**The fix** (`io.cpp`, `deviceName()`): memstick: is ms0:, beside fatms0: and ms:, so every file call (open, read,
+write, the asynchronous ones, status, folders, removing, renaming, the working folder) reaches the stick through it,
+whatever its case. Chosen: memstick: is the stick whether a game assigned it or not (on a PSP there's no memstick:
+before the assignment). Keeping what sceIoAssign assigned would be state (a list of names in the save states) for no
+game that needs it, and the assignments the games make (Metal Gear Acid's and Ridge Racer's disc0: through isofs0:,
+this one) name devices the kernel has anyway. What stays apart from a PSP, none of it met by a known game: memstick:
+answers before any assignment, assigning it elsewhere is ignored, and sceIoAssign answers 0 where a PSP's says
+ALIAS_USED for a name in use (as before).
+
+**The game now** (the play-tester's fresh.txt on an empty stick, then reload.txt on the same stick, with the base's
+runner and this branch's, both clean): before, frame 2460 "Save failed!", the stick holding PARAM.SFO 4912, ICON0.PNG
+15912, PIC1.PNG 65891 and OPTIONS.DAT 0, and the second boot's "AUTO-SAVE." question again at 2100. Now, after the
+empty autosave, the game writes TIMES.DAT (3,897,120 bytes) and CMR5TS.DAT (28) itself, both opened asynchronously,
+then autosaves again with its data (dataBuf given, 228,760 bytes of OPTIONS.DAT), and goes on to its loading screen.
+The second boot opens CMR5TS.DAT, says "AUTO-LOAD. Loading data. Do not remove Memory Stick Duo™ or switch off the
+system." (2100), autoloads OPTIONS.DAT (mode 0: 228,760 bytes read, bind 1021), reads TIMES.DAT and reaches its main
+menu (CHALLENGES - CHAMPIONSHIP - CAREER, 3000 on); the stick's six files are as the first boot left them. A stick
+holding the broken save the base left (OPTIONS.DAT empty, no TIMES.DAT or CMR5TS.DAT) needs no clearing: the first
+boot asks again, Yes writes all six files at a fresh stick's sizes, and the next boot autoloads (the review's run).
+
+**A save mode given no data** is left as it was: the kernel writes the named file empty (and lists it secure in
+PARAM.SFO), where PPSSPP's notes write no data file at all without a buffer and leave it out of SAVEDATA_FILE_LIST
+(their note on it names mode 13, but the condition holds for every save mode). No pspautotests recording saves
+without a buffer, and here the game's second autosave writes OPTIONS.DAT over it 31 frames later, so nothing it does
+depends on which.
+
+**Other games** (`two-boots.sh`: each booted twice on one stick, Cross every 5 s, with the base's runner and this
+branch's): twelve early-saving games, of which five write a save in that time (Valkyria Chronicles II and III, Shining
+Blade, Daxter, Ridge Racer 2); every one of the 24 boots leaves the same files at the same sizes with either runner,
+and the captures that differ are mid-movie frames. The test (`utility savedata through memstick: (Colin McRae Rally
+2005 Plus)`) makes the game's calls as traced (each open asynchronous, polled), and beyond them its files' status and a folder
+listing through memstick:, memstick: in capitals,
+a rename to ms0: (the same device), a relative open from a working folder on memstick:, and memstick: with no
+assignment.
+
+**Checks.** On the branch merged with master (340857fe9): `tests/psp/run-tests.sh` 467 groups, 0 failures;
+`tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. Colin McRae
+again with the merged runner, fresh.txt then reload.txt: the same six files at the same sizes as before the merge,
+"AUTO-LOAD." at 2100 and the main menu at 3000. The scratch (the scratch runner, the scripts, the runs and their
+captures) is in `~/phobos-work/scratch/colinsave/` on the Mac it was made on, not in the repository.
+
+## Part 78: anti-aliased lines — the coverage for the alpha, measured; Dead or Alive Paradise's wireframe gone
+
+The play-test (batch 1, item 1) found every girl's 3D model in Dead or Alive Paradise (ULUS10521) covered in a
+wireframe of coloured 1-pixel lines along its mesh edges, in every 3D scene, with both renderers, from the frame the
+first model appears, the same frame the core noted "anti-aliased lines (ANTI_ALIAS_ENABLE) are drawn aliased". Clean
+room: the owner's PSP's round 4 pictures, a trace of the game's own display lists, and PPSSPP's software rasterizer
+read for how it describes the PSP (none of its code copied or translated); JPCSP not read. Save states unchanged.
+
+### What the game draws
+
+A trace of the beach scene's lists: after each model's triangles the game draws its edges again as 3D line strips with
+ANTI_ALIAS_ENABLE, no vertex color (the material's ambient, 0xffffffff), u8 texture coordinates, 16-bit normals and
+skinning; blending source alpha over one minus it, the alpha test above 0, the depth test GEQUAL with depth writes,
+dithering, no lighting; texture function replace, RGB only, texture map mode UV, scale 1, offset 0; and for its texture
+0x04044000, 512x512 5551, rows of 512: the frame buffer itself (0x44000, 5551). Drawn as the core drew them, opaque,
+each pixel at the texel the model's own coordinates give, the lines showed other parts of the screen (sky, palms,
+sand) over the girls. On a PSP the pass doesn't show.
+
+### What the PSP does
+
+Round 4's `lines-smooth` (tools/psp-measure: in each of 16x16 cells a white line from (4 + i/16, 4 + j/16) pixels to
+(7.5, 2.25) further, GU_LINE_SMOOTH, blended source alpha over black; the owner's PSP ran round 4 three times, the
+same each time) has the anti-aliased line light exactly the pixels the aliased one does (`lines-shallow`), each grey
+level its alpha (the blend's arithmetic gives `(511 * (2a + 1)) >> 10 = a` for white over black). A pixel's alpha is
+found exactly, for all 1920 lit pixels (12 of them 0):
+
+- where the line crosses the pixel's middle column, as a fraction of the pixel from its top edge, in 256ths, rounded
+  up, the line stepped from its left end by its slope cut toward zero to 65536ths (13 or more fraction bits fit every
+  pixel; 10 and 12 miss 174; the slope rounded instead of cut misses 368);
+- then the distance to the nearer edge: min(g, 256 - g), held to 0 to 128. A line through a pixel's middle gives 128,
+  one along its edge 0.
+
+PPSSPP's rasterizer describes the PSP the same way in words: an anti-aliased line's alpha is replaced by its coverage,
+0 to 128. For a textured anti-aliased line it takes the texel at each pixel's own place on the screen, a rule its own
+comments call a naive guess.
+
+### The fix
+
+`GE::line()` marks a line anti-aliased (ANTI_ALIAS_ENABLE, not in clear mode) and keeps its slope in 65536ths;
+`linePixels()` (raster.cpp) gives each pixel's color the coverage for its alpha and, textured, the texel at the
+pixel's own middle; the through-mode texture reach (draw.cpp) takes the whole texture for such lines. The Vulkan
+renderer draws a line from `linePixels()`'s pixels, so it draws the same without a change of its own. The note is
+gone. Measured: the coverage of shallow lines falling to the right, through mode, untextured, vertex alpha 0xff.
+Chosen, and labelled so in the code: the coverage replaces the vertex's alpha (PPSSPP's description); a steep line is
+a shallow one turned, as the pixels it lights are; a rising line's slope is cut toward zero (not down); the texel at
+the pixel's own middle (PPSSPP's description, and what the game needs: its edge pass blends each pixel with itself,
+which leaves it as it was); clear mode draws as before.
+
+`lines-smooth` now matches the PSP's word for word; the other round 4 line pictures are as they were (only
+`lines-smooth` turns anti-aliasing on).
+
+### Round 7
+
+`tools/psp-measure`'s new first menu line, "Round 7: the GE's anti-aliased lines", writes six pictures
+(`manifest7.txt`) for what's chosen above: `aa-slopes` (8 slopes, shallow and steep, falling and rising, each drawn
+both ways over the same segments, at every sixteenth along x), `aa-axes` (level, upright and diagonal lines, each both
+ways, at every sixteenth across, a level line from along its row's edge to through its pixels' middles), `aa-alpha`
+(`lines-smooth`'s lines at every vertex alpha: replaced or scaled), `aa-blend` (a colored line over a known
+background in eight modes, with and without the alpha test, clear mode among them),
+`aa-textured` (every vertex at one texel or a ramp of them, replace, modulate and bilinear: which texels the pixels
+take, and the texel's alpha against the coverage) and `aa-3d`. `tests/psp/measure.cpp` drives it and compares with a
+PSP's files where there are any. `pspmeasure.elf` was rebuilt in the pinned pspdev image (master's source rebuilds
+there to the committed file byte for byte). Not run on a PSP yet.
+
+### The game now
+
+The play-tester's states, 300 frames, PNGs at 30 to 300, software and Vulkan (`~/phobos-work/scratch/aalines/sbs`:
+`bsw.png`, `bvk.png`, `sw.png`, `vk.png`, `zoom-270.png`, the play-tester's frames on the left), and the pool scene
+from `island.bin` with `pool.txt` at `q-pool.png`'s frames (`pool.png`): the girls' skin is smooth, no lines, at the
+beach, the pool and in the volleyball match, with both renderers. Software and Vulkan now differ by a mean of 0.09 to
+0.23 a channel (0.23 to 2.42 before, nearly all of it on the line pixels).
+
+### The library
+
+The whole library the report's way (3600 frames, Start at 120 and Cross at 1800, 7 GE threads, three games at a
+time) beside the final run (`lib-top`): 265 of 266 finish their 3600 frames; Killzone was stopped at the 900-second
+limit (691 s in the final run; the Mac was busy with other work, and nearly every game ran slower than in the final
+run). Three games draw anti-aliased lines in those frames (the final run's logs note it): MotorStorm: Arctic Edge,
+whose menu panels' slanted white edges were hard steps and are now graded (frame 1200, the only one that changes
+from the lines); Persona 3 Portable, no frame different; and Virtua Tennis: World Tour, whose frame 60 (the Memory
+Stick notice) differs by a step of its fade, the run's own timing. The other games' differences (45 with a frame more
+than 1 of 255 apart a channel) can't come from this change, which touches only anti-aliased lines: they're movies,
+fades and titles a few frames apart as two runs differ, and what master changed since the final run (the Metal Gear
+Acids' titles, part 72).
+
+After the merge with master (`529fbf403`) and the second review's fixes the library ran again, one game at a time
+(`lib2`, `lib2-compare.tsv`): all 266 finish, Killzone too. 28 games have a frame more than 1 of 255 apart from the
+final run's. MotorStorm: Arctic Edge's frame 1200 is again the only one from the lines (0.47), Persona 3 Portable and
+Virtua Tennis: World Tour are the same, and the six games new to the list (Jeanne d'Arc, Kenka Bancho, Metal Slug XX,
+Super Stardust Portable, Syphon Filter: Dark Mirror, The Sims 2: Pets, 1.75 to 5.87) draw no anti-aliased line.
+
+### Checks
+
+- `tests/psp/run-tests.sh` (sanitized) 468 groups, 0 failures (on master `529fbf403`): "draw anti-aliased lines" (five measured cells, shallow
+  and turned steep, at vertex alphas 0xff and 0x20, the alpha test dropping a pixel of no coverage, a clamped textured
+  line's texels from rows its ends' coordinates wouldn't decode) and "gpu anti-aliased lines against the software
+  renderer" (flat, then textured from the frame buffer they draw into and modulated, each line's alpha test above 0,
+  31, 63 or 95, byte for byte) are new; "psp measure" runs round 7. With `PSP_GE_RESULTS` set to the owner's round 4 to
+  6 results, `lines-smooth` is "same".
+- `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed.
+- An independent read-only review found no bug in the core. Its points were fixed: round 7's replace-RGBA rows read
+  the alpha from the frame buffer's alpha byte, which is the stencil's (now read through blending, over white); the
+  GPU test saw the coverage only as zero or not and its textured half wrote back what it read; the draw test never
+  reached the texture rows past the ends'; aa-slopes' reversed rows weren't the same segments; aa-3d didn't try the
+  texture scale and offset; comments and sizes. Left as it is: the texture reach could stop at the drawn region rather
+  than the whole texture (fewer rows for the Vulkan renderer to copy; 3D already takes the whole texture).
+- A second independent review, of the whole branch, found no bug either. Its points were taken: `aa-axes` added to
+  round 7 (level, upright and diagonal lines, which aa-slopes' two slopes didn't try, and where a level line on a row's
+  edge falls); above 1x the Vulkan renderer's textured anti-aliased pixels take a texel per GPU pixel, as a copy of the
+  frame buffer at that resolution has them, not one per square; through mode's texture reach no longer guesses rows
+  for anti-aliased lines but takes the whole texture; the GPU test checks that the GPU drew its lines; comments.
+
+### Left, and why
+
+- Round 7 on a PSP: whether the coverage replaces the alpha or scales it, every octant's rule, blending's and the alpha
+  test's use of it, which texels a textured line takes, 3D, clear mode.
+- Scratch: `~/phobos-work/scratch/aalines` (fit2.py, the fit; sbs/, the pictures; lib/, the library run;
+  lib-compare.tsv).
+
 ## Part 79: where the slow games' emulation thread goes, and making it faster — the GPU's palette pictures decoded where taken, memory's changes only where there's code, calm system calls, more of the CPU compiled
 
 On branch `cursor/psp-cpu-speed5-2b67`, on master (`6ab2c5583`, #224 merged in). The task: on the owner's Retroid
@@ -10655,3 +10850,164 @@ compiles at once; `patches/`: counters, clock, states, the counting build's `sta
 `bench2/final1.tsv`, `final3.tsv`, `iso.tsv`), `hashcmp.sh` (`hash/`), `sample.sh`, `prof2.sh` and `sampletop.py`
 (`prof/*-merged-vkf.top`), `stats-all.sh` (`stats/*-merged-vkf.txt`), `breakdown.py`, `tests1.sh` (a filtered copy of
 tests/psp), `lib1.sh` and `lib/` (the library subset), `scenes/` (the states), `commit/` (these notes' drafts).
+
+## Part 80: the savedata trace — After Burner's dates, the list modes' automatic answer (Brandish, 7th Dragon 2020)
+
+On branch `cursor/psp-savedata2-2b67`, begun on `cursor/psp-colinsave-2b67` (part 77) after its merge of master. Parts
+76 to 79 are other branches'. Sources: the games themselves, traced with the new option; pspsdk's psputility_savedata.h
+(the modes and the parameters' layout); pspautotests' utility/savedata tests; FAT's directory entries (a file's dates in
+local time, with no zone, none before 1980); pspsdk's psputility_sysparam.h (the time zone and daylight saving time
+settings); PPSSPP read only as a description of the PSP (its notes on the save dialog's lists copying the chosen name
+back; nothing copied). JPCSP was not read. Save states are unchanged (StateVersion 26): the trace is the host's, and
+nothing else gains state. The branch's first commit (926cf1214) failed CI's GCC build, and an independent review of it
+followed; both are taken in the commits after it, folded in below (**CI** and **The review's points** at the end).
+
+**The problem** (the play-testers' deep-play batch 00, suspected bug 1): three games' saves failed with no savedata
+note. After Burner: Black Falcon wrote `ULUS102440000` in full, then went back to pilot selection after its story,
+forever, and on the next boot its autoload said "No game data was found."; 7th Dragon 2020 [English v0.91]'s progress
+save was never written and its title's LOAD GAME found nothing; Brandish: The Dark Revenant wrote `NPUH101950001`, and
+its loads, from the title and in play, dimmed the screen and did nothing.
+
+**The trace** (`tools/psp-runner --trace-savedata`; `Kernel::savedataTrace`, empty unless a host sets it): each savedata
+request a line with its frame, as the game made it (the mode by pspsdk's name, the structure's size, the game's and the
+save's names, a list's names, the list dialog's focus, and the save chosen from the list, by a front end's player or the
+automatic answer), the data file, the buffer and the data's size, whether the save's folder is there, and the modes' own
+fields; then its answer (the result, named, and what came back, a chosen name as written back into the request).
+`savedata()` traces, writes a chosen name into the request, and calls `savedataMode()`, the modes as they were; the
+trace reads only the parameters' words that are in memory (a read past it would be noted and counted in the machine's
+state). With the app's dialogs, what they answer without doing a request isn't traced: a dialog backed out of, the
+notices that there's nothing to load or delete, and the deletes from a list. The runner's README has the format and real
+lines. With Colin McRae's fix (part 77) alone none of the three games was fixed.
+
+**After Burner: Black Falcon (ULUS10244).** The trace showed its autoload (mode 0, save "0000", AFTRBURN.BIN, 16368
+bytes) answered in full on some runs, and on others no request at all before "No game data was found.": the runs
+differed only in the save's files' dates. A copy that kept the play-tester's dates (00:53 that morning) loaded; a copy
+dated at once, or a save the game had just written, didn't. The kernel gave a file's dates (sceIoGetstat, sceIoDread,
+the savedata list and files modes) in UTC, and the PSP's clock (sceRtcGetCurrentClockLocalTime) in the host's local
+time: on a Mac 4 hours behind UTC a save made in the last 4 hours was dated after now, and the game, which looks at its
+save's files itself before asking the utility (their dates, it seems: nothing else differed), took it for none. The same
+check after the story, on the save it had just written, sent it back to pilot selection. With TZ=UTC (the two zones the
+same) the fresh copy loaded, unchanged code. **The fix** (`io.cpp`, `writeTimes()`): the dates in local time, through
+`writeDate()` as the clock's are; a memory stick's FAT keeps local times (chosen: no recording of a PSP's dates in
+another zone). Nor is any date later than the PSP's own clock, as local times go: that clock is startTime (the host's
+time at power-on, in whole seconds) plus the time the PSP has run, so it falls behind the host's, which dates the files,
+while the emulation is paused or runs slower than a PSP, and after a state saved earlier is loaded (startTime and the
+cycles come back with it); the save from the future would return (the runner, not paced to real time, doesn't show it).
+A date later than the clock's now is the clock's now. Compared in local time, as the game compares them, the hour
+daylight saving time gives back is covered too: a file changed in its first pass is later in local time than the clock
+in its second, though earlier in UTC. A time before 1980 in local time, or none (a file gone), is 1980-01-01 00:00:00,
+as no FAT stick holds an earlier date (the first commit's 1970's start in UTC was 1969 west of Greenwich). The times are
+read with stat() itself (`hostTimes()`; **CI** below). The system's time zone and daylight saving time settings
+(sceUtilityGetSystemParamInt's 6 and 7, 0 until now) are the host's at the clock's now, so they agree with the clock's
+local time and the dates (`hostZone()`): the zone as pspsdk has it, the offset from UTC in minutes without daylight
+saving time ("EST = -300"), and daylight saving time a setting of its own, an hour on top, 1 while kept. An offset is
+the local date's seconds less UTC's (`localSeconds()`; std::tm has no portable field for it); the zone is the lesser of
+the year's offsets on the first of January and of July, which takes both hemispheres alike, and Ireland too, whose zone
+files keep its winter as the "daylight saving" time (std::tm's tm_isdst would have it backwards), and daylight saving
+time is kept while the offset is more (a zone whose daylight saving time isn't an hour, as Lord Howe Island's, can't be
+told exactly). **Now**: the story ends, the game saves (a list save to 0000 at frame 9232) and goes on to its MAIN MENU
+(Missions, Showroom, Pilot Stats, Multiplayer, Options, Save); the next boot, on that save, autoloads it ("CONTINUE WITH
+PILOT N00b").
+
+**Brandish: The Dark Revenant (NPUH10195).** Its loads and saves are list requests (modes 4 and 5) with no save name of
+its own and a list of 99 or more names, "0001" first; the save it wrote is 0001. The kernel's automatic answer (no front
+end: the runner, and the app without its dialogs) took the list's first name and loaded it in full (105,260 bytes), but
+left the request's save name empty, and the game, finding no name, made nothing of it (in play it asked again at each
+press). A PSP's dialog writes the chosen save's name into the request (PPSSPP's notes: loads and saves from a list copy
+it back), as the front end's path here already did (`dialogSaved()`). **7th Dragon 2020 (NPJH50459).** Its title's LOAD
+GAME is a list load of DATA00 to DATA49, no save name; the kernel took DATA00, there or not, so a save in any other slot
+would never load (the dialog shows only the saves there). **The fix** (`dialogs.cpp`, `savedataUnshown()`, from
+`dialogUpdate()`), for a list request answered with no front end that names no save of its own (empty or "<>"): a load
+is answered as a PSP's player who confirms what the dialog shows first, the save the dialog focuses (the parameters'
+focus) among the saves there, or, that one broken (its PARAM.SFO not one, or its data file missing), the one the same
+focus takes among those that aren't (`dialogFocus()`; chosen: a player told it's corrupted takes another, the latest
+still where the latest was focused; the focused one where all are broken), through `dialogSaved()`; a save takes the
+list's first name as before, whatever the focus (chosen: where the automatic answer's own loads find it, and "<>" still
+the game's folder alone, not one of its saves). Either name goes through `savedata()`, which writes it into the request
+before doing it, as it does a front end's choice. The answer looks only at which saves are there, broken or not, and
+their dates (`dialogSaves()` without details), not their sizes or icons: it runs on the emulation thread, and Brandish
+lists 99 names. A request naming its save (chosen: taken as before), a list with no first name, a game's name that isn't
+a plain one, a load with no save there, and the other modes are answered by `savedata()` as before.
+
+**Not taken: a list save to the new slot its dialog focuses.** The review suggested that a list save whose dialog
+focuses the first or last new slot (focus 7 or 8) take that slot. Not done: each automatic save would then make a new
+slot, and a later automatic load whose dialog focuses the first save there (focus 0 with no name of its own, 1 or 5)
+would take the oldest, the player's progress seemingly lost, where a PSP's player would pick; with the list's first
+name, the automatic saves and loads meet in one slot whatever the foci. The three games focus the latest (3) in every
+list they ask for: After Burner's and Brandish's saves, Brandish's and 7th Dragon's loads. **Now**: Brandish's in-game
+load asks once and the game returns to the ruins with the save's character (HP 1/20, as its PARAM.SFO says), and from
+the title LOAD GAME loads it too; a save made with the fix on an empty stick reloads from the title. 7th Dragon's LOAD
+GAME, with a save in DATA03 (a copy of its system data put there), loads DATA03 and goes on into play.
+
+**7th Dragon's progress save is not fixed: the game never asked for one.** The play-tester's save (camp menu, Select for
+the Option screen, Start, "Create a save?", YES) is one save request, mode 3 to `NPJH50459DATA` (the system data,
+SECURE.BIN, 26 bytes, titled "システムデータ"), answered 0; no other savedata call follows, nor any list or size query. The
+Option screen's save data section has LOAD and DELETE but no save of the game, and the camp menu has none either, so at
+this point of the game (its prologue in the Shinjuku streets) the progress save isn't offered, it seems; a save point
+later in the game wasn't reached. Its title's LOAD GAME on that stick is right to find nothing.
+
+**Tests.** `utility savedata lists answered with no front end (7th Dragon 2020, Brandish)`: list loads taking the
+focused save among those there (DATA03 first, DATA05 last, the game's saves through "<>"), NO_DATA with none (the name
+left empty), a named save as before; list saves to the list's first name whatever the focus, "<>" to the game's folder
+alone with its other saves there; a list with no first name refused, a save making nothing and a load reading nothing
+with the game's folder there; a game's name that isn't plain refused, the load and the save (nothing read, made or
+written back); the focused save broken (its data file gone) passed over for the one the same focus takes among the rest
+(the latest, DATA05, broken: DATA03, not the oldest; the first, DATA01, broken: DATA03), and of two saves both broken
+the focused one taken, the last (FILE_NOT_FOUND); each loaded or saved name written back. `utility savedata trace`: an
+autosave, a list load and a list save naming no save (the game's own names, the focus, the chosen save, written back), a
+refused save with a quote and a control character in its name, a load of no save, and the sizes, list, files and size
+modes, each line exact; nothing traced without a host. `files dates in local time, none after the clock or before 1980;
+the system's time zone` (files.cpp; the zones POSIX rules, so no zone files are needed; each file made afresh and dated
+in 2025, so its birth time, where the host keeps one, is no earlier): 4 hours west of Greenwich, a file changed at
+12:34:56 UTC is dated 08:34:56, and 07:34:56 with the clock an hour behind it, as the clock's local time then; in New
+York's rules, summer's and winter's dates, a file changed at 01:30 EDT on the night daylight saving time ended dated
+01:10 by a clock at 01:10 EST, 1975 and 1979-12-31 19:00 dated 1980-01-01 00:00:00 while 00:00:01 is kept, and a file
+not there 1980-01-01; the zone and daylight saving time settings -240 and 0 there, -300 and 1 or 0 here, Sydney's 600
+with 1 in January and 0 in July, Ireland's 0 with 1 in July and 0 in January, Tokyo's 540 and 0. `utility savedata
+PARAM.SFO`'s list mode compares two saves' dates whole, so the night daylight saving time ends can't put them on one
+day.
+
+**CI.** The first commit's PSP system tests didn't build with GCC (Ubuntu 24.04's 13.3, `-Werror`, the sanitizers):
+`writeTimes()` gave nall::inode::timestamp() a nall::string made from `host.c_str()`, and GCC, inlining its constructor,
+took a field of the string's union that a short string leaves unset (`_refs`) for a read before it's set
+(-Wmaybe-uninitialized, a false positive). The times are now read with stat() itself (`hostTimes()`, io.cpp), as
+nall::inode::timestamp() reads them (made: Windows' ctime, or the birth time where the host keeps one, no later than the
+change; the change otherwise), with no nall::string, and the dialog's save dates (`dialogSaves()`) through it too.
+Checked with GCC 13.3 (Ubuntu 24.04's, in a container, on arm64) and CI's flags: the first commit's kernel.cpp fails as
+CI did, at io.cpp's line 205; the final kernel.cpp, tests/psp/files.cpp and tests/psp/utility.cpp build clean; and CI
+built every test file clean on 7c44b0184. That commit's message describes only an earlier tweak, and its review line
+another diff (ea8661e8…): its content is this follow-up's work in progress, committed and pushed by another process
+while the work went on, finished and reviewed in the commits after it.
+
+**The review's points** (an independent read-only review of 926cf1214), all taken but one: the dates no later than the
+clock (its one medium point; tested with the clock an hour behind the file, and in the hour daylight saving time gives
+back, which a clamp in UTC would miss); the README's `chosen` for list saves (now traced, through `savedata()`, with the
+game's own save name beside it); what the trace leaves out with a front end, noted (kernel.hpp, the README); 1980 at the
+earliest; the system's time zone and daylight saving time (done here, not left for later); a broken focused save passed
+over; the tests (a game's name that isn't plain in a list request, a zone with daylight saving time, the trace of modes
+5, 8, 11, 12 and 22, the list mode's dates compared whole); the nits (the handoff's 188-column line rewrapped,
+`dialogSaved()` given the parameters as `savedataUnshown()` is, sizes and icons left out of the automatic answer, the
+scratch run script's zone pinned: no script in the repository compares captures). Not taken: the optional list save to
+the new slot its dialog focuses (above). A second independent read-only review, of the follow-up (diff f43e863f…, on
+67c1548c4 and the docs' draft), approved it with minor points, taken: the zone from the year's offsets rather than
+tm_isdst (Ireland, Lord Howe Island); a broken focused save's place taken by the same focus among the rest, not the
+first in the list; an all-broken test whose focus isn't the first; 7c44b0184's message corrected here and in the PR;
+comments, the tests' dates moved to 2025 (no longer after the day they were written), HostZone not copyable. Not taken:
+one helper for the clock's now (the pattern was there before).
+
+**Checks.** On 926cf1214 (the fixes and the first review's points): `tests/psp/run-tests.sh` 469 groups, 0 failures;
+`tests/allegrex/run-tests.sh` 58 groups, 0 failures and `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. On the
+follow-up's final code (4aee686c3): `tests/psp/run-tests.sh` 473 groups, 0 failures; `tests/allegrex/run-tests.sh` 58
+groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed; and merged with master again (7026500ae, #226's
+anti-aliased lines): 475 groups (#226's two more), 58 groups and 318 checks, none failing. CI on 67c1548c4 was all
+green: its PSP system tests (GCC) 473 groups, 0 failures, the Allegrex tests, and the Android, Windows, macOS and Linux
+builds. The games again with 4aee686c3's runner and `--trace-savedata`, each run on its own stick: After Burner's story
+ends in the MAIN MENU (its list save to 0000, focus 3) and its next boot autoloads; Brandish saves to an empty stick
+(list saves to 0001, focus 3), then loads it from the title and in play; 7th Dragon's Option save writes only its system
+data, and its LOAD GAME (focus 3) loads DATA03. Every capture is the first commit's final runs' byte for byte but 7th
+Dragon's last after the load, a few sprites' pixels apart, which the first commit's own runner gives as well run now:
+the game reads the clock.
+
+**Scratch** (the runs, their stick copies, traces and captures; `run.sh` gives each run its own memory stick folder, and
+pins TZ to the Mac's own zone, America/New_York, as the stick's dates and the clock's local time follow it):
+`~/phobos-work/scratch/savedata2/` on the Mac it was made on, not in the repository.

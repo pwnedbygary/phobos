@@ -71,6 +71,90 @@ evidence. Clean room: PPSSPP not read (its CPU, JIT and IR code not at all), JPC
   about a third, the Need for Speeds and the intros 10 to 20%, Monkey Ball and Army of Two about as they were.
 - Scratch: `~/phobos-work/scratch/cpu-speed2`.
 
+## PSP: the savedata trace; After Burner's save dates, the list modes' automatic answer — 2026-10-12
+
+Branch `cursor/psp-savedata2-2b67`, begun on `cursor/psp-colinsave-2b67` (Colin McRae's memstick:, part 77) after its
+merge of master, and merged with master again since (#227, then #226). docs/psp-core.md, part 80, has the evidence.
+Clean room: the games' own requests (traced), pspsdk's psputility_savedata.h and psputility_sysparam.h, pspautotests'
+savedata tests, FAT's format, PPSSPP's notes only as a description of the PSP; JPCSP not read. Save states are
+unchanged (StateVersion 26).
+- **The trace**: `tools/psp-runner --trace-savedata` prints each savedata request as the game made it (a list's
+  focus and the save chosen from it beside it) and its answer, a line with its frame (`Kernel::savedataTrace`, empty
+  unless a host sets it; the runner's README has the format).
+- **After Burner: Black Falcon** (autoload "No game data was found.", and the loop back to pilot selection after its
+  story): the kernel dated the stick's files in UTC against a clock in local time, so on a host west of Greenwich a
+  save made in the last hours was dated in the future and the game took it for none. Fix (`io.cpp`, `writeTimes()`):
+  local time, as a FAT memory stick keeps, and no date later than the PSP's own clock in local time (which falls
+  behind the host's when paused, slow, or after a state loaded), nor before 1980. The system's time zone and daylight
+  saving time settings follow the host's. Now: the story ends in the MAIN MENU, and the next boot autoloads.
+- **Brandish: The Dark Revenant** (loads did nothing) and **7th Dragon 2020** (LOAD GAME): with no front end, a list
+  load or save naming no save took the list's first name, there or not, and didn't write it back into the request.
+  Fix (`dialogs.cpp`, `savedataUnshown()`): a list load takes the save the dialog would focus among those there (if
+  that one is broken, the one the same focus takes among those that aren't), a list save the list's first name as
+  before; the name written back either way, as a choice is. Now: Brandish loads from the title and in play; 7th
+  Dragon loads a save that isn't its list's first.
+- **CI and the reviews**: the first commit (926cf1214) failed CI's GCC build (a -Wmaybe-uninitialized false positive
+  on the nall::string given to nall::inode::timestamp(); the times are now read with stat(), checked with GCC 13.3
+  and CI's flags). An independent review's points are taken but one (a list save to the new slot its dialog focuses,
+  left out on purpose), and a second review's of the follow-up; part 80 lists them. 7c44b0184's message describes only
+  an earlier tweak, its review line another diff: its content is this follow-up's work in progress, committed by
+  another process, finished and reviewed in the commits after it.
+- **Not fixed**: 7th Dragon's progress save. The game never asks for one where the play-tester tried (its Option
+  screen's Start saves the 26-byte system data, as asked); a save point further in wasn't reached.
+- **Checks**: see part 80.
+
+## PSP: anti-aliased lines — Dead or Alive Paradise's wireframe gone — 2026-10-12
+
+Branch `cursor/psp-aalines-2b67`, on master (`529fbf403`, after #221, #222 and #225). The play-test's batch 1, item 1: every girl's model in Dead
+or Alive Paradise covered in a coloured wireframe, both renderers. docs/psp-core.md, part 78, has the evidence. Clean
+room: the owner's PSP's round 4 pictures, a trace of the game's lists, PPSSPP's rasterizer read for its description
+of the PSP only; JPCSP not read. Save states unchanged.
+- **Cause**: the game draws its models' edges again as anti-aliased 3D line strips, textured with the frame buffer
+  they draw into, blended by alpha, alpha test above 0. The core drew anti-aliased lines aliased and opaque, each pixel
+  at the model's own texture coordinates, so other parts of the screen showed along every edge.
+- **Fix** (`draw.cpp`, `raster.cpp`): an anti-aliased line's pixels are the aliased line's, each with its coverage
+  for its alpha (0 to 128, measured: round 4's `lines-smooth` matches word for word) and, textured, the texel at its
+  own middle (unmeasured, PPSSPP's description); the GPU draws them from `linePixels()` alike. The edge pass now blends
+  each pixel with itself and doesn't show. Chosen where unmeasured: the alpha replaced, not scaled; steep lines as
+  shallow ones turned; clear mode as before.
+- **Round 7** (`tools/psp-measure`, new first menu line, `pspmeasure.elf` rebuilt): `aa-slopes`, `aa-axes`,
+  `aa-alpha`, `aa-blend`, `aa-textured`, `aa-3d`, for what's chosen. Not run on a PSP yet: the next thing to ask the
+  owner for.
+- **Checks**: tests/psp 468/0 (sanitized; two new groups, round 7 driven), tests/allegrex 58/0, tests/psp/ares 318/0.
+  The beach, pool and volleyball scenes are clean in both renderers, software and Vulkan a mean of 0.1-0.2 apart. The
+  whole library beside the final run: 265 finish (Killzone stopped at 900 s on a busy Mac); of the three games that
+  draw anti-aliased lines, MotorStorm: Arctic Edge's menu panels' edges are now graded, the others unchanged.
+  Again after the merge, one game at a time: all 266 finish, 28 differ from the final run, none from the lines but
+  MotorStorm's frame 1200.
+
+## PSP: memstick: is the memory stick — Colin McRae Rally 2005 Plus's save — 2026-10-12
+
+Branch `cursor/psp-colinsave-2b67`, begun on `cursor/psp-dialogs-2b67` (#221) and merged with master (#221, #222, #224
+and #225). docs/psp-core.md, part 77, has the evidence. Clean room: the game's own calls (traced with a scratch runner),
+pspsdk's headers, pspautotests' savedata tests, uOFW's iofilemgr.c, PPSSPP's notes read only as a description of the
+PSP; JPCSP not read. Save states are unchanged (StateVersion 26).
+- **Before**: answering Yes to Colin McRae Rally 2005 Plus's "Do you wish to create an Auto-Save file?" gave "Save
+  failed!", the save's folder holding an empty OPTIONS.DAT, and the next boot asked again. The game assigns memstick:
+  to the stick's file system at boot (sceIoAssign) and, after the save utility's autosave (which gives no data: the
+  folder, PARAM.SFO and icons), opens its own TIMES.DAT and CMR5TS.DAT through it; the kernel knew no memstick:, so
+  every such open failed as no device (0x80010013), and the boot's look for CMR5TS.DAT never found a save.
+- **The fix** (`ares/psp/kernel/io.cpp`, `deviceName()`): memstick: is ms0:, whatever its case, assigned or not (no
+  assignments kept: they would be state). `tests/psp/utility.cpp` has the game's calls as traced.
+- **The game now**: after the autosave it writes TIMES.DAT (3.9 MB) and CMR5TS.DAT, autosaves again with OPTIONS.DAT's
+  228,760 bytes and goes on; the second boot says "AUTO-LOAD.", loads, and reaches the main menu. A stick holding the
+  old broken save needs no clearing: the game asks again and Yes writes the whole save. Twelve early-saving games
+  booted twice on one stick (five of which save in that time) leave the same files with the base's runner and this one.
+- **Checks** on the branch merged with master: `tests/psp/run-tests.sh` 467 groups, 0 failures;
+  `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed; the game's
+  two boots as before. (Before the merge, on the fix's first commit d63474454, 462 groups; of two runs one had the
+  timing-dependent group "ge loads through the depth buffer's views wait for the threads" fail on the loaded Mac.)
+- **Review**: an independent read-only review of the fix (d63474454) and the docs' draft found no blocker or major
+  point; its minor points were taken in 7d16e1301 (the test opening files as the game does, a garbled comment) and
+  69b0bfe45 (the docs' quote, base and numbering). The merged branch was reviewed again (minor: these docs, and the
+  test's nits), its points taken in the commit that records it.
+- **Not done**: no APK built, nothing run on the RP6 (the Mac's runner only). On the RP6, to check: Colin McRae Rally
+  2005 Plus, Yes to the Auto-Save question, then a second boot shows AUTO-LOAD and reaches the main menu.
+
 ## PSP: the slowest games faster — render to texture decoded where it's taken, Killzone's blur from a copy, polled system functions cheaper — 2026-10-12
 
 Branch `cursor/psp-speed9-2b67`, on `cursor/psp-merge-212-219-2b67` (`5b2a564fa`, master and #212 to #219, since merged

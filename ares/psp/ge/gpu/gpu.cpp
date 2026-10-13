@@ -996,6 +996,11 @@ auto GPU::line(const GE::Job& job, const std::vector<GE::LinePixel>& pixels) -> 
     base.color = pixel.color, base.specular = pixel.specular, base.fog = pixel.fog >= 255 ? 1.0f : pixel.fog / 256.0f;
     base.flags = textured && job.linear;
     squareOf(base, pixel.x + s32(column), pixel.y + s32(row), v);
+    //An anti-aliased line's texel is the one at its pixel (x + 0.5, y + 0.5): above 1x each of the GPU's pixels in
+    //the square takes its own, as a frame buffer's copy at that resolution has them
+    if(job.line.smooth && textured && resolution() > 1) {
+      for(auto& corner : v) corner.u = corner.x - f32(column), corner.v = corner.y - f32(row);
+    }
     emit(v, 6);
   }
 }
