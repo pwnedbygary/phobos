@@ -27,7 +27,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## CI: the CPU's tests on an ARM64 host, the RSP's NEON checked there; the CPU's and the system's tests built as the app is — 2026-10-13
 
-Branch `cursor/test-plan-06-2b67`, stacked on `cursor/test-plan-04-2b67` (package 04, on package 03, on #241).
+Branch `cursor/test-plan-06-2b67` (PR #247), stacked on `cursor/test-plan-04-2b67` (#246, on #245, on #241).
 Package 06 of the 2026-10-13 test and performance plan (indexed in the implementation plan by package 01's PR). Test
 scripts and CI only: the app's build and its flags are unchanged.
 - **The gap**: the phones run the Allegrex recompiler's ARM64 code and the N64 RSP's NEON sequences, but CI ran only
@@ -42,13 +42,25 @@ scripts and CI only: the app's build and its flags are unchanged.
   (NDEBUG: the core's four asserts out, as in the app; no test uses assert), `SLJIT_DEBUG=0`, `-O3 -ftree-vectorize
   -funroll-loops -fno-math-errno -fno-trapping-math`, no sanitizers unless `SANITIZE` names some; not the app's
   link-time optimization (`-flto=thin` is clang's, CI's compiler is GCC). sljit's C file and the C++ files get the
-  same mode. The default stays the sanitized debug build. CI runs it beside each sanitized run: a second step in both
-  Allegrex jobs, and "PSP system tests, built as the app is" beside the system lane, with the same requirements.
+  same mode. The default stays the sanitized debug build. CI runs it beside each sanitized run in both Allegrex jobs
+  (a second step).
+- **A finding: `tests/psp` built as the app is doesn't compile with GCC.** Its lane ("PSP system tests, built as the
+  app is", run 38439997353) failed: GCC 13 at `-O3` with `-Werror` reports `-Wmaybe-uninitialized` in
+  `ares/psp/ge/four.cpp` (lines 44, 231, 243, 262, through `pickLanes()`, `texelsFour()` and `spriteFours()`): `Four
+  four;` is declared without a value and `pickLanes()` reads `four.depth`, and lanes of `downAxis[]`, where the mask
+  then drops them. The results look masked off, but those are reads of indeterminate values (undefined in C++).
+  Apple clang 21 compiles the same `ge.cpp` at the same flags with `-Werror` cleanly, and the app is built by the
+  NDK's clang with `-w`. The fix belongs in the software renderer's innermost loop (the GE, #240's area), with its
+  speed measured, so it isn't made here, and `-Werror` isn't loosened for the lane: the lane is in a draft PR of its
+  own (stacked on this one), red until `four.cpp` is settled.
 - **Checks** (the Mac, arm64, Apple clang 21): `PHOBOS_TESTS_MODE=release tests/allegrex/run-tests.sh` 60/0 (7
   objects of its own, 18 s with the run); `tests/rsp-vu-neon/run-tests.sh 3000 0x5253505655`: 10,420,000 checks, no
-  NEON or reference mismatch; actionlint on the workflows. CI and the negative controls (an ARM64 instruction
-  mis-encoded in sljit's back end, which the ARM64 lane must catch and x86-64 can't; a NEON sequence broken): below
-  once run.
+  NEON or reference mismatch; actionlint on the workflows. CI on #247 (run 38439997353): Allegrex 60/0 sanitized and
+  60/0 built as the app is, on x86-64 and on `aarch64` (GCC 13.3); RSP NEON (run 38439997492, `aarch64`): 10,420,000
+  checks, no mismatch.
+- **Negative controls** (draft PR #248, deleted after): EOR emitted with ORR's encoding in sljit's ARM64 back end:
+  the ARM64 lane failed ("alu (recompiler)" and the recompiler against the interpreter, 0x16e mismatches; x86-64
+  doesn't build that back end); the RSP's NEON `ADD_4S` emitted as `SUB_4S`: "NEON differs from SSE" at VMADM, failed.
 
 ## Tests: a skip says what's missing, and fails where the lane must have it; the Allegrex measurements unpacked by content — 2026-10-13
 
