@@ -11,8 +11,8 @@
 #compiled beside its place and renamed into it, its list first, so runs at the same time share objects safely and a
 #compile cut short leaves nothing that's taken for finished; a program is linked the same way, under a name of its
 #configuration's (objects_program). Each checkout has its own folder in the suite's (cksum of the checkout's path,
-#which the folder's `checkout` file names), which can be deleted between runs; each configuration a checkout builds
-#keeps a set of objects there (tens of MB each) until then.
+#which the folder's .phobos-checkout file names), which can be deleted between runs; each configuration a checkout
+#builds keeps a set of objects there (tens of MB each) until then.
 #What times can't tell: a header added where it shadows another (a file the list doesn't name), and a file replaced
 #by an older-dated copy (cp -p, an archive) in a checkout built before, are taken as unchanged.
 #
@@ -27,9 +27,10 @@
 CHECKOUT=$(printf %s "$ROOT" | cksum | cut -d' ' -f1)
 BUILD=${OBJECTS_BUILD:-$OUT/$CHECKOUT}
 mkdir -p "$BUILD/objects"
-printf '%s\n' "$ROOT" > "$BUILD/checkout"
-#(what compiles cut short left, once no run could still be writing it)
+printf '%s\n' "$ROOT" > "$BUILD/.phobos-checkout"
+#(what compiles and links cut short left, once no run could still be writing it: objects, and programs by their names)
 find "$BUILD/objects" -type f -name '*.part-*' -mmin +120 -exec rm -f {} + 2> /dev/null || true
+find "$BUILD" -maxdepth 1 -type f -name '*-????????????????.part-*' -mmin +120 -exec rm -f {} + 2> /dev/null || true
 
 PHOBOS_JOBS=${PHOBOS_JOBS:-1}
 OBJECTS=()
