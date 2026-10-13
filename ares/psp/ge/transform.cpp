@@ -177,10 +177,12 @@ auto GE::transform(Vertex& vertex, const Transform& t) -> void {
 //each vertex's arithmetic waits on itself all along (project()'s divisions and conversions, lighting's), and a
 //vertex's stage done after the last's leaves the CPU the next's to do meanwhile. (God of War's battle draws 255,000
 //vertices a frame, nearly all lit.) Unskinned, their places and their places on the screen four at a time
-//(placedFour()); skinned, their places a vertex at a time, as ever: the compiler sums a vertex's bones four at a time
-//there, each product rounded before it's added (the multiply and add written together may be fused or not), which
-//placedFour()'s lanes, each a vertex, don't do; then their places on the screen four at a time (projectedFour()).
-//The rest four at a time where texture coordinates are mapped by UV (transformRestFour()).
+//(placedFour()); skinned, their places a vertex at a time, as ever: the compiler may sum a vertex's bones four at a
+//time there (as it does at -O3), each product rounded before it's added (the multiply and add written together may be
+//fused or not), which placedFour()'s lanes, each a vertex, don't do; then their places on the screen four at a time
+//(projectedFour()). The rest four at a time where texture coordinates are mapped by UV (transformRestFour()). (The
+//same numbers as transform()'s, but for which of two operands that aren't numbers a sum gives, and so the sign of a
+//result that isn't one: the compiler may swap them either way, in the scalar code as in the lanes.)
 auto GE::transformAll(std::vector<Vertex>& vertices, const Transform& t) -> void {
   Placing placings[64];
   for(u32 first = 0, count = vertices.size(); first < count; first += 64) {
@@ -390,7 +392,7 @@ static alwaysinline auto projectedFour(const GE::Transform& t, GE::f32x4 cx, GE:
 //each, the last vertex standing in for lanes past lanes.
 static auto projectedFour(GE::Vertex* v, u32 lanes, const GE::Transform& t) -> void {
   auto lane = [&](u32 k) -> const GE::Vertex& { return v[std::min(k, lanes - 1)]; };
-  auto clip = [&](u32 n) -> GE::f32x4 { return {lane(0).clip[n], lane(1).clip[n], lane(2).clip[n], lane(3).clip[n]}; };
+  auto clip = [&](u32 n) { return GE::f32x4{lane(0).clip[n], lane(1).clip[n], lane(2).clip[n], lane(3).clip[n]}; };
   auto s = projectedFour(t, clip(0), clip(1), clip(2), clip(3));
   for(u32 k = 0; k < lanes; k++) {
     auto& out = v[k];
@@ -405,7 +407,7 @@ static auto projectedFour(GE::Vertex* v, u32 lanes, const GE::Transform& t) -> v
 static auto placedFour(GE::Vertex* v, u32 lanes, const GE::Transform& t, GE::Placing* placing) -> void {
   using f32x4 = GE::f32x4;
   auto lane = [&](u32 k) -> GE::Vertex& { return v[std::min(k, lanes - 1)]; };
-  auto gather = [&](auto part) -> f32x4 { return {part(lane(0)), part(lane(1)), part(lane(2)), part(lane(3))}; };
+  auto gather = [&](auto part) { return f32x4{part(lane(0)), part(lane(1)), part(lane(2)), part(lane(3))}; };
   f32x4 x = gather([](auto& p) { return p.x; });
   f32x4 y = gather([](auto& p) { return p.y; });
   f32x4 z = gather([](auto& p) { return p.z; });

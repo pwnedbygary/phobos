@@ -2863,7 +2863,8 @@ static auto geVerticesDrawn() -> void {
 //read one at a time (GE::vertexRuns off), field for field and bit for bit: every vertex type but morph targets (which
 //are read one at a time), through mode and 3D, at random over random bytes (a quarter of the floats infinities or not
 //numbers), in a row and by indices of each size (the largest index's vertex last in RAM, then a byte past its end,
-//which leaves them one at a time), and in a row in VRAM, through its plain copy and the one that rearranges it.
+//which leaves them one at a time), and in a row in VRAM, through its plain copy and the one that rearranges it. (The
+//runs counted are those readVertices() read so: GE::vertexRunsRead.)
 static auto geVertexRuns() -> void {
   System s;
   auto& ge = s.ge;
@@ -2910,13 +2911,14 @@ static auto geVertexRuns() -> void {
       }
     }
     std::vector<GE::Vertex> read[2];
-    for(bool runs : {false, true}) {
-      ge.vertexRuns = runs;
+    u64 before = ge.vertexRunsRead;
+    for(bool inRuns : {false, true}) {
+      ge.vertexRuns = inRuns;
       ge.vertexAddress = address, ge.indexAddress = indices;
       ge.readVertices(count, format);
-      read[runs] = ge.primitiveVertices;
+      read[inRuns] = ge.primitiveVertices;
     }
-    runs += !last && where != 3;
+    runs += ge.vertexRunsRead - before;
     if(!same(read[0], read[1]) && differing++ < 4) std::printf("  round %u (type %06x): not the same\n", round, type);
   }
   ge.vertexRuns = true;
@@ -2963,6 +2965,8 @@ static auto geTransformKept() -> void {
   u32* matrices[5] = {ge.bones, ge.world, ge.view, ge.projection, ge.textureMatrix};
   u32 sizes[5] = {96, 12, 12, 16, 12};
   u32 differing = 0;
+  float lastBones[96] = {};  //(the last skinning PRIM's bones, as an unskinned one keeps them)
+  bool skinnedOnce = false;
   for(u32 round = 0; round < 20000; round++) {
     for(u32 changes = 1 + random() % 3; changes; changes--) {
       u32 which = random() % 8, value = random() & 0xff'ffff;
@@ -2976,9 +2980,10 @@ static auto geTransformKept() -> void {
     }
     bool skinned = random() % 3;
     auto kept = ge.transformKept(skinned);
-    if(!sameTransform(kept, ge.transformState(), skinned) && differing++ < 4) {
-      std::printf("  round %u: not the same\n", round);
-    }
+    bool same = sameTransform(kept, ge.transformState(), skinned);
+    if(skinned) std::memcpy(lastBones, kept.bones, sizeof(lastBones)), skinnedOnce = true;
+    else if(skinnedOnce) same &= !std::memcmp(kept.bones, lastBones, sizeof(lastBones));
+    if(!same && differing++ < 4) std::printf("  round %u: not the same\n", round);
   }
   CHECK(differing, 0u);
 }

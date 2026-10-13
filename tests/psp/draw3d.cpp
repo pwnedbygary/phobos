@@ -1120,9 +1120,17 @@ static auto draw3dTimeCounted() -> void {
   }
 }
 
-//Whether two vertices are the same, field for field, floats bit for bit.
+//Whether two vertices are the same, field for field, floats bit for bit, but that one not a number matches another:
+//which of two operands that aren't numbers a sum or product gives isn't the source's to say (the compiler may swap
+//them, in the scalar code as in the lanes), nor so the sign and payload of the one it gives.
 static auto sameVertex(const GE::Vertex& p, const GE::Vertex& q) -> bool {
-  auto bits = [](const auto& x, const auto& y) { return !std::memcmp(&x, &y, sizeof(x)); };
+  auto bits = [](const auto& x, const auto& y) {
+    const float *a = (const float*)&x, *b = (const float*)&y;
+    for(u32 n = 0; n < sizeof(x) / 4; n++) {
+      if(!(a[n] != a[n] && b[n] != b[n]) && std::memcmp(&a[n], &b[n], 4)) return false;
+    }
+    return true;
+  };
   return bits(p.weights, q.weights) && bits(p.u, q.u) && bits(p.v, q.v) && p.color == q.color &&
          bits(p.normal, q.normal) && bits(p.x, q.x) && bits(p.y, q.y) && bits(p.z, q.z) && bits(p.clip, q.clip) &&
          bits(p.q, q.q) && bits(p.fog, q.fog) && p.outside == q.outside && p.far == q.far && p.near == q.near &&
@@ -1183,8 +1191,8 @@ struct Random3D {
 };
 
 //Vertices transformed a stage at a time, their places four at a time (transformAll(): placedFour()), are those
-//transformed one at a time (transform()), field for field and bit for bit: random settings and cameras, skinning with
-//0 to 8 bones, PRIMs of 1 to 70 vertices (lanes left over at the end).
+//transformed one at a time (transform()), field for field and bit for bit (sameVertex()): random settings and cameras,
+//skinning with 0 to 8 bones, PRIMs of 1 to 70 vertices (lanes left over at the end).
 static auto draw3dTransformedFour() -> void {
   Scene c;
   Random3D r;

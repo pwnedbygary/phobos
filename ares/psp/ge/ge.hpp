@@ -254,8 +254,9 @@ struct GE {
     u32 minDepth, maxDepth, fogColor;
   };
 
-  //Four pixels side by side in a row, each in a lane of a vector (four.cpp): GCC's and Clang's own vector types,
-  //which they compile to the host's SIMD instructions (NEON on ARM64, SSE on x86-64).
+  //Four pixels side by side in a row (four.cpp), or four vertices (transform.cpp, lighting.cpp), each in a lane of a
+  //vector: GCC's and Clang's own vector types, which they compile to the host's SIMD instructions (NEON on ARM64, SSE
+  //on x86-64).
   using f32x4 = float __attribute__((vector_size(16)));
   using f64x2 = f64 __attribute__((vector_size(16)));
   using u64x2 = u64 __attribute__((vector_size(16)));
@@ -581,6 +582,7 @@ struct GE {
   std::vector<Vertex> primitiveVertices;  //the primitive being drawn's (draw.cpp); a curved surface's points
   std::vector<u32> vertexOffsets;         //(readVertices()': where each of them is, read in a run)
   bool vertexRuns = true;  //vertices read in runs where they may be (readVertices(); tests compare without)
+  u64 vertexRunsRead = 0;  //(the PRIMs whose vertices were, for the tests)
   std::vector<Vertex> patchVertices;      //the vertices a curved surface is cut into (curves.cpp)
 
   //The bytes of VRAM the primitive being drawn may draw over (draw.cpp): its frame buffer's, and its depth buffer's.

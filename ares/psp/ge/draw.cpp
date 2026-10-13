@@ -267,6 +267,7 @@ auto GE::readVertices(u32 count, const VertexFormat& format) -> void {
   if(bytes) {
     vertices.resize(count);
     readVerticesFrom(bytes, vertexOffsets.data(), count, format, vertices.data());
+    vertexRunsRead++;
   } else {
     for(u32 n = 0; n < count; n++) {
       //(indices and vertices in VRAM that primitives waiting to be drawn draw over: they're drawn first, threads.cpp)
@@ -564,8 +565,8 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     placed.resize(count);
     for(u32 n = 0; n < count; n++) {
       auto& v = vertices[n];
-      placed[n] = {fixed(v.x), fixed(v.y), (v.outside ? Outside : 0) | (v.far ? Far : 0) | (v.near ? Near : 0) |
-                   (v.clip[3] < 0 ? Behind : 0) | (v.clip[2] + v.clip[3] >= 0 ? 0 : Cut)};
+      placed[n] = {fixed(v.x), fixed(v.y), (v.outside ? Outside : 0u) | (v.far ? Far : 0u) | (v.near ? Near : 0u) |
+                   (v.clip[3] < 0 ? Behind : 0u) | (v.clip[2] + v.clip[3] >= 0 ? 0u : Cut)};
     }
   }
   auto drawTriangle = [&](u32 a, u32 b, u32 c, s32 facing) {
@@ -641,9 +642,8 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
 //and projection matrices made one, once a PRIM: clipPosition()'s but for a float's rounding, which can only move a
 //triangle lying on an edge of these rules across it.) What the rules ask of each corner is kept in its bits, so that a
 //strip's triangles, three to a corner, look at those. Corners are put on the screen four at a time, each lane's
-//arithmetic the same as one corner's alone (projectedFour()), unskinned ones placed four at a time too; skinned ones
-//are placed a corner at a time, as transformAll() places them (the compiler sums a corner's bones in its own way
-//there).
+//arithmetic the same as one corner's alone (projectedFour()), unskinned ones placed four at a time too; a skinned
+//one's bones are summed a corner at a time, as transformAll() sums them (the compiler may sum them its own way there).
 auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip, s32 facing,
                        std::vector<Vertex>& vertices) -> void {
   u32 count = vertices.size();
@@ -684,7 +684,7 @@ auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip
     }
     for(u32 n = 0; n < run; n += 4) {
       auto lane = [&](u32 k, u32 part) { return clip[std::min(n + k, run - 1)][part]; };
-      auto part = [&](u32 p) -> f32x4 { return {lane(0, p), lane(1, p), lane(2, p), lane(3, p)}; };
+      auto part = [&](u32 p) { return f32x4{lane(0, p), lane(1, p), lane(2, p), lane(3, p)}; };
       placeFour(first + n, part(0), part(1), part(2), part(3));
     }
   }
