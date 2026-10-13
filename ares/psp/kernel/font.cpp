@@ -21,9 +21,9 @@
 //
 //Not as Sony's library does it: a font file opened a piece at a time (sceFontOpenUserFile's mode 0) is read through
 //the kernel's own files, not the game's open, read, seek and close callbacks (which must be set, as on a PSP, but
-//aren't called), so a game whose callbacks read an archive of its own wouldn't find its font; the memory a glyph is
-//read into (fontCharacter()) is asked for and given back as a PSP does, but nothing is written in it (no game reads
-//it); and a shadow, or a picture's size, is answered without reading its glyph into any.
+//aren't called), so a game whose callbacks read an archive of its own wouldn't find its font; and the memory a glyph
+//is read into (fontCharacter()) is asked for and given back as a PSP does, but nothing is written in it (no game reads
+//it). What a shadow, or a picture's size, reads into memory isn't known: here they read nothing.
 
 namespace {
   constexpr u32 StandInLibrary = 0x0000'f001;  //the handle the stand-in gives (nothing a game reads through)
@@ -632,8 +632,9 @@ auto Kernel::sceFontDoneLib() -> void {
 //One of a library's handles that's closed already closes again, doing nothing: 0, as Jeanne d'Arc shows. Its two
 //text objects both hold the handle its first battle's loading closes twice, and its own code goes on only for a 0:
 //before each call into the library it takes a lock of its own, and gives it back only when the call returns 0, so
-//any other answer leaves the next call waiting for that lock for ever ("Loading..." for good). A handle that's none
-//of a library's is refused (INVALID_PARAMETER: nothing shows what a PSP does with it).
+//any other answer leaves the next call waiting for that lock for ever ("Loading..." for good). One never opened is
+//answered the same (chosen: nothing shows it). A handle that's none of a library's is refused (INVALID_PARAMETER:
+//nothing shows what a PSP does with it).
 auto Kernel::sceFontClose() -> void {
   if(!fontsInstalled()) return result(0);
   FontLibrary* library;
@@ -681,9 +682,9 @@ auto Kernel::sceFontOpen() -> void {
 }
 
 //(library, a PGF in the game's memory, its length, where to put an error): a font the game holds, read where it is,
-//in RAM or VRAM (fontMemory()). Its length counts as unsigned (pspautotests' openmem: -1 and longer than the font
-//open), but 0 doesn't, nor does no memory (INVALID_PARAMETER). Of a length past the font's end, 8 MiB at most are
-//read.
+//in RAM, VRAM or the scratchpad (fontMemory()). Its length counts as unsigned (pspautotests' openmem: -1 and longer
+//than the font open), but 0 doesn't, nor does no memory (INVALID_PARAMETER). Of a length past the font's end, 8 MiB at
+//most are read.
 auto Kernel::sceFontOpenUserMemory() -> void {
   if(!fontsInstalled()) return standInOpen(arg(3));
   auto library = fontLibraryAt(arg(0));
@@ -937,17 +938,22 @@ auto Kernel::fontCharInfo(const PGF::Glyph& glyph, u32 info) -> void {
 //(whole, or clipped), and the same of its shadow. No font, or nowhere to put the answer: INVALID_PARAMETER.
 //
 //A character's details and its picture read its glyph into memory of the program's first, as a PSP does: two blocks,
-//its record past the 8 bytes that lead it, then its picture, a byte a pixel (pspautotests' fonttest: drawing jpn0's
-//'H', whose record is 79 bytes and picture 14 by 15, took 71, then 210). The font holds the glyph it last read:
-//reading another gives those two back first, in the same order; the one it holds asks for nothing, nor does a code
-//with no glyph to read. A block alloc doesn't give fails the call, out of memory, with nothing written, whatever its
-//size: a character with no pixels (a space) asks for a picture of 0 bytes, which a program's alloc may refuse.
-//Hammerin' Hero's does (a VPL's: pspautotests' vpl/try refused 0 bytes), and its text is spaced by it: a character
-//advances by its details' advance, but a space by a quarter of that, or of the 18 pixels it takes when they fail.
-//Its words are spaced as normal on a PSP (PPSSPP's issue 5954 compared pictures of one), so a space's details fail
-//there, and its spaces are 4.5 pixels wide, not 1.7. With no alloc or free to call, from an interrupt handler or from
-//a thread already in a library function (which can't run the program's functions this way), nothing is asked for. A
-//shadow, and a picture's size, are answered without reading the glyph into memory (nothing shows what they take).
+//its record past the 8 bytes that lead it (the fixed fields' 64 bits), then its picture, a byte a pixel
+//(pspautotests' fonttest: drawing jpn0's 'H', whose record is 79 bytes and picture 14 by 15, took 71, then 210, and
+//gave them back after the font's tables). A block alloc doesn't give fails the call, whatever its size: a character
+//with no pixels (a space) asks for a picture of 0 bytes, which a program's alloc may refuse. Hammerin' Hero's does (a
+//VPL's: pspautotests' vpl/try refused 0 bytes), and its text is spaced by it: a character advances by its details'
+//advance, but a space by a quarter of that, or of the 18 pixels it takes when they fail. Its words are spaced as normal
+//on a PSP (PPSSPP's issue 5954 compared pictures of one), so a space's details fail there, and its spaces are 4.5
+//pixels wide, not 1.7. Chosen, as nothing shows them: the failure is OUT_OF_MEMORY (newlib's for an alloc that gives
+//nothing), with nothing written and what was given given back, the font then holding no glyph; each font holds the
+//glyph it last read (its handles sharing it), and reading another gives those two back first, in the same order (the
+//least memory at once); the one it holds asks for nothing, nor does a code with no glyph to read; a library's cache
+//(its parameters' third word) changes nothing (fonttest's had none, nor have Hammerin' Hero's and Jeanne d'Arc's); and
+//a read whose font closes meanwhile, on another thread, gives its blocks back and fails, INVALID_PARAMETER. With no
+//alloc or free to call, with no thread, from an interrupt handler or from a thread already in a library function
+//(which can't run the program's functions this way), nothing is asked for. A shadow, and a picture's size, are
+//answered without reading the glyph into memory (nothing shows what they take).
 auto Kernel::fontCharacter(bool shadow, u32 what) -> void {
   if(!fontsInstalled()) return result(ErrorNotFound);
   auto font = fontFor(arg(0));
@@ -970,14 +976,16 @@ auto Kernel::fontCharacter(bool shadow, u32 what) -> void {
     call.frees = font->glyphBlocks;
     call.font = font->id;
     call.glyph = index;
-    call.code = code;
     call.what = what;
     call.out = out;
     std::copy(clip, clip + 4, call.clip);
+    u32 held = font->held;
+    auto blocks = std::move(font->glyphBlocks);
     font->held = 0;
     font->glyphBlocks.clear();
-    fontStart(std::move(call));
-    return;
+    if(fontStart(std::move(call))) return;
+    font->held = held;  //(not started after all: the font keeps its glyph, and answers without one)
+    font->glyphBlocks = std::move(blocks);
   }
   fontAnswer(glyph, what, out, clip);
   result(0);

@@ -1722,8 +1722,8 @@ struct Kernel {
     std::shared_ptr<PGF> pgf;   //its glyphs (not saved: read again when a state is loaded)
   };
   struct FontCall {             //a library function part way through, calling the program's own alloc or free
-    //Give: only gives memory back (a close, the library done with); Glyph: a character's info or picture, its glyph
-    //read into memory of the program's
+    //Give: only gives memory back (a close, the library done with, a flush); Glyph: a character's info or picture,
+    //its glyph read into memory of the program's
     enum Kind : u32 { NewLib = 1, Open, Give, Glyph };
     u32 kind = 0;
     Context caller{};           //the thread where it called the library: put back as the function returns
@@ -1738,9 +1738,8 @@ struct Kernel {
     u32 result = 0, error = 0;  //what it returns, and its error
     OpenFont opening;           //an open's font, made once its memory has all come
     u32 font = 0, glyph = 0;    //a glyph's: the font (its ID) and the glyph's number, which the font then holds,
-    u32 code = 0, what = 0;     //the character and what's asked of it (fontCharacter()'s what: 0, 2 or 3), where
-    u32 out = 0;                //the answer goes, and _Clip's rectangle
-    u32 clip[4] = {};
+    u32 what = 0, out = 0;      //what's asked of it (fontCharacter()'s what: 0, 2 or 3), where the answer goes,
+    u32 clip[4] = {};           //and _Clip's rectangle
   };
   std::map<u32, FontLibrary> fontLibraries;  //by address
   std::map<u32, OpenFont> openFonts;         //by ID

@@ -16,16 +16,17 @@ namespace {
 
 //Where the tests' programs keep things.
 constexpr u32 Code = 0x0880'0000, Alloc = 0x0880'4000, Free = 0x0880'4800, SlowAlloc = 0x0880'5000;
-constexpr u32 VplAlloc = 0x0880'5800, VplFree = 0x0880'6000;
+constexpr u32 VplAlloc = 0x0880'5800, VplFree = 0x0880'6000, SlowVplAlloc = 0x0880'6800;
 constexpr u32 Heap = 0x0894'0000, HeapTop = 0x0893'0000, Log = 0x0893'1000;
 constexpr u32 Parameters = 0x0893'8000, Style = 0x0893'9000, Image = 0x0893'a000, Buffer = 0x0893'b000;
-constexpr u32 Answer = 0x0893'e000, Error = 0x0893'e010;
+constexpr u32 Answer = 0x0893'e000, Error = 0x0893'e010, FreeErrors = 0x0893'e020;
 
 //The program's memory functions, as a game's: alloc(user data, size) hands out from a heap (16 bytes at a time,
 //after the last), free(user data, block) gives nothing back; both write what they did to the log (a count, the call
 //it fails at, then pairs: 1 and the size, or 2 and the block). The slow alloc waits 100 microseconds first. The VPL's
 //are Hammerin' Hero's: they take and give back blocks of the VPL the user data names (sceKernelTryAllocateVpl, and
-//none when it refuses; sceKernelFreeVpl), logged the same.
+//none when it refuses; sceKernelFreeVpl, its answers ORed together at FreeErrors: a block given back twice shows
+//there), logged the same; the slow one waits 100 microseconds first too.
 auto memoryFunctions(KernelMachine& m) -> void {
   auto logged = [&](Assembler& a, u32 kind, u32 value) {
     a.li(t0, Log);
@@ -94,10 +95,29 @@ auto memoryFunctions(KernelMachine& m) -> void {
   vplFree.put(addiu(sp, sp, -16));
   vplFree.put(sw(ra, 0, sp));
   vplFree.call("sceKernelFreeVpl");
+  vplFree.li(t0, FreeErrors);
+  vplFree.put(lw(t1, 0, t0));
+  vplFree.put(or_(t1, t1, v0));
+  vplFree.put(sw(t1, 0, t0));
   vplFree.put(lw(ra, 0, sp));
   vplFree.put(jr(ra));
   vplFree.put(addiu(sp, sp, 16));
+  Assembler slowVpl{m, SlowVplAlloc};
+  slowVpl.put(addiu(sp, sp, -16));
+  slowVpl.put(sw(ra, 0, sp));
+  slowVpl.put(sw(a0, 4, sp));
+  slowVpl.put(sw(a1, 8, sp));
+  slowVpl.li(a0, 100);
+  slowVpl.call("sceKernelDelayThread");
+  slowVpl.put(lw(a0, 4, sp));
+  slowVpl.put(lw(a1, 8, sp));
+  slowVpl.put(jal(VplAlloc));
+  slowVpl.put(nop);
+  slowVpl.put(lw(ra, 0, sp));
+  slowVpl.put(jr(ra));
+  slowVpl.put(addiu(sp, sp, 16));
   m.system.memory.write(4, HeapTop, Heap);
+  m.system.memory.write(4, FreeErrors, 0);
   m.system.memory.write(4, Log, 0);
   m.system.memory.write(4, Log + 4, 0);
 }
@@ -1092,8 +1112,8 @@ static auto fontsFolder() -> void {
 //A handle closed already closes again, doing nothing, and gives 0, as Jeanne d'Arc's first battle needs: two of its
 //text objects hold one handle, both close it, and the game waits for ever after any answer but 0 (on a lock of its
 //own it gives back only for a 0). Its font stays loaded for the handle still open, the handle opens again, and the
-//last handle closed twice gives the font's memory back once. A handle that's none of a library's is refused, and so
-//is one of a library done with.
+//last handle closed twice gives the font's memory back once. A handle never opened closes the same; one that's none
+//of a library's is refused, and so is one of a library done with.
 static auto fontsClosedTwice() -> void {
   FontFolder folder;
   for(bool recompile : {false, true}) {
@@ -1110,6 +1130,9 @@ static auto fontsClosedTwice() -> void {
     CHECK(m.call("sceFontGetCharInfo", {kept, 'B', Buffer}), 0);
     CHECK(word(m, Buffer + 0x10), 306);  //font 6's 'B'
     CHECK(viaProgram(m, "sceFontOpen", {f.library, 6, 0, Error}, recompile), twice);
+    before = word(m, Log);
+    CHECK(viaProgram(m, "sceFontClose", {kept + 2 * 76}, recompile), 0);  //the third handle, never opened
+    CHECK(word(m, Log) == before && m.kernel.openFonts.begin()->second.references == 2, true);
     for(u32 handle : {0u, 0x1234u, twice + 4, f.library, kept + 4 * 76}) {
       check(__LINE__, "a handle no library has", m.call("sceFontClose", {handle}), 0x8046'0003);
     }
@@ -1216,11 +1239,12 @@ static auto fontsGlyphMemory() -> void {
     //'B', drawn clipped: the 'A's two back, then its own
     u32 recordB = word(m, HeapTop);
     image();
-    CHECK(viaProgram(m, "sceFontGetCharGlyphImage_Clip", {font, 'B', Image, 0, 0, 20, 20}, recompile), 0);
+    CHECK(viaProgram(m, "sceFontGetCharGlyphImage_Clip", {font, 'B', Image, 1, 0, 2, 20}, recompile), 0);
     auto expected = std::vector<std::pair<u32, u32>>{{2, record}, {2, picture}};
     for(auto ask : blocks('B')) expected.push_back(ask);
     CHECK(logged(m, before) == expected, true);
-    CHECK(m.system.memory.read(1, Buffer), 17);  //drawn: its first pixel, shade 1
+    //drawn, clipped to its second and third columns: its first row's shades are 1, 8, 15, 6 and 13
+    CHECK(word(m, Buffer), 0x00ff'8800);
     u32 pictureB = recordB + ((blocks('B')[0].second + 15) & ~15u);
     //nothing read: a code below the first (zeros), a shadow, a picture's size
     before = word(m, Log);
@@ -1332,6 +1356,67 @@ static auto fontsGlyphRefused() -> void {
   }
 }
 
+//A glyph read on one thread while another, as its alloc waits, closes the font (the read gives its blocks back and
+//fails, INVALID_PARAMETER), reads another glyph of it (the later to end holds its glyph, the other's given back),
+//is done with the library (as a close), or ends the thread reading (what it was given stays given, as when a thread
+//ends part way through an open). Every block goes back once: FreeVpl refuses none, and the VPL ends empty but for
+//the ended thread's.
+static auto fontsGlyphMeanwhile() -> void {
+  FontFolder folder;
+  enum Meanwhile { Closed, Read, Done, Ended };
+  for(Meanwhile meanwhile : {Closed, Read, Done, Ended}) {
+    KernelMachine m;
+    m.kernel.fontsFrom(folder.path.string());
+    memoryFunctions(m);
+    s32 vpl = m.call("sceKernelCreateVpl", {m.string("font heap"), 2, 0x4000, 0x4000, 0});
+    parameters(m, 2, VplAlloc, VplFree);
+    m.system.memory.write(4, Parameters + 0x00, vpl);
+    u32 library = viaProgram(m, "sceFontNewLib", {Parameters, Error});
+    auto bytes = systemFont(1).build();
+    m.system.memory.copyIn(0x0896'0000, bytes.data(), bytes.size());
+    u32 font = viaProgram(m, "sceFontOpenUserMemory", {library, 0x0896'0000, u32(bytes.size()), Error});
+    CHECK(library != 0 && font != 0, true);
+    m.system.memory.write(4, library + 0x0c, SlowVplAlloc);  //from here on each block waits 100 microseconds
+    m.system.recompiler.enabled = false;
+    m.system.power(Code);
+    s32 reading = m.kernel.createThread("reading", Code, 0x20, 0x4000, 0, 0);
+    s32 other = m.kernel.createThread("other", Code + 0x400, 0x20, 0x4000, 0, 0);
+    Assembler a{m, Code};
+    a.li(a0, font), a.li(a1, 'A'), a.li(a2, Buffer);
+    a.call("sceFontGetCharInfo");
+    a.li(t9, Answer), a.put(sw(v0, 0, t9));
+    a.call("sceKernelExitThread");
+    Assembler b{m, Code + 0x400};
+    b.li(a0, 150);
+    b.call("sceKernelDelayThread");  //by then the reading thread has its record and waits for its picture
+    if(meanwhile == Closed) b.li(a0, font), b.call("sceFontClose");
+    if(meanwhile == Read) b.li(a0, font), b.li(a1, 'B'), b.li(a2, Buffer + 0x40), b.call("sceFontGetCharInfo");
+    if(meanwhile == Done) b.li(a0, library), b.call("sceFontDoneLib");
+    if(meanwhile == Ended) b.li(a0, reading), b.call("sceKernelTerminateThread");
+    b.li(t9, Answer), b.put(sw(v0, 4, t9));
+    b.call("sceKernelExitThread");
+    m.system.memory.write(4, Answer, 0x1337), m.system.memory.write(4, Answer + 4, 0x1337);
+    m.kernel.startThread(*m.kernel.threads[reading], 0, 0);
+    m.kernel.startThread(*m.kernel.threads[other], 0, 0);
+    m.kernel.run(Kernel::CPUFrequency / 10);
+    CHECK(m.kernel.fontCalls.empty() && word(m, Answer + 4) == 0, true);
+    if(meanwhile == Closed || meanwhile == Done) CHECK(word(m, Answer), 0x8046'0003);
+    if(meanwhile == Read) {
+      CHECK(word(m, Answer) == 0 && word(m, Buffer + 0x30) == 1138 && word(m, Buffer + 0x40 + 0x30) == 700, true);
+      CHECK(m.kernel.openFonts.size() == 1 && m.kernel.openFonts.begin()->second.held == 3, true);  //'B''s
+    }
+    if(meanwhile == Ended) {
+      CHECK(word(m, Answer), 0x1337);  //never answered
+      CHECK(m.kernel.openFonts.size() == 1 && m.kernel.openFonts.begin()->second.held == 0, true);
+    }
+    if(meanwhile != Done) CHECK(viaProgram(m, "sceFontDoneLib", {library}), 0);
+    CHECK(m.kernel.fontLibraries.empty() && m.kernel.openFonts.empty() && m.kernel.fontCalls.empty(), true);
+    CHECK(word(m, FreeErrors), 0);
+    CHECK(m.kernel.pools.count(vpl), 1);
+    if(m.kernel.pools.count(vpl)) CHECK(m.kernel.pools[vpl].pieces.size(), meanwhile == Ended ? 1 : 0);
+  }
+}
+
 //A glyph read part way through, the program's alloc waiting, carries on in another machine as it would have in the
 //first; a state of an older layout (26) loads, its font holding no glyph.
 static auto fontsGlyphStates() -> void {
@@ -1416,6 +1501,47 @@ static auto fontsGlyphStates() -> void {
   n.kernel.stateLayout = current;
   CHECK(loaded && kernelState(n) == now, true);
   CHECK(n.kernel.openFonts.size() == 1 && n.kernel.openFonts.begin()->second.held == 0, true);
+
+  //layout 26 with a call part way through (sceFontNewLib, waiting in its alloc): no glyph's fields of the call's (32
+  //bytes), nor of the font it would be opening (8)
+  KernelMachine p;
+  prepare(p);
+  memoryFunctions(p);
+  Assembler a{p, Code};
+  a.li(a0, parameters(p, 4, SlowAlloc));
+  a.li(a1, Error);
+  a.call("sceFontNewLib");
+  a.call("sceKernelExitThread");
+  p.system.recompiler.enabled = false;
+  p.system.power(Code);
+  p.kernel.startThread(*p.kernel.threads[p.kernel.createThread("main", Code, 0x20, 0x4000, 0, 0)], 0, 0);
+  for(u32 step = 0; step < 1000 && p.kernel.fontCalls.empty(); step++) p.kernel.run(Kernel::CPUFrequency / 100'000);
+  CHECK(p.kernel.fontCalls.size(), 1);
+  if(p.kernel.fontCalls.size() != 1) return;
+  auto& call = p.kernel.fontCalls.begin()->second;
+  now = kernelState(p);
+  auto where = [&](auto&& change) {
+    change(true);
+    auto changed = kernelState(p);
+    change(false);
+    u32 at = 0;
+    while(at < now.size() && now[at] == changed[at]) at++;
+    return at;
+  };
+  u32 opening = where([&](bool on) { call.opening.held = on; });
+  u32 fields = where([&](bool on) { call.font = on; });
+  CHECK(opening < fields && fields + 32 <= now.size(), true);
+  if(!(opening < fields && fields + 32 <= now.size())) return;
+  older = now;
+  older.erase(older.begin() + fields, older.begin() + fields + 32);
+  older.erase(older.begin() + opening, older.begin() + opening + 8);
+  KernelMachine q;
+  prepare(q);
+  q.kernel.stateLayout = 26;
+  serializer t{older.data(), u32(older.size())};
+  loaded = q.kernel.serialize(t) && t.size() == older.size();
+  q.kernel.stateLayout = current;
+  CHECK(loaded && kernelState(q) == now && q.kernel.fontCalls.size() == 1, true);
 }
 
 auto fontTests() -> Tests {
@@ -1424,7 +1550,8 @@ auto fontTests() -> Tests {
           {"fonts of the program's own", fontsOwn}, {"fonts resolution", fontsResolution},
           {"fonts states", fontsStates}, {"fonts folder", fontsFolder}, {"fonts closed twice", fontsClosedTwice},
           {"fonts in VRAM", fontsInVram}, {"fonts glyph memory", fontsGlyphMemory},
-          {"fonts glyph memory refused", fontsGlyphRefused}, {"fonts glyph states", fontsGlyphStates}};
+          {"fonts glyph memory refused", fontsGlyphRefused}, {"fonts glyph memory meanwhile", fontsGlyphMeanwhile},
+          {"fonts glyph states", fontsGlyphStates}};
 }
 
 }

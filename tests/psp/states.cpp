@@ -437,14 +437,14 @@ static auto stateFields() -> void {
     {"font glyph blocks", [&] { openFont.glyphBlocks[1] ^= 0x10; }},
     {"font call reading a glyph", [&] {
       fontCall.kind = Kernel::FontCall::Glyph, fontCall.ended = false, fontCall.asks = {32, 0};
-      fontCall.font = 1, fontCall.code = 0x20, fontCall.out = 0x0896'2000;
+      fontCall.errorAt = 0, fontCall.font = 1, fontCall.out = 0x0896'2000;
     }},
     {"font call font", [&] { fontCall.font = 7; }}, {"font call glyph", [&] { fontCall.glyph = 2; }},
-    {"font call code", [&] { fontCall.code = 'B'; }}, {"font call what", [&] { fontCall.what = 3; }},
-    {"font call out", [&] { fontCall.out += 0x40; }}, {"font call clip", [&] { fontCall.clip[2] = 5; }},
+    {"font call what", [&] { fontCall.what = 3; }}, {"font call out", [&] { fontCall.out += 0x40; }},
+    {"font call clip", [&] { fontCall.clip[2] = 5; }},
     {"font call giving again", [&] {
       fontCall.kind = Kernel::FontCall::Give, fontCall.ended = true, fontCall.asks.clear();
-      fontCall.font = fontCall.glyph = fontCall.code = fontCall.what = fontCall.out = fontCall.clip[2] = 0;
+      fontCall.font = fontCall.glyph = fontCall.what = fontCall.out = fontCall.clip[2] = 0;
     }},
     {"mpeg call ringbuffer", [&] { mpegCall.ringbuffer ^= 0x40; }}, {"mpeg call left", [&] { mpegCall.left = 6; }},
     {"mpeg call asked", [&] { mpegCall.asked = 4; }}, {"mpeg call put", [&] { mpegCall.put = 1; }},
@@ -1304,7 +1304,7 @@ static auto stateFields() -> void {
   auto glyphCall = [&]() -> Kernel::FontCall& {  //thread two's call made one reading the font's space
     auto& call = k.fontCalls.at(two);
     call.kind = Kernel::FontCall::Glyph, call.ended = false, call.asks = {32, 0}, call.got.clear();
-    call.font = 1, call.glyph = 0, call.code = 0x20, call.what = 0, call.out = 0x0896'2000;
+    call.errorAt = 0, call.font = 1, call.glyph = 0, call.what = 0, call.out = 0x0896'2000;
     return call;
   };
   {
@@ -1316,9 +1316,15 @@ static auto stateFields() -> void {
   }
   refuses("a glyph call asking for three blocks", [&] { glyphCall().asks.push_back(4); });
   refuses("a glyph call asking a picture's size", [&] { glyphCall().what = 1; });
-  refuses("a glyph call of a character past 16 bits", [&] { glyphCall().code = 0x10020; });
   refuses("a glyph call answering where nothing is", [&] { glyphCall().out = 0x0000'1000; });
   refuses("a glyph call reading a glyph its font hasn't got", [&] { glyphCall().glyph = 50; });
+  refuses("a glyph call of no font", [&] { glyphCall().font = 0; });
+  refuses("a glyph call of a font not handed out yet", [&] { glyphCall().font = k.nextFontID; });
+  refuses("a glyph call with somewhere for an error", [&] { glyphCall().errorAt = 0x0896'0800; });
+  refuses("a font call's font being opened holding a glyph", [&] {
+    auto& opening = k.fontCalls.at(two).opening;
+    opening.held = 1, opening.glyphBlocks = {0x0899'5000, 0x0899'5100};
+  });
   refuses("a font call opening into a handle it doesn't hold", [&] {
     auto& call = k.fontCalls.at(two);
     call.kind = Kernel::FontCall::Open, call.ended = false, call.slot = 3;

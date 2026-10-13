@@ -524,13 +524,17 @@ auto Kernel::serialize(serializer& s) -> bool {
     vector(call.frees, [&](u32& block) { s(block); });
     s(call.ended); s(call.result); s(call.error);
     fontFields(call.opening);
-    if(glyphs) s(call.font), s(call.glyph), s(call.code), s(call.what), s(call.out), s(call.clip);
-    else call.font = call.glyph = call.code = call.what = call.out = 0, std::fill_n(call.clip, 4, 0);
+    if(glyphs) s(call.font), s(call.glyph), s(call.what), s(call.out), s(call.clip);
+    else call.font = call.glyph = call.what = call.out = 0, std::fill_n(call.clip, 4, 0);
     check(call.kind >= FontCall::NewLib && call.kind <= (glyphs ? FontCall::Glyph : FontCall::Give));
     check(call.slot < MaxFonts && call.slots <= MaxFonts && call.asks.size() <= 9);
-    check(call.got.size() <= call.asks.size() && call.frees.size() <= MaxFonts * 11 + 4);
-    check(call.kind != FontCall::Glyph || (call.asks.size() == 2 && call.code <= 0xffff &&
-                                           (call.what == 0 || call.what == 2 || call.what == 3)));
+    //(what a call may give back: sceFontDoneLib's, each open font's 9 tables and its glyph's 2 blocks, then the 4 of
+    //the library's own)
+    check(call.got.size() <= call.asks.size() && call.frees.size() <= MaxFonts * (9 + 2) + 4);
+    //a font being opened holds no glyph yet; a glyph's call reads one of a font handed out, returning its error
+    check(!call.opening.held);
+    check(call.kind != FontCall::Glyph || (call.asks.size() == 2 && call.font && call.font < nextFontID &&
+                                           !call.errorAt && (call.what == 0 || call.what == 2 || call.what == 3)));
   });
   //a ringbuffer being fed, its callback running: it asked for a run of what's left (at most RingMostPackets)
   map(mpegCalls, [&](MpegCall& call) {
