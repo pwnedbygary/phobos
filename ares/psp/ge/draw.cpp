@@ -643,7 +643,8 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
 //triangle lying on an edge of these rules across it.) What the rules ask of each corner is kept in its bits, so that a
 //strip's triangles, three to a corner, look at those. Corners are put on the screen four at a time, each lane's
 //arithmetic the same as one corner's alone (projectedFour()), unskinned ones placed four at a time too; a skinned
-//one's bones are summed a corner at a time, as transformAll() sums them (the compiler may sum them its own way there).
+//one's bones are summed a corner at a time, as transformAll() sums them: the compiler may sum them across the bones
+//there, each product rounded before it's added, which lanes holding a corner each can't do the same way.
 auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip, s32 facing,
                        std::vector<Vertex>& vertices) -> void {
   u32 count = vertices.size();

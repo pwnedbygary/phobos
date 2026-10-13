@@ -1122,7 +1122,7 @@ static auto draw3dTimeCounted() -> void {
 
 //Whether two vertices are the same, field for field, floats bit for bit, but that one not a number matches another:
 //which of two operands that aren't numbers a sum or product gives isn't the source's to say (the compiler may swap
-//them, in the scalar code as in the lanes), nor so the sign and payload of the one it gives.
+//them), nor so the sign and payload of the one it gives.
 static auto sameVertex(const GE::Vertex& p, const GE::Vertex& q) -> bool {
   auto bits = [](const auto& x, const auto& y) {
     const float *a = (const float*)&x, *b = (const float*)&y;
@@ -1216,11 +1216,11 @@ static auto draw3dTransformedStages() -> void {
 }
 
 //Vertices lit a stage at a time (transformAll()) are those lit one at a time (transform()), field for field and bit
-//for bit (sameVertex()): a camera's settings with lighting on and texture coordinates mapped by UV, four lights of
-//every kind (directional, points and spotlights; ambient and diffuse, those and the shine, or powered), a quarter of
-//them off, each fading and pointing at random, now and then by numbers that aren't plausible (infinities, not
-//numbers); the vertex's own color standing for any of the material's, the shine kept apart or not, the normals turned
-//round or not; normals of every length, none now and then; skinned and not.
+//for bit (sameVertex()): a camera's settings with lighting on and texture coordinates mapped any of the three ways,
+//four lights of every kind (directional, points and spotlights; ambient and diffuse, those and the shine, or
+//powered), a quarter of them off, each fading and pointing at random, now and then by numbers that aren't plausible
+//(infinities, not numbers); the vertex's own color standing for any of the material's, the shine kept apart or not,
+//the normals turned round or not; normals of every length, none now and then; skinned and not.
 static auto draw3dLitStages() -> void {
   Scene c;
   Random3D r;
@@ -1234,7 +1234,7 @@ static auto draw3dLitStages() -> void {
     r.settings(c.ge, true);
     auto& set = c.ge.commands;
     set[GE::LightingEnable] = 1;
-    set[GE::TextureMapMode] = (r.random() % 4) << 8;
+    set[GE::TextureMapMode] = (r.random() % 3) | (r.random() % 4) << 8;
     set[GE::LightMode] = r.random() % 2, set[GE::NormalReverse] = r.random() % 2;
     set[GE::MaterialColor] = r.random() % 8;
     for(u32 command : {GE::MaterialEmissive, GE::AmbientColor, GE::MaterialDiffuse, GE::MaterialSpecular,
@@ -1299,7 +1299,7 @@ struct MeshRecorder : NothingDrawn {
 //meshTriangles() as it was, a corner at a time through project() and each triangle's corners through fixed() and
 //outOfSight() (draw.cpp's and transform.cpp's, here as they are there), for meshTriangles() to be checked against.
 static auto meshOneAtATime(GE& ge, const GE::Look& look, const GE::Transform& t, u32 kind, u32 strip, s32 facing,
-                           std::vector<GE::Vertex>& vertices) -> void {
+                           std::vector<GE::Vertex>& vertices, std::vector<GE::MeshCorner>& corners) -> void {
   auto fixed = [](float position) -> s32 {
     if(!(position >= -4096 && position <= 4096)) position = position > 0 ? 4096 : -4096;
     return s32(position * 16);
@@ -1381,6 +1381,12 @@ static auto meshOneAtATime(GE& ge, const GE::Look& look, const GE::Transform& t,
                           clipping[12 + j];
     }
     ge.project(placed[n], t, false);
+    //(the corner as meshTriangles() keeps it: its place in sixteenths, and its bits, draw.cpp's)
+    auto& corner = placed[n];
+    float z = corner.clip[2], w = corner.clip[3];
+    u32 bits = (corner.outside ? 1u : 0u) | (corner.far ? 2u : 0u) | (corner.near ? 4u : 0u) | (w < 0 ? 8u : 0u) |
+               (w > 0 ? 0u : 16u) | (z + w < 0 ? 32u : 0u);
+    corners.push_back({fixed(corner.x), fixed(corner.y), bits});
   }
   bool again = false;
   auto hand = [&] {
@@ -1420,12 +1426,13 @@ static auto meshOneAtATime(GE& ge, const GE::Look& look, const GE::Transform& t,
 
 //A renderer transforming its own 3D vertices is handed what it was when meshTriangles() placed a corner at a time:
 //the same runs of corners, the same triangles cut and drawn by the GE between them, the same time owed (GE::owe()),
-//over random settings and cameras, skinning with 0 to 8 bones, triangles, strips (some cut into rows) and fans of 3
-//to 70 vertices, culling either way or none, and scissor rectangles cutting into them.
+//each corner kept at the same place with the same bits, over random settings and cameras, skinning with 0 to 8 bones,
+//triangles, strips (some cut into rows) and fans of 3 to 70 vertices, culling either way or none, and scissor
+//rectangles cutting into them.
 static auto draw3dMeshFour() -> void {
   Scene c;
   Random3D r;
-  MeshRecorder placedFour, oneAtATime;
+  MeshRecorder fourAtATime, oneAtATime;
   u32 differing = 0, handed = 0, cut = 0;
   for(u32 round = 0; round < 1500; round++) {
     bool camera = round % 4 != 0;
@@ -1440,20 +1447,26 @@ static auto draw3dMeshFour() -> void {
     s32 facing = s32(r.random() % 3) - 1;
     auto vertices = r.vertices(count, camera);
     u64 owed[2][2];
-    for(auto* recorder : {&placedFour, &oneAtATime}) {
+    std::vector<GE::MeshCorner> corners;
+    for(auto* recorder : {&fourAtATime, &oneAtATime}) {
       auto copy = vertices;
       recorder->calls.clear();
       c.ge.setRenderer(recorder);
       c.ge.hardware = true;
       c.ge.owedPixels = c.ge.owedPrimitives = 0;
-      if(recorder == &placedFour) c.ge.meshTriangles(look, t, kind, strip, facing, copy);
-      else meshOneAtATime(c.ge, look, t, kind, strip, facing, copy);
+      if(recorder == &fourAtATime) c.ge.meshTriangles(look, t, kind, strip, facing, copy);
+      else meshOneAtATime(c.ge, look, t, kind, strip, facing, copy, corners);
       c.ge.hardware = false;
       c.ge.setRenderer(nullptr);
       owed[recorder == &oneAtATime][0] = c.ge.owedPixels, owed[recorder == &oneAtATime][1] = c.ge.owedPrimitives;
     }
     for(auto& call : oneAtATime.calls) (call[0] == ~0u ? cut : handed)++;
-    if((placedFour.calls != oneAtATime.calls || owed[0][0] != owed[1][0] || owed[0][1] != owed[1][1]) &&
+    bool samePlaces = c.ge.placed.size() == corners.size();
+    for(u32 n = 0; samePlaces && n < corners.size(); n++) {
+      auto &p = c.ge.placed[n], &q = corners[n];
+      samePlaces = p.x == q.x && p.y == q.y && p.bits == q.bits;
+    }
+    if((fourAtATime.calls != oneAtATime.calls || owed[0][0] != owed[1][0] || owed[0][1] != owed[1][1] || !samePlaces) &&
        differing++ < 4) {
       std::printf("  round %u: kind %u, %u vertices, differs\n", round, kind, count);
     }

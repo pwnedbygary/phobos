@@ -703,8 +703,9 @@ struct GE {
   bool boxes = true;      //a renderer's textures decoded only as far as its triangles take them (texelBox()); tests
                           //turn it off to compare
   std::vector<LinePixel> hardwareLine;
-  //meshTriangles()'s corners on the screen: each one's place in sixteenths, as fixed() has it, and what its triangles
-  //ask of it (draw.cpp's bits); and the run of triangles it hands to the renderer
+  //A PRIM's corners on the screen, meshTriangles()' or drawVertices()' (each with its own bits, draw.cpp's): each
+  //one's place in sixteenths, as fixed() has it, and what its triangles ask of it; and the run of triangles
+  //meshTriangles() hands to the renderer
   struct MeshCorner { s32 x, y; u32 bits; };
   std::vector<MeshCorner> placed;
   std::vector<u32> handed;

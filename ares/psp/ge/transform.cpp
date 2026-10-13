@@ -176,8 +176,8 @@ auto GE::transform(Vertex& vertex, const Transform& t) -> void {
 //vertex's stage done after the last's leaves the CPU the next's to do meanwhile. (God of War's battle draws 255,000
 //vertices a frame, nearly all lit.) The compiler turns each vertex's own arithmetic into vector instructions here
 //(x, y and z at once): written four vertices to a vector instead, placed, put on the screen and lit, it was slower on
-//the M1, all of it, by 10% lit to 85% for PRIMs of a few vertices (their fields gathered into lanes and spread back
-//out cost more than the lanes save; part 85). meshTriangles(), which keeps only each corner's place, gains from them.
+//the M1 in every case timed (their fields gathered into lanes and spread back out cost more than the lanes save;
+//part 85). meshTriangles(), which keeps only each corner's place and bits, gains from them.
 auto GE::transformAll(std::vector<Vertex>& vertices, const Transform& t) -> void {
   Placing placings[64];
   for(u32 first = 0, count = vertices.size(); first < count; first += 64) {
@@ -294,9 +294,9 @@ static alwaysinline auto pickFloats(GE::s32x4 mask, GE::f32x4 yes, GE::f32x4 no)
   return out;
 }
 
-//Four vertices on the screen (projectedFour()), a lane each: projected()'s x, y and z, and its yes or no as all bits
-//set or none.
-struct OnScreenFour { GE::f32x4 x, y, z; GE::s32x4 outside, far, near; };
+//Four corners on the screen (projectedFour()), a lane each: projected()'s x and y, and its yes or no as all bits set
+//or none.
+struct OnScreenFour { GE::f32x4 x, y; GE::s32x4 outside, far, near; };
 
 //Four clip positions (a lane each: x, y, z and w) onto the screen, as projected() puts each, not cut by clipping:
 //each lane the same operations as projected()'s on one, four at a time (its doubles two at a time).
@@ -336,7 +336,6 @@ static alwaysinline auto projectedFour(const GE::Transform& t, GE::f32x4 cx, GE:
   s.outside = t.depthClamp ? offScreen & (cz > -cw) : offScreen | ~((z >= 0) & (z < 65536));
   s.x = f32x4{across[0][0], across[0][1], across[1][0], across[1][1]};
   s.y = f32x4{down[0][0], down[0][1], down[1][0], down[1][1]};
-  s.z = pickFloats(z > 0, pickFloats(65535.0f < z, f32x4{} + 65535.0f, z), f32x4{});
   s.far = depth >= OutsideDepth, s.near = -depth >= OutsideDepth;
   return s;
 }
