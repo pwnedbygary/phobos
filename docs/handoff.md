@@ -28,10 +28,10 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 ## PSP: the savedata trace; After Burner's save dates, the list modes' automatic answer — 2026-10-12
 
 Branch `cursor/psp-savedata2-2b67`, begun on `cursor/psp-colinsave-2b67` (Colin McRae's memstick:, part 77) after its
-merge of master, and merged with master again once that branch merged (#227). docs/psp-core.md, part 80, has the
-evidence. Clean room: the games' own requests (traced), pspsdk's psputility_savedata.h and psputility_sysparam.h,
-pspautotests' savedata tests, FAT's format, PPSSPP's notes only as a description of the PSP; JPCSP not read. Save
-states are unchanged (StateVersion 26).
+merge of master, and merged with master again since (#227, then #226). docs/psp-core.md, part 80, has the evidence.
+Clean room: the games' own requests (traced), pspsdk's psputility_savedata.h and psputility_sysparam.h, pspautotests'
+savedata tests, FAT's format, PPSSPP's notes only as a description of the PSP; JPCSP not read. Save states are
+unchanged (StateVersion 26).
 - **The trace**: `tools/psp-runner --trace-savedata` prints each savedata request as the game made it (a list's
   focus and the save chosen from it beside it) and its answer, a line with its frame (`Kernel::savedataTrace`, empty
   unless a host sets it; the runner's README has the format).

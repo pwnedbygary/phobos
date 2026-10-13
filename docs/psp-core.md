@@ -10657,16 +10657,17 @@ comments, the tests' dates moved to 2025 (no longer after the day they were writ
 one helper for the clock's now (the pattern was there before).
 
 **Checks.** On 926cf1214 (the fixes and the first review's points): `tests/psp/run-tests.sh` 469 groups, 0 failures;
-`tests/allegrex/run-tests.sh` 58 groups, 0 failures and `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. On the final
-tree (the follow-up and the second review's points, merged with master): `tests/psp/run-tests.sh` 473 groups, 0
-failures; `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. CI on
-67c1548c4 was all green: its PSP system tests (GCC) 473 groups, 0 failures, the Allegrex tests, and the Android,
-Windows, macOS and Linux builds. The games again with the final runner and `--trace-savedata`, each run on its own
-stick: After Burner's story ends in the MAIN MENU (its list save to 0000, focus 3) and its next boot autoloads; Brandish
-saves to an empty stick (list saves to 0001, focus 3), then loads it from the title and in play; 7th Dragon's Option
-save writes only its system data, and its LOAD GAME (focus 3) loads DATA03. Every capture is the first commit's final
-runs' byte for byte but 7th Dragon's last after the load, a few sprites' pixels apart, which the first commit's own
-runner gives as well run now: the game reads the clock.
+`tests/allegrex/run-tests.sh` 58 groups, 0 failures and `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. On the
+follow-up's final code (4aee686c3): `tests/psp/run-tests.sh` 473 groups, 0 failures; `tests/allegrex/run-tests.sh` 58
+groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed; and merged with master again (7026500ae, #226's
+anti-aliased lines): 475 groups (#226's two more), 58 groups and 318 checks, none failing. CI on 67c1548c4 was all
+green: its PSP system tests (GCC) 473 groups, 0 failures, the Allegrex tests, and the Android, Windows, macOS and Linux
+builds. The games again with 4aee686c3's runner and `--trace-savedata`, each run on its own stick: After Burner's story
+ends in the MAIN MENU (its list save to 0000, focus 3) and its next boot autoloads; Brandish saves to an empty stick
+(list saves to 0001, focus 3), then loads it from the title and in play; 7th Dragon's Option save writes only its system
+data, and its LOAD GAME (focus 3) loads DATA03. Every capture is the first commit's final runs' byte for byte but 7th
+Dragon's last after the load, a few sprites' pixels apart, which the first commit's own runner gives as well run now:
+the game reads the clock.
 
 **Scratch** (the runs, their stick copies, traces and captures; `run.sh` gives each run its own memory stick folder, and
 pins TZ to the Mac's own zone, America/New_York, as the stick's dates and the clock's local time follow it):
