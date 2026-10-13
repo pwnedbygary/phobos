@@ -52,10 +52,15 @@ room: the games' own code and traces, pspautotests' recordings; PPSSPP read only
   reading nothing, opens keeping part 23's rule for a 0-byte block) are marked in the code and in part 87.
 - **Regression check** (master's runner against the branch's, PNGs compared): Growlanser IV from its state in play and
   in its menu, and 21 more of the play-testers' sceFont games from boot (Gran Turismo's 5,508 glyphs read among them):
-  every frame the same pixel for pixel but one of Crush's, its title's background a step apart (the time its 811 reads
-  take now). The last three (Guilty Gear XX Accent Core Plus, both Hot Shots) were still running as this was written.
-- **Checks**: tests/psp 483 groups, 0 failures (five new font groups; the state fields' new ones), tests/allegrex 60/0,
-  tests/psp/ares 318/0.
+  every frame the same pixel for pixel but two, Crush's title background a step apart (the time its 811 reads take
+  now) and Guilty Gear XX's intro a frame behind in one capture (the GE's threads: master's own picture of frames 598
+  and 599; the same with no GE threads). Traced, no game but Hammerin' Hero has a glyph read refused, and none gives its
+  library a cache.
+- **Review**: an independent read-only reviewer found no high-severity bug; its points (the count above, a test of
+  reads with another thread closing the font or the library meanwhile, three damaged-state checks, the choices marked as
+  choices, the never-opened handle, small cleanups) are all taken.
+- **Checks**: tests/psp 484/0 (six new font groups; the state fields' new ones), tests/allegrex 60/0, tests/psp/ares
+  318/0.
 - **Scratch**: `~/phobos-work/scratch/font-b03/` on the Mac it was made on (runs, traces, comparison sheets, the scratch
   tracer's patch), not in the repository.
 

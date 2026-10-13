@@ -11045,7 +11045,7 @@ PSP, so a PSP's sceFontClose answers 0 for a handle closed already (pspautotests
 each with no crash recorded, but not what the closes return; PPSSPP's sceFont answers 0 for a font that isn't open). A
 handle that's none of a library's, or one of a library done with, is still refused (INVALID_PARAMETER: chosen, nothing
 shows it). **The change** (`sceFontClose()`): a library's handle that's closed already closes again, doing nothing, and
-returns 0.
+returns 0; one never opened is answered the same (chosen: nothing shows it).
 
 **Final Fantasy III (NPUH10125): none of its own text drawn** (batch 02, bug 2). The game keeps its three fonts (from
 its files: 108,252, 20,872 and 112,892 bytes) in VRAM, at 0x041e5900, 0x041e0740 and 0x041c4e40, and opens them with
@@ -11065,63 +11065,76 @@ text's width, which the PSP's button symbols it draws take whole). Its space's a
 run together, as in PPSSPP before (its issue 5954), and on a PSP they don't: the reporter's pictures of one show them
 spaced. So a PSP refuses the space's details, and the space is 4.5 pixels. **Why a PSP refuses them**: a PSP's libfont
 reads each glyph into memory it asks the program's alloc for (pspautotests' fonttest: drawing jpn0's 'H' asked for 71
-bytes and then 210, its record of 79 bytes less the 8 that lead it and its picture of 14 by 15, given back after the
-font's tables and before the library's own blocks) and asks for blocks of 0 bytes without passing over them (fonttest:
-two, a revision 2 font's empty lists of ranges, as it opened); a space's picture is 0 by 0. Hammerin' Hero's alloc is
-sceKernelTryAllocateVpl on a VPL of 16 KiB, which a PSP refuses 0 bytes (pspautotests' vpl/try: "0 bytes: Failed
-(800201B7)"); its alloc then gives nothing, and the call fails. Jeanne d'Arc's alloc gives 4 bytes for 0 (its own rule),
-so its spaces are details like any. PPSSPP's sceFont models the same (a character's details take its picture, width
-times height, of the program's alloc; none given: OUT_OF_MEMORY). A scratch build that refused the details of every
-character with no pixels showed Hammerin' Hero's text spaced first; the model below does it as the PSP does. **The
-change** (`fontCharacter()`, a library call of a kind of its own, `FontCall::Glyph`): a character's details and its
-picture (sceFontGetCharInfo, sceFontGetCharGlyphImage and its _Clip) read its glyph into two blocks of the program's
-first, its record past the 8 bytes that lead it and then its picture, a byte a pixel. The font holds the glyph it last
-read: reading another gives those two back first (its record, then its picture: chosen, as closing gives them); the one
+bytes and then 210, its record of 79 bytes less the 8 that lead it (the fixed fields' 64 bits: 14 + 7 + 7 + 7 + 7 + 6 +
+7 + 9) and its picture of 14 by 15, given back after the font's tables and before the library's own blocks) and asks for
+blocks of 0 bytes without passing over them (fonttest: two, a revision 2 font's empty lists of ranges, as it opened); a
+space's picture is 0 by 0. Hammerin' Hero's alloc is sceKernelTryAllocateVpl on a VPL of 16 KiB, which a PSP refuses 0
+bytes (pspautotests' vpl/try: "0 bytes: Failed (800201B7)"); its alloc then gives nothing, and the call fails. Jeanne
+d'Arc's alloc gives 4 bytes for 0 (its own rule), so its spaces are details like any. PPSSPP's sceFont models the same
+(a character's details take its picture, width times height, of the program's alloc; none given: OUT_OF_MEMORY). A
+scratch build that refused the details of every character with no pixels showed Hammerin' Hero's text spaced first; the
+model below does it as the PSP does. **The change** (`fontCharacter()`, a library call of a kind of its own,
+`FontCall::Glyph`): a character's details and its picture (sceFontGetCharInfo, sceFontGetCharGlyphImage and its _Clip)
+read its glyph into two blocks of the program's first, its record past the 8 bytes that lead it and then its picture, a
+byte a pixel. A block the program's alloc doesn't give fails the call, whatever its size. Chosen, as nothing shows them:
+the failure is OUT_OF_MEMORY (0x80460001, newlib's for an alloc that gives nothing), with nothing written and what was
+given given back, the font then holding no glyph; each font holds the glyph it last read (its handles sharing it), and
+reading another gives those two back first, in the same order as closing gives them (the least memory at once); the one
 it holds asks for nothing, nor does a code with no glyph to read (below the font's first; one it hasn't got reads its
-alternative's). A block the program's alloc doesn't give fails the call, out of memory (0x80460001), with nothing
-written, whatever its size; what was given goes back. Closing a font's last handle gives back its tables, then its
+alternative's); a library's cache (its parameters' third word) changes nothing (fonttest's had none, nor have Hammerin'
+Hero's and Jeanne d'Arc's: the check below lists the others'); and a read whose font closes meanwhile, on another
+thread, gives its blocks back and fails, INVALID_PARAMETER. Closing a font's last handle gives back its tables, then its
 glyph's record and picture (fonttest's order), and so does sceFontDoneLib, before the library's own; sceFontFlush gives
 the glyph back (chosen, by its name; PPSSPP's flush does the same), and the next one is read afresh. What's in the two
 blocks isn't written (no game reads them: chosen, as for the handles' data). Not changed, as nothing shows what they
 take: a shadow's functions and a picture's size (sceFontGetCharImageRect) read no glyph into memory, and an open still
 takes a 0-byte block alloc didn't give as given (part 23's choice; a game whose alloc refuses 0 bytes and opens a system
-font a piece at a time would show it). From an interrupt handler, or with no alloc or free to call, nothing is asked
-for, as before.
+font a piece at a time would show it). With no alloc or free to call, with no thread, from an interrupt handler or from
+a thread already in a library function, nothing is asked for, as before.
 
-**Tests** (`tests/psp/font.cpp`, five groups more; `tests/psp/states.cpp`). `fonts closed twice`: a handle closed twice
+**Tests** (`tests/psp/font.cpp`, six groups more; `tests/psp/states.cpp`). `fonts closed twice`: a handle closed twice
 gives 0 both times and nothing more back, its font still loaded for the handle open (its details as before) and opened
-again into the same handle; the last handle closed twice gives the tables back once; handles of no library (0, a stray
-number, between two handles, the library's own address, past its count) and one of a library done with refused. `fonts
-in VRAM`: a font where Final Fantasy III keeps its first (0x041e5900), and through VRAM's uncached view and third copy,
-opened and measured; one at VRAM's very end opened with a length of -1, read to the end and no further, and 2 KiB there
-holding no font (INVALID_DATA); one in the scratchpad; nothing behind the address, INVALID_DATA; the machine's state
-round trips, the font read again from VRAM. `fonts glyph memory` (both engines): 'A' asks for its record past 8 bytes
-and its 16-by-17 picture (sizes from the record as the font maker makes it), held: its details again and its picture ask
-for nothing; 'B' drawn clipped gives the 'A''s two back (record, then picture) and asks for its own; a code below the
-first (zeros), a shadow's details and picture and a picture's size ask for nothing; 'C', which the font hasn't got,
-reads the '_'; the space asks for a picture of 0 bytes (the heap gives a block, and its details come); from no thread
-the answer is the same and nothing is asked for; sceFontFlush gives the held glyph back, again nothing; closing gives
-the tables, then the glyph's record and picture; sceFontDoneLib a font's tables, its glyph's two, then the library's
-four. `fonts glyph memory refused` (both engines): Hammerin' Hero's alloc and free, a VPL's: the space's record given,
-its 0-byte picture refused (the kernel's VPL as pspautotests recorded, 0x800201B7), the call OUT_OF_MEMORY with its
-details left as they were and its record given back, its picture refused the same, the letters' details as ever, and
-every block back in the VPL once the library's done with. `fonts glyph states`: a machine saved while its alloc waits
-part way through reading 'A' loads into another and carries on to the same answer and the same calls; a layout 26 state
-of a machine with a font open loads, the font holding no glyph, and saves as layout 27's. `fonts memory`'s second close
-of a handle is 0 now, with nothing given back. `state fields` changes a font's held glyph and its blocks and each field
-of a call made one reading a glyph, and refuses a glyph held in one block, none held in two, a glyph the font hasn't
-got, and a call reading one that asks for three blocks, asks a picture's size, reads a character past 16 bits or a glyph
-its font hasn't got, or answers where nothing is.
+again into the same handle; the last handle closed twice gives the tables back once; a handle never opened closes the
+same, nothing given back; handles of no library (0, a stray number, between two handles, the library's own address, past
+its count) and one of a library done with refused. `fonts in VRAM`: a font where Final Fantasy III keeps its first
+(0x041e5900), and through VRAM's uncached view and third copy, opened and measured; one at VRAM's very end opened with a
+length of -1, read to the end and no further, and 2 KiB there holding no font (INVALID_DATA); one in the scratchpad;
+nothing behind the address, INVALID_DATA; the machine's state round trips, the font read again from VRAM. `fonts glyph
+memory` (both engines): 'A' asks for its record past 8 bytes and its 16-by-17 picture (sizes from the record as the font
+maker makes it), held: its details again and its picture ask for nothing; 'B' drawn clipped to its second and third
+columns (those two drawn, the rest not) gives the 'A''s two back (record, then picture) and asks for its own; a code
+below the first (zeros), a shadow's details and picture and a picture's size ask for nothing; 'C', which the font hasn't
+got, reads the '_'; the space asks for a picture of 0 bytes (the heap gives a block, and its details come); from no
+thread the answer is the same and nothing is asked for; sceFontFlush gives the held glyph back, again nothing; closing
+gives the tables, then the glyph's record and picture; sceFontDoneLib a font's tables, its glyph's two, then the
+library's four. `fonts glyph memory refused` (both engines): Hammerin' Hero's alloc and free, a VPL's: the space's
+record given, its 0-byte picture refused (the kernel's VPL as pspautotests recorded, 0x800201B7), the call OUT_OF_MEMORY
+with its details left as they were and its record given back, its picture refused the same, the letters' details as
+ever, and every block back in the VPL once the library's done with. `fonts glyph memory meanwhile`: a read on one
+thread, its alloc a VPL's that waits, while another thread closes the font (the read fails, INVALID_PARAMETER, its
+blocks given back), reads another glyph of it (the later to end holds its glyph, the other's given back), is done with
+the library, or ends the reading thread (its record stays given); FreeVpl refuses no block (none given back twice), and
+the VPL ends empty but for the ended thread's record. `fonts glyph states`: a machine saved while its alloc waits part
+way through reading 'A' loads into another and carries on to the same answer and the same calls; a layout 26 state of a
+machine with a font open loads, the font holding no glyph, and saves as layout 27's, and so does one with sceFontNewLib
+part way through (without the call's glyph fields and its font's). `fonts memory`'s second close of a handle is 0 now,
+with nothing given back. `state fields` changes a font's held glyph and its blocks and each field of a call made one
+reading a glyph, and refuses a glyph held in one block, none held in two, a glyph the font hasn't got, a font being
+opened holding one, and a call reading one that asks for three blocks, asks a picture's size, reads a glyph its font
+hasn't got, reads one of no font or of a font not handed out yet, has somewhere for an error, or answers where nothing
+is.
 
-**Checks.** `tests/psp/run-tests.sh` 483 groups, 0 failures (both sanitizers; 478 before); `tests/allegrex/run-tests.sh`
-60 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. The repros, each with a runner built from the
-branch (and master's, `b3507c1db`, for before), on an empty stick or a copy of the play-tester's: Jeanne d'Arc from its
-briefing state with Cross (`sortie.txt`), its battle map at frame 300 and the Combat tutorial from 600 to 2400, no error
-line (master: "Loading..." to the end, the error at 154); Hammerin' Hero's `t1.txt` from boot, "Start the game from the
-beginning." (frame 1320), "Start the game on this setting?" (1800) and "I don't have time to be playing with you, Boy."
-(3000), its words spaced; Final Fantasy III's `script.txt` from boot, the name screen's text (4100), the battle's
-command and party windows (6000) and its dialogue (8500). Final Fantasy III's own state from the play-tester (frame
-9400) keeps its empty text: it was saved after the game's three opens had failed, with 0 for its handles.
+**Checks.** `tests/psp/run-tests.sh` 484 groups, 0 failures (both sanitizers; 478 before); `tests/allegrex/run-tests.sh`
+60 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed (each on the review's fixes too; CI on
+2ce1c070b: the PSP system tests with GCC, the Allegrex tests and the Linux and Windows builds green, the macOS build not
+started, no runner taking it). The repros, each with a runner built from the branch (and master's, `b3507c1db`, for
+before), on an empty stick or a copy of the play-tester's: Jeanne d'Arc from its briefing state with Cross
+(`sortie.txt`), its battle map at frame 300 and the Combat tutorial from 600 to 2400, no error line (master:
+"Loading..." to the end, the error at 154); Hammerin' Hero's `t1.txt` from boot, "Start the game from the beginning."
+(frame 1320), "Start the game on this setting?" (1800) and "I don't have time to be playing with you, Boy." (3000), its
+words spaced; Final Fantasy III's `script.txt` from boot, the name screen's text (4100), the battle's command and party
+windows (6000) and its dialogue (8500). Final Fantasy III's own state from the play-tester (frame 9400) keeps its empty
+text: it was saved after the game's three opens had failed, with 0 for its handles.
 
 **The regression check.** The play-testers' other sceFont games, master's runner (with the scratch trace, which counted
 each game's calls into the library) against the branch's, each on its own stick: Growlanser IV from its state in play
@@ -11132,11 +11145,32 @@ Battle vs. Chess (168 details and 84 clipped pictures, of six fonts its files ho
 (811 details of a font in its memory), Darkstalkers Chronicle (a font opened), Disaster Report 3 (28, a font in its
 memory), Cars, both Dissidias (a font opened each), both Dragonball Z Shin Budokais (45 details and 362 pictures, 49 and
 730), Ghost in the Shell (256 details, 97 pictures), God Eater 2 (48, a font in its memory), Gran Turismo (5,508 details
-and pictures, 36 opens), Growlanser IV (2), Guilty Gear Judgment (none yet); the last three, Guilty Gear XX Accent Core
-Plus, Hot Shots Golf Open Tee 2 and Hot Shots Tennis, were still running as this was written (the Mac's load above 100).
-Every frame is the same pixel for pixel but Crush's at 2400 (mean 0.25 a channel, no pixel off by more than 24): its
+and pictures, 36 opens), Growlanser IV (2), Guilty Gear Judgment (none), Guilty Gear XX Accent Core Plus and Hot Shots
+Golf Open Tee 2 (a font opened each) and Hot Shots Tennis (28). Every frame is the same pixel for pixel but two. Crush's
+at 2400 (and at 1200 run again without the GE's threads) differs by 0.25 a channel, no pixel by more than 24: its
 title's animated background a step apart, from the time its 811 reads take now that each calls the game's alloc and
-free.
+free. Guilty Gear XX's at 600 (9.78, its intro's flying cubes) is the runner's capture a frame behind, from the GE's
+threads: that picture is master's own at 598 and 599, master shows it in none of eight runs and the branch's runner in
+two of eight, and without the GE's threads (`--ge-threads` left out) the branch's six runs are all master's picture; the
+game makes no call the branch changed (sceFontNewLib and an open). With the branch's runner and the trace (the review's
+question below), no game but Hammerin' Hero has a glyph read refused: Gran Turismo's 5,508 reads, Crush's 767,
+Dragonball Z's 356 and 715, Ghost in the Shell's 291, Final Fantasy III's 541 (its `script.txt`), Jeanne d'Arc's 48 (its
+alloc gives 4 bytes for 0) and the rest all give their blocks; Hammerin' Hero (`t1.txt`, 3000 frames) has 33,284 of its
+33,365 refused, every one its space (a record of 4 bytes, then a picture of 0), which the game asks for again each frame
+as it can't keep it. Every game's library has no cache (its parameters' third word 0).
+
+**The review's points** (an independent read-only reviewer of the branch at 7b2cf6836, which found no high-severity bug
+and traced the blocks' ownership through closes, sceFontDoneLib, flushes, two threads reading one font and a close or
+the library done with part way through a read, with no block given back twice or lost but where a thread ends part way),
+all taken: the medium one, whether the change refuses other games' glyphs (counted above: none but Hammerin' Hero's
+spaces) and what a library's cache does (none of the games has one: chosen, as changing nothing); the untested paths,
+now `fonts glyph memory meanwhile`; three holes in what a damaged state may say (a font being opened holding a glyph, a
+glyph's call of a font not handed out yet or with somewhere for an error), now refused; the choices stated as facts in
+`fontCharacter()`'s comment, now marked, and the top comment's list put right (what a shadow takes isn't known, not
+known to differ); a handle never opened closing to 0 too, now said; the call's character code, saved but never read,
+dropped (layout 27 isn't out yet); `fontStart()`'s answer no longer taken for granted (a read that couldn't start keeps
+the font's glyph and answers without one); a narrow clip for the _Clip read and the layout 26 test with a call part way
+through; and the comments' and part 87's omissions.
 
 **Scratch** (the runs and their PNGs, the traces, the comparison sheets, the scratch tracer's patch and the RAM dumps'
 disassembly helpers): `~/phobos-work/scratch/font-b03/` on the Mac it was made on, not in the repository. The before and
