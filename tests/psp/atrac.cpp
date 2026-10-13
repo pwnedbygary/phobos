@@ -758,16 +758,23 @@ static auto atracContextsOlder() -> void {
   m.kernel.atracContexts = contexts;
   for(u32 id : range(6)) m.kernel.atracContext(id);
   m.system.memory.write(1, contexts + 128 + 21, 16);
-  //this state as layout 26 has it: without sceVaudio's 15 bytes, where saving it with sceVaudio held shows them
+  //this state as layout 26 has it: without sceVaudio's 15 bytes, where saving it with sceVaudio held shows them,
+  //nor the program's count of imported variables (4 bytes before them: layout 28's)
   auto state = saveState(m);
   m.kernel.audio.vaudio.reserved = true;
   auto held = saveState(m);
   m.kernel.audio.vaudio.reserved = false;
+  m.kernel.module.variables.push_back({"Lib", 1, 2, 0});
+  auto imported = saveState(m);
+  m.kernel.module.variables.clear();
   u32 vaudio = 0;
   while(vaudio < state.size() && vaudio < held.size() && state[vaudio] == held[vaudio]) vaudio++;
-  CHECK(vaudio + 15 < state.size(), true);
-  if(vaudio + 15 >= state.size()) return;
+  u32 variables = 0;
+  while(variables < state.size() && variables < imported.size() && state[variables] == imported[variables]) variables++;
+  CHECK(variables + 4 <= vaudio && vaudio + 15 < state.size(), true);
+  if(variables + 4 > vaudio || vaudio + 15 >= state.size()) return;
   state.erase(state.begin() + vaudio, state.begin() + vaudio + 15);
+  state.erase(state.begin() + variables, state.begin() + variables + 4);
   Machine n;
   u32 current = n.kernel.stateLayout;
   n.kernel.stateLayout = 26;
