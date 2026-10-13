@@ -653,8 +653,15 @@ struct GE {
     virtual auto forget(GE& ge) -> void = 0;  //VRAM replaced whole (a state loaded, the power): its copies are old
     //A texture (its first rows and columns, those the PRIM can reach) in a frame buffer whose newest pixels are on
     //the GPU: the renderer takes it from there for the PRIM (begin()), so the GE doesn't decode it, and memory's
-    //pages under it stay the renderer's.
-    virtual auto holds(GE& ge, const Sampler& texture, u32 rows, u32 columns) -> bool = 0;
+    //pages under it stay the renderer's. takes: the texels (columns and rows, inclusive) the PRIM may take, asked
+    //for where it holds the texture.
+    virtual auto holds(GE& ge, const Sampler& texture, u32 rows, u32 columns,
+                       const std::function<auto () -> Region>& takes) -> bool = 0;
+    //Of a texture it doesn't hold, whose PRIM's rows aren't known (a 3D one's), the rows memory gives: all, or those
+    //before the pages of a frame buffer it has drawn since, the rest held at the last of them (its copies' way),
+    //where the texels the PRIM may take (takes) allow.
+    virtual auto memoryRows(GE&, const Sampler& /*texture*/, const std::function<auto () -> Region>& /*takes*/)
+      -> u32 { return ~0u; }
     //Whether what it has drawn since it last finished reaches any of VRAM's bytes first to last (offsets in VRAM,
     //inclusive): its pixels' own bytes, row by row, not the unused columns right of a picture in the same pages,
     //where games keep lists and textures (as drawsOver() has it for the drawing threads, texture.cpp).
