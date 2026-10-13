@@ -53,7 +53,7 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          echo "- tests/allegrex at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR's head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
+          echo "- tests/allegrex at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
 
   system:
     name: PSP system tests
@@ -94,7 +94,7 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          echo "- tests/psp at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR's head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
+          echo "- tests/psp at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
 
   # The whole core as an ares system, with ares's node tree, libco and libchdr, as Phobos builds it: system.cpp's
   # checks, which boot the test programs in tests/psp/programs (no Vulkan: they draw with the software renderer)
@@ -125,7 +125,7 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          echo "- tests/psp/ares at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR's head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
+          echo "- tests/psp/ares at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
 
   # tools/psp-runner built as tools/psp-runner/build.sh builds it, running cube.elf for 60 frames: its summary, PNGs
   # and WAV checked
@@ -156,4 +156,4 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          echo "- tests/psp/ares/runner-test.sh at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR's head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
+          echo "- tests/psp/ares/runner-test.sh at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
