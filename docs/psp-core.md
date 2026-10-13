@@ -11191,7 +11191,40 @@ groups, each failing without its change, among them the held rows' paths, checke
 builds. Its first run had failed one check that lavapipe's own blending rounds differently (the dithered blends' channels
 the same, 81% there against the M1's 87%; the check is at 75% now, the far ones still under 1%).
 
-**Library**: (filled in below, after the runs).
+**Library** (the report's way, `lib.sh` with `--renderer Vulkan`: accurate mode, 3600 frames each, one at a time,
+master's runner and the final code's, each with only the bench patch): all 266 games finish in both, none missing a
+function. 214 are the same at all four captures (frames 60, 300, 1200 and 3600); 32 differ by a mean of 1 level or
+less; 20 by more. Those 20 were run again in Software: where the branch's capture is nearer Software's, it's the
+dither and depth fixes (Gitaroo Man Lives!, Warriors of the Lost Empire, Tenchu: Shadow Assassins, Samurai Dou
+Portable, Grand Theft Auto: Vice City Stories, Metal Gear Solid: Portable Ops Plus, MX vs. ATV Untamed, PixelJunk
+Monsters, LocoRoco, Shepherd's Crossing: the branch's the same as Software's, or nearly); where master's is nearer,
+the captures show the same movie or demo a few frames apart (IL-2 Sturmovik's and Mega Man Maverick Hunter X's
+intros, Formula Front International's credits, Tales of the World: Radiant Mythology 2's and Persona 2's movies,
+Brothers in Arms' logo fading, Mega Man Powered Up's demo), as runs of one runner do: the clock follows the host's,
+and the branch's run had the Mac at a load of 100 to 240, master's and Software's near 30. None shows anything
+drawn worse. (Run time 8,873 s for master, 10,088 s for the branch under that load.)
+
+**With part 79** (#233, merged in after it reached master): a texture of palette indices over a frame buffer is the
+GPU's first (`holds()`, the palette looked up there), so Backbone's glow decodes nothing in fast mode. One the GPU
+doesn't hold is decoded from memory: rows running on into a frame buffer it has drawn since its last finish only as
+far as that (`memoryRows()`), which waits for nothing and stays cached for the next PRIM through the same palette; and
+part 79's box, as a part, only where decoding the rows asked for would still wait: rows the GPU drew itself (the first
+tile after the picture, without the palettes), or rows accurate mode won't hold at the last because the PRIM takes
+them (the bottom tiles, reaching the 2D pass's buffer at the picture's row 272). The box does more in accurate mode
+than its parts: a cached copy whose pages were written since serves a tile whose box's bytes are as they were, so the
+six tiles above each column's bottom one take the copy, which this branch alone decoded again (textures decoded a
+frame, the branch alone against the merge, 200 frames: Death Jr. II's woods 78 -> 57 and its character select 75 ->
+33, Sonic Rivals 73 -> 45, Activision Hits Remixed 155 -> 75; the same finishes). On Death Jr. II's woods (decodes
+logged) parts have nothing more to save: without the palettes, the first tile through each of the three palettes a
+frame is at the left edge, its box not known (it would repeat round), and the rows it decodes serve every later tile;
+in accurate mode each column's bottom tile finds the copy changed by the 2D pass and decodes it whole after the
+finish, a copy the next column's first tile (no box either) and the six below it take. So neither a part wherever the
+box is far smaller than the rows (with a budget against the whole: it never applied) nor asking whether the rows wait
+before a cached copy's bytes are waited for (5.6 parts a frame, 52.6 whole decodes down to 52.2) was taken. Part
+79's two glow tests assert each of these now. On the merge: `tests/psp` 489 groups, `tests/allegrex` 60, both 0
+failures, `tests/psp/ares` 318 checks, 0 failed; against this branch alone, the same machine at the end of Death Jr.
+II's woods and character select, Sonic Rivals and Activision Hits Remixed in Software (every frame's picture and
+VRAM too) and in accurate mode, and of those and Colin McRae's race in fast mode.
 
 **For the RP6** (Adreno may differ from MoltenVK): the Armored Cores' intros are the same in both renderers on the
 M1, bound by the movie's polling; what Vulkan adds there each frame is half a texture upload (456 KB), a texture made
