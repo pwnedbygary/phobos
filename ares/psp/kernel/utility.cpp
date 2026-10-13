@@ -197,7 +197,8 @@ namespace {
     if((c >= 0x0430 && c <= 0x044f) || c == 0x0451) return InputRussianLower;
     if((c >= 0x0410 && c <= 0x042f) || c == 0x0401) return InputRussianUpper;
     if((c >= 0xac00 && c <= 0xd7a3) || (c >= 0x1100 && c <= 0x11ff) || (c >= 0x3130 && c <= 0x318f)) return InputKorean;
-    return keyboardPrinted(c) ? InputJapaneseSymbol : 0;
+    if(keyboardPrinted(c)) return InputJapaneseSymbol;
+    return 0;
   }
 
   //The console's nickname for an empty field, "PSP", or where the field can't take it a name it can: "pi-esu-pi" in
