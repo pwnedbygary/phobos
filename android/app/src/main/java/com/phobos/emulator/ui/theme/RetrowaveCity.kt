@@ -22,7 +22,7 @@ import kotlin.random.Random
  */
 internal class CityColors(scheme: ColorScheme, val isDark: Boolean) {
     val background: Int = scheme.background.toArgb()
-    val neon: IntArray = intArrayOf(vivid(scheme.primary), vivid(scheme.secondary), violet(scheme), vivid(scheme.tertiary))
+    val neon: IntArray = intArrayOf(neonOf(scheme.primary), neonOf(scheme.secondary), violet(scheme), neonOf(scheme.tertiary))
     val skyTop: Int = lerp(scheme.background, Color.Black, 0.25f).toArgb()
     val skyMiddle: Int = lerp(scheme.background, Color(neon[2]), 0.3f).toArgb()
     val skyLow: Int = lerp(lerp(scheme.background, Color(neon[0]), 0.62f), Color(neon[2]), 0.2f).toArgb()
@@ -54,13 +54,6 @@ internal class CityColors(scheme: ColorScheme, val isDark: Boolean) {
     private companion object {
         const val WHITE = 0xFFFFFFFF.toInt()
 
-        /** [color]'s hue as bright and colorful as sRGB allows at a neon's lightness. */
-        fun vivid(color: Color): Int {
-            val tone = Oklab.of(color)
-            val l = 0.74f
-            return Oklab.lch(l, Oklab.maxChroma(l, tone.hue) * 0.92f, tone.hue).toColor().toArgb()
-        }
-
         /** A violet from the background's hue where it has one (the retrowave themes' purples), else between the primary and secondary. */
         fun violet(scheme: ColorScheme): Int {
             val background = Oklab.of(scheme.background)
@@ -70,6 +63,13 @@ internal class CityColors(scheme: ColorScheme, val isDark: Boolean) {
             return if (color.luminance() < 0.02f) lerp(scheme.primary, scheme.secondary, 0.5f).toArgb() else color.toArgb()
         }
     }
+}
+
+/** [color]'s hue as bright and colorful as sRGB allows at a neon's lightness: night city's neon, and the consoles'. */
+internal fun neonOf(color: Color): Int {
+    val tone = Oklab.of(color)
+    val l = 0.74f
+    return Oklab.lch(l, Oklab.maxChroma(l, tone.hue) * 0.92f, tone.hue).toColor().toArgb()
 }
 
 /**
