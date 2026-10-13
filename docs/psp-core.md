@@ -10612,7 +10612,8 @@ around the confirm, and the game's memory 40 frames before, 10 before, 20 after 
 reaches the game, whose pad code (0x0888fc6c) maps a fresh Cross to the first of its actions; its "chess thread"
 wakes every 100 ms and runs its engine only when a request word (0x0899f2ac) says 1, which stays 0; between the
 frames before and after the confirm nothing in its memory changes but the lit squares' colours and its frame-rate
-count; and no system function is called differently (no file, no thread, nothing missing). The game's own move code
-(its states name an ST_COMMIT_MOVE) wasn't followed to where it gives up. Leads not checked: the engine loads an
-opening book, `openings.fbk`, by a path relative to the working directory as the match starts (whether that opens
-here isn't known); and the prototype's code may simply not finish its moves.
+count; and no system function is called differently (no file, no thread, nothing missing). Picking the pawn loads
+its sounds through the game's file thread (`w_pawn_idle_to_agressive.vag` among them), every open and read
+answered; from boot to the match the thread's five refused opens are each followed by another name that opens (a
+fallback). The game's own move code (its states name an ST_COMMIT_MOVE) wasn't followed to where it gives up; the
+prototype's code may simply not finish its moves.
