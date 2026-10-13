@@ -10395,11 +10395,13 @@ captures) is in `~/phobos-work/scratch/colinsave/` on the Mac it was made on, no
 ## Part 80: the savedata trace — After Burner's dates, the list modes' automatic answer (Brandish, 7th Dragon 2020)
 
 On branch `cursor/psp-savedata2-2b67`, begun on `cursor/psp-colinsave-2b67` (part 77) after its merge of master. Parts
-76 to 79 are other branches'. Sources: the games themselves, traced with the new option; pspsdk's
-psputility_savedata.h (the modes and the parameters' layout); pspautotests' utility/savedata tests; FAT's directory
-entries (a file's dates in local time, with no zone); PPSSPP read only as a description of the PSP (its notes on the
-save dialog's lists copying the chosen name back; nothing copied). JPCSP was not read. Save states are unchanged
-(StateVersion 26): the trace is the host's, and nothing else gains state.
+76 to 79 are other branches'. Sources: the games themselves, traced with the new option; pspsdk's psputility_savedata.h
+(the modes and the parameters' layout); pspautotests' utility/savedata tests; FAT's directory entries (a file's dates in
+local time, with no zone, none before 1980); pspsdk's psputility_sysparam.h (the time zone and daylight saving time
+settings); PPSSPP read only as a description of the PSP (its notes on the save dialog's lists copying the chosen name
+back; nothing copied). JPCSP was not read. Save states are unchanged (StateVersion 26): the trace is the host's, and
+nothing else gains state. The branch's first commit (926cf1214) failed CI's GCC build, and an independent review of it
+followed; both are taken in the commits after it, folded in below (**CI** and **The review's points** at the end).
 
 **The problem** (the play-testers' deep-play batch 00, suspected bug 1): three games' saves failed with no savedata
 note. After Burner: Black Falcon wrote `ULUS102440000` in full, then went back to pilot selection after its story,
@@ -10408,13 +10410,15 @@ save was never written and its title's LOAD GAME found nothing; Brandish: The Da
 its loads, from the title and in play, dimmed the screen and did nothing.
 
 **The trace** (`tools/psp-runner --trace-savedata`; `Kernel::savedataTrace`, empty unless a host sets it): each savedata
-request a line with its frame, as `savedataMode()` takes it (the mode by pspsdk's name, the structure's size, the game's
-and the save's names, a list's names and the save chosen from it, already written into the save's name, the data file,
-the buffer and the data's size, whether the save's folder is there, and the modes' own fields), then its answer (the
-result, named, and what came back). `savedata()` traces and calls `savedataMode()`, the modes as they were; the trace
-reads only the parameters' words that are in memory (a read past it would be noted and counted in the machine's state).
-The runner's README has the format and real lines. With Colin McRae's fix (part 77) alone none of the three games was
-fixed.
+request a line with its frame, as the game made it (the mode by pspsdk's name, the structure's size, the game's and the
+save's names, a list's names, the list dialog's focus, and the save chosen from the list, by a front end's player or the
+automatic answer), the data file, the buffer and the data's size, whether the save's folder is there, and the modes' own
+fields; then its answer (the result, named, and what came back, a chosen name as written back into the request).
+`savedata()` traces, writes a chosen name into the request, and calls `savedataMode()`, the modes as they were; the
+trace reads only the parameters' words that are in memory (a read past it would be noted and counted in the machine's
+state). With the app's dialogs, what they answer without doing a request isn't traced: a dialog backed out of, the
+notices that there's nothing to load or delete, and the deletes from a list. The runner's README has the format and real
+lines. With Colin McRae's fix (part 77) alone none of the three games was fixed.
 
 **After Burner: Black Falcon (ULUS10244).** The trace showed its autoload (mode 0, save "0000", AFTRBURN.BIN, 16368
 bytes) answered in full on some runs, and on others no request at all before "No game data was found.": the runs
@@ -10425,10 +10429,26 @@ time: on a Mac 4 hours behind UTC a save made in the last 4 hours was dated afte
 save's files itself before asking the utility (their dates, it seems: nothing else differed), took it for none. The same
 check after the story, on the save it had just written, sent it back to pilot selection. With TZ=UTC (the two zones the
 same) the fresh copy loaded, unchanged code. **The fix** (`io.cpp`, `writeTimes()`): the dates in local time, through
-`writeDate()` as the clock's are (a time before 1970, or none, as 1970's start); a memory stick's FAT keeps local times
-(chosen: no recording of a PSP's dates in another zone). **Now**: the story ends, the game saves (a list save to 0000 at
-frame 9232) and goes on to its MAIN MENU (Missions, Showroom, Pilot Stats, Multiplayer, Options, Save); the next boot,
-on that save, autoloads it ("CONTINUE WITH PILOT N00b").
+`writeDate()` as the clock's are; a memory stick's FAT keeps local times (chosen: no recording of a PSP's dates in
+another zone). Nor is any date later than the PSP's own clock, as local times go: that clock is startTime (the host's
+time at power-on, in whole seconds) plus the time the PSP has run, so it falls behind the host's, which dates the files,
+while the emulation is paused or runs slower than a PSP, and after a state saved earlier is loaded (startTime and the
+cycles come back with it); the save from the future would return (the runner, not paced to real time, doesn't show it).
+A date later than the clock's now is the clock's now. Compared in local time, as the game compares them, the hour
+daylight saving time gives back is covered too: a file changed in its first pass is later in local time than the clock
+in its second, though earlier in UTC. A time before 1980 in local time, or none (a file gone), is 1980-01-01 00:00:00,
+as no FAT stick holds an earlier date (the first commit's 1970's start in UTC was 1969 west of Greenwich). The times are
+read with stat() itself (`hostTimes()`; **CI** below). The system's time zone and daylight saving time settings
+(sceUtilityGetSystemParamInt's 6 and 7, 0 until now) are the host's at the clock's now, so they agree with the clock's
+local time and the dates (`hostZone()`): the zone as pspsdk has it, the offset from UTC in minutes without daylight
+saving time ("EST = -300"), and daylight saving time a setting of its own, an hour on top, 1 while kept. An offset is
+the local date's seconds less UTC's (`localSeconds()`; std::tm has no portable field for it); the zone is the lesser of
+the year's offsets on the first of January and of July, which takes both hemispheres alike, and Ireland too, whose zone
+files keep its winter as the "daylight saving" time (std::tm's tm_isdst would have it backwards), and daylight saving
+time is kept while the offset is more (a zone whose daylight saving time isn't an hour, as Lord Howe Island's, can't be
+told exactly). **Now**: the story ends, the game saves (a list save to 0000 at frame 9232) and goes on to its MAIN MENU
+(Missions, Showroom, Pilot Stats, Multiplayer, Options, Save); the next boot, on that save, autoloads it ("CONTINUE WITH
+PILOT N00b").
 
 **Brandish: The Dark Revenant (NPUH10195).** Its loads and saves are list requests (modes 4 and 5) with no save name of
 its own and a list of 99 or more names, "0001" first; the save it wrote is 0001. The kernel's automatic answer (no front
@@ -10440,14 +10460,25 @@ GAME is a list load of DATA00 to DATA49, no save name; the kernel took DATA00, t
 would never load (the dialog shows only the saves there). **The fix** (`dialogs.cpp`, `savedataUnshown()`, from
 `dialogUpdate()`), for a list request answered with no front end that names no save of its own (empty or "<>"): a load
 is answered as a PSP's player who confirms what the dialog shows first, the save the dialog focuses (the parameters'
-focus) among the saves there, through `dialogSaved()`, which writes the name back; a save takes the list's first name as
-before (chosen: where the automatic answer's own loads find it, and "<>" still the game's folder alone, not one of its
-saves), the name written back. A request naming its save (chosen: taken as before), a list with no first name, a game's
-name that isn't a plain one, a load with no save there, and the other modes are answered by `savedata()` as before.
-**Now**: Brandish's in-game load asks once and the game returns to the ruins with the save's character (HP 1/20, as its
-PARAM.SFO says), and from the title LOAD GAME loads it too; a save made with the fix on an empty stick reloads from the
-title. 7th Dragon's LOAD GAME, with a save in DATA03 (a copy of its system data put there), loads DATA03 and goes on
-into play.
+focus) among the saves there, or, that one broken (its PARAM.SFO not one, or its data file missing), the one the same
+focus takes among those that aren't (`dialogFocus()`; chosen: a player told it's corrupted takes another, the latest
+still where the latest was focused; the focused one where all are broken), through `dialogSaved()`; a save takes the
+list's first name as before, whatever the focus (chosen: where the automatic answer's own loads find it, and "<>" still
+the game's folder alone, not one of its saves). Either name goes through `savedata()`, which writes it into the request
+before doing it, as it does a front end's choice. The answer looks only at which saves are there, broken or not, and
+their dates (`dialogSaves()` without details), not their sizes or icons: it runs on the emulation thread, and Brandish
+lists 99 names. A request naming its save (chosen: taken as before), a list with no first name, a game's name that isn't
+a plain one, a load with no save there, and the other modes are answered by `savedata()` as before.
+
+**Not taken: a list save to the new slot its dialog focuses.** The review suggested that a list save whose dialog
+focuses the first or last new slot (focus 7 or 8) take that slot. Not done: each automatic save would then make a new
+slot, and a later automatic load whose dialog focuses the first save there (focus 0 with no name of its own, 1 or 5)
+would take the oldest, the player's progress seemingly lost, where a PSP's player would pick; with the list's first
+name, the automatic saves and loads meet in one slot whatever the foci. The three games focus the latest (3) in every
+list they ask for: After Burner's and Brandish's saves, Brandish's and 7th Dragon's loads. **Now**: Brandish's in-game
+load asks once and the game returns to the ruins with the save's character (HP 1/20, as its PARAM.SFO says), and from
+the title LOAD GAME loads it too; a save made with the fix on an empty stick reloads from the title. 7th Dragon's LOAD
+GAME, with a save in DATA03 (a copy of its system data put there), loads DATA03 and goes on into play.
 
 **7th Dragon's progress save is not fixed: the game never asked for one.** The play-tester's save (camp menu, Select for
 the Option screen, Start, "Create a save?", YES) is one save request, mode 3 to `NPJH50459DATA` (the system data,
@@ -10460,17 +10491,63 @@ later in the game wasn't reached. Its title's LOAD GAME on that stick is right t
 focused save among those there (DATA03 first, DATA05 last, the game's saves through "<>"), NO_DATA with none (the name
 left empty), a named save as before; list saves to the list's first name whatever the focus, "<>" to the game's folder
 alone with its other saves there; a list with no first name refused, a save making nothing and a load reading nothing
-with the game's folder there; each loaded or saved name written back. `utility savedata trace`: a save, a list load, a
-refused save with a quote and a control character in its name, and a load of no save, each line exact; nothing traced
-without a host. `files folders` (files.cpp): with the host's zone 4 hours west of Greenwich, a file changed at 12:34:56
-UTC is dated 08:34:56, as the clock's local time.
+with the game's folder there; a game's name that isn't plain refused, the load and the save (nothing read, made or
+written back); the focused save broken (its data file gone) passed over for the one the same focus takes among the rest
+(the latest, DATA05, broken: DATA03, not the oldest; the first, DATA01, broken: DATA03), and of two saves both broken
+the focused one taken, the last (FILE_NOT_FOUND); each loaded or saved name written back. `utility savedata trace`: an
+autosave, a list load and a list save naming no save (the game's own names, the focus, the chosen save, written back), a
+refused save with a quote and a control character in its name, a load of no save, and the sizes, list, files and size
+modes, each line exact; nothing traced without a host. `files dates in local time, none after the clock or before 1980;
+the system's time zone` (files.cpp; the zones POSIX rules, so no zone files are needed; each file made afresh and dated
+in 2025, so its birth time, where the host keeps one, is no earlier): 4 hours west of Greenwich, a file changed at
+12:34:56 UTC is dated 08:34:56, and 07:34:56 with the clock an hour behind it, as the clock's local time then; in New
+York's rules, summer's and winter's dates, a file changed at 01:30 EDT on the night daylight saving time ended dated
+01:10 by a clock at 01:10 EST, 1975 and 1979-12-31 19:00 dated 1980-01-01 00:00:00 while 00:00:01 is kept, and a file
+not there 1980-01-01; the zone and daylight saving time settings -240 and 0 there, -300 and 1 or 0 here, Sydney's 600
+with 1 in January and 0 in July, Ireland's 0 with 1 in July and 0 in January, Tokyo's 540 and 0. `utility savedata
+PARAM.SFO`'s list mode compares two saves' dates whole, so the night daylight saving time ends can't put them on one
+day.
 
-**Checks** (the fixes and the review's points, on 926cf1214): `tests/psp/run-tests.sh` 469 groups, 0 failures;
-`tests/allegrex/run-tests.sh` 58 groups, 0 failures and `tests/psp/ares/run-tests.sh` 318 checks, 0 failed (before
-the review's points, which change the list answer and the trace only). The games again with the final runner, each
-run on its own stick: After Burner's story ends in the MAIN MENU and its next boot autoloads; Brandish saves to an
-empty stick, then loads from the title and in play; 7th Dragon's Option save writes only its system data, and its
-LOAD GAME loads DATA03.
+**CI.** The first commit's PSP system tests didn't build with GCC (Ubuntu 24.04's 13.3, `-Werror`, the sanitizers):
+`writeTimes()` gave nall::inode::timestamp() a nall::string made from `host.c_str()`, and GCC, inlining its constructor,
+took a field of the string's union that a short string leaves unset (`_refs`) for a read before it's set
+(-Wmaybe-uninitialized, a false positive). The times are now read with stat() itself (`hostTimes()`, io.cpp), as
+nall::inode::timestamp() reads them (made: Windows' ctime, or the birth time where the host keeps one, no later than the
+change; the change otherwise), with no nall::string, and the dialog's save dates (`dialogSaves()`) through it too.
+Checked with GCC 13.3 (Ubuntu 24.04's, in a container, on arm64) and CI's flags: the first commit's kernel.cpp fails as
+CI did, at io.cpp's line 205; the final kernel.cpp, tests/psp/files.cpp and tests/psp/utility.cpp build clean; and CI
+built every test file clean on 7c44b0184. That commit's message describes only an earlier tweak, and its review line
+another diff (ea8661e8…): its content is this follow-up's work in progress, committed and pushed by another process
+while the work went on, finished and reviewed in the commits after it.
 
-**Scratch** (the runs, their stick copies, traces and captures; `run.sh` gives each run its own memory stick folder):
+**The review's points** (an independent read-only review of 926cf1214), all taken but one: the dates no later than the
+clock (its one medium point; tested with the clock an hour behind the file, and in the hour daylight saving time gives
+back, which a clamp in UTC would miss); the README's `chosen` for list saves (now traced, through `savedata()`, with the
+game's own save name beside it); what the trace leaves out with a front end, noted (kernel.hpp, the README); 1980 at the
+earliest; the system's time zone and daylight saving time (done here, not left for later); a broken focused save passed
+over; the tests (a game's name that isn't plain in a list request, a zone with daylight saving time, the trace of modes
+5, 8, 11, 12 and 22, the list mode's dates compared whole); the nits (the handoff's 188-column line rewrapped,
+`dialogSaved()` given the parameters as `savedataUnshown()` is, sizes and icons left out of the automatic answer, the
+scratch run script's zone pinned: no script in the repository compares captures). Not taken: the optional list save to
+the new slot its dialog focuses (above). A second independent read-only review, of the follow-up (diff f43e863f…, on
+67c1548c4 and the docs' draft), approved it with minor points, taken: the zone from the year's offsets rather than
+tm_isdst (Ireland, Lord Howe Island); a broken focused save's place taken by the same focus among the rest, not the
+first in the list; an all-broken test whose focus isn't the first; 7c44b0184's message corrected here and in the PR;
+comments, the tests' dates moved to 2025 (no longer after the day they were written), HostZone not copyable. Not taken:
+one helper for the clock's now (the pattern was there before).
+
+**Checks.** On 926cf1214 (the fixes and the first review's points): `tests/psp/run-tests.sh` 469 groups, 0 failures;
+`tests/allegrex/run-tests.sh` 58 groups, 0 failures and `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. On the final
+tree (the follow-up and the second review's points, merged with master): `tests/psp/run-tests.sh` 473 groups, 0
+failures; `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. CI on
+67c1548c4 was all green: its PSP system tests (GCC) 473 groups, 0 failures, the Allegrex tests, and the Android,
+Windows, macOS and Linux builds. The games again with the final runner and `--trace-savedata`, each run on its own
+stick: After Burner's story ends in the MAIN MENU (its list save to 0000, focus 3) and its next boot autoloads; Brandish
+saves to an empty stick (list saves to 0001, focus 3), then loads it from the title and in play; 7th Dragon's Option
+save writes only its system data, and its LOAD GAME (focus 3) loads DATA03. Every capture is the first commit's final
+runs' byte for byte but 7th Dragon's last after the load, a few sprites' pixels apart, which the first commit's own
+runner gives as well run now: the game reads the clock.
+
+**Scratch** (the runs, their stick copies, traces and captures; `run.sh` gives each run its own memory stick folder, and
+pins TZ to the Mac's own zone, America/New_York, as the stick's dates and the clock's local time follow it):
 `~/phobos-work/scratch/savedata2/` on the Mac it was made on, not in the repository.
