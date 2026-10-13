@@ -563,7 +563,8 @@ struct Allegrex {
     auto emitPrefixesBusy() -> sljit_jump*;
     auto prefixesAfter(u32 instruction) -> void;
     auto emitMFVC(u32 instruction) -> void;
-    //What the block being compiled knows of the prefixes here: each one's value, where it's known (recompiler-vfpu.cpp).
+    //What the block being compiled knows of the prefixes here: each one's value, where it's known
+    //(recompiler-vfpu.cpp).
     struct Prefixes {
       bool known[3] = {};  //pfxs, pfxt, pfxd
       u32 value[3] = {};

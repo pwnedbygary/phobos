@@ -558,18 +558,17 @@ auto Allegrex::Recompiler::emitBranch(u32 address, u32 instruction, u32 count) -
 
 //The coprocessors' branches, BC1F, BC1T, BC1FL and BC1TL on the FPU's condition (FCSR bit 23), and BVF, BVT, BVFL
 //and BVTL on one of the VFPU's condition codes (bits 18-20 pick which); bit 16 branches when it's true, bit 17
-//makes the branch likely. The block ends right after one, as it did when the interpreter ran them: where blocks
-//end is where a run of the CPU may stop (Allegrex::run() checks its limit between blocks), so it decides when
-//interrupts and the HLE kernel's events land, and has to stay as it was for every run to come out the same. So the
-//branch leaves pc and pd as the interpreter's would: pc at the delay slot and pd at the target or past the delay
-//slot, or both past the delay slot for a likely branch not taken; run() then has the interpreter take a delay slot
-//before a taken branch's target, as before. Not taken, the block goes on to the next by itself (emitChainTo()).
-//Taken, it does what run() would do next by itself too: Allegrex::run()'s round (the block counted, the run stopping
-//there if it's done), then the interpreter's step, which moves pc and pd past the delay slot and runs it, counted on
-//its own, then the round again and the target's block (emitChainTo()). Its delay slot is compiled as any other
-//instruction is, but where run() wouldn't take that step (a target just past the delay slot, where pd is pc + 4
-//and run() starts a block at the delay slot instead) or the delay slot isn't one the block could hold (in the next
-//section, a branch, or one that ends blocks): those leave for run() as before.
+//makes the branch likely. Each ends its block's own instructions, the interpreter's way: where blocks end is where
+//a run of the CPU may stop (Allegrex::run() checks its limit between blocks), so it decides when interrupts and the
+//HLE kernel's events land, and has to stay put for every run to come out the same. The branch leaves pc and pd as
+//the interpreter's would: pc at the delay slot and pd at the target or past the delay slot, or both past the delay
+//slot for a likely branch not taken. Not taken, the block goes on to the next by itself (emitChainTo()). Taken, it
+//does what run() would do next by itself too: Allegrex::run()'s round (the block counted, the run stopping there if
+//it's done), then the interpreter's step, which moves pc and pd past the delay slot and runs it, counted on its own,
+//then the round again and the target's block (emitChainTo()). Its delay slot is compiled as any other instruction
+//is, but where run() wouldn't take that step (a target just past the delay slot, where pd is pc + 4 and run()
+//starts a block at the delay slot instead) or the delay slot isn't one the block could hold (in the next section, a
+//branch, or one that ends blocks), the block leaves for run(), whose interpreter takes the delay slot.
 auto Allegrex::Recompiler::emitCoprocessorBranch(u32 address, u32 instruction, u32 count) -> void {
   u32 target = address + 4 + s16(instruction) * 4;
   if(instruction >> 26 == 0x11) test32(field(&self.fpu.csr), imm(1 << 23), set_z);
@@ -597,7 +596,7 @@ auto Allegrex::Recompiler::emitCoprocessorBranch(u32 address, u32 instruction, u
   std::vector<sljit_jump*> leave;
   emitCounted(count, leave);
   //A store earlier in this block may have rewritten the delay slot (dropping the section the block was compiled
-  //into): then run() takes it from memory, as before.
+  //into): then run() takes it from memory.
   u32 index = (address & 0x1fff'ffff) / SectionSize;
   mov64(reg(1), field(&table));
   mov64(reg(1), mem(reg(1), index * sizeof(Section*)));

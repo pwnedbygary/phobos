@@ -275,7 +275,9 @@ auto Allegrex::Recompiler::emitVFPU(u32 address, u32 instruction, u32 count, boo
     s32 which = -1;
     u32 matrix = size;
     if(group == 0 && size != 1) which = 0;
-    if(group >= 1 && group <= 3 && (size == group + 1 || size == group)) which = size == group + 1 ? 1 : 2, matrix = group + 1;
+    if(group >= 1 && group <= 3 && (size == group + 1 || size == group)) {
+      which = size == group + 1 ? 1 : 2, matrix = group + 1;
+    }
     if(group == 4 && size != 1) which = 3;
     if(group == 7 && size != 1) which = vt == 0x00 ? 4 : vt == 0x03 ? 5 : vt == 0x06 ? 6 : vt == 0x07 ? 7 : -1;
     if(which >= 0) {

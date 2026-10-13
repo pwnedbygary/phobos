@@ -570,14 +570,15 @@ auto more() -> void {
   CHECK(branch.cpu.vfpu.r[S(0, 1, 0)], bits(3.0f));  //the target's, plain
   //The matrix group's other instructions use them up too: vcrsp.
   Machine cross;
-  cross.run({vpfxs(negateX), alu(Vcrsp, 3, Rw(5, 0), Rw(1, 0), Rw(2, 0)), alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0))},
-            oneAndTwo);
+  cross.run({vpfxs(negateX), alu(Vcrsp, 3, Rw(5, 0), Rw(1, 0), Rw(2, 0)),
+             alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0))}, oneAndTwo);
   CHECK(cross.cpu.vfpu.r[S(0, 0, 0)], bits(3.0f));
   CHECK(cross.cpu.vfpu.pfxs, 0xe4);
   //An instruction that raises an exception instead of running leaves them: here a reserved encoding of the vadd
   //group, vcrs, which only exists for triples, used on a quad, and vmscl, vmmov and vmidt on singles.
-  for(uint32_t reserved : {0x61800000u, alu(Vcrs, 4, Rw(0, 0), Rw(1, 0), Rw(2, 0)), alu(Vmscl, 1, M(6), M(1), S(5, 0, 0)),
-                           alu(Vmatrix, 1, M(6), M(1), 0x00), alu(Vmatrix, 1, M(6), 0, 0x03)}) {
+  for(uint32_t reserved : {0x61800000u, alu(Vcrs, 4, Rw(0, 0), Rw(1, 0), Rw(2, 0)),
+                           alu(Vmscl, 1, M(6), M(1), S(5, 0, 0)), alu(Vmatrix, 1, M(6), M(1), 0x00),
+                           alu(Vmatrix, 1, M(6), 0, 0x03)}) {
     Machine fault;
     fault.run({vpfxs(negateX), reserved}, oneAndTwo);
     CHECK(fault.exceptions.size(), 1);

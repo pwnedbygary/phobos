@@ -749,6 +749,8 @@ auto coprocessorBranchesTaken() -> void {
   if(!useRecompiler) return;
   constexpr uint32_t Loop = Base + 0x100, Edge = Base + 0xff8;
   auto mtvc = [](uint32_t t, uint32_t index) { return 0x48e00000u | t << 16 | 0x80 | index; };
+  auto mtv = [](uint32_t t, uint32_t vd) { return 0x48e00000u | t << 16 | vd; };
+  auto vaddS = [](uint32_t vd, uint32_t vs, uint32_t vt) { return 0x60000000u | vt << 16 | vs << 8 | vd; };
   auto bv = [](bool onTrue, bool likely, uint32_t bit, int32_t o) {
     return 0x49000000u | likely << 17 | onTrue << 16 | bit << 18 | ((uint32_t)o & 0xffff);
   };
@@ -764,10 +766,10 @@ auto coprocessorBranchesTaken() -> void {
     };
     put(Base, {addiu(s0, zero, 0), lui(t2, Data >> 16), ori(t2, t2, Data & 0xffff), lui(t3, Unmapped >> 16),
                ori(t3, t3, Unmapped & 0xffff), lui(t1, addiu(t6, t6, 1) >> 16), ori(t1, t1, addiu(t6, t6, 1) & 0xffff),
-               lui(a1, (Edge + 8) >> 16), ori(a1, a1, (Edge + 8) & 0xffff), j(Loop), nop});
+               lui(a1, (Edge + 8) >> 16), ori(a1, a1, (Edge + 8) & 0xffff), lui(a3, 0x3f80), mtv(a3, 2), j(Loop), nop});
     put(Loop, {
       addiu(s0, s0, 1), andi(t0, s0, 1), mtc1(t0, 0), mtc1(zero, 1), ccond(CondEq, 0, 1),  //true when s0 is even
-      addu(a2, t1, t0), sw(a2, 0, a1),                             //the edge's delay slot, in the next section, rewritten
+      addu(a2, t1, t0), sw(a2, 0, a1),                             //the edge's delay slot, next section's, rewritten
       bc1(Bc1t, 2), addiu(s1, s1, 1), addiu(s2, s2, 1),           //native delay slot
       mtvc(t0, 3),                                                 //cc bit 0: s0 odd
       bv(true, false, 0, 2), bitrev(s3, s0), addiu(s4, s4, 1),    //interpreted delay slot
@@ -775,6 +777,8 @@ auto coprocessorBranchesTaken() -> void {
       bv(false, true, 0, 2), lw(s6, 0, t3), addiu(s7, s7, 1),      //likely, a load through read()
       bc1(Bc1f, 1), addiu(t4, t4, 1),                              //to just past its delay slot
       bv(true, false, 0, 2), syscall(1), addiu(t5, t5, 1),         //a syscall in its delay slot
+      bv(true, false, 0, 2), vaddS(1, 1, 2), addiu(v0, v0, 1),     //a VFPU delay slot, the prefixes at rest
+      0xdc0100e4, bv(false, false, 0, 2), vaddS(3, 3, 2), addiu(v1, v1, 1),  //vpfxs (lane 0 negated) before it
       j(Edge), nop,
     });
     put(Edge, {ccond(CondEq, 0, 1), bc1(Bc1t, 2), addiu(t6, t6, 1), addiu(t7, t7, 1),  //the last word, and across
@@ -799,8 +803,10 @@ auto coprocessorBranchesTaken() -> void {
                 chained.scc.halted == unchained.scc.halted;
     for(uint32_t r = 0; r < 32; r++) same = same && chained.ipu.r[r] == unchained.ipu.r[r];
     for(uint32_t r = 0; r < 32; r++) same = same && chained.fpu.r[r] == unchained.fpu.r[r];
+    for(uint32_t r = 0; r < 128; r++) same = same && chained.vfpu.r[r] == unchained.vfpu.r[r];
     same = same && chained.fpu.csr == unchained.fpu.csr && chained.vfpu.cc == unchained.vfpu.cc &&
-           runs[0].m.ram.bytes == runs[1].m.ram.bytes;
+           chained.vfpu.pfxs == unchained.vfpu.pfxs && chained.vfpu.pfxt == unchained.vfpu.pfxt &&
+           chained.vfpu.pfxd == unchained.vfpu.pfxd && runs[0].m.ram.bytes == runs[1].m.ram.bytes;
     if(!same && ++mismatches <= 3) {
       std::printf("FAIL %s: run %u of %u: %llu vs %llu instructions, pc %08x vs %08x\n", currentTest, round, limit,
                   (unsigned long long)a, (unsigned long long)b, chained.ipu.pc, unchained.ipu.pc);
@@ -819,6 +825,9 @@ auto coprocessorBranchesTaken() -> void {
   CHECK(chained.ipu.r[t6], 90);  //1 when s0 is even, 2 when odd
   CHECK(chained.ipu.r[t7], 30);
   CHECK(chained.ipu.r[s6], 0x1234'5678);
+  CHECK(chained.ipu.r[v0], 30);  //(each VFPU branch not taken when s0 is odd, the other when it's even)
+  CHECK(chained.ipu.r[v1], 30);
+  CHECK(chained.vfpu.r[1], 0x4270'0000u);  //60.0: every VFPU delay slot ran
   CHECK(runs[0].befores == runs[1].befores, 1);
   CHECK(runs[0].befores.size(), 60);
   CHECK(runs[0].m.exceptions.size(), 1);
