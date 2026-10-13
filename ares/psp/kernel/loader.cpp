@@ -13,7 +13,7 @@ enum : u32 {
   ElfMIPS        = 8,           //e_machine
   SegmentLoad    = 1,           //p_type: bytes to put in memory
   SonyRelocations       = 0x7000'00a0,  //p_type and sh_type: a PRX's relocations
-  SonyPackedRelocations = 0x7000'00a1,  //p_type: the newer packed form (not yet)
+  SonyPackedRelocations = 0x7000'00a1,  //p_type: the newer packed form (relocatePacked())
   HeaderSize        = 52,
   SegmentEntrySize  = 32,
   SectionEntrySize  = 40,
@@ -44,6 +44,114 @@ auto hex(u32 value) -> std::string {
   char text[16];
   std::snprintf(text, sizeof(text), "0x%08x", value);
   return text;
+}
+
+//A loaded segment, as relocations name it: where it went, and how many of its bytes came from the file.
+struct Placed { u32 address, fileSize; };
+
+//Sony's packed relocations (PT_PSP_REL2), which later SDKs write in place of the eight-byte entries: a program
+//header of their own after the segments, as God Eater 2's update modules have them. The PSP's loadcore reads them as
+//uOFW's loadelf.c sets out (sceKernelApplyPspRelSegment2). Its reverse engineering names the types after standard
+//MIPS's and slips in places, which the modules themselves settle: a segment's command also sets the offset, from the
+//rest of its word; a relocation's type comes from the second list, not the first; the upper-half form of a move is
+//shifted by the kind's, segment's and type's bits; a jump's target is written as a word index; the type of the
+//relocation before is kept, for the addend; a command naming a segment past the last is refused (not the other way
+//round); and each relocated word is the one at the offset. Read so, every one of the 45 modules' relocations lands in
+//its segment, every jump in its module's code, every upper half's address in its module.
+//
+//The table: two zero bytes; how many bits a command's kind takes, and its type; then two lists of bytes, each
+//starting with its own length (that byte counted): the kinds, and the types. Then the commands, 16-bit words, from
+//their lowest bits: the kind (an index into the first list); a segment (one bit for a module of one or two segments,
+//else two); for a relocation, its type (an index into the second list); then the rest of the word. A kind with bit 0
+//clear names the segment the offsets count from, the rest of its word the offset (or, with bit 2 set, a 32-bit offset
+//that follows). A kind with bit 0 set relocates a word there by the address of the segment the command names: bits
+//1 and 2 say where the offset goes (on by the rest of the word, signed; on by that as an upper half, with a 16-bit
+//lower half that follows; to a 32-bit offset that follows), bits 3-5 what an upper half's addend is (none; the one
+//before, if the relocation before was an upper half; a 16-bit word that follows). The types: 1 and 5, a lower half
+//(its 16 bits); 2, a 32-bit word; 3, a jump's target, the jump kept; 4, an upper half (lui), whose addend is the
+//lower half completing its address, so it can carry; 6 and 7, a j and a jal, made so; 0, nothing. Returns why the
+//table can't be applied, or nothing.
+auto relocatePacked(Memory& memory, const File& file, u32 offset, u32 length, const std::vector<Placed>& placed)
+  -> std::string {
+  if(!file.has(offset, length)) return "the packed relocations run past the end of the file";
+  u64 at = offset, end = u64(offset) + length;
+  auto take16 = [&](u32& value) { if(at + 2 > end) return false; value = file.read16(at); at += 2; return true; };
+  auto take32 = [&](u32& value) { if(at + 4 > end) return false; value = file.read32(at); at += 4; return true; };
+  if(length < 6 || file.read16(at) != 0) return "the packed relocations' header is broken";
+  u32 kindBits = file.data[at + 2], typeBits = file.data[at + 3];
+  u64 kinds = at + 4, kindCount = file.data[kinds];
+  u64 types = kinds + kindCount;
+  if(kindBits > 16 || kindCount == 0 || types >= end) return "the packed relocations' header is broken";
+  u64 typeCount = file.data[types];
+  at = types + typeCount;
+  if(typeCount == 0 || at > end) return "the packed relocations' header is broken";
+  u32 segments = placed.size(), segmentBits = segments < 3 ? 1 : 2;
+  u32 field = kindBits + segmentBits, rest = field + typeBits;
+  if(rest > 16) return "the packed relocations' header is broken";
+  u32 base = segments, position = 0, addend = 0, last = ~0u;  //no segment named yet
+  while(at < end) {
+    u32 command = 0;
+    if(!take16(command)) return "a packed relocation is cut short";
+    u32 kindIndex = command & ((1u << kindBits) - 1);
+    if(kindIndex >= kindCount) return "a packed relocation of a kind the table hasn't";
+    u32 kind = file.data[kinds + kindIndex];
+    u32 segment = command >> kindBits & ((1u << segmentBits) - 1);
+    if(segment >= segments) return "a packed relocation names a segment that isn't there";
+    if(!(kind & 1)) {
+      base = segment;
+      if(kind & 4) {
+        if(!take32(position)) return "a packed relocation is cut short";
+      } else if(kind & 2) {
+        return "a packed relocation of a kind the loader doesn't know";
+      } else {
+        position = command >> field;
+      }
+      continue;
+    }
+    if(base >= segments) return "a packed relocation before its segment is named";
+    u32 typeIndex = command >> field & ((1u << typeBits) - 1);
+    if(typeIndex >= typeCount) return "a packed relocation of a type the table hasn't";
+    u32 type = file.data[types + typeIndex];
+    s32 moved = s32(s16(command)) >> rest;
+    switch(kind & 6) {
+    case 0: position += moved; break;
+    case 2: {
+      u32 lower = 0;
+      if(!take16(lower)) return "a packed relocation is cut short";
+      position += u32(moved) << 16 | lower;
+      break;
+    }
+    case 4:
+      if(!take32(position)) return "a packed relocation is cut short";
+      break;
+    default: return "a packed relocation of a kind the loader doesn't know";
+    }
+    if(position >= placed[base].fileSize) return "a packed relocation points outside its segment";
+    switch(kind & 0x38) {
+    case 0x00: addend = 0; break;
+    case 0x08: if(last != 4) addend = 0; break;
+    case 0x10: if(!take16(addend)) return "a packed relocation is cut short"; break;
+    default: return "a packed relocation of a kind the loader doesn't know";
+    }
+    u32 address = placed[base].address + position, add = placed[segment].address;
+    if(!memory.reaches(address, 4)) return "a relocation points outside the program: " + hex(address);
+    u32 word = memory.read(4, address);
+    u32 target = ((address & 0xf000'0000) | (word & 0x03ff'ffff) << 2) + add;  //for the jumps
+    switch(type) {
+    case 0: break;
+    case 1: case 5: memory.write(4, address, (word & 0xffff'0000) | ((add + s16(word)) & 0xffff)); break;
+    case 2: memory.write(4, address, word + add); break;
+    case 3: memory.write(4, address, (word & 0xfc00'0000) | (target >> 2 & 0x03ff'ffff)); break;
+    case 4:
+      memory.write(4, address, (word & 0xffff'0000) | (((word << 16) + s16(addend) + add + 0x8000) >> 16 & 0xffff));
+      break;
+    case 6: memory.write(4, address, 0x0800'0000 | (target >> 2 & 0x03ff'ffff)); break;
+    case 7: memory.write(4, address, 0x0c00'0000 | (target >> 2 & 0x03ff'ffff)); break;
+    default: return "a packed relocation of type " + std::to_string(type) + ", which the loader doesn't know";
+    }
+    last = type;
+  }
+  return {};
 }
 
 }
@@ -154,11 +262,18 @@ auto Loader::load(Memory& memory, const u8* data, u64 size, u32 base, const Impo
   //eight bytes: an offset, and an info word holding the type (bits 0-7), the segment the offset counts from (bits
   //8-15) and the segment whose address is added to the word (bits 16-23): a relocated word holds an address
   //within that segment. (Sony's tools and pspdev's alike number segments by their program headers. pspdev's PRXs
-  //have a single segment, starting at 0; retail modules with more will show the segment numbers matter.)
-  if(module.relocatable) {
+  //have a single segment, starting at 0; retail modules with more will show the segment numbers matter.) A module
+  //with packed relocations has them alone (relocatePacked()), its segments numbered among the run of those loaded.
+  const Header* packed = nullptr;
+  for(auto& segment : segments) if(segment.type == SonyPackedRelocations && !packed) packed = &segment;
+  if(module.relocatable && packed) {
+    std::vector<Placed> placed;  //loadcore's numbering: the run of loaded segments from the first
     for(auto& segment : segments) {
-      if(segment.type == SonyPackedRelocations) return "packed relocations (PT_PSP_REL2) aren't supported yet";
+      if(segment.type == SegmentLoad) placed.push_back({relocation + segment.address, segment.fileSize});
+      else if(!placed.empty()) break;
     }
+    if(auto why = relocatePacked(memory, file, packed->offset, packed->fileSize, placed); !why.empty()) return why;
+  } else if(module.relocatable) {
     std::vector<std::pair<u32, u32>> tables;  //file offset and size of each list of relocations
     for(auto& section : sections) if(section.type == SonyRelocations) tables.push_back({section.offset, section.size});
     if(tables.empty()) {
@@ -245,7 +360,9 @@ auto Loader::load(Memory& memory, const u8* data, u64 size, u32 base, const Impo
   module.entry = relocation + file.read32(24);
 
   //The imports: one entry per library, each len words long: the library's name, its version and attributes, the
-  //entry's length, counts of variables and functions, and where the NIDs and the stubs are.
+  //entry's length, counts of variables and functions, and where the NIDs and the stubs are; an entry of 6 words or
+  //more (uOFW's loadcore: 7 adds a second count of variables, the larger taken) then says where its variables'
+  //table is: for each, the address of its list of words to relocate, and its NID (modules.cpp links them).
   for(u32 at = importsStart; at < importsEnd;) {
     if(!memory.reaches(at, 20)) return "the import table is broken";
     u32 length = memory.read(1, at + 8);
@@ -263,7 +380,15 @@ auto Loader::load(Memory& memory, const u8* data, u64 size, u32 base, const Impo
       memory.write(4, stub + 4, (code & 0xf'ffff) << 6 | 0x0c);  //syscall code, in the delay slot
       module.imports.push_back({library, nid, stub});
     }
-    if(variables) module.skipped.push_back(std::to_string(variables) + " variable imports from " + library);
+    if(length >= 7 && memory.reaches(at + 24, 2)) variables = std::max<u32>(variables, memory.read(2, at + 24));
+    u32 table = length >= 6 && memory.reaches(at + 20, 4) ? memory.read(4, at + 20) : 0;
+    if(variables && (!table || !memory.reaches(table, variables * 8))) {
+      module.skipped.push_back(std::to_string(variables) + " variable imports from " + library);
+    } else {
+      for(u32 n = 0; n < variables; n++) {
+        module.variables.push_back({library, memory.read(4, table + n * 8 + 4), memory.read(4, table + n * 8), 0});
+      }
+    }
     at += length * 4;
   }
 
