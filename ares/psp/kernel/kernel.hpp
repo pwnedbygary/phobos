@@ -222,6 +222,7 @@ struct Kernel {
   //modules' (pspkerror.h)
   static constexpr u32 ErrorIllegalObject         = 0x8002'012d;  //not a module, or one the loader refuses
   static constexpr u32 ErrorUnknownModule         = 0x8002'012e;
+  static constexpr u32 ErrorUnknownModuleFile     = 0x8002'012f;  //a module's path with a '%' in it (uOFW)
   static constexpr u32 ErrorAlreadyStarted        = 0x8002'0133;
   static constexpr u32 ErrorNotStarted            = 0x8002'0134;
   static constexpr u32 ErrorAlreadyStopped        = 0x8002'0135;
@@ -290,6 +291,10 @@ struct Kernel {
     u32 nid;
     bool quiet = false;  //it makes nothing due sooner (syscall())
   };
+  //Set by a function that isn't always quiet but was this time: it changed nothing that has a time to come (dispatch()
+  //clears it before each)
+  bool calm = false;
+  u64 switched = 0;  //switchTo()'s changes of the thread in the CPU so far (calm calls tell none came by it; not saved)
   struct Import {
     std::string library;
     u32 nid;
@@ -417,7 +422,7 @@ struct Kernel {
   auto threadReturned() -> void;
   auto extendReturned() -> void;
   auto extensionsEnded(Thread& thread) -> void;
-  auto signalSemaphores(Semaphore& semaphore) -> void;
+  auto signalSemaphores(Semaphore& semaphore) -> bool;  //(whether it woke a thread)
   auto unlockLwMutex(u32 workArea) -> void;
   auto findThread(u32 uid) -> Thread*;
   auto deleteThread(Thread& thread) -> void;
@@ -769,6 +774,7 @@ struct Kernel {
       u32 time = 0;              //when it was taken, in microseconds
       u32 buttons = 0;
       u8 x = 128, y = 128;       //the stick (centred unless sampling was analog)
+      u8 rightX = 128, rightY = 128;  //the host's right stick, the same way (not the PSP's: ctrl.cpp; not in states)
     };
     struct Latch {                 //since the latch was last read:
       u32 made = 0, broken = 0;    //buttons pressed, and let go
@@ -777,6 +783,7 @@ struct Kernel {
     };
     u32 buttons = 0;                  //what the player holds now (PSP_CTRL_* bits): the system sets these
     u8 analogX = 128, analogY = 128;  //the stick, 0-255 on each axis, 128 when left alone
+    u8 rightX = 128, rightY = 128;    //the host's right stick, the same way (a convention: ctrl.cpp; not in states)
     u32 cycle = 0, mode = 0;          //sampling cycle (0: at each vertical blank; else microseconds) and mode
     u64 nextSample = 0;               //with a cycle: when the next sample is due
     Sample samples[64];               //the last 64 samples, a ring: the next one goes over samples[next], the oldest
@@ -1360,6 +1367,7 @@ struct Kernel {
   auto sceMpegInit() -> void;
   auto sceMpegFinish() -> void;
   auto sceMpegRingbufferQueryMemSize() -> void;
+  auto sceMpegRingbufferQueryPackNum() -> void;
   auto sceMpegQueryMemSize() -> void;
   auto sceMpegRingbufferConstruct() -> void;
   auto sceMpegRingbufferDestruct() -> void;
@@ -1712,11 +1720,15 @@ struct Kernel {
     u32 mode = 0;               //1: read whole into the program's memory (else a piece at a time)
     u32 references = 0;         //handles holding it open
     std::vector<u32> blocks;    //the memory it took from the program, given back as its last handle closes
+    u32 held = 0;               //the glyph it last read, its number plus 1 (0: none), in two blocks of the
+    std::vector<u32> glyphBlocks;  //program's: its record and its picture (fontCharacter()), given back with blocks
     u64 hash = 0;               //its bytes' (a system font's or a file's): a state's must be the same
     std::shared_ptr<PGF> pgf;   //its glyphs (not saved: read again when a state is loaded)
   };
   struct FontCall {             //a library function part way through, calling the program's own alloc or free
-    enum Kind : u32 { NewLib = 1, Open, Give };  //Give: only gives memory back (a close, the library done with)
+    //Give: only gives memory back (a close, the library done with, a flush); Glyph: a character's info or picture,
+    //its glyph read into memory of the program's
+    enum Kind : u32 { NewLib = 1, Open, Give, Glyph };
     u32 kind = 0;
     Context caller{};           //the thread where it called the library: put back as the function returns
     u32 library = 0;            //the library (sceFontNewLib's: its parameters)
@@ -1729,6 +1741,9 @@ struct Kernel {
     bool ended = false;         //what it makes is made (fontEnd()): what's left is giving back, then returning
     u32 result = 0, error = 0;  //what it returns, and its error
     OpenFont opening;           //an open's font, made once its memory has all come
+    u32 font = 0, glyph = 0;    //a glyph's: the font (its ID) and the glyph's number, which the font then holds,
+    u32 what = 0, out = 0;      //what's asked of it (fontCharacter()'s what: 0, 2 or 3), where the answer goes,
+    u32 clip[4] = {};           //and _Clip's rectangle
   };
   std::map<u32, FontLibrary> fontLibraries;  //by address
   std::map<u32, OpenFont> openFonts;         //by ID
@@ -1743,7 +1758,8 @@ struct Kernel {
   auto fontCount(u32 library) -> u32;
   auto fontStyle(u32 address, const PGF& pgf, s32 system) -> void;
   auto systemFontStyle(u32 address, u32 index) -> void;
-  auto fontGlyph(const OpenFont& font, u32 code, PGF::Glyph& glyph, bool shadow) -> void;
+  auto fontGlyph(const OpenFont& font, u32 code, PGF::Glyph& glyph, bool shadow) -> s32;
+  auto fontAnswer(const PGF::Glyph& glyph, u32 what, u32 out, const u32 clip[4]) -> void;
   auto fontDraw(const PGF::Glyph& glyph, u32 image, s64 clipLeft, s64 clipTop, u64 clipWidth, u64 clipHeight)
     -> void;
   auto fontNext(FontCall& call) -> void;
@@ -1853,6 +1869,19 @@ struct Kernel {
   auto sceKernelUtilsMt19937UInt() -> void;
   auto sceMt19937Init() -> void;
   auto sceMt19937UInt() -> void;
+  //md5.cpp: MD5, the kernel's and its library's (sceMd5)
+  auto md5Init(u32 context) -> u32;
+  auto md5Update(u32 context, u32 data, u32 size) -> u32;
+  auto md5Result(u32 context, u32 digest) -> u32;
+  auto md5Digest(u32 data, u32 size, u32 digest) -> u32;
+  auto sceKernelUtilsMd5Digest() -> void;
+  auto sceKernelUtilsMd5BlockInit() -> void;
+  auto sceKernelUtilsMd5BlockUpdate() -> void;
+  auto sceKernelUtilsMd5BlockResult() -> void;
+  auto sceMd5Digest() -> void;
+  auto sceMd5BlockInit() -> void;
+  auto sceMd5BlockUpdate() -> void;
+  auto sceMd5BlockResult() -> void;
 
   //p3da.cpp: sound channels mixed into stereo (sceP3da)
   auto sceP3daBridgeInit() -> void;
@@ -1903,13 +1932,14 @@ struct Kernel {
     u32 error = 0;         //what an aborted message finishes with: 0, or the error of one a PSP doesn't show
     bool deleted = false;  //a save was deleted from its list, which asks the front end again (dialogs.cpp)
   } dialog;
-  u32 stateLayout = 26;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 28;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;
   auto dialogStatus(u32 kind) -> void;
   auto dialogUpdate(u32 kind) -> void;
   auto dialogShutdown(u32 kind) -> void;
+  static auto keyboardConform(const std::vector<u16>& text, u32 input, u32 lines) -> std::vector<u16>;
   auto keyboard(u32 parameters) -> u32;
   auto keyboardField(u32 field, std::vector<u16> text) -> void;
   static auto hexWord(u32 value) -> std::string;
@@ -1922,7 +1952,7 @@ struct Kernel {
   auto savedataIcons(u32 parameters, const std::string& folder) -> void;
   auto savedataClusters(const std::string& folder, const std::vector<std::string>& secure) -> u64;
   auto savedataNeeded(u32 parameters, u32 dataSize) -> u64;
-  auto savedataList(u32 parameters, const std::string& game) -> u32;
+  auto savedataList(u32 parameters, const std::string& game, const std::string& save) -> u32;
   auto savedataFiles(u32 info, const std::string& host, const std::vector<std::string>& secure) -> void;
   auto sceUtilitySavedataInitStart() -> void;
   auto sceUtilitySavedataGetStatus() -> void;
@@ -1983,10 +2013,12 @@ struct Kernel {
     bool back = false;
     std::string ok, cancel;
     //the keyboard: each field's description and text at first, the most characters it takes (UTF-16 units, as the
-    //PSP counts them), which characters (psputility_osk.h's input types, 0 for any), its lines and its language
+    //PSP counts them), which characters (psputility_osk.h's input types, 0 for any), its lines and its language; and
+    //its text at first as the program's UTF-16 (the kernel's: not in the byte form)
     struct Field {
       std::string description, text;
       u32 most = 0, input = 0, lines = 1, language = 0;
+      std::vector<u16> units = {};
     };
     std::vector<Field> fields;
     //saving and loading: the mode (2 load, 3 save, 4 load from a list, 5 save to a list, 6 delete from a list, 7
@@ -2116,6 +2148,9 @@ struct Kernel {
   static auto localSeconds(s64 seconds, s64& local) -> bool;
   static auto hostZone(s64 seconds, s32& minutes, bool& daylight) -> void;
   auto writeDate(u32 address, u64 microseconds, bool local) -> bool;
+  auto rtcConvertZone(bool toLocal) -> void;
+  auto sceRtcConvertUtcToLocalTime() -> void;
+  auto sceRtcConvertLocalTimeToUTC() -> void;
   struct Exec {  //sceKernelLoadExec's program, put in as the kernel's loop next goes round (never kept in states)
     bool pending = false;
     std::string path;
@@ -2172,6 +2207,8 @@ struct Kernel {
   auto programAsModule() -> void;
   auto unloadSelf(s32 exitStatus, u32 length, u32 argument, u32 options) -> void;
   auto linkImports() -> void;
+  auto relinkVariable(u32 list, u32 delta) -> void;
+  auto noteSystemVariables(const Module& m, const std::string& who) -> void;
   auto moduleAt(u32 address) const -> u32;
   auto moduleFunction(const LoadedModule& loaded, u32 nid) const -> u32;
   auto threadParameters(const Module& module, u32 parameters, u32& priority, u32& stackSize, u32& attributes) const
@@ -2184,6 +2221,7 @@ struct Kernel {
   auto moduleReturned() -> void;
   auto sceKernelLoadModule() -> void;
   auto sceKernelLoadModuleByID() -> void;
+  auto sceKernelLoadModuleNpDrm() -> void;
   auto sceKernelStartModule() -> void;
   auto sceKernelStopModule() -> void;
   auto sceKernelUnloadModule() -> void;

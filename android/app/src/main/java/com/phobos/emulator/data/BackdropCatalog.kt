@@ -25,7 +25,8 @@ enum class CatalogBackdrop(
 
     MANGA_TONE("Manga ink", MangaBackdropScene.TONE.label, MangaBackdropScene.TONE.description),
     MANGA_SPEED_LINES("Manga ink", MangaBackdropScene.SPEED_LINES.label, MangaBackdropScene.SPEED_LINES.description),
-    MANGA_SPLASH("Manga ink", MangaBackdropScene.SPLASH.label, MangaBackdropScene.SPLASH.description),
+    MANGA_COVER("Manga ink", MangaBackdropScene.COVER.label, MangaBackdropScene.COVER.description),
+    MANGA_TRUCK("Manga ink", MangaBackdropScene.TRUCK.label, MangaBackdropScene.TRUCK.description),
 
     RPG_LATTICE("16-bit RPG", RpgBackdropScene.LATTICE.label, RpgBackdropScene.LATTICE.description),
     RPG_STARS("16-bit RPG", RpgBackdropScene.STARS.label, RpgBackdropScene.STARS.description),
@@ -79,7 +80,8 @@ fun PixelBackdropScene.toCatalog(): CatalogBackdrop = when (this) {
 fun MangaBackdropScene.toCatalog(): CatalogBackdrop = when (this) {
     MangaBackdropScene.TONE -> CatalogBackdrop.MANGA_TONE
     MangaBackdropScene.SPEED_LINES -> CatalogBackdrop.MANGA_SPEED_LINES
-    MangaBackdropScene.SPLASH -> CatalogBackdrop.MANGA_SPLASH
+    MangaBackdropScene.COVER -> CatalogBackdrop.MANGA_COVER
+    MangaBackdropScene.TRUCK -> CatalogBackdrop.MANGA_TRUCK
 }
 
 fun RpgBackdropScene.toCatalog(): CatalogBackdrop = when (this) {

@@ -398,6 +398,12 @@ static auto mpegStubs() -> void {
                               {u32(-1), 0xffff'f798u}, {0x8000'0000u, 0u}}) {
     check(__LINE__, "a ringbuffer's memory", m.call("sceMpegRingbufferQueryMemSize", {packets}), size);
   }
+  //and the other way, how many packets that memory holds, as ringbuffer/packnum recorded (the size unsigned)
+  for(auto [size, packets] : {std::pair{u32(-1), 0x1e'741au}, {0u, 0u}, {1u, 0u}, {0x800u, 0u}, {0x867u, 0u},
+                              {0x868u, 1u}, {0x869u, 1u}, {0x540fu, 9u}, {0x5410u, 10u}, {0x5411u, 10u},
+                              {0x7fff'ffffu, 0xf'3a0du}, {0x8000'0000u, 0xf'3a0du}}) {
+    check(__LINE__, "a ringbuffer's packets", m.call("sceMpegRingbufferQueryPackNum", {size}), packets);
+  }
   CHECK(m.call("sceMpegInit", {}), 0);
   CHECK(m.call("sceMpegQueryMemSize", {0}), 0x10000);
   constexpr u32 Ring = R + 0x100, Data = 0x0894'0000;

@@ -26,12 +26,13 @@
 //    folder, erasing a data file the file alone (and its name from PARAM.SFO's list). Names that would lead out of
 //    the save's folder, and buffers outside the program's memory, are refused. The PSP also encrypts the secure files
 //    and hashes them in PARAM.SFO: not done here (the files are only Phobos's to read; the hashes are zeros). A
-//    list's load that names no save takes the one its dialog would focus (that one broken, the one the same focus
-//    takes among those that aren't), a list's save the list's first name, the name written back either way
-//    (savedataUnshown()).
+//    list's load takes the save its dialog would focus (that one broken, the one the same focus takes among those
+//    that aren't), a list's save that names none (or a pattern, which names none there) the list's first name, the
+//    name written back either way (savedataUnshown()); the list mode lists the saves its save name takes as a pattern
+//    ('*', '?').
 //  - A message: answered at once, as if the player pressed Yes (or OK), the message noted.
-//  - The keyboard: each field's text entered as it is, an empty one given the console's nickname, each CHANGED
-//    (keyboard()).
+//  - The keyboard: each field's text entered as it is, an empty one given the console's nickname as the field's input
+//    types allow it, each CHANGED (keyboard()).
 //  - Network settings, game sharing, the web browser: cancelled, as if the player backed out.
 //  - Installing a game's data to the memory stick (gamedata install, which later games show at their first start):
 //    cancelled too, the game going on from the disc.
@@ -114,6 +115,36 @@ namespace {
     return std::none_of(name.begin(), name.end(), [](char c) { return u8(c) < 0x20; });
   }
 
+  //Whether a save's name is a pattern, as the list mode takes its save's name ('*' for any run of characters, '?' for
+  //any one: utility/savedata/idlist's "A?C" listed its one save, ABC). It names no save a memory stick can hold: FAT
+  //takes neither character in a name (the same test's open of a file in ms0:/PSP/SAVEDATA/TEST99901A?C/ was
+  //0x80010016, invalid, where one not there is 0x80010002).
+  auto savePattern(const std::string& name) -> bool {
+    return name.find_first_of("*?") != std::string::npos;
+  }
+
+  //Whether a pattern (savePattern()'s) takes a name whole: '*' any run of its characters (none too), '?' any one, any
+  //other character itself, as it's given (chosen: a FAT stick keeps a name's case, and the folders a game lists are
+  //its own, named as it names them).
+  auto patternTakes(const std::string& pattern, const std::string& name) -> bool {
+    u64 at = 0, from = 0, star = std::string::npos, resume = 0;
+    while(from < name.size()) {
+      if(at < pattern.size() && pattern[at] == '*') {
+        star = at++;
+        resume = from;
+      } else if(at < pattern.size() && (pattern[at] == '?' || pattern[at] == name[from])) {
+        at++, from++;
+      } else if(star != std::string::npos) {  //(the last '*' takes one more character, and the rest is tried again)
+        at = star + 1;
+        from = ++resume;
+      } else {
+        return false;
+      }
+    }
+    while(at < pattern.size() && pattern[at] == '*') at++;
+    return at == pattern.size();
+  }
+
   //A keyboard field's text in the program's memory (UTF-16, ending in a NUL): as far as it goes there, and no more
   //than KeyboardMostText characters; none from address 0.
   auto keyboardText(Memory& memory, u32 address) -> std::vector<u16> {
@@ -125,6 +156,89 @@ namespace {
     }
     return text;
   }
+
+  //The keyboard's input types (psputility_osk.h's PSP_UTILITY_OSK_INPUTTYPE_*, a field's at 16 in SceUtilityOskData,
+  //0 for all): which a character is typed in, by what it is. The Latin letters are ASCII's and U+00C0-024F's (Latin-1's
+  //and Latin Extended-A's and -B's, the accented letters), lower or upper by case, a letter that's neither (title
+  //case, or none) upper. Full-width letters, digits and signs (U+FF01-FF5E, and U+3000-303F's spaces and marks) are
+  //the Japanese ones, and so are the kana's own marks (the voicing and iteration marks, the middle dot, the long vowel
+  //mark: kana too) and every other character that's printed and classed nowhere else, JIS X 0208's other symbols
+  //among them (stars, notes, arrows, the reference mark, the ellipsis, the full-width yen, Greek, box drawing). The URL
+  //keyboard types every printable ASCII character. The app classes them alike (android/.../util/PspDialogs.kt), both
+  //checked against the same cases (psp-keyboard-cases.txt, beside the app's tests).
+  enum : u32 {
+    InputLatinDigit = 0x1, InputLatinSymbol = 0x2, InputLatinLower = 0x4, InputLatinUpper = 0x8,
+    InputJapaneseDigit = 0x100, InputJapaneseSymbol = 0x200, InputJapaneseLower = 0x400, InputJapaneseUpper = 0x800,
+    InputHiragana = 0x1000, InputHalfKatakana = 0x2000, InputKatakana = 0x4000, InputKanji = 0x8000,
+    InputRussianLower = 0x1'0000, InputRussianUpper = 0x2'0000, InputKorean = 0x4'0000, InputURL = 0x8'0000,
+    InputKnown = 0xf'ff0f, InputDigits = InputLatinDigit | InputJapaneseDigit,
+    InputHalfWidth = InputLatinDigit | InputLatinSymbol | InputLatinLower | InputLatinUpper | InputURL,
+    InputFullWidth = InputJapaneseDigit | InputJapaneseSymbol | InputJapaneseLower | InputJapaneseUpper
+                   | InputHiragana | InputKatakana | InputKanji,
+  };
+  //U+00C0-024F, a character each: l a lower case letter, U any other letter, - not a letter (× and ÷), by Unicode's
+  //general categories
+  constexpr char KeyboardLatin[] =
+    "UUUUUUUUUUUUUUUUUUUUUUU-UUUUUUUl"  //U+00C0
+    "lllllllllllllllllllllll-llllllll"  //U+00E0
+    "UlUlUlUlUlUlUlUlUlUlUlUlUlUlUlUl"  //U+0100
+    "UlUlUlUlUlUlUlUlUlUlUlUllUlUlUlU"  //U+0120
+    "lUlUlUlUllUlUlUlUlUlUlUlUlUlUlUl"  //U+0140
+    "UlUlUlUlUlUlUlUlUlUlUlUlUUlUlUll"  //U+0160
+    "lUUlUlUUlUUUllUUUUlUUlUUUlllUUlU"  //U+0180
+    "UlUlUlUUlUllUlUUlUUUlUlUUllUUlll"  //U+01A0
+    "UUUUUUlUUlUUlUlUlUlUlUlUlUlUllUl"  //U+01C0
+    "UlUlUlUlUlUlUlUllUUlUlUUUlUlUlUl"  //U+01E0
+    "UlUlUlUlUlUlUlUlUlUlUlUlUlUlUlUl"  //U+0200
+    "UlUlUlUlUlUlUlUlUlUlllllllUUlUUl"  //U+0220
+    "lUlUUUUlUlUlUlUl";                 //U+0240
+
+  //Whether a character is printed: not a control character, half of a pair (a character past U+FFFF, which the PSP
+  //hasn't got), a combining mark, an invisible format character, a variation selector, private use, a special or a
+  //noncharacter.
+  auto keyboardPrinted(u16 c) -> bool {
+    if(c < 0x20 || (c >= 0x7f && c <= 0x9f) || c == 0xad) return false;
+    for(auto [first, last] : {std::pair<u16, u16>{0x0300, 0x036f}, {0x200b, 0x200f}, {0x2028, 0x202e},
+                              {0x2060, 0x206f}, {0x20d0, 0x20ff}, {0xd800, 0xf8ff}, {0xfdd0, 0xfdef},
+                              {0xfe00, 0xfe0f}, {0xfe20, 0xfe2f}, {0xfeff, 0xfeff}, {0xfff0, 0xffff}}) {
+      if(c >= first && c <= last) return false;
+    }
+    return true;
+  }
+
+  auto keyboardTypes(u16 c) -> u32 {
+    if(c >= '0' && c <= '9') return InputLatinDigit | InputURL;
+    if(c >= 'a' && c <= 'z') return InputLatinLower | InputURL;
+    if(c >= 'A' && c <= 'Z') return InputLatinUpper | InputURL;
+    if(c >= 0x20 && c <= 0x7e) return InputLatinSymbol | InputURL;
+    if(c >= 0xc0 && c <= 0x24f && KeyboardLatin[c - 0xc0] != '-') {
+      return KeyboardLatin[c - 0xc0] == 'l' ? InputLatinLower : InputLatinUpper;
+    }
+    if(c >= 0xff10 && c <= 0xff19) return InputJapaneseDigit;
+    if(c >= 0xff41 && c <= 0xff5a) return InputJapaneseLower;
+    if(c >= 0xff21 && c <= 0xff3a) return InputJapaneseUpper;
+    if((c >= 0xff01 && c <= 0xff5e) || (c >= 0x3000 && c <= 0x303f)) return InputJapaneseSymbol;
+    if(c >= 0x309b && c <= 0x309e) return InputHiragana | InputJapaneseSymbol;  //(voicing, iteration marks)
+    if(c == 0x30fc) return InputHiragana | InputKatakana | InputJapaneseSymbol;  //(the long vowel mark)
+    if(c == 0x30fb || c == 0x30fd || c == 0x30fe) return InputKatakana | InputJapaneseSymbol;  //(middle dot, iteration)
+    if(c >= 0x3041 && c <= 0x309f) return InputHiragana;
+    if(c >= 0x30a0 && c <= 0x30ff) return InputKatakana;
+    if(c >= 0xff61 && c <= 0xff9f) return InputHalfKatakana;
+    if((c >= 0x4e00 && c <= 0x9fff) || (c >= 0x3400 && c <= 0x4dbf)) return InputKanji;
+    if((c >= 0x0430 && c <= 0x044f) || c == 0x0451) return InputRussianLower;
+    if((c >= 0x0410 && c <= 0x042f) || c == 0x0401) return InputRussianUpper;
+    if((c >= 0xac00 && c <= 0xd7a3) || (c >= 0x1100 && c <= 0x11ff) || (c >= 0x3130 && c <= 0x318f)) return InputKorean;
+    if(keyboardPrinted(c)) return InputJapaneseSymbol;
+    return 0;
+  }
+
+  //The console's nickname for an empty field, "PSP", or where the field can't take it a name it can: "pi-esu-pi" in
+  //hiragana (katakana too, by keyboardConform()) and in half-width katakana, the Cyrillic and Hangul for "PSP", or
+  //digits alone.
+  const std::u16string KeyboardNicknames[] = {
+    u"PSP", u"\u3074\u30fc\u3048\u3059\u3074\u30fc", u"\uff8b\uff9f\uff70\uff74\uff7d\uff8b\uff9f\uff70",
+    u"\u041f\u0421\u041f", u"\ud53c\uc5d0\uc2a4\ud53c", u"1",
+  };
 
   //A save's PARAM.SFO, in the disc's format (disc-info.cpp's sfoValue()): a head ("\0PSF", version 1.1, where the
   //keys and the values start, how many there are), 16 bytes for each value (where its key is among the keys, its
@@ -387,26 +501,88 @@ auto Kernel::dialogShutdown(u32 kind) -> void {
   dialog.changeAt = cycles + u64(close) * (CPUFrequency / 1'000'000);
 }
 
+//Text as a field of input types `input` and that many lines takes it, as typed on a PSP's keyboard, which has only
+//those characters: each character it doesn't take becomes one it does where there's one (the other width of an
+//ASCII letter, digit or sign, the other case of an ASCII, full-width or Russian letter, the other kana), and is left
+//out where there isn't. A space, which every keyboard but the digits' has, is full-width (U+3000) where the field
+//takes full-width characters and no half-width ones; a line break stays in a field of several lines, whatever its
+//types, and no other control character anywhere, nor half of a pair (a character past U+FFFF, which the PSP hasn't
+//got). Half-width katakana are taken only as they come (no other kana becomes one). A field taking all (0, or none
+//of the types known) takes everything else. Phobos's choice, as the app's keyboard enters text
+//(android/.../util/PspDialogs.kt's accept(), checked against the same cases): the game's own text is kept as it is,
+//by the automatic answer (keyboard()) and where a front end answers with it unedited (dialogs.cpp); any other answer
+//is typed so.
+auto Kernel::keyboardConform(const std::vector<u16>& text, u32 input, u32 lines) -> std::vector<u16> {
+  std::vector<u16> conformed;
+  input &= InputKnown;
+  if(!input) {
+    for(u16 c : text) {
+      bool kept = c == '\n' ? lines > 1 : c >= 0x20 && !(c >= 0x7f && c <= 0x9f) && !(c >= 0xd800 && c <= 0xdfff);
+      if(kept) conformed.push_back(c);
+    }
+    return conformed;
+  }
+  auto takes = [&](u16 c) { return (keyboardTypes(c) & input) != 0; };
+  auto width = [](u16 c) -> u16 {
+    if(c >= 0x21 && c <= 0x7e) return c + 0xfee0;
+    if(c >= 0xff01 && c <= 0xff5e) return c - 0xfee0;
+    return c;
+  };
+  auto other = [](u16 c) -> u16 {  //the other case, or kana
+    if((c >= 'a' && c <= 'z') || (c >= 0xff41 && c <= 0xff5a) || (c >= 0x0430 && c <= 0x044f)) return c - 0x20;
+    if((c >= 'A' && c <= 'Z') || (c >= 0xff21 && c <= 0xff3a) || (c >= 0x0410 && c <= 0x042f)) return c + 0x20;
+    if(c == 0x0451) return 0x0401;
+    if(c == 0x0401) return 0x0451;
+    if(c >= 0x3041 && c <= 0x3096) return c + 0x60;
+    if(c >= 0x30a1 && c <= 0x30f6) return c - 0x60;
+    return c;
+  };
+  for(u16 c : text) {
+    if(c == '\n') {
+      if(lines > 1) conformed.push_back(c);
+      continue;
+    }
+    if(c == ' ' || c == 0x3000) {
+      if(!(input & ~InputDigits)) continue;
+      bool full = (input & InputFullWidth) && !(input & InputHalfWidth);
+      conformed.push_back(full ? 0x3000 : ' ');
+      continue;
+    }
+    for(u16 candidate : {c, width(c), other(c), width(other(c))}) {
+      if(takes(candidate)) { conformed.push_back(candidate); break; }
+    }
+  }
+  return conformed;
+}
+
 //The keyboard (psputility_osk.h's SceUtilityOskParams: the common part, then how many fields and where their
 //SceUtilityOskData are), answered as a player entering each field's text and confirming it would: what the field
-//started with goes into its output, or for a field holding nothing but spaces the console's nickname, "PSP", as a
-//player asked for a name would type one (Peace Walker, asking for its player's name in an empty field, refused an
-//empty answer, "at least 1 characters", and asked again for good). Each field's result is CHANGED (2), as a PSP is
-//taken to say of every field the player confirms, edited or not: Ridge Racer 2 fills its field with a default driver
-//name, "DAMACY", and takes UNCHANGED (0) as it takes CANCELLED (1), going back to its title without a profile, which
-//every player keeping that name would meet if a PSP said UNCHANGED. (Killzone and Space Invaders Extreme also act
-//only on CHANGED; Midnight Club 3 takes anything but CANCELLED.) The text is UTF-16, as far as the field's room
-//(outtextlength, its NUL among it) and limit (outtextlimit) allow: a limit of 0 is none (taken as no characters, it
-//cut the nickname to nothing), and a field with no room gets nothing written, not even its NUL. Returns the common
-//part's result: 0.
+//started with goes into its output, as it is, or for a field holding nothing but spaces (ASCII's or full-width ones)
+//the console's nickname, "PSP", as a player asked for a name would type one (Peace Walker, asking for its player's
+//name in an empty field, refused an empty answer, "at least 1 characters", and asked again for good). The nickname is
+//typed as the field's input types allow (keyboardConform()): 7th Dragon 2020 and 2020-II take only full-width
+//letters (0x0c00) and get it full-width (U+FF30 U+FF33 U+FF30), where ASCII "PSP" left the first's hero nameless. A
+//field taking none of its letters gets the first of KeyboardNicknames it takes whole (kana alone: "pi-esu-pi" in kana,
+//digits alone: "1"); one taking none of those whole (symbols alone, kanji alone) keeps its own text. Each field's
+//result is CHANGED (2), as a PSP is taken to say of every field the player confirms, edited or not: Ridge Racer 2
+//fills its field with a default driver name, "DAMACY", and takes UNCHANGED (0) as it takes CANCELLED (1), going back
+//to its title without a profile, which every player keeping that name would meet if a PSP said UNCHANGED. (Killzone
+//and Space Invaders Extreme also act only on CHANGED; Midnight Club 3 takes anything but CANCELLED.) The text is
+//UTF-16, as far as the field's room (outtextlength, its NUL among it) and limit (outtextlimit) allow: a limit of 0 is
+//none (taken as no characters, it cut the nickname to nothing), and a field with no room gets nothing written, not
+//even its NUL. Returns the common part's result: 0.
 auto Kernel::keyboard(u32 parameters) -> u32 {
   u32 count = memory.read(4, parameters + 48), fields = memory.read(4, parameters + 52);
   for(u32 n = 0; n < std::min(count, KeyboardFields); n++) {
     u32 field = fields + n * KeyboardFieldSize;
     if(!memory.reaches(field, KeyboardFieldSize)) break;
     std::vector<u16> text = keyboardText(memory, memory.read(4, field + 32));
-    bool blank = std::all_of(text.begin(), text.end(), [](u16 character) { return character == ' '; });
-    if(blank) text = {'P', 'S', 'P'};
+    bool blank = std::all_of(text.begin(), text.end(), [](u16 c) { return c == ' ' || c == 0x3000; });
+    for(auto& nickname : KeyboardNicknames) {
+      if(!blank) break;
+      auto typed = keyboardConform({nickname.begin(), nickname.end()}, memory.read(4, field + 16), 1);
+      if(typed.size() == nickname.size()) text = typed, blank = false;
+    }
     keyboardField(field, text);
     memory.write(4, field + 44, KeyboardChanged);
   }
@@ -414,11 +590,13 @@ auto Kernel::keyboard(u32 parameters) -> u32 {
 }
 
 //A field's text into its output (SceUtilityOskData's outtext), as far as its room (outtextlength, the NUL among it)
-//and its limit (outtextlimit, 0 for none) allow; nothing written where it has no room.
+//and its limit (outtextlimit, 0 for none) allow, a pair (a game's own text may hold one) not cut in two; nothing
+//written where it has no room.
 auto Kernel::keyboardField(u32 field, std::vector<u16> text) -> void {
   u32 room = memory.read(4, field + 36), output = memory.read(4, field + 40), limit = memory.read(4, field + 48);
   u64 most = room ? room - 1 : 0;
   if(limit) most = std::min<u64>(most, limit);
+  if(most && most < text.size() && text[most - 1] >= 0xd800 && text[most - 1] <= 0xdbff) most--;
   text.resize(std::min<u64>(text.size(), most));
   if(room && output && memory.reaches(output, (text.size() + 1) * 2)) {
     for(u32 at = 0; at < text.size(); at++) memory.write(2, output + at * 2, text[at]);
@@ -480,9 +658,10 @@ namespace {
 //A savedata request as the trace gives it: its mode (pspsdk's name), the structure's size, the game's and the save's
 //names (as the game gave them), a list's names (8 of them, and how many in all), a list dialog's focus (in the sizes
 //that have it) and the save chosen from the list (by a front end's player or the automatic answer), the data file's
-//name, the buffer, its size and the data's, and whether the save it names (with none chosen, a list's first, as
-//savedataMode() takes it) is on the memory stick; the sizes mode's msData, the list mode's most, the files mode's most
-//of each kind, the size mode's files; a save mode's title.
+//name, the buffer, its size and the data's, and whether the save it names (with none named, in a list's load or save
+//from a list a pattern naming none, and none chosen, a list's first, as savedataMode() takes it) is on the memory
+//stick; the sizes mode's msData, the list mode's most, the files mode's most of each kind, the size mode's files; a
+//save mode's title.
 auto Kernel::savedataRequest(u32 p, const std::string* chosen) -> std::string {
   //(the parameters' words where they're in memory: a read past it is noted and counted in the machine's state)
   auto word = [&](u32 at) -> u32 { return memory.reaches(p + at, 4) ? memory.read(4, p + at) : 0; };
@@ -496,6 +675,8 @@ auto Kernel::savedataRequest(u32 p, const std::string* chosen) -> std::string {
   if(mode < std::size(Modes)) text += " (" + std::string(Modes[mode]) + ")";
   text += ", size " + std::to_string(size) + ", game " + traceName(game) + ", save " + traceName(save);
   std::string used = save == "<>" ? std::string{} : save, first;
+  bool listed = (mode == 4 || mode == 5) && names && !memory.readString(names, 20).empty();  //(as savedataMode())
+  if(listed && savePattern(used)) used.clear();
   if(names && mode >= 4 && mode <= 6) {
     u32 count = 0;
     text += ", list";
@@ -614,22 +795,36 @@ auto Kernel::savedataMode(u32 p, const std::string* chosen) -> u32 {
   u32 buffer = memory.read(4, p + 116), bufferSize = memory.read(4, p + 120), dataSize = memory.read(4, p + 124);
   u32 refused = savedataRefusal(mode);
   std::error_code error;
-  if(mode == 11) return savedataList(p, game);  //(the game's name only picks the folders listed)
+  if(mode == 11) return savedataList(p, game, save);
   //"<>" names no save of its own: the PSP takes it as none, the save's folder the game's name alone, as the save's
   //name and as a list's choice (where it stands for any name). Taken as a name, it made folders no PSP's memory stick
   //can hold ('<' and '>' aren't allowed there), which the games looking for their saves again never found: Shining
   //Blade, Space Invaders Extreme and Valkyria Chronicles II made a save and called it corrupted.
   auto unnamed = [](std::string& name) { if(name == "<>") name.clear(); };
   unnamed(save);
+  //Nor does a pattern (savePattern()) in a list's load or save from a list (one with a first name), where the save's
+  //name only names the save the dialog focuses at first (dialogFocus()): Dissidia Final Fantasy and its 012 keep
+  //"GameData*" from the list mode for their list loads, which looked for a folder of that name, found none, and went
+  //back to the title. Anywhere else a pattern is taken as a name, which no save has: a load, read, files request or
+  //delete finds none, as before (a list delete with no front end deletes the save it names), and a save is refused
+  //below. (Chosen: with no list a pattern isn't taken as none, which would make it the game's folder alone, a save
+  //of its own the game may keep there.)
+  u32 names = memory.read(4, p + 96);
+  bool listed = (mode == 4 || mode == 5) && names && !memory.readString(names, 20).empty();
+  if(listed && savePattern(save)) save.clear();
   if(chosen) {
     save = *chosen;
-  } else if((mode == 4 || mode == 5) && save.empty() && memory.read(4, p + 96)) {  //from a list: its first name
-    save = memory.readString(memory.read(4, p + 96), 20);
+  } else if((mode == 4 || mode == 5) && save.empty() && names) {  //from a list: its first name
+    save = memory.readString(names, 20);
     if(save.empty()) return refused;
     unnamed(save);
   }
   //(Valhalla Knights 2 asks for sizes with no names, and took a refusal for a memory stick too full to save on.)
   if(mode != 8 && (!plainName(game, 13) || (!save.empty() && !plainName(save, 20)))) return refused;
+  //A save mode is refused a pattern as a name that isn't plain is, making nothing (chosen: no recording saves under
+  //one, and no memory stick holds its folder). Writing data (17, 18) under one is refused so too, where it was NO_DATA.
+  bool saving = mode == 1 || mode == 3 || mode == 5 || mode == 13 || mode == 14 || mode == 17 || mode == 18;
+  if(saving && savePattern(save)) return refused;
   bool filed = mode <= 5 || (mode >= 13 && mode <= 20);  //the modes that read, write or erase the data file
   if(filed && !fileName.empty() && !plainName(fileName, 13)) return refused;
   std::string folder = savePath(game + save);
@@ -922,12 +1117,17 @@ auto Kernel::savedataNeeded(u32 p, u32 dataSize) -> u64 {
   return total;
 }
 
-//The list mode (savedata()'s 11): the game's saves, its folders in SAVEDATA whose names start with the game's, into
-//a SceUtilitySavedataIdListInfo (from 1524: the most to list, how many were listed, the entries). Each entry's dates
-//are its PARAM.SFO's, as PPSSPP gives them (the request names no file to date a save by), or for a save without one,
-//its folder's (chosen; none for a folder that leads off the stick). As far as the host can tell them (nothing here
-//throws).
-auto Kernel::savedataList(u32 p, const std::string& game) -> u32 {
+//The list mode (savedata()'s 11): the game's saves the request's save name takes as a pattern (savePattern(),
+//patternTakes()), its folders in SAVEDATA whose names are the game's and then a name the pattern takes, into a
+//SceUtilitySavedataIdListInfo (from 1524: the most to list, how many were listed, the entries). utility/savedata/
+//idlist's "A?C" listed ABC, its one save: the name is a pattern, not a save's name. That the saves it doesn't take are
+//left out, and a name with neither '*' nor '?' lists that save alone, is chosen, as the games mean their patterns:
+//every folder starting with the game's name was listed, and Final Fantasy Type-0's "GAMEDATA*", asked for one save,
+//was given its SYSTEMDATA. An empty save name, or "<>", lists every save of the game's (chosen, as before: no
+//recording lists with either, and they name no save of their own anywhere else). Each entry's dates are its
+//PARAM.SFO's, as PPSSPP gives them (the request names no file to date a save by), or for a save without one, its
+//folder's (chosen; none for a folder that leads off the stick). As far as the host can tell them (nothing here throws).
+auto Kernel::savedataList(u32 p, const std::string& game, const std::string& save) -> u32 {
   namespace fs = std::filesystem;
   u32 list = memory.read(4, p + 1524);
   if(!list) return 0;
@@ -936,10 +1136,12 @@ auto Kernel::savedataList(u32 p, const std::string& game) -> u32 {
   if(!resolve("ms0:/PSP/SAVEDATA", saves, normalized)) {
     std::vector<std::string> names;
     std::error_code error;
+    bool every = save.empty() || save == "<>";
     for(fs::directory_iterator at(saves, error), end; !error && at != end; at.increment(error)) {
       std::error_code unread;
       auto name = at->path().filename().string();
-      if(at->is_directory(unread) && name.compare(0, game.size(), game) == 0) names.push_back(name);
+      if(!at->is_directory(unread) || name.compare(0, game.size(), game)) continue;
+      if(every || patternTakes(save, name.substr(game.size()))) names.push_back(name);
     }
     std::sort(names.begin(), names.end());
     for(auto& name : names) {

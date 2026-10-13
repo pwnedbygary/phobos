@@ -2,7 +2,8 @@
 //sized, listed, erased and deleted in a memory stick folder (names that would reach elsewhere and buffers outside
 //the program's memory refused), their files listed secure, normal and the system's, their PARAM.SFO written and read
 //back, saves without one (v2.0.0's) still loading, a game's save beside its own files through memstick:, list loads
-//and saves answered with no front end as a PSP's dialog would be, each request traced for a host, the memory
+//and saves answered with no front end as a PSP's dialog would be, a save's name with '*' or '?' taken as a pattern
+//(the list mode's, which names no save anywhere), each request traced for a host, the memory
 //stick's free space told alike everywhere, a message answered yes, the keyboard's fields entered (an empty one given
 //the nickname), network settings cancelled, the wrong type and the wrong status refused; a game's data install
 //cancelled; optional modules loaded and unloaded; the nickname. Called directly, the clock moved on by hand.
@@ -801,14 +802,16 @@ static auto savedataMemstick() -> void {
   CHECK(read(unassigned, open(unassigned, folder + "CMR5TS.DAT")) == "cmr5", true);
 }
 
-//A list's load or save answered with no front end, naming no save of its own: a load takes what a PSP's dialog shows
-//first, the focused save among those there (7th Dragon 2020 lists DATA00 to DATA49; its DATA03 loads), nothing there
-//NO_DATA, and the focused one broken, the one the same focus takes among those that aren't (the latest left of a
-//broken latest; the focused one where all are); a save the list's first name ("<>" the game's folder alone, whatever
-//else of the game's is there). A loaded or saved name is written back into the request's save name, as a choice is
-//(Brandish: The Dark Revenant's loads went on only with it). A request naming its save takes it; a list with no first
-//name, and a game's name that isn't plain, are refused, as before, a save making nothing and a load reading nothing,
-//the game's folder there or not.
+//A list's load or save answered with no front end: a load takes what a PSP's dialog shows first, the focused save
+//among those there (7th Dragon 2020 lists DATA00 to DATA49; its DATA03 loads), nothing there NO_DATA, and the focused
+//one broken, the one the same focus takes among those that aren't (the latest left of a broken latest; the focused
+//one where all are); a load naming its save takes it where focus 0 picks it and it's there, else what the dialog
+//focuses (its name not there: the first there; focus 2: the last, though it's there), and NO_DATA with none there,
+//its name left (Disgaea Infinite's Continue, on an empty stick); a save naming none, the list's first name ("<>" the
+//game's folder alone, whatever else of the game's is there). A loaded or saved name is written back into the
+//request's save name, as a choice is (Brandish: The Dark Revenant's loads went on only with it). A save naming its own
+//takes it; a list with no first name, and a game's name that isn't plain, are refused, as before, a save making
+//nothing and a load reading nothing, the game's folder there or not.
 static auto savedataListAnswers() -> void {
   HostFolder stick;
   KernelMachine m;
@@ -835,8 +838,18 @@ static auto savedataListAnswers() -> void {
   listed(4, "", {"DATA00", "DATA01"}, 0);
   CHECK(runSave(m), 0x8011'0307);
   CHECK(saved() == "", true);
-  listed(4, "DATA01", list, 0);  //its own save, not there
+  listed(4, "DATA01", list, 0);  //its own save, not there: the first there
+  CHECK(runSave(m), 0);
+  CHECK(m.system.memory.readString(Buffer, 8) == "third" && saved() == "DATA03", true);
+  listed(4, "DATA05", list, 0);  //its own save, there
+  CHECK(runSave(m), 0);
+  CHECK(m.system.memory.readString(Buffer, 8) == "fifth" && saved() == "DATA05", true);
+  listed(4, "DATA03", list, 2);  //the last there, its own save there too
+  CHECK(runSave(m), 0);
+  CHECK(m.system.memory.readString(Buffer, 8) == "fifth" && saved() == "DATA05", true);
+  listed(4, "DATA00", {"DATA00", "DATA01"}, 0);  //none there
   CHECK(runSave(m), 0x8011'0307);
+  CHECK(saved() == "DATA00" && m.system.memory.readString(Buffer, 8) == "", true);
   listed(4, "", {"<>"}, 0);  //the game's saves: DATA03 first
   CHECK(runSave(m), 0);
   CHECK(saved() == "DATA03", true);
@@ -888,6 +901,149 @@ static auto savedataListAnswers() -> void {
   listed(4, "", {"DATA01", "DATA05"}, 2);  //all there broken: the focused one, the last
   CHECK(runSave(m), 0x8011'0309);
   CHECK(saved() == "DATA05", true);
+}
+
+//A save's name with '*' or '?' in it is a pattern (utility/savedata/idlist's "A?C" listed its ABC), naming no folder a
+//memory stick can hold. The list mode lists the game's saves it takes, in their names' order, as many as asked for:
+//Dissidia's "GameData*" its GameData saves and not its others, Final Fantasy Type-0's "GAMEDATA*" none where it has
+//only its SYSTEMDATA, "A?C" ABC and not ABCD, '*' any run (none too, and after a false start), case as given, a name
+//with neither that save alone; an empty name, "<>" and "*" every save of the game's, its own folder too. A list's load
+//naming a pattern takes what its dialog focuses (Dissidia's Load Game: "GameData*", its 20 slots, focus 3: the latest,
+//GameData00; 4 the oldest; 0 the first there), the name written back, and NO_DATA with none there, the pattern left;
+//a list's save naming one, the list's first name. With no list (none, or no first name) it's taken as a name, which no
+//save has: the load finds none (not the game's own folder, which is there), the save is refused. A pattern in a list
+//is no save: passed over, and a save to a list led by one refused. Saved under, a pattern is refused, nothing made;
+//loaded, read or deleted, there's no such save. The trace says which save a list's load naming a pattern takes, there
+//or not.
+static auto savedataPatterns() -> void {
+  namespace fs = std::filesystem;
+  HostFolder stick;
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  auto& memory = m.system.memory;
+  for(auto [save, data] : std::initializer_list<std::pair<const char*, const char*>>{{"", "the game's own"},
+      {"ABC", "abc"}, {"ABCD", "abcd"}, {"GameData00", "latest"}, {"GameData03", "older"}, {"SYSTEMDATA", "system"}}) {
+    stick.put(std::string("PSP/SAVEDATA/ULUS10437") + save + "/DISSIDIA.BIN", data);
+  }
+  stick.put("PSP/SAVEDATA/NPJH50443SYSTEMDATA/TYPE0SYS.BIN", "type-0");
+  auto saves = stick.path / "PSP/SAVEDATA";
+  auto now = fs::file_time_type::clock::now();
+  fs::last_write_time(saves / "ULUS10437GameData00", now - std::chrono::hours(1));
+  fs::last_write_time(saves / "ULUS10437GameData03", now - std::chrono::hours(5));
+  using Names = std::vector<std::string>;
+  auto listing = [&](const char* game, const char* save, u32 most) {
+    saveParameters(m, 11, game, save, 0);
+    memory.write(4, List, most);
+    memory.write(4, List + 4, 0xcccc'cccc);
+    Names names;
+    if(runSave(m)) return Names{"refused"};
+    for(u32 n = 0; n < std::min(memory.read(4, List + 4), 10u); n++) {
+      names.push_back(memory.readString(Entries + n * 72 + 52, 20));
+    }
+    return names;
+  };
+  CHECK(listing("ULUS10437", "GameData*", 10) == Names({"GameData00", "GameData03"}), true);
+  CHECK(listing("NPJH50443", "GAMEDATA*", 1) == Names(), true);
+  CHECK(listing("ULUS10437", "A?C", 10) == Names({"ABC"}), true);
+  CHECK(listing("ULUS10437", "A*C*", 10) == Names({"ABC", "ABCD"}), true);
+  CHECK(listing("ULUS10437", "*0?", 10) == Names({"GameData00", "GameData03"}), true);
+  CHECK(listing("ULUS10437", "*DATA", 10) == Names({"SYSTEMDATA"}), true);
+  CHECK(listing("ULUS10437", "gamedata*", 10) == Names(), true);
+  CHECK(listing("ULUS10437", "GameData03", 10) == Names({"GameData03"}), true);
+  CHECK(listing("ULUS10437", "GameData*", 1) == Names({"GameData00"}), true);
+  CHECK(listing("ULUS10437", "?", 10) == Names(), true);
+  for(const char* every : {"", "<>", "*"}) {
+    check(__LINE__, every, listing("ULUS10437", every, 10) == Names({"", "ABC", "ABCD", "GameData00", "GameData03",
+                                                                     "SYSTEMDATA"}), true);
+  }
+  //a list's load or save naming a pattern
+  Names slots;
+  for(u32 n = 0; n < 20; n++) slots.push_back("GameData" + std::string(n < 10 ? "0" : "") + std::to_string(n));
+  auto listed = [&](u32 mode, const char* game, const char* save, const Names& names, u32 focus) {
+    saveParameters(m, mode, game, save, mode == 5 ? 3 : 0);
+    fileName(m, "DISSIDIA.BIN");
+    memory.fill(Buffer + 0x100, 0, 0x400);
+    for(u32 n = 0; n < names.size(); n++) memory.copyIn(Buffer + 0x100 + n * 20, names[n].data(), names[n].size());
+    memory.write(4, Parameters + 96, Buffer + 0x100);
+    memory.write(4, Parameters + 1480, focus);
+    memory.fill(Buffer, 0, 8);
+    if(mode == 5) memory.copyIn(Buffer, "new", 3);
+  };
+  auto saved = [&] { return memory.readString(Parameters + 76, 20); };
+  auto loaded = [&] { return memory.readString(Buffer, 8); };
+  listed(4, "ULUS10437", "GameData*", slots, 3);
+  CHECK(runSave(m), 0);
+  CHECK(loaded() == "latest" && saved() == "GameData00", true);
+  listed(4, "ULUS10437", "GameData*", slots, 4);
+  CHECK(runSave(m), 0);
+  CHECK(loaded() == "older" && saved() == "GameData03", true);
+  listed(4, "ULUS10437", "Game?ata*", slots, 0);
+  CHECK(runSave(m), 0);
+  CHECK(loaded() == "latest" && saved() == "GameData00", true);
+  listed(4, "ULUS10437", "", {"GameData*", "GameData03"}, 1);  //(the first there)
+  CHECK(runSave(m), 0);
+  CHECK(loaded() == "older" && saved() == "GameData03", true);
+  for(u32 mode : {4u, 5u}) {  //with no list (none, or no first name), a name no save has: not the game's own folder
+    for(bool pointer : {true, false}) {
+      listed(mode, "ULUS10437", "GameData*", {}, 3);
+      if(!pointer) memory.write(4, Parameters + 96, 0);
+      check(__LINE__, "no list", runSave(m), mode == 4 ? 0x8011'0307 : 0x8011'0388);
+      check(__LINE__, "nothing", saved() == "GameData*" && loaded() == (mode == 4 ? "" : "new"), true);
+    }
+  }
+  CHECK(stick.get("PSP/SAVEDATA/ULUS10437/DISSIDIA.BIN") == "the game's own", true);
+  std::vector<std::string> lines;
+  m.kernel.savedataTrace = [&](const std::string& text) { lines.push_back(text); };
+  listed(4, "ULUS10566", "GameData*", slots, 3);  //Dissidia 012's, none there
+  CHECK(runSave(m), 0x8011'0307);
+  CHECK(saved() == "GameData*" && loaded() == "", true);
+  listed(5, "ULUS10566", "GameData*", slots, 7);
+  CHECK(runSave(m), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS10566GameData00/DISSIDIA.BIN") == "new" && saved() == "GameData00", true);
+  listed(4, "ULUS10566", "GameData*", slots, 3);
+  CHECK(runSave(m), 0);
+  CHECK(loaded() == "new" && saved() == "GameData00", true);
+  m.kernel.savedataTrace = nullptr;
+  Names expected = {
+    "mode 4 (listload), size 1536, game \"ULUS10566\", save \"GameData*\", list \"GameData00\" \"GameData01\" "
+    "\"GameData02\" \"GameData03\" \"GameData04\" \"GameData05\" \"GameData06\" \"GameData07\" (20 in all), focus 3, "
+    "file \"DISSIDIA.BIN\", buffer 0x08930000 of 4096, data 0, \"ULUS10566GameData00\" not there -> 0x80110307 (load: "
+    "no data), save \"GameData*\"",
+    "mode 5 (listsave), size 1536, game \"ULUS10566\", save \"GameData*\", list \"GameData00\" \"GameData01\" "
+    "\"GameData02\" \"GameData03\" \"GameData04\" \"GameData05\" \"GameData06\" \"GameData07\" (20 in all), focus 7, "
+    "chosen \"GameData00\", file \"DISSIDIA.BIN\", buffer 0x08930000 of 4096, data 3, \"ULUS10566GameData00\" not "
+    "there, title \"\" -> 0x00000000, save \"GameData00\"",
+    "mode 4 (listload), size 1536, game \"ULUS10566\", save \"GameData*\", list \"GameData00\" \"GameData01\" "
+    "\"GameData02\" \"GameData03\" \"GameData04\" \"GameData05\" \"GameData06\" \"GameData07\" (20 in all), focus 3, "
+    "chosen \"GameData00\", file \"DISSIDIA.BIN\", buffer 0x08930000 of 4096, data 0, \"ULUS10566GameData00\" there "
+    "-> 0x00000000, read 3, save \"GameData00\""};
+  CHECK(lines.size(), expected.size());
+  for(u32 n = 0; n < std::min(lines.size(), expected.size()); n++) {
+    if(lines[n] != expected[n]) std::printf("  trace line %u: %s\n", n, lines[n].c_str());
+    CHECK(lines[n] == expected[n], true);
+  }
+  auto patterned = [&] {  //(a folder whose name has a pattern in it)
+    for(auto& entry : fs::directory_iterator(saves)) {
+      if(entry.path().filename().string().find_first_of("*?") != std::string::npos) return true;
+    }
+    return false;
+  };
+  listed(5, "ULUS10566", "", {"Game*", "GameData01"}, 0);
+  CHECK(runSave(m), 0x8011'0388);
+  CHECK(saved() == "" && !fs::exists(saves / "ULUS10566GameData01"), true);
+  //a pattern as a single save's name: saved under, refused; loaded, read, listed or deleted, no such save
+  for(u32 mode : {1u, 3u, 13u, 14u, 17u, 18u}) {
+    saveParameters(m, mode, "ULUS10566", mode & 1 ? "GameData*" : "Slot?", 3);
+    memory.copyIn(Buffer, "new", 3);
+    check(__LINE__, "refused", runSave(m), 0x8011'0388);
+  }
+  CHECK(patterned(), false);
+  for(auto [mode, answer] : std::initializer_list<std::pair<u32, u32>>{{0, 0x8011'0307}, {15, 0x8011'0327},
+      {12, 0x8011'0327}, {10, 0x8011'0347}}) {
+    saveParameters(m, mode, "ULUS10566", "GameData*", 0);
+    check(__LINE__, "none", runSave(m), answer);
+  }
+  CHECK(stick.get("PSP/SAVEDATA/ULUS10566GameData00/DISSIDIA.BIN") == "new", true);
 }
 
 //The savedata trace (the runner's --trace-savedata): each request a line, as the game made it, the save chosen from
@@ -1573,6 +1729,148 @@ static auto keyboard() -> void {
   CHECK(roundTrip(m), true);
 }
 
+//The nickname as each field's input types (SceUtilityOskData's at 16) take it, as a PSP's keyboard types it: full-width
+//where only full-width letters are taken (7th Dragon 2020 and 2020-II, 0x0c00: ASCII "PSP" left 2020's hero
+//nameless), in the one case taken, ASCII where ASCII is among them; a field of full-width spaces is blank too. One
+//taking none of its letters gets a name it can take (a name prompt refuses an empty answer, as Peace Walker's did):
+//"pi-esu-pi" in hiragana, in katakana and in half-width katakana, the Cyrillic (in the case taken) and Hangul for
+//"PSP", or "1" (full-width where only those digits are), the first it takes whole; one taking none of those whole
+//(kanji alone; symbols alone, which take the kana's long vowel mark and nothing else of them) keeps its own text. A
+//game's own text stays as it is, whatever its characters.
+static auto keyboardInputTypes() -> void {
+  KernelMachine m;
+  u64 millisecond = Kernel::CPUFrequency / 1000;
+  constexpr u32 Fields = Buffer, Texts = Buffer + 0x400;
+  auto write16 = [&](u32 at, const std::u16string& text) {
+    for(u32 n = 0; n < text.size(); n++) m.system.memory.write(2, at + n * 2, text[n]);
+    m.system.memory.write(2, at + text.size() * 2, 0);
+  };
+  auto read16 = [&](u32 at) {
+    std::u16string text;
+    for(u16 c; (c = m.system.memory.read(2, at)) && text.size() < 64; at += 2) text.push_back(c);
+    return text;
+  };
+  struct Field { std::u16string initial; u32 input, limit; std::u16string expected; };
+  std::vector<Field> fields = {
+    {u"", 0x0c00, 8, u"\uff30\uff33\uff30"},
+    {u"\u3000\u3000\u3000", 0x0c00, 8, u"\uff30\uff33\uff30"},
+    {u"", 0x0c00, 2, u"\uff30\uff33"},
+    {u"", 0x0400, 8, u"\uff50\uff53\uff50"},
+    {u"", 0x0004, 8, u"psp"},
+    {u"", 0x0c0f, 8, u"PSP"},
+    {u"", 0x80000, 8, u"PSP"},
+    {u"", 0x0001, 8, u"1"},
+    {u"", 0x0100, 8, u"\uff11"},
+    {u"  ", 0x1000, 8, u"\u3074\u30fc\u3048\u3059\u3074\u30fc"},
+    {u"", 0x1000, 4, u"\u3074\u30fc\u3048\u3059"},
+    {u"", 0x4000, 8, u"\u30d4\u30fc\u30a8\u30b9\u30d4\u30fc"},
+    {u"", 0x2000, 8, u"\uff8b\uff9f\uff70\uff74\uff7d\uff8b\uff9f\uff70"},
+    {u"", 0x1'0000, 8, u"\u043f\u0441\u043f"},
+    {u"", 0x2'0000, 8, u"\u041f\u0421\u041f"},
+    {u"", 0x4'0000, 8, u"\ud53c\uc5d0\uc2a4\ud53c"},
+    {u"", 0x1001, 8, u"\u3074\u30fc\u3048\u3059\u3074\u30fc"},  //(kana before digits)
+    {u"", 0x8000, 8, u""},
+    {u" ", 0x0200, 8, u" "},
+    {u"Bob", 0x0c00, 8, u"Bob"},
+    {u"Ren\u00e9e \u2606", 0x0001, 8, u"Ren\u00e9e \u2606"},
+    {u"", 0x40'0000, 8, u"PSP"},  //(no type known: all)
+  };
+  for(u32 first = 0; first < fields.size(); first += 10) {  //(ten fields a dialog: the PSP's keyboard has room for 16)
+    u32 count = std::min<u32>(10, fields.size() - first);
+    m.system.memory.fill(Parameters, 0, 64);
+    m.system.memory.write(4, Parameters, 64);
+    m.system.memory.write(4, Parameters + 48, count);
+    m.system.memory.write(4, Parameters + 52, Fields);
+    for(u32 n = 0; n < count; n++) {
+      u32 at = Fields + n * 52, in = Texts + n * 0x100, out = in + 0x80;
+      m.system.memory.fill(at, 0, 52);
+      write16(in, fields[first + n].initial);
+      m.system.memory.fill(out, 0xcc, 0x40);
+      m.system.memory.write(4, at + 8, 1);
+      m.system.memory.write(4, at + 16, fields[first + n].input);
+      m.system.memory.write(4, at + 20, 1);
+      m.system.memory.write(4, at + 32, in);
+      m.system.memory.write(4, at + 36, 48);
+      m.system.memory.write(4, at + 40, out);
+      m.system.memory.write(4, at + 48, fields[first + n].limit);
+    }
+    CHECK(m.call("sceUtilityOskInitStart", {Parameters}), 0);
+    m.kernel.cycles += 300 * millisecond;
+    m.kernel.events();
+    CHECK(m.call("sceUtilityOskUpdate", {1}), 0);
+    CHECK(m.call("sceUtilityOskGetStatus", {}), 3);
+    for(u32 n = 0; n < count; n++) {
+      bool right = read16(Texts + n * 0x100 + 0x80) == fields[first + n].expected;
+      CHECK(right, true);
+      if(!right) std::printf("  field %u\n", first + n);
+      CHECK(m.system.memory.read(4, Fields + n * 52 + 44), 2);
+    }
+    CHECK(m.call("sceUtilityOskShutdownStart", {}), 0);
+    m.kernel.cycles += 40 * millisecond;
+    m.kernel.events();
+    CHECK(m.call("sceUtilityOskGetStatus", {}), 0);
+  }
+  CHECK(m.notes.size(), 0);
+}
+
+//The keyboard's conversion against the cases the Android app's tests run through its own (psp-keyboard-cases.txt,
+//beside them): each text as its field's input types and lines take it (Kernel::keyboardConform()).
+static auto keyboardCases() -> void {
+  auto resources = std::filesystem::path(__FILE__).parent_path() / "../../android/app/src/test/resources";
+  std::ifstream file(resources / "psp-keyboard-cases.txt", std::ios::binary);
+  //a text's UTF-16 units: \uXXXX that unit, \n, \t and \\ a line break, a tab and a backslash, the rest UTF-8 (a
+  //character past U+FFFF a pair)
+  auto units = [](const std::string& text) {
+    std::vector<u16> result;
+    for(u64 at = 0; at < text.size();) {
+      u8 lead = text[at];
+      if(lead == '\\' && at + 1 < text.size()) {
+        char escaped = text[at + 1];
+        if(escaped == 'u' && at + 6 <= text.size()) {
+          result.push_back(std::stoul(text.substr(at + 2, 4), nullptr, 16));
+          at += 6;
+          continue;
+        }
+        result.push_back(escaped == 'n' ? '\n' : escaped == 't' ? '\t' : escaped);
+        at += 2;
+        continue;
+      }
+      u32 length = lead < 0x80 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4;
+      u32 character = length == 1 ? lead : lead & (0xff >> (length + 1));
+      for(u32 n = 1; n < length && at + n < text.size(); n++) character = character << 6 | (text[at + n] & 0x3f);
+      if(character >= 0x1'0000) {
+        result.push_back(0xd800 + ((character - 0x1'0000) >> 10));
+        result.push_back(0xdc00 + ((character - 0x1'0000) & 0x3ff));
+      } else {
+        result.push_back(character);
+      }
+      at += length;
+    }
+    return result;
+  };
+  u32 cases = 0, number = 0;
+  for(std::string line; std::getline(file, line);) {
+    number++;
+    if(!line.empty() && line.back() == '\r') line.pop_back();
+    if(line.empty() || line[0] == '#') continue;
+    std::vector<std::string> fields;  //types, lines, the text, what's entered
+    for(u64 start = 0;;) {
+      u64 tab = line.find('\t', start);
+      fields.push_back(line.substr(start, tab == std::string::npos ? tab : tab - start));
+      if(tab == std::string::npos) break;
+      start = tab + 1;
+    }
+    CHECK(fields.size(), 4);
+    if(fields.size() != 4) continue;
+    u32 input = std::stoul(fields[0], nullptr, 16), lines = std::stoul(fields[1]);
+    bool right = Kernel::keyboardConform(units(fields[2]), input, lines) == units(fields[3]);
+    CHECK(right, true);
+    if(!right) std::printf("  psp-keyboard-cases.txt line %u\n", number);
+    cases++;
+  }
+  CHECK(cases >= 40, true);
+}
+
 //Optional modules: loaded once (again: already loaded), unloaded once (again: not loaded), 0x107, 0x108 and 0x308
 //among them, numbers that aren't a module refused, the older network numbers standing for 0x100-0x106 and the older
 //USB numbers for 0x200-0x203; the nickname.
@@ -1631,9 +1929,11 @@ auto utilityTests() -> Tests {
     {"utility savedata broken saves", savedataBroken},
     {"utility savedata through memstick: (Colin McRae Rally 2005 Plus)", savedataMemstick},
     {"utility savedata lists answered with no front end (7th Dragon 2020, Brandish)", savedataListAnswers},
+    {"utility savedata patterns (Dissidia, Final Fantasy Type-0)", savedataPatterns},
     {"utility savedata trace", savedataTrace},
     {"memory stick free space", stickSpace}, {"utility dialogs", dialogs},
-    {"utility keyboard", keyboard}, {"utility modules", modules},
+    {"utility keyboard", keyboard}, {"utility keyboard input types", keyboardInputTypes},
+    {"utility keyboard conversion: the app's cases", keyboardCases}, {"utility modules", modules},
     {"utility game data install", gamedataInstall}, {"utility dialog sizes and statuses", dialogStatuses},
     {"utility save dialog closed by priority", savedataClosing},
   };

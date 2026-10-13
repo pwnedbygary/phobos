@@ -129,6 +129,9 @@ struct VulkanBackend : GPU::Backend {
     std::shared_ptr<const void> owner;
     std::vector<u32> copied;
     bool fresh = true;  //never written yet (its layout undefined)
+    //the texels pending, packed: those from column left and row top, partWidth x partHeight of them (makeTexturePart():
+    //the rest are never taken), or all of them
+    u32 left = 0, top = 0, partWidth = 0, partHeight = 0;
   };
   //A run's: its commands, the fence it signals, and the vertices and pictures it uploads; presenting's, the
   //semaphore the swapchain image's acquiring signals, and the shot of a picture it presents from a target (the
@@ -173,12 +176,20 @@ struct VulkanBackend : GPU::Backend {
   VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
   VkSampler sampler = VK_NULL_HANDLE;
   VkShaderModule vertexModule = VK_NULL_HANDLE, fragmentModule = VK_NULL_HANDLE;
+  VkShaderModule fragmentDepthModule = VK_NULL_HANDLE;  //(draw.frag's DEPTHS build)
   VkShaderModule transformModule = VK_NULL_HANDLE;  //(fast mode's: transform.vert)
   VkPipelineCache pipelineCache = VK_NULL_HANDLE;
   VkCommandPool commandPool = VK_NULL_HANDLE;
   std::map<std::array<u8, sizeof(GPU::Pipeline)>, VkPipeline> pipelineCache_;  //(VK_NULL_HANDLE: it failed)
   std::unordered_map<u32, Target> targetImages;
   std::unordered_map<u32, Texture> textureImages;  //0: a blank one, bound for untextured draws
+  //Textures let go of, once their runs are done, kept for a texture of their size to take (makeTexture()), rather
+  //than a picture, its memory, view and set made and destroyed for each (a movie's every frame; each a call into the
+  //driver's kernel on Android). At most MostSpares, SpareBytes of pictures in all, the one kept longest destroyed
+  //first.
+  std::vector<Texture> spareTextures;
+  static constexpr u32 MostSpares = 16;
+  static constexpr u64 SpareBytes = 32 << 20;
   u32 nextId = 1;
   Slot slots[Slots];
   u32 next = 0;
@@ -188,6 +199,15 @@ struct VulkanBackend : GPU::Backend {
   struct Grave { u64 serial; u32 id; bool texture; };
   std::vector<Grave> graves;
   std::vector<u32> uploading;  //textures with texels for the next run to put on the GPU
+  //Palettes (makePalette()): a picture of PaletteRows rows of 512 entries, each a palette's (its id, from 1), set 1's
+  //binding 1 beside each target's colors; those made since the last run, put on the GPU before its draws; rows free,
+  //and let go of, free once the runs that may use them are done
+  static constexpr u32 PaletteRows = 256;
+  Image paletteImage;
+  bool paletteFresh = true;
+  std::vector<std::pair<u32, std::array<u32, 512>>> pendingPalettes;
+  std::vector<u32> freePalettes;
+  std::vector<std::pair<u64, u32>> paletteGraves;
   Buffer readback;
   std::vector<std::pair<u64, u64>> readbacks;  //the last finish()'s: where each one's colors and stencils are
   std::vector<std::pair<u32, u32>> readbackSizes;
@@ -255,13 +275,14 @@ struct VulkanBackend : GPU::Backend {
       vk.vkDeviceWaitIdle(device);
       for(auto& [id, t] : targetImages) destroy(t);
       for(auto& [id, t] : textureImages) destroy(t);
+      for(auto& t : spareTextures) destroy(t);
       for(auto& [key, pipeline] : pipelineCache_) if(pipeline) vk.vkDestroyPipeline(device, pipeline, nullptr);
       for(auto& r : retired) destroy(r);
       for(auto* staged : {&stagedColors, &stagedDepths}) {
         if(staged->set) vk.vkFreeDescriptorSets(device, descriptorPool, 1, &staged->set);
         destroy(staged->image);
       }
-      destroy(shrunk);
+      destroy(shrunk), destroy(paletteImage);
       dropSurface();
       dropPresentPass();
       if(presentLayout) vk.vkDestroyPipelineLayout(device, presentLayout, nullptr);
@@ -295,6 +316,7 @@ struct VulkanBackend : GPU::Backend {
       if(vertexModule) vk.vkDestroyShaderModule(device, vertexModule, nullptr);
       if(transformModule) vk.vkDestroyShaderModule(device, transformModule, nullptr);
       if(fragmentModule) vk.vkDestroyShaderModule(device, fragmentModule, nullptr);
+      if(fragmentDepthModule) vk.vkDestroyShaderModule(device, fragmentDepthModule, nullptr);
       if(sampler) vk.vkDestroySampler(device, sampler, nullptr);
       if(descriptorPool) vk.vkDestroyDescriptorPool(device, descriptorPool, nullptr);
       if(pipelineLayout) vk.vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
@@ -425,12 +447,17 @@ struct VulkanBackend : GPU::Backend {
       ok = vk.vkAllocateDescriptorSets(device, &setInfo, &t.frame) == VK_SUCCESS;
       if(!ok) t.frame = VK_NULL_HANDLE;
     }
-    if(ok) {
+    if(ok) {  //(and the palettes beside it)
       VkDescriptorImageInfo picture{VK_NULL_HANDLE, t.color.view, ColorLayout};
-      auto write = made<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-      write.dstSet = t.frame, write.descriptorCount = 1;
-      write.descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, write.pImageInfo = &picture;
-      vk.vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+      VkDescriptorImageInfo palette{sampler, paletteImage.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+      VkWriteDescriptorSet writes[2];
+      for(u32 n = 0; n < 2; n++) {
+        writes[n] = made<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+        writes[n].dstSet = t.frame, writes[n].dstBinding = n, writes[n].descriptorCount = 1;
+      }
+      writes[0].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, writes[0].pImageInfo = &picture;
+      writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, writes[1].pImageInfo = &palette;
+      vk.vkUpdateDescriptorSets(device, paletteImage.view ? 2 : 1, writes, 0, nullptr);
     }
     t.rows = rows;
     return ok;
@@ -519,22 +546,31 @@ struct VulkanBackend : GPU::Backend {
   auto makeTexture(u32 width, u32 height, const u32* texels, std::shared_ptr<const void> owner) -> u32 override {
     if(lost || !width || !height) return 0;
     Texture t;
-    t.width = width, t.height = height;
-    if(!make(t.image, width, height, VK_FORMAT_R8G8B8A8_UNORM,
-             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT)) {
-      return destroy(t), 0;
+    auto kept = std::find_if(spareTextures.begin(), spareTextures.end(), [&](const Texture& s) {
+      return s.width == width && s.height == height;
+    });
+    if(kept != spareTextures.end()) {  //(its layout undefined again, as a new one's)
+      t = std::move(*kept), spareTextures.erase(kept);
+      t.fresh = true, texturesKept++;
+    } else {
+      t.width = width, t.height = height;
+      if(!make(t.image, width, height, VK_FORMAT_R8G8B8A8_UNORM,
+               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT)) {
+        return destroy(t), 0;
+      }
+      auto setInfo = made<VkDescriptorSetAllocateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
+      setInfo.descriptorPool = descriptorPool, setInfo.descriptorSetCount = 1, setInfo.pSetLayouts = &setLayout;
+      if(vk.vkAllocateDescriptorSets(device, &setInfo, &t.set) != VK_SUCCESS) {
+        return t.set = VK_NULL_HANDLE, destroy(t), 0;
+      }
+      VkDescriptorImageInfo image{sampler, t.image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+      auto write = made<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+      write.dstSet = t.set, write.descriptorCount = 1;
+      write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, write.pImageInfo = &image;
+      vk.vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     }
-    auto setInfo = made<VkDescriptorSetAllocateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
-    setInfo.descriptorPool = descriptorPool, setInfo.descriptorSetCount = 1, setInfo.pSetLayouts = &setLayout;
-    if(vk.vkAllocateDescriptorSets(device, &setInfo, &t.set) != VK_SUCCESS) {
-      return t.set = VK_NULL_HANDLE, destroy(t), 0;
-    }
-    VkDescriptorImageInfo image{sampler, t.image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    auto write = made<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-    write.dstSet = t.set, write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, write.pImageInfo = &image;
-    vk.vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     u32 id = nextId++;
+    t.left = 0, t.top = 0, t.partWidth = width, t.partHeight = height;  //(a spare may have been a part)
     if(texels) {
       if(owner) t.pending = texels, t.owner = std::move(owner);
       else t.copied.assign(texels, texels + width * height), t.pending = t.copied.data();
@@ -543,10 +579,53 @@ struct VulkanBackend : GPU::Backend {
     textureImages[id] = std::move(t);
     return id;
   }
+  //(the part alone put on the GPU: its texels stay the owner's till then)
+  auto makeTexturePart(u32 textureWidth, u32 textureHeight, const u32* texels, u32 left, u32 top, u32 width,
+                       u32 height, std::shared_ptr<const void> owner) -> u32 override {
+    if(u64(left) + width > textureWidth || u64(top) + height > textureHeight) return 0;
+    if(!owner || !width || !height) {
+      return Backend::makeTexturePart(textureWidth, textureHeight, texels, left, top, width, height, owner);
+    }
+    u32 id = makeTexture(textureWidth, textureHeight, nullptr, {});
+    if(!id) return 0;
+    Texture& t = textureImages[id];
+    t.pending = texels, t.owner = std::move(owner);
+    t.left = left, t.top = top, t.partWidth = width, t.partHeight = height;
+    uploading.push_back(id);
+    return id;
+  }
   auto dropTexture(u32 id) -> void override { graves.push_back({submitted + 1, id, true}); }
 
-  //Those let go of whose runs are done, destroyed.
+  auto makePalette(const u32* entries) -> u32 override {
+    if(lost || !palettes || freePalettes.empty()) return 0;
+    u32 row = freePalettes.back();
+    freePalettes.pop_back();
+    auto& pending = pendingPalettes.emplace_back();
+    pending.first = row, std::memcpy(pending.second.data(), entries, sizeof(pending.second));
+    return row;
+  }
+  auto dropPalette(u32 id) -> void override { paletteGraves.push_back({submitted + 1, id}); }
+
+  //A texture let go of, its run done, kept for another of its size (spareTextures), or destroyed.
+  auto spare(Texture&& t) -> void {
+    auto bytes = [](const Texture& t) { return u64(t.width) * t.height * 4; };
+    t.pending = nullptr, t.owner.reset(), t.copied = {};
+    if(bytes(t) > SpareBytes / 4) return destroy(t);
+    u64 kept = bytes(t);
+    for(auto& s : spareTextures) kept += bytes(s);
+    while(!spareTextures.empty() && (spareTextures.size() >= MostSpares || kept > SpareBytes)) {
+      kept -= bytes(spareTextures.front());
+      destroy(spareTextures.front()), spareTextures.erase(spareTextures.begin());
+    }
+    spareTextures.push_back(std::move(t));
+  }
+
+  //Those let go of whose runs are done, destroyed (textures kept as spares).
   auto bury() -> void {
+    for(auto grave = paletteGraves.begin(); grave != paletteGraves.end();) {
+      if(grave->first > completed) { grave++; continue; }
+      freePalettes.push_back(grave->second), grave = paletteGraves.erase(grave);
+    }
     for(auto r = retired.begin(); r != retired.end();) {
       if(r->serial > completed) { r++; continue; }
       destroy(*r), r = retired.erase(r);
@@ -555,7 +634,7 @@ struct VulkanBackend : GPU::Backend {
       if(grave->serial > completed) { grave++; continue; }
       if(grave->texture) {
         auto t = textureImages.find(grave->id);
-        if(t != textureImages.end()) destroy(t->second), textureImages.erase(t);
+        if(t != textureImages.end()) spare(std::move(t->second)), textureImages.erase(t);
       } else {
         auto t = targetImages.find(grave->id);
         if(t != targetImages.end()) destroy(t->second), targetImages.erase(t);
@@ -622,18 +701,20 @@ struct VulkanBackend : GPU::Backend {
     std::memcpy(key.data(), &k, sizeof(k));
     if(auto found = pipelineCache_.find(key); found != pipelineCache_.end()) return found->second;
     if(k.transformed && !transformModule) return pipelineCache_[key] = VK_NULL_HANDLE;
-    u32 constants[19] = {k.textured, k.function, k.alphaTest, k.colorTest, k.fog, k.depthRange, k.clear, k.source,
+    u32 constants[20] = {k.textured, k.function, k.alphaTest, k.colorTest, k.fog, k.depthRange, k.clear, k.source,
                          k.destination, k.alphaOut, k.dither, k.quantize, k.logic, k.clamp, k.texels, k.reads,
-                         k.blending, k.term, k.flat};
-    VkSpecializationMapEntry entries[19];
-    for(u32 n = 0; n < 19; n++) entries[n] = {n, n * 4, 4};
-    VkSpecializationInfo specialization{19, entries, sizeof(constants), constants};
+                         k.blending, k.term, k.flat, k.indexed};
+    VkSpecializationMapEntry entries[20];
+    for(u32 n = 0; n < 20; n++) entries[n] = {n, n * 4, 4};
+    VkSpecializationInfo specialization{20, entries, sizeof(constants), constants};
+    //(the GE's whole-number depth, draw.frag's DEPTHS, where the depth decides the test or is written)
+    bool depths = k.depthWrite || (k.depthTest && k.depthCompare > 1);
     //(fast mode's 3D: transform.vert, taking the GE's vertices)
     VkPipelineShaderStageCreateInfo stages[2] = {
       {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT,
        k.transformed ? transformModule : vertexModule, "main", nullptr},
       {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT,
-       fragmentModule, "main", &specialization}};
+       depths ? fragmentDepthModule : fragmentModule, "main", &specialization}};
     using V = GPU::Vertex;
     using M = GPU::Model;
     VkVertexInputBindingDescription binding{0, k.transformed ? u32(sizeof(M)) : u32(sizeof(V)),
@@ -778,9 +859,9 @@ struct VulkanBackend : GPU::Backend {
     return pipeline;
   }
 
-  //copy.frag's push constants
+  //copy.frag's push constants, and move.frag's
   struct CopyPush { s32 origin[2]; u32 scale, bit; };
-  struct MovePush { s32 origin[2]; u32 scale, bit, formats; };
+  struct MovePush { s32 origin[2]; u32 scale, bit, formats; s32 delta; u32 rowBytes, sourceRowBytes; s32 box[4]; };
 
   //move.frag's layout and pipelines, for moves (Backend::moves): false where the driver won't take them, and a
   //target's pixels go to another through memory, a finish between.
@@ -860,14 +941,8 @@ struct VulkanBackend : GPU::Backend {
     return true;
   }
 
-  //A Move's source pixels across (the target's are its width): one for two of a 16-bit frame buffer's from an
-  //8888 one's, two for one the other way, else one for one
-  static auto moved(const GPU::Command& c) -> u32 {
-    if((c.sourceFormat == 3) == (c.format == 3)) return c.width;
-    return c.format == 3 ? c.width * 2 : c.width / 2;
-  }
-  //(its stencils' rows in the staging buffer: bytes of each, whole words)
-  auto movedPitch(const GPU::Command& c) const -> u32 { return (moved(c) * scale + 3) & ~3u; }
+  //(a Move's source's stencils' rows in the staging buffer: bytes of each, whole words)
+  auto movedPitch(const GPU::Command& c) const -> u32 { return (c.sourceWidth * scale + 3) & ~3u; }
 
   //The target's stencil over area set from its pixels' alphas, after their colors are drawn, where no shader gives
   //it with them (stencilExport): cleared, then draw(bit, mask) for each bit its GE format keeps apart, a draw that
@@ -888,11 +963,11 @@ struct VulkanBackend : GPU::Backend {
   //A Move (move.frag): the source's rectangle, one of each pixel's colors and its stencils' rows through the
   //middle of each (as a read back for memory takes them), taken into pictures of the PSP's size, through the slot's
   //staging buffer at stencils for the stencils (none for a 5650 source, whose colors are all it takes), then drawn
-  //into the target's rectangle: the colors and the stencil at once (stencilExport), or the colors and then the
-  //stencil's bits (stencilBits()).
+  //into the target's rectangle, each pixel the source's at its bytes (where they're the rectangle's): the colors
+  //and the stencil at once (stencilExport), or the colors and then the stencil's bits (stencilBits()).
   auto move(VkCommandBuffer commands, Slot& slot, Target& t, Target& from, const GPU::Command& c, u64 stencils)
     -> void {
-    u32 width = moved(c), height = c.height, pitch = movedPitch(c);
+    u32 width = c.sourceWidth, height = c.sourceHeight, pitch = movedPitch(c);
     if(!moveStage(width, height, pitch)) return void(lost = true);
     constexpr auto DepthStencil = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
     constexpr auto Source = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, Destination = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -942,7 +1017,9 @@ struct VulkanBackend : GPU::Backend {
     VkViewport viewport{f32(c.x * scale), f32(c.y * scale), f32(c.width * scale), f32(c.height * scale), 0, 1};
     vk.vkCmdSetViewport(commands, 0, 1, &viewport);
     vk.vkCmdSetScissor(commands, 0, 1, &area);
-    MovePush push{{c.x * s32(scale), c.y * s32(scale)}, scale, 0, u32(c.sourceFormat) | u32(c.format) << 8};
+    MovePush push{{c.x * s32(scale), c.y * s32(scale)}, scale, 0, u32(c.sourceFormat) | u32(c.format) << 8, c.delta,
+                  c.rowBytes, c.sourceRowBytes,
+                  {c.sourceX, c.sourceY, c.sourceX + c.sourceWidth - 1, c.sourceY + c.sourceHeight - 1}};
     //(everything bound again for each draw, as upload()'s are: the stencil's clearing may be a draw of the driver's
     //own, which MoltenVK leaves the set unbound after)
     auto draw = [&](VkPipeline pipeline) {
@@ -1011,14 +1088,15 @@ struct VulkanBackend : GPU::Backend {
       if(c.kind == GPU::Command::Kind::Upload) size = aligned(size) + aligned(u64(c.width) * c.height * 4) * 2 +
                                                       aligned(u64(c.width) * c.height);
       if(c.kind == GPU::Command::Kind::Present && !c.target) size = aligned(size) + u64(c.width) * c.height * 4;
-      if(c.kind == GPU::Command::Kind::Move) size = aligned(size) + u64(movedPitch(c)) * c.height;
+      if(c.kind == GPU::Command::Kind::Move) size = aligned(size) + u64(movedPitch(c)) * c.sourceHeight;
     }
     for(u32 id : uploading) {
       auto found = textureImages.find(id);
       if(found != textureImages.end() && found->second.pending) {
-        size = aligned(size) + u64(found->second.width) * found->second.height * 4;
+        size = aligned(size) + u64(found->second.partWidth) * found->second.partHeight * 4;
       }
     }
+    size += pendingPalettes.size() * (512 * 4 + 16);
     size = aligned(size) + 16;
     if(slot.staging.size < size) {
       constexpr auto Usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
@@ -1080,12 +1158,13 @@ struct VulkanBackend : GPU::Backend {
       auto found = textureImages.find(id);
       if(found == textureImages.end() || !found->second.pending) continue;
       Texture& t = found->second;
-      u64 bytes = u64(t.width) * t.height * 4;
+      u64 bytes = u64(t.partWidth) * t.partHeight * 4;
       at = aligned(at);
       std::memcpy(staging + at, t.pending, bytes);
       transition(commands, t.image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-      VkBufferImageCopy copy{at, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {t.width, t.height, 1}};
+      VkBufferImageCopy copy{at, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {s32(t.left), s32(t.top), 0},
+                             {t.partWidth, t.partHeight, 1}};
       vk.vkCmdCopyBufferToImage(commands, slot.staging.buffer, t.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                 1, &copy);
       transition(commands, t.image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -1095,6 +1174,24 @@ struct VulkanBackend : GPU::Backend {
       t.fresh = false;
     }
     uploading.clear();
+    //(the palettes made since, each into its row; the picture into its layout the first time)
+    if(paletteFresh || !pendingPalettes.empty()) {
+      constexpr auto Read = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      constexpr auto Destination = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+      VkImageLayout was = paletteFresh ? VK_IMAGE_LAYOUT_UNDEFINED : Read;
+      auto color = VK_IMAGE_ASPECT_COLOR_BIT;
+      paletteFresh = false;
+      transition(commands, paletteImage.image, color, was, pendingPalettes.empty() ? Read : Destination);
+      for(auto& [row, entries] : pendingPalettes) {
+        at = aligned(at);
+        std::memcpy(staging + at, entries.data(), sizeof(entries));
+        VkBufferImageCopy copy{at, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, s32(row), 0}, {512, 1, 1}};
+        vk.vkCmdCopyBufferToImage(commands, slot.staging.buffer, paletteImage.image, Destination, 1, &copy);
+        at += sizeof(entries);
+      }
+      if(!pendingPalettes.empty()) transition(commands, paletteImage.image, color, Destination, Read);
+      pendingPalettes.clear();
+    }
     VkDeviceSize zero = 0;
     vk.vkCmdBindVertexBuffers(commands, 0, 1, &slot.staging.buffer, &zero);
     if(!r.indices.empty()) vk.vkCmdBindIndexBuffer(commands, slot.staging.buffer, indicesAt, VK_INDEX_TYPE_UINT32);
@@ -1103,6 +1200,7 @@ struct VulkanBackend : GPU::Backend {
 
     Target* pass = nullptr;  //the target whose render pass is open
     u32 lastState = ~0u;
+    bool owed = false;  //(a barrier a draw left out had, for the next that reads)
     VkPipeline boundPipeline = VK_NULL_HANDLE;
     VkDescriptorSet boundSet = VK_NULL_HANDLE;
     //(the dynamic state and push constants set in the open pass, which a draw with the same doesn't set again: every
@@ -1150,7 +1248,8 @@ struct VulkanBackend : GPU::Backend {
           pass = &t, lastState = ~0u, set.known = false;
           //(the sets bound again from 0 up, as a copy's layout may have been bound, which leaves this layout's sets
           //undefined, and binding a lower set after a higher one through another layout would too: set 0 the blank
-          //texture's until a draw's own, set 1 the target's colors for shader blending, set 2 at the first mesh)
+          //texture's until a draw's own, set 1 the target's colors for shader blending and the palettes, set 2 at
+          //the first mesh)
           VkDescriptorSet sets[2] = {textureImages.find(0)->second.set, t.frame};
           vk.vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 2, sets, 0,
                                      nullptr);
@@ -1159,7 +1258,7 @@ struct VulkanBackend : GPU::Backend {
         if(c.state != lastState) {
           if(!lastPipeline || !(s.pipeline == lastKey)) lastPipeline = pipelineFor(s.pipeline), lastKey = s.pipeline;
           VkPipeline pipeline = lastPipeline;
-          if(!pipeline) continue;
+          if(!pipeline) { owed |= c.barrier; continue; }
           if(pipeline != boundPipeline) {
             vk.vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline), boundPipeline = pipeline;
           }
@@ -1196,9 +1295,11 @@ struct VulkanBackend : GPU::Backend {
           set = {true, scissor, s.stencilReference, s.stencilCompareMask, s.stencilWriteMask, s.blendConstant, s.push};
           lastState = c.state;
         }
-        //(what the draws before wrote, made visible to its reading, where the GPU doesn't keep the order: in
-        //rasterization order every pipeline of the subpass asks for it, which orders the draws before too)
-        if(s.pipeline.reads && !(readsInOrder && orderedPass)) {
+        //(what the draws before wrote, made visible to its reading, where the GPU doesn't keep the order and it
+        //reads where they drew (GPU::emit()): in rasterization order every pipeline of the subpass asks for it, which
+        //orders the draws before too)
+        if((c.barrier || owed) && s.pipeline.reads && !(readsInOrder && orderedPass)) {
+          owed = false;
           auto barrier = made<VkMemoryBarrier>(VK_STRUCTURE_TYPE_MEMORY_BARRIER);
           barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
           barrier.dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
@@ -1232,11 +1333,11 @@ struct VulkanBackend : GPU::Backend {
       if(c.kind == GPU::Command::Kind::Move) {
         auto from = targetImages.find(c.source);
         if(from == targetImages.end() || from == found) continue;
-        if(!fit(commands, t, c.y + c.height) || !fit(commands, from->second, c.sourceY + c.height)) {
+        if(!fit(commands, t, c.y + c.height) || !fit(commands, from->second, c.sourceY + c.sourceHeight)) {
           return lost = true, false;
         }
         u64 stencils = aligned(at);
-        at = stencils + u64(movedPitch(c)) * c.height;
+        at = stencils + u64(movedPitch(c)) * c.sourceHeight;
         move(commands, slot, t, from->second, c, stencils);
         if(lost) return false;
         boundPipeline = VK_NULL_HANDLE, boundSet = VK_NULL_HANDLE, lastState = ~0u, transformsBound = false;
@@ -1267,11 +1368,11 @@ struct VulkanBackend : GPU::Backend {
         for(u32 n = 0; n < count && depthed; n++) {
           u16 z;
           std::memcpy(&z, in + c.depth + n * 2, 2);
-          if(depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT) {
-            f32 value = z / 65535.0f;
+          if(depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT) {  //(in 65,536ths, exactly as draw.frag writes them)
+            f32 value = z * (1.0f / 65536);
             std::memcpy(&depth[n], &value, 4);
-          } else {
-            depth[n] = u32((u64(z) * 0xff'ffff + 32767) / 65535);
+          } else {  //(those rounded to 24 bits, as the GPU rounds to nearest)
+            depth[n] = u32((u64(z) * 0xff'ffff + 32768) >> 16);
           }
         }
         transition(commands, t.color.image, VK_IMAGE_ASPECT_COLOR_BIT, ColorLayout, Destination);
@@ -2066,12 +2167,15 @@ struct VulkanBackend : GPU::Backend {
     if(vk.vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &setLayout) != VK_SUCCESS) {
       return error = "no descriptor set layout", false;
     }
-    VkDescriptorSetLayoutBinding frameBinding{0, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
-                                              nullptr};
-    layoutInfo.pBindings = &frameBinding;
+    //(set 1: a target's colors for shader blending, and the palettes for textures of palette indices)
+    VkDescriptorSetLayoutBinding frameBindings[2] = {
+      {0, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+      {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
+    layoutInfo.bindingCount = 2, layoutInfo.pBindings = frameBindings;
     if(vk.vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &frameLayout) != VK_SUCCESS) {
       return error = "no descriptor set layout", false;
     }
+    layoutInfo.bindingCount = 1;
     VkDescriptorSetLayoutBinding transformBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT,
                                                   nullptr};
     layoutInfo.pBindings = &transformBinding;
@@ -2087,7 +2191,7 @@ struct VulkanBackend : GPU::Backend {
       return error = "no pipeline layout", false;
     }
     pipelineLayoutInfo.setLayoutCount = 1, pipelineLayoutInfo.pSetLayouts = &setLayout;  //(copies' and presenting's)
-    VkDescriptorPoolSize poolSizes[3] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8192},
+    VkDescriptorPoolSize poolSizes[3] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8192 + 1024},
                                          {VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1024},
                                          {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, Slots}};
     auto poolInfo = made<VkDescriptorPoolCreateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
@@ -2101,6 +2205,12 @@ struct VulkanBackend : GPU::Backend {
     samplerInfo.addressModeU = samplerInfo.addressModeV = samplerInfo.addressModeW =
       VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     if(vk.vkCreateSampler(device, &samplerInfo, nullptr, &sampler) != VK_SUCCESS) return error = "no sampler", false;
+    if(!make(paletteImage, 512, PaletteRows, VK_FORMAT_R8G8B8A8_UNORM,
+             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT)) {
+      return error = "no palettes' picture", false;
+    }
+    for(u32 row = PaletteRows - 1; row >= 1; row--) freePalettes.push_back(row);
+    palettes = true;
 
     VkPushConstantRange copyRange{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(CopyPush)};
     pipelineLayoutInfo.pPushConstantRanges = &copyRange;
@@ -2117,10 +2227,14 @@ struct VulkanBackend : GPU::Backend {
     Code vertexCode{GPUShaders::vertexSPIRV, sizeof(GPUShaders::vertexSPIRV)};
     Code fragmentCode = dualSource ? Code{GPUShaders::fragmentSPIRV, sizeof(GPUShaders::fragmentSPIRV)}
                                    : Code{GPUShaders::fragmentSingleSPIRV, sizeof(GPUShaders::fragmentSingleSPIRV)};
+    Code fragmentDepthCode = dualSource
+      ? Code{GPUShaders::fragmentDepthSPIRV, sizeof(GPUShaders::fragmentDepthSPIRV)}
+      : Code{GPUShaders::fragmentSingleDepthSPIRV, sizeof(GPUShaders::fragmentSingleDepthSPIRV)};
     Code copyVertexCode{GPUShaders::copyVertexSPIRV, sizeof(GPUShaders::copyVertexSPIRV)};
     Code copyFragmentCode{GPUShaders::copyFragmentSPIRV, sizeof(GPUShaders::copyFragmentSPIRV)};
     Code presentCode{GPUShaders::presentSPIRV, sizeof(GPUShaders::presentSPIRV)};
     for(auto [code, module] : {std::pair{vertexCode, &vertexModule}, std::pair{fragmentCode, &fragmentModule},
+                               std::pair{fragmentDepthCode, &fragmentDepthModule},
                                std::pair{copyVertexCode, &copyVertexModule},
                                std::pair{copyFragmentCode, &copyFragmentModule},
                                std::pair{presentCode, &presentModule}}) {
@@ -2165,6 +2279,7 @@ struct VulkanBackend : GPU::Backend {
                                         copyExportModule, copyLayout);
     stencilExport = copyExportPipeline;
     moves = makeMoves();
+    moveExport = moveExportPipeline != VK_NULL_HANDLE;
     auto commandPoolInfo = made<VkCommandPoolCreateInfo>(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
     commandPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     commandPoolInfo.queueFamilyIndex = family;

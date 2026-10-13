@@ -4,6 +4,7 @@ import com.phobos.emulator.data.MangaBackdropScene
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.hypot
@@ -21,35 +22,55 @@ import kotlin.random.Random
  *   dense at the bottom along a gently wavy edge, cut by two clusters of scratched highlights.
  * - Speed lines: focus lines, hundreds of tapering wedges converging on a clear space just above the
  *   middle, their inner ends ragged, a few of them thick.
- * - Splash page: an impact burst, a spiky flash of paper with an inked edge and short focus lines inside
- *   it, cut out of a field of screentone that darkens toward the edges.
+ * - Magazine cover: a weekly shonen magazine's cover announcing Phobos ([cover]).
+ * - Truck-kun: the isekai truck charging out of focus lines, headlights blazing ([truck]).
  *
  * Plain Kotlin, drawn once per size and theme; the same size, colors and seed always give the same picture.
+ * The two lettered scenes letter with [lettering] (without it, they leave the words out).
  */
 internal object MangaPage {
-    fun render(width: Int, height: Int, paper: Int, ink: Int, scene: MangaBackdropScene, seed: Int = 1952): IntArray {
+    fun render(width: Int, height: Int, paper: Int, ink: Int, scene: MangaBackdropScene, lettering: Lettering? = null, seed: Int = 1952): IntArray {
         val w = width.coerceAtLeast(1)
         val h = height.coerceAtLeast(1)
         val coverage = FloatArray(w * h)
-        val page = Page(w, h, Random(seed))
+        val page = Page(w, h, Random(seed), luma(ink) > luma(paper))
         when (scene) {
             MangaBackdropScene.TONE -> page.screentone(coverage)
             MangaBackdropScene.SPEED_LINES -> page.focusLines(coverage)
-            MangaBackdropScene.SPLASH -> page.impact(coverage)
+            MangaBackdropScene.COVER -> page.cover(coverage, lettering)
+            MangaBackdropScene.TRUCK -> page.truck(coverage, lettering)
         }
         return IntArray(w * h) { PixelKit.mix(paper, ink, coverage[it]) }
     }
+
+    private fun luma(color: Int) = 0.299f * (color shr 16 and 0xFF) + 0.587f * (color shr 8 and 0xFF) + 0.114f * (color and 0xFF)
 }
 
-private class Page(val w: Int, val h: Int, val random: Random) {
+/**
+ * A page being inked: [w] by [h] pixels of coverage, 0 paper to 1 ink. [inkIsLight] on dark themes, where
+ * the ink is the lighter of the two, so a light (a headlight, a flash) is drawn in whichever is lighter.
+ */
+internal class Page(val w: Int, val h: Int, val random: Random, val inkIsLight: Boolean) {
     /** About a dp on a phone, from the page's shorter side. */
-    private val unit = max(1f, min(w, h) / 420f)
+    val unit = max(1f, min(w, h) / 420f)
 
     /** The screentone's dot pitch along its grid. */
-    private val pitch = max(4f, unit * 7f)
+    val pitch = max(4f, unit * 7f)
+
+    /** A finer screentone's pitch, for shading drawn things. */
+    val fine = max(3f, unit * 4.4f)
+
+    /** The coverage that reads as light: ink on a dark theme, paper on a light one. */
+    val light: Float get() = if (inkIsLight) 1f else 0f
+
+    /**
+     * A tone at ([x], [y]) that looks [darkness] dark, 0 lit to 1 in shadow, whichever way round the theme
+     * is: on a light theme the shadows get the dots, on a dark one (light ink) the lit parts, up to [LIT].
+     */
+    fun shade(x: Int, y: Int, darkness: Float): Float = if (inkIsLight) dot(x, y, (1f - darkness) * LIT, fine) else dot(x, y, darkness, fine)
 
     /** How much of a halftone cell's area is ink at ([x], [y]) for a tone of [density] (0 to 1), antialiased. */
-    private fun dot(x: Int, y: Int, density: Float): Float {
+    fun dot(x: Int, y: Int, density: Float, pitch: Float = this.pitch): Float {
         if (density <= 0f) return 0f
         // The grid turned 45 degrees: each dot's area grows with the density, until they touch and merge.
         val u = (x + y + 1) / SQRT2 / pitch
@@ -61,6 +82,81 @@ private class Page(val w: Int, val h: Int, val random: Random) {
             best = max(best, (radius - d + 0.5f).coerceIn(0f, 1f))
         }
         return best
+    }
+
+    /** [value] (0 paper to 1 ink) laid over [out] at [i], [alpha] of the way. */
+    fun paint(out: FloatArray, i: Int, alpha: Float, value: Float) {
+        if (alpha > 0f) out[i] += (value - out[i]) * min(alpha, 1f)
+    }
+
+    /** Every pixel from ([left], [top]) to ([right], [bottom]) that's on the page: its x, y and index. */
+    inline fun box(left: Float, top: Float, right: Float, bottom: Float, body: (x: Int, y: Int, i: Int) -> Unit) {
+        if (!(left <= right && top <= bottom)) return
+        val x0 = max(0f, floor(left)).toInt()
+        val x1 = min(w - 1f, ceil(right)).toInt()
+        val y0 = max(0f, floor(top)).toInt()
+        val y1 = min(h - 1f, ceil(bottom)).toInt()
+        for (y in y0..y1) for (x in x0..x1) body(x, y, y * w + x)
+    }
+
+    /** Every page pixel the part of [frame] from ([left], [top]) to ([right], [bottom]) covers, with its point in the frame (x, y and pixels per unit there). */
+    inline fun box(frame: Frame, left: Float, top: Float, right: Float, bottom: Float, body: (x: Int, y: Int, i: Int, local: FloatArray) -> Unit) {
+        val corners = FloatArray(3)
+        var minX = Float.MAX_VALUE
+        var minY = Float.MAX_VALUE
+        var maxX = -Float.MAX_VALUE
+        var maxY = -Float.MAX_VALUE
+        for ((lx, ly) in listOf(left to top, right to top, left to bottom, right to bottom)) {
+            frame.toPage(lx, ly, corners)
+            minX = min(minX, corners[0])
+            maxX = max(maxX, corners[0])
+            minY = min(minY, corners[1])
+            maxY = max(maxY, corners[1])
+        }
+        val local = FloatArray(3)
+        box(minX - 2f, minY - 2f, maxX + 2f, maxY + 2f) { x, y, i ->
+            frame.toLocal(x + 0.5f, y + 0.5f, local)
+            body(x, y, i, local)
+        }
+    }
+
+    /**
+     * Lettering as a logo: [mask]'s letters filled by [fill], ringed with paper [ring] wide and then an ink
+     * line [line] wide, over a drop shadow of the whole [shadowX], [shadowY] pixels away in a tone of [shadow].
+     */
+    fun logo(out: FloatArray, mask: Mask, ring: Float, line: Float, shadowX: Int, shadowY: Int, shadow: Float, fill: (x: Int, y: Int) -> Float) {
+        val distance = mask.distances()
+        val outer = ring + line
+        for (my in 0 until mask.height) for (mx in 0 until mask.width) {
+            val x = mask.left + mx
+            val y = mask.top + my
+            if (x !in 0 until w || y !in 0 until h) continue
+            val i = y * w + x
+            val k = my * mask.width + mx
+            val sx = mx - shadowX
+            val sy = my - shadowY
+            if (shadow > 0f && sx in 0 until mask.width && sy in 0 until mask.height) {
+                val behind = (outer - distance[sy * mask.width + sx] + 0.5f).coerceIn(0f, 1f)
+                if (behind > 0f) paint(out, i, behind, dot(x, y, shadow))
+            }
+            paint(out, i, (outer - distance[k] + 0.5f).coerceIn(0f, 1f), 1f)
+            paint(out, i, (ring - distance[k] + 0.5f).coerceIn(0f, 1f), 0f)
+            if (mask.alpha[k] > 0f) paint(out, i, mask.alpha[k], fill(x, y))
+        }
+    }
+
+    /** [mask]'s letters in [value], with a paper [halo] around them first when it's over 0. */
+    fun letters(out: FloatArray, mask: Mask, value: Float, halo: Float = 0f) {
+        val distance = if (halo > 0f) mask.distances() else null
+        for (my in 0 until mask.height) for (mx in 0 until mask.width) {
+            val x = mask.left + mx
+            val y = mask.top + my
+            if (x !in 0 until w || y !in 0 until h) continue
+            val i = y * w + x
+            val k = my * mask.width + mx
+            if (distance != null) paint(out, i, (halo - distance[k] + 0.5f).coerceIn(0f, 1f), 1f - value)
+            paint(out, i, mask.alpha[k], value)
+        }
     }
 
     fun screentone(out: FloatArray) {
@@ -107,10 +203,10 @@ private class Page(val w: Int, val h: Int, val random: Random) {
     }
 
     /** A focus line: its angle, its width at the page's farthest corner, and where its inner end is. */
-    private class Ray(val angle: Float, val width: Float, val inner: Float)
+    class Ray(val angle: Float, val width: Float, val inner: Float)
 
     /** [count] rays, sorted by angle, up to [thickest] wide (most much thinner), their inner ends ragged around [clear]. */
-    private fun rays(count: Int, clear: Float, thickest: Float): List<Ray> =
+    fun rays(count: Int, clear: Float, thickest: Float): List<Ray> =
         List(count) {
             val angle = (2 * PI * (it + random.nextFloat() * 0.8f) / count).toFloat()
             val thick = random.nextFloat()
@@ -122,7 +218,7 @@ private class Page(val w: Int, val h: Int, val random: Random) {
      * a point, out to [reach], where it's its full width; only rays near enough to reach the pixel, at up to
      * [thickest] (as given to [rays]), are looked at.
      */
-    private fun rayInk(x: Int, y: Int, cx: Float, cy: Float, rays: List<Ray>, angles: FloatArray, reach: Float, thickest: Float): Float {
+    fun rayInk(x: Int, y: Int, cx: Float, cy: Float, rays: List<Ray>, angles: FloatArray, reach: Float, thickest: Float): Float {
         val dx = x + 0.5f - cx
         val dy = y + 0.5f - cy
         val rho = sqrt(dx * dx + dy * dy)
@@ -167,40 +263,22 @@ private class Page(val w: Int, val h: Int, val random: Random) {
         for (y in 0 until h) for (x in 0 until w) out[y * w + x] = rayInk(x, y, cx, cy, rays, angles, reach, thickest)
     }
 
-    fun impact(out: FloatArray) {
-        val cx = w * 0.56f
-        val cy = h * 0.46f
-        val radius = min(w, h) * 0.3f
-        // The burst's edge: spike tips and the valleys between them, around the circle.
-        val points = 2 * (30 + random.nextInt(8))
-        val edgeAngles = FloatArray(points) { (2 * PI * (it + 0.3f * random.nextFloat()) / points).toFloat() }
-        val edgeRadii = FloatArray(points) { if (it % 2 == 0) radius * (1.2f + 0.75f * random.nextFloat() * random.nextFloat()) else radius * (0.82f + 0.12f * random.nextFloat()) }
-        val line = unit * 2.2f
-        val rays = rays(160, radius * 0.5f, unit * 3f)
-        val angles = FloatArray(rays.size) { rays[it].angle }
-        val far = hypot(max(cx, w - cx), max(cy, h - cy))
-        for (y in 0 until h) for (x in 0 until w) {
-            val dx = x + 0.5f - cx
-            val dy = y + 0.5f - cy
-            val rho = sqrt(dx * dx + dy * dy)
-            var theta = atan2(dy, dx)
-            if (theta < 0) theta += (2 * PI).toFloat()
-            val edge = edgeAt(theta, edgeAngles, edgeRadii)
-            // Distance across the edge, measured square to it where it slants.
-            val across = (rho - edge.first) * edge.second
-            val i = y * w + x
-            out[i] = if (across > 0f) {
-                // Outside the burst: screentone, denser toward the page's edges.
-                val density = 0.24f + 0.34f * ((rho - radius) / (far - radius)).coerceIn(0f, 1f)
-                max(dot(x, y, density) * (across / (line * 3f)).coerceIn(0f, 1f), (line / 2f - abs(across) + 0.5f).coerceIn(0f, 1f))
-            } else {
-                max((line / 2f - abs(across) + 0.5f).coerceIn(0f, 1f), rayInk(x, y, cx, cy, rays, angles, edge.first, unit * 3f) * 0.85f)
-            }
+    /**
+     * An impact burst's edge around a circle of [radius]: [points] spike tips and the valleys between them,
+     * as angles and radii, the tips out to [spike] radii (unevenly), the valleys in to [valley].
+     */
+    fun burstEdge(points: Int, radius: Float, spike: Float, valley: Float): Pair<FloatArray, FloatArray> {
+        val n = 2 * points
+        val angles = FloatArray(n) { (2 * PI * (it + 0.3f * random.nextFloat()) / n).toFloat() }
+        val radii = FloatArray(n) {
+            if (it % 2 == 0) radius * (1f + (spike - 1f) * (0.45f + 0.55f * random.nextFloat() * random.nextFloat()))
+            else radius * (valley + 0.08f * random.nextFloat())
         }
+        return angles to radii
     }
 
     /** The burst's edge at [theta]: its radius there, and how square to the radius it runs (the cosine of its slant). */
-    private fun edgeAt(theta: Float, angles: FloatArray, radii: FloatArray): Pair<Float, Float> {
+    fun edgeAt(theta: Float, angles: FloatArray, radii: FloatArray): Pair<Float, Float> {
         val n = angles.size
         // The last edge point at or before theta (-1: before the first, so between the last and the first).
         var lo = 0
@@ -210,9 +288,9 @@ private class Page(val w: Int, val h: Int, val random: Random) {
             if (angles[mid] <= theta) lo = mid + 1 else hi = mid
         }
         val k = lo - 1
-        val a0 = if (k < 0) angles[n - 1] - (2 * PI).toFloat() else angles[k]
+        val a0 = if (k < 0) angles[n - 1] - TURN else angles[k]
         val r0 = radii[(k + n) % n]
-        val a1 = if (k + 1 >= n) angles[0] + (2 * PI).toFloat() else angles[k + 1]
+        val a1 = if (k + 1 >= n) angles[0] + TURN else angles[k + 1]
         val r1 = radii[(k + 1) % n]
         val t = ((theta - a0) / (a1 - a0)).coerceIn(0f, 1f)
         val r = r0 + (r1 - r0) * t
@@ -221,8 +299,136 @@ private class Page(val w: Int, val h: Int, val random: Random) {
         return r to (1f / sqrt(1f + slope * slope))
     }
 
-    private companion object {
+    /** How far ([x], [y]) is outside the burst around ([cx], [cy]) with the edge [angles] and [radii], square to its edge (negative inside). */
+    fun burstDistance(x: Int, y: Int, cx: Float, cy: Float, angles: FloatArray, radii: FloatArray): Float {
+        val dx = x + 0.5f - cx
+        val dy = y + 0.5f - cy
+        var theta = atan2(dy, dx)
+        if (theta < 0) theta += TURN
+        val (edge, square) = edgeAt(theta, angles, radii)
+        return (sqrt(dx * dx + dy * dy) - edge) * square
+    }
+
+    companion object {
         val SQRT2 = sqrt(2f)
         const val TURN = (2 * PI).toFloat()
+
+        /** The densest tone [shade] gives the lit parts of a dark theme's drawings. */
+        const val LIT = 0.6f
     }
+}
+
+/** A box on the page, in pixels. */
+internal class Box(val left: Float, val top: Float, val right: Float, val bottom: Float) {
+    val width get() = right - left
+    val height get() = bottom - top
+    val cx get() = (left + right) / 2f
+    val cy get() = (top + bottom) / 2f
+}
+
+/** A paper box with an ink line [line] wide round it, its corners square. */
+internal fun Page.panel(out: FloatArray, box: Box, line: Float) {
+    box(box.left - line, box.top - line, box.right + line, box.bottom + line) { x, y, i ->
+        val d = roundBox(x + 0.5f - box.cx, y + 0.5f - box.cy, box.width / 2f, box.height / 2f, 0f)
+        paint(out, i, inside(d), 0f)
+        paint(out, i, onLine(d, line), 1f)
+    }
+}
+
+/** A caption box: [lines] in ink, centered, as large as they fit in [box], on a [panel]. */
+internal fun Page.caption(out: FloatArray, l: Lettering, box: Box, line: Float, lines: List<String>) {
+    panel(out, box, line)
+    val pad = min(box.width, box.height) * 0.14f
+    val size = min(lines.minOf { l.fit(it, box.width - pad * 2, 0.02f) }, (box.height - pad * 2) / (l.capHeight * (lines.size + 0.3f * (lines.size - 1))))
+    l.mask(l.block(lines, lines.map { size }, box.cx, box.cy, 0f, 0.05f, gap = 0.3f, tracking = 0.02f))?.let { letters(out, it, 1f) }
+}
+
+/**
+ * A drawing's own coordinates: its unit is [scale] pixels at its origin, page point ([cx], [cy]); it's
+ * turned [angle] radians clockwise, and seen in perspective, its lower half leaning toward the viewer, a
+ * point at y = 1 nearer by [tilt] (1 / (1 - tilt) as large).
+ */
+internal class Frame(val cx: Float, val cy: Float, val scale: Float, val angle: Float, val tilt: Float = 0f) {
+    private val cos = cos(angle)
+    private val sin = sin(angle)
+
+    /** How many pixels a unit spans across, at the frame's height [y]. */
+    fun pixels(y: Float): Float = scale / max(0.05f, 1f - tilt * y)
+
+    /** Page point ([x], [y]) in the frame: into [out], its x, y, and how many pixels a unit spans there. */
+    fun toLocal(x: Float, y: Float, out: FloatArray) {
+        val dx = x - cx
+        val dy = y - cy
+        val rx = (dx * cos + dy * sin) / scale
+        val ry = (-dx * sin + dy * cos) / scale
+        val ly = ry / max(0.05f, 1f + tilt * ry)
+        val near = 1f / max(0.05f, 1f - tilt * ly)
+        out[0] = rx / near
+        out[1] = ly
+        out[2] = scale * near * sqrt(near)
+    }
+
+    /** The frame's point ([x], [y]) on the page, into [out]: x, y. */
+    fun toPage(x: Float, y: Float, out: FloatArray) {
+        val near = 1f / max(0.05f, 1f - tilt * y)
+        val rx = x * near * scale
+        val ry = y * near * scale
+        out[0] = cx + rx * cos - ry * sin
+        out[1] = cy + rx * sin + ry * cos
+    }
+}
+
+/** How much of a pixel a shape covers, from its signed distance to the shape's edge in pixels (negative inside). */
+internal fun inside(distance: Float): Float = (0.5f - distance).coerceIn(0f, 1f)
+
+/** How much of a pixel at [s] a band from [from] to [to] covers (all in pixels, across the band). */
+internal fun band(s: Float, from: Float, to: Float): Float = (s - from + 0.5f).coerceIn(0f, 1f) * (to - s + 0.5f).coerceIn(0f, 1f)
+
+/** How much of a pixel a line [width] pixels wide covers, [distance] pixels from its middle. */
+internal fun onLine(distance: Float, width: Float): Float = (width / 2f - abs(distance) + 0.5f).coerceIn(0f, 1f)
+
+/** Signed distance from ([x], [y]) to a box around the origin, [hx] and [hy] its half sides, its corners rounded by [r]. */
+internal fun roundBox(x: Float, y: Float, hx: Float, hy: Float, r: Float): Float {
+    val qx = abs(x) - hx + r
+    val qy = abs(y) - hy + r
+    return min(max(qx, qy), 0f) + hypot(max(qx, 0f), max(qy, 0f)) - r
+}
+
+/** Distance from ([x], [y]) to the segment from ([ax], [ay]) to ([bx], [by]). */
+internal fun segment(x: Float, y: Float, ax: Float, ay: Float, bx: Float, by: Float): Float {
+    val px = x - ax
+    val py = y - ay
+    val ex = bx - ax
+    val ey = by - ay
+    val t = ((px * ex + py * ey) / max(1e-6f, ex * ex + ey * ey)).coerceIn(0f, 1f)
+    return hypot(px - ex * t, py - ey * t)
+}
+
+/** Signed distance from ([x], [y]) to the polygon through [xs], [ys] (negative inside, either winding). */
+internal fun polygon(x: Float, y: Float, xs: FloatArray, ys: FloatArray): Float {
+    var best = Float.MAX_VALUE
+    var sign = 1f
+    var j = xs.size - 1
+    for (i in xs.indices) {
+        val ex = xs[j] - xs[i]
+        val ey = ys[j] - ys[i]
+        val px = x - xs[i]
+        val py = y - ys[i]
+        val t = ((px * ex + py * ey) / max(1e-6f, ex * ex + ey * ey)).coerceIn(0f, 1f)
+        val dx = px - ex * t
+        val dy = py - ey * t
+        best = min(best, dx * dx + dy * dy)
+        val above = y >= ys[i]
+        val below = y < ys[j]
+        val left = ex * py > ey * px
+        if ((above && below && left) || (!above && !below && !left)) sign = -sign
+        j = i
+    }
+    return sign * sqrt(best)
+}
+
+/** 0 at or below [from], 1 at or past [to], eased between (either way round). */
+internal fun smooth(from: Float, to: Float, x: Float): Float {
+    val t = ((x - from) / (to - from)).coerceIn(0f, 1f)
+    return t * t * (3f - 2f * t)
 }

@@ -280,8 +280,75 @@ static auto vramCopies() -> void {
   CHECK(wrong, 0);
 }
 
+//What the recompiler keeps of memory's changes (recompiler.cpp's invalidateRange(), unwatched()): a watched page's
+//compiled stores go through write(), and once a change ends its watch, straight to it again, unless the page holds
+//compiled code, which keeps it out of the store table until a change drops the code. A change over many sections
+//(through VRAM's copies, or past memory's end round to its start) drops every section with code in it, and only those.
+static auto recompilerPages() -> void {
+  System s;
+  constexpr u32 Data = 0x0890'0000, Code = 0x0880'0000;
+  u32 data = (Data & 0x1fff'ffff) >> 12, code = (Code & 0x1fff'ffff) >> 12;
+  s.runProgram(Code, {lui(s0, Data >> 16), sw(zero, 0, s0)}, true);
+  auto& r = s.recompiler;
+  CHECK(r.writePages[data] != nullptr, true);
+  CHECK(r.writePages[code] == nullptr, true);  //(code compiled there)
+  s.memory.watch(Data, 4), s.memory.watch(Code, 4);
+  CHECK(r.writePages[data] == nullptr, true);
+  s.memory.write(Allegrex::Word, Data + 0x800, 1);  //(the data page's watch ends: its stores go straight to it again)
+  CHECK(s.memory.watched[data], 0);
+  CHECK(r.writePages[data] != nullptr, true);
+  s.memory.watch(Data, 4);
+  s.memory.unwatchAll();
+  CHECK(r.writePages[data] != nullptr, true);
+  CHECK(r.writePages[code] == nullptr, true);  //(its watch ended too, but its code is still there)
+  CHECK(r.sections[code] != nullptr, true);
+  s.memory.write(Allegrex::Word, Code + 0x800, 1);  //(a change in its page: the code goes, the page is plain again)
+  CHECK(r.sections[code] == nullptr, true);
+  CHECK(r.writePages[code] != nullptr, true);
+  //sections with code compiled from VRAM's first copy, RAM's first and last pages, and the scratchpad: each dropped
+  //by a change over it, those outside a change kept
+  System t;
+  t.recompiler.enabled = true;
+  t.power(Code);
+  auto& q = t.recompiler;
+  std::vector<u32> pages = {0x0400'0000 >> 12, 0x0400'5000 >> 12, 0x0800'0000 >> 12, 0x0bff'f000 >> 12,
+                            0x0001'0000 >> 12};
+  for(u32 page : pages) q.block(page << 12);
+  for(u32 page : pages) CHECK(q.sections[page] != nullptr, true);
+  t.memory.fill(0x0460'4010, 7, 64);  //(through VRAM's fourth copy: its first copy's 16 KiB from 0x4000)
+  CHECK(q.sections[0x0400'5000 >> 12] == nullptr, true);
+  CHECK(q.sections[0x0400'0000 >> 12] != nullptr, true);
+  q.invalidateRange(0x1fff'f000, 0x0800'2000);  //(round memory's end to RAM's first page)
+  CHECK(q.sections[0x0800'0000 >> 12] == nullptr, true);
+  CHECK(q.sections[0x0400'0000 >> 12] == nullptr, true);
+  CHECK(q.sections[0x0001'0000 >> 12] == nullptr, true);
+  CHECK(q.sections[0x0bff'f000 >> 12] != nullptr, true);
+  q.invalidateRange(0x0bff'fffc, 4);
+  CHECK(q.sections[0x0bff'f000 >> 12] == nullptr, true);
+  u32 left = 0;
+  for(u64 word : q.compiled) left += std::popcount(word);
+  CHECK(left, 0u);
+  //a VRAM page holding code, busy (drawn over) and listed again: still out of the store table till a change drops it
+  System v;
+  v.recompiler.enabled = true;
+  v.power(Code);
+  u32 vram = Memory::VRAMBase >> 12;
+  v.recompiler.block(Memory::VRAMBase);
+  v.memory.busyPages[0] |= 1, v.memory.vramBusy = true;
+  v.memory.vramGuard(true);
+  CHECK(v.table[vram] == nullptr, true);
+  v.memory.vramGuard(false);
+  v.memory.busyPages[0] = 0, v.memory.vramBusy = false;
+  CHECK(v.table[vram] != nullptr, true);
+  CHECK(v.recompiler.writePages[vram] == nullptr, true);
+  v.memory.write(Allegrex::Word, Memory::VRAMBase + 0x800, 1);
+  CHECK(v.recompiler.sections[vram] == nullptr, true);
+  CHECK(v.recompiler.writePages[vram] != nullptr, true);
+}
+
 auto memoryTests() -> Tests {
   return {
+    {"memory and the recompiler: watched pages' stores, sections dropped by a change", recompilerPages},
     {"memory windows", windows}, {"memory areas", areas}, {"memory written", written}, {"memory bulk", bulk},
     {"memory page table", pageTable}, {"memory and the cpu", cpu}, {"memory vram copies", vramCopies},
   };
