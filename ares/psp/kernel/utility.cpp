@@ -127,8 +127,14 @@ namespace {
   }
 
   //The keyboard's input types (psputility_osk.h's PSP_UTILITY_OSK_INPUTTYPE_*, a field's at 16 in SceUtilityOskData,
-  //0 for all): which a character is typed in, by what it is. Full-width letters, digits and signs (U+FF01-FF5E, and
-  //U+3000-303F's spaces and marks) are the Japanese ones; the URL keyboard types every printable ASCII character.
+  //0 for all): which a character is typed in, by what it is. The Latin letters are ASCII's and U+00C0-024F's (Latin-1's
+  //and Latin Extended-A's and -B's, the accented letters), lower or upper by case, a letter that's neither (title
+  //case, or none) upper. Full-width letters, digits and signs (U+FF01-FF5E, and U+3000-303F's spaces and marks) are
+  //the Japanese ones, and so are the kana's own marks (the voicing and iteration marks, the middle dot, the long vowel
+  //mark: kana too) and every other character that's printed and classed nowhere else, JIS X 0208's other symbols
+  //among them (stars, notes, arrows, the reference mark, the ellipsis, the full-width yen, Greek, box drawing). The URL
+  //keyboard types every printable ASCII character. The app classes them alike (android/.../util/PspDialogs.kt), both
+  //checked against the same cases (psp-keyboard-cases.txt, beside the app's tests).
   enum : u32 {
     InputLatinDigit = 0x1, InputLatinSymbol = 0x2, InputLatinLower = 0x4, InputLatinUpper = 0x8,
     InputJapaneseDigit = 0x100, InputJapaneseSymbol = 0x200, InputJapaneseLower = 0x400, InputJapaneseUpper = 0x800,
@@ -139,16 +145,51 @@ namespace {
     InputFullWidth = InputJapaneseDigit | InputJapaneseSymbol | InputJapaneseLower | InputJapaneseUpper
                    | InputHiragana | InputKatakana | InputKanji,
   };
+  //U+00C0-024F, a character each: l a lower case letter, U any other letter, - not a letter (× and ÷), by Unicode's
+  //general categories
+  constexpr char KeyboardLatin[] =
+    "UUUUUUUUUUUUUUUUUUUUUUU-UUUUUUUl"  //U+00C0
+    "lllllllllllllllllllllll-llllllll"  //U+00E0
+    "UlUlUlUlUlUlUlUlUlUlUlUlUlUlUlUl"  //U+0100
+    "UlUlUlUlUlUlUlUlUlUlUlUllUlUlUlU"  //U+0120
+    "lUlUlUlUllUlUlUlUlUlUlUlUlUlUlUl"  //U+0140
+    "UlUlUlUlUlUlUlUlUlUlUlUlUUlUlUll"  //U+0160
+    "lUUlUlUUlUUUllUUUUlUUlUUUlllUUlU"  //U+0180
+    "UlUlUlUUlUllUlUUlUUUlUlUUllUUlll"  //U+01A0
+    "UUUUUUlUUlUUlUlUlUlUlUlUlUlUllUl"  //U+01C0
+    "UlUlUlUlUlUlUlUllUUlUlUUUlUlUlUl"  //U+01E0
+    "UlUlUlUlUlUlUlUlUlUlUlUlUlUlUlUl"  //U+0200
+    "UlUlUlUlUlUlUlUlUlUlllllllUUlUUl"  //U+0220
+    "lUlUUUUlUlUlUlUl";                 //U+0240
+
+  //Whether a character is printed: not a control character, half of a pair (a character past U+FFFF, which the PSP
+  //hasn't got), a combining mark, an invisible format character, a variation selector, private use, a special or a
+  //noncharacter.
+  auto keyboardPrinted(u16 c) -> bool {
+    if(c < 0x20 || (c >= 0x7f && c <= 0x9f) || c == 0xad) return false;
+    for(auto [first, last] : {std::pair<u16, u16>{0x0300, 0x036f}, {0x200b, 0x200f}, {0x2028, 0x202e},
+                              {0x2060, 0x206f}, {0x20d0, 0x20ff}, {0xd800, 0xf8ff}, {0xfdd0, 0xfdef},
+                              {0xfe00, 0xfe0f}, {0xfe20, 0xfe2f}, {0xfeff, 0xfeff}, {0xfff0, 0xffff}}) {
+      if(c >= first && c <= last) return false;
+    }
+    return true;
+  }
+
   auto keyboardTypes(u16 c) -> u32 {
     if(c >= '0' && c <= '9') return InputLatinDigit | InputURL;
     if(c >= 'a' && c <= 'z') return InputLatinLower | InputURL;
     if(c >= 'A' && c <= 'Z') return InputLatinUpper | InputURL;
     if(c >= 0x20 && c <= 0x7e) return InputLatinSymbol | InputURL;
+    if(c >= 0xc0 && c <= 0x24f && KeyboardLatin[c - 0xc0] != '-') {
+      return KeyboardLatin[c - 0xc0] == 'l' ? InputLatinLower : InputLatinUpper;
+    }
     if(c >= 0xff10 && c <= 0xff19) return InputJapaneseDigit;
     if(c >= 0xff41 && c <= 0xff5a) return InputJapaneseLower;
     if(c >= 0xff21 && c <= 0xff3a) return InputJapaneseUpper;
     if((c >= 0xff01 && c <= 0xff5e) || (c >= 0x3000 && c <= 0x303f)) return InputJapaneseSymbol;
-    if(c == 0x30fc) return InputHiragana | InputKatakana;  //(the long vowel mark, in both)
+    if(c >= 0x309b && c <= 0x309e) return InputHiragana | InputJapaneseSymbol;  //(voicing, iteration marks)
+    if(c == 0x30fc) return InputHiragana | InputKatakana | InputJapaneseSymbol;  //(the long vowel mark)
+    if(c == 0x30fb || c == 0x30fd || c == 0x30fe) return InputKatakana | InputJapaneseSymbol;  //(middle dot, iteration)
     if(c >= 0x3041 && c <= 0x309f) return InputHiragana;
     if(c >= 0x30a0 && c <= 0x30ff) return InputKatakana;
     if(c >= 0xff61 && c <= 0xff9f) return InputHalfKatakana;
@@ -156,59 +197,16 @@ namespace {
     if((c >= 0x0430 && c <= 0x044f) || c == 0x0451) return InputRussianLower;
     if((c >= 0x0410 && c <= 0x042f) || c == 0x0401) return InputRussianUpper;
     if((c >= 0xac00 && c <= 0xd7a3) || (c >= 0x1100 && c <= 0x11ff) || (c >= 0x3130 && c <= 0x318f)) return InputKorean;
-    return 0;
+    return keyboardPrinted(c) ? InputJapaneseSymbol : 0;
   }
 
-  //Text as a field of input types `input` and that many lines takes it, as typed on a PSP's keyboard, which has only
-  //those characters: each character it doesn't take becomes one it does where there's one (the other width of an
-  //ASCII letter, digit or sign, the other case, the other kana), and is left out where there isn't. A space, which
-  //every keyboard but the digits' has, is full-width (U+3000) where the field takes full-width characters and no
-  //half-width ones; a line break stays in a field of several lines, whatever its types, and no other control
-  //character anywhere. Half-width katakana are taken only as they come (no other kana becomes one). A field taking
-  //all (0, or none of the types known) takes everything else. Phobos's choice: the automatic answer keeps a field's
-  //own text, the game's, as it is (keyboard()); a front end's answer, the game's text among it, is typed so
-  //(dialogs.cpp).
-  auto keyboardConform(const std::vector<u16>& text, u32 input, u32 lines) -> std::vector<u16> {
-    std::vector<u16> conformed;
-    input &= InputKnown;
-    if(!input) {
-      for(u16 c : text) {
-        if(c == '\n' ? lines > 1 : c >= 0x20 && !(c >= 0x7f && c <= 0x9f)) conformed.push_back(c);
-      }
-      return conformed;
-    }
-    auto takes = [&](u16 c) { return (keyboardTypes(c) & input) != 0; };
-    auto width = [](u16 c) -> u16 {
-      if(c >= 0x21 && c <= 0x7e) return c + 0xfee0;
-      if(c >= 0xff01 && c <= 0xff5e) return c - 0xfee0;
-      return c;
-    };
-    auto other = [](u16 c) -> u16 {  //the other case, or kana
-      if((c >= 'a' && c <= 'z') || (c >= 0xff41 && c <= 0xff5a) || (c >= 0x0430 && c <= 0x044f)) return c - 0x20;
-      if((c >= 'A' && c <= 'Z') || (c >= 0xff21 && c <= 0xff3a) || (c >= 0x0410 && c <= 0x042f)) return c + 0x20;
-      if(c == 0x0451) return 0x0401;
-      if(c == 0x0401) return 0x0451;
-      if(c >= 0x3041 && c <= 0x3096) return c + 0x60;
-      if(c >= 0x30a1 && c <= 0x30f6) return c - 0x60;
-      return c;
-    };
-    for(u16 c : text) {
-      if(c == '\n') {
-        if(lines > 1) conformed.push_back(c);
-        continue;
-      }
-      if(c == ' ' || c == 0x3000) {
-        if(!(input & ~InputDigits)) continue;
-        bool full = (input & InputFullWidth) && !(input & InputHalfWidth);
-        conformed.push_back(full ? 0x3000 : ' ');
-        continue;
-      }
-      for(u16 candidate : {c, width(c), other(c), width(other(c))}) {
-        if(takes(candidate)) { conformed.push_back(candidate); break; }
-      }
-    }
-    return conformed;
-  }
+  //The console's nickname for an empty field, "PSP", or where the field can't take it a name it can: "pi-esu-pi" in
+  //hiragana (katakana too, by keyboardConform()) and in half-width katakana, the Cyrillic and Hangul for "PSP", or
+  //digits alone.
+  const std::u16string KeyboardNicknames[] = {
+    u"PSP", u"\u3074\u30fc\u3048\u3059\u3074\u30fc", u"\uff8b\uff9f\uff70\uff74\uff7d\uff8b\uff9f\uff70",
+    u"\u041f\u0421\u041f", u"\ud53c\uc5d0\uc2a4\ud53c", u"1",
+  };
 
   //A save's PARAM.SFO, in the disc's format (disc-info.cpp's sfoValue()): a head ("\0PSF", version 1.1, where the
   //keys and the values start, how many there are), 16 bytes for each value (where its key is among the keys, its
@@ -471,21 +469,76 @@ auto Kernel::dialogShutdown(u32 kind) -> void {
   dialog.changeAt = cycles + u64(close) * (CPUFrequency / 1'000'000);
 }
 
+//Text as a field of input types `input` and that many lines takes it, as typed on a PSP's keyboard, which has only
+//those characters: each character it doesn't take becomes one it does where there's one (the other width of an
+//ASCII letter, digit or sign, the other case of an ASCII, full-width or Russian letter, the other kana), and is left
+//out where there isn't. A space, which every keyboard but the digits' has, is full-width (U+3000) where the field
+//takes full-width characters and no half-width ones; a line break stays in a field of several lines, whatever its
+//types, and no other control character anywhere, nor half of a pair (a character past U+FFFF, which the PSP hasn't
+//got). Half-width katakana are taken only as they come (no other kana becomes one). A field taking all (0, or none
+//of the types known) takes everything else. Phobos's choice, as the app's keyboard enters text
+//(android/.../util/PspDialogs.kt's accept(), checked against the same cases): the game's own text is kept as it is,
+//by the automatic answer (keyboard()) and where a front end answers with it unedited (dialogs.cpp); any other answer
+//is typed so.
+auto Kernel::keyboardConform(const std::vector<u16>& text, u32 input, u32 lines) -> std::vector<u16> {
+  std::vector<u16> conformed;
+  input &= InputKnown;
+  if(!input) {
+    for(u16 c : text) {
+      bool kept = c == '\n' ? lines > 1 : c >= 0x20 && !(c >= 0x7f && c <= 0x9f) && !(c >= 0xd800 && c <= 0xdfff);
+      if(kept) conformed.push_back(c);
+    }
+    return conformed;
+  }
+  auto takes = [&](u16 c) { return (keyboardTypes(c) & input) != 0; };
+  auto width = [](u16 c) -> u16 {
+    if(c >= 0x21 && c <= 0x7e) return c + 0xfee0;
+    if(c >= 0xff01 && c <= 0xff5e) return c - 0xfee0;
+    return c;
+  };
+  auto other = [](u16 c) -> u16 {  //the other case, or kana
+    if((c >= 'a' && c <= 'z') || (c >= 0xff41 && c <= 0xff5a) || (c >= 0x0430 && c <= 0x044f)) return c - 0x20;
+    if((c >= 'A' && c <= 'Z') || (c >= 0xff21 && c <= 0xff3a) || (c >= 0x0410 && c <= 0x042f)) return c + 0x20;
+    if(c == 0x0451) return 0x0401;
+    if(c == 0x0401) return 0x0451;
+    if(c >= 0x3041 && c <= 0x3096) return c + 0x60;
+    if(c >= 0x30a1 && c <= 0x30f6) return c - 0x60;
+    return c;
+  };
+  for(u16 c : text) {
+    if(c == '\n') {
+      if(lines > 1) conformed.push_back(c);
+      continue;
+    }
+    if(c == ' ' || c == 0x3000) {
+      if(!(input & ~InputDigits)) continue;
+      bool full = (input & InputFullWidth) && !(input & InputHalfWidth);
+      conformed.push_back(full ? 0x3000 : ' ');
+      continue;
+    }
+    for(u16 candidate : {c, width(c), other(c), width(other(c))}) {
+      if(takes(candidate)) { conformed.push_back(candidate); break; }
+    }
+  }
+  return conformed;
+}
+
 //The keyboard (psputility_osk.h's SceUtilityOskParams: the common part, then how many fields and where their
 //SceUtilityOskData are), answered as a player entering each field's text and confirming it would: what the field
-//started with goes into its output, or for a field holding nothing but spaces (ASCII's or full-width ones) the
-//console's nickname, "PSP", as a player asked for a name would type one (Peace Walker, asking for its player's name
-//in an empty field, refused an empty answer, "at least 1 characters", and asked again for good). The nickname is
+//started with goes into its output, as it is, or for a field holding nothing but spaces (ASCII's or full-width ones)
+//the console's nickname, "PSP", as a player asked for a name would type one (Peace Walker, asking for its player's
+//name in an empty field, refused an empty answer, "at least 1 characters", and asked again for good). The nickname is
 //typed as the field's input types allow (keyboardConform()): 7th Dragon 2020 and 2020-II take only full-width
-//letters (0x0c00) and get it full-width (U+FF30 U+FF33 U+FF30), where ASCII "PSP" left the first's hero nameless;
-//a field taking none of its letters (digits alone, kana) keeps its own. Each field's result is CHANGED (2), as a
-//PSP is taken to say of every field the player confirms, edited
-//or not: Ridge Racer 2 fills its field with a default driver name, "DAMACY", and takes UNCHANGED (0) as it takes
-//CANCELLED (1), going back to its title without a profile, which every player keeping that name would meet if a PSP
-//said UNCHANGED. (Killzone and Space Invaders Extreme also act only on CHANGED; Midnight Club 3 takes anything but
-//CANCELLED.) The text is UTF-16, as far as the field's room (outtextlength, its NUL among it) and limit
-//(outtextlimit) allow: a limit of 0 is none (taken as no characters, it cut the nickname to nothing), and a field
-//with no room gets nothing written, not even its NUL. Returns the common part's result: 0.
+//letters (0x0c00) and get it full-width (U+FF30 U+FF33 U+FF30), where ASCII "PSP" left the first's hero nameless. A
+//field taking none of its letters gets the first of KeyboardNicknames it takes whole (kana alone: "pi-esu-pi" in kana,
+//digits alone: "1"); one taking none of those whole (symbols alone, kanji alone) keeps its own text. Each field's
+//result is CHANGED (2), as a PSP is taken to say of every field the player confirms, edited or not: Ridge Racer 2
+//fills its field with a default driver name, "DAMACY", and takes UNCHANGED (0) as it takes CANCELLED (1), going back
+//to its title without a profile, which every player keeping that name would meet if a PSP said UNCHANGED. (Killzone
+//and Space Invaders Extreme also act only on CHANGED; Midnight Club 3 takes anything but CANCELLED.) The text is
+//UTF-16, as far as the field's room (outtextlength, its NUL among it) and limit (outtextlimit) allow: a limit of 0 is
+//none (taken as no characters, it cut the nickname to nothing), and a field with no room gets nothing written, not
+//even its NUL. Returns the common part's result: 0.
 auto Kernel::keyboard(u32 parameters) -> u32 {
   u32 count = memory.read(4, parameters + 48), fields = memory.read(4, parameters + 52);
   for(u32 n = 0; n < std::min(count, KeyboardFields); n++) {
@@ -493,8 +546,11 @@ auto Kernel::keyboard(u32 parameters) -> u32 {
     if(!memory.reaches(field, KeyboardFieldSize)) break;
     std::vector<u16> text = keyboardText(memory, memory.read(4, field + 32));
     bool blank = std::all_of(text.begin(), text.end(), [](u16 c) { return c == ' ' || c == 0x3000; });
-    std::vector<u16> nickname = keyboardConform({'P', 'S', 'P'}, memory.read(4, field + 16), 1);
-    if(blank && !nickname.empty()) text = nickname;
+    for(auto& nickname : KeyboardNicknames) {
+      if(!blank) break;
+      auto typed = keyboardConform({nickname.begin(), nickname.end()}, memory.read(4, field + 16), 1);
+      if(typed.size() == nickname.size()) text = typed, blank = false;
+    }
     keyboardField(field, text);
     memory.write(4, field + 44, KeyboardChanged);
   }
@@ -502,11 +558,13 @@ auto Kernel::keyboard(u32 parameters) -> u32 {
 }
 
 //A field's text into its output (SceUtilityOskData's outtext), as far as its room (outtextlength, the NUL among it)
-//and its limit (outtextlimit, 0 for none) allow; nothing written where it has no room.
+//and its limit (outtextlimit, 0 for none) allow, a pair (a game's own text may hold one) not cut in two; nothing
+//written where it has no room.
 auto Kernel::keyboardField(u32 field, std::vector<u16> text) -> void {
   u32 room = memory.read(4, field + 36), output = memory.read(4, field + 40), limit = memory.read(4, field + 48);
   u64 most = room ? room - 1 : 0;
   if(limit) most = std::min<u64>(most, limit);
+  if(most && most < text.size() && text[most - 1] >= 0xd800 && text[most - 1] <= 0xdbff) most--;
   text.resize(std::min<u64>(text.size(), most));
   if(room && output && memory.reaches(output, (text.size() + 1) * 2)) {
     for(u32 at = 0; at < text.size(); at++) memory.write(2, output + at * 2, text[at]);

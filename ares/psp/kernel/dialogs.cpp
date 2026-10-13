@@ -222,7 +222,8 @@ auto Kernel::dialogKeyboard(u32 p, DialogRequest& request) -> void {
     shown.input = memory.read(4, field + 16);
     shown.lines = memory.read(4, field + 20);
     shown.description = utf8(keyboardText(memory, memory.read(4, field + 28)));
-    shown.text = utf8(keyboardText(memory, memory.read(4, field + 32)));
+    shown.units = keyboardText(memory, memory.read(4, field + 32));
+    shown.text = utf8(shown.units);
     u32 room = memory.read(4, field + 36), limit = memory.read(4, field + 48);
     shown.most = room ? room - 1 : 0;
     if(limit) shown.most = std::min(shown.most, limit);
@@ -422,14 +423,19 @@ auto Kernel::dialogAnswered(const DialogRequest& asked, const DialogAnswer& give
   }
   if(asked.kind == DialogKeyboard) {
     //each field's text, as the field's input types and lines take it (keyboardConform()) and keyboard() writes it,
-    //CHANGED; backed out of, each CANCELLED (pspsdk's result) and its output as it was, the common result 0 (chosen:
-    //no recording shows a PSP's keyboard backed out of)
+    //CHANGED; the game's own text where the answer is the text it was shown, unedited, as the automatic answer keeps
+    //it (a PSP's keyboard edits the text it starts with: it isn't typed afresh). Backed out of, each CANCELLED
+    //(pspsdk's result) and its output as it was, the common result 0 (chosen: no recording shows a PSP's keyboard
+    //backed out of)
     u32 count = memory.read(4, p + 48), fields = memory.read(4, p + 52);
     for(u32 n = 0; n < std::min<u64>(count, asked.fields.size()); n++) {
       u32 field = fields + n * KeyboardFieldSize;
       if(!memory.reaches(field, KeyboardFieldSize)) break;
       auto& shown = asked.fields[n];
-      if(!given.cancelled) keyboardField(field, keyboardConform(utf16(given.texts[n]), shown.input, shown.lines));
+      if(!given.cancelled) {
+        bool unedited = given.texts[n] == shown.text;
+        keyboardField(field, unedited ? shown.units : keyboardConform(utf16(given.texts[n]), shown.input, shown.lines));
+      }
       memory.write(4, field + 44, given.cancelled ? KeyboardCancelled : KeyboardChanged);
     }
     memory.write(4, p + 28, 0);

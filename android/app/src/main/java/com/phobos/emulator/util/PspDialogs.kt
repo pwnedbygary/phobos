@@ -159,8 +159,12 @@ fun parsePspDialog(bytes: ByteArray): PspDialogRequest? {
 
 /**
  * The PSP's input types (psputility_osk.h's PSP_UTILITY_OSK_INPUTTYPE_*, 0 for all): which a character is typed in.
- * Full-width letters, digits and signs (U+FF01-FF5E, and U+3000-303F's spaces and marks) are the Japanese ones; the
- * URL keyboard types every printable ASCII character. As ares/psp/kernel/utility.cpp's keyboardTypes().
+ * The Latin letters are ASCII's and U+00C0-024F's (the accented letters), lower or upper by case, any other letter
+ * there upper. Full-width letters, digits and signs (U+FF01-FF5E, and U+3000-303F's spaces and marks) are the Japanese
+ * ones, and so are the kana's own marks (kana too) and every other printed character classed nowhere else
+ * ([pspPrinted]: JIS X 0208's other symbols among them, stars, notes, arrows, the full-width yen). The URL keyboard
+ * types every printable ASCII character. As ares/psp/kernel/utility.cpp's keyboardTypes(): both are checked against
+ * the same cases, psp-keyboard-cases.txt among the tests' resources.
  */
 const val PSP_INPUT_LATIN_DIGIT = 0x1
 const val PSP_INPUT_LATIN_SYMBOL = 0x2
@@ -190,11 +194,18 @@ private fun pspInputTypes(c: Char): Int = when (c) {
     in 'a'..'z' -> PSP_INPUT_LATIN_LOWER or PSP_INPUT_URL
     in 'A'..'Z' -> PSP_INPUT_LATIN_UPPER or PSP_INPUT_URL
     in ' '..'~' -> PSP_INPUT_LATIN_SYMBOL or PSP_INPUT_URL
+    in '\u00c0'..'\u024f' -> when {
+        c.isLowerCase() -> PSP_INPUT_LATIN_LOWER
+        c.isLetter() -> PSP_INPUT_LATIN_UPPER
+        else -> PSP_INPUT_JAPANESE_SYMBOL  // (× and ÷, printed and classed nowhere else)
+    }
     in '\uff10'..'\uff19' -> PSP_INPUT_JAPANESE_DIGIT
     in '\uff41'..'\uff5a' -> PSP_INPUT_JAPANESE_LOWER
     in '\uff21'..'\uff3a' -> PSP_INPUT_JAPANESE_UPPER
     in '\uff01'..'\uff5e', in '\u3000'..'\u303f' -> PSP_INPUT_JAPANESE_SYMBOL
-    '\u30fc' -> PSP_INPUT_HIRAGANA or PSP_INPUT_KATAKANA  // (the long vowel mark, in both)
+    in '\u309b'..'\u309e' -> PSP_INPUT_HIRAGANA or PSP_INPUT_JAPANESE_SYMBOL  // (voicing, iteration marks)
+    '\u30fc' -> PSP_INPUT_HIRAGANA or PSP_INPUT_KATAKANA or PSP_INPUT_JAPANESE_SYMBOL  // (the long vowel mark)
+    '\u30fb', '\u30fd', '\u30fe' -> PSP_INPUT_KATAKANA or PSP_INPUT_JAPANESE_SYMBOL  // (middle dot, iteration marks)
     in '\u3041'..'\u309f' -> PSP_INPUT_HIRAGANA
     in '\u30a0'..'\u30ff' -> PSP_INPUT_KATAKANA
     in '\uff61'..'\uff9f' -> PSP_INPUT_HALF_KATAKANA
@@ -202,7 +213,19 @@ private fun pspInputTypes(c: Char): Int = when (c) {
     in '\u0430'..'\u044f', '\u0451' -> PSP_INPUT_RUSSIAN_LOWER
     in '\u0410'..'\u042f', '\u0401' -> PSP_INPUT_RUSSIAN_UPPER
     in '\uac00'..'\ud7a3', in '\u1100'..'\u11ff', in '\u3130'..'\u318f' -> PSP_INPUT_KOREAN
-    else -> 0
+    else -> if (pspPrinted(c)) PSP_INPUT_JAPANESE_SYMBOL else 0
+}
+
+/**
+ * Whether [c] is printed: not a control character, half of a pair (past U+FFFF, which the PSP hasn't got), a combining
+ * mark, an invisible format character, a variation selector, private use, a special or a noncharacter. As
+ * ares/psp/kernel/utility.cpp's keyboardPrinted().
+ */
+private fun pspPrinted(c: Char): Boolean = when (c) {
+    in '\u0000'..'\u001f', in '\u007f'..'\u009f', '\u00ad', in '\u0300'..'\u036f', in '\u200b'..'\u200f',
+    in '\u2028'..'\u202e', in '\u2060'..'\u206f', in '\u20d0'..'\u20ff', in '\ud800'..'\uf8ff', in '\ufdd0'..'\ufdef',
+    in '\ufe00'..'\ufe0f', in '\ufe20'..'\ufe2f', '\ufeff', in '\ufff0'..'\uffff' -> false
+    else -> true
 }
 
 private fun pspOtherWidth(c: Char): Char = when (c) {
@@ -229,9 +252,9 @@ fun PspKeyboardField.digitsOnly(): Boolean = inputTypes != 0 && inputTypes and P
 
 /**
  * [c] as the field's input types take it, as typed on a PSP's keyboard, which has only those characters: itself, or
- * the other width of an ASCII letter, digit or sign, the other case, the other kana; null where none is taken. A space
- * (which every keyboard but the digits' has) is full-width where the field takes full-width characters and no
- * half-width ones. As ares/psp/kernel/utility.cpp's keyboardConform().
+ * the other width of an ASCII letter, digit or sign, the other case of an ASCII, full-width or Russian letter, the
+ * other kana; null where none is taken. A space (which every keyboard but the digits' has) is full-width where the
+ * field takes full-width characters and no half-width ones. As ares/psp/kernel/utility.cpp's keyboardConform().
  */
 private fun PspKeyboardField.conform(c: Char): Char? {
     val types = inputTypes
@@ -281,6 +304,20 @@ fun PspKeyboardField.typing(text: String): String {
     }
     return kept.toString()
 }
+
+/**
+ * What's entered for [text], the field holding it as the player confirms: the game's own text as it is where it's
+ * the text the field started with, unedited (a PSP's keyboard edits the text it starts with rather than typing it
+ * afresh, and the core keeps it so too), else [accept]'s.
+ */
+fun PspKeyboardField.entered(text: String): String = if (text == this.text) text else accept(text)
+
+/** What the keyboard's fields hold as it opens: each one's own text, as [typing] holds it. */
+fun PspDialogRequest.keyboardTexts(): List<String> = fields.map { it.typing(it.text) }
+
+/** The keyboard's answer, its fields holding [texts] as the player confirms: each field's text as [entered]. */
+fun PspDialogRequest.keyboardAnswer(texts: List<String>): PspDialogAnswer =
+    PspDialogAnswer(id, texts = texts.mapIndexed { n, text -> fields[n].entered(text) })
 
 /** Which of the user's PSP buttons (PhobosCore.Input bits) confirm and back out, by the game's convention. */
 fun PspDialogRequest.confirmBit(): Int = if (circleConfirms) PhobosCore.Input.B else PhobosCore.Input.A

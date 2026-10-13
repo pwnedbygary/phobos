@@ -10676,19 +10676,25 @@ pins TZ to the Mac's own zone, America/New_York, as the stick's dates and the cl
 
 ## Part 81: input — a right stick for patched games, the keyboard's input types, 7th Dragon 2020-II past its certificate
 
-On branch `cursor/psp-input-b00-2b67`, on master (`6ab2c5583`, then `b7ea296f4`). The task: items 3 and 4 of the
-play-testers' batch 00 report (the 7th Dragon games' names, Armored Core's True Analogs images). Clean room: PPSSPP read as a
-guide to the PSP's behaviour only (its convention for a right stick, its note on a negative ATRAC size), no code
-copied or translated; JPCSP not read. Save states keep their layout (26).
+On branch `cursor/psp-input-b00-2b67`, on master (`6ab2c5583`, then `b7ea296f4`, then `1d9308714`, #228). The task:
+items 3 and 4 of the play-testers' batch 00 report (the 7th Dragon games' names, Armored Core's True Analogs images);
+then an independent review's points (below, "The review's points"). Clean room: pspsdk's pspctrl.h and
+psputility_osk.h, pspautotests' ctrl/sampling, PPSSPP read as a guide to the PSP's behaviour only (its convention for
+a right stick, its note on a negative ATRAC size), no code copied or translated; JPCSP not read. Save states keep
+their layout (26).
 
-### A right stick for games patched to read one (a convention, not the PSP's)
+### A right stick for games patched to read one (a convention of the systems that have one, not the PSP's own)
 
 The "True Analogs" mods of the four Armored Core Portable games (Formula Front International, 3, Silent Line, Last
 Raven) read a second stick from bytes 10 and 11 of each SceCtrlData sample, as PPSSPP fills them from the host's
-right stick (128 centred); pspsdk calls them reserved, and a PSP, having no right stick, leaves them 0. Read as 0
-(up and left held fully), the mods' camera pitched up at the sky from "GO!!!" on and the AC turned left on its own.
+right stick (128 centred). pspsdk's pspctrl.h names those bytes Rx and Ry, a right stick's axes, "valid when using
+DualShock 3 on PSP GO, a PS VITA system, through hardware/software hacking, or system emulation", the four after
+them reserved and "unused by the firmware", and marks Rsrv, its older name for all six, deprecated. The PSP itself
+has no second stick: pspautotests' ctrl/sampling, recorded on one, notes that "The PSP doesn't natively support a
+right analog stick, but official emulators do" and zeroes their centred 128 so its results compare. Read as 0 (up
+and left held fully), the mods' camera pitched up at the sky from "GO!!!" on and the AC turned left on its own.
 
-The core now fills them so, as the owner chose (a compatibility convention, not hardware): `ctrl.cpp` keeps the
+The core now fills them so, as the owner chose (as those systems have it, for every game): `ctrl.cpp` keeps the
 host's right stick beside the left one in each sample, and every read that returns SceCtrlData (peek and read,
 positive and negative, up to 64 samples) writes it at 10 and 11, 128 centred, the last four bytes 0. Digital
 sampling centres it as it centres the left stick. It comes from the node tree's "R-Stick X" and "R-Stick Y" (the
@@ -10713,22 +10719,44 @@ character sets the PSP's keyboard offers for it, and a PSP's keyboard types noth
 an empty field ASCII "PSP" whatever they were; both 7th Dragon games ask for their hero's name in an empty field of
 full-width Latin letters alone (0x0c00, limit 8), and their font shows no ASCII: 2020's hero was nameless.
 
-`keyboardConform()` (utility.cpp) now takes text as a field's types allow, as typing it on the PSP's keyboard would:
-each character the field doesn't take becomes one it does where there's one (the other width of an ASCII letter,
-digit or sign, the other case, the other kana) and is left out where there isn't; a space is full-width (U+3000)
-where the field takes full-width characters and no half-width ones, and none where it takes digits alone; a line
-break stays in a field of several lines and goes in a field of one; the web address keyboard takes every printable
-ASCII character, digits too. The automatic answer's nickname goes through it (0x0c00: U+FF30 U+FF33 U+FF30), and a
-field taking none of its letters (digits alone, kana alone) keeps its own text; a field of full-width spaces is blank
-too. The automatic answer keeps the game's own text at first as it was (Ridge Racer 2's "DAMACY"). The app's keyboard
-(part 73) shows the game's text and what the player types as Android's keyboard composes it, leaving out only what
-the PSP has no character for and nothing past the field's limit once entered (`PspKeyboardField.typing()`), and
-enters it all, the game's own text with it, through the same conversion (`accept()`), showing under the field what
-will be entered where that differs; the core takes the app's answer through `keyboardConform()` again, with the
-field's types and lines as the request showed them. (Converting each character as it was typed, as a first version
-did, changed Android's text under its keyboard: romaji on its way to kana lost its letters in a field of kana, and
-kanji conversion stopped.) Phobos's choice for what the PSP's keyboard would do; no recording shows a PSP's answer to
-a field's types.
+`Kernel::keyboardConform()` (utility.cpp) now takes text as a field's types allow, as typing it on the PSP's keyboard
+would: each character the field doesn't take becomes one it does where there's one (the other width of an ASCII
+letter, digit or sign, the other case of an ASCII, full-width or Russian letter, the other kana) and is left out where
+there isn't; a space is full-width (U+3000) where the field takes full-width characters and no half-width ones, and
+none where it takes digits alone; a line break stays in a field of several lines and goes in a field of one; the web
+address keyboard takes every printable ASCII character, digits too. What a character is typed in (`keyboardTypes()`):
+ASCII's letters and U+00C0-024F's (the accented letters: é, ñ, ü, ß, Ł) are the Latin ones, lower or upper by case
+(Unicode's general categories, a table of the 400 characters; any other letter there upper); the full-width forms and
+U+3000-303F are the Japanese ones, as are the kana's own marks (the voicing and iteration marks, the middle dot, the
+long vowel mark, kana too) and every other printed character classed nowhere else: JIS X 0208's other symbols (☆ ★ ♪
+※ → … ￥, Greek, box drawing) among them. Not printed, so in no field of a type: control characters, halves of pairs
+(characters past U+FFFF, which the PSP hasn't got, kept in no field at all), combining marks, the invisible format
+characters, variation selectors, private use, specials and noncharacters. (The first version's Latin was ASCII's
+alone and its Japanese symbols the full-width forms and U+3000-303F: é, ß and most symbols on a Japanese keyboard went
+from a field of any type.)
+
+The automatic answer's nickname goes through it (0x0c00: U+FF30 U+FF33 U+FF30); a field taking none of its letters
+gets the first nickname it takes whole of "PSP", "ぴーえすぴー" (katakana too, by the conversion), "ﾋﾟｰｴｽﾋﾟｰ",
+"ПСП", "피에스피" and "1" (Peace Walker refused an empty name and asked again for good: kana alone, digits alone,
+Russian or Korean alone had got "PSP" before the conversion, and nothing with its first version), and one taking none
+of them whole (kanji alone, symbols alone) keeps its own text; a field of full-width spaces is blank too. The automatic
+answer keeps the game's own text at first as it was (Ridge Racer 2's "DAMACY"), and a pair in it is never cut in two
+by the field's limit.
+
+The app's keyboard (part 73) shows the game's text and what the player types as Android's keyboard composes it,
+leaving out only what the PSP has no character for and nothing past the field's limit once entered
+(`PspKeyboardField.typing()`), and enters what's typed through the same conversion (`accept()`), showing under the
+field what will be entered where that differs; the core takes the app's answer through `keyboardConform()` again,
+with the field's types and lines as the request showed them. The game's own text left as it was is entered as it is,
+by the app (`entered()`: the answer the field's text at first) and by the core (`dialogAnswered()`: an answer that is
+the text the request showed, the field's UTF-16 at first written back), as the automatic answer leaves it: a PSP's
+keyboard edits the text it starts with, not typing it afresh (a first version converted it too, so OK on a default
+with a character the field's types lack entered a changed or empty name). The two conversions, Kotlin's and C++'s,
+are checked against one table of cases, `android/app/src/test/resources/psp-keyboard-cases.txt`, by both the core's
+tests and the app's (every character of U+00C0-024F among them, against the JVM's own Unicode data). (Converting each
+character as it was typed, as a first version did, changed Android's text under its keyboard: romaji on its way to
+kana lost its letters in a field of kana, and kanji conversion stopped.) Phobos's choice for what the PSP's keyboard
+would do; no recording shows a PSP's answer to a field's types.
 
 7th Dragon 2020's name screen shows "PSP" and the voice screen after it too (`v-7d1-name/frame-000200.png`,
 `frame-000800.png`).
@@ -10739,11 +10767,14 @@ With the name taken, 2020-II's "Murakumo Certificate" still froze for good (fram
 shows, the game reads a sound file whole into a buffer and hands it to `sceAtracSetDataAndGetID` with the size
 0xffffffff; Phobos refused it (0x80630006: the size doesn't fit memory), and the game waited for that sound for good.
 PPSSPP notes the same of Tales of VS, so the PSP's library evidently takes such a size; Phobos now takes a size whose
-top bit is set as reaching to the end of the memory the buffer is in (`atrac.cpp`'s `atracWholeSize()`, in the four
-functions given the whole file: SetData, SetMOutData and their AndGetID), a buffer with no memory behind it refused as
-before (0x80630006). The card then passes and the
-story goes on (`v-7d2-cert/frame-001560.png`, the Diet chamber; `frame-003600.png`, the first conversation). The name
-wasn't what stopped it.
+top bit is set as reaching to the end of the memory the buffer is in (`atrac.cpp`'s `atracWholeSize()`), wherever a
+buffer is read whole: the four functions given the whole file (SetData, SetMOutData and their AndGetID), and a halfway
+one said to be read as far as its buffer goes. It's done in the setting functions they share, `atracSet()` and
+`atracSetAndGetID()` (read size and buffer size the same), the setters' own lines as they were, so that this branch and
+the sound branch's (#229, which takes the context writes out of those lines) merge without a conflict. A buffer with
+no memory behind it is refused as before (0x80630006). The card then passes and the story goes on
+(`v-7d2-cert/frame-001560.png`, the Diet chamber; `frame-003600.png`, the first conversation). The name wasn't what
+stopped it.
 
 ### Tests
 
@@ -10751,12 +10782,57 @@ wasn't what stopped it.
   and negative, the last four bytes 0; through a state, 128 until the next sample. `tests/psp/ares/system.cpp`: the
   node tree's "R-Stick X"/"R-Stick Y" reach the kernel, 128 untouched.
 - `tests/psp/utility.cpp` "utility keyboard input types": the nickname for 0x0c00, full-width spaces, a limit, lower
-  case alone, ASCII among the types, URL, digits alone, hiragana alone, a game's own text, types not known.
+  case alone, ASCII among the types, URL; the nicknames for digits alone (ASCII and full-width), hiragana alone (cut
+  by a limit), katakana, half-width katakana, Russian (either case), Korean, kana and digits; none for kanji alone or
+  symbols alone; a game's own text, whatever its characters; types not known. "utility keyboard conversion: the app's
+  cases": every case of `psp-keyboard-cases.txt` through `Kernel::keyboardConform()`.
 - `tests/psp/dialogs.cpp` "dialogs front end: keyboard": the app's answer conformed (digits alone; 0x0c00; a web
   address's digits; full-width capitals in a field of small letters; line breaks in one line and in two, and other
-  control characters, in typed and untyped fields).
+  control characters, in typed and untyped fields); the game's own text answered unedited entered as it was (an
+  accented letter and a star in a field of full-width letters, a pair kept whole, and cut before where the limit falls
+  inside it), and the same fields answered otherwise converted.
 - `tests/psp/atrac.cpp` "atrac setting": 0xffffffff takes the whole file; a file ending where memory ends taken to
-  the byte with 0x80000000; SetData, SetMOutData and SetMOutDataAndGetID the same; no RIFF header there, and no memory
-  there, refused (0x80630006).
-- Android: `PspDialogsTest.keyboardFieldsTakeOnlyTheirInputTypes` and `keyboardFieldsHoldWhatsTypedUntilEntered` (what
-  the field holds while typing: romaji kept in a field of kana, the limit counted as entered), `PspRightStickTest`.
+  the byte with 0x80000000; SetData, SetMOutData, SetMOutDataAndGetID and a halfway buffer read as far as it goes the
+  same; no RIFF header there, and no memory there, refused (0x80630006).
+- Android: `PspDialogsTest.keyboardFieldsConvertAsTheCoreDoes` (every case of the shared table through `accept()`),
+  `anUneditedDefaultIsEnteredAsTheGameGaveIt` (the dialog's path, `keyboardTexts()` and `keyboardAnswer()`: the game's
+  text unedited as it was, typed over converted), `keyboardFieldsTakeOnlyTheirInputTypes` and
+  `keyboardFieldsHoldWhatsTypedUntilEntered` (what the field holds while typing: romaji kept in a field of kana, the
+  limit counted as entered), `PspRightStickTest`.
+
+### The review's points
+
+An independent review of the branch (merged with master, `afea54b93`) found one Medium and four Lows, all taken:
+
+- **Medium: the app's keyboard rewrote the game's own text.** The field's input types converted its default too, and
+  the classifier knew too little: Latin was ASCII's letters alone, so é, ñ, ü and ß went from a field of letters, and
+  most symbols on a Japanese keyboard (☆ ★ ♪ ※ → … ・ ￥) from a field of symbols; OK on a default could enter a
+  changed or empty name, where the automatic answer leaves it alone and a PSP's keyboard edits it rather than typing it
+  afresh. Ridge Racer 2 is such a game: its driver name, "XEVIOUS" (a Namco game, by chance), is in a field of small
+  letters alone (input types 4), so the first version entered "xevious". Now the game's own text answered unedited is
+  entered as it is (the app's `entered()`, the core's `dialogAnswered()`: above), and the classifier takes U+00C0-024F's
+  letters and every printed character it had no class for (above). A scripted front end (a scratch runner answering as
+  the app does when OK is pressed on the text untouched) on Ridge Racer 2: the keyboard's "XEVIOUS" taken, the save
+  then made says "Player Name：XEVIOUS", and the game goes on into World Tours and a race.
+- **Low: a blank field taking no letter of "PSP"** (kana alone, digits alone, Russian or Korean alone) had its empty
+  text kept, which a name prompt refuses (Peace Walker asked again for good): it gets the first nickname it takes whole
+  (above), and only a field taking none of them keeps its own text.
+- **Low: pspsdk understated.** Its pspctrl.h names bytes 10 and 11 Rx and Ry, valid on a PSP Go with a DualShock 3, a
+  PS Vita, by hacking or in emulation, and marks Rsrv deprecated: `ctrl.cpp`'s comment, the runner's README and the
+  section above say so, and quote pspautotests' ctrl/sampling on the PSP itself.
+- **Low: two conversions with no shared cases** (and apart on characters past U+FFFF in a field taking all, which the
+  core kept and the app didn't; the core's cut at a field's limit could split a pair): one table of cases now, run by
+  both (above); the core keeps no half of a pair in what it converts, and never cuts a pair in two.
+- **Low: `atrac.cpp` against the sound branch** (#229, which takes `atracContext()` out of the setters' lines this
+  branch had changed, so that whichever merged second met a conflict): the negative size moved into `atracSet()` and
+  `atracSetAndGetID()`, the setters' lines as on master. `git merge-tree` of the two branches now leaves only the
+  documents in conflict, and the merged `atrac.cpp` has #229's setters with this branch's negative size.
+
+Not done: an edited default is converted whole. A PSP's keyboard keeps what the player leaves of its text and types the
+rest; which characters of an edited text are the game's isn't told apart here, so a field whose own default it can't
+type (Ridge Racer 2's capitals in a field of small letters) has the whole text converted once it's edited.
+
+Checks on the final tree, with the branch's runner (`~/phobos-work/scratch/review-b00`): Formula Front International's
+True Analogs camera as before (`c1-right`: level behind the AC at rest after "GO!!!", turned and pitched by the right
+stick; the frames within a mean of 0.7/255 of the previous agent's run); 7th Dragon 2020-II's certificate passed into
+the Diet chamber (frame 1560) and the first conversation (3600); Ridge Racer 2's default entered unchanged (above).

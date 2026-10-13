@@ -1575,8 +1575,12 @@ static auto keyboard() -> void {
 
 //The nickname as each field's input types (SceUtilityOskData's at 16) take it, as a PSP's keyboard types it: full-width
 //where only full-width letters are taken (7th Dragon 2020 and 2020-II, 0x0c00: ASCII "PSP" left 2020's hero
-//nameless), in the one case taken, ASCII where ASCII is among them; a field of full-width spaces is blank too; one
-//taking none of its letters (digits, hiragana) keeps its own text. A game's own text stays as it is.
+//nameless), in the one case taken, ASCII where ASCII is among them; a field of full-width spaces is blank too. One
+//taking none of its letters gets a name it can take (a name prompt refuses an empty answer, as Peace Walker's did):
+//"pi-esu-pi" in hiragana, in katakana and in half-width katakana, the Cyrillic (in the case taken) and Hangul for
+//"PSP", or "1" (full-width where only those digits are), the first it takes whole; one taking none of those whole
+//(kanji alone; symbols alone, which take the kana's long vowel mark and nothing else of them) keeps its own text. A
+//game's own text stays as it is, whatever its characters.
 static auto keyboardInputTypes() -> void {
   KernelMachine m;
   u64 millisecond = Kernel::CPUFrequency / 1000;
@@ -1599,38 +1603,116 @@ static auto keyboardInputTypes() -> void {
     {u"", 0x0004, 8, u"psp"},
     {u"", 0x0c0f, 8, u"PSP"},
     {u"", 0x80000, 8, u"PSP"},
-    {u"", 0x0001, 8, u""},
-    {u"  ", 0x1000, 8, u"  "},
+    {u"", 0x0001, 8, u"1"},
+    {u"", 0x0100, 8, u"\uff11"},
+    {u"  ", 0x1000, 8, u"\u3074\u30fc\u3048\u3059\u3074\u30fc"},
+    {u"", 0x1000, 4, u"\u3074\u30fc\u3048\u3059"},
+    {u"", 0x4000, 8, u"\u30d4\u30fc\u30a8\u30b9\u30d4\u30fc"},
+    {u"", 0x2000, 8, u"\uff8b\uff9f\uff70\uff74\uff7d\uff8b\uff9f\uff70"},
+    {u"", 0x1'0000, 8, u"\u043f\u0441\u043f"},
+    {u"", 0x2'0000, 8, u"\u041f\u0421\u041f"},
+    {u"", 0x4'0000, 8, u"\ud53c\uc5d0\uc2a4\ud53c"},
+    {u"", 0x1001, 8, u"\u3074\u30fc\u3048\u3059\u3074\u30fc"},  //(kana before digits)
+    {u"", 0x8000, 8, u""},
+    {u" ", 0x0200, 8, u" "},
     {u"Bob", 0x0c00, 8, u"Bob"},
+    {u"Ren\u00e9e \u2606", 0x0001, 8, u"Ren\u00e9e \u2606"},
     {u"", 0x40'0000, 8, u"PSP"},  //(no type known: all)
   };
-  m.system.memory.fill(Parameters, 0, 64);
-  m.system.memory.write(4, Parameters, 64);
-  m.system.memory.write(4, Parameters + 48, fields.size());
-  m.system.memory.write(4, Parameters + 52, Fields);
-  for(u32 n = 0; n < fields.size(); n++) {
-    u32 at = Fields + n * 52, in = Texts + n * 0x100, out = in + 0x80;
-    m.system.memory.fill(at, 0, 52);
-    write16(in, fields[n].initial);
-    m.system.memory.fill(out, 0xcc, 0x40);
-    m.system.memory.write(4, at + 8, 1);
-    m.system.memory.write(4, at + 16, fields[n].input);
-    m.system.memory.write(4, at + 20, 1);
-    m.system.memory.write(4, at + 32, in);
-    m.system.memory.write(4, at + 36, 48);
-    m.system.memory.write(4, at + 40, out);
-    m.system.memory.write(4, at + 48, fields[n].limit);
-  }
-  CHECK(m.call("sceUtilityOskInitStart", {Parameters}), 0);
-  m.kernel.cycles += 300 * millisecond;
-  m.kernel.events();
-  CHECK(m.call("sceUtilityOskUpdate", {1}), 0);
-  CHECK(m.call("sceUtilityOskGetStatus", {}), 3);
-  for(u32 n = 0; n < fields.size(); n++) {
-    CHECK(read16(Texts + n * 0x100 + 0x80) == fields[n].expected, true);
-    CHECK(m.system.memory.read(4, Fields + n * 52 + 44), 2);
+  for(u32 first = 0; first < fields.size(); first += 10) {  //(ten fields a dialog: the PSP's keyboard has room for 16)
+    u32 count = std::min<u32>(10, fields.size() - first);
+    m.system.memory.fill(Parameters, 0, 64);
+    m.system.memory.write(4, Parameters, 64);
+    m.system.memory.write(4, Parameters + 48, count);
+    m.system.memory.write(4, Parameters + 52, Fields);
+    for(u32 n = 0; n < count; n++) {
+      u32 at = Fields + n * 52, in = Texts + n * 0x100, out = in + 0x80;
+      m.system.memory.fill(at, 0, 52);
+      write16(in, fields[first + n].initial);
+      m.system.memory.fill(out, 0xcc, 0x40);
+      m.system.memory.write(4, at + 8, 1);
+      m.system.memory.write(4, at + 16, fields[first + n].input);
+      m.system.memory.write(4, at + 20, 1);
+      m.system.memory.write(4, at + 32, in);
+      m.system.memory.write(4, at + 36, 48);
+      m.system.memory.write(4, at + 40, out);
+      m.system.memory.write(4, at + 48, fields[first + n].limit);
+    }
+    CHECK(m.call("sceUtilityOskInitStart", {Parameters}), 0);
+    m.kernel.cycles += 300 * millisecond;
+    m.kernel.events();
+    CHECK(m.call("sceUtilityOskUpdate", {1}), 0);
+    CHECK(m.call("sceUtilityOskGetStatus", {}), 3);
+    for(u32 n = 0; n < count; n++) {
+      bool right = read16(Texts + n * 0x100 + 0x80) == fields[first + n].expected;
+      CHECK(right, true);
+      if(!right) std::printf("  field %u\n", first + n);
+      CHECK(m.system.memory.read(4, Fields + n * 52 + 44), 2);
+    }
+    CHECK(m.call("sceUtilityOskShutdownStart", {}), 0);
+    m.kernel.cycles += 40 * millisecond;
+    m.kernel.events();
+    CHECK(m.call("sceUtilityOskGetStatus", {}), 0);
   }
   CHECK(m.notes.size(), 0);
+}
+
+//The keyboard's conversion against the cases the Android app's tests run through its own (psp-keyboard-cases.txt,
+//beside them): each text as its field's input types and lines take it (Kernel::keyboardConform()).
+static auto keyboardCases() -> void {
+  auto resources = std::filesystem::path(__FILE__).parent_path() / "../../android/app/src/test/resources";
+  std::ifstream file(resources / "psp-keyboard-cases.txt", std::ios::binary);
+  //a text's UTF-16 units: \uXXXX that unit, \n, \t and \\ a line break, a tab and a backslash, the rest UTF-8 (a
+  //character past U+FFFF a pair)
+  auto units = [](const std::string& text) {
+    std::vector<u16> result;
+    for(u64 at = 0; at < text.size();) {
+      u8 lead = text[at];
+      if(lead == '\\' && at + 1 < text.size()) {
+        char escaped = text[at + 1];
+        if(escaped == 'u' && at + 6 <= text.size()) {
+          result.push_back(std::stoul(text.substr(at + 2, 4), nullptr, 16));
+          at += 6;
+          continue;
+        }
+        result.push_back(escaped == 'n' ? '\n' : escaped == 't' ? '\t' : escaped);
+        at += 2;
+        continue;
+      }
+      u32 length = lead < 0x80 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4;
+      u32 character = length == 1 ? lead : lead & (0xff >> (length + 1));
+      for(u32 n = 1; n < length && at + n < text.size(); n++) character = character << 6 | (text[at + n] & 0x3f);
+      if(character >= 0x1'0000) {
+        result.push_back(0xd800 + ((character - 0x1'0000) >> 10));
+        result.push_back(0xdc00 + ((character - 0x1'0000) & 0x3ff));
+      } else {
+        result.push_back(character);
+      }
+      at += length;
+    }
+    return result;
+  };
+  u32 cases = 0, number = 0;
+  for(std::string line; std::getline(file, line);) {
+    number++;
+    if(!line.empty() && line.back() == '\r') line.pop_back();
+    if(line.empty() || line[0] == '#') continue;
+    std::vector<std::string> fields;  //types, lines, the text, what's entered
+    for(u64 start = 0;;) {
+      u64 tab = line.find('\t', start);
+      fields.push_back(line.substr(start, tab == std::string::npos ? tab : tab - start));
+      if(tab == std::string::npos) break;
+      start = tab + 1;
+    }
+    CHECK(fields.size(), 4);
+    if(fields.size() != 4) continue;
+    u32 input = std::stoul(fields[0], nullptr, 16), lines = std::stoul(fields[1]);
+    bool right = Kernel::keyboardConform(units(fields[2]), input, lines) == units(fields[3]);
+    CHECK(right, true);
+    if(!right) std::printf("  psp-keyboard-cases.txt line %u\n", number);
+    cases++;
+  }
+  CHECK(cases >= 40, true);
 }
 
 //Optional modules: loaded once (again: already loaded), unloaded once (again: not loaded), 0x107, 0x108 and 0x308
@@ -1693,7 +1775,8 @@ auto utilityTests() -> Tests {
     {"utility savedata lists answered with no front end (7th Dragon 2020, Brandish)", savedataListAnswers},
     {"utility savedata trace", savedataTrace},
     {"memory stick free space", stickSpace}, {"utility dialogs", dialogs},
-    {"utility keyboard", keyboard}, {"utility keyboard input types", keyboardInputTypes}, {"utility modules", modules},
+    {"utility keyboard", keyboard}, {"utility keyboard input types", keyboardInputTypes},
+    {"utility keyboard conversion: the app's cases", keyboardCases}, {"utility modules", modules},
     {"utility game data install", gamedataInstall}, {"utility dialog sizes and statuses", dialogStatuses},
     {"utility save dialog closed by priority", savedataClosing},
   };

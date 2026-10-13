@@ -269,8 +269,8 @@ static auto frontMessageRefused() -> void {
 //The keyboard: each field as the game gave it (its description and text as UTF-8, the most it takes: its room less
 //the NUL, or its limit where that's less, its input types, lines and language); answered, each field's text as
 //entered (UTF-8 to UTF-16, characters the PSP hasn't left out, as its input types and lines take it, cut to its
-//most), CHANGED and the result 0; backed out of, each CANCELLED and its output as it was. Texts for another count of
-//fields are refused.
+//most; the game's own text, answered unedited, as it was), CHANGED and the result 0; backed out of, each CANCELLED
+//and its output as it was. Texts for another count of fields are refused.
 static auto frontKeyboard() -> void {
   FrontMachine m;
   auto& memory = m.system.memory;
@@ -377,6 +377,32 @@ static auto frontKeyboard() -> void {
   CHECK(output(1) == u"a.b/1?x=2" && result(1) == 2, true);
   CHECK(output(2) == u"psp" && result(2) == 2, true);
   CHECK(output(3) == u"a\nb" && output(4) == u"ab" && output(5) == u"a\nb", true);
+  CHECK(m.close("sceUtilityOsk"), true);
+  //the game's own text answered as it was shown, unedited, entered as the game gave it, whatever the field's types
+  //(a PSP's keyboard edits the text it starts with): an accented letter and a star in a field of full-width letters,
+  //and a game pad (a pair, shown as U+FFFD twice) in a field taking all, kept whole, or where the limit falls inside
+  //it cut before it; answered otherwise, each as its field takes it
+  fields = {{u"Name", u"Ren\u00e9e \u2606", 0x0c00, 1, 48, 16}, {u"Pad", u"a\xd83c\xdfae", 0, 1, 48, 8},
+            {u"Cut", u"ab\xd83c\xdfae", 0, 1, 48, 3}};
+  setUp();
+  CHECK(m.start("sceUtilityOsk") && !m.update("sceUtilityOsk"), true);
+  request = m.kernel.dialogShown();
+  CHECK(request.fields.size() == 3 && request.fields[1].text == "a\xef\xbf\xbd\xef\xbf\xbd", true);
+  answer = {};
+  answer.id = request.id;
+  for(auto& shown : request.fields) answer.texts.push_back(shown.text);
+  CHECK(m.kernel.dialogAnswer(answer) && !m.update("sceUtilityOsk"), true);
+  CHECK(output(0) == u"Ren\u00e9e \u2606" && result(0) == 2, true);
+  CHECK(output(1) == u"a\xd83c\xdfae" && output(2) == u"ab", true);
+  CHECK(m.close("sceUtilityOsk"), true);
+  setUp();
+  CHECK(m.start("sceUtilityOsk") && !m.update("sceUtilityOsk"), true);
+  answer = {};
+  answer.id = m.kernel.dialogShownID();
+  answer.texts = {"Ren\xc3\xa9" "e \xe2\x98\x86!", "a\xef\xbf\xbd", "abcd"};
+  CHECK(m.kernel.dialogAnswer(answer) && !m.update("sceUtilityOsk"), true);
+  CHECK(output(0) == u"\uff32\uff45\uff4e\uff45\u3000" && result(0) == 2, true);
+  CHECK(output(1) == u"a\ufffd" && output(2) == u"abc", true);
   CHECK(m.close("sceUtilityOsk"), true);
 }
 
@@ -754,7 +780,7 @@ static auto frontBytes() -> void {
   request.id = 7, request.kind = 1, request.language = 2, request.circle = true;
   request.text = "Caf\xc3\xa9?", request.error = 0x8002'0323, request.buttons = 2, request.firstNo = true;
   request.back = true, request.ok = "Hai", request.cancel = "Iya";
-  request.fields = {{"Name", "Snake", 8, 0x0f, 1, 2}, {"PIN", "", 4, 1, 1, 0}};
+  request.fields = {{"Name", "Snake", 8, 0x0f, 1, 2, {}}, {"PIN", "", 4, 1, 1, 0, {}}};
   request.mode = 5, request.focus = 1, request.deleted = true;
   Request::Save first;
   first.name = "SLOT0", first.title = "A game", first.saveTitle = "Chapter 3", first.detail = "Line one\nline two";

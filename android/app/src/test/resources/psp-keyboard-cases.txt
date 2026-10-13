@@ -1,0 +1,70 @@
+# The PSP keyboard's text as a field's input types and lines take it: the conversion the PSP core makes of an answer
+# (ares/psp/kernel/utility.cpp's keyboardConform()) and the app makes as it enters one (PspKeyboardField.accept(),
+# android/app/src/main/java/com/phobos/emulator/util/PspDialogs.kt), each checked against every case here, by
+# tests/psp/utility.cpp and by PspDialogsTest. A case is a line of four fields apart by tabs: the field's input types
+# (psputility_osk.h's PSP_UTILITY_OSK_INPUTTYPE_* bits, in hexadecimal; 0 for all), its lines, the text, and what's
+# entered. In the texts \uXXXX is that UTF-16 unit, \n a line break, \t a tab and \\ a backslash; the rest is as it is
+# (UTF-8). Lines starting with # and empty lines are passed over.
+
+# A field taking all: everything but control characters (a line break only in several lines) and halves of pairs
+# (characters past U+FFFF, a game pad's among them, which the PSP hasn't got)
+0	1	Big Boss!	Big Boss!
+0	1	a\nb	ab
+0	3	a\n\tb	a\nb
+0	1	Sna\ud83c\udfaeke\u2606	Snake\u2606
+0	1	a\ud800b\udc00c	abc
+0	1	a\u007fb\u0085c	abc
+0	1	Ren\u00e9e \u263a\ufe0f	Ren\u00e9e \u263a\ufe0f
+400000	1	\u2606a	\u2606a
+
+# 7th Dragon 2020's name: full-width letters alone (ASCII typed full-width, the space too, the digit left out; no
+# full-width accented letters)
+c00	1	Bob 7A	\uff22\uff4f\uff42\u3000\uff21
+c00	1	\uff30\uff33\uff30	\uff30\uff33\uff30
+c00	1	Ren\u00e9e	\uff32\uff45\uff4e\uff45
+
+# Latin letters: ASCII's and U+00C0-024F's, by case (the other case only for ASCII's)
+4	1	\uff30S P	ps p
+4	1	Ren\u00e9e M\u00fcller \u00df \u00dcnal	ren\u00e9e m\u00fcller \u00df nal
+8	1	\u00e9t\u00c9	T\u00c9
+c	1	\u00c0 la carte, \u0141\u00f3d\u017a	\u00c0 la carte \u0141\u00f3d\u017a
+c	1	\u03a9x\u0456	x
+c	1	a\u00d7b\u00f7c	abc
+c	1	e\u0301	e
+f	1	\uff30SP\u30001	PSP 1
+2	1	a!\u00a3?	!?
+
+# Japanese symbols: full-width signs, the kana's marks, and every other printed character classed nowhere else
+200	1	\u2606\u2605\u266a\u203b\u2192\u2026\u30fb\uffe5	\u2606\u2605\u266a\u203b\u2192\u2026\u30fb\uffe5
+200	1	!a1	\uff01
+200	1	\u263a\ufe0f\u200d\ufeff\u00ad	\u263a
+200	1	\u03a9\u03b1\u2500\u00d7\u00f7\u00b0\u00a3	\u03a9\u03b1\u2500\u00d7\u00f7\u00b0\u00a3
+200	1	\ue000\ufffd\ufdd0\u2606	\u2606
+
+# Kana: the other kana where the field takes it, the long vowel mark in both, the marks as they are
+1000	1	\u304b\u306a\u30fc\u30fb\u309b	\u304b\u306a\u30fc\u309b
+1000	1	\u30ab\u30ca	\u304b\u306a
+1000	1	ka\u3042	\u3042
+4000	1	\u304b\u306a	\u30ab\u30ca
+4000	1	\u30fb\u30fd	\u30fb\u30fd
+2000	1	\uff76\u30ab	\uff76
+
+# Digits, Russian, Korean, a web address
+100	1	1 2	\uff11\uff12
+1	1	1a2b3c45	12345
+1	1	\uff11\uff12	12
+10000	1	\u0414a\u0410	\u0434\u0430
+20000	1	\u0451\u0436	\u0401\u0416
+40000	1	\ud53c\uc5d0 PSP	\ud53c\uc5d0\u0020
+80000	1	a/b?9\u3042	a/b?9
+80000	1	\uff41\uff0f	a/
+
+# Line breaks in a field of a type: kept in several lines, left out of one
+4	2	a\nb	a\nb
+4	1	\uff30S\np	psp
+
+# Every character of U+00C0-024F: the lower case letters in a field of small letters, the others in a field of
+# capitals, and the two that aren't letters (multiplication and division signs) in a field of Japanese symbols
+4	1	ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿĀāĂăĄąĆćĈĉĊċČčĎďĐđĒēĔĕĖėĘęĚěĜĝĞğĠġĢģĤĥĦħĨĩĪīĬĭĮįİıĲĳĴĵĶķĸĹĺĻļĽľĿŀŁłŃńŅņŇňŉŊŋŌōŎŏŐőŒœŔŕŖŗŘřŚśŜŝŞşŠšŢţŤťŦŧŨũŪūŬŭŮůŰűŲųŴŵŶŷŸŹźŻżŽžſƀƁƂƃƄƅƆƇƈƉƊƋƌƍƎƏƐƑƒƓƔƕƖƗƘƙƚƛƜƝƞƟƠơƢƣƤƥƦƧƨƩƪƫƬƭƮƯưƱƲƳƴƵƶƷƸƹƺƻƼƽƾƿǀǁǂǃǄǅǆǇǈǉǊǋǌǍǎǏǐǑǒǓǔǕǖǗǘǙǚǛǜǝǞǟǠǡǢǣǤǥǦǧǨǩǪǫǬǭǮǯǰǱǲǳǴǵǶǷǸǹǺǻǼǽǾǿȀȁȂȃȄȅȆȇȈȉȊȋȌȍȎȏȐȑȒȓȔȕȖȗȘșȚțȜȝȞȟȠȡȢȣȤȥȦȧȨȩȪȫȬȭȮȯȰȱȲȳȴȵȶȷȸȹȺȻȼȽȾȿɀɁɂɃɄɅɆɇɈɉɊɋɌɍɎɏ	ßàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿāăąćĉċčďđēĕėęěĝğġģĥħĩīĭįıĳĵķĸĺļľŀłńņňŉŋōŏőœŕŗřśŝşšţťŧũūŭůűųŵŷźżžſƀƃƅƈƌƍƒƕƙƚƛƞơƣƥƨƪƫƭưƴƶƹƺƽƾƿǆǉǌǎǐǒǔǖǘǚǜǝǟǡǣǥǧǩǫǭǯǰǳǵǹǻǽǿȁȃȅȇȉȋȍȏȑȓȕȗșțȝȟȡȣȥȧȩȫȭȯȱȳȴȵȶȷȸȹȼȿɀɂɇɉɋɍɏ
+8	1	ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿĀāĂăĄąĆćĈĉĊċČčĎďĐđĒēĔĕĖėĘęĚěĜĝĞğĠġĢģĤĥĦħĨĩĪīĬĭĮįİıĲĳĴĵĶķĸĹĺĻļĽľĿŀŁłŃńŅņŇňŉŊŋŌōŎŏŐőŒœŔŕŖŗŘřŚśŜŝŞşŠšŢţŤťŦŧŨũŪūŬŭŮůŰűŲųŴŵŶŷŸŹźŻżŽžſƀƁƂƃƄƅƆƇƈƉƊƋƌƍƎƏƐƑƒƓƔƕƖƗƘƙƚƛƜƝƞƟƠơƢƣƤƥƦƧƨƩƪƫƬƭƮƯưƱƲƳƴƵƶƷƸƹƺƻƼƽƾƿǀǁǂǃǄǅǆǇǈǉǊǋǌǍǎǏǐǑǒǓǔǕǖǗǘǙǚǛǜǝǞǟǠǡǢǣǤǥǦǧǨǩǪǫǬǭǮǯǰǱǲǳǴǵǶǷǸǹǺǻǼǽǾǿȀȁȂȃȄȅȆȇȈȉȊȋȌȍȎȏȐȑȒȓȔȕȖȗȘșȚțȜȝȞȟȠȡȢȣȤȥȦȧȨȩȪȫȬȭȮȯȰȱȲȳȴȵȶȷȸȹȺȻȼȽȾȿɀɁɂɃɄɅɆɇɈɉɊɋɌɍɎɏ	ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞĀĂĄĆĈĊČĎĐĒĔĖĘĚĜĞĠĢĤĦĨĪĬĮİĲĴĶĹĻĽĿŁŃŅŇŊŌŎŐŒŔŖŘŚŜŞŠŢŤŦŨŪŬŮŰŲŴŶŸŹŻŽƁƂƄƆƇƉƊƋƎƏƐƑƓƔƖƗƘƜƝƟƠƢƤƦƧƩƬƮƯƱƲƳƵƷƸƻƼǀǁǂǃǄǅǇǈǊǋǍǏǑǓǕǗǙǛǞǠǢǤǦǨǪǬǮǱǲǴǶǷǸǺǼǾȀȂȄȆȈȊȌȎȐȒȔȖȘȚȜȞȠȢȤȦȨȪȬȮȰȲȺȻȽȾɁɃɄɅɆɈɊɌɎ
+200	1	ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿĀāĂăĄąĆćĈĉĊċČčĎďĐđĒēĔĕĖėĘęĚěĜĝĞğĠġĢģĤĥĦħĨĩĪīĬĭĮįİıĲĳĴĵĶķĸĹĺĻļĽľĿŀŁłŃńŅņŇňŉŊŋŌōŎŏŐőŒœŔŕŖŗŘřŚśŜŝŞşŠšŢţŤťŦŧŨũŪūŬŭŮůŰűŲųŴŵŶŷŸŹźŻżŽžſƀƁƂƃƄƅƆƇƈƉƊƋƌƍƎƏƐƑƒƓƔƕƖƗƘƙƚƛƜƝƞƟƠơƢƣƤƥƦƧƨƩƪƫƬƭƮƯưƱƲƳƴƵƶƷƸƹƺƻƼƽƾƿǀǁǂǃǄǅǆǇǈǉǊǋǌǍǎǏǐǑǒǓǔǕǖǗǘǙǚǛǜǝǞǟǠǡǢǣǤǥǦǧǨǩǪǫǬǭǮǯǰǱǲǳǴǵǶǷǸǹǺǻǼǽǾǿȀȁȂȃȄȅȆȇȈȉȊȋȌȍȎȏȐȑȒȓȔȕȖȗȘșȚțȜȝȞȟȠȡȢȣȤȥȦȧȨȩȪȫȬȭȮȯȰȱȲȳȴȵȶȷȸȹȺȻȼȽȾȿɀɁɂɃɄɅɆɇɈɉɊɋɌɍɎɏ	×÷

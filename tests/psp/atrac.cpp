@@ -131,8 +131,9 @@ static auto atracIDs() -> void {
 
 //Setting a file (audio/atrac/setdata, headerfields): one of the other codec, an ID not handed out, no bytes, bytes
 //that aren't a RIFF file, and a header whose samples, offset and decoder delay need more frames than its data holds
-//are refused; sceAtracSetDataAndGetID hands out an ID of the file's codec. The four given the whole file take a
-//size whose top bit is set as far as memory goes (none at all: no file). Without decoders (a build without FFmpeg)
+//are refused; sceAtracSetDataAndGetID hands out an ID of the file's codec. The four given the whole file, and a
+//halfway one said to be read as far as its buffer goes, take a size whose top bit is set as far as memory goes (none
+//at all: no file). Without decoders (a build without FFmpeg)
 //every file is refused as unreadable, as before there were any.
 static auto atracSetting() -> void {
   Machine m;
@@ -170,8 +171,12 @@ static auto atracSetting() -> void {
   m.call("sceAtracGetRemainFrame", {1, R});
   CHECK(word(m, R), ~0u);
   m.call("sceAtracReleaseAtracID", {1});
-  //the same for the others given the whole file: on an ID, and the mono ones (the file read: a stereo one refused)
+  //the same for the others given the whole file: on an ID, and the mono ones (the file read: a stereo one refused);
+  //and a halfway buffer said to be read as far as it goes
   CHECK(m.call("sceAtracSetData", {plus, File, 0xffff'ffff}), 0);
+  m.call("sceAtracGetRemainFrame", {plus, R});
+  CHECK(word(m, R), ~0u);
+  CHECK(m.call("sceAtracSetHalfwayBuffer", {plus, File, 0xffff'ffff, 0xffff'ffff}), 0);
   m.call("sceAtracGetRemainFrame", {plus, R});
   CHECK(word(m, R), ~0u);
   CHECK(m.call("sceAtracSetMOutData", {plus, File, 0xffff'ffff}), 0x8063'0019);

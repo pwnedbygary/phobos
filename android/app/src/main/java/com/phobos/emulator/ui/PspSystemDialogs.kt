@@ -75,12 +75,14 @@ import com.phobos.emulator.util.PspDialogAnswer
 import com.phobos.emulator.util.PspDialogRequest
 import com.phobos.emulator.util.PspKeyboardField
 import com.phobos.emulator.util.PspSave
-import com.phobos.emulator.util.accept
 import com.phobos.emulator.util.backBit
 import com.phobos.emulator.util.backGlyph
 import com.phobos.emulator.util.confirmBit
 import com.phobos.emulator.util.confirmGlyph
 import com.phobos.emulator.util.digitsOnly
+import com.phobos.emulator.util.entered
+import com.phobos.emulator.util.keyboardAnswer
+import com.phobos.emulator.util.keyboardTexts
 import com.phobos.emulator.util.listed
 import com.phobos.emulator.util.nothingThere
 import com.phobos.emulator.util.pspSaveHeading
@@ -284,11 +286,11 @@ private fun PspMessageDialog(
 
 /**
  * The keyboard: a text field for each of the game's fields (its description the title, or each one's label), with
- * Android's own keyboard, holding the game's own text at first. Each takes no more than the game allows, and is
- * entered as its input types take it (digits alone where it asks for digits, letters typed in ASCII made full-width
- * where it takes only full-width ones), the game's own text too: the field shows what's typed, as Android's keyboard
- * composes it, and below it what will be entered where that differs. OK, Done or the confirm button (or Start) enters
- * the text; Cancel or the back button backs out.
+ * Android's own keyboard, holding the game's own text at first. Each takes no more than the game allows, and what's
+ * typed is entered as its input types take it (digits alone where it asks for digits, letters typed in ASCII made
+ * full-width where it takes only full-width ones), while the game's own text left as it was is entered as it is: the
+ * field shows what's typed, as Android's keyboard composes it, and below it what will be entered where that differs.
+ * OK, Done or the confirm button (or Start) enters the text; Cancel or the back button backs out.
  */
 @Composable
 private fun PspKeyboardDialog(
@@ -298,9 +300,8 @@ private fun PspKeyboardDialog(
     onAnswer: (PspDialogAnswer) -> Unit,
 ) {
     val fields = request.fields
-    var texts by remember(request.id) { mutableStateOf(fields.map { it.typing(it.text) }) }
-    fun enter() =
-        onAnswer(PspDialogAnswer(request.id, texts = texts.mapIndexed { n, text -> fields[n].accept(text) }))
+    var texts by remember(request.id) { mutableStateOf(request.keyboardTexts()) }
+    fun enter() = onAnswer(request.keyboardAnswer(texts))
     fun cancel() = onAnswer(PspDialogAnswer(request.id, cancelled = true))
     val input = remember { PspDialogInput() }
     val first = fields.indexOfFirst { it.maxLength > 0 }  //(the field taking the focus; with none, the dialog does)
@@ -365,7 +366,7 @@ private fun PspTextField(
         singleLine = field.lines <= 1,
         maxLines = field.lines.coerceIn(1, 6),
         supportingText = {
-            val entered = field.accept(value)
+            val entered = field.entered(value)
             val count = "${entered.length} / ${field.maxLength}"
             Text(
                 when {

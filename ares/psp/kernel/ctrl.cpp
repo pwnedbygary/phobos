@@ -6,14 +6,18 @@
 //
 //How each call behaves follows uOFW's reading of the PSP's own controller driver (ctrl.c).
 //
-//A right stick, which a PSP hasn't got: a compatibility convention, not the hardware's behavior. A PSP leaves
-//SceCtrlData's six bytes after the stick (pspsdk's Rsrv) at zero; PPSSPP reports a second stick in the first two of
-//them, X at byte 10 and Y at 11, centred at 128, and fan patches made for it read them there: the Armored Core "True
-//Analogs" mods turn and look with them, and take zeros for the stick held up and left (the camera stuck on the sky,
-//the AC turning on its own). Every sample carries the host's right stick there, 128 each way when it's left alone,
-//whatever the game: centred too unless sampling is analog, as the stick is, and the last four bytes stay zero. The
-//system sets it each frame from the front end's "R-Stick X" and "R-Stick Y". It isn't in save states: a loaded
-//state's samples read it centred until the next sample.
+//A right stick, which the PSP itself hasn't got. pspsdk's pspctrl.h names SceCtrlData's bytes 10 and 11, after the
+//stick, Rx and Ry, a right stick's X and Y, "valid when using DualShock 3 on PSP GO, a PS VITA system, through
+//hardware/software hacking, or system emulation" (the four after them reserved, "unused by the firmware"; Rsrv, its
+//older name for all six, it marks deprecated). pspautotests' ctrl/sampling, recorded on a PSP, says "The PSP doesn't
+//natively support a right analog stick, but official emulators do", and zeroes their centred 128 so its results
+//compare. PPSSPP fills them from the host's right stick, centred at 128, and fan patches made for it read them there:
+//the Armored Core "True Analogs" mods turn and look with them, and take zeros for the stick held up and left (the
+//camera stuck on the sky, the AC turning on its own). Every sample carries the host's right stick there, 128 each way
+//when it's left alone, whatever the game (Phobos's choice: a PSP as those systems have it): centred too unless
+//sampling is analog, as the stick is, and the last four bytes stay zero. The system sets it each frame from the front
+//end's "R-Stick X" and "R-Stick Y". It isn't in save states: a loaded state's samples read it centred until the next
+//sample.
 
 //The buttons a game sees: the pad, the four face buttons, the shoulders, start and select, the hold switch, and
 //0x10000, which tells it the system has taken the controls (for its HOME menu). The rest (volume, the screen and
