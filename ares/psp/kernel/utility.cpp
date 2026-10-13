@@ -26,9 +26,10 @@
 //    folder, erasing a data file the file alone (and its name from PARAM.SFO's list). Names that would lead out of
 //    the save's folder, and buffers outside the program's memory, are refused. The PSP also encrypts the secure files
 //    and hashes them in PARAM.SFO: not done here (the files are only Phobos's to read; the hashes are zeros). A
-//    list's load that names no save takes the one its dialog would focus (that one broken, the one the same focus
-//    takes among those that aren't), a list's save the list's first name, the name written back either way
-//    (savedataUnshown()).
+//    list's load takes the save its dialog would focus (that one broken, the one the same focus takes among those
+//    that aren't), a list's save that names none (or a pattern, which names none there) the list's first name, the
+//    name written back either way (savedataUnshown()); the list mode lists the saves its save name takes as a pattern
+//    ('*', '?').
 //  - A message: answered at once, as if the player pressed Yes (or OK), the message noted.
 //  - The keyboard: each field's text entered as it is, an empty one given the console's nickname, each CHANGED
 //    (keyboard()).
@@ -112,6 +113,36 @@ namespace {
     if(name.empty() || name.size() >= field || name == "." || name == "..") return false;
     if(name.find_first_of("/\\:") != std::string::npos) return false;
     return std::none_of(name.begin(), name.end(), [](char c) { return u8(c) < 0x20; });
+  }
+
+  //Whether a save's name is a pattern, as the list mode takes its save's name ('*' for any run of characters, '?' for
+  //any one: utility/savedata/idlist's "A?C" listed its one save, ABC). It names no save a memory stick can hold: FAT
+  //takes neither character in a name (the same test's open of a file in ms0:/PSP/SAVEDATA/TEST99901A?C/ was
+  //0x80010016, invalid, where one not there is 0x80010002).
+  auto savePattern(const std::string& name) -> bool {
+    return name.find_first_of("*?") != std::string::npos;
+  }
+
+  //Whether a pattern (savePattern()'s) takes a name whole: '*' any run of its characters (none too), '?' any one, any
+  //other character itself, as it's given (chosen: a FAT stick keeps a name's case, and the folders a game lists are
+  //its own, named as it names them).
+  auto patternTakes(const std::string& pattern, const std::string& name) -> bool {
+    u64 at = 0, from = 0, star = std::string::npos, resume = 0;
+    while(from < name.size()) {
+      if(at < pattern.size() && pattern[at] == '*') {
+        star = at++;
+        resume = from;
+      } else if(at < pattern.size() && (pattern[at] == '?' || pattern[at] == name[from])) {
+        at++, from++;
+      } else if(star != std::string::npos) {  //(the last '*' takes one more character, and the rest is tried again)
+        at = star + 1;
+        from = ++resume;
+      } else {
+        return false;
+      }
+    }
+    while(at < pattern.size() && pattern[at] == '*') at++;
+    return at == pattern.size();
   }
 
   //A keyboard field's text in the program's memory (UTF-16, ending in a NUL): as far as it goes there, and no more
@@ -480,9 +511,10 @@ namespace {
 //A savedata request as the trace gives it: its mode (pspsdk's name), the structure's size, the game's and the save's
 //names (as the game gave them), a list's names (8 of them, and how many in all), a list dialog's focus (in the sizes
 //that have it) and the save chosen from the list (by a front end's player or the automatic answer), the data file's
-//name, the buffer, its size and the data's, and whether the save it names (with none chosen, a list's first, as
-//savedataMode() takes it) is on the memory stick; the sizes mode's msData, the list mode's most, the files mode's most
-//of each kind, the size mode's files; a save mode's title.
+//name, the buffer, its size and the data's, and whether the save it names (with none named, in a list's load or save
+//from a list a pattern naming none, and none chosen, a list's first, as savedataMode() takes it) is on the memory
+//stick; the sizes mode's msData, the list mode's most, the files mode's most of each kind, the size mode's files; a
+//save mode's title.
 auto Kernel::savedataRequest(u32 p, const std::string* chosen) -> std::string {
   //(the parameters' words where they're in memory: a read past it is noted and counted in the machine's state)
   auto word = [&](u32 at) -> u32 { return memory.reaches(p + at, 4) ? memory.read(4, p + at) : 0; };
@@ -496,6 +528,8 @@ auto Kernel::savedataRequest(u32 p, const std::string* chosen) -> std::string {
   if(mode < std::size(Modes)) text += " (" + std::string(Modes[mode]) + ")";
   text += ", size " + std::to_string(size) + ", game " + traceName(game) + ", save " + traceName(save);
   std::string used = save == "<>" ? std::string{} : save, first;
+  bool listed = (mode == 4 || mode == 5) && names && !memory.readString(names, 20).empty();  //(as savedataMode())
+  if(listed && savePattern(used)) used.clear();
   if(names && mode >= 4 && mode <= 6) {
     u32 count = 0;
     text += ", list";
@@ -614,22 +648,36 @@ auto Kernel::savedataMode(u32 p, const std::string* chosen) -> u32 {
   u32 buffer = memory.read(4, p + 116), bufferSize = memory.read(4, p + 120), dataSize = memory.read(4, p + 124);
   u32 refused = savedataRefusal(mode);
   std::error_code error;
-  if(mode == 11) return savedataList(p, game);  //(the game's name only picks the folders listed)
+  if(mode == 11) return savedataList(p, game, save);
   //"<>" names no save of its own: the PSP takes it as none, the save's folder the game's name alone, as the save's
   //name and as a list's choice (where it stands for any name). Taken as a name, it made folders no PSP's memory stick
   //can hold ('<' and '>' aren't allowed there), which the games looking for their saves again never found: Shining
   //Blade, Space Invaders Extreme and Valkyria Chronicles II made a save and called it corrupted.
   auto unnamed = [](std::string& name) { if(name == "<>") name.clear(); };
   unnamed(save);
+  //Nor does a pattern (savePattern()) in a list's load or save from a list (one with a first name), where the save's
+  //name only names the save the dialog focuses at first (dialogFocus()): Dissidia Final Fantasy and its 012 keep
+  //"GameData*" from the list mode for their list loads, which looked for a folder of that name, found none, and went
+  //back to the title. Anywhere else a pattern is taken as a name, which no save has: a load, read, files request or
+  //delete finds none, as before (a list delete with no front end deletes the save it names), and a save is refused
+  //below. (Chosen: with no list a pattern isn't taken as none, which would make it the game's folder alone, a save
+  //of its own the game may keep there.)
+  u32 names = memory.read(4, p + 96);
+  bool listed = (mode == 4 || mode == 5) && names && !memory.readString(names, 20).empty();
+  if(listed && savePattern(save)) save.clear();
   if(chosen) {
     save = *chosen;
-  } else if((mode == 4 || mode == 5) && save.empty() && memory.read(4, p + 96)) {  //from a list: its first name
-    save = memory.readString(memory.read(4, p + 96), 20);
+  } else if((mode == 4 || mode == 5) && save.empty() && names) {  //from a list: its first name
+    save = memory.readString(names, 20);
     if(save.empty()) return refused;
     unnamed(save);
   }
   //(Valhalla Knights 2 asks for sizes with no names, and took a refusal for a memory stick too full to save on.)
   if(mode != 8 && (!plainName(game, 13) || (!save.empty() && !plainName(save, 20)))) return refused;
+  //A save mode is refused a pattern as a name that isn't plain is, making nothing (chosen: no recording saves under
+  //one, and no memory stick holds its folder). Writing data (17, 18) under one is refused so too, where it was NO_DATA.
+  bool saving = mode == 1 || mode == 3 || mode == 5 || mode == 13 || mode == 14 || mode == 17 || mode == 18;
+  if(saving && savePattern(save)) return refused;
   bool filed = mode <= 5 || (mode >= 13 && mode <= 20);  //the modes that read, write or erase the data file
   if(filed && !fileName.empty() && !plainName(fileName, 13)) return refused;
   std::string folder = savePath(game + save);
@@ -922,12 +970,17 @@ auto Kernel::savedataNeeded(u32 p, u32 dataSize) -> u64 {
   return total;
 }
 
-//The list mode (savedata()'s 11): the game's saves, its folders in SAVEDATA whose names start with the game's, into
-//a SceUtilitySavedataIdListInfo (from 1524: the most to list, how many were listed, the entries). Each entry's dates
-//are its PARAM.SFO's, as PPSSPP gives them (the request names no file to date a save by), or for a save without one,
-//its folder's (chosen; none for a folder that leads off the stick). As far as the host can tell them (nothing here
-//throws).
-auto Kernel::savedataList(u32 p, const std::string& game) -> u32 {
+//The list mode (savedata()'s 11): the game's saves the request's save name takes as a pattern (savePattern(),
+//patternTakes()), its folders in SAVEDATA whose names are the game's and then a name the pattern takes, into a
+//SceUtilitySavedataIdListInfo (from 1524: the most to list, how many were listed, the entries). utility/savedata/
+//idlist's "A?C" listed ABC, its one save: the name is a pattern, not a save's name. That the saves it doesn't take are
+//left out, and a name with neither '*' nor '?' lists that save alone, is chosen, as the games mean their patterns:
+//every folder starting with the game's name was listed, and Final Fantasy Type-0's "GAMEDATA*", asked for one save,
+//was given its SYSTEMDATA. An empty save name, or "<>", lists every save of the game's (chosen, as before: no
+//recording lists with either, and they name no save of their own anywhere else). Each entry's dates are its
+//PARAM.SFO's, as PPSSPP gives them (the request names no file to date a save by), or for a save without one, its
+//folder's (chosen; none for a folder that leads off the stick). As far as the host can tell them (nothing here throws).
+auto Kernel::savedataList(u32 p, const std::string& game, const std::string& save) -> u32 {
   namespace fs = std::filesystem;
   u32 list = memory.read(4, p + 1524);
   if(!list) return 0;
@@ -936,10 +989,12 @@ auto Kernel::savedataList(u32 p, const std::string& game) -> u32 {
   if(!resolve("ms0:/PSP/SAVEDATA", saves, normalized)) {
     std::vector<std::string> names;
     std::error_code error;
+    bool every = save.empty() || save == "<>";
     for(fs::directory_iterator at(saves, error), end; !error && at != end; at.increment(error)) {
       std::error_code unread;
       auto name = at->path().filename().string();
-      if(at->is_directory(unread) && name.compare(0, game.size(), game) == 0) names.push_back(name);
+      if(!at->is_directory(unread) || name.compare(0, game.size(), game)) continue;
+      if(every || patternTakes(save, name.substr(game.size()))) names.push_back(name);
     }
     std::sort(names.begin(), names.end());
     for(auto& name : names) {

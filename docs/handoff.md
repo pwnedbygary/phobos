@@ -64,6 +64,38 @@ room: the games' own code and traces, pspautotests' recordings; PPSSPP read only
 - **Scratch**: `~/phobos-work/scratch/font-b03/` on the Mac it was made on (runs, traces, comparison sheets, the scratch
   tracer's patch), not in the repository.
 
+## PSP: savedata's patterns — Dissidia's Load Game, Final Fantasy Type-0's list; Disgaea Infinite's New was Continue — 2026-10-13
+
+Branch `cursor/psp-savedata3-2b67`, on master (1d9308714, #228). docs/psp-core.md, part 84, has the evidence. Clean
+room: the games' own requests (traced), Disgaea Infinite's own code (a RAM dump read with LLVM's MIPS disassembler, a
+scratch runner following its variables), pspsdk's psputility_savedata.h, pspautotests' utility/savedata/idlist,
+PPSSPP's notes only as a description of the PSP; JPCSP not read. Save states are unchanged (StateVersion 26).
+- **Dissidia Final Fantasy and Dissidia 012** (Load Game back to the title): their list load keeps "GameData*", the
+  list mode's pattern, as its save name, and the kernel took a list only for a request naming no save, so it looked
+  for a save named "GameData*" and said NO_DATA. Fix (`utility.cpp`, `savePattern()`; `dialogs.cpp`): a save's name
+  with '*' or '?' is a pattern, naming no save (FAT holds neither character); in a list's load or save from a list it
+  names none, as "<>" doesn't. Now: GameData00 loads and both games go on where the save was made.
+- **The same mistake elsewhere**: every list load answered with no front end now takes what its dialog focuses, the
+  request's own save name only naming focus 0's pick (Disgaea's Continue names DIP000 beside 32 slots: with its save
+  moved to DIP003 it now loads it, where master said no data); a list save naming a pattern takes the list's first
+  name; a pattern in a list is no save; with no list a pattern is a name no save has (a load finds none, a save is
+  refused); no save is made under a pattern, and the app's dialog asks for none.
+- **Final Fantasy Type-0** (its "GAMEDATA*" list answered with SYSTEMDATA): the list mode listed every folder of the
+  game's. Fix (`savedataList()`, `patternTakes()`): the saves the pattern takes ('*' any run, '?' any one; idlist's
+  "A?C" listed its one save, ABC; leaving out the rest is chosen); "" and "<>" still list every save. Now: listed 0,
+  the game as before.
+- **Disgaea Infinite** (New back to the title): not an emulator bug. Its title's cursor starts on Continue (index 1
+  in the game's data; only Up and Down change it), so the play-tester's Cross was Continue: a list load of its slots
+  on an empty stick, NO_DATA, and the game's code goes back to the title for any answer but 0, a cancel included. New
+  (Up once) starts the story with master's runner as with this one. Nothing at boot writes its system data: its only
+  saving requests are its save's (Start in the story: a list save to DIP000, then DIS000 autosaved), and Continue
+  loads that save.
+- **The #228 games** (After Burner, Brandish, 7th Dragon 2020, Colin McRae Rally 2005 Plus) save and load as before:
+  every trace, file and capture the same with master's runner and this branch's.
+- **Review**: an independent read-only review's points are all taken (part 84 lists them); left as before: a list
+  delete answered with no front end and naming no save deletes the game's own folder.
+- **Checks**: see part 84.
+
 ## PSP Vulkan: its waits for its own pixels gone — moves across row widths, palettes on the GPU, copies kept — 2026-10-13
 
 Branch `cursor/psp-vulkan-speed-2b67`, on master (`1d9308714`, #228). docs/psp-core.md, part 83, has the evidence;
