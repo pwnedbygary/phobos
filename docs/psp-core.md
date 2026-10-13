@@ -11018,3 +11018,236 @@ the game reads the clock.
 **Scratch** (the runs, their stick copies, traces and captures; `run.sh` gives each run its own memory stick folder, and
 pins TZ to the Mac's own zone, America/New_York, as the stick's dates and the clock's local time follow it):
 `~/phobos-work/scratch/savedata2/` on the Mac it was made on, not in the repository.
+
+## Part 86: the CPU, round 2 — the VFPU's adder in NEON, delay slots compiled each way, the rare ways out of line, prefixes worked out as blocks are compiled, blocks linked to each other
+
+On branch `cursor/psp-cpu-round2-2b67`, on master (`b3507c1db`, #233 merged). The task: round 2 of part 79's CPU
+work, for the owner's goal of PPSSPP's speed with room for fast-forward and upscaling on the Retroid Pocket 6
+(ARM64): the VFPU's vector and matrix operations in NEON where that can be exact, the compiled code's own costs
+(block endings and linking, loads and stores, registers), wait loops, and whatever else profiling shows on the CPU's
+side; every emulated result the same. Clean room: PPSSPP not read (its CPU, JIT and IR code not at all), JPCSP not
+read. Save states are unchanged (layout 26): nothing new is kept.
+
+### How it was measured
+
+As part 79: the headless runner built as Android builds it (O3, thin LTO), patched in scratch to report the emulation
+thread's CPU time, retired host instructions and cycles, run from the scenes' save states
+(`~/phobos-work/scratch/cpu-speed2/scenes`), base and branch in turn. New here, a block-level profile: a scratch patch
+(`jitmap-patch.py`, `jitmap3-patch.py`) has the recompiler log every block it compiles (its guest words, its host
+code, and where in the host code each guest instruction's code, each block ending and each cold path begins), and
+`jitcat.py` sorts xctrace's samples in compiled code by what each host instruction was compiled for. (The first try
+at these profiles hung for two hours on Super Monkey Ball: xctrace never got past "ending recording" after its target
+exited about 9 s after the time limit, while it was still ending the attach session. The profile script now keeps
+the runner alive until xctrace returns, then stops it, with a limit on every step; every profile since has
+finished.) The Mac was shared with three other agents throughout, its load average 25 to 70, so the host
+instructions a frame carry the comparisons, the times beside them.
+
+### Where the time went (master, Vulkan fast)
+
+| Scene | Compiled code (self) | Under system calls (GE, kernel) | VFPU helpers | Notes |
+| --- | --- | --- | --- | --- |
+| Super Monkey Ball Adventures, story | 19% | 62% | 15% | one loop of eight vtfm.q on a transposed matrix: 12% |
+| Disaster Report 3, playing | 35% | 32% | 25% | vhtfm and vmmul 11%; prefixed vsge/vslt (a frustum test) through the interpreter 9% |
+| Colin McRae 2005 | 30% | 59% | 6% | the VFPU4 group's conversions and functions through the interpreter 3% |
+| Army of Two, playing | 25% | 69% | 4% | |
+| Armored Core Formula Front, playing | 28% | 65% | 3% | |
+| Need for Speed Most Wanted, race | 25% | 68% | 2% | the polled calls: the kernel's per-call work spread over a dozen functions |
+
+Compiled code is flat: the busiest block is 0.3 to 0.7% of the thread. Sorted by what it was compiled for
+(Colin McRae): block endings (the chain to the next block) 23% of it, the branches themselves 14%, loads 18%, stores 9%,
+the FPU's loads and stores 8%, ALU 13%, FPU 7%. A conditional branch stored pc and pd on both ways, compiled its
+delay slot once, then loaded pc again to pick its chain: about 27 host instructions per block ending, then 17 more to
+find the next block. Every load and store was about 11 host instructions, every native instruction's rare way (a page
+off the fast path, an FPU mode or NaN, an overflow) compiled inline with a jump over it, and every FPU operation's
+inline fallback made the block forget the registers it held.
+
+### What was done
+
+1. **The VFPU's adder in NEON** (`recompiler-vfpu.cpp`: `vfpuDots()`, `vfpuDotAcross()`, `vfpuTransform()`,
+   `vfpuMultiply()`, `matrixProduct()`). vfpuDot(), the PSP's own adder (each product's 27 bits with round-to-odd,
+   aligned to the largest exponent and truncated, the sum rounded to nearest even, flushed below the smallest normal),
+   is integer arithmetic, so NEON's integer instructions do it four lanes at once, every step the scalar one's:
+   `umull`/`umull2` for the products, a sticky test for round-to-odd, `ushl` by negative amounts to align, the signs
+   applied and summed, `clz` to normalize. vtfm, vhtfm and vmmul take a lane per result: a 4x4 transform is four dot
+   products, side by side, from four row loads (turned with `trn1`/`trn2` for a transposed matrix) and four
+   broadcasts. vdot and vhdp take the terms across the lanes. The scalar code's last step (`vfpuDotRound()`) is shared.
+   A lane with an infinity or a NaN among its inputs goes to the scalar adder. Compiled code uses these where every
+   operand is in place (each matrix at its matrix's first row and column, each vector along a row or a column: checked
+   against `vfpuSquare()` and `vfpuLine()` as the block is compiled); the rest keep the scalar helpers, as does
+   x86-64. The scalar split also shows one thing only a test caught: large terms that cancel exactly flush to 0, so
+   the flush must come after the overflow's select.
+2. **A branch's delay slot compiled along each way it goes** (`recompiler-ipu.cpp`'s `emitBranch()` and
+   `emitDelaySlot()`, `recompiler.cpp`'s `emitEnd()`, `emitPC()`). The branch compiles only its decision; the delay
+   slot and the block's ending are compiled once for the taken way and once for the other, each knowing where it goes,
+   so pc and pd are stored only where the block leaves for run() (its chain's leave path) or calls the interpreter
+   (`destination`: the delay slot's interpreter calls store the way's own pc and pd). A conditional branch no longer
+   loads pc to pick its chain. After a delay slot the interpreter ran, the block goes where pc and pd say (a syscall
+   there may switch threads); a jump through a register stores them first, as before. The coprocessors' branches store
+   them only where they leave too.
+3. **The rare ways out of the block's straight line; loads and stores in fewer steps** (`emitCold()`,
+   `emitColdFallback()`, `recompiler-memory.cpp`). Each native instruction's rare way (an access off the fast path,
+   an overflow, a division the host can't make, an FPU mode or NaN, the VFPU's prefixes not at rest) is cold code,
+   emitted after the block's end with what the block held there, and back. The FPU's ways to the interpreter keep the
+   registers held (the interpreter writes no integer register there), so a block no longer reloads every register
+   after each FPU operation. A load or store's address is rs's host register itself or one 32-bit add (only bits 0-28
+   are used, by 64-bit operations that mask the rest), its page one `UBFX` on ARM64, and a store writes straight from
+   rt's host register: 7 to 8 host instructions on the fast path, from 11.
+4. **The VFPU's lane-by-lane instructions with their prefixes worked out as the block is compiled** (`vfpuEach()`,
+   `vfpuLane()`, `emitEach()`). vadd, vsub, vdiv, vmul, vscl, vmin, vmax, vsge, vslt, vmov, vabs, vneg, vi2f and vf2i
+   with any prefixes the block knows (a vpfx before them in the block), and the math functions (vrcp, vrsq, vsin,
+   vcos, vexp2, vlog2, vsqrt, vasin, vnrcp, vnsin, vrexp2) and vf2i at rest, run one helper that takes each lane's
+   source (its register after the swizzle, or a constant; absolute, negated), its destination (masked, clamped) and the
+   lanes a prefix takes past the size as packed descriptions, worked out from the prefixes as vfpuRead(),
+   outsideLanes() and vfpuWrite() would use them; each lane's arithmetic is the interpreter's (`vfpuLane()`). A
+   prefix the block doesn't know is taken to be at rest and checked as it runs (otherwise the interpreter's way, cold).
+   Disaster Report 3's frustum test (vsge and vslt against a broadcast w and -w) no longer goes through the
+   interpreter's decoder.
+5. **Blocks linked to the blocks they go on to** (`recompiler.cpp`'s exits: `emitLink()`, `addExits()`, `link()`,
+   `patch()`, `drop()`). A block's way on to a block it knows as it's compiled, after the run's limit and the page's
+   check, is a jump of the host's own (ARM64's `B`, x86-64's `JMP rel32`) to the lookup after it; once the target's
+   block is compiled it's rewritten to go straight to the target's body. Dropping a section puts every jump linked to
+   its blocks back to its lookup, even one in dead code (a block still running from a section that went runs on to its
+   end), and the live ones wait for those blocks to be compiled again; a section compiled for another mirror is
+   dropped first. Everything that drops code runs on the emulation thread.
+
+Not done: a wait loop to skip. Among the profiled scenes' busiest blocks, the self-loops are copies and fills (they
+store) or work on data (Disaster Report 3's clipping loop), at most 0.7% of the thread; the waiting that costs time,
+the Need for Speeds' idle thread rotating its queue 175,000 times a frame, goes through system calls (part 79).
+
+### Numbers
+
+The Mac, master (`b3507c1db`) against this branch (`ae85b27b0`: the review's changes after it change no compiled code),
+the bench runners from the scenes' states, medians of three rounds taking turns in Vulkan fast (MoltenVK, 1x) and two in
+the software renderer (4 drawing threads). "Fps it allows" is 1000 over the emulation thread's ms. The Mac's load
+average was 34 to 144 (up to 300 at times) through these rounds (three other agents, and the Cursor app's own renderer
+at up to 3.5 cores), so the times swing with the cores the thread got; the host instructions a frame hardly move with
+that, and carry the comparison.
+
+(The rounds of master against the branch are being measured as this is written; their table follows in the
+next commit.)
+
+Where each change counts (Vulkan fast, M host instructions a frame, one round each, the six scenes the CPU matters in):
+
+| Scene | Master | VFPU adder in NEON | delay slots each way | cold code, loads and stores | prefixes compiled (vfpuEach) | blocks linked |
+| --- | --- | --- | --- | --- | --- | --- |
+| Super Monkey Ball Adventures, story | 636 | 542 (-14.8%) | 534 (-1.2%) | 527 (-1.1%) | 525 (-0.4%) |  |
+| Disaster Report 3, playing | 52 | 45 (-12.9%) | 44 (-2.2%) | 43 (-1.8%) | 39 (-7.3%) |  |
+| Colin McRae 2005 | 179 | 173 (-3.0%) | 170 (-1.9%) | 166 (-2.0%) | 165 (-0.5%) |  |
+| Armored Core Formula Front, playing | 95 | 91 (-4.3%) | 90 (-1.3%) | 89 (-1.1%) | 89 (+0.5%) |  |
+| NFS Most Wanted, race | 319 | 315 (-1.4%) | 305 (-3.1%) | 301 (-1.2%) | 301 (+0.1%) |  |
+| Army of Two, playing | 585 | 573 (-2.0%) | 566 (-1.2%) | 562 (-0.8%) | 560 (-0.3%) |  |
+
+The NEON adder is most of it where the VFPU's matrix products run (Super Monkey Ball's eight vtfm.q a vertex batch,
+Disaster Report 3's), the prefixes compiled most of the rest of Disaster Report 3 (its frustum test); the compiled
+code's own changes take 1 to 3% each from every scene that runs much guest code.
+
+### Accuracy
+
+Every change is the host's alone; nothing a game can see moves.
+- The branch against master from the 21 scenes' states (part 79's: the table's and Death Jr. II's character select,
+  Hits Remixed's game-select room, Army of Two's menu): in the software renderer, 100 frames with every frame's picture
+  and all of VRAM hashed, drawing settled, then RAM and the machine's whole serialized state; in Vulkan fast and Vulkan
+  accurate, 200 frames, then RAM and the machine's state (VRAM, read back from the GPU, among it): identical, every
+  one, in all three.
+- The NEON adder against vfpuDot() itself (`stress/dots.cpp`, scratch): 3 million random sets of terms for each of
+  2, 3 and 4 terms, all four lanes, through the vertical adder and the one across the lanes (72 million results),
+  with inputs drawn to reach every case (zeros, denormals, infinities and NaNs, products that flush or overflow,
+  few-bit significands that cancel exactly, ties): every one the same.
+- Broken versions of the changes (`mutate2.py`, scratch, each in a copy of the tree running tests/allegrex, no
+  sanitizers): 62, of which 59 are caught. The three that aren't change nothing a test or a game can see: lanes past an
+  operand's size let into the special case (which then works the same lanes out the scalar way), an offset from r0
+  widened without its sign (neither address has a page on a PSP, so both go to the interpreter), and a section compiled
+  for another mirror replacing the old one without dropping it (links are kept by section, so the next drop takes them
+  anyway). One more broke a step that turned out to do nothing (a shift after a rounding carry, whose result's fraction
+  is 0 either way), which was then taken out. The runs also showed what random trials miss: the flush-after-overflow
+  mutation slipped past them once their sequence changed, and is now caught by fixed cases; a function whose code
+  doesn't depend on its own address let a link into the other mirror's code pass, and now keeps the address it runs
+  from.
+
+### Checks
+
+- `tests/allegrex/run-tests.sh`: 68 groups, 0 failures (sanitizers on), and the same built for x86-64 and run under
+  Rosetta (no sanitizers), which takes the JMP rel32 links, the page found by a shift and a mask, and the scalar matrix
+  helpers. New groups: "vfpu compiled products" (3000 random vmmul, vtfm, vhtfm, vdot and vhdp
+  instructions of each size, any registers, half after random prefixes, both engines bit for bit, and fixed cases of
+  huge terms cancelling exactly), "vfpu compiled lanes" (1500 of each lane-by-lane instruction with random prefixes,
+  set in the block, only in the starting state, or none), "delay slots each way" (every branch, taken and not, and
+  every jump, with a delay slot native, interpreted, a syscall, a load raising an exception, a syscall moving pc as a
+  thread switch does, a load from a page the table leaves out, a division by zero, an FPU division giving NaN, a VFPU
+  instruction after mtvc set a prefix and a reserved VFPU encoding: what the hooks see, every register at the end, and
+  runs of 1 to 37 instructions chained and not), "linked blocks" (a linked function rewritten by the program, a loop
+  rewriting its own first word with a new constant every round, a function that keeps the address it runs from called
+  through two mirrors in turn and from a site compiled right after a call through the other; links made and waiting;
+  the same with code memory starting afresh every few blocks).
+- `tests/psp/run-tests.sh` (sanitizers on): 478 groups, 0 failures.
+- `tests/psp/ares/run-tests.sh`: 318 checks, 0 failed.
+
+### Left, and why
+
+- **Where the CPU's time goes now** (Vulkan fast, xctrace on the branch's last code): compiled code is 17 to 36% of
+  the emulation thread (Super Monkey Ball 17%, Army of Two 18%, Need for Speed Most Wanted 20%, Colin McRae 24%,
+  Disaster Report 3 36%; master's 20, 25, 26, 30 and 42%). Of it: block endings 23 to 28% (57% in Most Wanted's
+  polling loop, whose `jr ra` endings look the target up every time), ALU 19 to 22%, loads 17 to 21%, branches 7 to
+  10%, stores 6 to 7%, the FPU's loads, stores and arithmetic 6 to 10%. The VFPU's helpers left: Monkey Ball's vtfm.q
+  in NEON 4.4%, its vcmp and vscl 2%; Disaster Report 3's vsge and vslt (vfpuEach) 4%, vhtfm.q and vmmul.q in NEON
+  3.5%, vfpuMatrix's other forms 1.6%; Colin McRae's VFPU4 group through the interpreter 1.7%. The rest of the thread is
+  under the system calls: the GE's display lists (Monkey Ball 75%, Army of Two 77%, Colin McRae 68%) and the polled
+  kernel (Most Wanted 72%).
+- **The block endings' count**: with the lookup gone where blocks are linked, a block ending is the run's count
+  (loaded, added to and stored back, then compared with the limit: each block's ending waits on the last one's store),
+  the halted check where the block called the interpreter, the page's check and the jump. Keeping the count in a
+  saved register, stored only where something reads it (a call into the interpreter or the kernel, leaving for run()),
+  would take the memory out of that chain. The next step for block endings, then a cache of the last target for jumps
+  through a register (Most Wanted's import stubs).
+- **Registers across blocks**: a block starts holding nothing, and every result is stored as its instruction ends,
+  so each block loads the registers it uses. Keeping the most-used ones (sp, ra, the arguments) in host registers
+  across linked blocks, stored only where something reads ipu.r[] (the interpreter, the kernel, a block leaving), is
+  the next big step for compiled code: ALU and loads are about 40% of what's left in it.
+- **The VFPU's remaining helpers**: vf2h, vh2f and the small integer packings (vs2i, vi2s, vi2us...) still go through
+  the interpreter's decoder, as do vdot, vhdp and vcmp with prefixes set, and vcrsp, vqmul and vdet (adder-based,
+  which vfpuDots() could take); the lane-by-lane instructions go a lane at a time in vfpuEach() (NEON there would need
+  each lane's flush and NaN rules, and products near 2^-126, where IEEE rounds differently from the PSP, sent to the
+  scalar way).
+- **Polled system calls** (the Need for Speeds): about two thirds of the thread is the kernel's per-call work over
+  half a million calls a frame, a system call costing the PSP's clock a single cycle (part 79). A loop of calls that
+  each change nothing could jump ahead to the next event only if every function in it provably changes nothing at all
+  and the GE's FINISH check after each call were accounted for; not done.
+- **The GE's work on the CPU** (the GE front end's task, not this one): most of what's left in Monkey Ball, Army of
+  Two, Colin McRae and the Armored Cores.
+
+### On the RP6
+
+The NEON is ARM64's own, so the Mac's gains in the VFPU carry over; the compiled code's (fewer host instructions a
+block ending, a load or a store) carry over too, and count for more on cores with smaller caches (the RP6's
+Cortex-X3 and A715 have a 64 KiB instruction cache, the M1's performance cores 192 KiB). To compare: master and this
+branch, Vulkan fast at 1x, the scenes in `~/phobos-work/scratch/cpu-speed2/scenes` (part 79's table). Expect Super
+Monkey Ball's story and Disaster Report 3's play most (15 to 25% fewer instructions on the emulation thread), Colin
+McRae, the Armored Cores and the Need for Speeds 5 to 10%, the GE-bound scenes a few percent.
+
+### Review
+
+An independent read-only review of the whole branch against master found no change to emulated results, and checked
+exact, step by step: the NEON adder against vfpuDot() and vfpuDotRound() (round-to-odd, the -254 start, the shift's
+clamp, the signs, the rounding's garbage lanes gated off, the carry, the flush after the overflow, -0 from a small
+negative sum, the special lanes), vfpuEach()'s descriptions against vfpuRead(), outsideLanes(), vfpuWrite(), VSCL(),
+VI2F(), VF2I() and vfpuLastLaneFirst(), the in-place tests and the transposes, every place pc and pd are read after the
+delay slots' change, the registers the cold code holds, and the links (the checks before them, unlinking dead and live
+exits, the mirrors, reset, jitprotect's nesting, the instruction cache, the jumps' reach). Its points, all taken:
+- Test gaps: the NEON vmmul's in-place cases came up in about 1 trial in 512 for .p and .t (now three in four trials
+  have their matrices in place, every transposition in turn); nothing showed that blocks link at all, or that code
+  memory starting afresh mid-run is safe with links (now checked, and a run with code memory 8 KiB over the reserve
+  starts afresh three times with 20 links in place); more delay slot kinds (added); the random programs depended on
+  the order a compiler evaluates arguments in (now sequenced).
+- drop() now marks a section's own exits dead before putting its links back, so its exits into itself don't wait;
+  emitChainTo()'s leave path always stores pc and pd (its parameter was always false); cold code runs by index (cold
+  code may add some); the VFPU's cold interpreter calls check they compiled; a block starts with no destination; a
+  condition that was always true is gone; unload() lets the links' memory go.
+- Comments: the VFPU file's header and the products' comments (the NEON paths, vfpuEach()), the branches', the
+  coprocessors' and the stores' brought up to what the code does.
+
+### Scratch
+
+`~/phobos-work/scratch/cpu-round2`: `build.sh`, `run.sh`, `bench2.sh` and `benchsum2.py` (the rounds: `bench2/*.tsv`),
+`hashcmp.sh` (`hash/`), `xprof2.sh` and `jmprof2.sh`/`jmcat.sh` (xctrace with time limits), `patches/jitmap-patch.py`
+and `jitmap3-patch.py`, `jitprof.py`, `jitcat.py` and `calltree.py` (`prof/`), `stress/dots.cpp` (the NEON adder
+against vfpuDot), `mutate2.py` (`mut/`), `NOTES.md`.

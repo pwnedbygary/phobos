@@ -25,6 +25,41 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: the CPU, round 2 — the VFPU's adder in NEON, delay slots compiled each way, the rare ways out of line, prefixes compiled, blocks linked — 2026-10-13
+Branch `cursor/psp-cpu-round2-2b67`, on master (`b3507c1db`, #233 merged). docs/psp-core.md, part 86, has the
+evidence. Clean room: PPSSPP not read (its CPU, JIT and IR code not at all), JPCSP not read. Save states unchanged
+(layout 26). Every change is the host's alone: pictures, VRAM, RAM and the machine's state are master's.
+- **Where it went** (Mac, Vulkan fast, xctrace sorted by compiled block): compiled code was 20 to 42% of the emulation
+  thread in the CPU-heavy scenes and flat (the busiest block under 1%): block endings and branches a third of it, loads
+  and stores a third; the VFPU's matrix products through the scalar adder 15% of Super Monkey Ball's thread (one loop
+  of eight vtfm.q), 25% of Disaster Report 3's with its prefixed compares through the interpreter.
+- **Changes** (each its own commit, with tests): the VFPU's adder (vfpuDot) in NEON integer instructions, four lanes at
+  once and bit for bit, for compiled vmmul, vtfm, vhtfm, vdot and vhdp on ARM64 (operands in place; inf and NaN lanes
+  and other hosts the scalar way); a branch's delay slot compiled along each way it goes, pc and pd stored only where
+  they're read; the rare ways (an access off the fast path, an FPU mode or NaN, an overflow) as cold code after the
+  block, the FPU's keeping the registers held, loads and stores in 7 to 8 host instructions; the lane-by-lane VFPU
+  instructions with their prefixes worked out as the block is compiled (vfpuEach), the math functions and vf2i at rest;
+  blocks linked straight to the blocks they go on to, unlinked when those blocks' code goes.
+- **Numbers** (Mac, medians of rounds taking turns, the load 25 to 300: the host instructions carry it): see part
+  86 (the rounds are under way as this is written).
+- **Exact**: the 21 scenes' hashes identical to master's in the software renderer (100 frames, every frame's picture
+  and VRAM, then RAM and the machine's state), Vulkan fast and Vulkan accurate (200 frames, the end's RAM and state);
+  the NEON adder against vfpuDot on 72 million random results; 62 broken versions of the changes, 59 caught by
+  tests/allegrex, the other 3 changing nothing observable. pending (the whole library, before merging)
+- **Checks**: tests/allegrex 68/0 (sanitized; and 68/0 built for x86-64, run under Rosetta), tests/psp 478/0
+  (sanitized), tests/psp/ares 318/0. An independent review found no change to emulated results; its points (test
+  gaps: the NEON vmmul's in-place cases, links never checked, code memory starting afresh mid-run, more delay slot
+  kinds; small fixes and comments) were all taken.
+- **Left**: the block endings' run count kept in a register (each ending's load and store of it chains the blocks
+  through memory), a cache of the last target for jumps through a register (Most Wanted's import stubs: 57% of its
+  compiled code is block endings), registers held across blocks with stores only where read, the VFPU's remaining
+  helpers (vf2h, vh2f, the integer packings, vdot/vhdp/vcmp with prefixes, vcrsp/vqmul/vdet), the polled kernel's
+  per-call work (Most Wanted: 72% of the thread), and the GE's display lists (another task's).
+- **On the RP6, to measure**: master against this branch, Vulkan fast at 1x, part 79's scenes: Super Monkey Ball and
+  Disaster Report 3 most (15 to 25% fewer instructions on the emulation thread), Colin McRae, the Armored Cores and
+  the Need for Speeds 5 to 10%, the GE-bound scenes a few percent.
+- Scratch: `~/phobos-work/scratch/cpu-round2`.
+
 ## PSP: where the slow games' emulation thread goes — the GPU's palette pictures decoded where taken, code forgotten only where there is some, calm system calls, more of the CPU compiled — 2026-10-12
 
 Branch `cursor/psp-cpu-speed5-2b67`, on master (`6ab2c5583`, #224 merged in). docs/psp-core.md, part 79, has the
