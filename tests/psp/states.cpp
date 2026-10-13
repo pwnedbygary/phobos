@@ -431,6 +431,21 @@ static auto stateFields() -> void {
     {"font call slot", [&] { library.open[1] = false, library.open[3] = true, fontCall.slot = 3; }},
     {"font call ended", [&] { fontCall.ended = true, library.open[3] = false; }},
     {"font call kind", [&] { fontCall.kind = Kernel::FontCall::Give, fontCall.asks.clear(), fontCall.got.clear(); }},
+    //part 87's: the font holding a glyph (its 'A'), and the call made one reading the space into it, each of its
+    //fields changed, then a closing's again
+    {"font held", [&] { openFont.held = 2, openFont.glyphBlocks = {0x0899'4000, 0x0899'4100}; }},
+    {"font glyph blocks", [&] { openFont.glyphBlocks[1] ^= 0x10; }},
+    {"font call reading a glyph", [&] {
+      fontCall.kind = Kernel::FontCall::Glyph, fontCall.ended = false, fontCall.asks = {32, 0};
+      fontCall.errorAt = 0, fontCall.font = 1, fontCall.out = 0x0896'2000;
+    }},
+    {"font call font", [&] { fontCall.font = 7; }}, {"font call glyph", [&] { fontCall.glyph = 2; }},
+    {"font call what", [&] { fontCall.what = 3; }}, {"font call out", [&] { fontCall.out += 0x40; }},
+    {"font call clip", [&] { fontCall.clip[2] = 5; }},
+    {"font call giving again", [&] {
+      fontCall.kind = Kernel::FontCall::Give, fontCall.ended = true, fontCall.asks.clear();
+      fontCall.font = fontCall.glyph = fontCall.what = fontCall.out = fontCall.clip[2] = 0;
+    }},
     {"mpeg call ringbuffer", [&] { mpegCall.ringbuffer ^= 0x40; }}, {"mpeg call left", [&] { mpegCall.left = 6; }},
     {"mpeg call asked", [&] { mpegCall.asked = 4; }}, {"mpeg call put", [&] { mpegCall.put = 1; }},
     {"thread name", [&] { t.name += "x"; }}, {"thread entry", [&] { t.entry ^= 4; }},
@@ -1282,6 +1297,34 @@ static auto stateFields() -> void {
   });
   refuses("an mpeg call feeding a ringbuffer nowhere", [&] { k.mpegCalls.at(one).ringbuffer = 0x1000; });
   refuses("a font call given more than it asked for", [&] { k.fontCalls.at(two).got.push_back(1); });
+  //a font's glyph, and a call reading one, as no machine has them
+  refuses("a font holding a glyph in one block", [&] { fontOne().glyphBlocks.pop_back(); });
+  refuses("a font holding no glyph in two blocks", [&] { fontOne().held = 0; });
+  refuses("a font holding a glyph it hasn't got", [&] { fontOne().held = 100; });
+  auto glyphCall = [&]() -> Kernel::FontCall& {  //thread two's call made one reading the font's space
+    auto& call = k.fontCalls.at(two);
+    call.kind = Kernel::FontCall::Glyph, call.ended = false, call.asks = {32, 0}, call.got.clear();
+    call.errorAt = 0, call.font = 1, call.glyph = 0, call.what = 0, call.out = 0x0896'2000;
+    return call;
+  };
+  {
+    glyphCall();
+    KernelMachine fresh;
+    devices(fresh);
+    CHECK(load(fresh, save(a)), true);  //as a machine has it: loads
+    CHECK(load(a, state), true);
+  }
+  refuses("a glyph call asking for three blocks", [&] { glyphCall().asks.push_back(4); });
+  refuses("a glyph call asking a picture's size", [&] { glyphCall().what = 1; });
+  refuses("a glyph call answering where nothing is", [&] { glyphCall().out = 0x0000'1000; });
+  refuses("a glyph call reading a glyph its font hasn't got", [&] { glyphCall().glyph = 50; });
+  refuses("a glyph call of no font", [&] { glyphCall().font = 0; });
+  refuses("a glyph call of a font not handed out yet", [&] { glyphCall().font = k.nextFontID; });
+  refuses("a glyph call with somewhere for an error", [&] { glyphCall().errorAt = 0x0896'0800; });
+  refuses("a font call's font being opened holding a glyph", [&] {
+    auto& opening = k.fontCalls.at(two).opening;
+    opening.held = 1, opening.glyphBlocks = {0x0899'5000, 0x0899'5100};
+  });
   refuses("a font call opening into a handle it doesn't hold", [&] {
     auto& call = k.fontCalls.at(two);
     call.kind = Kernel::FontCall::Open, call.ended = false, call.slot = 3;
@@ -1642,9 +1685,9 @@ static auto olderLayouts() -> void {
     bytes.erase(bytes.begin() + dialogError, bytes.begin() + dialogDeleted + 1);
     return bytes;
   };
-  //Layouts before 27 have no imported variables: the program's count of them (4 bytes, before everything else, so
-  //taken out last of all).
-  auto before27 = [&](std::vector<u8> bytes) {
+  //Layouts before 28 have no imported variables: the program's count of them (4 bytes, before everything else, so
+  //taken out last of all). (Layout 27's glyphs are open fonts', and no font is open here.)
+  auto before28 = [&](std::vector<u8> bytes) {
     bytes.erase(bytes.begin() + variables, bytes.begin() + variables + 4);
     return bytes;
   };
@@ -1665,30 +1708,31 @@ static auto olderLayouts() -> void {
     n.kernel.serialize(again);
     return loaded && std::vector<u8>{again.data(), again.data() + again.size()} == state;
   };
-  CHECK(loads(26, before27(state)), true);
-  CHECK(loads(current, before27(state)), false);
-  CHECK(loads(25, before27(before26(state))), true);
-  CHECK(loads(current, before27(before26(state))), false);
+  CHECK(loads(27, before28(state)), true);
+  CHECK(loads(current, before28(state)), false);
+  CHECK(loads(26, before28(state)), true);
+  CHECK(loads(25, before28(before26(state))), true);
+  CHECK(loads(current, before28(before26(state))), false);
   auto layout24 = state;
   layout24.erase(layout24.begin() + pgd, layout24.begin() + pgdEnd);
-  CHECK(loads(24, before27(before26(layout24))), true);
+  CHECK(loads(24, before28(before26(layout24))), true);
   auto untimed = state;  //no GE time, the file's fields all there
   untimed.erase(untimed.begin() + geDone, untimed.begin() + geFinish + 1);
   auto layout23 = untimed;
   layout23.erase(layout23.begin() + pgd, layout23.begin() + pgdEnd);
-  CHECK(loads(23, before27(before26(layout23))), true);
+  CHECK(loads(23, before28(before26(layout23))), true);
   auto layout22 = layout23;
   layout22.erase(layout22.begin() + opened, layout22.begin() + opened + 8);
-  CHECK(loads(22, before27(before26(layout22))), true);
+  CHECK(loads(22, before28(before26(layout22))), true);
   std::vector<u8> counted = {0x45, 0x23, 0x01, 0x00};  //numbers handed out once, passed over
   auto layout21 = untimed;
   layout21.insert(layout21.begin() + workingDirectory, counted.begin(), counted.end());
   layout21.erase(layout21.begin() + asyncData, layout21.begin() + workingDirectory);
   auto layout20 = layout21;
   layout20.erase(layout20.begin() + jpeg, layout20.begin() + files);
-  CHECK(loads(21, before27(before26(layout21))), true);
-  CHECK(loads(20, before27(before26(layout20))), true);
-  CHECK(loads(current, before27(before26(layout21))), false);  //read as this layout, it's another state
+  CHECK(loads(21, before28(before26(layout21))), true);
+  CHECK(loads(20, before28(before26(layout20))), true);
+  CHECK(loads(current, before28(before26(layout21))), false);  //read as this layout, it's another state
 
   //another file opened, then the first closed and opened again: its number is the lower, its place the later
   CHECK(m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0}), file + 1);

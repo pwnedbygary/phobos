@@ -529,54 +529,50 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
   report(true, problems.empty() ? "the disc has no program" : "can't start the game: " + problems);
 }
 
-//Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a
-//signature, the version of its layout, RAM's size and the program it was made with, all of which must be the
-//machine's; then memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a
-//field means: 27 since each module keeps the variables it imports, and the address each holds now (part 88); 26 since
-//the dialog keeps an aborted message's error and whether a list delete has deleted a save
-//(part 73); 25 since each open file keeps its PGD decryption (the version key it was given, where its data starts,
-//and its header's descriptor once decrypted); 24 since the GE driver keeps when the GE will have drawn what it was
-//given and whether the list it runs has met its FINISH, a list being done for the program only then (part 64); 23
-//since each open file keeps its place in the order the program opened them, sceIoGetFdList's (part 62); 22 since
-//files are numbered lowest free first, the count of numbers handed out gone, and an asynchronous read under way
-//keeps where its bytes go as it's done (part 59); 21 since the kernel keeps sceJpeg's
-//library and context, sceHprm's callbacks and which ATRAC IDs decode frames one at a time (part 58); 20 since a
-//thread keeps the stacks lent to it for calls (sceKernelExtendThreadStack: part 55); 19 since
-//the kernel holds thread-local storage pools and threads may wait for their blocks (part 55);
-//18 since the kernel keeps sceCcc's tables and error characters (part 55); 17 since a message dialog
-//counts Updates before an abort for its fade length (part 42); 16 since a
-//message dialog counts the Updates it takes to finish once aborted (part 42); 15 since the
-//disc drive keeps whether the game deactivated it (part 37); 14 since threads keep their
-//run figures, the kernel when the running one got the CPU, lightweight
-//mutexes their names, attributes and first counts, and the display a base for its count of lines (part 32); 13 since
-//the kernel holds scePsmfPlayer's player and threads may wait for it (part 31); 12 since the
-//GE keeps its last bounding box's result for BJUMP, and calls into the program say
-//which are the GE's callbacks (part 29); 11 since the kernel holds
-//mutexes, alarms and virtual timers, calls into the program pass four
-//arguments and say whether they're a timer's handler, and the controller's idle thresholds, the GE's translation
-//width and the HOME menu's language are kept (part 28); 10 since sceAtrac3plus, sceMp3 and sceMpeg decode, keeping
-//their streams' places (part 26); 9 since
-//sceMpegRingbufferPut calls a ringbuffer's callback, part way through when a state is saved (part 25); 8 since the
-//font library holds libraries, open fonts and its calls into the program (part 23); 7 since
-//sound (docs/psp-core.md's part 21) and part 22 merged, each branch having made a version 6 of
-//its own: part 21's as sound came to be heard (the output the channels make, the SRC channel's place in its samples,
-//VAG voices' decoders), part 22's as interrupts held off came to keep the CPU for the thread holding them and their
-//flag became the CPU's alone (mfic and mtic's, on as a program starts), the kernel keeping no copy of it (a version
-//5 state's flag held off for a thread that wasn't the holder would leave it spinning, every wait refused); 5 since
-//the kernel holds files' asynchronous requests, sceSas, message pipes, mailboxes and the other functions of
-//docs/psp-core.md's part 20 (and threads' message pipe transfers); 4 since
-//each call into the program says whether it's a vertical blank's handler; 3 when the kernel came to hold both the
-//modules the program loaded and its threads', semaphores' and callbacks' new fields (with pools, sound and the
-//dialogs), each of which came first on a branch of its own as a version 2, two layouts that differ from each other
-//and from these. Layouts 15 and 16 load with the dialog abort counters defaulted to 0, 15 to 17 with no sceCcc tables
-//set, 15 to 18 with no thread-local storage pools, 15 to 19 with no stacks lent, 15 to 20 with sceJpeg not started,
-//no sceHprm callbacks and no ATRAC low-level IDs, 15 to 21 with their files' count passed over and no read's
-//bytes still to come, 15 to 22 with their files opened in the order of their numbers, 15 to 23 with the GE
-//having nothing left to draw, 15 to 24 with no file's PGD decryption set up (each read as it is), 15 to 25 with
-//no error for an aborted message and no save deleted from a list, and 15 to 26 with no module's imported variables
-//known (none linked, as those builds left them); older layouts are refused.
+//Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a signature,
+//the version of its layout, RAM's size and the program it was made with, all of which must be the machine's; then
+//memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a field means: 28
+//since each module keeps the variables it imports, and the address each holds now (part 88); 27 since a font holds the
+//glyph it last read, and a call may be reading one (part 87); 26 since the dialog keeps an aborted message's error and
+//whether a list delete has deleted a save (part 73); 25 since each open file keeps its PGD decryption (the version key
+//it was given, where its data starts, and its header's descriptor once decrypted); 24 since the GE driver keeps when
+//the GE will have drawn what it was given and whether the list it runs has met its FINISH, a list being done for the
+//program only then (part 64); 23 since each open file keeps its place in the order the program opened them,
+//sceIoGetFdList's (part 62); 22 since files are numbered lowest free first, the count of numbers handed out gone, and
+//an asynchronous read under way keeps where its bytes go as it's done (part 59); 21 since the kernel keeps sceJpeg's
+//library and context, sceHprm's callbacks and which ATRAC IDs decode frames one at a time (part 58); 20 since a thread
+//keeps the stacks lent to it for calls (sceKernelExtendThreadStack: part 55); 19 since the kernel holds thread-local
+//storage pools and threads may wait for their blocks (part 55); 18 since the kernel keeps sceCcc's tables and error
+//characters (part 55); 17 since a message dialog counts Updates before an abort for its fade length (part 42); 16 since
+//a message dialog counts the Updates it takes to finish once aborted (part 42); 15 since the disc drive keeps whether
+//the game deactivated it (part 37); 14 since threads keep their run figures, the kernel when the running one got the
+//CPU, lightweight mutexes their names, attributes and first counts, and the display a base for its count of lines (part
+//32); 13 since the kernel holds scePsmfPlayer's player and threads may wait for it (part 31); 12 since the GE keeps its
+//last bounding box's result for BJUMP, and calls into the program say which are the GE's callbacks (part 29); 11 since
+//the kernel holds mutexes, alarms and virtual timers, calls into the program pass four arguments and say whether
+//they're a timer's handler, and the controller's idle thresholds, the GE's translation width and the HOME menu's
+//language are kept (part 28); 10 since sceAtrac3plus, sceMp3 and sceMpeg decode, keeping their streams' places (part
+//26); 9 since sceMpegRingbufferPut calls a ringbuffer's callback, part way through when a state is saved (part 25); 8
+//since the font library holds libraries, open fonts and its calls into the program (part 23); 7 since sound
+//(docs/psp-core.md's part 21) and part 22 merged, each branch having made a version 6 of its own: part 21's as sound
+//came to be heard (the output the channels make, the SRC channel's place in its samples, VAG voices' decoders), part
+//22's as interrupts held off came to keep the CPU for the thread holding them and their flag became the CPU's alone
+//(mfic and mtic's, on as a program starts), the kernel keeping no copy of it (a version 5 state's flag held off for a
+//thread that wasn't the holder would leave it spinning, every wait refused); 5 since the kernel holds files'
+//asynchronous requests, sceSas, message pipes, mailboxes and the other functions of docs/psp-core.md's part 20 (and
+//threads' message pipe transfers); 4 since each call into the program says whether it's a vertical blank's handler; 3
+//when the kernel came to hold both the modules the program loaded and its threads', semaphores' and callbacks' new
+//fields (with pools, sound and the dialogs), each of which came first on a branch of its own as a version 2, two
+//layouts that differ from each other and from these. Layouts 15 and 16 load with the dialog abort counters defaulted to
+//0, 15 to 17 with no sceCcc tables set, 15 to 18 with no thread-local storage pools, 15 to 19 with no stacks lent, 15
+//to 20 with sceJpeg not started, no sceHprm callbacks and no ATRAC low-level IDs, 15 to 21 with their files' count
+//passed over and no read's bytes still to come, 15 to 22 with their files opened in the order of their numbers, 15 to
+//23 with the GE having nothing left to draw, 15 to 24 with no file's PGD decryption set up (each read as it is), 15 to
+//25 with no error for an aborted message and no save deleted from a list, 15 to 26 with no glyph held by a font nor
+//being read into one, and 15 to 27 with no module's imported variables known (none linked, as those builds left them);
+//older layouts are refused.
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
-static constexpr u32 StateVersion = 27;
+static constexpr u32 StateVersion = 28;
 
 //The program that started, to tell it from any other: an FNV-1a hash of all its bytes. A state is only loaded into
 //the program it was made with, as another's memory, threads and files mean nothing to it.
@@ -586,12 +582,12 @@ auto System::hash(std::span<const u8> bytes) -> u64 {
   return value;
 }
 
-//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 26 (the
+//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 27 (the
 //dialog's abort counters default to 0, no sceCcc tables, no thread-local storage pools, no stacks lent, sceJpeg not
 //started, no sceHprm callbacks, no ATRAC low-level IDs, the files' count passed over, no read's bytes still to
 //come, files opened in the order of their numbers, the GE with nothing left to draw, no file's PGD decryption set
-//up, no aborted message's error or list delete's deleted save, no module's imported variables): the owner's accuracy
-//scenes were saved at 15 before part 42.
+//up, no aborted message's error or list delete's deleted save, no glyph held by a font nor being read into one, no
+//module's imported variables): the owner's accuracy scenes were saved at 15 before part 42.
 auto System::header(serializer& s) -> bool {
   u32 signature = StateSignature, version = StateVersion, ramSize = memory.ram.size();
   u64 program = programHash;
