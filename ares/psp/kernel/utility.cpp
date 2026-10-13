@@ -25,7 +25,10 @@
 //    and the files mode what a save holds, its secure, normal and system files apart; deleting a save takes its
 //    folder, erasing a data file the file alone (and its name from PARAM.SFO's list). Names that would lead out of
 //    the save's folder, and buffers outside the program's memory, are refused. The PSP also encrypts the secure files
-//    and hashes them in PARAM.SFO: not done here (the files are only Phobos's to read; the hashes are zeros).
+//    and hashes them in PARAM.SFO: not done here (the files are only Phobos's to read; the hashes are zeros). A
+//    list's load that names no save takes the one its dialog would focus (that one broken, the one the same focus
+//    takes among those that aren't), a list's save the list's first name, the name written back either way
+//    (savedataUnshown()).
 //  - A message: answered at once, as if the player pressed Yes (or OK), the message noted.
 //  - The keyboard: each field's text entered as it is, an empty one given the console's nickname, each CHANGED
 //    (keyboard()).
@@ -335,7 +338,7 @@ auto Kernel::dialogUpdate(u32 kind) -> void {
     dialogAsk();
   } else if(dialog.status == DialogRunning) {
     u32 answer = DialogCancelled;
-    if(kind == DialogSavedata) answer = savedata(dialog.parameters);
+    if(kind == DialogSavedata) answer = savedataUnshown(dialog.parameters);
     if(kind == DialogMessage) {
       std::string text = memory.readString(dialog.parameters + 60, 512);
       note("message dialog (answered yes): " + (text.empty() ? "error " + hexWord(memory.read(4, dialog.parameters
@@ -445,6 +448,149 @@ auto Kernel::savePath(const std::string& folder, const std::string& file) -> std
   return fs::path(host).parent_path() == inside ? host : std::string{};
 }
 
+//Does what a savedata request asks (savedataMode()), traced for a host that traces them (savedataTrace): the request
+//as the game made it, with the save chosen from its list where one was (by a front end's player or the automatic
+//answer), then its answer. A chosen save's name is written into the request's save name first, as a PSP's dialog
+//writes it (PPSSPP's notes: loads and saves from a list copy it back).
+auto Kernel::savedata(u32 p, const std::string* chosen) -> u32 {
+  std::string request = savedataTrace ? savedataRequest(p, chosen) : std::string{};
+  if(chosen) {
+    memory.fill(p + 76, 0, 20);
+    memory.copyIn(p + 76, chosen->data(), std::min<u64>(chosen->size(), 19));
+  }
+  u32 answer = savedataMode(p, chosen);
+  if(savedataTrace) savedataTrace(request + " -> " + savedataAnswer(p, answer));
+  return answer;
+}
+
+namespace {
+  //A name as the trace quotes it: bytes outside printable ASCII, the quote and the backslash as \xNN.
+  auto traceName(const std::string& text) -> std::string {
+    std::string out = "\"";
+    for(char c : text) {
+      if(u8(c) >= 0x20 && u8(c) < 0x7f && c != '"' && c != '\\') { out += c; continue; }
+      char escaped[8];
+      std::snprintf(escaped, sizeof(escaped), "\\x%02x", u8(c));
+      out += escaped;
+    }
+    return out + "\"";
+  }
+}
+
+//A savedata request as the trace gives it: its mode (pspsdk's name), the structure's size, the game's and the save's
+//names (as the game gave them), a list's names (8 of them, and how many in all), a list dialog's focus (in the sizes
+//that have it) and the save chosen from the list (by a front end's player or the automatic answer), the data file's
+//name, the buffer, its size and the data's, and whether the save it names (with none chosen, a list's first, as
+//savedataMode() takes it) is on the memory stick; the sizes mode's msData, the list mode's most, the files mode's most
+//of each kind, the size mode's files; a save mode's title.
+auto Kernel::savedataRequest(u32 p, const std::string* chosen) -> std::string {
+  //(the parameters' words where they're in memory: a read past it is noted and counted in the machine's state)
+  auto word = [&](u32 at) -> u32 { return memory.reaches(p + at, 4) ? memory.read(4, p + at) : 0; };
+  namespace fs = std::filesystem;
+  static constexpr const char* Modes[] = {"autoload", "autosave", "load", "save", "listload", "listsave",
+    "listdelete", "listalldelete", "sizes", "autodelete", "delete", "list", "files", "makedatasecure", "makedata",
+    "readdatasecure", "readdata", "writedatasecure", "writedata", "erasesecure", "erase", "deletedata", "getsize"};
+  u32 size = word(0), mode = word(48), names = word(96);
+  std::string game = memory.readString(p + 60, 13), save = memory.readString(p + 76, 20);
+  std::string text = "mode " + std::to_string(mode);
+  if(mode < std::size(Modes)) text += " (" + std::string(Modes[mode]) + ")";
+  text += ", size " + std::to_string(size) + ", game " + traceName(game) + ", save " + traceName(save);
+  std::string used = save == "<>" ? std::string{} : save, first;
+  if(names && mode >= 4 && mode <= 6) {
+    u32 count = 0;
+    text += ", list";
+    for(; count < 1024 && memory.reaches(names + count * 20, 20); count++) {  //(as far as a save dialog reads)
+      std::string name = memory.readString(names + count * 20, 20);
+      if(name.empty()) break;
+      if(!count) first = name == "<>" ? std::string{} : name;
+      if(count < 8) text += " " + traceName(name);
+    }
+    text += count ? count > 8 ? " (" + std::to_string(count) + " in all)" : std::string{} : std::string{" empty"};
+  }
+  if(mode >= 4 && mode <= 7 && size > 1480) text += ", focus " + std::to_string(word(1480));  //(as dialogSaves())
+  if(chosen) {
+    text += ", chosen " + traceName(*chosen);
+    used = *chosen;
+  } else if((mode == 4 || mode == 5) && used.empty()) {
+    used = first;
+  }
+  text += ", file " + traceName(memory.readString(p + 100, 13));
+  text += ", buffer 0x" + hexWord(word(116)) + " of " + std::to_string(word(120));
+  text += ", data " + std::to_string(word(124));
+  if(mode != 7 && mode != 8 && mode != 11) {
+    std::error_code error;
+    bool plain = plainName(game, 13) && (used.empty() || plainName(used, 20));
+    std::string folder = plain ? savePath(game + used) : std::string{};
+    bool there = !folder.empty() && fs::is_directory(folder, error);
+    text += ", " + traceName(game + used) + (there ? " there" : " not there");
+  }
+  if(u32 data = word(1492); mode == 8 && data && memory.reaches(data, 36)) {
+    text += ", msData " + traceName(memory.readString(data, 13)) + " " + traceName(memory.readString(data + 16, 20));
+  }
+  if(u32 list = word(1524); mode == 11 && list && memory.reaches(list, 12)) {
+    text += ", most " + std::to_string(memory.read(4, list));
+  }
+  if(u32 info = size >= 1536 ? word(1528) : 0; mode == 12 && info && memory.reaches(info, 36)) {
+    text += ", most " + std::to_string(memory.read(4, info)) + " secure " + std::to_string(memory.read(4, info + 4))
+          + " normal " + std::to_string(memory.read(4, info + 8)) + " system";
+  }
+  if(u32 info = size >= 1536 ? word(1532) : 0; mode == 22 && info && memory.reaches(info, 60)) {
+    text += ", files " + std::to_string(memory.read(4, info)) + " secure " + std::to_string(memory.read(4, info + 4))
+          + " normal";
+  }
+  if(mode == 1 || mode == 3 || mode == 5 || mode == 13 || mode == 14 || mode == 17 || mode == 18) {
+    text += ", title " + traceName(memory.readString(p + 128, 128));
+  }
+  return text;
+}
+
+//A savedata request's answer as the trace gives it: the result (named where it's one of savedataMode()'s), then what
+//the mode wrote back: a load's bytes read; a list load's or save's save name; the list mode's saves; the files mode's
+//counts; the sizes mode's free clusters, msData's clusters and what saving would take; the size mode's KB needed.
+auto Kernel::savedataAnswer(u32 p, u32 answer) -> std::string {
+  //(the parameters' words where they're in memory: a read past it is noted and counted in the machine's state)
+  auto word = [&](u32 at) -> u32 { return memory.reaches(p + at, 4) ? memory.read(4, p + at) : 0; };
+  static const std::map<u32, const char*> Names = {
+    {DialogCancelled, "cancelled"}, {SavedataLoadBroken, "load: data broken"},
+    {SavedataLoadNoData, "load: no data"}, {SavedataLoadParameter, "load: bad parameter"},
+    {SavedataLoadNoFile, "load: file not found"}, {SavedataReadBroken, "read: data broken"},
+    {SavedataReadNoData, "read: no data"}, {SavedataReadParameter, "read: bad parameter"},
+    {SavedataReadNoFile, "read: file not found"}, {SavedataDeleteNoData, "delete: no data"},
+    {SavedataDeleteParameter, "delete: bad parameter"}, {SavedataSaveAccess, "save: access"},
+    {SavedataSaveParameter, "save: bad parameter"}, {SavedataSizesNoData, "sizes: no data"},
+    {SavedataSizesParameter, "sizes: bad parameter"}};
+  u32 size = word(0), mode = word(48);
+  std::string text = "0x" + hexWord(answer);
+  if(auto name = Names.find(answer); name != Names.end()) text += " (" + std::string(name->second) + ")";
+  if(!answer && (mode == 0 || mode == 2 || mode == 4 || mode == 15 || mode == 16)) {
+    text += ", read " + std::to_string(word(124));
+  }
+  if(mode == 4 || mode == 5) text += ", save " + traceName(memory.readString(p + 76, 20));
+  if(u32 list = word(1524); mode == 11 && list && memory.reaches(list, 12)) {
+    u32 count = memory.read(4, list + 4), entries = memory.read(4, list + 8);
+    text += ", listed " + std::to_string(count);
+    for(u32 n = 0; n < std::min(count, 8u) && memory.reaches(entries + n * 72, 72); n++) {
+      text += " " + traceName(memory.readString(entries + n * 72 + 52, 20));
+    }
+  }
+  if(u32 info = size >= 1536 ? word(1528) : 0; mode == 12 && info && memory.reaches(info, 36)) {
+    text += ", listed " + std::to_string(memory.read(4, info + 12)) + " secure "
+          + std::to_string(memory.read(4, info + 16)) + " normal " + std::to_string(memory.read(4, info + 20))
+          + " system";
+  }
+  if(mode == 8) {
+    u32 free = word(1488), data = word(1492), needed = word(1496);
+    if(free && memory.reaches(free, 12)) text += ", free " + std::to_string(memory.read(4, free + 4)) + " clusters";
+    if(data && memory.reaches(data, 40)) text += ", msData " + std::to_string(memory.read(4, data + 36)) + " clusters";
+    if(needed && memory.reaches(needed, 4)) text += ", needed " + std::to_string(memory.read(4, needed)) + " clusters";
+  }
+  if(u32 info = size >= 1536 ? word(1532) : 0; mode == 22 && info && memory.reaches(info, 60)) {
+    text += ", needed " + std::to_string(memory.read(4, info + 36)) + " KB, overwrite "
+          + std::to_string(memory.read(4, info + 48)) + " KB";
+  }
+  return text;
+}
+
 //Does what a SceUtilitySavedataParam (psputility_savedata.h) asks, by its mode; the dialog's result. The layout: the
 //common part (48 bytes, its first word the structure's size), the mode at 48, bind at 52, the game's name at 60 (13
 //bytes), the save's at 76 (20), a list of save names at 96, the data file's name at 100 (13), its buffer at 116, the
@@ -460,7 +606,7 @@ auto Kernel::savePath(const std::string& folder, const std::string& file) -> std
 //so is refused as a bad parameter, before anything is made, read or deleted. The sizes mode reads no names of its
 //own, so none are asked of it: the save it measures is msData's, whose names are checked there. chosen: the save a
 //front end's player chose from a list (dialogs.cpp), taken in place of the request's own.
-auto Kernel::savedata(u32 p, const std::string* chosen) -> u32 {
+auto Kernel::savedataMode(u32 p, const std::string* chosen) -> u32 {
   namespace fs = std::filesystem;
   u32 mode = memory.read(4, p + 48);
   std::string game = memory.readString(p + 60, 13), save = memory.readString(p + 76, 20);

@@ -109,10 +109,17 @@ auto Kernel::sceKernelStopUnloadSelfModule() -> void {
   unloadSelf(0, arg(0), arg(1), arg(3));
 }
 
-//(which setting, where to put it): the system's settings (psputility_sysparam.h). Language 1 is English; button
-//swap 1 means the cross button confirms, as outside Japan; anything else reads 0.
+//(which setting, where to put it): the system's settings (psputility_sysparam.h). The time zone and daylight saving
+//time are the host's at the clock's now (hostZone()), as the clock's local time and the memory stick's dates have
+//them. Language 1 is English; button swap 1 means the cross button confirms, as outside Japan; anything else reads 0.
 auto Kernel::sceUtilityGetSystemParamInt() -> void {
   u32 which = arg(0), value = 0;
+  if(which == 6 || which == 7) {  //PSP_SYSTEMPARAM_ID_INT_TIMEZONE, PSP_SYSTEMPARAM_ID_INT_DAYLIGHTSAVINGS
+    s32 minutes = 0;
+    bool daylight = false;
+    hostZone(s64((startTime + cycles / (CPUFrequency / 1'000'000)) / 1'000'000), minutes, daylight);
+    value = which == 6 ? u32(minutes) : u32(daylight);
+  }
   if(which == 8) value = 1;  //PSP_SYSTEMPARAM_ID_INT_LANGUAGE
   if(which == 9) value = 1;  //PSP_SYSTEMPARAM_ID_INT_BUTTON_SWAP
   if(arg(1)) memory.write(4, arg(1), value);
@@ -426,18 +433,56 @@ auto Kernel::sceKernelCacheUnneeded() -> void {
   result(0);
 }
 
+//A moment, in seconds since 1970, as the host's calendar has it: in UTC, or in its time zone (local). False if the
+//host can't tell.
+static auto hostCalendar(s64 seconds, bool local, std::tm& when) -> bool {
+  std::time_t time = std::time_t(seconds);
+  #if defined(PLATFORM_WINDOWS)
+  //Windows' thread-safe pair: the arguments the other way round, 0 for success
+  return !(local ? localtime_s(&when, &time) : gmtime_s(&when, &time));
+  #else
+  return (local ? localtime_r(&time, &when) : gmtime_r(&time, &when)) != nullptr;
+  #endif
+}
+
+//A moment (seconds since 1970) as the host's local date and time, given as the seconds since 1970 that date and time
+//would be in UTC: the zone's offset then is the difference (std::tm has no portable field for it). False if the host
+//can't tell.
+auto Kernel::localSeconds(s64 seconds, s64& local) -> bool {
+  std::tm when{};
+  if(!hostCalendar(seconds, true, when)) return false;
+  s64 days = daysFromYearOne(when.tm_year + 1900, when.tm_mon + 1, when.tm_mday) - daysFromYearOne(1970, 1, 1);
+  local = days * 86'400 + when.tm_hour * 3'600 + when.tm_min * 60 + when.tm_sec;
+  return true;
+}
+
+//The host's time zone at a moment (seconds since 1970) as a PSP's settings keep one (pspsdk): the zone, its offset
+//from UTC in minutes without daylight saving time ("EST = -300"), and daylight saving time, a setting of its own, an
+//hour on top while it's kept. The zone is the lesser of its offsets on the year's first of January and of July, which
+//takes both hemispheres alike, and Ireland's too, whose zone files keep its winter as the "daylight saving" time;
+//daylight saving time is kept while the offset is more (a zone whose daylight saving time isn't an hour, as Lord
+//Howe Island's, can't be told exactly). UTC where the host can't tell.
+auto Kernel::hostZone(s64 seconds, s32& minutes, bool& daylight) -> void {
+  minutes = 0, daylight = false;
+  s64 local = 0, year = 0;
+  u32 month = 0, day = 0;
+  if(!localSeconds(seconds, local)) return;
+  dateFromYearOne(daysFromYearOne(1970, 1, 1) + (local - (local < 0 ? 86'399 : 0)) / 86'400, year, month, day);
+  auto offset = [&](u32 first) -> s64 {  //on the year's first of that month
+    s64 at = (daysFromYearOne(year, first, 1) - daysFromYearOne(1970, 1, 1)) * 86'400, there = at;
+    return localSeconds(at, there) ? there - at : 0;
+  };
+  s64 standard = std::min(offset(1), offset(7));
+  minutes = s32(standard / 60);
+  daylight = local - seconds > standard;
+}
+
 //A ScePspDateTime (psprtc.h: year, month, day, hour, minute and second as 16-bit numbers, then microseconds) at an
 //address, from microseconds since 1970: in UTC, or in the host's time zone (local). False if it can't be written.
 auto Kernel::writeDate(u32 address, u64 microseconds, bool local) -> bool {
   if(!memory.reaches(address, 16)) return false;
-  std::time_t seconds = std::time_t(microseconds / 1'000'000);
   std::tm when{};
-  #if defined(PLATFORM_WINDOWS)
-  //Windows' thread-safe pair: the arguments the other way round, 0 for success
-  if(local ? localtime_s(&when, &seconds) : gmtime_s(&when, &seconds)) return false;
-  #else
-  if(!(local ? localtime_r(&seconds, &when) : gmtime_r(&seconds, &when))) return false;
-  #endif
+  if(!hostCalendar(s64(microseconds / 1'000'000), local, when)) return false;
   u16 fields[6] = {u16(when.tm_year + 1900), u16(when.tm_mon + 1), u16(when.tm_mday), u16(when.tm_hour),
                    u16(when.tm_min), u16(when.tm_sec)};
   for(u32 n = 0; n < 6; n++) memory.write(2, address + n * 2, fields[n]);
