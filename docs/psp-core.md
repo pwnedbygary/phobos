@@ -10838,6 +10838,13 @@ again, of barriers counted, of textures kept, of rows held only where exact; com
 Sonic Rivals' and Activision Hits Remixed's palette passes reach the frame buffer below by their corners (at a
 weight of 0), so in accurate mode they finish again since: 8 to 16 a frame, against 31 to 61 on master.
 
+**Checks.** On the final code (4b2665616): `tests/psp/run-tests.sh` 486 groups, 0 failures (sanitized; 11 new GPU
+groups, each failing without its change, among them the held rows' paths, checked by taking them out: 12 failures);
+`tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed. CI on PR
+#234 green: the PSP system tests (GCC, Mesa's lavapipe), the Allegrex tests, and the Android, Windows, macOS and Linux
+builds. Its first run had failed one check that lavapipe's own blending rounds differently (the dithered blends' channels
+the same, 81% there against the M1's 87%; the check is at 75% now, the far ones still under 1%).
+
 **Library**: (filled in below, after the runs).
 
 **For the RP6** (Adreno may differ from MoltenVK): the Armored Cores' intros are the same in both renderers on the

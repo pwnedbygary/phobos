@@ -52,7 +52,11 @@ Save states unchanged (StateVersion 26). The software renderer untouched.
   156 -> 216; the Armored Cores, Army of Two, Daxter as they were; the final code's round (load 30-130) in part 83, the
   same ratios. Accurate: Castlevania 58 -> 144, Killzone 11.7 -> 19.3, Death Jr. II's woods 4.0 -> 10.5 and Sonic
   Rivals 5.8 -> 11.5 (their palette passes held only where exact: 8 finishes a frame, from 31).
-- **Checks**: (below, filled in at the end.)
+- **Checks** (the final code, 4b2665616): tests/psp 486/0 (sanitized; 11 new GPU groups), tests/allegrex 58/0,
+  tests/psp/ares 318/0; CI on #234 green (its first run failed a dithered-blending threshold lavapipe misses: 75% now).
+- **Review**: an independent read-only review (no blocker, three major points: accurate mode's held rows, texels a
+  PRIM takes for sprites, beside fills inside memory's callbacks) and a delta review (its tests in 3D so they reach the
+  held-row paths); all points taken (04e5d1c8a, 7099e35e3).
 - **On the RP6, to measure**: Software against Vulkan (fast) in the Armored Cores' intros and first menus (the M1
   can't say why the RP6 was slower there: the GPU's per-frame work is half a texture upload, a present and a shot),
   Colin McRae's race, Death Jr. II, Sonic Rivals, Activision Hits Remixed, Brothers in Arms, Killzone's menus,
