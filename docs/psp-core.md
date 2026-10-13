@@ -10845,7 +10845,18 @@ groups, each failing without its change, among them the held rows' paths, checke
 builds. Its first run had failed one check that lavapipe's own blending rounds differently (the dithered blends' channels
 the same, 81% there against the M1's 87%; the check is at 75% now, the far ones still under 1%).
 
-**Library**: (filled in below, after the runs).
+**Library** (the report's way, `lib.sh` with `--renderer Vulkan`: accurate mode, 3600 frames each, one at a time,
+master's runner and the final code's, each with only the bench patch): all 266 games finish in both, none missing a
+function. 214 are the same at all four captures (frames 60, 300, 1200 and 3600); 32 differ by a mean of 1 level or
+less; 20 by more. Those 20 were run again in Software: where the branch's capture is nearer Software's, it's the
+dither and depth fixes (Gitaroo Man Lives!, Warriors of the Lost Empire, Tenchu: Shadow Assassins, Samurai Dou
+Portable, Grand Theft Auto: Vice City Stories, Metal Gear Solid: Portable Ops Plus, MX vs. ATV Untamed, PixelJunk
+Monsters, LocoRoco, Shepherd's Crossing: the branch's the same as Software's, or nearly); where master's is nearer,
+the captures show the same movie or demo a few frames apart (IL-2 Sturmovik's and Mega Man Maverick Hunter X's
+intros, Formula Front International's credits, Tales of the World: Radiant Mythology 2's and Persona 2's movies,
+Brothers in Arms' logo fading, Mega Man Powered Up's demo), as runs of one runner do: the clock follows the host's,
+and the branch's run had the Mac at a load of 100 to 240, master's and Software's near 30. None shows anything
+drawn worse. (Run time 8,873 s for master, 10,088 s for the branch under that load.)
 
 **For the RP6** (Adreno may differ from MoltenVK): the Armored Cores' intros are the same in both renderers on the
 M1, bound by the movie's polling; what Vulkan adds there each frame is half a texture upload (456 KB), a texture made
