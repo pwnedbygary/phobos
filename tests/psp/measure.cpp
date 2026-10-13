@@ -470,6 +470,7 @@ static auto pspMeasure() -> void {
   CHECK(waitFor(m, 100, [&] { return m.kernel.exited; }), true);
 
   const char* reference = std::getenv("PSP_GE_RESULTS");
+  if(!reference || !*reference) skip("ge-round3", "PSP_GE_RESULTS isn't set: the files compared with nothing");
   const char* copy = std::getenv("PSP_GE_OURS");
   if(copy) std::filesystem::create_directories(copy);
   //each file against the reference's; one the reference lacks is said to be missing (one given up on there, say),

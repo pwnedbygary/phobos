@@ -2,7 +2,7 @@
 #Builds the PSP as an ares system (ares/psp/psp.cpp, the whole core as Phobos builds it, with ares's node tree) and
 #runs system.cpp's checks on the host. tests/psp/run-tests.sh tests the parts underneath on their own.
 #usage: tests/psp/ares/run-tests.sh   (PSP_TEST_PROGRAMS: the test programs' folder, see system.cpp; PHOBOS_JOBS:
-#compiles at once)
+#compiles at once; PHOBOS_TESTS_REQUIRE naming programs fails the run without them, where it would skip their checks)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)

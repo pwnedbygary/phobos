@@ -1178,7 +1178,7 @@ int main() {
       currentTest = label.c_str();
       int before = failures;
       run();
-      std::printf("%s %s\n", failures == before ? "pass" : "FAIL", currentTest);
+      report(before);
       groups++;
     }
   }
@@ -1186,9 +1186,9 @@ int main() {
     currentTest = name;
     int before = failures;
     run();
-    std::printf("%s %s\n", failures == before ? "pass" : "FAIL", currentTest);
+    report(before);
     groups++;
   }
-  std::printf("%d groups, %d failure%s\n", groups, failures, failures == 1 ? "" : "s");
+  summary(groups);
   return failures ? 1 : 0;
 }

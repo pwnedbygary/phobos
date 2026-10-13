@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <functional>
 #include <initializer_list>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -247,6 +248,56 @@ inline auto check(int line, const char* what, uint64_t actual, uint64_t expected
               (unsigned long long)actual, (unsigned long long)expected);
 }
 #define CHECK(actual, expected) check(__LINE__, #actual, (uint64_t)(actual), (uint64_t)(expected))
+
+//What a group (or a part of one) couldn't run here, and why: skip() names what it needs, a capability ("vulkan", a
+//Vulkan GPU; "programs", the test programs; ...), and the group then reports "skip" with the reasons rather than
+//"pass" (a failure in it still reports FAIL). A capability PHOBOS_TESTS_REQUIRE names (a comma-separated list; CI
+//names each lane's) is a failure instead, so a lane that must have it can't go green without it.
+inline std::string skipped;
+inline int skippedGroups = 0;
+
+inline auto required(const std::string& capability) -> bool {
+  const char* list = std::getenv("PHOBOS_TESTS_REQUIRE");
+  return list && ("," + std::string(list) + ",").find("," + capability + ",") != std::string::npos;
+}
+
+inline auto skip(const std::string& capability, const std::string& why) -> void {
+  if(required(capability)) {
+    failures++;
+    std::printf("FAIL %s: %s is required here (PHOBOS_TESTS_REQUIRE), and %s\n", currentTest, capability.c_str(),
+                why.c_str());
+    return;
+  }
+  auto reason = capability + ": " + why;
+  if(("; " + skipped + "; ").find("; " + reason + "; ") != std::string::npos) return;
+  skipped += (skipped.empty() ? "" : "; ") + reason;
+}
+
+//A group's result, after it ran with failures at `before` when it began: its line (FAIL, skip with its reasons, or
+//pass), and the same as a line of PHOBOS_TESTS_REPORT's file, if one is named (result, group and reasons, a tab
+//between; the file begun again by the run's first group).
+inline auto report(int before) -> void {
+  const char* result = failures != before ? "FAIL" : !skipped.empty() ? "skip" : "pass";
+  if(skipped.empty()) std::printf("%s %s\n", result, currentTest);
+  else std::printf("%s %s (%s)\n", result, currentTest, skipped.c_str());
+  skippedGroups += failures == before && !skipped.empty();
+  static bool begun = false;
+  if(const char* file = std::getenv("PHOBOS_TESTS_REPORT"); file && *file) {
+    if(FILE* out = std::fopen(file, begun ? "a" : "w")) {
+      std::fprintf(out, "%s\t%s\t%s\n", result, currentTest, skipped.c_str());
+      std::fclose(out);
+    }
+    begun = true;
+  }
+  skipped.clear();
+}
+
+//The run's last line: its groups and failures, and the groups skipped where there are any.
+inline auto summary(size_t groups) -> void {
+  std::printf("%zu groups, %d failure%s", groups, failures, failures == 1 ? "" : "s");
+  if(skippedGroups) std::printf(", %d skipped", skippedGroups);
+  std::printf("\n");
+}
 
 inline auto bits(float value) -> uint32_t { return std::bit_cast<uint32_t>(value); }
 

@@ -365,7 +365,7 @@ static auto curvesKnots() -> void {
 //covers and the core, a hair from them, doesn't.
 static auto curvesRound3() -> void {
   const char* results = std::getenv("PSP_GE_RESULTS");
-  if(!results || !*results) return;
+  if(!results || !*results) return skip("ge-round3", "PSP_GE_RESULTS isn't set");
   auto load = [&](const char* name) {
     std::ifstream file(std::filesystem::path(results) / (std::string(name) + ".bin"), std::ios::binary);
     std::vector<u8> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());

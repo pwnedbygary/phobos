@@ -25,6 +25,41 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Tests: a skip says what's missing, and fails where the lane must have it; the Allegrex measurements unpacked by content — 2026-10-13
+
+Branch `cursor/test-plan-04-2b67`, stacked on `cursor/test-plan-03-2b67` (package 03, itself on #241). Package 04 of
+the 2026-10-13 test and performance plan (indexed in the implementation plan by package 01's PR). Test harness, test
+scripts and CI only: no core or app change, no check loosened.
+- **The problem**: with no Vulkan GPU, `tests/psp/gpu.cpp` said "skipped" once and every GPU group then printed
+  "pass"; the groups needing the test programs or the GE's measurement rounds returned early, silently, without
+  them. A green run didn't say what had run.
+- **Now** (`tests/allegrex/harness.hpp`, both suites): `skip(capability, why)` marks the group: it prints `skip
+  NAME (capability: why)` rather than `pass` (a failure still prints FAIL), and the last line adds ", N skipped"
+  where any were (`489 groups, 0 failures` otherwise as before). A capability named in `PHOBOS_TESTS_REQUIRE` (a
+  comma-separated list) makes that skip a failure. `PHOBOS_TESTS_REPORT=FILE` writes each group's result, group and
+  reasons, a tab between. Skips declared: `vulkan` (no renderer: `renderer()` itself), `vulkan-fast`, and the GPU's
+  capabilities the groups already tested for (`vulkan-transforms`, `-palettes`, `-moves`, `-reads`,
+  `-unordered-reads`, `-2x`, `-3x`); `programs` (`testPrograms()` and `testProgram()`, a program missing from the
+  folder too); `ge-round3`, `ge-round6`. The ares suite's run without programs fails where `programs` is required,
+  and its last line says when their checks were skipped.
+- **CI** (PSP Core Tests): the system lane requires `vulkan`, `vulkan-fast`, `-transforms`, `-palettes`, `-moves`,
+  `-reads`, `-2x`, `-3x`, `programs`, `ge-round3` and `ge-round6` (not `vulkan-unordered-reads`: lavapipe reads in
+  order, the one skip its runs already printed); the ares lane requires `programs`. The Allegrex and system lanes
+  keep their reports as artifacts.
+- **The Allegrex measurements**: unpacked again when their packed file's SHA-256 (kept beside the unpacked file)
+  changes, not by time: a tree copied with its times kept, as the agents' scratch copies are, can hold an older packed
+  file than the folder. xz checks each packed file as it unpacks; a damaged one stops the run, naming it.
+  `SHA256SUMS*` there are the sums of the PSP's whole output files, many kept here only in part (the 16k sets), so
+  they are its provenance, not a list of this folder; round 6 keeps verifying its own `SHA256SUMS` as before.
+- **Kept**: every check and tolerance; the `main()` loop's first lines, which three agents' scratch filters patch;
+  the PSP's optional pspautotests samples and `loader.cpp`'s own program check (#243 changes that file) stay as they
+  were.
+- **Checks** (the Mac): the changed test sources compile with `-Wall -Wextra -Werror` (syntax-only, both flag sets);
+  `tests/allegrex` 60/0 with its report (60 pass lines), a second run unpacking nothing, and a disposable copy with one
+  packed file damaged: exit 1, "tests/allegrex/measured/vadd-spread.bin.xz doesn't unpack (damaged?)". CI on the PR
+  and the negative controls (Vulkan off while required, a missing program while required, Vulkan off and optional):
+  below once run.
+
 ## Tests: the host suites' objects kept by what they include and how they're compiled, a checkout's apart — 2026-10-13
 
 Branch `cursor/test-plan-03-2b67`, stacked on `cursor/test-plan-05-2b67` (#241, the CI lanes, so every script changed

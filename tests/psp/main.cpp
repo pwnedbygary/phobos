@@ -48,8 +48,8 @@ int main() {
     currentTest = name;
     int before = failures;
     run();
-    std::printf("%s %s\n", failures == before ? "pass" : "FAIL", currentTest);
+    report(before);
   }
-  std::printf("%zu groups, %d failure%s\n", tests.size(), failures, failures == 1 ? "" : "s");
+  summary(tests.size());
   return failures ? 1 : 0;
 }
