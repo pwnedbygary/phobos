@@ -25,9 +25,9 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
-## Appearance: the Sakura cycle in phases, three Pixel art scenes gone, night city and XMB Deep redrawn, Manga and CRT redone — 2026-10-13
+## Appearance: the Sakura cycle in phases, three Pixel art scenes gone, night city and XMB Deep redrawn, Manga and CRT redone, a magazine cover and Truck-kun — 2026-10-13
 
-Branch `cursor/themes-backdrops-2b67`, on master (`1d9308714`), from the owner's feedback on the styles and their
+Branch `cursor/themes-backdrops-2b67`, on master (`1d9308714`, merged with `542da5a28`, #230, since), from the owner's feedback on the styles and their
 backdrops. App only (Kotlin; no native or core change). The console icons follow in a second branch,
 `cursor/themes-console-icons-2b67`.
 - **Sakura cycle** (`PixelBackdropScene.SAKURA_CYCLE`, `ui/theme/PixelSakura.kt`): the sun and the moon were up
@@ -69,7 +69,43 @@ backdrops. App only (Kotlin; no native or core change). The console icons follow
 - **Manga ink** (its own commit, so it can be dropped): `ui/theme/MangaPage.kt`, through `RenderedBackdrop`, in the
   ink tone (`mangaTone`) on the paper and never denser than it: Screentone is a 45-degree halftone swelling from a
   third of the way down along a wavy edge, cut by scratched highlights; Speed lines are 520 tapering focus lines around
-  a clear space; Splash page is an impact burst cut out of a screentone field (it was a grey star blob).
+  a clear space; Splash page was an impact burst cut out of a screentone field (it was a grey star blob), and is now
+  the magazine cover below.
+- **Magazine cover and Truck-kun** (Manga ink, the owner's follow-up: Splash page "looks kinda lame", he wanted the
+  cover of a manga magazine advertising Phobos, and a speed lines backdrop with Truck-kun): `ui/theme/MangaCover.kt`
+  and `ui/theme/MangaTruck.kt`, drawn by `MangaPage` like the other two, in its ink and never denser than it.
+  - *Magazine cover* (`MangaBackdropScene.COVER`): Weekly Shonen Phobos, an original masthead (no Jump name, logo or
+    emblem): WEEKLY SHONEN on an ink tab beside PHOBOS on wide pages (above it on tall ones), PHOBOS inked, cut by two
+    speed stripes, ringed in paper and outlined over a toned drop shadow; an issue box (2026, No.42, PRICE ¥0); a NEW
+    SERIES! ribbon with sparkles; the cover lines "ares, now on Android!" (outlined) and "...and back to Windows and
+    Linux!" (a caption box); a 30+ SYSTEMS! balloon; an EAN-13 barcode that reads back as its digits (491..., the
+    magazine prefix, its check digit computed); and in the middle the app icon's moon, lumpy and cratered (craters
+    foreshortened toward its edge, the wall toward the light in shadow), a d-pad on a cross-shaped hollow, bursting out
+    of an impact burst with rocks flying, focus lines converging on it, over the curve of Mars (ares, the planet's Greek
+    name) with craters seen edge on. On a wide page the masthead and the issue box stay in the top fifth, which the
+    Library's cards leave showing.
+  - *Truck-kun* (`TRUCK`): a cab-over truck charging at the reader, seen from low down (`Frame`, a perspective frame)
+    and tilted: a toned cab with a light stripe lettered ISEKAI, a dark windshield with two reflections and wipers,
+    mirrors, roof marker lamps, a slatted grille, round headlights blazing (a glow, flare lines and an eight-pointed
+    glint, long sideways), a bumper with a 1-UP plate, tyres and its shadow on the road; 340 focus lines converge on
+    the grille. VRRROOOM!! grows letter by letter, and the narration is a light novel's title: "That time ares got hit
+    by Truck-kun and was reincarnated on Android". On a wide page both stay in the top fifth.
+  - *Lettering*: Bangers (already bundled, OFL) rasterized in plain Kotlin, so it's the same on every device and in
+    tests: `TrueType` reads the font file (format 4 character map, simple and composite quadratic outlines, advances,
+    GPOS pair kerning), `Lettering` sets lines and blocks (turned, slanted, growing) and fills them by signed area per
+    pixel; outlined letters take their rings from an exact distance transform (`Mask.distances`). The app reads the
+    font resource once, on the render thread (`MangaLettering` in `Manga.kt`); without it the two scenes leave the
+    words out.
+  - *Dark themes*: where the ink is lighter than the paper, form shading turns round (`Page.shade`), so the moon's lit
+    side and the headlights are the light parts on both kinds of theme; lines and lettering stay ink.
+  - *Stored choices*: `SPLASH` reads as `COVER` (`mangaBackdropNamed`, `data/SettingsStore.kt`), the screensaver's
+    `MANGA_SPLASH` as `MANGA_COVER`.
+  - *Cost* (the Mac's JVM, warmed up, shared with other agents' builds): 1920x1080 in 0.4-0.6 s for the cover and
+    0.6-0.9 s for Truck-kun (Speed lines 0.35-0.45 s at the same time); once per size and theme, off the main thread.
+  - *Previews* (outside the repo, `~/phobos-work/scratch/themes/previews2/`): `manga-cover-*.png` and
+    `manga-truck-*.png`, 1920x1080 and 1080x2400 in GitHub Light, Gruvbox Dark and Phobos dark, each also with a
+    mock of the Library drawn over it (`*-library.png`), and `manga-cover-sheet.png` and `manga-truck-sheet.png`; from
+    a local JVM test (not committed) running the real code and theme colors.
 - **CRT terminal** (its own commit, so it can be dropped): `ui/theme/CrtScreen.kt`, through `RenderedBackdrop`: a tube
   at rest, the phosphor glowing in a pool below the middle (`bloomAt`, falling off over the shorter side so the top
   bar's title stays on darker glass), rounded corners, soft scanlines in threes, a faint aperture grille on dark
@@ -90,7 +126,11 @@ backdrops. App only (Kotlin; no native or core change). The console icons follow
   `XmbDeepTest` (3), `MangaPageTest` (3), `CrtScreenTest` (4); `PixelSceneTest` and `PixelArtTest`'s planet and
   shooting-star tests went with Space. Reverting the Manga or the CRT commit alone leaves the app compiling and the
   remaining tests passing (this entry then needs its bullet for it taken out). No APK built locally (CI builds them);
-  not yet seen on a device.
+  not yet seen on a device. With master merged and the magazine cover and Truck-kun: 331 pass; `MangaPageTest` has 11
+  (every pixel between paper and ink on light and dark themes, the same page with the font read again, every scene
+  faint on average, the masthead lettered over the moon, the headlights light on both kinds of theme, the barcode read
+  back by the published patterns, a letter's counter and surroundings clear, ink growing with the square of the size,
+  Euclidean distances, and a stored Splash page, backdrop or screensaver, read as the cover).
 - **Review**: an independent read-only review (a subagent) of the whole branch: NEEDS CHANGES, no High finding. Its
   three Mediums are fixed: Deep's strands drew brighter than the glass search modeled where a sheet gathers (the fade's
   gradient had 16 stops; now 64, and each sheet is one path); `RenderedBackdrop` drew again from scratch after every
@@ -102,7 +142,7 @@ backdrops. App only (Kotlin; no native or core change). The console icons follow
   second), and MangaPage's per-pixel `hypot`s and edge scan (a 1920x1080 page now 130-320 ms). `CrtContrastTest` also
   allows for a status bar above the top bar.
 - **For the owner**: whether the Manga and CRT backdrops stay (the PR's description has the verdict and previews);
-  Sakura as the Pixel art default now that Space is gone.
+  Sakura as the Pixel art default now that Space is gone; the magazine cover and Truck-kun on the RP6.
 
 ## PSP: the host's right stick for patched games, the keyboard in a field's own characters, 7th Dragon 2020-II past its certificate — 2026-10-12
 
