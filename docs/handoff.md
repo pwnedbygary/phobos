@@ -85,46 +85,66 @@ scripts and CI only: no core or app change, no check loosened.
 
 ## Tests: the host suites' objects kept by what they include and how they're compiled, a checkout's apart — 2026-10-13
 
-Branch `cursor/test-plan-03-2b67`, stacked on `cursor/test-plan-05-2b67` (#241, the CI lanes, so every script changed
-here runs in CI). Package 03 of the 2026-10-13 test and performance plan (indexed in the implementation plan by
-package 01's PR). Build scripts only: no core, app or test source changes.
+Branch `cursor/test-plan-03-2b67` (PR #245), stacked on `cursor/test-plan-05-2b67` (#241, the CI lanes, so every
+script changed here runs in CI). Package 03 of the 2026-10-13 test and performance plan (indexed in the implementation
+plan by #244). Build scripts only: no core, app or test source changes.
 - **The problem** (on a Mac five agents share): the four PSP build scripts kept objects in one folder per suite in
   `${TMPDIR:-/tmp}`, shared by every worktree, reused while their top source was older than them. A header edit,
   another worktree's newer object, another compiler or sanitizer setting, all reused the old object; libco's was
   never rebuilt; two worktrees' runs wrote the same test binary.
 - **`tests/objects.sh`** (sourced by `tests/allegrex`, `tests/psp`, `tests/psp/ares`, `tests/ngcd` and
-  `tools/psp-runner/build.sh`): an object is named by its compile command (the compiler's path and its `--version`,
-  every flag, the source's path), so another checkout, compiler, sanitizer or define makes its own; it's kept while
-  nothing on the compiler's own list of what it read (`-MD`, system headers included: ares's and nall's are
-  included as system headers) is newer than it, or gone, compared with `find -newer` (nanoseconds, where macOS's
-  bash 3.2 `-nt` takes whole seconds). Objects and programs are written beside their place and renamed into it, so
-  runs at once are safe and a killed build leaves nothing taken for finished. Each checkout gets its own folder in
-  the suite's (the cksum of its path, as the NGCD script already did). Every source is its own object now, the
+  `tools/psp-runner/build.sh`): an object is named by its compile command (the compiler as named, every word of CC
+  or CXX, where it is and its `--version`, every flag, the source's path, and `CPATH`, `C_INCLUDE_PATH`,
+  `CPLUS_INCLUDE_PATH`, `SDKROOT`, `MACOSX_DEPLOYMENT_TARGET`), so another checkout, compiler, sanitizer or define
+  makes its own; it's kept while nothing on the compiler's own list of what it read (`-MD`, system headers included:
+  ares's and nall's are included as system headers) is newer than it, or gone, compared with `find -newer`
+  (nanoseconds, where macOS's bash 3.2 `-nt` takes whole seconds). An object takes the time its compile began, so a
+  header saved during the compile is newer than it. Objects and programs are written beside their place and renamed
+  into it, so runs at once are safe and a killed build leaves nothing taken for finished; a program's name carries a
+  hash of its objects and link flags, so runs of two configurations in one checkout each run their own. Each
+  checkout gets its own folder in the suite's (the cksum of its path, as the NGCD script already did; its `checkout`
+  file names the path), deletable between runs: per configuration a checkout keeps 21 MB (Allegrex), 34 MB (NGCD),
+  40 MB (the ares system) or 46 MB (the runner, with its copy) until then. What times can't tell is written down: a
+  new header shadowing another, a file replaced by an older-dated copy. Every source is its own object now, the
   test suites' too (they were one compile each run), and each compile's line says whether it's sanitized (in the
   sanitized suites nall and sljit aren't). `PHOBOS_JOBS=N` compiles N at once (1 by default).
 - **Kept as they were**: `TMPDIR=X tools/psp-runner/build.sh` still leaves `X/phobos-psp-runner/psp-runner` (a copy
   of this checkout's, which the build's last line names; `runner-test.sh` takes the latter); NGCD's build-dir
   argument; the FFmpeg cache; every flag. The round-6 and Allegrex measurements unpack into the checkout's folder,
-  the latter now through a temporary file too.
-- **`tests/objects-test.sh`** (in CI's Allegrex job; seconds): a small C program built cold (2 compiles), warm (0),
-  after its header changes (1, and the program sees it), with a define added (2) and taken away (0: the first objects
-  kept), with a compiler reporting another version (2), killed mid-compile with the build (fails, then the same
-  command compiles everything: nothing kept from the cut), with the first header on the include path gone (1, the
-  next one taken), and two checkouts built at once into one folder (each its own program and folder). Negative
-  controls, each a disposable copy of the library: the old rule (the source's time alone), flags out of the key,
-  objects written in place, one folder for all checkouts, a gone file taken as unchanged, the compiler's version out
-  of the key: each fails at least one case.
+  each file through a temporary one named by the run, a failed unpack stopping the run.
+- **`tests/objects-test.sh`** (in CI's Allegrex job; seconds; 18 cases): a small C program built cold (2 compiles),
+  warm (0), after its header changes (1, and the program sees it), and a header found as a system header (1), with a
+  define added (2) and taken away (0: the first objects kept), with the compiler named with another word (`cc
+  -DEXTRA=9`: 2, the word taken), the same compiler at the same path reporting another version (2), a header saved
+  while its includer compiled (the compiler holding before it writes the object: compiled again next time), a header
+  changed within the second (where the file system keeps fractions; said as a skip where it doesn't), killed
+  mid-compile with the build (fails, then the same command compiles everything: nothing kept from the cut), with the
+  first header on the include path gone (1, the next one taken), a compile failing among two at once (the build
+  fails), and two checkouts built at once into one folder (each its own program and folder). Negative controls,
+  each a disposable copy of the library: the compiler's name, or its version, out of the key; the object's time its
+  compile's end; `-MMD`; bash's whole-second `-nt`; a failed compile among several ignored; the old rule (the
+  source's time alone); flags out of the key; objects written in place; one folder for all checkouts; a gone file
+  taken as unchanged: each of the 11 fails at least one case.
 - **Checks** (the Mac, bash 3.2, Apple clang 21, `PHOBOS_JOBS=3`, a TMPDIR of its own): `tests/objects-test.sh` 11/11,
   three times; `tests/allegrex` cold 7 compiles (60/0), warm 0 (60/0), after touching `ares/psp/cpu/allegrex.hpp` 4
   (the four that include it; 60/0); `tests/ngcd` cold 13 (2835/0), warm 0; `tests/psp/ares` cold 25 (318/0), warm 0
-  (318/0); `runner-test.sh` cold 71 s (25 objects), warm 12 s, the copy left in `phobos-psp-runner/`. CI on the
-  PR: below once run.
+  (318/0); `runner-test.sh` cold 71 s (25 objects), warm 12 s, the copy left in `phobos-psp-runner/`. CI on #245
+  (runs 38439444461 and 38439444229, at `960d668da`; Linux, GCC 13, bash 5): `tests/objects-test.sh` 0 failures,
+  Allegrex 60/0, the system suite 497/0 (every source its own object now), the ares system 318/0, the runner's test
+  passing, NGCD 2835/0.
+- **Review**: an independent read-only review found a major hole (a word after the first in CC or CXX wasn't in
+  the key: `CC="cc -DEXTRA=9"` after `cc` compiled nothing and ran the old program), and minor ones: a header edited
+  during a compile never rebuilt, the stale-file cleanup reaching anything in a folder handed to NGCD, an exported
+  `BUILD` overriding the per-checkout folders, four mutations the test let through, the disk use unsaid, the
+  include-path variables not keyed, a failed unpack carrying on, programs per checkout rather than per
+  configuration. All taken (above): the cleanup only in the objects folder, the folder override named
+  `OBJECTS_BUILD`, the test's new cases each failing the mutation it was missing.
 
 ## CI: the PSP core as an ares system, the headless runner and the Neo Geo CD's checks in CI; the triggers complete — 2026-10-13
 
-Branch `cursor/test-plan-05-2b67`, on master (`9333a8d7a`, #235). Package 05 of the 2026-10-13 test and performance
-plan (an outside audit of master `b3507c1db`, triaged against `9333a8d7a`; package 01's PR indexes it in the
-implementation plan). CI only: no core, app or test code changes.
+Branch `cursor/test-plan-05-2b67` (PR #241), on master (`4788125f1`, #236). Package 05 of the 2026-10-13 test and
+performance plan (an outside audit of master `b3507c1db`, triaged against `9333a8d7a`; #244, package 01, indexes it
+in the implementation plan). CI only: no core, app or test code changes.
 - **The gap**: three suites ran only by hand: `tests/psp/ares/run-tests.sh` (the whole PSP core as an ares system,
   318 checks on the last recorded runs), `tests/psp/ares/runner-test.sh` (the headless runner built and running
   cube.elf) and `tests/ngcd/run-tests.sh` (the Neo Geo CD's layout and state checks). PSP Core Tests' paths also
@@ -134,15 +154,31 @@ implementation plan). CI only: no core, app or test code changes.
   build cached as the system job has it), and a new workflow, Neo Geo CD Tests, runs `tests/ngcd/run-tests.sh` on
   changes to the Neo Geo core, the 68000, the Z80, ymfm, ares's framework, nall, libco or the tests. PSP Core Tests'
   paths add `ares/ares/**`, `libco/**`, `thirdparty/sljit/**` and `thirdparty/sljit*`, `thirdparty/Vulkan-Headers/**`,
-  `thirdparty/libchdr/**`, `tools/psp-runner/**` and `android/app/src/test/resources/psp-*` (the last as #230 adds it,
-  so that line's conflict resolves to this one). Both workflows also run for version tags (a tag's push takes no path
+  `thirdparty/libchdr/**`, `tools/psp-runner/**`, `desktop/Platform.hpp` (which `desktop/PspDiscInfo.cpp`
+  includes) and `android/app/src/test/resources/psp-*` (the last as #230 adds it, so that line's conflict resolves
+  to this one); Neo Geo CD Tests' include sljit's (ares.hpp includes `sljit.h`). Both workflows also run for version tags (a tag's push takes no path
   filter). Every suite's last line, its count, goes in the run's summary with the commit; the suites' output goes
-  through `tee`, so their steps run as `shell: bash` (pipefail) to keep a failure failing.
+  through `tee`, so their steps run as `shell: bash` (pipefail) to keep a failure failing, and a suite that left no
+  output says so in the summary. Both workflows' runners are pinned to Ubuntu 24.04 (ubuntu-latest moves to 26 on
+  2026-10-19: a new GCC, a new FFmpeg build, maybe new `-Werror` warnings, taken on purpose instead), each job has a
+  time limit (20 to 60 minutes), and only a PR's newer push cancels its run: every master and tag run finishes.
 - **Not done here**: a workflow whose paths don't match doesn't run, which shows as no check rather than as a passing
   one; and Android's release and nightly don't wait for these workflows (they are separate; package 20 or a later
   change can gate them explicitly).
-- **Checks**: actionlint 1.7.12 on both workflows (clean). CI on the PR and a negative control (a failing check in
-  each suite on a disposable branch): below once run.
+- **Checks**: actionlint 1.7.12 on both workflows (clean). CI on #241 (runs 38439422378 and 38439422290, at
+  `f1d3915f4`): Allegrex 60/0, the system suite 497/0, the ares system 318/0, the runner's test passing, NGCD
+  2835/0, each count in the run's summary. A run's summary steps failed at `a2483e36c` (the suites passed): an
+  apostrophe inside `${HEAD_SHA:+...}` that bash took for a quote; fixed in `f1d3915f4`.
+- **Negative control** (a disposable branch from this PR's first commit `1bf7afd26`, on master `9333a8d7a`, hence
+  491 groups, with one failing check in each suite: run 38436478270, dispatched, and draft #242 for the new NGCD
+  workflow, which a dispatch can't run before it's on master; #242 closed and the branch deleted after): every lane
+  failed: Allegrex "60 groups, 1 failure", the ares system "319 checks, 1 failed", the system suite "491 groups, 1
+  failure", the runner's test on its frame count, NGCD "2836 checks, 1 failures" (each through `tee`, the step
+  failing; the test steps are the same in `f1d3915f4`).
+- **Review**: an independent read-only review (it scanned every source the five builds compile against the paths)
+  found sljit's headers missing from NGCD's paths and `desktop/Platform.hpp` from PSP's, and this entry calling the
+  control's branch deleted when it wasn't yet; all fixed, with its suggestions taken (the Ubuntu pin, time limits,
+  master's runs not cancelled, the empty-log case).
 
 ## PSP: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces — 2026-10-13
 

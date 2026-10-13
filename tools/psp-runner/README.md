@@ -11,9 +11,10 @@ it is what `docs/psp-compatibility.md` was run with.
 tools/psp-runner/build.sh
 ```
 
-The binary ends up in this checkout's build folder, named `psp-runner`, which the build's last
-line names (`${TMPDIR:-/tmp}/phobos-psp-runner/<a number for the checkout>/psp-runner`); a copy
-also goes in `${TMPDIR:-/tmp}/phobos-psp-runner/psp-runner`, the last one built there. The build
+The binary ends up in this checkout's build folder, named `psp-runner-` and a hash of its
+configuration, which the build's last line names
+(`${TMPDIR:-/tmp}/phobos-psp-runner/<a number for the checkout>/psp-runner-<hash>`); a copy also
+goes in `${TMPDIR:-/tmp}/phobos-psp-runner/psp-runner`, the last one built there. The build
 reuses the recipe of `tests/psp/ares/run-tests.sh`: the same objects (the core, ares's globals,
 the node tree, nall, sljit, libchdr, zlib, libco), the same defines, its objects kept between
 builds by `tests/objects.sh`, each compiled again only when a file it was built from (any header

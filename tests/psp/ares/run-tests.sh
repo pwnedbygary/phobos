@@ -57,6 +57,7 @@ object "$CC" "$ROOT/libco/libco.c" -O1 -w "${SYSROOT[@]}" -I"$ROOT/libco"
 object "$CXX" "$HERE/system.cpp" "${CXXFLAGS[@]}" -Wall -Wextra -Werror
 objects_done
 
-$CXX "${SYSROOT[@]}" -o "$BUILD/psp-ares.part-$$" "${OBJECTS[@]}" "${LIBRARIES[@]}"
-mv -f "$BUILD/psp-ares.part-$$" "$BUILD/psp-ares"
-"$BUILD/psp-ares"
+objects_program psp-ares "${SYSROOT[@]}" "${LIBRARIES[@]}"
+$CXX "${SYSROOT[@]}" -o "$REPLY.part-$$" "${OBJECTS[@]}" "${LIBRARIES[@]}"
+mv -f "$REPLY.part-$$" "$REPLY"
+"$REPLY"

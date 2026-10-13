@@ -27,10 +27,11 @@ if [[ -z ${PSP_GE_ROUND6+set} ]]; then
     for packed in "$MEASURED6"/*.xz; do
       unpacked="$PSP_GE_ROUND6/$(basename "$packed" .xz)"
       if [[ ${1:-} == all || ! -f $unpacked || $packed -nt $unpacked ]]; then
-        if xz -dc "$packed" > "$unpacked.part"; then mv "$unpacked.part" "$unpacked"; else rm -f "$unpacked.part"; fi
+        if xz -dc "$packed" > "$unpacked.part-$$"; then mv -f "$unpacked.part-$$" "$unpacked"; else rm -f "$unpacked.part-$$"; fi
       fi
     done
-    cp "$MEASURED6/manifest6.txt" "$PSP_GE_ROUND6/"
+    cp "$MEASURED6/manifest6.txt" "$PSP_GE_ROUND6/manifest6.txt.part-$$"
+    mv -f "$PSP_GE_ROUND6/manifest6.txt.part-$$" "$PSP_GE_ROUND6/manifest6.txt"
   }
   sums6() {
     local sum=(shasum -a 256)
@@ -108,6 +109,8 @@ for source in "$ROOT/ares/psp/cpu/allegrex.cpp" "$ROOT/ares/psp/memory/memory.cp
 done
 objects_done
 # shellcheck disable=SC2086
-$CXX $SANITIZE "${SYSROOT[@]}" "${OBJECTS[@]}" "${LIBRARIES[@]}" -o "$BUILD/psp.part-$$"
-mv -f "$BUILD/psp.part-$$" "$BUILD/psp"
-"$BUILD/psp"
+objects_program psp $SANITIZE "${SYSROOT[@]}" "${LIBRARIES[@]}"
+# shellcheck disable=SC2086
+$CXX $SANITIZE "${SYSROOT[@]}" "${OBJECTS[@]}" "${LIBRARIES[@]}" -o "$REPLY.part-$$"
+mv -f "$REPLY.part-$$" "$REPLY"
+"$REPLY"
