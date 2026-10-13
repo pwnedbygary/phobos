@@ -31,26 +31,34 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## Docs: the plan's opening and evidence brought up to date; the 2026-10-13 test and performance plan indexed — 2026-10-13
 
-Branch `cursor/test-plan-01-2b67`, on master (`4788125f1`, #236). Package 01 of the 2026-10-13 test and performance
-plan, an outside audit of master `b3507c1db` given to the owner as a plan bundle (not kept in the repository).
-Documentation only.
+Branch `cursor/test-plan-01-2b67` (PR #244), on master (`4788125f1`, #236). Package 01 of the 2026-10-13 test and
+performance plan, an outside audit of master `b3507c1db` given to the owner as a plan bundle (not kept in the
+repository). Documentation only.
 - **The stale summaries**: the implementation plan opened with "Last reconciled: 2026-09-25" and "zero fresh native
   performance runs", and this file's entry point with September's next action, though later sections record the
   RP6's N64 measurements (from 2026-09-25), the 2026-10-02 presentation comparison with Mupen64Plus-AE, the desktop
   builds and the PSP core's parts (76 of them on master, up to part 87). Now the plan's opening and its evidence
-  boundary sort what's known by kind: checked on CI's hosts, measured on the RP6 (dated, linked), waiting for the
-  RP6, on branches, proposed. The current priority (the PSP's throughput, fast-forward and Vulkan scaling, accurate
+  boundary sort what's known by kind: implemented on master (some of it only built), checked on CI's hosts (exactly
+  what CI runs, and what it doesn't yet), measured on the RP6 (dated, linked: the N64's, and the PSP's speed in
+  parts 52 to 68), waiting for the RP6, on branches, proposed. The current priority (the PSP's throughput, fast-forward and Vulkan scaling, accurate
   and fast apart) is named, the N64 regressions kept, and no comparison is presented as new. Nothing historical is
   removed.
 - **The plan indexed**: the implementation plan's "Test and performance plan (2026-10-13)" lists the 25 packages
   with the triage's disposition (seven now, 16 later, each waiting on a named PR or package, two not now), what each
   waits on, and its PR.
-- **Baseline at triage** (master `9333a8d7a`; now `4788125f1`): the libadrenotools submodule at `8fae8ce25`; open
-  PRs #223, #229-#232, #237, #240, #243 (the agents' own), and this plan's #238, #239, #241; CI on `0a9a7fa75`:
-  PSP Core Tests 60/0 and 489/0, Desktop Build green, Android Build cancelled in its SDK cache's post step after 37
-  minutes (package 02). The Mac: macOS 27.0.1, Apple clang 21.0.0, glslang 16.6.0, JDK 17.0.20.1.
-- **Checks**: `git diff --check`; the links' targets (the plan's new anchor, the audit's two sections, psp-core.md)
-  read back.
+- **Baseline at triage** (master `9333a8d7a`): the libadrenotools submodule at `8fae8ce25`; open PRs #223, #229,
+  #230, #231, #232, #236 and #237, and two agents' branches without PRs (GE headroom and NpDrm modules, since #240
+  and #243); CI on `0a9a7fa75` (v2.2.0's commit): PSP Core Tests 60/0 and 489/0, Desktop Build green, Android Build
+  cancelled in its SDK cache's post step after 37 minutes (package 02). The Mac: macOS 27.0.1, Apple clang 21.0.0,
+  glslang 16.6.0, JDK 17.0.20.1. Since: #236 merged (`4788125f1`, StateVersion 27), all three workflows green on it
+  (PSP 60/0 and 497/0); the open PRs' heads at this entry: #223 `f12663c2d`, #229 `a31b2b3ae`, #230 `059a1bbfe`,
+  #231 `5e6d8a5b1`, #232 `b4dc27e4e`, #237 `46f62e6bf`, #240 `7aa4b8054`, #243 `e84596e63`, and this plan's.
+- **Checks**: `git diff --check`; relative links and anchors in both files, 0 bad (as on master).
+- **Review**: an independent read-only review found the CI line claiming more than CI runs (the ares suite, the
+  runner, NGCD, ARM64 and the JVM tests aren't run) and merging "implemented" with "CI-verified", the PSP's RP6
+  speed measurements left out, the baseline's PR list not the one at triage, CI cited from an older commit, #237
+  named among the state-layout PRs (it doesn't change states), and the order of the CI packages unexplained; all
+  taken. Its doubt about "up to 59 minutes" is answered by the run cited (38286832457's post step: 58.7 minutes).
 
 ## PSP: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces — 2026-10-13
 
