@@ -42,11 +42,14 @@ out = pathlib.Path(sys.argv[2])
 modules = re.findall(r'static const u32 (\w+)\[\] = \{([^}]*)\};', text)
 if not modules:
     sys.exit('shaders.hpp: no SPIR-V arrays found')
-#(every array declared, in whatever form, must be one read above: none left unvalidated)
-declared = re.findall(r'(\w+)\s*\[\w*\]\s*=\s*\{', text)
+#(every array declared, with or without '=', must be one read above, and every SPIR-V module's magic number one of
+#theirs: none left unvalidated however it's written)
+declared = re.findall(r'(\w+)\s*\[[^\]]*\]\s*=?\s*\{', text)
 if len(declared) != len(modules):
     unread = sorted(set(declared) - {name for name, _ in modules})
     sys.exit('shaders.hpp: arrays this check doesn\'t read: ' + ', '.join(unread or declared))
+if text.lower().count('0x07230203') != len(modules):
+    sys.exit(f'shaders.hpp: {text.lower().count("0x07230203")} SPIR-V magic numbers, but {len(modules)} arrays read')
 for name, body in modules:
     tokens = [token.strip() for token in body.split(',') if token.strip()]
     bad = [token for token in tokens if not re.fullmatch(r'0x[0-9a-fA-F]{8}', token)]

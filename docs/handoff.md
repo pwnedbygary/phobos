@@ -55,11 +55,14 @@ sources' hash covers `compile.sh`, so changing it would have meant regenerating 
   its own ("none"), the archive's SHA-256 matched, and Khronos's Linux glslang 16.6.0 compiled `shaders.hpp` byte for
   byte; Ubuntu's SPIRV-Tools v2025.1 passed all 12 modules.
 - **Review**: an independent read-only review (PASS; it reproduced the pin, both CI runs and 14 negative controls)
-  found that an array declared another way (`static constexpr`, made with a changed compile.sh) went unvalidated (11
-  of 12), the version pinned in two places CI couldn't keep together, a malformed word dropped, `--version`'s failure
-  unexplained, and the first run's time misquoted; all taken: the declared arrays counted, every word checked, one pin
-  the workflow doesn't override, the error said, the runs cited; the workflow on `ubuntu-24.04` with a 10-minute limit
-  and curl's retries. The reviewer's three failing cases now fail with their reasons; the earlier controls as before.
+  raised seven points: an array declared another way (`static constexpr`, made with a changed compile.sh) went
+  unvalidated (11 of 12); the version was pinned in two places CI couldn't keep equal; a malformed word was dropped;
+  `--version`'s failure was unexplained; the first run's time was misquoted; "CI never checked the SPIR-V" overstated
+  the gap; actionlint had run without shellcheck. All taken: the declared arrays counted, every word checked, the
+  workflow no longer overriding the script's version (two pins CI now keeps equal), the error said, the runs cited,
+  the gap reworded, shellcheck run; and its suggestions (`ubuntu-24.04`, a 10-minute limit, curl's retries). A delta
+  review (PASS) found an array written without `=` still unread: arrays are now found with or without it, and the
+  SPIR-V magic numbers in the file must match the arrays read.
 
 ## PSP: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces — 2026-10-13
 
