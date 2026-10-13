@@ -101,7 +101,7 @@ static const sljit_u8 freg_map[SLJIT_NUMBER_OF_FLOAT_REGISTERS + 3] = {
 #define DMB_SY		0xd5033fbf
 #define DUP_e		0x0e000400
 #define DUP_g		0x0e000c00
-#define EOR		0xca000000
+#define EOR		0xaa000000 /* DO NOT MERGE: negative control, ORR's encoding */
 #define EOR_v		0x2e201c00
 #define EORI		0xd2000000
 #define EXTR		0x93c00000

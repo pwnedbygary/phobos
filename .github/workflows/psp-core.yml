@@ -1,288 +1,110 @@
+---
 name: PSP Core Tests
-
-# The PSP core (ares/psp) tested on the host, in four suites: the Allegrex CPU's (tests/allegrex) and the system's
-# parts (tests/psp), both with the address and undefined-behavior sanitizers; the whole core as an ares system, as
-# Phobos builds it (tests/psp/ares/run-tests.sh); and the headless runner, built and running a test program
-# (tests/psp/ares/runner-test.sh). Their paths are what those builds compile or read: the core, nall, ares's framework
-# and libco, sljit and its configuration, Vulkan's headers, libchdr, FFmpeg's build, the runner, the desktop's disc
-# reader, the tests, and the byte files the PSP's tests share with the app's (android/app/src/test/resources/psp-*).
-# The CPU's suite runs on an ARM64 host too, and the CPU's and the system's again built as the app's release builds
-# are (PHOBOS_TESTS_MODE=release), beside the sanitized runs. A version tag runs every suite (a tag's push takes no
-# path filter). Each suite's last line, its count, goes in the run's summary with the commit, and its groups' results
-# (pass, FAIL or skip with why) are kept as an artifact. What a lane must have is named in PHOBOS_TESTS_REQUIRE
-# (tests/allegrex/harness.hpp's skip()): without it, a group that needs it fails instead of skipping.
-
 on:
   push:
-    branches: [ master ]
-    tags: [ 'v*' ]
-    paths: [ 'ares/psp/**', 'ares/ares/**', 'nall/**', 'libco/**', 'thirdparty/sljit/**', 'thirdparty/sljit*',
-             'thirdparty/Vulkan-Headers/**', 'thirdparty/libchdr/**', 'thirdparty/ffmpeg/**', 'tools/psp-runner/**',
-             'tests/allegrex/**', 'tests/psp/**', 'tests/objects*.sh', 'desktop/PspDiscInfo.*',
-             'android/app/src/test/resources/psp-*', '.github/workflows/psp-core.yml' ]
+    branches:
+    - master
+    tags:
+    - v*
+    paths:
+    - ares/psp/**
+    - ares/ares/**
+    - nall/**
+    - libco/**
+    - thirdparty/sljit/**
+    - thirdparty/sljit*
+    - thirdparty/Vulkan-Headers/**
+    - thirdparty/libchdr/**
+    - thirdparty/ffmpeg/**
+    - tools/psp-runner/**
+    - tests/allegrex/**
+    - tests/psp/**
+    - tests/objects*.sh
+    - desktop/PspDiscInfo.*
+    - android/app/src/test/resources/psp-*
+    - ".github/workflows/psp-core.yml"
   pull_request:
-    paths: [ 'ares/psp/**', 'ares/ares/**', 'nall/**', 'libco/**', 'thirdparty/sljit/**', 'thirdparty/sljit*',
-             'thirdparty/Vulkan-Headers/**', 'thirdparty/libchdr/**', 'thirdparty/ffmpeg/**', 'tools/psp-runner/**',
-             'tests/allegrex/**', 'tests/psp/**', 'tests/objects*.sh', 'desktop/PspDiscInfo.*',
-             'android/app/src/test/resources/psp-*', '.github/workflows/psp-core.yml' ]
-  workflow_dispatch:
-
+    paths:
+    - ares/psp/**
+    - ares/ares/**
+    - nall/**
+    - libco/**
+    - thirdparty/sljit/**
+    - thirdparty/sljit*
+    - thirdparty/Vulkan-Headers/**
+    - thirdparty/libchdr/**
+    - thirdparty/ffmpeg/**
+    - tools/psp-runner/**
+    - tests/allegrex/**
+    - tests/psp/**
+    - tests/objects*.sh
+    - desktop/PspDiscInfo.*
+    - android/app/src/test/resources/psp-*
+    - ".github/workflows/psp-core.yml"
+  workflow_dispatch: 
 concurrency:
   group: psp-core-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
-
 permissions:
   contents: read
-
 jobs:
   allegrex:
     name: Allegrex CPU tests
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # tests/objects.sh, which keeps every suite's objects, on its own small program (seconds)
-      - name: Check the build scripts' object keeping
-        run: tests/objects-test.sh
-
-      # (bash named, so a failing suite fails the step through tee: pipefail)
-      - name: Run the tests
-        shell: bash
-        env:
-          PHOBOS_TESTS_REPORT: ${{ runner.temp }}/allegrex-report.tsv
-        run: tests/allegrex/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
-
-      - name: Keep the groups' results
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: allegrex-report
-          path: ${{ runner.temp }}/allegrex-report.tsv
-          if-no-files-found: warn
-
-      # again built as the app's release builds are (PHOBOS_TESTS_MODE=release: BUILD_RELEASE, -O3, no sanitizers),
-      # whether or not the sanitized run passed
-      - name: Run the tests, built as the app is
-        if: ${{ !cancelled() }}
-        shell: bash
-        env:
-          PHOBOS_TESTS_MODE: release
-        run: tests/allegrex/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite-release.log"
-
-      - name: Summary
-        if: ${{ !cancelled() }}
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          echo "- tests/allegrex at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
-          echo "- tests/allegrex, release build: $(tail -1 "$RUNNER_TEMP/suite-release.log" 2> /dev/null)" >> "$GITHUB_STEP_SUMMARY"
-
-  # The same on an ARM64 host, where the recompiler emits ARM64 code as it does on the phones (sljit's ARM64 back
-  # end; Linux's ABI, not Android's): sanitized, then built as the app is
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Check the build scripts' object keeping
+      run: tests/objects-test.sh
+    - name: Run the tests
+      shell: bash
+      env:
+        PHOBOS_TESTS_REPORT: "${{ runner.temp }}/allegrex-report.tsv"
+      run: tests/allegrex/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
+    - name: Keep the groups' results
+      if: "${{ !cancelled() }}"
+      uses: actions/upload-artifact@v4
+      with:
+        name: allegrex-report
+        path: "${{ runner.temp }}/allegrex-report.tsv"
+        if-no-files-found: warn
+    - name: Run the tests, built as the app is
+      if: "${{ !cancelled() }}"
+      shell: bash
+      env:
+        PHOBOS_TESTS_MODE: release
+      run: tests/allegrex/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite-release.log"
+    - name: Summary
+      if: "${{ !cancelled() }}"
+      env:
+        HEAD_SHA: "${{ github.event.pull_request.head.sha }}"
+      run: |
+        echo "- tests/allegrex at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
+        echo "- tests/allegrex, release build: $(tail -1 "$RUNNER_TEMP/suite-release.log" 2> /dev/null)" >> "$GITHUB_STEP_SUMMARY"
   allegrex-arm64:
     name: Allegrex CPU tests (ARM64)
     runs-on: ubuntu-24.04-arm
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: The host
-        run: |
-          uname -m
-          c++ --version | head -1
-
-      - name: Run the tests
-        shell: bash
-        run: tests/allegrex/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
-
-      - name: Run the tests, built as the app is
-        if: ${{ !cancelled() }}
-        shell: bash
-        env:
-          PHOBOS_TESTS_MODE: release
-        run: tests/allegrex/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite-release.log"
-
-      - name: Summary
-        if: ${{ !cancelled() }}
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          host="$(uname -m), $(c++ --version | head -1)"
-          echo "- tests/allegrex on $host at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
-          echo "- tests/allegrex on $host, release build: $(tail -1 "$RUNNER_TEMP/suite-release.log" 2> /dev/null)" >> "$GITHUB_STEP_SUMMARY"
-
-  system:
-    name: PSP system tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # FFmpeg's decoders for the host (thirdparty/ffmpeg/build.sh, run by the test script), built once and kept:
-      # keyed on the build's own name (the script, the system and the compiler), so a runner's new compiler makes a
-      # new build that's kept in turn
-      - name: Name the FFmpeg build
-        id: ffmpeg
-        run: echo "name=$(thirdparty/ffmpeg/build.sh --name host)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache FFmpeg
-        uses: actions/cache@v4
-        with:
-          path: .cache/ffmpeg
-          key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
-          restore-keys: ffmpeg-${{ runner.os }}-host-
-
-      # The GPU renderer's tests (tests/psp/gpu.cpp) on Mesa's Vulkan driver that draws on the CPU (lavapipe), which
-      # the renderer takes only when asked (PSP_GPU_ON_CPU)
-      - name: Install Mesa's software Vulkan driver
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers libvulkan1
-
-      # Required: a Vulkan GPU (lavapipe) with each capability of it the tests use that lavapipe has (not
-      # vulkan-unordered-reads: it reads in order), the test programs, and the GE's measurements (rounds 3 and 6)
-      - name: Run the tests
-        shell: bash
-        env:
-          PSP_GPU_ON_CPU: 1
-          PHOBOS_TESTS_REQUIRE: >-
-            vulkan,vulkan-fast,vulkan-transforms,vulkan-palettes,vulkan-moves,vulkan-reads,vulkan-2x,vulkan-3x,programs,ge-round3,ge-round6
-          PHOBOS_TESTS_REPORT: ${{ runner.temp }}/psp-report.tsv
-        run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
-
-      - name: Keep the groups' results
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: psp-report
-          path: ${{ runner.temp }}/psp-report.tsv
-          if-no-files-found: warn
-
-      - name: Summary
-        if: ${{ !cancelled() }}
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          echo "- tests/psp at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
-
-  # tests/psp again built as the app's release builds are (PHOBOS_TESTS_MODE=release: BUILD_RELEASE, -O3, no
-  # sanitizers), with the same requirements
-  system-release:
-    name: PSP system tests, built as the app is
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # FFmpeg's decoders for the host (thirdparty/ffmpeg/build.sh, run by the test script), built once and kept:
-      # keyed on the build's own name (the script, the system and the compiler), so a runner's new compiler makes a
-      # new build that's kept in turn
-      - name: Name the FFmpeg build
-        id: ffmpeg
-        run: echo "name=$(thirdparty/ffmpeg/build.sh --name host)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache FFmpeg
-        uses: actions/cache@v4
-        with:
-          path: .cache/ffmpeg
-          key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
-          restore-keys: ffmpeg-${{ runner.os }}-host-
-
-      # The GPU renderer's tests (tests/psp/gpu.cpp) on Mesa's Vulkan driver that draws on the CPU (lavapipe), which
-      # the renderer takes only when asked (PSP_GPU_ON_CPU)
-      - name: Install Mesa's software Vulkan driver
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers libvulkan1
-
-      # Required: a Vulkan GPU (lavapipe) with each capability of it the tests use that lavapipe has (not
-      # vulkan-unordered-reads: it reads in order), the test programs, and the GE's measurements (rounds 3 and 6)
-      - name: Run the tests
-        shell: bash
-        env:
-          PHOBOS_TESTS_MODE: release
-          PSP_GPU_ON_CPU: 1
-          PHOBOS_TESTS_REQUIRE: >-
-            vulkan,vulkan-fast,vulkan-transforms,vulkan-palettes,vulkan-moves,vulkan-reads,vulkan-2x,vulkan-3x,programs,ge-round3,ge-round6
-          PHOBOS_TESTS_REPORT: ${{ runner.temp }}/psp-report.tsv
-        run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
-
-      - name: Keep the groups' results
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: psp-report-release
-          path: ${{ runner.temp }}/psp-report.tsv
-          if-no-files-found: warn
-
-      - name: Summary
-        if: ${{ !cancelled() }}
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          echo "- tests/psp, release build, at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
-
-  # The whole core as an ares system, with ares's node tree, libco and libchdr, as Phobos builds it: system.cpp's
-  # checks, which boot the test programs in tests/psp/programs (no Vulkan: they draw with the software renderer)
-  ares:
-    name: PSP as an ares system
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Name the FFmpeg build
-        id: ffmpeg
-        run: echo "name=$(thirdparty/ffmpeg/build.sh --name host)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache FFmpeg
-        uses: actions/cache@v4
-        with:
-          path: .cache/ffmpeg
-          key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
-          restore-keys: ffmpeg-${{ runner.os }}-host-
-
-      - name: Run the tests
-        shell: bash
-        env:
-          PHOBOS_TESTS_REQUIRE: programs
-        run: tests/psp/ares/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
-
-      - name: Summary
-        if: ${{ !cancelled() }}
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          echo "- tests/psp/ares at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
-
-  # tools/psp-runner built as tools/psp-runner/build.sh builds it, running cube.elf for 60 frames: its summary, PNGs
-  # and WAV checked
-  runner:
-    name: Headless runner
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Name the FFmpeg build
-        id: ffmpeg
-        run: echo "name=$(thirdparty/ffmpeg/build.sh --name host)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache FFmpeg
-        uses: actions/cache@v4
-        with:
-          path: .cache/ffmpeg
-          key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
-          restore-keys: ffmpeg-${{ runner.os }}-host-
-
-      - name: Run the test
-        shell: bash
-        run: tests/psp/ares/runner-test.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
-
-      - name: Summary
-        if: ${{ !cancelled() }}
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          echo "- tests/psp/ares/runner-test.sh at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: The host
+      run: |
+        uname -m
+        c++ --version | head -1
+    - name: Run the tests
+      shell: bash
+      run: tests/allegrex/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
+    - name: Run the tests, built as the app is
+      if: "${{ !cancelled() }}"
+      shell: bash
+      env:
+        PHOBOS_TESTS_MODE: release
+      run: tests/allegrex/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite-release.log"
+    - name: Summary
+      if: "${{ !cancelled() }}"
+      env:
+        HEAD_SHA: "${{ github.event.pull_request.head.sha }}"
+      run: |
+        host="$(uname -m), $(c++ --version | head -1)"
+        echo "- tests/allegrex on $host at ${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}: $(tail -1 "$RUNNER_TEMP/suite.log")" >> "$GITHUB_STEP_SUMMARY"
+        echo "- tests/allegrex on $host, release build: $(tail -1 "$RUNNER_TEMP/suite-release.log" 2> /dev/null)" >> "$GITHUB_STEP_SUMMARY"

@@ -36,7 +36,7 @@ namespace encode {
   constexpr uint32_t MUL_8H    = 0x4e609c00, MUL_4S    = 0x4ea09c00;
   constexpr uint32_t SMULL_4S  = 0x0e60c000, SMULL2_4S = 0x4e60c000;
   constexpr uint32_t UMULL_4S  = 0x2e60c000, UMULL2_4S = 0x6e60c000;
-  constexpr uint32_t ADD_8H    = 0x4e608400, ADD_4S    = 0x4ea08400;
+  constexpr uint32_t ADD_8H    = 0x4e608400, ADD_4S    = 0x6ea08400;  //DO NOT MERGE: negative control, SUB_4S
   constexpr uint32_t SUB_8H    = 0x6e608400, SUB_4S    = 0x6ea08400;
   constexpr uint32_t ZIP1_8H   = 0x4e403800, ZIP2_8H   = 0x4e407800;
   constexpr uint32_t UZP1_8H   = 0x4e401800, UZP2_8H   = 0x4e405800;
