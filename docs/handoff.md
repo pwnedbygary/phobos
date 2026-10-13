@@ -37,20 +37,20 @@ repository). Documentation only.
 - **The stale summaries**: the implementation plan opened with "Last reconciled: 2026-09-25" and "zero fresh native
   performance runs", and this file's entry point with September's next action, though later sections record the
   RP6's N64 measurements (from 2026-09-25), the 2026-10-02 presentation comparison with Mupen64Plus-AE, the desktop
-  builds and the PSP core's parts (76 of them on master, up to part 87). Now the plan's opening and its evidence
-  boundary sort what's known by kind: implemented on master (some of it CI only builds), checked on CI's hosts
-  (exactly what CI runs, and what it doesn't yet), measured on the RP6 (dated, linked: the N64's, and the PSP's
-  speed in its parts), waiting for the RP6, on branches, proposed. The current priority (the PSP's throughput, fast-forward and Vulkan scaling, accurate
-  and fast apart) is named, the N64 regressions kept, and no comparison is presented as new. Nothing historical is
-  removed.
+  builds and the PSP core's parts (76 of them on master then, up to part 87; 77 since #243, up to 88). Now the
+  plan's opening and its evidence boundary sort what's known by kind: implemented on master (some of it CI only
+  builds), checked on CI's hosts (exactly what CI runs, and what it doesn't yet), measured on the RP6 (dated, linked:
+  the N64's, and the PSP's speed in its parts), waiting for the RP6, on branches, proposed. The current priority
+  (the PSP's throughput, fast-forward and Vulkan scaling, accurate and fast apart) is named, the N64 regressions
+  kept, and no comparison is presented as new. Nothing historical is removed.
 - **The plan indexed**: the implementation plan's "Test and performance plan (2026-10-13)" lists the 25 packages
   with their dispositions (eight now, 08 pulled forward from the triage's later ones; 15 later, each waiting on a
   named PR or package; two not now), what each waits on, and its PR.
 - **Baseline at triage** (master `9333a8d7a`): the libadrenotools submodule at `8fae8ce25`; open PRs #223, #229,
   #230, #231, #232, #236 and #237, and two agents' branches without PRs (GE headroom and NpDrm modules, since #240
   and #243); CI on `0a9a7fa75` (v2.2.0's commit): PSP Core Tests 60/0 and 489/0, Desktop Build green, Android Build
-  cancelled in its SDK cache's post step after 37 minutes (package 02). The Mac: macOS 27.0.1, Apple clang 21.0.0,
-  glslang 16.6.0, JDK 17.0.20.1 (v2.2.0's own tag build, run 38432072867, passed, its release complete). Since: #236
+  cancelled in its SDK cache's post step after 37 minutes (package 02; v2.2.0's own tag build, run 38432072867,
+  passed, its release complete). The Mac: macOS 27.0.1, Apple clang 21.0.0, glslang 16.6.0, JDK 17.0.20.1. Since: #236
   merged (`4788125f1`, StateVersion 27), all three workflows green on it (PSP 60/0 and 497/0), then #243
   (`49fec7215`, StateVersion 28); the open PRs' heads when this entry was first written: #223 `f12663c2d`, #229
   `a31b2b3ae`, #230 `059a1bbfe`, #231 `5e6d8a5b1`, #232 `b4dc27e4e`, #237 `46f62e6bf`, #240 `7aa4b8054`, #243
@@ -61,9 +61,13 @@ repository). Documentation only.
   speed measurements left out, the baseline's PR list not the one at triage, CI cited from an older commit, #237
   named among the state-layout PRs (it doesn't change states), and the order of the CI packages unexplained; all
   taken. Its doubt about "up to 59 minutes" is answered by the run cited (38286832457's post step: 58.7 minutes). A
-  delta review found "only built" not limited to CI (release builds run on the RP6; the desktop packages were run on
-  2026-10-02), the RP6 speed parts listed incompletely (53 and 54) and "gathered" too widely, and row 08 marked done
-  while its PR is open; all taken, with master's #243 merged in (row 12).
+  delta review found "only built" not limited to CI (release builds run on the RP6; the AppImage and Phobos.exe were
+  run on 2026-10-02, Phobos.app on 2026-10-06), the RP6 speed parts listed incompletely (53 and 54) and "gathered"
+  too widely, and row 08 marked done while its PR is open; all taken, with master's #243 merged in (row 12). A
+  second delta review found the software renderer's RP6 parts incomplete (67 and 68, and its columns beside Vulkan
+  in 52 and 53) and row 12 missing #223 (whose own layout 28 isn't master's); both taken, with its suggestions (the
+  speed tables' parts, the tag build's note, the desktop runs' dates, one list of what CI doesn't run, the part
+  count), and master's #230 merged in.
 
 ## PSP: the host's right stick for patched games, the keyboard in a field's own characters, 7th Dragon 2020-II past its certificate — 2026-10-12
 

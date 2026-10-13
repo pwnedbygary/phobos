@@ -42,11 +42,11 @@ entry, or a part of [psp-core.md](psp-core.md), overrides this summary.
   and universal macOS; PSP Core Tests, on changes to its paths, runs `tests/allegrex`
   (60 groups) and `tests/psp` (497 groups, the GPU's on lavapipe) on x86-64 with the
   address and undefined-behavior sanitizers, no failures (run 38436364669), and checks
-  the shaders' sources by hash only. Not yet in CI: the PSP core as an ares system, the
-  runner, the Neo Geo CD checks, anything on ARM64, a recompile of the shaders (the
-  test plan's packages 02, 05, 06, 07 and 21: the JVM tests, the PSP core as an ares
-  system and the runner, nothing run on ARM64, the shaders compiled again, a desktop
-  package launched). A build or a host suite is not device evidence.
+  the shaders' sources by hash only. Not yet in CI, by the test plan's package: the JVM
+  tests (02), the PSP core as an ares system, the runner and the Neo Geo CD checks (05),
+  any test run on ARM64 (06; the macOS job builds on an arm64 runner but runs nothing
+  there), the shaders compiled again (07) and a desktop package launched (21). A build
+  or a host suite is not device evidence.
 - **Measured on the RP6, dated:** the N64 profiling and its changes from 2026-09-25
   on ([audit](performance-audit.md#2026-09-25-device-profiling-retroid-pocket-6-and-changes)),
   and one presentation comparison with Mupen64Plus-AE on 2026-10-02 (presented frames
@@ -54,8 +54,9 @@ entry, or a part of [psp-core.md](psp-core.md), overrides this summary.
   [audit](performance-audit.md#2026-10-02-follow-up-present-at-the-games-display-rate)).
   The PSP core's speed on the RP6 is measured in many of its parts (both Vulkan modes on
   Turnip and Qualcomm's driver in 53, 54, 63, 65, 67 and 68, 4x among them; the software
-  renderer in 61 and 64; earlier rounds from part 24), the tables of parts 41 to 63
-  gathered in [psp-gpu-renderers.md](psp-gpu-renderers.md#speed); its other RP6 reports
+  renderer in 61, 64, 67 and 68, and beside Vulkan in 52 and 53; earlier rounds from part
+  24), the tables of parts 36, 41, 49, 52, 53, 54 and 63 gathered in
+  [psp-gpu-renderers.md](psp-gpu-renderers.md#speed); its other RP6 reports
   (stuck or black games, among them parts 69, 71 and 72) are in those parts and the
   handoff.
 - **Waiting for the RP6:** PSP speed work measured on the M1 (parts 74, 79 and 83 each
@@ -307,7 +308,7 @@ alone.
 | 09 | Automate PSP throughput comparisons | P0 | Later | 08 | — |
 | 10 | Protect high-resolution Vulkan output | P0 | Later | 04, 07; #240 | — |
 | 11 | Remove timing-sensitive thread tests | P1 | Later | #240 (`tests/psp/ge.cpp`) | — |
-| 12 | Test historical PSP state compatibility | P1 | Later | #229 settling the layout (28 on master since #243) | — |
+| 12 | Test historical PSP state compatibility | P1 | Later | #223 and #229 settling the layout (28 on master since #243; #223's own 28 must move) | — |
 | 13 | Measure the actual Android driver | P0 | Later, on the RP6 | 09, 10 | — |
 | 14 | Expand replayable JIT differential tests | P1 | Later | #237, 06 | — |
 | 15 | Retain PSP dialog interaction tests | P1 | Later | #230, 02 | — |
