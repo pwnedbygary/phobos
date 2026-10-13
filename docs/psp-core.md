@@ -10724,7 +10724,14 @@ Every change is the host's alone; nothing a game can see moves.
   and all of VRAM hashed, drawing settled, then RAM and the machine's whole serialized state; in Vulkan-fast, 200
   frames, then RAM and the machine's state (VRAM, read back from the GPU, among it): identical, every one, in both.
   (Per-frame hashes in Vulkan would finish the GPU each frame, which is what the first change avoids.)
-- The library: pending — run across the whole library (base master and this branch, 3600 frames each) before merging; the result goes in the PR.
+- The library (266 games, 3600 frames, Start at 120 and Cross at 1800, PNGs at 60, 300, 1200 and 3600, the software
+  renderer, two games at a time): master 1d9308714 and this branch, then the 63 games whose pictures differed run again
+  with both. 203 are identical at all four captures; Ghost of Sparta reaches the 900 seconds in both (its retries). Of
+  the 63, in 50 a run of master and a run of the branch agree at every capture, and in 11 master's own two runs differ
+  where the branch does (Battlefront II's random map, LocoRoco's and Sonic Rivals' attract scenes among them). The last
+  two, Crash Tag Team Racing's logo fade at 1200 and Snoopy vs. the Red Baron's clouds at 3600, came out alike in each
+  runner's two runs, both made under a heavy load; run side by side again with the library's options under a light
+  one, the two runners make the same pictures at all four captures and the same sound. No game differs for the branch.
 - The first session's 23 broken versions of its changes (a scratch script, `mutate.py`, each in a copy of the tree
   running tests/allegrex): 21 caught; the two that aren't change nothing (a "known busy" shortcut whose run-time check
   then sends the instruction the same way, and an exclusion that execute()'s result makes anyway).
