@@ -19,8 +19,9 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ngcd-${{ github.head_ref || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # (a PR's newer push replaces its run; every other run is a group of its own: see psp-core.yml)
+  group: ngcd-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -45,5 +46,5 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           at="${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}"
-          last=$(tail -1 "$RUNNER_TEMP/suite.log" 2> /dev/null || echo "no output: the suite didn't run")
-          echo "- tests/ngcd at $at: $last" >> "$GITHUB_STEP_SUMMARY"
+          last=$(tail -1 "$RUNNER_TEMP/suite.log" 2> /dev/null || true)
+          echo "- tests/ngcd at $at: ${last:-no output: the suite did not run}" >> "$GITHUB_STEP_SUMMARY"

@@ -7,8 +7,9 @@
 #reporting another version, or named with another word (CC="cc -DX"): everything; a header saved while its includer
 #compiled: compiled again next time; a header changed within the second of the build, where times have fractions;
 #a compile cut short: nothing kept from it; a header found first on the include path gone: compiled again with the
-#next one; a compile failing among others at once (PHOBOS_JOBS=2): the build fails; two checkouts built at once into
-#one folder: each its own objects and program.
+#next one; a compile failing among others at once (PHOBOS_JOBS=2): the build fails; a header found through CPATH,
+#then another CPATH: compiled again; a program for each configuration; two checkouts built at once into one folder:
+#each its own objects and program.
 #usage: tests/objects-test.sh   (CC: the compiler, cc by default)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -137,11 +138,16 @@ build "$A" "$SCRATCH/tools/holding-cc"
 expect "a header saved while its includer compiled: compiled again next time, the change seen" \
   '[[ $(cat "$SCRATCH/hold/built") == ok && $built == ok && $compiles == 1 && $said == "a 6 1 0 3 7" ]]'
 
-#a header changed within the second the object was made, where the file system keeps fractions of a second
+#a header changed within the second the object was made, where the file system keeps fractions of a second: the
+#object's time and the header's pinned at .2 and .7 of one second past (a whole-second comparison takes them as equal)
 touch "$SCRATCH/early"; sleep 0.05; touch "$SCRATCH/late"
 if [[ -n $(find "$SCRATCH/late" -newer "$SCRATCH/early") ]]; then
   build "$A"
   printf '#define VALUE 7\n' > "$A/a.h"
+  second=$(date +%Y-%m-%dT%H:%M:%S)
+  sleep 1
+  for object in "$OUT"/*/objects/main-*.o; do touch -d "$second.2" "$object"; done
+  touch -d "$second.7" "$A/a.h"
   build "$A"
   expect "a header changed within the second: compiled again, the change seen" \
     '[[ $built == ok && $compiles == 1 && $said == "a 7 1 0 3 7" ]]'
@@ -184,6 +190,36 @@ cp "$SCRATCH/other.c" "$A/other.c"
 PHOBOS_JOBS=2 build "$A"
 expect "fixed, two at once: built" '[[ $built == ok && $compiles == 1 && $said == "a 7 2 0 3 7" ]]'
 
+#a header found through CPATH, which the environment names, not the flags: another CPATH, another object
+D=$SCRATCH/checkout-d
+mkdir -p "$D/one" "$D/two"
+printf '#define FROM 1\n' > "$D/one/from.h"
+printf '#define FROM 2\n' > "$D/two/from.h"
+printf '#include <stdio.h>\n#include <from.h>\nint main(void) { printf("d %%d\\n", FROM); return 0; }\n' > "$D/main.c"
+cat > "$D/build.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT=$(cd "$(dirname "$0")" && pwd)
+source "$OBJECTS_SH"
+object "$CC" "$ROOT/main.c" -O1
+objects_done
+objects_program program
+$CC "${OBJECTS[@]}" -o "$REPLY.part-$$"
+mv -f "$REPLY.part-$$" "$REPLY"
+"$REPLY"
+EOF
+chmod +x "$D/build.sh"
+sleep 1
+CPATH=$D/one build "$D"
+expect "a header through CPATH: compiled" '[[ $built == ok && $compiles == 1 && $said == "d 1" ]]'
+CPATH=$D/two build "$D"
+expect "another CPATH: compiled again, the other header taken" '[[ $built == ok && $compiles == 1 && $said == "d 2" ]]'
+
+#each configuration its own program: the checkout's builds above made several
+folder=$OUT/$(cd "$A" && pwd | tr -d '\n' | cksum | cut -d' ' -f1)  #(the path as the build script sees it)
+programs=$(find "$folder" -maxdepth 1 -type f -name 'program-*' ! -name '*.part-*' | wc -l | tr -d ' ')
+expect "a program for each configuration" '[[ $programs -ge 4 ]]'
+
 #two checkouts at once, into the same folder
 B=$SCRATCH/checkout-b
 C=$SCRATCH/checkout-c
@@ -197,7 +233,7 @@ said="$(tail -1 "$SCRATCH/b.log") / $(tail -1 "$SCRATCH/c.log")"
 expect "two checkouts at once: each built, each its own program" \
   '[[ $built == "0 0" && $said == "b 1 1 0 1 7 / c 1 1 0 1 7" ]]'
 folders=$(find "$OUT" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
-expect "two checkouts at once: a folder each (and checkout a's)" '[[ $folders == 3 ]]'
+expect "two checkouts at once: a folder each (and checkouts a's and d's)" '[[ $folders == 4 ]]'
 
 echo "$failures failure$([[ $failures == 1 ]] || echo s)"
 ((failures == 0))
