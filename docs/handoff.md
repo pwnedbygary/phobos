@@ -27,9 +27,10 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP: the CPU, round 2 — the VFPU's adder in NEON, delay slots compiled each way, the rare ways out of line, prefixes compiled, blocks linked — 2026-10-13
 
-Branch `cursor/psp-cpu-round2-2b67`, on master (`b3507c1db`, #233 merged). docs/psp-core.md, part 86, has the
-evidence. Clean room: PPSSPP not read (its CPU, JIT and IR code not at all), JPCSP not read. Save states unchanged
-(layout 26). Every change is the host's alone: pictures, VRAM, RAM and the machine's state are master's.
+Branch `cursor/psp-cpu-round2-2b67`, on master (`b3507c1db`, #233 merged; merged in again at `0a9a7fa75`, #234).
+docs/psp-core.md, part 86, has the evidence. Clean room: PPSSPP not read (its CPU, JIT and IR code not at all), JPCSP
+not read. Save states unchanged (layout 26). Every change is the host's alone: pictures, VRAM, RAM and the machine's
+state are master's.
 - **Where it went** (Mac, Vulkan fast, xctrace sorted by compiled block): compiled code was 20 to 42% of the emulation
   thread in the CPU-heavy scenes and flat (the busiest block under 1%): block endings and branches a third of it, loads
   and stores a third; the VFPU's matrix products through the scalar adder 15% of Super Monkey Ball's thread (one loop
@@ -51,9 +52,11 @@ evidence. Clean room: PPSSPP not read (its CPU, JIT and IR code not at all), JPC
   the NEON adder against vfpuDot on 72 million random results; 62 broken versions of the changes, 59 caught by
   tests/allegrex, the other 3 changing nothing observable. pending (the whole library, before merging)
 - **Checks**: tests/allegrex 68/0 (sanitized; and 68/0 built for x86-64, run under Rosetta), tests/psp 478/0
-  (sanitized), tests/psp/ares 318/0. An independent review found no change to emulated results; its points (test
-  gaps: the NEON vmmul's in-place cases, links never checked, code memory starting afresh mid-run, more delay slot
-  kinds; small fixes and comments) were all taken.
+  (sanitized), tests/psp/ares 318/0. Merged with #234 (part 83): the hashes identical again in all three renderers,
+  tests/psp 489/0, tests/psp/ares 318/0; GitHub's Linux build (GCC) found a missing `<cstring>`, added, and its tests
+  pass. An independent review found no change to emulated results; its points (test gaps: the NEON vmmul's in-place
+  cases, links never checked, code memory starting afresh mid-run, more delay slot kinds; small fixes and comments) were
+  all taken.
 - **Left**: the block endings' run count kept in a register (each ending's load and store of it chains the blocks
   through memory), a cache of the last target for jumps through a register (Most Wanted's import stubs: 57% of its
   compiled code is block endings), registers held across blocks with stores only where read, the VFPU's remaining

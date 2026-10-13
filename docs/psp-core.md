@@ -11236,12 +11236,12 @@ counters where the app can show them.
 
 ## Part 86: the CPU, round 2 — the VFPU's adder in NEON, delay slots compiled each way, the rare ways out of line, prefixes worked out as blocks are compiled, blocks linked to each other
 
-On branch `cursor/psp-cpu-round2-2b67`, on master (`b3507c1db`, #233 merged). The task: round 2 of part 79's CPU
-work, for the owner's goal of PPSSPP's speed with room for fast-forward and upscaling on the Retroid Pocket 6
-(ARM64): the VFPU's vector and matrix operations in NEON where that can be exact, the compiled code's own costs
-(block endings and linking, loads and stores, registers), wait loops, and whatever else profiling shows on the CPU's
-side; every emulated result the same. Clean room: PPSSPP not read (its CPU, JIT and IR code not at all), JPCSP not
-read. Save states are unchanged (layout 26): nothing new is kept.
+On branch `cursor/psp-cpu-round2-2b67`, on master (`b3507c1db`, #233 merged), with master merged in again before the PR
+was done (`0a9a7fa75`, #234: see "Checks"). The task: round 2 of part 79's CPU work, for the owner's goal of PPSSPP's
+speed with room for fast-forward and upscaling on the Retroid Pocket 6 (ARM64): the VFPU's vector and matrix operations
+in NEON where that can be exact, the compiled code's own costs (block endings and linking, loads and stores, registers),
+wait loops, and whatever else profiling shows on the CPU's side; every emulated result the same. Clean room: PPSSPP not
+read (its CPU, JIT and IR code not at all), JPCSP not read. Save states are unchanged (layout 26): nothing new is kept.
 
 ### How it was measured
 
@@ -11424,6 +11424,13 @@ Every change is the host's alone; nothing a game can see moves.
   the same with code memory starting afresh every few blocks).
 - `tests/psp/run-tests.sh` (sanitizers on): 478 groups, 0 failures.
 - `tests/psp/ares/run-tests.sh`: 318 checks, 0 failed.
+- With part 83: master moved while this was reviewed (#234, part 83's Vulkan work, merged as `0a9a7fa75`) and was
+  merged into the branch, the docs alone conflicting. The merge against that master: the 21 scenes' hashes identical
+  in all three renderers again (the same frames and states as above), tests/allegrex 68/0 (its sources untouched by
+  the merge), tests/psp 489/0 (part 83's groups among them), tests/psp/ares 318/0. GitHub's Linux build then found
+  `std::memcpy` (the links' patching) used without `<cstring>`, which Apple's library brings in by itself, so the
+  Rosetta build hadn't shown it; it's included now, and GitHub's tests pass (tests/allegrex 68/0 built by GCC for
+  x86-64, sanitizers on; tests/psp; the desktop build).
 
 ### Left, and why
 
@@ -11464,8 +11471,9 @@ The NEON is ARM64's own, so the Mac's gains in the VFPU carry over; the compiled
 block ending, a load or a store) carry over too, and count for more on cores with smaller caches (the RP6's
 Cortex-X3 and A715 have a 64 KiB instruction cache, the M1's performance cores 192 KiB). To compare: master and this
 branch, Vulkan fast at 1x, the scenes in `~/phobos-work/scratch/cpu-speed2/scenes` (part 79's table). Expect Super
-Monkey Ball's story and Disaster Report 3's play most (15 to 25% fewer instructions on the emulation thread), Colin
-McRae, the Armored Cores and the Need for Speeds 5 to 10%, the GE-bound scenes a few percent.
+Monkey Ball's story and Disaster Report 3's play most (a fifth to a quarter fewer instructions on the emulation thread,
+as on the Mac), Colin McRae, the Armored Cores and the Need for Speeds 8 to 11% (Silent Line's play 19%), the GE-bound
+scenes 2 to 5%.
 
 ### Review
 
