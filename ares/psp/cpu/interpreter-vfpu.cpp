@@ -252,7 +252,31 @@ static auto vfpuLog2(u32 bits) -> u32 {
 //matrix products). Each product keeps two extra bits with round-to-odd; the four terms are aligned to the largest
 //exponent and truncated; the integer sum rounds to nearest, ties to even, a carry out of that rounding raising the
 //exponent; subnormals flush after that. Order of the lanes does not matter (measured, docs/psp-vfpu-measurements.md,
-//round 2).
+//round 2). (Compiled code's matrix products and dot products do the same in NEON: recompiler-vfpu.cpp.)
+//
+//Its last step, vfpuDotRound(): the terms' sum (each product's 27 bits, aligned to the largest exponent, highest)
+//rounded to a float.
+static auto vfpuDotRound(s32 sum, s32 highest) -> u32 {
+  constexpr s32 Extra = 2;
+  u32 mantissa = u32(sum < 0 ? -sum : sum);
+  mantissa >>= Extra;
+  if(mantissa) {
+    s32 adjust = s32(8 - std::countl_zero(mantissa));
+    highest += adjust;
+    if(adjust > 0) {
+      u32 half = 1u << (adjust - 1);
+      mantissa = (mantissa >> adjust) + ((mantissa & (half + half - 1)) + ((mantissa >> adjust) & 1) > half);
+      if(mantissa >> 24) mantissa >>= 1, highest++;  //rounded up to the next power of two (0.99999997 to 1)
+    }
+    if(adjust < 0) mantissa <<= -adjust;
+  } else {
+    highest = -128;
+  }
+  if(highest <= -127) { highest = -127; mantissa = 0; }  //flush below the smallest normal
+  if(highest >= +128) { highest = +128; mantissa = 0; }  //overflow to infinity
+  return u32(sum < 0) << 31 | u32(highest + 127) << 23 | (mantissa & 0x007f'ffff);
+}
+
 static auto vfpuDot(const u32 a[4], const u32 b[4]) -> u32 {
   constexpr s32 Extra = 2;
   constexpr u32 Hidden = 1u << 23, Frac = Hidden - 1;
@@ -286,23 +310,7 @@ static auto vfpuDot(const u32 a[4], const u32 b[4]) -> u32 {
     u32 term = product[i] >> shift;
     sum += (sign[i] ? -1 : +1) * s32(term);
   }
-  u32 mantissa = u32(sum < 0 ? -sum : sum);
-  mantissa >>= Extra;
-  if(mantissa) {
-    s32 adjust = s32(8 - std::countl_zero(mantissa));
-    highest += adjust;
-    if(adjust > 0) {
-      u32 half = 1u << (adjust - 1);
-      mantissa = (mantissa >> adjust) + ((mantissa & (half + half - 1)) + ((mantissa >> adjust) & 1) > half);
-      if(mantissa >> 24) mantissa >>= 1, highest++;  //rounded up to the next power of two (0.99999997 to 1)
-    }
-    if(adjust < 0) mantissa <<= -adjust;
-  } else {
-    highest = -128;
-  }
-  if(highest <= -127) { highest = -127; mantissa = 0; }  //flush below the smallest normal
-  if(highest >= +128) { highest = +128; mantissa = 0; }  //overflow to infinity
-  return u32(sum < 0) << 31 | u32(highest + 127) << 23 | (mantissa & 0x007f'ffff);
+  return vfpuDotRound(sum, highest);
 }
 
 //Half-precision floats (16 bits: sign, 5-bit exponent, 10-bit mantissa), as vfim, vf2h and vh2f use them. Neither

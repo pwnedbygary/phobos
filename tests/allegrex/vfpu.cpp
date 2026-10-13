@@ -806,12 +806,97 @@ auto edges() -> void {
   for(auto& c : prefixed) test(c.name, c.words, c.s, c.t, c.d);
 }
 
+//Random values for the VFPU's registers, picked to reach every case of the adder and the lanes' arithmetic: any
+//bits, zeros, denormals, infinities and NaNs, exponents at both ends (products that flush or overflow), few
+//significant bits (sums that cancel exactly), and ordinary numbers near 1. A pool, when given, makes most values
+//come from a few (whose products then cancel and tie).
+struct Values {
+  uint64_t state;
+  Values(uint64_t seed) : state(seed | 1) {}
+  auto next() -> uint32_t { state ^= state << 13; state ^= state >> 7; state ^= state << 17; return uint32_t(state >> 16); }
+  auto value() -> uint32_t {
+    uint32_t r = next(), sign = next() & 0x8000'0000, fraction = next() & 0x7f'ffff;
+    switch(r % 16) {
+    case 0: return next();
+    case 1: return sign;
+    case 2: return sign | (fraction ? fraction : 1);
+    case 3: return sign | 0x7f80'0000 | (r & 0x100 ? fraction : 0);
+    case 4: return sign | (1 + r / 16 % 12) << 23 | fraction;
+    case 5: return sign | (243 + r / 16 % 12) << 23 | fraction;
+    case 6: return sign | (124 + r / 16 % 8) << 23 | (fraction & 0x7f'0000);
+    default: return sign | (118 + r / 16 % 20) << 23 | fraction;
+    }
+  }
+  auto fill(uint32_t (&r)[128]) -> void {
+    uint32_t pool[6];
+    bool pooled = next() % 3 == 0;
+    for(auto& p : pool) p = value() & 0x7fff'ffff;
+    for(auto& x : r) x = pooled && next() % 8 ? pool[next() % 6] ^ (next() & 0x8000'0000) : value();
+  }
+};
+
+//Compiled code's matrix and dot products (recompiler-vfpu.cpp: vmmul, vtfm, vhtfm, vdot and vhdp, which on ARM64
+//run the adder in NEON) against the interpreter's: random instructions of each kind and size, on any registers
+//(matrices in place or not, transposed or not, vectors along rows or columns, results over their own operands),
+//from random registers (Values). Each runs from a fresh address on both engines, and every register, the prefixes
+//and the condition codes must come out the same.
+auto compiledProducts() -> void {
+  if(!useRecompiler) return;  //(it runs both engines itself)
+  struct Kind { const char* name; uint32_t opcode, size; };
+  const Kind kinds[] = {
+    {"vmmul.p", Vmmul, 2}, {"vmmul.t", Vmmul, 3}, {"vmmul.q", Vmmul, 4},
+    {"vtfm2.p", 0b111100001, 2}, {"vhtfm2.p", 0b111100001, 1}, {"vtfm3.t", 0b111100010, 3},
+    {"vhtfm3.t", 0b111100010, 2}, {"vtfm4.q", Vtfm4, 4}, {"vhtfm4.t", Vtfm4, 3},
+    {"vdot.p", Vdot, 2}, {"vdot.t", Vdot, 3}, {"vdot.q", Vdot, 4}, {"vhdp.p", Vhdp, 2}, {"vhdp.t", Vhdp, 3},
+    {"vhdp.q", Vhdp, 4},
+  };
+  Machine engines[2];
+  uint32_t at[2] = {Base, Base};
+  for(uint32_t e : range(2)) {
+    engines[e].cpu.recompiler.enabled = engines[e].recompile = e == 1;
+    engines[e].cpu.power(Base);
+  }
+  auto run = [&](uint32_t e, uint32_t word, const uint32_t (&registers)[128]) {
+    auto& m = engines[e];
+    if(at[e] + 8 > Data) m.cpu.power(Base), at[e] = Base;  //(code from the start again, compiled afresh)
+    m.ram.write32(at[e], word);
+    m.ram.write32(at[e] + 4, halt);
+    for(uint32_t i : range(128)) m.cpu.vfpu.r[i] = registers[i];
+    m.cpu.vfpu.pfxs = m.cpu.vfpu.pfxt = 0xe4, m.cpu.vfpu.pfxd = 0, m.cpu.vfpu.cc = 0x15;
+    m.cpu.ipu.pc = at[e], m.cpu.ipu.pd = at[e] + 4, m.cpu.scc.halted = 0;
+    m.cpu.run(100);
+    at[e] += 8;
+  };
+  Values values(0x5eed'0001);
+  uint32_t registers[128];
+  for(auto& kind : kinds) {
+    uint32_t differences = 0;
+    for(uint32_t trial = 0; trial < 3000; trial++) {
+      uint32_t word = alu(kind.opcode, kind.size, values.next() & 0x7f, values.next() & 0x7f, values.next() & 0x7f);
+      values.fill(registers);
+      run(0, word, registers);
+      run(1, word, registers);
+      auto& a = engines[0].cpu.vfpu;
+      auto& b = engines[1].cpu.vfpu;
+      bool same = a.pfxs == b.pfxs && a.pfxt == b.pfxt && a.pfxd == b.pfxd && a.cc == b.cc;
+      for(uint32_t i : range(128)) same &= a.r[i] == b.r[i];
+      if(!same && differences++ < 3) {
+        for(uint32_t i : range(128)) {
+          if(a.r[i] != b.r[i]) std::printf("  %s %08x: register %u is %08x compiled, %08x interpreted\n", kind.name,
+                                           word, i, b.r[i], a.r[i]);
+        }
+      }
+    }
+    check(__LINE__, kind.name, differences, 0);
+  }
+}
+
 auto vfpuTests() -> Tests {
   return {
     {"vfpu addressing", addressing}, {"vfpu arithmetic", arithmetic}, {"vfpu prefixes", prefixes},
     {"vfpu products", products}, {"vfpu comparisons", comparisons}, {"vfpu conversions", conversions},
     {"vfpu functions", functions}, {"vfpu matrices", matrices}, {"vfpu moves", moves}, {"vfpu more", more},
-    {"vfpu random", random}, {"vfpu edges", edges},
+    {"vfpu random", random}, {"vfpu edges", edges}, {"vfpu compiled products", compiledProducts},
   };
 }
 

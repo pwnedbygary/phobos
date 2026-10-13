@@ -10,6 +10,12 @@
 //vmin instruction.
 #undef VMIN
 
+//On ARM64 the VFPU's matrix and dot products that compiled code calls run in NEON (recompiler-vfpu.cpp).
+#if defined(ARCHITECTURE_ARM64) && !defined(COMPILER_MICROSOFT)
+  #include <arm_neon.h>
+  #define ALLEGREX_NEON
+#endif
+
 //Sony Allegrex: the PSP's main CPU.
 //
 //What a CPU does: it reads one instruction at a time from memory and does what that instruction says ("add these
@@ -464,6 +470,8 @@ struct Allegrex {
   template<u32 Size, bool Less> auto vfpuRestSet(u32 vd, u32 vs, u32 vt) -> void;
   template<u32 Size> auto vfpuRestHalfDot(u32 vd, u32 vs, u32 vt) -> void;
   auto vfpuMatrix(u32 which, u32 registers, u32 size) -> void;
+  template<u32 Size, bool Transposed, bool Homogeneous> auto vfpuTransform(u32 matrix, u32 t, u32 d) -> void;
+  template<u32 Size, u32 Transposed> auto vfpuMultiply(u32 s, u32 t, u32 d) -> void;
   template<u32 Op> auto executeVFPU(u32 address, u32 instruction) -> u32;
 
   //exceptions.cpp
@@ -563,6 +571,8 @@ struct Allegrex {
     auto emitPrefixesBusy() -> sljit_jump*;
     auto prefixesAfter(u32 instruction) -> void;
     auto emitMFVC(u32 instruction) -> void;
+    using Helper = void (Allegrex::*)(u32, u32, u32);
+    auto matrixProduct(u32 which, u8 vd, u8 vs, u8 vt, u32 size, u32& first, u32& second, u32& third) -> Helper;
     //What the block being compiled knows of the prefixes here: each one's value, where it's known
     //(recompiler-vfpu.cpp).
     struct Prefixes {
