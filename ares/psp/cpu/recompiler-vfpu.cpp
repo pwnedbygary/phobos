@@ -581,10 +581,7 @@ auto Allegrex::Recompiler::emitVFPUCall(u32 address, u32 instruction, u32 count,
   case 0x3c: call = &Allegrex::executeVFPU<0x3c>; break;
   }
   if(!call) return false;
-  if(!delaySlot) {
-    mov32(field(&self.ipu.pc), imm(address + 4));
-    mov32(field(&self.ipu.pd), imm(address + 8));
-  }
+  emitPC(address, delaySlot);
   mov32(field(&executed), imm(count));
   callf(call, imm(address), imm(instruction));
   testJumpEpilog();

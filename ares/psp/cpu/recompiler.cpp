@@ -3,7 +3,8 @@
 //How a block runs: the compiled code is a function that takes the CPU (in sljit's saved register S0) and works on
 //the same registers the interpreter does (ipu.r[], hi, lo), so either can carry on where the other stopped. When
 //a block leaves, ipu.pc and ipu.pd say where the CPU goes next, exactly as if the interpreter had run those
-//instructions, and `executed` says how many ran. A block that ends as blocks usually do goes on to the next
+//instructions, and `executed` says how many ran. (Within a block they're stored only where something reads them:
+//where it leaves, and before a call into the interpreter.) A block that ends as blocks usually do goes on to the next
 //block by itself, doing what Allegrex::run() and run() would have done in between, so that every block starts and
 //ends where it always did (emitChain()).
 //
@@ -174,13 +175,11 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
   calls = false;
   prefixes = {};  //(not known as a block starts: recompiler-vfpu.cpp)
   forgetAll();  //(nor is anything held: a block before it may have left anything in those registers)
-  u32 count = 0;          //instructions in the block so far
-  bool pcStored = false;  //whether ipu.pc and ipu.pd already say where to go after the last instruction
-  bool ended = false;     //it ends at an instruction after which run() and the HLE kernel take over (endsBlock())
-  //Where it goes next, when that's known as it's compiled: one place (next), or either of two (next or other) as a
-  //branch decides; or the block has ended itself (done).
-  enum class Next : u32 { Unknown, Known, Either, Done } going = Next::Unknown;
-  u32 next = 0, other = 0;
+  u32 count = 0;       //instructions in the block so far
+  bool ended = false;  //it ends at an instruction after which run() and the HLE kernel take over (endsBlock())
+  //Where it goes next: a place known as it's compiled (next), or where pc and pd say; or the block has ended itself.
+  enum class Next : u32 { Unknown, Known, Done } going = Next::Unknown;
+  u32 next = 0;
 
   while(true) {
     u32 instruction = self.read(Word, address);
@@ -188,45 +187,28 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
     bool lastInSection = address % SectionSize == SectionSize - 4;
 
     if(isBranch(instruction)) {
-      //A native branch sets pc and pd for its delay slot, which the block then includes. A branch in the last word
-      //of a section would need its delay slot from the next one, so the interpreter runs it instead; if it's
-      //taken, pd won't be pc + 4 afterwards, and run() has the interpreter take the delay slot as well. The
-      //coprocessors' branches end the block at the branch, as the interpreter's did (taken, the block may go on
-      //through the delay slot to the target by itself: emitCoprocessorBranch()).
+      //A native branch decides where it goes, then the block includes its delay slot, compiled along each way it can
+      //go (emitDelaySlot()). A branch in the last word of a section would need its delay slot from the next one, so
+      //the interpreter runs it instead; if it's taken, pd won't be pc + 4 afterwards, and run() has the interpreter
+      //take the delay slot as well. The coprocessors' branches end the block at the branch, as the interpreter's did
+      //(taken, the block may go on through the delay slot to the target by itself: emitCoprocessorBranch()).
+      Branch branch;
       if(instruction >> 26 == 0x11 || instruction >> 26 == 0x12) {
         emitCoprocessorBranch(address, instruction, count);
         going = Next::Done;
-      } else if(!lastInSection && emitBranch(address, instruction, count)) {
+      } else if(!lastInSection && (branch = emitBranch(address, instruction)).kind != Branch::None) {
         wrote();
-        u32 branch = address;
-        address += 4;
+        emitDelaySlot(address, branch, count);
         count++;
-        u32 delaySlot = self.read(Word, address);
-        //(A branch in a delay slot has no defined meaning on MIPS; the interpreter's is used.)
-        if(isBranch(delaySlot) || !emitInstruction(address, delaySlot, count, true)) {
-          emitInterpreter(address, delaySlot, count, true);
-        } else if(instruction >> 26 == 0x02 || instruction >> 26 == 0x03) {
-          //(a native delay slot leaves pc and pd as the branch set them: an interpreted one may not, a syscall
-          //switching threads say)
-          going = Next::Known, next = (address & 0xf000'0000) | (instruction & 0x03ff'ffff) << 2;  //j, jal
-        } else if(instruction >> 26 != 0x00) {  //(jr and jalr go where a register says)
-          //a likely branch not taken has left already (emitBranchOutcome()): one past its delay slot is taken
-          u32 op = instruction >> 26;
-          bool likely = (op >= 0x14 && op <= 0x17) || (op == 0x01 && instruction >> 17 & 1);
-          going = likely ? Next::Known : Next::Either;
-          next = branch + 4 + s16(instruction) * 4, other = branch + 8;
-        }
+        going = Next::Done;
       } else {
         emitInterpreter(address, instruction, count, false);
       }
       break;
     }
 
-    if(emitInstruction(address, instruction, count, false)) {
-      pcStored = false;
-    } else {
+    if(!emitInstruction(address, instruction, count, false)) {
       emitInterpreter(address, instruction, count, false);
-      pcStored = true;
       if(endsBlock(instruction)) {
         ended = true;
         break;
@@ -235,28 +217,19 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
     prefixesAfter(instruction);
 
     if(lastInSection) {
-      if(!pcStored) {
-        mov32(field(&self.ipu.pc), imm(address + 4));
-        mov32(field(&self.ipu.pd), imm(address + 8));
-      }
       going = Next::Known, next = address + 4;
       break;
     }
     address += 4;
   }
 
-  if(ended || (!chains && going != Next::Done)) {
+  if(ended) {
     mov32(field(&executed), imm(count));
     jumpEpilog();
   } else if(going == Next::Known) {
-    emitChainTo(count, next);
-  } else if(going == Next::Either) {
-    auto taken = cmp32_jump(field(&self.ipu.pc), imm(next), flag_eq);
-    emitChainTo(count, other);
-    setLabel(taken);
-    emitChainTo(count, next);
+    emitEnd(count, true, next);
   } else if(going == Next::Unknown) {
-    emitChain(count);
+    emitEnd(count, false, 0);
   }
 
   //(endFunction() as nall has it, but for the body's address, which is only known in between)
@@ -333,13 +306,28 @@ auto Allegrex::Recompiler::emitChain(u32 count) -> void {
   jumpEpilog();
 }
 
+//The end of a block of count instructions that goes on to target, pc and pd not stored for it yet (known), or to
+//wherever pc and pd say. With chains off (the tests' comparison) it leaves for run() instead.
+auto Allegrex::Recompiler::emitEnd(u32 count, bool known, u32 target) -> void {
+  if(!chains) {
+    if(known) {
+      mov32(field(&self.ipu.pc), imm(target));
+      mov32(field(&self.ipu.pd), imm(target + 4));
+    }
+    mov32(field(&executed), imm(count));
+    return jumpEpilog();
+  }
+  if(known) return emitChainTo(count, target, false);
+  emitChain(count);
+}
+
 //emitChain() for a block that goes on to target, which the compiled code knows already (pc is target and pd the
-//word after it, as the branch or the end of the section set them): its section and word are worked out here, and
-//of run()'s checks only the page's is made as it runs, the CPU's owner being free to change the table. Whether the
-//CPU halted is only looked at if the block called the interpreter, the only way it can halt (an exception leaves
-//before this; a syscall, halt, break or eret ends its block for run(), but for a syscall in a delay slot, which is
-//such a call).
-auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target) -> void {
+//word after it, as the branch or the end of the section set them, stored already or only where it leaves for run():
+//stored): its section and word are worked out here, and of run()'s checks only the page's is made as it runs, the
+//CPU's owner being free to change the table. Whether the CPU halted is only looked at if the block called the
+//interpreter, the only way it can halt (an exception leaves before this; a syscall, halt, break or eret ends its
+//block for run(), but for a syscall in a delay slot, which is such a call).
+auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target, bool stored) -> void {
   std::vector<sljit_jump*> leave;
   auto unless = [&](sljit_jump* jump) { leave.push_back(jump); };
   emitCounted(count, leave);
@@ -357,6 +345,10 @@ auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target) -> void {
 
   auto here = sljit_emit_label(compiler);
   for(auto jump : leave) sljit_set_label(jump, here);
+  if(!stored) {
+    mov32(field(&self.ipu.pc), imm(target));
+    mov32(field(&self.ipu.pd), imm(target + 4));
+  }
   mov32(field(&executed), imm(0));
   jumpEpilog();
 }
@@ -376,15 +368,21 @@ auto Allegrex::Recompiler::emitCounted(u32 count, std::vector<sljit_jump*>& leav
   }
 }
 
-//Compiles one instruction as a call to execute(). Outside a delay slot, pc and pd are set first, as the interpreter
-//has them while that instruction runs; in a delay slot, the branch before it has already set them. If the
-//instruction raises an exception, the block leaves right after it.
+//pc and pd as the interpreter has them while the instruction at address runs, for a call into it: past it, or in a
+//delay slot, where the branch before it goes, stored here when the block knows that (destination: emitDelaySlot())
+//and by the branch itself otherwise.
+auto Allegrex::Recompiler::emitPC(u32 address, bool delaySlot) -> void {
+  if(delaySlot && !destination.known) return;
+  u32 pc = delaySlot ? destination.target : address + 4;
+  mov32(field(&self.ipu.pc), imm(pc));
+  mov32(field(&self.ipu.pd), imm(pc + 4));
+}
+
+//Compiles one instruction as a call to execute(), pc and pd first set as the interpreter has them while that
+//instruction runs (emitPC()). If the instruction raises an exception, the block leaves right after it.
 auto Allegrex::Recompiler::emitInterpreter(u32 address, u32 instruction, u32 count, bool delaySlot) -> void {
   calls = true;
-  if(!delaySlot) {
-    mov32(field(&self.ipu.pc), imm(address + 4));
-    mov32(field(&self.ipu.pd), imm(address + 8));
-  }
+  emitPC(address, delaySlot);
   mov32(field(&executed), imm(count));
   bool syscall = instruction >> 26 == 0x00 && (instruction & 0x3f) == 0x0c;
   callf(syscall ? &Allegrex::executeSyscall : &Allegrex::execute, imm(address), imm(instruction));

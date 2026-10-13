@@ -835,6 +835,103 @@ auto coprocessorBranchesTaken() -> void {
   CHECK(runs[0].m.ram.read32(Data), 59);
 }
 
+// A native branch's delay slot is compiled along each way the branch goes, pc and pd stored only where the block
+// leaves or calls the interpreter (emitDelaySlot()). Every branch, taken and not (a likely one skipping its delay
+// slot then), and every jump, with a delay slot of each kind: native, interpreted, a syscall and a load raising an
+// exception (whose hooks record pc and pd as they are then, and the instructions run before), a syscall that moves pc
+// and pd (as a thread switch does: to the word after the delay slot, whichever way the branch went), and a load from
+// a page the page table leaves out. The interpreter and the recompiler must record the same and end the same, and
+// runs of 1 to 37 instructions at a time, chained and not, must stop in the same places.
+auto delaySlotsEachWay() -> void {
+  if(!useRecompiler) return;
+  enum : uint32_t { Taken = 44, Case = 64 };  //(each case: 16 words, the taken way's from word 11)
+  struct Form { uint32_t word; bool likely; int32_t a, b; };  //the branch at word 4, rs = t0 = a, rt = t1 = b
+  constexpr int32_t offset = (Taken - 20) / 4;
+  const Form forms[] = {
+    {beq(t0, t1, offset), 0, 3, 3}, {beq(t0, t1, offset), 0, 3, 4}, {bne(t0, t1, offset), 0, 3, 4},
+    {bne(t0, t1, offset), 0, 3, 3}, {blez(t0, offset), 0, -1, 0}, {blez(t0, offset), 0, 1, 0},
+    {bgtz(t0, offset), 0, 1, 0}, {bgtz(t0, offset), 0, 0, 0}, {bltz(t0, offset), 0, -1, 0},
+    {bltz(t0, offset), 0, 0, 0}, {bgez(t0, offset), 0, 0, 0}, {bgez(t0, offset), 0, -1, 0},
+    {bltzal(t0, offset), 0, -1, 0}, {bgezal(t0, offset), 0, -1, 0}, {beql(t0, t1, offset), 1, 3, 3},
+    {beql(t0, t1, offset), 1, 3, 4}, {bnel(t0, t1, offset), 1, 3, 4}, {bnel(t0, t1, offset), 1, 3, 3},
+    {blezl(t0, offset), 1, 0, 0}, {blezl(t0, offset), 1, 2, 0}, {bgtzl(t0, offset), 1, 2, 0},
+    {bgtzl(t0, offset), 1, -2, 0}, {bltzl(t0, offset), 1, -2, 0}, {bltzl(t0, offset), 1, 2, 0},
+    {bgezl(t0, offset), 1, 2, 0}, {bgezl(t0, offset), 1, -2, 0}, {bltzall(t0, offset), 1, -5, 0},
+    {bgezall(t0, offset), 1, -5, 0}, {j(0), 0, 0, 0}, {jal(0), 0, 0, 0}, {jr(t2), 0, 0, 0}, {jalr(t3, t2), 0, 0, 0},
+  };
+  const uint32_t slots[] = {addiu(s2, s2, 3), bitrev(s3, t0), syscall(5), lw(t9, 1, s7), lw(t8, 0, s6), syscall(6)};
+  struct Event {
+    uint32_t kind, what, pc, pd;
+    uint64_t before;
+    auto operator==(const Event&) const -> bool = default;
+  };
+  struct Run {
+    Machine m;
+    std::vector<Event> events;
+  } runs[3];  //the interpreter; the recompiler; the recompiler without chains
+  for(uint32_t n : range(3)) {
+    auto& m = runs[n].m;
+    auto& events = runs[n].events;
+    uint32_t at = Base, cases = 0;
+    for(auto& form : forms) {
+      for(uint32_t slot : slots) {
+        uint32_t next = at + Case;
+        uint32_t word = form.word;
+        if(word >> 26 == 0x02 || word >> 26 == 0x03) word |= (at + Taken) >> 2 & 0x03ff'ffff;
+        uint32_t words[16] = {addiu(t0, zero, form.a), addiu(t1, zero, form.b), lui(t2, (at + Taken) >> 16),
+                              ori(t2, t2, (at + Taken) & 0xffff), word, slot, addiu(s0, s0, 1), j(next), nop, nop, nop,
+                              addiu(s1, s1, 1), j(next), nop, nop, nop};
+        for(uint32_t k : range(16)) m.ram.write32(at + 4 * k, words[k]);
+        at = next, cases++;
+      }
+    }
+    m.ram.write32(at, halt);
+    m.cpu.syscallHook = [&m, &events](u32 code) -> bool {
+      events.push_back({1, code, m.cpu.ipu.pc, m.cpu.ipu.pd, m.cpu.instructionsBefore()});
+      if(code == 6) m.cpu.ipu.pc = m.cpu.pipeline.address + 4, m.cpu.ipu.pd = m.cpu.ipu.pc + 4;
+      return true;
+    };
+    m.cpu.exceptionHook = [&m, &events](Exception, u32 address) {  //(not halting: the program goes on)
+      events.push_back({2, address, m.cpu.ipu.pc, m.cpu.ipu.pd, m.cpu.instructionsBefore()});
+    };
+    m.cpu.recompiler.enabled = n != 0;
+    m.cpu.recompiler.chains = n != 2;
+    m.cpu.power(Base);
+    m.cpu.ipu.r[s7] = Data, m.cpu.ipu.r[s6] = Unmapped;
+    m.ram.write32(Unmapped, 0x1234'5678);
+  }
+  auto same = [&](uint32_t x, uint32_t y) {
+    auto& a = runs[x].m.cpu;
+    auto& b = runs[y].m.cpu;
+    bool same = a.ipu.pc == b.ipu.pc && a.ipu.pd == b.ipu.pd && a.scc.halted == b.scc.halted;
+    for(uint32_t r : range(32)) same = same && a.ipu.r[r] == b.ipu.r[r];
+    return same;
+  };
+  runs[0].m.cpu.run(100'000);
+  runs[1].m.cpu.run(100'000);
+  CHECK(same(0, 1), 1);
+  CHECK(runs[0].events == runs[1].events, 1);
+  CHECK(runs[0].m.cpu.scc.halted, 1);
+  CHECK(runs[0].events.size(), 3 * std::size(forms) - 3 * 7);  //(the 7 likely branches not taken skip theirs)
+  //chained against unchained, a few instructions at a time (runs[1] again, from the start)
+  runs[1].events.clear();
+  runs[1].m.cpu.ipu.pc = Base, runs[1].m.cpu.ipu.pd = Base + 4, runs[1].m.cpu.scc.halted = 0;
+  for(uint32_t r : range(32)) runs[1].m.cpu.ipu.r[r] = runs[2].m.cpu.ipu.r[r];
+  uint32_t mismatches = 0;
+  for(uint32_t round = 0; round < 20000 && !runs[1].m.cpu.scc.halted; round++) {
+    uint32_t limit = 1 + round % 37;
+    uint64_t a = runs[1].m.cpu.run(limit), b = runs[2].m.cpu.run(limit);
+    if((a != b || !same(1, 2)) && ++mismatches <= 3) {
+      std::printf("FAIL %s: run %u of %u: %llu vs %llu instructions, pc %08x vs %08x\n", currentTest, round, limit,
+                  (unsigned long long)a, (unsigned long long)b, runs[1].m.cpu.ipu.pc, runs[2].m.cpu.ipu.pc);
+    }
+  }
+  CHECK(mismatches, 0);
+  CHECK(runs[1].m.cpu.scc.halted, 1);
+  CHECK(runs[1].events == runs[2].events, 1);  //(the instructions before each counted from its run's start)
+  CHECK(runs[1].events.size(), runs[0].events.size());
+}
+
 // Not a test: with ALLEGREX_BENCHMARK set, times a loop of loads, stores and arithmetic on the interpreter, on the
 // recompiler without a page table (its loads and stores call the interpreter), and on the recompiler. For numbers
 // that mean something, build without the sanitizers: SANITIZE= ALLEGREX_BENCHMARK=1 tests/allegrex/run-tests.sh
@@ -1168,6 +1265,7 @@ int main() {
     {"exceptions", exceptions}, {"fpu arithmetic", fpuArithmetic}, {"fpu conversions", fpuConversions},
     {"fpu compare", fpuCompare}, {"fpu memory", fpuMemory}, {"system", system}, {"recompiler", recompilerCases},
     {"chained runs", chainedRuns}, {"coprocessor branches taken", coprocessorBranchesTaken},
+    {"delay slots each way", delaySlotsEachWay},
   };
   for(auto& test : vfpuTests()) tests.push_back(test);
   int groups = 0;

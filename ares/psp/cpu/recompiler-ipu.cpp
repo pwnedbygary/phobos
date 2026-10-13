@@ -468,11 +468,12 @@ auto Allegrex::Recompiler::emitSPECIAL(u32 address, u32 instruction, u32 count, 
   return false;
 }
 
-//Branches and jumps. Each one decides where the CPU goes after its delay slot and stores that in pc (and pd as the
-//word after it), which is how the interpreter has them while the delay slot runs; recompiler.cpp then compiles the
-//delay slot and ends the block. The decision comes first, before the link or the delay slot can change the
-//registers it depends on. The coprocessors' branches end their block by themselves (emitCoprocessorBranch()).
-auto Allegrex::Recompiler::emitBranch(u32 address, u32 instruction, u32 count) -> bool {
+//Branches and jumps, up to their delay slot: each decides where the CPU goes after the delay slot, before the link or
+//the delay slot can change the registers that depends on. recompiler.cpp then compiles the delay slot and the
+//block's end along each way the branch can go (emitDelaySlot()), so only a jump to where a register says stores pc
+//and pd here (as the interpreter has them while the delay slot runs); the others' targets are known as they're
+//compiled. The coprocessors' branches end their block by themselves (emitCoprocessorBranch()).
+auto Allegrex::Recompiler::emitBranch(u32 address, u32 instruction) -> Branch {
   //a branch's offset counts instructions from its delay slot
   u32 target = address + 4 + i16 * 4;
 
@@ -484,7 +485,7 @@ auto Allegrex::Recompiler::emitBranch(u32 address, u32 instruction, u32 count) -
       mov32(reg(0), Rs);
       mov32(PC, reg(0));
       add32(PD, reg(0), imm(4));
-      return true;
+      return {Branch::Register};
     }
     //JALR Rd,Rs (the target is read before rd is written, in case they're the same register)
     if((instruction & 0x3f) == 0x09) {
@@ -492,9 +493,9 @@ auto Allegrex::Recompiler::emitBranch(u32 address, u32 instruction, u32 count) -
       if(RDn) mov32(gpr(RDn), imm(address + 8)), forget(RDn);
       mov32(PC, reg(0));
       add32(PD, reg(0), imm(4));
-      return true;
+      return {Branch::Register};
     }
-    return false;
+    return {};
   }
 
   //REGIMM: BLTZ, BGEZ, BLTZL, BGEZL, BLTZAL, BGEZAL, BLTZALL, BGEZALL Rs,i16
@@ -506,63 +507,72 @@ auto Allegrex::Recompiler::emitBranch(u32 address, u32 instruction, u32 count) -
     bool link = RTn & 0x10;
     mov32(reg(0), Rs);
     if(link) mov32(gpr(31), imm(address + 8)), forget(31);
-    auto taken = cmp32_jump(reg(0), imm(0), greaterEqual ? flag_sge : flag_slt);
-    emitBranchOutcome(taken, address, target, likely, count);
-    return true;
+    return {Branch::Conditional, target, cmp32_jump(reg(0), imm(0), greaterEqual ? flag_sge : flag_slt), likely};
   }
 
   //J target: within the 256 MiB region the delay slot is in
-  case 0x02: {
-    emitJump(((address + 4) & 0xf000'0000) | (instruction & 0x03ff'ffff) << 2);
-    return true;
-  }
+  case 0x02: return {Branch::Jump, ((address + 4) & 0xf000'0000) | (instruction & 0x03ff'ffff) << 2};
 
   //JAL target
   case 0x03: {
     mov32(gpr(31), imm(address + 8)), forget(31);
-    emitJump(((address + 4) & 0xf000'0000) | (instruction & 0x03ff'ffff) << 2);
-    return true;
+    return {Branch::Jump, ((address + 4) & 0xf000'0000) | (instruction & 0x03ff'ffff) << 2};
   }
 
   //BEQ Rs,Rt,i16 and BEQL
-  case 0x04: case 0x14: {
-    auto taken = cmp32_jump(Rs, Rt, flag_eq);
-    emitBranchOutcome(taken, address, target, instruction >> 26 == 0x14, count);
-    return true;
-  }
+  case 0x04: case 0x14: return {Branch::Conditional, target, cmp32_jump(Rs, Rt, flag_eq), instruction >> 26 == 0x14};
 
   //BNE Rs,Rt,i16 and BNEL
-  case 0x05: case 0x15: {
-    auto taken = cmp32_jump(Rs, Rt, flag_ne);
-    emitBranchOutcome(taken, address, target, instruction >> 26 == 0x15, count);
-    return true;
-  }
+  case 0x05: case 0x15: return {Branch::Conditional, target, cmp32_jump(Rs, Rt, flag_ne), instruction >> 26 == 0x15};
 
   //BLEZ Rs,i16 and BLEZL
   case 0x06: case 0x16: {
-    auto taken = cmp32_jump(Rs, imm(0), flag_sle);
-    emitBranchOutcome(taken, address, target, instruction >> 26 == 0x16, count);
-    return true;
+    return {Branch::Conditional, target, cmp32_jump(Rs, imm(0), flag_sle), instruction >> 26 == 0x16};
   }
 
   //BGTZ Rs,i16 and BGTZL
   case 0x07: case 0x17: {
-    auto taken = cmp32_jump(Rs, imm(0), flag_sgt);
-    emitBranchOutcome(taken, address, target, instruction >> 26 == 0x17, count);
-    return true;
+    return {Branch::Conditional, target, cmp32_jump(Rs, imm(0), flag_sgt), instruction >> 26 == 0x17};
   }
 
   }
-  return false;
+  return {};
+}
+
+//A native branch's delay slot and the block's end, compiled along each way the branch goes (emitBranch()), each
+//from what the block knows at the branch, so that each knows where it goes: pc and pd are stored only where the
+//block leaves for run() (emitEnd()) or calls the interpreter (destination), and a conditional branch never looks at
+//pc again to find its way. A likely branch not taken skips its delay slot. After a delay slot the interpreter ran,
+//the block goes where pc and pd say (a syscall there may have switched threads), as after a jump to a register.
+auto Allegrex::Recompiler::emitDelaySlot(u32 address, const Branch& branch, u32 count) -> void {
+  u32 instruction = self.read(Word, address + 4);
+  auto way = [&](bool known, u32 target) {
+    destination = {known, target};
+    //(a branch in a delay slot has no defined meaning on MIPS; the interpreter's is used)
+    bool native = !isBranch(instruction) && emitInstruction(address + 4, instruction, count + 1, true);
+    if(!native) emitInterpreter(address + 4, instruction, count + 1, true);
+    destination = {};
+    emitEnd(count + 1, known && native, target);
+  };
+  if(branch.kind == Branch::Jump) return way(true, branch.target);
+  if(branch.kind == Branch::Register) return way(false, 0);
+  auto held = holding;
+  auto known = prefixes;
+  if(branch.likely) emitEnd(count, true, address + 8);
+  else way(true, address + 8);
+  holding = held, prefixes = known;
+  setLabel(branch.taken);
+  way(true, branch.target);
 }
 
 //The coprocessors' branches, BC1F, BC1T, BC1FL and BC1TL on the FPU's condition (FCSR bit 23), and BVF, BVT, BVFL
 //and BVTL on one of the VFPU's condition codes (bits 18-20 pick which); bit 16 branches when it's true, bit 17
 //makes the branch likely. Each ends its block's own instructions, the interpreter's way: where blocks end is where
 //a run of the CPU may stop (Allegrex::run() checks its limit between blocks), so it decides when interrupts and the
-//HLE kernel's events land, and has to stay put for every run to come out the same. The branch leaves pc and pd as
-//the interpreter's would: pc at the delay slot and pd at the target or past the delay slot, or both past the delay
-//slot for a likely branch not taken. Not taken, the block goes on to the next by itself (emitChainTo()). Taken, it
+//HLE kernel's events land, and has to stay put for every run to come out the same. Wherever the block leaves for
+//run(), pc and pd are as the interpreter's branch leaves them: pc at the delay slot and pd at the target or past the
+//delay slot, or both past the delay slot for a likely branch not taken (stored only there, where they're read).
+//Not taken, the block goes on to the next by itself (emitEnd()). Taken, it
 //does what run() would do next by itself too: Allegrex::run()'s round (the block counted, the run stopping there if
 //it's done), then the interpreter's step, which moves pc and pd past the delay slot and runs it, counted on its own,
 //then the round again and the target's block (emitChainTo()). Its delay slot is compiled as any other instruction
@@ -575,18 +585,15 @@ auto Allegrex::Recompiler::emitCoprocessorBranch(u32 address, u32 instruction, u
   else test32(field(&self.vfpu.cc), imm(1 << (instruction >> 18 & 7)), set_z);
   auto taken = jump(instruction >> 16 & 1 ? flag_nz : flag_z);
   bool likely = instruction >> 17 & 1;
-  mov32(PC, imm(address + (likely ? 8 : 4)));
-  mov32(PD, imm(address + (likely ? 12 : 8)));
-  if(chains) {
-    emitChainTo(count, address + (likely ? 8 : 4));
-  } else {
-    mov32(field(&executed), imm(count));
-    jumpEpilog();
-  }
+  emitEnd(count, true, address + (likely ? 8 : 4));
   setLabel(taken);
-  mov32(PC, imm(address + 4));
-  mov32(PD, imm(target));
+  //(pc and pd as the interpreter has them after the branch: the delay slot next, then the target)
+  auto stored = [&] {
+    mov32(PC, imm(address + 4));
+    mov32(PD, imm(target));
+  };
   auto leaveForRun = [&] {
+    stored();
     mov32(field(&executed), imm(count));
     jumpEpilog();
   };
@@ -601,42 +608,15 @@ auto Allegrex::Recompiler::emitCoprocessorBranch(u32 address, u32 instruction, u
   mov64(reg(1), field(&table));
   mov64(reg(1), mem(reg(1), index * sizeof(Section*)));
   leave.push_back(sljit_emit_cmp(compiler, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, (sljit_sw)sectionTable[index]));
-  mov32(PC, imm(target));
-  mov32(PD, imm(target + 4));
+  destination = {true, target};
   if(!emitInstruction(address + 4, delaySlot, 1, true)) emitInterpreter(address + 4, delaySlot, 1, true);
-  emitChainTo(1, target);
+  destination = {};
+  emitChainTo(1, target, false);
   auto here = sljit_emit_label(compiler);
   for(auto jump : leave) sljit_set_label(jump, here);
+  stored();
   mov32(field(&executed), imm(0));
   jumpEpilog();
-}
-
-//Finishes a conditional branch, given the jump its "taken" case makes. Either way pc and pd are set for the delay
-//slot: to the target if taken, to the instruction after the delay slot if not. A likely branch that isn't taken
-//skips its delay slot instead, so the block ends right there, going on after the delay slot (by itself, as a block
-//ending anywhere else does: emitChain()).
-auto Allegrex::Recompiler::emitBranchOutcome(sljit_jump* taken, u32 address, u32 target, bool likely, u32 count) -> void {
-  mov32(PC, imm(address + 8));
-  mov32(PD, imm(address + 12));
-  sljit_jump* done = nullptr;
-  if(likely) {
-    if(chains) {
-      emitChainTo(count, address + 8);
-    } else {
-      mov32(field(&executed), imm(count));
-      jumpEpilog();
-    }
-  } else {
-    done = jump();
-  }
-  setLabel(taken);
-  emitJump(target);
-  if(done) setLabel(done);
-}
-
-auto Allegrex::Recompiler::emitJump(u32 target) -> void {
-  mov32(PC, imm(target));
-  mov32(PD, imm(target + 4));
 }
 
 #undef RDn

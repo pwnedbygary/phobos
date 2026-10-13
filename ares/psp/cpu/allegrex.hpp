@@ -522,12 +522,20 @@ struct Allegrex {
     auto run() -> u32;
     auto block(u32 address) -> u8*;
     auto emit(u32 address, u8*& body) -> u8*;
+    auto emitEnd(u32 count, bool known, u32 target) -> void;
     auto emitChain(u32 count) -> void;
-    auto emitChainTo(u32 count, u32 target) -> void;
+    auto emitChainTo(u32 count, u32 target, bool stored = true) -> void;
     auto emitCounted(u32 count, std::vector<sljit_jump*>& leave) -> void;
+    auto emitPC(u32 address, bool delaySlot) -> void;
     auto emitInterpreter(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
     auto emitFallback(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
     auto isBranch(u32 instruction) const -> bool;
+    //Where the delay slot being compiled goes after it, when that's known as it's compiled (emitDelaySlot()): pc and
+    //pd aren't stored before such a delay slot, so its calls into the interpreter store them first (emitPC()).
+    struct Destination {
+      bool known = false;
+      u32 target = 0;
+    } destination;
 
     //recompiler.cpp: the game's registers a block holds in host registers, saved registers S3 on (emit())
     static constexpr u32 Held = SLJIT_NUMBER_OF_SAVED_REGISTERS - 3 < 7 ? SLJIT_NUMBER_OF_SAVED_REGISTERS - 3 : 7;
@@ -554,9 +562,17 @@ struct Allegrex {
     auto emitSPECIAL3(u32 instruction) -> bool;
     auto emitMultiply(u32 instruction, bool isSigned, s32 accumulate) -> void;
     auto emitTrapping(u32 address, u32 instruction, u32 count, bool delaySlot, u32 rd, bool subtract) -> void;
-    auto emitBranch(u32 address, u32 instruction, u32 count) -> bool;
-    auto emitBranchOutcome(sljit_jump* taken, u32 address, u32 target, bool likely, u32 count) -> void;
-    auto emitJump(u32 target) -> void;
+    //How a branch goes (emitBranch()): to target, known as it's compiled (Jump); where a register said, pc and pd
+    //stored (Register); or to target if the taken jump is made, past the delay slot if not (Conditional; likely:
+    //skipping the delay slot then). None for a branch with no native code.
+    struct Branch {
+      enum Kind : u32 { None, Jump, Register, Conditional } kind = None;
+      u32 target = 0;
+      sljit_jump* taken = nullptr;
+      bool likely = false;
+    };
+    auto emitBranch(u32 address, u32 instruction) -> Branch;
+    auto emitDelaySlot(u32 address, const Branch& branch, u32 count) -> void;
     auto emitCoprocessorBranch(u32 address, u32 instruction, u32 count) -> void;
 
     //recompiler-fpu.cpp
