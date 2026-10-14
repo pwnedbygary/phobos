@@ -330,6 +330,9 @@ struct GPU : GE::Renderer {
     s32 changes[4] = {0, 0, -1, -1};  //changed since its copies last heard (textureFor()): left, top, right, bottom
     std::vector<std::array<s32, 4>> told;  //rectangles memory has heard were drawn over since then (own())
     u64 toldBusy = 0;                       //(Memory::busyCleared as they were told)
+    //VRAM's pages own() last made its own and busy, and drawnSerial and Memory::busyCleared as it left them
+    u32 heldFirst = 1, heldLast = 0;
+    u64 heldSerial = 0, heldBusy = 0;
     u64 used = 0;
     //VRAM's bytes (offsets, inclusive) someone reached in its pages while the GPU drew in them, not over what it
     //drew (drawnOver()), or changed in pages it hasn't drawn in since the last finish (written()): memory's, maybe
@@ -391,6 +394,8 @@ struct GPU : GE::Renderer {
   auto ready() const -> bool override { return backend && !backend->lost; }
   auto begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region) -> bool override;
   auto triangle(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c) -> void override;
+  auto triangleAt(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c, const s64 (&x)[3], const s64 (&y)[3])
+    -> void override;
   auto sprite(const GE::Job& job) -> void override;
   auto point(const GE::Vertex& at) -> void override;
   auto line(const GE::Job& job, const std::vector<GE::LinePixel>& pixels) -> void override;
@@ -570,7 +575,7 @@ private:
   auto settings(const GE::Look& look) -> void;
   auto clearStencil(u32 color) -> void;
   auto emit(const Vertex* vertices, u32 count) -> void;
-  auto vertex(const GE::Vertex& v, bool perspective) const -> Vertex;
+  auto vertex(const GE::Vertex& v, bool perspective, s32 x, s32 y) const -> Vertex;
   auto transformed(const GE::Transform& t) -> u32;  //(mesh()'s Transformed block for t: its index in transforms)
   GE::Transform lastTransform{};                    //(the last one's settings, and where its frame buffer was)
   u32 lastColumn = 0, lastRow = 0;

@@ -157,18 +157,23 @@ inline auto discFrom(const std::vector<u8>& bytes) -> std::shared_ptr<ares::Play
   return disc;
 }
 
-//The folder PSP_TEST_PROGRAMS names (see tools/psp-test-programs/build.sh), or null when it isn't set (or is empty).
+//The folder PSP_TEST_PROGRAMS names (see tools/psp-test-programs/build.sh), or null when it isn't set (or is empty):
+//the group asking then skips what needs it ("programs", a failure where PHOBOS_TESTS_REQUIRE names it).
 inline auto testPrograms() -> const char* {
   const char* folder = std::getenv("PSP_TEST_PROGRAMS");
-  return folder && *folder ? folder : nullptr;
+  if(folder && *folder) return folder;
+  skip("programs", "PSP_TEST_PROGRAMS isn't set");
+  return nullptr;
 }
 
-//A program from PSP_TEST_PROGRAMS; empty when it isn't set.
+//A program from PSP_TEST_PROGRAMS; empty when it isn't set, or when it isn't there (said as a skip of "programs").
 inline auto testProgram(const char* name) -> std::vector<u8> {
   const char* programs = testPrograms();
   if(!programs) return {};
   std::ifstream stream(std::string(programs) + "/" + name, std::ios::binary);
-  return std::vector<u8>((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+  auto bytes = std::vector<u8>((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+  if(bytes.empty()) skip("programs", std::string(name) + " isn't in PSP_TEST_PROGRAMS");
+  return bytes;
 }
 
 }
