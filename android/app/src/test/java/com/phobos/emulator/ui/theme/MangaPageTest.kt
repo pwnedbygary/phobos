@@ -164,8 +164,9 @@ class MangaPageTest {
         val middle = (top + bottom) / 2 * mask.width
         assertEquals("the O's counter is clear", 0f, mask.alpha[middle + (left + right) / 2])
         assertTrue("its sides are solid", (left..right).count { mask.alpha[middle + it] >= 0.999f } >= 6)
-        // Every row's crossings cancel: nothing at all is left past the letter.
-        for (y in 0 until mask.height) for (x in right + 1 until mask.width) assertEquals(0f, mask.alpha[y * mask.width + x])
+        // Every row's crossings cancel, across a whole word: its margin, which no letter reaches, is bare paper.
+        val word = lettering.mask(lettering.line("PHOBOS", 48f, 10f, 60f, slant = 0.1f), 4)!!
+        for (y in 0 until word.height) for (x in word.width - 4 until word.width) assertEquals("row $y", 0f, word.alpha[y * word.width + x])
     }
 
     @Test fun aLettersInkGrowsWithTheSquareOfItsSize() {

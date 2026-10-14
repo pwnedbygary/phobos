@@ -160,7 +160,7 @@ backdrops. App only (Kotlin; no native or core change). The console icons follow
   - *Cost* (the Mac's JVM, warmed up, shared with other agents' builds): 1920x1080 in 0.4-0.6 s for the cover and
     0.6-0.9 s for Truck-kun (Speed lines 0.35-0.45 s at the same time); once per size and theme, off the main thread.
   - *Previews* (outside the repo, `~/phobos-work/scratch/themes/previews2/`): `manga-cover-*.png` and
-    `manga-truck-*.png`, 1920x1080 and 1080x2400 in GitHub Light, Gruvbox Dark and Phobos dark, each also with a
+    `manga-truck-*.png`, 1920x1080 and 1080x2400 in GitHub Light, Phobos light, Gruvbox Dark and Phobos dark, each also with a
     mock of the Library drawn over it (`*-library.png`), and `manga-cover-sheet.png` and `manga-truck-sheet.png`; from
     a local JVM test (not committed) running the real code and theme colors.
 - **CRT terminal** (its own commit, so it can be dropped): `ui/theme/CrtScreen.kt`, through `RenderedBackdrop`: a tube
@@ -183,11 +183,12 @@ backdrops. App only (Kotlin; no native or core change). The console icons follow
   `XmbDeepTest` (3), `MangaPageTest` (3), `CrtScreenTest` (4); `PixelSceneTest` and `PixelArtTest`'s planet and
   shooting-star tests went with Space. Reverting the Manga or the CRT commit alone leaves the app compiling and the
   remaining tests passing (this entry then needs its bullet for it taken out). No APK built locally (CI builds them);
-  not yet seen on a device. With master merged and the magazine cover and Truck-kun: 331 pass; `MangaPageTest` has 11
-  (every pixel between paper and ink on light and dark themes, the same page with the font read again, every scene
-  faint on average, the masthead lettered over the moon, the headlights light on both kinds of theme, the barcode read
-  back by the published patterns, a letter's counter and surroundings clear, ink growing with the square of the size,
-  Euclidean distances, and a stored Splash page, backdrop or screensaver, read as the cover).
+  not yet seen on a device. With master merged and the magazine cover and Truck-kun: 331 pass in 47 classes (on
+  `74bc914b6`); `MangaPageTest` has 11 (every pixel between paper and ink on light and dark themes, the same page with
+  the font read again, every scene faint on average, the masthead lettered over the moon, the headlights light on
+  both kinds of theme, the barcode read back by the published patterns, a letter's counter clear and a whole word's
+  margin bare, ink growing with the square of the size, Euclidean distances, and a stored Splash page, backdrop or
+  screensaver, read as the cover).
 - **Review**: an independent read-only review (a subagent) of the whole branch: NEEDS CHANGES, no High finding. Its
   three Mediums are fixed: Deep's strands drew brighter than the glass search modeled where a sheet gathers (the fade's
   gradient had 16 stops; now 64, and each sheet is one path); `RenderedBackdrop` drew again from scratch after every
@@ -197,7 +198,8 @@ backdrops. App only (Kotlin; no native or core change). The console icons follow
   model rather than the drawing, the plan row's order, `CrtScreen.REFLECTION`'s and `SolidUi`'s KDoc, Deep's pool
   under the top bar's title (`XmbContrastTest` takes it now), the band's cost (`CrtUi.animatedBackdrop`, 15 frames a
   second), and MangaPage's per-pixel `hypot`s and edge scan (a 1920x1080 page now 130-320 ms). `CrtContrastTest` also
-  allows for a status bar above the top bar.
+  allows for a status bar above the top bar. The magazine cover and Truck-kun have had no review of their own: the
+  read-only review started for them was stopped before it reported.
 - **For the owner**: whether the Manga and CRT backdrops stay (the PR's description has the verdict and previews);
   Sakura as the Pixel art default now that Space is gone; the magazine cover and Truck-kun on the RP6.
 
