@@ -2445,6 +2445,121 @@ static auto gpuStencilAlpha() -> void {
   }
 }
 
+//Each other way a PRIM leaves the frame buffer's alpha behind its stencil, the alpha then read by a blend (white over
+//black by the frame buffer's alpha, so the colors come out as the alpha exactly): a stencil test failing; MASK_ALPHA
+//keeping some of the stencil's bits, in a PRIM and in clear mode; INCREMENT and DECREMENT; a REPLACE blended by the
+//pixel's own alpha without dual-source blending (output 0's alpha carrying it, not the stencil); the GPU's own logic
+//operation, which takes the alpha too where the GE's leaves the stencil out (fast mode, where the GPU has them); and
+//a 4444 frame buffer's stencil as a REPLACE under a comparison leaves it on the GPU (the GE's reference, 0x80, its
+//alpha 0x88 as a read back takes it), set from the stencil with the rest of a rectangle noted for another PRIM. Every
+//byte the software renderer's, the alpha set from the stencil in each. At 1x and 2x, in either mode.
+static auto everywhere(System& s, u32 reference) -> void {  //(the stencil set to reference everywhere, colors kept)
+  auto& c = s.ge.commands;
+  c[GE::MaskColor] = 0xff'ffff, c[GE::StencilTestEnable] = 1;
+  c[GE::StencilTest] = 1 | reference << 8 | 0xff << 16, c[GE::StencilOperation] = 2 << 16;  //(always: REPLACE)
+  sprite(s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xffff'ffff});
+}
+static auto stencilAlphaWays(GPU* gpu) -> void {
+  //(single: drawn without dual-source blending; logic: left behind only by the GPU's own logic operation, where it has
+  //them and doesn't blend in the shader, the shader's leaving the alpha as the GE's does)
+  struct Way { const char* name; u32 format; bool single, logic; std::function<void(System&)> draw; };
+  std::vector<Way> ways = {
+    {"a stencil test failing", 3, false, false, [](System& s) {
+      auto& c = s.ge.commands;
+      everywhere(s, 0xc0);
+      c[GE::StencilTest] = 3 | 0xc0 << 8 | 0xff << 16, c[GE::StencilOperation] = 1;  //(not equal: ZERO where it fails)
+      sprite(s, {{{0, 0, 0, 0}, {0, 0, 32, 48}}, 0xffff'ffff});
+    }},
+    {"MASK_ALPHA keeping some bits", 3, false, false, [](System& s) {
+      auto& c = s.ge.commands;
+      everywhere(s, 0xc0);
+      c[GE::MaskAlpha] = 0x0f, c[GE::StencilTest] = 1 | 0x3f << 8 | 0xff << 16;
+      sprite(s, {{{0, 0, 0, 0}, {0, 0, 32, 48}}, 0xffff'ffff});
+    }},
+    {"MASK_ALPHA keeping some bits in clear mode", 3, false, false, [](System& s) {
+      auto& c = s.ge.commands;
+      everywhere(s, 0xc0);
+      c[GE::StencilTestEnable] = 0, c[GE::MaskAlpha] = 0x0f, c[GE::ClearMode] = 1 | 2 << 8;  //(the stencil alone)
+      sprite(s, {{{0, 0, 0, 0}, {0, 0, 32, 48}}, 0x3f00'0000});
+      c[GE::ClearMode] = 0;
+    }},
+    {"INCREMENT and DECREMENT", 3, false, false, [](System& s) {
+      auto& c = s.ge.commands;
+      everywhere(s, 0xc0);
+      c[GE::StencilOperation] = 4 << 16;
+      sprite(s, {{{0, 0, 0, 0}, {0, 0, 32, 48}}, 0xffff'ffff});
+      c[GE::StencilOperation] = 5 << 16;
+      sprite(s, {{{0, 0, 32, 0}, {0, 0, 64, 24}}, 0xffff'ffff});
+    }},
+    {"a REPLACE blended by its own alpha without dual-source blending", 3, true, false, [](System& s) {
+      auto& c = s.ge.commands;
+      everywhere(s, 0xc0);
+      c[GE::MaskColor] = 0, c[GE::StencilTest] = 1 | 0x3f << 8 | 0xff << 16;
+      c[GE::AlphaBlendEnable] = 1, c[GE::BlendMode] = 2 | 3 << 4;  //(black, whole: the colors as they were)
+      sprite(s, {{{0, 0, 0, 0}, {0, 0, 32, 48}}, 0xff00'0000});
+      c[GE::AlphaBlendEnable] = 0;
+    }},
+    {"the GPU's own logic operation", 3, false, true, [](System& s) {
+      auto& c = s.ge.commands;
+      everywhere(s, 0xc0);
+      c[GE::MaskColor] = 0, c[GE::StencilTest] = 1 | 0xff << 8 | 0xff << 16, c[GE::LogicOpEnable] = 1;
+      for(u32 logic : {6u, 0u, 5u}) {  //(XOR, CLEAR, NOOP: black either way)
+        c[GE::LogicOp] = logic;
+        sprite(s, {{{0, 0, 0, 0}, {0, 0, 32, 48}}, 0x0000'0000});
+      }
+      c[GE::LogicOpEnable] = 0;
+    }},
+    {"a 4444 REPLACE under a comparison", 2, false, false, [](System& s) {
+      auto& c = s.ge.commands;
+      c[GE::MaskColor] = 0xff'ffff, c[GE::StencilTestEnable] = 1;
+      c[GE::StencilTest] = 3 | 0x80 << 8 | 0xff << 16, c[GE::StencilOperation] = 2 << 16;  //(not equal to 0x80)
+      sprite(s, {{{0, 0, 0, 0}, {0, 0, 32, 48}}, 0xffff'ffff});
+      c[GE::StencilTest] = 0 | 0xff << 16, c[GE::StencilOperation] = 3 << 16;  //(never: INVERT, noted everywhere)
+      sprite(s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xffff'ffff});
+    }},
+  };
+  for(auto& way : ways) {
+    for(u32 scale : {1u, 2u}) {
+      gpu->resolution(scale);
+      auto before = gpu->statistics;
+      bool dualSource = gpu->backend->dualSource;
+      if(way.single) gpu->backend->dualSource = false;
+      System software, hardware;
+      hardware.ge.setRenderer(gpu);
+      for(System* s : {&software, &hardware}) {
+        auto& c = s->ge.commands;
+        prepare(*s, 0, way.format);
+        c[GE::ClearMode] = 1 | 7 << 8;  //(black, the stencil 0, the depth 0)
+        sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0x0000'0000});
+        c[GE::ClearMode] = 0;
+        way.draw(*s);
+        c[GE::MaskColor] = 0, c[GE::MaskAlpha] = 0, c[GE::StencilTestEnable] = 0;
+        c[GE::AlphaBlendEnable] = 1, c[GE::BlendMode] = 4 | 5 << 4;  //(white, by the frame buffer's alpha)
+        sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xffff'ffff});
+        c[GE::AlphaBlendEnable] = 0;
+      }
+      u32 bytes = apart(software, hardware);
+      gpu->backend->dualSource = dualSource;
+      if(bytes) {
+        std::printf("  %s, %s %ux%s: %u bytes apart\n", way.name, gpu->fast ? "fast" : "accurate", scale,
+                    gpu->backend->logicOps ? " (the GPU's logic operations)" : "", bytes);
+      }
+      CHECK(bytes, 0u);
+      bool left = !way.logic || (gpu->backend->logicOps && !gpu->backend->reads);
+      CHECK(gpu->statistics.alphas > before.alphas, left);
+      hardware.ge.setRenderer(nullptr);
+    }
+  }
+  gpu->resolution(1);
+}
+static auto gpuStencilAlphaWays() -> void {
+  if(!renderer()) return;
+  std::printf("  (the GPU's own logic operations: %s)\n", renderer()->backend->logicOps ? "yes" : "no");
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(gpu) stencilAlphaWays(gpu);
+  }
+}
+
 //A depth buffer read as a texture through VRAM's depth views (Cars Race-O-Rama takes its race's depth through a
 //palette into the alpha its sky is blended by): the depth the GPU drew, put into memory first, each texel the
 //software renderer's, through the fourth copy (the depths in order) and the second (rearranged); put once, the second
@@ -3420,6 +3535,7 @@ auto gpuTests() -> Tests {
      gpuStencilBit},
     {"gpu the frame buffer's alpha as its stencil has it, where operations changed it without a color: blended by, "
      "taken as a texture", gpuStencilAlpha},
+    {"gpu the frame buffer's alpha as its stencil has it, each other way a PRIM leaves it behind", gpuStencilAlphaWays},
     {"gpu a depth buffer read as a texture through VRAM's depth views: the depth it drew put into memory first",
      gpuDepthAsTexture},
     {"gpu depths as the depth formats keep them, and back: all 65,536 the same again", gpuDepthFormats},
