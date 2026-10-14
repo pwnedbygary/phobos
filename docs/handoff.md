@@ -33,7 +33,8 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 ## PSP CPU: the FPU's flush to zero compiled, block endings in fewer steps, the run's count in a register, main RAM's loads without the page table, more of the VFPU compiled — 2026-10-14
 
 Branch `cursor/psp-cpu-round3-2b67`, on master (`dd37263c8`, #253). docs/psp-core.md, part 94, has the evidence.
-Clean room: PPSSPP not read at all, JPCSP not read. Save states unchanged (layout 31). Nothing a game sees changes.
+Clean room: PPSSPP not read at all, JPCSP not read. Save states unchanged (layout 31). Nothing a game sees changes on
+clang's builds (Android, macOS); on GCC's (the Linux desktop) vfim of a NaN half may (part 94, change 7).
 - **Measured first** (the M1; xctrace with round 2's block map, sorted over the whole thread by a new script; a probe
   build counting the interpreter's calls from compiled code): the GE is 36 to 84% of the emulation thread, compiled
   code 12 to 40%, the VFPU's helpers 1 to 13%. Hot Wheels: Ultimate Racing sets FCSR's flush-to-zero bit, so 660,000
@@ -47,7 +48,7 @@ Clean room: PPSSPP not read at all, JPCSP not read. Save states unchanged (layou
   reads kept for it (`pinSources()`); no halted check after a native instruction's way to the interpreter; no page
   check going on to pages the owner says never change (`Allegrex::steady`: main RAM, the scratchpad); r0 as the
   constant 0; main RAM's loads without the page table (`Recompiler::direct`: eor, ror, tst, then one load from S1; other
-  memory as cold code); the run's count in a saved register on ARM64 (held game registers 7 -> 6); vf2h, vh2f, the
+  memory as cold code); the run's count in a saved register on ARM64 alone (held game registers 7 -> 6); vf2h, vh2f, the
   integer packings, vcst, vcmov, vcrs, vcrsp, vqmul and vrot compiled with the prefixes at rest.
 - **Numbers** (the M1, Vulkan fast, master -> branch, emulation thread, medians of three rounds taking turns): Hot Wheels' race 340 -> 249 M host instructions a frame (-27%; 30.4 -> 24.3 ms), Colin
   McRae -8.7%, Disaster Report 3 -5.0%, Killzone's gameplay and Armored Core -4.5%, Army of Two and Killzone's menu
@@ -65,9 +66,19 @@ Clean room: PPSSPP not read at all, JPCSP not read. Save states unchanged (layou
   GitHub's checks on 622fd6a0f all pass (the PSP core's, desktop, Android).
 - **Merged with master** (#254) as cd97a4630, the docs alone conflicting (part 93 before 94): the 26 scenes' hashes
   against that master 78/78 identical; tests/psp 528/0 (sanitized), tests/psp/ares 340/0, tests/allegrex 74/0.
+- **Review** (independent, read-only, to 1c951a6f3): no blocker; its points taken in f055ec9f3: the count in a
+  register on ARM64 alone (Windows' x86-64 had it, untested); tests/psp's machine sets the steady pages, so its groups
+  take the direct loads and the skipped page checks, and the Allegrex harness's data is inside its direct region; the
+  review's probes as tests (the flush bit switched in a block and a delay slot, code rewritten after a link through
+  each mirror, the region at RAM's end, runs of 2^62 to 2^64, r0 as every operand, threads switched by syscalls);
+  emitFallback() keeps calls. Flush to zero from a cold boot measured: Hot Wheels from boot to its race sends no FPU
+  arithmetic to the interpreter (sqrt.s and floor.w.s, which have no native code, as before). Mutations again: the
+  same 48 caught, the same 4 equivalent. After it: tests/allegrex 78/0 (sanitized, release, x86-64 both), tests/psp
+  528/0 (sanitized and not, nothing skipped), tests/psp/ares 340/0, the 78 hashes against master with #254 identical.
 - **Left**: the GE (most of every scene's thread); jumps through a register (2 to 3%: a cache of the last target); the
   VFPU's NEON helpers and vfpuEach; vcmp, vdot and vfad with prefixes; the FPU's mode check once a block; sqrt.s.
-- **RP6**: RP6
+- **RP6**: to be measured (part 94's "On the RP6" has the commands: base dd37263c8 against the branch on eight
+  scenes, and the direct loads alone, 9586b8c4e against d5c43999b).
 - Scratch: `~/phobos-work/scratch/cpu-round3` (`NOTES.md`, `cats.py`, `mutate3.py`, `queue-hash.sh`, `queue-final.sh`).
 
 ## PSP Vulkan: the frame buffer's alpha as its stencil has it — MX vs. ATV Untamed's race (the haze over its hills and trees, the tree's shadow) — 2026-10-14

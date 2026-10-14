@@ -13487,8 +13487,9 @@ the hash, picture and speed runs; `tests1.sh`, `suites.sh`).
 
 On branch `cursor/psp-cpu-round3-2b67`, on master (`dd37263c8`, #253 merged). The task: round 3 of the CPU's work (parts
 79 and 86), the Allegrex recompiler and the CPU's side of the emulation thread, for the owner's goal of PPSSPP's speed
-with room for fast-forward and upscaling on the Retroid Pocket 6, every emulated result the same. Clean room: PPSSPP not
-read at all, JPCSP not read. Save states are unchanged (layout 31): nothing new is kept.
+with room for fast-forward and upscaling on the Retroid Pocket 6, every emulated result the same (but vfim of a NaN
+half on GCC's builds: change 7). Clean room: PPSSPP not read at all, JPCSP not read. Save states are unchanged (layout
+31): nothing new is kept.
 
 ### How it was measured
 
@@ -13561,12 +13562,15 @@ loads 3 to 9%, ALU 3 to 9%, stores 1 to 3%, branches 1 to 4%, the FPU's loads an
    bits from the size up checks both (`eor`, `ror`, `tst`, each a logical immediate ARM64 encodes): then the access is
    at S1 plus the physical address, one load. Any other load takes the page table's way as cold code, then makes the
    same access. lwl and lwr keep the page table's way (their access works from the address's byte within its word).
-5. **The run's count in a saved register** (`left()`, `storeCount()`, `loadCount()`, `emitCount()`). Where the host has
-   saved registers enough (ARM64: the held game registers go from 7 to 6), a register holds runLimit less
+   So loads from the scratchpad and VRAM now go through that cold code, two taken branches and the table's lookup
+   more than before; none of the scenes measured got slower (every one took fewer host instructions, below).
+5. **The run's count in a saved register** (`left()`, `storeCount()`, `loadCount()`, `emitCount()`). On ARM64, whose ten
+   saved registers leave room (the held game registers go from 7 to 6), a register holds runLimit less
    instructionsRun as compiled code runs, and a block's end is a subtraction and a branch. instructionsRun in memory is
    brought up to date before every call into the interpreter (whose syscalls read it, and may move it and runLimit on,
-   after which the register is worked out again) and wherever the code leaves for run(). x86-64 outside Windows, with
-   six saved registers, keeps counting in memory.
+   after which the register is worked out again) and wherever the code leaves for run(). x86-64 keeps counting in
+   memory (outside Windows it has six saved registers; Windows' eight would have room, but no check runs the tests
+   there).
 6. **More of the VFPU compiled with the prefixes at rest** (`recompiler-vfpu.cpp`: `vfpuRestPack()`,
    `vfpuRestConditionalMove()`, `vfpuRestCross()`, `vfpuRestRotate()`): the conversions that move bits about (vf2h, vh2f,
    vuc2i, vc2i, vus2i, vs2i, vi2uc, vi2c, vi2us, vi2s), vcmovt and vcmovf, vcrs, vcrsp, vqmul and vrot as helpers of
@@ -13639,7 +13643,8 @@ worth measuring there on their own), the VFPU's helpers up to 3.5% (Colin McRae)
 
 ### Accuracy
 
-Every change is the host's alone; nothing a game can see moves.
+Every change is the host's alone; nothing a game can see moves, but vfim of a NaN half on a build GCC compiled
+(change 7: the Linux desktop's), whose bits are now clang's.
 - The branch against master from the 21 scenes' states (part 79's) and five more (Hot Wheels' race, Killzone's
   gameplay and menu, MX vs. ATV riding, Chains of Olympus' difficulty menu), in the software renderer, Vulkan fast and
   Vulkan accurate: 100 frames with every frame's picture and all of VRAM hashed, drawing settled (with Vulkan a finish
@@ -13689,6 +13694,10 @@ Every change is the host's alone; nothing a game can see moves.
   alone conflicting. The merge against that master: the 26 scenes' hashes identical in all three renderers (78 of 78);
   tests/psp 528 groups, 0 failures (sanitized: part 93's groups among them); tests/psp/ares 340/0; tests/allegrex
   74/0.
+- After the review (`f055ec9f3`, below): `tests/allegrex/run-tests.sh` 78 groups, 0 failures, sanitized and in release
+  mode on ARM64, and built for x86-64 under Rosetta in both modes; `tests/psp/run-tests.sh` 528 groups, 0 failures,
+  sanitized (Homebrew's Vulkan loader on `DYLD_LIBRARY_PATH`, nothing skipped) and unsanitized (nothing skipped);
+  `tests/psp/ares/run-tests.sh` 340 checks, 0 failed; the 78 hashes against master with #254 identical.
 
 ### Left, and why
 
@@ -13761,6 +13770,49 @@ but the page checks' use of pageTable(), which stays right with S1 the page tabl
 
 The same as 1 with `--late-frames` after the state (label `r3late-$1`): the frames taken without waiting for the GPU.
 
+
+### Review
+
+An independent read-only review of the branch (to `1c951a6f3`) found no blocker: all six changes match the interpreter
+by reading and in every run; its seven probes (flush to zero switched in a block and in a delay slot, code
+overwritten after a block linked into it, through each mirror, r0 as every operand, the direct region at RAM's end,
+runs of 2^63 instructions and more, loads chasing pointers in the region, counts across syscalls that switch
+threads) pass on ARM64 and x86-64, each catching a break made on purpose; and the four surviving mutations are
+equivalent. Its points, all taken (`f055ec9f3`):
+- **The new paths' coverage**: tests/psp's machine set no steady pages, so none of its groups (its programs on both
+  engines among them) used the direct region or a block going on without the page check; and tests/allegrex's
+  random programs loaded only from just past the harness's direct region. tests/psp's machine now sets them as the
+  system does (its page table group checks which pages are steady and that the region is all 32 MiB of its RAM), and
+  the harness's data is inside the region (the random programs check it). The probes are tests now: "fpu flushing"
+  (the bit switched by ctc1 in a block, either way, with another rounding mode, from r0; and in a jump's delay slot,
+  the target compiled in the other mode), "linked blocks" (main RAM's code rewritten after a block linked into it, by
+  a store in the linking block through each mirror into its own page or another, and by a write the owner reports),
+  "direct loads" (a second layout, the region at RAM's very end, loads with negative offsets, and loads chasing
+  pointers through the region with one off the fast path between), "runs moved by syscalls" (two threads the
+  syscalls switch between, the limit and the count moved), and two new groups, "runs of 2^62 to 2^64" (the count in a
+  register is signed: past 2^63 every block leaves for run(), which counts on) and "r0 as an operand" (every native
+  form, both engines).
+- **The count in a register on ARM64 alone**: Windows' x86-64, with eight saved registers, had it on (and four held
+  game registers, not five), but no check runs the tests there, only the build. x86-64 counts in memory everywhere
+  now.
+- **Flush to zero from a cold boot**: a block compiled before a game sets the bit sends each FPU instruction to the
+  interpreter (its check fails) until the block goes, and the measurements here start from states, which compile
+  afresh. Measured with the probe build from boot: Hot Wheels to its race (5,300 frames with the presses its race
+  scene was made with: frame 4,700 is lap 1) sets the bit before its hot FPU code is compiled. In the race (frames
+  4,700 to 5,300) no FPU arithmetic goes to the interpreter (add.s, mul.s and the compares 0 a frame); what does is
+  what has no native code at all, sqrt.s 547, floor.w.s 283 and round.w.s 16 a frame, as from the race's state (508
+  and 270 there). So nothing is dropped or compiled again when the bit changes.
+- **Smaller points**: `emitFallback()` now keeps `calls` as it was, as its comment said (its interpreter call is cold
+  code emitted after the block's ends, so this changes no code); the handoff's RP6 line; the summary lines say what
+  change 7 says of vfim on GCC's builds; loads from the scratchpad and VRAM through cold code (change 4).
+- **Mutations again** against the new tests: the same 48 of 52 caught and the same four equivalent ones left, none
+  newly caught or newly missed; 17 of the caught now fail more checks (the flush bit switched in a block, the threads
+  switched, r0 as every operand). The random programs' data in the region takes its fast path (they check it), but
+  sits in its top quarter, where a load without the rotate already fails the region's test and takes the checked way:
+  "direct loads" is what catches the direct mutations.
+- **After the review** (`f055ec9f3`, master with #254 merged): the 26 scenes' hashes against that master identical in
+  all three renderers (78 of 78; against master before #254, MX vs. ATV's two Vulkan runs differ by #254's own
+  change, as they should).
 
 ### Scratch
 
