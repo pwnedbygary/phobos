@@ -153,6 +153,86 @@ auto GE::readVertexWith(const Read& memory, u32 address, const VertexFormat& f) 
   return sum;
 }
 
+//A number of format (8-bit, 16-bit or float) from the host's bytes, as readNumber() reads it: the reader byFormat()
+//hands its body, made for the format, so that a loop over many vertices doesn't look at the format for each number.
+template<typename Body> static alwaysinline auto byFormat(u32 format, bool isSigned, const Body& body) -> void {
+  switch(format | u32(isSigned) << 2) {
+  case 1: return body([](const u8* at) { return float(at[0]); });
+  case 5: return body([](const u8* at) { return float(s8(at[0])); });
+  case 2: return body([](const u8* at) { u16 value; std::memcpy(&value, at, 2); return float(value); });
+  case 6: return body([](const u8* at) { u16 value; std::memcpy(&value, at, 2); return float(s16(value)); });
+  case 3: case 7: return body([](const u8* at) { float value; std::memcpy(&value, at, 4); return value; });
+  }
+}
+
+//count vertices without morph targets into out, which holds count Vertex{}: the n-th from the host's bytes at bytes
+//+ offsets[n], all of its bytes there, as readTarget() reads it (through readVertex(), which takes them the same way),
+//but a part at a time over all of them, each loop made for its part's format. (Army of Two reads 650,000 vertices a
+//frame, a hundred or so to a PRIM.)
+auto GE::readVerticesFrom(const u8* bytes, const u32* offsets, u32 count, const VertexFormat& f, Vertex* out) -> void {
+  if(f.weightFormat) {
+    float scale = unit(f.weightFormat, f.through);
+    u32 size = numberSize(f.weightFormat);
+    byFormat(f.weightFormat, false, [&](auto number) {
+      for(u32 n = 0; n < count; n++) {
+        const u8* at = bytes + offsets[n] + f.weightOffset;
+        for(u32 k = 0; k < f.weights; k++) out[n].weights[k] = number(at + k * size) * scale;
+      }
+    });
+  }
+  if(f.textureFormat) {
+    float scale = unit(f.textureFormat, f.through);
+    u32 size = numberSize(f.textureFormat);
+    byFormat(f.textureFormat, false, [&](auto number) {
+      for(u32 n = 0; n < count; n++) {
+        const u8* at = bytes + offsets[n] + f.textureOffset;
+        out[n].u = number(at) * scale;
+        out[n].v = number(at + size) * scale;
+      }
+    });
+  }
+  if(f.colorFormat) {
+    auto colors = [&](auto color) {
+      for(u32 n = 0; n < count; n++) out[n].color = color(bytes + offsets[n] + f.colorOffset);
+    };
+    auto read = [](u32 size, const u8* at) -> u32 {
+      u32 value = 0;
+      std::memcpy(&value, at, size);
+      return value;
+    };
+    switch(f.colorFormat) {
+    case 7: colors([&](const u8* at) { return read(4, at); }); break;
+    case 4: colors([&](const u8* at) { return readColor([&](u32 size, u32) { return read(size, at); }, 0, 4); }); break;
+    case 5: colors([&](const u8* at) { return readColor([&](u32 size, u32) { return read(size, at); }, 0, 5); }); break;
+    default: colors([&](const u8* at) { return readColor([&](u32 size, u32) { return read(size, at); }, 0, 6); });
+    }
+  }
+  if(f.normalFormat) {
+    float scale = unit(f.normalFormat, f.through);
+    u32 size = numberSize(f.normalFormat);
+    byFormat(f.normalFormat, true, [&](auto number) {
+      for(u32 n = 0; n < count; n++) {
+        const u8* at = bytes + offsets[n] + f.normalOffset;
+        for(u32 k = 0; k < 3; k++) out[n].normal[k] = number(at + k * size) * scale;
+      }
+    });
+  }
+  if(f.positionFormat && !(f.through && f.positionFormat == 1)) {  //(as readTarget(): through mode's 8-bit are 0)
+    float scale = unit(f.positionFormat, f.through);
+    u32 size = numberSize(f.positionFormat);
+    byFormat(f.positionFormat, true, [&](auto number) {
+      byFormat(f.positionFormat, !f.through, [&](auto depth) {
+        for(u32 n = 0; n < count; n++) {
+          const u8* at = bytes + offsets[n] + f.positionOffset;
+          out[n].x = number(at) * scale;
+          out[n].y = number(at + size) * scale;
+          out[n].z = depth(at + size * 2) * scale;
+        }
+      });
+    });
+  }
+}
+
 //The n-th index of an indexed PRIM (or BOUNDING_BOX): which vertex, counted from the vertex address. Format 3, which
 //pspgu.h doesn't name, holds 32-bit indices of which the GE takes the low 16 bits, as pspautotests recorded on a PSP:
 //gpu/primitives/indices drew with them as with the others, indices32 drew 0x10000 as 0 and 0xffff0000 as 0, and

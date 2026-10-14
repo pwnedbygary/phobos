@@ -8,7 +8,8 @@
 //bytes beside the GPU's pixels, memory's without waiting; the start-up check a game's renderer goes through; and
 //drawing at 2 and 3 times the PSP's resolution, where memory's bytes must still come back exactly.
 //Each group but the lost GPU's is skipped, saying why, where there's no Vulkan GPU (or with PSP_GPU=0): the
-//machines the tests run on needn't have one.
+//machines the tests run on needn't have one. The skips name what they lack (skip(): "vulkan", or a GPU's capability,
+//"vulkan-palettes" and the like), and fail where PHOBOS_TESTS_REQUIRE names it, as CI's lane on lavapipe does.
 #include "kernel-machine.hpp"
 #include "../../ares/psp/ge/gpu/gpu.hpp"
 
@@ -25,14 +26,14 @@ constexpr u32 GPUVertices = 0x0896'0000, GPUTexture = 0x0898'0000;
 static auto renderer() -> GPU* {
   static std::unique_ptr<GPU> gpu;
   static bool tried = false;
+  static std::string error = "PSP_GPU=0";
   if(!tried) {
     tried = true;
     const char* wanted = std::getenv("PSP_GPU");
-    std::string error = "PSP_GPU=0";
     if(!wanted || std::string(wanted) != "0") gpu = GPU::vulkan(nullptr, error);
     if(gpu) std::printf("  on %s\n", gpu->backend->name().c_str());
-    else std::printf("  skipped: %s\n", error.c_str());
   }
+  if(!gpu) skip("vulkan", error);
   return gpu.get();
 }
 
@@ -110,7 +111,17 @@ static auto apart(System& a, System& b) -> u32 {
 //The ways the backend sets a target's stencil from its pixels' alphas, above 1x and in moves, to try: a draw for each
 //of its bits, and, where a shader can give it (Backend::stencilExport), with the colors.
 static auto stencilWays(GPU* gpu) -> std::vector<bool> {
-  return gpu->backend->stencilExport ? std::vector<bool>{false, true} : std::vector<bool>{false};
+  if(gpu->backend->stencilExport) return {false, true};
+  skip("vulkan-stencil-export", "the GPU can't give the stencil from the shader: only the other way tested");
+  return {false};
+}
+
+//Whether the GPU takes a resolution, saying so as a skip of it where it doesn't.
+static auto scaleTaken(GPU* gpu, u32 scale) -> bool {
+  if(scale <= gpu->backend->mostScale) return true;
+  auto most = std::to_string(gpu->backend->mostScale);
+  skip("vulkan-" + std::to_string(scale) + "x", "the GPU takes at most " + most + "x");
+  return false;
 }
 
 //Sprites without blending or dithering, in each format: the GPU's pixels are the software renderer's, byte for
@@ -269,6 +280,7 @@ static auto fastRenderer() -> GPU* {
   static std::unique_ptr<GPU> gpu;
   std::string error;
   if(!gpu && renderer()) gpu = GPU::vulkan(nullptr, error, true);
+  if(!gpu && renderer()) skip("vulkan-fast", error.empty() ? "the fast renderer didn't start" : error);
   return gpu.get();
 }
 
@@ -278,7 +290,9 @@ static auto gpuFast() -> void {
   CHECK((bool)gpu, true);
   if(!gpu) return;
   CHECK(gpu->fast && !gpu->backend->reads, true);
-  if(!gpu->backend->transforms) return void(std::printf("  the driver didn't take transform.vert: 3D on the CPU\n"));
+  if(!gpu->backend->transforms) {
+    return skip("vulkan-transforms", "the driver didn't take transform.vert: 3D on the CPU");
+  }
   auto before = gpu->statistics;
   std::string error;
   bool passed = gpu->check(error);
@@ -311,6 +325,7 @@ static auto stencilFormats(GPU* gpu) -> void {
   auto test = [](u32 comparison, u32 reference, u32 mask) { return comparison | reference << 8 | mask << 16; };
   auto replaceOn = [](bool pass) { return pass ? 2u << 16 : 2u; };
   for(u32 scale : {1u, 2u}) {
+    if(!scaleTaken(gpu, scale)) break;
     gpu->resolution(scale);
     for(u32 format : {0u, 1u, 2u, 3u}) {
       std::vector<Pass> passes;
@@ -419,7 +434,8 @@ static auto gpuStencilFormats() -> void {
 static auto gpuFastRules() -> void {
   GPU* accurate = renderer();
   GPU* fast = accurate ? fastRenderer() : nullptr;
-  if(!fast || !fast->backend->transforms) return;
+  if(!fast) return;
+  if(!fast->backend->transforms) return skip("vulkan-transforms", "the driver didn't take transform.vert");
   constexpr u32 Width = 128, Height = 96, Background = 0xff20'2020;
   auto f24 = [](float value) { return bitsOf(value) >> 8; };
   struct Corner { float u, v; u32 color; float normal[3], at[3]; };  //(vertex type 0x1ff)
@@ -508,7 +524,8 @@ static auto gpuFastRules() -> void {
 //edges (which fast mode may cover where the GE doesn't).
 static auto gpuFastMeshChanges() -> void {
   GPU* gpu = renderer() ? fastRenderer() : nullptr;
-  if(!gpu || !gpu->backend->transforms) return;
+  if(!gpu) return;
+  if(!gpu->backend->transforms) return skip("vulkan-transforms", "the driver didn't take transform.vert");
   auto f24 = [](float value) { return bitsOf(value) >> 8; };
   std::mt19937 random{20261015};
   auto drawn = randomSprites(random, 30, false);
@@ -736,7 +753,7 @@ static auto gpuTextureAtVRAMsEnd() -> void {
 static auto gpuPalettes() -> void {
   auto gpu = renderer();
   if(!gpu) return;
-  if(!gpu->backend->palettes) return void(std::printf("  skipped: no palettes on the GPU\n"));
+  if(!gpu->backend->palettes) return skip("vulkan-palettes", "no palettes on the GPU");
   constexpr u32 Palette = 0x0897'0000;
   struct Case { u32 format, clutFormat, shift, mask, offset; };
   Case cases[] = {{3, 3, 8, 0xff, 0}, {3, 1, 0, 0xff, 0x100}, {3, 2, 13, 0x7f, 0x80}, {0, 0, 5, 0x3f, 0x40},
@@ -799,7 +816,7 @@ static auto gpuPalettes() -> void {
 static auto gpuPalettesAgain() -> void {
   auto gpu = renderer();
   if(!gpu) return;
-  if(!gpu->backend->palettes) return void(std::printf("  skipped: no palettes on the GPU\n"));
+  if(!gpu->backend->palettes) return skip("vulkan-palettes", "no palettes on the GPU");
   constexpr u32 Palette = 0x0897'0000;
   std::mt19937 random{20261088};
   auto drawn = randomSprites(random, 40, false);
@@ -839,7 +856,7 @@ static auto gpuBarriers() -> void {
   auto gpu = renderer();
   if(!gpu) return;
   if(!gpu->backend->reads || gpu->backend->readsInOrder) {
-    return void(std::printf("  skipped: the GPU reads in order, or reads nothing\n"));
+    return skip("vulkan-unordered-reads", "the GPU reads in order, or reads nothing");
   }
   System software, hardware;
   hardware.ge.setRenderer(gpu);
@@ -1030,7 +1047,7 @@ static auto gpuPartialCopies() -> void {
   if(!gpu) return;
   std::mt19937 random{20261010};
   for(u32 scale : {1u, 2u, 3u}) {
-    if(scale > gpu->backend->mostScale) break;
+    if(!scaleTaken(gpu, scale)) break;
     gpu->resolution(scale);
     System software, hardware;
     hardware.ge.setRenderer(gpu);
@@ -1062,7 +1079,7 @@ static auto gpuPartialCopies() -> void {
     hardware.ge.setRenderer(nullptr);
   }
   for(u32 scale : {1u, 2u}) {
-    if(scale > gpu->backend->mostScale) break;
+    if(!scaleTaken(gpu, scale)) break;
     gpu->resolution(scale);
     System software, hardware;
     hardware.ge.setRenderer(gpu);
@@ -1417,7 +1434,7 @@ static auto gpuRefusedAmongThreads() -> void {
 static auto gpuMoves() -> void {
   auto gpu = renderer();
   if(!gpu) return;
-  if(!gpu->backend->moves) return void(std::printf("  skipped: the GPU doesn't move pixels between targets\n"));
+  if(!gpu->backend->moves) return skip("vulkan-moves", "the GPU doesn't move pixels between targets");
   std::mt19937 random{20261016};
   constexpr u32 At = 0x3'0000;  //(where no other test draws: VRAM's offset)
   bool exports = gpu->backend->stencilExport;
@@ -1425,7 +1442,7 @@ static auto gpuMoves() -> void {
   for(bool exported : stencilWays(gpu)) {
     gpu->backend->stencilExport = exported;
     for(u32 scale : {1u, 2u, 3u}) {
-      if(scale > gpu->backend->mostScale) break;
+      if(!scaleTaken(gpu, scale)) break;
       gpu->resolution(scale);
       System software, hardware;
       hardware.ge.setRenderer(gpu);
@@ -1482,14 +1499,14 @@ static auto gpuMoves() -> void {
 static auto gpuStridedMoves() -> void {
   auto gpu = renderer();
   if(!gpu) return;
-  if(!gpu->backend->moves) return void(std::printf("  skipped: the GPU doesn't move pixels between targets\n"));
+  if(!gpu->backend->moves) return skip("vulkan-moves", "the GPU doesn't move pixels between targets");
   std::mt19937 random{20261083};
   constexpr u32 At = 0x3'0000;
   bool exports = gpu->backend->stencilExport;
   for(bool exported : stencilWays(gpu)) {
     gpu->backend->stencilExport = exported;
     for(u32 scale : {1u, 2u, 3u}) {
-      if(scale > gpu->backend->mostScale) break;
+      if(!scaleTaken(gpu, scale)) break;
       gpu->resolution(scale);
       System software, hardware;
       hardware.ge.setRenderer(gpu);
@@ -1959,7 +1976,7 @@ static auto gpuTiles() -> void {
   if(!gpu) return;
   std::mt19937 random{20261020};
   for(u32 scale : {1u, 2u, 3u}) {
-    if(scale > gpu->backend->mostScale) break;
+    if(!scaleTaken(gpu, scale)) break;
     gpu->resolution(scale);
     System software, hardware;
     hardware.ge.setRenderer(gpu);
@@ -2258,8 +2275,7 @@ static auto gpuCheck() -> void {
 static auto gpuScaled() -> void {
   auto gpu = renderer();
   if(!gpu) return;
-  if(gpu->backend->mostScale < 3) return void(std::printf("  skipped: the GPU takes at most %ux\n",
-                                                         gpu->backend->mostScale));
+  if(!scaleTaken(gpu, 3)) return;
   std::mt19937 random{20261012};
   for(u32 scale : {2u, 3u}) {
     gpu->resolution(scale);
@@ -2358,10 +2374,7 @@ static auto gpuSeams() -> void {
     s.ge.primitive(GE::Triangles, 6);
   };
   for(u32 scale : {1u, 2u, 3u}) {
-    if(scale > gpu->backend->mostScale) {
-      std::printf("  %ux skipped: the GPU takes at most %ux\n", scale, gpu->backend->mostScale);
-      continue;
-    }
+    if(!scaleTaken(gpu, scale)) continue;
     gpu->resolution(scale);
     System software, hardware;
     hardware.ge.setRenderer(gpu);
@@ -2403,13 +2416,13 @@ static auto gpuSeams() -> void {
 static auto gpuBlending() -> void {
   auto gpu = renderer();
   if(!gpu) return;
-  if(!gpu->backend->reads) return void(std::printf("  skipped: the GPU doesn't read the frame buffer\n"));
+  if(!gpu->backend->reads) return skip("vulkan-reads", "the GPU doesn't read the frame buffer");
   std::printf("  %s\n", gpu->backend->readsInOrder ? "in rasterization order" : "draws split where they overlap");
   bool readsBlending = gpu->backend->readsBlending;
   gpu->backend->readsBlending = true;
   std::mt19937 random{20261013};
   for(u32 scale : {1u, 2u}) {
-    if(scale > gpu->backend->mostScale) continue;
+    if(!scaleTaken(gpu, scale)) continue;
     gpu->resolution(scale);
     for(u32 format : {3u, 0u, 1u, 2u}) {
       System software, hardware;
@@ -2567,7 +2580,7 @@ static auto gpuBlendingApart() -> void {
     hardware.ge.setRenderer(nullptr);
   }
   if(!gpu->backend->reads) {
-    std::printf("  what reads skipped: the GPU doesn't read the frame buffer\n");
+    skip("vulkan-reads", "the GPU doesn't read the frame buffer (what reads)");
     gpu->backend->readsInOrder = readsInOrder, gpu->backend->readsBlending = readsBlending;
     return;
   }
@@ -2787,7 +2800,7 @@ static auto glow(System& s, const std::vector<Corners>& drawn, const std::vector
 static auto gpuGlowParts() -> void {
   GPU* accurate = renderer();
   if(!accurate) return;
-  if(!accurate->backend->palettes) return void(std::printf("  skipped: no palettes on the GPU\n"));
+  if(!accurate->backend->palettes) return skip("vulkan-palettes", "no palettes on the GPU");
   std::mt19937 random{20261012};
   auto drawn = randomSprites(random, 30, false);
   auto tiles = glowTiles(random);
@@ -2796,7 +2809,7 @@ static auto gpuGlowParts() -> void {
   u32 decodes = tiles.size() * 3;  //(a palette for each tile's channel)
   for(GPU* gpu : {accurate, fastRenderer()}) {
     for(u32 scale : {1u, 2u}) {
-      if(!gpu || scale > gpu->backend->mostScale) continue;
+      if(!gpu || !scaleTaken(gpu, scale)) continue;
       gpu->resolution(scale);
       System held, parts, whole;
       whole.ge.boxes = false;

@@ -45,12 +45,13 @@ int main() {
   for(auto& test : measureTests()) tests.push_back(test);
   for(auto& test : measured6Tests()) tests.push_back(test);
   for(auto& test : gpuTests()) tests.push_back(test);
+  checkRequired();
   for(auto& [name, run] : tests) {
     currentTest = name;
     int before = failures;
     run();
-    std::printf("%s %s\n", failures == before ? "pass" : "FAIL", currentTest);
+    report(before);
   }
-  std::printf("%zu groups, %d failure%s\n", tests.size(), failures, failures == 1 ? "" : "s");
+  summary(tests.size());
   return failures ? 1 : 0;
 }
