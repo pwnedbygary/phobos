@@ -30,6 +30,60 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP GE: fewer GPU draws and cheaper PRIMs — the texels taken in the vertices, fast mode's small PRIMs among its meshes, a PRIM's settings kept — 2026-10-14
+
+Branch `cursor/psp-ge-speed3-2b67`, on `af542113a` (#251's head), so its diff is this round's alone (draft PR to
+#251's branch, to be retargeted once #251 merges). docs/psp-core.md, part 92, has the evidence. Clean room: no PPSSPP
+code read (its GPU backend not opened), JPCSP not read. Save states unchanged (layout 31). The branch name isn't
+`cursor/psp-ge-round3-2b67`: that's PR #132's, closed long ago.
+- **Measured first** (the M1, the bench runner at -O3 with thin LTO, a build counting why each GPU draw couldn't join
+  the one before): fast mode's draws alternated between meshes and the GE's own small PRIMs (Army of Two 3,144 draws a
+  frame, 2,167 such breaks; Ghost of Sparta's menu 3,684 and 2,095); the push constant `held` split Ghost of Sparta's
+  menu into 1,573 draws in accurate mode (1,213 breaks); MoltenVK's encoding at the submit was 7-16% of the emulation
+  thread; Monkey Ball's 50,000 PRIMs a frame paid for their whole setup each.
+- **Changes** (gpu.cpp, gpu.hpp, vulkan.cpp, draw.frag, draw.vert's comment, transform.vert, draw.cpp, threads.cpp,
+  ge.hpp): the texels a PRIM takes of a copy in its vertices (flags' bits 8-27) and its Transformed block, not the push
+  constants; fast mode's 3D triangles the GE transformed itself recorded among the meshes as models placed already,
+  which transform.vert takes with draw.vert's own arithmetic, so meshes and the small PRIMs between them are one draw;
+  a PRIM's GPU state kept where its settings are the last one's; the last texture looked at first; pipelines found by
+  a hash; fast mode's models and corners written into room made once a PRIM; the software renderer's triangle jobs set
+  up where the batch keeps them.
+- **Draws a frame** (base -> branch): fast mode Ghost of Sparta's menu 3,684 -> 346, Army of Two 3,144 -> 642 (menu
+  3,205 -> 541), Monkey Ball 2,119 -> 1,143, Hits Remixed 948 -> 472, Twisted Metal 208 -> 110, Sonic Rivals 445 ->
+  255; accurate mode Ghost of Sparta 1,573 -> 348, Army of Two 963 -> 649.
+- **Numbers** (the M1, MoltenVK, the emulation thread, base -> branch, two rounds taking turns at a load of 15-50;
+  fps it allows; instructions steadier): Vulkan (fast) Army of Two playing 19 -> 21 (343 -> 300 M instructions a
+  frame, -13%; cycles -12%), its menu 28 -> 32 (-16%), Ghost of Sparta's menu 35 -> 40 (-8%; cycles -11%), Hits
+  Remixed 150 -> 167 (-7%), Colin McRae -6%, Monkey Ball -3%, Death Jr. II, Sonic Rivals and Twisted Metal -3%;
+  Vulkan (accurate) Monkey Ball and Ghost of Sparta -4%, the rest within 2%; Software within its noise (the bands its
+  emulation thread draws while it waits move its counts by a tenth between runs of one build).
+- **Exact**: base against the branch from the 21 scenes' states, 100 frames, every frame's picture and VRAM, then RAM
+  and the machine's state: identical in all three renderers (63 of 63, and 63 of 63 again on b3a208277). The one
+  difference a GPU could see: draw.vert's
+  position isn't declared invariant as transform.vert's is, so a driver compiling the same expression differently in
+  the two could move a small PRIM's corner by a float's rounding in fast mode alone (on the M1, none: tested at 1x and
+  2x). draw.vert, accurate mode's, is as it was.
+- **Checks** (b3a208277): tests/psp 522/0 (sanitized, with `detect_container_overflow=0`: on this Mac base's GPU groups
+  stop at an AddressSanitizer container-overflow in `vector<u8>::resize()` too, an unsanitized object's
+  instantiation), and its GE's and GPU's 143 groups unsanitized 0 failures; tests/allegrex 68/0; tests/psp/ares
+  340/0; the shaders' CI check (glslang 16.6.0 byte for byte, valid for Vulkan 1.0) passes. GCC 14 without the
+  sanitizers (on 9c411d1ed) stops at "may be used uninitialized" in four.cpp (`downAxis`, `four.depth`), untouched
+  here and met by the God of War software round on Oct 10 too; CI's GCC 13 with the sanitizers doesn't.
+- **Review** (independent, read-only, to 4d26b6a98): no blocker; four points fixed in b3a208277: a mesh's models kept
+  across its runs by the recording's generation (a near-plane cut no longer copies the PRIM's vertices again, nor can a
+  hand-over in between leave a run's indices on placed models); the start-up check draws the GE's own 3D among the
+  meshes, and where only that fails System turns `screenMeshes` off and checks again; kept settings let go after a
+  texture the backend couldn't make; tests in a 480-wide frame buffer, with the shine apart, a near-plane cut, and
+  sampling past what's taken (each of the clamp's three paths, broken, fails them; the kept settings' fix undone fails
+  the pretend backend's test). Small points taken; draw.vert's invariance left to measure on the RP6. Instructions
+  unchanged by them (both Vulkan modes to the percent, Software within its noise).
+- **After an update** players' kept pipelines (System's "Pipeline Cache") miss once: draw.frag's push constants and fast
+  mode's vertex layout changed, so the first session makes its pipelines afresh (a stutter at each).
+- **What's left**: Monkey Ball's draws split by texture (descriptor indexing); a Look kept on the GE's side and the
+  command loop (7%); fast mode's vertices read straight into models; 2D PRIMs between meshes; the software renderer's
+  triangle setup. Measure on the RP6, where the driver's work is in the `vkCmd*` calls, not deferred to the submit.
+- Scratch: `~/phobos-work/scratch/ge-round3` (`NOTES.md`, `patches/gestats-patch.py`, `stats-run.sh`, `hash21.sh`).
+
 ## PSP Vulkan: the depth buffer as the PSP's memory, a 5551 stencil bit — Hammerin' Hero's and Jeanne d'Arc's characters, Cars Race-O-Rama's race, Colin McRae's terrain shadows — 2026-10-13
 
 Branch `cursor/psp-vk-models-2b67`, on master (`542da5a28`, #230), merged with `3228b825d` (#229, #237); PR #251.

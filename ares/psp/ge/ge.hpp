@@ -453,7 +453,7 @@ struct GE {
   auto drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>& vertices, u32 strip) -> void;
   auto meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip, s32 facing,
                      std::vector<Vertex>& vertices) -> void;
-  auto submit(Job& job) -> void;
+  auto submit(Job& job) -> bool;
   auto spriteJob(const Look& look, const Vertex& from, const Vertex& to, bool perspective, Job& job) const -> bool;
   auto readsAhead(const Look& look, const std::vector<Vertex>& vertices, u32 count) const -> bool;
   auto readsApart(const Look& look, const Transform& t, const std::vector<Vertex>& vertices, u32 kind, u32 strip,
@@ -463,8 +463,8 @@ struct GE {
     -> void;
   auto placedTriangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing,
                       bool perspective, const s64 (&x)[3], const s64 (&y)[3]) -> void;
-  auto triangleJob(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, const s64 (&x)[3],
-                   const s64 (&y)[3], s64 area, bool perspective) const -> Job;
+  auto triangleJob(Job& job, const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, const s64 (&x)[3],
+                   const s64 (&y)[3], s64 area, bool perspective) const -> void;
   auto point(const Look& look, const Vertex& at) -> void;
   auto line(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto readVertices(u32 count, const VertexFormat& format) -> void;
@@ -708,7 +708,7 @@ struct GE {
   //meshTriangles() hands to the renderer
   struct MeshCorner { s32 x, y; u32 bits; };
   std::vector<MeshCorner> placed;
-  std::vector<u32> handed;
+  std::vector<u32> handed, handing;  //(handing: room for a PRIM's corners as they're found, handed over in runs)
 
   //What the primitives set up since the driver last looked take a PSP's GE to draw (Kernel::geTime()): how many
   //there are (sprites, triangles, lines and points; a triangle cut at the near plane, its pieces), and their pixels

@@ -518,6 +518,121 @@ static auto gpuFastRules() -> void {
   }
 }
 
+//Fast mode's PRIMs of fewer than MeshLeast vertices (the GE transforms them) between its meshes (the GPU transforms
+//them), in one setting after another (smooth and flat shading, a texture filtered and not, fog, lighting with its
+//shine kept apart), each setting's first mesh with a triangle cut at the near plane (which the GE cuts and draws among
+//its runs), into a frame buffer 128 pixels wide and one 480 wide (a target whose scale to the GPU's -1 to 1 isn't a
+//power of two), at 1x and 2x: the GE's triangles go among the meshes (GPU::screenTriangle()), so each setting's PRIMs
+//are one draw, and every pixel is as when they're drawn apart (draw.vert's own draws).
+static auto gpuScreenMeshes() -> void {
+  GPU* gpu = renderer() ? fastRenderer() : nullptr;
+  if(!gpu) return;
+  if(!gpu->backend->transforms) return skip("vulkan-transforms", "the driver didn't take transform.vert");
+  auto f24 = [](float value) { return bitsOf(value) >> 8; };
+  struct Corner { float u, v; u32 color; float normal[3], at[3]; };  //(vertex type 0x1ff)
+  auto draw = [&](System& s, u32 kind, const std::vector<Corner>& corners) {
+    u32 to = GPUVertices;
+    for(auto& c : corners) {
+      for(u32 word : {bitsOf(c.u), bitsOf(c.v), c.color, bitsOf(c.normal[0]), bitsOf(c.normal[1]),
+                      bitsOf(c.normal[2]), bitsOf(c.at[0]), bitsOf(c.at[1]), bitsOf(c.at[2])}) {
+        s.memory.write(4, to, word), to += 4;
+      }
+    }
+    s.ge.vertexAddress = GPUVertices;
+    s.ge.primitive(kind, corners.size());
+  };
+  constexpr u32 Settings = 5;
+  //(each setting: 4 PRIMs of 30 corners, a small one of 6 after each; the texture 16 by 16 random texels in RAM)
+  auto scene = [&](System& s, u32 width, u32 height, std::vector<u64>& draws) {
+    auto& c = s.ge.commands;
+    c[GE::FrameBufferPointer] = 0, c[GE::FrameBufferWidth] = width, c[GE::FrameBufferPixelFormat] = 3;
+    c[GE::DepthBufferPointer] = 0x10'0000, c[GE::DepthBufferWidth] = width;
+    c[GE::Region2] = 1023 << 10 | 1023, c[GE::Scissor2] = (width - 1) | (height - 1) << 10;
+    c[GE::VertexType] = 0x1ff, c[GE::MaxZ] = 0xffff, c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 5;
+    for(u32 n = 0; n < 12; n++) s.ge.world[n] = s.ge.view[n] = f24(n % 4 == 0 ? 1 : 0);
+    for(u32 n = 0; n < 16; n++) s.ge.projection[n] = 0;
+    s.ge.projection[0] = s.ge.projection[5] = f24(1);  //(the near plane 1 away, the far one 10)
+    s.ge.projection[10] = f24(-11.0f / 9), s.ge.projection[11] = f24(-1), s.ge.projection[14] = f24(-20.0f / 9);
+    c[GE::ViewportXScale] = f24(width / 2.0f), c[GE::ViewportYScale] = f24(height / -2.0f);
+    c[GE::ViewportZScale] = f24(30000);
+    c[GE::ViewportXCenter] = f24(2048), c[GE::ViewportYCenter] = f24(2048), c[GE::ViewportZCenter] = f24(32768);
+    c[GE::OffsetX] = (2048 - width / 2) << 4, c[GE::OffsetY] = (2048 - height / 2) << 4;
+    c[GE::TextureScaleU] = c[GE::TextureScaleV] = f24(1);
+    std::mt19937 random{20261014};
+    for(u32 n = 0; n < 16 * 16; n++) s.memory.write(4, GPUTexture + n * 4, u32(random()) | 0xff00'0000);
+    for(u32 n = 0; n < width * height * 4; n += 4) s.memory.write(4, 0x0400'0000 + n, 0xff20'2020);
+    for(u32 n = 0; n < width * height * 2; n += 4) s.memory.write(4, 0x0410'0000 + n, 0xffff'ffff);
+    for(u32 setting = 0; setting < Settings; setting++) {
+      c[GE::ShadeMode] = setting != 1;
+      c[GE::TextureMappingEnable] = 0, c[GE::FogEnable] = 0, c[GE::LightingEnable] = 0;
+      if(setting == 2 || setting == 3) {
+        texture(s, GPUTexture, 16, 16, 16);
+        c[GE::TextureFilter] = setting == 3 ? 1 | 1 << 8 : 0;
+        c[GE::TextureFunction] = 0;
+      }
+      if(setting == 3) {
+        c[GE::FogEnable] = 1, c[GE::FogEnd] = f24(12.0f), c[GE::FogSlope] = f24(1.0f / 11);
+        c[GE::FogColor] = 0x30'60ff;
+      }
+      if(setting == 4) {  //(a light whose shine is kept apart, the vertices' colors the diffuse)
+        c[GE::LightingEnable] = 1, c[GE::LightMode] = 1, c[GE::LightEnable0] = 1, c[GE::LightType0] = 1;
+        c[GE::Light0X] = f24(0.3f), c[GE::Light0X + 1] = f24(0.2f), c[GE::Light0X + 2] = f24(1);
+        c[GE::Light0Ambient] = 0x10'1010, c[GE::Light0Ambient + 1] = 0xff'ffff, c[GE::Light0Ambient + 2] = 0xff'ffff;
+        c[GE::MaterialColor] = 2, c[GE::MaterialSpecular] = 0xff'ffff, c[GE::MaterialSpecularCoefficient] = f24(2);
+        c[GE::AmbientLightColor] = 0x30'3030, c[GE::AmbientLightAlpha] = 0xff;
+      }
+      u64 before = s.ge.renderer ? gpu->statistics.draws : 0;
+      for(u32 prim = 0; prim < 8; prim++) {
+        std::vector<Corner> corners;
+        for(u32 n = 0; n < (prim & 1 ? 6u : 30u); n++) {
+          float z = -1.5f - (random() % 1000) / 1000.0f * 7.0f;
+          float x = (s32(random() % 2000) - 1000) / 1000.0f * -z, y = (s32(random() % 2000) - 1000) / 1000.0f * -z;
+          float facing[3] = {(s32(random() % 200) - 100) / 400.0f, (s32(random() % 200) - 100) / 400.0f, 1};
+          corners.push_back({(random() % 64) / 4.0f, (random() % 64) / 4.0f, u32(random()) | 0xff00'0000,
+                             {facing[0], facing[1], facing[2]}, {x, y, z}});
+        }
+        if(prim == 0) corners[2].at[2] = -0.5f;  //(nearer than the near plane: its triangle cut)
+        draw(s, GE::Triangles, corners);
+      }
+      if(s.ge.renderer) draws.push_back(gpu->statistics.draws - before);
+    }
+    c[GE::LightingEnable] = 0, c[GE::LightMode] = 0, c[GE::LightType0] = 0;
+  };
+  for(u32 scale : {1u, 2u}) {
+    if(!scaleTaken(gpu, scale)) break;
+    for(auto [width, height] : {std::pair{128u, 96u}, std::pair{480u, 272u}}) {
+      std::vector<u32> pictures[2];
+      std::vector<u64> draws[2];
+      u64 screened = 0;
+      for(bool together : {true, false}) {
+        gpu->resolution(scale);
+        gpu->screenMeshes = together;
+        System hardware;
+        hardware.ge.setRenderer(gpu);
+        u64 before = gpu->statistics.screened;
+        scene(hardware, width, height, draws[together]);
+        if(together) screened = gpu->statistics.screened - before;
+        CHECK(gpu->picture(0, width, 3, width, height, pictures[together], scale), true);
+        hardware.ge.setRenderer(nullptr);
+      }
+      gpu->screenMeshes = true;
+      u32 apart = 0;
+      for(u32 n = 0; n < pictures[0].size() && n < pictures[1].size(); n++) apart += pictures[0][n] != pictures[1][n];
+      if(apart) std::printf("  %ux, %u wide: %u pixels differ, among the meshes and apart\n", scale, width, apart);
+      CHECK(pictures[0].size() == pictures[1].size() && pictures[0].size() == u64(width) * height * scale * scale,
+            true);
+      CHECK(apart, 0u);
+      CHECK(screened >= Settings * 4 * 2, true);  //(the small PRIMs' two triangles each, the cut ones' pieces too)
+      CHECK(draws[1].size(), u64(Settings));
+      for(u32 setting = 0; setting < draws[1].size(); setting++) {
+        CHECK(draws[1][setting], 1u);
+        CHECK(draws[0][setting] >= 8, true);
+      }
+    }
+  }
+  gpu->resolution(1);
+}
+
 //Fast mode's 3D (mesh()) changes a target as any draw does, for render to texture taken again: a frame buffer
 //sampled into another, a wall of one color drawn over part of it with the GPU transforming it, then sampled again from
 //the same place. The second picture has the wall in it as the software renderer has it, all but a few pixels of its
@@ -621,6 +736,56 @@ static auto gpuLost() -> void {
   CHECK(apart(software, hardware), 0u);
   CHECK(pretend.runs, runs);
   CHECK(reports, 1u);
+  hardware.ge.setRenderer(nullptr);
+}
+
+//A texture the backend couldn't make (its memory for pictures exhausted, as at a high resolution): its PRIM draws
+//untextured, and the next PRIM, with the same settings and the texture the one before it had, isn't taken for that
+//one (GPU::settings()' kept state): it draws with its texture. A pretend backend, no GPU needed, whose second
+//texture fails; each draw's texture as it's run.
+static auto gpuKeptAfterFailedTexture() -> void {
+  struct Failing : GPU::Backend {
+    u32 made = 0, textures = 0;
+    std::vector<u32> drawn;
+    auto name() const -> std::string override { return "pretend"; }
+    auto makeTarget(u32, u32) -> u32 override { return ++made; }
+    auto dropTarget(u32) -> void override {}
+    auto makeTexture(u32, u32, const u32*, std::shared_ptr<const void>) -> u32 override {
+      return ++textures == 2 ? 0 : ++made;
+    }
+    auto dropTexture(u32) -> void override {}
+    auto run(const GPU::Recorded& r) -> bool {
+      for(auto& c : r.commands) if(c.kind == GPU::Command::Kind::Draw) drawn.push_back(r.states[c.state].texture);
+      return true;
+    }
+    auto submit(const GPU::Recorded& r) -> bool override { return run(r); }
+    auto finish(const GPU::Recorded& r) -> bool override { return run(r); }
+    auto read(u32, const u32*&, const u8*&) -> bool override { return false; }
+  };
+  auto backend = std::make_unique<Failing>();
+  auto& pretend = *backend;
+  GPU gpu(std::move(backend));
+  System hardware;
+  hardware.ge.setRenderer(&gpu);
+  prepare(hardware, 0, 3);
+  std::mt19937 random{20261014};
+  for(u32 n = 0; n < 2 * 16 * 16; n++) hardware.memory.write(4, GPUTexture + n * 4, u32(random()) | 0xff00'0000);
+  Corners corners{{{0, 0, 4, 4}, {16, 16, 20, 20}}, 0xffff'ffff};
+  texture(hardware, GPUTexture, 16, 16, 16);
+  sprite(hardware, corners);  //(its texture made)
+  texture(hardware, GPUTexture + 0x400, 16, 16, 16);
+  sprite(hardware, corners);  //(its texture not: untextured)
+  texture(hardware, GPUTexture, 16, 16, 16);
+  sprite(hardware, corners);  //(the first's texture again)
+  hardware.ge.settleAll();
+  CHECK(gpu.ready(), true);
+  CHECK(pretend.textures, 2u);
+  CHECK(pretend.drawn.size(), u64(3));
+  if(pretend.drawn.size() == 3) {
+    CHECK(pretend.drawn[0] != 0, true);
+    CHECK(pretend.drawn[1], 0u);
+    CHECK(pretend.drawn[2], pretend.drawn[0]);
+  }
   hardware.ge.setRenderer(nullptr);
 }
 
@@ -1002,6 +1167,78 @@ static auto gpuHeldRows() -> void {
     }
     hardware.ge.setRenderer(nullptr);
   }
+}
+
+//Fast mode's 3D taking a frame buffer as a texture whose rows run on into another frame buffer's (of another row
+//width, not taken: held at the last row of its own, take()'s cut), from a copy of more rows a sprite took before that
+//frame buffer was drawn: the rows taken ride with the PRIM (GPU::Vertex::taken()), which fetches are held inside. A
+//PRIM of six corners among the meshes (screenTriangle(): transform.vert's placed vertices) and drawn apart (draw.vert),
+//and a mesh of eighteen (its Transformed block), filtered, their texels reaching past the rows taken, at 1x and 2x:
+//every pixel as from a copy of only the rows taken.
+static auto gpuTakenRowsHeld() -> void {
+  GPU* gpu = renderer() ? fastRenderer() : nullptr;
+  if(!gpu) return;
+  if(!gpu->backend->transforms) return skip("vulkan-transforms", "the driver didn't take transform.vert");
+  std::mt19937 random{20261089};
+  auto drawn = randomSprites(random, 30, false);
+  auto quads = [](System& s, std::vector<std::array<f32, 5>> list) {  //(each x0, x1, y0, y1, v0: two triangles)
+    u32 to = GPUVertices, count = 0;
+    for(auto [x0, x1, y0, y1, v0] : list) {
+      for(u32 corner : {0u, 1u, 3u, 0u, 3u, 2u}) {
+        f32 x = corner & 1 ? x1 : x0, y = corner >> 1 ? y1 : y0, v = v0 + y - y0;
+        for(u32 word : {bitsOf(x / 64), bitsOf(v / 64), 0xffff'ffffu, 0u, 0u, bitsOf(1), bitsOf(x / 32 - 1),
+                        bitsOf(1 - y / 24), 0u}) {
+          s.memory.write(4, to, word), to += 4;
+        }
+        count++;
+      }
+    }
+    s.ge.vertexAddress = GPUVertices;
+    s.ge.primitive(GE::Triangles, count);
+  };
+  for(u32 scale : {1u, 2u}) {
+    if(!scaleTaken(gpu, scale)) break;
+    auto run = [&](bool larger, bool together) {
+      gpu->resolution(scale);
+      gpu->screenMeshes = together;
+      System s;
+      s.ge.setRenderer(gpu);
+      auto& c = s.ge.commands;
+      prepare(s, 0, 3);
+      for(auto& one : drawn) sprite(s, one);
+      if(larger) {  //(the copy of all 64 rows, before the frame buffer below is drawn)
+        prepare(s, 0x2'8000, 3);
+        texture(s, Memory::VRAMBase, 64, 64, 64);
+        sprite(s, {{{0, 0, 0, 0}, {64, 64, 64, 48}}, 0xffff'ffff});
+      }
+      prepare(s, 0x3000, 3);  //(below the picture's 48 rows, 48 pixels wide)
+      c[GE::FrameBufferWidth] = 48, c[GE::Scissor2] = 47 | 15 << 10;
+      sprite(s, {{{0, 0, 0, 0}, {0, 0, 48, 16}}, 0x5a12'3456});
+      prepare(s, 0x2'0000, 3);
+      orthographic(s, 64);
+      c[GE::TextureFilter] = 1 | 1 << 8;
+      quads(s, {{0, 30, 0, 40, 16}});  //(rows 16 to 56)
+      quads(s, {{32, 64, 0, 20, 16}, {32, 64, 20, 40, 36}, {32, 48, 40, 48, 40}});
+      std::vector<u32> picture;
+      CHECK(gpu->picture(0x2'0000, 64, 3, 64, 48, picture, scale), true);
+      s.ge.setRenderer(nullptr);
+      return picture;
+    };
+    auto held = run(true, true), apart = run(true, false), alone = run(false, true);
+    auto differ = [](const std::vector<u32>& a, const std::vector<u32>& b) {
+      u32 count = a.size() != b.size();
+      for(u32 n = 0; n < a.size() && n < b.size(); n++) count += a[n] != b[n];
+      return count;
+    };
+    u32 off = differ(held, alone), offApart = differ(held, apart);
+    if(off) std::printf("  %ux: %u pixels differ from a copy of the rows taken alone\n", scale, off);
+    if(offApart) std::printf("  %ux: %u pixels differ, among the meshes and apart\n", scale, offApart);
+    CHECK(held.size(), u64(64 * 48 * scale * scale));
+    CHECK(off, 0u);
+    CHECK(offApart, 0u);
+  }
+  gpu->screenMeshes = true;
+  gpu->resolution(1);
 }
 
 //Render to texture from many places and sizes (a strip further down each time, wider or taller): the GPU's copies
@@ -2043,6 +2280,95 @@ static auto gpuTiles() -> void {
     }
   }
   gpu->resolution(1);
+}
+
+//A frame buffer taken as a texture whole by one sprite, then by sprites taking less of it, each its own columns and
+//rows (Ghost of Sparta's menu draws 1,200 such PRIMs a frame from one copy): what each takes rides in its vertices
+//(GPU::Vertex::taken()), not the push constants, so after the first they're all one draw, in either mode, and every
+//pixel is the software renderer's. Then, filtered, at 1x and 2x, tiles side by side each shrinking a part of its own
+//size onto the screen, their texels reaching the edge of what each takes (above 1x the GPU's pixels between two of the
+//GE's sample past it, where the copy has more): one draw again, and each tile's pixels as when it's drawn alone, from
+//a copy of only what it takes.
+static auto gpuTakenInOneDraw() -> void {
+  if(!renderer()) return;
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(!gpu) continue;
+    std::mt19937 random{20261014};
+    auto drawn = randomSprites(random, 30, false);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    GPU::Statistics before, between;
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0, 3);
+      for(auto& one : drawn) sprite(*s, one);
+      prepare(*s, 0x2'0000, 3);
+      texture(*s, Memory::VRAMBase, 64, 64, 64);
+      if(s == &hardware) before = gpu->statistics;
+      sprite(*s, {{{0, 0, 0, 0}, {48, 40, 48, 40}}, 0xffff'ffff});  //(the copy: 48 columns, 40 rows)
+      if(s == &hardware) between = gpu->statistics;
+      for(u32 n = 0; n < 6; n++) {
+        float u = 3 * n, v = 2 * n, width = 8 + 5 * n, height = 6 + 3 * n, x = 7 * n, y = 40 - height;
+        sprite(*s, {{{u, v, x, y}, {u + width, v + height, x + width, y + height}}, 0xffff'ffff});
+      }
+    }
+    CHECK(between.copies - before.copies, 1u);
+    CHECK(gpu->statistics.copies, between.copies);
+    CHECK(gpu->statistics.draws, between.draws);
+    CHECK(apart(software, hardware), 0u);
+    hardware.ge.setRenderer(nullptr);
+
+    //(tile n: 10 by 16 pixels at x 2 + 10n, its texels 2 to 14 + 4n across and 2 to 12 + 3n down, filtered: from 2, so
+    //that the filter's first texels are inside, not repeated round from the far edge, which would take the whole)
+    auto tile = [](System& s, u32 n) {
+      float x = 2 + 10 * n, across = 14 + 4 * n, down = 12 + 3 * n;
+      sprite(s, {{{2, 2, x, 20}, {across, down, x + 10, 36}}, 0xffff'ffff});
+    };
+    for(u32 scale : {1u, 2u}) {
+      if(!scaleTaken(gpu, scale)) break;
+      auto machine = [&](bool larger, s32 only, u64& draws) {
+        gpu->resolution(scale);
+        System s;
+        s.ge.setRenderer(gpu);
+        //(the frame buffer drawn from random texels, each unlike the next, so a texel past what a tile takes shows)
+        std::mt19937 noise{20261015};
+        for(u32 n = 0; n < 64 * 64; n++) s.memory.write(4, GPUTexture + n * 4, u32(noise()) | 0xff00'0000);
+        prepare(s, 0, 3);
+        texture(s, GPUTexture, 64, 64, 64);
+        sprite(s, {{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0xffff'ffff});
+        s.ge.commands[GE::TextureMappingEnable] = 0;
+        prepare(s, 0x2'0000, 3);
+        sprite(s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff10'2030});  //(all the picture's rows the GPU's)
+        texture(s, Memory::VRAMBase, 64, 64, 64);
+        s.ge.commands[GE::TextureFilter] = 1 | 1 << 8;
+        if(larger) sprite(s, {{{0, 0, 0, 0}, {48, 40, 48, 40}}, 0xffff'ffff});
+        u64 first = gpu->statistics.draws;
+        for(u32 n = 0; n < 6; n++) if(only < 0 || u32(only) == n) tile(s, n);
+        draws = gpu->statistics.draws - first;
+        std::vector<u32> picture;
+        CHECK(gpu->picture(0x2'0000, 64, 3, 64, 48, picture, scale), true);
+        s.ge.setRenderer(nullptr);
+        return picture;
+      };
+      u64 draws = 0, ignored = 0;
+      auto together = machine(true, -1, draws);
+      CHECK(draws, 0u);  //(the tiles join the larger sprite's draw)
+      u32 off = 0;
+      for(u32 n = 0; n < 6; n++) {
+        auto alone = machine(false, n, ignored);
+        bool sized = alone.size() == together.size() && alone.size() == 64 * 48 * scale * scale;
+        for(u32 y = 20 * scale; y < 36 * scale && sized; y++) {
+          for(u32 x = (2 + 10 * n) * scale; x < (12 + 10 * n) * scale; x++) {
+            off += alone[y * 64 * scale + x] != together[y * 64 * scale + x];
+          }
+        }
+      }
+      if(off) std::printf("  %s, %ux: %u of the tiles' pixels differ from tiles drawn alone\n",
+                          gpu->fast ? "fast" : "accurate", scale, off);
+      CHECK(together.size(), u64(64 * 48 * scale * scale));
+      CHECK(off, 0u);
+    }
+    gpu->resolution(1);
+  }
 }
 
 //The GPU's depth buffer against memory's: depth cleared by the CPU between two depth-tested sprites is taken (the
@@ -3307,6 +3633,11 @@ auto gpuTests() -> Tests {
     {"gpu pixels moved over bytes memory has the newest of: the moved ones newest", gpuMovedOverMemorys},
     {"gpu memory's bytes in its pages taken again, not the target afresh", gpuRevived},
     {"gpu a texture's place taken by tiles reaching further: few copies, held to what each takes", gpuTiles},
+    {"gpu sprites taking less of one copy: one draw, the software renderer's pixels, filtered as from copies of what "
+     "each takes", gpuTakenInOneDraw},
+    {"gpu fast mode's small 3D PRIMs among its meshes: one draw, the pixels as drawn apart", gpuScreenMeshes},
+    {"gpu fast mode's 3D held to the rows it takes of a larger copy, placed by the GE and in a mesh", gpuTakenRowsHeld},
+    {"gpu a texture the backend couldn't make: the next PRIM alike still draws with its own", gpuKeptAfterFailedTexture},
     {"gpu depth buffer follows memory's changes", gpuDepth},
     {"gpu depth as the GE's whole numbers: a fraction of a step above meets the GE's comparisons", gpuDepthSteps},
     {"gpu memory's changes to depth kept past PRIMs that don't use it, for the next that does", gpuDepthUnused},
