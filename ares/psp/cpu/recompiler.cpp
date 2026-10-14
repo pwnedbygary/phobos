@@ -545,10 +545,11 @@ auto Allegrex::Recompiler::take() -> u32 {
   return best;
 }
 
-//Register index's value, to be read: the host register holding it, loaded there first if none does yet (r0, always
-//zero, is read from ipu.r[] as before). Its loading comes before whatever the instruction does with it.
+//Register index's value, to be read: the host register holding it, loaded there first if none does yet (r0 is the
+//constant 0: nothing compiled writes it, and the interpreter sets it to 0 after every instruction). Its loading comes
+//before whatever the instruction does with it.
 auto Allegrex::Recompiler::use(u32 index) -> op_base {
-  if(index == 0) return gpr(0);
+  if(index == 0) return imm(0);
   s32 k = holding.slot[index];
   if(k < 0) {
     k = take();
