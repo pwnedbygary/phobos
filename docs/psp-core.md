@@ -13265,3 +13265,131 @@ MoltenVK does, so fewer draws (and fewer pipeline, push constant and vertex buff
 there than the M1's instructions say: worth measuring Ghost of Sparta's menu in both modes, Army of Two's play and menu,
 Monkey Ball, Hits Remixed and Twisted Metal in fast mode, and the fast mode's pictures against accurate mode's (the
 invariance note above).
+
+## Part 95: memory stick files emptied as they're opened keep their bytes (LittleBigPlanet's install), and the runner's file I/O trace
+
+On branch `cursor/psp-installs-2b67`, on master `dd37263c8` (part 92); parts 93 (#254) and 94 (the CPU's round 3) are
+other branches'. Clean room: PPSSPP's notes on the hardware read as a description of how the PSP behaves (its issue
+579's tests on a PSP, the comments in its directory file system), none of its code; JPCSP not read. Save states:
+layout 32.
+
+**The problem.** Deep play batch 04's bug 1: LittleBigPlanet (UCUS98744) was blocked at its first boot. Its install
+("Installing Game Data") wrote `PSP/SAVEDATA/UCUS98744INSTALL/GUI.ARC`, 4,352,791 bytes, with its first 4 MiB zero
+(only its last 158,487 bytes held data, though a run stopped part way had found every byte of its first MiB there),
+and from frame ~1596 the game asked for good "Save data load failed because the data is corrupt" and "... because the
+specified file was not found. Retry?". The same with the interpreter.
+
+**The file I/O trace** (`tools/psp-runner --trace-io`; `Kernel::ioTrace`, empty unless a host sets it, not part of the
+machine's state): each call of IoFileMgrForUser's functions a line, `[frame] io:`, then the PSP's time in microseconds
+and the calling thread, the function, the call as the game made it and its answer: a descriptor with its file's path
+and the position the call found it at (`@`), an open's flags (named) and mode, a read's or write's buffer, size and
+the FNV-1a hash of the bytes it moved (`zeros` if they all were), a seek's offset and where from, a status's size, a
+folder entry's name, an ioctl's or devctl's command and buffers; an asynchronous request's due time and result, a line
+of its own as it's done (`done fd N`, with the position then and a read's landed bytes' hash), and a poll's or wait's
+taken result; `(waits)` where the call made its thread wait. The dispatcher calls the I/O functions through
+`traceIo()` when a host traces them, so every way out of each is traced and the functions themselves are untouched; an
+untraced run pays one test of the hook a system call.
+
+**What the trace showed.** The game's file library (its threads are "fios mediathread") copies GUI.ARC from the disc a
+MiB at a time. For each MiB it opens `disc0:/PSP_GAME/USRDIR/archives/gui.arc`, seeks, reads and closes it, then opens
+the memory stick's GUI.ARC with flags 0x02000602 (write, create, truncate, and a bit pspsdk doesn't name), takes its
+status (size 0), seeks to where that MiB goes (0x100000 for the second), writes it and closes it, every request
+asynchronous and waited for. Each open emptied the file: each MiB was written after a hole the seek left, and only the
+last piece, from 0x400000, was left with its data. The game then read GUI.ARC's header (12 bytes at 0, 16 at 0xC) as
+zeros and called its data corrupt.
+
+**What a PSP does.** PPSSPP's issue 579 (2013-2022) is this game. Its developer tested a PSP's memory stick: a file
+written "test", then opened with O_TRUNC again (with the game's 0x02000000 and its SDK version too), sought to 4 and
+written "abc", reads back "testabc"; on `host0:`, a PC's folder through PSPLink, the same reads four zeros and "abc",
+which had first hidden it; opened with O_TRUNC and closed with nothing written, the file is empty. A log of this
+install taken on a PSP (with JpcspTrace, a plugin that logs a game's system calls on the PSP itself), linked from the
+issue, has the same calls, and after them the game reading GUI.ARC back: its header, then 0xB364 bytes at 0x1C.
+PPSSPP's notes: on the PSP, truncating doesn't lose data, and a seek later recovers it; the file is truncated, but its
+data isn't erased (reads find nothing). Not recorded anywhere: the status a file emptied so gives before it's written
+(the JpcspTrace log didn't hook sceIoGetstat).
+
+**What was wrong.** `openFile()` opened an existing file with O_TRUNC through `std::ios::trunc`: the host file was
+emptied then and there.
+
+**The change** (`io.cpp`, `async.cpp`, `kernel.cpp`, `kernel.hpp`, `serialization.cpp`, `system.cpp`):
+- An existing memory stick file with bytes, opened to write with O_TRUNC, isn't emptied on the host. Its descriptor
+  says it was emptied (`OpenFile::truncated`) and holds the PSP's length of the file (`length`), from 0.
+- That length is the file's for everything `io.cpp` sees of it, through that descriptor or any other on the file
+  (`fileLength()`): reads stop at it (`readCount()`, synchronous and asynchronous), a seek from the end starts there,
+  sceIoGetstat and a folder's entries give it (`writeStat()`), a write with O_APPEND goes there, and
+  sceNpDrmEdataGetDataSize gives it. So a file emptied so holds nothing, as before.
+- A write raises the length to where it ended (`fileWritten()`), through any descriptor on the file. A write past the
+  length, after a seek, finds the old bytes still on the host between the length and the write, as on the PSP:
+  LittleBigPlanet's earlier pieces. Past the old bytes, a gap holds zeros (chosen: a FAT stick's would hold whatever
+  its clusters held).
+- `closeFile()` cuts the host file to the length as the file is closed (sceIoClose, sceIoCloseAsync) and as the kernel
+  powers on (a program ending or another starting, the machine switched off, as a PSP's kernel closes a program's
+  files as it ends). So a file emptied with nothing written ends empty, and one written short of its old length ends
+  where the writing did.
+- Emptied again while another descriptor still keeps its bytes, the file is cut to that one's length first: one length
+  at a time (chosen).
+- A state keeps an emptied file's length (layout 32; older layouts load with none kept). A state loaded over the kernel
+  lets go of its files without closing them: loading a state changes nothing on the memory stick
+  (`System::unserialize()` keeps the files the kernel had, to put back if the state is refused; a refused state can't
+  cut a file either). An emptied file the program hadn't closed keeps its bytes past its length there (chosen: nothing
+  closed it).
+- Unchanged: an empty file (nothing to keep), a file being made, a file opened without O_TRUNC or only to read, the
+  disc. The savedata utility, the dialogs and module loading read save folders' files on the host as they are (chosen:
+  a game doesn't ask them about a file it holds open to write).
+
+**Tests** (tests/psp): `files emptied as they're opened keep their bytes for a write past the end` (issue 579's test,
+with and without 0x02000000, then nothing written: empty; while emptied, its status 0, reads and a seek from its end
+finding nothing, a write at 3 bringing back 0 to 2, one past its old length bringing back the rest and zeros after it;
+written short; appended to; emptied again by a second descriptor; a state saved meanwhile keeping the length, loaded
+into another machine and the file closed there; a state loaded over it changing nothing; the kernel powering on
+closing it); `async files LittleBigPlanet's install` (the game's own calls for four pieces and a short one, the status 0
+at each open: the file ends the disc file's bytes); `files traced` (the trace's lines for an open, a write, a seek, an
+asynchronous read and its completion, a poll, a status and a close, and nothing traced without the hook); and
+`older layouts load` with layout 31's states. With `openFile()` as master had it (the file emptied as it's opened; the
+tests as they are), both new groups fail: the first 8 of its checks (issue 579's file read back as four zeros and
+"abc", the old bytes back in neither gap, the bytes not kept until the file is closed, the second descriptor's case,
+the length a state keeps), the second its file (zeros before its last piece).
+
+**LittleBigPlanet now** (the branch's runner, a fresh stick, batch 04's script): GUI.ARC is byte for byte the disc's
+`PSP_GAME/USRDIR/archives/gui.arc` (4,352,791 bytes, MD5 39a495311490a365427a8ec3ae78ba88; the disc file's bytes as
+the game read them, dumped by a scratch build), each MiB written with the hash it was read with; no "Save data load
+failed" message. The game goes on through its loading screen, the warning, its title animation and the intro movie
+(Circle skips it) to its first level: Sackboy in the entrance tube, then on the opening stage, walking with the stick
+over the rainbow hill to the PlayStation symbols. One boot from a fresh stick does all of it
+(`deepplay/LittleBigPlanet/`: `fixed-path.txt`, batch 04's presses to frame 3300, then Circle and the stick;
+`run-fx4/`, `sheet-fx4.png`; `z-fixed-install-to-level.png`).
+
+**Kingdom Hearts Birth by Sleep Final Mix's DATA INSTALL** (batch 04's bug 3), traced and left: not the savedata
+utility's size mode, the free space or the folder check. After the size mode's NO_DATA for "ULJM05775DATA" (as PPSSPP
+answers too) the game starts the system's game data install dialog (sceUtilityGamedataInstallInitStart, frame 1815),
+which part 37 made a dialog that runs and is cancelled, copying nothing. Then a thread of the game's ("DataInstall")
+cleans up after the install: the stick's FAT check (devctl 0x02425823), sceKernelPowerLock, sceIoDopen of
+`ms0:/PSP/SAVEDATA/ULJM05775DATA` (not there: 0x80010002), sceKernelPowerUnlock, sceKernelExitDeleteThread, and "An
+error has occurred. Data installation will be canceled." With an empty ULJM05775DATA made first, the size mode answers
+0, the game asks "Install data for this game already exists. Overwrite it?", and Yes runs the same dialog, the thread
+removes the folder (sceIoRmdir, 0), and the same error follows. The install needs the game data install utility itself:
+copying the disc's install files into the save folder with its PARAM.SFO, its progress and result.
+
+**Checks.**
+- tests/psp: 528 groups, 0 failures, sanitized (with `detect_container_overflow=0`, this Mac's known false positive) and
+  unsanitized; tests/allegrex 68 groups, 0 failures; tests/psp/ares 340 checks, 0 failed; the runner's test passes.
+  GCC 13.3 (Ubuntu 24.04's, CI's) builds the kernel, the changed tests and the runner with `-Wall -Wextra -Werror`.
+- The 21 scenes in Software (master's bench runner against the branch's, 100 frames from each scene's state, every
+  frame's picture and VRAM, then RAM and the machine's state): every frame's picture and VRAM, and the RAM, the same in
+  all 21. The machine's state differs as layout 32 makes it: the header's version, and 9 bytes for each open file (0
+  to 45 bytes in all). The branch writing its states in layout 31 (a scratch build: neither field, version 31) gives
+  master's states byte for byte in all 21. The emulation thread's host instructions a frame are within their noise
+  (one pass moved them -8% to +36% either way; three rounds taking turns on the three that moved most: Death Jr. II
+  100.6 and 94.8 M, Hits Remixed 45.1 and 43.6, Sonic Rivals 54.9 and 55.1, master's first).
+- Batch 04's saves and installs (master's runner against the branch's, each from the same stick, the clock pinned
+  where the run boots): Gundam NEXT PLUS's system data, Kurohyou 1's install data, Lunar's system data, Killzone's
+  and Lumines' profiles, La Pucelle Ragnarok's and MediEvil's game saves come out the same files byte for byte, with
+  the same savedata requests. Each game booted again with the branch's runner loads its save (54,020, 51,200, 152,
+  1,664, 18,448, 366,760 and 32,850 bytes read) and changes nothing on the stick. (These save through the savedata
+  utility, which writes its files itself.)
+- LittleBigPlanet booted again on its installed stick lists INSTALL and PROFILE, reads GUI.ARC back, installs nothing
+  and says nothing, and goes on to its logos and intro; nothing on the stick changes.
+
+**What's left.** The game data install utility (Kingdom Hearts BbS FM's DATA INSTALL; Gunhound EX's cancels too).
+What a PSP's sceIoGetstat says of a file emptied so before it's written, and what a gap past the old bytes holds, if a
+test on a PSP ever records them.

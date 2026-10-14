@@ -30,6 +30,39 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP I/O: memory stick files emptied as they're opened keep their bytes (LittleBigPlanet's install), and the runner's file I/O trace — 2026-10-14
+
+Branch `cursor/psp-installs-2b67`, on master `dd37263c8`; docs/psp-core.md, part 95, has the evidence. Clean room:
+PPSSPP's issue 579 and its directory file system's comments read as the hardware's description, none of its code;
+JPCSP not read. Save states: layout 32 (31 and older load as before; `tests/psp/ares/system.cpp` now refuses 33).
+- **The bug** (deep play batch 04's bug 1, high): LittleBigPlanet's first-boot install left GUI.ARC's first 4 MiB zero,
+  and the game asked "Save data load failed because the data is corrupt. Retry?" for good.
+- **The trace** (`tools/psp-runner --trace-io`, `Kernel::ioTrace`): each IoFileMgrForUser call with its answer, the
+  descriptor's path and position, sizes, buffers and the bytes' hash, and asynchronous requests as they're done. It
+  showed the game's file library copying GUI.ARC a MiB at a time, opening the stick's file with O_TRUNC (0x02000602)
+  for each MiB, seeking to its place and writing it; each open emptied the file.
+- **What a PSP does** (PPSSPP's issue 579, this game, tested on a PSP's memory stick): a file emptied as it's opened
+  keeps its bytes for a write past its end ("test", then O_TRUNC, seek 4, "abc": "testabc"), and with nothing written
+  it ends empty.
+- **The change** (io.cpp, async.cpp, kernel.cpp, kernel.hpp, serialization.cpp, system.cpp): such a file isn't emptied
+  on the host; its descriptor holds the PSP's length of it, from 0, which reads, seeks from the end, sceIoGetstat, a
+  folder's entries and appends see; writes raise it; closing the file (sceIoClose, sceIoCloseAsync, the kernel powering
+  on) cuts the host file to it. A state keeps the length; loading a state changes nothing on the stick.
+- **LittleBigPlanet now**: GUI.ARC byte for byte the disc's archives/gui.arc; the game reaches its first level and
+  Sackboy walks (PNGs in deepplay/LittleBigPlanet: sheet-fx2.png, quad-sk2.png, sheet-mv2.png).
+- **Kingdom Hearts BbS FM's DATA INSTALL** (bug 3, medium), traced, not fixed: it uses the system's game data install
+  dialog (sceUtilityGamedataInstall), part 37's cancel stub, so nothing is copied and the game's clean-up finds no
+  ULJM05775DATA folder. Needs that utility implemented (a feature of its own).
+- **Checks**: tests/psp 528/0 sanitized (`detect_container_overflow=0`) and unsanitized; tests/allegrex 68/0;
+  tests/psp/ares 340/0; the runner's test passes; GCC 13.3 builds the changed files with `-Wall -Wextra -Werror`. With
+  master's `openFile()` both new groups fail (9 checks). The 21 scenes in Software against master: every frame's
+  picture and VRAM, and RAM, identical; the machine's state differs only by layout 32 (the version, 9 bytes an open
+  file: the branch writing layout 31 gives master's states byte for byte); host instructions within their noise.
+  Batch 04's saves (Gundam NEXT PLUS, Kurohyou 1, Lunar, Killzone, Lumines, La Pucelle Ragnarok, MediEvil): the same
+  files byte for byte as master's runner makes, and each loads on a second boot.
+- **Left**: the game data install utility (KH BbS FM; Gunhound EX's DATA INSTALL cancels too). What a PSP's
+  sceIoGetstat says of a file emptied so before it's written, and what a gap past its old bytes holds, aren't recorded.
+
 ## PSP GE: fewer GPU draws and cheaper PRIMs — the texels taken in the vertices, fast mode's small PRIMs among its meshes, a PRIM's settings kept — 2026-10-14
 
 Branch `cursor/psp-ge-speed3-2b67`, on `af542113a` (#251's head), so its diff is this round's alone (draft PR to
