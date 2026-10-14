@@ -266,15 +266,22 @@ one for every change to the core and keeps it as an artifact (`psp-runner-androi
 (the loop's clock's start and end, and `root->run()`), so every commit is measured by the same
 code. After the summary, its lines, each beginning `measure`, give the frame loop's time as it
 timed it; the emulation thread's CPU time (the runner's own thread, which runs the PSP's CPU, the
-GE's commands and its sound) with its time waiting for a CPU, its timeslices and context switches
-(`/proc/self/task/TID/schedstat`, `getrusage(RUSAGE_THREAD)`); the CPU it was on after each frame,
-by core kind (`midr_el1`); the clock of that CPU every 30 frames (`scaling_cur_freq`;
+GE's commands and its sound) with its time waiting for a CPU, its timeslices, context switches and
+page faults (`/proc/self/task/TID/schedstat`, `getrusage(RUSAGE_THREAD)`); the CPU it was on after
+each frame, by core kind (`midr_el1`); the clock of that CPU every 30 frames (`scaling_cur_freq`;
 `PHOBOS_FREQ_EVERY`); where the kernel lets the user count them, its instructions and cycles in
 user mode (IPC, and cycles over its CPU time: the clock it ran at), its stalls, mispredicted
 branches and level 1 refills (`perf_event_open` on that thread alone, on each CPU PMU sysfs lists,
 added up; otherwise why not); the frames' times (median, 90th and 99th percentiles, the longest);
 and every thread's CPU time in the window (the GE's drawing threads, the screen's, the GPU
 driver's). `PHOBOS_MEASURE_JSON=FILE` writes the same as JSON (`"phobos-psp-runner-measure 1"`).
+
+Instructions and cycles are counted together, all the time. The other events are counted one by
+one, as a phone's kernel may keep most of the PMU's counters for its own counting: each takes
+turns for the counters left and is scaled from its turns (`counted 20% of the time, scaled`; the
+JSON's `counted` has each one's share), and one that never had a counter is said `not counted`
+(the JSON's `not counted`, its total `null`), never given as 0. On the Retroid Pocket 6
+(Snapdragon 8 Gen 2), the kernel leaves none for them.
 
 By default the emulation thread is pinned as the app pins its own (`PhobosRunner.cpp`'s
 `emulationLoop()`, with "Pin to fastest core" on): nice -10, the last four cores, then the
@@ -286,7 +293,8 @@ value; `PHOBOS_PERF=0` opens no counters; `PHOBOS_MEASURE=0` measures and pins n
 Android refuses the counters to the shell while `security.perf_harden` is 1
 (`perf_event_paranoid` 3), as it is by default; `adb shell setprop security.perf_harden 0` allows
 them until the next boot (`run-on-device.sh --perf-harden-off` does it for its runs and sets it
-back). Where the device refuses memory that code may run from (SELinux's `execmem`), the
+back). The Retroid Pocket 6 comes with it at 0 (`perf_event_paranoid` 1), so the counters work
+there as it is. Where the device refuses memory that code may run from (SELinux's `execmem`), the
 recompiler can't run and the interpreter runs everything, unseen but for the speed: the
 measurements check for it, and say so on a `measure warning:` line.
 
@@ -322,3 +330,14 @@ compiles, but the app's library links every core and the JNI front end beside th
 shell's cgroups (the app's thread runs in the top app's, with its boosts), and the GPU's work
 without a window to present on; the Vulkan renderer takes the system's loader
 (`/system/lib64/libvulkan.so`), not a custom driver the app may load.
+
+The window matters most for the speed. With a Vulkan renderer the app presents each frame on its
+window and waits for nothing, where the runner reads each frame back and waits for the GPU to
+finish it (the summary's `ms a frame waiting`), its emulation thread idle meanwhile. In Killzone's
+menu on the Retroid Pocket 6 that is 5 to 6.5 ms of a 19 ms frame (the emulation thread busy 68
+to 77% of the time), so the runner runs it at 51 to 54 frames a second where the app's
+fast-forward reaches 70 to 72 (at master). `--late-frames` takes each frame a frame or two late
+without waiting for it, as the app's presenting doesn't wait, to time it as the app runs. Either
+way, the emulation thread's instructions and CPU time a frame are its own work, the numbers to
+compare commits by; a frame's speed with the wait also depends on how much of the GPU's work the
+CPU's overlaps (less CPU work a frame leaves more of the wait).

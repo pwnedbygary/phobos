@@ -6,7 +6,8 @@
 #
 #usage: run-on-device.sh [options] BUILD GAME [runner options]
 #  BUILD   a build's folder (build-android.sh's last line), its psp-runner-android, or a commit: its build in
-#          $PHOBOS_ANDROID_OUT, made first if it isn't there
+#          $PHOBOS_ANDROID_OUT, made first if it isn't there, or again if its measure.hpp isn't this checkout's (so
+#          the builds a comparison runs are measured alike)
 #  GAME    the game on the device: its path, or a name in $PHOBOS_DEVICE_ROMS ("Killzone - Liberation" takes
 #          Killzone - Liberation.chd, .iso or .cso there)
 #  runner options: the runner's (tools/psp-runner/README.md), with files and folders on this computer or the device's
@@ -140,7 +141,13 @@ else
     exit 1
   fi
   LOCAL_BUILD=$BUILDS/${COMMIT:0:9}-$FLAVOR
-  if [[ ! -f $LOCAL_BUILD/psp-runner-android ]]; then
+  MEASURED=$(sed -n 's/^measure: //p' "$LOCAL_BUILD/build.txt" 2> /dev/null || true)
+  STALE=0
+  if [[ -f $LOCAL_BUILD/psp-runner-android && $MEASURED != "$(sha "$HERE/measure.hpp")" ]]; then
+    echo "$(basename "$LOCAL_BUILD") was built with another measure.hpp than this checkout's: building it again" >&2
+    STALE=1
+  fi
+  if [[ ! -f $LOCAL_BUILD/psp-runner-android ]] || ((STALE)); then
     if ((DRY)); then
       echo "+ $REPOSITORY/tools/psp-runner/build-android.sh $BUILD" >&2
     else
@@ -156,6 +163,11 @@ if ((!DRY)) || [[ -f $LOCAL_BUILD/build.txt ]]; then
   BINARY_SHA=$(sed -n 's/^sha256: //p' "$LOCAL_BUILD/build.txt")
   HAS_REPORT=$(sed -n 's/^report: //p' "$LOCAL_BUILD/build.txt")
   SOURCE=$(sed -n 's/^source: //p' "$LOCAL_BUILD/build.txt")
+  if [[ -z ${COMMIT:-} && $(sed -n 's/^measure: //p' "$LOCAL_BUILD/build.txt") != "$(sha "$HERE/measure.hpp")" ]]
+  then
+    echo "warning: $(basename "$LOCAL_BUILD") was built with another measure.hpp than this checkout's: its" \
+         "measurements may differ from other builds' (a commit given rather than a folder is built again)" >&2
+  fi
 else
   BINARY_SHA=unbuilt HAS_REPORT=yes SOURCE=unbuilt
 fi

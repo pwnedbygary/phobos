@@ -356,10 +356,13 @@ inline auto setAffinity(const std::vector<int>& cpus) -> int {  //errno, or 0
 #endif
 
 //The hardware counters: perf_event_open() on this thread alone (pid 0, any CPU), user mode only (what
-//perf_event_paranoid 2 allows), in groups so a group's counts are of the same time. A phone's cores of each kind may
-//have a PMU of their own (sysfs's armv8_*/armv9_* PMUs, each with its cpus): a thread's counter on one counts only
-//while the thread is on that PMU's cores, so each PMU gets its groups and the totals add them up. Without such PMUs
-//in sysfs, the kernel's generic events.
+//perf_event_paranoid 2 allows). Instructions and cycles are a pinned group, counted together all the time; the other
+//events (stalls, mispredicts, refills) are a group each, as a phone's kernel may keep most of the PMU's counters for
+//its own counting (Qualcomm's governors count every core), too many for five at once: the kernel takes turns with
+//what's left, and their counts are scaled from their turns (results()), or not counted where they never had one. A
+//phone's cores of each kind may have a PMU of their own (sysfs's armv8_*/armv9_* PMUs, each with its cpus): a
+//thread's counter on one counts only while the thread is on that PMU's cores, so each PMU gets its groups and the
+//totals add them up. Without such PMUs in sysfs, the kernel's generic events.
 struct Counter {
   std::string name;
   int fd = -1;
@@ -367,7 +370,7 @@ struct Counter {
 };
 
 struct Group {
-  std::string pmu, cpus, kind;  //kind: core (instructions, cycles), stalls, software
+  std::string pmu, cpus, kind;  //kind: core (instructions, cycles), extra (one other event), software
   std::vector<Counter> counters;
   u64 enabled = 0, running = 0;
   bool read = false;
@@ -466,24 +469,24 @@ inline auto perfStart(Perf& perf) -> void {
   }
   std::sort(pmus.begin(), pmus.end(), [](auto& a, auto& b) { return a.type < b.type; });
   //ARMv8's common events, by number: INST_RETIRED, CPU_CYCLES (the dedicated cycle counter), then the stalls,
-  //mispredicted branches and the level 1 caches' refills (six programmable counters hold one group of each)
+  //mispredicted branches and the level 1 caches' refills
   std::vector<EventName> coreRaw = {{"instructions", 0x08}, {"cycles", 0x11}};
-  std::vector<EventName> stallsRaw = {{"frontend stall cycles", 0x23}, {"backend stall cycles", 0x24},
-                                      {"mispredicted branches", 0x10}, {"L1I refills", 0x01}, {"L1D refills", 0x03}};
+  std::vector<EventName> extraRaw = {{"frontend stall cycles", 0x23}, {"backend stall cycles", 0x24},
+                                     {"mispredicted branches", 0x10}, {"L1I refills", 0x01}, {"L1D refills", 0x03}};
   int denied = 0;
   for(auto& pmu : pmus) {
     int error = perfGroup(perf, pmu.name, pmu.cpus, "core", (u64)pmu.type, coreRaw, true, true);
     if(error == EACCES || error == EPERM) { denied = error; break; }
-    perfGroup(perf, pmu.name, pmu.cpus, "stalls", (u64)pmu.type, stallsRaw, true, false);
+    for(auto& event : extraRaw) perfGroup(perf, pmu.name, pmu.cpus, "extra", (u64)pmu.type, {event}, true, false);
   }
   if(pmus.empty()) {
     std::vector<EventName> core = {{"instructions", PERF_COUNT_HW_INSTRUCTIONS}, {"cycles", PERF_COUNT_HW_CPU_CYCLES}};
-    std::vector<EventName> stalls = {{"frontend stall cycles", PERF_COUNT_HW_STALLED_CYCLES_FRONTEND},
-                                     {"backend stall cycles", PERF_COUNT_HW_STALLED_CYCLES_BACKEND},
-                                     {"mispredicted branches", PERF_COUNT_HW_BRANCH_MISSES}};
+    std::vector<EventName> extra = {{"frontend stall cycles", PERF_COUNT_HW_STALLED_CYCLES_FRONTEND},
+                                    {"backend stall cycles", PERF_COUNT_HW_STALLED_CYCLES_BACKEND},
+                                    {"mispredicted branches", PERF_COUNT_HW_BRANCH_MISSES}};
     int error = perfGroup(perf, "generic", "", "core", PERF_TYPE_HARDWARE, core, true, true);
     if(error == EACCES || error == EPERM) denied = error;
-    else perfGroup(perf, "generic", "", "stalls", PERF_TYPE_HARDWARE, stalls, true, false);
+    else for(auto& event : extra) perfGroup(perf, "generic", "", "extra", PERF_TYPE_HARDWARE, {event}, true, false);
   }
   if(!denied) {
     //the kernel's own counts: CPU time and migrations between cores (page faults: the user's)
@@ -537,14 +540,6 @@ inline auto perfStop(Perf& perf) -> void {
   }
   #endif
   (void)perf;
-}
-
-//A group's count, scaled where it shared the PMU with others for part of the time (running < enabled).
-inline auto scaled(const Group& group, const Counter& counter) -> double {
-  if(!group.read || !group.running) return 0;
-  double value = (double)counter.value;
-  if(group.running < group.enabled) value *= (double)group.enabled / (double)group.running;
-  return value;
 }
 
 //The CPUs' clocks now (each policy's scaling_cur_freq, by its first CPU), in kHz.
@@ -730,6 +725,8 @@ struct Results {
   double window = 0, fps = 0, threadCpu = 0, processCpu = 0, user = 0, system = 0, waiting = -1;
   u64 slices = 0, voluntary = 0, involuntary = 0, minorFaults = 0, majorFaults = 0;
   std::map<std::string, double> totals;  //the counters' totals across the PMUs, by name
+  std::map<std::string, double> counted; //an extra event's share of the time it could count that it had a counter
+  std::vector<std::string> uncounted;    //the extra events that never had one (no total: not a zero)
   struct Busy { long tid; std::string name; double cpu; };
   std::vector<Busy> busy;                //the threads' CPU time in the window, the most first
   double meanMs = 0, medianMs = 0, p90Ms = 0, p99Ms = 0, maxMs = 0;
@@ -756,8 +753,32 @@ inline auto results(const State& s) -> Results {
     r.waiting = (s.taskEnd.wait - s.taskBegin.wait) * 1e-9;
     r.slices = s.taskEnd.slices - s.taskBegin.slices;
   }
+  //The counters' totals. A core group is pinned, never sharing a counter, so its counts stand as they are (on a PMU of
+  //some cores alone, they count while the thread is on those, and the PMUs' counts add up). An extra event may have
+  //had a counter for only some of that time, taking turns: its count is taken to the whole of its PMU's core group's
+  //time (else its own time enabled), a share kept in counted.
+  std::map<std::string, u64> onPmu;  //(each core group's time counting: the thread's time on its PMU's cores)
+  for(auto& group : s.perf.groups) if(group.kind == "core" && group.read) onPmu[group.pmu] = group.running;
+  std::vector<std::string> extras;
+  std::map<std::string, std::pair<u64, u64>> turns;  //an extra event's time with a counter, and the time it could count
   for(auto& group : s.perf.groups) {
-    for(auto& counter : group.counters) r.totals[counter.name] += scaled(group, counter);
+    for(auto& counter : group.counters) {
+      if(group.kind != "extra") {
+        if(group.read) r.totals[counter.name] += (double)counter.value;
+        continue;
+      }
+      if(!turns.count(counter.name)) extras.push_back(counter.name);
+      auto& turn = turns[counter.name];
+      if(!group.read) continue;
+      u64 whole = onPmu.count(group.pmu) ? onPmu[group.pmu] : group.enabled;
+      turn.first += group.running, turn.second += whole;
+      if(group.running) r.totals[counter.name] += (double)counter.value * (double)whole / (double)group.running;
+    }
+  }
+  for(auto& name : extras) {
+    auto& turn = turns[name];
+    if(turn.first) r.counted[name] = std::min(1.0, (double)turn.first / (double)std::max<u64>(turn.second, 1));
+    else r.uncounted.push_back(name);
   }
   for(auto& [tid, thread] : s.threadsEnd) {
     u64 before = 0;
@@ -814,8 +835,9 @@ inline auto print() -> void {
   if(s.threadUsage) std::printf("; %.3f user, %.3f system", r.user, r.system);
   std::printf(")");
   if(r.waiting >= 0) std::printf(", %.3f s waiting for a CPU in %llu timeslices", r.waiting, r.slices);
-  std::printf(", %llu voluntary and %llu involuntary switches, %llu major faults%s\n", r.voluntary, r.involuntary,
-              r.majorFaults, s.threadUsage ? "" : " (the process's: no per-thread usage here)");
+  std::printf(", %llu voluntary and %llu involuntary switches, %llu minor and %llu major faults%s\n", r.voluntary,
+              r.involuntary, r.minorFaults, r.majorFaults,
+              s.threadUsage ? "" : " (the process's: no per-thread usage here)");
   std::string where;
   for(auto& [cpu, frames] : s.framesByCpu) {
     if(cpu < 0) continue;
@@ -864,6 +886,12 @@ inline auto print() -> void {
     if(l1i >= 0 && instructions > 0) std::printf(", %.2f L1I refills", 1000 * l1i / instructions);
     if(l1d >= 0 && instructions > 0) std::printf(", %.2f L1D refills", 1000 * l1d / instructions);
     if(branches >= 0 || l1i >= 0 || l1d >= 0) std::printf(" per 1000 instructions");
+    double least = 1, most = 0;  //(the extra events' turns with a counter, where they took turns)
+    for(auto& [name, share] : r.counted) least = std::min(least, share), most = std::max(most, share);
+    if(!r.counted.empty() && least < 0.995) {
+      if(most - least < 0.005) std::printf(" (counted %.0f%% of the time, scaled)", 100 * least);
+      else std::printf(" (counted %.0f%% to %.0f%% of the time, scaled)", 100 * least, 100 * most);
+    }
     double migrations = total(r, "migrations");
     if(migrations >= 0) std::printf(", %.0f migrations", migrations);
     std::printf("; user mode");
@@ -873,14 +901,19 @@ inline auto print() -> void {
       if(group.kind != "core") continue;
       double groupInstructions = 0, groupCycles = 0;
       for(auto& counter : group.counters) {
-        if(counter.name == "instructions") groupInstructions = scaled(group, counter);
-        if(counter.name == "cycles") groupCycles = scaled(group, counter);
+        if(counter.name == "instructions") groupInstructions = (double)counter.value;
+        if(counter.name == "cycles") groupCycles = (double)counter.value;
       }
       std::printf(", %s (cpus %s)", group.pmu.c_str(), group.cpus.empty() ? "any" : group.cpus.c_str());
       if(pmus > 1) std::printf(": %.4g instructions, %.4g cycles", groupInstructions, groupCycles);
       if(group.read && group.running < group.enabled) {
-        std::printf(" (scaled: counted %.1f%% of the time)", 100.0 * group.running / std::max<u64>(group.enabled, 1));
+        std::printf(" (on its cores %.1f%% of the time)", 100.0 * group.running / std::max<u64>(group.enabled, 1));
       }
+    }
+    if(!r.uncounted.empty()) {
+      std::string names;
+      for(auto& name : r.uncounted) names += (names.empty() ? "" : ", ") + name;
+      std::printf("; not counted: %s (never given a counter: the PMU's others were all in use)", names.c_str());
     }
     std::printf("\n");
   } else {
@@ -990,7 +1023,19 @@ inline auto writeJson(State& s) -> void {
     out += std::string(first ? "" : ", ") + jsonText(name) + ": " + jsonNumber(value, "%.0f");
     first = false;
   }
-  out += "}, \"groups\": [";
+  for(auto& name : r.uncounted) {
+    out += std::string(first ? "" : ", ") + jsonText(name) + ": null";
+    first = false;
+  }
+  out += "}, \"counted\": {";
+  first = true;
+  for(auto& [name, share] : r.counted) {
+    out += std::string(first ? "" : ", ") + jsonText(name) + ": " + jsonNumber(share, "%.4f");
+    first = false;
+  }
+  out += "}, \"not counted\": [";
+  for(size_t n = 0; n < r.uncounted.size(); n++) out += (n ? ", " : "") + jsonText(r.uncounted[n]);
+  out += "], \"groups\": [";
   for(size_t n = 0; n < s.perf.groups.size(); n++) {
     auto& group = s.perf.groups[n];
     out += std::string(n ? ", " : "") + "{\"pmu\": " + jsonText(group.pmu) + ", \"cpus\": " + jsonText(group.cpus) +
