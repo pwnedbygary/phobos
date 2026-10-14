@@ -178,6 +178,7 @@ struct TestCPU : Allegrex {
   std::vector<u8*> table = std::vector<u8*>(Recompiler::SectionCount);
   std::vector<u8> steadyPages = std::vector<u8>(Recompiler::SectionCount);
   uint32_t writes = 0;  //how many writes came through write()
+  uint32_t reads = 0;   //how many reads came through read() (instruction fetches among them)
 
   TestCPU(Ram& ram) : ram(ram) {
     for(uint32_t offset = 0; offset < ram.bytes.size(); offset += 4096) {
@@ -190,6 +191,7 @@ struct TestCPU : Allegrex {
   }
 
   auto read(u32 size, u32 address) -> u32 override {
+    reads++;
     if(size == Byte) return ram.read8(address);
     if(size == Half) return ram.read16(address);
     return ram.read32(address);

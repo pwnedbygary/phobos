@@ -11,11 +11,19 @@
 //registers, which read() and write() handle), and for stores, a page holding compiled code (writePages leaves
 //those out, so the store goes through write(), which drops that code).
 //
-//The tables stay in two of sljit's saved registers, S1 for loads (the CPU's) and S2 for stores (writePages), which
-//every block's prologue sets (emit()) and blocks going on to each other keep. The address is rs's host register
-//itself, or the 32-bit sum in reg(0): only its bits 0-28 are used, by 64-bit operations that mask the rest away, so
-//whatever sljit leaves in a 32-bit result's upper half never matters. Everything off the fast path is cold code, out
-//of the block's straight line (emitCold()).
+//Loads in the direct region (allegrex.hpp: the PSP's main RAM, steady pages one after another in the host's memory as
+//in the PSP's, a power of two in size, from a multiple of it) skip the page table. The address's physical part xor
+//the region's first address is below the region's size only for an address in the region; turned right by the
+//alignment's bits, it's below the size turned likewise only if it's aligned as well (a misaligned address's low bits
+//end up at the top): one test of the bits from there up. The access is then at S1 (the region's memory less its first
+//address) plus the physical address. Any other load takes steps 2 to 4 as cold code, then goes back to make the same
+//access from S1. lwl and lwr, whose access works from the address's byte within its word, take the page table's way.
+//
+//The tables stay in two of sljit's saved registers, S1 for loads (the CPU's, or the direct region's memory: emit())
+//and S2 for stores (writePages), which every block's prologue sets and blocks going on to each other keep. The address
+//is rs's host register itself, or the 32-bit sum in reg(0): only its bits 0-28 are used, by 64-bit operations that
+//mask the rest away, so whatever sljit leaves in a 32-bit result's upper half never matters. Everything off the fast
+//path is cold code, out of the block's straight line (emitCold()).
 
 auto Allegrex::Recompiler::emitMemory(u32 address, u32 instruction, u32 count, bool delaySlot, bool store,
                                        u32 alignment, s16 offset, const std::function<void ()>& access) -> void {
@@ -24,6 +32,37 @@ auto Allegrex::Recompiler::emitMemory(u32 address, u32 instruction, u32 count, b
   if(rs == 0) mov32(reg(0), imm(offset));
   else if(offset == 0) base = use(rs);
   else add32(reg(0), use(rs), imm(offset));
+  u32 op = instruction >> 26;
+  if(!store && direct.size && op != 0x22 && op != 0x26) {
+    u32 shift = alignment == 16 ? 4 : alignment == 4 ? 2 : alignment == 2 ? 1 : 0;
+    and64(reg(0), base, imm(0x1fff'ffff));
+    xor32(reg(1), reg(0), imm(direct.first));
+    if(shift) rotr32(reg(1), reg(1), imm(shift));
+    test32(reg(1), imm(s32(~((direct.size >> shift) - 1))), set_z);
+    auto outside = jump(flag_nz);
+    auto again = sljit_emit_label(compiler);  //(reg(0) the access's host address less S1)
+    hostBase = SLJIT_S1;
+    if(alignment == 16) add64(reg(1), sreg(1), reg(0));
+    access();
+    emitCold({outside}, [=, this] {
+      sljit_jump* misaligned = nullptr;
+      if(alignment > 1) {
+        test32(reg(0), imm(alignment - 1), set_z);
+        misaligned = jump(flag_nz);
+      }
+      lshr64(reg(1), reg(0), imm(12));
+      mov64(reg(1), mem(SLJIT_MEM2(pageTable(reg(2)), SLJIT_R1), 3));
+      auto missing = sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
+      and64(reg(0), reg(0), imm(0xfff));
+      add64(reg(0), reg(0), reg(1));
+      sub64(reg(0), reg(0), sreg(1));
+      sljit_set_label(jump(), again);
+      auto here = sljit_emit_label(compiler);
+      for(auto jump : {misaligned, missing}) if(jump) sljit_set_label(jump, here);
+      emitFallback(address, instruction, count, delaySlot);  //(a load's result read back)
+    });
+    return;
+  }
   sljit_jump* misaligned = nullptr;
   if(alignment > 1) {
     test32(base, imm(alignment - 1), set_z);
@@ -38,9 +77,11 @@ auto Allegrex::Recompiler::emitMemory(u32 address, u32 instruction, u32 count, b
   lshr64(reg(1), base, imm(12));
   and64(reg(1), reg(1), imm(0x1'ffff));
   #endif
-  mov64(reg(1), mem(SLJIT_MEM2(store ? SLJIT_S2 : SLJIT_S1, SLJIT_R1), 3));  //its entry: table + page * 8
+  sljit_s32 table = store ? SLJIT_S2 : pageTable(reg(2));
+  mov64(reg(1), mem(SLJIT_MEM2(table, SLJIT_R1), 3));  //its entry: table + page * 8
   auto missing = sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
   and64(reg(0), base, imm(0xfff));
+  hostBase = SLJIT_R1;
   if(alignment == 16) add64(reg(1), reg(1), reg(0));  //(a quad's four words: reg(1) the host address)
   access();
   emitColdFallback({misaligned, missing}, address, instruction, count, delaySlot);  //(a load's result read back)
@@ -54,12 +95,12 @@ auto Allegrex::Recompiler::emitMemory(u32 address, u32 instruction, u32 count, b
 #define VTQ ((instruction >> 16 & 31) | (instruction & 1) << 5)
 
 //Each access below reads or writes the host's memory at Host, the page emitMemory() found plus the address's low 12
-//bits, or a quad's at mem(reg(1), byte offset). A load into r0 does nothing once it's past the checks (which can
-//still raise an exception). sb, sh and sw store rt as use() gives it (its host register, read before the fast path
-//splits off; r0 from ipu.r[]); the coprocessors' stores and lwl, lwr, swl and swr work in reg(2) and reg(3) (and a
-//quad's in reg(0)), as reg(0) and reg(1) hold the address. A load's result goes into the host register that holds it
-//from then on (recompiler.cpp's use() and def()).
-#define Host mem(SLJIT_MEM2(SLJIT_R1, SLJIT_R0), 0)
+//bits (or S1 plus the physical address, in the direct region), or a quad's at mem(reg(1), byte offset). A load into r0
+//does nothing once it's past the checks (which can still raise an exception). sb, sh and sw store rt as use() gives it
+//(its host register, read before the fast path splits off; r0 as the constant 0); the coprocessors' stores and lwl,
+//lwr, swl and swr work in reg(2) and reg(3) (and a quad's in reg(0)), as reg(0) and reg(1) hold the address. A load's
+//result goes into the host register that holds it from then on (recompiler.cpp's use() and def()).
+#define Host mem(SLJIT_MEM2(hostBase, SLJIT_R0), 0)
 auto Allegrex::Recompiler::emitLoadStore(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool {
   if(!self.pages) return false;
   //The VFPU's loads and stores keep two bits of their register number in the offset's low bits.

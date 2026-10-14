@@ -493,6 +493,73 @@ auto fpuMemory() -> void {
   CHECK(std::fpclassify(std::bit_cast<float>(keep.fpr(2))) == FP_SUBNORMAL, 1);
 }
 
+// Loads reach main memory's direct region (the largest aligned block of steady pages one after another in the host's
+// memory: here pages 4 to 7 of the test's RAM, with pages 1 and 8 not steady) without the page table, and every other
+// load through it, as cold code. Each kind of load at the region's first and last addresses, just outside it on either
+// side, misaligned, through other mirrors, on a steady page apart from it, on listed pages that aren't steady, and on
+// the page the table leaves out, run once and again compiled with page 8 then taken out of the table: the
+// interpreter's registers and exceptions, and read() reached (on the recompiler) only for pages the table leaves out.
+auto directLoads() -> void {
+  auto lvs = [](uint32_t vt, uint32_t b) { return 0x32u << 26 | b << 21 | (vt & 31) << 16 | (vt >> 5 & 3); };
+  auto lvq = [](uint32_t vt, uint32_t b) { return 0x36u << 26 | b << 21 | (vt & 31) << 16 | (vt >> 5 & 1); };
+  struct Load { uint32_t word, alignment; };
+  const Load loads[] = {
+    {lb(t0, 0, s0), 1}, {lbu(t0, 0, s0), 1}, {lh(t0, 0, s0), 2}, {lhu(t0, 0, s0), 2}, {lw(t0, 0, s0), 4},
+    {lwl(t0, 0, s0), 1}, {lwr(t0, 0, s0), 1}, {lwc1(3, 0, s0), 4}, {lvs(0x25, s0), 4}, {lvq(0x21, s0), 16},
+  };
+  constexpr uint32_t Region = Base + 0x4000, After = Base + 0x8000, Apart = Base + 0x1000;
+  const uint32_t addresses[] = {
+    Region, Region + 1, Region + 2, Region + 0x3ff0, Region + 0x3ffc, Region + 0x3fff, Region - 16, Region - 1,
+    After, After + 3, Base + 0xa100, Apart, Apart + 2, Unmapped + 0x40, 0x48804010, 0x88804020, 0xa8807ff0,
+  };
+  auto page = [](uint32_t address) { return (address & 0x1fffffff) >> 12; };
+  uint32_t mismatches = 0;
+  for(auto& load : loads) {
+    for(uint32_t address : addresses) {
+      std::vector<uint32_t> code = {lui(s0, address >> 16), ori(s0, s0, address & 0xffff), load.word};
+      auto setup = [](Allegrex& s) { s.ipu.r[t0] = 0x12345678; };
+      Machine reference, m;
+      reference.recompile = false;
+      for(auto* machine : {&reference, &m}) {
+        for(uint32_t n = 0; n < machine->ram.bytes.size(); n++) machine->ram.bytes[n] = uint8_t(n * 7 + n / 251);
+      }
+      m.cpu.steadyPages[page(Apart)] = 0;
+      m.cpu.steadyPages[page(After)] = 0;
+      reference.run(code, setup);
+      for(uint32_t pass = 0; pass < 2; pass++) {
+        uint32_t reads = 0;
+        if(pass == 0) {
+          m.run(code, setup);
+          if(m.recompile) {
+            CHECK(m.cpu.recompiler.direct.first, Region & 0x1fffffff);
+            CHECK(m.cpu.recompiler.direct.size, 0x4000);
+          }
+        } else {
+          m.cpu.table[page(After)] = nullptr;
+          m.cpu.ipu.pc = Base, m.cpu.ipu.pd = Base + 4, m.cpu.scc.halted = 0;
+          m.exceptions.clear();
+          setup(m.cpu);
+          uint32_t before = m.cpu.reads;
+          m.cpu.run(10000);
+          reads = m.cpu.reads - before;
+        }
+        bool same = m.gpr(t0) == reference.gpr(t0) && m.fpr(3) == reference.fpr(3)
+                 && m.exceptions == reference.exceptions && m.cpu.scc.r[8] == reference.cpu.scc.r[8];
+        for(uint32_t n = 0; n < 128; n++) same &= m.cpu.vfpu.r[n] == reference.cpu.vfpu.r[n];
+        bool aligned = address % load.alignment == 0;
+        bool unlisted = page(address) == page(Unmapped) || (pass == 1 && page(address) == page(After));
+        if(pass == 1 && m.recompile) same &= reads == (aligned && unlisted ? load.alignment == 16 ? 4u : 1u : 0u);
+        if(!same && ++mismatches <= 5) {
+          std::printf("FAIL %s: %08x at %08x, pass %u: t0 %08x vs %08x, %zu exceptions vs %zu, %u reads\n", currentTest,
+                      load.word, address, pass, m.gpr(t0), reference.gpr(t0), m.exceptions.size(),
+                      reference.exceptions.size(), reads);
+        }
+      }
+    }
+  }
+  CHECK(mismatches, 0);
+}
+
 // With flush to zero (fcr31 bit 24), a subnormal input or result counts as the zero of its sign. The recompiler's
 // native arithmetic and compares are compiled for the bit as it is when their block is compiled: they must give the
 // interpreter's bits with it set, and a block compiled with it one way must still do so run with it the other way, or
@@ -1472,7 +1539,8 @@ int main() {
   }
   Tests tests = {
     {"alu", alu}, {"shifts", shifts}, {"allegrex bits", allegrexBits}, {"multiply/divide", multiplyDivide},
-    {"loads/stores", loadsStores}, {"unaligned", unaligned}, {"branches", branches}, {"syscalls", syscalls},
+    {"loads/stores", loadsStores}, {"unaligned", unaligned}, {"direct loads", directLoads}, {"branches", branches},
+    {"syscalls", syscalls},
     {"exceptions", exceptions}, {"fpu arithmetic", fpuArithmetic}, {"fpu conversions", fpuConversions},
     {"fpu compare", fpuCompare}, {"fpu memory", fpuMemory}, {"fpu flushing", fpuFlushing}, {"system", system},
     {"recompiler", recompilerCases},
