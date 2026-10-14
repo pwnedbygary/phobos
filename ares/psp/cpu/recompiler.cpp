@@ -551,7 +551,9 @@ auto Allegrex::Recompiler::emitInterpreter(u32 address, u32 instruction, u32 cou
 //instruction's would be: the same value).
 auto Allegrex::Recompiler::emitFallback(u32 address, u32 instruction, u32 count, bool delaySlot) -> void {
   auto kept = holding;
+  bool called = calls;  //(not a call that may halt the CPU: emitColdFallback())
   emitInterpreter(address, instruction, count, delaySlot);
+  calls = called;
   holding = kept;
   for(u32 k = 0; k < Held; k++) {
     if(holding.pending[k] >= 0) mov32(sreg(3 + k), gpr(holding.pending[k]));

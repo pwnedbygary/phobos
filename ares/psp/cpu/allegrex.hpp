@@ -579,9 +579,9 @@ struct Allegrex {
       u32 target = 0;
     } destination;
 
-    //recompiler.cpp: the game's registers a block holds in host registers, saved registers S3 on (emit()), and on a
-    //host with saved registers enough, the run's count in the next one (Counted: left())
-    static constexpr bool Counted = SLJIT_NUMBER_OF_SAVED_REGISTERS >= 8;
+    //recompiler.cpp: the game's registers a block holds in host registers, saved registers S3 on (emit()), and on
+    //ARM64, whose ten saved registers leave room, the run's count in the next one (Counted: left())
+    static constexpr bool Counted = Architecture::arm64;
     static constexpr u32 Held = SLJIT_NUMBER_OF_SAVED_REGISTERS - 3 - Counted < 7 ? SLJIT_NUMBER_OF_SAVED_REGISTERS - 3 - Counted : 7;
     //The run's count, where Counted: as compiled code runs, left() holds runLimit less instructionsRun, the
     //instructions the run has left, which each block's end counts down. instructionsRun in memory stays as it was

@@ -21,7 +21,7 @@ using Exception = Allegrex::Exception;
 using Tests = std::vector<std::pair<const char*, void (*)()>>;
 
 constexpr uint32_t Base = 0x08800000;
-constexpr uint32_t Data = Base + 0x8000;
+constexpr uint32_t Data = Base + 0x7000;  //(inside the recompiler's direct region, the RAM's first 32 KiB: TestCPU)
 constexpr uint32_t Unmapped = Data + 0x1000;  //RAM left out of the page table, as hardware registers would be
 
 enum : uint32_t { zero, at, v0, v1, a0, a1, a2, a3, t0, t1, t2, t3, t4, t5, t6, t7,
