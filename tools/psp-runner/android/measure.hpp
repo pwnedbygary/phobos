@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -889,8 +890,11 @@ inline auto print() -> void {
     double least = 1, most = 0;  //(the extra events' turns with a counter, where they took turns)
     for(auto& [name, share] : r.counted) least = std::min(least, share), most = std::max(most, share);
     if(!r.counted.empty() && least < 0.995) {
-      if(most - least < 0.005) std::printf(" (counted %.0f%% of the time, scaled)", 100 * least);
-      else std::printf(" (counted %.0f%% to %.0f%% of the time, scaled)", 100 * least, 100 * most);
+      if(std::lround(100 * least) == std::lround(100 * most)) {
+        std::printf(" (counted %.0f%% of the time, scaled)", 100 * least);
+      } else {
+        std::printf(" (counted %.0f%% to %.0f%% of the time, scaled)", 100 * least, 100 * most);
+      }
     }
     double migrations = total(r, "migrations");
     if(migrations >= 0) std::printf(", %.0f migrations", migrations);
