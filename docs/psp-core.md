@@ -12868,6 +12868,10 @@ The software renderer's rows move by up to a tenth between runs of one build (So
 counts follow the scheduling more than its front end; the one change there sets a job up in place, which does no
 more work.
 
+With the review's points (`b3a208277`, the same benches again, base, `9c411d1ed` and it taking turns) the host
+instructions are the same to the percent in every Vulkan row, fast and accurate, and the software renderer's within its
+spread (Ghost of Sparta -2%, Death Jr. II -4%, the rest within 1%; nothing of the review's is on its path).
+
 GPU draws a frame (the counting build, 150 frames, base -> branch):
 
 | Scene | Vulkan (fast) | Vulkan (accurate) |
@@ -12895,27 +12899,67 @@ renderer's jobs in place, Army of Two -2%, Monkey Ball -1% (Software).
 
 **Accuracy.** Base against the branch from the 21 scenes' states (part 79's), 100 frames, every frame's picture and all
 of VRAM hashed with drawing settled, then RAM and the machine's whole serialized state: identical in every one of the
-63 runs, the 21 scenes in Vulkan (fast), Vulkan (accurate) and the software renderer (4 drawing threads). On the way,
+63 runs, the 21 scenes in Vulkan (fast), Vulkan (accurate) and the software renderer (4 drawing threads), and in the
+63 again with the review's points (`b3a208277`). On the way,
 each step's scenes the same too (fast mode's eight busiest at the small PRIMs' step, Ghost of Sparta's and Army of Two's
 in both modes at the texels' step).
 
-**Checks.** On the branch (`9c411d1ed`): `tests/psp/run-tests.sh` 520 groups, 0 failures (sanitized), and its GE's and GPU's 141 groups (ge, draw3d, draw,
-curves, gpu) without the sanitizers, 0 failures; `tests/allegrex/run-tests.sh` 68 groups, 0 failures;
-`tests/psp/ares/run-tests.sh` 340 checks, 0 failed. On
-this Mac every sanitized run of the GPU's groups, base's too, now stops at an AddressSanitizer "container-overflow" in
-`std::vector<u8>::resize()` called by `GPU::fill()` (base `af542113a` the same: a vector instantiated unannotated in
-one of the objects built without the sanitizers, `nall.cpp` or `sljitAllocator.cpp`, and annotated in the rest), so the
-suite ran with `ASAN_OPTIONS=detect_container_overflow=0` beside its usual option; the shaders' check (CI's
-`check-psp-shaders.sh`: glslang 16.6.0 byte for byte, the 12 modules valid for Vulkan 1.0) passes. GCC 14 (Docker, no
-sanitizers, -Wall -Wextra -Werror as the tests build): gpu.cpp and the GPU's, draw3d's and the GE's tests compile
-cleanly at -O1 to -O3; ge.cpp stops at GCC's "may be used uninitialized" in four.cpp (`downAxis`, `four.depth`, each
-written before it's read), untouched here, which the God of War software round met with GCC 11 at -O2 and -O3 on
-Oct 10, and which CI's way (GCC 13, -O1, the sanitizers) doesn't. New tests: "gpu
-sprites taking less of one copy: one draw, the software renderer's pixels" (each mode: six sprites after the copy's,
-none a draw of its own, every byte Software's), and "gpu fast mode's small 3D PRIMs among its meshes: one draw, the
-pixels as drawn apart" (meshes of 30 corners and PRIMs of 6 in turn, smooth, flat, textured nearest and filtered with
-fog, at 1x and 2x: one draw for each setting, against eight with them apart, and the GPU's every pixel the same either
-way).
+**Checks.** On the branch with the review's points (`b3a208277`): `tests/psp/run-tests.sh` 522 groups, 0 failures
+(sanitized), and its GE's and GPU's 143 groups (ge, draw3d, draw, curves, gpu) without the sanitizers, 0 failures;
+`tests/allegrex/run-tests.sh` 68 groups, 0 failures; `tests/psp/ares/run-tests.sh` 340 checks, 0 failed. On this Mac
+every sanitized run of
+the GPU's groups, base's too, now stops at an AddressSanitizer "container-overflow" in `std::vector<u8>::resize()` called
+by `GPU::fill()` (base `af542113a` the same: a vector instantiated unannotated in one of the objects built without the
+sanitizers, `nall.cpp` or `sljitAllocator.cpp`, and annotated in the rest), so the suite ran with
+`ASAN_OPTIONS=detect_container_overflow=0` beside its usual option; the shaders' check (CI's `check-psp-shaders.sh`:
+glslang 16.6.0 byte for byte, the 12 modules valid for Vulkan 1.0) passes. GCC 14 (Docker, no sanitizers, -Wall -Wextra
+-Werror as the tests build), on `9c411d1ed`: gpu.cpp and the GPU's, draw3d's and the GE's tests compile cleanly at -O1
+to -O3; ge.cpp stops at GCC's "may be used uninitialized" in four.cpp (`downAxis`, `four.depth`, each written before
+it's read), untouched here, which the God of War software round met with GCC 11 at -O2 and -O3 on Oct 10, and which
+CI's way (GCC 13, -O1, the sanitizers) doesn't. New tests:
+- "gpu sprites taking less of one copy: one draw, the software renderer's pixels, filtered as from copies of what each
+  takes": in each mode six sprites after the copy's, none a draw of its own, every byte Software's; then, filtered, at
+  1x and 2x, from a picture of random texels, tiles side by side each taking its own part, one draw, each tile's
+  pixels those of the same tile drawn alone from a copy of only what it takes.
+- "gpu fast mode's small 3D PRIMs among its meshes: one draw, the pixels as drawn apart": meshes of 30 corners and
+  PRIMs of 6 in turn (smooth, flat, textured nearest and filtered with fog, lit with the shine kept apart), each
+  setting's first mesh with a triangle cut at the near plane, in frame buffers 128 and 480 pixels wide, at 1x and 2x:
+  one draw for each setting, against eight with them apart, and the GPU's every pixel the same either way.
+- "gpu fast mode's 3D held to the rows it takes of a larger copy, placed by the GE and in a mesh": a frame buffer whose
+  rows run on into another's, taken by a PRIM of six corners (among the meshes and apart) and a mesh of eighteen from
+  a copy of more rows, filtered, at 1x and 2x: every pixel as from a copy of only the rows taken.
+- "gpu a texture the backend couldn't make: the next PRIM alike still draws with its own" (a pretend backend).
+Broken on purpose in turn (draw.frag's clamp gone, a mesh block's taken texels dropped, a placed vertex's dropped), the
+third of these fails each time, and the first when draw.frag's clamp is gone (part 83's "a texture's place taken by
+tiles" doesn't: its picture's flat sprites leave the texels past a tile's edge as the last inside). With the kept
+settings left valid after the texture that failed, the fourth fails, the whole suite's one failure (two draws, not
+three: the third PRIM joins the untextured one's).
+
+**The review.** An independent read-only review of the branch (to `4d26b6a98`) found no blocker (accurate mode and the
+software renderer the same as base by construction) and four points to fix, all taken (`b3a208277`):
+1. A triangle of a mesh cut at the near plane went among its runs as three placed models, after which the next run
+   found the recording's models no longer ending at its PRIM's and copied all its vertices again, at each cut; and
+   after a recording handed over between two runs, that test could pass by coincidence, the run's indices then landing
+   on placed models. A PRIM's models are now kept by the recording's generation (`Recorded::generation`, which
+   `clear()` moves on): its later runs take them where they are until it's handed over, whatever comes after them.
+2. The start-up check drew no placed triangles: it draws PRIMs of six corners (lit and not, one textured, one with its
+   shine kept apart, over the two attributes that alias the weights) and a mesh's triangle cut at the near plane, close
+   to the software renderer's; where only that fails, System checks again with `screenMeshes` off, the GPU still
+   transforming the rest. (A driver drawing those wrong passed the check before, and drew the game wrong.)
+3. A texture the backend couldn't make (its memory for pictures exhausted, as at a high resolution) left the kept
+   settings valid while the GPU's last texture was still the one before it: a next PRIM alike with that texture again
+   took the untextured state. They're let go of now (the test's pretend backend fails the second of three textures).
+4. The tests couldn't show what they claimed in places: the 128-pixel frame buffer's scale to the GPU's -1 to 1 is a
+   power of two, the shine's attribute was always 0, nothing was cut at the near plane, and no sprite sampled past what
+   it took: the tests above do each now.
+Its small points taken too: transform.vert's block for a placed vertex is the first (read ahead of the branch, it
+stays inside), `Vertex::taken()` asserts its columns and rows fit, `readingDraws` counts each PRIM again (its settings
+kept or not), and the note below on kept pipelines. Not taken now: draw.vert's position declared invariant as
+transform.vert's is (a change to accurate mode's shader, to measure on the RP6 and on lavapipe first).
+
+**After an update** the pipelines a player's earlier sessions kept (System's "Pipeline Cache") miss once: draw.frag's push
+constants and fast mode's vertex layout changed, so the first session after it makes its pipelines afresh, a stutter at
+each new one.
 
 **Where the time goes now** (the branch, `sample` of a -g build, fast mode, at a load of 15-40): Army of Two's
 `vkQueueSubmit` 5.1% (12.7%), its thread now waiting for the GPU most (26% of the samples in the frame's finish: the

@@ -58,16 +58,27 @@ code read (its GPU backend not opened), JPCSP not read. Save states unchanged (l
   Vulkan (accurate) Monkey Ball and Ghost of Sparta -4%, the rest within 2%; Software within its noise (the bands its
   emulation thread draws while it waits move its counts by a tenth between runs of one build).
 - **Exact**: base against the branch from the 21 scenes' states, 100 frames, every frame's picture and VRAM, then RAM
-  and the machine's state: identical in all three renderers (63 of 63). The one difference a GPU could see: draw.vert's
+  and the machine's state: identical in all three renderers (63 of 63, and 63 of 63 again on b3a208277). The one
+  difference a GPU could see: draw.vert's
   position isn't declared invariant as transform.vert's is, so a driver compiling the same expression differently in
   the two could move a small PRIM's corner by a float's rounding in fast mode alone (on the M1, none: tested at 1x and
   2x). draw.vert, accurate mode's, is as it was.
-- **Checks** (9c411d1ed): tests/psp 520/0 (sanitized, with `detect_container_overflow=0`: on this Mac base's GPU groups
+- **Checks** (b3a208277): tests/psp 522/0 (sanitized, with `detect_container_overflow=0`: on this Mac base's GPU groups
   stop at an AddressSanitizer container-overflow in `vector<u8>::resize()` too, an unsanitized object's
-  instantiation), and its GE's and GPU's 141 groups unsanitized 0 failures; tests/allegrex 68/0; tests/psp/ares
+  instantiation), and its GE's and GPU's 143 groups unsanitized 0 failures; tests/allegrex 68/0; tests/psp/ares
   340/0; the shaders' CI check (glslang 16.6.0 byte for byte, valid for Vulkan 1.0) passes. GCC 14 without the
-  sanitizers stops at "may be used uninitialized" in four.cpp (`downAxis`, `four.depth`), untouched here and met by
-  the God of War software round on Oct 10 too; CI's GCC 13 with the sanitizers doesn't.
+  sanitizers (on 9c411d1ed) stops at "may be used uninitialized" in four.cpp (`downAxis`, `four.depth`), untouched
+  here and met by the God of War software round on Oct 10 too; CI's GCC 13 with the sanitizers doesn't.
+- **Review** (independent, read-only, to 4d26b6a98): no blocker; four points fixed in b3a208277: a mesh's models kept
+  across its runs by the recording's generation (a near-plane cut no longer copies the PRIM's vertices again, nor can a
+  hand-over in between leave a run's indices on placed models); the start-up check draws the GE's own 3D among the
+  meshes, and where only that fails System turns `screenMeshes` off and checks again; kept settings let go after a
+  texture the backend couldn't make; tests in a 480-wide frame buffer, with the shine apart, a near-plane cut, and
+  sampling past what's taken (each of the clamp's three paths, broken, fails them; the kept settings' fix undone fails
+  the pretend backend's test). Small points taken; draw.vert's invariance left to measure on the RP6. Instructions
+  unchanged by them (both Vulkan modes to the percent, Software within its noise).
+- **After an update** players' kept pipelines (System's "Pipeline Cache") miss once: draw.frag's push constants and fast
+  mode's vertex layout changed, so the first session makes its pipelines afresh (a stutter at each).
 - **What's left**: Monkey Ball's draws split by texture (descriptor indexing); a Look kept on the GE's side and the
   command loop (7%); fast mode's vertices read straight into models; 2D PRIMs between meshes; the software renderer's
   triangle setup. Measure on the RP6, where the driver's work is in the `vkCmd*` calls, not deferred to the submit.

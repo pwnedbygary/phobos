@@ -671,7 +671,10 @@ the design; none of its code is used, copied or translated.
 - **The start-up check** draws 3D triangles in perspective (smooth, half lit, some textured, four PRIMs of six)
   through the GPU's transform against the software renderer: at most one pixel in 50 more than 8 levels apart. Where
   that part alone fails (or the triangles never reached the GPU's transform), the check runs again with the GE
-  transforming, saying so, and fast mode goes on with the GPU's blending alone; where anything else fails, the
+  transforming, saying so, and fast mode goes on with the GPU's blending alone. It draws the GE's own 3D among the
+  meshes as well (PRIMs of six corners, lit, textured, the shine kept apart; a mesh's triangle cut at the near plane):
+  where only that fails, the check runs again with those drawn apart (`GPU::screenMeshes` off, `screenMeshesFailed`),
+  the GPU still transforming the rest. Where anything else fails, the
   software renderer draws the game, as in the accurate mode. (MoltenVK refused the first `transform.vert`, a helper
   named `signbit()` clashing with Metal's own, and the 3D drew nothing: `drawable()` and the check each catch that
   now.)
