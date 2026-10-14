@@ -2602,6 +2602,90 @@ static auto gpuSharedDepth() -> void {
   }
 }
 
+//The depth buffer in the order a frame buffer's format has it (memory.hpp: a 16-bit frame buffer's as VRAM's second
+//copy shows it, an 8888 one's as the fourth does), on the GPU as the software renderer has it, its frame buffers and
+//depth buffer 512 pixels wide as games have them (16 rows; the frame buffers at 0, the depth buffer at 0x88000):
+//  - the Kurohyou games' depth made as a picture: drawn into the depth buffer's memory as a 5650 frame buffer, taken
+//    back through the second copy into a frame buffer of their own (0x116400) and from there into the depth buffer,
+//    all three on the GPU, then a sprite into the 5551 screen tested against it ("greater or equal"), which needs the
+//    other frame buffer's pixels, the GPU's, as its depth (a finish before the depth is filled from memory);
+//  - the depth a 5551 frame buffer drew, taken through the second copy as a 5650 texture into another frame buffer
+//    (Kurohyou's depth of field: the GPU's depth put into memory in that order first);
+//  - a depth buffer an 8888 frame buffer and a 5551 one draw with in turn (no game known does; on the PSP each reads
+//    the same bytes in its own order): the depth goes through memory between them, as the software renderer has it.
+//Every byte of the screens the software renderer's, at 1x and 2x, in either mode.
+static auto depthOrders(GPU* gpu) -> void {
+  constexpr u32 Depth = 0x8'8000, Scratch = 0x11'6400, Second = 0x1'0000, Rows = 16;
+  auto picture = [](u32 x, u32 y) -> u32 { return (x * 37 + y * 1031) % 1000; };  //(depths 0-999)
+  for(u32 scale : {1u, 2u}) {
+    if(!scaleTaken(gpu, scale)) continue;
+    gpu->resolution(scale);
+    auto before = gpu->statistics;
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    for(System* s : {&software, &hardware}) {
+      auto& c = s->ge.commands;
+      c[GE::FrameBufferWidth] = 512, c[GE::DepthBufferPointer] = Depth, c[GE::DepthBufferWidth] = 512;
+      c[GE::Region2] = 1023 << 10 | 1023, c[GE::Scissor2] = 511 | (Rows - 1) << 10;
+      c[GE::VertexType] = 0x80'019f, c[GE::ShadeMode] = 1;
+      for(u32 y = 0; y < Rows; y++) {
+        for(u32 x = 0; x < 512; x++) s->memory.write(2, GPUTexture + (y * 512 + x) * 2, picture(x, y));
+      }
+      auto into = [&](u32 buffer, u32 format) {
+        c[GE::FrameBufferPointer] = buffer, c[GE::FrameBufferPixelFormat] = format;
+      };
+      auto copy = [&](u32 from, u32 to) {  //(a 5650 texture 512 wide at from, 1:1 onto a 5650 frame buffer at to)
+        into(to, 0);
+        texture(*s, from, 512, 16, 512, 0);
+        sprite(*s, {{{0, 0, 0, 0}, {512, Rows, 512, Rows}}, 0xffff'ffff});
+        c[GE::TextureMappingEnable] = 0;
+      };
+      copy(GPUTexture, Depth);
+      copy(Memory::VRAMBase + Memory::VRAMSize + Depth, Scratch);
+      copy(Memory::VRAMBase + Scratch, Depth);
+      into(0, 1);
+      c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 7, c[GE::DepthMask] = 1;  //(greater or equal, not written)
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 480, Rows}}, 0xffff'ffff}, 500);
+      c[GE::DepthTest] = 1, c[GE::DepthMask] = 0;  //(always, written: a depth of the screen's own on the left)
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 200, Rows}}, 0xff00'40ff}, 700);
+      c[GE::DepthTestEnable] = 0;
+      copy(Memory::VRAMBase + Memory::VRAMSize + Depth, Second);  //(that depth through the second copy)
+      into(0, 3);  //(an 8888 frame buffer over the same depth buffer: its depth in the fourth copy's order)
+      c[GE::FrameBufferPointer] = 0x2'0000;
+      c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 1;
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 512, Rows}}, 0xff20'2020}, 300);
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 96, 8}}, 0xff40'4040}, 900);
+      into(0x3'0000, 1);  //(and a 5551 one tested against it: the same bytes, read in the second copy's order)
+      c[GE::DepthTest] = 7, c[GE::DepthMask] = 1;
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 512, Rows}}, 0xffff'ffff}, 600);
+      c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0;
+    }
+    u32 bytes = apart(software, hardware);
+    if(bytes) std::printf("  %s %ux: %u bytes apart\n", gpu->fast ? "fast" : "accurate", scale, bytes);
+    CHECK(bytes, 0u);
+    auto at = [&](u32 buffer, u32 x, u32 y) {
+      return u32(software.memory.read(2, Memory::VRAMBase + buffer + (y * 512 + x) * 2));
+    };
+    u32 wrong = 0;
+    for(u32 y = 0; y < Rows; y++) {
+      for(u32 x = 200; x < 480; x++) wrong += ((at(0, x, y) & 0x7fff) == 0x7fff) != (500 >= picture(x, y));
+    }
+    CHECK(wrong, 0u);
+    CHECK(at(Second, 100, 3), 700u), CHECK(at(Second, 300, 3), picture(300, 3));  //(the screen's depth, the picture's)
+    //(the 5551 frame buffer's pixel (20, 4) reads the 8888 one's (260, 4), 300; its (128, 4) the 8888's (64, 4), 900)
+    CHECK(at(0x3'0000, 20, 4) & 0x7fff, 0x7fffu), CHECK(at(0x3'0000, 128, 4) & 0x7fff, 0u);
+    CHECK(gpu->statistics.finishes > before.finishes, true);
+    hardware.ge.setRenderer(nullptr);
+  }
+  gpu->resolution(1);
+}
+static auto gpuDepthOrders() -> void {
+  if(!renderer()) return;
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(gpu) depthOrders(gpu);
+  }
+}
+
 //A 5551 frame buffer's stencil is a bit, which INCREMENT fills and DECREMENT empties (pixel.cpp), as the pass's
 //operation (one over a test of "equal to 0" too, compared on the GPU against the 255 it writes), the fail's and the
 //depth fail's: then tested (equal to 255: a sprite drawn only where it's filled), read back as the alpha, and taken as
@@ -3961,6 +4045,8 @@ auto gpuTests() -> Tests {
     {"gpu memory's changes to depth kept past PRIMs that don't use it, for the next that does", gpuDepthUnused},
     {"gpu loads through the depth buffer's views: memory's, without waiting", gpuDepthViewLoads},
     {"gpu a depth buffer two frame buffers draw with: the depth either drew taken by the other", gpuSharedDepth},
+    {"gpu the depth buffer in each format's order: a depth made as a picture through VRAM's second copy, read as a "
+     "texture, drawn with two formats", gpuDepthOrders},
     {"gpu a 5551 frame buffer's stencil bit filled by INCREMENT, emptied by DECREMENT, taken as a texture's alpha",
      gpuStencilBit},
     {"gpu the frame buffer's alpha as its stencil has it, where operations changed it without a color: blended by, "
