@@ -2888,6 +2888,103 @@ static auto gpuStencilAlphaWays() -> void {
   }
 }
 
+//The frame buffer's alpha behind its stencil noted, and set from it, on part 92's paths too: a PRIM whose settings are
+//the last one's keeps them (`keptSettings`), its own rectangle noted all the same (two sprites alike, leaving the
+//alpha behind, then white blended in by it over the second's alone); and in fast mode a PRIM of fewer vertices than
+//MeshLeast is drawn among the meshes (screenTriangle()), one leaving the alpha behind noted (a quad's depth fails
+//over the nearer half), one blending by it after another leaving it behind set first. Every byte the software
+//renderer's. At 1x and 2x, in either mode.
+static auto stencilAlphaPaths(GPU* gpu) -> void {
+  auto f24 = [](float value) { return bitsOf(value) >> 8; };
+  auto quad = [&](System& s, float z) {  //(two triangles over the frame buffer at depth z, seen orthographically)
+    auto& c = s.ge.commands;
+    c[GE::VertexType] = 0x1ff, c[GE::MaxZ] = 0xffff;
+    for(u32 n = 0; n < 12; n++) s.ge.world[n] = s.ge.view[n] = f24(n % 4 == 0 ? 1 : 0);
+    for(u32 n = 0; n < 16; n++) s.ge.projection[n] = f24(n % 5 == 0 ? 1 : 0);
+    c[GE::ViewportXScale] = f24(32), c[GE::ViewportYScale] = f24(-24), c[GE::ViewportZScale] = f24(30000);
+    c[GE::ViewportXCenter] = f24(2048), c[GE::ViewportYCenter] = f24(2048), c[GE::ViewportZCenter] = f24(32768);
+    c[GE::OffsetX] = (2048 - 32) << 4, c[GE::OffsetY] = (2048 - 24) << 4;
+    u32 to = GPUVertices;
+    for(u32 corner : {0u, 1u, 3u, 0u, 3u, 2u}) {
+      float x = -1 + 2.0f * (corner & 1), y = -1 + 2.0f * (corner >> 1), depth = (z - 32768) / 30000.0f;
+      for(u32 word : {0u, 0u, 0xffff'ffffu, 0u, 0u, bitsOf(1), bitsOf(x), bitsOf(y), bitsOf(depth)}) {
+        s.memory.write(4, to, word), to += 4;
+      }
+    }
+    s.ge.vertexAddress = GPUVertices;
+    s.ge.primitive(GE::Triangles, 6);
+    c[GE::VertexType] = 0x80'019f;
+  };
+  struct Path { const char* name; bool screened; std::function<void(System&)> draw; };
+  std::vector<Path> paths = {
+    {"settings kept", false, [](System& s) {
+      auto& c = s.ge.commands;
+      everywhere(s, 0xc0);
+      c[GE::StencilTest] = 3 | 0xc0 << 8 | 0xff << 16, c[GE::StencilOperation] = 1;  //(not equal: ZERO where it fails)
+      sprite(s, {{{0, 0, 0, 0}, {0, 0, 16, 48}}, 0xffff'ffff});
+      sprite(s, {{{0, 0, 40, 0}, {0, 0, 56, 48}}, 0xffff'ffff});
+      c[GE::MaskColor] = 0, c[GE::StencilTestEnable] = 0;
+      c[GE::AlphaBlendEnable] = 1, c[GE::BlendMode] = 4 | 5 << 4;  //(white, by the frame buffer's alpha)
+      sprite(s, {{{0, 0, 40, 0}, {0, 0, 56, 48}}, 0xffff'ffff});
+      c[GE::AlphaBlendEnable] = 0;
+    }},
+    {"a small PRIM leaving it behind among the meshes", true, [&](System& s) {
+      auto& c = s.ge.commands;
+      c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 1;  //(always, written: the nearer half)
+      sprite(s, {{{0, 0, 0, 0}, {0, 0, 32, 48}}, 0xff00'0000}, 40000);
+      c[GE::DepthTestEnable] = 0;
+      everywhere(s, 0xc0);
+      c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 7, c[GE::DepthMask] = 1;  //(at least as near, not written)
+      c[GE::StencilOperation] = 1 << 8;  //(ZERO where the depth test fails)
+      quad(s, 30000);
+      c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0, c[GE::MaskColor] = 0, c[GE::StencilTestEnable] = 0;
+      c[GE::AlphaBlendEnable] = 1, c[GE::BlendMode] = 4 | 5 << 4;
+      sprite(s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xffff'ffff});
+      c[GE::AlphaBlendEnable] = 0;
+    }},
+    {"a small PRIM blending by it among the meshes", true, [&](System& s) {
+      auto& c = s.ge.commands;
+      everywhere(s, 0xc0);
+      c[GE::StencilTest] = 3 | 0xc0 << 8 | 0xff << 16, c[GE::StencilOperation] = 1;
+      sprite(s, {{{0, 0, 0, 0}, {0, 0, 32, 48}}, 0xffff'ffff});
+      c[GE::MaskColor] = 0, c[GE::StencilTestEnable] = 0;
+      c[GE::AlphaBlendEnable] = 1, c[GE::BlendMode] = 4 | 5 << 4;
+      quad(s, 30000);
+      c[GE::AlphaBlendEnable] = 0;
+    }},
+  };
+  for(auto& path : paths) {
+    for(u32 scale : {1u, 2u}) {
+      gpu->resolution(scale);
+      auto before = gpu->statistics;
+      System software, hardware;
+      hardware.ge.setRenderer(gpu);
+      for(System* s : {&software, &hardware}) {
+        auto& c = s->ge.commands;
+        prepare(*s, 0, 3);
+        c[GE::ClearMode] = 1 | 7 << 8;  //(black, the stencil 0, the depth 0)
+        sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0x0000'0000});
+        c[GE::ClearMode] = 0;
+        path.draw(*s);
+      }
+      u32 bytes = apart(software, hardware);
+      if(bytes) std::printf("  %s, %s %ux: %u bytes apart\n", path.name, gpu->fast ? "fast" : "accurate", scale, bytes);
+      CHECK(bytes, 0u);
+      CHECK(gpu->statistics.alphas > before.alphas, true);
+      bool screens = gpu->fast && gpu->screenMeshes && gpu->backend->transforms && !gpu->backend->reads;
+      if(path.screened && screens) CHECK(gpu->statistics.screened > before.screened, true);
+      hardware.ge.setRenderer(nullptr);
+    }
+  }
+  gpu->resolution(1);
+}
+static auto gpuStencilAlphaPaths() -> void {
+  if(!renderer()) return;
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(gpu) stencilAlphaPaths(gpu);
+  }
+}
+
 //A depth buffer read as a texture through VRAM's depth views (Cars Race-O-Rama takes its race's depth through a
 //palette into the alpha its sky is blended by): the depth the GPU drew, put into memory first, each texel the
 //software renderer's, through the fourth copy (the depths in order) and the second (rearranged); put once, the second
@@ -3869,6 +3966,8 @@ auto gpuTests() -> Tests {
     {"gpu the frame buffer's alpha as its stencil has it, where operations changed it without a color: blended by, "
      "taken as a texture", gpuStencilAlpha},
     {"gpu the frame buffer's alpha as its stencil has it, each other way a PRIM leaves it behind", gpuStencilAlphaWays},
+    {"gpu the frame buffer's alpha as its stencil has it, on settings kept and fast mode's small PRIMs among the meshes",
+     gpuStencilAlphaPaths},
     {"gpu a depth buffer read as a texture through VRAM's depth views: the depth it drew put into memory first",
      gpuDepthAsTexture},
     {"gpu depths as the depth formats keep them, and back: all 65,536 the same again", gpuDepthFormats},
