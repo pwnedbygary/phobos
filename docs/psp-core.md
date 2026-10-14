@@ -12506,7 +12506,8 @@ room (32 targets), or drawn with another depth buffer, loses it, as before.
 **Tests** (tests/psp/gpu.cpp, in both modes, the first three at 1x and 2x; on master's core, 3228b825d, with only the
 two statistics and the depth conversions added so they build, the first three fail on their pictures in every mode
 and resolution, 7,424, 4,608 and 16,832 bytes apart; memory's changes around a put depth on its counts alone, as there
-the target takes nothing and fills from memory, which the CPU wrote whole; the conversions pass):
+the target takes nothing and fills from memory, which the CPU wrote whole, and on its pictures with 5071b80b5's keeping
+of the targets' changes taken out, 1,024 bytes apart in each mode; the conversions pass):
 - "a depth buffer two frame buffers draw with": a sprite into the second frame buffer behind what the first drew is
   drawn only where the first drew nothing, then the first's behind what the second drew since, likewise, then a 3D
   mesh into the second (fast mode's GPU transform) behind what the first drew since; each keeps its own stencil.
