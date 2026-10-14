@@ -181,7 +181,7 @@ struct GPU : GE::Renderer {
     enum class Kind : u8 { Draw, Upload, Readback, Copy, Present, Shot, Mesh, Move, Depth } kind;
     u32 target;
     u32 state = 0, first = 0, count = 0;  //Draw, Mesh
-    s32 x = 0, y = 0;                     //Upload, Readback, Copy
+    s32 x = 0, y = 0;                     //Upload, Readback, Copy, Depth
     u32 width = 0, height = 0;
     u64 colors = 0, stencil = 0, depth = 0;  //Upload: where in uploads (8888s, bytes, 16-bit depths: the parts it
                                              //has); Present's
@@ -196,8 +196,8 @@ struct GPU : GE::Renderer {
     u8 format = 3;  //Present: the frame buffer's GE format, its colors shown as memory keeps them (3: as they are);
                   //Upload, Move: the target's
     u8 sourceFormat = 3;            //Move
-    u32 source = 0;
-    u16 sourceX = 0, sourceY = 0, sourceWidth = 0, sourceHeight = 0;  //(source: Move's, Depth's)
+    u32 source = 0;                 //Move, Depth
+    u16 sourceX = 0, sourceY = 0, sourceWidth = 0, sourceHeight = 0;
     s32 delta = 0;
     u32 rowBytes = 0, sourceRowBytes = 0;
     bool barrier = false;  //Draw: what the pass drew before made visible to its reading first (emit())
@@ -294,8 +294,11 @@ struct GPU : GE::Renderer {
     //Readback n of the last finish(): its 8888s and stencils (none for one at more than 1), a row after another
     virtual auto read(u32 n, const u32*& colors, const u8*& stencil) -> bool = 0;
     //Readback n of the last finish(), of a target's depths alone (parts 2): each pixel's as the GE's 16-bit depth, a
-    //row after another
-    virtual auto readDepth(u32 n, const u16*& depths) -> bool { (void)n, (void)depths; return false; }
+    //row after another, width x height of them
+    virtual auto readDepth(u32 n, const u16*& depths, u32& width, u32& height) -> bool {
+      (void)n, (void)depths, (void)width, (void)height;
+      return false;
+    }
     //Presenting (docs/psp-gpu-renderers.md, "Presenting"): the window it shows Present's pictures on (the host's:
     //an ANativeWindow on Android), none to let go of it; whether it presents (it can, and hasn't given up: the host
     //shows the screen's frames otherwise); and the newest picture it presented from a target, at the PSP's size as
@@ -366,8 +369,8 @@ struct GPU : GE::Renderer {
     u64 presents = 0, presentsFromMemory = 0;  //frames presented on the window (show()): from a target, memory's
     u64 meshes = 0;    //3D PRIMs the GPU transformed (fast mode: mesh(), the first of each PRIM's runs)
     u64 moves = 0;     //rectangles moved from one target into another on the GPU (move()), not put back and filled
-    //depths taken from another target over the same depth buffer (takeDepth()), and put into memory for a texture
-    //read from a depth buffer (putDepth(): each a wait for the GPU, as a finish)
+    //depths taken from another target over the same depth buffer (takeDepth()), and targets' depths put into memory
+    //for a texture read from a depth buffer (putDepth(): those of one texture a wait for the GPU, as a finish)
     u64 depthsTaken = 0, depthsPut = 0;
     u64 waiting = 0;   //nanoseconds the CPU waited in finish(), picture() and putDepth()
   } statistics;
@@ -406,6 +409,16 @@ struct GPU : GE::Renderer {
   auto mesh(GE& ge, const GE::Transform& t, const std::vector<GE::Vertex>& vertices, const std::vector<u32>& corners,
             bool again) -> void override;
   auto copiesKept() const -> u32 { return copies.size(); }  //(render-to-texture copies on the GPU: the tests')
+  //The GE's 16-bit depth as a GPU's depth format keeps it, and back (a backend's uploads and read backs): D32 in
+  //65,536ths, as draw.frag's DEPTHS writes it; D24 those rounded to nearest, taken back whichever way the GPU rounded
+  //the fragment's depth into it
+  static auto depthToFloat(u16 z) -> f32 { return z * (1.0f / 65536); }
+  static auto depthFromFloat(f32 value) -> u16 {
+    value = value * 65536 + 0.5f;
+    return value >= 65535 ? 65535 : value >= 0 ? u16(value) : 0;  //(not a number: 0)
+  }
+  static auto depthTo24(u16 z) -> u32 { return u32((u64(z) * 0xff'ffff + 32768) >> 16); }
+  static auto depthFrom24(u32 value) -> u16 { return std::min<u32>(((value & 0xff'ffff) + 255) >> 8, 65535); }
 
   //What the screen shows (the frame buffer at VRAM's offset address, stride pixels a row, in GE format), width x
   //height of it as Kernel::picture() makes it (8888, red in the low byte, alpha 255), read straight from the target
@@ -548,15 +561,10 @@ private:
   auto move(Target& from, Target& t, const Moving& m) -> void;
   auto keepBeside(Target& t, u32 first, u32 last) -> void;  //(Target::beside's first to last added)
   static constexpr u32 MostBeside = 256;
-  //A depth buffer drawn with two frame buffers (Hammerin' Hero and Jeanne d'Arc draw their characters into a frame
-  //buffer of their own, tested against the depth their scene drew with the screen's): the newest depth drawn in it,
-  //where another target's depth has it, taken into t's on the GPU before t draws with it (takeDepth()); and, where a
-  //texture is read from a depth buffer through VRAM's depth views (Cars Race-O-Rama takes its depth through a
-  //palette), the newest the GPU drew there put into memory first, waited for (putDepth(): VRAM's bytes first to last,
-  //offsets in any of its copies)
+  //(the depth buffer as memory: takeDepth() and putDepth(), gpu.cpp)
   u64 depthSerial = 0;  //(goes up with each PRIM that writes depth: Target::depthAt)
   auto takeDepth(Target& t, const GE::PixelState& p) -> void;
-  auto putDepth(u32 first, u32 last) -> void;
+  auto putDepth(u32 first, u32 last) -> void;  //(VRAM's bytes first to last, offsets in any of its copies)
   auto own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;
   auto textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken, u8& indexed, u32& palette) -> u32;
   auto settings(const GE::Look& look) -> void;

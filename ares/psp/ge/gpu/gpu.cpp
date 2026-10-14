@@ -226,12 +226,12 @@ auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts, u
 }
 
 //The newest depth drawn in t's depth buffer, where another target's depth has it (the last to draw with that depth
-//buffer and row width, not t), taken into t's depth on the GPU before t draws with it, for the rows that one has: the
-//PSP's depth buffer is memory, whichever frame buffer it's drawn with, where each target's depth is its own. Hammerin'
-//Hero and Jeanne d'Arc draw their scene into the screen's frame buffer, then their characters into a frame buffer of
-//their own, cleared without its depth, tested against the scene's: tested against that target's own depth (memory's,
-//then the characters' own of the frames before), all but a piece of each was lost. Memory's changes the other hasn't
-//filled yet are filled into it first, so what's taken is as new as memory's; t's own, in the rows taken, are those.
+//buffer and row width, not t), taken into t's depth on the GPU before t draws with it, for the rows and columns that
+//one has: the PSP's depth buffer is memory, whichever frame buffer it's drawn with, where each target's depth is its
+//own. Hammerin' Hero, Jeanne d'Arc and Colin McRae Rally draw their scene into the screen's frame buffer, then their
+//characters or shadows into a frame buffer of their own, cleared without its depth, tested against the scene's.
+//Memory's changes the other hasn't filled yet are filled into it first, so what's taken is as new as memory's; t's
+//own in what's taken are those. Where the other is narrower, t's columns past it are as they'd be without it.
 auto GPU::takeDepth(Target& t, const GE::PixelState& p) -> void {
   Target* newest = nullptr;
   for(auto& other : targets) {
@@ -246,9 +246,16 @@ auto GPU::takeDepth(Target& t, const GE::PixelState& p) -> void {
     fill(from, from.depthChangedFrom, std::min(from.depthChangedTo, from.depthRows), p, 2);
     from.depthChangedFrom = from.depthChangedTo = 0;
   }
-  u32 rows = std::min(from.depthRows, t.height);
+  u32 rows = std::min(from.depthRows, t.height), width = std::min({from.stride, t.stride, t.depthStride});
+  if(width < std::min(t.stride, t.depthStride)) {
+    if(t.depthChangedFrom < t.depthChangedTo) {
+      fill(t, t.depthChangedFrom, std::min(t.depthChangedTo, t.depthRows), p, 2);
+      t.depthChangedFrom = t.depthChangedTo = 0;
+    }
+    if(rows > t.depthRows) fill(t, t.depthRows, rows, p, 2), t.depthRows = rows;
+  }
   Command c{Command::Kind::Depth, t.id};
-  c.source = from.id, c.width = std::min({from.stride, t.stride, t.depthStride}), c.height = rows;
+  c.source = from.id, c.width = width, c.height = rows;
   recorded.commands.push_back(c);
   t.depthRows = std::max(t.depthRows, rows);
   t.depthChangedFrom = std::max(t.depthChangedFrom, rows);
@@ -260,28 +267,39 @@ auto GPU::takeDepth(Target& t, const GE::PixelState& p) -> void {
 //The newest depth the GPU drew in each depth buffer reaching VRAM's bytes first to last, where memory hasn't it, put
 //into memory's VRAM as the GE keeps its depth (through the fourth copy), the older depth buffers' first where two
 //reach the same bytes: a texture is about to be read from them through VRAM's depth views (holds()), which on the PSP
-//finds the depth drawn there. Cars Race-O-Rama takes its race's depth through a palette into the alpha its sky is
-//blended by: from memory's depth (not the GPU's) the sky covered the whole race. A read back of those depths alone,
-//waited for (each target's own changes from memory filled into it first, so none is lost); the targets' pixels and
-//pages stay the GPU's. Memory hears of the bytes changed (decoded textures, the recompiler), and so do the targets
-//over them, which fill them again, but those whose depth is what was put there, where no newer depth put after
-//reaches it: their changes from memory are kept as they were. (The second and fourth copies rearrange each 16 KiB:
-//all of each 16 KiB they touch is taken.)
+//finds the depth drawn there (Cars Race-O-Rama takes its race's depth through a palette into the alpha its sky is
+//blended by). A read back of those depths alone, waited for (each target's own changes from memory filled into it
+//first, so none is lost); the targets' pixels and pages stay the GPU's. Of targets as new over one depth buffer, the
+//widest's is put (not the columns of one older and wider than the newest). Memory hears of the bytes changed (decoded
+//textures, the recompiler), and so do the targets over them, which fill them again, but those whose depth is what was
+//put there, where no newer depth put after reaches it: their changes from memory are kept as they were. One that
+//couldn't be read back isn't kept, for the next texture to take again. (The second and fourth copies rearrange each
+//16 KiB: all of each 16 KiB they touch is taken; a depth buffer's bytes past VRAM's end are its start's, as the GE's.)
 auto GPU::putDepth(u32 first, u32 last) -> void {
   first &= ~0x3fffu, last |= 0x3fff;
-  auto bytes = [](const Target& t) -> std::pair<u32, u32> {
-    return {t.depthBuffer & ~0x3fffu, (t.depthBuffer + t.depthRows * t.depthStride * 2 - 1) | 0x3fff};
+  auto bytes = [](const Target& t) -> std::pair<u64, u64> {  //(may run past VRAM's end)
+    return {t.depthBuffer & ~0x3fffu, (u64(t.depthBuffer) + t.depthRows * t.depthStride * 2 - 1) | 0x3fff};
   };
-  auto reaches = [&](const Target& t) { return bytes(t).first <= last && first <= bytes(t).second; };
+  auto meets = [](std::pair<u64, u64> a, u64 low, u64 high) {  //(low to high inside VRAM)
+    return (a.first <= high && low <= a.second) || (a.second >= Memory::VRAMSize && low <= a.second - Memory::VRAMSize);
+  };
+  auto overlap = [&](std::pair<u64, u64> a, std::pair<u64, u64> b) {
+    if(meets(a, b.first, std::min<u64>(b.second, Memory::VRAMSize - 1))) return true;
+    return b.second >= Memory::VRAMSize && meets(a, 0, b.second - Memory::VRAMSize);
+  };
+  auto width = [](const Target& t) { return std::min(t.stride, t.depthStride); };
   std::vector<Target*> put;  //(the newest over each depth buffer, where memory hasn't it)
-  for(auto& t : targets) {
-    if(!t->depthAt || t->depthKept || !t->depthRows || !t->depthStride || !reaches(*t)) continue;
-    bool newest = true;
-    for(auto& other : targets) {
-      if(other->depthBuffer != t->depthBuffer || other->depthStride != t->depthStride) continue;
-      newest &= other->depthAt < t->depthAt || (other->depthAt == t->depthAt && other.get() >= t.get());
+  for(u32 i = 0; i < targets.size(); i++) {
+    Target& t = *targets[i];
+    if(!t.depthAt || t.depthKept || !t.depthRows || !t.depthStride || !overlap(bytes(t), {first, last})) continue;
+    bool newest = true;  //(of those as new, the widest, then the first)
+    for(u32 j = 0; j < targets.size() && newest; j++) {
+      Target& other = *targets[j];
+      if(j == i || other.depthBuffer != t.depthBuffer || other.depthStride != t.depthStride) continue;
+      newest = other.depthAt < t.depthAt ||
+               (other.depthAt == t.depthAt && (width(other) < width(t) || (width(other) == width(t) && j > i)));
     }
-    if(newest) put.push_back(t.get());
+    if(newest) put.push_back(&t);
   }
   if(put.empty() || !ready()) return;
   std::sort(put.begin(), put.end(), [](Target* a, Target* b) { return a->depthAt < b->depthAt; });
@@ -291,7 +309,7 @@ auto GPU::putDepth(u32 first, u32 last) -> void {
       t->depthChangedFrom = t->depthChangedTo = 0;
     }
     Command c{Command::Kind::Readback, t->id};
-    c.width = std::min(t->stride, t->depthStride), c.height = t->depthRows, c.parts = 2;
+    c.width = width(*t), c.height = t->depthRows, c.parts = 2;
     recorded.commands.push_back(c);
     recorded.readbacks++;
   }
@@ -302,31 +320,36 @@ auto GPU::putDepth(u32 first, u32 last) -> void {
   recorded.clear();
   if(!finished) return lose();
   auto& memory = ge->memory;
+  std::vector<bool> done(put.size());
   for(u32 n = 0; n < put.size(); n++) {
     Target& t = *put[n];
     const u16* depths;
-    if(!backend->readDepth(n, depths)) continue;
-    u32 width = std::min(t.stride, t.depthStride);
-    for(u32 y = 0; y < t.depthRows; y++) {
-      for(u32 x = 0; x < width; x++, depths++) {
+    u32 across = 0, down = 0;
+    if(!backend->readDepth(n, depths, across, down) || across != width(t) || down != t.depthRows) continue;
+    for(u32 y = 0; y < down; y++) {
+      for(u32 x = 0; x < across; x++, depths++) {
         u32 at = Memory::vramOffset(3, (t.depthBuffer + (y * t.depthStride + x) * 2) & (Memory::VRAMSize - 1));
         memory.vram[at] = u8(*depths), memory.vram[at + 1] = u8(*depths >> 8);
       }
     }
+    done[n] = true;
     statistics.depthsPut++;
   }
   std::vector<std::pair<u32, u32>> changes;  //(each target's changes from memory, as they were)
   for(auto& t : targets) changes.push_back({t->depthChangedFrom, t->depthChangedTo});
-  for(auto* t : put) {
-    auto [low, high] = bytes(*t);
-    memory.changed(Memory::VRAMBase + low, std::min<u32>(high, Memory::VRAMSize - 1) - low + 1);
+  auto inParts = [](u64 at, u64 size, auto&& part) {  //(round VRAM's end)
+    part(u32(at), u32(std::min<u64>(size, Memory::VRAMSize - at)));
+    if(at + size > Memory::VRAMSize) part(0u, u32(at + size - Memory::VRAMSize));
+  };
+  for(u32 n = 0; n < put.size(); n++) {
+    auto [low, high] = bytes(*put[n]);
+    if(done[n]) inParts(low, high - low + 1, [&](u32 at, u32 size) { memory.changed(Memory::VRAMBase + at, size); });
   }
   for(u32 n = 0; n < put.size(); n++) {
+    if(!done[n]) continue;
     Target& t = *put[n];
     bool over = false;  //(a newer depth put after reaches its bytes: those of its depth buffer fill them again)
-    for(u32 later = n + 1; later < put.size(); later++) {
-      over |= bytes(*put[later]).first <= bytes(t).second && bytes(t).first <= bytes(*put[later]).second;
-    }
+    for(u32 later = n + 1; later < put.size(); later++) over |= done[later] && overlap(bytes(*put[later]), bytes(t));
     for(u32 i = 0; i < targets.size(); i++) {
       auto& other = *targets[i];
       if(other.depthBuffer != t.depthBuffer || other.depthStride != t.depthStride || other.depthAt != t.depthAt) {
@@ -335,7 +358,9 @@ auto GPU::putDepth(u32 first, u32 last) -> void {
       other.depthKept = true;
       if(!over) other.depthChangedFrom = changes[i].first, other.depthChangedTo = changes[i].second;
     }
-    memory.watch(Memory::VRAMBase + 3 * Memory::VRAMSize + t.depthBuffer, t.depthRows * t.depthStride * 2);
+    inParts(t.depthBuffer, u64(t.depthRows) * t.depthStride * 2, [&](u32 at, u32 size) {
+      memory.watch(Memory::VRAMBase + 3 * Memory::VRAMSize + at, size);
+    });
   }
   release();
 }
@@ -703,7 +728,8 @@ auto GPU::settings(const GE::Look& look) -> void {
   u32 maskColor = c[GE::MaskColor] & 0xff'ffff, maskAlpha = c[GE::MaskAlpha] & 0xff;
   u8 rgb = 0;
   for(u32 n = 0; n < 3; n++) rgb |= (maskColor >> n * 8 & 0xff) != 0xff ? 1 << n : 0;
-  bool alphaWritable = stencils && maskAlpha != 0xff;
+  //(MASK_ALPHA keeping every bit of a 16-bit one's stencil leaves the color's alpha too)
+  bool alphaWritable = stencils && keptStencil(~maskAlpha & 0xff, p.format);
   //Shader blending (docs/psp-gpu-renderers.md, "Shader blending"), where the backend reads the frame buffer: a
   //write mask that keeps part of a channel is pixel.cpp's then (the GPU's masks keep whole channels), and so are
   //logic operations, and blending where the GPU's own can't come close (the absolute difference; doubled alphas,
@@ -760,25 +786,24 @@ auto GPU::settings(const GE::Look& look) -> void {
       //one's comparison (its stencil 0 or 255) is made on the top bit instead, against the kept reference, which
       //comes out the same at either stencil; a 4444 one's stays the GE's, its REPLACE writing all eight bits.
       //A 5551 one's stencil is a bit, which an INCREMENT fills and a DECREMENT empties (pixel.cpp), where the GPU's
-      //would step its 0 or 255 by one, the color's alpha left: those are a REPLACE of 255 and a ZERO (but an
-      //INCREMENT beside a REPLACE of 0, which one reference can't write both of). Hammerin' Hero and Jeanne d'Arc
-      //mark their characters' pixels so in a frame buffer of their own, then take them onto the screen by the alpha.
-      u32 kept = keptStencil(p.stencilReference, p.format), written = kept;
-      bool replaces = k.stencilFail == Replace || k.stencilDepthFail == Replace || k.stencilPass == Replace;
+      //would step its 0 or 255 by one, the color's alpha left: those are a REPLACE of 255 and a ZERO, and a REPLACE
+      //of 0 a ZERO, so one reference serves them all. Hammerin' Hero and Jeanne d'Arc mark their characters' pixels
+      //so in a frame buffer of their own, then take them onto the screen by the alpha.
+      u32 kept = keptStencil(p.stencilReference, p.format), replaced = kept;
       for(u8* o : {&k.stencilFail, &k.stencilDepthFail, &k.stencilPass}) {
-        if(p.format == 1 && *o == Decrement) *o = Clear;
-        if(p.format == 1 && *o == Increment && (!replaces || kept == 0xff)) *o = Replace, written = 0xff;
+        if(p.format == 1 && (*o == Decrement || (*o == Replace && !kept))) *o = Clear;
+        if(p.format == 1 && *o == Increment) *o = Replace, replaced = 0xff;
       }
-      replaces = k.stencilFail == Replace || k.stencilDepthFail == Replace || k.stencilPass == Replace;
-      if(replaces && written != p.stencilReference) {
+      bool replaces = k.stencilFail == Replace || k.stencilDepthFail == Replace || k.stencilPass == Replace;
+      if(replaces && replaced != p.stencilReference) {
         u32 reference = p.stencilReference & p.stencilMask;
-        if(p.stencilFunction < 2 || (written & p.stencilMask) == reference) {  //(never, always: no reference)
-          s.stencilReference = written;
+        if(p.stencilFunction < 2 || (replaced & p.stencilMask) == reference) {  //(never, always: no reference)
+          s.stencilReference = replaced;
         } else if(p.format == 1) {
           bool zero = comparesTrue(p.stencilFunction, reference, 0);
           bool full = comparesTrue(p.stencilFunction, reference, 0xff & p.stencilMask);
-          s.stencilReference = written, s.stencilCompareMask = 0x80;
-          k.stencilCompare = zero == full ? zero : zero == !written ? 2 : 3;  //(always or never; equal, not equal)
+          s.stencilReference = replaced, s.stencilCompareMask = 0x80;
+          k.stencilCompare = zero == full ? zero : zero == !replaced ? 2 : 3;  //(always or never; equal, not equal)
         }
       }
       //The alpha the frame buffer keeps is the stencil; where the pass operation's result is known here, the
@@ -786,7 +811,7 @@ auto GPU::settings(const GE::Look& look) -> void {
       //itself is read back from the GPU's stencil, finish()).
       if(alphaWritable && (k.stencilPass == Replace || k.stencilPass == Clear)) {
         k.alphaOut = 1, k.colorMask |= 8;
-        s.push.stencil = k.stencilPass == Replace ? written : 0;
+        s.push.stencil = k.stencilPass == Replace ? replaced : 0;
       }
     } else if(p.stencilTest && !comparesTrue(p.stencilFunction, p.stencilReference & p.stencilMask, 0)) {
       //A 5650 frame buffer's stencil reads as 0: a test that fails against it drops every pixel (and keeps the
@@ -1818,7 +1843,10 @@ auto GPU::keepBeside(Target& t, u32 first, u32 last) -> void {
 auto GPU::forget(GE& ge) -> void {
   finish(ge);
   lastPalette = {};  //(another GE's palette versions)
-  for(auto& t : targets) t->stale = true, t->depthRows = 0, t->depthChangedFrom = t->depthChangedTo = 0;
+  for(auto& t : targets) {
+    t->stale = true, t->depthRows = 0, t->depthChangedFrom = t->depthChangedTo = 0;
+    t->depthAt = 0, t->depthKept = false;
+  }
 }
 
 //The frame shown, from the GPU's target: a read back of the rectangle shown alone, after what's recorded so far.

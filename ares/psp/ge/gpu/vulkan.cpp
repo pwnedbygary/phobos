@@ -1093,6 +1093,7 @@ struct VulkanBackend : GPU::Backend {
                                                       aligned(u64(c.width) * c.height);
       if(c.kind == GPU::Command::Kind::Present && !c.target) size = aligned(size) + u64(c.width) * c.height * 4;
       if(c.kind == GPU::Command::Kind::Move) size = aligned(size) + u64(movedPitch(c)) * c.sourceHeight;
+      if(c.kind == GPU::Command::Kind::Depth) size = aligned(size) + u64(c.width) * c.height * scale * scale * 4;
     }
     for(u32 id : uploading) {
       auto found = textureImages.find(id);
@@ -1348,25 +1349,37 @@ struct VulkanBackend : GPU::Backend {
         boundPipeline = VK_NULL_HANDLE, boundSet = VK_NULL_HANDLE, lastState = ~0u, transformsBound = false;
         continue;
       }
-      if(c.kind == GPU::Command::Kind::Depth) {  //(the depth alone: the stencil is each frame buffer's own)
+      //(the depth alone, through the slot's staging buffer: the stencil is each frame buffer's own, and a copy between
+      //images of their depth alone takes the stencil too on MoltenVK)
+      if(c.kind == GPU::Command::Kind::Depth) {
         auto from = targetImages.find(c.source);
         if(from == targetImages.end() || from == found) continue;
         if(!fit(commands, t, c.y + c.height) || !fit(commands, from->second, c.y + c.height)) {
           return lost = true, false;
         }
+        u64 depths = aligned(at);
+        at = depths + u64(c.width) * c.height * scale * scale * 4;
         constexpr auto Source = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         constexpr auto Destination = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         VkRect2D into = scaled(t, c.x, c.y, c.width, c.height);
         VkRect2D out = scaled(from->second, c.x, c.y, c.width, c.height);
-        VkExtent3D extent{std::min(into.extent.width, out.extent.width), std::min(into.extent.height, out.extent.height),
-                          1};
+        VkExtent3D extent{std::min(into.extent.width, out.extent.width),
+                          std::min(into.extent.height, out.extent.height), 1};
         if(!extent.width || !extent.height) continue;
-        VkOffset3D at{into.offset.x, into.offset.y, 0};
-        VkImageCopy region{{VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1}, at, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1}, at, extent};
+        VkBufferImageCopy region{depths, 0, 0, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1}, {into.offset.x, into.offset.y, 0},
+                                 extent};
         transition(commands, from->second.depth.image, DepthStencil, DepthLayout, Source);
-        transition(commands, t.depth.image, DepthStencil, DepthLayout, Destination);
-        vk.vkCmdCopyImage(commands, from->second.depth.image, Source, t.depth.image, Destination, 1, &region);
+        vk.vkCmdCopyImageToBuffer(commands, from->second.depth.image, Source, slot.staging.buffer, 1, &region);
         transition(commands, from->second.depth.image, DepthStencil, Source, DepthLayout);
+        auto copied = made<VkBufferMemoryBarrier>(VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER);
+        copied.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, copied.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        copied.srcQueueFamilyIndex = copied.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        copied.buffer = slot.staging.buffer, copied.offset = depths;
+        copied.size = u64(extent.width) * extent.height * 4;
+        vk.vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
+                                1, &copied, 0, nullptr);
+        transition(commands, t.depth.image, DepthStencil, DepthLayout, Destination);
+        vk.vkCmdCopyBufferToImage(commands, slot.staging.buffer, t.depth.image, Destination, 1, &region);
         transition(commands, t.depth.image, DepthStencil, Destination, DepthLayout);
         continue;
       }
@@ -1396,10 +1409,10 @@ struct VulkanBackend : GPU::Backend {
           u16 z;
           std::memcpy(&z, in + c.depth + n * 2, 2);
           if(depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT) {  //(in 65,536ths, exactly as draw.frag writes them)
-            f32 value = z * (1.0f / 65536);
+            f32 value = GPU::depthToFloat(z);
             std::memcpy(&depth[n], &value, 4);
           } else {  //(those rounded to 24 bits, as the GPU rounds to nearest)
-            depth[n] = u32((u64(z) * 0xff'ffff + 32768) >> 16);
+            depth[n] = GPU::depthTo24(z);
           }
         }
         transition(commands, t.color.image, VK_IMAGE_ASPECT_COLOR_BIT, ColorLayout, Destination);
@@ -1966,9 +1979,8 @@ struct VulkanBackend : GPU::Backend {
     stencil = readback.mapped + readbacks[n].second;
     return true;
   }
-  //(the depth format's values as the GE's: 65,536ths, as draw.frag's DEPTHS and the uploads write them, or those
-  //rounded to 24 bits; at a higher resolution, each pixel's middle one)
-  auto readDepth(u32 n, const u16*& depths) -> bool override {
+  //(at a higher resolution, each pixel's middle one)
+  auto readDepth(u32 n, const u16*& depths, u32& width, u32& height) -> bool override {
     auto read = std::find_if(depthReads.begin(), depthReads.end(), [&](const Squeeze& s) { return s.readback == n; });
     if(n >= readbacks.size() || read == depthReads.end()) return false;
     const u8* in = readback.mapped + readbacks[n].first;
@@ -1980,14 +1992,13 @@ struct VulkanBackend : GPU::Backend {
         if(depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT) {
           f32 value;
           std::memcpy(&value, &word, 4);
-          value = value * 65536 + 0.5f;
-          depthsRead[i] = value >= 65535 ? 65535 : value >= 0 ? u16(value) : 0;
+          depthsRead[i] = GPU::depthFromFloat(value);
         } else {
-          depthsRead[i] = std::min<u32>(((word & 0xff'ffff) + 255) >> 8, 65535);
+          depthsRead[i] = GPU::depthFrom24(word);
         }
       }
     }
-    depths = depthsRead.data();
+    depths = depthsRead.data(), width = read->width, height = read->height;
     return true;
   }
 
