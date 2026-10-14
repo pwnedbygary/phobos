@@ -1,6 +1,7 @@
 package com.phobos.emulator.ui.theme
 
 import android.graphics.Bitmap
+import android.util.Log
 import android.util.LruCache
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.runtime.Composable
@@ -54,6 +55,10 @@ internal fun RenderedBackdrop(key: Any, placeholder: Color, modifier: Modifier, 
             try {
                 Bitmap.createBitmap(render(width, height), width, height, Bitmap.Config.ARGB_8888).asImageBitmap().also { Pictures.put(id, it) }
             } catch (e: OutOfMemoryError) {
+                null
+            } catch (e: RuntimeException) {
+                // A backdrop that can't be drawn leaves its placeholder rather than taking the app down.
+                Log.w("PhobosBackdrop", "Couldn't draw the backdrop ${width}x$height", e)
                 null
             }
         } ?: return@produceState

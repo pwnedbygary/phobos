@@ -126,19 +126,21 @@ internal class Lettering(val font: TrueType) {
     }
 }
 
-/** Coverage on part of the page: [alpha] for the [width] by [height] pixels from ([left], [top]). */
-internal class Mask(val left: Int, val top: Int, val width: Int, val height: Int, val alpha: FloatArray) {
-    /** The coverage at page pixel ([x], [y]); none outside the mask. */
-    fun at(x: Int, y: Int): Float {
-        val mx = x - left
-        val my = y - top
-        return if (mx in 0 until width && my in 0 until height) alpha[my * width + mx] else 0f
+/** Lettering in the font file [bytes], or null when they can't be read as a TrueType font. */
+internal fun letteringOf(bytes: ByteArray): Lettering? =
+    try {
+        Lettering(TrueType(bytes))
+    } catch (e: RuntimeException) {
+        null
     }
 
+/** Coverage on part of the page: [alpha] for the [width] by [height] pixels from ([left], [top]). */
+internal class Mask(val left: Int, val top: Int, val width: Int, val height: Int, val alpha: FloatArray) {
     /**
-     * How far each of the mask's pixels is from the inked shape, in pixels: 0 at and inside its edge, as
-     * an exact Euclidean distance transform seeded by the edge pixels' own coverage, so outlines drawn at
-     * a distance keep the shape's antialiasing.
+     * How far each of the mask's pixels is from the inked shape, in pixels: 0 at and inside its edge. An
+     * exact Euclidean distance transform between pixel centers, seeded by the edge pixels' coverage, so it's
+     * within about half a pixel of the true distance: an outline drawn at a distance follows the shape, but
+     * along a shallow slope its width steps by a pixel.
      */
     fun distances(): FloatArray {
         val far = 1e12

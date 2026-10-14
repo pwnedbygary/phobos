@@ -131,13 +131,28 @@ fun MangaBackdrop(
     }
 }
 
-/** Bangers' outlines for the lettered manga backdrops, read from its font resource the first time one is drawn. */
+/**
+ * Bangers' outlines for the lettered manga backdrops, read from its font resource the first time one is
+ * drawn; null, once and for all, if it can't be read, and the scenes leave their words out.
+ */
 private object MangaLettering {
     @Volatile
-    private var loaded: Lettering? = null
+    private var read = false
+    private var lettering: Lettering? = null
 
-    fun of(resources: Resources): Lettering = loaded ?: synchronized(this) {
-        loaded ?: Lettering(TrueType(resources.openRawResource(R.font.bangers).use { it.readBytes() })).also { loaded = it }
+    fun of(resources: Resources): Lettering? {
+        if (!read) synchronized(this) {
+            if (!read) {
+                val bytes = try {
+                    resources.openRawResource(R.font.bangers).use { it.readBytes() }
+                } catch (e: Exception) {
+                    null
+                }
+                lettering = bytes?.let(::letteringOf)
+                read = true
+            }
+        }
+        return lettering
     }
 }
 

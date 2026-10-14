@@ -256,7 +256,7 @@ private fun Page.truckLettering(out: FloatArray, l: Lettering, f: Frame, wide: B
     val shadow = (unit * 3.5f).roundToInt().coerceAtLeast(1)
     val roar = "VRRROOOM!!"
     // On a wide page the roar and the narration stay in the top fifth, which the Library's grid of cards leaves showing.
-    val roarBox = if (wide) Box(w * 0.17f, h * 0.02f, w * 0.6f, h * 0.215f) else Box(w * 0.05f, h * 0.79f, w * 0.95f, h * 0.95f)
+    val roarBox = if (wide) PageBox(w * 0.17f, h * 0.02f, w * 0.6f, h * 0.215f) else PageBox(w * 0.05f, h * 0.79f, w * 0.95f, h * 0.95f)
     val grow = if (wide) 1.6f else 1.9f
     val angle = if (wide) -0.05f else -0.16f
     // The letters grow along the line, so it sets about (1 + grow) / 2 as wide as at the first letter's size.
@@ -267,6 +267,6 @@ private fun Page.truckLettering(out: FloatArray, l: Lettering, f: Frame, wide: B
     }
 
     // The narration, a light novel's title.
-    val narration = if (wide) Box(w * 0.655f, h * 0.03f, w * 0.97f, h * 0.2f) else Box(w * 0.06f, h * 0.045f, w * 0.94f, h * 0.17f)
-    caption(out, l, narration, line, listOf("THAT TIME ares GOT HIT", "BY TRUCK-KUN AND WAS", "REINCARNATED ON ANDROID"))
+    val narration = if (wide) PageBox(w * 0.655f, h * 0.03f, w * 0.97f, h * 0.2f) else PageBox(w * 0.06f, h * 0.045f, w * 0.94f, h * 0.17f)
+    caption(out, l, narration, line, listOf("THAT TIME ARES GOT HIT", "BY TRUCK-KUN AND WAS", "REINCARNATED ON ANDROID"))
 }
