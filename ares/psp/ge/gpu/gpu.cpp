@@ -1080,21 +1080,31 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   //pre-rendered depth into the depth buffer's memory as a 5650 frame buffer, then test their characters against it.
   bool depth = !column && !row && (p.clear ? p.clearDepth : p.depthTest);
   if(depth && p.depthStride) {
-    u32 rows = bottom + 1;  //(the most rows filled from memory: this PRIM's, those filled already, a taken depth's)
-    for(auto& other : targets) {
-      if(other->depthBuffer != p.depthBuffer || other->depthStride != p.depthStride) continue;
-      rows = std::max(rows, other->depthRows);
-    }
-    u64 low = p.depthBuffer & ~0x3fffu, high = (u64(p.depthBuffer) + u64(rows) * p.depthStride * 2 - 1) | 0x3fff;
-    u32 first = low / Memory::PageSize, last = std::min<u64>(high / Memory::PageSize, GE::VRAMPages - 1);
-    bool alone = t->depthAlone.serial == drawnSerial && first >= t->depthAlone.first && last <= t->depthAlone.last;
-    for(u32 page = first; page <= last && !alone; page++) {
-      if(owners[page] && owners[page] != t) {
-        finish(ge), moving.clear();
-        break;
+    //(the rows filled from memory: this PRIM's, those filled already, and, looked through only where the pages aren't
+    //known free, a taken depth's; owners[] changes with drawnSerial)
+    bool same = t->depthBuffer == p.depthBuffer && t->depthStride == p.depthStride;
+    u32 rows = std::max<u32>(bottom + 1, same ? t->depthRows : 0);
+    auto pages = [&](u32& first, u32& last) {
+      u64 low = p.depthBuffer & ~0x3fffu, high = (u64(p.depthBuffer) + u64(rows) * p.depthStride * 2 - 1) | 0x3fff;
+      first = low / Memory::PageSize, last = std::min<u64>(high / Memory::PageSize, GE::VRAMPages - 1);
+    };
+    u32 first, last;
+    pages(first, last);
+    if(t->depthAlone.serial != drawnSerial || first < t->depthAlone.first || last > t->depthAlone.last) {
+      for(auto& other : targets) {
+        if(other->depthBuffer == p.depthBuffer && other->depthStride == p.depthStride) {
+          rows = std::max(rows, other->depthRows);
+        }
       }
+      pages(first, last);
+      for(u32 page = first; page <= last; page++) {
+        if(owners[page] && owners[page] != t) {
+          finish(ge), moving.clear();
+          break;
+        }
+      }
+      t->depthAlone = {first, last, drawnSerial};
     }
-    if(!alone) t->depthAlone = {first, last, drawnSerial};
   }
   if(!ready()) return held.reset(), false;
   //(the colors filled afresh where memory's changed, the depth where memory's depth has: rows of it, or all of it
