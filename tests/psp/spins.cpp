@@ -1,10 +1,13 @@
 //Spins (ares/psp/kernel/spins.cpp): a thread polling quiet or calm system functions in a loop that comes back to
 //where it was, skipped by whole turns to just before the CPU's go ends. Programs run in steps of an eighth of a frame
 //on both engines with the skip on and off, and after every step the machine's whole state (memory, the CPU, the GE,
-//the kernel) is the same either way: the Need for Speeds' idle loop and the intro movies' wait, skipped; loops that
-//aren't one turn over and over (a count stored, a register counting, the thread's run time read, the clock polled, a
-//semaphore that counts, a store into its own compiled code), not skipped. And one skip made directly, against the
-//same turns run: every register and byte, the clock, the ready order's count and the run time the last turn wrote.
+//the kernel) is the same either way: the Need for Speeds' idle loop (also with its ticker at its own priority, and
+//with a status of 88 bytes) and the intro movies' wait (also through the ring's library, one naming no ring, and with
+//interrupts held off), skipped; loops that aren't one turn over and over (a count stored, a register counting, an FPU
+//register adding up, the thread's run time read, the clock polled, a semaphore that counts, another priority's line
+//rotated, a store into its own compiled code), not skipped. And skips made directly, against the same turns run: every
+//register and byte, the clock, the ready order's count and the run time the last turn wrote (to the cycle); the turns'
+//boundaries, none outside a go or with a thread of the caller's priority ready, and the pages a turn may store to.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -53,6 +56,7 @@ auto idleLoop(KernelMachine& m, Twist twist = Twist::Plain, u32 tick = 200) -> I
     main.put(addu(s7, v0, zero));
   }
   startThread(main, m, "ticker", 0x0880'3000, twist == Twist::Equal ? 0x20 : 0x10);
+  if(twist == Twist::Size88) main.li(t5, 0x5a5a'5a5a), main.put(sw(t5, -0x80 + 0x10 + 88, sp));  //(under bytes 88-91)
   if(twist == Twist::Fpu) main.li(t0, 0x3f80'0000), main.put(mtc1(t0, 2));  //(f2: 1.0)
   main.li(s3, Count); main.li(s4, 0);
   u32 round = main.here();
@@ -99,12 +103,14 @@ auto idleLoop(KernelMachine& m, Twist twist = Twist::Plain, u32 tick = 200) -> I
 //semaphore already at its most (refused), till a feeder thread (every 500 microseconds) puts 5 packets in, or the next
 //vertical blank comes; four times, the ring emptied after each. held: interrupts held off round the wait, which keeps
 //the feeder out (no thread switches then), so each ends at the blank. library: the ring's library's memory marked
-//as sceMpegCreate marks it, naming the ring (the count read through it), else none (the ring counts its own).
-auto movieWait(KernelMachine& m, bool held = false, bool library = false) -> void {
+//as sceMpegCreate marks it, naming the ring (1: the count read through it) or none (2: an address with nothing behind
+//it, so the ring counts its own); 0, no library.
+auto movieWait(KernelMachine& m, bool held = false, u32 library = 0) -> void {
   m.system.memory.write(4, Ring + 0, 64);  //packets
   m.system.memory.write(4, Ring + 12, 0);  //holding data
   m.system.memory.write(4, Ring + 40, library ? Library : 0);
-  if(library) m.system.memory.copyIn(Library, "LIBMPEG", 8), m.system.memory.write(4, Library + 0x10, Ring);
+  if(library) m.system.memory.copyIn(Library, "LIBMPEG", 8);
+  if(library) m.system.memory.write(4, Library + 0x10, library == 1 ? Ring : 0);
   Assembler feeder{m, 0x0880'3000};
   u32 again = feeder.here();
   feeder.li(a0, 500); feeder.call("sceKernelDelayThread");
@@ -192,7 +198,9 @@ static auto spinsSkipped() -> void {
     CHECK(skipped > 1000, true);
     CHECK(bothWays([](KernelMachine& m) { movieWait(m, true); }, recompile, 40, skipped), true);
     CHECK(skipped > 1000, true);
-    CHECK(bothWays([](KernelMachine& m) { movieWait(m, false, true); }, recompile, 40, skipped), true);
+    CHECK(bothWays([](KernelMachine& m) { movieWait(m, false, 1); }, recompile, 40, skipped), true);
+    CHECK(skipped > 1000, true);
+    CHECK(bothWays([](KernelMachine& m) { movieWait(m, false, 2); }, recompile, 40, skipped), true);
     CHECK(skipped > 1000, true);
     //the status of 88 bytes: its run time's first word the only bytes the time decides, its second never written
     CHECK(bothWays([](KernelMachine& m) { idleLoop(m, Twist::Size88); }, recompile, 16, skipped), true);
@@ -264,6 +272,22 @@ static auto spinsDirect() -> void {
     return k.spun;
   };
   constexpr u64 Turns = 500;
+  //the run time the last skipped turn's status gives (the anchor's call ending it, at the anchor's time plus the turns)
+  //on a microsecond's last cycle, then on its first, main's run figures moved back alike on both machines: a skip
+  //writing it a cycle late, or early, writes another microsecond
+  for(u64 phase : {332, 0}) {
+    auto x = positioned(), y = positioned();
+    for(auto* m : {x.get(), y.get()}) {
+      auto& thread = *m->kernel.current;
+      u64 ran = thread.runCycles + m->kernel.cycles + Turns * period - m->kernel.ranSince;
+      thread.runCycles -= (ran % 333 + 333 - phase) % 333;
+    }
+    CHECK(anchor(*x, Turns), Turns);
+    y->kernel.run(Turns * period + 1);
+    u32 at = x->system.ipu.r[29] + 0x10 + 84;
+    CHECK(x->system.memory.read(4, at), y->system.memory.read(4, at));
+    CHECK(saveState(*x) == saveState(*y), true);
+  }
   CHECK(anchor(*a, Turns), Turns);
   b->kernel.run(Turns * period + 1);
   CHECK(a->kernel.cycles, b->kernel.cycles);

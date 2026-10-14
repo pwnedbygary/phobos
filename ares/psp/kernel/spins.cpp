@@ -28,9 +28,10 @@
 //of this is kept in a state: a spin found again after a state loads is skipped the same way, and one not found runs
 //every turn, to the same end.
 
-//The shadow: a CPU of its own running one turn of a spin through the interpreter (see above). A load or store outside
-//main RAM, a store that would do more than store, a byte the time decides read or written over, an exception, a halt
-//or a function the kernel can't work out without making it ends the proof (failed).
+//The shadow: a CPU of its own running one turn of a spin through the interpreter (see above). A load or store of the
+//turn's own outside main RAM, a store that would do more than store, a byte the time decides read or written over, an
+//exception, a halt or a function the kernel can't work out without making it ends the proof (failed); a function's
+//own stores and checks of an address are answered as Memory answers them (reaches()).
 struct SpinShadow : Allegrex {
   Kernel& kernel;
   Memory& memory;
@@ -47,11 +48,11 @@ struct SpinShadow : Allegrex {
   struct Range { u32 address, size; };  //(physical)
   std::vector<Range> reads;
   //The bytes the time decides that the turn's calls wrote, written again for real at the last turn's time
-  //(Kernel::spinSkip()): a thread's run time in its status, at address, the status's bytes from to to, and where in
-  //the turn the call was made
+  //(Kernel::spinSkip()): a thread's run time in its status at address, the status's bytes first to end (not that
+  //one), and where in the turn the call was made
   struct Timed {
     const Kernel::Thread* thread;
-    u32 address, from, to;
+    u32 address, first, end;
     u32 executed;
   };
   std::vector<Timed> timed;
@@ -64,9 +65,10 @@ struct SpinShadow : Allegrex {
   auto time() const -> u64 { return start + executed; }
   auto arg(u32 n) const -> u32 { return n < 4 ? ipu.r[4 + n] : ipu.r[8 + n - 4]; }
 
-  //Whether size bytes at address are all there, in main RAM. Bytes with nothing behind them aren't, as Memory says
-  //(a function checking an address it was given finds that out the same way); others than main RAM's end the proof:
-  //VRAM, which the GE's workers may draw into as the CPU runs, and the scratchpad, which polling loops don't touch.
+  //Whether size bytes at address are all there, in main RAM. Where Memory finds them not all there, they aren't (a
+  //function checking an address it was given finds that out the same way); where it finds them elsewhere, the proof
+  //ends: VRAM, which the GE's workers may draw into as the CPU runs, and the scratchpad, which polling loops don't
+  //touch.
   auto reaches(u32 address, u32 size) -> bool {
     u32 offset = (address & 0x1fff'ffff) - Memory::RAMBase;
     if(offset < memory.ram.size()) return size <= memory.ram.size() - offset;
@@ -169,7 +171,7 @@ auto Kernel::spinSkip() -> void {
   }
   for(auto& write : shadow.timed) {
     auto info = threadInfo(*write.thread, cycles + 1 + (turns - 1) * spin.period + write.executed);
-    memory.copyIn(write.address + write.from, info.bytes + write.from, write.to - write.from);
+    memory.copyIn(write.address + write.first, info.bytes + write.first, write.end - write.first);
   }
   cycles += skipped;
   counted += skipped;
@@ -200,6 +202,8 @@ auto Kernel::spinProve(SpinShadow& shadow) -> bool {
   for(auto& [physical, held] : shadow.stored) {
     if(!held.timed && held.value != memory.ram[physical - Memory::RAMBase]) return false;
   }
+  //(every write with bytes the time decides is one the skip writes again)
+  if(shadow.timed.size() != shadow.timedWrites) return false;
   //(a load the turn made before a byte the time decides was written: what the last turn's call wrote there)
   if(shadow.timedWrites) {
     for(auto& read : shadow.reads) {

@@ -1173,7 +1173,7 @@ auto Kernel::importCode(const std::string& library, u32 nid) -> u32 {
 //by no FINISH taken nor call started, made nothing due sooner: the go already stops by the next thing due, which
 //keeps its time, so it's left as it is (untilNextEvent() looks through every thread, timer and file, after each of
 //the hundreds of thousands of calls a frame of games polling one of these in a loop); and the call may be part of a
-//loop of such calls that can be skipped to the go's end (spinTurn(): spins.cpp).
+//loop of such calls that can be skipped to just before the go's end (spinTurn(): spins.cpp).
 auto Kernel::syscall(u32 code) -> bool {
   u64 before = cpu.instructionsBefore();
   if(before > counted) cycles += before - counted;
