@@ -55,6 +55,7 @@ namespace ares::PlayStationPortable {
 struct Allegrex;
 struct Memory;
 struct GE;
+struct SpinShadow;
 
 //codec.cpp: the decoders under the PSP's music and movies. The libraries (atrac.cpp, mp3.cpp, mpeg.cpp) take the
 //PSP's containers apart themselves and hand a decoder one frame, or one picture's access unit, at a time; builds with
@@ -268,6 +269,7 @@ struct Kernel {
   auto importCode(const std::string& library, u32 nid) -> u32;
   auto syscall(u32 code) -> bool;
   auto dispatch(u32 code, bool& quiet) -> bool;
+  auto dispatchImport(u32 code, bool& quiet) -> bool;
   auto runUntilNextEvent() -> void;
   auto arg(u32 n) const -> u32;
   auto result(u32 value) -> void;
@@ -294,6 +296,9 @@ struct Kernel {
     auto (Kernel::*handler)() -> void;
     u32 nid;
     bool quiet = false;  //it makes nothing due sooner (syscall())
+    //what it does in a spin's turn, worked out without doing it (spins.cpp): false where it would do something else.
+    //Only for cases where the function itself is quiet or calm, so a turn never needs runUntilNextEvent().
+    auto (Kernel::*spin)(SpinShadow& shadow, u64 time) -> bool = nullptr;
   };
   //Set by a function that isn't always quiet but was this time: it changed nothing that has a time to come (dispatch()
   //clears it before each)
@@ -307,6 +312,32 @@ struct Kernel {
   };
   std::vector<Function> functions;
   std::vector<Import> imports;  //by syscall code minus FirstImportCode
+
+  //spins.cpp: a thread polling quiet or calm functions in a loop that comes back to where it was, every register and
+  //byte the same but for those only the time decides, skipped to its last turns before the CPU's go ends. Not saved.
+  struct Spin {
+    u32 site = 0, back = 0;  //the anchor: a syscall's address, and where the program goes on from it (none: 0)
+    u64 last = 0;            //when (cycles) the program was last there
+    u64 period = 0;          //the time between the last two
+    u32 turns = 0;           //turns of that time in a row since
+    u32 wait = 0;            //more to wait for after a proof that failed
+  } spin;
+  bool spins = true;   //(tests turn it off to compare)
+  bool going = false;  //a go of the CPU's is under way (run()): its limit and count are what a skip works from
+  u64 spun = 0;        //turns skipped
+  //SpinLongest: the longest turn, in instructions (the shadow's) and so in cycles (the detector's)
+  static constexpr u32 SpinTurns = 4, SpinLongest = 2048, SpinMargin = 2, SpinWaitMost = 4096;
+  auto spinTurn() -> void;
+  auto spinSkip() -> void;
+  auto spinProve(SpinShadow& shadow) -> bool;
+  auto spinCall(SpinShadow& shadow, u32 code) -> bool;
+  auto spinStorable(u32 address, u32 size) -> bool;
+  auto spinGetThreadId(SpinShadow& shadow, u64 time) -> bool;
+  auto spinReferThreadStatus(SpinShadow& shadow, u64 time) -> bool;
+  auto spinRotateThreadReadyQueue(SpinShadow& shadow, u64 time) -> bool;
+  auto spinSignalSema(SpinShadow& shadow, u64 time) -> bool;
+  auto spinMpegRingbufferAvailableSize(SpinShadow& shadow, u64 time) -> bool;
+  auto spinGetVcount(SpinShadow& shadow, u64 time) -> bool;
   static constexpr u32 ThreadReturnCode = 1, CallReturnCode = 2, ModuleReturnCode = 3, CallbackReturnCode = 4,
                        FontReturnCode = 5, MpegReturnCode = 6, ExtendReturnCode = 7;
   static constexpr u32 FirstImportCode = 0x1000;
@@ -428,6 +459,7 @@ struct Kernel {
   auto extendReturned() -> void;
   auto extensionsEnded(Thread& thread) -> void;
   auto signalSemaphores(Semaphore& semaphore) -> bool;  //(whether it woke a thread)
+  auto signalRefused(u32 uid, s32 count) const -> u32;
   auto unlockLwMutex(u32 workArea) -> void;
   auto findThread(u32 uid) -> Thread*;
   auto deleteThread(Thread& thread) -> void;
@@ -448,7 +480,10 @@ struct Kernel {
   auto report(u32 address, const Report& structure) -> void;
   auto threadStatus(const Thread& thread) const -> u32;
   auto threadWaitType(const Thread& thread) const -> u32;
-  auto threadRunTime(const Thread& thread) const -> u64;
+  auto threadRunTime(const Thread& thread, u64 time) const -> u64;
+  auto threadInfoLength() const -> u32;
+  auto threadInfo(const Thread& thread, u64 time) const -> Report;
+  static constexpr u32 ThreadInfoRunTime = 84;  //the run time's two words in a SceKernelThreadInfo
   auto threadmanIDs(u32 type, std::vector<u32>& ids) -> bool;
 
   auto sceKernelCreateThread() -> void;
@@ -1379,6 +1414,9 @@ struct Kernel {
   auto mpegFinish(MpegCall& call) -> void;
   auto mpegAbandoned(u32 thread) -> void;
   auto mpegLibrary(u32 handle) -> u32;
+  auto mpegMarked(u32 library) -> bool;
+  template<typename View> auto ringAvailable(View& view, u32 ringbuffer) -> u32;
+  template<typename View> auto mpegMarkedIn(View& view, u32 library) -> bool;
   auto mpegHeaderWord(u32 address) -> u32;
   auto mpegFrameWidth(u32 handle, u32 frameWidth) -> u32;
   auto mpegOwnLibrary() -> bool;

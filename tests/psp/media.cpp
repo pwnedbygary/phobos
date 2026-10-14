@@ -969,6 +969,23 @@ static auto mpegRingbufferCopy() -> void {
   CHECK(m.call("sceMpegRingbufferAvailableSize", {Other}), 13);
   CHECK(m.call("sceMpegCreate", {Handle, Library, 0x10000, Ring, 512, 0, 0}), 0);
   CHECK(m.call("sceMpegRingbufferAvailableSize", {Copy}), 0);
+  //The library's mark is its "LIBMPEG" with the NUL after it: an eighth byte that isn't refuses the ring as well. A
+  //copy of the library's memory in VRAM (its third copy, which shows the bytes as they are) is read as a library.
+  u32 library = word(m, Copy + 40);
+  m.system.memory.write(1, library + 7, 'X');
+  CHECK(m.call("sceMpegRingbufferAvailableSize", {Copy}), 0x8061'8009);
+  m.system.memory.write(1, library + 7, 0);
+  CHECK(m.call("sceMpegRingbufferAvailableSize", {Copy}), 0);
+  constexpr u32 InVram = 0x0450'0000;
+  std::vector<u8> bytes(0x800);
+  CHECK(m.system.memory.copyOut(bytes.data(), library, 0x800), true);
+  CHECK(m.system.memory.copyIn(InVram, bytes.data(), 0x800), true);
+  m.system.memory.write(4, Copy + 40, InVram);
+  m.system.memory.write(4, Ring + 12, 9);
+  CHECK(m.call("sceMpegRingbufferAvailableSize", {Copy}), word(m, Ring) - 9);
+  m.system.memory.write(1, InVram + 6, 'g');
+  CHECK(m.call("sceMpegRingbufferAvailableSize", {Copy}), 0x8061'8009);
+  m.system.memory.write(4, Copy + 40, library);
   CHECK(m.notes.size(), 0);
   CHECK(roundTrip(m), true);
 }
