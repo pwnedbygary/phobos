@@ -30,6 +30,53 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP GE: the depth buffer in the order its frame buffer's format has it — the Kurohyou games' characters at the screen's middle (deep play batch 04, bug 2) — 2026-10-14
+
+Branch `cursor/psp-kurohyou-2b67`, on master at e78b4a364 (#254); PR #258. docs/psp-core.md, part 96, has the
+evidence; docs/psp-gpu-renderers.md ("Filled from memory", "A depth buffer drawn with two frame buffers") the GPU's
+side. Clean room: no PPSSPP code read, JPCSP not read. Save states unchanged.
+- **The bug**: in Kurohyou 1 and 2, characters crossing x = 240 lost their left part under Software (a straight edge at
+  240) and vanished under Vulkan (both modes); a faint seam in the floors at 240. Not the scissor, region, offsets or
+  bounding boxes (none in the frame): the games draw their pre-rendered depth into the depth buffer's memory as a 5650
+  frame buffer, take it back through VRAM's second copy and copy it into the depth buffer, which leaves the depth right
+  only if a 16-bit frame buffer's depth is kept as the second copy shows it. Phobos kept every depth buffer in the
+  fourth copy's order (round 3's measurement, made with an 8888 frame buffer), which scrambled it: depth (x, y) from the
+  picture's column rot(x) — two squeezed copies of the street, 240-255 from undrawn columns (0). Kurohyou's depth of
+  field reads that depth through the second copy too: its mask broke at 240 (the seam).
+- **The rule** (`Memory::depthCopy()`): the GE keeps its depth buffer as VRAM's second copy shows it with a 16-bit frame
+  buffer (5650, 5551, 4444), as the fourth does with an 8888 one. Unmeasured; a census of the 128 deep-play states
+  agrees game by game, none against: 16-bit games read their depth in order through the second copy (Kurohyou 1 and 2,
+  Genso Suikoden, Me & My Katamari, MediEvil's CPU), 8888 ones through the fourth (Cars, IL-2 Sturmovik, Killzone,
+  WipEout), and the 8888 ones reading the second copy undo its spread with 16-texel strips (MX vs. ATV Reflex and
+  Untamed, Cars Race-O-Rama). Only Twisted Metal (a kit scene) draws one depth buffer with both sizes: small 5551 frame
+  buffers tested against its 8888 scene's depth, the same pictures either way. A PSP measurement of 16-bit depth layouts
+  would settle the rule.
+- **Changes**: the software renderer's depth reads and writes (pixel.cpp, four.cpp) by the frame buffer's format; on the
+  GPU (gpu.cpp, vulkan.cpp, both modes) the depth filled, watched and put into memory in the target's format's order, a
+  finish before a PRIM's depth is filled from memory where another target has drawn in the depth buffer's pages
+  (Kurohyou's depth, drawn as colors on the GPU), and a depth taken across the two sizes placed on the GPU by runs of
+  16, each where the other's order puts the same bytes (through memory, a wait, only where a run's bytes lie past the
+  other's: Twisted Metal's first take put it into memory every frame, 1 ms a frame of waiting on the M1).
+- **Pictures**: both games' centre characters whole in Software, Vulkan accurate and fast, and the streets full of the
+  pedestrians the scrambled depth had hidden; Vulkan against Software 0.20-0.90 (Kurohyou 1) and 0.35-0.48 (Kurohyou 2)
+  at frames 30-300, no pixel more than 24 apart. Sheets (before above after; Software, Vulkan accurate, fast):
+  `~/phobos-work/scratch/kurohyou/png/` `pr-k1-30-full.png`, `pr-k1-30-centre.png`, `pr-k1-150-centre.png`,
+  `pr-k2-90-full.png`, `pr-k2-90-centre.png`.
+- **Hashes** (the kit's 21 scenes, Hammerin' Hero, Jeanne d'Arc, Cars Race-O-Rama, MX vs. ATV Untamed; master against
+  dbbb6f1b0): Vulkan accurate and fast the same in all 25; Software the same in 18, and in the 7 others (Colin McRae,
+  both Need for Speed Most Wanted scenes, Need for Speed Underground Rivals, Disaster Report 3's play, Hammerin' Hero,
+  Jeanne d'Arc: 16-bit with a depth buffer) every picture and the RAM the same, VRAM apart only in the depth buffer:
+  the same 130,560 depths in the second copy's order (dumps after frame 100; every byte outside its 16 KiB blocks the
+  same). Twisted Metal the same in all three.
+- **Speed** (M1, late frames, pipelines kept, six rounds in turns): no change past the runs' spread in either game
+  (Kurohyou 1 fast 44.9 -> 46.3 fps, accurate 19.6 -> 18.9; Kurohyou 2 62.8 -> 63.5 and 50.9 -> 51.0); Kurohyou 2
+  finishes once more a frame (a move on the GPU of the depth-as-colors would save it: left).
+- **Tests**: three groups (draw.cpp: the depth in each format's order through each copy, Kurohyou's round trip in
+  miniature; gpu.cpp: the same on the GPU, a 5551 depth read as a texture, a depth buffer drawn by 8888 and 5551 frame
+  buffers, 1x and 2x, both modes), all failing on master's core. On the final code (dbd8139bc): tests/psp 531 groups,
+  0 failures, sanitized (the container check off) and not, the GPU groups run; tests/allegrex 68, 0; tests/psp/ares
+  340, 0; CI green.
+
 ## PSP Vulkan: the frame buffer's alpha as its stencil has it — MX vs. ATV Untamed's race (the haze over its hills and trees, the tree's shadow) — 2026-10-14
 
 Branch `cursor/psp-vk-mx-2b67`, on master with #251 merged (`5893dbdc0`), then merged with #253 (`dd37263c8`, part 92:
