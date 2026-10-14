@@ -13485,10 +13485,10 @@ the hash, picture and speed runs; `tests1.sh`, `suites.sh`).
 
 ## Part 95: memory stick files emptied as they're opened keep their bytes (LittleBigPlanet's install), and the runner's file I/O trace
 
-On branch `cursor/psp-installs-2b67`, on master `dd37263c8` (part 92); parts 93 (#254) and 94 (the CPU's round 3) are
-other branches'. Clean room: PPSSPP's notes on the hardware read as a description of how the PSP behaves (its issue
-579's tests on a PSP, the comments in its directory file system), none of its code; JPCSP not read. Save states:
-layout 32.
+On branch `cursor/psp-installs-2b67`, on master `dd37263c8` (part 92), then merged with master `e78b4a364` (part 93,
+#254: only the docs met, this part after it); part 94 (the CPU's round 3) is another branch's. Clean room: PPSSPP's
+notes on the hardware read as a description of how the PSP behaves (its issue 579's tests on a PSP, the comments in
+its directory file system), none of its code; JPCSP not read. Save states: layout 32.
 
 **The problem.** Deep play batch 04's bug 1: LittleBigPlanet (UCUS98744) was blocked at its first boot. Its install
 ("Installing Game Data") wrote `PSP/SAVEDATA/UCUS98744INSTALL/GUI.ARC`, 4,352,791 bytes, with its first 4 MiB zero
