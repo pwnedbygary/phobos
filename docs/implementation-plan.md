@@ -59,8 +59,8 @@ entry, or a part of [psp-core.md](psp-core.md), overrides this summary.
   [psp-gpu-renderers.md](psp-gpu-renderers.md#speed); its other RP6 reports
   (stuck or black games, among them parts 69, 71 and 72) are in those parts and the
   handoff.
-- **Waiting for the RP6:** PSP speed work measured on the M1 (parts 74, 79, 83 and 86 each
-  list the scenes to measure) and whatever the handoff marks so.
+- **Waiting for the RP6:** PSP speed work measured on the M1 (parts 74, 79, 83 and, since
+  `3228b825d`, 86 each list the scenes to measure) and whatever the handoff marks so.
 - **On branches:** open PRs and branches the handoff names; not master until merged.
 - **Proposed:** the [test and performance plan](#test-and-performance-plan-2026-10-13)
   and the ranked roadmap below.
@@ -302,7 +302,7 @@ alone.
 | 03 | Make host test builds trustworthy | P0 | Do now | stacked on 05 | [#245](https://github.com/pwnedbygary/phobos/pull/245) |
 | 04 | Make skipped coverage explicit | P0 | Do now | stacked on 03 | [#246](https://github.com/pwnedbygary/phobos/pull/246) |
 | 05 | Run the missing host suites in CI | P0 | Do now | — | [#241](https://github.com/pwnedbygary/phobos/pull/241) |
-| 06 | Exercise ARM64 and release paths | P0 | Do now | stacked on 04 | [#247](https://github.com/pwnedbygary/phobos/pull/247); its system lane, built as the app is, in draft [#249](https://github.com/pwnedbygary/phobos/pull/249) (red: GCC finds maybe-uninitialized reads in `ares/psp/ge/four.cpp`) |
+| 06 | Exercise ARM64 and release paths | P0 | Do now | stacked on 04 | [#247](https://github.com/pwnedbygary/phobos/pull/247); its system lane, built as the app is, in draft [#249](https://github.com/pwnedbygary/phobos/pull/249) (red: GCC 13 at -O3 -Werror rejects four of master's files) |
 | 07 | Verify compiled shader artifacts | P0 | Do now | — | [#239](https://github.com/pwnedbygary/phobos/pull/239) |
 | 08 | Make PSP runs reproducible | P0 | Do now (pulled forward; adapted: the runner only) | stacked on 03 | [#250](https://github.com/pwnedbygary/phobos/pull/250) |
 | 09 | Automate PSP throughput comparisons | P0 | Later | 08 | — |

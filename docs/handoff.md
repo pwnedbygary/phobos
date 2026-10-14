@@ -14,7 +14,8 @@ Read in order:
 4. [Implementation history](implementation-history.md) only for relevant historical details.
 
 Current focus (2026-10-13): the PSP core (its parts in [psp-core.md](psp-core.md), and the
-entries below, newest first) and the [test and performance plan](implementation-plan.md#test-and-performance-plan-2026-10-13):
+entries below, newest first) and the
+[test and performance plan](implementation-plan.md#test-and-performance-plan-2026-10-13):
 PSP throughput, fast-forward and Vulkan at 1x, 2x, 4x and 5x, accurate and fast modes
 measured apart, with the N64/Mario Tennis regressions kept. A matched Phobos/v336
 comparison (APK, device, driver, settings, scene and traces) has still not been made, and
@@ -75,9 +76,11 @@ given to the owner as a plan bundle (not kept in the repository). Documentation 
   because it still compared #229 with `49fec7215`, and #229 had #230's branch merged). A fourth delta review found this
   sentence had first called that comment #229's own edit; fixed, with its suggestions (#243 in the opening, row 18's
   adaptation, clearer wording). A review of master's #229 and #237 merged in found the plan and this entry stale in
-  five places: the state layout (31 now) in row 12, row 14 still waiting on #237, the plan's waits dated `542da5a28`,
-  the part count, and this entry's opening and "Since". All taken, with part 86 added to the parts waiting for the RP6
-  and this sentence about #229 put in the past.
+  five places: the state layout (31 now) in row 12, row 14 still waiting on #237, the plan's waits dated
+  `542da5a28`, the part count, and this entry's opening and "Since". All taken, with part 86 added to the parts
+  waiting for the RP6 and this sentence about #229 put in the past. Its delta review found row 06 still giving
+  #249's first reason for being red (four files now); taken, with part 86's date in the plan and the entry point's
+  line over 120 columns broken before its link.
 
 ## PSP: the CPU, round 2 — the VFPU's adder in NEON, delay slots compiled each way, the rare ways out of line, prefixes compiled, blocks linked — 2026-10-13
 
