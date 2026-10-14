@@ -248,6 +248,115 @@ template<u32 Size> auto Allegrex::vfpuRestHalfDot(u32 vd, u32 vs, u32 vt) -> voi
   #endif
 }
 
+//The conversions that move lanes' bits about (Op, their rt field: vf2h 0x32, vh2f 0x33, vuc2i 0x38, vc2i 0x39, vus2i
+//0x3a, vs2i 0x3b, vi2uc 0x3c, vi2c 0x3d, vi2us 0x3e, vi2s 0x3f): VF2H() and the rest with the prefixes at rest, at the
+//sizes their decoder takes (the instruction's in size); s's lanes as many as they read, d's as many as they write
+//(packLanes()). Every input lane is read before any result is written.
+template<u32 Op> auto Allegrex::vfpuRestPack(u32 d, u32 s, u32 size) -> void {
+  u32 in[4] = {}, out[4] = {}, lanes = 0;
+  for(u32 i : range(Op == 0x38 || Op == 0x39 ? 1 : size)) in[i] = vfpu.r[laneOf(s, i)];
+  auto half = [&](u32 i) { return in[i / 2] >> 16 * (i % 2) & 0xffff; };
+  if constexpr(Op == 0x32) {
+    lanes = size / 2;
+    for(u32 i : range(lanes)) out[i] = floatToHalf(in[2 * i]) | floatToHalf(in[2 * i + 1]) << 16;
+  }
+  if constexpr(Op == 0x33) {
+    lanes = 2 * size;
+    for(u32 i : range(lanes)) out[i] = halfToFloat(half(i));
+  }
+  if constexpr(Op == 0x38) {
+    lanes = 4;
+    for(u32 i : range(4)) {
+      u32 byte = in[0] >> (8 * i) & 0xff;
+      out[i] = byte << 23 | byte << 15 | byte << 7 | byte >> 1;
+    }
+  }
+  if constexpr(Op == 0x39) {
+    lanes = 4;
+    for(u32 i : range(4)) out[i] = (in[0] >> (8 * i) & 0xff) << 24;
+  }
+  if constexpr(Op == 0x3a) {
+    lanes = 2 * size;
+    for(u32 i : range(lanes)) out[i] = (half(i) << 15) & 0x7fff'ffff;
+  }
+  if constexpr(Op == 0x3b) {
+    lanes = 2 * size;
+    for(u32 i : range(lanes)) out[i] = half(i) << 16;
+  }
+  if constexpr(Op == 0x3c) {
+    lanes = 1;
+    for(u32 i : range(4)) out[0] |= (in[i] & 0x8000'0000 ? 0 : in[i] >> 23 & 0xff) << (8 * i);
+  }
+  if constexpr(Op == 0x3d) {
+    lanes = 1;
+    for(u32 i : range(4)) out[0] |= (in[i] >> 24) << (8 * i);
+  }
+  if constexpr(Op == 0x3e) {
+    lanes = size / 2;
+    auto top = [](u32 x) -> u32 { return x & 0x8000'0000 ? 0 : x >> 15 & 0xffff; };
+    for(u32 i : range(lanes)) out[i] = top(in[2 * i]) | top(in[2 * i + 1]) << 16;
+  }
+  if constexpr(Op == 0x3f) {
+    lanes = size / 2;
+    for(u32 i : range(lanes)) out[i] = (in[2 * i] >> 16) | (in[2 * i + 1] >> 16) << 16;
+  }
+  for(u32 i : range(lanes)) vfpu.r[laneOf(d, i)] = out[i];
+}
+
+//vcmovt and vcmovf: VCMOV() with the prefixes at rest, which, in the condition codes' bit 0-5 or each lane's own (6),
+//and whether on false (bit 3) in the last argument.
+template<u32 Size> auto Allegrex::vfpuRestConditionalMove(u32 d, u32 s, u32 which) -> void {
+  u32 bit = which & 7;
+  bool onFalse = which >> 3 & 1;
+  u32 in[Size];
+  for(u32 i : range(Size)) in[i] = vfpu.r[laneOf(s, i)];
+  for(u32 i : range(Size)) {
+    bool condition = vfpu.cc >> (bit == 6 ? i : bit) & 1;
+    if(condition != onFalse) vfpu.r[laneOf(d, i)] = in[i];
+  }
+}
+
+//vcrs.t, vcrsp.t and vqmul.q (Op 0, 1, 2): VCRS(), VCRSP() and VQMUL() with the prefixes at rest. Every input lane is
+//read before any result is written.
+template<u32 Op> auto Allegrex::vfpuRestCross(u32 d, u32 s, u32 t) -> void {
+  constexpr u32 Size = Op == 2 ? 4 : 3;
+  u32 a[Size], b[Size], out[Size];
+  for(u32 i : range(Size)) a[i] = vfpu.r[laneOf(s, i)], b[i] = vfpu.r[laneOf(t, i)];
+  auto dot = [&](u32 a0, u32 a1, u32 a2, u32 a3, u32 b0, u32 b1, u32 b2, u32 b3) -> u32 {
+    u32 x[4] = {a0, a1, a2, a3}, y[4] = {b0, b1, b2, b3};
+    return vfpuNaN(vfpuDot(x, y), NaNSign::Positive, 0);
+  };
+  if constexpr(Op == 0) {
+    auto product = [&](u32 i, u32 j) {
+      return vfpuNaN(vfpuBits((f64)vfpuFloat(a[i]) * vfpuFloat(b[j])), NaNSign::Product, a[i], b[j]);
+    };
+    out[0] = product(1, 2), out[1] = product(2, 0), out[2] = product(0, 1);
+  }
+  if constexpr(Op == 1) {
+    auto cross = [&](u32 i, u32 j) { return dot(a[i], a[j], 0, 0, b[j], b[i] ^ 0x8000'0000, 0, 0); };
+    out[0] = cross(1, 2), out[1] = cross(2, 0), out[2] = cross(0, 1);
+  }
+  if constexpr(Op == 2) {
+    auto neg = [](u32 x) -> u32 { return x ^ 0x8000'0000; };
+    out[0] = dot(a[3], a[2], a[1], a[0], b[0], neg(b[1]), b[2], b[3]);
+    out[1] = dot(a[3], a[2], a[1], a[0], b[1], b[0], b[3], neg(b[2]));
+    out[2] = dot(a[3], a[2], a[1], a[0], b[2], b[3], neg(b[0]), b[1]);
+    out[3] = dot(a[3], a[2], a[1], a[0], b[3], neg(b[2]), neg(b[1]), neg(b[0]));
+  }
+  for(u32 i : range(Size)) vfpu.r[laneOf(d, i)] = out[i];
+}
+
+//vrot: VROT() with the prefixes at rest, rs's single in s, the placement field in the last argument's low five bits.
+template<u32 Size> auto Allegrex::vfpuRestRotate(u32 d, u32 s, u32 placement) -> void {
+  u32 angle = vfpu.r[s];
+  u32 sine = vfpuSine(angle), cosine = vfpuCosine(angle);
+  if(placement & 0x10) sine ^= 0x8000'0000;
+  u32 cosineLane = placement & 3, sineLane = placement >> 2 & 3;
+  for(u32 i : range(Size)) {
+    vfpu.r[laneOf(d, i)] = i == cosineLane ? cosine : cosineLane == sineLane || i == sineLane ? sine : 0;
+  }
+}
+
 //One lane of the instructions that work lane by lane, as the interpreter works it out (vfpuBinary(), VMIN(), VMAX(),
 //vfpuUnaryBits(), VI2F(), VF2I(), the math functions): Op 0 vadd, 1 vsub, 7 vdiv, 8 vmul (and vscl), 10 vmin,
 //11 vmax, 12 vsge, 13 vslt; 20 vmov, 21 vabs, 22 vneg; 30 vi2f (t the scale), 31 vf2i (t the scale, the rounding
@@ -516,6 +625,8 @@ auto Allegrex::Recompiler::emitVFPU(u32 address, u32 instruction, u32 count, boo
     helper = Sized(vfpuRestScale), third = self.vfpuLine(vt, 1)[0], each = 9;
   } else if(op == 0x19 && group == 4) {  //vhdp
     helper = Sized(vfpuRestHalfDot), first = self.vfpuLine(vd, 1)[0];
+  } else if(op == 0x19 && group == 5 && size == 3) {  //vcrs.t
+    helper = &Allegrex::vfpuRestCross<0>;
   } else if(op == 0x1b && group == 0) {  //vcmp
     helper = Sized(vfpuRestCompare), first = instruction & 15;
   } else if(op == 0x1b && (group == 2 || group == 3)) {  //vmin, vmax
@@ -539,8 +650,26 @@ auto Allegrex::Recompiler::emitVFPU(u32 address, u32 instruction, u32 count, boo
       u32 position = vd & 3, start = lineOffset(vd, size);
       for(u32 i : range(size)) constants[i] = ((start + i) & 3) == position ? One : 0;
     }
+    if(vt >= 0x60) constant = true, constants.fill(ConstantTable[(vt & 31) < 20 ? vt & 31 : 0]);  //vcst
+    //vf2h, vh2f, vuc2i, vc2i, vus2i, vs2i, vi2uc, vi2c, vi2us, vi2s, at the sizes their decoder takes: the lanes each
+    //writes (the rest are reserved)
+    u32 out = 0;
+    if((vt == 0x32 || vt == 0x3e || vt == 0x3f) && (size == 2 || size == 4)) out = size / 2;
+    if((vt == 0x33 || vt == 0x3a || vt == 0x3b) && size <= 2) out = 2 * size;
+    if((vt == 0x3c || vt == 0x3d) && size == 4) out = 1;
+    if(vt == 0x38 || vt == 0x39) out = 4;
+    if(out) {
+      #define Pack(n) if(vt == n) helper = &Allegrex::vfpuRestPack<n>;
+      Pack(0x32) Pack(0x33) Pack(0x38) Pack(0x39) Pack(0x3a) Pack(0x3b) Pack(0x3c) Pack(0x3d) Pack(0x3e) Pack(0x3f)
+      #undef Pack
+      first = packLanes(self.vfpuLine(vd, out));
+      second = packLanes(self.vfpuLine(vs, vt == 0x38 || vt == 0x39 ? 1 : size));
+      third = size;
+    }
   } else if(op == 0x34 && group == 5 && (instruction >> 21 & 3) == 0) {  //vi2f
     helper = Sized(vfpuRestToFloat), third = instruction >> 16 & 31, each = 30;
+  } else if(op == 0x34 && group == 5 && (instruction >> 20 & 7) == 2) {  //vcmovt, vcmovf
+    helper = Sized(vfpuRestConditionalMove), third = instruction >> 16 & 15;
   } else if(op == 0x34 && group == 4) {  //vf2in, vf2iz, vf2iu, vf2id
     each = 31;
   } else if(op == 0x3c) {
@@ -555,6 +684,11 @@ auto Allegrex::Recompiler::emitVFPU(u32 address, u32 instruction, u32 count, boo
     }
     if(group == 4 && size != 1) which = 3;
     if(group == 7 && size != 1) which = vt == 0x00 ? 4 : vt == 0x03 ? 5 : vt == 0x06 ? 6 : vt == 0x07 ? 7 : -1;
+    //vcrsp.t and vqmul.q, and vrot (group 7, rt's top two bits 01: its placement below them), which take prefixes
+    if(group == 5 && (size == 3 || size == 4)) helper = size == 3 ? &Allegrex::vfpuRestCross<1> : &Allegrex::vfpuRestCross<2>;
+    if(group == 7 && (instruction >> 21 & 3) == 1 && size != 1) {
+      helper = Sized(vfpuRestRotate), second = self.vfpuLine(vs, 1)[0], third = instruction >> 16 & 31;
+    }
     #if defined(ALLEGREX_NEON)
     if(which >= 0 && which <= 2) {
       if(auto product = matrixProduct(which, vd, vs, vt, matrix, first, second, third)) {

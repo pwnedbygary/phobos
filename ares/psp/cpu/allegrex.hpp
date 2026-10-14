@@ -478,6 +478,10 @@ struct Allegrex {
   template<u32 Size, bool Max> auto vfpuRestMinMax(u32 vd, u32 vs, u32 vt) -> void;
   template<u32 Size, bool Less> auto vfpuRestSet(u32 vd, u32 vs, u32 vt) -> void;
   template<u32 Size> auto vfpuRestHalfDot(u32 vd, u32 vs, u32 vt) -> void;
+  template<u32 Op> auto vfpuRestPack(u32 d, u32 s, u32 size) -> void;
+  template<u32 Size> auto vfpuRestConditionalMove(u32 d, u32 s, u32 which) -> void;
+  template<u32 Op> auto vfpuRestCross(u32 d, u32 s, u32 t) -> void;
+  template<u32 Size> auto vfpuRestRotate(u32 d, u32 s, u32 placement) -> void;
   template<u32 Op> auto vfpuLane(u32 s, u32 t) const -> u32;
   template<u32 Size, u32 Op> auto vfpuEach(u64 s, u64 t, u64 d) -> void;
   auto vfpuMatrix(u32 which, u32 registers, u32 size) -> void;
