@@ -69,6 +69,24 @@ class AppearanceSettingsTest {
     }
 
     @Test
+    fun aRemovedIconPackReadsAsMatchStyle() {
+        val expected = mapOf(
+            "PHOBOS" to PlatformIconPack.MATCH_STYLE,
+            "PIXEL" to PlatformIconPack.MATCH_STYLE,
+            "MANGA" to PlatformIconPack.MATCH_STYLE,
+            "SYSTEMATIC" to PlatformIconPack.SYSTEMATIC,
+            "MATCH_STYLE" to PlatformIconPack.MATCH_STYLE,
+        )
+        withStore { store, dataStore ->
+            assertEquals("the default", PlatformIconPack.MATCH_STYLE, store.settings.first().platformIconPack)
+            for ((stored, pack) in expected) {
+                dataStore.edit { it[SettingsStore.PLATFORM_ICON_PACK] = stored }
+                assertEquals(stored, pack, store.settings.first().platformIconPack)
+            }
+        }
+    }
+
+    @Test
     fun aStoredSplashPageReadsAsTheMagazineCover() {
         val scenes = mapOf(
             "SPLASH" to MangaBackdropScene.COVER,
