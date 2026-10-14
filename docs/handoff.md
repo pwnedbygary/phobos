@@ -58,7 +58,16 @@ text are kept; the first holds the worktree (`LOCK-worktree`, `TWIN-NOTICE.md` b
   each operation, taken as a texture's alpha; a depth buffer read as a texture through the depth views, and memory's
   changes around it; the depth formats' conversions), in both modes; on master's core the first three fail on their
   pictures.
-- **Checks, speed, review**: pending.
+- **Review**: an independent read-only review (no blocker, no major point; nothing touching the software renderer):
+  all its points taken but the clear's depth copy, measured instead (b042ddb15, e620356f1, 1c44ceab7). Its test of each
+  frame buffer's own stencil caught MoltenVK's image copy of the depth alone taking the stencil too: the depth goes
+  through the staging buffer now.
+- **Checks** (1c44ceab7, merged with master at 3228b825d): tests/psp 513/0 (sanitized), tests/allegrex 68/0,
+  tests/psp/ares 340/0; CI on 1c44ceab7 green. Hashes as above, against master as merged in.
+- **Speed** (the M1, two rounds, master -> branch): Vulkan fast at 1x 2-5% slower in the four scenes (Hammerin' Hero
+  168.9 -> 164.8, Jeanne d'Arc 277.3 -> 264.0, Cars 17.76 -> 17.06, Colin McRae 69.9 -> 68.5), at 4x about 7%
+  (Hammerin' Hero 46.7 -> 43.6, Cars 8.09 -> 7.48): the depth copies, Cars' read back and wait, and what's drawn now.
+  To measure on the RP6.
 - **Left**: depth between depth buffers of other row widths over the same memory; the CPU's loads, block transfers and
   palette loads through the depth views, and a texture over depth through VRAM's plain copies; a 4444 frame buffer's
   INCREMENT and DECREMENT; a fail or depth-fail operation's stencil in a texture copied on the GPU.

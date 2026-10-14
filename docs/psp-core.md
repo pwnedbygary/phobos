@@ -12447,10 +12447,12 @@ weights, which the CPU transforms in accurate mode), so their pixels were failin
    drawn (`Target::depthKept`): Cars' later strips find memory has it. A depth that couldn't be read back isn't kept,
    for the next texture to take again. The targets' pixels and pages stay the GPU's.
 
-**The other scenes.** The kit's 21 scenes (`~/phobos-work/scratch/ge-headroom`'s, copied), master against the branch,
-100 frames from each state, every frame's picture and VRAM hashed (drawing settled), then the end's RAM and machine:
-Software the same in all 21 and in the three games' scenes (24 of 24); Vulkan accurate and fast each the same in 19 of
-the 21. The two others had the same bug, and changed by the depth's taking alone (each change turned off in turn):
+**The other scenes.** The kit's 21 scenes (`~/phobos-work/scratch/ge-headroom`'s, copied), the final code (1c44ceab7)
+against master as merged in (3228b825d), 100 frames from each state, every frame's picture and VRAM hashed (drawing
+settled), then the end's RAM and machine: Software the same in all 21 and in the three games' scenes (24 of 24);
+Vulkan accurate and fast each the same in 19 of the 21 (as before the review's points, against master at 542da5a28,
+the differing scenes' first differing frames the same). The two others had the same bug, and changed by the depth's
+taking alone (each change turned off in turn):
 - **Colin McRae Rally 2005 Plus**' race draws its scene into the screen's 5551 frame buffer, then 130 PRIMs a frame into
   a frame buffer at 0xcc000 of the same row width against the same depth buffer: its terrain shadows, which part 83
   left, putting them down to depth across row widths (a frame buffer 256 pixels wide over the same memory is drawn
@@ -12474,7 +12476,25 @@ pixels more than 24 apart, master -> branch):
 interpolated. Jeanne d'Arc's frame 20, the map's camera moving, is as far from Software in both builds, 3.03 and 2.86
 accurate: the whole picture a little apart, its units drawn in both.)
 
-**Speed**: pending (the three games and Colin McRae's race, master against the branch, both Vulkan modes).
+**Speed** (the kit's runners, master as merged in against the final code, 300 frames from each state, late frames at 1x
+and the pipelines kept, the builds in turns over two rounds; the Mac's load 9-31, which moved single runs by a fifth to
+a half: the means are what to read, frames a second, and the GPU's waits in ms a frame where they're more than a
+tenth):
+
+| Scene | Vulkan fast, 1x | Vulkan fast, 4x | Vulkan accurate, 1x |
+|---|---|---|---|
+| Hammerin' Hero | 168.9 -> 164.8 (-2.4%) | 46.7 -> 43.6 (-6.6%), waits 12.5 -> 15.1 | 8.08 -> 6.54 (8.3/7.8, 8.1/5.0) |
+| Jeanne d'Arc | 277.3 -> 264.0 (-4.8%) | | 4.09 -> 3.75 (5.3/2.9, 3.8/3.7) |
+| Cars Race-O-Rama | 17.76 -> 17.06 (-3.9%), waits 26.3 -> 28.9 | 8.09 -> 7.48 (-7.5%), waits 95 -> 104 | 12.31 -> 11.41, waits 41 -> 53 |
+| Colin McRae's race | 69.9 -> 68.5 (-2.0%) | | |
+
+What it costs: the depth copies (two or three a frame in Hammerin' Hero, Jeanne d'Arc and Colin McRae: a screen's depth,
+through the staging buffer, at 4x sixteen times as much), Cars' read back of its depths and the wait for it (once a
+frame), and the characters, units and shadows drawn now, which failed their tests before. Accurate mode on MoltenVK
+splits every overlapping blended primitive (part 49), so its rounds swing most (Jeanne d'Arc's base 5.3 then 2.9). The
+review's point about the copy a double-buffered game makes into the screen it then clears stands: a clear's region
+doesn't say which pixels its primitives cover, so the copy can't be cut to what it leaves without them; left for a
+follow-up, with the RP6's numbers (a tile-based GPU may weigh the copies differently).
 
 Still not done: depth between depth buffers of other row widths over the same memory, and an older, wider frame
 buffer's columns past the newest one's put into memory; the CPU's loads, block transfers and palette loads through
@@ -12483,7 +12503,10 @@ buffer's INCREMENT and DECREMENT (by one on the GPU, by 16 on the PSP); the sten
 leaves, in the color's alpha a texture taken on the GPU reads; a target holding the only newest depth let go of for
 room (32 targets), or drawn with another depth buffer, loses it, as before.
 
-**Tests** (tests/psp/gpu.cpp, in both modes, the first three at 1x and 2x; TESTS-BEFORE):
+**Tests** (tests/psp/gpu.cpp, in both modes, the first three at 1x and 2x; on master's core, 3228b825d, with only the
+two statistics and the depth conversions added so they build, the first three fail on their pictures in every mode
+and resolution, 7,424, 4,608 and 16,832 bytes apart; memory's changes around a put depth on its counts alone, as there
+the target takes nothing and fills from memory, which the CPU wrote whole; the conversions pass):
 - "a depth buffer two frame buffers draw with": a sprite into the second frame buffer behind what the first drew is
   drawn only where the first drew nothing, then the first's behind what the second drew since, likewise, then a 3D
   mesh into the second (fast mode's GPU transform) behind what the first drew since; each keeps its own stencil.
@@ -12497,9 +12520,24 @@ room (32 targets), or drawn with another depth buffer, loses it, as before.
 - "depths as the depth formats keep them, and back": all 65,536 depths through D32 and D24 and back (D24 whichever way
   the GPU rounds; the M1 takes D32), no GPU needed.
 
-**Checks**: pending (the three suites on the merge with master).
+**Checks.** On the final code (1c44ceab7, merged with master at 3228b825d): `tests/psp/run-tests.sh` 513 groups, 0
+failures (sanitized; 4 new GPU groups); `tests/allegrex/run-tests.sh` 68 groups, 0 failures;
+`tests/psp/ares/run-tests.sh` 340 checks, 0 failed (the merge before the review's points the same: 512, 68 and 340).
+CI on 1c44ceab7 green: the PSP system tests (GCC, Mesa's lavapipe), the Allegrex tests, and the Android, Windows,
+macOS and Linux builds. The hash comparison of the final code: above ("The other scenes").
 
-**The review**: pending (an independent read-only review of the branch).
+**The review.** An independent read-only review of the branch (to d673bf4fb) found no blocker or major point, and
+nothing that could change the software renderer. Its points, all taken but the clear's copy, measured instead
+(b042ddb15, e620356f1, 1c44ceab7): a narrower frame buffer's columns past a taken depth left as they'd be without it,
+and of targets as new over one depth buffer the widest put (by their order, not their addresses); a 5551 REPLACE of
+0 a ZERO, so one reference serves every combination; MASK_ALPHA keeping every bit of a 16-bit stencil leaving the
+color's alpha; `forget()` resetting the depths' serials; a depth not read back, or of another size, not kept; a depth
+buffer past VRAM's end told to memory and watched in two parts; and tests: each frame buffer's own stencil, which
+caught MoltenVK's copy of an image's depth alone taking its stencil too (the depth goes through the staging buffer
+now, image to buffer to image), the comparison against 255, DECREMENT as the fail's operation and both as the depth
+fail's, memory's changes around a taken and a put depth, a 3D mesh in fast mode, and the depth formats' conversions
+shared and tested over all 65,536 depths; and the docs' wording (depth buffers, not frame buffers, of other row
+widths; Twisted Metal's fast mode; what still reads memory's depth).
 
 Scratch: `~/phobos-work/scratch/vk-models` (`patches/dbg-patch.py` and `dbg2-patch.py`, the PRIM log and the changes'
 switches; `kit/`, the hash and picture runs; `png/`, the sheets; `tests1.sh`, `suites.sh`).
