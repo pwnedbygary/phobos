@@ -1,6 +1,5 @@
 package com.phobos.emulator.ui.theme
 
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
 import com.phobos.emulator.data.CrtBackdropScene
 import org.junit.Assert.assertTrue
@@ -9,10 +8,27 @@ import org.junit.Test
 /**
  * WCAG checks for the CRT terminal style, for every [styleVariants] palette, on the composited 8-bit
  * colors. Text drawn on the backdrop sits on a solid plate of the background, except the top bar's
- * title, which is large text (3:1) over the backdrop's phosphor bloom, scanlines and vignette.
+ * title, which is large text (3:1) over the backdrop's phosphor bloom, reflection, refresh band, grain,
+ * scanlines and vignette.
  */
 class CrtContrastTest {
     private val black = 0xFF000000.toInt()
+    private val white = 0xFFFFFFFF.toInt()
+
+    /**
+     * The most of the bloom's strength under the top bar (64 dp: on a landscape phone about a sixth of the
+     * height, a fifth with a status bar above it edge to edge; less of a portrait one's), on landscape screens
+     * from 4:3 to 21:9.
+     */
+    private val underTopBar: Float = listOf(1600 to 1200, 1920 to 1080, 2520 to 1080).maxOf { (w, h) ->
+        (0 until h / 5 step 4).maxOf { y -> (0 until w step 16).maxOf { x -> CrtScreen.bloomAt(x, y, w, h) } }
+    }
+
+    /** [color] a level of grain lighter or darker. */
+    private fun grain(color: Int, by: Int): Int {
+        fun channel(shift: Int) = ((color shr shift and 0xFF) + by).coerceIn(0, 255) shl shift
+        return (0xFF shl 24) or channel(16) or channel(8) or channel(0)
+    }
 
     @Test
     fun textOnThePlateReachesAa() {
@@ -30,13 +46,17 @@ class CrtContrastTest {
     fun topBarTitleStandsOutFromTheBackdrop() {
         val failures = styleVariants.flatMap { v ->
             val s = v.scheme
-            // Brightest: each phosphor's bloom center, between scanlines and on one. Darkest: a scanline under the vignette's full strength.
+            // Brightest: each phosphor's bloom as strong as it gets under the top bar, the glass's reflection, the
+            // refresh band's peak and a level of grain, between scanlines and on one. Darkest: a scanline under
+            // the vignette's full strength, a level of grain darker.
             val blooms = CrtBackdropScene.entries.flatMap { scene ->
-                val bloom = lerp(s.background, crtBloomColor(s, scene), crtBloom(v.isDark)).toArgb()
-                listOf("the ${scene.label} bloom" to bloom, "a scanline on the ${scene.label} bloom" to blend(black, bloom, paintAlpha(crtScanline(v.isDark))))
+                val phosphor = crtBloomColor(s, scene).toArgb()
+                val glow = blend(phosphor, s.background.toArgb(), crtBloom(v.isDark) * underTopBar.toDouble())
+                val lit = grain(blend(phosphor, blend(white, glow, CrtScreen.REFLECTION.toDouble()), paintAlpha(crtBand(v.isDark))), 1)
+                listOf("the ${scene.label} bloom" to lit, "a scanline on the ${scene.label} bloom" to blend(black, lit, crtScanlineRows(v.isDark).max().toDouble()))
             }
-            val vignette = blend(black, s.background.toArgb(), paintAlpha(crtVignette(v.isDark)))
-            val darkest = blend(black, vignette, paintAlpha(crtScanline(v.isDark)))
+            val vignette = blend(black, s.background.toArgb(), crtVignette(v.isDark).toDouble())
+            val darkest = grain(blend(black, vignette, crtScanlineRows(v.isDark).max().toDouble()), -1)
             (blooms + ("a dark scanline" to darkest)).mapNotNull { (where, backdrop) ->
                 val ratio = wcagContrast(s.primary.toArgb(), backdrop)
                 if (ratio < 3.0) "${v.name}: the top bar's title over $where: ${twoPlaces(ratio)}" else null

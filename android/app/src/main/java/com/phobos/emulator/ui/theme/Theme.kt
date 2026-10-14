@@ -54,7 +54,7 @@ data class PhobosThemeInfo(
     /** Glass panel and backdrop values for [scheme]; they switch at once while the colors cross-fade. */
     val glass: GlassStyle,
     /** The scene behind the pages in the Pixel art style. */
-    val pixelBackdrop: PixelBackdropScene = PixelBackdropScene.SPACE,
+    val pixelBackdrop: PixelBackdropScene = PixelBackdropScene.SAKURA_CYCLE,
     val mangaBackdrop: MangaBackdropScene = MangaBackdropScene.TONE,
     val rpgBackdrop: RpgBackdropScene = RpgBackdropScene.LATTICE,
     val retrowaveBackdrop: RetrowaveBackdropScene = RetrowaveBackdropScene.SUNSET,
@@ -87,7 +87,7 @@ fun PhobosTheme(
     followSystem: Boolean = false,
     effects: UiEffects = UiEffects.NONE,
     glassEffects: GlassEffects = GlassEffects.FULL,
-    pixelBackdrop: PixelBackdropScene = PixelBackdropScene.SPACE,
+    pixelBackdrop: PixelBackdropScene = PixelBackdropScene.SAKURA_CYCLE,
     mangaBackdrop: MangaBackdropScene = MangaBackdropScene.TONE,
     rpgBackdrop: RpgBackdropScene = RpgBackdropScene.LATTICE,
     retrowaveBackdrop: RetrowaveBackdropScene = RetrowaveBackdropScene.SUNSET,

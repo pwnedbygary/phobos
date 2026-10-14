@@ -1,7 +1,7 @@
 package com.phobos.emulator.ui
 
 /**
- * Resolves a library system name to the platform-art slug shared by asset and Canvas icon packs.
+ * Resolves a library system name to its platform-art slug, which [consoleArtFor] takes to the console drawn.
  *
  * The established names intentionally match the Systematic SVG basenames where those assets exist.
  */
@@ -55,4 +55,24 @@ val systemIconSlugs: Set<String> = setOf(
     "n64", "gb", "gbc", "gba", "sms", "genesis", "sega32", "gamegear", "segacd", "psx", "psp",
     "neogeomvs", "neo-geo-cd", "neo-geo-pocket", "neo-geo-pocket-color", "zx-spectrum",
     "pce", "pcecd", "supergrafx", "wonderswan", "wonderswan-color", "pcv2", "msx", "msx2",
+)
+
+/**
+ * The console art (a basename under assets/platforms) drawn for [slug], in every style's treatment. The set
+ * has no Super Game Boy, PC Engine LD or Pocket Challenge V2: they take the console each runs on or as, the
+ * Super Famicom, the LaserActive and the WonderSwan.
+ */
+fun consoleArtFor(slug: String): String? = when (slug) {
+    "sgb" -> "snes"
+    "pceld" -> "laseractive"
+    "pcv2" -> "wonderswan"
+    else -> slug.takeIf { it in CONSOLE_ART }
+}
+
+/** The console art under assets/platforms the Library draws: BAXY Square's Systematic set, and Phobos's PSP in its style. */
+val CONSOLE_ART: Set<String> = setOf(
+    "atari2600", "colecovision", "nes", "snes", "arcade", "laseractive", "n64",
+    "gb", "gbc", "gba", "sms", "genesis", "sega32", "gamegear", "segacd", "psx", "psp",
+    "neogeomvs", "neo-geo-cd", "neo-geo-pocket", "neo-geo-pocket-color", "zx-spectrum",
+    "pce", "pcecd", "supergrafx", "wonderswan", "wonderswan-color", "msx", "msx2",
 )

@@ -27,10 +27,22 @@ class LicenseNoticesTest {
         assertTrue(notices.all { it.text.isNotBlank() })
         val expected = listOf(
             "MAME (portions)", "paraLLEl-RDP", "volk", "sse2neon", "miniz", "Zstandard", "libadrenotools",
-            "Vulkan-Headers", "puff", "Systematic console icons", "ZX Spectrum", "Android and Kotlin libraries", "C-BIOS",
+            "Vulkan-Headers", "font-rs", "puff", "Systematic console icons", "ZX Spectrum", "Android and Kotlin libraries", "C-BIOS",
             "FFmpeg", "MinGW-w64 runtime",
         )
         for (name in expected) assertTrue("no notice for $name", titles.any { it.startsWith(name) })
+    }
+
+    @Test fun theSystematicNoticeCoversTheConsolesDerivedFromIt() {
+        val notices = parseLicenseNotices(File("../../LICENSE").readText())
+        val systematic = notices.single { it.title.startsWith("Systematic console icons") }.text.replace(Regex("\\s+"), " ")
+        assertTrue("the MIT license", systematic.contains("Permission is hereby granted, free of charge"))
+        for (derived in listOf("ConsolePixels.kt", "tools/console-art/pixelate.py", "ConsoleTreatment.kt")) {
+            assertTrue("the notice names $derived", systematic.replace(" ", "").contains(derived))
+            val path = if (derived.startsWith("tools/")) "../../$derived" else "src/main/java/com/phobos/emulator/ui/theme/$derived"
+            assertTrue("$derived is where the notice says", File(path).exists())
+        }
+        assertTrue("no notice for the removed glyph packs", notices.none { it.title.contains("glyph", ignoreCase = true) })
     }
 
     @Test fun ffmpegsNoticeCarriesItsLicenseAndWhereItsSourceIs() {

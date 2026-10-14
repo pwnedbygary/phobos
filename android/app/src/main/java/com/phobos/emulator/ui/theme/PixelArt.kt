@@ -4,10 +4,7 @@ import androidx.compose.material3.ColorScheme
 import com.phobos.emulator.data.PixelBackdropScene
 import kotlin.math.PI
 import kotlin.math.floor
-import kotlin.math.min
-import kotlin.math.roundToInt
 import kotlin.math.sin
-import kotlin.math.sqrt
 import kotlin.random.Random
 
 /**
@@ -30,14 +27,11 @@ internal abstract class PixelArt(val cols: Int, val rows: Int) {
         const val FRAME_MS = 16L
 
         fun of(scene: PixelBackdropScene, cols: Int, rows: Int, scheme: ColorScheme, isDark: Boolean): PixelArt = when (scene) {
-            PixelBackdropScene.SPACE -> SpaceArt(cols, rows, pixelSceneColors(scheme, isDark))
-            PixelBackdropScene.NIGHT_DRIVE -> NightDriveArt(cols, rows, pixelPalette(scheme, isDark))
-            PixelBackdropScene.PLAINS -> PlainsArt(cols, rows, pixelPalette(scheme, isDark))
             PixelBackdropScene.SAKURA_CYCLE -> SakuraArt(cols, rows, pixelPalette(scheme, isDark), SakuraMode.CYCLE)
-            PixelBackdropScene.SAKURA_NIGHT -> SakuraArt(cols, rows, pixelPalette(scheme, isDark), SakuraMode.NIGHT)
             PixelBackdropScene.SAKURA_DAY -> SakuraArt(cols, rows, pixelPalette(scheme, isDark), SakuraMode.DAY)
-            PixelBackdropScene.UNDERWATER -> UnderwaterArt(cols, rows, pixelPalette(scheme, isDark))
-            PixelBackdropScene.CASTLE -> CastleArt(cols, rows, pixelPalette(scheme, isDark))
+            PixelBackdropScene.SAKURA_NIGHT -> SakuraArt(cols, rows, pixelPalette(scheme, isDark), SakuraMode.NIGHT)
+            PixelBackdropScene.PLAINS -> PlainsArt(cols, rows, pixelPalette(scheme, isDark))
+            PixelBackdropScene.NIGHT_DRIVE -> NightDriveArt(cols, rows, pixelPalette(scheme, isDark))
         }
     }
 }
@@ -156,9 +150,10 @@ internal class StarField(private val cols: Int, private val rows: Int, skyRows: 
         }
     }
 
-    /** The stars at rest, in [color]. */
-    fun paint(out: IntArray, color: Int) {
+    /** The stars at rest, in [color]: [shown] of them, from 0 to 1, the brightest first, as they come out at dusk. */
+    fun paint(out: IntArray, color: Int, shown: Float = 1f) {
         for (i in xs.indices) {
+            if (glow[i] < 1f - shown) continue
             val x = xs[i]
             val y = ys[i]
             when {
@@ -172,8 +167,8 @@ internal class StarField(private val cols: Int, private val rows: Int, skyRows: 
         }
     }
 
-    /** The stars twinkling at [time], over the stars at rest. */
-    fun twinkle(time: Long, out: IntArray, color: Int) {
+    /** The stars twinkling at [time], over the stars at rest; only those of the [shown] that are out. */
+    fun twinkle(time: Long, out: IntArray, color: Int, shown: Float = 1f) {
         if (xs.isEmpty()) return
         val slot = Math.floorDiv(time, TWINKLE_EVERY)
         for (k in slot - TWINKLE_LENGTH / TWINKLE_EVERY..slot) {
@@ -183,6 +178,7 @@ internal class StarField(private val cols: Int, private val rows: Int, skyRows: 
             val level = floor(sin(PI * phase).toFloat() * 4f) / 4f
             if (level <= 0f) continue
             val star = Math.floorMod(PixelKit.hash(k.toInt() * 31 + seed), xs.size)
+            if (glow[star] < 1f - shown) continue
             val x = xs[star]
             val y = ys[star]
             PixelKit.blend(out, cols, rows, x, y, color, 0.4f + 0.6f * level)
@@ -203,66 +199,5 @@ internal class StarField(private val cols: Int, private val rows: Int, skyRows: 
 
         /** Each of its eight brightness steps lasts about 300 ms, longer than the scenes' 250 ms between redraws. */
         const val TWINKLE_LENGTH = 2400L
-    }
-}
-
-/**
- * Now and then, tens of seconds apart at random, a shooting star streaking down across part of the sky
- * above [floorRow], with a short tail that grows and fades.
- */
-internal class Meteors(private val cols: Int, private val rows: Int, private val floorRow: Int, private val seed: Int) {
-    /** When the shooting star of [window] starts, or null when that window has none. */
-    private fun start(window: Long): Long? {
-        val h = PixelKit.hash(window.toInt() * 7919 + seed)
-        if ((h and 0xFF) >= 170) return null
-        return window * WINDOW + (PixelKit.unit(h, 1) * (WINDOW - LENGTH)).toLong()
-    }
-
-    /** Whether a shooting star is in flight at [time]. */
-    fun flying(time: Long): Boolean {
-        val begin = start(Math.floorDiv(time, WINDOW)) ?: return false
-        return time >= begin && time < begin + LENGTH
-    }
-
-    /** How long from [time] until the next shooting star, or 0 while one is in flight. */
-    fun untilNext(time: Long): Long {
-        val window = Math.floorDiv(time, WINDOW)
-        for (w in window..window + 2) {
-            val begin = start(w) ?: continue
-            if (time < begin) return begin - time
-            if (time < begin + LENGTH) return 0
-        }
-        return WINDOW
-    }
-
-    /** The shooting star in flight at [time], if any, in [color]. */
-    fun paint(time: Long, out: IntArray, color: Int) {
-        val window = Math.floorDiv(time, WINDOW)
-        val begin = start(window) ?: return
-        val progress = (time - begin) / LENGTH.toFloat()
-        if (progress < 0f || progress >= 1f || floorRow < 4) return
-        val h = PixelKit.hash(window.toInt() * 7919 + seed)
-        val x0 = cols * (0.15f + 0.7f * PixelKit.unit(h, 3))
-        val y0 = floorRow * (0.05f + 0.3f * PixelKit.unit(h, 4))
-        val slope = 0.3f + 0.3f * PixelKit.unit(h, 5)
-        val length = sqrt(1f + slope * slope)
-        val ux = (if (PixelKit.unit(h, 2) < 0.5f) -1f else 1f) / length
-        val uy = slope / length
-        // As far as a quarter or so of the width, but never down to the floor.
-        val distance = min(cols * (0.2f + 0.15f * PixelKit.unit(h, 6)), (floorRow - 2 - y0) / uy)
-        if (distance <= 0f) return
-        val headX = x0 + ux * distance * progress
-        val headY = y0 + uy * distance * progress
-        val fade = if (progress < 0.75f) 1f else (1f - progress) / 0.25f
-        val tail = (3 + 9 * sin(PI * progress)).roundToInt()
-        for (k in 0..tail) {
-            val amount = (1f - k / (tail + 1f)) * fade
-            PixelKit.blend(out, cols, rows, (headX - ux * k).roundToInt(), (headY - uy * k).roundToInt(), color, amount)
-        }
-    }
-
-    companion object {
-        const val WINDOW = 23_000L
-        const val LENGTH = 900L
     }
 }

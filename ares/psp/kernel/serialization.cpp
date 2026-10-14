@@ -71,6 +71,7 @@ static auto poolHolds(const Kernel::Pool& pool, const std::vector<Kernel::Block>
 auto Kernel::serialize(serializer& s) -> bool {
   bool valid = true;
   if(s.reading()) trampoline();  //(memory has loaded: the kernel's own code is this kernel's, whatever the state's)
+  if(s.reading()) spin = {};     //(not saved: spins.cpp)
   //where the state ends: what nall's serializer reads past it is zeros, not the state's
   u32 end = s.capacity();
   auto check = [&](bool good) { if(s.reading() && !good) valid = false; };

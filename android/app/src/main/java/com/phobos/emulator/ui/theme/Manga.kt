@@ -1,6 +1,6 @@
 package com.phobos.emulator.ui.theme
 
-import android.graphics.Bitmap
+import android.content.res.Resources
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -8,7 +8,6 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
@@ -26,15 +25,11 @@ import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageShader
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.addOutline
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -42,6 +37,7 @@ import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -57,11 +53,8 @@ import com.phobos.emulator.R
 import com.phobos.emulator.data.MangaBackdropScene
 import kotlin.math.PI
 import kotlin.math.cos
-import kotlin.math.floor
 import kotlin.math.max
-import kotlin.math.roundToInt
 import kotlin.math.sin
-import kotlin.math.sqrt
 
 /** Bangers (SIL Open Font License 1.1; see LICENSE), comic-book sound-effect lettering, for headings. */
 val MangaHeadingFont = FontFamily(Font(R.font.bangers))
@@ -117,11 +110,10 @@ private val CAPTION_LINE = 1.5.dp
 private val CAPTION_REACH_X = 6.dp
 private val CAPTION_REACH_Y = 3.dp
 
-/** Dot spacing along a row of the screentone, whose rows are half this apart and offset, a grid turned 45 degrees. */
-private val TONE_PITCH = 8.dp
-
 /**
- * The manga backdrop: a screentone page, radiating speed lines, or an ink splash page.
+ * The manga backdrop ([MangaPage]): a screentone page, focus lines, a magazine cover or Truck-kun, in the
+ * theme's ink tone on its paper. [scheme] should be the theme's final colors: the page is drawn again
+ * whenever they change.
  */
 @Composable
 fun MangaBackdrop(
@@ -130,75 +122,38 @@ fun MangaBackdrop(
     scene: MangaBackdropScene = MangaBackdropScene.TONE,
     modifier: Modifier = Modifier,
 ) {
-    Spacer(
-        modifier.drawWithCache {
-            val paper = scheme.background
-            val ink = mangaTone(scheme, isDark)
-            when (scene) {
-                MangaBackdropScene.TONE -> {
-                    val pitch = max(4, TONE_PITCH.toPx().roundToInt())
-                    val rows = pitch / 2f
-                    val height = max(1, size.height.roundToInt())
-                    val pixels = IntArray(pitch * height)
-                    val largest = rows * 0.62f
-                    for (y in 0 until height) {
-                        val t = ((y.toFloat() / height - 0.25f) / 0.75f).coerceIn(0f, 1f)
-                        val radius = largest * t * t * (3 - 2 * t)
-                        val row = floor(y / rows).toInt()
-                        for (x in 0 until pitch) {
-                            var coverage = 0f
-                            if (radius > 0f) {
-                                for (r in row - 1..row + 1) {
-                                    val dy = y + 0.5f - (r + 0.5f) * rows
-                                    val offset = if (r % 2 == 0) 0f else pitch / 2f
-                                    for (k in -1..1) {
-                                        val dx = x + 0.5f - (offset + k * pitch)
-                                        coverage = max(coverage, (radius - sqrt(dx * dx + dy * dy) + 0.5f).coerceIn(0f, 1f))
-                                    }
-                                }
-                            }
-                            pixels[y * pitch + x] = lerp(paper, ink, coverage).toArgb()
-                        }
-                    }
-                    val column = Bitmap.createBitmap(pixels, pitch, height, Bitmap.Config.ARGB_8888).asImageBitmap()
-                    val brush = ShaderBrush(ImageShader(column, TileMode.Repeated, TileMode.Clamp))
-                    onDrawBehind { drawRect(brush) }
+    val paper = scheme.background.toArgb()
+    val ink = mangaTone(scheme, isDark).toArgb()
+    val resources = LocalContext.current.resources
+    RenderedBackdrop(listOf("manga", paper, ink, scene), Color(paper), modifier) { width, height ->
+        val lettered = scene == MangaBackdropScene.COVER || scene == MangaBackdropScene.TRUCK
+        MangaPage.render(width, height, paper, ink, scene, if (lettered) MangaLettering.of(resources) else null)
+    }
+}
+
+/**
+ * Bangers' outlines for the lettered manga backdrops, read from its font resource the first time one is
+ * drawn; null, once and for all, if it can't be read, and the scenes leave their words out.
+ */
+private object MangaLettering {
+    @Volatile
+    private var read = false
+    private var lettering: Lettering? = null
+
+    fun of(resources: Resources): Lettering? {
+        if (!read) synchronized(this) {
+            if (!read) {
+                val bytes = try {
+                    resources.openRawResource(R.font.bangers).use { it.readBytes() }
+                } catch (e: Exception) {
+                    null
                 }
-                MangaBackdropScene.SPEED_LINES -> onDrawBehind {
-                    drawRect(paper)
-                    val center = Offset(size.width / 2f, size.height / 2f)
-                    val reach = size.maxDimension
-                    repeat(48) { index ->
-                        val angle = 2 * PI * index / 48 + (index % 3) * 0.035
-                        val start = reach * (0.10f + (index % 5) * 0.025f)
-                        val end = reach * (0.68f + (index % 4) * 0.10f)
-                        val from = Offset(center.x + cos(angle).toFloat() * start, center.y + sin(angle).toFloat() * start)
-                        val to = Offset(center.x + cos(angle).toFloat() * end, center.y + sin(angle).toFloat() * end)
-                        drawLine(ink.copy(alpha = 0.52f), from, to, strokeWidth = 1.2.dp.toPx())
-                    }
-                }
-                MangaBackdropScene.SPLASH -> onDrawBehind {
-                    drawRect(paper)
-                    val center = Offset(size.width * 0.52f, size.height * 0.48f)
-                    val splash = Path().apply {
-                        repeat(28) { index ->
-                            val angle = 2 * PI * index / 28
-                            val radius = size.minDimension * (if (index % 4 == 0) 0.24f else 0.16f + (index % 3) * 0.025f)
-                            val point = Offset(center.x + cos(angle).toFloat() * radius, center.y + sin(angle).toFloat() * radius)
-                            if (index == 0) moveTo(point.x, point.y) else lineTo(point.x, point.y)
-                        }
-                        close()
-                    }
-                    drawPath(splash, ink.copy(alpha = 0.7f))
-                    repeat(22) { index ->
-                        val x = if (index % 2 == 0) size.width * 0.08f else size.width * 0.92f
-                        val y = size.height * ((index + 1) / 23f)
-                        drawCircle(ink.copy(alpha = 0.28f), radius = (1 + index % 3).dp.toPx(), center = Offset(x, y))
-                    }
-                }
+                lettering = bytes?.let(::letteringOf)
+                read = true
             }
-        },
-    )
+        }
+        return lettering
+    }
 }
 
 /**
@@ -245,7 +200,7 @@ object MangaUi : SolidUi() {
 
     @Composable
     override fun Backdrop(modifier: Modifier) =
-        MangaBackdrop(MaterialTheme.colorScheme, LocalPhobosTheme.current.isDark, LocalPhobosTheme.current.mangaBackdrop, modifier)
+        MangaBackdrop(LocalPhobosTheme.current.scheme, LocalPhobosTheme.current.isDark, LocalPhobosTheme.current.mangaBackdrop, modifier)
 
     /** A caption box: paper inside a thin ink line, like a narration box. */
     @Composable
