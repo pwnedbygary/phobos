@@ -32,7 +32,8 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP I/O: memory stick files emptied as they're opened keep their bytes (LittleBigPlanet's install), and the runner's file I/O trace — 2026-10-14
 
-Branch `cursor/psp-installs-2b67`, on master `dd37263c8`; docs/psp-core.md, part 95, has the evidence. Clean room:
+Branch `cursor/psp-installs-2b67`, on master `dd37263c8`, merged with `e78b4a364` (part 93; only the docs met); draft
+PR #257. docs/psp-core.md, part 95, has the evidence. Clean room:
 PPSSPP's issue 579 and its directory file system's comments read as the hardware's description, none of its code;
 JPCSP not read. Save states: layout 32 (31 and older load as before; `tests/psp/ares/system.cpp` now refuses 33).
 - **The bug** (deep play batch 04's bug 1, high): LittleBigPlanet's first-boot install left GUI.ARC's first 4 MiB zero,
@@ -48,8 +49,9 @@ JPCSP not read. Save states: layout 32 (31 and older load as before; `tests/psp/
   on the host; its descriptor holds the PSP's length of it, from 0, which reads, seeks from the end, sceIoGetstat, a
   folder's entries and appends see; writes raise it; closing the file (sceIoClose, sceIoCloseAsync, the kernel powering
   on) cuts the host file to it. A state keeps the length; loading a state changes nothing on the stick.
-- **LittleBigPlanet now**: GUI.ARC byte for byte the disc's archives/gui.arc; the game reaches its first level and
-  Sackboy walks (PNGs in deepplay/LittleBigPlanet: sheet-fx2.png, quad-sk2.png, sheet-mv2.png).
+- **LittleBigPlanet now**: GUI.ARC byte for byte the disc's archives/gui.arc; one boot from a fresh stick reaches its
+  first level, where Sackboy walks, and a second boot takes the installed data (deepplay/LittleBigPlanet:
+  fixed-path.txt, sheet-fx4.png, z-fixed-install-to-level.png, sheet-fx4b.png).
 - **Kingdom Hearts BbS FM's DATA INSTALL** (bug 3, medium), traced, not fixed: it uses the system's game data install
   dialog (sceUtilityGamedataInstall), part 37's cancel stub, so nothing is copied and the game's clean-up finds no
   ULJM05775DATA folder. Needs that utility implemented (a feature of its own).
