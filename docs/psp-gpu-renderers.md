@@ -285,7 +285,8 @@ or 8888, not swizzled) or palette indices of as many bits (below), its row width
 inside the target. Then
 the GE doesn't decode it, and the renderer copies the part of the target the texture covers into a texture of its own
 on the GPU, in order with the draws, for the PRIM to sample. One copy is kept for each target and place (part 65; for
-each size before), serving the PRIMs that take as much of it or less, each held to what it takes (`Push::held`), and
+each size before), serving the PRIMs that take as much of it or less, each held to what it takes (the vertices'
+`GPU::Vertex::taken()`, so that PRIMs taking more or less of one copy are one draw: part 92), and
 made again to the next power of two for one that takes more (God of War draws a picture back over the screen in 272
 tiles a time, each reaching further); it's taken again where the target has changed since; the draws before sample it
 as it was, as the GPU runs the commands in order. Taken again from the same place, only the part of the target changed
@@ -663,6 +664,14 @@ the design; none of its code is used, copied or translated.
   its settings' block, and a skinned one's bones differ from PRIM to PRIM; Peace Walker draws 5,000 PRIMs a frame of
   three triangles each, which the GPU's way made slower); clear mode (each triangle's stencil from its own last
   corner); and a PRIM whose pipeline the driver won't make (`Backend::drawable()`, asked before anything's recorded).
+- **The GE's own 3D triangles among the meshes** (`GPU::screenTriangle()`, docs/psp-core.md, part 92): those of a
+  PRIM left to the GE, and a mesh's cut at the near plane, are recorded as models placed already (`Model::OnScreen`:
+  the GE's place, depth, clip w, q, fog, coordinates, colors and flags), with the PRIM's state as its meshes take it,
+  and `transform.vert` hands them on with `draw.vert`'s arithmetic on the same numbers: the same pixels as a draw of
+  their own, and the meshes before and after them, the small PRIMs between, one draw. (Army of Two drew 3,144 draws a
+  frame alternating between the two, 642 now; Ghost of Sparta's menu 3,684, now 346.) `draw.vert` doesn't declare
+  its position invariant as `transform.vert` does, so a driver could compile the same expression apart in the two:
+  fast mode's corners alone, by a float's rounding.
 - **The filter chosen once a triangle**, as the GE chooses it: `draw.frag` takes the texels a pixel covers from the
   texture coordinates straight across the screen (`vertexTexels`, `noperspective`), whose steps are the triangle's
   own texels to its pixels: the GE's ratio exactly, for a triangle the GE didn't cut.
@@ -674,7 +683,10 @@ the design; none of its code is used, copied or translated.
 - **The start-up check** draws 3D triangles in perspective (smooth, half lit, some textured, four PRIMs of six)
   through the GPU's transform against the software renderer: at most one pixel in 50 more than 8 levels apart. Where
   that part alone fails (or the triangles never reached the GPU's transform), the check runs again with the GE
-  transforming, saying so, and fast mode goes on with the GPU's blending alone; where anything else fails, the
+  transforming, saying so, and fast mode goes on with the GPU's blending alone. It draws the GE's own 3D among the
+  meshes as well (PRIMs of six corners, lit, textured, the shine kept apart; a mesh's triangle cut at the near plane):
+  where only that fails, the check runs again with those drawn apart (`GPU::screenMeshes` off, `screenMeshesFailed`),
+  the GPU still transforming the rest. Where anything else fails, the
   software renderer draws the game, as in the accurate mode. (MoltenVK refused the first `transform.vert`, a helper
   named `signbit()` clashing with Metal's own, and the 3D drew nothing: `drawable()` and the check each catch that
   now.)

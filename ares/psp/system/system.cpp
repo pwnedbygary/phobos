@@ -720,6 +720,14 @@ auto System::startRenderer() -> void {
       pipelinesKept = gpu ? gpu->backend->pipelines : 0;
       passed = gpu && gpu->check(error);
     }
+    //(fast mode's own 3D among the GPU's failing it alone: the check again with that drawn apart, the GPU still
+    //transforming the rest)
+    if(gpu && !passed && gpu->screenMeshesFailed) {
+      report(true, "the Vulkan renderer's start-up check, its 3D transformed by the CPU among the GPU's, failed (" +
+                   error + "): checked again with that drawn apart");
+      gpu->screenMeshes = false, error.clear();
+      passed = gpu->check(error);
+    }
     //(fast mode's 3D through the GPU's transform failing it alone: the check again with the GE transforming)
     if(gpu && !passed && gpu->transformsFailed) {
       report(true, "the Vulkan renderer's start-up check, its 3D transformed by the GPU, failed (" + error +

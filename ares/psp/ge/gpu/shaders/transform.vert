@@ -34,7 +34,7 @@ struct Transformed {
                        //LIGHTING_ENABLE, 5-6 TEXTURE_MAP_MODE (0 scaled, 1 the texture matrix, 2 environment),
                        //8-11 the bone matrices each vertex mixes (0-8: skinning)
   uvec4 material;      //MATERIAL_COLOR; emissive; ambient (8888); diffuse
-  uvec4 material2;     //specular; the ambient light (8888)
+  uvec4 material2;     //specular; the ambient light (8888); the texels taken (draw.vert's flags' bits 8-27)
   vec4 viewDirection;  //where the view looks, in the world; w the specular power
   Light lights[4];
   mat4x3 bones[8];
@@ -48,7 +48,13 @@ layout(location = 3) in vec4 color;  //8888 (UNORM)
 layout(location = 4) in vec4 weightsLow;
 layout(location = 5) in vec4 weightsHigh;
 layout(location = 6) in uint transform;
-#define t blocks[transform]
+//A vertex the GE put on the screen itself (transform OnScreen: gpu.cpp's screenTriangle()), as draw.vert's: x and y
+//in pixels and the depth (position), clip w, q and fog (normal), u and v, its color, and over the first two weights
+//its shine and flags. It names no block (one a driver reads ahead of the branch is the first, which every run has).
+const uint OnScreen = 0xffffffffu;
+#define t blocks[transform == OnScreen ? 0u : transform]
+layout(location = 7) in vec4 shine;  //8888 (UNORM)
+layout(location = 8) in uint flags;
 
 layout(location = 0) noperspective out vec4 vertexColor;
 layout(location = 1) noperspective out vec4 vertexSpecular;
@@ -179,6 +185,22 @@ float shadeCoordinate(uint index, vec3 world, vec3 normal) {
 }
 
 void main() {
+  //(draw.vert's main(), each output the same arithmetic on the same numbers)
+  if(transform == OnScreen) {
+    float w = normal.x;
+    gl_Position = vec4((position.xy * push.scale - 1.0) * w, position.z / 65535.0 * w, w);
+    vertexColor = color * 255.0;
+    vertexSpecular = shine * 255.0;
+    vertexCoordinates = vec3(coordinates, normal.y);
+    vertexFog = normal.z;
+    vertexDepth = position.z;
+    vertexFlags = flags;
+    vertexStepping = vec4(0.0);
+    vertexStart = ivec2(0);
+    vertexFlatColor = vertexColor, vertexFlatSpecular = vertexSpecular;
+    vertexTexels = vec2(0.0);
+    return;
+  }
   uint bones = t.modes.w >> 8 & 15u, lighting = t.modes.w >> 4 & 1u, mapping = t.modes.w >> 5 & 3u;
   //(precise: the position's arithmetic done as written, nothing fused or reordered by the driver's compiler, which
   //put corners a sixteenth from where project() puts them more often)
@@ -258,7 +280,7 @@ void main() {
   }
   vertexCoordinates = uvq;
   vertexTexels = uvq.xy;
-  vertexFlags = 16u;  //(the filter chosen at each pixel: draw.frag)
+  vertexFlags = 16u | t.material2.z;  //(the filter chosen at each pixel: draw.frag; and the texels taken)
   vertexStepping = vec4(0.0);
   vertexStart = ivec2(0);
 }

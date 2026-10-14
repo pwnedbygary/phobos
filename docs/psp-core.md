@@ -13024,6 +13024,248 @@ review's fixes: `logs/hash-final2-*.log`, `logs/hash-final3-*.log`), `patches/tr
 `trace/` (each scene's trace and RAM), `dis.sh` (a RAM dump's words disassembled), `patches/spindebug-patch.py` (each
 proof's outcome), `quicktest.sh` (tests/psp's groups from a file alone), `mutate.py` (`mut/`), `NOTES.md`.
 
+## Part 92: the GE's front end and the GPU's draws, round 3 — the texels taken in the vertices, fast mode's small PRIMs among its meshes, a PRIM's settings kept
+
+On branch `cursor/psp-ge-speed3-2b67`, on `af542113a` (#251's head: master `239d4c80a` with #251, part 90), so that its
+diff is this round's alone; parts 91 and 89 are other branches'. Clean room: no PPSSPP code read (its GPU backend not
+opened at all), JPCSP not read; nothing of the PSP's behaviour changes. Every change is the host's: the same pixels in
+the same order, so Vulkan (accurate), Vulkan (fast) and the software renderer draw the same frames, VRAM, RAM and
+machine state as before (checked below). Save states unchanged (layout 31).
+
+**The problem.** On the owner's RP6 (v2.2.0, Vulkan fast, 1x, average and low frames a second, where PPSSPP holds about
+60): Super Monkey Ball Adventures 30.2/17.2, Army of Two 34.3/25.3, Ghost of Sparta 34.8/26.8, Colin McRae 2005 42.7/27.3,
+Twisted Metal 43.1/27.6, Death Jr. II 50.6/27.4, Sonic Rivals 56.3/30.2, Activision Hits Remixed 56.5/29.9. Part 86's
+profile had 59-69% of the emulation thread under system calls in the slowest (the GE's front end and the renderer).
+
+**How it was measured.** The Mac (M1, MoltenVK), part 85's kit copied to `~/phobos-work/scratch/ge-round3`: the bench
+runner at -O3 with thin LTO and the emulation thread's counters (its CPU time, retired instructions and cycles), from
+the 21 scenes' states; `sample` profiles of a -g build; and a counting build (`patches/gestats-patch.py`): the GE's
+commands, PRIMs and vertices by path, the GPU draws begun and joined, for each draw that couldn't join the one before
+which parts of the state differed (the pipeline, the texture, each push constant), and the Vulkan loop's binds. The
+Mac was shared with a library check, a deep-play run and other agents' builds (a load of 8 to 150), which moves single
+times by a fifth and more; host instructions a frame move far less, and carry the comparisons.
+
+**Where the time went** (base, a frame; the share of the emulation thread's samples):
+- **Fast mode's draws alternated.** Army of Two drew 3,144 GPU draws a frame, Ghost of Sparta's menu 3,684, Monkey
+  Ball 2,119, Hits Remixed 948. The commonest reason a draw couldn't join the one before was the other kind: a mesh
+  (fast mode's GPU-transformed 3D, `Command::Mesh`) after a draw of triangles the GE had transformed itself, or the
+  reverse (2,167 of Army of Two's breaks, 2,095 of Ghost of Sparta's, 970 of Monkey Ball's, 459 of Hits Remixed's).
+  Counted apart in those four, none came from a mesh's own triangles cut at the near plane: all were between PRIMs,
+  the GE's own triangles of PRIMs below `MeshLeast` (16) vertices (and a few 2D PRIMs) between the meshes. (With them
+  joined, below, Army of Two's draws of the GE's own triangles are 134 a frame, from 1,675.)
+- **`Push::held`.** The texels a PRIM takes of a larger copy of a target (render to texture, part 83) were a push
+  constant, so PRIMs taking more or less of one copy were each their own draw: Ghost of Sparta's menu 1,213 of its 1,573
+  draws in accurate mode, 1,214 breaks in fast mode; Army of Two about 315 in either.
+- **MoltenVK** encodes a run's commands as it's submitted: `vkQueueSubmit` was 15.6% of Ghost of Sparta's thread in
+  fast mode, 12.7% of Army of Two's, 6.8% of Monkey Ball's (and 8.3% of Ghost of Sparta's in accurate mode).
+- **Monkey Ball's PRIMs**: 594,000 commands, 50,400 PRIMs (48,000 of them small, transformed by the GE) and 301,000
+  vertices a frame. Each PRIM's setup: `GPU::begin()` 15% with its flushes, `settings()` 5% (the whole state built,
+  then copied), the command loop 7%, the texture's lookups, the state compared at each draw.
+- **Army of Two's meshes** (fast mode): reading the vertices 13%, `meshTriangles()` 14%, `GPU::mesh()` 9% (660,000
+  models a frame pushed one at a time), the staging copy 3%.
+- **The software renderer**: Monkey Ball's `triangleJob()` 14% (`quantize15()` 5% of it), `GE::submit()` 7%, of which
+  4% copying each triangle's job (470 bytes) into the batch after building it.
+
+**The changes:**
+1. **The texels taken in the vertices** (`GPU::Vertex::taken()`, draw.frag's `fetch()`): a copy's columns and rows a
+   PRIM takes ride in its vertices' flags (bits 8-17 and 18-27; each at most 512) and, for fast mode's meshes, in its
+   Transformed block (`material2[2]`, which transform.vert puts in the flags it hands draw.frag), not in the push
+   constants; `transformed()` keeps a block for a PRIM only where they're the same too. PRIMs taking more or less of one
+   copy are one draw.
+2. **Fast mode's small PRIMs among its meshes** (`GPU::screenTriangle()`, transform.vert's `OnScreen`): a 3D triangle
+   the GE transformed, lit and clipped itself goes into the run's models as one placed already (`Model::OnScreen`: its
+   place and depth, its clip w, q and fog in the normal, its u and v, its color, and its shine and flags over the first
+   two weights, read by two attributes over the same bytes), with the PRIM's state as its meshes take it (`meshState()`,
+   `meshDraw()`). transform.vert hands such a vertex to draw.frag as draw.vert does its own, output by output the same
+   arithmetic on the same numbers. So the meshes and the small PRIMs between them are one draw where their settings are
+   the same. The pipeline the driver must make for it is asked for as the state is recorded (a state at the back already
+   was, then); a run of only such triangles binds a block's room, which they read none of.
+3. **A PRIM's settings kept** (`GPU::settings()`, `keptSettings`): a PRIM whose settings are the last one's (its pixel
+   pipeline's, its texture's, the write masks, its target and place in it, the shading and filter, the backend's ways of
+   drawing) keeps the GPU's state as it is, its draws joining the last's without comparing the states again where it's
+   still the last recorded; not in clear
+   mode (each primitive sets the stencil there) nor for a copy of a target (taken again for each PRIM). The state is
+   built in place, not copied. `textureFor()` looks at the last texture it found first (one still alive: no other copy
+   can be at its address). The backend's pipelines are found by a hash of their key (`Pipeline::Hash`), not compared
+   byte by byte in an ordered map, and keys compare as bytes.
+4. **Fast mode's models** made room for once a PRIM and written, not pushed one at a time; `meshTriangles()` works the
+   scissor out in sixteenths once a PRIM (`Sixteenths`), not once a triangle, and keeps its corners in room made for
+   them (`handing`), handed over in runs as before.
+5. **The software renderer's triangles** set up where the batch keeps them (`triangleJob()` fills a job given it, all 0
+   as it comes; `record()` takes one already in its list), not built and then copied there.
+
+**Tried and taken back:** `transformKept()` comparing its command ranges with `memcmp()` and copying only those that
+changed: ten library calls a PRIM, on ranges mostly one word long, cost more than the compiler's own loop (Monkey Ball
+3% more instructions in the software renderer).
+
+**Exact, and how that was made sure.** Each change moves where a number is kept or when it's worked out, never the
+number: (1) the same texels taken, from a flat input instead of a push constant, in the same arithmetic; (2) the same
+vertices in the same order (a triangle's corners as draw.vert had them, so the GPU interpolates from the same corner),
+transform.vert's `OnScreen` branch draw.vert's `main()` output by output, each input the same type and format as
+draw.vert reads it (floats from float attributes, the color and shine as normalized bytes, the flags as an integer);
+fast mode's flat shading takes the last corner's colors (draw.frag's `FLAT`), which `triangleAt()` gives all three
+corners already, so they're the colors draw.vert's draws interpolated to within the `1/512` draw.frag rounds by; (3)
+every input `settings()` reads compared before its state is kept; (4) and (5) the same values in other room. One
+difference the GPU could see: transform.vert declares its position `invariant` and draw.vert doesn't. GLSL promises
+the same position from two shaders only where both declare it and the expressions and their control flow match;
+draw.vert is left as it was, so that accurate mode's draws stay base's on every driver, and on the M1 the placed-already
+triangles are draw.vert's pixel for pixel (the test below at 1x and 2x, and the 21 scenes). A driver that compiled the
+same expression differently in the two shaders could move such a triangle's corner by a float's rounding, in fast mode
+alone, as fast mode's own transform already may move a mesh's corner (part 85); never accurate mode or the software
+renderer.
+
+**Numbers** (the M1, MoltenVK; base `af542113a` against the branch `9c411d1ed`, two rounds taking turns, the means;
+150 frames from each scene's state; Software with 4 drawing threads; the emulation thread's ms a frame and the frame
+rate it allows, 1000 over that, and its host instructions and cycles a frame):
+
+| Scene | Renderer | Emulation thread ms a frame (fps it allows) | M host instructions | M cycles |
+| --- | --- | --- | --- | --- |
+| Army of Two, playing | Vulkan (fast) | 53.4 -> 46.6 (19 -> 21), -13% | 343 -> 300 (-13%) | 143 -> 126 (-12%) |
+| Army of Two, main menu | Vulkan (fast) | 36.1 -> 30.9 (28 -> 32), -14% | 257 -> 216 (-16%) | 97 -> 83 (-14%) |
+| Super Monkey Ball, story | Vulkan (fast) | 47.9 -> 47.7 (21 -> 21), -0% | 451 -> 437 (-3%) | 130 -> 129 (-1%) |
+| Ghost of Sparta, menu | Vulkan (fast) | 28.6 -> 25.3 (35 -> 40), -12% | 333 -> 306 (-8%) | 80 -> 71 (-11%) |
+| Death Jr. II, woods | Vulkan (fast) | 7.3 -> 7.1 (136 -> 141), -4% | 84 -> 82 (-3%) | 21 -> 20 (-3%) |
+| Sonic Rivals, a stage | Vulkan (fast) | 4.8 -> 4.6 (208 -> 216), -3% | 50 -> 48 (-3%) | 13 -> 13 (-4%) |
+| Activision Hits Remixed, room | Vulkan (fast) | 6.7 -> 6.0 (150 -> 167), -10% | 66 -> 62 (-7%) | 19 -> 17 (-8%) |
+| Twisted Metal, playing | Vulkan (fast) | 4.0 -> 4.3 (253 -> 233), +9% | 34 -> 33 (-3%) | 11 -> 11 (+4%) |
+| Colin McRae 2005, race | Vulkan (fast) | 11.8 -> 11.7 (85 -> 85), -0% | 102 -> 96 (-6%) | 32 -> 31 (-3%) |
+| Army of Two, playing | Vulkan (accurate) | 46.5 -> 45.6 (22 -> 22), -2% | 479 -> 477 (-0%) | 132 -> 132 (-1%) |
+| Army of Two, main menu | Vulkan (accurate) | 30.0 -> 29.8 (33 -> 34), -1% | 352 -> 349 (-1%) | 87 -> 87 (-1%) |
+| Super Monkey Ball, story | Vulkan (accurate) | 37.5 -> 36.1 (27 -> 28), -4% | 453 -> 435 (-4%) | 106 -> 101 (-4%) |
+| Ghost of Sparta, menu | Vulkan (accurate) | 34.1 -> 34.9 (29 -> 29), +2% | 365 -> 351 (-4%) | 91 -> 93 (+1%) |
+| Death Jr. II, woods | Vulkan (accurate) | 36.6 -> 34.9 (27 -> 29), -5% | 370 -> 368 (-0%) | 95 -> 93 (-2%) |
+| Sonic Rivals, a stage | Vulkan (accurate) | 28.1 -> 33.5 (36 -> 30), +19% | 295 -> 295 (-0%) | 75 -> 83 (+11%) |
+| Activision Hits Remixed, room | Vulkan (accurate) | 37.9 -> 37.7 (26 -> 26), -1% | 466 -> 465 (-0%) | 110 -> 107 (-3%) |
+| Twisted Metal, playing | Vulkan (accurate) | 3.3 -> 3.3 (303 -> 303), -0% | 34 -> 33 (-2%) | 10 -> 10 (-1%) |
+| Army of Two, playing | Software | 76.4 -> 72.5 (13 -> 14), -5% | 826 -> 817 (-1%) | 220 -> 215 (-3%) |
+| Army of Two, main menu | Software | 75.6 -> 76.3 (13 -> 13), +1% | 759 -> 686 (-10%) | 202 -> 197 (-2%) |
+| Super Monkey Ball, story | Software | 52.5 -> 54.7 (19 -> 18), +4% | 508 -> 497 (-2%) | 142 -> 146 (+3%) |
+| Ghost of Sparta, menu | Software | 81.6 -> 79.3 (12 -> 13), -3% | 894 -> 892 (-0%) | 224 -> 221 (-1%) |
+| Death Jr. II, woods | Software | 10.2 -> 10.4 (98 -> 96), +3% | 108 -> 111 (+3%) | 28 -> 29 (+3%) |
+| Sonic Rivals, a stage | Software | 6.6 -> 6.4 (152 -> 157), -3% | 71 -> 65 (-9%) | 18 -> 17 (-5%) |
+| Activision Hits Remixed, room | Software | 13.9 -> 15.1 (72 -> 66), +9% | 144 -> 155 (+8%) | 38 -> 41 (+8%) |
+| Twisted Metal, playing | Software | 3.4 -> 3.3 (298 -> 302), -1% | 36 -> 36 (-0%) | 10 -> 10 (-1%) |
+| Colin McRae 2005, race | Software | 17.2 -> 17.1 (58 -> 58), -0% | 182 -> 178 (-2%) | 48 -> 47 (-1%) |
+
+The software renderer's rows move by up to a tenth between runs of one build (Sonic Rivals 61 and 68 M, Hits Remixed
+147 to 173 M): its emulation thread draws its share of the bands while it waits for the workers (part 74), so its
+counts follow the scheduling more than its front end; the one change there sets a job up in place, which does no
+more work.
+
+With the review's points (`b3a208277`, the same benches again, base, `9c411d1ed` and it taking turns) the host
+instructions are the same to the percent in every Vulkan row, fast and accurate, and the software renderer's within its
+spread (Ghost of Sparta -2%, Death Jr. II -4%, the rest within 1%; nothing of the review's is on its path).
+
+GPU draws a frame (the counting build, 150 frames, base -> branch):
+
+| Scene | Vulkan (fast) | Vulkan (accurate) |
+| --- | --- | --- |
+| Ghost of Sparta, menu | 3,684 -> 346 (-91%) | 1,573 -> 348 (-78%) |
+| Army of Two, playing | 3,144 -> 642 (-80%) | 963 -> 649 (-33%) |
+| Army of Two, main menu | 3,205 -> 541 (-83%) | 789 -> 546 (-31%) |
+| Super Monkey Ball Adventures, story | 2,119 -> 1,143 (-46%) | 1,144 -> 1,144 |
+| Activision Hits Remixed, room | 948 -> 472 (-50%) | 784 -> 784 |
+| Death Jr. II, woods | 744 -> 551 (-26%) | 677 -> 677 |
+| Sonic Rivals, a stage | 445 -> 255 (-43%) | 392 -> 392 |
+| Colin McRae 2005, race | 484 -> 346 (-29%) | 26,019 -> 26,013 (MoltenVK's barriers, part 83) |
+| Twisted Metal, playing | 208 -> 110 (-47%) | 114 -> 114 |
+| Armored Core Formula Front, playing | 95 -> 71 (-25%) | 85 -> 85 |
+| Disaster Report 3, playing | 262 -> 213 (-19%) | 2,371 -> 2,371 |
+
+Each step on its own (M host instructions a frame against the step before, two rounds taking turns): the texels taken
+in the vertices, Ghost of Sparta's menu -1% accurate and -2% fast (a draw differing by a push constant alone is cheap for
+MoltenVK to encode); the models and scissor, Army of Two -5% fast, its menu -6%; the small PRIMs among the meshes, Army
+of Two -5%, its menu -7%, Hits Remixed -3%, Ghost of Sparta -2%, Monkey Ball +3% (its 48,000 small PRIMs a frame each
+paid for asking for the mesh pipeline then); the pipelines by hash and the pipeline asked for as a state is recorded,
+Monkey Ball -2%; the state built in place and the last texture, Monkey Ball -2% in either mode; the settings kept,
+Monkey Ball -2% in either mode, Ghost of Sparta -1%; the corners' room, Army of Two -2%, its menu -3%; the software
+renderer's jobs in place, Army of Two -2%, Monkey Ball -1% (Software).
+
+**Accuracy.** Base against the branch from the 21 scenes' states (part 79's), 100 frames, every frame's picture and all
+of VRAM hashed with drawing settled, then RAM and the machine's whole serialized state: identical in every one of the
+63 runs, the 21 scenes in Vulkan (fast), Vulkan (accurate) and the software renderer (4 drawing threads), and in the
+63 again with the review's points (`b3a208277`). On the way,
+each step's scenes the same too (fast mode's eight busiest at the small PRIMs' step, Ghost of Sparta's and Army of Two's
+in both modes at the texels' step).
+
+**Checks.** On the branch with the review's points (`b3a208277`): `tests/psp/run-tests.sh` 522 groups, 0 failures
+(sanitized), and its GE's and GPU's 143 groups (ge, draw3d, draw, curves, gpu) without the sanitizers, 0 failures;
+`tests/allegrex/run-tests.sh` 68 groups, 0 failures; `tests/psp/ares/run-tests.sh` 340 checks, 0 failed. On this Mac
+every sanitized run of
+the GPU's groups, base's too, now stops at an AddressSanitizer "container-overflow" in `std::vector<u8>::resize()` called
+by `GPU::fill()` (base `af542113a` the same: a vector instantiated unannotated in one of the objects built without the
+sanitizers, `nall.cpp` or `sljitAllocator.cpp`, and annotated in the rest), so the suite ran with
+`ASAN_OPTIONS=detect_container_overflow=0` beside its usual option; the shaders' check (CI's `check-psp-shaders.sh`:
+glslang 16.6.0 byte for byte, the 12 modules valid for Vulkan 1.0) passes. GCC 14 (Docker, no sanitizers, -Wall -Wextra
+-Werror as the tests build), on `9c411d1ed`: gpu.cpp and the GPU's, draw3d's and the GE's tests compile cleanly at -O1
+to -O3; ge.cpp stops at GCC's "may be used uninitialized" in four.cpp (`downAxis`, `four.depth`, each written before
+it's read), untouched here, which the God of War software round met with GCC 11 at -O2 and -O3 on Oct 10, and which
+CI's way (GCC 13, -O1, the sanitizers) doesn't. New tests:
+- "gpu sprites taking less of one copy: one draw, the software renderer's pixels, filtered as from copies of what each
+  takes": in each mode six sprites after the copy's, none a draw of its own, every byte Software's; then, filtered, at
+  1x and 2x, from a picture of random texels, tiles side by side each taking its own part, one draw, each tile's
+  pixels those of the same tile drawn alone from a copy of only what it takes.
+- "gpu fast mode's small 3D PRIMs among its meshes: one draw, the pixels as drawn apart": meshes of 30 corners and
+  PRIMs of 6 in turn (smooth, flat, textured nearest and filtered with fog, lit with the shine kept apart), each
+  setting's first mesh with a triangle cut at the near plane, in frame buffers 128 and 480 pixels wide, at 1x and 2x:
+  one draw for each setting, against eight with them apart, and the GPU's every pixel the same either way.
+- "gpu fast mode's 3D held to the rows it takes of a larger copy, placed by the GE and in a mesh": a frame buffer whose
+  rows run on into another's, taken by a PRIM of six corners (among the meshes and apart) and a mesh of eighteen from
+  a copy of more rows, filtered, at 1x and 2x: every pixel as from a copy of only the rows taken.
+- "gpu a texture the backend couldn't make: the next PRIM alike still draws with its own" (a pretend backend).
+Broken on purpose in turn (draw.frag's clamp gone, a mesh block's taken texels dropped, a placed vertex's dropped), the
+third of these fails each time, and the first when draw.frag's clamp is gone (part 83's "a texture's place taken by
+tiles" doesn't: its picture's flat sprites leave the texels past a tile's edge as the last inside). With the kept
+settings left valid after the texture that failed, the fourth fails, the whole suite's one failure (two draws, not
+three: the third PRIM joins the untextured one's).
+
+**The review.** An independent read-only review of the branch (to `4d26b6a98`) found no blocker (accurate mode and the
+software renderer the same as base by construction) and four points to fix, all taken (`b3a208277`):
+1. A triangle of a mesh cut at the near plane went among its runs as three placed models, after which the next run
+   found the recording's models no longer ending at its PRIM's and copied all its vertices again, at each cut; and
+   after a recording handed over between two runs, that test could pass by coincidence, the run's indices then landing
+   on placed models. A PRIM's models are now kept by the recording's generation (`Recorded::generation`, which
+   `clear()` moves on): its later runs take them where they are until it's handed over, whatever comes after them.
+2. The start-up check drew no placed triangles: it draws PRIMs of six corners (lit and not, one textured, one with its
+   shine kept apart, over the two attributes that alias the weights) and a mesh's triangle cut at the near plane, close
+   to the software renderer's; where only that fails, System checks again with `screenMeshes` off, the GPU still
+   transforming the rest. (A driver drawing those wrong passed the check before, and drew the game wrong.)
+3. A texture the backend couldn't make (its memory for pictures exhausted, as at a high resolution) left the kept
+   settings valid while the GPU's last texture was still the one before it: a next PRIM alike with that texture again
+   took the untextured state. They're let go of now (the test's pretend backend fails the second of three textures).
+4. The tests couldn't show what they claimed in places: the 128-pixel frame buffer's scale to the GPU's -1 to 1 is a
+   power of two, the shine's attribute was always 0, nothing was cut at the near plane, and no sprite sampled past what
+   it took: the tests above do each now.
+Its small points taken too: transform.vert's block for a placed vertex is the first (read ahead of the branch, it
+stays inside), `Vertex::taken()` asserts its columns and rows fit, `readingDraws` counts each PRIM again (its settings
+kept or not), and the note below on kept pipelines. Not taken now: draw.vert's position declared invariant as
+transform.vert's is (a change to accurate mode's shader, to measure on the RP6 and on lavapipe first).
+
+**After an update** the pipelines a player's earlier sessions kept (System's "Pipeline Cache") miss once: draw.frag's push
+constants and fast mode's vertex layout changed, so the first session after it makes its pipelines afresh, a stutter at
+each new one.
+
+**Where the time goes now** (the branch, `sample` of a -g build, fast mode, at a load of 15-40): Army of Two's
+`vkQueueSubmit` 5.1% (12.7%), its thread now waiting for the GPU most (26% of the samples in the frame's finish: the
+Mac's GPU is shared), reading the vertices 11%, placing the corners 7%, `meshTriangles()`' triangles 10%; Monkey Ball's
+`vkQueueSubmit` 3.8% (6.8%), the command loop 7%, `transformAll()` 8%, each PRIM's setup spread over `drawVertices()`
+(6%), `GPU::begin()` (3%), `settings()`' comparison (2%), `decode()` (2%), `transformKept()` (2%), `pixelState()` (2%).
+
+**What's left.**
+- Monkey Ball's draws split on the texture (681 of its 1,143 a frame in fast mode): textures taken from an array the
+  draw indexes (descriptor indexing) would join them, where the backend has it.
+- Each PRIM's setup on the GE's side: a Look kept from the last PRIM where its commands are the same (`pixelState()`,
+  `sampler()`, the texture's lookup), and the command loop (7% of Monkey Ball).
+- Fast mode's vertices read straight into models (Army of Two reads 660,000 a frame into the GE's `Vertex`, then copies
+  them), and 2D PRIMs between meshes, which still break a draw.
+- The software renderer's triangle setup (`triangleJob()`, `quantize15()`), the jobs' size.
+
+**For the RP6.** Qualcomm's driver does its work in the `vkCmd*` calls as they're recorded, not at the submit as
+MoltenVK does, so fewer draws (and fewer pipeline, push constant and vertex buffer changes between them) may weigh more
+there than the M1's instructions say: worth measuring Ghost of Sparta's menu in both modes, Army of Two's play and menu,
+Monkey Ball, Hits Remixed and Twisted Metal in fast mode, and the fast mode's pictures against accurate mode's (the
+invariance note above).
+
 ## Part 93: Vulkan's haze over MX vs. ATV Untamed's race — the frame buffer's alpha as its stencil has it
 
 On branch `cursor/psp-vk-mx-2b67`, begun on #251's (`cursor/psp-vk-models-2b67` at e823bf00b: master at 239d4c80a,
