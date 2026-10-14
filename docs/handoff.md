@@ -30,6 +30,62 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: polling loops — the polled calls in fewer steps, and a loop that comes back as it was skipped to the go's end, each skip proved — 2026-10-13
+
+Branch `cursor/psp-polling-2b67`, begun on `cursor/psp-cpu-round2-2b67` (#237 on #229), master merged in once both had
+(`3228b825d`). docs/psp-core.md, part 91, has the evidence. Clean room: PPSSPP not read at all, JPCSP not read. Save
+states unchanged (layout 31). Nothing a game sees changes: pictures, VRAM, RAM and the machine's state are master's.
+- **What the loops call** (a scratch syscall trace, the loops read from RAM): both Need for Speeds' idle thread runs
+  `while(*count < target) yield(0)`, the yield being sceKernelGetThreadId, sceKernelReferThreadStatus (itself) and
+  sceKernelRotateThreadReadyQueue at its own priority, alone in its line: 29 instructions, 526,000 calls a frame;
+  Twisted Metal's logo asks the movie ring's free packets and signals a semaphore already at its most (refused), the
+  Armored Cores' intros the same with the ring asked twice, Disaster Report 3's intro the blank count and the ring:
+  90,000 to 370,000 calls a frame. Nothing changes from turn to turn but the thread's run time in the status (never
+  read) and the ready order's count (the rotation); every call quiet or calm, so each loop runs to the go's end.
+- **Changes** (each its own commit, with tests): main RAM read, written and looked up without a call, copies' pieces
+  without a std::function; polled calls dispatched in fewer steps (imports first, the FINISH and calls into the program
+  looked for only where there may be one, the movie library's mark compared in place); spins skipped (`spins.cpp`):
+  once a quiet or calm call's place has come round four times the same cycles apart, the kernel runs the next turn on
+  a CPU of its own (the interpreter, its stores kept aside, its system calls worked out without being made) and, if it
+  comes back with every register as it was and every byte it stored what memory holds (but the run time, never read),
+  skips whole turns to two short of the go's end: their cycles to the clock, the ready order's count, the last turn's
+  run time written where its status would write it.
+- **Numbers** (Mac, Vulkan fast, the emulation thread's host instructions and ms a frame, medians of three rounds
+  taking turns; the load 10 to 200, so the instructions carry it): Most Wanted's race 289 -> 38 M (-87%, 17.4 -> 3.2
+  ms), its profile 301 -> 19 M (-94%), Underground Rivals' title 276 -> 9 M (-97%, 18.0 -> 1.3 ms); Twisted Metal's
+  logo 286 -> 10 M (-97%, 14.6 -> 0.7 ms), Disaster Report 3's intro 149 -> 10 M (-93%), the Armored Cores' intros
+  148 -> 13 and 140 -> 18 M (-91%, -87%); the per-call commits alone 18 to 20% of it in the Need for Speeds, 43 to 54%
+  in the movies; scenes that don't poll 1 to 7% fewer instructions (main RAM without a call). The software renderer
+  alike (the Need for Speeds -84 to -91%, the movies -87 to -97%).
+- **Exact**: the 21 scenes' hashes identical to master's in the software renderer (100 frames, every frame's picture and
+  VRAM, then RAM and the machine's state), Vulkan fast and Vulkan accurate (200 frames, the end's RAM and state), for
+  the first code, after the review's fix and for the last commit (`3b2e44167`); tests/psp's new groups run each program
+  both ways on both engines, the whole state compared after every eighth of a frame (skipped, refused, and skips made
+  directly against the same turns run); 29 broken versions of spins.cpp, 21 caught, the other 8 changing nothing a game
+  sees (guards that can't be reached or always hold). An independent review found one exactness bug (the last turn's run
+  time rewritten from the status's size word as the turn left it: a status of 88 bytes got bytes 88-91 written), fixed
+  with a test the first code fails, and its other points taken; a delta review of the fixes found no exactness bugs, its
+  points (a guard, the run time pinned to the cycle, a sentinel, a ring whose library names none, comments) taken.
+- **The library check's Platypus** (pictures other than master's from frame 90, in two runs of each runner): not the
+  emulation. From boot with the check's presses every frame's picture and VRAM, then RAM and the machine's state, are
+  master's through 3600 frames; the runner's PNG is the last picture the screen's thread presented, a frame or more
+  older than its name on a busy host, and the branch's cheaper frames make other captures stale (master's at 90, the
+  branch's at 320 and 480; two runs of master's newer runner differ at 10 of 360 PNGs too). The other 30 flagged games'
+  every frame is master's too. A capture taken from the core itself, drawing settled, would make the check's PNGs exact.
+  With master merged again (`2d6766628`): the 21 scenes identical in all three renderers, the suites passing (tests/psp
+  517/0 with ASan's container-overflow check off: master's own suite trips it on the Mac), the speeds as above.
+- **Checks**: on the last commit, tests/allegrex 68/0, tests/psp 512/0 (sanitized), tests/psp/ares 340/0; GitHub's
+  checks pass (the PSP core tests built by GCC, the desktop builds, the Android APKs).
+- **Left**: loops whose answers move on with the clock (polling the system time till a moment) can't be skipped so;
+  only six functions are worked out (others to add as traces show loops of them: a library run with the spin debug
+  patch would list proofs that fail); the per-call costs left (the scheduler's look through every thread at a
+  rotation, the stub's `jr ra` looked up in compiled code) matter only for loops the skip can't take.
+- **On the RP6, to measure**: master against this branch, Vulkan fast at 1x, part 79's scenes (nfsmw-race,
+  nfsmw-profile, nfsur-title, tm-logo, dr3-intro, acff-intro, acsl-intro): the Need for Speeds, at 41-42 there held by
+  the emulation thread (PPSSPP 60), should reach 60 unless the GPU's side holds them; the movies' thread a tenth of
+  what it was; the rest as they were.
+- Scratch: `~/phobos-work/scratch/polling`.
+
 ## Library: every style's own take on the Systematic consoles; the glyph packs gone — 2026-10-13
 
 Branch `cursor/themes-console-icons-2b67`, on `cursor/themes-backdrops-2b67` (the entry below), at the owner's choice:

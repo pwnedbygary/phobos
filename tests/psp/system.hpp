@@ -88,6 +88,7 @@ auto sasTests() -> Tests;
 auto messageTests() -> Tests;
 auto mutexTests() -> Tests;
 auto threadmanTests() -> Tests;
+auto spinTests() -> Tests;
 auto timerTests() -> Tests;
 auto mediaTests() -> Tests;
 auto atracTests() -> Tests;

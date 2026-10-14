@@ -112,7 +112,7 @@ for source in "$ROOT/ares/psp/cpu/allegrex.cpp" "$ROOT/ares/psp/memory/memory.cp
   "$HERE/main.cpp" "$HERE/memory.cpp" "$HERE/loader.cpp" "$HERE/kernel.cpp" "$HERE/callbacks.cpp" "$HERE/power.cpp" \
   "$HERE/audio.cpp" "$HERE/sas.cpp" "$HERE/utility.cpp" "$HERE/dialogs.cpp" "$HERE/pools.cpp" "$HERE/messages.cpp" \
   "$HERE/media.cpp" \
-  "$HERE/mutexes.cpp" "$HERE/timers.cpp" "$HERE/threadman.cpp" \
+  "$HERE/mutexes.cpp" "$HERE/timers.cpp" "$HERE/threadman.cpp" "$HERE/spins.cpp" \
   "$HERE/atrac.cpp" "$HERE/mp3.cpp" "$HERE/movies.cpp" "$HERE/psmf.cpp" "$HERE/font.cpp" "$HERE/ccc.cpp" \
   "$HERE/jpeg.cpp" \
   "$HERE/files.cpp" "$HERE/async.cpp" "$HERE/disc.cpp" \
