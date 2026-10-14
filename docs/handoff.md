@@ -13,10 +13,15 @@ Read in order:
 3. [Performance audit](performance-audit.md) and [benchmark protocol](mario-tennis-benchmark.md).
 4. [Implementation history](implementation-history.md) only for relevant historical details.
 
-Next action: establish matched Phobos/v336 APK, device, driver, settings and scene
-identities, then collect baseline traces. No optimization or performance parity
-has been demonstrated. Do not resume the cancelled signing or audio-buffer tasks
-without new authorization. Preserve saves and do not assume APK update compatibility.
+Current focus (2026-10-13): the PSP core (its parts in [psp-core.md](psp-core.md), and the
+entries below, newest first) and the
+[test and performance plan](implementation-plan.md#test-and-performance-plan-2026-10-13):
+PSP throughput, fast-forward and Vulkan at 1x, 2x, 4x and 5x, accurate and fast modes
+measured apart, with the N64/Mario Tennis regressions kept. A matched Phobos/v336
+comparison (APK, device, driver, settings, scene and traces) has still not been made, and
+no overall speedup or parity is claimed. Do not resume the cancelled signing or
+audio-buffer tasks without new authorization. Preserve saves and do not assume APK update
+compatibility.
 
 Publication preparation: the plan reconciliation received independent PASS,
 including byte-for-byte preservation of the original plan in its archival appendix.
@@ -67,6 +72,135 @@ in the implementation plan). CI only: no core, app or test code changes.
   master's runs not cancelled, the empty-log case). A delta review found that a concurrency group holds one waiting
   run, so a third quick push to master still cancelled the waiting one: non-PR runs now get a group each (the run's
   ID).
+
+## Docs: the plan's opening and evidence brought up to date; the 2026-10-13 test and performance plan indexed — 2026-10-13
+
+Branch `cursor/test-plan-01-2b67` (PR #244), on master (`4788125f1`, #236), with #243, #230, #229 and #237 merged in
+since (`3228b825d`). Package 01 of the 2026-10-13 test and performance plan, an outside audit of master `b3507c1db`
+given to the owner as a plan bundle (not kept in the repository). Documentation only.
+- **The stale summaries**: the implementation plan opened with "Last reconciled: 2026-09-25" and "zero fresh native
+  performance runs", and this file's entry point with September's next action, though later sections record the RP6's
+  N64 measurements (from 2026-09-25), the 2026-10-02 presentation comparison with Mupen64Plus-AE, the desktop builds
+  and the PSP core's parts (76 of them on master then, up to part 87; 80 now, up to 88, with #243's part 88, #230's
+  part 81, #229's part 82 and #237's part 86). Now the plan's opening and its evidence boundary sort what's known by
+  kind: implemented on master (some of it CI only builds), checked on CI's hosts (exactly what CI runs, and what it
+  doesn't yet), measured on the RP6 (dated, linked: the N64's, and the PSP's speed in its parts), waiting for the RP6,
+  on branches, proposed. The current priority (the PSP's throughput, fast-forward and Vulkan scaling, accurate and fast
+  apart) is named, the N64 regressions kept, and no comparison is presented as new. Nothing historical is removed.
+- **The plan indexed**: the implementation plan's "Test and performance plan (2026-10-13)" lists the 25 packages
+  with their dispositions (eight now, 08 pulled forward from the triage's later ones; 15 later, each waiting on a
+  named PR or package except 18, whose only wait, #230, has merged since; two not now), what each waits on, and its PR.
+- **Baseline at triage** (master `9333a8d7a`): the libadrenotools submodule at `8fae8ce25`; open PRs #223, #229,
+  #230, #231, #232, #236 and #237, and two agents' branches without PRs (GE headroom and NpDrm modules, since #240
+  and #243); CI on `0a9a7fa75` (v2.2.0's commit): PSP Core Tests 60/0 and 489/0, Desktop Build green, Android Build
+  cancelled in its SDK cache's post step after 37 minutes (package 02; v2.2.0's own tag build, run 38432072867,
+  passed, its release complete). The Mac: macOS 27.0.1, Apple clang 21.0.0, glslang 16.6.0, JDK 17.0.20.1. Since:
+  #236 merged (`4788125f1`, StateVersion 27), all three workflows green on it (PSP 60/0 and 497/0), then #243
+  (`49fec7215`, StateVersion 28), #230 (`542da5a28`, StateVersion still 28), #229 (`7511c64c3`, StateVersion 31) and
+  #237 (`3228b825d`, StateVersion still 31); the open PRs' heads when this entry was first written: #223
+  `f12663c2d`, #229 `a31b2b3ae`, #230 `059a1bbfe`, #231 `5e6d8a5b1`, #232 `b4dc27e4e`, #237 `46f62e6bf`, #240
+  `7aa4b8054`, #243 `e84596e63`, and this plan's.
+- **Checks**: `git diff --check`; relative links and anchors in both files, 0 bad (as on master).
+- **Review**: an independent read-only review found the CI line claiming more than CI runs (the ares suite, the runner,
+  NGCD, ARM64 and the JVM tests aren't run) and merging "implemented" with "CI-verified", the PSP's RP6 speed
+  measurements left out, the baseline's PR list not the one at triage, CI cited from an older commit, #237 named among
+  the state-layout PRs (it doesn't change states), and the order of the CI packages unexplained; all taken. Its doubt
+  about "up to 59 minutes" is answered by the run cited (38286832457's post step: 58.7 minutes). A delta review found
+  "only built" not limited to CI (release builds run on the RP6; the AppImage and Phobos.exe were run on 2026-10-02,
+  Phobos.app on 2026-10-06), the RP6 speed parts listed incompletely (53 and 54) and "gathered" too widely, and row 08
+  marked done while its PR is open; all taken, with master's #243 merged in (row 12). A second delta review found the
+  software renderer's RP6 parts incomplete (67 and 68, and its columns beside Vulkan in 52 and 53) and row 12 missing
+  #223 (whose own layout 28 isn't master's); both taken, with its suggestions (the speed tables' parts, the tag build's
+  note, the desktop runs' dates, one list of what CI doesn't run, the part count), and master's #230 merged in. A third
+  delta review found two facts left stale by that merge: the part count (#230 added part 81) and rows 15 and 18 still
+  waiting on #230; both taken, with its suggestions (#230 in this entry's opening and its "Since", the plan's waits
+  dated, part 41's speed figures no longer called a table). Row 18 now waits on nothing: no open PR changes
+  `PhobosRunner.cpp` against master (GitHub's diff of #229, then open, showed #230's comment at the axis slots only
+  because it still compared #229 with `49fec7215`, and #229 had #230's branch merged). A fourth delta review found this
+  sentence had first called that comment #229's own edit; fixed, with its suggestions (#243 in the opening, row 18's
+  adaptation, clearer wording). A review of master's #229 and #237 merged in found the plan and this entry stale in
+  five places: the state layout (31 now) in row 12, row 14 still waiting on #237, the plan's waits dated
+  `542da5a28`, the part count, and this entry's opening and "Since". All taken, with part 86 added to the parts
+  waiting for the RP6 and this sentence about #229 put in the past. Its delta review found row 06 still giving
+  #249's first reason for being red (four files now); taken, with part 86's date in the plan and the entry point's
+  line over 120 columns broken before its link.
+
+## CI: the PSP renderer's shaders compiled again by the glslang that made them, and validated — 2026-10-13
+
+Branch `cursor/test-plan-07-2b67` (PR #239), on master (`4788125f1`, #236). Package 07 of the 2026-10-13 test and
+performance plan (an outside audit of master `b3507c1db`, triaged against `9333a8d7a`; #244, package 01, indexes it
+in the implementation plan). CI and a check script only: `compile.sh`, the GLSL and `shaders.hpp` are untouched (the
+sources' hash covers `compile.sh`, so changing it would have meant regenerating `shaders.hpp`).
+- **The gap**: `compile.sh --check` (run by `tests/psp/run-tests.sh`) always compares the sources' hash, but compiles
+  again and compares `shaders.hpp` byte for byte only where a glslang happens to be installed, and CI installs none.
+  So CI never compared the SPIR-V with what its GLSL compiles to, nor validated it (the GPU tests run it on lavapipe):
+  a changed word under an unchanged hash that those tests don't notice passed.
+- **The pin**: glslang 16.6.0 makes `shaders.hpp` exactly, both Homebrew's build and Khronos's own macOS release
+  (`compile.sh --check` with each: exit 0). Khronos's Linux release of it is
+  `glslang-16.6.0-linux-x86_64-release.tar.gz`, SHA-256 `2c34071f…91ce`.
+- **The check** (`.github/scripts/check-psp-shaders.sh`, in a new workflow, PSP Shaders, on changes to the shaders,
+  the script or the workflow): glslang must be found and be 16.6.0, then `compile.sh --check` (the hash, then every
+  shader compiled again and compared), and each of the 12 modules in `shaders.hpp`, as its bytes, through `spirv-val
+  --target-env vulkan1.0` (compile.sh's target); every array `shaders.hpp` declares must be one it reads, and every
+  word a 32-bit hex word. Both parts run and report; either failing fails. A glslang upgrade is a toolchain change:
+  `shaders.hpp` made with it, and the script's version, the workflow's version and SHA-256 and the doc's line moved
+  together (the workflow doesn't override the script's, so CI fails if they differ).
+- **Negative controls** (a disposable copy, the Mac, glslang 16.6.0 and SPIRV-Tools v2026.4): the copy as it is
+  passes (12 valid); GLSL changed without regenerating: the hash fails; one word of `presentSPIRV` changed (still
+  valid SPIR-V: spirv-val passes it) with the hash kept: the byte comparison fails; `presentSPIRV`'s id bound set to 1:
+  the comparison and spirv-val both fail (11 valid); no glslang in PATH: fails; a glslang calling itself 16.5.0:
+  fails.
+- **Checks**: actionlint 1.7.12 with shellcheck 0.11.0 (clean); the script on master's tree (pass); CI on #239 (runs
+  38435975771, 19 s, and 38437980381 on the head merged with master, 16 s; ubuntu-24.04): the image has no glslang of
+  its own ("none"), the archive's SHA-256 matched, and Khronos's Linux glslang 16.6.0 compiled `shaders.hpp` byte for
+  byte; Ubuntu's SPIRV-Tools v2025.1 passed all 12 modules.
+- **Review**: an independent read-only review (PASS; it reproduced the pin, both CI runs and 14 negative controls)
+  raised seven points: an array declared another way (`static constexpr`, made with a changed compile.sh) went
+  unvalidated (11 of 12); the version was pinned in two places CI couldn't keep equal; a malformed word was dropped;
+  `--version`'s failure was unexplained; the first run's time was misquoted; "CI never checked the SPIR-V" overstated
+  the gap; actionlint had run without shellcheck. All taken: the declared arrays counted, every word checked, the
+  workflow no longer overriding the script's version (two pins CI now keeps equal), the error said, the runs cited,
+  the gap reworded, shellcheck run; and its suggestions (`ubuntu-24.04`, a 10-minute limit, curl's retries). A delta
+  review (PASS) found an array written without `=` still unread: arrays are now found with or without it, and the
+  SPIR-V magic numbers in the file must match the arrays read; CI on that head (run 38455036248 at `17c21468e`): the
+  12 modules read, compiled byte for byte and valid. A second delta review passed it.
+
+## CI: the Android unit tests in every build, the releases waiting for them; the SDK cache gone — 2026-10-13
+
+Branch `cursor/test-plan-02-2b67` (PR #238), on master (`4788125f1`, #236). Package 02 of the 2026-10-13 test and
+performance plan (an outside audit of master `b3507c1db`, triaged against `9333a8d7a`; #244, package 01, indexes it
+in the implementation plan). CI only: no app, core or test code changes.
+- **Unit tests in CI**: `.github/workflows/android.yml` gains a job beside the APK build, "Unit tests (legacy +
+  modern)": `./gradlew :app:testLegacyDebugUnitTest :app:testModernDebugUnitTest --continue` (the app's 42 test files,
+  299 `@Test`s, which no workflow ran before), their XML and HTML reports kept as the `unit-test-reports` artifact
+  whether they pass or fail. The release and nightly jobs now need it as well as the build, so a failing test stops
+  `android.yml` publishing either (on a version tag, `desktop.yml` still makes the release for its own packages after
+  waiting 20 minutes for Android's: whether it should wait for the tests too is the owner's call). It builds no APK
+  and uploads none; no device or instrumented test is implied (none exist). Both jobs now have a time limit (build 60
+  minutes, tests 30), so a hung step ends instead of running on.
+- **The SDK cache removed** (the Android job's long post step): `Cache Android SDK` packed the runner image's whole
+  SDK folder, 4.6 GiB. After a miss its post step tars all of it: on master's six runs before `0a9a7fa75` that step
+  took 2 to 59 minutes (13 or more in four), master's run 38423938456 was cancelled in it after 37 minutes with every
+  real step green, and the run for `9333a8d7a` was cancelled in it too by the next push (neither commit got a
+  nightly; v2.2.0's own tag run finished, its release complete). Without it, the components install in 19-67 s (the
+  platform and build tools are on the image; the NDK and CMake download). A hit was no better: 2 to 5 minutes, then
+  tar failing to set the times and modes of the image's root-owned folders ("Failed to restore", run 38429067532).
+  Two of its entries (9.2 GiB together) also filled most of the repository's 10 GB of cache, which GitHub trims by
+  evicting the least recently used (the Gradle and FFmpeg caches).
+- **Checks**: actionlint 1.7.12 on the workflow (clean); the job graph read back (release and nightly need build and
+  unit-tests). CI on #238 (run 38437970240): the unit-test job passed in 3 minutes, 299 tests in each flavor, none
+  failed or skipped (its reports). Negative control (run 38435701552, a disposable branch with one test asserting
+  1 == 2, dispatched): the unit-test job failed, both flavors ran (300 tests each, that one failing in each; Gradle ran
+  them side by side, so this run doesn't show `--continue` at work, which matters when one flavor fails to compile),
+  and the reports were uploaded; the branch was deleted after. Release and nightly don't run on a branch, so their
+  gating is the job graph above. The first build without the cache (run 38437970240) passed in 17.5 minutes.
+- **Review**: an independent read-only review found the workflow right and its CI claims checked (counts, artifacts,
+  job graph, invariants), and asked for the docs to be exact: the tag case of `desktop.yml`, the cache's real save
+  and restore times (and that the "never finishing" runs were cancelled by the next push), `--continue`'s wording,
+  this entry's base, "every commit". All taken, with its suggestions of time limits and the failed restores; left:
+  deleting the two old 4.6 GiB cache entries once this is merged (open PRs on the old workflow make them again).
+- **Left**: the unit tests run on the debug variants (release differs in `BuildConfig.DEBUG` and signing); the
+  dialogs', settings' and launch paths' UI tests are later packages (15-17).
 
 ## PSP: the CPU, round 2 — the VFPU's adder in NEON, delay slots compiled each way, the rare ways out of line, prefixes compiled, blocks linked — 2026-10-13
 
