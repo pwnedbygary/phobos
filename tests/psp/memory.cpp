@@ -191,9 +191,8 @@ static auto bulk() -> void {
 }
 
 //The page table: each area's pages point at its bytes (VRAM's at its first copy only), the rest at nothing; the
-//scratchpad's and main RAM's pages steady (their entries never change), VRAM's not (the GE's workers take them out),
-//so the recompiler's direct region is all of main RAM; and power() keeps the buffers (and so the table) while the
-//sizes stay the same.
+//scratchpad's and main RAM's pages steady (their entries never change), VRAM's not (the GE's workers take them out);
+//and power() keeps the buffers (and so the table) while the sizes stay the same.
 static auto pageTable() -> void {
   System s;
   for(u32 address : {0x0001'0000u, 0x0001'3000u, 0x0800'0000u, 0x0880'0000u, 0x09ff'f000u}) {
@@ -202,10 +201,6 @@ static auto pageTable() -> void {
   for(u32 address : {0x0001'4000u, 0x0400'0000u, 0x041f'f000u, 0x0420'0000u, 0x0a00'0000u, 0x1c00'0000u}) {
     CHECK(s.steadyTable[address >> 12], 0);
   }
-  s.recompiler.enabled = true;
-  s.power(0x0880'0000);
-  CHECK(s.recompiler.direct.first, 0x0800'0000);
-  CHECK(s.recompiler.direct.size, 32_MiB);
   CHECK(s.table.size(), 512_MiB / 4_KiB);
   CHECK(s.table[0x0001'0000 >> 12] == s.memory.scratchpad.data(), true);
   CHECK(s.table[0x0001'3000 >> 12] == s.memory.scratchpad.data() + 0x3000, true);

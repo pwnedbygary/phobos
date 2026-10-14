@@ -656,17 +656,7 @@ struct Allegrex {
       auto busy() const -> bool;
     } prefixes;
 
-    //recompiler-memory.cpp. The direct region: the largest block of steady pages (Allegrex::steady) that lie one after
-    //another in the host's memory as they do in the PSP's, physical addresses first to first + size, size a power of
-    //two and first a multiple of it (found by reset(): the PSP's main RAM), which loads reach from S1 (directBase())
-    //without the page table; with none (size 0), S1 is the page table, which pageTable() gives either way.
-    struct Direct {
-      u32 first = 0;
-      u32 size = 0;
-    } direct;
-    auto directBase() const -> sljit_sw;
-    auto pageTable(reg r) -> sljit_s32;
-    sljit_s32 hostBase = 0;  //what an access's address is from (recompiler-memory.cpp's Host)
+    //recompiler-memory.cpp
     auto emitLoadStore(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
     auto emitMemory(u32 address, u32 instruction, u32 count, bool delaySlot, bool store, u32 alignment, s16 offset,
                     const std::function<void ()>& access) -> void;

@@ -525,15 +525,16 @@ auto sameOnBoth(const char* name, const std::vector<uint32_t>& code, const std::
   return same;
 }
 
-// Loads reach main memory's direct region (the largest aligned block of steady pages one after another in the host's
-// memory) without the page table, and every other load through it, as cold code. Two layouts of the test's RAM: the
-// region in its middle (pages 4 to 7, with pages 1 and 9 listed but not steady and page 8 the one the table leaves
-// out), and at its very end (pages 12 to 15, the pages before it not steady). Each kind of load, from rs and with
-// negative offsets, at the region's first and last bytes, just outside it on either side, misaligned, through other
-// mirrors, on a steady page apart from it, on listed pages that aren't steady, and on the page the table leaves out,
-// run once and again compiled with the listed pages that aren't steady then taken out of the table: the
-// interpreter's registers and exceptions, and read() reached (on the recompiler) only for pages the table leaves out.
-auto directLoads() -> void {
+// Loads on every kind of page compiled code meets: steady ones (as main RAM's, whose entries never change), listed
+// ones that aren't steady (taken out of the table after the block was compiled, as the GE's workers take VRAM's busy
+// pages out), and the page the table leaves out. Two layouts of the test's RAM: steady pages 4 to 7 in its middle
+// (pages 1 and 9 listed but not steady, page 8 the one the table leaves out), and steady pages 12 to 15 at its very
+// end (the pages before them not steady). Each kind of load, from rs and with negative offsets, at the steady pages'
+// first and last bytes, just outside them on either side, misaligned, through other mirrors, on a steady page apart,
+// on listed pages that aren't steady, and on the page the table leaves out, run once and again compiled with the
+// listed pages that aren't steady then taken out of the table: the interpreter's registers and exceptions, and read()
+// reached (on the recompiler) only for pages the table leaves out.
+auto pagedLoads() -> void {
   auto lvs = [](uint32_t vt, uint32_t b) { return 0x32u << 26 | b << 21 | (vt & 31) << 16 | (vt >> 5 & 3); };
   auto lvq = [](uint32_t vt, uint32_t b) { return 0x36u << 26 | b << 21 | (vt & 31) << 16 | (vt >> 5 & 1); };
   struct Load { uint32_t word, size; int32_t offset; };
@@ -543,14 +544,14 @@ auto directLoads() -> void {
     {lvq(0x21, s0), 16, 0}, {lw(t0, -4, s0), 4, -4}, {lh(t0, -2, s0), 2, -2}, {lb(t0, -1, s0), 1, -1},
   };
   auto page = [](uint32_t address) { return (address & 0x1fffffff) >> 12; };
-  struct Layout { uint32_t first; std::vector<uint32_t> unsteady; std::vector<uint32_t> addresses; };
+  struct Layout { std::vector<uint32_t> unsteady; std::vector<uint32_t> addresses; };
   constexpr uint32_t Middle = Base + 0x4000, Taken = Base + 0x9000, Apart = Base + 0x1000;
   constexpr uint32_t End = Base + 0x10000, Last = End - 0x4000;
   const Layout layouts[] = {
-    {Middle, {Apart, Taken}, {Middle, Middle + 1, Middle + 2, Middle + 0x3ff0, Middle + 0x3ffc, Middle + 0x3fff,
+    {{Apart, Taken}, {Middle, Middle + 1, Middle + 2, Middle + 0x3ff0, Middle + 0x3ffc, Middle + 0x3fff,
       Middle - 16, Middle - 1, Unmapped, Unmapped + 3, Unmapped + 0x40, Taken, Taken + 2, Base + 0xa100, Apart,
       Apart + 2, 0x48804010, 0x88804020, 0xa8807ff0}},
-    {Last, {Base, Base + 0x1000, Base + 0x2000, Base + 0x3000, Base + 0x4000, Base + 0x5000, Base + 0x6000,
+    {{Base, Base + 0x1000, Base + 0x2000, Base + 0x3000, Base + 0x4000, Base + 0x5000, Base + 0x6000,
       Base + 0x7000, Base + 0x9000, Base + 0xa000, Base + 0xb000}, {End - 1, End - 2, End - 3, End - 4, End - 8,
       End - 16, End - 15, Last, Last - 4, Last - 16, Last - 1, Last + 0x2000, (End - 16) | 0x40000000,
       (End - 4) | 0xa0000000}},
@@ -579,10 +580,6 @@ auto directLoads() -> void {
           uint32_t reads = 0;
           if(pass == 0) {
             m.run(code, setup);
-            if(m.recompile) {
-              CHECK(m.cpu.recompiler.direct.first, layout.first & 0x1fffffff);
-              CHECK(m.cpu.recompiler.direct.size, 0x4000);
-            }
           } else {
             for(uint32_t unsteady : layout.unsteady) if(page(unsteady) != page(Base)) m.cpu.table[page(unsteady)] = nullptr;
             m.cpu.ipu.pc = Base, m.cpu.ipu.pd = Base + 4, m.cpu.scc.halted = 0;
@@ -611,7 +608,7 @@ auto directLoads() -> void {
   }
   CHECK(mismatches, 0);
 
-  //Loads chasing pointers through the region: a result into its own base, with an offset and without, in a delay
+  //Loads chasing pointers through steady pages: a result into its own base, with an offset and without, in a delay
   //slot, through the uncached mirror, and a load off the fast path (the page the table leaves out) between.
   if(!useRecompiler) return;
   constexpr uint32_t Nodes = Base + 0x3000;
@@ -1687,8 +1684,8 @@ auto matchesInterpreter() -> void {
         continue;
       }
 
-      // memory: 256 bytes of data at s7 (in the recompiler's direct region), or at s7 + 0x1000, the page left out of the
-      // page table (so compiled code reaches it through read() and write()); aligned, and now and then not
+      // memory: 256 bytes of data at s7 (in a steady page), or at s7 + 0x1000, the page left out of the page table (so
+      // compiled code reaches it through read() and write()); aligned, and now and then not
       uint32_t region = random(4) ? 0 : 0x1000;
       uint32_t wordOffset = region + random(64) * 4 + (random(30) ? 0 : 1 + random(3));
       uint32_t halfOffset = region + random(128) * 2 + (random(30) ? 0 : 1);
@@ -1847,10 +1844,6 @@ auto matchesInterpreter() -> void {
     }
     interpreter.run(code, setup);
     recompiler.run(code, setup);
-    if(program == 0) {  //(the data in the recompiler's direct region, so its loads take the fast path there)
-      auto& direct = recompiler.cpu.recompiler.direct;
-      CHECK((Data & 0x1fffffff) - direct.first < direct.size, true);
-    }
 
     auto& a = interpreter.cpu;
     auto& b = recompiler.cpu;
@@ -1902,7 +1895,7 @@ int main() {
   }
   Tests tests = {
     {"alu", alu}, {"shifts", shifts}, {"allegrex bits", allegrexBits}, {"multiply/divide", multiplyDivide},
-    {"loads/stores", loadsStores}, {"unaligned", unaligned}, {"direct loads", directLoads}, {"branches", branches},
+    {"loads/stores", loadsStores}, {"unaligned", unaligned}, {"loads across pages", pagedLoads}, {"branches", branches},
     {"syscalls", syscalls},
     {"exceptions", exceptions}, {"fpu arithmetic", fpuArithmetic}, {"fpu conversions", fpuConversions},
     {"fpu compare", fpuCompare}, {"fpu memory", fpuMemory}, {"fpu flushing", fpuFlushing}, {"system", system},

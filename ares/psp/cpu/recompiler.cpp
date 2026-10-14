@@ -37,40 +37,6 @@ auto Allegrex::Recompiler::reset() -> void {
   compiled.assign(SectionCount / 64, 0);
   table = sectionTable.data();
   for(u32 index = 0; index < SectionCount; index++) writable(index);
-  //(the direct region: the largest block of steady pages one after another in the host's memory as in the PSP's, its
-  //size a power of two and its first page a multiple of it, from each run of such pages)
-  direct = {};
-  if(!self.pages || !self.steady) return;
-  for(u32 index = 0; index < SectionCount;) {
-    u32 end = index + 1;
-    if(self.steady[index] && self.pages[index]) {
-      while(end < SectionCount && self.steady[end] && self.pages[end] == self.pages[index] + (end - index) * SectionSize) {
-        end++;
-      }
-      for(u32 size = SectionCount; size * SectionSize > direct.size; size >>= 1) {
-        u32 first = (index + size - 1) / size * size;
-        if(first + size <= end) {
-          direct = {first * SectionSize, size * SectionSize};
-          break;
-        }
-      }
-    }
-    index = end;
-  }
-}
-
-//What the S1 register holds as blocks run (emit()): the direct region's memory less its first address, where there is
-//one, else the page table.
-auto Allegrex::Recompiler::directBase() const -> sljit_sw {
-  if(!direct.size) return (sljit_sw)self.pages;
-  return sljit_sw((uintptr_t)self.pages[direct.first / SectionSize] - direct.first);
-}
-
-//The page table in r: S1 itself where there's no direct region, else loaded.
-auto Allegrex::Recompiler::pageTable(reg r) -> sljit_s32 {
-  if(!direct.size) return SLJIT_S1;
-  mov64(r, field(&self.pages));
-  return r.fst;
 }
 
 //Memory changed at address, so code compiled from there may be stale: its whole section goes, and is compiled
@@ -223,9 +189,10 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
   //Every block has the same prologue (two float registers, for the FPU's native arithmetic: recompiler-fpu.cpp),
   //so the stack frame one block's prologue made serves any other's body, and its epilogue.
   beginFunction(1, 3 + Held + Counted, 4, 2);
-  //What loads and stores reach memory through (recompiler-memory.cpp), in saved registers S1 and S2: set here, before
-  //the body, and kept by the blocks that go on to each other, which all set them alike; and the run's count (left()).
-  mov64(sreg(1), imm(directBase()));
+  //The page tables loads and stores look pages up in (recompiler-memory.cpp), in saved registers S1 and S2, and the
+  //run's count (left()): set here, before the body, and kept by the blocks that go on to each other, which all set
+  //them alike.
+  mov64(sreg(1), imm((sljit_sw)self.pages));
   mov64(sreg(2), imm((sljit_sw)writePages.data()));
   loadCount();
   auto bodyLabel = sljit_emit_label(compiler);
@@ -342,7 +309,7 @@ auto Allegrex::Recompiler::emitChain(u32 count) -> void {
   lshr32(reg(1), reg(1), imm(12));
   mov64_u32(reg(1), reg(1));  //reg(1): the page, and the section
   if(self.pages) {
-    mov64(reg(2), mem(SLJIT_MEM2(pageTable(reg(2)), SLJIT_R1), 3));
+    mov64(reg(2), mem(SLJIT_MEM2(SLJIT_S1, SLJIT_R1), 3));  //(S1: the page table, emit())
     unless(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_R2, 0, SLJIT_IMM, 0));
   }
 
@@ -395,7 +362,7 @@ auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target) -> void {
   emitCounted(count, leave);
   u32 index = (target & 0x1fff'ffff) / SectionSize;
   if(self.pages && !(self.steady && self.steady[index] && self.pages[index])) {
-    unless(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_MEM1(pageTable(reg(1))), index * sizeof(u8*), SLJIT_IMM, 0));
+    unless(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_MEM1(SLJIT_S1), index * sizeof(u8*), SLJIT_IMM, 0));
   }
   emitLink(target);  //(straight to the target's body once it's compiled; until then, the lookup)
   mov64(reg(1), field(&table));
