@@ -31,15 +31,25 @@
 //VRAM's copies (measured on a PSP, docs/psp-core.md, round 3's depth-layout files). The first and third copies show
 //VRAM as it is. The other two rearrange it in 32-byte pieces: the second reaches the byte at its offset with bits 6
 //and 13 flipped; the fourth first turns the offset's bits 5-9 round by one place (bit 9 down to bit 5, bits 5-8 up
-//to 6-9), then flips the same two. The GE reaches its depth buffer as the fourth copy shows it, so for a depth buffer
-//512 pixels wide (as games have it), pixel (x, y)'s depth is, in 16-bit steps from the buffer's start:
+//to 6-9), then flips the same two. With an 8888 frame buffer the GE reaches its depth buffer as the fourth copy shows
+//it, so for a depth buffer 512 pixels wide (as games have it), pixel (x, y)'s depth is, in 16-bit steps from the
+//buffer's start:
 //  - through the fourth copy, at y * 512 + x: in order;
 //  - through the second, at y * 512 + (x >> 4) * 32 + (x & 15): each 16 pixels of a row 32 apart (columns 256-511 go
-//    in the gaps, by these rules; only columns 0-255 were measured);
+//    in the gaps, by these rules; only columns 0-255 were measured, and MX vs. ATV Untamed's 8888 race takes its
+//    depth from the second copy so, in strips of 16 pixels, columns 256-479 from the gaps);
 //  - through the first and third, as the second but with the pieces swapped in pairs and the rows in eights:
 //    (y ^ 8) * 512 + ((x >> 4) ^ 1) * 32 + (x & 15).
 //That fits every value measured for a buffer 1.5 MiB (0x180000) into VRAM. Whether the rules go by the address in
 //VRAM (as here) or from the buffer's start differs only for a buffer that doesn't start on 16 KiB.
+//With a 16-bit frame buffer (5650, 5551, 4444) the GE reaches its depth buffer as the second copy shows it: there it's
+//in order, and through the first and third at (y ^ 8) * 512 + (x ^ 32). Unmeasured, but as the games have it: the
+//Kurohyou games draw their pre-rendered depth into the depth buffer's memory as a 5650 frame buffer, take it back
+//through the second copy into a frame buffer of their own and from there into the depth buffer, then test their
+//characters against it, which leaves every pixel's depth the picture's only so; and every game known to read its
+//depth buffer in order reads it through the second copy where it draws 16-bit (Kurohyou's and Genso Suikoden's depth
+//of field, Me & My Katamari's fog, MediEvil's CPU), through the fourth where it draws 8888 (Cars' and IL-2's depth of
+//field, Killzone's and WipEout's CPU) (docs/psp-core.md, part 96).
 
 namespace ares::PlayStationPortable {
 
@@ -122,6 +132,10 @@ struct Memory {
   //before pointer() looks at them: for the GE to have a hardware renderer give up the pixels it covers whole, as
   //memory's bytes are the newest there from then on, so pointer() needn't wait for them.
   std::function<auto (u32 first, u32 last) -> void> vramStoring;
+
+  //The copy of VRAM in whose order the GE keeps its depth buffer, drawing into a frame buffer of this format (0-3):
+  //the second for 16-bit formats, the fourth for 8888 (above).
+  static constexpr auto depthCopy(u32 format) -> u32 { return format == 3 ? 3 : 1; }
 
   //memory.cpp
   static auto vramOffset(u32 copy, u32 seen) -> u32;

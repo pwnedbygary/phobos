@@ -137,11 +137,13 @@ alwaysinline auto GE::drawPixelAs(const PixelState& p, s32 x, s32 y, u32 z, u32 
   if(p.depthRange && (z < p.minDepth || z > p.maxDepth)) return;
   constexpr u32 bytes = Format == 3 ? 4 : 2;
   //Both offsets wrap within VRAM and stay multiples of their pixel's size (the buffers start on 16 bytes, VRAM's size
-  //is a power of two), so no pixel runs past VRAM's end. The GE reaches its depth buffer as VRAM's fourth copy shows
-  //it, so in VRAM itself (and through the first copy) the depth buffer's pieces are rearranged (memory.hpp).
+  //is a power of two), so no pixel runs past VRAM's end. The GE reaches its depth buffer as VRAM's second copy shows
+  //it with a 16-bit frame buffer, as the fourth does with an 8888 one, so in VRAM itself (and through the first copy)
+  //the depth buffer's pieces are rearranged (memory.hpp).
   u32 at = (p.frameBuffer + (y * p.stride + x) * bytes) & (Memory::VRAMSize - 1);
   auto depthAt = [&] {
-    return Memory::vramOffset(3, (p.depthBuffer + (y * p.depthStride + x) * 2) & (Memory::VRAMSize - 1));
+    return Memory::vramOffset(Memory::depthCopy(Format),
+                              (p.depthBuffer + (y * p.depthStride + x) * 2) & (Memory::VRAMSize - 1));
   };
   u8* vram = memory.vram.data();
   u32 old;

@@ -193,8 +193,9 @@ alwaysinline auto GE::depthFirst(const PixelState& p, s32 x, s32 y, Four& four) 
   if(p.clear ? p.clearDepth : p.depthTest) {
     //The four depths are side by side even as the GE rearranges its depth buffer: the four's first byte is a
     //multiple of 8 (the buffer starts on 16 bytes, its rows are multiples of 4 pixels long, the four starts on a
-    //multiple of 4), and the rearrangement leaves an offset's low 5 bits as they are (memory.hpp).
-    u32 at = Memory::vramOffset(3, (p.depthBuffer + (y * p.depthStride + x) * 2) & (Memory::VRAMSize - 1));
+    //multiple of 4), and either rearrangement leaves an offset's low 5 bits as they are (memory.hpp).
+    u32 at = Memory::vramOffset(Memory::depthCopy(Format),
+                                (p.depthBuffer + (y * p.depthStride + x) * 2) & (Memory::VRAMSize - 1));
     u16 depths[4] = {};
     if(four.full) std::memcpy(depths, memory.vram.data() + at, sizeof(depths));
     else for(u32 n = 0; n < 4; n++) if(four.inside[n]) std::memcpy(&depths[n], memory.vram.data() + at + n * 2, 2);
@@ -336,7 +337,8 @@ alwaysinline auto GE::pixelsFour(const PixelState& p, s32 x, s32 y, Four& four) 
   }
   auto& color = four.color;
   auto writeDepth = [&] {
-    u32 offset = Memory::vramOffset(3, (p.depthBuffer + (y * p.depthStride + x) * 2) & (Memory::VRAMSize - 1));
+    u32 offset = Memory::vramOffset(Memory::depthCopy(Format),
+                                    (p.depthBuffer + (y * p.depthStride + x) * 2) & (Memory::VRAMSize - 1));
     s32x4 depth = pickLanes(four.live, four.z, four.depth);
     u16 depths[4] = {u16(depth[0]), u16(depth[1]), u16(depth[2]), u16(depth[3])};
     if(four.full) std::memcpy(vram + offset, depths, sizeof(depths));

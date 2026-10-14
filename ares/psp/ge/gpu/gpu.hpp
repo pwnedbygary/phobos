@@ -376,8 +376,8 @@ struct GPU : GE::Renderer {
     //copied or shown or moved (revive()). (At most 16; where there'd be more, the write waits for a finish.)
     std::vector<std::pair<u32, u32>> dead;
     //VRAM's pages first to last found owned by no other target as of drawnSerial (begin(): not looked through again
-    //while that's so)
-    struct Alone { u32 first = 0, last = 0; u64 serial = 0; } alone;
+    //while that's so); and its depth buffer's likewise (begin(): before its depth is filled from memory)
+    struct Alone { u32 first = 0, last = 0; u64 serial = 0; } alone, depthAlone;
     auto bytes() const -> u32 { return format == 3 ? 4 : 2; }
     auto end() const -> u32 { return address + rows * stride * bytes(); }  //(the VRAM bytes it covers)
     auto drawn() const -> bool { return left <= right; }
