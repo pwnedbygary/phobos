@@ -172,7 +172,8 @@ writes depth draws into a target, the newer depth of another target over the sam
 into its depth on the GPU (`takeDepth()`, `Command::Depth`: the depth aspect alone, the stencil being each frame
 buffer's own), for the rows that one has, its changes from memory filled first. Hammerin' Hero and Jeanne d'Arc draw
 their scene into the screen's frame buffer, then their characters into a frame buffer of their own, cleared without
-its depth, tested against the scene's. Depth across row widths isn't taken (Colin McRae's terrain shadows, part 83).
+its depth, tested against the scene's; Colin McRae Rally's terrain shadows are drawn so too. Depth across row widths
+isn't taken.
 
 **What the GPU doesn't draw.** A PRIM the renderer can't take is drawn by the software renderer instead, once the
 renderer has put back what it drew (`begin()` says so): no target for its frame buffer (the GPU out of room), rows

@@ -12373,3 +12373,122 @@ into this part.
   `runs/final2`, `runs/final3a`, `runs/drive1`, `runs/final4a`, the final runs, and their states in `states/`;
   `regress.sh` and `regress/`, the other games; `tests.sh`, the tests built a file at a time for iterating). Nothing was
   run on the RP6.
+
+## Part 90: Vulkan's lost characters and race — the depth buffer as the PSP's memory, a 5551 stencil bit (Hammerin' Hero, Jeanne d'Arc, Cars Race-O-Rama)
+
+On branch `cursor/psp-vk-models-2b67`, on master (`542da5a28`, #230), merged with `3228b825d` (#229, #237). Parts 81
+to 88 are other branches', 89 kept for the test plan's. Clean room: no PPSSPP code read (its GPU backend not opened),
+JPCSP not read; the PSP's behaviour relied on is the GE's own as the software renderer has it (pixel.cpp's stencil
+operations; the depth buffer in VRAM's copies as memory.hpp has it, measured in round 3). Save states are unchanged:
+everything here is the renderer's, which no state keeps. The software renderer is untouched: its pictures, VRAM and
+state are master's. Two copies of the agent worked in the worktree for a while (Cursor ran a second); the second's are
+5071b80b5 and the design doc's text, and the first, holding the worktree since (`LOCK-worktree`), finished it.
+
+**The problem.** The deep-play reports (batch 03's bug 2, batch 02's item 4): under Vulkan, accurate and fast alike,
+Hammerin' Hero's Gen showed only his hair tuft and his shadow, its pickaxe enemy and a box missing; Jeanne d'Arc's
+units on the briefing's map showed only their shadows; and Cars Race-O-Rama's races had no 3D world at all, a full
+screen of cloudy sky over the track (77-80% of pixels more than 24 levels from Software's). With fast mode transforming
+Hammerin' Hero's 3D on the GPU (3,409 PRIMs) and only 4 read backs, neither the CPU's transform nor the known render-to-
+texture losses were the cause.
+
+**How it was found.** A scratch runner logging every PRIM of a frame (the vertex type, the pixel pipeline's state, the
+texture, the target and its depth, the vertices' depths, the triangles that reached the renderer) and able to have the
+software renderer draw PRIMs chosen by their kind. The characters' PRIMs reached the GPU whole (skinned, with 8-bit
+weights, which the CPU transforms in accurate mode), so their pixels were failing tests the software renderer's pass.
+- **Hammerin' Hero** draws each frame's scene into the screen's 5551 frame buffer (0x44000 and 0x00000 in turn) with
+  the depth buffer at 0x88000, then clears a frame buffer of its own (0xcc000) for its colors and alpha but not its
+  depth, draws its characters there tested "greater or equal" against the scene's depth, marking their pixels in the
+  stencil by INCREMENT (stencil test always), and lays that frame buffer over the screen as a 5551 texture behind an
+  alpha test of "above 0". **Jeanne d'Arc** the same way: its units into 0xcc000 against depth 0x88000, marked by
+  INCREMENT (stencil "255 at least"), taken onto the screen by 3D quads with an alpha test of "1 at least". Two
+  things lost them, each alone:
+  - **The depth.** The PSP's depth buffer is memory, which the scene's drawing left for the characters to be tested
+    against. On the GPU each target's depth is its own: the characters' frame buffer had memory's depth (the state's,
+    never the GPU's) and then its own characters' of the frames before, never cleared, and all of each but what was
+    nearer than the frames before failed.
+  - **The stencil bit.** A 5551 frame buffer's stencil is its alpha bit, which INCREMENT sets (pixel.cpp's
+    `stencilOperation()`: 255) and DECREMENT clears. The GPU's stencil, which holds a 5551 one as 0 or 255, stepped
+    0 to 1 (read back as alpha 0), and the color's alpha, which a texture taken from the frame buffer on the GPU reads,
+    followed the stencil only for REPLACE and ZERO: the composite's alpha test dropped every pixel.
+  Turning each change off in the scratch build (accurate mode, the mean channel difference from Software and the pixels
+  more than 24 apart): Hammerin' Hero at frame 150, without the depth's 2.46 and 4.7%, without the stencil's 2.61 and
+  5.1%, with both 0.08 and 0.0% (master 2.57); Jeanne d'Arc at frame 30, 0.22 and 0.4%, 0.37 and 0.8%, both 0.05 and
+  0.0% (master 0.37 and 0.8%).
+- **Cars Race-O-Rama** draws its race into an 8888 frame buffer with the depth buffer at 0xcc000, then, in strips 32
+  pixels wide, takes that depth as a CLUT16 texture through VRAM's second copy (0x042cc000), its palette making depth an
+  alpha, writes it into the picture's alpha bytes (drawing the picture's memory as a 5650 frame buffer twice as wide),
+  and blends its sky over the far parts by that alpha. The GPU's depth isn't memory's (docs/psp-gpu-renderers.md, "Owned
+  until needed": the depth buffer isn't read back), so the texture read memory's, the state's: the sky covered the race.
+  The depth's taking and the stencil's change alone leave it as master's (39.87 at frame 30).
+
+**The changes** (gpu.cpp, gpu.hpp, vulkan.cpp; in both modes and at every resolution):
+1. **The newest depth taken from the frame buffer that drew it** (`takeDepth()`, `Command::Depth`). A target's depth
+   says which depth it holds (`Target::depthAt`: the serial of the last PRIM that wrote depth into it, 0 for memory's).
+   Before a PRIM that tests or writes depth draws into a target, another target over the same depth buffer and row
+   width holding newer depth has its depth copied into this one's on the GPU (the depth aspect alone, `vkCmdCopyImage`:
+   the stencil is each frame buffer's own), for the rows it has; memory's changes it hadn't filled yet are filled into
+   it first, and this one's own changes in those rows dropped. Nothing waits.
+2. **A 5551 stencil bit** (`settings()`). On a 5551 frame buffer INCREMENT is a REPLACE of 255 and DECREMENT a ZERO, the
+   comparison made against the new reference as a 5551 REPLACE's is (part 68: on the top bit, where the reference's
+   bits the format doesn't keep would tell them apart), so the GPU's stencil is the GE's and the color's alpha follows
+   the pass's operation (but an INCREMENT beside a REPLACE of 0, which one reference can't write both of).
+3. **Depth put into memory for a texture read through VRAM's depth views** (`putDepth()`, `Readback`'s depths,
+   `Backend::readDepth()`). A texture read through VRAM's second or fourth copy (`holds()`) over a depth buffer whose
+   newest depth is the GPU's has that depth read back first (the depth aspect alone, at a higher resolution each
+   pixel's middle sample, made the GE's 16-bit depths: D32's 65,536ths, D24's rounding undone), and written into
+   memory's VRAM in the fourth copy's order, older depth buffers over the same bytes first. Memory hears of the change
+   (decoded textures, the recompiler), and the targets over it fill those rows again, but those holding what was put
+   there, whose own changes from memory are kept as they were (unless a newer depth put after reaches those bytes:
+   5071b80b5). A wait, as a finish, but once until more depth is drawn (`Target::depthKept`): Cars' later strips find
+   memory has it. The targets' pixels and pages stay the GPU's.
+
+**The other scenes.** The kit's 21 scenes (`~/phobos-work/scratch/ge-headroom`'s, copied), master against the branch,
+100 frames from each state, every frame's picture and VRAM hashed (drawing settled), then the end's RAM and machine:
+Software the same in all 21 and in the three games' scenes (24 of 24); Vulkan accurate and fast each the same in 19 of
+the 21. The two others had the same bug, and come out nearer Software, by the depth's taking alone (each change turned
+off in turn):
+- **Colin McRae Rally 2005 Plus**' race draws its scene into the screen's 5551 frame buffer, then 130 PRIMs a frame into
+  a frame buffer at 0xcc000 of the same row width against the same depth buffer: its terrain shadows, which part 83
+  left, putting them down to depth across row widths (a frame buffer 256 pixels wide over the same memory is drawn
+  too, with a depth buffer of its own width). Now drawn: the mean difference from Software at frame 100 3.69 -> 0.22
+  accurate, 3.93 -> 0.53 fast (5.9% of pixels more than 24 apart -> 0.0%).
+- **Twisted Metal: Head On**'s play: 4 pixels of the 130,560 change by a level, in one spot (8 in fast mode); 2 of the 4
+  are Software's now where none were (in fast mode 2 of 8, where 4 were). The game's RAM at the end is the same.
+
+**Pictures** (the kit's runners, -O3 with thin LTO, the final code; the mean channel difference from Software and the
+pixels more than 24 apart, master -> branch):
+
+| Scene, frame | Vulkan accurate | Vulkan fast |
+|---|---|---|
+| Hammerin' Hero, 100 | 1.04, 2.0% -> 0.07, 0.0% | 2.14, 2.1% -> 1.17, 0.0% |
+| Jeanne d'Arc, 100 | 0.27, 0.6% -> 0.04, 0.0% | 2.31, 0.6% -> 2.10, 0.0% |
+| Cars Race-O-Rama, 100 | 37.08, 79.2% -> 1.19, 2.0% | 37.08, 79.2% -> 1.21, 2.0% |
+| Colin McRae Rally 2005 Plus, race, 100 | 3.69, 5.9% -> 0.22, 0.0% | 3.93, 5.9% -> 0.53, 0.0% |
+
+(Fast mode's remaining difference is its usual approximations: 16-bit frame buffers blended by the GPU, colors
+interpolated. Jeanne d'Arc's frame 20, the map's camera moving, is as far from Software in both builds, 3.03 and 2.86
+accurate: the whole picture a little apart, its units drawn in both.)
+
+**Speed**: pending (the three games and Colin McRae's race, master against the branch, both Vulkan modes).
+
+Still not done: depth between frame buffers of other row widths; the CPU's loads through the depth views (memory's
+still, part 68); a texture over a depth buffer through VRAM's plain copies; a 4444 frame buffer's INCREMENT and
+DECREMENT (by one on the GPU, by 16 on the PSP); the stencil a fail or depth-fail operation leaves, in the color's
+alpha a texture taken on the GPU reads; a target holding the only newest depth let go of for room (32 targets), or
+drawn with another depth buffer, loses it, as before.
+
+**Tests** (tests/psp/gpu.cpp, each at 1x and 2x in both modes; on master's core, with only the two statistics added so
+they build, all three fail on their pictures: 5,120, 3,936 and 16,832 bytes apart):
+- "a depth buffer two frame buffers draw with": a sprite into the second frame buffer behind what the first drew is
+  drawn only where the first drew nothing, then the first's behind what the second drew since, likewise.
+- "a 5551 frame buffer's stencil bit": INCREMENT and DECREMENT as the pass's operation and the fail's, then a test of
+  255, the read back, and the bit taken as a texture's alpha behind an alpha test.
+- "a depth buffer read as a texture through VRAM's depth views": through the fourth copy and the second, put once, not
+  again for the second read, again once more depth is drawn.
+
+**Checks**: pending (the three suites on the merge with master).
+
+**The review**: pending (an independent read-only review of the branch).
+
+Scratch: `~/phobos-work/scratch/vk-models` (`patches/dbg-patch.py` and `dbg2-patch.py`, the PRIM log and the changes'
+switches; `kit/`, the hash and picture runs; `png/`, the sheets; `tests1.sh`, `suites.sh`).
