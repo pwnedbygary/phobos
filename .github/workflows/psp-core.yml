@@ -309,8 +309,12 @@ jobs:
           echo "folder=$folder" >> "$GITHUB_OUTPUT"
           echo "name=$(basename "$folder")" >> "$GITHUB_OUTPUT"
 
+      # (the counters allowed for the test, as a phone allows them after setprop security.perf_harden 0; the VM may
+      # have no hardware ones, which the test says and doesn't need)
       - name: Test the measurements on this host
-        run: tools/psp-runner/android/measure-test.sh
+        run: |
+          sudo sysctl -w kernel.perf_event_paranoid=1 || true
+          tools/psp-runner/android/measure-test.sh
 
       - name: Keep the build
         uses: actions/upload-artifact@v4
@@ -321,3 +325,19 @@ jobs:
             ${{ steps.build.outputs.folder }}/lib
             ${{ steps.build.outputs.folder }}/build.txt
           if-no-files-found: error
+
+  # The measurements on an ARM64 host's kernel, as a phone's: its CPU PMUs in sysfs, their counters on one thread
+  runner-measure-arm64:
+    name: Runner measurements (ARM64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test the measurements
+        run: |
+          uname -m
+          ls /sys/bus/event_source/devices
+          sudo sysctl -w kernel.perf_event_paranoid=1 || true
+          tools/psp-runner/android/measure-test.sh

@@ -9,17 +9,21 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/measure-test.XXXXXX")
 trap 'rm -rf "$SCRATCH"' EXIT
 cat > "$SCRATCH/test.cpp" << 'EOF'
+#include <atomic>
 #include <cmath>
 #include <thread>
 int main() {
   volatile double sink = 0, other = 0;
-  std::thread helper([&] { for(int i = 0; i < 20'000'000; i++) other = other + 1; });
+  std::atomic<bool> done{false};
+  //(a second thread, busy until the window's end, for the threads' times)
+  std::thread helper([&] { while(!done) other = other + 1; });
   phobos_measure::begin();
   for(int frame = 0; frame < 90; frame++) {
     for(int i = 0; i < 300'000; i++) sink = sink + std::sqrt(double(i));
     phobos_measure::frame();
   }
   phobos_measure::end();
+  done = true;
   helper.join();
   std::printf("--\nframes run: 90\n");
 }
@@ -45,6 +49,7 @@ for pin in 0 none; do
         > /dev/null || fail "not kept to CPU 0"
     fi
   fi
-  echo "PHOBOS_PIN=$pin: $(grep -E '^measure (window|counters|cpus)' "$SCRATCH/out.txt" | tr '\n' ' ')"
+  echo "PHOBOS_PIN=$pin:"
+  grep -E '^measure (window|emulation|cpus|pinning|counter|threads)' "$SCRATCH/out.txt" | sed 's/^/  /'
 done
 echo "measure-test.sh: passed"

@@ -499,11 +499,13 @@ inline auto perfStart(Perf& perf) -> void {
     //thread's own user-mode counts, so a refusal then is SELinux's)
     long long paranoid = perfParanoid();
     std::string harden = property("security.perf_harden");
+    std::string why = paranoid == -1000 ? ")"
+      : paranoid <= 2 ? "; the kernel allows them at this level, so SELinux (or seccomp) refused them)"
+      : !harden.empty() ? "; adb shell setprop security.perf_harden 0 allows them until the next boot)"
+      : "; sysctl kernel.perf_event_paranoid=2 allows them)";
     perf.error = std::string("perf_event_open: ") + std::strerror(denied) + " (perf_event_paranoid " +
                  (paranoid == -1000 ? std::string("unreadable") : std::to_string(paranoid)) +
-                 ", security.perf_harden " + (harden.empty() ? std::string("not set") : harden) +
-                 (paranoid > 2 ? "; adb shell setprop security.perf_harden 0 allows them until the next boot)"
-                  : paranoid != -1000 ? "; the kernel allows them at this level, so SELinux refused them)" : ")");
+                 (harden.empty() ? std::string() : ", security.perf_harden " + harden) + why;
   } else if(!counted) {
     perf.error = perf.problems.empty() ? "no CPU PMU" : "no instructions or cycles counter opened";
   }
