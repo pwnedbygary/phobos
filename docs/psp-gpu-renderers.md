@@ -403,13 +403,17 @@ What the GPU does with the GPU's own units, and how near the PSP it comes:
   replace, invert, increment and decrement clamped). The alpha written to the color follows the stencil where the pass
   operation's result is known in advance (replace, zero), so blending by the frame buffer's alpha reads it; the
   stencil itself is what's read back as the alpha. Where a PRIM changes the stencil and not the color's alpha (a
-  fail or depth-fail operation that can happen, an increment, decrement or invert, or a write mask keeping some of
-  the stencil's bits), its target notes the rectangle (`Target::lags`), and before a PRIM blends by the frame
-  buffer's alpha there (the GE's factors, so shader blending too) or a copy of the target is taken over it (render to
-  texture), the color's alpha there is set from the stencil on the GPU (`catchAlpha()`, `Command::Alpha`: in a render
-  pass of its own, `copy.frag`'s `ALPHA` build adding each bit the format keeps apart where the stencil test finds it,
-  after a draw making it 0). Part 93: MX vs. ATV Untamed zeroes its race's alpha by a depth-fail operation behind its
-  hills before blending the sky in by it. A 16-bit frame buffer's stencil is held as the GE reads it (part
+  fail or depth-fail operation that can happen, an increment, decrement or invert, a write mask keeping some of the
+  stencil's bits, or the GPU's own logic operation, under which the color's alpha isn't written: Vulkan's takes the
+  alpha too, where the GE's leaves the stencil out), its target notes the rectangle (`Target::lags`), and before a
+  PRIM blends by the frame buffer's alpha there (the GE's factors, so shader blending too) or a copy of the target is
+  taken over it for a PRIM whose pixels use the copy's alpha (render to texture: not through a palette, nor without
+  the texel's alpha, nor without the alpha test or blending by the source's alpha), the color's alpha there is set
+  from the stencil on the GPU (`catchAlpha()`, `Command::Alpha`: in a render pass over the rectangle alone,
+  `copy.frag`'s `ALPHA` build adding, for each bit of the stencil a read back takes, the alpha it reads as, where the
+  stencil test finds it, after a draw making it 0). Part 93: MX vs. ATV Untamed zeroes its race's alpha by a
+  depth-fail operation behind its hills before blending the sky in by it. A 16-bit frame buffer's stencil is held as
+  the GE reads it (part
   68): a 5551 one's bit as 0 or 255, a 4444 one's four bits twice over, as fills and moves put it there, and so do
   clear mode's alpha (a triangle's last corner's for all of it, a sprite's, a point's, each pixel's of a line), a
   replace's reference and MASK_ALPHA's bits (each kept bit with its copies); where a replace's
@@ -809,8 +813,11 @@ What differs after shader blending:
   the row; textures past a frame buffer's row; in fast mode, a texture's rows past its frame buffer's held at its
   last where the PRIM's rows aren't known (part 83); a 4444 frame buffer's increment and decrement stepping its
   stencil by one (part 90); the GPU's corners' depths not whole numbers as the GE's are (draw.cpp's `stepped()`),
-  so its depths come out one more than the GE's at about half the pixels of a 3D surface (part 93); and, for a backend
-  that can't read the frame buffer, the older blending and logic approximations.
+  so its depths come out one more than the GE's at about half the pixels of a 3D surface (part 93); within one PRIM,
+  a primitive blending by the frame buffer's alpha over pixels an earlier primitive of the same PRIM changed the
+  stencil of without the colors' alpha (the alpha is set from the stencil before a PRIM, not between its
+  primitives: part 93); and, for a backend that can't read the frame buffer, the older blending and logic
+  approximations.
 
 The pictures look the same to the eye in the scenes measured; nothing is missing or misplaced.
 

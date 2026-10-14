@@ -32,10 +32,9 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP Vulkan: the frame buffer's alpha as its stencil has it — MX vs. ATV Untamed's race (the haze over its hills and trees, the tree's shadow) — 2026-10-14
 
-Branch `cursor/psp-vk-mx-2b67`, on #251's (`cursor/psp-vk-models-2b67` at e823bf00b); draft PR #254, based on #251's
-branch until #251 merges. docs/psp-core.md, part 93, has the evidence; docs/psp-gpu-renderers.md ("Stencil") the
-design. Clean room: no PPSSPP code read (its GPU backend not opened), JPCSP not read. Save states unchanged. The
-software renderer untouched.
+Branch `cursor/psp-vk-mx-2b67`, on master with #251 merged (`5893dbdc0`); PR #254. docs/psp-core.md, part 93, has the
+evidence; docs/psp-gpu-renderers.md ("Stencil") the design. Clean room: no PPSSPP code read (its GPU backend not
+opened), JPCSP not read. Save states unchanged. The software renderer untouched.
 - **Found** with part 90's PRIM log and dumps of VRAM, everything drawn settled, before chosen PRIMs of a frame: the
   race (Cars Race-O-Rama's engine) makes its alpha from its depth in strips, zeroes the near pixels' alpha by 15
   sprites whose stencil operation is ZERO where the depth test fails, and blends its sky in by the frame buffer's
@@ -45,23 +44,34 @@ software renderer untouched.
 - **Changes** (gpu.cpp, gpu.hpp, vulkan.cpp, copy.frag, compile.sh; both modes, any resolution): a target notes where
   a PRIM's stencil operations changed the stencil without the colors' alpha (`Target::lags`); before a PRIM blends by
   the frame buffer's alpha there, or a copy of the target is taken over it, the colors' alpha is set from the stencil
-  on the GPU (`catchAlpha()`, `Command::Alpha`: `copy.frag`'s `ALPHA` build, a draw for each bit, in a render pass of
-  its own). Nothing waits.
+  on the GPU (`catchAlpha()`, `Command::Alpha`: `copy.frag`'s `ALPHA` build, a draw for each bit a read back takes,
+  in a render pass over the rectangle alone; not for a copy whose alpha the PRIM's pixels don't use). Under the GPU's
+  own logic operation the colors' alpha isn't written (Vulkan's takes the alpha, the GE's leaves the stencil), which
+  notes the area too. Nothing waits.
 - **Pictures** (mean channel difference from Software, #251 -> this, the kit's runners): the race at frames 100, 130,
   160 and 200 4.72, 5.20, 2.84 and 2.79 -> 0.16, 0.21, 0.21 and 0.22, accurate and fast alike (9-10% of pixels more
   than 24 apart -> 0.0-0.1%); Cars Race-O-Rama, the same bug, at 100, 150 and 200 1.19, 0.80, 0.76 -> 0.58, 0.54,
   0.43 accurate, 1.21, 0.82, 0.79 -> 0.60, 0.56, 0.45 fast. Sheets: `~/phobos-work/scratch/vk-mx/out/` (`mx-final-100.png`)
   and `kit/look/`.
-- **Hashes** (the kit's 21 scenes, #251's three games and the race, #251's head against this, 100 frames, every frame's
-  picture and VRAM settled, then RAM and machine): Software the same in all 25; Vulkan accurate and fast each the same
-  in 23, the others the race and Cars. Counted (fast, 100 frames): the race sets the alpha 90 times, Cars 50, Colin
-  McRae's race 98 (its pictures unchanged), the other 22 scenes none.
-- **Speed** (fast mode at 1x, frames a second, two rounds in turns): the race 32.72 -> 33.43, Hammerin' Hero 219.4 ->
-  218.2, Cars 24.92 -> 25.94, Colin McRae 97.35 -> 100.87; the race at 4x 11.28 -> 11.00 and accurate 30.07 ->
-  32.40: within the runs' own spread (a tenth). The RP6's numbers are still to take.
+- **Hashes** (the kit's 21 scenes, #251's three games and the race, master at 5893dbdc0 against the final code,
+  bb6298e9a, 100 frames, every frame's picture and VRAM settled, then RAM and machine): Software the same in all 25;
+  Vulkan accurate and fast each the same in 23, the others the race and Cars, whose hashes are the first fix's
+  (ed3f121c6) exactly. The alpha set per 100 frames (both modes), before the review's points and after: the race 90 ->
+  45 (once a picture), Cars 50 -> 50, Colin McRae's race 98 -> 0 (its pictures the same), the other 22 scenes none.
+- **Speed** (Vulkan fast, frames a second, master / before the review's points / final, two rounds in turns, the
+  Mac's load 9-13): at 1x the race 28.30 / 29.52 / 30.32, Cars 20.36 / 21.00 / 22.06, Hammerin' Hero 190.9 / 189.9 /
+  193.6, Colin McRae 85.6 / 88.8 / 83.0; at 2x the race 21.24 / 20.99 / 20.64, Cars 15.41 / 15.80 / 15.66, Hammerin'
+  Hero 107.3 / 106.2 / 114.7: within the runs' own spread (a tenth). The RP6's numbers are still to take.
 - **Tests**: a GPU group (the alpha zeroed by a depth fail, inverted, by a 3D mesh's depth fail, then blended by and
   taken as a texture, in 8888, 4444 and 5551) and part 90's 5551 group taking all its rows, both modes, 1x and 2x; on
-  #251's core they fail in every mode and resolution (10,752, 8,960 and 1,344 bytes apart).
+  #251's core they fail in every mode and resolution (10,752, 8,960 and 1,344 bytes apart). And a group for each other
+  way a PRIM leaves the alpha behind (a stencil test failing, MASK_ALPHA in a PRIM and in clear mode, INCREMENT and
+  DECREMENT, a REPLACE blended by its own alpha without dual-source blending, the GPU's own logic operation, a 4444
+  REPLACE under a comparison): on master's core the first five fail (4,608-6,912 bytes apart), before the review's
+  points the 4444 one (3,072) and, on CI's lavapipe (the M1 has no logic operations), the logic operation's (4,608).
+- **Review**: an independent read-only review found no blocker and four points, all taken (part 93, "The review"):
+  the GPU's logic operation's alpha, a 4444 stencil's top four bits, the cost on a tile-based GPU (the pass over its
+  rectangle, no setting for a copy whose alpha isn't used), and tests for the other ways.
 - **Found, not changed**: the GPU's corners' depths aren't whole numbers as the GE's are, so its depths come out one
   more at about half of a 3D surface's pixels (the race's 51.2% Software's; truncated in a scratch build 95.3%, its
   pictures unmoved). Its own change, as it moves every 3D game's depth on the GPU.
@@ -69,9 +79,9 @@ software renderer untouched.
   `std::vector<u8>::resize` (seen in "gpu stencil formats" on #251's core, before this change): nall and sljit are
   built without the sanitizers, and the linker can keep their unannotated instantiation. A false positive; these
   runs set `ASAN_OPTIONS=detect_stack_use_after_return=0:detect_container_overflow=0`.
-- **Checks** on ed3f121c6 with its tests (10469dbba): `tests/psp/run-tests.sh` 519 groups, 0 failures;
-  `tests/allegrex/run-tests.sh` 68, 0; `tests/psp/ares/run-tests.sh` 340 checks, 0 failed (the container check off,
-  above). The independent review is the coordinator's.
+- **Checks** on the final code (bb6298e9a): `tests/psp/run-tests.sh` 523 groups, 0 failures, sanitized (the container
+  check off, above) and not; `tests/allegrex/run-tests.sh` 68, 0; `tests/psp/ares/run-tests.sh` 340 checks, 0 failed;
+  CI green.
 
 ## PSP Vulkan: the depth buffer as the PSP's memory, a 5551 stencil bit — Hammerin' Hero's and Jeanne d'Arc's characters, Cars Race-O-Rama's race, Colin McRae's terrain shadows — 2026-10-13
 
