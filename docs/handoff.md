@@ -84,7 +84,7 @@ the Phobos, Pixel and Manga packs' "little blobs". App only.
 
 ## Appearance: the Sakura cycle in phases, three Pixel art scenes gone, night city and XMB Deep redrawn, Manga and CRT redone, a magazine cover and Truck-kun — 2026-10-13
 
-Branch `cursor/themes-backdrops-2b67`, on master (`1d9308714`, merged with `542da5a28`, #230, since), from the owner's feedback on the styles and their
+Branch `cursor/themes-backdrops-2b67`, on master (`1d9308714`, merged with `542da5a28`, #230, and `3228b825d`, #237, since), from the owner's feedback on the styles and their
 backdrops. App only (Kotlin; no native or core change). The console icons follow in a second branch,
 `cursor/themes-console-icons-2b67`.
 - **Sakura cycle** (`PixelBackdropScene.SAKURA_CYCLE`, `ui/theme/PixelSakura.kt`): the sun and the moon were up
@@ -200,6 +200,101 @@ backdrops. App only (Kotlin; no native or core change). The console icons follow
   allows for a status bar above the top bar.
 - **For the owner**: whether the Manga and CRT backdrops stay (the PR's description has the verdict and previews);
   Sakura as the Pixel art default now that Space is gone; the magazine cover and Truck-kun on the RP6.
+
+## PSP: the CPU, round 2 — the VFPU's adder in NEON, delay slots compiled each way, the rare ways out of line, prefixes compiled, blocks linked — 2026-10-13
+
+Branch `cursor/psp-cpu-round2-2b67`, on master (`b3507c1db`, #233 merged; merged in again at `0a9a7fa75`, #234, and at
+`4788125f1`, #235 and #236). docs/psp-core.md, part 86, has the evidence. Clean room: PPSSPP not read (its CPU, JIT and
+IR code not at all), JPCSP not read. Save states unchanged by this branch (master's layout, 27 since #236). Every change
+is the host's alone: pictures, VRAM, RAM and the machine's state are master's.
+- **Where it went** (Mac, Vulkan fast, xctrace sorted by compiled block): compiled code was 20 to 42% of the emulation
+  thread in the CPU-heavy scenes and flat (the busiest block under 1%): block endings and branches a third of it, loads
+  and stores a third; the VFPU's matrix products through the scalar adder 15% of Super Monkey Ball's thread (one loop
+  of eight vtfm.q), 25% of Disaster Report 3's with its prefixed compares through the interpreter.
+- **Changes** (each its own commit, with tests): the VFPU's adder (vfpuDot) in NEON integer instructions, four lanes at
+  once and bit for bit, for compiled vmmul, vtfm, vhtfm, vdot and vhdp on ARM64 (operands in place; inf and NaN lanes
+  and other hosts the scalar way); a branch's delay slot compiled along each way it goes, pc and pd stored only where
+  they're read; the rare ways (an access off the fast path, an FPU mode or NaN, an overflow) as cold code after the
+  block, the FPU's keeping the registers held, loads and stores in 7 to 8 host instructions; the lane-by-lane VFPU
+  instructions with their prefixes worked out as the block is compiled (vfpuEach), the math functions and vf2i at rest;
+  blocks linked straight to the blocks they go on to, unlinked when those blocks' code goes.
+- **Numbers** (Mac, Vulkan fast, the emulation thread's host instructions and ms a frame, medians of three rounds
+  taking turns; the load 30 to 300, so the instructions carry it): Super Monkey Ball's story 636 -> 520 M (-18%, 60 ->
+  49 ms), Disaster Report 3 playing 52 -> 38 M (-26%, 4.4 -> 3.4 ms), the Need for Speeds, Twisted Metal's logo and the
+  Armored Cores' intros 8 to 11% fewer, Colin McRae, the Armored Cores and Twisted Metal playing 8 to 19%, the GE-bound
+  scenes 2 to 5%; the software renderer alike where the CPU counts.
+- **Exact**: the 21 scenes' hashes identical to master's in the software renderer (100 frames, every frame's picture
+  and VRAM, then RAM and the machine's state), Vulkan fast and Vulkan accurate (200 frames, the end's RAM and state);
+  the NEON adder against vfpuDot on 72 million random results; 62 broken versions of the changes, 59 caught by
+  tests/allegrex, the other 3 changing nothing observable. pending (the whole library, before merging)
+- **Checks**: tests/allegrex 68/0 (sanitized; and 68/0 built for x86-64, run under Rosetta), tests/psp 478/0
+  (sanitized), tests/psp/ares 318/0. Merged with #234 (part 83): the hashes identical again in all three renderers,
+  tests/psp 489/0, tests/psp/ares 318/0; GitHub's Linux build (GCC) found a missing `<cstring>`, added, and its tests
+  pass. Merged with #235 and #236 (parts 84 and 87): the hashes identical again in all three, tests/psp 497/0,
+  tests/psp/ares 318/0, GitHub's tests and builds passing. An independent review found no change to emulated results;
+  its points (test gaps: the NEON vmmul's in-place cases, links never checked, code memory starting afresh mid-run, more
+  delay slot kinds; small fixes and comments) were all taken.
+- **Left**: the block endings' run count kept in a register (each ending's load and store of it chains the blocks
+  through memory), a cache of the last target for jumps through a register (Most Wanted's import stubs: 57% of its
+  compiled code is block endings), registers held across blocks with stores only where read, the VFPU's remaining
+  helpers (vf2h, vh2f, the integer packings, vdot/vhdp/vcmp with prefixes, vcrsp/vqmul/vdet), the polled kernel's
+  per-call work (Most Wanted: 72% of the thread), and the GE's display lists (another task's).
+- **On the RP6, to measure**: master against this branch, Vulkan fast at 1x, part 79's scenes: Super Monkey Ball and
+  Disaster Report 3 most (a fifth to a quarter fewer instructions on the emulation thread), Colin McRae, the Armored
+  Cores and the Need for Speeds 8 to 11% (Silent Line playing 19%), the GE-bound scenes 2 to 5%.
+- Scratch: `~/phobos-work/scratch/cpu-round2`.
+
+## PSP: sound — every ATRAC ID's context kept current (Angus Hates Aliens past NEW GAME), and sceVaudio — 2026-10-12
+
+Branch `cursor/psp-audio-b00-2b67`, on master (`b7ea296f4`, then `1d9308714`, #228). docs/psp-core.md, part 82, has
+the evidence. Items 2 and 5 of the deep-play batch 00 report. Clean room: pspautotests' audio/atrac (the states its
+tests force, sas), audio/blocking/vaudio and audio/sceaudio/reserve recordings, pspsdk's pspatrac3.h and pspvaudio.h,
+pspautotests' sascore.h, PPSSPP read only as a description of the PSP (sceVaudio on the SRC channel), the games' own
+code traced and disassembled; JPCSP not read. Begun by one agent; an independent review's points taken by another.
+**Save states go to StateVersion 31** (sceVaudio's hold; 15 to 28 still load, 27 and 28 being parts 87's and 88's
+layouts). **29 and 30 are skipped**: other open branches' layouts, refused here (as 32 is). Whoever lands one of
+those branches after this one must renumber its layout past 31 and update `tests/psp/ares/system.cpp`'s list of
+refused versions (29, 30 and 32) and `tests/psp/states.cpp`'s older layouts (part 82 says more).
+- **Angus Hates Aliens**: its music goes through sceSas's ATRAC3 voices with a wrapper (the one pspautotests'
+  audio/atrac/sas copies) that sets its ID's context state to 16 and, to stop the music (NEW GAME), unsets the voice
+  only while the context still says 16, asking again for good when refused. `_sceAtracGetContextAddress` rewrote the
+  whole context at every call, so the 16 went back to 2: the black screen, the runner's time all in that call. Now
+  every ID's context is in kernel memory (0x08030000), written at power on and whenever the library changes the ID,
+  only read by `_sceAtracGetContextAddress`; a state a program sets (8, 16) refuses the seven calls recorded so with
+  the recorded errors, the other calls answering as before; `__sceSasSetVoiceATRAC3` keeps the context in the voice's
+  word in the SasCore `__sceSasInit` set up (0 again on unset and on init), where the game's streaming reads it (the 16
+  loads through address 0 at boot). The game now loads and reaches its first level. Still silent: sceSas's ATRAC3
+  voices don't decode (they didn't before).
+- **sceVaudio**: reserve, release, blocking output, the effect and level control setters, on the SRC channel, as
+  pspautotests' vaudio recorded (an output returns its count; a reservation refused while Output2 holds the channel
+  still holds sceVaudio; the release waits for a buffer playing); buffers copied as pairs into two kernel buffers
+  (0x08031000); an output's volume 0 to pspvaudio.h's 0x8000, more refused. Two choices disagree with pspautotests'
+  audio/sceaudio/reserve (mono refused there; a release freeing the SRC channel Output2 held): left for the owner, part
+  82 says how; Battle vs. Chess reserves stereo (format 2) and its outputs' volume, fading in from 0, peaks at 0x35C1,
+  so neither touches it. Battle vs. Chess's music thread plays its MP3 music through it now. **Its moves still aren't
+  carried out**: not sceVaudio. Traced: the confirm reaches the game's pad code; its chess thread runs its engine only
+  when a request word is set, which nothing sets on the confirm; nothing else in its memory changes but the lit squares'
+  colours, and no system call differs (no file, thread or missing function). The prototype's own move code wasn't
+  followed to the end (part 82 has the leads).
+- **Checks** on the final tree (with the review's points): `tests/psp/run-tests.sh` (sanitizers) 479 groups, 0
+  failures; `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 338 checks, 0 failed
+  (before it, 473 groups). Games with the branch's runner: part 82's last paragraph.
+- **Library**: not run by the agents (the first agent's run stopped with its session); the owner runs the 266-game
+  comparison for this branch and #230 together.
+- **Review**: an independent review found NEEDS CHANGES (two state refusals with no check behind them; sceVaudio acting
+  on a channel another caller held after its refused reservation; and lows: a bad rate leaving it held, contexts written
+  on refused calls, the MAX values, untested refusals, wording), all taken in `930c6e2db`; a delta review passed, its
+  two points (the SRC family's release of sceVaudio's channel documented and tested, a test's leftover) taken in
+  `97fac6653`. A later independent review of the merged branch (five Lows), taken by another agent after the first
+  stopped: sceVaudio's volume to 0x8000; the SasCore's word only for the core set up, cleared on unset and init; the
+  older state's test; the context's state looked at by the seven recorded calls alone (Corpse Party's sound byte for
+  byte master's); 27 to 30 noted. Part 82's "The review's points" has each.
+- **On the RP6, to check**: (1) Angus Hates Aliens: NEW GAME passes the loading screen into the first level (black
+  before); its music is still silent. (2) Battle vs. Chess: menu and board music plays (silent before); a move is
+  still refused. (3) Save and load a state in a game playing music (any ATRAC game) and in Battle vs. Chess: it plays
+  on; a state made by this build is refused by builds before it (StateVersion 31).
+- Scratch: `~/phobos-work/scratch/hle-b00`; `~/phobos-work/scratch/review-b00` (the review's points: the runners, the
+  runs in `runs/`, the WAVs in `wav/`).
 
 ## PSP: the host's right stick for patched games, the keyboard in a field's own characters, 7th Dragon 2020-II past its certificate — 2026-10-12
 

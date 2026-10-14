@@ -346,6 +346,16 @@ auto Kernel::serialize(serializer& s) -> bool {
     u64 latest = frameCycle(Audio::SrcAhead) + srcDuration(src.buffers[0].sampleCount) - Audio::SrcLead;
     check(src.retireAt > cycles ? src.retireAt - cycles <= latest : cycles - src.retireAt < VblankCycles);
   }
+  //sceVaudio (layout 31 on; not held in older states): whether it's held (a reservation the SRC channel refused holds
+  //it too: audio.cpp) and whether the SRC channel is reserved for it, then only while it's held and the channel
+  //reserved; its buffers' format, its effect and level control as sceVaudioSetEffectType and sceVaudioSetAlcMode take
+  //them
+  auto& vaudio = audio.vaudio;
+  if(s.reading() && stateLayout < 31) vaudio = {};
+  else s(vaudio.reserved), s(vaudio.ownsSrc), s(vaudio.mono), s(vaudio.effect), s(vaudio.effectVolume), s(vaudio.alc);
+  check(!vaudio.ownsSrc || (vaudio.reserved && src.reserved));
+  check(vaudio.effect >= 0 && vaudio.effect <= 5 && vaudio.effectVolume >= 0 && vaudio.effectVolume <= 0x8000);
+  check(vaudio.alc >= 0 && vaudio.alc <= 2);
   //what the channels have added to the output and the system hasn't taken yet: frames from the first not taken
   //(heard by now at the latest) to one past the last added to, a ring's worth at most, each sum no bigger than eight
   //channels and the SRC channel at their loudest make (2^21), so adding to it can't overflow; and where the SRC
@@ -369,7 +379,7 @@ auto Kernel::serialize(serializer& s) -> bool {
   check(src.armed ? src.position < (armedSamples + 1) * 44'100 : !src.position);
   //threads waiting on sound: on a mixer channel, one at most, while its slot is busy (it's given the slot as the
   //buffer there is used up); on the SRC channel, one at most waiting for a completion, while both buffers are armed
-  //(only a buffer retiring wakes it), and any waiting for it to drain while one is
+  //(only a buffer retiring wakes it), and any waiting for it to drain while one is, to release it for sceVaudio too
   if(s.reading()) {
     bool waited[8] = {}, srcWaited = false;
     for(auto& [uid, t] : threads) {
@@ -381,6 +391,8 @@ auto Kernel::serialize(serializer& s) -> bool {
       } else if(t->waitID == Audio::WaitSrc) {
         check(src.armed == 2 && !srcWaited);
         srcWaited = true;
+      } else if(t->waitID == Audio::WaitVaudioRelease) {
+        check(src.armed && vaudio.ownsSrc);
       } else {
         check(t->waitID == Audio::WaitSrcDrain && src.armed);
       }
@@ -419,7 +431,9 @@ auto Kernel::serialize(serializer& s) -> bool {
   //priming two frames at most, its second buffer only with a loop before its end, a halfway buffer's data within the
   //file; a stream's ring within its buffer, decoding and the game's bytes no more than a time round apart and the
   //bytes between them what the ring holds (sceAtracGetStreamDataInfo and sceAtracAddStreamData rely on it). The
-  //contexts' memory, once handed out, is a block of the user partition.
+  //contexts are in kernel memory (AtracContextMemory), saved with the rest of memory as the program left them; a
+  //state from before they had memory of their own says 0 there (written now), or, if the program asked for one, the
+  //block of the user partition they were put in then, where they stay.
   s(atracPlusIDs); s(atracClassicIDs); s(atracContexts);
   check(atracPlusIDs <= 3 && atracClassicIDs <= 6 - 2 * std::min(atracPlusIDs, 3u));
   for(u32 id : range(6)) {
@@ -461,7 +475,7 @@ auto Kernel::serialize(serializer& s) -> bool {
     check(a.curBuffer || a.streamDataByte == ring);
     check(a.loopsAhead <= a.bufferByte / a.frameBytes + 1);
   }
-  if(s.reading() && atracContexts) {
+  if(s.reading() && atracContexts && atracContexts != AtracContextMemory) {
     bool found = false;
     for(auto& block : blocks) found |= block.address == atracContexts && block.size >= 6 * 256;
     check(found);
@@ -1094,6 +1108,13 @@ auto Kernel::serialize(serializer& s) -> bool {
         check(list.state == GeList::State::Running || (list.state == GeList::State::Paused && list.pausing));
       }
     }
+  }
+  //(a state from before the ATRAC contexts had memory of their own: theirs written now, from all that's loaded. One
+  //where a program had asked for them keeps them in its block as they were then, as fresh as that last asking, which
+  //wrote them: they're written again as the library next changes each ID, a state the program set kept meanwhile.)
+  if(s.reading() && !atracContexts && valid) {
+    atracContexts = AtracContextMemory;
+    for(u32 id : range(6)) atracContext(id);
   }
   return valid;
 }
