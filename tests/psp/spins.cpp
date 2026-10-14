@@ -18,17 +18,18 @@ constexpr u64 Step = Kernel::VblankCycles / 8;
 
 auto branchTo(Assembler& a, u32 target) -> s32 { return s32(target - a.here() - 4) / 4; }
 
-//Starts thread name at entry, priority 0x10 (better than main's 0x20), from main.
-auto startThread(Assembler& main, KernelMachine& m, const char* name, u32 entry) -> void {
-  main.li(a0, m.string(name)); main.li(a1, entry); main.li(a2, 0x10); main.li(a3, 0x1000);
+//Starts thread name at entry, at priority (0x10: better than main's 0x20), from main.
+auto startThread(Assembler& main, KernelMachine& m, const char* name, u32 entry, u32 priority = 0x10) -> void {
+  main.li(a0, m.string(name)); main.li(a1, entry); main.li(a2, priority); main.li(a3, 0x1000);
   main.li(t0, 0); main.li(t1, 0);
   main.call("sceKernelCreateThread");
   main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
   main.call("sceKernelStartThread");
 }
 
-//What a loop does besides polling, to make it one that can't be skipped (Plain: none).
-enum class Twist : u32 { Plain, Stored, Counting, RunTime, Clock, Counted, OwnCode };
+//What a loop does besides polling, to make it one that can't be skipped (Plain: none); or, Equal, its ticker at
+//main's own priority, ready at main's next rotation once its delay ends (as the go ends) and taking the CPU there.
+enum class Twist : u32 { Plain, Stored, Counting, RunTime, Clock, Counted, OwnCode, Fpu, OtherLine, Equal };
 
 //Where the idle loop's anchor is, for the direct skip: sceKernelReferThreadStatus's syscall, and where main goes on.
 struct Idle { u32 refer = 0, back = 0; };
@@ -49,7 +50,8 @@ auto idleLoop(KernelMachine& m, Twist twist = Twist::Plain, u32 tick = 200) -> I
     main.call("sceKernelCreateSema");
     main.put(addu(s7, v0, zero));
   }
-  startThread(main, m, "ticker", 0x0880'3000);
+  startThread(main, m, "ticker", 0x0880'3000, twist == Twist::Equal ? 0x20 : 0x10);
+  if(twist == Twist::Fpu) main.li(t0, 0x3f80'0000), main.put(mtc1(t0, 2));  //(f2: 1.0)
   main.li(s3, Count); main.li(s4, 0);
   u32 round = main.here();
   main.put(addiu(s4, s4, 1));
@@ -61,7 +63,8 @@ auto idleLoop(KernelMachine& m, Twist twist = Twist::Plain, u32 tick = 200) -> I
   main.put(addu(a0, v0, zero)); main.put(addiu(a1, sp, 0x10));
   main.call("sceKernelReferThreadStatus");
   idle.refer = m.stub("sceKernelReferThreadStatus") + 4, idle.back = main.here();
-  main.put(lw(a0, 0x50, sp));
+  if(twist == Twist::OtherLine) main.li(a0, 0x30);  //(no thread there: it changes nothing, but isn't worked out)
+  else main.put(lw(a0, 0x50, sp));
   main.call("sceKernelRotateThreadReadyQueue");
   main.put(lw(s0, 0x78, sp)); main.put(lw(ra, 0x7c, sp));
   switch(twist) {
@@ -71,7 +74,8 @@ auto idleLoop(KernelMachine& m, Twist twist = Twist::Plain, u32 tick = 200) -> I
   case Twist::Clock: main.call("sceKernelGetSystemTimeLow"); break;
   case Twist::Counted: main.put(addu(a0, s7, zero)), main.li(a1, 1), main.call("sceKernelSignalSema"); break;
   case Twist::OwnCode: main.li(t5, 0x0880'1ff0), main.put(lw(t6, 0, t5)), main.put(sw(t6, 0, t5)); break;
-  case Twist::Plain: break;
+  case Twist::Fpu: main.put(fop(0x00, 1, 1, 2)); break;  //add.s f1, f1, f2
+  case Twist::Plain: case Twist::OtherLine: case Twist::Equal: break;
   }
   main.put(addiu(sp, sp, 0x80));
   main.put(lw(t0, 0, s3)); main.put(sltu(t1, t0, s5));
@@ -164,12 +168,16 @@ auto bothWays(const std::function<void(KernelMachine&)>& program, bool recompile
 }
 
 //The idle loop and the movie wait, skipped (thousands of turns), every step's state the same as with every turn run;
-//the run times the idle loop noted moving on as its targets came. With interrupts held off the wait is skipped as
-//well (no thread switch, nor a call into the program, could come in it either way), the same.
+//the run times the idle loop noted moving on as its targets came. With the ticker at main's priority, ready as a go
+//begins, the turn whose rotation hands it the CPU isn't skipped (a proof there finds it ready), the rest are. With
+//interrupts held off the wait is skipped as well (no thread switch, nor a call into the program, could come in it
+//either way), the same.
 static auto spinsSkipped() -> void {
   for(bool recompile : {false, true}) {
     u64 skipped = 0;
     CHECK(bothWays([](KernelMachine& m) { idleLoop(m); }, recompile, 16, skipped), true);
+    CHECK(skipped > 1000, true);
+    CHECK(bothWays([](KernelMachine& m) { idleLoop(m, Twist::Equal); }, recompile, 16, skipped), true);
     CHECK(skipped > 1000, true);
     CHECK(bothWays([](KernelMachine& m) { movieWait(m); }, recompile, 40, skipped), true);
     CHECK(skipped > 1000, true);
@@ -185,12 +193,15 @@ static auto spinsSkipped() -> void {
 }
 
 //Loops that aren't the same turn over and over, never skipped, the same either way: a count stored in memory each
-//turn, a register counting turns, the thread's run time read from its status, the clock polled (whose answer moves
-//on), a semaphore signalled that counts. A store into the loop's own page (the same word again) drops its compiled
-//code, so with the recompiler that one isn't skipped either; the interpreter compiles nothing, and skips it.
+//turn, a register counting turns, an FPU register adding up, the thread's run time read from its status, the clock
+//polled (whose answer moves on), a semaphore signalled that counts. One rotating another priority's line (none ready
+//there) changes nothing, but isn't a case the kernel works out, so isn't skipped either. A store into the loop's own
+//page (the same word again) drops its compiled code, so with the recompiler that one isn't skipped; the interpreter
+//compiles nothing, and skips it.
 static auto spinsRefused() -> void {
   for(bool recompile : {false, true}) {
-    for(auto twist : {Twist::Stored, Twist::Counting, Twist::RunTime, Twist::Clock, Twist::Counted, Twist::OwnCode}) {
+    for(auto twist : {Twist::Stored, Twist::Counting, Twist::Fpu, Twist::RunTime, Twist::Clock, Twist::Counted,
+                      Twist::OtherLine, Twist::OwnCode}) {
       u64 skipped = 0;
       CHECK(bothWays([twist](KernelMachine& m) { idleLoop(m, twist); }, recompile, 16, skipped), true);
       if(twist == Twist::OwnCode && !recompile) {
