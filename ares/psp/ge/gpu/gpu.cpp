@@ -732,10 +732,10 @@ auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken, u
 auto GPU::settings(const GE::Look& look) -> void {
   auto& p = look.pixel;
   auto& c = ge->commands;
-  //(a PRIM whose settings, texture and frame buffer are the last one's takes its state as it is, and its draws join
-  //the last's without comparing them: Super Monkey Ball draws 50,000 PRIMs a frame, a world matrix between each two
-  //and its settings changed for one in fifty. Not in clear mode, where each primitive sets the stencil
-  //(clearStencil()), nor for a copy of a target, which textureFor() takes again for each PRIM.)
+  //(a PRIM whose settings, texture and frame buffer are the last one's takes its state as it is, its draws joining the
+  //last's without comparing them again where it's still the last recorded: Super Monkey Ball draws 50,000 PRIMs a
+  //frame, a world matrix between each two and its settings changed for one in fifty. Not in clear mode, where each
+  //primitive sets the stencil (clearStencil()), nor for a copy of a target, which textureFor() takes again for each.)
   auto& t = look.texture;
   KeptSettings now{!p.clear && !held, p, look.textured, t.clampU, t.clampV, look.withAlpha, look.doubled, t.width,
                    t.height, look.function, look.environment, c[GE::MaskColor], c[GE::MaskAlpha], target->id,
