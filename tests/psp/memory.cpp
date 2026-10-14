@@ -75,12 +75,28 @@ static auto areas() -> void {
     CHECK(s.unmapped[1].first, 0x09ff'fffe), CHECK(s.unmapped[1].second, false);
   }
 
+  //copies, fills and copies out (their pieces' main RAM, in one step) up to RAM's last byte, and none across it: a
+  //range one byte past it does nothing at all, nor reports anything
+  u8 four[4] = {1, 2, 3, 4}, back[4] = {};
+  s.unmapped.clear();
+  CHECK(s.memory.copyIn(0x09ff'fffc, four, 4), true);
+  CHECK(s.memory.copyOut(back, 0x09ff'fffc, 4), true);
+  CHECK(back[0] == 1 && back[3] == 4, true);
+  CHECK(s.memory.copyIn(0x09ff'fffd, four, 4), false), CHECK(s.memory.fill(0x09ff'fffd, 0xee, 4), false);
+  CHECK(s.memory.copyOut(back, 0x09ff'fffd, 4), false);
+  CHECK(s.memory.read(Allegrex::Word, 0x09ff'fffc), 0x0403'0201);
+  CHECK(s.memory.fill(0x09ff'fffe, 0xee, 2), true);
+  CHECK(s.memory.read(Allegrex::Word, 0x09ff'fffc), 0xeeee'0201);
+  CHECK(s.unmapped.size(), 0);
+
   //later models' 64 MiB
   System big(64_MiB);
   CHECK(big.memory.ram.size(), 64_MiB);
   big.memory.write(Allegrex::Word, 0x0bff'fffc, 7);
   CHECK(big.memory.read(Allegrex::Word, 0x0bff'fffc), 7);
   CHECK(big.unmapped.size(), 0);
+  CHECK(big.memory.copyIn(0x0bff'fffd, four, 4), false), CHECK(big.memory.copyIn(0x0bff'fffc, four, 4), true);
+  CHECK(big.memory.read(Allegrex::Word, 0x0bff'fffc), 0x0403'0201);
   big.memory.read(Allegrex::Word, 0x0c00'0000);
   CHECK(big.unmapped.size(), 1);
 }

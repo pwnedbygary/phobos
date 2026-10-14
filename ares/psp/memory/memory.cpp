@@ -100,13 +100,9 @@ auto Memory::serialize(serializer& s) -> void {
 
 //Where the size bytes from address are in the host's memory, or nullptr if any of them has nothing behind it (or
 //they run past the end of an area, or past a 32-byte piece of VRAM's second or fourth copy, which rearrange them).
-//load: they're about to be read, not written (read()).
+//load: they're about to be read, not written (read()). (Main RAM's are found in memory.hpp's pointer().)
 auto Memory::pointerElsewhere(u32 address, u32 size, bool load) -> u8* {
   u32 physical = address & 0x1fff'ffff;
-  if(physical >= RAMBase && physical - RAMBase < ram.size()) {
-    u32 offset = physical - RAMBase;
-    return size <= ram.size() - offset ? &ram[offset] : nullptr;
-  }
   if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow) {
     if(!knownDrawn && vramBusy) {  //(the first and third copies: the bytes; others: the 16 KiB they rearrange)
       u32 seen = (physical - VRAMBase) % VRAMSize, last = std::min<u32>(seen + size, VRAMSize) - 1;
