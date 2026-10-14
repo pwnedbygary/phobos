@@ -1030,7 +1030,7 @@ inline auto writeJson(State& s) -> void {
   out += "}, \"counted\": {";
   first = true;
   for(auto& [name, share] : r.counted) {
-    out += std::string(first ? "" : ", ") + jsonText(name) + ": " + jsonNumber(share, "%.4f");
+    out += std::string(first ? "" : ", ") + jsonText(name) + ": " + jsonNumber(share);
     first = false;
   }
   out += "}, \"not counted\": [";
