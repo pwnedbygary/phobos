@@ -13467,8 +13467,9 @@ white blended in by it over the second's alone; and in fast mode a quad of six v
 leaving the alpha behind by its depth fails, and another blending by it after a sprite left it behind. On the merged
 code (78138561a) against master at dd37263c8, the kit's 21 scenes, #251's three games and the race as before:
 Software the same in all 25, Vulkan accurate and fast each in 23, the race and Cars apart as before, their hashes
-the pre-merge code's (bb6298e9a: c2a95b636's) exactly in both modes; the alpha set per 100 frames as before (the race 45, Cars 50, Hammerin' Hero and
-Colin McRae none); `tests/psp/run-tests.sh` 528 groups, 0 failures, sanitized (the container check off) and not;
+the pre-merge code's (bb6298e9a: c2a95b636's) exactly in both modes; the alpha set per 100 frames as before (the
+race 45, Cars 50, Hammerin' Hero and Colin McRae none); `tests/psp/run-tests.sh` 528 groups, 0 failures, sanitized
+(the container check off) and not;
 `tests/allegrex/run-tests.sh` 68, 0; `tests/psp/ares/run-tests.sh` 340, 0; CI green. With `lagging` reset before the
 kept settings' return (a scratch build: the way a merge could have lost it), the test's sprites alike fail in each
 mode and resolution, 2,304 bytes apart, no alpha set.
