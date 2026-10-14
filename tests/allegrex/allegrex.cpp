@@ -497,7 +497,7 @@ auto fpuMemory() -> void {
 // memory: here pages 4 to 7 of the test's RAM, with pages 1 and 8 not steady) without the page table, and every other
 // load through it, as cold code. Each kind of load at the region's first and last addresses, just outside it on either
 // side, misaligned, through other mirrors, on a steady page apart from it, on listed pages that aren't steady, and on
-// the page the table leaves out, run once and again compiled with page 8 then taken out of the table: the
+// the page the table leaves out, run once and again compiled with pages 1 and 8 then taken out of the table: the
 // interpreter's registers and exceptions, and read() reached (on the recompiler) only for pages the table leaves out.
 auto directLoads() -> void {
   auto lvs = [](uint32_t vt, uint32_t b) { return 0x32u << 26 | b << 21 | (vt & 31) << 16 | (vt >> 5 & 3); };
@@ -536,6 +536,7 @@ auto directLoads() -> void {
           }
         } else {
           m.cpu.table[page(After)] = nullptr;
+          m.cpu.table[page(Apart)] = nullptr;
           m.cpu.ipu.pc = Base, m.cpu.ipu.pd = Base + 4, m.cpu.scc.halted = 0;
           m.exceptions.clear();
           setup(m.cpu);
@@ -547,7 +548,8 @@ auto directLoads() -> void {
                  && m.exceptions == reference.exceptions && m.cpu.scc.r[8] == reference.cpu.scc.r[8];
         for(uint32_t n = 0; n < 128; n++) same &= m.cpu.vfpu.r[n] == reference.cpu.vfpu.r[n];
         bool aligned = address % load.alignment == 0;
-        bool unlisted = page(address) == page(Unmapped) || (pass == 1 && page(address) == page(After));
+        bool unlisted = page(address) == page(Unmapped) || (pass == 1 && (page(address) == page(After)
+                     || page(address) == page(Apart)));
         if(pass == 1 && m.recompile) same &= reads == (aligned && unlisted ? load.alignment == 16 ? 4u : 1u : 0u);
         if(!same && ++mismatches <= 5) {
           std::printf("FAIL %s: %08x at %08x, pass %u: t0 %08x vs %08x, %zu exceptions vs %zu, %u reads\n", currentTest,
@@ -756,6 +758,46 @@ auto recompilerCases() -> void {
                });
   CHECK(unlisted.gpr(s0), 11);
 
+  // A block that goes on into a page the owner may take out of the table (not steady), compiled with the page listed:
+  // once it's out, and its bytes changed where the recompiler didn't hear of it (as the GE's workers draw into VRAM's
+  // busy pages), the block leaves for run(), which interprets what's there now.
+  {
+    constexpr uint32_t Edge = Base + 0x1ffc, Out = Base + 0x2000;
+    Machine m;
+    m.cpu.steadyPages[(Out & 0x1fffffff) >> 12] = 0;
+    m.ram.write32(Edge, addiu(s0, s0, 1));
+    m.ram.write32(Out, addiu(s1, s1, 1));
+    m.ram.write32(Out + 4, halt);
+    m.run({j(Edge), nop});
+    m.cpu.table[(Out & 0x1fffffff) >> 12] = nullptr;
+    m.ram.write32(Out, addiu(s1, s1, 100));
+    m.cpu.ipu.pc = Base, m.cpu.ipu.pd = Base + 4, m.cpu.scc.halted = 0;
+    m.cpu.run(10000);
+    CHECK(m.gpr(s0), 2);
+    CHECK(m.gpr(s1), 101);
+  }
+
+  // A syscall in a delay slot that halts the CPU (as the kernel does when every thread waits on something): nothing
+  // runs after it, though the jump's target is a block compiled and linked already (by a first run, not halting).
+  {
+    constexpr uint32_t Target = Base + 0x100;
+    Machine m;
+    bool halting = false;
+    m.cpu.syscallHook = [&](u32) -> bool {
+      if(halting) m.cpu.scc.halted = 1;
+      return true;
+    };
+    m.ram.write32(Target, addiu(s1, s1, 1));
+    m.ram.write32(Target + 4, halt);
+    m.run({addiu(s0, s0, 1), j(Target), syscall(1)});
+    halting = true;
+    m.cpu.ipu.pc = Base, m.cpu.ipu.pd = Base + 4, m.cpu.scc.halted = 0;
+    m.cpu.run(10000);
+    CHECK(m.gpr(s0), 2);
+    CHECK(m.gpr(s1), 1);
+    CHECK(m.cpu.ipu.pc, Target);
+  }
+
   // A branch in the last word of a 4 KiB section, so its delay slot is in the next one: taken, not taken, and a
   // likely branch not taken, which skips the delay slot.
   for(auto [branch, delaySlotRuns, nextRuns] : {std::tuple{beq(zero, zero, 2), 1u, 0u},
@@ -918,6 +960,50 @@ auto chainedRuns() -> void {
   CHECK(chained.ipu.r[s6], 25);
   CHECK(runs[0].befores == runs[1].befores, 1);
   CHECK(runs[0].befores.size(), 50);
+}
+
+// Syscalls that move a run on: one bringing its limit forward (as the kernel does when something it set off comes due
+// sooner), one counting instructions it skipped (as the kernel's spins do), every third call. A loop calling an import
+// stub (a jr ra with its syscall in the delay slot) runs in short runs on two recompilers, one chaining (counting the
+// run in a register where the host has one) and one not: each run must end at the same count, pc and registers.
+auto movedRuns() -> void {
+  if(!useRecompiler) return;  //(it runs both engines itself)
+  constexpr uint32_t Stub = Base + 0x200;
+  struct Run { Machine m; uint32_t calls = 0; } runs[2];
+  for(uint32_t n = 0; n < 2; n++) {
+    auto& run = runs[n];
+    run.m.cpu.syscallHook = [&run](u32) -> bool {
+      auto& cpu = run.m.cpu;
+      if(++run.calls % 3 == 1) cpu.runLimit = std::min<u64>(cpu.runLimit, cpu.instructionsBefore() + 2);
+      if(run.calls % 3 == 2) cpu.instructionsRun += 5;
+      return true;
+    };
+    for(uint32_t address = Base; uint32_t word : {addiu(s0, s0, 1), jal(Stub), nop, slti(t0, s0, 200),
+                                                  bne(t0, zero, -5), nop, halt}) {
+      run.m.ram.write32(address, word), address += 4;
+    }
+    run.m.ram.write32(Stub, jr(ra));
+    run.m.ram.write32(Stub + 4, syscall(1));
+    run.m.cpu.recompiler.enabled = run.m.recompile = true;
+    run.m.cpu.recompiler.chains = n == 1;
+    run.m.cpu.power(Base);
+  }
+  auto& a = runs[0].m.cpu;
+  auto& b = runs[1].m.cpu;
+  uint32_t mismatches = 0;
+  for(uint32_t round = 0; round < 3000 && !a.scc.halted; round++) {
+    uint32_t limit = 1 + round % 23;
+    uint64_t x = a.run(limit), y = b.run(limit);
+    bool same = x == y && a.ipu.pc == b.ipu.pc && a.ipu.pd == b.ipu.pd && a.ipu.r[s0] == b.ipu.r[s0];
+    if(!same && ++mismatches <= 3) {
+      std::printf("FAIL %s: run %u of %u: %llu vs %llu instructions, pc %08x vs %08x\n", currentTest, round, limit,
+                  (unsigned long long)x, (unsigned long long)y, a.ipu.pc, b.ipu.pc);
+    }
+  }
+  CHECK(mismatches, 0);
+  CHECK(a.scc.halted, 1);
+  CHECK(b.scc.halted, 1);
+  CHECK(b.ipu.r[s0], 200);
 }
 
 // The coprocessors' branches taken: a chaining recompiler runs the delay slot and goes on to the target itself
@@ -1544,7 +1630,8 @@ int main() {
     {"exceptions", exceptions}, {"fpu arithmetic", fpuArithmetic}, {"fpu conversions", fpuConversions},
     {"fpu compare", fpuCompare}, {"fpu memory", fpuMemory}, {"fpu flushing", fpuFlushing}, {"system", system},
     {"recompiler", recompilerCases},
-    {"chained runs", chainedRuns}, {"coprocessor branches taken", coprocessorBranchesTaken},
+    {"chained runs", chainedRuns}, {"runs moved by syscalls", movedRuns},
+    {"coprocessor branches taken", coprocessorBranchesTaken},
     {"delay slots each way", delaySlotsEachWay}, {"linked blocks", linkedBlocks},
   };
   for(auto& test : vfpuTests()) tests.push_back(test);
