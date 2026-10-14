@@ -13,10 +13,15 @@ Read in order:
 3. [Performance audit](performance-audit.md) and [benchmark protocol](mario-tennis-benchmark.md).
 4. [Implementation history](implementation-history.md) only for relevant historical details.
 
-Next action: establish matched Phobos/v336 APK, device, driver, settings and scene
-identities, then collect baseline traces. No optimization or performance parity
-has been demonstrated. Do not resume the cancelled signing or audio-buffer tasks
-without new authorization. Preserve saves and do not assume APK update compatibility.
+Current focus (2026-10-13): the PSP core (its parts in [psp-core.md](psp-core.md), and the
+entries below, newest first) and the
+[test and performance plan](implementation-plan.md#test-and-performance-plan-2026-10-13):
+PSP throughput, fast-forward and Vulkan at 1x, 2x, 4x and 5x, accurate and fast modes
+measured apart, with the N64/Mario Tennis regressions kept. A matched Phobos/v336
+comparison (APK, device, driver, settings, scene and traces) has still not been made, and
+no overall speedup or parity is claimed. Do not resume the cancelled signing or
+audio-buffer tasks without new authorization. Preserve saves and do not assume APK update
+compatibility.
 
 Publication preparation: the plan reconciliation received independent PASS,
 including byte-for-byte preservation of the original plan in its archival appendix.
@@ -223,6 +228,508 @@ backdrops. App only (Kotlin; no native or core change). The console icons follow
   meet.
 - **For the owner**: whether the Manga and CRT backdrops stay (the PR's description has the verdict and previews);
   Sakura as the Pixel art default now that Space is gone; the magazine cover and Truck-kun on the RP6.
+
+## PSP GE: the front end faster — vertices read a part at a time, fast mode's corners four at a time in vectors, each corner placed once — 2026-10-13
+
+Branch `cursor/psp-ge-headroom-2b67`, on master (with #233, #234 and #235 in it).
+docs/psp-core.md, part 85, has the evidence. Clean room: no PPSSPP code read, JPCSP not read. Save states unchanged
+(StateVersion 26).
+- **Measured first** (the M1, the bench runner at -O3 with thin LTO and the emulation thread's counters, `sample`
+  profiles by line): Army of Two's 650,000 vertices a frame went to placing fast mode's corners (17%, each corner
+  projected again at every triangle) and reading vertices (18%); Super Monkey Ball's 50,000 small PRIMs a frame to
+  their setup, the command loop and the guest's VFPU; Ghost of Sparta's menu to `transformAll()`, `GPU::own()` (10%)
+  and MoltenVK's submissions.
+- **Changes**: vertices read a part at a time from the host's bytes; fast mode's corners placed once a corner and four
+  at a time in vectors (NEON), skinned ones after their scalar bone sums; fast mode's models not zeroed first;
+  `GPU::own()` passing over pages already its own and busy, memory's changes over unwatched pages eight at once; a
+  list's words from the host's bytes; the kept settings' bones only for skinning PRIMs; each 3D triangle's corners
+  placed once a vertex (`Renderer::triangleAt()`). `transformAll()` four at a time was tried and taken back: timed
+  alone it was slower than base's scalar code, which the compiler already vectorizes (gathering and spreading the
+  fields cost more than the lanes saved); `meshTriangles()`, which keeps only each corner's place, gains from them.
+- **Numbers** (the M1, MoltenVK, the emulation thread, base -> branch, two rounds taking turns at a load of 20-120;
+  fps it allows; instructions steadier): Vulkan (fast) Army of Two playing 14 -> 19 (587 -> 369 M instructions a
+  frame) and its menu 20 -> 27, Ghost of Sparta's menu 25 -> 29, Colin McRae 60 -> 68, Monkey Ball 15 -> 16; Vulkan
+  (accurate) Army of Two 17 -> 19, Ghost of Sparta 25 -> 33, Monkey Ball 19 -> 21; Software Army of Two 9 -> 10,
+  Monkey Ball 15 -> 16; Death Jr. II, Sonic Rivals and Activision Hits Remixed 1-9% fewer instructions.
+- **Exact**: base against the final code from the 21 scenes' states, 100 frames, every frame's picture and VRAM, then
+  RAM and the machine's state: identical in all three renderers. Lanes written in the scalar code's expression shapes
+  (Clang's fused multiply-adds); skinned bone sums kept scalar; `transformAll()` bit-identical to base's, not-a-numbers
+  included.
+- **Checks** (the final code, #234's reconciled branch merged): tests/psp 496/0 (sanitized), tests/allegrex 60/0,
+  tests/psp/ares 318/0; GCC 14 builds the GE and its tests with -Wall -Wextra -Werror.
+- **Review**: a fresh read-only review; two blockers (a not-a-number's sign in the four-lane `transformAll()`, gone
+  with it; an enumerator and an int in a conditional, an error under GCC's -Wextra -Werror: 0u) and minor points,
+  all taken but an ARM64 CI job.
+- **What's left**: Ghost of Sparta's 1,350 GPU draws a frame, 91% split by #234's push constant `held` alone;
+  Army of Two's draws split by texture and its models built on the CPU; Monkey Ball's PRIMs' setup (a Look kept from
+  the last PRIM) and its VFPU (the CPU's); `light()`, now Ghost of Sparta's biggest function; the software renderer's
+  triangle setup; an ARM64 CI job.
+
+## CI: the CPU's tests on an ARM64 host and built as the app is, the RSP's NEON checked on ARM64; the system's tests can be built so too — 2026-10-13
+
+Branch `cursor/test-plan-06-2b67` (PR #247), stacked on `cursor/test-plan-04-2b67` (#246, on #245, on #241).
+Package 06 of the 2026-10-13 test and performance plan (indexed in the implementation plan by package 01's PR). Test
+scripts and CI only: the app's build and its flags are unchanged.
+- **The gap**: the phones run the Allegrex recompiler's ARM64 code and the N64 RSP's NEON sequences, but CI ran only
+  x86-64 (where neither is executed), and every host suite was an `-O1` debug build, the CPU's and the system's
+  sanitized, while the app is `BUILD_RELEASE`, `SLJIT_DEBUG=0`, `-O3` with its math and loop flags (CMakeLists.txt).
+- **ARM64** (GitHub's `ubuntu-24.04-arm`, free for public repositories): PSP Core Tests gains "Allegrex CPU tests
+  (ARM64)", the suite sanitized and then built as the app is, each test on the interpreter and the recompiler (sljit's
+  ARM64 back end: Linux's ABI, not Android's); a new workflow, N64 RSP NEON Tests, runs
+  `tests/rsp-vu-neon/run-tests.sh 3000 0x5253505655` there on changes to the RSP, the harness or sse2neon. Their
+  summaries name the host (`uname -m`, the compiler) and the commit.
+- **Built as the app is** (`PHOBOS_TESTS_MODE=release` in `tests/allegrex` and `tests/psp`): `BUILD_RELEASE`
+  (NDEBUG: the core's five asserts out, as in the app; no test uses assert), `SLJIT_DEBUG=0`, `-O3 -ftree-vectorize
+  -funroll-loops -fno-math-errno -fno-trapping-math`, no sanitizers unless `SANITIZE` names some; not the app's
+  link-time optimization (`-flto=thin` is clang's, CI's compiler is GCC). sljit's C file and the C++ files get the
+  same mode. The default stays the sanitized debug build. CI runs it beside each sanitized run in both Allegrex jobs
+  (a second step); the ARM64 lane fails unless its host is `aarch64`. `tests/psp` takes the same switch, but its
+  lane is a draft of its own (#249) because GCC rejects four of the files it builds (below), so package 06's
+  release lane is met for the CPU's tests only until those are settled.
+- **A finding: `tests/psp` built as the app is doesn't get through GCC.** Its lane ("PSP system tests, built as the
+  app is", run 38439997353) failed: GCC 13 at `-O3` with `-Werror` reports `-Wmaybe-uninitialized` in
+  `ares/psp/ge/four.cpp` (lines 44, 231, 243, 262, through `pickLanes()`, `texelsFour()` and `spriteFours()`), for
+  `Four::depth` in `spriteFours()`'s `Four four;` and for `downAxis[]`. They're false positives, which `-Werror`
+  turns into an error (the review's reading): `four.depth` is read only by `writeDepth()`, which runs only where the
+  depth is written (a clear's depth, or `depthWrite`), and `depthFirst()`, always run first, assigns all four lanes
+  whenever the depth is tested, or cleared; `depthWrite` is only ever on with `depthTest` (`pixel.cpp:93`), which
+  GCC can't see through two separate flags. `downAxis[]` is read only for a textured sprite, and every textured path
+  assigns all three. Only sprites warn because `triangleFours()` already sets `four.depth = s32x4{};` before
+  `depthFirst()`.
+  Apple clang 21 compiles the same `ge.cpp` at the same flags with `-Werror` cleanly (silent even with
+  `-Wconditional-uninitialized`), and the app is built by the NDK's clang with `-w`. The review's suggested fix,
+  `four.depth = s32x4{};` in `spriteFours()` as triangles do and `s32x4 downAxis[3] = {};` (not `Four four{}`, which
+  zeroes ten vectors per four), is `four.cpp`'s alone, outside #240's files; it isn't made here because it's the
+  software renderer's innermost loop and wants its speed measured. `-Werror` isn't loosened: the lane stays red in
+  its draft. That run stopped at the first failed compile, `ge.cpp`, the 8th file; #249 now compiles four at a time
+  (`PHOBOS_JOBS=4`, where every file is compiled before the build fails), and its run 38462046887 has GCC rejecting
+  4 of the 51 files. Beside `ge.cpp` (`four.cpp`, as above), three fail with `-Wstringop-overflow`, each reading as
+  a false positive too (the review's reading, not checked with a compiler): `kernel.cpp` at `serialization.cpp:976`
+  (64 times, "writing 2 bytes into a region of size 0"), a range-for over `Sample samples[64]` that writes in bounds,
+  added by master's right stick (`2b5a9209a`, merged with #230 since; `kernel.cpp` compiled cleanly in the earlier
+  runs, before that commit); `desktop/PspDiscInfo.cpp` in nall's string allocator (`memory.hpp:137`, 24 bytes into
+  8, through `pspIconKey()`'s `Hash::digest()` and `hex()`), though `reserve()` allocates only past the 23-character
+  inline buffer; and `tests/psp/crypto.cpp:29`, `put32()` inlined into `kirkPrivate()`, writing into `other`, a copy
+  of `input` at least 0x8f bytes long (0x180 here), whose data GCC takes for address zero. The last two were there
+  before, never reached. None is fixed here: `four.cpp`'s wants measuring (above), #229 is changing the kernel's
+  serialization, nall is shared with every ares system, and a change to `crypto.cpp` alone wouldn't turn the lane
+  green.
+- **Checks** (the Mac, arm64, Apple clang 21): `PHOBOS_TESTS_MODE=release tests/allegrex/run-tests.sh` 60/0 (7
+  objects of its own, 18 s with the run); `tests/rsp-vu-neon/run-tests.sh 3000 0x5253505655`: 10,420,000 checks, no
+  NEON or reference mismatch; actionlint on the workflows. CI on #247 (run 38439997353): Allegrex 60/0 sanitized and
+  60/0 built as the app is, on x86-64 and on `aarch64` (GCC 13.3); RSP NEON (run 38439997492, `aarch64`): 10,420,000
+  checks, no mismatch. Merged with the stack below: runs 38448910923 (`c2d54f724`), 38454946526 (`014c037b1`) and
+  38461962140 (`c31d1f7b8`, master's #230 in), every job green; RSP NEON 38454946627 and 38461962244.
+- **Negative controls** (draft PR #248, closed and its branch deleted; runs 38440061339 and 38440061297): EOR emitted
+  with ORR's encoding in sljit's ARM64 back end: the ARM64 lane failed ("alu (recompiler)" and the recompiler against
+  the interpreter, 0x16e mismatches; x86-64 doesn't build that back end, and passed); the RSP's NEON `ADD_4S` emitted
+  as `SUB_4S`: "NEON differs from SSE" at VMADM, failed.
+- **Review**: an independent read-only review checked the mode switch (the default's flags, so its objects, are
+  unchanged), the workflows, the logs and both controls, and re-ran the release-built Allegrex suite, the RSP harness
+  and `ge.cpp` at the release flags on the Mac. It found these notes wrong on `four.cpp` (they called the warnings
+  indeterminate reads; above, corrected) and on the asserts' count, and the heading claiming the system's tests built
+  as the app is; all corrected. Its suggestions taken: the ARM64 lane checks its host; the workflow's note on the kept
+  results says which runs keep them. A delta review, after #249's run compiled every file, found the finding stale
+  (it said GCC's other findings would show once `four.cpp` was settled; the four files above, from that review's
+  reading of the log, checked against it) and "every host suite was a sanitized `-O1` debug build" wrong (the ares
+  system's suite and the runner aren't sanitized); both corrected. The next delta review: PASS; its points, all
+  wording, are taken (clears in `depthFirst()`'s condition, `crypto.cpp`'s reason, `other` named, which runs
+  compiled `kernel.cpp`).
+
+## Runner: a JSON report of what ran, a pinned start time, captures timed apart and stale ones said — 2026-10-13
+
+Branch `cursor/test-plan-08-2b67` (PR #250), stacked on `cursor/test-plan-03-2b67` (#245, which changes the runner's
+build script and smoke test; on #241). Package 08 of the 2026-10-13 test and performance plan, adapted (indexed in
+the implementation plan by #244). The runner only: no core change; every option, output line and default as before
+(but a malformed number is now refused, and a bare file name for `--wav` or a saved state, which ended the run in an
+exception, now works), only new options and new lines where they apply.
+- **The problem**: speed comparisons ran through private scratch patches; a run didn't record what it had actually
+  used (a Vulkan renderer that failed falls back to the software one); the PSP's clock started at the host's time,
+  so two runs of a game differed; the frame loop's time included its captures (waiting for each PNG's picture,
+  writing it, the save state); and a PNG whose wait ran out was written as if fresh.
+- **`--report FILE`**: the run as JSON, `"report": "phobos-psp-runner 1"` (README, "The report"): the runner's build
+  (the commit, from `build.sh`; the compiler's version string; debug or release; FFmpeg or not), the game (path,
+  kind, title, disc ID, size), the options given (null where not: renderer, resolution, engine, GE threads, late
+  frames, frames, start time, state, presses, script, the PNGs' schedule and folder, WAV, state saved, memory stick,
+  fonts, pipeline cache), what ran (the renderer the core used, the GPU's device, whether the GPU was lost during
+  the run, the resolution, engine, GE threads, the clock it began at, `TZ` and the host's UTC offset then), the
+  result (frames, the program's end, the loop's seconds and its captures', stale captures, clock restarts, each
+  capture's frame and the frame running when its picture arrived, missing functions, last note) and the GPU's
+  counts. Text stays UTF-8: a byte that isn't part of a UTF-8 character (a game's Shift-JIS output, a Latin-1 file
+  name) is written `\u00XX`. The run's folders (the PNGs', the WAV's, the state's, the report's) are made before it
+  runs, and one that can't be made ends it (exit 1, said, no scratch left); the report is written beside its name,
+  closed, checked and renamed, so a failed write fails the run (exit 1) without leaving part of one.
+- **`--start-time SECONDS`** (up to 4294967295; every number the runner reads, a press's frame too, is decimal digits
+  within 32 bits, and a stick's value digits after an optional minus sign; anything else refused, not wrapped or cut
+  short): the kernel's clock set right after power-on (`Kernel::power()` takes the host's time, the core's only read of
+  the host clock; local time follows `TZ`), before anything runs. A game that starts itself again (sceKernelLoadExec,
+  largeRestart) powers the kernel on again, which takes the host's clock again: the kernel's run returns as the new
+  program is started, before it runs, and `System::run` calls it once a frame, so the runner sets the clock back at the
+  next frame's top (and after the last frame), says so on standard error and counts it (`clock restarts`). A loaded
+  state keeps its own clock (said on standard error); a restart after it takes the time asked for.
+- **Captures**: the summary adds `capture seconds:` (their time, and the speed without them) where there were any;
+  a PNG with no picture presented since the last one within 2 s is said on standard error and counted (`stale
+  captures: N`); with no picture at all yet there's no PNG (a 0-by-0 one was written before), said and counted.
+  Which picture a PNG takes is as before (the first presented since the last PNG): the coordinator's library
+  comparisons keep their meaning. ares's screen thread drops pictures it doesn't take in time, so on a busy host a
+  PNG can be older than its name; the report's captures give the frame that was running when each picture arrived.
+  `--screen-stops-at F`, for the runner's own test, takes no pictures from frame F on. If the GPU is lost during a
+  run, `gpu lost:` says the software renderer drew from then on. The new summary lines begin with words of their
+  own, and only the speed's has "frames per second" in it: the coordinator's and agents' scripts find lines by those.
+- **`build.sh`**: the commit described without `--dirty`, which rewrites the checkout's git index under its lock
+  (another agent's `git add` in the same checkout could fail); `-dirty` comes from `git status` with
+  `GIT_OPTIONAL_LOCKS=0`, tracked files only. Only this checkout's own repository is described (a copy inside
+  another says `unknown`), and the name keeps only letters, digits and `._+-`.
+- **Kept**: every line the speed kits' patches anchor on. Each kit's whole chain (bench-patch.py, then every other
+  patch in its folder) applies to this runner exactly where it applies to master's (`cpu-round2`, `ge-headroom`,
+  `reconcile`, `vulkan-speed`; `cpu-speed2`'s bench-patch.py already fails on master's runner).
+- **`tests/psp/ares/runner-test.sh`** adds: the summary's speed on the one line with "frames per second" and the
+  captures' time on `capture seconds:`; the report checked (JSON; the options not given null; the software renderer,
+  the recompiler, no GPU lost; 60 frames, the program running on; both captures fresh, at frames 30 and 60, each
+  picture arrived by its frame); three runs of cube.elf saving a state at frame 30, two started at 1234567890
+  (identical states, no clock restarts) and one at 1234567999 (another); the first state loaded with another start
+  time (the state's clock kept, said, not set again); a start time past 32 bits, a number with more after it, a
+  press's frame past 32 bits, and a stick's value with more after it, a space before it or below -32768 refused, and
+  the sticks' extremes taken; captures at frames 19, 20 and 40 with `--screen-stops-at 20` (19's fresh, as it waits
+  for a picture before the screen stops; 40's stale; 20's either, as pictures came while 19's PNG was written; each
+  said and counted as it was, each with a PNG; 40's PNG the same as 20's, the last picture before the screen
+  stopped); a capture with no picture at all (said, no PNG, in the report, whose new folder the runner made); and a
+  game's name with a Latin-1 byte (the report still JSON, the byte `\u00e9`), where the filesystem takes such a name
+  (Linux's do; macOS's don't, and there it's left out, said).
+- **Checks** (the Mac, `PHOBOS_JOBS=3`, its own TMPDIR): `runner-test.sh` passes (38 s with the core rebuilt after
+  master's #230); the kits' patch chains as above. `jsonText()` alone, in a scratch harness, on 18 byte strings
+  (UTF-8 of 2 to 4 bytes and U+10FFFF kept; Latin-1, Shift-JIS, overlong forms, a surrogate, past U+10FFFF, a lead
+  byte F5, cut-off characters and lone continuation bytes escaped; quotes and control characters): each output
+  valid JSON and equal to Python's strict UTF-8 reading. A real restart (a disposable patch filling the kernel's
+  own sceKernelLoadExec request with cube.elf, so `Kernel::run` calls `loadExec()`): at frame 10, "frame 10: the
+  game started itself again ..." and the kernel's clock 1234567890 at the end, two such runs saving identical
+  states; with the runner's hold off, the host's clock at the end (1791923398) and another state; restarts at the
+  last frame and at frame 1 (no cycles yet: seen by the clock's change) set back too; without `--start-time`,
+  nothing said, `clock restarts` null. Negative controls, each in a disposable copy: the start time not applied,
+  "runs started at different times saved the same state" (fails); the stale capture's detection removed, `stale
+  captures: 1` missing (fails). After the delta review's changes: `runner-test.sh` passes again (13 s, the runner
+  alone rebuilt), the kits' chains as on master's runner, shellcheck clean; the three-capture case alone six times,
+  19 and 20 fresh and 40 stale each time. The review's suggestion for that case, frame 19 without frame 20, failed
+  on its first run here: frame 40 found a new picture, which had come while frame 19's PNG was written. The restarts
+  above again, the same, and one whose program can't start (bytes that aren't an ELF): "a program the game asked for
+  couldn't start, which ended the game ...", the program ended, the clock still the one asked for. A report folder
+  that can't be made: said, exit 1, no scratch left; malformed numbers (`12abc`, `+5`, a leading space, a negative
+  that wraps to 1, a press's frame past 32 bits or `1x`) refused. After the second delta review's changes:
+  `runner-test.sh` passes (14 s), the kits' chains as on master's runner, shellcheck clean; with the stick's old
+  read put back (`std::stol`), the test fails ("not refused: --press 1:L-StickX:12abc"). After the third delta
+  review's wording: `runner-test.sh` passes (15 s), the kits' chains as on master's runner, shellcheck clean.
+- **Review**: an independent read-only review (it re-ran the smoke test and the kits' chains, read the restart
+  path, and ran error cases) found two majors: the start time lost when a game starts itself again, while the
+  report still showed the pinned clock; and text not always UTF-8 (a Shift-JIS note). Its minors: the report's
+  write errors late or unseen (no folder made, the stream checked before closing); captures not saying which frame
+  they show; `ran.renderer` saying Vulkan after the GPU was lost; `git describe --dirty` rewriting the index. Its
+  nits: `nan` for the GPU's wait with `--frames 0`, a misleading message and a 0-by-0 PNG with no picture, the
+  README's example and test sentence, line lengths, `asked` mixing nulls and defaults, the start time with a loaded
+  state unsaid, `build.sh` with a quote in a tag or inside another repository, start times wrapping past 32 bits.
+  All taken (above), and of its suggestions the compiler, build mode, FFmpeg, the UTC offset and the options given.
+  Not taken: the source string out of runner.cpp's compile command (each commit compiles the runner again in a
+  checkout's build folder; CI builds once; pruning old objects is the objects cache's, for every suite), a report
+  when a run fails early, the driver's version (no accessor in the core), the program's hash, and a test program
+  that reads the clock (none in the repository prints the date; building one needs pspsdk). A delta review (PASS;
+  it re-ran the smoke test and the kits' chains, 16 runs through the restart path (controls without a restart among
+  them) and `jsonText()` on 978,253 strings, and compiled runner.cpp with GCC 13.3 and 14.4 under `-Werror`) found
+  one minor: the two new summary lines began with the words of existing ones ("frames per second, captures left
+  out", "gpu: lost"), and scripts in the agents' scratch find lines by those (one would take the wrong line's speed,
+  one would overwrite the GPU's counts, three greps print both); taken (`capture seconds:`, `gpu lost:`, and the
+  test's check that one line has "frames per second"). Its nits, all taken: a press's frame still wrapping past 32
+  bits and a number with more after it accepted (one digits-only reader for both now, and the test refuses both); a
+  folder that can't be made ending the run in an exception (said now, exit 1, before the scratch is made); a
+  capture's freshness read apart from its picture (now in the same lock); frame 20's fresh capture possibly missed
+  on a starved host (the three captures above); the README's `asked` and title; a program that couldn't start
+  called a restart (said as what it is). A second delta review (PASS; the smoke test again, the three captures 10
+  times, real failed starts at frames 1, 10 and 30, four ways a folder can't be made, and the stale check removed,
+  which the test catches) found five nits. Taken: a stick's value still read loosely (`12abc` ran as 12; now an
+  optional minus sign, then digits, and the test refuses both kinds and takes the extremes); the bare file names
+  above unsaid; frame 40's PNG, always frame 20's picture, now compared; "16 real restarts" and the README's `clock
+  restarts`. Left: a scratch script outside the repository that diffs two runs' summaries would count `capture
+  seconds:`, a time, as a difference (`scratch/dialogs/compare.sh`, if it's used again: one more pattern for its
+  filter). A third delta review (PASS; 33 edge cases run against the runner, and no press script in the scratch
+  folders refused by the strict read) found three nits, all taken: two lines left short, a run missing below, and
+  `-0` read as 0 though the wording said a minus sign only below 0 (now an optional one; leading zeros are read as
+  every number's are).
+- **CI**: PSP Core Tests green on each earlier head (runs 38443751682, 38449049095, 38454982676, 38463437399,
+  38468789060 and 38471152830, the runner's test passing; on Linux the last three ran the name not in UTF-8).
+
+## Tests: a skip says what's missing, and fails where the lane must have it; the Allegrex measurements unpacked by content — 2026-10-13
+
+Branch `cursor/test-plan-04-2b67` (PR #246), stacked on `cursor/test-plan-03-2b67` (#245, itself on #241). Package 04
+of the 2026-10-13 test and performance plan (indexed in the implementation plan by #244). Test harness, test
+scripts and CI only: no core or app change, no check loosened.
+- **The problem**: with no Vulkan GPU, `tests/psp/gpu.cpp` said "skipped" once and every GPU group then printed
+  "pass"; the groups needing the test programs or the GE's measurement rounds returned early, silently, without
+  them. A green run didn't say what had run.
+- **Now** (`tests/allegrex/harness.hpp`, both suites): `skip(capability, why)` marks the group: it prints `skip
+  NAME (capability: why)` rather than `pass` (a failure still prints FAIL), and the last line adds ", N skipped"
+  where any were (`497 groups, 0 failures` otherwise as before). A capability named in `PHOBOS_TESTS_REQUIRE` (a
+  comma-separated list, spaces around a name left out) makes that skip a failure, once a group for each reason; a
+  name no test skips for (a typo) fails the run before the groups. `PHOBOS_TESTS_REPORT=FILE` writes each group's
+  result, group and reasons (what was required and missing first), a tab between, and a last `summary` line (a
+  report without it is of a run that didn't finish). Skips declared: `vulkan` (no renderer: `renderer()` itself),
+  `vulkan-fast`, and the GPU's capabilities the groups test for (`vulkan-transforms`, `-palettes`, `-moves`,
+  `-reads`, `-unordered-reads`, `-2x`, `-3x`, every loop over the scales now saying so, and `-stencil-export`, where
+  only one of a group's two ways ran); `programs` (`testPrograms()` and `testProgram()`, a program missing from the
+  folder too); `ge-round3` (the variable unset, or a file of it missing, or no round 3 to compare with), `ge-round6`.
+  The ares suite's run without programs fails where `programs` is required, and its last line says when their
+  checks were skipped.
+- **CI** (PSP Core Tests): the system lane requires `vulkan`, `vulkan-fast`, `-transforms`, `-palettes`, `-moves`,
+  `-reads`, `-2x`, `-3x`, `-stencil-export`, `programs`, `ge-round3` and `ge-round6` (not `vulkan-unordered-reads`:
+  lavapipe reads in order, the one skip its runs already printed); the ares lane requires `programs`. The Allegrex
+  and system lanes keep their reports as artifacts.
+- **The Allegrex measurements**: unpacked again when their packed file's SHA-256 (kept beside the unpacked file)
+  changes, not by time: a tree copied with its times kept, as the agents' scratch copies are, can hold an older packed
+  file than the folder. xz checks each packed file as it unpacks; a damaged one stops the run, naming it.
+  `SHA256SUMS*` there are the sums of the PSP's own output files, of which 13 of the 25 packed here are kept whole
+  (those, and three plain files the sums list, are now checked against them each run) and the rest in part (the 16k
+  sets) or not at all; round 6 keeps verifying its own `SHA256SUMS` as before.
+- **Kept**: every check and tolerance; the `main()` loop's first lines, which three agents' scratch filters patch;
+  the PSP's optional pspautotests samples and `loader.cpp`'s own program check (#243 changes that file) stay as they
+  were.
+- **Checks** (the Mac): the changed test sources compile with `-Wall -Wextra -Werror` (syntax-only, both flag sets);
+  `tests/allegrex` 60/0 with its report (60 pass lines and the summary line), a second run unpacking nothing, and a
+  disposable copy with one packed file damaged: exit 1, "tests/allegrex/measured/vadd-spread.bin.xz doesn't unpack
+  (damaged?)". After the review: `PHOBOS_TESTS_REQUIRE="vulkan, programs ,ge-round3"` taken (60/0);
+  `"vulkan,Programs"` fails before the groups ("names Programs, which no test skips for"); an unpacked file kept
+  whole changed after unpacking fails ("fpu-arith-safe.bin isn't the file the PSP made (SHA256SUMS3)"), restored
+  60/0. CI on #246 (run 38439504812, at `60e8f1e14`): the system suite "497 groups, 0 failures, 1 skipped"
+  (vulkan-unordered-reads: lavapipe reads in order), with every requirement met; the ares system 318/0; Allegrex
+  60/0; the runner's test passing; the reports kept. After the review: run 38448816745 (`aa197ced0`, the stencil
+  export required too: 497/0, 1 skipped) and run 38454904089 (`0c44ebd4b`, with #243's groups: "502 groups, 0
+  failures, 1 skipped", the report 501 pass lines, 1 skip and its summary line).
+- **Negative controls** (run 38439595119, dispatched on a disposable branch whose workflow ran the lanes these ways;
+  deleted after): `cube.elf` missing from the programs while they're required: "497 groups, 3 failures, 1 skipped",
+  each FAIL naming it ("programs is required here (PHOBOS_TESTS_REQUIRE), and cube.elf isn't in
+  PSP_TEST_PROGRAMS"); the ares lane with no programs while required: "33 checks, 1 failed, the programs' checks
+  skipped"; Vulkan off (`PSP_GPU=0`) with nothing required: passes, "497 groups, 0 failures, 45 skipped", each GPU
+  group `skip ... (vulkan: PSP_GPU=0)`; Vulkan off while required: "497 groups, 45 failures" (every group that
+  needs the GPU). The branch is deleted.
+- **Review**: an independent read-only review (it re-ran the Allegrex suite and damaged, truncated and back-dated
+  packed files, and linked a probe against the harness) found the major gap that `ge-round3` was required only as a
+  variable: with the folder set but a file missing, `curves.cpp` went on silently, and `measure.cpp` only describes;
+  and that the requirement list was matched exactly (a space, a capital or a typo dropped a requirement), the report
+  left the reason off FAIL lines, some scale loops and the stencil-export way were dropped silently, and these docs
+  were stale. All taken (above); its suggestion of checking the files kept whole against the PSP's sums too. A delta
+  review passed it; its nit taken: `stencilFormats()`'s loop over the scales says its skip too.
+
+## Tests: the host suites' objects kept by what they include and how they're compiled, a checkout's apart — 2026-10-13
+
+Branch `cursor/test-plan-03-2b67` (PR #245), stacked on `cursor/test-plan-05-2b67` (#241, the CI lanes, so every
+script changed here runs in CI). Package 03 of the 2026-10-13 test and performance plan (indexed in the implementation
+plan by #244). Build scripts only: no core, app or test source changes.
+- **The problem** (on a Mac five agents share): the four PSP build scripts kept objects in one folder per suite in
+  `${TMPDIR:-/tmp}`, shared by every worktree, reused while their top source was older than them. A header edit,
+  another worktree's newer object, another compiler or sanitizer setting, all reused the old object; libco's was
+  never rebuilt; two worktrees' runs wrote the same test binary.
+- **`tests/objects.sh`** (sourced by `tests/allegrex`, `tests/psp`, `tests/psp/ares`, `tests/ngcd` and
+  `tools/psp-runner/build.sh`): an object is named by its compile command (the compiler as named, every word of CC
+  or CXX, where it is and its `--version`, every flag, the source's path, and `CPATH`, `C_INCLUDE_PATH`,
+  `CPLUS_INCLUDE_PATH`, `SDKROOT`, `MACOSX_DEPLOYMENT_TARGET`), so another checkout, compiler, sanitizer or define
+  makes its own; it's kept while nothing on the compiler's own list of what it read (`-MD`, system headers included:
+  ares's and nall's are included as system headers) is newer than it, or gone, compared with `find -newer`
+  (nanoseconds, where macOS's bash 3.2 `-nt` takes whole seconds). An object takes the time its compile began, so a
+  header saved during the compile is newer than it. Objects and programs are written beside their place and renamed
+  into it, so runs at once are safe and a killed build leaves nothing taken for finished; a program's name carries a
+  hash of its objects and link flags, so runs of two configurations in one checkout each run their own. Each
+  checkout gets its own folder in the suite's (the cksum of its path, as the NGCD script already did; its
+  `.phobos-checkout` file names the path), deletable between runs: per configuration a checkout keeps 21 MB
+  (Allegrex), 34 MB (NGCD), 40 MB (the ares system) or 46 MB (the runner, with its copy) until then (`tests/psp`'s,
+  the largest, not measured). What times can't tell is written down: a
+  new header shadowing another, a file replaced by an older-dated copy. Every source is its own object now, the
+  test suites' too (they were one compile each run), and each compile's line says whether it's sanitized (in the
+  sanitized suites nall and sljit aren't). `PHOBOS_JOBS=N` compiles N at once (1 by default).
+- **Kept as they were**: `TMPDIR=X tools/psp-runner/build.sh` still leaves `X/phobos-psp-runner/psp-runner` (a copy
+  of this checkout's, which the build's last line names; `runner-test.sh` takes the latter); NGCD's build-dir
+  argument; the FFmpeg cache; every flag. The round-6 and Allegrex measurements unpack into the checkout's folder,
+  each file through a temporary one named by the run, a failed unpack stopping the run.
+- **`tests/objects-test.sh`** (in CI's Allegrex job; seconds; 21 cases): a small C program built cold (2 compiles),
+  warm (0), after its header changes (1, and the program sees it), and a header found as a system header (1), with a
+  define added (2) and taken away (0: the first objects kept), with the compiler named with another word (`cc
+  -DEXTRA=9`: 2, the word taken), the same compiler at the same path reporting another version (2), a header saved
+  while its includer compiled (the compiler holding before it writes the object: compiled again next time), a header
+  changed within the second (its time and the object's pinned at .2 and .7 of one second; said as a skip where the
+  file system keeps whole seconds), killed
+  mid-compile with the build (fails, then the same command compiles everything: nothing kept from the cut), with the
+  first header on the include path gone (1, the next one taken), a compile failing among two at once (the build
+  fails), a header found through `CPATH` and then another `CPATH` (compiled again), a program for each
+  configuration, and two checkouts built at once into one folder (each its own program and folder). Negative
+  controls, each a disposable copy of the library: the compiler's name, or its version, out of the key; the
+  object's time its compile's end; `-MMD`; bash's whole-second `-nt` (failing every run, 3 of 3); a failed compile
+  among several ignored; the old rule (the source's time alone); flags out of the key; the environment out of the
+  key; one program name for every configuration; objects written in place; one folder for all checkouts; a gone
+  file taken as unchanged: each of the 13 fails at least one case.
+- **Checks** (the Mac, bash 3.2, Apple clang 21, `PHOBOS_JOBS=3`, a TMPDIR of its own): at `86a5a80d0`,
+  `tests/objects-test.sh` 21/21, twice; with the scripts at `f1bc43c89` (before the delta review's changes),
+  `tests/allegrex` cold 7 compiles (60/0), warm 0, after touching `ares/psp/cpu/allegrex.hpp` 4 (the four that
+  include it; 60/0); `tests/ngcd` cold 13 (2835/0), warm 0; `tests/psp/ares` cold 25 (318/0), warm 0;
+  `runner-test.sh` cold 42 s, warm 4 s, its program `psp-runner-<hash>` and the copy left in `phobos-psp-runner/`. CI
+  on the reviewed scripts (run 38448696924 at `a476470ec`; Linux, GCC 13, bash 5): `tests/objects-test.sh` 18 cases,
+  0 failures (the case within the second ran), Allegrex 60/0, the system suite 497/0 (every source its own object
+  now), the ares system 318/0, the runner's test passing; NGCD 2835/0 (run 38448696864). CI at `86a5a80d0` (run
+  38454888271): `tests/objects-test.sh` 21 cases, 0 failures (the case within the second ran), Allegrex 60/0, the
+  system suite 502/0 (#243's five groups more), the ares system 318/0, the runner's test passing; NGCD 2835/0 (run
+  38454887111). A second delta review passed it; its nit taken: the leftovers' pattern is the 16 hex digits and a
+  process number, so a folder's own files of a like name aren't taken. At `fefce4e5f`, with that pattern: on the Mac,
+  `tests/objects-test.sh` 21/21, and the pattern alone under bash 3.2 removing the six kinds of leftover
+  (`psp-runner`, `allegrex`, `psp`, `psp-ares`, `ngcd`, the test's `program`) and keeping the eleven like names tried
+  (the old pattern's false match; 16 letters that aren't hex digits; uppercase hex digits; 15 or 17 of them; none; no
+  number after `.part-`; a dated file name with spaces; one under two hours old; one in a subfolder; a folder); CI
+  run 38461715565: `tests/objects-test.sh` 21/0, Allegrex 60/0, the system suite 505/0 (master's #230 three groups
+  more), the ares system 328/0, the runner's test passing; NGCD 2835/0 (run 38461715535).
+- **Review**: an independent read-only review found a major hole (a word after the first in CC or CXX wasn't in
+  the key: `CC="cc -DEXTRA=9"` after `cc` compiled nothing and ran the old program), and minor ones: a header edited
+  during a compile never rebuilt, the stale-file cleanup reaching anything in a folder handed to NGCD, an exported
+  `BUILD` overriding the per-checkout folders, four mutations the test let through, the disk use unsaid, the
+  include-path variables not keyed, a failed unpack carrying on, programs per checkout rather than per
+  configuration. All taken (above): the cleanup only in the objects folder, the folder override named
+  `OBJECTS_BUILD`, the test's new cases each failing the mutation it was missing. A delta review found every fix
+  right in code, and the whole-second mutation caught only by chance (the two times not pinned), the environment's
+  keys and the per-configuration names untested, a cut-short link's leftovers no longer cleaned, and the docs behind;
+  all taken: the times pinned, two cases added, programs' leftovers cleaned by their hashed names, the folder's file
+  named `.phobos-checkout` (a folder handed to NGCD may have a `checkout`), the README's line and these checks. A
+  recheck at `fefce4e5f`, after #241's merge of master's #230: PASS. Its two trivial nits: "the final scripts" for
+  checks run before the leftovers' pattern changed (taken: each check names its commit now), and the pattern
+  checking only the first character after `.part-` (left: such a name would also need 16 lowercase hex digits right
+  before `.part-`, be two hours old and sit directly in the build folder: the suite's own, or the one
+  `OBJECTS_BUILD` or NGCD's argument names).
+
+## CI: the PSP core as an ares system, the headless runner and the Neo Geo CD's checks in CI; the triggers complete — 2026-10-13
+
+Branch `cursor/test-plan-05-2b67` (PR #241), on master (`4788125f1`, #236). Package 05 of the 2026-10-13 test and
+performance plan (an outside audit of master `b3507c1db`, triaged against `9333a8d7a`; #244, package 01, indexes it
+in the implementation plan). CI only: no core, app or test code changes.
+- **The gap**: three suites ran only by hand: `tests/psp/ares/run-tests.sh` (the whole PSP core as an ares system,
+  318 checks on the last recorded runs), `tests/psp/ares/runner-test.sh` (the headless runner built and running
+  cube.elf) and `tests/ngcd/run-tests.sh` (the Neo Geo CD's layout and state checks). PSP Core Tests' paths also
+  missed what its builds compile: sljit and its configuration, Vulkan's headers, ares's framework beyond `types.hpp`;
+  and the byte files `tests/psp/dialogs.cpp` reads from the app's test resources.
+- **Now**: PSP Core Tests has two more jobs, "PSP as an ares system" and "Headless runner" (each with the FFmpeg
+  build cached as the system job has it), and a new workflow, Neo Geo CD Tests, runs `tests/ngcd/run-tests.sh` on
+  changes to the Neo Geo core, the 68000, the Z80, ymfm, ares's framework, nall, libco or the tests. PSP Core Tests'
+  paths add `ares/ares/**`, `libco/**`, `thirdparty/sljit/**` and `thirdparty/sljit*`, `thirdparty/Vulkan-Headers/**`,
+  `thirdparty/libchdr/**`, `tools/psp-runner/**`, `desktop/Platform.hpp` (which `desktop/PspDiscInfo.cpp`
+  includes) and `android/app/src/test/resources/psp-*` (the last as #230 adds it, so that line's conflict resolves
+  to this one); Neo Geo CD Tests' include sljit's (ares.hpp includes `sljit.h`). Both workflows also run for version tags (a tag's push takes no path
+  filter). Every suite's last line, its count, goes in the run's summary with the commit; the suites' output goes
+  through `tee`, so their steps run as `shell: bash` (pipefail) to keep a failure failing, and a suite that left no
+  output says so in the summary. Both workflows' runners are pinned to Ubuntu 24.04 (ubuntu-latest moves to 26 on
+  2026-10-19: a new GCC, a new FFmpeg build, maybe new `-Werror` warnings, taken on purpose instead), each job has a
+  time limit (20 to 60 minutes), and only a PR's newer push cancels its run: every other run (master's, a tag's, a
+  dispatch) is a group of its own, so none is cancelled or left waiting behind another.
+- **Not done here**: a workflow whose paths don't match doesn't run, which shows as no check rather than as a passing
+  one; and Android's release and nightly don't wait for these workflows (they are separate; package 20 or a later
+  change can gate them explicitly).
+- **Checks**: actionlint 1.7.12 on both workflows (clean). CI on #241 (runs 38439422378 and 38439422290, at
+  `f1d3915f4`): Allegrex 60/0, the system suite 497/0, the ares system 318/0, the runner's test passing, NGCD
+  2835/0, each count in the run's summary. A run's summary steps failed at `a2483e36c` (the suites passed): an
+  apostrophe inside `${HEAD_SHA:+...}` that bash took for a quote; fixed in `f1d3915f4`.
+- **Negative control** (a disposable branch from this PR's first commit `1bf7afd26`, on master `9333a8d7a`, hence
+  491 groups, with one failing check in each suite: run 38436478270, dispatched, and draft #242 for the new NGCD
+  workflow, which a dispatch can't run before it's on master; #242 closed and the branch deleted after): every lane
+  failed: Allegrex "60 groups, 1 failure", the ares system "319 checks, 1 failed", the system suite "491 groups, 1
+  failure", the runner's test on its frame count, NGCD "2836 checks, 1 failures" (each through `tee`, the step
+  failing; the test steps are the same in `f1d3915f4`).
+- **Review**: an independent read-only review (it scanned every source the five builds compile against the paths)
+  found sljit's headers missing from NGCD's paths and `desktop/Platform.hpp` from PSP's, and this entry calling the
+  control's branch deleted when it wasn't yet; all fixed, with its suggestions taken (the Ubuntu pin, time limits,
+  master's runs not cancelled, the empty-log case). A delta review found that a concurrency group holds one waiting
+  run, so a third quick push to master still cancelled the waiting one: non-PR runs now get a group each (the run's
+  ID).
+
+## Docs: the plan's opening and evidence brought up to date; the 2026-10-13 test and performance plan indexed — 2026-10-13
+
+Branch `cursor/test-plan-01-2b67` (PR #244), on master (`4788125f1`, #236), with #243, #230, #229 and #237 merged in
+since (`3228b825d`). Package 01 of the 2026-10-13 test and performance plan, an outside audit of master `b3507c1db`
+given to the owner as a plan bundle (not kept in the repository). Documentation only.
+- **The stale summaries**: the implementation plan opened with "Last reconciled: 2026-09-25" and "zero fresh native
+  performance runs", and this file's entry point with September's next action, though later sections record the RP6's
+  N64 measurements (from 2026-09-25), the 2026-10-02 presentation comparison with Mupen64Plus-AE, the desktop builds
+  and the PSP core's parts (76 of them on master then, up to part 87; 80 now, up to 88, with #243's part 88, #230's
+  part 81, #229's part 82 and #237's part 86). Now the plan's opening and its evidence boundary sort what's known by
+  kind: implemented on master (some of it CI only builds), checked on CI's hosts (exactly what CI runs, and what it
+  doesn't yet), measured on the RP6 (dated, linked: the N64's, and the PSP's speed in its parts), waiting for the RP6,
+  on branches, proposed. The current priority (the PSP's throughput, fast-forward and Vulkan scaling, accurate and fast
+  apart) is named, the N64 regressions kept, and no comparison is presented as new. Nothing historical is removed.
+- **The plan indexed**: the implementation plan's "Test and performance plan (2026-10-13)" lists the 25 packages
+  with their dispositions (eight now, 08 pulled forward from the triage's later ones; 15 later, each waiting on a
+  named PR or package except 18, whose only wait, #230, has merged since; two not now), what each waits on, and its PR.
+- **Baseline at triage** (master `9333a8d7a`): the libadrenotools submodule at `8fae8ce25`; open PRs #223, #229,
+  #230, #231, #232, #236 and #237, and two agents' branches without PRs (GE headroom and NpDrm modules, since #240
+  and #243); CI on `0a9a7fa75` (v2.2.0's commit): PSP Core Tests 60/0 and 489/0, Desktop Build green, Android Build
+  cancelled in its SDK cache's post step after 37 minutes (package 02; v2.2.0's own tag build, run 38432072867,
+  passed, its release complete). The Mac: macOS 27.0.1, Apple clang 21.0.0, glslang 16.6.0, JDK 17.0.20.1. Since:
+  #236 merged (`4788125f1`, StateVersion 27), all three workflows green on it (PSP 60/0 and 497/0), then #243
+  (`49fec7215`, StateVersion 28), #230 (`542da5a28`, StateVersion still 28), #229 (`7511c64c3`, StateVersion 31) and
+  #237 (`3228b825d`, StateVersion still 31); the open PRs' heads when this entry was first written: #223
+  `f12663c2d`, #229 `a31b2b3ae`, #230 `059a1bbfe`, #231 `5e6d8a5b1`, #232 `b4dc27e4e`, #237 `46f62e6bf`, #240
+  `7aa4b8054`, #243 `e84596e63`, and this plan's.
+- **Checks**: `git diff --check`; relative links and anchors in both files, 0 bad (as on master).
+- **Review**: an independent read-only review found the CI line claiming more than CI runs (the ares suite, the runner,
+  NGCD, ARM64 and the JVM tests aren't run) and merging "implemented" with "CI-verified", the PSP's RP6 speed
+  measurements left out, the baseline's PR list not the one at triage, CI cited from an older commit, #237 named among
+  the state-layout PRs (it doesn't change states), and the order of the CI packages unexplained; all taken. Its doubt
+  about "up to 59 minutes" is answered by the run cited (38286832457's post step: 58.7 minutes). A delta review found
+  "only built" not limited to CI (release builds run on the RP6; the AppImage and Phobos.exe were run on 2026-10-02,
+  Phobos.app on 2026-10-06), the RP6 speed parts listed incompletely (53 and 54) and "gathered" too widely, and row 08
+  marked done while its PR is open; all taken, with master's #243 merged in (row 12). A second delta review found the
+  software renderer's RP6 parts incomplete (67 and 68, and its columns beside Vulkan in 52 and 53) and row 12 missing
+  #223 (whose own layout 28 isn't master's); both taken, with its suggestions (the speed tables' parts, the tag build's
+  note, the desktop runs' dates, one list of what CI doesn't run, the part count), and master's #230 merged in. A third
+  delta review found two facts left stale by that merge: the part count (#230 added part 81) and rows 15 and 18 still
+  waiting on #230; both taken, with its suggestions (#230 in this entry's opening and its "Since", the plan's waits
+  dated, part 41's speed figures no longer called a table). Row 18 now waits on nothing: no open PR changes
+  `PhobosRunner.cpp` against master (GitHub's diff of #229, then open, showed #230's comment at the axis slots only
+  because it still compared #229 with `49fec7215`, and #229 had #230's branch merged). A fourth delta review found this
+  sentence had first called that comment #229's own edit; fixed, with its suggestions (#243 in the opening, row 18's
+  adaptation, clearer wording). A review of master's #229 and #237 merged in found the plan and this entry stale in
+  five places: the state layout (31 now) in row 12, row 14 still waiting on #237, the plan's waits dated
+  `542da5a28`, the part count, and this entry's opening and "Since". All taken, with part 86 added to the parts
+  waiting for the RP6 and this sentence about #229 put in the past. Its delta review found row 06 still giving
+  #249's first reason for being red (four files now); taken, with part 86's date in the plan and the entry point's
+  line over 120 columns broken before its link.
+
+## CI: the PSP renderer's shaders compiled again by the glslang that made them, and validated — 2026-10-13
+
+Branch `cursor/test-plan-07-2b67` (PR #239), on master (`4788125f1`, #236). Package 07 of the 2026-10-13 test and
+performance plan (an outside audit of master `b3507c1db`, triaged against `9333a8d7a`; #244, package 01, indexes it
+in the implementation plan). CI and a check script only: `compile.sh`, the GLSL and `shaders.hpp` are untouched (the
+sources' hash covers `compile.sh`, so changing it would have meant regenerating `shaders.hpp`).
+- **The gap**: `compile.sh --check` (run by `tests/psp/run-tests.sh`) always compares the sources' hash, but compiles
+  again and compares `shaders.hpp` byte for byte only where a glslang happens to be installed, and CI installs none.
+  So CI never compared the SPIR-V with what its GLSL compiles to, nor validated it (the GPU tests run it on lavapipe):
+  a changed word under an unchanged hash that those tests don't notice passed.
+- **The pin**: glslang 16.6.0 makes `shaders.hpp` exactly, both Homebrew's build and Khronos's own macOS release
+  (`compile.sh --check` with each: exit 0). Khronos's Linux release of it is
+  `glslang-16.6.0-linux-x86_64-release.tar.gz`, SHA-256 `2c34071f…91ce`.
+- **The check** (`.github/scripts/check-psp-shaders.sh`, in a new workflow, PSP Shaders, on changes to the shaders,
+  the script or the workflow): glslang must be found and be 16.6.0, then `compile.sh --check` (the hash, then every
+  shader compiled again and compared), and each of the 12 modules in `shaders.hpp`, as its bytes, through `spirv-val
+  --target-env vulkan1.0` (compile.sh's target); every array `shaders.hpp` declares must be one it reads, and every
+  word a 32-bit hex word. Both parts run and report; either failing fails. A glslang upgrade is a toolchain change:
+  `shaders.hpp` made with it, and the script's version, the workflow's version and SHA-256 and the doc's line moved
+  together (the workflow doesn't override the script's, so CI fails if they differ).
+- **Negative controls** (a disposable copy, the Mac, glslang 16.6.0 and SPIRV-Tools v2026.4): the copy as it is
+  passes (12 valid); GLSL changed without regenerating: the hash fails; one word of `presentSPIRV` changed (still
+  valid SPIR-V: spirv-val passes it) with the hash kept: the byte comparison fails; `presentSPIRV`'s id bound set to 1:
+  the comparison and spirv-val both fail (11 valid); no glslang in PATH: fails; a glslang calling itself 16.5.0:
+  fails.
+- **Checks**: actionlint 1.7.12 with shellcheck 0.11.0 (clean); the script on master's tree (pass); CI on #239 (runs
+  38435975771, 19 s, and 38437980381 on the head merged with master, 16 s; ubuntu-24.04): the image has no glslang of
+  its own ("none"), the archive's SHA-256 matched, and Khronos's Linux glslang 16.6.0 compiled `shaders.hpp` byte for
+  byte; Ubuntu's SPIRV-Tools v2025.1 passed all 12 modules.
+- **Review**: an independent read-only review (PASS; it reproduced the pin, both CI runs and 14 negative controls)
+  raised seven points: an array declared another way (`static constexpr`, made with a changed compile.sh) went
+  unvalidated (11 of 12); the version was pinned in two places CI couldn't keep equal; a malformed word was dropped;
+  `--version`'s failure was unexplained; the first run's time was misquoted; "CI never checked the SPIR-V" overstated
+  the gap; actionlint had run without shellcheck. All taken: the declared arrays counted, every word checked, the
+  workflow no longer overriding the script's version (two pins CI now keeps equal), the error said, the runs cited,
+  the gap reworded, shellcheck run; and its suggestions (`ubuntu-24.04`, a 10-minute limit, curl's retries). A delta
+  review (PASS) found an array written without `=` still unread: arrays are now found with or without it, and the
+  SPIR-V magic numbers in the file must match the arrays read; CI on that head (run 38455036248 at `17c21468e`): the
+  12 modules read, compiled byte for byte and valid. A second delta review passed it.
 
 ## CI: the Android unit tests in every build, the releases waiting for them; the SDK cache gone — 2026-10-13
 

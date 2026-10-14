@@ -100,12 +100,13 @@ static_assert(commandsIn(LightingCommands) == GE::KeptTransform::Lighting);
 //words alone (a matrix's floats from its words, the viewport's, texture mapping's and fog's settings from their
 //commands, lighting's from its commands and the view matrix), so only the parts whose words have changed are worked
 //out again. Most PRIMs share their 3D settings with the one before, but for the world matrix; and they're compared,
-//not told of, as a list, a context or a state loaded, and the tests all set them.
-auto GE::transformKept() -> Transform& {
+//not told of, as a list, a context or a state loaded, and the tests all set them. The bone matrices are looked at
+//only for a PRIM that skins (skinned): one that doesn't takes none of them, and keeps those of the last that did.
+auto GE::transformKept(bool skinned) -> Transform& {
   auto& k = keptTransform;
   auto& t = k.transform;
-  auto renew = [&](u32* kept, const u32* now, u32 count, float* floats) {
-    if(k.valid && !std::memcmp(kept, now, count * 4)) return false;
+  auto renew = [&](u32* kept, const u32* now, u32 count, float* floats, bool valid) {
+    if(valid && !std::memcmp(kept, now, count * 4)) return false;
     std::memcpy(kept, now, count * 4);
     toFloats(now, floats, count);
     return true;
@@ -119,11 +120,11 @@ auto GE::transformKept() -> Transform& {
     }
     return !same;
   };
-  renew(k.world, world, 12, t.world);
-  bool viewed = renew(k.view, view, 12, t.view);
-  renew(k.projection, projection, 16, t.projection);
-  renew(k.textureMatrix, textureMatrix, 12, t.textureMatrix);
-  renew(k.bones, bones, 96, t.bones);
+  renew(k.world, world, 12, t.world, k.valid);
+  bool viewed = renew(k.view, view, 12, t.view, k.valid);
+  renew(k.projection, projection, 16, t.projection, k.valid);
+  renew(k.textureMatrix, textureMatrix, 12, t.textureMatrix, k.valid);
+  if(skinned) renew(k.bones, bones, 96, t.bones, k.bonesValid), k.bonesValid = true;
   if(gathered(SettingsCommands, k.settings)) settingsState(t);
   if(gathered(LightingCommands, k.lighting) || viewed) lightingState(t);
   k.valid = true;
@@ -173,7 +174,10 @@ auto GE::transform(Vertex& vertex, const Transform& t) -> void {
 //A PRIM's vertices transformed, each as transform() has it, but a stage at a time over all of them (64 at a time):
 //each vertex's arithmetic waits on itself all along (project()'s divisions and conversions, lighting's), and a
 //vertex's stage done after the last's leaves the CPU the next's to do meanwhile. (God of War's battle draws 255,000
-//vertices a frame, nearly all lit.)
+//vertices a frame, nearly all lit.) The compiler turns each vertex's own arithmetic into vector instructions here
+//(x, y and z at once): written four vertices to a vector instead, placed, put on the screen and lit, it was slower on
+//the M1 in every case timed (their fields gathered into lanes and spread back out cost more than the lanes save;
+//part 85). meshTriangles(), which keeps only each corner's place and bits, gains from them.
 auto GE::transformAll(std::vector<Vertex>& vertices, const Transform& t) -> void {
   Placing placings[64];
   for(u32 first = 0, count = vertices.size(); first < count; first += 64) {
@@ -275,6 +279,65 @@ static alwaysinline auto projected(GE::Vertex& v, const GE::Transform& t, bool c
   //z / w past either end of the depths (outOfSight()): worked out once a vertex, not at each primitive's corner
   float depth = v.clip[2] / v.clip[3];
   v.far = depth >= OutsideDepth, v.near = -depth >= OutsideDepth;
+}
+
+//Lane by lane, yes where the mask's lane is set (all bits, as a comparison sets it), else no.
+static alwaysinline auto pickLevels(GE::s32x4 mask, GE::s32x4 yes, GE::s32x4 no) -> GE::s32x4 {
+  return (mask & yes) | (~mask & no);
+}
+static alwaysinline auto pickFloats(GE::s32x4 mask, GE::f32x4 yes, GE::f32x4 no) -> GE::f32x4 {
+  GE::s32x4 y, n;
+  std::memcpy(&y, &yes, 16), std::memcpy(&n, &no, 16);
+  GE::s32x4 picked = pickLevels(mask, y, n);
+  GE::f32x4 out;
+  std::memcpy(&out, &picked, 16);
+  return out;
+}
+
+//Four corners on the screen (projectedFour()), a lane each: projected()'s x and y, and its yes or no as all bits set
+//or none.
+struct OnScreenFour { GE::f32x4 x, y; GE::s32x4 outside, far, near; };
+
+//Four clip positions (a lane each: x, y, z and w) onto the screen, as projected() puts each, not cut by clipping:
+//each lane the same operations as projected()'s on one, four at a time (its doubles two at a time).
+static alwaysinline auto projectedFour(const GE::Transform& t, GE::f32x4 cx, GE::f32x4 cy, GE::f32x4 cz,
+                                       GE::f32x4 cw) -> OnScreenFour {
+  using f32x4 = GE::f32x4;
+  using f64x2 = GE::f64x2;
+  using f32x2 = float __attribute__((vector_size(8)));
+  using s32x2 = s32 __attribute__((vector_size(8)));
+  f32x4 x = cx * t.scale[0] / cw + t.center[0];
+  f32x4 y = cy * t.scale[1] / cw + t.center[1];
+  f32x4 z = cz * t.scale[2] / cw + t.center[2];
+  f32x4 depth = cz / cw;
+  //(projected()'s cut, its test for the screen and pixels() for half the lanes: 0 and 1, or 2 and 3)
+  auto cut = [](f32x4 position, u32 half) -> f64x2 {
+    f32x2 two{position[half * 2], position[half * 2 + 1]};
+    f64x2 sixteenths = (__builtin_convertvector(two, f64x2) - 2048) * 16;
+#if __has_builtin(__builtin_elementwise_trunc)
+    return 32768 + __builtin_elementwise_trunc(sixteenths);
+#else
+    return 32768 + f64x2{std::trunc(sixteenths[0]), std::trunc(sixteenths[1])};
+#endif
+  };
+  auto pixels = [](f64x2 position, float offset) -> f32x2 {
+    s32x2 tame = __builtin_convertvector((position < 1e9) & (position > -1e9), s32x2);
+    return (f32x2)((s32x2)__builtin_convertvector((position - offset) / 16, f32x2) & tame);
+  };
+  s32x2 on[2];
+  f32x2 across[2], down[2];
+  for(u32 half = 0; half < 2; half++) {
+    f64x2 cutX = cut(x, half), cutY = cut(y, half);
+    on[half] = __builtin_convertvector((cutX >= 0) & (cutX < 65536) & (cutY >= 0) & (cutY < 65536), s32x2);
+    across[half] = pixels(cutX, t.offsetX), down[half] = pixels(cutY, t.offsetY);
+  }
+  OnScreenFour s;
+  GE::s32x4 offScreen = ~GE::s32x4{on[0][0], on[0][1], on[1][0], on[1][1]};
+  s.outside = t.depthClamp ? offScreen & (cz > -cw) : offScreen | ~((z >= 0) & (z < 65536));
+  s.x = f32x4{across[0][0], across[0][1], across[1][0], across[1][1]};
+  s.y = f32x4{down[0][0], down[0][1], down[1][0], down[1][1]};
+  s.far = depth >= OutsideDepth, s.near = -depth >= OutsideDepth;
+  return s;
 }
 
 //Whether a primitive with these corners isn't drawn because of where they are: one off the screen, or depths

@@ -207,6 +207,11 @@ auto Memory::changed(u32 address, u32 size) -> void {
     u32 first, last;
     if(pagesOf(address, size, first, last)) {
       for(u32 page = first; page <= last; page++) {
+        if(!(page & 7) && page + 7 <= last) {  //(eight at once where none of them is watched)
+          u64 eight;
+          std::memcpy(&eight, &watched[page], 8);
+          if(!eight) { page += 7; continue; }
+        }
         if(!watched[page]) continue;
         watched[page] = 0;
         watchedPages--;

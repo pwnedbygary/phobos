@@ -11730,6 +11730,203 @@ pointer too, the folder "<>" leaves out tested, a comment's wording, and a test'
 Infinite's disassembly; `run.sh` gives each run its own stick, `recheck228.sh` and `final3.sh` are the runs above):
 `~/phobos-work/scratch/savedata3/` on the Mac it was made on, not in the repository.
 
+## Part 85: the GE's front end faster — vertices read a part at a time, fast mode's corners four at a time in vectors, each corner placed once
+
+On branch `cursor/psp-ge-headroom-2b67`: master (`1d9308714`) with #233 (`cursor/psp-cpu-speed5-2b67`, part 79) and #234
+(`cursor/psp-vulkan-speed-2b67`, part 83) merged in (`7b5bcdaf8`, which the numbers below call base), then #234's
+reconciled branch and master again as #233, #234 and #235 (part 84) went in. Parts 81 and 82 are other branches'. Clean
+room: no PPSSPP code read (nothing of it opened), JPCSP not read; the PSP's behaviour relied on is the GE's own as the
+code already had it. Every change is the host's: the same numbers worked out in the same order, so the same pictures,
+VRAM, RAM and machine state in all three renderers (checked below). Save states unchanged (StateVersion 26).
+
+**The problem.** On the owner's RP6 (Snapdragon 8 Gen 2), fast-forward ran Super Monkey Ball at 0.3x, Army of Two at
+0.5x, Killzone 1.1x, God of War: Chains of Olympus 1.7x, Ghost of Sparta 2.1x, GTA: Liberty City Stories 2.7x (scenes
+not matched), where PPSSPP runs Army of Two at 13x and the God of Wars at 11-16x. In 3D scenes the GE's front end, the
+emulation thread's work a draw and a vertex at a time (the list's commands, reading vertices, transforming, lighting,
+projecting, clipping, the renderer's state and submission), was 56-97% of that thread (part 79, "Where the time goes").
+
+**How it was measured.** The Mac (M1, MoltenVK), the headless bench runner built as Android builds it (-O3, thin LTO)
+with the emulation thread's counters (its CPU time, retired instructions and cycles) and a fixed PSP start clock, from
+the scenes' states (the CPU work's, part 79); macOS `sample` (1 ms) of a -g build for where the time goes, by function
+and by source line; and scratch harnesses compiling the GE's own code as the app is built, to time one function on
+its own (cycles and instructions from `/usr/bin/time -l`) and to compare its results with another version's. The Mac
+was shared with three other agents, a library run and an OS update installing (a load of 15 to 150 through these
+runs), which moves single times by a fifth and more; the host instructions and cycles a frame move far less, and carry
+the comparison.
+
+**Where the time went** (base, the share of the emulation thread's samples):
+- **Army of Two, playing**: 650,000 vertices a frame, about a hundred to a PRIM; 3,000 GPU draws. Vulkan (fast):
+  `meshTriangles()` placing the corners 17% (projecting them a corner at a time 7% of it), reading the vertices 18%
+  (each number through its format's switch), the GPU's models 7%, MoltenVK's submissions 13%, the guest's code 24%.
+  Vulkan (accurate): `transformAll()` 17%, `GE::triangle()` and `clipTriangle()` 19%, reading 15%, the GPU's triangles
+  9%. Software: the same front end, and each triangle's job (`triangleJob()`, `quantize15()`) 13%.
+- **Super Monkey Ball Adventures, story**: 50,000 small PRIMs a frame, each about 12 commands (a world matrix, then
+  the PRIM: 600,000 commands a frame), so its time is spread over each PRIM's setup (`pixelState()`, the Look, the
+  GPU's settings and `begin()`, the texture's lookup), the command loop, `transformAll()` 7%, reading, and 35% the
+  guest's code and its VFPU (`vfpuDot()` alone 8%).
+- **Ghost of Sparta, menu**: 17,000 3D PRIMs a frame, nearly every vertex lit: `transformAll()` 12-18% (`light()` 6-8%
+  of it), `GPU::own()` 10% (each PRIM walking the 126-136 pages of its scissor rectangle), MoltenVK's submissions 19%.
+- Death Jr. II, Sonic Rivals and Activision Hits Remixed aren't bound by the front end since #234 (part 83).
+
+**The changes**:
+1. **Vertices read a part at a time** (`readVerticesFrom()`): a PRIM without morph targets whose bytes are all in the
+   host's memory (in a row, after the same `drawnFirst()`; or by indices, indices and vertices in RAM) is read a part
+   at a time over all its vertices, each part's loop made for its format, straight from the host's bytes: the same
+   bytes and arithmetic as `readTarget()`.
+2. **Fast mode's corners placed once a corner, four at a time** (`meshTriangles()`): each corner's place in sixteenths
+   and what the rules ask of it kept as bits (`MeshCorner`), not worked out again at each of the three triangles of a
+   strip it's a corner of; four corners at a time through the world, view and projection matrices made one, onto the
+   screen (`projectedFour()`: `projected()`'s cut toward the screen's middle, its tests and the pixels from the frame
+   buffer's corner for four lanes, its doubles two at a time), into sixteenths (`fixedFour()`) and bits, GCC's and
+   Clang's vector types, NEON on ARM64. A skinned corner's bones are summed by the scalar code, as `transformAll()`
+   sums them, and the rest goes four at a time.
+3. **Fast mode's models** built and added, not zeroed by the vector's growth and written again.
+4. **`GPU::own()`** passes over a PRIM's pages that are its own and busy already (inside those it last went through,
+   no owner changed and no busy page cleared since); `Memory::changed()` passes over unwatched pages eight at once.
+5. **A list's words** read straight from the host's bytes in a page nothing draws over (`undrawnPage()`), not through
+   `memory.read()` a word at a time.
+6. **The bone matrices** of the kept 3D settings looked at only for a PRIM that skins.
+7. **Each 3D triangle's corners placed once a vertex** where the GE transforms them (`drawVertices()`: their places in
+   sixteenths and what `clipTriangle()` asks of them, as bits), and the renderer handed the places
+   (`Renderer::triangleAt()`); `pixelsInside()`'s case of a triangle inside the scissor inlined.
+
+**Tried and taken back: `transformAll()` four at a time.** Placing, putting on the screen and lighting four vertices
+to a vector (`placedFour()`, a four-lane `light()`, as `meshTriangles()` does its corners) ran fewer instructions in the
+whole runner, but timed alone it was slower than base's code in every case tried: PRIMs of 6 unlit vertices 0.26 ->
+0.46 G cycles (whole harness runs), 100 unlit 0.23 -> 0.38, 100 lit by one light or four 0.54 -> 0.58 and 0.77 ->
+0.84, 100 skinned by 4 bones 0.45 -> 0.55. The compiler already turns each vertex's own arithmetic into vector
+instructions there (x, y and z at once: base's `transformAll()` compiles to NEON lane loads and moves already), and
+gathering four vertices' fields into lanes and spreading every field back out (17 a vertex) cost more than the lanes
+saved. `meshTriangles()` keeps only each corner's place and bits, and there the lanes win: strips of 100 corners
+0.36 G cycles in base, 0.26 with the corners placed once a corner but a corner at a time, 0.20 four at a time; skinned
+by 3 bones 0.44, 0.34 and 0.26. So `transformAll()` is base's code again, and the lanes stay where they pay, in
+`meshTriangles()`.
+
+**Exact, and how that was made sure.** A lane gives what one corner alone gives only if every operation is the same,
+and with floats that includes which multiplies and adds are fused: Clang fuses a multiply and an add written in one
+expression (`-ffp-contract=on`, its default), so each lane's expressions are written in the same shape as the scalar
+ones (the same operands, in the same order, in the same statements); and skinned corners keep the scalar bone sums,
+which the compiler may vectorize its own way (at -O3, across the bones, each product rounded before it's added, the
+bones left over fused), as no lane-a-corner form does: a skinned corner matches base's as long as the compiler builds
+the two copies of that loop alike, which the scenes below show at -O3. GCC, which the desktop builds use, fuses across
+statements too (`-ffp-contract=fast`, with FMA under `-march=native`); the lanes' only multiplies and adds are the
+matrix products, in the same order as `times44()`'s, and nothing in `projected()` or `fixed()` can fuse, so its lanes
+match its scalar code as well. Which of two operands that aren't numbers a sum gives isn't the source's
+to say (LLVM may swap them, in scalar code as in lanes), but nothing `meshTriangles()` keeps is a float: places in
+sixteenths (held to the screen, 0 where they aren't numbers) and bits. Made sure by: the tests of `meshTriangles()`
+against the corner-at-a-time code it was (the runs handed over, the triangles cut, the time owed) and of
+`drawVertices()`' corners against `clipTriangle()`; `transformAll()` against `transform()` (now base's own code both,
+kept as a guard: random settings, and lighting's every kind of light); scratch dumps of base's and the branch's
+`transformAll()` at O3 with thin LTO over 200,000 PRIMs (7 million vertices) with infinities and not-a-numbers of
+either sign: identical, bit for bit; and the scenes, below.
+
+**Numbers** (the M1, MoltenVK; the final code against base, two rounds taking turns, the means; 150 frames from each
+scene's state; Software with 4 drawing threads; the emulation thread's ms a frame and the frame rate it allows, 1000
+over that, and its host instructions and cycles a frame). The Mac's load was 20 to 120 through these runs and the
+thread got 63-96% of its cycles on the performance cores, so the times and cycles move by 5-10% between rounds; the
+instructions under 1%. Colin McRae in Vulkan (accurate) isn't timed: without rasterization order MoltenVK splits its
+3D blends into 26,000 draws a frame there (0.7 frames a second, part 83).
+
+| Scene | Renderer | Emulation thread ms a frame (fps it allows) | M host instructions | M cycles |
+| --- | --- | --- | --- | --- |
+| Army of Two, playing | Vulkan (fast) | 71.7 -> 52.9 (14 -> 19), -26% | 587 -> 369 (-37%) | 192 -> 146 (-24%) |
+| Army of Two, main menu | Vulkan (fast) | 50.2 -> 36.8 (20 -> 27), -27% | 447 -> 267 (-40%) | 134 -> 98 (-27%) |
+| Super Monkey Ball Adventures, story | Vulkan (fast) | 68.2 -> 63.0 (15 -> 16), -8% | 644 -> 564 (-12%) | 180 -> 167 (-7%) |
+| Ghost of Sparta, menu | Vulkan (fast) | 39.4 -> 34.4 (25 -> 29), -13% | 433 -> 339 (-22%) | 111 -> 94 (-15%) |
+| Death Jr. II, woods | Vulkan (fast) | 8.6 -> 8.9 (116 -> 112), +3% | 97 -> 90 (-7%) | 25 -> 25 (+0%) |
+| Sonic Rivals, a stage | Vulkan (fast) | 6.1 -> 5.6 (164 -> 179), -8% | 58 -> 54 (-6%) | 17 -> 16 (-7%) |
+| Activision Hits Remixed, room | Vulkan (fast) | 10.3 -> 10.0 (97 -> 100), -3% | 78 -> 71 (-9%) | 27 -> 26 (-5%) |
+| Colin McRae 2005, race | Vulkan (fast) | 16.6 -> 14.7 (60 -> 68), -12% | 152 -> 119 (-22%) | 45 -> 40 (-12%) |
+| Army of Two, playing | Vulkan (accurate) | 58.9 -> 51.9 (17 -> 19), -12% | 657 -> 508 (-23%) | 170 -> 151 (-11%) |
+| Army of Two, main menu | Vulkan (accurate) | 38.9 -> 33.2 (26 -> 30), -15% | 487 -> 364 (-25%) | 113 -> 97 (-14%) |
+| Super Monkey Ball Adventures, story | Vulkan (accurate) | 52.4 -> 46.6 (19 -> 21), -11% | 642 -> 565 (-12%) | 152 -> 137 (-10%) |
+| Ghost of Sparta, menu | Vulkan (accurate) | 39.5 -> 30.3 (25 -> 33), -23% | 458 -> 370 (-19%) | 111 -> 89 (-20%) |
+| Death Jr. II, woods | Vulkan (accurate) | 37.4 -> 32.7 (27 -> 31), -13% | 381 -> 375 (-2%) | 98 -> 91 (-8%) |
+| Sonic Rivals, a stage | Vulkan (accurate) | 27.9 -> 25.4 (36 -> 39), -9% | 303 -> 300 (-1%) | 78 -> 73 (-7%) |
+| Activision Hits Remixed, room | Vulkan (accurate) | 50.3 -> 46.4 (20 -> 22), -8% | 478 -> 472 (-1%) | 137 -> 129 (-6%) |
+| Army of Two, playing | Software | 106.0 -> 96.6 (9 -> 10), -9% | 1010 -> 840 (-17%) | 286 -> 261 (-9%) |
+| Army of Two, main menu | Software | 94.5 -> 91.1 (11 -> 11), -4% | 884 -> 728 (-18%) | 249 -> 233 (-6%) |
+| Super Monkey Ball Adventures, story | Software | 67.8 -> 63.4 (15 -> 16), -6% | 690 -> 618 (-11%) | 186 -> 173 (-7%) |
+| Ghost of Sparta, menu | Software | 90.9 -> 88.2 (11 -> 11), -3% | 935 -> 877 (-6%) | 244 -> 236 (-4%) |
+| Death Jr. II, woods | Software | 12.5 -> 11.8 (80 -> 85), -6% | 131 -> 124 (-5%) | 34 -> 32 (-5%) |
+| Sonic Rivals, a stage | Software | 9.0 -> 8.5 (111 -> 117), -5% | 94 -> 87 (-8%) | 24 -> 23 (-5%) |
+| Activision Hits Remixed, room | Software | 18.3 -> 16.4 (55 -> 61), -10% | 184 -> 172 (-6%) | 49 -> 45 (-8%) |
+| Colin McRae 2005, race | Software | 24.4 -> 22.3 (41 -> 45), -9% | 221 -> 201 (-9%) | 63 -> 58 (-7%) |
+
+Army of Two takes a quarter less time in Vulkan (fast) (37-40% fewer instructions: its corners and its vertex reading),
+an eighth less in accurate, a tenth less in Software; Ghost of Sparta's menu 15-20% less in both Vulkan modes (`own()`'s
+pages, the corners); Colin McRae's race 12% in fast; Monkey Ball 7-10%, its time being its PRIMs' setup and the guest's
+VFPU (below). Death Jr. II, Sonic Rivals and Activision Hits Remixed, bound elsewhere since #234, run 1-9% fewer
+instructions. The software renderer's frames are bound by its drawing, whose bands the emulation thread draws too while
+it waits (part 74), so its time there moves less than its front end's instructions.
+
+**Accuracy.** Base against the branch's final code from the 21 scenes' states (part 79's), 100 frames, every frame's
+picture and all of VRAM hashed with drawing settled, then RAM and the machine's whole serialized state: identical
+in every one of the 63 runs, the 21 scenes in Vulkan (fast), Vulkan (accurate) and the software renderer (4 drawing
+threads). Before the review's points the same check on the code then (the four-lane `transformAll()` in it) was
+identical in all 63 runs too, and the steps before it on the eight front-end scenes in all three renderers.
+
+**Checks.** On the final code, with #234's reconciled branch merged (its tests of #233's glow with #234's palettes,
+which failed 11 checks on the merge of the two before) and master's #235 after: `tests/psp/run-tests.sh` 496 groups, 0
+failures (sanitized, and the GE's groups without the sanitizers too); `tests/allegrex/run-tests.sh` 60 groups, 0
+failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed; GCC 14 builds the GE, the renderer and their tests with
+-Wall -Wextra -Werror. New tests: "ge vertices read in runs as one at a time" (the runs counted as read), "draw3d mesh
+corners placed four at a time as one at a time", "draw3d triangles' corners placed once as at each triangle", "draw3d
+transformed a stage at a time as one at a time", "draw3d lit a stage at a time as one at a time", and "ge 3D settings
+kept from PRIM to PRIM" asking for unskinned PRIMs (the last skinning one's bones kept).
+
+**The review.** A fresh read-only review of the branch's nine commits checked each four-lane path against the scalar
+code operation by operation (in LLVM IR too), the list's words, the kept bones, the corners' bits against
+`clipTriangle()`, `own()`'s skip and memory's eight pages, and the vertex runs, and found them right, with two blockers.
+(1) Where two operands that aren't numbers met in one of the four-lane `transformAll()`'s sums, Clang put them the other
+way round from the scalar code, so such a result's sign could differ, and fog reads that sign: a 3D point or sprite at a
+place that isn't a number, with depth clamping and fog on, is drawn at the screen's corner with fog 0 or 255 by it.
+Looked into: base's scalar code, auto-vectorized, takes its own order too, so a vertex at a time where a lane isn't a
+number matched base less, not more (55,000 of 200,000 harness rounds differing in a not-a-number's bits, against
+25,000); with `transformAll()` base's code again (above), none differ. (2) `cond ? Outside : 0` (an enumerator and an
+int) is an error under GCC's -Wextra -Werror, as CI builds the tests: 0u (GCC 14 compiles the GE and its tests cleanly
+with -Wall -Wextra -Werror now). Its minor points, taken: the vertex runs test counts the runs read
+(`GE::vertexRunsRead`), not its own expectation; the kept settings test checks an unskinned PRIM keeps the last skinning
+one's bones; the stage-at-a-time tests take one not-a-number as another; comments; vectors returned by their type for
+GCC. Not taken: an ARM64 CI job (a fused multiply and add written differently in a lane shows only there; the Mac's test
+runs are ARM64 and catch it). A second fresh review, of the final diff after `transformAll()` went back to base's, found
+no blocker or major point; its minor ones taken: the GCC note above, the mesh test comparing each corner's place and
+bits too, the lighting test over all three mappings, a lane of depths nothing read, comments and the tests' names.
+
+**Where the time goes now** (the final code, `sample` of a -g build, the share of the emulation thread; taken at a
+load near 100, so as shares):
+- **Army of Two, playing**: Vulkan (fast) `meshTriangles()`' triangles' culling 14% (the vector of the corners handed
+  over 3% of it) and its corners' placing 10%, reading the vertices 12%, the GPU's models 8%, recording and MoltenVK's
+  submissions 15%, the guest's code 27%; accurate `transformAll()` 17%, reading 10%, the GPU's triangles 16%
+  (`placedTriangle()`, `triangleAt()`, `emit()`); Software the bands it draws itself (12%), `transformAll()` 10%, each
+  triangle's job 13%.
+- **Super Monkey Ball, story**: the guest's VFPU 15% (`VTFM`, `vfpuDot()`), each PRIM's setup about 17% together
+  (`GPU::begin()` with its settings and submissions, the texture's lookup, `transformKept()`, `pixelState()`, the
+  Look), the command loop 6%, `transformAll()` 6-9%, reading 5%.
+- **Ghost of Sparta, menu**: `transformAll()` 15-23%, `light()` alone 7-9% of it (now its biggest function), recording
+  and MoltenVK's submissions 19-28% (`GPU::begin()`'s), the GPU's triangles 5-12%.
+
+**What's left.**
+- Ghost of Sparta's menu draws 1,350 GPU draws a frame in fast mode, 91% of them split from the last only by the push
+  constant `held` (render to texture's texels taken, #234's: 184,000 of 202,000 draws in 150 frames): they can't join,
+  and each costs MoltenVK's encoding. `held` in the vertices or in a table the draw indexes would let them join.
+- Army of Two's draws split on the texture (51,600 of 59,200 in 150 frames); its models could be written straight into
+  the GPU's buffer (#234's backend), an unskinned PRIM's without their eight weights.
+- Monkey Ball's PRIMs' setup: a Look kept from the last PRIM where its commands are the same, the GPU's settings with
+  it, would cut most of it. Its VFPU is the CPU's (round 2).
+- Lighting: four vertices to a vector lost to the compiler's own vectorization; a `light()` made for each PRIM's lights
+  (no branches a vertex), or a vertex's four channels in the lanes, is what's left to try. `transformAll()` likewise:
+  the vectors lost on gathering and spreading the vertex's fields, which vertices kept as parts (all the x, then all
+  the y) from `readVertices()` on would change.
+- The software renderer's triangle setup (`triangleJob()`, `quantize15()`: 12-13%).
+- An ARM64 CI job, for the lanes' fused multiply-adds.
+
+**For the RP6.** Fast-forward and the emulation thread's time in Army of Two's play and main menu, Ghost of Sparta's
+menu, Colin McRae's race and Activision Hits Remixed's room in Vulkan (fast), where the corners' work moved most;
+Super Monkey Ball's story in all three (its time is the PRIMs' setup and the guest's VFPU, which this hardly moves).
+The Snapdragon's cores and the NDK's Clang may weigh the vector code differently from the M1 and Apple's Clang; the
+exactness doesn't depend on that (each lane's operations are the scalar code's in any build).
+
 ## Part 86: the CPU, round 2 — the VFPU's adder in NEON, delay slots compiled each way, the rare ways out of line, prefixes worked out as blocks are compiled, blocks linked to each other
 
 On branch `cursor/psp-cpu-round2-2b67`, on master (`b3507c1db`, #233 merged), with master merged in again before the PR

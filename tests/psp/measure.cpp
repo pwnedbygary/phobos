@@ -470,12 +470,16 @@ static auto pspMeasure() -> void {
   CHECK(waitFor(m, 100, [&] { return m.kernel.exited; }), true);
 
   const char* reference = std::getenv("PSP_GE_RESULTS");
+  if(!reference || !*reference) skip("ge-round3", "PSP_GE_RESULTS isn't set: the files compared with nothing");
   const char* copy = std::getenv("PSP_GE_OURS");
   if(copy) std::filesystem::create_directories(copy);
   //each file against the reference's; one the reference lacks is said to be missing (one given up on there, say),
   //but for a round's (3 to 7) when the reference has none of that round (its manifest3.txt to manifest7.txt), as a
   //PSP that hasn't run it
   bool referenceRound3 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest3.txt");
+  if(reference && *reference && !referenceRound3) {
+    skip("ge-round3", "PSP_GE_RESULTS has no round 3 (manifest3.txt): its files compared with nothing");
+  }
   bool referenceRound4 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest4.txt");
   bool referenceRound5 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest5.txt");
   bool referenceRound6 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest6.txt");
