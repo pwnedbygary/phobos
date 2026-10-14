@@ -262,9 +262,10 @@ inline auto cpuKind(unsigned implementer, unsigned part) -> std::string {
     static const std::map<unsigned, const char*> arm = {
       {0xd03, "Cortex-A53"}, {0xd04, "Cortex-A35"}, {0xd05, "Cortex-A55"}, {0xd07, "Cortex-A57"},
       {0xd08, "Cortex-A72"}, {0xd09, "Cortex-A73"}, {0xd0a, "Cortex-A75"}, {0xd0b, "Cortex-A76"},
-      {0xd0d, "Cortex-A77"}, {0xd41, "Cortex-A78"}, {0xd44, "Cortex-X1"}, {0xd46, "Cortex-A510"},
-      {0xd47, "Cortex-A710"}, {0xd48, "Cortex-X2"}, {0xd4b, "Cortex-A78C"}, {0xd4d, "Cortex-A715"},
-      {0xd4e, "Cortex-X3"}, {0xd80, "Cortex-A520"}, {0xd81, "Cortex-A720"}, {0xd82, "Cortex-X4"},
+      {0xd0c, "Neoverse N1"}, {0xd0d, "Cortex-A77"}, {0xd40, "Neoverse V1"}, {0xd41, "Cortex-A78"},
+      {0xd44, "Cortex-X1"}, {0xd46, "Cortex-A510"}, {0xd47, "Cortex-A710"}, {0xd48, "Cortex-X2"},
+      {0xd49, "Neoverse N2"}, {0xd4b, "Cortex-A78C"}, {0xd4d, "Cortex-A715"}, {0xd4e, "Cortex-X3"},
+      {0xd4f, "Neoverse V2"}, {0xd80, "Cortex-A520"}, {0xd81, "Cortex-A720"}, {0xd82, "Cortex-X4"},
       {0xd85, "Cortex-X925"}, {0xd87, "Cortex-A725"},
     };
     if(auto found = arm.find(part); found != arm.end()) return found->second;
@@ -373,7 +374,7 @@ struct Group {
 };
 
 struct Perf {
-  bool tried = false, available = false;
+  bool tried = false, available = false, denied = false;  //denied: perf_event_open refused (said in error)
   std::string error;                 //why there are none (or why some are missing)
   std::vector<std::string> problems; //the counters that didn't open, and why
   std::vector<Group> groups;
@@ -494,6 +495,7 @@ inline auto perfStart(Perf& perf) -> void {
   bool counted = false;
   for(auto& group : perf.groups) counted = counted || group.kind == "core";
   perf.available = counted;
+  perf.denied = denied != 0;
   if(denied) {
     //(Android's paranoid level 3, security.perf_harden 1, refuses every user; at 2 or below the kernel allows a
     //thread's own user-mode counts, so a refusal then is SELinux's)
@@ -884,8 +886,8 @@ inline auto print() -> void {
   } else {
     std::printf("measure counters: none (%s)\n", s.perf.error.empty() ? "unknown" : s.perf.error.c_str());
   }
-  for(auto& problem : s.perf.problems) {
-    if(s.perf.available || s.perf.error.empty()) std::printf("measure counter problem: %s\n", problem.c_str());
+  if(!s.perf.denied) {
+    for(auto& problem : s.perf.problems) std::printf("measure counter problem: %s\n", problem.c_str());
   }
   if(!s.frameMs.empty()) {
     std::printf("measure frame times: mean %.2f ms, median %.2f, 90%% %.2f, 99%% %.2f, longest %.2f (frame %u)\n",
