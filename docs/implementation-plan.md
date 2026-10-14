@@ -2,7 +2,7 @@
 
 **Last reconciled: 2026-10-13** (this opening, the evidence boundary below and the
 [test and performance plan](#test-and-performance-plan-2026-10-13), against master
-`4788125f1`, that plan's waits since brought to `542da5a28`; the 2026-09-25 update of
+`4788125f1`, that plan's waits since brought to `3228b825d`; the 2026-09-25 update of
 tasks 50 and 72 with device-measured N64 performance and aspect/preview work, in the
 [performance audit](performance-audit.md#2026-09-25-device-profiling-retroid-pocket-6-and-changes),
 task dispositions and safeguards from 2026-09-24 for the touch-controls/performance work
@@ -59,7 +59,7 @@ entry, or a part of [psp-core.md](psp-core.md), overrides this summary.
   [psp-gpu-renderers.md](psp-gpu-renderers.md#speed); its other RP6 reports
   (stuck or black games, among them parts 69, 71 and 72) are in those parts and the
   handoff.
-- **Waiting for the RP6:** PSP speed work measured on the M1 (parts 74, 79 and 83 each
+- **Waiting for the RP6:** PSP speed work measured on the M1 (parts 74, 79, 83 and 86 each
   list the scenes to measure) and whatever the handoff marks so.
 - **On branches:** open PRs and branches the handoff names; not master until merged.
 - **Proposed:** the [test and performance plan](#test-and-performance-plan-2026-10-13)
@@ -308,9 +308,9 @@ alone.
 | 09 | Automate PSP throughput comparisons | P0 | Later | 08 | — |
 | 10 | Protect high-resolution Vulkan output | P0 | Later | 04, 07; #240 | — |
 | 11 | Remove timing-sensitive thread tests | P1 | Later | #240 (`tests/psp/ge.cpp`) | — |
-| 12 | Test historical PSP state compatibility | P1 | Later | #223 and #229 settling the layout (28 on master since #243; #223's own 28 must move) | — |
+| 12 | Test historical PSP state compatibility | P1 | Later | #223 settling the layout (31 on master since #229; #223's own 28 must move) | — |
 | 13 | Measure the actual Android driver | P0 | Later, on the RP6 | 09, 10 | — |
-| 14 | Expand replayable JIT differential tests | P1 | Later | #237, 06 | — |
+| 14 | Expand replayable JIT differential tests | P1 | Later | 06 (#237 merged since) | — |
 | 15 | Retain PSP dialog interaction tests | P1 | Later | 02 (#230 merged since) | — |
 | 16 | Protect settings and input persistence | P2 | Later | #231, #232 | — |
 | 17 | Test Android launch and storage | P2 | Later | 15 | — |
