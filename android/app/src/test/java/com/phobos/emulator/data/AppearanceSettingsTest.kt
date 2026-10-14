@@ -69,10 +69,40 @@ class AppearanceSettingsTest {
     }
 
     @Test
+    fun aStoredSplashPageReadsAsTheMagazineCover() {
+        val scenes = mapOf(
+            "SPLASH" to MangaBackdropScene.COVER,
+            "COVER" to MangaBackdropScene.COVER,
+            "TRUCK" to MangaBackdropScene.TRUCK,
+            "A_LATER_SCENE" to MangaBackdropScene.TONE,
+        )
+        val screensaver = mapOf(
+            "MANGA_SPLASH" to CatalogBackdrop.MANGA_COVER,
+            "MANGA_TRUCK" to CatalogBackdrop.MANGA_TRUCK,
+            "MANGA_A_LATER_SCENE" to CatalogBackdrop.MATCH_APP,
+        )
+        withStore { store, dataStore ->
+            assertEquals("the default", MangaBackdropScene.TONE, store.settings.first().mangaBackdrop)
+            for ((stored, scene) in scenes) {
+                dataStore.edit { it[SettingsStore.MANGA_BACKDROP] = stored }
+                assertEquals(stored, scene, store.settings.first().mangaBackdrop)
+            }
+            for ((stored, backdrop) in screensaver) {
+                dataStore.edit { it[SettingsStore.SCREENSAVER_BACKDROP] = stored }
+                assertEquals(stored, backdrop, store.settings.first().screensaverBackdrop)
+            }
+        }
+    }
+
+    @Test
     fun everyKeptSceneAndScreensaverBackdropKeepsItsValueAcrossStarts() {
         for (scene in PixelBackdropScene.entries) {
             withStore { store, _ -> store.setPixelBackdrop(scene) }
             withStore { store, _ -> assertEquals(scene, store.settings.first().pixelBackdrop) }
+        }
+        for (scene in MangaBackdropScene.entries) {
+            withStore { store, _ -> store.setMangaBackdrop(scene) }
+            withStore { store, _ -> assertEquals(scene, store.settings.first().mangaBackdrop) }
         }
         for (backdrop in CatalogBackdrop.entries) {
             withStore { store, _ -> store.setScreensaverBackdrop(backdrop) }
