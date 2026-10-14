@@ -82,6 +82,83 @@ given to the owner as a plan bundle (not kept in the repository). Documentation 
   #249's first reason for being red (four files now); taken, with part 86's date in the plan and the entry point's
   line over 120 columns broken before its link.
 
+## CI: the PSP renderer's shaders compiled again by the glslang that made them, and validated — 2026-10-13
+
+Branch `cursor/test-plan-07-2b67` (PR #239), on master (`4788125f1`, #236). Package 07 of the 2026-10-13 test and
+performance plan (an outside audit of master `b3507c1db`, triaged against `9333a8d7a`; #244, package 01, indexes it
+in the implementation plan). CI and a check script only: `compile.sh`, the GLSL and `shaders.hpp` are untouched (the
+sources' hash covers `compile.sh`, so changing it would have meant regenerating `shaders.hpp`).
+- **The gap**: `compile.sh --check` (run by `tests/psp/run-tests.sh`) always compares the sources' hash, but compiles
+  again and compares `shaders.hpp` byte for byte only where a glslang happens to be installed, and CI installs none.
+  So CI never compared the SPIR-V with what its GLSL compiles to, nor validated it (the GPU tests run it on lavapipe):
+  a changed word under an unchanged hash that those tests don't notice passed.
+- **The pin**: glslang 16.6.0 makes `shaders.hpp` exactly, both Homebrew's build and Khronos's own macOS release
+  (`compile.sh --check` with each: exit 0). Khronos's Linux release of it is
+  `glslang-16.6.0-linux-x86_64-release.tar.gz`, SHA-256 `2c34071f…91ce`.
+- **The check** (`.github/scripts/check-psp-shaders.sh`, in a new workflow, PSP Shaders, on changes to the shaders,
+  the script or the workflow): glslang must be found and be 16.6.0, then `compile.sh --check` (the hash, then every
+  shader compiled again and compared), and each of the 12 modules in `shaders.hpp`, as its bytes, through `spirv-val
+  --target-env vulkan1.0` (compile.sh's target); every array `shaders.hpp` declares must be one it reads, and every
+  word a 32-bit hex word. Both parts run and report; either failing fails. A glslang upgrade is a toolchain change:
+  `shaders.hpp` made with it, and the script's version, the workflow's version and SHA-256 and the doc's line moved
+  together (the workflow doesn't override the script's, so CI fails if they differ).
+- **Negative controls** (a disposable copy, the Mac, glslang 16.6.0 and SPIRV-Tools v2026.4): the copy as it is
+  passes (12 valid); GLSL changed without regenerating: the hash fails; one word of `presentSPIRV` changed (still
+  valid SPIR-V: spirv-val passes it) with the hash kept: the byte comparison fails; `presentSPIRV`'s id bound set to 1:
+  the comparison and spirv-val both fail (11 valid); no glslang in PATH: fails; a glslang calling itself 16.5.0:
+  fails.
+- **Checks**: actionlint 1.7.12 with shellcheck 0.11.0 (clean); the script on master's tree (pass); CI on #239 (runs
+  38435975771, 19 s, and 38437980381 on the head merged with master, 16 s; ubuntu-24.04): the image has no glslang of
+  its own ("none"), the archive's SHA-256 matched, and Khronos's Linux glslang 16.6.0 compiled `shaders.hpp` byte for
+  byte; Ubuntu's SPIRV-Tools v2025.1 passed all 12 modules.
+- **Review**: an independent read-only review (PASS; it reproduced the pin, both CI runs and 14 negative controls)
+  raised seven points: an array declared another way (`static constexpr`, made with a changed compile.sh) went
+  unvalidated (11 of 12); the version was pinned in two places CI couldn't keep equal; a malformed word was dropped;
+  `--version`'s failure was unexplained; the first run's time was misquoted; "CI never checked the SPIR-V" overstated
+  the gap; actionlint had run without shellcheck. All taken: the declared arrays counted, every word checked, the
+  workflow no longer overriding the script's version (two pins CI now keeps equal), the error said, the runs cited,
+  the gap reworded, shellcheck run; and its suggestions (`ubuntu-24.04`, a 10-minute limit, curl's retries). A delta
+  review (PASS) found an array written without `=` still unread: arrays are now found with or without it, and the
+  SPIR-V magic numbers in the file must match the arrays read; CI on that head (run 38455036248 at `17c21468e`): the
+  12 modules read, compiled byte for byte and valid. A second delta review passed it.
+
+## CI: the Android unit tests in every build, the releases waiting for them; the SDK cache gone — 2026-10-13
+
+Branch `cursor/test-plan-02-2b67` (PR #238), on master (`4788125f1`, #236). Package 02 of the 2026-10-13 test and
+performance plan (an outside audit of master `b3507c1db`, triaged against `9333a8d7a`; #244, package 01, indexes it
+in the implementation plan). CI only: no app, core or test code changes.
+- **Unit tests in CI**: `.github/workflows/android.yml` gains a job beside the APK build, "Unit tests (legacy +
+  modern)": `./gradlew :app:testLegacyDebugUnitTest :app:testModernDebugUnitTest --continue` (the app's 42 test files,
+  299 `@Test`s, which no workflow ran before), their XML and HTML reports kept as the `unit-test-reports` artifact
+  whether they pass or fail. The release and nightly jobs now need it as well as the build, so a failing test stops
+  `android.yml` publishing either (on a version tag, `desktop.yml` still makes the release for its own packages after
+  waiting 20 minutes for Android's: whether it should wait for the tests too is the owner's call). It builds no APK
+  and uploads none; no device or instrumented test is implied (none exist). Both jobs now have a time limit (build 60
+  minutes, tests 30), so a hung step ends instead of running on.
+- **The SDK cache removed** (the Android job's long post step): `Cache Android SDK` packed the runner image's whole
+  SDK folder, 4.6 GiB. After a miss its post step tars all of it: on master's six runs before `0a9a7fa75` that step
+  took 2 to 59 minutes (13 or more in four), master's run 38423938456 was cancelled in it after 37 minutes with every
+  real step green, and the run for `9333a8d7a` was cancelled in it too by the next push (neither commit got a
+  nightly; v2.2.0's own tag run finished, its release complete). Without it, the components install in 19-67 s (the
+  platform and build tools are on the image; the NDK and CMake download). A hit was no better: 2 to 5 minutes, then
+  tar failing to set the times and modes of the image's root-owned folders ("Failed to restore", run 38429067532).
+  Two of its entries (9.2 GiB together) also filled most of the repository's 10 GB of cache, which GitHub trims by
+  evicting the least recently used (the Gradle and FFmpeg caches).
+- **Checks**: actionlint 1.7.12 on the workflow (clean); the job graph read back (release and nightly need build and
+  unit-tests). CI on #238 (run 38437970240): the unit-test job passed in 3 minutes, 299 tests in each flavor, none
+  failed or skipped (its reports). Negative control (run 38435701552, a disposable branch with one test asserting
+  1 == 2, dispatched): the unit-test job failed, both flavors ran (300 tests each, that one failing in each; Gradle ran
+  them side by side, so this run doesn't show `--continue` at work, which matters when one flavor fails to compile),
+  and the reports were uploaded; the branch was deleted after. Release and nightly don't run on a branch, so their
+  gating is the job graph above. The first build without the cache (run 38437970240) passed in 17.5 minutes.
+- **Review**: an independent read-only review found the workflow right and its CI claims checked (counts, artifacts,
+  job graph, invariants), and asked for the docs to be exact: the tag case of `desktop.yml`, the cache's real save
+  and restore times (and that the "never finishing" runs were cancelled by the next push), `--continue`'s wording,
+  this entry's base, "every commit". All taken, with its suggestions of time limits and the failed restores; left:
+  deleting the two old 4.6 GiB cache entries once this is merged (open PRs on the old workflow make them again).
+- **Left**: the unit tests run on the debug variants (release differs in `BuildConfig.DEBUG` and signing); the
+  dialogs', settings' and launch paths' UI tests are later packages (15-17).
+
 ## PSP: the CPU, round 2 — the VFPU's adder in NEON, delay slots compiled each way, the rare ways out of line, prefixes compiled, blocks linked — 2026-10-13
 
 Branch `cursor/psp-cpu-round2-2b67`, on master (`b3507c1db`, #233 merged; merged in again at `0a9a7fa75`, #234, and at
