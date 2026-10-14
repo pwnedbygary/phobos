@@ -1,19 +1,37 @@
 name: PSP Core Tests
 
-# The PSP core (ares/psp) isn't in the app yet; its parts are tested on the host, here with the address and
-# undefined-behavior sanitizers. The files the core's tests share with the app's (android/app/src/test/resources/psp-*:
-# the dialogs' byte form, the keyboard's cases) run them too.
+# The PSP core (ares/psp) tested on the host, in four suites: the Allegrex CPU's (tests/allegrex) and the system's
+# parts (tests/psp), both with the address and undefined-behavior sanitizers; the whole core as an ares system, as
+# Phobos builds it (tests/psp/ares/run-tests.sh); and the headless runner, built and running a test program
+# (tests/psp/ares/runner-test.sh). Their paths are what those builds compile or read: the core, nall, ares's framework
+# and libco, sljit and its configuration, Vulkan's headers, libchdr, FFmpeg's build, the runner, the desktop's disc
+# reader, the tests, and the files the PSP's tests share with the app's (android/app/src/test/resources/psp-*: the
+# dialogs' byte form, the keyboard's cases).
+# A version tag runs every suite (a tag's push takes no path filter). The runners are pinned to Ubuntu 24.04 (its
+# GCC 13), so a new image is a change made on purpose. Each suite's last line, its count, goes in the
+# run's summary with the commit.
 
 on:
   push:
     branches: [ master ]
-    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', 'tests/psp/**', 'desktop/PspDiscInfo.*', 'thirdparty/ffmpeg/**', 'android/app/src/test/resources/psp-*', '.github/workflows/psp-core.yml' ]
+    tags: [ 'v*' ]
+    paths: [ 'ares/psp/**', 'ares/ares/**', 'nall/**', 'libco/**', 'thirdparty/sljit/**', 'thirdparty/sljit*',
+             'thirdparty/Vulkan-Headers/**', 'thirdparty/libchdr/**', 'thirdparty/ffmpeg/**', 'tools/psp-runner/**',
+             'tests/allegrex/**', 'tests/psp/**', 'desktop/PspDiscInfo.*', 'desktop/Platform.hpp',
+             'android/app/src/test/resources/psp-*',
+             '.github/workflows/psp-core.yml' ]
   pull_request:
-    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', 'tests/psp/**', 'desktop/PspDiscInfo.*', 'thirdparty/ffmpeg/**', 'android/app/src/test/resources/psp-*', '.github/workflows/psp-core.yml' ]
+    paths: [ 'ares/psp/**', 'ares/ares/**', 'nall/**', 'libco/**', 'thirdparty/sljit/**', 'thirdparty/sljit*',
+             'thirdparty/Vulkan-Headers/**', 'thirdparty/libchdr/**', 'thirdparty/ffmpeg/**', 'tools/psp-runner/**',
+             'tests/allegrex/**', 'tests/psp/**', 'desktop/PspDiscInfo.*', 'desktop/Platform.hpp',
+             'android/app/src/test/resources/psp-*',
+             '.github/workflows/psp-core.yml' ]
   workflow_dispatch:
 
 concurrency:
-  group: psp-core-${{ github.head_ref || github.ref }}
+  # a PR's newer push replaces its run; every other run (master's, a tag's, a dispatch) is a group of its own, so none
+  # waits behind or is cancelled by another, and each commit keeps its result
+  group: psp-core-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -22,17 +40,30 @@ permissions:
 jobs:
   allegrex:
     name: Allegrex CPU tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # (bash named, so a failing suite fails the step through tee: pipefail)
       - name: Run the tests
-        run: tests/allegrex/run-tests.sh
+        shell: bash
+        run: tests/allegrex/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          at="${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}"
+          last=$(tail -1 "$RUNNER_TEMP/suite.log" 2> /dev/null || true)
+          echo "- tests/allegrex at $at: ${last:-no output: the suite did not run}" >> "$GITHUB_STEP_SUMMARY"
 
   system:
     name: PSP system tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -59,6 +90,84 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers libvulkan1
 
       - name: Run the tests
+        shell: bash
         env:
           PSP_GPU_ON_CPU: 1
-        run: tests/psp/run-tests.sh
+        run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          at="${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}"
+          last=$(tail -1 "$RUNNER_TEMP/suite.log" 2> /dev/null || true)
+          echo "- tests/psp at $at: ${last:-no output: the suite did not run}" >> "$GITHUB_STEP_SUMMARY"
+
+  # The whole core as an ares system, with ares's node tree, libco and libchdr, as Phobos builds it: system.cpp's
+  # checks, which boot the test programs in tests/psp/programs (no Vulkan: they draw with the software renderer)
+  ares:
+    name: PSP as an ares system
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Name the FFmpeg build
+        id: ffmpeg
+        run: echo "name=$(thirdparty/ffmpeg/build.sh --name host)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: .cache/ffmpeg
+          key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
+          restore-keys: ffmpeg-${{ runner.os }}-host-
+
+      - name: Run the tests
+        shell: bash
+        run: tests/psp/ares/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          at="${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}"
+          last=$(tail -1 "$RUNNER_TEMP/suite.log" 2> /dev/null || true)
+          echo "- tests/psp/ares at $at: ${last:-no output: the suite did not run}" >> "$GITHUB_STEP_SUMMARY"
+
+  # tools/psp-runner built as tools/psp-runner/build.sh builds it, running cube.elf for 60 frames: its summary, PNGs
+  # and WAV checked
+  runner:
+    name: Headless runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Name the FFmpeg build
+        id: ffmpeg
+        run: echo "name=$(thirdparty/ffmpeg/build.sh --name host)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: .cache/ffmpeg
+          key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
+          restore-keys: ffmpeg-${{ runner.os }}-host-
+
+      - name: Run the test
+        shell: bash
+        run: tests/psp/ares/runner-test.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          at="${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}"
+          last=$(tail -1 "$RUNNER_TEMP/suite.log" 2> /dev/null || true)
+          echo "- tests/psp/ares/runner-test.sh at $at: ${last:-no output: the suite did not run}" >> "$GITHUB_STEP_SUMMARY"
