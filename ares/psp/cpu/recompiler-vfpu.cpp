@@ -610,7 +610,7 @@ auto Allegrex::Recompiler::emitVFPU(u32 address, u32 instruction, u32 count, boo
     return true;
   } else if(op == 0x37) {  //viim, vfim: their constant into rt's single, as VIIM() and VFIM() make it
     constant = true, written = 1, vd = vt;
-    if(instruction >> 23 & 1) constants[0] = self.vfpuBits(std::bit_cast<f32>(halfToFloat(u16(instruction))));
+    if(instruction >> 23 & 1) constants[0] = halfToFloat(u16(instruction));
     else constants[0] = self.vfpuBits(s16(instruction));
   } else if(op == 0x18 && (group == 0 || group == 1 || group == 7)) {  //vadd, vsub, vdiv
     if(group == 0) helper = Sized(vfpuRestBinary, 0);

@@ -266,6 +266,14 @@ auto conversions() -> void {
   CHECK(pack.cpu.vfpu.r[S(3, 0, 0)], 0x7f0200ffu);
   CHECK(pack.cpu.vfpu.r[S(4, 0, 0)], 0x001fffffu);
   CHECK(pack.cpu.vfpu.r[S(4, 1, 0)], 0xf80007e0u);
+
+  //vfim of a half NaN gives its bits as a float's, a signaling one's too (not quieted), as of an infinity and a -0.
+  for(auto [value, expected] : {std::pair{0xffd8u, 0xff8003d8u}, {0x7c01u, 0x7f800001u}, {0x7e00u, 0x7f800200u},
+                                 {0xfc00u, 0xff800000u}, {0x8000u, 0x80000000u}}) {
+    Machine constant;
+    constant.run({vfim(S(3, 0, 0), value)});
+    CHECK(constant.cpu.vfpu.r[S(3, 0, 0)], expected);
+  }
 }
 
 auto functions() -> void {
