@@ -630,10 +630,14 @@ auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken, u
     Held h = *held;
     held.reset();
     //(its colors' alpha caught up with the stencil first where it lags, a change its copies take again, below; not
-    //where the PRIM can't see the copy's alpha: palette indices take none of the stencil's bits (take()), and a
-    //texture function without the texel's alpha leaves it out. A later PRIM that sees it catches it up then, its copy
-    //taken again from the change that makes)
-    if(!h.palette && look.withAlpha) {
+    //where the PRIM can't see the copy's alpha: palette indices take none of the stencil's bits (take()), a texture
+    //function without the texel's alpha leaves it out, and a pixel's alpha counts only in the alpha test and blending
+    //by the source's alpha, the alpha written being the stencil (pixel.cpp). A later PRIM that sees it catches it up
+    //then, its copy taken again from the change that makes)
+    auto& p = look.pixel;
+    auto bySource = [](u32 factor) { return factor == 2 || factor == 3 || factor == 6 || factor == 7; };
+    bool blendsBySource = p.blend && p.blendOperation < 3 && (bySource(p.blendSource) || bySource(p.blendDestination));
+    if(!h.palette && look.withAlpha && (p.alphaTest || blendsBySource)) {
       catchAlpha(*h.target, h.x, h.y, h.x + h.width - 1, h.y + h.split - 1);
       if(h.next) catchAlpha(*h.next, h.x, 0, h.x + h.width - 1, h.rows - h.split - 1);
     }
