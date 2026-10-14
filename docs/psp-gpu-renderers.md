@@ -152,7 +152,8 @@ Each frame buffer the GE draws into (its address, row width and format) is a **t
 picture as wide as the row and as tall as fits in VRAM (at most 512 rows), and a depth and stencil picture (32-bit
 float depth with 8-bit stencil, or 24-bit depth where that's all there is), drawn in one render pass. The PSP's
 stencil is its frame buffer's alpha (none in 5650), so the GPU's stencil holds it, and the color's alpha follows it
-where the renderer knows what's written.
+where the renderer knows what's written; where a PRIM changes the stencil without it, the color's alpha is set from
+the stencil before anything reads it (part 93: "Stencil", below).
 
 **Frame buffers side by side** (part 65): a frame buffer is part of the target of its row width and format that starts
 where its page does, where a page holds whole rows (rows whose bytes divide 4,096, from VRAM's start), else where its
@@ -401,7 +402,14 @@ What the GPU does with the GPU's own units, and how near the PSP it comes:
 - **Stencil**: the GPU's 8-bit stencil, with the GE's comparison, reference, masks and operations (keep, zero,
   replace, invert, increment and decrement clamped). The alpha written to the color follows the stencil where the pass
   operation's result is known in advance (replace, zero), so blending by the frame buffer's alpha reads it; the
-  stencil itself is what's read back as the alpha. A 16-bit frame buffer's stencil is held as the GE reads it (part
+  stencil itself is what's read back as the alpha. Where a PRIM changes the stencil and not the color's alpha (a
+  fail or depth-fail operation that can happen, an increment, decrement or invert, or a write mask keeping some of
+  the stencil's bits), its target notes the rectangle (`Target::lags`), and before a PRIM blends by the frame
+  buffer's alpha there (the GE's factors, so shader blending too) or a copy of the target is taken over it (render to
+  texture), the color's alpha there is set from the stencil on the GPU (`catchAlpha()`, `Command::Alpha`: in a render
+  pass of its own, `copy.frag`'s `ALPHA` build adding each bit the format keeps apart where the stencil test finds it,
+  after a draw making it 0). Part 93: MX vs. ATV Untamed zeroes its race's alpha by a depth-fail operation behind its
+  hills before blending the sky in by it. A 16-bit frame buffer's stencil is held as the GE reads it (part
   68): a 5551 one's bit as 0 or 255, a 4444 one's four bits twice over, as fills and moves put it there, and so do
   clear mode's alpha (a triangle's last corner's for all of it, a sprite's, a point's, each pixel's of a line), a
   replace's reference and MASK_ALPHA's bits (each kept bit with its copies); where a replace's
@@ -800,9 +808,9 @@ What differs after shader blending:
   depth buffer's bytes refills all of each 16 KiB it touches; a PRIM's pixels past its frame buffer's row end cut at
   the row; textures past a frame buffer's row; in fast mode, a texture's rows past its frame buffer's held at its
   last where the PRIM's rows aren't known (part 83); a 4444 frame buffer's increment and decrement stepping its
-  stencil by one, and the stencil a fail or depth-fail operation leaves not in the color's alpha a texture taken on
-  the GPU reads (part 90); and, for a backend that can't read the frame buffer, the older blending and logic
-  approximations.
+  stencil by one (part 90); the GPU's corners' depths not whole numbers as the GE's are (draw.cpp's `stepped()`),
+  so its depths come out one more than the GE's at about half the pixels of a 3D surface (part 93); and, for a backend
+  that can't read the frame buffer, the older blending and logic approximations.
 
 The pictures look the same to the eye in the scenes measured; nothing is missing or misplaced.
 
@@ -1100,9 +1108,10 @@ software renderer.
    (Vulkan (fast), part 53); a pipeline cache kept on disk (part 54); still to do, block transfers on the GPU.
 4. **Accuracy**: shader blending (part 45, done: blending, dithering, logic operations, write masks and 16-bit
    formats as the PSP's, on every Vulkan GPU); the depth taken between frame buffers over one depth buffer, and put
-   into memory for a texture read through VRAM's depth views (part 90); still to do, depth read back for the CPU's
-   loads and taken between depth buffers of other row widths, block transfers between targets on the GPU, textures
-   decoded on the GPU.
+   into memory for a texture read through VRAM's depth views (part 90); the frame buffer's alpha set from its stencil
+   where operations changed the stencil without it (part 93); still to do, depth read back for the CPU's loads and
+   taken between depth buffers of other row widths, the corners' depths whole numbers as the GE's, block transfers
+   between targets on the GPU, textures decoded on the GPU.
 5. **OpenGL** (parked 2026-10-08): not worth a second HW backend yet; Software is the non-Vulkan path. Revisit only if telemetry shows need.
 6. **Vulkan (fast)** (part 53, done): the GPU's transform and lighting for 3D, the GE's rules for which triangles are
    drawn, the GPU's blending; its pipelines kept on disk (part 54); still to do, the bones in a block of their own
