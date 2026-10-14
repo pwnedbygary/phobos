@@ -88,16 +88,16 @@ private class CoverLayout(w: Int, h: Int) {
     val marsY = h * (if (wide) 0.87f else 0.86f) + marsR
 
     /** On a wide page, the masthead and the issue box stay in the top fifth, which the Library's grid of cards leaves showing. */
-    val masthead = if (wide) Box(w * 0.25f, h * 0.018f, w * 0.75f, h * 0.205f) else Box(m, h * 0.018f, w - m, h * 0.148f)
-    val issue = if (wide) Box(w - m - h * 0.17f, h * 0.025f, w - m, h * 0.2f) else Box(w - m - w * 0.25f, h * 0.155f, w - m, h * 0.155f + w * 0.29f)
-    val banner = if (wide) Box(m, h * 0.33f, w * 0.29f, h * 0.425f) else Box(m, h * 0.165f, w * 0.66f, h * 0.208f)
+    val masthead = if (wide) PageBox(w * 0.25f, h * 0.018f, w * 0.75f, h * 0.205f) else PageBox(m, h * 0.018f, w - m, h * 0.148f)
+    val issue = if (wide) PageBox(w - m - h * 0.17f, h * 0.025f, w - m, h * 0.2f) else PageBox(w - m - w * 0.25f, h * 0.155f, w - m, h * 0.155f + w * 0.29f)
+    val banner = if (wide) PageBox(m, h * 0.33f, w * 0.29f, h * 0.425f) else PageBox(m, h * 0.165f, w * 0.66f, h * 0.208f)
     val bannerAngle = if (wide) -0.1f else -0.08f
-    val headline = if (wide) Box(m, h * 0.45f, w * 0.3f, h * 0.67f) else Box(m, h * 0.635f, w - m, h * 0.72f)
-    val caption = if (wide) Box(m * 1.4f, h * 0.7f, w * 0.27f, h * 0.84f) else Box(w * 0.14f, h * 0.735f, w * 0.86f, h * 0.79f)
+    val headline = if (wide) PageBox(m, h * 0.45f, w * 0.3f, h * 0.67f) else PageBox(m, h * 0.635f, w - m, h * 0.72f)
+    val caption = if (wide) PageBox(m * 1.4f, h * 0.7f, w * 0.27f, h * 0.84f) else PageBox(w * 0.14f, h * 0.735f, w * 0.86f, h * 0.79f)
     val balloonX = if (wide) w * 0.84f else w * 0.79f
     val balloonY = if (wide) h * 0.5f else h * 0.54f
     val balloonR = if (wide) h * 0.135f else w * 0.15f
-    val barcode = if (wide) Box(w - m - h * 0.3f, h - m - h * 0.16f, w - m, h - m) else Box(m, h - m - w * 0.17f, m + w * 0.34f, h - m)
+    val barcode = if (wide) PageBox(w - m - h * 0.3f, h - m - h * 0.16f, w - m, h - m) else PageBox(m, h - m - w * 0.17f, m + w * 0.34f, h - m)
 }
 
 /** The focus lines converging on the moon, the burst flashing behind it, and Mars' curve across the bottom. */
@@ -299,7 +299,7 @@ private fun Page.coverLettering(out: FloatArray, l: Lettering, c: CoverLayout) {
  * WEEKLY SHONEN in paper on an ink tab, and PHOBOS: inked letters cut by two speed stripes, ringed,
  * outlined, over a toned shadow. The tab stands beside the title when [beside], else above it.
  */
-private fun Page.masthead(out: FloatArray, l: Lettering, box: Box, beside: Boolean) {
+private fun Page.masthead(out: FloatArray, l: Lettering, box: PageBox, beside: Boolean) {
     val ring = max(1f, unit * 1.3f)
     val ink = max(1.5f, unit * 2.4f)
     val shadow = (unit * 4f).roundToInt().coerceAtLeast(1)
@@ -356,7 +356,7 @@ private fun Page.tab(out: FloatArray, l: Lettering, left: Float, top: Float, wid
 }
 
 /** The issue box: the year, the issue's number, a rule, and the price. */
-private fun Page.issueBox(out: FloatArray, l: Lettering, box: Box, line: Float) {
+private fun Page.issueBox(out: FloatArray, l: Lettering, box: PageBox, line: Float) {
     panel(out, box, line)
     val pad = box.width * 0.1f
     val inner = box.width - pad * 2
@@ -370,7 +370,7 @@ private fun Page.issueBox(out: FloatArray, l: Lettering, box: Box, line: Float) 
 }
 
 /** NEW SERIES! in paper on an ink ribbon with swallowtail ends, a sparkle at each end. */
-private fun Page.banner(out: FloatArray, l: Lettering, box: Box, angle: Float) {
+private fun Page.banner(out: FloatArray, l: Lettering, box: PageBox, angle: Float) {
     val text = "NEW SERIES!"
     val height = box.height * 0.78f
     val notch = height * 0.35f
@@ -391,7 +391,9 @@ private fun Page.banner(out: FloatArray, l: Lettering, box: Box, angle: Float) {
     l.mask(l.block(listOf(text), listOf(size), box.cx, box.cy, angle, 0.12f, tracking = 0.03f))?.let { letters(out, it, 0f) }
     for (side in listOf(-1f, 1f)) {
         val along = side * (halfW - notch * 0.2f)
-        val sx = (box.cx + along * cos - (-halfH * 1.55f) * sin).coerceIn(height * 0.5f, w - height * 0.5f)
+        // Kept on the page, where it's wider than the sparkle.
+        val x = box.cx + along * cos - (-halfH * 1.55f) * sin
+        val sx = if (w > height) x.coerceIn(height * 0.5f, w - height * 0.5f) else x
         val sy = box.cy + along * sin + (-halfH * 1.55f) * cos
         sparkle(out, sx, sy, height * 0.42f, max(1f, unit * 1.2f))
     }
@@ -414,9 +416,9 @@ private fun Page.sparkle(out: FloatArray, cx: Float, cy: Float, r: Float, line: 
     }
 }
 
-/** The lead cover line, "ares, now on Android!", in outlined letters. */
-private fun Page.headline(out: FloatArray, l: Lettering, box: Box, wide: Boolean) {
-    val lines = if (wide) listOf("ares,", "NOW ON ANDROID!") else listOf("ares, NOW ON", "ANDROID!")
+/** The lead cover line, "ares, now on Android!", in outlined capitals (Bangers has no lowercase). */
+private fun Page.headline(out: FloatArray, l: Lettering, box: PageBox, wide: Boolean) {
+    val lines = if (wide) listOf("ARES,", "NOW ON ANDROID!") else listOf("ARES, NOW ON", "ANDROID!")
     val ring = max(1f, unit * 1.7f)
     val ink = max(1f, unit * 1.5f)
     val shadow = (unit * 2f).roundToInt().coerceAtLeast(1)
@@ -442,7 +444,7 @@ private fun Page.balloon(out: FloatArray, l: Lettering, cx: Float, cy: Float, r:
 }
 
 /** A barcode in a paper box: the magazine's number as EAN-13 bars, its digits beneath. */
-private fun Page.barcode(out: FloatArray, l: Lettering, box: Box, line: Float) {
+private fun Page.barcode(out: FloatArray, l: Lettering, box: PageBox, line: Float) {
     panel(out, box, line * 0.8f)
     val digits = "491020261042"
     val code = digits + ean13Check(digits)
@@ -462,16 +464,22 @@ private fun Page.barcode(out: FloatArray, l: Lettering, box: Box, line: Float) {
             val start = left + k * module
             ink += (min(x + 1f, start + module) - max(x.toFloat(), start)).coerceAtLeast(0f)
         }
-        val guard = from < 3 || from in 45..49 || from >= 92
+        val guard = from in EAN_START || from in EAN_CENTER || from in EAN_END
         val low = if (guard) guardBottom else bottom
         paint(out, i, ink.coerceAtMost(1f) * (low - y).coerceIn(0f, 1f), 1f)
     }
     val size = min((guardBottom - bottom) * 2.2f / l.capHeight, module * 6.2f / l.width("0", 1f))
     val baseline = box.bottom - box.height * 0.07f
+    // The first digit stands in the quiet zone; the others under the six digits' modules either side of the center guard.
     l.mask(l.line(code.substring(0, 1), size, left - module * 8f, baseline))?.let { letters(out, it, 1f) }
-    l.mask(l.line(code.substring(1, 7), size, left + module * 4f, baseline, tracking = 0.12f))?.let { letters(out, it, 1f) }
-    l.mask(l.line(code.substring(7), size, left + module * 50f, baseline, tracking = 0.12f))?.let { letters(out, it, 1f) }
+    l.mask(l.line(code.substring(1, 7), size, left + module * (EAN_START.last + 2), baseline, tracking = 0.12f))?.let { letters(out, it, 1f) }
+    l.mask(l.line(code.substring(7), size, left + module * (EAN_CENTER.last + 1), baseline, tracking = 0.12f))?.let { letters(out, it, 1f) }
 }
+
+/** EAN-13's guard bars, as module ranges: the start, the center and the end, drawn longer than the digits' bars. */
+private val EAN_START = 0..2
+private val EAN_CENTER = 45..49
+private val EAN_END = 92..94
 
 /** EAN-13's check digit for its first twelve [digits]. */
 internal fun ean13Check(digits: String): Int {

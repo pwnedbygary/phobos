@@ -147,18 +147,24 @@ backdrops. App only (Kotlin; no native or core change). The console icons follow
     glint, long sideways), a bumper with a 1-UP plate, tyres and its shadow on the road; 340 focus lines converge on
     the grille. VRRROOOM!! grows letter by letter, and the narration is a light novel's title: "That time ares got hit
     by Truck-kun and was reincarnated on Android". On a wide page both stay in the top fifth.
-  - *Lettering*: Bangers (already bundled, OFL) rasterized in plain Kotlin, so it's the same on every device and in
-    tests: `TrueType` reads the font file (format 4 character map, simple and composite quadratic outlines, advances,
-    GPOS pair kerning), `Lettering` sets lines and blocks (turned, slanted, growing) and fills them by signed area per
-    pixel; outlined letters take their rings from an exact distance transform (`Mask.distances`). The app reads the
-    font resource once, on the render thread (`MangaLettering` in `Manga.kt`); without it the two scenes leave the
-    words out.
+  - *Lettering*: Bangers (already bundled, OFL; it has no lowercase, so the lettering is in capitals) rasterized by
+    the app's own code, so it's the same on every device and in tests: `TrueType` reads the font file (format 4
+    character map, simple and composite quadratic outlines, advances, GPOS pair kerning), `Lettering` sets lines and
+    blocks (turned, slanted, growing), and `Raster` fills them by signed area per pixel. `Raster` is a modified Kotlin
+    translation of font-rs's rasterizer (`draw_line` in its `src/raster.rs`, `accumulate` in `src/accumulate.rs`;
+    Copyright 2015 Google Inc., Apache License 2.0), credited in LICENSE (font-rs's entry, which `LicenseNoticesTest`
+    checks for) and in its KDoc. Outlined letters take their rings from an exact distance transform between pixel
+    centers (`Mask.distances`, within about half a pixel of the true distance). The app reads the font resource once,
+    on the render thread (`MangaLettering` in `Manga.kt`); if it can't be read or parsed (`letteringOf`), the failure
+    is kept and the two scenes leave the words out, and a backdrop whose render throws keeps its placeholder
+    (`RenderedBackdrop` logs it).
   - *Dark themes*: where the ink is lighter than the paper, form shading turns round (`Page.shade`), so the moon's lit
     side and the headlights are the light parts on both kinds of theme; lines and lettering stay ink.
   - *Stored choices*: `SPLASH` reads as `COVER` (`mangaBackdropNamed`, `data/SettingsStore.kt`), the screensaver's
     `MANGA_SPLASH` as `MANGA_COVER`.
-  - *Cost* (the Mac's JVM, warmed up, shared with other agents' builds): 1920x1080 in 0.4-0.6 s for the cover and
-    0.6-0.9 s for Truck-kun (Speed lines 0.35-0.45 s at the same time); once per size and theme, off the main thread.
+  - *Cost* (the Mac's JVM, warmed up, the machine quiet): 1920x1080 in 0.37-0.44 s for the cover and 0.53-0.61 s for
+    Truck-kun (Speed lines 0.31-0.37 s), allocating about 27 and 35 MB (Speed lines 17 MB); once per size and theme,
+    off the main thread.
   - *Previews* (outside the repo, `~/phobos-work/scratch/themes/previews2/`): `manga-cover-*.png` and
     `manga-truck-*.png`, 1920x1080 and 1080x2400 in GitHub Light, Phobos light, Gruvbox Dark and Phobos dark, each also with a
     mock of the Library drawn over it (`*-library.png`), and `manga-cover-sheet.png` and `manga-truck-sheet.png`; from
@@ -183,12 +189,14 @@ backdrops. App only (Kotlin; no native or core change). The console icons follow
   `XmbDeepTest` (3), `MangaPageTest` (3), `CrtScreenTest` (4); `PixelSceneTest` and `PixelArtTest`'s planet and
   shooting-star tests went with Space. Reverting the Manga or the CRT commit alone leaves the app compiling and the
   remaining tests passing (this entry then needs its bullet for it taken out). No APK built locally (CI builds them);
-  not yet seen on a device. With master merged and the magazine cover and Truck-kun: 331 pass in 47 classes (on
-  `74bc914b6`); `MangaPageTest` has 11 (every pixel between paper and ink on light and dark themes, the same page with
-  the font read again, every scene faint on average, the masthead lettered over the moon, the headlights light on
-  both kinds of theme, the barcode read back by the published patterns, a letter's counter clear and a whole word's
-  margin bare, ink growing with the square of the size, Euclidean distances, and a stored Splash page, backdrop or
-  screensaver, read as the cover).
+  not yet seen on a device. With master merged, the magazine cover and Truck-kun, and the review's fixes: 333 pass in
+  47 classes (on `ac7b1c115`); `MangaPageTest` has 12 (every pixel between paper and ink on light and dark themes, down
+  to 1x1 and on pages as narrow as 1x30, the same page with the font read again, every scene faint on average on wide,
+  square, 4:3 and tall pages, the masthead lettered over the moon, the headlights light on both kinds of theme, the
+  barcode read back by the published patterns for every leading digit, a letter's counter clear and a whole word's
+  margin bare, ink growing with the square of the size, a composite glyph and a missing one, a font that can't be
+  read leaving the words out, Euclidean distances), and `AppearanceSettingsTest` reads a stored Splash page, backdrop
+  or screensaver, as the cover.
 - **Review**: an independent read-only review (a subagent) of the whole branch: NEEDS CHANGES, no High finding. Its
   three Mediums are fixed: Deep's strands drew brighter than the glass search modeled where a sheet gathers (the fade's
   gradient had 16 stops; now 64, and each sheet is one path); `RenderedBackdrop` drew again from scratch after every
@@ -198,8 +206,21 @@ backdrops. App only (Kotlin; no native or core change). The console icons follow
   model rather than the drawing, the plan row's order, `CrtScreen.REFLECTION`'s and `SolidUi`'s KDoc, Deep's pool
   under the top bar's title (`XmbContrastTest` takes it now), the band's cost (`CrtUi.animatedBackdrop`, 15 frames a
   second), and MangaPage's per-pixel `hypot`s and edge scan (a 1920x1080 page now 130-320 ms). `CrtContrastTest` also
-  allows for a status bar above the top bar. The magazine cover and Truck-kun have had no review of their own: the
-  read-only review started for them was stopped before it reported.
+  allows for a status bar above the top bar. The magazine cover and Truck-kun had an independent review of their
+  own (the coordinator's; notes and probes in `~/phobos-work/scratch/themes/review/`): OK to merge after fixes. Its
+  blocker: `Raster` was a translation of font-rs's rasterizer (Apache-2.0) without credit, and the docs called it
+  plain Kotlin; it's now credited as above. Its should-fixes: the NEW SERIES! sparkle's clamp threw on pages under
+  about a thirtieth as wide as they're tall (now clamped only where the page is wider than it; the every-pixel test
+  takes 1x30, 2x3000 and 30x4000); a font that couldn't be read threw on every lettered render, uncaught (now read
+  once, a failure kept as no lettering, and `RenderedBackdrop` keeps the placeholder if a render throws); the barcode
+  test's parity for a leading 6 was wrong (fixed, and every leading digit is tested). Its nits, taken: square and 4:3
+  pages in the faintness test (Truck-kun's mean ink is 0.38 at 1:1 against the 0.4 bound), the every-pixel test's
+  comment (`PixelKit.mix` clamps, so it catches a NaN), tests for a composite glyph (É) and a missing character, the
+  dark-theme KDoc, the unused `halo` and `Mask.at`, the migration test moved to `AppearanceSettingsTest` with an
+  unknown screensaver value, `Box` renamed `PageBox` (it shadowed Compose's), the EAN-13 guards named, the
+  lettering's strings in capitals as Bangers draws them, and `Mask.distances`' KDoc. Left as it is: an outline ring's
+  width steps by a pixel along a shallow slope, leaving dashes of paper where two masthead letters' outlines nearly
+  meet.
 - **For the owner**: whether the Manga and CRT backdrops stay (the PR's description has the verdict and previews);
   Sakura as the Pixel art default now that Space is gone; the magazine cover and Truck-kun on the RP6.
 

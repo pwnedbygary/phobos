@@ -9,8 +9,8 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * Lettering in a [TrueType] font, rasterized to coverage in plain Kotlin for the manga backdrops: glyphs
- * set along a baseline, turned and slanted like hand lettering, then filled by their signed area per pixel.
+ * Lettering in a [TrueType] font, rasterized to coverage for the manga backdrops: glyphs set along a
+ * baseline, turned and slanted like hand lettering, then filled by their signed area per pixel ([Raster]).
  */
 internal class Lettering(val font: TrueType) {
     /** [glyph] on the page: font units (y up) to page pixels by x' = a x + c y + e, y' = b x + d y + f. */
@@ -126,19 +126,21 @@ internal class Lettering(val font: TrueType) {
     }
 }
 
-/** Coverage on part of the page: [alpha] for the [width] by [height] pixels from ([left], [top]). */
-internal class Mask(val left: Int, val top: Int, val width: Int, val height: Int, val alpha: FloatArray) {
-    /** The coverage at page pixel ([x], [y]); none outside the mask. */
-    fun at(x: Int, y: Int): Float {
-        val mx = x - left
-        val my = y - top
-        return if (mx in 0 until width && my in 0 until height) alpha[my * width + mx] else 0f
+/** Lettering in the font file [bytes], or null when they can't be read as a TrueType font. */
+internal fun letteringOf(bytes: ByteArray): Lettering? =
+    try {
+        Lettering(TrueType(bytes))
+    } catch (e: RuntimeException) {
+        null
     }
 
+/** Coverage on part of the page: [alpha] for the [width] by [height] pixels from ([left], [top]). */
+internal class Mask(val left: Int, val top: Int, val width: Int, val height: Int, val alpha: FloatArray) {
     /**
-     * How far each of the mask's pixels is from the inked shape, in pixels: 0 at and inside its edge, as
-     * an exact Euclidean distance transform seeded by the edge pixels' own coverage, so outlines drawn at
-     * a distance keep the shape's antialiasing.
+     * How far each of the mask's pixels is from the inked shape, in pixels: 0 at and inside its edge. An
+     * exact Euclidean distance transform between pixel centers, seeded by the edge pixels' coverage, so it's
+     * within about half a pixel of the true distance: an outline drawn at a distance follows the shape, but
+     * along a shallow slope its width steps by a pixel.
      */
     fun distances(): FloatArray {
         val far = 1e12
@@ -202,6 +204,11 @@ internal class Mask(val left: Int, val top: Int, val width: Int, val height: Int
 /**
  * Coverage by signed area: each edge adds, to the cells of every row it crosses, the share of the row it
  * winds past, and a row's running sum is then how much of each pixel is inside (overlaps capped at full).
+ *
+ * A modified Kotlin translation of font-rs's rasterizer (Copyright 2015 Google Inc., Apache License 2.0;
+ * see LICENSE): [line] is `draw_line` in its `src/raster.rs` and [coverage] is `accumulate` in its
+ * `src/accumulate.rs`, changed to start each row's sum afresh, clamp edges to the raster and take the
+ * sum's rounding residue as no ink; [quad] flattens a curve by the same estimate as its `draw_quad`.
  */
 private class Raster(val width: Int, val height: Int) {
     private val cells = FloatArray(width * height)

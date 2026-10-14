@@ -48,7 +48,8 @@ internal object MangaPage {
 
 /**
  * A page being inked: [w] by [h] pixels of coverage, 0 paper to 1 ink. [inkIsLight] on dark themes, where
- * the ink is the lighter of the two, so a light (a headlight, a flash) is drawn in whichever is lighter.
+ * the ink is the lighter of the two, so a light (a headlight, a glint, light caught on a rim) and form
+ * shading ([shade]) are drawn the right way round; lines, lettering and panels stay ink on paper.
  */
 internal class Page(val w: Int, val h: Int, val random: Random, val inkIsLight: Boolean) {
     /** About a dp on a phone, from the page's shorter side. */
@@ -145,17 +146,13 @@ internal class Page(val w: Int, val h: Int, val random: Random, val inkIsLight: 
         }
     }
 
-    /** [mask]'s letters in [value], with a paper [halo] around them first when it's over 0. */
-    fun letters(out: FloatArray, mask: Mask, value: Float, halo: Float = 0f) {
-        val distance = if (halo > 0f) mask.distances() else null
+    /** [mask]'s letters in [value]. */
+    fun letters(out: FloatArray, mask: Mask, value: Float) {
         for (my in 0 until mask.height) for (mx in 0 until mask.width) {
             val x = mask.left + mx
             val y = mask.top + my
             if (x !in 0 until w || y !in 0 until h) continue
-            val i = y * w + x
-            val k = my * mask.width + mx
-            if (distance != null) paint(out, i, (halo - distance[k] + 0.5f).coerceIn(0f, 1f), 1f - value)
-            paint(out, i, mask.alpha[k], value)
+            paint(out, y * w + x, mask.alpha[my * mask.width + mx], value)
         }
     }
 
@@ -319,7 +316,7 @@ internal class Page(val w: Int, val h: Int, val random: Random, val inkIsLight: 
 }
 
 /** A box on the page, in pixels. */
-internal class Box(val left: Float, val top: Float, val right: Float, val bottom: Float) {
+internal class PageBox(val left: Float, val top: Float, val right: Float, val bottom: Float) {
     val width get() = right - left
     val height get() = bottom - top
     val cx get() = (left + right) / 2f
@@ -327,7 +324,7 @@ internal class Box(val left: Float, val top: Float, val right: Float, val bottom
 }
 
 /** A paper box with an ink line [line] wide round it, its corners square. */
-internal fun Page.panel(out: FloatArray, box: Box, line: Float) {
+internal fun Page.panel(out: FloatArray, box: PageBox, line: Float) {
     box(box.left - line, box.top - line, box.right + line, box.bottom + line) { x, y, i ->
         val d = roundBox(x + 0.5f - box.cx, y + 0.5f - box.cy, box.width / 2f, box.height / 2f, 0f)
         paint(out, i, inside(d), 0f)
@@ -336,7 +333,7 @@ internal fun Page.panel(out: FloatArray, box: Box, line: Float) {
 }
 
 /** A caption box: [lines] in ink, centered, as large as they fit in [box], on a [panel]. */
-internal fun Page.caption(out: FloatArray, l: Lettering, box: Box, line: Float, lines: List<String>) {
+internal fun Page.caption(out: FloatArray, l: Lettering, box: PageBox, line: Float, lines: List<String>) {
     panel(out, box, line)
     val pad = min(box.width, box.height) * 0.14f
     val size = min(lines.minOf { l.fit(it, box.width - pad * 2, 0.02f) }, (box.height - pad * 2) / (l.capHeight * (lines.size + 0.3f * (lines.size - 1))))

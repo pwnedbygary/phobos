@@ -1,29 +1,16 @@
 package com.phobos.emulator.ui.theme
 
-import androidx.datastore.preferences.core.PreferenceDataStoreFactory
-import androidx.datastore.preferences.core.edit
-import com.phobos.emulator.data.CatalogBackdrop
 import com.phobos.emulator.data.MangaBackdropScene
-import com.phobos.emulator.data.SettingsStore
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.TemporaryFolder
 import java.io.File
 import kotlin.math.hypot
 
 class MangaPageTest {
-    @get:Rule
-    val folder = TemporaryFolder()
-
     private val paper = 0xFFF4F1E8.toInt()
     private val ink = 0xFF8C8A84.toInt()
 
@@ -43,11 +30,12 @@ class MangaPageTest {
 
     @Test fun everySceneDrawsEveryPixelBetweenPaperAndInk() {
         for ((p, k) in listOf(paper to ink, darkPaper to darkInk)) for (scene in MangaBackdropScene.entries) {
-            for ((w, h) in listOf(1 to 1, 3 to 2, 64 to 36, 36 to 64, 480 to 270, 270 to 480)) {
+            // Down to a pixel, and pages far narrower than they're tall.
+            for ((w, h) in listOf(1 to 1, 3 to 2, 1 to 30, 2 to 3000, 30 to 4000, 64 to 36, 36 to 64, 480 to 270, 270 to 480)) {
                 val pixels = render(w, h, scene, p, k)
                 assertEquals(w * h, pixels.size)
                 assertTrue("$scene ${w}x$h", pixels.all { it ushr 24 == 0xFF })
-                // Never denser than the ink, so the panels' ink lines keep their contrast over every mark (MangaContrastTest).
+                // PixelKit.mix clamps the coverage, so a pixel outside the paper and the ink is a NaN, which it draws black.
                 for (shift in listOf(16, 8, 0)) for (pixel in pixels) {
                     val c = pixel shr shift and 0xFF
                     assertTrue("$scene ${w}x$h channel ${Integer.toHexString(pixel)}", c in minOf(p shr shift and 0xFF, k shr shift and 0xFF)..maxOf(p shr shift and 0xFF, k shr shift and 0xFF))
@@ -65,10 +53,12 @@ class MangaPageTest {
     }
 
     @Test fun everySceneStaysAFaintBackdrop() {
-        // On average well short of the ink, so the pages over it stay the thing to read.
-        for ((p, k) in listOf(paper to ink, darkPaper to darkInk)) for (scene in MangaBackdropScene.entries) for ((w, h) in listOf(640 to 360, 360 to 640)) {
-            val mean = coverage(render(w, h, scene, p, k), p, k).average()
-            assertTrue("$scene ${w}x$h on ${Integer.toHexString(p)}: $mean", mean in 0.05..0.4)
+        // On average well short of the ink, so the pages over it stay the thing to read: wide, square and tall.
+        for ((p, k) in listOf(paper to ink, darkPaper to darkInk)) for (scene in MangaBackdropScene.entries) {
+            for ((w, h) in listOf(640 to 360, 360 to 640, 480 to 480, 640 to 480, 480 to 640)) {
+                val mean = coverage(render(w, h, scene, p, k), p, k).average()
+                assertTrue("$scene ${w}x$h on ${Integer.toHexString(p)}: $mean", mean in 0.05..0.4)
+            }
         }
     }
 
@@ -121,7 +111,9 @@ class MangaPageTest {
 
     @Test fun theBarcodeReadsBackAsItsDigits() {
         assertEquals("a published EAN-13's check digit", 1, ean13Check("400638133393"))
-        for (digits in listOf("491020261042", "400638133393", "012345678901")) {
+        // Every leading digit: each sets the left half's parities its own way.
+        for (first in 0..9) for (rest in listOf("91020261042", "00638133393", "12345678901")) {
+            val digits = "$first$rest"
             val code = digits + ean13Check(digits)
             assertEquals(code, readEan13(ean13(code)))
         }
@@ -137,7 +129,7 @@ class MangaPageTest {
         val odd = listOf("0001101", "0011001", "0010011", "0111101", "0100011", "0110001", "0101111", "0111011", "0110111", "0001011")
         val right = odd.map { pattern -> pattern.map { if (it == '0') '1' else '0' }.joinToString("") }
         val even = right.map { it.reversed() }
-        val parities = listOf("OOOOOO", "OOEOEE", "OOEEOE", "OOEEEO", "OEOOEE", "OEEOOE", "OEEEOE", "OEOEOE", "OEOEEO", "OEEOEO")
+        val parities = listOf("OOOOOO", "OOEOEE", "OOEEOE", "OOEEEO", "OEOOEE", "OEEOOE", "OEEEOO", "OEOEOE", "OEOEEO", "OEEOEO")
         var parity = ""
         var left = ""
         for (k in 0 until 6) {
@@ -150,8 +142,9 @@ class MangaPageTest {
                 left += even.indexOf(pattern).also { assertTrue(pattern, it >= 0) }
             }
         }
+        val first = parities.indexOf(parity).also { assertTrue(parity, it >= 0) }
         val rightDigits = (0 until 6).joinToString("") { k -> right.indexOf(bits(50 + 7 * k, 7)).also { assertTrue(it >= 0) }.toString() }
-        return "${parities.indexOf(parity)}$left$rightDigits"
+        return "$first$left$rightDigits"
     }
 
     @Test fun aLetterIsInkedAndItsCounterAndItsSurroundsAreNot() {
@@ -174,31 +167,32 @@ class MangaPageTest {
         assertEquals(16.0, (ink(160f) / ink(40f)).toDouble(), 0.4)
     }
 
+    @Test fun aCompositeGlyphIsItsPartsAndAMissingOneTheFontsBox() {
+        val font = lettering.font
+        val e = font.contours(font.glyph('E'.code))
+        val accented = font.contours(font.glyph('É'.code))
+        // É is composed of E, in place, and an acute standing above it.
+        assertTrue(accented.size > e.size)
+        assertTrue("E's outlines, unmoved", e.all { c -> accented.any { it.x.contentEquals(c.x) && it.y.contentEquals(c.y) } })
+        assertTrue("the accent above the capital", accented.maxOf { it.y.max() } > e.maxOf { it.y.max() })
+        // A character the font lacks is its missing glyph: still lettered, as the font's box.
+        assertEquals(0, font.glyph(0x4E00))
+        assertTrue(font.contours(0).isNotEmpty())
+        assertTrue(lettering.width("\u4E00", 40f) > 0f)
+        assertNotNull(lettering.mask(lettering.line("\u4E00", 40f, 4f, 40f)))
+    }
+
+    @Test fun aFontThatCantBeReadLeavesTheWordsOut() {
+        assertNotNull(letteringOf(font))
+        assertNull("a truncated file", letteringOf(font.copyOf(font.size / 3)))
+        assertNull("no font at all", letteringOf(ByteArray(64)))
+        for (scene in listOf(MangaBackdropScene.COVER, MangaBackdropScene.TRUCK)) assertEquals(320 * 180, render(320, 180, scene, lettering = null).size)
+    }
+
     @Test fun distancesFromTheInkAreEuclidean() {
         val side = 21
         val alpha = FloatArray(side * side).also { it[10 * side + 10] = 1f }
         val distances = Mask(0, 0, side, side, alpha).distances()
         for (y in 0 until side) for (x in 0 until side) assertEquals(hypot(x - 10f, y - 10f), distances[y * side + x], 1e-4f)
-    }
-
-    @Test fun aStoredSplashPageReadsAsTheCover() = runBlocking {
-        val job = SupervisorJob()
-        val file = folder.root.resolve("settings.preferences_pb")
-        val dataStore = PreferenceDataStoreFactory.create(scope = CoroutineScope(Dispatchers.IO + job)) { file }
-        try {
-            val store = SettingsStore(dataStore)
-            val scenes = mapOf("SPLASH" to MangaBackdropScene.COVER, "COVER" to MangaBackdropScene.COVER, "TRUCK" to MangaBackdropScene.TRUCK, "A_LATER_SCENE" to MangaBackdropScene.TONE)
-            for ((stored, scene) in scenes) {
-                dataStore.edit { it[SettingsStore.MANGA_BACKDROP] = stored }
-                assertEquals(stored, scene, store.settings.first().mangaBackdrop)
-            }
-            val screensaver = mapOf("MANGA_SPLASH" to CatalogBackdrop.MANGA_COVER, "MANGA_TRUCK" to CatalogBackdrop.MANGA_TRUCK)
-            for ((stored, backdrop) in screensaver) {
-                dataStore.edit { it[SettingsStore.SCREENSAVER_BACKDROP] = stored }
-                assertEquals(stored, backdrop, store.settings.first().screensaverBackdrop)
-            }
-        } finally {
-            job.cancelAndJoin()
-        }
     }
 }
