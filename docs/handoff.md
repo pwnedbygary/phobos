@@ -30,6 +30,44 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP CPU: the FPU's flush to zero compiled, block endings in fewer steps, the run's count in a register, main RAM's loads without the page table, more of the VFPU compiled — 2026-10-14
+
+Branch `cursor/psp-cpu-round3-2b67`, on master (`dd37263c8`, #253). docs/psp-core.md, part 94, has the evidence.
+Clean room: PPSSPP not read at all, JPCSP not read. Save states unchanged (layout 31). Nothing a game sees changes.
+- **Measured first** (the M1; xctrace with round 2's block map, sorted over the whole thread by a new script; a probe
+  build counting the interpreter's calls from compiled code): the GE is 36 to 84% of the emulation thread, compiled
+  code 12 to 40%, the VFPU's helpers 1 to 13%. Hot Wheels: Ultimate Racing sets FCSR's flush-to-zero bit, so 660,000
+  FPU instructions a frame went to the interpreter (a fifth of its thread). Colin McRae, Killzone and Hot Wheels ran
+  14,000 to 16,000 VFPU instructions a frame through the interpreter (packing conversions, vcrs, vcrsp, vrot, vcst).
+  A block's end stored and loaded the run's count, checked halted after any load or store, and loaded the target's
+  page entry; a result into a register it read took its host register first and loaded the source again.
+- **Changes** (recompiler*.cpp, allegrex.hpp, memory.cpp/hpp, system.cpp/hpp; six commits, each measured alone): the
+  FPU's arithmetic and compares compiled for the flush bit as the block finds it (inputs and result flushed in integer
+  registers, after the host's rounding as the interpreter does; checked per instruction); the registers an instruction
+  reads kept for it (`pinSources()`); no halted check after a native instruction's way to the interpreter; no page
+  check going on to pages the owner says never change (`Allegrex::steady`: main RAM, the scratchpad); r0 as the
+  constant 0; main RAM's loads without the page table (`Recompiler::direct`: eor, ror, tst, then one load from S1; other
+  memory as cold code); the run's count in a saved register on ARM64 (held game registers 7 -> 6); vf2h, vh2f, the
+  integer packings, vcst, vcmov, vcrs, vcrsp, vqmul and vrot compiled with the prefixes at rest.
+- **Numbers** (the M1, Vulkan fast, master -> branch, emulation thread, medians of three rounds taking turns): Hot Wheels' race 340 -> 249 M host instructions a frame (-27%; 30.4 -> 24.3 ms), Colin
+  McRae -8.7%, Disaster Report 3 -5.0%, Killzone's gameplay and Armored Core -4.5%, Army of Two and Killzone's menu
+  -2.8%, Monkey Ball -2.0%, the GE-bound scenes (Ghost of Sparta, Chains of Olympus, MX vs. ATV, Death Jr. II) 0.6 to
+  2.1%; the software renderer Hot Wheels -12%, the rest within 3% (its emulation thread draws bands too). Each change
+  measured alone: part 94's step table.
+- **Exact**: settled hashes, master against the branch (100 frames, every frame's picture and VRAM,
+  then RAM and the machine's state): 78/78 identical on 2ce7026e9 (the 21 scenes in Vulkan fast, Software and Vulkan
+  accurate, and Hot Wheels, Killzone's gameplay and menu, MX vs. ATV and Chains of Olympus in all three), 78/78 again on the last code (622fd6a0f); tests/allegrex's new groups (fpu flushing, direct loads, runs moved by syscalls; the recompiler
+  cases of a page taken out unheard and of a halting syscall; 15 new kinds in vfpu compiled lanes); 52 broken versions of the new code, 48 caught, the other 4 equivalent (part 94).
+  vfim of a NaN half now gives halfToFloat()'s bits in both engines whatever the compiler (clang's builds gave that
+  already; GitHub's GCC at -O3 quieted it in compiled code once this round changed its inlining).
+- **Checks**: tests/allegrex 74/0 (sanitized and release on ARM64; built for x86-64 and run under Rosetta, debug and
+  release), tests/psp 525/0 (sanitized, with detect_container_overflow=0, and unsanitized), tests/psp/ares 340/0;
+  GitHub's checks on 622fd6a0f all pass (the PSP core's, desktop, Android).
+- **Left**: the GE (most of every scene's thread); jumps through a register (2 to 3%: a cache of the last target); the
+  VFPU's NEON helpers and vfpuEach; vcmp, vdot and vfad with prefixes; the FPU's mode check once a block; sqrt.s.
+- **RP6**: RP6
+- Scratch: `~/phobos-work/scratch/cpu-round3` (`NOTES.md`, `cats.py`, `mutate3.py`, `queue-hash.sh`, `queue-final.sh`).
+
 ## PSP GE: fewer GPU draws and cheaper PRIMs — the texels taken in the vertices, fast mode's small PRIMs among its meshes, a PRIM's settings kept — 2026-10-14
 
 Branch `cursor/psp-ge-speed3-2b67`, on `af542113a` (#251's head), so its diff is this round's alone (draft PR to
