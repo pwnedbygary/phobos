@@ -84,7 +84,7 @@ the Phobos, Pixel and Manga packs' "little blobs". App only.
 
 ## Appearance: the Sakura cycle in phases, three Pixel art scenes gone, night city and XMB Deep redrawn, Manga and CRT redone, a magazine cover and Truck-kun — 2026-10-13
 
-Branch `cursor/themes-backdrops-2b67`, on master (`1d9308714`, merged with `542da5a28`, #230, and `3228b825d`, #237, since), from the owner's feedback on the styles and their
+Branch `cursor/themes-backdrops-2b67`, on master (`1d9308714`, merged with `542da5a28`, #230, `3228b825d`, #237, and `19da506fe`, #238, since), from the owner's feedback on the styles and their
 backdrops. App only (Kotlin; no native or core change). The console icons follow in a second branch,
 `cursor/themes-console-icons-2b67`.
 - **Sakura cycle** (`PixelBackdropScene.SAKURA_CYCLE`, `ui/theme/PixelSakura.kt`): the sun and the moon were up
@@ -147,16 +147,16 @@ backdrops. App only (Kotlin; no native or core change). The console icons follow
     glint, long sideways), a bumper with a 1-UP plate, tyres and its shadow on the road; 340 focus lines converge on
     the grille. VRRROOOM!! grows letter by letter, and the narration is a light novel's title: "That time ares got hit
     by Truck-kun and was reincarnated on Android". On a wide page both stay in the top fifth.
-  - *Lettering*: Bangers (already bundled, OFL; it has no lowercase, so the lettering is in capitals) rasterized by
-    the app's own code, so it's the same on every device and in tests: `TrueType` reads the font file (format 4
-    character map, simple and composite quadratic outlines, advances, GPOS pair kerning), `Lettering` sets lines and
-    blocks (turned, slanted, growing), and `Raster` fills them by signed area per pixel. `Raster` is a modified Kotlin
+  - *Lettering*: Bangers (already bundled, OFL; it has no lowercase, so the lettering is in capitals) rasterized by the
+    app's own code, so it's the same on every device and in tests: `TrueType` reads the font file (format 4 character
+    map, simple and composite quadratic outlines, advances, GPOS pair kerning), `Lettering` sets lines and blocks
+    (turned, slanted, growing), and `Raster` fills them by signed area per pixel. `Raster` is a modified Kotlin
     translation of font-rs's rasterizer (`draw_line` in its `src/raster.rs`, `accumulate` in `src/accumulate.rs`;
-    Copyright 2015 Google Inc., Apache License 2.0), credited in LICENSE (font-rs's entry, which `LicenseNoticesTest`
-    checks for) and in its KDoc. Outlined letters take their rings from an exact distance transform between pixel
-    centers (`Mask.distances`, within about half a pixel of the true distance). The app reads the font resource once,
-    on the render thread (`MangaLettering` in `Manga.kt`); if it can't be read or parsed (`letteringOf`), the failure
-    is kept and the two scenes leave the words out, and a backdrop whose render throws keeps its placeholder
+    Copyright 2015, 2018 Google Inc., Apache License 2.0), credited in LICENSE (font-rs's entry, which
+    `LicenseNoticesTest` checks for) and in its KDoc. Outlined letters take their rings from an exact distance transform
+    between pixel centers (`Mask.distances`, within about half a pixel of the true distance). The app reads the font
+    resource once, on the render thread (`MangaLettering` in `Manga.kt`); if it can't be read or parsed (`letteringOf`),
+    the failure is kept and the two scenes leave the words out, and a backdrop whose render throws keeps its placeholder
     (`RenderedBackdrop` logs it).
   - *Dark themes*: where the ink is lighter than the paper, form shading turns round (`Page.shade`), so the moon's lit
     side and the headlights are the light parts on both kinds of theme; lines and lettering stay ink.
