@@ -525,6 +525,7 @@ struct Allegrex {
     auto protect(u32 page) -> void;
     auto unwatched(u32 page) -> void;
     auto writable(u32 index) -> void;
+    auto holds(u32 index) const -> bool { return index < sections.size() && sections[index]; }  //compiled code there
     auto run() -> u32;
     auto block(u32 address) -> u8*;
     auto emit(u32 address, u8*& body) -> u8*;

@@ -200,14 +200,25 @@ auto Kernel::sceMpegRingbufferDestruct() -> void { result(0); }
 //and the game, which goes on to its title only after 30 frames of a movie, waited for good. Chosen (avail's PSP
 //crashed): a ring with no library yet counts its own.
 auto Kernel::sceMpegRingbufferAvailableSize() -> void {
-  u32 ringbuffer = arg(0);
-  if(!memory.reaches(ringbuffer, 16)) return result(ErrorInvalidPointer);
-  if(u32 library = memory.reaches(ringbuffer, 44) ? memory.read(4, ringbuffer + RingLibrary) : 0) {
-    if(!mpegMarked(library)) return result(MpegErrorLibrary);
-    u32 read = memory.read(4, library + LibraryRingbuffer);
-    if(memory.reaches(read, 16)) ringbuffer = read;
+  struct View {
+    Kernel& kernel;
+    auto reaches(u32 address, u32 size) -> bool { return kernel.memory.reaches(address, size); }
+    auto read(u32 size, u32 address) -> u32 { return kernel.memory.read(size, address); }
+    auto marked(u32 library) -> bool { return kernel.mpegMarked(library); }
+  } view{*this};
+  result(ringAvailable(view, arg(0)));
+}
+
+//The free packets (or why there are none to count), memory read through view: memory itself, or a spin's turn as it
+//would read it (spins.cpp).
+template<typename View> auto Kernel::ringAvailable(View& view, u32 ringbuffer) -> u32 {
+  if(!view.reaches(ringbuffer, 16)) return ErrorInvalidPointer;
+  if(u32 library = view.reaches(ringbuffer, 44) ? view.read(4, ringbuffer + RingLibrary) : 0) {
+    if(!view.marked(library)) return MpegErrorLibrary;
+    u32 read = view.read(4, library + LibraryRingbuffer);
+    if(view.reaches(read, 16)) ringbuffer = read;
   }
-  result(memory.read(4, ringbuffer + RingPackets) - memory.read(4, ringbuffer + RingFilled));
+  return view.read(4, ringbuffer + RingPackets) - view.read(4, ringbuffer + RingFilled);
 }
 
 //(ringbuffer, packets, available): the ringbuffer fed, as video/mpeg/basic recorded (the ring given, which basic's is
@@ -350,6 +361,16 @@ auto Kernel::mpegMarked(u32 library) -> bool {
   for(u32 n = 0; n < sizeof(mark); n++) {
     u8* byte = memory.pointer(library + n);
     if(!byte || *byte != u8(mark[n])) return false;
+  }
+  return true;
+}
+
+//mpegMarked() as a view of memory reads it (ringAvailable()'s), a byte at a time.
+template<typename View> auto Kernel::mpegMarkedIn(View& view, u32 library) -> bool {
+  if(!view.reaches(library, LibraryState)) return false;
+  static constexpr char mark[8] = "LIBMPEG";
+  for(u32 n = 0; n < sizeof(mark); n++) {
+    if(view.read(1, library + n) != u8(mark[n])) return false;
   }
   return true;
 }

@@ -62,6 +62,7 @@ namespace ares::PlayStationPortable {
 #include "md5.cpp"
 #include "rtc.cpp"
 #include "modules.cpp"
+#include "spins.cpp"
 #include "serialization.cpp"
 
 Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
@@ -864,6 +865,18 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
       if(!std::strcmp(function.name, name)) function.quiet = true;
     }
   }
+  //and those a spin's turn may call, worked out without being made (spins.cpp)
+  for(auto& function : functions) {
+    for(auto [name, spin] : std::initializer_list<std::pair<const char*, decltype(Function::spin)>>{
+          {"sceKernelGetThreadId", &Kernel::spinGetThreadId},
+          {"sceKernelReferThreadStatus", &Kernel::spinReferThreadStatus},
+          {"sceKernelRotateThreadReadyQueue", &Kernel::spinRotateThreadReadyQueue},
+          {"sceKernelSignalSema", &Kernel::spinSignalSema},
+          {"sceMpegRingbufferAvailableSize", &Kernel::spinMpegRingbufferAvailableSize},
+          {"sceDisplayGetVcount", &Kernel::spinGetVcount}}) {
+      if(!std::strcmp(function.name, name)) function.spin = spin;
+    }
+  }
   cpu.syscallHook = [this](u32 code) { return syscall(code); };
   ge.log = [this](const std::string& text) { note("GE: " + text); };
 }
@@ -885,6 +898,7 @@ auto Kernel::power() -> void {
   started = {};
   stuck = false;
   cycles = 0;
+  spin = {};
   nextUID = 0x100;
   imports.clear();
   threads.clear();
@@ -1162,7 +1176,12 @@ auto Kernel::syscall(u32 code) -> bool {
   counted = before;
   bool quiet = false;
   bool handled = dispatch(code, quiet);
-  if(!quiet) runUntilNextEvent();
+  if(!quiet) {
+    runUntilNextEvent();
+    spin.site = 0;
+  } else if(spins) {
+    spinTurn();
+  }
   return handled;
 }
 

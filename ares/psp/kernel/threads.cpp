@@ -465,12 +465,12 @@ auto Kernel::threadWaitType(const Thread& thread) const -> u32 {
   }
 }
 
-//The time a thread has had the CPU since it was started, in microseconds (a SceKernelSysClock's unit): what it had
-//as it last left the CPU, and the running thread's time since it got it (a call into the program on top of it
-//counts as the call's, not the thread's).
-auto Kernel::threadRunTime(const Thread& thread) const -> u64 {
+//The time a thread has had the CPU since it was started, in microseconds (a SceKernelSysClock's unit), at time
+//(cycles: now, or as a spin's turn would ask, spins.cpp): what it had as it last left the CPU, and the running
+//thread's time since it got it (a call into the program on top of it counts as the call's, not the thread's).
+auto Kernel::threadRunTime(const Thread& thread, u64 time) const -> u64 {
   u64 ran = thread.runCycles;
-  if(&thread == current && !interrupting) ran += cycles - ranSince;
+  if(&thread == current && !interrupting) ran += time - ranSince;
   return ran / (CPUFrequency / 1'000'000);
 }
 
@@ -482,30 +482,40 @@ auto Kernel::threadRunTime(const Thread& thread) const -> u64 {
 auto Kernel::sceKernelReferThreadStatus() -> void {
   auto thread = findThread(arg(0));
   if(!thread) return result(ErrorUnknownThread);
-  u32 length = sdkVersion > 0x0206'0010 ? 108 : 104;
+  u32 length = threadInfoLength();
   if(length == 108 && memory.read(4, arg(1)) > length) return result(ErrorIllegalSize);
-  Report info(length);
-  info.name(4, thread->name);
-  info.word(36, thread->attributes);
-  info.word(40, threadStatus(*thread));
-  info.word(44, thread->entry);
-  info.word(48, thread->stackBlock);
-  info.word(52, thread->stackSize);
-  info.word(56, thread->gp);
-  info.word(60, thread->initialPriority);
-  info.word(64, thread->priority);
-  info.word(68, threadWaitType(*thread));
-  info.word(72, thread->status == Status::Waiting ? thread->waitID : 0);
-  info.word(76, thread->wakeupCount);
-  info.word(80, u32(thread->exitStatus));
-  u64 ran = threadRunTime(*thread);
-  info.word(84, u32(ran));
-  info.word(88, u32(ran >> 32));
-  info.word(92, thread->interruptPreempts);
-  info.word(96, thread->threadPreempts);
-  info.word(100, thread->releases);
-  report(arg(1), info);
+  report(arg(1), threadInfo(*thread, cycles));
   result(0);
+}
+
+auto Kernel::threadInfoLength() const -> u32 {
+  return sdkVersion > 0x0206'0010 ? 108 : 104;
+}
+
+//The structure itself at time (cycles); only its run time (bytes 84-91, ThreadInfoRunTime) depends on it, and only the
+//running thread's.
+auto Kernel::threadInfo(const Thread& thread, u64 time) const -> Report {
+  Report info(threadInfoLength());
+  info.name(4, thread.name);
+  info.word(36, thread.attributes);
+  info.word(40, threadStatus(thread));
+  info.word(44, thread.entry);
+  info.word(48, thread.stackBlock);
+  info.word(52, thread.stackSize);
+  info.word(56, thread.gp);
+  info.word(60, thread.initialPriority);
+  info.word(64, thread.priority);
+  info.word(68, threadWaitType(thread));
+  info.word(72, thread.status == Status::Waiting ? thread.waitID : 0);
+  info.word(76, thread.wakeupCount);
+  info.word(80, u32(thread.exitStatus));
+  u64 ran = threadRunTime(thread, time);
+  info.word(ThreadInfoRunTime, u32(ran));
+  info.word(ThreadInfoRunTime + 4, u32(ran >> 32));
+  info.word(92, thread.interruptPreempts);
+  info.word(96, thread.threadPreempts);
+  info.word(100, thread.releases);
+  return info;
 }
 
 //(thread, status; 0 for the caller): a SceKernelThreadRunStatus (pspthreadman.h, 44 bytes): the thread's status,
@@ -528,7 +538,7 @@ auto Kernel::sceKernelReferThreadRunStatus() -> void {
   status.word(12, threadWaitType(*thread));
   status.word(16, thread->status == Status::Waiting ? thread->waitID : 0);
   status.word(20, thread->wakeupCount);
-  u64 ran = threadRunTime(*thread);
+  u64 ran = threadRunTime(*thread, cycles);
   status.word(24, u32(ran));
   status.word(28, u32(ran >> 32));
   status.word(32, thread->interruptPreempts);
@@ -770,18 +780,25 @@ auto Kernel::signalSemaphores(Semaphore& semaphore) -> bool {
 //Waking no thread, and no other taking the CPU, this changes nothing that has a time to come (calm): a count alone.
 //Twisted Metal's and both Armored Cores' intro movies signal one 47,000 to 185,000 times a frame, polling the ring.
 auto Kernel::sceKernelSignalSema() -> void {
-  auto found = semaphores.find(arg(0));
-  if(found == semaphores.end()) return calm = true, result(ErrorUnknownSemaphore);
-  auto& semaphore = found->second;
+  if(u32 refused = signalRefused(arg(0), s32(arg(1)))) return calm = true, result(refused);
+  auto& semaphore = semaphores.find(arg(0))->second;
   s32 count = s32(arg(1));
-  //(in 64 bits: a semaphore may hold any count, so the sum can pass what 32 hold)
-  if(count <= 0 || s64(semaphore.count) + count > semaphore.maximum) return calm = true, result(ErrorSemaphoreOverflow);
   semaphore.count += count;
   result(0);
   u64 before = switched;
   bool woke = signalSemaphores(semaphore);
   reschedule();
   calm = !woke && switched == before;
+}
+
+//What sceKernelSignalSema refuses with, changing nothing (0: it signals): no such semaphore, or a count of 0 or less,
+//or one taking it past its most.
+auto Kernel::signalRefused(u32 uid, s32 count) const -> u32 {
+  auto found = semaphores.find(uid);
+  if(found == semaphores.end()) return ErrorUnknownSemaphore;
+  //(in 64 bits: a semaphore may hold any count, so the sum can pass what 32 hold)
+  if(count <= 0 || s64(found->second.count) + count > found->second.maximum) return ErrorSemaphoreOverflow;
+  return 0;
 }
 
 //(semaphore, count, timeout)
