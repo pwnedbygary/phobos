@@ -11,11 +11,16 @@ it is what `docs/psp-compatibility.md` was run with.
 tools/psp-runner/build.sh
 ```
 
-The binary ends up in the build folder, named `psp-runner` (by default
-`${TMPDIR:-/tmp}/phobos-psp-runner/psp-runner`). The build reuses the recipe of
-`tests/psp/ares/run-tests.sh`: the same objects (the core, ares's globals, the node tree,
-nall, sljit, libchdr, zlib, libco), the same defines, its objects kept between builds in the
-build folder so a change to one file rebuilds only it.
+The binary ends up in this checkout's build folder, named `psp-runner-` and a hash of its
+configuration, which the build's last line names
+(`${TMPDIR:-/tmp}/phobos-psp-runner/<a number for the checkout>/psp-runner-<hash>`); a copy also
+goes in `${TMPDIR:-/tmp}/phobos-psp-runner/psp-runner`, the last one built there. The build
+reuses the recipe of `tests/psp/ares/run-tests.sh`: the same objects (the core, ares's globals,
+the node tree, nall, sljit, libchdr, zlib, libco), the same defines, its objects kept between
+builds by `tests/objects.sh`, each compiled again only when a file it was built from (any header
+it includes) or its compile command changes. `PHOBOS_JOBS=N` compiles N at once. The checkout's
+folder (its `.phobos-checkout` names the checkout) can be deleted between builds; each
+configuration built keeps about 45 MB there until then.
 
 It also builds in FFmpeg's decoders for the games' music and movies, as the tests and Phobos's
 builds do: `thirdparty/ffmpeg/build.sh host` downloads FFmpeg's release once (it needs curl, xz,

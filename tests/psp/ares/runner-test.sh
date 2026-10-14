@@ -12,8 +12,10 @@ SCRATCH=$OUT/runner-test-$$
 mkdir -p "$SCRATCH"
 trap 'rm -rf "$SCRATCH"' EXIT
 
-"$ROOT/tools/psp-runner/build.sh" > /dev/null
-"$OUT/psp-runner" "$PSP_TEST_PROGRAMS/cube.elf" --frames 60 --out "$SCRATCH" --png-every 30 \
+#(this checkout's runner, which the build's last line names, not the copy the last build anywhere left in $OUT)
+RUNNER=$("$ROOT/tools/psp-runner/build.sh" | tail -1)
+RUNNER=${RUNNER#built }
+"$RUNNER" "$PSP_TEST_PROGRAMS/cube.elf" --frames 60 --out "$SCRATCH" --png-every 30 \
   --wav "$SCRATCH/sound.wav" > "$SCRATCH/summary.txt" 2> "$SCRATCH/errors.txt"
 
 #The summary: the frames ran, the program still running (cube never ends), no function missing.

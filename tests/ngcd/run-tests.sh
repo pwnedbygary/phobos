@@ -1,45 +1,40 @@
 #!/usr/bin/env bash
 #Builds and runs the Neo Geo CD layout and save state checks on the host (Linux, g++ >= 13;
 #macOS with clang).
-#usage: tests/ngcd/run-tests.sh [build-dir]
+#usage: tests/ngcd/run-tests.sh [build-dir]   (PHOBOS_JOBS: compiles at once)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
-#objects are reused when their top-level source is older, so each checkout gets
-#its own default build dir; use a fresh one after editing included headers
-OUT=${1:-${TMPDIR:-/tmp}/phobos-ngcd-tests-$(printf %s "$ROOT" | cksum | cut -d' ' -f1)}
-mkdir -p "$OUT/obj"
+#objects are kept between runs by tests/objects.sh, each compiled again when what it was built from changes (a
+#header it includes too) or its compile command does; each checkout gets its own default build dir
+OBJECTS_BUILD=${1:-${TMPDIR:-/tmp}/phobos-ngcd-tests-$(printf %s "$ROOT" | cksum | cut -d' ' -f1)}
+source "$ROOT/tests/objects.sh"
 
 CXX=${CXX:-g++}
 CC=${CC:-gcc}
-CXXFLAGS="-std=c++20 -O1 -g -w -DPROFILE_PERFORMANCE -DCORE_NG -I$HERE/stub -I$ROOT -I$ROOT/nall -I$ROOT/nall/nall -I$ROOT/libco -I$ROOT/ares -I$ROOT/thirdparty -I$ROOT/thirdparty/ymfm/src"
+CXXFLAGS=(-std=c++20 -O1 -g -w -DPROFILE_PERFORMANCE -DCORE_NG -I"$HERE/stub" -I"$ROOT" -I"$ROOT/nall"
+  -I"$ROOT/nall/nall" -I"$ROOT/libco" -I"$ROOT/ares" -I"$ROOT/thirdparty" -I"$ROOT/thirdparty/ymfm/src")
 
-compile() {  #source object [always]
-  local obj=$OUT/obj/$2.o
-  if [[ ${3:-} == always || ! -f $obj || $1 -nt $obj ]]; then
-    echo "  CXX $1"
-    $CXX $CXXFLAGS -c "$1" -o "$obj"
-  fi
-}
-
-compile "$ROOT/ares/ng/ng.cpp" ng always
-compile "$ROOT/ares/ares/android_globals.cpp" globals
-compile "$HERE/ares-runtime.cpp" ares-runtime
-compile "$ROOT/ares/ares/memory/fixed-allocator.cpp" fixed-allocator
-compile "$ROOT/nall/nall/nall.cpp" nall
-compile "$ROOT/ares/component/processor/m68000/m68000.cpp" m68000
-compile "$ROOT/ares/component/processor/z80/z80.cpp" z80
+object "$CXX" "$ROOT/ares/ng/ng.cpp" "${CXXFLAGS[@]}"
+object "$CXX" "$ROOT/ares/ares/android_globals.cpp" "${CXXFLAGS[@]}"
+object "$CXX" "$HERE/ares-runtime.cpp" "${CXXFLAGS[@]}"
+object "$CXX" "$ROOT/ares/ares/memory/fixed-allocator.cpp" "${CXXFLAGS[@]}"
+object "$CXX" "$ROOT/nall/nall/nall.cpp" "${CXXFLAGS[@]}"
+object "$CXX" "$ROOT/ares/component/processor/m68000/m68000.cpp" "${CXXFLAGS[@]}"
+object "$CXX" "$ROOT/ares/component/processor/z80/z80.cpp" "${CXXFLAGS[@]}"
 for f in ymfm_opn ymfm_adpcm ymfm_ssg ymfm_misc; do
-  compile "$ROOT/thirdparty/ymfm/src/$f.cpp" "$f"
+  object "$CXX" "$ROOT/thirdparty/ymfm/src/$f.cpp" "${CXXFLAGS[@]}"
 done
-if [[ ! -f $OUT/obj/libco.o ]]; then
-  echo "  CC  libco/libco.c"
-  $CC -O1 -w -I"$ROOT/libco" -c "$ROOT/libco/libco.c" -o "$OUT/obj/libco.o"
-fi
-compile "$HERE/ngcd.cpp" ngcd always
+object "$CC" "$ROOT/libco/libco.c" -O1 -w -I"$ROOT/libco"
+object "$CXX" "$HERE/ngcd.cpp" "${CXXFLAGS[@]}"
+objects_done
 
 #macOS: nall needs CoreFoundation; LDFLAGS can name an SDK the linker understands (-isysroot)
-LIBS="-lpthread -ldl"
-if [[ $(uname) == Darwin ]]; then LIBS="$LIBS -framework CoreFoundation"; fi
-$CXX ${LDFLAGS:-} -o "$OUT/ngcd" "$OUT"/obj/*.o $LIBS
-"$OUT/ngcd"
+LIBS=(-lpthread -ldl)
+if [[ $(uname) == Darwin ]]; then LIBS+=(-framework CoreFoundation); fi
+# shellcheck disable=SC2086
+objects_program ngcd ${LDFLAGS:-} "${LIBS[@]}"
+# shellcheck disable=SC2086
+$CXX ${LDFLAGS:-} -o "$REPLY.part-$$" "${OBJECTS[@]}" "${LIBS[@]}"
+mv -f "$REPLY.part-$$" "$REPLY"
+"$REPLY"

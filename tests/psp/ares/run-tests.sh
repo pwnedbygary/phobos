@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 #Builds the PSP as an ares system (ares/psp/psp.cpp, the whole core as Phobos builds it, with ares's node tree) and
 #runs system.cpp's checks on the host. tests/psp/run-tests.sh tests the parts underneath on their own.
-#usage: tests/psp/ares/run-tests.sh   (PSP_TEST_PROGRAMS: the test programs' folder, see system.cpp)
+#usage: tests/psp/ares/run-tests.sh   (PSP_TEST_PROGRAMS: the test programs' folder, see system.cpp; PHOBOS_JOBS:
+#compiles at once)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
 #the test programs kept in the repository, unless named otherwise (empty: none)
 export PSP_TEST_PROGRAMS=${PSP_TEST_PROGRAMS-$ROOT/tests/psp/programs}
-#ares and nall change rarely and take the longest to build, so their objects are kept and rebuilt when their top
-#source is newer; a fresh TMPDIR rebuilds everything (after editing headers they include, say).
+#Objects are kept between runs by tests/objects.sh, this checkout's in its own folder, each compiled again when what
+#it was built from changes (any header it includes: the core's object is the whole core) or its compile command does.
 OUT=${TMPDIR:-/tmp}/phobos-psp-ares-tests
-mkdir -p "$OUT/obj"
+source "$ROOT/tests/objects.sh"
 
 CC=${CC:-cc}
 CXX=${CXX:-c++}
@@ -31,8 +32,8 @@ CHDR=$ROOT/thirdparty/libchdr
 INCLUDES=(-isystem "$ROOT" -isystem "$ROOT/nall" -isystem "$ROOT/nall/nall" -isystem "$ROOT/libco"
   -isystem "$ROOT/ares" -isystem "$ROOT/thirdparty" -isystem "$CHDR/include"
   -isystem "$ROOT/thirdparty/Vulkan-Headers/include")
-#FFmpeg's decoders, as Phobos's builds have them (docs/psp-core.md, part 26); PSP_FFMPEG=0 builds without them. The
-#core's object is built afresh every run (below), so switching needs no fresh TMPDIR.
+#FFmpeg's decoders, as Phobos's builds have them (docs/psp-core.md, part 26); PSP_FFMPEG=0 builds without them (their
+#define is in the objects' commands, so switching makes objects of their own).
 if [[ ${PSP_FFMPEG:-1} != 0 ]]; then
   FFMPEG=$("$ROOT/thirdparty/ffmpeg/build.sh" host | tail -1)
   DEFINES+=(-DARES_ENABLE_FFMPEG)
@@ -41,39 +42,22 @@ if [[ ${PSP_FFMPEG:-1} != 0 ]]; then
 fi
 CXXFLAGS=(-std=c++20 -O1 -g "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}")
 
-compile() {  #source object [always]
-  local object=$OUT/obj/$2.o
-  if [[ ${3:-} == always || ! -f $object || $1 -nt $object ]]; then
-    echo "  CXX $1"
-    $CXX "${CXXFLAGS[@]}" -w -c "$1" -o "$object"
-  fi
-}
-
-compile "$ROOT/ares/psp/psp.cpp" psp always
-compile "$ROOT/ares/ares/android_globals.cpp" globals
-compile "$HERE/ares-runtime.cpp" ares-runtime
-compile "$ROOT/nall/nall/nall.cpp" nall
-compile "$ROOT/thirdparty/sljitAllocator.cpp" sljit-allocator
-if [[ ! -f $OUT/obj/sljit.o || $ROOT/thirdparty/sljit/sljit_src/sljitLir.c -nt $OUT/obj/sljit.o ]]; then
-  echo "  CC  sljitLir.c"
-  $CC -O1 "${SYSROOT[@]}" "${DEFINES[@]}" -I"$ROOT/thirdparty" -c "$ROOT/thirdparty/sljit/sljit_src/sljitLir.c" \
-    -o "$OUT/obj/sljit.o"
-fi
+object "$CXX" "$ROOT/ares/psp/psp.cpp" "${CXXFLAGS[@]}" -w
+object "$CXX" "$ROOT/ares/ares/android_globals.cpp" "${CXXFLAGS[@]}" -w
+object "$CXX" "$HERE/ares-runtime.cpp" "${CXXFLAGS[@]}" -w
+object "$CXX" "$ROOT/nall/nall/nall.cpp" "${CXXFLAGS[@]}" -w
+object "$CXX" "$ROOT/thirdparty/sljitAllocator.cpp" "${CXXFLAGS[@]}" -w
+object "$CC" "$ROOT/thirdparty/sljit/sljit_src/sljitLir.c" -O1 "${SYSROOT[@]}" "${DEFINES[@]}" -I"$ROOT/thirdparty"
 #libchdr, and the zlib, LZMA and zstd decoders it carries
 for source in "$CHDR"/src/libchdr_*.c "$CHDR/deps/lzma-25.01/src/LzmaDec.c" "$CHDR/deps/miniz-3.1.1/miniz.c" \
   "$CHDR/deps/zstd-1.5.7/zstddeclib.c"; do
-  object=$OUT/obj/chdr-$(basename "$source" .c).o
-  if [[ ! -f $object || $source -nt $object ]]; then
-    echo "  CC  $(basename "$source")"
-    $CC -O1 -w "${SYSROOT[@]}" -I"$CHDR/include" -I"$CHDR/deps/zstd-1.5.7" -c "$source" -o "$object"
-  fi
+  object "$CC" "$source" -O1 -w "${SYSROOT[@]}" -I"$CHDR/include" -I"$CHDR/deps/zstd-1.5.7"
 done
-if [[ ! -f $OUT/obj/libco.o ]]; then
-  echo "  CC  libco.c"
-  $CC -O1 -w "${SYSROOT[@]}" -I"$ROOT/libco" -c "$ROOT/libco/libco.c" -o "$OUT/obj/libco.o"
-fi
-echo "  CXX $HERE/system.cpp"
-$CXX "${CXXFLAGS[@]}" -Wall -Wextra -Werror -c "$HERE/system.cpp" -o "$OUT/obj/system.o"
+object "$CC" "$ROOT/libco/libco.c" -O1 -w "${SYSROOT[@]}" -I"$ROOT/libco"
+object "$CXX" "$HERE/system.cpp" "${CXXFLAGS[@]}" -Wall -Wextra -Werror
+objects_done
 
-$CXX "${SYSROOT[@]}" -o "$OUT/psp-ares" "$OUT"/obj/*.o "${LIBRARIES[@]}"
-"$OUT/psp-ares"
+objects_program psp-ares "${SYSROOT[@]}" "${LIBRARIES[@]}"
+$CXX "${SYSROOT[@]}" -o "$REPLY.part-$$" "${OBJECTS[@]}" "${LIBRARIES[@]}"
+mv -f "$REPLY.part-$$" "$REPLY"
+"$REPLY"

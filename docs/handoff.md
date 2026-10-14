@@ -30,6 +30,87 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Tests: the host suites' objects kept by what they include and how they're compiled, a checkout's apart — 2026-10-13
+
+Branch `cursor/test-plan-03-2b67` (PR #245), stacked on `cursor/test-plan-05-2b67` (#241, the CI lanes, so every
+script changed here runs in CI). Package 03 of the 2026-10-13 test and performance plan (indexed in the implementation
+plan by #244). Build scripts only: no core, app or test source changes.
+- **The problem** (on a Mac five agents share): the four PSP build scripts kept objects in one folder per suite in
+  `${TMPDIR:-/tmp}`, shared by every worktree, reused while their top source was older than them. A header edit,
+  another worktree's newer object, another compiler or sanitizer setting, all reused the old object; libco's was
+  never rebuilt; two worktrees' runs wrote the same test binary.
+- **`tests/objects.sh`** (sourced by `tests/allegrex`, `tests/psp`, `tests/psp/ares`, `tests/ngcd` and
+  `tools/psp-runner/build.sh`): an object is named by its compile command (the compiler as named, every word of CC
+  or CXX, where it is and its `--version`, every flag, the source's path, and `CPATH`, `C_INCLUDE_PATH`,
+  `CPLUS_INCLUDE_PATH`, `SDKROOT`, `MACOSX_DEPLOYMENT_TARGET`), so another checkout, compiler, sanitizer or define
+  makes its own; it's kept while nothing on the compiler's own list of what it read (`-MD`, system headers included:
+  ares's and nall's are included as system headers) is newer than it, or gone, compared with `find -newer`
+  (nanoseconds, where macOS's bash 3.2 `-nt` takes whole seconds). An object takes the time its compile began, so a
+  header saved during the compile is newer than it. Objects and programs are written beside their place and renamed
+  into it, so runs at once are safe and a killed build leaves nothing taken for finished; a program's name carries a
+  hash of its objects and link flags, so runs of two configurations in one checkout each run their own. Each
+  checkout gets its own folder in the suite's (the cksum of its path, as the NGCD script already did; its
+  `.phobos-checkout` file names the path), deletable between runs: per configuration a checkout keeps 21 MB
+  (Allegrex), 34 MB (NGCD), 40 MB (the ares system) or 46 MB (the runner, with its copy) until then (`tests/psp`'s,
+  the largest, not measured). What times can't tell is written down: a
+  new header shadowing another, a file replaced by an older-dated copy. Every source is its own object now, the
+  test suites' too (they were one compile each run), and each compile's line says whether it's sanitized (in the
+  sanitized suites nall and sljit aren't). `PHOBOS_JOBS=N` compiles N at once (1 by default).
+- **Kept as they were**: `TMPDIR=X tools/psp-runner/build.sh` still leaves `X/phobos-psp-runner/psp-runner` (a copy
+  of this checkout's, which the build's last line names; `runner-test.sh` takes the latter); NGCD's build-dir
+  argument; the FFmpeg cache; every flag. The round-6 and Allegrex measurements unpack into the checkout's folder,
+  each file through a temporary one named by the run, a failed unpack stopping the run.
+- **`tests/objects-test.sh`** (in CI's Allegrex job; seconds; 21 cases): a small C program built cold (2 compiles),
+  warm (0), after its header changes (1, and the program sees it), and a header found as a system header (1), with a
+  define added (2) and taken away (0: the first objects kept), with the compiler named with another word (`cc
+  -DEXTRA=9`: 2, the word taken), the same compiler at the same path reporting another version (2), a header saved
+  while its includer compiled (the compiler holding before it writes the object: compiled again next time), a header
+  changed within the second (its time and the object's pinned at .2 and .7 of one second; said as a skip where the
+  file system keeps whole seconds), killed
+  mid-compile with the build (fails, then the same command compiles everything: nothing kept from the cut), with the
+  first header on the include path gone (1, the next one taken), a compile failing among two at once (the build
+  fails), a header found through `CPATH` and then another `CPATH` (compiled again), a program for each
+  configuration, and two checkouts built at once into one folder (each its own program and folder). Negative
+  controls, each a disposable copy of the library: the compiler's name, or its version, out of the key; the
+  object's time its compile's end; `-MMD`; bash's whole-second `-nt` (failing every run, 3 of 3); a failed compile
+  among several ignored; the old rule (the source's time alone); flags out of the key; the environment out of the
+  key; one program name for every configuration; objects written in place; one folder for all checkouts; a gone
+  file taken as unchanged: each of the 13 fails at least one case.
+- **Checks** (the Mac, bash 3.2, Apple clang 21, `PHOBOS_JOBS=3`, a TMPDIR of its own): at `86a5a80d0`,
+  `tests/objects-test.sh` 21/21, twice; with the scripts at `f1bc43c89` (before the delta review's changes),
+  `tests/allegrex` cold 7 compiles (60/0), warm 0, after touching `ares/psp/cpu/allegrex.hpp` 4 (the four that
+  include it; 60/0); `tests/ngcd` cold 13 (2835/0), warm 0; `tests/psp/ares` cold 25 (318/0), warm 0;
+  `runner-test.sh` cold 42 s, warm 4 s, its program `psp-runner-<hash>` and the copy left in `phobos-psp-runner/`. CI
+  on the reviewed scripts (run 38448696924 at `a476470ec`; Linux, GCC 13, bash 5): `tests/objects-test.sh` 18 cases,
+  0 failures (the case within the second ran), Allegrex 60/0, the system suite 497/0 (every source its own object
+  now), the ares system 318/0, the runner's test passing; NGCD 2835/0 (run 38448696864). CI at `86a5a80d0` (run
+  38454888271): `tests/objects-test.sh` 21 cases, 0 failures (the case within the second ran), Allegrex 60/0, the
+  system suite 502/0 (#243's five groups more), the ares system 318/0, the runner's test passing; NGCD 2835/0 (run
+  38454887111). A second delta review passed it; its nit taken: the leftovers' pattern is the 16 hex digits and a
+  process number, so a folder's own files of a like name aren't taken. At `fefce4e5f`, with that pattern: on the Mac,
+  `tests/objects-test.sh` 21/21, and the pattern alone under bash 3.2 removing the six kinds of leftover
+  (`psp-runner`, `allegrex`, `psp`, `psp-ares`, `ngcd`, the test's `program`) and keeping the eleven like names tried
+  (the old pattern's false match; 16 letters that aren't hex digits; uppercase hex digits; 15 or 17 of them; none; no
+  number after `.part-`; a dated file name with spaces; one under two hours old; one in a subfolder; a folder); CI
+  run 38461715565: `tests/objects-test.sh` 21/0, Allegrex 60/0, the system suite 505/0 (master's #230 three groups
+  more), the ares system 328/0, the runner's test passing; NGCD 2835/0 (run 38461715535).
+- **Review**: an independent read-only review found a major hole (a word after the first in CC or CXX wasn't in
+  the key: `CC="cc -DEXTRA=9"` after `cc` compiled nothing and ran the old program), and minor ones: a header edited
+  during a compile never rebuilt, the stale-file cleanup reaching anything in a folder handed to NGCD, an exported
+  `BUILD` overriding the per-checkout folders, four mutations the test let through, the disk use unsaid, the
+  include-path variables not keyed, a failed unpack carrying on, programs per checkout rather than per
+  configuration. All taken (above): the cleanup only in the objects folder, the folder override named
+  `OBJECTS_BUILD`, the test's new cases each failing the mutation it was missing. A delta review found every fix
+  right in code, and the whole-second mutation caught only by chance (the two times not pinned), the environment's
+  keys and the per-configuration names untested, a cut-short link's leftovers no longer cleaned, and the docs behind;
+  all taken: the times pinned, two cases added, programs' leftovers cleaned by their hashed names, the folder's file
+  named `.phobos-checkout` (a folder handed to NGCD may have a `checkout`), the README's line and these checks. A
+  recheck at `fefce4e5f`, after #241's merge of master's #230: PASS. Its two trivial nits: "the final scripts" for
+  checks run before the leftovers' pattern changed (taken: each check names its commit now), and the pattern
+  checking only the first character after `.part-` (left: such a name would also need 16 lowercase hex digits right
+  before `.part-`, be two hours old and sit directly in the build folder: the suite's own, or the one
+  `OBJECTS_BUILD` or NGCD's argument names).
+
 ## CI: the PSP core as an ares system, the headless runner and the Neo Geo CD's checks in CI; the triggers complete — 2026-10-13
 
 Branch `cursor/test-plan-05-2b67` (PR #241), on master (`4788125f1`, #236). Package 05 of the 2026-10-13 test and
