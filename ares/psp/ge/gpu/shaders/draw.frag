@@ -74,8 +74,6 @@ layout(push_constant) uniform Push {
   uint fixedB;          //BLEND_FIXED_B (READS)
   uint writeMask;       //the frame buffer's bits left alone, in its format (READS)
   uint filtering;       //TEXTURE_FILTER, where the filter is chosen at each pixel (vertexFlags' bit 4)
-  uint held;            //a copy of a target with more texels than taken: those taken, the width and, in bits 16-31,
-                        //the rows (0: all of the copy's)
   uint origin;          //the target's row the frame buffer's first is, where the dither matrix starts
   uint palette;         //(INDEXED) the palette's row in bits 0-9; the shift (10-14), mask (15-22) and offset's five
                         //bits (23-27); 512 entries where bit 28 is set (a 16-bit palette's), else 256
@@ -139,10 +137,12 @@ uint narrowed(uint value, uint bits) {
 
 //A texel; one of a texture taken from a 16-bit frame buffer (TEXELS) as its format keeps it, as the GE reads it.
 //(Held inside the picture on the GPU, which may have only the rows and columns the GE's pixels reach: above 1x a
-//pixel between two of the GE's may sample a little past them. A copy with more than those is held inside those.)
+//pixel between two of the GE's may sample a little past them. A copy with more than those is held inside those:
+//vertexFlags' bits 8-17 the columns taken, 18-27 the rows, 0 all of the copy's.)
 uvec4 fetch(uint u, uint v) {
   ivec2 size = textureSize(texels, 0);
-  if(push.held != 0u) size = min(size, ivec2(push.held & 0xffffu, push.held >> 16) * int(push.textureScale));
+  uint taken = vertexFlags >> 8 & 0xfffffu;
+  if(taken != 0u) size = min(size, ivec2(taken & 1023u, taken >> 10) * int(push.textureScale));
   ivec2 at = min(ivec2(u, v), size - 1);
   uvec4 t = uvec4(texelFetch(texels, at, 0) * 255.0 + 0.5);
   if(INDEXED != 0u) {

@@ -518,6 +518,100 @@ static auto gpuFastRules() -> void {
   }
 }
 
+//Fast mode's PRIMs of fewer than MeshLeast vertices (the GE transforms them) between its meshes (the GPU transforms
+//them), in one setting after another (smooth and flat shading, a texture filtered and not, fog), at 1x and 2x: their
+//triangles go among the meshes (GPU::screenTriangle()), so each setting's PRIMs are one draw, and every pixel is as
+//when they're drawn apart (draw.vert's own draws).
+static auto gpuScreenMeshes() -> void {
+  GPU* gpu = renderer() ? fastRenderer() : nullptr;
+  if(!gpu) return;
+  if(!gpu->backend->transforms) return skip("vulkan-transforms", "the driver didn't take transform.vert");
+  constexpr u32 Width = 128, Height = 96;
+  auto f24 = [](float value) { return bitsOf(value) >> 8; };
+  struct Corner { float u, v; u32 color; float normal[3], at[3]; };  //(vertex type 0x1ff)
+  auto draw = [&](System& s, u32 kind, const std::vector<Corner>& corners) {
+    u32 to = GPUVertices;
+    for(auto& c : corners) {
+      for(u32 word : {bitsOf(c.u), bitsOf(c.v), c.color, bitsOf(c.normal[0]), bitsOf(c.normal[1]),
+                      bitsOf(c.normal[2]), bitsOf(c.at[0]), bitsOf(c.at[1]), bitsOf(c.at[2])}) {
+        s.memory.write(4, to, word), to += 4;
+      }
+    }
+    s.ge.vertexAddress = GPUVertices;
+    s.ge.primitive(kind, corners.size());
+  };
+  //(each setting: 4 PRIMs of 30 corners, a small one of 6 after each; the texture 16 by 16 random texels in RAM)
+  auto scene = [&](System& s, std::vector<u64>& draws) {
+    auto& c = s.ge.commands;
+    c[GE::FrameBufferPointer] = 0, c[GE::FrameBufferWidth] = Width, c[GE::FrameBufferPixelFormat] = 3;
+    c[GE::DepthBufferPointer] = 0x10'0000, c[GE::DepthBufferWidth] = Width;
+    c[GE::Region2] = 1023 << 10 | 1023, c[GE::Scissor2] = (Width - 1) | (Height - 1) << 10;
+    c[GE::VertexType] = 0x1ff, c[GE::MaxZ] = 0xffff, c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 5;
+    for(u32 n = 0; n < 12; n++) s.ge.world[n] = s.ge.view[n] = f24(n % 4 == 0 ? 1 : 0);
+    for(u32 n = 0; n < 16; n++) s.ge.projection[n] = 0;
+    s.ge.projection[0] = s.ge.projection[5] = f24(1);  //(the near plane 1 away, the far one 10)
+    s.ge.projection[10] = f24(-11.0f / 9), s.ge.projection[11] = f24(-1), s.ge.projection[14] = f24(-20.0f / 9);
+    c[GE::ViewportXScale] = f24(64), c[GE::ViewportYScale] = f24(-48), c[GE::ViewportZScale] = f24(30000);
+    c[GE::ViewportXCenter] = f24(2048), c[GE::ViewportYCenter] = f24(2048), c[GE::ViewportZCenter] = f24(32768);
+    c[GE::OffsetX] = (2048 - 64) << 4, c[GE::OffsetY] = (2048 - 48) << 4;
+    c[GE::TextureScaleU] = c[GE::TextureScaleV] = f24(1);
+    std::mt19937 random{20261014};
+    for(u32 n = 0; n < 16 * 16; n++) s.memory.write(4, GPUTexture + n * 4, u32(random()) | 0xff00'0000);
+    for(u32 n = 0; n < Width * Height * 4; n += 4) s.memory.write(4, 0x0400'0000 + n, 0xff20'2020);
+    for(u32 n = 0; n < Width * Height * 2; n += 4) s.memory.write(4, 0x0410'0000 + n, 0xffff'ffff);
+    for(u32 setting = 0; setting < 4; setting++) {
+      c[GE::ShadeMode] = setting != 1;
+      c[GE::TextureMappingEnable] = 0, c[GE::FogEnable] = 0;
+      if(setting >= 2) {
+        texture(s, GPUTexture, 16, 16, 16);
+        c[GE::TextureFilter] = setting == 3 ? 1 | 1 << 8 : 0;
+        c[GE::TextureFunction] = 0;
+      }
+      if(setting == 3) {
+        c[GE::FogEnable] = 1, c[GE::FogEnd] = f24(12.0f), c[GE::FogSlope] = f24(1.0f / 11);
+        c[GE::FogColor] = 0x30'60ff;
+      }
+      u64 before = s.ge.renderer ? gpu->statistics.draws : 0;
+      for(u32 prim = 0; prim < 8; prim++) {
+        std::vector<Corner> corners;
+        for(u32 n = 0; n < (prim & 1 ? 6u : 30u); n++) {
+          float z = -1.5f - (random() % 1000) / 1000.0f * 7.0f;
+          float x = (s32(random() % 2000) - 1000) / 1000.0f * -z, y = (s32(random() % 2000) - 1000) / 1000.0f * -z;
+          corners.push_back({(random() % 64) / 4.0f, (random() % 64) / 4.0f, u32(random()) | 0xff00'0000,
+                             {0, 0, 1}, {x, y, z}});
+        }
+        draw(s, GE::Triangles, corners);
+      }
+      if(s.ge.renderer) draws.push_back(gpu->statistics.draws - before);
+    }
+  };
+  for(u32 scale : {1u, 2u}) {
+    if(!scaleTaken(gpu, scale)) break;
+    std::vector<u32> pictures[2];
+    std::vector<u64> draws[2];
+    for(bool together : {true, false}) {
+      gpu->resolution(scale);
+      gpu->screenMeshes = together;
+      System hardware;
+      hardware.ge.setRenderer(gpu);
+      scene(hardware, draws[together]);
+      CHECK(gpu->picture(0, Width, 3, Width, Height, pictures[together], scale), true);
+      hardware.ge.setRenderer(nullptr);
+    }
+    gpu->screenMeshes = true;
+    u32 apart = 0;
+    for(u32 n = 0; n < pictures[0].size() && n < pictures[1].size(); n++) apart += pictures[0][n] != pictures[1][n];
+    if(apart) std::printf("  %ux: %u pixels differ, among the meshes and apart\n", scale, apart);
+    CHECK(pictures[0].size() == pictures[1].size() && pictures[0].size() == u64(Width) * Height * scale * scale, true);
+    CHECK(apart, 0u);
+    for(u32 setting = 0; setting < draws[1].size(); setting++) {
+      CHECK(draws[1][setting], 1u);
+      CHECK(draws[0][setting] >= 8, true);
+    }
+  }
+  gpu->resolution(1);
+}
+
 //Fast mode's 3D (mesh()) changes a target as any draw does, for render to texture taken again: a frame buffer
 //sampled into another, a wall of one color drawn over part of it with the GPU transforming it, then sampled again from
 //the same place. The second picture has the wall in it as the software renderer has it, all but a few pixels of its
@@ -2045,6 +2139,40 @@ static auto gpuTiles() -> void {
   gpu->resolution(1);
 }
 
+//A frame buffer taken as a texture whole by one sprite, then by sprites taking less of it, each its own columns and
+//rows (Ghost of Sparta's menu draws 1,200 such PRIMs a frame from one copy): what each takes rides in its vertices
+//(GPU::Vertex::taken()), not the push constants, so after the first they're all one draw, in either mode, and every
+//pixel is the software renderer's.
+static auto gpuTakenInOneDraw() -> void {
+  if(!renderer()) return;
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(!gpu) continue;
+    std::mt19937 random{20261014};
+    auto drawn = randomSprites(random, 30, false);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    GPU::Statistics before, between;
+    for(System* s : {&software, &hardware}) {
+      prepare(*s, 0, 3);
+      for(auto& one : drawn) sprite(*s, one);
+      prepare(*s, 0x2'0000, 3);
+      texture(*s, Memory::VRAMBase, 64, 64, 64);
+      if(s == &hardware) before = gpu->statistics;
+      sprite(*s, {{{0, 0, 0, 0}, {48, 40, 48, 40}}, 0xffff'ffff});  //(the copy: 48 columns, 40 rows)
+      if(s == &hardware) between = gpu->statistics;
+      for(u32 n = 0; n < 6; n++) {
+        float u = 3 * n, v = 2 * n, width = 8 + 5 * n, height = 6 + 3 * n, x = 7 * n, y = 40 - height;
+        sprite(*s, {{{u, v, x, y}, {u + width, v + height, x + width, y + height}}, 0xffff'ffff});
+      }
+    }
+    CHECK(between.copies - before.copies, 1u);
+    CHECK(gpu->statistics.copies, between.copies);
+    CHECK(gpu->statistics.draws, between.draws);
+    CHECK(apart(software, hardware), 0u);
+    hardware.ge.setRenderer(nullptr);
+  }
+}
+
 //The GPU's depth buffer against memory's: depth cleared by the CPU between two depth-tested sprites is taken (the
 //second sprite drawn), and a color pixel the CPU writes between them doesn't bring back memory's older depth (the
 //second sprite, behind the first, not drawn).
@@ -3307,6 +3435,8 @@ auto gpuTests() -> Tests {
     {"gpu pixels moved over bytes memory has the newest of: the moved ones newest", gpuMovedOverMemorys},
     {"gpu memory's bytes in its pages taken again, not the target afresh", gpuRevived},
     {"gpu a texture's place taken by tiles reaching further: few copies, held to what each takes", gpuTiles},
+    {"gpu sprites taking less of one copy: one draw, the software renderer's pixels", gpuTakenInOneDraw},
+    {"gpu fast mode's small 3D PRIMs among its meshes: one draw, the pixels as drawn apart", gpuScreenMeshes},
     {"gpu depth buffer follows memory's changes", gpuDepth},
     {"gpu depth as the GE's whole numbers: a fraction of a step above meets the GE's comparisons", gpuDepthSteps},
     {"gpu memory's changes to depth kept past PRIMs that don't use it, for the next that does", gpuDepthUnused},

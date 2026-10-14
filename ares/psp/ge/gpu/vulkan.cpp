@@ -180,7 +180,7 @@ struct VulkanBackend : GPU::Backend {
   VkShaderModule transformModule = VK_NULL_HANDLE;  //(fast mode's: transform.vert)
   VkPipelineCache pipelineCache = VK_NULL_HANDLE;
   VkCommandPool commandPool = VK_NULL_HANDLE;
-  std::map<std::array<u8, sizeof(GPU::Pipeline)>, VkPipeline> pipelineCache_;  //(VK_NULL_HANDLE: it failed)
+  std::unordered_map<GPU::Pipeline, VkPipeline, GPU::Pipeline::Hash> pipelineCache_;  //(VK_NULL_HANDLE: it failed)
   std::unordered_map<u32, Target> targetImages;
   std::unordered_map<u32, Texture> textureImages;  //0: a blank one, bound for untextured draws
   //Textures let go of, once their runs are done, kept for a texture of their size to take (makeTexture()), rather
@@ -701,10 +701,8 @@ struct VulkanBackend : GPU::Backend {
 
   //The pipeline for a key: made the first time it's met, and kept (VK_NULL_HANDLE where the driver wouldn't).
   auto pipelineFor(const GPU::Pipeline& k) -> VkPipeline {
-    std::array<u8, sizeof(GPU::Pipeline)> key;
-    std::memcpy(key.data(), &k, sizeof(k));
-    if(auto found = pipelineCache_.find(key); found != pipelineCache_.end()) return found->second;
-    if(k.transformed && !transformModule) return pipelineCache_[key] = VK_NULL_HANDLE;
+    if(auto found = pipelineCache_.find(k); found != pipelineCache_.end()) return found->second;
+    if(k.transformed && !transformModule) return pipelineCache_[k] = VK_NULL_HANDLE;
     u32 constants[20] = {k.textured, k.function, k.alphaTest, k.colorTest, k.fog, k.depthRange, k.clear, k.source,
                          k.destination, k.alphaOut, k.dither, k.quantize, k.logic, k.clamp, k.texels, k.reads,
                          k.blending, k.term, k.flat, k.indexed};
@@ -732,18 +730,21 @@ struct VulkanBackend : GPU::Backend {
       {5, 0, VK_FORMAT_R32_UINT, u32(offsetof(V, flags))},
       {6, 0, VK_FORMAT_R32G32B32A32_SFLOAT, u32(offsetof(V, columnFirst))},
       {7, 0, VK_FORMAT_R32G32_SINT, u32(offsetof(V, columnStart))}};
-    VkVertexInputAttributeDescription models[7] = {
+    //(and over the first two weights, a vertex the GE put on the screen's shine and flags: GPU::Model::OnScreen)
+    VkVertexInputAttributeDescription models[9] = {
       {0, 0, VK_FORMAT_R32G32B32_SFLOAT, u32(offsetof(M, x))},
       {1, 0, VK_FORMAT_R32G32B32_SFLOAT, u32(offsetof(M, normal))},
       {2, 0, VK_FORMAT_R32G32_SFLOAT, u32(offsetof(M, u))},
       {3, 0, VK_FORMAT_R8G8B8A8_UNORM, u32(offsetof(M, color))},
       {4, 0, VK_FORMAT_R32G32B32A32_SFLOAT, u32(offsetof(M, weights))},
       {5, 0, VK_FORMAT_R32G32B32A32_SFLOAT, u32(offsetof(M, weights) + 16)},
-      {6, 0, VK_FORMAT_R32_UINT, u32(offsetof(M, transform))}};
+      {6, 0, VK_FORMAT_R32_UINT, u32(offsetof(M, transform))},
+      {7, 0, VK_FORMAT_R8G8B8A8_UNORM, u32(offsetof(M, weights))},
+      {8, 0, VK_FORMAT_R32_UINT, u32(offsetof(M, weights) + 4)}};
     auto input = made<VkPipelineVertexInputStateCreateInfo>(
       VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
     input.vertexBindingDescriptionCount = 1, input.pVertexBindingDescriptions = &binding;
-    input.vertexAttributeDescriptionCount = k.transformed ? 7 : 8;
+    input.vertexAttributeDescriptionCount = k.transformed ? 9 : 8;
     input.pVertexAttributeDescriptions = k.transformed ? models : attributes;
     auto assembly = made<VkPipelineInputAssemblyStateCreateInfo>(
       VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO);
@@ -802,7 +803,7 @@ struct VulkanBackend : GPU::Backend {
     pipelineMaking += std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now() - start).count();
     pipelines++;
-    pipelineCache_[key] = pipeline;
+    pipelineCache_[k] = pipeline;
     return pipeline;
   }
 
@@ -1087,7 +1088,10 @@ struct VulkanBackend : GPU::Backend {
     u64 modelsAt = aligned(r.vertices.size() * sizeof(GPU::Vertex));
     u64 indicesAt = aligned(modelsAt + r.models.size() * sizeof(GPU::Model));
     u64 transformsAt = (indicesAt + r.indices.size() * 4 + storageAlignment - 1) / storageAlignment * storageAlignment;
-    u64 size = transformsAt + r.transforms.size() * sizeof(GPU::Transformed);
+    //(a run of meshes binds the blocks' set though its vertices may be only ones on the screen, which read none: one
+    //block's room at least, so the set has something to name)
+    u64 blocks = r.models.empty() ? 0 : std::max<u64>(r.transforms.size(), 1);
+    u64 size = transformsAt + blocks * sizeof(GPU::Transformed);
     for(auto& c : r.commands) {
       if(c.kind == GPU::Command::Kind::Upload) size = aligned(size) + aligned(u64(c.width) * c.height * 4) * 2 +
                                                       aligned(u64(c.width) * c.height);
@@ -1109,11 +1113,11 @@ struct VulkanBackend : GPU::Backend {
                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
       if(!make(slot.staging, std::max<u64>(size, slot.staging.size * 2), Usage, false)) return lost = true, false;
     }
-    if(!r.transforms.empty()) {  //(the slot's run before is done: its set isn't in use)
-      VkDescriptorBufferInfo blocks{slot.staging.buffer, transformsAt, r.transforms.size() * sizeof(GPU::Transformed)};
+    if(blocks) {  //(the slot's run before is done: its set isn't in use)
+      VkDescriptorBufferInfo range{slot.staging.buffer, transformsAt, blocks * sizeof(GPU::Transformed)};
       auto write = made<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
       write.dstSet = slot.transforms, write.descriptorCount = 1;
-      write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, write.pBufferInfo = &blocks;
+      write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, write.pBufferInfo = &range;
       vk.vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     }
     u64 readbackSize = 0;  //(the colors at the size asked for; the stencils, at a higher resolution, a row in scale)
@@ -1137,7 +1141,7 @@ struct VulkanBackend : GPU::Backend {
     if(!r.transforms.empty()) {
       std::memcpy(staging + transformsAt, r.transforms.data(), r.transforms.size() * sizeof(GPU::Transformed));
     }
-    u64 at = transformsAt + r.transforms.size() * sizeof(GPU::Transformed);
+    u64 at = transformsAt + blocks * sizeof(GPU::Transformed);
 
     //(a swapchain image for a Present, acquired before anything's recorded: none, nothing's presented)
     constexpr u32 NoImage = ~0u;

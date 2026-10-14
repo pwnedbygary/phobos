@@ -151,13 +151,20 @@ static auto keepsPixels(const GE::PixelState& p) -> bool {
 //(owe()): its area there. (It draws the pixels whose middles are inside it: as many, but for those along its edges.)
 //One reaching past the rectangle is cut to it (pixelsCut()).
 static auto pixelsCut(const s64 (&x)[3], const s64 (&y)[3], f64 left, f64 right, f64 top, f64 bottom) -> u64;
-static alwaysinline auto pixelsInside(const s64 (&x)[3], const s64 (&y)[3], const GE::PixelState& p) -> u64 {
-  f64 left = p.left * 16.0, right = (p.right + 1) * 16.0, top = p.top * 16.0, bottom = (p.bottom + 1) * 16.0;
+struct Sixteenths { f64 left, right, top, bottom; };  //(the rectangle's edges, in sixteenths)
+static auto sixteenthsOf(const GE::PixelState& p) -> Sixteenths {
+  return {p.left * 16.0, (p.right + 1) * 16.0, p.top * 16.0, (p.bottom + 1) * 16.0};
+}
+static alwaysinline auto pixelsInside(const s64 (&x)[3], const s64 (&y)[3], const Sixteenths& r) -> u64 {
+  auto [left, right, top, bottom] = r;
   if(left >= right || top >= bottom) return 0;
   s64 twice = (x[1] - x[0]) * (y[2] - y[0]) - (y[1] - y[0]) * (x[2] - x[0]);
   if(std::min({x[0], x[1], x[2]}) >= left && std::max({x[0], x[1], x[2]}) <= right &&
      std::min({y[0], y[1], y[2]}) >= top && std::max({y[0], y[1], y[2]}) <= bottom) return u64(std::abs(twice)) / 512;
   return pixelsCut(x, y, left, right, top, bottom);
+}
+static alwaysinline auto pixelsInside(const s64 (&x)[3], const s64 (&y)[3], const GE::PixelState& p) -> u64 {
+  return pixelsInside(x, y, sixteenthsOf(p));
 }
 
 //pixelsInside()'s triangle reaching past the rectangle (in sixteenths): cut at each side of it in turn (each cut adds
@@ -703,11 +710,16 @@ auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip
     placeFour(n, cx, cy, cz, cw);
   }
   bool again = false;
+  if(handing.size() < 3 * count) handing.resize(3 * count);
+  u32* into = handing.data();
+  u32 filled = 0;
   auto hand = [&] {
-    if(handed.empty()) return;
+    if(!filled) return;
+    handed.assign(into, into + filled);
     renderer->mesh(*this, t, vertices, handed, again);
-    handed.clear(), again = true;
+    filled = 0, again = true;
   };
+  Sixteenths inside = sixteenthsOf(look.pixel);
   auto consider = [&](u32 a, u32 b, u32 c, s32 facing) {
     const MeshCorner &pa = placed[a], &pb = placed[b], &pc = placed[c];
     u32 any = pa.bits | pb.bits | pc.bits, all = pa.bits & pb.bits & pc.bits;
@@ -722,8 +734,8 @@ auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip
     s64 x0 = pa.x, y0 = pa.y;
     s64 area = (pb.x - x0) * (pc.y - y0) - (pb.y - y0) * (pc.x - x0);
     if(area == 0 || (facing && (area > 0) != (facing > 0))) return;
-    owe(pixelsInside({x0, pb.x, pc.x}, {y0, pb.y, pc.y}, look.pixel));
-    handed.push_back(c), handed.push_back(a), handed.push_back(b);
+    owe(pixelsInside({x0, pb.x, pc.x}, {y0, pb.y, pc.y}, inside));
+    into[filled] = c, into[filled + 1] = a, into[filled + 2] = b, filled += 3;
   };
   if(kind == Triangles) {
     for(u32 n = 0; n + 2 < count; n += 3) consider(n, n + 1, n + 2, facing);
@@ -740,8 +752,8 @@ auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip
 
 //A job set up: drawn, and the bytes of VRAM it may write noted (touched: its frame buffer's rows, and its depth
 //buffer's, by the 16 KiB the GE rearranges each in, where it tests depth), for primitive() to report.
-auto GE::submit(Job& job) -> void {
-  if(job.firstX > job.lastX || job.firstY > job.lastY) return;
+auto GE::submit(Job& job) -> bool {
+  if(job.firstX > job.lastX || job.firstY > job.lastY) return false;
   job.fours = fourFriendly(job);
   auto& p = job.look->pixel;
   auto note = [&](u32 which, u32 from, u32 to, bool depth) {  //VRAM offsets, before wrapping at its end
@@ -760,9 +772,10 @@ auto GE::submit(Job& job) -> void {
     note(1, p.depthBuffer + (job.firstY * p.depthStride + job.firstX) * 2,
          p.depthBuffer + (job.lastY * p.depthStride + job.lastX) * 2 + 1, true);
   }
-  if(skipping) return;
+  if(skipping) return false;
   if(drawing.recording) record(job);
   else rasterize(job, job.firstY, job.lastY);
+  return true;
 }
 
 //The fog at a vertex, 0-255, from its 0-1: rounded down, 1 or more giving 255. Measured (docs/psp-core.md,
@@ -1115,7 +1128,8 @@ auto GE::readsApart(const Look& look, const Transform& t, const std::vector<Vert
     s64 x[3] = {fixed(a.x), fixed(b.x), fixed(c.x)}, y[3] = {fixed(a.y), fixed(b.y), fixed(c.y)};
     s64 area = (x[1] - x[0]) * (y[2] - y[0]) - (y[1] - y[0]) * (x[2] - x[0]);  //(as triangle())
     if(area == 0 || (facing && (area > 0) != (facing > 0))) return;
-    Job job = triangleJob(look, a, b, c, x, y, area, true);
+    Job job{};
+    triangleJob(job, look, a, b, c, x, y, area, true);
     if(job.firstX <= job.lastX && job.firstY <= job.lastY) jobs.push_back(job);
   };
   u32 count = vertices.size();
@@ -1232,20 +1246,26 @@ auto GE::placedTriangle(const Look& look, const Vertex& a, const Vertex& b, cons
   if(facing && (area > 0) != (facing > 0)) return;
   owe(pixelsInside(x, y, look.pixel));
   if(hardware) return renderer->triangleAt(a, b, c, x, y);
-  Job job = triangleJob(look, a, b, c, x, y, area, perspective);
+  if(drawing.recording && !skipping) {  //(set up where the batch keeps it, not copied there: a triangle's is 470 bytes)
+    auto& jobs = drawing.batch->jobs;
+    triangleJob(jobs.emplace_back(), look, a, b, c, x, y, area, perspective);
+    if(!submit(jobs.back())) jobs.pop_back();
+    return;
+  }
+  Job job{};
+  triangleJob(job, look, a, b, c, x, y, area, perspective);
   submit(job);
 }
 
-//The job of a triangle triangle() draws, set up: its corners (sixteenths) and area (not 0) as triangle() works them
-//out.
-auto GE::triangleJob(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, const s64 (&x)[3],
-                     const s64 (&y)[3], s64 area, bool perspective) const -> Job {
+//The job of a triangle triangle() draws, set up in job (Job{}, all 0, as it comes): its corners (sixteenths) and area
+//(not 0) as triangle() works them out.
+auto GE::triangleJob(Job& job, const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, const s64 (&x)[3],
+                     const s64 (&y)[3], s64 area, bool perspective) const -> void {
   auto& pixel = look.pixel;
   struct Corner { s64 x, y; const Vertex* vertex; };
   Corner p[3] = {{x[0], y[0], &a}, {x[1], y[1], &b}, {x[2], y[2], &c}};
   if(area < 0) std::swap(p[1], p[2]), area = -area;  //the same corners, turned the way the edges are worked out for
   //(which pixels on its edges it draws: triangleRows(), raster.cpp)
-  Job job{};
   job.kind = Job::Kind::Triangle;
   job.look = &look;
   auto& r = job.triangle;
@@ -1324,7 +1344,6 @@ auto GE::triangleJob(const Look& look, const Vertex& a, const Vertex& b, const V
     r.uStart = u.start, r.uAcross = u.across, r.uDown = u.down;
     r.vStart = v.start, r.vAcross = v.across, r.vDown = v.down;
   }
-  return job;
 }
 
 auto GE::point(const Look& look, const Vertex& at) -> void {
