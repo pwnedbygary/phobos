@@ -12,7 +12,7 @@ namespace allegrex_test::psp {
 namespace {
 
 constexpr u32 R = KernelMachine::Results;
-constexpr u32 Count = R, Seen = R + 0x40, Ring = R + 0x100, Spare = R + 0x200;
+constexpr u32 Count = R, Seen = R + 0x40, Ring = R + 0x100, Spare = R + 0x200, Library = R + 0x1000;
 constexpr u32 Rounds = 3;
 constexpr u64 Step = Kernel::VblankCycles / 8;
 
@@ -28,8 +28,10 @@ auto startThread(Assembler& main, KernelMachine& m, const char* name, u32 entry,
 }
 
 //What a loop does besides polling, to make it one that can't be skipped (Plain: none); or, Equal, its ticker at
-//main's own priority, ready at main's next rotation once its delay ends (as the go ends) and taking the CPU there.
-enum class Twist : u32 { Plain, Stored, Counting, RunTime, Clock, Counted, OwnCode, Fpu, OtherLine, Equal };
+//main's own priority, ready at main's next rotation once its delay ends (as the go ends) and taking the CPU there; or,
+//Size88, the status's size word set to 88 before each call, which then copies the run time's first word alone (and
+//writes the size word back as the whole's).
+enum class Twist : u32 { Plain, Stored, Counting, RunTime, Clock, Counted, OwnCode, Fpu, OtherLine, Equal, Size88 };
 
 //Where the idle loop's anchor is, for the direct skip: sceKernelReferThreadStatus's syscall, and where main goes on.
 struct Idle { u32 refer = 0, back = 0; };
@@ -60,6 +62,7 @@ auto idleLoop(KernelMachine& m, Twist twist = Twist::Plain, u32 tick = 200) -> I
   main.put(addiu(sp, sp, -0x80));
   main.put(sw(s0, 0x78, sp)); main.put(sw(ra, 0x7c, sp));
   main.call("sceKernelGetThreadId");
+  if(twist == Twist::Size88) main.li(t5, 88), main.put(sw(t5, 0x10, sp));
   main.put(addu(a0, v0, zero)); main.put(addiu(a1, sp, 0x10));
   main.call("sceKernelReferThreadStatus");
   idle.refer = m.stub("sceKernelReferThreadStatus") + 4, idle.back = main.here();
@@ -68,14 +71,17 @@ auto idleLoop(KernelMachine& m, Twist twist = Twist::Plain, u32 tick = 200) -> I
   main.call("sceKernelRotateThreadReadyQueue");
   main.put(lw(s0, 0x78, sp)); main.put(lw(ra, 0x7c, sp));
   switch(twist) {
-  case Twist::Stored: main.li(t5, Spare), main.put(lw(t6, 0, t5)), main.put(addiu(t6, t6, 1)), main.put(sw(t6, 0, t5)); break;
+  case Twist::Stored:  //(the count in memory alone: no register keeps it)
+    main.li(t5, Spare), main.put(lw(t6, 0, t5)), main.put(addiu(t6, t6, 1)), main.put(sw(t6, 0, t5));
+    main.put(addu(t6, zero, zero));
+    break;
   case Twist::Counting: main.put(addiu(s6, s6, 1)); break;
   case Twist::RunTime: main.put(lw(t6, 0x10 + 84, sp)); break;
   case Twist::Clock: main.call("sceKernelGetSystemTimeLow"); break;
   case Twist::Counted: main.put(addu(a0, s7, zero)), main.li(a1, 1), main.call("sceKernelSignalSema"); break;
   case Twist::OwnCode: main.li(t5, 0x0880'1ff0), main.put(lw(t6, 0, t5)), main.put(sw(t6, 0, t5)); break;
   case Twist::Fpu: main.put(fop(0x00, 1, 1, 2)); break;  //add.s f1, f1, f2
-  case Twist::Plain: case Twist::OtherLine: case Twist::Equal: break;
+  case Twist::Plain: case Twist::OtherLine: case Twist::Equal: case Twist::Size88: break;
   }
   main.put(addiu(sp, sp, 0x80));
   main.put(lw(t0, 0, s3)); main.put(sltu(t1, t0, s5));
@@ -92,11 +98,13 @@ auto idleLoop(KernelMachine& m, Twist twist = Twist::Plain, u32 tick = 200) -> I
 //The intro movies' wait: main asks a movie ring how many packets are free and the vertical blank count, and signals a
 //semaphore already at its most (refused), till a feeder thread (every 500 microseconds) puts 5 packets in, or the next
 //vertical blank comes; four times, the ring emptied after each. held: interrupts held off round the wait, which keeps
-//the feeder out (no thread switches then), so each ends at the blank.
-auto movieWait(KernelMachine& m, bool held = false) -> void {
+//the feeder out (no thread switches then), so each ends at the blank. library: the ring's library's memory marked
+//as sceMpegCreate marks it, naming the ring (the count read through it), else none (the ring counts its own).
+auto movieWait(KernelMachine& m, bool held = false, bool library = false) -> void {
   m.system.memory.write(4, Ring + 0, 64);  //packets
   m.system.memory.write(4, Ring + 12, 0);  //holding data
-  m.system.memory.write(4, Ring + 40, 0);  //no library: the ring counts its own
+  m.system.memory.write(4, Ring + 40, library ? Library : 0);
+  if(library) m.system.memory.copyIn(Library, "LIBMPEG", 8), m.system.memory.write(4, Library + 0x10, Ring);
   Assembler feeder{m, 0x0880'3000};
   u32 again = feeder.here();
   feeder.li(a0, 500); feeder.call("sceKernelDelayThread");
@@ -171,7 +179,8 @@ auto bothWays(const std::function<void(KernelMachine&)>& program, bool recompile
 //the run times the idle loop noted moving on as its targets came. With the ticker at main's priority, ready as a go
 //begins, the turn whose rotation hands it the CPU isn't skipped (a proof there finds it ready), the rest are. With
 //interrupts held off the wait is skipped as well (no thread switch, nor a call into the program, could come in it
-//either way), the same.
+//either way), the same; and with the ring's count read through its library. The status set to 88 bytes each turn
+//(written back as 104 by the call) is skipped too, its second word of run time left as it was.
 static auto spinsSkipped() -> void {
   for(bool recompile : {false, true}) {
     u64 skipped = 0;
@@ -182,6 +191,11 @@ static auto spinsSkipped() -> void {
     CHECK(bothWays([](KernelMachine& m) { movieWait(m); }, recompile, 40, skipped), true);
     CHECK(skipped > 1000, true);
     CHECK(bothWays([](KernelMachine& m) { movieWait(m, true); }, recompile, 40, skipped), true);
+    CHECK(skipped > 1000, true);
+    CHECK(bothWays([](KernelMachine& m) { movieWait(m, false, true); }, recompile, 40, skipped), true);
+    CHECK(skipped > 1000, true);
+    //the status of 88 bytes: its run time's first word the only bytes the time decides, its second never written
+    CHECK(bothWays([](KernelMachine& m) { idleLoop(m, Twist::Size88); }, recompile, 16, skipped), true);
     CHECK(skipped > 1000, true);
   }
   auto m = machine([](KernelMachine& m) { idleLoop(m); }, true, true);
@@ -233,18 +247,24 @@ static auto spinsDirect() -> void {
   do c->kernel.run(1), period++; while(c->system.ipu.pc != idle.refer || c->system.ipu.pd != idle.back);
   CHECK(period > 20 && period < 60, true);
   CHECK(a->kernel.current && a->kernel.current->name == "main", true);
-  //the anchor's syscall in a go of its own, the detector a turn short of a proof, room for Turns turns and the margin
+  //the anchor's syscall in a go of its own (with room for turns turns and the margin, or not in a go), the detector a
+  //turn short of a proof: the turns skipped
+  auto anchor = [&](KernelMachine& m, u64 turns, bool going = true) {
+    auto& k = m.kernel;
+    k.spins = true;
+    k.spin = {idle.refer, idle.back, k.cycles - period, period, Kernel::SpinTurns - 1, 0};
+    k.counted = 0;
+    k.going = going;
+    m.system.instructionsRun = 0;
+    m.system.runLimit = (turns + Kernel::SpinMargin) * period + 1;
+    m.system.instruction();
+    k.going = false;
+    u64 ran = m.system.instructionsRun + 1;  //(and the syscall)
+    k.cycles += ran - k.counted, k.counted = ran;
+    return k.spun;
+  };
   constexpr u64 Turns = 500;
-  auto& k = a->kernel;
-  k.spins = true;
-  k.spin = {idle.refer, idle.back, k.cycles - period, period, Kernel::SpinTurns - 1, 0};
-  k.counted = 0;
-  a->system.instructionsRun = 0;
-  a->system.runLimit = (Turns + Kernel::SpinMargin) * period + 1;
-  a->system.instruction();
-  u64 ran = a->system.instructionsRun + 1;  //(and the syscall)
-  k.cycles += ran - k.counted, k.counted = ran;
-  CHECK(k.spun, Turns);
+  CHECK(anchor(*a, Turns), Turns);
   b->kernel.run(Turns * period + 1);
   CHECK(a->kernel.cycles, b->kernel.cycles);
   CHECK(a->kernel.readySequence, b->kernel.readySequence);
@@ -253,6 +273,21 @@ static auto spinsDirect() -> void {
   CHECK(a->system.memory.read(4, runTime), b->system.memory.read(4, runTime));
   CHECK(a->system.memory.read(4, runTime) != c->system.memory.read(4, runTime), true);
   CHECK(saveState(*a) == saveState(*b), true);
+  //with a thread of main's priority ready (woken as the go began, say), the turn's rotation would hand it the CPU:
+  //not skipped, and that's what happens
+  auto e = positioned();
+  auto& ticker = *e->kernel.threads.rbegin()->second;
+  CHECK(ticker.name == "ticker", true);
+  ticker.status = Kernel::Status::Ready, ticker.priority = 0x20, ticker.wait = Kernel::Wait::None, ticker.wakeAt = 0;
+  CHECK(anchor(*e, Turns), 0);
+  CHECK(e->kernel.spin.wait > 0, true);
+  u32 count = e->system.memory.read(4, Count);
+  e->kernel.run(period);  //(the ticker gets the CPU at the rotation, moves the count on and waits again)
+  CHECK(e->system.memory.read(4, Count), count + 1);
+  //room for one turn and the margin: one skipped; for the margin alone, none; nor outside a go
+  CHECK(anchor(*positioned(), 1), 1);
+  CHECK(anchor(*positioned(), 0), 0);
+  CHECK(anchor(*positioned(), Turns, false), 0);
   //where a turn may store
   u32 stack = c->system.ipu.r[29];
   CHECK(c->kernel.spinStorable(stack, 4), true);

@@ -493,7 +493,7 @@ auto Kernel::threadInfoLength() const -> u32 {
 }
 
 //The structure itself at time (cycles); only its run time (bytes 84-91, ThreadInfoRunTime) depends on it, and only the
-//running thread's.
+//running thread's outside a call into the program.
 auto Kernel::threadInfo(const Thread& thread, u64 time) const -> Report {
   Report info(threadInfoLength());
   info.name(4, thread.name);

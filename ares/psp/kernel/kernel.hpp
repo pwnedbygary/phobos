@@ -296,7 +296,8 @@ struct Kernel {
     auto (Kernel::*handler)() -> void;
     u32 nid;
     bool quiet = false;  //it makes nothing due sooner (syscall())
-    //what it does in a spin's turn, worked out without doing it (spins.cpp): false where it would do something else
+    //what it does in a spin's turn, worked out without doing it (spins.cpp): false where it would do something else.
+    //Only for cases where the function itself is quiet or calm, so a turn never needs runUntilNextEvent().
     auto (Kernel::*spin)(SpinShadow& shadow, u64 time) -> bool = nullptr;
   };
   //Set by a function that isn't always quiet but was this time: it changed nothing that has a time to come (dispatch()
@@ -321,8 +322,10 @@ struct Kernel {
     u32 turns = 0;           //turns of that time in a row since
     u32 wait = 0;            //more to wait for after a proof that failed
   } spin;
-  bool spins = true;  //(tests turn it off to compare)
-  u64 spun = 0;       //turns skipped
+  bool spins = true;   //(tests turn it off to compare)
+  bool going = false;  //a go of the CPU's is under way (run()): its limit and count are what a skip works from
+  u64 spun = 0;        //turns skipped
+  //SpinLongest: the longest turn, in instructions (the shadow's) and so in cycles (the detector's)
   static constexpr u32 SpinTurns = 4, SpinLongest = 2048, SpinMargin = 2, SpinWaitMost = 4096;
   auto spinTurn() -> void;
   auto spinSkip() -> void;

@@ -899,6 +899,7 @@ auto Kernel::power() -> void {
   stuck = false;
   cycles = 0;
   spin = {};
+  spun = 0;
   nextUID = 0x100;
   imports.clear();
   threads.clear();
@@ -1134,7 +1135,9 @@ auto Kernel::run(u64 budget) -> u64 {
     }
     stuck = false;  //something runs: should nothing run again later, that's worth a note again
     counted = 0;
+    going = true;
     u64 ran = cpu.run(std::min(end - cycles, std::max<u64>(1, untilNextEvent())));
+    going = false;
     cycles += ran - counted;
     counted = ran;  //(what cpu.instructionsRun stays at till the next run: a call made outside one adds nothing)
     if((current || interrupting) && cpu.scc.halted) {  //it stopped by itself: a halt, or an exception nobody handled
@@ -1169,7 +1172,8 @@ auto Kernel::importCode(const std::string& library, u32 nid) -> u32 {
 //ends by whatever the function made due. A quiet function (Function::quiet), or one calm this time (calm), followed
 //by no FINISH taken nor call started, made nothing due sooner: the go already stops by the next thing due, which
 //keeps its time, so it's left as it is (untilNextEvent() looks through every thread, timer and file, after each of
-//the hundreds of thousands of calls a frame of games polling one of these in a loop).
+//the hundreds of thousands of calls a frame of games polling one of these in a loop); and the call may be part of a
+//loop of such calls that can be skipped to the go's end (spinTurn(): spins.cpp).
 auto Kernel::syscall(u32 code) -> bool {
   u64 before = cpu.instructionsBefore();
   if(before > counted) cycles += before - counted;

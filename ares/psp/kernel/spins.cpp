@@ -1,11 +1,11 @@
 //Spins: a thread polling system functions in a loop that changes nothing until something comes from outside it (a
 //vertical blank, a timer, another thread). Both Need for Speeds' idle thread puts itself back in its line, asking its
-//own status for its priority first, half a million times a frame till a count its vertical blank's handler keeps moves
-//on; the Twisted Metal, Disaster Report 3 and Armored Core intro movies ask the movie's ring how full it is (and signal
-//a semaphore already at its most) up to 400,000 times a frame till the reader thread feeds it. A system call costs
-//the clock one cycle, so a turn of such a loop is a few dozen cycles of the PSP's time, and nothing else happens till
-//the CPU's go ends at the next thing due (Kernel::run(): only system functions bring that end sooner, and these, quiet
-//or calm, don't).
+//ID and its own status (for its priority) first, 175,000 times a frame (half a million calls) till a count another
+//thread or a handler keeps moves on; the Twisted Metal, Disaster Report 3 and Armored Core intro movies ask the
+//movie's ring how full it is (and signal a semaphore already at its most) in 90,000 to 370,000 calls a frame till the
+//reader thread feeds it. A system call costs the clock one cycle, so a turn of such a loop is a few dozen cycles of the
+//PSP's time, and nothing else happens till the CPU's go ends at the next thing due (Kernel::run(): only system
+//functions bring that end sooner, and these, quiet or calm, don't).
 //
 //So once a loop has come round the same way a few times, the kernel proves that its next turn leaves everything a
 //later turn sees as it was, and jumps ahead by whole turns to just before the go's end, the last turns running as
@@ -19,12 +19,14 @@
 //    way;
 //  - it must come back to the call it started after (the anchor: the same syscall, going on to the same place), every
 //    register as it was, and every byte it stored holding what memory holds (but those the time decides).
-//Then every turn does what this one did, at its own time: the CPU is deterministic, every value it reads is the same,
-//and so is what each function returns. The go ends at the first block end where the run's count reaches its limit,
-//and a turn's blocks end at the same counts whether or not the turns before it ran; so skipping turns whose blocks all
-//end before the limit (and before a list's FINISH falls due, which a system call would take) leaves where the go ends,
-//and so when everything after happens, as it was. Nothing of this is kept in a state: a spin found again after a
-//state loads is skipped the same way, and one not found runs every turn, to the same end.
+//Then every turn does what this one did, at its own time: the CPU is deterministic (the interpreter and compiled code
+//alike: tests/allegrex holds them to it), every value it reads is the same, and so is what each function returns. The
+//go ends at the first block end where the run's count reaches its limit, and a turn's blocks end at the same counts
+//whether or not the turns before it ran (the anchor's syscall always ends its block: endsBlock(), or the branch it's
+//the delay slot of); so skipping turns whose blocks all end before the limit (and before a list's FINISH falls due,
+//which a system call would take) leaves where the go ends, and so when everything after happens, as it was. Nothing
+//of this is kept in a state: a spin found again after a state loads is skipped the same way, and one not found runs
+//every turn, to the same end.
 
 //The shadow: a CPU of its own running one turn of a spin through the interpreter (see above). A load or store outside
 //main RAM, a store that would do more than store, a byte the time decides read or written over, an exception, a halt
@@ -34,7 +36,6 @@ struct SpinShadow : Allegrex {
   Memory& memory;
   bool failed = false;
   bool closed = false;    //the turn came back to the anchor
-  bool applying = false;  //the last turn's calls writing the bytes the time decides for real (Kernel::spinSkip())
   u64 start = 0;          //cycles, as the turn's first instruction runs
   u32 executed = 0;       //the turn's instructions before the one running
   u32 period = 0;         //the turn's instructions, the anchor's syscall last
@@ -45,12 +46,12 @@ struct SpinShadow : Allegrex {
   std::unordered_map<u32, Byte> stored;
   struct Range { u32 address, size; };  //(physical)
   std::vector<Range> reads;
-  //The calls that write bytes the time decides, made again for real at the last turn's time: each one's function, the
-  //registers it was called with and where in the turn it was called
+  //The bytes the time decides that the turn's calls wrote, written again for real at the last turn's time
+  //(Kernel::spinSkip()): a thread's run time in its status, at address, the status's bytes from to to, and where in
+  //the turn the call was made
   struct Timed {
-    const Kernel::Function* function;
-    u32 gpr[32];
-    u32 interrupts;
+    const Kernel::Thread* thread;
+    u32 address, from, to;
     u32 executed;
   };
   std::vector<Timed> timed;
@@ -63,12 +64,13 @@ struct SpinShadow : Allegrex {
   auto time() const -> u64 { return start + executed; }
   auto arg(u32 n) const -> u32 { return n < 4 ? ipu.r[4 + n] : ipu.r[8 + n - 4]; }
 
-  //Main RAM: whether size bytes at address are all there. Anything else ends the proof: VRAM, which the GE's workers
-  //may draw into as the CPU runs, and the scratchpad and nothing at all, which polling loops don't touch.
+  //Whether size bytes at address are all there, in main RAM. Bytes with nothing behind them aren't, as Memory says
+  //(a function checking an address it was given finds that out the same way); others than main RAM's end the proof:
+  //VRAM, which the GE's workers may draw into as the CPU runs, and the scratchpad, which polling loops don't touch.
   auto reaches(u32 address, u32 size) -> bool {
     u32 offset = (address & 0x1fff'ffff) - Memory::RAMBase;
     if(offset < memory.ram.size()) return size <= memory.ram.size() - offset;
-    failed = true;
+    if(memory.reaches(address, size)) failed = true;
     return false;
   }
 
@@ -105,19 +107,16 @@ struct SpinShadow : Allegrex {
   auto marked(u32 library) -> bool { return kernel.mpegMarkedIn(*this, library); }
 
   //A function's write: size bytes at address, as Memory::copyIn() makes it (nothing, if they aren't all there), the
-  //bytes from timedFrom to timedTo of it decided by the time. Applying, only those are written.
-  auto store(u32 address, const u8* bytes, u32 size, u32 timedFrom = 0, u32 timedTo = 0) -> void {
+  //bytes from timedFrom to timedTo of it decided by the time. Whether it wrote them.
+  auto store(u32 address, const u8* bytes, u32 size, u32 timedFrom = 0, u32 timedTo = 0) -> bool {
     timedTo = std::min(timedTo, size);
     timedFrom = std::min(timedFrom, timedTo);
-    if(applying) {
-      if(timedFrom < timedTo) memory.copyIn(address + timedFrom, bytes + timedFrom, timedTo - timedFrom);
-      return;
-    }
-    if(failed || !size || !reaches(address, size)) return;
-    if(!kernel.spinStorable(address, size)) return void(failed = true);
+    if(failed || !size || !reaches(address, size)) return false;
+    if(!kernel.spinStorable(address, size)) return failed = true, false;
     u32 physical = address & 0x1fff'ffff;
     for(u32 n = 0; n < size; n++) put(physical + n, bytes[n], n >= timedFrom && n < timedTo);
     if(timedFrom < timedTo) timedWrites++;
+    return true;
   }
 };
 
@@ -144,12 +143,14 @@ auto Kernel::spinTurn() -> void {
   spinSkip();
 }
 
-//The spin's next turns skipped, if its next turn is proved to change nothing (spinProve()): as many as end before the
-//go's (or the margin's last turns), each counted in the clock and in what it changes in the kernel, the last one's
-//writes the time decides made as its calls would make them. A proof that fails waits longer each time before the next.
+//The spin's next turns skipped, if its next turn is proved to change nothing (spinProve()): every whole turn that fits
+//before the go's limit but the last SpinMargin, each counted in the clock and in what it changes in the kernel, the
+//last skipped one's bytes the time decides written as its calls would have written them. A proof that fails waits
+//longer each time before the next.
 auto Kernel::spinSkip() -> void {
-  //(nothing else may come in meanwhile: no call into the program waiting or running, no vertical blank's handlers)
-  if(interrupting || !current || current->status != Status::Running || !calls.empty() || vblankPending) return;
+  //(in a go of the CPU's, whose limit and count these are; nothing else may come in meanwhile: no call into the
+  //program waiting or running, no vertical blank's handlers)
+  if(!going || interrupting || !current || current->status != Status::Running || !calls.empty() || vblankPending) return;
   //the skipped turns' blocks all end before the go's limit: the last at the count the anchor's syscall ends on
   u64 room = cpu.runLimit > counted + 1 ? cpu.runLimit - counted - 1 : 0;
   if(room / spin.period <= SpinMargin) return;
@@ -166,14 +167,9 @@ auto Kernel::spinSkip() -> void {
     readySequence += turns * shadow.rotations;
     current->readySince = readySequence;
   }
-  for(auto& call : shadow.timed) {
-    SpinShadow last{*this, memory};
-    last.applying = true;
-    std::copy(call.gpr, call.gpr + 32, last.ipu.r);
-    last.scc.interrupts = call.interrupts;
-    last.start = cycles + 1 + (turns - 1) * spin.period;
-    last.executed = call.executed;
-    (this->*call.function->spin)(last, last.time());
+  for(auto& write : shadow.timed) {
+    auto info = threadInfo(*write.thread, cycles + 1 + (turns - 1) * spin.period + write.executed);
+    memory.copyIn(write.address + write.from, info.bytes + write.from, write.to - write.from);
   }
   cycles += skipped;
   counted += skipped;
@@ -223,13 +219,7 @@ auto Kernel::spinCall(SpinShadow& shadow, u32 code) -> bool {
   if(shadow.failed || code < FirstImportCode || code - FirstImportCode >= imports.size()) return false;
   auto function = imports[code - FirstImportCode].function;
   if(!function || !function->spin) return false;
-  u32 timedBefore = shadow.timedWrites;
   if(!(this->*function->spin)(shadow, shadow.time()) || shadow.failed) return false;
-  if(shadow.timedWrites > timedBefore) {
-    SpinShadow::Timed call{function, {}, shadow.scc.interrupts, shadow.executed};
-    std::copy(shadow.ipu.r, shadow.ipu.r + 32, call.gpr);
-    shadow.timed.push_back(call);
-  }
   if(shadow.pipeline.address == spin.site && shadow.ipu.pc == spin.back) shadow.closed = true;
   return true;
 }
@@ -261,8 +251,11 @@ auto Kernel::spinReferThreadStatus(SpinShadow& shadow, u64 time) -> bool {
   u32 address = shadow.arg(1), length = threadInfoLength(), size = shadow.read(4, address);
   if(length == 108 && size > length) return shadow.ipu.r[2] = ErrorIllegalSize, true;
   auto info = threadInfo(*thread, time);
-  u32 timed = thread == current && !interrupting ? ThreadInfoRunTime : 0;
-  shadow.store(address, info.bytes, std::min(size, length), timed, timed ? timed + 8 : 0);
+  u32 copied = std::min(size, length), timed = thread == current && !interrupting ? ThreadInfoRunTime : 0;
+  bool wrote = shadow.store(address, info.bytes, copied, timed, timed ? timed + 8 : 0);
+  if(wrote && timed && copied > timed) {
+    shadow.timed.push_back({thread, address, timed, std::min(copied, timed + 8), shadow.executed});
+  }
   shadow.ipu.r[2] = 0;
   return true;
 }
