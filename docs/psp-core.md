@@ -12424,36 +12424,41 @@ weights, which the CPU transforms in accurate mode), so their pixels were failin
 **The changes** (gpu.cpp, gpu.hpp, vulkan.cpp; in both modes and at every resolution):
 1. **The newest depth taken from the frame buffer that drew it** (`takeDepth()`, `Command::Depth`). A target's depth
    says which depth it holds (`Target::depthAt`: the serial of the last PRIM that wrote depth into it, 0 for memory's).
-   Before a PRIM that tests or writes depth draws into a target, another target over the same depth buffer and row
-   width holding newer depth has its depth copied into this one's on the GPU (the depth aspect alone, `vkCmdCopyImage`:
-   the stencil is each frame buffer's own), for the rows it has; memory's changes it hadn't filled yet are filled into
-   it first, and this one's own changes in those rows dropped. Nothing waits.
-2. **A 5551 stencil bit** (`settings()`). On a 5551 frame buffer INCREMENT is a REPLACE of 255 and DECREMENT a ZERO, the
-   comparison made against the new reference as a 5551 REPLACE's is (part 68: on the top bit, where the reference's
-   bits the format doesn't keep would tell them apart), so the GPU's stencil is the GE's and the color's alpha follows
-   the pass's operation (but an INCREMENT beside a REPLACE of 0, which one reference can't write both of).
+   Before a PRIM that tests or writes depth draws into a target, another target over the same depth buffer (its address
+   and row width) holding newer depth has its depth copied into this one's on the GPU (the depth aspect alone,
+   `vkCmdCopyImage`: the stencil is each frame buffer's own), for the rows and columns it has; memory's changes it
+   hadn't filled yet are filled into it first, and this one's own changes there dropped; where it's a narrower frame
+   buffer, this one's columns past it are left as they'd be without it (its own, or memory's in rows it hadn't
+   filled). Nothing waits. A double-buffered game that clears depth each frame takes the other screen's depth into the
+   one it clears first: a copy of a frame's depth, which the clear then covers (below: "Speed").
+2. **A 5551 stencil bit** (`settings()`). On a 5551 frame buffer INCREMENT is a REPLACE of 255 and DECREMENT a ZERO, and
+   a REPLACE of 0 a ZERO, so one reference serves them all, the comparison made against it as a 5551 REPLACE's is (part
+   68: on the top bit, where the reference's bits the format doesn't keep would tell them apart): the GPU's stencil is
+   the GE's, and the color's alpha follows the pass's operation. And where MASK_ALPHA keeps every bit a 16-bit frame
+   buffer's stencil has (a 5551 one's at 0x80 or more), the color's alpha is left too, as the stencil is.
 3. **Depth put into memory for a texture read through VRAM's depth views** (`putDepth()`, `Readback`'s depths,
    `Backend::readDepth()`). A texture read through VRAM's second or fourth copy (`holds()`) over a depth buffer whose
    newest depth is the GPU's has that depth read back first (the depth aspect alone, at a higher resolution each
    pixel's middle sample, made the GE's 16-bit depths: D32's 65,536ths, D24's rounding undone), and written into
-   memory's VRAM in the fourth copy's order, older depth buffers over the same bytes first. Memory hears of the change
-   (decoded textures, the recompiler), and the targets over it fill those rows again, but those holding what was put
-   there, whose own changes from memory are kept as they were (unless a newer depth put after reaches those bytes:
-   5071b80b5). A wait, as a finish, but once until more depth is drawn (`Target::depthKept`): Cars' later strips find
-   memory has it. The targets' pixels and pages stay the GPU's.
+   memory's VRAM in the fourth copy's order, older depth buffers over the same bytes first, of targets as new over one
+   depth buffer the widest's. Memory hears of the change (decoded textures, the recompiler), and the targets over it
+   fill those rows again, but those holding what was put there, whose own changes from memory are kept as they were
+   (unless a newer depth put after reaches those bytes: 5071b80b5). A wait, as a finish, but once until more depth is
+   drawn (`Target::depthKept`): Cars' later strips find memory has it. A depth that couldn't be read back isn't kept,
+   for the next texture to take again. The targets' pixels and pages stay the GPU's.
 
 **The other scenes.** The kit's 21 scenes (`~/phobos-work/scratch/ge-headroom`'s, copied), master against the branch,
 100 frames from each state, every frame's picture and VRAM hashed (drawing settled), then the end's RAM and machine:
 Software the same in all 21 and in the three games' scenes (24 of 24); Vulkan accurate and fast each the same in 19 of
-the 21. The two others had the same bug, and come out nearer Software, by the depth's taking alone (each change turned
-off in turn):
+the 21. The two others had the same bug, and changed by the depth's taking alone (each change turned off in turn):
 - **Colin McRae Rally 2005 Plus**' race draws its scene into the screen's 5551 frame buffer, then 130 PRIMs a frame into
   a frame buffer at 0xcc000 of the same row width against the same depth buffer: its terrain shadows, which part 83
   left, putting them down to depth across row widths (a frame buffer 256 pixels wide over the same memory is drawn
   too, with a depth buffer of its own width). Now drawn: the mean difference from Software at frame 100 3.69 -> 0.22
   accurate, 3.93 -> 0.53 fast (5.9% of pixels more than 24 apart -> 0.0%).
-- **Twisted Metal: Head On**'s play: 4 pixels of the 130,560 change by a level, in one spot (8 in fast mode); 2 of the 4
-  are Software's now where none were (in fast mode 2 of 8, where 4 were). The game's RAM at the end is the same.
+- **Twisted Metal: Head On**'s play: 4 pixels of the 130,560 change by a level, in one spot (8 in fast mode). In
+  accurate mode 2 of the 4 are Software's now where none were; in fast mode 2 of the 8, where 4 were, a hair further.
+  The game's RAM at the end is the same.
 
 **Pictures** (the kit's runners, -O3 with thin LTO, the final code; the mean channel difference from Software and the
 pixels more than 24 apart, master -> branch):
@@ -12471,20 +12476,26 @@ accurate: the whole picture a little apart, its units drawn in both.)
 
 **Speed**: pending (the three games and Colin McRae's race, master against the branch, both Vulkan modes).
 
-Still not done: depth between frame buffers of other row widths; the CPU's loads through the depth views (memory's
-still, part 68); a texture over a depth buffer through VRAM's plain copies; a 4444 frame buffer's INCREMENT and
-DECREMENT (by one on the GPU, by 16 on the PSP); the stencil a fail or depth-fail operation leaves, in the color's
-alpha a texture taken on the GPU reads; a target holding the only newest depth let go of for room (32 targets), or
-drawn with another depth buffer, loses it, as before.
+Still not done: depth between depth buffers of other row widths over the same memory, and an older, wider frame
+buffer's columns past the newest one's put into memory; the CPU's loads, block transfers and palette loads through
+the depth views (memory's still, part 68), and a texture over a depth buffer through VRAM's plain copies; a 4444 frame
+buffer's INCREMENT and DECREMENT (by one on the GPU, by 16 on the PSP); the stencil a fail or depth-fail operation
+leaves, in the color's alpha a texture taken on the GPU reads; a target holding the only newest depth let go of for
+room (32 targets), or drawn with another depth buffer, loses it, as before.
 
-**Tests** (tests/psp/gpu.cpp, each at 1x and 2x in both modes; on master's core, with only the two statistics added so
-they build, all three fail on their pictures: 5,120, 3,936 and 16,832 bytes apart):
+**Tests** (tests/psp/gpu.cpp, in both modes, the first three at 1x and 2x; TESTS-BEFORE):
 - "a depth buffer two frame buffers draw with": a sprite into the second frame buffer behind what the first drew is
-  drawn only where the first drew nothing, then the first's behind what the second drew since, likewise.
-- "a 5551 frame buffer's stencil bit": INCREMENT and DECREMENT as the pass's operation and the fail's, then a test of
-  255, the read back, and the bit taken as a texture's alpha behind an alpha test.
+  drawn only where the first drew nothing, then the first's behind what the second drew since, likewise, then a 3D
+  mesh into the second (fast mode's GPU transform) behind what the first drew since; each keeps its own stencil.
+- "a 5551 frame buffer's stencil bit": INCREMENT and DECREMENT as the pass's operation (one over a test of "equal to
+  0", compared on the GPU against the 255 it writes), the fail's and the depth fail's, then a test of 255, the read
+  back, and the bit taken as a texture's alpha behind an alpha test.
 - "a depth buffer read as a texture through VRAM's depth views": through the fourth copy and the second, put once, not
-  again for the second read, again once more depth is drawn.
+  again for the second read, again once more depth is drawn; and memory's changes around it (the CPU writing all of
+  the depth buffer twice): filled into the target taken from first, kept by the other target holding the same depth
+  when the first's is put.
+- "depths as the depth formats keep them, and back": all 65,536 depths through D32 and D24 and back (D24 whichever way
+  the GPU rounds; the M1 takes D32), no GPU needed.
 
 **Checks**: pending (the three suites on the merge with master).
 

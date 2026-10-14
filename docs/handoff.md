@@ -41,23 +41,27 @@ text are kept; the first holds the worktree (`LOCK-worktree`, `TWIN-NOTICE.md` b
   each alone lost them. Cars Race-O-Rama reads its race's depth as a CLUT16 texture through VRAM's second copy
   (0x042cc000) for the alpha its sky is blended by, and the GPU's depth was never in memory: the sky covered the race.
 - **Changes** (gpu.cpp, gpu.hpp, vulkan.cpp; both modes, any resolution): the newest depth drawn in a depth buffer
-  taken into a target from the target over the same depth buffer and row width that drew it, on the GPU (`takeDepth()`,
-  `Command::Depth`: the depth aspect copied, nothing waits); on 5551, INCREMENT a REPLACE of 255 and DECREMENT a ZERO;
-  a texture read through VRAM's depth views over a depth buffer the GPU drew newer depth in has that depth read back
-  into memory first (`putDepth()`, `Backend::readDepth()`: a wait, once until more depth is drawn).
+  taken into a target from the target over the same depth buffer (address and row width) that drew it, on the GPU
+  (`takeDepth()`, `Command::Depth`: the depth aspect copied, nothing waits); on 5551, INCREMENT a REPLACE of 255,
+  DECREMENT and a REPLACE of 0 a ZERO; a texture read through VRAM's depth views over a depth buffer the GPU drew newer
+  depth in has that depth read back into memory first (`putDepth()`, `Backend::readDepth()`: a wait, once until more
+  depth is drawn).
 - **Pictures** (mean channel difference from Software at frame 100, master -> branch): Hammerin' Hero accurate 1.04 ->
   0.07, fast 2.14 -> 1.17; Jeanne d'Arc 0.27 -> 0.04 and 2.31 -> 2.10; Cars 37.08 -> 1.19 and 37.08 -> 1.21; Colin
   McRae's race (the kit's scene, the same bug: its terrain shadows, which part 83 left) 3.69 -> 0.22 and 3.93 -> 0.53.
   Sheets: `~/phobos-work/scratch/vk-models/png/`.
 - **Hashes** (the kit's 21 scenes, master against the branch, 100 frames, every frame's picture and VRAM, then RAM and
   machine): Software the same in all 21 and the three games' (24); Vulkan accurate and fast the same in 19 of 21, the
-  others Colin McRae's race (its shadows) and Twisted Metal's play (4 pixels a level apart, 2 now Software's).
-- **Tests**: three GPU groups (a depth buffer two frame buffers draw with; a 5551 stencil bit taken as a texture's
-  alpha; a depth buffer read as a texture through the depth views), each at 1x and 2x in both modes; on master's core
-  all three fail on their pictures.
+  others Colin McRae's race (its shadows) and Twisted Metal's play (4 pixels a level apart, 2 now Software's; in fast
+  mode 8, 2 Software's where 4 were).
+- **Tests**: four GPU groups (a depth buffer two frame buffers draw with, a 3D mesh among them; a 5551 stencil bit by
+  each operation, taken as a texture's alpha; a depth buffer read as a texture through the depth views, and memory's
+  changes around it; the depth formats' conversions), in both modes; on master's core the first three fail on their
+  pictures.
 - **Checks, speed, review**: pending.
-- **Left**: depth across row widths; the CPU's loads through the depth views; a texture over depth through VRAM's plain
-  copies; a 4444 frame buffer's INCREMENT and DECREMENT; a fail operation's stencil in a texture copied on the GPU.
+- **Left**: depth between depth buffers of other row widths over the same memory; the CPU's loads, block transfers and
+  palette loads through the depth views, and a texture over depth through VRAM's plain copies; a 4444 frame buffer's
+  INCREMENT and DECREMENT; a fail or depth-fail operation's stencil in a texture copied on the GPU.
 - Scratch: `~/phobos-work/scratch/vk-models`.
 
 ## PSP: the CPU, round 2 — the VFPU's adder in NEON, delay slots compiled each way, the rare ways out of line, prefixes compiled, blocks linked — 2026-10-13
