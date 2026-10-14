@@ -3,11 +3,13 @@ name: PSP Core Tests
 # The PSP core (ares/psp) tested on the host, in four suites: the Allegrex CPU's (tests/allegrex) and the system's
 # parts (tests/psp), both with the address and undefined-behavior sanitizers; the whole core as an ares system, as
 # Phobos builds it (tests/psp/ares/run-tests.sh); and the headless runner, built and running a test program
-# (tests/psp/ares/runner-test.sh). Their paths are what those builds compile or read: the core, nall, ares's framework
-# and libco, sljit and its configuration, Vulkan's headers, libchdr, FFmpeg's build, the runner, the desktop's disc
-# reader, the tests, and the files the PSP's tests share with the app's (android/app/src/test/resources/psp-*: the
-# dialogs' byte form, the keyboard's cases). The CPU's suite runs on an ARM64 host too, and again built as the app's
-# release builds are (PHOBOS_TESTS_MODE=release), beside the sanitized runs.
+# (tests/psp/ares/runner-test.sh), and built for Android as an artifact to run on a phone
+# (tools/psp-runner/build-android.sh). Their paths are what those builds compile or read: the core, nall, ares's
+# framework and libco, sljit and its configuration, Vulkan's headers, libchdr, FFmpeg's build, the runner, the
+# desktop's disc reader, the tests, and the files the PSP's tests share with the app's
+# (android/app/src/test/resources/psp-*: the dialogs' byte form, the keyboard's cases). The CPU's suite runs on an
+# ARM64 host too, and again built as the app's release builds are (PHOBOS_TESTS_MODE=release), beside the sanitized
+# runs.
 # A version tag runs every suite (a tag's push takes no path filter). The runners are pinned to Ubuntu 24.04 (its
 # GCC 13), so a new image is a change made on purpose. Each suite's last line, its count, goes in the run's summary
 # with the commit; the x86-64 Allegrex lane's sanitized run and the system lane keep their groups' results (pass, FAIL
@@ -254,3 +256,68 @@ jobs:
           at="${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}"
           last=$(tail -1 "$RUNNER_TEMP/suite.log" 2> /dev/null || true)
           echo "- tests/psp/ares/runner-test.sh at $at: ${last:-no output: the suite did not run}" >> "$GITHUB_STEP_SUMMARY"
+
+  # tools/psp-runner built for Android as tools/psp-runner/build-android.sh builds it (the app's NDK, flags and
+  # flavor, arm64-v8a), checked to be what a phone's adb shell runs, and kept as an artifact to run on a device
+  # (tools/psp-runner/README.md); the measurements it carries tested on this host (Linux's /proc, pinning, counters)
+  runner-android:
+    name: Headless runner for Android
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # (the history, for the build's name: git describe)
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+
+      # the app's NDK (.github/workflows/android.yml)
+      - name: Install the NDK
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "ndk;28.2.13676358"
+
+      # FFmpeg's decoders for arm64-v8a at the app's API level: the app's build's cache (android.yml), by its name
+      - name: Name the FFmpeg build
+        id: ffmpeg
+        run: echo "name=$(thirdparty/ffmpeg/build.sh --name android "$ANDROID_SDK_ROOT/ndk/28.2.13676358" 26)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: .cache/ffmpeg
+          key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
+          restore-keys: ffmpeg-${{ runner.os }}-android-
+
+      - name: Build and check
+        id: build
+        env:
+          PHOBOS_FFMPEG_CACHE: ${{ github.workspace }}/.cache/ffmpeg
+          PHOBOS_ANDROID_WORK: ${{ runner.temp }}/runner-android
+          PHOBOS_JOBS: 4
+        run: |
+          export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/28.2.13676358
+          folder=$(tools/psp-runner/build-android.sh | tail -1)
+          tools/psp-runner/android/check-build.sh "$folder"
+          cat "$folder/build.txt"
+          echo "folder=$folder" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$folder")" >> "$GITHUB_OUTPUT"
+
+      - name: Test the measurements on this host
+        run: tools/psp-runner/android/measure-test.sh
+
+      - name: Keep the build
+        uses: actions/upload-artifact@v4
+        with:
+          name: psp-runner-android-${{ steps.build.outputs.name }}
+          path: |
+            ${{ steps.build.outputs.folder }}/psp-runner-android
+            ${{ steps.build.outputs.folder }}/lib
+            ${{ steps.build.outputs.folder }}/build.txt
+          if-no-files-found: error
