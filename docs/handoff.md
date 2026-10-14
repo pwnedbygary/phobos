@@ -30,6 +30,54 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP Vulkan: the depth buffer as the PSP's memory, a 5551 stencil bit — Hammerin' Hero's and Jeanne d'Arc's characters, Cars Race-O-Rama's race, Colin McRae's terrain shadows — 2026-10-13
+
+Branch `cursor/psp-vk-models-2b67`, on master (`542da5a28`, #230), merged with `3228b825d` (#229, #237); PR #251.
+docs/psp-core.md, part 90, has the evidence; docs/psp-gpu-renderers.md the design. Deep-play batch 03's bug 2 and batch
+02's item 4. Clean room: no PPSSPP code read (its GPU backend not opened), JPCSP not read. Save states unchanged. The
+software renderer untouched. Cursor ran a second copy of the agent for a while: its commit (5071b80b5) and design-doc
+text are kept; the first holds the worktree (`LOCK-worktree`, `TWIN-NOTICE.md` beside it, neither committed).
+- **Found** with a scratch runner logging every PRIM of a frame: the characters' PRIMs reached the GPU whole (skinned;
+  not the cause), and failed per-pixel tests. Hammerin' Hero and Jeanne d'Arc draw their scene into the screen's 5551
+  frame buffer, then their characters into one of their own (0xcc000), cleared without its depth, tested against the
+  scene's depth (0x88000) and marked in the stencil by INCREMENT, then laid over the screen as a 5551 texture behind
+  an alpha test. On the GPU each target's depth was its own (the characters tested against stale depth), and a 5551
+  INCREMENT stepped the stencil 0 to 1 with the color's alpha left (the composite's alpha test dropped every pixel):
+  each alone lost them. Cars Race-O-Rama reads its race's depth as a CLUT16 texture through VRAM's second copy
+  (0x042cc000) for the alpha its sky is blended by, and the GPU's depth was never in memory: the sky covered the race.
+- **Changes** (gpu.cpp, gpu.hpp, vulkan.cpp; both modes, any resolution): the newest depth drawn in a depth buffer
+  taken into a target from the target over the same depth buffer (address and row width) that drew it, on the GPU
+  (`takeDepth()`, `Command::Depth`: the depth aspect copied, nothing waits); on 5551, INCREMENT a REPLACE of 255,
+  DECREMENT and a REPLACE of 0 a ZERO; a texture read through VRAM's depth views over a depth buffer the GPU drew newer
+  depth in has that depth read back into memory first (`putDepth()`, `Backend::readDepth()`: a wait, once until more
+  depth is drawn).
+- **Pictures** (mean channel difference from Software at frame 100, master -> branch): Hammerin' Hero accurate 1.04 ->
+  0.07, fast 2.14 -> 1.17; Jeanne d'Arc 0.27 -> 0.04 and 2.31 -> 2.10; Cars 37.08 -> 1.19 and 37.08 -> 1.21; Colin
+  McRae's race (the kit's scene, the same bug: its terrain shadows, which part 83 left) 3.69 -> 0.22 and 3.93 -> 0.53.
+  Sheets: `~/phobos-work/scratch/vk-models/png/`.
+- **Hashes** (the kit's 21 scenes, master against the branch, 100 frames, every frame's picture and VRAM, then RAM and
+  machine): Software the same in all 21 and the three games' (24); Vulkan accurate and fast the same in 19 of 21, the
+  others Colin McRae's race (its shadows) and Twisted Metal's play (4 pixels a level apart, 2 now Software's; in fast
+  mode 8, 2 Software's where 4 were).
+- **Tests**: four GPU groups (a depth buffer two frame buffers draw with, a 3D mesh among them; a 5551 stencil bit by
+  each operation, taken as a texture's alpha; a depth buffer read as a texture through the depth views, and memory's
+  changes around it; the depth formats' conversions), in both modes; on master's core the first three fail on their
+  pictures.
+- **Review**: an independent read-only review (no blocker, no major point; nothing touching the software renderer):
+  all its points taken but the clear's depth copy, measured instead (b042ddb15, e620356f1, 1c44ceab7). Its test of each
+  frame buffer's own stencil caught MoltenVK's image copy of the depth alone taking the stencil too: the depth goes
+  through the staging buffer now.
+- **Checks** (1c44ceab7, merged with master at 3228b825d): tests/psp 513/0 (sanitized), tests/allegrex 68/0,
+  tests/psp/ares 340/0; CI on 1c44ceab7 green. Hashes as above, against master as merged in.
+- **Speed** (the M1, two rounds, master -> branch): Vulkan fast at 1x 2-5% slower in the four scenes (Hammerin' Hero
+  168.9 -> 164.8, Jeanne d'Arc 277.3 -> 264.0, Cars 17.76 -> 17.06, Colin McRae 69.9 -> 68.5), at 4x about 7%
+  (Hammerin' Hero 46.7 -> 43.6, Cars 8.09 -> 7.48): the depth copies, Cars' read back and wait, and what's drawn now.
+  To measure on the RP6.
+- **Left**: depth between depth buffers of other row widths over the same memory; the CPU's loads, block transfers and
+  palette loads through the depth views, and a texture over depth through VRAM's plain copies; a 4444 frame buffer's
+  INCREMENT and DECREMENT; a fail or depth-fail operation's stencil in a texture copied on the GPU.
+- Scratch: `~/phobos-work/scratch/vk-models`.
+
 ## PSP: polling loops — the polled calls in fewer steps, and a loop that comes back as it was skipped to the go's end, each skip proved — 2026-10-13
 
 Branch `cursor/psp-polling-2b67`, begun on `cursor/psp-cpu-round2-2b67` (#237 on #229), master merged in once both had
