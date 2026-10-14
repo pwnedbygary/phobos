@@ -63,6 +63,8 @@ Clean room: PPSSPP not read at all, JPCSP not read. Save states unchanged (layou
 - **Checks**: tests/allegrex 74/0 (sanitized and release on ARM64; built for x86-64 and run under Rosetta, debug and
   release), tests/psp 525/0 (sanitized, with detect_container_overflow=0, and unsanitized), tests/psp/ares 340/0;
   GitHub's checks on 622fd6a0f all pass (the PSP core's, desktop, Android).
+- **Merged with master** (#254) as cd97a4630, the docs alone conflicting (part 93 before 94): the 26 scenes' hashes
+  against that master 78/78 identical; tests/psp 528/0 (sanitized), tests/psp/ares 340/0, tests/allegrex 74/0.
 - **Left**: the GE (most of every scene's thread); jumps through a register (2 to 3%: a cache of the last target); the
   VFPU's NEON helpers and vfpuEach; vcmp, vdot and vfad with prefixes; the FPU's mode check once a block; sqrt.s.
 - **RP6**: RP6

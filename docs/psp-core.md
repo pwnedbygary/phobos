@@ -13685,6 +13685,10 @@ Every change is the host's alone; nothing a game can see moves.
 - GitHub: on `5fb38f169` its GCC release build of tests/allegrex met vfim of a NaN half (change 7); on `622fd6a0f` the
   PSP core's checks (tests/allegrex on x86-64 and ARM64, the runner, the PSP as an ares system, the runner's
   measurements, tests/psp), the desktop builds (Linux, macOS, Windows) and the Android builds: all pass.
+- With part 93: master moved (#254, Vulkan's frame buffer alpha, `e78b4a364`) and was merged in (`cd97a4630`), the docs
+  alone conflicting. The merge against that master: the 26 scenes' hashes identical in all three renderers (78 of 78);
+  tests/psp 528 groups, 0 failures (sanitized: part 93's groups among them); tests/psp/ares 340/0; tests/allegrex
+  74/0.
 
 ### Left, and why
 
