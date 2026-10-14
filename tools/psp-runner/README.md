@@ -81,6 +81,8 @@ the runner refuses anything else):
   game's text
 - `--trace-savedata` — each savedata request the system answers, with its answer, as a line
   `[frame] savedata: ...` on standard output (below)
+- `--trace-io` — each file request (IoFileMgrForUser's functions) with its answer, and each
+  asynchronous request as it's done, as a line `[frame] io: ...` on standard output (below)
 - `--report FILE` — the run as JSON (below): for comparing runs by what ran, not only by their
   speed
 - `--start-time SECONDS` — the PSP's clock starts there (seconds since 1970, up to 4294967295)
@@ -149,6 +151,26 @@ Revenant's save to a list on an empty stick, and in another run its load from th
 [002138] savedata: mode 0 (autoload), size 1536, game "ULUS10244", save "0000", file "AFTRBURN.BIN", buffer 0x09c5b570 of 16368, data 16368, "ULUS102440000" there -> 0x00000000, read 16368
 [000474] savedata: mode 5 (listsave), size 1536, game "NPUH10195", save "", list "0001" "0002" "0003" "0004" "0005" "0006" "0007" "0008" (99 in all), focus 3, chosen "0001", file "SAVEDATA.DAT", buffer 0x09dd8cd0 of 105260, data 105260, "NPUH101950001" not there, title "Brandish The Dark Revenant" -> 0x00000000, save "0001"
 [000451] savedata: mode 4 (listload), size 1536, game "NPUH10195", save "", list "0001" "0002" "0003" "0004" "0005" "0006" "0007" "0008" (99 in all), focus 3, chosen "0001", file "SAVEDATA.DAT", buffer 0x09dbc7b0 of 105260, data 0, "NPUH101950001" there -> 0x00000000, read 105260, save "0001"
+```
+
+With `--trace-io`, each call of IoFileMgrForUser's functions adds a line: the PSP's time in
+microseconds and the calling thread's name (`-` for none), the function, then the call as the
+game made it and after `->` its answer (an error in hex, a count or position in decimal). A
+descriptor is shown with its file's PSP path and, after `@`, the position the call found it at;
+an open with its path, flags (named in brackets) and mode; a read or write with its buffer, size
+and, for the bytes it moved, `hash` and their FNV-1a hash or `zeros` if they all were; a seek
+with its offset and where from; a status with the size it gave; a folder's entry with its name;
+an ioctl or devctl with its command and buffers. A request made asynchronously says when it's
+due and the result it will give; a line of its own (`done fd N`) says when it's done, with the
+file's position then and, for a read, the hash of the bytes that landed; a poll or wait that
+takes a result shows it. A call that made its thread wait says `(waits)`: what it returns comes
+as the thread wakes. For example (LittleBigPlanet's install copying the last piece of GUI.ARC):
+
+```
+[001556] io: 25942641 us 08C12774 fios mediathread: sceIoOpenAsync "ms0:/PSP/SAVEDATA/UCUS98744INSTALL/GUI.ARC" flags 0x2000602 (write create truncate) mode 0644 -> 5 (due in 100 us, result 0x5)
+[001556] io: 25942744 us 08C12774 fios mediathread: sceIoLseekAsync fd 5 ms0:/PSP/SAVEDATA/UCUS98744INSTALL/GUI.ARC @0x0 offset 4194304 whence 0 -> 0 (due in 100 us, result 0x400000)
+[001556] io: 25942844 us 08C12774 fios mediathread: sceIoWriteAsync fd 5 ms0:/PSP/SAVEDATA/UCUS98744INSTALL/GUI.ARC @0x400000 from 0x953a320 size 0x26b17 hash 6f3bfbe7 -> 0 (due in 39721 us, result 0x26b17)
+[001558] io: 25982565 us: done fd 5 ms0:/PSP/SAVEDATA/UCUS98744INSTALL/GUI.ARC @0x426b17 -> 0x26b17
 ```
 
 The frames the PNGs name are the frames the runner ran: after the run of a frame that asks for

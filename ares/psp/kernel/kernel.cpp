@@ -944,6 +944,7 @@ auto Kernel::power() -> void {
   utilityModules.clear();
   imposeLanguage = imposeButton = 1;
   geTranslation = 0x400;
+  for(auto& [file, open] : files) closeFile(open);
   files.clear();
   filesOpened = 0;
   workingDirectory = "ms0:/";
@@ -1242,9 +1243,11 @@ auto Kernel::dispatchImport(u32 code, bool& quiet) -> bool {
     result(ErrorNotYetLinked);
     return true;
   }
-  bool looks = import.function->quiet;  //(read first: a function loading a module adds imports, moving them)
+  const Function* function = import.function;  //(read first: a function loading a module adds imports, moving them)
+  bool looks = function->quiet;
   calm = false;
-  (this->*import.function->handler)();
+  if(ioTrace && !std::strcmp(function->library, "IoFileMgrForUser")) traceIo(*function);
+  else (this->*function->handler)();
   bool taken = geFinishDue && geInterrupt();  //(a display list's FINISH, met by the GE in it)
   //what the function set off (a display list finishing) may call into the program now
   bool started = !interrupting && interruptsEnabled && (vblankPending || !calls.empty()) && startCall();

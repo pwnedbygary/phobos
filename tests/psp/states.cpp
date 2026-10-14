@@ -1626,8 +1626,8 @@ static auto idsRunOut() -> void {
   CHECK(n.kernel.nextUID, Kernel::LastUID + 1);
 }
 
-//States of the layouts before this one load: 26's (no sceVaudio), 25's (nor the dialog's error and deleted save),
-//24's (nor any file's PGD decryption), 23's (nor GE time: when the GE will
+//States of the layouts before this one load: 31's (no emptied file's length), 26's (nor sceVaudio), 25's (nor the
+//dialog's error and deleted save), 24's (nor any file's PGD decryption), 23's (nor GE time: when the GE will
 //have drawn what it was given, and whether its list's FINISH waits), 22's (nor any file's place in the order files
 //were opened), 21's (nor part 58's sceJpeg, sceHprm and low-level ATRAC fields, with files' count still kept and no
 //read's bytes to come) and 20's (none of those either). Each is this layout's state with the newer fields taken out
@@ -1669,8 +1669,14 @@ static auto olderLayouts() -> void {
   u32 pgd = where(kernelState(), state);
   open.pgd = false;
   open.pgdDataOffset = 1;
-  u32 pgdEnd = where(kernelState(), state) + 4;  //(the last of its PGD fields, and of the file's)
+  u32 pgdEnd = where(kernelState(), state) + 4;  //(the last of its PGD fields)
   open.pgdDataOffset = 0;
+  open.truncated = true;
+  u32 truncation = where(kernelState(), state);
+  open.truncated = false;
+  open.length = 1;
+  u32 truncationEnd = where(kernelState(), state) + 8;  //(an emptied file's length, the last of the file's fields)
+  open.length = 0;
   m.kernel.workingDirectory = "ms0:/LIST";
   u32 workingDirectory = where(kernelState(), state);
   m.kernel.workingDirectory = "ms0:/";
@@ -1706,10 +1712,16 @@ static auto olderLayouts() -> void {
   bool ordered = variables + 4 <= vaudio && vaudio + 15 <= dialogError && dialogDeleted == dialogError + 4
               && dialogDeleted < jpeg
               && jpeg < files && files < asyncData && asyncData < opened && opened + 8 <= pgd && pgd < pgdEnd
-              && pgdEnd <= workingDirectory && workingDirectory < geDone && geFinish == geDone + 8
-              && geFinish < state.size();
+              && pgdEnd == truncation && truncation < truncationEnd && truncationEnd <= workingDirectory
+              && workingDirectory < geDone && geFinish == geDone + 8 && geFinish < state.size();
   CHECK(ordered, true);
   if(!ordered) return;
+  //Layouts before 32 have no emptied file's length (the file's last fields, after everything but the working folder
+  //and the GE's time, so taken out of each older state first, those after it moving back as much)
+  u32 cut = truncationEnd - truncation;
+  auto older = state;
+  older.erase(older.begin() + truncation, older.begin() + truncationEnd);
+  workingDirectory -= cut, geDone -= cut, geFinish -= cut;
   //Layouts before 26 have no dialog error and deleted save (5 bytes, before everything else changed here but the
   //variables and sceVaudio, so taken out of each older state after the rest and before those).
   auto before26 = [&](std::vector<u8> bytes) {
@@ -1745,17 +1757,19 @@ static auto olderLayouts() -> void {
     n.kernel.serialize(again);
     return loaded && std::vector<u8>{again.data(), again.data() + again.size()} == state;
   };
-  CHECK(loads(28, before31(state)), true);
-  CHECK(loads(current, before31(state)), false);
-  CHECK(loads(27, before28(before31(state))), true);
-  CHECK(loads(current, before28(state)), false);
-  CHECK(loads(26, before28(before31(state))), true);
-  CHECK(loads(25, before28(before31(before26(state)))), true);
-  CHECK(loads(current, before26(state)), false);
-  auto layout24 = state;
+  CHECK(loads(31, older), true);
+  CHECK(loads(current, older), false);
+  CHECK(loads(28, before31(older)), true);
+  CHECK(loads(current, before31(older)), false);
+  CHECK(loads(27, before28(before31(older))), true);
+  CHECK(loads(current, before28(older)), false);
+  CHECK(loads(26, before28(before31(older))), true);
+  CHECK(loads(25, before28(before31(before26(older)))), true);
+  CHECK(loads(current, before26(older)), false);
+  auto layout24 = older;
   layout24.erase(layout24.begin() + pgd, layout24.begin() + pgdEnd);
   CHECK(loads(24, before28(before31(before26(layout24)))), true);
-  auto untimed = state;  //no GE time, the file's fields all there
+  auto untimed = older;  //no GE time, the file's older fields all there
   untimed.erase(untimed.begin() + geDone, untimed.begin() + geFinish + 1);
   auto layout23 = untimed;
   layout23.erase(layout23.begin() + pgd, layout23.begin() + pgdEnd);
@@ -1797,8 +1811,8 @@ static auto olderLayouts() -> void {
   CHECK(places[0] < places[1] && places[1] < geAt, true);
   if(!(places[0] < places[1] && places[1] < geAt)) return;
   twoFiles.erase(twoFiles.begin() + geAt, twoFiles.begin() + geAt + 9);
-  for(u32 at : {places[1], places[0]}) {  //each file's place, and its PGD decryption after it
-    twoFiles.erase(twoFiles.begin() + at, twoFiles.begin() + at + (pgdEnd - opened));
+  for(u32 at : {places[1], places[0]}) {  //each file's place, and its PGD decryption and length after it
+    twoFiles.erase(twoFiles.begin() + at, twoFiles.begin() + at + (truncationEnd - opened));
   }
   CHECK(variables + 4 <= vaudioAt && vaudioAt + 15 <= dialogAt && dialogAt < places[0], true);
   twoFiles.erase(twoFiles.begin() + dialogAt, twoFiles.begin() + dialogAt + 5);

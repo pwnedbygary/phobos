@@ -537,10 +537,12 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 
 //Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a signature,
 //the version of its layout, RAM's size and the program it was made with, all of which must be the machine's; then
-//memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a field means: 31
-//since the kernel keeps sceVaudio's hold on the SRC channel, its buffers' format, effect and level control (part 82; 29
-//and 30 are skipped, other branches' layouts, refused here: a branch with one of them landing after this renumbers its
-//layout past 31 and updates tests/psp/ares/system.cpp's list of refused versions); 28 since each module keeps the
+//memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a field means: 32
+//since an open memory stick file emptied as it was opened keeps the PSP's length of it, its host file keeping the
+//bytes past them until it's closed (part 95); 31 since the kernel keeps sceVaudio's hold on the SRC channel, its
+//buffers' format, effect and level control (part 82; 29 and 30 are skipped, other branches' layouts, refused here: a
+//branch with one of them landing after this renumbers its layout past 32 and updates tests/psp/ares/system.cpp's list
+//of refused versions); 28 since each module keeps the
 //variables it imports, and the address each holds now (part 88); 27 since a font holds the glyph it last read, and a
 //call may be reading one (part 87); 26 since the dialog keeps an aborted message's error and whether a list delete has
 //deleted a save (part 73); 25 since each open file keeps its PGD decryption (the version key it was given, where its
@@ -578,10 +580,11 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //files opened in the order of their numbers, 15 to 23 with the GE having nothing left to draw, 15 to 24 with no file's
 //PGD decryption set up (each read as it is), 15 to 25 with no error for an aborted message and no save deleted from a
 //list, 15 to 26 with no glyph held by a font nor being read into one, 15 to 27 with no module's imported variables
-//known (none linked, as those builds left them), and 15 to 28 with sceVaudio holding nothing; 29 and 30 (other
-//branches' layouts) and older layouts are refused.
+//known (none linked, as those builds left them), 15 to 28 with sceVaudio holding nothing, and 15 to 31 with no file
+//emptied as it was opened keeping its host file's bytes; 29 and 30 (other branches' layouts) and older layouts are
+//refused.
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
-static constexpr u32 StateVersion = 31;
+static constexpr u32 StateVersion = 32;
 
 //The program that started, to tell it from any other: an FNV-1a hash of all its bytes. A state is only loaded into
 //the program it was made with, as another's memory, threads and files mean nothing to it.
@@ -591,13 +594,14 @@ auto System::hash(std::span<const u8> bytes) -> u64 {
   return value;
 }
 
-//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 28 (the
-//dialog's abort counters default to 0, no sceCcc tables, no thread-local storage pools, no stacks lent, sceJpeg not
-//started, no sceHprm callbacks, no ATRAC low-level IDs, the files' count passed over, no read's bytes still to
+//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 28 and 31
+//(the dialog's abort counters default to 0, no sceCcc tables, no thread-local storage pools, no stacks lent, sceJpeg
+//not started, no sceHprm callbacks, no ATRAC low-level IDs, the files' count passed over, no read's bytes still to
 //come, files opened in the order of their numbers, the GE with nothing left to draw, no file's PGD decryption set
 //up, no aborted message's error or list delete's deleted save, no glyph held by a font nor being read into one, no
-//module's imported variables, sceVaudio holding nothing, as each layout lacks them): the owner's accuracy scenes
-//were saved at 15 before part 42. Not 29 and 30, other branches' layouts.
+//module's imported variables, sceVaudio holding nothing, no emptied file keeping its host file's bytes, as each
+//layout lacks them): the owner's accuracy scenes were saved at 15 before part 42. Not 29 and 30, other branches'
+//layouts.
 auto System::header(serializer& s) -> bool {
   u32 signature = StateSignature, version = StateVersion, ramSize = memory.ram.size();
   u64 program = programHash;

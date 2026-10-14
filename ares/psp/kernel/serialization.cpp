@@ -829,7 +829,11 @@ auto Kernel::serialize(serializer& s) -> bool {
   //the order the program opened files (layout 23 on: sceIoGetFdList's), counted from 1, no two alike, and short of
   //2^62 (counting on from it could never run round); a state of an older layout gives its files the order of their
   //numbers. A file keeps its PGD decryption (layout 25 on: none set up in older states), which a folder never has,
-  //its header's descriptor decrypted only once it's set up.
+  //its header's descriptor decrypted only once it's set up; and a host file emptied as it was opened, the PSP's
+  //length of it (layout 32 on: none in older states), which only a host file opened to write has. The files the
+  //kernel had are let go of as they are, nothing on the host changed (System::unserialize() keeps them to put back
+  //if the state is refused): an emptied one keeps its bytes past its length, as a PSP's file is left when the PSP is
+  //switched off before the file is closed.
   auto entry = [&](Disc::Entry& e) { text(e.name); s(e.sector); s(e.size); s(e.folder); s(e.date); };
   u64 longest = asyncDuration(true, 64_MiB);
   map(files, [&](OpenFile& open) {
@@ -855,6 +859,9 @@ auto Kernel::serialize(serializer& s) -> bool {
       s(open.pgd); s(open.pgdVersionKey); s(open.pgdReady); s(open.pgdDataKey);
       s(open.pgdDataSize); s(open.pgdBlockSize); s(open.pgdDataOffset);
     }
+    if(s.reading() && stateLayout < 32) open.truncated = false, open.length = 0;
+    else s(open.truncated), s(open.length);
+    check(!open.truncated || (!open.onDisc && !open.folder && !open.resultOnly && (open.flags & OpenWrite)));
     if(open.asyncData) {
       u64 unit = open.sectors ? Disc::SectorSize : 1;
       check(open.async == OpenFile::Async::Pending && (open.flags & OpenRead));

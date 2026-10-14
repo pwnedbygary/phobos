@@ -185,6 +185,7 @@ auto Kernel::writeStat(u32 address, const std::string& host) -> void {
   bool folder = std::filesystem::is_directory(host, error);
   u64 size = folder ? 0 : std::filesystem::file_size(host, error);
   if(error) size = 0;
+  if(!folder) size = fileLength(host, size);
   memory.fill(address, 0, 64);
   memory.write(4, address + 0, folder ? 0x11ff : 0x21ff);
   memory.write(4, address + 4, folder ? 0x0017 : 0x0027);
@@ -355,6 +356,19 @@ auto Kernel::sceKernelStderr() -> void { result(StandardError); }
 //Opens a file (path, flags): its descriptor, or an error. Flags (PSP_O_*) say whether it's read, written or both;
 //whether it's created if missing, emptied, or only created if it isn't there already; and whether writes go to its
 //end. sceIoOpen, and sceIoOpenAsync (async.cpp).
+//
+//A memory stick file emptied as it's opened to write (PSP_O_TRUNC) holds nothing from then on, but its bytes aren't
+//lost: a write past its end, after a seek, finds them still there between the end and the write, as PPSSPP's notes on
+//the hardware record (its issue 579: on a PSP's stick, a file written "test", then opened to be emptied again, sought
+//to 4 and written "abc", read back "testabc"; opened to be emptied and closed with nothing written, it was empty).
+//LittleBigPlanet installs so: its file library opens GUI.ARC to be emptied for each 1 MiB it writes, seeks to where
+//that MiB goes and writes it, and finds the whole file there when it reads it back (emptied for good, it found its
+//first 4 MiB zero, and called its data corrupt). So the host file keeps its bytes, and the descriptor counts the
+//PSP's length of the file (truncated, length), from 0: what reads, seeks from the end and the file's status see,
+//raised by each write past it, and the host file's length once it's closed (closeFile()). Past the bytes it had,
+//a gap left by a write past the end holds zeros (chosen: a FAT stick's would hold whatever its clusters held).
+//An empty file has nothing to keep, and one emptied while another descriptor still keeps its bytes is cut to that
+//one's length first: one length at a time.
 auto Kernel::openFile(const std::string& path, u32 flags) -> u32 {
   std::string host, normalized;
   if(onDisc(path)) return openOnDisc(path, flags);
@@ -368,9 +382,18 @@ auto Kernel::openFile(const std::string& path, u32 flags) -> u32 {
   if(!exists && !(write && (flags & OpenCreate))) return ErrorFileNotFound;
   auto mode = std::ios::binary | std::ios::in;
   if(write) mode |= std::ios::out;
-  if(write && (!exists || (flags & OpenTruncate))) mode |= std::ios::trunc;  //made, or emptied
+  if(write && !exists) mode |= std::ios::trunc;  //made
   u32 file = newFile();
   if(!file) return ErrorTooManyFiles;  //before the file is made or emptied
+  bool emptied = write && exists && (flags & OpenTruncate);
+  if(emptied) {
+    for(auto& [other, open] : files) {
+      if(!open.truncated || open.host != host) continue;
+      open.stream->flush();
+      std::filesystem::resize_file(host, open.length, error);
+      open.truncated = false;
+    }
+  }
   auto stream = std::make_unique<std::fstream>(host, mode);
   if(!stream->is_open()) return ErrorNoPermission;
   auto& open = files[file];
@@ -379,7 +402,38 @@ auto Kernel::openFile(const std::string& path, u32 flags) -> u32 {
   open.flags = flags;
   open.stream = std::move(stream);
   open.opened = ++filesOpened;
+  open.truncated = emptied && std::filesystem::file_size(host, error) && !error;
+  open.length = 0;
   return file;
+}
+
+//The PSP's length of a host file the host has hostLength bytes of: those, unless a descriptor open on it has emptied
+//it (openFile()), whose length it is then (no more than the host has, if the host file was cut behind its back).
+auto Kernel::fileLength(const std::string& host, u64 hostLength) -> u64 {
+  for(auto& [file, open] : files) {
+    if(open.truncated && open.host == host) return std::min(open.length, hostLength);
+  }
+  return hostLength;
+}
+
+//A write to a host file that ended at end: an emptied file's length (openFile()) grows to it.
+auto Kernel::fileWritten(const std::string& host, u64 end) -> void {
+  for(auto& [file, open] : files) {
+    if(open.truncated && open.host == host) open.length = std::max(open.length, end);
+  }
+}
+
+//A host file closed: its stream flushed and let go of, and if it was emptied as it was opened (openFile()), the host
+//file cut to the PSP's length of it, dropping the bytes it kept past them. As the program closes it (sceIoClose,
+//sceIoCloseAsync), and as the kernel powers on (a program ending or another starting, the machine switched off),
+//which closes every file the program had, as a PSP's kernel does as a program ends. A state loaded over the files
+//lets go of them without closing them (serialization.cpp): loading a state changes nothing on the memory stick.
+auto Kernel::closeFile(OpenFile& open) -> void {
+  open.stream.reset();
+  if(!open.truncated) return;
+  std::error_code error;
+  std::filesystem::resize_file(open.host, open.length, error);
+  open.truncated = false;
 }
 
 //(path, flags, mode): a file's descriptor.
@@ -394,6 +448,7 @@ auto Kernel::sceIoClose() -> void {
   auto found = files.find(arg(0));
   if(found == files.end() || found->second.folder) return result(ErrorBadFile);
   if(asyncBusy(arg(0))) return result(ErrorAsyncBusy);
+  closeFile(found->second);
   files.erase(found);
   result(0);
 }
@@ -503,6 +558,7 @@ auto Kernel::readCount(OpenFile& open, u32 data, u32 size, u64& count) -> u32 {
   open.stream->seekg(0, std::ios::end);
   s64 length = s64(open.stream->tellg());
   open.stream->clear();
+  if(length >= 0) length = s64(fileLength(open.host, u64(length)));
   count = length > s64(open.position) ? std::min<u64>(size, u64(length) - open.position) : 0;
   if(open.pgd && open.pgdReady)
     count = std::min<u64>(count, u64(open.position) < open.pgdDataSize ? u64(open.pgdDataSize) - open.position : 0);
@@ -587,12 +643,17 @@ auto Kernel::writeFile(u32 file, u32 data, u32 size) -> u32 {
   std::vector<char> buffer(size);
   memory.copyOut(buffer.data(), data, size);
   open.stream->clear();
-  if(open.flags & OpenAppend) open.stream->seekp(0, std::ios::end);
-  else open.stream->seekp(std::streamoff(open.position));
+  if(open.flags & OpenAppend) {  //at the PSP's end of the file
+    open.stream->seekp(0, std::ios::end);
+    if(s64 end = s64(open.stream->tellp()); end >= 0) open.stream->seekp(std::streamoff(fileLength(open.host, end)));
+  } else {
+    open.stream->seekp(std::streamoff(open.position));
+  }
   open.stream->write(buffer.data(), size);
   open.stream->flush();
   if(!*open.stream) return ErrorIOError;
   open.position = u64(open.stream->tellp());
+  fileWritten(open.host, open.position);
   return size;
 }
 
@@ -619,7 +680,7 @@ auto Kernel::seek(u32 file, s64 offset, u32 whence, u64& position) -> u32 {
   if(!open.onDisc) {
     open.stream->flush();
     std::error_code error;
-    size = s64(std::filesystem::file_size(open.host, error));
+    size = s64(fileLength(open.host, std::filesystem::file_size(open.host, error)));
   }
   s64 base = whence == 0 ? 0 : whence == 1 ? s64(open.position) : whence == 2 ? size : -1;
   if(base < 0 || base + offset < 0) return ErrorInvalidArgument;
@@ -1138,6 +1199,141 @@ auto Kernel::sceIoDevctl() -> void {
   result(ErrorFunctionNotSupported);
 }
 
+//The file I/O trace (the runner's --trace-io; ioTrace, empty unless a host sets it): each IoFileMgrForUser call a
+//line, the PSP's time in microseconds and the calling thread first, then the call as the program made it and its
+//answer. A descriptor comes with its file's path and the position the call found it at; a read or write with its
+//buffer, its size and a hash of the bytes it moved ("zeros" if they all were); an open with its flags and mode; a seek
+//with its offset and where from. An asynchronous request's line says when it's due, and a line of its own when it's
+//done (traceIoDone()). A call that made its thread wait says so: what it returns comes as the thread wakes.
+auto Kernel::traceIo(const Function& function) -> void {
+  std::string name = function.name;
+  u32 a[6];
+  for(u32 n : range(6)) a[n] = arg(n);
+  Thread* caller = current;
+  u64 issued = cycles;
+  auto hex = [](u64 value) {
+    char text[24];
+    std::snprintf(text, sizeof(text), "0x%llx", (unsigned long long)value);
+    return std::string(text);
+  };
+  auto quoted = [&](u32 address) { return "\"" + memory.readString(address, 1024) + "\""; };
+  auto described = [&](u32 file) {
+    std::string text = "fd " + std::to_string(file);
+    auto found = files.find(file);
+    if(found == files.end()) return text + " (none)";
+    text += " " + found->second.path;
+    if(!found->second.folder && !found->second.resultOnly) text += " @" + hex(found->second.position);
+    return text;
+  };
+  auto bytes = [&](u32 address, u64 size) { return traceBytes(address, size); };
+  auto octal = [](u32 value) {
+    char text[16];
+    std::snprintf(text, sizeof(text), "0%o", value);
+    return std::string(text);
+  };
+  auto flagNames = [](u32 flags) {
+    static const std::pair<u32, const char*> names[] = {{OpenRead, "read"}, {OpenWrite, "write"},
+      {OpenAppend, "append"}, {OpenCreate, "create"}, {OpenTruncate, "truncate"}, {OpenExclusive, "exclusive"}};
+    std::string text;
+    for(auto& [bit, word] : names) if(flags & bit) text += std::string(text.empty() ? " (" : " ") + word;
+    return text.empty() ? text : text + ")";
+  };
+  bool fileFirst = name != "sceIoOpen" && name != "sceIoOpenAsync" && name != "sceIoRemove" && name != "sceIoMkdir"
+                && name != "sceIoRmdir" && name != "sceIoRename" && name != "sceIoChdir" && name != "sceIoAssign"
+                && name != "sceIoGetstat" && name != "sceIoDopen" && name != "sceIoDevctl" && name != "sceIoGetFdList"
+                && !(name == "sceIoChangeAsyncPriority" && a[0] == 0xffff'ffff);
+  std::string call = fileFirst ? described(a[0]) : std::string{};
+  bool read = name == "sceIoRead" || name == "sceIoReadAsync";
+  bool write = name == "sceIoWrite" || name == "sceIoWriteAsync";
+  if(name == "sceIoOpen" || name == "sceIoOpenAsync") {
+    call = quoted(a[0]) + " flags " + hex(a[1]) + flagNames(a[1]) + " mode " + octal(a[2]);
+  } else if(read || write) {
+    call += std::string(read ? " into " : " from ") + hex(a[1]) + " size " + hex(a[2]);
+    if(write) call += bytes(a[1], a[2]);
+  } else if(name == "sceIoLseek" || name == "sceIoLseekAsync") {
+    call += " offset " + std::to_string(s64(u64(a[3]) << 32 | a[2])) + " whence " + std::to_string(a[4]);
+  } else if(name == "sceIoLseek32" || name == "sceIoLseek32Async") {
+    call += " offset " + std::to_string(s32(a[1])) + " whence " + std::to_string(a[2]);
+  } else if(name == "sceIoRename") {
+    call = quoted(a[0]) + " to " + quoted(a[1]);
+  } else if(name == "sceIoAssign") {
+    call = quoted(a[0]) + " to " + quoted(a[1]) + " " + quoted(a[2]);
+  } else if(name == "sceIoMkdir") {
+    call = quoted(a[0]) + " mode " + octal(a[1]);
+  } else if(!fileFirst && name != "sceIoDevctl" && name != "sceIoGetFdList" && name != "sceIoChangeAsyncPriority") {
+    call = quoted(a[0]);  //remove, rmdir, chdir, getstat, dopen
+  } else if(name == "sceIoIoctl" || name == "sceIoIoctlAsync" || name == "sceIoDevctl") {
+    if(name == "sceIoDevctl") call = quoted(a[0]);
+    call += " command " + hex(a[1]) + " in " + hex(a[2]) + " (" + std::to_string(a[3]) + ") out " + hex(a[4]) + " ("
+          + std::to_string(a[5]) + ")";
+  } else if(name == "sceIoChangeAsyncPriority") {
+    call = (a[0] == 0xffff'ffff ? std::string("fd -1") : call) + " priority " + hex(a[1]);
+  } else if(name == "sceIoSetAsyncCallback") {
+    call += " callback " + hex(a[1]) + " argument " + hex(a[2]);
+  } else if(name == "sceIoGetAsyncStat") {
+    call += a[1] ? " poll" : " wait";
+  } else if(name == "sceIoGetFdList") {
+    call = "into " + hex(a[0]) + " room " + std::to_string(a[1]);
+  }
+
+  (this->*function.handler)();
+
+  u32 v0 = caller && caller != current ? caller->context.gpr[2] : cpu.ipu.r[2];
+  u32 v1 = caller && caller != current ? caller->context.gpr[3] : cpu.ipu.r[3];
+  bool waits = caller && caller->status == Status::Waiting;
+  std::string answer = s32(v0) < 0 ? hex(v0) : std::to_string(v0);
+  if(name == "sceIoLseek" && s32(v0) >= 0) answer = std::to_string(u64(v1) << 32 | v0);
+  if(name == "sceIoRead" && s32(v0) > 0) answer += bytes(a[1], v0);
+  if(name == "sceIoGetstat" && !v0) answer += " (size " + std::to_string(u64(memory.read(4, a[1] + 12)) << 32
+                                                 | memory.read(4, a[1] + 8)) + ")";
+  if(name == "sceIoDread" && v0 == 1) answer += " (" + memory.readString(a[1] + 88, 256) + ")";
+  u32 pointer = name == "sceIoGetAsyncStat" ? a[2] : a[1];
+  bool taken = name == "sceIoPollAsync" || name == "sceIoWaitAsync" || name == "sceIoWaitAsyncCB"
+            || name == "sceIoGetAsyncStat";
+  if(taken && !v0 && !waits && pointer && memory.reaches(pointer, 8)) {
+    answer += " (result " + hex(u64(memory.read(4, pointer + 4)) << 32 | memory.read(4, pointer)) + ")";
+  }
+  u32 file = name == "sceIoOpenAsync" ? v0 : a[0];
+  if(auto found = files.find(file); name.find("Async") != std::string::npos && !taken && s32(v0) >= 0
+  && found != files.end() && found->second.async == OpenFile::Async::Pending && found->second.asyncDoneAt >= issued) {
+    answer += " (due in " + std::to_string((found->second.asyncDoneAt - issued) / (CPUFrequency / 1'000'000))
+            + " us, result " + hex(found->second.asyncResult) + ")";
+  }
+  if(waits) answer += " (waits)";
+  char head[64];
+  std::snprintf(head, sizeof(head), "%llu us %s: ", (unsigned long long)(issued / (CPUFrequency / 1'000'000)),
+                caller ? caller->name.c_str() : "-");
+  ioTrace(head + name + " " + call + " -> " + answer);
+}
+
+//The trace's line for an asynchronous request done (asyncDone()): the file, its position now, the result, and for a
+//read the hash of the bytes that landed.
+auto Kernel::traceIoDone(u32 file, u32 data, u64 bytes) -> void {
+  auto& open = files[file];
+  char text[96];
+  std::snprintf(text, sizeof(text), "%llu us: done fd %u ", (unsigned long long)(cycles / (CPUFrequency / 1'000'000)),
+                file);
+  std::string line = text + open.path;
+  std::snprintf(text, sizeof(text), " @0x%llx -> 0x%llx", (unsigned long long)open.position,
+                (unsigned long long)open.asyncResult);
+  ioTrace(line + text + (data ? traceBytes(data, bytes) : std::string{}));
+}
+
+//The trace's word on the bytes a read or write moved: " zeros" if they all were, else " hash" and their FNV-1a hash
+//(nothing for none, or bytes not in the program's memory).
+auto Kernel::traceBytes(u32 address, u64 size) -> std::string {
+  if(!size || size > 0x7fff'ffff || !memory.reaches(address, u32(size))) return {};
+  std::vector<u8> data(size);
+  memory.copyOut(data.data(), address, u32(size));
+  u32 hash = 0x811c'9dc5;
+  bool zeros = true;
+  for(u8 byte : data) hash = (hash ^ byte) * 0x0100'0193, zeros = zeros && !byte;
+  if(zeros) return " zeros";
+  char text[24];
+  std::snprintf(text, sizeof(text), " hash %08x", hash);
+  return text;
+}
+
 //scePspNpDrm_user, the DRM of games sold as downloads: a game gives its licensee key (16 bytes) before it opens its
 //own protected files (EDATA, ".PSPEDAT" with a PGD inside, as the PSP Developer Wiki describes them), which the PSP
 //then decrypts as they're read. There is no DRM here: a key is taken and forgotten, and a game's files are read as
@@ -1200,6 +1396,7 @@ auto Kernel::sceNpDrmEdataGetDataSize() -> void {
     std::error_code error;
     size = std::filesystem::file_size(open.host, error);
     if(error) size = 0;
+    size = fileLength(open.host, size);
   }
   result(u32(std::min<u64>(size, 0x7fff'ffff)));
 }

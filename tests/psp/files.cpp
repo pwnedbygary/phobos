@@ -804,9 +804,161 @@ static auto fileList() -> void {
   CHECK(listed(n, 16) == std::vector<u32>({0, 1, 2, 4, 5, 3, 6, 7}), true);
 }
 
+//A memory stick file emptied as it's opened to write (PSP_O_TRUNC) holds nothing, but keeps its bytes for a write
+//past its end, as PPSSPP's notes on the hardware record (its issue 579, on a PSP's stick): written "test", then
+//opened to be emptied again (here with LittleBigPlanet's 0x02000000 too), sought to 4 and written "abc", it reads back
+//"testabc"; opened to be emptied and closed with nothing written, it's empty. Meanwhile it holds nothing for its
+//status, reads, seeks from its end and writes to its end, its bytes coming back only into a gap a write leaves, and
+//only as far as they went (zeros past them); written short of its old length, it ends there. Emptied again while
+//another descriptor keeps its bytes, it's cut to that one's length first. A state keeps an emptied file's length; one
+//loaded over the kernel lets go of it as it is, nothing on the stick changed; the kernel powering on closes it.
+static auto fileTruncation() -> void {
+  HostFolder stick;
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  auto mounted = [&](KernelMachine& on) { on.kernel.mount("ms0", stick.path.string()); };
+  KernelMachine m;
+  mounted(m);
+  auto open = [&](KernelMachine& on, u32 flags) {
+    return on.call("sceIoOpen", {on.string("ms0:/SAVE/DATA.BIN"), flags, 0777});
+  };
+  auto write = [&](KernelMachine& on, u32 file, const std::string& text) {
+    on.system.memory.copyIn(Buffer, text.data(), text.size());
+    return on.call("sceIoWrite", {file, Buffer, u32(text.size())});
+  };
+  auto size = [&] {  //its status's
+    if(m.call("sceIoGetstat", {m.string("ms0:/SAVE/DATA.BIN"), Buffer + 0x100}) != 0) return ~0u;
+    return m.system.memory.read(4, Buffer + 0x108);
+  };
+  u32 file = open(m, 0x0602);  //write, create, truncate
+  CHECK(m.call("sceIoLseek32", {file, 0, 0}), 0);
+  CHECK(write(m, file, "test"), 4);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == "test", true);
+  file = open(m, 0x0200'0602);
+  CHECK(m.call("sceIoLseek32", {file, 4, 0}), 4);
+  CHECK(write(m, file, "abc"), 3);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == "testabc", true);
+  file = open(m, 0x0602);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN").empty(), true);
+
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  file = open(m, 0x0603);  //read and write, create, truncate
+  CHECK(size(), 0);
+  CHECK(m.call("sceIoLseek32", {file, 0, 2}), 0);  //from its end
+  CHECK(m.call("sceIoRead", {file, Buffer, 16}), 0);
+  CHECK(m.call("sceIoLseek32", {file, 3, 0}), 3);
+  CHECK(m.call("sceIoRead", {file, Buffer, 16}), 0);  //sought into what it keeps: nothing yet
+  CHECK(write(m, file, "ab"), 2);  //0 to 2 back
+  CHECK(size(), 5);
+  CHECK(m.call("sceIoLseek32", {file, 0, 0}), 0);
+  CHECK(m.call("sceIoRead", {file, Buffer, 16}), 5);
+  CHECK(readBack(m, 5) == "012ab", true);
+  CHECK(m.call("sceIoLseek32", {file, 0, 2}), 5);
+  CHECK(m.call("sceIoLseek32", {file, 12, 0}), 12);  //past its old length: 5 to 9 back, zeros after them
+  CHECK(write(m, file, "Z"), 1);
+  CHECK(size(), 13);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == std::string("012ab56789\0\0Z", 13), true);
+
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  file = open(m, 0x0602);
+  CHECK(write(m, file, "xy"), 2);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == "xy", true);  //written short: it ends there
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  file = open(m, 0x0702);  //write, append, create, truncate
+  CHECK(write(m, file, "ab"), 2);  //at its end, 0
+  CHECK(write(m, file, "cd"), 2);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == "abcd", true);
+
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  u32 first = open(m, 0x0602);
+  CHECK(write(m, first, "ab"), 2);
+  CHECK(stick.get("SAVE/DATA.BIN") == "ab23456789", true);  //its bytes kept on the host until it's closed
+  u32 second = open(m, 0x0602);
+  CHECK(stick.get("SAVE/DATA.BIN") == "ab", true);  //the first's length first
+  CHECK(m.call("sceIoLseek32", {second, 4, 0}), 4);
+  CHECK(write(m, second, "cd"), 2);
+  CHECK(m.call("sceIoClose", {second}), 0);
+  CHECK(m.call("sceIoClose", {first}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == std::string("ab\0\0cd", 6), true);
+  CHECK(m.notes.size(), 0);
+
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  KernelMachine n;
+  mounted(n);
+  auto before = saveState(n);
+  file = open(n, 0x0602);
+  CHECK(write(n, file, "ab"), 2);
+  CHECK(n.kernel.files[file].truncated && n.kernel.files[file].length == 2, true);
+  auto during = saveState(n);
+  CHECK(roundTrip(n, mounted), true);
+  KernelMachine o;
+  mounted(o);
+  CHECK(loadState(o, during), true);
+  CHECK(o.kernel.files.count(file) && o.kernel.files[file].truncated && o.kernel.files[file].length == 2, true);
+  CHECK(o.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == "ab", true);
+  stick.put("SAVE/DATA.BIN", "ab23456789");
+  CHECK(loadState(n, before), true);  //n's file let go of as it was: nothing on the stick changes
+  CHECK(stick.get("SAVE/DATA.BIN") == "ab23456789", true);
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  file = open(n, 0x0602);
+  CHECK(write(n, file, "ab"), 2);
+  n.kernel.power();
+  CHECK(stick.get("SAVE/DATA.BIN") == "ab", true);
+}
+
+//The file I/O trace (Kernel::ioTrace, the runner's --trace-io): a line for each IoFileMgrForUser call, led by the
+//PSP's time and the thread (none here: called directly), with a descriptor's path and position, a read's or write's
+//buffer, size and the hash of its bytes, an open's flags and mode, and the answer; an asynchronous request's due time
+//and result, and a line as it's done. The calls answer as they do untraced, and nothing is traced without a hook.
+static auto fileTrace() -> void {
+  HostFolder stick;
+  stick.put("A.BIN", std::string(4, '\0'));
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  std::vector<std::string> lines;
+  m.kernel.ioTrace = [&](const std::string& line) { lines.push_back(line); };
+  u32 file = m.call("sceIoOpen", {m.string("ms0:/A.BIN"), 0x0603, 0644});
+  CHECK(file, 3);
+  m.system.memory.copyIn(Buffer, "abcd", 4);
+  CHECK(m.call("sceIoWrite", {file, Buffer, 4}), 4);
+  CHECK(m.call("sceIoLseek32", {file, 0, 0}), 0);
+  m.system.memory.fill(Buffer, 0, 8);
+  CHECK(m.call("sceIoReadAsync", {file, Buffer, 8}), 0);
+  m.kernel.cycles = m.kernel.files[file].asyncDoneAt;
+  m.kernel.events();
+  CHECK(m.call("sceIoPollAsync", {file, Buffer + 16}), 0);
+  CHECK(m.call("sceIoGetstat", {m.string("ms0:/A.BIN"), Buffer + 32}), 0);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(lines.size(), 8);
+  if(lines.size() != 8) return;
+  auto has = [&](u32 n, const std::string& text) { return lines[n].find(text) != std::string::npos; };
+  CHECK(has(0, " -: sceIoOpen \"ms0:/A.BIN\" flags 0x603 (read write create truncate) mode 0644 -> 3"), true);
+  CHECK(has(1, ": sceIoWrite fd 3 ms0:/A.BIN @0x0 from 0x8930000 size 0x4 hash ") && has(1, " -> 4"), true);
+  CHECK(has(2, ": sceIoLseek32 fd 3 ms0:/A.BIN @0x4 offset 0 whence 0 -> 0"), true);
+  CHECK(has(3, ": sceIoReadAsync fd 3 ms0:/A.BIN @0x0 into 0x8930000 size 0x8 -> 0 (due in 101 us, result 0x4)"),
+        true);
+  CHECK(has(4, ": done fd 3 ms0:/A.BIN @0x4 -> 0x4 hash ") && !has(4, "zeros"), true);
+  CHECK(has(5, ": sceIoPollAsync fd 3 ms0:/A.BIN @0x4 -> 0 (result 0x4)"), true);
+  CHECK(has(6, ": sceIoGetstat \"ms0:/A.BIN\" -> 0 (size 4)"), true);
+  CHECK(has(7, ": sceIoClose fd 3 ms0:/A.BIN @0x4 -> 0"), true);
+  CHECK(lines[0].rfind("0 us -: ", 0) == 0 && lines[4].rfind("101 us: done", 0) == 0, true);
+  m.kernel.ioTrace = {};
+  CHECK(m.call("sceIoOpen", {m.string("ms0:/A.BIN"), 0x0001, 0}), 3);
+  CHECK(lines.size(), 8);
+  CHECK(stick.get("A.BIN") == "abcd", true);
+}
+
 auto fileTests() -> Tests {
   return {
     {"files basics", fileBasics}, {"files folders", fileFolders},
+    {"files emptied as they're opened keep their bytes for a write past the end", fileTruncation},
+    {"files traced", fileTrace},
     {"files dates in local time, none after the clock or before 1980; the system's time zone", fileDates},
     {"files containment", fileContainment},
     {"files rename", fileRename}, {"files numbered lowest free first", fileNumbers},
