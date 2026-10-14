@@ -180,8 +180,8 @@ You can contact the author at:
 
 Apache License 2.0
 
-Used by Vulkan-Headers and the Android and Kotlin libraries listed near the
-end of this file.
+Used by Vulkan-Headers, font-rs and the Android and Kotlin libraries listed
+near the end of this file.
 
                                  Apache License
                            Version 2.0, January 2004
@@ -2723,6 +2723,22 @@ https://github.com/KhronosGroup/Vulkan-Headers
 Copyright 2015-2026 The Khronos Group Inc.
 SPDX-License-Identifier: Apache-2.0 OR MIT, used here under the Apache
 License 2.0, whose text appears above.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+font-rs (android/app/src/main/java/com/phobos/emulator/ui/theme/Lettering.kt, a modified translation)
+https://github.com/google/font-rs
+
+Copyright 2015, 2018 Google Inc. All rights reserved.
+Licensed under the Apache License 2.0, whose text appears above.
+
+The Manga ink backdrops' lettering rasterizer (Raster in Lettering.kt) is a
+modified Kotlin translation of draw_line in font-rs's src/raster.rs and
+accumulate in its src/accumulate.rs: a row's running sum starts afresh at each
+row, edges are clamped to the raster, and the sum's rounding residue is taken
+as no ink. Its curve flattening uses the same kind of estimate as draw_quad's
+(the number of segments growing with the square root of a curve's deviation),
+with a tighter tolerance and at most 64 segments.
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
