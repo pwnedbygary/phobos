@@ -12740,6 +12740,290 @@ widths; Twisted Metal's fast mode; what still reads memory's depth).
 Scratch: `~/phobos-work/scratch/vk-models` (`patches/dbg-patch.py` and `dbg2-patch.py`, the PRIM log and the changes'
 switches; `kit/`, the hash and picture runs; `png/`, the sheets; `tests1.sh`, `suites.sh`).
 
+## Part 91: polling loops — the polled calls in fewer steps, and a loop that comes back as it was skipped to the go's end, each skip proved by a turn run on a CPU of its own
+
+On branch `cursor/psp-polling-2b67`, begun on `cursor/psp-cpu-round2-2b67` (#237, on #229), with master merged in once
+both had merged (`3228b825d`, the same tree). The task: both Need for Speeds and several intro movies (Twisted Metal's
+logo, both Armored Cores', Disaster Report 3's) call system functions 130,000 to 530,000 times a frame while they poll,
+Most Wanted's polled kernel 72% of the emulation thread (parts 79 and 86); on the RP6 the Need for Speeds run at 41-42
+frames a second where PPSSPP holds 60. Find what the loops call and what each call changes; cut the cost of each call;
+then, where it can be proved exact, skip ahead to the next thing due, every register, byte, cycle count and later
+result as running the loop would give. Clean room: PPSSPP not read at all, JPCSP not read. Save states are unchanged
+(layout 31): nothing new is kept.
+
+### How it was measured
+
+The headless runner built as Android builds it (O3, thin LTO), patched in scratch for the emulation thread's CPU time
+and retired host instructions (as parts 79 and 86), from the scenes' states (`~/phobos-work/scratch/cpu-speed2/scenes`).
+New here, a syscall trace (`trace-patch.py`, scratch): each call's function, arguments, result, return address and
+cycles since the last, whether it was quiet or calm, and all of RAM at the trace's end, whose loops were then read
+with Homebrew's llvm-objdump (MIPS32, little-endian). Profiles with xctrace and macOS's `sample`. The Mac was shared
+with other agents throughout (load averages 10 to 200), so the host instructions a frame carry the comparisons.
+
+### What the loops call
+
+| Scene | Calls a frame | The loop | A turn |
+| --- | --- | --- | --- |
+| Need for Speed Most Wanted, race and profile; Underground Rivals, title | 526,000; 502,000 | `while(*count < target) yield(0)`, the yield asking the thread's ID, its status (into its stack frame) and rotating its line at the priority the status gave: its own, alone in it | 29 instructions |
+| Twisted Metal, logo movie | 370,000 | the movie ring's free packets (550), then a semaphore signalled, refused (at its most) | 30 |
+| Disaster Report 3, intro movie | 222,000 | the vertical blank count, the ring's free packets (none) | 20 |
+| Armored Core Formula Front and Silent Line, intro movies | 133,000; 90,000 | the ring's free packets twice, the refused signal | 85; 89 |
+
+The ID, the ring's count, the blank count and the refused signal change nothing but v0. The status writes its 104
+bytes into the frame, all the same each turn but the thread's run time (8 bytes, microseconds), which the loop never
+reads (it reads the priority). The rotation changes the ready order's count and the thread's place in its line
+(`readySequence`, `readySince`, both in states), and nothing else: the thread is alone at its priority. Every call is
+quiet or calm (parts 74 and 79): none cuts the CPU's go short, so each loop runs, a turn always the same length, till
+the go ends at the next thing due (a vertical blank, a thread's delay, the sound), where a handler or another thread
+moves what it polls on.
+
+### Where the time went (master, Most Wanted's race, the software renderer)
+
+| Part of the emulation thread | Share |
+| --- | --- |
+| System calls (the loop's three functions and the dispatch) | 66% |
+| — sceKernelReferThreadStatus | 28% (its copy into memory 12%: `copyIn()` through a std::function a piece, `changed()`) |
+| — sceKernelRotateThreadReadyQueue | 13% (the scheduler's look through every thread in the map) |
+| — dispatch, `startCall()`, `geInterrupt()`, the hooks' calls | about 15% |
+| Compiled code (the loop's 11 blocks a turn) | 22% |
+| The GE | 8% |
+
+A system call costs the PSP's clock one cycle (part 79), so the idle loop turns 175,000 times a frame.
+
+### What was done
+
+1. **Main RAM without a call** (`memory.hpp`: `read()`, `write()`, `pointer()`, `reaches()` inline for main RAM, the
+   rest through memory.cpp's `...Elsewhere()` as before; `pieces()` a template, not a std::function). Every HLE
+   function's and every slow-path access's bytes are in main RAM nearly always. Exact: the same bytes, `changed()` after
+   each store as before, unmapped() hearing of a word past RAM's end as before (a test of RAM's last bytes).
+2. **Polled calls dispatched in fewer steps** (`kernel.cpp`'s `dispatchImport()`): imports looked for first (the
+   kernel's own codes after); the FINISH after a call looked for only with one due (`geInterrupt()` returns at once
+   otherwise), and a call into the program only with one waiting or a blank pending (likewise `startCall()`);
+   `instructionsBefore()` inline; the movie library's "LIBMPEG" mark compared in place (`mpegMarked()`) rather than read
+   into a string, the ring's count asking it at every call (a test: an eighth byte that isn't the NUL, the library in
+   VRAM's third copy).
+3. **Spins skipped** (`spins.cpp`). After a quiet or calm call, the kernel notes where it was made (the syscall's
+   address and where the program goes on: the anchor) and when; once the same anchor has come round four times in a row
+   the same number of cycles apart, it tries to prove the next turn changes nothing a later turn sees, and if it can,
+   skips whole turns to just before the go's end:
+   - **The proof**: one turn run on a CPU of its own (`SpinShadow`, an Allegrex whose loads and stores are its own),
+     through the interpreter, from the real registers, till it comes back to the anchor. Its loads reach main RAM alone
+     (anything else ends the proof), and see its own stores; its stores are kept aside, only to pages where a store does
+     no more than store (no compiled code there, none the GE watches: `spinStorable()`). Its system calls are worked out
+     by the kernel without being made (`Function::spin`), each as the function itself does it in that case, sharing its
+     code (`threadInfo()`, `signalRefused()`, `ringAvailable()` with a view of memory): the ID; the status (its run
+     time the bytes the time decides); the caller's own line rotated with no other thread ready at its priority or
+     above (the ready order's count one on); a signal refused; the ring's count, its reads through the turn's view; the
+     blank count. Any other function, or another case of these, ends the proof. The turn must come back with every
+     register as it was (the integer unit's with pc and pd, the FPU's, the VFPU's with its prefixes and random state,
+     coprocessor 0's, the interrupt flag), every byte it stored what memory holds already but those the time decides,
+     and none of those read in the turn, nor written another way.
+   - **Why that's every turn**: the CPU is deterministic, and the next turn starts from the same registers and the same
+     memory but bytes it never reads; each function it calls answers the same (they read nothing the turns change, the
+     ready order's count aside, which none reads), so it does what this one did, at its own time, and so on for every
+     turn. Nothing else can come in meanwhile: only a system function cuts the go short, and these don't; no call into
+     the program is waiting or running, no blank's handlers pending (else no skip), and a list's FINISH due within the
+     turns skipped is refused too (a call would take it). Only a go of the CPU's is skipped in (`Kernel::going`): its
+     limit and count are what the skip works from.
+   - **Where the go ends**: at the first block end where the run's count reaches its limit (part 79). A turn's blocks
+     end at the same counts whether or not the turns before it ran, so skipping turns whose blocks all end before the
+     limit leaves where the go ends as it was. It skips all but the last two whole turns that fit (the margin), so the
+     last ones always run.
+   - **The skip**: the turns' cycles to the clock and the run's count (`cycles`, `counted`, `instructionsRun`); the
+     ready order's count by the turns' rotations, the caller's place after the last; and the last turn's bytes the time
+     decides written as its calls would have written them: the proof records which bytes each call wrote so (whose
+     status, where, which of its bytes), and the skip fills exactly those from `threadInfo()` at that call's time in the
+     last turn. A proof that fails waits twice as long (and four turns more) before the next try, up to 4,096 turns.
+   Nothing of it is kept in a state: after a state loads, the spin is found again and skipped the same way, or not found
+   and run to the same end.
+
+Not done: a loop whose answers move on with the clock (polling `sceKernelGetSystemTimeLow` till a time, as some games
+spin) can't be skipped this way: each turn's answer differs, and the loop ends at a time no event marks. Those still
+take the cheaper calls of 1 and 2.
+
+### Numbers
+
+The Mac, master (`3228b825d`, whose tree is the branch's base) against the branch's first code (`5e3e11b09`), with the
+per-call commits alone (`c1944b73d`) between, the bench runners from the scenes' states, medians of three rounds taking
+turns, in Vulkan fast (MoltenVK, 1x) and the software renderer (4 drawing threads). "Fps it allows" is 1000 over the
+emulation thread's ms. The review's fixes change no work but the last turn's rewrite at a skip: `8799a3daa` against
+`5e3e11b09`, two more rounds on the seven polling scenes in Vulkan fast, the same host instructions a frame, every one.
+The Mac's load average was 10 to 200 through these rounds (other agents, and Cursor itself), so the host instructions a
+frame carry the comparison, the times beside them.
+
+Vulkan fast:
+
+| Scene | Emulation thread ms a frame: master -> branch (fps it allows) | M host instructions a frame: master -> per-call -> branch | rounds |
+| --- | --- | --- | --- |
+| NFS Most Wanted, race | 17.4 -> 3.2 (57 -> 310), -81% | 289.3 -> 236.5 (-18%) -> 38.0 (-87%) | 3/3/3 |
+| NFS Most Wanted, profile | 20.1 -> 2.8 (50 -> 361), -86% | 301.1 -> 242.7 (-19%) -> 18.6 (-94%) | 3/3/3 |
+| NFS Underground Rivals, title | 18.0 -> 1.3 (56 -> 797), -93% | 275.8 -> 220.0 (-20%) -> 8.9 (-97%) | 3/3/3 |
+| Twisted Metal, logo movie | 14.6 -> 0.7 (68 -> 1435), -95% | 286.0 -> 146.7 (-49%) -> 9.8 (-97%) | 3/3/3 |
+| Disaster Report 3, intro movie | 8.1 -> 0.8 (124 -> 1311), -91% | 148.5 -> 68.1 (-54%) -> 10.0 (-93%) | 3/3/3 |
+| Armored Core Formula Front, intro movie | 12.3 -> 1.7 (81 -> 594), -86% | 147.7 -> 80.0 (-46%) -> 12.7 (-91%) | 3/3/3 |
+| Armored Core Silent Line, intro movie | 11.1 -> 2.6 (90 -> 381), -76% | 140.1 -> 79.3 (-43%) -> 18.0 (-87%) | 3/3/3 |
+| Super Monkey Ball Adventures, story | 44.0 -> 42.7 (23 -> 23), -3% | 527.3 -> 492.0 (-7%) -> 491.0 (-7%) | 3/3/3 |
+| Colin McRae 2005 | 15.1 -> 14.3 (66 -> 70), -5% | 127.6 -> 126.5 (-1%) -> 126.3 (-1%) | 3/3/3 |
+| Disaster Report 3, playing | 5.4 -> 5.5 (184 -> 181), +1% | 41.3 -> 40.1 (-3%) -> 40.1 (-3%) | 3/3/3 |
+| Twisted Metal, playing | 5.5 -> 5.3 (182 -> 190), -4% | 39.4 -> 38.1 (-3%) -> 38.1 (-3%) | 3/3/3 |
+
+The software renderer:
+
+| Scene | Emulation thread ms a frame: master -> branch (fps it allows) | M host instructions a frame: master -> per-call -> branch | rounds |
+| --- | --- | --- | --- |
+| NFS Most Wanted, race | 19.7 -> 4.7 (51 -> 211), -76% | 298.3 -> 245.3 (-18%) -> 47.8 (-84%) | 3/3/3 |
+| NFS Most Wanted, profile | 19.1 -> 2.5 (52 -> 401), -87% | 304.1 -> 245.3 (-19%) -> 27.2 (-91%) | 3/3/3 |
+| NFS Underground Rivals, title | 18.7 -> 3.2 (54 -> 314), -83% | 278.9 -> 222.6 (-20%) -> 29.8 (-89%) | 3/3/3 |
+| Twisted Metal, logo movie | 17.5 -> 0.8 (57 -> 1255), -95% | 286.2 -> 146.7 (-49%) -> 9.8 (-97%) | 3/3/3 |
+| Disaster Report 3, intro movie | 9.4 -> 1.0 (107 -> 1040), -90% | 148.1 -> 67.7 (-54%) -> 10.1 (-93%) | 3/3/3 |
+| Armored Core Formula Front, intro movie | 9.1 -> 1.4 (109 -> 707), -85% | 148.1 -> 80.9 (-45%) -> 13.8 (-91%) | 3/3/3 |
+| Armored Core Silent Line, intro movie | 8.7 -> 1.6 (114 -> 611), -81% | 140.7 -> 80.0 (-43%) -> 18.9 (-87%) | 3/3/3 |
+| Super Monkey Ball Adventures, story | 54.9 -> 51.3 (18 -> 19), -7% | 583.1 -> 549.8 (-6%) -> 548.2 (-6%) | 3/3/3 |
+| Colin McRae 2005 | 17.7 -> 16.6 (57 -> 60), -6% | 194.5 -> 190.7 (-2%) -> 190.7 (-2%) | 3/3/3 |
+| Disaster Report 3, playing | 4.9 -> 5.0 (203 -> 202), +0% | 49.6 -> 47.3 (-5%) -> 48.2 (-3%) | 3/3/3 |
+| Twisted Metal, playing | 3.7 -> 3.5 (272 -> 284), -4% | 41.9 -> 40.2 (-4%) -> 40.2 (-4%) | 3/3/3 |
+
+The Need for Speeds' emulation thread takes 81 to 93% less time in Vulkan fast (17 to 20 ms a frame down to 1.3 to 3.2),
+87 to 97% fewer host instructions; the intro movies' 76 to 95% less (91 to 97% fewer instructions). The per-call commits
+alone take 18 to 20% of the instructions from the Need for Speeds and 43 to 54% from the movies (whose ring count read
+the library's mark into a string at every call); the skip takes most of the rest. What's left in the Need for Speeds is
+their own code and the GE's work (the race's display lists), and in the movies their decoding. The scenes that don't
+poll take 1 to 7% fewer instructions (main RAM without a call: the GE reads vertices through memory's read()), their
+times within the rounds' spread. In the software renderer the emulation thread also draws the bands it takes while it
+waits (part 74), so a little more is left there (Underground Rivals' title 30 M against Vulkan's 9).
+
+### Accuracy
+
+Every change leaves what a game sees as it was.
+- The 21 scenes' hashes (part 79's), master against the branch: in the software renderer, 100 frames with every
+  frame's picture and all of VRAM hashed, drawing settled, then RAM and the machine's whole serialized state; in Vulkan
+  fast and Vulkan accurate, 200 frames, then RAM and the machine's state (VRAM, read back from the GPU, among it):
+  identical, every one, in all three, for the first code (`5e3e11b09`), after the review's fix (`8799a3daa`) and for
+  the last commit (`3b2e44167`).
+- tests/psp's new groups (spins.cpp), each program on both engines with the skip on and off, an eighth of a frame at a
+  time, the machine's whole state compared after each: "spins skipped as run" (the idle loop as the Need for Speeds have
+  it, a ticker thread moving the count it waits for, and with the ticker at the caller's own priority, ready as a go
+  begins; the status set to 88 bytes before each call, a sentinel under its last word; the movie wait, a feeder thread
+  filling the ring, through the ring's library too, through a library naming no ring, and with interrupts held off,
+  ending at the blank: all skipped, thousands of turns, every state the same), "spins refused" (a count stored each
+  turn, a register counting, an FPU register adding up, the run time read, the clock polled, a semaphore that counts,
+  another priority's line rotated, and a store into the loop's own page, which with the recompiler drops its code: none
+  skipped, the same states; the interpreter, which compiles nothing, skips the last), "a spin skipped directly" (the
+  anchor's syscall made in a go of its own, 500 turns skipped, against the same turns run: the same state at once, its
+  clock, the ready order's count, the caller's place and the run time the last turn wrote, also with that run time on a
+  microsecond's last cycle and on its first (a rewrite a cycle late or early writes another microsecond); room for one
+  turn and the margin, one; for the margin alone, none; none outside a go; none with a thread of the caller's priority
+  ready, which its rotation then hands the CPU; the pages a turn may store to). tests/psp/memory.cpp: copies, fills and
+  copies out up to RAM's last byte and none across it.
+- The library check (all 266 games, the software renderer, 3600 frames from boot, PNGs at 60, 300, 1200 and 3600, Start
+  at 120 and Cross at 1800) flagged Platypus: its pictures other than master's from frame 90, the MumboJumbo logo's
+  loading bar a step ahead there and behind at 320 and 480, the same in two runs of each runner. The emulation isn't
+  other: from boot with the check's presses, every frame's picture and all of VRAM hashed with drawing settled, then RAM
+  and the machine's state, come out as master's through all 3600 frames, with the skip on or off and with the per-call
+  commits alone; and so is the state at 3600 without settling, the same RAM and machine state in all six runs (three
+  each). The runner's PNG is the last picture the screen's own thread had presented when the frame's run ended, which on
+  a busy host is a frame or more older than its name (the newer runner's report gives each capture's arrival: master's
+  PNG named 220 arrived in frame 215); the branch's frames cost the host less (Platypus 325 frames a second against
+  283), so other captures come out stale: master's at 90 shows an earlier frame's bar (42 columns, where a fresh capture
+  from either runner shows 49), the branch's at 320 and 480 (145 and 223 against 151 and 239). Two runs of master's
+  newer runner differ from each other at 10 of its 360 PNGs, as master's and the branch's do. The check's 30 other
+  flagged games, from boot the same way, every frame hashed: the same, every frame of every one. Its own classification
+  of the 11 still differing after its rerun, with two more runs of the branch's runner against master's two: 9 noise
+  (master differing from itself there) and two whose captures came out other in both of the branch's runs (Resistance's
+  PNG at 60, Platypus's at 3600), stale captures again: every frame of both is master's.
+- Broken versions of spins.cpp (`mutate.py`, scratch, each built against the spin groups: the last commit's for the
+  rewrite's and the new address rule's, `8799a3daa`'s for the rest): 29, of which 21 are caught. Among them: no proof
+  at all, the first code's rewrite (eight bytes whatever the size), a rewrite a cycle late or early, the margin at 0,
+  the stores, registers or FPU registers not compared, a rotation of another line taken for the caller's own, an
+  address with nothing behind it ending the proof again, a skip outside a go. The 8 that pass change nothing a game
+  can see: two guards that can't be reached (a list's FINISH within the turns skipped, where the go's limit stops
+  already; a turn whose length isn't the period seen, which a proved turn has), two that hold in every case today
+  (every write the time decides is one the skip writes again; a range recorded only where it was stored, a copy to
+  nothing writing nothing), the early check of a byte the time decides being read (the check after the turn covers
+  it), room counted one more (the margin covers it), the detector not waiting (proofs more often, the host's cost
+  alone) and a blank count worked out wrongly (the turn then fails its proof, and nothing is skipped).
+
+### Checks
+
+- On the last commit (`3b2e44167`), and on `5e3e11b09` and `8799a3daa` before it: `tests/psp/run-tests.sh` (sanitizers
+  on) 512 groups, 0 failures (master's 509 and these three); `tests/allegrex/run-tests.sh` 68 groups, 0 failures;
+  `tests/psp/ares/run-tests.sh` 340 checks, 0 failed.
+- GitHub's checks on the last commit pass: the PSP core tests (tests/allegrex and tests/psp built by GCC), the desktop
+  builds (Linux, macOS, Windows) and the Android APKs.
+- With master merged in again (`239d4c80a`: #238, #240 and the test plan's CI, as `2d6766628`): the 21 scenes' hashes
+  against that master identical in all three renderers; tests/allegrex 68/0, tests/psp 517/0 (sanitized, its
+  container-overflow check off: on the Mac a vector's own resize trips it, in master's own run of the suite too, under
+  the PSMF player's reads, which this branch doesn't touch; GitHub's GCC build passes with it), tests/psp/ares 340/0.
+  The rounds there (Vulkan fast, three, master -> branch, M host instructions a frame): Most Wanted's race 283 -> 32,
+  its profile 302 -> 19, Underground Rivals' title 276 -> 9, Twisted Metal's logo 286 -> 10, Disaster Report 3's intro
+  149 -> 10, the Armored Cores' intros 147 -> 13 and 140 -> 18, Super Monkey Ball's story 447 -> 444 (#240's front end
+  faster on both sides).
+
+### Left, and why
+
+- **Loops whose answers move on with the clock**: polling `sceKernelGetSystemTimeLow` (or the RTC's tick) till a time
+  can't be skipped this way, each turn's answer differing and the loop ending at a time nothing marks; nor a loop
+  calling a function the kernel can't work out without making it. Those take the cheaper calls of 1 and 2 only. And
+  every go still runs some turns: the four the detector waits for, the margin's two and the part of one the go ends
+  in; the Armored Cores' goes are short (their sound and a thread's short delays end one every 80,000 cycles or so),
+  so there that's seven turns of some 900 a go.
+- **More functions worked out**: only the six these loops call have a `Function::spin`. Others games poll (a semaphore's
+  or event flag's poll, the controller's peek, `sceDisplayIsVblank`) could be added, each as its own case, once a trace
+  shows a loop of them; a library run with the spin debug patch would list the loops whose proofs fail and why.
+- **The per-call costs left**: the scheduler's look through every thread at each rotation, the status's 104 bytes
+  built and copied, and the stub's `jr ra` looked up in compiled code after each call (part 86's cache of the last
+  target): they matter now only for the loops the skip can't take.
+- **The Need for Speeds' own work**: with the loop skipped, what's left of their emulation thread is the game's code
+  and its display lists (the race's GE work), as in other games.
+
+### On the RP6
+
+The skip is the kernel's alone, so it holds on the RP6 as on the Mac: there the Need for Speeds ran at 41-42 frames a
+second, held by the emulation thread (PPSSPP 60), and that thread's host instructions fall by 87 to 97% on the Mac;
+expect them at 60 unless the GPU's side holds them (not measured here: no device). The intro movies' thread falls by as
+much (their decoding is on it too, and stays); Super Monkey Ball, Colin McRae, Disaster Report 3 and Twisted Metal
+playing as they were (no polling). To compare: master against this branch, Vulkan fast at 1x, the scenes in
+`~/phobos-work/scratch/cpu-speed2/scenes` (nfsmw-race, nfsmw-profile, nfsur-title, tm-logo, dr3-intro, acff-intro,
+acsl-intro), as part 79 describes.
+
+### Review
+
+An independent read-only review of the branch against master found the memory and dispatch commits exact, and one
+exactness bug in the skip: the last turn's run time was written by working its status out again, which read the
+status's size word from memory as the turn left it, not as the call had found it, and the call writes that word back
+as the whole's. A loop setting it to 88 before each call has the call copy 88 bytes, the run time's first word alone;
+written again with 104, the second word (bytes 88-91, never written by the call, which the turn may read) took the run
+time's high word, and kept it. Now the proof records what each call wrote that the time decides (whose status, where,
+which bytes) and the rewrite fills exactly that from `threadInfo()` at the last turn's time; "spins skipped as run"
+has the 88-byte loop, which the first code fails on both engines. Its other points, taken: proofs only in a go
+(`Kernel::going`: a test calling a function directly between runs could have had one work from a stale limit); an
+address with nothing behind it answered as Memory answers it, not ending the proof (a ring's library pointer of 0);
+test gaps (the 88-byte status, a ring with a library, the boundaries, sizes past RAM's end in copies); comments (the
+calls' counts, the margin, the block-end argument resting on every syscall ending its block, the engines agreeing,
+`Function::spin`'s contract to cases that are quiet or calm, `SpinLongest`'s two units); `pointerElsewhere()`'s RAM
+branch, now dead, removed; `spun` reset at power. Not taken: its "drop the rewrite" alternative (the margin's turns
+rewrite those bytes before anything can read them, but the state is exact at once with it).
+
+A delta review of those fixes (`5e3e11b09` to `8799a3daa`) found no exactness bugs, and checked the rewrite against the
+real call for every size the size word may hold (0, up to 84, 85 to 91, 92 on, past 108 refused), unaligned statuses,
+another thread's status, overlapping calls in one turn, an address with nothing behind it, the new `reaches()` for each
+of its callers (and Memory's `reaches()` free of side effects on those paths), `going` on every path through
+`Kernel::run()`, and `pointerElsewhere()`'s callers. Its points, taken (`3b2e44167`): a proof refused where a write the
+time decides isn't one the skip writes again (the two kept in step by hand; it holds for every case today); the last
+turn's run time pinned to the cycle (on a microsecond's last cycle and its first, main's run figures moved alike on
+both machines: a rewrite a cycle late or early writes another microsecond); a sentinel under the 88-byte status's last
+word (so the test doesn't lean on a new stack's 0xff fill); a ring whose library names no ring (the new `reaches()`);
+comments. Left: two statuses written in one turn, and other sizes, in a running loop (the direct checks and the review
+cover them; a whole-state comparison at a step's end sees only a range's errors).
+
+### Scratch
+
+`~/phobos-work/scratch/polling`: `build.sh`, `run.sh`, `bench2.sh`, `hashcmp.sh` (`hash/`), `queue1.sh` (the final
+hashes and rounds: `logs/hash-final-*.log`, `bench/final-*.tsv`), `queue2.sh` and `queue3.sh` (the same hashes after the
+review's fixes: `logs/hash-final2-*.log`, `logs/hash-final3-*.log`), `patches/trace-patch.py` (the syscall trace) and
+`trace/` (each scene's trace and RAM), `dis.sh` (a RAM dump's words disassembled), `patches/spindebug-patch.py` (each
+proof's outcome), `quicktest.sh` (tests/psp's groups from a file alone), `mutate.py` (`mut/`), `NOTES.md`.
+
 ## Part 93: Vulkan's haze over MX vs. ATV Untamed's race — the frame buffer's alpha as its stencil has it
 
 On branch `cursor/psp-vk-mx-2b67`, on #251's (`cursor/psp-vk-models-2b67` at e823bf00b: master at 239d4c80a, v2.3.0,

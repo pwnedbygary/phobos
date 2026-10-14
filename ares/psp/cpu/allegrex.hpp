@@ -525,6 +525,7 @@ struct Allegrex {
     auto protect(u32 page) -> void;
     auto unwatched(u32 page) -> void;
     auto writable(u32 index) -> void;
+    auto holds(u32 index) const -> bool { return index < sections.size() && sections[index]; }  //compiled code there
     auto run() -> u32;
     auto block(u32 address) -> u8*;
     auto emit(u32 address, u8*& body) -> u8*;
@@ -662,5 +663,10 @@ struct Allegrex {
     std::vector<u8*> writePages;
   } recompiler{*this};
 };
+
+inline auto Allegrex::instructionsBefore() const -> u64 {
+  if(recompiler.inBlock) return instructionsRun + recompiler.executed - 1;
+  return instructionsRun;
+}
 
 }
