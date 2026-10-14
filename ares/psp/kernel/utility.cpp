@@ -889,6 +889,7 @@ auto Kernel::savedataMode(u32 p, const std::string* chosen) -> u32 {
     if(!fileName.empty()) {
       std::vector<u8> bytes(size);
       memory.copyOut(bytes.data(), buffer, size);
+      dropCuts(file);  //(written over here: a descriptor that emptied it is cut no more, io.cpp)
       std::ofstream stream(file, std::ios::binary | std::ios::trunc);
       stream.write((const char*)bytes.data(), size);
       if(!stream) return SavedataSaveAccess;
@@ -1009,6 +1010,7 @@ auto Kernel::savedataMode(u32 p, const std::string* chosen) -> u32 {
   case 6: case 7: case 9: case 10: case 21: {  //deleting a save: its folder goes, with all it holds
     if(!exists) return SavedataDeleteNoData;
     fs::remove_all(folder, error);
+    if(!error) dropCuts(folder);  //(a descriptor still open in it holds what's gone: io.cpp)
     return 0;
   }
   case 19: case 20: {  //erasing (secure or not): the data file named goes, and its name from PARAM.SFO's list
@@ -1020,8 +1022,12 @@ auto Kernel::savedataMode(u32 p, const std::string* chosen) -> u32 {
     if(broken) return SavedataReadBroken;
     if(fileName.empty()) return 0;
     if(file.empty() || !fs::is_regular_file(file, error)) return SavedataReadNoFile;
-    fs::remove(file, error);
-    if(described && sfo.listed(fileName, false)) sfo.write(savePath(game + save, "PARAM.SFO"));
+    if(fs::remove(file, error)) dropCuts(file);
+    if(described && sfo.listed(fileName, false)) {
+      std::string path = savePath(game + save, "PARAM.SFO");
+      dropCuts(path);
+      sfo.write(path);
+    }
     return 0;
   }
   default:  //a mode not known: nothing to tell
@@ -1063,6 +1069,7 @@ auto Kernel::savedataWritten(u32 p, const std::string& folder, const std::string
     sfo.values.clear();
     describe();
   }
+  dropCuts(path);  //(replaced: a descriptor that emptied this PARAM.SFO is cut no more, io.cpp)
   return sfo.write(path);
 }
 
@@ -1081,6 +1088,7 @@ auto Kernel::savedataIcons(u32 p, const std::string& folder) -> void {
     if(path.empty()) continue;
     std::vector<u8> bytes(size);
     memory.copyOut(bytes.data(), buffer, size);
+    dropCuts(path);
     std::ofstream(path, std::ios::binary | std::ios::trunc).write((const char*)bytes.data(), size);
   }
 }

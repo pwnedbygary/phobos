@@ -1674,9 +1674,9 @@ static auto olderLayouts() -> void {
   open.truncated = true;
   u32 truncation = where(kernelState(), state);
   open.truncated = false;
-  open.length = 1;
-  u32 truncationEnd = where(kernelState(), state) + 8;  //(an emptied file's length, the last of the file's fields)
-  open.length = 0;
+  open.hostLength = 1;
+  u32 truncationEnd = where(kernelState(), state) + 8;  //(an emptied file's host length, the file's last field)
+  open.hostLength = 0;
   m.kernel.workingDirectory = "ms0:/LIST";
   u32 workingDirectory = where(kernelState(), state);
   m.kernel.workingDirectory = "ms0:/";
@@ -1716,7 +1716,7 @@ static auto olderLayouts() -> void {
               && workingDirectory < geDone && geFinish == geDone + 8 && geFinish < state.size();
   CHECK(ordered, true);
   if(!ordered) return;
-  //Layouts before 32 have no emptied file's length (the file's last fields, after everything but the working folder
+  //Layouts before 32 have no emptied file's lengths (the file's last fields, after everything but the working folder
   //and the GE's time, so taken out of each older state first, those after it moving back as much)
   u32 cut = truncationEnd - truncation;
   auto older = state;
@@ -1811,7 +1811,7 @@ static auto olderLayouts() -> void {
   CHECK(places[0] < places[1] && places[1] < geAt, true);
   if(!(places[0] < places[1] && places[1] < geAt)) return;
   twoFiles.erase(twoFiles.begin() + geAt, twoFiles.begin() + geAt + 9);
-  for(u32 at : {places[1], places[0]}) {  //each file's place, and its PGD decryption and length after it
+  for(u32 at : {places[1], places[0]}) {  //each file's place, and its PGD decryption and lengths after it
     twoFiles.erase(twoFiles.begin() + at, twoFiles.begin() + at + (truncationEnd - opened));
   }
   CHECK(variables + 4 <= vaudioAt && vaudioAt + 15 <= dialogAt && dialogAt < places[0], true);

@@ -4,6 +4,13 @@
 #include "../ge/ge.hpp"
 #include "pgd.hpp"
 
+//shortening a host file held open (io.cpp's cut())
+#if defined(_WIN32)
+  #include <io.h>
+#else
+  #include <unistd.h>
+#endif
+
 //FFmpeg's decoders, in builds that have them (codec.cpp)
 #if defined(ARES_ENABLE_FFMPEG)
 extern "C" {

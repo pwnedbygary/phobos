@@ -476,6 +476,7 @@ auto Kernel::dialogSaved(u32 p, const DialogRequest& asked, const DialogAnswer& 
     std::string host = savePath(chosen.folder);
     std::error_code error;
     if(!host.empty()) std::filesystem::remove_all(host, error);
+    if(!host.empty() && !error) dropCuts(host);  //(a descriptor still open in it holds what's gone: io.cpp)
     dialog.deleted = true;
     DialogRequest request;
     request.kind = asked.kind;

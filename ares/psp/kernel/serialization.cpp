@@ -830,10 +830,12 @@ auto Kernel::serialize(serializer& s) -> bool {
   //2^62 (counting on from it could never run round); a state of an older layout gives its files the order of their
   //numbers. A file keeps its PGD decryption (layout 25 on: none set up in older states), which a folder never has,
   //its header's descriptor decrypted only once it's set up; and a host file emptied as it was opened, the PSP's
-  //length of it (layout 32 on: none in older states), which only a host file opened to write has. The files the
-  //kernel had are let go of as they are, nothing on the host changed (System::unserialize() keeps them to put back
-  //if the state is refused): an emptied one keeps its bytes past its length, as a PSP's file is left when the PSP is
-  //switched off before the file is closed.
+  //length of it and the host file's length as the kernel left it (layout 32 on: none in older states), which only a
+  //host file opened to write has, the one short of the other (once it reaches it, there's nothing left to cut), and
+  //no two descriptors have for one file. Opened again, an emptied file keeps its cut only while its host file still
+  //has that length (io.cpp's cut()): a save written since, longer or shorter, isn't cut to the state's length. The
+  //files the kernel had are let go of here as they are, nothing on the host changed: System::unserialize() keeps them,
+  //to put back if the state is refused, and closes them once it has loaded.
   auto entry = [&](Disc::Entry& e) { text(e.name); s(e.sector); s(e.size); s(e.folder); s(e.date); };
   u64 longest = asyncDuration(true, 64_MiB);
   map(files, [&](OpenFile& open) {
@@ -859,9 +861,10 @@ auto Kernel::serialize(serializer& s) -> bool {
       s(open.pgd); s(open.pgdVersionKey); s(open.pgdReady); s(open.pgdDataKey);
       s(open.pgdDataSize); s(open.pgdBlockSize); s(open.pgdDataOffset);
     }
-    if(s.reading() && stateLayout < 32) open.truncated = false, open.length = 0;
-    else s(open.truncated), s(open.length);
-    check(!open.truncated || (!open.onDisc && !open.folder && !open.resultOnly && (open.flags & OpenWrite)));
+    if(s.reading() && stateLayout < 32) open.truncated = false, open.length = open.hostLength = 0;
+    else s(open.truncated), s(open.length), s(open.hostLength);
+    check(!open.truncated || (!open.onDisc && !open.folder && !open.resultOnly && (open.flags & OpenWrite)
+                              && open.length < open.hostLength));
     if(open.asyncData) {
       u64 unit = open.sectors ? Disc::SectorSize : 1;
       check(open.async == OpenFile::Async::Pending && (open.flags & OpenRead));
@@ -895,6 +898,10 @@ auto Kernel::serialize(serializer& s) -> bool {
     std::sort(orders.begin(), orders.end());
     check(std::adjacent_find(orders.begin(), orders.end()) == orders.end());
     filesOpened = orders.empty() ? 0 : orders.back();
+    std::vector<std::string> emptied;
+    for(auto& [file, open] : files) if(open.truncated) emptied.push_back(open.path);
+    std::sort(emptied.begin(), emptied.end());
+    check(std::adjacent_find(emptied.begin(), emptied.end()) == emptied.end());
   }
   //a thread waiting on a file's request waits on a file whose request is under way: only its end wakes it. (One
   //made ready to run its callbacks, or running them with its wait put aside, ends that wait as it finds the file
@@ -924,6 +931,7 @@ auto Kernel::serialize(serializer& s) -> bool {
           if(open.flags & OpenWrite) mode |= std::ios::out;
           open.stream = std::make_unique<std::fstream>(open.host, mode);
           kept = open.stream->is_open();
+          if(kept && open.truncated && hold(open) != s64(open.hostLength)) dropCut(open);
         }
       }
       at = kept ? std::next(at) : files.erase(at);

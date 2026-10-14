@@ -365,10 +365,14 @@ auto Kernel::sceKernelStderr() -> void { result(StandardError); }
 //that MiB goes and writes it, and finds the whole file there when it reads it back (emptied for good, it found its
 //first 4 MiB zero, and called its data corrupt). So the host file keeps its bytes, and the descriptor counts the
 //PSP's length of the file (truncated, length), from 0: what reads, seeks from the end and the file's status see,
-//raised by each write past it, and the host file's length once it's closed (closeFile()). Past the bytes it had,
-//a gap left by a write past the end holds zeros (chosen: a FAT stick's would hold whatever its clusters held).
-//An empty file has nothing to keep, and one emptied while another descriptor still keeps its bytes is cut to that
-//one's length first: one length at a time.
+//raised by each write past it. Past the bytes it had, a gap left by a write past the end holds zeros (chosen: a FAT
+//stick's would hold whatever its clusters held). The host file is cut to that length (cut()) as the descriptor is
+//closed, or as soon as a write starts at or before the length, as a save rewritten from its start does (writeFile()):
+//chosen, not measured, so that Phobos killed part way, which cuts nothing, leaves no worse than emptying the file at
+//once would (a save rewritten from its start as far as it got), and the old bytes whole if nothing had been written.
+//LittleBigPlanet writes each MiB of its install but the first past the length, and its profile saves (STORY.SLV,
+//PS.BIN and others, emptied as they're opened) from their starts. An empty file has nothing to keep, and one emptied
+//while another descriptor still keeps its bytes is cut to that one's length first: one length at a time.
 auto Kernel::openFile(const std::string& path, u32 flags) -> u32 {
   std::string host, normalized;
   if(onDisc(path)) return openOnDisc(path, flags);
@@ -387,12 +391,7 @@ auto Kernel::openFile(const std::string& path, u32 flags) -> u32 {
   if(!file) return ErrorTooManyFiles;  //before the file is made or emptied
   bool emptied = write && exists && (flags & OpenTruncate);
   if(emptied) {
-    for(auto& [other, open] : files) {
-      if(!open.truncated || open.host != host) continue;
-      open.stream->flush();
-      std::filesystem::resize_file(host, open.length, error);
-      open.truncated = false;
-    }
+    for(auto& [other, open] : files) if(open.truncated && open.host == host) cut(open);
   }
   auto stream = std::make_unique<std::fstream>(host, mode);
   if(!stream->is_open()) return ErrorNoPermission;
@@ -402,38 +401,100 @@ auto Kernel::openFile(const std::string& path, u32 flags) -> u32 {
   open.flags = flags;
   open.stream = std::move(stream);
   open.opened = ++filesOpened;
-  open.truncated = emptied && std::filesystem::file_size(host, error) && !error;
-  open.length = 0;
+  if(!emptied) return file;
+  open.truncated = true;
+  s64 bytes = hold(open);
+  if(bytes > 0) open.length = 0, open.hostLength = bytes;
+  else dropCut(open);
+  if(bytes < 0) std::filesystem::resize_file(host, 0, error);  //(not held, so emptied now)
   return file;
 }
 
-//The PSP's length of a host file the host has hostLength bytes of: those, unless a descriptor open on it has emptied
-//it (openFile()), whose length it is then (no more than the host has, if the host file was cut behind its back).
-auto Kernel::fileLength(const std::string& host, u64 hostLength) -> u64 {
-  for(auto& [file, open] : files) {
-    if(open.truncated && open.host == host) return std::min(open.length, hostLength);
-  }
-  return hostLength;
+//Whether a host path is folder's, or inside it (both as resolve() makes them).
+static auto hostWithin(const std::string& path, const std::string& folder) -> bool {
+  if(folder.empty() || path.compare(0, folder.size(), folder)) return false;
+  return path.size() == folder.size() || path[folder.size()] == '/' || path[folder.size()] == '\\';
 }
 
-//A write to a host file that ended at end: an emptied file's length (openFile()) grows to it.
+//The PSP's length of a host file the host has hostBytes of: those, unless a descriptor open on it has emptied it
+//(openFile()), whose length it is then (no more than the host has, if the host file was cut behind its back).
+auto Kernel::fileLength(const std::string& host, u64 hostBytes) -> u64 {
+  for(auto& [file, open] : files) {
+    if(open.truncated && open.host == host) return std::min(open.length, hostBytes);
+  }
+  return hostBytes;
+}
+
+//A write to a host file that ended at end: an emptied file's length (openFile()) grows to it, and so does the host
+//file's as the kernel left it. Once its length reaches the host file's, there's nothing past it left to cut.
 auto Kernel::fileWritten(const std::string& host, u64 end) -> void {
   for(auto& [file, open] : files) {
-    if(open.truncated && open.host == host) open.length = std::max(open.length, end);
+    if(!open.truncated || open.host != host) continue;
+    open.length = std::max(open.length, end);
+    open.hostLength = std::max(open.hostLength, end);
+    if(open.length >= open.hostLength) dropCut(open);
   }
 }
 
-//A host file closed: its stream flushed and let go of, and if it was emptied as it was opened (openFile()), the host
-//file cut to the PSP's length of it, dropping the bytes it kept past them. As the program closes it (sceIoClose,
-//sceIoCloseAsync), and as the kernel powers on (a program ending or another starting, the machine switched off),
-//which closes every file the program had, as a PSP's kernel does as a program ends. A state loaded over the files
-//lets go of them without closing them (serialization.cpp): loading a state changes nothing on the memory stick.
+//An emptied file's host file held to be cut (openFile(), and a state's emptied file opened again: serialization.cpp):
+//opened again, beside its stream, through the C library, as cut() shortens it through that. Its length, or -1 if it
+//can't be held.
+auto Kernel::hold(OpenFile& open) -> s64 {
+  open.held.reset(std::fopen(open.host.c_str(), "rb+"));
+  if(!open.held || std::fseek(open.held.get(), 0, SEEK_END)) return -1;
+  return std::ftell(open.held.get());
+}
+
+//An emptied file cut (openFile()): its host file shortened to the PSP's length of it, dropping the bytes it kept past
+//them. Through the file held, never a path: a file renamed meanwhile is cut where it went, one removed (and whatever
+//was put in its place) never. Only while the host file is as the kernel left it (hostLength), nothing else having
+//written it since, and only ever shorter; the cut made or not, the descriptor is a plain one from then on.
+auto Kernel::cut(OpenFile& open) -> void {
+  if(!open.truncated) return;
+  if(open.stream) open.stream->flush();
+  std::FILE* held = open.held.get();
+  long bytes = held && !std::fseek(held, 0, SEEK_END) ? std::ftell(held) : -1;
+  if(bytes >= 0 && u64(bytes) == open.hostLength && u64(bytes) > open.length) {
+    #if defined(_WIN32)
+    if(_chsize_s(_fileno(held), s64(open.length))) {}  //(refused: the bytes stay, nothing lost)
+    #else
+    if(ftruncate(fileno(held), off_t(open.length))) {}
+    #endif
+  }
+  dropCut(open);
+}
+
+//An emptied file's cut dropped, not made: the descriptor is a plain one, the host file as it is.
+auto Kernel::dropCut(OpenFile& open) -> void {
+  open.held.reset();
+  open.truncated = false, open.length = 0, open.hostLength = 0;
+}
+
+//A host file, or folder, that something other than its descriptors removed, replaced or wrote (sceIoRemove, the
+//savedata utility): the cuts of the descriptors that emptied it, or a file in it, dropped. What's at its path isn't
+//theirs to cut, and what they emptied is gone or written over.
+auto Kernel::dropCuts(const std::string& host) -> void {
+  for(auto& [file, open] : files) if(open.truncated && hostWithin(open.host, host)) dropCut(open);
+}
+
+//A file or folder renamed (sceIoRename): the descriptors open on it, or on what's in it, follow it to its new path,
+//as their host files do (a state opens them again there, and an emptied file's length goes with it).
+auto Kernel::filesMoved(const std::string& oldHost, const std::string& oldPath, const std::string& newHost,
+                        const std::string& newPath) -> void {
+  for(auto& [file, open] : files) {
+    if(open.onDisc || !hostWithin(open.host, oldHost)) continue;
+    open.host = newHost + open.host.substr(oldHost.size());
+    if(hostWithin(open.path, oldPath)) open.path = newPath + open.path.substr(oldPath.size());
+  }
+}
+
+//A host file closed: its stream flushed and let go of, and if it was emptied as it was opened (openFile()), cut
+//(cut()). As the program closes it (sceIoClose, sceIoCloseAsync); as the kernel powers on (a program ending or another
+//starting, the machine switched off), which closes every file the program had, as a PSP's kernel does as a program
+//ends; and as a state is loaded over the program (System::unserialize(), once the state has loaded).
 auto Kernel::closeFile(OpenFile& open) -> void {
   open.stream.reset();
-  if(!open.truncated) return;
-  std::error_code error;
-  std::filesystem::resize_file(open.host, open.length, error);
-  open.truncated = false;
+  cut(open);
 }
 
 //(path, flags, mode): a file's descriptor.
@@ -643,12 +704,16 @@ auto Kernel::writeFile(u32 file, u32 data, u32 size) -> u32 {
   std::vector<char> buffer(size);
   memory.copyOut(buffer.data(), data, size);
   open.stream->clear();
+  u64 at = open.position;
   if(open.flags & OpenAppend) {  //at the PSP's end of the file
     open.stream->seekp(0, std::ios::end);
-    if(s64 end = s64(open.stream->tellp()); end >= 0) open.stream->seekp(std::streamoff(fileLength(open.host, end)));
-  } else {
-    open.stream->seekp(std::streamoff(open.position));
+    if(s64 end = s64(open.stream->tellp()); end >= 0) at = fileLength(open.host, end);
   }
+  //(from or before an emptied file's end: it's being rewritten in order, and is cut first: openFile())
+  for(auto& [other, emptied] : files) {
+    if(size && emptied.truncated && emptied.host == open.host && at <= emptied.length) cut(emptied);
+  }
+  open.stream->seekp(std::streamoff(at));
   open.stream->write(buffer.data(), size);
   open.stream->flush();
   if(!*open.stream) return ErrorIOError;
@@ -712,7 +777,9 @@ auto Kernel::sceIoRemove() -> void {
   std::error_code error;
   if(!std::filesystem::exists(host, error)) return result(ErrorFileNotFound);
   if(std::filesystem::is_directory(host, error)) return result(ErrorIsDirectory);
-  result(std::filesystem::remove(host, error) ? 0 : ErrorNoPermission);
+  bool removed = std::filesystem::remove(host, error);
+  if(removed) dropCuts(host);  //(a descriptor still open on it holds what's gone)
+  result(removed ? 0 : ErrorNoPermission);
 }
 
 auto Kernel::sceIoMkdir() -> void {
@@ -763,6 +830,7 @@ auto Kernel::sceIoRename() -> void {
   }
   if(std::filesystem::exists(newHost, error)) return result(ErrorFileExists);
   std::filesystem::rename(oldHost, newHost, error);
+  if(!error) filesMoved(oldHost, oldPath, newHost, newPath);
   result(error ? ErrorNoPermission : 0);
 }
 

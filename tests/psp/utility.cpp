@@ -3,10 +3,11 @@
 //the program's memory refused), their files listed secure, normal and the system's, their PARAM.SFO written and read
 //back, saves without one (v2.0.0's) still loading, a game's save beside its own files through memstick:, list loads
 //and saves answered with no front end as a PSP's dialog would be, a save's name with '*' or '?' taken as a pattern
-//(the list mode's, which names no save anywhere), each request traced for a host, the memory
-//stick's free space told alike everywhere, a message answered yes, the keyboard's fields entered (an empty one given
-//the nickname), network settings cancelled, the wrong type and the wrong status refused; a game's data install
-//cancelled; optional modules loaded and unloaded; the nickname. Called directly, the clock moved on by hand.
+//(the list mode's, which names no save anywhere), each request traced for a host, a save written over files the game
+//emptied left as written, the memory stick's free space told alike everywhere, a message answered yes, the keyboard's
+//fields entered (an empty one given the nickname), network settings cancelled, the wrong type and the wrong status
+//refused; a game's data install cancelled; optional modules loaded and unloaded; the nickname. Called directly, the
+//clock moved on by hand.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -1919,6 +1920,39 @@ static auto modules() -> void {
   CHECK(m.system.memory.read(4, Buffer), 1);
 }
 
+//A save written over files the game has open, emptied as it opened them and not written yet (io.cpp's cut()): the
+//data file written over in place, as long as it was, and PARAM.SFO replaced; then, the save deleted and made again,
+//its data file anew. Each is as the save left it after the game closes its descriptor.
+static auto savedataOverEmptied() -> void {
+  HostFolder stick;
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  m.system.memory.copyIn(Buffer, "saved bytes", 11);
+  saveParameters(m, 1, "ULUS99999", "SLOT0", 11);
+  CHECK(runSave(m), 0);
+  auto emptying = [&](const std::string& name) {
+    return m.call("sceIoOpen", {m.string("ms0:/PSP/SAVEDATA/ULUS99999SLOT0/" + name), 0x0602, 0777});
+  };
+  u32 data = emptying("DATA.BIN"), sfo = emptying("PARAM.SFO");
+  m.system.memory.copyIn(Buffer, "SAVED BYTES", 11);
+  saveParameters(m, 1, "ULUS99999", "SLOT0", 11);
+  CHECK(runSave(m), 0);
+  auto described = stick.get("PSP/SAVEDATA/ULUS99999SLOT0/PARAM.SFO");
+  CHECK(described.size() > 20, true);
+  CHECK(m.call("sceIoClose", {data}), 0);
+  CHECK(m.call("sceIoClose", {sfo}), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS99999SLOT0/DATA.BIN") == "SAVED BYTES", true);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS99999SLOT0/PARAM.SFO") == described, true);
+  data = emptying("DATA.BIN");
+  saveParameters(m, 10, "ULUS99999", "SLOT0", 0);  //delete
+  CHECK(runSave(m), 0);
+  m.system.memory.copyIn(Buffer, "fresh bytes", 11);
+  saveParameters(m, 1, "ULUS99999", "SLOT0", 11);
+  CHECK(runSave(m), 0);
+  CHECK(m.call("sceIoClose", {data}), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS99999SLOT0/DATA.BIN") == "fresh bytes", true);
+}
+
 auto utilityTests() -> Tests {
   return {
     {"utility savedata", savedata}, {"utility savedata names", savedataNames},
@@ -1931,6 +1965,7 @@ auto utilityTests() -> Tests {
     {"utility savedata lists answered with no front end (7th Dragon 2020, Brandish)", savedataListAnswers},
     {"utility savedata patterns (Dissidia, Final Fantasy Type-0)", savedataPatterns},
     {"utility savedata trace", savedataTrace},
+    {"utility savedata over files the game emptied", savedataOverEmptied},
     {"memory stick free space", stickSpace}, {"utility dialogs", dialogs},
     {"utility keyboard", keyboard}, {"utility keyboard input types", keyboardInputTypes},
     {"utility keyboard conversion: the app's cases", keyboardCases}, {"utility modules", modules},

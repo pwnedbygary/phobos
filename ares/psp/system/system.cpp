@@ -538,12 +538,12 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a signature,
 //the version of its layout, RAM's size and the program it was made with, all of which must be the machine's; then
 //memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a field means: 32
-//since an open memory stick file emptied as it was opened keeps the PSP's length of it, its host file keeping the
-//bytes past them until it's closed (part 95); 31 since the kernel keeps sceVaudio's hold on the SRC channel, its
-//buffers' format, effect and level control (part 82; 29 and 30 are skipped, other branches' layouts, refused here: a
-//branch with one of them landing after this renumbers its layout past 32 and updates tests/psp/ares/system.cpp's list
-//of refused versions); 28 since each module keeps the
-//variables it imports, and the address each holds now (part 88); 27 since a font holds the glyph it last read, and a
+//since an open memory stick file emptied as it was opened keeps the PSP's length of it and its host file's length,
+//the host file keeping the bytes past them until it's cut (part 95); 31 since the kernel keeps sceVaudio's hold on the
+//SRC channel, its buffers' format, effect and level control (part 82; 29 and 30 are skipped, other branches' layouts,
+//refused here: a branch with one of them landing after this renumbers its layout past 32 and updates
+//tests/psp/ares/system.cpp's list of refused versions); 28 since each module keeps the variables it imports, and the
+//address each holds now (part 88); 27 since a font holds the glyph it last read, and a
 //call may be reading one (part 87); 26 since the dialog keeps an aborted message's error and whether a list delete has
 //deleted a save (part 73); 25 since each open file keeps its PGD decryption (the version key it was given, where its
 //data starts, and its header's descriptor once decrypted); 24 since the GE driver keeps when the GE will have drawn
@@ -653,9 +653,11 @@ auto System::restore(serializer& s, u32 length) -> bool {
 
 //Loads a state; false, with the machine as it was, if it isn't this machine's (nothing is touched then) or turns out
 //damaged part way (the machine is put back from a state of itself made first, which loads as any of its own does).
-//Its open files are set aside as they are and put back the same, still open: a state reopens files by their paths,
-//which a file the program removed or renamed while it had it open no longer has. Should even putting the machine
-//back fail, it starts the game afresh rather than run on from half of each.
+//Its open files are set aside as they are: put back the same, still open, if the state is refused (a state reopens
+//files by their paths, which a file the program removed while it had it open no longer has), or closed once it has
+//loaded, the program that had them gone, as closing them would (a file it emptied as it opened it cut then:
+//io.cpp's closeFile()). Should even putting the machine back fail, it starts the game afresh rather than run on from
+//half of each, closing them as powering on does.
 auto System::unserialize(serializer& s) -> bool {
   u32 length = s.capacity();  //a state to load holds exactly its bytes
   if(!header(s)) return false;
@@ -671,10 +673,13 @@ auto System::unserialize(serializer& s) -> bool {
     before.setReading();
     if(!header(before) || !restore(before, saved)) {
       report(true, "a damaged state couldn't be undone: the game starts again");
+      kernel.files = std::move(files);
       power(false);
       return false;
     }
     kernel.files = std::move(files);
+  } else {
+    for(auto& [file, open] : files) kernel.closeFile(open);
   }
   cpu.recompiler.reset();  //what it compiled came from memory as it was before
   return loaded;
