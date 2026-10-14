@@ -56,6 +56,11 @@ are excluded; copying the portable template elsewhere requires explicit adoption
   requested flavor). The wrapper currently pins Gradle 9.6.0, AGP 9.3.2, JDK 17,
   CMake 3.22.1; SDK setup requests NDK 28.2.13676358. Verify actual versions each run.
   Do not copy the supplied Mupen guide's Gradle 8.4 / AGP 8.2.2 or DD test commands.
+- Android unit tests (JVM, both flavors):
+  `bash scripts/build-replit.sh :app:testLegacyDebugUnitTest :app:testModernDebugUnitTest --continue`
+  (or the same tasks with `./gradlew` in `android/`). CI's Android Build runs them on every
+  pull request, master push and tag, and publishes neither its release nor the nightly when
+  they fail.
 - Missing submodules/SDK/device are explicit blockers for their respective checks.
   Use repository tests applicable to touched paths; never invent suite results.
 - Keep Vulkan SyncFull waiting and DP interrupt order. Before any async proposal,
