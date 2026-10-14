@@ -205,10 +205,11 @@ internal class Mask(val left: Int, val top: Int, val width: Int, val height: Int
  * Coverage by signed area: each edge adds, to the cells of every row it crosses, the share of the row it
  * winds past, and a row's running sum is then how much of each pixel is inside (overlaps capped at full).
  *
- * A modified Kotlin translation of font-rs's rasterizer (Copyright 2015 Google Inc., Apache License 2.0;
- * see LICENSE): [line] is `draw_line` in its `src/raster.rs` and [coverage] is `accumulate` in its
+ * A modified Kotlin translation of font-rs's rasterizer (Copyright 2015, 2018 Google Inc., Apache License
+ * 2.0; see LICENSE): [line] is `draw_line` in its `src/raster.rs` and [coverage] is `accumulate` in its
  * `src/accumulate.rs`, changed to start each row's sum afresh, clamp edges to the raster and take the
- * sum's rounding residue as no ink; [quad] flattens a curve by the same estimate as its `draw_quad`.
+ * sum's rounding residue as no ink; [quad] flattens a curve by the same kind of estimate as its
+ * `draw_quad`, with a tighter tolerance and at most 64 segments.
  */
 private class Raster(val width: Int, val height: Int) {
     private val cells = FloatArray(width * height)
