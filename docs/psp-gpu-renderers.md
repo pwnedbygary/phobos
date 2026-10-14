@@ -165,6 +165,15 @@ to the colors leaves the GPU's depth alone; and a PRIM with another depth buffer
 afresh. The rows changed are filled before the next PRIM that tests or writes depth, not before one that doesn't (part
 83: Darkstalkers' CPU writes beside its depth buffer between its 2D PRIMs, 90 fills a frame).
 
+**A depth buffer drawn with two frame buffers** (part 90): on the PSP the depth buffer is memory, whichever frame buffer
+it's drawn with, where each target's depth is its own on the GPU. So a target's depth says which depth it holds (the
+serial of the last PRIM that wrote depth there, `Target::depthAt`, 0 for memory's), and before a PRIM that tests or
+writes depth draws into a target, the newer depth of another target over the same depth buffer and row width is copied
+into its depth on the GPU (`takeDepth()`, `Command::Depth`: the depth aspect alone, the stencil being each frame
+buffer's own), for the rows that one has, its changes from memory filled first. Hammerin' Hero and Jeanne d'Arc draw
+their scene into the screen's frame buffer, then their characters into a frame buffer of their own, cleared without
+its depth, tested against the scene's. Depth across row widths isn't taken (Colin McRae's terrain shadows, part 83).
+
 **What the GPU doesn't draw.** A PRIM the renderer can't take is drawn by the software renderer instead, once the
 renderer has put back what it drew (`begin()` says so): no target for its frame buffer (the GPU out of room), rows
 past the target's (a frame buffer near VRAM's end whose drawing runs past it, where the PSP's addresses run round to
@@ -181,9 +190,13 @@ memory's VRAM, and the pages are memory's again. Only the pages the target owns 
 spans its PRIMs since the last finish, and a page between two far apart wasn't busy, so the CPU's bytes written there,
 or another frame buffer's drawn there, are newer than its pixels. Decoded textures and the recompiler hear of the
 change when the pages are first owned, as they do of the software renderer's drawing. The depth buffer isn't read back
-(the GPU's depth stays the GPU's; a game that reads depth with the CPU, or samples it as a texture, sees what memory
-had; and a PRIM the software renderer draws, above, tests against memory's depth): PPSSPP makes the same choice by
-default, and it's on the list below. So a load (`Memory::read()`: the CPU's, an HLE function's) through VRAM's second
+by a finish (the GPU's depth stays the GPU's; a game that reads depth with the CPU sees what memory had, and so does a
+PRIM the software renderer draws, above): PPSSPP makes the same choice by default, and it's on the list below. But a
+texture read through VRAM's second or fourth copy (part 90: `holds()`) over a depth buffer whose newest depth is the
+GPU's has that depth put into memory first (`putDepth()`: a read back of the depth alone, each pixel's as the GE's
+16-bit depth, written through the fourth copy's order; a wait, but once until more depth is drawn, `Target::depthKept`),
+and the GE decodes it from there: Cars Race-O-Rama takes its race's depth through a palette into the alpha its sky is
+blended by. So a load (`Memory::read()`: the CPU's, an HLE function's) through VRAM's second
 or fourth copy, the views the GE keeps its depth buffer in, doesn't finish the renderer (part 68:
 `Memory::vramDrawnOver`'s `depthLoad`): finishing couldn't give it the GPU's depth, only the colors of a frame buffer
 drawn over the same bytes. (Stores, and copies in or out through those views, still finish.) WipEout reads its depth
@@ -382,10 +395,12 @@ What the GPU does with the GPU's own units, and how near the PSP it comes:
   clear mode's alpha (a triangle's last corner's for all of it, a sprite's, a point's, each pixel's of a line), a
   replace's reference and MASK_ALPHA's bits (each kept bit with its copies); where a replace's
   comparison takes bits the format doesn't keep, a 5551 one's is made on its top bit against the kept reference
-  (the same at 0 and 255), and a 4444 one's stays the GE's, its replace then writing all eight bits. Increment and
-  decrement still step a 16-bit one's stencil by one, where the PSP's steps a 5551 one to 255 or 0 and a 4444 one by
-  16. A 5650 frame buffer has none, which the GE's test reads as 0: a test failing against 0 drops every pixel (a
-  never-passing test on the GPU), one passing is no test.
+  (the same at 0 and 255), and a 4444 one's stays the GE's, its replace then writing all eight bits. On a 5551 one
+  (part 90) increment is a replace of 255 and decrement a zero, as the PSP fills and empties its bit, so the color's
+  alpha follows the pass's (but an increment beside a replace of 0, which one reference can't write both of);
+  increment and decrement still step a 4444 one's stencil by one, where the PSP's steps it by 16. A 5650 frame buffer
+  has none, which the GE's test reads as 0: a test failing against 0 drops every pixel (a never-passing test on the
+  GPU), one passing is no test.
 - **Write masks**: per channel, where a channel's mask is all or nothing (as games use them); the GPU has no bitwise
   color mask, so a partial mask writes the whole channel.
 - **Blending**: the GE's factors map onto the GPU's: the frame buffer's color or alpha as the GPU's destination
@@ -767,11 +782,14 @@ What differs after shader blending:
   GPU blends (in 8888 without rasterization order; everything on Qualcomm's own driver), its rounding is mostly the
   PSP's (`TERM`, the dither in it since part 83) and the rest a level apart, and on Qualcomm's driver a 16-bit frame
   buffer keeps 8 bits between blends.
-- **Known approximations** still: the depth buffer not read back (so the CPU, a texture or a PRIM the software
-  renderer draws sees memory's depth, not the GPU's); a change to the depth buffer's bytes refills all of each 16
-  KiB it touches; a PRIM's pixels past its frame buffer's row end cut at the row; textures past a frame buffer's
-  row; in fast mode, a texture's rows past its frame buffer's held at its last where the PRIM's rows aren't known
-  (part 83); and, for a backend that can't read the frame buffer, the older blending and logic approximations.
+- **Known approximations** still: the depth buffer not read back but for a texture through VRAM's depth views (so
+  the CPU, a texture through the plain copies or a PRIM the software renderer draws sees memory's depth, not the
+  GPU's: part 90); depth not taken between frame buffers of other row widths; a change to the depth buffer's bytes
+  refills all of each 16 KiB it touches; a PRIM's pixels past its frame buffer's row end cut at the row; textures
+  past a frame buffer's row; in fast mode, a texture's rows past its frame buffer's held at its last where the
+  PRIM's rows aren't known (part 83); a 4444 frame buffer's increment and decrement stepping its stencil by one, and
+  a fail operation's stencil not in the color's alpha a texture taken on the GPU reads (part 90); and, for a
+  backend that can't read the frame buffer, the older blending and logic approximations.
 
 The pictures look the same to the eye in the scenes measured; nothing is missing or misplaced.
 
@@ -1068,8 +1086,9 @@ software renderer.
 3a. **Speed** (part 52, done): the renderer's own waste found with a profile and cut, both modes; the CPU's transform
    (Vulkan (fast), part 53); a pipeline cache kept on disk (part 54); still to do, block transfers on the GPU.
 4. **Accuracy**: shader blending (part 45, done: blending, dithering, logic operations, write masks and 16-bit
-   formats as the PSP's, on every Vulkan GPU); still to do, depth read back where games need it, block transfers
-   between targets on the GPU, textures decoded on the GPU.
+   formats as the PSP's, on every Vulkan GPU); the depth taken between frame buffers over one depth buffer, and put
+   into memory for a texture read through VRAM's depth views (part 90); still to do, depth read back for the CPU's
+   loads and taken across row widths, block transfers between targets on the GPU, textures decoded on the GPU.
 5. **OpenGL** (parked 2026-10-08): not worth a second HW backend yet; Software is the non-Vulkan path. Revisit only if telemetry shows need.
 6. **Vulkan (fast)** (part 53, done): the GPU's transform and lighting for 3D, the GE's rules for which triangles are
    drawn, the GPU's blending; its pipelines kept on disk (part 54); still to do, the bones in a block of their own
