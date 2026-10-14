@@ -222,11 +222,12 @@ auto Allegrex::Recompiler::block(u32 address) -> u8* {
 auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
   //Every block has the same prologue (two float registers, for the FPU's native arithmetic: recompiler-fpu.cpp),
   //so the stack frame one block's prologue made serves any other's body, and its epilogue.
-  beginFunction(1, 3 + Held, 4, 2);
+  beginFunction(1, 3 + Held + Counted, 4, 2);
   //What loads and stores reach memory through (recompiler-memory.cpp), in saved registers S1 and S2: set here, before
-  //the body, and kept by the blocks that go on to each other, which all set them alike.
+  //the body, and kept by the blocks that go on to each other, which all set them alike; and the run's count (left()).
   mov64(sreg(1), imm(directBase()));
   mov64(sreg(2), imm((sljit_sw)writePages.data()));
+  loadCount();
   auto bodyLabel = sljit_emit_label(compiler);
   u32 index = (address & 0x1fff'ffff) / SectionSize;  //(a block never leaves its section)
   calls = false;
@@ -327,11 +328,7 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
 auto Allegrex::Recompiler::emitChain(u32 count) -> void {
   std::vector<sljit_jump*> leave;
   auto unless = [&](sljit_jump* jump) { leave.push_back(jump); };
-  mov64(reg(0), field(&self.instructionsRun));
-  add64(reg(0), reg(0), imm(count));
-  mov64(field(&self.instructionsRun), reg(0));
-  auto limit = field(&self.runLimit);
-  unless(sljit_emit_cmp(compiler, SLJIT_GREATER_EQUAL, SLJIT_R0, 0, limit.fst, limit.snd));
+  emitCount(count, leave);
   mov32_u8(reg(0), field(&self.scc.halted));
   unless(cmp32_jump(reg(0), imm(0), flag_ne));
 
@@ -365,6 +362,7 @@ auto Allegrex::Recompiler::emitChain(u32 count) -> void {
 
   auto here = sljit_emit_label(compiler);
   for(auto jump : leave) sljit_set_label(jump, here);
+  storeCount();
   mov32(field(&executed), imm(0));
   jumpEpilog();
 }
@@ -377,6 +375,7 @@ auto Allegrex::Recompiler::emitEnd(u32 count, bool known, u32 target) -> void {
       mov32(field(&self.ipu.pc), imm(target));
       mov32(field(&self.ipu.pd), imm(target + 4));
     }
+    storeCount();
     mov32(field(&executed), imm(count));
     return jumpEpilog();
   }
@@ -409,6 +408,7 @@ auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target) -> void {
 
   auto here = sljit_emit_label(compiler);
   for(auto jump : leave) sljit_set_label(jump, here);
+  storeCount();
   mov32(field(&self.ipu.pc), imm(target));
   mov32(field(&self.ipu.pd), imm(target + 4));
   mov32(field(&executed), imm(0));
@@ -481,15 +481,40 @@ auto Allegrex::Recompiler::patch(u8* jump, u8* to) -> bool {
   #endif
 }
 
-//Allegrex::run()'s round after count instructions, for emitChainTo() and a coprocessor branch taken
-//(emitCoprocessorBranch()): they're counted in instructionsRun, and the run stops (a jump added to leave) once that
-//reaches its limit or the CPU has halted, which is only looked at if the block called the interpreter.
-auto Allegrex::Recompiler::emitCounted(u32 count, std::vector<sljit_jump*>& leave) -> void {
+//instructionsRun brought up to date from left() (Counted), and left() worked out again from it and runLimit.
+auto Allegrex::Recompiler::storeCount() -> void {
+  if(!Counted) return;
+  mov64(reg(0), field(&self.runLimit));
+  sub64(reg(0), reg(0), left());
+  mov64(field(&self.instructionsRun), reg(0));
+}
+
+auto Allegrex::Recompiler::loadCount() -> void {
+  if(!Counted) return;
+  mov64(reg(0), field(&self.runLimit));
+  sub64(left(), reg(0), field(&self.instructionsRun));
+}
+
+//count instructions counted in the run, and a jump added to leave taken once it reaches its limit: left() counted down
+//past 0 (Counted), or instructionsRun up to runLimit.
+auto Allegrex::Recompiler::emitCount(u32 count, std::vector<sljit_jump*>& leave) -> void {
+  if(Counted) {
+    sljit_emit_op2(compiler, SLJIT_SUB | SLJIT_SET_SIG_LESS_EQUAL, left().fst, 0, left().fst, 0, SLJIT_IMM, count);
+    leave.push_back(jump(SLJIT_SIG_LESS_EQUAL));
+    return;
+  }
   mov64(reg(0), field(&self.instructionsRun));
   add64(reg(0), reg(0), imm(count));
   mov64(field(&self.instructionsRun), reg(0));
   auto limit = field(&self.runLimit);
   leave.push_back(sljit_emit_cmp(compiler, SLJIT_GREATER_EQUAL, SLJIT_R0, 0, limit.fst, limit.snd));
+}
+
+//Allegrex::run()'s round after count instructions, for emitChainTo() and a coprocessor branch taken
+//(emitCoprocessorBranch()): they're counted in instructionsRun, and the run stops (a jump added to leave) once that
+//reaches its limit or the CPU has halted, which is only looked at if the block called the interpreter.
+auto Allegrex::Recompiler::emitCounted(u32 count, std::vector<sljit_jump*>& leave) -> void {
+  emitCount(count, leave);
   if(calls) {
     mov32_u8(reg(0), field(&self.scc.halted));
     leave.push_back(cmp32_jump(reg(0), imm(0), flag_ne));
@@ -510,11 +535,13 @@ auto Allegrex::Recompiler::emitPC(u32 address, bool delaySlot) -> void {
 //instruction runs (emitPC()). If the instruction raises an exception, the block leaves right after it.
 auto Allegrex::Recompiler::emitInterpreter(u32 address, u32 instruction, u32 count, bool delaySlot) -> void {
   calls = true;
+  storeCount();
   emitPC(address, delaySlot);
   mov32(field(&executed), imm(count));
   bool syscall = instruction >> 26 == 0x00 && (instruction & 0x3f) == 0x0c;
   callf(syscall ? &Allegrex::executeSyscall : &Allegrex::execute, imm(address), imm(instruction));
   testJumpEpilog();
+  loadCount();
   forgetAll();  //(it may have written any register)
 }
 

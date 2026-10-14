@@ -736,6 +736,7 @@ auto Allegrex::Recompiler::emitVFPUCall(u32 address, u32 instruction, u32 count,
   case 0x3c: call = &Allegrex::executeVFPU<0x3c>; break;
   }
   if(!call) return false;
+  storeCount();  //(for the block's leaving after an exception)
   emitPC(address, delaySlot);
   mov32(field(&executed), imm(count));
   callf(call, imm(address), imm(instruction));

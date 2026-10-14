@@ -575,8 +575,20 @@ struct Allegrex {
       u32 target = 0;
     } destination;
 
-    //recompiler.cpp: the game's registers a block holds in host registers, saved registers S3 on (emit())
-    static constexpr u32 Held = SLJIT_NUMBER_OF_SAVED_REGISTERS - 3 < 7 ? SLJIT_NUMBER_OF_SAVED_REGISTERS - 3 : 7;
+    //recompiler.cpp: the game's registers a block holds in host registers, saved registers S3 on (emit()), and on a
+    //host with saved registers enough, the run's count in the next one (Counted: left())
+    static constexpr bool Counted = SLJIT_NUMBER_OF_SAVED_REGISTERS >= 8;
+    static constexpr u32 Held = SLJIT_NUMBER_OF_SAVED_REGISTERS - 3 - Counted < 7 ? SLJIT_NUMBER_OF_SAVED_REGISTERS - 3 - Counted : 7;
+    //The run's count, where Counted: as compiled code runs, left() holds runLimit less instructionsRun, the
+    //instructions the run has left, which each block's end counts down. instructionsRun in memory stays as it was
+    //where the code began or last called the interpreter: it's brought up to date (storeCount()) before anything that
+    //reads it runs (a call into the interpreter, whose syscalls read it and may move it and runLimit on, after which
+    //left() is worked out again: loadCount()) and before the code leaves for run(). Otherwise each block's end counts
+    //in instructionsRun itself.
+    auto left() const -> sreg { return sreg(3 + Held); }
+    auto storeCount() -> void;
+    auto loadCount() -> void;
+    auto emitCount(u32 count, std::vector<sljit_jump*>& leave) -> void;
     struct Holding {
       s8 slot[32];       //the host register holding each game register's value, or -1
       s8 held[Held];     //the game register each host register holds the value of, or -1

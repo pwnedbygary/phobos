@@ -589,6 +589,7 @@ auto Allegrex::Recompiler::emitCoprocessorBranch(u32 address, u32 instruction, u
   };
   auto leaveForRun = [&] {
     stored();
+    storeCount();
     mov32(field(&executed), imm(count));
     jumpEpilog();
   };
@@ -610,6 +611,7 @@ auto Allegrex::Recompiler::emitCoprocessorBranch(u32 address, u32 instruction, u
   auto here = sljit_emit_label(compiler);
   for(auto jump : leave) sljit_set_label(jump, here);
   stored();
+  storeCount();
   mov32(field(&executed), imm(0));
   jumpEpilog();
 }
