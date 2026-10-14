@@ -12746,6 +12746,22 @@ Every change leaves what a game sees as it was.
   turn and the margin, one; for the margin alone, none; none outside a go; none with a thread of the caller's priority
   ready, which its rotation then hands the CPU; the pages a turn may store to). tests/psp/memory.cpp: copies, fills and
   copies out up to RAM's last byte and none across it.
+- The library check (all 266 games, the software renderer, 3600 frames from boot, PNGs at 60, 300, 1200 and 3600, Start
+  at 120 and Cross at 1800) flagged Platypus: its pictures other than master's from frame 90, the MumboJumbo logo's
+  loading bar a step ahead there and behind at 320 and 480, the same in two runs of each runner. The emulation isn't
+  other: from boot with the check's presses, every frame's picture and all of VRAM hashed with drawing settled, then RAM
+  and the machine's state, come out as master's through all 3600 frames, with the skip on or off and with the per-call
+  commits alone; and so is the state at 3600 without settling, the same RAM and machine state in all six runs (three
+  each). The runner's PNG is the last picture the screen's own thread had presented when the frame's run ended, which on
+  a busy host is a frame or more older than its name (the newer runner's report gives each capture's arrival: master's
+  PNG named 220 arrived in frame 215); the branch's frames cost the host less (Platypus 325 frames a second against
+  283), so other captures come out stale: master's at 90 shows an earlier frame's bar (42 columns, where a fresh capture
+  from either runner shows 49), the branch's at 320 and 480 (145 and 223 against 151 and 239). Two runs of master's
+  newer runner differ from each other at 10 of its 360 PNGs, as master's and the branch's do. The check's 30 other
+  flagged games, from boot the same way, every frame hashed: the same, every frame of every one. Its own classification
+  of the 11 still differing after its rerun, with two more runs of the branch's runner against master's two: 9 noise
+  (master differing from itself there) and two whose captures came out other in both of the branch's runs (Resistance's
+  PNG at 60, Platypus's at 3600), stale captures again: every frame of both is master's.
 - Broken versions of spins.cpp (`mutate.py`, scratch, each built against the spin groups: the last commit's for the
   rewrite's and the new address rule's, `8799a3daa`'s for the rest): 29, of which 21 are caught. Among them: no proof
   at all, the first code's rewrite (eight bytes whatever the size), a rewrite a cycle late or early, the margin at 0,
@@ -12765,6 +12781,14 @@ Every change leaves what a game sees as it was.
   `tests/psp/ares/run-tests.sh` 340 checks, 0 failed.
 - GitHub's checks on the last commit pass: the PSP core tests (tests/allegrex and tests/psp built by GCC), the desktop
   builds (Linux, macOS, Windows) and the Android APKs.
+- With master merged in again (`239d4c80a`: #238, #240 and the test plan's CI, as `2d6766628`): the 21 scenes' hashes
+  against that master identical in all three renderers; tests/allegrex 68/0, tests/psp 517/0 (sanitized, its
+  container-overflow check off: on the Mac a vector's own resize trips it, in master's own run of the suite too, under
+  the PSMF player's reads, which this branch doesn't touch; GitHub's GCC build passes with it), tests/psp/ares 340/0.
+  The rounds there (Vulkan fast, three, master -> branch, M host instructions a frame): Most Wanted's race 283 -> 32,
+  its profile 302 -> 19, Underground Rivals' title 276 -> 9, Twisted Metal's logo 286 -> 10, Disaster Report 3's intro
+  149 -> 10, the Armored Cores' intros 147 -> 13 and 140 -> 18, Super Monkey Ball's story 447 -> 444 (#240's front end
+  faster on both sides).
 
 ### Left, and why
 

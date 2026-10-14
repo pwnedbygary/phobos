@@ -66,6 +66,14 @@ states unchanged (layout 31). Nothing a game sees changes: pictures, VRAM, RAM a
   time rewritten from the status's size word as the turn left it: a status of 88 bytes got bytes 88-91 written), fixed
   with a test the first code fails, and its other points taken; a delta review of the fixes found no exactness bugs, its
   points (a guard, the run time pinned to the cycle, a sentinel, a ring whose library names none, comments) taken.
+- **The library check's Platypus** (pictures other than master's from frame 90, in two runs of each runner): not the
+  emulation. From boot with the check's presses every frame's picture and VRAM, then RAM and the machine's state, are
+  master's through 3600 frames; the runner's PNG is the last picture the screen's thread presented, a frame or more
+  older than its name on a busy host, and the branch's cheaper frames make other captures stale (master's at 90, the
+  branch's at 320 and 480; two runs of master's newer runner differ at 10 of 360 PNGs too). The other 30 flagged games'
+  every frame is master's too. A capture taken from the core itself, drawing settled, would make the check's PNGs exact.
+  With master merged again (`2d6766628`): the 21 scenes identical in all three renderers, the suites passing (tests/psp
+  517/0 with ASan's container-overflow check off: master's own suite trips it on the Mac), the speeds as above.
 - **Checks**: on the last commit, tests/allegrex 68/0, tests/psp 512/0 (sanitized), tests/psp/ares 340/0; GitHub's
   checks pass (the PSP core tests built by GCC, the desktop builds, the Android APKs).
 - **Left**: loops whose answers move on with the clock (polling the system time till a moment) can't be skipped so;
