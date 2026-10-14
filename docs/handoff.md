@@ -30,6 +30,66 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Tests: a skip says what's missing, and fails where the lane must have it; the Allegrex measurements unpacked by content — 2026-10-13
+
+Branch `cursor/test-plan-04-2b67` (PR #246), stacked on `cursor/test-plan-03-2b67` (#245, itself on #241). Package 04
+of the 2026-10-13 test and performance plan (indexed in the implementation plan by #244). Test harness, test
+scripts and CI only: no core or app change, no check loosened.
+- **The problem**: with no Vulkan GPU, `tests/psp/gpu.cpp` said "skipped" once and every GPU group then printed
+  "pass"; the groups needing the test programs or the GE's measurement rounds returned early, silently, without
+  them. A green run didn't say what had run.
+- **Now** (`tests/allegrex/harness.hpp`, both suites): `skip(capability, why)` marks the group: it prints `skip
+  NAME (capability: why)` rather than `pass` (a failure still prints FAIL), and the last line adds ", N skipped"
+  where any were (`497 groups, 0 failures` otherwise as before). A capability named in `PHOBOS_TESTS_REQUIRE` (a
+  comma-separated list, spaces around a name left out) makes that skip a failure, once a group for each reason; a
+  name no test skips for (a typo) fails the run before the groups. `PHOBOS_TESTS_REPORT=FILE` writes each group's
+  result, group and reasons (what was required and missing first), a tab between, and a last `summary` line (a
+  report without it is of a run that didn't finish). Skips declared: `vulkan` (no renderer: `renderer()` itself),
+  `vulkan-fast`, and the GPU's capabilities the groups test for (`vulkan-transforms`, `-palettes`, `-moves`,
+  `-reads`, `-unordered-reads`, `-2x`, `-3x`, every loop over the scales now saying so, and `-stencil-export`, where
+  only one of a group's two ways ran); `programs` (`testPrograms()` and `testProgram()`, a program missing from the
+  folder too); `ge-round3` (the variable unset, or a file of it missing, or no round 3 to compare with), `ge-round6`.
+  The ares suite's run without programs fails where `programs` is required, and its last line says when their
+  checks were skipped.
+- **CI** (PSP Core Tests): the system lane requires `vulkan`, `vulkan-fast`, `-transforms`, `-palettes`, `-moves`,
+  `-reads`, `-2x`, `-3x`, `-stencil-export`, `programs`, `ge-round3` and `ge-round6` (not `vulkan-unordered-reads`:
+  lavapipe reads in order, the one skip its runs already printed); the ares lane requires `programs`. The Allegrex
+  and system lanes keep their reports as artifacts.
+- **The Allegrex measurements**: unpacked again when their packed file's SHA-256 (kept beside the unpacked file)
+  changes, not by time: a tree copied with its times kept, as the agents' scratch copies are, can hold an older packed
+  file than the folder. xz checks each packed file as it unpacks; a damaged one stops the run, naming it.
+  `SHA256SUMS*` there are the sums of the PSP's own output files, of which 13 of the 25 packed here are kept whole
+  (those, and three plain files the sums list, are now checked against them each run) and the rest in part (the 16k
+  sets) or not at all; round 6 keeps verifying its own `SHA256SUMS` as before.
+- **Kept**: every check and tolerance; the `main()` loop's first lines, which three agents' scratch filters patch;
+  the PSP's optional pspautotests samples and `loader.cpp`'s own program check (#243 changes that file) stay as they
+  were.
+- **Checks** (the Mac): the changed test sources compile with `-Wall -Wextra -Werror` (syntax-only, both flag sets);
+  `tests/allegrex` 60/0 with its report (60 pass lines and the summary line), a second run unpacking nothing, and a
+  disposable copy with one packed file damaged: exit 1, "tests/allegrex/measured/vadd-spread.bin.xz doesn't unpack
+  (damaged?)". After the review: `PHOBOS_TESTS_REQUIRE="vulkan, programs ,ge-round3"` taken (60/0);
+  `"vulkan,Programs"` fails before the groups ("names Programs, which no test skips for"); an unpacked file kept
+  whole changed after unpacking fails ("fpu-arith-safe.bin isn't the file the PSP made (SHA256SUMS3)"), restored
+  60/0. CI on #246 (run 38439504812, at `60e8f1e14`): the system suite "497 groups, 0 failures, 1 skipped"
+  (vulkan-unordered-reads: lavapipe reads in order), with every requirement met; the ares system 318/0; Allegrex
+  60/0; the runner's test passing; the reports kept. After the review: run 38448816745 (`aa197ced0`, the stencil
+  export required too: 497/0, 1 skipped) and run 38454904089 (`0c44ebd4b`, with #243's groups: "502 groups, 0
+  failures, 1 skipped", the report 501 pass lines, 1 skip and its summary line).
+- **Negative controls** (run 38439595119, dispatched on a disposable branch whose workflow ran the lanes these ways;
+  deleted after): `cube.elf` missing from the programs while they're required: "497 groups, 3 failures, 1 skipped",
+  each FAIL naming it ("programs is required here (PHOBOS_TESTS_REQUIRE), and cube.elf isn't in
+  PSP_TEST_PROGRAMS"); the ares lane with no programs while required: "33 checks, 1 failed, the programs' checks
+  skipped"; Vulkan off (`PSP_GPU=0`) with nothing required: passes, "497 groups, 0 failures, 45 skipped", each GPU
+  group `skip ... (vulkan: PSP_GPU=0)`; Vulkan off while required: "497 groups, 45 failures" (every group that
+  needs the GPU). The branch is deleted.
+- **Review**: an independent read-only review (it re-ran the Allegrex suite and damaged, truncated and back-dated
+  packed files, and linked a probe against the harness) found the major gap that `ge-round3` was required only as a
+  variable: with the folder set but a file missing, `curves.cpp` went on silently, and `measure.cpp` only describes;
+  and that the requirement list was matched exactly (a space, a capital or a typo dropped a requirement), the report
+  left the reason off FAIL lines, some scale loops and the stencil-export way were dropped silently, and these docs
+  were stale. All taken (above); its suggestion of checking the files kept whole against the PSP's sums too. A delta
+  review passed it; its nit taken: `stencilFormats()`'s loop over the scales says its skip too.
+
 ## Tests: the host suites' objects kept by what they include and how they're compiled, a checkout's apart — 2026-10-13
 
 Branch `cursor/test-plan-03-2b67` (PR #245), stacked on `cursor/test-plan-05-2b67` (#241, the CI lanes, so every

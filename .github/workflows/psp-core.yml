@@ -8,8 +8,10 @@ name: PSP Core Tests
 # reader, the tests, and the files the PSP's tests share with the app's (android/app/src/test/resources/psp-*: the
 # dialogs' byte form, the keyboard's cases).
 # A version tag runs every suite (a tag's push takes no path filter). The runners are pinned to Ubuntu 24.04 (its
-# GCC 13), so a new image is a change made on purpose. Each suite's last line, its count, goes in the
-# run's summary with the commit.
+# GCC 13), so a new image is a change made on purpose. Each suite's last line, its count, goes in the run's summary
+# with the commit; the Allegrex and system lanes keep their groups' results (pass, FAIL or skip with why) as an
+# artifact. What a lane must have is named in PHOBOS_TESTS_REQUIRE (tests/allegrex/harness.hpp's skip()): without it,
+# a group that needs it fails instead of skipping.
 
 on:
   push:
@@ -53,7 +55,17 @@ jobs:
       # (bash named, so a failing suite fails the step through tee: pipefail)
       - name: Run the tests
         shell: bash
+        env:
+          PHOBOS_TESTS_REPORT: ${{ runner.temp }}/allegrex-report.tsv
         run: tests/allegrex/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+      - name: Keep the groups' results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: allegrex-report
+          path: ${{ runner.temp }}/allegrex-report.tsv
+          if-no-files-found: warn
 
       - name: Summary
         if: ${{ !cancelled() }}
@@ -93,11 +105,25 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers libvulkan1
 
+      # Required: a Vulkan GPU (lavapipe) with each capability of it the tests use that lavapipe has (not
+      # vulkan-unordered-reads: it reads in order), the test programs, and the GE's measurements (rounds 3 and 6)
       - name: Run the tests
         shell: bash
         env:
           PSP_GPU_ON_CPU: 1
+          PHOBOS_TESTS_REQUIRE: >-
+            vulkan, vulkan-fast, vulkan-transforms, vulkan-palettes, vulkan-moves, vulkan-reads, vulkan-2x, vulkan-3x,
+            vulkan-stencil-export, programs, ge-round3, ge-round6
+          PHOBOS_TESTS_REPORT: ${{ runner.temp }}/psp-report.tsv
         run: tests/psp/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+      - name: Keep the groups' results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: psp-report
+          path: ${{ runner.temp }}/psp-report.tsv
+          if-no-files-found: warn
 
       - name: Summary
         if: ${{ !cancelled() }}
@@ -131,6 +157,8 @@ jobs:
 
       - name: Run the tests
         shell: bash
+        env:
+          PHOBOS_TESTS_REQUIRE: programs
         run: tests/psp/ares/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
 
       - name: Summary

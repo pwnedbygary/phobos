@@ -1364,6 +1364,7 @@ int main() {
     {"delay slots each way", delaySlotsEachWay}, {"linked blocks", linkedBlocks},
   };
   for(auto& test : vfpuTests()) tests.push_back(test);
+  checkRequired();
   int groups = 0;
   for(bool recompiler : {false, true}) {
     useRecompiler = recompiler;
@@ -1372,7 +1373,7 @@ int main() {
       currentTest = label.c_str();
       int before = failures;
       run();
-      std::printf("%s %s\n", failures == before ? "pass" : "FAIL", currentTest);
+      report(before);
       groups++;
     }
   }
@@ -1380,9 +1381,9 @@ int main() {
     currentTest = name;
     int before = failures;
     run();
-    std::printf("%s %s\n", failures == before ? "pass" : "FAIL", currentTest);
+    report(before);
     groups++;
   }
-  std::printf("%d groups, %d failure%s\n", groups, failures, failures == 1 ? "" : "s");
+  summary(groups);
   return failures ? 1 : 0;
 }

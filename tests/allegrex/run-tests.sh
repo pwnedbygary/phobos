@@ -8,7 +8,8 @@
 #files must agree on that, as it changes the layout of sljit's structures.
 #Objects are kept between runs by tests/objects.sh, this checkout's in its own folder, each compiled again when what
 #it was built from changes (a header it includes too) or its compile command does.
-#usage: tests/allegrex/run-tests.sh   (SANITIZE= turns the sanitizers off; PHOBOS_JOBS: compiles at once)
+#usage: tests/allegrex/run-tests.sh   (SANITIZE= turns the sanitizers off; PHOBOS_JOBS: compiles at once;
+#PHOBOS_TESTS_REQUIRE and PHOBOS_TESTS_REPORT as in tests/psp/run-tests.sh)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
@@ -28,20 +29,41 @@ fi
 DEFINES=(-DBUILD_DEBUG -DSLJIT_HAVE_CONFIG_PRE=1 -DSLJIT_HAVE_CONFIG_POST=1)
 INCLUDES=(-isystem "$ROOT/nall" -isystem "$ROOT/ares" -isystem "$ROOT" -isystem "$ROOT/thirdparty")
 
-#Results measured on a real PSP (measured.cpp), unpacked once into this checkout's folder, each file through a
-#temporary one, so one cut short isn't kept.
+#Results measured on a real PSP (measured.cpp), unpacked into this checkout's folder, each file through a temporary
+#one, so one cut short isn't kept; xz checks a packed file's own integrity as it unpacks it, failing on a damaged one.
+#A file is unpacked again when its packed file's SHA-256, kept beside it, changes: a tree copied with its times kept
+#can hold older packed files than the folder's. SHA256SUMS* beside them are the sums of the PSP's own files, of which
+#some are kept here whole and the rest in part (the 16k sets) or not at all: those kept whole are checked against
+#them.
+sha256() {
+  if command -v sha256sum > /dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
 MEASURED="$BUILD/measured"
 mkdir -p "$MEASURED"
+command -v xz > /dev/null || { echo "tests/allegrex/measured needs xz to unpack" >&2; exit 1; }
 for packed in "$HERE"/measured/*.xz; do
   unpacked="$MEASURED/$(basename "$packed" .xz)"
-  if [[ ! -f $unpacked || $packed -nt $unpacked ]]; then
+  sum=$(sha256 "$packed")
+  if [[ ! -f $unpacked || $(cat "$unpacked.sha256" 2> /dev/null) != "$sum" ]]; then
     if ! xz -dc "$packed" > "$unpacked.part-$$"; then
       rm -f "$unpacked.part-$$"
-      echo "tests/allegrex/measured/$(basename "$packed") doesn't unpack" >&2
+      echo "tests/allegrex/measured/$(basename "$packed") doesn't unpack (damaged?)" >&2
       exit 1
     fi
     mv -f "$unpacked.part-$$" "$unpacked"
+    echo "$sum" > "$unpacked.sha256"
   fi
+done
+for sums in "$HERE"/measured/SHA256SUMS*; do
+  while read -r sum name; do
+    file="$MEASURED/$name"
+    [[ -f $file ]] || file="$HERE/measured/$name"
+    [[ -f $file ]] || continue  #(a file of the PSP's not kept here)
+    if [[ $(sha256 "$file") != "$sum" ]]; then
+      echo "tests/allegrex/measured: $name isn't the file the PSP made ($(basename "$sums"))" >&2
+      exit 1
+    fi
+  done < "$sums"
 done
 
 #nall, sljit and sljit's allocator: built without the sanitizers (their lines say so as they're compiled)
