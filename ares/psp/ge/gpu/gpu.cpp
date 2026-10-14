@@ -629,9 +629,14 @@ auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken, u
   if(held && look.textured) {  //(copied from its target, in order with what's drawn)
     Held h = *held;
     held.reset();
-    //(its colors' alpha caught up with the stencil first where it lags: a change its copies take again, below)
-    catchAlpha(*h.target, h.x, h.y, h.x + h.width - 1, h.y + h.split - 1);
-    if(h.next) catchAlpha(*h.next, h.x, 0, h.x + h.width - 1, h.rows - h.split - 1);
+    //(its colors' alpha caught up with the stencil first where it lags, a change its copies take again, below; not
+    //where the PRIM can't see the copy's alpha: palette indices take none of the stencil's bits (take()), and a
+    //texture function without the texel's alpha leaves it out. A later PRIM that sees it catches it up then, its copy
+    //taken again from the change that makes)
+    if(!h.palette && look.withAlpha) {
+      catchAlpha(*h.target, h.x, h.y, h.x + h.width - 1, h.y + h.split - 1);
+      if(h.next) catchAlpha(*h.next, h.x, 0, h.x + h.width - 1, h.rows - h.split - 1);
+    }
     texels = h.target->format < 3 ? h.target->format : 4;
     if(h.palette) {
       auto& t = look.texture;
@@ -894,8 +899,9 @@ auto GPU::settings(const GE::Look& look) -> void {
       }
     }
     if(p.logicOp && p.logic != 3 && !reading) {
-      if(backend->logicOps) {
+      if(backend->logicOps) {  //(the GPU's takes the alpha too, the GE's leaves the stencil: its alpha left behind)
         k.logicOp = 1, k.logicOperation = p.logic, k.blend = 0;
+        k.alphaOut = 0, k.colorMask &= 7;
       } else if(p.logic == 0 || p.logic == 12 || p.logic == 15) {
         k.logic = p.logic;
       } else if(p.logic == 5) {  //the frame buffer kept: no color written

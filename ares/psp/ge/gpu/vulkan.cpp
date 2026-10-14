@@ -1576,11 +1576,12 @@ struct VulkanBackend : GPU::Backend {
     return true;
   }
 
-  //A target's render pass begun, over the whole of its pictures
-  auto beginPass(VkCommandBuffer commands, Target& t) -> void {
+  //A target's render pass begun, over the whole of its pictures, or a rectangle of them (each kept as it is around
+  //it: its pictures are loaded and stored)
+  auto beginPass(VkCommandBuffer commands, Target& t, const VkRect2D* area = nullptr) -> void {
     auto info = made<VkRenderPassBeginInfo>(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
     info.renderPass = renderPass, info.framebuffer = t.framebuffer;
-    info.renderArea = {{0, 0}, {t.width * scale, t.rows * scale}};
+    info.renderArea = area ? *area : VkRect2D{{0, 0}, {t.width * scale, t.rows * scale}};
     vk.vkCmdBeginRenderPass(commands, &info, VK_SUBPASS_CONTENTS_INLINE);
     passes++;
   }
@@ -1656,32 +1657,35 @@ struct VulkanBackend : GPU::Backend {
   }
 
   //An Alpha (GPU::catchAlpha()): the target's colors' alpha over the rectangle set from its stencil, by draws of
-  //copy.frag's ALPHA pipeline, each adding its alpha to the target's times the blend constant's: 0 times 0 first,
-  //everywhere (a test of no bits passes), then each bit the target's format keeps apart (as stencilBits() writes
-  //them) where the stencil has it.
+  //copy.frag's ALPHA pipeline in a render pass over the rectangle alone, each adding its alpha to the target's times
+  //the blend constant's: 0 times 0 first, everywhere (a test of no bits passes), then for each bit of the stencil a
+  //read back takes (GPU::finish()'s narrowTarget(), move.frag: a 5551 one's top bit, a 4444 one's top four, an 8888
+  //one's eight) the alpha it reads as (255, the bit twice over, the bit), where the stencil has it.
   auto alphaFromStencil(VkCommandBuffer commands, Target& t, const GPU::Command& c) -> void {
     VkRect2D area = scaled(t, c.x, c.y, c.width, c.height);
     if(c.format == 0 || !area.extent.width || !area.extent.height) return;
-    beginPass(commands, t);
+    beginPass(commands, t, &area);
     VkViewport viewport{f32(area.offset.x), f32(area.offset.y), f32(area.extent.width), f32(area.extent.height), 0,
                         1};
     vk.vkCmdSetViewport(commands, 0, 1, &viewport);
     vk.vkCmdSetScissor(commands, 0, 1, &area);
     vk.vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, alphaPipeline);
-    auto draw = [&](u32 bits, f32 kept) {
-      CopyPush push{{0, 0}, scale, bits};
+    auto draw = [&](u32 tested, u32 added, f32 kept) {
+      CopyPush push{{0, 0}, scale, added};
       f32 constant[4] = {0, 0, 0, kept};
       vk.vkCmdSetBlendConstants(commands, constant);
-      vk.vkCmdSetStencilCompareMask(commands, VK_STENCIL_FACE_FRONT_AND_BACK, bits);
-      vk.vkCmdSetStencilReference(commands, VK_STENCIL_FACE_FRONT_AND_BACK, bits);
+      vk.vkCmdSetStencilCompareMask(commands, VK_STENCIL_FACE_FRONT_AND_BACK, tested);
+      vk.vkCmdSetStencilReference(commands, VK_STENCIL_FACE_FRONT_AND_BACK, tested);
       vk.vkCmdPushConstants(commands, copyLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
       vk.vkCmdDraw(commands, 3, 1, 0, 0);
     };
-    draw(0, 0);
+    draw(0, 0, 0);
     if(c.format == 1) {
-      draw(0xff, 1);
+      draw(0x80, 0xff, 1);
+    } else if(c.format == 2) {
+      for(u32 bit = 0; bit < 4; bit++) draw(0x10 << bit, 0x11 << bit, 1);
     } else {
-      for(u32 bit = 0; bit < (c.format == 2 ? 4u : 8u); bit++) draw((c.format == 2 ? 0x11 : 1) << bit, 1);
+      for(u32 bit = 0; bit < 8; bit++) draw(1 << bit, 1 << bit, 1);
     }
     vk.vkCmdEndRenderPass(commands);
   }
