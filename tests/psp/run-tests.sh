@@ -5,9 +5,10 @@
 #from changes (a header it includes too) or its compile command does.
 #usage: tests/psp/run-tests.sh   (SANITIZE= turns the sanitizers off; PSP_TEST_PROGRAMS: see loader.cpp;
 #PSP_AUTOTESTS: a pspautotests checkout, whose sample files atrac.cpp and mp3.cpp decode with FFmpeg; PHOBOS_JOBS:
-#compiles at once; PHOBOS_TESTS_REQUIRE: what must be here, a group that needs it failing rather than skipping, as
-#vulkan,programs,ge-round3,ge-round6 (tests/allegrex/harness.hpp's skip(), tests/psp/gpu.cpp's capabilities);
-#PHOBOS_TESTS_REPORT: a file for each group's result, pass, FAIL or skip with why, a tab between)
+#compiles at once; PHOBOS_TESTS_MODE=release: built as the app is, below; PHOBOS_TESTS_REQUIRE: what must be here,
+#a group that needs it failing rather than skipping, as vulkan,programs,ge-round3,ge-round6
+#(tests/allegrex/harness.hpp's skip(), tests/psp/gpu.cpp's capabilities); PHOBOS_TESTS_REPORT: a file for each
+#group's result, pass, FAIL or skip with why, a tab between)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
@@ -52,7 +53,21 @@ fi
 
 CC=${CC:-cc}
 CXX=${CXX:-c++}
-SANITIZE=${SANITIZE--fsanitize=address,undefined -fno-sanitize-recover=all}
+#PHOBOS_TESTS_MODE: debug (the default: BUILD_DEBUG, sljit's own checks on, -O1, the sanitizers unless SANITIZE says
+#otherwise) or release, built as the app's release builds are (CMakeLists.txt: BUILD_RELEASE, SLJIT_DEBUG=0, -O3 and
+#its math and loop flags, without its link-time optimization), with no sanitizers unless SANITIZE names some; sljit's C
+#file and the C++ files get the same mode either way.
+case ${PHOBOS_TESTS_MODE:-debug} in
+  debug)
+    MODE=(-DBUILD_DEBUG)
+    OPTIMIZE=(-O1)
+    SANITIZE=${SANITIZE--fsanitize=address,undefined -fno-sanitize-recover=all} ;;
+  release)
+    MODE=(-DBUILD_RELEASE -DSLJIT_DEBUG=0)
+    OPTIMIZE=(-O3 -ftree-vectorize -funroll-loops -fno-math-errno -fno-trapping-math)
+    SANITIZE=${SANITIZE-} ;;
+  *) echo "PHOBOS_TESTS_MODE is debug or release, not ${PHOBOS_TESTS_MODE}" >&2; exit 1 ;;
+esac
 #The address sanitizer's check for stack use after return gives every call a fresh frame on its own heap, which the
 #interpreter's per-instruction and the GE's per-pixel functions make hundreds of times slower; its other checks stay.
 export ASAN_OPTIONS=${ASAN_OPTIONS-detect_stack_use_after_return=0}
@@ -63,7 +78,7 @@ if [[ $(uname) == Darwin ]]; then
   if SDK=$(xcrun --sdk macosx --show-sdk-path 2>/dev/null); then SYSROOT=(-isysroot "$SDK"); fi
   LIBRARIES=(-framework CoreFoundation -lz)
 fi
-DEFINES=(-DBUILD_DEBUG -DSLJIT_HAVE_CONFIG_PRE=1 -DSLJIT_HAVE_CONFIG_POST=1)
+DEFINES=("${MODE[@]}" -DSLJIT_HAVE_CONFIG_PRE=1 -DSLJIT_HAVE_CONFIG_POST=1)
 INCLUDES=(-isystem "$ROOT/nall" -isystem "$ROOT/ares" -isystem "$ROOT" -isystem "$ROOT/thirdparty"
   -isystem "$ROOT/thirdparty/Vulkan-Headers/include")
 #The hardware renderer's shaders (ares/psp/ge/gpu/shaders): shaders.hpp must be what its GLSL compiles to (its
@@ -85,12 +100,12 @@ if [[ ${PSP_FFMPEG:-1} != 0 ]]; then
 fi
 
 #nall, sljit and sljit's allocator: built without the sanitizers (their lines say so as they're compiled)
-object "$CXX" "$ROOT/nall/nall/nall.cpp" -std=c++20 -O1 "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}"
-object "$CC" "$ROOT/thirdparty/sljit/sljit_src/sljitLir.c" -O1 "${SYSROOT[@]}" "${DEFINES[@]}" -I "$ROOT/thirdparty"
-object "$CXX" "$ROOT/thirdparty/sljitAllocator.cpp" -std=c++20 -O1 "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}"
+object "$CXX" "$ROOT/nall/nall/nall.cpp" -std=c++20 "${OPTIMIZE[@]}" "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}"
+object "$CC" "$ROOT/thirdparty/sljit/sljit_src/sljitLir.c" "${OPTIMIZE[@]}" "${SYSROOT[@]}" "${DEFINES[@]}" -I "$ROOT/thirdparty"
+object "$CXX" "$ROOT/thirdparty/sljitAllocator.cpp" -std=c++20 "${OPTIMIZE[@]}" "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}"
 
 # shellcheck disable=SC2206
-FLAGS=(-std=c++20 -O1 -g -Wall -Wextra -Werror $SANITIZE "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}"
+FLAGS=(-std=c++20 "${OPTIMIZE[@]}" -g -Wall -Wextra -Werror $SANITIZE "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}"
   -include "$ROOT/tests/allegrex/prelude.hpp")
 for source in "$ROOT/ares/psp/cpu/allegrex.cpp" "$ROOT/ares/psp/memory/memory.cpp" \
   "$ROOT/ares/psp/kernel/loader.cpp" "$ROOT/ares/psp/kernel/kernel.cpp" "$ROOT/ares/psp/ge/ge.cpp" \

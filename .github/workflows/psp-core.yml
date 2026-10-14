@@ -6,12 +6,13 @@ name: PSP Core Tests
 # (tests/psp/ares/runner-test.sh). Their paths are what those builds compile or read: the core, nall, ares's framework
 # and libco, sljit and its configuration, Vulkan's headers, libchdr, FFmpeg's build, the runner, the desktop's disc
 # reader, the tests, and the files the PSP's tests share with the app's (android/app/src/test/resources/psp-*: the
-# dialogs' byte form, the keyboard's cases).
+# dialogs' byte form, the keyboard's cases). The CPU's suite runs on an ARM64 host too, and again built as the app's
+# release builds are (PHOBOS_TESTS_MODE=release), beside the sanitized runs.
 # A version tag runs every suite (a tag's push takes no path filter). The runners are pinned to Ubuntu 24.04 (its
 # GCC 13), so a new image is a change made on purpose. Each suite's last line, its count, goes in the run's summary
-# with the commit; the Allegrex and system lanes keep their groups' results (pass, FAIL or skip with why) as an
-# artifact. What a lane must have is named in PHOBOS_TESTS_REQUIRE (tests/allegrex/harness.hpp's skip()): without it,
-# a group that needs it fails instead of skipping.
+# with the commit; the x86-64 Allegrex lane's sanitized run and the system lane keep their groups' results (pass, FAIL
+# or skip with why) as an artifact. What a lane must have is named in PHOBOS_TESTS_REQUIRE
+# (tests/allegrex/harness.hpp's skip()): without it, a group that needs it fails instead of skipping.
 
 on:
   push:
@@ -67,6 +68,15 @@ jobs:
           path: ${{ runner.temp }}/allegrex-report.tsv
           if-no-files-found: warn
 
+      # again built as the app's release builds are (PHOBOS_TESTS_MODE=release: BUILD_RELEASE, -O3, no sanitizers),
+      # whether or not the sanitized run passed
+      - name: Run the tests, built as the app is
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PHOBOS_TESTS_MODE: release
+        run: tests/allegrex/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite-release.log"
+
       - name: Summary
         if: ${{ !cancelled() }}
         env:
@@ -74,7 +84,48 @@ jobs:
         run: |
           at="${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}"
           last=$(tail -1 "$RUNNER_TEMP/suite.log" 2> /dev/null || true)
+          release=$(tail -1 "$RUNNER_TEMP/suite-release.log" 2> /dev/null || true)
           echo "- tests/allegrex at $at: ${last:-no output: the suite did not run}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- tests/allegrex, release build: ${release:-no output: the suite did not run}" >> "$GITHUB_STEP_SUMMARY"
+
+  # The same on an ARM64 host, where the recompiler emits ARM64 code as it does on the phones (sljit's ARM64 back
+  # end; Linux's ABI, not Android's): sanitized, then built as the app is
+  allegrex-arm64:
+    name: Allegrex CPU tests (ARM64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: The host
+        run: |
+          uname -m
+          c++ --version | head -1
+          [[ $(uname -m) == aarch64 ]] || { echo "this lane is for an ARM64 host; it got $(uname -m)"; exit 1; }
+
+      - name: Run the tests
+        shell: bash
+        run: tests/allegrex/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+      - name: Run the tests, built as the app is
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PHOBOS_TESTS_MODE: release
+        run: tests/allegrex/run-tests.sh 2>&1 | tee "$RUNNER_TEMP/suite-release.log"
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          host="$(uname -m), $(c++ --version | head -1)"
+          at="${GITHUB_SHA::9}${HEAD_SHA:+ (the PR head ${HEAD_SHA::9}, merged)}"
+          last=$(tail -1 "$RUNNER_TEMP/suite.log" 2> /dev/null || true)
+          release=$(tail -1 "$RUNNER_TEMP/suite-release.log" 2> /dev/null || true)
+          echo "- tests/allegrex on $host at $at: ${last:-no output: the suite did not run}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- tests/allegrex on $host, release build: ${release:-no output: the suite did not run}" >> "$GITHUB_STEP_SUMMARY"
 
   system:
     name: PSP system tests

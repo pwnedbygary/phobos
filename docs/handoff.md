@@ -30,6 +30,77 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## CI: the CPU's tests on an ARM64 host and built as the app is, the RSP's NEON checked on ARM64; the system's tests can be built so too — 2026-10-13
+
+Branch `cursor/test-plan-06-2b67` (PR #247), stacked on `cursor/test-plan-04-2b67` (#246, on #245, on #241).
+Package 06 of the 2026-10-13 test and performance plan (indexed in the implementation plan by package 01's PR). Test
+scripts and CI only: the app's build and its flags are unchanged.
+- **The gap**: the phones run the Allegrex recompiler's ARM64 code and the N64 RSP's NEON sequences, but CI ran only
+  x86-64 (where neither is executed), and every host suite was an `-O1` debug build, the CPU's and the system's
+  sanitized, while the app is `BUILD_RELEASE`, `SLJIT_DEBUG=0`, `-O3` with its math and loop flags (CMakeLists.txt).
+- **ARM64** (GitHub's `ubuntu-24.04-arm`, free for public repositories): PSP Core Tests gains "Allegrex CPU tests
+  (ARM64)", the suite sanitized and then built as the app is, each test on the interpreter and the recompiler (sljit's
+  ARM64 back end: Linux's ABI, not Android's); a new workflow, N64 RSP NEON Tests, runs
+  `tests/rsp-vu-neon/run-tests.sh 3000 0x5253505655` there on changes to the RSP, the harness or sse2neon. Their
+  summaries name the host (`uname -m`, the compiler) and the commit.
+- **Built as the app is** (`PHOBOS_TESTS_MODE=release` in `tests/allegrex` and `tests/psp`): `BUILD_RELEASE`
+  (NDEBUG: the core's five asserts out, as in the app; no test uses assert), `SLJIT_DEBUG=0`, `-O3 -ftree-vectorize
+  -funroll-loops -fno-math-errno -fno-trapping-math`, no sanitizers unless `SANITIZE` names some; not the app's
+  link-time optimization (`-flto=thin` is clang's, CI's compiler is GCC). sljit's C file and the C++ files get the
+  same mode. The default stays the sanitized debug build. CI runs it beside each sanitized run in both Allegrex jobs
+  (a second step); the ARM64 lane fails unless its host is `aarch64`. `tests/psp` takes the same switch, but its
+  lane is a draft of its own (#249) because GCC rejects four of the files it builds (below), so package 06's
+  release lane is met for the CPU's tests only until those are settled.
+- **A finding: `tests/psp` built as the app is doesn't get through GCC.** Its lane ("PSP system tests, built as the
+  app is", run 38439997353) failed: GCC 13 at `-O3` with `-Werror` reports `-Wmaybe-uninitialized` in
+  `ares/psp/ge/four.cpp` (lines 44, 231, 243, 262, through `pickLanes()`, `texelsFour()` and `spriteFours()`), for
+  `Four::depth` in `spriteFours()`'s `Four four;` and for `downAxis[]`. They're false positives, which `-Werror`
+  turns into an error (the review's reading): `four.depth` is read only by `writeDepth()`, which runs only where the
+  depth is written (a clear's depth, or `depthWrite`), and `depthFirst()`, always run first, assigns all four lanes
+  whenever the depth is tested, or cleared; `depthWrite` is only ever on with `depthTest` (`pixel.cpp:93`), which
+  GCC can't see through two separate flags. `downAxis[]` is read only for a textured sprite, and every textured path
+  assigns all three. Only sprites warn because `triangleFours()` already sets `four.depth = s32x4{};` before
+  `depthFirst()`.
+  Apple clang 21 compiles the same `ge.cpp` at the same flags with `-Werror` cleanly (silent even with
+  `-Wconditional-uninitialized`), and the app is built by the NDK's clang with `-w`. The review's suggested fix,
+  `four.depth = s32x4{};` in `spriteFours()` as triangles do and `s32x4 downAxis[3] = {};` (not `Four four{}`, which
+  zeroes ten vectors per four), is `four.cpp`'s alone, outside #240's files; it isn't made here because it's the
+  software renderer's innermost loop and wants its speed measured. `-Werror` isn't loosened: the lane stays red in
+  its draft. That run stopped at the first failed compile, `ge.cpp`, the 8th file; #249 now compiles four at a time
+  (`PHOBOS_JOBS=4`, where every file is compiled before the build fails), and its run 38462046887 has GCC rejecting
+  4 of the 51 files. Beside `ge.cpp` (`four.cpp`, as above), three fail with `-Wstringop-overflow`, each reading as
+  a false positive too (the review's reading, not checked with a compiler): `kernel.cpp` at `serialization.cpp:976`
+  (64 times, "writing 2 bytes into a region of size 0"), a range-for over `Sample samples[64]` that writes in bounds,
+  added by master's right stick (`2b5a9209a`, merged with #230 since; `kernel.cpp` compiled cleanly in the earlier
+  runs, before that commit); `desktop/PspDiscInfo.cpp` in nall's string allocator (`memory.hpp:137`, 24 bytes into
+  8, through `pspIconKey()`'s `Hash::digest()` and `hex()`), though `reserve()` allocates only past the 23-character
+  inline buffer; and `tests/psp/crypto.cpp:29`, `put32()` inlined into `kirkPrivate()`, writing into `other`, a copy
+  of `input` at least 0x8f bytes long (0x180 here), whose data GCC takes for address zero. The last two were there
+  before, never reached. None is fixed here: `four.cpp`'s wants measuring (above), #229 is changing the kernel's
+  serialization, nall is shared with every ares system, and a change to `crypto.cpp` alone wouldn't turn the lane
+  green.
+- **Checks** (the Mac, arm64, Apple clang 21): `PHOBOS_TESTS_MODE=release tests/allegrex/run-tests.sh` 60/0 (7
+  objects of its own, 18 s with the run); `tests/rsp-vu-neon/run-tests.sh 3000 0x5253505655`: 10,420,000 checks, no
+  NEON or reference mismatch; actionlint on the workflows. CI on #247 (run 38439997353): Allegrex 60/0 sanitized and
+  60/0 built as the app is, on x86-64 and on `aarch64` (GCC 13.3); RSP NEON (run 38439997492, `aarch64`): 10,420,000
+  checks, no mismatch. Merged with the stack below: runs 38448910923 (`c2d54f724`), 38454946526 (`014c037b1`) and
+  38461962140 (`c31d1f7b8`, master's #230 in), every job green; RSP NEON 38454946627 and 38461962244.
+- **Negative controls** (draft PR #248, closed and its branch deleted; runs 38440061339 and 38440061297): EOR emitted
+  with ORR's encoding in sljit's ARM64 back end: the ARM64 lane failed ("alu (recompiler)" and the recompiler against
+  the interpreter, 0x16e mismatches; x86-64 doesn't build that back end, and passed); the RSP's NEON `ADD_4S` emitted
+  as `SUB_4S`: "NEON differs from SSE" at VMADM, failed.
+- **Review**: an independent read-only review checked the mode switch (the default's flags, so its objects, are
+  unchanged), the workflows, the logs and both controls, and re-ran the release-built Allegrex suite, the RSP harness
+  and `ge.cpp` at the release flags on the Mac. It found these notes wrong on `four.cpp` (they called the warnings
+  indeterminate reads; above, corrected) and on the asserts' count, and the heading claiming the system's tests built
+  as the app is; all corrected. Its suggestions taken: the ARM64 lane checks its host; the workflow's note on the kept
+  results says which runs keep them. A delta review, after #249's run compiled every file, found the finding stale
+  (it said GCC's other findings would show once `four.cpp` was settled; the four files above, from that review's
+  reading of the log, checked against it) and "every host suite was a sanitized `-O1` debug build" wrong (the ares
+  system's suite and the runner aren't sanitized); both corrected. The next delta review: PASS; its points, all
+  wording, are taken (clears in `depthFirst()`'s condition, `crypto.cpp`'s reason, `other` named, which runs
+  compiled `kernel.cpp`).
+
 ## Runner: a JSON report of what ran, a pinned start time, captures timed apart and stale ones said — 2026-10-13
 
 Branch `cursor/test-plan-08-2b67` (PR #250), stacked on `cursor/test-plan-03-2b67` (#245, which changes the runner's
