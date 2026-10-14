@@ -11199,6 +11199,173 @@ documents): Formula Front International's True Analogs camera as before (`c1-rig
 Dragon 2020-II's certificate passed into the Diet chamber (frame 1560) and the first conversation (3600); Ridge Racer
 2's default entered unchanged (above).
 
+## Part 82: sound — every ATRAC ID's context kept current (Angus Hates Aliens past NEW GAME), and sceVaudio
+
+On branch `cursor/psp-audio-b00-2b67`, on master (`b7ea296f4`, then `1d9308714`, #228). The task: items 2 and 5 of
+the play-testers' batch 00 report (Angus Hates Aliens black after NEW GAME; Battle vs. Chess's missing sceVaudio);
+then an independent review's points (below, "The review's points"). Sources: pspautotests' audio/atrac recordings
+(getremainframe, getsoundsample, resetpos, resetting and second with a state the test forces; sas, a context a
+program changes for sceSas) and audio/blocking/vaudio, pspsdk's pspatrac3.h and pspvaudio.h, pspautotests' sascore.h
+(the SasCore's layout), PPSSPP read only as a description of the PSP (sceVaudio on the SRC channel), and the games'
+own code, traced with a scratch runner and disassembled from their memory. No code copied or translated; JPCSP not
+read.
+
+**Save states go to StateVersion 31, and 29 and 30 are skipped.** 27 and 28 are the fonts' and the downloads'
+modules' layouts (parts 87 and 88), which landed first: a 27 or 28 state loads as an older layout, sceVaudio holding
+nothing (`tests/psp/states.cpp` loads both). 29 and 30 are other open branches' layouts, and this one's loader
+refuses them (as it refuses 32, past it), so no state of theirs is ever read as this layout or this layout's as
+theirs. Whoever lands one of those branches after this one must renumber its layout past 31 (its loader then
+reading 31's states as the layout before it), and update `tests/psp/ares/system.cpp`'s list of refused versions
+(29, 30 and 32: the one it takes falls out of the list) along with `tests/psp/states.cpp`'s older layouts.
+
+### Angus Hates Aliens: the contexts
+
+**The report.** Black for good after NEW GAME, the runner at 4 to 8 fps with nearly all its time in
+`_sceAtracGetContextAddress`, and 16 loads from 0xa0, 0xa4 and 0xbc between boot frames 500 and 550.
+
+**What the game does.** It imports three of sceAtrac3plus's functions (SetDataAndGetID, `_sceAtracGetContextAddress`,
+ReleaseAtracID) and plays its music through sceSas's ATRAC3 voices, with a wrapper of its own (0x0885d09c on; the
+one pspautotests' audio/atrac/sas copies, Sol Trigger's in its comments). Setting a voice: the ID's context, checked
+for one channel, ATRAC3, no loop and a state of 2 to 4, gets the state 16; `__sceSasSetVoiceATRAC3` takes it for
+voice 31; then the wrapper moves the context's buffer on by streamOff and curFileOff by streamDataByte, puts the voice
+in loopNum and, for a stream, -1 in secondBuffer. Streaming, it reads the context back from the voice's first word in
+the SasCore (20 bytes of the core's own, then 56 a voice: sascore.h; the word where a VAG voice's samples are), and
+compares curFileOff with fileDataEnd and secondBuffer with 0 to know whether to hand over more. Stopping the music, as
+NEW GAME does, it takes the context again and unsets the voice only while its state says 16, then sets 1 and
+releases the ID; refused (0x80420102), it asks again, for good (0x08804a3c).
+
+**Why it stopped.** `_sceAtracGetContextAddress` wrote the whole context afresh from the library's own record each
+time it was asked: the 16 the wrapper had set went back to 2, the stop was refused for ever, and the 256 bytes
+written at every one of its calls were where the runner's time went. And `__sceSasSetVoiceATRAC3` kept the context
+nowhere in the SasCore: the streaming code read 0 there and loaded through it (0xa0, 0xa4, 0xbc are curFileOff,
+fileDataEnd and secondBuffer).
+
+**What a PSP does.** Its library's contexts are its state itself, there from the start and current after every call;
+`_sceAtracGetContextAddress` only says where one is (pspautotests' shared.cpp: "Need to call this every time to get
+the values updated - but only in the emulator!"). Programs write them, and the library honours it: getremainframe,
+getsoundsample, resetpos, resetting and second recorded the calls they make (GetRemainFrame, GetSoundSample,
+ResetPlayPosition, GetBufferInfoForResetting, GetSecondBufferInfo, IsSecondBufferNeeded, SetSecondBuffer) refusing an
+ID whose state the test set to 8 (0x80630031) or 16 (0x80630040). The sas recording shows nothing in the context
+moving as sceSas plays it but the buffer, which the first grain clears.
+
+**The fix** (`atrac.cpp`, `sas.cpp`):
+- Every ID's 256 bytes are in kernel memory (`Kernel::AtracContextMemory`, 0x08030000: chosen, as a PSP's are in its
+  library's module, in the user partition, and no game's memory need go to them here), written at power on and
+  whenever the library changes the ID (set, decoded, added to, reset, released, its loops or second buffer set, a
+  low-level decode's error). `_sceAtracGetContextAddress` writes nothing and gives the address of an ID handed out
+  (0 for one that isn't, as before).
+- The state a program wrote there is what the seven recorded calls look at first: 8 refuses them with 0x80630031, 16
+  with 0x80630040, and set back the ID is taken again (no recording calls after that). Every other call answers as it
+  did before the contexts were kept, the state as the library holds it (none is recorded with such a state). A
+  low-level ID's context says 8, so the seven say 0x80630031 of one, and the rest NO_DATA where they need a file, as
+  before (sceAtracGetInternalErrorInfo among them; a first version refused them all with 0x80630031). The rest of what
+  a program writes stays until the library next changes that ID: a set refused before it changes anything, or a
+  decode after the end, writes nothing.
+- `__sceSasSetVoiceATRAC3` writes the context's address into the voice's first word in the SasCore: only into the
+  SasCore `__sceSasInit` set up, the call naming it (the program's memory, which the library has only once it's set
+  up; the other calls take any core). `__sceSasUnsetATRAC3` puts 0 back, and `__sceSasInit` puts 0 in each of the 32
+  voices' words, as a fresh SasCore has them (sascore.h: "default 0x00000000").
+- States: the contexts travel in memory. A state from before (no memory of their own: 0) has them written as it
+  loads; one where a program had asked (a block of the user partition) keeps them there, as fresh as that last
+  asking, which wrote them then: each is written again as the library next changes its ID, a state the program set
+  kept meanwhile (Angus's state at its title needs its 16 kept).
+
+**The game now** (the scratch runner, the tester's `st-title.bin`, Cross at 30): the stop goes through at once, a
+loading screen from frame 100, and the first level from about 750, Angus in his cell: "MY HEAD HURTS. THE LAST THING I
+REMEMBER IS BEING TAKEN PRISONER BY SOME STRANGE ALIENS THAT LANDED ON MY FARM." From boot (`s1.txt`) the same, and no
+load through address 0. Still not done: sceSas's ATRAC3 voices play silence and take nothing from their stream, so
+the music isn't heard (it wasn't before), and the game, its voice never asking for more by its secondBuffer, hands
+over the whole file at once and then an empty piece every other frame, where a PSP would take it as it plays.
+
+### sceVaudio
+
+**The report.** Battle vs. Chess (a prototype) calls sceVaudioChReserve at boot and sceVaudioOutputBlocking once as a
+match starts, neither there; moves are never carried out, a suspect.
+
+**What the PSP does** (pspautotests' audio/blocking/vaudio, recorded): an output of 2048 samples returns 0x800, and
+the SRC channel's `sceAudioOutput2GetRestSample` counts its buffer: sceVaudio is the SRC channel (part 21's) under
+another name. Reserving while `sceAudioOutput2Reserve` holds it is ALREADY_RESERVED, and sceVaudio is held all the
+same: reserving again, once the channel is free, is BUSY, an output NOT_RESERVED, the release NOT_RESERVED.
+Releasing what isn't reserved is NOT_RESERVED; releasing with a buffer still playing isn't refused, as the SRC
+channel's release is, but waits for it to be heard (a buffer's time) and then releases. pspvaudio.h gives the rest:
+256 to 2048 samples a buffer, mono (1) or stereo (2), the rates, the four effects and the level control.
+
+**The implementation** (`audio.cpp`): sceVaudioChReserve, ChRelease, OutputBlocking, SetEffectType and SetAlcMode, as
+recorded and, where not, chosen: its outputs and release act on the SRC channel only where its own reservation took
+it (held on a refused one, or once the SRC family's release has let its channel go, they're NOT_RESERVED whoever has
+the channel, and the release lets go of the hold alone);
+each buffer is copied as pairs (a mono sample heard on both sides) into whichever of two kernel buffers
+(`Kernel::VaudioMemory`) isn't armed, and armed on the SRC channel from there, its blocking and pace the SRC
+channel's; the release's wait is a thread state of its own (`Audio::WaitVaudioRelease`), the release made as the last
+buffer retires (100 microseconds before its end is heard, as a drain returns); a count outside 256 to 2048 is
+INVALID_SIZE, a format but 1 or 2 INVALID_FORMAT and a rate the SRC channel hasn't got INVALID_FREQUENCY, all before
+sceVaudio is held; an output's volume is 0 to pspvaudio.h's PSP_VAUDIO_VOLUME_MAX, 0x8000 ("It must be a value
+between 0 and PSP_VAUDIO_VOLUME_MAX"), one out of that refused (INVALID_VOLUME, as the SRC channel says of one out of
+its own range of 0 to 0xFFFFF, which a first version took) rather than clamped, as the header has it and no recording
+contradicts; the effect (0 to 5 and the level control 0 to 2, pspvaudio.h's MAX values among them, the effect at 0 to
+0x8000, the volume returned) is kept and not heard. The state keeps whether sceVaudio is held and whether the channel
+is its own, its format, effect and level control (layout 31).
+
+**Battle vs. Chess now** (the tester's `script.txt` from boot, then `gameplay.txt`'s presses at 5820): its music thread
+(SceMainSampleBgmMp3) reserves 1152 samples at 44,100 Hz at frame 607 and plays its MP3 music through sceVaudio, an
+output every 26 ms, releasing and starting the next track at 4412. The moves still aren't carried out: the pawn is
+picked and its squares light up, the confirm on a lit square does nothing, as before; so sceVaudio wasn't the cause.
+
+**What the move does instead**, traced with the scratch runner from the tester's `state.bin` (every system call
+around the confirm, and the game's memory 40 frames before, 10 before, 20 after and 100 after it): the press
+reaches the game, whose pad code (0x0888fc6c) maps a fresh Cross to the first of its actions; its "chess thread"
+wakes every 100 ms and runs its engine only when a request word (0x0899f2ac) says 1, which stays 0; between the
+frames before and after the confirm nothing in its memory changes but the lit squares' colours and its frame-rate
+count; and no system function is called differently (no file, no thread, nothing missing). Picking the pawn loads
+its sounds through the game's file thread (`w_pawn_idle_to_agressive.vag` among them), every open and read
+answered; from boot to the match the thread's five refused opens are each followed by another name that opens (a
+fallback). The game's own move code (its states name an ST_COMMIT_MOVE) wasn't followed to where it gives up; the
+prototype's code may simply not finish its moves.
+
+### The review's points
+
+An independent review of the branch (merged with master, `649a88137`) found five Lows, all taken:
+
+- **sceVaudio's output volume** took the SRC channel's 0 to 0xFFFFF, where pspvaudio.h says it "must be a value between
+  0 and PSP_VAUDIO_VOLUME_MAX" (0x8000), as sceVaudioSetEffectType's must, which already refused more. Refused now, not
+  clamped (the header's "must", its call returning an error where it fails; no recording tries more): INVALID_VOLUME,
+  as the SRC channel says of a volume out of its own range, after NOT_RESERVED and before anything's armed.
+- **The SasCore's word was written wherever the call pointed** (`arg(0) + 20 + voice * 56`). Now only into the SasCore
+  `__sceSasInit` set up, the call naming it; `__sceSasUnsetATRAC3` puts 0 back, and `__sceSasInit` puts 0 in every
+  voice's word, as a fresh SasCore has them (above).
+- **An older state's contexts in a block** had no test: a layout-26 state (this branch's without sceVaudio's 15 bytes)
+  whose contexts were in a block of the user partition loads with them kept there, a state of 16 set there honoured,
+  kernel memory left alone, and each written there again as the library next changes its ID.
+- **Low-level IDs refused every call needing a file** with 0x80630031, unrecorded ones too (sceAtracGetInternalErrorInfo
+  was NO_DATA): the seven recorded calls alone look at the context's state now, the rest answering as before (above).
+  Corpse Party (20 seconds from the tester's state with `--wav`): its sound byte for byte master's runner's.
+- **29 and 30 skipped** (27 and 28, parts 87 and 88, loaded): said above, in the handoff, beside StateVersion in
+  `system.cpp` and in the test that refuses them.
+
+These fixes had an independent review in turn (PASS, one Low and two Nits, taken): Battle vs. Chess's format, which
+the first agent's trace shows (below); the forced states' test given the two recorded calls it lacked
+(ResetPlayPosition, SetSecondBuffer); the recording's untried format and the handoff's merges.
+
+Left, and why: pspautotests' audio/sceaudio/reserve also recorded sceVaudio, and disagrees with two of this branch's
+choices. Its "Channel counts" refuse every format it tries but 2 with 0x80000108, mono (1) among them (4 isn't tried:
+the test skips it, as it never wakes the thread), where pspvaudio.h lists mono, this branch takes it and refuses the
+rest with sceAudio's INVALID_FORMAT (0x80260007). And after a reservation refused while `sceAudioOutput2Reserve` held
+the channel, that channel released and reserved again by Output2, a "wrong" sceVaudioChRelease and a reservation that
+then succeeds (0) show the release freeing the SRC channel whoever holds it, where this branch's lets go of its hold
+alone (the first review's choice). Neither was among the review's points, and the second would undo an earlier
+review's decision; left for the owner. Battle vs. Chess, the one game known to use sceVaudio, is touched by neither: it
+reserves stereo (the first agent's trace, `~/phobos-work/scratch/hle-b00/runs/Battle vs. Chess [Europe Proto]/full1`:
+`sceVaudioChReserve(0x480, 0xac44, 2)`), and its outputs' volume, fading in from 0, peaks at 0x35C1, within the new
+limit too.
+
+Checks on the final tree: `tests/psp/run-tests.sh` (sanitizers) 479 groups, 0 failures; `tests/allegrex/run-tests.sh` 58
+groups, 0 failures; `tests/psp/ares/run-tests.sh` 338 checks, 0 failed. With the branch's runner
+(`~/phobos-work/scratch/review-b00`; its core as committed, the later changes being the tests' and the documents'):
+Angus Hates Aliens past NEW GAME from the tester's title state (the loading screen at frame 500, the first level and
+Angus's line at 1000) and from boot (`s1.txt`: the first level at 2400, as before); Battle vs. Chess as before (the
+tester's script, 7200 frames: every frame checked identical to the previous run's, and its sound, ten-second loudness by
+loudness, the same); Corpse Party's sound as master's (above).
+
 ## Part 83: Vulkan's waits for its own pixels gone — moves across row widths, palettes on the GPU, copies kept
 
 On branch `cursor/psp-vulkan-speed-2b67`, on master (`1d9308714`, #228). Parts 81 and 82 are other branches'. Clean
@@ -11562,6 +11729,280 @@ pointer too, the folder "<>" leaves out tested, a comment's wording, and a test'
 **Scratch** (the runs, their stick copies, traces and captures, the sheets, the scratch runner's patch and Disgaea
 Infinite's disassembly; `run.sh` gives each run its own stick, `recheck228.sh` and `final3.sh` are the runs above):
 `~/phobos-work/scratch/savedata3/` on the Mac it was made on, not in the repository.
+
+## Part 86: the CPU, round 2 — the VFPU's adder in NEON, delay slots compiled each way, the rare ways out of line, prefixes worked out as blocks are compiled, blocks linked to each other
+
+On branch `cursor/psp-cpu-round2-2b67`, on master (`b3507c1db`, #233 merged), with master merged in again before the PR
+was done (`0a9a7fa75` with #234, then `4788125f1` with #235 and #236: see "Checks"). The task: round 2 of part 79's CPU
+work, for the owner's goal of PPSSPP's speed with room for fast-forward and upscaling on the Retroid Pocket 6 (ARM64):
+the VFPU's vector and matrix operations in NEON where that can be exact, the compiled code's own costs (block endings
+and linking, loads and stores, registers), wait loops, and whatever else profiling shows on the CPU's side; every
+emulated result the same. Clean room: PPSSPP not read (its CPU, JIT and IR code not at all), JPCSP not read. Save states
+are unchanged by this branch (master's layout, 27 since part 87): nothing new is kept.
+
+### How it was measured
+
+As part 79: the headless runner built as Android builds it (O3, thin LTO), patched in scratch to report the emulation
+thread's CPU time, retired host instructions and cycles, run from the scenes' save states
+(`~/phobos-work/scratch/cpu-speed2/scenes`), base and branch in turn. New here, a block-level profile: a scratch patch
+(`jitmap-patch.py`, `jitmap3-patch.py`) has the recompiler log every block it compiles (its guest words, its host
+code, and where in the host code each guest instruction's code, each block ending and each cold path begins), and
+`jitcat.py` sorts xctrace's samples in compiled code by what each host instruction was compiled for. (The first try
+at these profiles hung for two hours on Super Monkey Ball: xctrace never got past "ending recording" after its target
+exited about 9 s after the time limit, while it was still ending the attach session. The profile script now keeps
+the runner alive until xctrace returns, then stops it, with a limit on every step; every profile since has
+finished.) The Mac was shared with three other agents throughout, its load average 25 to 70, so the host
+instructions a frame carry the comparisons, the times beside them.
+
+### Where the time went (master, Vulkan fast)
+
+| Scene | Compiled code (self) | Under system calls (GE, kernel) | VFPU helpers | Notes |
+| --- | --- | --- | --- | --- |
+| Super Monkey Ball Adventures, story | 19% | 62% | 15% | one loop of eight vtfm.q on a transposed matrix: 12% |
+| Disaster Report 3, playing | 35% | 32% | 25% | vhtfm and vmmul 11%; prefixed vsge/vslt (a frustum test) through the interpreter 9% |
+| Colin McRae 2005 | 30% | 59% | 6% | the VFPU4 group's conversions and functions through the interpreter 3% |
+| Army of Two, playing | 25% | 69% | 4% | |
+| Armored Core Formula Front, playing | 28% | 65% | 3% | |
+| Need for Speed Most Wanted, race | 25% | 68% | 2% | the polled calls: the kernel's per-call work spread over a dozen functions |
+
+Compiled code is flat: the busiest block is 0.3 to 0.7% of the thread. Sorted by what it was compiled for
+(Colin McRae): block endings (the chain to the next block) 23% of it, the branches themselves 14%, loads 18%, stores 9%,
+the FPU's loads and stores 8%, ALU 13%, FPU 7%. A conditional branch stored pc and pd on both ways, compiled its
+delay slot once, then loaded pc again to pick its chain: about 27 host instructions per block ending, then 17 more to
+find the next block. Every load and store was about 11 host instructions, every native instruction's rare way (a page
+off the fast path, an FPU mode or NaN, an overflow) compiled inline with a jump over it, and every FPU operation's
+inline fallback made the block forget the registers it held.
+
+### What was done
+
+1. **The VFPU's adder in NEON** (`recompiler-vfpu.cpp`: `vfpuDots()`, `vfpuDotAcross()`, `vfpuTransform()`,
+   `vfpuMultiply()`, `matrixProduct()`). vfpuDot(), the PSP's own adder (each product's 27 bits with round-to-odd,
+   aligned to the largest exponent and truncated, the sum rounded to nearest even, flushed below the smallest normal),
+   is integer arithmetic, so NEON's integer instructions do it four lanes at once, every step the scalar one's:
+   `umull`/`umull2` for the products, a sticky test for round-to-odd, `ushl` by negative amounts to align, the signs
+   applied and summed, `clz` to normalize. vtfm, vhtfm and vmmul take a lane per result: a 4x4 transform is four dot
+   products, side by side, from four row loads (turned with `trn1`/`trn2` for a transposed matrix) and four
+   broadcasts. vdot and vhdp take the terms across the lanes. The scalar code's last step (`vfpuDotRound()`) is shared.
+   A lane with an infinity or a NaN among its inputs goes to the scalar adder. Compiled code uses these where every
+   operand is in place (each matrix at its matrix's first row and column, each vector along a row or a column: checked
+   against `vfpuSquare()` and `vfpuLine()` as the block is compiled); the rest keep the scalar helpers, as does
+   x86-64. The scalar split also shows one thing only a test caught: large terms that cancel exactly flush to 0, so
+   the flush must come after the overflow's select.
+2. **A branch's delay slot compiled along each way it goes** (`recompiler-ipu.cpp`'s `emitBranch()` and
+   `emitDelaySlot()`, `recompiler.cpp`'s `emitEnd()`, `emitPC()`). The branch compiles only its decision; the delay
+   slot and the block's ending are compiled once for the taken way and once for the other, each knowing where it goes,
+   so pc and pd are stored only where the block leaves for run() (its chain's leave path) or calls the interpreter
+   (`destination`: the delay slot's interpreter calls store the way's own pc and pd). A conditional branch no longer
+   loads pc to pick its chain. After a delay slot the interpreter ran, the block goes where pc and pd say (a syscall
+   there may switch threads); a jump through a register stores them first, as before. The coprocessors' branches store
+   them only where they leave too.
+3. **The rare ways out of the block's straight line; loads and stores in fewer steps** (`emitCold()`,
+   `emitColdFallback()`, `recompiler-memory.cpp`). Each native instruction's rare way (an access off the fast path,
+   an overflow, a division the host can't make, an FPU mode or NaN, the VFPU's prefixes not at rest) is cold code,
+   emitted after the block's end with what the block held there, and back. The FPU's ways to the interpreter keep the
+   registers held (the interpreter writes no integer register there), so a block no longer reloads every register
+   after each FPU operation. A load or store's address is rs's host register itself or one 32-bit add (only bits 0-28
+   are used, by 64-bit operations that mask the rest), its page one `UBFX` on ARM64, and a store writes straight from
+   rt's host register: 7 to 8 host instructions on the fast path, from 11.
+4. **The VFPU's lane-by-lane instructions with their prefixes worked out as the block is compiled** (`vfpuEach()`,
+   `vfpuLane()`, `emitEach()`). vadd, vsub, vdiv, vmul, vscl, vmin, vmax, vsge, vslt, vmov, vabs, vneg, vi2f and vf2i
+   with any prefixes the block knows (a vpfx before them in the block), and the math functions (vrcp, vrsq, vsin,
+   vcos, vexp2, vlog2, vsqrt, vasin, vnrcp, vnsin, vrexp2) and vf2i at rest, run one helper that takes each lane's
+   source (its register after the swizzle, or a constant; absolute, negated), its destination (masked, clamped) and the
+   lanes a prefix takes past the size as packed descriptions, worked out from the prefixes as vfpuRead(),
+   outsideLanes() and vfpuWrite() would use them; each lane's arithmetic is the interpreter's (`vfpuLane()`). A
+   prefix the block doesn't know is taken to be at rest and checked as it runs (otherwise the interpreter's way, cold).
+   Disaster Report 3's frustum test (vsge and vslt against a broadcast w and -w) no longer goes through the
+   interpreter's decoder.
+5. **Blocks linked to the blocks they go on to** (`recompiler.cpp`'s exits: `emitLink()`, `addExits()`, `link()`,
+   `patch()`, `drop()`). A block's way on to a block it knows as it's compiled, after the run's limit and the page's
+   check, is a jump of the host's own (ARM64's `B`, x86-64's `JMP rel32`) to the lookup after it; once the target's
+   block is compiled it's rewritten to go straight to the target's body. Dropping a section puts every jump linked to
+   its blocks back to its lookup, even one in dead code (a block still running from a section that went runs on to its
+   end), and the live ones wait for those blocks to be compiled again; a section compiled for another mirror is
+   dropped first. Everything that drops code runs on the emulation thread.
+
+Not done: a wait loop to skip. Among the profiled scenes' busiest blocks, the self-loops are copies and fills (they
+store) or work on data (Disaster Report 3's clipping loop), at most 0.7% of the thread; the waiting that costs time,
+the Need for Speeds' idle thread rotating its queue 175,000 times a frame, goes through system calls (part 79).
+
+### Numbers
+
+The Mac, master (`b3507c1db`) against this branch (`ae85b27b0`: the review's changes after it change no compiled code),
+the bench runners from the scenes' states, medians of three rounds taking turns in Vulkan fast (MoltenVK, 1x) and two in
+the software renderer (4 drawing threads). "Fps it allows" is 1000 over the emulation thread's ms. The Mac's load
+average was 30 to 144 (up to 300 at times) through these rounds (three other agents, and the Cursor app's own renderer
+at up to 3.5 cores), so the times swing with the cores the thread got; the host instructions a frame hardly move with
+that, and carry the comparison.
+
+| Scene | Vulkan fast: emulation thread ms a frame (fps it allows) | M host instructions | Software: emulation thread ms | M host instructions |
+| --- | --- | --- | --- | --- |
+| Death Jr. II, playing | 31.2 -> 28.9 (32 -> 35), -7% | 389 -> 383 (-2%) | 15.0 -> 15.7 (+4%) | 162 -> 165 (+2%) |
+| Sonic Rivals, a stage | 30.1 -> 24.3 (33 -> 41), -19% | 277 -> 273 (-2%) | 9.9 -> 9.2 (-7%) | 107 -> 104 (-3%) |
+| Activision Hits Remixed, Atlantis | 23.1 -> 26.9 (43 -> 37), +16% | 269 -> 265 (-2%) | 7.0 -> 6.9 (-2%) | 67 -> 61 (-9%) |
+| Ghost of Sparta, menu | 46.3 -> 42.6 (22 -> 23), -8% | 431 -> 423 (-2%) | 88.4 -> 87.7 (-1%) | 935 -> 932 (-0%) |
+| NFS Most Wanted, race | 21.3 -> 19.0 (47 -> 53), -11% | 320 -> 290 (-9%) | 23.5 -> 22.6 (-4%) | 351 -> 320 (-9%) |
+| NFS Most Wanted, profile | 20.3 -> 19.2 (49 -> 52), -5% | 329 -> 302 (-8%) | 20.9 -> 20.1 (-4%) | 332 -> 305 (-8%) |
+| NFS Underground Rivals, title | 19.2 -> 17.6 (52 -> 57), -8% | 323 -> 295 (-9%) | 20.2 -> 18.6 (-8%) | 307 -> 279 (-9%) |
+| Super Monkey Ball Adventures, story | 59.7 -> 49.2 (17 -> 20), -18% | 636 -> 520 (-18%) | 64.1 -> 54.1 (-16%) | 686 -> 576 (-16%) |
+| Army of Two, playing | 66.4 -> 61.1 (15 -> 16), -8% | 585 -> 556 (-5%) | 94.6 -> 86.9 (-8%) | 1015 -> 978 (-4%) |
+| Colin McRae 2005 | 15.1 -> 14.0 (66 -> 71), -7% | 178 -> 162 (-9%) | 21.2 -> 20.9 (-1%) | 214 -> 200 (-7%) |
+| Armored Core Formula Front, playing | 10.3 -> 9.6 (97 -> 104), -6% | 95 -> 88 (-8%) | 8.4 -> 7.2 (-14%) | 71 -> 63 (-11%) |
+| Armored Core Silent Line, playing | 2.2 -> 1.8 (454 -> 568), -20% | 18 -> 15 (-19%) | 2.3 -> 2.0 (-16%) | 21 -> 18 (-14%) |
+| Disaster Report 3, playing | 4.4 -> 3.4 (230 -> 293), -22% | 52 -> 38 (-26%) | 6.3 -> 5.7 (-10%) | 61 -> 51 (-16%) |
+| Twisted Metal, playing | 3.9 -> 3.3 (258 -> 299), -14% | 42 -> 37 (-10%) | 4.6 -> 4.0 (-11%) | 47 -> 43 (-7%) |
+| Twisted Metal, logo movie | 15.9 -> 14.6 (63 -> 69), -8% | 317 -> 286 (-10%) | 17.0 -> 15.2 (-11%) | 317 -> 286 (-10%) |
+| Disaster Report 3, intro | 8.2 -> 7.8 (122 -> 128), -5% | 158 -> 147 (-7%) | 8.9 -> 8.2 (-7%) | 160 -> 148 (-7%) |
+| Armored Core Formula Front, intro | 11.9 -> 12.0 (84 -> 83), +1% | 165 -> 147 (-11%) | 10.6 -> 10.0 (-6%) | 166 -> 148 (-11%) |
+| Armored Core Silent Line, intro | 13.4 -> 12.6 (74 -> 80), -7% | 154 -> 137 (-11%) | 9.8 -> 9.2 (-6%) | 158 -> 141 (-11%) |
+
+Super Monkey Ball's story and Disaster Report 3's play, where the VFPU's matrix products run, take 18 and 26% fewer
+host instructions (49 and 3.4 ms a frame from 60 and 4.4); the Need for Speeds, Twisted Metal's logo movie and the
+Armored Cores' intros, polling system functions in tiny blocks, 8 to 11% (the links, and the delay slots' stores);
+Colin McRae, the Armored Cores and Twisted Metal playing 8 to 19%; the GE-bound scenes (Death Jr. II, Sonic Rivals, Hits
+Remixed, Ghost of Sparta, Army of Two) 2 to 5%. In the software renderer the emulation thread also draws the bands it
+takes while it waits for the drawing threads (part 74), so its instructions follow the bands it took too (Death Jr. II
+2% more); the CPU-heavy scenes come out as in Vulkan. The last code's runner (`3878e0db3`, the review's changes) against
+`ae85b27b0` on four scenes: the same instructions a frame within 0.05%.
+
+Where each change counts (Vulkan fast, M host instructions a frame, one round each, the six scenes the CPU matters in):
+
+| Scene | Master | VFPU adder in NEON | delay slots each way | cold code, loads and stores | prefixes compiled (vfpuEach) | blocks linked |
+| --- | --- | --- | --- | --- | --- | --- |
+| Super Monkey Ball Adventures, story | 636 | 542 (-14.8%) | 534 (-1.2%) | 527 (-1.1%) | 525 (-0.4%) | 520 (-0.8%) |
+| Disaster Report 3, playing | 52 | 45 (-12.7%) | 44 (-2.3%) | 43 (-1.8%) | 39 (-7.3%) | 38 (-2.0%) |
+| Colin McRae 2005 | 179 | 173 (-2.9%) | 170 (-1.9%) | 166 (-2.0%) | 165 (-0.5%) | 162 (-1.7%) |
+| Armored Core Formula Front, playing | 95 | 91 (-4.1%) | 90 (-1.3%) | 89 (-1.2%) | 89 (+0.5%) | 88 (-1.8%) |
+| NFS Most Wanted, race | 320 | 315 (-1.5%) | 305 (-3.1%) | 301 (-1.2%) | 301 (+0.1%) | 290 (-3.6%) |
+| Army of Two, playing | 585 | 573 (-2.0%) | 566 (-1.2%) | 562 (-0.8%) | 560 (-0.3%) | 556 (-0.6%) |
+
+The NEON adder is most of it where the VFPU's matrix products run (Super Monkey Ball's eight vtfm.q a vertex batch,
+Disaster Report 3's), the prefixes compiled most of the rest of Disaster Report 3 (its frustum test); the compiled
+code's own changes take 1 to 4% each from every scene that runs much guest code, the links most from the polling
+scenes.
+
+### Accuracy
+
+Every change is the host's alone; nothing a game can see moves.
+- The branch against master from the 21 scenes' states (part 79's: the table's and Death Jr. II's character select,
+  Hits Remixed's game-select room, Army of Two's menu): in the software renderer, 100 frames with every frame's picture
+  and all of VRAM hashed, drawing settled, then RAM and the machine's whole serialized state; in Vulkan fast and Vulkan
+  accurate, 200 frames, then RAM and the machine's state (VRAM, read back from the GPU, among it): identical, every
+  one, in all three.
+- The NEON adder against vfpuDot() itself (`stress/dots.cpp`, scratch): 3 million random sets of terms for each of
+  2, 3 and 4 terms, all four lanes, through the vertical adder and the one across the lanes (72 million results),
+  with inputs drawn to reach every case (zeros, denormals, infinities and NaNs, products that flush or overflow,
+  few-bit significands that cancel exactly, ties): every one the same.
+- Broken versions of the changes (`mutate2.py`, scratch, each in a copy of the tree running tests/allegrex, no
+  sanitizers): 62, of which 59 are caught. The three that aren't change nothing a test or a game can see: lanes past an
+  operand's size let into the special case (which then works the same lanes out the scalar way), an offset from r0
+  widened without its sign (neither address has a page on a PSP, so both go to the interpreter), and a section compiled
+  for another mirror replacing the old one without dropping it (links are kept by section, so the next drop takes them
+  anyway). One more broke a step that turned out to do nothing (a shift after a rounding carry, whose result's fraction
+  is 0 either way), which was then taken out. The runs also showed what random trials miss: the flush-after-overflow
+  mutation slipped past them once their sequence changed, and is now caught by fixed cases; a function whose code
+  doesn't depend on its own address let a link into the other mirror's code pass, and now keeps the address it runs
+  from.
+
+### Checks
+
+- `tests/allegrex/run-tests.sh`: 68 groups, 0 failures (sanitizers on), and the same built for x86-64 and run under
+  Rosetta (no sanitizers), which takes the JMP rel32 links, the page found by a shift and a mask, and the scalar matrix
+  helpers. New groups: "vfpu compiled products" (3000 random vmmul, vtfm, vhtfm, vdot and vhdp
+  instructions of each size, any registers, half after random prefixes, both engines bit for bit, and fixed cases of
+  huge terms cancelling exactly), "vfpu compiled lanes" (1500 of each lane-by-lane instruction with random prefixes,
+  set in the block, only in the starting state, or none), "delay slots each way" (every branch, taken and not, and
+  every jump, with a delay slot native, interpreted, a syscall, a load raising an exception, a syscall moving pc as a
+  thread switch does, a load from a page the table leaves out, a division by zero, an FPU division giving NaN, a VFPU
+  instruction after mtvc set a prefix and a reserved VFPU encoding: what the hooks see, every register at the end, and
+  runs of 1 to 37 instructions chained and not), "linked blocks" (a linked function rewritten by the program, a loop
+  rewriting its own first word with a new constant every round, a function that keeps the address it runs from called
+  through two mirrors in turn and from a site compiled right after a call through the other; links made and waiting;
+  the same with code memory starting afresh every few blocks).
+- `tests/psp/run-tests.sh` (sanitizers on): 478 groups, 0 failures.
+- `tests/psp/ares/run-tests.sh`: 318 checks, 0 failed.
+- With part 83: master moved while this was reviewed (#234, part 83's Vulkan work, merged as `0a9a7fa75`) and was
+  merged into the branch, the docs alone conflicting. The merge against that master: the 21 scenes' hashes identical
+  in all three renderers again (the same frames and states as above), tests/allegrex 68/0 (its sources untouched by
+  the merge), tests/psp 489/0 (part 83's groups among them), tests/psp/ares 318/0. GitHub's Linux build then found
+  `std::memcpy` (the links' patching) used without `<cstring>`, which Apple's library brings in by itself, so the
+  Rosetta build hadn't shown it; it's included now, and GitHub's tests pass (tests/allegrex 68/0 built by GCC for
+  x86-64, sanitizers on; tests/psp; the desktop build).
+- With parts 84 and 87: master moved again (#235, savedata's dialogs, and #236, sceFont, whose states are layout 27;
+  master at `4788125f1`) and was merged in as well, the docs alone conflicting. That merge against that master: the 21
+  scenes' hashes identical in all three renderers again; tests/psp 497/0 and tests/psp/ares 318/0 on the Mac; GitHub's
+  tests (tests/allegrex 68/0 and tests/psp 497/0, built by GCC) and the desktop and Android builds pass.
+
+### Left, and why
+
+- **Where the CPU's time goes now** (Vulkan fast, xctrace on the branch's last code): compiled code is 17 to 36% of
+  the emulation thread (Super Monkey Ball 17%, Army of Two 18%, Need for Speed Most Wanted 20%, Colin McRae 24%,
+  Disaster Report 3 36%; master's 20, 25, 26, 30 and 42%). Of it: block endings 23 to 28% (57% in Most Wanted's
+  polling loop, whose `jr ra` endings look the target up every time), ALU 19 to 22%, loads 17 to 21%, branches 7 to
+  10%, stores 6 to 7%, the FPU's loads, stores and arithmetic 6 to 10%. The VFPU's helpers left: Monkey Ball's vtfm.q
+  in NEON 4.4%, its vcmp and vscl 2%; Disaster Report 3's vsge and vslt (vfpuEach) 4%, vhtfm.q and vmmul.q in NEON
+  3.5%, vfpuMatrix's other forms 1.6%; Colin McRae's VFPU4 group through the interpreter 1.7%. The rest of the thread is
+  under the system calls: the GE's display lists (Monkey Ball 75%, Army of Two 77%, Colin McRae 68%) and the polled
+  kernel (Most Wanted 72%).
+- **The block endings' count**: with the lookup gone where blocks are linked, a block ending is the run's count
+  (loaded, added to and stored back, then compared with the limit: each block's ending waits on the last one's store),
+  the halted check where the block called the interpreter, the page's check and the jump. Keeping the count in a
+  saved register, stored only where something reads it (a call into the interpreter or the kernel, leaving for run()),
+  would take the memory out of that chain. The next step for block endings, then a cache of the last target for jumps
+  through a register (Most Wanted's import stubs).
+- **Registers across blocks**: a block starts holding nothing, and every result is stored as its instruction ends,
+  so each block loads the registers it uses. Keeping the most-used ones (sp, ra, the arguments) in host registers
+  across linked blocks, stored only where something reads ipu.r[] (the interpreter, the kernel, a block leaving), is
+  the next big step for compiled code: ALU and loads are about 40% of what's left in it.
+- **The VFPU's remaining helpers**: vf2h, vh2f and the small integer packings (vs2i, vi2s, vi2us...) still go through
+  the interpreter's decoder, as do vdot, vhdp and vcmp with prefixes set, and vcrsp, vqmul and vdet (adder-based,
+  which vfpuDots() could take); the lane-by-lane instructions go a lane at a time in vfpuEach() (NEON there would need
+  each lane's flush and NaN rules, and products near 2^-126, where IEEE rounds differently from the PSP, sent to the
+  scalar way).
+- **Polled system calls** (the Need for Speeds): about two thirds of the thread is the kernel's per-call work over
+  half a million calls a frame, a system call costing the PSP's clock a single cycle (part 79). A loop of calls that
+  each change nothing could jump ahead to the next event only if every function in it provably changes nothing at all
+  and the GE's FINISH check after each call were accounted for; not done.
+- **The GE's work on the CPU** (the GE front end's task, not this one): most of what's left in Monkey Ball, Army of
+  Two, Colin McRae and the Armored Cores.
+
+### On the RP6
+
+The NEON is ARM64's own, so the Mac's gains in the VFPU carry over; the compiled code's (fewer host instructions a
+block ending, a load or a store) carry over too, and count for more on cores with smaller caches (the RP6's
+Cortex-X3 and A715 have a 64 KiB instruction cache, the M1's performance cores 192 KiB). To compare: master and this
+branch, Vulkan fast at 1x, the scenes in `~/phobos-work/scratch/cpu-speed2/scenes` (part 79's table). Expect Super
+Monkey Ball's story and Disaster Report 3's play most (a fifth to a quarter fewer instructions on the emulation thread,
+as on the Mac), Colin McRae, the Armored Cores and the Need for Speeds 8 to 11% (Silent Line's play 19%), the GE-bound
+scenes 2 to 5%.
+
+### Review
+
+An independent read-only review of the whole branch against master found no change to emulated results, and checked
+exact, step by step: the NEON adder against vfpuDot() and vfpuDotRound() (round-to-odd, the -254 start, the shift's
+clamp, the signs, the rounding's garbage lanes gated off, the carry, the flush after the overflow, -0 from a small
+negative sum, the special lanes), vfpuEach()'s descriptions against vfpuRead(), outsideLanes(), vfpuWrite(), VSCL(),
+VI2F(), VF2I() and vfpuLastLaneFirst(), the in-place tests and the transposes, every place pc and pd are read after the
+delay slots' change, the registers the cold code holds, and the links (the checks before them, unlinking dead and live
+exits, the mirrors, reset, jitprotect's nesting, the instruction cache, the jumps' reach). Its points, all taken:
+- Test gaps: the NEON vmmul's in-place cases came up in about 1 trial in 512 for .p and .t (now three in four trials
+  have their matrices in place, every transposition in turn); nothing showed that blocks link at all, or that code
+  memory starting afresh mid-run is safe with links (now checked, and a run with code memory 8 KiB over the reserve
+  starts afresh three times with 20 links in place); more delay slot kinds (added); the random programs depended on the
+  order a compiler evaluates arguments in (now sequenced); the fixed cases all reported one line (now each its own).
+- drop() now marks a section's own exits dead before putting its links back, so its exits into itself don't wait;
+  emitChainTo()'s leave path always stores pc and pd (its parameter was always false); cold code runs by index (cold
+  code may add some); the VFPU's cold interpreter calls check they compiled; a block starts with no destination; a
+  condition that was always true is gone; unload() lets the links' memory go.
+- Comments: the VFPU file's header and the products' comments (the NEON paths, vfpuEach()), the branches', the
+  coprocessors' and the stores' brought up to what the code does.
+
+### Scratch
+
+`~/phobos-work/scratch/cpu-round2`: `build.sh`, `run.sh`, `bench2.sh` and `benchsum2.py` (the rounds: `bench2/*.tsv`),
+`hashcmp.sh` (`hash/`), `xprof2.sh` and `jmprof2.sh`/`jmcat.sh` (xctrace with time limits), `patches/jitmap-patch.py`
+and `jitmap3-patch.py`, `jitprof.py`, `jitcat.py` and `calltree.py` (`prof/`), `stress/dots.cpp` (the NEON adder
+against vfpuDot), `mutate2.py` (`mut/`), `NOTES.md`.
 
 ## Part 87: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces (the memory a glyph is read into)
 

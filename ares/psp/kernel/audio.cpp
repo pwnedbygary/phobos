@@ -20,7 +20,8 @@
 //and each from the third on waits for a boundary, so K of them take K - 2 blocks' time.
 //
 //The SRC channel: one more output beside the mixer, reached by two families of calls (sceAudioOutput2*, and
-//sceAudioSRC* with a rate of its own), with two slots ("armed" buffers, played one after the other) and a completion
+//sceAudioSRC* with a rate of its own; sceVaudio's, at the end, are a third), with two slots ("armed" buffers, played
+//one after the other) and a completion
 //flag. An output arms its buffer and then waits for a completion: one pending lets it return at once (starting from
 //idle makes one), else it returns when the buffer playing has finished. A buffer plays for its samples' time at the
 //channel's rate; the next one armed carries straight on. Its slot frees as its transfer ends, about 100
@@ -57,6 +58,7 @@
 //the channel left as it was.
 
 static constexpr u32 AudioStereo = 0x00, AudioMono = 0x10;
+static constexpr s32 VaudioVolumeMost = 0x8000;  //pspvaudio.h's PSP_VAUDIO_VOLUME_MAX: the sound as it is
 
 //A mixer channel's sample count: a multiple of 64, from 64 to 65472.
 static auto mixerSamplesValid(u32 samples) -> bool {
@@ -119,9 +121,9 @@ auto Kernel::outputRoom(u64 last) -> u64 {
   return last;
 }
 
-//The thread waiting on a channel (0-7), or on the SRC channel (Audio::WaitSrc, Audio::WaitSrcDrain), if one is. Its
-//output's arguments wait with it: the buffer to hand over and its volumes (see Thread's waitPointer, waitCount and
-//waitMode).
+//The thread waiting on a channel (0-7), or on the SRC channel (Audio::WaitSrc, WaitSrcDrain, WaitVaudioRelease), if
+//one is. Its output's arguments wait with it: the buffer to hand over and its volumes (see Thread's waitPointer,
+//waitCount and waitMode).
 auto Kernel::audioWaiter(u32 waitID) -> Thread* {
   for(auto& [uid, thread] : threads) {
     if(thread->status == Status::Waiting && thread->wait == Wait::Audio && thread->waitID == waitID) {
@@ -334,6 +336,13 @@ auto Kernel::srcRetire() -> bool {
     ready(*thread, 0);
     woke = true;
   }
+  //sceVaudioChRelease's callers (below): drained, the first releases the channel sceVaudio holds; any other finds it
+  //released
+  for(bool first = true; auto thread = audioWaiter(Audio::WaitVaudioRelease); first = false) {
+    if(first) src.reserved = audio.vaudio.reserved = audio.vaudio.ownsSrc = false;
+    ready(*thread, first ? 0 : ErrorAudioChannelNotReserved);
+    woke = true;
+  }
   return woke;
 }
 
@@ -498,30 +507,32 @@ auto Kernel::sceAudioChangeChannelVolume() -> void {
 //sceAudioSRCChReserve(n, 44100, 2). Checked in this order: 4 channels (a "not supported" code of its own), any other
 //number but 2 (INVALID_SIZE), the sample count with its top bit ignored (17-4111, else INVALID_SIZE), the rate
 //(INVALID_FREQUENCY; no bit is ignored there), and the channel reserved already, by either family
-//(ALREADY_RESERVED). Reserving it doesn't take a mixer channel, nor does it need one.
-auto Kernel::srcReserve(u32 samples, u32 rate, u32 channels) -> void {
+//(ALREADY_RESERVED). Reserving it doesn't take a mixer channel, nor does it need one. Returns 0, or the error.
+auto Kernel::srcReserve(u32 samples, u32 rate, u32 channels) -> u32 {
   auto& src = audio.src;
-  if(channels == 4) return result(ErrorNotImplemented);
-  if(channels != 2) return result(ErrorInvalidSize);
+  if(channels == 4) return ErrorNotImplemented;
+  if(channels != 2) return ErrorInvalidSize;
   samples &= 0x7fff'ffff;
-  if(!srcSamplesValid(samples)) return result(ErrorInvalidSize);
-  if(!srcRateValid(rate)) return result(ErrorAudioInvalidFrequency);
-  if(src.reserved) return result(ErrorAudioChannelAlreadyReserved);
+  if(!srcSamplesValid(samples)) return ErrorInvalidSize;
+  if(!srcRateValid(rate)) return ErrorAudioInvalidFrequency;
+  if(src.reserved) return ErrorAudioChannelAlreadyReserved;
   src.reserved = true;
   src.sampleCount = samples;
   src.rate = rate ? rate : 44'100;
   src.completion = false;
-  result(0);
+  return 0;
 }
 
 //Releasing it, by either family's call, whichever reserved it, from any thread: refused while a buffer is armed
-//(ALREADY_RESERVED), not put off until it has played. A program drains the channel first, with a null output.
-auto Kernel::srcRelease() -> void {
+//(ALREADY_RESERVED), not put off until it has played (sceVaudio's release waits: below). A program drains the channel
+//first, with a null output. Returns 0, or the error.
+auto Kernel::srcRelease() -> u32 {
   auto& src = audio.src;
-  if(!src.reserved) return result(ErrorAudioChannelNotReserved);
-  if(src.armed) return result(ErrorAudioChannelAlreadyReserved);
+  if(!src.reserved) return ErrorAudioChannelNotReserved;
+  if(src.armed) return ErrorAudioChannelAlreadyReserved;
   src.reserved = false;
-  result(0);
+  audio.vaudio.ownsSrc = false;  //(sceVaudio, should it have held it, still thinks it does: below)
+  return 0;
 }
 
 //(volume, buffer), for either family. The volume first: 0 to 0xFFFFF, a negative one refused (INVALID_VOLUME); then
@@ -538,10 +549,8 @@ auto Kernel::srcRelease() -> void {
 //A call that would wait from an interrupt handler or with interrupts held off returns the wait's error instead
 //(pspautotests' intr/waits), even with a completion pending, which stays pending; but its buffer stays armed, and
 //plays.
-auto Kernel::srcOutput() -> void {
+auto Kernel::srcOutput(s32 volume, u32 buffer) -> void {
   auto& src = audio.src;
-  s32 volume = s32(arg(0));
-  u32 buffer = arg(1);
   if(volume < 0 || volume > 0xf'ffff) return result(ErrorAudioInvalidVolume);
   if(!src.reserved) return result(ErrorAudioChannelNotReserved);
   if(src.armed == 2) return result(ErrorAudioChannelBusy);
@@ -568,12 +577,12 @@ auto Kernel::srcOutput() -> void {
   block(Wait::Audio, Audio::WaitSrc, 0);
 }
 
-auto Kernel::sceAudioOutput2Reserve() -> void { srcReserve(arg(0), 44'100, 2); }
-auto Kernel::sceAudioSRCChReserve() -> void { srcReserve(arg(0), arg(1), arg(2)); }
-auto Kernel::sceAudioOutput2Release() -> void { srcRelease(); }
-auto Kernel::sceAudioSRCChRelease() -> void { srcRelease(); }
-auto Kernel::sceAudioOutput2OutputBlocking() -> void { srcOutput(); }
-auto Kernel::sceAudioSRCOutputBlocking() -> void { srcOutput(); }
+auto Kernel::sceAudioOutput2Reserve() -> void { result(srcReserve(arg(0), 44'100, 2)); }
+auto Kernel::sceAudioSRCChReserve() -> void { result(srcReserve(arg(0), arg(1), arg(2))); }
+auto Kernel::sceAudioOutput2Release() -> void { result(srcRelease()); }
+auto Kernel::sceAudioSRCChRelease() -> void { result(srcRelease()); }
+auto Kernel::sceAudioOutput2OutputBlocking() -> void { srcOutput(s32(arg(0)), arg(1)); }
+auto Kernel::sceAudioSRCOutputBlocking() -> void { srcOutput(s32(arg(0)), arg(1)); }
 
 //The samples still to play: each armed buffer counts as the channel's sample count as it is now, however far it has
 //played (so after sceAudioOutput2ChangeLength(64), a 4096-sample buffer still playing counts 64).
@@ -589,5 +598,104 @@ auto Kernel::sceAudioOutput2ChangeLength() -> void {
   if(!srcSamplesValid(samples)) return result(ErrorAudioSampleCount);
   if(!audio.src.reserved) return result(ErrorAudioChannelNotReserved);
   audio.src.sampleCount = samples;
+  result(0);
+}
+
+//sceVaudio (pspsdk's pspvaudio.h): a channel for a program's music, 256 to 2048 samples a buffer, single 16-bit
+//samples (format 1) or pairs (2), at one of the SRC channel's rates, with a sound effect (heavy, pops, jazz, unique)
+//and an automatic level control to choose. It is the SRC channel above under another name. pspautotests'
+//audio/blocking/vaudio recorded on a PSP: an output of 2048 samples returns 0x800, the count, and the SRC channel's
+//sceAudioOutput2GetRestSample counts its buffer; reserving while sceAudioOutput2Reserve holds the channel is
+//ALREADY_RESERVED, and so refused, sceVaudio is held all the same: reserving again, once the channel is free, is BUSY,
+//an output NOT_RESERVED (the SRC channel's), and releasing NOT_RESERVED; releasing what isn't reserved is
+//NOT_RESERVED; and releasing with a buffer still playing isn't refused, as the SRC channel's release is, but waits
+//for it (a buffer's time), then releases (0). Chosen, beside those:
+//- sceVaudio's outputs and release act on the SRC channel only where its own reservation took it (ownsSrc): held on a
+//  refused one, or after sceAudioOutput2Release or sceAudioSRCChRelease let its channel go, they're NOT_RESERVED
+//  whoever has the channel now, and the release lets go of the hold alone.
+//- Each buffer is copied as pairs (a single sample heard on both sides) into whichever of the kernel's two
+//  (VaudioMemory) isn't armed, and armed from there, as a library working its effects on the sound would: the
+//  program's buffer is its own again as the call returns.
+//- An output's volume is 0 to pspvaudio.h's PSP_VAUDIO_VOLUME_MAX, 0x8000, the sound as it is: "It must be a value
+//  between 0 and PSP_VAUDIO_VOLUME_MAX", as sceVaudioSetEffectType's must, which takes no more either. One out of that
+//  is refused (after NOT_RESERVED, before anything's armed) as the SRC channel refuses one out of its own wider range,
+//  INVALID_VOLUME: refused rather than clamped, the header's "must" (its call returning an error where it fails); no
+//  recording tries one past 0x8000.
+//- Reserving: a sample count outside pspvaudio.h's 256-2048 is INVALID_SIZE, a format but 1 or 2 INVALID_FORMAT and a
+//  rate the SRC channel hasn't got INVALID_FREQUENCY, all before sceVaudio is held, so only the channel being taken
+//  leaves it held.
+//- The release returns as the last buffer armed retires, 100 microseconds before its end is heard, as a drain does.
+//- The effect (0, off, to 5, pspvaudio.h's PSP_VAUDIO_EFFECT_MAX among them, at a volume of 0 to 0x8000, which the
+//  call returns) and the level control (0 to 2, PSP_VAUDIO_ALC_MODE_MAX among them) are kept, others refused
+//  (INVALID_VALUE), and not heard: what they do to the sound isn't known.
+auto Kernel::sceVaudioChReserve() -> void {
+  u32 samples = arg(0), rate = arg(1), format = arg(2);
+  if(audio.vaudio.reserved) return result(ErrorBusy);
+  if(samples < 256 || samples > 2048) return result(ErrorInvalidSize);
+  if(format != 1 && format != 2) return result(ErrorAudioInvalidFormat);
+  if(!srcRateValid(rate)) return result(ErrorAudioInvalidFrequency);
+  audio.vaudio.reserved = true;
+  audio.vaudio.mono = format == 1;
+  u32 error = srcReserve(samples, rate, 2);
+  audio.vaudio.ownsSrc = !error;
+  result(error);
+}
+
+//(): with buffers armed, the caller waits until the last retires (srcRetire() releases then), as a null output
+//waits; one that can't wait is told why, nothing released.
+auto Kernel::sceVaudioChRelease() -> void {
+  auto& vaudio = audio.vaudio;
+  if(!vaudio.reserved) return result(ErrorAudioChannelNotReserved);
+  if(!vaudio.ownsSrc) {
+    vaudio.reserved = false;
+    return result(ErrorAudioChannelNotReserved);
+  }
+  if(audio.src.armed) {
+    if(auto refused = audioWaitRefused()) return result(refused);
+    return block(Wait::Audio, Audio::WaitVaudioRelease, 0);
+  }
+  u32 error = srcRelease();
+  vaudio.reserved = vaudio.ownsSrc = false;
+  result(error);
+}
+
+//(volume, buffer): a null buffer waits for what's armed to be heard, as the SRC channel's does.
+auto Kernel::sceVaudioOutputBlocking() -> void {
+  s32 volume = s32(arg(0));
+  u32 buffer = arg(1);
+  auto& src = audio.src;
+  if(!audio.vaudio.ownsSrc) return result(ErrorAudioChannelNotReserved);
+  if(volume < 0 || volume > VaudioVolumeMost) return result(ErrorAudioInvalidVolume);
+  if(buffer && src.armed < 2) {
+    u32 slot = VaudioMemory;
+    if(src.armed && src.buffers[0].address == slot) slot += VaudioBufferBytes;
+    u32 count = src.sampleCount, size = audio.vaudio.mono ? 2 : 4;
+    std::vector<u8> given(count * size, 0), pairs(count * 4);
+    memory.copyOut(given.data(), buffer, given.size());  //(memory that isn't there: silence)
+    for(u32 n = 0; n < count; n++) {
+      const u8* sample = &given[n * size];
+      pairs[n * 4 + 0] = sample[0], pairs[n * 4 + 1] = sample[1];
+      pairs[n * 4 + 2] = sample[size - 2], pairs[n * 4 + 3] = sample[size - 1];
+    }
+    memory.copyIn(slot, pairs.data(), pairs.size());
+    buffer = slot;
+  }
+  srcOutput(volume, buffer);
+}
+
+//(effect, volume): the volume
+auto Kernel::sceVaudioSetEffectType() -> void {
+  s32 effect = s32(arg(0)), volume = s32(arg(1));
+  if(effect < 0 || effect > 5 || volume < 0 || volume > VaudioVolumeMost) return result(ErrorInvalidValue);
+  audio.vaudio.effect = effect;
+  audio.vaudio.effectVolume = volume;
+  result(volume);
+}
+
+//(mode)
+auto Kernel::sceVaudioSetAlcMode() -> void {
+  s32 mode = s32(arg(0));
+  if(mode < 0 || mode > 2) return result(ErrorInvalidValue);
+  audio.vaudio.alc = mode;
   result(0);
 }

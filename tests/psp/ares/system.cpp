@@ -654,8 +654,9 @@ auto states(const fs::path& programs) -> void {
     //the display's count of lines adjusted (part 32); version 14, before the disc drive kept whether it was
     //deactivated (part 37). Layouts 15 and 16 load with the message-dialog abort counters defaulted (part 42).
     //Each older layout is refused by its header, before anything is touched (even the compiled code, which any load
-    //throws away).
-    for(u8 version : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}) {
+    //throws away); so are 29 and 30, skipped (other branches' layouts: a branch landing one renumbers it past 31,
+    //and takes it out of this list), and 32, past this one. 27 and 28 (parts 87 and 88) load.
+    for(u8 version : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 29, 30, 32}) {
       bytes.assign(state.data(), state.data() + state.size());
       bytes[4] = version, bytes[5] = bytes[6] = bytes[7] = 0;
       serializer old{bytes.data(), u32(bytes.size())};
@@ -921,7 +922,9 @@ auto main() -> int {
   names();
   nodeTree();
   drawingThreads();
+  bool programsRun = false;
   if(auto programs = std::getenv("PSP_TEST_PROGRAMS"); programs && fs::exists(fs::path{programs} / "hello.elf")) {
+    programsRun = true;
     //on the recompiler (as the front ends run it) and on the interpreter, its fallback
     for(bool recompile : {true, false}) {
       std::printf("[%s]\n", recompile ? "recompiler" : "interpreter");
@@ -939,9 +942,16 @@ auto main() -> int {
     frontDialogs(fs::path{programs});
   } else {
     std::printf("PSP_TEST_PROGRAMS isn't set (or has no hello.elf): the checks that run a program are skipped\n");
+    //(a failure where the run must have them: PHOBOS_TESTS_REQUIRE naming "programs", as CI's does)
+    //(the names, spaces left out, as tests/allegrex/harness.hpp takes them)
+    std::string required = std::getenv("PHOBOS_TESTS_REQUIRE") ? std::getenv("PHOBOS_TESTS_REQUIRE") : "";
+    required.erase(std::remove_if(required.begin(), required.end(), [](char c) { return std::isspace(u8(c)); }),
+                   required.end());
+    CHECK(("," + required + ",").find(",programs,") == std::string::npos,
+          "programs are required here (PHOBOS_TESTS_REQUIRE), and PSP_TEST_PROGRAMS has no hello.elf");
   }
 
   fs::remove_all(scratch);
-  std::printf("%d checks, %d failed\n", checks, failures);
+  std::printf("%d checks, %d failed%s\n", checks, failures, programsRun ? "" : ", the programs' checks skipped");
   return failures ? 1 : 0;
 }

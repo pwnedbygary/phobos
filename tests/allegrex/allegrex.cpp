@@ -835,6 +835,199 @@ auto coprocessorBranchesTaken() -> void {
   CHECK(runs[0].m.ram.read32(Data), 59);
 }
 
+// A native branch's delay slot is compiled along each way the branch goes, pc and pd stored only where the block
+// leaves or calls the interpreter (emitDelaySlot()). Every branch, taken and not (a likely one skipping its delay
+// slot then), and every jump, with a delay slot of each kind: native, interpreted, a syscall and a load raising an
+// exception (whose hooks record pc and pd as they are then, and the instructions run before), a syscall that moves pc
+// and pd (as a thread switch does: to the word after the delay slot, whichever way the branch went), a load from a
+// page the page table leaves out, a division by zero and an FPU division giving NaN (cold code that comes back), a
+// VFPU instruction after mtvc set a prefix the block can't know (the interpreter's way, cold) and a reserved VFPU
+// encoding (which raises). The interpreter and the recompiler must record the same and end the same, and runs of 1 to
+// 37 instructions at a time, chained and not, must stop in the same places.
+auto delaySlotsEachWay() -> void {
+  if(!useRecompiler) return;
+  enum : uint32_t { Taken = 48, Case = 64 };  //(each case: 16 words, the taken way's from word 12)
+  struct Form { uint32_t word; bool likely; int32_t a, b; };  //the branch at word 5, rs = t0 = a, rt = t1 = b
+  constexpr int32_t offset = (Taken - 24) / 4;
+  const Form forms[] = {
+    {beq(t0, t1, offset), 0, 3, 3}, {beq(t0, t1, offset), 0, 3, 4}, {bne(t0, t1, offset), 0, 3, 4},
+    {bne(t0, t1, offset), 0, 3, 3}, {blez(t0, offset), 0, -1, 0}, {blez(t0, offset), 0, 1, 0},
+    {bgtz(t0, offset), 0, 1, 0}, {bgtz(t0, offset), 0, 0, 0}, {bltz(t0, offset), 0, -1, 0},
+    {bltz(t0, offset), 0, 0, 0}, {bgez(t0, offset), 0, 0, 0}, {bgez(t0, offset), 0, -1, 0},
+    {bltzal(t0, offset), 0, -1, 0}, {bgezal(t0, offset), 0, -1, 0}, {beql(t0, t1, offset), 1, 3, 3},
+    {beql(t0, t1, offset), 1, 3, 4}, {bnel(t0, t1, offset), 1, 3, 4}, {bnel(t0, t1, offset), 1, 3, 3},
+    {blezl(t0, offset), 1, 0, 0}, {blezl(t0, offset), 1, 2, 0}, {bgtzl(t0, offset), 1, 2, 0},
+    {bgtzl(t0, offset), 1, -2, 0}, {bltzl(t0, offset), 1, -2, 0}, {bltzl(t0, offset), 1, 2, 0},
+    {bgezl(t0, offset), 1, 2, 0}, {bgezl(t0, offset), 1, -2, 0}, {bltzall(t0, offset), 1, -5, 0},
+    {bgezall(t0, offset), 1, -5, 0}, {j(0), 0, 0, 0}, {jal(0), 0, 0, 0}, {jr(t2), 0, 0, 0}, {jalr(t3, t2), 0, 0, 0},
+  };
+  //each delay slot, and the word before the branch (mtvc t5 into pfxs for the VFPU instruction after it)
+  const uint32_t mtvc = 0x48e0'0080u | t5 << 16, vaddS = 0x6000'0000u | 1 << 16 | 2 << 8 | 3;
+  const std::pair<uint32_t, uint32_t> slots[] = {{nop, addiu(s2, s2, 3)}, {nop, bitrev(s3, t0)}, {nop, syscall(5)},
+    {nop, lw(t9, 1, s7)}, {nop, lw(t8, 0, s6)}, {nop, syscall(6)}, {nop, div_(t0, zero)}, {nop, fop(0x03, 2, 0, 1)},
+    {mtvc, vaddS}, {nop, 0xd019'0000u}};
+  struct Event {
+    uint32_t kind, what, pc, pd;
+    uint64_t before;
+    auto operator==(const Event&) const -> bool = default;
+  };
+  struct Run {
+    Machine m;
+    std::vector<Event> events;
+  } runs[3];  //the interpreter; the recompiler; the recompiler without chains
+  for(uint32_t n : range(3)) {
+    auto& m = runs[n].m;
+    auto& events = runs[n].events;
+    uint32_t at = Base, cases = 0;
+    for(auto& form : forms) {
+      for(auto [before, slot] : slots) {
+        uint32_t next = at + Case;
+        uint32_t word = form.word;
+        if(word >> 26 == 0x02 || word >> 26 == 0x03) word |= (at + Taken) >> 2 & 0x03ff'ffff;
+        uint32_t words[16] = {addiu(t0, zero, form.a), addiu(t1, zero, form.b), lui(t2, (at + Taken) >> 16),
+                              ori(t2, t2, (at + Taken) & 0xffff), before, word, slot, addiu(s0, s0, 1), j(next), nop,
+                              nop, nop, addiu(s1, s1, 1), j(next), nop, nop};
+        for(uint32_t k : range(16)) m.ram.write32(at + 4 * k, words[k]);
+        at = next, cases++;
+      }
+    }
+    m.ram.write32(at, halt);
+    m.cpu.syscallHook = [&m, &events](u32 code) -> bool {
+      events.push_back({1, code, m.cpu.ipu.pc, m.cpu.ipu.pd, m.cpu.instructionsBefore()});
+      if(code == 6) m.cpu.ipu.pc = m.cpu.pipeline.address + 4, m.cpu.ipu.pd = m.cpu.ipu.pc + 4;
+      return true;
+    };
+    m.cpu.exceptionHook = [&m, &events](Exception, u32 address) {  //(not halting: the program goes on)
+      events.push_back({2, address, m.cpu.ipu.pc, m.cpu.ipu.pd, m.cpu.instructionsBefore()});
+    };
+    m.cpu.recompiler.enabled = n != 0;
+    m.cpu.recompiler.chains = n != 2;
+    m.cpu.power(Base);
+    m.cpu.ipu.r[s7] = Data, m.cpu.ipu.r[s6] = Unmapped, m.cpu.ipu.r[t5] = 0x55;
+    m.ram.write32(Unmapped, 0x1234'5678);
+  }
+  auto same = [&](uint32_t x, uint32_t y) {
+    auto& a = runs[x].m.cpu;
+    auto& b = runs[y].m.cpu;
+    bool same = a.ipu.pc == b.ipu.pc && a.ipu.pd == b.ipu.pd && a.scc.halted == b.scc.halted;
+    same = same && a.ipu.hi == b.ipu.hi && a.ipu.lo == b.ipu.lo && a.fpu.csr == b.fpu.csr;
+    same = same && a.vfpu.pfxs == b.vfpu.pfxs && a.vfpu.pfxt == b.vfpu.pfxt && a.vfpu.pfxd == b.vfpu.pfxd;
+    for(uint32_t r : range(32)) same = same && a.ipu.r[r] == b.ipu.r[r] && a.fpu.r[r] == b.fpu.r[r];
+    for(uint32_t r : range(128)) same = same && a.vfpu.r[r] == b.vfpu.r[r];
+    return same;
+  };
+  runs[0].m.cpu.run(100'000);
+  runs[1].m.cpu.run(100'000);
+  CHECK(same(0, 1), 1);
+  CHECK(runs[0].events == runs[1].events, 1);
+  CHECK(runs[0].m.cpu.scc.halted, 1);
+  CHECK(runs[0].events.size(), 4 * std::size(forms) - 4 * 7);  //(the 7 likely branches not taken skip theirs)
+  //chained against unchained, a few instructions at a time (runs[1] again, from the start)
+  runs[1].events.clear();
+  runs[1].m.cpu.ipu = runs[2].m.cpu.ipu, runs[1].m.cpu.fpu = runs[2].m.cpu.fpu, runs[1].m.cpu.vfpu = runs[2].m.cpu.vfpu;
+  runs[1].m.cpu.scc.halted = 0;
+  uint32_t mismatches = 0;
+  for(uint32_t round = 0; round < 20000 && !runs[1].m.cpu.scc.halted; round++) {
+    uint32_t limit = 1 + round % 37;
+    uint64_t a = runs[1].m.cpu.run(limit), b = runs[2].m.cpu.run(limit);
+    if((a != b || !same(1, 2)) && ++mismatches <= 3) {
+      std::printf("FAIL %s: run %u of %u: %llu vs %llu instructions, pc %08x vs %08x\n", currentTest, round, limit,
+                  (unsigned long long)a, (unsigned long long)b, runs[1].m.cpu.ipu.pc, runs[2].m.cpu.ipu.pc);
+    }
+  }
+  CHECK(mismatches, 0);
+  CHECK(runs[1].m.cpu.scc.halted, 1);
+  CHECK(runs[1].events == runs[2].events, 1);  //(the instructions before each counted from its run's start)
+  CHECK(runs[1].events.size(), runs[0].events.size());
+}
+
+// Blocks linked to each other (recompiler.cpp's exits: a jump straight to the target's body) unlinked when the
+// target's code goes: a function a call site has linked to, rewritten by the program itself halfway; a loop that
+// rewrites its own first instruction on every round, with a larger constant each time (its block, running on from a
+// section that went, mustn't go on to its old self); and a function called through two mirrors in turn (its section
+// compiled afresh for each), which keeps the address bgezal links (as it runs through either mirror), called also from
+// a site first compiled right after a call through the other mirror (whose exit mustn't take the code compiled for
+// that mirror). The recompiler must end as the interpreter does, links made and waiting, also with code
+// memory small enough to start afresh every few blocks; and runs of a few instructions at a time, chained and not, must
+// stop in the same places.
+auto linkedBlocks() -> void {
+  if(!useRecompiler) return;
+  constexpr uint32_t Function = Base + 0x1000, Loop = Base + 0x2000, Mirrored = Function | 0x4000'0000;
+  auto program = [&](Machine& m) {
+    auto put = [&](uint32_t address, std::initializer_list<uint32_t> words) {
+      for(uint32_t word : words) m.ram.write32(address, word), address += 4;
+    };
+    //main: 40 rounds of calling the function, rewriting its first word at round 20, every third call through the
+    //uncached mirror, and at round 30, right after a call through the mirror, a call from a site compiled only then;
+    //then the self-rewriting loop
+    put(Base, {addiu(s0, zero, 0), lui(t7, Function >> 16), ori(t7, t7, Function & 0xffff), lui(t3, Mirrored >> 16),
+               ori(t3, t3, Mirrored & 0xffff), lui(t6, addiu(s1, s1, 100) >> 16),
+               ori(t6, t6, addiu(s1, s1, 100) & 0xffff), addiu(t5, zero, 20),
+               /*32, a round:*/ addiu(s0, s0, 1), bne(s0, t5, 2), nop, sw(t6, 0, t7),
+               /*48:*/ addiu(t4, zero, 3), div_(s0, t4), mfhi(t4), beq(t4, zero, 5), nop,
+               /*68:*/ jal(Function), nop, j(Base + 92), nop,
+               /*84:*/ jalr(ra, t3), nop,
+               /*92:*/ addiu(t9, zero, 30), bne(s0, t9, 3), nop, jal(Function), nop,
+               /*112:*/ slti(t0, s0, 40), bne(t0, zero, -22), nop, j(Loop), nop});
+    //the function: what bgezal links, its own address through the mirror it runs from, goes into s4
+    put(Function, {addiu(s1, s1, 1), addu(t2, ra, zero), bgezal(zero, 1), nop, xor_(s4, s4, ra), jr(t2), nop});
+    //the loop: its first word becomes addiu s2,s2,50 by the store in it, then 51, 52 and so on, a round each
+    put(Loop, {lui(t8, addiu(s2, s2, 50) >> 16), ori(t8, t8, addiu(s2, s2, 50) & 0xffff), lui(t9, (Loop + 16) >> 16),
+               ori(t9, t9, (Loop + 16) & 0xffff), /*16:*/ addiu(s2, s2, 1), sw(t8, 0, t9), addiu(t8, t8, 1),
+               addiu(s3, s3, 1), slti(t0, s3, 30), bne(t0, zero, -6), nop, halt});
+  };
+  Machine runs[3];  //the interpreter, the recompiler, the recompiler without chains
+  for(uint32_t n : range(3)) {
+    program(runs[n]);
+    runs[n].cpu.recompiler.enabled = n != 0;
+    runs[n].cpu.recompiler.chains = n != 2;
+    runs[n].cpu.power(Base);
+  }
+  runs[0].cpu.run(100'000);
+  runs[1].cpu.run(100'000);
+  bool same = true;
+  for(uint32_t r : range(32)) same = same && runs[0].cpu.ipu.r[r] == runs[1].cpu.ipu.r[r];
+  CHECK(same, 1);
+  CHECK(runs[0].cpu.scc.halted, 1);
+  CHECK(runs[1].cpu.scc.halted, 1);
+  CHECK(runs[0].gpr(s1), 19 + 22 * 100);  //(round 20's call already took the rewritten word; round 30 called twice)
+  CHECK(runs[1].gpr(s1), 19 + 22 * 100);
+  CHECK(runs[0].gpr(s2), 1 + (50 + 78) * 29 / 2);  //(round r took the word round r - 1 stored: 50 + r - 2)
+  CHECK(runs[1].gpr(s2), 1 + (50 + 78) * 29 / 2);
+  //(links were made: the call site's to the function, and j Loop's waits since the loop's first block went)
+  CHECK(runs[1].cpu.recompiler.into.empty(), 0);
+  CHECK(runs[1].cpu.recompiler.waiting.empty(), 0);
+  //with code memory so small it starts afresh every few blocks, links and all
+  Machine tight;
+  program(tight);
+  tight.cpu.recompiler.enabled = true;
+  tight.cpu.recompiler.codeMemory = 1_MiB + 8_KiB;  //(it starts afresh with under 1 MiB left)
+  tight.cpu.power(Base);
+  tight.cpu.run(100'000);
+  same = tight.cpu.scc.halted;
+  for(uint32_t r : range(32)) same = same && runs[0].cpu.ipu.r[r] == tight.cpu.ipu.r[r];
+  CHECK(same, 1);
+  //chained against unchained, a few instructions at a time, from the start again
+  for(uint32_t n : {1u, 2u}) {
+    program(runs[n]);
+    runs[n].cpu.power(Base);
+  }
+  uint32_t mismatches = 0;
+  for(uint32_t round = 0; round < 20000 && !runs[1].cpu.scc.halted; round++) {
+    uint32_t limit = 1 + round % 37;
+    uint64_t a = runs[1].cpu.run(limit), b = runs[2].cpu.run(limit);
+    bool alike = a == b && runs[1].cpu.ipu.pc == runs[2].cpu.ipu.pc && runs[1].cpu.ipu.pd == runs[2].cpu.ipu.pd;
+    for(uint32_t r : range(32)) alike = alike && runs[1].cpu.ipu.r[r] == runs[2].cpu.ipu.r[r];
+    if(!alike && ++mismatches <= 3) {
+      std::printf("FAIL %s: run %u of %u: %llu vs %llu instructions, pc %08x vs %08x\n", currentTest, round, limit,
+                  (unsigned long long)a, (unsigned long long)b, runs[1].cpu.ipu.pc, runs[2].cpu.ipu.pc);
+    }
+  }
+  CHECK(mismatches, 0);
+  CHECK(runs[1].gpr(s1), 19 + 22 * 100);
+  CHECK(runs[1].gpr(s2), 1 + (50 + 78) * 29 / 2);
+}
+
 // Not a test: with ALLEGREX_BENCHMARK set, times a loop of loads, stores and arithmetic on the interpreter, on the
 // recompiler without a page table (its loads and stores call the interpreter), and on the recompiler. For numbers
 // that mean something, build without the sanitizers: SANITIZE= ALLEGREX_BENCHMARK=1 tests/allegrex/run-tests.sh
@@ -1168,8 +1361,10 @@ int main() {
     {"exceptions", exceptions}, {"fpu arithmetic", fpuArithmetic}, {"fpu conversions", fpuConversions},
     {"fpu compare", fpuCompare}, {"fpu memory", fpuMemory}, {"system", system}, {"recompiler", recompilerCases},
     {"chained runs", chainedRuns}, {"coprocessor branches taken", coprocessorBranchesTaken},
+    {"delay slots each way", delaySlotsEachWay}, {"linked blocks", linkedBlocks},
   };
   for(auto& test : vfpuTests()) tests.push_back(test);
+  checkRequired();
   int groups = 0;
   for(bool recompiler : {false, true}) {
     useRecompiler = recompiler;
@@ -1178,7 +1373,7 @@ int main() {
       currentTest = label.c_str();
       int before = failures;
       run();
-      std::printf("%s %s\n", failures == before ? "pass" : "FAIL", currentTest);
+      report(before);
       groups++;
     }
   }
@@ -1186,9 +1381,9 @@ int main() {
     currentTest = name;
     int before = failures;
     run();
-    std::printf("%s %s\n", failures == before ? "pass" : "FAIL", currentTest);
+    report(before);
     groups++;
   }
-  std::printf("%d groups, %d failure%s\n", groups, failures, failures == 1 ? "" : "s");
+  summary(groups);
   return failures ? 1 : 0;
 }
