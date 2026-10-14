@@ -67,6 +67,11 @@ struct Allegrex {
   //GE keeps decoded (memory.hpp); the owner tells the recompiler of each page newly watched (recompiler.protect()).
   const u8* watched = nullptr;
 
+  //Pages, numbered as above, whose entries in the page table never change (nonzero bytes), as the owner promises:
+  //the PSP's main RAM and scratchpad, which nothing takes out or moves. A block goes on to a block in one of them
+  //without looking at its entry again (emitChainTo()); without this, it always looks.
+  const u8* steady = nullptr;
+
   //Why the CPU stopped a program. The numbers are the ones MIPS uses in its Cause register.
   enum class Exception : u32 {
     AddressLoad         =  4,  //an instruction fetch or load from an address that isn't aligned to its size
@@ -581,6 +586,7 @@ struct Allegrex {
       u32 clock = 0;
     } holding;
     auto take() -> u32;
+    auto pinSources(u32 instruction) -> void;
     auto use(u32 index) -> op_base;
     auto def(u32 index) -> op_base;
     auto wrote() -> void;
@@ -642,7 +648,8 @@ struct Allegrex {
     bool enabled = false;
     bool chains = true;  //blocks go on to the next by themselves (emitChain()); tests turn it off to compare
     //The block being compiled calls the interpreter somewhere (emitInterpreter()), which may halt the CPU. (Calls
-    //that halt it only by an exception, after which the block leaves, needn't say so: emitVFPUCall().)
+    //that halt it only by an exception, after which the block leaves, needn't say so: emitVFPUCall(), and a native
+    //instruction's way to the interpreter, emitColdFallback().)
     bool calls = false;
     //How many instructions the last block ran, not yet counted in instructionsRun: each block sets it as it leaves
     //for run() (0 when it counted them itself, going on to the next: emitChain()), and as it calls the interpreter

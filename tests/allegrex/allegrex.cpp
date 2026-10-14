@@ -670,6 +670,7 @@ auto recompilerCases() -> void {
   // same.
   constexpr uint32_t Function = Base + 0x2000;
   Machine unlisted;
+  unlisted.cpu.steadyPages[(Function & 0x1fffffff) >> 12] = 0;
   unlisted.cpu.syscallHook = [&](u32) -> bool {
     uint32_t page = (Function & 0x1fffffff) >> 12;
     auto listed = unlisted.cpu.table[page];
@@ -824,6 +825,7 @@ auto chainedRuns() -> void {
       m.cpu.recompiler.writable(Page);
       return true;
     };
+    m.cpu.steadyPages[((Base & 0x1fffffff) + 0x1000) >> 12] = 0;
     m.cpu.recompiler.enabled = true;
     m.cpu.recompiler.chains = n == 0;
     m.cpu.power(Base);

@@ -351,7 +351,8 @@ auto Allegrex::Recompiler::emitEnd(u32 count, bool known, u32 target) -> void {
 }
 
 //emitChain() for a block that goes on to target, which the compiled code knows already: its section and word are worked
-//out here, and of run()'s checks only the page's is made as it runs, the CPU's owner being free to change the table.
+//out here, and of run()'s checks only the page's is made as it runs, the CPU's owner being free to change the table
+//(but for a page it says never changes, listed as it is now: Allegrex::steady).
 //pc and pd, target and the word after it, are stored only where it leaves for run(). Whether the CPU halted is only
 //looked at if the block called the interpreter, the only way it can halt (an exception leaves before this; a syscall,
 //halt, break or eret ends its block for run(), but for a syscall in a delay slot, which is such a call).
@@ -360,7 +361,7 @@ auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target) -> void {
   auto unless = [&](sljit_jump* jump) { leave.push_back(jump); };
   emitCounted(count, leave);
   u32 index = (target & 0x1fff'ffff) / SectionSize;
-  if(self.pages) {
+  if(self.pages && !(self.steady && self.steady[index] && self.pages[index])) {
     unless(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_MEM1(SLJIT_S1), index * sizeof(u8*), SLJIT_IMM, 0));
   }
   emitLink(target);  //(straight to the target's body once it's compiled; until then, the lookup)
@@ -513,10 +514,10 @@ auto Allegrex::Recompiler::emitCold(const std::vector<sljit_jump*>& jumps, const
   });
 }
 
-//emitFallback() as cold code.
+//emitFallback() as cold code. The interpreter runs a native instruction there, which halts the CPU only by an
+//exception, after which the block leaves: so it doesn't count among the block's calls (calls).
 auto Allegrex::Recompiler::emitColdFallback(const std::vector<sljit_jump*>& jumps, u32 address, u32 instruction,
                                             u32 count, bool delaySlot) -> void {
-  calls = true;
   emitCold(jumps, [=, this] { emitFallback(address, instruction, count, delaySlot); });
 }
 
@@ -559,9 +560,21 @@ auto Allegrex::Recompiler::use(u32 index) -> op_base {
   return sreg(3 + k);
 }
 
+//The registers an instruction reads (rs, and rt where it's a source), where host registers hold them, are kept for it
+//(pinned) before anything is compiled: def() then takes another host register for a result into one of them, so
+//use() still finds the value the instruction reads, whichever of the two it asks for first.
+auto Allegrex::Recompiler::pinSources(u32 instruction) -> void {
+  u32 op = instruction >> 26;
+  bool rt = op == 0x00 || (op >= 0x04 && op <= 0x07) || (op >= 0x14 && op <= 0x17) || op == 0x1f || op == 0x22
+         || op == 0x26 || (op >= 0x28 && op <= 0x2e);
+  for(u32 index : {instruction >> 21 & 31, rt ? instruction >> 16 & 31 : 0}) {
+    if(index && holding.slot[index] >= 0) holding.pinned |= 1 << holding.slot[index];
+  }
+}
+
 //Where register index's new value goes (never r0's: an instruction writing only r0 compiles to nothing), stored by
 //wrote(). Until then the old value is the register's, in ipu.r[] and for use() (which loads it afresh if its host
-//register is now this one).
+//register is now this one: pinSources() keeps that from happening to a value the instruction reads).
 auto Allegrex::Recompiler::def(u32 index) -> op_base {
   s32 k = holding.slot[index];
   if(k >= 0 && !(holding.pinned >> k & 1)) {

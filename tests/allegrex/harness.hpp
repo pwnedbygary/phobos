@@ -171,18 +171,22 @@ struct Ram {
 
 //The Allegrex leaves memory to whoever owns it; here that's the test's RAM. Like the PSP's memory map, it tells the
 //recompiler about every write, so code compiled from there is compiled again. Its page table lists the RAM's
-//pages, except the one at Unmapped, which compiled code then reaches through read() and write().
+//pages, except the one at Unmapped, which compiled code then reaches through read() and write(); and says they never
+//change (steady), as the PSP's says of its main RAM: a test that changes a page's entry takes it out of steadyPages.
 struct TestCPU : Allegrex {
   Ram& ram;
   std::vector<u8*> table = std::vector<u8*>(Recompiler::SectionCount);
+  std::vector<u8> steadyPages = std::vector<u8>(Recompiler::SectionCount);
   uint32_t writes = 0;  //how many writes came through write()
 
   TestCPU(Ram& ram) : ram(ram) {
     for(uint32_t offset = 0; offset < ram.bytes.size(); offset += 4096) {
       if(Base + offset == Unmapped) continue;
       table[((Base & 0x1fffffff) + offset) >> 12] = ram.bytes.data() + offset;
+      steadyPages[((Base & 0x1fffffff) + offset) >> 12] = 1;
     }
     pages = table.data();
+    steady = steadyPages.data();
   }
 
   auto read(u32 size, u32 address) -> u32 override {

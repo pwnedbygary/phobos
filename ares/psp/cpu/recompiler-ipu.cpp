@@ -31,6 +31,7 @@
 //An instruction compiled natively, if it can be, its results stored as it ends. A coprocessor's move into rt
 //(MFC1, MFV, MFVC) writes ipu.r[] itself, so rt's host register no longer holds its value.
 auto Allegrex::Recompiler::emitInstruction(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool {
+  pinSources(instruction);
   bool native = emitNative(address, instruction, count, delaySlot);
   wrote();
   u32 op = instruction >> 26;

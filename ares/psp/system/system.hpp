@@ -84,6 +84,7 @@ struct System {
 
 private:
   std::vector<u8*> pageTable;  //the CPU's view of memory, page by page (Memory::buildPages)
+  std::vector<u8> steadyPages;  //the pages whose entries in it never change (Memory::buildSteady)
   std::vector<u32> pixels;     //the frame the game shows
   std::vector<u32> latePixels; //the newest late frame the GPU has finished ("Late Frames"), its size and GE format
   u32 lateWidth = 0, lateHeight = 0, lateFormat = 3;
