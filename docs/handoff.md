@@ -30,6 +30,125 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Runner: a JSON report of what ran, a pinned start time, captures timed apart and stale ones said — 2026-10-13
+
+Branch `cursor/test-plan-08-2b67` (PR #250), stacked on `cursor/test-plan-03-2b67` (#245, which changes the runner's
+build script and smoke test; on #241). Package 08 of the 2026-10-13 test and performance plan, adapted (indexed in
+the implementation plan by #244). The runner only: no core change; every option, output line and default as before
+(but a malformed number is now refused, and a bare file name for `--wav` or a saved state, which ended the run in an
+exception, now works), only new options and new lines where they apply.
+- **The problem**: speed comparisons ran through private scratch patches; a run didn't record what it had actually
+  used (a Vulkan renderer that failed falls back to the software one); the PSP's clock started at the host's time,
+  so two runs of a game differed; the frame loop's time included its captures (waiting for each PNG's picture,
+  writing it, the save state); and a PNG whose wait ran out was written as if fresh.
+- **`--report FILE`**: the run as JSON, `"report": "phobos-psp-runner 1"` (README, "The report"): the runner's build
+  (the commit, from `build.sh`; the compiler's version string; debug or release; FFmpeg or not), the game (path,
+  kind, title, disc ID, size), the options given (null where not: renderer, resolution, engine, GE threads, late
+  frames, frames, start time, state, presses, script, the PNGs' schedule and folder, WAV, state saved, memory stick,
+  fonts, pipeline cache), what ran (the renderer the core used, the GPU's device, whether the GPU was lost during
+  the run, the resolution, engine, GE threads, the clock it began at, `TZ` and the host's UTC offset then), the
+  result (frames, the program's end, the loop's seconds and its captures', stale captures, clock restarts, each
+  capture's frame and the frame running when its picture arrived, missing functions, last note) and the GPU's
+  counts. Text stays UTF-8: a byte that isn't part of a UTF-8 character (a game's Shift-JIS output, a Latin-1 file
+  name) is written `\u00XX`. The run's folders (the PNGs', the WAV's, the state's, the report's) are made before it
+  runs, and one that can't be made ends it (exit 1, said, no scratch left); the report is written beside its name,
+  closed, checked and renamed, so a failed write fails the run (exit 1) without leaving part of one.
+- **`--start-time SECONDS`** (up to 4294967295; every number the runner reads, a press's frame too, is decimal digits
+  within 32 bits, and a stick's value digits after an optional minus sign; anything else refused, not wrapped or cut
+  short): the kernel's clock set right after power-on (`Kernel::power()` takes the host's time, the core's only read of
+  the host clock; local time follows `TZ`), before anything runs. A game that starts itself again (sceKernelLoadExec,
+  largeRestart) powers the kernel on again, which takes the host's clock again: the kernel's run returns as the new
+  program is started, before it runs, and `System::run` calls it once a frame, so the runner sets the clock back at the
+  next frame's top (and after the last frame), says so on standard error and counts it (`clock restarts`). A loaded
+  state keeps its own clock (said on standard error); a restart after it takes the time asked for.
+- **Captures**: the summary adds `capture seconds:` (their time, and the speed without them) where there were any;
+  a PNG with no picture presented since the last one within 2 s is said on standard error and counted (`stale
+  captures: N`); with no picture at all yet there's no PNG (a 0-by-0 one was written before), said and counted.
+  Which picture a PNG takes is as before (the first presented since the last PNG): the coordinator's library
+  comparisons keep their meaning. ares's screen thread drops pictures it doesn't take in time, so on a busy host a
+  PNG can be older than its name; the report's captures give the frame that was running when each picture arrived.
+  `--screen-stops-at F`, for the runner's own test, takes no pictures from frame F on. If the GPU is lost during a
+  run, `gpu lost:` says the software renderer drew from then on. The new summary lines begin with words of their
+  own, and only the speed's has "frames per second" in it: the coordinator's and agents' scripts find lines by those.
+- **`build.sh`**: the commit described without `--dirty`, which rewrites the checkout's git index under its lock
+  (another agent's `git add` in the same checkout could fail); `-dirty` comes from `git status` with
+  `GIT_OPTIONAL_LOCKS=0`, tracked files only. Only this checkout's own repository is described (a copy inside
+  another says `unknown`), and the name keeps only letters, digits and `._+-`.
+- **Kept**: every line the speed kits' patches anchor on. Each kit's whole chain (bench-patch.py, then every other
+  patch in its folder) applies to this runner exactly where it applies to master's (`cpu-round2`, `ge-headroom`,
+  `reconcile`, `vulkan-speed`; `cpu-speed2`'s bench-patch.py already fails on master's runner).
+- **`tests/psp/ares/runner-test.sh`** adds: the summary's speed on the one line with "frames per second" and the
+  captures' time on `capture seconds:`; the report checked (JSON; the options not given null; the software renderer,
+  the recompiler, no GPU lost; 60 frames, the program running on; both captures fresh, at frames 30 and 60, each
+  picture arrived by its frame); three runs of cube.elf saving a state at frame 30, two started at 1234567890
+  (identical states, no clock restarts) and one at 1234567999 (another); the first state loaded with another start
+  time (the state's clock kept, said, not set again); a start time past 32 bits, a number with more after it, a
+  press's frame past 32 bits, and a stick's value with more after it, a space before it or below -32768 refused, and
+  the sticks' extremes taken; captures at frames 19, 20 and 40 with `--screen-stops-at 20` (19's fresh, as it waits
+  for a picture before the screen stops; 40's stale; 20's either, as pictures came while 19's PNG was written; each
+  said and counted as it was, each with a PNG; 40's PNG the same as 20's, the last picture before the screen
+  stopped); a capture with no picture at all (said, no PNG, in the report, whose new folder the runner made); and a
+  game's name with a Latin-1 byte (the report still JSON, the byte `\u00e9`), where the filesystem takes such a name
+  (Linux's do; macOS's don't, and there it's left out, said).
+- **Checks** (the Mac, `PHOBOS_JOBS=3`, its own TMPDIR): `runner-test.sh` passes (38 s with the core rebuilt after
+  master's #230); the kits' patch chains as above. `jsonText()` alone, in a scratch harness, on 18 byte strings
+  (UTF-8 of 2 to 4 bytes and U+10FFFF kept; Latin-1, Shift-JIS, overlong forms, a surrogate, past U+10FFFF, a lead
+  byte F5, cut-off characters and lone continuation bytes escaped; quotes and control characters): each output
+  valid JSON and equal to Python's strict UTF-8 reading. A real restart (a disposable patch filling the kernel's
+  own sceKernelLoadExec request with cube.elf, so `Kernel::run` calls `loadExec()`): at frame 10, "frame 10: the
+  game started itself again ..." and the kernel's clock 1234567890 at the end, two such runs saving identical
+  states; with the runner's hold off, the host's clock at the end (1791923398) and another state; restarts at the
+  last frame and at frame 1 (no cycles yet: seen by the clock's change) set back too; without `--start-time`,
+  nothing said, `clock restarts` null. Negative controls, each in a disposable copy: the start time not applied,
+  "runs started at different times saved the same state" (fails); the stale capture's detection removed, `stale
+  captures: 1` missing (fails). After the delta review's changes: `runner-test.sh` passes again (13 s, the runner
+  alone rebuilt), the kits' chains as on master's runner, shellcheck clean; the three-capture case alone six times,
+  19 and 20 fresh and 40 stale each time. The review's suggestion for that case, frame 19 without frame 20, failed
+  on its first run here: frame 40 found a new picture, which had come while frame 19's PNG was written. The restarts
+  above again, the same, and one whose program can't start (bytes that aren't an ELF): "a program the game asked for
+  couldn't start, which ended the game ...", the program ended, the clock still the one asked for. A report folder
+  that can't be made: said, exit 1, no scratch left; malformed numbers (`12abc`, `+5`, a leading space, a negative
+  that wraps to 1, a press's frame past 32 bits or `1x`) refused. After the second delta review's changes:
+  `runner-test.sh` passes (14 s), the kits' chains as on master's runner, shellcheck clean; with the stick's old
+  read put back (`std::stol`), the test fails ("not refused: --press 1:L-StickX:12abc"). After the third delta
+  review's wording: `runner-test.sh` passes (15 s), the kits' chains as on master's runner, shellcheck clean.
+- **Review**: an independent read-only review (it re-ran the smoke test and the kits' chains, read the restart
+  path, and ran error cases) found two majors: the start time lost when a game starts itself again, while the
+  report still showed the pinned clock; and text not always UTF-8 (a Shift-JIS note). Its minors: the report's
+  write errors late or unseen (no folder made, the stream checked before closing); captures not saying which frame
+  they show; `ran.renderer` saying Vulkan after the GPU was lost; `git describe --dirty` rewriting the index. Its
+  nits: `nan` for the GPU's wait with `--frames 0`, a misleading message and a 0-by-0 PNG with no picture, the
+  README's example and test sentence, line lengths, `asked` mixing nulls and defaults, the start time with a loaded
+  state unsaid, `build.sh` with a quote in a tag or inside another repository, start times wrapping past 32 bits.
+  All taken (above), and of its suggestions the compiler, build mode, FFmpeg, the UTC offset and the options given.
+  Not taken: the source string out of runner.cpp's compile command (each commit compiles the runner again in a
+  checkout's build folder; CI builds once; pruning old objects is the objects cache's, for every suite), a report
+  when a run fails early, the driver's version (no accessor in the core), the program's hash, and a test program
+  that reads the clock (none in the repository prints the date; building one needs pspsdk). A delta review (PASS;
+  it re-ran the smoke test and the kits' chains, 16 runs through the restart path (controls without a restart among
+  them) and `jsonText()` on 978,253 strings, and compiled runner.cpp with GCC 13.3 and 14.4 under `-Werror`) found
+  one minor: the two new summary lines began with the words of existing ones ("frames per second, captures left
+  out", "gpu: lost"), and scripts in the agents' scratch find lines by those (one would take the wrong line's speed,
+  one would overwrite the GPU's counts, three greps print both); taken (`capture seconds:`, `gpu lost:`, and the
+  test's check that one line has "frames per second"). Its nits, all taken: a press's frame still wrapping past 32
+  bits and a number with more after it accepted (one digits-only reader for both now, and the test refuses both); a
+  folder that can't be made ending the run in an exception (said now, exit 1, before the scratch is made); a
+  capture's freshness read apart from its picture (now in the same lock); frame 20's fresh capture possibly missed
+  on a starved host (the three captures above); the README's `asked` and title; a program that couldn't start
+  called a restart (said as what it is). A second delta review (PASS; the smoke test again, the three captures 10
+  times, real failed starts at frames 1, 10 and 30, four ways a folder can't be made, and the stale check removed,
+  which the test catches) found five nits. Taken: a stick's value still read loosely (`12abc` ran as 12; now an
+  optional minus sign, then digits, and the test refuses both kinds and takes the extremes); the bare file names
+  above unsaid; frame 40's PNG, always frame 20's picture, now compared; "16 real restarts" and the README's `clock
+  restarts`. Left: a scratch script outside the repository that diffs two runs' summaries would count `capture
+  seconds:`, a time, as a difference (`scratch/dialogs/compare.sh`, if it's used again: one more pattern for its
+  filter). A third delta review (PASS; 33 edge cases run against the runner, and no press script in the scratch
+  folders refused by the strict read) found three nits, all taken: two lines left short, a run missing below, and
+  `-0` read as 0 though the wording said a minus sign only below 0 (now an optional one; leading zeros are read as
+  every number's are).
+- **CI**: PSP Core Tests green on each earlier head (runs 38443751682, 38449049095, 38454982676, 38463437399,
+  38468789060 and 38471152830, the runner's test passing; on Linux the last three ran the name not in UTF-8).
+
 ## Tests: a skip says what's missing, and fails where the lane must have it; the Allegrex measurements unpacked by content — 2026-10-13
 
 Branch `cursor/test-plan-04-2b67` (PR #246), stacked on `cursor/test-plan-03-2b67` (#245, itself on #241). Package 04
