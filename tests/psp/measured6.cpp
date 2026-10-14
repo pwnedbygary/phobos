@@ -34,7 +34,10 @@ auto present(const std::filesystem::path& path, const char* whose) -> std::vecto
 //The PSP's file, or nothing without the measurements (which, given, have every file).
 auto theirs(const char* name) -> std::vector<u32> {
   const char* folder = std::getenv("PSP_GE_ROUND6");
-  if(!folder || !*folder) return {};
+  if(!folder || !*folder) {
+    skip("ge-round6", "PSP_GE_ROUND6 isn't set");
+    return {};
+  }
   return present(std::filesystem::path(folder) / (std::string(name) + ".bin"), "the PSP's");
 }
 

@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 #Builds tools/psp-runner, the headless PSP game runner: the PSP core as an ares system (ares/psp/psp.cpp, the
 #whole core as Phobos builds it, with ares's node tree) with a command-line front end (runner.cpp) that boots a
-#game, runs it a frame at a time, and reports what happens. Its objects are kept between builds in a folder
-#outside the repository (a fresh TMPDIR rebuilds everything).
-#usage: tools/psp-runner/build.sh   (the binary ends up in the build folder, named psp-runner)
+#game, runs it a frame at a time, and reports what happens. Its objects are kept between builds outside the
+#repository by tests/objects.sh, this checkout's in its own folder, each compiled again when what it was built from
+#changes (any header it includes) or its compile command does.
+#usage: tools/psp-runner/build.sh   (the binary ends up in this checkout's build folder, named psp-runner and a hash
+#of its configuration, which the last line names; a copy goes in ${TMPDIR:-/tmp}/phobos-psp-runner/psp-runner, the
+#last one built there.
+#PHOBOS_JOBS: compiles at once)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 OUT=${TMPDIR:-/tmp}/phobos-psp-runner
-mkdir -p "$OUT/obj"
+source "$ROOT/tests/objects.sh"
 
 CC=${CC:-cc}
 CXX=${CXX:-c++}
@@ -31,8 +35,8 @@ INCLUDES=(-isystem "$ROOT" -isystem "$ROOT/nall" -isystem "$ROOT/nall/nall" -isy
   -isystem "$ROOT/thirdparty/Vulkan-Headers/include")
 #FFmpeg's decoders for the games' music and movies, as Phobos's builds have them (docs/psp-core.md, part 26),
 #built once for the host by thirdparty/ffmpeg/build.sh and kept; PSP_FFMPEG=0 builds without them (the games'
-#movies then stay black and their ATRAC music silent). The core's object is built afresh every run (below), so
-#switching needs no fresh TMPDIR.
+#movies then stay black and their ATRAC music silent). Their define is in the objects' commands, so switching
+#makes objects of their own.
 if [[ ${PSP_FFMPEG:-1} != 0 ]]; then
   FFMPEG=$("$ROOT/thirdparty/ffmpeg/build.sh" host | tail -1)
   DEFINES+=(-DARES_ENABLE_FFMPEG)
@@ -41,40 +45,36 @@ if [[ ${PSP_FFMPEG:-1} != 0 ]]; then
 fi
 CXXFLAGS=(-std=c++20 -O1 -g "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}")
 
-compile() {  #source object [always]
-  local object=$OUT/obj/$2.o
-  if [[ ${3:-} == always || ! -f $object || $1 -nt $object ]]; then
-    echo "  CXX $1"
-    $CXX "${CXXFLAGS[@]}" -w -c "$1" -o "$object"
-  fi
-}
-
-compile "$ROOT/ares/psp/psp.cpp" psp always
-compile "$ROOT/ares/ares/android_globals.cpp" globals
+object "$CXX" "$ROOT/ares/psp/psp.cpp" "${CXXFLAGS[@]}" -w
+object "$CXX" "$ROOT/ares/ares/android_globals.cpp" "${CXXFLAGS[@]}" -w
 #the parts of ares's framework the core needs beside its own code: the node tree, and the debugger it refers to
-compile "$ROOT/tests/psp/ares/ares-runtime.cpp" ares-runtime
-compile "$ROOT/nall/nall/nall.cpp" nall
-compile "$ROOT/thirdparty/sljitAllocator.cpp" sljit-allocator
-if [[ ! -f $OUT/obj/sljit.o || $ROOT/thirdparty/sljit/sljit_src/sljitLir.c -nt $OUT/obj/sljit.o ]]; then
-  echo "  CC  sljitLir.c"
-  $CC -O1 "${SYSROOT[@]}" "${DEFINES[@]}" -I"$ROOT/thirdparty" -c "$ROOT/thirdparty/sljit/sljit_src/sljitLir.c" \
-    -o "$OUT/obj/sljit.o"
-fi
+object "$CXX" "$ROOT/tests/psp/ares/ares-runtime.cpp" "${CXXFLAGS[@]}" -w
+object "$CXX" "$ROOT/nall/nall/nall.cpp" "${CXXFLAGS[@]}" -w
+object "$CXX" "$ROOT/thirdparty/sljitAllocator.cpp" "${CXXFLAGS[@]}" -w
+object "$CC" "$ROOT/thirdparty/sljit/sljit_src/sljitLir.c" -O1 "${SYSROOT[@]}" "${DEFINES[@]}" -I"$ROOT/thirdparty"
 #libchdr, and the zlib, LZMA and zstd decoders it carries
 for source in "$CHDR"/src/libchdr_*.c "$CHDR/deps/lzma-25.01/src/LzmaDec.c" "$CHDR/deps/miniz-3.1.1/miniz.c" \
   "$CHDR/deps/zstd-1.5.7/zstddeclib.c"; do
-  object=$OUT/obj/chdr-$(basename "$source" .c).o
-  if [[ ! -f $object || $source -nt $object ]]; then
-    echo "  CC  $(basename "$source")"
-    $CC -O1 -w "${SYSROOT[@]}" -I"$CHDR/include" -I"$CHDR/deps/zstd-1.5.7" -c "$source" -o "$object"
-  fi
+  object "$CC" "$source" -O1 -w "${SYSROOT[@]}" -I"$CHDR/include" -I"$CHDR/deps/zstd-1.5.7"
 done
-if [[ ! -f $OUT/obj/libco.o ]]; then
-  echo "  CC  libco.c"
-  $CC -O1 -w "${SYSROOT[@]}" -I"$ROOT/libco" -c "$ROOT/libco/libco.c" -o "$OUT/obj/libco.o"
+object "$CC" "$ROOT/libco/libco.c" -O1 -w "${SYSROOT[@]}" -I"$ROOT/libco"
+#the source it's built from, for its report: the commit (described from the latest tag), marked dirty with changes
+#to its tracked files. Read without taking git's index lock (describe --dirty takes it, and another git command may
+#be at work in the checkout), and only from this checkout's own repository (a copy inside another isn't its commit).
+SOURCE=unknown
+if [[ $(git -C "$ROOT" rev-parse --show-toplevel 2> /dev/null) == "$(cd "$ROOT" && pwd -P)" ]]; then
+  SOURCE=$(git -C "$ROOT" describe --tags --match 'v[0-9]*' --always --abbrev=12 2> /dev/null || echo unknown)
+  if [[ -n $(GIT_OPTIONAL_LOCKS=0 git -C "$ROOT" status --porcelain --untracked-files=no 2> /dev/null) ]]; then
+    SOURCE+=-dirty
+  fi
 fi
-echo "  CXX $HERE/runner.cpp"
-$CXX "${CXXFLAGS[@]}" -Wall -Wextra -Werror -c "$HERE/runner.cpp" -o "$OUT/obj/runner.o"
+SOURCE=${SOURCE//[^A-Za-z0-9._+-]/_}
+object "$CXX" "$HERE/runner.cpp" "${CXXFLAGS[@]}" -Wall -Wextra -Werror "-DPHOBOS_RUNNER_SOURCE=\"$SOURCE\""
+objects_done
 
-$CXX "${SYSROOT[@]}" -o "$OUT/psp-runner" "$OUT"/obj/*.o "${LIBRARIES[@]}"
-echo "built $OUT/psp-runner"
+objects_program psp-runner "${SYSROOT[@]}" "${LIBRARIES[@]}"
+$CXX "${SYSROOT[@]}" -o "$REPLY.part-$$" "${OBJECTS[@]}" "${LIBRARIES[@]}"
+mv -f "$REPLY.part-$$" "$REPLY"
+cp "$REPLY" "$OUT/psp-runner.part-$$"
+mv -f "$OUT/psp-runner.part-$$" "$OUT/psp-runner"
+echo "built $REPLY"
