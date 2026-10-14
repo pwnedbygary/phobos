@@ -13269,8 +13269,8 @@ invariance note above).
 ## Part 93: Vulkan's haze over MX vs. ATV Untamed's race — the frame buffer's alpha as its stencil has it
 
 On branch `cursor/psp-vk-mx-2b67`, begun on #251's (`cursor/psp-vk-models-2b67` at e823bf00b: master at 239d4c80a,
-v2.3.0, and part 90's branch), on master since #251 merged (5893dbdc0, with part 91's). Part 92 is another branch's
-(the GE's third round). Clean room: no PPSSPP code
+v2.3.0, and part 90's branch), on master since #251 merged (5893dbdc0, with part 91's), merged with part 92's
+(dd37263c8: "Merged with part 92", below). Clean room: no PPSSPP code
 read (its GPU backend not opened), JPCSP not read; the PSP's behaviour relied on is the GE's own as the software
 renderer has it (pixel.cpp: the frame buffer's alpha is its stencil, changed by the stencil operations; draw.cpp's
 `stepped()`, measured in part 48, for the depth below). Save states are unchanged: everything here is the renderer's.
@@ -13450,6 +13450,28 @@ fix right) and four points to fix, all taken (8b7fc0b06, with the tests in f567d
 And three small points: a PRIM whose own primitives leave the alpha behind and then blend by it is the design doc's
 known approximations' now (the setting comes before a PRIM, not between its primitives); the second is point 3's
 copies; and the PR's and the handoff's base lines, stale once #251 merged.
+
+**Merged with part 92** (master at dd37263c8; part 92's changes are the host's alone). Its kept settings return from
+`settings()` before `lagging` is worked out, for a PRIM whose settings are the last one's: the flag stays as the last
+one's made it, which is the same (everything it's worked out from is among the kept settings: the pixel pipeline's
+state, the write masks, the target's format, the backend's ways of blending and logic operations), and any PRIM whose
+settings aren't kept replaces them. The setting of the alpha and the noting of a PRIM's rectangle are `begin()`'s, after
+`settings()`, for every PRIM, so before any of its primitives is recorded, a draw of its own or among fast mode's
+meshes (`screenTriangle()`, whose meshes join only a Mesh command at the back: an Alpha between two PRIMs keeps them
+apart). The last texture looked up first is a decoded texture's; a copy of a target is taken, and its alpha set first
+where its PRIM uses it, for each PRIM as before. The two sides met in `settings()`'s end (the state built in place,
+`lagging` worked out on it) and `begin()` (part 92's count of reading draws, then this part's setting and noting);
+`shaders.hpp` was made again from the merged GLSL (compile.sh, glslang 16.6.0, which makes master's byte for byte from
+master's). A test for part 92's paths: two sprites alike, the second's settings kept, leaving the alpha behind, then
+white blended in by it over the second's alone; and in fast mode a quad of six vertices drawn among the meshes,
+leaving the alpha behind by its depth fails, and another blending by it after a sprite left it behind. On the merged
+code (78138561a) against master at dd37263c8, the kit's 21 scenes, #251's three games and the race as before:
+Software the same in all 25, Vulkan accurate and fast each in 23, the race and Cars apart as before, their hashes
+the pre-merge code's (bb6298e9a: c2a95b636's) exactly in both modes; the alpha set per 100 frames as before (the race 45, Cars 50, Hammerin' Hero and
+Colin McRae none); `tests/psp/run-tests.sh` 528 groups, 0 failures, sanitized (the container check off) and not;
+`tests/allegrex/run-tests.sh` 68, 0; `tests/psp/ares/run-tests.sh` 340, 0; CI green. With `lagging` reset before the
+kept settings' return (a scratch build: the way a merge could have lost it), the test's sprites alike fail in each
+mode and resolution, 2,304 bytes apart, no alpha set.
 
 Still not done: the corners' depths (above); a 4444 frame buffer's INCREMENT and DECREMENT (by one on the GPU, by 16
 on the PSP: part 90); the GPU's blending by a partial alpha rounding its own way (a level apart here and there, as

@@ -32,9 +32,18 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP Vulkan: the frame buffer's alpha as its stencil has it — MX vs. ATV Untamed's race (the haze over its hills and trees, the tree's shadow) — 2026-10-14
 
-Branch `cursor/psp-vk-mx-2b67`, on master with #251 merged (`5893dbdc0`); PR #254. docs/psp-core.md, part 93, has the
-evidence; docs/psp-gpu-renderers.md ("Stencil") the design. Clean room: no PPSSPP code read (its GPU backend not
-opened), JPCSP not read. Save states unchanged. The software renderer untouched.
+Branch `cursor/psp-vk-mx-2b67`, on master with #251 merged (`5893dbdc0`), then merged with #253 (`dd37263c8`, part 92:
+conflicts in `settings()`'s end and `begin()`, both sides kept; `shaders.hpp` made again with compile.sh); PR #254.
+docs/psp-core.md, part 93, has the evidence; docs/psp-gpu-renderers.md ("Stencil") the design. Clean room: no PPSSPP
+code read (its GPU backend not opened), JPCSP not read. Save states unchanged. The software renderer untouched.
+- **Merged with part 92** (#253): its kept settings return from `settings()` before `lagging` is
+  worked out, which stays right (everything it's worked out from is among the kept settings); the setting and the
+  noting are `begin()`'s for every PRIM, before its primitives go into a draw of their own or among fast mode's meshes.
+  A test for those paths (sprites alike, the second's settings kept; a small PRIM among the meshes leaving the alpha
+  behind, another blending by it), which fails with `lagging` reset before the kept return (2,304 bytes apart). On the
+  merged code (78138561a) against dd37263c8: Software the same in 25; Vulkan in 23 each, the race's and Cars' hashes
+  the pre-merge code's exactly; the alpha set as before (45, 50, 0, 0 per 100 frames); tests/psp 528 groups, 0
+  failures, sanitized and not; tests/allegrex 68, 0; tests/psp/ares 340, 0; CI green.
 - **Found** with part 90's PRIM log and dumps of VRAM, everything drawn settled, before chosen PRIMs of a frame: the
   race (Cars Race-O-Rama's engine) makes its alpha from its depth in strips, zeroes the near pixels' alpha by 15
   sprites whose stencil operation is ZERO where the depth test fails, and blends its sky in by the frame buffer's
