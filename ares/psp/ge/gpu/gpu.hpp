@@ -197,13 +197,15 @@ struct GPU : GE::Renderer {
   //bytes as those of the target's rectangle that it reaches, in the target's format: each of the rectangle's pixels
   //the source's at the same bytes, its rectangle's first pixel delta bytes from source's first, rows of rowBytes in
   //the target and sourceRowBytes in source); and another target's depth put into the target's rectangle at the same
-  //place (Depth: source's, where both are drawn with one depth buffer). Every position and size is in the PSP's
-  //pixels: the backend has each of them Backend::scale times over.
+  //place (Depth: source's, where both are drawn with one depth buffer); and the alpha of the target's colors in a
+  //rectangle set from its stencil, the PSP's alpha, where draws changed the stencil without it (Alpha:
+  //catchAlpha()). Every position and size is in the PSP's pixels: the backend has each of them Backend::scale times
+  //over.
   struct Command {
-    enum class Kind : u8 { Draw, Upload, Readback, Copy, Present, Shot, Mesh, Move, Depth } kind;
+    enum class Kind : u8 { Draw, Upload, Readback, Copy, Present, Shot, Mesh, Move, Depth, Alpha } kind;
     u32 target;
     u32 state = 0, first = 0, count = 0;  //Draw, Mesh
-    s32 x = 0, y = 0;                     //Upload, Readback, Copy, Depth
+    s32 x = 0, y = 0;                     //Upload, Readback, Copy, Depth, Alpha
     u32 width = 0, height = 0;
     u64 colors = 0, stencil = 0, depth = 0;  //Upload: where in uploads (8888s, bytes, 16-bit depths: the parts it
                                              //has); Present's
@@ -216,7 +218,7 @@ struct GPU : GE::Renderer {
     //in), or more, up to the backend's scale, for the screen (shrunk smoothly, the colors alone, no stencil)
     u8 at = 1;
     u8 format = 3;  //Present: the frame buffer's GE format, its colors shown as memory keeps them (3: as they are);
-                  //Upload, Move: the target's
+                  //Upload, Move, Alpha: the target's
     u8 sourceFormat = 3;            //Move
     u32 source = 0;                 //Move, Depth
     u16 sourceX = 0, sourceY = 0, sourceWidth = 0, sourceHeight = 0;
@@ -352,6 +354,10 @@ struct GPU : GE::Renderer {
     bool depthKept = false;
     s32 left = 0, top = 0, right = -1, bottom = -1;  //drawn since it was last read back
     s32 changes[4] = {0, 0, -1, -1};  //changed since its copies last heard (textureFor()): left, top, right, bottom
+    //Where its colors' alpha may differ from its stencil, which is the PSP's alpha: drawn over by PRIMs whose stencil
+    //operations the colors' alpha doesn't follow (settings()), and set from the stencil before anything reads it
+    //there (catchAlpha()). Left, top, right, bottom.
+    s32 lags[4] = {0, 0, -1, -1};
     std::vector<std::array<s32, 4>> told;  //rectangles memory has heard were drawn over since then (own())
     u64 toldBusy = 0;                       //(Memory::busyCleared as they were told)
     //VRAM's pages own() last made its own and busy, and drawnSerial and Memory::busyCleared as it left them
@@ -400,6 +406,7 @@ struct GPU : GE::Renderer {
     //depths taken from another target over the same depth buffer (takeDepth()), and targets' depths put into memory
     //for a texture read from a depth buffer (putDepth(): those of one texture a wait for the GPU, as a finish)
     u64 depthsTaken = 0, depthsPut = 0;
+    u64 alphas = 0;    //rectangles of targets' colors whose alpha was set from their stencil (catchAlpha())
     u64 waiting = 0;   //nanoseconds the CPU waited in finish(), picture() and putDepth()
   } statistics;
 
@@ -604,6 +611,10 @@ private:
   u64 depthSerial = 0;  //(goes up with each PRIM that writes depth: Target::depthAt)
   auto takeDepth(Target& t, const GE::PixelState& p) -> void;
   auto putDepth(u32 first, u32 last) -> void;  //(VRAM's bytes first to last, offsets in any of its copies)
+  //(the colors' alpha as the stencil has it: Target::lags, gpu.cpp. lagging: the PRIM's stencil operations leave it
+  //behind, settings())
+  bool lagging = false;
+  auto catchAlpha(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;
   auto own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;
   auto textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken, u8& indexed, u32& palette) -> u32;
   auto settings(const GE::Look& look) -> void;

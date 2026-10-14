@@ -580,6 +580,24 @@ auto GPU::changed(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
   if(left <= right && top <= bottom) widen(t.changes, left, top, right, bottom);
 }
 
+//The frame buffer's alpha is the stencil (pixel.cpp), which the GPU keeps apart from the colors' alpha: a PRIM
+//writes the colors' alpha where its stencil operation's result is known (settings()), not where a stencil or depth
+//test fails (MX vs. ATV Untamed's race zeroes the stencil behind the hills so, before taking the sky over the far
+//pixels by the frame buffer's alpha), nor an increment's. Where they differ (Target::lags), before a PRIM blends by
+//the frame buffer's alpha or a copy is taken over (left, top, right, bottom), the colors' alpha is set from the
+//stencil there (Command::Alpha), a change the target's copies take again.
+auto GPU::catchAlpha(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
+  auto& r = t.lags;
+  if(r[0] > r[2] || left > right || top > bottom) return;
+  if(left > r[2] || r[0] > right || top > r[3] || r[1] > bottom) return;
+  Command c{Command::Kind::Alpha, t.id};
+  c.x = r[0], c.y = r[1], c.width = r[2] - r[0] + 1, c.height = r[3] - r[1] + 1, c.format = t.format;
+  recorded.commands.push_back(c);
+  changed(t, r[0], r[1], r[2], r[3]);
+  r[0] = 0, r[1] = 0, r[2] = -1, r[3] = -1;
+  statistics.alphas++;
+}
+
 //The last PRIM's pixels given to its target's changes, as the next begins (gathered as the corners' extent, a float
 //compared at each primitive, not worked out at each), inside its scissor: those with a sample of the GPU's inside
 //the extent (each of the PSP's pixels has scale x scale, the first and last half of one of them in from its edges),
@@ -611,6 +629,18 @@ auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken, u
   if(held && look.textured) {  //(copied from its target, in order with what's drawn)
     Held h = *held;
     held.reset();
+    //(its colors' alpha caught up with the stencil first where it lags, a change its copies take again, below; not
+    //where the PRIM can't see the copy's alpha: palette indices take none of the stencil's bits (take()), a texture
+    //function without the texel's alpha leaves it out, and a pixel's alpha counts only in the alpha test and blending
+    //by the source's alpha, the alpha written being the stencil (pixel.cpp). A later PRIM that sees it catches it up
+    //then, its copy taken again from the change that makes)
+    auto& p = look.pixel;
+    auto bySource = [](u32 factor) { return factor == 2 || factor == 3 || factor == 6 || factor == 7; };
+    bool blendsBySource = p.blend && p.blendOperation < 3 && (bySource(p.blendSource) || bySource(p.blendDestination));
+    if(!h.palette && look.withAlpha && (p.alphaTest || blendsBySource)) {
+      catchAlpha(*h.target, h.x, h.y, h.x + h.width - 1, h.y + h.split - 1);
+      if(h.next) catchAlpha(*h.next, h.x, 0, h.x + h.width - 1, h.rows - h.split - 1);
+    }
     texels = h.target->format < 3 ? h.target->format : 4;
     if(h.palette) {
       auto& t = look.texture;
@@ -904,8 +934,9 @@ auto GPU::settings(const GE::Look& look) -> void {
       }
     }
     if(p.logicOp && p.logic != 3 && !reading) {
-      if(backend->logicOps) {
+      if(backend->logicOps) {  //(the GPU's takes the alpha too, the GE's leaves the stencil: its alpha left behind)
         k.logicOp = 1, k.logicOperation = p.logic, k.blend = 0;
+        k.alphaOut = 0, k.colorMask &= 7;
       } else if(p.logic == 0 || p.logic == 12 || p.logic == 15) {
         k.logic = p.logic;
       } else if(p.logic == 5) {  //the frame buffer kept: no color written
@@ -940,6 +971,13 @@ auto GPU::settings(const GE::Look& look) -> void {
   s32 bottom = std::min<s32>(p.bottom, target->height - 1 - row) + row;
   s.push.origin = row;
   s.scissor[0] = left, s.scissor[1] = top, s.scissor[2] = right - left + 1, s.scissor[3] = bottom - top + 1;
+  //(the stencil, the PSP's alpha, changed where the colors' alpha isn't, which then differs from it: by a stencil or
+  //depth test failing, or a pass whose alpha isn't written, or is written whole where the write mask keeps bits.
+  //Target::lags. A PRIM whose settings are kept, above, keeps it as it is: it's theirs alone.)
+  lagging = k.stencilTest && s.stencilWriteMask &&
+            ((k.stencilFail != Keep && k.stencilCompare != 1) ||
+             (k.stencilDepthFail != Keep && k.depthTest && k.depthCompare != 1) ||
+             (k.stencilPass != Keep && (!(k.colorMask & 8) || s.stencilWriteMask != 0xff)));
   stateKept = false, meshKept = false, screenable = true;
 }
 
@@ -1008,7 +1046,10 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   //another's target, which doesn't reach its depth buffer, leaves the target's depth as it is: God of War's four
   //side by side don't fill it afresh each in turn. So does a PRIM that neither tests nor writes depth, its changes
   //kept for the next that does: Darkstalkers' CPU writes beside its depth buffer between its 2D PRIMs.)
-  if(t->stale) t->rows = 0, t->stale = false, t->beside.clear(), t->dead.clear();
+  if(t->stale) {
+    t->rows = 0, t->stale = false, t->beside.clear(), t->dead.clear();
+    t->lags[0] = 0, t->lags[1] = 0, t->lags[2] = -1, t->lags[3] = -1;  //(colors and stencil both memory's again)
+  }
   bool depth = !column && !row && (p.clear ? p.clearDepth : p.depthTest);
   if(depth && (t->depthBuffer != p.depthBuffer || t->depthStride != p.depthStride)) {
     t->depthBuffer = p.depthBuffer, t->depthStride = p.depthStride, t->depthRows = 0;
@@ -1044,6 +1085,14 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   shade = ge.commands[GE::ShadeMode];
   settings(look);
   if(!state.pipeline.clear && state.pipeline.reads) statistics.readingDraws++;  //(each PRIM, its settings kept or not)
+  //(where it blends by the frame buffer's alpha, the colors' alpha caught up with the stencil first; then where its
+  //own stencil operations leave it behind: each PRIM, its settings kept or not, before any of its primitives is
+  //recorded, a draw of its own or among fast mode's meshes)
+  auto byAlpha = [](u32 factor) { return factor == 4 || factor == 5 || factor == 8 || factor == 9; };
+  if(!p.clear && p.blend && p.blendOperation < 3 && (byAlpha(p.blendSource) || byAlpha(p.blendDestination))) {
+    catchAlpha(*t, left, top, right, bottom);
+  }
+  if(lagging) widen(t->lags, left, top, right, bottom);
   own(*t, left, top, right, bottom);
   reach = {t, {state.scissor[0], state.scissor[1], state.scissor[2], state.scissor[3]}};
   drawing = true;
