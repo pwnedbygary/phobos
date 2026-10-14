@@ -797,6 +797,8 @@ auto GPU::settings(const GE::Look& look) -> void {
   } else {
     textured = look.textured &&
                (s.texture = textureFor(look, k.texels, s.push.textureScale, takenFlags, k.indexed, s.push.palette));
+    //(a texture the backend couldn't make leaves lastDecoded another's, which the next PRIM's mustn't be taken for)
+    if(look.textured && !textured) keptSettings.valid = false;
     k.textured = textured;
     k.function = look.function | look.withAlpha << 3 | look.doubled << 4;
     k.clamp = look.texture.clampU | look.texture.clampV << 1;
@@ -920,7 +922,6 @@ auto GPU::settings(const GE::Look& look) -> void {
     if(k.blend && k.sourceFactor == One && k.operation <= ReverseSubtract && !weighs) k.term = k.operation + 1;
     k.dither = p.dither && !k.logicOp && (!k.blend || k.term);
     if(!k.blend && !k.logicOp && p.format < 3) k.quantize = p.format;
-    if(reading) statistics.readingDraws++;
   }
   for(u32 row = 0; row < 4; row++) {
     for(u32 column = 0; column < 4; column++) {
@@ -1042,6 +1043,7 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   filter = ge.commands[GE::TextureFilter];
   shade = ge.commands[GE::ShadeMode];
   settings(look);
+  if(!state.pipeline.clear && state.pipeline.reads) statistics.readingDraws++;  //(each PRIM, its settings kept or not)
   own(*t, left, top, right, bottom);
   reach = {t, {state.scissor[0], state.scissor[1], state.scissor[2], state.scissor[3]}};
   drawing = true;
@@ -1202,7 +1204,7 @@ auto GPU::screenTriangle(const Vertex (&v)[3]) -> bool {
   recorded.indices.resize(first + 3);
   for(u32 n = 0; n < 3; n++) recorded.indices[first + n] = base + n;
   meshDraw(index, first, 3);
-  statistics.primitives++;
+  statistics.primitives++, statistics.screened++;
   return true;
 }
 
@@ -1367,11 +1369,11 @@ auto GPU::mesh(GE& ge, const GE::Transform& t, const std::vector<GE::Vertex>& ve
   if(!drawing) return;
   this->ge = &ge;
   u32 count = vertices.size();
-  //(the PRIM's vertices once, kept for its later runs: still the recording's last models, unless it was handed over
-  //between them)
-  if(!again || recorded.models.size() != meshFirst + count) {
+  //(the PRIM's vertices once, kept for its later runs: where they are in the recording until it's handed over,
+  //whatever comes after them, a triangle cut at the near plane among the runs: screenTriangle())
+  if(!again || recorded.generation != meshGeneration) {
     if(recorded.models.size() + count > MostVertices) flush();
-    meshFirst = recorded.models.size();
+    meshFirst = recorded.models.size(), meshGeneration = recorded.generation;
     u32 transform = transformed(t);
     recorded.models.resize(meshFirst + count);
     Model* models = recorded.models.data() + meshFirst;

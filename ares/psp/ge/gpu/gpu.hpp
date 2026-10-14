@@ -2,6 +2,7 @@
 
 #include "../ge.hpp"
 
+#include <cassert>
 #include <functional>
 #include <map>
 #include <optional>
@@ -50,7 +51,10 @@ struct GPU : GE::Renderer {
     //(0: the copy's own). In the vertices, not the push constants, so that PRIMs taking more or less of one copy
     //are one draw (Ghost of Sparta's menu draws 1,200 such PRIMs a frame, one after another).
     static constexpr u32 TakenShift = 8;
-    static auto taken(u32 columns, u32 rows) -> u32 { return (columns | rows << 10) << TakenShift; }
+    static auto taken(u32 columns, u32 rows) -> u32 {
+      assert(columns < 1024 && rows < 1024);  //(holds() takes 512 at most)
+      return (columns | rows << 10) << TakenShift;
+    }
     //A 2D sprite's texture coordinates as the GE steps them (draw.cpp's rectangle()): across x from columnFirst at
     //sixteenth columnStart, by columnStep a pixel; down y likewise. The coordinate across x is v when turned.
     //Held (a 2D triangle above 1x: triangle()): u kept from columnFirst to columnStep, v from rowFirst to rowStep.
@@ -229,10 +233,12 @@ struct GPU : GE::Renderer {
     std::vector<u32> indices;
     std::vector<Transformed> transforms;
     u32 readbacks = 0;
+    u64 generation = 0;  //(goes up as it's cleared: what was recorded before is gone)
     auto empty() const -> bool { return commands.empty(); }
     auto clear() -> void {
       commands.clear(), states.clear(), vertices.clear(), uploads.clear(), readbacks = 0;
       models.clear(), indices.clear(), transforms.clear();
+      generation++;
     }
   };
 
@@ -389,6 +395,7 @@ struct GPU : GE::Renderer {
     u64 palettes = 0;  //palettes put on the GPU (paletteFor(): those found again aren't)
     u64 presents = 0, presentsFromMemory = 0;  //frames presented on the window (show()): from a target, memory's
     u64 meshes = 0;    //3D PRIMs the GPU transformed (fast mode: mesh(), the first of each PRIM's runs)
+    u64 screened = 0;  //fast mode's 3D triangles the GE transformed itself, drawn among the meshes (screenTriangle())
     u64 moves = 0;     //rectangles moved from one target into another on the GPU (move()), not put back and filled
     //depths taken from another target over the same depth buffer (takeDepth()), and targets' depths put into memory
     //for a texture read from a depth buffer (putDepth(): those of one texture a wait for the GPU, as a finish)
@@ -407,6 +414,9 @@ struct GPU : GE::Renderer {
   //The start-up check's 3D through the GPU's transform failed, and the rest passed (check()): System checks again
   //with the GE transforming
   bool transformsFailed = false;
+  //Its 3D the GE transformed among the GPU's (screenMeshes) failed, and the rest passed: System checks again with
+  //those drawn apart
+  bool screenMeshesFailed = false;
 
   //gpu.cpp
   GPU(std::unique_ptr<Backend> backend);
@@ -623,7 +633,8 @@ private:
   GE::Transform lastTransform{};                    //(the last one's settings, where its frame buffer was, and the
   u32 lastColumn = 0, lastRow = 0, lastTaken = 0;   //texels it took)
   std::array<std::optional<Pipeline>, 64> drawables;  //(pipelines meshDrawable() found drawable, by their hash)
-  u32 meshFirst = 0;                                //(the last PRIM's first model, in recorded's)
+  u32 meshFirst = 0;                                //(the last PRIM's first model, in recorded's, and its
+  u64 meshGeneration = ~0ull;                       //generation then)
   auto lose() -> void;
   //the target picture() and show() take the frame buffer's pixels from: none where the GPU hasn't the newest
   auto shownTarget(u32 address, u32 stride, u32 format, u32 width, u32 height) -> Target*;

@@ -48,11 +48,11 @@ layout(location = 3) in vec4 color;  //8888 (UNORM)
 layout(location = 4) in vec4 weightsLow;
 layout(location = 5) in vec4 weightsHigh;
 layout(location = 6) in uint transform;
-#define t blocks[transform]
 //A vertex the GE put on the screen itself (transform OnScreen: gpu.cpp's screenTriangle()), as draw.vert's: x and y
 //in pixels and the depth (position), clip w, q and fog (normal), u and v, its color, and over the first two weights
-//its shine and flags
+//its shine and flags. It names no block (one a driver reads ahead of the branch is the first, which every run has).
 const uint OnScreen = 0xffffffffu;
+#define t blocks[transform == OnScreen ? 0u : transform]
 layout(location = 7) in vec4 shine;  //8888 (UNORM)
 layout(location = 8) in uint flags;
 
