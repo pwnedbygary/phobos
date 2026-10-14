@@ -493,6 +493,119 @@ auto fpuMemory() -> void {
   CHECK(std::fpclassify(std::bit_cast<float>(keep.fpr(2))) == FP_SUBNORMAL, 1);
 }
 
+// With flush to zero (fcr31 bit 24), a subnormal input or result counts as the zero of its sign. The recompiler's
+// native arithmetic and compares are compiled for the bit as it is when their block is compiled: they must give the
+// interpreter's bits with it set, and a block compiled with it one way must still do so run with it the other way, or
+// with another rounding mode.
+auto fpuFlushing() -> void {
+  static constexpr uint32_t Flush = 0x01000000;
+  struct Case { uint32_t funct, s, t, flushed, kept; };
+  const Case cases[] = {
+    {0x00, 0x00000001, 0x00000000, 0x00000000, 0x00000001},  // a subnormal and +0
+    {0x00, 0x80000001, 0x00000000, 0x00000000, 0x80000001},  // -0 + +0 is +0
+    {0x00, 0x80000001, 0x80000000, 0x80000000, 0x80000001},  // -0 + -0 is -0
+    {0x00, 0x00800000, 0x80000001, 0x00800000, 0x007fffff},  // the smallest normal less nothing, or less 2^-149
+    {0x01, 0x00800001, 0x00800000, 0x00000000, 0x00000001},  // a difference of 2^-149
+    {0x02, 0x80800000, 0x3f000000, 0x80000000, 0x80400000},  // -2^-127
+    {0x02, 0x3f7fffff, 0x00800000, 0x00800000, 0x00800000},  // halfway below 2^-126, rounded up to it: normal, kept
+    {0x03, 0x00000001, 0x3f800000, 0x00000000, 0x00000001},  // 2^-149 / 1
+    {0x03, 0x00800000, 0x40000000, 0x00000000, 0x00400000},  // 2^-126 / 2
+    {0x03, 0x00000001, 0x00000000, 0x7fc00000, 0x7f800000},  // flushed, 0 / 0: the NaN made from numbers
+    {0x02, 0x80000001, 0x7f800000, 0x7fc00000, 0xff800000},  // flushed, -0 * infinity
+  };
+  for(const Case& c : cases) {
+    for(uint32_t csr : {Flush, 0u}) {
+      Machine m;
+      m.run({fop(c.funct, 2, 0, 1)}, [&](Allegrex& s) { s.fpu.r[0] = c.s, s.fpu.r[1] = c.t, s.fpu.csr = csr; });
+      CHECK(m.fpr(2), csr ? c.flushed : c.kept);
+    }
+  }
+  // compares: +0 and a subnormal are equal flushed, -2^-149 below +2^-149 only kept
+  Machine compares;
+  compares.run({ccond(CondEq, 0, 1), cfc1(s0, 31), ccond(CondOlt, 2, 0), cfc1(s1, 31), ccond(CondUle, 0, 3), cfc1(s2, 31)},
+               [](Allegrex& s) {
+                 s.fpu.r[0] = 0x00000001, s.fpu.r[1] = 0x00000000, s.fpu.r[2] = 0x80000001, s.fpu.r[3] = 0x80000000;
+                 s.fpu.csr = Flush;
+               });
+  CHECK(compares.gpr(s0), Flush | 1 << 23);
+  CHECK(compares.gpr(s1), Flush);
+  CHECK(compares.gpr(s2), Flush | 1 << 23);
+
+  // Random arithmetic and compares on numbers round 2^-126, both engines bit for bit, mostly flushing.
+  uint32_t seed = 0x6d2b79f5;
+  auto random = [&](uint32_t range) -> uint32_t {
+    seed ^= seed << 13, seed ^= seed >> 17, seed ^= seed << 5;
+    return seed % range;
+  };
+  auto tiny = [&]() -> uint32_t {
+    uint32_t sign = random(2) << 31;
+    switch(random(9)) {
+    case 0: return sign;
+    case 1: return sign | (1 + random(0x7fffff));                    // subnormal
+    case 2: return sign | (0x00800000 + random(0x800));               // just past the smallest normal
+    case 3: return sign | (0x007ff000 + random(0x1000));              // just below it
+    case 4: return sign | (1 + random(40)) << 23 | random(0x800000);  // small normal numbers
+    case 5: return sign | (0x3e800000 + random(0x1000000));           // 1/4 to 1
+    case 6: return sign | (0x3f800000 + random(0x1000000));           // 1 to 4
+    case 7: return sign | 0x7f800000 | (random(3) ? 0 : 1 + random(0x7fffff));  // infinities, NaNs
+    default: return sign | (100 + random(100)) << 23 | random(0x800000);
+    }
+  };
+  if(!useRecompiler) return;
+  uint32_t mismatches = 0;
+  for(uint32_t program = 0; program < 1500; program++) {
+    std::vector<uint32_t> code;
+    for(uint32_t n = 0; n < 12; n++) {
+      if(random(3)) code.push_back(fop(random(4), 16 + n, random(16), random(16)));
+      else code.push_back(ccond(random(16), random(16), random(16))), code.push_back(cfc1(t0 + n % 8, 31));
+    }
+    uint32_t floats[16];
+    for(auto& f : floats) f = tiny();
+    uint32_t csr = random(8) ? Flush : random(2) ? 0 : Flush | (1 + random(3));
+    auto setup = [&](Allegrex& s) {
+      for(uint32_t n = 0; n < 16; n++) s.fpu.r[n] = floats[n];
+      s.fpu.csr = csr;
+    };
+    Machine interpreter, recompiler;
+    interpreter.recompile = false;
+    recompiler.recompile = true;
+    interpreter.run(code, setup);
+    recompiler.run(code, setup);
+    bool same = interpreter.cpu.fpu.csr == recompiler.cpu.fpu.csr;
+    for(uint32_t n = 0; n < 32; n++) same &= interpreter.fpr(n) == recompiler.fpr(n) && interpreter.gpr(n) == recompiler.gpr(n);
+    if(!same && ++mismatches <= 3) {
+      std::printf("FAIL %s: program %u differs (fcr31 %08x)\n", currentTest, program, csr);
+      for(uint32_t word : code) std::printf("  %08x\n", word);
+    }
+  }
+  CHECK(mismatches, 0);
+
+  // A block compiled with flushing one way, then run again (not compiled again) with it the other way, or with another
+  // rounding mode: the interpreter's answers.
+  const std::vector<uint32_t> code = {fop(0x00, 2, 0, 1), fop(0x02, 3, 0, 1), fop(0x03, 4, 1, 0),
+                                      ccond(CondEq, 0, 5), cfc1(s0, 31), fop(0x01, 6, 1, 1)};
+  auto inputs = [](Allegrex& s, uint32_t csr) {
+    s.fpu.r[0] = 0x00400000, s.fpu.r[1] = 0x3f7fffff, s.fpu.r[5] = 0x80000000, s.fpu.csr = csr;
+  };
+  for(uint32_t compiled : {0u, Flush}) {
+    for(uint32_t later : {0u, Flush, 1u, Flush | 3u}) {
+      Machine reference;
+      reference.recompile = false;
+      reference.run(code, [&](Allegrex& s) { inputs(s, later); });
+      Machine m;
+      m.recompile = true;
+      m.run(code, [&](Allegrex& s) { inputs(s, compiled); });
+      m.cpu.ipu.pc = Base, m.cpu.ipu.pd = Base + 4, m.cpu.scc.halted = 0;
+      for(uint32_t n = 0; n < 32; n++) m.cpu.fpu.r[n] = 0;
+      inputs(m.cpu, later);
+      m.cpu.run(10000);
+      for(uint32_t n = 2; n <= 6; n++) CHECK(m.fpr(n), reference.fpr(n));
+      CHECK(m.gpr(s0), reference.gpr(s0));
+      CHECK(m.cpu.fpu.csr, reference.cpu.fpu.csr);
+    }
+  }
+}
+
 auto system() -> void {
   // mtic sets the interrupt flag and mfic reads it back; halt stops the CPU where it is.
   Machine m;
@@ -1359,7 +1472,8 @@ int main() {
     {"alu", alu}, {"shifts", shifts}, {"allegrex bits", allegrexBits}, {"multiply/divide", multiplyDivide},
     {"loads/stores", loadsStores}, {"unaligned", unaligned}, {"branches", branches}, {"syscalls", syscalls},
     {"exceptions", exceptions}, {"fpu arithmetic", fpuArithmetic}, {"fpu conversions", fpuConversions},
-    {"fpu compare", fpuCompare}, {"fpu memory", fpuMemory}, {"system", system}, {"recompiler", recompilerCases},
+    {"fpu compare", fpuCompare}, {"fpu memory", fpuMemory}, {"fpu flushing", fpuFlushing}, {"system", system},
+    {"recompiler", recompilerCases},
     {"chained runs", chainedRuns}, {"coprocessor branches taken", coprocessorBranchesTaken},
     {"delay slots each way", delaySlotsEachWay}, {"linked blocks", linkedBlocks},
   };

@@ -4,10 +4,14 @@
 //The FPU's arithmetic is the host's own: one IEEE single-precision operation, rounded to the nearest, is the same
 //operation on every host, so it gives the same bits however it's reached. The interpreter (interpreter-fpu.cpp)
 //does a little more around it, and the native code does exactly that much or hands the instruction over:
-//  - FCSR's rounding mode (bits 0-1) other than to the nearest, and its flush-to-zero bit (24): the interpreter
-//    switches the host's rounding or flushes subnormals then. Native arithmetic runs only while FCSR has none of
-//    those three bits set, which it checks each time (a game may set them, with ctc1, at any moment); otherwise the
-//    instruction goes to the interpreter. With them clear, f() and setF() leave values as they are.
+//  - FCSR's rounding mode (bits 0-1) other than to the nearest: the interpreter switches the host's rounding then.
+//    Native arithmetic runs only with the mode at the nearest, which it checks each time (a game may set it, with
+//    ctc1, at any moment); otherwise the instruction goes to the interpreter.
+//  - FCSR's flush-to-zero bit (24): f() and setF() make a subnormal input or result the zero of its sign. Native
+//    code is compiled for the bit as it is when its block is compiled (a game sets it once, as it starts, if at all):
+//    set, it flushes each input and the result in integer registers (emitFlush()) around the same operation; clear,
+//    it leaves them as they are, as f() and setF() do then. Each instruction checks the bit is still as compiled,
+//    along with the rounding mode, else it goes to the interpreter.
 //  - A result that isn't a number: which NaN the PSP gives depends on the inputs' bits (pickNaN()), so the native
 //    code, having computed into a host register without writing fd, hands the instruction to the interpreter,
 //    which computes it again from the same, untouched, inputs.
@@ -98,39 +102,80 @@ auto Allegrex::Recompiler::emitFPU(u32 address, u32 instruction, u32 count, bool
   return false;
 }
 
+//A float's bits in r, a subnormal made the zero of its sign as flushed() makes it (a zero stays as it is); scratch is
+//overwritten.
+auto Allegrex::Recompiler::emitFlush(reg r, reg scratch) -> void {
+  and32(scratch, r, imm(s32(0x8000'0000)));
+  test32(r, imm(0x7f80'0000), set_z);
+  cmov32(r, scratch, r, flag_z);
+}
+
+//fs and ft, flushed (emitFlush()), into FR0 and FR1.
+auto Allegrex::Recompiler::emitFlushedInputs(u32 instruction) -> void {
+  mov32(reg(1), Fs);
+  emitFlush(reg(1), reg(3));
+  mov32(freg(0), reg(1));
+  mov32(reg(2), Ft);
+  emitFlush(reg(2), reg(3));
+  mov32(freg(1), reg(2));
+}
+
 //ADD.S, SUB.S, MUL.S, DIV.S Fd,Fs,Ft: see the top of this file.
 auto Allegrex::Recompiler::emitFPUArithmetic(u32 address, u32 instruction, u32 count, bool delaySlot, s32 op)
   -> void {
+  bool flushing = self.fpu.csr.bit(24);
   mov32(reg(0), Csr);
-  test32(reg(0), imm(0x0100'0003), set_z);
-  auto other = jump(flag_nz);
-  sljit_emit_fop2(compiler, op, SLJIT_FR0, 0, Fs.fst, Fs.snd, Ft.fst, Ft.snd);
+  sljit_jump* other;
+  if(!flushing) {
+    test32(reg(0), imm(0x0100'0003), set_z);
+    other = jump(flag_nz);
+    sljit_emit_fop2(compiler, op, SLJIT_FR0, 0, Fs.fst, Fs.snd, Ft.fst, Ft.snd);
+  } else {
+    and32(reg(0), reg(0), imm(0x0100'0003));
+    other = cmp32_jump(reg(0), imm(0x0100'0000), flag_ne);
+    emitFlushedInputs(instruction);
+    sljit_emit_fop2(compiler, op, SLJIT_FR0, 0, SLJIT_FR0, 0, SLJIT_FR1, 0);
+  }
   auto notNumber = sljit_emit_fcmp(compiler, SLJIT_UNORDERED | SLJIT_32, SLJIT_FR0, 0, SLJIT_FR0, 0);
-  sljit_emit_fop1(compiler, SLJIT_MOV_F32, Fd.fst, Fd.snd, SLJIT_FR0, 0);
+  if(!flushing) {
+    sljit_emit_fop1(compiler, SLJIT_MOV_F32, Fd.fst, Fd.snd, SLJIT_FR0, 0);
+  } else {
+    mov32(reg(1), freg(0));
+    emitFlush(reg(1), reg(3));
+    mov32(Fd, reg(1));
+  }
   emitColdFallback({other, notNumber}, address, instruction, count, delaySlot);
 }
 
 //C.cond.S Fs,Ft: FCSR bit 23 becomes the comparison's answer. The condition's low three bits are the outcomes that
 //count (bit 0 unordered, bit 1 equal, bit 2 less), so each condition is one of the host's ordered or unordered
 //comparisons; bit 3 (signaling) changes no answer. Only the flush-to-zero bit matters here (f() flushes subnormal
-//inputs when it's set): with it, the interpreter compares.
+//inputs when it's set): compiled for it as the arithmetic is (the top of this file), the inputs flushed where it's
+//set; with it other than compiled, the interpreter compares.
 auto Allegrex::Recompiler::emitFPUCompare(u32 address, u32 instruction, u32 count, bool delaySlot) -> void {
   static constexpr s32 holds[8] = {
     0, SLJIT_UNORDERED, SLJIT_ORDERED_EQUAL, SLJIT_UNORDERED_OR_EQUAL,
     SLJIT_ORDERED_LESS, SLJIT_UNORDERED_OR_LESS, SLJIT_ORDERED_LESS_EQUAL, SLJIT_UNORDERED_OR_LESS_EQUAL,
   };
+  bool flushing = self.fpu.csr.bit(24);
   mov32(reg(0), Csr);
   test32(reg(0), imm(0x0100'0000), set_z);
-  auto flushing = jump(flag_nz);
+  auto other = jump(flushing ? flag_z : flag_nz);
   and32(reg(0), reg(0), imm(~(1 << 23)));
   if(u32 condition = instruction & 7) {
     //(each sljit comparison and its opposite differ in the lowest bit)
-    auto fails = sljit_emit_fcmp(compiler, (holds[condition] ^ 1) | SLJIT_32, Fs.fst, Fs.snd, Ft.fst, Ft.snd);
+    sljit_jump* fails;
+    if(flushing) {
+      emitFlushedInputs(instruction);
+      fails = sljit_emit_fcmp(compiler, (holds[condition] ^ 1) | SLJIT_32, SLJIT_FR0, 0, SLJIT_FR1, 0);
+    } else {
+      fails = sljit_emit_fcmp(compiler, (holds[condition] ^ 1) | SLJIT_32, Fs.fst, Fs.snd, Ft.fst, Ft.snd);
+    }
     or32(reg(0), reg(0), imm(1 << 23));
     setLabel(fails);
   }
   mov32(Csr, reg(0));
-  emitColdFallback({flushing}, address, instruction, count, delaySlot);
+  emitColdFallback({other}, address, instruction, count, delaySlot);
 }
 
 //Coprocessor 2's moves: MFV and MTV copy a VFPU register's bits to or from an integer register, as the interpreter

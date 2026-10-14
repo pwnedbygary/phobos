@@ -610,6 +610,8 @@ struct Allegrex {
 
     //recompiler-fpu.cpp
     auto emitFPU(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
+    auto emitFlush(reg r, reg scratch) -> void;
+    auto emitFlushedInputs(u32 instruction) -> void;
     auto emitFPUArithmetic(u32 address, u32 instruction, u32 count, bool delaySlot, s32 op) -> void;
     auto emitFPUCompare(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
     auto emitCOP2(u32 instruction) -> bool;
