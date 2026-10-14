@@ -61,6 +61,9 @@ object LaunchSystems {
         "MSX2" to listOf("msx2"),
     ).flatMap { (system, keys) -> keys.map { it to system } }.toMap()
 
+    /** Every system [names] names. */
+    internal val systemNames: Set<String> = names.values.toSet()
+
     /** Extensions two systems list where one is the usual meaning: a .gb file is a Game Boy game. */
     private val preferred = mapOf("gb" to "Game Boy", "ngc" to "Neo Geo Pocket Color")
 

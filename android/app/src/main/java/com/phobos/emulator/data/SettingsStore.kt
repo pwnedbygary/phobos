@@ -47,33 +47,50 @@ enum class UiEffects(val label: String, val description: String) {
 
 /** The scene the Pixel art style draws behind the pages (Settings → Appearance → Backdrop). */
 enum class PixelBackdropScene(val label: String, val description: String) {
-    SPACE("Space", "Mars turning below the stars, with Phobos (D-pad moon) in orbit and occasional shooting stars"),
-    NIGHT_DRIVE("Night drive", "A road racing toward a striped sun between the mountains"),
-    PLAINS("Pixel plains", "A Mario-like stage: heroes run and jump, collect coins and stomp foes"),
-    SAKURA_CYCLE("Sakura", "Day↔night cycle: moon and sun rise and set while petals fall"),
-    SAKURA_NIGHT("Sakura night", "Cherry blossom petals falling under a full moon"),
+    SAKURA_CYCLE("Sakura", "A day and a night every eight minutes: the sun sets, the stars come out and the moon rises, while petals fall"),
     SAKURA_DAY("Sakura day", "Cherry blossom petals falling under a bright sun"),
-    UNDERWATER("Underwater", "Bubbles rising past a coral reef under a wavy surface"),
-    CASTLE("Pixel castle", "Torches flickering on a brick wall under a starry battlement"),
+    SAKURA_NIGHT("Sakura night", "Cherry blossom petals falling under a full moon"),
+    PLAINS("Pixel plains", "A Mario-like stage: heroes run and jump, collect coins and stomp foes"),
+    NIGHT_DRIVE("Night drive", "A road racing toward a striped sun between the mountains"),
 }
 
-/** Library console art pack (Settings → Appearance → Platform icons). */
+/**
+ * Pixel art scenes since removed, each read as the kept one closest to it: Space and Pixel castle, starry
+ * nights, as Sakura night; Underwater, bright and blue, as Sakura day.
+ */
+private val removedPixelScenes = mapOf(
+    "SPACE" to PixelBackdropScene.SAKURA_NIGHT,
+    "CASTLE" to PixelBackdropScene.SAKURA_NIGHT,
+    "UNDERWATER" to PixelBackdropScene.SAKURA_DAY,
+)
+
+/** The Pixel art scene stored as [name]. Pre-split installs stored SAKURA for the moonlit scene. */
+private fun pixelBackdropNamed(name: String): PixelBackdropScene =
+    removedPixelScenes[name] ?: if (name == "SAKURA") PixelBackdropScene.SAKURA_NIGHT else enumOrDefault(name, PixelBackdropScene.SAKURA_CYCLE)
+
+/** The Manga ink scene stored as [name]: Splash page, since redrawn as the magazine cover, reads as the cover. */
+private fun mangaBackdropNamed(name: String): MangaBackdropScene =
+    if (name == "SPLASH") MangaBackdropScene.COVER else enumOrDefault(name, MangaBackdropScene.TONE)
+
+/** The screensaver's backdrop stored as [name]: a removed Pixel art scene's entry reads as its scene does, Splash page's as the cover. */
+private fun screensaverBackdropNamed(name: String): CatalogBackdrop {
+    if (name == "MANGA_SPLASH") return CatalogBackdrop.MANGA_COVER
+    val removed = if (name.startsWith("PIXEL_")) removedPixelScenes[name.removePrefix("PIXEL_")] else null
+    return removed?.toCatalog() ?: enumOrDefault(name, CatalogBackdrop.MATCH_APP)
+}
+
+/** How the Library draws its consoles (Settings → Appearance → Platform icons). */
 enum class PlatformIconPack(val label: String, val description: String) {
-    MATCH_STYLE(
-        "Match style",
-        "Pixel with Pixel art and 16-bit RPG, Manga with Manga ink, Systematic otherwise",
-    ),
-    SYSTEMATIC("Systematic", "BAXY Square top-down consoles (MIT), recolored to the theme"),
-    PHOBOS("Phobos", "Original Phobos silhouettes for every system, including newer ones"),
-    PIXEL("Pixel", "Chunky pixel-art console glyphs"),
-    MANGA("Manga", "Ink-line console glyphs with screentone shading"),
+    MATCH_STYLE("Match style", "The consoles in the style's own look: glass, neon, pixel art, 16-bit, glossy, ink or phosphor"),
+    SYSTEMATIC("Systematic", "BAXY Square's top-down consoles (MIT) as drawn, recolored to the theme"),
 }
 
 /** Manga ink backdrop variants. */
 enum class MangaBackdropScene(val label: String, val description: String) {
-    TONE("Screentone", "Paper with a screentone that densifies toward the bottom"),
-    SPEED_LINES("Speed lines", "Radial ink speed lines bursting from the center"),
-    SPLASH("Splash page", "A bold ink splash with sparse tone at the edges"),
+    TONE("Screentone", "A halftone screentone rising from the bottom, with scratched highlights"),
+    SPEED_LINES("Speed lines", "Focus lines converging on a clear space in the middle"),
+    COVER("Magazine cover", "Weekly Shonen Phobos announces the new series: ares, now on Android, and back to Windows and Linux"),
+    TRUCK("Truck-kun", "The isekai truck charges out of focus lines, headlights blazing"),
 }
 
 /** 16-bit RPG backdrop variants. */
@@ -87,14 +104,14 @@ enum class RpgBackdropScene(val label: String, val description: String) {
 enum class RetrowaveBackdropScene(val label: String, val description: String) {
     SUNSET("Sunset", "Banded sun over a perspective grid floor"),
     GRID("Neon grid", "An endless neon floor grid without the sun"),
-    CITY("Night city", "A skyline silhouette under a neon sky"),
+    CITY("Night city", "A dense skyline of neon-lit towers glowing over the water"),
 }
 
 /** CRT terminal backdrop phosphor tint. */
 enum class CrtBackdropScene(val label: String, val description: String) {
-    GREEN("Green phosphor", "Classic green bloom with scanlines"),
-    AMBER("Amber phosphor", "Warm amber bloom with scanlines"),
-    BLUE("Blue phosphor", "Cool blue bloom with scanlines"),
+    GREEN("Green phosphor", "A green-glowing tube: scanlines, curved corners, a rolling refresh band and burned-in boot text"),
+    AMBER("Amber phosphor", "A warm amber tube: scanlines, curved corners, a rolling refresh band and burned-in boot text"),
+    BLUE("Blue phosphor", "A cool blue tube: scanlines, curved corners, a rolling refresh band and burned-in boot text"),
 }
 
 /** Glass / default backdrop variants when no solid style owns the scene. */
@@ -107,8 +124,8 @@ enum class GlassBackdropScene(val label: String, val description: String) {
 /** XMB wave backdrop variants. */
 enum class XmbBackdropScene(val label: String, val description: String) {
     WAVES("Waves", "Slow ribbons of light over a color gradient"),
-    CALM("Calm", "Quieter waves with a deeper gradient"),
-    DEEP("Deep", "Stronger ribbons over a darker depth"),
+    CALM("Calm", "One faint ribbon drifting over the gradient"),
+    DEEP("Deep", "Sheets of fine strands turning over a darker depth, with sparkles drifting up"),
 }
 
 /** Idle screensaver that shows only the current backdrop until interrupted. */
@@ -141,14 +158,14 @@ data class EmulatorSettings(
     // Paired themes (One Dark / One Light, ...) switch to their sibling to match the system.
     val themeFollowSystem: Boolean = false,
     val uiEffects: UiEffects = UiEffects.NONE,
-    val pixelBackdrop: PixelBackdropScene = PixelBackdropScene.SPACE,
+    val pixelBackdrop: PixelBackdropScene = PixelBackdropScene.SAKURA_CYCLE,
     val mangaBackdrop: MangaBackdropScene = MangaBackdropScene.TONE,
     val rpgBackdrop: RpgBackdropScene = RpgBackdropScene.LATTICE,
     val retrowaveBackdrop: RetrowaveBackdropScene = RetrowaveBackdropScene.SUNSET,
     val crtBackdrop: CrtBackdropScene = CrtBackdropScene.GREEN,
     val glassBackdrop: GlassBackdropScene = GlassBackdropScene.GLOWS,
     val xmbBackdrop: XmbBackdropScene = XmbBackdropScene.WAVES,
-    val platformIconPack: PlatformIconPack = PlatformIconPack.SYSTEMATIC,
+    val platformIconPack: PlatformIconPack = PlatformIconPack.MATCH_STYLE,
     val screensaverDelay: ScreensaverDelay = ScreensaverDelay.OFF,
     /** Independent of the app style: which catalog backdrop the idle screensaver shows. */
     val screensaverBackdrop: CatalogBackdrop = CatalogBackdrop.MATCH_APP,
@@ -534,20 +551,17 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
                 safeGetString(UI_EFFECTS, ""),
                 if (safeGet(RETROWAVE_EFFECTS, false)) UiEffects.RETROWAVE else UiEffects.NONE,
             ),
-            // Pre-split installs stored SAKURA for the moonlit scene; SAKURA_CYCLE is the new day↔night option.
-            pixelBackdrop = when (val raw = safeGetString(PIXEL_BACKDROP, "")) {
-                "SAKURA" -> PixelBackdropScene.SAKURA_NIGHT
-                else -> enumOrDefault(raw, PixelBackdropScene.SPACE)
-            },
-            mangaBackdrop = enumOrDefault(safeGetString(MANGA_BACKDROP, ""), MangaBackdropScene.TONE),
+            pixelBackdrop = pixelBackdropNamed(safeGetString(PIXEL_BACKDROP, "")),
+            mangaBackdrop = mangaBackdropNamed(safeGetString(MANGA_BACKDROP, "")),
             rpgBackdrop = enumOrDefault(safeGetString(RPG_BACKDROP, ""), RpgBackdropScene.LATTICE),
             retrowaveBackdrop = enumOrDefault(safeGetString(RETROWAVE_BACKDROP, ""), RetrowaveBackdropScene.SUNSET),
             crtBackdrop = enumOrDefault(safeGetString(CRT_BACKDROP, ""), CrtBackdropScene.GREEN),
             glassBackdrop = enumOrDefault(safeGetString(GLASS_BACKDROP, ""), GlassBackdropScene.GLOWS),
             xmbBackdrop = enumOrDefault(safeGetString(XMB_BACKDROP, ""), XmbBackdropScene.WAVES),
-            platformIconPack = enumOrDefault(safeGetString(PLATFORM_ICON_PACK, ""), PlatformIconPack.SYSTEMATIC),
+            // The Phobos, Pixel and Manga packs, since removed, read as Match style.
+            platformIconPack = enumOrDefault(safeGetString(PLATFORM_ICON_PACK, ""), PlatformIconPack.MATCH_STYLE),
             screensaverDelay = enumOrDefault(safeGetString(SCREENSAVER_DELAY, ""), ScreensaverDelay.OFF),
-            screensaverBackdrop = enumOrDefault(safeGetString(SCREENSAVER_BACKDROP, ""), CatalogBackdrop.MATCH_APP),
+            screensaverBackdrop = screensaverBackdropNamed(safeGetString(SCREENSAVER_BACKDROP, "")),
             glassEffects = enumOrDefault(safeGetString(GLASS_EFFECTS, GlassEffects.FULL.name), GlassEffects.FULL),
             regionPreference = enumOrDefault(safeGetString(REGION_PREFERENCE, ""), RegionPreference.NTSC_U_NTSC_J_PAL),
             fastBoot = safeGet(FAST_BOOT, false),

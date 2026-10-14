@@ -2,7 +2,6 @@ package com.phobos.emulator.ui.theme
 
 import com.phobos.emulator.data.PixelBackdropScene
 import org.junit.Assert.assertArrayEquals
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -16,26 +15,13 @@ class PixelArtTest {
         tertiary = 0xFFF0B040.toInt(),
         isDark = true,
     )
-    private val spaceColors = PixelSceneColors(
-        skyTop = 0xFF0A0A1A.toInt(),
-        skyBottom = 0xFF2A1A3A.toInt(),
-        star = 0xFFFFFFFF.toInt(),
-        planetLit = 0xFFB04020.toInt(),
-        planetShade = 0xFF702010.toInt(),
-        crater = 0xFF401008.toInt(),
-        rim = 0xFFFF9060.toInt(),
-        glow = 0xFFD06030.toInt(),
-    )
 
     private fun art(scene: PixelBackdropScene, cols: Int, rows: Int): PixelArt = when (scene) {
-        PixelBackdropScene.SPACE -> SpaceArt(cols, rows, spaceColors)
-        PixelBackdropScene.NIGHT_DRIVE -> NightDriveArt(cols, rows, palette)
-        PixelBackdropScene.PLAINS -> PlainsArt(cols, rows, palette)
         PixelBackdropScene.SAKURA_CYCLE -> SakuraArt(cols, rows, palette, SakuraMode.CYCLE)
-        PixelBackdropScene.SAKURA_NIGHT -> SakuraArt(cols, rows, palette, SakuraMode.NIGHT)
         PixelBackdropScene.SAKURA_DAY -> SakuraArt(cols, rows, palette, SakuraMode.DAY)
-        PixelBackdropScene.UNDERWATER -> UnderwaterArt(cols, rows, palette)
-        PixelBackdropScene.CASTLE -> CastleArt(cols, rows, palette)
+        PixelBackdropScene.SAKURA_NIGHT -> SakuraArt(cols, rows, palette, SakuraMode.NIGHT)
+        PixelBackdropScene.PLAINS -> PlainsArt(cols, rows, palette)
+        PixelBackdropScene.NIGHT_DRIVE -> NightDriveArt(cols, rows, palette)
     }
 
     private fun frame(art: PixelArt, time: Long, live: Boolean = true) = IntArray(art.cols * art.rows).also { art.compose(time, it, live) }
@@ -67,35 +53,6 @@ class PixelArtTest {
             val art = art(scene, 240, 135)
             assertFalse("$scene didn't change", frame(art, 10_000).contentEquals(frame(art, 12_000)))
         }
-    }
-
-    @Test fun thePlanetTurnsUnderAStillSilhouette() {
-        val art = SpaceArt(240, 135, spaceColors)
-        val before = frame(art, 0)
-        val after = frame(art, 60_000)
-        val horizon = (135 * PixelScene.HORIZON).toInt()
-        val face = horizon * 240 until before.size
-        assertFalse("the craters didn't move", face.all { before[it] == after[it] })
-        val rim = { pixels: IntArray -> pixels.indices.filter { pixels[it] == spaceColors.rim }.toSet() }
-        assertEquals(rim(before), rim(after))
-    }
-
-    @Test fun aShootingStarDrawsEveryFrameAndOnlyOneFliesAtATime() {
-        val meteors = Meteors(240, 135, 80, seed = 1977)
-        var flights = 0
-        var wasFlying = false
-        var time = 0L
-        while (time < Meteors.WINDOW * 12) {
-            val flying = meteors.flying(time)
-            if (flying && !wasFlying) flights++
-            assertEquals(flying, meteors.untilNext(time) == 0L)
-            wasFlying = flying
-            time += 10
-        }
-        assertTrue("$flights shooting stars in 12 windows", flights in 4..12)
-        val art = SpaceArt(240, 135, spaceColors)
-        val inFlight = (0L until Meteors.WINDOW * 12 step 10).first { meteors.flying(it) }
-        assertEquals(PixelArt.FRAME_MS, art.hold(inFlight))
     }
 
     @Test fun theRoadMovesUnderAStillSky() {

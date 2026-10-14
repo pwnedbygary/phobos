@@ -53,18 +53,16 @@ fun CatalogBackdropView(
     val scheme = MaterialTheme.colorScheme
     when (scene) {
         CatalogBackdrop.MATCH_APP -> Unit // resolved above
-        CatalogBackdrop.PIXEL_SPACE -> PixelBackdrop(scheme, theme.isDark, PixelBackdropScene.SPACE, modifier)
-        CatalogBackdrop.PIXEL_NIGHT_DRIVE -> PixelBackdrop(scheme, theme.isDark, PixelBackdropScene.NIGHT_DRIVE, modifier)
-        CatalogBackdrop.PIXEL_PLAINS -> PixelBackdrop(scheme, theme.isDark, PixelBackdropScene.PLAINS, modifier)
         CatalogBackdrop.PIXEL_SAKURA -> PixelBackdrop(scheme, theme.isDark, PixelBackdropScene.SAKURA_CYCLE, modifier)
-        CatalogBackdrop.PIXEL_SAKURA_NIGHT -> PixelBackdrop(scheme, theme.isDark, PixelBackdropScene.SAKURA_NIGHT, modifier)
         CatalogBackdrop.PIXEL_SAKURA_DAY -> PixelBackdrop(scheme, theme.isDark, PixelBackdropScene.SAKURA_DAY, modifier)
-        CatalogBackdrop.PIXEL_UNDERWATER -> PixelBackdrop(scheme, theme.isDark, PixelBackdropScene.UNDERWATER, modifier)
-        CatalogBackdrop.PIXEL_CASTLE -> PixelBackdrop(scheme, theme.isDark, PixelBackdropScene.CASTLE, modifier)
+        CatalogBackdrop.PIXEL_SAKURA_NIGHT -> PixelBackdrop(scheme, theme.isDark, PixelBackdropScene.SAKURA_NIGHT, modifier)
+        CatalogBackdrop.PIXEL_PLAINS -> PixelBackdrop(scheme, theme.isDark, PixelBackdropScene.PLAINS, modifier)
+        CatalogBackdrop.PIXEL_NIGHT_DRIVE -> PixelBackdrop(scheme, theme.isDark, PixelBackdropScene.NIGHT_DRIVE, modifier)
 
-        CatalogBackdrop.MANGA_TONE -> MangaBackdrop(scheme, theme.isDark, MangaBackdropScene.TONE, modifier)
-        CatalogBackdrop.MANGA_SPEED_LINES -> MangaBackdrop(scheme, theme.isDark, MangaBackdropScene.SPEED_LINES, modifier)
-        CatalogBackdrop.MANGA_SPLASH -> MangaBackdrop(scheme, theme.isDark, MangaBackdropScene.SPLASH, modifier)
+        CatalogBackdrop.MANGA_TONE -> MangaBackdrop(theme.scheme, theme.isDark, MangaBackdropScene.TONE, modifier)
+        CatalogBackdrop.MANGA_SPEED_LINES -> MangaBackdrop(theme.scheme, theme.isDark, MangaBackdropScene.SPEED_LINES, modifier)
+        CatalogBackdrop.MANGA_COVER -> MangaBackdrop(theme.scheme, theme.isDark, MangaBackdropScene.COVER, modifier)
+        CatalogBackdrop.MANGA_TRUCK -> MangaBackdrop(theme.scheme, theme.isDark, MangaBackdropScene.TRUCK, modifier)
 
         CatalogBackdrop.RPG_LATTICE -> RpgBackdrop(scheme, theme.isDark, RpgBackdropScene.LATTICE, modifier)
         CatalogBackdrop.RPG_STARS -> RpgBackdrop(scheme, theme.isDark, RpgBackdropScene.STARS, modifier)
@@ -74,9 +72,9 @@ fun CatalogBackdropView(
         CatalogBackdrop.RETRO_GRID -> RetrowaveBackdrop(modifier, RetrowaveBackdropScene.GRID)
         CatalogBackdrop.RETRO_CITY -> RetrowaveBackdrop(modifier, RetrowaveBackdropScene.CITY)
 
-        CatalogBackdrop.CRT_GREEN -> CrtBackdrop(scheme, theme.isDark, CrtBackdropScene.GREEN, modifier)
-        CatalogBackdrop.CRT_AMBER -> CrtBackdrop(scheme, theme.isDark, CrtBackdropScene.AMBER, modifier)
-        CatalogBackdrop.CRT_BLUE -> CrtBackdrop(scheme, theme.isDark, CrtBackdropScene.BLUE, modifier)
+        CatalogBackdrop.CRT_GREEN -> CrtBackdrop(theme.scheme, theme.isDark, CrtBackdropScene.GREEN, modifier)
+        CatalogBackdrop.CRT_AMBER -> CrtBackdrop(theme.scheme, theme.isDark, CrtBackdropScene.AMBER, modifier)
+        CatalogBackdrop.CRT_BLUE -> CrtBackdrop(theme.scheme, theme.isDark, CrtBackdropScene.BLUE, modifier)
 
         CatalogBackdrop.GLASS_GLOWS -> GlassCatalogBackdrop(scheme, theme.isDark, GlassBackdropScene.GLOWS, modifier)
         CatalogBackdrop.GLASS_AURORA -> GlassCatalogBackdrop(scheme, theme.isDark, GlassBackdropScene.AURORA, modifier)
