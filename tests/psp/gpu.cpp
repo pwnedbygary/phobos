@@ -2460,8 +2460,9 @@ static auto everywhere(System& s, u32 reference) -> void {  //(the stencil set t
   sprite(s, {{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xffff'ffff});
 }
 static auto stencilAlphaWays(GPU* gpu) -> void {
-  //(single: drawn without dual-source blending; logic: left behind only by the GPU's own logic operation, where it has
-  //them and doesn't blend in the shader, the shader's leaving the alpha as the GE's does)
+  //(single: drawn without dual-source blending, left behind only by the GPU's own blending, not where every blend is
+  //the shader's; logic: left behind only by the GPU's own logic operation, where it has them and doesn't blend in the
+  //shader, the shader's leaving the alpha as the GE's does)
   struct Way { const char* name; u32 format; bool single, logic; std::function<void(System&)> draw; };
   std::vector<Way> ways = {
     {"a stencil test failing", 3, false, false, [](System& s) {
@@ -2545,7 +2546,8 @@ static auto stencilAlphaWays(GPU* gpu) -> void {
                     gpu->backend->logicOps ? " (the GPU's logic operations)" : "", bytes);
       }
       CHECK(bytes, 0u);
-      bool left = !way.logic || (gpu->backend->logicOps && !gpu->backend->reads);
+      bool shaded = gpu->backend->reads && gpu->backend->readsBlending;
+      bool left = way.logic ? gpu->backend->logicOps && !gpu->backend->reads : !way.single || !shaded;
       CHECK(gpu->statistics.alphas > before.alphas, left);
       hardware.ge.setRenderer(nullptr);
     }
