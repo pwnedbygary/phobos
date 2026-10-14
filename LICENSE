@@ -180,8 +180,8 @@ You can contact the author at:
 
 Apache License 2.0
 
-Used by Vulkan-Headers and the Android and Kotlin libraries listed near the
-end of this file.
+Used by Vulkan-Headers, font-rs and the Android and Kotlin libraries listed
+near the end of this file.
 
                                  Apache License
                            Version 2.0, January 2004
@@ -2726,6 +2726,22 @@ License 2.0, whose text appears above.
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
+font-rs (android/app/src/main/java/com/phobos/emulator/ui/theme/Lettering.kt, a modified translation)
+https://github.com/google/font-rs
+
+Copyright 2015, 2018 Google Inc. All rights reserved.
+Licensed under the Apache License 2.0, whose text appears above.
+
+The Manga ink backdrops' lettering rasterizer (Raster in Lettering.kt) is a
+modified Kotlin translation of draw_line in font-rs's src/raster.rs and
+accumulate in its src/accumulate.rs: a row's running sum starts afresh at each
+row, edges are clamped to the raster, and the sum's rounding residue is taken
+as no ink. Its curve flattening uses the same kind of estimate as draw_quad's
+(the number of segments growing with the square root of a curve's deviation),
+with a tighter tolerance and at most 64 segments.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
 puff (nall/nall/decode/inflate.hpp, an altered version)
 https://github.com/madler/zlib/tree/develop/contrib/puff
 
@@ -2759,7 +2775,12 @@ By BAXY Square, from the Systematic theme for RetroArch:
 https://github.com/baxysquare/baxy-retroarch-themes
 Obtained via RomM (https://github.com/rommapp/romm,
 frontend/assets/platforms/systematic), which renamed and reformatted them.
-Phobos recolors them at runtime.
+Phobos recolors them at runtime, and derives each style's consoles from
+them: the pixel art in android/app/src/main/java/com/phobos/emulator/ui/
+theme/ConsolePixels.kt (made by tools/console-art/pixelate.py) and the
+glass, neon, glossy, ink and phosphor looks drawn from the SVGs at runtime
+(ui/theme/ConsoleTreatment.kt). Those are derived from the icons and
+covered by this notice, all but the PSP's (the next notice).
 
 MIT License
 
@@ -2789,15 +2810,8 @@ Phobos PSP console art (android/app/src/main/assets/platforms/psp.svg)
 
 Drawn for Phobos in the style of the Systematic set above, which has no
 PSP: the one SVG in that folder that isn't BAXY Square's. It is Phobos's
-own work, under Phobos's license (the first notice).
-----------------------------------------------------------------------
-
-----------------------------------------------------------------------
-Phobos platform glyphs (ui/theme/PlatformGlyphs.kt, PlatformGlyphArt.kt)
-
-Original console silhouettes drawn for Phobos (Phobos / Pixel / Manga icon
-packs under Settings → Appearance → Platform icons). Not derived from the
-Systematic set above.
+own work, under Phobos's license (the first notice), as are the styles'
+PSPs derived from it.
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------

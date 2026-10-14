@@ -1,5 +1,6 @@
 package com.phobos.emulator.ui.theme
 
+import android.animation.ValueAnimator
 import android.graphics.Bitmap
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
@@ -8,6 +9,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,14 +21,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.geometry.center
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageShader
@@ -38,6 +43,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -51,7 +57,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.phobos.emulator.R
 import com.phobos.emulator.data.CrtBackdropScene
+import kotlinx.coroutines.delay
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /** VT323 (SIL Open Font License 1.1; see LICENSE), the type of DEC's VT320 terminal. */
 val TerminalFont = FontFamily(Font(R.font.vt323))
@@ -111,31 +119,24 @@ internal fun crtScanline(isDark: Boolean): Float = if (isDark) 0.30f else 0.08f
 internal fun crtVignette(isDark: Boolean): Float = if (isDark) 0.45f else 0.12f
 
 /** How far the backdrop's center glows toward [crtBloomColor], like a CRT's phosphor bloom. */
-internal fun crtBloom(isDark: Boolean): Float = if (isDark) 0.12f else 0.08f
+internal fun crtBloom(isDark: Boolean): Float = if (isDark) 0.22f else 0.1f
 
-/** The bloom's color: the [scene]'s phosphor mixed into the primary color. */
+/** The bloom's color: the [scene]'s phosphor with a little of the primary color in it. */
 internal fun crtBloomColor(scheme: ColorScheme, scene: CrtBackdropScene): Color {
     val phosphor = when (scene) {
         CrtBackdropScene.GREEN -> Color(0xFF54FF8B)
         CrtBackdropScene.AMBER -> Color(0xFFFFB347)
         CrtBackdropScene.BLUE -> Color(0xFF69B7FF)
     }
-    return lerp(scheme.primary, phosphor, 0.6f)
+    return lerp(scheme.primary, phosphor, 0.8f)
 }
 
 /**
- * One scanline every [SCANLINE_PITCH] screen pixels: a repeating image of a dark row under clear
- * ones, so the whole screen takes one draw.
+ * The CRT backdrop: the picture tube at rest ([CrtScreen]) in the theme's final colors ([scheme] should be
+ * them: the screen is drawn again whenever they change), with its scanlines and, on dark themes, its aperture
+ * grille over it at the screen's own pixels, and a faint band of light rolling slowly down it, as a refresh
+ * does on camera. The band stays away when Android's animations are off.
  */
-private val scanlines: ShaderBrush by lazy {
-    val pixels = IntArray(SCANLINE_PITCH) { if (it == SCANLINE_PITCH - 1) 0xFF000000.toInt() else 0 }
-    val image = Bitmap.createBitmap(pixels, 1, SCANLINE_PITCH, Bitmap.Config.ARGB_8888).asImageBitmap()
-    ShaderBrush(ImageShader(image, TileMode.Repeated, TileMode.Repeated))
-}
-
-private const val SCANLINE_PITCH = 3
-
-/** The CRT backdrop: the background with a phosphor bloom in the middle, scanlines and a vignette. */
 @Composable
 fun CrtBackdrop(
     scheme: ColorScheme,
@@ -143,27 +144,75 @@ fun CrtBackdrop(
     scene: CrtBackdropScene = CrtBackdropScene.GREEN,
     modifier: Modifier = Modifier,
 ) {
+    val background = scheme.background.toArgb()
+    val phosphor = crtBloomColor(scheme, scene).toArgb()
+    Box(modifier) {
+        RenderedBackdrop(listOf("crt", background, phosphor, isDark), Color(background), Modifier.matchParentSize()) { width, height ->
+            CrtScreen.render(width, height, background, phosphor, isDark)
+        }
+        Spacer(
+            Modifier.matchParentSize().drawWithCache {
+                val lines = scanlines(isDark)
+                onDrawBehind {
+                    if (isDark) drawRect(grille, blendMode = BlendMode.Modulate)
+                    drawRect(lines)
+                }
+            },
+        )
+        RefreshBand(Color(phosphor), isDark, Modifier.matchParentSize())
+    }
+}
+
+/** How far each of a scanline's three rows darkens the screen: the last fully, the one before it a little. */
+internal fun crtScanlineRows(isDark: Boolean): FloatArray = crtScanline(isDark).let { floatArrayOf(0f, it * 0.35f, it) }
+
+/** One scanline every three screen pixels, as a repeating image, so the whole screen takes one draw. */
+private fun scanlines(isDark: Boolean): ShaderBrush {
+    val rows = crtScanlineRows(isDark)
+    val image = Bitmap.createBitmap(IntArray(rows.size) { (rows[it] * 255).roundToInt() shl 24 }, 1, rows.size, Bitmap.Config.ARGB_8888).asImageBitmap()
+    return ShaderBrush(ImageShader(image, TileMode.Repeated, TileMode.Repeated))
+}
+
+/**
+ * The aperture grille: columns in threes, each dimming the other two of red, green and blue a touch, multiplied in
+ * (Modulate: below Android 10, Compose draws Multiply as a plain blend).
+ */
+private val grille: ShaderBrush by lazy {
+    val dim = 240
+    val columns = intArrayOf(0xFF000000.toInt() or (255 shl 16) or (dim shl 8) or dim, 0xFF000000.toInt() or (dim shl 16) or (255 shl 8) or dim, 0xFF000000.toInt() or (dim shl 16) or (dim shl 8) or 255)
+    ShaderBrush(ImageShader(Bitmap.createBitmap(columns, 3, 1, Bitmap.Config.ARGB_8888).asImageBitmap(), TileMode.Repeated, TileMode.Repeated))
+}
+
+/** The refresh band's peak: how far it lights the screen toward the phosphor. */
+internal fun crtBand(isDark: Boolean): Float = if (isDark) 0.05f else 0.04f
+
+@Composable
+private fun RefreshBand(color: Color, isDark: Boolean, modifier: Modifier) {
+    val position = remember { mutableFloatStateOf(-1f) }
+    LaunchedEffect(Unit) {
+        if (!ValueAnimator.areAnimatorsEnabled()) return@LaunchedEffect
+        while (true) {
+            delay(BAND_FRAME_MS)
+            withFrameMillis { now -> position.floatValue = (now % BAND_PERIOD_MS) / BAND_PERIOD_MS.toFloat() }
+        }
+    }
     Spacer(
-        modifier.drawWithCache {
-            val background = scheme.background
-            val center = size.center
-            val radius = size.maxDimension * 0.75f
-            val bloom = Brush.radialGradient(listOf(lerp(background, crtBloomColor(scheme, scene), crtBloom(isDark)), background), center, radius)
-            val vignette = Brush.radialGradient(
-                0.5f to Color.Transparent,
-                1f to Color.Black.copy(alpha = crtVignette(isDark)),
-                center = center,
-                radius = radius,
-            )
-            val lines = crtScanline(isDark)
-            onDrawBehind {
-                drawRect(bloom)
-                drawRect(scanlines, alpha = lines)
-                drawRect(vignette)
-            }
+        modifier.drawBehind {
+            val at = position.floatValue
+            if (at < 0f) return@drawBehind
+            val band = size.height * BAND_HEIGHT
+            val top = -band + (size.height + band) * at
+            val light = Brush.verticalGradient(listOf(Color.Transparent, color.copy(alpha = crtBand(isDark)), Color.Transparent), startY = top, endY = top + band)
+            drawRect(light, Offset(0f, top), Size(size.width, band))
         },
     )
 }
+
+private const val BAND_PERIOD_MS = 9_000L
+private const val BAND_HEIGHT = 0.18f
+
+/** The band moves slowly and softly: fifteen frames a second is smooth enough. */
+private const val BAND_FRAME_MS = 66L
 
 private val LINE = 1.5.dp
 private val INNER_LINE = 1.dp
@@ -188,6 +237,7 @@ object CrtUi : SolidUi() {
     override val pill: CornerBasedShape get() = Square
     override val capitalHeaders: Boolean get() = true
     override val titleCursor: Boolean get() = true
+    override val animatedBackdrop: Boolean get() = true
 
     @Composable
     override fun titleStyle(base: TextStyle) = base.phosphor(MaterialTheme.colorScheme.primary)
@@ -213,7 +263,7 @@ object CrtUi : SolidUi() {
 
     @Composable
     override fun Backdrop(modifier: Modifier) =
-        CrtBackdrop(MaterialTheme.colorScheme, LocalPhobosTheme.current.isDark, LocalPhobosTheme.current.crtBackdrop, modifier)
+        CrtBackdrop(LocalPhobosTheme.current.scheme, LocalPhobosTheme.current.isDark, LocalPhobosTheme.current.crtBackdrop, modifier)
 
     @Composable
     override fun plate(): Modifier {

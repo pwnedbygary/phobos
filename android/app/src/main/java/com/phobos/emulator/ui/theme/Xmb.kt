@@ -12,6 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -32,6 +33,9 @@ import com.phobos.emulator.R
 import com.phobos.emulator.data.XmbBackdropScene
 import kotlinx.coroutines.delay
 import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.max
 import kotlin.math.sin
 
 @OptIn(ExperimentalTextApi::class)
@@ -90,15 +94,11 @@ internal class WaveColors(scheme: ColorScheme, isDark: Boolean, scene: XmbBackdr
         else -> lerp(scheme.background, Color.Black, 0.35f)
     }
 
-    /** The ribbons' light: white on dark themes, and the primary color on light ones, where white wouldn't show. */
+    /** The ribbons', strands' and sparkles' light: white on dark themes, and the primary color on light ones, where white wouldn't show. */
     private val light = if (isDark) Color.White else scheme.primary
 
-    /** How strongly the ribbons show: fainter when Calm, stronger when Deep. */
-    private val strength = when (scene) {
-        XmbBackdropScene.CALM -> 0.5f
-        XmbBackdropScene.DEEP -> 1.35f
-        XmbBackdropScene.WAVES -> 1f
-    }
+    /** How strongly the ribbons show: fainter when Calm. Deep draws strands instead. */
+    private val strength = if (scene == XmbBackdropScene.CALM) 0.5f else 1f
 
     /** A ribbon's see-through fill. */
     val ribbon = light.copy(alpha = 0.06f * strength)
@@ -108,6 +108,15 @@ internal class WaveColors(scheme: ColorScheme, isDark: Boolean, scene: XmbBackdr
 
     /** The bright line along each edge of a ribbon. */
     val crest = light.copy(alpha = (if (isDark) 0.24f else 0.3f) * strength)
+
+    /** Deep's strands where their sheet lies flat; they fade as it turns edge on ([Sheet.fade]). */
+    val strand = light.copy(alpha = if (isDark) 0.2f else 0.24f)
+
+    /** A sparkle drifting up through Deep's sheets, at its brightest. */
+    val sparkle = light.copy(alpha = if (isDark) 0.42f else 0.5f)
+
+    /** The soft pool of light behind Deep's sheets, at its middle. */
+    val pool = light.copy(alpha = if (isDark) 0.08f else 0.1f)
 
     /** The gradient at [fraction] of the height, blended per sRGB channel as the screen blends it. */
     fun skyAt(fraction: Float): Color =
@@ -124,6 +133,16 @@ internal class WaveColors(scheme: ColorScheme, isDark: Boolean, scene: XmbBackdr
         /** The part of the height the ribbons can reach, with room for their glow. */
         val BAND: ClosedFloatingPointRange<Float> =
             WAVES.minOf { it.center - it.amplitude - it.thickness / 2 } - 0.02f..WAVES.maxOf { it.center + it.amplitude + it.thickness / 2 } + 0.02f
+
+        /** The part of the height Deep's sheets and sparkles reach. */
+        val DEEP_BAND: ClosedFloatingPointRange<Float> =
+            SHEETS.minOf { it.center - it.amplitude - it.spread / 2 } - 0.03f..SHEETS.maxOf { it.center + it.amplitude + it.spread / 2 } + 0.03f
+
+        /**
+         * The most of [strand]'s alpha Deep's strands lay over one point, as a multiple: each sheet is drawn as one
+         * path, so its own strands don't add up where they gather, and the two sheets can cross.
+         */
+        val STRAND_STACK: Float = SHEETS.size.toFloat()
     }
 }
 
@@ -191,8 +210,75 @@ private val WAVES = listOf(
 )
 
 /**
+ * A sheet of [strands] fine lines, Deep's wave: its middle swings [amplitude] (of the height) around
+ * [center] along a wave [length] (of the width) long, and it turns along [twist], its strands fanning
+ * out to [spread] where it lies flat and gathering into one line where it's edge on. It moves [speed]
+ * and turns [twistSpeed] wavelengths per [WAVE_PERIOD_MS], whole numbers so the loop is seamless.
+ */
+internal class Sheet(
+    val center: Float,
+    val amplitude: Float,
+    val length: Float,
+    val speed: Int,
+    val spread: Float,
+    val twist: Float,
+    val twistSpeed: Int,
+    val strands: Int,
+    val offset: Float,
+) {
+    private fun fan(u: Float, time: Float) = spread * cos(2 * PI * (u / twist + twistSpeed * time + offset * 2)).toFloat()
+
+    /** Where strand [index] is, as a fraction of the height, [u] of the way across at [time] (0 to 1 through the period). */
+    fun strandAt(index: Int, u: Float, time: Float): Float {
+        val middle = center + amplitude * sin(2 * PI * (u / length + speed * time + offset)).toFloat()
+        return middle + (index / (strands - 1f) - 0.5f) * fan(u, time)
+    }
+
+    /**
+     * How strongly the strands show [u] of the way across at [time]: fully where the sheet lies flat, down to
+     * [EDGE_ON] where it's edge on, as a ribbon of threads thins to a faint line seen edge on.
+     */
+    fun fade(u: Float, time: Float): Float = max(EDGE_ON, abs(fan(u, time)) / spread)
+
+    companion object {
+        const val EDGE_ON = 0.06f
+    }
+}
+
+internal val SHEETS = listOf(
+    Sheet(center = 0.6f, amplitude = 0.09f, length = 1.6f, speed = 1, spread = 0.16f, twist = 1.1f, twistSpeed = 1, strands = 18, offset = 0.1f),
+    Sheet(center = 0.67f, amplitude = 0.06f, length = 1.2f, speed = -1, spread = 0.1f, twist = 0.8f, twistSpeed = 2, strands = 10, offset = 0.55f),
+)
+
+/**
+ * Deep's sparkles, rising through its band and wrapping, faded in and out at its edges so the wrap
+ * doesn't show, twinkling and swaying a little, in whole cycles per [WAVE_PERIOD_MS] so the loop is seamless.
+ */
+internal object Sparkles {
+    const val COUNT = 40
+
+    /**
+     * Sparkle [index] at [time] (0 to 1 through the period) into [out]: across the width and down the height
+     * (fractions), and how bright, 0 to 1; written into an array, as the backdrop asks 30 times a second.
+     */
+    fun at(index: Int, time: Float, out: FloatArray) {
+        val band = WaveColors.DEEP_BAND
+        val rise = 1 + index % 3
+        val climb = (PixelKit.unit(SEED, index * 4) + time * rise) % 1f
+        val twinkle = 0.55f + 0.45f * sin(2 * PI * (time * (2 + index % 5) + PixelKit.unit(SEED, index * 4 + 3))).toFloat()
+        out[0] = PixelKit.unit(SEED, index * 4 + 1) + 0.015f * sin(2 * PI * (time * (1 + index % 2) + PixelKit.unit(SEED, index * 4 + 2))).toFloat()
+        out[1] = band.endInclusive - climb * (band.endInclusive - band.start)
+        out[2] = sin(PI * climb).toFloat() * twinkle
+    }
+
+    private const val SEED = 2006
+}
+
+/**
  * The XMB backdrop: a gradient from a tint of the primary color at the top to the background, crossed
- * by ribbons of light that drift and twist, holding still when Android's animations are off.
+ * by ribbons of light that drift and twist (Waves, or Calm's one faint ribbon), or, for Deep, a darker
+ * gradient with a pool of light where two sheets of fine strands sweep and turn, fanning out and
+ * gathering, and sparkles drift up through them. It holds still when Android's animations are off.
  */
 @Composable
 fun XmbBackdrop(
@@ -215,27 +301,74 @@ fun XmbBackdrop(
         modifier.drawWithCache {
             val colors = WaveColors(scheme, isDark, scene)
             val sky = Brush.verticalGradient(0f to colors.top, WaveColors.MIDDLE to colors.middle, 1f to colors.bottom)
-            val glow = Stroke(6.dp.toPx())
-            val crest = Stroke(1.5.dp.toPx())
-            val fill = Path()
-            val upper = Path()
-            val lower = Path()
-            onDrawBehind {
-                drawRect(sky)
-                val now = time.floatValue
-                val waves = if (scene == XmbBackdropScene.CALM) WAVES.take(1) else WAVES
-                waves.forEach { wave ->
-                    wave.trace(size, now, fill, upper, lower)
-                    drawPath(fill, colors.ribbon)
-                    drawPath(upper, colors.crestGlow, style = glow)
-                    drawPath(upper, colors.crest, style = crest)
-                    drawPath(lower, colors.crestGlow, style = glow)
-                    drawPath(lower, colors.crest, style = crest)
+            if (scene == XmbBackdropScene.DEEP) {
+                val pool = Brush.radialGradient(
+                    listOf(colors.pool, colors.pool.copy(alpha = 0f)),
+                    center = Offset(size.width * 0.5f, size.height * 0.62f),
+                    radius = size.maxDimension * 0.55f,
+                )
+                val line = Stroke(1.dp.toPx())
+                val sparkle = 1.6.dp.toPx()
+                val strands = Path()
+                val at = FloatArray(3)
+                onDrawBehind {
+                    drawRect(sky)
+                    drawRect(pool)
+                    val now = time.floatValue
+                    SHEETS.forEach { sheet ->
+                        val fade = Brush.horizontalGradient(
+                            List(FADE_STOPS + 1) { k -> colors.strand.copy(alpha = colors.strand.alpha * sheet.fade(k / FADE_STOPS.toFloat(), now)) },
+                            startX = 0f,
+                            endX = size.width,
+                        )
+                        // One path for the whole sheet: where its strands gather, they don't add up.
+                        strands.reset()
+                        for (index in 0 until sheet.strands) {
+                            for (i in 0..WAVE_STEPS) {
+                                val u = i.toFloat() / WAVE_STEPS
+                                val y = size.height * sheet.strandAt(index, u, now)
+                                if (i == 0) strands.moveTo(0f, y) else strands.lineTo(size.width * u, y)
+                            }
+                        }
+                        drawPath(strands, fade, style = line)
+                    }
+                    for (index in 0 until Sparkles.COUNT) {
+                        Sparkles.at(index, now, at)
+                        val center = Offset(size.width * at[0], size.height * at[1])
+                        val radius = sparkle * (0.75f + 0.5f * (index % 3) / 2f)
+                        drawCircle(colors.sparkle, radius * 2.5f, center, alpha = colors.sparkle.alpha * at[2] * 0.25f)
+                        drawCircle(colors.sparkle, radius, center, alpha = colors.sparkle.alpha * at[2])
+                    }
+                }
+            } else {
+                val glow = Stroke(6.dp.toPx())
+                val crest = Stroke(1.5.dp.toPx())
+                val fill = Path()
+                val upper = Path()
+                val lower = Path()
+                onDrawBehind {
+                    drawRect(sky)
+                    val now = time.floatValue
+                    val waves = if (scene == XmbBackdropScene.CALM) WAVES.take(1) else WAVES
+                    waves.forEach { wave ->
+                        wave.trace(size, now, fill, upper, lower)
+                        drawPath(fill, colors.ribbon)
+                        drawPath(upper, colors.crestGlow, style = glow)
+                        drawPath(upper, colors.crest, style = crest)
+                        drawPath(lower, colors.crestGlow, style = glow)
+                        drawPath(lower, colors.crest, style = crest)
+                    }
                 }
             }
         },
     )
 }
+
+/**
+ * Stops across the width at which a Deep sheet's fade is laid into its strands' gradient: enough that, between
+ * two, the fade where a sheet turns edge on stays near [Sheet.EDGE_ON] rather than pulsing as it passes them.
+ */
+private const val FADE_STOPS = 64
 
 /** XMB waves: M PLUS 1 lettering and the glass panels over ribbons of light flowing across a gradient. */
 object XmbUi : UiStyle() {

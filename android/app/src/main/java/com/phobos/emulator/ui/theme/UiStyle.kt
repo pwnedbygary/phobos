@@ -65,7 +65,8 @@ object GlassUi : UiStyle()
  * A style with its own solid panels, which Glass effects don't apply to, and its own backdrop, headers
  * and controls. Screens draw the glass versions when the style isn't one of these. Its parts take
  * [MaterialTheme.colorScheme], not [PhobosThemeInfo.scheme], so they cross-fade with the pages after a
- * theme change.
+ * theme change, except the backdrops drawn into bitmaps, which take the final colors and are drawn again
+ * once.
  */
 @Stable
 abstract class SolidUi : UiStyle() {
