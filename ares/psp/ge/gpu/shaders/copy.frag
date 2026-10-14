@@ -7,6 +7,10 @@
 //stencil, which a shader can't write, a bit at a time: the target's stencil cleared, then for each bit a draw that
 //replaces it with the bit (the stencil's write mask that bit alone) where the pixel's stencil (its alpha) has it; or
 //with the color where the GPU lets a shader give the stencil's value (EXPORT: VK_EXT_shader_stencil_export).
+//
+//Built again to set a target's colors' alpha from its stencil, which a shader can't read either (ALPHA: GPU's
+//catchAlpha()): no picture, the alpha push.bit alone, which the backend's draws add a bit at a time where the
+//stencil test finds it, after one making it 0.
 #if defined(EXPORT)
 #extension GL_ARB_shader_stencil_export : require
 #endif
@@ -17,12 +21,17 @@ layout(constant_id = 0) const uint MODE = 0u;  //0 the colors (EXPORT: and the s
 layout(push_constant) uniform Push {
   ivec2 origin;  //where the rectangle starts in the target, in its own pixels
   uint scale;    //the target's resolution
-  uint bit;      //MODE 2: the stencil's bit
+  uint bit;      //MODE 2: the stencil's bit (ALPHA: the alpha's)
 } push;
 
-layout(set = 0, binding = 0) uniform sampler2D picture;  //8888: the colors (the stencil the alpha), or the depths
-
 layout(location = 0) out vec4 outColor;
+
+#if defined(ALPHA)
+void main() {
+  outColor = vec4(0.0, 0.0, 0.0, float(push.bit) / 255.0);
+}
+#else
+layout(set = 0, binding = 0) uniform sampler2D picture;  //8888: the colors (the stencil the alpha), or the depths
 
 void main() {
   ivec2 at = ivec2(gl_FragCoord.xy - vec2(push.origin)) / int(push.scale);
@@ -40,3 +49,4 @@ void main() {
     if((bytes.a & push.bit) == 0u) discard;
   }
 }
+#endif

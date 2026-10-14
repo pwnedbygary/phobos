@@ -13266,6 +13266,223 @@ there than the M1's instructions say: worth measuring Ghost of Sparta's menu in 
 Monkey Ball, Hits Remixed and Twisted Metal in fast mode, and the fast mode's pictures against accurate mode's (the
 invariance note above).
 
+## Part 93: Vulkan's haze over MX vs. ATV Untamed's race — the frame buffer's alpha as its stencil has it
+
+On branch `cursor/psp-vk-mx-2b67`, begun on #251's (`cursor/psp-vk-models-2b67` at e823bf00b: master at 239d4c80a,
+v2.3.0, and part 90's branch), on master since #251 merged (5893dbdc0, with part 91's), merged with part 92's
+(dd37263c8: "Merged with part 92", below). Clean room: no PPSSPP code
+read (its GPU backend not opened), JPCSP not read; the PSP's behaviour relied on is the GE's own as the software
+renderer has it (pixel.cpp: the frame buffer's alpha is its stencil, changed by the stencil operations; draw.cpp's
+`stepped()`, measured in part 48, for the depth below). Save states are unchanged: everything here is the renderer's.
+The software renderer is untouched: its pictures, VRAM and state are #251's.
+
+**The problem.** The owner's report from the RP6 (v2.3.0) and the library check of #251: in MX vs. ATV Untamed's
+races, master's Vulkan, accurate and fast alike, lost nearly the whole scene (the trees, the hills, the house, the
+rider: a sky and a blurred ground left, the mean channel difference from Software about 37), as Cars Race-O-Rama's did
+(part 90: the same studio's engine, its depth read through VRAM's second copy). With #251 the scene is drawn, but in
+both modes alike thin light stripes ran across the grass like contour lines, others down through the tree's foliage,
+one side of a tree's trunk was bluish, and the dark shadow under the tree was missing: the mean difference about 4.7
+(other games' 0.04-2).
+
+**How it was found.** The scratch runner of part 90 (every PRIM of a frame logged: its pipeline state, texture,
+target and depth), and dumps of VRAM, everything drawn settled (each target read back, each target's depth put into
+memory as for a texture through the depth views), after a frame and just before chosen PRIMs of it, from Software and
+from Vulkan. A frame of the race (100 frames from the state, 9,600 PRIMs): four 64x64 5551 frame buffers drawn first;
+the scene into the screen's 8888 frame buffer (0x00000) with the depth buffer at 0xcc000, its stencil ZERO by every
+operation (fail, depth fail, pass), so its alpha 0; the terrain again, a 128x128 texture multiplied in where the
+stencil is 0, with INCREMENT (its shadows); then Cars' strips: the depth as a CLUT16 texture through VRAM's second
+copy (0x042cc000), its palette's 63 entries falling from 251 to 3 by 4 and 0 after (indexed by the depth's bits 1-8:
+a ramp every 512 depths), made the picture's alpha bytes through the picture's memory drawn as a 5650 frame buffer;
+15 sprites at depth tested "at least as near", ZERO where the depth test fails, so the near pixels' alpha 0; and the
+sky dome blended in by the frame buffer's alpha (DST_ALPHA and 1 - DST_ALPHA), over the far pixels.
+- The dumps: just before the sky, the screen's alpha in memory (the GPU's stencil, as a read back takes it) was
+  Software's (a mean 0.03 apart) and its colors 0.2 apart; the sky's 64 PRIMs made the difference (4.6-8.3 a channel).
+- The cause: the GPU keeps a frame buffer's alpha twice, in the colors' alpha and in the stencil. A PRIM writes the
+  colors' alpha where its pass operation's result is known (REPLACE, ZERO: `settings()`), not where a test or depth
+  test fails, nor an INCREMENT's; the stencil is what's read back. The 15 sprites' ZERO zeroed the stencil of the near
+  pixels and left their colors' alpha as the strips made it, and the GPU's blending reads the colors' alpha: the sky
+  went over the near pixels whose depth fell in the ramp's 126 of every 512, stripes along the depths across the hills
+  and the foliage, over the trunk and over the tree's shadow.
+- A scratch build making such a target stale before a blend by the frame buffer's alpha (finished, memory's alpha the
+  stencil, and filled again from memory) brought the race to 0.16 from Software at frame 100 in both modes.
+
+**The change** (gpu.cpp, gpu.hpp, vulkan.cpp, copy.frag, compile.sh; both modes, every resolution):
+- A target notes where its colors' alpha may differ from its stencil (`Target::lags`): the rectangle of each PRIM whose
+  stencil operations change the stencil without the colors' alpha (`settings()`: with the stencil written, a fail
+  operation where the stencil test can fail, a depth-fail operation where the depth test can fail, or a pass operation
+  whose alpha isn't written, or is written whole where MASK_ALPHA keeps some of the stencil's bits). Under the GPU's
+  own logic operation (where it has them and doesn't blend in the shader: fast mode, and the RP6's accurate mode) the
+  colors' alpha isn't written, as Vulkan's would take the alpha too where the GE's leaves the stencil out, so such a
+  PRIM is noted the same way.
+- Before a PRIM that blends by the frame buffer's alpha (the GE's factors 4, 5, 8 and 9, adding or subtracting: the
+  GPU's blending and shader blending alike) draws over that rectangle, or a copy of the target is taken over it for a
+  texture whose alpha the PRIM sees (render to texture: not through a palette, whose indices take none of the stencil's
+  bits, nor for a texture function leaving the texel's alpha out; a PRIM that sees it later sets it then, and its copy
+  is taken again from that change), the colors' alpha there is set from the stencil on the GPU (`catchAlpha()`,
+  `Command::Alpha`), and the target's copies take that change. The backend draws it in a render pass of its own over
+  the rectangle alone with `copy.frag`'s `ALPHA` build (no picture, its alpha a constant): a draw making the alpha 0,
+  then one for each bit of the stencil a read back takes (`narrowTarget()`, `move.frag`: 8888's eight, a 4444 one's top
+  four, a 5551 one's top bit), each adding the alpha that bit reads as (the bit, the bit twice over, 255) where the
+  stencil test finds it (the blend constant's alpha the destination's factor: 0, then 1). Exact: each sum is a whole
+  number of 255ths. Nothing waits: the race's finishes are 96 in 200 frames before and after.
+- A stale target's note goes with its colors and stencil, both filled from memory again.
+
+**The depth, found on the way and not changed.** The race's depth, put into memory, was Software's at 51.2% of the
+pixels and one more at 48.6%. The GE's corners' depths are whole numbers (`stepped()`: "the start is exactly the
+corner's value, its depth a whole number"), each pixel's the stepped value rounded down; the GPU interpolates the
+corners' fractional depths before `draw.frag`'s `DEPTHS` rounds down, one more where the fractions tip it. Truncated
+in a scratch build (`GPU::vertex()`, `transform.vert`), 95.3% were Software's (one more at 4.6%: the GE's stepping
+rounds its steps down), but the race's pictures didn't move: the stripes weren't the depth's. Left for its own change,
+as it moves every 3D game's depth on the GPU (docs/psp-gpu-renderers.md, "Known approximations").
+
+**Pictures** (the kit's runners, -O3 with thin LTO; the mean channel difference from Software and the pixels more
+than 24 apart, #251 -> this, at several frames of each, far beyond what a capture a frame stale moves):
+
+| Scene, frame | Vulkan accurate | Vulkan fast |
+|---|---|---|
+| MX vs. ATV Untamed, race, 100 | 4.72, 9.2% -> 0.16, 0.0% | 4.72, 9.2% -> 0.16, 0.0% |
+| the same, 130 | 5.20, 10.3% -> 0.21, 0.1% | 5.20, 10.3% -> 0.21, 0.1% |
+| the same, 160 | 2.84, 6.0% -> 0.21, 0.0% | 2.84, 6.0% -> 0.21, 0.0% |
+| the same, 200 | 2.79, 5.8% -> 0.22, 0.0% | 2.79, 5.8% -> 0.22, 0.0% |
+| Cars Race-O-Rama, 100 | 1.19, 2.0% -> 0.58, 0.2% | 1.21, 2.0% -> 0.60, 0.2% |
+| the same, 150 | 0.80, 0.9% -> 0.54, 0.1% | 0.82, 0.9% -> 0.56, 0.1% |
+| the same, 200 | 0.76, 0.7% -> 0.43, 0.1% | 0.79, 0.7% -> 0.45, 0.1% |
+
+(Cars' frame 50 is 11 apart in both builds: its Vulkan captures are a few frames stale, the race's clock at 9.41
+against Software's 9.44.)
+
+**The other scenes.** The kit's 21 scenes (part 90's), #251's three games and the race, 100 frames from each state,
+every frame's picture and VRAM hashed (drawing settled), then the end's RAM and machine: first #251's head
+(e823bf00b) against this (ed3f121c6), then master with #251 merged (5893dbdc0) against the final code (bb6298e9a;
+Software against 8b7fc0b06, the GPU code after it being none of Software's), the same both times: Software the same
+in all 25; Vulkan accurate and fast each the same in 23 of the 25, the others the race (from its frame 12) and Cars
+Race-O-Rama (from its first): the same bug, Cars' sky over its near pixels where its strips' depth-fail sprites had
+zeroed only the stencil, which part 90 left (its 1.19 at frame 100). The review's points change neither: the race's
+and Cars' hashes, every frame's and the end's, are ed3f121c6's. Hammerin' Hero, Jeanne d'Arc, Colin McRae's race (its
+terrain shadows) and Twisted Metal's play are master's exactly. The settings of the alpha, counted in a scratch build
+(100 frames, the same in both modes), before the review's points and after: the race 90 -> 45 (twice a picture, then
+once: before the sky), Cars 50 -> 50 (once a picture, before its sky), Colin McRae's race 98 -> 0 (its pictures the
+same either way: its alpha was the stencil's already where it's read), Hammerin' Hero 0; the 20 other scenes and
+Jeanne d'Arc none.
+
+**Speed** (the kit's runners, #251's head against this, 300 frames from each state, late frames at 1x and the pipelines
+kept, the builds in turns over two rounds, the Mac's load 8-14; frames a second, the means, and the GPU's waits in ms a
+frame where they're more than a tenth):
+
+| Scene | Vulkan fast, 1x | Vulkan accurate, 1x | Vulkan fast, 4x |
+|---|---|---|---|
+| MX vs. ATV Untamed, race | 32.72 -> 33.43 (+2.2%), waits 9.6 -> 9.6 | 30.07 -> 32.40 | 11.28 -> 11.00 (-2.5%), waits 66 -> 69 |
+| Hammerin' Hero | 219.4 -> 218.2 (-0.5%) | | |
+| Cars Race-O-Rama | 24.92 -> 25.94 (+4.1%), waits 16.0 -> 14.3 | | |
+| Colin McRae's race | 97.35 -> 100.87 (+3.6%) | | |
+
+Single runs moved by up to a tenth between rounds (the race at 4x: 11.21 and 10.78 against 10.84 and 11.71): no change
+past that is measured. And after the review's points (below), master (5893dbdc0), the branch before them (da6832ae5)
+and the final code (bb6298e9a), Vulkan fast in the same way (the Mac's load 9-13):
+
+| Scene | 1x: master, before, final | 2x: master, before, final |
+|---|---|---|
+| MX vs. ATV Untamed, race | 28.30, 29.52, 30.32 (waits 10.8, 9.2, 8.8) | 21.24, 20.99, 20.64 (waits 22.6, 22.9, 23.1) |
+| Cars Race-O-Rama | 20.36, 21.00, 22.06 (waits 16.3, 16.0, 15.6) | 15.41, 15.80, 15.66 (waits 35.8, 34.3, 34.4) |
+| Hammerin' Hero | 190.9, 189.9, 193.6 | 107.3, 106.2, 114.7 (waits 4.0, 4.0, 3.7) |
+| Colin McRae's race | 85.6, 88.8, 83.0 | |
+
+Within the runs' own spread again (Colin McRae's single runs 82-92 across the three). The setting's nine draws at
+most go in a render pass of their own over its rectangle (on a tile-based GPU only that much of the target's pictures
+loaded and stored, but the draws' pass ended and begun again around it): once a picture in the race and in Cars;
+the RP6's numbers are still to take.
+
+**Tests** (tests/psp/gpu.cpp, both modes, 1x and 2x; on #251's core with only the statistic added so they build, they
+fail in every mode and resolution: the new group 10,752 bytes apart in 8888 and 8,960 in 4444 and 5551, its alpha set
+none of the twice it should be; the 5551 group 1,344 bytes apart):
+- "the frame buffer's alpha as its stencil has it": in 8888, 4444 and 5551, a nearer half drawn and the stencil set
+  everywhere; ZERO where the depth test fails behind it, INVERT where the pass is; a copy taken as a texture's alpha
+  into another frame buffer; ZERO by a 3D mesh's depth fails (fast mode's GPU transform); white blended in by the frame
+  buffer's alpha; then ZERO again and a blend by the pixel's own alpha, which sets nothing. Black under white and the
+  reverse, so that each blend comes out as the alpha exactly however the GPU rounds; every byte the software
+  renderer's, the alpha set twice.
+- "a 5551 frame buffer's stencil bit" (part 90's) now takes all its rows as the texture, those its fail and depth-fail
+  operations made too, which it left out before.
+- "each other way a PRIM leaves it behind" (the review's point 4), each probed by white blended in by the frame
+  buffer's alpha over black: a stencil test failing (ZERO where "not equal" fails); MASK_ALPHA keeping some of the
+  stencil's bits, in a PRIM and in clear mode; INCREMENT and DECREMENT; a REPLACE blended by its own alpha without
+  dual-source blending (output 0's alpha the source's, left behind unless every blend is the shader's); the GPU's own
+  logic operation (XOR, CLEAR and NOOP, left behind where the GPU has them and doesn't blend in the shader); and a
+  4444 REPLACE of 0x80 under "not equal", then a rectangle over it noted by another PRIM. On master's core
+  (5893dbdc0, the statistic added) the first five fail in every mode and resolution (4,608 bytes apart, INCREMENT
+  and DECREMENT 6,912), and none of the six sets the alpha; on the branch before the review's points (da6832ae5) the
+  4444 one fails, 3,072 bytes apart in each mode and resolution (CI's lavapipe too), and the logic operation's on
+  lavapipe in fast mode (4,608).
+
+**Checks.** On ed3f121c6 with its tests (10469dbba): `tests/psp/run-tests.sh` 519 groups, 0 failures (sanitized; one
+new GPU group); `tests/allegrex/run-tests.sh` 68 groups, 0 failures; `tests/psp/ares/run-tests.sh` 340 checks, 0
+failed. On the final code (bb6298e9a, on master at 5893dbdc0): `tests/psp/run-tests.sh` 523 groups, 0 failures,
+sanitized and again without the sanitizers (`SANITIZE=`); `tests/allegrex/run-tests.sh` 68, 0;
+`tests/psp/ares/run-tests.sh` 340 checks, 0 failed; CI green (the PSP system tests on Mesa's lavapipe, which has the
+GPU's own logic operations, the Allegrex tests, and the Android, Windows, macOS and Linux builds). On the Mac the
+address sanitizer's container check was left off for them
+(`ASAN_OPTIONS=detect_stack_use_after_return=0:detect_container_overflow=0`): with it, tests/psp stops in "gpu
+stencil formats" on #251's core as on this, a false positive (nall and sljit are built without the sanitizers, and
+the linker can keep their unannotated `std::vector<u8>::resize`). The hash comparison: above ("The other scenes").
+
+**The review.** An independent read-only review of #254 found no blocker (the design sound, the race's and Cars'
+fix right) and four points to fix, all taken (8b7fc0b06, with the tests in f567df316):
+1. The GPU's own logic operation wrote the colors' alpha as op(reference, old alpha) while the stencil got the
+   reference, unnoted (Vulkan's takes the alpha; the GE's leaves the stencil out: pixel.cpp). Under it the colors'
+   alpha isn't written now, which notes the area (above). Reached in fast mode wherever the GPU has logic operations
+   and in accurate mode where it doesn't blend in the shader (the RP6); the M1 has none (MoltenVK), so the test fails
+   without the fix on CI's lavapipe (f567df316, the tests pushed alone): 4,608 bytes apart in fast mode at 1x and 2x,
+   and no alpha set.
+2. A 4444 stencil was set into the alpha by both copies of each bit, where a read back and a move take its top four
+   bits: a stencil the GPU holds otherwise (a REPLACE of 0x80 under a comparison keeps the GE's reference, 0x80,
+   where the colors' alpha and memory have 0x88; an INCREMENT steps it by one) came out as alpha 0, a regression from
+   #251 wherever a noted rectangle covered it. The bits tested are now those a read back takes (a 4444 one's top four,
+   a 5551 one's top bit), the alpha added the one they read as (0x11 times, 255); the test of that case fails without
+   it, 3,072 bytes apart in each mode and resolution.
+3. The cost on a tile-based GPU (the RP6's): each setting ended the draws' render pass and began one over the whole
+   target. Its render pass covers the rectangle alone now, and a copy whose alpha the PRIM can't see sets nothing
+   (above), which takes the race's first setting a picture away (before its strips copy the picture as a texture
+   without its alpha, untested and unblended: a pixel's alpha counts only in the alpha test and blending by the
+   source's alpha, bb6298e9a, as the first take on it, by the texture function alone, left the race's count as it
+   was). Counted per 100 frames before and after: the race 90 -> 45, Cars 50 -> 50, Colin McRae's race 98 -> 0,
+   Hammerin' Hero 0. Vulkan fast at 1x and 2x: within the runs' spread ("Speed", above).
+4. The tests covered two of the ways a PRIM leaves the alpha behind; a group for the others now (below).
+And three small points: a PRIM whose own primitives leave the alpha behind and then blend by it is the design doc's
+known approximations' now (the setting comes before a PRIM, not between its primitives); the second is point 3's
+copies; and the PR's and the handoff's base lines, stale once #251 merged.
+
+**Merged with part 92** (master at dd37263c8; part 92's changes are the host's alone). Its kept settings return from
+`settings()` before `lagging` is worked out, for a PRIM whose settings are the last one's: the flag stays as the last
+one's made it, which is the same (everything it's worked out from is among the kept settings: the pixel pipeline's
+state, the write masks, the target's format, the backend's ways of blending and logic operations), and any PRIM whose
+settings aren't kept replaces them. The setting of the alpha and the noting of a PRIM's rectangle are `begin()`'s, after
+`settings()`, for every PRIM, so before any of its primitives is recorded, a draw of its own or among fast mode's
+meshes (`screenTriangle()`, whose meshes join only a Mesh command at the back: an Alpha between two PRIMs keeps them
+apart). The last texture looked up first is a decoded texture's; a copy of a target is taken, and its alpha set first
+where its PRIM uses it, for each PRIM as before. The two sides met in `settings()`'s end (the state built in place,
+`lagging` worked out on it) and `begin()` (part 92's count of reading draws, then this part's setting and noting);
+`shaders.hpp` was made again from the merged GLSL (compile.sh, glslang 16.6.0, which makes master's byte for byte from
+master's). A test for part 92's paths: two sprites alike, the second's settings kept, leaving the alpha behind, then
+white blended in by it over the second's alone; and in fast mode a quad of six vertices drawn among the meshes,
+leaving the alpha behind by its depth fails, and another blending by it after a sprite left it behind. On the merged
+code (78138561a) against master at dd37263c8, the kit's 21 scenes, #251's three games and the race as before:
+Software the same in all 25, Vulkan accurate and fast each in 23, the race and Cars apart as before, their hashes
+the pre-merge code's (bb6298e9a: c2a95b636's) exactly in both modes; the alpha set per 100 frames as before (the
+race 45, Cars 50, Hammerin' Hero and Colin McRae none); `tests/psp/run-tests.sh` 528 groups, 0 failures, sanitized
+(the container check off) and not;
+`tests/allegrex/run-tests.sh` 68, 0; `tests/psp/ares/run-tests.sh` 340, 0; CI green. With `lagging` reset before the
+kept settings' return (a scratch build: the way a merge could have lost it), the test's sprites alike fail in each
+mode and resolution, 2,304 bytes apart, no alpha set.
+
+Still not done: the corners' depths (above); a 4444 frame buffer's INCREMENT and DECREMENT (by one on the GPU, by 16
+on the PSP: part 90); the GPU's blending by a partial alpha rounding its own way (a level apart here and there, as
+before); within one PRIM, a primitive blending by the alpha over pixels an earlier one left behind; and part 90's
+list otherwise.
+
+Scratch: `~/phobos-work/scratch/vk-mx` (`NOTES.md`; `patches/`: the PRIM log, the VRAM dumps (`dbg4-patch.py`,
+`dbg5-patch.py`), the stale-target experiment (`exp2-patch.py`) and the corners' depths (`corner-depth.patch`); `kit/`,
+the hash, picture and speed runs; `tests1.sh`, `suites.sh`).
+
 ## Part 94: the CPU, round 3 — the FPU's flush to zero compiled, block endings in fewer steps, the run's count in a register, main RAM's loads without the page table, more of the VFPU compiled
 
 On branch `cursor/psp-cpu-round3-2b67`, on master (`dd37263c8`, #253 merged). The task: round 3 of the CPU's work (parts
