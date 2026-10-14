@@ -12,32 +12,38 @@
 //those out, so the store goes through write(), which drops that code).
 //
 //The tables stay in two of sljit's saved registers, S1 for loads (the CPU's) and S2 for stores (writePages), which
-//every block's prologue sets (emit()) and blocks going on to each other keep. The address is worked out in 64 bits
-//from the base register widened without its sign: only its bits 0-28 are used from there on, and those are the
-//32-bit sum's, so no 32-bit result (whose upper half sljit leaves undefined) has to be widened again.
+//every block's prologue sets (emit()) and blocks going on to each other keep. The address is rs's host register
+//itself, or the 32-bit sum in reg(0): only its bits 0-28 are used, by 64-bit operations that mask the rest away, so
+//whatever sljit leaves in a 32-bit result's upper half never matters. Everything off the fast path is cold code, out
+//of the block's straight line (emitCold()).
 
 auto Allegrex::Recompiler::emitMemory(u32 address, u32 instruction, u32 count, bool delaySlot, bool store,
                                        u32 alignment, s16 offset, const std::function<void ()>& access) -> void {
-  mov64_u32(reg(0), use(instruction >> 21 & 31));
-  add64(reg(0), reg(0), imm(offset));
+  u32 rs = instruction >> 21 & 31;
+  op_base base = reg(0);
+  if(rs == 0) mov32(reg(0), imm(offset));
+  else if(offset == 0) base = use(rs);
+  else add32(reg(0), use(rs), imm(offset));
   sljit_jump* misaligned = nullptr;
   if(alignment > 1) {
-    test32(reg(0), imm(alignment - 1), set_z);
+    test32(base, imm(alignment - 1), set_z);
     misaligned = jump(flag_nz);
   }
-  lshr64(reg(1), reg(0), imm(12));
-  and64(reg(1), reg(1), imm(0x1'ffff));  //the physical page: address bits 12-28
+  //the physical page, address bits 12-28, into reg(1)
+  #if defined(ARCHITECTURE_ARM64)
+  u32 ubfx = 0xd340'0000 | 12 << 16 | 28 << 10 | sljit_get_register_index(SLJIT_GP_REGISTER, base.fst) << 5
+           | sljit_get_register_index(SLJIT_GP_REGISTER, SLJIT_R1);  //UBFX X1, base, #12, #17
+  sljit_emit_op_custom(compiler, &ubfx, sizeof(ubfx));
+  #else
+  lshr64(reg(1), base, imm(12));
+  and64(reg(1), reg(1), imm(0x1'ffff));
+  #endif
   mov64(reg(1), mem(SLJIT_MEM2(store ? SLJIT_S2 : SLJIT_S1, SLJIT_R1), 3));  //its entry: table + page * 8
   auto missing = sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
-  and64(reg(0), reg(0), imm(0xfff));
+  and64(reg(0), base, imm(0xfff));
   if(alignment == 16) add64(reg(1), reg(1), reg(0));  //(a quad's four words: reg(1) the host address)
   access();
-  auto done = jump();
-
-  if(misaligned) setLabel(misaligned);
-  setLabel(missing);
-  emitFallback(address, instruction, count, delaySlot);  //(a load's result read back from what it wrote)
-  setLabel(done);
+  emitColdFallback({misaligned, missing}, address, instruction, count, delaySlot);  //(a load's result read back)
 }
 
 #define RTn (instruction >> 16 & 31)
@@ -49,8 +55,10 @@ auto Allegrex::Recompiler::emitMemory(u32 address, u32 instruction, u32 count, b
 
 //Each access below reads or writes the host's memory at Host, the page emitMemory() found plus the address's low 12
 //bits, or a quad's at mem(reg(1), byte offset). A load into r0 does nothing once it's past the checks (which can
-//still raise an exception). Stores take their value in reg(2), as reg(0) and reg(1) hold the address. A load's
-//result goes into the host register that holds it from then on (recompiler.cpp's use() and def()).
+//still raise an exception). sb, sh and sw store rt as use() gives it (its host register, read before the fast path
+//splits off; r0 from ipu.r[]); the coprocessors' stores and lwl, lwr, swl and swr work in reg(2) and reg(3) (and a
+//quad's in reg(0)), as reg(0) and reg(1) hold the address. A load's result goes into the host register that holds it
+//from then on (recompiler.cpp's use() and def()).
 #define Host mem(SLJIT_MEM2(SLJIT_R1, SLJIT_R0), 0)
 auto Allegrex::Recompiler::emitLoadStore(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool {
   if(!self.pages) return false;
@@ -101,20 +109,17 @@ auto Allegrex::Recompiler::emitLoadStore(u32 address, u32 instruction, u32 count
 
   //SB Rt,Rs,i16
   case 0x28: return memory(true, 1, offset, [&] {
-    mov32(reg(2), Rt);
-    mov32_u8(Host, reg(2));
+    mov32_u8(Host, Rt);
   });
 
   //SH Rt,Rs,i16
   case 0x29: return memory(true, 2, offset, [&] {
-    mov32(reg(2), Rt);
-    mov32_u16(Host, reg(2));
+    mov32_u16(Host, Rt);
   });
 
   //SW Rt,Rs,i16
   case 0x2b: return memory(true, 4, offset, [&] {
-    mov32(reg(2), Rt);
-    mov32(Host, reg(2));
+    mov32(Host, Rt);
   });
 
   //LWL and LWR Rt,Rs,i16, SWL and SWR: an unaligned word's halves, as the interpreter has them (interpreter-ipu.cpp),

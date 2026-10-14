@@ -1,0 +1,58 @@
+name: PSP Shaders
+
+# The PSP renderer's shaders (ares/psp/ge/gpu/shaders): shaders.hpp, the SPIR-V the program carries, must be what its
+# GLSL compiles to with the glslang it was made with, byte for byte, and each of its modules valid for Vulkan 1.0
+# (.github/scripts/check-psp-shaders.sh). tests/psp/run-tests.sh checks the sources' hash everywhere, but compiles
+# again only where a glslang happens to be installed; here the pinned one is installed, and its absence fails.
+
+on:
+  push:
+    branches: [ master ]
+    paths: [ 'ares/psp/ge/gpu/shaders/**', '.github/scripts/check-psp-shaders.sh', '.github/workflows/psp-shaders.yml' ]
+  pull_request:
+    paths: [ 'ares/psp/ge/gpu/shaders/**', '.github/scripts/check-psp-shaders.sh', '.github/workflows/psp-shaders.yml' ]
+  workflow_dispatch:
+
+concurrency:
+  group: psp-shaders-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  shaders:
+    name: Shaders as glslang compiles them
+    runs-on: ubuntu-24.04
+    # The glslang shaders.hpp is made with (Khronos's release; the Mac's Homebrew build of it makes the same bytes),
+    # and its archive's SHA-256. The script requires its own pin of the version, which this one must equal: moving to
+    # another means both moved, with shaders.hpp made again by it, in the same change.
+    timeout-minutes: 10
+    env:
+      GLSLANG_VERSION: 16.6.0
+      GLSLANG_SHA256: 2c34071f56ecf39d16233294d3739cf43f981fd39080f2fd9dccb782101191ce
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # (whether the image has one of its own; the pinned one, installed next, comes first in PATH either way)
+      - name: The image's glslang
+        run: |
+          if command -v glslangValidator > /dev/null; then glslangValidator --version | head -1; else echo "none"; fi
+
+      - name: Install glslang ${{ env.GLSLANG_VERSION }}
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/glslang.tar.gz" \
+            "https://github.com/KhronosGroup/glslang/releases/download/$GLSLANG_VERSION/glslang-$GLSLANG_VERSION-linux-x86_64-release.tar.gz"
+          echo "$GLSLANG_SHA256  $RUNNER_TEMP/glslang.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/glslang"
+          tar -xzf "$RUNNER_TEMP/glslang.tar.gz" -C "$RUNNER_TEMP/glslang"
+          echo "$RUNNER_TEMP/glslang/bin" >> "$GITHUB_PATH"
+
+      - name: Install SPIRV-Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends spirv-tools
+
+      - name: Check the shaders
+        run: .github/scripts/check-psp-shaders.sh
