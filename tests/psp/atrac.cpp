@@ -595,7 +595,11 @@ static auto atracLowLevel() -> void {
   CHECK(m.system.memory.read(4, Used) == 376 && m.system.memory.read(4, Written) == 2048 * 4, true);
   CHECK(sample(0) == 7 && sample(1) == 0 && sample(4094) == 7 && sample(4095) == 2047, true);
   CHECK(m.system.memory.read(2, Samples + 8192), 0xcccc);
-  CHECK(m.call("sceAtracDecodeData", {0, Samples, R, R + 4, R + 8}), AtracErrorNoData);  //no file
+  //no file, its context saying 8: IS_LOW_LEVEL from the calls recorded with a state set to 8, NO_DATA as before from
+  //the rest
+  CHECK(m.call("sceAtracGetRemainFrame", {0, R}), 0x8063'0031);
+  CHECK(m.call("sceAtracDecodeData", {0, Samples, R, R + 4, R + 8}), AtracErrorNoData);
+  CHECK(m.call("sceAtracGetInternalErrorInfo", {0, R}), AtracErrorNoData);
   //mono output from two channels: the left; one channel doubled
   CHECK(initialize(0, 2, 1, 376), 0);
   frame(9);
@@ -658,12 +662,202 @@ static auto atracLowLevelState() -> void {
   CHECK(n.system.memory.read(2, Samples) == 8 && n.system.memory.read(4, Written) == 2048 * 2, true);
 }
 
+//The contexts (pspautotests' atrac.h): every ID's 256 bytes in kernel memory from power on (no file: state 1, the ID
+//at the end), written whenever the library changes the ID (set, decoded, released), without
+//_sceAtracGetContextAddress, which only says where (0 for an ID not handed out) and writes nothing: what the program
+//wrote stays until the library next changes the ID (a set refused before it changes, a decode after the end, don't).
+//A state the program set to 8 or 16 refuses each of the seven calls recorded with one, 0x80630031 and 0x80630040
+//(getremainframe, getsoundsample, resetpos, resetting and second), and set back to 2 the ID is taken again; every
+//other call, none recorded so, answers as before. A low-level ID's says 8 (the seven IS_LOW_LEVEL, the rest NO_DATA as
+//before). A state keeps them; one from before they had memory of their own (0 for it) has them written as it loads.
+static auto atracContexts() -> void {
+  Machine m;
+  auto at3 = file();
+  m.system.memory.copyIn(File, at3.data(), at3.size());
+  auto context = [](u32 id) { return Kernel::AtracContextMemory + id * 256; };
+  auto field = [&](u32 id, u32 offset) { return word(m, context(id) + 128 + offset); };
+  auto state = [&](u32 id) { return m.system.memory.read(1, context(id) + 128 + 21); };
+  for(u32 id : range(6)) CHECK(state(id) == 1 && field(id, 124) == id && field(id, 0) == 0, true);
+  CHECK(m.call("_sceAtracGetContextAddress", {0}), 0);
+  CHECK(m.call("sceAtracSetDataAndGetID", {File, u32(at3.size())}), 0);
+  CHECK(state(0) == 2 && field(0, 0) == 2416 && field(0, 36) == at3.size() && field(0, 56) == File, true);
+  CHECK(m.system.memory.read(2, context(0) + 128 + 26), 0x1000);
+  CHECK(decode(m, 0).count, 1680);
+  CHECK(field(0, 0), 4096);  //current without asking
+  CHECK(m.call("_sceAtracGetContextAddress", {0}), context(0));
+  //the program's writes stay through _sceAtracGetContextAddress
+  m.system.memory.write(4, context(0) + 128 + 40, 30);
+  m.system.memory.write(4, context(0) + 128 + 60, ~0u);
+  CHECK(m.call("_sceAtracGetContextAddress", {0}), context(0));
+  CHECK(field(0, 40) == 30 && field(0, 60) == ~0u, true);
+  CHECK(m.call("sceAtracSetData", {0, File + 0x10000, 0x1000}), 0x8063'0006);  //(refused before the ID changes)
+  CHECK(field(0, 40) == 30 && field(0, 60) == ~0u, true);
+  //the state it sets
+  auto remain = [&] { return m.call("sceAtracGetRemainFrame", {0, R}); };
+  for(auto [forced, error] : {std::pair{8u, 0x8063'0031u}, {16u, 0x8063'0040u}}) {
+    m.system.memory.write(1, context(0) + 128 + 21, forced);
+    CHECK(remain(), error);
+    CHECK(m.call("sceAtracGetSoundSample", {0, R, R + 4, R + 8}), error);
+    CHECK(m.call("sceAtracIsSecondBufferNeeded", {0}), error);
+    CHECK(m.call("sceAtracGetBufferInfoForResetting", {0, 0, R + 0x40}), error);
+    CHECK(m.call("sceAtracGetSecondBufferInfo", {0, R, R + 4}), error);
+    CHECK(m.call("sceAtracResetPlayPosition", {0, 0, 0, 0}), error);
+    CHECK(m.call("sceAtracSetSecondBuffer", {0, Second, 0x1000}), error);
+    CHECK(m.call("sceAtracGetInternalErrorInfo", {0, R}), 0);  //(not among them: as before)
+    CHECK(m.call("sceAtracGetBitrate", {0, R}), 0);
+  }
+  m.system.memory.write(1, context(0) + 128 + 21, 2);
+  CHECK(remain() == 0 && s32(word(m, R)) == -1, true);
+  CHECK(decode(m, 0).count, 2048);
+  CHECK(field(0, 0) == 6144 && field(0, 40) == 0 && field(0, 60) == 0, true);  //the library's again, as it changed
+  while(!decode(m, 0).ended) {}
+  m.system.memory.write(4, context(0) + 128 + 40, 77);
+  CHECK(decode(m, 0).result, 0x8063'0024);  //(after the end: nothing changes, nothing's written)
+  CHECK(field(0, 40), 77);
+  CHECK(roundTrip(m), true);
+  CHECK(m.call("sceAtracReleaseAtracID", {0}), 0);
+  CHECK(state(0) == 1 && field(0, 0) == 0 && field(0, 124) == 0, true);
+  CHECK(m.call("_sceAtracGetContextAddress", {0}), 0);
+  //a low-level ID's says 8
+  constexpr u32 Parameters = R + 0x100;
+  CHECK(m.call("sceAtracGetAtracID", {0x1000}), 0);
+  m.system.memory.write(4, Parameters, 2), m.system.memory.write(4, Parameters + 4, 2);
+  m.system.memory.write(4, Parameters + 8, 376);
+  CHECK(m.call("sceAtracLowLevelInitDecoder", {0, Parameters}), 0);
+  CHECK(state(0), 8);
+  CHECK(remain(), 0x8063'0031);
+  CHECK(m.call("sceAtracGetInternalErrorInfo", {0, R}), 0x8063'0010);
+  //a state from before: no memory of their own (0), written as it loads
+  CHECK(m.call("sceAtracSetDataAndGetID", {File, u32(at3.size())}), 1);
+  m.system.memory.fill(Kernel::AtracContextMemory, 0, 6 * 256);
+  m.kernel.atracContexts = 0;
+  auto old = saveState(m);
+  Machine n;
+  CHECK(loadState(n, old), true);
+  CHECK(n.kernel.atracContexts, Kernel::AtracContextMemory);
+  CHECK(n.system.memory.read(1, context(0) + 128 + 21) == 8 && n.system.memory.read(1, context(1) + 128 + 21) == 2,
+        true);
+  CHECK(word(n, context(1) + 128) == 2416 && word(n, context(5) + 252) == 5, true);
+  CHECK(m.notes.size() == 0 && n.notes.size() == 0, true);
+}
+
+//A layout-26 state whose program had asked for the contexts, so that they were put in a block of the user partition
+//then (the library's way before they had memory of their own): loaded, they stay in that block as they were, a state
+//the program set there honoured (16, as Angus Hates Aliens' state at its title has it), kernel memory left alone; each
+//is written there again as the library next changes its ID.
+static auto atracContextsOlder() -> void {
+  Machine m;
+  auto at3 = file();
+  m.system.memory.copyIn(File, at3.data(), at3.size());
+  CHECK(m.call("sceAtracSetDataAndGetID", {File, u32(at3.size())}), 0);
+  auto block = m.kernel.allocate(6 * 256, 1, 0, "atrac contexts");
+  CHECK(block != nullptr, true);
+  if(!block) return;
+  u32 contexts = block->address;
+  m.system.memory.fill(Kernel::AtracContextMemory, 0, 6 * 256);  //(nothing there before layout 31)
+  m.kernel.atracContexts = contexts;
+  for(u32 id : range(6)) m.kernel.atracContext(id);
+  m.system.memory.write(1, contexts + 128 + 21, 16);
+  //this state as layout 26 has it: without sceVaudio's 15 bytes, where saving it with sceVaudio held shows them,
+  //nor the program's count of imported variables (4 bytes before them: layout 28's)
+  auto state = saveState(m);
+  m.kernel.audio.vaudio.reserved = true;
+  auto held = saveState(m);
+  m.kernel.audio.vaudio.reserved = false;
+  m.kernel.module.variables.push_back({"Lib", 1, 2, 0});
+  auto imported = saveState(m);
+  m.kernel.module.variables.clear();
+  u32 vaudio = 0;
+  while(vaudio < state.size() && vaudio < held.size() && state[vaudio] == held[vaudio]) vaudio++;
+  u32 variables = 0;
+  while(variables < state.size() && variables < imported.size() && state[variables] == imported[variables]) variables++;
+  CHECK(variables + 4 <= vaudio && vaudio + 15 < state.size(), true);
+  if(variables + 4 > vaudio || vaudio + 15 >= state.size()) return;
+  state.erase(state.begin() + vaudio, state.begin() + vaudio + 15);
+  state.erase(state.begin() + variables, state.begin() + variables + 4);
+  Machine n;
+  u32 current = n.kernel.stateLayout;
+  n.kernel.stateLayout = 26;
+  CHECK(loadState(n, state), true);
+  n.kernel.stateLayout = current;
+  CHECK(n.kernel.atracContexts, contexts);
+  CHECK(n.call("_sceAtracGetContextAddress", {0}), contexts);
+  CHECK(n.system.memory.read(1, contexts + 128 + 21), 16);
+  CHECK(n.call("sceAtracGetRemainFrame", {0, R}), 0x8063'0040);
+  std::vector<u8> kernelMemory(6 * 256, 0xcc);
+  n.system.memory.copyOut(kernelMemory.data(), Kernel::AtracContextMemory, kernelMemory.size());
+  CHECK(std::all_of(kernelMemory.begin(), kernelMemory.end(), [](u8 byte) { return byte == 0; }), true);
+  n.system.memory.write(1, contexts + 128 + 21, 2);
+  CHECK(n.call("sceAtracGetRemainFrame", {0, R}), 0);
+  CHECK(decode(n, 0).count, 1680);
+  CHECK(word(n, contexts + 128), 4096);  //(written there again, as the library changed the ID)
+  CHECK(roundTrip(n), true);
+  CHECK(m.notes.size() == 0 && n.notes.size() == 0, true);
+}
+
+//Angus Hates Aliens' music: its sound code (a wrapper over sceSas's ATRAC3 voices, which pspautotests' audio/atrac/sas
+//copies) sets a file, takes its ID's context and sets its state to 16, gives the context to a voice with
+//__sceSasSetVoiceATRAC3, which keeps it in the voice's first word in the SasCore, then moves the context's buffer and
+//curFileOff on, puts the voice in loopNum and -1 in secondBuffer; it streams the file through the context it reads
+//back from the SasCore; it stops the voice only while the context still says 16 (it asked again for good when the
+//state it set was written over), setting 1 and releasing the ID. The calls recorded with such a state are refused
+//meanwhile. The voice's word is written only into the SasCore __sceSasInit set up, the call naming it: not before
+//it's set up, nor into another; it's 0 again as the voice is unset and as the core is set up afresh (each voice's,
+//as a fresh SasCore has them).
+static auto atracForSas() -> void {
+  Machine m;
+  auto at3 = file();
+  m.system.memory.copyIn(File, at3.data(), at3.size());
+  constexpr u32 Core = 0x0890'4000, Other = Core + 0x1000, Words = 20 + 32 * 56;
+  auto slot = [](u32 core, u32 voice) { return core + 20 + voice * 56; };
+  m.system.memory.fill(Core, 0xcc, Words);
+  m.system.memory.fill(Other, 0xcc, Words);
+  CHECK(m.call("__sceSasSetVoiceATRAC3", {Core, 3, 0x0880'1234}), 0);
+  CHECK(word(m, slot(Core, 3)), 0xcccc'cccc);  //(not set up yet)
+  u32 id = m.call("sceAtracSetDataAndGetID", {File, u32(at3.size())});
+  u32 context = m.call("_sceAtracGetContextAddress", {id});
+  CHECK(context, Kernel::AtracContextMemory + id * 256);
+  CHECK(m.call("__sceSasInit", {Core, 1024, 32, 0, 44'100}), 0);
+  CHECK(word(m, slot(Core, 0)) == 0 && word(m, slot(Core, 3)) == 0 && word(m, slot(Core, 31)) == 0, true);
+  CHECK(word(m, Core) == 0xcccc'cccc && word(m, slot(Core, 0) + 4) == 0xcccc'cccc, true);  //(the rest left alone)
+  CHECK(m.call("__sceSasSetVoiceATRAC3", {Other, 31, context}), 0);
+  CHECK(word(m, slot(Other, 31)), 0xcccc'cccc);  //(another core)
+  m.system.memory.write(1, context + 0x95, 16);
+  CHECK(m.call("__sceSasSetVoiceATRAC3", {Core, 31, context}), 0);
+  CHECK(word(m, slot(Core, 31)), context);
+  CHECK(word(m, slot(Core, 30)), 0);
+  auto put = [&](u32 offset, u32 value) { m.system.memory.write(4, context + offset, value); };
+  put(0xb8, word(m, context + 0xb8) + word(m, context + 0xb0));
+  put(0xa0, word(m, context + 0xa0) + word(m, context + 0xac));
+  put(0xa8, 31);
+  put(0xbc, ~0u);
+  u32 voice = word(m, Core + 20 + 31 * 56);  //(as the game streams: through the SasCore)
+  CHECK(word(m, voice + 0xa4) == at3.size() && word(m, voice + 0xbc) == ~0u, true);
+  CHECK(m.call("sceAtracGetRemainFrame", {id, R}), 0x8063'0040);
+  CHECK(m.call("_sceAtracGetContextAddress", {id}), context);
+  CHECK(m.system.memory.read(1, context + 0x95) == 16 && word(m, context + 0xa8) == 31, true);
+  CHECK(roundTrip(m), true);
+  CHECK(m.call("__sceSasUnsetATRAC3", {Core, word(m, context + 0xa8)}), 0);
+  CHECK(word(m, slot(Core, 31)), 0);
+  m.system.memory.write(1, context + 0x95, 1);
+  CHECK(m.call("sceAtracReleaseAtracID", {id}), 0);
+  CHECK(m.call("_sceAtracGetContextAddress", {id}), 0);
+  //set up afresh: every voice's word 0 again
+  CHECK(m.call("__sceSasSetVoiceATRAC3", {Core, 5, context}), 0);
+  CHECK(word(m, slot(Core, 5)), context);
+  CHECK(m.call("__sceSasInit", {Core, 1024, 32, 0, 44'100}), 0);
+  CHECK(word(m, slot(Core, 5)), 0);
+  CHECK(m.notes.size(), 0);
+}
+
 auto atracTests() -> Tests {
   return {{"atrac ids", atracIDs}, {"atrac setting", atracSetting}, {"atrac whole file", atracWholeFile},
           {"atrac halfway", atracHalfway}, {"atrac streamed", atracStreamed}, {"atrac looped", atracLooped},
           {"atrac second buffer", atracSecondBuffer}, {"atrac reset", atracReset}, {"atrac bad frame", atracBadFrame},
           {"atrac states", atracStates}, {"atrac header sizes", atracHeaderSizes}, {"atrac ffmpeg", atracFFmpeg},
-          {"atrac low level", atracLowLevel}, {"atrac low level in a state", atracLowLevelState}};
+          {"atrac low level", atracLowLevel}, {"atrac low level in a state", atracLowLevelState},
+          {"atrac contexts", atracContexts}, {"atrac contexts in a layout-26 state's block", atracContextsOlder},
+          {"atrac contexts for sceSas", atracForSas}};
 }
 
 }

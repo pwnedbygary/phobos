@@ -11,6 +11,8 @@
 //  - A result that isn't a number: which NaN the PSP gives depends on the inputs' bits (pickNaN()), so the native
 //    code, having computed into a host register without writing fd, hands the instruction to the interpreter,
 //    which computes it again from the same, untouched, inputs.
+//Either way to the interpreter is cold code, the interpreter writing only the instruction's own results (no integer
+//register: what the block holds stays as it was).
 //The arithmetic runs on the emulation thread, in the host's floating-point mode, exactly as the interpreter's does
 //(the host's own defaults: to the nearest, subnormals kept, no traps), so even subnormal inputs and results come out
 //alike. Every native operation here is a single one (no product fused into a sum, which would round once instead of
@@ -68,10 +70,7 @@ auto Allegrex::Recompiler::emitFPU(u32 address, u32 instruction, u32 count, bool
       auto outside = jump(flag_uge);
       sljit_emit_fop1(compiler, SLJIT_CONV_S32_FROM_F32, SLJIT_R1, 0, Fs.fst, Fs.snd);
       mov32(Fd, reg(1));
-      auto done = jump();
-      setLabel(outside);
-      emitInterpreter(address, instruction, count, delaySlot);
-      setLabel(done);
+      emitColdFallback({outside}, address, instruction, count, delaySlot);
       return true;
     }
     }
@@ -91,10 +90,7 @@ auto Allegrex::Recompiler::emitFPU(u32 address, u32 instruction, u32 count, bool
     auto other = jump(flag_nz);
     sljit_emit_fop1(compiler, SLJIT_CONV_F32_FROM_S32, SLJIT_FR0, 0, Fs.fst, Fs.snd);
     sljit_emit_fop1(compiler, SLJIT_MOV_F32, Fd.fst, Fd.snd, SLJIT_FR0, 0);
-    auto done = jump();
-    setLabel(other);
-    emitInterpreter(address, instruction, count, delaySlot);
-    setLabel(done);
+    emitColdFallback({other}, address, instruction, count, delaySlot);
     return true;
   }
 
@@ -111,11 +107,7 @@ auto Allegrex::Recompiler::emitFPUArithmetic(u32 address, u32 instruction, u32 c
   sljit_emit_fop2(compiler, op, SLJIT_FR0, 0, Fs.fst, Fs.snd, Ft.fst, Ft.snd);
   auto notNumber = sljit_emit_fcmp(compiler, SLJIT_UNORDERED | SLJIT_32, SLJIT_FR0, 0, SLJIT_FR0, 0);
   sljit_emit_fop1(compiler, SLJIT_MOV_F32, Fd.fst, Fd.snd, SLJIT_FR0, 0);
-  auto done = jump();
-  setLabel(other);
-  setLabel(notNumber);
-  emitInterpreter(address, instruction, count, delaySlot);
-  setLabel(done);
+  emitColdFallback({other, notNumber}, address, instruction, count, delaySlot);
 }
 
 //C.cond.S Fs,Ft: FCSR bit 23 becomes the comparison's answer. The condition's low three bits are the outcomes that
@@ -138,10 +130,7 @@ auto Allegrex::Recompiler::emitFPUCompare(u32 address, u32 instruction, u32 coun
     setLabel(fails);
   }
   mov32(Csr, reg(0));
-  auto done = jump();
-  setLabel(flushing);
-  emitInterpreter(address, instruction, count, delaySlot);
-  setLabel(done);
+  emitColdFallback({flushing}, address, instruction, count, delaySlot);
 }
 
 //Coprocessor 2's moves: MFV and MTV copy a VFPU register's bits to or from an integer register, as the interpreter

@@ -3,7 +3,8 @@
 //How a block runs: the compiled code is a function that takes the CPU (in sljit's saved register S0) and works on
 //the same registers the interpreter does (ipu.r[], hi, lo), so either can carry on where the other stopped. When
 //a block leaves, ipu.pc and ipu.pd say where the CPU goes next, exactly as if the interpreter had run those
-//instructions, and `executed` says how many ran. A block that ends as blocks usually do goes on to the next
+//instructions, and `executed` says how many ran. (Within a block they're stored only where something reads them:
+//where it leaves, and before a call into the interpreter.) A block that ends as blocks usually do goes on to the next
 //block by itself, doing what Allegrex::run() and run() would have done in between, so that every block starts and
 //ends where it always did (emitChain()).
 //
@@ -16,6 +17,7 @@
 
 //Throws away every compiled block and starts the code memory afresh.
 auto Allegrex::Recompiler::reset() -> void {
+  exits.clear(), into.clear(), waiting.clear(), outOf.clear();
   sections.clear();
   writePages.clear();
   sectionTable.clear();
@@ -79,8 +81,22 @@ auto Allegrex::Recompiler::invalidateRange(u32 address, u32 size) -> void {
   run(first, SectionCount - 1), run(0, last);
 }
 
-//The section's code goes: no block starts there now, nor goes on to one, and stores may go straight to it again.
+//The section's code goes: no block starts there now, nor goes on to one, and stores may go straight to it again. Its
+//own blocks' exits are dead code from now on; every exit linked to its blocks goes back to its lookup, even one in
+//dead code (a block still running from a section that went runs on to its end), and the live ones wait for those
+//blocks to be compiled again.
 auto Allegrex::Recompiler::drop(u32 index) -> void {
+  if(auto own = outOf.find(index); own != outOf.end()) {
+    for(u32 exit : own->second) exits[exit].live = false;
+    outOf.erase(own);
+  }
+  if(auto linked = into.find(index); linked != into.end()) {
+    for(u32 exit : linked->second) {
+      patch(exits[exit].jump, exits[exit].lookup);
+      if(exits[exit].live) waiting[exits[exit].target].push_back(exit);
+    }
+    into.erase(linked);
+  }
   sections[index].reset();
   sectionTable[index] = nullptr;
   compiled[index / 64] &= ~(1ull << index % 64);
@@ -144,7 +160,8 @@ auto Allegrex::Recompiler::block(u32 address) -> u8* {
   //Code compiled through another mirror of this memory knows the wrong addresses (the return addresses it stores,
   //where its jumps go), so that section starts afresh. Games run their code through one mirror, so this doesn't
   //happen back and forth.
-  if(!section || section->mirror != address >> 29) {
+  if(section && section->mirror != address >> 29) drop(index);
+  if(!section) {
     section = std::make_unique<Section>();
     section->mirror = address >> 29;
     sectionTable[index] = section.get();
@@ -155,6 +172,12 @@ auto Allegrex::Recompiler::block(u32 address) -> u8* {
   if(!code) {
     code = emit(address, section->bodies[word]);
     writePages[index] = nullptr;  //this page holds compiled code now, so stores to it must go through write()
+    //(the exits waiting for this block go straight to it now)
+    if(auto waiters = waiting.find(address); waiters != waiting.end()) {
+      auto list = std::move(waiters->second);
+      waiting.erase(waiters);
+      for(u32 exit : list) if(exits[exit].live) link(exit, section->bodies[word]);
+    }
   }
   return code;
 }
@@ -171,16 +194,18 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
   mov64(sreg(1), imm((sljit_sw)self.pages));
   mov64(sreg(2), imm((sljit_sw)writePages.data()));
   auto bodyLabel = sljit_emit_label(compiler);
+  u32 index = (address & 0x1fff'ffff) / SectionSize;  //(a block never leaves its section)
   calls = false;
+  cold.clear();
+  linking.clear();
+  destination = {};
   prefixes = {};  //(not known as a block starts: recompiler-vfpu.cpp)
   forgetAll();  //(nor is anything held: a block before it may have left anything in those registers)
-  u32 count = 0;          //instructions in the block so far
-  bool pcStored = false;  //whether ipu.pc and ipu.pd already say where to go after the last instruction
-  bool ended = false;     //it ends at an instruction after which run() and the HLE kernel take over (endsBlock())
-  //Where it goes next, when that's known as it's compiled: one place (next), or either of two (next or other) as a
-  //branch decides; or the block has ended itself (done).
-  enum class Next : u32 { Unknown, Known, Either, Done } going = Next::Unknown;
-  u32 next = 0, other = 0;
+  u32 count = 0;       //instructions in the block so far
+  bool ended = false;  //it ends at an instruction after which run() and the HLE kernel take over (endsBlock())
+  //Where it goes next: a place known as it's compiled (next), or where pc and pd say; or the block has ended itself.
+  enum class Next : u32 { Unknown, Known, Done } going = Next::Unknown;
+  u32 next = 0;
 
   while(true) {
     u32 instruction = self.read(Word, address);
@@ -188,45 +213,28 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
     bool lastInSection = address % SectionSize == SectionSize - 4;
 
     if(isBranch(instruction)) {
-      //A native branch sets pc and pd for its delay slot, which the block then includes. A branch in the last word
-      //of a section would need its delay slot from the next one, so the interpreter runs it instead; if it's
-      //taken, pd won't be pc + 4 afterwards, and run() has the interpreter take the delay slot as well. The
-      //coprocessors' branches end the block at the branch, as the interpreter's did (taken, the block may go on
-      //through the delay slot to the target by itself: emitCoprocessorBranch()).
+      //A native branch decides where it goes, then the block includes its delay slot, compiled along each way it can
+      //go (emitDelaySlot()). A branch in the last word of a section would need its delay slot from the next one, so
+      //the interpreter runs it instead; if it's taken, pd won't be pc + 4 afterwards, and run() has the interpreter
+      //take the delay slot as well. The coprocessors' branches end the block at the branch, as the interpreter's did
+      //(taken, the block may go on through the delay slot to the target by itself: emitCoprocessorBranch()).
+      Branch branch;
       if(instruction >> 26 == 0x11 || instruction >> 26 == 0x12) {
         emitCoprocessorBranch(address, instruction, count);
         going = Next::Done;
-      } else if(!lastInSection && emitBranch(address, instruction, count)) {
+      } else if(!lastInSection && (branch = emitBranch(address, instruction)).kind != Branch::None) {
         wrote();
-        u32 branch = address;
-        address += 4;
+        emitDelaySlot(address, branch, count);
         count++;
-        u32 delaySlot = self.read(Word, address);
-        //(A branch in a delay slot has no defined meaning on MIPS; the interpreter's is used.)
-        if(isBranch(delaySlot) || !emitInstruction(address, delaySlot, count, true)) {
-          emitInterpreter(address, delaySlot, count, true);
-        } else if(instruction >> 26 == 0x02 || instruction >> 26 == 0x03) {
-          //(a native delay slot leaves pc and pd as the branch set them: an interpreted one may not, a syscall
-          //switching threads say)
-          going = Next::Known, next = (address & 0xf000'0000) | (instruction & 0x03ff'ffff) << 2;  //j, jal
-        } else if(instruction >> 26 != 0x00) {  //(jr and jalr go where a register says)
-          //a likely branch not taken has left already (emitBranchOutcome()): one past its delay slot is taken
-          u32 op = instruction >> 26;
-          bool likely = (op >= 0x14 && op <= 0x17) || (op == 0x01 && instruction >> 17 & 1);
-          going = likely ? Next::Known : Next::Either;
-          next = branch + 4 + s16(instruction) * 4, other = branch + 8;
-        }
+        going = Next::Done;
       } else {
         emitInterpreter(address, instruction, count, false);
       }
       break;
     }
 
-    if(emitInstruction(address, instruction, count, false)) {
-      pcStored = false;
-    } else {
+    if(!emitInstruction(address, instruction, count, false)) {
       emitInterpreter(address, instruction, count, false);
-      pcStored = true;
       if(endsBlock(instruction)) {
         ended = true;
         break;
@@ -235,35 +243,29 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
     prefixesAfter(instruction);
 
     if(lastInSection) {
-      if(!pcStored) {
-        mov32(field(&self.ipu.pc), imm(address + 4));
-        mov32(field(&self.ipu.pd), imm(address + 8));
-      }
       going = Next::Known, next = address + 4;
       break;
     }
     address += 4;
   }
 
-  if(ended || (!chains && going != Next::Done)) {
+  if(ended) {
     mov32(field(&executed), imm(count));
     jumpEpilog();
   } else if(going == Next::Known) {
-    emitChainTo(count, next);
-  } else if(going == Next::Either) {
-    auto taken = cmp32_jump(field(&self.ipu.pc), imm(next), flag_eq);
-    emitChainTo(count, other);
-    setLabel(taken);
-    emitChainTo(count, next);
+    emitEnd(count, true, next);
   } else if(going == Next::Unknown) {
-    emitChain(count);
+    emitEnd(count, false, 0);
   }
+  for(u32 n = 0; n < cold.size(); n++) cold[n]();  //(cold code may add cold code)
+  cold.clear();
 
   //(endFunction() as nall has it, but for the body's address, which is only known in between)
   memory::jitprotect(false);
   auto code = (u8*)sljit_generate_code(compiler, 0, &allocator);
   body = (u8*)sljit_get_label_addr(bodyLabel);
   allocator.reserve(sljit_get_generated_code_size(compiler));
+  addExits(index);
   resetCompiler();
   memory::jitprotect(true);
   return code;
@@ -333,12 +335,26 @@ auto Allegrex::Recompiler::emitChain(u32 count) -> void {
   jumpEpilog();
 }
 
-//emitChain() for a block that goes on to target, which the compiled code knows already (pc is target and pd the
-//word after it, as the branch or the end of the section set them): its section and word are worked out here, and
-//of run()'s checks only the page's is made as it runs, the CPU's owner being free to change the table. Whether the
-//CPU halted is only looked at if the block called the interpreter, the only way it can halt (an exception leaves
-//before this; a syscall, halt, break or eret ends its block for run(), but for a syscall in a delay slot, which is
-//such a call).
+//The end of a block of count instructions that goes on to target, pc and pd not stored for it yet (known), or to
+//wherever pc and pd say. With chains off (the tests' comparison) it leaves for run() instead.
+auto Allegrex::Recompiler::emitEnd(u32 count, bool known, u32 target) -> void {
+  if(!chains) {
+    if(known) {
+      mov32(field(&self.ipu.pc), imm(target));
+      mov32(field(&self.ipu.pd), imm(target + 4));
+    }
+    mov32(field(&executed), imm(count));
+    return jumpEpilog();
+  }
+  if(known) return emitChainTo(count, target);
+  emitChain(count);
+}
+
+//emitChain() for a block that goes on to target, which the compiled code knows already: its section and word are worked
+//out here, and of run()'s checks only the page's is made as it runs, the CPU's owner being free to change the table.
+//pc and pd, target and the word after it, are stored only where it leaves for run(). Whether the CPU halted is only
+//looked at if the block called the interpreter, the only way it can halt (an exception leaves before this; a syscall,
+//halt, break or eret ends its block for run(), but for a syscall in a delay slot, which is such a call).
 auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target) -> void {
   std::vector<sljit_jump*> leave;
   auto unless = [&](sljit_jump* jump) { leave.push_back(jump); };
@@ -347,6 +363,7 @@ auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target) -> void {
   if(self.pages) {
     unless(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_MEM1(SLJIT_S1), index * sizeof(u8*), SLJIT_IMM, 0));
   }
+  emitLink(target);  //(straight to the target's body once it's compiled; until then, the lookup)
   mov64(reg(1), field(&table));
   mov64(reg(1), mem(reg(1), index * sizeof(Section*)));
   unless(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0));
@@ -357,8 +374,76 @@ auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target) -> void {
 
   auto here = sljit_emit_label(compiler);
   for(auto jump : leave) sljit_set_label(jump, here);
+  mov32(field(&self.ipu.pc), imm(target));
+  mov32(field(&self.ipu.pd), imm(target + 4));
   mov32(field(&executed), imm(0));
   jumpEpilog();
+}
+
+//An exit's jump (Exit): a jump of the host's own (ARM64's B, x86-64's JMP rel32) to the code right after it, which
+//link() and drop() rewrite. On other hosts there's none, and the lookup always runs.
+#if defined(ARCHITECTURE_ARM64)
+static constexpr u32 LinkSize = 4;
+#elif defined(ARCHITECTURE_AMD64)
+static constexpr u32 LinkSize = 5;
+#else
+static constexpr u32 LinkSize = 0;
+#endif
+auto Allegrex::Recompiler::emitLink(u32 target) -> void {
+  if(!LinkSize) return;
+  linking.push_back({target, sljit_emit_label(compiler)});
+  #if defined(ARCHITECTURE_ARM64)
+  u32 b = 0x1400'0001;  //B .+4
+  sljit_emit_op_custom(compiler, &b, sizeof(b));
+  #elif defined(ARCHITECTURE_AMD64)
+  u8 jmp[5] = {0xe9, 0, 0, 0, 0};  //JMP .+5
+  sljit_emit_op_custom(compiler, jmp, sizeof(jmp));
+  #endif
+}
+
+//The exits of the block just compiled (in section index), once its code is where it runs: each linked if its target
+//is compiled already (a block going on to itself is: its body is known by now), else waiting for it (block() links it
+//then).
+auto Allegrex::Recompiler::addExits(u32 index) -> void {
+  for(auto& [target, label] : linking) {
+    u8* jump = (u8*)sljit_get_label_addr(label);
+    u32 exit = exits.size();
+    exits.push_back({jump, jump + LinkSize, target, true});
+    outOf[index].push_back(exit);
+    auto& section = sections[(target & 0x1fff'ffff) / SectionSize];
+    u8* body = section && section->mirror == target >> 29 ? section->bodies[target % SectionSize / 4] : nullptr;
+    if(body) link(exit, body);
+    else waiting[target].push_back(exit);
+  }
+  linking.clear();
+}
+
+auto Allegrex::Recompiler::link(u32 exit, u8* body) -> void {
+  if(patch(exits[exit].jump, body)) into[(exits[exit].target & 0x1fff'ffff) / SectionSize].push_back(exit);
+}
+
+//Rewrites the jump at jump to go to to; false if that's too far for it (it's left as it was then).
+auto Allegrex::Recompiler::patch(u8* jump, u8* to) -> bool {
+  #if defined(ARCHITECTURE_ARM64)
+  s64 distance = (to - jump) / 4;
+  if(distance < -(1 << 25) || distance >= 1 << 25) return false;
+  u32 b = 0x1400'0000 | (u32(distance) & 0x3ff'ffff);
+  memory::jitprotect(false);
+  std::memcpy(jump, &b, sizeof(b));
+  memory::jitprotect(true);
+  SLJIT_CACHE_FLUSH(jump, jump + sizeof(b));
+  return true;
+  #elif defined(ARCHITECTURE_AMD64)
+  s64 distance = to - (jump + 5);
+  if(distance != s32(distance)) return false;
+  s32 rel = s32(distance);
+  memory::jitprotect(false);
+  std::memcpy(jump + 1, &rel, sizeof(rel));
+  memory::jitprotect(true);
+  return true;
+  #else
+  return false;
+  #endif
 }
 
 //Allegrex::run()'s round after count instructions, for emitChainTo() and a coprocessor branch taken
@@ -376,15 +461,21 @@ auto Allegrex::Recompiler::emitCounted(u32 count, std::vector<sljit_jump*>& leav
   }
 }
 
-//Compiles one instruction as a call to execute(). Outside a delay slot, pc and pd are set first, as the interpreter
-//has them while that instruction runs; in a delay slot, the branch before it has already set them. If the
-//instruction raises an exception, the block leaves right after it.
+//pc and pd as the interpreter has them while the instruction at address runs, for a call into it: past it, or in a
+//delay slot, where the branch before it goes, stored here when the block knows that (destination: emitDelaySlot())
+//and by the branch itself otherwise.
+auto Allegrex::Recompiler::emitPC(u32 address, bool delaySlot) -> void {
+  if(delaySlot && !destination.known) return;
+  u32 pc = delaySlot ? destination.target : address + 4;
+  mov32(field(&self.ipu.pc), imm(pc));
+  mov32(field(&self.ipu.pd), imm(pc + 4));
+}
+
+//Compiles one instruction as a call to execute(), pc and pd first set as the interpreter has them while that
+//instruction runs (emitPC()). If the instruction raises an exception, the block leaves right after it.
 auto Allegrex::Recompiler::emitInterpreter(u32 address, u32 instruction, u32 count, bool delaySlot) -> void {
   calls = true;
-  if(!delaySlot) {
-    mov32(field(&self.ipu.pc), imm(address + 4));
-    mov32(field(&self.ipu.pd), imm(address + 8));
-  }
+  emitPC(address, delaySlot);
   mov32(field(&executed), imm(count));
   bool syscall = instruction >> 26 == 0x00 && (instruction & 0x3f) == 0x0c;
   callf(syscall ? &Allegrex::executeSyscall : &Allegrex::execute, imm(address), imm(instruction));
@@ -403,6 +494,30 @@ auto Allegrex::Recompiler::emitFallback(u32 address, u32 instruction, u32 count,
   for(u32 k = 0; k < Held; k++) {
     if(holding.pending[k] >= 0) mov32(sreg(3 + k), gpr(holding.pending[k]));
   }
+}
+
+//Cold code: the jumps given go to code, out of the block's straight line, which then comes back here, to the end of
+//the instruction's fast path. It's emitted after the block's end (emit()), holding what the block holds here and
+//knowing where a delay slot goes (destination), as if it were here; so the registers the instruction reads must be
+//read before the first of the jumps.
+auto Allegrex::Recompiler::emitCold(const std::vector<sljit_jump*>& jumps, const std::function<void ()>& code) -> void {
+  auto back = sljit_emit_label(compiler);
+  std::vector<sljit_jump*> from;
+  for(auto jump : jumps) if(jump) from.push_back(jump);
+  cold.push_back([this, back, from, code, kept = holding, where = destination] {
+    auto here = sljit_emit_label(compiler);
+    for(auto jump : from) sljit_set_label(jump, here);
+    holding = kept, destination = where;
+    code();
+    sljit_set_label(sljit_emit_jump(compiler, SLJIT_JUMP), back);
+  });
+}
+
+//emitFallback() as cold code.
+auto Allegrex::Recompiler::emitColdFallback(const std::vector<sljit_jump*>& jumps, u32 address, u32 instruction,
+                                            u32 count, bool delaySlot) -> void {
+  calls = true;
+  emitCold(jumps, [=, this] { emitFallback(address, instruction, count, delaySlot); });
 }
 
 //The game's registers in host registers: within a block, a register's value once read stays in a host register,
