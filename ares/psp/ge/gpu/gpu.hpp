@@ -197,10 +197,11 @@ struct GPU : GE::Renderer {
   //bytes as those of the target's rectangle that it reaches, in the target's format: each of the rectangle's pixels
   //the source's at the same bytes, its rectangle's first pixel delta bytes from source's first, rows of rowBytes in
   //the target and sourceRowBytes in source); and another target's depth put into the target's rectangle at the same
-  //place (Depth: source's, where both are drawn with one depth buffer); and the alpha of the target's colors in a
-  //rectangle set from its stencil, the PSP's alpha, where draws changed the stencil without it (Alpha:
-  //catchAlpha()). Every position and size is in the PSP's pixels: the backend has each of them Backend::scale times
-  //over.
+  //place (Depth: source's, where both are drawn with one depth buffer; or, with runs, each run's rectangle of the
+  //target taken from the source's at the run's sourceX, sourceY: where two formats keep the depth in two orders,
+  //memory.hpp); and the alpha of the target's colors in a rectangle set from its stencil, the PSP's alpha, where draws
+  //changed the stencil without it (Alpha: catchAlpha()). Every position and size is in the PSP's pixels: the backend
+  //has each of them Backend::scale times over.
   struct Command {
     enum class Kind : u8 { Draw, Upload, Readback, Copy, Present, Shot, Mesh, Move, Depth, Alpha } kind;
     u32 target;
@@ -221,11 +222,14 @@ struct GPU : GE::Renderer {
                   //Upload, Move, Alpha: the target's
     u8 sourceFormat = 3;            //Move
     u32 source = 0;                 //Move, Depth
+    u32 firstRun = 0, runs = 0;     //Depth: Recorded::runs (none: the source's depth at the same place)
     u16 sourceX = 0, sourceY = 0, sourceWidth = 0, sourceHeight = 0;
     s32 delta = 0;
     u32 rowBytes = 0, sourceRowBytes = 0;
     bool barrier = false;  //Draw: what the pass drew before made visible to its reading first (emit())
   };
+  //A Depth command's run: the target's rectangle at x, y, width x height taken from the source's at sourceX, sourceY.
+  struct DepthRun { u16 x, y, sourceX, sourceY, width, height; };
   struct Recorded {
     std::vector<Command> commands;
     std::vector<State> states;
@@ -234,12 +238,13 @@ struct GPU : GE::Renderer {
     std::vector<Model> models;   //(Mesh's)
     std::vector<u32> indices;
     std::vector<Transformed> transforms;
+    std::vector<DepthRun> runs;  //(Depth's)
     u32 readbacks = 0;
     u64 generation = 0;  //(goes up as it's cleared: what was recorded before is gone)
     auto empty() const -> bool { return commands.empty(); }
     auto clear() -> void {
       commands.clear(), states.clear(), vertices.clear(), uploads.clear(), readbacks = 0;
-      models.clear(), indices.clear(), transforms.clear();
+      models.clear(), indices.clear(), transforms.clear(), runs.clear();
       generation++;
     }
   };

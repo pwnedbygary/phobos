@@ -1391,9 +1391,11 @@ struct VulkanBackend : GPU::Backend {
         VkRect2D out = scaled(from->second, c.x, c.y, c.width, c.height);
         VkExtent3D extent{std::min(into.extent.width, out.extent.width),
                           std::min(into.extent.height, out.extent.height), 1};
+        if(c.runs) extent = {out.extent.width, out.extent.height, 1};  //(the source's rows and columns, whole)
         if(!extent.width || !extent.height) continue;
         VkBufferImageCopy region{depths, 0, 0, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1}, {into.offset.x, into.offset.y, 0},
                                  extent};
+        if(c.runs) region.imageOffset = {out.offset.x, out.offset.y, 0};
         transition(commands, from->second.depth.image, DepthStencil, DepthLayout, Source);
         vk.vkCmdCopyImageToBuffer(commands, from->second.depth.image, Source, slot.staging.buffer, 1, &region);
         transition(commands, from->second.depth.image, DepthStencil, Source, DepthLayout);
@@ -1404,8 +1406,25 @@ struct VulkanBackend : GPU::Backend {
         copied.size = u64(extent.width) * extent.height * 4;
         vk.vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
                                 1, &copied, 0, nullptr);
+        //(with runs, each of the target's from the source's place in the buffer, rows of the source's width)
+        std::vector<VkBufferImageCopy> placed;
+        for(u32 n = 0; n < c.runs; n++) {
+          auto& run = r.runs[c.firstRun + n];
+          VkRect2D to = scaled(t, run.x, run.y, run.width, run.height);
+          VkRect2D taken = scaled(from->second, run.sourceX, run.sourceY, run.width, run.height);
+          u32 across = std::min(to.extent.width, taken.extent.width);
+          u32 down = std::min(to.extent.height, taken.extent.height);
+          if(!across || !down) continue;
+          u64 offset = depths + (u64(taken.offset.y - out.offset.y) * extent.width + taken.offset.x - out.offset.x) * 4;
+          placed.push_back({offset, extent.width, 0, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1},
+                            {to.offset.x, to.offset.y, 0}, {across, down, 1}});
+        }
         transition(commands, t.depth.image, DepthStencil, DepthLayout, Destination);
-        vk.vkCmdCopyBufferToImage(commands, slot.staging.buffer, t.depth.image, Destination, 1, &region);
+        if(!c.runs) vk.vkCmdCopyBufferToImage(commands, slot.staging.buffer, t.depth.image, Destination, 1, &region);
+        else if(!placed.empty()) {
+          vk.vkCmdCopyBufferToImage(commands, slot.staging.buffer, t.depth.image, Destination, placed.size(),
+                                    placed.data());
+        }
         transition(commands, t.depth.image, DepthStencil, Destination, DepthLayout);
         continue;
       }

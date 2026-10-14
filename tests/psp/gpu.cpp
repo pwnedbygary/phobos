@@ -2611,8 +2611,10 @@ static auto gpuSharedDepth() -> void {
 //    other frame buffer's pixels, the GPU's, as its depth (a finish before the depth is filled from memory);
 //  - the depth a 5551 frame buffer drew, taken through the second copy as a 5650 texture into another frame buffer
 //    (Kurohyou's depth of field: the GPU's depth put into memory in that order first);
-//  - a depth buffer an 8888 frame buffer and a 5551 one draw with in turn (no game known does; on the PSP each reads
-//    the same bytes in its own order): the depth goes through memory between them, as the software renderer has it.
+//  - a depth buffer an 8888 frame buffer and a 5551 one draw with in turn (Twisted Metal's small 5551 frame buffers
+//    test against its 8888 scene's depth; on the PSP each reads the same bytes in its own order): the depth placed on
+//    the GPU between them by runs of 16, each where the other's order puts the same bytes, put into memory once only,
+//    for the texture.
 //Every byte of the screens the software renderer's, at 1x and 2x, in either mode.
 static auto depthOrders(GPU* gpu) -> void {
   constexpr u32 Depth = 0x8'8000, Scratch = 0x11'6400, Second = 0x1'0000, Rows = 16;
@@ -2675,6 +2677,7 @@ static auto depthOrders(GPU* gpu) -> void {
     //(the 5551 frame buffer's pixel (20, 4) reads the 8888 one's (260, 4), 300; its (128, 4) the 8888's (64, 4), 900)
     CHECK(at(0x3'0000, 20, 4) & 0x7fff, 0x7fffu), CHECK(at(0x3'0000, 128, 4) & 0x7fff, 0u);
     CHECK(gpu->statistics.finishes > before.finishes, true);
+    CHECK(gpu->statistics.depthsPut - before.depthsPut, 1u);  //(the texture's, not the depth taken across the formats)
     hardware.ge.setRenderer(nullptr);
   }
   gpu->resolution(1);

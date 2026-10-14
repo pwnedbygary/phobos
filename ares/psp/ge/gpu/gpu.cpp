@@ -244,27 +244,51 @@ auto GPU::takeDepth(Target& t, const GE::PixelState& p) -> void {
   }
   if(!newest) return;
   Target& from = *newest;
-  //(one of another format reads the depth buffer's bytes in another copy's order, memory.hpp: its depth is put into
-  //memory in its order, and filled into this one from there in this one's, as the PSP reads the same bytes; no game
-  //is known to draw a depth buffer so)
-  if(Memory::depthCopy(from.format) != Memory::depthCopy(t.format)) {
-    u64 end = u64(t.depthBuffer) + u64(std::max(from.depthRows, 1u)) * t.depthStride * 2;
-    return putDepth(t.depthBuffer, u32(std::min<u64>(end, Memory::VRAMSize) - 1));
-  }
   if(from.depthChangedFrom < from.depthChangedTo) {
     fill(from, from.depthChangedFrom, std::min(from.depthChangedTo, from.depthRows), p, 2);
     from.depthChangedFrom = from.depthChangedTo = 0;
   }
   u32 rows = std::min(from.depthRows, t.height), width = std::min({from.stride, t.stride, t.depthStride});
-  if(width < std::min(t.stride, t.depthStride)) {
+  Command c{Command::Kind::Depth, t.id};
+  c.source = from.id, c.width = width, c.height = rows;
+  //(one of another format reads the depth buffer's bytes in another copy's order, memory.hpp, Twisted Metal's small
+  //5551 frame buffers its 8888 scene's: the two orders move 32-byte pieces whole, so each run of 16 of this one's
+  //depths is 16 of the other's, those its order puts at the same bytes, taken from there, a run down as many rows as
+  //move alike. Where some lie past the other's rows or columns, or the pieces don't start on 32 bytes, its depth goes
+  //through memory instead: put in its order, filled into this one in this one's.)
+  if(Memory::depthCopy(from.format) != Memory::depthCopy(t.format)) {
+    u32 across = std::min(t.stride, t.depthStride), sourceAcross = std::min(from.stride, t.depthStride);
+    bool placed = !(t.depthBuffer & 31) && !(t.depthStride & 15);
+    auto& runs = recorded.runs;
+    c.firstRun = runs.size(), c.width = sourceAcross;
+    for(u32 x = 0; x < across && placed; x += 16) {
+      u16 run = std::min(16u, across - x);
+      for(u32 y = 0; y < rows && placed; y++) {
+        u32 seen = (t.depthBuffer + (y * t.depthStride + x) * 2) & (Memory::VRAMSize - 1);
+        u32 there = Memory::vramSeen(Memory::depthCopy(from.format),
+                                     Memory::vramOffset(Memory::depthCopy(t.format), seen));
+        u32 at = ((there - t.depthBuffer) & (Memory::VRAMSize - 1)) / 2;
+        u32 sourceX = at % t.depthStride, sourceY = at / t.depthStride;
+        if(!(placed = sourceY < rows && sourceX + run <= sourceAcross)) break;
+        bool down = y && runs.size() > c.firstRun && runs.back().x == x && runs.back().sourceX == sourceX &&
+                    runs.back().sourceY + runs.back().height == sourceY;
+        if(down) runs.back().height++;
+        else runs.push_back({u16(x), u16(y), u16(sourceX), u16(sourceY), run, 1});
+      }
+    }
+    if(!placed) {
+      runs.resize(c.firstRun);
+      u64 end = u64(t.depthBuffer) + u64(std::max(from.depthRows, 1u)) * t.depthStride * 2;
+      return putDepth(t.depthBuffer, u32(std::min<u64>(end, Memory::VRAMSize) - 1));
+    }
+    c.runs = runs.size() - c.firstRun;
+  } else if(width < std::min(t.stride, t.depthStride)) {
     if(t.depthChangedFrom < t.depthChangedTo) {
       fill(t, t.depthChangedFrom, std::min(t.depthChangedTo, t.depthRows), p, 2);
       t.depthChangedFrom = t.depthChangedTo = 0;
     }
     if(rows > t.depthRows) fill(t, t.depthRows, rows, p, 2), t.depthRows = rows;
   }
-  Command c{Command::Kind::Depth, t.id};
-  c.source = from.id, c.width = width, c.height = rows;
   recorded.commands.push_back(c);
   t.depthRows = std::max(t.depthRows, rows);
   t.depthChangedFrom = std::max(t.depthChangedFrom, rows);
