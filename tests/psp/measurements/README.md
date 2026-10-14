@@ -24,6 +24,9 @@ xz (`xz -9e`, 7.3 MB as 1.5 MB), as `tests/allegrex/measured`'s are; `SHA256SUMS
 `tests/psp/run-tests.sh` unpacks them into its build folder (`PSP_GE_ROUND6`, unless that names another folder), and
 `tests/psp/measured6.cpp` compares the core's run of round 6 with them.
 
+Without a round's files (`PSP_GE_RESULTS` or `PSP_GE_ROUND6` set empty), the groups comparing with them say so as a
+skip of `ge-round3` or `ge-round6`; where `PHOBOS_TESTS_REQUIRE` names it, as CI's does, that's a failure instead.
+
 ## Not here
 
 The VFPU's measurements (`tools/psp-measure`'s `vfpu.c`: rounds 1 to 3, about 670 MB each, mostly exhaustive sweeps

@@ -365,7 +365,7 @@ static auto curvesKnots() -> void {
 //covers and the core, a hair from them, doesn't.
 static auto curvesRound3() -> void {
   const char* results = std::getenv("PSP_GE_RESULTS");
-  if(!results || !*results) return;
+  if(!results || !*results) return skip("ge-round3", "PSP_GE_RESULTS isn't set");
   auto load = [&](const char* name) {
     std::ifstream file(std::filesystem::path(results) / (std::string(name) + ".bin"), std::ios::binary);
     std::vector<u8> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
@@ -391,7 +391,10 @@ static auto curvesRound3() -> void {
                         {"spline-edges-3", curved, 4, 3, 0}};
   for(auto& test : cases) {
     auto theirs = load(test.name);
-    if(theirs.size() != 256 * 256) continue;
+    if(theirs.size() != 256 * 256) {
+      skip("ge-round3", std::string(test.name) + ".bin isn't in PSP_GE_RESULTS (or isn't 256x256)");
+      continue;
+    }
     //start3D(&identity, 1) and patch(): the viewport onto a 256x256 target 512 pixels wide, z / w -1 to 1 the depths
     //65535 to 0, DEPTH_CLIP_ENABLE on, the depth test passing all, each point a color of its own
     Surface c;
