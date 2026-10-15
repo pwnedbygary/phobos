@@ -14279,7 +14279,7 @@ machine's state): all 102 hashes the same in all 21, the state too (no layout ch
 
 ## Part 98: ticks as RFC 2822 and RFC 3339 text (MediEvil's save details), a list save to its list's names (Lumines II), the depth-view loads' test deterministic
 
-On branch `cursor/psp-small-fixes-2b67` (a draft PR), on master `cc0638372` (part 97, #259); part 96 is #258's,
+On branch `cursor/psp-small-fixes-2b67` (draft PR #260), on master `cc0638372` (part 97, #259); part 96 is #258's,
 still open. Deep play's batch 04 bugs 4 and 5 (both low), and a test that failed now and then on a loaded Mac. Clean
 room: the PSP's behaviour from pspautotests' `rtc/convert` (recorded on a PSP), uOFW's decompilation of the rtc
 module (`src/kd/rtc/rtc.c`, firmware 6.60) and Phobos's own model of the save dialog; PPSSPP's sceRtc read only as a

@@ -32,7 +32,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP: ticks as RFC 2822 and RFC 3339 text (MediEvil's save details), a list save to its list's names (Lumines II), the depth-view loads' test deterministic — 2026-10-15
 
-Branch `cursor/psp-small-fixes-2b67`, on master `cc0638372` (part 97, #259); a draft PR. docs/psp-core.md,
+Branch `cursor/psp-small-fixes-2b67`, on master `cc0638372` (part 97, #259); draft PR #260. docs/psp-core.md,
 part 98, has the evidence (part 96 is #258's, still open). Clean room: pspautotests' `rtc/convert` (recorded on a
 PSP) and uOFW's decompilation of the rtc module; PPSSPP's sceRtc only as a design cross-check; JPCSP not read. Save
 states unchanged.
