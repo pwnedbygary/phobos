@@ -188,11 +188,13 @@ auto Allegrex::Recompiler::block(u32 address) -> u8* {
 auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
   //Every block has the same prologue (two float registers, for the FPU's native arithmetic: recompiler-fpu.cpp),
   //so the stack frame one block's prologue made serves any other's body, and its epilogue.
-  beginFunction(1, 3 + Held, 4, 2);
-  //The page tables loads and stores look pages up in (recompiler-memory.cpp), in saved registers S1 and S2: set
-  //here, before the body, and kept by the blocks that go on to each other, which all set them alike.
+  beginFunction(1, 3 + Held + Counted, 4, 2);
+  //The page tables loads and stores look pages up in (recompiler-memory.cpp), in saved registers S1 and S2, and the
+  //run's count (left()): set here, before the body, and kept by the blocks that go on to each other, which all set
+  //them alike.
   mov64(sreg(1), imm((sljit_sw)self.pages));
   mov64(sreg(2), imm((sljit_sw)writePages.data()));
+  loadCount();
   auto bodyLabel = sljit_emit_label(compiler);
   u32 index = (address & 0x1fff'ffff) / SectionSize;  //(a block never leaves its section)
   calls = false;
@@ -293,11 +295,7 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
 auto Allegrex::Recompiler::emitChain(u32 count) -> void {
   std::vector<sljit_jump*> leave;
   auto unless = [&](sljit_jump* jump) { leave.push_back(jump); };
-  mov64(reg(0), field(&self.instructionsRun));
-  add64(reg(0), reg(0), imm(count));
-  mov64(field(&self.instructionsRun), reg(0));
-  auto limit = field(&self.runLimit);
-  unless(sljit_emit_cmp(compiler, SLJIT_GREATER_EQUAL, SLJIT_R0, 0, limit.fst, limit.snd));
+  emitCount(count, leave);
   mov32_u8(reg(0), field(&self.scc.halted));
   unless(cmp32_jump(reg(0), imm(0), flag_ne));
 
@@ -331,6 +329,7 @@ auto Allegrex::Recompiler::emitChain(u32 count) -> void {
 
   auto here = sljit_emit_label(compiler);
   for(auto jump : leave) sljit_set_label(jump, here);
+  storeCount();
   mov32(field(&executed), imm(0));
   jumpEpilog();
 }
@@ -343,6 +342,7 @@ auto Allegrex::Recompiler::emitEnd(u32 count, bool known, u32 target) -> void {
       mov32(field(&self.ipu.pc), imm(target));
       mov32(field(&self.ipu.pd), imm(target + 4));
     }
+    storeCount();
     mov32(field(&executed), imm(count));
     return jumpEpilog();
   }
@@ -351,7 +351,8 @@ auto Allegrex::Recompiler::emitEnd(u32 count, bool known, u32 target) -> void {
 }
 
 //emitChain() for a block that goes on to target, which the compiled code knows already: its section and word are worked
-//out here, and of run()'s checks only the page's is made as it runs, the CPU's owner being free to change the table.
+//out here, and of run()'s checks only the page's is made as it runs, the CPU's owner being free to change the table
+//(but for a page it says never changes, listed as it is now: Allegrex::steady).
 //pc and pd, target and the word after it, are stored only where it leaves for run(). Whether the CPU halted is only
 //looked at if the block called the interpreter, the only way it can halt (an exception leaves before this; a syscall,
 //halt, break or eret ends its block for run(), but for a syscall in a delay slot, which is such a call).
@@ -360,7 +361,7 @@ auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target) -> void {
   auto unless = [&](sljit_jump* jump) { leave.push_back(jump); };
   emitCounted(count, leave);
   u32 index = (target & 0x1fff'ffff) / SectionSize;
-  if(self.pages) {
+  if(self.pages && !(self.steady && self.steady[index] && self.pages[index])) {
     unless(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_MEM1(SLJIT_S1), index * sizeof(u8*), SLJIT_IMM, 0));
   }
   emitLink(target);  //(straight to the target's body once it's compiled; until then, the lookup)
@@ -374,6 +375,7 @@ auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target) -> void {
 
   auto here = sljit_emit_label(compiler);
   for(auto jump : leave) sljit_set_label(jump, here);
+  storeCount();
   mov32(field(&self.ipu.pc), imm(target));
   mov32(field(&self.ipu.pd), imm(target + 4));
   mov32(field(&executed), imm(0));
@@ -446,15 +448,40 @@ auto Allegrex::Recompiler::patch(u8* jump, u8* to) -> bool {
   #endif
 }
 
-//Allegrex::run()'s round after count instructions, for emitChainTo() and a coprocessor branch taken
-//(emitCoprocessorBranch()): they're counted in instructionsRun, and the run stops (a jump added to leave) once that
-//reaches its limit or the CPU has halted, which is only looked at if the block called the interpreter.
-auto Allegrex::Recompiler::emitCounted(u32 count, std::vector<sljit_jump*>& leave) -> void {
+//instructionsRun brought up to date from left() (Counted), and left() worked out again from it and runLimit.
+auto Allegrex::Recompiler::storeCount() -> void {
+  if(!Counted) return;
+  mov64(reg(0), field(&self.runLimit));
+  sub64(reg(0), reg(0), left());
+  mov64(field(&self.instructionsRun), reg(0));
+}
+
+auto Allegrex::Recompiler::loadCount() -> void {
+  if(!Counted) return;
+  mov64(reg(0), field(&self.runLimit));
+  sub64(left(), reg(0), field(&self.instructionsRun));
+}
+
+//count instructions counted in the run, and a jump added to leave taken once it reaches its limit: left() counted down
+//past 0 (Counted), or instructionsRun up to runLimit.
+auto Allegrex::Recompiler::emitCount(u32 count, std::vector<sljit_jump*>& leave) -> void {
+  if(Counted) {
+    sljit_emit_op2(compiler, SLJIT_SUB | SLJIT_SET_SIG_LESS_EQUAL, left().fst, 0, left().fst, 0, SLJIT_IMM, count);
+    leave.push_back(jump(SLJIT_SIG_LESS_EQUAL));
+    return;
+  }
   mov64(reg(0), field(&self.instructionsRun));
   add64(reg(0), reg(0), imm(count));
   mov64(field(&self.instructionsRun), reg(0));
   auto limit = field(&self.runLimit);
   leave.push_back(sljit_emit_cmp(compiler, SLJIT_GREATER_EQUAL, SLJIT_R0, 0, limit.fst, limit.snd));
+}
+
+//Allegrex::run()'s round after count instructions, for emitChainTo() and a coprocessor branch taken
+//(emitCoprocessorBranch()): they're counted in instructionsRun, and the run stops (a jump added to leave) once that
+//reaches its limit or the CPU has halted, which is only looked at if the block called the interpreter.
+auto Allegrex::Recompiler::emitCounted(u32 count, std::vector<sljit_jump*>& leave) -> void {
+  emitCount(count, leave);
   if(calls) {
     mov32_u8(reg(0), field(&self.scc.halted));
     leave.push_back(cmp32_jump(reg(0), imm(0), flag_ne));
@@ -475,11 +502,13 @@ auto Allegrex::Recompiler::emitPC(u32 address, bool delaySlot) -> void {
 //instruction runs (emitPC()). If the instruction raises an exception, the block leaves right after it.
 auto Allegrex::Recompiler::emitInterpreter(u32 address, u32 instruction, u32 count, bool delaySlot) -> void {
   calls = true;
+  storeCount();
   emitPC(address, delaySlot);
   mov32(field(&executed), imm(count));
   bool syscall = instruction >> 26 == 0x00 && (instruction & 0x3f) == 0x0c;
   callf(syscall ? &Allegrex::executeSyscall : &Allegrex::execute, imm(address), imm(instruction));
   testJumpEpilog();
+  loadCount();
   forgetAll();  //(it may have written any register)
 }
 
@@ -489,7 +518,9 @@ auto Allegrex::Recompiler::emitInterpreter(u32 address, u32 instruction, u32 cou
 //instruction's would be: the same value).
 auto Allegrex::Recompiler::emitFallback(u32 address, u32 instruction, u32 count, bool delaySlot) -> void {
   auto kept = holding;
+  bool called = calls;  //(not a call that may halt the CPU: emitColdFallback())
   emitInterpreter(address, instruction, count, delaySlot);
+  calls = called;
   holding = kept;
   for(u32 k = 0; k < Held; k++) {
     if(holding.pending[k] >= 0) mov32(sreg(3 + k), gpr(holding.pending[k]));
@@ -513,10 +544,10 @@ auto Allegrex::Recompiler::emitCold(const std::vector<sljit_jump*>& jumps, const
   });
 }
 
-//emitFallback() as cold code.
+//emitFallback() as cold code. The interpreter runs a native instruction there, which halts the CPU only by an
+//exception, after which the block leaves: so it doesn't count among the block's calls (calls).
 auto Allegrex::Recompiler::emitColdFallback(const std::vector<sljit_jump*>& jumps, u32 address, u32 instruction,
                                             u32 count, bool delaySlot) -> void {
-  calls = true;
   emitCold(jumps, [=, this] { emitFallback(address, instruction, count, delaySlot); });
 }
 
@@ -544,10 +575,11 @@ auto Allegrex::Recompiler::take() -> u32 {
   return best;
 }
 
-//Register index's value, to be read: the host register holding it, loaded there first if none does yet (r0, always
-//zero, is read from ipu.r[] as before). Its loading comes before whatever the instruction does with it.
+//Register index's value, to be read: the host register holding it, loaded there first if none does yet (r0 is the
+//constant 0: nothing compiled writes it, and the interpreter sets it to 0 after every instruction). Its loading comes
+//before whatever the instruction does with it.
 auto Allegrex::Recompiler::use(u32 index) -> op_base {
-  if(index == 0) return gpr(0);
+  if(index == 0) return imm(0);
   s32 k = holding.slot[index];
   if(k < 0) {
     k = take();
@@ -559,9 +591,21 @@ auto Allegrex::Recompiler::use(u32 index) -> op_base {
   return sreg(3 + k);
 }
 
+//The registers an instruction reads (rs, and rt where it's a source), where host registers hold them, are kept for it
+//(pinned) before anything is compiled: def() then takes another host register for a result into one of them, so
+//use() still finds the value the instruction reads, whichever of the two it asks for first.
+auto Allegrex::Recompiler::pinSources(u32 instruction) -> void {
+  u32 op = instruction >> 26;
+  bool rt = op == 0x00 || (op >= 0x04 && op <= 0x07) || (op >= 0x14 && op <= 0x17) || op == 0x1f || op == 0x22
+         || op == 0x26 || (op >= 0x28 && op <= 0x2e);
+  for(u32 index : {instruction >> 21 & 31, rt ? instruction >> 16 & 31 : 0}) {
+    if(index && holding.slot[index] >= 0) holding.pinned |= 1 << holding.slot[index];
+  }
+}
+
 //Where register index's new value goes (never r0's: an instruction writing only r0 compiles to nothing), stored by
 //wrote(). Until then the old value is the register's, in ipu.r[] and for use() (which loads it afresh if its host
-//register is now this one).
+//register is now this one: pinSources() keeps that from happening to a value the instruction reads).
 auto Allegrex::Recompiler::def(u32 index) -> op_base {
   s32 k = holding.slot[index];
   if(k >= 0 && !(holding.pinned >> k & 1)) {

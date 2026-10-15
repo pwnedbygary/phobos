@@ -13482,3 +13482,356 @@ list otherwise.
 Scratch: `~/phobos-work/scratch/vk-mx` (`NOTES.md`; `patches/`: the PRIM log, the VRAM dumps (`dbg4-patch.py`,
 `dbg5-patch.py`), the stale-target experiment (`exp2-patch.py`) and the corners' depths (`corner-depth.patch`); `kit/`,
 the hash, picture and speed runs; `tests1.sh`, `suites.sh`).
+
+## Part 94: the CPU, round 3 — the FPU's flush to zero compiled, block endings in fewer steps, the run's count in a register, more of the VFPU compiled
+
+On branch `cursor/psp-cpu-round3-2b67`, on master (`dd37263c8`, #253 merged). The task: round 3 of the CPU's work (parts
+79 and 86), the Allegrex recompiler and the CPU's side of the emulation thread, for the owner's goal of PPSSPP's speed
+with room for fast-forward and upscaling on the Retroid Pocket 6, every emulated result the same (but vfim of a NaN
+half on GCC's builds: change 6). Clean room: PPSSPP not read at all, JPCSP not read. Save states are unchanged (layout
+31): nothing new is kept.
+
+### How it was measured
+
+On the Mac (an M1), the headless runner built as Android builds it (O3, thin LTO), patched in scratch to report the
+emulation thread's CPU time, retired host instructions and cycles (parts 79 and 86), from the scenes' save states:
+part 79's 21, and Hot Wheels' race and Chains of Olympus' difficulty menu (part 74's), the owner's Killzone gameplay
+and the Killzone menu v2.2.0 made (`scratch/scenes-owner`), and MX vs. ATV Untamed riding. Profiles with xctrace and
+round 2's block map (each compiled block's guest words, host code and marks), sorted by a new script (`cats.py`) into the
+whole thread's parts: compiled code by what each host instruction was compiled for, the VFPU's helpers, the
+interpreter called from compiled code, system calls (the GE's display lists run inside them apart), the GE run from the
+kernel's loop. A probe build counted the interpreter's calls from compiled code by instruction, the VFPU's by their
+top 16 bits and whether their prefixes were set, and read FCSR. The Mac was shared with a library check and other
+agents (a load of 6 to 35), so the host instructions a frame carry the comparisons, the times beside them.
+
+### Where the time went (master, Vulkan fast)
+
+| Scene | Compiled code | VFPU helpers | Interpreter from compiled code | System calls' GE |
+| --- | --- | --- | --- | --- |
+| Hot Wheels: Ultimate Racing, race | 23% (its cold paths 3.5%) | 7% | 20% (the FPU's arithmetic) | 48% |
+| Super Monkey Ball Adventures, story | 17% | 8% (vtfm.q on a transposed matrix 5%) | 0 | 74% |
+| Army of Two, playing | 33% | 3% | 1% | 60% |
+| Killzone, gameplay | 34% | 3% | 2.5% | 57% |
+| Colin McRae 2005, race | 33% | 4% | 2% | 56% |
+| Disaster Report 3, playing | 40% | 13% | 1% | 36% |
+| Ghost of Sparta, menu | 12.5% | 1% | 0 | 84% |
+| Chains of Olympus, difficulty menu | 17% | 1% | 0 | 78% |
+
+Compiled code by what it was compiled for, in the CPU-heavy scenes, as shares of the thread: block endings 3 to 11%,
+loads 3 to 9%, ALU 3 to 9%, stores 1 to 3%, branches 1 to 4%, the FPU's loads and stores 1 to 3%.
+
+- **Hot Wheels' FPU through the interpreter**: its FCSR is 0x01000000, flush to zero on. Native FPU arithmetic and
+  compares ran only with that bit clear, so 660,000 FPU instructions a frame (add.s, mul.s, c.lt.s, sub.s...) went to
+  the interpreter through cold code, a fifth of its emulation thread. No other scene had the bit set.
+- **The VFPU through the interpreter**: Colin McRae 16,000 instructions a frame (vf2h, vs2i, vus2i, vh2f, the other
+  packing conversions), Killzone 15,000 (vcrs, vcmp with prefixes set, vs2i, vcrsp), Hot Wheels 14,000 (vrot, vcst),
+  Army of Two 4,500 (vcmov, vqmul), MX vs. ATV 3,300; about 1 to 2.5% of the thread each.
+- **What a block's straight line spends** (the block map, weighted by each block's samples): a block ending stored and
+  loaded the run's count and loaded its limit (6 instructions, the next block's load waiting on this one's store),
+  checked whether the CPU had halted wherever the block had a load or store (its cold path counted as a call into the
+  interpreter), and loaded the target's page table entry (3); an instruction writing a register it also read, the
+  result's host register taken first, loaded the source again from memory (`addiu t0,t0,1`); a branch against r0
+  loaded r0 (1.1 times a block); a load was 8 host instructions, two of them dependent loads (the page table's entry,
+  then the value).
+
+### What was done
+
+1. **The FPU's arithmetic and compares compiled with flush to zero set** (`recompiler-fpu.cpp`: `emitFlush()`,
+   `emitFlushedInputs()`). Native code is compiled for FCSR's bit 24 as it is when its block is compiled (a game sets it
+   once, as it starts, if at all). Set, each input is flushed in integer registers as `f()` flushes it (the sign alone
+   where the exponent is 0: a subnormal becomes the zero of its sign, a zero stays as it is), the same IEEE operation
+   runs on the host, and the result is flushed as `setF()` flushes it, after the host has rounded it: a result rounded
+   up to 2^-126 from below stays, as in the interpreter (a host's own flush-to-zero mode decides before rounding, and
+   would make it 0). A NaN result still goes to the interpreter, which picks its bits. Compares flush their inputs
+   likewise. Every instruction checks the bit and the rounding mode are as compiled, else the interpreter runs it, as
+   before.
+2. **Block endings and registers in fewer steps** (`recompiler.cpp`): `pinSources()` keeps the host registers holding
+   what an instruction reads for it, so a result into one of them takes another register and the source isn't loaded
+   again; a native instruction's way to the interpreter (cold code: an access off the fast path, an overflow) no longer
+   counts as a call that may halt the CPU, since the interpreter halts it there only by an exception, after which the
+   block leaves; and the owner now says which pages' entries in the page table never change (`Allegrex::steady`: the
+   PSP's main RAM and scratchpad, `Memory::buildSteady()`), and a block going on to a block in one of them doesn't
+   look at the entry again (VRAM's pages, which the GE's workers take out while they draw, are still looked at).
+3. **r0 read as the constant 0** in compiled code: nothing compiled writes it, and the interpreter sets it to 0 after
+   every instruction.
+4. **The run's count in a saved register** (`left()`, `storeCount()`, `loadCount()`, `emitCount()`). On ARM64, whose ten
+   saved registers leave room (the held game registers go from 7 to 6), a register holds runLimit less
+   instructionsRun as compiled code runs, and a block's end is a subtraction and a branch. instructionsRun in memory is
+   brought up to date before every call into the interpreter (whose syscalls read it, and may move it and runLimit on,
+   after which the register is worked out again) and wherever the code leaves for run(). x86-64 keeps counting in
+   memory (outside Windows it has six saved registers; Windows' eight would have room, but no check runs the tests
+   there).
+5. **More of the VFPU compiled with the prefixes at rest** (`recompiler-vfpu.cpp`: `vfpuRestPack()`,
+   `vfpuRestConditionalMove()`, `vfpuRestCross()`, `vfpuRestRotate()`): the conversions that move bits about (vf2h, vh2f,
+   vuc2i, vc2i, vus2i, vs2i, vi2uc, vi2c, vi2us, vi2s), vcmovt and vcmovf, vcrs, vcrsp, vqmul and vrot as helpers of
+   their own, each the interpreter's function at rest; vcst as constants the block writes. Each only at the sizes its
+   decoder takes, and with prefixes set, the interpreter's way as before.
+6. **vfim's half float as `halfToFloat()` makes it**, in the interpreter and in compiled code. Both took `vfpuBits()` of
+   the half's float, whose trip through a double keeps a signaling NaN or quiets it as the host's compiler chooses:
+   clang folds the trip away, so a NaN half keeps its bits (master gives that in both engines, built for the Mac as
+   for Android: a probe of both trees' tests at -O3), while GitHub's GCC at -O3 kept the trip in compiled code's
+   constant once this round's code changed its inlining, and its run of the random interpreter-against-recompiler
+   programs met vfim of a half NaN (0xffd8: 0xff8003d8 in the interpreter, 0xffc003d8 compiled). A half float is a
+   float exactly, nothing in it below 2^-126, so `vfpuBits()` changed no other value; now both take `halfToFloat()`'s
+   bits whatever the compiler, which is what clang's builds gave already.
+
+Measured and taken out (`d5c43999b`, out again in `3081c98e2`): **main RAM's loads without the page table**. As the
+code memory started afresh, the recompiler found the largest block of steady pages lying one after another in the
+host's memory as in the PSP's, a power of two in size from a multiple of it (the PSP's 64 MiB of RAM), and kept that
+memory less its first address in S1. A load's physical address xor the region's first address, turned right by the
+alignment's bits, was tested against the bits from the region's size up (`eor`, `ror`, `tst`: in the region and
+aligned, in one test), and the access was then one load from S1; every other load took the page table's way as cold
+code. That took 0.1 to 0.6% of the host instructions on the Mac (below), its cycles within the rounds' spread, and on
+the RP6 nothing either (Army of Two 0.3% less CPU time, Colin McRae 0.3% less, Killzone 0.1% more: "On the RP6"),
+while loads from the scratchpad and VRAM took two more taken branches and the table's lookup out of line. So loads
+are compiled as on master again ("The direct loads taken out", below).
+
+Tried and not taken: loads and stores whose base register a lui made a constant earlier in the block (2% of them);
+keeping registers across blocks (about 3 loads a block, 1% of the thread at most); storing results only at a block's
+end (about one store a block saved). Jumps through a register (jr ra) are 15 to 27% of block endings but 35 to 53% of
+their time, 2 to 3% of the thread: a cache of the last target, invalidated as links are, is the next step there.
+
+### Numbers
+
+The Mac, master (`dd37263c8`) against the branch's code (`2ce7026e9`, the direct loads still in: the last code, without
+them, below the table; `622fd6a0f` after it changes only vfim of a NaN half), the bench runners from the scenes'
+states, medians of three rounds taking turns in Vulkan fast (MoltenVK, 1x) and two in the software renderer (4 drawing
+threads). "Fps it allows" is 1000 over the emulation thread's ms. The Mac's load average was 11 to 25 through these
+rounds (a library check and other agents), so the times swing with the cores the thread got; the host instructions a
+frame hardly move with that, and carry the comparison.
+
+| Scene | Vulkan fast: emulation thread ms a frame (fps it allows) | M host instructions | M cycles | Software: ms | M host instructions |
+| --- | --- | --- | --- | --- | --- |
+| Hot Wheels: Ultimate Racing, race | 30.4 -> 24.3 (33 -> 41), -20% | 340.0 -> 249.0 (-26.8%) | 86.7 -> 68.0 (-22%) | 42.7 -> 40.4 (-5%) | 419 -> 369 (-11.9%) |
+| Colin McRae 2005, race | 9.9 -> 9.3 (101 -> 107), -5% | 91.1 -> 83.3 (-8.7%) | 28.5 -> 26.9 (-5%) | 17.9 -> 18.1 (+1%) | 175 -> 170 (-2.7%) |
+| Killzone, gameplay | 23.6 -> 22.3 (42 -> 45), -5% | 166.2 -> 158.8 (-4.5%) | 66.0 -> 62.7 (-5%) | 50.9 -> 50.1 (-2%) | 495 -> 495 (+0.1%) |
+| Killzone, menu | 18.7 -> 16.5 (53 -> 61), -12% | 122.2 -> 118.7 (-2.8%) | 41.9 -> 45.7 (+9%) | | |
+| Army of Two, playing | 43.3 -> 42.3 (23 -> 24), -2% | 297.2 -> 288.8 (-2.8%) | 116.9 -> 116.0 (-1%) | 84.5 -> 82.7 (-2%) | 833 -> 833 (-0.0%) |
+| Super Monkey Ball Adventures, story | 38.0 -> 38.3 (26 -> 26), +1% | 434.4 -> 425.6 (-2.0%) | 112.8 -> 110.4 (-2%) | 53.6 -> 50.8 (-5%) | 499 -> 491 (-1.6%) |
+| Disaster Report 3, playing | 3.4 -> 3.3 (290 -> 300), -3% | 35.6 -> 33.9 (-5.0%) | 10.1 -> 9.6 (-4%) | 4.8 -> 4.6 (-5%) | 45 -> 44 (-2.8%) |
+| MX vs. ATV Untamed, riding | 23.6 -> 23.7 (42 -> 42), +0% | 276.1 -> 274.3 (-0.6%) | 69.4 -> 67.3 (-3%) | | |
+| Ghost of Sparta, menu | 27.1 -> 26.7 (37 -> 37), -1% | 304.0 -> 301.7 (-0.8%) | 75.1 -> 72.1 (-4%) | | |
+| Chains of Olympus, difficulty menu | 11.0 -> 10.7 (91 -> 93), -2% | 107.2 -> 106.1 (-1.0%) | 31.7 -> 31.2 (-1%) | | |
+| Armored Core Formula Front, playing | 5.4 -> 5.2 (185 -> 191), -3% | 39.5 -> 37.8 (-4.5%) | 15.3 -> 15.1 (-2%) | | |
+| Twisted Metal, playing | 3.8 -> 3.7 (267 -> 271), -2% | 33.2 -> 32.6 (-1.8%) | 10.6 -> 10.6 (-1%) | | |
+| NFS Most Wanted, race | 4.2 -> 4.1 (237 -> 246), -4% | 30.8 -> 30.3 (-1.9%) | 10.8 -> 10.6 (-2%) | | |
+| Death Jr. II, playing | 8.7 -> 8.9 (115 -> 112), +3% | 77.3 -> 75.7 (-2.1%) | 23.1 -> 23.9 (+3%) | | |
+
+Hot Wheels' race takes 27% fewer host instructions and a fifth less time on its emulation thread in Vulkan fast (30.4 to
+24.3 ms a frame): its FPU is compiled now. The scenes that run much guest code take 3 to 9% fewer instructions (Colin
+McRae 8.7%, the VFPU's conversions compiled; Disaster Report 3, Killzone's gameplay and Armored Core 4.5 to 5%); the
+GE-bound scenes 1 to 3% (Army of Two, Monkey Ball, Ghost of Sparta, Chains of Olympus, MX vs. ATV, Death Jr. II),
+their CPU being a sixth to a third of the thread. In the software renderer the emulation thread also draws the bands
+it takes while it waits for the drawing threads (part 74), so its counts follow the scheduling as much as the CPU
+(Hot Wheels 12% fewer there).
+
+The last code, without the direct loads (`3081c98e2`), against master and against `622fd6a0f` (the code the RP6
+measured, the direct loads in), Vulkan fast, 300 frames from the states, two rounds taking turns (a load of 11 to 20):
+
+| Scene | ms a frame: master -> last code | M host instructions: master -> last code | M host instructions: `622fd6a0f` -> last code |
+| --- | --- | --- | --- |
+| Hot Wheels: Ultimate Racing, race | 27.9 -> 21.5 (-23%) | 340.0 -> 250.5 (-26.3%) | 249.0 -> 250.5 (+0.6%) |
+| Colin McRae 2005, race | 9.3 -> 9.2 (-1%) | 91.1 -> 83.8 (-7.9%) | 83.4 -> 83.8 (+0.6%) |
+| Killzone, gameplay | 18.8 -> 18.5 (-1%) | 166.1 -> 159.0 (-4.2%) | 158.4 -> 159.0 (+0.4%) |
+| Super Monkey Ball Adventures, story | 36.4 -> 35.0 (-4%) | 433.9 -> 427.0 (-1.6%) | 425.3 -> 427.0 (+0.4%) |
+
+The gains are the table's above less the direct loads' 0.4 to 0.6% of the instructions; against `622fd6a0f` the
+cycles are within the rounds' spread (-2.7% to +2.3%, single rounds up to 4% apart).
+
+Each change on its own (M host instructions a frame against the commit before, Vulkan fast, two rounds taking turns):
+
+| Scene | flush to zero | endings | r0 | direct loads (taken out) | count | VFPU |
+| --- | --- | --- | --- | --- | --- | --- |
+| Hot Wheels, race | 339.6 -> 259.7 (-23.5%) | 260.1 -> 256.4 (-1.4%) | 256.4 -> 255.6 (-0.3%) | 255.4 -> 254.3 (-0.4%) | 254.5 -> 251.3 (-1.3%) | 251.0 -> 248.6 (-0.9%) |
+| Colin McRae 2005, race |  | 91.0 -> 89.0 (-2.2%) | 89.0 -> 88.4 (-0.6%) | 88.3 -> 87.8 (-0.6%) | 87.9 -> 86.1 (-2.0%) | 86.1 -> 83.1 (-3.5%) |
+| Killzone, gameplay |  | 166.0 -> 163.8 (-1.3%) | 164.0 -> 163.2 (-0.5%) | 163.0 -> 162.4 (-0.4%) | 162.6 -> 160.7 (-1.1%) | 160.7 -> 158.5 (-1.4%) |
+| Army of Two, playing |  | 296.7 -> 293.5 (-1.1%) | 293.5 -> 292.2 (-0.4%) | 292.1 -> 291.8 (-0.1%) | 292.0 -> 289.1 (-1.0%) | 289.1 -> 288.2 (-0.3%) |
+| Disaster Report 3, playing |  | 35.6 -> 35.0 (-1.7%) | 35.0 -> 34.9 (-0.4%) | 34.9 -> 34.7 (-0.6%) | 34.7 -> 34.1 (-1.6%) | 34.2 -> 33.9 (-0.8%) |
+| Super Monkey Ball, story |  | 433.8 -> 430.6 (-0.7%) | 430.6 -> 429.6 (-0.2%) | 429.5 -> 428.6 (-0.2%) | 428.8 -> 425.3 (-0.8%) |  |
+| MX vs. ATV Untamed, riding |  |  |  |  |  | 274.8 -> 274.2 (-0.2%) |
+
+The flush path is Hot Wheels' alone (no other scene sets the bit). The endings' commit takes 0.7 to 2.2% from every
+scene that runs much guest code, the count in a register 0.8 to 2.0%, r0 0.2 to 0.6%, the VFPU's helpers up to 3.5%
+(Colin McRae). The direct loads took 0.1 to 0.6%, their cycles within the rounds' spread on the M1, whose
+out-of-order window is twice the RP6's X3's; measured there on their own, they gave nothing either, and are out.
+
+### Accuracy
+
+Every change is the host's alone; nothing a game can see moves, but vfim of a NaN half on a build GCC compiled
+(change 6: the Linux desktop's), whose bits are now clang's.
+- The branch against master from the 21 scenes' states (part 79's) and five more (Hot Wheels' race, Killzone's
+  gameplay and menu, MX vs. ATV riding, Chains of Olympus' difficulty menu), in the software renderer, Vulkan fast and
+  Vulkan accurate: 100 frames with every frame's picture and all of VRAM hashed, drawing settled (with Vulkan a finish
+  each frame, the same for both builds), then RAM and the machine's whole serialized state: identical, 78 of 78, on the
+  code as measured (`2ce7026e9`), again on `622fd6a0f`, and on the last code (`3081c98e2`, the direct loads taken out)
+  against master with #254 (`e78b4a364`).
+- The FPU's flush path: "fpu flushing" (tests/allegrex): fixed cases (a subnormal and +0, -0 + +0, the smallest normal
+  less a subnormal, differences and products below 2^-126, a product rounded up to 2^-126, 0/0 and -0 * infinity
+  flushed into NaNs, compares of zeros and subnormals), 1,500 random programs of 12 FPU instructions on numbers round
+  2^-126 with flushing mostly on, both engines bit for bit, and a block compiled with flushing one way then run with it
+  the other or with another rounding mode. The random interpreter-against-recompiler programs already set the bit in
+  half their runs.
+- Loads on every kind of page: "loads across pages" (written for the direct loads, kept without their checks): every
+  kind of load at the first and last bytes of a run of steady pages (in the test RAM's middle and at its very end),
+  just outside it, with negative offsets, misaligned, through three other mirrors, on pages apart (steady, listed but
+  not steady, left out), run once and again with two listed pages then taken out of the table, and loads chasing
+  pointers with one off the fast path between: the interpreter's registers and exceptions, and read() reached only
+  for the pages left out.
+- A block going on into a page that isn't steady, compiled with the page listed, then the page taken out and its bytes
+  changed unheard: the block leaves for run(), which interprets the new bytes ("recompiler").
+- The VFPU's new helpers: "vfpu compiled lanes" takes each of the 15 new kinds, 1,500 random instructions of each,
+  random sizes and registers, random prefixes set in the block, in the starting state or not at all, both engines bit
+  for bit.
+- Broken versions of this round's code (`mutate3.py`, scratch, each in a copy of the tree running tests/allegrex, no
+  sanitizers): 43 on the last code, of which 39 are caught (52 and 48 with the direct loads in, their nine all
+  caught); the four that pass change nothing a test or a game can see (`pinSources()` undone: it only picks which host
+  register holds a value; the halted check after an interpreter call taken out where a block's end has a known
+  target: nothing that halts the CPU but by an exception can be before such an end, a syscall, halt or eret ending its
+  block and a delay slot's ending checking always; instructionsRun not stored where a block leaves without chaining:
+  nothing counts in the register there, so it writes what memory holds; vus2i's mask taken out: a halfword shifted
+  left by 15 never reaches bit 31, the interpreter's mask a no-op too). The runs showed four gaps the tests then
+  filled: a page that isn't steady, listed when a block linked into it was compiled, then
+  taken out with its bytes changed unheard (a check skipped where the entry was listed at compile time passed);
+  a direct region twice its size, or moved, over pages that are contiguous in the test's memory (while the direct
+  loads were in: a listed page apart from the region is taken out too, so a load reaching it directly is seen); and a
+  syscall moving the run's limit or count on (now "runs moved by syscalls").
+
+### Checks
+
+- On the last code (`622fd6a0f`): `tests/allegrex/run-tests.sh` 74 groups, 0 failures, sanitized and in release mode
+  on ARM64, and built for x86-64 and run under Rosetta in both modes (the count in memory, the scalar helpers);
+  `tests/psp/run-tests.sh` 525 groups, 0 failures, sanitized (with `ASAN_OPTIONS` `detect_container_overflow=0` beside
+  its usual option, part 92's container-overflow false positive in an unsanitized object's vector) and unsanitized;
+  `tests/psp/ares/run-tests.sh` 340 checks, 0 failed. (A sanitized run under a load of 94 failed "ge loads through the
+  depth buffer's views wait for the threads" once, at its check that the drawing threads were still drawing before
+  any CPU code ran; it passed in every run since.)
+- GitHub: on `5fb38f169` its GCC release build of tests/allegrex met vfim of a NaN half (change 6); on `622fd6a0f` the
+  PSP core's checks (tests/allegrex on x86-64 and ARM64, the runner, the PSP as an ares system, the runner's
+  measurements, tests/psp), the desktop builds (Linux, macOS, Windows) and the Android builds: all pass.
+- With part 93: master moved (#254, Vulkan's frame buffer alpha, `e78b4a364`) and was merged in (`cd97a4630`), the docs
+  alone conflicting. The merge against that master: the 26 scenes' hashes identical in all three renderers (78 of 78);
+  tests/psp 528 groups, 0 failures (sanitized: part 93's groups among them); tests/psp/ares 340/0; tests/allegrex
+  74/0.
+- After the review (`f055ec9f3`, below): `tests/allegrex/run-tests.sh` 78 groups, 0 failures, sanitized and in release
+  mode on ARM64, and built for x86-64 under Rosetta in both modes; `tests/psp/run-tests.sh` 528 groups, 0 failures,
+  sanitized (Homebrew's Vulkan loader on `DYLD_LIBRARY_PATH`, nothing skipped) and unsanitized (nothing skipped);
+  `tests/psp/ares/run-tests.sh` 340 checks, 0 failed; the 78 hashes against master with #254 identical.
+- Without the direct loads (`3081c98e2`): `tests/allegrex/run-tests.sh` 78 groups, 0 failures, sanitized and in
+  release mode on ARM64, and built for x86-64 under Rosetta in both modes; `tests/psp/run-tests.sh` 528 groups, 0
+  failures, sanitized (Homebrew's Vulkan loader on `DYLD_LIBRARY_PATH`, nothing skipped) and unsanitized (nothing
+  skipped); `tests/psp/ares/run-tests.sh` 340 checks, 0 failed; the 78 hashes against master with #254 identical;
+  GitHub's checks on it (the PSP core's, the desktop builds, the Android builds): all pass.
+
+### Left, and why
+
+- **The GE**: 55 to 84% of the emulation thread in every scene measured (the display lists inside the system calls);
+  the CPU's part is a third at most. Ghost of Sparta, Chains of Olympus and Super Monkey Ball are the GE's.
+- **Jumps through a register** (2 to 3% of the thread): a cache of the last target, as above.
+- **The VFPU's helpers left**: Super Monkey Ball's vtfm.q (NEON, 5%), Disaster Report 3's vsge and vslt with prefixes
+  (vfpuEach, 4%), vdot and vhdp at rest (1 to 2%); vcmp, vdot and vfad with prefixes set still go through the
+  interpreter (Killzone 3,700 vcmp a frame).
+- **The FPU's mode check** runs at every instruction (4 host instructions): once a block would need a way to leave the
+  block when it fails, not the interpreter for one instruction.
+- **sqrt.s** has no native code (1,200 a frame in Ghost of Sparta's menu).
+
+### On the RP6
+
+The coordinator ran master (`dd37263c8`) against `622fd6a0f` (the branch's code then, the direct loads in) on the RP6
+with `rp6-compare.sh` (PR #255's runner for Android): eight scenes from their states, 600 frames in Vulkan fast, three
+rounds each, the emulation thread's CPU time, retired instructions and cycles a frame:
+
+| Scene | CPU ms a frame | M instructions | M cycles |
+| --- | --- | --- | --- |
+| Colin McRae 2005, race | 11.94 -> 11.38 (-4.7%) | 108.44 -> 100.47 (-7.3%) | 37.06 -> 35.27 (-4.8%) |
+| Hot Wheels: Ultimate Racing, race | 48.58 -> 46.52 (-4.2%) | 499.23 -> 445.50 (-10.8%) | 129.40 -> 124.51 (-3.8%) |
+| Killzone, gameplay | 17.38 -> 16.77 (-3.5%) | 162.35 -> 154.04 (-5.1%) | 53.95 -> 52.09 (-3.4%) |
+| Disaster Report 3, playing | 3.66 -> 3.54 (-3.2%) | 40.08 -> 38.10 (-4.9%) | 11.27 -> 10.91 (-3.2%) |
+| Super Monkey Ball Adventures, story | 40.58 -> 39.48 (-2.7%) | 441.15 -> 432.90 (-1.9%) | 119.03 -> 115.96 (-2.6%) |
+| Army of Two, playing | 34.78 -> 34.02 (-2.2%) | 271.94 -> 264.12 (-2.9%) | 108.67 -> 106.39 (-2.1%) |
+| Ghost of Sparta, menu | 28.66 -> 28.46 (-0.7%) | 307.94 -> 305.88 (-0.7%) | 84.61 -> 83.63 (-1.2%) |
+| MX vs. ATV Untamed, riding | 25.65 -> 25.51 (-0.5%) | 238.51 -> 236.91 (-0.7%) | 74.84 -> 74.39 (-0.6%) |
+
+Every scene takes less of the thread and none more: the scenes that run much guest code 3 to 5% less CPU time (Colin
+McRae, Hot Wheels, Killzone's gameplay, Disaster Report 3), the GE-bound ones 0.5 to 3% (MX vs. ATV waits on the
+GPU). Hot Wheels gains less there than on the Mac (54 M fewer instructions a frame against 91 M, 4.2% less time
+against 20%); why isn't measured here (no profile from the device).
+
+The direct loads alone (`9586b8c4e` against `d5c43999b`), three scenes, three rounds each:
+
+| Scene | CPU ms a frame | M instructions | M cycles |
+| --- | --- | --- | --- |
+| Army of Two, playing | -0.3% | -0.1% | -0.0% |
+| Colin McRae 2005, race | -0.3% | -0.5% | -0.4% |
+| Killzone, gameplay | +0.1% | -0.3% | +0.0% |
+
+Nothing measurable, as on the Mac, so they were taken out (below). The table's head had them in; without them, the
+Mac's gains are the same (above), so the RP6's should be too. To measure the last code there: the same
+`rp6-compare.sh` commands with `3081c98e2` as the head.
+
+### Review
+
+An independent read-only review of the branch (to `1c951a6f3`) found no blocker: all six changes match the interpreter
+by reading and in every run; its seven probes (flush to zero switched in a block and in a delay slot, code
+overwritten after a block linked into it, through each mirror, r0 as every operand, the direct region at RAM's end,
+runs of 2^63 instructions and more, loads chasing pointers in the region, counts across syscalls that switch
+threads) pass on ARM64 and x86-64, each catching a break made on purpose; and the four surviving mutations are
+equivalent. Its points, all taken (`f055ec9f3`; the direct region it speaks of was taken out after the RP6's numbers:
+"The direct loads taken out", below):
+- **The new paths' coverage**: tests/psp's machine set no steady pages, so none of its groups (its programs on both
+  engines among them) used the direct region or a block going on without the page check; and tests/allegrex's
+  random programs loaded only from just past the harness's direct region. tests/psp's machine now sets them as the
+  system does (its page table group checks which pages are steady and that the region is all 32 MiB of its RAM), and
+  the harness's data is inside the region (the random programs check it). The probes are tests now: "fpu flushing"
+  (the bit switched by ctc1 in a block, either way, with another rounding mode, from r0; and in a jump's delay slot,
+  the target compiled in the other mode), "linked blocks" (main RAM's code rewritten after a block linked into it, by
+  a store in the linking block through each mirror into its own page or another, and by a write the owner reports),
+  "direct loads" (a second layout, the region at RAM's very end, loads with negative offsets, and loads chasing
+  pointers through the region with one off the fast path between), "runs moved by syscalls" (two threads the
+  syscalls switch between, the limit and the count moved), and two new groups, "runs of 2^62 to 2^64" (the count in a
+  register is signed: past 2^63 every block leaves for run(), which counts on) and "r0 as an operand" (every native
+  form, both engines).
+- **The count in a register on ARM64 alone**: Windows' x86-64, with eight saved registers, had it on (and four held
+  game registers, not five), but no check runs the tests there, only the build. x86-64 counts in memory everywhere
+  now.
+- **Flush to zero from a cold boot**: a block compiled before a game sets the bit sends each FPU instruction to the
+  interpreter (its check fails) until the block goes, and the measurements here start from states, which compile
+  afresh. Measured with the probe build from boot: Hot Wheels to its race (5,300 frames with the presses its race
+  scene was made with: frame 4,700 is lap 1) sets the bit before its hot FPU code is compiled. In the race (frames
+  4,700 to 5,300) no FPU arithmetic goes to the interpreter (add.s, mul.s and the compares 0 a frame); what does is
+  what has no native code at all, sqrt.s 547, floor.w.s 283 and round.w.s 16 a frame, as from the race's state (508
+  and 270 there). So nothing is dropped or compiled again when the bit changes.
+- **Smaller points**: `emitFallback()` now keeps `calls` as it was, as its comment said (its interpreter call is cold
+  code emitted after the block's ends, so this changes no code); the handoff's RP6 line; the summary lines say what
+  change 6 now says of vfim on GCC's builds; part 94 said loads from the scratchpad and VRAM went through cold code
+  (until the direct loads were taken out: below).
+- **Mutations again** against the new tests: the same 48 of 52 caught and the same four equivalent ones left, none
+  newly caught or newly missed; 17 of the caught now fail more checks (the flush bit switched in a block, the threads
+  switched, r0 as every operand). The random programs' data in the region takes its fast path (they check it), but
+  sits in its top quarter, where a load without the rotate already fails the region's test and takes the checked way:
+  "direct loads" is what catches the direct mutations.
+- **After the review** (`f055ec9f3`, master with #254 merged): the 26 scenes' hashes against that master identical in
+  all three renderers (78 of 78; against master before #254, MX vs. ATV's two Vulkan runs differ by #254's own
+  change, as they should).
+
+### The direct loads taken out
+
+The RP6 measured nothing from the direct loads (above), and the review had found loads from the scratchpad and VRAM
+slower for them (out of line, two more taken branches), so `3081c98e2` takes them out: loads are compiled as on
+master (S1 the page table again, which the block endings read straight from, as before; the region, `directBase()`
+and `pageTable()` gone), and nothing else changes (flush to zero, the endings with the steady pages, r0, the count in
+a register on ARM64, the VFPU's helpers and vfim stay as they were).
+
+Tests: "direct loads" is "loads across pages" (the same loads on the same pages, without the region's checks); the
+random programs' data stays in a steady page, their check that it lay in the region gone; tests/psp's page table
+group keeps its check of the steady pages, the region's gone. Mutations: the direct loads' nine went with them; of the
+43 left, 39 are caught, and the same four equivalent ones pass. The 78 hashes against master with #254 (`e78b4a364`):
+identical. The Mac: the same gains, less the direct loads' 0.4 to 0.6% of the instructions ("Numbers"); the suites:
+"Checks".
+
+### Scratch
+
+`~/phobos-work/scratch/cpu-round3`: `build.sh`, `run.sh`, `bench2.sh`, `med.py` (medians: `bench/*.tsv`), `hashcmp3.sh`
+and `queue-hash.sh` (`hash/`, `logs/hash-*.log`), `queue-final.sh`, `cats.py` (the thread by part), `regs.py` and
+`ends.py` (the block map's registers and endings), `dis.py` (a block's guest and host code), `patches/probe-patch.py`
+and `probe2-patch.py` (the interpreter's calls, FCSR), `jmcat.sh` and round 2's block map patches (`prof/`), `mutate3.py`
+(`mut/`), `NOTES.md`.

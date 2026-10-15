@@ -270,6 +270,14 @@ auto Memory::buildPages(std::vector<u8*>& table) -> void {
   for(u32 offset = 0; offset < ram.size(); offset += PageSize) table[(RAMBase + offset) / PageSize] = &ram[offset];
 }
 
+//The pages of buildPages()' table whose entries never change (Allegrex::steady), one byte each, nonzero for those:
+//the scratchpad's and main RAM's. VRAM's come and go as the GE's workers draw there (vramGuard).
+auto Memory::buildSteady(std::vector<u8>& steady) -> void {
+  steady.assign(512_MiB / PageSize, 0);
+  for(u32 offset = 0; offset < ScratchpadSize; offset += PageSize) steady[(ScratchpadBase + offset) / PageSize] = 1;
+  for(u32 offset = 0; offset < ram.size(); offset += PageSize) steady[(RAMBase + offset) / PageSize] = 1;
+}
+
 //Copies to and from emulated memory, for the loader and the HLE functions. They do nothing and return false when
 //the range isn't all inside one area (so a game passing a bad buffer gets an error, not a crash).
 auto Memory::copyIn(u32 address, const void* data, u32 size) -> bool {
