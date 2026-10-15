@@ -635,6 +635,7 @@ struct GE {
     std::condition_variable wake, finished;
     u64 round = 0;            //goes up as each batch starts being drawn, which the workers wake for
     bool quit = false;
+    bool held = false;        //the workers take no batch (tests: one kept being drawn till they've looked)
     u64 shared = 8192;        //a batch with fewer pixels is drawn on the GE's thread alone (tests may make it 0)
   } drawing;
 

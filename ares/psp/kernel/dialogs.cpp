@@ -245,10 +245,11 @@ auto Kernel::dialogKeyboard(u32 p, DialogRequest& request) -> void {
 //game's saves (its folders whose names start with the game's): every one, chosen (PPSSPP's notes take one for each
 //"<>", the first not yet listed, marked as unsure). Chosen beside a list's: loading or deleting from it also shows the
 //request's own save where it's there and not listed (savedata() takes it before the list where nothing is chosen, as
-//a list save or delete naming it is answered with no front end). A pattern (savePattern(): '*' or '?') names no save
-//a memory stick holds: in a list, or among the folders "<>" stands for, it's left out (chosen), and as the request's
-//own save in a list mode it's shown as none, with a list or without. Chosen: a list's names are shown whatever the
-//request's pattern takes (PPSSPP's notes show the list's names alone; Dissidia's "GameData*" takes all twenty of its).
+//a list delete naming it is answered with no front end), so saves an older Phobos made under a list save's own name
+//(Lumines II's GAME) still load. A pattern (savePattern(): '*' or '?') names no save a memory stick holds: in a
+//list, or among the folders "<>" stands for, it's left out (chosen), and as the request's own save in a list mode
+//it's shown as none, with a list or without. Chosen: a list's names are shown whatever the request's pattern takes
+//(PPSSPP's notes show the list's names alone; Dissidia's "GameData*" takes all twenty of its).
 //Mode 7 shows every save on the memory stick, of any game (pspautotests' utility/savedata/deletedata: its list all
 //delete went on after deleting the test's save, the PSP's memory stick holding others, and finished CANCEL); the
 //others, the one save they name. Each save as its PARAM.SFO describes it, with the size of its files, the time of its
@@ -490,24 +491,33 @@ auto Kernel::dialogSaved(u32 p, const DialogRequest& asked, const DialogAnswer& 
   return savedata(p, &chosen.name);
 }
 
-//A save dialog no front end shows, answered as a PSP's player who confirms what it shows first. A list's load takes
-//the save the dialog focuses among those it shows (only saves that are there: the list's, and the request's own if
-//it names one that's there), whatever its save name, which names only the save focus 0 takes; or, that one broken,
-//the one the same focus takes among those that aren't (chosen: a player told it's corrupted takes another, the latest
-//still where the latest was focused; the focused one if all are broken). A list's save naming no save of its own
-//("", "<>", or a pattern: savePattern()) takes the list's first name, whatever the focus (chosen: where the automatic
-//answer's later loads will find it; a dialog focusing a new slot, 7 or 8, would spread the saves over the list, and a
-//load focusing the first would then take the oldest). Either name is written into the request's save name, as a choice
-//is (savedata()). Every other mode, a list save that names its save (chosen: that save), a list with no first name, a
-//game's name that isn't a plain one, a list save led by "<>" (to the game's folder alone) or by a pattern (refused)
-//and a list the dialog would show nothing from are answered by savedata() as before (no data to load, or a name
-//refused). Taking the list's first name whether there or not, a load from a list whose first save wasn't made
-//found no data with others there (7th Dragon 2020 lists DATA00 to DATA49); taking the request's own save name before
-//the list, a load whose save name was a pattern looked for a save of that name (Dissidia Final Fantasy's and its
-//012's "GameData*": no data, and back to the title), and one naming a save not there found no data with others in
-//the list there (Disgaea Infinite's Continue names DIP000 beside its 32 slots); with no name written back, Brandish:
-//The Dark Revenant made nothing of a load from a list. Only which saves are there, broken or not, and their dates are
-//looked at, not their sizes or icons: this runs on the emulation thread, and Brandish lists 99 names.
+//A save dialog no front end shows, answered as a PSP's player who confirms what it shows first. A list's load takes the
+//save the dialog focuses among those it shows (only saves that are there: the list's, and the request's own if it names
+//one that's there), whatever its save name, which names only the save focus 0 takes; or, that one broken, the one the
+//same focus takes among those that aren't (chosen: a player told it's corrupted takes another, the latest still where
+//the latest was focused; the focused one if all are broken). A list's save naming no save of its own ("", "<>", or a
+//pattern: savePattern()) takes the list's first name, whatever the focus (chosen: where the automatic answer's later
+//loads will find it; a dialog focusing a new slot, 7 or 8, would spread the saves over the list, and a load focusing
+//the first would then take the oldest). A PSP's list save shows the list's names alone (dialogSaves()) and saves to the
+//one chosen, its save name choosing only what focus 0 focuses: Lumines II names "GAME" beside GAME01 to GAME03, and
+//taken as it was named, its save made a folder no PSP's would. So one naming a save its dialog doesn't show, and that
+//isn't on the memory stick, is answered as one naming none, but that focus 7 or 8 (the first or last new slot) takes
+//the slot the dialog focuses (Lumines II's new profile after a broken GAME01 goes to GAME02, GAME01 kept); and where
+//the slot it would take is on the stick (every slot there for focus 7 or 8, the list's first for the others), its own
+//name is kept, as before: a save the game still has is never written over. Where its own save is on the memory stick,
+//made so by an older Phobos, it's kept too: a second folder for it would leave two saves the game's loads choose
+//between by their dates, a stale one taken and the next save, by its name, sent over the newer. Either name is written
+//into the request's save name, as a choice is (savedata()). Every other mode, a list save naming one of the saves its
+//dialog shows (chosen: that one, which focus 0 takes), a list with no first name, a game's name that isn't a plain one,
+//a list save led by "<>" (to the game's folder alone) or by a pattern (refused) and a list the dialog would show
+//nothing from are answered by savedata() as before (no data to load, or a name refused). Taking the list's first name
+//whether there or not, a load from a list whose first save wasn't made found no data with others there (7th Dragon 2020
+//lists DATA00 to DATA49); taking the request's own save name before the list, a load whose save name was a pattern
+//looked for a save of that name (Dissidia Final Fantasy's and its 012's "GameData*": no data, and back to the title),
+//and one naming a save not there found no data with others in the list there (Disgaea Infinite's Continue names DIP000
+//beside its 32 slots); with no name written back, Brandish: The Dark Revenant made nothing of a load from a list. Only
+//which saves are there, broken or not, and their dates are looked at, not their sizes or icons: this runs on the
+//emulation thread, and Brandish lists 99 names.
 auto Kernel::savedataUnshown(u32 p) -> u32 {
   u32 mode = memory.read(4, p + 48), names = memory.read(4, p + 96);
   std::string game = memory.readString(p + 60, 13), save = memory.readString(p + 76, 20);
@@ -515,8 +525,23 @@ auto Kernel::savedataUnshown(u32 p) -> u32 {
   bool unnamed = save.empty() || save == "<>" || savePattern(save);
   if((mode != 4 && mode != 5) || first.empty() || !plainName(game, 13)) return savedata(p);
   if(mode == 5) {
+    std::string chosen = first;
+    if(!unnamed && plainName(save, 20)) {
+      std::error_code error;
+      std::string own = savePath(game + save);
+      if(!own.empty() && std::filesystem::is_directory(own, error)) return savedata(p);
+      DialogRequest request;
+      request.kind = DialogSavedata;
+      dialogSaves(p, request, false);
+      auto& shown = request.saves;
+      if(std::any_of(shown.begin(), shown.end(), [&](auto& entry) { return entry.name == save; })) return savedata(p);
+      u32 focus = memory.read(4, p) > 1480 ? memory.read(4, p + 1480) : 0;  //(as dialogFocus() reads it)
+      if((focus == 7 || focus == 8) && !shown.empty()) chosen = shown[request.focus].name;
+      for(auto& entry : shown) if(entry.name == chosen && entry.there) return savedata(p);
+      unnamed = true;
+    }
     bool takes = unnamed && first != "<>" && plainName(first, 20) && !savePattern(first);
-    return takes ? savedata(p, &first) : savedata(p);
+    return takes ? savedata(p, &chosen) : savedata(p);
   }
   DialogRequest request;
   request.kind = DialogSavedata;
