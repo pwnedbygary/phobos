@@ -14998,7 +14998,7 @@ savedata traces line for line. CI: the draft PR's checks.
 
 ## Part 101: PGD files on the memory stick — a game's installed data read through the PGD layer (Gunhound EX, 7th Dragon 2020), the PGD layer's answers to a wrong key, a damaged header and a write, and the disc's seek request in an unlocked PGD's data
 
-On branch `cursor/psp-pgd-stick-2b67` (draft PR to come), on master `6ff82f9f1` (part 96, #258, after part 98, #260);
+On branch `cursor/psp-pgd-stick-2b67` (draft PR #263), on master `6ff82f9f1` (part 96, #258, after part 98, #260);
 parts 99 and 100 are #261's and #262's, still open. The first work in the PGD/NPDRM code since the owner opened it to
 agents on 15 Oct 2026 (the handoff's standing note): agents write and maintain `pgd.cpp`, `pgd.hpp`, io.cpp's
 sceNpDrm functions, its PGD requests and the EDATA path, and the owner approves their PRs as any other. Clean room:

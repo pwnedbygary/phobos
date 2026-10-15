@@ -37,7 +37,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP NPDRM: PGD files on the memory stick — a game's installed data read through the PGD layer (Gunhound EX, 7th Dragon 2020); a wrong key, a damaged header and a write refused as the PGD layer refuses them — 2026-10-15
 
-Branch `cursor/psp-pgd-stick-2b67`, on master `6ff82f9f1` (part 96, #258); draft PR to come. docs/psp-core.md, part
+Branch `cursor/psp-pgd-stick-2b67`, on master `6ff82f9f1` (part 96, #258); draft PR #263. docs/psp-core.md, part
 101, has the evidence (parts 99 and 100 are #261's and #262's, still open). The first work in the PGD/NPDRM code
 since the owner opened it to agents (the standing note above). Clean room: tpu's decompilation of the firmware's PGD
 layer (iofilemgr_dnas), uOFW's names, the games; PPSSPP's sceIo.cpp only as a description; JPCSP not read. Save states
