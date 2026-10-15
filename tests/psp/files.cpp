@@ -960,9 +960,10 @@ static auto statusSize(KernelMachine& m, const char* path) -> u32 {
 
 //An emptied file's cut (io.cpp's cut()) reaches the file it emptied and nothing else. Removed while it's open, its
 //cut is dropped, and a file made in its place, as long, is left whole; renamed while open, it follows (its status, its
-//cut), and so does one in a folder renamed; replaced behind the kernel's back by another program's file renamed over
-//it, as long, the replacement is left whole (the cut goes to the file held, which no path names now); and written over
-//by something else, longer or shorter, it's never cut, nor made longer.
+//cut), and so does one in a folder renamed, the rename spelled as the open was or otherwise (a FAT stick's names
+//ignore case), a state then opening it again where it went; replaced behind the kernel's back by another program's
+//file renamed over it, as long, the replacement is left whole (the cut goes to the file held, which no path names
+//now); and written over by something else, longer or shorter, it's never cut, nor made longer.
 static auto fileCutReach() -> void {
   HostFolder stick;
   KernelMachine m;
@@ -995,6 +996,23 @@ static auto fileCutReach() -> void {
   CHECK(statusSize(m, "ms0:/SAVE/F/E.BIN"), 0);
   CHECK(m.call("sceIoClose", {file}), 0);
   CHECK(stick.get("SAVE/F/E.BIN").empty(), true);
+  stick.put("SAVE/K/L.BIN", "0123456789");
+  file = open("ms0:/SAVE/K/L.BIN");
+  CHECK(seek(file, 2), 2);
+  CHECK(putText(m, file, "ab"), 2);
+  CHECK(m.call("sceIoRename", {m.string("ms0:/save/k"), m.string("ms0:/save/n")}), 0);  //(spelled otherwise)
+  CHECK(m.kernel.files[file].path == "ms0:/save/n/L.BIN", true);
+  CHECK(statusSize(m, "ms0:/SAVE/N/L.BIN"), 4);
+  auto renamed = saveState(m);
+  {
+    KernelMachine o;
+    o.kernel.mount("ms0", stick.path.string());
+    CHECK(loadState(o, renamed), true);  //opened again where it went, its cut kept
+    CHECK(o.kernel.files.count(file) && o.kernel.files[file].truncated && o.kernel.files[file].length == 4, true);
+    o.kernel.files.clear();
+  }
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/n/L.BIN") == "01ab", true);
 
   stick.put("SAVE/G.BIN", "0123456789");
   file = open("ms0:/SAVE/G.BIN");
@@ -1178,6 +1196,52 @@ static auto fileReviewTwoHandles() -> void {
   CHECK(stick.get("SAVE/DATA.BIN") == "01234ZY", true);
 }
 
+//The second review's P4: a state with a cut pending (nothing written yet, or a write past the end), loaded after a
+//newer save exactly as long as the host file was: the bytes the cut would drop aren't the state's, so its cut is
+//dropped, and closing the descriptor leaves the newer save whole.
+static auto fileReviewExactLength() -> void {
+  HostFolder stick;
+  for(u32 written : {0u, 4u}) {
+    stick.put("SAVE/DATA.BIN", "0123456789");
+    KernelMachine n;
+    n.kernel.mount("ms0", stick.path.string());
+    u32 file = n.call("sceIoOpen", {n.string("ms0:/SAVE/DATA.BIN"), 0x0602, 0777});
+    if(written) CHECK(n.call("sceIoLseek32", {file, 2, 0}), 2), CHECK(putText(n, file, "ab"), 2);
+    auto during = saveState(n);
+    n.kernel.files.clear();  //(that session gone without a close: nothing cut)
+    stick.put("SAVE/DATA.BIN", "NEWERSAVE!");
+    KernelMachine o;
+    o.kernel.mount("ms0", stick.path.string());
+    CHECK(loadState(o, during), true);
+    CHECK(o.kernel.files.count(file) && !o.kernel.files[file].truncated, true);
+    CHECK(o.call("sceIoClose", {file}), 0);
+    CHECK(stick.get("SAVE/DATA.BIN") == "NEWERSAVE!", true);
+  }
+}
+
+//The second review's P7: two names for one file (a hard link, standing in for a host whose names ignore case and
+//whose paths keep a name as it was asked for). Through the other name, a plain descriptor writes inside the old
+//length: the file is the emptied one, so its length grows to the write's end, and the close keeps the write, as with
+//one name ("01QQ"; master, emptying at once, "\0\0QQ").
+static auto fileReviewTwoNames() -> void {
+  HostFolder stick;
+  stick.put("SAVE/A.BIN", "0123456789");
+  std::error_code error;
+  std::filesystem::create_hard_link(stick.path / "SAVE/A.BIN", stick.path / "SAVE/B.BIN", error);
+  CHECK(bool(error), false);
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  u32 emptied = m.call("sceIoOpen", {m.string("ms0:/SAVE/A.BIN"), 0x0602, 0777});
+  u32 other = m.call("sceIoOpen", {m.string("ms0:/SAVE/B.BIN"), 0x0002, 0});
+  CHECK(statusSize(m, "ms0:/SAVE/B.BIN"), 0);
+  CHECK(m.call("sceIoLseek32", {other, 2, 0}), 2);
+  CHECK(putText(m, other, "QQ"), 2);
+  CHECK(statusSize(m, "ms0:/SAVE/B.BIN"), 4);
+  CHECK(m.call("sceIoClose", {other}), 0);
+  CHECK(m.call("sceIoClose", {emptied}), 0);
+  CHECK(stick.get("SAVE/B.BIN") == "01QQ", true);
+}
+
 //The file I/O trace (Kernel::ioTrace, the runner's --trace-io): a line for each IoFileMgrForUser call, led by the
 //PSP's time and the thread (none here: called directly), with a descriptor's path and position, a read's or write's
 //buffer, size and the hash of its bytes, an open's flags and mode, and the answer; an asynchronous request's due time
@@ -1233,6 +1297,8 @@ auto fileTests() -> Tests {
     {"files review R5: a file shortened behind an emptied file's back", fileReviewNeverLonger},
     {"files review R6: Phobos killed after a rewrite's writes", fileReviewKilled},
     {"files review R7: a reader and a writer beside an emptying open", fileReviewTwoHandles},
+    {"files review P4: a state's cut and a newer save exactly as long", fileReviewExactLength},
+    {"files review P7: two names for one emptied file", fileReviewTwoNames},
     {"files traced", fileTrace},
     {"files dates in local time, none after the clock or before 1980; the system's time zone", fileDates},
     {"files containment", fileContainment},

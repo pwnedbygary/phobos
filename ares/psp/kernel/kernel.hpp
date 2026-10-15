@@ -704,10 +704,11 @@ struct Kernel {
     //from then on, while the host file keeps the bytes it had past them until it's cut (io.cpp's openFile() and
     //cut()): `held`, the host file itself, opened again to be cut through whatever becomes of its path (not
     //saved: a state's is opened again), and `hostLength`, its length as the kernel left it, which it must still
-    //have to be cut.
+    //have to be cut. `tailHash`: in a state, the hash of the bytes the cut would drop (hashTail()).
     bool truncated = false;
     u64 length = 0;
     u64 hostLength = 0;
+    u64 tailHash = 0;
     std::unique_ptr<std::FILE, HeldFileCloser> held;
   };
   std::map<std::string, std::string> devices;  //"ms0" -> the host folder standing for it
@@ -719,6 +720,7 @@ struct Kernel {
   auto fileLength(const std::string& host, u64 hostBytes) -> u64;
   auto fileWritten(const std::string& host, u64 end) -> void;
   auto hold(OpenFile& open) -> s64;
+  auto hashTail(OpenFile& open) -> std::optional<u64>;
   auto cut(OpenFile& open) -> void;
   auto dropCut(OpenFile& open) -> void;
   auto dropCuts(const std::string& host) -> void;
