@@ -543,6 +543,90 @@ static auto discPgdReads() -> void {
   CHECK(m.notes.size(), 0);
 }
 
+//A PGD that doesn't start at its file's start: ioctl 0x04100002 says where it does, and the PSP's PGD layer reads its
+//header there and its data where its descriptor says, counted from there ("tpu"'s decompilation of it), as npdrm has
+//an EDATA's read past its "\0PSPEDAT" header. Given after the offset, the key unlocks the PGD there, and the file reads
+//as its decrypted data from its first byte. And an EDATA on the disc itself, readied by sceNpDrmEdataSetupKey, reads
+//the same way.
+static auto discPgdOffset() -> void {
+  KernelMachine m;
+  auto& memory = m.system.memory;
+  auto plain = pattern(3000, 8);
+  u8 key[16];
+  for(u32 at = 0; at < 16; at++) key[at] = u8(0x40 + at);
+  psp_pgd::Options options;
+  options.keyIndex = 1;
+  options.versionKey = key;
+  auto pgd = psp_pgd::build(plain, options);
+  auto packed = pattern(0x800, 9);  //something before the PGD
+  packed.insert(packed.end(), pgd.begin(), pgd.end());
+  auto image = disc_image::makeIso({
+    {"PSP_GAME/USRDIR/PACKED.BIN", packed}, {"PSP_GAME/USRDIR/DLC.EDAT", psp_pgd::edata(pgd)},
+    {"UMD_DATA.BIN", pattern(32, 4)},
+  });
+  std::string error;
+  m.kernel.disc = openDisc(image.bytes, error);
+  for(u32 at = 0; at < 16; at++) memory.write(1, In + at, 0x40 + at);  //the key
+  memory.write(4, In + 16, 0x800);  //where the PGD starts
+  u32 file = m.call("sceIoOpen", {m.string("disc0:/PSP_GAME/USRDIR/PACKED.BIN"), 0x4000'4001, 0});
+  CHECK(file >= 3 && file < 0x8000'0000, true);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0002, In + 16, 4, 0, 0}), 0);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), 0);
+  CHECK(m.call("sceIoRead", {file, Buffer, 4000}), 3000);
+  std::vector<u8> read(3000);
+  memory.copyOut(read.data(), Buffer, 3000);
+  CHECK(read == plain, true);
+  m.call("sceIoClose", {file});
+  memory.fill(Out, 0x5a, 16);
+  CHECK(m.call("sceNpDrmSetLicenseeKey", {Out}), 0);
+  file = m.call("sceIoOpen", {m.string("disc0:/PSP_GAME/USRDIR/DLC.EDAT"), 0x4000'0001, 0});
+  CHECK(file >= 3 && file < 0x8000'0000, true);
+  CHECK(m.call("sceNpDrmEdataSetupKey", {file}), 0);
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {file}), 3000);
+  CHECK(m.call("sceIoRead", {file, Buffer, 4000}), 3000);
+  memory.copyOut(read.data(), Buffer, 3000);
+  CHECK(read == plain, true);
+  m.call("sceIoClose", {file});
+  CHECK(m.notes.size(), 0);
+}
+
+//An unlocked PGD file's end is its data's, as the PSP's PGD layer seeks it ("tpu"'s decompilation): a game asking
+//where a UMD data file or an EDATA ends (from the end, then back to the start, to learn how much to read) gets the
+//data's size, not the file's with its headers and block MACs. Still locked, a file ends where it does.
+static auto pgdSeekEnd() -> void {
+  KernelMachine m;
+  auto& memory = m.system.memory;
+  auto plain = pattern(3000, 10);
+  u8 key[16];
+  for(u32 at = 0; at < 16; at++) key[at] = u8(0x40 + at);
+  psp_pgd::Options options;
+  options.keyIndex = 1;
+  options.versionKey = key;
+  auto pgd = psp_pgd::build(plain, options);
+  auto image = disc_image::makeIso({{"PSP_GAME/INSDIR/DATA.BIN", pgd}, {"UMD_DATA.BIN", pattern(32, 4)}});
+  std::string error;
+  m.kernel.disc = openDisc(image.bytes, error);
+  for(u32 at = 0; at < 16; at++) memory.write(1, In + at, 0x40 + at);  //the key
+  u32 file = m.call("sceIoOpen", {m.string("disc0:/PSP_GAME/INSDIR/DATA.BIN"), 0x4000'4001, 0});
+  CHECK(m.call("sceIoLseek32", {file, 0, 2}), pgd.size());  //locked: the file's own end
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), 0);
+  CHECK(m.call("sceIoLseek32", {file, 0, 2}), 3000);
+  CHECK(m.call("sceIoLseek32", {file, u32(-100), 2}), 2900);
+  CHECK(m.call("sceIoRead", {file, Buffer, 4000}), 100);
+  m.call("sceIoClose", {file});
+  HostFolder folder;
+  auto edata = psp_pgd::edata(pgd);
+  folder.put("PSP/GAME/NPUH00000/DLC.EDAT", std::string(edata.begin(), edata.end()));
+  m.kernel.mount("ms0", folder.path.string());
+  memory.fill(Out, 0x5a, 16);
+  CHECK(m.call("sceNpDrmSetLicenseeKey", {Out}), 0);
+  file = m.call("sceIoOpen", {m.string("ms0:/PSP/GAME/NPUH00000/DLC.EDAT"), 0x4000'0001, 0});
+  CHECK(m.call("sceNpDrmEdataSetupKey", {file}), 0);
+  CHECK(m.call("sceIoLseek32", {file, 0, 2}), 3000);
+  m.call("sceIoClose", {file});
+  CHECK(m.notes.size(), 0);
+}
+
 //The drive's state, and waiting for it.
 static auto umdDrive() -> void {
   for(bool recompile : {false, true}) {
@@ -963,7 +1047,9 @@ auto discTests() -> Tests {
   return {
     {"disc images", discImages}, {"disc files", discFiles}, {"disc folders read once", discFolders},
     {"disc requests", discRequests},
-    {"disc PGD keys", discKeys}, {"disc PGD reads", discPgdReads}, {"disc drive", umdDrive}, {"disc drive's callback", umdCallback},
+    {"disc PGD keys", discKeys}, {"disc PGD reads", discPgdReads}, {"disc PGD past a file's start", discPgdOffset},
+    {"PGD files end where their data does", pgdSeekEnd},
+    {"disc drive", umdDrive}, {"disc drive's callback", umdCallback},
     {"disc drive mounting as it's activated", umdMounting}, {"memory stick's callback", stickCallback},
   };
 }

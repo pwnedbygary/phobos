@@ -572,32 +572,55 @@ auto Kernel::readFile(u32 file, u32 data, u32 size) -> u32 {
   return u32(moved);
 }
 
-//A PGD file's header descriptor, decrypted once (pgd.cpp): why it can't, or nothing. The header is read from where
-//the file lies (the disc, or the host), and where the data starts is the offset the game gave (0x04100002) if it did,
-//else the descriptor's.
+//How long an open file is, for its PGD: a disc file's size, or a memory stick file's length as the PSP sees it, as
+//its reads, seeks and status do (fileLength(): the host file's, unless a descriptor emptied it as it was opened and
+//keeps its bytes). open.size is kept for the disc's files alone, and is 0 for the memory stick's.
+auto Kernel::pgdFileLength(OpenFile& open) -> u64 {
+  if(open.onDisc) return open.size;
+  open.stream->flush();
+  open.stream->clear();
+  open.stream->seekg(0, std::ios::end);
+  s64 length = s64(open.stream->tellg());
+  open.stream->clear();
+  return length > 0 ? fileLength(open.host, u64(length)) : 0;
+}
+
+//size bytes of an open file from at on, wherever it lies (the disc, or the host): false if they can't all be read,
+//as none past its length (pgdFileLength()) can.
+auto Kernel::pgdFileRead(OpenFile& open, u64 at, u64 size, u8* bytes) -> bool {
+  u64 length = pgdFileLength(open);
+  if(at > length || size > length - at) return false;
+  if(open.onDisc) return disc && disc->read(u64(open.sector) * Disc::SectorSize + at, size, bytes);
+  open.stream->clear();
+  open.stream->seekg(std::streamoff(at));
+  open.stream->read(reinterpret_cast<char*>(bytes), size);
+  bool got = u64(open.stream->gcount()) == size;
+  open.stream->clear();
+  return got;
+}
+
+//A PGD file's header descriptor, decrypted once (pgd.cpp): why it can't, or nothing. Until then, pgdDataOffset says
+//where the PGD itself starts in the file: 0 for a UMD data file, which is a PGD whole; past the "\0PSPEDAT" header for
+//an NPDRM EDATA (sceNpDrmEdataSetupKey); or where ioctl 0x04100002 put it. The PSP's PGD layer reads the 0x90-byte
+//header there, and the descriptor's data offset counts from there too ("tpu"'s decompilation of it: the data at the
+//PGD's offset plus the descriptor's, the table of block MACs past it), so once the descriptor is read pgdDataOffset
+//says where the data starts: 0x90 for a UMD file, 0x120 for a download's EDATA.
 auto Kernel::pgdDescriptor(OpenFile& open) -> std::string {
-  u8 header[0x90];
-  u64 read = std::min<u64>(sizeof(header), open.size);  //the header is 0x90 bytes, or the file if it's shorter
-  if(open.onDisc) {
-    if(!disc->read(u64(open.sector) * Disc::SectorSize, read, header)) return "couldn't read a PGD file's header";
-  } else {
-    open.stream->flush();
-    open.stream->clear();
-    open.stream->seekg(0);
-    open.stream->read(reinterpret_cast<char*>(header), read);
-    if(u64(open.stream->gcount()) < read) return "a PGD file cut short in its header";
-  }
-  //The file's own size, not how much of its header was read: the descriptor says where the data starts and how long it
-  //is, and that is checked against the whole file (pgd.cpp). Handed the 0x90 read above, every PGD file would be
-  //refused for holding more data than its own header.
-  u64 size = open.size;
+  u64 at = open.pgdDataOffset, length = pgdFileLength(open);
+  if(at > length) return "a PGD that starts past its file's end";
+  u8 header[0x90] = {};
+  u64 read = std::min<u64>(sizeof(header), length - at);  //the header is 0x90 bytes, or the file if it's shorter
+  if(!pgdFileRead(open, at, read, header)) return "couldn't read a PGD file's header";
+  //The PGD's own size, from its start to the file's end, not how much of its header was read: the descriptor says
+  //where the data starts and how long it is, and that is checked against the whole PGD (pgd.cpp). Handed the 0x90 read
+  //above, every PGD file would be refused for holding more data than its own header.
   Pgd::Descriptor descriptor;
-  auto why = Pgd::descriptor(header, size, open.pgdVersionKey, descriptor);
+  auto why = Pgd::descriptor(header, length - at, open.pgdVersionKey, descriptor);
   if(!why.empty()) return why;
   //the key the descriptor came out under, which the data must also be decrypted with (pgd.cpp may have recovered it
   //from the header's own MAC when the key the game gave didn't match).
   memcpy(open.pgdVersionKey, descriptor.versionKey, 16);
-  open.pgdDataOffset = open.pgdDataOffset ? open.pgdDataOffset : descriptor.dataOffset;
+  open.pgdDataOffset = u32(at + descriptor.dataOffset);
   open.pgdDataSize = descriptor.dataSize;
   open.pgdBlockSize = descriptor.blockSize;
   memcpy(open.pgdDataKey, descriptor.dataKey, 16);
@@ -606,9 +629,10 @@ auto Kernel::pgdDescriptor(OpenFile& open) -> std::string {
 }
 
 //A PGD file's reads: unlocked with its key (ioctl 0x04100001), the file reads as its decrypted data, its 0x90-byte
-//header hidden: file offset p is data byte p, "CPK " and all. The ciphertext lives behind the header, so it's read
-//from there and decrypted over what the read moved. readCount() already clamped the read to the data, so length here
-//is the whole count whenever the position is inside the data. Set up the descriptor first.
+//header (and an EDATA's own before it) hidden: file offset p is data byte p, "CPK " and all. The ciphertext lives
+//behind the header, so it's read from there and decrypted over what the read moved. readCount() already clamped the
+//read to the data, so length here is the whole count whenever the position is inside the data. Set up the descriptor
+//first.
 auto Kernel::pgdDecryptRead(OpenFile& open, u32 data, u64 count) -> void {
   if(count == 0 || !open.pgd) return;
   if(!open.pgdReady) {
@@ -777,7 +801,13 @@ auto Kernel::sceIoWrite() -> void {
   fileWait(file, wrote, false, s32(wrote) < 0 ? 0 : wrote);
 }
 
-//Moves a file's position: from its start (whence 0), where it is (1), or its end (2). Returns where it is now.
+//Moves a file's position: from its start (whence 0), where it is (1), or its end (2). Returns where it is now. A
+//memory stick file ends where the PSP sees it end (fileLength(): short of the host file's end while a descriptor that
+//emptied it as it was opened keeps its bytes). A PGD file unlocked with its key is its decrypted data
+//(pgdDecryptRead()), so its end is the data's, as the PSP's PGD layer seeks it ("tpu"'s decompilation: from the
+//descriptor's size), not the file's, headers and block MACs and all. No descriptor is both: a PGD file is open only
+//to read (the disc's files can't be opened to write, and sceNpDrmEdataSetupKey readies an EDATA only so), and only a
+//descriptor opened to write empties its file as it's opened (openFile()).
 auto Kernel::seek(u32 file, s64 offset, u32 whence, u64& position) -> u32 {
   auto found = files.find(file);
   if(found == files.end() || found->second.folder || found->second.resultOnly) return ErrorBadFile;
@@ -788,6 +818,8 @@ auto Kernel::seek(u32 file, s64 offset, u32 whence, u64& position) -> u32 {
     std::error_code error;
     size = s64(fileLength(open.host, std::filesystem::file_size(open.host, error)));
   }
+  if(open.pgd && !open.pgdReady) pgdDescriptor(open);
+  if(open.pgd && open.pgdReady) size = open.pgdDataSize;
   s64 base = whence == 0 ? 0 : whence == 1 ? s64(open.position) : whence == 2 ? size : -1;
   if(base < 0 || base + offset < 0) return ErrorInvalidArgument;
   open.position = u64(base + offset);
@@ -1165,18 +1197,26 @@ auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 out
     //A file without PGD's header ("\0PGD") is read as it is: the fan translations of 7th Dragon 2020 and its sequel
     //carry their INSDIR data decrypted, and the games set its key all the same, taking anything but success as the
     //drive failing and opening the file again, for good. A file with the header keeps the key, and reads as its
-    //decrypted data with the header hidden (pgdDecryptRead()); its key (0x10) is in the clear.
+    //decrypted data with the header hidden (pgdDecryptRead()); its key (0x10) is in the clear. The header is looked
+    //for where the PGD starts: the file's start, or where 0x04100002 put it. A file already unlocked stays as it is:
+    //its descriptor came out under the key its own header's MAC holds, whatever key is given now.
     if(open.sectors || inLength < 16 || !memory.reaches(in, 16)) return ErrorFunctionNotSupported;
+    if(open.pgdReady) return 0;
+    u32 at = open.pgd ? open.pgdDataOffset : 0;
     u8 head[4] = {};
-    if(open.size >= 4 && !disc->read(u64(open.sector) * Disc::SectorSize, 4, head)) return ErrorIOError;
+    if(open.size >= u64(at) + 4 && !disc->read(u64(open.sector) * Disc::SectorSize + at, 4, head)) return ErrorIOError;
     if(!memcmp(head, "\0PGD", 4)) {
       memcpy(open.pgdVersionKey, memory.pointer(in, 16), 16);
       open.pgd = true;
       open.pgdReady = false;
+      open.pgdDataOffset = at;
     }
     return 0;
   }
-  case 0x0410'0002: {  //where the encrypted data starts, relative to the file (the rest is read as it is)
+  //where the PGD starts, relative to the file: the PSP's PGD layer reads its header there when the key is given
+  //(0x04100001), and its data where its descriptor says, counted from there ("tpu"'s decompilation; PPSSPP's notes
+  //have npdrm give an EDATA's 0x90 so).
+  case 0x0410'0002: {
     if(open.sectors || inLength < 4 || !memory.reaches(in, 4)) return ErrorFunctionNotSupported;
     open.pgd = true;
     open.pgdReady = false;
@@ -1445,9 +1485,9 @@ auto Kernel::traceBytes(u32 address, u64 size) -> std::string {
 
 //scePspNpDrm_user, the DRM of games sold as downloads: a game gives its licensee key (16 bytes) before it opens its
 //own protected files (EDATA, ".PSPEDAT" with a PGD inside, as the PSP Developer Wiki describes them), which the PSP
-//then decrypts as they're read. There is no DRM here: a key is taken and forgotten, and a game's files are read as
-//they are, so a game's plain files work and an encrypted one reads as its encrypted bytes. uOFW's npdrm exports
-//name the user library's five functions; none has a pspautotests program.
+//then decrypts as they're read. There is no DRM here: no licence is checked, a game's plain files are read as they
+//are, and an EDATA's PGD is decrypted as a UMD data file's is (sceNpDrmEdataSetupKey). uOFW's npdrm exports name the
+//user library's five functions; none has a pspautotests program.
 //(the licensee key, 16 bytes): the key a download game hands before it opens its protected EDATA files. It's the
 //version key the PGD decrypts with (part that follows), stored for sceNpDrmEdataSetupKey to put on them.
 auto Kernel::sceNpDrmSetLicenseeKey() -> void {
@@ -1467,38 +1507,47 @@ auto Kernel::sceNpDrmClearLicenseeKey() -> void {
 //(name): whether a protected file still has the name it was sold with: always, here.
 auto Kernel::sceNpDrmRenameCheck() -> void { result(0); }
 
-//(file): readies an open file's decryption; one not open (or a folder) is BAD_FILE. A protected file is wrapped in
-//EDATA ("\0PSPEDAT"), which wraps a PGD: the licensee key is put on it, and the data is said to start after EDATA's
-//0x90-byte header, so its reads decrypt (io.cpp's 0x04100001 and 0x04100002).
+//(file): readies an open file's decryption; one not open (or a folder) is BAD_FILE. A protected file is EDATA: a
+//"\0PSPEDAT" header, then a whole PGD (the PSP Developer Wiki's PSP_EDAT and PGD pages). The header's word at 0x0c
+//says where the PGD starts, in its low 24 bits (its top byte holds flags: "tpu"'s edata.c, written from npdrm): 0x90
+//in a download's EDATA, whose header ends with its licence's MAC at 0x80, 0x80 in one without (the wiki's
+//examples; PPSSPP's notes take 0x90 always). npdrm gives the PGD layer that offset (ioctl 0x04100002) and the key
+//(0x04100001), so the PGD is read as a UMD file's is from there on: its header, then its data where its descriptor
+//says, counted from the PGD's start (0x120 into the file, in the usual EDATA). The licensee key is put on it as the
+//version key (pgd.cpp recovers the right one from the header's MAC when it isn't). Anything else is read as it is: a
+//plain file, or an EDATA holding something other than a PGD. Only a file open to read alone is readied, as npdrm's
+//callers open their EDATA (0x40000001; chosen: what a PSP makes of one open to write isn't known), so a PGD is never
+//a descriptor that emptied its file as it was opened (openFile(), seek()); one emptied through another descriptor is
+//as long as the PSP sees it (pgdFileLength()).
 auto Kernel::sceNpDrmEdataSetupKey() -> void {
   auto found = files.find(arg(0));
   if(found == files.end() || found->second.folder || found->second.resultOnly) return result(ErrorBadFile);
   auto& open = found->second;
-  if(npdrmLicenseeKeySet) {
-    u8 magic[8] = {};
-    u64 size = std::min<u64>(sizeof(magic), open.size);
-    if(open.onDisc) disc->read(u64(open.sector) * Disc::SectorSize, size, magic);
-    else {
-      open.stream->flush();
-      open.stream->clear();
-      open.stream->seekg(0);
-      open.stream->read(reinterpret_cast<char*>(magic), size);
-    }
-    if(!memcmp(magic, "\0PSPEDAT", 8)) {
-      memcpy(open.pgdVersionKey, npdrmLicenseeKey, 16);
-      open.pgd = true;
-      open.pgdReady = false;
-      open.pgdDataOffset = 0x90;
+  if(npdrmLicenseeKeySet && !open.sectors && !(open.flags & OpenWrite)) {
+    u8 head[16] = {}, magic[4] = {};
+    u64 length = pgdFileLength(open);
+    if(length >= sizeof(head) && pgdFileRead(open, 0, sizeof(head), head) && !memcmp(head, "\0PSPEDAT", 8)) {
+      u32 at = (head[12] | head[13] << 8 | head[14] << 16 | u32(head[15]) << 24) & 0xff'ffff;
+      if(u64(at) + 0x90 <= length && pgdFileRead(open, at, 4, magic) && Pgd::is(magic)) {
+        memcpy(open.pgdVersionKey, npdrmLicenseeKey, 16);
+        open.pgd = true;
+        open.pgdReady = false;
+        open.pgdDataOffset = at;
+      }
     }
   }
   result(0);
 }
 
-//(file): the size of an open file's data: here the file's own size, as nothing is decrypted.
+//(file): the size of an open file's data: an EDATA's readied by sceNpDrmEdataSetupKey, its PGD's data (the
+//descriptor's size, which the PGD layer's ioctl 0x04100010 answers); anything else, the file's own size (a memory
+//stick file's as the PSP sees it: fileLength()).
 auto Kernel::sceNpDrmEdataGetDataSize() -> void {
   auto found = files.find(arg(0));
   if(found == files.end() || found->second.folder || found->second.resultOnly) return result(ErrorBadFile);
   auto& open = found->second;
+  if(open.pgd && !open.pgdReady) pgdDescriptor(open);
+  if(open.pgd && open.pgdReady) return result(open.pgdDataSize);
   u64 size = open.size;
   if(!open.onDisc) {
     open.stream->flush();
