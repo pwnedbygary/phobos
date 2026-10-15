@@ -14288,9 +14288,9 @@ sceIoChstat and the memory stick's attributes), players' reports of Kingdom Hear
 (GameFAQs' and Reddit's "The Memory Stick could not be accessed (80111904)"), the games' own code (Kingdom Hearts'
 traced and disassembled from a dump of its memory) and discs (every INSDIR in the library listed), and PPSSPP's
 `PSPGamedataInstallDialog`, its error codes and its notes on sceIoChstat read only as a description of the PSP, nothing
-copied or translated. JPCSP was not read: a web search showed a few lines of one of its files among its results
-unasked; nothing from them is used (the code they named is reached here another way, below). Save states: unchanged
-(layout 32): the copy isn't state.
+copied or translated. JPCSP was not read; a web search's results showed, unasked, a few lines of one of its files,
+among them a name for 0x80111902. Nothing is taken from them: that code is chosen below from the pattern of the codes
+the clean sources give. Save states: unchanged (layout 32): the copy isn't state.
 
 **What Kingdom Hearts does.** Title > DATA INSTALL > OK > 200 MB > Yes. The game asks the savedata utility's size mode
 about "ULJM05775DATA" (NO_DATA: none yet), then starts the install dialog with 0x598 bytes of parameters: mode 0, the
@@ -14320,9 +14320,8 @@ overwrite?" first). Its statuses are a dialog's: starting, running while it copi
 **The change** (`install.cpp`, new; `utility.cpp`'s Update; `kernel.cpp`, `kernel.hpp`, `serialization.cpp`).
 - At its first Update the dialog lists INSDIR's files (folders in it aren't copied), from the disc image or a host
   folder standing for the disc, and checks the request; then each Update copies a piece, 1 MiB
-  (`InstallBytesPerUpdate`: a fixed amount, so a run takes as many Updates every time; 22 to 27 ms a piece on the
-  Mac while it was shared, mostly the CHD's unpacking), writes the progress and, once every file is there, makes it
-  the save's folder. The statuses and timing are the other dialogs': 200 ms starting, 40 ms closing.
+  (`InstallBytesPerUpdate`: a fixed amount, so a run takes as many Updates every time; 22 to 27 ms a piece from a CHD
+  on the Mac while it was shared), writes the progress and, once every file is there, makes it the save's folder. The statuses and timing are the other dialogs': 200 ms starting, 40 ms closing.
 - **What it writes, and what it may write over** (the PSP's dialog would write the same): the folder
   PSP/SAVEDATA/<game><data>; in it INSDIR's files and PARAM.SFO, over the files of those names already there. Nothing
   else in that folder is touched, and nothing anywhere else on the memory stick but its own copy folder, below.
@@ -14380,7 +14379,7 @@ overwrite?" first). Its statuses are a dialog's: starting, running while it copi
 - `game data install: INSDIR installed, its statuses, progress and PARAM.SFO`, in both sizes: the wrong type before any
   install, a second start refused, Abort and Update refused while it starts, running after 200 ms; three Updates for a
   disc of an icon, a picture, a data file of two and a half MiB, an empty file and a folder (progress 39, 79, then 100
-  and installed); the files byte for byte the disc's, the folder left out, the empty file made; PARAM.SFO's ten keys;
+  and installed); the files byte for byte the disc's, the folder left out, the empty file made; PARAM.SFO's eight keys;
   the two words after the progress untouched; nothing of the copy left; finished, Update does nothing and Abort is
   refused; shut down in 40 ms; the size mode then answers 0 for the data; the trace's lines.
 - `... from a host folder standing for the disc`: the same install.
@@ -14420,11 +14419,11 @@ and the sceIoChstat group fail (master copies nothing and answers 1; sceIoChstat
   for the same file at the same frame, finds none, and reads the disc alone. (`kh/`: `run-v3`, `sheet-v3.png`,
   `run-v3boot`, `sheet-v3boot.png`, `run-baseboot`.)
 - **Gunhound EX** (batch 04's Option > DATA INSTALL): mode 1, "NPJH5072300" and "INST00", all 797 files, 460,394,746
-  bytes, in 439 Updates, every file byte for byte the disc's; asked again, the game says it's installed already and the
-  dialog writes it over. Booted again, the game opens its install with the PGD layer's flag and key (0x40000001, ioctl
-  0x04100001: its files are PGDs), which io.cpp refuses on a memory stick file (`0x8001b000`, part 97's "PGD ioctls on
-  stick files", the owner's area, left alone here): it says it couldn't read the install and plays Mission 01 from the
-  disc. (`gunhound/`.)
+  bytes, in 440 Updates (frames 691 to 1130), every file byte for byte the disc's; asked again, the game says it's
+  installed already and the dialog writes it over. Booted again, the game opens its install with the PGD layer's flag
+  and key (0x40000001, ioctl 0x04100001: its files are PGDs), which io.cpp refuses on a memory stick file
+  (`0x8001b000`, part 97's "PGD ioctls on stick files", the owner's area, left alone here): it says it couldn't read the
+  install and plays Mission 01 from the disc. (`gunhound/`.)
 - **7th Dragon 2020** (title > DATA INSTALL): mode 1, "NPJH50459" and "USERID", 1,532,651,653 bytes (the translation's
   GAME.DNS, a CRI archive it keeps decrypted), installed at frame 3641; booted again, it opens GAME.DNS with the same
   flag and key, is refused the same way twice, says "The installed data could not be read. Data installation will be
