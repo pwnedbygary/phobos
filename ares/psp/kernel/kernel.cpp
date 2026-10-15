@@ -63,6 +63,7 @@ namespace ares::PlayStationPortable {
 #include "jpeg.cpp"
 #include "utility.cpp"
 #include "dialogs.cpp"
+#include "install.cpp"
 #include "power.cpp"
 #include "system.cpp"
 #include "mt19937.cpp"
@@ -450,6 +451,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("IoFileMgrForUser",  "sceIoChdir",                    &Kernel::sceIoChdir);
   add("IoFileMgrForUser",  "sceIoAssign",                   &Kernel::sceIoAssign);
   add("IoFileMgrForUser",  "sceIoGetstat",                  &Kernel::sceIoGetstat);
+  add("IoFileMgrForUser",  "sceIoChstat",                   &Kernel::sceIoChstat);
   add("IoFileMgrForUser",  "sceIoDopen",                    &Kernel::sceIoDopen);
   add("IoFileMgrForUser",  "sceIoDread",                    &Kernel::sceIoDread);
   add("IoFileMgrForUser",  "sceIoDclose",                   &Kernel::sceIoDclose);
@@ -952,6 +954,7 @@ auto Kernel::power() -> void {
   for(auto& callback : hprmCallbacks) callback = 0;
   dialog = {};
   dialogWithdraw();
+  installAbandon();
   utilityModules.clear();
   imposeLanguage = imposeButton = 1;
   geTranslation = 0x400;
