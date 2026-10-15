@@ -748,6 +748,17 @@ auto System::startRenderer() -> void {
       gpu->backend->transforms = false, error.clear();
       passed = gpu->check(error);
     }
+    //(its frame buffers tested against frame buffers drawn over their depth buffers failing it alone: the check again
+    //with those put in memory first, the depth filled from there; asked again once reading is settled below, which
+    //the check looks at first)
+    auto depthMovesAgain = [&] {
+      if(!gpu || passed || !gpu->depthMovesFailed) return;
+      report(true, "the Vulkan renderer's start-up check, its depth taken from frame buffers drawn over the depth "
+                   "buffer on the GPU, failed (" + error + "): checked again with those put in memory first");
+      gpu->backend->depthMoves = false, error.clear();
+      passed = gpu->check(error);
+    };
+    depthMovesAgain();
     if(gpu && !passed && gpu->backend->readsInOrder) {
       auto& b = *gpu->backend;
       b.readsInOrder = b.readsBlending = false, b.reads = b.reads && b.readsApart;
@@ -762,6 +773,7 @@ auto System::startRenderer() -> void {
       gpu->backend->reads = gpu->backend->readsBlending = false, error.clear();
       passed = gpu->check(error);
     }
+    depthMovesAgain();
     if(gpu && !passed) {
       error += " on " + gpu->backend->name();
       gpu.reset();

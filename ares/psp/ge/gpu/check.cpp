@@ -20,7 +20,12 @@
 //  - and there, where the GE's own 3D goes among the GPU's (screenMeshes: screenTriangle()), PRIMs of six corners
 //    (lit and not, one textured, one with its shine kept apart) and a triangle of a mesh cut at the near plane: close
 //    too, so a driver that takes transform.vert's placed vertices wrong fails here, and System checks again with them
-//    drawn apart (screenMeshesFailed), the GPU still transforming the rest.
+//    drawn apart (screenMeshesFailed), the GPU still transforming the rest;
+//  - frame buffers drawn over a depth buffer's memory (a 5551 one, 128x64, and an 8888 one over the same 16 KiB of
+//    another), then a frame buffer of the other size of pixel (8888, 4444) tested against each ("greater or equal",
+//    not written): their pixels as the depth, in the order each format keeps it (gpu.cpp's moveIntoDepth(), on the
+//    GPU where it can: Backend::depthMoves), exactly; a driver that moves them wrong fails here, and System checks
+//    again with them put in memory first (depthMovesFailed).
 //It takes some milliseconds, most of them the GPU making its first pipelines (kept for the game).
 
 auto GPU::check(std::string& error) -> bool {
@@ -132,6 +137,18 @@ auto GPU::check(std::string& error) -> bool {
     layered.push_back({{0, 0, color, x, y}, {0, 0, color, x + w, y + h}});
     layered.push_back({{0, 0, over, x + dx, y + dy}, {0, 0, over, x + dx + w, y + dy + h}});
   }
+  //(the frame buffers drawn over depth buffers: a sprite over all, then smaller ones)
+  constexpr u32 Wide = 128, Tall = 64;
+  std::vector<std::vector<Corner>> pictures[2];
+  for(auto& picture : pictures) {
+    u32 color = random() | random() << 24;
+    picture.push_back({{0, 0, color, 0, 0}, {0, 0, color, Wide, Tall}});
+    for(u32 n = 0; n < 64; n++) {
+      float x = random() % Wide, y = random() % Tall, w = 1 + random() % 32, h = 1 + random() % 16;
+      color = random() | random() << 24;
+      picture.push_back({{0, 0, color, x, y}, {0, 0, color, x + w, y + h}});
+    }
+  }
   //(the 8888 sprites' depth alone, a level for each 16 pixels of each row)
   std::vector<std::vector<Corner>> strips;
   for(u32 y = 0; y < Height; y++) {
@@ -242,6 +259,24 @@ auto GPU::check(std::string& error) -> bool {
       draw(*m, GE::Sprites, layered[n]);
     }
     c[GE::AlphaBlendEnable] = 0, c[GE::MaskColor] = 0;
+    //frame buffers drawn over depth buffers' memory, then tested against: 5551 at 0x1c'0000 under an 8888 one's
+    //depth, 8888 64 wide at 0x1d'0000 under a 4444 one's
+    for(u32 n = 0; n < 2; n++) {
+      u32 depthBuffer = n ? 0x1d'0000 : 0x1c'0000;
+      into(*m, depthBuffer, n ? 3 : 1);
+      u32 across = n ? Wide / 2 : Wide;
+      c[GE::FrameBufferWidth] = across, c[GE::Scissor2] = (across - 1) | (Tall - 1) << 10;
+      for(auto& one : pictures[n]) draw(*m, GE::Sprites, one);
+      into(*m, n ? 0x1a'8000 : 0x1a'0000, n ? 2 : 3);
+      c[GE::FrameBufferWidth] = Wide, c[GE::Scissor2] = (Wide - 1) | (Tall - 1) << 10;
+      c[GE::DepthBufferPointer] = depthBuffer, c[GE::DepthBufferWidth] = Wide;
+      c[GE::ClearMode] = 1 | 1 << 8;  //(the colors alone)
+      draw(*m, GE::Sprites, {{0, 0, 0, 0, 0}, {0, 0, 0, Wide, Tall}});
+      c[GE::ClearMode] = 0;
+      c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 7, c[GE::DepthMask] = 1;
+      draw(*m, GE::Sprites, {{0, 0, 0xffc0'80ff, 0, 0, 32768}, {0, 0, 0xffc0'80ff, Wide, Tall, 32768}});
+      c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0;
+    }
     m->ge.settleAll();
   }
   hardware->ge.setRenderer(nullptr);
@@ -311,6 +346,16 @@ auto GPU::check(std::string& error) -> bool {
       error = "its draws reading the frame buffer in a game-sized picture are " + std::to_string(apart) +
               " bytes off the software renderer's";
       passed = false;
+    }
+  }
+  depthMovesFailed = false;
+  if(passed) {
+    u32 apart = 0;
+    for(u32 n = 0x1a'0000; n < 0x1a'8000 + Wide * Tall * 2; n++) apart += a[n] != b[n];
+    if(apart) {
+      error = "its frame buffers tested against frame buffers drawn over their depth buffers are " +
+              std::to_string(apart) + " bytes off the software renderer's";
+      passed = false, depthMovesFailed = backend->depthMoves;
     }
   }
   drop();

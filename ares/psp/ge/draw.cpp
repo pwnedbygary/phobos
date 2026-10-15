@@ -329,39 +329,6 @@ static auto texelsInside(GE::Region& takes, const GE::Sampler& texture, bool fil
   axis(lowV, highV, takes.bottom + 1, texture.clampV, takes.top, takes.bottom);
 }
 
-//Where a PRIM's pixels can be, inside its region, and their depths (Renderer::begin() asks). In 2D its region is its
-//vertices' reach already, and its depths its vertices', as the GE takes them: held to 0-65535, whole (a sprite's its
-//second corner's, a triangle's stepped between its corners'). In 3D its vertices placed on the screen as
-//transformAll() places them: the rectangle round them, a pixel wider each way than a line's diamonds reach (fast
-//mode's GPU, placing them itself, may round them a hair apart); its region where one is somewhere the GE leaves out
-//or cuts (off the screen, past either end of the depths, behind the camera or nearer than the near plane), which the
-//rectangle can't tell.
-auto GE::reachedBy(bool through, const std::vector<Vertex>& vertices, const Transform& t, const Region& region)
-  -> Reached {
-  Reached all{region, 0, 65535};
-  if(vertices.empty()) return all;
-  if(through) {
-    f32 low = 65535, high = 0;
-    for(auto& vertex : vertices) {
-      if(vertex.z != vertex.z) return all;
-      low = std::min(low, vertex.z), high = std::max(high, vertex.z);
-    }
-    return {region, u32(std::clamp(low, 0.0f, 65535.0f)), u32(std::clamp(high, 0.0f, 65535.0f))};
-  }
-  s32 low[2] = {1 << 30, 1 << 30}, high[2] = {-(1 << 30), -(1 << 30)};
-  for(auto vertex : vertices) {
-    transform(vertex, t);
-    bool cut = !(vertex.clip[3] > 0) || !(vertex.clip[2] + vertex.clip[3] >= 0);
-    if(vertex.outside || vertex.far || vertex.near || cut) return all;
-    s32 at[2] = {fixed(vertex.x), fixed(vertex.y)};
-    for(u32 n : {0u, 1u}) low[n] = std::min(low[n], at[n]), high[n] = std::max(high[n], at[n]);
-  }
-  Region box{floorDivide(low[0] - 1, 16) - 1, floorDivide(low[1] - 1, 16) - 1, floorDivide(high[0], 16) + 1,
-             floorDivide(high[1], 16) + 1};
-  return {{std::max(region.left, box.left), std::max(region.top, box.top), std::min(region.right, box.right),
-           std::min(region.bottom, box.bottom)}, 0, 65535};
-}
-
 auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>& vertices, u32 strip) -> void {
   u32 count = vertices.size();
   strip = std::max(strip, 1u);
@@ -568,15 +535,7 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     decode(look, hardware ? Region{0, 0, -1, -1} : region, drawnRows, !hardware, copyDraws, boxOf);
     if(!look.texture.decoded && !look.deferRows) look.texture.bytes = direct(look.texture);
   }
-  struct Reaching {
-    GE& ge; bool through; const std::vector<Vertex>& vertices; const Transform& t; const Region& region;
-  };
-  Reaching reaching{*this, format.through, vertices, t, region};
-  std::function<auto () -> Reached> reached = [&reaching] {
-    auto& r = reaching;
-    return r.ge.reachedBy(r.through, r.vertices, r.t, r.region);
-  };
-  if(hardware && !renderer->begin(*this, look, format.through, region, reached)) {
+  if(hardware && !renderer->begin(*this, look, format.through, region)) {
     renderer->finish(*this);
     hardware = false, refused = true;
     if(textured) {

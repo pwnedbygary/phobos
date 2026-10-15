@@ -2602,6 +2602,55 @@ static auto gpuSharedDepth() -> void {
   }
 }
 
+//The ways other frame buffers' pixels in a depth buffer's bytes become the depth a PRIM is filled with (GPU::
+//moveIntoDepth()), to try: moved into it on the GPU, where the backend can (Backend::depthMoves, which the tests turn
+//off and on), and put in memory first, as a GPU that can't has them (a finish); and either's name.
+static auto depthWays(GPU* gpu) -> std::vector<bool> {
+  if(gpu->backend->depthMoves) return {true, false};
+  skip("vulkan-moves", "the GPU doesn't move pixels into a depth: only memory's way tested");
+  return {false};
+}
+static auto way(bool moves) -> const char* { return moves ? "moved on the GPU" : "put in memory first"; }
+struct DepthMovesKept {  //(Backend::depthMoves as it was, back as it goes)
+  GPU* gpu;
+  bool was = gpu->backend->depthMoves;
+  ~DepthMovesKept() { gpu->backend->depthMoves = was; }
+};
+
+//The depth a frame buffer of format has on the GPU (GPU::depthOf()), its depth buffer at depthBuffer, 512 wide, against
+//the software renderer's memory there (in the order the format keeps it in: memory.hpp): the depths apart, the first
+//few said.
+static auto depthsApart(GPU* gpu, System& software, u32 address, u32 format, u32 depthBuffer) -> u32 {
+  std::vector<u16> depths;
+  u32 width = 0, height = 0;
+  if(!gpu->depthOf(address, 512, format, depths, width, height) || width != 512) return ~0u;
+  u32 apart = 0;
+  for(u32 y = 0; y < height; y++) {
+    for(u32 x = 0; x < width; x++) {
+      u32 seen = (depthBuffer + (y * 512 + x) * 2) & (Memory::VRAMSize - 1);
+      u32 at = Memory::vramOffset(Memory::depthCopy(format), seen);
+      u32 expected = software.memory.vram[at] | software.memory.vram[at + 1] << 8, got = depths[y * width + x];
+      if(got != expected && apart++ < 4) std::printf("  depth (%u, %u): %04x, the GPU's %04x\n", x, y, expected, got);
+    }
+  }
+  return apart;
+}
+
+//VRAM's bytes the two machines don't agree on, all of them but those from skip to skipEnd (a depth buffer the
+//software renderer writes, the GPU's depth staying on the GPU), the first few said.
+static auto apartBut(System& a, System& b, u32 skip, u32 skipEnd) -> u32 {
+  a.ge.settleAll(), b.ge.settleAll();
+  auto &x = a.memory.vram, &y = b.memory.vram;
+  u32 bytes = 0;
+  for(auto [from, to] : {std::pair<u32, u32>{0, skip}, std::pair<u32, u32>{skipEnd, Memory::VRAMSize}}) {
+    if(from >= to || !std::memcmp(&x[from], &y[from], to - from)) continue;
+    for(u32 n = from; n < to; n++) {
+      if(x[n] != y[n] && bytes++ < 4) std::printf("  VRAM %06x: %02x, the GPU's %02x\n", n, x[n], y[n]);
+    }
+  }
+  return bytes;
+}
+
 //The depth buffer in the order a frame buffer's format has it (memory.hpp: a 16-bit frame buffer's as VRAM's second
 //copy shows it, an 8888 one's as the fourth does), on the GPU as the software renderer has it, its frame buffers and
 //depth buffer 512 pixels wide as games have them (16 rows; the frame buffers at 0, the depth buffer at 0x88000):
@@ -2616,12 +2665,13 @@ static auto gpuSharedDepth() -> void {
 //    the GPU between them by runs of 16, each where the other's order puts the same bytes, put into memory once only,
 //    for the texture;
 //  - a second frame, the depth made again from another picture and the screen's sprite tested against it: the screen
-//    then takes its depth from the 8888 frame buffer's, whose rows the picture changed (filled from memory, after
-//    the finish the picture needs again).
-//Every byte of the screens the software renderer's, at 1x and 2x, in either mode; one finish for a depth fill each
-//frame (GPU::Statistics::depthFinishes).
+//    then takes its depth from the 8888 frame buffer's, whose rows the picture changed (filled from memory, the
+//    picture's pixels with them).
+//Every byte of the screens the software renderer's, at 1x and 2x, in either mode, the picture's pixels moved into the
+//depth on the GPU (no finish) and put in memory first (a finish for a depth fill each frame: depthWays()).
 static auto depthOrders(GPU* gpu) -> void {
   constexpr u32 Depth = 0x8'8000, Scratch = 0x11'6400, Second = 0x1'0000, Rows = 16;
+  DepthMovesKept kept{gpu};
   auto picture = [](u32 frame, u32 x, u32 y) -> u32 {  //(depths 0-999, each frame's own)
     return frame ? (x * 53 + y * 997 + 500) % 1000 : (x * 37 + y * 1031) % 1000;
   };
@@ -2651,9 +2701,10 @@ static auto depthOrders(GPU* gpu) -> void {
     sprite(s, {{{0, 0, 0, 0}, {0, 0, 480, Rows}}, 0xffff'ffff}, 500);
     c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0;
   };
-  for(u32 scale : {1u, 2u}) {
+  for(bool moves : depthWays(gpu)) for(u32 scale : {1u, 2u}) {
     if(!scaleTaken(gpu, scale)) continue;
     gpu->resolution(scale);
+    gpu->backend->depthMoves = moves;
     auto before = gpu->statistics;
     System software, hardware;
     hardware.ge.setRenderer(gpu);
@@ -2687,21 +2738,25 @@ static auto depthOrders(GPU* gpu) -> void {
       return count;
     };
     u32 bytes = apart(software, hardware);
-    if(bytes) std::printf("  %s %ux: %u bytes apart\n", gpu->fast ? "fast" : "accurate", scale, bytes);
+    if(bytes) std::printf("  %s %ux, %s: %u bytes apart\n", gpu->fast ? "fast" : "accurate", scale, way(moves), bytes);
     CHECK(bytes, 0u);
     CHECK(wrong(0, 200), 0u);
     //(the screen's depth, the picture's)
     CHECK(at(Second, 100, 3), 700u), CHECK(at(Second, 300, 3), picture(0, 300, 3));
     //(the 5551 frame buffer's pixel (20, 4) reads the 8888 one's (260, 4), 300; its (128, 4) the 8888's (64, 4), 900)
     CHECK(at(0x3'0000, 20, 4) & 0x7fff, 0x7fffu), CHECK(at(0x3'0000, 128, 4) & 0x7fff, 0u);
-    CHECK(gpu->statistics.depthFinishes - before.depthFinishes, 1u);
+    CHECK(gpu->statistics.depthFinishes - before.depthFinishes, moves ? 0u : 1u);
+    CHECK(gpu->statistics.depthsMoved > before.depthsMoved, moves);
     CHECK(gpu->statistics.depthsPut - before.depthsPut, 1u);  //(the texture's, not the depth taken across the formats)
     for(System* s : {&software, &hardware}) frame(*s, 1);
     bytes = apart(software, hardware);
-    if(bytes) std::printf("  %s %ux, second frame: %u bytes apart\n", gpu->fast ? "fast" : "accurate", scale, bytes);
+    if(bytes) {
+      std::printf("  %s %ux, %s, second frame: %u bytes apart\n", gpu->fast ? "fast" : "accurate", scale, way(moves),
+                  bytes);
+    }
     CHECK(bytes, 0u);
     CHECK(wrong(1, 0), 0u);
-    CHECK(gpu->statistics.depthFinishes - before.depthFinishes, 2u);
+    CHECK(gpu->statistics.depthFinishes - before.depthFinishes, moves ? 0u : 2u);
     hardware.ge.setRenderer(nullptr);
   }
   gpu->resolution(1);
@@ -2713,22 +2768,30 @@ static auto gpuDepthOrders() -> void {
   }
 }
 
-//The finish before a depth fill only where the PRIM's depth test reads the depth filled (GPU::begin()): a picture of
-//depths drawn into the depth buffer's first 16 rows as a 5650 frame buffer, on the GPU (the 5551 screen 512 pixels
-//wide and 32 rows, its depth buffer at 0x88000: the picture's rows one 16 KiB, the rest another), then on machines of
-//their own each of these, and a sprite or quad tested against the depth they leave:
-//  - a clear of all of the depth, or a sprite over all of it written with a test always true: no finish (games clear
-//    their depth so over the bloom they drew into its memory);
-//  - a sprite at 65535 tested "greater or equal", which passes whatever it finds: no finish; one at 65534, which fails
-//    where the picture's 65535: a finish (Chili Con Carnage and Dirt 2 test sprites at 65535 so);
-//  - a 3D quad tested in rows 18-31, below the picture's 16 KiB: no finish; one tested in rows 2-13: a finish (GTA
-//    Chinatown Wars tests its radar below the rows its bloom drew over);
+//Depth filled from memory as a finish then the fill would leave it (GPU::moveIntoDepth()), for every PRIM it's filled
+//for, whether its test reads it or not, and so for every PRIM after that finds it filled: a picture of depths drawn
+//into the depth buffer's first 16 rows as a 5650 frame buffer, on the GPU (the 5551 screen 512 pixels wide and 32
+//rows, its depth buffer at 0x88000: the picture's rows one 16 KiB, the rest another), then on machines of their own
+//each of these, and a sprite or quad tested against the depth they leave ("greater or equal", not written):
+//  - a clear of all of the depth, or a sprite over all of it written with a test always true (games clear their depth
+//    so over the bloom they drew into its memory, or write it so);
+//  - a sprite at 65535, which passes whatever it finds, or at 65534, which fails where the picture's 65535 (Chili Con
+//    Carnage and Dirt 2 test sprites at 65535 so); a 3D quad in rows 18-31, below the picture's 16 KiB, or in rows
+//    2-13 (GTA Chinatown Wars tests its radar below the rows its bloom drew over);
+//  - the review's five that leave the picture's rows filled for the sprite tested after, over them: a sprite at 65535,
+//    a 3D quad below the picture, the left half written with a test always true or cleared, a sprite in rows 16-31;
 //  - another picture drawn after a sprite tested against the first, and a sprite tested against it: the screen's depth
-//    the only one over the depth buffer, its rows filled already, only its own rows memory changed find the picture's
-//    pages (a finish each).
-//Every byte of the screen the software renderer's, at 1x and 2x, in either mode, and each's finishes as said.
-static auto depthReads(GPU* gpu) -> void {
+//    the only one over the depth buffer, its rows filled already, its own rows memory changed taken again (drawn where
+//    the first was, which memory heard of then: own());
+//  - the screen at 0x8'c000, its colors (cleared to a color of their own) the depth buffer's last 16 rows, tested in
+//    its last 16 (the rows of its own it draws no depth but memory's): a finish either way, which puts both frame
+//    buffers' pixels in memory (a target's own pixels don't go into its depth).
+//Every byte of VRAM the software renderer's but the depth buffer's, and every depth the screen has (GPU::depthOf()),
+//at 1x and 2x, in either mode, with the picture's pixels moved into the depth on the GPU (no finish) and put in memory
+//first (a finish).
+static auto depthCurrent(GPU* gpu) -> void {
   constexpr u32 Depth = 0x8'8000, Rows = 32;
+  DepthMovesKept kept{gpu};
   auto picture = [](u32 n, u32 x, u32 y) -> u32 {  //(about 32768, the quads' depth; 65535 every seventh diagonal)
     return (x + y) % 7 == 0 ? 65535 : 32268 + (x * (37 + n * 16) + y * 1031) % 1000;
   };
@@ -2745,10 +2808,10 @@ static auto depthReads(GPU* gpu) -> void {
     s.ge.commands[GE::TextureMappingEnable] = 0;
     into(s, 0, 1);
   };
-  auto tested = [](System& s, float z, float top, float bottom, u32 color) {  //("greater or equal", not written)
+  auto tested = [](System& s, float z, float left, float top, float right, float bottom, u32 color) {
     auto& c = s.ge.commands;
     c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 7, c[GE::DepthMask] = 1;
-    sprite(s, {{{0, 0, 0, top}, {0, 0, 512, bottom}}, color}, z);
+    sprite(s, {{{0, 0, left, top}, {0, 0, right, bottom}}, color}, z);
     c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0;
   };
   auto quad = [](System& s, float top, float bottom) {  //(3D, the screen's width, at 32768, tested as tested())
@@ -2772,8 +2835,17 @@ static auto depthReads(GPU* gpu) -> void {
     s.ge.primitive(GE::Triangles, 6);
     c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0, c[GE::VertexType] = 0x80'019f;
   };
-  auto run = [&](u32 scale, const char* what, u64 finishes, const std::function<void (System&)>& steps) {
-    auto before = gpu->statistics.depthFinishes;
+  auto written = [](System& s, float right, bool clear) {  //(the depth of the screen's left, 30000, every row)
+    auto& c = s.ge.commands;
+    if(clear) c[GE::ClearMode] = 1 | 4 << 8;  //(the depth alone)
+    else c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 1;
+    sprite(s, {{{0, 0, 0, 0}, {0, 0, right, Rows}}, 0xff00'40ff}, 30000);
+    c[GE::ClearMode] = 0, c[GE::DepthTestEnable] = 0;
+  };
+  u32 screen = 0;  //(the screen's address)
+  auto run = [&](u32 scale, bool moves, const char* what, const std::function<void (System&)>& steps) {
+    gpu->backend->depthMoves = moves;
+    auto before = gpu->statistics;
     System software, hardware;
     hardware.ge.setRenderer(gpu);
     for(System* s : {&software, &hardware}) {
@@ -2781,54 +2853,170 @@ static auto depthReads(GPU* gpu) -> void {
       c[GE::FrameBufferWidth] = 512, c[GE::DepthBufferPointer] = Depth, c[GE::DepthBufferWidth] = 512;
       c[GE::Region2] = 1023 << 10 | 1023, c[GE::Scissor2] = 511 | (Rows - 1) << 10;
       c[GE::VertexType] = 0x80'019f, c[GE::ShadeMode] = 1;
-      into(*s, 0, 1);
+      into(*s, screen, 1);
       c[GE::ClearMode] = 1 | 1 << 8;  //(the screen's colors)
-      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 512, Rows}}, 0});
+      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 512, Rows}}, screen ? 0x8000'7654 : 0});
       c[GE::ClearMode] = 0;
       drawPicture(*s, 0);
+      into(*s, screen, 1);
       steps(*s);
     }
-    u32 bytes = apart(software, hardware);
-    u64 finished = gpu->statistics.depthFinishes - before;
-    if(bytes || finished != finishes) {
-      std::printf("  %s %ux, %s: %u bytes apart, %llu depth finishes\n", gpu->fast ? "fast" : "accurate", scale, what,
-                  bytes, (unsigned long long)finished);
+    u32 depths = depthsApart(gpu, software, screen, 1, Depth);
+    u32 bytes = apartBut(software, hardware, Depth, Depth + 512 * Rows * 2);
+    u64 finished = gpu->statistics.depthFinishes - before.depthFinishes;
+    u64 moved = gpu->statistics.depthsMoved - before.depthsMoved;
+    bool none = moves && !screen;  //(no finish: a finish either way where the screen's own pixels are the depth's)
+    if(bytes || depths || (finished == 0) != none || (moved > 0) != none) {
+      std::printf("  %s %ux, %s, %s: %u bytes apart, %u depths, %llu depth finishes, %llu moved\n",
+                  gpu->fast ? "fast" : "accurate", scale, way(moves), what, bytes, depths,
+                  (unsigned long long)finished, (unsigned long long)moved);
     }
-    CHECK(bytes, 0u);
-    CHECK(finished, finishes);
+    CHECK(bytes, 0u), CHECK(depths, 0u);
+    CHECK(finished == 0, none), CHECK(moved > 0, none);
     hardware.ge.setRenderer(nullptr);
   };
-  for(u32 scale : {1u, 2u}) {
+  for(bool moves : depthWays(gpu)) for(u32 scale : {1u, 2u}) {
     if(!scaleTaken(gpu, scale)) continue;
     gpu->resolution(scale);
-    run(scale, "a clear of the depth", 0, [&](System& s) {
-      s.ge.commands[GE::ClearMode] = 1 | 4 << 8;  //(the depth alone)
-      sprite(s, {{{0, 0, 0, 0}, {0, 0, 512, Rows}}, 0}, 30000);
-      s.ge.commands[GE::ClearMode] = 0;
-      tested(s, 32768, 0, Rows, 0xffff'ffff);
+    run(scale, moves, "a clear of the depth", [&](System& s) {
+      written(s, 512, true), tested(s, 32768, 0, 0, 512, Rows, 0xffff'ffff);
     });
-    run(scale, "a sprite written, its test always true", 0, [&](System& s) {
-      s.ge.commands[GE::DepthTestEnable] = 1, s.ge.commands[GE::DepthTest] = 1;
-      sprite(s, {{{0, 0, 0, 0}, {0, 0, 512, Rows}}, 0xff00'40ff}, 30000);
-      s.ge.commands[GE::DepthTestEnable] = 0;
-      tested(s, 32768, 0, Rows, 0xffff'ffff);
+    run(scale, moves, "a sprite written, its test always true", [&](System& s) {
+      written(s, 512, false), tested(s, 32768, 0, 0, 512, Rows, 0xffff'ffff);
     });
-    run(scale, "a sprite at 65535", 0, [&](System& s) { tested(s, 65535, 0, 16, 0xffff'ffff); });
-    run(scale, "a sprite at 65534", 1, [&](System& s) { tested(s, 65534, 0, 16, 0xffff'ffff); });
-    run(scale, "a 3D quad below the picture", 0, [&](System& s) { quad(s, 18, Rows); });
-    run(scale, "a 3D quad over it", 1, [&](System& s) { quad(s, 2, 14); });
-    run(scale, "another picture", 2, [&](System& s) {
-      tested(s, 32768, 0, 16, 0xffff'ffff);
+    run(scale, moves, "a sprite at 65535", [&](System& s) { tested(s, 65535, 0, 0, 512, 16, 0xffff'ffff); });
+    run(scale, moves, "a sprite at 65534", [&](System& s) { tested(s, 65534, 0, 0, 512, 16, 0xffff'ffff); });
+    run(scale, moves, "a 3D quad below the picture", [&](System& s) { quad(s, 18, Rows); });
+    run(scale, moves, "a 3D quad over it", [&](System& s) { quad(s, 2, 14); });
+    run(scale, moves, "a sprite at 65535, then one at 32768", [&](System& s) {
+      tested(s, 65535, 0, 0, 512, 16, 0xffff'ffff), tested(s, 32768, 0, 0, 512, 16, 0xff00'ffff);
+    });
+    run(scale, moves, "a 3D quad below the picture, then a sprite over it", [&](System& s) {
+      quad(s, 18, Rows), tested(s, 32768, 0, 0, 512, 16, 0xff00'ffff);
+    });
+    run(scale, moves, "the left half written with a test always true, then a sprite over all", [&](System& s) {
+      written(s, 256, false), tested(s, 32768, 0, 0, 512, 16, 0xff00'ffff);
+    });
+    run(scale, moves, "the left half's depth cleared, then a sprite over all", [&](System& s) {
+      written(s, 256, true), tested(s, 32768, 0, 0, 512, 16, 0xff00'ffff);
+    });
+    run(scale, moves, "a sprite in rows 16-31, then one in rows 0-15", [&](System& s) {
+      tested(s, 32768, 0, 16, 512, Rows, 0xffff'ffff), tested(s, 32768, 0, 0, 512, 16, 0xff00'ffff);
+    });
+    run(scale, moves, "another picture", [&](System& s) {
+      tested(s, 32768, 0, 0, 512, 16, 0xffff'ffff);
       drawPicture(s, 1);
-      tested(s, 32768, 0, 16, 0xff00'ffff);
+      tested(s, 32768, 0, 0, 512, 16, 0xff00'ffff);
     });
+    screen = 0x8'c000;
+    run(scale, moves, "the screen over the depth's last rows", [&](System& s) {
+      tested(s, 32768, 0, 16, 512, Rows, 0xff00'ffff);
+    });
+    screen = 0;
   }
   gpu->resolution(1);
 }
-static auto gpuDepthReads() -> void {
+static auto gpuDepthCurrent() -> void {
   if(!renderer()) return;
   for(GPU* gpu : {renderer(), fastRenderer()}) {
-    if(gpu) depthReads(gpu);
+    if(gpu) depthCurrent(gpu);
+  }
+}
+
+//Other frame buffers' pixels as the depth, in every pair of formats (GPU::moveIntoDepth()): a picture drawn on the GPU
+//into a frame buffer over a depth buffer's bytes (16-bit, 5650, 5551 or 4444, or 8888: a texture's texels, their
+//alphas the stencil), then a frame buffer of each format tested against that depth ("greater or equal" at 32768, not
+//written), which keeps it in its own format's order (memory.hpp): the screen 512 pixels wide and 32 rows, its depth
+//buffer at 0x88000 (two 16 KiB). The picture's frame buffer starts at the depth buffer's first byte, a page on, 64
+//bytes on, or half a 16 KiB back, its rows 512 pixels or 480 (rows that aren't whole pages), and is drawn only in part,
+//the rest of its bytes memory's (as the CPU left them: a pattern), or drawn whole (its 64 rows: where it starts on
+//the depth's first byte or before, all of the depth's 16 KiB, whose depth isn't taken from memory first then:
+//GPU::depthCovered()), in all its rows but only some columns, or in all its columns from its third row (its pages
+//the first 16 KiB's, not all of their bytes), some of what it drew written over by the CPU since (memory's then:
+//dead). The depth the screen has (GPU::depthOf()) is the software renderer's, depth for depth, and so is every byte of
+//VRAM after, with the pixels moved into the depth on the GPU (no finish) and put in memory first (a finish), at 1x,
+//2x and 3x, in either mode.
+static auto depthMoves(GPU* gpu) -> void {
+  constexpr u32 Depth = 0x8'8000, Rows = 32;
+  DepthMovesKept kept{gpu};
+  struct Place { s32 offset; u32 stride; };
+  static constexpr Place places[] = {{0, 512}, {0x1000, 512}, {0x40, 512}, {-0x2000, 512}, {0, 480}, {0x40, 480}};
+  auto machine = [&](System& s, u32 screen, u32 format, Place place, u32 shape) {
+    for(u32 n = 0; n < 0x6'0000; n += 4) {  //(memory's bytes before: a pattern, from 0x6'0000)
+      u32 word = (n * 0x9e37'79b9u) ^ (n >> 7) * 0x85eb'ca6bu;
+      std::memcpy(&s.memory.vram[0x6'0000 + n], &word, 4);
+    }
+    for(u32 n = 0; n < 512 * 64; n++) s.memory.write(4, GPUTexture + n * 4, u32(n * 0x2545'f491u) ^ n >> 9);
+    auto& c = s.ge.commands;
+    c[GE::Region2] = 1023 << 10 | 1023, c[GE::VertexType] = 0x80'019f, c[GE::ShadeMode] = 1;
+    c[GE::FrameBufferPointer] = Depth + place.offset, c[GE::FrameBufferWidth] = place.stride;
+    c[GE::FrameBufferPixelFormat] = format, c[GE::Scissor2] = (place.stride - 1) | 63 << 10;
+    texture(s, GPUTexture, 512, 64, 512);
+    //(1:1: columns 37-436 of rows 2-59, all its columns and rows, those columns of all its rows, or all its columns
+    //of rows 2-63)
+    if(shape == 0) sprite(s, {{{37, 2, 37, 2}, {437, 60, 437, 60}}, 0xffff'ffff});
+    if(shape == 1) sprite(s, {{{0, 0, 0, 0}, {512, 64, 512, 64}}, 0xffff'ffff});
+    if(shape == 2) sprite(s, {{{37, 0, 37, 0}, {437, 64, 437, 64}}, 0xffff'ffff});
+    if(shape == 3) sprite(s, {{{0, 2, 0, 2}, {512, 64, 512, 64}}, 0xffff'ffff});
+    c[GE::TextureMappingEnable] = 0;
+    for(u32 n = 0; n < 8; n++) s.memory.write(4, Memory::VRAMBase + Depth + 0x5100 + n * 4, 0x1234'5678u * (n + 1));
+    c[GE::FrameBufferPointer] = 0, c[GE::FrameBufferWidth] = 512, c[GE::FrameBufferPixelFormat] = screen;
+    c[GE::DepthBufferPointer] = Depth, c[GE::DepthBufferWidth] = 512, c[GE::Scissor2] = 511 | (Rows - 1) << 10;
+    c[GE::ClearMode] = 1 | 1 << 8;  //(the screen's colors)
+    sprite(s, {{{0, 0, 0, 0}, {0, 0, 512, Rows}}, 0});
+    c[GE::ClearMode] = 0;
+    c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 7, c[GE::DepthMask] = 1;
+    sprite(s, {{{0, 0, 0, 0}, {0, 0, 512, Rows}}, 0xffc0'80ff}, 32768);
+    c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0;
+  };
+  u32 cases = 0;
+  auto ways = depthWays(gpu);
+  for(u32 screen : {0u, 1u, 2u, 3u}) {
+    for(u32 format : {0u, 1u, 2u, 3u}) {
+      for(u32 k : {0u, 1u, 2u, 3u, 4u}) {
+        Place place = places[(screen * 4 + format + k) % std::size(places)];
+        u32 shape = k == 3 ? 0 : k == 4 ? 3 : k;
+        //(the depth's two 16 KiB the picture's drawn bytes: from the first's start, or from before it where it's
+        //drawn from row 2)
+        bool covers = (shape == 1 && place.offset <= 0) || (shape == 3 && place.offset < 0);
+        System software;
+        machine(software, screen, format, place, shape);
+        software.ge.settleAll();
+        for(bool moves : ways) for(u32 scale : {1u, 2u, 3u}) {
+          if(!scaleTaken(gpu, scale)) continue;
+          gpu->resolution(scale);
+          gpu->backend->depthMoves = moves;
+          auto before = gpu->statistics;
+          System hardware;
+          hardware.ge.setRenderer(gpu);
+          machine(hardware, screen, format, place, shape);
+          u32 depths = depthsApart(gpu, software, 0, screen, Depth);
+          u64 finished = gpu->statistics.depthFinishes - before.depthFinishes;
+          u64 moved = gpu->statistics.depthsMoved - before.depthsMoved;
+          u64 covered = gpu->statistics.depthsCovered - before.depthsCovered;
+          u32 bytes = vramApart(software, hardware);
+          bool wrong = (finished == 0) != moves || (moved > 0) != moves || (covered > 0) != (moves && covers);
+          if(bytes || depths || wrong) {
+            std::printf("  %s %ux, %s: screen %u over picture %u at %+d, %u wide, shape %u: %u bytes apart, %u depths, "
+                        "%llu depth finishes, %llu moved, %llu covered\n", gpu->fast ? "fast" : "accurate", scale,
+                        way(moves), screen, format, place.offset, place.stride, shape, bytes, depths,
+                        (unsigned long long)finished, (unsigned long long)moved, (unsigned long long)covered);
+          }
+          CHECK(bytes, 0u), CHECK(depths, 0u);
+          CHECK(finished == 0, moves), CHECK(moved > 0, moves), CHECK(covered > 0, moves && covers);
+          hardware.ge.setRenderer(nullptr);
+        }
+        cases++;
+      }
+    }
+  }
+  CHECK(cases, 80u);
+  gpu->resolution(1);
+}
+static auto gpuDepthMoves() -> void {
+  if(!renderer()) return;
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(gpu) depthMoves(gpu);
   }
 }
 
@@ -4193,8 +4381,10 @@ auto gpuTests() -> Tests {
     {"gpu a depth buffer two frame buffers draw with: the depth either drew taken by the other", gpuSharedDepth},
     {"gpu the depth buffer in each format's order: a depth made as a picture through VRAM's second copy, read as a "
      "texture, drawn with two formats", gpuDepthOrders},
-    {"gpu a finish before a depth fill only where the PRIM's test reads it: not a clear's, nor one its depths decide, "
-     "nor rows a 3D one's vertices don't reach; the screen's own rows memory changed", gpuDepthReads},
+    {"gpu depth filled from memory as a finish would leave it, for every PRIM after: other frame buffers' pixels moved "
+     "into it on the GPU, or put in memory first", gpuDepthCurrent},
+    {"gpu other frame buffers' pixels as the depth in every pair of formats, at offsets, in part, at 1x-3x: moved on "
+     "the GPU as a finish then a fill would leave them", gpuDepthMoves},
     {"gpu a 5551 frame buffer's stencil bit filled by INCREMENT, emptied by DECREMENT, taken as a texture's alpha",
      gpuStencilBit},
     {"gpu the frame buffer's alpha as its stencil has it, where operations changed it without a color: blended by, "

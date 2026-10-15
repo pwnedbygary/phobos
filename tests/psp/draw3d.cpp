@@ -1046,10 +1046,7 @@ static auto draw3dFours() -> void {
 struct NothingDrawn : GE::Renderer {
   bool transforms = false;
   auto ready() const -> bool override { return true; }
-  auto begin(GE&, const GE::Look&, bool, const GE::Region&, const std::function<auto () -> GE::Reached>&)
-    -> bool override {
-    return true;
-  }
+  auto begin(GE&, const GE::Look&, bool, const GE::Region&) -> bool override { return true; }
   auto triangle(const GE::Vertex&, const GE::Vertex&, const GE::Vertex&) -> void override {}
   auto sprite(const GE::Job&) -> void override {}
   auto point(const GE::Vertex&) -> void override {}
