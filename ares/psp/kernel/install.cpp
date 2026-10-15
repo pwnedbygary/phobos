@@ -89,6 +89,17 @@ auto Kernel::installWriteFailed() -> u32 {
   return !error && space.available < InstallHostRoom ? InstallNoSpace : InstallAccess;
 }
 
+//Whether the copy's folder, and the copies' folder it's in, are still the folders installBegin() made on the stick,
+//not links a host put in their place: through one, the copy's files would be written, moved into the saves, or taken
+//away off the stick.
+auto Kernel::installFolderIntact() -> bool {
+  namespace fs = std::filesystem;
+  std::error_code error;
+  fs::path folder = install.partial;
+  return fs::is_directory(fs::symlink_status(folder.parent_path(), error))
+      && fs::is_directory(fs::symlink_status(folder, error));
+}
+
 //(at an Update while the dialog runs, from dialogUpdate()) The copy begun, or carried on a piece, its progress
 //written; once every file is there, made the save's folder, and the dialog finished.
 auto Kernel::installUpdate() -> void {
@@ -187,13 +198,14 @@ auto Kernel::installBegin() -> u32 {
 
 //A piece of the copy: up to InstallBytesPerUpdate bytes, the next of each file in turn, onto the end of its copy (an
 //empty file made as it's reached). 0, or the answer the dialog finishes with (for a write that fails,
-//installWriteFailed()'s). The copy must be as the install left it, nothing there before a file's first piece and a
-//file of its own as long as what's been copied after: one the host took away, cut short or put a link in place of
-//meanwhile (a tool keeping the stick in step with another device's, say) would otherwise be made again or written on
-//at its end, a short install answered 0, or be written through the link. It gives the install up instead
-//(0x80111904), as a write failing does.
+//installWriteFailed()'s). The copy must be as the install left it, its folders real ones (installFolderIntact()),
+//nothing there before a file's first piece and a file of its own as long as what's been copied after: one the host
+//took away, cut short or put a link in place of meanwhile (a tool keeping the stick in step with another device's,
+//say) would otherwise be made again or written on at its end, a short install answered 0, or be written through the
+//link. It gives the install up instead (0x80111904), as a write failing does.
 auto Kernel::installStep() -> u32 {
   namespace fs = std::filesystem;
+  if(!installFolderIntact()) return InstallAccess;
   std::vector<u8> bytes;
   for(u64 left = InstallBytesPerUpdate; install.file < install.files.size() && left;) {
     auto& file = install.files[install.file];
@@ -228,12 +240,13 @@ auto Kernel::installRead(const Install::File& file, u64 at, u64 size, u8* data) 
 //folder there, else afresh; a broken one afresh), then the copy made the save's folder, or each of its files moved into
 //the one there over the file of its name, PARAM.SFO last. 0, or the answer the dialog finishes with. (What's at the
 //save's folder is looked at again here: installBegin() looked before the copy, which a host may have changed since.
-//So is each file of the copy, a file of its own as long as the disc's, as a host may have taken one away or cut it
-//short after its last piece: 0x80111904 rather than a short install.)
+//So are the copy's folders, real ones still, and each file of the copy, a file of its own as long as the disc's, as a
+//host may have taken one away or cut it short after its last piece: 0x80111904 rather than a short install.)
 auto Kernel::installCommit() -> u32 {
   namespace fs = std::filesystem;
   u32 p = dialog.parameters;
   std::error_code error;
+  if(!installFolderIntact()) return InstallAccess;
   for(auto& file : install.files) {
     auto path = fs::path(install.partial) / file.name;
     if(!fs::is_regular_file(fs::symlink_status(path, error)) || fs::file_size(path, error) != file.size) {
@@ -300,13 +313,15 @@ auto Kernel::installFinish(u32 answer) -> void {
 
 //The copy's own folder taken away, with whatever's left in it (nothing, once it's become the save's), and the stick's
 //folder for copies with it if that leaves it empty; nothing else. As the dialog finishes, as the game aborts it, as
-//the machine is reset, and as a state is loaded.
+//the machine is reset, and as a state is loaded. A link a host put in the place of either folder is taken away
+//itself: nothing is taken away through it.
 auto Kernel::installAbandon() -> void {
   namespace fs = std::filesystem;
   std::error_code error;
   if(!install.partial.empty()) {
-    fs::remove_all(install.partial, error);
-    fs::remove(fs::path(install.partial).parent_path(), error);
+    fs::path folder = install.partial;
+    if(!fs::is_symlink(folder.parent_path(), error)) fs::remove_all(folder, error);
+    fs::remove(folder.parent_path(), error);
   }
   install = {};
 }

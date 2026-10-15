@@ -518,11 +518,12 @@ static auto installCopiesFolder() -> void {
 
 //The copy changed behind the install's back between Updates, by the host (no program can reach it), as a tool keeping
 //the memory stick in step with another device's might change it: the data file being copied taken away, cut short to
-//4 KiB, or a link to a file off the stick put in its place, or such a link where a file is yet to go; and, on a disc of
-//a small file and a large one, the small file (copied whole at the first Update) taken away or cut short before the
-//last. Each time the install gives up with 0x80111904 (the stick couldn't be written) rather than install short or
-//write through the link: nothing among the saves, no copy left, the file off the stick untouched; the next install
-//installs whole.
+//4 KiB, or a link to a file off the stick put in its place, or such a link where a file is yet to go; on a disc of a
+//small file and a large one, the small file (copied whole at the first Update) taken away or cut short before the
+//last; and, on a disc whose first file fills the first Update, the copy's own folder, or the copies' folder it's in,
+//put in place of by a link to a folder off the stick. Each time the install gives up with 0x80111904 (the stick
+//couldn't be written) rather than install short or write through the link: nothing among the saves, no copy left,
+//nothing off the stick written or taken away; the next install installs whole.
 static auto installCopyChanged() -> void {
   HostFolder outside;
   outside.put("KEEP.BIN", "off the stick");
@@ -578,6 +579,24 @@ static auto installCopyChanged() -> void {
     else fs::remove(copied(m, "A.BIN"), error);
     CHECK(error.value(), 0);
     CHECK(m.finish() == 2 && m.result() == 0x8011'1904, true);
+    CHECK(fs::exists(m.saved("ULJM99999DATA")) || fs::exists(fs::symlink_status(m.copies())), false);
+    CHECK(m.close(), true);
+  }
+  for(bool own : {true, false}) {
+    HostFolder off;
+    off.put("ULJM99999DATA/KEEP.BIN", "off the stick");
+    InstallMachine m;
+    m.kernel.disc = discFrom(disc_image::makeIso({{"PSP_GAME/INSDIR/A.BIN", pattern(Piece, 9)},
+                                                   {"PSP_GAME/INSDIR/B.BIN", pattern(1000, 10)}}).bytes);
+    installParameters(m, 0x598, 0, "ULJM99999", "DATA");
+    CHECK(m.start() && !m.update() && m.status() == 2, true);
+    auto swapped = own ? m.copies() / "ULJM99999DATA" : m.copies();
+    std::error_code error;
+    fs::remove_all(swapped, error);
+    fs::create_directory_symlink(own ? off.path / "ULJM99999DATA" : off.path, swapped, error);
+    CHECK(error.value(), 0);
+    CHECK(m.finish() == 1 && m.result() == 0x8011'1904, true);
+    CHECK(tree(off.path).size() == 1 && off.get("ULJM99999DATA/KEEP.BIN") == "off the stick", true);
     CHECK(fs::exists(m.saved("ULJM99999DATA")) || fs::exists(fs::symlink_status(m.copies())), false);
     CHECK(m.close(), true);
   }

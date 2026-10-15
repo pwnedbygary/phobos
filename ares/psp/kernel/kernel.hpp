@@ -2191,6 +2191,7 @@ struct Kernel {
   static constexpr const char* InstallCopies = ".phobos-install";
   auto installLeftovers(const std::string& stick) -> bool;
   auto installWriteFailed() -> u32;
+  auto installFolderIntact() -> bool;
   auto installUpdate() -> void;
   auto installBegin() -> u32;
   auto installStep() -> u32;
