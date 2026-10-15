@@ -30,6 +30,63 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP I/O: memory stick files emptied as they're opened keep their bytes (LittleBigPlanet's install), and the runner's file I/O trace — 2026-10-14
+
+Branch `cursor/psp-installs-2b67`, on master `dd37263c8`, merged with `e78b4a364` (part 93; only the docs met); draft
+PR #257. docs/psp-core.md, part 95, has the evidence. Clean room:
+PPSSPP's issue 579 and its directory file system's comments read as the hardware's description, none of its code;
+JPCSP not read. Save states: layout 32 (31 and older load as before; `tests/psp/ares/system.cpp` now refuses 33).
+- **The bug** (deep play batch 04's bug 1, high): LittleBigPlanet's first-boot install left GUI.ARC's first 4 MiB zero,
+  and the game asked "Save data load failed because the data is corrupt. Retry?" for good.
+- **The trace** (`tools/psp-runner --trace-io`, `Kernel::ioTrace`): each IoFileMgrForUser call with its answer, the
+  descriptor's path and position, sizes, buffers and the bytes' hash, and asynchronous requests as they're done. It
+  showed the game's file library copying GUI.ARC a MiB at a time, opening the stick's file with O_TRUNC (0x02000602)
+  for each MiB, seeking to its place and writing it; each open emptied the file.
+- **What a PSP does** (PPSSPP's issue 579, this game, tested on a PSP's memory stick): a file emptied as it's opened
+  keeps its bytes for a write past its end ("test", then O_TRUNC, seek 4, "abc": "testabc"), and with nothing written
+  it ends empty.
+- **The change** (io.cpp, async.cpp, kernel.cpp, kernel.hpp, serialization.cpp, system.cpp, utility.cpp, dialogs.cpp):
+  such a file isn't emptied on the host; its descriptor holds the PSP's length of it, from 0, which reads, seeks from
+  the end, sceIoGetstat, a folder's entries and appends see; writes raise it. The host file is cut to it through a
+  second handle held on the file itself (never by path), only while the file has the length the kernel left it, and
+  only ever shorter: as soon as a write starts at or before the length (a save rewritten from its start), or as the
+  file is closed (sceIoClose, sceIoCloseAsync, the kernel powering on, a state loaded over the program). sceIoRemove
+  and the savedata utility's writes and deletes drop a cut on their files; sceIoRename moves descriptors with their
+  file (PSP paths matched whatever their case). Files are matched by the host's identity of them, so two names for one
+  file share its length and cut. A state keeps both lengths and the hash of the bytes a pending cut would drop, and a
+  loaded one keeps its cut only while the host file has that length and those bytes.
+- **The review** (round 2, changes requested on `300e03e14`: the delayed cut could reach save data master leaves whole):
+  a cut by path (R1: a file renamed onto an emptied file's name emptied at the old descriptor's close; R2: an emptied
+  file renamed while open never cut), a state's descriptor cutting a newer save or padding a shorter one (R4, R5), a
+  state load dropping the session's cuts (R3), and Phobos killed between a rewrite's last write and its close leaving
+  the old tail (R6). All fixed as above; R1 to R7 are tests now. The reviewer's NPDRM nit (a memory stick EDATA gets
+  no PGD state, as on master) is the owner's area, left to him. Round 3 (the second review approved `6b26d4b63`,
+  leaving three small things): its P4 (a state's cut and a newer save exactly as long, which the length alone let
+  through) closed by the tail hash; its P7 (a write through another name for the file lost at the close: part 95's
+  claim was inexact) closed by matching files by identity; renames spelled otherwise than the open now carry the PSP
+  path. P4 and P7 are tests; its P1 to P7 and R1 to R7 pass.
+- **LittleBigPlanet now**: GUI.ARC byte for byte the disc's archives/gui.arc; one boot from a fresh stick reaches its
+  first level, where Sackboy walks, and a second boot takes the installed data (deepplay/LittleBigPlanet:
+  fixed-path.txt, sheet-fx4.png, z-fixed-install-to-level.png, sheet-fx4b.png; round 2: run-r2a, sheet-r2a.png).
+  Its profile saves (18 files through its file library, each emptied as it's opened and written from its start): a
+  second boot rewrites PS.BIN over the file there, a third reads it back, master's runner leaving the same files byte
+  for byte at each boot (r2-profile-roundtrip.txt).
+- **Kingdom Hearts BbS FM's DATA INSTALL** (bug 3, medium), traced, not fixed: it uses the system's game data install
+  dialog (sceUtilityGamedataInstall), part 37's cancel stub, so nothing is copied and the game's clean-up finds no
+  ULJM05775DATA folder. Needs that utility implemented (a feature of its own).
+- **Checks** (round 2): tests/psp 541/0 sanitized (`detect_container_overflow=0`) and unsanitized; tests/allegrex
+  68/0; tests/psp/ares 348/0; the runner's test passes; GCC 13.3 builds the changed files with `-Wall -Wextra -Werror`.
+  Against master the review's R1-R6 pass and R7 fails (zeros where the old bytes come back); against the first round
+  R1-R6 fail. The 21 scenes in Software against master: every frame's picture and VRAM, and RAM, identical; the
+  machine's state differs only by layout 32 (the version, 17 bytes an open file: the branch writing layout 31 gives
+  master's states byte for byte). Batch 04's saves (Gundam NEXT PLUS, Kurohyou 1, Lunar, Killzone, Lumines, La Pucelle
+  Ragnarok, MediEvil): the same files byte for byte as master's runner makes (and as the first round's), and each loads
+  on a second boot.
+- **Left**: the game data install utility (KH BbS FM; Gunhound EX's DATA INSTALL cancels too). What a PSP's
+  sceIoGetstat says of a file emptied so before it's written, and what a gap past its old bytes holds, aren't recorded.
+  What the cut can't tell from a file left as it was (part 95): a newer save whose dropped bytes are the state's byte
+  for byte, and within a session another host program's in-place write of the same length.
+
 ## PSP CPU: the FPU's flush to zero compiled, block endings in fewer steps, the run's count in a register, more of the VFPU compiled — 2026-10-14
 
 Branch `cursor/psp-cpu-round3-2b67`, on master (`dd37263c8`, #253). docs/psp-core.md, part 94, has the evidence.

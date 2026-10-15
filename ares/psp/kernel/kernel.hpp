@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdio>
 #include <ctime>
 #include <deque>
 #include <filesystem>
@@ -257,6 +258,10 @@ struct Kernel {
   //(dialogs.cpp), what they answer without doing a request isn't traced: a dialog backed out of, the notices that
   //there's nothing to load or delete, and the deletes from a list.
   std::function<auto (const std::string& text) -> void> savedataTrace;
+  //Each file request (IoFileMgrForUser's functions) with its answer, and each asynchronous request as it's done, a
+  //line of text, for a host tracing the games' file I/O (the runner's --trace-io; io.cpp's traceIo()): nothing is
+  //traced without one. Not part of the machine's state.
+  std::function<auto (const std::string& text) -> void> ioTrace;
 
   //kernel.cpp
   static auto nid(const std::string& name) -> u32;
@@ -659,6 +664,7 @@ struct Kernel {
 
   //io.cpp: files and folders on the host folders standing for the PSP's devices, or on the disc in the drive;
   //standard input, output and error
+  struct HeldFileCloser { auto operator()(std::FILE* file) const -> void { std::fclose(file); } };
   struct OpenFile {
     std::string path;      //the PSP's name for it, normalized
     std::string host;
@@ -694,6 +700,16 @@ struct Kernel {
     bool resultOnly = false;  //nothing is open (an asynchronous close, or an asynchronous open that failed): the
                               //descriptor stays only to hand over its request's result
     u64 opened = 0;        //its place in the order the program opened files (filesOpened then): sceIoGetFdList's
+    //A host file that had bytes, opened to write and be emptied (PSP_O_TRUNC): the PSP's file is `length` bytes
+    //from then on, while the host file keeps the bytes it had past them until it's cut (io.cpp's openFile() and
+    //cut()): `held`, the host file itself, opened again to be cut through whatever becomes of its path (not
+    //saved: a state's is opened again), and `hostLength`, its length as the kernel left it, which it must still
+    //have to be cut. `tailHash`: in a state, the hash of the bytes the cut would drop (hashTail()).
+    bool truncated = false;
+    u64 length = 0;
+    u64 hostLength = 0;
+    u64 tailHash = 0;
+    std::unique_ptr<std::FILE, HeldFileCloser> held;
   };
   std::map<std::string, std::string> devices;  //"ms0" -> the host folder standing for it
   std::shared_ptr<Disc> disc;  //the disc image in the drive (disc0: and umd0:, unless a host folder stands for it)
@@ -701,12 +717,25 @@ struct Kernel {
   static constexpr u32 MostFiles = 64;
   u64 filesOpened = 0;  //how many files and folders the program has opened (never saved: its files' largest count)
   auto newFile() -> u32;
+  auto fileLength(const std::string& host, u64 hostBytes) -> u64;
+  auto fileWritten(const std::string& host, u64 end) -> void;
+  auto hold(OpenFile& open) -> s64;
+  auto hashTail(OpenFile& open) -> std::optional<u64>;
+  auto cut(OpenFile& open) -> void;
+  auto dropCut(OpenFile& open) -> void;
+  auto dropCuts(const std::string& host) -> void;
+  auto filesMoved(const std::string& oldHost, const std::string& oldPath, const std::string& newHost,
+                  const std::string& newPath) -> void;
+  auto closeFile(OpenFile& open) -> void;
   std::string workingDirectory;
   std::vector<u32> memoryStickCallbacks;  //callbacks the program registered for the memory stick going in and out
   //the memory stick's size and free space, as every function that tells them reports them (io.cpp)
   static constexpr u32 StickSectorSize = 512, StickClusterSize = 32_KiB;
   static constexpr u32 StickClusters = 61'440, StickFreeClusters = 57'344;
   auto stickText(u32 at, u64 kilobytes) -> void;
+  auto traceIo(const Function& function) -> void;
+  auto traceIoDone(u32 file, u32 data, u64 bytes) -> void;
+  auto traceBytes(u32 address, u64 size) -> std::string;
   auto mount(const std::string& device, const std::string& folder) -> void;
   auto split(const std::string& path, std::string& device, std::string& rest) const -> bool;
   auto onDisc(const std::string& path) const -> bool;
@@ -1991,7 +2020,7 @@ struct Kernel {
     u32 error = 0;         //what an aborted message finishes with: 0, or the error of one a PSP doesn't show
     bool deleted = false;  //a save was deleted from its list, which asks the front end again (dialogs.cpp)
   } dialog;
-  u32 stateLayout = 31;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 32;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;
