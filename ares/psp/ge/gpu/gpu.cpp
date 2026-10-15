@@ -757,32 +757,48 @@ auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken, u
   return id;
 }
 
+//A PRIM whose settings, texture and frame buffer are the last one's takes its state as it is (begin()), its draws
+//joining the last's without comparing them again where it's still the last recorded: Super Monkey Ball draws 50,000
+//PRIMs a frame, a world matrix between each two and its settings changed for one in fifty. Not in clear mode, where
+//each primitive sets the stencil (clearStencil()), nor for a copy of a target, which textureFor() takes again for
+//each. (Every input compared where it is, the pixel pipeline's bytes all of them, as they're laid out, with a branch
+//at the end alone: a copy of them, a call to compare it and a branch a field cost the RP6's Cortex-X3 more.)
+alwaysinline auto GPU::kept(const GE::Look& look) const -> bool {
+  auto& p = look.pixel;
+  auto& t = look.texture;
+  auto& c = ge->commands;
+  auto& k = keptSettings;
+  static_assert(sizeof(GE::PixelState) % 16 == 0);
+  GE::u64x2 bytes{};
+  for(u32 n = 0; n < sizeof(GE::PixelState); n += 16) {
+    GE::u64x2 now, then;
+    std::memcpy(&now, reinterpret_cast<const u8*>(&p) + n, 16);
+    std::memcpy(&then, reinterpret_cast<const u8*>(&k.pixel) + n, 16);
+    bytes |= now ^ then;
+  }
+  u32 words = (t.width ^ k.width) | (t.height ^ k.height) | (look.function ^ k.function) |
+              (look.environment ^ k.environment) | (c[GE::MaskColor] ^ k.maskColor) |
+              (c[GE::MaskAlpha] ^ k.maskAlpha) | (target->id ^ k.target) | (target->stride ^ k.stride) |
+              (target->height ^ k.rows) | (column ^ k.column) | (row ^ k.row) | (shade ^ k.shade) |
+              (filter ^ k.filter);
+  u32 flags = u32(look.textured != k.textured) | u32(t.clampU != k.clampU) | u32(t.clampV != k.clampV) |
+              u32(look.withAlpha != k.withAlpha) | u32(look.doubled != k.doubled) | u32(backend->reads != k.reads) |
+              u32(backend->readsBlending != k.readsBlending) | u32(backend->dualSource != k.dualSource) |
+              u32(backend->logicOps != k.logicOps);
+  if((bytes[0] | bytes[1] | words | flags) || !k.valid || p.clear || held) return false;
+  return !look.textured || (look.decoded.get() == lastDecoded && !lastTexture.decoded.expired());
+}
+
 //The GE's settings as the GPU's: a pipeline, its constants, and the dynamic state (the design's "Depth, stencil,
 //blending and logic operations" says what each approximates).
 auto GPU::settings(const GE::Look& look) -> void {
   auto& p = look.pixel;
   auto& c = ge->commands;
-  //(a PRIM whose settings, texture and frame buffer are the last one's takes its state as it is, its draws joining the
-  //last's without comparing them again where it's still the last recorded: Super Monkey Ball draws 50,000 PRIMs a
-  //frame, a world matrix between each two and its settings changed for one in fifty. Not in clear mode, where each
-  //primitive sets the stencil (clearStencil()), nor for a copy of a target, which textureFor() takes again for each.)
   auto& t = look.texture;
-  KeptSettings now{!p.clear && !held, p, look.textured, t.clampU, t.clampV, look.withAlpha, look.doubled, t.width,
-                   t.height, look.function, look.environment, c[GE::MaskColor], c[GE::MaskAlpha], target->id,
-                   target->stride, target->height, column, row, shade, filter, backend->reads,
-                   backend->readsBlending, backend->dualSource, backend->logicOps};
-  auto& k0 = keptSettings;
-  if(now.valid && k0.valid && !std::memcmp(&now.pixel, &k0.pixel, sizeof(now.pixel)) &&
-     std::tie(now.textured, now.clampU, now.clampV, now.withAlpha, now.doubled, now.width, now.height, now.function,
-              now.environment, now.maskColor, now.maskAlpha, now.target, now.stride, now.rows, now.column, now.row,
-              now.shade, now.filter, now.reads, now.readsBlending, now.dualSource, now.logicOps) ==
-     std::tie(k0.textured, k0.clampU, k0.clampV, k0.withAlpha, k0.doubled, k0.width, k0.height, k0.function,
-              k0.environment, k0.maskColor, k0.maskAlpha, k0.target, k0.stride, k0.rows, k0.column, k0.row,
-              k0.shade, k0.filter, k0.reads, k0.readsBlending, k0.dualSource, k0.logicOps) &&
-     (!look.textured || (look.decoded.get() == lastDecoded && !lastTexture.decoded.expired()))) {
-    return;
-  }
-  keptSettings = now;
+  keptSettings = {p, t.width, t.height, look.function, look.environment, c[GE::MaskColor], c[GE::MaskAlpha],
+                  target->id, target->stride, target->height, column, row, shade, filter, !p.clear && !held,
+                  look.textured, t.clampU, t.clampV, look.withAlpha, look.doubled, backend->reads,
+                  backend->readsBlending, backend->dualSource, backend->logicOps};
   textured = false;
   State& s = state;
   s = {};
@@ -978,7 +994,10 @@ auto GPU::settings(const GE::Look& look) -> void {
             ((k.stencilFail != Keep && k.stencilCompare != 1) ||
              (k.stencilDepthFail != Keep && k.depthTest && k.depthCompare != 1) ||
              (k.stencilPass != Keep && (!(k.colorMask & 8) || s.stencilWriteMask != 0xff)));
-  stateKept = false, meshKept = false, screenable = true;
+  auto byAlpha = [](u32 factor) { return factor == 4 || factor == 5 || factor == 8 || factor == 9; };
+  blendsByAlpha = !p.clear && p.blend && p.blendOperation < 3 &&
+                  (byAlpha(p.blendSource) || byAlpha(p.blendDestination));
+  stateKept = false, meshKept = false, screenable = true, drawableKnown = false;
 }
 
 //A PRIM's settings: its target found (filled from memory first if need be), its pages owned, its texture on the
@@ -1083,15 +1102,12 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   this->through = through;
   filter = ge.commands[GE::TextureFilter];
   shade = ge.commands[GE::ShadeMode];
-  settings(look);
+  if(!kept(look)) settings(look);
   if(!state.pipeline.clear && state.pipeline.reads) statistics.readingDraws++;  //(each PRIM, its settings kept or not)
   //(where it blends by the frame buffer's alpha, the colors' alpha caught up with the stencil first; then where its
   //own stencil operations leave it behind: each PRIM, its settings kept or not, before any of its primitives is
   //recorded, a draw of its own or among fast mode's meshes)
-  auto byAlpha = [](u32 factor) { return factor == 4 || factor == 5 || factor == 8 || factor == 9; };
-  if(!p.clear && p.blend && p.blendOperation < 3 && (byAlpha(p.blendSource) || byAlpha(p.blendDestination))) {
-    catchAlpha(*t, left, top, right, bottom);
-  }
+  if(blendsByAlpha) catchAlpha(*t, left, top, right, bottom);
   if(lagging) widen(t->lags, left, top, right, bottom);
   own(*t, left, top, right, bottom);
   reach = {t, {state.scissor[0], state.scissor[1], state.scissor[2], state.scissor[3]}};
@@ -1233,14 +1249,13 @@ auto GPU::triangleAt(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex&
 //PRIMs between them are one draw where their settings are the same: Army of Two and Ghost of Sparta alternate between
 //the two 2,000 times a frame.
 auto GPU::screenTriangle(const Vertex (&v)[3]) -> bool {
-  if(recorded.models.size() + 3 > MostVertices) flush();
+  auto& models = recorded.models;
+  if(models.size() + 3 > MostVertices) flush();
   u32 index = meshState();
   if(index == ~0u) return screenable = false;
-  u32 base = recorded.models.size();
-  recorded.models.resize(base + 3);
-  Model* models = recorded.models.data() + base;
-  for(u32 n = 0; n < 3; n++) {
-    auto& m = models[n];
+  u32 base = models.size();
+  for(u32 n = 0; n < 3; n++) {  //(each grown into place: a resize() is a call)
+    auto& m = models.emplace_back();
     m.x = v[n].x, m.y = v[n].y, m.z = v[n].z;
     m.normal[0] = v[n].w, m.normal[1] = v[n].q, m.normal[2] = v[n].fog;
     m.u = v[n].u, m.v = v[n].v, m.color = v[n].color;
@@ -1250,8 +1265,7 @@ auto GPU::screenTriangle(const Vertex (&v)[3]) -> bool {
   }
   reachOver(v, 3);
   u32 first = recorded.indices.size();
-  recorded.indices.resize(first + 3);
-  for(u32 n = 0; n < 3; n++) recorded.indices[first + n] = base + n;
+  for(u32 n = 0; n < 3; n++) recorded.indices.push_back(base + n);
   meshDraw(index, first, 3);
   statistics.primitives++, statistics.screened++;
   return true;
@@ -1371,8 +1385,10 @@ auto GPU::meshes(GE&, const GE::Transform&, u32 count) -> bool {
   return meshDrawable();
 }
 
-//(whether the driver makes the PRIM's pipeline as fast mode's 3D takes it)
+//(whether the driver makes the PRIM's pipeline as fast mode's 3D takes it; found once for its settings while they're
+//kept, as only settings() changes them)
 auto GPU::meshDrawable() -> bool {
+  if(drawableKnown) return true;
   Pipeline k = state.pipeline;
   k.transformed = 1;
   k.flat = !(shade & 1);
@@ -1381,13 +1397,19 @@ auto GPU::meshDrawable() -> bool {
     if(!backend->drawable(k)) return false;
     known = k;
   }
-  return true;
+  return drawableKnown = true;
 }
 
 //(the PRIM's state as fast mode's 3D draws take it: transform.vert's pipeline, draw.frag's flat shading, the filter
-//chosen at each pixel. Its pipeline is asked for as the state is recorded: one at the back already was then.)
-auto GPU::meshState() -> u32 {
+//chosen at each pixel; the last recorded while it's kept, else recorded now: recordMeshState(). Each of fast mode's
+//triangles the GE put on the screen asks, a hundred thousand a frame in Super Monkey Ball: no call while it's kept.)
+alwaysinline auto GPU::meshState() -> u32 {
   if(meshKept && !recorded.states.empty()) return recorded.states.size() - 1;
+  return recordMeshState();
+}
+
+//(its pipeline asked for as the state is recorded: one at the back already was then)
+auto GPU::recordMeshState() -> u32 {
   State s = state;
   s.pipeline.transformed = 1;
   s.pipeline.flat = !(shade & 1);
@@ -1400,17 +1422,21 @@ auto GPU::meshState() -> u32 {
   return recorded.states.size() - 1;
 }
 
-auto GPU::meshDraw(u32 index, u32 first, u32 count) -> void {
+alwaysinline auto GPU::meshDraw(u32 index, u32 first, u32 count) -> void {
   auto& commands = recorded.commands;
   if(!commands.empty() && commands.back().kind == Command::Kind::Mesh && commands.back().state == index &&
      commands.back().first + commands.back().count == first) {
     commands.back().count += count;
   } else {
-    Command c{Command::Kind::Mesh, state.target};
-    c.state = index, c.first = first, c.count = count;
-    commands.push_back(c);
-    statistics.draws++;
+    newMeshDraw(index, first, count);
   }
+}
+
+auto GPU::newMeshDraw(u32 index, u32 first, u32 count) -> void {
+  Command c{Command::Kind::Mesh, state.target};
+  c.state = index, c.first = first, c.count = count;
+  recorded.commands.push_back(c);
+  statistics.draws++;
 }
 
 auto GPU::mesh(GE& ge, const GE::Transform& t, const std::vector<GE::Vertex>& vertices,

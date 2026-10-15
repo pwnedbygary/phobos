@@ -617,17 +617,19 @@ private:
   auto catchAlpha(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;
   auto own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;
   auto textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken, u8& indexed, u32& palette) -> u32;
-  auto settings(const GE::Look& look) -> void;
+  NALL_NOINLINE auto settings(const GE::Look& look) -> void;
   //(settings()' inputs as the last PRIM had them, where its state is kept for the next with the same: its pixel
   //pipeline's, its texture's (the copy alive still: lastDecoded's), the write masks, its target and place in it, and
-  //the backend's ways of drawing; and the shading and filter, which its draws in fast mode's 3D take as well)
+  //the backend's ways of drawing; and the shading and filter, which its draws in fast mode's 3D take as well. kept()
+  //compares them where they are, word by word, with a branch at the end alone)
   struct KeptSettings {
-    bool valid = false;
     GE::PixelState pixel;
-    bool textured, clampU, clampV, withAlpha, doubled;
     u32 width, height, function, environment, maskColor, maskAlpha, target, stride, rows, column, row, shade, filter;
-    bool reads, readsBlending, dualSource, logicOps;
+    bool valid = false;
+    bool textured, clampU, clampV, withAlpha, doubled, reads, readsBlending, dualSource, logicOps;
   } keptSettings;
+  auto kept(const GE::Look& look) const -> bool;
+  bool blendsByAlpha = false;  //(the PRIM blends by the frame buffer's alpha: settings(), for begin())
   auto clearStencil(u32 color) -> void;
   auto emit(const Vertex* vertices, u32 count) -> void;
   auto reachOver(const Vertex* vertices, u32 count) -> std::array<float, 4>;  //(their box, given to reach's)
@@ -635,9 +637,12 @@ private:
   //make its pipeline), kept while it's the last; whether the PRIM's triangles the GE put on the screen may go among
   //the meshes; and a draw of its indices from first, or more of the last one)
   bool meshKept = false, screenable = true;
+  bool drawableKnown = false;  //(meshDrawable() found the PRIM's pipeline drawable, its settings kept since)
   auto meshDrawable() -> bool;
   auto meshState() -> u32;
+  auto recordMeshState() -> u32;
   auto meshDraw(u32 state, u32 first, u32 count) -> void;
+  auto newMeshDraw(u32 state, u32 first, u32 count) -> void;
   auto screenTriangle(const Vertex (&v)[3]) -> bool;
   auto vertex(const GE::Vertex& v, bool perspective, s32 x, s32 y) const -> Vertex;
   auto transformed(const GE::Transform& t) -> u32;  //(mesh()'s Transformed block for t: its index in transforms)
