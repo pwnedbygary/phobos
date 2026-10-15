@@ -14344,7 +14344,8 @@ running while it copies, finished, shutting down.
   game's sceIoRemove and sceIoRmdir took a running install's copy away on `1fbabdf43`, below.) Phobos stopped part
   way (killed, the machine reset, the game aborting the dialog, a state loaded) leaves the saves as they were, never
   a half folder a game would take for its install: the savedata utility
-  still says NO_DATA for it. Aborted, reset or a state loaded, the copy is taken away at once. As one install runs at a
+  still says NO_DATA for it. Aborted, reset or a state loaded, the copies' folder is taken away at once, with all it
+  holds (`installAbandon()`, by the folder's own name, as below). As one install runs at a
   time, whatever is in `.phobos-install` when an install starts, or when the memory stick is put in at power on
   (`mount()`, after the kernel's power has given up any install), is a copy left so, and all of it is taken away
   (`installLeftovers()`): a phone that killed Phobos part way through 7th Dragon 2020's 1.5 GB gets the room back at
@@ -14360,9 +14361,13 @@ running while it copies, finished, shutting down.
   as when a write fails. Before this, later pieces were added at whatever end a file had: a copy taken away after
   the first piece was made again and installed 1.5 MiB of the test's 2.5 MiB, answered 0. A link in a copy's place
   would have been written through, its target off the stick added to or cut short. Before each piece and at the end,
-  the copy's folder and the copies' folder it's in must also be real folders, not links (`installFolderIntact()`),
-  and the cleanup takes a link in the copies' folder's place away itself: a host that put a link to a folder off the
-  stick there would have had the next file made in that folder, and the cleanup would have taken that folder away.
+  the copy's folder and the copies' folder it's in must also be real folders, not links (`installFolderIntact()`):
+  a host that put a link to a folder off the stick there would have had the next file made in that folder. And the
+  cleanup takes the whole copies' folder away by its own name, as the power-on cleanup does, so a link put in its
+  place, even while the cleanup runs, is taken away itself and nothing through it. Taking the copy's folder away by
+  its path instead looked the copies' folder up on the way, and through a link swapped in meanwhile: the reviewer's
+  host thread swapping it had Phobos take away a folder of the copy's name off the stick 12 times in 6,524 cleanups,
+  and none in 4,177 with this.
 - **Not state.** The copy's place isn't in a save state (so no layout change, and every state the same as master's):
   loading a state takes the copy's folder away, and an install running in the loaded state starts again at its next
   Update, its progress from 0. Phobos never loads states behind the player's back (the stored "run ahead" setting is
@@ -14458,7 +14463,9 @@ running while it copies, finished, shutting down.
   disc whose 1 MiB first file fills the first Update, the copy's own folder or the copies' folder put in place of by a
   link to a folder off the stick (0x80111904 at the next Update, nothing written in that folder or taken from it).
   Each time nothing is among the saves, no copy is left, nothing off the stick is touched, and the next install
-  installs whole (the standard disc's cases).
+  installs whole (the standard disc's cases). And the game's Abort, or a reset, after another leftover was put in the
+  copies' folder, or after a link to a folder off the stick holding a folder of the copy's name was put in its place:
+  no copies' folder left, nothing behind the link touched.
 - `... a state saved part way`: the state round-trips; loaded into another machine and into the same one, the install
   starts again and installs whole.
 - `... over an install there`: over a save the savedata utility made: INSDIR's files written over (a longer DATA.BIN
@@ -14494,7 +14501,10 @@ installed short or wrote through the link and answered 0 (the file off the stick
 overwritten with the icon). On the third round's head with the fourth round's folder swaps (`d92edf077`,
 `beforesrc4`): that group alone fails, 2 checks, and the other 557 pass. Both swaps answered 0x80111904 there too,
 but changed the folder off the stick first: B.BIN made in it, and, with the copies' folder swapped, the folder taken
-away by the cleanup through the link.
+away by the cleanup through the link. On the fourth round's head with the fifth round's cases (`78e0be7fe`,
+`beforesrc5`): that group alone fails, 2 checks, an Abort and a reset each leaving the copies' folder behind with the
+other leftover in it, and the other 557 pass (the link put in its place was already taken away alone there; the race
+the round closes isn't a stable test).
 
 **The games** (runners built from master and from this branch; every memory stick a fresh folder under
 `~/phobos-work/scratch/gamedata-install`).
@@ -14548,7 +14558,9 @@ spaces dropped, and the path's real place is compared with the folder as a file,
 It also found its first review's Kingdom Hearts nit wrong (`kh/run-v2`'s runner predated the attributes' fix). Its
 last look, at the third round, approved, with an optional nit taken in a fourth: the copy's own folder put in place of
 by a link after the first piece had the next file made through it. Now the copy's folders are checked as its files
-are, the copies' folder too, as a link there would have had the cleanup take a folder off the stick away.
+are, the copies' folder too, as a link there would have had the cleanup take a folder off the stick away. Its look at
+the deletion paths approved, with one should-fix taken in a fifth round: the cleanup still raced a host swapping the
+copies' folder for a link while it ran (above), now closed by taking the copies' folder away by its own name.
 
 **Checks** (the fourth round, `5d947135b`). tests/psp: 558 groups, 0 failures, sanitized and unsanitized
 (`r4-tests-asan.log`, `r4-tests-plain.log`), every install group and every files group among them.
@@ -14605,6 +14617,11 @@ sticks, the clock pinned): the same files byte for byte and the same savedata re
   and the links.
 - The copy is checked by its files' lengths, not their bytes: a host that put other bytes of the same length in a
   file of the copy would go unseen.
+- A write can still race a host (the reviewer's, informational): a link swapped into the copies' folder's place, or
+  the copy's folder's, in the microseconds between the folder check and a file's opening has that file's first piece
+  written through the link, onto a file of the same name behind it if there is one. The checks narrow it to that
+  window. Closing it fully needs openat-style I/O (each name opened in a folder already held open, never looked up
+  again), which `std::filesystem` and the streams don't give.
 - Scratch: `~/phobos-work/scratch/gamedata-install` (`NOTES.md`; `disclist/`, a scratch lister of a disc image's
   folders; `insdir-survey.txt`; `imports-survey.sh` and `survey/`; `kh/` with the dump, `code.dis` and the runs;
   `gunhound/`; `7d/`; `beforesrc/` and `tests-before-*.log`, the tests on master; `beforesrc2/` and
