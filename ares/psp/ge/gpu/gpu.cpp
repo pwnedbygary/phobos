@@ -234,14 +234,16 @@ auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts, u
 //characters or shadows into a frame buffer of their own, cleared without its depth, tested against the scene's.
 //Memory's changes the other hasn't filled yet are filled into it first, so what's taken is as new as memory's; t's
 //own in what's taken are those. Where the other is narrower, t's columns past it are as they'd be without it.
-auto GPU::takeDepth(Target& t, const GE::PixelState& p) -> void {
+auto GPU::newestDepth(const Target& t, u32 depthBuffer, u32 depthStride, u64 at) const -> Target* {
   Target* newest = nullptr;
   for(auto& other : targets) {
-    if(other.get() == &t || other->depthBuffer != t.depthBuffer || other->depthStride != t.depthStride) continue;
-    if(other->depthRows && other->depthAt > t.depthAt && (!newest || other->depthAt > newest->depthAt)) {
-      newest = other.get();
-    }
+    if(other.get() == &t || other->depthBuffer != depthBuffer || other->depthStride != depthStride) continue;
+    if(other->depthRows && other->depthAt > at && (!newest || other->depthAt > newest->depthAt)) newest = other.get();
   }
+  return newest;
+}
+
+auto GPU::takeDepth(Target& t, Target* newest, const GE::PixelState& p) -> void {
   if(!newest) return;
   Target& from = *newest;
   if(from.depthChangedFrom < from.depthChangedTo) {
@@ -260,7 +262,7 @@ auto GPU::takeDepth(Target& t, const GE::PixelState& p) -> void {
     u32 across = std::min(t.stride, t.depthStride), sourceAcross = std::min(from.stride, t.depthStride);
     bool placed = !(t.depthBuffer & 31) && !(t.depthStride & 15);
     auto& runs = recorded.runs;
-    c.firstRun = runs.size(), c.width = sourceAcross;
+    c.firstRun = runs.size(), c.width = across;  //(the runs cover its columns and rows once each)
     for(u32 x = 0; x < across && placed; x += 16) {
       u16 run = std::min(16u, across - x);
       for(u32 y = 0; y < rows && placed; y++) {
@@ -398,6 +400,20 @@ auto GPU::putDepth(u32 first, u32 last) -> void {
     });
   }
   release();
+}
+
+//(the second and fourth copies rearrange each 16 KiB: all of each 16 KiB the rows reach counts; a depth buffer's bytes
+//past VRAM's end are its start's, as the GE's)
+auto GPU::depthOwned(const Target& t, u32 depthBuffer, u32 depthStride, u32 from, u32 to) const -> bool {
+  if(from >= to || !depthStride) return false;
+  u64 low = (u64(depthBuffer) + u64(from) * depthStride * 2) & ~u64(0x3fff);
+  u64 high = (u64(depthBuffer) + u64(to) * depthStride * 2 - 1) | 0x3fff;
+  u64 pages = std::min<u64>((high - low + 1) / Memory::PageSize, GE::VRAMPages);
+  for(u64 n = 0; n < pages; n++) {
+    Target* owner = owners[(low / Memory::PageSize + n) % GE::VRAMPages];
+    if(owner && owner != &t) return true;
+  }
+  return false;
 }
 
 //A rectangle (left, top, right, bottom; none: left past right) grown to take in another
@@ -1075,36 +1091,34 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
     break;
   }
   if(t->stale && t->drawn()) finish(ge), moving.clear();  //(what the GPU drew, then memory's changes over it)
-  //Its depth buffer's bytes another target has drawn on the GPU since the last finish, as colors: put in memory first,
-  //for its depth (and a target's it takes depth from) to be filled from there (below). The Kurohyou games draw their
-  //pre-rendered depth into the depth buffer's memory as a 5650 frame buffer, then test their characters against it.
+  //The rows this PRIM draws in that its depth is filled in from memory below (its own new ones and those memory
+  //changed, and those memory changed of the target it takes depth from), where another target has drawn on the GPU
+  //since the last finish, as colors: put in memory first, for the depth to be filled from there. The Kurohyou games
+  //draw their pre-rendered depth into the depth buffer's memory as a 5650 frame buffer, then test their characters
+  //against it. (Rows filled already aren't looked at again, nor rows filled that it doesn't draw in, which are filled
+  //from memory as it is: IL-2 Sturmovik's bloom, drawn each frame in the 16 KiB of its depth buffer's 273rd row, which
+  //memory changes, waits for no finish where its depth-of-field target and its clear fill that row.)
   bool depth = !column && !row && (p.clear ? p.clearDepth : p.depthTest);
-  if(depth && p.depthStride) {
-    //(the rows filled from memory: this PRIM's, those filled already, and, looked through only where the pages aren't
-    //known free, a taken depth's; owners[] changes with drawnSerial)
+  Target* taken = nullptr;
+  if(depth) {
     bool same = t->depthBuffer == p.depthBuffer && t->depthStride == p.depthStride;
-    u32 rows = std::max<u32>(bottom + 1, same ? t->depthRows : 0);
-    auto pages = [&](u32& first, u32& last) {
-      u64 low = p.depthBuffer & ~0x3fffu, high = (u64(p.depthBuffer) + u64(rows) * p.depthStride * 2 - 1) | 0x3fff;
-      first = low / Memory::PageSize, last = std::min<u64>(high / Memory::PageSize, GE::VRAMPages - 1);
+    u32 rows = same ? t->depthRows : 0, changedFrom = same ? t->depthChangedFrom : 0;
+    u32 changedTo = same ? t->depthChangedTo : 0;
+    taken = newestDepth(*t, p.depthBuffer, p.depthStride, same ? t->depthAt : 0);
+    bool owned = false;
+    auto reach = [&](u32 from, u32 to) {
+      from = std::max<u32>(from, top), to = std::min<u32>(to, bottom + 1);
+      owned = owned || depthOwned(*t, p.depthBuffer, p.depthStride, from, to);
     };
-    u32 first, last;
-    pages(first, last);
-    if(t->depthAlone.serial != drawnSerial || first < t->depthAlone.first || last > t->depthAlone.last) {
-      for(auto& other : targets) {
-        if(other->depthBuffer == p.depthBuffer && other->depthStride == p.depthStride) {
-          rows = std::max(rows, other->depthRows);
-        }
-      }
-      pages(first, last);
-      for(u32 page = first; page <= last; page++) {
-        if(owners[page] && owners[page] != t) {
-          finish(ge), moving.clear();
-          break;
-        }
-      }
-      t->depthAlone = {first, last, drawnSerial};
+    if(taken) {  //(as takeDepth() fills them: the other's changes, and where it's narrower, this one's rows up to its)
+      reach(taken->depthChangedFrom, std::min(taken->depthChangedTo, taken->depthRows));
+      bool narrower = Memory::depthCopy(taken->format) == Memory::depthCopy(t->format) &&
+                      taken->stride < std::min(t->stride, p.depthStride);
+      if(narrower) reach(rows, std::min(taken->depthRows, t->height));
     }
+    reach(changedFrom, std::min(changedTo, rows));
+    reach(rows, bottom + 1);
+    if(owned) statistics.depthFinishes++, finish(ge), moving.clear();
   }
   if(!ready()) return held.reset(), false;
   //(the colors filled afresh where memory's changed, the depth where memory's depth has: rows of it, or all of it
@@ -1121,7 +1135,7 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
     t->depthChangedFrom = t->depthChangedTo = 0;
     t->depthAt = 0, t->depthKept = false;
   }
-  if(depth) takeDepth(*t, p);  //(the newest drawn in its depth buffer, where another target drew it)
+  if(depth) takeDepth(*t, taken, p);  //(the newest drawn in its depth buffer, where another target drew it)
   if(depth && t->depthChangedFrom < t->depthChangedTo) {
     fill(*t, t->depthChangedFrom, std::min(t->depthChangedTo, t->depthRows), p, 2);
     t->depthChangedFrom = t->depthChangedTo = 0;

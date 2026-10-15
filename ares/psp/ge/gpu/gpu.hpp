@@ -381,8 +381,8 @@ struct GPU : GE::Renderer {
     //copied or shown or moved (revive()). (At most 16; where there'd be more, the write waits for a finish.)
     std::vector<std::pair<u32, u32>> dead;
     //VRAM's pages first to last found owned by no other target as of drawnSerial (begin(): not looked through again
-    //while that's so); and its depth buffer's likewise (begin(): before its depth is filled from memory)
-    struct Alone { u32 first = 0, last = 0; u64 serial = 0; } alone, depthAlone;
+    //while that's so)
+    struct Alone { u32 first = 0, last = 0; u64 serial = 0; } alone;
     auto bytes() const -> u32 { return format == 3 ? 4 : 2; }
     auto end() const -> u32 { return address + rows * stride * bytes(); }  //(the VRAM bytes it covers)
     auto drawn() const -> bool { return left <= right; }
@@ -411,6 +411,8 @@ struct GPU : GE::Renderer {
     //depths taken from another target over the same depth buffer (takeDepth()), and targets' depths put into memory
     //for a texture read from a depth buffer (putDepth(): those of one texture a wait for the GPU, as a finish)
     u64 depthsTaken = 0, depthsPut = 0;
+    //finishes before a PRIM's depth is filled from memory, another target's pixels in the rows filled (begin())
+    u64 depthFinishes = 0;
     u64 alphas = 0;    //rectangles of targets' colors whose alpha was set from their stencil (catchAlpha())
     u64 waiting = 0;   //nanoseconds the CPU waited in finish(), picture() and putDepth()
   } statistics;
@@ -614,8 +616,12 @@ private:
   static constexpr u32 MostBeside = 256;
   //(the depth buffer as memory: takeDepth() and putDepth(), gpu.cpp)
   u64 depthSerial = 0;  //(goes up with each PRIM that writes depth: Target::depthAt)
-  auto takeDepth(Target& t, const GE::PixelState& p) -> void;
+  //(the target t takes depth from: the newest other drawn over its depth buffer, newer than at; none if none is)
+  auto newestDepth(const Target& t, u32 depthBuffer, u32 depthStride, u64 at) const -> Target*;
+  auto takeDepth(Target& t, Target* newest, const GE::PixelState& p) -> void;
   auto putDepth(u32 first, u32 last) -> void;  //(VRAM's bytes first to last, offsets in any of its copies)
+  //(whether a target but t drew in rows from to to of a depth buffer since the last finish: owners[])
+  auto depthOwned(const Target& t, u32 depthBuffer, u32 depthStride, u32 from, u32 to) const -> bool;
   //(the colors' alpha as the stencil has it: Target::lags, gpu.cpp. lagging: the PRIM's stencil operations leave it
   //behind, settings())
   bool lagging = false;

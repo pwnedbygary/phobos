@@ -49,7 +49,8 @@
 //characters against it, which leaves every pixel's depth the picture's only so; and every game known to read its
 //depth buffer in order reads it through the second copy where it draws 16-bit (Kurohyou's and Genso Suikoden's depth
 //of field, Me & My Katamari's fog, MediEvil's CPU), through the fourth where it draws 8888 (Cars' and IL-2's depth of
-//field, Killzone's and WipEout's CPU) (docs/psp-core.md, part 96).
+//field, Killzone's and WipEout's CPU) (docs/psp-core.md, part 96). All of those 16-bit games draw 5551: 5650 and 4444
+//go with it by their pixels' size only, which no game or measurement has shown yet.
 
 namespace ares::PlayStationPortable {
 

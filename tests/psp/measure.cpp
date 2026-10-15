@@ -487,7 +487,10 @@ static auto pspMeasure() -> void {
   auto look = [&](const MeasureFile& file, const std::vector<u32>& ours, bool expected) {
     std::string name = std::string(file.name) + ".bin";
     if(reference && std::filesystem::exists(std::filesystem::path(reference) / name)) {
-      describe(file, ours, readWords(std::filesystem::path(reference) / name));
+      auto theirs = readWords(std::filesystem::path(reference) / name);
+      describe(file, ours, theirs);
+      //(the depth buffer as each of VRAM's copies shows it: the GE's own order, memory.hpp's depthCopy(), exactly)
+      if(std::string(file.name).rfind("depth-layout-", 0) == 0) CHECK(ours == theirs, true);
     } else if(reference && expected) {
       std::printf("  %-24s not in the reference\n", file.name);
     }

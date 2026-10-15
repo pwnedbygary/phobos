@@ -2614,11 +2614,43 @@ static auto gpuSharedDepth() -> void {
 //  - a depth buffer an 8888 frame buffer and a 5551 one draw with in turn (Twisted Metal's small 5551 frame buffers
 //    test against its 8888 scene's depth; on the PSP each reads the same bytes in its own order): the depth placed on
 //    the GPU between them by runs of 16, each where the other's order puts the same bytes, put into memory once only,
-//    for the texture.
-//Every byte of the screens the software renderer's, at 1x and 2x, in either mode.
+//    for the texture;
+//  - a second frame, the depth made again from another picture and the screen's sprite tested against it: the screen
+//    then takes its depth from the 8888 frame buffer's, whose rows the picture changed (filled from memory, after
+//    the finish the picture needs again).
+//Every byte of the screens the software renderer's, at 1x and 2x, in either mode; one finish for a depth fill each
+//frame (GPU::Statistics::depthFinishes).
 static auto depthOrders(GPU* gpu) -> void {
   constexpr u32 Depth = 0x8'8000, Scratch = 0x11'6400, Second = 0x1'0000, Rows = 16;
-  auto picture = [](u32 x, u32 y) -> u32 { return (x * 37 + y * 1031) % 1000; };  //(depths 0-999)
+  auto picture = [](u32 frame, u32 x, u32 y) -> u32 {  //(depths 0-999, each frame's own)
+    return frame ? (x * 53 + y * 997 + 500) % 1000 : (x * 37 + y * 1031) % 1000;
+  };
+  auto into = [](System& s, u32 buffer, u32 format) {
+    s.ge.commands[GE::FrameBufferPointer] = buffer, s.ge.commands[GE::FrameBufferPixelFormat] = format;
+  };
+  //(a 5650 texture 512 wide at from, 1:1 onto a 5650 frame buffer at to)
+  auto copy = [&](System& s, u32 from, u32 to) {
+    into(s, to, 0);
+    texture(s, from, 512, 16, 512, 0);
+    sprite(s, {{{0, 0, 0, 0}, {512, Rows, 512, Rows}}, 0xffff'ffff});
+    s.ge.commands[GE::TextureMappingEnable] = 0;
+  };
+  auto frame = [&](System& s, u32 n) {  //(the depth made as a picture, the screen cleared and tested against it)
+    auto& c = s.ge.commands;
+    for(u32 y = 0; y < Rows; y++) {
+      for(u32 x = 0; x < 512; x++) s.memory.write(2, GPUTexture + (y * 512 + x) * 2, picture(n, x, y));
+    }
+    copy(s, GPUTexture, Depth);
+    copy(s, Memory::VRAMBase + Memory::VRAMSize + Depth, Scratch);
+    copy(s, Memory::VRAMBase + Scratch, Depth);
+    into(s, 0, 1);
+    c[GE::ClearMode] = 1 | 1 << 8;  //(its colors, not its depth)
+    sprite(s, {{{0, 0, 0, 0}, {0, 0, 480, Rows}}, 0});
+    c[GE::ClearMode] = 0;
+    c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 7, c[GE::DepthMask] = 1;  //(greater or equal, not written)
+    sprite(s, {{{0, 0, 0, 0}, {0, 0, 480, Rows}}, 0xffff'ffff}, 500);
+    c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0;
+  };
   for(u32 scale : {1u, 2u}) {
     if(!scaleTaken(gpu, scale)) continue;
     gpu->resolution(scale);
@@ -2630,54 +2662,46 @@ static auto depthOrders(GPU* gpu) -> void {
       c[GE::FrameBufferWidth] = 512, c[GE::DepthBufferPointer] = Depth, c[GE::DepthBufferWidth] = 512;
       c[GE::Region2] = 1023 << 10 | 1023, c[GE::Scissor2] = 511 | (Rows - 1) << 10;
       c[GE::VertexType] = 0x80'019f, c[GE::ShadeMode] = 1;
-      for(u32 y = 0; y < Rows; y++) {
-        for(u32 x = 0; x < 512; x++) s->memory.write(2, GPUTexture + (y * 512 + x) * 2, picture(x, y));
-      }
-      auto into = [&](u32 buffer, u32 format) {
-        c[GE::FrameBufferPointer] = buffer, c[GE::FrameBufferPixelFormat] = format;
-      };
-      auto copy = [&](u32 from, u32 to) {  //(a 5650 texture 512 wide at from, 1:1 onto a 5650 frame buffer at to)
-        into(to, 0);
-        texture(*s, from, 512, 16, 512, 0);
-        sprite(*s, {{{0, 0, 0, 0}, {512, Rows, 512, Rows}}, 0xffff'ffff});
-        c[GE::TextureMappingEnable] = 0;
-      };
-      copy(GPUTexture, Depth);
-      copy(Memory::VRAMBase + Memory::VRAMSize + Depth, Scratch);
-      copy(Memory::VRAMBase + Scratch, Depth);
-      into(0, 1);
-      c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 7, c[GE::DepthMask] = 1;  //(greater or equal, not written)
-      sprite(*s, {{{0, 0, 0, 0}, {0, 0, 480, Rows}}, 0xffff'ffff}, 500);
-      c[GE::DepthTest] = 1, c[GE::DepthMask] = 0;  //(always, written: a depth of the screen's own on the left)
+      frame(*s, 0);
+      c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 1;  //(always, written: a depth of the screen's own on the left)
       sprite(*s, {{{0, 0, 0, 0}, {0, 0, 200, Rows}}, 0xff00'40ff}, 700);
       c[GE::DepthTestEnable] = 0;
-      copy(Memory::VRAMBase + Memory::VRAMSize + Depth, Second);  //(that depth through the second copy)
-      into(0, 3);  //(an 8888 frame buffer over the same depth buffer: its depth in the fourth copy's order)
-      c[GE::FrameBufferPointer] = 0x2'0000;
+      copy(*s, Memory::VRAMBase + Memory::VRAMSize + Depth, Second);  //(that depth through the second copy)
+      into(*s, 0x2'0000, 3);  //(an 8888 frame buffer over the same depth buffer: its depth in the fourth copy's order)
       c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 1;
       sprite(*s, {{{0, 0, 0, 0}, {0, 0, 512, Rows}}, 0xff20'2020}, 300);
       sprite(*s, {{{0, 0, 0, 0}, {0, 0, 96, 8}}, 0xff40'4040}, 900);
-      into(0x3'0000, 1);  //(and a 5551 one tested against it: the same bytes, read in the second copy's order)
+      into(*s, 0x3'0000, 1);  //(and a 5551 one tested against it: the same bytes, read in the second copy's order)
       c[GE::DepthTest] = 7, c[GE::DepthMask] = 1;
       sprite(*s, {{{0, 0, 0, 0}, {0, 0, 512, Rows}}, 0xffff'ffff}, 600);
       c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0;
     }
-    u32 bytes = apart(software, hardware);
-    if(bytes) std::printf("  %s %ux: %u bytes apart\n", gpu->fast ? "fast" : "accurate", scale, bytes);
-    CHECK(bytes, 0u);
     auto at = [&](u32 buffer, u32 x, u32 y) {
       return u32(software.memory.read(2, Memory::VRAMBase + buffer + (y * 512 + x) * 2));
     };
-    u32 wrong = 0;
-    for(u32 y = 0; y < Rows; y++) {
-      for(u32 x = 200; x < 480; x++) wrong += ((at(0, x, y) & 0x7fff) == 0x7fff) != (500 >= picture(x, y));
-    }
-    CHECK(wrong, 0u);
-    CHECK(at(Second, 100, 3), 700u), CHECK(at(Second, 300, 3), picture(300, 3));  //(the screen's depth, the picture's)
+    auto wrong = [&](u32 n, u32 left) {  //(the screen's pixels drawn but where the picture's nearer than 500)
+      u32 count = 0;
+      for(u32 y = 0; y < Rows; y++) {
+        for(u32 x = left; x < 480; x++) count += ((at(0, x, y) & 0x7fff) == 0x7fff) != (500 >= picture(n, x, y));
+      }
+      return count;
+    };
+    u32 bytes = apart(software, hardware);
+    if(bytes) std::printf("  %s %ux: %u bytes apart\n", gpu->fast ? "fast" : "accurate", scale, bytes);
+    CHECK(bytes, 0u);
+    CHECK(wrong(0, 200), 0u);
+    //(the screen's depth, the picture's)
+    CHECK(at(Second, 100, 3), 700u), CHECK(at(Second, 300, 3), picture(0, 300, 3));
     //(the 5551 frame buffer's pixel (20, 4) reads the 8888 one's (260, 4), 300; its (128, 4) the 8888's (64, 4), 900)
     CHECK(at(0x3'0000, 20, 4) & 0x7fff, 0x7fffu), CHECK(at(0x3'0000, 128, 4) & 0x7fff, 0u);
-    CHECK(gpu->statistics.finishes > before.finishes, true);
+    CHECK(gpu->statistics.depthFinishes - before.depthFinishes, 1u);
     CHECK(gpu->statistics.depthsPut - before.depthsPut, 1u);  //(the texture's, not the depth taken across the formats)
+    for(System* s : {&software, &hardware}) frame(*s, 1);
+    bytes = apart(software, hardware);
+    if(bytes) std::printf("  %s %ux, second frame: %u bytes apart\n", gpu->fast ? "fast" : "accurate", scale, bytes);
+    CHECK(bytes, 0u);
+    CHECK(wrong(1, 0), 0u);
+    CHECK(gpu->statistics.depthFinishes - before.depthFinishes, 2u);
     hardware.ge.setRenderer(nullptr);
   }
   gpu->resolution(1);
