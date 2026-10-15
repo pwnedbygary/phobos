@@ -5,9 +5,10 @@
 //notices that there's nothing to load or delete, or that the data is corrupted). From its first Update the dialog
 //asks the front end (a DialogRequest) and runs until it answers (a DialogAnswer), the game calling Update every frame
 //and running on meanwhile; the answer, taken at the next Update, finishes it as the player's choice does on a PSP.
-//Every other dialog (the save modes with nothing to show, network settings, game sharing, the web browser, a game's
-//data install), and every dialog with no such front end (the runner, the tests, the desktop and libretro hosts), is
-//answered as utility.cpp answers it.
+//Every other dialog (the save modes with nothing to show, network settings, game sharing, the web browser), and every
+//dialog with no such front end (the runner, the tests, the desktop and libretro hosts), is answered as utility.cpp
+//answers it. A game's data install shows the front end its progress where a PSP shows its own (install.cpp), asking
+//nothing.
 //
 //The request and its answer go through a mailbox (dialogMutex's), which the front end reads and fills from a thread
 //of its own (dialogShown(), dialogAnswer()). Each request has a number of its own, so an answer finds the request it

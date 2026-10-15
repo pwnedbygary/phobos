@@ -81,6 +81,7 @@ import com.phobos.emulator.util.confirmBit
 import com.phobos.emulator.util.confirmGlyph
 import com.phobos.emulator.util.digitsOnly
 import com.phobos.emulator.util.entered
+import com.phobos.emulator.util.installProgress
 import com.phobos.emulator.util.keyboardAnswer
 import com.phobos.emulator.util.keyboardTexts
 import com.phobos.emulator.util.listed
@@ -96,10 +97,10 @@ import java.time.format.FormatStyle
 
 /**
  * The PSP's system dialogs over the running game (util/PspDialogs.kt): a message, the keyboard, and saving and loading,
- * answered for the game by the player. Touch and controller both work. A controller's D-pad moves the choice, and the
- * PSP buttons the user mapped confirm and back out, circle or cross confirming as the game asks (Japanese games often
- * confirm with circle); Start finishes the keyboard. [controls] are the game's bindings: its pause hotkey opens the
- * pause menu ([onPause]), which the dialog waits behind.
+ * answered for the game by the player, and a game data install's progress, which asks nothing. Touch and controller
+ * both work. A controller's D-pad moves the choice, and the PSP buttons the user mapped confirm and back out, circle or
+ * cross confirming as the game asks (Japanese games often confirm with circle); Start finishes the keyboard.
+ * [controls] are the game's bindings: its pause hotkey opens the pause menu ([onPause]), which the dialog waits behind.
  */
 @Composable
 fun PspSystemDialog(
@@ -114,6 +115,7 @@ fun PspSystemDialog(
         PspDialogRequest.KIND_MESSAGE -> PspMessageDialog(request, keys, fullScreen, onAnswer)
         PspDialogRequest.KIND_KEYBOARD -> PspKeyboardDialog(request, keys, fullScreen, onAnswer)
         PspDialogRequest.KIND_SAVEDATA -> PspSaveDialog(request, keys, fullScreen, onAnswer)
+        PspDialogRequest.KIND_INSTALL -> PspInstallDialog(request, keys, fullScreen)
     }
 }
 
@@ -484,6 +486,52 @@ private fun PspSaveDialog(
         dismissButton = if (asked == null && !request.nothingThere()) {
             { TextButton(onClick = ::back) { Text("Back") } }
         } else null,
+    )
+}
+
+/**
+ * A game data install's progress, where the PSP shows its own (the game's mode 1; in mode 0 the game draws its own and
+ * nothing comes here): the install's icon, its titles and detail, the bytes it copies, and how far it has got. No
+ * button and no back: the install can't be stopped from here, and the core takes the dialog down when it's done. The
+ * pause hotkey still opens the pause menu.
+ */
+@Composable
+private fun PspInstallDialog(request: PspDialogRequest, keys: PspDialogKeys, fullScreen: Boolean) {
+    val input = remember { PspDialogInput() }
+    val progress = request.installProgress()
+    PhobosAlertDialog(
+        onDismissRequest = {},
+        modifier = Modifier.pspKeys(request, keys, input) {},
+        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+        title = {
+            DialogSystemBars(fullScreen, inGame = true)
+            Text("Install")
+        },
+        text = {
+            Column {
+                PspTakeFocus(request, input)
+                request.saves.firstOrNull()?.let { install ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        PspSaveIcon(install)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(install.saveTitle.ifEmpty { install.title.ifEmpty { install.name } },
+                                style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (install.detail.isNotEmpty()) {
+                                Text(install.detail, style = MaterialTheme.typography.bodySmall, maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Text(pspSaveSize(install.size), style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                Text("Installing\u2026 $progress%", Modifier.padding(top = 12.dp))
+                ProgressBar({ progress / 100f }, Modifier.fillMaxWidth().padding(top = 8.dp))
+            }
+        },
+        confirmButton = {},
     )
 }
 
