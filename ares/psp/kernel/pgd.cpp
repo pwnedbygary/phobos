@@ -90,6 +90,23 @@ static auto versionKeyFromMac(const u8* file, const Block& storedMac) -> Block {
   return key;
 }
 
+//A MAC the header holds at `at`. MAC type 3 (key index over 1) stores its MACs encrypted with KIRK's key 0x63, so
+//they're decrypted before they're compared.
+static auto storedMac(const u8* file, u32 at) -> Block {
+  Block mac;
+  memcpy(mac.data(), file + at, 16);
+  if(le32(file + 4) > 1) AES128{Keys::kirk7[0x63]}.decrypt(mac.data());
+  return mac;
+}
+
+}
+
+auto Pgd::intact(const u8* file) -> bool {
+  return bbmac(file, 0x80, kDnasKey) == storedMac(file, 0x80);
+}
+
+auto Pgd::keyMatches(const u8* file, const u8 versionKey[16]) -> bool {
+  return bbmac(file, 0x70, versionKey) == storedMac(file, 0x70);
 }
 
 //The data key XORed with the version key, one BBCipher key, is how both the descriptor and the data are keyed.
@@ -129,24 +146,16 @@ auto Pgd::decryptData(u8* data, u32 offset, u32 size, const u8 dataKey[16], cons
 auto Pgd::descriptor(const u8* file, u64 size, const u8 versionKey[16], Descriptor& out) -> std::string {
   if(size < 0x90) return "a PGD file cut short in its header";
 
-  //MAC type 3 (key index over 1) stores its MACs encrypted with KIRK's key 0x63, before they're compared.
-  bool encryptedMacs = le32(file + 4) > 1;
-  auto storedMac = [&](u32 at) -> Block {
-    Block mac;
-    memcpy(mac.data(), file + at, 16);
-    if(encryptedMacs) AES128{Keys::kirk7[0x63]}.decrypt(mac.data());
-    return mac;
-  };
-
   //The header's two MACs: the file with the DNAS key over its first 0x80 bytes, and with the version key over its
-  //first 0x70. The first failing says the header isn't what its keys say. For the second, a game that hands over a key
-  //which doesn't match this file's MAC (a key meant for another of its files, say) isn't stuck: the key comes back
-  //out of the MAC itself, so a header that checks against the recovered key still unlocks. Which key was used is
-  //reported, because the data has to be decrypted with the same one.
-  if(bbmac(file, 0x80, kDnasKey) != storedMac(0x80)) return "a PGD file whose header doesn't match its DNAS MAC";
+  //first 0x70. The first failing says the header isn't what its keys say. For the second, a key that doesn't match
+  //this file's MAC comes back out of the MAC itself, so a header that checks against the recovered key still unlocks:
+  //what an NPDRM EDATA readied with its licensee key needs (io.cpp's sceNpDrmEdataSetupKey: that key isn't its PGD's
+  //version key). A game's own key is checked before it gets here (io.cpp's pgdUnlock(), keyMatches()), as the PSP's
+  //PGD layer refuses any other. Which key was used is reported, because the data has to be decrypted with the same one.
+  if(!intact(file)) return "a PGD file whose header doesn't match its DNAS MAC";
   Block key;
   memcpy(key.data(), versionKey, 16);
-  if(bbmac(file, 0x70, versionKey) != storedMac(0x70)) key = versionKeyFromMac(file, storedMac(0x70));
+  if(!keyMatches(file, versionKey)) key = versionKeyFromMac(file, storedMac(file, 0x70));
   memcpy(out.versionKey, key.data(), 16);
 
   //The descriptor (0x30 bytes at 0x30), BBCiphered with the 0x10 key XORed with the version key.

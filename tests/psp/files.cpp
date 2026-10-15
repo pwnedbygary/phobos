@@ -783,7 +783,10 @@ static auto downloadEdataEmptied() -> void {
   CHECK(m.call("sceNpDrmEdataGetDataSize", {save}), 5);
   CHECK(m.call("sceIoClose", {save}), 0);
   CHECK(stick.get("PSP/SAVEDATA/NPUH00000/DATA.BIN") == "012xy", true);
-  u32 emptying = open("ms0:/PSP/GAME/NPUH00000/DLC.EDAT", 0x4000'0602);
+  //(through the PGD layer it can't be: its open refuses a file opened with 0x40000000 to write, and leaves it be)
+  CHECK(open("ms0:/PSP/GAME/NPUH00000/DLC.EDAT", 0x4000'0602), Kernel::ErrorPgdInvalidArgument);
+  CHECK(stick.get("PSP/GAME/NPUH00000/DLC.EDAT") == bytes, true);
+  u32 emptying = open("ms0:/PSP/GAME/NPUH00000/DLC.EDAT", 0x0602);
   CHECK(m.call("sceNpDrmEdataSetupKey", {emptying}), 0);
   CHECK(m.call("sceNpDrmEdataGetDataSize", {emptying}), 0);
   edat = open("ms0:/PSP/GAME/NPUH00000/DLC.EDAT", 0x4000'0001);
