@@ -32,7 +32,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP NPDRM: EDATA decrypted — the PGD past the EDATA's header, on the memory stick too, its size and end the data's; a PGD file's end its data's — 2026-10-14
 
-Branch `cursor/psp-pgd-edata-2b67`, on master `14b181707` (part 95, #257, with #256); draft PR (below).
+Branch `cursor/psp-pgd-edata-2b67`, on master `14b181707` (part 95, #257, with #256); draft PR #259.
 docs/psp-core.md, part 97, has the evidence (part 96 is #258's). **The owner's area**: his PGD/EDATA proposal of
 13 Oct (`~/phobos-work/scratch/pgd-offset/`: REPORT.md, proposed-fix.patch), rebased at his request (14 Oct 20:30),
 to merge once CI is green and an independent review finds nothing (his approval, 21:18). Clean room: tpu's

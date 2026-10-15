@@ -14081,17 +14081,17 @@ length is checked then; Phobos's own savedata utility drops the cut on what it w
 
 ## Part 97: NPDRM EDATA decrypted — the PGD past the EDATA's header, on the memory stick too, its size and end the data's; a PGD file's end its data's
 
-On branch `cursor/psp-pgd-edata-2b67`, on master `14b181707` (part 95, #257, after part 94, #256); part 96 is #258's,
-still open. The owner's area (io.cpp's PGD and sceNpDrm code, which parts 88 and 95 reported to him and left alone):
-this is his proposal of 13 Oct (an investigation and a patch, `~/phobos-work/scratch/pgd-offset/`: `REPORT.md`,
-`proposed-fix.patch`), rebased at his request (14 Oct) onto part 95's model of a memory stick file's length, to merge
-once CI is green and an independent review finds nothing. Clean room: the PSP's behaviour from "tpu"'s decompilation
-of the firmware's PGD layer (kirk_engine's `npdrm/dnas_ida.c`) and his `npdrm/edata.c` and `npdrm/pgd.c` (written
-from npdrm), the PSP Developer Wiki's PSP_EDAT and PGD pages, uOFW's `iofilemgr_kernel.h` (the names of the flag and
-the commands), and codestation's npdecrypter (a plugin that dumps DLC through the firmware's own functions on a PSP);
-PPSSPP read only as a design cross-check (its npdrm's order of the two ioctls, its GetDataSize asking the PGD layer),
-nothing copied or translated; JPCSP not read. Save states: unchanged (layout 32, part 95's): no field added, as
-`pgdDataOffset` changes meaning once the descriptor is read (below).
+On branch `cursor/psp-pgd-edata-2b67` (draft PR #259), on master `14b181707` (part 95, #257, after part 94, #256);
+part 96 is #258's, still open. The owner's area (io.cpp's PGD and sceNpDrm code, which parts 88 and 95 reported to
+him and left alone): this is his proposal of 13 Oct (an investigation and a patch, `~/phobos-work/scratch/pgd-offset/`:
+`REPORT.md`, `proposed-fix.patch`), rebased at his request (14 Oct) onto part 95's model of a memory stick file's
+length, to merge once CI is green and an independent review finds nothing. Clean room: the PSP's behaviour from
+"tpu"'s decompilation of the firmware's PGD layer (kirk_engine's `npdrm/dnas_ida.c`) and his `npdrm/edata.c` and
+`npdrm/pgd.c` (written from npdrm), the PSP Developer Wiki's PSP_EDAT and PGD pages, uOFW's `iofilemgr_kernel.h` (the
+names of the flag and the commands), and codestation's npdecrypter (a plugin that dumps DLC through the firmware's own
+functions on a PSP); PPSSPP read only as a design cross-check (its npdrm's order of the two ioctls, its GetDataSize
+asking the PGD layer), nothing copied or translated; JPCSP not read. Save states: unchanged (layout 32, part 95's): no
+field added, as `pgdDataOffset` changes meaning once the descriptor is read (below).
 
 **The problem.** Part 88's review remarked that `pgdDescriptor()` read a PGD's header at file offset 0 while
 `sceNpDrmEdataSetupKey` set the data's start to 0x90. A **PGD** is the PSP's encrypted file: a 0x90-byte header whose
