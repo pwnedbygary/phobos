@@ -13552,20 +13552,31 @@ emptied then and there.
   are written from their starts: each is cut at its first write, as master emptied it at its opening.
 - The cut (`cut()`): the held file shortened to the length, through the held file and never a path, so a file renamed
   meanwhile is cut where it went, and one removed (and whatever is put at its path) never; only while the held file
-  has the host length the kernel left it, nothing else having written it since; and only ever shorter. Made as the
+  has the host length the kernel left it (a file written longer or shorter meanwhile by something else isn't cut); and
+  only ever shorter. Made as the
   file is closed (sceIoClose, sceIoCloseAsync), as the kernel powers on (a program ending or another starting, the
   machine switched off, as a PSP's kernel closes a program's files as it ends), and as a state is loaded over the
   program (below); after it, made or not, the descriptor is a plain one. So a file emptied with nothing written ends
   empty, and one written short of its old length ends where the writing did.
 - The descriptors kept in step with the paths: sceIoRemove drops the cuts of descriptors on the file it removed;
   sceIoRename moves descriptors on the file renamed, or in the folder renamed, to its new path (their host path and
-  their PSP path, where a state opens them again); and the savedata utility drops the cuts on the files it writes over
-  in place (the data file, the icons), replaces (PARAM.SFO), erases, or deletes with their save (`dropCuts()`).
+  their PSP path, where a state opens them again; the PSP's paths matched whatever their case, as a FAT stick's names
+  are, so a rename may spell them otherwise than the open did); and the savedata utility drops the cuts on the files
+  it writes over in place (the data file, the icons), replaces (PARAM.SFO), erases, or deletes with their save
+  (`dropCuts()`).
+- A file is one file to all of this by the host's own identity of it, not by its path's spelling (`sameHostFile()`:
+  the same path, or `std::filesystem::equivalent`, which compares the file's device and inode, or its volume and index
+  on Windows): two names for one file, a hard link or a host whose names ignore case and whose paths keep a name as
+  it was asked for, share its PSP length, its writes and its cut.
 - Emptied again while another descriptor still keeps its bytes, the file is cut to that one's length first: one length
   at a time (chosen).
-- A state keeps an emptied file's length and host length (layout 32; older layouts load with none kept). Loaded, an
-  emptied file keeps its cut only while its host file still has that host length (held again, its length compared): a
-  save written since, longer or shorter, isn't cut to the state's length. `System::unserialize()` sets the program's
+- A state keeps an emptied file's length and host length (layout 32; older layouts load with none kept), and for one
+  with a cut pending, the FNV-1a hash of the bytes the cut would drop, from the length to the host length
+  (`hashTail()`). Loaded, an emptied file keeps its cut only while its host file still has that host length and those
+  bytes (held again, its length and the hash compared): a save written since, longer, shorter or exactly as long, isn't
+  cut to the state's length. The hash is only made as a state is saved or loaded with a cut pending, over the tail
+  alone: LittleBigPlanet's longest, GUI.ARC's 4 MiB between a piece's emptying open and its write, takes about 6 ms on
+  this Mac; any other state pays nothing. `System::unserialize()` sets the program's
   files aside as it loads a state: put back untouched if the state is refused, and closed once it has loaded, their
   cuts made then as closing them would (`Kernel::serialize()` itself lets go of them as they are). So loading a state
   changes nothing on the memory stick as it loads; once loaded, the files the old session emptied are cut.
@@ -13597,6 +13608,19 @@ the owner's rules forbid, and gave cases for each (R1 to R7, now tests):
 - Not this part's: openFile() never sets a memory stick file's size, which the NPDRM code reads an EDATA's PGD header
   by, so an EDATA on the stick gets no PGD state (as on master): the owner's area, reported to him.
 
+The second review (of `6b26d4b63`) approved, rechecking each of these with probes of its own (P1 to P7: the held
+handles released on every path, 40 emptied files holding 80 descriptors and none after; at the process's file limit,
+master's emptying at once; folders renamed with emptied files in them; LittleBigPlanet's profile the same as master's
+on every boot), and left three small things, closed in a third round, as the owner's rule is never losing data:
+- P4, the limit the second round chose: a state with a cut pending, loaded after a newer save exactly as long as the
+  host file was, then closed without a write from its start, cut the newer save (to nothing, or to "NEWE"). Now the
+  state keeps the hash of the bytes the cut would drop, and the newer save's aren't them.
+- P7: part 95 said a cut through one of two names for one file could only be dropped, never made on another file. Not
+  so: a write through the other name inside the old length left the host length as it was, so the close cut the write
+  away. Now files are matched by identity: the write grows the emptied file's length, and the close keeps it.
+- `filesMoved()` matched the PSP's paths by their case: a rename spelled otherwise than the open left the descriptor's
+  PSP path behind (a state then dropped it). Now they match whatever their case.
+
 **Tests** (tests/psp): `files emptied as they're opened keep their bytes for a write past the end` (issue 579's test,
 with and without 0x02000000, then nothing written: empty, nothing cut before the close; while emptied, its status 0,
 reads and a seek from its end finding nothing, a write at 3 bringing back 0 to 2, one past its old length bringing
@@ -13607,9 +13631,13 @@ loaded over a newer save, longer and shorter (the cut dropped, the save left who
 state letting go of its files as they are; the kernel powering on closing them); `files emptied: the cut reaches only
 the file emptied` (removed while open and a file as long made at its path; renamed while open, its status and cut
 following it; its folder renamed; replaced behind the kernel's back by another program's file as long; written over in
-place, longer and shorter); `files emptied: Phobos killed part way` (before any write: whole; written from its start:
-the rewrite; written past its end only: its old bytes with the new ones over them); the review's cases, `files review
-R1` to `R7`; `utility savedata over files the game emptied` (the data file written over in place, as long as it was,
+place, longer and shorter; and renamed spelled otherwise than its open, its PSP path following, a state opening it
+again where it went with its cut); `files emptied: Phobos killed part way` (before any write: whole; written from its
+start: the rewrite; written past its end only: its old bytes with the new ones over them); the reviews' cases, `files
+review R1` to `R7`, `P4` (a state's cut, a newer save exactly as long: its cut dropped as it loads, the save left
+whole, nothing written and with a write past the end) and `P7` (two names for one file, a hard link: a write through
+the other name inside the old length, its status the emptied file's, kept at the close); `utility savedata over files
+the game emptied` (the data file written over in place, as long as it was,
 PARAM.SFO replaced, and the save deleted and made again: each as the save left it once the game closes its
 descriptor); `async files LittleBigPlanet's install` (the game's own calls for four pieces and a short one, the status
 0 at each open: the file ends the disc file's bytes); `files traced` (the trace's lines for an open, a write, a seek,
@@ -13625,7 +13653,10 @@ as the review found, and R7 passes; so do the cut's reach (the replacement as lo
 over cut or padded, the renames not followed), Phobos killed after a write from the start (the old tail kept), and the
 savedata utility's group (the data file written over as long cut to nothing, the new PARAM.SFO cut by its name). The
 first round's evidence stands: with `openFile()` as master had it, the install's group ends with its file zero before
-its last piece.
+its last piece. Against the second round's head (`6b26d4b63`), the third round's checks fail: P4 (the cut kept, the
+newer save cut), P7 (its status 10, the file emptied at the close) and the rename spelled otherwise (the PSP path left
+behind, the state dropping the descriptor). The second review's own probes, P1 to P7 as it wrote them, and its R1 to R7,
+pass on the third round (sanitized), P7 now ending "01QQ".
 
 **LittleBigPlanet now** (the branch's runner, a fresh stick, batch 04's script): GUI.ARC is byte for byte the disc's
 `PSP_GAME/USRDIR/archives/gui.arc` (4,352,791 bytes, MD5 39a495311490a365427a8ec3ae78ba88; the disc file's bytes as
@@ -13660,6 +13691,12 @@ error has occurred. Data installation will be canceled." With an empty ULJM05775
 removes the folder (sceIoRmdir, 0), and the same error follows. The install needs the game data install utility itself:
 copying the disc's install files into the save folder with its PARAM.SFO, its progress and result.
 
+**Checks** (the third round's code). tests/psp: 543 groups, 0 failures, sanitized and unsanitized; tests/psp/ares
+348 checks, 0 failed; the runner's test passes; GCC 13.3 builds the changed kernel and tests with `-Wall -Wextra
+-Werror`. The reviews' R1 to R7 and P1 to P7 pass. LittleBigPlanet from a fresh stick: GUI.ARC byte for byte again
+(`run-r3/`). A state with no cut pending is as the second round wrote it (the hash is only kept for a pending cut), so
+the scenes' and saves' checks below stand.
+
 **Checks** (the second round's code).
 - tests/psp: 541 groups, 0 failures, sanitized (with `detect_container_overflow=0`, this Mac's known false positive) and
   unsanitized; tests/allegrex 68 groups, 0 failures; tests/psp/ares 348 checks, 0 failed; the runner's test passes.
@@ -13684,9 +13721,7 @@ copying the disc's install files into the save folder with its PARAM.SFO, its pr
 
 **What's left.** The game data install utility (Kingdom Hearts BbS FM's DATA INSTALL; Gunhound EX's cancels too).
 What a PSP's sceIoGetstat says of a file emptied so before it's written, and what a gap past the old bytes holds, if a
-test on a PSP ever records them. The cut's limits, chosen: a state saved inside an emptied file's window (between its
-emptying open and its first write, or with only writes past its end: a few milliseconds a file in LittleBigPlanet's
-saves) and loaded after a newer save of the very length the state recorded cuts that save to the state's length; and
-two names for one file that the host doesn't make one (resolve()'s paths on a case-insensitive host that keeps the
-names as given: the review's note, unverified on Android's storage) aren't seen as one file, so a cut through either
-can only be dropped (its host length no longer the kernel's), never made on another file.
+test on a PSP ever records them. What the cut can't tell from a file left as it was: loading a state, a newer save
+whose bytes past the state's length are byte for byte the ones the state hashed (or collide with their 64-bit hash);
+within a session, another program on the host writing the file in place, as long, while a cut is pending (only the
+length is checked then; Phobos's own savedata utility drops the cut on what it writes).

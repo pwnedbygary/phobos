@@ -52,13 +52,19 @@ JPCSP not read. Save states: layout 32 (31 and older load as before; `tests/psp/
   only ever shorter: as soon as a write starts at or before the length (a save rewritten from its start), or as the
   file is closed (sceIoClose, sceIoCloseAsync, the kernel powering on, a state loaded over the program). sceIoRemove
   and the savedata utility's writes and deletes drop a cut on their files; sceIoRename moves descriptors with their
-  file. A state keeps both lengths, and a loaded one keeps its cut only while the host file has the length it recorded.
+  file (PSP paths matched whatever their case). Files are matched by the host's identity of them, so two names for one
+  file share its length and cut. A state keeps both lengths and the hash of the bytes a pending cut would drop, and a
+  loaded one keeps its cut only while the host file has that length and those bytes.
 - **The review** (round 2, changes requested on `300e03e14`: the delayed cut could reach save data master leaves whole):
   a cut by path (R1: a file renamed onto an emptied file's name emptied at the old descriptor's close; R2: an emptied
   file renamed while open never cut), a state's descriptor cutting a newer save or padding a shorter one (R4, R5), a
   state load dropping the session's cuts (R3), and Phobos killed between a rewrite's last write and its close leaving
   the old tail (R6). All fixed as above; R1 to R7 are tests now. The reviewer's NPDRM nit (a memory stick EDATA gets
-  no PGD state, as on master) is the owner's area, left to him.
+  no PGD state, as on master) is the owner's area, left to him. Round 3 (the second review approved `6b26d4b63`,
+  leaving three small things): its P4 (a state's cut and a newer save exactly as long, which the length alone let
+  through) closed by the tail hash; its P7 (a write through another name for the file lost at the close: part 95's
+  claim was inexact) closed by matching files by identity; renames spelled otherwise than the open now carry the PSP
+  path. P4 and P7 are tests; its P1 to P7 and R1 to R7 pass.
 - **LittleBigPlanet now**: GUI.ARC byte for byte the disc's archives/gui.arc; one boot from a fresh stick reaches its
   first level, where Sackboy walks, and a second boot takes the installed data (deepplay/LittleBigPlanet:
   fixed-path.txt, sheet-fx4.png, z-fixed-install-to-level.png, sheet-fx4b.png; round 2: run-r2a, sheet-r2a.png).
@@ -78,9 +84,8 @@ JPCSP not read. Save states: layout 32 (31 and older load as before; `tests/psp/
   on a second boot.
 - **Left**: the game data install utility (KH BbS FM; Gunhound EX's DATA INSTALL cancels too). What a PSP's
   sceIoGetstat says of a file emptied so before it's written, and what a gap past its old bytes holds, aren't recorded.
-  The cut's chosen limits (part 95): a state from inside an emptied file's window loaded after a newer save of the very
-  length it recorded cuts it; two names for one file a case-insensitive host keeps apart aren't seen as one (a cut
-  through either can only be dropped).
+  What the cut can't tell from a file left as it was (part 95): a newer save whose dropped bytes are the state's byte
+  for byte, and within a session another host program's in-place write of the same length.
 
 ## PSP Vulkan: the frame buffer's alpha as its stencil has it — MX vs. ATV Untamed's race (the haze over its hills and trees, the tree's shadow) — 2026-10-14
 
