@@ -627,6 +627,64 @@ static auto pgdSeekEnd() -> void {
   CHECK(m.notes.size(), 0);
 }
 
+//An unlocked PGD file's seeks stop at its data's end, as the PSP's PGD layer clamps each one to the descriptor's size
+//("tpu"'s decompilation): sought past the end from its start, from where it is or from its end, synchronously or
+//not, a UMD data file or an EDATA is at its data's end, and a seek back from there reads what's left.
+static auto pgdSeekClamped() -> void {
+  auto plain = pattern(3000, 12);
+  u8 key[16];
+  for(u32 at = 0; at < 16; at++) key[at] = u8(0x40 + at);
+  psp_pgd::Options options;
+  options.keyIndex = 1;
+  options.versionKey = key;
+  auto pgd = psp_pgd::build(plain, options);
+  auto image = disc_image::makeIso({{"PSP_GAME/INSDIR/DATA.BIN", pgd}, {"UMD_DATA.BIN", pattern(32, 4)}});
+  auto edata = psp_pgd::edata(pgd);
+  HostFolder folder;
+  folder.put("PSP/GAME/NPUH00000/DLC.EDAT", std::string(edata.begin(), edata.end()));
+  for(bool stick : {false, true}) {
+    KernelMachine m;
+    auto& memory = m.system.memory;
+    std::string error;
+    m.kernel.disc = openDisc(image.bytes, error);
+    m.kernel.mount("ms0", folder.path.string());
+    u32 file = 0;
+    auto soughtAsync = [&]() -> u64 {  //an asynchronous seek, once it's done: where it left the file, through a poll
+      m.kernel.cycles = m.kernel.files[file].asyncDoneAt;
+      m.kernel.events();
+      if(m.call("sceIoPollAsync", {file, KernelMachine::Results})) return ~u64(0);
+      return memory.read(4, KernelMachine::Results) | u64(memory.read(4, KernelMachine::Results + 4)) << 32;
+    };
+    if(stick) {
+      memory.fill(Out, 0x5a, 16);
+      CHECK(m.call("sceNpDrmSetLicenseeKey", {Out}), 0);
+      file = m.call("sceIoOpen", {m.string("ms0:/PSP/GAME/NPUH00000/DLC.EDAT"), 0x4000'0001, 0});
+      CHECK(m.call("sceNpDrmEdataSetupKey", {file}), 0);
+    } else {
+      for(u32 at = 0; at < 16; at++) memory.write(1, In + at, 0x40 + at);  //the key
+      file = m.call("sceIoOpen", {m.string("disc0:/PSP_GAME/INSDIR/DATA.BIN"), 0x4000'4001, 0});
+      CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), 0);
+    }
+    CHECK(m.call("sceIoLseek32", {file, 5000, 0}), 3000);
+    CHECK(m.call("sceIoLseek32", {file, u32(-1000), 1}), 2000);
+    CHECK(m.call("sceIoRead", {file, Buffer, 4000}), 1000);
+    std::vector<u8> read(1000);
+    memory.copyOut(read.data(), Buffer, 1000);
+    CHECK(read == std::vector<u8>(plain.begin() + 2000, plain.end()), true);
+    CHECK(m.call("sceIoLseek32", {file, 100, 2}), 3000);
+    CHECK(m.call("sceIoLseek32", {file, u32(-200), 1}), 2800);
+    CHECK(m.call("sceIoRead", {file, Buffer, 4000}), 200);
+    CHECK(m.call("sceIoLseek32", {file, 500, 1}), 3000);
+    CHECK(m.call("sceIoLseekAsync", {file, 0, 5000, 0, 0}), 0);  //(file, unused, the offset's halves, whence)
+    CHECK(soughtAsync(), 3000);
+    CHECK(m.call("sceIoLseek32Async", {file, u32(-1000), 1}), 0);
+    CHECK(soughtAsync(), 2000);
+    CHECK(m.call("sceIoRead", {file, Buffer, 4000}), 1000);
+    m.call("sceIoClose", {file});
+    CHECK(m.notes.size(), 0);
+  }
+}
+
 //The drive's state, and waiting for it.
 static auto umdDrive() -> void {
   for(bool recompile : {false, true}) {
@@ -1048,7 +1106,7 @@ auto discTests() -> Tests {
     {"disc images", discImages}, {"disc files", discFiles}, {"disc folders read once", discFolders},
     {"disc requests", discRequests},
     {"disc PGD keys", discKeys}, {"disc PGD reads", discPgdReads}, {"disc PGD past a file's start", discPgdOffset},
-    {"PGD files end where their data does", pgdSeekEnd},
+    {"PGD files end where their data does", pgdSeekEnd}, {"PGD files' seeks stop at their data's end", pgdSeekClamped},
     {"disc drive", umdDrive}, {"disc drive's callback", umdCallback},
     {"disc drive mounting as it's activated", umdMounting}, {"memory stick's callback", stickCallback},
   };

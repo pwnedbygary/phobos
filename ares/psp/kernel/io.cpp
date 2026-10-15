@@ -804,10 +804,13 @@ auto Kernel::sceIoWrite() -> void {
 //Moves a file's position: from its start (whence 0), where it is (1), or its end (2). Returns where it is now. A
 //memory stick file ends where the PSP sees it end (fileLength(): short of the host file's end while a descriptor that
 //emptied it as it was opened keeps its bytes). A PGD file unlocked with its key is its decrypted data
-//(pgdDecryptRead()), so its end is the data's, as the PSP's PGD layer seeks it ("tpu"'s decompilation: from the
-//descriptor's size), not the file's, headers and block MACs and all. No descriptor is both: a PGD file is open only
-//to read (the disc's files can't be opened to write, and sceNpDrmEdataSetupKey readies an EDATA only so), and only a
-//descriptor opened to write empties its file as it's opened (openFile()).
+//(pgdDecryptRead()), so its end is the data's, not the file's, headers and block MACs and all, and no seek goes past
+//it, as the PSP's PGD layer seeks it ("tpu"'s decompilation: from the descriptor's size, each result clamped to it).
+//A descriptor that emptied its file is never a PGD: a PGD file is open only to read (the disc's files can't be opened
+//to write, and sceNpDrmEdataSetupKey readies an EDATA only so), and only a descriptor opened to write empties its file
+//as it's opened (openFile()). The two meet where another descriptor empties a readied EDATA: its end stays its data's
+//while its reads find nothing past the PSP's length (readCount()), as the PGD layer, which answers from its
+//descriptor, plausibly does too.
 auto Kernel::seek(u32 file, s64 offset, u32 whence, u64& position) -> u32 {
   auto found = files.find(file);
   if(found == files.end() || found->second.folder || found->second.resultOnly) return ErrorBadFile;
@@ -823,6 +826,7 @@ auto Kernel::seek(u32 file, s64 offset, u32 whence, u64& position) -> u32 {
   s64 base = whence == 0 ? 0 : whence == 1 ? s64(open.position) : whence == 2 ? size : -1;
   if(base < 0 || base + offset < 0) return ErrorInvalidArgument;
   open.position = u64(base + offset);
+  if(open.pgd && open.pgdReady) open.position = std::min<u64>(open.position, open.pgdDataSize);
   position = open.position;
   return 0;
 }
@@ -1516,9 +1520,9 @@ auto Kernel::sceNpDrmRenameCheck() -> void { result(0); }
 //says, counted from the PGD's start (0x120 into the file, in the usual EDATA). The licensee key is put on it as the
 //version key (pgd.cpp recovers the right one from the header's MAC when it isn't). Anything else is read as it is: a
 //plain file, or an EDATA holding something other than a PGD. Only a file open to read alone is readied, as npdrm's
-//callers open their EDATA (0x40000001; chosen: what a PSP makes of one open to write isn't known), so a PGD is never
-//a descriptor that emptied its file as it was opened (openFile(), seek()); one emptied through another descriptor is
-//as long as the PSP sees it (pgdFileLength()).
+//callers open their EDATA (0x40000001) and as the PSP's PGD layer takes them ("tpu"'s decompilation refuses a
+//0x40000000 file opened to write, 0x80510201), so a PGD is never a descriptor that emptied its file as it was opened
+//(openFile(), seek()); one emptied through another descriptor is as long as the PSP sees it (pgdFileLength()).
 auto Kernel::sceNpDrmEdataSetupKey() -> void {
   auto found = files.find(arg(0));
   if(found == files.end() || found->second.folder || found->second.resultOnly) return result(ErrorBadFile);
