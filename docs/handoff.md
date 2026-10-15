@@ -46,13 +46,17 @@ Save states unchanged (layout 32: the copy isn't state).
   the end writes PARAM.SFO (the request's titles; a PARAM.SFO there keeps its other keys) and renames the copy into
   PSP/SAVEDATA/<game><data>, or moves its files into the folder there, PARAM.SFO last. It writes over only what a PSP's
   dialog would: INSDIR's files and PARAM.SFO in that folder. Phobos stopped part way leaves no half folder: aborted,
-  reset or a state loaded, the copy is taken away; killed, it stays out of sight until the next install of the same
-  data. Answers: 0; 1 (Abort; a disc with nothing to install, as before); 0x80111901 no stick; 0x80111902 no space
-  (chosen from the codes' pattern; io.cpp's 57,344 free clusters, and never filling the host's storage); 0x80111904
-  the stick unwritable (also chosen for bad names); 0x80111908 mode ≥ 2.
-- **sceIoChstat** (io.cpp, new): the memory stick's read-only flag as io/stat/readonly recorded (the host file's owner's
-  write permission); sceIoGetstat and sceIoDread give a stick file's attributes as io/stat recorded (0x20 a file, 0x10
-  a folder, 0x01 more when read-only), where they had been 0x27 and 0x17.
+  reset or a state loaded, the copy is taken away; killed, the whole `.phobos-install` is emptied at the next power on
+  or install start (never following a link out of it). Programs can't see or reach `.phobos-install` (io.cpp's
+  `resolve()` and sceIoDopen). Answers: 0; 1 (Abort; a disc with nothing to install, as before); 0x80111901 no stick;
+  0x80111902 no space (chosen from the codes' pattern; io.cpp's 57,344 free clusters, never filling the host's
+  storage, and the host filling during the copy); 0x80111904 the stick unwritable (also chosen for bad names, a
+  folder name ending in '.' or ' ', a file in the folder's place, a leftover that can't be removed); 0x80111908 mode
+  ≥ 2. The trailing '.'/' ' refusal is the install's alone: savedata's names (the shared `plainName()`) are unchanged.
+- **sceIoChstat** (io.cpp, new): a memory stick file's read-only flag as io/stat/readonly recorded (the host file's
+  owner's write permission); a folder's answered 0 and changed nowhere, the device's top refused (0x80010016, as
+  sceIoGetstat). sceIoGetstat and sceIoDread give a stick file's attributes as io/stat recorded (0x20 a file, 0x10 a
+  folder, 0x01 more when a file is read-only), where they had been 0x27 and 0x17.
 - **The app**: in mode 1 (the PSP's own progress screen) a request of kind 7, made afresh as the progress moves on and
   taking no answer, shown by `PspInstallDialog` (icon, titles, size, "Installing… N%"; no button). Mode 0 shows
   nothing, as a PSP does (Kingdom Hearts draws its own screen).
@@ -61,14 +65,24 @@ Save states unchanged (layout 32: the copy isn't state).
   Gunhound EX installs all 797 files byte for byte; 7th Dragon 2020 its 1.5 GB. Both then read their install through
   the PGD layer (flag 0x40000000, ioctl 0x04100001), which io.cpp refuses on memory stick files (the owner's area,
   part 97's "left"), say so at boot and play from the disc. All 30 INSDIR discs in the library import the dialog.
-- **Tests**: tests/psp/install.cpp's 7 groups (the whole install in both sizes, a host folder disc, every answer, cut
-  short by Abort, a reset or Phobos killed, a state saved part way, over an install there, the progress screen and its
-  byte form) and files.cpp's sceIoChstat group; on master all 8 fail, part 37's own group passing on both. Android:
-  `PspDialogsTest.readsTheCoresInstallProgress`.
+- **Tests**: tests/psp/install.cpp's 8 groups (the whole install in both sizes, a host folder disc, every answer, cut
+  short by Abort, a reset or Phobos killed, the copies' folder hidden and links in its place, a state saved part way,
+  over an install there, the progress screen and its byte form) and files.cpp's sceIoChstat group; on master the first
+  round's 8 fail, part 37's own group passing on both. Android: `PspDialogsTest.readsTheCoresInstallProgress`.
+- **Review round** (review of `1fbabdf43`: approve with should-fixes): the leftovers' cleanup at power on and every
+  install start; sceIoChstat files only, top refused; the copies' folder hidden; the cleanup's errors checked; names
+  ending in '.'/' ' refused; a file in the folder's place found before the copy; a disk filling mid-copy 0x80111902;
+  two doc wordings (a third didn't hold: Kingdom Hearts clears its folders' read-only flag only where sceIoGetstat
+  says it's set, so with the PSP's 0x10 it changes none). The merge over an install there is kept (PPSSPP's
+  description; no clean-room recording covers it).
 - **Checks**: tests/psp 556/0 sanitized (`detect_container_overflow=0`) and unsanitized; tests/allegrex 78/0;
   tests/psp/ares 348/0; the runner's test; GCC 13.3 `-Wall -Wextra -Werror` on the changed files; Android 344 unit
   tests, 0 failures. The 21 scenes in Software: every hash master's, the state too. Batch 04's saves (7 games): the same
-  files byte for byte and the same savedata requests as master's runner. Nothing run on the RP6.
+  files byte for byte and the same savedata requests as master's runner. Nothing run on the RP6. Second round
+  (`063633d84`): tests/psp 557/0 sanitized and unsanitized, tests/allegrex 78/0, tests/psp/ares 348/0, the runner's
+  test; the round's tests fail on `1fbabdf43` (4 groups, 45 checks) and the other 553 pass; Kingdom Hearts installs
+  and boots again on a scratch stick (files the disc's, a planted leftover gone at power on, 41 reads from the stick,
+  every frame the first round's); a disk image filled mid-copy answers 0x80111902; the 21 scenes' hashes master's.
 - **Left**: the PGD layer on memory stick files (the owner's: Gunhound EX and 7th Dragon 2020 use their installs once
   it's there); the dialog's own screens and timing, the words after the progress, and the no-space code aren't recorded;
   sceIoChstat's times and size aren't changed.

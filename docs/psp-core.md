@@ -14298,9 +14298,10 @@ game "ULJM05775", the data "DATA", the titles "Kingdom Hearts Birth by Sleep -Fi
 "Deleting this will cause load times to increase.", parental level 1. It reads the dialog's progress (a getter at
 0x088d76c8, for its own install screen) and, once the dialog's gone, only its result: ≥ 0 goes on. Its disc's INSDIR
 holds ICON0.PNG and PIC1.PNG alone, the install's icons; the data is the game's to copy. A thread of its own
-("DataInstall") then registers a memory stick callback, takes the read-only flag off ms0:/PSP, PSP/SAVEDATA and the
-install's folder with sceIoChstat, and copies disc0:/PSP_GAME/USRDIR/BBS1.DAT (206,092,288 bytes) into the folder half
-a MiB at a time, each piece after another sceIoChstat on the file. sceIoChstat was missing (the kernel's "not yet
+("DataInstall") then registers a memory stick callback, looks at ms0:/PSP, PSP/SAVEDATA and the install's folder with
+sceIoGetstat, taking the read-only flag off any that has it with sceIoChstat, and copies
+disc0:/PSP_GAME/USRDIR/BBS1.DAT (206,092,288 bytes) into the folder half a MiB at a time, each piece after another
+sceIoChstat on the file. sceIoChstat was missing (the kernel's "not yet
 linked", 0x8002013a), and the game takes any failure there for the memory stick failing: it empties and removes the
 folder and shows the system's message with **0x80111904**, the code players saw on real PSPs with bad memory sticks.
 Cancelled (part 37), the thread found no folder and gave its own error.
@@ -14315,7 +14316,9 @@ game has them). It copies every file of the disc's PSP_GAME/INSDIR into the memo
 and writes a PARAM.SFO there describing the install as a save's describes it (TITLE, SAVEDATA_TITLE, SAVEDATA_DETAIL,
 PARENTAL_LEVEL, CATEGORY "MS", SAVEDATA_DIRECTORY), keeping a PARAM.SFO's other keys; over a folder already there it
 writes the same files over the ones there (PPSSPP's notes; Kingdom Hearts and Gunhound EX ask "already installed,
-overwrite?" first). Its statuses are a dialog's: starting, running while it copies, finished, shutting down.
+overwrite?" first, and Gunhound EX's install asked again goes on to write it over). No clean-room recording covers
+that merge: it's kept as PPSSPP's notes describe it and the games expect it. Its statuses are a dialog's: starting,
+running while it copies, finished, shutting down.
 
 **The change** (`install.cpp`, new; `utility.cpp`'s Update; `kernel.cpp`, `kernel.hpp`, `serialization.cpp`).
 - At its first Update the dialog lists INSDIR's files (folders in it aren't copied), from the disc image or a host
@@ -14329,13 +14332,23 @@ overwrite?" first). Its statuses are a dialog's: starting, running while it copi
   PARAM.SFO comes from INSDIR's own if it has one, else the folder's, else afresh (a broken one afresh), with the
   request's TITLE, SAVEDATA_TITLE, SAVEDATA_DETAIL, PARENTAL_LEVEL, CATEGORY and SAVEDATA_DIRECTORY, and (chosen, as
   every save Phobos writes has them) a SAVEDATA_FILE_LIST and SAVEDATA_PARAMS if it lacks them.
-- **Through a folder of its own.** The copy is made in `<memory stick>/.phobos-install/<game><data>`, out of the games'
-  sight and the savedata utility's (their lists look in PSP/SAVEDATA), and becomes the save's folder by one rename once
-  every file and PARAM.SFO are written; where the folder is there already, each file is moved into it over the one of
-  its name, PARAM.SFO last. Phobos stopped part way (killed, the machine reset, the game aborting the dialog, a state
+- **Through a folder of its own.** The copy is made in `<memory stick>/.phobos-install/<game><data>` and becomes the
+  save's folder by one rename once every file and PARAM.SFO are written; where the folder is there already, each file
+  is moved into it over the one of its name, PARAM.SFO last. Programs can neither see nor reach that folder
+  (`io.cpp`): `resolve()` answers "not found" for any memory stick path whose first name is `.phobos-install`,
+  whatever its case and however the path is written (`fatms0:`, `..`, from the working folder), so no game can open,
+  make, remove or rename anything in it, and sceIoDopen of the stick's top leaves it out; the savedata utility looks
+  in PSP/SAVEDATA alone. (Without this, a game's sceIoRemove and sceIoRmdir took a running install's copy away on
+  `1fbabdf43`, below.) Phobos stopped part way (killed, the machine reset, the game aborting the dialog, a state
   loaded) leaves the saves as they were, never a half folder a game would take for its install: the savedata utility
-  still says NO_DATA for it. A copy left by Phobos killed is taken away by the next install of the same data;
-  aborted, reset or a state loaded, at once.
+  still says NO_DATA for it. Aborted, reset or a state loaded, the copy is taken away at once. As one install runs at a
+  time, whatever is in `.phobos-install` when an install starts, or when the memory stick is put in at power on
+  (`mount()`, after the kernel's power has given up any install), is a copy left so, and all of it is taken away
+  (`installLeftovers()`): a phone that killed Phobos part way through 7th Dragon 2020's 1.5 GB gets the room back at
+  the next boot. That takes away `<stick>/.phobos-install` and nothing else: links in it are taken away and never
+  followed; a link in its place is taken away itself at power on, and an install that finds one there gives up
+  (0x80111904) with nothing behind it touched; and where something in it can't be taken away (no permission), the
+  install answers 0x80111904 before anything is written, PSP/SAVEDATA untouched.
 - **Not state.** The copy's place isn't in a save state (so no layout change, and every state the same as master's):
   loading a state takes the copy's folder away, and an install running in the loaded state starts again at its next
   Update, its progress from 0. Phobos never loads states behind the player's back (the stored "run ahead" setting is
@@ -14347,22 +14360,39 @@ overwrite?" first). Its statuses are a dialog's: starting, running while it copi
   from the pattern of the codes known, as nothing clean-room records it: the save group's 0x80110382 to 0x80110385 are
   removed, no space, protected and access, as the install's 0x80111901, 0x80111903 (PPSSPP's notes' WRITE_PROTECTED)
   and 0x80111904 are removed, protected and access. **0x80111904**, the memory stick couldn't be written (the players'
-  reports above); chosen too for names that would lead out of SAVEDATA, a file where the folder goes, and the disc
-  failing to read. **0x80111908**, a mode of 2 or more (PPSSPP's notes). The free space is the memory stick's as every
-  function tells it (io.cpp's 57,344 free clusters of 32 KiB): the install takes each file in whole clusters, one for
-  PARAM.SFO and one for the folder, as savedata's sizes count a save, and more than the free clusters is no space before
-  anything is written. Where the host itself hasn't room for the copy and 64 MiB more (a phone's storage nearly full),
-  the same answer: an install never fills the host's storage. Every install in the library fits (the largest INSDIR,
-  7th Dragon 2020's translation, is 1,532,651,653 bytes: 46,776 clusters with its PARAM.SFO and folder).
+  reports above); chosen too for names that would lead out of SAVEDATA, a folder's name ending in '.' or ' ' (FAT and
+  Windows drop those, so "DATA." would go into DATA's folder on one host and be a folder of its own on another), a
+  file where the folder goes (found at the first Update, before anything is copied, and looked at again at the end),
+  a copy left before that can't be taken away, a write failing with room on the host, and the disc failing to read.
+  **0x80111908**, a mode of 2 or more (PPSSPP's notes). The free space is the memory stick's as every function tells
+  it (io.cpp's 57,344 free clusters of 32 KiB): the install takes each file in whole clusters, one for PARAM.SFO and
+  one for the folder, as savedata's sizes count a save, and more than the free clusters is no space before anything is
+  written. Where the host itself hasn't room for the copy and 64 MiB more (a phone's storage nearly full), the same
+  answer: an install never fills the host's storage; and where a write fails with the host short of that room
+  (something else filling it while the copy runs), the same answer again, the copy taken away and its room given
+  back. Every install in the library fits (the largest INSDIR, 7th Dragon 2020's translation, is 1,532,651,653 bytes:
+  46,776 clusters with its PARAM.SFO and folder).
+- **The trailing '.' and ' ' check is the install's alone.** The savedata utility's names go through the same check of
+  plain names (`utility.cpp`'s `plainName()`, used by its save, load, size and list modes and its dialogs), and
+  refusing such names there could keep a game from loading or writing a save it already has, so they're left as they
+  were. Deep play's savedata traces (`~/phobos-work/deepplay`, 1,296 savedata calls) name no game, save or file
+  ending so, but they don't cover the library.
 - **sceIoChstat** (`io.cpp`, new): as io/stat/readonly recorded, the mode's write bits and the attributes' 0x01 are one
-  read-only flag on a PSP's memory stick (made 0444 a file reads mode 0x216d and attributes 0x21, made 0777 again 0x21ff
-  and 0x20, given the attributes 0x21 alone the same as 0444, each change answered 0). Here the flag is the host file's
-  owner's write permission (made writable, the owner's alone is given back), the attributes winning where both are
-  named; the rest of a status (times, size, private words) is answered 0 and left. On the disc, ErrorReadOnly. And
-  sceIoGetstat and sceIoDread give a stick file's attributes as io/stat recorded them, FAT's: 0x20 a file, 0x10 a
-  folder, 0x01 more and the mode's write bits gone where it's read-only. They had been 0x27 and 0x17, which as FAT's
-  attributes say read-only, hidden and system: Kingdom Hearts read 0x17 back and passed 0x16 to sceIoChstat. (The
-  disc's files are as before.)
+  read-only flag on a PSP's memory stick file (made 0444 a file reads mode 0x216d and attributes 0x21, made 0777 again
+  0x21ff and 0x20, given the attributes 0x21 alone the same as 0444, each change answered 0). Here the flag is the host
+  file's owner's write permission (made writable, the owner's alone is given back). Where both are named the
+  attributes say which: chosen, as the recording names both only once, agreeing. The recording has a file's flag
+  alone: a folder's is answered 0 and changed nowhere (chosen: a host folder that can't be written takes no new files,
+  while Windows' and Linux's FAT drivers ignore a folder's flag, so a game setting it on PSP/SAVEDATA would otherwise
+  stop every save), and a folder never reads read-only. The device's top (`ms0:/`, `ms0:`, `fatms0:/`) is refused as
+  sceIoGetstat refuses it (io/stat: "ms0:" 0x80010016). The rest of a status (times, size, private words) is answered
+  0 and left. On the disc, ErrorReadOnly. And sceIoGetstat and sceIoDread give a stick file's attributes as io/stat
+  recorded them, FAT's: 0x20 a file, 0x10 a folder, 0x01 more and the mode's write bits gone where a file is
+  read-only. They had been 0x27 and 0x17, which as FAT's attributes say read-only, hidden and system. Kingdom Hearts
+  reads its three folders' status and sets the attributes alone (bits 0x2) only where they say read-only: given the
+  old 0x17 it passed 0x16, 0x17 without read-only, for ms0:/PSP, PSP/SAVEDATA and its folder (`kh/run-v2`, whose
+  runner still had the old attributes); given 0x10, as a PSP gives, it changes no folder (`kh/run-r2`, the second
+  round's code). BBS1.DAT it gives 0 before each piece. (The disc's files are as before.)
 - **A front end** (the option "Dialogs", part 73): in mode 1, where a PSP shows its progress screen, the dialog posts a
   request of a kind of its own (7), made afresh as the progress moves on, which takes no answer: its mode 1, its focus
   the progress, and its one save the install (the data's name, the titles, the bytes it copies, INSDIR's ICON0.PNG,
@@ -14385,14 +14415,25 @@ overwrite?" first). Its statuses are a dialog's: starting, running while it copi
   refused; shut down in 40 ms; the size mode then answers 0 for the data; the trace's lines.
 - `... from a host folder standing for the disc`: the same install.
 - `... each answer`: nothing to install (no INSDIR, only a folder in it, no disc) cancelled; no memory stick
-  0x80111901; modes 2 and 0x7fffffff 0x80111908 (-1 installs); five names that aren't one plain name ("../OUTSIDE",
-  a data name of "../../OUTSIDE", "A/B", an empty game, a colon) 0x80111904, the stick untouched; a file where the
-  folder goes 0x80111904 at the end, the file as it was; an INSDIR file of 0x7fffffff bytes 0x80111902 before anything
-  is written.
+  0x80111901; modes 2 and 0x7fffffff 0x80111908 (-1 installs); nine names that aren't one plain name or make a
+  folder's name ending in '.' or ' ' ("../OUTSIDE", a data name of "../../OUTSIDE", "A/B", an empty game, a colon,
+  "DATA.", "DATA ", a game "ULJM99999 " with no data, "...") 0x80111904, the stick untouched; a file where the folder
+  goes 0x80111904 at the first Update, the file as it was and nothing copied; an INSDIR file of 0x7fffffff bytes
+  0x80111902 before anything is written.
 - `... cut short by the game, a reset, Phobos killed`: Abort after a piece (cancelled, nothing among the saves, no
   copy; then installed whole); a reset after a piece (the same); the memory stick as Phobos killed after two pieces
-  left it (only the copy; the size mode NO_DATA for the data; another game's install beside it leaves it; the next
-  install of the same data takes it away and installs whole).
+  left it (only the copy): the next boot (the stick mounted) takes the copy away and leaves a save beside it as it
+  was; put back while the machine runs, the size mode says NO_DATA for the data, another game's install takes it away
+  and installs, and the same data's install takes it away and installs whole. A leftover that can't be taken away (a
+  folder in it its owner may not write) makes the install answer 0x80111904 at the first Update, PSP untouched and
+  the leftover as it was; once it can be, the install takes it away and installs.
+- `... the copies' folder, hidden from programs, links in its place`: while a copy runs, sceIoDopen of `ms0:/` lists
+  only `NOTE.TXT` and `PSP`; sceIoGetstat, sceIoOpen (to read, to write, to make a file), sceIoMkdir, sceIoRemove,
+  sceIoRmdir, sceIoRename (to it and from it) and sceIoDopen on it, in other cases, through `..`, from the working
+  folder and through `fatms0:` all answer "not found", and the install then completes. A link in its place to a
+  folder off the stick: the stick mounted takes the link away, the folder behind it untouched; one made while the
+  machine runs makes the install answer 0x80111904, the folder behind it untouched. Links inside it, to a folder and a
+  file off the stick: the stick mounted, and an install's start, take the links away, never what they lead to.
 - `... a state saved part way`: the state round-trips; loaded into another machine and into the same one, the install
   starts again and installs whole.
 - `... over an install there`: over a save the savedata utility made: INSDIR's files written over (a longer DATA.BIN
@@ -14402,12 +14443,23 @@ overwrite?" first). Its statuses are a dialog's: starting, running while it copi
   and icon) each new, no answer taken, taken down at the end; the byte form against the Android tests' file
   (`psp-dialog-install.bin`); mode 0 shows nothing.
 - `files status changed (sceIoChstat): the memory stick's read-only flag`: the recording's sequence, sceIoDread as
-  sceIoGetstat, the attributes winning, times answered and left, a file not there, the disc refused.
+  sceIoGetstat, the attributes winning, times answered and left; a folder given the attributes 0x11 and the mode 0555
+  answered 0 and left as it was (it reads 0x11ff and 0x10, its host folder stays writable, and a file can be made in
+  it); the device's top (`ms0:/`, `ms0:`, `fatms0:/`) refused with 0x80010016 and left writable; a file not there,
+  the disc refused.
 - Android (`PspDialogsTest.readsTheCoresInstallProgress`): the core's install request read back, its progress clamped.
 
 On master with these tests (`~/phobos-work/scratch/gamedata-install/beforesrc`, unsanitized): the seven install groups
 and the sceIoChstat group fail (master copies nothing and answers 1; sceIoChstat answers 0x8002013a; the attributes
 0x27 and 0x17), and part 37's own group passes there as here (a disc with nothing to install is still cancelled).
+
+On the first round's head with the second round's tests (`1fbabdf43`, `beforesrc2`, unsanitized): the four groups
+the round changed fail, 45 checks, and the other 553 pass. Each answer's 6: the four new names installed, and the
+file where the folder goes was found only at the end. Cut short's 6: the next boot and another game's install left
+the copy, and a leftover that couldn't be taken away was passed over. The copies' folder's 25: sceIoDopen listed it,
+every function reached it, the program's sceIoRemove and sceIoRmdir took the running install's copy away (the
+install then failed), and the links in its place and in it stayed. sceIoChstat's 9: the folder was made read-only and
+unwritable (no file could be made in it), and the device's top was changed and made unwritable.
 
 **The games** (runners built from master and from this branch; every memory stick a fresh folder under
 `~/phobos-work/scratch/gamedata-install`).
@@ -14433,12 +14485,44 @@ and the sceIoChstat group fail (master copies nothing and answers 1; sceIoChstat
   installs now complete. Those that read their install through the PGD layer, as Gunhound EX and 7th Dragon 2020 do,
   fall back to the disc until the PGD layer takes its key on a memory stick file (the owner's to add).
 
-**Checks** (`403252139` and `e62b70f1e`). tests/psp: 556 groups, 0 failures, sanitized (`detect_container_overflow=0`)
-and unsanitized; tests/allegrex 78 groups, 0 failures; tests/psp/ares 348 checks, 0 failed; the runner's test passes.
-GCC 13.3 (Ubuntu 24.04's, CI's) builds `kernel.cpp` and the two test files with `-Wall -Wextra -Werror`. Android:
-`:app:compileModernReleaseKotlin` and `:app:testModernDebugUnitTest`, 344 tests, 0 failures. The 21 scenes in Software
-(the kit's bench runner, master's against the branch's, 100 frames from each scene's state, every frame's picture and
-VRAM settled, then RAM and the machine's state): all 102 hashes the same in all 21, the state too (no layout change).
+**The review.** An independent review of `1fbabdf43` (read-only, with probes and runners of its own) found no
+blockers: nothing written outside PSP/SAVEDATA/<game><data> and the copies' folder, no link leading the install out,
+the stat attributes' change one nothing else reads, kind 7's answers refused by the core, no run-ahead or rewind for
+the PSP. Its should-fixes, taken in a second round: a copy left by Phobos killed was taken away only by the next
+install of the same data (a phone killing Phobos during a 1.5 GB install kept it), now the whole copies' folder is
+emptied at each install's start and at power on; and sceIoChstat took the host's write permission from folders too
+(an unwritable host folder takes no saves) and from the device's top, now files alone, the top refused. Its nits,
+taken: the copies' folder hidden from programs (sceIoDopen of `ms0:/` listed it, and every function reached it); the
+leftovers' removal checked (a copy only partly taken away would have gone in with the install); folder names ending
+in '.' or ' ' refused (the install's alone, above); a file where the folder goes found before the copy (it was found
+after, up to 1.5 GB copied for nothing); a disk filling during the copy answered 0x80111902 (it was 0x80111904); and
+two wordings (the attributes winning is a choice; the folder is out of programs' sight only now that io.cpp hides
+it). A third didn't hold: that Kingdom Hearts passed 0x16 though Phobos gave its folders 0x10. `kh/run-v2`'s runner
+was built before the attributes were fixed and still gave 0x17, and on the second round's code, which gives 0x10, the
+game changes no folder at all (`kh/run-r2`): it reads the flag back and clears it where it's set (above). Kept, as
+the review asked: the merge over an install there, which no clean-room recording covers (above).
+
+**Checks** (the second round, `063633d84`). tests/psp: 557 groups, 0 failures, sanitized
+(`detect_container_overflow=0`) and unsanitized; tests/allegrex 78 groups, 0 failures; tests/psp/ares 348 checks, 0
+failed; the runner's test passes. GCC 13.3 wasn't run here this round (its container couldn't reach Ubuntu's
+archive that morning): CI's Linux build compiles with it. No Kotlin changed in the round, so the Android tests
+weren't run again. Kingdom Hearts with the second round's runner on a fresh scratch stick (`kh/run-r2`):
+INSTALLATION COMPLETE at frame 14,500, BBS1.DAT, ICON0.PNG and PIC1.PNG the disc's, PARAM.SFO the first round's byte
+for byte, nothing left in `.phobos-install`, and all 32 frames the first round's. Booted again on that stick with a
+3 MiB copy left in `.phobos-install` (`kh/run-r2boot`): the copy was gone at power on and PSP was as it was, and the
+game read BBS1.DAT from the stick (41 reads, none from the disc), all 21 frames the first round's. A disk filling
+during a copy (`diskfull/`, a scratch harness on the test objects: a 100 MB HFS+ disk image, filled after the first
+piece): 0x80111902, the copy taken away, a save and the filler untouched; a copied file made unwritable, with room:
+0x80111904; then installed whole, byte for byte. The 21 scenes in Software (master's bench runner against the second
+round's): all 102 hashes the same in all 21, the state too.
+
+**Checks** (the first round, `403252139` and `e62b70f1e`). tests/psp: 556 groups, 0 failures, sanitized
+(`detect_container_overflow=0`) and unsanitized; tests/allegrex 78 groups, 0 failures; tests/psp/ares 348 checks, 0
+failed; the runner's test passes. GCC 13.3 (Ubuntu 24.04's, CI's) builds `kernel.cpp` and the two test files with
+`-Wall -Wextra -Werror`. Android: `:app:compileModernReleaseKotlin` and `:app:testModernDebugUnitTest`, 344 tests, 0
+failures. The 21 scenes in Software (the kit's bench runner, master's against the branch's, 100 frames from each
+scene's state, every frame's picture and VRAM settled, then RAM and the machine's state): all 102 hashes the same in
+all 21, the state too (no layout change).
 Batch 04's saves (Gundam NEXT PLUS's system data, Kurohyou 1's install-data save, Lunar's system data, Killzone's and
 Lumines' profiles, La Pucelle Ragnarok's and MediEvil's game saves; master's runner and the branch's from the same
 sticks, the clock pinned): the same files byte for byte and the same savedata requests line for line.
@@ -14446,14 +14530,18 @@ sticks, the clock pinned): the same files byte for byte and the same savedata re
 **Left, and why.**
 - The PGD layer on memory stick files (ioctls 0x04100001 and 0x04100002 refused off the disc): games that read their
   installed data through it (Gunhound EX's PGDs, 7th Dragon 2020's GAME.DNS) can't use their install yet and fall back
-  to the disc, saying so at boot. PGD and NPDRM are the owner's; part 97 lists it too.
+  to the disc, saying so at boot, while the install keeps its room on the stick (460 MB and 1.5 GB). That message and
+  that room are the owner's to weigh: PGD and NPDRM are his; part 97 lists it too.
 - No recording has the dialog's own screens, its timing (a PSP copies at the UMD's speed: minutes for these installs,
-  seconds here), the words after the progress, or its answer for no space (0x80111902 is the pattern's) or for a disc
-  with nothing to install (cancelled is the stub's answer, kept).
+  seconds here), the words after the progress, its answer for no space (0x80111902 is the pattern's) or for a disc
+  with nothing to install (cancelled is the stub's answer, kept), or what it does over an install there (the merge
+  is PPSSPP's description).
 - The PSP's progress screen in mode 1 is the app's own dialog, not the PSP's drawing; it has no button, as nothing
   says a PSP's has one.
-- sceIoChstat's times, size and private words are answered but not changed (no recording has them).
+- sceIoChstat's times, size and private words are answered but not changed (no recording has them), and a folder's
+  read-only flag isn't kept (chosen, above).
 - Scratch: `~/phobos-work/scratch/gamedata-install` (`NOTES.md`; `disclist/`, a scratch lister of a disc image's
   folders; `insdir-survey.txt`; `imports-survey.sh` and `survey/`; `kh/` with the dump, `code.dis` and the runs;
-  `gunhound/`; `7d/`; `beforesrc/` and `tests-before-*.log`, the tests on master; `hashkit/`; `savecheck/`). Nothing
-  was run on the RP6.
+  `gunhound/`; `7d/`; `beforesrc/` and `tests-before-*.log`, the tests on master; `beforesrc2/` and
+  `r2-tests-before.log`, the second round's tests on `1fbabdf43`; `diskfull/`, the disk filling during a copy;
+  `hashkit/`; `savecheck/`). Nothing was run on the RP6.
