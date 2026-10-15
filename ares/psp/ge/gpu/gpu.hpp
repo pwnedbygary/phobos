@@ -232,10 +232,10 @@ struct GPU : GE::Renderer {
     u32 address = 0, low = 0, high = 0;  //Move into the depth
     bool barrier = false;  //Draw: what the pass drew before made visible to its reading first (emit())
   };
-  //(a run of models or indices, its room made larger out of line and kept as it's cleared: an append is a bound's check
-  //and a sum, where a vector's resize() is a call and its emplace_back() has its reallocation inline at each. Fast
-  //mode's screen triangles append three of each, a hundred thousand times a frame in Super Monkey Ball.)
-  template<typename T> struct Run {
+  //(a pile of models or indices, its room made larger out of line and kept as it's cleared: an append is a bound's
+  //check and a sum, where a vector's resize() is a call and its emplace_back() has its reallocation inline at each.
+  //Fast mode's screen triangles append three of each, a hundred thousand times a frame in Super Monkey Ball.)
+  template<typename T> struct Pile {
     auto size() const -> size_t { return used; }
     auto empty() const -> bool { return !used; }
     auto data() const -> const T* { return room.data(); }
@@ -259,8 +259,8 @@ struct GPU : GE::Renderer {
     std::vector<State> states;
     std::vector<Vertex> vertices;
     std::vector<u8> uploads;
-    Run<Model> models;   //(Mesh's)
-    Run<u32> indices;
+    Pile<Model> models;   //(Mesh's)
+    Pile<u32> indices;
     std::vector<Transformed> transforms;
     std::vector<DepthRun> runs;  //(Depth's)
     u32 readbacks = 0;
@@ -687,6 +687,10 @@ private:
     bool valid = false;
     bool textured, clampU, clampV, withAlpha, doubled, reads, readsBlending, dualSource, logicOps;
   } keptSettings{};
+  //(kept() compares each field by name and settings() records each: a field added must be in both, and these the new
+  //size and last place. A bool added last fits the padding, but settings()' list then misses it: -Wextra says so.)
+  static_assert(sizeof(KeptSettings) == sizeof(GE::PixelState) + 13 * 4 + 12 &&
+                offsetof(KeptSettings, logicOps) == sizeof(GE::PixelState) + 13 * 4 + 9);
   auto kept(const GE::Look& look) const -> bool;
   bool blendsByAlpha = false;  //(the PRIM blends by the frame buffer's alpha: settings(), for begin())
   auto clearStencil(u32 color) -> void;

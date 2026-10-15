@@ -789,6 +789,168 @@ static auto gpuKeptAfterFailedTexture() -> void {
   hardware.ge.setRenderer(nullptr);
 }
 
+//A pretend backend that draws nothing and keeps each draw's kind and state as it's run (the two tests below).
+struct RecordingBackend : GPU::Backend {
+  u32 made = 0;
+  std::vector<std::pair<GPU::Command::Kind, GPU::State>> drawn;
+  auto name() const -> std::string override { return "pretend"; }
+  auto makeTarget(u32, u32) -> u32 override { return ++made; }
+  auto dropTarget(u32) -> void override {}
+  auto makeTexture(u32, u32, const u32*, std::shared_ptr<const void>) -> u32 override { return ++made; }
+  auto dropTexture(u32) -> void override {}
+  auto run(const GPU::Recorded& r) -> bool {
+    for(auto& c : r.commands) {
+      if(c.kind == GPU::Command::Kind::Draw || c.kind == GPU::Command::Kind::Mesh) {
+        drawn.push_back({c.kind, r.states[c.state]});
+      }
+    }
+    return true;
+  }
+  auto submit(const GPU::Recorded& r) -> bool override { return run(r); }
+  auto finish(const GPU::Recorded& r) -> bool override { return run(r); }
+  auto read(u32, const u32*&, const u8*&) -> bool override { return false; }
+};
+
+//3D quads two units square side by side six units before the camera (vertex type 0x1ff, each quad's u and v 0 to 1),
+//one PRIM of triangles into prepare()'s frame buffer: fast mode's mesh at 3 quads or more, else the GE's own.
+static auto quads3D(System& s, u32 quads) -> void {
+  auto f24 = [](float value) { return bitsOf(value) >> 8; };
+  auto& c = s.ge.commands;
+  c[GE::VertexType] = 0x1ff, c[GE::MaxZ] = 0xffff;
+  for(u32 n = 0; n < 12; n++) s.ge.world[n] = s.ge.view[n] = f24(n % 4 == 0 ? 1 : 0);
+  for(u32 n = 0; n < 16; n++) s.ge.projection[n] = 0;
+  s.ge.projection[0] = s.ge.projection[5] = f24(1);  //(the near plane 1 away, the far one 10)
+  s.ge.projection[10] = f24(-11.0f / 9), s.ge.projection[11] = f24(-1), s.ge.projection[14] = f24(-20.0f / 9);
+  c[GE::ViewportXScale] = f24(32), c[GE::ViewportYScale] = f24(-24), c[GE::ViewportZScale] = f24(30000);
+  c[GE::ViewportXCenter] = f24(2048), c[GE::ViewportYCenter] = f24(2048), c[GE::ViewportZCenter] = f24(32768);
+  c[GE::OffsetX] = (2048 - 32) << 4, c[GE::OffsetY] = (2048 - 24) << 4;
+  c[GE::TextureScaleU] = c[GE::TextureScaleV] = f24(1);
+  u32 to = GPUVertices;
+  for(u32 quad = 0; quad < quads; quad++) {
+    for(u32 corner : {0u, 1u, 3u, 0u, 3u, 2u}) {
+      float u = corner & 1, v = corner >> 1, x = 2.0f * quad - quads + 2 * u, y = 2 * v - 1;
+      for(u32 word : {bitsOf(u), bitsOf(v), 0xff40'8020u, 0u, 0u, bitsOf(1), bitsOf(x), bitsOf(y), bitsOf(-6)}) {
+        s.memory.write(4, to, word), to += 4;
+      }
+    }
+  }
+  s.ge.vertexAddress = GPUVertices;
+  s.ge.primitive(GE::Triangles, quads * 6);
+}
+
+//A PRIM's settings kept (GPU::kept()) only while every input of them is the last one's: two PRIMs the same but for
+//one input, each input in turn, and the second must have settings of its own (a draw of its own with another state,
+//where taken for the first's it joins the first's draw). Each field of KeptSettings that can change alone; the
+//pixel pipeline's 16-byte blocks each (bytes 0-15, the clear flags, the frame buffer and its format, change the target
+//or make the settings unkept as well); the texture as the decoded copy it is; and the backend's ways of drawing, which
+//a pretend backend can change between PRIMs. (The target, its row width, rows and the frame buffer's place in it go
+//with the frame buffer's address; MASK_ALPHA with the write mask in the pixel pipeline; the texture's width, below
+//512, with the decoded copy, and above, the GPU takes 512.) No GPU needed.
+static auto gpuKeptInputs() -> void {
+  using Change = std::function<void(System&, RecordingBackend&)>;
+  struct Case { const char* input; u32 format; bool fast; Change both, change; };
+  Change none = [](System&, RecordingBackend&) {};
+  Change textured = [](System& s, RecordingBackend&) { texture(s, GPUTexture, 16, 16, 16); };
+  auto set = [](u32 command, u32 value) -> Change {
+    return [=](System& s, RecordingBackend&) { s.ge.commands[command] = value; };
+  };
+  auto stencils = [](System& s, RecordingBackend&) {
+    s.ge.commands[GE::StencilTestEnable] = 1, s.ge.commands[GE::StencilTest] = 1;  //(always)
+  };
+  auto logic = [](System& s, RecordingBackend&) {
+    s.ge.commands[GE::LogicOpEnable] = 1, s.ge.commands[GE::LogicOp] = 6;  //(XOR)
+  };
+  auto blended = [](System& s, RecordingBackend&) {
+    s.ge.commands[GE::AlphaBlendEnable] = 1, s.ge.commands[GE::BlendMode] = 2 | 3 << 4;  //(by the source's alpha)
+  };
+  std::vector<Case> cases = {
+    {"the pixel pipeline's bytes 16-31: the alpha test", 3, false, none, set(GE::AlphaTestEnable, 1)},
+    {"bytes 32-47: the alpha test's reference", 3, false, none, set(GE::AlphaTest, 0x80 << 8)},
+    {"bytes 48-63: the color test's reference", 3, false, none, set(GE::ColorReference, 0x12'3456)},
+    {"bytes 64-79: the stencil's pass operation", 3, false, stencils, set(GE::StencilOperation, 2 << 16)},
+    {"bytes 80-95: the depth test's function", 3, false, none, set(GE::DepthTest, 4)},
+    {"bytes 96-111: BLEND_FIXED_A", 3, false, none, set(GE::BlendFixedA, 0x10'2030)},
+    {"bytes 112-127: the dither matrix's third", 3, false, none, set(GE::Dither0, 3 << 8)},
+    {"bytes 128-143: its seventh", 3, false, none, set(GE::Dither0 + 1, 3 << 8)},
+    {"bytes 144-159: its eleventh", 3, false, none, set(GE::Dither0 + 2, 3 << 8)},
+    {"bytes 160-175: its fifteenth", 3, false, none, set(GE::Dither0 + 3, 3 << 8)},
+    {"bytes 176-191: the scissor", 3, false, none, set(GE::Scissor1, 1)},
+    {"bytes 192-207: the depth range", 3, false, none, set(GE::MinZ, 0x100)},
+    //(red's low bits, which a 5650 frame buffer's write mask doesn't keep)
+    {"MASK_COLOR", 0, false, set(GE::MaskColor, 0xf8), set(GE::MaskColor, 0xff)},
+    {"the texture function", 3, false, textured, set(GE::TextureFunction, 0 | 1 << 8)},
+    {"the texture's alpha", 3, false, textured, set(GE::TextureFunction, 3)},
+    {"the colors doubled", 3, false, textured, set(GE::TextureFunction, 3 | 1 << 8 | 1 << 16)},
+    {"the environment color", 3, false, textured, set(GE::TextureEnvironmentColor, 0x20'4060)},
+    {"clamped across", 3, false, textured, set(GE::TextureWrap, 1)},
+    {"clamped down", 3, false, textured, set(GE::TextureWrap, 1 << 8)},
+    {"the texture's height, the decoded copy the same", 3, false, textured, set(GE::TextureSize0, 3 << 8 | 4)},
+    {"the texture", 3, false, textured,
+      [](System& s, RecordingBackend&) { texture(s, GPUTexture + 0x400, 16, 16, 16); }},
+    {"textured", 3, false, textured, set(GE::TextureMappingEnable, 0)},
+    {"the backend reading the frame buffer", 3, false, logic, [](System&, RecordingBackend& b) { b.reads = true; }},
+    {"the backend reading every blend", 3, false,
+      [=](System& s, RecordingBackend& b) { blended(s, b), b.reads = true; },
+      [](System&, RecordingBackend& b) { b.readsBlending = true; }},
+    {"the backend's dual-source blending", 3, false, blended,
+      [](System&, RecordingBackend& b) { b.dualSource = true; }},
+    {"the backend's logic operations", 3, false, logic, [](System&, RecordingBackend& b) { b.logicOps = true; }},
+    {"the shading, fast mode's", 3, true, none, set(GE::ShadeMode, 0)},
+    {"the filter, fast mode's", 3, true, textured, set(GE::TextureFilter, 1 | 1 << 8)},
+  };
+  for(auto& one : cases) {
+    auto backend = std::make_unique<RecordingBackend>();
+    auto& pretend = *backend;
+    pretend.transforms = one.fast;
+    GPU gpu(std::move(backend));
+    gpu.fast = one.fast;
+    System s;
+    s.ge.setRenderer(&gpu);
+    prepare(s, 0, one.format);
+    for(u32 n = 0; n < 2 * 16 * 16; n++) s.memory.write(4, GPUTexture + n * 4, 0xff00'0000 | n * 0x01'0203);
+    one.both(s, pretend);
+    auto draw = [&] { one.fast ? quads3D(s, 1) : sprite(s, {{{0, 0, 4, 4}, {16, 16, 20, 20}}, 0x8040'2010}); };
+    draw();
+    one.change(s, pretend);
+    draw();
+    s.ge.settleAll();
+    bool own = pretend.drawn.size() == 2 && !(pretend.drawn[0].second == pretend.drawn[1].second);
+    if(!own) std::printf("  %s: %u draws\n", one.input, u32(pretend.drawn.size()));
+    CHECK(own, true);
+    s.ge.setRenderer(nullptr);
+  }
+}
+
+//Fast mode's 3D whose pipeline the driver won't make (Backend::drawable(), its answer kept while a PRIM's settings
+//are: GPU::drawableKnown): a PRIM of three quads drawn as a mesh, then the same blended, whose pipeline a pretend
+//backend refuses. The GE transforms that one itself and its triangles are drawn apart, not as a mesh. No GPU needed.
+static auto gpuMeshRefused() -> void {
+  struct Refusing : RecordingBackend {
+    auto drawable(const GPU::Pipeline& k) -> bool override { return !k.blend; }
+  };
+  auto backend = std::make_unique<Refusing>();
+  auto& pretend = *backend;
+  pretend.transforms = true;
+  GPU gpu(std::move(backend));
+  gpu.fast = true;
+  System s;
+  s.ge.setRenderer(&gpu);
+  prepare(s, 0, 3);
+  quads3D(s, 3);
+  s.ge.commands[GE::AlphaBlendEnable] = 1, s.ge.commands[GE::BlendMode] = 2 | 3 << 4;
+  quads3D(s, 3);
+  s.ge.settleAll();
+  u32 meshes = 0, apart = 0, blendedMeshes = 0;
+  for(auto& [kind, state] : pretend.drawn) {
+    if(kind == GPU::Command::Kind::Mesh) meshes++, blendedMeshes += state.pipeline.blend;
+    if(kind == GPU::Command::Kind::Draw) apart += state.pipeline.blend;
+  }
+  CHECK(meshes, 1u);
+  CHECK(blendedMeshes, 0u);
+  CHECK(apart > 0, true);
+  s.ge.setRenderer(nullptr);
+}
+
 //VRAM's bytes the two machines don't agree on, all of them.
 static auto vramApart(System& a, System& b) -> u32 {
   a.ge.settleAll(), b.ge.settleAll();
@@ -3338,10 +3500,11 @@ static auto gpuStencilAlphaWays() -> void {
 
 //The frame buffer's alpha behind its stencil noted, and set from it, on part 92's paths too: a PRIM whose settings are
 //the last one's keeps them (`keptSettings`), its own rectangle noted all the same (two sprites alike, leaving the
-//alpha behind, then white blended in by it over the second's alone); and in fast mode a PRIM of fewer vertices than
-//MeshLeast is drawn among the meshes (screenTriangle()), one leaving the alpha behind noted (a quad's depth fails
-//over the nearer half), one blending by it after another leaving it behind set first. Every byte the software
-//renderer's. At 1x and 2x, in either mode.
+//alpha behind, then white blended in by it over the second's alone), and one blending by it sets it first all the
+//same (part 100: two sprites alike blending by it, the first beside what lags, the second over it); and in fast mode
+//a PRIM of fewer vertices than MeshLeast is drawn among the meshes (screenTriangle()), one leaving the alpha behind
+//noted (a quad's depth fails over the nearer half), one blending by it after another leaving it behind set first.
+//Every byte the software renderer's. At 1x and 2x, in either mode.
 static auto stencilAlphaPaths(GPU* gpu) -> void {
   auto f24 = [](float value) { return bitsOf(value) >> 8; };
   auto quad = [&](System& s, float z) {  //(two triangles over the frame buffer at depth z, seen orthographically)
@@ -3374,6 +3537,17 @@ static auto stencilAlphaPaths(GPU* gpu) -> void {
       c[GE::MaskColor] = 0, c[GE::StencilTestEnable] = 0;
       c[GE::AlphaBlendEnable] = 1, c[GE::BlendMode] = 4 | 5 << 4;  //(white, by the frame buffer's alpha)
       sprite(s, {{{0, 0, 40, 0}, {0, 0, 56, 48}}, 0xffff'ffff});
+      c[GE::AlphaBlendEnable] = 0;
+    }},
+    {"blending by it, settings kept", false, [](System& s) {
+      auto& c = s.ge.commands;
+      everywhere(s, 0xc0);
+      c[GE::StencilTest] = 3 | 0xc0 << 8 | 0xff << 16, c[GE::StencilOperation] = 1;
+      sprite(s, {{{0, 0, 0, 0}, {0, 0, 16, 48}}, 0xffff'ffff});
+      c[GE::MaskColor] = 0, c[GE::StencilTestEnable] = 0;
+      c[GE::AlphaBlendEnable] = 1, c[GE::BlendMode] = 4 | 5 << 4;
+      sprite(s, {{{0, 0, 40, 0}, {0, 0, 56, 48}}, 0xffff'ffff});
+      sprite(s, {{{0, 0, 0, 0}, {0, 0, 16, 48}}, 0xffff'ffff});
       c[GE::AlphaBlendEnable] = 0;
     }},
     {"a small PRIM leaving it behind among the meshes", true, [&](System& s) {
@@ -4404,6 +4578,9 @@ auto gpuTests() -> Tests {
     {"gpu fast mode's small 3D PRIMs among its meshes: one draw, the pixels as drawn apart", gpuScreenMeshes},
     {"gpu fast mode's 3D held to the rows it takes of a larger copy, placed by the GE and in a mesh", gpuTakenRowsHeld},
     {"gpu a texture the backend couldn't make: the next PRIM alike still draws with its own", gpuKeptAfterFailedTexture},
+    {"gpu settings kept only while every input of them is the same: each changed alone, the next PRIM's its own",
+      gpuKeptInputs},
+    {"gpu fast mode: a PRIM changing to a pipeline the driver won't make isn't a mesh", gpuMeshRefused},
     {"gpu depth buffer follows memory's changes", gpuDepth},
     {"gpu depth as the GE's whole numbers: a fraction of a step above meets the GE's comparisons", gpuDepthSteps},
     {"gpu memory's changes to depth kept past PRIMs that don't use it, for the next that does", gpuDepthUnused},
