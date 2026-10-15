@@ -1037,7 +1037,8 @@ auto GPU::settings(const GE::Look& look) -> void {
 //GPU lost, no target for its frame buffer, rows past the target's (past VRAM's end, where the PSP's addresses run
 //round to its start, or past 512), or a texture the GE reads from memory as it draws, which the GPU can't have),
 //for the software renderer to draw; true for one that draws nothing too.
-auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region) -> bool {
+auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region,
+                const std::function<auto () -> GE::Reached>& reachedBy) -> bool {
   this->ge = &ge;
   drawing = false;
   reached();
@@ -1091,13 +1092,20 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
     break;
   }
   if(t->stale && t->drawn()) finish(ge), moving.clear();  //(what the GPU drew, then memory's changes over it)
-  //The rows this PRIM draws in that its depth is filled in from memory below (its own new ones and those memory
+  //The rows its depth test reads that its depth is filled in from memory below (its own new ones and those memory
   //changed, and those memory changed of the target it takes depth from), where another target has drawn on the GPU
   //since the last finish, as colors: put in memory first, for the depth to be filled from there. The Kurohyou games
   //draw their pre-rendered depth into the depth buffer's memory as a 5650 frame buffer, then test their characters
-  //against it. (Rows filled already aren't looked at again, nor rows filled that it doesn't draw in, which are filled
-  //from memory as it is: IL-2 Sturmovik's bloom, drawn each frame in the 16 KiB of its depth buffer's 273rd row, which
-  //memory changes, waits for no finish where its depth-of-field target and its clear fill that row.)
+  //against it. A test reads what's there unless it's always or never true, whatever it finds by the PRIM's depths
+  //too (nothing's greater than 65535, nor less than 0: Chili Con Carnage and Dirt 2 test 2D sprites at 65535 "greater
+  //or equal" over what they drew into the depth buffer's memory), in the rows the PRIM's pixels can be in: a 3D one's
+  //vertices on the screen, worked out only where those rows are asked about (GTA Chinatown Wars' radar, tested below
+  //the rows its bloom drew over). Depth filled that it doesn't read, of rows it doesn't draw in or of a PRIM whose test
+  //doesn't read it (a clear, or one always true: Brothers in Arms clears its depth so, Burnout writes it so, over their
+  //post-processing's buffers), is filled from memory as it is. (IL-2 Sturmovik draws its bloom each frame in the
+  //16 KiB of its depth buffer's 273rd row: its depth-of-field target and its clear fill that row, and the 3D drawn
+  //there after reads it as filled, as memory had it. WipEout Pure's HUD is tested against the bloom it draws over its
+  //depth buffer: a finish each frame.)
   bool depth = !column && !row && (p.clear ? p.clearDepth : p.depthTest);
   Target* taken = nullptr;
   if(depth) {
@@ -1105,20 +1113,31 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
     u32 rows = same ? t->depthRows : 0, changedFrom = same ? t->depthChangedFrom : 0;
     u32 changedTo = same ? t->depthChangedTo : 0;
     taken = newestDepth(*t, p.depthBuffer, p.depthStride, same ? t->depthAt : 0);
-    bool owned = false;
-    auto reach = [&](u32 from, u32 to) {
-      from = std::max<u32>(from, top), to = std::min<u32>(to, bottom + 1);
-      owned = owned || depthOwned(*t, p.depthBuffer, p.depthStride, from, to);
+    auto owned = [&](s32 first, s32 last) {  //(in rows first to last)
+      bool found = false;
+      auto reach = [&](u32 from, u32 to) {
+        from = std::max<u32>(from, first), to = std::min<u32>(to, last + 1);
+        found = found || depthOwned(*t, p.depthBuffer, p.depthStride, from, to);
+      };
+      if(taken) {  //(as takeDepth() fills them: the other's changes, and where it's narrower, this one's rows to its)
+        reach(taken->depthChangedFrom, std::min(taken->depthChangedTo, taken->depthRows));
+        bool narrower = Memory::depthCopy(taken->format) == Memory::depthCopy(t->format) &&
+                        taken->stride < std::min(t->stride, p.depthStride);
+        if(narrower) reach(rows, std::min(taken->depthRows, t->height));
+      }
+      reach(changedFrom, std::min(changedTo, rows));
+      reach(rows, bottom + 1);
+      return found;
     };
-    if(taken) {  //(as takeDepth() fills them: the other's changes, and where it's narrower, this one's rows up to its)
-      reach(taken->depthChangedFrom, std::min(taken->depthChangedTo, taken->depthRows));
-      bool narrower = Memory::depthCopy(taken->format) == Memory::depthCopy(t->format) &&
-                      taken->stride < std::min(t->stride, p.depthStride);
-      if(narrower) reach(rows, std::min(taken->depthRows, t->height));
+    if(!p.clear && p.depthFunction > 1 && owned(top, bottom)) {
+      GE::Reached r = reachedBy();
+      u32 f = p.depthFunction;
+      bool decided = (f == 4 || f == 7) ? r.lowest == 65535 : (f == 5 || f == 6) && r.highest == 0;
+      s32 first = std::max(top, r.region.top), last = std::min(bottom, r.region.bottom);
+      if(!decided && r.region.left <= r.region.right && first <= last && owned(first, last)) {
+        statistics.depthFinishes++, finish(ge), moving.clear();
+      }
     }
-    reach(changedFrom, std::min(changedTo, rows));
-    reach(rows, bottom + 1);
-    if(owned) statistics.depthFinishes++, finish(ge), moving.clear();
   }
   if(!ready()) return held.reset(), false;
   //(the colors filled afresh where memory's changed, the depth where memory's depth has: rows of it, or all of it
