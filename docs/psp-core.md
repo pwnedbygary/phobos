@@ -14082,11 +14082,15 @@ length is checked then; Phobos's own savedata utility drops the cut on what it w
 
 ## Part 96: the depth buffer in the order its frame buffer's format has it — the Kurohyou games' characters at the screen's middle, their floor's seam
 
-On branch `cursor/psp-kurohyou-2b67`, on master at e78b4a364 (#254). Parts 94 and 95 are other branches'. Clean room: no
-PPSSPP code read, JPCSP not read; the PSP's behaviour relied on is round 3's measurement of VRAM's copies (memory.hpp),
-pspautotests' `gpu/ge/edramswizzle` recording (the copies' layouts, which `sceGeEdramSetAddrTranslation` changes), and
-what the games themselves do on the PSP (below). Save states are unchanged (their layout and what's in them: the depth
-order is worked out from the frame buffer's format as it's drawn).
+On branch `cursor/psp-kurohyou-2b67`, on master at e78b4a364 (#254), with master at 14b181707 (#257; parts 94 and 95,
+other branches') merged in for the second round, after the review. Clean room: no PPSSPP code read, JPCSP not read; the
+PSP's behaviour relied on is round 3's measurement of VRAM's copies (memory.hpp), pspautotests' `gpu/ge/edramswizzle`
+recording (the copies' layouts, which `sceGeEdramSetAddrTranslation` changes), and what the games themselves do on the
+PSP (below). Save states are unchanged (their layout and what's in them: the depth order is worked out from the frame
+buffer's format as it's drawn). A state saved before this part holds a 16-bit frame buffer's depth in the old order
+(the fourth copy's): a game that clears its depth or draws it again each frame doesn't notice (every kit scene, and
+Kurohyou 1 and 2, right from the first frame), but one that drew its depth once and kept it would test against it
+scrambled until it drew it again.
 
 **The problem.** Deep play batch 04's bug 2 (HIGH, both renderers): in Kurohyou: Ryu ga Gotoku Shinshou and Kurohyou 2,
 characters crossing the screen's vertical middle (x = 240) lost their left part under Software, cut along a
@@ -14118,9 +14122,10 @@ of the copies (`edramswizzle`, at the PSP's starting translation, 0x400) is memo
 `sceGeEdramSetAddrTranslation`. So the layout the GE writes must differ by something round 3 held fixed: the frame
 buffer's format. With a 16-bit frame buffer the GE keeps its depth as the second copy shows it in order, with an 8888
 one as the fourth does: two copies that rearrange, one for each size of pixel, where a single layout would have needed
-one. Unmeasured, but every game that reads its depth buffer agrees, and none disagrees. A census (a scratch runner
-counting each texture read and CPU load through the second and fourth copies, and each depth buffer's frame buffer
-formats; 60 frames from each of the 128 deep-play games' states, and WipEout Pure's race):
+one. Unmeasured, but every game that reads its depth buffer agrees, and none disagrees. Every 16-bit game among them
+draws 5551: 5650 and 4444 go with it by their pixels' size only (no game or measurement shows them). A census (a
+scratch runner counting each texture read and CPU load through the second and fourth copies, and each depth buffer's
+frame buffer formats; 60 frames from each of the 128 deep-play games' states, and WipEout Pure's race):
 - 16-bit frame buffers reading their depth in order through the second copy: Kurohyou 1 and 2 (5551: the round trip,
   and Kurohyou's depth of field), Genso Suikoden Tsumugareshi Hyakunen no Toki (5551: a depth of field, four sprites of
   120 texels onto a 256-wide buffer, CLUT16), Me & My Katamari (5551: fog by depth, sprites with u = x onto the screen),
@@ -14143,18 +14148,33 @@ formats; 60 frames from each of the 128 deep-play games' states, and WipEout Pur
   it from the frame buffer's format, a template argument there (no cost); the four depths of a run stay side by side, as
   either copy leaves an offset's low 5 bits.
 - Vulkan, both modes: a target's depth is filled from memory, watched and put into memory (`putDepth()`) in its format's
-  order. Before a PRIM's depth is filled from memory, a finish where another target has drawn on the GPU in the depth
-  buffer's pages since the last one (`begin()`; `Target::depthAlone` keeps the pages found free as of `drawnSerial`, so
-  the 3D PRIMs after don't look again): Kurohyou draws its depth into the depth buffer's memory as a 5650 frame buffer,
-  on the GPU, and its characters' depth was filled from memory's older bytes (none of it drawn: the characters gone in
-  both modes). And a depth taken from another target over the same depth buffer, where their formats read it in two
-  orders (Twisted Metal's), is placed on the GPU by runs (`takeDepth()`, `Command::runs`): the two orders move 32-byte
-  pieces whole, so each run of 16 of this target's depths is 16 of the other's, those the other's order puts at the
-  same bytes, and the backend's copy through its staging buffer places each run, down as many rows as move alike (32
-  runs for a depth buffer 512 wide). Where a run's bytes lie past what the other holds (a depth buffer not on 32 bytes,
-  rows past its), its depth goes through memory instead (put in its order, filled in this one's: a wait). A first take
-  of this part put the depth into memory every time: Twisted Metal's waits for the GPU went from 0.03-0.14 to 1.0 ms a
-  frame.
+  order. Before a PRIM's depth is filled from memory, a finish where rows it draws in are filled from bytes another
+  target has drawn on the GPU since the last one (`begin()`, `depthOwned()`, `Statistics::depthFinishes`): the rows
+  filled are the target's new ones and those memory changed, and those memory changed of the target it takes depth
+  from, all of each 16 KiB they reach (past VRAM's end, its start's). Kurohyou draws its depth into the depth buffer's
+  memory as a 5650 frame buffer, on the GPU, and its characters' depth was filled from memory's older bytes (none of it
+  drawn: the characters gone in both modes). And a depth taken from another target over the same depth buffer, where
+  their formats read it in two orders (Twisted Metal's), is placed on the GPU by runs (`takeDepth()`, `Command::runs`):
+  the two orders move 32-byte pieces whole, so each run of 16 of this target's depths is 16 of the other's, those the
+  other's order puts at the same bytes; the backend's copy takes each run from the other's depth into its staging
+  buffer, one after another, and places it from there, down as many rows as move alike (32 runs for a depth buffer 512
+  wide). Where a run's bytes lie past what the other holds (a depth buffer not on 32 bytes, rows past its), its depth
+  goes through memory instead (put in its order, filled in this one's: a wait). A first take of this part put the
+  depth into memory every time: Twisted Metal's waits for the GPU went from 0.03-0.14 to 1.0 ms a frame.
+- The second round, after the review: the first round's finish looked at all of the depth buffer's pages, as far as
+  any target over it had rows, whatever this PRIM filled (with a cache of the pages found free, `Target::depthAlone`,
+  which no test broke: a test that did would have lost Kurohyou's characters from its second frame). IL-2 Sturmovik
+  (its depth buffer at 0x114000, 512 wide, 273 rows: its 3D's scissor reaches row 272) draws its bloom, 256 pixels wide
+  and 8888, at 0x158000 each frame, in the 16 KiB that holds that 273rd row, and finished 239 times more in 120 frames
+  (601 to 840 in fast mode, 841 to 1,080 in accurate). Looking only at the rows filled wasn't enough: the bloom's
+  drawing changes row 272 for every target over the depth buffer, and its depth-of-field target (64 rows) and the
+  other screen's clear (272 rows) fill that row whole, theirs or the one they take depth from (a trace of each such
+  finish: 179 the taken one's changed rows, 60 their own; the cache was gone and they stayed). The finish now looks at
+  the rows filled that the PRIM draws in; rows past them are filled from memory as before. IL-2's finishes are
+  master's again, 601 and 841, none before a depth fill; Kurohyou 1's and 2's as in the first round (below). The staging
+  buffer holds the target's columns alone (each run taken from the other's depth, not the other's whole rows):
+  Twisted Metal's 64- and 128-pixel frame buffers staged 5.5 million pixels in 300 frames (5,538,816, what a take
+  of one format would), against 33.8 million.
 
 **Pictures** (the kit's runners, -O3 with thin LTO, from the batch's states and presses, 300 frames, Vulkan against
 Software: the mean channel difference and the pixels more than 24 apart):
@@ -14171,10 +14191,13 @@ Software: the mean channel difference and the pixels more than 24 apart):
   pixels, each stepping its texels from its own start, as on the PSP.
 
 **The other scenes.** The kit's 21 scenes, Hammerin' Hero, Jeanne d'Arc, Cars Race-O-Rama and MX vs. ATV Untamed's race,
-100 frames from each state, every frame's picture and VRAM hashed (drawing settled), then the end's RAM and machine,
-master (e78b4a364) against the final code (dbbb6f1b0):
-- Vulkan accurate and fast: the same in all 25.
-- Software: the same in 18. In the other 7, every frame's picture is the same and so is the RAM, and VRAM differs:
+and in the second round IL-2 Sturmovik's normal play (its deep-play state and presses), 100 frames from each state,
+every frame's picture and VRAM hashed (drawing settled), then the end's RAM and machine, master against this: the first
+round master e78b4a364 against dbbb6f1b0 (25 scenes), the second master 14b181707 against 318a7c5c2 (26), the same
+outcome:
+- Vulkan accurate and fast: the same in all (IL-2 too: the second review's 200 pixels of its pictures, which the first
+  round's extra finishes had changed, are master's again).
+- Software: the same in all but 7. In those, every frame's picture is the same and so is the RAM, and VRAM differs:
   Colin McRae's race, Need for Speed Most Wanted's race and profile, Need for Speed Underground Rivals' title, Disaster
   Report 3's play, Hammerin' Hero and Jeanne d'Arc, the games among them drawing 16-bit with a depth buffer (each at
   0x88000, 512 wide: 5551, or 5650 in the Need for Speeds). Their VRAM after frame 100, master's against this: every
@@ -14182,23 +14205,33 @@ master (e78b4a364) against the final code (dbbb6f1b0):
   0-479) the same depth, master's through the fourth copy's order and this one's through the second's; what moved
   besides are the bytes past column 479, which neither draws (the state's, in the other order). Colin McRae also draws
   the same memory as a depth buffer 256 wide (part 90), its bytes those of the two widths mixed; its pictures the same.
+  The second round's dumps give the first's counts scene by scene (2,176 to 4,352 depths apart past column 479, none
+  before it; Colin McRae's 256-wide view 2,062 of 69,632).
 - Twisted Metal's play (one depth buffer, 8888 and 5551, above) is the same in all three. With the first take of the
   change, which put the depth into memory between the formats, its Vulkan VRAM differed (the depth bytes memory got;
   the pictures the same), and its waits rose (below).
 
-**Speed** (the M1, the kit's runners, 300 frames from the batch's states with their presses, late frames at 1x and the
-pipelines kept, master and this in turns over six rounds, the Mac's load 4-12: frames a second, the means, and the
-GPU's waits in ms a frame): Kurohyou 1 Vulkan fast 44.9 -> 46.3 (waits 9.6 -> 10.5), accurate 19.6 -> 18.9 (34.6 ->
-37.1); Kurohyou 2 fast 62.8 -> 63.5 (6.7 -> 7.3), accurate 50.9 -> 51.0 (9.0 -> 9.1): within the runs' spread (single
-runs a fifth apart). Kurohyou 1's finishes are as many (two a frame): the second, before its depth-of-field texture
-through the second copy after the characters, comes before the characters now (the logged frame), and the texture finds
-memory's depth current. Kurohyou 2 finishes once more a frame (601 -> 901 in 300 frames), before its characters' depth
-is filled. (A first measurement, the base's pipelines made during the run, had Kurohyou 1 twice as fast: not so.)
-Twisted Metal's play, Vulkan fast and accurate, 300 frames: the same draws, uploads and waits as master's (0.03-0.06 ms
-a frame); with the first take, 1.0 ms a frame of waiting and 340 more uploads in 300 frames.
+**Speed.** Kurohyou 2 finishes once more a frame (601 -> 901 in 300 frames, both modes), before its characters' depth
+is filled from the picture the GPU has just drawn there: the finish is needed, and it costs. The second review's runs
+on the M1 (late frames at 1x, the pipelines kept, master and this in turns, three pairs): Vulkan fast 41.7, 39.3 and
+31.6 frames a second on master against 33.9, 28.2 and 27.7, about 5 ms a frame more waiting for the GPU; on the RP6
+(the coordinator's measurement) 0.64 ms a frame more waiting (3.90 -> 4.54) and 2.5% more CPU, still 77 frames a
+second without a screen. This round's runs the same way on the M1 (three pairs in turns, the Mac's load
+9-14): fast 61.8, 80.9 and 85.6 frames a second on master against 66.3, 72.9 and 74.1, the waits 4.6, 4.0 and 3.6 ms a
+frame against 5.5, 4.9 and 4.8, about 1 ms more each time (accurate: 7.2, 7.1 and 7.3 against 7.5, 7.5 and 10.1; its
+frames a second too scattered to tell). The first round said "no change past the runs' spread" (Kurohyou 2 fast 62.8 ->
+63.5): wrong, its rounds too far apart to show it. The move on the GPU of the 5650 frame buffer's pixels into the
+depth (still not done, below) would take that finish, and its cost, away. Kurohyou 1's finishes are as many as
+master's (601 in 300 frames): the second of its two a frame, before its depth-of-field texture through the second copy
+after the characters, comes before the characters now, and the texture finds memory's depth current (5% less CPU on
+the RP6). IL-2 Sturmovik: 601 and 841 finishes in 120 frames (fast, accurate), master's; the first round's 840 and
+1,080 had it waiting about 29% more on the M1. Twisted Metal's play, Vulkan fast and accurate, 300 frames: one finish
+and the same draws and uploads as master's; with the first take, 1.0 ms a frame of waiting and 340 more uploads. (A
+first measurement, the base's pipelines made during the run, had Kurohyou 1 twice as fast: not so.)
 
-**Tests** (tests/psp: draw.cpp, gpu.cpp; on master's core with only these tests, all three fail, the other 528 groups
-pass):
+**Tests** (tests/psp: draw.cpp, gpu.cpp, measure.cpp; and the start-up check, check.cpp. On master's core with only
+these tests, and `Statistics::depthFinishes` added, never counted, for gpu.cpp to compile, the first three fail and the
+other 538 groups run there pass):
 - "draw depth in the order each frame buffer format has it": points with depths of their own over 512x16 pixels (the
   depth buffer at 0x88000, 512 wide), each read back through the copies: 8888 in order through the fourth and spread
   through the second (round 3's), 5650, 5551 and 4444 in order through the second and at (y ^ 8) * 512 + (x ^ 32)
@@ -14209,26 +14242,52 @@ pass):
 - "gpu the depth buffer in each format's order" (1x and 2x, both modes): the same passes on the GPU, then the depth the
   screen drew read through the second copy as a texture (Kurohyou's depth of field), then a depth buffer an 8888 frame
   buffer and a 5551 one draw with in turn, every byte the software renderer's, the pixels checked (the 5551 one's pixel
-  (20, 4) reading the 8888 one's (260, 4), its (128, 4) the 8888's (64, 4)), a finish counted, and one depth put into
-  memory, the texture's (the takes across the formats placed on the GPU). On master's core 9,977 bytes apart in every
-  mode and resolution.
+  (20, 4) reading the 8888 one's (260, 4), its (128, 4) the 8888's (64, 4)), one finish before a depth fill
+  (`depthFinishes`), and one depth put into memory, the texture's (the takes across the formats placed on the GPU). Then
+  a second frame: the depth made again from another picture, the screen cleared and its sprite tested against it, the
+  screen now taking its depth from the 8888 frame buffer's, whose rows the picture changed: every byte the software
+  renderer's again, the pixels checked, a second such finish. On master's core 9,977 bytes apart in the first frame and
+  14,641 in the second, no finish counted, in every mode and resolution. With the finish taken out, 10,007 bytes apart
+  in the first frame and 14,761 in the second, no finish counted; with the changed rows not looked at (the new rows
+  only, the kind of slip a cache of free pages could make), the first frame right and the second 9,200 bytes apart, one
+  finish counted: in every mode and resolution. (Either changed-row term alone still finishes there: the screen's own
+  rows and the 8888 one's are the same 16 KiB.)
+- "psp measure" (measure.cpp): round 3's depth-layout-0 to -3, the 8888 depth buffer read through each copy, now
+  checked byte for byte against the PSP's files (they were listed, not checked): the same.
+- The start-up check (check.cpp): the 8888 sprites' depth written alone (clear mode), a level for each 16 pixels of each
+  row, and the 5650 frame buffer's last sprite tested against it ("greater or equal", not written), after its depth is
+  taken across the two orders by runs: before, nothing the check compared depended on that take (the colors only); a
+  driver that copies the runs wrong now fails it, and the software renderer draws the game.
 
-**Checks.** On the final code (dbd8139bc; bd084145f the change, a0d5a5598 the tests, dbbb6f1b0 the runs across the
-formats, dbd8139bc the pages looked through only where they aren't known free): `tests/psp/run-tests.sh` 531 groups, 0
-failures, sanitized (the address sanitizer's container check off on the Mac, part 93's false positive) and again
-without the sanitizers, the GPU groups run on the M1's Vulkan, none skipped; `tests/allegrex/run-tests.sh` 68, 0;
-`tests/psp/ares/run-tests.sh` 340 checks, 0 failed. The same sanitized run on dbbb6f1b0: 531, 0. CI green on dbbb6f1b0
-(the PSP system tests on Mesa's lavapipe, the Allegrex tests, the runners, and the Android, Windows, macOS and Linux
-builds), and on dbd8139bc. The hashes, pictures and speed above are dbbb6f1b0's; on dbd8139bc the hashes are the same
-in all three renderers (the Software differences byte for byte), and Kurohyou's Vulkan captures the same pixels.
+**Checks.** The second round, on 318a7c5c2 (acd733840 the merge of master 14b181707, 318a7c5c2 the code):
+`tests/psp/run-tests.sh` 546 groups, 0 failures, sanitized (the address sanitizer's container check off on the Mac,
+part 93's false positive) and again without the sanitizers, the GPU groups run on the M1's Vulkan, none skipped
+(Vulkan, the test programs and both rounds of the PSP's measurements required); `tests/allegrex/run-tests.sh` 78, 0;
+`tests/psp/ares/run-tests.sh` 348 checks, 0 failed; CI green on 318a7c5c2 (the PSP system tests on Mesa's lavapipe,
+which run the start-up check, the Allegrex tests, the runners, and the Android, Windows, macOS and Linux builds). The
+first round, on dbd8139bc (bd084145f the change, a0d5a5598 the tests, dbbb6f1b0 the runs across the formats, dbd8139bc
+the pages looked through only where they weren't known free): 531, 68 and 340, CI green on dbbb6f1b0 and dbd8139bc.
+The pictures above are the first round's; the second round's captures of Kurohyou 1 and 2 (frames 30, 90, 150, 210, 270
+and 300 in Software, Vulkan accurate and fast: 36) are the same pixels.
 
-Still not done: a move on the GPU of a target's pixels into another's depth (Kurohyou 2's finish a frame; Kurohyou 1's
-moved, not added); depth between depth buffers of other row widths over the same memory, as before (part 90); a 16-bit
-frame buffer's depth layout measured on a PSP (round 3's depth-layout drawn with 5650, 5551 and 4444: tools/psp-measure
-would show it in one run); and the RP6's numbers.
+Still not done:
+- A move on the GPU of a target's pixels into another's depth, which would take away Kurohyou 2's finish a frame (and
+  its cost, above; Kurohyou 1's is moved, not added).
+- Rows filled from memory that the PRIM doesn't draw in, where another target's pixels are the GPU's: filled from
+  memory as it is, as before part 96. IL-2 Sturmovik's 3D, whose scissor reaches row 272 (the other screen's first
+  row), tests that row against its bloom as memory had it, the GPU's newer bloom not put back; exact would keep such
+  rows waiting until a PRIM draws in them, then finish (once a frame in IL-2), or move the bloom's pixels on the GPU.
+  The second review saw it in about 200 pixels of rows 0 and 8-11, a level or two, which the first round's extra
+  finishes had brought nearer the software renderer's.
+- Depth between depth buffers of other row widths over the same memory, as before (part 90).
+- A 16-bit frame buffer's depth layout measured on a PSP: round 3's depth-layout case drawn with 5650, 5551 and 4444
+  frame buffers (tools/psp-measure would show it in one run). Until then 5650's and 4444's go with 5551's by size.
 
 Scratch: `~/phobos-work/scratch/kurohyou` (`NOTES.md`; `kit/patches/k96dbg-patch.py`, the command and PRIM log, the VRAM
 dumps; `k96census-patch.py`, `census.sh`, `census-sum.py` and `census-summary.txt`, the census; `viewprims.sh`, the
 depth views' sprites; `kit/`, the hash runs, `depthperm.sh` the depth rearranged; `png/`, the sheets:
 `pr-k1-30-full.png`, `pr-k1-30-centre.png`, `pr-k1-150-centre.png`, `pr-k2-90-full.png`, `pr-k2-90-centre.png`, before
-above after, Software, Vulkan accurate and fast).
+above after, Software, Vulkan accurate and fast). The second round's: `kit/patches/r2count-patch.py` (the review's
+counters for this code) and `r2trace-patch.py` (each depth-fill finish, its rows and owner: `kit/logs/r2trace-il2.err`),
+`kit/r2counts-all.sh` (`kit/logs/r2counts-all.log`), `kit/r2hash.sh` (`kit/logs/r2hash-*.log`), `depthperm2.sh`,
+`mut/` (the mutations), `basetests/` (the tests on master's core), `bench2.sh` and `piccmp.py` (`tmp/r2final.log`).

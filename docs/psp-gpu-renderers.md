@@ -174,10 +174,16 @@ drawing, another target's pixels drawn there) has the rows it may be in (all of 
 copy rearranges) filled again from memory, and the rest of the GPU's depth kept; a change to the colors leaves the
 GPU's depth alone; and a PRIM with another depth buffer than the target's last fills it afresh. The rows changed are
 filled before the next PRIM that tests or writes depth, not before one that doesn't (part 83: Darkstalkers' CPU writes
-beside its depth buffer between its 2D PRIMs, 90 fills a frame). Where another target has drawn on the GPU in the
-depth buffer's pages since the last finish (as colors: the Kurohyou games draw their pre-rendered depth into the depth
-buffer's memory as a 5650 frame buffer, part 96), the renderer finishes first (`begin()`, `Target::depthAlone`), so
-that what's filled is those pixels, as the PSP's depth test reads them.
+beside its depth buffer between its 2D PRIMs, 90 fills a frame). Where rows a PRIM draws in are about to be filled
+from memory (the target's new rows and those memory changed, and those memory changed of a target it takes depth
+from: all of each 16 KiB they reach) from bytes another target has drawn on the GPU since the last finish (as colors:
+the Kurohyou games draw their pre-rendered depth into the depth buffer's memory as a 5650 frame buffer, part 96), the
+renderer finishes first (`begin()`, `depthOwned()`, counted in `Statistics::depthFinishes`), so that what's filled is
+those pixels, as the PSP's depth test reads them. Rows filled already aren't looked at again, so most PRIMs, filling
+none, look at nothing; rows filled that the PRIM doesn't draw in are filled from memory as it is, as before part 96
+(IL-2 Sturmovik draws its bloom each frame in the 16 KiB that holds its depth buffer's 273rd row: its depth-of-field
+target, 64 rows, and its clear, 272, fill that row without waiting; its 3D, whose scissor reaches row 272, then tests
+that row against the bloom as memory had it: part 96's "still not done").
 
 **A depth buffer drawn with two frame buffers** (part 90): on the PSP the depth buffer is memory, whichever frame buffer
 it's drawn with, where each target's depth is its own on the GPU. So a target's depth says which depth it holds (the
@@ -193,8 +199,9 @@ other screen's depth into the one it clears first (a copy of a frame's depth, an
 frame buffer and a 16-bit one, which read the depth buffer's bytes in two orders (part 96: Twisted Metal draws small
 5551 frame buffers against its 8888 scene's depth), the depth is placed by runs: the two orders move 32-byte pieces
 whole, so each run of 16 of the target's depths is 16 of the other's, those its order puts at the same bytes
-(`Command::runs`, the backend's copy through the staging buffer placing each run, down as many rows as move alike; 32
-runs for a depth buffer 512 wide). Where a run's bytes lie past what the other holds (a depth buffer not on 32 bytes,
+(`Command::runs`, the backend's copy through the staging buffer taking each run from the other's depth and placing
+it, down as many rows as move alike; 32 runs for a depth buffer 512 wide, the buffer holding the target's columns
+alone). Where a run's bytes lie past what the other holds (a depth buffer not on 32 bytes,
 rows past its), the depth goes through memory instead: put there in its frame buffer's order (`putDepth()`, below)
 and filled into the other in that one's, a wait.
 
