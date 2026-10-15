@@ -14359,7 +14359,10 @@ running while it copies, finished, shutting down.
   file of its own as long as the disc's. Otherwise the install gives up with 0x80111904 and the copy is taken away,
   as when a write fails. Before this, later pieces were added at whatever end a file had: a copy taken away after
   the first piece was made again and installed 1.5 MiB of the test's 2.5 MiB, answered 0. A link in a copy's place
-  would have been written through, its target off the stick added to or cut short.
+  would have been written through, its target off the stick added to or cut short. Before each piece and at the end,
+  the copy's folder and the copies' folder it's in must also be real folders, not links (`installFolderIntact()`),
+  and the cleanup takes a link in the copies' folder's place away itself: a host that put a link to a folder off the
+  stick there would have had the next file made in that folder, and the cleanup would have taken that folder away.
 - **Not state.** The copy's place isn't in a save state (so no layout change, and every state the same as master's):
   loading a state takes the copy's folder away, and an install running in the loaded state starts again at its next
   Update, its progress from 0. Phobos never loads states behind the player's back (the stored "run ahead" setting is
@@ -14451,9 +14454,11 @@ running while it copies, finished, shutting down.
 - `... its copy changed behind its back`: after the first piece, the host takes the copy's DATA.BIN away, cuts it to
   4 KiB, or puts a link to a file off the stick in its place (0x80111904 at the next Update), or puts such a link
   where ICON0.PNG is yet to go (0x80111904 at the Update that reaches it); on a disc of a 1,000-byte file and a 2 MiB
-  one, the small file, copied whole at the first Update, taken away or cut to 10 bytes (0x80111904 at the end). Each
-  time nothing is among the saves, no copy is left, the file off the stick is untouched, and the next install
-  installs whole.
+  one, the small file, copied whole at the first Update, taken away or cut to 10 bytes (0x80111904 at the end); on a
+  disc whose 1 MiB first file fills the first Update, the copy's own folder or the copies' folder put in place of by a
+  link to a folder off the stick (0x80111904 at the next Update, nothing written in that folder or taken from it).
+  Each time nothing is among the saves, no copy is left, nothing off the stick is touched, and the next install
+  installs whole (the standard disc's cases).
 - `... a state saved part way`: the state round-trips; loaded into another machine and into the same one, the install
   starts again and installs whole.
 - `... over an install there`: over a save the savedata utility made: INSDIR's files written over (a longer DATA.BIN
@@ -14486,7 +14491,10 @@ the round changed fail, 26 checks, and the other 556 pass. The copies' folder's 
 `.phobos-install.` (a folder of its own on the Mac, the copies' folder itself on a FAT host), both links reached the
 folder, and sceIoRemove through `ALIAS` took the running copy's DATA.BIN away. The changed copy's 17: each change
 installed short or wrote through the link and answered 0 (the file off the stick added to, and cut short and
-overwritten with the icon).
+overwritten with the icon). On the third round's head with the fourth round's folder swaps (`d92edf077`,
+`beforesrc4`): that group alone fails, 2 checks, and the other 557 pass. Both swaps answered 0x80111904 there too,
+but changed the folder off the stick first: B.BIN made in it, and, with the copies' folder swapped, the folder taken
+away by the cleanup through the link.
 
 **The games** (runners built from master and from this branch; every memory stick a fresh folder under
 `~/phobos-work/scratch/gamedata-install`).
@@ -14537,7 +14545,13 @@ the end). Taken in a third round ("The copy checked as it goes", above). Its opt
 (and on Linux's FAT driver) a name with dots or spaces at its end, or the short 8.3 name the host gives the folder,
 would reach the copies' folder past a name compared as written. Now such names are compared with the dots and
 spaces dropped, and the path's real place is compared with the folder as a file, which a short name can't get past.
-It also found its first review's Kingdom Hearts nit wrong (`kh/run-v2`'s runner predated the attributes' fix).
+It also found its first review's Kingdom Hearts nit wrong (`kh/run-v2`'s runner predated the attributes' fix). Its
+last look, at the third round, approved, with an optional nit taken in a fourth: the copy's own folder put in place of
+by a link after the first piece had the next file made through it. Now the copy's folders are checked as its files
+are, the copies' folder too, as a link there would have had the cleanup take a folder off the stick away.
+
+**Checks** (the fourth round, `5d947135b`). tests/psp: 558 groups, 0 failures, sanitized and unsanitized
+(`r4-tests-asan.log`, `r4-tests-plain.log`), every install group and every files group among them.
 
 **Checks** (the third round, `d5771d7fb`). tests/psp: 558 groups, 0 failures, sanitized
 (`detect_container_overflow=0`) and unsanitized (`r3-tests-asan.log`, `r3-tests-plain.log`); tests/allegrex 78 groups,
