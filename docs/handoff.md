@@ -32,9 +32,9 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP GE: #253's per-PRIM paths cheaper on the RP6's Cortex-X3 — a PRIM's kept settings compared where they are, fast mode's screen triangles without calls — 2026-10-15
 
-Branch `cursor/psp-ge-round4a-2b67`, on master `cc0638372` (part 97, #259), master `02cd1fa8c` (part 98, #260)
-merged in; draft PR #262. docs/psp-core.md, part 100, has the evidence (parts 96 and 99 are #258's and #261's, still
-open). GE round 4, part A; part B (the GE's front end on a thread of its own, its design in
+Branch `cursor/psp-ge-round4a-2b67`, on master `cc0638372` (part 97, #259), masters `02cd1fa8c` (part 98, #260) and
+`6ff82f9f1` (part 96, #258) merged in; draft PR #262. docs/psp-core.md, part 100, has the evidence (part 99 is #261's,
+still open). GE round 4, part A; part B (the GE's front end on a thread of its own, its design in
 `~/phobos-work/scratch/ge-round4/DESIGN.md`) comes after. Clean room: no PPSSPP code read, JPCSP not read. Nothing of
 the PSP's behaviour changes; save states unchanged.
 - **The problem** (the coordinator's RP6 bisect): #253 (part 92) took 1.4% of Super Monkey Ball's instructions but
@@ -47,7 +47,7 @@ the PSP's behaviour changes; save states unchanged.
   touch).
 - **The change** (gpu.cpp, gpu.hpp): `kept()` compares the key's inputs where they are, word by word, with a branch at
   the end alone, `settings()` the work where they differ; `meshState()`/`meshDraw()` inline where kept and joining;
-  the recording's models and indices are `GPU::Run`s (an append a bound's check and a sum, the room grown out of
+  the recording's models and indices are `GPU::Pile`s (an append a bound's check and a sum, the room grown out of
   line); `meshDrawable()` answered once for a PRIM's settings while they're kept; #254's blending by the frame
   buffer's alpha decided with the settings. The key starts zeroed: UBSan caught `kept()` reading it unwritten.
 - **RP6** (the coordinator's session, 15 Oct, the owner's usual profile, 600 frames, Vulkan fast, three rounds; master
@@ -58,9 +58,19 @@ the PSP's behaviour changes; save states unchanged.
   −0.5%, Ghost of Sparta +2.7%, Killzone +1.9%: kept on. What they still cost is the driver's and the GPU's (more page
   faults, longer waits for the GPU, backend stalls), not their recording: next, `rp6-profile.sh` on Chains of Olympus
   and Army of Two with and without them (page faults by call stack), and `--late-frames`.
-- **Checks**: the merged head's settled hashes against master `02cd1fa8c`, 75 of 75 the same (the 21 kit scenes,
-  Hammerin' Hero, Jeanne d'Arc, Cars, MX, in the three renderers); tests/psp 550/0 sanitized and unsanitized (the
-  Vulkan groups run), tests/allegrex 78/0, tests/psp/ares 348/0; CI: the draft PR's checks.
+- **Review** (independent, of `c2dc921fa`: approve with should-fixes, no blockers), taken in `3e819d440`: the
+  review's test of the alpha caught up on a PRIM whose settings are kept; `gpuKeptInputs` (each of `kept()`'s inputs
+  changed alone; each term left out alone fails it, but those that go with another input: part 100's table);
+  `gpuMeshRefused` (a pipeline the driver won't make, after a mesh); KeptSettings' size and last place pinned;
+  `GPU::Run` named `GPU::Pile` (#258's runs are depth runs). Master `6ff82f9f1` (#258) merged: gpu.hpp and this top
+  met, nothing else.
+- **Review round's checks** (`3e819d440` against master `6ff82f9f1`): settled hashes 93 of 93 the same (the 21 kit
+  scenes, #258's Kurohyou 1 and 2, WipEout and IL-2, Chains of Olympus, Killzone, Hammerin' Hero, Jeanne d'Arc, Cars,
+  MX, in the three renderers); tests/psp 557/0 plain and sanitized; the Mac's bench: Monkey Ball −4.6% instructions,
+  Ghost of Sparta −2.9%, as before.
+- **First round's checks**: the merged head's settled hashes against master `02cd1fa8c`, 75 of 75 the same (the 21 kit
+  scenes, Hammerin' Hero, Jeanne d'Arc, Cars, MX, in the three renderers); tests/psp 550/0 sanitized and unsanitized
+  (the Vulkan groups run), tests/allegrex 78/0, tests/psp/ares 348/0; CI: the draft PR's checks.
 
 ## PSP GE: the depth buffer in the order its frame buffer's format has it — the Kurohyou games' characters at the screen's middle (deep play batch 04, bug 2) — 2026-10-14
 

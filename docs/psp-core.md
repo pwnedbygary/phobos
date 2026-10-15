@@ -14994,12 +14994,11 @@ savedata traces line for line. CI: the draft PR's checks.
 
 ## Part 100: the GE's per-PRIM paths on the RP6's Cortex-X3 — a PRIM's kept settings compared where they are, fast mode's screen triangles without calls (GE round 4, part A)
 
-On branch `cursor/psp-ge-round4a-2b67` (draft PR #262), on master `cc0638372` (part 97, #259), with master
-`02cd1fa8c` (part 98, #260) merged in; parts 96 and 99 are #258's and #261's, still open. Clean room: no PPSSPP code
-read (its GPU backend not opened), JPCSP not read. Nothing of the PSP's behaviour changes: the host's work for each
-PRIM and each triangle, the same draws in the same order, so Vulkan (fast), Vulkan (accurate) and the software
-renderer draw the same frames, VRAM, RAM and machine state as master (checked below). Save states unchanged (no
-field added).
+On branch `cursor/psp-ge-round4a-2b67` (draft PR #262), on master `cc0638372` (part 97, #259), with masters `02cd1fa8c`
+(part 98, #260) and `6ff82f9f1` (part 96, #258) merged in; part 99 is #261's, still open. Clean room: no PPSSPP code
+read (its GPU backend not opened), JPCSP not read. Nothing of the PSP's behaviour changes: the host's work for each PRIM
+and each triangle, the same draws in the same order, so Vulkan (fast), Vulkan (accurate) and the software renderer draw
+the same frames, VRAM, RAM and machine state as master (checked below). Save states unchanged (no field added).
 
 **The problem.** The coordinator's bisect on the RP6 (14 Oct, the headless runner built for Android (#255), the
 emulation thread, Vulkan fast, 600 frames, medians of three rounds taking turns; `runner-android/runs/sb-*`): #253 (part
@@ -15044,7 +15043,7 @@ instructions' supply, not the data.
    buffer's alpha is decided with the settings (`blendsByAlpha`), from the bits the key holds.
 2. **`meshState()` and `meshDraw()`** keep their kept and joining paths inline; what records a new state or a new
    draw is out of line (`recordMeshState()`, `newMeshDraw()`).
-3. **The recording's models and indices are runs** (`GPU::Run<T>`): an append is a bound's check and a sum, the room
+3. **The recording's models and indices are piles** (`GPU::Pile<T>`): an append is a bound's check and a sum, the room
    made larger out of line (`NALL_NOINLINE`) and kept as the recording's cleared, as a vector's capacity was; the
    backend reads them as it read the vectors (`size()`, `empty()`, `data()`). A screen triangle's hot code on the X3
    makes no call now (what's left out of line comes after the function's return). `mesh()` no longer zeroes the
@@ -15120,15 +15119,55 @@ type 'bool'" in `kept()`: the renderer's first PRIMs read the key's bools before
 (master's chain of `&&` never read them while `valid` was false); its answer was thrown away for `valid`'s sake, but the
 load was undefined. `d5b5ec227` zeroes the key with the renderer: 548 groups, 0 failures, sanitized. The X3's code read
 again on each commit's Android build (`syms.py`, `llvm-objdump`): `begin()` calls `settings()` only where the key
-differs; the screen triangle's calls (`recordMeshState()`, `newMeshDraw()`, `Run::grow()`) only on their slow paths. CI:
-the draft PR's checks.
+differs; the screen triangle's calls (`recordMeshState()`, `newMeshDraw()`, `Pile::grow()`) only on their slow paths.
+CI: the draft PR's checks.
 
 **Kit.** `~/phobos-work/scratch/ge-round4/part-a` (`NOTES.md`): the bench and hash kit (round 3's, the scenes linked),
 `paths-patch.py` (the paths counted), `syms.py` (the X3's function sizes), the RP6's `ge4a-rp6.sh`, `counters.py` (the
 runs' stall shares, refills, faults and switches beside the runner's table), `rp6-profile.sh` (simpleperf on the RP6
 for a run made already: its command line again with the build's unstripped binary, counted, then sampled; its report
 on the device took the thread by its short name and found nothing, since fixed: the profiles above are the pulled
-`perf.data` reported on the Mac, the NDK's simpleperf with `--symfs`) and `profcmp.py` (two reports side by side).
+`perf.data` reported on the Mac, the NDK's simpleperf with `--symfs`), `profcmp.py` (two reports side by side) and
+`mut/` (the review round's mutants: `mutate.py`, `mutants.sh`, on a copy of the tree with a test filter).
+
+**The review** (independent, of `c2dc921fa`): approve with should-fixes, no blockers. It found `kept()` comparing
+exactly master's inputs, the moved alpha decision and the drawable answer unable to go stale while settings are kept,
+and the piles sound; and three gaps in the tests, by mutation (each fault, all 58 GPU groups and 32 hashed scenes still
+passing): the alpha caught up on a PRIM whose settings are kept, most of `kept()`'s inputs one at a time, and
+`drawableKnown` against a pipeline the driver won't make. Taken (`3e819d440`):
+- **The review's path** in `stencilAlphaPaths` (two sprites alike blending by the frame buffer's alpha, the first
+  beside what lags, the second over it): it passes; without the catch-up on a kept PRIM, 8 failures (2,304 bytes
+  apart, accurate and fast, 1x and 2x).
+- **`gpuKeptInputs`** (a pretend backend that keeps each draw's state): two PRIMs the same but for one input, 28
+  inputs in turn, the second must have a state of its own. Each term of `kept()` left out alone (`mut/mutate.py`,
+  `mut/summary.txt`) fails it, one case each: the texture's height, function, environment, alpha and doubling, both
+  clamps, MASK_COLOR (a 5650 frame buffer's red, whose low bits its write mask doesn't keep), fast mode's shading and
+  filter, the backend's four ways, the texture as its decoded copy, and each 16-byte block of the PixelState from
+  byte 16 on (twelve). Left out without a failure, as each goes with another input: the texture's width and
+  `textured` (an untextured PRIM's sampler is zeroed: width, height and `textured` left out together fail), MASK_ALPHA
+  (the PixelState's write mask holds what `settings()` takes of it, in every format), the target, its row width and
+  rows and the frame buffer's place in it (they go with the frame buffer's address), and bytes 0-15 (the clear flags
+  leave the settings unkept; the frame buffer, its width and format change the target). `valid` left out fails
+  `gpuKeptAfterFailedTexture`; `clear` and `held` left out pass all 63 GPU groups (a clear PRIM records `valid` false;
+  a held one has no decoded texture, which the identity check refuses).
+- **`gpuMeshRefused`** (a pretend backend refusing blended pipelines): a mesh, then the same PRIM blended, which
+  mustn't be a mesh: it passes; with `drawableKnown` never cleared, 3 failures.
+- **KeptSettings' size and its last field's place pinned** (`static_assert`): a field added must go in `kept()` and
+  `settings()` too. A bool added last fits the padding, but `settings()`' list then misses it, which
+  `-Wmissing-field-initializers` (in `-Wextra`) stops the tests' build on (tried).
+- **`GPU::Run<T>` named `GPU::Pile<T>`**: a run is a submission to the GPU, and #258's `Recorded::runs` are depth runs.
+- **Chains of Olympus and Killzone hashed**, with #258's four scenes (below).
+
+**Master merged** (`6ff82f9f1`, #258, part 96: `5cd00b30e`): gpu.hpp met at one place (the piles' template and
+#258's `DepthRun`, both kept) and the handoff at its top (this entry first); gpu.cpp merged by itself. #258 leaves
+`settings()` and `kept()`'s inputs as they were, and its `Recorded::runs` (a vector) is cleared with the piles.
+
+**The review round's checks** (the merged head's code, `3e819d440`, against master `6ff82f9f1`): settled hashes on 31
+scenes (the 21 kit scenes, #258's Kurohyou 1 and 2, WipEout and IL-2, Chains of Olympus's difficulty menu, Killzone's
+gameplay, Hammerin' Hero, Jeanne d'Arc, Cars, MX) in each renderer: 93 of 93 the same (31 in each), none run again.
+tests/psp: 557 groups, 0 failures, plain and sanitized (`detect_container_overflow=0`), the Vulkan groups required (none
+skipped). The Mac's bench (Vulkan fast, 300 frames, medians of two rounds taking turns): Super Monkey Ball 432.6 → 412.9
+M instructions a frame (−4.6%), Ghost of Sparta 304.5 → 295.5 (−2.9%), the gain as before the merge.
 
 **Left:**
 - The screen meshes' cost on the X3 for Monkey Ball, Chains of Olympus and Army of Two (above), the driver's and the
