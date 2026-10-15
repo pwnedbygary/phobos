@@ -34,8 +34,9 @@
 //  - The keyboard: each field's text entered as it is, an empty one given the console's nickname as the field's input
 //    types allow it, each CHANGED (keyboard()).
 //  - Network settings, game sharing, the web browser: cancelled, as if the player backed out.
-//  - Installing a game's data to the memory stick (gamedata install, which later games show at their first start):
-//    cancelled too, the game going on from the disc.
+//  - Installing a game's data to the memory stick (gamedata install): the disc's PSP_GAME/INSDIR copied into a save's
+//    folder, a piece at each Update (install.cpp). Ace Combat: Joint Assault asks about it (GetStatus) at boot, and
+//    goes on when it's told no install dialog was started (the wrong type, as every dialog answers).
 //
 //Modules: games load the system's optional libraries (sound codecs, network, ...) before using them. Their functions
 //are the HLE kernel's own, so loading one just marks it loaded (a second load, or unloading one that isn't, fails as
@@ -443,7 +444,9 @@ auto Kernel::dialogUpdate(u32 kind) -> void {
   dialogDue();
   if(dialog.status != DialogRunning && dialog.status != DialogFinished) return result(UtilityInvalidStatus);
   if(dialog.status == DialogRunning && !dialog.abortUpdates) dialog.runningUpdates++;
-  if(dialog.status == DialogRunning && dialog.abortUpdates) {
+  if(dialog.status == DialogRunning && kind == DialogInstall) {
+    installUpdate();
+  } else if(dialog.status == DialogRunning && dialog.abortUpdates) {
     if(--dialog.abortUpdates == 0) {
       memory.write(4, dialog.parameters + 28, dialog.error);
       dialog.status = DialogFinished;
@@ -1254,24 +1257,6 @@ auto Kernel::sceUtilityHtmlViewerInitStart() -> void { dialogStart(DialogBrowser
 auto Kernel::sceUtilityHtmlViewerGetStatus() -> void { dialogStatus(DialogBrowser); }
 auto Kernel::sceUtilityHtmlViewerUpdate() -> void { dialogUpdate(DialogBrowser); }
 auto Kernel::sceUtilityHtmlViewerShutdownStart() -> void { dialogShutdown(DialogBrowser); }
-
-//Installing a game's data (its parameters: the common part, then what to install where; 0x590 or 0x598 bytes,
-//dialogSize()). Ace Combat: Joint Assault asks about it (GetStatus) at boot, and goes on when it's told no install
-//dialog was started (the wrong type, as every dialog answers). Cancelled when it runs.
-auto Kernel::sceUtilityGamedataInstallInitStart() -> void { dialogStart(DialogInstall); }
-auto Kernel::sceUtilityGamedataInstallGetStatus() -> void { dialogStatus(DialogInstall); }
-auto Kernel::sceUtilityGamedataInstallUpdate() -> void { dialogUpdate(DialogInstall); }
-auto Kernel::sceUtilityGamedataInstallShutdownStart() -> void { dialogShutdown(DialogInstall); }
-
-//The player (or the game) stopping an install while it runs: it finishes, cancelled.
-auto Kernel::sceUtilityGamedataInstallAbort() -> void {
-  if(dialog.kind != DialogInstall) return result(UtilityWrongType);
-  dialogDue();
-  if(dialog.status != DialogRunning) return result(UtilityInvalidStatus);
-  memory.write(4, dialog.parameters + 28, DialogCancelled);
-  dialog.status = DialogFinished;
-  result(0);
-}
 
 //(module: psputility_modules.h's PSP_MODULE_*): network (0x100-0x108), USB devices (0x200-0x203), sound and video
 //codecs (0x300-0x308), the network platform (0x400-0x402), DRM (0x500), infrared (0x600). pspsdk's list stops at

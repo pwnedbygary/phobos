@@ -61,6 +61,30 @@ class PspDialogsTest {
         assertEquals(0, second.icon.size)
     }
 
+    // A game data install's progress as the core shows it (tests/psp/install.cpp writes the file): kind 7, mode 1, its
+    // progress as the focus, the install as the one save, with INSDIR's icon (4096 bytes in the test).
+    @Test
+    fun readsTheCoresInstallProgress() {
+        val request = assertNotNullRequest(parsePspDialog(resource("psp-dialog-install.bin")))
+        assertEquals(1, request.id)
+        assertEquals(PspDialogRequest.KIND_INSTALL, request.kind)
+        assertEquals(1, request.language)
+        assertTrue(request.circleConfirms)
+        assertEquals(1, request.mode)
+        assertEquals(39, request.installProgress())
+        assertEquals(1, request.saves.size)
+        val install = request.saves[0]
+        assertEquals("DATA", install.name)
+        assertEquals("A Game -Final Mix-", install.title)
+        assertEquals("Install Data", install.saveTitle)
+        assertEquals("Deleting this will cause\nload times to increase.", install.detail)
+        assertFalse(install.there)
+        assertEquals(4096L + 10240L + 2_621_440L, install.size)
+        assertEquals(4096, install.icon.size)
+        assertEquals(100, request.copy(focus = 250).installProgress())
+        assertEquals(0, request.copy(focus = -1).installProgress())
+    }
+
     private fun assertNotNullRequest(request: PspDialogRequest?): PspDialogRequest {
         assertTrue("the request wasn't read", request != null)
         return request!!
