@@ -179,50 +179,161 @@ auto GPU::targetFor(const GE::PixelState& p, const GE::Region& region, u32& colu
 }
 
 //Rows from to to of the target filled from memory's VRAM (columns left to right of them), in order with what's
-//drawn: its pixels (the stencil their alpha: parts bit 0) or its depth buffer's (bit 1: the target's, VRAM's fourth
-//copy's order, memory.hpp). Their bytes are then watched, so that whoever changes them is heard of (written()).
+//drawn: its pixels (the stencil their alpha: parts bit 0) or its depth buffer's (bit 1: the target's, in the order
+//of VRAM's copy the GE keeps it in for the target's format, memory.hpp; and where other targets drew in those bytes
+//on the GPU, their pixels there, as a finish would put them in memory: moveIntoDepth(); a depth they're put in all of
+//isn't taken from memory first). Their bytes are then watched, so that whoever changes them is heard of (written()).
 auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts, u32 left, u32 right) -> void {
   right = std::min(right, t.stride - 1);
   if(from >= to || left > right) return;
   (void)p;
   u32 width = right - left + 1, height = to - from, count = width * height, bytes = t.bytes();
   auto& vram = ge->memory.vram;
-  Command c{Command::Kind::Upload, t.id};
-  c.x = left, c.y = from, c.width = width, c.height = height, c.format = t.format;
-  //(the parts it has: the colors and stencils, the depths)
-  c.colors = recorded.uploads.size();
-  c.stencil = c.colors + (parts & 1 ? count * 4 : 0);
-  c.depth = c.stencil + (parts & 1 ? count : 0);
-  c.parts = parts;
-  recorded.uploads.resize(c.depth + (parts & 2 ? count * 2 : 0));
-  u8* out = recorded.uploads.data();
-  if(parts & 1) {
-    u32 at = t.address + (from * t.stride + left) * bytes;
-    auto rows = [&](auto widen) { widen(vram.data(), at, t.stride, width, height, out + c.colors, out + c.stencil); };
-    if(t.format == 0) rows(widenRows<0>);
-    if(t.format == 1) rows(widenRows<1>);
-    if(t.format == 2) rows(widenRows<2>);
-    if(t.format == 3) rows(widenRows<3>);
-  }
-  for(u32 y = 0; y < height && parts & 2; y++) {
-    for(u32 x = left; x <= right; x++) {
-      u16 depth = 0;
-      if(x < t.depthStride) {
-        u32 offset = Memory::vramOffset(3, (t.depthBuffer + ((from + y) * t.depthStride + x) * 2) &
-                                              (Memory::VRAMSize - 1));
-        depth = vram[offset] | vram[offset + 1] << 8;
-      }
-      std::memcpy(out + c.depth + (y * width + x - left) * 2, &depth, 2);
+  u32 depthCopy = Memory::depthCopy(t.format);
+  u8 taken = parts;  //(the parts taken from memory)
+  if(parts & 2 && depthCovered(t, from, to, right)) taken &= ~2, statistics.depthsCovered++;
+  if(taken) {
+    Command c{Command::Kind::Upload, t.id};
+    c.x = left, c.y = from, c.width = width, c.height = height, c.format = t.format;
+    //(the parts it has: the colors and stencils, the depths)
+    c.colors = recorded.uploads.size();
+    c.stencil = c.colors + (taken & 1 ? count * 4 : 0);
+    c.depth = c.stencil + (taken & 1 ? count : 0);
+    c.parts = taken;
+    recorded.uploads.resize(c.depth + (taken & 2 ? count * 2 : 0));
+    u8* out = recorded.uploads.data();
+    if(taken & 1) {
+      u32 at = t.address + (from * t.stride + left) * bytes;
+      auto rows = [&](auto widen) { widen(vram.data(), at, t.stride, width, height, out + c.colors, out + c.stencil); };
+      if(t.format == 0) rows(widenRows<0>);
+      if(t.format == 1) rows(widenRows<1>);
+      if(t.format == 2) rows(widenRows<2>);
+      if(t.format == 3) rows(widenRows<3>);
     }
+    for(u32 y = 0; y < height && taken & 2; y++) {
+      for(u32 x = left; x <= right; x++) {
+        u16 depth = 0;
+        if(x < t.depthStride) {
+          u32 offset = Memory::vramOffset(depthCopy, (t.depthBuffer + ((from + y) * t.depthStride + x) * 2) &
+                                                       (Memory::VRAMSize - 1));
+          depth = vram[offset] | vram[offset + 1] << 8;
+        }
+        std::memcpy(out + c.depth + (y * width + x - left) * 2, &depth, 2);
+      }
+    }
+    recorded.commands.push_back(c);
+    statistics.uploads++;
   }
-  recorded.commands.push_back(c);
   if(parts & 1) changed(t, left, from, right, to - 1);
   if(parts & 1) ge->memory.watch(Memory::VRAMBase + t.address + from * t.stride * bytes, height * t.stride * bytes);
-  if(parts & 2 && t.depthStride) {  //(through the fourth copy, as the GE sees it)
-    ge->memory.watch(Memory::VRAMBase + 3 * Memory::VRAMSize + t.depthBuffer + from * t.depthStride * 2,
+  if(parts & 2 && t.depthStride) {  //(through that copy, as the GE sees it)
+    ge->memory.watch(Memory::VRAMBase + depthCopy * Memory::VRAMSize + t.depthBuffer + from * t.depthStride * 2,
                      height * t.depthStride * 2);
   }
-  statistics.uploads++;
+  if(parts & 2) moveIntoDepth(t, from, to, left, right);
+}
+
+//VRAM's pages rows from to to of a depth buffer are in, each(page): all of each 16 KiB the rows reach, which the
+//second and fourth copies rearrange; a depth buffer's bytes past VRAM's end are its start's, as the GE's.
+template<typename Each>
+static auto depthPages(u32 depthBuffer, u32 depthStride, u32 from, u32 to, const Each& each) -> void {
+  if(from >= to || !depthStride) return;
+  u64 low = (u64(depthBuffer) + u64(from) * depthStride * 2) & ~u64(0x3fff);
+  u64 high = (u64(depthBuffer) + u64(to) * depthStride * 2 - 1) | 0x3fff;
+  u64 pages = std::min<u64>((high - low + 1) / Memory::PageSize, GE::VRAMPages);
+  for(u64 n = 0; n < pages; n++) each(u32((low / Memory::PageSize + n) % GE::VRAMPages));
+}
+
+//The PSP's depth buffer is memory, which a frame buffer drawn over its bytes changes: the Kurohyou games draw their
+//pre-rendered depth into the depth buffer's memory as a 5650 frame buffer and test their characters against it,
+//WipEout Pure tests its HUD against the bloom it draws there, and a dozen games draw their post-processing there,
+//then clear it or write over it. Depth filled from memory into t, where other targets drew those bytes on the GPU
+//since the last finish, is what a finish would put there then: each target's pixels, in its drawn rectangle in the
+//pages it owns, the newest of those memory has newer filled into it first (its dead ones, as a move does), put into
+//t's depth on the GPU (a Move into the depth, parts 2: move.frag's DEPTH build), each depth the two bytes of the
+//pixel at the depth's bytes (an 8888 one's half) narrowed to its format as a read back for memory narrows it. Not t's
+//own pages, which its own depth can't take from it (begin() finishes first where those and another's meet: a finish
+//would put both in memory). The pages are watched for the drawing again (depthSources, own()).
+auto GPU::moveIntoDepth(Target& t, u32 from, u32 to, u32 left, u32 right) -> void {
+  if(!backend->depthMoves || !t.depthStride) return;
+  right = std::min({right, t.stride - 1, t.depthStride - 1});
+  if(from >= to || left > right) return;
+  std::vector<Moving> sources;  //(the pages' owners, a run of pages each; none where t owns one)
+  bool own = false;
+  depthPages(t.depthBuffer, t.depthStride, from, to, [&](u32 page) {
+    Target* owner = owners[page];
+    own = own || owner == &t;
+    if(!owner || owner == &t) return;
+    if(!sources.empty() && sources.back().from == owner && sources.back().last + 1 == page) sources.back().last = page;
+    else sources.push_back({owner, page, page});
+  });
+  if(own) return;
+  u32 rowBytes = t.depthStride * 2;
+  bool wraps = u64(t.depthBuffer) + u64(to) * rowBytes > Memory::VRAMSize;
+  for(auto& m : sources) {
+    for(u32 page = m.first; page <= m.last; page++) depthSources[page >> 6] |= 1ull << (page & 63);
+    sourcesFirst = std::min(sourcesFirst, m.first), sourcesLast = std::max(sourcesLast, m.last);
+    Target& o = *m.from;
+    u32 low = m.first * Memory::PageSize, high = (m.last + 1) * Memory::PageSize - 1;
+    s32 fromRow = o.stride * o.bytes();
+    if(!o.drawn() || high < o.address) continue;
+    s32 top = std::max<s32>(o.top, low > o.address ? s32(low - o.address) / fromRow : 0);
+    s32 bottom = std::min<s32>(o.bottom, s32(high - o.address) / fromRow);
+    if(top > bottom) continue;
+    if(o.deadReaches(o.left, top, o.right, bottom)) revive(o, o.dead);
+    //(t's rows whose depths' bytes can be in those pages' 16 KiB)
+    s32 first = from, last = to - 1;
+    u32 blockLow = low & ~0x3fffu, blockHigh = high | 0x3fff;
+    if(!wraps) {
+      if(blockHigh < t.depthBuffer) continue;
+      if(blockLow > t.depthBuffer) first = std::max<s32>(first, (blockLow - t.depthBuffer) / rowBytes);
+      last = std::min<s32>(last, (blockHigh - t.depthBuffer) / rowBytes);
+    }
+    if(first > last) continue;
+    Command c{Command::Kind::Move, t.id};
+    c.parts = 2, c.source = o.id, c.sourceFormat = o.format, c.format = t.format;
+    c.sourceX = o.left, c.sourceY = top, c.sourceWidth = o.right + 1 - o.left, c.sourceHeight = bottom + 1 - top;
+    c.x = left, c.y = first, c.width = right + 1 - left, c.height = last + 1 - first;
+    c.delta = s32(t.depthBuffer + (first * t.depthStride + left) * 2);
+    c.rowBytes = rowBytes, c.sourceRowBytes = fromRow;
+    c.address = o.address, c.low = low, c.high = high;
+    recorded.commands.push_back(c);
+    statistics.depthsMoved++;
+  }
+}
+
+//(whether filling rows from to to of a depth buffer into t from memory leaves them as a finish then the fill would:
+//no other target drew in their pages on the GPU since the last finish, or the GPU puts those pixels into its depth
+//(moveIntoDepth(): where it can, and t drew in none of those pages itself))
+auto GPU::depthMovable(const Target& t, u32 depthBuffer, u32 depthStride, u32 from, u32 to) const -> bool {
+  bool others = false, own = false;
+  depthPages(depthBuffer, depthStride, from, to, [&](u32 page) {
+    others = others || (owners[page] && owners[page] != &t);
+    own = own || owners[page] == &t;
+  });
+  return !others || (backend->depthMoves && !own);
+}
+
+//(whether moveIntoDepth() puts pixels in every depth of t's rows from to to, columns to right: all of each 16 KiB
+//they reach in one other target's pages and its drawn rectangle's full rows, short of VRAM's end; each depth of
+//them then the bytes a finish would put there, none of memory's)
+auto GPU::depthCovered(const Target& t, u32 from, u32 to, u32 right) const -> bool {
+  if(!backend->depthMoves || from >= to || right >= t.depthStride) return false;
+  u64 low = (u64(t.depthBuffer) + u64(from) * t.depthStride * 2) & ~u64(0x3fff);
+  u64 high = (u64(t.depthBuffer) + u64(to) * t.depthStride * 2 - 1) | 0x3fff;
+  if(high >= Memory::VRAMSize) return false;
+  for(u64 block = low; block < high; block += 0x4000) {
+    const Target* o = owners[block / Memory::PageSize];
+    if(!o || o == &t || !o->drawn() || o->left || o->right != s32(o->stride) - 1 || block < o->address) return false;
+    for(u64 page = block; page < block + 0x4000; page += Memory::PageSize) {
+      if(owners[page / Memory::PageSize] != o) return false;
+    }
+    u64 fromRow = o->stride * o->bytes();
+    if(s32((block - o->address) / fromRow) < o->top || s32((block + 0x3fff - o->address) / fromRow) > o->bottom) {
+      return false;
+    }
+  }
+  return true;
 }
 
 //The newest depth drawn in t's depth buffer, where another target's depth has it (the last to draw with that depth
@@ -232,14 +343,16 @@ auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts, u
 //characters or shadows into a frame buffer of their own, cleared without its depth, tested against the scene's.
 //Memory's changes the other hasn't filled yet are filled into it first, so what's taken is as new as memory's; t's
 //own in what's taken are those. Where the other is narrower, t's columns past it are as they'd be without it.
-auto GPU::takeDepth(Target& t, const GE::PixelState& p) -> void {
+auto GPU::newestDepth(const Target& t, u32 depthBuffer, u32 depthStride, u64 at) const -> Target* {
   Target* newest = nullptr;
   for(auto& other : targets) {
-    if(other.get() == &t || other->depthBuffer != t.depthBuffer || other->depthStride != t.depthStride) continue;
-    if(other->depthRows && other->depthAt > t.depthAt && (!newest || other->depthAt > newest->depthAt)) {
-      newest = other.get();
-    }
+    if(other.get() == &t || other->depthBuffer != depthBuffer || other->depthStride != depthStride) continue;
+    if(other->depthRows && other->depthAt > at && (!newest || other->depthAt > newest->depthAt)) newest = other.get();
   }
+  return newest;
+}
+
+auto GPU::takeDepth(Target& t, Target* newest, const GE::PixelState& p) -> void {
   if(!newest) return;
   Target& from = *newest;
   if(from.depthChangedFrom < from.depthChangedTo) {
@@ -247,15 +360,46 @@ auto GPU::takeDepth(Target& t, const GE::PixelState& p) -> void {
     from.depthChangedFrom = from.depthChangedTo = 0;
   }
   u32 rows = std::min(from.depthRows, t.height), width = std::min({from.stride, t.stride, t.depthStride});
-  if(width < std::min(t.stride, t.depthStride)) {
+  Command c{Command::Kind::Depth, t.id};
+  c.source = from.id, c.width = width, c.height = rows;
+  //(one of another format reads the depth buffer's bytes in another copy's order, memory.hpp, Twisted Metal's small
+  //5551 frame buffers its 8888 scene's: the two orders move 32-byte pieces whole, so each run of 16 of this one's
+  //depths is 16 of the other's, those its order puts at the same bytes, taken from there, a run down as many rows as
+  //move alike. Where some lie past the other's rows or columns, or the pieces don't start on 32 bytes, its depth goes
+  //through memory instead: put in its order, filled into this one in this one's.)
+  if(Memory::depthCopy(from.format) != Memory::depthCopy(t.format)) {
+    u32 across = std::min(t.stride, t.depthStride), sourceAcross = std::min(from.stride, t.depthStride);
+    bool placed = !(t.depthBuffer & 31) && !(t.depthStride & 15);
+    auto& runs = recorded.runs;
+    c.firstRun = runs.size(), c.width = across;  //(the runs cover its columns and rows once each)
+    for(u32 x = 0; x < across && placed; x += 16) {
+      u16 run = std::min(16u, across - x);
+      for(u32 y = 0; y < rows && placed; y++) {
+        u32 seen = (t.depthBuffer + (y * t.depthStride + x) * 2) & (Memory::VRAMSize - 1);
+        u32 there = Memory::vramSeen(Memory::depthCopy(from.format),
+                                     Memory::vramOffset(Memory::depthCopy(t.format), seen));
+        u32 at = ((there - t.depthBuffer) & (Memory::VRAMSize - 1)) / 2;
+        u32 sourceX = at % t.depthStride, sourceY = at / t.depthStride;
+        if(!(placed = sourceY < rows && sourceX + run <= sourceAcross)) break;
+        bool down = y && runs.size() > c.firstRun && runs.back().x == x && runs.back().sourceX == sourceX &&
+                    runs.back().sourceY + runs.back().height == sourceY;
+        if(down) runs.back().height++;
+        else runs.push_back({u16(x), u16(y), u16(sourceX), u16(sourceY), run, 1});
+      }
+    }
+    if(!placed) {
+      runs.resize(c.firstRun);
+      u64 end = u64(t.depthBuffer) + u64(std::max(from.depthRows, 1u)) * t.depthStride * 2;
+      return putDepth(t.depthBuffer, u32(std::min<u64>(end, Memory::VRAMSize) - 1));
+    }
+    c.runs = runs.size() - c.firstRun;
+  } else if(width < std::min(t.stride, t.depthStride)) {
     if(t.depthChangedFrom < t.depthChangedTo) {
       fill(t, t.depthChangedFrom, std::min(t.depthChangedTo, t.depthRows), p, 2);
       t.depthChangedFrom = t.depthChangedTo = 0;
     }
     if(rows > t.depthRows) fill(t, t.depthRows, rows, p, 2), t.depthRows = rows;
   }
-  Command c{Command::Kind::Depth, t.id};
-  c.source = from.id, c.width = width, c.height = rows;
   recorded.commands.push_back(c);
   t.depthRows = std::max(t.depthRows, rows);
   t.depthChangedFrom = std::max(t.depthChangedFrom, rows);
@@ -265,17 +409,19 @@ auto GPU::takeDepth(Target& t, const GE::PixelState& p) -> void {
 }
 
 //The newest depth the GPU drew in each depth buffer reaching VRAM's bytes first to last, where memory hasn't it, put
-//into memory's VRAM as the GE keeps its depth (through the fourth copy), the older depth buffers' first where two
-//reach the same bytes: a texture is about to be read from them through VRAM's depth views (holds()), which on the PSP
-//finds the depth drawn there (Cars Race-O-Rama takes its race's depth through a palette into the alpha its sky is
-//blended by). A read back of those depths alone, waited for (each target's own changes from memory filled into it
-//first, so none is lost); the targets' pixels and pages stay the GPU's. Of targets as new over one depth buffer, the
+//into memory's VRAM as the GE keeps its depth (through the copy its target's format has: memory.hpp's depthCopy()),
+//the older depth buffers' first where two reach the same bytes: a texture is about to be read from them through
+//VRAM's depth views (holds()), which on the PSP finds the depth drawn there (Cars Race-O-Rama takes its race's depth
+//through a palette into the alpha its sky is blended by, Kurohyou its depth for its depth of field). A read back of
+//those depths alone, waited for (each target's own changes from memory filled into it first, so none is lost); the
+//targets' pixels and pages stay the GPU's, but for a texture those in its bytes, which its decoding waits for anyway:
+//put in memory first, the depth over them where it's newer. Of targets as new over one depth buffer, the
 //widest's is put (not the columns of one older and wider than the newest). Memory hears of the bytes changed (decoded
 //textures, the recompiler), and so do the targets over them, which fill them again, but those whose depth is what was
 //put there, where no newer depth put after reaches it: their changes from memory are kept as they were. One that
 //couldn't be read back isn't kept, for the next texture to take again. (The second and fourth copies rearrange each
 //16 KiB: all of each 16 KiB they touch is taken; a depth buffer's bytes past VRAM's end are its start's, as the GE's.)
-auto GPU::putDepth(u32 first, u32 last) -> void {
+auto GPU::putDepth(u32 first, u32 last, bool finishing) -> void {
   first &= ~0x3fffu, last |= 0x3fff;
   auto bytes = [](const Target& t) -> std::pair<u64, u64> {  //(may run past VRAM's end)
     return {t.depthBuffer & ~0x3fffu, (u64(t.depthBuffer) + t.depthRows * t.depthStride * 2 - 1) | 0x3fff};
@@ -302,6 +448,8 @@ auto GPU::putDepth(u32 first, u32 last) -> void {
     if(newest) put.push_back(&t);
   }
   if(put.empty() || !ready()) return;
+  //(where they were newer, the fills below take them: moveIntoDepth())
+  if(finishing && drawnOver(*ge, first, last)) finish(*ge);
   std::sort(put.begin(), put.end(), [](Target* a, Target* b) { return a->depthAt < b->depthAt; });
   for(auto* t : put) {
     if(t->depthChangedFrom < t->depthChangedTo) {
@@ -326,9 +474,10 @@ auto GPU::putDepth(u32 first, u32 last) -> void {
     const u16* depths;
     u32 across = 0, down = 0;
     if(!backend->readDepth(n, depths, across, down) || across != width(t) || down != t.depthRows) continue;
+    u32 depthCopy = Memory::depthCopy(t.format);
     for(u32 y = 0; y < down; y++) {
       for(u32 x = 0; x < across; x++, depths++) {
-        u32 at = Memory::vramOffset(3, (t.depthBuffer + (y * t.depthStride + x) * 2) & (Memory::VRAMSize - 1));
+        u32 at = Memory::vramOffset(depthCopy, (t.depthBuffer + (y * t.depthStride + x) * 2) & (Memory::VRAMSize - 1));
         memory.vram[at] = u8(*depths), memory.vram[at + 1] = u8(*depths >> 8);
       }
     }
@@ -359,10 +508,33 @@ auto GPU::putDepth(u32 first, u32 last) -> void {
       if(!over) other.depthChangedFrom = changes[i].first, other.depthChangedTo = changes[i].second;
     }
     inParts(t.depthBuffer, u64(t.depthRows) * t.depthStride * 2, [&](u32 at, u32 size) {
-      memory.watch(Memory::VRAMBase + 3 * Memory::VRAMSize + at, size);
+      memory.watch(Memory::VRAMBase + Memory::depthCopy(t.format) * Memory::VRAMSize + at, size);
     });
   }
   release();
+}
+
+auto GPU::depthOf(u32 address, u32 stride, u32 format, std::vector<u16>& depths, u32& width, u32& height) -> bool {
+  depths.clear(), width = height = 0;
+  Target* t = nullptr;
+  for(auto& candidate : targets) {
+    if(candidate->address == address && candidate->stride == stride && candidate->format == format) {
+      t = candidate.get();
+    }
+  }
+  if(!ready() || !t || !t->depthRows || !t->depthStride) return false;
+  Command c{Command::Kind::Readback, t->id};
+  c.width = std::min(t->stride, t->depthStride), c.height = t->depthRows, c.parts = 2;
+  u32 n = recorded.readbacks++;
+  recorded.commands.push_back(c);
+  bool finished = backend->finish(recorded);
+  recorded.clear();
+  if(!finished) return lose(), false;
+  const u16* read;
+  if(!backend->readDepth(n, read, width, height)) return false;
+  depths.assign(read, read + u64(width) * height);
+  release();
+  return true;
 }
 
 //A rectangle (left, top, right, bottom; none: left past right) grown to take in another
@@ -474,6 +646,14 @@ auto GPU::own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
   bool told = false;
   if(t.toldBusy != memory.busyCleared) t.told.clear(), t.toldBusy = memory.busyCleared;
   for(auto& r : t.told) told |= left >= r[0] && top >= r[1] && right <= r[2] && bottom <= r[3];
+  //(where a depth took the pixels of pages it draws in since (moveIntoDepth()), the depths over them filled again
+  //before they're used, as memory's change would have them: told or not)
+  u32 from = std::max(first, sourcesFirst), to = std::min(last, sourcesLast);
+  for(u32 page = from, block = ~0u; page <= to; page++) {
+    if(!(depthSources[page >> 6] >> (page & 63) & 1) || page * Memory::PageSize >> 14 == block) continue;
+    block = page * Memory::PageSize >> 14;
+    depthChanged(block << 14);
+  }
   if(told) return;
   if(t.told.size() < MostTold) t.told.push_back({left, top, right, bottom});
   //(not looked through where they're all its own and busy already: inside those it last went through, no page's owner
@@ -1005,7 +1185,8 @@ auto GPU::settings(const GE::Look& look) -> void {
 //GPU lost, no target for its frame buffer, rows past the target's (past VRAM's end, where the PSP's addresses run
 //round to its start, or past 512), or a texture the GE reads from memory as it draws, which the GPU can't have),
 //for the software renderer to draw; true for one that draws nothing too.
-auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region) -> bool {
+auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region,
+                const std::vector<GE::Vertex>& vertices, const GE::Transform& transform) -> bool {
   this->ge = &ge;
   drawing = false;
   reached();
@@ -1059,6 +1240,61 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
     break;
   }
   if(t->stale && t->drawn()) finish(ge), moving.clear();  //(what the GPU drew, then memory's changes over it)
+  //Depth filled from memory below (its own new rows and those memory changed, and those memory changed of the target
+  //it takes depth from), in pages another target has drawn in on the GPU since the last finish: as a finish then the
+  //fill would leave it, the other's pixels moved into it on the GPU (moveIntoDepth()); else, where the target filled
+  //drew in those pages itself (a finish would put both in memory), put in memory first. Where the GPU can't move
+  //pixels into a depth (Backend::depthMoves), put in memory first only where this PRIM's depth test reads what's
+  //filled: not a clear's, nor a test always or never true, nor one its depths decide (nothing's greater than 65535,
+  //nor less than 0: Chili Con Carnage and Dirt 2 test 2D sprites at 65535 "greater or equal" over what they drew into
+  //their depth buffer's memory), in the rows its pixels can be in (a 3D one's vertices on the screen, worked out only
+  //where those rows are asked about: GTA Chinatown Wars' radar is tested below the rows its bloom drew over). The rest
+  //is filled from memory as it is, as before the moves: a PRIM after that finds those rows filled reads them so (the
+  //stale depth master has), where finishing for each would have the dozen games that draw their post-processing over
+  //their depth buffer wait for the GPU once to three times a frame.
+  bool depth = !column && !row && (p.clear ? p.clearDepth : p.depthTest);
+  Target* taken = nullptr;
+  if(depth) {
+    bool same = t->depthBuffer == p.depthBuffer && t->depthStride == p.depthStride;
+    u32 rows = same ? t->depthRows : 0, changedFrom = same ? t->depthChangedFrom : 0;
+    u32 changedTo = same ? t->depthChangedTo : 0;
+    taken = newestDepth(*t, p.depthBuffer, p.depthStride, same ? t->depthAt : 0);
+    auto filled = [&](const auto& each) {  //(each(target filled, from, to) of the rows the fills below take)
+      if(taken) {  //(as takeDepth() fills them: the other's changes, and where it's narrower, this one's rows to its)
+        each(*taken, taken->depthChangedFrom, std::min(taken->depthChangedTo, taken->depthRows));
+        bool narrower = Memory::depthCopy(taken->format) == Memory::depthCopy(t->format) &&
+                        taken->stride < std::min(t->stride, p.depthStride);
+        if(narrower) each(*t, rows, std::min(taken->depthRows, t->height));
+      }
+      each(*t, changedFrom, std::min(changedTo, rows));
+      each(*t, rows, u32(bottom + 1));
+    };
+    if(backend->depthMoves) {
+      bool onGPU = true;
+      filled([&](const Target& into, u32 from, u32 to) {
+        onGPU = onGPU && depthMovable(into, p.depthBuffer, p.depthStride, from, to);
+      });
+      if(!onGPU) statistics.depthFinishes++, finish(ge), moving.clear();
+    } else {
+      auto owned = [&](s32 first, s32 last) {  //(another target's pages in the rows filled from first to last)
+        bool found = false;
+        filled([&](const Target&, u32 from, u32 to) {
+          from = std::max<u32>(from, first), to = std::min<u32>(to, last + 1);
+          found = found || !depthMovable(*t, p.depthBuffer, p.depthStride, from, to);
+        });
+        return found;
+      };
+      if(!p.clear && p.depthFunction > 1 && owned(top, bottom)) {
+        GE::Reached r = ge.reachedBy(through, vertices, transform, region);
+        u32 f = p.depthFunction;
+        bool decided = (f == 4 || f == 7) ? r.lowest == 65535 : (f == 5 || f == 6) && r.highest == 0;
+        s32 first = std::max(top, r.region.top), last = std::min(bottom, r.region.bottom);
+        if(!decided && r.region.left <= r.region.right && first <= last && owned(first, last)) {
+          statistics.depthFinishes++, finish(ge), moving.clear();
+        }
+      }
+    }
+  }
   if(!ready()) return held.reset(), false;
   //(the colors filled afresh where memory's changed, the depth where memory's depth has: rows of it, or all of it
   //for another depth buffer; neither replaces the other's newer pixels on the GPU. A frame buffer that's part of
@@ -1069,13 +1305,12 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
     t->rows = 0, t->stale = false, t->beside.clear(), t->dead.clear();
     t->lags[0] = 0, t->lags[1] = 0, t->lags[2] = -1, t->lags[3] = -1;  //(colors and stencil both memory's again)
   }
-  bool depth = !column && !row && (p.clear ? p.clearDepth : p.depthTest);
   if(depth && (t->depthBuffer != p.depthBuffer || t->depthStride != p.depthStride)) {
     t->depthBuffer = p.depthBuffer, t->depthStride = p.depthStride, t->depthRows = 0;
     t->depthChangedFrom = t->depthChangedTo = 0;
     t->depthAt = 0, t->depthKept = false;
   }
-  if(depth) takeDepth(*t, p);  //(the newest drawn in its depth buffer, where another target drew it)
+  if(depth) takeDepth(*t, taken, p);  //(the newest drawn in its depth buffer, where another target drew it)
   if(depth && t->depthChangedFrom < t->depthChangedTo) {
     fill(*t, t->depthChangedFrom, std::min(t->depthChangedTo, t->depthRows), p, 2);
     t->depthChangedFrom = t->depthChangedTo = 0;
@@ -1619,6 +1854,8 @@ auto GPU::finish(GE& ge) -> void {
     memory.busyCleared++;
   }
   for(auto& owner : owners) owner = nullptr;
+  for(auto& pages : depthSources) pages = 0;
+  sourcesFirst = ~0u, sourcesLast = 0;
   drawnSerial++;
   for(auto& t : targets) {
     t->left = 0, t->top = 0, t->right = -1, t->bottom = -1;
@@ -1627,7 +1864,8 @@ auto GPU::finish(GE& ge) -> void {
     t->dead.clear();
     if(t->rows) memory.watch(Memory::VRAMBase + t->address, t->rows * t->stride * t->bytes());
     if(t->depthRows && t->depthStride) {
-      memory.watch(Memory::VRAMBase + 3 * Memory::VRAMSize + t->depthBuffer, t->depthRows * t->depthStride * 2);
+      memory.watch(Memory::VRAMBase + Memory::depthCopy(t->format) * Memory::VRAMSize + t->depthBuffer,
+                   t->depthRows * t->depthStride * 2);
     }
   }
   release();
@@ -1639,20 +1877,7 @@ auto GPU::written(GE& ge, u32 page) -> void {
   u32 base = Memory::VRAMBase / Memory::PageSize;
   if(page < base || page >= base + GE::VRAMPages) return;
   page -= base;
-  //A depth buffer's rows the change may be in (the fourth copy rearranges each 16 KiB: all of its 16 KiB's), to
-  //be filled again before the next draw; the rest of the GPU's depth is kept.
-  u32 block = page * Memory::PageSize & ~0x3fffu;
-  for(auto& t : targets) {
-    if(!t->depthRows || !t->depthStride) continue;
-    u32 rowBytes = t->depthStride * 2, low = t->depthBuffer, high = low + t->depthRows * rowBytes;
-    if(block + 0x4000 <= low || high <= block) continue;
-    u32 from = block > low ? (block - low) / rowBytes : 0;
-    u32 to = std::min<u32>((block + 0x4000 - low + rowBytes - 1) / rowBytes, t->depthRows);
-    if(t->depthChangedFrom < t->depthChangedTo) {
-      from = std::min(from, t->depthChangedFrom), to = std::max(to, t->depthChangedTo);
-    }
-    t->depthChangedFrom = from, t->depthChangedTo = to;
-  }
+  depthChanged(page * Memory::PageSize & ~0x3fffu);
   if(owners[page]) return;
   //(a page of whole rows of it, which it hasn't drawn in since the last finish: those bytes taken from memory again
   //before they're used (beside); else all of it, filled afresh)
@@ -1664,6 +1889,22 @@ auto GPU::written(GE& ge, u32 page) -> void {
     else keepBeside(*t, std::max(low, t->address), std::min(high, t->end()) - 1);
   }
   (void)ge;
+}
+
+//A depth buffer's rows a change in VRAM's 16 KiB from block may be in (the copies the GE keeps it in rearrange each 16
+//KiB: all of its 16 KiB's), to be filled again before the next draw; the rest of the GPU's depth is kept.
+auto GPU::depthChanged(u32 block) -> void {
+  for(auto& t : targets) {
+    if(!t->depthRows || !t->depthStride) continue;
+    u32 rowBytes = t->depthStride * 2, low = t->depthBuffer, high = low + t->depthRows * rowBytes;
+    if(block + 0x4000 <= low || high <= block) continue;
+    u32 from = block > low ? (block - low) / rowBytes : 0;
+    u32 to = std::min<u32>((block + 0x4000 - low + rowBytes - 1) / rowBytes, t->depthRows);
+    if(t->depthChangedFrom < t->depthChangedTo) {
+      from = std::min(from, t->depthChangedFrom), to = std::max(to, t->depthChangedTo);
+    }
+    t->depthChangedFrom = from, t->depthChangedTo = to;
+  }
 }
 
 //A texture whose bytes are, some of them, in pages the GPU has drawn in: taken from there for the next PRIM where
@@ -1685,7 +1926,7 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns,
     u32 offset = (physical - Memory::VRAMBase) % Memory::VRAMSize;
     u64 tall = (std::min<u32>({rows, texture.height, 512}) + 7) & ~7u;  //(a swizzled one's in rows of eight)
     u64 end = offset + tall * texture.bufferWidth * bits[texture.format] / 8;
-    if(end > offset) putDepth(offset, std::min<u64>(end, Memory::VRAMSize) - 1);
+    if(end > offset) putDepth(offset, std::min<u64>(end, Memory::VRAMSize) - 1, true);
     return false;
   }
   if(physical < Memory::VRAMBase || physical - Memory::VRAMBase >= Memory::VRAMSize) return false;
@@ -2147,6 +2388,8 @@ auto GPU::drop() -> void {
   reach = {};
   target = nullptr, drawing = false;
   for(auto& owner : owners) owner = nullptr;
+  for(auto& pages : depthSources) pages = 0;
+  sourcesFirst = ~0u, sourcesLast = 0;
   drawnSerial++;
   if(!backend) return;
   for(auto& t : targets) backend->dropTarget(t->id);

@@ -3,7 +3,9 @@
 //driver that compiles the shaders wrong, blends or narrows wrong, or steps a texture wrong shows it here, and the
 //software renderer draws the game instead. What's drawn, into 64x48 frame buffers:
 //  - sprites, flat and textured (enlarged, shrunk, mirrored), some in clear mode, in 8888 and 5650: the GPU's bytes
-//    are the software renderer's exactly, as tests/psp/gpu.cpp's gpuSprites has them;
+//    are the software renderer's exactly, as tests/psp/gpu.cpp's gpuSprites has them; the 5650 one's last tested
+//    against the 8888 one's depth (a level for each 16 pixels of each row), which it takes across the two formats'
+//    orders of the depth buffer (memory.hpp's depthCopy(): gpu.cpp's takeDepth());
 //  - shaded triangles, some blended over them: close (each channel within 8 of the software renderer's but at the
 //    edges, where the two may cover a pixel differently: at most 1 pixel in 50 further off);
 //  - where the GPU reads the frame buffer in the shader (Backend::reads), a frame buffer of a game's size (480x272
@@ -18,7 +20,12 @@
 //  - and there, where the GE's own 3D goes among the GPU's (screenMeshes: screenTriangle()), PRIMs of six corners
 //    (lit and not, one textured, one with its shine kept apart) and a triangle of a mesh cut at the near plane: close
 //    too, so a driver that takes transform.vert's placed vertices wrong fails here, and System checks again with them
-//    drawn apart (screenMeshesFailed), the GPU still transforming the rest.
+//    drawn apart (screenMeshesFailed), the GPU still transforming the rest;
+//  - frame buffers drawn over a depth buffer's memory (a 5551 one, 128x64, and an 8888 one over the same 16 KiB of
+//    another), then a frame buffer of the other size of pixel (8888, 4444) tested against each ("greater or equal",
+//    not written): their pixels as the depth, in the order each format keeps it (gpu.cpp's moveIntoDepth(), on the
+//    GPU where it can: Backend::depthMoves), exactly; a driver that moves them wrong fails here, and System checks
+//    again with them put in memory first (depthMovesFailed).
 //It takes some milliseconds, most of them the GPU making its first pipelines (kept for the game).
 
 auto GPU::check(std::string& error) -> bool {
@@ -38,11 +45,11 @@ auto GPU::check(std::string& error) -> bool {
   auto bitsOf = [](float value) { u32 bits; std::memcpy(&bits, &value, 4); return bits; };
 
   //(through mode: float u, v; 8888 color; float x, y, z; the vertices written at Vertices, then drawn)
-  struct Corner { float u, v; u32 color; float x, y; };
+  struct Corner { float u, v; u32 color; float x, y, z = 0; };
   auto draw = [&](Machine& m, u32 kind, const std::vector<Corner>& corners) {
     u32 to = Vertices;
     for(auto& c : corners) {
-      for(u32 word : {bitsOf(c.u), bitsOf(c.v), c.color, bitsOf(c.x), bitsOf(c.y), 0u}) {
+      for(u32 word : {bitsOf(c.u), bitsOf(c.v), c.color, bitsOf(c.x), bitsOf(c.y), bitsOf(c.z)}) {
         m.memory.write(4, to, word), to += 4;
       }
     }
@@ -130,6 +137,26 @@ auto GPU::check(std::string& error) -> bool {
     layered.push_back({{0, 0, color, x, y}, {0, 0, color, x + w, y + h}});
     layered.push_back({{0, 0, over, x + dx, y + dy}, {0, 0, over, x + dx + w, y + dy + h}});
   }
+  //(the frame buffers drawn over depth buffers: a sprite over all, then smaller ones)
+  constexpr u32 Wide = 128, Tall = 64;
+  std::vector<std::vector<Corner>> pictures[2];
+  for(auto& picture : pictures) {
+    u32 color = random() | random() << 24;
+    picture.push_back({{0, 0, color, 0, 0}, {0, 0, color, Wide, Tall}});
+    for(u32 n = 0; n < 64; n++) {
+      float x = random() % Wide, y = random() % Tall, w = 1 + random() % 32, h = 1 + random() % 16;
+      color = random() | random() << 24;
+      picture.push_back({{0, 0, color, x, y}, {0, 0, color, x + w, y + h}});
+    }
+  }
+  //(the 8888 sprites' depth alone, a level for each 16 pixels of each row)
+  std::vector<std::vector<Corner>> strips;
+  for(u32 y = 0; y < Height; y++) {
+    for(u32 x = 0; x < Width; x += 16) {
+      float z = random() % 65536;
+      strips.push_back({{0, 0, 0, float(x), float(y), z}, {0, 0, 0, float(x + 16), float(y + 1), z}});
+    }
+  }
 
   for(Machine* m : {software.get(), hardware.get()}) {
     for(u32 n = 0; n < 16 * 16; n++) m->memory.write(4, Texels + n * 4, n * 0x9e37'79b9u);
@@ -143,6 +170,18 @@ auto GPU::check(std::string& error) -> bool {
       m->ge.commands[GE::ClearMode] = 1 | 7 << 8;  //(clear mode: color, stencil and depth written as they come)
       for(u32 n = 0; n < 4; n++) draw(*m, GE::Sprites, sprites[n]);
       m->ge.commands[GE::ClearMode] = 0;
+      auto& c = m->ge.commands;
+      if(format == 3) {
+        c[GE::ClearMode] = 1 | 4 << 8;  //(the depth alone)
+        for(auto& one : strips) draw(*m, GE::Sprites, one);
+        c[GE::ClearMode] = 0;
+      } else {
+        //(the 5650 one's depth the 8888 one's, taken across the two orders, then tested against: greater or equal,
+        //not written)
+        c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 7, c[GE::DepthMask] = 1;
+        draw(*m, GE::Sprites, {{0, 0, 0xff00'ff00, 0, 0, 32768}, {0, 0, 0xff00'ff00, Width, Height, 32768}});
+        c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0;
+      }
     }
     //shaded triangles, the second half blended over the first (source alpha, one minus it)
     into(*m, 0x8000, 3);
@@ -220,6 +259,24 @@ auto GPU::check(std::string& error) -> bool {
       draw(*m, GE::Sprites, layered[n]);
     }
     c[GE::AlphaBlendEnable] = 0, c[GE::MaskColor] = 0;
+    //frame buffers drawn over depth buffers' memory, then tested against: 5551 at 0x1c'0000 under an 8888 one's
+    //depth, 8888 64 wide at 0x1d'0000 under a 4444 one's
+    for(u32 n = 0; n < 2; n++) {
+      u32 depthBuffer = n ? 0x1d'0000 : 0x1c'0000;
+      into(*m, depthBuffer, n ? 3 : 1);
+      u32 across = n ? Wide / 2 : Wide;
+      c[GE::FrameBufferWidth] = across, c[GE::Scissor2] = (across - 1) | (Tall - 1) << 10;
+      for(auto& one : pictures[n]) draw(*m, GE::Sprites, one);
+      into(*m, n ? 0x1a'8000 : 0x1a'0000, n ? 2 : 3);
+      c[GE::FrameBufferWidth] = Wide, c[GE::Scissor2] = (Wide - 1) | (Tall - 1) << 10;
+      c[GE::DepthBufferPointer] = depthBuffer, c[GE::DepthBufferWidth] = Wide;
+      c[GE::ClearMode] = 1 | 1 << 8;  //(the colors alone)
+      draw(*m, GE::Sprites, {{0, 0, 0, 0, 0}, {0, 0, 0, Wide, Tall}});
+      c[GE::ClearMode] = 0;
+      c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 7, c[GE::DepthMask] = 1;
+      draw(*m, GE::Sprites, {{0, 0, 0xffc0'80ff, 0, 0, 32768}, {0, 0, 0xffc0'80ff, Wide, Tall, 32768}});
+      c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0;
+    }
     m->ge.settleAll();
   }
   hardware->ge.setRenderer(nullptr);
@@ -289,6 +346,16 @@ auto GPU::check(std::string& error) -> bool {
       error = "its draws reading the frame buffer in a game-sized picture are " + std::to_string(apart) +
               " bytes off the software renderer's";
       passed = false;
+    }
+  }
+  depthMovesFailed = false;
+  if(passed) {
+    u32 apart = 0;
+    for(u32 n = 0x1a'0000; n < 0x1a'8000 + Wide * Tall * 2; n++) apart += a[n] != b[n];
+    if(apart) {
+      error = "its frame buffers tested against frame buffers drawn over their depth buffers are " +
+              std::to_string(apart) + " bytes off the software renderer's";
+      passed = false, depthMovesFailed = backend->depthMoves;
     }
   }
   drop();

@@ -10,6 +10,13 @@
 //
 //The colors are written as they are; the stencil, which a shader can't write, a bit at a time as copy.frag does, or
 //with them where the GPU lets a shader give the stencil's value (EXPORT: VK_EXT_shader_stencil_export).
+//
+//Built again to put the source's pixels into the target's depth instead, as its depth filled from memory after a
+//finish would have them (DEPTH: gpu.cpp's moveIntoDepth()): each of the target's pixels is its depth buffer's depth at
+//the same place, whose two bytes, in the order the copy of VRAM its format keeps its depth in has them (memory.cpp's
+//vramOffset(): the fourth for 8888, else the second), are the source's pixel's there, or half of an 8888 one's, where
+//they're the rectangle's and among the bytes from low to high (the pages the source owns). Elsewhere the depth stays
+//as it is.
 #if defined(EXPORT)
 #extension GL_ARB_shader_stencil_export : require
 #endif
@@ -21,10 +28,15 @@ layout(push_constant) uniform Push {
   uint scale;            //the targets' resolution
   uint bit;              //MODE 1: the stencil's bit
   uint formats;          //the source's GE format, and in bits 8-15 the target's
-  int delta;             //the target's rectangle's first pixel's byte, from the source's first
-  uint rowBytes;         //the bytes of a row of the target's
+  int delta;             //the target's rectangle's first pixel's byte, from the source's first (DEPTH: its depth's
+                         //byte in VRAM, as the copy shows it)
+  uint rowBytes;         //the bytes of a row of the target's (DEPTH: of its depth buffer's)
   uint sourceRowBytes;   //and of the source's
   ivec4 box;             //the source's rectangle (left, top, right, bottom in its pixels), whose pictures these are
+#if defined(DEPTH)
+  uint address;          //the source's first byte in VRAM
+  uint low, high;        //the bytes of VRAM its pixels are taken from (inclusive)
+#endif
 } push;
 
 layout(set = 0, binding = 0) uniform sampler2D colors;
@@ -49,14 +61,28 @@ void main() {
   ivec2 at = ivec2(gl_FragCoord.xy - vec2(push.origin)) / int(push.scale);
   uint from = push.formats & 255u, to = push.formats >> 8;
   int bytes = to == 3u ? 4 : 2, sourceBytes = from == 3u ? 4 : 2;
+#if defined(DEPTH)
+  //(the depth's bytes, as the copy shows them, where VRAM keeps them: each 32-byte piece moved whole in its 16 KiB)
+  uint seen = (uint(push.delta) + uint(at.y) * push.rowBytes + uint(at.x) * 2u) & 0x1fffffu;
+  if(to == 3u) seen = (seen & ~0x3e0u) | (seen >> 9 & 1u) << 5 | (seen >> 5 & 15u) << 6;
+  uint kept = seen ^ 0x2040u;
+  if(kept < push.low || kept > push.high || kept < push.address) discard;
+  int offset = int(kept - push.address);
+#else
   //(the source's row and column at the pixel's bytes: an 8888 pixel is two of a 16-bit source's, a 16-bit one half
   //of an 8888 source's)
   int offset = push.delta + at.y * int(push.rowBytes) + at.x * bytes;
   if(offset < 0) discard;
+#endif
   int row = offset / int(push.sourceRowBytes), inRow = offset - row * int(push.sourceRowBytes);
   int column = inRow / sourceBytes;
   if(column < push.box.x || column > push.box.z || row < push.box.y || row > push.box.w) discard;
   column -= push.box.x, row -= push.box.y;
+#if defined(DEPTH)
+  uint depth = narrowed(column, row);
+  if(sourceBytes == 4) depth = depth >> uint(inRow & 2) * 8u & 0xffffu;  //(half of one)
+  gl_FragDepth = float(depth) * (1.0 / 65536.0);                          //(as draw.frag's DEPTHS has them)
+#else
   uint p;
   if(bytes == sourceBytes) p = narrowed(column, row);                                 //(a pixel for a pixel)
   else if(bytes == 4) p = narrowed(column, row) | narrowed(column + 1, row) << 16;     //(two for one)
@@ -72,5 +98,6 @@ void main() {
   if(MODE == 1u && (c.a & push.bit) == 0u) discard;
 #if defined(EXPORT)
   gl_FragStencilRefARB = int(c.a);
+#endif
 #endif
 }
