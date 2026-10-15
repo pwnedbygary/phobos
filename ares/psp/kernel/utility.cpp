@@ -27,9 +27,10 @@
 //    the save's folder, and buffers outside the program's memory, are refused. The PSP also encrypts the secure files
 //    and hashes them in PARAM.SFO: not done here (the files are only Phobos's to read; the hashes are zeros). A
 //    list's load takes the save its dialog would focus (that one broken, the one the same focus takes among those
-//    that aren't), a list's save that names none (or a pattern, which names none there) the list's first name, the
-//    name written back either way (savedataUnshown()); the list mode lists the saves its save name takes as a pattern
-//    ('*', '?').
+//    that aren't), a list's save that names none of the saves its dialog shows (no name, a pattern, or a name its
+//    list doesn't hold whose save isn't there) the list's first name, or with focus 7 or 8 the new slot the dialog
+//    focuses, but never a save that's there (its own name kept then), the name written back either way
+//    (savedataUnshown()); the list mode lists the saves its save name takes as a pattern ('*', '?').
 //  - A message: answered at once, as if the player pressed Yes (or OK), the message noted.
 //  - The keyboard: each field's text entered as it is, an empty one given the console's nickname as the field's input
 //    types allow it, each CHANGED (keyboard()).
