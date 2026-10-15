@@ -15236,7 +15236,7 @@ the round closes isn't a stable test).
   bytes, in 440 Updates (frames 691 to 1130), every file byte for byte the disc's; asked again, the game says it's
   installed already and the dialog writes it over. Booted again, the game opens its install with the PGD layer's flag
   and key (0x40000001, ioctl 0x04100001: its files are PGDs), which io.cpp refuses on a memory stick file
-  (`0x8001b000`, part 97's "PGD ioctls on stick files", the owner's area, left alone here): it says it couldn't read the
+  (`0x8001b000`, part 97's "PGD ioctls on stick files", left alone here, its own task): it says it couldn't read the
   install and plays Mission 01 from the disc. (`gunhound/`.)
 - **7th Dragon 2020** (title > DATA INSTALL): mode 1, "NPJH50459" and "USERID", 1,532,651,653 bytes (the translation's
   GAME.DNS, a CRI archive it keeps decrypted), installed at frame 3641; booted again, it opens GAME.DNS with the same
@@ -15244,7 +15244,7 @@ the round closes isn't a stable test).
   turned OFF. Installed data will be read from the UMD." and plays on from the disc. (`7d/`.)
 - Every one of the library's 30 discs with an INSDIR imports the dialog's functions (`survey/imports.txt`): their
   installs now complete. Those that read their install through the PGD layer, as Gunhound EX and 7th Dragon 2020 do,
-  fall back to the disc until the PGD layer takes its key on a memory stick file (the owner's to add).
+  fall back to the disc until the PGD layer takes its key on a memory stick file (its own task).
 
 **The review.** An independent review of `1fbabdf43` (read-only, with probes and runners of its own) found no
 blockers: nothing written outside PSP/SAVEDATA/<game><data> and the copies' folder, no link leading the install out,
@@ -15322,7 +15322,8 @@ sticks, the clock pinned): the same files byte for byte and the same savedata re
 - The PGD layer on memory stick files (ioctls 0x04100001 and 0x04100002 refused off the disc): games that read their
   installed data through it (Gunhound EX's PGDs, 7th Dragon 2020's GAME.DNS) can't use their install yet and fall back
   to the disc, saying so at boot, while the install keeps its room on the stick (460 MB and 1.5 GB). That message and
-  that room are the owner's to weigh: PGD and NPDRM are his; part 97 lists it too.
+  that room go once the PGD layer reads stick files, its own task now (the PGD and NPDRM code is open to agents since
+  2026-10-15, the owner approving); part 97 lists it too.
 - No recording has the dialog's own screens, its timing (a PSP copies at the UMD's speed: minutes for these installs,
   seconds here), the words after the progress, its answer for no space (0x80111902 is the pattern's) or for a disc
   with nothing to install (cancelled is the stub's answer, kept), or what it does over an install there (the merge

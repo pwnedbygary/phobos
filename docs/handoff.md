@@ -67,8 +67,8 @@ Save states unchanged (layout 32: the copy isn't state).
 - **Games**: Kingdom Hearts installs (INSTALLATION COMPLETE; BBS1.DAT, ICON0.PNG, PIC1.PNG byte for byte the disc's)
   and, booted again, reads BBS1.DAT from the memory stick (41 reads, none from the disc's copy) to its first gameplay.
   Gunhound EX installs all 797 files byte for byte; 7th Dragon 2020 its 1.5 GB. Both then read their install through
-  the PGD layer (flag 0x40000000, ioctl 0x04100001), which io.cpp refuses on memory stick files (the owner's area,
-  part 97's "left"), say so at boot and play from the disc. All 30 INSDIR discs in the library import the dialog.
+  the PGD layer (flag 0x40000000, ioctl 0x04100001), which io.cpp refuses on memory stick files (part 97's "left",
+  its own task now), say so at boot and play from the disc. All 30 INSDIR discs in the library import the dialog.
 - **Tests**: tests/psp/install.cpp's 9 groups (the whole install in both sizes, a host folder disc, every answer, cut
   short by Abort, a reset or Phobos killed, the copies' folder hidden and links in its place, its copy changed behind
   its back, a state saved part way, over an install there, the progress screen and its byte form) and files.cpp's
@@ -94,7 +94,7 @@ Save states unchanged (layout 32: the copy isn't state).
   the round's tests fail on `4b671947d` (2 groups, 26 checks) and the other 556 pass; Kingdom Hearts' install and
   boot every file and frame the second round's; the 21 scenes' hashes master's. GCC 13.3 (Docker) couldn't be run in
   rounds two and three (Ubuntu's archive unreachable); CI's Linux build compiles with it.
-- **Left**: the PGD layer on memory stick files (the owner's: Gunhound EX and 7th Dragon 2020 use their installs once
+- **Left**: the PGD layer on memory stick files (its own task now: Gunhound EX and 7th Dragon 2020 use their installs once
   it's there); the dialog's own screens and timing, the words after the progress, and the no-space code aren't recorded;
   sceIoChstat's times and size aren't changed.
 
