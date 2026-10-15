@@ -316,7 +316,9 @@ auto System::unload() -> void {
   memory.ram = {};
   memory.watched = {};
   pageTable = {};
+  steadyPages = {};
   cpu.pages = nullptr;
+  cpu.steady = nullptr;
   cpu.watched = nullptr;
   cpu.recompiler.sections.clear();
   cpu.recompiler.sections.shrink_to_fit();
@@ -360,6 +362,8 @@ auto System::power(bool reset) -> void {
   memory.power(64_MiB);
   memory.buildPages(pageTable);
   cpu.pages = pageTable.data();
+  memory.buildSteady(steadyPages);
+  cpu.steady = steadyPages.data();
   cpu.watched = memory.watched.data();
   memory.watching = [this](u32 page) { cpu.recompiler.protect(page); };
   memory.unwatched = [this](u32 page) { cpu.recompiler.unwatched(page); };

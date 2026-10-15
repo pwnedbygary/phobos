@@ -56,7 +56,7 @@ auto Allegrex::Recompiler::emitMemory(u32 address, u32 instruction, u32 count, b
 //Each access below reads or writes the host's memory at Host, the page emitMemory() found plus the address's low 12
 //bits, or a quad's at mem(reg(1), byte offset). A load into r0 does nothing once it's past the checks (which can
 //still raise an exception). sb, sh and sw store rt as use() gives it (its host register, read before the fast path
-//splits off; r0 from ipu.r[]); the coprocessors' stores and lwl, lwr, swl and swr work in reg(2) and reg(3) (and a
+//splits off; r0 as the constant 0); the coprocessors' stores and lwl, lwr, swl and swr work in reg(2) and reg(3) (and a
 //quad's in reg(0)), as reg(0) and reg(1) hold the address. A load's result goes into the host register that holds it
 //from then on (recompiler.cpp's use() and def()).
 #define Host mem(SLJIT_MEM2(SLJIT_R1, SLJIT_R0), 0)
