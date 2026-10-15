@@ -14112,10 +14112,11 @@ file's end (SEEK_END) was the whole file's, header and block MACs and all: Black
 
 **What a PSP does.**
 - The firmware's PGD layer (tpu's decompilation) takes a file opened with 0x40000000 (uOFW's `SCE_FGAMEDATA`) on any
-  device. 0x04100002 stores where the PGD starts in the file; 0x04100001 (`SCE_GAMEDATA_SET_SECURE_INSTALL_ID`, the
-  key) seeks there, reads the 0x90-byte header, checks its magic, key index and MACs, decrypts the descriptor, and
-  puts the data's start at the PGD's start plus the descriptor's data offset, the block MACs after the data;
-  0x04100010 answers the descriptor's data size; lseek works in data coordinates, clamped to that size.
+  device, and refuses one opened to write (0x80510201). 0x04100002 stores where the PGD starts in the file;
+  0x04100001 (`SCE_GAMEDATA_SET_SECURE_INSTALL_ID`, the key) seeks there, reads the 0x90-byte header, checks its
+  magic, key index and MACs, decrypts the descriptor, and puts the data's start at the PGD's start plus the
+  descriptor's data offset, the block MACs after the data; 0x04100010 answers the descriptor's data size; lseek works
+  in data coordinates, each result clamped to that size, and is refused before the PGD is opened (0x80510206).
 - An EDATA (the wiki's PSP_EDAT page): `"\0PSPEDAT"`, the content ID at 0x10, an ECDSA signature at 0x58; 0x80 bytes,
   or 0x90 with the licence's MAC at 0x80 (DLC has it, DOCINFO.EDAT doesn't); then the body, "packed file, PGD file
   usually". tpu's `edata.c` takes the PGD's offset from the low 24 bits of the word at 0x0c, flags in its top byte.
@@ -14138,7 +14139,9 @@ file's end (SEEK_END) was the whole file's, header and block MACs and all: Black
 - ioctl 0x04100001 looks for `"\0PGD"` where 0x04100002 put the PGD, or at byte 0, and leaves a file already
   unlocked as it is (its descriptor came out under the key its own header's MAC holds); 0x04100002 means where the
   PGD starts.
-- `seek()`: an unlocked PGD file ends where its data does.
+- `seek()`: an unlocked PGD file ends where its data does, and no seek goes past that end: each result is clamped to
+  the data's size, from the start, from where the file is or from its end, synchronous or not, as the PGD layer's are
+  (the review's point, below).
 
 **Part 95's meeting point** (the rebase). The proposal was written on `3228b825d`; on `14b181707` it fails at
 `seek()`'s hunk, and applied 3-way it has no textual conflict, so the models were reconciled by hand:
@@ -14148,15 +14151,17 @@ file's end (SEEK_END) was the whole file's, header and block MACs and all: Black
   refuses bytes past it, so an EDATA emptied through another descriptor holds no header to ready (the one its host
   file still keeps is past the PSP's end). Both are the kernel's members now, as `fileLength()` is.
 - `seek()` changes the end both ways: a stick file ends at its PSP length (part 95), an unlocked PGD at its data's end
-  (the proposal). Both rules are kept; they never meet on one descriptor: a PGD file is open only to read (the disc's
-  can't be opened to write, and SetupKey now readies only a file open to read alone), and only a descriptor opened to
-  write empties its file as it's opened. The check is chosen (what a PSP makes of an EDATA open to write isn't known)
-  and costs nothing a game does: every EDATA open in the library's runs is 0x40000001 or 0x40004001, and master
-  readied no stick file at all.
+  (the proposal). Both rules are kept. A descriptor that emptied its file is never a PGD: a PGD file is open only to
+  read (the disc's can't be opened to write, and SetupKey now readies only a file open to read alone), and only a
+  descriptor opened to write empties its file as it's opened. The check follows the PGD layer, whose open refuses a
+  0x40000000 file opened to write (0x80510201), and costs nothing a game does: every EDATA open in the library's runs
+  is 0x40000001 or 0x40004001, and master readied no stick file at all. The two rules do meet on another descriptor:
+  a readied EDATA that a second descriptor empties keeps its data's end, while its reads find nothing past the PSP's
+  length, as the PGD layer, which answers from its descriptor, plausibly does too.
 - Save states: no field added; layout 32 as part 95 left it.
 
 **Tests** (tests/psp): the proposal's three groups and `psp_pgd::edata()` (`tests/psp/pgd.hpp`: a PGD wrapped in an
-EDATA's header, the PGD's offset in the word at 0x0c), and one for the meeting point.
+EDATA's header, the PGD's offset in the word at 0x0c), one for the meeting point, and one from the review.
 - `download DRM on an EDATA (a PGD past its header)` (files.cpp): a stick EDATA with its PGD at 0x90 and at 0x80, the
   licensee key not the PGD's version key: SetupKey, GetDataSize, a whole read, one from the middle and one past the
   end; and an EDATA holding a module, read raw.
@@ -14164,6 +14169,10 @@ EDATA's header, the PGD's offset in the word at 0x0c), and one for the meeting p
   and an EDATA on the disc, through SetupKey.
 - `PGD files end where their data does` (disc.cpp): SEEK_END before the key (the file's end) and after it (the
   data's), 100 bytes back from the end and the read there, and a stick EDATA's end.
+- `PGD files' seeks stop at their data's end` (disc.cpp, the review's cases): a UMD data file and a stick EDATA, 3000
+  bytes of data each, sought to 5000 from the start (3000), 1000 back from there (2000) and read (1000 bytes), 100
+  past the end (3000), 200 back and read (200 bytes), 500 on from the end (3000), and through sceIoLseekAsync (5000:
+  3000) and sceIoLseek32Async (1000 back: 2000, then 1000 bytes read).
 - `download DRM on an EDATA beside files emptied as they're opened` (files.cpp, the rebase's): beside a save emptied
   as it's opened, the EDATA's size and end are its data's and it reads as its plaintext, whole and from 100 bytes
   before its end; the emptied save ends at its PSP length (0, then 5 after a write past it, its host file still
@@ -14172,13 +14181,16 @@ EDATA's header, the PGD's offset in the word at 0x0c), and one for the meeting p
   isn't readied either, its size, end and reads 0, while the host file keeps the EDATA until the emptying
   descriptor's close cuts it.
 
-Against master (`14b181707` with these tests, unsanitized): the four groups fail, 25 checks, the other 543 pass. The
-EDATA group fails 10 (the size the file's, 0xd18 and 0xd08, the reads raw, the read past the end 0x192 bytes where
-the data leaves 0x32); the meeting point's 6 (the EDATA's size, end and reads); the disc offset's 5; the end's 4 (the
-end at 3144, the whole file, so 100 bytes back from it is past the data and the read there gets nothing; the EDATA's
-end). Against the proposal applied 3-way without the hand reconciliation: only the meeting point's group fails, 3
-checks: the EDATA the PSP sees emptied is readied, GetDataSize 3000 through both descriptors and the reader's end
-3000, where they're 0. The branch: 547 groups, 0 failures.
+Against master (`14b181707` with the first round's tests, unsanitized): the four groups fail, 25 checks, the other
+543 pass. The EDATA group fails 10 (the size the file's, 0xd18 and 0xd08, the reads raw, the read past the end 0x192
+bytes where the data leaves 0x32); the meeting point's 6 (the EDATA's size, end and reads); the disc offset's 5; the
+end's 4 (the end at 3144, the whole file, so 100 bytes back from it is past the data and the read there gets nothing;
+the EDATA's end). Against the proposal applied 3-way without the hand reconciliation: only the meeting point's group
+fails, 3 checks: the EDATA the PSP sees emptied is readied, GetDataSize 3000 through both descriptors and the reader's
+end 3000, where they're 0. Against the first round's head (`8d3d08dbb`, no clamp) with the review's group: it alone
+fails, 22 checks, each file's 11 (5000, then 4000, a read of nothing and so not the data, 3100, 2900 and a read of
+100 bytes, 3500, the asynchronous 5000 and 4000, and a read of nothing), and the other 547 pass. The branch: 548
+groups, 0 failures.
 
 **Games** (`~/phobos-work/scratch/pgd-edata`: master's runner and the branch's, each with the file I/O trace, part
 95's `--trace-io`, made to trace scePspNpDrm_user's calls too in a scratch build; the clock pinned with
@@ -14211,12 +14223,32 @@ checks: the EDATA the PSP sees emptied is readied, GetDataSize 3000 through both
   (Naruto's at 1200, Shining Blade's at 2500), each master's own noise: master's runner run twice more gave the
   branch's picture byte for byte both times.
 
-**Checks** (`61ddbad0e`). tests/psp 547 groups, 0 failures, sanitized (`detect_container_overflow=0`) and
-unsanitized; tests/allegrex 78 groups, 0 failures; tests/psp/ares 348 checks, 0 failed. The 21 scenes in Software
-(the kit's bench runner, master's against the branch's, 100 frames from each scene's state, every frame's picture and
-VRAM settled, then RAM and the machine's state): all 102 hashes the same in all 21, the state too (no layout change).
+**The review.** An independent review of `8d3d08dbb` (read-only, with probes of its own and its own runners) found no
+blockers: the offsets as tpu's `edata.c` and the wiki have them, the scope clean (`pgd.cpp` and the serialization
+untouched), no game opening an EDATA to write, master's states loading with the same meaning, God Eater 2's English
+patch EDATs (PATCH.EDAT, SYSTEM_UPDATE.EDAT, plain files opened with 0x40000001) tracing and capturing as master's,
+and the four new groups failing on master. Its should-fix, taken in a second round: `seek()` didn't clamp an unlocked
+PGD to its data's size, as tpu's decompilation does (`if(offset>file_size) offset = file_size`, for every seek) and as
+this part said: on 3000 bytes of data, SEEK_SET 5000 gave 5000 where a PSP gives 3000, then SEEK_CUR -1000 4000 and a
+read of nothing (a PSP: 2000 and 1000 bytes), SEEK_END +100 3100, and sceIoLseekAsync the same. Now every seek of an
+unlocked PGD is clamped (the test above). No game run here or in the review seeks past a PGD's data end: the second
+round's runner gives the first round's traces line for line, and its captures byte for byte, in all sixteen of this
+part's game runs. Its wording points, taken: the read-only check follows the decompilation (its open refuses a
+0x40000000 file opened to write) rather than being a guess, and the two end rules do meet on a reading descriptor
+whose readied EDATA another descriptor empties.
 
-**Confidence, and what's left** (the investigation's, unchanged by the rebase).
+**Checks** (the second round, `3d500b9e2`). tests/psp 548 groups, 0 failures, sanitized (`detect_container_overflow=0`)
+and unsanitized; tests/psp/ares 348 checks, 0 failed. On master with all five new groups: the five fail (47 checks:
+the first round's 25 and the review's 22). The five DLC games, the seven UMD games and the four long runs again on the
+second round's trace runner: each trace and capture the first round's. The 21 scenes in Software again with the
+second round's bench runner: all 102 hashes master's in all 21. CI green on the head.
+
+**Checks** (the first round, `61ddbad0e`). tests/psp 547 groups, 0 failures, sanitized and unsanitized; tests/allegrex
+78 groups, 0 failures; tests/psp/ares 348 checks, 0 failed. The 21 scenes in Software (the kit's bench runner, master's
+against the branch's, 100 frames from each scene's state, every frame's picture and VRAM settled, then RAM and the
+machine's state): all 102 hashes the same in all 21, the state too (no layout change).
+
+**Confidence, and what's left** (the investigation's, and the review's additions).
 - High on the format and the offsets, and on the stick's missing size: tpu's decompilation, his `edata.c` and
   npdecrypter's behaviour on hardware agree, and so does the wiki; synthetic PGDs and a real UMD PGD wrapped in an
   EDATA (scratch only) read as they should.
@@ -14228,9 +14260,18 @@ VRAM settled, then RAM and the machine's state): all 102 hashes the same in all 
   unsupported, as before.
 - The PGD offset 0x80 (an EDATA without the licence's MAC) rests on the wiki's examples alone; the fix reads whatever
   the header says.
-- Whether 0x04100002's argument is the offset or a pointer to it isn't settled; no game in the library sends it.
+- 0x04100002's argument: the investigation left open whether it's the offset or a pointer to it; the review read the
+  decompilation as storing the value itself, where Phobos reads the word it points to (below). No game in the
+  library sends it.
 - Not done, as before: PGD ioctls on stick files (refused), 0x04100010, SetupKey's error returns (no licensee key
-  set, say), and ECDSA and licence checks (skipped on purpose).
+  set, say), and ECDSA and licence checks (skipped on purpose). And three the review found, none of which a game in
+  the library does:
+  - SetupKey ignores the 0x40000000 flag: an EDATA opened without it (plain, 0x1) is decrypted, where a PSP's PGD
+    layer, which hooks only files opened with it, would read it raw.
+  - 0x04100002's argument is read as a pointer to the offset; tpu's decompilation stores the value itself. Moot while
+    no game sends it.
+  - SEEK_END before the key gives the whole file's size, where the PGD layer refuses a seek before the PGD is opened
+    (0x80510206): master's behaviour, unchanged.
 - Scratch: `~/phobos-work/scratch/pgd-edata` (`NOTES.md`; `trace-patch.py`, the runners' NPDRM lines; `games.sh`,
   `check-edata.py`, `compare-umd.sh`, `repeat.sh` and `runs/`, the game checks; `tests.sh` and `logs/`, the suites,
   `src-before/` and `io-3way.cpp` the trees before the fix and before the reconciliation; `hashkit/`, the scenes).
