@@ -568,15 +568,7 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     decode(look, hardware ? Region{0, 0, -1, -1} : region, drawnRows, !hardware, copyDraws, boxOf);
     if(!look.texture.decoded && !look.deferRows) look.texture.bytes = direct(look.texture);
   }
-  struct Reaching {
-    GE& ge; bool through; const std::vector<Vertex>& vertices; const Transform& t; const Region& region;
-  };
-  Reaching reaching{*this, format.through, vertices, t, region};
-  std::function<auto () -> Reached> reached = [&reaching] {
-    auto& r = reaching;
-    return r.ge.reachedBy(r.through, r.vertices, r.t, r.region);
-  };
-  if(hardware && !renderer->begin(*this, look, format.through, region, reached)) {
+  if(hardware && !renderer->begin(*this, look, format.through, region, vertices, t)) {
     renderer->finish(*this);
     hardware = false, refused = true;
     if(textured) {

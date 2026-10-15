@@ -449,7 +449,7 @@ struct GPU : GE::Renderer {
   ~GPU();
   auto ready() const -> bool override { return backend && !backend->lost; }
   auto begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region,
-             const std::function<auto () -> GE::Reached>& reachedBy) -> bool override;
+             const std::vector<GE::Vertex>& vertices, const GE::Transform& transform) -> bool override;
   auto triangle(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c) -> void override;
   auto triangleAt(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c, const s64 (&x)[3], const s64 (&y)[3])
     -> void override;

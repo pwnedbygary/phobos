@@ -656,10 +656,10 @@ struct GE {
   struct Renderer {
     virtual ~Renderer() = default;
     virtual auto ready() const -> bool = 0;
-    //(reachedBy: where the PRIM's pixels can be and their depths, asked for where they're needed: a 3D PRIM's are its
-    //vertices on the screen, worked out only then)
+    //(vertices, t: the PRIM's, for GE::reachedBy() where it needs where the PRIM's pixels can be and their depths: a
+    //3D PRIM's are its vertices on the screen, worked out only then)
     virtual auto begin(GE& ge, const Look& look, bool through, const Region& region,
-                       const std::function<auto () -> Reached>& reachedBy) -> bool = 0;
+                       const std::vector<Vertex>& vertices, const Transform& t) -> bool = 0;
     virtual auto triangle(const Vertex& a, const Vertex& b, const Vertex& c) -> void = 0;
     //(triangle() with its corners' places as the GE holds them, in sixteenths, which it worked out: draw.cpp's fixed())
     virtual auto triangleAt(const Vertex& a, const Vertex& b, const Vertex& c, const s64 (&)[3], const s64 (&)[3])

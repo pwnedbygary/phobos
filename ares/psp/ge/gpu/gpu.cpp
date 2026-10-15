@@ -1167,7 +1167,7 @@ auto GPU::settings(const GE::Look& look) -> void {
 //round to its start, or past 512), or a texture the GE reads from memory as it draws, which the GPU can't have),
 //for the software renderer to draw; true for one that draws nothing too.
 auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region,
-                const std::function<auto () -> GE::Reached>& reachedBy) -> bool {
+                const std::vector<GE::Vertex>& vertices, const GE::Transform& transform) -> bool {
   this->ge = &ge;
   drawing = false;
   reached();
@@ -1266,7 +1266,7 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
         return found;
       };
       if(!p.clear && p.depthFunction > 1 && owned(top, bottom)) {
-        GE::Reached r = reachedBy();
+        GE::Reached r = ge.reachedBy(through, vertices, transform, region);
         u32 f = p.depthFunction;
         bool decided = (f == 4 || f == 7) ? r.lowest == 65535 : (f == 5 || f == 6) && r.highest == 0;
         s32 first = std::max(top, r.region.top), last = std::min(bottom, r.region.bottom);

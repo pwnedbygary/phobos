@@ -14244,21 +14244,24 @@ fallback in the fifth):
   exact) and the owner's decision: where the GPU can't move pixels into a depth (`Backend::depthMoves` off: no such
   pipeline, or the start-up check's new case failed and the check passed again without), the finish before a depth
   fill comes only where round three's rule has the PRIM's test read what's filled: not a clear's, nor a test always or
-  never true, nor one its depths decide, and in the rows its pixels can be in (`GE::reachedBy()` and
-  `Renderer::begin()`'s `reachedBy` back, ge.hpp and draw.cpp round three's again). The rest is filled from memory as
-  it is. Without the rule that fallback was round two's slowdown: the review's runs of the fourth round with the moves
-  off had Dirt 2 at 181 finishes in 60 frames (master 2; 62.5 -> 33.8 frames a second on the M1), GTA Chinatown Wars
-  at 31 (1) and Brothers in Arms at 70 (1). With it the fallback is round three exactly: the sweep's 128 states without
-  moves (60 frames fast, every frame hashed) drew round three's runner's pictures, VRAM and RAM in every frame, with its
-  finishes (the start-up check's second run aside, without moves: 3 finishes a process, 2 of them before depth fills),
-  and so did Kurohyou 1 and 2, WipEout's race and IL-2 in both modes (Kurohyou 2 901 finishes in 300 frames, WipEout
-  301). The fallback then has master's accuracy, the stale depth master has included: a PRIM after one whose fill wasn't
-  put in memory first, finding those rows filled, reads memory's bytes as they were (the second review's five cases, as
-  on master and in round three). With the moves on nothing changes: `begin()` takes the fourth round's look, and the
-  hashes are its byte for byte. The start-up log says when they're off, in one line ("the Vulkan renderer's depth moves
-  are off: frame buffers drawn over a depth buffer are put in memory before a PRIM's depth test reads them there (a wait
-  for the GPU each time), elsewhere the depth is taken from memory as it is"), after the check's own where it failed
-  them.
+  never true, nor one its depths decide, and in the rows its pixels can be in (`GE::reachedBy()` back, round three's;
+  `Renderer::begin()` takes the PRIM's vertices and transform and asks it itself, only then, where round three handed
+  it a `std::function` built for every PRIM: the fifth round's first version ran 0.3% more instructions a frame than
+  the fourth in God of War's menu (about 17,000 PRIMs a frame), two fifths of it that (on the M1, 300 frames fast:
+  304.54 million a frame in six runs with it against 304.13 without, the fourth round 303.58 in three; the frames a
+  second within the runs' spread). The rest is filled from memory as it is. Without the rule that fallback was round
+  two's slowdown: the review's runs of the fourth round with the moves off had Dirt 2 at 181 finishes in 60 frames
+  (master 2; 62.5 -> 33.8 frames a second on the M1), GTA Chinatown Wars at 31 (1) and Brothers in Arms at 70 (1).
+  With it the fallback is round three exactly: the sweep's 128 states without moves (60 frames fast, every frame
+  hashed) drew round three's runner's pictures, VRAM and RAM in every frame, with its finishes (the start-up check's
+  second run aside, without moves: 3 finishes a process, 2 of them before depth fills), and so did Kurohyou 1 and 2,
+  WipEout's race and IL-2 in both modes (Kurohyou 2 901 finishes in 300 frames, WipEout 301). The fallback then has
+  master's accuracy, the stale depth master has included: a PRIM after one whose fill wasn't put in memory first,
+  finding those rows filled, reads memory's bytes as they were (the second review's five cases, as on master and in
+  round three). With the moves on nothing changes: `begin()` takes the fourth round's look, and the hashes are its
+  byte for byte. The start-up log says when they're off, in one line ("the Vulkan renderer's depth moves are off:
+  frame buffers drawn over a depth buffer are put in memory before a PRIM's depth test reads them there (a wait for
+  the GPU each time), elsewhere the depth is taken from memory as it is"), after the check's own where it failed them.
 
 **Pictures** (the kit's runners, -O3 with thin LTO, from the batch's states and presses, 300 frames, Vulkan against
 Software: the mean channel difference and the pixels more than 24 apart):
@@ -14468,11 +14471,13 @@ sanitized (the container check off) and without the sanitizers, its 61 GPU group
 `tests/allegrex` 78, 0; `tests/psp/ares` 348, 0. On the merge of master's 02cd1fa8c (ec16a9237): 555 groups, 0
 failures, without the sanitizers and sanitized (the first sanitized run, on the loaded Mac, had one wait for the GPU
 last past five seconds, so the device counted as lost and every GPU group after it failed; run again, the
-coordinator's run and mine, none did); `tests/allegrex` 78, 0; `tests/psp/ares` 348, 0; CI on the pushed head. The
-library check in Vulkan of the fourth round's head (58ed0e5fd, whose way with the moves the fifth round keeps byte for
-byte; the coordinator's, the games apart from master's run again with both builds): in accurate mode 11 of them the
-same as master's again and 8 where master's own runs are apart, in fast mode 8 and 10, none apart in every run; the
-only flag Monster Hunter 3rd HD's intro movie, a frame apart in 3 of 5 runs.
+coordinator's run and mine, none did); `tests/allegrex` 78, 0; `tests/psp/ares` 348, 0. With `begin()` taking the
+PRIM's vertices (no `std::function` a PRIM), on the merge: 555 groups, 0 failures, sanitized and not, and God of War's
+menu, IL-2's play and WipEout's race in both Vulkan modes, with the moves, round four's hash files byte for byte; CI
+on the pushed head. The library check in Vulkan of the fourth round's head (58ed0e5fd, whose way with the moves the
+fifth round keeps byte for byte; the coordinator's, the games apart from master's run again with both builds): in
+accurate mode 11 of them the same as master's again and 8 where master's own runs are apart, in fast mode 8 and 10,
+none apart in every run; the only flag Monster Hunter 3rd HD's intro movie, a frame apart in 3 of 5 runs.
 The fourth round, on e78ccb495 (the code and its tests, on d67ef308f): `tests/psp/run-tests.sh` 553
 groups, 0 failures, sanitized (the container check off) and without the sanitizers, its 61 GPU groups run on the M1's
 Vulkan, none skipped (Vulkan, the test programs and both rounds of the PSP's measurements required);
@@ -14538,7 +14543,9 @@ moves' counters), `kit/r4queue.sh` and `kit/r4bqueue.sh` (the sweep `kit/logs/r4
 (`PHOBOS_NO_DEPTH_MOVES=1` fails the start-up check's new case), `kit/r5queue.sh` (the sweep with the moves
 `kit/logs/r5-sweep-on.log` and without `kit/logs/r5-sweep-off.log`, round three's runner's pictures
 `kit/logs/r3h-sweep.log`, the hashes `kit/logs/r4/*.hashes`; the counts without `kit/logs/r5-counts-off.log`; the
-scenes' hashes `kit/logs/r5hash-*.log`), `mut6/` (the mutations).
+scenes' hashes `kit/logs/r5hash-*.log`), `mut6/` (the mutations), `kit/r5dqueue.sh` (`begin()` without the
+`std::function`: `kit/logs/r5dhash-*.log`, God of War's menu's instructions `kit/logs/r5dbench.log` and
+`kit/logs/r5dbench2.log`).
 
 ## Part 97: NPDRM EDATA decrypted — the PGD past the EDATA's header, on the memory stick too, its size and end the data's; a PGD file's end its data's
 

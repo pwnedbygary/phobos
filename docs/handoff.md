@@ -86,10 +86,11 @@ Kurohyou's, don't notice; one that drew it once and kept it would test against i
   other's pixel at the depth's bytes in its format's copy order, narrowed as memory would have it), at every such fill,
   so on the GPU's way a later PRIM that finds those rows filled reads them current too (the second review's five
   cases, now tests; not a target's own pixels over its own depth, which stay memory's: part 96's "Still not done");
-  round three's rule, `GE::reachedBy()` and `begin()`'s argument went (back for the fallback in the fifth round). A
-  PRIM drawing again where a depth took from has that depth filled again (told rectangles too); a texture through the
-  depth views finishes first where its decoding would anyway. Where the target drew in those pages itself, a finish
-  first (exact); where the GPU can't move at all, in this round a finish before every such fill. The sweep (the 128
+  round three's rule, `GE::reachedBy()` and `begin()`'s argument went (the first two back for the fallback in the
+  fifth round). A PRIM drawing again where a depth took from has that depth filled again (told rectangles too); a
+  texture through the depth views finishes first where its decoding would anyway. Where the rows filled take the
+  target's own pages as well as another's, a finish first (exact; its own pages alone, memory's depth as it is); where
+  the GPU can't move at all, in this round a finish before every such fill. The sweep (the 128
   deep-play states, 60 frames fast): all 128 with master's finishes, Kurohyou 2's too (121; the third round 181). In 300
   frames, both modes: Kurohyou 1 and 2 601 (master's; the third round had Kurohyou 2 at 901), WipEout's race 1
   (master's; the third round 301). Instead, the Kurohyous move pixels into the depth once a frame and WipEout twice.
@@ -101,14 +102,15 @@ Kurohyou's, don't notice; one that drew it once and kept it would test against i
 - **Fifth round** (the fourth's review: no blockers, its should-fixes; the owner's decision): without depth moves (no
   pipeline, or the start-up check's new case fails and it passes again without), round three's rule decides the finish
   again: not a clear's, nor a test always or never true, nor one its depths decide, and in the rows its pixels can be in
-  (`GE::reachedBy()` and `begin()`'s argument back); the rest is filled from memory as it is, master's accuracy, its
-  stale depth included. The fourth round's fallback had been round two's slowdown (the review: Dirt 2 from 2 to 181
-  finishes in 60 frames, 62.5 -> 33.8 fps; GTA from 1 to 31; Brothers in Arms from 1 to 70). Now it's round three
-  exactly: the sweep's 128 states without moves have round three's pictures, VRAM and RAM in every frame and its
-  finishes (the start-up check's second run aside: 3 a process), and so do Kurohyou 1 and 2, WipEout's race and IL-2 in
-  both modes. The start-up log says in one line when the moves are off. The review's gap and straddle cases are tests
-  now (83 in the formats' group; the straddle two-sided), catching the two mutations that had passed. With the moves on
-  nothing changes: the sweep's counts and the hashes are the fourth round's.
+  (`GE::reachedBy()` back, which `begin()` asks with the PRIM's vertices and transform, not round three's
+  `std::function` a PRIM); the rest is filled from memory as it is, master's accuracy, its stale depth included. The
+  fourth round's fallback had been round two's slowdown (the review: Dirt 2 from 2 to 181 finishes in 60 frames, 62.5
+  -> 33.8 fps; GTA from 1 to 31; Brothers in Arms from 1 to 70). Now it's round three exactly: the sweep's 128 states
+  without moves have round three's pictures, VRAM and RAM in every frame and its finishes (the start-up check's second
+  run aside: 3 a process), and so do Kurohyou 1 and 2, WipEout's race and IL-2 in both modes. The start-up log says in
+  one line when the moves are off. The review's gap and straddle cases are tests now (83 in the formats' group; the
+  straddle two-sided), catching the two mutations that had passed. With the moves on nothing changes: the sweep's
+  counts and the hashes are the fourth round's.
 - **Pictures**: both games' centre characters whole in Software, Vulkan accurate and fast, and the streets full of the
   pedestrians the scrambled depth had hidden; Vulkan against Software 0.20-0.90 (Kurohyou 1) and 0.35-0.48 (Kurohyou 2)
   at frames 30-300, no pixel more than 24 apart. The second round's 36 captures (both games, frames 30-300, all three
@@ -172,7 +174,10 @@ Kurohyou's, don't notice; one that drew it once and kept it would test against i
   group (83 cases); the depth-current group's way without moves has round three's finishes (one, one and two in three
   cases, none in the rest), exact where round three is. On the merge of master's 02cd1fa8c: tests/psp 555, 0
   without the sanitizers and sanitized (run again: the first lost the Mac's GPU under load, a wait past five
-  seconds); tests/allegrex 78, 0; tests/psp/ares 348, 0; CI on the pushed head. The library check in Vulkan of the
+  seconds); tests/allegrex 78, 0; tests/psp/ares 348, 0. With `begin()` taking the PRIM's vertices: tests/psp 555,
+  0 both ways, and three scenes' hashes with the moves round four's in both Vulkan modes (God of War's menu 0.13%
+  fewer instructions a frame than with the `std::function`: two fifths of round five's 0.3% over round four); CI on
+  the pushed head. The library check in Vulkan of the
   fourth round's head (its way the fifth's with the moves): none apart from master's in every run, the only flag
   Monster Hunter 3rd HD's intro movie a frame apart in 3 of 5 runs.
 
