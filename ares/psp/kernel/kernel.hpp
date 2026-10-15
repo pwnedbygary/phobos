@@ -780,6 +780,7 @@ struct Kernel {
   auto sceIoChdir() -> void;
   auto sceIoAssign() -> void;
   auto sceIoGetstat() -> void;
+  auto sceIoChstat() -> void;
   auto sceIoDopen() -> void;
   auto sceIoDread() -> void;
   auto sceIoDclose() -> void;

@@ -446,6 +446,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("IoFileMgrForUser",  "sceIoChdir",                    &Kernel::sceIoChdir);
   add("IoFileMgrForUser",  "sceIoAssign",                   &Kernel::sceIoAssign);
   add("IoFileMgrForUser",  "sceIoGetstat",                  &Kernel::sceIoGetstat);
+  add("IoFileMgrForUser",  "sceIoChstat",                   &Kernel::sceIoChstat);
   add("IoFileMgrForUser",  "sceIoDopen",                    &Kernel::sceIoDopen);
   add("IoFileMgrForUser",  "sceIoDread",                    &Kernel::sceIoDread);
   add("IoFileMgrForUser",  "sceIoDclose",                   &Kernel::sceIoDclose);
