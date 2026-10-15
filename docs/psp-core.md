@@ -14378,24 +14378,29 @@ whether the list held it or not.
 saves its dialog shows (`dialogSaves()`). A plain save name that isn't among them, and whose own folder isn't on the
 memory stick, names none of them: the list's first name is taken, as for none (the earlier choice, the first whatever
 the focus, where the automatic answer's later loads find it), but for focus 7 or 8, the first or last new slot, which
-take the slot the dialog focuses (on a fresh stick, as here, focus 7 focuses the first, GAME01), never a save there
-over a new one. Where its own folder is on the stick, made so by an older Phobos, the name is kept, as master keeps
-it: an upgraded player's GAME stays GAME, and Phobos never makes the second folder. A name its list holds is still
-that save: every other plain-named list save in deep play's logs names one of its list's (La Pucelle Ragnarok's
-LAPUCELLE000 with focus 0, Gunhound EX's GHSAVE00 with 1, Manhunt 2's 000 with 7, ULUS10476's USER0 with 3).
+take the slot the dialog focuses (on a fresh stick, as here, focus 7 focuses the first, GAME01). Where the slot it
+would take is on the stick (every slot there for focus 7 or 8, whose focus then falls back to the first; the list's
+first for the others), the request's own name is kept, as master keeps it: a save the game still has is never written
+over. Where its own folder is on the stick, made so by an older Phobos, the name is kept too, as master keeps it: an
+upgraded player's GAME stays GAME, and Phobos never makes the second folder. A name its list holds is still that save:
+every other plain-named list save in deep play's logs names one of its list's (La Pucelle Ragnarok's LAPUCELLE000 with
+focus 0, Gunhound EX's GHSAVE00 with 1, Manhunt 2's 000 with 7, ULUS10476's USER0 with 3).
 
 **Test** (`utility savedata list saves go to their lists' names (Lumines II)`, tests/psp/utility.cpp), each save's
 bytes its own so that one written over shows: on a fresh stick, `GAME` beside GAME01-GAME03 with focus 7 goes to
 GAME01, written back, and the trace shows it chosen; the next load (focus 3) takes GAME01 and writes it back, and the
 save by that name (focus 0) goes there again. `GAME`, its folder not there, beside GAME01: focus 7 goes to GAME02 and
-focus 8 to GAME03, GAME01 kept; on an empty stick focus 0 goes to GAME01. An upgraded player's GAME: its load takes it
-and the save by its name goes there, no GAME01 made; then with a GAME01 beside it dated before it (the review's case
-A), the load takes GAME and the save by GAME's name goes to GAME, GAME01 kept. A GAME01 whose PARAM.SFO is broken
-(case B): DATA_BROKEN, the new profile's save (focus 7) goes to GAME02, GAME01's data kept, and the next load takes
-GAME02. LAPUCELLE000 (focus 0) and Manhunt 2's 000 (focus 7, twice: the second over the first, not to 001) as before.
-On master it fails 11 checks; on the first round's head 7 (focus 7 and 8 writing over GAME01, the upgraded player's
-save made into a GAME01, the stale case's load and save, case B's save over GAME01 and the load after it); the La
-Pucelle and Manhunt checks pass on both, as they should.
+focus 8 to GAME03, GAME01 kept; on an empty stick focus 0 goes to GAME01. With every slot there (focus 7 and 8), or
+the list's first there and no GAME (focus 0), the save goes to GAME, as master saves it, no slot's bytes changed. An
+upgraded player's GAME: its load takes it and the save by its name goes there, no GAME01 made; then with a GAME01
+beside it dated before it (the review's case A), the load takes GAME and the save by GAME's name goes to GAME, GAME01
+kept. A GAME01 whose PARAM.SFO is broken (case B): DATA_BROKEN, the new profile's save (focus 7) goes to GAME02,
+GAME01's data kept, and the next load takes GAME02. LAPUCELLE000 (focus 0) and Manhunt 2's 000 (focus 7, twice: the
+second over the first, not to 001) as before. On master it fails 11 checks; on the second round's head 6 (every slot
+there for focus 7 and 8, the list's first there for focus 0: each save sent over GAME01); on the first round's head 13
+(those six, focus 7 and 8 writing over GAME01 beside it, the upgraded player's save made into a GAME01, the stale
+case's load and save, case B's save over GAME01 and the load after it); the La Pucelle and Manhunt checks pass on all
+three, as they should, and the new all-slot checks on master, which keeps the request's own name.
 
 **Games.** Lumines II, batch 04's repro (a fresh stick, `script.txt`, 2200 frames, the clock pinned): master writes
 `ULUS10183GAME`; the branch `ULUS10183GAME01` (`[001515] ... focus 7, chosen "GAME01" ... -> 0x00000000, save
@@ -14459,7 +14464,31 @@ first round's and this round's, on scratch copies, never the owner's sticks, the
   round to GAME02 (`focus 7, chosen "GAME02" ... not there`), GAME01's two files byte for byte as they were.
 - A fresh stick (batch 04's repro): GAME01, byte for byte the first round's.
 
+**The re-review** of `bac0374f3` found both cases fixed and the year's change safe (its 25,896 texts below the year
+10000 byte for byte the first round's, the year always four characters, the longest text 37 bytes), and one overwrite
+left: with GAME01 to GAME03 all on the stick, focus 7 or 8 finds no new slot and the dialog's focus falls back to the
+first (`dialogFocus()`), so the redirect sent Lumines II's new profile over GAME01 (reproduced with the game: all
+three slots with damaged PARAM.SFOs and intact data, the boot's load DATA_BROKEN, the focus-7 save `chosen "GAME01"
+... there`, GAME01's mark gone, where master writes a new GAME); and with focus 0 to 6, an unlisted name with no
+folder of its own went over GAME01 whenever GAME01 was there (no Lumines II flow known, the same harm). Now the
+redirect never lands on a slot that's on the stick: the request's own name is kept, as master keeps it (item 2's
+change). The test has every slot there (focus 7 and 8) and the list's first there with no GAME (focus 0), each save's
+bytes its own: the save goes to GAME, no slot touched.
+
+**Walked again** for this round (`~/phobos-work/scratch/small-fixes/walks3.sh`, `logs/walks3.log`, scratch copies, the
+clock pinned). The reviewer's all-slot case (GAME01 to GAME03 each with its PARAM.SFO cut to 64 bytes and its own mark
+after its data; `script.txt` from boot): all three runners load DATA_BROKEN; master writes the new profile to a new
+GAME, the second round over GAME01 (its mark gone), this round to a new GAME, its trace and the stick byte for byte
+master's, the three slots' files and times as they were. And the second round's four walks with this round's runner
+(the upgrade's three boots, the first round's stick with GAME touched, case B, the fresh stick): each savedata trace
+line for line the second round's, and the same files.
+
 ### Checks
+
+The third round (`ce436b2e7`): tests/psp 550 groups, 0 failures, sanitized and unsanitized (none skipped);
+tests/allegrex 78 groups, 0 failures; tests/psp/ares 348 checks, 0 failed. Only `savedataUnshown()` changed (and
+comments), so the 21 scenes weren't run again (the second round's: every hash master's). The new checks on the second
+round's head, the first round's and master: above. The walks: above. CI: the draft PR's checks.
 
 The second round (`0707dccc9`): tests/psp 550 groups, 0 failures, sanitized and unsanitized (none skipped);
 tests/allegrex 78 groups, 0 failures; tests/psp/ares 348 checks, 0 failed; GCC 13.3 `-Werror` on `kernel.cpp` and the
