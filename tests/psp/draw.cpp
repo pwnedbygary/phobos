@@ -1539,6 +1539,81 @@ static auto drawDecodedAgainstMemory() -> void {
   CHECK(differing, 0u);
 }
 
+//The GE's depth buffer in each frame buffer format (memory.hpp): points in through mode, each with a depth of its own,
+//into a 512-pixel-wide frame buffer with its depth buffer at 0x88000 (as games have them), 16 rows: with 8888 the
+//fourth copy reads every depth in order and the second spreads each 16 pixels of a row 32 apart (round 3's
+//measurement), and with 5650, 5551 and 4444 the second copy reads them in order, the first at (y ^ 8) * 512 + (x ^ 32)
+//(the Kurohyou games' depth, part 96).
+static auto drawDepthLayouts() -> void {
+  constexpr u32 Depth = 0x8'8000;
+  for(u32 format : {3u, 0u, 1u, 2u}) {
+    Canvas c(format);
+    c.ge.commands[GE::FrameBufferWidth] = 512;
+    c.ge.commands[GE::DepthBufferPointer] = Depth, c.ge.commands[GE::DepthBufferWidth] = 512;
+    c.ge.commands[GE::DepthTestEnable] = 1, c.ge.commands[GE::DepthTest] = 1;  //(always, written)
+    std::vector<V> points;
+    for(u32 y = 0; y < 16; y++) {
+      for(u32 x = 0; x < 512; x++) points.push_back({0, 0, 0xffff'ffff, float(x), float(y), float(y * 512 + x + 1)});
+    }
+    c.draw(GE::Points, points);
+    auto through = [&](u32 copy, u32 at) { return c.memory.read(2, VRAM + copy * Memory::VRAMSize + Depth + at * 2); };
+    u32 wrong = 0;
+    for(u32 y = 0; y < 16; y++) {
+      for(u32 x = 0; x < 512; x++) {
+        u32 z = y * 512 + x + 1;
+        if(format == 3) {
+          wrong += through(3, y * 512 + x) != z;
+          if(x < 256) wrong += through(1, y * 512 + (x >> 4) * 32 + (x & 15)) != z;
+        } else {
+          wrong += through(1, y * 512 + x) != z;
+          wrong += through(0, (y ^ 8) * 512 + (x ^ 32)) != z;
+        }
+      }
+    }
+    if(wrong) std::printf("  format %u: %u depths not where they belong\n", format, wrong);
+    CHECK(wrong, 0u);
+  }
+}
+
+//A depth made as a picture (the Kurohyou games: their pre-rendered depth drawn into the depth buffer's memory as a 5650
+//frame buffer, taken back through VRAM's second copy into a frame buffer of their own and from there into the depth
+//buffer), then a sprite into the 5551 screen tested against it ("greater or equal"): drawn exactly where its depth
+//is the picture's or more, whatever the column (with the fourth copy's order a sprite crossing the screen's middle lost
+//its left part).
+static auto drawDepthFromPicture() -> void {
+  constexpr u32 Depth = 0x8'8000, Scratch = 0x11'6400, Rows = 16;
+  auto picture = [](u32 x, u32 y) -> u32 { return (x * 37 + y * 1031) % 1000; };  //(depths 0-999)
+  Canvas c(1);
+  auto& g = c.ge.commands;
+  g[GE::FrameBufferWidth] = 512, g[GE::DepthBufferPointer] = Depth, g[GE::DepthBufferWidth] = 512;
+  for(u32 y = 0; y < Rows; y++) {
+    for(u32 x = 0; x < 512; x++) c.memory.write(2, Texture + (y * 512 + x) * 2, picture(x, y));
+  }
+  auto copy = [&](u32 from, u32 to) {  //(a 5650 texture 512 wide at from, 1:1 onto a 5650 frame buffer 512 wide at to)
+    g[GE::FrameBufferPointer] = to, g[GE::FrameBufferPixelFormat] = 0;
+    g[GE::TextureMappingEnable] = 1, g[GE::TextureAddress0] = from & 0xff'ffff;
+    g[GE::TextureBufferWidth0] = (from >> 24 & 0xf) << 16 | 512, g[GE::TextureSize0] = 4 << 8 | 9;
+    g[GE::TextureFormat] = 0, g[GE::TextureFunction] = 3;
+    c.draw(GE::Sprites, {{0, 0, 0xffff'ffff, 0, 0, 0}, {512, Rows, 0xffff'ffff, 512, Rows, 0}});
+  };
+  copy(Texture, Depth);                                         //(the picture into the depth buffer's memory)
+  copy(Memory::VRAMBase + Memory::VRAMSize + Depth, Scratch);   //(back through the second copy)
+  copy(Memory::VRAMBase + Scratch, Depth);                      //(and into the depth buffer)
+  g[GE::TextureMappingEnable] = 0, g[GE::FrameBufferPointer] = 0, g[GE::FrameBufferPixelFormat] = 1;
+  g[GE::DepthTestEnable] = 1, g[GE::DepthTest] = 7, g[GE::DepthMask] = 1;  //(greater or equal, not written)
+  c.draw(GE::Sprites, {{0, 0, 0xffff'ffff, 0, 0, 500}, {0, 0, 0xffff'ffff, 480, Rows, 500}});
+  u32 wrong = 0, drawn = 0;
+  for(u32 y = 0; y < Rows; y++) {
+    for(u32 x = 0; x < 480; x++) {
+      bool white = (c.memory.read(2, VRAM + (y * 512 + x) * 2) & 0x7fff) == 0x7fff;  //(the stencil bit kept)
+      drawn += white, wrong += white != (500 >= picture(x, y));
+    }
+  }
+  if(wrong) std::printf("  %u of %u pixels drawn wrongly (%u drawn)\n", wrong, 480 * Rows, drawn);
+  CHECK(wrong, 0u);
+  CHECK(drawn > 0 && drawn < 480 * Rows, true);
+}
+
 auto drawTests() -> Tests {
   return {
     {"draw textures kept decoded", drawDecodedTextures},
@@ -1555,6 +1630,8 @@ auto drawTests() -> Tests {
     {"draw texel steps", drawTexelSteps}, {"draw ambient and filters", drawAmbientAndFilters},
     {"draw lines", drawLines}, {"draw anti-aliased lines", drawLinesSmooth},
     {"draw corners at one depth", drawOneDepth}, {"draw DXT textures", drawDXT},
+    {"draw depth in the order each frame buffer format has it", drawDepthLayouts},
+    {"draw against a depth made as a picture and taken back through VRAM's second copy", drawDepthFromPicture},
     {"draw vertex formats", drawVertexFormats},
     {"blit sample", blitSample}, {"doublelist sample", doublelistSample}, {"clut sample", clutSample},
     {"blend sample", blendSample}, {"cube sample", cubeSample}, {"celshading sample", celshadingSample},

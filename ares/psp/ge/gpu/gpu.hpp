@@ -196,11 +196,15 @@ struct GPU : GE::Renderer {
   //(Move: source's rectangle at sourceX, sourceY, sourceWidth x sourceHeight, in its format, sourceFormat, the same
   //bytes as those of the target's rectangle that it reaches, in the target's format: each of the rectangle's pixels
   //the source's at the same bytes, its rectangle's first pixel delta bytes from source's first, rows of rowBytes in
-  //the target and sourceRowBytes in source); and another target's depth put into the target's rectangle at the same
-  //place (Depth: source's, where both are drawn with one depth buffer); and the alpha of the target's colors in a
-  //rectangle set from its stencil, the PSP's alpha, where draws changed the stencil without it (Alpha:
-  //catchAlpha()). Every position and size is in the PSP's pixels: the backend has each of them Backend::scale times
-  //over.
+  //the target and sourceRowBytes in source; or, parts 2, into the target's depth: each of the rectangle's depths, in
+  //rows of rowBytes from the byte delta of VRAM as the copy the target's format keeps its depth in shows it, the two
+  //bytes of the source's pixel there, those whose bytes are the source's rectangle's and among VRAM's low to high,
+  //address the source's first: moveIntoDepth()); and another target's depth put into the target's rectangle at the same
+  //place (Depth: source's, where both are drawn with one depth buffer; or, with runs, each run's rectangle of the
+  //target taken from the source's at the run's sourceX, sourceY: where two formats keep the depth in two orders,
+  //memory.hpp); and the alpha of the target's colors in a rectangle set from its stencil, the PSP's alpha, where draws
+  //changed the stencil without it (Alpha: catchAlpha()). Every position and size is in the PSP's pixels: the backend
+  //has each of them Backend::scale times over.
   struct Command {
     enum class Kind : u8 { Draw, Upload, Readback, Copy, Present, Shot, Mesh, Move, Depth, Alpha } kind;
     u32 target;
@@ -210,7 +214,7 @@ struct GPU : GE::Renderer {
     u64 colors = 0, stencil = 0, depth = 0;  //Upload: where in uploads (8888s, bytes, 16-bit depths: the parts it
                                              //has); Present's
     u8 parts = 3;                            //Upload: bit 0 the colors and stencils, bit 1 the depths; Readback: 2
-                                             //for its depths alone (readDepth())
+                                             //for its depths alone (readDepth()); Move: 2 into the depth
     u32 texture = 0;                         //Copy
     u16 intoX = 0, intoY = 0;                //Copy: where in the texture (its top left the target's x, y)
     //Readback: how many times the PSP's size its pixels come back: 1, the PSP's own (for memory: one of each pixel's
@@ -221,11 +225,15 @@ struct GPU : GE::Renderer {
                   //Upload, Move, Alpha: the target's
     u8 sourceFormat = 3;            //Move
     u32 source = 0;                 //Move, Depth
+    u32 firstRun = 0, runs = 0;     //Depth: Recorded::runs (none: the source's depth at the same place)
     u16 sourceX = 0, sourceY = 0, sourceWidth = 0, sourceHeight = 0;
     s32 delta = 0;
     u32 rowBytes = 0, sourceRowBytes = 0;
+    u32 address = 0, low = 0, high = 0;  //Move into the depth
     bool barrier = false;  //Draw: what the pass drew before made visible to its reading first (emit())
   };
+  //A Depth command's run: the target's rectangle at x, y, width x height taken from the source's at sourceX, sourceY.
+  struct DepthRun { u16 x, y, sourceX, sourceY, width, height; };
   struct Recorded {
     std::vector<Command> commands;
     std::vector<State> states;
@@ -234,12 +242,13 @@ struct GPU : GE::Renderer {
     std::vector<Model> models;   //(Mesh's)
     std::vector<u32> indices;
     std::vector<Transformed> transforms;
+    std::vector<DepthRun> runs;  //(Depth's)
     u32 readbacks = 0;
     u64 generation = 0;  //(goes up as it's cleared: what was recorded before is gone)
     auto empty() const -> bool { return commands.empty(); }
     auto clear() -> void {
       commands.clear(), states.clear(), vertices.clear(), uploads.clear(), readbacks = 0;
-      models.clear(), indices.clear(), transforms.clear();
+      models.clear(), indices.clear(), transforms.clear(), runs.clear();
       generation++;
     }
   };
@@ -262,8 +271,10 @@ struct GPU : GE::Renderer {
     bool reads = false, readsInOrder = false, readsBlending = false, readsApart = true;
     //Fast mode's 3D (mesh()): whether the GPU transforms vertices itself (the driver took transform.vert)
     bool transforms = false;
-    //Whether it moves pixels from one target into another (Command::Move: the driver took move.frag's pipelines)
-    bool moves = false;
+    //Whether it moves pixels from one target into another (Command::Move: the driver took move.frag's pipelines), and
+    //into another's depth (parts 2: move.frag's DEPTH build's; else a finish puts them in memory first, for the depth
+    //to be filled from there: GPU::begin(). System::startRenderer() turns it off as the start-up check fails it.)
+    bool moves = false, depthMoves = false;
     //Whether it looks palettes up in the shader (makePalette(): a texture of palette indices from a frame buffer,
     //Pipeline::indexed)
     bool palettes = false;
@@ -406,6 +417,11 @@ struct GPU : GE::Renderer {
     //depths taken from another target over the same depth buffer (takeDepth()), and targets' depths put into memory
     //for a texture read from a depth buffer (putDepth(): those of one texture a wait for the GPU, as a finish)
     u64 depthsTaken = 0, depthsPut = 0;
+    //rectangles of other targets' pixels put into a target's depth on the GPU as it's filled from memory, as memory
+    //would have them after a finish (moveIntoDepth()); and finishes before such a fill, where the GPU can't (begin():
+    //with no moves, only where the PRIM's depth test reads what's filled)
+    u64 depthsMoved = 0, depthFinishes = 0;
+    u64 depthsCovered = 0;  //depth fills those moves put pixels in all of, none of it taken from memory (fill())
     u64 alphas = 0;    //rectangles of targets' colors whose alpha was set from their stencil (catchAlpha())
     u64 waiting = 0;   //nanoseconds the CPU waited in finish(), picture() and putDepth()
   } statistics;
@@ -424,12 +440,16 @@ struct GPU : GE::Renderer {
   //Its 3D the GE transformed among the GPU's (screenMeshes) failed, and the rest passed: System checks again with
   //those drawn apart
   bool screenMeshesFailed = false;
+  //Its depth taken from frame buffers drawn over the depth buffer's memory, moved into the depth on the GPU
+  //(Backend::depthMoves), failed, and the rest passed: System checks again with those put in memory first
+  bool depthMovesFailed = false;
 
   //gpu.cpp
   GPU(std::unique_ptr<Backend> backend);
   ~GPU();
   auto ready() const -> bool override { return backend && !backend->lost; }
-  auto begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region) -> bool override;
+  auto begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region,
+             const std::vector<GE::Vertex>& vertices, const GE::Transform& transform) -> bool override;
   auto triangle(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c) -> void override;
   auto triangleAt(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c, const s64 (&x)[3], const s64 (&y)[3])
     -> void override;
@@ -451,6 +471,10 @@ struct GPU : GE::Renderer {
   auto mesh(GE& ge, const GE::Transform& t, const std::vector<GE::Vertex>& vertices, const std::vector<u32>& corners,
             bool again) -> void override;
   auto copiesKept() const -> u32 { return copies.size(); }  //(render-to-texture copies on the GPU: the tests')
+  //(the tests': the depth of the frame buffer at VRAM's offset address, stride pixels a row, in GE format, as its
+  //target holds it after what's recorded so far: its depth buffer's rows filled so far, height of them, width each,
+  //waited for, nothing else changed; false where there's no such target or depth)
+  auto depthOf(u32 address, u32 stride, u32 format, std::vector<u16>& depths, u32& width, u32& height) -> bool;
   //The GE's 16-bit depth as a GPU's depth format keeps it, and back (a backend's uploads and read backs): D32 in
   //65,536ths, as draw.frag's DEPTHS writes it; D24 those rounded to nearest, taken back whichever way the GPU rounded
   //the fragment's depth into it
@@ -609,8 +633,22 @@ private:
   static constexpr u32 MostBeside = 256;
   //(the depth buffer as memory: takeDepth() and putDepth(), gpu.cpp)
   u64 depthSerial = 0;  //(goes up with each PRIM that writes depth: Target::depthAt)
-  auto takeDepth(Target& t, const GE::PixelState& p) -> void;
-  auto putDepth(u32 first, u32 last) -> void;  //(VRAM's bytes first to last, offsets in any of its copies)
+  //(the target t takes depth from: the newest other drawn over its depth buffer, newer than at; none if none is)
+  auto newestDepth(const Target& t, u32 depthBuffer, u32 depthStride, u64 at) const -> Target*;
+  auto takeDepth(Target& t, Target* newest, const GE::PixelState& p) -> void;
+  //(VRAM's bytes first to last, offsets in any of its copies; finishing: a texture's, between PRIMs)
+  auto putDepth(u32 first, u32 last, bool finishing = false) -> void;
+  //(the pixels other targets drew in the bytes of t's depth rows from to to, columns left to right, put into its depth
+  //on the GPU as it's filled from memory: fill(); whether that leaves those rows as a finish then a fill would; and
+  //whether it puts pixels in every depth of them, columns to right)
+  auto moveIntoDepth(Target& t, u32 from, u32 to, u32 left, u32 right) -> void;
+  auto depthMovable(const Target& t, u32 depthBuffer, u32 depthStride, u32 from, u32 to) const -> bool;
+  auto depthCovered(const Target& t, u32 from, u32 to, u32 right) const -> bool;
+  //(VRAM's pages whose pixels moveIntoDepth() put into a depth since the last finish: a PRIM drawing in them again
+  //has the depths over them filled again, told of it before or not: own(); the first and last of them)
+  u64 depthSources[GE::VRAMPages / 64] = {};
+  u32 sourcesFirst = ~0u, sourcesLast = 0;
+  auto depthChanged(u32 block) -> void;  //(the depths over VRAM's 16 KiB from block, filled again before they're used)
   //(the colors' alpha as the stencil has it: Target::lags, gpu.cpp. lagging: the PRIM's stencil operations leave it
   //behind, settings())
   bool lagging = false;

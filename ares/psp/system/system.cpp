@@ -748,6 +748,17 @@ auto System::startRenderer() -> void {
       gpu->backend->transforms = false, error.clear();
       passed = gpu->check(error);
     }
+    //(its frame buffers tested against frame buffers drawn over their depth buffers failing it alone: the check again
+    //with those put in memory first, the depth filled from there; asked again once reading is settled below, which
+    //the check looks at first)
+    auto depthMovesAgain = [&] {
+      if(!gpu || passed || !gpu->depthMovesFailed) return;
+      report(true, "the Vulkan renderer's start-up check, its depth taken from frame buffers drawn over the depth "
+                   "buffer on the GPU, failed (" + error + "): checked again with those put in memory first");
+      gpu->backend->depthMoves = false, error.clear();
+      passed = gpu->check(error);
+    };
+    depthMovesAgain();
     if(gpu && !passed && gpu->backend->readsInOrder) {
       auto& b = *gpu->backend;
       b.readsInOrder = b.readsBlending = false, b.reads = b.reads && b.readsApart;
@@ -762,6 +773,7 @@ auto System::startRenderer() -> void {
       gpu->backend->reads = gpu->backend->readsBlending = false, error.clear();
       passed = gpu->check(error);
     }
+    depthMovesAgain();
     if(gpu && !passed) {
       error += " on " + gpu->backend->name();
       gpu.reset();
@@ -781,6 +793,11 @@ auto System::startRenderer() -> void {
                    : gpu->backend->readsInOrder ? ", blending in the shader, in order"
                                                 : ", blending in 8888 by the GPU, the rest in the shader, overlaps "
                                                   "apart"));
+    if(!gpu->backend->depthMoves) {
+      report(true, "the Vulkan renderer's depth moves are off: frame buffers drawn over a depth buffer are put in "
+                   "memory before a PRIM's depth test reads them there (a wait for the GPU each time), elsewhere the "
+                   "depth is taken from memory as it is");
+    }
     gpu->report = [this](const std::string& what) { tell("The Vulkan renderer stopped: " + what); };
   }
   if(gpu && gpu->ready()) ge.setRenderer(gpu.get());
