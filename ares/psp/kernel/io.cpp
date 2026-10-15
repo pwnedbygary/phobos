@@ -185,6 +185,7 @@ auto Kernel::writeStat(u32 address, const std::string& host) -> void {
   bool folder = std::filesystem::is_directory(host, error);
   u64 size = folder ? 0 : std::filesystem::file_size(host, error);
   if(error) size = 0;
+  if(!folder) size = fileLength(host, size);
   memory.fill(address, 0, 64);
   memory.write(4, address + 0, folder ? 0x11ff : 0x21ff);
   memory.write(4, address + 4, folder ? 0x0017 : 0x0027);
@@ -352,9 +353,46 @@ auto Kernel::sceKernelStdin() -> void { result(StandardInput); }
 auto Kernel::sceKernelStdout() -> void { result(StandardOutput); }
 auto Kernel::sceKernelStderr() -> void { result(StandardError); }
 
+//Whether a host path is folder's, or inside it (both as resolve() makes them).
+static auto hostWithin(const std::string& path, const std::string& folder) -> bool {
+  if(folder.empty() || path.compare(0, folder.size(), folder)) return false;
+  return path.size() == folder.size() || path[folder.size()] == '/' || path[folder.size()] == '\\';
+}
+
+//Whether a PSP path is folder's, or inside it, whatever the case of either (a FAT stick's names ignore it).
+static auto pathWithin(const std::string& path, const std::string& folder) -> bool {
+  if(folder.empty() || path.size() < folder.size() || !sameName(path.substr(0, folder.size()), folder)) return false;
+  return path.size() == folder.size() || path[folder.size()] == '/';
+}
+
+//Whether two host paths name one file: the very path, or another name for it (a hard link, or the other spelling of
+//a host whose names ignore case and whose paths keep a name as it was asked for), by the host's own identity of it.
+static auto sameHostFile(const std::string& a, const std::string& b) -> bool {
+  if(a == b) return true;
+  std::error_code error;
+  return std::filesystem::equivalent(a, b, error) && !error;
+}
+
 //Opens a file (path, flags): its descriptor, or an error. Flags (PSP_O_*) say whether it's read, written or both;
 //whether it's created if missing, emptied, or only created if it isn't there already; and whether writes go to its
 //end. sceIoOpen, and sceIoOpenAsync (async.cpp).
+//
+//A memory stick file emptied as it's opened to write (PSP_O_TRUNC) holds nothing from then on, but its bytes aren't
+//lost: a write past its end, after a seek, finds them still there between the end and the write, as PPSSPP's notes on
+//the hardware record (its issue 579: on a PSP's stick, a file written "test", then opened to be emptied again, sought
+//to 4 and written "abc", read back "testabc"; opened to be emptied and closed with nothing written, it was empty).
+//LittleBigPlanet installs so: its file library opens GUI.ARC to be emptied for each 1 MiB it writes, seeks to where
+//that MiB goes and writes it, and finds the whole file there when it reads it back (emptied for good, it found its
+//first 4 MiB zero, and called its data corrupt). So the host file keeps its bytes, and the descriptor counts the
+//PSP's length of the file (truncated, length), from 0: what reads, seeks from the end and the file's status see,
+//raised by each write past it. Past the bytes it had, a gap left by a write past the end holds zeros (chosen: a FAT
+//stick's would hold whatever its clusters held). The host file is cut to that length (cut()) as the descriptor is
+//closed, or as soon as a write starts at or before the length, as a save rewritten from its start does (writeFile()):
+//chosen, not measured, so that Phobos killed part way, which cuts nothing, leaves no worse than emptying the file at
+//once would (a save rewritten from its start as far as it got), and the old bytes whole if nothing had been written.
+//LittleBigPlanet writes each MiB of its install but the first past the length, and its profile saves (STORY.SLV,
+//PS.BIN and others, emptied as they're opened) from their starts. An empty file has nothing to keep, and one emptied
+//while another descriptor still keeps its bytes is cut to that one's length first: one length at a time.
 auto Kernel::openFile(const std::string& path, u32 flags) -> u32 {
   std::string host, normalized;
   if(onDisc(path)) return openOnDisc(path, flags);
@@ -368,9 +406,13 @@ auto Kernel::openFile(const std::string& path, u32 flags) -> u32 {
   if(!exists && !(write && (flags & OpenCreate))) return ErrorFileNotFound;
   auto mode = std::ios::binary | std::ios::in;
   if(write) mode |= std::ios::out;
-  if(write && (!exists || (flags & OpenTruncate))) mode |= std::ios::trunc;  //made, or emptied
+  if(write && !exists) mode |= std::ios::trunc;  //made
   u32 file = newFile();
   if(!file) return ErrorTooManyFiles;  //before the file is made or emptied
+  bool emptied = write && exists && (flags & OpenTruncate);
+  if(emptied) {
+    for(auto& [other, open] : files) if(open.truncated && sameHostFile(open.host, host)) cut(open);
+  }
   auto stream = std::make_unique<std::fstream>(host, mode);
   if(!stream->is_open()) return ErrorNoPermission;
   auto& open = files[file];
@@ -379,7 +421,121 @@ auto Kernel::openFile(const std::string& path, u32 flags) -> u32 {
   open.flags = flags;
   open.stream = std::move(stream);
   open.opened = ++filesOpened;
+  if(!emptied) return file;
+  open.truncated = true;
+  s64 bytes = hold(open);
+  if(bytes > 0) open.length = 0, open.hostLength = bytes;
+  else dropCut(open);
+  if(bytes < 0) std::filesystem::resize_file(host, 0, error);  //(not held, so emptied now)
   return file;
+}
+
+//The PSP's length of a host file the host has hostBytes of: those, unless a descriptor open on it has emptied it
+//(openFile()), whose length it is then (no more than the host has, if the host file was cut behind its back).
+auto Kernel::fileLength(const std::string& host, u64 hostBytes) -> u64 {
+  for(auto& [file, open] : files) {
+    if(open.truncated && sameHostFile(open.host, host)) return std::min(open.length, hostBytes);
+  }
+  return hostBytes;
+}
+
+//A write to a host file that ended at end: an emptied file's length (openFile()) grows to it, and so does the host
+//file's as the kernel left it. Once its length reaches the host file's, there's nothing past it left to cut.
+auto Kernel::fileWritten(const std::string& host, u64 end) -> void {
+  for(auto& [file, open] : files) {
+    if(!open.truncated || !sameHostFile(open.host, host)) continue;
+    open.length = std::max(open.length, end);
+    open.hostLength = std::max(open.hostLength, end);
+    if(open.length >= open.hostLength) dropCut(open);
+  }
+}
+
+//An emptied file's host file held to be cut (openFile(), and a state's emptied file opened again: serialization.cpp):
+//opened again, beside its stream, through the C library, as cut() shortens it through that. Its length, or -1 if it
+//can't be held.
+auto Kernel::hold(OpenFile& open) -> s64 {
+  open.held.reset(std::fopen(open.host.c_str(), "rb+"));
+  if(!open.held || std::fseek(open.held.get(), 0, SEEK_END)) return -1;
+  return std::ftell(open.held.get());
+}
+
+//The bytes an emptied file's cut would drop (from the PSP's length of it to the host file's length as the kernel left
+//it), read through the held file: their FNV-1a hash, or none if they can't all be read. A state records it, and keeps
+//the cut only while the host file still holds those bytes (serialization.cpp): a newer save as long isn't cut.
+auto Kernel::hashTail(OpenFile& open) -> std::optional<u64> {
+  std::FILE* held = open.held.get();
+  if(!held || open.length >= open.hostLength) return {};
+  if(open.stream) open.stream->flush();
+  if(std::fseek(held, long(open.length), SEEK_SET)) return {};
+  u64 hash = 0xcbf2'9ce4'8422'2325;
+  std::vector<u8> chunk(64_KiB);
+  for(u64 left = open.hostLength - open.length; left;) {
+    u64 got = std::fread(chunk.data(), 1, std::min<u64>(left, chunk.size()), held);
+    if(!got) return {};
+    for(u64 n = 0; n < got; n++) hash = (hash ^ chunk[n]) * 0x100'0000'01b3;
+    left -= got;
+  }
+  return hash;
+}
+
+//An emptied file cut (openFile()): its host file shortened to the PSP's length of it, dropping the bytes it kept past
+//them. Through the file held, never a path: a file renamed meanwhile is cut where it went, one removed (and whatever
+//was put in its place) never. Only while the host file has the length the kernel left it (hostLength: one written
+//longer or shorter by something else since isn't cut), and only ever shorter; the cut made or not, the descriptor is a
+//plain one from then on.
+auto Kernel::cut(OpenFile& open) -> void {
+  if(!open.truncated) return;
+  if(open.stream) open.stream->flush();
+  std::FILE* held = open.held.get();
+  long bytes = held && !std::fseek(held, 0, SEEK_END) ? std::ftell(held) : -1;
+  if(bytes >= 0 && u64(bytes) == open.hostLength && u64(bytes) > open.length) {
+    #if defined(_WIN32)
+    if(_chsize_s(_fileno(held), s64(open.length))) {}  //(refused: the bytes stay, nothing lost)
+    #else
+    if(ftruncate(fileno(held), off_t(open.length))) {}
+    #endif
+  }
+  dropCut(open);
+}
+
+//An emptied file's cut dropped, not made: the descriptor is a plain one, the host file as it is.
+auto Kernel::dropCut(OpenFile& open) -> void {
+  open.held.reset();
+  open.truncated = false, open.length = 0, open.hostLength = 0, open.tailHash = 0;
+}
+
+//A host file, or folder, that something other than its descriptors removed, replaced or wrote (sceIoRemove, the
+//savedata utility): the cuts of the descriptors that emptied it, or a file in it, dropped. What's at its path isn't
+//theirs to cut, and what they emptied is gone or written over.
+auto Kernel::dropCuts(const std::string& host) -> void {
+  for(auto& [file, open] : files) {
+    if(open.truncated && (hostWithin(open.host, host) || sameHostFile(open.host, host))) dropCut(open);
+  }
+}
+
+//A file or folder renamed (sceIoRename): the descriptors open on it, or on what's in it, follow it to its new path,
+//as their host files do (a state opens them again there, and an emptied file's length goes with it). The PSP's paths
+//match whatever their case, as a FAT stick's names do: the rename may spell them otherwise than the open did. (A host
+//path the host spelled otherwise, as a host whose names ignore case may keep them, is found again from the new one.)
+auto Kernel::filesMoved(const std::string& oldHost, const std::string& oldPath, const std::string& newHost,
+                        const std::string& newPath) -> void {
+  for(auto& [file, open] : files) {
+    if(open.onDisc) continue;
+    bool hosted = hostWithin(open.host, oldHost), named = pathWithin(open.path, oldPath);
+    if(hosted) open.host = newHost + open.host.substr(oldHost.size());
+    if(named) open.path = newPath + open.path.substr(oldPath.size());
+    std::string host, normalized;
+    if(named && !hosted && !resolve(open.path, host, normalized)) open.host = host;
+  }
+}
+
+//A host file closed: its stream flushed and let go of, and if it was emptied as it was opened (openFile()), cut
+//(cut()). As the program closes it (sceIoClose, sceIoCloseAsync); as the kernel powers on (a program ending or another
+//starting, the machine switched off), which closes every file the program had, as a PSP's kernel does as a program
+//ends; and as a state is loaded over the program (System::unserialize(), once the state has loaded).
+auto Kernel::closeFile(OpenFile& open) -> void {
+  open.stream.reset();
+  cut(open);
 }
 
 //(path, flags, mode): a file's descriptor.
@@ -394,6 +550,7 @@ auto Kernel::sceIoClose() -> void {
   auto found = files.find(arg(0));
   if(found == files.end() || found->second.folder) return result(ErrorBadFile);
   if(asyncBusy(arg(0))) return result(ErrorAsyncBusy);
+  closeFile(found->second);
   files.erase(found);
   result(0);
 }
@@ -415,32 +572,55 @@ auto Kernel::readFile(u32 file, u32 data, u32 size) -> u32 {
   return u32(moved);
 }
 
-//A PGD file's header descriptor, decrypted once (pgd.cpp): why it can't, or nothing. The header is read from where
-//the file lies (the disc, or the host), and where the data starts is the offset the game gave (0x04100002) if it did,
-//else the descriptor's.
+//How long an open file is, for its PGD: a disc file's size, or a memory stick file's length as the PSP sees it, as
+//its reads, seeks and status do (fileLength(): the host file's, unless a descriptor emptied it as it was opened and
+//keeps its bytes). open.size is kept for the disc's files alone, and is 0 for the memory stick's.
+auto Kernel::pgdFileLength(OpenFile& open) -> u64 {
+  if(open.onDisc) return open.size;
+  open.stream->flush();
+  open.stream->clear();
+  open.stream->seekg(0, std::ios::end);
+  s64 length = s64(open.stream->tellg());
+  open.stream->clear();
+  return length > 0 ? fileLength(open.host, u64(length)) : 0;
+}
+
+//size bytes of an open file from at on, wherever it lies (the disc, or the host): false if they can't all be read,
+//as none past its length (pgdFileLength()) can.
+auto Kernel::pgdFileRead(OpenFile& open, u64 at, u64 size, u8* bytes) -> bool {
+  u64 length = pgdFileLength(open);
+  if(at > length || size > length - at) return false;
+  if(open.onDisc) return disc && disc->read(u64(open.sector) * Disc::SectorSize + at, size, bytes);
+  open.stream->clear();
+  open.stream->seekg(std::streamoff(at));
+  open.stream->read(reinterpret_cast<char*>(bytes), size);
+  bool got = u64(open.stream->gcount()) == size;
+  open.stream->clear();
+  return got;
+}
+
+//A PGD file's header descriptor, decrypted once (pgd.cpp): why it can't, or nothing. Until then, pgdDataOffset says
+//where the PGD itself starts in the file: 0 for a UMD data file, which is a PGD whole; past the "\0PSPEDAT" header for
+//an NPDRM EDATA (sceNpDrmEdataSetupKey); or where ioctl 0x04100002 put it. The PSP's PGD layer reads the 0x90-byte
+//header there, and the descriptor's data offset counts from there too ("tpu"'s decompilation of it: the data at the
+//PGD's offset plus the descriptor's, the table of block MACs past it), so once the descriptor is read pgdDataOffset
+//says where the data starts: 0x90 for a UMD file, 0x120 for a download's EDATA.
 auto Kernel::pgdDescriptor(OpenFile& open) -> std::string {
-  u8 header[0x90];
-  u64 read = std::min<u64>(sizeof(header), open.size);  //the header is 0x90 bytes, or the file if it's shorter
-  if(open.onDisc) {
-    if(!disc->read(u64(open.sector) * Disc::SectorSize, read, header)) return "couldn't read a PGD file's header";
-  } else {
-    open.stream->flush();
-    open.stream->clear();
-    open.stream->seekg(0);
-    open.stream->read(reinterpret_cast<char*>(header), read);
-    if(u64(open.stream->gcount()) < read) return "a PGD file cut short in its header";
-  }
-  //The file's own size, not how much of its header was read: the descriptor says where the data starts and how long it
-  //is, and that is checked against the whole file (pgd.cpp). Handed the 0x90 read above, every PGD file would be
-  //refused for holding more data than its own header.
-  u64 size = open.size;
+  u64 at = open.pgdDataOffset, length = pgdFileLength(open);
+  if(at > length) return "a PGD that starts past its file's end";
+  u8 header[0x90] = {};
+  u64 read = std::min<u64>(sizeof(header), length - at);  //the header is 0x90 bytes, or the file if it's shorter
+  if(!pgdFileRead(open, at, read, header)) return "couldn't read a PGD file's header";
+  //The PGD's own size, from its start to the file's end, not how much of its header was read: the descriptor says
+  //where the data starts and how long it is, and that is checked against the whole PGD (pgd.cpp). Handed the 0x90 read
+  //above, every PGD file would be refused for holding more data than its own header.
   Pgd::Descriptor descriptor;
-  auto why = Pgd::descriptor(header, size, open.pgdVersionKey, descriptor);
+  auto why = Pgd::descriptor(header, length - at, open.pgdVersionKey, descriptor);
   if(!why.empty()) return why;
   //the key the descriptor came out under, which the data must also be decrypted with (pgd.cpp may have recovered it
   //from the header's own MAC when the key the game gave didn't match).
   memcpy(open.pgdVersionKey, descriptor.versionKey, 16);
-  open.pgdDataOffset = open.pgdDataOffset ? open.pgdDataOffset : descriptor.dataOffset;
+  open.pgdDataOffset = u32(at + descriptor.dataOffset);
   open.pgdDataSize = descriptor.dataSize;
   open.pgdBlockSize = descriptor.blockSize;
   memcpy(open.pgdDataKey, descriptor.dataKey, 16);
@@ -449,9 +629,10 @@ auto Kernel::pgdDescriptor(OpenFile& open) -> std::string {
 }
 
 //A PGD file's reads: unlocked with its key (ioctl 0x04100001), the file reads as its decrypted data, its 0x90-byte
-//header hidden: file offset p is data byte p, "CPK " and all. The ciphertext lives behind the header, so it's read
-//from there and decrypted over what the read moved. readCount() already clamped the read to the data, so length here
-//is the whole count whenever the position is inside the data. Set up the descriptor first.
+//header (and an EDATA's own before it) hidden: file offset p is data byte p, "CPK " and all. The ciphertext lives
+//behind the header, so it's read from there and decrypted over what the read moved. readCount() already clamped the
+//read to the data, so length here is the whole count whenever the position is inside the data. Set up the descriptor
+//first.
 auto Kernel::pgdDecryptRead(OpenFile& open, u32 data, u64 count) -> void {
   if(count == 0 || !open.pgd) return;
   if(!open.pgdReady) {
@@ -503,6 +684,7 @@ auto Kernel::readCount(OpenFile& open, u32 data, u32 size, u64& count) -> u32 {
   open.stream->seekg(0, std::ios::end);
   s64 length = s64(open.stream->tellg());
   open.stream->clear();
+  if(length >= 0) length = s64(fileLength(open.host, u64(length)));
   count = length > s64(open.position) ? std::min<u64>(size, u64(length) - open.position) : 0;
   if(open.pgd && open.pgdReady)
     count = std::min<u64>(count, u64(open.position) < open.pgdDataSize ? u64(open.pgdDataSize) - open.position : 0);
@@ -587,12 +769,21 @@ auto Kernel::writeFile(u32 file, u32 data, u32 size) -> u32 {
   std::vector<char> buffer(size);
   memory.copyOut(buffer.data(), data, size);
   open.stream->clear();
-  if(open.flags & OpenAppend) open.stream->seekp(0, std::ios::end);
-  else open.stream->seekp(std::streamoff(open.position));
+  u64 at = open.position;
+  if(open.flags & OpenAppend) {  //at the PSP's end of the file
+    open.stream->seekp(0, std::ios::end);
+    if(s64 end = s64(open.stream->tellp()); end >= 0) at = fileLength(open.host, end);
+  }
+  //(from or before an emptied file's end: it's being rewritten in order, and is cut first: openFile())
+  for(auto& [other, emptied] : files) {
+    if(size && emptied.truncated && at <= emptied.length && sameHostFile(emptied.host, open.host)) cut(emptied);
+  }
+  open.stream->seekp(std::streamoff(at));
   open.stream->write(buffer.data(), size);
   open.stream->flush();
   if(!*open.stream) return ErrorIOError;
   open.position = u64(open.stream->tellp());
+  fileWritten(open.host, open.position);
   return size;
 }
 
@@ -610,7 +801,16 @@ auto Kernel::sceIoWrite() -> void {
   fileWait(file, wrote, false, s32(wrote) < 0 ? 0 : wrote);
 }
 
-//Moves a file's position: from its start (whence 0), where it is (1), or its end (2). Returns where it is now.
+//Moves a file's position: from its start (whence 0), where it is (1), or its end (2). Returns where it is now. A
+//memory stick file ends where the PSP sees it end (fileLength(): short of the host file's end while a descriptor that
+//emptied it as it was opened keeps its bytes). A PGD file unlocked with its key is its decrypted data
+//(pgdDecryptRead()), so its end is the data's, not the file's, headers and block MACs and all, and no seek goes past
+//it, as the PSP's PGD layer seeks it ("tpu"'s decompilation: from the descriptor's size, each result clamped to it).
+//A descriptor that emptied its file is never a PGD: a PGD file is open only to read (the disc's files can't be opened
+//to write, and sceNpDrmEdataSetupKey readies an EDATA only so), and only a descriptor opened to write empties its file
+//as it's opened (openFile()). The two meet where another descriptor empties a readied EDATA: its end stays its data's
+//while its reads find nothing past the PSP's length (readCount()), as the PGD layer, which answers from its
+//descriptor, plausibly does too.
 auto Kernel::seek(u32 file, s64 offset, u32 whence, u64& position) -> u32 {
   auto found = files.find(file);
   if(found == files.end() || found->second.folder || found->second.resultOnly) return ErrorBadFile;
@@ -619,11 +819,14 @@ auto Kernel::seek(u32 file, s64 offset, u32 whence, u64& position) -> u32 {
   if(!open.onDisc) {
     open.stream->flush();
     std::error_code error;
-    size = s64(std::filesystem::file_size(open.host, error));
+    size = s64(fileLength(open.host, std::filesystem::file_size(open.host, error)));
   }
+  if(open.pgd && !open.pgdReady) pgdDescriptor(open);
+  if(open.pgd && open.pgdReady) size = open.pgdDataSize;
   s64 base = whence == 0 ? 0 : whence == 1 ? s64(open.position) : whence == 2 ? size : -1;
   if(base < 0 || base + offset < 0) return ErrorInvalidArgument;
   open.position = u64(base + offset);
+  if(open.pgd && open.pgdReady) open.position = std::min<u64>(open.position, open.pgdDataSize);
   position = open.position;
   return 0;
 }
@@ -651,7 +854,9 @@ auto Kernel::sceIoRemove() -> void {
   std::error_code error;
   if(!std::filesystem::exists(host, error)) return result(ErrorFileNotFound);
   if(std::filesystem::is_directory(host, error)) return result(ErrorIsDirectory);
-  result(std::filesystem::remove(host, error) ? 0 : ErrorNoPermission);
+  bool removed = std::filesystem::remove(host, error);
+  if(removed) dropCuts(host);  //(a descriptor still open on it holds what's gone)
+  result(removed ? 0 : ErrorNoPermission);
 }
 
 auto Kernel::sceIoMkdir() -> void {
@@ -702,6 +907,7 @@ auto Kernel::sceIoRename() -> void {
   }
   if(std::filesystem::exists(newHost, error)) return result(ErrorFileExists);
   std::filesystem::rename(oldHost, newHost, error);
+  if(!error) filesMoved(oldHost, oldPath, newHost, newPath);
   result(error ? ErrorNoPermission : 0);
 }
 
@@ -995,18 +1201,26 @@ auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 out
     //A file without PGD's header ("\0PGD") is read as it is: the fan translations of 7th Dragon 2020 and its sequel
     //carry their INSDIR data decrypted, and the games set its key all the same, taking anything but success as the
     //drive failing and opening the file again, for good. A file with the header keeps the key, and reads as its
-    //decrypted data with the header hidden (pgdDecryptRead()); its key (0x10) is in the clear.
+    //decrypted data with the header hidden (pgdDecryptRead()); its key (0x10) is in the clear. The header is looked
+    //for where the PGD starts: the file's start, or where 0x04100002 put it. A file already unlocked stays as it is:
+    //its descriptor came out under the key its own header's MAC holds, whatever key is given now.
     if(open.sectors || inLength < 16 || !memory.reaches(in, 16)) return ErrorFunctionNotSupported;
+    if(open.pgdReady) return 0;
+    u32 at = open.pgd ? open.pgdDataOffset : 0;
     u8 head[4] = {};
-    if(open.size >= 4 && !disc->read(u64(open.sector) * Disc::SectorSize, 4, head)) return ErrorIOError;
+    if(open.size >= u64(at) + 4 && !disc->read(u64(open.sector) * Disc::SectorSize + at, 4, head)) return ErrorIOError;
     if(!memcmp(head, "\0PGD", 4)) {
       memcpy(open.pgdVersionKey, memory.pointer(in, 16), 16);
       open.pgd = true;
       open.pgdReady = false;
+      open.pgdDataOffset = at;
     }
     return 0;
   }
-  case 0x0410'0002: {  //where the encrypted data starts, relative to the file (the rest is read as it is)
+  //where the PGD starts, relative to the file: the PSP's PGD layer reads its header there when the key is given
+  //(0x04100001), and its data where its descriptor says, counted from there ("tpu"'s decompilation; PPSSPP's notes
+  //have npdrm give an EDATA's 0x90 so).
+  case 0x0410'0002: {
     if(open.sectors || inLength < 4 || !memory.reaches(in, 4)) return ErrorFunctionNotSupported;
     open.pgd = true;
     open.pgdReady = false;
@@ -1138,11 +1352,146 @@ auto Kernel::sceIoDevctl() -> void {
   result(ErrorFunctionNotSupported);
 }
 
+//The file I/O trace (the runner's --trace-io; ioTrace, empty unless a host sets it): each IoFileMgrForUser call a
+//line, the PSP's time in microseconds and the calling thread first, then the call as the program made it and its
+//answer. A descriptor comes with its file's path and the position the call found it at; a read or write with its
+//buffer, its size and a hash of the bytes it moved ("zeros" if they all were); an open with its flags and mode; a seek
+//with its offset and where from. An asynchronous request's line says when it's due, and a line of its own when it's
+//done (traceIoDone()). A call that made its thread wait says so: what it returns comes as the thread wakes.
+auto Kernel::traceIo(const Function& function) -> void {
+  std::string name = function.name;
+  u32 a[6];
+  for(u32 n : range(6)) a[n] = arg(n);
+  Thread* caller = current;
+  u64 issued = cycles;
+  auto hex = [](u64 value) {
+    char text[24];
+    std::snprintf(text, sizeof(text), "0x%llx", (unsigned long long)value);
+    return std::string(text);
+  };
+  auto quoted = [&](u32 address) { return "\"" + memory.readString(address, 1024) + "\""; };
+  auto described = [&](u32 file) {
+    std::string text = "fd " + std::to_string(file);
+    auto found = files.find(file);
+    if(found == files.end()) return text + " (none)";
+    text += " " + found->second.path;
+    if(!found->second.folder && !found->second.resultOnly) text += " @" + hex(found->second.position);
+    return text;
+  };
+  auto bytes = [&](u32 address, u64 size) { return traceBytes(address, size); };
+  auto octal = [](u32 value) {
+    char text[16];
+    std::snprintf(text, sizeof(text), "0%o", value);
+    return std::string(text);
+  };
+  auto flagNames = [](u32 flags) {
+    static const std::pair<u32, const char*> names[] = {{OpenRead, "read"}, {OpenWrite, "write"},
+      {OpenAppend, "append"}, {OpenCreate, "create"}, {OpenTruncate, "truncate"}, {OpenExclusive, "exclusive"}};
+    std::string text;
+    for(auto& [bit, word] : names) if(flags & bit) text += std::string(text.empty() ? " (" : " ") + word;
+    return text.empty() ? text : text + ")";
+  };
+  bool fileFirst = name != "sceIoOpen" && name != "sceIoOpenAsync" && name != "sceIoRemove" && name != "sceIoMkdir"
+                && name != "sceIoRmdir" && name != "sceIoRename" && name != "sceIoChdir" && name != "sceIoAssign"
+                && name != "sceIoGetstat" && name != "sceIoDopen" && name != "sceIoDevctl" && name != "sceIoGetFdList"
+                && !(name == "sceIoChangeAsyncPriority" && a[0] == 0xffff'ffff);
+  std::string call = fileFirst ? described(a[0]) : std::string{};
+  bool read = name == "sceIoRead" || name == "sceIoReadAsync";
+  bool write = name == "sceIoWrite" || name == "sceIoWriteAsync";
+  if(name == "sceIoOpen" || name == "sceIoOpenAsync") {
+    call = quoted(a[0]) + " flags " + hex(a[1]) + flagNames(a[1]) + " mode " + octal(a[2]);
+  } else if(read || write) {
+    call += std::string(read ? " into " : " from ") + hex(a[1]) + " size " + hex(a[2]);
+    if(write) call += bytes(a[1], a[2]);
+  } else if(name == "sceIoLseek" || name == "sceIoLseekAsync") {
+    call += " offset " + std::to_string(s64(u64(a[3]) << 32 | a[2])) + " whence " + std::to_string(a[4]);
+  } else if(name == "sceIoLseek32" || name == "sceIoLseek32Async") {
+    call += " offset " + std::to_string(s32(a[1])) + " whence " + std::to_string(a[2]);
+  } else if(name == "sceIoRename") {
+    call = quoted(a[0]) + " to " + quoted(a[1]);
+  } else if(name == "sceIoAssign") {
+    call = quoted(a[0]) + " to " + quoted(a[1]) + " " + quoted(a[2]);
+  } else if(name == "sceIoMkdir") {
+    call = quoted(a[0]) + " mode " + octal(a[1]);
+  } else if(!fileFirst && name != "sceIoDevctl" && name != "sceIoGetFdList" && name != "sceIoChangeAsyncPriority") {
+    call = quoted(a[0]);  //remove, rmdir, chdir, getstat, dopen
+  } else if(name == "sceIoIoctl" || name == "sceIoIoctlAsync" || name == "sceIoDevctl") {
+    if(name == "sceIoDevctl") call = quoted(a[0]);
+    call += " command " + hex(a[1]) + " in " + hex(a[2]) + " (" + std::to_string(a[3]) + ") out " + hex(a[4]) + " ("
+          + std::to_string(a[5]) + ")";
+  } else if(name == "sceIoChangeAsyncPriority") {
+    call = (a[0] == 0xffff'ffff ? std::string("fd -1") : call) + " priority " + hex(a[1]);
+  } else if(name == "sceIoSetAsyncCallback") {
+    call += " callback " + hex(a[1]) + " argument " + hex(a[2]);
+  } else if(name == "sceIoGetAsyncStat") {
+    call += a[1] ? " poll" : " wait";
+  } else if(name == "sceIoGetFdList") {
+    call = "into " + hex(a[0]) + " room " + std::to_string(a[1]);
+  }
+
+  (this->*function.handler)();
+
+  u32 v0 = caller && caller != current ? caller->context.gpr[2] : cpu.ipu.r[2];
+  u32 v1 = caller && caller != current ? caller->context.gpr[3] : cpu.ipu.r[3];
+  bool waits = caller && caller->status == Status::Waiting;
+  std::string answer = s32(v0) < 0 ? hex(v0) : std::to_string(v0);
+  if(name == "sceIoLseek" && s32(v0) >= 0) answer = std::to_string(u64(v1) << 32 | v0);
+  if(name == "sceIoRead" && s32(v0) > 0) answer += bytes(a[1], v0);
+  if(name == "sceIoGetstat" && !v0) answer += " (size " + std::to_string(u64(memory.read(4, a[1] + 12)) << 32
+                                                 | memory.read(4, a[1] + 8)) + ")";
+  if(name == "sceIoDread" && v0 == 1) answer += " (" + memory.readString(a[1] + 88, 256) + ")";
+  u32 pointer = name == "sceIoGetAsyncStat" ? a[2] : a[1];
+  bool taken = name == "sceIoPollAsync" || name == "sceIoWaitAsync" || name == "sceIoWaitAsyncCB"
+            || name == "sceIoGetAsyncStat";
+  if(taken && !v0 && !waits && pointer && memory.reaches(pointer, 8)) {
+    answer += " (result " + hex(u64(memory.read(4, pointer + 4)) << 32 | memory.read(4, pointer)) + ")";
+  }
+  u32 file = name == "sceIoOpenAsync" ? v0 : a[0];
+  if(auto found = files.find(file); name.find("Async") != std::string::npos && !taken && s32(v0) >= 0
+  && found != files.end() && found->second.async == OpenFile::Async::Pending && found->second.asyncDoneAt >= issued) {
+    answer += " (due in " + std::to_string((found->second.asyncDoneAt - issued) / (CPUFrequency / 1'000'000))
+            + " us, result " + hex(found->second.asyncResult) + ")";
+  }
+  if(waits) answer += " (waits)";
+  char head[64];
+  std::snprintf(head, sizeof(head), "%llu us %s: ", (unsigned long long)(issued / (CPUFrequency / 1'000'000)),
+                caller ? caller->name.c_str() : "-");
+  ioTrace(head + name + " " + call + " -> " + answer);
+}
+
+//The trace's line for an asynchronous request done (asyncDone()): the file, its position now, the result, and for a
+//read the hash of the bytes that landed.
+auto Kernel::traceIoDone(u32 file, u32 data, u64 bytes) -> void {
+  auto& open = files[file];
+  char text[96];
+  std::snprintf(text, sizeof(text), "%llu us: done fd %u ", (unsigned long long)(cycles / (CPUFrequency / 1'000'000)),
+                file);
+  std::string line = text + open.path;
+  std::snprintf(text, sizeof(text), " @0x%llx -> 0x%llx", (unsigned long long)open.position,
+                (unsigned long long)open.asyncResult);
+  ioTrace(line + text + (data ? traceBytes(data, bytes) : std::string{}));
+}
+
+//The trace's word on the bytes a read or write moved: " zeros" if they all were, else " hash" and their FNV-1a hash
+//(nothing for none, or bytes not in the program's memory).
+auto Kernel::traceBytes(u32 address, u64 size) -> std::string {
+  if(!size || size > 0x7fff'ffff || !memory.reaches(address, u32(size))) return {};
+  std::vector<u8> data(size);
+  memory.copyOut(data.data(), address, u32(size));
+  u32 hash = 0x811c'9dc5;
+  bool zeros = true;
+  for(u8 byte : data) hash = (hash ^ byte) * 0x0100'0193, zeros = zeros && !byte;
+  if(zeros) return " zeros";
+  char text[24];
+  std::snprintf(text, sizeof(text), " hash %08x", hash);
+  return text;
+}
+
 //scePspNpDrm_user, the DRM of games sold as downloads: a game gives its licensee key (16 bytes) before it opens its
 //own protected files (EDATA, ".PSPEDAT" with a PGD inside, as the PSP Developer Wiki describes them), which the PSP
-//then decrypts as they're read. There is no DRM here: a key is taken and forgotten, and a game's files are read as
-//they are, so a game's plain files work and an encrypted one reads as its encrypted bytes. uOFW's npdrm exports
-//name the user library's five functions; none has a pspautotests program.
+//then decrypts as they're read. There is no DRM here: no licence is checked, a game's plain files are read as they
+//are, and an EDATA's PGD is decrypted as a UMD data file's is (sceNpDrmEdataSetupKey). uOFW's npdrm exports name the
+//user library's five functions; none has a pspautotests program.
 //(the licensee key, 16 bytes): the key a download game hands before it opens its protected EDATA files. It's the
 //version key the PGD decrypts with (part that follows), stored for sceNpDrmEdataSetupKey to put on them.
 auto Kernel::sceNpDrmSetLicenseeKey() -> void {
@@ -1162,44 +1511,54 @@ auto Kernel::sceNpDrmClearLicenseeKey() -> void {
 //(name): whether a protected file still has the name it was sold with: always, here.
 auto Kernel::sceNpDrmRenameCheck() -> void { result(0); }
 
-//(file): readies an open file's decryption; one not open (or a folder) is BAD_FILE. A protected file is wrapped in
-//EDATA ("\0PSPEDAT"), which wraps a PGD: the licensee key is put on it, and the data is said to start after EDATA's
-//0x90-byte header, so its reads decrypt (io.cpp's 0x04100001 and 0x04100002).
+//(file): readies an open file's decryption; one not open (or a folder) is BAD_FILE. A protected file is EDATA: a
+//"\0PSPEDAT" header, then a whole PGD (the PSP Developer Wiki's PSP_EDAT and PGD pages). The header's word at 0x0c
+//says where the PGD starts, in its low 24 bits (its top byte holds flags: "tpu"'s edata.c, written from npdrm): 0x90
+//in a download's EDATA, whose header ends with its licence's MAC at 0x80, 0x80 in one without (the wiki's
+//examples; PPSSPP's notes take 0x90 always). npdrm gives the PGD layer that offset (ioctl 0x04100002) and the key
+//(0x04100001), so the PGD is read as a UMD file's is from there on: its header, then its data where its descriptor
+//says, counted from the PGD's start (0x120 into the file, in the usual EDATA). The licensee key is put on it as the
+//version key (pgd.cpp recovers the right one from the header's MAC when it isn't). Anything else is read as it is: a
+//plain file, or an EDATA holding something other than a PGD. Only a file open to read alone is readied, as npdrm's
+//callers open their EDATA (0x40000001) and as the PSP's PGD layer takes them ("tpu"'s decompilation refuses a
+//0x40000000 file opened to write, 0x80510201), so a PGD is never a descriptor that emptied its file as it was opened
+//(openFile(), seek()); one emptied through another descriptor is as long as the PSP sees it (pgdFileLength()).
 auto Kernel::sceNpDrmEdataSetupKey() -> void {
   auto found = files.find(arg(0));
   if(found == files.end() || found->second.folder || found->second.resultOnly) return result(ErrorBadFile);
   auto& open = found->second;
-  if(npdrmLicenseeKeySet) {
-    u8 magic[8] = {};
-    u64 size = std::min<u64>(sizeof(magic), open.size);
-    if(open.onDisc) disc->read(u64(open.sector) * Disc::SectorSize, size, magic);
-    else {
-      open.stream->flush();
-      open.stream->clear();
-      open.stream->seekg(0);
-      open.stream->read(reinterpret_cast<char*>(magic), size);
-    }
-    if(!memcmp(magic, "\0PSPEDAT", 8)) {
-      memcpy(open.pgdVersionKey, npdrmLicenseeKey, 16);
-      open.pgd = true;
-      open.pgdReady = false;
-      open.pgdDataOffset = 0x90;
+  if(npdrmLicenseeKeySet && !open.sectors && !(open.flags & OpenWrite)) {
+    u8 head[16] = {}, magic[4] = {};
+    u64 length = pgdFileLength(open);
+    if(length >= sizeof(head) && pgdFileRead(open, 0, sizeof(head), head) && !memcmp(head, "\0PSPEDAT", 8)) {
+      u32 at = (head[12] | head[13] << 8 | head[14] << 16 | u32(head[15]) << 24) & 0xff'ffff;
+      if(u64(at) + 0x90 <= length && pgdFileRead(open, at, 4, magic) && Pgd::is(magic)) {
+        memcpy(open.pgdVersionKey, npdrmLicenseeKey, 16);
+        open.pgd = true;
+        open.pgdReady = false;
+        open.pgdDataOffset = at;
+      }
     }
   }
   result(0);
 }
 
-//(file): the size of an open file's data: here the file's own size, as nothing is decrypted.
+//(file): the size of an open file's data: an EDATA's readied by sceNpDrmEdataSetupKey, its PGD's data (the
+//descriptor's size, which the PGD layer's ioctl 0x04100010 answers); anything else, the file's own size (a memory
+//stick file's as the PSP sees it: fileLength()).
 auto Kernel::sceNpDrmEdataGetDataSize() -> void {
   auto found = files.find(arg(0));
   if(found == files.end() || found->second.folder || found->second.resultOnly) return result(ErrorBadFile);
   auto& open = found->second;
+  if(open.pgd && !open.pgdReady) pgdDescriptor(open);
+  if(open.pgd && open.pgdReady) return result(open.pgdDataSize);
   u64 size = open.size;
   if(!open.onDisc) {
     open.stream->flush();
     std::error_code error;
     size = std::filesystem::file_size(open.host, error);
     if(error) size = 0;
+    size = fileLength(open.host, size);
   }
   result(u32(std::min<u64>(size, 0x7fff'ffff)));
 }

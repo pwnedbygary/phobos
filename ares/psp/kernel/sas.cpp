@@ -73,7 +73,8 @@
 //flags byte is 1 or 7 ends the voice, 3 loops when the voice loops and ends it when it doesn't, 4 and 6 mark where
 //the loop goes back to, and any other byte goes on, 0x41 and 0x75 among them as recorded, 0x87 too); that a voice
 //keyed on with no samples set ends at the next __sceSasCore; and that every call works on the one SasCore
-//__sceSasInit set up, whatever core it's given; and how long a grain keeps the Media Engine: __sceSasCore waits 300
+//__sceSasInit set up, whatever core it's given (the voice's word an ATRAC3 voice's context goes in written only into
+//that one: sasVoiceWord()); and how long a grain keeps the Media Engine: __sceSasCore waits 300
 //microseconds where a thread can wait, and is refused where it can't, as a PSP's is (sasMix()).
 
 namespace {
@@ -142,6 +143,15 @@ namespace {
 auto Kernel::sasVoice(u32 number) -> Sas::Voice* {
   if(number >= 32) return result(SasErrorVoice), nullptr;
   return &sas.voices[number];
+}
+
+//A voice's first word in the SasCore (20 bytes of the core's own, then 56 bytes a voice, as pspautotests' sascore.h
+//lays it out: a VAG voice's samples, an ATRAC3 voice's context), set to value. Only in the SasCore __sceSasInit set up,
+//where the call names that one: it's the program's memory, which the library has only once it's set up (the other
+//calls take any core, as above).
+auto Kernel::sasVoiceWord(u32 core, u32 number, u32 value) -> void {
+  u32 slot = core + 20 + number * 56;
+  if(sas.initialized && core == sas.core && number < 32 && memory.reaches(slot, 4)) memory.write(4, slot, value);
 }
 
 //One sample of a voice's envelope: its phase's curve moves its height (kept within 0 and the top), and the phase
@@ -272,9 +282,10 @@ auto Kernel::sasGrain(Sas::Voice& voice, u32 from, s32* sums) -> void {
 }
 
 //(core, grain, voices, output mode, sample rate): the synthesizer set up afresh in a SasCore (64-byte aligned), every
-//voice as it starts: no samples, ended. Checked in this order, as pspautotests' audio/sascore found: the core (null
-//or unaligned: ADDRESS), the grain (64 to 2048 in 64s), the voices (1 to 32), the output mode (stereo 0 or
-//multichannel 1), the rate (44100 alone). Setting it up again is allowed.
+//voice as it starts: no samples, ended, its first word there 0, as a fresh SasCore's are (pspautotests' sascore.h; an
+//ATRAC3 voice's context goes there: __sceSasSetVoiceATRAC3). Checked in this order, as pspautotests' audio/sascore
+//found: the core (null or unaligned: ADDRESS), the grain (64 to 2048 in 64s), the voices (1 to 32), the output mode
+//(stereo 0 or multichannel 1), the rate (44100 alone). Setting it up again is allowed.
 auto Kernel::__sceSasInit() -> void {
   u32 core = arg(0), grain = arg(1), voices = arg(2), mode = arg(3), rate = arg(4);
   if(!core || core & 63) return result(SasErrorAddress);
@@ -288,6 +299,7 @@ auto Kernel::__sceSasInit() -> void {
   sas.grain = grain;
   sas.voiceCount = voices;
   sas.outputMode = mode;
+  for(u32 number = 0; number < 32; number++) sasVoiceWord(core, number, 0);
   result(0);
 }
 
@@ -459,12 +471,17 @@ auto Kernel::__sceSasSetSteepWave() -> void {
 }
 
 //(core, voice, ATRAC3 context): the voice plays an ATRAC3 stream fed to it (__sceSasConcatenateATRAC3), until it's
-//keyed off; unset, it has no samples.
+//keyed off; unset, it has no samples. The context's address goes in the voice's first word in the SasCore
+//(sasVoiceWord(): the one __sceSasInit set up, named by the call), where a PSP keeps it: Angus Hates Aliens' sound
+//code reads it back from there to stream the voice's data (through the context's curFileOff, fileDataEnd and
+//secondBuffer: atrac.cpp), and read nothing but zeros before. Unset, the word is 0 again, as it is when the core's
+//set up afresh.
 auto Kernel::__sceSasSetVoiceATRAC3() -> void {
   auto voice = sasVoice(arg(1));
   if(!voice) return;
   voice->source = Sas::Source::Atrac;
   voice->address = arg(2);
+  sasVoiceWord(arg(0), arg(1), arg(2));
   result(0);
 }
 
@@ -477,6 +494,7 @@ auto Kernel::__sceSasUnsetATRAC3() -> void {
   auto voice = sasVoice(arg(1));
   if(!voice) return;
   voice->source = Sas::Source::None;
+  sasVoiceWord(arg(0), arg(1), 0);
   result(0);
 }
 

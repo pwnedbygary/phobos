@@ -14,7 +14,11 @@
 //    System::startRenderer() has the GPU blend with its own units instead.
 //  - in fast mode, where the GPU transforms 3D vertices itself (mesh()), 3D triangles in perspective, smooth, half of
 //    them lit by a light, some textured: close, as the 2D triangles are, so a driver that takes transform.vert wrong
-//    fails here rather than in a game.
+//    fails here rather than in a game;
+//  - and there, where the GE's own 3D goes among the GPU's (screenMeshes: screenTriangle()), PRIMs of six corners
+//    (lit and not, one textured, one with its shine kept apart) and a triangle of a mesh cut at the near plane: close
+//    too, so a driver that takes transform.vert's placed vertices wrong fails here, and System checks again with them
+//    drawn apart (screenMeshesFailed), the GPU still transforming the rest.
 //It takes some milliseconds, most of them the GPU making its first pipelines (kept for the game).
 
 auto GPU::check(std::string& error) -> bool {
@@ -99,9 +103,9 @@ auto GPU::check(std::string& error) -> bool {
     }
     triangles.push_back(corners);
   }
-  bool transforms = fast && backend->transforms;
+  bool transforms = fast && backend->transforms, screens = transforms && screenMeshes;
   u64 meshes = statistics.meshes;
-  transformsFailed = false;
+  transformsFailed = false, screenMeshesFailed = false;
   std::vector<std::vector<Corner3>> solids;
   for(u32 n = 0; n < 24 && transforms; n++) {
     std::vector<Corner3> corners;
@@ -146,10 +150,11 @@ auto GPU::check(std::string& error) -> bool {
       if(n == triangles.size() / 2) m->ge.commands[GE::AlphaBlendEnable] = 1, m->ge.commands[GE::BlendMode] = 0x32;
       draw(*m, GE::Triangles, triangles[n]);
     }
-    //3D (fast mode): the camera looking down -z, w the distance, the 64x48 picture the screen's middle
+    //3D (fast mode): the camera looking down -z, w the distance (the near plane 1 away), the 64x48 picture the
+    //screen's middle
     auto& c = m->ge.commands;
-    if(transforms) {
-      into(*m, 0xc000, 3);
+    auto scene3d = [&](u32 buffer) {
+      into(*m, buffer, 3);
       c[GE::VertexType] = 0x1ff, c[GE::DepthClipEnable] = 1, c[GE::MaxZ] = 0xffff;
       for(u32 n = 0; n < 12; n++) m->ge.world[n] = m->ge.view[n] = f24(n % 4 == 0 ? 1 : 0);
       for(u32 n = 0; n < 16; n++) m->ge.projection[n] = 0;
@@ -163,6 +168,9 @@ auto GPU::check(std::string& error) -> bool {
       c[GE::LightEnable0] = 1, c[GE::LightType0] = 0;  //(directional: ambient and diffuse)
       c[GE::Light0X] = f24(0.3f), c[GE::Light0X + 1] = f24(0.2f), c[GE::Light0X + 2] = f24(1);
       c[GE::Light0Ambient] = 0x10'1010, c[GE::Light0Ambient + 1] = 0xff'ffff;
+    };
+    if(transforms) {
+      scene3d(0xc000);
       //(six triangles a PRIM, enough vertices for mesh() to take them: lit and unlit in turn, the last textured)
       static_assert(6 * 3 >= MeshLeast);
       for(u32 group = 0; group < solids.size() / 6; group++) {
@@ -176,6 +184,32 @@ auto GPU::check(std::string& error) -> bool {
         c[GE::TextureMappingEnable] = 0;
       }
       c[GE::LightingEnable] = 0;
+    }
+    //(fast mode's own 3D among the GPU's: two triangles a PRIM, below MeshLeast, lit and unlit in turn, the third
+    //textured, the fourth lit with its shine kept apart; then six triangles, one with a corner nearer than the near
+    //plane, which the GE cuts and draws among the rest)
+    if(screens) {
+      scene3d(0xa'0000);
+      static_assert(2 * 3 < MeshLeast);
+      for(u32 group = 0; group < 4; group++) {
+        std::vector<Corner3> corners;
+        for(u32 n = group * 2; n < group * 2 + 2; n++) {
+          corners.insert(corners.end(), solids[n].begin(), solids[n].end());
+        }
+        c[GE::LightingEnable] = group & 1;
+        if(group == 2) texture(*m);
+        if(group == 3) {
+          c[GE::LightMode] = 1, c[GE::LightType0] = 1, c[GE::Light0Ambient + 2] = 0xff'ffff;
+          c[GE::MaterialSpecular] = 0xff'ffff, c[GE::MaterialSpecularCoefficient] = f24(2);
+        }
+        draw3d(*m, corners);
+        c[GE::TextureMappingEnable] = 0;
+      }
+      c[GE::LightingEnable] = 0, c[GE::LightMode] = 0, c[GE::LightType0] = 0;
+      std::vector<Corner3> cut;
+      for(u32 n = 8; n < 14; n++) cut.insert(cut.end(), solids[n].begin(), solids[n].end());
+      cut[2].at[2] = -0.5f;
+      draw3d(*m, cut);
     }
     //the game-sized frame buffer, opaque and blended sprites in turn, the blended through the write mask
     into(*m, Large, 3);
@@ -232,6 +266,20 @@ auto GPU::check(std::string& error) -> bool {
       error = "its 3D triangles, transformed by the GPU, are " + std::to_string(far) +
               " pixels off the software renderer's";
       passed = false, transformsFailed = true;
+    }
+  }
+  if(passed && screens) {
+    u32 far = 0;
+    for(u32 n = 0; n < Width * Height; n++) {
+      for(u32 channel = 0; channel < 3; channel++) {
+        s32 d = s32(a[0xa'0000 + n * 4 + channel]) - s32(b[0xa'0000 + n * 4 + channel]);
+        if(d > 8 || d < -8) { far++; break; }
+      }
+    }
+    if(far > Width * Height / 50) {
+      error = "its 3D triangles transformed by the CPU among the GPU's are " + std::to_string(far) +
+              " pixels off the software renderer's";
+      passed = false, screenMeshesFailed = true;
     }
   }
   if(passed && reads) {

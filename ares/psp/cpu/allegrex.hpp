@@ -4,11 +4,19 @@
 #include <bit>
 #include <cfenv>
 #include <cmath>
+#include <cstring>
 #include <limits>
+#include <unordered_map>
 
 //<termios.h>, which nall includes for its terminal code, defines VMIN (a terminal setting); here it's the VFPU's
 //vmin instruction.
 #undef VMIN
+
+//On ARM64 the VFPU's matrix and dot products that compiled code calls run in NEON (recompiler-vfpu.cpp).
+#if defined(ARCHITECTURE_ARM64) && !defined(COMPILER_MICROSOFT)
+  #include <arm_neon.h>
+  #define ALLEGREX_NEON
+#endif
 
 //Sony Allegrex: the PSP's main CPU.
 //
@@ -58,6 +66,11 @@ struct Allegrex {
   //for them, as they do for pages holding compiled code. The PSP's memory map watches the pages of the textures the
   //GE keeps decoded (memory.hpp); the owner tells the recompiler of each page newly watched (recompiler.protect()).
   const u8* watched = nullptr;
+
+  //Pages, numbered as above, whose entries in the page table never change (nonzero bytes), as the owner promises:
+  //the PSP's main RAM and scratchpad, which nothing takes out or moves. A block goes on to a block in one of them
+  //without looking at its entry again (emitChainTo()); without this, it always looks.
+  const u8* steady = nullptr;
 
   //Why the CPU stopped a program. The numbers are the ones MIPS uses in its Cause register.
   enum class Exception : u32 {
@@ -452,8 +465,10 @@ struct Allegrex {
   auto VWBN(u8 vd, u8 vs, u32 size, u8 scale) -> void;
   auto VZERO(u8 vd, u32 size) -> void;
 
-  //recompiler-vfpu.cpp: the VFPU's common instructions with the prefixes at rest, which compiled code calls with
-  //its operands' registers worked out (four to a word, a byte each)
+  //recompiler-vfpu.cpp: the VFPU's instructions compiled code calls with their operands worked out as the block was
+  //compiled: the common ones with the prefixes at rest, their registers four to a word (a byte each); the
+  //lane-by-lane ones with any prefixes (vfpuEach(): each lane described in 16 bits); and the matrix products of
+  //matrices in place (on ARM64, in NEON)
   template<u32 Size, u32 Op> auto vfpuRestBinary(u32 vd, u32 vs, u32 vt) -> void;
   template<u32 Size> auto vfpuRestDot(u32 vd, u32 vs, u32 vt) -> void;
   template<u32 Size> auto vfpuRestScale(u32 vd, u32 vs, u32 vt) -> void;
@@ -463,7 +478,15 @@ struct Allegrex {
   template<u32 Size, bool Max> auto vfpuRestMinMax(u32 vd, u32 vs, u32 vt) -> void;
   template<u32 Size, bool Less> auto vfpuRestSet(u32 vd, u32 vs, u32 vt) -> void;
   template<u32 Size> auto vfpuRestHalfDot(u32 vd, u32 vs, u32 vt) -> void;
+  template<u32 Op> auto vfpuRestPack(u32 d, u32 s, u32 size) -> void;
+  template<u32 Size> auto vfpuRestConditionalMove(u32 d, u32 s, u32 which) -> void;
+  template<u32 Op> auto vfpuRestCross(u32 d, u32 s, u32 t) -> void;
+  template<u32 Size> auto vfpuRestRotate(u32 d, u32 s, u32 placement) -> void;
+  template<u32 Op> auto vfpuLane(u32 s, u32 t) const -> u32;
+  template<u32 Size, u32 Op> auto vfpuEach(u64 s, u64 t, u64 d) -> void;
   auto vfpuMatrix(u32 which, u32 registers, u32 size) -> void;
+  template<u32 Size, bool Transposed, bool Homogeneous> auto vfpuTransform(u32 matrix, u32 t, u32 d) -> void;
+  template<u32 Size, u32 Transposed> auto vfpuMultiply(u32 s, u32 t, u32 d) -> void;
   template<u32 Op> auto executeVFPU(u32 address, u32 instruction) -> u32;
 
   //exceptions.cpp
@@ -511,18 +534,65 @@ struct Allegrex {
     auto protect(u32 page) -> void;
     auto unwatched(u32 page) -> void;
     auto writable(u32 index) -> void;
+    auto holds(u32 index) const -> bool { return index < sections.size() && sections[index]; }  //compiled code there
     auto run() -> u32;
     auto block(u32 address) -> u8*;
     auto emit(u32 address, u8*& body) -> u8*;
+    auto emitEnd(u32 count, bool known, u32 target) -> void;
     auto emitChain(u32 count) -> void;
     auto emitChainTo(u32 count, u32 target) -> void;
     auto emitCounted(u32 count, std::vector<sljit_jump*>& leave) -> void;
+    //Direct links (emitChainTo()): a block's way on to a block it knows as it's compiled is a jump that goes to the
+    //code after it (the lookup) until that block is compiled, then straight to its body, and back to the lookup when
+    //that block's section goes. Each such jump is an exit: where it is in the code, where its lookup is, the guest
+    //address it goes to, and whether its own block's code is live (not once its section goes).
+    struct Exit {
+      u8* jump;
+      u8* lookup;
+      u32 target;
+      bool live;
+    };
+    std::vector<Exit> exits;
+    std::unordered_map<u32, std::vector<u32>> into;     //by section: the exits linked to its blocks
+    std::unordered_map<u32, std::vector<u32>> waiting;  //by guest address: the exits to a block not compiled yet
+    std::unordered_map<u32, std::vector<u32>> outOf;    //by section: its blocks' exits
+    std::vector<std::pair<u32, sljit_label*>> linking;  //the exits of the block being compiled: targets and places
+    auto emitLink(u32 target) -> void;
+    auto addExits(u32 index) -> void;
+    auto link(u32 exit, u8* body) -> void;
+    auto patch(u8* jump, u8* to) -> bool;
+    auto emitPC(u32 address, bool delaySlot) -> void;
     auto emitInterpreter(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
     auto emitFallback(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
+    //Code a native instruction rarely takes (an access off the fast path, an overflow, a division the host can't
+    //make, an FPU mode or result its native code leaves to the interpreter, the VFPU's prefixes not at rest), kept
+    //out of the block's straight line: emitted after the block's end, each from its jumps and back (emitCold()).
+    std::vector<std::function<void ()>> cold;
+    auto emitCold(const std::vector<sljit_jump*>& jumps, const std::function<void ()>& code) -> void;
+    auto emitColdFallback(const std::vector<sljit_jump*>& jumps, u32 address, u32 instruction, u32 count,
+                          bool delaySlot) -> void;
     auto isBranch(u32 instruction) const -> bool;
+    //Where the delay slot being compiled goes after it, when that's known as it's compiled (emitDelaySlot()): pc and
+    //pd aren't stored before such a delay slot, so its calls into the interpreter store them first (emitPC()).
+    struct Destination {
+      bool known = false;
+      u32 target = 0;
+    } destination;
 
-    //recompiler.cpp: the game's registers a block holds in host registers, saved registers S3 on (emit())
-    static constexpr u32 Held = SLJIT_NUMBER_OF_SAVED_REGISTERS - 3 < 7 ? SLJIT_NUMBER_OF_SAVED_REGISTERS - 3 : 7;
+    //recompiler.cpp: the game's registers a block holds in host registers, saved registers S3 on (emit()), and on
+    //ARM64, whose ten saved registers leave room, the run's count in the next one (Counted: left())
+    static constexpr bool Counted = Architecture::arm64;
+    static constexpr u32 Held = SLJIT_NUMBER_OF_SAVED_REGISTERS - 3 - Counted < 7 ? SLJIT_NUMBER_OF_SAVED_REGISTERS - 3 - Counted : 7;
+    //The run's count, where Counted: as compiled code runs, left() holds runLimit less instructionsRun, the
+    //instructions the run has left, which each block's end counts down. instructionsRun in memory stays as it was
+    //where the code began or last called the interpreter: it's brought up to date (storeCount()) before anything that
+    //reads it runs (a call into the interpreter, whose syscalls read it and may move it and runLimit on, after which
+    //left() is worked out again: loadCount()) and before the code leaves for run(). Otherwise each block's end counts
+    //in instructionsRun itself.
+    auto left() const -> sreg { return sreg(3 + Held); }
+    auto storeCount() -> void;
+    auto loadCount() -> void;
+    auto emitCount(u32 count, std::vector<sljit_jump*>& leave) -> void;
     struct Holding {
       s8 slot[32];       //the host register holding each game register's value, or -1
       s8 held[Held];     //the game register each host register holds the value of, or -1
@@ -532,6 +602,7 @@ struct Allegrex {
       u32 clock = 0;
     } holding;
     auto take() -> u32;
+    auto pinSources(u32 instruction) -> void;
     auto use(u32 index) -> op_base;
     auto def(u32 index) -> op_base;
     auto wrote() -> void;
@@ -546,13 +617,23 @@ struct Allegrex {
     auto emitSPECIAL3(u32 instruction) -> bool;
     auto emitMultiply(u32 instruction, bool isSigned, s32 accumulate) -> void;
     auto emitTrapping(u32 address, u32 instruction, u32 count, bool delaySlot, u32 rd, bool subtract) -> void;
-    auto emitBranch(u32 address, u32 instruction, u32 count) -> bool;
-    auto emitBranchOutcome(sljit_jump* taken, u32 address, u32 target, bool likely, u32 count) -> void;
-    auto emitJump(u32 target) -> void;
+    //How a branch goes (emitBranch()): to target, known as it's compiled (Jump); where a register said, pc and pd
+    //stored (Register); or to target if the taken jump is made, past the delay slot if not (Conditional; likely:
+    //skipping the delay slot then). None for a branch with no native code.
+    struct Branch {
+      enum Kind : u32 { None, Jump, Register, Conditional } kind = None;
+      u32 target = 0;
+      sljit_jump* taken = nullptr;
+      bool likely = false;
+    };
+    auto emitBranch(u32 address, u32 instruction) -> Branch;
+    auto emitDelaySlot(u32 address, const Branch& branch, u32 count) -> void;
     auto emitCoprocessorBranch(u32 address, u32 instruction, u32 count) -> void;
 
     //recompiler-fpu.cpp
     auto emitFPU(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
+    auto emitFlush(reg r, reg scratch) -> void;
+    auto emitFlushedInputs(u32 instruction) -> void;
     auto emitFPUArithmetic(u32 address, u32 instruction, u32 count, bool delaySlot, s32 op) -> void;
     auto emitFPUCompare(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
     auto emitCOP2(u32 instruction) -> bool;
@@ -560,9 +641,12 @@ struct Allegrex {
     //recompiler-vfpu.cpp
     auto emitVFPU(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
     auto emitVFPUCall(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
+    auto emitEach(u32 address, u32 instruction, u32 count, bool delaySlot, u32 op, u32 size) -> bool;
     auto emitPrefixesBusy() -> sljit_jump*;
     auto prefixesAfter(u32 instruction) -> void;
     auto emitMFVC(u32 instruction) -> void;
+    using Helper = void (Allegrex::*)(u32, u32, u32);
+    auto matrixProduct(u32 which, u8 vd, u8 vs, u8 vt, u32 size, u32& first, u32& second, u32& third) -> Helper;
     //What the block being compiled knows of the prefixes here: each one's value, where it's known
     //(recompiler-vfpu.cpp).
     struct Prefixes {
@@ -580,7 +664,8 @@ struct Allegrex {
     bool enabled = false;
     bool chains = true;  //blocks go on to the next by themselves (emitChain()); tests turn it off to compare
     //The block being compiled calls the interpreter somewhere (emitInterpreter()), which may halt the CPU. (Calls
-    //that halt it only by an exception, after which the block leaves, needn't say so: emitVFPUCall().)
+    //that halt it only by an exception, after which the block leaves, needn't say so: emitVFPUCall(), and a native
+    //instruction's way to the interpreter, emitColdFallback().)
     bool calls = false;
     //How many instructions the last block ran, not yet counted in instructionsRun: each block sets it as it leaves
     //for run() (0 when it counted them itself, going on to the next: emitChain()), and as it calls the interpreter
@@ -603,5 +688,10 @@ struct Allegrex {
     std::vector<u8*> writePages;
   } recompiler{*this};
 };
+
+inline auto Allegrex::instructionsBefore() const -> u64 {
+  if(recompiler.inBlock) return instructionsRun + recompiler.executed - 1;
+  return instructionsRun;
+}
 
 }

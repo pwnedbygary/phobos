@@ -1358,7 +1358,9 @@ static auto geThreads() -> void {
 //A load through VRAM's fourth copy (the depth buffer as the GE has it) of depths a batch still draws, and through its
 //second copy: the batch is waited for, as for a load through the first copy (only a hardware renderer's depth isn't
 //memory's to wait for: Memory::vramDrawnOver's depthLoad). The depths found are those drawing it all on one thread
-//writes, compiled loads and the interpreter's alike.
+//writes, compiled loads and the interpreter's alike. The drawing threads are held till the batch is seen still being
+//drawn (on a busy host they could draw it all first, and the loads would wait for nothing), then let go as the loads
+//come, or held through them, so that the loads must wait for the batch, drawing it themselves.
 static auto geDepthViewLoads() -> void {
   constexpr u32 Depth = 0x11'0000;  //(VRAM offset: 512 depths a row)
   auto build = [&](Memory& memory) {
@@ -1386,10 +1388,18 @@ static auto geDepthViewLoads() -> void {
     list.put(GE::Finish), list.put(GE::End);
   };
   u32 middle = Depth + (136 * 512 + 240) * 2, corner = Depth + (60 * 512 + 300) * 2;
-  auto loads = [&](u32 threads, bool recompile) {
+  auto loads = [&](u32 threads, bool recompile, bool heldThrough) {
     KernelMachine m;
     m.system.ge.setThreads(threads);
     m.system.ge.drawing.shared = 0;
+    auto hold = [&](bool held) {
+      {
+        std::lock_guard lock(m.system.ge.drawing.mutex);
+        m.system.ge.drawing.held = held;
+      }
+      m.system.ge.drawing.wake.notify_all();
+    };
+    hold(true);
     build(m.system.memory);
     m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
     if(threads > 1) {  //(a batch drawing the depths still being drawn: else the loads wait for nothing)
@@ -1399,18 +1409,22 @@ static auto geDepthViewLoads() -> void {
       }
       CHECK(drawing, true);
     }
+    if(!heldThrough) hold(false);
     u32 fourth = 0x0460'0000 + middle, second = 0x0420'0000 + Memory::vramSeen(1, Memory::vramOffset(3, corner));
     m.system.runProgram(0x0890'0000, {lui(t0, fourth >> 16), ori(t0, t0, fourth & 0xffff), lhu(t1, 0, t0),
                                       lui(t2, second >> 16), ori(t2, t2, second & 0xffff), lhu(t3, 0, t2),
                                       lui(t4, 0x0892), sw(t1, 0, t4), sw(t3, 4, t4)}, recompile);
+    hold(false);
     m.system.ge.settle();
     return std::array<u32, 2>{m.system.memory.read(4, 0x0892'0000), m.system.memory.read(4, 0x0892'0004)};
   };
-  auto one = loads(1, false);
+  auto one = loads(1, false, false);
   CHECK(one[0], 59000u);  //(the last sprite over each, its depth written as it was drawn)
   CHECK(one[1], 57000u);
   for(u32 threads : {2u, 4u}) {
-    for(bool recompile : {false, true}) CHECK(loads(threads, recompile) == one, true);
+    for(bool recompile : {false, true}) {
+      for(bool heldThrough : {false, true}) CHECK(loads(threads, recompile, heldThrough) == one, true);
+    }
   }
 }
 
@@ -2859,11 +2873,79 @@ static auto geVerticesDrawn() -> void {
   for(u32 threads : {1u, 2u, 4u, 8u}) CHECK(listed(threads), u32(GE::AmbientColor << 24 | 0x00'ff40));
 }
 
+//Vertices read in a run (readVertices() reading a part at a time over all of them, from the host's bytes) are those
+//read one at a time (GE::vertexRuns off), field for field and bit for bit: every vertex type but morph targets (which
+//are read one at a time), through mode and 3D, at random over random bytes (a quarter of the floats infinities or not
+//numbers), in a row and by indices of each size (the largest index's vertex last in RAM, then a byte past its end,
+//which leaves them one at a time), and in a row in VRAM, through its plain copy and the one that rearranges it. (The
+//runs counted are those readVertices() read so: GE::vertexRunsRead.)
+static auto geVertexRuns() -> void {
+  System s;
+  auto& ge = s.ge;
+  auto& memory = s.memory;
+  std::mt19937 random{20261013};
+  auto same = [](const std::vector<GE::Vertex>& a, const std::vector<GE::Vertex>& b) {
+    if(a.size() != b.size()) return false;
+    for(u32 n = 0; n < a.size(); n++) {
+      auto &p = a[n], &q = b[n];
+      auto bits = [](const auto& x, const auto& y) { return !std::memcmp(&x, &y, sizeof(x)); };
+      if(!bits(p.weights, q.weights) || !bits(p.u, q.u) || !bits(p.v, q.v) || p.color != q.color ||
+         !bits(p.normal, q.normal) || !bits(p.x, q.x) || !bits(p.y, q.y) || !bits(p.z, q.z) || !bits(p.clip, q.clip) ||
+         !bits(p.q, q.q) || !bits(p.fog, q.fog) || p.outside != q.outside || p.far != q.far || p.near != q.near ||
+         p.specular != q.specular) return false;
+    }
+    return true;
+  };
+  u32 differing = 0, runs = 0;
+  for(u32 round = 0; round < 3000; round++) {
+    u32 type = random() & 0x81'c7ff;  //(every field but the indices, set below, and morph targets)
+    u32 where = random() % 4, indexFormat = where == 1 ? 1 + random() % 3 : 0;
+    type |= indexFormat << 11;
+    ge.commands[GE::VertexType] = type;
+    ge.commands[GE::AmbientColor] = random() & 0xff'ffff, ge.commands[GE::AmbientAlpha] = random() & 0xff;
+    auto format = ge.vertexFormat();
+    if(!format.size) continue;
+    u32 count = 1 + random() % 40;
+    u32 address = where == 2 ? VRAM + 0x10'0000 : where == 3 ? VRAM + Memory::VRAMSize + 0x400 : Vertices;
+    u32 indices = Vertices + 0x8000, most = 0;
+    for(u32 n = 0; n < count && indexFormat; n++) {
+      u32 index = random() % 64;
+      if(indexFormat == 3) index |= random() << 16;  //(the GE takes the low 16 bits)
+      memory.write(indexFormat == 3 ? 4 : indexFormat, indices + n * (indexFormat == 3 ? 4 : indexFormat), index);
+      most = std::max(most, index & 0xffff);
+    }
+    u32 span = (indexFormat ? most + 1 : count) * format.size;
+    bool last = indexFormat && random() % 8 == 0;  //(its vertices end where RAM ends, or a byte past it)
+    if(last) address = Memory::RAMBase + memory.ram.size() - span + random() % 2;
+    for(u32 at = 0; at < span; at += 4) {
+      u32 word = random();
+      if(random() % 4 == 0) word |= 0x7f80'0000;
+      if(address + at - Memory::RAMBase + 4 <= memory.ram.size() || address < Memory::RAMBase) {
+        memory.write(4, address + at, word);
+      }
+    }
+    std::vector<GE::Vertex> read[2];
+    u64 before = ge.vertexRunsRead;
+    for(bool inRuns : {false, true}) {
+      ge.vertexRuns = inRuns;
+      ge.vertexAddress = address, ge.indexAddress = indices;
+      ge.readVertices(count, format);
+      read[inRuns] = ge.primitiveVertices;
+    }
+    runs += ge.vertexRunsRead - before;
+    if(!same(read[0], read[1]) && differing++ < 4) std::printf("  round %u (type %06x): not the same\n", round, type);
+  }
+  ge.vertexRuns = true;
+  CHECK(differing, 0u);
+  CHECK(runs > 1500, true);
+}
+
 //The 3D settings kept from one PRIM to the next (transformKept()), taken after a few of the GE's commands (any of the
 //256) and matrix elements are changed at random, round after round: field for field (floats bit for bit) the
 //Transform transformState() works out afresh. (Changes to the world matrix alone, most PRIMs' in a 3D game, are as
-//many as all the rest; a quarter of the values are infinities or not numbers as floats.)
-static auto sameTransform(const GE::Transform& a, const GE::Transform& b) -> bool {
+//many as all the rest; a quarter of the values are infinities or not numbers as floats.) Asked for a PRIM that doesn't
+//skin (a third of the rounds), all of it but the bones, which stay the last skinning PRIM's, then all again.
+static auto sameTransform(const GE::Transform& a, const GE::Transform& b, bool bones = true) -> bool {
   static_assert(sizeof(GE::Transform) == 1292);  //(a field added is compared here too)
   auto bits = [](const auto& x, const auto& y) { return !std::memcmp(&x, &y, sizeof(x)); };
   for(u32 n = 0; n < 4; n++) {
@@ -2875,7 +2957,7 @@ static auto sameTransform(const GE::Transform& a, const GE::Transform& b) -> boo
        !bits(p.halfway, q.halfway) || !bits(p.products, q.products)) return false;
   }
   return bits(a.world, b.world) && bits(a.view, b.view) && bits(a.projection, b.projection) &&
-         bits(a.textureMatrix, b.textureMatrix) && bits(a.bones, b.bones) && a.weights == b.weights &&
+         bits(a.textureMatrix, b.textureMatrix) && (!bones || bits(a.bones, b.bones)) && a.weights == b.weights &&
          bits(a.scale, b.scale) && bits(a.center, b.center) && bits(a.offsetX, b.offsetX) &&
          bits(a.offsetY, b.offsetY) && a.depthClamp == b.depthClamp && a.mapMode == b.mapMode &&
          a.mapSource == b.mapSource && bits(a.textureScale, b.textureScale) &&
@@ -2897,6 +2979,8 @@ static auto geTransformKept() -> void {
   u32* matrices[5] = {ge.bones, ge.world, ge.view, ge.projection, ge.textureMatrix};
   u32 sizes[5] = {96, 12, 12, 16, 12};
   u32 differing = 0;
+  float lastBones[96] = {};  //(the last skinning PRIM's bones, as an unskinned one keeps them)
+  bool skinnedOnce = false;
   for(u32 round = 0; round < 20000; round++) {
     for(u32 changes = 1 + random() % 3; changes; changes--) {
       u32 which = random() % 8, value = random() & 0xff'ffff;
@@ -2908,9 +2992,12 @@ static auto geTransformKept() -> void {
         matrices[matrix][random() % sizes[matrix]] = value;
       }
     }
-    if(!sameTransform(ge.transformKept(), ge.transformState()) && differing++ < 4) {
-      std::printf("  round %u: not the same\n", round);
-    }
+    bool skinned = random() % 3;
+    auto kept = ge.transformKept(skinned);
+    bool same = sameTransform(kept, ge.transformState(), skinned);
+    if(skinned) std::memcpy(lastBones, kept.bones, sizeof(lastBones)), skinnedOnce = true;
+    else if(skinnedOnce) same &= !std::memcmp(kept.bones, lastBones, sizeof(lastBones));
+    if(!same && differing++ < 4) std::printf("  round %u: not the same\n", round);
   }
   CHECK(differing, 0u);
 }
@@ -2932,6 +3019,7 @@ auto geTests() -> Tests {
     {"ge break and callbacks", geBreakCallbacks}, {"ge time", geTime}, {"ge time's interrupt", geTimeInterrupts},
     {"ge FINISH after a quiet function", geQuietFunctions},
     {"ge 3D settings kept from PRIM to PRIM", geTransformKept}, {"ge vertices and lists drawn first", geVerticesDrawn},
+    {"ge vertices read in runs as one at a time", geVertexRuns},
     {"event flags", eventFlags}, {"event flag waiting", eventFlagWaiting}, {"display picture", displayPicture},
     {"gu program", guProgram}, {"copy sample", copySample},
   };

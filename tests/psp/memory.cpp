@@ -58,12 +58,45 @@ static auto areas() -> void {
     }
   }
 
+  //main RAM's last bytes (memory.hpp's way to RAM): a half in its last two works; an HLE function's word whose last
+  //two bytes are past it reads 0 and goes nowhere, unmapped() hearing of each, as anywhere with nothing behind it
+  s.unmapped.clear();
+  s.memory.write(Allegrex::Half, 0x09ff'fffe, 0xabcd);
+  CHECK(s.memory.read(Allegrex::Half, 0x09ff'fffe), 0xabcd);
+  CHECK(s.memory.reaches(0x09ff'fffe, 2), true), CHECK(s.memory.reaches(0x09ff'fffe, 4), false);
+  CHECK(s.memory.pointer(0x09ff'fffe, 4) == nullptr, true);
+  CHECK(s.unmapped.size(), 0);
+  s.memory.write(Allegrex::Word, 0x89ff'fffe, 0x1234'5678);
+  CHECK(s.memory.read(Allegrex::Word, 0x09ff'fffe), 0);
+  CHECK(s.memory.read(Allegrex::Half, 0x09ff'fffe), 0xabcd);
+  CHECK(s.unmapped.size(), 2);
+  if(s.unmapped.size() == 2) {
+    CHECK(s.unmapped[0].first, 0x89ff'fffe), CHECK(s.unmapped[0].second, true);
+    CHECK(s.unmapped[1].first, 0x09ff'fffe), CHECK(s.unmapped[1].second, false);
+  }
+
+  //copies, fills and copies out (their pieces' main RAM, in one step) up to RAM's last byte, and none across it: a
+  //range one byte past it does nothing at all, nor reports anything
+  u8 four[4] = {1, 2, 3, 4}, back[4] = {};
+  s.unmapped.clear();
+  CHECK(s.memory.copyIn(0x09ff'fffc, four, 4), true);
+  CHECK(s.memory.copyOut(back, 0x09ff'fffc, 4), true);
+  CHECK(back[0] == 1 && back[3] == 4, true);
+  CHECK(s.memory.copyIn(0x09ff'fffd, four, 4), false), CHECK(s.memory.fill(0x09ff'fffd, 0xee, 4), false);
+  CHECK(s.memory.copyOut(back, 0x09ff'fffd, 4), false);
+  CHECK(s.memory.read(Allegrex::Word, 0x09ff'fffc), 0x0403'0201);
+  CHECK(s.memory.fill(0x09ff'fffe, 0xee, 2), true);
+  CHECK(s.memory.read(Allegrex::Word, 0x09ff'fffc), 0xeeee'0201);
+  CHECK(s.unmapped.size(), 0);
+
   //later models' 64 MiB
   System big(64_MiB);
   CHECK(big.memory.ram.size(), 64_MiB);
   big.memory.write(Allegrex::Word, 0x0bff'fffc, 7);
   CHECK(big.memory.read(Allegrex::Word, 0x0bff'fffc), 7);
   CHECK(big.unmapped.size(), 0);
+  CHECK(big.memory.copyIn(0x0bff'fffd, four, 4), false), CHECK(big.memory.copyIn(0x0bff'fffc, four, 4), true);
+  CHECK(big.memory.read(Allegrex::Word, 0x0bff'fffc), 0x0403'0201);
   big.memory.read(Allegrex::Word, 0x0c00'0000);
   CHECK(big.unmapped.size(), 1);
 }
@@ -157,10 +190,17 @@ static auto bulk() -> void {
   CHECK(s.memory.copyIn(0x047f'fff0, many, 32), false);  //past the fourth copy's end
 }
 
-//The page table: each area's pages point at its bytes (VRAM's at its first copy only), the rest at nothing; and
-//power() keeps the buffers (and so the table) while the sizes stay the same.
+//The page table: each area's pages point at its bytes (VRAM's at its first copy only), the rest at nothing; the
+//scratchpad's and main RAM's pages steady (their entries never change), VRAM's not (the GE's workers take them out);
+//and power() keeps the buffers (and so the table) while the sizes stay the same.
 static auto pageTable() -> void {
   System s;
+  for(u32 address : {0x0001'0000u, 0x0001'3000u, 0x0800'0000u, 0x0880'0000u, 0x09ff'f000u}) {
+    CHECK(s.steadyTable[address >> 12], 1);
+  }
+  for(u32 address : {0x0001'4000u, 0x0400'0000u, 0x041f'f000u, 0x0420'0000u, 0x0a00'0000u, 0x1c00'0000u}) {
+    CHECK(s.steadyTable[address >> 12], 0);
+  }
   CHECK(s.table.size(), 512_MiB / 4_KiB);
   CHECK(s.table[0x0001'0000 >> 12] == s.memory.scratchpad.data(), true);
   CHECK(s.table[0x0001'3000 >> 12] == s.memory.scratchpad.data() + 0x3000, true);

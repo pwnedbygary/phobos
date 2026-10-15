@@ -635,6 +635,12 @@ auto states(const fs::path& programs) -> void {
     u32 number = psp.kernel.newFile();
     psp.kernel.files[number] = std::move(open);
     fs::remove(openPath);
+    //...and one it emptied as it opened it (PSP_O_TRUNC), nothing written yet: its host file keeps its bytes until
+    //it's closed (io.cpp's openFile())
+    auto emptiedPath = scratch / "stick" / "EMPTIED.BIN";
+    std::ofstream(emptiedPath, std::ios::binary) << "0123456789";
+    u32 emptied = psp.kernel.openFile("ms0:/EMPTIED.BIN", 0x0602);  //write, create, truncate
+    CHECK(emptied < 0x8000'0000 && psp.kernel.files[emptied].truncated, "a file emptied as it's opened is held");
     auto before = root->serialize(true);
     std::vector<u8> bytes(state.data(), state.data() + state.size());
     bytes[0] ^= 0xff;
@@ -654,8 +660,9 @@ auto states(const fs::path& programs) -> void {
     //the display's count of lines adjusted (part 32); version 14, before the disc drive kept whether it was
     //deactivated (part 37). Layouts 15 and 16 load with the message-dialog abort counters defaulted (part 42).
     //Each older layout is refused by its header, before anything is touched (even the compiled code, which any load
-    //throws away).
-    for(u8 version : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}) {
+    //throws away); so are 29 and 30, skipped (other branches' layouts: a branch landing one renumbers it past 32,
+    //and takes it out of this list), and 33, past this one. 27, 28 and 31 (parts 87, 88 and 82) load.
+    for(u8 version : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 29, 30, 33}) {
       bytes.assign(state.data(), state.data() + state.size());
       bytes[4] = version, bytes[5] = bytes[6] = bytes[7] = 0;
       serializer old{bytes.data(), u32(bytes.size())};
@@ -679,6 +686,11 @@ auto states(const fs::path& programs) -> void {
       kept->second.stream->read(text.data(), text.size());
     }
     CHECK(text == "still here", "the file whose host file is gone is still open");
+    CHECK(fs::file_size(emptiedPath) == 10, "the file emptied keeps its bytes through every refused load");
+    //a state loaded closes the files the program had, as closing them would: the one emptied cut then
+    serializer good{state.data(), state.size()};
+    CHECK(root->unserialize(good) && !psp.kernel.files.count(emptied), "a good state loads, the files closed");
+    CHECK(fs::exists(emptiedPath) && fs::file_size(emptiedPath) == 0, "the file emptied is cut as it's closed");
     root->unload();
 
     //another program's state (pspsdk's blend sample, which runs on, as cube does): refused before anything is touched

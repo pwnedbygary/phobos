@@ -4,6 +4,13 @@
 #include "../ge/ge.hpp"
 #include "pgd.hpp"
 
+//shortening a host file held open (io.cpp's cut())
+#if defined(_WIN32)
+  #include <io.h>
+#else
+  #include <unistd.h>
+#endif
+
 //FFmpeg's decoders, in builds that have them (codec.cpp)
 #if defined(ARES_ENABLE_FFMPEG)
 extern "C" {
@@ -62,6 +69,7 @@ namespace ares::PlayStationPortable {
 #include "md5.cpp"
 #include "rtc.cpp"
 #include "modules.cpp"
+#include "spins.cpp"
 #include "serialization.cpp"
 
 Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
@@ -280,6 +288,10 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
         {"sceRtcTickAddYears", &Kernel::sceRtcTickAddYears}}) {
     add("sceRtc", name, handler);
   }
+  add("sceRtc",            "sceRtcFormatRFC2822",           &Kernel::sceRtcFormatRFC2822);
+  add("sceRtc",            "sceRtcFormatRFC2822LocalTime",  &Kernel::sceRtcFormatRFC2822LocalTime);
+  add("sceRtc",            "sceRtcFormatRFC3339",           &Kernel::sceRtcFormatRFC3339);
+  add("sceRtc",            "sceRtcFormatRFC3339LocalTime",  &Kernel::sceRtcFormatRFC3339LocalTime);
   add("sceOpenPSID",       "sceOpenPSIDGetOpenPSID",        &Kernel::sceOpenPSIDGetOpenPSID);
   add("SysMemUserForUser", "sceKernelPrintf",               &Kernel::sceKernelPrintf);
   //the kernel's own debug printf, which kernel modules print with (pspautotests' modules/loadexec/simple)
@@ -331,6 +343,11 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceAudio",          "sceAudioSRCChReserve",          &Kernel::sceAudioSRCChReserve);
   add("sceAudio",          "sceAudioSRCOutputBlocking",     &Kernel::sceAudioSRCOutputBlocking);
   add("sceAudio",          "sceAudioSRCChRelease",          &Kernel::sceAudioSRCChRelease);
+  add("sceVaudio",         "sceVaudioChReserve",            &Kernel::sceVaudioChReserve);
+  add("sceVaudio",         "sceVaudioChRelease",            &Kernel::sceVaudioChRelease);
+  add("sceVaudio",         "sceVaudioOutputBlocking",       &Kernel::sceVaudioOutputBlocking);
+  add("sceVaudio",         "sceVaudioSetEffectType",        &Kernel::sceVaudioSetEffectType);
+  add("sceVaudio",         "sceVaudioSetAlcMode",           &Kernel::sceVaudioSetAlcMode);
   add("sceSasCore",        "__sceSasInit",                  &Kernel::__sceSasInit);
   add("sceSasCore",        "__sceSasCore",                  &Kernel::__sceSasCore);
   add("sceSasCore",        "__sceSasCoreWithMix",           &Kernel::__sceSasCoreWithMix);
@@ -859,6 +876,18 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
       if(!std::strcmp(function.name, name)) function.quiet = true;
     }
   }
+  //and those a spin's turn may call, worked out without being made (spins.cpp)
+  for(auto& function : functions) {
+    for(auto [name, spin] : std::initializer_list<std::pair<const char*, decltype(Function::spin)>>{
+          {"sceKernelGetThreadId", &Kernel::spinGetThreadId},
+          {"sceKernelReferThreadStatus", &Kernel::spinReferThreadStatus},
+          {"sceKernelRotateThreadReadyQueue", &Kernel::spinRotateThreadReadyQueue},
+          {"sceKernelSignalSema", &Kernel::spinSignalSema},
+          {"sceMpegRingbufferAvailableSize", &Kernel::spinMpegRingbufferAvailableSize},
+          {"sceDisplayGetVcount", &Kernel::spinGetVcount}}) {
+      if(!std::strcmp(function.name, name)) function.spin = spin;
+    }
+  }
   cpu.syscallHook = [this](u32 code) { return syscall(code); };
   ge.log = [this](const std::string& text) { note("GE: " + text); };
 }
@@ -880,6 +909,8 @@ auto Kernel::power() -> void {
   started = {};
   stuck = false;
   cycles = 0;
+  spin = {};
+  spun = 0;
   nextUID = 0x100;
   imports.clear();
   threads.clear();
@@ -903,7 +934,8 @@ auto Kernel::power() -> void {
   sas = {};
   for(auto& atrac : atracs) atrac = {};
   atracPlusIDs = atracClassicIDs = 2;
-  atracContexts = 0;
+  atracContexts = AtracContextMemory;
+  for(u32 id = 0; id < 6; id++) atracContext(id);
   for(auto& mp3 : mp3s) mp3 = {};
   mp3Terminated = false;
   dispatchSuspended = false;
@@ -923,6 +955,7 @@ auto Kernel::power() -> void {
   utilityModules.clear();
   imposeLanguage = imposeButton = 1;
   geTranslation = 0x400;
+  for(auto& [file, open] : files) closeFile(open);
   files.clear();
   filesOpened = 0;
   workingDirectory = "ms0:/";
@@ -1114,7 +1147,9 @@ auto Kernel::run(u64 budget) -> u64 {
     }
     stuck = false;  //something runs: should nothing run again later, that's worth a note again
     counted = 0;
+    going = true;
     u64 ran = cpu.run(std::min(end - cycles, std::max<u64>(1, untilNextEvent())));
+    going = false;
     cycles += ran - counted;
     counted = ran;  //(what cpu.instructionsRun stays at till the next run: a call made outside one adds nothing)
     if((current || interrupting) && cpu.scc.halted) {  //it stopped by itself: a halt, or an exception nobody handled
@@ -1149,19 +1184,26 @@ auto Kernel::importCode(const std::string& library, u32 nid) -> u32 {
 //ends by whatever the function made due. A quiet function (Function::quiet), or one calm this time (calm), followed
 //by no FINISH taken nor call started, made nothing due sooner: the go already stops by the next thing due, which
 //keeps its time, so it's left as it is (untilNextEvent() looks through every thread, timer and file, after each of
-//the hundreds of thousands of calls a frame of games polling one of these in a loop).
+//the hundreds of thousands of calls a frame of games polling one of these in a loop); and the call may be part of a
+//loop of such calls that can be skipped to just before the go's end (spinTurn(): spins.cpp).
 auto Kernel::syscall(u32 code) -> bool {
   u64 before = cpu.instructionsBefore();
   if(before > counted) cycles += before - counted;
   counted = before;
   bool quiet = false;
   bool handled = dispatch(code, quiet);
-  if(!quiet) runUntilNextEvent();
+  if(!quiet) {
+    runUntilNextEvent();
+    spin.site = 0;
+  } else if(spins) {
+    spinTurn();
+  }
   return handled;
 }
 
 //The function a syscall's code stands for. quiet: it was a quiet function, after which nothing else changed.
 auto Kernel::dispatch(u32 code, bool& quiet) -> bool {
+  if(code >= FirstImportCode) return dispatchImport(code, quiet);
   if(code == ThreadReturnCode) {
     threadReturned();
     return true;
@@ -1190,7 +1232,14 @@ auto Kernel::dispatch(u32 code, bool& quiet) -> bool {
     extendReturned();
     return true;
   }
-  if(code < FirstImportCode || code - FirstImportCode >= imports.size()) {
+  note("a syscall (code " + std::to_string(code) + ") that no import stands for");
+  return false;
+}
+
+//A library function's code (FirstImportCode on). The FINISH and the call after the function are looked for only where
+//there may be one: geInterrupt() and startCall() return at once otherwise.
+auto Kernel::dispatchImport(u32 code, bool& quiet) -> bool {
+  if(code - FirstImportCode >= imports.size()) {
     note("a syscall (code " + std::to_string(code) + ") that no import stands for");
     return false;
   }
@@ -1205,11 +1254,14 @@ auto Kernel::dispatch(u32 code, bool& quiet) -> bool {
     result(ErrorNotYetLinked);
     return true;
   }
-  bool looks = import.function->quiet;  //(read first: a function loading a module adds imports, moving them)
+  const Function* function = import.function;  //(read first: a function loading a module adds imports, moving them)
+  bool looks = function->quiet;
   calm = false;
-  (this->*import.function->handler)();
-  bool taken = geInterrupt();  //(a display list's FINISH, met by the GE in it)
-  bool started = startCall();  //what the function set off (a display list finishing) may call into the program now
+  if(ioTrace && !std::strcmp(function->library, "IoFileMgrForUser")) traceIo(*function);
+  else (this->*function->handler)();
+  bool taken = geFinishDue && geInterrupt();  //(a display list's FINISH, met by the GE in it)
+  //what the function set off (a display list finishing) may call into the program now
+  bool started = !interrupting && interruptsEnabled && (vblankPending || !calls.empty()) && startCall();
   quiet = (looks || calm) && !taken && !started;
   return true;
 }

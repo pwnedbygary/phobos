@@ -44,6 +44,12 @@ static auto fixed(float position) -> s32 {
   if(!(position >= -4096 && position <= 4096)) position = position > 0 ? 4096 : -4096;
   return s32(position * 16);
 }
+//fixed() of each lane.
+static alwaysinline auto fixedFour(GE::f32x4 position) -> GE::s32x4 {
+  GE::f32x4 held = pickFloats(position > 0, GE::f32x4{} + 4096, GE::f32x4{} - 4096);
+  GE::f32x4 kept = pickFloats((position >= -4096) & (position <= 4096), position, held);
+  return __builtin_convertvector(kept * 16, GE::s32x4);
+}
 
 static auto floorDivide(s32 value, s32 by) -> s32 { return value >= 0 ? value / by : -((-value + by - 1) / by); }
 static auto floorDivide64(s64 value, s64 by) -> s64 { return value >= 0 ? value / by : -((-value + by - 1) / by); }
@@ -143,13 +149,27 @@ static auto keepsPixels(const GE::PixelState& p) -> bool {
 
 //A triangle's pixels inside the scissor rectangle and drawing region, its corners in sixteenths, for the GE's time
 //(owe()): its area there. (It draws the pixels whose middles are inside it: as many, but for those along its edges.)
-static auto pixelsInside(const s64 (&x)[3], const s64 (&y)[3], const GE::PixelState& p) -> u64 {
-  f64 left = p.left * 16.0, right = (p.right + 1) * 16.0, top = p.top * 16.0, bottom = (p.bottom + 1) * 16.0;
+//One reaching past the rectangle is cut to it (pixelsCut()).
+static auto pixelsCut(const s64 (&x)[3], const s64 (&y)[3], f64 left, f64 right, f64 top, f64 bottom) -> u64;
+struct Sixteenths { f64 left, right, top, bottom; };  //(the rectangle's edges, in sixteenths)
+static auto sixteenthsOf(const GE::PixelState& p) -> Sixteenths {
+  return {p.left * 16.0, (p.right + 1) * 16.0, p.top * 16.0, (p.bottom + 1) * 16.0};
+}
+static alwaysinline auto pixelsInside(const s64 (&x)[3], const s64 (&y)[3], const Sixteenths& r) -> u64 {
+  auto [left, right, top, bottom] = r;
   if(left >= right || top >= bottom) return 0;
   s64 twice = (x[1] - x[0]) * (y[2] - y[0]) - (y[1] - y[0]) * (x[2] - x[0]);
   if(std::min({x[0], x[1], x[2]}) >= left && std::max({x[0], x[1], x[2]}) <= right &&
      std::min({y[0], y[1], y[2]}) >= top && std::max({y[0], y[1], y[2]}) <= bottom) return u64(std::abs(twice)) / 512;
-  //cut at each side of the rectangle in turn (each cut adds a corner at most: seven), then what's left's area
+  return pixelsCut(x, y, left, right, top, bottom);
+}
+static alwaysinline auto pixelsInside(const s64 (&x)[3], const s64 (&y)[3], const GE::PixelState& p) -> u64 {
+  return pixelsInside(x, y, sixteenthsOf(p));
+}
+
+//pixelsInside()'s triangle reaching past the rectangle (in sixteenths): cut at each side of it in turn (each cut adds
+//a corner at most: seven), then what's left's area.
+static auto pixelsCut(const s64 (&x)[3], const s64 (&y)[3], f64 left, f64 right, f64 top, f64 bottom) -> u64 {
   f64 px[8], py[8], qx[8], qy[8];
   u32 count = 3;
   for(u32 k = 0; k < 3; k++) px[k] = f64(x[k]), py[k] = f64(y[k]);
@@ -224,15 +244,50 @@ auto GE::readVertices(u32 count, const VertexFormat& format) -> void {
                    inside(Memory::VRAMBase, Memory::VRAMWindow)));
   if(together) drawnFirst(vertexAddress, count * format.size);
   Memory::KnownDrawn known{together};
-  for(u32 n = 0; n < count; n++) {
-    //(indices and vertices in VRAM that primitives waiting to be drawn draw over: they're drawn first, threads.cpp)
-    if(format.indexFormat) drawnFirst(indexAddress + n * indexBytes, indexBytes);
-    u32 index = format.indexFormat ? readIndex(n, format) : n;
-    u32 address = vertexAddress + index * format.size;
-    if(!together) drawnFirst(address, format.size);
-    vertices.push_back(readVertex(address, format));
-    if(!format.colorFormat) vertices.back().color = ambient;
-    if(format.through) vertices.back().u = keep15(vertices.back().u), vertices.back().v = keep15(vertices.back().v);
+  //(without morph targets, read part by part over all of them where their bytes are all in the host's memory: in a
+  //row, after the drawing above; or by indices, indices and vertices all in RAM, where drawnFirst() has nothing to
+  //ask and memory.read() takes the same bytes)
+  const u8* bytes = nullptr;
+  if(vertexRuns && format.morphs == 1 && count && format.size) {
+    auto& offsets = vertexOffsets;
+    offsets.resize(count);
+    auto inRAM = [&](u32 address, u64 size) -> const u8* {
+      u32 physical = address & 0x1fff'ffff;
+      if(physical < Memory::RAMBase || physical - Memory::RAMBase + size > memory.ram.size()) return nullptr;
+      return &memory.ram[physical - Memory::RAMBase];
+    };
+    if(!format.indexFormat) {
+      if(together) bytes = memory.pointer(vertexAddress, count * format.size);
+      for(u32 n = 0; n < count && bytes; n++) offsets[n] = n * format.size;
+    } else if(const u8* indices = inRAM(indexAddress, u64(count) * indexBytes)) {
+      u32 most = 0;
+      for(u32 n = 0; n < count; n++) {
+        u32 index;
+        if(indexBytes == 1) index = indices[n];
+        else if(indexBytes == 2) { u16 half; std::memcpy(&half, indices + n * 2, 2); index = half; }
+        else { std::memcpy(&index, indices + n * 4, 4); index &= 0xffff; }
+        offsets[n] = index * format.size, most = std::max(most, index);
+      }
+      bytes = inRAM(vertexAddress, (u64(most) + 1) * format.size);
+    }
+  }
+  if(bytes) {
+    vertices.resize(count);
+    readVerticesFrom(bytes, vertexOffsets.data(), count, format, vertices.data());
+    vertexRunsRead++;
+  } else {
+    for(u32 n = 0; n < count; n++) {
+      //(indices and vertices in VRAM that primitives waiting to be drawn draw over: they're drawn first, threads.cpp)
+      if(format.indexFormat) drawnFirst(indexAddress + n * indexBytes, indexBytes);
+      u32 index = format.indexFormat ? readIndex(n, format) : n;
+      u32 address = vertexAddress + index * format.size;
+      if(!together) drawnFirst(address, format.size);
+      vertices.push_back(readVertex(address, format));
+    }
+  }
+  for(auto& vertex : vertices) {
+    if(!format.colorFormat) vertex.color = ambient;
+    if(format.through) vertex.u = keep15(vertex.u), vertex.v = keep15(vertex.v);
   }
   if(format.indexFormat) indexAddress += count * indexBytes;
   else vertexAddress += count * format.size;
@@ -417,7 +472,7 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   }
   //(3D's settings: the last PRIM's kept, worked out again where they've changed, with this PRIM's own set; 2D uses
   //none of them)
-  Transform& t = format.through ? keptTransform.transform : transformKept();
+  Transform& t = format.through ? keptTransform.transform : transformKept(format.weightFormat != 0);
   s32 facing = (commands[CullFaceEnable] & 1) && !pixel.clear ? (commands[Cull] & 1 ? 1 : -1) : 0;
   if(!format.through) {
     t.weights = format.weightFormat ? format.weights : 0;
@@ -508,9 +563,28 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     }
     transformAll(vertices, t);
   }
-  auto drawTriangle = [&](const Vertex& a, const Vertex& b, const Vertex& c, s32 facing) {
-    if(format.through) triangle(drawn, a, b, c, facing, false);
-    else clipTriangle(drawn, t, a, b, c, facing);
+  //(3D triangles: each vertex's place in sixteenths, as triangle() works it out, and what clipTriangle() asks of it,
+  //as bits, once a vertex, not at each of the triangles it's a corner of: off the screen; z / w past the far end, or
+  //the near one (outOfSight()); w below 0; nearer than the near plane, z + w not at least 0. Those reaching past it are
+  //cut by clipTriangle() as ever.)
+  enum : u32 { Outside = 1, Far = 2, Near = 4, Behind = 8, Cut = 16 };
+  if(!format.through && (kind == Triangles || kind == TriangleStrip || kind == TriangleFan)) {
+    placed.resize(count);
+    for(u32 n = 0; n < count; n++) {
+      auto& v = vertices[n];
+      placed[n] = {fixed(v.x), fixed(v.y), (v.outside ? Outside : 0u) | (v.far ? Far : 0u) | (v.near ? Near : 0u) |
+                   (v.clip[3] < 0 ? Behind : 0u) | (v.clip[2] + v.clip[3] >= 0 ? 0u : Cut)};
+    }
+  }
+  auto drawTriangle = [&](u32 a, u32 b, u32 c, s32 facing) {
+    auto &va = vertices[a], &vb = vertices[b], &vc = vertices[c];
+    if(format.through) return triangle(drawn, va, vb, vc, facing, false);
+    auto &pa = placed[a], &pb = placed[b], &pc = placed[c];
+    u32 any = pa.bits | pb.bits | pc.bits, all = pa.bits & pb.bits & pc.bits;
+    if((any & Outside) || (t.depthClamp ? all & (Far | Near) : any & (Far | Near))) return;
+    if(all & Behind) return;
+    if(any & Cut) return clipTriangle(drawn, t, va, vb, vc, facing);
+    placedTriangle(drawn, va, vb, vc, facing, true, {pa.x, pb.x, pc.x}, {pa.y, pb.y, pc.y});
   };
   touched = {};
   switch(kind) {
@@ -533,18 +607,16 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     }
     break;
   case Triangles:
-    for(u32 n = 0; n + 2 < count; n += 3) drawTriangle(vertices[n], vertices[n + 1], vertices[n + 2], facing);
+    for(u32 n = 0; n + 2 < count; n += 3) drawTriangle(n, n + 1, n + 2, facing);
     break;
   case TriangleStrip:
     for(u32 first = 0; first < count; first += strip) {
       u32 end = std::min(first + strip, count);
-      for(u32 n = first; n + 2 < end; n++) {
-        drawTriangle(vertices[n], vertices[n + 1], vertices[n + 2], (n - first) & 1 ? -facing : facing);
-      }
+      for(u32 n = first; n + 2 < end; n++) drawTriangle(n, n + 1, n + 2, (n - first) & 1 ? -facing : facing);
     }
     break;
   case TriangleFan:
-    for(u32 n = 1; n + 1 < count; n++) drawTriangle(vertices[0], vertices[n], vertices[n + 1], facing);
+    for(u32 n = 1; n + 1 < count; n++) drawTriangle(0, n, n + 1, facing);
     break;
   case Sprites:
     for(u32 n = 0; n + 1 < count; n += 2) {
@@ -575,7 +647,11 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
 //screen, not in clip space as the GE does. The rest are handed over whole, untransformed,
 //in runs between those, so that they're drawn in order. (The corners' clip positions come through the world, view
 //and projection matrices made one, once a PRIM: clipPosition()'s but for a float's rounding, which can only move a
-//triangle lying on an edge of these rules across it.)
+//triangle lying on an edge of these rules across it.) What the rules ask of each corner is kept in its bits, so that a
+//strip's triangles, three to a corner, look at those. Corners are put on the screen four at a time, each lane's
+//arithmetic the same as one corner's alone (projectedFour()), unskinned ones placed four at a time too; a skinned
+//one's bones are summed a corner at a time, as transformAll() sums them: the compiler may sum them across the bones
+//there, each product rounded before it's added, which lanes holding a corner each can't do the same way.
 auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip, s32 facing,
                        std::vector<Vertex>& vertices) -> void {
   u32 count = vertices.size();
@@ -589,43 +665,77 @@ auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip
                             viewWorld[c * 3 + 2] * t.projection[8 + r] + (c == 3 ? t.projection[12 + r] : 0.0f);
     }
   }
-  for(u32 n = 0; n < count; n++) {
-    auto& v = vertices[n];
-    float model[3] = {v.x, v.y, v.z};
-    if(t.weights) {
+  //a corner's bits: off the screen; z / w past the far end, or the near one (outOfSight()); w below 0; w not above 0;
+  //nearer than the near plane (z + w below 0)
+  enum : u32 { Outside = 1, Far = 2, Near = 4, Behind = 8, NotAhead = 16, Nearer = 32 };
+  //(four corners' clip positions, from the n-th on, onto the screen: their places and bits)
+  auto placeFour = [&](u32 n, f32x4 cx, f32x4 cy, f32x4 cz, f32x4 cw) {
+    auto screen = projectedFour(t, cx, cy, cz, cw);
+    s32x4 across = fixedFour(screen.x), down = fixedFour(screen.y);
+    s32x4 laneBits = (screen.outside & s32(Outside)) | (screen.far & s32(Far)) | (screen.near & s32(Near)) |
+                     ((cw < 0) & s32(Behind)) | (~(cw > 0) & s32(NotAhead)) | ((cz + cw < 0) & s32(Nearer));
+    for(u32 k = 0; k < 4 && n + k < count; k++) placed[n + k] = {across[k], down[k], u32(laneBits[k])};
+  };
+  for(u32 first = 0; first < count && t.weights; first += 64) {
+    u32 run = std::min(count - first, 64u);
+    float clip[64][4];
+    for(u32 n = 0; n < run; n++) {
+      auto& v = vertices[first + n];
+      float model[3] = {v.x, v.y, v.z};
       float position[3] = {};
       for(u32 bone = 0; bone < t.weights; bone++) {
         float moved[3];
         times43(t.bones + bone * 12, model, moved);
         for(u32 k = 0; k < 3; k++) position[k] += moved[k] * v.weights[bone];
       }
-      for(u32 k = 0; k < 3; k++) model[k] = position[k];
+      times44(clipping, position, clip[n]);
     }
-    times44(clipping, model, placed[n].clip);
-    project(placed[n], t, false);
+    for(u32 n = 0; n < run; n += 4) {
+      auto lane = [&](u32 k, u32 part) { return clip[std::min(n + k, run - 1)][part]; };
+      auto part = [&](u32 p) { return f32x4{lane(0, p), lane(1, p), lane(2, p), lane(3, p)}; };
+      placeFour(first + n, part(0), part(1), part(2), part(3));
+    }
+  }
+  for(u32 n = 0; n < count && !t.weights; n += 4) {
+    const Vertex* v[4];
+    for(u32 k = 0; k < 4; k++) v[k] = &vertices[std::min(n + k, count - 1)];
+    f32x4 x = {v[0]->x, v[1]->x, v[2]->x, v[3]->x};
+    f32x4 y = {v[0]->y, v[1]->y, v[2]->y, v[3]->y};
+    f32x4 z = {v[0]->z, v[1]->z, v[2]->z, v[3]->z};
+    //(times44()'s, with clipping)
+    f32x4 cx = x * clipping[0] + y * clipping[4] + z * clipping[8] + clipping[12];
+    f32x4 cy = x * clipping[1] + y * clipping[5] + z * clipping[9] + clipping[13];
+    f32x4 cz = x * clipping[2] + y * clipping[6] + z * clipping[10] + clipping[14];
+    f32x4 cw = x * clipping[3] + y * clipping[7] + z * clipping[11] + clipping[15];
+    placeFour(n, cx, cy, cz, cw);
   }
   bool again = false;
+  if(handing.size() < 3 * count) handing.resize(3 * count);
+  u32* into = handing.data();
+  u32 filled = 0;
   auto hand = [&] {
-    if(handed.empty()) return;
+    if(!filled) return;
+    handed.assign(into, into + filled);
     renderer->mesh(*this, t, vertices, handed, again);
-    handed.clear(), again = true;
+    filled = 0, again = true;
   };
-  auto nearer = [](const Vertex& v) { return v.clip[2] + v.clip[3]; };  //below zero: nearer than the near plane
+  Sixteenths inside = sixteenthsOf(look.pixel);
   auto consider = [&](u32 a, u32 b, u32 c, s32 facing) {
-    const Vertex &pa = placed[a], &pb = placed[b], &pc = placed[c];
-    if(outOfSight(t.depthClamp, {&pa, &pb, &pc})) return;
-    if(pa.clip[3] < 0 && pb.clip[3] < 0 && pc.clip[3] < 0) return;
-    if(nearer(pa) < 0 || nearer(pb) < 0 || nearer(pc) < 0 || !(pa.clip[3] > 0 && pb.clip[3] > 0 && pc.clip[3] > 0)) {
+    const MeshCorner &pa = placed[a], &pb = placed[b], &pc = placed[c];
+    u32 any = pa.bits | pb.bits | pc.bits, all = pa.bits & pb.bits & pc.bits;
+    if((any & Outside) || (t.depthClamp ? all & (Far | Near) : any & (Far | Near))) return;  //(outOfSight())
+    if(all & Behind) return;
+    if(any & (Nearer | NotAhead)) {
       hand();
       Vertex corners[3] = {vertices[a], vertices[b], vertices[c]};  //(the vertices kept as they came, for the runs)
       for(auto& corner : corners) transform(corner, t);
       return clipTriangle(look, t, corners[0], corners[1], corners[2], facing);
     }
-    s64 x0 = fixed(pa.x), y0 = fixed(pa.y);
-    s64 area = (fixed(pb.x) - x0) * (fixed(pc.y) - y0) - (fixed(pb.y) - y0) * (fixed(pc.x) - x0);
+    s64 x0 = pa.x, y0 = pa.y;
+    s64 area = (pb.x - x0) * (pc.y - y0) - (pb.y - y0) * (pc.x - x0);
     if(area == 0 || (facing && (area > 0) != (facing > 0))) return;
-    owe(pixelsInside({x0, fixed(pb.x), fixed(pc.x)}, {y0, fixed(pb.y), fixed(pc.y)}, look.pixel));
-    handed.insert(handed.end(), {c, a, b});
+    owe(pixelsInside({x0, pb.x, pc.x}, {y0, pb.y, pc.y}, inside));
+    into[filled] = c, into[filled + 1] = a, into[filled + 2] = b, filled += 3;
   };
   if(kind == Triangles) {
     for(u32 n = 0; n + 2 < count; n += 3) consider(n, n + 1, n + 2, facing);
@@ -642,8 +752,8 @@ auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip
 
 //A job set up: drawn, and the bytes of VRAM it may write noted (touched: its frame buffer's rows, and its depth
 //buffer's, by the 16 KiB the GE rearranges each in, where it tests depth), for primitive() to report.
-auto GE::submit(Job& job) -> void {
-  if(job.firstX > job.lastX || job.firstY > job.lastY) return;
+auto GE::submit(Job& job) -> bool {
+  if(job.firstX > job.lastX || job.firstY > job.lastY) return false;
   job.fours = fourFriendly(job);
   auto& p = job.look->pixel;
   auto note = [&](u32 which, u32 from, u32 to, bool depth) {  //VRAM offsets, before wrapping at its end
@@ -662,9 +772,10 @@ auto GE::submit(Job& job) -> void {
     note(1, p.depthBuffer + (job.firstY * p.depthStride + job.firstX) * 2,
          p.depthBuffer + (job.lastY * p.depthStride + job.lastX) * 2 + 1, true);
   }
-  if(skipping) return;
+  if(skipping) return false;
   if(drawing.recording) record(job);
   else rasterize(job, job.firstY, job.lastY);
+  return true;
 }
 
 //The fog at a vertex, 0-255, from its 0-1: rounded down, 1 or more giving 255. Measured (docs/psp-core.md,
@@ -1017,7 +1128,8 @@ auto GE::readsApart(const Look& look, const Transform& t, const std::vector<Vert
     s64 x[3] = {fixed(a.x), fixed(b.x), fixed(c.x)}, y[3] = {fixed(a.y), fixed(b.y), fixed(c.y)};
     s64 area = (x[1] - x[0]) * (y[2] - y[0]) - (y[1] - y[0]) * (x[2] - x[0]);  //(as triangle())
     if(area == 0 || (facing && (area > 0) != (facing > 0))) return;
-    Job job = triangleJob(look, a, b, c, x, y, area, true);
+    Job job{};
+    triangleJob(job, look, a, b, c, x, y, area, true);
     if(job.firstX <= job.lastX && job.firstY <= job.lastY) jobs.push_back(job);
   };
   u32 count = vertices.size();
@@ -1122,26 +1234,38 @@ auto GE::spriteJob(const Look& look, const Vertex& from, const Vertex& to, bool 
 //only counterclockwise. perspective: 3D, its texture coordinates blended as the perspective has them.
 auto GE::triangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing,
                   bool perspective) -> void {
-  s64 x[3] = {fixed(a.x), fixed(b.x), fixed(c.x)}, y[3] = {fixed(a.y), fixed(b.y), fixed(c.y)};
+  placedTriangle(look, a, b, c, facing, perspective, {fixed(a.x), fixed(b.x), fixed(c.x)},
+                 {fixed(a.y), fixed(b.y), fixed(c.y)});
+}
+
+//triangle() with its corners' places in sixteenths (x, y) worked out already.
+auto GE::placedTriangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing,
+                        bool perspective, const s64 (&x)[3], const s64 (&y)[3]) -> void {
   s64 area = (x[1] - x[0]) * (y[2] - y[0]) - (y[1] - y[0]) * (x[2] - x[0]);  //above 0: clockwise
   if(area == 0) return;
   if(facing && (area > 0) != (facing > 0)) return;
-  owe(pixelsInside({x[0], x[1], x[2]}, {y[0], y[1], y[2]}, look.pixel));
-  if(hardware) return renderer->triangle(a, b, c);
-  Job job = triangleJob(look, a, b, c, x, y, area, perspective);
+  owe(pixelsInside(x, y, look.pixel));
+  if(hardware) return renderer->triangleAt(a, b, c, x, y);
+  if(drawing.recording && !skipping) {  //(set up where the batch keeps it, not copied there: a triangle's is 470 bytes)
+    auto& jobs = drawing.batch->jobs;
+    triangleJob(jobs.emplace_back(), look, a, b, c, x, y, area, perspective);
+    if(!submit(jobs.back())) jobs.pop_back();
+    return;
+  }
+  Job job{};
+  triangleJob(job, look, a, b, c, x, y, area, perspective);
   submit(job);
 }
 
-//The job of a triangle triangle() draws, set up: its corners (sixteenths) and area (not 0) as triangle() works them
-//out.
-auto GE::triangleJob(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, const s64 (&x)[3],
-                     const s64 (&y)[3], s64 area, bool perspective) const -> Job {
+//The job of a triangle triangle() draws, set up in job (Job{}, all 0, as it comes): its corners (sixteenths) and area
+//(not 0) as triangle() works them out.
+auto GE::triangleJob(Job& job, const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, const s64 (&x)[3],
+                     const s64 (&y)[3], s64 area, bool perspective) const -> void {
   auto& pixel = look.pixel;
   struct Corner { s64 x, y; const Vertex* vertex; };
   Corner p[3] = {{x[0], y[0], &a}, {x[1], y[1], &b}, {x[2], y[2], &c}};
   if(area < 0) std::swap(p[1], p[2]), area = -area;  //the same corners, turned the way the edges are worked out for
   //(which pixels on its edges it draws: triangleRows(), raster.cpp)
-  Job job{};
   job.kind = Job::Kind::Triangle;
   job.look = &look;
   auto& r = job.triangle;
@@ -1220,7 +1344,6 @@ auto GE::triangleJob(const Look& look, const Vertex& a, const Vertex& b, const V
     r.uStart = u.start, r.uAcross = u.across, r.uDown = u.down;
     r.vStart = v.start, r.vAcross = v.across, r.vDown = v.down;
   }
-  return job;
 }
 
 auto GE::point(const Look& look, const Vertex& at) -> void {
@@ -1405,7 +1528,7 @@ auto GE::boundingBox(u32 count) -> bool {
   auto pixel = pixelState();
   s64 left = (pixel.left - 1) * 16, right = (pixel.right + 1) * 16;
   s64 top = (pixel.top - 1) * 16, bottom = (pixel.bottom + 1) * 16;
-  Transform& t = format.through ? keptTransform.transform : transformKept();
+  Transform& t = format.through ? keptTransform.transform : transformKept(format.weightFormat != 0);
   if(!format.through) t.weights = format.weightFormat ? format.weights : 0;
   //(on the screen in sixteenths, held to it: something not a number at its left or top edge)
   auto screen = [](float position) -> s64 {

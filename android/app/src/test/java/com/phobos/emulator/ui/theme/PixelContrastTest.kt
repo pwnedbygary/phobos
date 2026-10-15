@@ -1,20 +1,24 @@
 package com.phobos.emulator.ui.theme
 
 import androidx.compose.ui.graphics.toArgb
+import com.phobos.emulator.data.PixelBackdropScene
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * WCAG checks for pixel art effects, on the composited 8-bit colors the screen shows, for every
  * [styleVariants] palette. Text drawn straight on the pixel backdrop sits on the pixel plate and is
- * checked over every color a rendered scene contains; pixel panels and the dock are opaque.
+ * checked over every color the rendered scenes contain; pixel panels and the dock are opaque.
  */
 class PixelContrastTest {
     @Test
     fun backdropTextReachesAaOnThePixelPlate() {
         val failures = styleVariants.flatMap { v ->
             val s = v.scheme
-            val scene = PixelScene.render(60, 110, pixelSceneColors(s, v.isDark)).toSet()
+            val scene = PixelBackdropScene.entries.flatMapTo(HashSet()) { backdrop ->
+                val art = PixelArt.of(backdrop, 60, 110, s, v.isDark)
+                listOf(90_000L, 200_000L, 300_000L).flatMap { time -> IntArray(art.cols * art.rows).also { art.compose(time, it) }.asIterable() }
+            }
             val text = listOf("onBackground" to s.onBackground, "onSurfaceVariant" to s.onSurfaceVariant, "primary" to s.primary)
             scene.flatMap { backdrop ->
                 val plate = blend(s.background.toArgb(), backdrop, paintAlpha(PIXEL_PLATE_ALPHA))

@@ -36,9 +36,24 @@
 //    --fonts DIR                the PSP's system fonts (the .pgf files of a PSP's flash0), for the game's text
 //    --trace-savedata           each savedata request and its answer, a line with its frame: the mode, the game's
 //                                and the save's names, the data file's, the sizes and the result
+//    --trace-io                 each file request (sceIo*) and its answer, a line with its frame: the PSP's time and
+//                                the thread, the descriptor with its path and position, the sizes, buffers and a hash
+//                                of the bytes moved, and each asynchronous request as it's done
+//    --report FILE              the run as JSON ("phobos-psp-runner 1"; tools/psp-runner/README.md): the runner's
+//                                build, the game, what was asked and what ran (the renderer, its device and
+//                                resolution, the engine, the GE's threads, the clock), and what came of it
+//    --start-time SECONDS       the PSP's clock starts there (seconds since 1970, up to 4294967295), not at the
+//                                host's time, so runs see the same dates (the time zone is the host's TZ), and there
+//                                again if the game starts itself again; a loaded state keeps its own clock
+//    --screen-stops-at F        from frame F the runner takes no more pictures from the screen, as a screen that has
+//                                stopped presenting would give none (to test the runner's own capture timeout)
 //
 //The frames its PNGs name are the frames the runner ran: after a frame's run, the runner waits for the screen's
-//own thread to present a new picture (with a timeout), then writes it as a PNG named by the frame run.
+//own thread to present a new picture (with a timeout), then writes it as a PNG named by the frame run. A PNG whose
+//wait ran out (no picture presented since the last PNG) shows the last one: the runner says so on standard error and
+//counts it. The screen's thread drops pictures it doesn't take in time, so on a busy host a PNG can be older than its
+//name: the report's captures give, for each, the frame that was running when its picture arrived. Captures (PNGs and
+//the save state) are in the frame loop's time; the summary gives the speed without them too where there were any.
 
 #include <psp/psp.hpp>
 
@@ -48,6 +63,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -65,6 +81,11 @@ using namespace ares;
 using ares::PlayStationPortable::Disc;
 
 namespace ares { Platform* platform = nullptr; }  //the front end this build hands the core (main, below)
+
+//The source the runner was built from (build.sh names its commit), for the report.
+#if !defined(PHOBOS_RUNNER_SOURCE)
+  #define PHOBOS_RUNNER_SOURCE "unknown"
+#endif
 
 //The file's bytes, read a piece at a time from its host file, as the system reads a disc image's (system.cpp's
 //startDisc()): zeros past the end, and straight from its mapping when the file is mapped into memory.
@@ -270,6 +291,17 @@ struct Press {
 
 static const char* stickAxes[] = {"L-StickX:", "L-StickY:", "R-StickX:", "R-StickY:"};
 
+//A number as options and presses write it: decimal digits only (no sign, space or anything after them). False for
+//anything else; a value past 32 bits comes back as 0x1'0000'0000.
+auto readDigits(const std::string& text, u64& value) -> bool {
+  value = 0;
+  for(char c : text) {
+    if(c < '0' || c > '9') return false;
+    value = std::min<u64>(value * 10 + (c - '0'), 0x1'0000'0000);
+  }
+  return !text.empty();
+}
+
 auto parsePress(const std::string& item, std::string& problem) -> Press {
   Press press;
   auto colon = item.find(':');
@@ -277,23 +309,25 @@ auto parsePress(const std::string& item, std::string& problem) -> Press {
     problem = "a press is \"frame:control\", like 120:Start: " + item;
     return press;
   }
-  try {
-    press.frame = std::stoul(item.substr(0, colon));
-  } catch(...) {
-    problem = "a press's frame is a number: " + item;
+  u64 frame = 0;
+  if(!readDigits(item.substr(0, colon), frame) || frame > 0xffff'ffff) {
+    problem = "a press's frame is a number up to 4294967295: " + item;
     return press;
   }
+  press.frame = u32(frame);
   auto control = item.substr(colon + 1);
   auto axis = std::find_if(std::begin(stickAxes), std::end(stickAxes),
                            [&](const char* prefix) { return control.rfind(prefix, 0) == 0; });
   if(axis != std::end(stickAxes)) {
     press.name = std::string(*axis, 7) + " " + (*axis)[7];  //("L-Stick X")
-    try {
-      press.value = std::stol(control.substr(9));
-    } catch(...) {
+    auto value = control.substr(9);
+    bool negative = !value.empty() && value[0] == '-';  //(an optional minus sign, then digits only, as every number)
+    u64 magnitude = 0;
+    if(!readDigits(value.substr(negative), magnitude)) {
       problem = "a stick's value is a number: " + item;
       return press;
     }
+    press.value = negative ? -s64(magnitude) : s64(magnitude);
   } else if(!control.empty() && control.back() == '!') {
     press.name = control.substr(0, control.size() - 1);
     press.value = 0;
@@ -312,8 +346,11 @@ struct RunnerPlatform : ares::Platform {
   std::vector<u32> frame;                 //the last frame presented, as ARGB
   u32 frameWidth = 0, frameHeight = 0;
   u32 presented = 0;                      //how many frames the screen has presented
+  u32 arrivedIn = 0;                      //the frame the runner was running when the last one arrived
+  std::atomic<u32> runFrame{0};           //the frame the runner is running
   std::vector<s32> sound;                 //the sound the stream hands on, left and right, as 16-bit samples
   bool running = false;                   //a frame presented as the screen quits, on its way out, is no frame
+  bool screenStopped = false;             //--screen-stops-at reached: pictures presented from now on aren't taken
 
   u32 pngEvery = 0;                       //every K-th presented frame, as a PNG
   std::set<u32> pngAt;                    //or these presented frames, as PNGs
@@ -328,13 +365,14 @@ struct RunnerPlatform : ares::Platform {
   //asks for one, after waiting for the screen to present a new picture.
   auto video(Node::Video::Screen, const u32* data, u32 pitch, u32 width, u32 height) -> void override {
     std::lock_guard lock{mutex};
-    if(!running) return;
+    if(!running || screenStopped) return;
     frame.assign(width * height, 0);
     for(u32 y : range(height)) {
       for(u32 x : range(width)) frame[y * width + x] = data[y * (pitch / 4) + x];
     }
     frameWidth = width, frameHeight = height;
     ++presented;
+    arrivedIn = runFrame;
   }
 
   //The controls, as the system reads them each frame: the buttons by name, the stick by its node's name and value.
@@ -355,14 +393,52 @@ struct RunnerPlatform : ares::Platform {
   }
 };
 
-//A number from an option's value: stoul's exceptions (a non-number, say) end the run with a message.
+//A string as JSON writes it: in quotes, with quotes, backslashes and control characters escaped, and each byte that
+//isn't part of a UTF-8 character (a game's Shift-JIS text, a file name in Latin-1) written as the character of its
+//value (\u00XX), so the report stays UTF-8.
+auto jsonText(const std::string& text) -> std::string {
+  std::string out = "\"";
+  auto escape = [&](u8 c) {
+    char escaped[8];
+    std::snprintf(escaped, sizeof(escaped), "\\u%04x", c);
+    out += escaped;
+  };
+  for(size_t at = 0; at < text.size();) {
+    u8 c = text[at];
+    if(c == '"' || c == '\\') { out += '\\', out += char(c), at++; continue; }
+    if(c < 0x20) { escape(c), at++; continue; }
+    if(c < 0x80) { out += char(c), at++; continue; }
+    //a UTF-8 character's length by its first byte, and the range of its second (no overlong forms, no surrogates,
+    //nothing past U+10FFFF); the rest are 0x80 to 0xbf
+    u32 length = 0;
+    u8 low = 0x80, high = 0xbf;
+    if(c >= 0xc2 && c <= 0xdf) length = 2;
+    else if(c >= 0xe0 && c <= 0xef) length = 3, low = c == 0xe0 ? 0xa0 : 0x80, high = c == 0xed ? 0x9f : 0xbf;
+    else if(c >= 0xf0 && c <= 0xf4) length = 4, low = c == 0xf0 ? 0x90 : 0x80, high = c == 0xf4 ? 0x8f : 0xbf;
+    bool valid = length && at + length <= text.size();
+    for(u32 n = 1; valid && n < length; n++) {
+      u8 next = text[at + n];
+      valid = n == 1 ? next >= low && next <= high : next >= 0x80 && next <= 0xbf;
+    }
+    if(valid) out.append(text, at, length), at += length;
+    else escape(c), at++;
+  }
+  return out + "\"";
+}
+
+//A number from an option's value: anything but digits (readDigits()), or a number past 32 bits, ends the run with a
+//message.
 auto parseUint(const std::string& text, const std::string& option) -> u32 {
-  try {
-    return std::stoul(text);
-  } catch(...) {
+  u64 value = 0;
+  if(!readDigits(text, value)) {
     std::fprintf(stderr, "%s needs a number: %s\n", option.c_str(), text.c_str());
     std::exit(1);
   }
+  if(value > 0xffff'ffff) {
+    std::fprintf(stderr, "%s is at most 4294967295: %s\n", option.c_str(), text.c_str());
+    std::exit(1);
+  }
+  return u32(value);
 }
 
 auto main(int argc, char** argv) -> int {
@@ -380,7 +456,10 @@ auto main(int argc, char** argv) -> int {
   std::vector<std::string> pressItems;
   bool lateFrames = false;
   std::string pipelineCache;
-  bool interpreter = false, traceSavedata = false;
+  fs::path reportFile;
+  u32 startTime = 0, screenStopsAt = 0;
+  bool startTimeGiven = false, framesGiven = false;
+  bool interpreter = false, traceSavedata = false, traceIo = false;
   for(int i = 1; i < argc; i++) {
     auto option = std::string{argv[i]};
     auto next = [&]() -> std::string {
@@ -390,7 +469,7 @@ auto main(int argc, char** argv) -> int {
       }
       return argv[i];
     };
-    if(option == "--frames") frames = parseUint(next(), option);
+    if(option == "--frames") frames = parseUint(next(), option), framesGiven = true;
     else if(option == "--press") {  //each of a list's items a press of its own
       auto list = next();
       u32 start = 0;
@@ -424,6 +503,10 @@ auto main(int argc, char** argv) -> int {
     else if(option == "--memory-stick") memoryStick = next();
     else if(option == "--fonts") fonts = next();
     else if(option == "--trace-savedata") traceSavedata = true;
+    else if(option == "--trace-io") traceIo = true;
+    else if(option == "--report") reportFile = next();
+    else if(option == "--start-time") startTime = parseUint(next(), option), startTimeGiven = true;
+    else if(option == "--screen-stops-at") screenStopsAt = parseUint(next(), option);
     else if(option[0] == '-' && option[1] == '-') {
       std::fprintf(stderr, "no such option: %s\n", option.c_str());
       return 1;
@@ -495,17 +578,24 @@ auto main(int argc, char** argv) -> int {
   if(title.empty()) title = game.stem().string();
   std::printf("game: %s\n", game.string().c_str());
 
+  //The folders the run writes to, made if they aren't there: the PNGs' folder, and the WAV's, the save-state file's
+  //and the report's. One that can't be made ends the run, before it has a scratch to leave behind.
+  for(auto& folder : {outDir, wav.parent_path(), saveStateFile.parent_path(), reportFile.parent_path()}) {
+    if(folder.empty()) continue;
+    std::error_code error;
+    fs::create_directories(folder, error);
+    if(error) {
+      std::fprintf(stderr, "the folder can't be made: %s (%s)\n", folder.string().c_str(), error.message().c_str());
+      return 1;
+    }
+  }
+
   //The run's scratch, a folder of the runner's own (the memory stick's default): gone with the run.
   auto scratch = fs::temp_directory_path() / ("phobos-psp-runner-" + std::to_string(::getpid()));
   fs::remove_all(scratch);
   fs::create_directories(scratch);
-  if(memoryStick.empty()) memoryStick = (scratch / "memory-stick").string();
-
-  //The folders the run writes to, made if they aren't there: the PNGs' folder, and the WAV's and the
-  //save-state file's.
-  if(!outDir.empty()) fs::create_directories(outDir);
-  if(!wav.empty()) fs::create_directories(wav.parent_path());
-  if(!saveStateFile.empty()) fs::create_directories(saveStateFile.parent_path());
+  bool memoryStickGiven = !memoryStick.empty();
+  if(!memoryStickGiven) memoryStick = (scratch / "memory-stick").string();
 
   //The front end and the options, as the system takes them.
   RunnerPlatform host;
@@ -536,6 +626,9 @@ auto main(int argc, char** argv) -> int {
   drive->allocate();
   drive->connect();
   root->power();
+  //The PSP's clock from the time asked for, not the host's, which the kernel took as it powered on (Kernel::power(),
+  //before anything ran)
+  if(startTimeGiven) psp.kernel.startTime = u64(startTime) * 1'000'000;
 
   //The sound's stream, at the PSP's own rate, so the samples the runner writes are at it (the stream's default is
   //the host's 48 kHz).
@@ -570,6 +663,11 @@ auto main(int argc, char** argv) -> int {
       std::printf("[%06u] savedata: %s\n", frameNumber.load(), text.c_str());
     };
   }
+  if(traceIo) {
+    psp.kernel.ioTrace = [&](const std::string& text) {
+      std::printf("[%06u] io: %s\n", frameNumber.load(), text.c_str());
+    };
+  }
 
   //A state loaded at once: the game booted, then the machine as it was when it was saved.
   if(!loadState.empty()) {
@@ -582,6 +680,10 @@ auto main(int argc, char** argv) -> int {
                    lastNote.empty() ? "" : ": ", lastNote.c_str());  //(the last note while loading it, if any)
       return 1;
     }
+    if(startTimeGiven) {
+      std::fprintf(stderr, "--start-time: the loaded state keeps its own clock (the time asked for is taken if the "
+                           "game starts itself again)\n");
+    }
   }
 
   //The frames: the controls in, the game run, the picture and the sound out. A PNG is written after the run
@@ -590,20 +692,51 @@ auto main(int argc, char** argv) -> int {
   host.running = true;
   auto start = std::chrono::steady_clock::now();
   u32 lastPresented = 0;
+  std::chrono::steady_clock::duration captured{};  //the frame loop's time on captures: the save state and PNGs
+  u32 staleCaptures = 0;                            //PNGs whose wait for a new picture ran out
+  u64 clockStart = psp.kernel.startTime;            //the clock the run began with (a loaded state's own)
+  struct Capture { u32 frame, arrivedIn; f64 waited; bool fresh, picture; };
+  std::vector<Capture> captures;                    //each PNG asked for, for the report
+  //The clock asked for, held: a game that starts itself again (sceKernelLoadExec, or largeRestart with all of RAM)
+  //powers the kernel on again, which takes the host's clock again (Kernel::power()). The kernel's run returns as the
+  //new program is started, before any of it runs, so the clock is set again at the next frame's top (and after the
+  //last frame).
+  u32 clockRestarts = 0;
+  u64 clockSeen = psp.kernel.startTime, cyclesSeen = psp.kernel.cycles;
+  auto holdClock = [&](u32 frame) {
+    if(!startTimeGiven) return;
+    if(psp.kernel.startTime != clockSeen || psp.kernel.cycles < cyclesSeen) {
+      psp.kernel.startTime = u64(startTime) * 1'000'000;
+      clockRestarts++;
+      std::fprintf(stderr, "frame %u: %s the host's clock; the PSP's clock is the time asked for again\n", frame,
+                   psp.kernel.exited ? "a program the game asked for couldn't start, which ended the game and took"
+                                     : "the game started itself again, which took");
+    }
+    clockSeen = psp.kernel.startTime, cyclesSeen = psp.kernel.cycles;
+  };
   for(u32 frame = 1; frame <= frames; frame++) {
     frameNumber = frame;
+    if(screenStopsAt && frame == screenStopsAt) {
+      std::lock_guard lock{host.mutex};
+      host.screenStopped = true;
+    }
+    holdClock(frame - 1);
+    host.runFrame = frame;
     for(auto& press : presses) {  //the presses this frame: held from their frame on, released by a "!"
       if(press.frame != frame) continue;
       host.held[press.name] = press.value;
     }
+    auto stateStarted = std::chrono::steady_clock::now();
     if(saveStateAt == frame) {
       auto state = root->serialize(true);
       std::ofstream file(saveStateFile, std::ios::binary);
       file.write((const char*)state.data(), state.size());
     }
+    if(saveStateAt == frame) captured += std::chrono::steady_clock::now() - stateStarted;
     root->run();
     if(host.pngEvery ? frame % host.pngEvery == 0 : host.pngAt.count(frame)) {
-      auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+      auto pngStarted = std::chrono::steady_clock::now();
+      auto deadline = pngStarted + std::chrono::seconds(2);
       while(true) {
         u32 presented;
         {
@@ -613,18 +746,34 @@ auto main(int argc, char** argv) -> int {
         if(presented > lastPresented || std::chrono::steady_clock::now() > deadline) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
       }
-      lastPresented = host.presented;
+      auto waited = std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - pngStarted).count();
       std::vector<u32> frameData;
-      u32 w, h;
+      u32 w, h, arrivedIn;
+      bool fresh;  //(read with the picture it describes, under the same lock)
       {
         std::lock_guard lock{host.mutex};
+        fresh = host.presented > lastPresented;
+        lastPresented = host.presented;
         frameData = host.frame;
         w = host.frameWidth;
         h = host.frameHeight;
+        arrivedIn = host.arrivedIn;
       }
-      writePng(host.outDir / ("frame-" + numberText(frame) + ".png"), frameData, w, h);
+      if(!fresh) staleCaptures++;
+      if(!w || !h) {
+        std::fprintf(stderr, "frame %u: the screen presented no picture in 2 s, so it has no PNG\n", frame);
+      } else {
+        if(!fresh) {
+          std::fprintf(stderr, "frame %u: the screen presented no new picture in 2 s; its PNG shows the last one\n",
+                       frame);
+        }
+        writePng(host.outDir / ("frame-" + numberText(frame) + ".png"), frameData, w, h);
+      }
+      captures.push_back({frame, arrivedIn, waited, fresh, w && h});
+      captured += std::chrono::steady_clock::now() - pngStarted;
     }
   }
+  holdClock(frames);
   auto end = std::chrono::steady_clock::now();  //the speed is the frame loop's, not the screen's catch-up
   host.running = false;
   //The GPU renderer's counts, before unloading lets it go; none if it didn't start (the software renderer drew).
@@ -632,6 +781,11 @@ auto main(int argc, char** argv) -> int {
   if(psp.gpu) gpu = psp.gpu->statistics;
   u64 pipelines = psp.gpu ? psp.gpu->backend->pipelines : 0, making = psp.gpu ? psp.gpu->backend->pipelineMaking : 0;
   bool ended = psp.kernel.exited;  //(unloading powers the kernel off, which forgets it)
+  //what ran, for the report, before unloading lets the renderer go
+  std::string ranRenderer = psp.gpu ? (psp.gpu->fast ? "Vulkan (fast)" : "Vulkan") : "Software";
+  std::string ranDevice = psp.gpu ? psp.gpu->backend->name() : "";
+  bool gpuLost = psp.gpu && !psp.gpu->ready();  //(it stopped answering: the software renderer drew from then on)
+  u32 ranResolution = psp.gpu ? psp.gpu->resolution() : 1, ranThreads = psp.ge.drawing.threads;
   root->unload();
 
   //The sound, as a WAV.
@@ -649,12 +803,19 @@ auto main(int argc, char** argv) -> int {
 
   fs::remove_all(scratch);
 
-  //The summary: the frames run, the program's end, the speed, the missing functions, and the last note.
+  //The summary: the frames run, the program's end, the speed, the missing functions, and the last note. Scripts find
+  //its lines by their first words (or any line with "frames per second" in it), so a new line has words of its own.
   auto elapsed = std::chrono::duration<double>(end - start).count();
   std::printf("--\n");
   std::printf("frames run: %u\n", frames);
   std::printf("program: %s\n", ended ? "ended" : "still running");
   std::printf("frames per second: %.2f\n", frames / elapsed);
+  auto capturedSeconds = std::chrono::duration<double>(captured).count();
+  if(capturedSeconds > 0) {
+    std::printf("capture seconds: %.3f (%.2f frames a second without them)\n", capturedSeconds,
+                frames / std::max(elapsed - capturedSeconds, 1e-9));
+  }
+  if(staleCaptures) std::printf("stale captures: %u\n", staleCaptures);
   if(gpu) {
     std::printf("gpu: %llu draws, %llu primitives, %llu 3D PRIMs transformed by the GPU, %llu submits, %llu "
                 "finishes, %llu uploads, %llu read-backs, %llu textures, %llu copies, %llu frames shown from the "
@@ -663,8 +824,10 @@ auto main(int argc, char** argv) -> int {
                 (unsigned long long)gpu->submits, (unsigned long long)gpu->finishes,
                 (unsigned long long)gpu->uploads, (unsigned long long)gpu->readbacks,
                 (unsigned long long)gpu->textures, (unsigned long long)gpu->copies,
-                (unsigned long long)gpu->pictures, gpu->waiting / 1e6 / frames, (unsigned long long)gpu->moves);
+                (unsigned long long)gpu->pictures, frames ? gpu->waiting / 1e6 / frames : 0.0,
+                (unsigned long long)gpu->moves);
     std::printf("gpu pipelines: %llu made, %.1f ms making them\n", (unsigned long long)pipelines, making / 1e6);
+    if(gpuLost) std::printf("gpu lost: the software renderer drew from then on\n");
   }
   std::printf("unique missing functions: %u\n", u32(missing.size()));
   auto byCount = [](auto& a, auto& b) {
@@ -677,5 +840,106 @@ auto main(int argc, char** argv) -> int {
     std::printf("  %s %s: %u\n", key.first.c_str(), key.second.c_str(), count);
   }
   if(!lastNote.empty()) std::printf("last note: %s\n", lastNote.c_str());
+
+  //The report, as JSON: the runner's build, what was asked (null: not given), what ran, and what came of it (counts
+  //the GPU didn't give are null). Written beside its name, then renamed, so a report is never a part of one.
+  if(!reportFile.empty()) {
+    auto text = [](const std::string& value) { return value.empty() ? std::string("null") : jsonText(value); };
+    auto number = [](bool given, u64 value) { return given ? std::to_string(value) : std::string("null"); };
+    std::string missingList;
+    for(auto& [key, count] : sorted) {
+      missingList += std::string(missingList.empty() ? "" : ", ") + "{\"library\": " + jsonText(key.first) +
+                     ", \"nid\": " + jsonText(key.second) + ", \"count\": " + std::to_string(count) + "}";
+    }
+    std::string pngAtList;
+    for(u32 at : pngAt) pngAtList += (pngAtList.empty() ? "[" : ", ") + std::to_string(at);
+    pngAtList = pngAtList.empty() ? "null" : pngAtList + "]";
+    std::string captureList;
+    for(auto& capture : captures) {
+      char line[160];
+      std::snprintf(line, sizeof(line), "{\"frame\": %u, \"arrived in frame\": %s, \"waited ms\": %.1f, \"fresh\": %s}",
+                    capture.frame, number(capture.picture, capture.arrivedIn).c_str(), capture.waited,
+                    capture.fresh ? "true" : "false");
+      captureList += std::string(captureList.empty() ? "" : ", ") + line;
+    }
+    const char* timeZone = std::getenv("TZ");
+    char offset[16] = "";  //(the host's zone at the clock's start, as the kernel takes it: +hhmm)
+    time_t clockSeconds = time_t(clockStart / 1'000'000);
+    tm local{};
+    if(localtime_r(&clockSeconds, &local)) std::strftime(offset, sizeof(offset), "%z", &local);
+    std::string gpuCounts = "null";
+    if(gpu) {
+      char counts[640];
+      std::snprintf(counts, sizeof(counts),
+                    "{\"draws\": %llu, \"primitives\": %llu, \"meshes\": %llu, \"submits\": %llu, \"finishes\": %llu, "
+                    "\"uploads\": %llu, \"readbacks\": %llu, \"textures\": %llu, \"copies\": %llu, \"pictures\": %llu, "
+                    "\"moves\": %llu, \"waiting ms a frame\": %.3f, \"pipelines made\": %llu, \"pipeline ms\": %.1f}",
+                    (unsigned long long)gpu->draws, (unsigned long long)gpu->primitives,
+                    (unsigned long long)gpu->meshes, (unsigned long long)gpu->submits,
+                    (unsigned long long)gpu->finishes, (unsigned long long)gpu->uploads,
+                    (unsigned long long)gpu->readbacks, (unsigned long long)gpu->textures,
+                    (unsigned long long)gpu->copies, (unsigned long long)gpu->pictures, (unsigned long long)gpu->moves,
+                    frames ? gpu->waiting / 1e6 / frames : 0.0, (unsigned long long)pipelines, making / 1e6);
+      gpuCounts = counts;
+    }
+#if defined(BUILD_RELEASE)
+    const char* build = "release";
+#elif defined(BUILD_DEBUG)
+    const char* build = "debug";
+#else
+    const char* build = "unknown";
+#endif
+#if defined(ARES_ENABLE_FFMPEG)
+    bool ffmpeg = true;
+#else
+    bool ffmpeg = false;
+#endif
+    std::error_code sizeError;
+    auto gameBytes = fs::file_size(game, sizeError);
+    auto part = reportFile;
+    part += ".part-" + std::to_string(::getpid());
+    std::ofstream out(part);
+    out << "{\n  \"report\": \"phobos-psp-runner 1\",\n"
+        << "  \"runner\": {\"source\": " << jsonText(PHOBOS_RUNNER_SOURCE)
+        << ", \"compiler\": " << jsonText(__VERSION__) << ", \"build\": " << jsonText(build)
+        << ", \"ffmpeg\": " << (ffmpeg ? "true" : "false") << "},\n"
+        << "  \"game\": {\"path\": " << jsonText(game.string()) << ", \"kind\": " << jsonText(name)
+        << ", \"title\": " << text(title) << ", \"disc id\": " << text(npid)
+        << ", \"bytes\": " << (sizeError ? std::string("null") : std::to_string(gameBytes)) << "},\n"
+        << "  \"asked\": {\"renderer\": " << text(renderer) << ", \"resolution\": " << number(resolution, resolution)
+        << ", \"engine\": " << (interpreter ? jsonText("interpreter") : std::string("null"))
+        << ", \"ge threads\": " << number(geThreads, geThreads)
+        << ", \"late frames\": " << (lateFrames ? "true" : "false") << ", \"frames\": " << number(framesGiven, frames)
+        << ", \"start time\": " << number(startTimeGiven, startTime) << ", \"load state\": " << text(loadState.string())
+        << ", \"presses\": " << presses.size() << ", \"script\": " << text(script.string())
+        << ", \"png every\": " << number(pngEvery, pngEvery) << ", \"png at\": " << pngAtList
+        << ", \"out\": " << text(outDir.string()) << ", \"wav\": " << text(wav.string())
+        << ", \"save state at\": " << number(saveStateAt, saveStateAt)
+        << ", \"memory stick\": " << text(memoryStickGiven ? memoryStick.string() : "")
+        << ", \"fonts\": " << text(fonts.string()) << ", \"pipeline cache\": " << text(pipelineCache)
+        << ", \"screen stops at\": " << number(screenStopsAt, screenStopsAt) << "},\n"
+        << "  \"ran\": {\"renderer\": " << jsonText(ranRenderer) << ", \"device\": " << text(ranDevice)
+        << ", \"gpu lost\": " << (gpuLost ? "true" : "false") << ", \"resolution\": " << ranResolution
+        << ", \"engine\": " << jsonText(interpreter ? "interpreter" : "recompiler")
+        << ", \"ge threads\": " << ranThreads << ", \"clock start\": " << clockStart / 1'000'000
+        << ", \"time zone\": " << (timeZone ? jsonText(timeZone) : std::string("null"))
+        << ", \"utc offset\": " << text(offset) << "},\n"
+        << "  \"result\": {\"frames\": " << frames << ", \"program\": " << jsonText(ended ? "ended" : "still running")
+        << ", \"seconds\": " << elapsed << ", \"capture seconds\": " << capturedSeconds
+        << ", \"stale captures\": " << staleCaptures
+        << ", \"clock restarts\": " << number(startTimeGiven, clockRestarts)
+        << ", \"captures\": [" << captureList << "], \"missing functions\": [" << missingList << "]"
+        << ", \"last note\": " << text(lastNote) << "},\n"
+        << "  \"gpu\": " << gpuCounts << "\n}\n";
+    out.close();
+    std::error_code renameError;
+    if(!out.fail()) fs::rename(part, reportFile, renameError);
+    if(out.fail() || renameError) {
+      std::error_code ignored;
+      fs::remove(part, ignored);
+      std::fprintf(stderr, "the report can't be written: %s\n", reportFile.string().c_str());
+      return 1;
+    }
+  }
   return 0;
 }

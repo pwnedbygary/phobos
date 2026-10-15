@@ -3,10 +3,11 @@
 //the program's memory refused), their files listed secure, normal and the system's, their PARAM.SFO written and read
 //back, saves without one (v2.0.0's) still loading, a game's save beside its own files through memstick:, list loads
 //and saves answered with no front end as a PSP's dialog would be, a save's name with '*' or '?' taken as a pattern
-//(the list mode's, which names no save anywhere), each request traced for a host, the memory
-//stick's free space told alike everywhere, a message answered yes, the keyboard's fields entered (an empty one given
-//the nickname), network settings cancelled, the wrong type and the wrong status refused; a game's data install
-//cancelled; optional modules loaded and unloaded; the nickname. Called directly, the clock moved on by hand.
+//(the list mode's, which names no save anywhere), each request traced for a host, a save written over files the game
+//emptied left as written, the memory stick's free space told alike everywhere, a message answered yes, the keyboard's
+//fields entered (an empty one given the nickname), network settings cancelled, the wrong type and the wrong status
+//refused; a game's data install cancelled; optional modules loaded and unloaded; the nickname. Called directly, the
+//clock moved on by hand.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -901,6 +902,133 @@ static auto savedataListAnswers() -> void {
   listed(4, "", {"DATA01", "DATA05"}, 2);  //all there broken: the focused one, the last
   CHECK(runSave(m), 0x8011'0309);
   CHECK(saved() == "DATA05", true);
+}
+
+//A list's save answered with no front end goes to one of its list's names, as a PSP's dialog shows those alone, its
+//save name choosing only what focus 0 focuses; but never over a save the game still has. Lumines II on a fresh stick:
+//its profile saved with "GAME" beside GAME01 to GAME03, focus 7 (the first new), goes to GAME01, written back (the
+//trace shows it chosen); the next boot's load (focus 3, the latest) takes GAME01 and writes it back, and its save by
+//that name (focus 0) goes there again. "GAME", its folder not there, with GAME01 there: focus 7 goes to the first new
+//slot, GAME02, focus 8 to the last, GAME03, GAME01 kept; on an empty stick focus 0 goes to the list's first, GAME01;
+//with every slot there (focus 7, 8), or the list's first there (focus 0), to GAME, as master saves it, no slot touched.
+//An older Phobos's GAME (an upgraded player's) stays GAME: its load takes it and its save by that name goes there,
+//no GAME01 made; with a GAME01 beside it dated before it (the stale one taken by the load), the save by GAME's name
+//goes to GAME, GAME01 kept. A GAME01 whose PARAM.SFO is broken loads as DATA_BROKEN, and the new profile the game
+//then saves (focus 7) goes to GAME02, GAME01's data kept, which the next load passes over for GAME02. A list save
+//naming a save its list holds takes it, as before: La Pucelle Ragnarok's LAPUCELLE000 (focus 0), Manhunt 2's 000
+//(focus 7) with 000 there already. Each save's bytes its own, so a save written over shows.
+static auto savedataListNames() -> void {
+  namespace fs = std::filesystem;
+  HostFolder stick;
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  auto listed = [&](u32 mode, const char* game, const char* save, std::vector<const char*> names, u32 focus,
+                    const char* data = "") {
+    saveParameters(m, mode, game, save, strlen(data));
+    m.system.memory.fill(Buffer + 0x100, 0, 0x400);
+    for(u32 n = 0; n < names.size(); n++) m.system.memory.copyIn(Buffer + 0x100 + n * 20, names[n], strlen(names[n]));
+    m.system.memory.write(4, Parameters + 96, Buffer + 0x100);
+    m.system.memory.write(4, Parameters + 1480, focus);
+    m.system.memory.fill(Buffer, 0, 8);
+    m.system.memory.copyIn(Buffer, data, strlen(data));
+  };
+  auto saved = [&] { return m.system.memory.readString(Parameters + 76, 20); };
+  auto loaded = [&] { return m.system.memory.readString(Buffer, 8); };
+  auto saves = stick.path / "PSP/SAVEDATA";
+  auto data = [&](const std::string& save) {  //(a save's DATA.BIN, or "-" with none)
+    auto path = "PSP/SAVEDATA/ULUS10183" + save + "/DATA.BIN";
+    return fs::exists(stick.path / path) ? stick.get(path) : std::string("-");
+  };
+  std::vector<const char*> slots = {"GAME01", "GAME02", "GAME03"};
+  //a fresh stick
+  std::vector<std::string> lines;
+  m.kernel.savedataTrace = [&](const std::string& text) { lines.push_back(text); };
+  listed(5, "ULUS10183", "GAME", slots, 7, "one");
+  CHECK(runSave(m), 0);
+  CHECK(data("GAME01") == "one" && saved() == "GAME01", true);
+  CHECK(fs::exists(saves / "ULUS10183GAME"), false);
+  m.kernel.savedataTrace = nullptr;
+  std::string expected = "mode 5 (listsave), size 1536, game \"ULUS10183\", save \"GAME\", list \"GAME01\" \"GAME02\" "
+    "\"GAME03\", focus 7, chosen \"GAME01\", file \"DATA.BIN\", buffer 0x08930000 of 4096, data 3, \"ULUS10183GAME01\" "
+    "not there, title \"\" -> 0x00000000, save \"GAME01\"";
+  if(lines.size() != 1 || lines[0] != expected) std::printf("  trace: %s\n", lines.empty() ? "" : lines[0].c_str());
+  CHECK(lines.size() == 1 && lines[0] == expected, true);
+  listed(4, "ULUS10183", "GAME", slots, 3);
+  CHECK(runSave(m), 0);
+  CHECK(loaded() == "one" && saved() == "GAME01", true);
+  listed(5, "ULUS10183", "GAME01", slots, 0, "two");
+  CHECK(runSave(m), 0);
+  CHECK(data("GAME01") == "two" && saved() == "GAME01", true);
+  //"GAME", not there, beside GAME01: the new slot focus 7 or 8 focuses; on an empty stick, focus 0 the list's first
+  for(auto [focus, slot] : {std::pair{7u, "GAME02"}, std::pair{8u, "GAME03"}}) {
+    fs::remove_all(saves);
+    stick.put("PSP/SAVEDATA/ULUS10183GAME01/DATA.BIN", "kept");
+    listed(5, "ULUS10183", "GAME", slots, focus, "new");
+    check(__LINE__, slot, runSave(m), 0);
+    check(__LINE__, slot, data(slot) == "new" && saved() == slot && data("GAME01") == "kept", true);
+    check(__LINE__, slot, !fs::exists(saves / "ULUS10183GAME"), true);
+  }
+  fs::remove_all(saves);
+  listed(5, "ULUS10183", "GAME", slots, 0, "first");
+  CHECK(runSave(m), 0);
+  CHECK(data("GAME01") == "first" && saved() == "GAME01" && !fs::exists(saves / "ULUS10183GAME"), true);
+  //the slot it would take there: its own name kept, no slot touched
+  for(u32 focus : {7u, 8u, 0u}) {
+    fs::remove_all(saves);
+    stick.put("PSP/SAVEDATA/ULUS10183GAME01/DATA.BIN", "one");
+    if(focus) stick.put("PSP/SAVEDATA/ULUS10183GAME02/DATA.BIN", "two");
+    if(focus) stick.put("PSP/SAVEDATA/ULUS10183GAME03/DATA.BIN", "three");
+    listed(5, "ULUS10183", "GAME", slots, focus, "own");
+    check(__LINE__, "saved", runSave(m), 0);
+    check(__LINE__, "to GAME", data("GAME") == "own" && saved() == "GAME", true);
+    check(__LINE__, "no slot touched", data("GAME01") == "one" && data("GAME02") == (focus ? "two" : "-")
+          && data("GAME03") == (focus ? "three" : "-"), true);
+  }
+  //an upgraded player's GAME stays GAME: loaded, saved over by its name, no GAME01
+  fs::remove_all(saves);
+  stick.put("PSP/SAVEDATA/ULUS10183GAME/DATA.BIN", "old");
+  listed(4, "ULUS10183", "GAME", slots, 3);
+  CHECK(runSave(m), 0);
+  CHECK(loaded() == "old" && saved() == "GAME", true);
+  listed(5, "ULUS10183", "GAME", slots, 0, "newer");
+  CHECK(runSave(m), 0);
+  CHECK(data("GAME") == "newer" && saved() == "GAME" && !fs::exists(saves / "ULUS10183GAME01"), true);
+  //and beside a GAME01 dated before it: the load takes GAME, the save by its name goes to GAME, GAME01 kept
+  stick.put("PSP/SAVEDATA/ULUS10183GAME01/DATA.BIN", "newest");
+  fs::last_write_time(saves / "ULUS10183GAME01", fs::file_time_type::clock::now() - std::chrono::hours(2));
+  std::error_code error;  //(GAME's date: its PARAM.SFO's, or its folder's without one)
+  for(auto dated : {saves / "ULUS10183GAME", saves / "ULUS10183GAME/PARAM.SFO"}) {
+    fs::last_write_time(dated, fs::file_time_type::clock::now() + std::chrono::hours(1), error);
+  }
+  listed(4, "ULUS10183", "GAME", slots, 3);
+  CHECK(runSave(m), 0);
+  CHECK(loaded() == "newer" && saved() == "GAME", true);
+  listed(5, "ULUS10183", "GAME", slots, 0, "more");
+  CHECK(runSave(m), 0);
+  CHECK(data("GAME") == "more" && saved() == "GAME" && data("GAME01") == "newest", true);
+  //a broken GAME01: DATA_BROKEN, then the new profile (focus 7) to GAME02, GAME01's data kept
+  fs::remove_all(saves);
+  stick.put("PSP/SAVEDATA/ULUS10183GAME01/DATA.BIN", "intact");
+  stick.put("PSP/SAVEDATA/ULUS10183GAME01/PARAM.SFO", "not a PARAM.SFO");
+  fs::last_write_time(saves / "ULUS10183GAME01/PARAM.SFO", fs::file_time_type::clock::now() - std::chrono::hours(1));
+  listed(4, "ULUS10183", "GAME", slots, 3);
+  CHECK(runSave(m), 0x8011'0306);
+  listed(5, "ULUS10183", "GAME", slots, 7, "profile");
+  CHECK(runSave(m), 0);
+  CHECK(data("GAME02") == "profile" && saved() == "GAME02" && data("GAME01") == "intact", true);
+  listed(4, "ULUS10183", "GAME", slots, 3);
+  CHECK(runSave(m), 0);
+  CHECK(loaded() == "profile" && saved() == "GAME02", true);
+  //names their lists hold
+  listed(5, "ULJS00244", "LAPUCELLE000", {"LAPUCELLE000", "LAPUCELLE001", "LAPUCELLE002"}, 0, "pucelle");
+  CHECK(runSave(m), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULJS00244LAPUCELLE000/DATA.BIN") == "pucelle" && saved() == "LAPUCELLE000", true);
+  for(const char* bytes : {"first", "second"}) {
+    listed(5, "ULUS10280", "000", {"000", "001", "002"}, 7, bytes);
+    check(__LINE__, "saved", runSave(m), 0);
+    check(__LINE__, bytes, stick.get("PSP/SAVEDATA/ULUS10280000/DATA.BIN") == bytes && saved() == "000", true);
+  }
+  CHECK(fs::exists(saves / "ULUS10280001"), false);
 }
 
 //A save's name with '*' or '?' in it is a pattern (utility/savedata/idlist's "A?C" listed its ABC), naming no folder a
@@ -1919,6 +2047,39 @@ static auto modules() -> void {
   CHECK(m.system.memory.read(4, Buffer), 1);
 }
 
+//A save written over files the game has open, emptied as it opened them and not written yet (io.cpp's cut()): the
+//data file written over in place, as long as it was, and PARAM.SFO replaced; then, the save deleted and made again,
+//its data file anew. Each is as the save left it after the game closes its descriptor.
+static auto savedataOverEmptied() -> void {
+  HostFolder stick;
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  m.system.memory.copyIn(Buffer, "saved bytes", 11);
+  saveParameters(m, 1, "ULUS99999", "SLOT0", 11);
+  CHECK(runSave(m), 0);
+  auto emptying = [&](const std::string& name) {
+    return m.call("sceIoOpen", {m.string("ms0:/PSP/SAVEDATA/ULUS99999SLOT0/" + name), 0x0602, 0777});
+  };
+  u32 data = emptying("DATA.BIN"), sfo = emptying("PARAM.SFO");
+  m.system.memory.copyIn(Buffer, "SAVED BYTES", 11);
+  saveParameters(m, 1, "ULUS99999", "SLOT0", 11);
+  CHECK(runSave(m), 0);
+  auto described = stick.get("PSP/SAVEDATA/ULUS99999SLOT0/PARAM.SFO");
+  CHECK(described.size() > 20, true);
+  CHECK(m.call("sceIoClose", {data}), 0);
+  CHECK(m.call("sceIoClose", {sfo}), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS99999SLOT0/DATA.BIN") == "SAVED BYTES", true);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS99999SLOT0/PARAM.SFO") == described, true);
+  data = emptying("DATA.BIN");
+  saveParameters(m, 10, "ULUS99999", "SLOT0", 0);  //delete
+  CHECK(runSave(m), 0);
+  m.system.memory.copyIn(Buffer, "fresh bytes", 11);
+  saveParameters(m, 1, "ULUS99999", "SLOT0", 11);
+  CHECK(runSave(m), 0);
+  CHECK(m.call("sceIoClose", {data}), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS99999SLOT0/DATA.BIN") == "fresh bytes", true);
+}
+
 auto utilityTests() -> Tests {
   return {
     {"utility savedata", savedata}, {"utility savedata names", savedataNames},
@@ -1929,8 +2090,10 @@ auto utilityTests() -> Tests {
     {"utility savedata broken saves", savedataBroken},
     {"utility savedata through memstick: (Colin McRae Rally 2005 Plus)", savedataMemstick},
     {"utility savedata lists answered with no front end (7th Dragon 2020, Brandish)", savedataListAnswers},
+    {"utility savedata list saves go to their lists' names (Lumines II)", savedataListNames},
     {"utility savedata patterns (Dissidia, Final Fantasy Type-0)", savedataPatterns},
     {"utility savedata trace", savedataTrace},
+    {"utility savedata over files the game emptied", savedataOverEmptied},
     {"memory stick free space", stickSpace}, {"utility dialogs", dialogs},
     {"utility keyboard", keyboard}, {"utility keyboard input types", keyboardInputTypes},
     {"utility keyboard conversion: the app's cases", keyboardCases}, {"utility modules", modules},

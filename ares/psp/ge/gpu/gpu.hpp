@@ -2,6 +2,7 @@
 
 #include "../ge.hpp"
 
+#include <cassert>
 #include <functional>
 #include <map>
 #include <optional>
@@ -43,7 +44,17 @@ struct GPU : GE::Renderer {
     float u, v, q;      //texels; q, the divisor
     u32 color, specular;
     float fog;
-    u32 flags;          //bit 0: filtered; 1: stepped (a 2D sprite's coordinates, below); 2: turned; 3: held
+    u32 flags;          //bit 0: filtered; 1: stepped (a 2D sprite's coordinates, below); 2: turned; 3: held; 8-27:
+                        //taken (below)
+    //A copy of a target with more texels than its PRIM takes (render to texture: textureFor()): the texels taken,
+    //their columns in bits 8-17 and rows in 18-27, which fetches are held inside as they'd be in a copy of only those
+    //(0: the copy's own). In the vertices, not the push constants, so that PRIMs taking more or less of one copy
+    //are one draw (Ghost of Sparta's menu draws 1,200 such PRIMs a frame, one after another).
+    static constexpr u32 TakenShift = 8;
+    static auto taken(u32 columns, u32 rows) -> u32 {
+      assert(columns < 1024 && rows < 1024);  //(holds() takes 512 at most)
+      return (columns | rows << 10) << TakenShift;
+    }
     //A 2D sprite's texture coordinates as the GE steps them (draw.cpp's rectangle()): across x from columnFirst at
     //sixteenth columnStart, by columnStep a pixel; down y likewise. The coordinate across x is v when turned.
     //Held (a 2D triangle above 1x: triangle()): u kept from columnFirst to columnStep, v from rowFirst to rowStep.
@@ -52,14 +63,19 @@ struct GPU : GE::Renderer {
   };
 
   //Fast mode's vertices (mesh(): docs/psp-gpu-renderers.md, "Vulkan (fast)"): a 3D PRIM's, as the vertex type laid
-  //them out (morph targets blended), untransformed, for shaders/transform.vert to put on the screen
+  //them out (morph targets blended), untransformed, for shaders/transform.vert to put on the screen. Or (transform
+  //OnScreen) a vertex the GE put on the screen itself (screenTriangle()), as draw.vert takes one: x, y and z its place
+  //and depth, normal its clip w, q and fog, u and v, its color, and the first two weights its shine and its flags,
+  //their bits as they are.
   struct Model {
+    Model() {}  //(not zeroed as the vector grows: mesh() and screenTriangle() write every member)
     float x, y, z;
     float normal[3];
     float u, v;
     u32 color;
     float weights[8];
     u32 transform;  //its PRIM's settings, in the run's Transformed blocks
+    static constexpr u32 OnScreen = ~0u;
   };
   static_assert(sizeof(Model) == 72);
   //And the PRIM's 3D settings (the GE's Transform) for it: one of transform.vert's storage buffer's blocks, laid out
@@ -79,7 +95,7 @@ struct GPU : GE::Renderer {
                              //lighting, 5-6 how texture coordinates are made (TEXTURE_MAP_MODE's 0-2), 8-11 the
                              //bone matrices mixed (0-8)
     u32 material[4];         //MATERIAL_COLOR; MATERIAL_EMISSIVE; the ambient color (8888); MATERIAL_DIFFUSE
-    u32 material2[4];        //MATERIAL_SPECULAR; the ambient light (8888); 0; 0
+    u32 material2[4];        //MATERIAL_SPECULAR; the ambient light (8888); the texels taken (Vertex::flags'); 0
     float viewDirection[4];  //the way the view looks, in the world; MATERIAL_SPECULAR_COEF as lighting takes it
     struct Light {
       float position[4];     //and 0
@@ -128,7 +144,17 @@ struct GPU : GE::Renderer {
     //each texel the index its bits are, 1 those of a 16-bit frame buffer's (in texels' format), 2 an 8888 one's,
     //looked up in the palette Push::palette names; 0 none
     u8 indexed;
-    auto operator==(const Pipeline&) const -> bool = default;
+    auto operator==(const Pipeline& other) const -> bool { return !std::memcmp(this, &other, sizeof(Pipeline)); }
+    struct Hash {  //(of its bytes: the backend's pipelines are found by it, as meshDrawable()'s)
+      auto operator()(const Pipeline& k) const -> size_t {
+        u64 words[4];
+        u32 last;
+        std::memcpy(words, &k, 32), std::memcpy(&last, reinterpret_cast<const u8*>(&k) + 32, 4);
+        u64 h = last;
+        for(u64 word : words) h = (h ^ word) * 0x9e37'79b9'7f4a'7c15ull, h ^= h >> 32;
+        return size_t(h);
+      }
+    };
   };
   static_assert(sizeof(Pipeline) == 36);
   //draw.frag's push constants
@@ -141,10 +167,6 @@ struct GPU : GE::Renderer {
     u32 fixedB = 0;        //BLEND_FIXED_B (shader blending's)
     u32 writeMask = 0;     //the frame buffer's bits a write leaves alone, in its format (shader blending's)
     u32 filter = 0;        //TEXTURE_FILTER, where the filter is chosen at each pixel (fast mode's 3D: mesh())
-    //A copy of a target with more texels than its PRIM takes (render to texture: textureFor()): the texels taken,
-    //its width and, in bits 16-31, its rows, which fetches are held inside as they'd be in a copy of only those
-    //(0: the copy's own)
-    u32 held = 0;
     u32 origin = 0;  //the row of the target its frame buffer's first is (targetFor()), where the dither starts
     //Pipeline::indexed's palette and how an index is taken from a texel's bits (texture.cpp's texelFrom()): the
     //palette's row (Backend::makePalette()) in bits 0-9, CLUT_FORMAT's shift in 10-14, its mask in 15-22, its
@@ -174,17 +196,21 @@ struct GPU : GE::Renderer {
   //(Move: source's rectangle at sourceX, sourceY, sourceWidth x sourceHeight, in its format, sourceFormat, the same
   //bytes as those of the target's rectangle that it reaches, in the target's format: each of the rectangle's pixels
   //the source's at the same bytes, its rectangle's first pixel delta bytes from source's first, rows of rowBytes in
-  //the target and sourceRowBytes in source). Every position and size is in the PSP's pixels: the backend has each of
-  //them Backend::scale times over.
+  //the target and sourceRowBytes in source); and another target's depth put into the target's rectangle at the same
+  //place (Depth: source's, where both are drawn with one depth buffer); and the alpha of the target's colors in a
+  //rectangle set from its stencil, the PSP's alpha, where draws changed the stencil without it (Alpha:
+  //catchAlpha()). Every position and size is in the PSP's pixels: the backend has each of them Backend::scale times
+  //over.
   struct Command {
-    enum class Kind : u8 { Draw, Upload, Readback, Copy, Present, Shot, Mesh, Move } kind;
+    enum class Kind : u8 { Draw, Upload, Readback, Copy, Present, Shot, Mesh, Move, Depth, Alpha } kind;
     u32 target;
     u32 state = 0, first = 0, count = 0;  //Draw, Mesh
-    s32 x = 0, y = 0;                     //Upload, Readback, Copy
+    s32 x = 0, y = 0;                     //Upload, Readback, Copy, Depth, Alpha
     u32 width = 0, height = 0;
     u64 colors = 0, stencil = 0, depth = 0;  //Upload: where in uploads (8888s, bytes, 16-bit depths: the parts it
                                              //has); Present's
-    u8 parts = 3;                            //Upload: bit 0 the colors and stencils, bit 1 the depths
+    u8 parts = 3;                            //Upload: bit 0 the colors and stencils, bit 1 the depths; Readback: 2
+                                             //for its depths alone (readDepth())
     u32 texture = 0;                         //Copy
     u16 intoX = 0, intoY = 0;                //Copy: where in the texture (its top left the target's x, y)
     //Readback: how many times the PSP's size its pixels come back: 1, the PSP's own (for memory: one of each pixel's
@@ -192,9 +218,9 @@ struct GPU : GE::Renderer {
     //in), or more, up to the backend's scale, for the screen (shrunk smoothly, the colors alone, no stencil)
     u8 at = 1;
     u8 format = 3;  //Present: the frame buffer's GE format, its colors shown as memory keeps them (3: as they are);
-                  //Upload, Move: the target's
+                  //Upload, Move, Alpha: the target's
     u8 sourceFormat = 3;            //Move
-    u32 source = 0;
+    u32 source = 0;                 //Move, Depth
     u16 sourceX = 0, sourceY = 0, sourceWidth = 0, sourceHeight = 0;
     s32 delta = 0;
     u32 rowBytes = 0, sourceRowBytes = 0;
@@ -209,10 +235,12 @@ struct GPU : GE::Renderer {
     std::vector<u32> indices;
     std::vector<Transformed> transforms;
     u32 readbacks = 0;
+    u64 generation = 0;  //(goes up as it's cleared: what was recorded before is gone)
     auto empty() const -> bool { return commands.empty(); }
     auto clear() -> void {
       commands.clear(), states.clear(), vertices.clear(), uploads.clear(), readbacks = 0;
       models.clear(), indices.clear(), transforms.clear();
+      generation++;
     }
   };
 
@@ -291,6 +319,12 @@ struct GPU : GE::Renderer {
     virtual auto finish(const Recorded& recorded) -> bool = 0;  //run, and everything waited for
     //Readback n of the last finish(): its 8888s and stencils (none for one at more than 1), a row after another
     virtual auto read(u32 n, const u32*& colors, const u8*& stencil) -> bool = 0;
+    //Readback n of the last finish(), of a target's depths alone (parts 2): each pixel's as the GE's 16-bit depth, a
+    //row after another, width x height of them
+    virtual auto readDepth(u32 n, const u16*& depths, u32& width, u32& height) -> bool {
+      (void)n, (void)depths, (void)width, (void)height;
+      return false;
+    }
     //Presenting (docs/psp-gpu-renderers.md, "Presenting"): the window it shows Present's pictures on (the host's:
     //an ANativeWindow on Android), none to let go of it; whether it presents (it can, and hasn't given up: the host
     //shows the screen's frames otherwise); and the newest picture it presented from a target, at the PSP's size as
@@ -312,10 +346,23 @@ struct GPU : GE::Renderer {
     //The GPU's depth stays on the GPU: memory's isn't changed by what the GPU draws.
     u32 depthBuffer = 0, depthStride = 0, depthRows = 0;
     u32 depthChangedFrom = 0, depthChangedTo = 0;
+    //The depth buffer is the PSP's memory, whichever frame buffer it's drawn with, and each target has a depth of
+    //its own on the GPU: the newest depth drawn in it its depth holds, as the serial of the PRIM that drew it
+    //(depthSerial's; 0 for none since memory's), taken from another target over one depth buffer (takeDepth()); and
+    //whether memory's bytes have it too (putDepth())
+    u64 depthAt = 0;
+    bool depthKept = false;
     s32 left = 0, top = 0, right = -1, bottom = -1;  //drawn since it was last read back
     s32 changes[4] = {0, 0, -1, -1};  //changed since its copies last heard (textureFor()): left, top, right, bottom
+    //Where its colors' alpha may differ from its stencil, which is the PSP's alpha: drawn over by PRIMs whose stencil
+    //operations the colors' alpha doesn't follow (settings()), and set from the stencil before anything reads it
+    //there (catchAlpha()). Left, top, right, bottom.
+    s32 lags[4] = {0, 0, -1, -1};
     std::vector<std::array<s32, 4>> told;  //rectangles memory has heard were drawn over since then (own())
     u64 toldBusy = 0;                       //(Memory::busyCleared as they were told)
+    //VRAM's pages own() last made its own and busy, and drawnSerial and Memory::busyCleared as it left them
+    u32 heldFirst = 1, heldLast = 0;
+    u64 heldSerial = 0, heldBusy = 0;
     u64 used = 0;
     //VRAM's bytes (offsets, inclusive) someone reached in its pages while the GPU drew in them, not over what it
     //drew (drawnOver()), or changed in pages it hasn't drawn in since the last finish (written()): memory's, maybe
@@ -354,8 +401,13 @@ struct GPU : GE::Renderer {
     u64 palettes = 0;  //palettes put on the GPU (paletteFor(): those found again aren't)
     u64 presents = 0, presentsFromMemory = 0;  //frames presented on the window (show()): from a target, memory's
     u64 meshes = 0;    //3D PRIMs the GPU transformed (fast mode: mesh(), the first of each PRIM's runs)
+    u64 screened = 0;  //fast mode's 3D triangles the GE transformed itself, drawn among the meshes (screenTriangle())
     u64 moves = 0;     //rectangles moved from one target into another on the GPU (move()), not put back and filled
-    u64 waiting = 0;   //nanoseconds the CPU waited in finish() and picture()
+    //depths taken from another target over the same depth buffer (takeDepth()), and targets' depths put into memory
+    //for a texture read from a depth buffer (putDepth(): those of one texture a wait for the GPU, as a finish)
+    u64 depthsTaken = 0, depthsPut = 0;
+    u64 alphas = 0;    //rectangles of targets' colors whose alpha was set from their stencil (catchAlpha())
+    u64 waiting = 0;   //nanoseconds the CPU waited in finish(), picture() and putDepth()
   } statistics;
 
   std::unique_ptr<Backend> backend;
@@ -364,9 +416,14 @@ struct GPU : GE::Renderer {
   //Vulkan (fast) (docs/psp-gpu-renderers.md): 3D PRIMs' triangles transformed, lit and clipped by the GPU (mesh()),
   //the GPU's own blending throughout; else Vulkan (accurate)
   bool fast = false;
+  //Fast mode's 3D triangles the GE put on the screen drawn among the meshes (screenTriangle(); tests compare without)
+  bool screenMeshes = true;
   //The start-up check's 3D through the GPU's transform failed, and the rest passed (check()): System checks again
   //with the GE transforming
   bool transformsFailed = false;
+  //Its 3D the GE transformed among the GPU's (screenMeshes) failed, and the rest passed: System checks again with
+  //those drawn apart
+  bool screenMeshesFailed = false;
 
   //gpu.cpp
   GPU(std::unique_ptr<Backend> backend);
@@ -374,6 +431,8 @@ struct GPU : GE::Renderer {
   auto ready() const -> bool override { return backend && !backend->lost; }
   auto begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region) -> bool override;
   auto triangle(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c) -> void override;
+  auto triangleAt(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c, const s64 (&x)[3], const s64 (&y)[3])
+    -> void override;
   auto sprite(const GE::Job& job) -> void override;
   auto point(const GE::Vertex& at) -> void override;
   auto line(const GE::Job& job, const std::vector<GE::LinePixel>& pixels) -> void override;
@@ -392,6 +451,16 @@ struct GPU : GE::Renderer {
   auto mesh(GE& ge, const GE::Transform& t, const std::vector<GE::Vertex>& vertices, const std::vector<u32>& corners,
             bool again) -> void override;
   auto copiesKept() const -> u32 { return copies.size(); }  //(render-to-texture copies on the GPU: the tests')
+  //The GE's 16-bit depth as a GPU's depth format keeps it, and back (a backend's uploads and read backs): D32 in
+  //65,536ths, as draw.frag's DEPTHS writes it; D24 those rounded to nearest, taken back whichever way the GPU rounded
+  //the fragment's depth into it
+  static auto depthToFloat(u16 z) -> f32 { return z * (1.0f / 65536); }
+  static auto depthFromFloat(f32 value) -> u16 {
+    value = value * 65536 + 0.5f;
+    return value >= 65535 ? 65535 : value >= 0 ? u16(value) : 0;  //(not a number: 0)
+  }
+  static auto depthTo24(u16 z) -> u32 { return u32((u64(z) * 0xff'ffff + 32768) >> 16); }
+  static auto depthFrom24(u32 value) -> u16 { return std::min<u32>(((value & 0xff'ffff) + 255) >> 8, 65535); }
 
   //What the screen shows (the frame buffer at VRAM's offset address, stride pixels a row, in GE format), width x
   //height of it as Kernel::picture() makes it (8888, red in the low byte, alpha 255), read straight from the target
@@ -454,8 +523,12 @@ private:
   bool stateKept = false;    //and they're the last recorded's (emit())
   u32 filter = 0, shade = 0; //TEXTURE_FILTER, SHADE_MODE
   bool through = false, textured = false;
+  u32 takenFlags = 0;        //(its texture's texels taken, as its vertices carry them: Vertex::taken())
   u32 textureWidth = 0, textureHeight = 0;
   std::unordered_map<const GE::Decoded*, Texture> textures;
+  //(the last textureFor() found or made, looked at first: a copy still alive is the only one at its address)
+  const GE::Decoded* lastDecoded = nullptr;
+  Texture lastTexture;
   Target* owners[GE::VRAMPages] = {};  //VRAM's pages whose newest pixels are the GPU's: the target drawn there
   //(drawnOver()'s: a page whose owner has drawn none of its bytes, but dead ones, as of drawnSerial, which goes up as
   //anything is drawn or owned afresh: God of War's GE reads 700,000 vertices a frame from VRAM's busy pages)
@@ -491,7 +564,7 @@ private:
   //an effect drawing again and again into one corner of the frame buffer it samples copies the corner, not the
   //picture, as Killzone's menu blurs a strip right of its picture 1,100 times a frame; and only where the PRIM's
   //texels meet it, so a PRIM reading one part of the frame buffer while those before it wrote another takes the copy
-  //as it is. A PRIM taking fewer rows or columns from the place takes them from it too (Push::held). At most
+  //as it is. A PRIM taking fewer rows or columns from the place takes them from it too (Vertex::taken()). At most
   //MostCopies, the one unused longest let go for another, and none unused for CopyAge PRIMs: release().)
   struct Copied { u32 texture; u32 width, rows; u64 used; s32 dirty[4] = {0, 0, -1, -1}; };
   std::map<std::tuple<u32, s32, s32>, Copied> copies;  //(target, x, y)
@@ -534,17 +607,45 @@ private:
   auto move(Target& from, Target& t, const Moving& m) -> void;
   auto keepBeside(Target& t, u32 first, u32 last) -> void;  //(Target::beside's first to last added)
   static constexpr u32 MostBeside = 256;
+  //(the depth buffer as memory: takeDepth() and putDepth(), gpu.cpp)
+  u64 depthSerial = 0;  //(goes up with each PRIM that writes depth: Target::depthAt)
+  auto takeDepth(Target& t, const GE::PixelState& p) -> void;
+  auto putDepth(u32 first, u32 last) -> void;  //(VRAM's bytes first to last, offsets in any of its copies)
+  //(the colors' alpha as the stencil has it: Target::lags, gpu.cpp. lagging: the PRIM's stencil operations leave it
+  //behind, settings())
+  bool lagging = false;
+  auto catchAlpha(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;
   auto own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;
   auto textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken, u8& indexed, u32& palette) -> u32;
   auto settings(const GE::Look& look) -> void;
+  //(settings()' inputs as the last PRIM had them, where its state is kept for the next with the same: its pixel
+  //pipeline's, its texture's (the copy alive still: lastDecoded's), the write masks, its target and place in it, and
+  //the backend's ways of drawing; and the shading and filter, which its draws in fast mode's 3D take as well)
+  struct KeptSettings {
+    bool valid = false;
+    GE::PixelState pixel;
+    bool textured, clampU, clampV, withAlpha, doubled;
+    u32 width, height, function, environment, maskColor, maskAlpha, target, stride, rows, column, row, shade, filter;
+    bool reads, readsBlending, dualSource, logicOps;
+  } keptSettings;
   auto clearStencil(u32 color) -> void;
   auto emit(const Vertex* vertices, u32 count) -> void;
-  auto vertex(const GE::Vertex& v, bool perspective) const -> Vertex;
+  auto reachOver(const Vertex* vertices, u32 count) -> std::array<float, 4>;  //(their box, given to reach's)
+  //(fast mode's 3D: the PRIM's state as its draws take it, its index in recorded's states (~0u where the driver won't
+  //make its pipeline), kept while it's the last; whether the PRIM's triangles the GE put on the screen may go among
+  //the meshes; and a draw of its indices from first, or more of the last one)
+  bool meshKept = false, screenable = true;
+  auto meshDrawable() -> bool;
+  auto meshState() -> u32;
+  auto meshDraw(u32 state, u32 first, u32 count) -> void;
+  auto screenTriangle(const Vertex (&v)[3]) -> bool;
+  auto vertex(const GE::Vertex& v, bool perspective, s32 x, s32 y) const -> Vertex;
   auto transformed(const GE::Transform& t) -> u32;  //(mesh()'s Transformed block for t: its index in transforms)
-  GE::Transform lastTransform{};                    //(the last one's settings, and where its frame buffer was)
-  u32 lastColumn = 0, lastRow = 0;
-  std::optional<Pipeline> lastDrawable;             //(the last pipeline meshes() found drawable)
-  u32 meshFirst = 0;                                //(the last PRIM's first model, in recorded's)
+  GE::Transform lastTransform{};                    //(the last one's settings, where its frame buffer was, and the
+  u32 lastColumn = 0, lastRow = 0, lastTaken = 0;   //texels it took)
+  std::array<std::optional<Pipeline>, 64> drawables;  //(pipelines meshDrawable() found drawable, by their hash)
+  u32 meshFirst = 0;                                //(the last PRIM's first model, in recorded's, and its
+  u64 meshGeneration = ~0ull;                       //generation then)
   auto lose() -> void;
   //the target picture() and show() take the frame buffer's pixels from: none where the GPU hasn't the newest
   auto shownTarget(u32 address, u32 stride, u32 format, u32 width, u32 height) -> Target*;

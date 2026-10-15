@@ -13,10 +13,15 @@ Read in order:
 3. [Performance audit](performance-audit.md) and [benchmark protocol](mario-tennis-benchmark.md).
 4. [Implementation history](implementation-history.md) only for relevant historical details.
 
-Next action: establish matched Phobos/v336 APK, device, driver, settings and scene
-identities, then collect baseline traces. No optimization or performance parity
-has been demonstrated. Do not resume the cancelled signing or audio-buffer tasks
-without new authorization. Preserve saves and do not assume APK update compatibility.
+Current focus (2026-10-13): the PSP core (its parts in [psp-core.md](psp-core.md), and the
+entries below, newest first) and the
+[test and performance plan](implementation-plan.md#test-and-performance-plan-2026-10-13):
+PSP throughput, fast-forward and Vulkan at 1x, 2x, 4x and 5x, accurate and fast modes
+measured apart, with the N64/Mario Tennis regressions kept. A matched Phobos/v336
+comparison (APK, device, driver, settings, scene and traces) has still not been made, and
+no overall speedup or parity is claimed. Do not resume the cancelled signing or
+audio-buffer tasks without new authorization. Preserve saves and do not assume APK update
+compatibility.
 
 Publication preparation: the plan reconciliation received independent PASS,
 including byte-for-byte preservation of the original plan in its archival appendix.
@@ -24,6 +29,686 @@ This follow-up corrects cancelled signing-task status and adds this portable ent
 point, and restores tracking of the existing `.gitmodules` file for fresh clones.
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
+
+## PSP: ticks as RFC 2822 and RFC 3339 text (MediEvil's save details), a list save to its list's names (Lumines II), the depth-view loads' test deterministic — 2026-10-15
+
+Branch `cursor/psp-small-fixes-2b67`, on master `cc0638372` (part 97, #259); draft PR #260. docs/psp-core.md,
+part 98, has the evidence (part 96 is #258's, still open). Clean room: pspautotests' `rtc/convert` (recorded on a
+PSP) and uOFW's decompilation of the rtc module; PPSSPP's sceRtc only as a design cross-check; Vita3K's SceRtc read
+(its four RFC functions empty stubs); JPCSP not read. Save states unchanged.
+- **MediEvil Resurrection's blank save details** (deep play batch 04, bug 4): sceRtcFormatRFC2822LocalTime and the
+  rest of its family (sceRtcFormatRFC2822, sceRtcFormatRFC3339, sceRtcFormatRFC3339LocalTime) weren't there. Now as
+  `rtc/convert` recorded them on a PSP (`Mon, 30 Jan 2012 02:12:15 +0000`, `2012-01-30T02:12:15.00Z`; and its first
+  version's four zone-256 calls, rebuilt as the chain they were: the zone as `+0416` and `+04:16`, the hundredths
+  cut, the day in two digits and the year in four characters, years past 9999 too, which four not recorded), the
+  tick microseconds since 0001-01-01; the LocalTime forms with the zone the settings give (`localZone()`, also
+  behind sceUtilityGetSystemParamInt and sceRtcConvertUtcToLocalTime now), the kernel's addresses refused as uOFW's
+  rtc refuses them. MediEvil's SAVEDATA_DETAIL `""` -> `Wed, 14 Oct 2026 05:46:56 -0400`; Cube's detail's second
+  line, a stray byte, now its date.
+- **Lumines II's list save** (bug 5): the automatic answer kept a save name the list doesn't hold (`GAME` beside
+  GAME01-GAME03) and made `ULUS10183GAME` on a fresh stick, where a PSP's dialog shows and saves to the list's names
+  alone. Such a name now names none where its save isn't on the stick, and the list's first name is taken (GAME01),
+  or for focus 7 or 8 the new slot the dialog focuses; where that slot is there (every slot taken, or the first for
+  the other focuses), or its own save is (an upgraded player's GAME), its own name is kept, as on master: no save is
+  written over, and Phobos never makes a second folder.
+- **The review** (of `2a45e6531`, changes requested): the first round redirected even onto saves that were there,
+  so (A) an upgraded player got GAME01 beside GAME, and a stale GAME dated later was loaded and its next save sent
+  over GAME01, and (B) a new profile after a broken GAME01 (focus 7) went over GAME01's intact data. Both fixed as
+  above, both in the test, both walked with the game on scratch sticks. Its should-fix (the year's four characters)
+  and nits (recorded, not chosen: the hundredths cut, the day's two digits; the four old lines quoted; Vita3K named;
+  `localZone()` for the system parameters) taken. The re-review (of `bac0374f3`): both fixed, the year's change safe;
+  one overwrite left, every slot taken (focus 7 or 8 falling back to GAME01) or GAME01 there for focus 0-6: now the
+  redirect never lands on a slot that's there (`ce436b2e7`), tested and walked with the game.
+- **The flaky test** (`ge loads through the depth buffer's views wait for the threads`, which failed on loaded Macs in
+  the colinsave, npdrm-modules, round6 and cpu-round3 runs): `GE::Drawing::held` keeps the drawing threads from taking
+  a batch; the test holds them till it has seen the batch still drawn, then lets them go as the loads come, or holds
+  them through the loads, which then wait for the batch and draw it themselves. With a 200 ms sleep after the list,
+  master's test fails 4 checks; the branch's passes.
+- **Tests**: two new groups (the RTC texts; Lumines II's list saves, with the review's two cases) and the depth-view
+  loads' group changed. On master they fail 125 and 11 checks, on the first round's head 5 and
+  13 (the year's fifth character; the overwrites), on the second round's head 0 and 6 (every slot
+  there).
+- **Checks**: the third round (`ce436b2e7`): tests/psp 550 groups, 0 failures, sanitized and unsanitized;
+  tests/allegrex 78/0; tests/psp/ares 348/0; the reviewer's all-slot walk with the game (a new GAME, byte for byte
+  master's, no slot touched) and the four walks again (traces line for line the second round's). The second round
+  (`0707dccc9`): tests/psp 550 groups, 0 failures, sanitized and unsanitized; tests/allegrex 78/0; tests/psp/ares
+  348/0; GCC 13.3 `-Werror`; the 21 scenes in Software, every hash master's; MediEvil's save the first round's, byte
+  for byte; the walks (the reviewer's upgrade sequence and case B with the game: no save written over). The first
+  round: the same suites, and batch 04's saves of Gundam NEXT PLUS, Kurohyou 1, Lunar, Killzone, Lumines and La
+  Pucelle byte for byte master's, their traces line for line.
+- **Left**: what no PSP recording shows, chosen (which four digits a year past 9999 shows, a zone west of UTC as `-`
+  and its size, the two zone forms' refusals); sceRtcParseRFC3339 and sceRtcParseDateTime not done (no game in the
+  library known to call them); the automatic answer's first-name choice for list saves naming none, as before.
+
+## PSP NPDRM: EDATA decrypted — the PGD past the EDATA's header, on the memory stick too, its size and end the data's; a PGD file's end its data's — 2026-10-14
+
+Branch `cursor/psp-pgd-edata-2b67`, on master `14b181707` (part 95, #257, with #256); draft PR #259.
+docs/psp-core.md, part 97, has the evidence (part 96 is #258's). **The owner's area**: his PGD/EDATA proposal of
+13 Oct (`~/phobos-work/scratch/pgd-offset/`: REPORT.md, proposed-fix.patch), rebased at his request (14 Oct 20:30),
+to merge once CI is green and an independent review finds nothing (his approval, 21:18). Clean room: tpu's
+decompilation of the firmware's PGD layer and his edata.c and pgd.c, the PSP Developer Wiki, uOFW's names,
+npdecrypter's behaviour on hardware; PPSSPP only as a design cross-check; JPCSP not read. Save states unchanged
+(layout 32).
+- **The bug** (part 88's review remark): DLC EDATA on the memory stick read raw, with the file's size. Stick files had
+  no size, so sceNpDrmEdataSetupKey found no magic; the PGD's header was read at 0 and its data from 0x90 (in a
+  download's EDATA they're at 0x90 and 0x120); GetDataSize gave the file's size. And a UMD PGD file's SEEK_END was the
+  whole file's, headers and block MACs and all.
+- **The change** (io.cpp, kernel.hpp): `pgdDataOffset` is where the PGD starts until its descriptor is read, then
+  where its data starts (no new field); the header read there, on the disc or the stick; SetupKey takes the PGD's
+  offset from the EDATA header's word at 0x0c and readies only over "\0PGD"; GetDataSize gives the data's size;
+  0x04100002 is where the PGD starts, 0x04100001 looks for "\0PGD" there; an unlocked PGD ends where its data does,
+  and every seek of it is clamped there (round 2).
+- **The rebase** (part 95's meeting point; the patch applied 3-way with no textual conflict, reconciled by hand): a
+  stick file's length for the PGD code is `fileLength()`'s, the PSP's, and `pgdFileRead()` refuses bytes past it, so
+  an EDATA emptied through another descriptor isn't readied; `seek()` keeps both ends (a stick file's PSP length, an
+  unlocked PGD's data size). A descriptor that emptied its file is never a PGD: SetupKey now readies only a file open
+  to read alone, as the PGD layer's open does (it refuses one opened to write, 0x80510201; every EDATA open in the
+  library's runs is read-only), and only a descriptor opened to write empties its file. The two ends do meet on a
+  reading descriptor whose readied EDATA another descriptor empties: its end stays the data's while its reads find
+  nothing. No layout change.
+- **Review** (independent, of `8d3d08dbb`): no blockers. Its should-fix, taken in round 2: an unlocked PGD's seeks
+  weren't clamped to its data's size, as tpu's decompilation clamps them (SEEK_SET 5000 on 3000 bytes of data gave
+  5000, then SEEK_CUR -1000 4000 and an empty read; SEEK_END +100 3100; the asynchronous seeks the same). Now clamped,
+  with the review's cases as a test group, which fails on `8d3d08dbb` (22 checks). Its wording points taken (the
+  read-only check follows the decompilation; the two ends' meeting); part 97's "Not done" gains its three findings:
+  SetupKey ignoring the 0x40000000 flag, 0x04100002's argument read as a pointer, SEEK_END before the key (master's).
+- **Tests**: the proposal's three groups (an EDATA on the stick, a disc PGD past its file's start, PGD files' ends)
+  and `psp_pgd::edata()`, and one for the meeting point (an EDATA beside files emptied as they're opened). On master
+  they fail (4 groups, 25 checks); on the proposal applied 3-way without the reconciliation the meeting point's fails
+  (3 checks: an EDATA the PSP sees emptied is readied, its size and end 3000 where they're 0); on the branch they pass.
+  Round 2 adds the review's seeks past the data's end (a UMD file and an EDATA, sync and async).
+- **Games** (scratch runners with part 95's file I/O trace and NPDRM's calls, the clock pinned): the five DLC games
+  with the synthetic EDATA at their paths (Metal Slug XX, Disgaea 2, La Pucelle Ragnarok, SOCOM Fireteam Bravo 3,
+  Super Stardust Portable) get its plaintext and the data's size, 16384, where master hands them the raw bytes and
+  16736; SOCOM reads it once. The seven UMD PGD games: traces and captures identical to master's (1200 frames, and 3000
+  for four of them), but for the SEEK_END answers of the three that seek to the end (Black Wolves Saga, Shining Blade,
+  Valkyria Chronicles III); Naruto seeks from the start only. Two captures that differed once were master's own
+  noise: its reruns give the branch's pictures byte for byte.
+- **Checks**: round 2 (`3d500b9e2`): tests/psp 548/0 sanitized and unsanitized; tests/psp/ares 348/0; the 16 game
+  runs again on round 2's runner, each trace and capture round 1's; the 21 scenes in Software, every hash master's;
+  CI green.
+  Round 1 (`61ddbad0e`): tests/psp 547/0 sanitized and unsanitized; tests/allegrex 78/0; tests/psp/ares 348/0; the 21
+  scenes in Software: every hash master's, the machine's state too.
+- **Left**: no real encrypted DLC tested (the library has none); the PGD offset 0x80 unsettled; drm types other than 1
+  unsupported, as before; PGD ioctls on stick files, 0x04100010, SetupKey's error returns and the licence checks not
+  done; and the review's three, none of which a game does (SetupKey ignoring the 0x40000000 flag, 0x04100002's
+  argument read as a pointer where the decompilation stores the value, SEEK_END before the key not refused).
+
+## PSP I/O: memory stick files emptied as they're opened keep their bytes (LittleBigPlanet's install), and the runner's file I/O trace — 2026-10-14
+
+Branch `cursor/psp-installs-2b67`, on master `dd37263c8`, merged with `e78b4a364` (part 93; only the docs met); draft
+PR #257. docs/psp-core.md, part 95, has the evidence. Clean room:
+PPSSPP's issue 579 and its directory file system's comments read as the hardware's description, none of its code;
+JPCSP not read. Save states: layout 32 (31 and older load as before; `tests/psp/ares/system.cpp` now refuses 33).
+- **The bug** (deep play batch 04's bug 1, high): LittleBigPlanet's first-boot install left GUI.ARC's first 4 MiB zero,
+  and the game asked "Save data load failed because the data is corrupt. Retry?" for good.
+- **The trace** (`tools/psp-runner --trace-io`, `Kernel::ioTrace`): each IoFileMgrForUser call with its answer, the
+  descriptor's path and position, sizes, buffers and the bytes' hash, and asynchronous requests as they're done. It
+  showed the game's file library copying GUI.ARC a MiB at a time, opening the stick's file with O_TRUNC (0x02000602)
+  for each MiB, seeking to its place and writing it; each open emptied the file.
+- **What a PSP does** (PPSSPP's issue 579, this game, tested on a PSP's memory stick): a file emptied as it's opened
+  keeps its bytes for a write past its end ("test", then O_TRUNC, seek 4, "abc": "testabc"), and with nothing written
+  it ends empty.
+- **The change** (io.cpp, async.cpp, kernel.cpp, kernel.hpp, serialization.cpp, system.cpp, utility.cpp, dialogs.cpp):
+  such a file isn't emptied on the host; its descriptor holds the PSP's length of it, from 0, which reads, seeks from
+  the end, sceIoGetstat, a folder's entries and appends see; writes raise it. The host file is cut to it through a
+  second handle held on the file itself (never by path), only while the file has the length the kernel left it, and
+  only ever shorter: as soon as a write starts at or before the length (a save rewritten from its start), or as the
+  file is closed (sceIoClose, sceIoCloseAsync, the kernel powering on, a state loaded over the program). sceIoRemove
+  and the savedata utility's writes and deletes drop a cut on their files; sceIoRename moves descriptors with their
+  file (PSP paths matched whatever their case). Files are matched by the host's identity of them, so two names for one
+  file share its length and cut. A state keeps both lengths and the hash of the bytes a pending cut would drop, and a
+  loaded one keeps its cut only while the host file has that length and those bytes.
+- **The review** (round 2, changes requested on `300e03e14`: the delayed cut could reach save data master leaves whole):
+  a cut by path (R1: a file renamed onto an emptied file's name emptied at the old descriptor's close; R2: an emptied
+  file renamed while open never cut), a state's descriptor cutting a newer save or padding a shorter one (R4, R5), a
+  state load dropping the session's cuts (R3), and Phobos killed between a rewrite's last write and its close leaving
+  the old tail (R6). All fixed as above; R1 to R7 are tests now. The reviewer's NPDRM nit (a memory stick EDATA gets
+  no PGD state, as on master) is the owner's area, left to him. Round 3 (the second review approved `6b26d4b63`,
+  leaving three small things): its P4 (a state's cut and a newer save exactly as long, which the length alone let
+  through) closed by the tail hash; its P7 (a write through another name for the file lost at the close: part 95's
+  claim was inexact) closed by matching files by identity; renames spelled otherwise than the open now carry the PSP
+  path. P4 and P7 are tests; its P1 to P7 and R1 to R7 pass.
+- **LittleBigPlanet now**: GUI.ARC byte for byte the disc's archives/gui.arc; one boot from a fresh stick reaches its
+  first level, where Sackboy walks, and a second boot takes the installed data (deepplay/LittleBigPlanet:
+  fixed-path.txt, sheet-fx4.png, z-fixed-install-to-level.png, sheet-fx4b.png; round 2: run-r2a, sheet-r2a.png).
+  Its profile saves (18 files through its file library, each emptied as it's opened and written from its start): a
+  second boot rewrites PS.BIN over the file there, a third reads it back, master's runner leaving the same files byte
+  for byte at each boot (r2-profile-roundtrip.txt).
+- **Kingdom Hearts BbS FM's DATA INSTALL** (bug 3, medium), traced, not fixed: it uses the system's game data install
+  dialog (sceUtilityGamedataInstall), part 37's cancel stub, so nothing is copied and the game's clean-up finds no
+  ULJM05775DATA folder. Needs that utility implemented (a feature of its own).
+- **Checks** (round 2): tests/psp 541/0 sanitized (`detect_container_overflow=0`) and unsanitized; tests/allegrex
+  68/0; tests/psp/ares 348/0; the runner's test passes; GCC 13.3 builds the changed files with `-Wall -Wextra -Werror`.
+  Against master the review's R1-R6 pass and R7 fails (zeros where the old bytes come back); against the first round
+  R1-R6 fail. The 21 scenes in Software against master: every frame's picture and VRAM, and RAM, identical; the
+  machine's state differs only by layout 32 (the version, 17 bytes an open file: the branch writing layout 31 gives
+  master's states byte for byte). Batch 04's saves (Gundam NEXT PLUS, Kurohyou 1, Lunar, Killzone, Lumines, La Pucelle
+  Ragnarok, MediEvil): the same files byte for byte as master's runner makes (and as the first round's), and each loads
+  on a second boot.
+- **Left**: the game data install utility (KH BbS FM; Gunhound EX's DATA INSTALL cancels too). What a PSP's
+  sceIoGetstat says of a file emptied so before it's written, and what a gap past its old bytes holds, aren't recorded.
+  What the cut can't tell from a file left as it was (part 95): a newer save whose dropped bytes are the state's byte
+  for byte, and within a session another host program's in-place write of the same length.
+
+## PSP CPU: the FPU's flush to zero compiled, block endings in fewer steps, the run's count in a register, more of the VFPU compiled — 2026-10-14
+
+Branch `cursor/psp-cpu-round3-2b67`, on master (`dd37263c8`, #253). docs/psp-core.md, part 94, has the evidence.
+Clean room: PPSSPP not read at all, JPCSP not read. Save states unchanged (layout 31). Nothing a game sees changes on
+clang's builds (Android, macOS); on GCC's (the Linux desktop) vfim of a NaN half may (part 94, change 6).
+- **Measured first** (the M1; xctrace with round 2's block map, sorted over the whole thread by a new script; a probe
+  build counting the interpreter's calls from compiled code): the GE is 36 to 84% of the emulation thread, compiled
+  code 12 to 40%, the VFPU's helpers 1 to 13%. Hot Wheels: Ultimate Racing sets FCSR's flush-to-zero bit, so 660,000
+  FPU instructions a frame went to the interpreter (a fifth of its thread). Colin McRae, Killzone and Hot Wheels ran
+  14,000 to 16,000 VFPU instructions a frame through the interpreter (packing conversions, vcrs, vcrsp, vrot, vcst).
+  A block's end stored and loaded the run's count, checked halted after any load or store, and loaded the target's
+  page entry; a result into a register it read took its host register first and loaded the source again.
+- **Changes** (recompiler*.cpp, allegrex.hpp, memory.cpp/hpp, system.cpp/hpp; five commits, each measured alone): the
+  FPU's arithmetic and compares compiled for the flush bit as the block finds it (inputs and result flushed in integer
+  registers, after the host's rounding as the interpreter does; checked per instruction); the registers an instruction
+  reads kept for it (`pinSources()`); no halted check after a native instruction's way to the interpreter; no page
+  check going on to pages the owner says never change (`Allegrex::steady`: main RAM, the scratchpad); r0 as the
+  constant 0; the run's count in a saved register on ARM64 alone (held game registers 7 -> 6); vf2h, vh2f, the
+  integer packings, vcst, vcmov, vcrs, vcrsp, vqmul and vrot compiled with the prefixes at rest. A sixth, main RAM's
+  loads without the page table (d5c43999b), measured nothing on the Mac or the RP6 and is taken out (3081c98e2).
+- **Numbers** (the M1, Vulkan fast, master -> 2ce7026e9 with the direct loads still in, emulation thread, medians of three rounds taking turns): Hot Wheels' race 340 -> 249 M host instructions a frame (-27%; 30.4 -> 24.3 ms), Colin
+  McRae -8.7%, Disaster Report 3 -5.0%, Killzone's gameplay and Armored Core -4.5%, Army of Two and Killzone's menu
+  -2.8%, Monkey Ball -2.0%, the GE-bound scenes (Ghost of Sparta, Chains of Olympus, MX vs. ATV, Death Jr. II) 0.6 to
+  2.1%; the software renderer Hot Wheels -12%, the rest within 3% (its emulation thread draws bands too). Each change
+  measured alone: part 94's step table.
+- **Exact**: settled hashes, master against the branch (100 frames, every frame's picture and VRAM,
+  then RAM and the machine's state): 78/78 identical on 2ce7026e9 (the 21 scenes in Vulkan fast, Software and Vulkan
+  accurate, and Hot Wheels, Killzone's gameplay and menu, MX vs. ATV and Chains of Olympus in all three), 78/78 again on 622fd6a0f and on the last code (3081c98e2, against master with #254); tests/allegrex's new groups (fpu flushing, loads across pages, runs moved by syscalls; the recompiler
+  cases of a page taken out unheard and of a halting syscall; 15 new kinds in vfpu compiled lanes); 43 broken versions of the new code, 39 caught, the other 4 equivalent (part 94; 52 and 48 with the direct loads'
+  nine, all caught).
+  vfim of a NaN half now gives halfToFloat()'s bits in both engines whatever the compiler (clang's builds gave that
+  already; GitHub's GCC at -O3 quieted it in compiled code once this round changed its inlining).
+- **Checks**: tests/allegrex 74/0 (sanitized and release on ARM64; built for x86-64 and run under Rosetta, debug and
+  release), tests/psp 525/0 (sanitized, with detect_container_overflow=0, and unsanitized), tests/psp/ares 340/0;
+  GitHub's checks on 622fd6a0f all pass (the PSP core's, desktop, Android).
+- **Merged with master** (#254) as cd97a4630, the docs alone conflicting (part 93 before 94): the 26 scenes' hashes
+  against that master 78/78 identical; tests/psp 528/0 (sanitized), tests/psp/ares 340/0, tests/allegrex 74/0.
+- **Review** (independent, read-only, to 1c951a6f3): no blocker; its points taken in f055ec9f3: the count in a
+  register on ARM64 alone (Windows' x86-64 had it, untested); tests/psp's machine sets the steady pages, so its groups
+  take the skipped page checks (and took the direct loads while they were in), and the Allegrex harness's data is in
+  a steady page; the review's probes as tests (the flush bit switched in a block and a delay slot, code rewritten
+  after a link through each mirror, loads at RAM's end, runs of 2^62 to 2^64, r0 as every operand, threads switched
+  by syscalls);
+  emitFallback() keeps calls. Flush to zero from a cold boot measured: Hot Wheels from boot to its race sends no FPU
+  arithmetic to the interpreter (sqrt.s and floor.w.s, which have no native code, as before). Mutations again: the
+  same 48 caught, the same 4 equivalent. After it: tests/allegrex 78/0 (sanitized, release, x86-64 both), tests/psp
+  528/0 (sanitized and not, nothing skipped), tests/psp/ares 340/0, the 78 hashes against master with #254 identical.
+- **Left**: the GE (most of every scene's thread); jumps through a register (2 to 3%: a cache of the last target); the
+  VFPU's NEON helpers and vfpuEach; vcmp, vdot and vfad with prefixes; the FPU's mode check once a block; sqrt.s.
+- **RP6** (the coordinator's runs, master dd37263c8 against 622fd6a0f, the direct loads still in; Vulkan fast, 600
+  frames, three rounds; emulation thread CPU ms / M instructions / M cycles a frame): Colin McRae -4.7% / -7.3% /
+  -4.8%, Hot Wheels -4.2% / -10.8% / -3.8%, Killzone's gameplay -3.5% / -5.1% / -3.4%, Disaster Report 3 -3.2% / -4.9%
+  / -3.2%, Monkey Ball -2.7% / -1.9% / -2.6%, Army of Two -2.2% / -2.9% / -2.1%, Ghost of Sparta -0.7% / -0.7% / -1.2%,
+  MX vs. ATV -0.5% / -0.7% / -0.6% (waits on the GPU); nothing slower. The direct loads alone (9586b8c4e against
+  d5c43999b): Army of Two -0.3% / -0.1% / -0.0%, Colin McRae -0.3% / -0.5% / -0.4%, Killzone +0.1% / -0.3% / +0.0%:
+  nothing, as on the Mac, so they are out.
+- **Direct loads taken out** (3081c98e2): loads compiled as on master again (S1 the page table; the region,
+  directBase() and pageTable() gone), everything else kept; "direct loads" is "loads across pages", without the
+  region's checks. After it: tests/allegrex 78/0 (sanitized, release, x86-64 both), tests/psp
+  528/0 (sanitized and not, nothing skipped), tests/psp/ares 340/0, the 78 hashes against master with #254 identical,
+  39 of the 43 mutations caught (the same 4 equivalent); the Mac's gains the same (master -> 3081c98e2: Hot Wheels
+  -26.3% host instructions, Colin McRae -7.9%, Killzone -4.2%, Monkey Ball -1.6%; 0.4 to 0.6% more than 622fd6a0f).
+- Scratch: `~/phobos-work/scratch/cpu-round3` (`NOTES.md`, `cats.py`, `mutate3.py`, `queue-hash.sh`, `queue-final.sh`).
+
+## PSP Vulkan: the frame buffer's alpha as its stencil has it — MX vs. ATV Untamed's race (the haze over its hills and trees, the tree's shadow) — 2026-10-14
+
+Branch `cursor/psp-vk-mx-2b67`, on master with #251 merged (`5893dbdc0`), then merged with #253 (`dd37263c8`, part 92:
+conflicts in `settings()`'s end and `begin()`, both sides kept; `shaders.hpp` made again with compile.sh); PR #254.
+docs/psp-core.md, part 93, has the evidence; docs/psp-gpu-renderers.md ("Stencil") the design. Clean room: no PPSSPP
+code read (its GPU backend not opened), JPCSP not read. Save states unchanged. The software renderer untouched.
+- **Merged with part 92** (#253): its kept settings return from `settings()` before `lagging` is
+  worked out, which stays right (everything it's worked out from is among the kept settings); the setting and the
+  noting are `begin()`'s for every PRIM, before its primitives go into a draw of their own or among fast mode's meshes.
+  A test for those paths (sprites alike, the second's settings kept; a small PRIM among the meshes leaving the alpha
+  behind, another blending by it), which fails with `lagging` reset before the kept return (2,304 bytes apart). On the
+  merged code (78138561a) against dd37263c8: Software the same in 25; Vulkan in 23 each, the race's and Cars' hashes
+  the pre-merge code's exactly; the alpha set as before (45, 50, 0, 0 per 100 frames); tests/psp 528 groups, 0
+  failures, sanitized and not; tests/allegrex 68, 0; tests/psp/ares 340, 0; CI green.
+- **Found** with part 90's PRIM log and dumps of VRAM, everything drawn settled, before chosen PRIMs of a frame: the
+  race (Cars Race-O-Rama's engine) makes its alpha from its depth in strips, zeroes the near pixels' alpha by 15
+  sprites whose stencil operation is ZERO where the depth test fails, and blends its sky in by the frame buffer's
+  alpha. The GPU keeps that alpha twice, in the colors' alpha and the stencil, and writes the colors' alpha only where
+  a pass's result is known: the ZERO reached the stencil alone and the GPU's blending read the colors' alpha (the sky
+  over the near pixels whose depth fell in the strips' ramp: stripes along the depths, the trunk, the shadow).
+- **Changes** (gpu.cpp, gpu.hpp, vulkan.cpp, copy.frag, compile.sh; both modes, any resolution): a target notes where
+  a PRIM's stencil operations changed the stencil without the colors' alpha (`Target::lags`); before a PRIM blends by
+  the frame buffer's alpha there, or a copy of the target is taken over it, the colors' alpha is set from the stencil
+  on the GPU (`catchAlpha()`, `Command::Alpha`: `copy.frag`'s `ALPHA` build, a draw for each bit a read back takes,
+  in a render pass over the rectangle alone; not for a copy whose alpha the PRIM's pixels don't use). Under the GPU's
+  own logic operation the colors' alpha isn't written (Vulkan's takes the alpha, the GE's leaves the stencil), which
+  notes the area too. Nothing waits.
+- **Pictures** (mean channel difference from Software, #251 -> this, the kit's runners): the race at frames 100, 130,
+  160 and 200 4.72, 5.20, 2.84 and 2.79 -> 0.16, 0.21, 0.21 and 0.22, accurate and fast alike (9-10% of pixels more
+  than 24 apart -> 0.0-0.1%); Cars Race-O-Rama, the same bug, at 100, 150 and 200 1.19, 0.80, 0.76 -> 0.58, 0.54,
+  0.43 accurate, 1.21, 0.82, 0.79 -> 0.60, 0.56, 0.45 fast. Sheets: `~/phobos-work/scratch/vk-mx/out/` (`mx-final-100.png`)
+  and `kit/look/`.
+- **Hashes** (the kit's 21 scenes, #251's three games and the race, master at 5893dbdc0 against the final code,
+  bb6298e9a, 100 frames, every frame's picture and VRAM settled, then RAM and machine): Software the same in all 25;
+  Vulkan accurate and fast each the same in 23, the others the race and Cars, whose hashes are the first fix's
+  (ed3f121c6) exactly. The alpha set per 100 frames (both modes), before the review's points and after: the race 90 ->
+  45 (once a picture), Cars 50 -> 50, Colin McRae's race 98 -> 0 (its pictures the same), the other 22 scenes none.
+- **Speed** (Vulkan fast, frames a second, master / before the review's points / final, two rounds in turns, the
+  Mac's load 9-13): at 1x the race 28.30 / 29.52 / 30.32, Cars 20.36 / 21.00 / 22.06, Hammerin' Hero 190.9 / 189.9 /
+  193.6, Colin McRae 85.6 / 88.8 / 83.0; at 2x the race 21.24 / 20.99 / 20.64, Cars 15.41 / 15.80 / 15.66, Hammerin'
+  Hero 107.3 / 106.2 / 114.7: within the runs' own spread (a tenth). The RP6's numbers are still to take.
+- **Tests**: a GPU group (the alpha zeroed by a depth fail, inverted, by a 3D mesh's depth fail, then blended by and
+  taken as a texture, in 8888, 4444 and 5551) and part 90's 5551 group taking all its rows, both modes, 1x and 2x; on
+  #251's core they fail in every mode and resolution (10,752, 8,960 and 1,344 bytes apart). And a group for each other
+  way a PRIM leaves the alpha behind (a stencil test failing, MASK_ALPHA in a PRIM and in clear mode, INCREMENT and
+  DECREMENT, a REPLACE blended by its own alpha without dual-source blending, the GPU's own logic operation, a 4444
+  REPLACE under a comparison): on master's core the first five fail (4,608-6,912 bytes apart), before the review's
+  points the 4444 one (3,072) and, on CI's lavapipe (the M1 has no logic operations), the logic operation's (4,608).
+- **Review**: an independent read-only review found no blocker and four points, all taken (part 93, "The review"):
+  the GPU's logic operation's alpha, a 4444 stencil's top four bits, the cost on a tile-based GPU (the pass over its
+  rectangle, no setting for a copy whose alpha isn't used), and tests for the other ways.
+- **Found, not changed**: the GPU's corners' depths aren't whole numbers as the GE's are, so its depths come out one
+  more at about half of a 3D surface's pixels (the race's 51.2% Software's; truncated in a scratch build 95.3%, its
+  pictures unmoved). Its own change, as it moves every 3D game's depth on the GPU.
+- **For the test plan**: on the Mac, tests/psp's GPU groups can stop on an AddressSanitizer container-overflow in
+  `std::vector<u8>::resize` (seen in "gpu stencil formats" on #251's core, before this change): nall and sljit are
+  built without the sanitizers, and the linker can keep their unannotated instantiation. A false positive; these
+  runs set `ASAN_OPTIONS=detect_stack_use_after_return=0:detect_container_overflow=0`.
+- **Checks** on the final code (bb6298e9a): `tests/psp/run-tests.sh` 523 groups, 0 failures, sanitized (the container
+  check off, above) and not; `tests/allegrex/run-tests.sh` 68, 0; `tests/psp/ares/run-tests.sh` 340 checks, 0 failed;
+  CI green.
+
+## PSP GE: fewer GPU draws and cheaper PRIMs — the texels taken in the vertices, fast mode's small PRIMs among its meshes, a PRIM's settings kept — 2026-10-14
+
+Branch `cursor/psp-ge-speed3-2b67`, on `af542113a` (#251's head), so its diff is this round's alone (draft PR to
+#251's branch, to be retargeted once #251 merges). docs/psp-core.md, part 92, has the evidence. Clean room: no PPSSPP
+code read (its GPU backend not opened), JPCSP not read. Save states unchanged (layout 31). The branch name isn't
+`cursor/psp-ge-round3-2b67`: that's PR #132's, closed long ago.
+- **Measured first** (the M1, the bench runner at -O3 with thin LTO, a build counting why each GPU draw couldn't join
+  the one before): fast mode's draws alternated between meshes and the GE's own small PRIMs (Army of Two 3,144 draws a
+  frame, 2,167 such breaks; Ghost of Sparta's menu 3,684 and 2,095); the push constant `held` split Ghost of Sparta's
+  menu into 1,573 draws in accurate mode (1,213 breaks); MoltenVK's encoding at the submit was 7-16% of the emulation
+  thread; Monkey Ball's 50,000 PRIMs a frame paid for their whole setup each.
+- **Changes** (gpu.cpp, gpu.hpp, vulkan.cpp, draw.frag, draw.vert's comment, transform.vert, draw.cpp, threads.cpp,
+  ge.hpp): the texels a PRIM takes of a copy in its vertices (flags' bits 8-27) and its Transformed block, not the push
+  constants; fast mode's 3D triangles the GE transformed itself recorded among the meshes as models placed already,
+  which transform.vert takes with draw.vert's own arithmetic, so meshes and the small PRIMs between them are one draw;
+  a PRIM's GPU state kept where its settings are the last one's; the last texture looked at first; pipelines found by
+  a hash; fast mode's models and corners written into room made once a PRIM; the software renderer's triangle jobs set
+  up where the batch keeps them.
+- **Draws a frame** (base -> branch): fast mode Ghost of Sparta's menu 3,684 -> 346, Army of Two 3,144 -> 642 (menu
+  3,205 -> 541), Monkey Ball 2,119 -> 1,143, Hits Remixed 948 -> 472, Twisted Metal 208 -> 110, Sonic Rivals 445 ->
+  255; accurate mode Ghost of Sparta 1,573 -> 348, Army of Two 963 -> 649.
+- **Numbers** (the M1, MoltenVK, the emulation thread, base -> branch, two rounds taking turns at a load of 15-50;
+  fps it allows; instructions steadier): Vulkan (fast) Army of Two playing 19 -> 21 (343 -> 300 M instructions a
+  frame, -13%; cycles -12%), its menu 28 -> 32 (-16%), Ghost of Sparta's menu 35 -> 40 (-8%; cycles -11%), Hits
+  Remixed 150 -> 167 (-7%), Colin McRae -6%, Monkey Ball -3%, Death Jr. II, Sonic Rivals and Twisted Metal -3%;
+  Vulkan (accurate) Monkey Ball and Ghost of Sparta -4%, the rest within 2%; Software within its noise (the bands its
+  emulation thread draws while it waits move its counts by a tenth between runs of one build).
+- **Exact**: base against the branch from the 21 scenes' states, 100 frames, every frame's picture and VRAM, then RAM
+  and the machine's state: identical in all three renderers (63 of 63, and 63 of 63 again on b3a208277). The one
+  difference a GPU could see: draw.vert's
+  position isn't declared invariant as transform.vert's is, so a driver compiling the same expression differently in
+  the two could move a small PRIM's corner by a float's rounding in fast mode alone (on the M1, none: tested at 1x and
+  2x). draw.vert, accurate mode's, is as it was.
+- **Checks** (b3a208277): tests/psp 522/0 (sanitized, with `detect_container_overflow=0`: on this Mac base's GPU groups
+  stop at an AddressSanitizer container-overflow in `vector<u8>::resize()` too, an unsanitized object's
+  instantiation), and its GE's and GPU's 143 groups unsanitized 0 failures; tests/allegrex 68/0; tests/psp/ares
+  340/0; the shaders' CI check (glslang 16.6.0 byte for byte, valid for Vulkan 1.0) passes. GCC 14 without the
+  sanitizers (on 9c411d1ed) stops at "may be used uninitialized" in four.cpp (`downAxis`, `four.depth`), untouched
+  here and met by the God of War software round on Oct 10 too; CI's GCC 13 with the sanitizers doesn't.
+- **Review** (independent, read-only, to 4d26b6a98): no blocker; four points fixed in b3a208277: a mesh's models kept
+  across its runs by the recording's generation (a near-plane cut no longer copies the PRIM's vertices again, nor can a
+  hand-over in between leave a run's indices on placed models); the start-up check draws the GE's own 3D among the
+  meshes, and where only that fails System turns `screenMeshes` off and checks again; kept settings let go after a
+  texture the backend couldn't make; tests in a 480-wide frame buffer, with the shine apart, a near-plane cut, and
+  sampling past what's taken (each of the clamp's three paths, broken, fails them; the kept settings' fix undone fails
+  the pretend backend's test). Small points taken; draw.vert's invariance left to measure on the RP6. Instructions
+  unchanged by them (both Vulkan modes to the percent, Software within its noise).
+- **After an update** players' kept pipelines (System's "Pipeline Cache") miss once: draw.frag's push constants and fast
+  mode's vertex layout changed, so the first session makes its pipelines afresh (a stutter at each).
+- **What's left**: Monkey Ball's draws split by texture (descriptor indexing); a Look kept on the GE's side and the
+  command loop (7%); fast mode's vertices read straight into models; 2D PRIMs between meshes; the software renderer's
+  triangle setup. Measure on the RP6, where the driver's work is in the `vkCmd*` calls, not deferred to the submit.
+- Scratch: `~/phobos-work/scratch/ge-round3` (`NOTES.md`, `patches/gestats-patch.py`, `stats-run.sh`, `hash21.sh`).
+
+## PSP Vulkan: the depth buffer as the PSP's memory, a 5551 stencil bit — Hammerin' Hero's and Jeanne d'Arc's characters, Cars Race-O-Rama's race, Colin McRae's terrain shadows — 2026-10-13
+
+Branch `cursor/psp-vk-models-2b67`, on master (`542da5a28`, #230), merged with `3228b825d` (#229, #237); PR #251.
+docs/psp-core.md, part 90, has the evidence; docs/psp-gpu-renderers.md the design. Deep-play batch 03's bug 2 and batch
+02's item 4. Clean room: no PPSSPP code read (its GPU backend not opened), JPCSP not read. Save states unchanged. The
+software renderer untouched. Cursor ran a second copy of the agent for a while: its commit (5071b80b5) and design-doc
+text are kept; the first holds the worktree (`LOCK-worktree`, `TWIN-NOTICE.md` beside it, neither committed).
+- **Found** with a scratch runner logging every PRIM of a frame: the characters' PRIMs reached the GPU whole (skinned;
+  not the cause), and failed per-pixel tests. Hammerin' Hero and Jeanne d'Arc draw their scene into the screen's 5551
+  frame buffer, then their characters into one of their own (0xcc000), cleared without its depth, tested against the
+  scene's depth (0x88000) and marked in the stencil by INCREMENT, then laid over the screen as a 5551 texture behind
+  an alpha test. On the GPU each target's depth was its own (the characters tested against stale depth), and a 5551
+  INCREMENT stepped the stencil 0 to 1 with the color's alpha left (the composite's alpha test dropped every pixel):
+  each alone lost them. Cars Race-O-Rama reads its race's depth as a CLUT16 texture through VRAM's second copy
+  (0x042cc000) for the alpha its sky is blended by, and the GPU's depth was never in memory: the sky covered the race.
+- **Changes** (gpu.cpp, gpu.hpp, vulkan.cpp; both modes, any resolution): the newest depth drawn in a depth buffer
+  taken into a target from the target over the same depth buffer (address and row width) that drew it, on the GPU
+  (`takeDepth()`, `Command::Depth`: the depth aspect copied, nothing waits); on 5551, INCREMENT a REPLACE of 255,
+  DECREMENT and a REPLACE of 0 a ZERO; a texture read through VRAM's depth views over a depth buffer the GPU drew newer
+  depth in has that depth read back into memory first (`putDepth()`, `Backend::readDepth()`: a wait, once until more
+  depth is drawn).
+- **Pictures** (mean channel difference from Software at frame 100, master -> branch): Hammerin' Hero accurate 1.04 ->
+  0.07, fast 2.14 -> 1.17; Jeanne d'Arc 0.27 -> 0.04 and 2.31 -> 2.10; Cars 37.08 -> 1.19 and 37.08 -> 1.21; Colin
+  McRae's race (the kit's scene, the same bug: its terrain shadows, which part 83 left) 3.69 -> 0.22 and 3.93 -> 0.53.
+  Sheets: `~/phobos-work/scratch/vk-models/png/`.
+- **Hashes** (the kit's 21 scenes, master against the branch, 100 frames, every frame's picture and VRAM, then RAM and
+  machine): Software the same in all 21 and the three games' (24); Vulkan accurate and fast the same in 19 of 21, the
+  others Colin McRae's race (its shadows) and Twisted Metal's play (4 pixels a level apart, 2 now Software's; in fast
+  mode 8, 2 Software's where 4 were).
+- **Tests**: four GPU groups (a depth buffer two frame buffers draw with, a 3D mesh among them; a 5551 stencil bit by
+  each operation, taken as a texture's alpha; a depth buffer read as a texture through the depth views, and memory's
+  changes around it; the depth formats' conversions), in both modes; on master's core the first three fail on their
+  pictures.
+- **Review**: an independent read-only review (no blocker, no major point; nothing touching the software renderer):
+  all its points taken but the clear's depth copy, measured instead (b042ddb15, e620356f1, 1c44ceab7). Its test of each
+  frame buffer's own stencil caught MoltenVK's image copy of the depth alone taking the stencil too: the depth goes
+  through the staging buffer now.
+- **Checks** (1c44ceab7, merged with master at 3228b825d): tests/psp 513/0 (sanitized), tests/allegrex 68/0,
+  tests/psp/ares 340/0; CI on 1c44ceab7 green. Hashes as above, against master as merged in.
+- **Speed** (the M1, two rounds, master -> branch): Vulkan fast at 1x 2-5% slower in the four scenes (Hammerin' Hero
+  168.9 -> 164.8, Jeanne d'Arc 277.3 -> 264.0, Cars 17.76 -> 17.06, Colin McRae 69.9 -> 68.5), at 4x about 7%
+  (Hammerin' Hero 46.7 -> 43.6, Cars 8.09 -> 7.48): the depth copies, Cars' read back and wait, and what's drawn now.
+  To measure on the RP6.
+- **Left**: depth between depth buffers of other row widths over the same memory; the CPU's loads, block transfers and
+  palette loads through the depth views, and a texture over depth through VRAM's plain copies; a 4444 frame buffer's
+  INCREMENT and DECREMENT; a fail or depth-fail operation's stencil in a texture copied on the GPU.
+- Scratch: `~/phobos-work/scratch/vk-models`.
+
+## PSP: polling loops — the polled calls in fewer steps, and a loop that comes back as it was skipped to the go's end, each skip proved — 2026-10-13
+
+Branch `cursor/psp-polling-2b67`, begun on `cursor/psp-cpu-round2-2b67` (#237 on #229), master merged in once both had
+(`3228b825d`). docs/psp-core.md, part 91, has the evidence. Clean room: PPSSPP not read at all, JPCSP not read. Save
+states unchanged (layout 31). Nothing a game sees changes: pictures, VRAM, RAM and the machine's state are master's.
+- **What the loops call** (a scratch syscall trace, the loops read from RAM): both Need for Speeds' idle thread runs
+  `while(*count < target) yield(0)`, the yield being sceKernelGetThreadId, sceKernelReferThreadStatus (itself) and
+  sceKernelRotateThreadReadyQueue at its own priority, alone in its line: 29 instructions, 526,000 calls a frame;
+  Twisted Metal's logo asks the movie ring's free packets and signals a semaphore already at its most (refused), the
+  Armored Cores' intros the same with the ring asked twice, Disaster Report 3's intro the blank count and the ring:
+  90,000 to 370,000 calls a frame. Nothing changes from turn to turn but the thread's run time in the status (never
+  read) and the ready order's count (the rotation); every call quiet or calm, so each loop runs to the go's end.
+- **Changes** (each its own commit, with tests): main RAM read, written and looked up without a call, copies' pieces
+  without a std::function; polled calls dispatched in fewer steps (imports first, the FINISH and calls into the program
+  looked for only where there may be one, the movie library's mark compared in place); spins skipped (`spins.cpp`):
+  once a quiet or calm call's place has come round four times the same cycles apart, the kernel runs the next turn on
+  a CPU of its own (the interpreter, its stores kept aside, its system calls worked out without being made) and, if it
+  comes back with every register as it was and every byte it stored what memory holds (but the run time, never read),
+  skips whole turns to two short of the go's end: their cycles to the clock, the ready order's count, the last turn's
+  run time written where its status would write it.
+- **Numbers** (Mac, Vulkan fast, the emulation thread's host instructions and ms a frame, medians of three rounds
+  taking turns; the load 10 to 200, so the instructions carry it): Most Wanted's race 289 -> 38 M (-87%, 17.4 -> 3.2
+  ms), its profile 301 -> 19 M (-94%), Underground Rivals' title 276 -> 9 M (-97%, 18.0 -> 1.3 ms); Twisted Metal's
+  logo 286 -> 10 M (-97%, 14.6 -> 0.7 ms), Disaster Report 3's intro 149 -> 10 M (-93%), the Armored Cores' intros
+  148 -> 13 and 140 -> 18 M (-91%, -87%); the per-call commits alone 18 to 20% of it in the Need for Speeds, 43 to 54%
+  in the movies; scenes that don't poll 1 to 7% fewer instructions (main RAM without a call). The software renderer
+  alike (the Need for Speeds -84 to -91%, the movies -87 to -97%).
+- **Exact**: the 21 scenes' hashes identical to master's in the software renderer (100 frames, every frame's picture and
+  VRAM, then RAM and the machine's state), Vulkan fast and Vulkan accurate (200 frames, the end's RAM and state), for
+  the first code, after the review's fix and for the last commit (`3b2e44167`); tests/psp's new groups run each program
+  both ways on both engines, the whole state compared after every eighth of a frame (skipped, refused, and skips made
+  directly against the same turns run); 29 broken versions of spins.cpp, 21 caught, the other 8 changing nothing a game
+  sees (guards that can't be reached or always hold). An independent review found one exactness bug (the last turn's run
+  time rewritten from the status's size word as the turn left it: a status of 88 bytes got bytes 88-91 written), fixed
+  with a test the first code fails, and its other points taken; a delta review of the fixes found no exactness bugs, its
+  points (a guard, the run time pinned to the cycle, a sentinel, a ring whose library names none, comments) taken.
+- **The library check's Platypus** (pictures other than master's from frame 90, in two runs of each runner): not the
+  emulation. From boot with the check's presses every frame's picture and VRAM, then RAM and the machine's state, are
+  master's through 3600 frames; the runner's PNG is the last picture the screen's thread presented, a frame or more
+  older than its name on a busy host, and the branch's cheaper frames make other captures stale (master's at 90, the
+  branch's at 320 and 480; two runs of master's newer runner differ at 10 of 360 PNGs too). The other 30 flagged games'
+  every frame is master's too. A capture taken from the core itself, drawing settled, would make the check's PNGs exact.
+  With master merged again (`2d6766628`): the 21 scenes identical in all three renderers, the suites passing (tests/psp
+  517/0 with ASan's container-overflow check off: master's own suite trips it on the Mac), the speeds as above.
+- **Checks**: on the last commit, tests/allegrex 68/0, tests/psp 512/0 (sanitized), tests/psp/ares 340/0; GitHub's
+  checks pass (the PSP core tests built by GCC, the desktop builds, the Android APKs).
+- **Left**: loops whose answers move on with the clock (polling the system time till a moment) can't be skipped so;
+  only six functions are worked out (others to add as traces show loops of them: a library run with the spin debug
+  patch would list proofs that fail); the per-call costs left (the scheduler's look through every thread at a
+  rotation, the stub's `jr ra` looked up in compiled code) matter only for loops the skip can't take.
+- **On the RP6, to measure**: master against this branch, Vulkan fast at 1x, part 79's scenes (nfsmw-race,
+  nfsmw-profile, nfsur-title, tm-logo, dr3-intro, acff-intro, acsl-intro): the Need for Speeds, at 41-42 there held by
+  the emulation thread (PPSSPP 60), should reach 60 unless the GPU's side holds them; the movies' thread a tenth of
+  what it was; the rest as they were.
+- Scratch: `~/phobos-work/scratch/polling`.
+
+## Library: every style's own take on the Systematic consoles; the glyph packs gone — 2026-10-13
+
+Branch `cursor/themes-console-icons-2b67`, on `cursor/themes-backdrops-2b67` (the entry below), at the owner's choice:
+he likes BAXY Square's Systematic consoles and wanted each theme's icons to be those consoles in its own feel, not
+the Phobos, Pixel and Manga packs' "little blobs". App only.
+- **Match style** (now the default) gives every style a treatment of the same art (`ConsoleTreatment`,
+  `ui/theme/ConsoleTreatment.kt`): Glass under no style (recolored, light along the top and left edges, a gloss, a
+  soft shadow), Neon under Retrowave (primary tubes on the outline, secondary on the parts' edges, glowing; darker
+  tubes with a tinted glow on light themes, where added light would wash out), Pixel under Pixel art (32 cells along
+  the longer side, the theme's four tones and accents, a dark outline), RPG under 16-bit RPG (the same cells in six
+  shades, cool shadows and warm lights, a black outline, a highlight, a drop shadow), XMB (one light color shaded by
+  the art, the text's color in light themes, a gloss and a glow), Manga (an ink line, screentone in the mid tones,
+  solid ink in the darkest) and CRT (the art's light and its outline in the CRT style's phosphor, scanlines and a
+  bloom; on light themes, a dark phosphor ink). Neon's tubes and the phosphor stand out at least 3:1 against the
+  tile. Systematic keeps the art as drawn.
+- **The pixel art** is generated by `tools/console-art/pixelate.py` (cairosvg) into `ConsolePixels.kt`: each console
+  without its halo, cropped, on the grid, each cell one of the SVG's own colors (the one covering most of it, or a
+  darker one that covers a good share and stands out), its palette only the colors its cells took. At runtime
+  (`toneLevels`) the grey covering most of a console takes the tone nearest its own lightness, the other greys
+  covering a twentieth of it or more the tones either side in order (the run moved a tone if that sets more of them
+  apart within 0.2 of the console's lightness, 0.12 for greys under 0.05 apart), and the rest the nearest one's. So
+  black consoles (the Mega Drive family, the Neo Geos, the N64) stay dark with their parts apart; in Pixel's four
+  tones a few near-black greys share one (the Atari 2600's, the 32X's). Mapping each grey's lightness straight to a
+  tone made them blobs; centering the tones on a console's lightness drew them light. `PixelConsole` draws it at a
+  whole number of pixels to the cell.
+- **The other looks** are drawn from the SVG without its halo (`withoutHalo`, in step with the tool's) and finished
+  in a Coil transformation (`ConsoleFinishing` over `ConsoleFinish`), cached per theme and look; the SVG is rendered
+  at the largest size that with the finish's margin still fits the icon's box (`ConsoleFinish.inside`), shown 1:1.
+- **Every listed system** has its console in every look (`consoleArtFor`, `ui/PlatformIcons.kt`): the set has no
+  Super Game Boy, PC Engine LD or Pocket Challenge V2, which take the Super Famicom's, the LaserActive's and the
+  WonderSwan's as before; the PSP is Phobos's own drawing in the set's style.
+- **Settings**: Platform icons offers Match style or Systematic; a stored `PHOBOS`, `PIXEL` or `MANGA` reads as Match
+  style, and so does nothing stored (Systematic was the default while Match style meant the glyphs).
+  `PlatformGlyphs.kt`, `PlatformGlyphArt.kt` and `PlatformGlyphsTest` are gone.
+- **LICENSE**: the Systematic notice names the derived art (`ConsolePixels.kt`, the tool, `ConsoleTreatment.kt`) as
+  covered by it, all but the PSP's, which its own notice covers as derived from Phobos's drawing; the glyphs' notice
+  is gone.
+- **Previews** (outside the repo): `~/phobos-work/scratch/themes/previews/icons-<look>-<theme>.png`, every system the
+  Library lists on its tile, for Systematic, Glass, Neon, Pixel, RPG, XMB, Manga and CRT in two to four themes each,
+  light ones among them. A local JVM test ran the real Kotlin: the pixel art exactly; the other looks over the SVGs
+  as cairosvg draws them at the size the app renders them (AndroidSVG draws them the same up to antialiasing).
+- **Review**: an independent read-only review (a subagent) of the whole branch: NEEDS CHANGES, two Mediums, both
+  fixed: the pixel looks still merged dark consoles' parts (a grey's tone came from its place in the console's range;
+  now `toneLevels`, after a delta check caught a second pass drawing black consoles light), and Neon and CRT added
+  light that washed out on light themes (now darkened tubes and ink with a tinted glow, under a contrast test). So are
+  its Lows: the smooth looks resampled to the tile (now rendered to fit it 1:1), per-tile costs, tests for RPG's
+  highlight, the neon's colors and every launchable system's console, stale KDoc and plan wording, and
+  `PixelConsole`'s role. Its last delta checks passed.
+- **For the owner**: Match style is the new default (Systematic was); the stand-ins (the Super Famicom for the Super
+  Game Boy, the LaserActive for the PC Engine LD, the WonderSwan for the Pocket Challenge V2); on light themes Neon's
+  two tubes can come out close in color.
+- **Checks**: 328 host tests pass (`:app:testModernDebugUnitTest`); new `ConsoleTreatmentTest` (11, among them every
+  system `LaunchSystems` names having a console, each console keeping its lightness and its parts apart in the tones,
+  Neon's tubes and the phosphor standing out 3:1 on light and dark tiles, and the art rendered as large as fits its
+  box finished), `AppearanceSettingsTest`'s icon pack check and `LicenseNoticesTest`'s Systematic notice check. No
+  APK built locally (CI builds them); not yet seen on a device.
+
+## Appearance: the Sakura cycle in phases, three Pixel art scenes gone, night city and XMB Deep redrawn, Manga and CRT redone, a magazine cover and Truck-kun — 2026-10-13
+
+Branch `cursor/themes-backdrops-2b67`, on master (`1d9308714`, merged with `542da5a28`, #230, `3228b825d`, #237, and `19da506fe`, #238, since), from the owner's feedback on the styles and their
+backdrops. App only (Kotlin; no native or core change). The console icons follow in a second branch,
+`cursor/themes-console-icons-2b67`.
+- **Sakura cycle** (`PixelBackdropScene.SAKURA_CYCLE`, `ui/theme/PixelSakura.kt`): the sun and the moon were up
+  together, side by side, and popped in and out. `SakuraCycle` (plain math) runs a day and a night in 8 minutes (108 s
+  before) in eight phases: sunrise, day, sunset, dusk, moonrise, night, moonset, dawn. A body rises one diameter (and
+  its glow's reach), then follows an arc that climbs on at about the speed it rose at, and sets the same way; it's
+  drawn a whole pixel at a time and clipped at the first row the far ridge covers in every column, so it climbs out
+  from behind the mountains and sinks back behind them, its glow with it (`middleRow`'s reach). The sky and the light
+  are eased between keys (dawn, day, sunset, night): the sky is full night before the moon rises and until it sets,
+  dawn comes before the sun rises, and stars come out one by one at dusk (`StarField`'s `shown`). The landscape is
+  painted again only when the moment changes. Sakura day and Sakura night are unchanged pixel for pixel (3,120 frames
+  compared with the previous code: every theme, five sizes, live and still). With animations off the cycle shows the
+  sun touching the mountains as it sets.
+- **Pixel art scenes**: Space (with `Meteors`, `PixelScene` and `pixelSceneColors`), Underwater and Pixel castle are
+  gone; the list is Sakura (now the default), Sakura day, Sakura night, Pixel plains, Night drive. Stored names read
+  as the closest kept scene (`pixelBackdropNamed` and `screensaverBackdropNamed`, `data/SettingsStore.kt`): `SPACE`
+  and `CASTLE` as Sakura night, `UNDERWATER` as Sakura day, the screensaver's `PIXEL_SPACE`, `PIXEL_CASTLE` and
+  `PIXEL_UNDERWATER` the same way, the pre-split `SAKURA` as Sakura night; anything else unknown is Sakura (Match app
+  for the screensaver). `AppearanceSettingsTest` writes the old names into a real settings file.
+- **Night city** (`ui/theme/RetrowaveCity.kt`): the old row of dark boxes over the grid is now a dense neon
+  skyline over the water (the owner's photo reference used for the mood only): five layers of towers fading into a
+  lit haze, setbacks, needles, slanted roofs, lanterns and tapers, windows speckled or in lit floors, neon edges,
+  rings, rooflines, glyph-like signs and scan-lined screens whose light spills into the air, a landmark tower, and the
+  city mirrored and streaked in the water under a bright waterline. Neon from the theme's three accents and a violet
+  from its background; light themes get it washed toward the background. It's drawn in plain Kotlin through
+  `RenderedBackdrop` (new, `ui/theme/RenderedBackdrop.kt`: a still backdrop drawn off the main thread at its size, up
+  to a 1080p screen's pixels, keyed by value on the theme's final colors; the last three pictures are kept, so it's
+  back at once after a game or the screensaver; a new size's picture waits for the window to settle and shows the one
+  before, cropped, meanwhile), 70-300 ms for 1920x1080 on the Mac's JVM. The glass
+  search samples `CityColors` (white included, where the spilled light stacks up); panels come out about as opaque
+  as over the sunset (0.92-0.98 in the retrowave themes). `GlassContrastTest` checks against the city as drawn.
+- **XMB Deep** (`ui/theme/Xmb.kt`): it was Waves' three ribbons a little stronger. Now two sheets of fine strands
+  (`Sheet`, 18 and 10) sweep and turn over a darker gradient and a pool of light, fanning out where they lie flat and
+  gathering where they're edge on, with sparkles (`Sparkles`) drifting up through them; whole cycles of the 40 s loop.
+  Each sheet is one path, so its strands don't add up where they gather. Waves and Calm are as they were (Calm's
+  description no longer claims a deeper gradient). The glass search's `deepScene` samples the strands stacked to
+  `WaveColors.STRAND_STACK` and a sparkle with its halo; panels over Deep 0.90-0.97 in the themes looked at (Waves
+  0.80-0.93).
+- **Manga ink** (its own commit, so it can be dropped): `ui/theme/MangaPage.kt`, through `RenderedBackdrop`, in the
+  ink tone (`mangaTone`) on the paper and never denser than it: Screentone is a 45-degree halftone swelling from a
+  third of the way down along a wavy edge, cut by scratched highlights; Speed lines are 520 tapering focus lines around
+  a clear space; Splash page was an impact burst cut out of a screentone field (it was a grey star blob), and is now
+  the magazine cover below.
+- **Magazine cover and Truck-kun** (Manga ink, the owner's follow-up: Splash page "looks kinda lame", he wanted the
+  cover of a manga magazine advertising Phobos, and a speed lines backdrop with Truck-kun): `ui/theme/MangaCover.kt`
+  and `ui/theme/MangaTruck.kt`, drawn by `MangaPage` like the other two, in its ink and never denser than it.
+  - *Magazine cover* (`MangaBackdropScene.COVER`): Weekly Shonen Phobos, an original masthead (no Jump name, logo or
+    emblem): WEEKLY SHONEN on an ink tab beside PHOBOS on wide pages (above it on tall ones), PHOBOS inked, cut by two
+    speed stripes, ringed in paper and outlined over a toned drop shadow; an issue box (2026, No.42, PRICE ¥0); a NEW
+    SERIES! ribbon with sparkles; the cover lines "ares, now on Android!" (outlined) and "...and back to Windows and
+    Linux!" (a caption box); a 30+ SYSTEMS! balloon; an EAN-13 barcode that reads back as its digits (491..., the
+    magazine prefix, its check digit computed); and in the middle the app icon's moon, lumpy and cratered (craters
+    foreshortened toward its edge, the wall toward the light in shadow), a d-pad on a cross-shaped hollow, bursting out
+    of an impact burst with rocks flying, focus lines converging on it, over the curve of Mars (ares, the planet's Greek
+    name) with craters seen edge on. On a wide page the masthead and the issue box stay in the top fifth, which the
+    Library's cards leave showing.
+  - *Truck-kun* (`TRUCK`): a cab-over truck charging at the reader, seen from low down (`Frame`, a perspective frame)
+    and tilted: a toned cab with a light stripe lettered ISEKAI, a dark windshield with two reflections and wipers,
+    mirrors, roof marker lamps, a slatted grille, round headlights blazing (a glow, flare lines and an eight-pointed
+    glint, long sideways), a bumper with a 1-UP plate, tyres and its shadow on the road; 340 focus lines converge on
+    the grille. VRRROOOM!! grows letter by letter, and the narration is a light novel's title: "That time ares got hit
+    by Truck-kun and was reincarnated on Android". On a wide page both stay in the top fifth.
+  - *Lettering*: Bangers (already bundled, OFL; it has no lowercase, so the lettering is in capitals) rasterized by the
+    app's own code, so it's the same on every device and in tests: `TrueType` reads the font file (format 4 character
+    map, simple and composite quadratic outlines, advances, GPOS pair kerning), `Lettering` sets lines and blocks
+    (turned, slanted, growing), and `Raster` fills them by signed area per pixel. `Raster` is a modified Kotlin
+    translation of font-rs's rasterizer (`draw_line` in its `src/raster.rs`, `accumulate` in `src/accumulate.rs`;
+    Copyright 2015, 2018 Google Inc., Apache License 2.0), credited in LICENSE (font-rs's entry, which
+    `LicenseNoticesTest` checks for) and in its KDoc. Outlined letters take their rings from an exact distance transform
+    between pixel centers (`Mask.distances`, within about half a pixel of the true distance). The app reads the font
+    resource once, on the render thread (`MangaLettering` in `Manga.kt`); if it can't be read or parsed (`letteringOf`),
+    the failure is kept and the two scenes leave the words out, and a backdrop whose render throws keeps its placeholder
+    (`RenderedBackdrop` logs it).
+  - *Dark themes*: where the ink is lighter than the paper, form shading turns round (`Page.shade`), so the moon's lit
+    side and the headlights are the light parts on both kinds of theme; lines and lettering stay ink.
+  - *Stored choices*: `SPLASH` reads as `COVER` (`mangaBackdropNamed`, `data/SettingsStore.kt`), the screensaver's
+    `MANGA_SPLASH` as `MANGA_COVER`.
+  - *Cost* (the Mac's JVM, warmed up, the machine quiet): 1920x1080 in 0.37-0.44 s for the cover and 0.53-0.61 s for
+    Truck-kun (Speed lines 0.31-0.37 s), allocating about 27 and 35 MB (Speed lines 17 MB); once per size and theme,
+    off the main thread.
+  - *Previews* (outside the repo, `~/phobos-work/scratch/themes/previews2/`): `manga-cover-*.png` and
+    `manga-truck-*.png`, 1920x1080 and 1080x2400 in GitHub Light, Phobos light, Gruvbox Dark and Phobos dark, each also with a
+    mock of the Library drawn over it (`*-library.png`), and `manga-cover-sheet.png` and `manga-truck-sheet.png`; from
+    a local JVM test (not committed) running the real code and theme colors.
+- **CRT terminal** (its own commit, so it can be dropped): `ui/theme/CrtScreen.kt`, through `RenderedBackdrop`: a tube
+  at rest, the phosphor glowing in a pool below the middle (`bloomAt`, falling off over the shorter side so the top
+  bar's title stays on darker glass), rounded corners, soft scanlines in threes, a faint aperture grille on dark
+  themes, grain, a faint reflection, and boot text burned in at the bottom left in a 5x7 font. The scanlines and the
+  grille are drawn over the picture at the screen's own pixels (the picture is capped at 1080p and may be scaled); a
+  faint refresh band rolls down every 9 s (`RefreshBand`, 15 frames a second, off with animations off). The phosphor
+  leads its color now (80% of it in the primary, 60% before) and the bloom is stronger (0.22 dark, 0.1 light).
+- **Previews** (outside the repo, `~/phobos-work/scratch/themes/previews/`): `sakura-cycle-filmstrip-*.png` and
+  `sakura-cycle-horizon-*.png` (every phase, and the sunset and moonrise 4 s apart), `pixel-*.png` (each scene),
+  `retrowave-night-city*.png` and `retrowave-before-after.png`, `xmb-*.png`, `manga-before.png` and `manga-after*.png`,
+  `crt-before.png` and `crt-after*.png`. A local JVM test (not committed) ran the real Kotlin: the Pixel art scenes,
+  night city, Manga and CRT exactly; XMB and the kept Retrowave scenes through a Java2D port of their Compose drawing
+  with the real geometry and colors.
+- **Checks**: `:app:testModernDebugUnitTest` 318 pass (299 on master): new `SakuraCycleTest` (8: the phases' order,
+  never both up, rising out of the horizon a row at a time and sinking back, the drawn landscape unchanged at each
+  run's start and end, the arc, full night from moonrise to moonset, dusk and dawn without a jump, sunrise after
+  dawn), `AppearanceSettingsTest` (3), `NightCityTest` (4),
+  `XmbDeepTest` (3), `MangaPageTest` (3), `CrtScreenTest` (4); `PixelSceneTest` and `PixelArtTest`'s planet and
+  shooting-star tests went with Space. Reverting the Manga or the CRT commit alone leaves the app compiling and the
+  remaining tests passing (this entry then needs its bullet for it taken out). No APK built locally (CI builds them);
+  not yet seen on a device. With master merged, the magazine cover and Truck-kun, and the review's fixes: 333 pass in
+  47 classes (on `ac7b1c115`); `MangaPageTest` has 12 (every pixel between paper and ink on light and dark themes, down
+  to 1x1 and on pages as narrow as 1x30, the same page with the font read again, every scene faint on average on wide,
+  square, 4:3 and tall pages, the masthead lettered over the moon, the headlights light on both kinds of theme, the
+  barcode read back by the published patterns for every leading digit, a letter's counter clear and a whole word's
+  margin bare, ink growing with the square of the size, a composite glyph and a missing one, a font that can't be
+  read leaving the words out, Euclidean distances), and `AppearanceSettingsTest` reads a stored Splash page, backdrop
+  or screensaver, as the cover.
+- **Review**: an independent read-only review (a subagent) of the whole branch: NEEDS CHANGES, no High finding. Its
+  three Mediums are fixed: Deep's strands drew brighter than the glass search modeled where a sheet gathers (the fade's
+  gradient had 16 stops; now 64, and each sheet is one path); `RenderedBackdrop` drew again from scratch after every
+  game and the screensaver, stretched the old picture on rotation, let stale renders run and had no guard against
+  running out of memory; the CRT's scanlines and grille, baked into a picture scaled on screens over 1080p, beat
+  unevenly. So are its Lows: the glow appearing and vanishing at a run's ends, the cycle tested through a parallel
+  model rather than the drawing, the plan row's order, `CrtScreen.REFLECTION`'s and `SolidUi`'s KDoc, Deep's pool
+  under the top bar's title (`XmbContrastTest` takes it now), the band's cost (`CrtUi.animatedBackdrop`, 15 frames a
+  second), and MangaPage's per-pixel `hypot`s and edge scan (a 1920x1080 page now 130-320 ms). `CrtContrastTest` also
+  allows for a status bar above the top bar. The magazine cover and Truck-kun had an independent review of their
+  own (the coordinator's; notes and probes in `~/phobos-work/scratch/themes/review/`): OK to merge after fixes. Its
+  blocker: `Raster` was a translation of font-rs's rasterizer (Apache-2.0) without credit, and the docs called it
+  plain Kotlin; it's now credited as above. Its should-fixes: the NEW SERIES! sparkle's clamp threw on pages under
+  about a thirtieth as wide as they're tall (now clamped only where the page is wider than it; the every-pixel test
+  takes 1x30, 2x3000 and 30x4000); a font that couldn't be read threw on every lettered render, uncaught (now read
+  once, a failure kept as no lettering, and `RenderedBackdrop` keeps the placeholder if a render throws); the barcode
+  test's parity for a leading 6 was wrong (fixed, and every leading digit is tested). Its nits, taken: square and 4:3
+  pages in the faintness test (Truck-kun's mean ink is 0.38 at 1:1 against the 0.4 bound), the every-pixel test's
+  comment (`PixelKit.mix` clamps, so it catches a NaN), tests for a composite glyph (É) and a missing character, the
+  dark-theme KDoc, the unused `halo` and `Mask.at`, the migration test moved to `AppearanceSettingsTest` with an
+  unknown screensaver value, `Box` renamed `PageBox` (it shadowed Compose's), the EAN-13 guards named, the
+  lettering's strings in capitals as Bangers draws them, and `Mask.distances`' KDoc. Left as it is: an outline ring's
+  width steps by a pixel along a shallow slope, leaving dashes of paper where two masthead letters' outlines nearly
+  meet.
+- **For the owner**: whether the Manga and CRT backdrops stay (the PR's description has the verdict and previews);
+  Sakura as the Pixel art default now that Space is gone; the magazine cover and Truck-kun on the RP6.
+
+## PSP GE: the front end faster — vertices read a part at a time, fast mode's corners four at a time in vectors, each corner placed once — 2026-10-13
+
+Branch `cursor/psp-ge-headroom-2b67`, on master (with #233, #234 and #235 in it).
+docs/psp-core.md, part 85, has the evidence. Clean room: no PPSSPP code read, JPCSP not read. Save states unchanged
+(StateVersion 26).
+- **Measured first** (the M1, the bench runner at -O3 with thin LTO and the emulation thread's counters, `sample`
+  profiles by line): Army of Two's 650,000 vertices a frame went to placing fast mode's corners (17%, each corner
+  projected again at every triangle) and reading vertices (18%); Super Monkey Ball's 50,000 small PRIMs a frame to
+  their setup, the command loop and the guest's VFPU; Ghost of Sparta's menu to `transformAll()`, `GPU::own()` (10%)
+  and MoltenVK's submissions.
+- **Changes**: vertices read a part at a time from the host's bytes; fast mode's corners placed once a corner and four
+  at a time in vectors (NEON), skinned ones after their scalar bone sums; fast mode's models not zeroed first;
+  `GPU::own()` passing over pages already its own and busy, memory's changes over unwatched pages eight at once; a
+  list's words from the host's bytes; the kept settings' bones only for skinning PRIMs; each 3D triangle's corners
+  placed once a vertex (`Renderer::triangleAt()`). `transformAll()` four at a time was tried and taken back: timed
+  alone it was slower than base's scalar code, which the compiler already vectorizes (gathering and spreading the
+  fields cost more than the lanes saved); `meshTriangles()`, which keeps only each corner's place, gains from them.
+- **Numbers** (the M1, MoltenVK, the emulation thread, base -> branch, two rounds taking turns at a load of 20-120;
+  fps it allows; instructions steadier): Vulkan (fast) Army of Two playing 14 -> 19 (587 -> 369 M instructions a
+  frame) and its menu 20 -> 27, Ghost of Sparta's menu 25 -> 29, Colin McRae 60 -> 68, Monkey Ball 15 -> 16; Vulkan
+  (accurate) Army of Two 17 -> 19, Ghost of Sparta 25 -> 33, Monkey Ball 19 -> 21; Software Army of Two 9 -> 10,
+  Monkey Ball 15 -> 16; Death Jr. II, Sonic Rivals and Activision Hits Remixed 1-9% fewer instructions.
+- **Exact**: base against the final code from the 21 scenes' states, 100 frames, every frame's picture and VRAM, then
+  RAM and the machine's state: identical in all three renderers. Lanes written in the scalar code's expression shapes
+  (Clang's fused multiply-adds); skinned bone sums kept scalar; `transformAll()` bit-identical to base's, not-a-numbers
+  included.
+- **Checks** (the final code, #234's reconciled branch merged): tests/psp 496/0 (sanitized), tests/allegrex 60/0,
+  tests/psp/ares 318/0; GCC 14 builds the GE and its tests with -Wall -Wextra -Werror.
+- **Review**: a fresh read-only review; two blockers (a not-a-number's sign in the four-lane `transformAll()`, gone
+  with it; an enumerator and an int in a conditional, an error under GCC's -Wextra -Werror: 0u) and minor points,
+  all taken but an ARM64 CI job.
+- **What's left**: Ghost of Sparta's 1,350 GPU draws a frame, 91% split by #234's push constant `held` alone;
+  Army of Two's draws split by texture and its models built on the CPU; Monkey Ball's PRIMs' setup (a Look kept from
+  the last PRIM) and its VFPU (the CPU's); `light()`, now Ghost of Sparta's biggest function; the software renderer's
+  triangle setup; an ARM64 CI job.
 
 ## CI: the CPU's tests on an ARM64 host and built as the app is, the RSP's NEON checked on ARM64; the system's tests can be built so too — 2026-10-13
 
@@ -95,6 +780,125 @@ scripts and CI only: the app's build and its flags are unchanged.
   system's suite and the runner aren't sanitized); both corrected. The next delta review: PASS; its points, all
   wording, are taken (clears in `depthFirst()`'s condition, `crypto.cpp`'s reason, `other` named, which runs
   compiled `kernel.cpp`).
+
+## Runner: a JSON report of what ran, a pinned start time, captures timed apart and stale ones said — 2026-10-13
+
+Branch `cursor/test-plan-08-2b67` (PR #250), stacked on `cursor/test-plan-03-2b67` (#245, which changes the runner's
+build script and smoke test; on #241). Package 08 of the 2026-10-13 test and performance plan, adapted (indexed in
+the implementation plan by #244). The runner only: no core change; every option, output line and default as before
+(but a malformed number is now refused, and a bare file name for `--wav` or a saved state, which ended the run in an
+exception, now works), only new options and new lines where they apply.
+- **The problem**: speed comparisons ran through private scratch patches; a run didn't record what it had actually
+  used (a Vulkan renderer that failed falls back to the software one); the PSP's clock started at the host's time,
+  so two runs of a game differed; the frame loop's time included its captures (waiting for each PNG's picture,
+  writing it, the save state); and a PNG whose wait ran out was written as if fresh.
+- **`--report FILE`**: the run as JSON, `"report": "phobos-psp-runner 1"` (README, "The report"): the runner's build
+  (the commit, from `build.sh`; the compiler's version string; debug or release; FFmpeg or not), the game (path,
+  kind, title, disc ID, size), the options given (null where not: renderer, resolution, engine, GE threads, late
+  frames, frames, start time, state, presses, script, the PNGs' schedule and folder, WAV, state saved, memory stick,
+  fonts, pipeline cache), what ran (the renderer the core used, the GPU's device, whether the GPU was lost during
+  the run, the resolution, engine, GE threads, the clock it began at, `TZ` and the host's UTC offset then), the
+  result (frames, the program's end, the loop's seconds and its captures', stale captures, clock restarts, each
+  capture's frame and the frame running when its picture arrived, missing functions, last note) and the GPU's
+  counts. Text stays UTF-8: a byte that isn't part of a UTF-8 character (a game's Shift-JIS output, a Latin-1 file
+  name) is written `\u00XX`. The run's folders (the PNGs', the WAV's, the state's, the report's) are made before it
+  runs, and one that can't be made ends it (exit 1, said, no scratch left); the report is written beside its name,
+  closed, checked and renamed, so a failed write fails the run (exit 1) without leaving part of one.
+- **`--start-time SECONDS`** (up to 4294967295; every number the runner reads, a press's frame too, is decimal digits
+  within 32 bits, and a stick's value digits after an optional minus sign; anything else refused, not wrapped or cut
+  short): the kernel's clock set right after power-on (`Kernel::power()` takes the host's time, the core's only read of
+  the host clock; local time follows `TZ`), before anything runs. A game that starts itself again (sceKernelLoadExec,
+  largeRestart) powers the kernel on again, which takes the host's clock again: the kernel's run returns as the new
+  program is started, before it runs, and `System::run` calls it once a frame, so the runner sets the clock back at the
+  next frame's top (and after the last frame), says so on standard error and counts it (`clock restarts`). A loaded
+  state keeps its own clock (said on standard error); a restart after it takes the time asked for.
+- **Captures**: the summary adds `capture seconds:` (their time, and the speed without them) where there were any;
+  a PNG with no picture presented since the last one within 2 s is said on standard error and counted (`stale
+  captures: N`); with no picture at all yet there's no PNG (a 0-by-0 one was written before), said and counted.
+  Which picture a PNG takes is as before (the first presented since the last PNG): the coordinator's library
+  comparisons keep their meaning. ares's screen thread drops pictures it doesn't take in time, so on a busy host a
+  PNG can be older than its name; the report's captures give the frame that was running when each picture arrived.
+  `--screen-stops-at F`, for the runner's own test, takes no pictures from frame F on. If the GPU is lost during a
+  run, `gpu lost:` says the software renderer drew from then on. The new summary lines begin with words of their
+  own, and only the speed's has "frames per second" in it: the coordinator's and agents' scripts find lines by those.
+- **`build.sh`**: the commit described without `--dirty`, which rewrites the checkout's git index under its lock
+  (another agent's `git add` in the same checkout could fail); `-dirty` comes from `git status` with
+  `GIT_OPTIONAL_LOCKS=0`, tracked files only. Only this checkout's own repository is described (a copy inside
+  another says `unknown`), and the name keeps only letters, digits and `._+-`.
+- **Kept**: every line the speed kits' patches anchor on. Each kit's whole chain (bench-patch.py, then every other
+  patch in its folder) applies to this runner exactly where it applies to master's (`cpu-round2`, `ge-headroom`,
+  `reconcile`, `vulkan-speed`; `cpu-speed2`'s bench-patch.py already fails on master's runner).
+- **`tests/psp/ares/runner-test.sh`** adds: the summary's speed on the one line with "frames per second" and the
+  captures' time on `capture seconds:`; the report checked (JSON; the options not given null; the software renderer,
+  the recompiler, no GPU lost; 60 frames, the program running on; both captures fresh, at frames 30 and 60, each
+  picture arrived by its frame); three runs of cube.elf saving a state at frame 30, two started at 1234567890
+  (identical states, no clock restarts) and one at 1234567999 (another); the first state loaded with another start
+  time (the state's clock kept, said, not set again); a start time past 32 bits, a number with more after it, a
+  press's frame past 32 bits, and a stick's value with more after it, a space before it or below -32768 refused, and
+  the sticks' extremes taken; captures at frames 19, 20 and 40 with `--screen-stops-at 20` (19's fresh, as it waits
+  for a picture before the screen stops; 40's stale; 20's either, as pictures came while 19's PNG was written; each
+  said and counted as it was, each with a PNG; 40's PNG the same as 20's, the last picture before the screen
+  stopped); a capture with no picture at all (said, no PNG, in the report, whose new folder the runner made); and a
+  game's name with a Latin-1 byte (the report still JSON, the byte `\u00e9`), where the filesystem takes such a name
+  (Linux's do; macOS's don't, and there it's left out, said).
+- **Checks** (the Mac, `PHOBOS_JOBS=3`, its own TMPDIR): `runner-test.sh` passes (38 s with the core rebuilt after
+  master's #230); the kits' patch chains as above. `jsonText()` alone, in a scratch harness, on 18 byte strings
+  (UTF-8 of 2 to 4 bytes and U+10FFFF kept; Latin-1, Shift-JIS, overlong forms, a surrogate, past U+10FFFF, a lead
+  byte F5, cut-off characters and lone continuation bytes escaped; quotes and control characters): each output
+  valid JSON and equal to Python's strict UTF-8 reading. A real restart (a disposable patch filling the kernel's
+  own sceKernelLoadExec request with cube.elf, so `Kernel::run` calls `loadExec()`): at frame 10, "frame 10: the
+  game started itself again ..." and the kernel's clock 1234567890 at the end, two such runs saving identical
+  states; with the runner's hold off, the host's clock at the end (1791923398) and another state; restarts at the
+  last frame and at frame 1 (no cycles yet: seen by the clock's change) set back too; without `--start-time`,
+  nothing said, `clock restarts` null. Negative controls, each in a disposable copy: the start time not applied,
+  "runs started at different times saved the same state" (fails); the stale capture's detection removed, `stale
+  captures: 1` missing (fails). After the delta review's changes: `runner-test.sh` passes again (13 s, the runner
+  alone rebuilt), the kits' chains as on master's runner, shellcheck clean; the three-capture case alone six times,
+  19 and 20 fresh and 40 stale each time. The review's suggestion for that case, frame 19 without frame 20, failed
+  on its first run here: frame 40 found a new picture, which had come while frame 19's PNG was written. The restarts
+  above again, the same, and one whose program can't start (bytes that aren't an ELF): "a program the game asked for
+  couldn't start, which ended the game ...", the program ended, the clock still the one asked for. A report folder
+  that can't be made: said, exit 1, no scratch left; malformed numbers (`12abc`, `+5`, a leading space, a negative
+  that wraps to 1, a press's frame past 32 bits or `1x`) refused. After the second delta review's changes:
+  `runner-test.sh` passes (14 s), the kits' chains as on master's runner, shellcheck clean; with the stick's old
+  read put back (`std::stol`), the test fails ("not refused: --press 1:L-StickX:12abc"). After the third delta
+  review's wording: `runner-test.sh` passes (15 s), the kits' chains as on master's runner, shellcheck clean.
+- **Review**: an independent read-only review (it re-ran the smoke test and the kits' chains, read the restart
+  path, and ran error cases) found two majors: the start time lost when a game starts itself again, while the
+  report still showed the pinned clock; and text not always UTF-8 (a Shift-JIS note). Its minors: the report's
+  write errors late or unseen (no folder made, the stream checked before closing); captures not saying which frame
+  they show; `ran.renderer` saying Vulkan after the GPU was lost; `git describe --dirty` rewriting the index. Its
+  nits: `nan` for the GPU's wait with `--frames 0`, a misleading message and a 0-by-0 PNG with no picture, the
+  README's example and test sentence, line lengths, `asked` mixing nulls and defaults, the start time with a loaded
+  state unsaid, `build.sh` with a quote in a tag or inside another repository, start times wrapping past 32 bits.
+  All taken (above), and of its suggestions the compiler, build mode, FFmpeg, the UTC offset and the options given.
+  Not taken: the source string out of runner.cpp's compile command (each commit compiles the runner again in a
+  checkout's build folder; CI builds once; pruning old objects is the objects cache's, for every suite), a report
+  when a run fails early, the driver's version (no accessor in the core), the program's hash, and a test program
+  that reads the clock (none in the repository prints the date; building one needs pspsdk). A delta review (PASS;
+  it re-ran the smoke test and the kits' chains, 16 runs through the restart path (controls without a restart among
+  them) and `jsonText()` on 978,253 strings, and compiled runner.cpp with GCC 13.3 and 14.4 under `-Werror`) found
+  one minor: the two new summary lines began with the words of existing ones ("frames per second, captures left
+  out", "gpu: lost"), and scripts in the agents' scratch find lines by those (one would take the wrong line's speed,
+  one would overwrite the GPU's counts, three greps print both); taken (`capture seconds:`, `gpu lost:`, and the
+  test's check that one line has "frames per second"). Its nits, all taken: a press's frame still wrapping past 32
+  bits and a number with more after it accepted (one digits-only reader for both now, and the test refuses both); a
+  folder that can't be made ending the run in an exception (said now, exit 1, before the scratch is made); a
+  capture's freshness read apart from its picture (now in the same lock); frame 20's fresh capture possibly missed
+  on a starved host (the three captures above); the README's `asked` and title; a program that couldn't start
+  called a restart (said as what it is). A second delta review (PASS; the smoke test again, the three captures 10
+  times, real failed starts at frames 1, 10 and 30, four ways a folder can't be made, and the stale check removed,
+  which the test catches) found five nits. Taken: a stick's value still read loosely (`12abc` ran as 12; now an
+  optional minus sign, then digits, and the test refuses both kinds and takes the extremes); the bare file names
+  above unsaid; frame 40's PNG, always frame 20's picture, now compared; "16 real restarts" and the README's `clock
+  restarts`. Left: a scratch script outside the repository that diffs two runs' summaries would count `capture
+  seconds:`, a time, as a difference (`scratch/dialogs/compare.sh`, if it's used again: one more pattern for its
+  filter). A third delta review (PASS; 33 edge cases run against the runner, and no press script in the scratch
+  folders refused by the strict read) found three nits, all taken: two lines left short, a run missing below, and
+  `-0` read as 0 though the wording said a minus sign only below 0 (now an optional one; leading zeros are read as
+  every number's are).
+- **CI**: PSP Core Tests green on each earlier head (runs 38443751682, 38449049095, 38454982676, 38463437399,
+  38468789060 and 38471152830, the runner's test passing; on Linux the last three ran the name not in UTF-8).
 
 ## Tests: a skip says what's missing, and fails where the lane must have it; the Allegrex measurements unpacked by content — 2026-10-13
 
@@ -202,18 +1006,24 @@ plan by #244). Build scripts only: no core, app or test source changes.
   among several ignored; the old rule (the source's time alone); flags out of the key; the environment out of the
   key; one program name for every configuration; objects written in place; one folder for all checkouts; a gone
   file taken as unchanged: each of the 13 fails at least one case.
-- **Checks** (the Mac, bash 3.2, Apple clang 21, `PHOBOS_JOBS=3`, a TMPDIR of its own, the final scripts):
-  `tests/objects-test.sh` 21/21, twice; `tests/allegrex` cold 7 compiles (60/0), warm 0, after touching
-  `ares/psp/cpu/allegrex.hpp` 4 (the four that include it; 60/0); `tests/ngcd` cold 13 (2835/0), warm 0;
-  `tests/psp/ares` cold 25 (318/0), warm 0; `runner-test.sh` cold 42 s, warm 4 s, its program `psp-runner-<hash>`
-  and the copy left in `phobos-psp-runner/`. CI on the reviewed scripts (run 38448696924 at `a476470ec`; Linux, GCC
-  13, bash 5): `tests/objects-test.sh` 18 cases, 0 failures (the case within the second ran), Allegrex 60/0, the
-  system suite 497/0 (every source its own object now), the ares system 318/0, the runner's test passing; NGCD
-  2835/0 (run 38448696864). CI on the final scripts (run 38454888271 at `86a5a80d0`): `tests/objects-test.sh` 21
-  cases, 0 failures (the case within the second ran), Allegrex 60/0, the system suite 502/0 (#243's five groups
-  more), the ares system 318/0, the runner's test passing; NGCD 2835/0 (run 38454887111). A second delta review
-  passed it; its nit taken: the leftovers' pattern is the 16 hex digits and a process number, so a folder's own
-  files of a like name aren't taken.
+- **Checks** (the Mac, bash 3.2, Apple clang 21, `PHOBOS_JOBS=3`, a TMPDIR of its own): at `86a5a80d0`,
+  `tests/objects-test.sh` 21/21, twice; with the scripts at `f1bc43c89` (before the delta review's changes),
+  `tests/allegrex` cold 7 compiles (60/0), warm 0, after touching `ares/psp/cpu/allegrex.hpp` 4 (the four that
+  include it; 60/0); `tests/ngcd` cold 13 (2835/0), warm 0; `tests/psp/ares` cold 25 (318/0), warm 0;
+  `runner-test.sh` cold 42 s, warm 4 s, its program `psp-runner-<hash>` and the copy left in `phobos-psp-runner/`. CI
+  on the reviewed scripts (run 38448696924 at `a476470ec`; Linux, GCC 13, bash 5): `tests/objects-test.sh` 18 cases,
+  0 failures (the case within the second ran), Allegrex 60/0, the system suite 497/0 (every source its own object
+  now), the ares system 318/0, the runner's test passing; NGCD 2835/0 (run 38448696864). CI at `86a5a80d0` (run
+  38454888271): `tests/objects-test.sh` 21 cases, 0 failures (the case within the second ran), Allegrex 60/0, the
+  system suite 502/0 (#243's five groups more), the ares system 318/0, the runner's test passing; NGCD 2835/0 (run
+  38454887111). A second delta review passed it; its nit taken: the leftovers' pattern is the 16 hex digits and a
+  process number, so a folder's own files of a like name aren't taken. At `fefce4e5f`, with that pattern: on the Mac,
+  `tests/objects-test.sh` 21/21, and the pattern alone under bash 3.2 removing the six kinds of leftover
+  (`psp-runner`, `allegrex`, `psp`, `psp-ares`, `ngcd`, the test's `program`) and keeping the eleven like names tried
+  (the old pattern's false match; 16 letters that aren't hex digits; uppercase hex digits; 15 or 17 of them; none; no
+  number after `.part-`; a dated file name with spaces; one under two hours old; one in a subfolder; a folder); CI
+  run 38461715565: `tests/objects-test.sh` 21/0, Allegrex 60/0, the system suite 505/0 (master's #230 three groups
+  more), the ares system 328/0, the runner's test passing; NGCD 2835/0 (run 38461715535).
 - **Review**: an independent read-only review found a major hole (a word after the first in CC or CXX wasn't in
   the key: `CC="cc -DEXTRA=9"` after `cc` compiled nothing and ran the old program), and minor ones: a header edited
   during a compile never rebuilt, the stale-file cleanup reaching anything in a folder handed to NGCD, an exported
@@ -224,7 +1034,12 @@ plan by #244). Build scripts only: no core, app or test source changes.
   right in code, and the whole-second mutation caught only by chance (the two times not pinned), the environment's
   keys and the per-configuration names untested, a cut-short link's leftovers no longer cleaned, and the docs behind;
   all taken: the times pinned, two cases added, programs' leftovers cleaned by their hashed names, the folder's file
-  named `.phobos-checkout` (a folder handed to NGCD may have a `checkout`), the README's line and these checks.
+  named `.phobos-checkout` (a folder handed to NGCD may have a `checkout`), the README's line and these checks. A
+  recheck at `fefce4e5f`, after #241's merge of master's #230: PASS. Its two trivial nits: "the final scripts" for
+  checks run before the leftovers' pattern changed (taken: each check names its commit now), and the pattern
+  checking only the first character after `.part-` (left: such a name would also need 16 lowercase hex digits right
+  before `.part-`, be two hours old and sit directly in the build folder: the suite's own, or the one
+  `OBJECTS_BUILD` or NGCD's argument names).
 
 ## CI: the PSP core as an ares system, the headless runner and the Neo Geo CD's checks in CI; the triggers complete — 2026-10-13
 
@@ -268,6 +1083,230 @@ in the implementation plan). CI only: no core, app or test code changes.
   master's runs not cancelled, the empty-log case). A delta review found that a concurrency group holds one waiting
   run, so a third quick push to master still cancelled the waiting one: non-PR runs now get a group each (the run's
   ID).
+
+## Docs: the plan's opening and evidence brought up to date; the 2026-10-13 test and performance plan indexed — 2026-10-13
+
+Branch `cursor/test-plan-01-2b67` (PR #244), on master (`4788125f1`, #236), with #243, #230, #229 and #237 merged in
+since (`3228b825d`). Package 01 of the 2026-10-13 test and performance plan, an outside audit of master `b3507c1db`
+given to the owner as a plan bundle (not kept in the repository). Documentation only.
+- **The stale summaries**: the implementation plan opened with "Last reconciled: 2026-09-25" and "zero fresh native
+  performance runs", and this file's entry point with September's next action, though later sections record the RP6's
+  N64 measurements (from 2026-09-25), the 2026-10-02 presentation comparison with Mupen64Plus-AE, the desktop builds
+  and the PSP core's parts (76 of them on master then, up to part 87; 80 now, up to 88, with #243's part 88, #230's
+  part 81, #229's part 82 and #237's part 86). Now the plan's opening and its evidence boundary sort what's known by
+  kind: implemented on master (some of it CI only builds), checked on CI's hosts (exactly what CI runs, and what it
+  doesn't yet), measured on the RP6 (dated, linked: the N64's, and the PSP's speed in its parts), waiting for the RP6,
+  on branches, proposed. The current priority (the PSP's throughput, fast-forward and Vulkan scaling, accurate and fast
+  apart) is named, the N64 regressions kept, and no comparison is presented as new. Nothing historical is removed.
+- **The plan indexed**: the implementation plan's "Test and performance plan (2026-10-13)" lists the 25 packages
+  with their dispositions (eight now, 08 pulled forward from the triage's later ones; 15 later, each waiting on a
+  named PR or package except 18, whose only wait, #230, has merged since; two not now), what each waits on, and its PR.
+- **Baseline at triage** (master `9333a8d7a`): the libadrenotools submodule at `8fae8ce25`; open PRs #223, #229,
+  #230, #231, #232, #236 and #237, and two agents' branches without PRs (GE headroom and NpDrm modules, since #240
+  and #243); CI on `0a9a7fa75` (v2.2.0's commit): PSP Core Tests 60/0 and 489/0, Desktop Build green, Android Build
+  cancelled in its SDK cache's post step after 37 minutes (package 02; v2.2.0's own tag build, run 38432072867,
+  passed, its release complete). The Mac: macOS 27.0.1, Apple clang 21.0.0, glslang 16.6.0, JDK 17.0.20.1. Since:
+  #236 merged (`4788125f1`, StateVersion 27), all three workflows green on it (PSP 60/0 and 497/0), then #243
+  (`49fec7215`, StateVersion 28), #230 (`542da5a28`, StateVersion still 28), #229 (`7511c64c3`, StateVersion 31) and
+  #237 (`3228b825d`, StateVersion still 31); the open PRs' heads when this entry was first written: #223
+  `f12663c2d`, #229 `a31b2b3ae`, #230 `059a1bbfe`, #231 `5e6d8a5b1`, #232 `b4dc27e4e`, #237 `46f62e6bf`, #240
+  `7aa4b8054`, #243 `e84596e63`, and this plan's.
+- **Checks**: `git diff --check`; relative links and anchors in both files, 0 bad (as on master).
+- **Review**: an independent read-only review found the CI line claiming more than CI runs (the ares suite, the runner,
+  NGCD, ARM64 and the JVM tests aren't run) and merging "implemented" with "CI-verified", the PSP's RP6 speed
+  measurements left out, the baseline's PR list not the one at triage, CI cited from an older commit, #237 named among
+  the state-layout PRs (it doesn't change states), and the order of the CI packages unexplained; all taken. Its doubt
+  about "up to 59 minutes" is answered by the run cited (38286832457's post step: 58.7 minutes). A delta review found
+  "only built" not limited to CI (release builds run on the RP6; the AppImage and Phobos.exe were run on 2026-10-02,
+  Phobos.app on 2026-10-06), the RP6 speed parts listed incompletely (53 and 54) and "gathered" too widely, and row 08
+  marked done while its PR is open; all taken, with master's #243 merged in (row 12). A second delta review found the
+  software renderer's RP6 parts incomplete (67 and 68, and its columns beside Vulkan in 52 and 53) and row 12 missing
+  #223 (whose own layout 28 isn't master's); both taken, with its suggestions (the speed tables' parts, the tag build's
+  note, the desktop runs' dates, one list of what CI doesn't run, the part count), and master's #230 merged in. A third
+  delta review found two facts left stale by that merge: the part count (#230 added part 81) and rows 15 and 18 still
+  waiting on #230; both taken, with its suggestions (#230 in this entry's opening and its "Since", the plan's waits
+  dated, part 41's speed figures no longer called a table). Row 18 now waits on nothing: no open PR changes
+  `PhobosRunner.cpp` against master (GitHub's diff of #229, then open, showed #230's comment at the axis slots only
+  because it still compared #229 with `49fec7215`, and #229 had #230's branch merged). A fourth delta review found this
+  sentence had first called that comment #229's own edit; fixed, with its suggestions (#243 in the opening, row 18's
+  adaptation, clearer wording). A review of master's #229 and #237 merged in found the plan and this entry stale in
+  five places: the state layout (31 now) in row 12, row 14 still waiting on #237, the plan's waits dated
+  `542da5a28`, the part count, and this entry's opening and "Since". All taken, with part 86 added to the parts
+  waiting for the RP6 and this sentence about #229 put in the past. Its delta review found row 06 still giving
+  #249's first reason for being red (four files now); taken, with part 86's date in the plan and the entry point's
+  line over 120 columns broken before its link.
+
+## CI: the PSP renderer's shaders compiled again by the glslang that made them, and validated — 2026-10-13
+
+Branch `cursor/test-plan-07-2b67` (PR #239), on master (`4788125f1`, #236). Package 07 of the 2026-10-13 test and
+performance plan (an outside audit of master `b3507c1db`, triaged against `9333a8d7a`; #244, package 01, indexes it
+in the implementation plan). CI and a check script only: `compile.sh`, the GLSL and `shaders.hpp` are untouched (the
+sources' hash covers `compile.sh`, so changing it would have meant regenerating `shaders.hpp`).
+- **The gap**: `compile.sh --check` (run by `tests/psp/run-tests.sh`) always compares the sources' hash, but compiles
+  again and compares `shaders.hpp` byte for byte only where a glslang happens to be installed, and CI installs none.
+  So CI never compared the SPIR-V with what its GLSL compiles to, nor validated it (the GPU tests run it on lavapipe):
+  a changed word under an unchanged hash that those tests don't notice passed.
+- **The pin**: glslang 16.6.0 makes `shaders.hpp` exactly, both Homebrew's build and Khronos's own macOS release
+  (`compile.sh --check` with each: exit 0). Khronos's Linux release of it is
+  `glslang-16.6.0-linux-x86_64-release.tar.gz`, SHA-256 `2c34071f…91ce`.
+- **The check** (`.github/scripts/check-psp-shaders.sh`, in a new workflow, PSP Shaders, on changes to the shaders,
+  the script or the workflow): glslang must be found and be 16.6.0, then `compile.sh --check` (the hash, then every
+  shader compiled again and compared), and each of the 12 modules in `shaders.hpp`, as its bytes, through `spirv-val
+  --target-env vulkan1.0` (compile.sh's target); every array `shaders.hpp` declares must be one it reads, and every
+  word a 32-bit hex word. Both parts run and report; either failing fails. A glslang upgrade is a toolchain change:
+  `shaders.hpp` made with it, and the script's version, the workflow's version and SHA-256 and the doc's line moved
+  together (the workflow doesn't override the script's, so CI fails if they differ).
+- **Negative controls** (a disposable copy, the Mac, glslang 16.6.0 and SPIRV-Tools v2026.4): the copy as it is
+  passes (12 valid); GLSL changed without regenerating: the hash fails; one word of `presentSPIRV` changed (still
+  valid SPIR-V: spirv-val passes it) with the hash kept: the byte comparison fails; `presentSPIRV`'s id bound set to 1:
+  the comparison and spirv-val both fail (11 valid); no glslang in PATH: fails; a glslang calling itself 16.5.0:
+  fails.
+- **Checks**: actionlint 1.7.12 with shellcheck 0.11.0 (clean); the script on master's tree (pass); CI on #239 (runs
+  38435975771, 19 s, and 38437980381 on the head merged with master, 16 s; ubuntu-24.04): the image has no glslang of
+  its own ("none"), the archive's SHA-256 matched, and Khronos's Linux glslang 16.6.0 compiled `shaders.hpp` byte for
+  byte; Ubuntu's SPIRV-Tools v2025.1 passed all 12 modules.
+- **Review**: an independent read-only review (PASS; it reproduced the pin, both CI runs and 14 negative controls)
+  raised seven points: an array declared another way (`static constexpr`, made with a changed compile.sh) went
+  unvalidated (11 of 12); the version was pinned in two places CI couldn't keep equal; a malformed word was dropped;
+  `--version`'s failure was unexplained; the first run's time was misquoted; "CI never checked the SPIR-V" overstated
+  the gap; actionlint had run without shellcheck. All taken: the declared arrays counted, every word checked, the
+  workflow no longer overriding the script's version (two pins CI now keeps equal), the error said, the runs cited,
+  the gap reworded, shellcheck run; and its suggestions (`ubuntu-24.04`, a 10-minute limit, curl's retries). A delta
+  review (PASS) found an array written without `=` still unread: arrays are now found with or without it, and the
+  SPIR-V magic numbers in the file must match the arrays read; CI on that head (run 38455036248 at `17c21468e`): the
+  12 modules read, compiled byte for byte and valid. A second delta review passed it.
+
+## CI: the Android unit tests in every build, the releases waiting for them; the SDK cache gone — 2026-10-13
+
+Branch `cursor/test-plan-02-2b67` (PR #238), on master (`4788125f1`, #236). Package 02 of the 2026-10-13 test and
+performance plan (an outside audit of master `b3507c1db`, triaged against `9333a8d7a`; #244, package 01, indexes it
+in the implementation plan). CI only: no app, core or test code changes.
+- **Unit tests in CI**: `.github/workflows/android.yml` gains a job beside the APK build, "Unit tests (legacy +
+  modern)": `./gradlew :app:testLegacyDebugUnitTest :app:testModernDebugUnitTest --continue` (the app's 42 test files,
+  299 `@Test`s, which no workflow ran before), their XML and HTML reports kept as the `unit-test-reports` artifact
+  whether they pass or fail. The release and nightly jobs now need it as well as the build, so a failing test stops
+  `android.yml` publishing either (on a version tag, `desktop.yml` still makes the release for its own packages after
+  waiting 20 minutes for Android's: whether it should wait for the tests too is the owner's call). It builds no APK
+  and uploads none; no device or instrumented test is implied (none exist). Both jobs now have a time limit (build 60
+  minutes, tests 30), so a hung step ends instead of running on.
+- **The SDK cache removed** (the Android job's long post step): `Cache Android SDK` packed the runner image's whole
+  SDK folder, 4.6 GiB. After a miss its post step tars all of it: on master's six runs before `0a9a7fa75` that step
+  took 2 to 59 minutes (13 or more in four), master's run 38423938456 was cancelled in it after 37 minutes with every
+  real step green, and the run for `9333a8d7a` was cancelled in it too by the next push (neither commit got a
+  nightly; v2.2.0's own tag run finished, its release complete). Without it, the components install in 19-67 s (the
+  platform and build tools are on the image; the NDK and CMake download). A hit was no better: 2 to 5 minutes, then
+  tar failing to set the times and modes of the image's root-owned folders ("Failed to restore", run 38429067532).
+  Two of its entries (9.2 GiB together) also filled most of the repository's 10 GB of cache, which GitHub trims by
+  evicting the least recently used (the Gradle and FFmpeg caches).
+- **Checks**: actionlint 1.7.12 on the workflow (clean); the job graph read back (release and nightly need build and
+  unit-tests). CI on #238 (run 38437970240): the unit-test job passed in 3 minutes, 299 tests in each flavor, none
+  failed or skipped (its reports). Negative control (run 38435701552, a disposable branch with one test asserting
+  1 == 2, dispatched): the unit-test job failed, both flavors ran (300 tests each, that one failing in each; Gradle ran
+  them side by side, so this run doesn't show `--continue` at work, which matters when one flavor fails to compile),
+  and the reports were uploaded; the branch was deleted after. Release and nightly don't run on a branch, so their
+  gating is the job graph above. The first build without the cache (run 38437970240) passed in 17.5 minutes.
+- **Review**: an independent read-only review found the workflow right and its CI claims checked (counts, artifacts,
+  job graph, invariants), and asked for the docs to be exact: the tag case of `desktop.yml`, the cache's real save
+  and restore times (and that the "never finishing" runs were cancelled by the next push), `--continue`'s wording,
+  this entry's base, "every commit". All taken, with its suggestions of time limits and the failed restores; left:
+  deleting the two old 4.6 GiB cache entries once this is merged (open PRs on the old workflow make them again).
+- **Left**: the unit tests run on the debug variants (release differs in `BuildConfig.DEBUG` and signing); the
+  dialogs', settings' and launch paths' UI tests are later packages (15-17).
+
+## PSP: the CPU, round 2 — the VFPU's adder in NEON, delay slots compiled each way, the rare ways out of line, prefixes compiled, blocks linked — 2026-10-13
+
+Branch `cursor/psp-cpu-round2-2b67`, on master (`b3507c1db`, #233 merged; merged in again at `0a9a7fa75`, #234, and at
+`4788125f1`, #235 and #236). docs/psp-core.md, part 86, has the evidence. Clean room: PPSSPP not read (its CPU, JIT and
+IR code not at all), JPCSP not read. Save states unchanged by this branch (master's layout, 27 since #236). Every change
+is the host's alone: pictures, VRAM, RAM and the machine's state are master's.
+- **Where it went** (Mac, Vulkan fast, xctrace sorted by compiled block): compiled code was 20 to 42% of the emulation
+  thread in the CPU-heavy scenes and flat (the busiest block under 1%): block endings and branches a third of it, loads
+  and stores a third; the VFPU's matrix products through the scalar adder 15% of Super Monkey Ball's thread (one loop
+  of eight vtfm.q), 25% of Disaster Report 3's with its prefixed compares through the interpreter.
+- **Changes** (each its own commit, with tests): the VFPU's adder (vfpuDot) in NEON integer instructions, four lanes at
+  once and bit for bit, for compiled vmmul, vtfm, vhtfm, vdot and vhdp on ARM64 (operands in place; inf and NaN lanes
+  and other hosts the scalar way); a branch's delay slot compiled along each way it goes, pc and pd stored only where
+  they're read; the rare ways (an access off the fast path, an FPU mode or NaN, an overflow) as cold code after the
+  block, the FPU's keeping the registers held, loads and stores in 7 to 8 host instructions; the lane-by-lane VFPU
+  instructions with their prefixes worked out as the block is compiled (vfpuEach), the math functions and vf2i at rest;
+  blocks linked straight to the blocks they go on to, unlinked when those blocks' code goes.
+- **Numbers** (Mac, Vulkan fast, the emulation thread's host instructions and ms a frame, medians of three rounds
+  taking turns; the load 30 to 300, so the instructions carry it): Super Monkey Ball's story 636 -> 520 M (-18%, 60 ->
+  49 ms), Disaster Report 3 playing 52 -> 38 M (-26%, 4.4 -> 3.4 ms), the Need for Speeds, Twisted Metal's logo and the
+  Armored Cores' intros 8 to 11% fewer, Colin McRae, the Armored Cores and Twisted Metal playing 8 to 19%, the GE-bound
+  scenes 2 to 5%; the software renderer alike where the CPU counts.
+- **Exact**: the 21 scenes' hashes identical to master's in the software renderer (100 frames, every frame's picture
+  and VRAM, then RAM and the machine's state), Vulkan fast and Vulkan accurate (200 frames, the end's RAM and state);
+  the NEON adder against vfpuDot on 72 million random results; 62 broken versions of the changes, 59 caught by
+  tests/allegrex, the other 3 changing nothing observable. pending (the whole library, before merging)
+- **Checks**: tests/allegrex 68/0 (sanitized; and 68/0 built for x86-64, run under Rosetta), tests/psp 478/0
+  (sanitized), tests/psp/ares 318/0. Merged with #234 (part 83): the hashes identical again in all three renderers,
+  tests/psp 489/0, tests/psp/ares 318/0; GitHub's Linux build (GCC) found a missing `<cstring>`, added, and its tests
+  pass. Merged with #235 and #236 (parts 84 and 87): the hashes identical again in all three, tests/psp 497/0,
+  tests/psp/ares 318/0, GitHub's tests and builds passing. An independent review found no change to emulated results;
+  its points (test gaps: the NEON vmmul's in-place cases, links never checked, code memory starting afresh mid-run, more
+  delay slot kinds; small fixes and comments) were all taken.
+- **Left**: the block endings' run count kept in a register (each ending's load and store of it chains the blocks
+  through memory), a cache of the last target for jumps through a register (Most Wanted's import stubs: 57% of its
+  compiled code is block endings), registers held across blocks with stores only where read, the VFPU's remaining
+  helpers (vf2h, vh2f, the integer packings, vdot/vhdp/vcmp with prefixes, vcrsp/vqmul/vdet), the polled kernel's
+  per-call work (Most Wanted: 72% of the thread), and the GE's display lists (another task's).
+- **On the RP6, to measure**: master against this branch, Vulkan fast at 1x, part 79's scenes: Super Monkey Ball and
+  Disaster Report 3 most (a fifth to a quarter fewer instructions on the emulation thread), Colin McRae, the Armored
+  Cores and the Need for Speeds 8 to 11% (Silent Line playing 19%), the GE-bound scenes 2 to 5%.
+- Scratch: `~/phobos-work/scratch/cpu-round2`.
+
+## PSP: sound — every ATRAC ID's context kept current (Angus Hates Aliens past NEW GAME), and sceVaudio — 2026-10-12
+
+Branch `cursor/psp-audio-b00-2b67`, on master (`b7ea296f4`, then `1d9308714`, #228). docs/psp-core.md, part 82, has
+the evidence. Items 2 and 5 of the deep-play batch 00 report. Clean room: pspautotests' audio/atrac (the states its
+tests force, sas), audio/blocking/vaudio and audio/sceaudio/reserve recordings, pspsdk's pspatrac3.h and pspvaudio.h,
+pspautotests' sascore.h, PPSSPP read only as a description of the PSP (sceVaudio on the SRC channel), the games' own
+code traced and disassembled; JPCSP not read. Begun by one agent; an independent review's points taken by another.
+**Save states go to StateVersion 31** (sceVaudio's hold; 15 to 28 still load, 27 and 28 being parts 87's and 88's
+layouts). **29 and 30 are skipped**: other open branches' layouts, refused here (as 32 is). Whoever lands one of
+those branches after this one must renumber its layout past 31 and update `tests/psp/ares/system.cpp`'s list of
+refused versions (29, 30 and 32) and `tests/psp/states.cpp`'s older layouts (part 82 says more).
+- **Angus Hates Aliens**: its music goes through sceSas's ATRAC3 voices with a wrapper (the one pspautotests'
+  audio/atrac/sas copies) that sets its ID's context state to 16 and, to stop the music (NEW GAME), unsets the voice
+  only while the context still says 16, asking again for good when refused. `_sceAtracGetContextAddress` rewrote the
+  whole context at every call, so the 16 went back to 2: the black screen, the runner's time all in that call. Now
+  every ID's context is in kernel memory (0x08030000), written at power on and whenever the library changes the ID,
+  only read by `_sceAtracGetContextAddress`; a state a program sets (8, 16) refuses the seven calls recorded so with
+  the recorded errors, the other calls answering as before; `__sceSasSetVoiceATRAC3` keeps the context in the voice's
+  word in the SasCore `__sceSasInit` set up (0 again on unset and on init), where the game's streaming reads it (the 16
+  loads through address 0 at boot). The game now loads and reaches its first level. Still silent: sceSas's ATRAC3
+  voices don't decode (they didn't before).
+- **sceVaudio**: reserve, release, blocking output, the effect and level control setters, on the SRC channel, as
+  pspautotests' vaudio recorded (an output returns its count; a reservation refused while Output2 holds the channel
+  still holds sceVaudio; the release waits for a buffer playing); buffers copied as pairs into two kernel buffers
+  (0x08031000); an output's volume 0 to pspvaudio.h's 0x8000, more refused. Two choices disagree with pspautotests'
+  audio/sceaudio/reserve (mono refused there; a release freeing the SRC channel Output2 held): left for the owner, part
+  82 says how; Battle vs. Chess reserves stereo (format 2) and its outputs' volume, fading in from 0, peaks at 0x35C1,
+  so neither touches it. Battle vs. Chess's music thread plays its MP3 music through it now. **Its moves still aren't
+  carried out**: not sceVaudio. Traced: the confirm reaches the game's pad code; its chess thread runs its engine only
+  when a request word is set, which nothing sets on the confirm; nothing else in its memory changes but the lit squares'
+  colours, and no system call differs (no file, thread or missing function). The prototype's own move code wasn't
+  followed to the end (part 82 has the leads).
+- **Checks** on the final tree (with the review's points): `tests/psp/run-tests.sh` (sanitizers) 479 groups, 0
+  failures; `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh` 338 checks, 0 failed
+  (before it, 473 groups). Games with the branch's runner: part 82's last paragraph.
+- **Library**: not run by the agents (the first agent's run stopped with its session); the owner runs the 266-game
+  comparison for this branch and #230 together.
+- **Review**: an independent review found NEEDS CHANGES (two state refusals with no check behind them; sceVaudio acting
+  on a channel another caller held after its refused reservation; and lows: a bad rate leaving it held, contexts written
+  on refused calls, the MAX values, untested refusals, wording), all taken in `930c6e2db`; a delta review passed, its
+  two points (the SRC family's release of sceVaudio's channel documented and tested, a test's leftover) taken in
+  `97fac6653`. A later independent review of the merged branch (five Lows), taken by another agent after the first
+  stopped: sceVaudio's volume to 0x8000; the SasCore's word only for the core set up, cleared on unset and init; the
+  older state's test; the context's state looked at by the seven recorded calls alone (Corpse Party's sound byte for
+  byte master's); 27 to 30 noted. Part 82's "The review's points" has each.
+- **On the RP6, to check**: (1) Angus Hates Aliens: NEW GAME passes the loading screen into the first level (black
+  before); its music is still silent. (2) Battle vs. Chess: menu and board music plays (silent before); a move is
+  still refused. (3) Save and load a state in a game playing music (any ATRAC game) and in Battle vs. Chess: it plays
+  on; a state made by this build is refused by builds before it (StateVersion 31).
+- Scratch: `~/phobos-work/scratch/hle-b00`; `~/phobos-work/scratch/review-b00` (the review's points: the runners, the
+  runs in `runs/`, the WAVs in `wav/`).
 
 ## PSP: the host's right stick for patched games, the keyboard in a field's own characters, 7th Dragon 2020-II past its certificate — 2026-10-12
 

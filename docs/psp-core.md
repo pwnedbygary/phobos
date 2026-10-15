@@ -11199,6 +11199,173 @@ documents): Formula Front International's True Analogs camera as before (`c1-rig
 Dragon 2020-II's certificate passed into the Diet chamber (frame 1560) and the first conversation (3600); Ridge Racer
 2's default entered unchanged (above).
 
+## Part 82: sound — every ATRAC ID's context kept current (Angus Hates Aliens past NEW GAME), and sceVaudio
+
+On branch `cursor/psp-audio-b00-2b67`, on master (`b7ea296f4`, then `1d9308714`, #228). The task: items 2 and 5 of
+the play-testers' batch 00 report (Angus Hates Aliens black after NEW GAME; Battle vs. Chess's missing sceVaudio);
+then an independent review's points (below, "The review's points"). Sources: pspautotests' audio/atrac recordings
+(getremainframe, getsoundsample, resetpos, resetting and second with a state the test forces; sas, a context a
+program changes for sceSas) and audio/blocking/vaudio, pspsdk's pspatrac3.h and pspvaudio.h, pspautotests' sascore.h
+(the SasCore's layout), PPSSPP read only as a description of the PSP (sceVaudio on the SRC channel), and the games'
+own code, traced with a scratch runner and disassembled from their memory. No code copied or translated; JPCSP not
+read.
+
+**Save states go to StateVersion 31, and 29 and 30 are skipped.** 27 and 28 are the fonts' and the downloads'
+modules' layouts (parts 87 and 88), which landed first: a 27 or 28 state loads as an older layout, sceVaudio holding
+nothing (`tests/psp/states.cpp` loads both). 29 and 30 are other open branches' layouts, and this one's loader
+refuses them (as it refuses 32, past it), so no state of theirs is ever read as this layout or this layout's as
+theirs. Whoever lands one of those branches after this one must renumber its layout past 31 (its loader then
+reading 31's states as the layout before it), and update `tests/psp/ares/system.cpp`'s list of refused versions
+(29, 30 and 32: the one it takes falls out of the list) along with `tests/psp/states.cpp`'s older layouts.
+
+### Angus Hates Aliens: the contexts
+
+**The report.** Black for good after NEW GAME, the runner at 4 to 8 fps with nearly all its time in
+`_sceAtracGetContextAddress`, and 16 loads from 0xa0, 0xa4 and 0xbc between boot frames 500 and 550.
+
+**What the game does.** It imports three of sceAtrac3plus's functions (SetDataAndGetID, `_sceAtracGetContextAddress`,
+ReleaseAtracID) and plays its music through sceSas's ATRAC3 voices, with a wrapper of its own (0x0885d09c on; the
+one pspautotests' audio/atrac/sas copies, Sol Trigger's in its comments). Setting a voice: the ID's context, checked
+for one channel, ATRAC3, no loop and a state of 2 to 4, gets the state 16; `__sceSasSetVoiceATRAC3` takes it for
+voice 31; then the wrapper moves the context's buffer on by streamOff and curFileOff by streamDataByte, puts the voice
+in loopNum and, for a stream, -1 in secondBuffer. Streaming, it reads the context back from the voice's first word in
+the SasCore (20 bytes of the core's own, then 56 a voice: sascore.h; the word where a VAG voice's samples are), and
+compares curFileOff with fileDataEnd and secondBuffer with 0 to know whether to hand over more. Stopping the music, as
+NEW GAME does, it takes the context again and unsets the voice only while its state says 16, then sets 1 and
+releases the ID; refused (0x80420102), it asks again, for good (0x08804a3c).
+
+**Why it stopped.** `_sceAtracGetContextAddress` wrote the whole context afresh from the library's own record each
+time it was asked: the 16 the wrapper had set went back to 2, the stop was refused for ever, and the 256 bytes
+written at every one of its calls were where the runner's time went. And `__sceSasSetVoiceATRAC3` kept the context
+nowhere in the SasCore: the streaming code read 0 there and loaded through it (0xa0, 0xa4, 0xbc are curFileOff,
+fileDataEnd and secondBuffer).
+
+**What a PSP does.** Its library's contexts are its state itself, there from the start and current after every call;
+`_sceAtracGetContextAddress` only says where one is (pspautotests' shared.cpp: "Need to call this every time to get
+the values updated - but only in the emulator!"). Programs write them, and the library honours it: getremainframe,
+getsoundsample, resetpos, resetting and second recorded the calls they make (GetRemainFrame, GetSoundSample,
+ResetPlayPosition, GetBufferInfoForResetting, GetSecondBufferInfo, IsSecondBufferNeeded, SetSecondBuffer) refusing an
+ID whose state the test set to 8 (0x80630031) or 16 (0x80630040). The sas recording shows nothing in the context
+moving as sceSas plays it but the buffer, which the first grain clears.
+
+**The fix** (`atrac.cpp`, `sas.cpp`):
+- Every ID's 256 bytes are in kernel memory (`Kernel::AtracContextMemory`, 0x08030000: chosen, as a PSP's are in its
+  library's module, in the user partition, and no game's memory need go to them here), written at power on and
+  whenever the library changes the ID (set, decoded, added to, reset, released, its loops or second buffer set, a
+  low-level decode's error). `_sceAtracGetContextAddress` writes nothing and gives the address of an ID handed out
+  (0 for one that isn't, as before).
+- The state a program wrote there is what the seven recorded calls look at first: 8 refuses them with 0x80630031, 16
+  with 0x80630040, and set back the ID is taken again (no recording calls after that). Every other call answers as it
+  did before the contexts were kept, the state as the library holds it (none is recorded with such a state). A
+  low-level ID's context says 8, so the seven say 0x80630031 of one, and the rest NO_DATA where they need a file, as
+  before (sceAtracGetInternalErrorInfo among them; a first version refused them all with 0x80630031). The rest of what
+  a program writes stays until the library next changes that ID: a set refused before it changes anything, or a
+  decode after the end, writes nothing.
+- `__sceSasSetVoiceATRAC3` writes the context's address into the voice's first word in the SasCore: only into the
+  SasCore `__sceSasInit` set up, the call naming it (the program's memory, which the library has only once it's set
+  up; the other calls take any core). `__sceSasUnsetATRAC3` puts 0 back, and `__sceSasInit` puts 0 in each of the 32
+  voices' words, as a fresh SasCore has them (sascore.h: "default 0x00000000").
+- States: the contexts travel in memory. A state from before (no memory of their own: 0) has them written as it
+  loads; one where a program had asked (a block of the user partition) keeps them there, as fresh as that last
+  asking, which wrote them then: each is written again as the library next changes its ID, a state the program set
+  kept meanwhile (Angus's state at its title needs its 16 kept).
+
+**The game now** (the scratch runner, the tester's `st-title.bin`, Cross at 30): the stop goes through at once, a
+loading screen from frame 100, and the first level from about 750, Angus in his cell: "MY HEAD HURTS. THE LAST THING I
+REMEMBER IS BEING TAKEN PRISONER BY SOME STRANGE ALIENS THAT LANDED ON MY FARM." From boot (`s1.txt`) the same, and no
+load through address 0. Still not done: sceSas's ATRAC3 voices play silence and take nothing from their stream, so
+the music isn't heard (it wasn't before), and the game, its voice never asking for more by its secondBuffer, hands
+over the whole file at once and then an empty piece every other frame, where a PSP would take it as it plays.
+
+### sceVaudio
+
+**The report.** Battle vs. Chess (a prototype) calls sceVaudioChReserve at boot and sceVaudioOutputBlocking once as a
+match starts, neither there; moves are never carried out, a suspect.
+
+**What the PSP does** (pspautotests' audio/blocking/vaudio, recorded): an output of 2048 samples returns 0x800, and
+the SRC channel's `sceAudioOutput2GetRestSample` counts its buffer: sceVaudio is the SRC channel (part 21's) under
+another name. Reserving while `sceAudioOutput2Reserve` holds it is ALREADY_RESERVED, and sceVaudio is held all the
+same: reserving again, once the channel is free, is BUSY, an output NOT_RESERVED, the release NOT_RESERVED.
+Releasing what isn't reserved is NOT_RESERVED; releasing with a buffer still playing isn't refused, as the SRC
+channel's release is, but waits for it to be heard (a buffer's time) and then releases. pspvaudio.h gives the rest:
+256 to 2048 samples a buffer, mono (1) or stereo (2), the rates, the four effects and the level control.
+
+**The implementation** (`audio.cpp`): sceVaudioChReserve, ChRelease, OutputBlocking, SetEffectType and SetAlcMode, as
+recorded and, where not, chosen: its outputs and release act on the SRC channel only where its own reservation took
+it (held on a refused one, or once the SRC family's release has let its channel go, they're NOT_RESERVED whoever has
+the channel, and the release lets go of the hold alone);
+each buffer is copied as pairs (a mono sample heard on both sides) into whichever of two kernel buffers
+(`Kernel::VaudioMemory`) isn't armed, and armed on the SRC channel from there, its blocking and pace the SRC
+channel's; the release's wait is a thread state of its own (`Audio::WaitVaudioRelease`), the release made as the last
+buffer retires (100 microseconds before its end is heard, as a drain returns); a count outside 256 to 2048 is
+INVALID_SIZE, a format but 1 or 2 INVALID_FORMAT and a rate the SRC channel hasn't got INVALID_FREQUENCY, all before
+sceVaudio is held; an output's volume is 0 to pspvaudio.h's PSP_VAUDIO_VOLUME_MAX, 0x8000 ("It must be a value
+between 0 and PSP_VAUDIO_VOLUME_MAX"), one out of that refused (INVALID_VOLUME, as the SRC channel says of one out of
+its own range of 0 to 0xFFFFF, which a first version took) rather than clamped, as the header has it and no recording
+contradicts; the effect (0 to 5 and the level control 0 to 2, pspvaudio.h's MAX values among them, the effect at 0 to
+0x8000, the volume returned) is kept and not heard. The state keeps whether sceVaudio is held and whether the channel
+is its own, its format, effect and level control (layout 31).
+
+**Battle vs. Chess now** (the tester's `script.txt` from boot, then `gameplay.txt`'s presses at 5820): its music thread
+(SceMainSampleBgmMp3) reserves 1152 samples at 44,100 Hz at frame 607 and plays its MP3 music through sceVaudio, an
+output every 26 ms, releasing and starting the next track at 4412. The moves still aren't carried out: the pawn is
+picked and its squares light up, the confirm on a lit square does nothing, as before; so sceVaudio wasn't the cause.
+
+**What the move does instead**, traced with the scratch runner from the tester's `state.bin` (every system call
+around the confirm, and the game's memory 40 frames before, 10 before, 20 after and 100 after it): the press
+reaches the game, whose pad code (0x0888fc6c) maps a fresh Cross to the first of its actions; its "chess thread"
+wakes every 100 ms and runs its engine only when a request word (0x0899f2ac) says 1, which stays 0; between the
+frames before and after the confirm nothing in its memory changes but the lit squares' colours and its frame-rate
+count; and no system function is called differently (no file, no thread, nothing missing). Picking the pawn loads
+its sounds through the game's file thread (`w_pawn_idle_to_agressive.vag` among them), every open and read
+answered; from boot to the match the thread's five refused opens are each followed by another name that opens (a
+fallback). The game's own move code (its states name an ST_COMMIT_MOVE) wasn't followed to where it gives up; the
+prototype's code may simply not finish its moves.
+
+### The review's points
+
+An independent review of the branch (merged with master, `649a88137`) found five Lows, all taken:
+
+- **sceVaudio's output volume** took the SRC channel's 0 to 0xFFFFF, where pspvaudio.h says it "must be a value between
+  0 and PSP_VAUDIO_VOLUME_MAX" (0x8000), as sceVaudioSetEffectType's must, which already refused more. Refused now, not
+  clamped (the header's "must", its call returning an error where it fails; no recording tries more): INVALID_VOLUME,
+  as the SRC channel says of a volume out of its own range, after NOT_RESERVED and before anything's armed.
+- **The SasCore's word was written wherever the call pointed** (`arg(0) + 20 + voice * 56`). Now only into the SasCore
+  `__sceSasInit` set up, the call naming it; `__sceSasUnsetATRAC3` puts 0 back, and `__sceSasInit` puts 0 in every
+  voice's word, as a fresh SasCore has them (above).
+- **An older state's contexts in a block** had no test: a layout-26 state (this branch's without sceVaudio's 15 bytes)
+  whose contexts were in a block of the user partition loads with them kept there, a state of 16 set there honoured,
+  kernel memory left alone, and each written there again as the library next changes its ID.
+- **Low-level IDs refused every call needing a file** with 0x80630031, unrecorded ones too (sceAtracGetInternalErrorInfo
+  was NO_DATA): the seven recorded calls alone look at the context's state now, the rest answering as before (above).
+  Corpse Party (20 seconds from the tester's state with `--wav`): its sound byte for byte master's runner's.
+- **29 and 30 skipped** (27 and 28, parts 87 and 88, loaded): said above, in the handoff, beside StateVersion in
+  `system.cpp` and in the test that refuses them.
+
+These fixes had an independent review in turn (PASS, one Low and two Nits, taken): Battle vs. Chess's format, which
+the first agent's trace shows (below); the forced states' test given the two recorded calls it lacked
+(ResetPlayPosition, SetSecondBuffer); the recording's untried format and the handoff's merges.
+
+Left, and why: pspautotests' audio/sceaudio/reserve also recorded sceVaudio, and disagrees with two of this branch's
+choices. Its "Channel counts" refuse every format it tries but 2 with 0x80000108, mono (1) among them (4 isn't tried:
+the test skips it, as it never wakes the thread), where pspvaudio.h lists mono, this branch takes it and refuses the
+rest with sceAudio's INVALID_FORMAT (0x80260007). And after a reservation refused while `sceAudioOutput2Reserve` held
+the channel, that channel released and reserved again by Output2, a "wrong" sceVaudioChRelease and a reservation that
+then succeeds (0) show the release freeing the SRC channel whoever holds it, where this branch's lets go of its hold
+alone (the first review's choice). Neither was among the review's points, and the second would undo an earlier
+review's decision; left for the owner. Battle vs. Chess, the one game known to use sceVaudio, is touched by neither: it
+reserves stereo (the first agent's trace, `~/phobos-work/scratch/hle-b00/runs/Battle vs. Chess [Europe Proto]/full1`:
+`sceVaudioChReserve(0x480, 0xac44, 2)`), and its outputs' volume, fading in from 0, peaks at 0x35C1, within the new
+limit too.
+
+Checks on the final tree: `tests/psp/run-tests.sh` (sanitizers) 479 groups, 0 failures; `tests/allegrex/run-tests.sh` 58
+groups, 0 failures; `tests/psp/ares/run-tests.sh` 338 checks, 0 failed. With the branch's runner
+(`~/phobos-work/scratch/review-b00`; its core as committed, the later changes being the tests' and the documents'):
+Angus Hates Aliens past NEW GAME from the tester's title state (the loading screen at frame 500, the first level and
+Angus's line at 1000) and from boot (`s1.txt`: the first level at 2400, as before); Battle vs. Chess as before (the
+tester's script, 7200 frames: every frame checked identical to the previous run's, and its sound, ten-second loudness by
+loudness, the same); Corpse Party's sound as master's (above).
+
 ## Part 83: Vulkan's waits for its own pixels gone — moves across row widths, palettes on the GPU, copies kept
 
 On branch `cursor/psp-vulkan-speed-2b67`, on master (`1d9308714`, #228). Parts 81 and 82 are other branches'. Clean
@@ -11562,6 +11729,477 @@ pointer too, the folder "<>" leaves out tested, a comment's wording, and a test'
 **Scratch** (the runs, their stick copies, traces and captures, the sheets, the scratch runner's patch and Disgaea
 Infinite's disassembly; `run.sh` gives each run its own stick, `recheck228.sh` and `final3.sh` are the runs above):
 `~/phobos-work/scratch/savedata3/` on the Mac it was made on, not in the repository.
+
+## Part 85: the GE's front end faster — vertices read a part at a time, fast mode's corners four at a time in vectors, each corner placed once
+
+On branch `cursor/psp-ge-headroom-2b67`: master (`1d9308714`) with #233 (`cursor/psp-cpu-speed5-2b67`, part 79) and #234
+(`cursor/psp-vulkan-speed-2b67`, part 83) merged in (`7b5bcdaf8`, which the numbers below call base), then #234's
+reconciled branch and master again as #233, #234 and #235 (part 84) went in. Parts 81 and 82 are other branches'. Clean
+room: no PPSSPP code read (nothing of it opened), JPCSP not read; the PSP's behaviour relied on is the GE's own as the
+code already had it. Every change is the host's: the same numbers worked out in the same order, so the same pictures,
+VRAM, RAM and machine state in all three renderers (checked below). Save states unchanged (StateVersion 26).
+
+**The problem.** On the owner's RP6 (Snapdragon 8 Gen 2), fast-forward ran Super Monkey Ball at 0.3x, Army of Two at
+0.5x, Killzone 1.1x, God of War: Chains of Olympus 1.7x, Ghost of Sparta 2.1x, GTA: Liberty City Stories 2.7x (scenes
+not matched), where PPSSPP runs Army of Two at 13x and the God of Wars at 11-16x. In 3D scenes the GE's front end, the
+emulation thread's work a draw and a vertex at a time (the list's commands, reading vertices, transforming, lighting,
+projecting, clipping, the renderer's state and submission), was 56-97% of that thread (part 79, "Where the time goes").
+
+**How it was measured.** The Mac (M1, MoltenVK), the headless bench runner built as Android builds it (-O3, thin LTO)
+with the emulation thread's counters (its CPU time, retired instructions and cycles) and a fixed PSP start clock, from
+the scenes' states (the CPU work's, part 79); macOS `sample` (1 ms) of a -g build for where the time goes, by function
+and by source line; and scratch harnesses compiling the GE's own code as the app is built, to time one function on
+its own (cycles and instructions from `/usr/bin/time -l`) and to compare its results with another version's. The Mac
+was shared with three other agents, a library run and an OS update installing (a load of 15 to 150 through these
+runs), which moves single times by a fifth and more; the host instructions and cycles a frame move far less, and carry
+the comparison.
+
+**Where the time went** (base, the share of the emulation thread's samples):
+- **Army of Two, playing**: 650,000 vertices a frame, about a hundred to a PRIM; 3,000 GPU draws. Vulkan (fast):
+  `meshTriangles()` placing the corners 17% (projecting them a corner at a time 7% of it), reading the vertices 18%
+  (each number through its format's switch), the GPU's models 7%, MoltenVK's submissions 13%, the guest's code 24%.
+  Vulkan (accurate): `transformAll()` 17%, `GE::triangle()` and `clipTriangle()` 19%, reading 15%, the GPU's triangles
+  9%. Software: the same front end, and each triangle's job (`triangleJob()`, `quantize15()`) 13%.
+- **Super Monkey Ball Adventures, story**: 50,000 small PRIMs a frame, each about 12 commands (a world matrix, then
+  the PRIM: 600,000 commands a frame), so its time is spread over each PRIM's setup (`pixelState()`, the Look, the
+  GPU's settings and `begin()`, the texture's lookup), the command loop, `transformAll()` 7%, reading, and 35% the
+  guest's code and its VFPU (`vfpuDot()` alone 8%).
+- **Ghost of Sparta, menu**: 17,000 3D PRIMs a frame, nearly every vertex lit: `transformAll()` 12-18% (`light()` 6-8%
+  of it), `GPU::own()` 10% (each PRIM walking the 126-136 pages of its scissor rectangle), MoltenVK's submissions 19%.
+- Death Jr. II, Sonic Rivals and Activision Hits Remixed aren't bound by the front end since #234 (part 83).
+
+**The changes**:
+1. **Vertices read a part at a time** (`readVerticesFrom()`): a PRIM without morph targets whose bytes are all in the
+   host's memory (in a row, after the same `drawnFirst()`; or by indices, indices and vertices in RAM) is read a part
+   at a time over all its vertices, each part's loop made for its format, straight from the host's bytes: the same
+   bytes and arithmetic as `readTarget()`.
+2. **Fast mode's corners placed once a corner, four at a time** (`meshTriangles()`): each corner's place in sixteenths
+   and what the rules ask of it kept as bits (`MeshCorner`), not worked out again at each of the three triangles of a
+   strip it's a corner of; four corners at a time through the world, view and projection matrices made one, onto the
+   screen (`projectedFour()`: `projected()`'s cut toward the screen's middle, its tests and the pixels from the frame
+   buffer's corner for four lanes, its doubles two at a time), into sixteenths (`fixedFour()`) and bits, GCC's and
+   Clang's vector types, NEON on ARM64. A skinned corner's bones are summed by the scalar code, as `transformAll()`
+   sums them, and the rest goes four at a time.
+3. **Fast mode's models** built and added, not zeroed by the vector's growth and written again.
+4. **`GPU::own()`** passes over a PRIM's pages that are its own and busy already (inside those it last went through,
+   no owner changed and no busy page cleared since); `Memory::changed()` passes over unwatched pages eight at once.
+5. **A list's words** read straight from the host's bytes in a page nothing draws over (`undrawnPage()`), not through
+   `memory.read()` a word at a time.
+6. **The bone matrices** of the kept 3D settings looked at only for a PRIM that skins.
+7. **Each 3D triangle's corners placed once a vertex** where the GE transforms them (`drawVertices()`: their places in
+   sixteenths and what `clipTriangle()` asks of them, as bits), and the renderer handed the places
+   (`Renderer::triangleAt()`); `pixelsInside()`'s case of a triangle inside the scissor inlined.
+
+**Tried and taken back: `transformAll()` four at a time.** Placing, putting on the screen and lighting four vertices
+to a vector (`placedFour()`, a four-lane `light()`, as `meshTriangles()` does its corners) ran fewer instructions in the
+whole runner, but timed alone it was slower than base's code in every case tried: PRIMs of 6 unlit vertices 0.26 ->
+0.46 G cycles (whole harness runs), 100 unlit 0.23 -> 0.38, 100 lit by one light or four 0.54 -> 0.58 and 0.77 ->
+0.84, 100 skinned by 4 bones 0.45 -> 0.55. The compiler already turns each vertex's own arithmetic into vector
+instructions there (x, y and z at once: base's `transformAll()` compiles to NEON lane loads and moves already), and
+gathering four vertices' fields into lanes and spreading every field back out (17 a vertex) cost more than the lanes
+saved. `meshTriangles()` keeps only each corner's place and bits, and there the lanes win: strips of 100 corners
+0.36 G cycles in base, 0.26 with the corners placed once a corner but a corner at a time, 0.20 four at a time; skinned
+by 3 bones 0.44, 0.34 and 0.26. So `transformAll()` is base's code again, and the lanes stay where they pay, in
+`meshTriangles()`.
+
+**Exact, and how that was made sure.** A lane gives what one corner alone gives only if every operation is the same,
+and with floats that includes which multiplies and adds are fused: Clang fuses a multiply and an add written in one
+expression (`-ffp-contract=on`, its default), so each lane's expressions are written in the same shape as the scalar
+ones (the same operands, in the same order, in the same statements); and skinned corners keep the scalar bone sums,
+which the compiler may vectorize its own way (at -O3, across the bones, each product rounded before it's added, the
+bones left over fused), as no lane-a-corner form does: a skinned corner matches base's as long as the compiler builds
+the two copies of that loop alike, which the scenes below show at -O3. GCC, which the desktop builds use, fuses across
+statements too (`-ffp-contract=fast`, with FMA under `-march=native`); the lanes' only multiplies and adds are the
+matrix products, in the same order as `times44()`'s, and nothing in `projected()` or `fixed()` can fuse, so its lanes
+match its scalar code as well. Which of two operands that aren't numbers a sum gives isn't the source's
+to say (LLVM may swap them, in scalar code as in lanes), but nothing `meshTriangles()` keeps is a float: places in
+sixteenths (held to the screen, 0 where they aren't numbers) and bits. Made sure by: the tests of `meshTriangles()`
+against the corner-at-a-time code it was (the runs handed over, the triangles cut, the time owed) and of
+`drawVertices()`' corners against `clipTriangle()`; `transformAll()` against `transform()` (now base's own code both,
+kept as a guard: random settings, and lighting's every kind of light); scratch dumps of base's and the branch's
+`transformAll()` at O3 with thin LTO over 200,000 PRIMs (7 million vertices) with infinities and not-a-numbers of
+either sign: identical, bit for bit; and the scenes, below.
+
+**Numbers** (the M1, MoltenVK; the final code against base, two rounds taking turns, the means; 150 frames from each
+scene's state; Software with 4 drawing threads; the emulation thread's ms a frame and the frame rate it allows, 1000
+over that, and its host instructions and cycles a frame). The Mac's load was 20 to 120 through these runs and the
+thread got 63-96% of its cycles on the performance cores, so the times and cycles move by 5-10% between rounds; the
+instructions under 1%. Colin McRae in Vulkan (accurate) isn't timed: without rasterization order MoltenVK splits its
+3D blends into 26,000 draws a frame there (0.7 frames a second, part 83).
+
+| Scene | Renderer | Emulation thread ms a frame (fps it allows) | M host instructions | M cycles |
+| --- | --- | --- | --- | --- |
+| Army of Two, playing | Vulkan (fast) | 71.7 -> 52.9 (14 -> 19), -26% | 587 -> 369 (-37%) | 192 -> 146 (-24%) |
+| Army of Two, main menu | Vulkan (fast) | 50.2 -> 36.8 (20 -> 27), -27% | 447 -> 267 (-40%) | 134 -> 98 (-27%) |
+| Super Monkey Ball Adventures, story | Vulkan (fast) | 68.2 -> 63.0 (15 -> 16), -8% | 644 -> 564 (-12%) | 180 -> 167 (-7%) |
+| Ghost of Sparta, menu | Vulkan (fast) | 39.4 -> 34.4 (25 -> 29), -13% | 433 -> 339 (-22%) | 111 -> 94 (-15%) |
+| Death Jr. II, woods | Vulkan (fast) | 8.6 -> 8.9 (116 -> 112), +3% | 97 -> 90 (-7%) | 25 -> 25 (+0%) |
+| Sonic Rivals, a stage | Vulkan (fast) | 6.1 -> 5.6 (164 -> 179), -8% | 58 -> 54 (-6%) | 17 -> 16 (-7%) |
+| Activision Hits Remixed, room | Vulkan (fast) | 10.3 -> 10.0 (97 -> 100), -3% | 78 -> 71 (-9%) | 27 -> 26 (-5%) |
+| Colin McRae 2005, race | Vulkan (fast) | 16.6 -> 14.7 (60 -> 68), -12% | 152 -> 119 (-22%) | 45 -> 40 (-12%) |
+| Army of Two, playing | Vulkan (accurate) | 58.9 -> 51.9 (17 -> 19), -12% | 657 -> 508 (-23%) | 170 -> 151 (-11%) |
+| Army of Two, main menu | Vulkan (accurate) | 38.9 -> 33.2 (26 -> 30), -15% | 487 -> 364 (-25%) | 113 -> 97 (-14%) |
+| Super Monkey Ball Adventures, story | Vulkan (accurate) | 52.4 -> 46.6 (19 -> 21), -11% | 642 -> 565 (-12%) | 152 -> 137 (-10%) |
+| Ghost of Sparta, menu | Vulkan (accurate) | 39.5 -> 30.3 (25 -> 33), -23% | 458 -> 370 (-19%) | 111 -> 89 (-20%) |
+| Death Jr. II, woods | Vulkan (accurate) | 37.4 -> 32.7 (27 -> 31), -13% | 381 -> 375 (-2%) | 98 -> 91 (-8%) |
+| Sonic Rivals, a stage | Vulkan (accurate) | 27.9 -> 25.4 (36 -> 39), -9% | 303 -> 300 (-1%) | 78 -> 73 (-7%) |
+| Activision Hits Remixed, room | Vulkan (accurate) | 50.3 -> 46.4 (20 -> 22), -8% | 478 -> 472 (-1%) | 137 -> 129 (-6%) |
+| Army of Two, playing | Software | 106.0 -> 96.6 (9 -> 10), -9% | 1010 -> 840 (-17%) | 286 -> 261 (-9%) |
+| Army of Two, main menu | Software | 94.5 -> 91.1 (11 -> 11), -4% | 884 -> 728 (-18%) | 249 -> 233 (-6%) |
+| Super Monkey Ball Adventures, story | Software | 67.8 -> 63.4 (15 -> 16), -6% | 690 -> 618 (-11%) | 186 -> 173 (-7%) |
+| Ghost of Sparta, menu | Software | 90.9 -> 88.2 (11 -> 11), -3% | 935 -> 877 (-6%) | 244 -> 236 (-4%) |
+| Death Jr. II, woods | Software | 12.5 -> 11.8 (80 -> 85), -6% | 131 -> 124 (-5%) | 34 -> 32 (-5%) |
+| Sonic Rivals, a stage | Software | 9.0 -> 8.5 (111 -> 117), -5% | 94 -> 87 (-8%) | 24 -> 23 (-5%) |
+| Activision Hits Remixed, room | Software | 18.3 -> 16.4 (55 -> 61), -10% | 184 -> 172 (-6%) | 49 -> 45 (-8%) |
+| Colin McRae 2005, race | Software | 24.4 -> 22.3 (41 -> 45), -9% | 221 -> 201 (-9%) | 63 -> 58 (-7%) |
+
+Army of Two takes a quarter less time in Vulkan (fast) (37-40% fewer instructions: its corners and its vertex reading),
+an eighth less in accurate, a tenth less in Software; Ghost of Sparta's menu 15-20% less in both Vulkan modes (`own()`'s
+pages, the corners); Colin McRae's race 12% in fast; Monkey Ball 7-10%, its time being its PRIMs' setup and the guest's
+VFPU (below). Death Jr. II, Sonic Rivals and Activision Hits Remixed, bound elsewhere since #234, run 1-9% fewer
+instructions. The software renderer's frames are bound by its drawing, whose bands the emulation thread draws too while
+it waits (part 74), so its time there moves less than its front end's instructions.
+
+**Accuracy.** Base against the branch's final code from the 21 scenes' states (part 79's), 100 frames, every frame's
+picture and all of VRAM hashed with drawing settled, then RAM and the machine's whole serialized state: identical
+in every one of the 63 runs, the 21 scenes in Vulkan (fast), Vulkan (accurate) and the software renderer (4 drawing
+threads). Before the review's points the same check on the code then (the four-lane `transformAll()` in it) was
+identical in all 63 runs too, and the steps before it on the eight front-end scenes in all three renderers.
+
+**Checks.** On the final code, with #234's reconciled branch merged (its tests of #233's glow with #234's palettes,
+which failed 11 checks on the merge of the two before) and master's #235 after: `tests/psp/run-tests.sh` 496 groups, 0
+failures (sanitized, and the GE's groups without the sanitizers too); `tests/allegrex/run-tests.sh` 60 groups, 0
+failures; `tests/psp/ares/run-tests.sh` 318 checks, 0 failed; GCC 14 builds the GE, the renderer and their tests with
+-Wall -Wextra -Werror. New tests: "ge vertices read in runs as one at a time" (the runs counted as read), "draw3d mesh
+corners placed four at a time as one at a time", "draw3d triangles' corners placed once as at each triangle", "draw3d
+transformed a stage at a time as one at a time", "draw3d lit a stage at a time as one at a time", and "ge 3D settings
+kept from PRIM to PRIM" asking for unskinned PRIMs (the last skinning one's bones kept).
+
+**The review.** A fresh read-only review of the branch's nine commits checked each four-lane path against the scalar
+code operation by operation (in LLVM IR too), the list's words, the kept bones, the corners' bits against
+`clipTriangle()`, `own()`'s skip and memory's eight pages, and the vertex runs, and found them right, with two blockers.
+(1) Where two operands that aren't numbers met in one of the four-lane `transformAll()`'s sums, Clang put them the other
+way round from the scalar code, so such a result's sign could differ, and fog reads that sign: a 3D point or sprite at a
+place that isn't a number, with depth clamping and fog on, is drawn at the screen's corner with fog 0 or 255 by it.
+Looked into: base's scalar code, auto-vectorized, takes its own order too, so a vertex at a time where a lane isn't a
+number matched base less, not more (55,000 of 200,000 harness rounds differing in a not-a-number's bits, against
+25,000); with `transformAll()` base's code again (above), none differ. (2) `cond ? Outside : 0` (an enumerator and an
+int) is an error under GCC's -Wextra -Werror, as CI builds the tests: 0u (GCC 14 compiles the GE and its tests cleanly
+with -Wall -Wextra -Werror now). Its minor points, taken: the vertex runs test counts the runs read
+(`GE::vertexRunsRead`), not its own expectation; the kept settings test checks an unskinned PRIM keeps the last skinning
+one's bones; the stage-at-a-time tests take one not-a-number as another; comments; vectors returned by their type for
+GCC. Not taken: an ARM64 CI job (a fused multiply and add written differently in a lane shows only there; the Mac's test
+runs are ARM64 and catch it). A second fresh review, of the final diff after `transformAll()` went back to base's, found
+no blocker or major point; its minor ones taken: the GCC note above, the mesh test comparing each corner's place and
+bits too, the lighting test over all three mappings, a lane of depths nothing read, comments and the tests' names.
+
+**Where the time goes now** (the final code, `sample` of a -g build, the share of the emulation thread; taken at a
+load near 100, so as shares):
+- **Army of Two, playing**: Vulkan (fast) `meshTriangles()`' triangles' culling 14% (the vector of the corners handed
+  over 3% of it) and its corners' placing 10%, reading the vertices 12%, the GPU's models 8%, recording and MoltenVK's
+  submissions 15%, the guest's code 27%; accurate `transformAll()` 17%, reading 10%, the GPU's triangles 16%
+  (`placedTriangle()`, `triangleAt()`, `emit()`); Software the bands it draws itself (12%), `transformAll()` 10%, each
+  triangle's job 13%.
+- **Super Monkey Ball, story**: the guest's VFPU 15% (`VTFM`, `vfpuDot()`), each PRIM's setup about 17% together
+  (`GPU::begin()` with its settings and submissions, the texture's lookup, `transformKept()`, `pixelState()`, the
+  Look), the command loop 6%, `transformAll()` 6-9%, reading 5%.
+- **Ghost of Sparta, menu**: `transformAll()` 15-23%, `light()` alone 7-9% of it (now its biggest function), recording
+  and MoltenVK's submissions 19-28% (`GPU::begin()`'s), the GPU's triangles 5-12%.
+
+**What's left.**
+- Ghost of Sparta's menu draws 1,350 GPU draws a frame in fast mode, 91% of them split from the last only by the push
+  constant `held` (render to texture's texels taken, #234's: 184,000 of 202,000 draws in 150 frames): they can't join,
+  and each costs MoltenVK's encoding. `held` in the vertices or in a table the draw indexes would let them join.
+- Army of Two's draws split on the texture (51,600 of 59,200 in 150 frames); its models could be written straight into
+  the GPU's buffer (#234's backend), an unskinned PRIM's without their eight weights.
+- Monkey Ball's PRIMs' setup: a Look kept from the last PRIM where its commands are the same, the GPU's settings with
+  it, would cut most of it. Its VFPU is the CPU's (round 2).
+- Lighting: four vertices to a vector lost to the compiler's own vectorization; a `light()` made for each PRIM's lights
+  (no branches a vertex), or a vertex's four channels in the lanes, is what's left to try. `transformAll()` likewise:
+  the vectors lost on gathering and spreading the vertex's fields, which vertices kept as parts (all the x, then all
+  the y) from `readVertices()` on would change.
+- The software renderer's triangle setup (`triangleJob()`, `quantize15()`: 12-13%).
+- An ARM64 CI job, for the lanes' fused multiply-adds.
+
+**For the RP6.** Fast-forward and the emulation thread's time in Army of Two's play and main menu, Ghost of Sparta's
+menu, Colin McRae's race and Activision Hits Remixed's room in Vulkan (fast), where the corners' work moved most;
+Super Monkey Ball's story in all three (its time is the PRIMs' setup and the guest's VFPU, which this hardly moves).
+The Snapdragon's cores and the NDK's Clang may weigh the vector code differently from the M1 and Apple's Clang; the
+exactness doesn't depend on that (each lane's operations are the scalar code's in any build).
+
+## Part 86: the CPU, round 2 — the VFPU's adder in NEON, delay slots compiled each way, the rare ways out of line, prefixes worked out as blocks are compiled, blocks linked to each other
+
+On branch `cursor/psp-cpu-round2-2b67`, on master (`b3507c1db`, #233 merged), with master merged in again before the PR
+was done (`0a9a7fa75` with #234, then `4788125f1` with #235 and #236: see "Checks"). The task: round 2 of part 79's CPU
+work, for the owner's goal of PPSSPP's speed with room for fast-forward and upscaling on the Retroid Pocket 6 (ARM64):
+the VFPU's vector and matrix operations in NEON where that can be exact, the compiled code's own costs (block endings
+and linking, loads and stores, registers), wait loops, and whatever else profiling shows on the CPU's side; every
+emulated result the same. Clean room: PPSSPP not read (its CPU, JIT and IR code not at all), JPCSP not read. Save states
+are unchanged by this branch (master's layout, 27 since part 87): nothing new is kept.
+
+### How it was measured
+
+As part 79: the headless runner built as Android builds it (O3, thin LTO), patched in scratch to report the emulation
+thread's CPU time, retired host instructions and cycles, run from the scenes' save states
+(`~/phobos-work/scratch/cpu-speed2/scenes`), base and branch in turn. New here, a block-level profile: a scratch patch
+(`jitmap-patch.py`, `jitmap3-patch.py`) has the recompiler log every block it compiles (its guest words, its host
+code, and where in the host code each guest instruction's code, each block ending and each cold path begins), and
+`jitcat.py` sorts xctrace's samples in compiled code by what each host instruction was compiled for. (The first try
+at these profiles hung for two hours on Super Monkey Ball: xctrace never got past "ending recording" after its target
+exited about 9 s after the time limit, while it was still ending the attach session. The profile script now keeps
+the runner alive until xctrace returns, then stops it, with a limit on every step; every profile since has
+finished.) The Mac was shared with three other agents throughout, its load average 25 to 70, so the host
+instructions a frame carry the comparisons, the times beside them.
+
+### Where the time went (master, Vulkan fast)
+
+| Scene | Compiled code (self) | Under system calls (GE, kernel) | VFPU helpers | Notes |
+| --- | --- | --- | --- | --- |
+| Super Monkey Ball Adventures, story | 19% | 62% | 15% | one loop of eight vtfm.q on a transposed matrix: 12% |
+| Disaster Report 3, playing | 35% | 32% | 25% | vhtfm and vmmul 11%; prefixed vsge/vslt (a frustum test) through the interpreter 9% |
+| Colin McRae 2005 | 30% | 59% | 6% | the VFPU4 group's conversions and functions through the interpreter 3% |
+| Army of Two, playing | 25% | 69% | 4% | |
+| Armored Core Formula Front, playing | 28% | 65% | 3% | |
+| Need for Speed Most Wanted, race | 25% | 68% | 2% | the polled calls: the kernel's per-call work spread over a dozen functions |
+
+Compiled code is flat: the busiest block is 0.3 to 0.7% of the thread. Sorted by what it was compiled for
+(Colin McRae): block endings (the chain to the next block) 23% of it, the branches themselves 14%, loads 18%, stores 9%,
+the FPU's loads and stores 8%, ALU 13%, FPU 7%. A conditional branch stored pc and pd on both ways, compiled its
+delay slot once, then loaded pc again to pick its chain: about 27 host instructions per block ending, then 17 more to
+find the next block. Every load and store was about 11 host instructions, every native instruction's rare way (a page
+off the fast path, an FPU mode or NaN, an overflow) compiled inline with a jump over it, and every FPU operation's
+inline fallback made the block forget the registers it held.
+
+### What was done
+
+1. **The VFPU's adder in NEON** (`recompiler-vfpu.cpp`: `vfpuDots()`, `vfpuDotAcross()`, `vfpuTransform()`,
+   `vfpuMultiply()`, `matrixProduct()`). vfpuDot(), the PSP's own adder (each product's 27 bits with round-to-odd,
+   aligned to the largest exponent and truncated, the sum rounded to nearest even, flushed below the smallest normal),
+   is integer arithmetic, so NEON's integer instructions do it four lanes at once, every step the scalar one's:
+   `umull`/`umull2` for the products, a sticky test for round-to-odd, `ushl` by negative amounts to align, the signs
+   applied and summed, `clz` to normalize. vtfm, vhtfm and vmmul take a lane per result: a 4x4 transform is four dot
+   products, side by side, from four row loads (turned with `trn1`/`trn2` for a transposed matrix) and four
+   broadcasts. vdot and vhdp take the terms across the lanes. The scalar code's last step (`vfpuDotRound()`) is shared.
+   A lane with an infinity or a NaN among its inputs goes to the scalar adder. Compiled code uses these where every
+   operand is in place (each matrix at its matrix's first row and column, each vector along a row or a column: checked
+   against `vfpuSquare()` and `vfpuLine()` as the block is compiled); the rest keep the scalar helpers, as does
+   x86-64. The scalar split also shows one thing only a test caught: large terms that cancel exactly flush to 0, so
+   the flush must come after the overflow's select.
+2. **A branch's delay slot compiled along each way it goes** (`recompiler-ipu.cpp`'s `emitBranch()` and
+   `emitDelaySlot()`, `recompiler.cpp`'s `emitEnd()`, `emitPC()`). The branch compiles only its decision; the delay
+   slot and the block's ending are compiled once for the taken way and once for the other, each knowing where it goes,
+   so pc and pd are stored only where the block leaves for run() (its chain's leave path) or calls the interpreter
+   (`destination`: the delay slot's interpreter calls store the way's own pc and pd). A conditional branch no longer
+   loads pc to pick its chain. After a delay slot the interpreter ran, the block goes where pc and pd say (a syscall
+   there may switch threads); a jump through a register stores them first, as before. The coprocessors' branches store
+   them only where they leave too.
+3. **The rare ways out of the block's straight line; loads and stores in fewer steps** (`emitCold()`,
+   `emitColdFallback()`, `recompiler-memory.cpp`). Each native instruction's rare way (an access off the fast path,
+   an overflow, a division the host can't make, an FPU mode or NaN, the VFPU's prefixes not at rest) is cold code,
+   emitted after the block's end with what the block held there, and back. The FPU's ways to the interpreter keep the
+   registers held (the interpreter writes no integer register there), so a block no longer reloads every register
+   after each FPU operation. A load or store's address is rs's host register itself or one 32-bit add (only bits 0-28
+   are used, by 64-bit operations that mask the rest), its page one `UBFX` on ARM64, and a store writes straight from
+   rt's host register: 7 to 8 host instructions on the fast path, from 11.
+4. **The VFPU's lane-by-lane instructions with their prefixes worked out as the block is compiled** (`vfpuEach()`,
+   `vfpuLane()`, `emitEach()`). vadd, vsub, vdiv, vmul, vscl, vmin, vmax, vsge, vslt, vmov, vabs, vneg, vi2f and vf2i
+   with any prefixes the block knows (a vpfx before them in the block), and the math functions (vrcp, vrsq, vsin,
+   vcos, vexp2, vlog2, vsqrt, vasin, vnrcp, vnsin, vrexp2) and vf2i at rest, run one helper that takes each lane's
+   source (its register after the swizzle, or a constant; absolute, negated), its destination (masked, clamped) and the
+   lanes a prefix takes past the size as packed descriptions, worked out from the prefixes as vfpuRead(),
+   outsideLanes() and vfpuWrite() would use them; each lane's arithmetic is the interpreter's (`vfpuLane()`). A
+   prefix the block doesn't know is taken to be at rest and checked as it runs (otherwise the interpreter's way, cold).
+   Disaster Report 3's frustum test (vsge and vslt against a broadcast w and -w) no longer goes through the
+   interpreter's decoder.
+5. **Blocks linked to the blocks they go on to** (`recompiler.cpp`'s exits: `emitLink()`, `addExits()`, `link()`,
+   `patch()`, `drop()`). A block's way on to a block it knows as it's compiled, after the run's limit and the page's
+   check, is a jump of the host's own (ARM64's `B`, x86-64's `JMP rel32`) to the lookup after it; once the target's
+   block is compiled it's rewritten to go straight to the target's body. Dropping a section puts every jump linked to
+   its blocks back to its lookup, even one in dead code (a block still running from a section that went runs on to its
+   end), and the live ones wait for those blocks to be compiled again; a section compiled for another mirror is
+   dropped first. Everything that drops code runs on the emulation thread.
+
+Not done: a wait loop to skip. Among the profiled scenes' busiest blocks, the self-loops are copies and fills (they
+store) or work on data (Disaster Report 3's clipping loop), at most 0.7% of the thread; the waiting that costs time,
+the Need for Speeds' idle thread rotating its queue 175,000 times a frame, goes through system calls (part 79).
+
+### Numbers
+
+The Mac, master (`b3507c1db`) against this branch (`ae85b27b0`: the review's changes after it change no compiled code),
+the bench runners from the scenes' states, medians of three rounds taking turns in Vulkan fast (MoltenVK, 1x) and two in
+the software renderer (4 drawing threads). "Fps it allows" is 1000 over the emulation thread's ms. The Mac's load
+average was 30 to 144 (up to 300 at times) through these rounds (three other agents, and the Cursor app's own renderer
+at up to 3.5 cores), so the times swing with the cores the thread got; the host instructions a frame hardly move with
+that, and carry the comparison.
+
+| Scene | Vulkan fast: emulation thread ms a frame (fps it allows) | M host instructions | Software: emulation thread ms | M host instructions |
+| --- | --- | --- | --- | --- |
+| Death Jr. II, playing | 31.2 -> 28.9 (32 -> 35), -7% | 389 -> 383 (-2%) | 15.0 -> 15.7 (+4%) | 162 -> 165 (+2%) |
+| Sonic Rivals, a stage | 30.1 -> 24.3 (33 -> 41), -19% | 277 -> 273 (-2%) | 9.9 -> 9.2 (-7%) | 107 -> 104 (-3%) |
+| Activision Hits Remixed, Atlantis | 23.1 -> 26.9 (43 -> 37), +16% | 269 -> 265 (-2%) | 7.0 -> 6.9 (-2%) | 67 -> 61 (-9%) |
+| Ghost of Sparta, menu | 46.3 -> 42.6 (22 -> 23), -8% | 431 -> 423 (-2%) | 88.4 -> 87.7 (-1%) | 935 -> 932 (-0%) |
+| NFS Most Wanted, race | 21.3 -> 19.0 (47 -> 53), -11% | 320 -> 290 (-9%) | 23.5 -> 22.6 (-4%) | 351 -> 320 (-9%) |
+| NFS Most Wanted, profile | 20.3 -> 19.2 (49 -> 52), -5% | 329 -> 302 (-8%) | 20.9 -> 20.1 (-4%) | 332 -> 305 (-8%) |
+| NFS Underground Rivals, title | 19.2 -> 17.6 (52 -> 57), -8% | 323 -> 295 (-9%) | 20.2 -> 18.6 (-8%) | 307 -> 279 (-9%) |
+| Super Monkey Ball Adventures, story | 59.7 -> 49.2 (17 -> 20), -18% | 636 -> 520 (-18%) | 64.1 -> 54.1 (-16%) | 686 -> 576 (-16%) |
+| Army of Two, playing | 66.4 -> 61.1 (15 -> 16), -8% | 585 -> 556 (-5%) | 94.6 -> 86.9 (-8%) | 1015 -> 978 (-4%) |
+| Colin McRae 2005 | 15.1 -> 14.0 (66 -> 71), -7% | 178 -> 162 (-9%) | 21.2 -> 20.9 (-1%) | 214 -> 200 (-7%) |
+| Armored Core Formula Front, playing | 10.3 -> 9.6 (97 -> 104), -6% | 95 -> 88 (-8%) | 8.4 -> 7.2 (-14%) | 71 -> 63 (-11%) |
+| Armored Core Silent Line, playing | 2.2 -> 1.8 (454 -> 568), -20% | 18 -> 15 (-19%) | 2.3 -> 2.0 (-16%) | 21 -> 18 (-14%) |
+| Disaster Report 3, playing | 4.4 -> 3.4 (230 -> 293), -22% | 52 -> 38 (-26%) | 6.3 -> 5.7 (-10%) | 61 -> 51 (-16%) |
+| Twisted Metal, playing | 3.9 -> 3.3 (258 -> 299), -14% | 42 -> 37 (-10%) | 4.6 -> 4.0 (-11%) | 47 -> 43 (-7%) |
+| Twisted Metal, logo movie | 15.9 -> 14.6 (63 -> 69), -8% | 317 -> 286 (-10%) | 17.0 -> 15.2 (-11%) | 317 -> 286 (-10%) |
+| Disaster Report 3, intro | 8.2 -> 7.8 (122 -> 128), -5% | 158 -> 147 (-7%) | 8.9 -> 8.2 (-7%) | 160 -> 148 (-7%) |
+| Armored Core Formula Front, intro | 11.9 -> 12.0 (84 -> 83), +1% | 165 -> 147 (-11%) | 10.6 -> 10.0 (-6%) | 166 -> 148 (-11%) |
+| Armored Core Silent Line, intro | 13.4 -> 12.6 (74 -> 80), -7% | 154 -> 137 (-11%) | 9.8 -> 9.2 (-6%) | 158 -> 141 (-11%) |
+
+Super Monkey Ball's story and Disaster Report 3's play, where the VFPU's matrix products run, take 18 and 26% fewer
+host instructions (49 and 3.4 ms a frame from 60 and 4.4); the Need for Speeds, Twisted Metal's logo movie and the
+Armored Cores' intros, polling system functions in tiny blocks, 8 to 11% (the links, and the delay slots' stores);
+Colin McRae, the Armored Cores and Twisted Metal playing 8 to 19%; the GE-bound scenes (Death Jr. II, Sonic Rivals, Hits
+Remixed, Ghost of Sparta, Army of Two) 2 to 5%. In the software renderer the emulation thread also draws the bands it
+takes while it waits for the drawing threads (part 74), so its instructions follow the bands it took too (Death Jr. II
+2% more); the CPU-heavy scenes come out as in Vulkan. The last code's runner (`3878e0db3`, the review's changes) against
+`ae85b27b0` on four scenes: the same instructions a frame within 0.05%.
+
+Where each change counts (Vulkan fast, M host instructions a frame, one round each, the six scenes the CPU matters in):
+
+| Scene | Master | VFPU adder in NEON | delay slots each way | cold code, loads and stores | prefixes compiled (vfpuEach) | blocks linked |
+| --- | --- | --- | --- | --- | --- | --- |
+| Super Monkey Ball Adventures, story | 636 | 542 (-14.8%) | 534 (-1.2%) | 527 (-1.1%) | 525 (-0.4%) | 520 (-0.8%) |
+| Disaster Report 3, playing | 52 | 45 (-12.7%) | 44 (-2.3%) | 43 (-1.8%) | 39 (-7.3%) | 38 (-2.0%) |
+| Colin McRae 2005 | 179 | 173 (-2.9%) | 170 (-1.9%) | 166 (-2.0%) | 165 (-0.5%) | 162 (-1.7%) |
+| Armored Core Formula Front, playing | 95 | 91 (-4.1%) | 90 (-1.3%) | 89 (-1.2%) | 89 (+0.5%) | 88 (-1.8%) |
+| NFS Most Wanted, race | 320 | 315 (-1.5%) | 305 (-3.1%) | 301 (-1.2%) | 301 (+0.1%) | 290 (-3.6%) |
+| Army of Two, playing | 585 | 573 (-2.0%) | 566 (-1.2%) | 562 (-0.8%) | 560 (-0.3%) | 556 (-0.6%) |
+
+The NEON adder is most of it where the VFPU's matrix products run (Super Monkey Ball's eight vtfm.q a vertex batch,
+Disaster Report 3's), the prefixes compiled most of the rest of Disaster Report 3 (its frustum test); the compiled
+code's own changes take 1 to 4% each from every scene that runs much guest code, the links most from the polling
+scenes.
+
+### Accuracy
+
+Every change is the host's alone; nothing a game can see moves.
+- The branch against master from the 21 scenes' states (part 79's: the table's and Death Jr. II's character select,
+  Hits Remixed's game-select room, Army of Two's menu): in the software renderer, 100 frames with every frame's picture
+  and all of VRAM hashed, drawing settled, then RAM and the machine's whole serialized state; in Vulkan fast and Vulkan
+  accurate, 200 frames, then RAM and the machine's state (VRAM, read back from the GPU, among it): identical, every
+  one, in all three.
+- The NEON adder against vfpuDot() itself (`stress/dots.cpp`, scratch): 3 million random sets of terms for each of
+  2, 3 and 4 terms, all four lanes, through the vertical adder and the one across the lanes (72 million results),
+  with inputs drawn to reach every case (zeros, denormals, infinities and NaNs, products that flush or overflow,
+  few-bit significands that cancel exactly, ties): every one the same.
+- Broken versions of the changes (`mutate2.py`, scratch, each in a copy of the tree running tests/allegrex, no
+  sanitizers): 62, of which 59 are caught. The three that aren't change nothing a test or a game can see: lanes past an
+  operand's size let into the special case (which then works the same lanes out the scalar way), an offset from r0
+  widened without its sign (neither address has a page on a PSP, so both go to the interpreter), and a section compiled
+  for another mirror replacing the old one without dropping it (links are kept by section, so the next drop takes them
+  anyway). One more broke a step that turned out to do nothing (a shift after a rounding carry, whose result's fraction
+  is 0 either way), which was then taken out. The runs also showed what random trials miss: the flush-after-overflow
+  mutation slipped past them once their sequence changed, and is now caught by fixed cases; a function whose code
+  doesn't depend on its own address let a link into the other mirror's code pass, and now keeps the address it runs
+  from.
+
+### Checks
+
+- `tests/allegrex/run-tests.sh`: 68 groups, 0 failures (sanitizers on), and the same built for x86-64 and run under
+  Rosetta (no sanitizers), which takes the JMP rel32 links, the page found by a shift and a mask, and the scalar matrix
+  helpers. New groups: "vfpu compiled products" (3000 random vmmul, vtfm, vhtfm, vdot and vhdp
+  instructions of each size, any registers, half after random prefixes, both engines bit for bit, and fixed cases of
+  huge terms cancelling exactly), "vfpu compiled lanes" (1500 of each lane-by-lane instruction with random prefixes,
+  set in the block, only in the starting state, or none), "delay slots each way" (every branch, taken and not, and
+  every jump, with a delay slot native, interpreted, a syscall, a load raising an exception, a syscall moving pc as a
+  thread switch does, a load from a page the table leaves out, a division by zero, an FPU division giving NaN, a VFPU
+  instruction after mtvc set a prefix and a reserved VFPU encoding: what the hooks see, every register at the end, and
+  runs of 1 to 37 instructions chained and not), "linked blocks" (a linked function rewritten by the program, a loop
+  rewriting its own first word with a new constant every round, a function that keeps the address it runs from called
+  through two mirrors in turn and from a site compiled right after a call through the other; links made and waiting;
+  the same with code memory starting afresh every few blocks).
+- `tests/psp/run-tests.sh` (sanitizers on): 478 groups, 0 failures.
+- `tests/psp/ares/run-tests.sh`: 318 checks, 0 failed.
+- With part 83: master moved while this was reviewed (#234, part 83's Vulkan work, merged as `0a9a7fa75`) and was
+  merged into the branch, the docs alone conflicting. The merge against that master: the 21 scenes' hashes identical
+  in all three renderers again (the same frames and states as above), tests/allegrex 68/0 (its sources untouched by
+  the merge), tests/psp 489/0 (part 83's groups among them), tests/psp/ares 318/0. GitHub's Linux build then found
+  `std::memcpy` (the links' patching) used without `<cstring>`, which Apple's library brings in by itself, so the
+  Rosetta build hadn't shown it; it's included now, and GitHub's tests pass (tests/allegrex 68/0 built by GCC for
+  x86-64, sanitizers on; tests/psp; the desktop build).
+- With parts 84 and 87: master moved again (#235, savedata's dialogs, and #236, sceFont, whose states are layout 27;
+  master at `4788125f1`) and was merged in as well, the docs alone conflicting. That merge against that master: the 21
+  scenes' hashes identical in all three renderers again; tests/psp 497/0 and tests/psp/ares 318/0 on the Mac; GitHub's
+  tests (tests/allegrex 68/0 and tests/psp 497/0, built by GCC) and the desktop and Android builds pass.
+
+### Left, and why
+
+- **Where the CPU's time goes now** (Vulkan fast, xctrace on the branch's last code): compiled code is 17 to 36% of
+  the emulation thread (Super Monkey Ball 17%, Army of Two 18%, Need for Speed Most Wanted 20%, Colin McRae 24%,
+  Disaster Report 3 36%; master's 20, 25, 26, 30 and 42%). Of it: block endings 23 to 28% (57% in Most Wanted's
+  polling loop, whose `jr ra` endings look the target up every time), ALU 19 to 22%, loads 17 to 21%, branches 7 to
+  10%, stores 6 to 7%, the FPU's loads, stores and arithmetic 6 to 10%. The VFPU's helpers left: Monkey Ball's vtfm.q
+  in NEON 4.4%, its vcmp and vscl 2%; Disaster Report 3's vsge and vslt (vfpuEach) 4%, vhtfm.q and vmmul.q in NEON
+  3.5%, vfpuMatrix's other forms 1.6%; Colin McRae's VFPU4 group through the interpreter 1.7%. The rest of the thread is
+  under the system calls: the GE's display lists (Monkey Ball 75%, Army of Two 77%, Colin McRae 68%) and the polled
+  kernel (Most Wanted 72%).
+- **The block endings' count**: with the lookup gone where blocks are linked, a block ending is the run's count
+  (loaded, added to and stored back, then compared with the limit: each block's ending waits on the last one's store),
+  the halted check where the block called the interpreter, the page's check and the jump. Keeping the count in a
+  saved register, stored only where something reads it (a call into the interpreter or the kernel, leaving for run()),
+  would take the memory out of that chain. The next step for block endings, then a cache of the last target for jumps
+  through a register (Most Wanted's import stubs).
+- **Registers across blocks**: a block starts holding nothing, and every result is stored as its instruction ends,
+  so each block loads the registers it uses. Keeping the most-used ones (sp, ra, the arguments) in host registers
+  across linked blocks, stored only where something reads ipu.r[] (the interpreter, the kernel, a block leaving), is
+  the next big step for compiled code: ALU and loads are about 40% of what's left in it.
+- **The VFPU's remaining helpers**: vf2h, vh2f and the small integer packings (vs2i, vi2s, vi2us...) still go through
+  the interpreter's decoder, as do vdot, vhdp and vcmp with prefixes set, and vcrsp, vqmul and vdet (adder-based,
+  which vfpuDots() could take); the lane-by-lane instructions go a lane at a time in vfpuEach() (NEON there would need
+  each lane's flush and NaN rules, and products near 2^-126, where IEEE rounds differently from the PSP, sent to the
+  scalar way).
+- **Polled system calls** (the Need for Speeds): about two thirds of the thread is the kernel's per-call work over
+  half a million calls a frame, a system call costing the PSP's clock a single cycle (part 79). A loop of calls that
+  each change nothing could jump ahead to the next event only if every function in it provably changes nothing at all
+  and the GE's FINISH check after each call were accounted for; not done.
+- **The GE's work on the CPU** (the GE front end's task, not this one): most of what's left in Monkey Ball, Army of
+  Two, Colin McRae and the Armored Cores.
+
+### On the RP6
+
+The NEON is ARM64's own, so the Mac's gains in the VFPU carry over; the compiled code's (fewer host instructions a
+block ending, a load or a store) carry over too, and count for more on cores with smaller caches (the RP6's
+Cortex-X3 and A715 have a 64 KiB instruction cache, the M1's performance cores 192 KiB). To compare: master and this
+branch, Vulkan fast at 1x, the scenes in `~/phobos-work/scratch/cpu-speed2/scenes` (part 79's table). Expect Super
+Monkey Ball's story and Disaster Report 3's play most (a fifth to a quarter fewer instructions on the emulation thread,
+as on the Mac), Colin McRae, the Armored Cores and the Need for Speeds 8 to 11% (Silent Line's play 19%), the GE-bound
+scenes 2 to 5%.
+
+### Review
+
+An independent read-only review of the whole branch against master found no change to emulated results, and checked
+exact, step by step: the NEON adder against vfpuDot() and vfpuDotRound() (round-to-odd, the -254 start, the shift's
+clamp, the signs, the rounding's garbage lanes gated off, the carry, the flush after the overflow, -0 from a small
+negative sum, the special lanes), vfpuEach()'s descriptions against vfpuRead(), outsideLanes(), vfpuWrite(), VSCL(),
+VI2F(), VF2I() and vfpuLastLaneFirst(), the in-place tests and the transposes, every place pc and pd are read after the
+delay slots' change, the registers the cold code holds, and the links (the checks before them, unlinking dead and live
+exits, the mirrors, reset, jitprotect's nesting, the instruction cache, the jumps' reach). Its points, all taken:
+- Test gaps: the NEON vmmul's in-place cases came up in about 1 trial in 512 for .p and .t (now three in four trials
+  have their matrices in place, every transposition in turn); nothing showed that blocks link at all, or that code
+  memory starting afresh mid-run is safe with links (now checked, and a run with code memory 8 KiB over the reserve
+  starts afresh three times with 20 links in place); more delay slot kinds (added); the random programs depended on the
+  order a compiler evaluates arguments in (now sequenced); the fixed cases all reported one line (now each its own).
+- drop() now marks a section's own exits dead before putting its links back, so its exits into itself don't wait;
+  emitChainTo()'s leave path always stores pc and pd (its parameter was always false); cold code runs by index (cold
+  code may add some); the VFPU's cold interpreter calls check they compiled; a block starts with no destination; a
+  condition that was always true is gone; unload() lets the links' memory go.
+- Comments: the VFPU file's header and the products' comments (the NEON paths, vfpuEach()), the branches', the
+  coprocessors' and the stores' brought up to what the code does.
+
+### Scratch
+
+`~/phobos-work/scratch/cpu-round2`: `build.sh`, `run.sh`, `bench2.sh` and `benchsum2.py` (the rounds: `bench2/*.tsv`),
+`hashcmp.sh` (`hash/`), `xprof2.sh` and `jmprof2.sh`/`jmcat.sh` (xctrace with time limits), `patches/jitmap-patch.py`
+and `jitmap3-patch.py`, `jitprof.py`, `jitcat.py` and `calltree.py` (`prof/`), `stress/dots.cpp` (the NEON adder
+against vfpuDot), `mutate2.py` (`mut/`), `NOTES.md`.
 
 ## Part 87: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces (the memory a glyph is read into)
 
@@ -11932,3 +12570,1956 @@ into this part.
   `runs/final2`, `runs/final3a`, `runs/drive1`, `runs/final4a`, the final runs, and their states in `states/`;
   `regress.sh` and `regress/`, the other games; `tests.sh`, the tests built a file at a time for iterating). Nothing was
   run on the RP6.
+
+## Part 90: Vulkan's lost characters and race — the depth buffer as the PSP's memory, a 5551 stencil bit (Hammerin' Hero, Jeanne d'Arc, Cars Race-O-Rama)
+
+On branch `cursor/psp-vk-models-2b67`, on master (`542da5a28`, #230), merged with `3228b825d` (#229, #237). Parts 81
+to 88 are other branches', 89 kept for the test plan's. Clean room: no PPSSPP code read (its GPU backend not opened),
+JPCSP not read; the PSP's behaviour relied on is the GE's own as the software renderer has it (pixel.cpp's stencil
+operations; the depth buffer in VRAM's copies as memory.hpp has it, measured in round 3). Save states are unchanged:
+everything here is the renderer's, which no state keeps. The software renderer is untouched: its pictures, VRAM and
+state are master's. Two copies of the agent worked in the worktree for a while (Cursor ran a second); the second's are
+5071b80b5 and the design doc's text, and the first, holding the worktree since (`LOCK-worktree`), finished it.
+
+**The problem.** The deep-play reports (batch 03's bug 2, batch 02's item 4): under Vulkan, accurate and fast alike,
+Hammerin' Hero's Gen showed only his hair tuft and his shadow, its pickaxe enemy and a box missing; Jeanne d'Arc's
+units on the briefing's map showed only their shadows; and Cars Race-O-Rama's races had no 3D world at all, a full
+screen of cloudy sky over the track (77-80% of pixels more than 24 levels from Software's). With fast mode transforming
+Hammerin' Hero's 3D on the GPU (3,409 PRIMs) and only 4 read backs, neither the CPU's transform nor the known render-to-
+texture losses were the cause.
+
+**How it was found.** A scratch runner logging every PRIM of a frame (the vertex type, the pixel pipeline's state, the
+texture, the target and its depth, the vertices' depths, the triangles that reached the renderer) and able to have the
+software renderer draw PRIMs chosen by their kind. The characters' PRIMs reached the GPU whole (skinned, with 8-bit
+weights, which the CPU transforms in accurate mode), so their pixels were failing tests the software renderer's pass.
+- **Hammerin' Hero** draws each frame's scene into the screen's 5551 frame buffer (0x44000 and 0x00000 in turn) with
+  the depth buffer at 0x88000, then clears a frame buffer of its own (0xcc000) for its colors and alpha but not its
+  depth, draws its characters there tested "greater or equal" against the scene's depth, marking their pixels in the
+  stencil by INCREMENT (stencil test always), and lays that frame buffer over the screen as a 5551 texture behind an
+  alpha test of "above 0". **Jeanne d'Arc** the same way: its units into 0xcc000 against depth 0x88000, marked by
+  INCREMENT (stencil "255 at least"), taken onto the screen by 3D quads with an alpha test of "1 at least". Two
+  things lost them, each alone:
+  - **The depth.** The PSP's depth buffer is memory, which the scene's drawing left for the characters to be tested
+    against. On the GPU each target's depth is its own: the characters' frame buffer had memory's depth (the state's,
+    never the GPU's) and then its own characters' of the frames before, never cleared, and all of each but what was
+    nearer than the frames before failed.
+  - **The stencil bit.** A 5551 frame buffer's stencil is its alpha bit, which INCREMENT sets (pixel.cpp's
+    `stencilOperation()`: 255) and DECREMENT clears. The GPU's stencil, which holds a 5551 one as 0 or 255, stepped
+    0 to 1 (read back as alpha 0), and the color's alpha, which a texture taken from the frame buffer on the GPU reads,
+    followed the stencil only for REPLACE and ZERO: the composite's alpha test dropped every pixel.
+  Turning each change off in the scratch build (accurate mode, the mean channel difference from Software and the pixels
+  more than 24 apart): Hammerin' Hero at frame 150, without the depth's 2.46 and 4.7%, without the stencil's 2.61 and
+  5.1%, with both 0.08 and 0.0% (master 2.57); Jeanne d'Arc at frame 30, 0.22 and 0.4%, 0.37 and 0.8%, both 0.05 and
+  0.0% (master 0.37 and 0.8%).
+- **Cars Race-O-Rama** draws its race into an 8888 frame buffer with the depth buffer at 0xcc000, then, in strips 32
+  pixels wide, takes that depth as a CLUT16 texture through VRAM's second copy (0x042cc000), its palette making depth an
+  alpha, writes it into the picture's alpha bytes (drawing the picture's memory as a 5650 frame buffer twice as wide),
+  and blends its sky over the far parts by that alpha. The GPU's depth isn't memory's (docs/psp-gpu-renderers.md, "Owned
+  until needed": the depth buffer isn't read back), so the texture read memory's, the state's: the sky covered the race.
+  The depth's taking and the stencil's change alone leave it as master's (39.87 at frame 30).
+
+**The changes** (gpu.cpp, gpu.hpp, vulkan.cpp; in both modes and at every resolution):
+1. **The newest depth taken from the frame buffer that drew it** (`takeDepth()`, `Command::Depth`). A target's depth
+   says which depth it holds (`Target::depthAt`: the serial of the last PRIM that wrote depth into it, 0 for memory's).
+   Before a PRIM that tests or writes depth draws into a target, another target over the same depth buffer (its address
+   and row width) holding newer depth has its depth copied into this one's on the GPU (the depth aspect alone,
+   `vkCmdCopyImage`: the stencil is each frame buffer's own), for the rows and columns it has; memory's changes it
+   hadn't filled yet are filled into it first, and this one's own changes there dropped; where it's a narrower frame
+   buffer, this one's columns past it are left as they'd be without it (its own, or memory's in rows it hadn't
+   filled). Nothing waits. A double-buffered game that clears depth each frame takes the other screen's depth into the
+   one it clears first: a copy of a frame's depth, which the clear then covers (below: "Speed").
+2. **A 5551 stencil bit** (`settings()`). On a 5551 frame buffer INCREMENT is a REPLACE of 255 and DECREMENT a ZERO, and
+   a REPLACE of 0 a ZERO, so one reference serves them all, the comparison made against it as a 5551 REPLACE's is (part
+   68: on the top bit, where the reference's bits the format doesn't keep would tell them apart): the GPU's stencil is
+   the GE's, and the color's alpha follows the pass's operation. And where MASK_ALPHA keeps every bit a 16-bit frame
+   buffer's stencil has (a 5551 one's at 0x80 or more), the color's alpha is left too, as the stencil is.
+3. **Depth put into memory for a texture read through VRAM's depth views** (`putDepth()`, `Readback`'s depths,
+   `Backend::readDepth()`). A texture read through VRAM's second or fourth copy (`holds()`) over a depth buffer whose
+   newest depth is the GPU's has that depth read back first (the depth aspect alone, at a higher resolution each
+   pixel's middle sample, made the GE's 16-bit depths: D32's 65,536ths, D24's rounding undone), and written into
+   memory's VRAM in the fourth copy's order, older depth buffers over the same bytes first, of targets as new over one
+   depth buffer the widest's. Memory hears of the change (decoded textures, the recompiler), and the targets over it
+   fill those rows again, but those holding what was put there, whose own changes from memory are kept as they were
+   (unless a newer depth put after reaches those bytes: 5071b80b5). A wait, as a finish, but once until more depth is
+   drawn (`Target::depthKept`): Cars' later strips find memory has it. A depth that couldn't be read back isn't kept,
+   for the next texture to take again. The targets' pixels and pages stay the GPU's.
+
+**The other scenes.** The kit's 21 scenes (`~/phobos-work/scratch/ge-headroom`'s, copied), the final code (1c44ceab7)
+against master as merged in (3228b825d), 100 frames from each state, every frame's picture and VRAM hashed (drawing
+settled), then the end's RAM and machine: Software the same in all 21 and in the three games' scenes (24 of 24);
+Vulkan accurate and fast each the same in 19 of the 21 (as before the review's points, against master at 542da5a28,
+the differing scenes' first differing frames the same). The two others had the same bug, and changed by the depth's
+taking alone (each change turned off in turn):
+- **Colin McRae Rally 2005 Plus**' race draws its scene into the screen's 5551 frame buffer, then 130 PRIMs a frame into
+  a frame buffer at 0xcc000 of the same row width against the same depth buffer: its terrain shadows, which part 83
+  left, putting them down to depth across row widths (a frame buffer 256 pixels wide over the same memory is drawn
+  too, with a depth buffer of its own width). Now drawn: the mean difference from Software at frame 100 3.69 -> 0.22
+  accurate, 3.93 -> 0.53 fast (5.9% of pixels more than 24 apart -> 0.0%).
+- **Twisted Metal: Head On**'s play: 4 pixels of the 130,560 change by a level, in one spot (8 in fast mode). In
+  accurate mode 2 of the 4 are Software's now where none were; in fast mode 2 of the 8, where 4 were, a hair further.
+  The game's RAM at the end is the same.
+
+**Pictures** (the kit's runners, -O3 with thin LTO, the final code; the mean channel difference from Software and the
+pixels more than 24 apart, master -> branch):
+
+| Scene, frame | Vulkan accurate | Vulkan fast |
+|---|---|---|
+| Hammerin' Hero, 100 | 1.04, 2.0% -> 0.07, 0.0% | 2.14, 2.1% -> 1.17, 0.0% |
+| Jeanne d'Arc, 100 | 0.27, 0.6% -> 0.04, 0.0% | 2.31, 0.6% -> 2.10, 0.0% |
+| Cars Race-O-Rama, 100 | 37.08, 79.2% -> 1.19, 2.0% | 37.08, 79.2% -> 1.21, 2.0% |
+| Colin McRae Rally 2005 Plus, race, 100 | 3.69, 5.9% -> 0.22, 0.0% | 3.93, 5.9% -> 0.53, 0.0% |
+
+(Fast mode's remaining difference is its usual approximations: 16-bit frame buffers blended by the GPU, colors
+interpolated. Jeanne d'Arc's frame 20, the map's camera moving, is as far from Software in both builds, 3.03 and 2.86
+accurate: the whole picture a little apart, its units drawn in both.)
+
+**Speed** (the kit's runners, master as merged in against the final code, 300 frames from each state, late frames at 1x
+and the pipelines kept, the builds in turns over two rounds; the Mac's load 9-31, which moved single runs by a fifth to
+a half: the means are what to read, frames a second, and the GPU's waits in ms a frame where they're more than a
+tenth):
+
+| Scene | Vulkan fast, 1x | Vulkan fast, 4x | Vulkan accurate, 1x |
+|---|---|---|---|
+| Hammerin' Hero | 168.9 -> 164.8 (-2.4%) | 46.7 -> 43.6 (-6.6%), waits 12.5 -> 15.1 | 8.08 -> 6.54 (8.3/7.8, 8.1/5.0) |
+| Jeanne d'Arc | 277.3 -> 264.0 (-4.8%) | | 4.09 -> 3.75 (5.3/2.9, 3.8/3.7) |
+| Cars Race-O-Rama | 17.76 -> 17.06 (-3.9%), waits 26.3 -> 28.9 | 8.09 -> 7.48 (-7.5%), waits 95 -> 104 | 12.31 -> 11.41, waits 41 -> 53 |
+| Colin McRae's race | 69.9 -> 68.5 (-2.0%) | | |
+
+What it costs: the depth copies (two or three a frame in Hammerin' Hero, Jeanne d'Arc and Colin McRae: a screen's depth,
+through the staging buffer, at 4x sixteen times as much), Cars' read back of its depths and the wait for it (once a
+frame), and the characters, units and shadows drawn now, which failed their tests before. Accurate mode on MoltenVK
+splits every overlapping blended primitive (part 49), so its rounds swing most (Jeanne d'Arc's base 5.3 then 2.9). The
+review's point about the copy a double-buffered game makes into the screen it then clears stands: a clear's region
+doesn't say which pixels its primitives cover, so the copy can't be cut to what it leaves without them; left for a
+follow-up, with the RP6's numbers (a tile-based GPU may weigh the copies differently).
+
+Still not done: depth between depth buffers of other row widths over the same memory, and an older, wider frame
+buffer's columns past the newest one's put into memory; the CPU's loads, block transfers and palette loads through
+the depth views (memory's still, part 68), and a texture over a depth buffer through VRAM's plain copies; a 4444 frame
+buffer's INCREMENT and DECREMENT (by one on the GPU, by 16 on the PSP); the stencil a fail or depth-fail operation
+leaves, in the color's alpha a texture taken on the GPU reads; a target holding the only newest depth let go of for
+room (32 targets), or drawn with another depth buffer, loses it, as before.
+
+**Tests** (tests/psp/gpu.cpp, in both modes, the first three at 1x and 2x; on master's core, 3228b825d, with only the
+two statistics and the depth conversions added so they build, the first three fail on their pictures in every mode
+and resolution, 7,424, 4,608 and 16,832 bytes apart; memory's changes around a put depth on its counts alone, as there
+the target takes nothing and fills from memory, which the CPU wrote whole, and on its pictures with 5071b80b5's keeping
+of the targets' changes taken out, 1,024 bytes apart in each mode; the conversions pass):
+- "a depth buffer two frame buffers draw with": a sprite into the second frame buffer behind what the first drew is
+  drawn only where the first drew nothing, then the first's behind what the second drew since, likewise, then a 3D
+  mesh into the second (fast mode's GPU transform) behind what the first drew since; each keeps its own stencil.
+- "a 5551 frame buffer's stencil bit": INCREMENT and DECREMENT as the pass's operation (one over a test of "equal to
+  0", compared on the GPU against the 255 it writes), the fail's and the depth fail's, then a test of 255, the read
+  back, and the bit taken as a texture's alpha behind an alpha test.
+- "a depth buffer read as a texture through VRAM's depth views": through the fourth copy and the second, put once, not
+  again for the second read, again once more depth is drawn; and memory's changes around it (the CPU writing all of
+  the depth buffer twice): filled into the target taken from first, kept by the other target holding the same depth
+  when the first's is put.
+- "depths as the depth formats keep them, and back": all 65,536 depths through D32 and D24 and back (D24 whichever way
+  the GPU rounds; the M1 takes D32), no GPU needed.
+
+**Checks.** On the final code (1c44ceab7, merged with master at 3228b825d): `tests/psp/run-tests.sh` 513 groups, 0
+failures (sanitized; 4 new GPU groups); `tests/allegrex/run-tests.sh` 68 groups, 0 failures;
+`tests/psp/ares/run-tests.sh` 340 checks, 0 failed (the merge before the review's points the same: 512, 68 and 340).
+CI on 1c44ceab7 green: the PSP system tests (GCC, Mesa's lavapipe), the Allegrex tests, and the Android, Windows,
+macOS and Linux builds. The hash comparison of the final code: above ("The other scenes").
+
+**The review.** An independent read-only review of the branch (to d673bf4fb) found no blocker or major point, and
+nothing that could change the software renderer. Its points, all taken but the clear's copy, measured instead
+(b042ddb15, e620356f1, 1c44ceab7): a narrower frame buffer's columns past a taken depth left as they'd be without it,
+and of targets as new over one depth buffer the widest put (by their order, not their addresses); a 5551 REPLACE of
+0 a ZERO, so one reference serves every combination; MASK_ALPHA keeping every bit of a 16-bit stencil leaving the
+color's alpha; `forget()` resetting the depths' serials; a depth not read back, or of another size, not kept; a depth
+buffer past VRAM's end told to memory and watched in two parts; and tests: each frame buffer's own stencil, which
+caught MoltenVK's copy of an image's depth alone taking its stencil too (the depth goes through the staging buffer
+now, image to buffer to image), the comparison against 255, DECREMENT as the fail's operation and both as the depth
+fail's, memory's changes around a taken and a put depth, a 3D mesh in fast mode, and the depth formats' conversions
+shared and tested over all 65,536 depths; and the docs' wording (depth buffers, not frame buffers, of other row
+widths; Twisted Metal's fast mode; what still reads memory's depth).
+
+Scratch: `~/phobos-work/scratch/vk-models` (`patches/dbg-patch.py` and `dbg2-patch.py`, the PRIM log and the changes'
+switches; `kit/`, the hash and picture runs; `png/`, the sheets; `tests1.sh`, `suites.sh`).
+
+## Part 91: polling loops — the polled calls in fewer steps, and a loop that comes back as it was skipped to the go's end, each skip proved by a turn run on a CPU of its own
+
+On branch `cursor/psp-polling-2b67`, begun on `cursor/psp-cpu-round2-2b67` (#237, on #229), with master merged in once
+both had merged (`3228b825d`, the same tree). The task: both Need for Speeds and several intro movies (Twisted Metal's
+logo, both Armored Cores', Disaster Report 3's) call system functions 130,000 to 530,000 times a frame while they poll,
+Most Wanted's polled kernel 72% of the emulation thread (parts 79 and 86); on the RP6 the Need for Speeds run at 41-42
+frames a second where PPSSPP holds 60. Find what the loops call and what each call changes; cut the cost of each call;
+then, where it can be proved exact, skip ahead to the next thing due, every register, byte, cycle count and later
+result as running the loop would give. Clean room: PPSSPP not read at all, JPCSP not read. Save states are unchanged
+(layout 31): nothing new is kept.
+
+### How it was measured
+
+The headless runner built as Android builds it (O3, thin LTO), patched in scratch for the emulation thread's CPU time
+and retired host instructions (as parts 79 and 86), from the scenes' states (`~/phobos-work/scratch/cpu-speed2/scenes`).
+New here, a syscall trace (`trace-patch.py`, scratch): each call's function, arguments, result, return address and
+cycles since the last, whether it was quiet or calm, and all of RAM at the trace's end, whose loops were then read
+with Homebrew's llvm-objdump (MIPS32, little-endian). Profiles with xctrace and macOS's `sample`. The Mac was shared
+with other agents throughout (load averages 10 to 200), so the host instructions a frame carry the comparisons.
+
+### What the loops call
+
+| Scene | Calls a frame | The loop | A turn |
+| --- | --- | --- | --- |
+| Need for Speed Most Wanted, race and profile; Underground Rivals, title | 526,000; 502,000 | `while(*count < target) yield(0)`, the yield asking the thread's ID, its status (into its stack frame) and rotating its line at the priority the status gave: its own, alone in it | 29 instructions |
+| Twisted Metal, logo movie | 370,000 | the movie ring's free packets (550), then a semaphore signalled, refused (at its most) | 30 |
+| Disaster Report 3, intro movie | 222,000 | the vertical blank count, the ring's free packets (none) | 20 |
+| Armored Core Formula Front and Silent Line, intro movies | 133,000; 90,000 | the ring's free packets twice, the refused signal | 85; 89 |
+
+The ID, the ring's count, the blank count and the refused signal change nothing but v0. The status writes its 104
+bytes into the frame, all the same each turn but the thread's run time (8 bytes, microseconds), which the loop never
+reads (it reads the priority). The rotation changes the ready order's count and the thread's place in its line
+(`readySequence`, `readySince`, both in states), and nothing else: the thread is alone at its priority. Every call is
+quiet or calm (parts 74 and 79): none cuts the CPU's go short, so each loop runs, a turn always the same length, till
+the go ends at the next thing due (a vertical blank, a thread's delay, the sound), where a handler or another thread
+moves what it polls on.
+
+### Where the time went (master, Most Wanted's race, the software renderer)
+
+| Part of the emulation thread | Share |
+| --- | --- |
+| System calls (the loop's three functions and the dispatch) | 66% |
+| — sceKernelReferThreadStatus | 28% (its copy into memory 12%: `copyIn()` through a std::function a piece, `changed()`) |
+| — sceKernelRotateThreadReadyQueue | 13% (the scheduler's look through every thread in the map) |
+| — dispatch, `startCall()`, `geInterrupt()`, the hooks' calls | about 15% |
+| Compiled code (the loop's 11 blocks a turn) | 22% |
+| The GE | 8% |
+
+A system call costs the PSP's clock one cycle (part 79), so the idle loop turns 175,000 times a frame.
+
+### What was done
+
+1. **Main RAM without a call** (`memory.hpp`: `read()`, `write()`, `pointer()`, `reaches()` inline for main RAM, the
+   rest through memory.cpp's `...Elsewhere()` as before; `pieces()` a template, not a std::function). Every HLE
+   function's and every slow-path access's bytes are in main RAM nearly always. Exact: the same bytes, `changed()` after
+   each store as before, unmapped() hearing of a word past RAM's end as before (a test of RAM's last bytes).
+2. **Polled calls dispatched in fewer steps** (`kernel.cpp`'s `dispatchImport()`): imports looked for first (the
+   kernel's own codes after); the FINISH after a call looked for only with one due (`geInterrupt()` returns at once
+   otherwise), and a call into the program only with one waiting or a blank pending (likewise `startCall()`);
+   `instructionsBefore()` inline; the movie library's "LIBMPEG" mark compared in place (`mpegMarked()`) rather than read
+   into a string, the ring's count asking it at every call (a test: an eighth byte that isn't the NUL, the library in
+   VRAM's third copy).
+3. **Spins skipped** (`spins.cpp`). After a quiet or calm call, the kernel notes where it was made (the syscall's
+   address and where the program goes on: the anchor) and when; once the same anchor has come round four times in a row
+   the same number of cycles apart, it tries to prove the next turn changes nothing a later turn sees, and if it can,
+   skips whole turns to just before the go's end:
+   - **The proof**: one turn run on a CPU of its own (`SpinShadow`, an Allegrex whose loads and stores are its own),
+     through the interpreter, from the real registers, till it comes back to the anchor. Its loads reach main RAM alone
+     (anything else ends the proof), and see its own stores; its stores are kept aside, only to pages where a store does
+     no more than store (no compiled code there, none the GE watches: `spinStorable()`). Its system calls are worked out
+     by the kernel without being made (`Function::spin`), each as the function itself does it in that case, sharing its
+     code (`threadInfo()`, `signalRefused()`, `ringAvailable()` with a view of memory): the ID; the status (its run
+     time the bytes the time decides); the caller's own line rotated with no other thread ready at its priority or
+     above (the ready order's count one on); a signal refused; the ring's count, its reads through the turn's view; the
+     blank count. Any other function, or another case of these, ends the proof. The turn must come back with every
+     register as it was (the integer unit's with pc and pd, the FPU's, the VFPU's with its prefixes and random state,
+     coprocessor 0's, the interrupt flag), every byte it stored what memory holds already but those the time decides,
+     and none of those read in the turn, nor written another way.
+   - **Why that's every turn**: the CPU is deterministic, and the next turn starts from the same registers and the same
+     memory but bytes it never reads; each function it calls answers the same (they read nothing the turns change, the
+     ready order's count aside, which none reads), so it does what this one did, at its own time, and so on for every
+     turn. Nothing else can come in meanwhile: only a system function cuts the go short, and these don't; no call into
+     the program is waiting or running, no blank's handlers pending (else no skip), and a list's FINISH due within the
+     turns skipped is refused too (a call would take it). Only a go of the CPU's is skipped in (`Kernel::going`): its
+     limit and count are what the skip works from.
+   - **Where the go ends**: at the first block end where the run's count reaches its limit (part 79). A turn's blocks
+     end at the same counts whether or not the turns before it ran, so skipping turns whose blocks all end before the
+     limit leaves where the go ends as it was. It skips all but the last two whole turns that fit (the margin), so the
+     last ones always run.
+   - **The skip**: the turns' cycles to the clock and the run's count (`cycles`, `counted`, `instructionsRun`); the
+     ready order's count by the turns' rotations, the caller's place after the last; and the last turn's bytes the time
+     decides written as its calls would have written them: the proof records which bytes each call wrote so (whose
+     status, where, which of its bytes), and the skip fills exactly those from `threadInfo()` at that call's time in the
+     last turn. A proof that fails waits twice as long (and four turns more) before the next try, up to 4,096 turns.
+   Nothing of it is kept in a state: after a state loads, the spin is found again and skipped the same way, or not found
+   and run to the same end.
+
+Not done: a loop whose answers move on with the clock (polling `sceKernelGetSystemTimeLow` till a time, as some games
+spin) can't be skipped this way: each turn's answer differs, and the loop ends at a time no event marks. Those still
+take the cheaper calls of 1 and 2.
+
+### Numbers
+
+The Mac, master (`3228b825d`, whose tree is the branch's base) against the branch's first code (`5e3e11b09`), with the
+per-call commits alone (`c1944b73d`) between, the bench runners from the scenes' states, medians of three rounds taking
+turns, in Vulkan fast (MoltenVK, 1x) and the software renderer (4 drawing threads). "Fps it allows" is 1000 over the
+emulation thread's ms. The review's fixes change no work but the last turn's rewrite at a skip: `8799a3daa` against
+`5e3e11b09`, two more rounds on the seven polling scenes in Vulkan fast, the same host instructions a frame, every one.
+The Mac's load average was 10 to 200 through these rounds (other agents, and Cursor itself), so the host instructions a
+frame carry the comparison, the times beside them.
+
+Vulkan fast:
+
+| Scene | Emulation thread ms a frame: master -> branch (fps it allows) | M host instructions a frame: master -> per-call -> branch | rounds |
+| --- | --- | --- | --- |
+| NFS Most Wanted, race | 17.4 -> 3.2 (57 -> 310), -81% | 289.3 -> 236.5 (-18%) -> 38.0 (-87%) | 3/3/3 |
+| NFS Most Wanted, profile | 20.1 -> 2.8 (50 -> 361), -86% | 301.1 -> 242.7 (-19%) -> 18.6 (-94%) | 3/3/3 |
+| NFS Underground Rivals, title | 18.0 -> 1.3 (56 -> 797), -93% | 275.8 -> 220.0 (-20%) -> 8.9 (-97%) | 3/3/3 |
+| Twisted Metal, logo movie | 14.6 -> 0.7 (68 -> 1435), -95% | 286.0 -> 146.7 (-49%) -> 9.8 (-97%) | 3/3/3 |
+| Disaster Report 3, intro movie | 8.1 -> 0.8 (124 -> 1311), -91% | 148.5 -> 68.1 (-54%) -> 10.0 (-93%) | 3/3/3 |
+| Armored Core Formula Front, intro movie | 12.3 -> 1.7 (81 -> 594), -86% | 147.7 -> 80.0 (-46%) -> 12.7 (-91%) | 3/3/3 |
+| Armored Core Silent Line, intro movie | 11.1 -> 2.6 (90 -> 381), -76% | 140.1 -> 79.3 (-43%) -> 18.0 (-87%) | 3/3/3 |
+| Super Monkey Ball Adventures, story | 44.0 -> 42.7 (23 -> 23), -3% | 527.3 -> 492.0 (-7%) -> 491.0 (-7%) | 3/3/3 |
+| Colin McRae 2005 | 15.1 -> 14.3 (66 -> 70), -5% | 127.6 -> 126.5 (-1%) -> 126.3 (-1%) | 3/3/3 |
+| Disaster Report 3, playing | 5.4 -> 5.5 (184 -> 181), +1% | 41.3 -> 40.1 (-3%) -> 40.1 (-3%) | 3/3/3 |
+| Twisted Metal, playing | 5.5 -> 5.3 (182 -> 190), -4% | 39.4 -> 38.1 (-3%) -> 38.1 (-3%) | 3/3/3 |
+
+The software renderer:
+
+| Scene | Emulation thread ms a frame: master -> branch (fps it allows) | M host instructions a frame: master -> per-call -> branch | rounds |
+| --- | --- | --- | --- |
+| NFS Most Wanted, race | 19.7 -> 4.7 (51 -> 211), -76% | 298.3 -> 245.3 (-18%) -> 47.8 (-84%) | 3/3/3 |
+| NFS Most Wanted, profile | 19.1 -> 2.5 (52 -> 401), -87% | 304.1 -> 245.3 (-19%) -> 27.2 (-91%) | 3/3/3 |
+| NFS Underground Rivals, title | 18.7 -> 3.2 (54 -> 314), -83% | 278.9 -> 222.6 (-20%) -> 29.8 (-89%) | 3/3/3 |
+| Twisted Metal, logo movie | 17.5 -> 0.8 (57 -> 1255), -95% | 286.2 -> 146.7 (-49%) -> 9.8 (-97%) | 3/3/3 |
+| Disaster Report 3, intro movie | 9.4 -> 1.0 (107 -> 1040), -90% | 148.1 -> 67.7 (-54%) -> 10.1 (-93%) | 3/3/3 |
+| Armored Core Formula Front, intro movie | 9.1 -> 1.4 (109 -> 707), -85% | 148.1 -> 80.9 (-45%) -> 13.8 (-91%) | 3/3/3 |
+| Armored Core Silent Line, intro movie | 8.7 -> 1.6 (114 -> 611), -81% | 140.7 -> 80.0 (-43%) -> 18.9 (-87%) | 3/3/3 |
+| Super Monkey Ball Adventures, story | 54.9 -> 51.3 (18 -> 19), -7% | 583.1 -> 549.8 (-6%) -> 548.2 (-6%) | 3/3/3 |
+| Colin McRae 2005 | 17.7 -> 16.6 (57 -> 60), -6% | 194.5 -> 190.7 (-2%) -> 190.7 (-2%) | 3/3/3 |
+| Disaster Report 3, playing | 4.9 -> 5.0 (203 -> 202), +0% | 49.6 -> 47.3 (-5%) -> 48.2 (-3%) | 3/3/3 |
+| Twisted Metal, playing | 3.7 -> 3.5 (272 -> 284), -4% | 41.9 -> 40.2 (-4%) -> 40.2 (-4%) | 3/3/3 |
+
+The Need for Speeds' emulation thread takes 81 to 93% less time in Vulkan fast (17 to 20 ms a frame down to 1.3 to 3.2),
+87 to 97% fewer host instructions; the intro movies' 76 to 95% less (91 to 97% fewer instructions). The per-call commits
+alone take 18 to 20% of the instructions from the Need for Speeds and 43 to 54% from the movies (whose ring count read
+the library's mark into a string at every call); the skip takes most of the rest. What's left in the Need for Speeds is
+their own code and the GE's work (the race's display lists), and in the movies their decoding. The scenes that don't
+poll take 1 to 7% fewer instructions (main RAM without a call: the GE reads vertices through memory's read()), their
+times within the rounds' spread. In the software renderer the emulation thread also draws the bands it takes while it
+waits (part 74), so a little more is left there (Underground Rivals' title 30 M against Vulkan's 9).
+
+### Accuracy
+
+Every change leaves what a game sees as it was.
+- The 21 scenes' hashes (part 79's), master against the branch: in the software renderer, 100 frames with every
+  frame's picture and all of VRAM hashed, drawing settled, then RAM and the machine's whole serialized state; in Vulkan
+  fast and Vulkan accurate, 200 frames, then RAM and the machine's state (VRAM, read back from the GPU, among it):
+  identical, every one, in all three, for the first code (`5e3e11b09`), after the review's fix (`8799a3daa`) and for
+  the last commit (`3b2e44167`).
+- tests/psp's new groups (spins.cpp), each program on both engines with the skip on and off, an eighth of a frame at a
+  time, the machine's whole state compared after each: "spins skipped as run" (the idle loop as the Need for Speeds have
+  it, a ticker thread moving the count it waits for, and with the ticker at the caller's own priority, ready as a go
+  begins; the status set to 88 bytes before each call, a sentinel under its last word; the movie wait, a feeder thread
+  filling the ring, through the ring's library too, through a library naming no ring, and with interrupts held off,
+  ending at the blank: all skipped, thousands of turns, every state the same), "spins refused" (a count stored each
+  turn, a register counting, an FPU register adding up, the run time read, the clock polled, a semaphore that counts,
+  another priority's line rotated, and a store into the loop's own page, which with the recompiler drops its code: none
+  skipped, the same states; the interpreter, which compiles nothing, skips the last), "a spin skipped directly" (the
+  anchor's syscall made in a go of its own, 500 turns skipped, against the same turns run: the same state at once, its
+  clock, the ready order's count, the caller's place and the run time the last turn wrote, also with that run time on a
+  microsecond's last cycle and on its first (a rewrite a cycle late or early writes another microsecond); room for one
+  turn and the margin, one; for the margin alone, none; none outside a go; none with a thread of the caller's priority
+  ready, which its rotation then hands the CPU; the pages a turn may store to). tests/psp/memory.cpp: copies, fills and
+  copies out up to RAM's last byte and none across it.
+- The library check (all 266 games, the software renderer, 3600 frames from boot, PNGs at 60, 300, 1200 and 3600, Start
+  at 120 and Cross at 1800) flagged Platypus: its pictures other than master's from frame 90, the MumboJumbo logo's
+  loading bar a step ahead there and behind at 320 and 480, the same in two runs of each runner. The emulation isn't
+  other: from boot with the check's presses, every frame's picture and all of VRAM hashed with drawing settled, then RAM
+  and the machine's state, come out as master's through all 3600 frames, with the skip on or off and with the per-call
+  commits alone; and so is the state at 3600 without settling, the same RAM and machine state in all six runs (three
+  each). The runner's PNG is the last picture the screen's own thread had presented when the frame's run ended, which on
+  a busy host is a frame or more older than its name (the newer runner's report gives each capture's arrival: master's
+  PNG named 220 arrived in frame 215); the branch's frames cost the host less (Platypus 325 frames a second against
+  283), so other captures come out stale: master's at 90 shows an earlier frame's bar (42 columns, where a fresh capture
+  from either runner shows 49), the branch's at 320 and 480 (145 and 223 against 151 and 239). Two runs of master's
+  newer runner differ from each other at 10 of its 360 PNGs, as master's and the branch's do. The check's 30 other
+  flagged games, from boot the same way, every frame hashed: the same, every frame of every one. Its own classification
+  of the 11 still differing after its rerun, with two more runs of the branch's runner against master's two: 9 noise
+  (master differing from itself there) and two whose captures came out other in both of the branch's runs (Resistance's
+  PNG at 60, Platypus's at 3600), stale captures again: every frame of both is master's.
+- Broken versions of spins.cpp (`mutate.py`, scratch, each built against the spin groups: the last commit's for the
+  rewrite's and the new address rule's, `8799a3daa`'s for the rest): 29, of which 21 are caught. Among them: no proof
+  at all, the first code's rewrite (eight bytes whatever the size), a rewrite a cycle late or early, the margin at 0,
+  the stores, registers or FPU registers not compared, a rotation of another line taken for the caller's own, an
+  address with nothing behind it ending the proof again, a skip outside a go. The 8 that pass change nothing a game
+  can see: two guards that can't be reached (a list's FINISH within the turns skipped, where the go's limit stops
+  already; a turn whose length isn't the period seen, which a proved turn has), two that hold in every case today
+  (every write the time decides is one the skip writes again; a range recorded only where it was stored, a copy to
+  nothing writing nothing), the early check of a byte the time decides being read (the check after the turn covers
+  it), room counted one more (the margin covers it), the detector not waiting (proofs more often, the host's cost
+  alone) and a blank count worked out wrongly (the turn then fails its proof, and nothing is skipped).
+
+### Checks
+
+- On the last commit (`3b2e44167`), and on `5e3e11b09` and `8799a3daa` before it: `tests/psp/run-tests.sh` (sanitizers
+  on) 512 groups, 0 failures (master's 509 and these three); `tests/allegrex/run-tests.sh` 68 groups, 0 failures;
+  `tests/psp/ares/run-tests.sh` 340 checks, 0 failed.
+- GitHub's checks on the last commit pass: the PSP core tests (tests/allegrex and tests/psp built by GCC), the desktop
+  builds (Linux, macOS, Windows) and the Android APKs.
+- With master merged in again (`239d4c80a`: #238, #240 and the test plan's CI, as `2d6766628`): the 21 scenes' hashes
+  against that master identical in all three renderers; tests/allegrex 68/0, tests/psp 517/0 (sanitized, its
+  container-overflow check off: on the Mac a vector's own resize trips it, in master's own run of the suite too, under
+  the PSMF player's reads, which this branch doesn't touch; GitHub's GCC build passes with it), tests/psp/ares 340/0.
+  The rounds there (Vulkan fast, three, master -> branch, M host instructions a frame): Most Wanted's race 283 -> 32,
+  its profile 302 -> 19, Underground Rivals' title 276 -> 9, Twisted Metal's logo 286 -> 10, Disaster Report 3's intro
+  149 -> 10, the Armored Cores' intros 147 -> 13 and 140 -> 18, Super Monkey Ball's story 447 -> 444 (#240's front end
+  faster on both sides).
+
+### Left, and why
+
+- **Loops whose answers move on with the clock**: polling `sceKernelGetSystemTimeLow` (or the RTC's tick) till a time
+  can't be skipped this way, each turn's answer differing and the loop ending at a time nothing marks; nor a loop
+  calling a function the kernel can't work out without making it. Those take the cheaper calls of 1 and 2 only. And
+  every go still runs some turns: the four the detector waits for, the margin's two and the part of one the go ends
+  in; the Armored Cores' goes are short (their sound and a thread's short delays end one every 80,000 cycles or so),
+  so there that's seven turns of some 900 a go.
+- **More functions worked out**: only the six these loops call have a `Function::spin`. Others games poll (a semaphore's
+  or event flag's poll, the controller's peek, `sceDisplayIsVblank`) could be added, each as its own case, once a trace
+  shows a loop of them; a library run with the spin debug patch would list the loops whose proofs fail and why.
+- **The per-call costs left**: the scheduler's look through every thread at each rotation, the status's 104 bytes
+  built and copied, and the stub's `jr ra` looked up in compiled code after each call (part 86's cache of the last
+  target): they matter now only for the loops the skip can't take.
+- **The Need for Speeds' own work**: with the loop skipped, what's left of their emulation thread is the game's code
+  and its display lists (the race's GE work), as in other games.
+
+### On the RP6
+
+The skip is the kernel's alone, so it holds on the RP6 as on the Mac: there the Need for Speeds ran at 41-42 frames a
+second, held by the emulation thread (PPSSPP 60), and that thread's host instructions fall by 87 to 97% on the Mac;
+expect them at 60 unless the GPU's side holds them (not measured here: no device). The intro movies' thread falls by as
+much (their decoding is on it too, and stays); Super Monkey Ball, Colin McRae, Disaster Report 3 and Twisted Metal
+playing as they were (no polling). To compare: master against this branch, Vulkan fast at 1x, the scenes in
+`~/phobos-work/scratch/cpu-speed2/scenes` (nfsmw-race, nfsmw-profile, nfsur-title, tm-logo, dr3-intro, acff-intro,
+acsl-intro), as part 79 describes.
+
+### Review
+
+An independent read-only review of the branch against master found the memory and dispatch commits exact, and one
+exactness bug in the skip: the last turn's run time was written by working its status out again, which read the
+status's size word from memory as the turn left it, not as the call had found it, and the call writes that word back
+as the whole's. A loop setting it to 88 before each call has the call copy 88 bytes, the run time's first word alone;
+written again with 104, the second word (bytes 88-91, never written by the call, which the turn may read) took the run
+time's high word, and kept it. Now the proof records what each call wrote that the time decides (whose status, where,
+which bytes) and the rewrite fills exactly that from `threadInfo()` at the last turn's time; "spins skipped as run"
+has the 88-byte loop, which the first code fails on both engines. Its other points, taken: proofs only in a go
+(`Kernel::going`: a test calling a function directly between runs could have had one work from a stale limit); an
+address with nothing behind it answered as Memory answers it, not ending the proof (a ring's library pointer of 0);
+test gaps (the 88-byte status, a ring with a library, the boundaries, sizes past RAM's end in copies); comments (the
+calls' counts, the margin, the block-end argument resting on every syscall ending its block, the engines agreeing,
+`Function::spin`'s contract to cases that are quiet or calm, `SpinLongest`'s two units); `pointerElsewhere()`'s RAM
+branch, now dead, removed; `spun` reset at power. Not taken: its "drop the rewrite" alternative (the margin's turns
+rewrite those bytes before anything can read them, but the state is exact at once with it).
+
+A delta review of those fixes (`5e3e11b09` to `8799a3daa`) found no exactness bugs, and checked the rewrite against the
+real call for every size the size word may hold (0, up to 84, 85 to 91, 92 on, past 108 refused), unaligned statuses,
+another thread's status, overlapping calls in one turn, an address with nothing behind it, the new `reaches()` for each
+of its callers (and Memory's `reaches()` free of side effects on those paths), `going` on every path through
+`Kernel::run()`, and `pointerElsewhere()`'s callers. Its points, taken (`3b2e44167`): a proof refused where a write the
+time decides isn't one the skip writes again (the two kept in step by hand; it holds for every case today); the last
+turn's run time pinned to the cycle (on a microsecond's last cycle and its first, main's run figures moved alike on
+both machines: a rewrite a cycle late or early writes another microsecond); a sentinel under the 88-byte status's last
+word (so the test doesn't lean on a new stack's 0xff fill); a ring whose library names no ring (the new `reaches()`);
+comments. Left: two statuses written in one turn, and other sizes, in a running loop (the direct checks and the review
+cover them; a whole-state comparison at a step's end sees only a range's errors).
+
+### Scratch
+
+`~/phobos-work/scratch/polling`: `build.sh`, `run.sh`, `bench2.sh`, `hashcmp.sh` (`hash/`), `queue1.sh` (the final
+hashes and rounds: `logs/hash-final-*.log`, `bench/final-*.tsv`), `queue2.sh` and `queue3.sh` (the same hashes after the
+review's fixes: `logs/hash-final2-*.log`, `logs/hash-final3-*.log`), `patches/trace-patch.py` (the syscall trace) and
+`trace/` (each scene's trace and RAM), `dis.sh` (a RAM dump's words disassembled), `patches/spindebug-patch.py` (each
+proof's outcome), `quicktest.sh` (tests/psp's groups from a file alone), `mutate.py` (`mut/`), `NOTES.md`.
+
+## Part 92: the GE's front end and the GPU's draws, round 3 — the texels taken in the vertices, fast mode's small PRIMs among its meshes, a PRIM's settings kept
+
+On branch `cursor/psp-ge-speed3-2b67`, on `af542113a` (#251's head: master `239d4c80a` with #251, part 90), so that its
+diff is this round's alone; parts 91 and 89 are other branches'. Clean room: no PPSSPP code read (its GPU backend not
+opened at all), JPCSP not read; nothing of the PSP's behaviour changes. Every change is the host's: the same pixels in
+the same order, so Vulkan (accurate), Vulkan (fast) and the software renderer draw the same frames, VRAM, RAM and
+machine state as before (checked below). Save states unchanged (layout 31).
+
+**The problem.** On the owner's RP6 (v2.2.0, Vulkan fast, 1x, average and low frames a second, where PPSSPP holds about
+60): Super Monkey Ball Adventures 30.2/17.2, Army of Two 34.3/25.3, Ghost of Sparta 34.8/26.8, Colin McRae 2005 42.7/27.3,
+Twisted Metal 43.1/27.6, Death Jr. II 50.6/27.4, Sonic Rivals 56.3/30.2, Activision Hits Remixed 56.5/29.9. Part 86's
+profile had 59-69% of the emulation thread under system calls in the slowest (the GE's front end and the renderer).
+
+**How it was measured.** The Mac (M1, MoltenVK), part 85's kit copied to `~/phobos-work/scratch/ge-round3`: the bench
+runner at -O3 with thin LTO and the emulation thread's counters (its CPU time, retired instructions and cycles), from
+the 21 scenes' states; `sample` profiles of a -g build; and a counting build (`patches/gestats-patch.py`): the GE's
+commands, PRIMs and vertices by path, the GPU draws begun and joined, for each draw that couldn't join the one before
+which parts of the state differed (the pipeline, the texture, each push constant), and the Vulkan loop's binds. The
+Mac was shared with a library check, a deep-play run and other agents' builds (a load of 8 to 150), which moves single
+times by a fifth and more; host instructions a frame move far less, and carry the comparisons.
+
+**Where the time went** (base, a frame; the share of the emulation thread's samples):
+- **Fast mode's draws alternated.** Army of Two drew 3,144 GPU draws a frame, Ghost of Sparta's menu 3,684, Monkey
+  Ball 2,119, Hits Remixed 948. The commonest reason a draw couldn't join the one before was the other kind: a mesh
+  (fast mode's GPU-transformed 3D, `Command::Mesh`) after a draw of triangles the GE had transformed itself, or the
+  reverse (2,167 of Army of Two's breaks, 2,095 of Ghost of Sparta's, 970 of Monkey Ball's, 459 of Hits Remixed's).
+  Counted apart in those four, none came from a mesh's own triangles cut at the near plane: all were between PRIMs,
+  the GE's own triangles of PRIMs below `MeshLeast` (16) vertices (and a few 2D PRIMs) between the meshes. (With them
+  joined, below, Army of Two's draws of the GE's own triangles are 134 a frame, from 1,675.)
+- **`Push::held`.** The texels a PRIM takes of a larger copy of a target (render to texture, part 83) were a push
+  constant, so PRIMs taking more or less of one copy were each their own draw: Ghost of Sparta's menu 1,213 of its 1,573
+  draws in accurate mode, 1,214 breaks in fast mode; Army of Two about 315 in either.
+- **MoltenVK** encodes a run's commands as it's submitted: `vkQueueSubmit` was 15.6% of Ghost of Sparta's thread in
+  fast mode, 12.7% of Army of Two's, 6.8% of Monkey Ball's (and 8.3% of Ghost of Sparta's in accurate mode).
+- **Monkey Ball's PRIMs**: 594,000 commands, 50,400 PRIMs (48,000 of them small, transformed by the GE) and 301,000
+  vertices a frame. Each PRIM's setup: `GPU::begin()` 15% with its flushes, `settings()` 5% (the whole state built,
+  then copied), the command loop 7%, the texture's lookups, the state compared at each draw.
+- **Army of Two's meshes** (fast mode): reading the vertices 13%, `meshTriangles()` 14%, `GPU::mesh()` 9% (660,000
+  models a frame pushed one at a time), the staging copy 3%.
+- **The software renderer**: Monkey Ball's `triangleJob()` 14% (`quantize15()` 5% of it), `GE::submit()` 7%, of which
+  4% copying each triangle's job (470 bytes) into the batch after building it.
+
+**The changes:**
+1. **The texels taken in the vertices** (`GPU::Vertex::taken()`, draw.frag's `fetch()`): a copy's columns and rows a
+   PRIM takes ride in its vertices' flags (bits 8-17 and 18-27; each at most 512) and, for fast mode's meshes, in its
+   Transformed block (`material2[2]`, which transform.vert puts in the flags it hands draw.frag), not in the push
+   constants; `transformed()` keeps a block for a PRIM only where they're the same too. PRIMs taking more or less of one
+   copy are one draw.
+2. **Fast mode's small PRIMs among its meshes** (`GPU::screenTriangle()`, transform.vert's `OnScreen`): a 3D triangle
+   the GE transformed, lit and clipped itself goes into the run's models as one placed already (`Model::OnScreen`: its
+   place and depth, its clip w, q and fog in the normal, its u and v, its color, and its shine and flags over the first
+   two weights, read by two attributes over the same bytes), with the PRIM's state as its meshes take it (`meshState()`,
+   `meshDraw()`). transform.vert hands such a vertex to draw.frag as draw.vert does its own, output by output the same
+   arithmetic on the same numbers. So the meshes and the small PRIMs between them are one draw where their settings are
+   the same. The pipeline the driver must make for it is asked for as the state is recorded (a state at the back already
+   was, then); a run of only such triangles binds a block's room, which they read none of.
+3. **A PRIM's settings kept** (`GPU::settings()`, `keptSettings`): a PRIM whose settings are the last one's (its pixel
+   pipeline's, its texture's, the write masks, its target and place in it, the shading and filter, the backend's ways of
+   drawing) keeps the GPU's state as it is, its draws joining the last's without comparing the states again where it's
+   still the last recorded; not in clear
+   mode (each primitive sets the stencil there) nor for a copy of a target (taken again for each PRIM). The state is
+   built in place, not copied. `textureFor()` looks at the last texture it found first (one still alive: no other copy
+   can be at its address). The backend's pipelines are found by a hash of their key (`Pipeline::Hash`), not compared
+   byte by byte in an ordered map, and keys compare as bytes.
+4. **Fast mode's models** made room for once a PRIM and written, not pushed one at a time; `meshTriangles()` works the
+   scissor out in sixteenths once a PRIM (`Sixteenths`), not once a triangle, and keeps its corners in room made for
+   them (`handing`), handed over in runs as before.
+5. **The software renderer's triangles** set up where the batch keeps them (`triangleJob()` fills a job given it, all 0
+   as it comes; `record()` takes one already in its list), not built and then copied there.
+
+**Tried and taken back:** `transformKept()` comparing its command ranges with `memcmp()` and copying only those that
+changed: ten library calls a PRIM, on ranges mostly one word long, cost more than the compiler's own loop (Monkey Ball
+3% more instructions in the software renderer).
+
+**Exact, and how that was made sure.** Each change moves where a number is kept or when it's worked out, never the
+number: (1) the same texels taken, from a flat input instead of a push constant, in the same arithmetic; (2) the same
+vertices in the same order (a triangle's corners as draw.vert had them, so the GPU interpolates from the same corner),
+transform.vert's `OnScreen` branch draw.vert's `main()` output by output, each input the same type and format as
+draw.vert reads it (floats from float attributes, the color and shine as normalized bytes, the flags as an integer);
+fast mode's flat shading takes the last corner's colors (draw.frag's `FLAT`), which `triangleAt()` gives all three
+corners already, so they're the colors draw.vert's draws interpolated to within the `1/512` draw.frag rounds by; (3)
+every input `settings()` reads compared before its state is kept; (4) and (5) the same values in other room. One
+difference the GPU could see: transform.vert declares its position `invariant` and draw.vert doesn't. GLSL promises
+the same position from two shaders only where both declare it and the expressions and their control flow match;
+draw.vert is left as it was, so that accurate mode's draws stay base's on every driver, and on the M1 the placed-already
+triangles are draw.vert's pixel for pixel (the test below at 1x and 2x, and the 21 scenes). A driver that compiled the
+same expression differently in the two shaders could move such a triangle's corner by a float's rounding, in fast mode
+alone, as fast mode's own transform already may move a mesh's corner (part 85); never accurate mode or the software
+renderer.
+
+**Numbers** (the M1, MoltenVK; base `af542113a` against the branch `9c411d1ed`, two rounds taking turns, the means;
+150 frames from each scene's state; Software with 4 drawing threads; the emulation thread's ms a frame and the frame
+rate it allows, 1000 over that, and its host instructions and cycles a frame):
+
+| Scene | Renderer | Emulation thread ms a frame (fps it allows) | M host instructions | M cycles |
+| --- | --- | --- | --- | --- |
+| Army of Two, playing | Vulkan (fast) | 53.4 -> 46.6 (19 -> 21), -13% | 343 -> 300 (-13%) | 143 -> 126 (-12%) |
+| Army of Two, main menu | Vulkan (fast) | 36.1 -> 30.9 (28 -> 32), -14% | 257 -> 216 (-16%) | 97 -> 83 (-14%) |
+| Super Monkey Ball, story | Vulkan (fast) | 47.9 -> 47.7 (21 -> 21), -0% | 451 -> 437 (-3%) | 130 -> 129 (-1%) |
+| Ghost of Sparta, menu | Vulkan (fast) | 28.6 -> 25.3 (35 -> 40), -12% | 333 -> 306 (-8%) | 80 -> 71 (-11%) |
+| Death Jr. II, woods | Vulkan (fast) | 7.3 -> 7.1 (136 -> 141), -4% | 84 -> 82 (-3%) | 21 -> 20 (-3%) |
+| Sonic Rivals, a stage | Vulkan (fast) | 4.8 -> 4.6 (208 -> 216), -3% | 50 -> 48 (-3%) | 13 -> 13 (-4%) |
+| Activision Hits Remixed, room | Vulkan (fast) | 6.7 -> 6.0 (150 -> 167), -10% | 66 -> 62 (-7%) | 19 -> 17 (-8%) |
+| Twisted Metal, playing | Vulkan (fast) | 4.0 -> 4.3 (253 -> 233), +9% | 34 -> 33 (-3%) | 11 -> 11 (+4%) |
+| Colin McRae 2005, race | Vulkan (fast) | 11.8 -> 11.7 (85 -> 85), -0% | 102 -> 96 (-6%) | 32 -> 31 (-3%) |
+| Army of Two, playing | Vulkan (accurate) | 46.5 -> 45.6 (22 -> 22), -2% | 479 -> 477 (-0%) | 132 -> 132 (-1%) |
+| Army of Two, main menu | Vulkan (accurate) | 30.0 -> 29.8 (33 -> 34), -1% | 352 -> 349 (-1%) | 87 -> 87 (-1%) |
+| Super Monkey Ball, story | Vulkan (accurate) | 37.5 -> 36.1 (27 -> 28), -4% | 453 -> 435 (-4%) | 106 -> 101 (-4%) |
+| Ghost of Sparta, menu | Vulkan (accurate) | 34.1 -> 34.9 (29 -> 29), +2% | 365 -> 351 (-4%) | 91 -> 93 (+1%) |
+| Death Jr. II, woods | Vulkan (accurate) | 36.6 -> 34.9 (27 -> 29), -5% | 370 -> 368 (-0%) | 95 -> 93 (-2%) |
+| Sonic Rivals, a stage | Vulkan (accurate) | 28.1 -> 33.5 (36 -> 30), +19% | 295 -> 295 (-0%) | 75 -> 83 (+11%) |
+| Activision Hits Remixed, room | Vulkan (accurate) | 37.9 -> 37.7 (26 -> 26), -1% | 466 -> 465 (-0%) | 110 -> 107 (-3%) |
+| Twisted Metal, playing | Vulkan (accurate) | 3.3 -> 3.3 (303 -> 303), -0% | 34 -> 33 (-2%) | 10 -> 10 (-1%) |
+| Army of Two, playing | Software | 76.4 -> 72.5 (13 -> 14), -5% | 826 -> 817 (-1%) | 220 -> 215 (-3%) |
+| Army of Two, main menu | Software | 75.6 -> 76.3 (13 -> 13), +1% | 759 -> 686 (-10%) | 202 -> 197 (-2%) |
+| Super Monkey Ball, story | Software | 52.5 -> 54.7 (19 -> 18), +4% | 508 -> 497 (-2%) | 142 -> 146 (+3%) |
+| Ghost of Sparta, menu | Software | 81.6 -> 79.3 (12 -> 13), -3% | 894 -> 892 (-0%) | 224 -> 221 (-1%) |
+| Death Jr. II, woods | Software | 10.2 -> 10.4 (98 -> 96), +3% | 108 -> 111 (+3%) | 28 -> 29 (+3%) |
+| Sonic Rivals, a stage | Software | 6.6 -> 6.4 (152 -> 157), -3% | 71 -> 65 (-9%) | 18 -> 17 (-5%) |
+| Activision Hits Remixed, room | Software | 13.9 -> 15.1 (72 -> 66), +9% | 144 -> 155 (+8%) | 38 -> 41 (+8%) |
+| Twisted Metal, playing | Software | 3.4 -> 3.3 (298 -> 302), -1% | 36 -> 36 (-0%) | 10 -> 10 (-1%) |
+| Colin McRae 2005, race | Software | 17.2 -> 17.1 (58 -> 58), -0% | 182 -> 178 (-2%) | 48 -> 47 (-1%) |
+
+The software renderer's rows move by up to a tenth between runs of one build (Sonic Rivals 61 and 68 M, Hits Remixed
+147 to 173 M): its emulation thread draws its share of the bands while it waits for the workers (part 74), so its
+counts follow the scheduling more than its front end; the one change there sets a job up in place, which does no
+more work.
+
+With the review's points (`b3a208277`, the same benches again, base, `9c411d1ed` and it taking turns) the host
+instructions are the same to the percent in every Vulkan row, fast and accurate, and the software renderer's within its
+spread (Ghost of Sparta -2%, Death Jr. II -4%, the rest within 1%; nothing of the review's is on its path).
+
+GPU draws a frame (the counting build, 150 frames, base -> branch):
+
+| Scene | Vulkan (fast) | Vulkan (accurate) |
+| --- | --- | --- |
+| Ghost of Sparta, menu | 3,684 -> 346 (-91%) | 1,573 -> 348 (-78%) |
+| Army of Two, playing | 3,144 -> 642 (-80%) | 963 -> 649 (-33%) |
+| Army of Two, main menu | 3,205 -> 541 (-83%) | 789 -> 546 (-31%) |
+| Super Monkey Ball Adventures, story | 2,119 -> 1,143 (-46%) | 1,144 -> 1,144 |
+| Activision Hits Remixed, room | 948 -> 472 (-50%) | 784 -> 784 |
+| Death Jr. II, woods | 744 -> 551 (-26%) | 677 -> 677 |
+| Sonic Rivals, a stage | 445 -> 255 (-43%) | 392 -> 392 |
+| Colin McRae 2005, race | 484 -> 346 (-29%) | 26,019 -> 26,013 (MoltenVK's barriers, part 83) |
+| Twisted Metal, playing | 208 -> 110 (-47%) | 114 -> 114 |
+| Armored Core Formula Front, playing | 95 -> 71 (-25%) | 85 -> 85 |
+| Disaster Report 3, playing | 262 -> 213 (-19%) | 2,371 -> 2,371 |
+
+Each step on its own (M host instructions a frame against the step before, two rounds taking turns): the texels taken
+in the vertices, Ghost of Sparta's menu -1% accurate and -2% fast (a draw differing by a push constant alone is cheap for
+MoltenVK to encode); the models and scissor, Army of Two -5% fast, its menu -6%; the small PRIMs among the meshes, Army
+of Two -5%, its menu -7%, Hits Remixed -3%, Ghost of Sparta -2%, Monkey Ball +3% (its 48,000 small PRIMs a frame each
+paid for asking for the mesh pipeline then); the pipelines by hash and the pipeline asked for as a state is recorded,
+Monkey Ball -2%; the state built in place and the last texture, Monkey Ball -2% in either mode; the settings kept,
+Monkey Ball -2% in either mode, Ghost of Sparta -1%; the corners' room, Army of Two -2%, its menu -3%; the software
+renderer's jobs in place, Army of Two -2%, Monkey Ball -1% (Software).
+
+**Accuracy.** Base against the branch from the 21 scenes' states (part 79's), 100 frames, every frame's picture and all
+of VRAM hashed with drawing settled, then RAM and the machine's whole serialized state: identical in every one of the
+63 runs, the 21 scenes in Vulkan (fast), Vulkan (accurate) and the software renderer (4 drawing threads), and in the
+63 again with the review's points (`b3a208277`). On the way,
+each step's scenes the same too (fast mode's eight busiest at the small PRIMs' step, Ghost of Sparta's and Army of Two's
+in both modes at the texels' step).
+
+**Checks.** On the branch with the review's points (`b3a208277`): `tests/psp/run-tests.sh` 522 groups, 0 failures
+(sanitized), and its GE's and GPU's 143 groups (ge, draw3d, draw, curves, gpu) without the sanitizers, 0 failures;
+`tests/allegrex/run-tests.sh` 68 groups, 0 failures; `tests/psp/ares/run-tests.sh` 340 checks, 0 failed. On this Mac
+every sanitized run of
+the GPU's groups, base's too, now stops at an AddressSanitizer "container-overflow" in `std::vector<u8>::resize()` called
+by `GPU::fill()` (base `af542113a` the same: a vector instantiated unannotated in one of the objects built without the
+sanitizers, `nall.cpp` or `sljitAllocator.cpp`, and annotated in the rest), so the suite ran with
+`ASAN_OPTIONS=detect_container_overflow=0` beside its usual option; the shaders' check (CI's `check-psp-shaders.sh`:
+glslang 16.6.0 byte for byte, the 12 modules valid for Vulkan 1.0) passes. GCC 14 (Docker, no sanitizers, -Wall -Wextra
+-Werror as the tests build), on `9c411d1ed`: gpu.cpp and the GPU's, draw3d's and the GE's tests compile cleanly at -O1
+to -O3; ge.cpp stops at GCC's "may be used uninitialized" in four.cpp (`downAxis`, `four.depth`, each written before
+it's read), untouched here, which the God of War software round met with GCC 11 at -O2 and -O3 on Oct 10, and which
+CI's way (GCC 13, -O1, the sanitizers) doesn't. New tests:
+- "gpu sprites taking less of one copy: one draw, the software renderer's pixels, filtered as from copies of what each
+  takes": in each mode six sprites after the copy's, none a draw of its own, every byte Software's; then, filtered, at
+  1x and 2x, from a picture of random texels, tiles side by side each taking its own part, one draw, each tile's
+  pixels those of the same tile drawn alone from a copy of only what it takes.
+- "gpu fast mode's small 3D PRIMs among its meshes: one draw, the pixels as drawn apart": meshes of 30 corners and
+  PRIMs of 6 in turn (smooth, flat, textured nearest and filtered with fog, lit with the shine kept apart), each
+  setting's first mesh with a triangle cut at the near plane, in frame buffers 128 and 480 pixels wide, at 1x and 2x:
+  one draw for each setting, against eight with them apart, and the GPU's every pixel the same either way.
+- "gpu fast mode's 3D held to the rows it takes of a larger copy, placed by the GE and in a mesh": a frame buffer whose
+  rows run on into another's, taken by a PRIM of six corners (among the meshes and apart) and a mesh of eighteen from
+  a copy of more rows, filtered, at 1x and 2x: every pixel as from a copy of only the rows taken.
+- "gpu a texture the backend couldn't make: the next PRIM alike still draws with its own" (a pretend backend).
+Broken on purpose in turn (draw.frag's clamp gone, a mesh block's taken texels dropped, a placed vertex's dropped), the
+third of these fails each time, and the first when draw.frag's clamp is gone (part 83's "a texture's place taken by
+tiles" doesn't: its picture's flat sprites leave the texels past a tile's edge as the last inside). With the kept
+settings left valid after the texture that failed, the fourth fails, the whole suite's one failure (two draws, not
+three: the third PRIM joins the untextured one's).
+
+**The review.** An independent read-only review of the branch (to `4d26b6a98`) found no blocker (accurate mode and the
+software renderer the same as base by construction) and four points to fix, all taken (`b3a208277`):
+1. A triangle of a mesh cut at the near plane went among its runs as three placed models, after which the next run
+   found the recording's models no longer ending at its PRIM's and copied all its vertices again, at each cut; and
+   after a recording handed over between two runs, that test could pass by coincidence, the run's indices then landing
+   on placed models. A PRIM's models are now kept by the recording's generation (`Recorded::generation`, which
+   `clear()` moves on): its later runs take them where they are until it's handed over, whatever comes after them.
+2. The start-up check drew no placed triangles: it draws PRIMs of six corners (lit and not, one textured, one with its
+   shine kept apart, over the two attributes that alias the weights) and a mesh's triangle cut at the near plane, close
+   to the software renderer's; where only that fails, System checks again with `screenMeshes` off, the GPU still
+   transforming the rest. (A driver drawing those wrong passed the check before, and drew the game wrong.)
+3. A texture the backend couldn't make (its memory for pictures exhausted, as at a high resolution) left the kept
+   settings valid while the GPU's last texture was still the one before it: a next PRIM alike with that texture again
+   took the untextured state. They're let go of now (the test's pretend backend fails the second of three textures).
+4. The tests couldn't show what they claimed in places: the 128-pixel frame buffer's scale to the GPU's -1 to 1 is a
+   power of two, the shine's attribute was always 0, nothing was cut at the near plane, and no sprite sampled past what
+   it took: the tests above do each now.
+Its small points taken too: transform.vert's block for a placed vertex is the first (read ahead of the branch, it
+stays inside), `Vertex::taken()` asserts its columns and rows fit, `readingDraws` counts each PRIM again (its settings
+kept or not), and the note below on kept pipelines. Not taken now: draw.vert's position declared invariant as
+transform.vert's is (a change to accurate mode's shader, to measure on the RP6 and on lavapipe first).
+
+**After an update** the pipelines a player's earlier sessions kept (System's "Pipeline Cache") miss once: draw.frag's push
+constants and fast mode's vertex layout changed, so the first session after it makes its pipelines afresh, a stutter at
+each new one.
+
+**Where the time goes now** (the branch, `sample` of a -g build, fast mode, at a load of 15-40): Army of Two's
+`vkQueueSubmit` 5.1% (12.7%), its thread now waiting for the GPU most (26% of the samples in the frame's finish: the
+Mac's GPU is shared), reading the vertices 11%, placing the corners 7%, `meshTriangles()`' triangles 10%; Monkey Ball's
+`vkQueueSubmit` 3.8% (6.8%), the command loop 7%, `transformAll()` 8%, each PRIM's setup spread over `drawVertices()`
+(6%), `GPU::begin()` (3%), `settings()`' comparison (2%), `decode()` (2%), `transformKept()` (2%), `pixelState()` (2%).
+
+**What's left.**
+- Monkey Ball's draws split on the texture (681 of its 1,143 a frame in fast mode): textures taken from an array the
+  draw indexes (descriptor indexing) would join them, where the backend has it.
+- Each PRIM's setup on the GE's side: a Look kept from the last PRIM where its commands are the same (`pixelState()`,
+  `sampler()`, the texture's lookup), and the command loop (7% of Monkey Ball).
+- Fast mode's vertices read straight into models (Army of Two reads 660,000 a frame into the GE's `Vertex`, then copies
+  them), and 2D PRIMs between meshes, which still break a draw.
+- The software renderer's triangle setup (`triangleJob()`, `quantize15()`), the jobs' size.
+
+**For the RP6.** Qualcomm's driver does its work in the `vkCmd*` calls as they're recorded, not at the submit as
+MoltenVK does, so fewer draws (and fewer pipeline, push constant and vertex buffer changes between them) may weigh more
+there than the M1's instructions say: worth measuring Ghost of Sparta's menu in both modes, Army of Two's play and menu,
+Monkey Ball, Hits Remixed and Twisted Metal in fast mode, and the fast mode's pictures against accurate mode's (the
+invariance note above).
+
+## Part 93: Vulkan's haze over MX vs. ATV Untamed's race — the frame buffer's alpha as its stencil has it
+
+On branch `cursor/psp-vk-mx-2b67`, begun on #251's (`cursor/psp-vk-models-2b67` at e823bf00b: master at 239d4c80a,
+v2.3.0, and part 90's branch), on master since #251 merged (5893dbdc0, with part 91's), merged with part 92's
+(dd37263c8: "Merged with part 92", below). Clean room: no PPSSPP code
+read (its GPU backend not opened), JPCSP not read; the PSP's behaviour relied on is the GE's own as the software
+renderer has it (pixel.cpp: the frame buffer's alpha is its stencil, changed by the stencil operations; draw.cpp's
+`stepped()`, measured in part 48, for the depth below). Save states are unchanged: everything here is the renderer's.
+The software renderer is untouched: its pictures, VRAM and state are #251's.
+
+**The problem.** The owner's report from the RP6 (v2.3.0) and the library check of #251: in MX vs. ATV Untamed's
+races, master's Vulkan, accurate and fast alike, lost nearly the whole scene (the trees, the hills, the house, the
+rider: a sky and a blurred ground left, the mean channel difference from Software about 37), as Cars Race-O-Rama's did
+(part 90: the same studio's engine, its depth read through VRAM's second copy). With #251 the scene is drawn, but in
+both modes alike thin light stripes ran across the grass like contour lines, others down through the tree's foliage,
+one side of a tree's trunk was bluish, and the dark shadow under the tree was missing: the mean difference about 4.7
+(other games' 0.04-2).
+
+**How it was found.** The scratch runner of part 90 (every PRIM of a frame logged: its pipeline state, texture,
+target and depth), and dumps of VRAM, everything drawn settled (each target read back, each target's depth put into
+memory as for a texture through the depth views), after a frame and just before chosen PRIMs of it, from Software and
+from Vulkan. A frame of the race (100 frames from the state, 9,600 PRIMs): four 64x64 5551 frame buffers drawn first;
+the scene into the screen's 8888 frame buffer (0x00000) with the depth buffer at 0xcc000, its stencil ZERO by every
+operation (fail, depth fail, pass), so its alpha 0; the terrain again, a 128x128 texture multiplied in where the
+stencil is 0, with INCREMENT (its shadows); then Cars' strips: the depth as a CLUT16 texture through VRAM's second
+copy (0x042cc000), its palette's 63 entries falling from 251 to 3 by 4 and 0 after (indexed by the depth's bits 1-8:
+a ramp every 512 depths), made the picture's alpha bytes through the picture's memory drawn as a 5650 frame buffer;
+15 sprites at depth tested "at least as near", ZERO where the depth test fails, so the near pixels' alpha 0; and the
+sky dome blended in by the frame buffer's alpha (DST_ALPHA and 1 - DST_ALPHA), over the far pixels.
+- The dumps: just before the sky, the screen's alpha in memory (the GPU's stencil, as a read back takes it) was
+  Software's (a mean 0.03 apart) and its colors 0.2 apart; the sky's 64 PRIMs made the difference (4.6-8.3 a channel).
+- The cause: the GPU keeps a frame buffer's alpha twice, in the colors' alpha and in the stencil. A PRIM writes the
+  colors' alpha where its pass operation's result is known (REPLACE, ZERO: `settings()`), not where a test or depth
+  test fails, nor an INCREMENT's; the stencil is what's read back. The 15 sprites' ZERO zeroed the stencil of the near
+  pixels and left their colors' alpha as the strips made it, and the GPU's blending reads the colors' alpha: the sky
+  went over the near pixels whose depth fell in the ramp's 126 of every 512, stripes along the depths across the hills
+  and the foliage, over the trunk and over the tree's shadow.
+- A scratch build making such a target stale before a blend by the frame buffer's alpha (finished, memory's alpha the
+  stencil, and filled again from memory) brought the race to 0.16 from Software at frame 100 in both modes.
+
+**The change** (gpu.cpp, gpu.hpp, vulkan.cpp, copy.frag, compile.sh; both modes, every resolution):
+- A target notes where its colors' alpha may differ from its stencil (`Target::lags`): the rectangle of each PRIM whose
+  stencil operations change the stencil without the colors' alpha (`settings()`: with the stencil written, a fail
+  operation where the stencil test can fail, a depth-fail operation where the depth test can fail, or a pass operation
+  whose alpha isn't written, or is written whole where MASK_ALPHA keeps some of the stencil's bits). Under the GPU's
+  own logic operation (where it has them and doesn't blend in the shader: fast mode, and the RP6's accurate mode) the
+  colors' alpha isn't written, as Vulkan's would take the alpha too where the GE's leaves the stencil out, so such a
+  PRIM is noted the same way.
+- Before a PRIM that blends by the frame buffer's alpha (the GE's factors 4, 5, 8 and 9, adding or subtracting: the
+  GPU's blending and shader blending alike) draws over that rectangle, or a copy of the target is taken over it for a
+  texture whose alpha the PRIM sees (render to texture: not through a palette, whose indices take none of the stencil's
+  bits, nor for a texture function leaving the texel's alpha out; a PRIM that sees it later sets it then, and its copy
+  is taken again from that change), the colors' alpha there is set from the stencil on the GPU (`catchAlpha()`,
+  `Command::Alpha`), and the target's copies take that change. The backend draws it in a render pass of its own over
+  the rectangle alone with `copy.frag`'s `ALPHA` build (no picture, its alpha a constant): a draw making the alpha 0,
+  then one for each bit of the stencil a read back takes (`narrowTarget()`, `move.frag`: 8888's eight, a 4444 one's top
+  four, a 5551 one's top bit), each adding the alpha that bit reads as (the bit, the bit twice over, 255) where the
+  stencil test finds it (the blend constant's alpha the destination's factor: 0, then 1). Exact: each sum is a whole
+  number of 255ths. Nothing waits: the race's finishes are 96 in 200 frames before and after.
+- A stale target's note goes with its colors and stencil, both filled from memory again.
+
+**The depth, found on the way and not changed.** The race's depth, put into memory, was Software's at 51.2% of the
+pixels and one more at 48.6%. The GE's corners' depths are whole numbers (`stepped()`: "the start is exactly the
+corner's value, its depth a whole number"), each pixel's the stepped value rounded down; the GPU interpolates the
+corners' fractional depths before `draw.frag`'s `DEPTHS` rounds down, one more where the fractions tip it. Truncated
+in a scratch build (`GPU::vertex()`, `transform.vert`), 95.3% were Software's (one more at 4.6%: the GE's stepping
+rounds its steps down), but the race's pictures didn't move: the stripes weren't the depth's. Left for its own change,
+as it moves every 3D game's depth on the GPU (docs/psp-gpu-renderers.md, "Known approximations").
+
+**Pictures** (the kit's runners, -O3 with thin LTO; the mean channel difference from Software and the pixels more
+than 24 apart, #251 -> this, at several frames of each, far beyond what a capture a frame stale moves):
+
+| Scene, frame | Vulkan accurate | Vulkan fast |
+|---|---|---|
+| MX vs. ATV Untamed, race, 100 | 4.72, 9.2% -> 0.16, 0.0% | 4.72, 9.2% -> 0.16, 0.0% |
+| the same, 130 | 5.20, 10.3% -> 0.21, 0.1% | 5.20, 10.3% -> 0.21, 0.1% |
+| the same, 160 | 2.84, 6.0% -> 0.21, 0.0% | 2.84, 6.0% -> 0.21, 0.0% |
+| the same, 200 | 2.79, 5.8% -> 0.22, 0.0% | 2.79, 5.8% -> 0.22, 0.0% |
+| Cars Race-O-Rama, 100 | 1.19, 2.0% -> 0.58, 0.2% | 1.21, 2.0% -> 0.60, 0.2% |
+| the same, 150 | 0.80, 0.9% -> 0.54, 0.1% | 0.82, 0.9% -> 0.56, 0.1% |
+| the same, 200 | 0.76, 0.7% -> 0.43, 0.1% | 0.79, 0.7% -> 0.45, 0.1% |
+
+(Cars' frame 50 is 11 apart in both builds: its Vulkan captures are a few frames stale, the race's clock at 9.41
+against Software's 9.44.)
+
+**The other scenes.** The kit's 21 scenes (part 90's), #251's three games and the race, 100 frames from each state,
+every frame's picture and VRAM hashed (drawing settled), then the end's RAM and machine: first #251's head
+(e823bf00b) against this (ed3f121c6), then master with #251 merged (5893dbdc0) against the final code (bb6298e9a;
+Software against 8b7fc0b06, the GPU code after it being none of Software's), the same both times: Software the same
+in all 25; Vulkan accurate and fast each the same in 23 of the 25, the others the race (from its frame 12) and Cars
+Race-O-Rama (from its first): the same bug, Cars' sky over its near pixels where its strips' depth-fail sprites had
+zeroed only the stencil, which part 90 left (its 1.19 at frame 100). The review's points change neither: the race's
+and Cars' hashes, every frame's and the end's, are ed3f121c6's. Hammerin' Hero, Jeanne d'Arc, Colin McRae's race (its
+terrain shadows) and Twisted Metal's play are master's exactly. The settings of the alpha, counted in a scratch build
+(100 frames, the same in both modes), before the review's points and after: the race 90 -> 45 (twice a picture, then
+once: before the sky), Cars 50 -> 50 (once a picture, before its sky), Colin McRae's race 98 -> 0 (its pictures the
+same either way: its alpha was the stencil's already where it's read), Hammerin' Hero 0; the 20 other scenes and
+Jeanne d'Arc none.
+
+**Speed** (the kit's runners, #251's head against this, 300 frames from each state, late frames at 1x and the pipelines
+kept, the builds in turns over two rounds, the Mac's load 8-14; frames a second, the means, and the GPU's waits in ms a
+frame where they're more than a tenth):
+
+| Scene | Vulkan fast, 1x | Vulkan accurate, 1x | Vulkan fast, 4x |
+|---|---|---|---|
+| MX vs. ATV Untamed, race | 32.72 -> 33.43 (+2.2%), waits 9.6 -> 9.6 | 30.07 -> 32.40 | 11.28 -> 11.00 (-2.5%), waits 66 -> 69 |
+| Hammerin' Hero | 219.4 -> 218.2 (-0.5%) | | |
+| Cars Race-O-Rama | 24.92 -> 25.94 (+4.1%), waits 16.0 -> 14.3 | | |
+| Colin McRae's race | 97.35 -> 100.87 (+3.6%) | | |
+
+Single runs moved by up to a tenth between rounds (the race at 4x: 11.21 and 10.78 against 10.84 and 11.71): no change
+past that is measured. And after the review's points (below), master (5893dbdc0), the branch before them (da6832ae5)
+and the final code (bb6298e9a), Vulkan fast in the same way (the Mac's load 9-13):
+
+| Scene | 1x: master, before, final | 2x: master, before, final |
+|---|---|---|
+| MX vs. ATV Untamed, race | 28.30, 29.52, 30.32 (waits 10.8, 9.2, 8.8) | 21.24, 20.99, 20.64 (waits 22.6, 22.9, 23.1) |
+| Cars Race-O-Rama | 20.36, 21.00, 22.06 (waits 16.3, 16.0, 15.6) | 15.41, 15.80, 15.66 (waits 35.8, 34.3, 34.4) |
+| Hammerin' Hero | 190.9, 189.9, 193.6 | 107.3, 106.2, 114.7 (waits 4.0, 4.0, 3.7) |
+| Colin McRae's race | 85.6, 88.8, 83.0 | |
+
+Within the runs' own spread again (Colin McRae's single runs 82-92 across the three). The setting's nine draws at
+most go in a render pass of their own over its rectangle (on a tile-based GPU only that much of the target's pictures
+loaded and stored, but the draws' pass ended and begun again around it): once a picture in the race and in Cars;
+the RP6's numbers are still to take.
+
+**Tests** (tests/psp/gpu.cpp, both modes, 1x and 2x; on #251's core with only the statistic added so they build, they
+fail in every mode and resolution: the new group 10,752 bytes apart in 8888 and 8,960 in 4444 and 5551, its alpha set
+none of the twice it should be; the 5551 group 1,344 bytes apart):
+- "the frame buffer's alpha as its stencil has it": in 8888, 4444 and 5551, a nearer half drawn and the stencil set
+  everywhere; ZERO where the depth test fails behind it, INVERT where the pass is; a copy taken as a texture's alpha
+  into another frame buffer; ZERO by a 3D mesh's depth fails (fast mode's GPU transform); white blended in by the frame
+  buffer's alpha; then ZERO again and a blend by the pixel's own alpha, which sets nothing. Black under white and the
+  reverse, so that each blend comes out as the alpha exactly however the GPU rounds; every byte the software
+  renderer's, the alpha set twice.
+- "a 5551 frame buffer's stencil bit" (part 90's) now takes all its rows as the texture, those its fail and depth-fail
+  operations made too, which it left out before.
+- "each other way a PRIM leaves it behind" (the review's point 4), each probed by white blended in by the frame
+  buffer's alpha over black: a stencil test failing (ZERO where "not equal" fails); MASK_ALPHA keeping some of the
+  stencil's bits, in a PRIM and in clear mode; INCREMENT and DECREMENT; a REPLACE blended by its own alpha without
+  dual-source blending (output 0's alpha the source's, left behind unless every blend is the shader's); the GPU's own
+  logic operation (XOR, CLEAR and NOOP, left behind where the GPU has them and doesn't blend in the shader); and a
+  4444 REPLACE of 0x80 under "not equal", then a rectangle over it noted by another PRIM. On master's core
+  (5893dbdc0, the statistic added) the first five fail in every mode and resolution (4,608 bytes apart, INCREMENT
+  and DECREMENT 6,912), and none of the six sets the alpha; on the branch before the review's points (da6832ae5) the
+  4444 one fails, 3,072 bytes apart in each mode and resolution (CI's lavapipe too), and the logic operation's on
+  lavapipe in fast mode (4,608).
+
+**Checks.** On ed3f121c6 with its tests (10469dbba): `tests/psp/run-tests.sh` 519 groups, 0 failures (sanitized; one
+new GPU group); `tests/allegrex/run-tests.sh` 68 groups, 0 failures; `tests/psp/ares/run-tests.sh` 340 checks, 0
+failed. On the final code (bb6298e9a, on master at 5893dbdc0): `tests/psp/run-tests.sh` 523 groups, 0 failures,
+sanitized and again without the sanitizers (`SANITIZE=`); `tests/allegrex/run-tests.sh` 68, 0;
+`tests/psp/ares/run-tests.sh` 340 checks, 0 failed; CI green (the PSP system tests on Mesa's lavapipe, which has the
+GPU's own logic operations, the Allegrex tests, and the Android, Windows, macOS and Linux builds). On the Mac the
+address sanitizer's container check was left off for them
+(`ASAN_OPTIONS=detect_stack_use_after_return=0:detect_container_overflow=0`): with it, tests/psp stops in "gpu
+stencil formats" on #251's core as on this, a false positive (nall and sljit are built without the sanitizers, and
+the linker can keep their unannotated `std::vector<u8>::resize`). The hash comparison: above ("The other scenes").
+
+**The review.** An independent read-only review of #254 found no blocker (the design sound, the race's and Cars'
+fix right) and four points to fix, all taken (8b7fc0b06, with the tests in f567df316):
+1. The GPU's own logic operation wrote the colors' alpha as op(reference, old alpha) while the stencil got the
+   reference, unnoted (Vulkan's takes the alpha; the GE's leaves the stencil out: pixel.cpp). Under it the colors'
+   alpha isn't written now, which notes the area (above). Reached in fast mode wherever the GPU has logic operations
+   and in accurate mode where it doesn't blend in the shader (the RP6); the M1 has none (MoltenVK), so the test fails
+   without the fix on CI's lavapipe (f567df316, the tests pushed alone): 4,608 bytes apart in fast mode at 1x and 2x,
+   and no alpha set.
+2. A 4444 stencil was set into the alpha by both copies of each bit, where a read back and a move take its top four
+   bits: a stencil the GPU holds otherwise (a REPLACE of 0x80 under a comparison keeps the GE's reference, 0x80,
+   where the colors' alpha and memory have 0x88; an INCREMENT steps it by one) came out as alpha 0, a regression from
+   #251 wherever a noted rectangle covered it. The bits tested are now those a read back takes (a 4444 one's top four,
+   a 5551 one's top bit), the alpha added the one they read as (0x11 times, 255); the test of that case fails without
+   it, 3,072 bytes apart in each mode and resolution.
+3. The cost on a tile-based GPU (the RP6's): each setting ended the draws' render pass and began one over the whole
+   target. Its render pass covers the rectangle alone now, and a copy whose alpha the PRIM can't see sets nothing
+   (above), which takes the race's first setting a picture away (before its strips copy the picture as a texture
+   without its alpha, untested and unblended: a pixel's alpha counts only in the alpha test and blending by the
+   source's alpha, bb6298e9a, as the first take on it, by the texture function alone, left the race's count as it
+   was). Counted per 100 frames before and after: the race 90 -> 45, Cars 50 -> 50, Colin McRae's race 98 -> 0,
+   Hammerin' Hero 0. Vulkan fast at 1x and 2x: within the runs' spread ("Speed", above).
+4. The tests covered two of the ways a PRIM leaves the alpha behind; a group for the others now (below).
+And three small points: a PRIM whose own primitives leave the alpha behind and then blend by it is the design doc's
+known approximations' now (the setting comes before a PRIM, not between its primitives); the second is point 3's
+copies; and the PR's and the handoff's base lines, stale once #251 merged.
+
+**Merged with part 92** (master at dd37263c8; part 92's changes are the host's alone). Its kept settings return from
+`settings()` before `lagging` is worked out, for a PRIM whose settings are the last one's: the flag stays as the last
+one's made it, which is the same (everything it's worked out from is among the kept settings: the pixel pipeline's
+state, the write masks, the target's format, the backend's ways of blending and logic operations), and any PRIM whose
+settings aren't kept replaces them. The setting of the alpha and the noting of a PRIM's rectangle are `begin()`'s, after
+`settings()`, for every PRIM, so before any of its primitives is recorded, a draw of its own or among fast mode's
+meshes (`screenTriangle()`, whose meshes join only a Mesh command at the back: an Alpha between two PRIMs keeps them
+apart). The last texture looked up first is a decoded texture's; a copy of a target is taken, and its alpha set first
+where its PRIM uses it, for each PRIM as before. The two sides met in `settings()`'s end (the state built in place,
+`lagging` worked out on it) and `begin()` (part 92's count of reading draws, then this part's setting and noting);
+`shaders.hpp` was made again from the merged GLSL (compile.sh, glslang 16.6.0, which makes master's byte for byte from
+master's). A test for part 92's paths: two sprites alike, the second's settings kept, leaving the alpha behind, then
+white blended in by it over the second's alone; and in fast mode a quad of six vertices drawn among the meshes,
+leaving the alpha behind by its depth fails, and another blending by it after a sprite left it behind. On the merged
+code (78138561a) against master at dd37263c8, the kit's 21 scenes, #251's three games and the race as before:
+Software the same in all 25, Vulkan accurate and fast each in 23, the race and Cars apart as before, their hashes
+the pre-merge code's (bb6298e9a: c2a95b636's) exactly in both modes; the alpha set per 100 frames as before (the
+race 45, Cars 50, Hammerin' Hero and Colin McRae none); `tests/psp/run-tests.sh` 528 groups, 0 failures, sanitized
+(the container check off) and not;
+`tests/allegrex/run-tests.sh` 68, 0; `tests/psp/ares/run-tests.sh` 340, 0; CI green. With `lagging` reset before the
+kept settings' return (a scratch build: the way a merge could have lost it), the test's sprites alike fail in each
+mode and resolution, 2,304 bytes apart, no alpha set.
+
+Still not done: the corners' depths (above); a 4444 frame buffer's INCREMENT and DECREMENT (by one on the GPU, by 16
+on the PSP: part 90); the GPU's blending by a partial alpha rounding its own way (a level apart here and there, as
+before); within one PRIM, a primitive blending by the alpha over pixels an earlier one left behind; and part 90's
+list otherwise.
+
+Scratch: `~/phobos-work/scratch/vk-mx` (`NOTES.md`; `patches/`: the PRIM log, the VRAM dumps (`dbg4-patch.py`,
+`dbg5-patch.py`), the stale-target experiment (`exp2-patch.py`) and the corners' depths (`corner-depth.patch`); `kit/`,
+the hash, picture and speed runs; `tests1.sh`, `suites.sh`).
+
+## Part 94: the CPU, round 3 — the FPU's flush to zero compiled, block endings in fewer steps, the run's count in a register, more of the VFPU compiled
+
+On branch `cursor/psp-cpu-round3-2b67`, on master (`dd37263c8`, #253 merged). The task: round 3 of the CPU's work (parts
+79 and 86), the Allegrex recompiler and the CPU's side of the emulation thread, for the owner's goal of PPSSPP's speed
+with room for fast-forward and upscaling on the Retroid Pocket 6, every emulated result the same (but vfim of a NaN
+half on GCC's builds: change 6). Clean room: PPSSPP not read at all, JPCSP not read. Save states are unchanged (layout
+31): nothing new is kept.
+
+### How it was measured
+
+On the Mac (an M1), the headless runner built as Android builds it (O3, thin LTO), patched in scratch to report the
+emulation thread's CPU time, retired host instructions and cycles (parts 79 and 86), from the scenes' save states:
+part 79's 21, and Hot Wheels' race and Chains of Olympus' difficulty menu (part 74's), the owner's Killzone gameplay
+and the Killzone menu v2.2.0 made (`scratch/scenes-owner`), and MX vs. ATV Untamed riding. Profiles with xctrace and
+round 2's block map (each compiled block's guest words, host code and marks), sorted by a new script (`cats.py`) into the
+whole thread's parts: compiled code by what each host instruction was compiled for, the VFPU's helpers, the
+interpreter called from compiled code, system calls (the GE's display lists run inside them apart), the GE run from the
+kernel's loop. A probe build counted the interpreter's calls from compiled code by instruction, the VFPU's by their
+top 16 bits and whether their prefixes were set, and read FCSR. The Mac was shared with a library check and other
+agents (a load of 6 to 35), so the host instructions a frame carry the comparisons, the times beside them.
+
+### Where the time went (master, Vulkan fast)
+
+| Scene | Compiled code | VFPU helpers | Interpreter from compiled code | System calls' GE |
+| --- | --- | --- | --- | --- |
+| Hot Wheels: Ultimate Racing, race | 23% (its cold paths 3.5%) | 7% | 20% (the FPU's arithmetic) | 48% |
+| Super Monkey Ball Adventures, story | 17% | 8% (vtfm.q on a transposed matrix 5%) | 0 | 74% |
+| Army of Two, playing | 33% | 3% | 1% | 60% |
+| Killzone, gameplay | 34% | 3% | 2.5% | 57% |
+| Colin McRae 2005, race | 33% | 4% | 2% | 56% |
+| Disaster Report 3, playing | 40% | 13% | 1% | 36% |
+| Ghost of Sparta, menu | 12.5% | 1% | 0 | 84% |
+| Chains of Olympus, difficulty menu | 17% | 1% | 0 | 78% |
+
+Compiled code by what it was compiled for, in the CPU-heavy scenes, as shares of the thread: block endings 3 to 11%,
+loads 3 to 9%, ALU 3 to 9%, stores 1 to 3%, branches 1 to 4%, the FPU's loads and stores 1 to 3%.
+
+- **Hot Wheels' FPU through the interpreter**: its FCSR is 0x01000000, flush to zero on. Native FPU arithmetic and
+  compares ran only with that bit clear, so 660,000 FPU instructions a frame (add.s, mul.s, c.lt.s, sub.s...) went to
+  the interpreter through cold code, a fifth of its emulation thread. No other scene had the bit set.
+- **The VFPU through the interpreter**: Colin McRae 16,000 instructions a frame (vf2h, vs2i, vus2i, vh2f, the other
+  packing conversions), Killzone 15,000 (vcrs, vcmp with prefixes set, vs2i, vcrsp), Hot Wheels 14,000 (vrot, vcst),
+  Army of Two 4,500 (vcmov, vqmul), MX vs. ATV 3,300; about 1 to 2.5% of the thread each.
+- **What a block's straight line spends** (the block map, weighted by each block's samples): a block ending stored and
+  loaded the run's count and loaded its limit (6 instructions, the next block's load waiting on this one's store),
+  checked whether the CPU had halted wherever the block had a load or store (its cold path counted as a call into the
+  interpreter), and loaded the target's page table entry (3); an instruction writing a register it also read, the
+  result's host register taken first, loaded the source again from memory (`addiu t0,t0,1`); a branch against r0
+  loaded r0 (1.1 times a block); a load was 8 host instructions, two of them dependent loads (the page table's entry,
+  then the value).
+
+### What was done
+
+1. **The FPU's arithmetic and compares compiled with flush to zero set** (`recompiler-fpu.cpp`: `emitFlush()`,
+   `emitFlushedInputs()`). Native code is compiled for FCSR's bit 24 as it is when its block is compiled (a game sets it
+   once, as it starts, if at all). Set, each input is flushed in integer registers as `f()` flushes it (the sign alone
+   where the exponent is 0: a subnormal becomes the zero of its sign, a zero stays as it is), the same IEEE operation
+   runs on the host, and the result is flushed as `setF()` flushes it, after the host has rounded it: a result rounded
+   up to 2^-126 from below stays, as in the interpreter (a host's own flush-to-zero mode decides before rounding, and
+   would make it 0). A NaN result still goes to the interpreter, which picks its bits. Compares flush their inputs
+   likewise. Every instruction checks the bit and the rounding mode are as compiled, else the interpreter runs it, as
+   before.
+2. **Block endings and registers in fewer steps** (`recompiler.cpp`): `pinSources()` keeps the host registers holding
+   what an instruction reads for it, so a result into one of them takes another register and the source isn't loaded
+   again; a native instruction's way to the interpreter (cold code: an access off the fast path, an overflow) no longer
+   counts as a call that may halt the CPU, since the interpreter halts it there only by an exception, after which the
+   block leaves; and the owner now says which pages' entries in the page table never change (`Allegrex::steady`: the
+   PSP's main RAM and scratchpad, `Memory::buildSteady()`), and a block going on to a block in one of them doesn't
+   look at the entry again (VRAM's pages, which the GE's workers take out while they draw, are still looked at).
+3. **r0 read as the constant 0** in compiled code: nothing compiled writes it, and the interpreter sets it to 0 after
+   every instruction.
+4. **The run's count in a saved register** (`left()`, `storeCount()`, `loadCount()`, `emitCount()`). On ARM64, whose ten
+   saved registers leave room (the held game registers go from 7 to 6), a register holds runLimit less
+   instructionsRun as compiled code runs, and a block's end is a subtraction and a branch. instructionsRun in memory is
+   brought up to date before every call into the interpreter (whose syscalls read it, and may move it and runLimit on,
+   after which the register is worked out again) and wherever the code leaves for run(). x86-64 keeps counting in
+   memory (outside Windows it has six saved registers; Windows' eight would have room, but no check runs the tests
+   there).
+5. **More of the VFPU compiled with the prefixes at rest** (`recompiler-vfpu.cpp`: `vfpuRestPack()`,
+   `vfpuRestConditionalMove()`, `vfpuRestCross()`, `vfpuRestRotate()`): the conversions that move bits about (vf2h, vh2f,
+   vuc2i, vc2i, vus2i, vs2i, vi2uc, vi2c, vi2us, vi2s), vcmovt and vcmovf, vcrs, vcrsp, vqmul and vrot as helpers of
+   their own, each the interpreter's function at rest; vcst as constants the block writes. Each only at the sizes its
+   decoder takes, and with prefixes set, the interpreter's way as before.
+6. **vfim's half float as `halfToFloat()` makes it**, in the interpreter and in compiled code. Both took `vfpuBits()` of
+   the half's float, whose trip through a double keeps a signaling NaN or quiets it as the host's compiler chooses:
+   clang folds the trip away, so a NaN half keeps its bits (master gives that in both engines, built for the Mac as
+   for Android: a probe of both trees' tests at -O3), while GitHub's GCC at -O3 kept the trip in compiled code's
+   constant once this round's code changed its inlining, and its run of the random interpreter-against-recompiler
+   programs met vfim of a half NaN (0xffd8: 0xff8003d8 in the interpreter, 0xffc003d8 compiled). A half float is a
+   float exactly, nothing in it below 2^-126, so `vfpuBits()` changed no other value; now both take `halfToFloat()`'s
+   bits whatever the compiler, which is what clang's builds gave already.
+
+Measured and taken out (`d5c43999b`, out again in `3081c98e2`): **main RAM's loads without the page table**. As the
+code memory started afresh, the recompiler found the largest block of steady pages lying one after another in the
+host's memory as in the PSP's, a power of two in size from a multiple of it (the PSP's 64 MiB of RAM), and kept that
+memory less its first address in S1. A load's physical address xor the region's first address, turned right by the
+alignment's bits, was tested against the bits from the region's size up (`eor`, `ror`, `tst`: in the region and
+aligned, in one test), and the access was then one load from S1; every other load took the page table's way as cold
+code. That took 0.1 to 0.6% of the host instructions on the Mac (below), its cycles within the rounds' spread, and on
+the RP6 nothing either (Army of Two 0.3% less CPU time, Colin McRae 0.3% less, Killzone 0.1% more: "On the RP6"),
+while loads from the scratchpad and VRAM took two more taken branches and the table's lookup out of line. So loads
+are compiled as on master again ("The direct loads taken out", below).
+
+Tried and not taken: loads and stores whose base register a lui made a constant earlier in the block (2% of them);
+keeping registers across blocks (about 3 loads a block, 1% of the thread at most); storing results only at a block's
+end (about one store a block saved). Jumps through a register (jr ra) are 15 to 27% of block endings but 35 to 53% of
+their time, 2 to 3% of the thread: a cache of the last target, invalidated as links are, is the next step there.
+
+### Numbers
+
+The Mac, master (`dd37263c8`) against the branch's code (`2ce7026e9`, the direct loads still in: the last code, without
+them, below the table; `622fd6a0f` after it changes only vfim of a NaN half), the bench runners from the scenes'
+states, medians of three rounds taking turns in Vulkan fast (MoltenVK, 1x) and two in the software renderer (4 drawing
+threads). "Fps it allows" is 1000 over the emulation thread's ms. The Mac's load average was 11 to 25 through these
+rounds (a library check and other agents), so the times swing with the cores the thread got; the host instructions a
+frame hardly move with that, and carry the comparison.
+
+| Scene | Vulkan fast: emulation thread ms a frame (fps it allows) | M host instructions | M cycles | Software: ms | M host instructions |
+| --- | --- | --- | --- | --- | --- |
+| Hot Wheels: Ultimate Racing, race | 30.4 -> 24.3 (33 -> 41), -20% | 340.0 -> 249.0 (-26.8%) | 86.7 -> 68.0 (-22%) | 42.7 -> 40.4 (-5%) | 419 -> 369 (-11.9%) |
+| Colin McRae 2005, race | 9.9 -> 9.3 (101 -> 107), -5% | 91.1 -> 83.3 (-8.7%) | 28.5 -> 26.9 (-5%) | 17.9 -> 18.1 (+1%) | 175 -> 170 (-2.7%) |
+| Killzone, gameplay | 23.6 -> 22.3 (42 -> 45), -5% | 166.2 -> 158.8 (-4.5%) | 66.0 -> 62.7 (-5%) | 50.9 -> 50.1 (-2%) | 495 -> 495 (+0.1%) |
+| Killzone, menu | 18.7 -> 16.5 (53 -> 61), -12% | 122.2 -> 118.7 (-2.8%) | 41.9 -> 45.7 (+9%) | | |
+| Army of Two, playing | 43.3 -> 42.3 (23 -> 24), -2% | 297.2 -> 288.8 (-2.8%) | 116.9 -> 116.0 (-1%) | 84.5 -> 82.7 (-2%) | 833 -> 833 (-0.0%) |
+| Super Monkey Ball Adventures, story | 38.0 -> 38.3 (26 -> 26), +1% | 434.4 -> 425.6 (-2.0%) | 112.8 -> 110.4 (-2%) | 53.6 -> 50.8 (-5%) | 499 -> 491 (-1.6%) |
+| Disaster Report 3, playing | 3.4 -> 3.3 (290 -> 300), -3% | 35.6 -> 33.9 (-5.0%) | 10.1 -> 9.6 (-4%) | 4.8 -> 4.6 (-5%) | 45 -> 44 (-2.8%) |
+| MX vs. ATV Untamed, riding | 23.6 -> 23.7 (42 -> 42), +0% | 276.1 -> 274.3 (-0.6%) | 69.4 -> 67.3 (-3%) | | |
+| Ghost of Sparta, menu | 27.1 -> 26.7 (37 -> 37), -1% | 304.0 -> 301.7 (-0.8%) | 75.1 -> 72.1 (-4%) | | |
+| Chains of Olympus, difficulty menu | 11.0 -> 10.7 (91 -> 93), -2% | 107.2 -> 106.1 (-1.0%) | 31.7 -> 31.2 (-1%) | | |
+| Armored Core Formula Front, playing | 5.4 -> 5.2 (185 -> 191), -3% | 39.5 -> 37.8 (-4.5%) | 15.3 -> 15.1 (-2%) | | |
+| Twisted Metal, playing | 3.8 -> 3.7 (267 -> 271), -2% | 33.2 -> 32.6 (-1.8%) | 10.6 -> 10.6 (-1%) | | |
+| NFS Most Wanted, race | 4.2 -> 4.1 (237 -> 246), -4% | 30.8 -> 30.3 (-1.9%) | 10.8 -> 10.6 (-2%) | | |
+| Death Jr. II, playing | 8.7 -> 8.9 (115 -> 112), +3% | 77.3 -> 75.7 (-2.1%) | 23.1 -> 23.9 (+3%) | | |
+
+Hot Wheels' race takes 27% fewer host instructions and a fifth less time on its emulation thread in Vulkan fast (30.4 to
+24.3 ms a frame): its FPU is compiled now. The scenes that run much guest code take 3 to 9% fewer instructions (Colin
+McRae 8.7%, the VFPU's conversions compiled; Disaster Report 3, Killzone's gameplay and Armored Core 4.5 to 5%); the
+GE-bound scenes 1 to 3% (Army of Two, Monkey Ball, Ghost of Sparta, Chains of Olympus, MX vs. ATV, Death Jr. II),
+their CPU being a sixth to a third of the thread. In the software renderer the emulation thread also draws the bands
+it takes while it waits for the drawing threads (part 74), so its counts follow the scheduling as much as the CPU
+(Hot Wheels 12% fewer there).
+
+The last code, without the direct loads (`3081c98e2`), against master and against `622fd6a0f` (the code the RP6
+measured, the direct loads in), Vulkan fast, 300 frames from the states, two rounds taking turns (a load of 11 to 20):
+
+| Scene | ms a frame: master -> last code | M host instructions: master -> last code | M host instructions: `622fd6a0f` -> last code |
+| --- | --- | --- | --- |
+| Hot Wheels: Ultimate Racing, race | 27.9 -> 21.5 (-23%) | 340.0 -> 250.5 (-26.3%) | 249.0 -> 250.5 (+0.6%) |
+| Colin McRae 2005, race | 9.3 -> 9.2 (-1%) | 91.1 -> 83.8 (-7.9%) | 83.4 -> 83.8 (+0.6%) |
+| Killzone, gameplay | 18.8 -> 18.5 (-1%) | 166.1 -> 159.0 (-4.2%) | 158.4 -> 159.0 (+0.4%) |
+| Super Monkey Ball Adventures, story | 36.4 -> 35.0 (-4%) | 433.9 -> 427.0 (-1.6%) | 425.3 -> 427.0 (+0.4%) |
+
+The gains are the table's above less the direct loads' 0.4 to 0.6% of the instructions; against `622fd6a0f` the
+cycles are within the rounds' spread (-2.7% to +2.3%, single rounds up to 4% apart).
+
+Each change on its own (M host instructions a frame against the commit before, Vulkan fast, two rounds taking turns):
+
+| Scene | flush to zero | endings | r0 | direct loads (taken out) | count | VFPU |
+| --- | --- | --- | --- | --- | --- | --- |
+| Hot Wheels, race | 339.6 -> 259.7 (-23.5%) | 260.1 -> 256.4 (-1.4%) | 256.4 -> 255.6 (-0.3%) | 255.4 -> 254.3 (-0.4%) | 254.5 -> 251.3 (-1.3%) | 251.0 -> 248.6 (-0.9%) |
+| Colin McRae 2005, race |  | 91.0 -> 89.0 (-2.2%) | 89.0 -> 88.4 (-0.6%) | 88.3 -> 87.8 (-0.6%) | 87.9 -> 86.1 (-2.0%) | 86.1 -> 83.1 (-3.5%) |
+| Killzone, gameplay |  | 166.0 -> 163.8 (-1.3%) | 164.0 -> 163.2 (-0.5%) | 163.0 -> 162.4 (-0.4%) | 162.6 -> 160.7 (-1.1%) | 160.7 -> 158.5 (-1.4%) |
+| Army of Two, playing |  | 296.7 -> 293.5 (-1.1%) | 293.5 -> 292.2 (-0.4%) | 292.1 -> 291.8 (-0.1%) | 292.0 -> 289.1 (-1.0%) | 289.1 -> 288.2 (-0.3%) |
+| Disaster Report 3, playing |  | 35.6 -> 35.0 (-1.7%) | 35.0 -> 34.9 (-0.4%) | 34.9 -> 34.7 (-0.6%) | 34.7 -> 34.1 (-1.6%) | 34.2 -> 33.9 (-0.8%) |
+| Super Monkey Ball, story |  | 433.8 -> 430.6 (-0.7%) | 430.6 -> 429.6 (-0.2%) | 429.5 -> 428.6 (-0.2%) | 428.8 -> 425.3 (-0.8%) |  |
+| MX vs. ATV Untamed, riding |  |  |  |  |  | 274.8 -> 274.2 (-0.2%) |
+
+The flush path is Hot Wheels' alone (no other scene sets the bit). The endings' commit takes 0.7 to 2.2% from every
+scene that runs much guest code, the count in a register 0.8 to 2.0%, r0 0.2 to 0.6%, the VFPU's helpers up to 3.5%
+(Colin McRae). The direct loads took 0.1 to 0.6%, their cycles within the rounds' spread on the M1, whose
+out-of-order window is twice the RP6's X3's; measured there on their own, they gave nothing either, and are out.
+
+### Accuracy
+
+Every change is the host's alone; nothing a game can see moves, but vfim of a NaN half on a build GCC compiled
+(change 6: the Linux desktop's), whose bits are now clang's.
+- The branch against master from the 21 scenes' states (part 79's) and five more (Hot Wheels' race, Killzone's
+  gameplay and menu, MX vs. ATV riding, Chains of Olympus' difficulty menu), in the software renderer, Vulkan fast and
+  Vulkan accurate: 100 frames with every frame's picture and all of VRAM hashed, drawing settled (with Vulkan a finish
+  each frame, the same for both builds), then RAM and the machine's whole serialized state: identical, 78 of 78, on the
+  code as measured (`2ce7026e9`), again on `622fd6a0f`, and on the last code (`3081c98e2`, the direct loads taken out)
+  against master with #254 (`e78b4a364`).
+- The FPU's flush path: "fpu flushing" (tests/allegrex): fixed cases (a subnormal and +0, -0 + +0, the smallest normal
+  less a subnormal, differences and products below 2^-126, a product rounded up to 2^-126, 0/0 and -0 * infinity
+  flushed into NaNs, compares of zeros and subnormals), 1,500 random programs of 12 FPU instructions on numbers round
+  2^-126 with flushing mostly on, both engines bit for bit, and a block compiled with flushing one way then run with it
+  the other or with another rounding mode. The random interpreter-against-recompiler programs already set the bit in
+  half their runs.
+- Loads on every kind of page: "loads across pages" (written for the direct loads, kept without their checks): every
+  kind of load at the first and last bytes of a run of steady pages (in the test RAM's middle and at its very end),
+  just outside it, with negative offsets, misaligned, through three other mirrors, on pages apart (steady, listed but
+  not steady, left out), run once and again with two listed pages then taken out of the table, and loads chasing
+  pointers with one off the fast path between: the interpreter's registers and exceptions, and read() reached only
+  for the pages left out.
+- A block going on into a page that isn't steady, compiled with the page listed, then the page taken out and its bytes
+  changed unheard: the block leaves for run(), which interprets the new bytes ("recompiler").
+- The VFPU's new helpers: "vfpu compiled lanes" takes each of the 15 new kinds, 1,500 random instructions of each,
+  random sizes and registers, random prefixes set in the block, in the starting state or not at all, both engines bit
+  for bit.
+- Broken versions of this round's code (`mutate3.py`, scratch, each in a copy of the tree running tests/allegrex, no
+  sanitizers): 43 on the last code, of which 39 are caught (52 and 48 with the direct loads in, their nine all
+  caught); the four that pass change nothing a test or a game can see (`pinSources()` undone: it only picks which host
+  register holds a value; the halted check after an interpreter call taken out where a block's end has a known
+  target: nothing that halts the CPU but by an exception can be before such an end, a syscall, halt or eret ending its
+  block and a delay slot's ending checking always; instructionsRun not stored where a block leaves without chaining:
+  nothing counts in the register there, so it writes what memory holds; vus2i's mask taken out: a halfword shifted
+  left by 15 never reaches bit 31, the interpreter's mask a no-op too). The runs showed four gaps the tests then
+  filled: a page that isn't steady, listed when a block linked into it was compiled, then
+  taken out with its bytes changed unheard (a check skipped where the entry was listed at compile time passed);
+  a direct region twice its size, or moved, over pages that are contiguous in the test's memory (while the direct
+  loads were in: a listed page apart from the region is taken out too, so a load reaching it directly is seen); and a
+  syscall moving the run's limit or count on (now "runs moved by syscalls").
+
+### Checks
+
+- On the last code (`622fd6a0f`): `tests/allegrex/run-tests.sh` 74 groups, 0 failures, sanitized and in release mode
+  on ARM64, and built for x86-64 and run under Rosetta in both modes (the count in memory, the scalar helpers);
+  `tests/psp/run-tests.sh` 525 groups, 0 failures, sanitized (with `ASAN_OPTIONS` `detect_container_overflow=0` beside
+  its usual option, part 92's container-overflow false positive in an unsanitized object's vector) and unsanitized;
+  `tests/psp/ares/run-tests.sh` 340 checks, 0 failed. (A sanitized run under a load of 94 failed "ge loads through the
+  depth buffer's views wait for the threads" once, at its check that the drawing threads were still drawing before
+  any CPU code ran; it passed in every run since.)
+- GitHub: on `5fb38f169` its GCC release build of tests/allegrex met vfim of a NaN half (change 6); on `622fd6a0f` the
+  PSP core's checks (tests/allegrex on x86-64 and ARM64, the runner, the PSP as an ares system, the runner's
+  measurements, tests/psp), the desktop builds (Linux, macOS, Windows) and the Android builds: all pass.
+- With part 93: master moved (#254, Vulkan's frame buffer alpha, `e78b4a364`) and was merged in (`cd97a4630`), the docs
+  alone conflicting. The merge against that master: the 26 scenes' hashes identical in all three renderers (78 of 78);
+  tests/psp 528 groups, 0 failures (sanitized: part 93's groups among them); tests/psp/ares 340/0; tests/allegrex
+  74/0.
+- After the review (`f055ec9f3`, below): `tests/allegrex/run-tests.sh` 78 groups, 0 failures, sanitized and in release
+  mode on ARM64, and built for x86-64 under Rosetta in both modes; `tests/psp/run-tests.sh` 528 groups, 0 failures,
+  sanitized (Homebrew's Vulkan loader on `DYLD_LIBRARY_PATH`, nothing skipped) and unsanitized (nothing skipped);
+  `tests/psp/ares/run-tests.sh` 340 checks, 0 failed; the 78 hashes against master with #254 identical.
+- Without the direct loads (`3081c98e2`): `tests/allegrex/run-tests.sh` 78 groups, 0 failures, sanitized and in
+  release mode on ARM64, and built for x86-64 under Rosetta in both modes; `tests/psp/run-tests.sh` 528 groups, 0
+  failures, sanitized (Homebrew's Vulkan loader on `DYLD_LIBRARY_PATH`, nothing skipped) and unsanitized (nothing
+  skipped); `tests/psp/ares/run-tests.sh` 340 checks, 0 failed; the 78 hashes against master with #254 identical;
+  GitHub's checks on it (the PSP core's, the desktop builds, the Android builds): all pass.
+
+### Left, and why
+
+- **The GE**: 55 to 84% of the emulation thread in every scene measured (the display lists inside the system calls);
+  the CPU's part is a third at most. Ghost of Sparta, Chains of Olympus and Super Monkey Ball are the GE's.
+- **Jumps through a register** (2 to 3% of the thread): a cache of the last target, as above.
+- **The VFPU's helpers left**: Super Monkey Ball's vtfm.q (NEON, 5%), Disaster Report 3's vsge and vslt with prefixes
+  (vfpuEach, 4%), vdot and vhdp at rest (1 to 2%); vcmp, vdot and vfad with prefixes set still go through the
+  interpreter (Killzone 3,700 vcmp a frame).
+- **The FPU's mode check** runs at every instruction (4 host instructions): once a block would need a way to leave the
+  block when it fails, not the interpreter for one instruction.
+- **sqrt.s** has no native code (1,200 a frame in Ghost of Sparta's menu).
+
+### On the RP6
+
+The coordinator ran master (`dd37263c8`) against `622fd6a0f` (the branch's code then, the direct loads in) on the RP6
+with `rp6-compare.sh` (PR #255's runner for Android): eight scenes from their states, 600 frames in Vulkan fast, three
+rounds each, the emulation thread's CPU time, retired instructions and cycles a frame:
+
+| Scene | CPU ms a frame | M instructions | M cycles |
+| --- | --- | --- | --- |
+| Colin McRae 2005, race | 11.94 -> 11.38 (-4.7%) | 108.44 -> 100.47 (-7.3%) | 37.06 -> 35.27 (-4.8%) |
+| Hot Wheels: Ultimate Racing, race | 48.58 -> 46.52 (-4.2%) | 499.23 -> 445.50 (-10.8%) | 129.40 -> 124.51 (-3.8%) |
+| Killzone, gameplay | 17.38 -> 16.77 (-3.5%) | 162.35 -> 154.04 (-5.1%) | 53.95 -> 52.09 (-3.4%) |
+| Disaster Report 3, playing | 3.66 -> 3.54 (-3.2%) | 40.08 -> 38.10 (-4.9%) | 11.27 -> 10.91 (-3.2%) |
+| Super Monkey Ball Adventures, story | 40.58 -> 39.48 (-2.7%) | 441.15 -> 432.90 (-1.9%) | 119.03 -> 115.96 (-2.6%) |
+| Army of Two, playing | 34.78 -> 34.02 (-2.2%) | 271.94 -> 264.12 (-2.9%) | 108.67 -> 106.39 (-2.1%) |
+| Ghost of Sparta, menu | 28.66 -> 28.46 (-0.7%) | 307.94 -> 305.88 (-0.7%) | 84.61 -> 83.63 (-1.2%) |
+| MX vs. ATV Untamed, riding | 25.65 -> 25.51 (-0.5%) | 238.51 -> 236.91 (-0.7%) | 74.84 -> 74.39 (-0.6%) |
+
+Every scene takes less of the thread and none more: the scenes that run much guest code 3 to 5% less CPU time (Colin
+McRae, Hot Wheels, Killzone's gameplay, Disaster Report 3), the GE-bound ones 0.5 to 3% (MX vs. ATV waits on the
+GPU). Hot Wheels gains less there than on the Mac (54 M fewer instructions a frame against 91 M, 4.2% less time
+against 20%); why isn't measured here (no profile from the device).
+
+The direct loads alone (`9586b8c4e` against `d5c43999b`), three scenes, three rounds each:
+
+| Scene | CPU ms a frame | M instructions | M cycles |
+| --- | --- | --- | --- |
+| Army of Two, playing | -0.3% | -0.1% | -0.0% |
+| Colin McRae 2005, race | -0.3% | -0.5% | -0.4% |
+| Killzone, gameplay | +0.1% | -0.3% | +0.0% |
+
+Nothing measurable, as on the Mac, so they were taken out (below). The table's head had them in; without them, the
+Mac's gains are the same (above), so the RP6's should be too. To measure the last code there: the same
+`rp6-compare.sh` commands with `3081c98e2` as the head.
+
+### Review
+
+An independent read-only review of the branch (to `1c951a6f3`) found no blocker: all six changes match the interpreter
+by reading and in every run; its seven probes (flush to zero switched in a block and in a delay slot, code
+overwritten after a block linked into it, through each mirror, r0 as every operand, the direct region at RAM's end,
+runs of 2^63 instructions and more, loads chasing pointers in the region, counts across syscalls that switch
+threads) pass on ARM64 and x86-64, each catching a break made on purpose; and the four surviving mutations are
+equivalent. Its points, all taken (`f055ec9f3`; the direct region it speaks of was taken out after the RP6's numbers:
+"The direct loads taken out", below):
+- **The new paths' coverage**: tests/psp's machine set no steady pages, so none of its groups (its programs on both
+  engines among them) used the direct region or a block going on without the page check; and tests/allegrex's
+  random programs loaded only from just past the harness's direct region. tests/psp's machine now sets them as the
+  system does (its page table group checks which pages are steady and that the region is all 32 MiB of its RAM), and
+  the harness's data is inside the region (the random programs check it). The probes are tests now: "fpu flushing"
+  (the bit switched by ctc1 in a block, either way, with another rounding mode, from r0; and in a jump's delay slot,
+  the target compiled in the other mode), "linked blocks" (main RAM's code rewritten after a block linked into it, by
+  a store in the linking block through each mirror into its own page or another, and by a write the owner reports),
+  "direct loads" (a second layout, the region at RAM's very end, loads with negative offsets, and loads chasing
+  pointers through the region with one off the fast path between), "runs moved by syscalls" (two threads the
+  syscalls switch between, the limit and the count moved), and two new groups, "runs of 2^62 to 2^64" (the count in a
+  register is signed: past 2^63 every block leaves for run(), which counts on) and "r0 as an operand" (every native
+  form, both engines).
+- **The count in a register on ARM64 alone**: Windows' x86-64, with eight saved registers, had it on (and four held
+  game registers, not five), but no check runs the tests there, only the build. x86-64 counts in memory everywhere
+  now.
+- **Flush to zero from a cold boot**: a block compiled before a game sets the bit sends each FPU instruction to the
+  interpreter (its check fails) until the block goes, and the measurements here start from states, which compile
+  afresh. Measured with the probe build from boot: Hot Wheels to its race (5,300 frames with the presses its race
+  scene was made with: frame 4,700 is lap 1) sets the bit before its hot FPU code is compiled. In the race (frames
+  4,700 to 5,300) no FPU arithmetic goes to the interpreter (add.s, mul.s and the compares 0 a frame); what does is
+  what has no native code at all, sqrt.s 547, floor.w.s 283 and round.w.s 16 a frame, as from the race's state (508
+  and 270 there). So nothing is dropped or compiled again when the bit changes.
+- **Smaller points**: `emitFallback()` now keeps `calls` as it was, as its comment said (its interpreter call is cold
+  code emitted after the block's ends, so this changes no code); the handoff's RP6 line; the summary lines say what
+  change 6 now says of vfim on GCC's builds; part 94 said loads from the scratchpad and VRAM went through cold code
+  (until the direct loads were taken out: below).
+- **Mutations again** against the new tests: the same 48 of 52 caught and the same four equivalent ones left, none
+  newly caught or newly missed; 17 of the caught now fail more checks (the flush bit switched in a block, the threads
+  switched, r0 as every operand). The random programs' data in the region takes its fast path (they check it), but
+  sits in its top quarter, where a load without the rotate already fails the region's test and takes the checked way:
+  "direct loads" is what catches the direct mutations.
+- **After the review** (`f055ec9f3`, master with #254 merged): the 26 scenes' hashes against that master identical in
+  all three renderers (78 of 78; against master before #254, MX vs. ATV's two Vulkan runs differ by #254's own
+  change, as they should).
+
+### The direct loads taken out
+
+The RP6 measured nothing from the direct loads (above), and the review had found loads from the scratchpad and VRAM
+slower for them (out of line, two more taken branches), so `3081c98e2` takes them out: loads are compiled as on
+master (S1 the page table again, which the block endings read straight from, as before; the region, `directBase()`
+and `pageTable()` gone), and nothing else changes (flush to zero, the endings with the steady pages, r0, the count in
+a register on ARM64, the VFPU's helpers and vfim stay as they were).
+
+Tests: "direct loads" is "loads across pages" (the same loads on the same pages, without the region's checks); the
+random programs' data stays in a steady page, their check that it lay in the region gone; tests/psp's page table
+group keeps its check of the steady pages, the region's gone. Mutations: the direct loads' nine went with them; of the
+43 left, 39 are caught, and the same four equivalent ones pass. The 78 hashes against master with #254 (`e78b4a364`):
+identical. The Mac: the same gains, less the direct loads' 0.4 to 0.6% of the instructions ("Numbers"); the suites:
+"Checks".
+
+### Scratch
+
+`~/phobos-work/scratch/cpu-round3`: `build.sh`, `run.sh`, `bench2.sh`, `med.py` (medians: `bench/*.tsv`), `hashcmp3.sh`
+and `queue-hash.sh` (`hash/`, `logs/hash-*.log`), `queue-final.sh`, `cats.py` (the thread by part), `regs.py` and
+`ends.py` (the block map's registers and endings), `dis.py` (a block's guest and host code), `patches/probe-patch.py`
+and `probe2-patch.py` (the interpreter's calls, FCSR), `jmcat.sh` and round 2's block map patches (`prof/`), `mutate3.py`
+(`mut/`), `NOTES.md`.
+
+## Part 95: memory stick files emptied as they're opened keep their bytes (LittleBigPlanet's install), and the runner's file I/O trace
+
+On branch `cursor/psp-installs-2b67`, on master `dd37263c8` (part 92), then merged with master `e78b4a364` (part 93,
+#254: only the docs met, this part after it); part 94 (the CPU's round 3) is another branch's. Clean room: PPSSPP's
+notes on the hardware read as a description of how the PSP behaves (its issue 579's tests on a PSP, the comments in
+its directory file system), none of its code; JPCSP not read. Save states: layout 32. Reviewed independently (changes
+requested: the delayed cut could reach save data master leaves whole) and changed in a second round: **The review**,
+below.
+
+**The problem.** Deep play batch 04's bug 1: LittleBigPlanet (UCUS98744) was blocked at its first boot. Its install
+("Installing Game Data") wrote `PSP/SAVEDATA/UCUS98744INSTALL/GUI.ARC`, 4,352,791 bytes, with its first 4 MiB zero
+(only its last 158,487 bytes held data, though a run stopped part way had found every byte of its first MiB there),
+and from frame ~1596 the game asked for good "Save data load failed because the data is corrupt" and "... because the
+specified file was not found. Retry?". The same with the interpreter.
+
+**The file I/O trace** (`tools/psp-runner --trace-io`; `Kernel::ioTrace`, empty unless a host sets it, not part of the
+machine's state): each call of IoFileMgrForUser's functions a line, `[frame] io:`, then the PSP's time in microseconds
+and the calling thread, the function, the call as the game made it and its answer: a descriptor with its file's path
+and the position the call found it at (`@`), an open's flags (named) and mode, a read's or write's buffer, size and
+the FNV-1a hash of the bytes it moved (`zeros` if they all were), a seek's offset and where from, a status's size, a
+folder entry's name, an ioctl's or devctl's command and buffers; an asynchronous request's due time and result, a line
+of its own as it's done (`done fd N`, with the position then and a read's landed bytes' hash), and a poll's or wait's
+taken result; `(waits)` where the call made its thread wait. The dispatcher calls the I/O functions through
+`traceIo()` when a host traces them, so every way out of each is traced and the functions themselves are untouched; an
+untraced run pays one test of the hook a system call.
+
+**What the trace showed.** The game's file library (its threads are "fios mediathread") copies GUI.ARC from the disc a
+MiB at a time. For each MiB it opens `disc0:/PSP_GAME/USRDIR/archives/gui.arc`, seeks, reads and closes it, then opens
+the memory stick's GUI.ARC with flags 0x02000602 (write, create, truncate, and a bit pspsdk doesn't name), takes its
+status (size 0), seeks to where that MiB goes (0x100000 for the second), writes it and closes it, every request
+asynchronous and waited for. Each open emptied the file: each MiB was written after a hole the seek left, and only the
+last piece, from 0x400000, was left with its data. The game then read GUI.ARC's header (12 bytes at 0, 16 at 0xC) as
+zeros and called its data corrupt.
+
+**What a PSP does.** PPSSPP's issue 579 (2013-2022) is this game. Its developer tested a PSP's memory stick: a file
+written "test", then opened with O_TRUNC again (with the game's 0x02000000 and its SDK version too), sought to 4 and
+written "abc", reads back "testabc"; on `host0:`, a PC's folder through PSPLink, the same reads four zeros and "abc",
+which had first hidden it; opened with O_TRUNC and closed with nothing written, the file is empty. A log of this
+install taken on a PSP (with JpcspTrace, a plugin that logs a game's system calls on the PSP itself), linked from the
+issue, has the same calls, and after them the game reading GUI.ARC back: its header, then 0xB364 bytes at 0x1C.
+PPSSPP's notes: on the PSP, truncating doesn't lose data, and a seek later recovers it; the file is truncated, but its
+data isn't erased (reads find nothing). Not recorded anywhere: the status a file emptied so gives before it's written
+(the JpcspTrace log didn't hook sceIoGetstat).
+
+**What was wrong.** `openFile()` opened an existing file with O_TRUNC through `std::ios::trunc`: the host file was
+emptied then and there.
+
+**The change** (`io.cpp`, `async.cpp`, `kernel.cpp`, `kernel.hpp`, `serialization.cpp`, `system.cpp`, `utility.cpp`,
+`dialogs.cpp`):
+- An existing memory stick file with bytes, opened to write with O_TRUNC, isn't emptied on the host. Its descriptor
+  says it was emptied (`OpenFile::truncated`), holds the PSP's length of the file (`length`), from 0, and the host
+  file's length as the kernel left it (`hostLength`), and holds the host file itself, opened a second time through the
+  C library (`held`), to cut it through.
+- That length is the file's for everything `io.cpp` sees of it, through that descriptor or any other on the file
+  (`fileLength()`): reads stop at it (`readCount()`, synchronous and asynchronous), a seek from the end starts there,
+  sceIoGetstat and a folder's entries give it (`writeStat()`), a write with O_APPEND goes there, and
+  sceNpDrmEdataGetDataSize gives it. So a file emptied so holds nothing, as before.
+- A write raises the length to where it ended (`fileWritten()`), through any descriptor on the file, and the host
+  length with it. A write past the length, after a seek, finds the old bytes still on the host between the length and
+  the write, as on the PSP: LittleBigPlanet's earlier pieces. Past the old bytes, a gap holds zeros (chosen: a FAT
+  stick's would hold whatever its clusters held). Once the length reaches the host length there's nothing left to cut,
+  and the descriptor is a plain one: so each of LittleBigPlanet's pieces is, as it's written.
+- A write that starts at or before the length cuts the file first (`writeFile()`), as a save rewritten from its start
+  is. Chosen, not measured, for the owner's rule on save data: Phobos killed part way cuts nothing, so this leaves no
+  worse than master's emptying at once (the rewrite as far as it got), and before the first write, the old file whole.
+  LittleBigPlanet's profile saves (STORY.SLV, PLAYER.AUT, PS.BIN and the others, opened with 0x02000602 as GUI.ARC is)
+  are written from their starts: each is cut at its first write, as master emptied it at its opening.
+- The cut (`cut()`): the held file shortened to the length, through the held file and never a path, so a file renamed
+  meanwhile is cut where it went, and one removed (and whatever is put at its path) never; only while the held file
+  has the host length the kernel left it (a file written longer or shorter meanwhile by something else isn't cut); and
+  only ever shorter. Made as the
+  file is closed (sceIoClose, sceIoCloseAsync), as the kernel powers on (a program ending or another starting, the
+  machine switched off, as a PSP's kernel closes a program's files as it ends), and as a state is loaded over the
+  program (below); after it, made or not, the descriptor is a plain one. So a file emptied with nothing written ends
+  empty, and one written short of its old length ends where the writing did.
+- The descriptors kept in step with the paths: sceIoRemove drops the cuts of descriptors on the file it removed;
+  sceIoRename moves descriptors on the file renamed, or in the folder renamed, to its new path (their host path and
+  their PSP path, where a state opens them again; the PSP's paths matched whatever their case, as a FAT stick's names
+  are, so a rename may spell them otherwise than the open did); and the savedata utility drops the cuts on the files
+  it writes over in place (the data file, the icons), replaces (PARAM.SFO), erases, or deletes with their save
+  (`dropCuts()`).
+- A file is one file to all of this by the host's own identity of it, not by its path's spelling (`sameHostFile()`:
+  the same path, or `std::filesystem::equivalent`, which compares the file's device and inode, or its volume and index
+  on Windows): two names for one file, a hard link or a host whose names ignore case and whose paths keep a name as
+  it was asked for, share its PSP length, its writes and its cut.
+- Emptied again while another descriptor still keeps its bytes, the file is cut to that one's length first: one length
+  at a time (chosen).
+- A state keeps an emptied file's length and host length (layout 32; older layouts load with none kept), and for one
+  with a cut pending, the FNV-1a hash of the bytes the cut would drop, from the length to the host length
+  (`hashTail()`). Loaded, an emptied file keeps its cut only while its host file still has that host length and those
+  bytes (held again, its length and the hash compared): a save written since, longer, shorter or exactly as long, isn't
+  cut to the state's length. The hash is only made as a state is saved or loaded with a cut pending, over the tail
+  alone: LittleBigPlanet's longest, GUI.ARC's 4 MiB between a piece's emptying open and its write, takes about 6 ms on
+  this Mac; any other state pays nothing. `System::unserialize()` sets the program's
+  files aside as it loads a state: put back untouched if the state is refused, and closed once it has loaded, their
+  cuts made then as closing them would (`Kernel::serialize()` itself lets go of them as they are). So loading a state
+  changes nothing on the memory stick as it loads; once loaded, the files the old session emptied are cut.
+- Unchanged: an empty file (nothing to keep), a file being made, a file opened without O_TRUNC or only to read, the
+  disc. The savedata utility, the dialogs and module loading read save folders' files on the host as they are (chosen:
+  a game doesn't ask them about a file it holds open to write).
+
+**The review.** The coordinator's independent review of the first round (`300e03e14`) found the model of issue 579
+and GUI.ARC right, the suites and CI green, but the delayed cut able to destroy save data master leaves whole, which
+the owner's rules forbid, and gave cases for each (R1 to R7, now tests):
+- The cut went by path. `closeFile()` resized the host file by its name, and `fileLength()`, `fileWritten()` and a
+  second emptying open matched descriptors by name, while sceIoRemove and sceIoRename left open descriptors as they
+  were. R1: a file emptied, removed while open, another renamed onto its name: closing the old descriptor emptied
+  the new file, whose status said 0 meanwhile. R2: an emptied file written short, then renamed while open: never cut.
+  Now the cut goes through the held file, and removing, renaming and the savedata utility keep descriptors in step.
+- A descriptor restored from a state cut whatever had its path as it was closed (R4: a newer 15-byte save cut to
+  "NE"), and `resize_file()` could lengthen a file (R5: a newer 3-byte file padded with zeros to 8). Now a cut only
+  shortens, and only a host file as long as the kernel (or the state) left it.
+- Loading a state dropped the replaced session's cuts, unlike closing, quitting or powering off (R3: a save rewritten
+  shorter, then a state from before it loaded: the file kept its old tail, and the game read it back 10 bytes long).
+  Now the files set aside are closed once the state has loaded.
+- Phobos killed between a rewrite's last write and its close (nothing cuts then) left the old tail where master left
+  the rewrite (R6); a kill is decided by the owner's rule on save data, not by the hardware. Now a write from or
+  before the length cuts at once.
+- Saves written directly with O_TRUNC hadn't been checked (batch 04's go through the savedata utility):
+  LittleBigPlanet's profile saves, below.
+- R7 (a reader and a plain writer opened before an emptying open) only printed what it found, and passed on both; its
+  expectations are checks now (this part's model: the old bytes come back where master read zeros).
+- Not this part's: openFile() never sets a memory stick file's size, which the NPDRM code reads an EDATA's PGD header
+  by, so an EDATA on the stick gets no PGD state (as on master): the owner's area, reported to him.
+
+The second review (of `6b26d4b63`) approved, rechecking each of these with probes of its own (P1 to P7: the held
+handles released on every path, 40 emptied files holding 80 descriptors and none after; at the process's file limit,
+master's emptying at once; folders renamed with emptied files in them; LittleBigPlanet's profile the same as master's
+on every boot), and left three small things, closed in a third round, as the owner's rule is never losing data:
+- P4, the limit the second round chose: a state with a cut pending, loaded after a newer save exactly as long as the
+  host file was, then closed without a write from its start, cut the newer save (to nothing, or to "NEWE"). Now the
+  state keeps the hash of the bytes the cut would drop, and the newer save's aren't them.
+- P7: part 95 said a cut through one of two names for one file could only be dropped, never made on another file. Not
+  so: a write through the other name inside the old length left the host length as it was, so the close cut the write
+  away. Now files are matched by identity: the write grows the emptied file's length, and the close keeps it.
+- `filesMoved()` matched the PSP's paths by their case: a rename spelled otherwise than the open left the descriptor's
+  PSP path behind (a state then dropped it). Now they match whatever their case.
+
+**Tests** (tests/psp): `files emptied as they're opened keep their bytes for a write past the end` (issue 579's test,
+with and without 0x02000000, then nothing written: empty, nothing cut before the close; while emptied, its status 0,
+reads and a seek from its end finding nothing, a write at 3 bringing back 0 to 2, one past its old length bringing
+back the rest and zeros after it; a write before its end cutting it first, its old bytes gone from a gap after;
+written short, ending there as it's written; appended to; emptied again while another descriptor keeps its bytes; a
+state saved with a cut kept: round-tripped, loaded into another machine (the cut kept and made at the close), and
+loaded over a newer save, longer and shorter (the cut dropped, the save left whole, never padded); the kernel loading a
+state letting go of its files as they are; the kernel powering on closing them); `files emptied: the cut reaches only
+the file emptied` (removed while open and a file as long made at its path; renamed while open, its status and cut
+following it; its folder renamed; replaced behind the kernel's back by another program's file as long; written over in
+place, longer and shorter; and renamed spelled otherwise than its open, its PSP path following, a state opening it
+again where it went with its cut); `files emptied: Phobos killed part way` (before any write: whole; written from its
+start: the rewrite; written past its end only: its old bytes with the new ones over them); the reviews' cases, `files
+review R1` to `R7`, `P4` (a state's cut, a newer save exactly as long: its cut dropped as it loads, the save left
+whole, nothing written and with a write past the end) and `P7` (two names for one file, a hard link: a write through
+the other name inside the old length, its status the emptied file's, kept at the close); `utility savedata over files
+the game emptied` (the data file written over in place, as long as it was,
+PARAM.SFO replaced, and the save deleted and made again: each as the save left it once the game closes its
+descriptor); `async files LittleBigPlanet's install` (the game's own calls for four pieces and a short one, the status
+0 at each open: the file ends the disc file's bytes); `files traced` (the trace's lines for an open, a write, a seek,
+an asynchronous read and its completion, a poll, a status and a close, and nothing traced without the hook); `older
+layouts load` with layout 31's states; and tests/psp/ares's states (a file emptied, nothing written, kept whole
+through every refused load, and cut as a good state loads).
+
+The new groups against master (`e78b4a364`, emptying at once): R1 to R6 pass (none of master's cuts can go astray, as
+it makes none later), R7 fails (master reads zeros where the old bytes come back), and so do the checks that pin this
+part's model (the old bytes kept and brought back, a renamed descriptor following its file, a file killed before any
+write kept whole); the savedata utility's group passes. Against the first round's head (`300e03e14`): R1 to R6 fail,
+as the review found, and R7 passes; so do the cut's reach (the replacement as long cut to nothing, the files written
+over cut or padded, the renames not followed), Phobos killed after a write from the start (the old tail kept), and the
+savedata utility's group (the data file written over as long cut to nothing, the new PARAM.SFO cut by its name). The
+first round's evidence stands: with `openFile()` as master had it, the install's group ends with its file zero before
+its last piece. Against the second round's head (`6b26d4b63`), the third round's checks fail: P4 (the cut kept, the
+newer save cut), P7 (its status 10, the file emptied at the close) and the rename spelled otherwise (the PSP path left
+behind, the state dropping the descriptor). The second review's own probes, P1 to P7 as it wrote them, and its R1 to R7,
+pass on the third round (sanitized), P7 now ending "01QQ".
+
+**LittleBigPlanet now** (the branch's runner, a fresh stick, batch 04's script): GUI.ARC is byte for byte the disc's
+`PSP_GAME/USRDIR/archives/gui.arc` (4,352,791 bytes, MD5 39a495311490a365427a8ec3ae78ba88; the disc file's bytes as
+the game read them, dumped by a scratch build), each MiB written with the hash it was read with; no "Save data load
+failed" message. The game goes on through its loading screen, the warning, its title animation and the intro movie
+(Circle skips it) to its first level: Sackboy in the entrance tube, then on the opening stage, walking with the stick
+over the rainbow hill to the PlayStation symbols. One boot from a fresh stick does all of it
+(`deepplay/LittleBigPlanet/`: `fixed-path.txt`, batch 04's presses to frame 3300, then Circle and the stick;
+`run-fx4/`, `sheet-fx4.png`; `z-fixed-install-to-level.png`). The second round's runner does the same, GUI.ARC the
+same bytes (`run-r2a/`, `sheet-r2a.png`).
+
+**LittleBigPlanet's profile saves** (saves written directly with O_TRUNC, which the batch 04 checks, all through the
+savedata utility, didn't cover). The game writes its profile's 18 files in UCUS98744PROFILE (STORY.SLV, PLAYER.AUT,
+PS.BIN and the rest) through its file library: each opened with 0x02000602, its status taken (0), sought to 0, written
+whole and closed. From a fresh stick, a short boot (batch 04's script to frame 2200) installs and makes the profile;
+booted again (the script to 3000), the game rewrites PS.BIN, 51 bytes, over the file there at frame 2786 (MD5
+d383db56… before, cd4396dc… after); booted a third time, it reads those 51 bytes back (the hash it wrote) and writes
+nothing. Master's runner from the same sticks, with the same script and clock, leaves the same files byte for byte
+after the second boot and after the third, with the same savedata requests (`run-r2s1/`, `run-r2s2-*`, `run-r2s3-*`,
+`r2-profile-roundtrip.txt`, sizes and MD5s). The long boot to the first level rewrites PS.BIN twice more and
+CURCOST.CBF and CURCOST.CST once each, each from its start, and a second long boot rewrites the CURCOST files with the
+same bytes; master's runner leaves that stick the same too (`run-r2b-*`).
+
+**Kingdom Hearts Birth by Sleep Final Mix's DATA INSTALL** (batch 04's bug 3), traced and left: not the savedata
+utility's size mode, the free space or the folder check. After the size mode's NO_DATA for "ULJM05775DATA" (as PPSSPP
+answers too) the game starts the system's game data install dialog (sceUtilityGamedataInstallInitStart, frame 1815),
+which part 37 made a dialog that runs and is cancelled, copying nothing. Then a thread of the game's ("DataInstall")
+cleans up after the install: the stick's FAT check (devctl 0x02425823), sceKernelPowerLock, sceIoDopen of
+`ms0:/PSP/SAVEDATA/ULJM05775DATA` (not there: 0x80010002), sceKernelPowerUnlock, sceKernelExitDeleteThread, and "An
+error has occurred. Data installation will be canceled." With an empty ULJM05775DATA made first, the size mode answers
+0, the game asks "Install data for this game already exists. Overwrite it?", and Yes runs the same dialog, the thread
+removes the folder (sceIoRmdir, 0), and the same error follows. The install needs the game data install utility itself:
+copying the disc's install files into the save folder with its PARAM.SFO, its progress and result.
+
+**Checks** (the third round's code). tests/psp: 543 groups, 0 failures, sanitized and unsanitized; tests/psp/ares
+348 checks, 0 failed; the runner's test passes; GCC 13.3 builds the changed kernel and tests with `-Wall -Wextra
+-Werror`. The reviews' R1 to R7 and P1 to P7 pass. LittleBigPlanet from a fresh stick: GUI.ARC byte for byte again
+(`run-r3/`). A state with no cut pending is as the second round wrote it (the hash is only kept for a pending cut), so
+the scenes' and saves' checks below stand.
+
+**Checks** (the second round's code).
+- tests/psp: 541 groups, 0 failures, sanitized (with `detect_container_overflow=0`, this Mac's known false positive) and
+  unsanitized; tests/allegrex 68 groups, 0 failures; tests/psp/ares 348 checks, 0 failed; the runner's test passes.
+  GCC 13.3 (Ubuntu 24.04's, CI's) builds the kernel, the changed tests, the runner and tests/psp/ares's system test with
+  `-Wall -Wextra -Werror` (the whole core's other warnings, in ge/four.cpp, are master's).
+- The 21 scenes in Software (master's bench runner against the branch's, 100 frames from each scene's state, every
+  frame's picture and VRAM, then RAM and the machine's state): every frame's picture and VRAM, and the RAM, the same in
+  all 21. The machine's state differs as layout 32 makes it: the header's version, and 17 bytes for each open file (0
+  to 85 bytes in all). The branch writing its states in layout 31 (a scratch build: none of an emptied file's fields,
+  version 31) gives master's states byte for byte in all 21. The first round's emulation thread's host
+  instructions a frame were within their noise (three rounds taking turns on the three that moved most in one pass:
+  Death Jr. II 100.6 and 94.8 M, Hits Remixed 45.1 and 43.6, Sonic Rivals 54.9 and 55.1, master's first); the second
+  round adds nothing to a frame that doesn't open a file emptied.
+- Batch 04's saves and installs (master's runner against the branch's, each from the same stick, the clock pinned
+  where the run boots): Gundam NEXT PLUS's system data, Kurohyou 1's install data, Lunar's system data, Killzone's
+  and Lumines' profiles, La Pucelle Ragnarok's and MediEvil's game saves come out the same files byte for byte, with
+  the same savedata requests, and the same as the first round's. Each game booted again with the branch's runner loads
+  its save (54,020, 51,200, 152, 1,664, 18,448, 366,760 and 32,850 bytes read) and changes nothing on the stick.
+  (These save through the savedata utility, which writes its files itself; LittleBigPlanet's profile, above, doesn't.)
+- LittleBigPlanet booted again on its installed stick lists INSTALL and PROFILE, reads GUI.ARC back, installs nothing
+  and says nothing, and goes on to its logos and intro, and to its first level with the same presses.
+
+**What's left.** The game data install utility (Kingdom Hearts BbS FM's DATA INSTALL; Gunhound EX's cancels too).
+What a PSP's sceIoGetstat says of a file emptied so before it's written, and what a gap past the old bytes holds, if a
+test on a PSP ever records them. What the cut can't tell from a file left as it was: loading a state, a newer save
+whose bytes past the state's length are byte for byte the ones the state hashed (or collide with their 64-bit hash);
+within a session, another program on the host writing the file in place, as long, while a cut is pending (only the
+length is checked then; Phobos's own savedata utility drops the cut on what it writes).
+
+## Part 97: NPDRM EDATA decrypted — the PGD past the EDATA's header, on the memory stick too, its size and end the data's; a PGD file's end its data's
+
+On branch `cursor/psp-pgd-edata-2b67` (draft PR #259), on master `14b181707` (part 95, #257, after part 94, #256);
+part 96 is #258's, still open. The owner's area (io.cpp's PGD and sceNpDrm code, which parts 88 and 95 reported to
+him and left alone): this is his proposal of 13 Oct (an investigation and a patch, `~/phobos-work/scratch/pgd-offset/`:
+`REPORT.md`, `proposed-fix.patch`), rebased at his request (14 Oct) onto part 95's model of a memory stick file's
+length, to merge once CI is green and an independent review finds nothing. Clean room: the PSP's behaviour from
+"tpu"'s decompilation of the firmware's PGD layer (kirk_engine's `npdrm/dnas_ida.c`) and his `npdrm/edata.c` and
+`npdrm/pgd.c` (written from npdrm), the PSP Developer Wiki's PSP_EDAT and PGD pages, uOFW's `iofilemgr_kernel.h` (the
+names of the flag and the commands), and codestation's npdecrypter (a plugin that dumps DLC through the firmware's own
+functions on a PSP); PPSSPP read only as a design cross-check (its npdrm's order of the two ioctls, its GetDataSize
+asking the PGD layer), nothing copied or translated; JPCSP not read. Save states: unchanged (layout 32, part 95's): no
+field added, as `pgdDataOffset` changes meaning once the descriptor is read (below).
+
+**The problem.** Part 88's review remarked that `pgdDescriptor()` read a PGD's header at file offset 0 while
+`sceNpDrmEdataSetupKey` set the data's start to 0x90. A **PGD** is the PSP's encrypted file: a 0x90-byte header whose
+encrypted descriptor gives the data's key, size and start (usually 0x90, counted from the PGD's start), the data, then
+a table of block MACs. A UMD game's data files are PGDs whole; a download's DLC is **EDATA** on the memory stick, a
+`"\0PSPEDAT"` header and then a whole PGD. Four faults kept EDATA raw, each enough on its own:
+- A memory stick file has no `open.size` (kept for the disc's files alone), so SetupKey read `min(8, 0)` bytes of
+  magic and never knew an EDATA. Real DLC lives on the stick: this is the fault that matters in practice.
+- The PGD's header was read at byte 0, which holds the EDATA's header: its MAC check failed and reads stayed raw (an
+  EDATA in a disc image, which SetupKey did recognise).
+- The data was taken from 0x90 (SetupKey's offset kept as the data's start); it starts at 0x90 plus the descriptor's
+  0x90, 0x120.
+- `sceNpDrmEdataGetDataSize` gave the file's size, not the PGD's data's.
+
+And ioctl 0x04100002's value was taken as where the encrypted data starts, the header still read at 0; and a UMD PGD
+file's end (SEEK_END) was the whole file's, header and block MACs and all: Black Wolves Saga's INSTALL.DNS ended at
+0x0ba9d300 where its data is 0x0b7be2d4 bytes.
+
+**What a PSP does.**
+- The firmware's PGD layer (tpu's decompilation) takes a file opened with 0x40000000 (uOFW's `SCE_FGAMEDATA`) on any
+  device, and refuses one opened to write (0x80510201). 0x04100002 stores where the PGD starts in the file;
+  0x04100001 (`SCE_GAMEDATA_SET_SECURE_INSTALL_ID`, the key) seeks there, reads the 0x90-byte header, checks its
+  magic, key index and MACs, decrypts the descriptor, and puts the data's start at the PGD's start plus the
+  descriptor's data offset, the block MACs after the data; 0x04100010 answers the descriptor's data size; lseek works
+  in data coordinates, each result clamped to that size, and is refused before the PGD is opened (0x80510206).
+- An EDATA (the wiki's PSP_EDAT page): `"\0PSPEDAT"`, the content ID at 0x10, an ECDSA signature at 0x58; 0x80 bytes,
+  or 0x90 with the licence's MAC at 0x80 (DLC has it, DOCINFO.EDAT doesn't); then the body, "packed file, PGD file
+  usually". tpu's `edata.c` takes the PGD's offset from the low 24 bits of the word at 0x0c, flags in its top byte.
+- On hardware, npdecrypter opens an EDAT with 0x40000001, calls `sceNpDrmEdataSetupKey` and reads from offset 0: file
+  position 0 is plaintext byte 0, both headers hidden.
+- So a download's EDATA has its PGD at 0x90, its data at 0x120 and the descriptor's size; a UMD data file its PGD at 0
+  and its data at 0x90, as Phobos already read them.
+
+**The change** (`io.cpp`, `kernel.hpp`: the owner's proposal, with part 95's meeting point below).
+- `pgdDataOffset` says where the PGD starts until its descriptor is read (0 for a UMD data file, an EDATA's offset, or
+  0x04100002's), then where its data starts (that plus the descriptor's offset: 0x90 for a UMD file, 0x120 for a
+  download's EDATA). Every state a game in the library can reach loads with the same meaning: a UMD file's 0 before
+  and 0x90 after; master readied no stick file.
+- `pgdDescriptor()` reads the header where the PGD starts, on the disc or the stick (`pgdFileLength()`,
+  `pgdFileRead()`), and checks the descriptor against the PGD's size, from its start to the file's end.
+- `sceNpDrmEdataSetupKey` reads the first 16 bytes from either device, takes the PGD's offset from the header's word at
+  0x0c, and readies the file only where `"\0PGD"` is there: a plain file, or an EDATA holding something else (a
+  module), reads as it is. `sceNpDrmEdataGetDataSize` gives the descriptor's data size for an EDATA readied so, and
+  anything else's size as before.
+- ioctl 0x04100001 looks for `"\0PGD"` where 0x04100002 put the PGD, or at byte 0, and leaves a file already
+  unlocked as it is (its descriptor came out under the key its own header's MAC holds); 0x04100002 means where the
+  PGD starts.
+- `seek()`: an unlocked PGD file ends where its data does, and no seek goes past that end: each result is clamped to
+  the data's size, from the start, from where the file is or from its end, synchronous or not, as the PGD layer's are
+  (the review's point, below).
+
+**Part 95's meeting point** (the rebase). The proposal was written on `3228b825d`; on `14b181707` it fails at
+`seek()`'s hunk, and applied 3-way it has no textual conflict, so the models were reconciled by hand:
+- Part 95's `fileLength()` gives a memory stick file the length the PSP sees (short of the host file's while a
+  descriptor that emptied it as it was opened keeps its bytes), which reads, seeks, the status and GetDataSize see.
+  The proposal's `pgdFileLength()` took the host file's own; it takes `fileLength()`'s now, and `pgdFileRead()`
+  refuses bytes past it, so an EDATA emptied through another descriptor holds no header to ready (the one its host
+  file still keeps is past the PSP's end). Both are the kernel's members now, as `fileLength()` is.
+- `seek()` changes the end both ways: a stick file ends at its PSP length (part 95), an unlocked PGD at its data's end
+  (the proposal). Both rules are kept. A descriptor that emptied its file is never a PGD: a PGD file is open only to
+  read (the disc's can't be opened to write, and SetupKey now readies only a file open to read alone), and only a
+  descriptor opened to write empties its file as it's opened. The check follows the PGD layer, whose open refuses a
+  0x40000000 file opened to write (0x80510201), and costs nothing a game does: every EDATA open in the library's runs
+  is 0x40000001 or 0x40004001, and master readied no stick file at all. The two rules do meet on another descriptor:
+  a readied EDATA that a second descriptor empties keeps its data's end, while its reads find nothing past the PSP's
+  length, as the PGD layer, which answers from its descriptor, plausibly does too.
+- Save states: no field added; layout 32 as part 95 left it.
+
+**Tests** (tests/psp): the proposal's three groups and `psp_pgd::edata()` (`tests/psp/pgd.hpp`: a PGD wrapped in an
+EDATA's header, the PGD's offset in the word at 0x0c), one for the meeting point, and one from the review.
+- `download DRM on an EDATA (a PGD past its header)` (files.cpp): a stick EDATA with its PGD at 0x90 and at 0x80, the
+  licensee key not the PGD's version key: SetupKey, GetDataSize, a whole read, one from the middle and one past the
+  end; and an EDATA holding a module, read raw.
+- `disc PGD past a file's start` (disc.cpp): 0x04100002 with 0x800, then the key: the file reads as its plaintext;
+  and an EDATA on the disc, through SetupKey.
+- `PGD files end where their data does` (disc.cpp): SEEK_END before the key (the file's end) and after it (the
+  data's), 100 bytes back from the end and the read there, and a stick EDATA's end.
+- `PGD files' seeks stop at their data's end` (disc.cpp, the review's cases): a UMD data file and a stick EDATA, 3000
+  bytes of data each, sought to 5000 from the start (3000), 1000 back from there (2000) and read (1000 bytes), 100
+  past the end (3000), 200 back and read (200 bytes), 500 on from the end (3000), and through sceIoLseekAsync (5000:
+  3000) and sceIoLseek32Async (1000 back: 2000, then 1000 bytes read).
+- `download DRM on an EDATA beside files emptied as they're opened` (files.cpp, the rebase's): beside a save emptied
+  as it's opened, the EDATA's size and end are its data's and it reads as its plaintext, whole and from 100 bytes
+  before its end; the emptied save ends at its PSP length (0, then 5 after a write past it, its host file still
+  "012xy56789", "012xy" once closed), SetupKey leaves it plain (it's open to write) and GetDataSize gives 5; then the
+  EDATA emptied through another descriptor: SetupKey on that one leaves it plain, a descriptor opened on it to read
+  isn't readied either, its size, end and reads 0, while the host file keeps the EDATA until the emptying
+  descriptor's close cuts it.
+
+Against master (`14b181707` with the first round's tests, unsanitized): the four groups fail, 25 checks, the other
+543 pass. The EDATA group fails 10 (the size the file's, 0xd18 and 0xd08, the reads raw, the read past the end 0x192
+bytes where the data leaves 0x32); the meeting point's 6 (the EDATA's size, end and reads); the disc offset's 5; the
+end's 4 (the end at 3144, the whole file, so 100 bytes back from it is past the data and the read there gets nothing;
+the EDATA's end). Against the proposal applied 3-way without the hand reconciliation: only the meeting point's group
+fails, 3 checks: the EDATA the PSP sees emptied is readied, GetDataSize 3000 through both descriptors and the reader's
+end 3000, where they're 0. Against the first round's head (`8d3d08dbb`, no clamp) with the review's group: it alone
+fails, 22 checks, each file's 11 (5000, then 4000, a read of nothing and so not the data, 3100, 2900 and a read of
+100 bytes, 3500, the asynchronous 5000 and 4000, and a read of nothing), and the other 547 pass. The branch: 548
+groups, 0 failures.
+
+**Games** (`~/phobos-work/scratch/pgd-edata`: master's runner and the branch's, each with the file I/O trace, part
+95's `--trace-io`, made to trace scePspNpDrm_user's calls too in a scratch build; the clock pinned with
+`--start-time`; a fresh stick in a scratch folder for each run; the presses and frames the investigation's).
+- **The DLC games**, with the investigation's synthetic EDATA at their paths (the test helper's PGD, 0x4000 bytes of
+  data, wrapped at 0x90: 0x4160 bytes in all). Master hands every one the raw `"\0PSPEDAT"` bytes and the file's
+  size; the branch the plaintext (each read's FNV-1a hash in the trace is the plaintext's at that position) and the
+  data's size:
+  - Metal Slug XX (MSXXLEONA.EDAT, opened 0x40000001 at frame 7): GetDataSize 16736 -> 16384, its 0x80-byte read
+    raw -> plaintext.
+  - SOCOM Fireteam Bravo 3 (unlock0.edat, frame 64): SEEK_END 16736 -> 16384, then a single read of all of it, raw
+    -> plaintext. SOCOM reads until it has as many bytes as the end said: the end the data's, it reads once (with the
+    offsets fixed and the end left the file's, the investigation saw 89,394 empty reads in 600 frames).
+  - Super Stardust Portable (KEYFILE1.EDAT, frame 68): its 10-byte read raw -> plaintext.
+  - Disgaea 2 (DL_US_00.EDAT, frame 10) and La Pucelle Ragnarok (DL_JP_00.EDAT, frame 4), both through the
+    asynchronous calls (opened 0x40004001): sceIoLseekAsync's end 0x4160 -> 0x4000, an 8-byte asynchronous read raw
+    -> plaintext. Each first opens the file plain (0x1) and seeks its end: 0x4160 on both runners, as it isn't
+    readied.
+  - No game takes the made-up DLC (Metal Slug XX says "EDATA file : read file error", "leona disable" on both): the
+    runs show the data reaching the game, not a game using it.
+- **The UMD PGD games**, 1200 frames, the traces compared line for line and the captures at 600 and 1200 byte for
+  byte. 7th Dragon 2020, Dragon Ball Z: Tenkaichi Tag Team, God of War: Ghost of Sparta and Naruto Shippuden: Ultimate
+  Ninja Impact: identical. Black Wolves Saga, Shining Blade and Valkyria Chronicles III, which seek to their PGD
+  files' ends right after giving the key: identical but for those answers (and the seek back from there): Black
+  Wolves Saga's INSTALL.DNS 0x0ba9d300 -> 0x0b7be2d4 and INSTALL2.DNS 0x23fb9040 -> 0x236dd834, Shining Blade's
+  DATA.BIN 0x133f96b0 -> 0x12f3c6f8, Valkyria Chronicles III's 0x29f941b0 -> 0x2953f145. Naruto's seeks are all from
+  the start (sceIoLseekAsync, whence 0), answered as before: three of the seven seek to the end in these runs, not
+  the four the investigation counted. Those four again to 3000 frames (captures at 1500, 2000, 2500, 3000), where
+  Shining Blade and Valkyria Chronicles III seek to the end a second time: the same. Two captures differed once
+  (Naruto's at 1200, Shining Blade's at 2500), each master's own noise: master's runner run twice more gave the
+  branch's picture byte for byte both times.
+
+**The review.** An independent review of `8d3d08dbb` (read-only, with probes of its own and its own runners) found no
+blockers: the offsets as tpu's `edata.c` and the wiki have them, the scope clean (`pgd.cpp` and the serialization
+untouched), no game opening an EDATA to write, master's states loading with the same meaning, God Eater 2's English
+patch EDATs (PATCH.EDAT, SYSTEM_UPDATE.EDAT, plain files opened with 0x40000001) tracing and capturing as master's,
+and the four new groups failing on master. Its should-fix, taken in a second round: `seek()` didn't clamp an unlocked
+PGD to its data's size, as tpu's decompilation does (`if(offset>file_size) offset = file_size`, for every seek) and as
+this part said: on 3000 bytes of data, SEEK_SET 5000 gave 5000 where a PSP gives 3000, then SEEK_CUR -1000 4000 and a
+read of nothing (a PSP: 2000 and 1000 bytes), SEEK_END +100 3100, and sceIoLseekAsync the same. Now every seek of an
+unlocked PGD is clamped (the test above). No game run here or in the review seeks past a PGD's data end: the second
+round's runner gives the first round's traces line for line, and its captures byte for byte, in all sixteen of this
+part's game runs. Its wording points, taken: the read-only check follows the decompilation (its open refuses a
+0x40000000 file opened to write) rather than being a guess, and the two end rules do meet on a reading descriptor
+whose readied EDATA another descriptor empties.
+
+**Checks** (the second round, `3d500b9e2`). tests/psp 548 groups, 0 failures, sanitized (`detect_container_overflow=0`)
+and unsanitized; tests/psp/ares 348 checks, 0 failed. On master with all five new groups: the five fail (47 checks:
+the first round's 25 and the review's 22). The five DLC games, the seven UMD games and the four long runs again on the
+second round's trace runner: each trace and capture the first round's. The 21 scenes in Software again with the
+second round's bench runner: all 102 hashes master's in all 21. CI green on the head.
+
+**Checks** (the first round, `61ddbad0e`). tests/psp 547 groups, 0 failures, sanitized and unsanitized; tests/allegrex
+78 groups, 0 failures; tests/psp/ares 348 checks, 0 failed. The 21 scenes in Software (the kit's bench runner, master's
+against the branch's, 100 frames from each scene's state, every frame's picture and VRAM settled, then RAM and the
+machine's state): all 102 hashes the same in all 21, the state too (no layout change).
+
+**Confidence, and what's left** (the investigation's, and the review's additions).
+- High on the format and the offsets, and on the stick's missing size: tpu's decompilation, his `edata.c` and
+  npdecrypter's behaviour on hardware agree, and so does the wiki; synthetic PGDs and a real UMD PGD wrapped in an
+  EDATA (scratch only) read as they should.
+- Medium on real DLC end to end: no real encrypted DLC EDATA was available, so no game has been seen to take real DLC.
+  The library holds none (no disc image carries an EDATA; God Eater 2's DLC files are plain).
+- The licensee key isn't the PGD's version key (npdrm derives that from it and the EDATA's header): the fix relies on
+  `pgd.cpp` recovering the version key from the PGD header's MAC, as master already does. That works for drm type 1
+  (MAC types 1 and 3, cipher type 1); other drm types use per-console KIRK commands `pgd.cpp` doesn't have, and are
+  unsupported, as before.
+- The PGD offset 0x80 (an EDATA without the licence's MAC) rests on the wiki's examples alone; the fix reads whatever
+  the header says.
+- 0x04100002's argument: the investigation left open whether it's the offset or a pointer to it; the review read the
+  decompilation as storing the value itself, where Phobos reads the word it points to (below). No game in the
+  library sends it.
+- Not done, as before: PGD ioctls on stick files (refused), 0x04100010, SetupKey's error returns (no licensee key
+  set, say), and ECDSA and licence checks (skipped on purpose). And three the review found, none of which a game in
+  the library does:
+  - SetupKey ignores the 0x40000000 flag: an EDATA opened without it (plain, 0x1) is decrypted, where a PSP's PGD
+    layer, which hooks only files opened with it, would read it raw.
+  - 0x04100002's argument is read as a pointer to the offset; tpu's decompilation stores the value itself. Moot while
+    no game sends it.
+  - SEEK_END before the key gives the whole file's size, where the PGD layer refuses a seek before the PGD is opened
+    (0x80510206): master's behaviour, unchanged.
+- Scratch: `~/phobos-work/scratch/pgd-edata` (`NOTES.md`; `trace-patch.py`, the runners' NPDRM lines; `games.sh`,
+  `check-edata.py`, `compare-umd.sh`, `repeat.sh` and `runs/`, the game checks; `tests.sh` and `logs/`, the suites,
+  `src-before/` and `io-3way.cpp` the trees before the fix and before the reconciliation; `hashkit/`, the scenes).
+  Nothing was run on the RP6.
+
+## Part 98: ticks as RFC 2822 and RFC 3339 text (MediEvil's save details), a list save to its list's names (Lumines II), the depth-view loads' test deterministic
+
+On branch `cursor/psp-small-fixes-2b67` (draft PR #260), on master `cc0638372` (part 97, #259); part 96 is #258's,
+still open. Deep play's batch 04 bugs 4 and 5 (both low), and a test that failed now and then on a loaded Mac. Clean
+room: the PSP's behaviour from pspautotests' `rtc/convert` (recorded on a PSP), uOFW's decompilation of the rtc
+module (`src/kd/rtc/rtc.c`, firmware 6.60) and Phobos's own model of the save dialog; PPSSPP's sceRtc read only as a
+design cross-check (it writes the same shape, but its RFC 3339 hundredths are a constant `.00` and its bad pointers
+-1, "not well tested": neither taken), nothing copied or translated; Vita3K's SceRtc read too (the Vita's library
+keeps these functions; its four are empty stubs, nothing taken); JPCSP not read. Save states are unchanged: no field
+added (`GE::Drawing::held` isn't state).
+
+### 1. MediEvil Resurrection's blank save details: sceRtcFormatRFC2822 and its family
+
+**The problem.** Batch 04's bug 4: MediEvil Resurrection calls sceRtcFormatRFC2822LocalTime (NID 0x7de6711b) just
+before its pause menu's SAVE GAME, and Phobos had none of the family (sceRtcFormatRFC2822, sceRtcFormatRFC3339 and the
+two LocalTime forms). The call did nothing ("not implemented yet") and the save's PARAM.SFO had an empty
+SAVEDATA_DETAIL, the line a PSP's save list shows under the save's title. Cube calls it too, as it makes its profile:
+its detail's second line came out as a stray byte (`"0% Complete.\n\x04"`, whatever the game's buffer held).
+
+**What a PSP does.**
+- pspautotests' `rtc/convert` recorded on a PSP (the lines Unknown W. Brackets added in 2013, `116693b781`), with no
+  time zone: 2012-01-30 02:12:15 and 900 microseconds as `Mon, 30 Jan 2012 02:12:15 +0000` and
+  `2012-01-30T02:12:15.00Z`; 2010-09-20 07:12:15 and 500 microseconds alike; and, after sceRtcParseDateTime's
+  failures, tick 0 as `0001-01-01T00:00:00.00Z`.
+- The lines those replaced (recorded at the test's first version, `789720b617`, before any emulator had these
+  functions) came from calls with the wrong signature: the text's address the test's 16-byte date, the tick the
+  buffer the test then printed, the zone 256 (the buffer's size). The PSP's text ran on past the date into that
+  buffer, so each call's tick was the previous text's bytes 16 to 23 (the first's, zeros), and what was printed is
+  each text from its 17th byte: ` 04:16:00 +0416`, ` 14:48:07 +0416`, `:15.71+04:16` and `:07.29+04:16`. Rebuilt so
+  (the review's reconstruction, `~/phobos-work/scratch/review-260/py/garbage.py`), the ticks give those texts
+  exactly: the time moved by the zone, written as hours and minutes (`+0416`, and `+04:16` in RFC 3339,
+  whose UTC is `Z`); the seconds' hundredths cut, not rounded (the last tick's 299,386 microseconds print `.29`);
+  and 16 characters before the 17th: tick 0's `Mon, 01 Jan 0001` (the day in two digits, the year in four), and the
+  other three ticks' years, 110124, 110124 and 109990, in four characters too. Which four for those years, and their
+  days of the week, fell in the 16 bytes nothing printed.
+- uOFW's rtc: the LocalTime forms check both pointers against the caller (`pspK1PtrOk`: an address with its top bit
+  set, the kernel's, is refused to a program) and call the zone's form with the two zone settings added
+  (`ctx.cUnk + ctx.dUnk`, the time zone and daylight saving time, as its local clock and its conversions use them).
+  RFC3339LocalTime, whose body uOFW gives as checked against the firmware's code ("ASM OK"), refuses with
+  PRIV_REQUIRED (0x80000023); RFC2822LocalTime, whose body it doesn't mark so, with INVALID_POINTER (0x80000103). The
+  two forms with a zone aren't worked out there.
+
+**The change** (`rtc.cpp`, `system.cpp`, `kernel.hpp`, `kernel.cpp`). `rtcFormat()` reads the tick (microseconds
+since 0001-01-01 00:00:00 UTC, as sceRtcGetCurrentTick gives it, sceRtcGetTickResolution's 1,000,000 a second), moves
+it by the zone's minutes, and writes `Ddd, DD Mon YYYY HH:MM:SS +HHMM` or `YYYY-MM-DDTHH:MM:SS.hh` and `Z` or
+`+HH:MM`, then a NUL, and returns 0. The LocalTime forms take the zone the system's settings give, `localZone()`: the
+host's zone at the clock's now and an hour more while its daylight saving time is kept, the two settings
+sceUtilityGetSystemParamInt reports (one function now for it and for sceRtcConvertUtcToLocalTime, which each worked it
+out themselves). As recorded: the day in two digits, the hundredths cut, the year in four characters.
+Chosen where no recording says: which four past the year 9999 (the last four digits of the year sceRtcSetTick gives,
+in its 16 bits, as uOFW's rtc builds its local clock's date with sceRtcSetTick: the largest tick, the year 60267
+there, is `0267`), and such a date's day of the week (its own day's); a zone west of UTC as `-` and its size; a
+pointer with its top bit set refused as uOFW has the LocalTime forms refuse it, and by the forms with a zone with
+PRIV_REQUIRED, as the module's other functions; a pointer outside the program's memory, where a PSP would fault,
+INVALID_POINTER, as the tick arithmetic's. Nothing is written when refused.
+
+**Test** (`kernel ticks as RFC 2822 and RFC 3339 text`, tests/psp/power.cpp): the recordings above, the old four calls
+rebuilt as a chain (each tick the previous text's bytes 16 to 23, the zone 256; each text from its 17th byte as
+recorded); the zone of 256 minutes, with hundredths; a zone west of UTC across a year's end (`Thu, 31 Dec 2026
+22:00:00 -0500`); zones of 330 and -90 minutes; a day below 10; every month's and day's name; hundredths cut
+(`23:59:59.99Z`, still the same day); the largest tick (`***, 19 Jan **** 08:01:49 +0000`: its date as
+`rtc/arithmetic` recorded sceRtcSetTick giving it, the year four characters, which four and the day of the week left
+out); the clock's own tick; the LocalTime forms with the host in New York in summer (`-0400`) and in winter (`-0500`,
+for the same July tick: the settings' zone for every tick), in Tokyo (`+09:00`) and in UTC (`Z`); only the text and
+its NUL written; and the refusals (the kernel's addresses for the text and the tick, address 0, a tick or a text
+running past RAM's end), nothing written. Every expected text was worked out apart from the code (Python's calendar,
+Howard Hinnant's days-to-date for the largest tick). On master it fails 125 checks: nothing is written, and the four
+functions are "not implemented". On the first round's head it fails 5: the old chain's three texts after the first and
+the largest tick's two, each with its year in five characters.
+
+**Games** (master's runner and the branch's, the batch's runs on fresh copies of the batch's sticks, one runner at a
+time; `~/phobos-work/scratch/small-fixes/savecheck.sh`):
+- MediEvil Resurrection (from `st-t2.bin` with `sv.txt`, 600 frames, a copy of `stick-t2`): master writes
+  SAVEDATA_DETAIL `""` and notes the missing function; the branch writes `Wed, 14 Oct 2026 05:46:56 -0400` (the
+  state's clock, in the Mac's zone), with no note, DATA.BIN and ICON0.PNG byte for byte master's, the savedata trace
+  line for line. The next boot's LOAD GAME (`rb.txt`, 4800 frames, on a copy of the branch's stick) list-loads it
+  (`read 32850`), the stick unchanged. The second round's runner writes the same save, byte for byte.
+- Cube (`script.txt` from boot, a fresh stick, the clock pinned): master's detail `"0% Complete.\n\x04"`, the
+  branch's `"0% Complete.\nMon, 13 Oct 2025 20:00:24 -0400"`; PROFILE.PRO and the icons byte for byte master's. The
+  next boot's autoload (`reload.txt`) reads it back (`read 2908`).
+
+### 2. Lumines II's list save: GAME01, not GAME
+
+**The problem.** Batch 04's bug 5: Lumines II saves its profile by a list save with the save name `GAME` and the list
+`GAME01`, `GAME02`, `GAME03`, focus 7 (the first new). Phobos's answer saved it to `ULUS10183GAME`. The next boot's
+list load (focus 3, the latest) took that folder (a list load shows the request's own save where it's there) and
+wrote `GAME` back, and the save after it (focus 0, by name) went there again. It round-tripped in Phobos, but no PSP
+makes that folder: a PSP's dialog wouldn't show Phobos's profile, and a profile carried over from a PSP (in GAME01)
+would sit beside Phobos's saves, never written to by them.
+
+**What a PSP does.** A list save's dialog shows the list's names (saveNameList), each there or new, and saves to the
+one the player chooses, writing its name back into the request; the request's own save name only picks what focus 0
+(by name) focuses. Phobos's front end for the dialogs (`dialogSaves()`) already showed the list's names alone; the
+automatic answer (`savedataUnshown()`, for a dialog no front end shows: the runner's, and the app's with "Dialogs"
+off) took the list's first name only when the save name was empty, `<>` or a pattern, and a plain one as it was,
+whether the list held it or not.
+
+**The change** (`dialogs.cpp`; the comments in `utility.cpp` too). The automatic answer to a list save looks at the
+saves its dialog shows (`dialogSaves()`). A plain save name that isn't among them, and whose own folder isn't on the
+memory stick, names none of them: the list's first name is taken, as for none (the earlier choice, the first whatever
+the focus, where the automatic answer's later loads find it), but for focus 7 or 8, the first or last new slot, which
+take the slot the dialog focuses (on a fresh stick, as here, focus 7 focuses the first, GAME01). Where the slot it
+would take is on the stick (every slot there for focus 7 or 8, whose focus then falls back to the first; the list's
+first for the others), the request's own name is kept, as master keeps it: a save the game still has is never written
+over. Where its own folder is on the stick, made so by an older Phobos, the name is kept too, as master keeps it: an
+upgraded player's GAME stays GAME, and Phobos never makes the second folder. A name its list holds is still that save:
+every other plain-named list save in deep play's logs names one of its list's (La Pucelle Ragnarok's LAPUCELLE000 with
+focus 0, Gunhound EX's GHSAVE00 with 1, Manhunt 2's 000 with 7, ULUS10476's USER0 with 3).
+
+**Test** (`utility savedata list saves go to their lists' names (Lumines II)`, tests/psp/utility.cpp), each save's
+bytes its own so that one written over shows: on a fresh stick, `GAME` beside GAME01-GAME03 with focus 7 goes to
+GAME01, written back, and the trace shows it chosen; the next load (focus 3) takes GAME01 and writes it back, and the
+save by that name (focus 0) goes there again. `GAME`, its folder not there, beside GAME01: focus 7 goes to GAME02 and
+focus 8 to GAME03, GAME01 kept; on an empty stick focus 0 goes to GAME01. With every slot there (focus 7 and 8), or
+the list's first there and no GAME (focus 0), the save goes to GAME, as master saves it, no slot's bytes changed. An
+upgraded player's GAME: its load takes it and the save by its name goes there, no GAME01 made; then with a GAME01
+beside it dated before it (the review's case A), the load takes GAME and the save by GAME's name goes to GAME, GAME01
+kept. A GAME01 whose PARAM.SFO is broken (case B): DATA_BROKEN, the new profile's save (focus 7) goes to GAME02,
+GAME01's data kept, and the next load takes GAME02. LAPUCELLE000 (focus 0) and Manhunt 2's 000 (focus 7, twice: the
+second over the first, not to 001) as before. On master it fails 11 checks; on the second round's head 6 (every slot
+there for focus 7 and 8, the list's first there for focus 0: each save sent over GAME01); on the first round's head 13
+(those six, focus 7 and 8 writing over GAME01 beside it, the upgraded player's save made into a GAME01, the stale
+case's load and save, case B's save over GAME01 and the load after it); the La Pucelle and Manhunt checks pass on all
+three, as they should, and the new all-slot checks on master, which keeps the request's own name.
+
+**Games.** Lumines II, batch 04's repro (a fresh stick, `script.txt`, 2200 frames, the clock pinned): master writes
+`ULUS10183GAME`; the branch `ULUS10183GAME01` (`[001515] ... focus 7, chosen "GAME01" ... -> 0x00000000, save
+"GAME01"`), DATA.BIN, ICON0.PNG and PIC1.PNG byte for byte master's, PARAM.SFO apart from its directory's name.
+The next boot (`t1.txt`, 1700 frames, on a copy of the branch's stick) list-loads GAME01 (`focus 3, chosen "GAME01"
+... read 18488, save "GAME01"`), goes straight to the menu as batch 04's reboot did (the first boot's profile screens
+skipped), and its save at 1215 names GAME01 (focus 0) and goes there.
+
+### 3. The depth-view loads' test made deterministic
+
+**The problem.** `ge loads through the depth buffer's views wait for the threads` (tests/psp/ge.cpp) checks that a
+batch drawing the depths is still being drawn right after the list is queued, else the loads it then makes would wait
+for nothing. On a loaded host the drawing threads could finish the batch before the test looked: `drawing = 0x0,
+expected 0x1` in the colinsave, npdrm-modules, round6 and cpu-round3 runs, each passing when run again.
+
+**The change.** `GE::Drawing::held` (`ge.hpp`, `threads.cpp`): while it's set, the workers take no batch (one more
+term in their wait's condition, read under the mutex). Nothing but the test sets it. The test holds them from before
+the list is queued till it has seen the batch still drawn, then either lets them go as the loads come (the test as
+it was: the workers drawing while the CPU runs on, whichever finishes first) or holds them through the loads, which
+must then wait for the batch, drawing it themselves. Both give the one thread's depths, at two and four threads,
+compiled and interpreted.
+
+**Shown.** With a 200 ms sleep added just after the list is queued (scratch only), master's test fails its
+precondition at both thread counts with both engines (4 checks, the logs' message); the branch's test with the same
+sleep passes, sanitized.
+
+### The review
+
+An independent review of `2a45e6531` (with its own runner and probes, `~/phobos-work/scratch/review-260/`) asked
+for changes over one data-safety blocker. The first round sent every unlisted plain name to the list's first name,
+even where that save was on the stick, so a list save could go over a save the game still had:
+- Case A, an upgraded player: the first save after the upgrade made GAME01 beside the old GAME. Which of the two a
+  list load takes is the one whose PARAM.SFO is dated later (whole seconds, ties to GAME01). With GAME dated later
+  (a copy or restore that doesn't keep file times, a device clock that was behind), the load took the stale GAME, and
+  the game's next save, by GAME's name (focus 0), went over GAME01: the newest progress lost. Master never makes
+  GAME01 for such a player, and on a PSP a stale slot that loads is one of the list's names, whose next save goes back
+  into it.
+- Case B: a GAME01 with its data intact and its PARAM.SFO damaged loads as DATA_BROKEN, Lumines II makes a new
+  profile, and its focus-7 save went over GAME01's data, where master makes a new GAME and Phobos's own focus model
+  says the first new slot, GAME02. The first round's test pinned that overwrite.
+
+The reviewer reproduced both with the game on scratch sticks. Now (item 2's change) a name whose save is on the stick
+is kept, so the second folder is never made, and focus 7 or 8 takes the new slot. Its should-fix: the old zone-256
+calls rebuilt give the recorded texts only with a four-character year, for the years 110124 and 109990 too, where the
+first round printed the 16-bit year (five characters there) and its test pinned 60267; the year is four characters
+now, and the test pins only what's recorded. Its nits, taken: the hundredths cut and the day's two digits are
+recorded (the first round called them choices), the four old lines are quoted, Vita3K is named, and
+sceUtilityGetSystemParamInt takes `localZone()` rather than repeating it.
+
+**Walked again** with the game (`~/phobos-work/scratch/small-fixes/walks.sh`, `logs/walks.log`: master's runner, the
+first round's and this round's, on scratch copies, never the owner's sticks, the clock pinned):
+- The reviewer's upgrade sequence (a copy of batch 04's `stick-t1`, an older Phobos's GAME; three boots of `t1.txt`,
+  each on a copy of the last one's stick, GAME's PARAM.SFO touched before the third): master and this round load
+  GAME and save to GAME at every boot, their traces and files alike; the first round made GAME01 at the first boot,
+  loaded it at the second, and at the third loaded the touched GAME and sent the save over GAME01 (`chosen "GAME01"
+  ... there`).
+- The first round's second-boot stick (GAME and the GAME01 it made), GAME touched, one boot of this round: the load
+  takes GAME and the save goes to GAME; GAME01's files keep their times.
+- Case B (GAME01 with its PARAM.SFO cut to 64 bytes and a mark after its data; `script.txt` from boot): all three
+  load DATA_BROKEN; master saves the new profile to a new GAME, the first round over GAME01 (the mark gone), this
+  round to GAME02 (`focus 7, chosen "GAME02" ... not there`), GAME01's two files byte for byte as they were.
+- A fresh stick (batch 04's repro): GAME01, byte for byte the first round's.
+
+**The re-review** of `bac0374f3` found both cases fixed and the year's change safe (its 25,896 texts below the year
+10000 byte for byte the first round's, the year always four characters, the longest text 37 bytes), and one overwrite
+left: with GAME01 to GAME03 all on the stick, focus 7 or 8 finds no new slot and the dialog's focus falls back to the
+first (`dialogFocus()`), so the redirect sent Lumines II's new profile over GAME01 (reproduced with the game: all
+three slots with damaged PARAM.SFOs and intact data, the boot's load DATA_BROKEN, the focus-7 save `chosen "GAME01"
+... there`, GAME01's mark gone, where master writes a new GAME); and with focus 0 to 6, an unlisted name with no
+folder of its own went over GAME01 whenever GAME01 was there (no Lumines II flow known, the same harm). Now the
+redirect never lands on a slot that's on the stick: the request's own name is kept, as master keeps it (item 2's
+change). The test has every slot there (focus 7 and 8) and the list's first there with no GAME (focus 0), each save's
+bytes its own: the save goes to GAME, no slot touched.
+
+**Walked again** for this round (`~/phobos-work/scratch/small-fixes/walks3.sh`, `logs/walks3.log`, scratch copies, the
+clock pinned). The reviewer's all-slot case (GAME01 to GAME03 each with its PARAM.SFO cut to 64 bytes and its own mark
+after its data; `script.txt` from boot): all three runners load DATA_BROKEN; master writes the new profile to a new
+GAME, the second round over GAME01 (its mark gone), this round to a new GAME, its trace and the stick byte for byte
+master's, the three slots' files and times as they were. And the second round's four walks with this round's runner
+(the upgrade's three boots, the first round's stick with GAME touched, case B, the fresh stick): each savedata trace
+line for line the second round's, and the same files.
+
+### Checks
+
+The third round (`ce436b2e7`): tests/psp 550 groups, 0 failures, sanitized and unsanitized (none skipped);
+tests/allegrex 78 groups, 0 failures; tests/psp/ares 348 checks, 0 failed. Only `savedataUnshown()` changed (and
+comments), so the 21 scenes weren't run again (the second round's: every hash master's). The new checks on the second
+round's head, the first round's and master: above. The walks: above. CI: the draft PR's checks.
+
+The second round (`0707dccc9`): tests/psp 550 groups, 0 failures, sanitized and unsanitized (none skipped);
+tests/allegrex 78 groups, 0 failures; tests/psp/ares 348 checks, 0 failed; GCC 13.3 `-Werror` on `kernel.cpp` and the
+two changed test files. The new tests on the first round's head and on master: above. The 21 scenes in Software,
+master's bench runner against this round's: all 102 hashes master's in all 21. MediEvil's save with this round's
+runner: the first round's, byte for byte. The walks: above. CI: the draft PR's checks.
+
+The first round (`7b1c3d49c`, the three fixes and their tests): tests/psp 550 groups, 0 failures, sanitized
+(`detect_container_overflow=0`) and unsanitized, the Vulkan groups run on the Mac's GPU (none skipped); tests/allegrex
+78 groups, 0 failures; tests/psp/ares 348 checks, 0 failed. GCC 13.3 (Ubuntu 24.04 in Docker, `-Wall -Wextra
+-Werror`): `kernel.cpp` and the three test files build; the GE's unity file only with `four.cpp`'s twelve
+maybe-uninitialized warnings, which master's gives the same. The 21 scenes in Software (the kit's bench runners,
+master's against the branch's, 100 frames from each scene's state, every frame's picture and VRAM settled, then RAM
+and the machine's state): all 102 hashes master's in all 21. Batch 04's other saves (master's runner and the
+branch's, the installs task's runs on copies of the same sticks): Gundam NEXT PLUS, Kurohyou 1, Lunar, Killzone,
+Lumines and La Pucelle Ragnarok byte for byte master's (and as the installs task's runs of 14 Oct wrote them), their
+savedata traces line for line. CI: the draft PR's checks.
+
+### Left
+
+- Not recorded on a PSP, chosen as above: which four digits a year past 9999 shows (its width is recorded) and such a
+  date's day of the week, a zone west of UTC as `-` and its size, zones of 100 hours or more (more digits), and the
+  error answers of the two forms with a zone. RFC2822LocalTime's INVALID_POINTER follows a body uOFW doesn't mark as
+  checked, where its RFC 3339 twin's PRIV_REQUIRED is.
+- An upgraded player's Lumines II profile stays in the GAME folder an older Phobos made, which no PSP makes: moving
+  it to GAME01 would put two saves before the game's loads again, which choose between them by date.
+- sceRtcParseRFC3339 and sceRtcParseDateTime (rtc/convert records the second) aren't done: no game in the library is
+  known to call them.
+- The automatic answer still takes a list's first name whatever the focus for a save naming none (a choice of
+  Phobos's, as before: a focus-7 save of a game naming none, as Killzone's or Kurohyou 1's, goes over the list's first
+  save each time, where a PSP's player would see the first new slot focused); a front end's player chooses.
+- Scratch: `~/phobos-work/scratch/small-fixes` (`NOTES.md`; `refs/`, the sources read; `savecheck.sh`,
+  `rebootcheck.sh`, `games.sh` and `logs/games.log`, the game checks; `before-src/`, master with the new tests;
+  `delay-patch.py`, the test's sleep; `hashkit/`, the scenes). Nothing was run on the RP6.

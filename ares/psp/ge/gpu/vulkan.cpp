@@ -180,7 +180,7 @@ struct VulkanBackend : GPU::Backend {
   VkShaderModule transformModule = VK_NULL_HANDLE;  //(fast mode's: transform.vert)
   VkPipelineCache pipelineCache = VK_NULL_HANDLE;
   VkCommandPool commandPool = VK_NULL_HANDLE;
-  std::map<std::array<u8, sizeof(GPU::Pipeline)>, VkPipeline> pipelineCache_;  //(VK_NULL_HANDLE: it failed)
+  std::unordered_map<GPU::Pipeline, VkPipeline, GPU::Pipeline::Hash> pipelineCache_;  //(VK_NULL_HANDLE: it failed)
   std::unordered_map<u32, Target> targetImages;
   std::unordered_map<u32, Texture> textureImages;  //0: a blank one, bound for untextured draws
   //Textures let go of, once their runs are done, kept for a texture of their size to take (makeTexture()), rather
@@ -223,6 +223,9 @@ struct VulkanBackend : GPU::Backend {
   //the stencil at once, by their EXPORT modules' pipelines, in place of a draw for each of its bits)
   VkShaderModule copyExportModule = VK_NULL_HANDLE, moveExportModule = VK_NULL_HANDLE;
   VkPipeline copyExportPipeline = VK_NULL_HANDLE, moveExportPipeline = VK_NULL_HANDLE;
+  //(a target's colors' alpha set from its stencil, Command::Alpha: copy.frag's ALPHA module's pipeline)
+  VkShaderModule copyAlphaModule = VK_NULL_HANDLE;
+  VkPipeline alphaPipeline = VK_NULL_HANDLE;
   //(moves' (Command::Move, move.frag): its set's layout (the source's colors and stencils), its pipelines (MODE 0
   //and 1) and their layout, and the pictures the source's pixels are taken into, with the set that samples them,
   //made larger as wanted)
@@ -237,6 +240,10 @@ struct VulkanBackend : GPU::Backend {
   u32 shrunkWidth = 0, shrunkHeight = 0;
   struct Squeeze { u32 readback, width, height; };
   std::vector<Squeeze> squeezes;
+  //(the last finish()'s read backs of depths alone, Readback's parts 2: readback n's, its width and height; and the
+  //GE's 16-bit depths readDepth() made of one)
+  std::vector<Squeeze> depthReads;
+  std::vector<u16> depthsRead;
   std::vector<VkBufferImageCopy> rows;
   std::vector<Retired> retired;
   //Presenting: whether the instance and device can (canPresent); the window shown on (the host's, as handed over),
@@ -290,10 +297,10 @@ struct VulkanBackend : GPU::Backend {
       if(shownPicture.set) vk.vkFreeDescriptorSets(device, descriptorPool, 1, &shownPicture.set);
       destroy(shownPicture.image);
       for(auto pipeline : copyPipelines) if(pipeline) vk.vkDestroyPipeline(device, pipeline, nullptr);
-      for(auto pipeline : {copyExportPipeline, moveExportPipeline}) {
+      for(auto pipeline : {copyExportPipeline, moveExportPipeline, alphaPipeline}) {
         if(pipeline) vk.vkDestroyPipeline(device, pipeline, nullptr);
       }
-      for(auto module : {copyExportModule, moveExportModule}) {
+      for(auto module : {copyExportModule, moveExportModule, copyAlphaModule}) {
         if(module) vk.vkDestroyShaderModule(device, module, nullptr);
       }
       if(copyLayout) vk.vkDestroyPipelineLayout(device, copyLayout, nullptr);
@@ -697,10 +704,8 @@ struct VulkanBackend : GPU::Backend {
 
   //The pipeline for a key: made the first time it's met, and kept (VK_NULL_HANDLE where the driver wouldn't).
   auto pipelineFor(const GPU::Pipeline& k) -> VkPipeline {
-    std::array<u8, sizeof(GPU::Pipeline)> key;
-    std::memcpy(key.data(), &k, sizeof(k));
-    if(auto found = pipelineCache_.find(key); found != pipelineCache_.end()) return found->second;
-    if(k.transformed && !transformModule) return pipelineCache_[key] = VK_NULL_HANDLE;
+    if(auto found = pipelineCache_.find(k); found != pipelineCache_.end()) return found->second;
+    if(k.transformed && !transformModule) return pipelineCache_[k] = VK_NULL_HANDLE;
     u32 constants[20] = {k.textured, k.function, k.alphaTest, k.colorTest, k.fog, k.depthRange, k.clear, k.source,
                          k.destination, k.alphaOut, k.dither, k.quantize, k.logic, k.clamp, k.texels, k.reads,
                          k.blending, k.term, k.flat, k.indexed};
@@ -728,18 +733,21 @@ struct VulkanBackend : GPU::Backend {
       {5, 0, VK_FORMAT_R32_UINT, u32(offsetof(V, flags))},
       {6, 0, VK_FORMAT_R32G32B32A32_SFLOAT, u32(offsetof(V, columnFirst))},
       {7, 0, VK_FORMAT_R32G32_SINT, u32(offsetof(V, columnStart))}};
-    VkVertexInputAttributeDescription models[7] = {
+    //(and over the first two weights, a vertex the GE put on the screen's shine and flags: GPU::Model::OnScreen)
+    VkVertexInputAttributeDescription models[9] = {
       {0, 0, VK_FORMAT_R32G32B32_SFLOAT, u32(offsetof(M, x))},
       {1, 0, VK_FORMAT_R32G32B32_SFLOAT, u32(offsetof(M, normal))},
       {2, 0, VK_FORMAT_R32G32_SFLOAT, u32(offsetof(M, u))},
       {3, 0, VK_FORMAT_R8G8B8A8_UNORM, u32(offsetof(M, color))},
       {4, 0, VK_FORMAT_R32G32B32A32_SFLOAT, u32(offsetof(M, weights))},
       {5, 0, VK_FORMAT_R32G32B32A32_SFLOAT, u32(offsetof(M, weights) + 16)},
-      {6, 0, VK_FORMAT_R32_UINT, u32(offsetof(M, transform))}};
+      {6, 0, VK_FORMAT_R32_UINT, u32(offsetof(M, transform))},
+      {7, 0, VK_FORMAT_R8G8B8A8_UNORM, u32(offsetof(M, weights))},
+      {8, 0, VK_FORMAT_R32_UINT, u32(offsetof(M, weights) + 4)}};
     auto input = made<VkPipelineVertexInputStateCreateInfo>(
       VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
     input.vertexBindingDescriptionCount = 1, input.pVertexBindingDescriptions = &binding;
-    input.vertexAttributeDescriptionCount = k.transformed ? 7 : 8;
+    input.vertexAttributeDescriptionCount = k.transformed ? 9 : 8;
     input.pVertexAttributeDescriptions = k.transformed ? models : attributes;
     auto assembly = made<VkPipelineInputAssemblyStateCreateInfo>(
       VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO);
@@ -798,7 +806,7 @@ struct VulkanBackend : GPU::Backend {
     pipelineMaking += std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now() - start).count();
     pipelines++;
-    pipelineCache_[key] = pipeline;
+    pipelineCache_[k] = pipeline;
     return pipeline;
   }
 
@@ -806,7 +814,9 @@ struct VulkanBackend : GPU::Backend {
   //stencil's bit the write mask has (2: replaced with the reference, 255, where the pixel's stencil has it). The
   //viewport is the rectangle copied into; nothing else is tested or blended. (move.frag's likewise, its MODE 0 the
   //colors, 1 the stencil's bit: writes 0 or 2, in its layout; and either's EXPORT module's MODE 0, the colors and
-  //the stencil the shader gives, replaced under the write mask: writes 3.)
+  //the stencil the shader gives, replaced under the write mask: writes 3. copy.frag's ALPHA module's adds its alpha
+  //alone to the target's times the blend constant's alpha, where the stencil under the compare mask is the
+  //reference, both dynamic: writes 4.)
   auto makeCopyPipeline(u32 mode, VkShaderModule fragment = VK_NULL_HANDLE, VkPipelineLayout layout = VK_NULL_HANDLE,
                         u32 writes = ~0u) -> VkPipeline {
     if(!fragment) fragment = copyFragmentModule, layout = copyLayout, writes = mode;
@@ -837,15 +847,27 @@ struct VulkanBackend : GPU::Backend {
     depth.stencilTestEnable = writes >= 2;
     depth.front = {VK_STENCIL_OP_KEEP, VK_STENCIL_OP_REPLACE, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_ALWAYS, 0xff, 0xff,
                    0xff};
+    if(writes == 4) {
+      depth.front = {VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_EQUAL, 0, 0, 0};
+    }
     depth.back = depth.front;
     VkPipelineColorBlendAttachmentState attachment{};
-    attachment.colorWriteMask = writes == 0 || writes == 3 ? 15 : 0;
+    attachment.colorWriteMask = writes == 0 || writes == 3 ? 15 : writes == 4 ? VK_COLOR_COMPONENT_A_BIT : 0;
+    if(writes == 4) {
+      attachment.blendEnable = VK_TRUE;
+      attachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE, attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+      attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+      attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_CONSTANT_ALPHA;
+    }
     auto blend = made<VkPipelineColorBlendStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);
     blend.attachmentCount = 1, blend.pAttachments = &attachment;
     VkDynamicState dynamics[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
       VK_DYNAMIC_STATE_STENCIL_WRITE_MASK};
+    VkDynamicState alphas[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
+      VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK, VK_DYNAMIC_STATE_STENCIL_REFERENCE, VK_DYNAMIC_STATE_BLEND_CONSTANTS};
     auto dynamic = made<VkPipelineDynamicStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO);
-    dynamic.dynamicStateCount = std::size(dynamics), dynamic.pDynamicStates = dynamics;
+    dynamic.dynamicStateCount = writes == 4 ? std::size(alphas) : std::size(dynamics);
+    dynamic.pDynamicStates = writes == 4 ? alphas : dynamics;
     auto info = made<VkGraphicsPipelineCreateInfo>(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
     info.stageCount = 2, info.pStages = stages;
     info.pVertexInputState = &input, info.pInputAssemblyState = &assembly, info.pViewportState = &viewport;
@@ -1083,12 +1105,16 @@ struct VulkanBackend : GPU::Backend {
     u64 modelsAt = aligned(r.vertices.size() * sizeof(GPU::Vertex));
     u64 indicesAt = aligned(modelsAt + r.models.size() * sizeof(GPU::Model));
     u64 transformsAt = (indicesAt + r.indices.size() * 4 + storageAlignment - 1) / storageAlignment * storageAlignment;
-    u64 size = transformsAt + r.transforms.size() * sizeof(GPU::Transformed);
+    //(a run of meshes binds the blocks' set though its vertices may be only ones on the screen, which read none: one
+    //block's room at least, so the set has something to name)
+    u64 blocks = r.models.empty() ? 0 : std::max<u64>(r.transforms.size(), 1);
+    u64 size = transformsAt + blocks * sizeof(GPU::Transformed);
     for(auto& c : r.commands) {
       if(c.kind == GPU::Command::Kind::Upload) size = aligned(size) + aligned(u64(c.width) * c.height * 4) * 2 +
                                                       aligned(u64(c.width) * c.height);
       if(c.kind == GPU::Command::Kind::Present && !c.target) size = aligned(size) + u64(c.width) * c.height * 4;
       if(c.kind == GPU::Command::Kind::Move) size = aligned(size) + u64(movedPitch(c)) * c.sourceHeight;
+      if(c.kind == GPU::Command::Kind::Depth) size = aligned(size) + u64(c.width) * c.height * scale * scale * 4;
     }
     for(u32 id : uploading) {
       auto found = textureImages.find(id);
@@ -1104,18 +1130,19 @@ struct VulkanBackend : GPU::Backend {
                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
       if(!make(slot.staging, std::max<u64>(size, slot.staging.size * 2), Usage, false)) return lost = true, false;
     }
-    if(!r.transforms.empty()) {  //(the slot's run before is done: its set isn't in use)
-      VkDescriptorBufferInfo blocks{slot.staging.buffer, transformsAt, r.transforms.size() * sizeof(GPU::Transformed)};
+    if(blocks) {  //(the slot's run before is done: its set isn't in use)
+      VkDescriptorBufferInfo range{slot.staging.buffer, transformsAt, blocks * sizeof(GPU::Transformed)};
       auto write = made<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
       write.dstSet = slot.transforms, write.descriptorCount = 1;
-      write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, write.pBufferInfo = &blocks;
+      write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, write.pBufferInfo = &range;
       vk.vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     }
     u64 readbackSize = 0;  //(the colors at the size asked for; the stencils, at a higher resolution, a row in scale)
     for(auto& c : r.commands) {
       if(c.kind != GPU::Command::Kind::Readback) continue;
       u64 pixels = u64(c.width) * c.height;
-      readbackSize = aligned(aligned(readbackSize + pixels * c.at * c.at * 4) + (c.at == 1 ? pixels * scale : 0));
+      if(c.parts == 2) readbackSize = aligned(readbackSize + pixels * scale * 4);  //(depths: a row of scale x each)
+      else readbackSize = aligned(aligned(readbackSize + pixels * c.at * c.at * 4) + (c.at == 1 ? pixels * scale : 0));
     }
     if(readbackSize > readback.size) {
       if(!make(readback, std::max<u64>(readbackSize, readback.size * 2), VK_BUFFER_USAGE_TRANSFER_DST_BIT, true)) {
@@ -1131,7 +1158,7 @@ struct VulkanBackend : GPU::Backend {
     if(!r.transforms.empty()) {
       std::memcpy(staging + transformsAt, r.transforms.data(), r.transforms.size() * sizeof(GPU::Transformed));
     }
-    u64 at = transformsAt + r.transforms.size() * sizeof(GPU::Transformed);
+    u64 at = transformsAt + blocks * sizeof(GPU::Transformed);
 
     //(a swapchain image for a Present, acquired before anything's recorded: none, nothing's presented)
     constexpr u32 NoImage = ~0u;
@@ -1213,7 +1240,7 @@ struct VulkanBackend : GPU::Backend {
     auto endPass = [&] {
       if(pass) vk.vkCmdEndRenderPass(commands), pass = nullptr;
     };
-    readbacks.clear(), readbackSizes.clear(), squeezes.clear();
+    readbacks.clear(), readbackSizes.clear(), squeezes.clear(), depthReads.clear();
     u64 readAt = 0;
     bool presenting = false;
     for(auto& c : r.commands) {
@@ -1330,6 +1357,11 @@ struct VulkanBackend : GPU::Backend {
         shoot(commands, slot, t, c);
         continue;
       }
+      if(c.kind == GPU::Command::Kind::Alpha) {
+        alphaFromStencil(commands, t, c);
+        boundPipeline = VK_NULL_HANDLE, boundSet = VK_NULL_HANDLE, lastState = ~0u, transformsBound = false;
+        continue;
+      }
       if(c.kind == GPU::Command::Kind::Move) {
         auto from = targetImages.find(c.source);
         if(from == targetImages.end() || from == found) continue;
@@ -1341,6 +1373,40 @@ struct VulkanBackend : GPU::Backend {
         move(commands, slot, t, from->second, c, stencils);
         if(lost) return false;
         boundPipeline = VK_NULL_HANDLE, boundSet = VK_NULL_HANDLE, lastState = ~0u, transformsBound = false;
+        continue;
+      }
+      //(the depth alone, through the slot's staging buffer: the stencil is each frame buffer's own, and a copy between
+      //images of their depth alone takes the stencil too on MoltenVK)
+      if(c.kind == GPU::Command::Kind::Depth) {
+        auto from = targetImages.find(c.source);
+        if(from == targetImages.end() || from == found) continue;
+        if(!fit(commands, t, c.y + c.height) || !fit(commands, from->second, c.y + c.height)) {
+          return lost = true, false;
+        }
+        u64 depths = aligned(at);
+        at = depths + u64(c.width) * c.height * scale * scale * 4;
+        constexpr auto Source = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        constexpr auto Destination = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        VkRect2D into = scaled(t, c.x, c.y, c.width, c.height);
+        VkRect2D out = scaled(from->second, c.x, c.y, c.width, c.height);
+        VkExtent3D extent{std::min(into.extent.width, out.extent.width),
+                          std::min(into.extent.height, out.extent.height), 1};
+        if(!extent.width || !extent.height) continue;
+        VkBufferImageCopy region{depths, 0, 0, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1}, {into.offset.x, into.offset.y, 0},
+                                 extent};
+        transition(commands, from->second.depth.image, DepthStencil, DepthLayout, Source);
+        vk.vkCmdCopyImageToBuffer(commands, from->second.depth.image, Source, slot.staging.buffer, 1, &region);
+        transition(commands, from->second.depth.image, DepthStencil, Source, DepthLayout);
+        auto copied = made<VkBufferMemoryBarrier>(VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER);
+        copied.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, copied.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        copied.srcQueueFamilyIndex = copied.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        copied.buffer = slot.staging.buffer, copied.offset = depths;
+        copied.size = u64(extent.width) * extent.height * 4;
+        vk.vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
+                                1, &copied, 0, nullptr);
+        transition(commands, t.depth.image, DepthStencil, DepthLayout, Destination);
+        vk.vkCmdCopyBufferToImage(commands, slot.staging.buffer, t.depth.image, Destination, 1, &region);
+        transition(commands, t.depth.image, DepthStencil, Destination, DepthLayout);
         continue;
       }
       if(!fit(commands, t, c.y + c.height)) return lost = true, false;
@@ -1369,10 +1435,10 @@ struct VulkanBackend : GPU::Backend {
           u16 z;
           std::memcpy(&z, in + c.depth + n * 2, 2);
           if(depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT) {  //(in 65,536ths, exactly as draw.frag writes them)
-            f32 value = z * (1.0f / 65536);
+            f32 value = GPU::depthToFloat(z);
             std::memcpy(&depth[n], &value, 4);
           } else {  //(those rounded to 24 bits, as the GPU rounds to nearest)
-            depth[n] = u32((u64(z) * 0xff'ffff + 32768) >> 16);
+            depth[n] = GPU::depthTo24(z);
           }
         }
         transition(commands, t.color.image, VK_IMAGE_ASPECT_COLOR_BIT, ColorLayout, Destination);
@@ -1403,6 +1469,19 @@ struct VulkanBackend : GPU::Backend {
         transition(commands, t.color.image, VK_IMAGE_ASPECT_COLOR_BIT, Source, ColorLayout);
         transition(commands, texture.image.image, VK_IMAGE_ASPECT_COLOR_BIT, Destination,
                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+      } else if(c.parts == 2) {  //(its depths alone, for memory: at a higher resolution, each pixel's middle row)
+        u64 depths = readAt;
+        readAt = aligned(depths + u64(count) * scale * 4);
+        readbacks.push_back({depths, depths});
+        depthReads.push_back({u32(readbacks.size() - 1), c.width, c.height});
+        transition(commands, t.depth.image, DepthStencil, DepthLayout, Source);
+        rows.resize(c.height);
+        for(u32 y = 0; y < c.height; y++) {
+          rows[y] = {depths + u64(y) * c.width * scale * 4, 0, 0, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1},
+                     {offset.x, s32((c.y + y) * scale + scale / 2), 0}, {extent.width, 1, 1}};
+        }
+        vk.vkCmdCopyImageToBuffer(commands, t.depth.image, Source, readback.buffer, rows.size(), rows.data());
+        transition(commands, t.depth.image, DepthStencil, Source, DepthLayout);
       } else {
         u32 times = std::clamp<u32>(c.at, 1, scale);
         u64 colors = readAt, stencils = aligned(colors + u64(count) * times * times * 4);
@@ -1501,11 +1580,12 @@ struct VulkanBackend : GPU::Backend {
     return true;
   }
 
-  //A target's render pass begun, over the whole of its pictures
-  auto beginPass(VkCommandBuffer commands, Target& t) -> void {
+  //A target's render pass begun, over the whole of its pictures, or a rectangle of them (each kept as it is around
+  //it: its pictures are loaded and stored)
+  auto beginPass(VkCommandBuffer commands, Target& t, const VkRect2D* area = nullptr) -> void {
     auto info = made<VkRenderPassBeginInfo>(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
     info.renderPass = renderPass, info.framebuffer = t.framebuffer;
-    info.renderArea = {{0, 0}, {t.width * scale, t.rows * scale}};
+    info.renderArea = area ? *area : VkRect2D{{0, 0}, {t.width * scale, t.rows * scale}};
     vk.vkCmdBeginRenderPass(commands, &info, VK_SUBPASS_CONTENTS_INLINE);
     passes++;
   }
@@ -1577,6 +1657,40 @@ struct VulkanBackend : GPU::Backend {
       });
     }
     if(depthed) draw(copyPipelines[1], stagedDepths);
+    vk.vkCmdEndRenderPass(commands);
+  }
+
+  //An Alpha (GPU::catchAlpha()): the target's colors' alpha over the rectangle set from its stencil, by draws of
+  //copy.frag's ALPHA pipeline in a render pass over the rectangle alone, each adding its alpha to the target's times
+  //the blend constant's: 0 times 0 first, everywhere (a test of no bits passes), then for each bit of the stencil a
+  //read back takes (GPU::finish()'s narrowTarget(), move.frag: a 5551 one's top bit, a 4444 one's top four, an 8888
+  //one's eight) the alpha it reads as (255, the bit twice over, the bit), where the stencil has it.
+  auto alphaFromStencil(VkCommandBuffer commands, Target& t, const GPU::Command& c) -> void {
+    VkRect2D area = scaled(t, c.x, c.y, c.width, c.height);
+    if(c.format == 0 || !area.extent.width || !area.extent.height) return;
+    beginPass(commands, t, &area);
+    VkViewport viewport{f32(area.offset.x), f32(area.offset.y), f32(area.extent.width), f32(area.extent.height), 0,
+                        1};
+    vk.vkCmdSetViewport(commands, 0, 1, &viewport);
+    vk.vkCmdSetScissor(commands, 0, 1, &area);
+    vk.vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, alphaPipeline);
+    auto draw = [&](u32 tested, u32 added, f32 kept) {
+      CopyPush push{{0, 0}, scale, added};
+      f32 constant[4] = {0, 0, 0, kept};
+      vk.vkCmdSetBlendConstants(commands, constant);
+      vk.vkCmdSetStencilCompareMask(commands, VK_STENCIL_FACE_FRONT_AND_BACK, tested);
+      vk.vkCmdSetStencilReference(commands, VK_STENCIL_FACE_FRONT_AND_BACK, tested);
+      vk.vkCmdPushConstants(commands, copyLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+      vk.vkCmdDraw(commands, 3, 1, 0, 0);
+    };
+    draw(0, 0, 0);
+    if(c.format == 1) {
+      draw(0x80, 0xff, 1);
+    } else if(c.format == 2) {
+      for(u32 bit = 0; bit < 4; bit++) draw(0x10 << bit, 0x11 << bit, 1);
+    } else {
+      for(u32 bit = 0; bit < 8; bit++) draw(1 << bit, 1 << bit, 1);
+    }
     vk.vkCmdEndRenderPass(commands);
   }
 
@@ -1926,6 +2040,28 @@ struct VulkanBackend : GPU::Backend {
     stencil = readback.mapped + readbacks[n].second;
     return true;
   }
+  //(at a higher resolution, each pixel's middle one)
+  auto readDepth(u32 n, const u16*& depths, u32& width, u32& height) -> bool override {
+    auto read = std::find_if(depthReads.begin(), depthReads.end(), [&](const Squeeze& s) { return s.readback == n; });
+    if(n >= readbacks.size() || read == depthReads.end()) return false;
+    const u8* in = readback.mapped + readbacks[n].first;
+    depthsRead.resize(u64(read->width) * read->height);
+    for(u32 y = 0, i = 0; y < read->height; y++) {
+      for(u32 x = 0; x < read->width; x++, i++) {
+        u32 word;
+        std::memcpy(&word, in + (u64(y) * read->width * scale + x * scale + scale / 2) * 4, 4);
+        if(depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT) {
+          f32 value;
+          std::memcpy(&value, &word, 4);
+          depthsRead[i] = GPU::depthFromFloat(value);
+        } else {
+          depthsRead[i] = GPU::depthFrom24(word);
+        }
+      }
+    }
+    depths = depthsRead.data(), width = read->width, height = read->height;
+    return true;
+  }
 
   //(fast: Vulkan (fast), which blends with the GPU's own units throughout: nothing asks for rasterization order;
   //cached: the pipelines a session before made, as pipelineData() gave them)
@@ -2232,11 +2368,13 @@ struct VulkanBackend : GPU::Backend {
       : Code{GPUShaders::fragmentSingleDepthSPIRV, sizeof(GPUShaders::fragmentSingleDepthSPIRV)};
     Code copyVertexCode{GPUShaders::copyVertexSPIRV, sizeof(GPUShaders::copyVertexSPIRV)};
     Code copyFragmentCode{GPUShaders::copyFragmentSPIRV, sizeof(GPUShaders::copyFragmentSPIRV)};
+    Code copyAlphaCode{GPUShaders::copyAlphaSPIRV, sizeof(GPUShaders::copyAlphaSPIRV)};
     Code presentCode{GPUShaders::presentSPIRV, sizeof(GPUShaders::presentSPIRV)};
     for(auto [code, module] : {std::pair{vertexCode, &vertexModule}, std::pair{fragmentCode, &fragmentModule},
                                std::pair{fragmentDepthCode, &fragmentDepthModule},
                                std::pair{copyVertexCode, &copyVertexModule},
                                std::pair{copyFragmentCode, &copyFragmentModule},
+                               std::pair{copyAlphaCode, &copyAlphaModule},
                                std::pair{presentCode, &presentModule}}) {
       auto moduleInfo = made<VkShaderModuleCreateInfo>(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
       moduleInfo.codeSize = code.size, moduleInfo.pCode = code.words;
@@ -2274,6 +2412,9 @@ struct VulkanBackend : GPU::Backend {
     }
     for(u32 mode = 0; mode < 3; mode++) {
       if(!(copyPipelines[mode] = makeCopyPipeline(mode))) return error = "the copy pipelines weren't made", false;
+    }
+    if(!(alphaPipeline = makeCopyPipeline(0, copyAlphaModule, copyLayout, 4))) {
+      return error = "the copy pipelines weren't made", false;
     }
     copyExportPipeline = exportPipeline(GPUShaders::copyExportSPIRV, sizeof(GPUShaders::copyExportSPIRV),
                                         copyExportModule, copyLayout);

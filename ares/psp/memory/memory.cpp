@@ -100,13 +100,9 @@ auto Memory::serialize(serializer& s) -> void {
 
 //Where the size bytes from address are in the host's memory, or nullptr if any of them has nothing behind it (or
 //they run past the end of an area, or past a 32-byte piece of VRAM's second or fourth copy, which rearrange them).
-//load: they're about to be read, not written (read()).
-auto Memory::pointer(u32 address, u32 size, bool load) -> u8* {
+//load: they're about to be read, not written (read()). (Main RAM's are found in memory.hpp's pointer().)
+auto Memory::pointerElsewhere(u32 address, u32 size, bool load) -> u8* {
   u32 physical = address & 0x1fff'ffff;
-  if(physical >= RAMBase && physical - RAMBase < ram.size()) {
-    u32 offset = physical - RAMBase;
-    return size <= ram.size() - offset ? &ram[offset] : nullptr;
-  }
   if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow) {
     if(!knownDrawn && vramBusy) {  //(the first and third copies: the bytes; others: the 16 KiB they rearrange)
       u32 seen = (physical - VRAMBase) % VRAMSize, last = std::min<u32>(seen + size, VRAMSize) - 1;
@@ -137,7 +133,7 @@ auto Memory::pointer(u32 address, u32 size, bool load) -> u8* {
 //Whether the size bytes from address all have something behind them, inside one area (one copy of VRAM): what an HLE
 //function checks a game's buffer against before copying in or out. (pointer() also wants the bytes side by side in
 //the host's memory, which a range through VRAM's second or fourth copy isn't.)
-auto Memory::reaches(u32 address, u32 size) -> bool {
+auto Memory::reachesElsewhere(u32 address, u32 size) -> bool {
   u32 physical = address & 0x1fff'ffff;
   if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow) {
     return size <= VRAMSize - (physical - VRAMBase) % VRAMSize;
@@ -148,7 +144,7 @@ auto Memory::reaches(u32 address, u32 size) -> bool {
 //The CPU's loads: size is 1, 2 or 4 bytes, and the CPU has already checked that the address is aligned to it. HLE
 //functions use them too, at whatever address a game gave, so an access can cross a 32-byte piece of VRAM's second or
 //fourth copy: that one goes a byte at a time.
-auto Memory::read(u32 size, u32 address) -> u32 {
+auto Memory::readElsewhere(u32 size, u32 address) -> u32 {
   u8* bytes = pointer(address, size, true);
   if(!bytes && size > 1 && reaches(address, size)) {
     u32 value = 0;
@@ -167,7 +163,7 @@ auto Memory::read(u32 size, u32 address) -> u32 {
 }
 
 //The CPU's stores, as aligned as its loads (and HLE functions', likewise a byte at a time across such a piece).
-auto Memory::write(u32 size, u32 address, u32 data) -> void {
+auto Memory::writeElsewhere(u32 size, u32 address, u32 data) -> void {
   if(vramBusy && vramStoring && !knownDrawn) {  //(not through the second or fourth copy, which rearrange the bytes)
     u32 physical = address & 0x1fff'ffff;
     if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow && !((physical - VRAMBase) / VRAMSize & 1)) {
@@ -207,6 +203,11 @@ auto Memory::changed(u32 address, u32 size) -> void {
     u32 first, last;
     if(pagesOf(address, size, first, last)) {
       for(u32 page = first; page <= last; page++) {
+        if(!(page & 7) && page + 7 <= last) {  //(eight at once where none of them is watched)
+          u64 eight;
+          std::memcpy(&eight, &watched[page], 8);
+          if(!eight) { page += 7; continue; }
+        }
         if(!watched[page]) continue;
         watched[page] = 0;
         watchedPages--;
@@ -237,7 +238,13 @@ auto Memory::changed(u32 address, u32 size) -> void {
 //The host's bytes behind size bytes from address, for the copies below: one piece, or up to 32 bytes at a time
 //through VRAM's second and fourth copies (which rearrange 32-byte pieces). use(bytes, done, count) for each; nothing
 //is used, and false returned, if any of the bytes has nothing behind it.
-static auto pieces(Memory& memory, u32 address, u32 size, const std::function<void(u8*, u32, u32)>& use) -> bool {
+template<typename Use> static auto pieces(Memory& memory, u32 address, u32 size, const Use& use) -> bool {
+  u32 ram = (address & 0x1fff'ffff) - Memory::RAMBase;
+  if(ram < memory.ram.size()) {
+    if(size > memory.ram.size() - ram) return false;
+    use(&memory.ram[ram], 0, size);
+    return true;
+  }
   if(!memory.reaches(address, size)) return false;
   u32 physical = address & 0x1fff'ffff, offset = physical - Memory::VRAMBase;
   if(physical < Memory::VRAMBase || offset >= Memory::VRAMWindow || !(offset / Memory::VRAMSize & 1)) {
@@ -261,6 +268,14 @@ auto Memory::buildPages(std::vector<u8*>& table) -> void {
   for(u32 offset = 0; offset < ScratchpadSize; offset += PageSize) table[(ScratchpadBase + offset) / PageSize] = &scratchpad[offset];
   for(u32 offset = 0; offset < VRAMSize; offset += PageSize) table[(VRAMBase + offset) / PageSize] = &vram[offset];
   for(u32 offset = 0; offset < ram.size(); offset += PageSize) table[(RAMBase + offset) / PageSize] = &ram[offset];
+}
+
+//The pages of buildPages()' table whose entries never change (Allegrex::steady), one byte each, nonzero for those:
+//the scratchpad's and main RAM's. VRAM's come and go as the GE's workers draw there (vramGuard).
+auto Memory::buildSteady(std::vector<u8>& steady) -> void {
+  steady.assign(512_MiB / PageSize, 0);
+  for(u32 offset = 0; offset < ScratchpadSize; offset += PageSize) steady[(ScratchpadBase + offset) / PageSize] = 1;
+  for(u32 offset = 0; offset < ram.size(); offset += PageSize) steady[(RAMBase + offset) / PageSize] = 1;
 }
 
 //Copies to and from emulated memory, for the loader and the HLE functions. They do nothing and return false when

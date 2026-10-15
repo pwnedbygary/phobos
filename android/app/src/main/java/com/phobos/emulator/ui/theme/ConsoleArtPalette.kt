@@ -194,3 +194,20 @@ class ConsoleArtPalette(scheme: ColorScheme, success: Color, warning: Color, til
         }
     }
 }
+
+/**
+ * [svg], one of the Systematic consoles, without the white halo drawn behind it (a group at half opacity, or
+ * for a few one white shape at half or 0.6), for the treatments that draw their own edge. Kept in step with
+ * tools/console-art/pixelate.py.
+ */
+internal fun withoutHalo(svg: String): String {
+    val stripped = HALO_GROUP.replaceFirst(svg, "")
+    return if (stripped != svg) stripped else HALO_SHAPE.replaceFirst(svg, "")
+}
+
+private val HALO_GROUP = Regex("""<g clip-path="url\(#\w+\)" style="opacity:\.5">.*?</g>""", RegexOption.DOT_MATCHES_ALL)
+private const val WHITE = """(?:#fff\b|#ffffff\b|white\b)"""
+private val HALO_SHAPE = Regex(
+    """<(?:path|rect|circle|ellipse)\b[^>]*?(?:fill:$WHITE[^>]*?opacity:\.[56]|opacity:\.[56][^>]*?fill:$WHITE|fill="$WHITE"[^>]*?opacity="\.[56]")[^>]*/>""",
+    RegexOption.DOT_MATCHES_ALL,
+)

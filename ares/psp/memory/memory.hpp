@@ -132,12 +132,46 @@ struct Memory {
   auto unwatchAll() -> void;
   auto pagesOf(u32 address, u32 size, u32& first, u32& last) const -> bool;
   auto serialize(serializer& s) -> void;
-  auto pointer(u32 address, u32 size = 1, bool load = false) -> u8*;
-  auto reaches(u32 address, u32 size) -> bool;
-  auto read(u32 size, u32 address) -> u32;
-  auto write(u32 size, u32 address, u32 data) -> void;
+  auto pointerElsewhere(u32 address, u32 size, bool load) -> u8*;
+  auto reachesElsewhere(u32 address, u32 size) -> bool;
+  auto readElsewhere(u32 size, u32 address) -> u32;
+  auto writeElsewhere(u32 size, u32 address, u32 data) -> void;
   auto changed(u32 address, u32 size) -> void;
+  //Main RAM, where nearly all that HLE functions and the CPU's slow paths reach is, without a call; the rest through
+  //memory.cpp's (the ...Elsewhere()s), as the functions there describe.
+  auto ramOffset(u32 address, u32 size, u32& offset) const -> bool {
+    offset = (address & 0x1fff'ffff) - RAMBase;
+    return offset < ram.size() && size <= ram.size() - offset;
+  }
+  auto pointer(u32 address, u32 size = 1, bool load = false) -> u8* {
+    u32 offset = (address & 0x1fff'ffff) - RAMBase;
+    if(offset < ram.size()) return size <= ram.size() - offset ? &ram[offset] : nullptr;
+    return pointerElsewhere(address, size, load);
+  }
+  auto reaches(u32 address, u32 size) -> bool {
+    u32 offset = (address & 0x1fff'ffff) - RAMBase;
+    if(offset < ram.size()) return size <= ram.size() - offset;
+    return reachesElsewhere(address, size);
+  }
+  auto read(u32 size, u32 address) -> u32 {
+    u32 offset;
+    if(!ramOffset(address, size, offset)) return readElsewhere(size, address);
+    if(size == 1) return ram[offset];
+    if(size == 2) { u16 half; std::memcpy(&half, &ram[offset], 2); return half; }
+    u32 word;
+    std::memcpy(&word, &ram[offset], 4);
+    return word;
+  }
+  auto write(u32 size, u32 address, u32 data) -> void {
+    u32 offset;
+    if(!ramOffset(address, size, offset)) return writeElsewhere(size, address, data);
+    if(size == 1) ram[offset] = data;
+    else if(size == 2) { u16 half = data; std::memcpy(&ram[offset], &half, 2); }
+    else std::memcpy(&ram[offset], &data, 4);
+    changed(address, size);
+  }
   auto buildPages(std::vector<u8*>& table) -> void;
+  auto buildSteady(std::vector<u8>& steady) -> void;
   auto copyIn(u32 address, const void* data, u32 size) -> bool;
   auto copyOut(void* data, u32 address, u32 size) -> bool;
   auto fill(u32 address, u8 value, u32 size) -> bool;

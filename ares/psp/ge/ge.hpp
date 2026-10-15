@@ -254,8 +254,9 @@ struct GE {
     u32 minDepth, maxDepth, fogColor;
   };
 
-  //Four pixels side by side in a row, each in a lane of a vector (four.cpp): GCC's and Clang's own vector types,
-  //which they compile to the host's SIMD instructions (NEON on ARM64, SSE on x86-64).
+  //Four pixels side by side in a row (four.cpp), or four corners of a renderer's triangles (draw.cpp's
+  //meshTriangles()), each in a lane of a vector: GCC's and Clang's own vector types, which they compile to the host's
+  //SIMD instructions (NEON on ARM64, SSE on x86-64).
   using f32x4 = float __attribute__((vector_size(16)));
   using f64x2 = f64 __attribute__((vector_size(16)));
   using u64x2 = u64 __attribute__((vector_size(16)));
@@ -421,6 +422,8 @@ struct GE {
   auto vertexFormat() const -> VertexFormat;
   auto readVertex(u32 address, const VertexFormat& format) -> Vertex;
   template<typename Read> auto readVertexWith(const Read& read, u32 address, const VertexFormat& format) -> Vertex;
+  auto readVerticesFrom(const u8* bytes, const u32* offsets, u32 count, const VertexFormat& format, Vertex* out)
+    -> void;
   auto readIndex(u32 n, const VertexFormat& format) -> u32;
 
   //lighting.cpp
@@ -430,7 +433,7 @@ struct GE {
   //transform.cpp
   auto transformState() const -> Transform;
   auto settingsState(Transform& t) const -> void;
-  auto transformKept() -> Transform&;
+  auto transformKept(bool skinned = true) -> Transform&;
   auto transform(Vertex& vertex, const Transform& t) -> void;
   auto transformAll(std::vector<Vertex>& vertices, const Transform& t) -> void;
   //(transform()'s stages: a vertex's place in its model, skinned, in the world and its depth in the view, from the
@@ -450,7 +453,7 @@ struct GE {
   auto drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>& vertices, u32 strip) -> void;
   auto meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip, s32 facing,
                      std::vector<Vertex>& vertices) -> void;
-  auto submit(Job& job) -> void;
+  auto submit(Job& job) -> bool;
   auto spriteJob(const Look& look, const Vertex& from, const Vertex& to, bool perspective, Job& job) const -> bool;
   auto readsAhead(const Look& look, const std::vector<Vertex>& vertices, u32 count) const -> bool;
   auto readsApart(const Look& look, const Transform& t, const std::vector<Vertex>& vertices, u32 kind, u32 strip,
@@ -458,8 +461,10 @@ struct GE {
   auto rectangle(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto triangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing, bool perspective)
     -> void;
-  auto triangleJob(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, const s64 (&x)[3],
-                   const s64 (&y)[3], s64 area, bool perspective) const -> Job;
+  auto placedTriangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing,
+                      bool perspective, const s64 (&x)[3], const s64 (&y)[3]) -> void;
+  auto triangleJob(Job& job, const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, const s64 (&x)[3],
+                   const s64 (&y)[3], s64 area, bool perspective) const -> void;
   auto point(const Look& look, const Vertex& at) -> void;
   auto line(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto readVertices(u32 count, const VertexFormat& format) -> void;
@@ -565,13 +570,16 @@ struct GE {
   //sets its own on it too: its weights, its texture's size, whether its vertices have colors.)
   struct KeptTransform {
     static constexpr u32 Settings = 17, Lighting = 77;
-    bool valid = false;
+    bool valid = false, bonesValid = false;
     u32 bones[96], world[12], view[12], projection[16], textureMatrix[12];
     u32 settings[Settings], lighting[Lighting];
     Transform transform{};
   } keptTransform;
 
   std::vector<Vertex> primitiveVertices;  //the primitive being drawn's (draw.cpp); a curved surface's points
+  std::vector<u32> vertexOffsets;         //(readVertices()': where each of them is, read in a run)
+  bool vertexRuns = true;  //vertices read in runs where they may be (readVertices(); tests compare without)
+  u64 vertexRunsRead = 0;  //(the PRIMs whose vertices were, for the tests)
   std::vector<Vertex> patchVertices;      //the vertices a curved surface is cut into (curves.cpp)
 
   //The bytes of VRAM the primitive being drawn may draw over (draw.cpp): its frame buffer's, and its depth buffer's.
@@ -622,6 +630,7 @@ struct GE {
     std::condition_variable wake, finished;
     u64 round = 0;            //goes up as each batch starts being drawn, which the workers wake for
     bool quit = false;
+    bool held = false;        //the workers take no batch (tests: one kept being drawn till they've looked)
     u64 shared = 8192;        //a batch with fewer pixels is drawn on the GE's thread alone (tests may make it 0)
   } drawing;
 
@@ -644,6 +653,11 @@ struct GE {
     virtual auto ready() const -> bool = 0;
     virtual auto begin(GE& ge, const Look& look, bool through, const Region& region) -> bool = 0;
     virtual auto triangle(const Vertex& a, const Vertex& b, const Vertex& c) -> void = 0;
+    //(triangle() with its corners' places as the GE holds them, in sixteenths, which it worked out: draw.cpp's fixed())
+    virtual auto triangleAt(const Vertex& a, const Vertex& b, const Vertex& c, const s64 (&)[3], const s64 (&)[3])
+      -> void {
+      triangle(a, b, c);
+    }
     virtual auto sprite(const Job& job) -> void = 0;
     virtual auto point(const Vertex& at) -> void = 0;
     virtual auto line(const Job& job, const std::vector<LinePixel>& pixels) -> void = 0;
@@ -690,8 +704,12 @@ struct GE {
   bool boxes = true;      //a renderer's textures decoded only as far as its triangles take them (texelBox()); tests
                           //turn it off to compare
   std::vector<LinePixel> hardwareLine;
-  std::vector<Vertex> placed;  //meshTriangles()'s: its corners' clip positions, on the screen
-  std::vector<u32> handed;     //and the run of triangles it hands to the renderer
+  //A PRIM's corners on the screen, meshTriangles()' or drawVertices()' (each with its own bits, draw.cpp's): each
+  //one's place in sixteenths, as fixed() has it, and what its triangles ask of it; and the run of triangles
+  //meshTriangles() hands to the renderer
+  struct MeshCorner { s32 x, y; u32 bits; };
+  std::vector<MeshCorner> placed;
+  std::vector<u32> handed, handing;  //(handing: room for a PRIM's corners as they're found, handed over in runs)
 
   //What the primitives set up since the driver last looked take a PSP's GE to draw (Kernel::geTime()): how many
   //there are (sprites, triangles, lines and points; a triangle cut at the near plane, its pieces), and their pixels

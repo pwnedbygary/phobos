@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdio>
 #include <ctime>
 #include <deque>
 #include <filesystem>
@@ -55,6 +56,7 @@ namespace ares::PlayStationPortable {
 struct Allegrex;
 struct Memory;
 struct GE;
+struct SpinShadow;
 
 //codec.cpp: the decoders under the PSP's music and movies. The libraries (atrac.cpp, mp3.cpp, mpeg.cpp) take the
 //PSP's containers apart themselves and hand a decoder one frame, or one picture's access unit, at a time; builds with
@@ -238,6 +240,10 @@ struct Kernel {
                                                   //the program's alloc or free called by sceLibFont; 40 on, a
                                                   //movie ring's callback; 48 on, a function on a lent stack)
   static constexpr u32 InterruptStack = 0x0802'0000;  //kernel memory: the top of the stack calls into the program use
+  static constexpr u32 AtracContextMemory = 0x0803'0000;  //kernel memory: the six ATRAC IDs' contexts (atrac.cpp)
+  static constexpr u32 VaudioMemory = 0x0803'1000;  //kernel memory: sceVaudio's two buffers, each with room for the
+                                                    //SRC channel's longest, 4111 pairs of samples (audio.cpp)
+  static constexpr u32 VaudioBufferBytes = 0x4100;
   static constexpr u32 UserMemory = 0x0880'0000;  //the user partition, games' memory, runs from here to the end of RAM
   static constexpr u32 ProgramBase = UserMemory + 0x4000;  //where a program that's a PRX goes (start())
 
@@ -252,6 +258,10 @@ struct Kernel {
   //(dialogs.cpp), what they answer without doing a request isn't traced: a dialog backed out of, the notices that
   //there's nothing to load or delete, and the deletes from a list.
   std::function<auto (const std::string& text) -> void> savedataTrace;
+  //Each file request (IoFileMgrForUser's functions) with its answer, and each asynchronous request as it's done, a
+  //line of text, for a host tracing the games' file I/O (the runner's --trace-io; io.cpp's traceIo()): nothing is
+  //traced without one. Not part of the machine's state.
+  std::function<auto (const std::string& text) -> void> ioTrace;
 
   //kernel.cpp
   static auto nid(const std::string& name) -> u32;
@@ -264,6 +274,7 @@ struct Kernel {
   auto importCode(const std::string& library, u32 nid) -> u32;
   auto syscall(u32 code) -> bool;
   auto dispatch(u32 code, bool& quiet) -> bool;
+  auto dispatchImport(u32 code, bool& quiet) -> bool;
   auto runUntilNextEvent() -> void;
   auto arg(u32 n) const -> u32;
   auto result(u32 value) -> void;
@@ -290,6 +301,9 @@ struct Kernel {
     auto (Kernel::*handler)() -> void;
     u32 nid;
     bool quiet = false;  //it makes nothing due sooner (syscall())
+    //what it does in a spin's turn, worked out without doing it (spins.cpp): false where it would do something else.
+    //Only for cases where the function itself is quiet or calm, so a turn never needs runUntilNextEvent().
+    auto (Kernel::*spin)(SpinShadow& shadow, u64 time) -> bool = nullptr;
   };
   //Set by a function that isn't always quiet but was this time: it changed nothing that has a time to come (dispatch()
   //clears it before each)
@@ -303,6 +317,32 @@ struct Kernel {
   };
   std::vector<Function> functions;
   std::vector<Import> imports;  //by syscall code minus FirstImportCode
+
+  //spins.cpp: a thread polling quiet or calm functions in a loop that comes back to where it was, every register and
+  //byte the same but for those only the time decides, skipped to its last turns before the CPU's go ends. Not saved.
+  struct Spin {
+    u32 site = 0, back = 0;  //the anchor: a syscall's address, and where the program goes on from it (none: 0)
+    u64 last = 0;            //when (cycles) the program was last there
+    u64 period = 0;          //the time between the last two
+    u32 turns = 0;           //turns of that time in a row since
+    u32 wait = 0;            //more to wait for after a proof that failed
+  } spin;
+  bool spins = true;   //(tests turn it off to compare)
+  bool going = false;  //a go of the CPU's is under way (run()): its limit and count are what a skip works from
+  u64 spun = 0;        //turns skipped
+  //SpinLongest: the longest turn, in instructions (the shadow's) and so in cycles (the detector's)
+  static constexpr u32 SpinTurns = 4, SpinLongest = 2048, SpinMargin = 2, SpinWaitMost = 4096;
+  auto spinTurn() -> void;
+  auto spinSkip() -> void;
+  auto spinProve(SpinShadow& shadow) -> bool;
+  auto spinCall(SpinShadow& shadow, u32 code) -> bool;
+  auto spinStorable(u32 address, u32 size) -> bool;
+  auto spinGetThreadId(SpinShadow& shadow, u64 time) -> bool;
+  auto spinReferThreadStatus(SpinShadow& shadow, u64 time) -> bool;
+  auto spinRotateThreadReadyQueue(SpinShadow& shadow, u64 time) -> bool;
+  auto spinSignalSema(SpinShadow& shadow, u64 time) -> bool;
+  auto spinMpegRingbufferAvailableSize(SpinShadow& shadow, u64 time) -> bool;
+  auto spinGetVcount(SpinShadow& shadow, u64 time) -> bool;
   static constexpr u32 ThreadReturnCode = 1, CallReturnCode = 2, ModuleReturnCode = 3, CallbackReturnCode = 4,
                        FontReturnCode = 5, MpegReturnCode = 6, ExtendReturnCode = 7;
   static constexpr u32 FirstImportCode = 0x1000;
@@ -341,8 +381,9 @@ struct Kernel {
     Wait wait = Wait::None;
     u32 waitID = 0;        //the semaphore, mutex (a kernel one's ID, a lightweight one's work area), thread, event
                            //flag, display list, module, message pipe, mailbox or thread-local storage pool waited
-                           //for; the sound channel (0-7 a mixer channel's, Audio::WaitSrc or WaitSrcDrain the SRC
-                           //channel's); the file whose asynchronous request is waited for, or that a synchronous
+                           //for; the sound channel (0-7 a mixer channel's, Audio::WaitSrc, WaitSrcDrain or
+                           //WaitVaudioRelease the SRC channel's); the file whose asynchronous request is waited for,
+                           //or that a synchronous
                            //read or write went to
     u32 waitCount = 0;     //how many a semaphore or mutex wait needs (the count a mutex is to be held with); the
                            //bits an event flag wait needs; a mixer output's left volume; the samples an SRC output's
@@ -423,6 +464,7 @@ struct Kernel {
   auto extendReturned() -> void;
   auto extensionsEnded(Thread& thread) -> void;
   auto signalSemaphores(Semaphore& semaphore) -> bool;  //(whether it woke a thread)
+  auto signalRefused(u32 uid, s32 count) const -> u32;
   auto unlockLwMutex(u32 workArea) -> void;
   auto findThread(u32 uid) -> Thread*;
   auto deleteThread(Thread& thread) -> void;
@@ -443,7 +485,10 @@ struct Kernel {
   auto report(u32 address, const Report& structure) -> void;
   auto threadStatus(const Thread& thread) const -> u32;
   auto threadWaitType(const Thread& thread) const -> u32;
-  auto threadRunTime(const Thread& thread) const -> u64;
+  auto threadRunTime(const Thread& thread, u64 time) const -> u64;
+  auto threadInfoLength() const -> u32;
+  auto threadInfo(const Thread& thread, u64 time) const -> Report;
+  static constexpr u32 ThreadInfoRunTime = 84;  //the run time's two words in a SceKernelThreadInfo
   auto threadmanIDs(u32 type, std::vector<u32>& ids) -> bool;
 
   auto sceKernelCreateThread() -> void;
@@ -619,6 +664,7 @@ struct Kernel {
 
   //io.cpp: files and folders on the host folders standing for the PSP's devices, or on the disc in the drive;
   //standard input, output and error
+  struct HeldFileCloser { auto operator()(std::FILE* file) const -> void { std::fclose(file); } };
   struct OpenFile {
     std::string path;      //the PSP's name for it, normalized
     std::string host;
@@ -634,8 +680,10 @@ struct Kernel {
     u32 sector = 0;
     u64 size = 0;
     //PGD (Protected Game Data): a UMD data file, or an NPDRM EDATA, whose data the PSP decrypts as it's read. The
-    //version key (sceIoIoctl's 0x04100001) and where the data starts (0x04100002) set it; the reads of that data in
-    //io.cpp are decrypted (ares/psp/kernel/pgd.cpp).
+    //version key (sceIoIoctl's 0x04100001, or the licensee key: sceNpDrmEdataSetupKey) and where the PGD starts in
+    //the file (0x04100002, or past an EDATA's header) set it; the reads of that data in io.cpp are decrypted
+    //(ares/psp/kernel/pgd.cpp). pgdDataOffset is where the PGD starts until its descriptor is read, then where its
+    //data starts (io.cpp's pgdDescriptor()).
     bool pgd = false;
     u8 pgdVersionKey[16] = {};
     bool pgdReady = false;
@@ -654,6 +702,16 @@ struct Kernel {
     bool resultOnly = false;  //nothing is open (an asynchronous close, or an asynchronous open that failed): the
                               //descriptor stays only to hand over its request's result
     u64 opened = 0;        //its place in the order the program opened files (filesOpened then): sceIoGetFdList's
+    //A host file that had bytes, opened to write and be emptied (PSP_O_TRUNC): the PSP's file is `length` bytes
+    //from then on, while the host file keeps the bytes it had past them until it's cut (io.cpp's openFile() and
+    //cut()): `held`, the host file itself, opened again to be cut through whatever becomes of its path (not
+    //saved: a state's is opened again), and `hostLength`, its length as the kernel left it, which it must still
+    //have to be cut. `tailHash`: in a state, the hash of the bytes the cut would drop (hashTail()).
+    bool truncated = false;
+    u64 length = 0;
+    u64 hostLength = 0;
+    u64 tailHash = 0;
+    std::unique_ptr<std::FILE, HeldFileCloser> held;
   };
   std::map<std::string, std::string> devices;  //"ms0" -> the host folder standing for it
   std::shared_ptr<Disc> disc;  //the disc image in the drive (disc0: and umd0:, unless a host folder stands for it)
@@ -661,12 +719,25 @@ struct Kernel {
   static constexpr u32 MostFiles = 64;
   u64 filesOpened = 0;  //how many files and folders the program has opened (never saved: its files' largest count)
   auto newFile() -> u32;
+  auto fileLength(const std::string& host, u64 hostBytes) -> u64;
+  auto fileWritten(const std::string& host, u64 end) -> void;
+  auto hold(OpenFile& open) -> s64;
+  auto hashTail(OpenFile& open) -> std::optional<u64>;
+  auto cut(OpenFile& open) -> void;
+  auto dropCut(OpenFile& open) -> void;
+  auto dropCuts(const std::string& host) -> void;
+  auto filesMoved(const std::string& oldHost, const std::string& oldPath, const std::string& newHost,
+                  const std::string& newPath) -> void;
+  auto closeFile(OpenFile& open) -> void;
   std::string workingDirectory;
   std::vector<u32> memoryStickCallbacks;  //callbacks the program registered for the memory stick going in and out
   //the memory stick's size and free space, as every function that tells them reports them (io.cpp)
   static constexpr u32 StickSectorSize = 512, StickClusterSize = 32_KiB;
   static constexpr u32 StickClusters = 61'440, StickFreeClusters = 57'344;
   auto stickText(u32 at, u64 kilobytes) -> void;
+  auto traceIo(const Function& function) -> void;
+  auto traceIoDone(u32 file, u32 data, u64 bytes) -> void;
+  auto traceBytes(u32 address, u64 size) -> std::string;
   auto mount(const std::string& device, const std::string& folder) -> void;
   auto split(const std::string& path, std::string& device, std::string& rest) const -> bool;
   auto onDisc(const std::string& path) const -> bool;
@@ -684,6 +755,8 @@ struct Kernel {
   auto readCount(OpenFile& open, u32 data, u32 size, u64& count) -> u32;
   auto readMove(OpenFile& open, u64 at, u64 count, u32 data) -> s64;
   //pgd.cpp: a PGD data file's decryption, set up by the two ioctl commands and applied to its reads
+  auto pgdFileLength(OpenFile& open) -> u64;  //how long the file is, wherever it lies (the disc, or the host)
+  auto pgdFileRead(OpenFile& open, u64 at, u64 size, u8* bytes) -> bool;  //its bytes, wherever it lies
   auto pgdDescriptor(OpenFile& open) -> std::string;  //its header's descriptor, decrypted once; why it can't
   auto pgdDecryptRead(OpenFile& open, u32 data, u64 count) -> void;  //its reads' data region, decrypted in place
   auto writeFile(u32 file, u32 data, u32 size) -> u32;
@@ -1111,7 +1184,9 @@ struct Kernel {
     //n * CPUFrequency / 44100, which is n * FrameCycles / FrameRate with the fraction cut down (370000 / 49).
     static constexpr u64 FrameCycles = 370'000, FrameRate = 49;
     static_assert(FrameCycles * 44'100 == CPUFrequency * FrameRate);
-    static constexpr u32 WaitSrc = 8, WaitSrcDrain = 9;  //waitIDs on the SRC channel (0-7: the mixer channels)
+    //waitIDs on the SRC channel (0-7: the mixer channels): for a completion, for it to drain, and for it to drain so
+    //that sceVaudioChRelease can release it
+    static constexpr u32 WaitSrc = 8, WaitSrcDrain = 9, WaitVaudioRelease = 10;
     //An SRC buffer's slot frees as its transfer ends, 100 microseconds before its last samples are heard
     //(srcOutput()); the shortest buffer, 17 samples at 48 kHz, plays for 354.
     static constexpr u64 SrcLead = CPUFrequency / 10'000;
@@ -1162,6 +1237,14 @@ struct Kernel {
       u64 renderedTo = 0;
       u64 position = 0;
     } src;
+    //sceVaudio's channel: the SRC channel, held by sceVaudioChReserve; its buffers, single samples or pairs, copied
+    //as pairs into the kernel's two (VaudioMemory) and armed from there (audio.cpp)
+    struct Vaudio {
+      bool reserved = false;          //held by sceVaudioChReserve (even where the SRC channel refused it: audio.cpp)
+      bool ownsSrc = false;           //and the SRC channel reserved for it
+      bool mono = false;              //its buffers single samples (format 1), else pairs (2)
+      s32 effect = 0, effectVolume = 0, alc = 0;  //sceVaudioSetEffectType's and sceVaudioSetAlcMode's: kept, not heard
+    } vaudio;
   } audio;
   auto sampleFrame(u64 cycle, u32 fraction = 0) const -> u64;
   auto frameCycle(u64 frame) const -> u64;
@@ -1177,9 +1260,9 @@ struct Kernel {
   auto srcRender(u64 until, bool wholeBuffer = false) -> void;
   auto srcRetire() -> bool;
   auto audioOutput(std::vector<s16>& frames) -> void;
-  auto srcReserve(u32 samples, u32 rate, u32 channels) -> void;
-  auto srcRelease() -> void;
-  auto srcOutput() -> void;
+  auto srcReserve(u32 samples, u32 rate, u32 channels) -> u32;
+  auto srcRelease() -> u32;
+  auto srcOutput(s32 volume, u32 buffer) -> void;
   auto audioEvents() -> bool;
   auto nextAudioEvent() const -> u64;
   auto sceAudioChReserve() -> void;
@@ -1201,6 +1284,11 @@ struct Kernel {
   auto sceAudioSRCChReserve() -> void;
   auto sceAudioSRCOutputBlocking() -> void;
   auto sceAudioSRCChRelease() -> void;
+  auto sceVaudioChReserve() -> void;
+  auto sceVaudioChRelease() -> void;
+  auto sceVaudioOutputBlocking() -> void;
+  auto sceVaudioSetEffectType() -> void;
+  auto sceVaudioSetAlcMode() -> void;
 
   //messages.cpp: message pipes (bytes from thread to thread, through a buffer or straight across) and mailboxes
   //(packets the program keeps in its own memory, handed over by address)
@@ -1287,6 +1375,7 @@ struct Kernel {
   std::vector<s32> sasSums;        //a grain's dry and wet sums as it's made (working room, not saved)
   std::vector<s16> sasSamples;     //and the 16-bit samples it writes
   auto sasVoice(u32 number) -> Sas::Voice*;
+  auto sasVoiceWord(u32 core, u32 number, u32 value) -> void;
   auto sasEnvelope(Sas::Voice& voice) -> void;
   auto sasBlock(Sas::Voice& voice, u32 block, u8* bytes) -> bool;
   auto sasNext(Sas::Voice& voice, u8* bytes) -> bool;
@@ -1358,6 +1447,9 @@ struct Kernel {
   auto mpegFinish(MpegCall& call) -> void;
   auto mpegAbandoned(u32 thread) -> void;
   auto mpegLibrary(u32 handle) -> u32;
+  auto mpegMarked(u32 library) -> bool;
+  template<typename View> auto ringAvailable(View& view, u32 ringbuffer) -> u32;
+  template<typename View> auto mpegMarkedIn(View& view, u32 library) -> bool;
   auto mpegHeaderWord(u32 address) -> u32;
   auto mpegFrameWidth(u32 handle, u32 frameWidth) -> u32;
   auto mpegOwnLibrary() -> bool;
@@ -1605,8 +1697,8 @@ struct Kernel {
   };
   Atrac atracs[6];
   u32 atracPlusIDs = 2, atracClassicIDs = 2;  //how sceAtracReinit shares the six IDs between the codecs
-  u32 atracContexts = 0;        //the memory _sceAtracGetContextAddress hands out (made the first time it's asked)
-  auto atracFind(u32 id, bool needData = true) -> Atrac*;
+  u32 atracContexts = AtracContextMemory;  //where the six IDs' contexts are, 256 bytes each (atrac.cpp)
+  auto atracFind(u32 id, bool needData = true, bool byContext = false) -> Atrac*;
   auto atracParse(Atrac& atrac, u32 buffer, u32 size) -> u32;
   auto atracSet(u32 id, u32 buffer, u32 readSize, u32 bufferSize, bool mono) -> u32;
   auto atracFrame(Atrac& atrac, u32& address) -> u32;
@@ -1861,6 +1953,12 @@ struct Kernel {
   auto sceRtcTickAddWeeks() -> void;
   auto sceRtcTickAddMonths() -> void;
   auto sceRtcTickAddYears() -> void;
+  //and dates as text (sceRtcFormat*)
+  auto rtcFormat(bool rfc3339, s32 zone, u32 refused) -> void;
+  auto sceRtcFormatRFC2822() -> void;
+  auto sceRtcFormatRFC2822LocalTime() -> void;
+  auto sceRtcFormatRFC3339() -> void;
+  auto sceRtcFormatRFC3339LocalTime() -> void;
 
   //mt19937.cpp: the Mersenne Twister, the kernel's and its library's (sceMt19937)
   auto mt19937Init(u32 context, u32 seed) -> void;
@@ -1932,7 +2030,7 @@ struct Kernel {
     u32 error = 0;         //what an aborted message finishes with: 0, or the error of one a PSP doesn't show
     bool deleted = false;  //a save was deleted from its list, which asks the front end again (dialogs.cpp)
   } dialog;
-  u32 stateLayout = 28;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 32;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;
@@ -2148,6 +2246,7 @@ struct Kernel {
   static auto localSeconds(s64 seconds, s64& local) -> bool;
   static auto hostZone(s64 seconds, s32& minutes, bool& daylight) -> void;
   auto writeDate(u32 address, u64 microseconds, bool local) -> bool;
+  auto localZone(s32* minutes = nullptr, bool* daylight = nullptr) -> s32;
   auto rtcConvertZone(bool toLocal) -> void;
   auto sceRtcConvertUtcToLocalTime() -> void;
   auto sceRtcConvertLocalTimeToUTC() -> void;

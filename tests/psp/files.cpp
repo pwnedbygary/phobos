@@ -2,6 +2,7 @@
 //buttons and stick as the system sets them; with PSP_TEST_PROGRAMS, a real program that uses both through newlib.
 #include "kernel-machine.hpp"
 #include "disc-image.hpp"
+#include "pgd.hpp"
 
 #include <array>
 #include <cstdlib>
@@ -671,6 +672,132 @@ static auto downloadDrm() -> void {
   CHECK(m.notes.size(), 0);
 }
 
+//An NPDRM EDATA on the stick, as a download's added content comes (Metal Slug XX's MSXXLEONA.EDAT, opened with
+//0x40000001): a "\0PSPEDAT" header, then a whole PGD (tests/psp/pgd.hpp makes both). Readied by
+//sceNpDrmEdataSetupKey, it reads as the PGD's decrypted data from its first byte, both headers hidden, whole, from
+//the middle and past the end, and its data's size is the PGD's. The PGD starts where the header's word at 0x0c says:
+//0x90 in a download's EDATA, 0x80 in one without a licence's MAC. The licensee key isn't the PGD's version key (npdrm
+//derives that from it), which is recovered from the PGD header's MAC. An EDATA holding something else (a module) is
+//read as it is.
+static auto downloadEdata() -> void {
+  auto plain = psp_pgd::scrambled(3000, 11);
+  auto versionKey = psp_pgd::scrambled(16, 0x1234);
+  psp_pgd::Options options;
+  options.keyIndex = 1;  //as games' PGD headers say
+  options.blockSize = 0x400;
+  options.versionKey = versionKey.data();
+  auto pgd = psp_pgd::build(plain, options);
+  CHECK(pgd.empty(), false);
+  for(u32 at : {0x90u, 0x80u}) {
+    auto file = psp_pgd::edata(pgd, at);
+    HostFolder folder;
+    folder.put("PSP/GAME/NPUH00000/DLC.EDAT", std::string(file.begin(), file.end()));
+    KernelMachine m;
+    m.kernel.mount("ms0", folder.path.string());
+    m.system.memory.fill(Buffer, 0x5a, 16);
+    CHECK(m.call("sceNpDrmSetLicenseeKey", {Buffer}), 0);
+    u32 edat = m.call("sceIoOpen", {m.string("ms0:/PSP/GAME/NPUH00000/DLC.EDAT"), 0x4000'0001, 0});
+    CHECK(edat >= 3 && edat < 0x8000'0000, true);
+    CHECK(m.call("sceNpDrmEdataSetupKey", {edat}), 0);
+    CHECK(m.call("sceNpDrmEdataGetDataSize", {edat}), plain.size());
+    CHECK(m.call("sceIoRead", {edat, Buffer, 4000}), plain.size());  //the data, and nothing after it
+    std::vector<u8> read(plain.size());
+    m.system.memory.copyOut(read.data(), Buffer, u32(read.size()));
+    CHECK(read == plain, true);
+    CHECK(m.call("sceIoLseek32", {edat, 1001, 0}), 1001);
+    CHECK(m.call("sceIoRead", {edat, Buffer, 100}), 100);
+    std::vector<u8> piece(100);
+    m.system.memory.copyOut(piece.data(), Buffer, 100);
+    CHECK(piece == std::vector<u8>(plain.begin() + 1001, plain.begin() + 1101), true);
+    CHECK(m.call("sceIoLseek32", {edat, 2950, 0}), 2950);
+    CHECK(m.call("sceIoRead", {edat, Buffer, 4000}), 50);  //past the data's end: only the data
+    CHECK(m.call("sceIoClose", {edat}), 0);
+    CHECK(m.notes.size(), 0);
+  }
+  //an EDATA holding a module (its "~PSP" header, then made-up bytes) rather than a PGD: read as it is
+  auto module = psp_pgd::scrambled(0x200, 12);
+  memcpy(module.data(), "~PSP", 4);
+  auto file = psp_pgd::edata(module);
+  HostFolder folder;
+  folder.put("PSP/GAME/NPUH00000/MODULE.EDAT", std::string(file.begin(), file.end()));
+  KernelMachine m;
+  m.kernel.mount("ms0", folder.path.string());
+  m.system.memory.fill(Buffer, 0x5a, 16);
+  CHECK(m.call("sceNpDrmSetLicenseeKey", {Buffer}), 0);
+  u32 edat = m.call("sceIoOpen", {m.string("ms0:/PSP/GAME/NPUH00000/MODULE.EDAT"), 0x4000'0001, 0});
+  CHECK(m.call("sceNpDrmEdataSetupKey", {edat}), 0);
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {edat}), file.size());
+  CHECK(m.call("sceIoRead", {edat, Buffer, 0x1000}), file.size());
+  std::vector<u8> read(file.size());
+  m.system.memory.copyOut(read.data(), Buffer, u32(read.size()));
+  CHECK(read == file, true);
+  CHECK(m.notes.size(), 0);
+}
+
+//An EDATA on the stick beside files emptied as they're opened (part 95), each as long as the PSP sees it. Readied, an
+//EDATA's size and end are its PGD's data's, and it reads as its data, from its end too, while a plain file emptied as
+//it was opened ends at its PSP length (nothing, then as far as it's written), its old bytes past that still on the
+//host. An EDATA emptied through another descriptor holds nothing to the PSP, so a descriptor opened on it then finds
+//no header to ready: its size and end are 0, while its host file holds the EDATA until the cut. A file open to write
+//isn't readied (sceNpDrmEdataSetupKey readies a file open to read alone), so no descriptor is a PGD with a cut pending.
+static auto downloadEdataEmptied() -> void {
+  auto plain = psp_pgd::scrambled(3000, 13);
+  auto versionKey = psp_pgd::scrambled(16, 0x4321);
+  psp_pgd::Options options;
+  options.keyIndex = 1;
+  options.blockSize = 0x400;
+  options.versionKey = versionKey.data();
+  auto edata = psp_pgd::edata(psp_pgd::build(plain, options));
+  std::string bytes(edata.begin(), edata.end());
+  HostFolder stick;
+  stick.put("PSP/GAME/NPUH00000/DLC.EDAT", bytes);
+  stick.put("PSP/SAVEDATA/NPUH00000/DATA.BIN", "0123456789");
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  auto open = [&](const char* path, u32 flags) { return m.call("sceIoOpen", {m.string(path), flags, 0777}); };
+  m.system.memory.fill(Buffer, 0x5a, 16);
+  CHECK(m.call("sceNpDrmSetLicenseeKey", {Buffer}), 0);
+  u32 save = open("ms0:/PSP/SAVEDATA/NPUH00000/DATA.BIN", 0x0602);  //write, create, truncate: emptied
+  u32 edat = open("ms0:/PSP/GAME/NPUH00000/DLC.EDAT", 0x4000'0001);
+  CHECK(m.call("sceNpDrmEdataSetupKey", {edat}), 0);
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {edat}), plain.size());
+  CHECK(m.call("sceIoLseek32", {edat, 0, 2}), plain.size());  //the data's end
+  CHECK(m.call("sceIoLseek32", {edat, u32(-100), 2}), 2900);
+  CHECK(m.call("sceIoRead", {edat, Buffer, 4000}), 100);
+  std::vector<u8> read(100);
+  m.system.memory.copyOut(read.data(), Buffer, 100);
+  CHECK(read == std::vector<u8>(plain.begin() + 2900, plain.end()), true);
+  CHECK(m.call("sceIoLseek32", {edat, 0, 0}), 0);
+  CHECK(m.call("sceIoRead", {edat, Buffer, 4000}), plain.size());
+  read.resize(plain.size());
+  m.system.memory.copyOut(read.data(), Buffer, u32(read.size()));
+  CHECK(read == plain, true);
+  CHECK(m.call("sceIoClose", {edat}), 0);
+  CHECK(m.call("sceIoLseek32", {save, 0, 2}), 0);  //emptied: its PSP length, its bytes kept on the host
+  CHECK(m.call("sceIoLseek32", {save, 3, 0}), 3);
+  m.system.memory.copyIn(Buffer, "xy", 2);
+  CHECK(m.call("sceIoWrite", {save, Buffer, 2}), 2);  //past its end: 0 to 2 back
+  CHECK(m.call("sceIoLseek32", {save, 0, 2}), 5);
+  CHECK(stick.get("PSP/SAVEDATA/NPUH00000/DATA.BIN") == "012xy56789", true);
+  CHECK(m.call("sceNpDrmEdataSetupKey", {save}), 0);  //open to write: not readied
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {save}), 5);
+  CHECK(m.call("sceIoClose", {save}), 0);
+  CHECK(stick.get("PSP/SAVEDATA/NPUH00000/DATA.BIN") == "012xy", true);
+  u32 emptying = open("ms0:/PSP/GAME/NPUH00000/DLC.EDAT", 0x4000'0602);
+  CHECK(m.call("sceNpDrmEdataSetupKey", {emptying}), 0);
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {emptying}), 0);
+  edat = open("ms0:/PSP/GAME/NPUH00000/DLC.EDAT", 0x4000'0001);
+  CHECK(m.call("sceNpDrmEdataSetupKey", {edat}), 0);
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {edat}), 0);
+  CHECK(m.call("sceIoLseek32", {edat, 0, 2}), 0);
+  CHECK(m.call("sceIoRead", {edat, Buffer, 4000}), 0);
+  CHECK(stick.get("PSP/GAME/NPUH00000/DLC.EDAT") == bytes, true);
+  CHECK(m.call("sceIoClose", {edat}), 0);
+  CHECK(m.call("sceIoClose", {emptying}), 0);
+  CHECK(stick.get("PSP/GAME/NPUH00000/DLC.EDAT").empty(), true);
+  CHECK(m.notes.size(), 0);
+}
+
 //Descriptors handed out: the lowest number free, from 3 (io/open/tty0 recorded small numbers counting up), a closed
 //file's number given to the next file or folder, whatever it is; an asynchronous open's descriptor holding its
 //number until its result is taken; the movie player's file keeping its number while the player has a movie, and a
@@ -804,9 +931,502 @@ static auto fileList() -> void {
   CHECK(listed(n, 16) == std::vector<u32>({0, 1, 2, 4, 5, 3, 6, 7}), true);
 }
 
+//A memory stick file emptied as it's opened to write (PSP_O_TRUNC) holds nothing, but keeps its bytes for a write
+//past its end, as PPSSPP's notes on the hardware record (its issue 579, on a PSP's stick): written "test", then
+//opened to be emptied again (here with LittleBigPlanet's 0x02000000 too), sought to 4 and written "abc", it reads back
+//"testabc"; opened to be emptied and closed with nothing written, it's empty. Meanwhile it holds nothing for its
+//status, reads, seeks from its end and writes to its end, its bytes coming back only into a gap a write leaves, and
+//only as far as they went (zeros past them). A write from or before its end cuts it there and then, as a save
+//rewritten from its start is (so written short of its old length, it ends there), its old bytes gone from gaps after.
+//Emptied again while another descriptor keeps its bytes, it's cut to that one's length first. A state keeps an emptied
+//file's lengths, and one loaded keeps its cut while the host file is as long as it was; the kernel loading a state
+//lets go of the files it had as they are (the system then closes them: ares/system.cpp), and powering on closes them.
+static auto fileTruncation() -> void {
+  HostFolder stick;
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  auto mounted = [&](KernelMachine& on) { on.kernel.mount("ms0", stick.path.string()); };
+  KernelMachine m;
+  mounted(m);
+  auto open = [&](KernelMachine& on, u32 flags) {
+    return on.call("sceIoOpen", {on.string("ms0:/SAVE/DATA.BIN"), flags, 0777});
+  };
+  auto write = [&](KernelMachine& on, u32 file, const std::string& text) {
+    on.system.memory.copyIn(Buffer, text.data(), text.size());
+    return on.call("sceIoWrite", {file, Buffer, u32(text.size())});
+  };
+  auto status = [&](KernelMachine& on) {  //its status's size
+    if(on.call("sceIoGetstat", {on.string("ms0:/SAVE/DATA.BIN"), Buffer + 0x100}) != 0) return ~0u;
+    return on.system.memory.read(4, Buffer + 0x108);
+  };
+  auto size = [&] { return status(m); };
+  u32 file = open(m, 0x0602);  //write, create, truncate
+  CHECK(m.call("sceIoLseek32", {file, 0, 0}), 0);
+  CHECK(write(m, file, "test"), 4);
+  CHECK(stick.get("SAVE/DATA.BIN") == "test", true);  //written from its start: cut then
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == "test", true);
+  file = open(m, 0x0200'0602);
+  CHECK(m.call("sceIoLseek32", {file, 4, 0}), 4);
+  CHECK(write(m, file, "abc"), 3);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == "testabc", true);
+  file = open(m, 0x0602);
+  CHECK(stick.get("SAVE/DATA.BIN") == "testabc", true);  //nothing written yet: nothing cut
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN").empty(), true);
+
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  file = open(m, 0x0603);  //read and write, create, truncate
+  CHECK(size(), 0);
+  CHECK(m.call("sceIoLseek32", {file, 0, 2}), 0);  //from its end
+  CHECK(m.call("sceIoRead", {file, Buffer, 16}), 0);
+  CHECK(m.call("sceIoLseek32", {file, 3, 0}), 3);
+  CHECK(m.call("sceIoRead", {file, Buffer, 16}), 0);  //sought into what it keeps: nothing yet
+  CHECK(write(m, file, "ab"), 2);  //0 to 2 back
+  CHECK(size(), 5);
+  CHECK(m.call("sceIoLseek32", {file, 0, 0}), 0);
+  CHECK(m.call("sceIoRead", {file, Buffer, 16}), 5);
+  CHECK(readBack(m, 5) == "012ab", true);
+  CHECK(m.call("sceIoLseek32", {file, 0, 2}), 5);
+  CHECK(m.call("sceIoLseek32", {file, 12, 0}), 12);  //past its old length: 5 to 9 back, zeros after them
+  CHECK(write(m, file, "Z"), 1);
+  CHECK(size(), 13);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == std::string("012ab56789\0\0Z", 13), true);
+
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  file = open(m, 0x0603);
+  CHECK(m.call("sceIoLseek32", {file, 3, 0}), 3);
+  CHECK(write(m, file, "ab"), 2);  //past its end: 0 to 2 back, 5 to 9 kept out of sight
+  CHECK(stick.get("SAVE/DATA.BIN") == "012ab56789", true);
+  CHECK(m.call("sceIoLseek32", {file, 1, 0}), 1);
+  CHECK(write(m, file, "x"), 1);  //before its end: cut to it first
+  CHECK(stick.get("SAVE/DATA.BIN") == "0x2ab", true);
+  CHECK(m.call("sceIoLseek32", {file, 7, 0}), 7);
+  CHECK(write(m, file, "Z"), 1);  //past its end again: zeros, its old bytes gone
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == std::string("0x2ab\0\0Z", 8), true);
+
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  file = open(m, 0x0602);
+  CHECK(write(m, file, "xy"), 2);
+  CHECK(stick.get("SAVE/DATA.BIN") == "xy", true);  //written short: it ends there, then and there
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == "xy", true);
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  file = open(m, 0x0702);  //write, append, create, truncate
+  CHECK(write(m, file, "ab"), 2);  //at its end, 0
+  CHECK(write(m, file, "cd"), 2);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == "abcd", true);
+
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  u32 first = open(m, 0x0602);
+  CHECK(m.call("sceIoLseek32", {first, 2, 0}), 2);
+  CHECK(write(m, first, "ab"), 2);
+  CHECK(stick.get("SAVE/DATA.BIN") == "01ab456789", true);  //its bytes past 4 kept on the host until it's cut
+  u32 second = open(m, 0x0602);
+  CHECK(stick.get("SAVE/DATA.BIN") == "01ab", true);  //the first's length first
+  CHECK(m.call("sceIoLseek32", {second, 6, 0}), 6);
+  CHECK(write(m, second, "cd"), 2);
+  CHECK(m.call("sceIoClose", {second}), 0);
+  CHECK(m.call("sceIoClose", {first}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == std::string("01ab\0\0cd", 8), true);
+  CHECK(m.notes.size(), 0);
+
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  KernelMachine n;
+  mounted(n);
+  file = open(n, 0x0602);
+  CHECK(n.call("sceIoLseek32", {file, 2, 0}), 2);
+  CHECK(write(n, file, "ab"), 2);
+  auto& emptied = n.kernel.files[file];
+  CHECK(emptied.truncated && emptied.length == 4 && emptied.hostLength == 10, true);
+  auto during = saveState(n);
+  CHECK(roundTrip(n, mounted), true);
+  n.kernel.files.clear();
+  KernelMachine o;
+  mounted(o);
+  CHECK(loadState(o, during), true);  //its host file as long as it was: its cut kept
+  CHECK(o.kernel.files.count(file) && o.kernel.files[file].truncated && o.kernel.files[file].length == 4, true);
+  CHECK(status(o), 4);
+  CHECK(o.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == "01ab", true);
+  for(std::string newer : {"NEWER-SAVE-DATA", "xyz"}) {  //written since, longer or shorter: never cut, nor padded
+    stick.put("SAVE/DATA.BIN", newer);
+    KernelMachine p;
+    mounted(p);
+    CHECK(loadState(p, during), true);
+    CHECK(p.kernel.files.count(file) && !p.kernel.files[file].truncated, true);
+    CHECK(status(p), newer.size());
+    CHECK(p.call("sceIoClose", {file}), 0);
+    CHECK(stick.get("SAVE/DATA.BIN") == newer, true);
+  }
+
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  KernelMachine q;
+  mounted(q);
+  auto before = saveState(q);
+  file = open(q, 0x0602);
+  CHECK(loadState(q, before), true);  //the file it had let go of as it was
+  CHECK(stick.get("SAVE/DATA.BIN") == "0123456789", true);
+  file = open(q, 0x0602);
+  q.kernel.power();
+  CHECK(stick.get("SAVE/DATA.BIN").empty(), true);
+}
+
+//Helpers for the emptied files' cases below: a write of text from Buffer, and a file's status size (~0: none).
+static auto putText(KernelMachine& m, u32 file, const std::string& text) -> u32 {
+  m.system.memory.copyIn(Buffer, text.data(), text.size());
+  return m.call("sceIoWrite", {file, Buffer, u32(text.size())});
+}
+static auto statusSize(KernelMachine& m, const char* path) -> u32 {
+  if(m.call("sceIoGetstat", {m.string(path), Buffer + 0x100}) != 0) return ~0u;
+  return m.system.memory.read(4, Buffer + 0x108);
+}
+
+//An emptied file's cut (io.cpp's cut()) reaches the file it emptied and nothing else. Removed while it's open, its
+//cut is dropped, and a file made in its place, as long, is left whole; renamed while open, it follows (its status, its
+//cut), and so does one in a folder renamed, the rename spelled as the open was or otherwise (a FAT stick's names
+//ignore case), a state then opening it again where it went; replaced behind the kernel's back by another program's
+//file renamed over it, as long, the replacement is left whole (the cut goes to the file held, which no path names
+//now); and written over by something else, longer or shorter, it's never cut, nor made longer.
+static auto fileCutReach() -> void {
+  HostFolder stick;
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  auto open = [&](const char* path) { return m.call("sceIoOpen", {m.string(path), 0x0602, 0777}); };
+  auto seek = [&](u32 file, u32 to) { return m.call("sceIoLseek32", {file, to, 0}); };
+  stick.put("SAVE/A.BIN", "0123456789");
+  u32 file = open("ms0:/SAVE/A.BIN");
+  CHECK(m.call("sceIoRemove", {m.string("ms0:/SAVE/A.BIN")}), 0);
+  u32 made = open("ms0:/SAVE/A.BIN");
+  CHECK(putText(m, made, "made after"), 10);
+  CHECK(m.call("sceIoClose", {made}), 0);
+  CHECK(statusSize(m, "ms0:/SAVE/A.BIN"), 10);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/A.BIN") == "made after", true);
+
+  stick.put("SAVE/B.BIN", "0123456789");
+  file = open("ms0:/SAVE/B.BIN");
+  CHECK(seek(file, 2), 2);
+  CHECK(putText(m, file, "ab"), 2);
+  CHECK(m.call("sceIoRename", {m.string("ms0:/SAVE/B.BIN"), m.string("ms0:/SAVE/C.BIN")}), 0);
+  CHECK(statusSize(m, "ms0:/SAVE/C.BIN"), 4);
+  CHECK(m.kernel.files[file].path == "ms0:/SAVE/C.BIN", true);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/C.BIN") == "01ab", true);
+  stick.put("SAVE/D/E.BIN", "0123456789");
+  file = open("ms0:/SAVE/D/E.BIN");
+  CHECK(m.call("sceIoRename", {m.string("ms0:/SAVE/D"), m.string("ms0:/SAVE/F")}), 0);
+  CHECK(m.kernel.files[file].path == "ms0:/SAVE/F/E.BIN", true);
+  CHECK(statusSize(m, "ms0:/SAVE/F/E.BIN"), 0);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/F/E.BIN").empty(), true);
+  stick.put("SAVE/K/L.BIN", "0123456789");
+  file = open("ms0:/SAVE/K/L.BIN");
+  CHECK(seek(file, 2), 2);
+  CHECK(putText(m, file, "ab"), 2);
+  CHECK(m.call("sceIoRename", {m.string("ms0:/save/k"), m.string("ms0:/save/n")}), 0);  //(spelled otherwise)
+  CHECK(m.kernel.files[file].path == "ms0:/save/n/L.BIN", true);
+  CHECK(statusSize(m, "ms0:/SAVE/N/L.BIN"), 4);
+  auto renamed = saveState(m);
+  {
+    KernelMachine o;
+    o.kernel.mount("ms0", stick.path.string());
+    CHECK(loadState(o, renamed), true);  //opened again where it went, its cut kept
+    CHECK(o.kernel.files.count(file) && o.kernel.files[file].truncated && o.kernel.files[file].length == 4, true);
+    o.kernel.files.clear();
+  }
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/n/L.BIN") == "01ab", true);
+
+  stick.put("SAVE/G.BIN", "0123456789");
+  file = open("ms0:/SAVE/G.BIN");
+  stick.put("SAVE/G.NEW", "9876543210");
+  std::error_code error;
+  std::filesystem::rename(stick.path / "SAVE/G.NEW", stick.path / "SAVE/G.BIN", error);
+  CHECK(bool(error), false);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/G.BIN") == "9876543210", true);
+
+  for(std::string other : {"0123456789ABCDEF", "xyz"}) {
+    stick.put("SAVE/H.BIN", "0123456789");
+    file = open("ms0:/SAVE/H.BIN");
+    CHECK(seek(file, 2), 2);
+    CHECK(putText(m, file, "ab"), 2);
+    stick.put("SAVE/H.BIN", other);  //(written over in place)
+    CHECK(m.call("sceIoClose", {file}), 0);
+    CHECK(stick.get("SAVE/H.BIN") == other, true);
+  }
+  CHECK(m.notes.size(), 0);
+}
+
+//Phobos killed with an emptied file open (no close, no powering off: the process gone, the host closing its files),
+//as the next boot finds the file: before anything was written, its bytes all there; written from its start, as far
+//as it was written, as emptying it at once would have left it; written past its end only, its bytes all there with
+//the new ones over them.
+static auto fileCutKilled() -> void {
+  HostFolder stick;
+  auto killed = [&](const std::function<void(KernelMachine&, u32)>& writes) {
+    stick.put("SAVE/DATA.BIN", "0123456789");
+    KernelMachine k;
+    k.kernel.mount("ms0", stick.path.string());
+    u32 file = k.call("sceIoOpen", {k.string("ms0:/SAVE/DATA.BIN"), 0x0602, 0777});
+    writes(k, file);
+    k.kernel.files.clear();
+    return stick.get("SAVE/DATA.BIN");
+  };
+  CHECK(killed([](KernelMachine&, u32) {}) == "0123456789", true);
+  CHECK(killed([](KernelMachine& k, u32 file) { putText(k, file, "ab"); }) == "ab", true);
+  CHECK(killed([](KernelMachine& k, u32 file) {
+    k.call("sceIoLseek32", {file, 2, 0});
+    putText(k, file, "ab");
+  }) == "01ab456789", true);
+}
+
+//The independent review's cases (part 95's): each what the stick holds as master's immediate emptying left it.
+//R1: an emptied file removed while open, another renamed onto its path: the replacement's status is its own, and
+//closing the old descriptor leaves it whole.
+static auto fileReviewRenameOnto() -> void {
+  HostFolder stick;
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  stick.put("SAVE/NEW.BIN", "NEWSAVE-NEWSAVE-NEWSAVE");
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  u32 file = m.call("sceIoOpen", {m.string("ms0:/SAVE/DATA.BIN"), 0x0602, 0777});
+  CHECK(m.call("sceIoRemove", {m.string("ms0:/SAVE/DATA.BIN")}), 0);
+  CHECK(m.call("sceIoRename", {m.string("ms0:/SAVE/NEW.BIN"), m.string("ms0:/SAVE/DATA.BIN")}), 0);
+  CHECK(statusSize(m, "ms0:/SAVE/DATA.BIN"), 23);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == "NEWSAVE-NEWSAVE-NEWSAVE", true);
+}
+
+//R2: an emptied file written short, renamed while open, then closed: the renamed file ends where it was written.
+static auto fileReviewRenameAway() -> void {
+  HostFolder stick;
+  stick.put("SAVE/TMP.BIN", "0123456789");
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  u32 file = m.call("sceIoOpen", {m.string("ms0:/SAVE/TMP.BIN"), 0x0602, 0777});
+  CHECK(putText(m, file, "ab"), 2);
+  CHECK(m.call("sceIoRename", {m.string("ms0:/SAVE/TMP.BIN"), m.string("ms0:/SAVE/FINAL.BIN")}), 0);
+  CHECK(statusSize(m, "ms0:/SAVE/FINAL.BIN"), 2);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/FINAL.BIN") == "ab", true);
+}
+
+//R3: a save rewritten shorter, not yet closed, then a state made before it loaded: the stick holds the rewrite, and
+//the game reads it back.
+static auto fileReviewStateMidRewrite() -> void {
+  HostFolder stick;
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  KernelMachine n;
+  n.kernel.mount("ms0", stick.path.string());
+  auto before = saveState(n);
+  u32 file = n.call("sceIoOpen", {n.string("ms0:/SAVE/DATA.BIN"), 0x0602, 0777});
+  CHECK(putText(n, file, "ab"), 2);
+  CHECK(loadState(n, before), true);
+  CHECK(stick.get("SAVE/DATA.BIN") == "ab", true);
+  u32 again = n.call("sceIoOpen", {n.string("ms0:/SAVE/DATA.BIN"), 0x0001, 0});
+  CHECK(n.call("sceIoRead", {again, Buffer, 64}), 2);
+  CHECK(n.call("sceIoClose", {again}), 0);
+}
+
+//R4: a state made after a shorter rewrite's writes, before its close; the game saves again, longer; the state loaded,
+//the game closes the descriptor it restored: the newer save is left whole.
+static auto fileReviewStateNewerSave() -> void {
+  HostFolder stick;
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  KernelMachine n;
+  n.kernel.mount("ms0", stick.path.string());
+  u32 file = n.call("sceIoOpen", {n.string("ms0:/SAVE/DATA.BIN"), 0x0602, 0777});
+  CHECK(putText(n, file, "ab"), 2);
+  auto during = saveState(n);
+  CHECK(n.call("sceIoClose", {file}), 0);
+  u32 newer = n.call("sceIoOpen", {n.string("ms0:/SAVE/DATA.BIN"), 0x0602, 0777});
+  CHECK(putText(n, newer, "NEWER-SAVE-DATA"), 15);
+  CHECK(n.call("sceIoClose", {newer}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == "NEWER-SAVE-DATA", true);
+  KernelMachine o;
+  o.kernel.mount("ms0", stick.path.string());
+  CHECK(loadState(o, during), true);
+  CHECK(statusSize(o, "ms0:/SAVE/DATA.BIN"), 15);
+  CHECK(o.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == "NEWER-SAVE-DATA", true);
+}
+
+//R5: the host file shortened behind an emptied descriptor's back (a newer, shorter save under a state; then within a
+//session, as a savedata utility's rewrite would): closing the descriptor never pads it.
+static auto fileReviewNeverLonger() -> void {
+  HostFolder stick;
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  KernelMachine n;
+  n.kernel.mount("ms0", stick.path.string());
+  u32 file = n.call("sceIoOpen", {n.string("ms0:/SAVE/DATA.BIN"), 0x0602, 0777});
+  CHECK(putText(n, file, "abcdefgh"), 8);
+  auto during = saveState(n);
+  CHECK(n.call("sceIoClose", {file}), 0);
+  stick.put("SAVE/DATA.BIN", "xyz");
+  KernelMachine o;
+  o.kernel.mount("ms0", stick.path.string());
+  CHECK(loadState(o, during), true);
+  CHECK(o.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == "xyz", true);
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  KernelMachine p;
+  p.kernel.mount("ms0", stick.path.string());
+  file = p.call("sceIoOpen", {p.string("ms0:/SAVE/DATA.BIN"), 0x0602, 0777});
+  CHECK(putText(p, file, "abcdefgh"), 8);
+  stick.put("SAVE/DATA.BIN", "xyz");
+  CHECK(p.call("sceIoClose", {file}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == "xyz", true);
+}
+
+//R6: Phobos killed (no close, nothing powered off) after a shorter rewrite's writes: the next boot finds the rewrite.
+static auto fileReviewKilled() -> void {
+  HostFolder stick;
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  {
+    KernelMachine k;
+    k.kernel.mount("ms0", stick.path.string());
+    u32 file = k.call("sceIoOpen", {k.string("ms0:/SAVE/DATA.BIN"), 0x0602, 0777});
+    CHECK(putText(k, file, "ab"), 2);
+    k.kernel.files.clear();
+  }
+  CHECK(stick.get("SAVE/DATA.BIN") == "ab", true);
+}
+
+//R7: a reader and a plain writer opened before an emptying open. The reader finds the emptied file empty; the writer's
+//write at 5 makes it 6 bytes long, its first 5 the old ones come back (as a write past an emptied file's end brings
+//them: master, emptying at once, read zeros there); closing the emptying descriptor leaves the 6, and the writer's next
+//byte goes after them.
+static auto fileReviewTwoHandles() -> void {
+  HostFolder stick;
+  stick.put("SAVE/DATA.BIN", "0123456789");
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  u32 reader = m.call("sceIoOpen", {m.string("ms0:/SAVE/DATA.BIN"), 0x0001, 0});
+  u32 writer = m.call("sceIoOpen", {m.string("ms0:/SAVE/DATA.BIN"), 0x0002, 0});
+  u32 emptied = m.call("sceIoOpen", {m.string("ms0:/SAVE/DATA.BIN"), 0x0602, 0777});
+  CHECK(m.call("sceIoRead", {reader, Buffer, 16}), 0);
+  CHECK(m.call("sceIoLseek32", {writer, 5, 0}), 5);
+  CHECK(putText(m, writer, "Z"), 1);
+  CHECK(statusSize(m, "ms0:/SAVE/DATA.BIN"), 6);
+  CHECK(m.call("sceIoRead", {reader, Buffer, 16}), 6);
+  CHECK(readBack(m, 6) == "01234Z", true);
+  CHECK(m.call("sceIoClose", {emptied}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == "01234Z", true);
+  CHECK(putText(m, writer, "Y"), 1);
+  CHECK(m.call("sceIoClose", {writer}), 0);
+  CHECK(m.call("sceIoClose", {reader}), 0);
+  CHECK(stick.get("SAVE/DATA.BIN") == "01234ZY", true);
+}
+
+//The second review's P4: a state with a cut pending (nothing written yet, or a write past the end), loaded after a
+//newer save exactly as long as the host file was: the bytes the cut would drop aren't the state's, so its cut is
+//dropped, and closing the descriptor leaves the newer save whole.
+static auto fileReviewExactLength() -> void {
+  HostFolder stick;
+  for(u32 written : {0u, 4u}) {
+    stick.put("SAVE/DATA.BIN", "0123456789");
+    KernelMachine n;
+    n.kernel.mount("ms0", stick.path.string());
+    u32 file = n.call("sceIoOpen", {n.string("ms0:/SAVE/DATA.BIN"), 0x0602, 0777});
+    if(written) CHECK(n.call("sceIoLseek32", {file, 2, 0}), 2), CHECK(putText(n, file, "ab"), 2);
+    auto during = saveState(n);
+    n.kernel.files.clear();  //(that session gone without a close: nothing cut)
+    stick.put("SAVE/DATA.BIN", "NEWERSAVE!");
+    KernelMachine o;
+    o.kernel.mount("ms0", stick.path.string());
+    CHECK(loadState(o, during), true);
+    CHECK(o.kernel.files.count(file) && !o.kernel.files[file].truncated, true);
+    CHECK(o.call("sceIoClose", {file}), 0);
+    CHECK(stick.get("SAVE/DATA.BIN") == "NEWERSAVE!", true);
+  }
+}
+
+//The second review's P7: two names for one file (a hard link, standing in for a host whose names ignore case and
+//whose paths keep a name as it was asked for). Through the other name, a plain descriptor writes inside the old
+//length: the file is the emptied one, so its length grows to the write's end, and the close keeps the write, as with
+//one name ("01QQ"; master, emptying at once, "\0\0QQ").
+static auto fileReviewTwoNames() -> void {
+  HostFolder stick;
+  stick.put("SAVE/A.BIN", "0123456789");
+  std::error_code error;
+  std::filesystem::create_hard_link(stick.path / "SAVE/A.BIN", stick.path / "SAVE/B.BIN", error);
+  CHECK(bool(error), false);
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  u32 emptied = m.call("sceIoOpen", {m.string("ms0:/SAVE/A.BIN"), 0x0602, 0777});
+  u32 other = m.call("sceIoOpen", {m.string("ms0:/SAVE/B.BIN"), 0x0002, 0});
+  CHECK(statusSize(m, "ms0:/SAVE/B.BIN"), 0);
+  CHECK(m.call("sceIoLseek32", {other, 2, 0}), 2);
+  CHECK(putText(m, other, "QQ"), 2);
+  CHECK(statusSize(m, "ms0:/SAVE/B.BIN"), 4);
+  CHECK(m.call("sceIoClose", {other}), 0);
+  CHECK(m.call("sceIoClose", {emptied}), 0);
+  CHECK(stick.get("SAVE/B.BIN") == "01QQ", true);
+}
+
+//The file I/O trace (Kernel::ioTrace, the runner's --trace-io): a line for each IoFileMgrForUser call, led by the
+//PSP's time and the thread (none here: called directly), with a descriptor's path and position, a read's or write's
+//buffer, size and the hash of its bytes, an open's flags and mode, and the answer; an asynchronous request's due time
+//and result, and a line as it's done. The calls answer as they do untraced, and nothing is traced without a hook.
+static auto fileTrace() -> void {
+  HostFolder stick;
+  stick.put("A.BIN", std::string(4, '\0'));
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  std::vector<std::string> lines;
+  m.kernel.ioTrace = [&](const std::string& line) { lines.push_back(line); };
+  u32 file = m.call("sceIoOpen", {m.string("ms0:/A.BIN"), 0x0603, 0644});
+  CHECK(file, 3);
+  m.system.memory.copyIn(Buffer, "abcd", 4);
+  CHECK(m.call("sceIoWrite", {file, Buffer, 4}), 4);
+  CHECK(m.call("sceIoLseek32", {file, 0, 0}), 0);
+  m.system.memory.fill(Buffer, 0, 8);
+  CHECK(m.call("sceIoReadAsync", {file, Buffer, 8}), 0);
+  m.kernel.cycles = m.kernel.files[file].asyncDoneAt;
+  m.kernel.events();
+  CHECK(m.call("sceIoPollAsync", {file, Buffer + 16}), 0);
+  CHECK(m.call("sceIoGetstat", {m.string("ms0:/A.BIN"), Buffer + 32}), 0);
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(lines.size(), 8);
+  if(lines.size() != 8) return;
+  auto has = [&](u32 n, const std::string& text) { return lines[n].find(text) != std::string::npos; };
+  CHECK(has(0, " -: sceIoOpen \"ms0:/A.BIN\" flags 0x603 (read write create truncate) mode 0644 -> 3"), true);
+  CHECK(has(1, ": sceIoWrite fd 3 ms0:/A.BIN @0x0 from 0x8930000 size 0x4 hash ") && has(1, " -> 4"), true);
+  CHECK(has(2, ": sceIoLseek32 fd 3 ms0:/A.BIN @0x4 offset 0 whence 0 -> 0"), true);
+  CHECK(has(3, ": sceIoReadAsync fd 3 ms0:/A.BIN @0x0 into 0x8930000 size 0x8 -> 0 (due in 101 us, result 0x4)"),
+        true);
+  CHECK(has(4, ": done fd 3 ms0:/A.BIN @0x4 -> 0x4 hash ") && !has(4, "zeros"), true);
+  CHECK(has(5, ": sceIoPollAsync fd 3 ms0:/A.BIN @0x4 -> 0 (result 0x4)"), true);
+  CHECK(has(6, ": sceIoGetstat \"ms0:/A.BIN\" -> 0 (size 4)"), true);
+  CHECK(has(7, ": sceIoClose fd 3 ms0:/A.BIN @0x4 -> 0"), true);
+  CHECK(lines[0].rfind("0 us -: ", 0) == 0 && lines[4].rfind("101 us: done", 0) == 0, true);
+  m.kernel.ioTrace = {};
+  CHECK(m.call("sceIoOpen", {m.string("ms0:/A.BIN"), 0x0001, 0}), 3);
+  CHECK(lines.size(), 8);
+  CHECK(stick.get("A.BIN") == "abcd", true);
+}
+
 auto fileTests() -> Tests {
   return {
     {"files basics", fileBasics}, {"files folders", fileFolders},
+    {"files emptied as they're opened keep their bytes for a write past the end", fileTruncation},
+    {"files emptied: the cut reaches only the file emptied", fileCutReach},
+    {"files emptied: Phobos killed part way", fileCutKilled},
+    {"files review R1: a file renamed onto an emptied file's path", fileReviewRenameOnto},
+    {"files review R2: an emptied file renamed while open", fileReviewRenameAway},
+    {"files review R3: a state loaded part way through a rewrite", fileReviewStateMidRewrite},
+    {"files review R4: a state's emptied file and a newer save", fileReviewStateNewerSave},
+    {"files review R5: a file shortened behind an emptied file's back", fileReviewNeverLonger},
+    {"files review R6: Phobos killed after a rewrite's writes", fileReviewKilled},
+    {"files review R7: a reader and a writer beside an emptying open", fileReviewTwoHandles},
+    {"files review P4: a state's cut and a newer save exactly as long", fileReviewExactLength},
+    {"files review P7: two names for one emptied file", fileReviewTwoNames},
+    {"files traced", fileTrace},
     {"files dates in local time, none after the clock or before 1980; the system's time zone", fileDates},
     {"files containment", fileContainment},
     {"files rename", fileRename}, {"files numbered lowest free first", fileNumbers},
@@ -816,6 +1436,8 @@ auto fileTests() -> Tests {
     {"controller new samples", controllerReadNew}, {"controller cycle", controllerCycle},
     {"controller read", controllerRead}, {"controller two readers", controllerTwoReaders},
     {"system program", systemProgram}, {"download DRM on a game's own files", downloadDrm},
+    {"download DRM on an EDATA (a PGD past its header)", downloadEdata},
+    {"download DRM on an EDATA beside files emptied as they're opened", downloadEdataEmptied},
   };
 }
 

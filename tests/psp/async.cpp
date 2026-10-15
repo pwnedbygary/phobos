@@ -718,8 +718,59 @@ static auto pgdAsyncReads() -> void {
   CHECK(m.notes.size(), 0);
 }
 
+//LittleBigPlanet's first-boot install, as its file library makes it (on a PSP, in JpcspTrace's log of it, and here):
+//GUI.ARC copied from the disc a MiB at a time, each MiB read from the disc file opened, sought and closed again, then
+//written to the stick's file opened again to be emptied (0x02000602: write, create, truncate and a bit pspsdk doesn't
+//name), its status taken, sought to where that MiB goes, written and closed, all asynchronously, each request waited
+//for. The status says the file holds nothing each time, as it was emptied; the file ends whole, the disc file's
+//bytes, as the game finds it when it reads it back (it read its first 4 MiB as zeros when each open emptied it for
+//good, called its data corrupt, and asked to retry for ever).
+static auto asyncInstall() -> void {
+  constexpr u32 Piece = 64 * 1024;
+  std::vector<u8> archive(Piece * 4 + 1234);
+  for(u32 n = 0; n < archive.size(); n++) archive[n] = u8(n * 7 + n / 251);
+  auto image = disc_image::makeIso({{"PSP_GAME/USRDIR/ARCHIVES/GUI.ARC", archive}});
+  HostFolder stick;
+  std::filesystem::create_directories(stick.path / "PSP/SAVEDATA/UCUS98744INSTALL");
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  m.kernel.disc = discFrom(image.bytes);
+  auto waited = [&](u32 file) {
+    advance(m, m.kernel.files[file].asyncDoneAt);
+    m.system.memory.write(4, R, 0x1337), m.system.memory.write(4, R + 4, 0x1337);
+    CHECK(m.call("sceIoWaitAsyncCB", {file, R}), 0);
+    return result64(m, R);
+  };
+  for(u32 at = 0; at < archive.size(); at += Piece) {
+    u32 size = std::min<u32>(Piece, archive.size() - at);
+    u32 disc = m.call("sceIoOpenAsync", {m.string("disc0:/PSP_GAME/USRDIR/archives/gui.arc"), 0x0001, 0644});
+    CHECK(waited(disc), disc);
+    CHECK(m.call("sceIoLseekAsync", {disc, 0, at, 0, 0}), 0);
+    CHECK(waited(disc), at);
+    CHECK(m.call("sceIoReadAsync", {disc, Buffer, size}), 0);
+    CHECK(waited(disc), size);
+    CHECK(m.call("sceIoCloseAsync", {disc}), 0);
+    CHECK(waited(disc), 0);
+    u32 file = m.call("sceIoOpenAsync", {m.string("ms0:/PSP/SAVEDATA/UCUS98744INSTALL/GUI.ARC"), 0x0200'0602, 0644});
+    CHECK(waited(file), file);
+    CHECK(m.call("sceIoGetstat", {m.string("ms0:/PSP/SAVEDATA/UCUS98744INSTALL/GUI.ARC"), R + 16}), 0);
+    CHECK(word(m, R + 16 + 8), 0);
+    CHECK(m.call("sceIoLseekAsync", {file, 0, at, 0, 0}), 0);
+    CHECK(waited(file), at);
+    CHECK(m.call("sceIoWriteAsync", {file, Buffer, size}), 0);
+    CHECK(waited(file), size);
+    CHECK(m.call("sceIoCloseAsync", {file}), 0);
+    CHECK(waited(file), 0);
+  }
+  auto installed = stick.get("PSP/SAVEDATA/UCUS98744INSTALL/GUI.ARC");
+  CHECK(installed.size(), archive.size());
+  CHECK(installed == std::string(archive.begin(), archive.end()), true);
+  CHECK(m.notes.size(), 0);
+}
+
 auto asyncTests() -> Tests {
   return {{"async files called directly", asyncCalls}, {"async files from a damaged image", asyncDamaged},
+          {"async files LittleBigPlanet's install", asyncInstall},
           {"async files waited for", asyncWaits},
           {"async files two waiters", asyncTwoWaiters}, {"async files callback takes the result", asyncCallbackTakes},
           {"async files ioctl timing", asyncIoctlTiming}, {"async files state", asyncState},

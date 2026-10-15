@@ -27,9 +27,10 @@
 //    the save's folder, and buffers outside the program's memory, are refused. The PSP also encrypts the secure files
 //    and hashes them in PARAM.SFO: not done here (the files are only Phobos's to read; the hashes are zeros). A
 //    list's load takes the save its dialog would focus (that one broken, the one the same focus takes among those
-//    that aren't), a list's save that names none (or a pattern, which names none there) the list's first name, the
-//    name written back either way (savedataUnshown()); the list mode lists the saves its save name takes as a pattern
-//    ('*', '?').
+//    that aren't), a list's save that names none of the saves its dialog shows (no name, a pattern, or a name its
+//    list doesn't hold whose save isn't there) the list's first name, or with focus 7 or 8 the new slot the dialog
+//    focuses, but never a save that's there (its own name kept then), the name written back either way
+//    (savedataUnshown()); the list mode lists the saves its save name takes as a pattern ('*', '?').
 //  - A message: answered at once, as if the player pressed Yes (or OK), the message noted.
 //  - The keyboard: each field's text entered as it is, an empty one given the console's nickname as the field's input
 //    types allow it, each CHANGED (keyboard()).
@@ -889,6 +890,7 @@ auto Kernel::savedataMode(u32 p, const std::string* chosen) -> u32 {
     if(!fileName.empty()) {
       std::vector<u8> bytes(size);
       memory.copyOut(bytes.data(), buffer, size);
+      dropCuts(file);  //(written over here: a descriptor that emptied it is cut no more, io.cpp)
       std::ofstream stream(file, std::ios::binary | std::ios::trunc);
       stream.write((const char*)bytes.data(), size);
       if(!stream) return SavedataSaveAccess;
@@ -1009,6 +1011,7 @@ auto Kernel::savedataMode(u32 p, const std::string* chosen) -> u32 {
   case 6: case 7: case 9: case 10: case 21: {  //deleting a save: its folder goes, with all it holds
     if(!exists) return SavedataDeleteNoData;
     fs::remove_all(folder, error);
+    if(!error) dropCuts(folder);  //(a descriptor still open in it holds what's gone: io.cpp)
     return 0;
   }
   case 19: case 20: {  //erasing (secure or not): the data file named goes, and its name from PARAM.SFO's list
@@ -1020,8 +1023,12 @@ auto Kernel::savedataMode(u32 p, const std::string* chosen) -> u32 {
     if(broken) return SavedataReadBroken;
     if(fileName.empty()) return 0;
     if(file.empty() || !fs::is_regular_file(file, error)) return SavedataReadNoFile;
-    fs::remove(file, error);
-    if(described && sfo.listed(fileName, false)) sfo.write(savePath(game + save, "PARAM.SFO"));
+    if(fs::remove(file, error)) dropCuts(file);
+    if(described && sfo.listed(fileName, false)) {
+      std::string path = savePath(game + save, "PARAM.SFO");
+      dropCuts(path);
+      sfo.write(path);
+    }
     return 0;
   }
   default:  //a mode not known: nothing to tell
@@ -1063,6 +1070,7 @@ auto Kernel::savedataWritten(u32 p, const std::string& folder, const std::string
     sfo.values.clear();
     describe();
   }
+  dropCuts(path);  //(replaced: a descriptor that emptied this PARAM.SFO is cut no more, io.cpp)
   return sfo.write(path);
 }
 
@@ -1081,6 +1089,7 @@ auto Kernel::savedataIcons(u32 p, const std::string& folder) -> void {
     if(path.empty()) continue;
     std::vector<u8> bytes(size);
     memory.copyOut(bytes.data(), buffer, size);
+    dropCuts(path);
     std::ofstream(path, std::ios::binary | std::ios::trunc).write((const char*)bytes.data(), size);
   }
 }

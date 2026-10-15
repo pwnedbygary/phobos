@@ -30,18 +30,24 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
     }
   } drawn{*this};
   //(a page of the list's found with nothing drawn or waiting to be drawn over any of its bytes, which stays so until a
-  //command draws: its words read without drawnFirst() asking each time. God of War runs its lists from VRAM, in pages
-  //the GPU draws in.)
+  //command draws: its words read without drawnFirst() asking each time, straight from the host's bytes where the page
+  //is all there, as memory.read() would take them. God of War runs its lists from VRAM, in pages the GPU draws in;
+  //Super Monkey Ball runs 600,000 commands a frame.)
   u32 undrawn = ~0u;
+  const u8* words = nullptr;
   for(ran = 0; ran < budget;) {
     if(list.stall && list.address == list.stall) return Stop::Stalled;
     u32 at = list.address;
     if(at >> 12 != undrawn) {  //(a list in VRAM, where what waits may draw: drawn first, then read without asking again)
       drawnFirst(at, 4);
       undrawn = undrawnPage(at) ? at >> 12 : ~0u;
+      Memory::KnownDrawn known;
+      words = undrawn != ~0u ? memory.pointer(at & ~0xfffu, 0x1000) : nullptr;
     }
     u32 word;
-    {
+    if(words && (at & 0xfff) <= 0xffc) {
+      std::memcpy(&word, words + (at & 0xfff), 4);
+    } else {
       Memory::KnownDrawn known;
       word = memory.read(4, at);
     }

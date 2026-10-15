@@ -95,7 +95,9 @@ auto GE::worker() -> void {
     Batch* batch;
     {
       std::unique_lock lock(drawing.mutex);
-      drawing.wake.wait(lock, [&] { return drawing.quit || (drawing.drawn && drawing.round != seen); });
+      drawing.wake.wait(lock, [&] {
+        return drawing.quit || (!drawing.held && drawing.drawn && drawing.round != seen);
+      });
       if(drawing.quit) return;
       seen = drawing.round;
       batch = drawing.drawn;
@@ -550,9 +552,10 @@ auto GE::defer(const PixelState& p, const Region& region) -> bool {
 auto GE::record(const Job& job) -> void {
   Batch& batch = *drawing.batch;
   if(batch.bandJobs.empty()) batch.bandJobs.resize(1024 / BandRows);  //(made with its first job, kept after)
-  u32 index = batch.jobs.size();
+  bool placed = !batch.jobs.empty() && &job == &batch.jobs.back();  //(set up in the list already: placedTriangle())
+  u32 index = batch.jobs.size() - placed;
   for(s32 band = job.firstY / BandRows; band <= job.lastY / BandRows; band++) batch.bandJobs[band].push_back(index);
-  batch.jobs.push_back(job);
+  if(!placed) batch.jobs.push_back(job);
   batch.work += u64(job.lastX - job.firstX + 1) * u64(job.lastY - job.firstY + 1);
   //a deferred texture's texels this job can take, for ensureDecoded() to decode no more than its jobs take
   Look& look = batch.looks.back();
