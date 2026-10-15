@@ -12372,9 +12372,10 @@ with its error codes (`include/common/errors.h`); pspsdk's `pspmodulemgr.h`, `ps
 recordings hash/md5ctx and video/mpeg/ringbuffer/packnum; RFC 1321; PPSSPP read only as a description of the PSP (its
 module loader's notes on NPDRM EDAT modules, its boot of an installed game update), nothing copied or translated; JPCSP
 not read; and the game itself, its files, and a scratch runner noting each module, file and NPDRM call with its
-arguments and result. The owner's PGD and NPDRM code (`pgd.cpp`, `pgd.hpp`, io.cpp's sceNpDrm functions) is unchanged,
-and nothing here needed it (below). Save states: StateVersion 28 (27 was part 87's, taken first), each module keeping
-the variables it imports and the address each holds; layouts 15 to 27 load with none known, as those builds linked none.
+arguments and result. The PGD and NPDRM code (`pgd.cpp`, `pgd.hpp`, io.cpp's sceNpDrm functions), the owner's then
+(open to agents since 15 Oct 2026: part 101), is unchanged, and nothing here needed it (below). Save states:
+StateVersion 28 (27 was part 87's, taken first), each module keeping the variables it imports and the address each
+holds; layouts 15 to 27 load with none known, as those builds linked none.
 
 **The problem.** God Eater 2 (NPJH50832, the PSN release made a disc image) with RedArtz's English patch v2.0 needs the
 patch's folder on the memory stick, `PSP/GAME/NPJH50832` (118 files). Without it the game shows the patch's notice ("It
@@ -12552,10 +12553,11 @@ fields' test covers the imported variables; a variable of one of the kernel's ow
 modules' counts are put right; uOFW's slips are named; segments are numbered as loadcore numbers them; a word already
 right isn't written again; each broken packed table is refused for its own reason; and a function compiled before its
 variable is linked runs again after, on both engines. Its remark on the owner's EDATA path went to the owner rather than
-into this part.
+into this part (part 97 took it up).
 
 **Left, and why.**
-- A module as sold (EDATA) is refused, as above: its key is npdrm's, in the owner's area.
+- A module as sold (EDATA) is refused, as above: its key is npdrm's, which isn't emulated (in the PGD/NPDRM code, the
+  owner's area when this was written and open to agents since 15 Oct 2026: part 101).
 - uOFW's module manager makes the same checks in sceKernelLoadModule and the other LoadModule functions; only
   sceKernelLoadModuleNpDrm makes them here (sceKernelLoadModule is as it was: no game is known to hand it a '%' or a
   short option). PROHIBIT_LOADMODULE_DEVICE isn't modeled.
@@ -13960,7 +13962,8 @@ the owner's rules forbid, and gave cases for each (R1 to R7, now tests):
 - R7 (a reader and a plain writer opened before an emptying open) only printed what it found, and passed on both; its
   expectations are checks now (this part's model: the old bytes come back where master read zeros).
 - Not this part's: openFile() never sets a memory stick file's size, which the NPDRM code reads an EDATA's PGD header
-  by, so an EDATA on the stick gets no PGD state (as on master): the owner's area, reported to him.
+  by, so an EDATA on the stick gets no PGD state (as on master): the owner's area then, reported to him (part 97 has
+  since readied such an EDATA; the code is open to agents since 15 Oct 2026, part 101).
 
 The second review (of `6b26d4b63`) approved, rechecking each of these with probes of its own (P1 to P7: the held
 handles released on every path, 40 emptied files holding 80 descriptors and none after; at the process's file limit,
@@ -14550,8 +14553,9 @@ scenes' hashes `kit/logs/r5hash-*.log`), `mut6/` (the mutations), `kit/r5dqueue.
 ## Part 97: NPDRM EDATA decrypted — the PGD past the EDATA's header, on the memory stick too, its size and end the data's; a PGD file's end its data's
 
 On branch `cursor/psp-pgd-edata-2b67` (draft PR #259), on master `14b181707` (part 95, #257, after part 94, #256);
-part 96 is #258's, still open. The owner's area (io.cpp's PGD and sceNpDrm code, which parts 88 and 95 reported to
-him and left alone): this is his proposal of 13 Oct (an investigation and a patch, `~/phobos-work/scratch/pgd-offset/`:
+part 96 is #258's, still open. The owner's area then (io.cpp's PGD and sceNpDrm code, which parts 88 and 95 reported
+to him and left alone; open to agents since 15 Oct 2026, part 101): this is his proposal of 13 Oct (an investigation
+and a patch, `~/phobos-work/scratch/pgd-offset/`:
 `REPORT.md`, `proposed-fix.patch`), rebased at his request (14 Oct) onto part 95's model of a memory stick file's
 length, to merge once CI is green and an independent review finds nothing. Clean room: the PSP's behaviour from
 "tpu"'s decompilation of the firmware's PGD layer (kirk_engine's `npdrm/dnas_ida.c`) and his `npdrm/edata.c` and
@@ -14731,9 +14735,9 @@ machine's state): all 102 hashes the same in all 21, the state too (no layout ch
 - 0x04100002's argument: the investigation left open whether it's the offset or a pointer to it; the review read the
   decompilation as storing the value itself, where Phobos reads the word it points to (below). No game in the
   library sends it.
-- Not done, as before: PGD ioctls on stick files (refused), 0x04100010, SetupKey's error returns (no licensee key
-  set, say), and ECDSA and licence checks (skipped on purpose). And three the review found, none of which a game in
-  the library does:
+- Not done, as before: SetupKey's error returns (no licensee key set, say), and ECDSA and licence checks (skipped on
+  purpose); PGD ioctls on stick files and 0x04100010 were refused here, and are part 101's. And three the review
+  found, none of which a game in the library does:
   - SetupKey ignores the 0x40000000 flag: an EDATA opened without it (plain, 0x1) is decrypted, where a PSP's PGD
     layer, which hooks only files opened with it, would read it raw.
   - 0x04100002's argument is read as a pointer to the offset; tpu's decompilation stores the value itself. Moot while
@@ -14991,3 +14995,156 @@ savedata traces line for line. CI: the draft PR's checks.
 - Scratch: `~/phobos-work/scratch/small-fixes` (`NOTES.md`; `refs/`, the sources read; `savecheck.sh`,
   `rebootcheck.sh`, `games.sh` and `logs/games.log`, the game checks; `before-src/`, master with the new tests;
   `delay-patch.py`, the test's sleep; `hashkit/`, the scenes). Nothing was run on the RP6.
+
+## Part 101: PGD files on the memory stick — a game's installed data read through the PGD layer (Gunhound EX, 7th Dragon 2020), the PGD layer's answers to a wrong key, a damaged header and a write, and the disc's seek request in an unlocked PGD's data
+
+On branch `cursor/psp-pgd-stick-2b67` (draft PR to come), on master `6ff82f9f1` (part 96, #258, after part 98, #260);
+parts 99 and 100 are #261's and #262's, still open. The first work in the PGD/NPDRM code since the owner opened it to
+agents on 15 Oct 2026 (the handoff's standing note): agents write and maintain `pgd.cpp`, `pgd.hpp`, io.cpp's
+sceNpDrm functions, its PGD requests and the EDATA path, and the owner approves their PRs as any other. Clean room:
+the PSP's behaviour from "tpu"'s decompilation of the firmware's PGD layer (kirk_engine's `npdrm/dnas_ida.c`, the
+module iofilemgr_dnas, part 97's source), uOFW's `iofilemgr_kernel.h` and `errors.h` (the flag's, the key request's
+and ENOTSUP's names) and the games themselves; PPSSPP's `sceIo.cpp` read only as a description of the PSP (its PGD key
+request's answers), nothing copied or translated; JPCSP not read. `pgd.cpp`'s own crypto, two of its checks given
+names. Save states: unchanged (no field added).
+
+**The problem.** #261's game data install dialog (part 99) copies a disc's PSP_GAME/INSDIR to the memory stick, as a
+PSP's does. Gunhound EX (NPJH50723) installs 797 files (460 MB), every one a PGD, to
+`ms0:/PSP/SAVEDATA/NPJH5072300INST00`; on its next boot it opens each it wants (00000313.DAT first, which stands for
+the disc's DRQ/FIRST/DASHBOARDPSP.TGA) with 0x40000001 and gives it its key (ioctl 0x04100001). 7th Dragon 2020
+(NPJH50459) installs GAME.DNS (1.53 GB) to NPJH50459USERID and opens it the same way (0x40004001). io.cpp refused every
+request on a file off the disc (0x8001b000, ENOTSUP), so Gunhound EX failed to read its install and loaded from the
+disc, and 7th Dragon 2020 said "The installed data could not be read. Data installation will be turned OFF. Installed
+data will be read from the UMD." All 30 discs in the library with an INSDIR import the install dialog; any of them
+that reads its install through the PGD layer was the same (Black Wolves Saga looks for
+`ms0:/psp/SAVEDATA/ULJM06220DAT/INSTALL.DNS` so at boot). And the disc's own seek request (ioctl 0x01010005) bounded an
+unlocked PGD by its file's size, where every other seek of one stops at its data's end since part 97.
+
+**What a PSP does** (tpu's decompilation of iofilemgr_dnas, which the firmware adds to the I/O manager as a hook,
+`sceIoAddHook`, the "gamedata" driver):
+- Its match takes any file opened with 0x40000000 (uOFW's SCE_FGAMEDATA) and tests no device: a memory stick file
+  opened so is the PGD layer's as a disc file is, and answers its requests (0x04100001 the key, 0x04100002 where the
+  PGD starts, 0x04100010 the data's size) as a disc file does. A request it doesn't know goes on to the device's
+  driver.
+- Its open refuses a file opened so to write (0x80510201, SCE_GAMEDATA_ERROR_INVALID_ARG), before the device sees it.
+- The key request reads the 0x90-byte header where the PGD starts and checks, in order: the magic "\0PGD" (else
+  0x80510204, INVALID_FORMAT); the header's version (0x80510205) and its DNAS MAC at 0x80 (0x80510204); its 0x70 MAC
+  against the key given (0x80510206, SECURE_INSTALL_ID: no key is recovered); then the descriptor's version and block
+  size (0x80510205, 0x80510204) and the MAC of the block MACs' table (0x80510207). A header shorter than 0x90 bytes:
+  0x80510204. Refused, no PGD is open.
+- 0x04100010 answers the descriptor's data size as its result, or 0x80510206 while no PGD is open. Its seek refuses
+  one before a PGD is open (0x80510206), and works in the data, stopping at its end (part 97).
+- PPSSPP's notes agree on the device (the key request is answered for any file), answer a PGD header that won't open
+  0x80510204 ("likely a key mismatch"), and go on with 0 for a file without PGD's magic, read as it is.
+- A game asks for the wrong key's refusal: Black Wolves Saga gives INSTALL2.DNS first the key it gave INSTALL.DNS
+  (from the same 16 bytes), and on the refusal the 16 bytes after them, which open it (below). Master answered 0 to
+  the first, `pgd.cpp` recovering the right key from the header's MAC.
+
+**The change** (`io.cpp`, `pgd.cpp`, `pgd.hpp`, `kernel.hpp`).
+- `ioctl()`: a memory stick file opened with 0x40000000 takes the PGD layer's three requests; one opened without it
+  still takes none (0x8001b000), and a disc file takes them however it was opened, as before.
+- The key (`pgdUnlock()`): the header read where the PGD starts, on either device (part 97's `pgdFileLength()` and
+  `pgdFileRead()`), and checked at once, as the PGD layer checks it. Cut short or damaged (the DNAS MAC), or a
+  descriptor putting the data past its file: 0x80510204. A key its 0x70 MAC refuses: 0x80510206, no key recovered.
+  Refused, the file stays locked, reading as it is, and keeps where its PGD starts for another key; unlocked, it reads
+  as its data from then on, as before. `pgd.cpp`'s two MAC checks are named for it (`Pgd::intact()`,
+  `Pgd::keyMatches()`) and `Pgd::descriptor()` uses them; it still recovers the version key where no key was
+  checked: sceNpDrmEdataSetupKey's EDATA (its licensee key isn't the version key: part 97), and a PGD whose start
+  0x04100002 gave with no key after it (Left).
+- A file without PGD's magic given a key reads as it is, answered 0, on the stick as on the disc: master's choice for
+  7th Dragon 2020's fan translations (part 51's fix 2: their INSDIR data is decrypted, and they take anything but
+  success as the drive failing), whose GAME.DNS this library's 7th Dragon 2020 installs as it is ("CPK " at its start).
+  The PGD layer answers 0x80510204 there.
+- 0x04100010: the data's size, or 0x80510206 while no PGD is unlocked.
+- `openFile()`: a file opened with 0x40000000 to write is refused (0x80510201) on either device, before it's made or
+  emptied. So the PGD path never writes a player's files, and a PGD is still never a descriptor that emptied its file
+  (part 97's rule, now over the stick's PGDs too).
+- The disc's seek request (0x01010005) on an unlocked PGD works in its data, as sceIoLseek does: from its end, the
+  data's; past the data's end refused (0x80010005), as past a plain file's end. On a PSP the PGD layer passes that
+  request to the disc's driver, which works on the raw file and a position of its own; Phobos keeps one position, an
+  unlocked PGD's in its data, as its reads and seeks have it. No game sends it on a PGD file.
+
+**Tests** (tests/psp/disc.cpp, three new groups and three changed).
+- `memory stick PGD files through the PGD layer`: a PGD of 5000 bytes in 1 KiB blocks, MAC type 1 (as Gunhound EX's),
+  at Gunhound EX's path, opened with 0x40000001. Locked: it reads as it is, ends where the file does, and 0x04100010
+  refuses (0x80510206). Its key: 0. Its size from 0x04100010, sceNpDrmEdataGetDataSize and its end, the data's;
+  sceIoGetstat, the file's. Read whole, and at 13 starts by 6 sizes across its 16-byte and 1 KiB blocks and its end;
+  sought past the end (stopping there), back from where it is and from its end; a second key, a wrong one, leaves it
+  unlocked; a state saved there loads and reads on; the key and a read made asynchronously (opened with 0x40004001, as
+  7th Dragon 2020 opens its GAME.DNS); its host file unchanged.
+- `memory stick PGD files refused`: a wrong key (0x80510206, the file then as it is until its own key unlocks it); a
+  damaged header, one cut short and a descriptor past its file (0x80510204, each left as it is); a short key
+  (0x8001b000, as on the disc); a CPK file and a 2-byte one given a key (0, read as they are, no data size); a file
+  opened without 0x40000000 (the three requests 0x8001b000); four ways of opening with 0x40000000 to write (0x80510201,
+  the file unchanged and none made); a PGD 0x800 bytes into its file by 0x04100002, a wrong key then its own; every
+  file byte for byte as it was.
+- `PGD files' disc seek requests stop at their data's end`: a UMD PGD with block MACs after its data. Locked, the
+  file's end; unlocked, the data's (3000, not 3208); 100 back reads the last 100 bytes; the disc's read request
+  (0x01030008) from 2500 reads 500; back to 0; to 3000 taken; to 3001, or past the end from it, refused.
+- Changed: `disc PGD keys` (a "\0PGD" file without a PGD's MACs: 0x80510204, where it was 0; a disc file opened with
+  0x40000000 to write: 0x80510201, where it was 0x8001b004); `disc PGD reads` (a wrong key: 0x80510206 and the file as
+  it is, then its own key, where the recovered key gave 0 and the data; 0x04100010); and `download DRM on an EDATA
+  beside files emptied as they're opened` (files.cpp: the EDATA is emptied through a plain write descriptor, 0x0602,
+  as 0x40000602's is now refused, which is checked with the EDATA unchanged).
+- Against master (`6ff82f9f1` with these tests and the three error names, unsanitized): the six fail, 152 checks (the
+  stick's 108, the refusals' 28, the disc seek's 7, the disc reads' 5, the EDATA's 2, the disc keys' 2), and the
+  other 552 pass. The branch: 558 groups, 0 failures.
+
+**Games** (`~/phobos-work/scratch/pgd-stick`: master's runner and the branch's, built from `bd4b4c058`'s code before two
+comments changed; the runner's file I/O trace, the clock pinned, deep play's boot scripts; the sticks APFS
+copies of #261's installed ones).
+- Gunhound EX (6000 frames, the boot script to Mission 01): master's key for the first installed file answers
+  0x8001b000 and the game reads from the disc (84 reads of DRQ files); the branch gives 74 installed files 83 keys,
+  each answered 0, and reads them from the stick (254 reads), reaching Mission 01's gameplay sooner. Each of the
+  branch's 178 distinct stick reads that master made from the disc (78 files: the PGD files, against the DRQ original
+  the game names before each, and the CRI sound banks) gives master's bytes, hash for hash; none differs (17 more are
+  music master's run hadn't reached).
+- The same PGD files on the disc: the disc's own INSDIR copies (taken out of the CHD with Phobos's disc reader), read
+  through the disc's PGD path with the keys the game gave (it prints each: "MS_INST5 secID"), against the stick's: 74
+  of 74 the same, each of the game's own size and hash, and each refusing the next file's key (0x80510206) on both
+  devices.
+- 7th Dragon 2020 [English v0.91] (16,200 frames, to the field): master answers the stick's GAME.DNS 0x8001b000 twice,
+  shows the message above and reads from the disc (148 reads); the branch answers 0, shows no message, reads its data
+  from the stick (123 reads; the disc's file stays open for the CPK's table of contents) and reaches the field. 118 of
+  its 119 distinct stick reads are master's disc reads at the same places, hash for hash.
+- Every stick after every boot: byte for byte #261's (nothing written).
+- The seven UMD PGD games (part 97's runs: 1200 frames with captures at 600 and 1200, and 3000 frames for four): six
+  are master's, traces line for line and captures byte for byte. Black Wolves Saga's INSTALL2.DNS refuses the game's
+  first key (0x80510206) and opens with its second, 100 microseconds later; the rest of its traces and every capture
+  are master's.
+- Batch 04's saves (Gundam NEXT PLUS, Kurohyou 1, Lunar, Killzone, Lumines, La Pucelle Ragnarok, MediEvil): byte for
+  byte master's runner's, their savedata traces line for line.
+
+**Checks** (`bd4b4c058`). tests/psp 558 groups, 0 failures, sanitized (`detect_container_overflow=0`) and unsanitized;
+tests/allegrex 78 groups, 0 failures; tests/psp/ares 348 checks, 0 failed. The 21 scenes in Software (the kit's bench
+runners, master's against the branch's, the branch's built as the games' was; 100 frames from each scene's state,
+every frame's picture and VRAM settled, then RAM and the machine's state): all 102 hashes master's in all 21. CI: the
+draft PR's checks.
+
+### Left
+
+- A file without PGD's magic given a key: 0, read as it is (the translations need it), where the PGD layer answers
+  0x80510204; and such a file's seeks before a key aren't refused (0x80510206 on a PSP), as before.
+- A disc file opened without 0x40000000 still takes the PGD requests (master's; a PSP's disc driver would get them,
+  its answer unknown). Part 97's survey ran 41 of the library's games; the seven PGD games all open theirs with it.
+- The PGD layer's other checks aren't made: the header's version (1), the descriptor's version (0) and block size
+  (0x400), the MAC of the block MACs' table (0x80510207) and each block's MAC as it's read, the eight files it holds at
+  once (0x80510202), and the flag 0x04000000's other MAC key. A short key is 0x8001b000, where the decompilation's
+  test (written backwards there) reads as 0x80510201.
+- A second key on an unlocked file leaves it unlocked (0), where the PGD layer checks it again.
+- 0x04100002 as part 97 left it: a pointer to the offset, where the decompilation and PPSSPP's notes take the value
+  (the PGD layer keeps a PGD open for the same offset and closes it for another); given alone, its PGD unlocks at the
+  first read through `pgd.cpp`'s recovery (master's). No game sends it.
+- The disc's requests on an unlocked PGD (0x01010005, 0x01030008, 0x01020004, 0x01020007): a PSP's PGD layer passes
+  them to the disc's driver, which sees the raw file and its own position; here the first three see the data, the
+  size the file's.
+- Black Wolves Saga's install isn't run here (it opens it as Gunhound EX does). Gunhound EX's and 7th Dragon 2020's
+  were installed with #261's runner: master installs nothing until #261 merges.
+- Part 97's: SetupKey ignoring the 0x40000000 flag, its error returns, the ECDSA and licence checks, drm types other
+  than 1, and real DLC.
+- Scratch: `~/phobos-work/scratch/pgd-stick` (`NOTES.md`; `refs/`, the decompilation and PPSSPP's file read;
+  `run-game.sh`, `gunhound/` and `7d/`, the installed games' runs; `compare-reads.py`, the reads paired;
+  `gunhound/disc-insdir`, `cases.txt` and `harness-disc-vs-stick.txt`, the disc's copies read (through a scratch test
+  group, not committed: `disc-with-harness.cpp`); `umd.sh`, `compare-umd.sh` and `runs/`, the UMD games;
+  `savecheck.sh`, `saves.sh` and `savecheck/`, the saves; `tests.sh` and `logs/`, the suites, `src-before/` the tree
+  they failed on; `hashkit/`, the scenes). Nothing was run on the RP6.

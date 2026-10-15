@@ -13,6 +13,11 @@ Read in order:
 3. [Performance audit](performance-audit.md) and [benchmark protocol](mario-tennis-benchmark.md).
 4. [Implementation history](implementation-history.md) only for relevant historical details.
 
+Standing note: the PSP core's PGD/NPDRM code is open to agents (the owner's decision, 15 Oct 2026).
+`ares/psp/kernel/pgd.cpp`, `pgd.hpp`, io.cpp's sceNpDrm functions, its PGD ioctls and the EDATA path are written and
+maintained by agents like the rest of the core, and the owner approves their PRs as usual. Entries and parts from
+before that day call it "the owner's area" and leave it to him: true then, history now.
+
 Current focus (2026-10-13): the PSP core (its parts in [psp-core.md](psp-core.md), and the
 entries below, newest first) and the
 [test and performance plan](implementation-plan.md#test-and-performance-plan-2026-10-13):
@@ -29,6 +34,42 @@ This follow-up corrects cancelled signing-task status and adds this portable ent
 point, and restores tracking of the existing `.gitmodules` file for fresh clones.
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
+
+## PSP NPDRM: PGD files on the memory stick — a game's installed data read through the PGD layer (Gunhound EX, 7th Dragon 2020); a wrong key, a damaged header and a write refused as the PGD layer refuses them — 2026-10-15
+
+Branch `cursor/psp-pgd-stick-2b67`, on master `6ff82f9f1` (part 96, #258); draft PR to come. docs/psp-core.md, part
+101, has the evidence (parts 99 and 100 are #261's and #262's, still open). The first work in the PGD/NPDRM code
+since the owner opened it to agents (the standing note above). Clean room: tpu's decompilation of the firmware's PGD
+layer (iofilemgr_dnas), uOFW's names, the games; PPSSPP's sceIo.cpp only as a description; JPCSP not read. Save states
+unchanged.
+- **The bug** (#261's install work): Gunhound EX's 797 installed PGD files and 7th Dragon 2020's installed GAME.DNS,
+  opened with 0x40000000 and given their keys (ioctl 0x04100001), were refused with 0x8001b000 (io.cpp took no
+  request on a file off the disc): Gunhound EX loaded from the disc, and 7th Dragon 2020 said "The installed data
+  could not be read" and turned its install off.
+- **What a PSP does**: its PGD layer takes any file opened with 0x40000000, on any device; its open refuses one opened
+  so to write (0x80510201); its key answers 0x80510204 for a header cut short, damaged or not a PGD's, and 0x80510206
+  for a key the header's MAC refuses (no key recovered); 0x04100010 gives the data's size, 0x80510206 with no PGD open.
+- **The change** (io.cpp, pgd.cpp, pgd.hpp, kernel.hpp): a stick file opened with 0x40000000 takes the PGD layer's
+  requests as a disc file does; the key checks the header at once on either device (`pgdUnlock()`: 0x80510204,
+  0x80510206, the file left locked; pgd.cpp's key recovery only where no key is checked, sceNpDrmEdataSetupKey's
+  EDATA above all); a file without PGD's magic still reads as it is (0, as the translations need); 0x04100010; a file
+  opened with 0x40000000 to write refused, so the PGD path never writes; and #259's leftover, the disc's seek request
+  (0x01010005) in an unlocked PGD's data, its end the data's.
+- **Games**: Gunhound EX reads 74 installed files from the stick (83 keys, each 0; 254 reads) and plays Mission 01;
+  178 of its stick reads are master's disc reads of the same data, hash for hash, and the disc's own INSDIR copies,
+  read through the disc's PGD path, give the stick's bytes, 74 of 74. 7th Dragon 2020 reads GAME.DNS from the stick
+  (123 reads), shows no message and reaches the field; 118 of 119 reads are master's disc reads. The sticks stay byte
+  for byte as installed. The seven UMD PGD games: six master's, traces line for line; Black Wolves Saga's INSTALL2.DNS
+  refuses the game's first key and opens with its second (master's key recovery hid that), every capture master's.
+- **Tests**: three new groups (stick PGD files through the PGD layer, their refusals, the disc's seek request) and
+  three changed (a fake "\0PGD" now 0x80510204, a wrong key 0x80510206, part 97's EDATA emptied through a plain
+  descriptor). On master the six fail, 152 checks.
+- **Checks**: tests/psp 558/0 sanitized and unsanitized; tests/allegrex 78/0; tests/psp/ares 348/0; the 21 scenes in
+  Software, every hash master's; batch 04's saves byte for byte master's.
+- **Left**: a file without PGD's magic answered 0 (the PGD layer says 0x80510204); disc files opened without the flag
+  still take the PGD requests; the PGD layer's version, block-size and table-MAC checks and its eight-file limit; a
+  second key on an unlocked file; 0x04100002 as part 97 left it; the disc's requests on an unlocked PGD see its data
+  (a PSP's PGD layer passes them to the disc's driver); Black Wolves Saga's install not run; part 97's EDATA items.
 
 ## PSP GE: the depth buffer in the order its frame buffer's format has it — the Kurohyou games' characters at the screen's middle (deep play batch 04, bug 2) — 2026-10-14
 
@@ -234,8 +275,9 @@ PSP) and uOFW's decompilation of the rtc module; PPSSPP's sceRtc only as a desig
 ## PSP NPDRM: EDATA decrypted — the PGD past the EDATA's header, on the memory stick too, its size and end the data's; a PGD file's end its data's — 2026-10-14
 
 Branch `cursor/psp-pgd-edata-2b67`, on master `14b181707` (part 95, #257, with #256); draft PR #259.
-docs/psp-core.md, part 97, has the evidence (part 96 is #258's). **The owner's area**: his PGD/EDATA proposal of
-13 Oct (`~/phobos-work/scratch/pgd-offset/`: REPORT.md, proposed-fix.patch), rebased at his request (14 Oct 20:30),
+docs/psp-core.md, part 97, has the evidence (part 96 is #258's). **The owner's area** then (open to agents since
+15 Oct: the standing note above): his PGD/EDATA proposal of 13 Oct (`~/phobos-work/scratch/pgd-offset/`: REPORT.md,
+proposed-fix.patch), rebased at his request (14 Oct 20:30),
 to merge once CI is green and an independent review finds nothing (his approval, 21:18). Clean room: tpu's
 decompilation of the firmware's PGD layer and his edata.c and pgd.c, the PSP Developer Wiki, uOFW's names,
 npdecrypter's behaviour on hardware; PPSSPP only as a design cross-check; JPCSP not read. Save states unchanged
@@ -281,9 +323,10 @@ npdecrypter's behaviour on hardware; PPSSPP only as a design cross-check; JPCSP 
   Round 1 (`61ddbad0e`): tests/psp 547/0 sanitized and unsanitized; tests/allegrex 78/0; tests/psp/ares 348/0; the 21
   scenes in Software: every hash master's, the machine's state too.
 - **Left**: no real encrypted DLC tested (the library has none); the PGD offset 0x80 unsettled; drm types other than 1
-  unsupported, as before; PGD ioctls on stick files, 0x04100010, SetupKey's error returns and the licence checks not
-  done; and the review's three, none of which a game does (SetupKey ignoring the 0x40000000 flag, 0x04100002's
-  argument read as a pointer where the decompilation stores the value, SEEK_END before the key not refused).
+  unsupported, as before; SetupKey's error returns and the licence checks not done (PGD ioctls on stick files and
+  0x04100010 since done: part 101); and the review's three, none of which a game does (SetupKey ignoring the
+  0x40000000 flag, 0x04100002's argument read as a pointer where the decompilation stores the value, SEEK_END before
+  the key not refused).
 
 ## PSP I/O: memory stick files emptied as they're opened keep their bytes (LittleBigPlanet's install), and the runner's file I/O trace — 2026-10-14
 
@@ -315,7 +358,8 @@ JPCSP not read. Save states: layout 32 (31 and older load as before; `tests/psp/
   file renamed while open never cut), a state's descriptor cutting a newer save or padding a shorter one (R4, R5), a
   state load dropping the session's cuts (R3), and Phobos killed between a rewrite's last write and its close leaving
   the old tail (R6). All fixed as above; R1 to R7 are tests now. The reviewer's NPDRM nit (a memory stick EDATA gets
-  no PGD state, as on master) is the owner's area, left to him. Round 3 (the second review approved `6b26d4b63`,
+  no PGD state, as on master) was the owner's area then, left to him (part 97 has since readied such an EDATA; the code
+  is open to agents since 15 Oct). Round 3 (the second review approved `6b26d4b63`,
   leaving three small things): its P4 (a state's cut and a newer save exactly as long, which the length alone let
   through) closed by the tail hash; its P7 (a write through another name for the file lost at the close: part 95's
   claim was inexact) closed by matching files by identity; renames spelled otherwise than the open now carry the PSP
@@ -1530,8 +1574,8 @@ commits are on the branch, and a third's with an independent review's points.
 Branch `cursor/psp-npdrm-modules-2b67`, on master (`0a9a7fa75`, #234), merged with master since (#235, #236).
 docs/psp-core.md, part 88, has the evidence. Clean room: uOFW's module manager and loadcore, pspsdk's headers,
 pspautotests' recordings, RFC 1321, PPSSPP's notes read only as a description of the PSP; JPCSP not read. StateVersion
-28 (each module keeps its imported variables; 27 is part 87's). The owner's PGD/NPDRM code (pgd.cpp, pgd.hpp, io.cpp's
-sceNpDrm functions) is unchanged and wasn't needed.
+28 (each module keeps its imported variables; 27 is part 87's). The PGD/NPDRM code (pgd.cpp, pgd.hpp, io.cpp's
+sceNpDrm functions), the owner's then (open to agents since 15 Oct), is unchanged and wasn't needed.
 - **Before**: God Eater 2 (NPJH50832) with RedArtz's English patch v2.0 and its folder `PSP/GAME/NPJH50832` on the stick
   stopped at the patch's "your DLC file is corrupted or missing": ModuleMgrForUser 0xf2d8d1b4 missing.
 - **The folder**: its 45 `.sprx` modules are plain ELFs, its EDATs plain too: nothing needs NPDRM decryption (the
@@ -1566,7 +1610,7 @@ sceNpDrm functions) is unchanged and wasn't needed.
   every tick, as uOFW's rtc, tested in fixed zones; state fields; the kernel's own libraries' variables noted; counts
   and uOFW's slips in part 88; loadcore's segment run; unchanged words not rewritten; broken tables' reasons; relinked
   code run again). Its remark on the owner's EDATA path (io.cpp's `pgdDescriptor()` reads the PGD header at offset 0,
-  sceNpDrmEdataSetupKey puts the data at 0x90) goes to the owner.
+  sceNpDrmEdataSetupKey puts the data at 0x90) went to the owner (part 97 took it up).
 
 ## PSP: sceFont — Jeanne d'Arc's handle closed twice, Final Fantasy III's fonts in VRAM, Hammerin' Hero's spaces — 2026-10-13
 
