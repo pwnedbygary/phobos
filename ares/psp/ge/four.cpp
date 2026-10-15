@@ -518,7 +518,7 @@ auto GE::spriteFours(const Job& job, s32 fromY, s32 toY) -> void {
   u32 downSize = s.turned ? t.width : t.height;
   bool downClamp = s.turned ? t.clampU : t.clampV;
   for(s32 y = firstY; y <= lastY; y++) {
-    s32x4 downAxis[3];
+    s32x4 downAxis[3] = {};
     s32 downT = 0;
     if(textured && divided) {
       downT = spriteAt(s.topT, s.bottomT, y, s.top, s.bottom);
@@ -534,6 +534,7 @@ auto GE::spriteFours(const Job& job, s32 fromY, s32 toY) -> void {
       four.live = four.inside = (column >= job.firstX) & (column <= job.lastX);
       four.full = x >= job.firstX && x + 3 <= job.lastX;
       four.z = splatLanes(s.z);
+      four.depth = s32x4{};
       if(!depthFirst<Format>(p, x, y, four)) continue;
       for(u32 n = 0; n < 4; n++) four.color[n] = baseColor[n];
       if(textured) {

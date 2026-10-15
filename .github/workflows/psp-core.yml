@@ -189,10 +189,9 @@ jobs:
           echo "- tests/psp at $at: ${last:-no output: the suite did not run}" >> "$GITHUB_STEP_SUMMARY"
 
   # tests/psp again built as the app's release builds are (PHOBOS_TESTS_MODE=release: BUILD_RELEASE, -O3, no
-  # sanitizers), with the same requirements. Red until GCC 13 at -O3 -Werror passes the four files it rejects now,
-  # each read as a false positive (the handoff's package 06 entry): ares/psp/ge/ge.cpp (four.cpp's
-  # maybe-uninitialized reads), ares/psp/kernel/kernel.cpp (serialization.cpp's right stick),
-  # desktop/PspDiscInfo.cpp (nall's string allocator) and tests/psp/crypto.cpp (put32() in kirkPrivate()).
+  # sanitizers), with the same requirements. GCC 13 at -O3 -Werror rejected four of its files with false positives,
+  # each settled in the code, not the flags (the handoff's package 06 entry): four.cpp's sprite fours,
+  # serialization.cpp's right stick, pspIconKey()'s digest (desktop/PspDiscInfo.cpp) and crypto.cpp's put32().
   system-release:
     name: PSP system tests, built as the app is
     runs-on: ubuntu-24.04
