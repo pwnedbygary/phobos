@@ -14562,6 +14562,9 @@ are, the copies' folder too, as a link there would have had the cleanup take a f
 the deletion paths approved, with one should-fix taken in a fifth round: the cleanup still raced a host swapping the
 copies' folder for a link while it ran (above), now closed by taking the copies' folder away by its own name.
 
+**Checks** (the fifth round, `173f849de`). tests/psp: 558 groups, 0 failures, sanitized and unsanitized
+(`r5-tests-asan.log`, `r5-tests-plain.log`), every install group and every files group among them.
+
 **Checks** (the fourth round, `5d947135b`). tests/psp: 558 groups, 0 failures, sanitized and unsanitized
 (`r4-tests-asan.log`, `r4-tests-plain.log`), every install group and every files group among them.
 
