@@ -653,6 +653,9 @@ auto Kernel::serialize(serializer& s) -> bool {
   if(s.reading() && stateLayout < 26) dialog.error = 0, dialog.deleted = false;
   else s(dialog.error), s(dialog.deleted);
   if(s.reading()) dialogWithdraw();
+  //A game data install's copy isn't state (install.cpp): its own folder is taken away, the saves left as they are,
+  //and an install still running in the state loaded starts again at its next Update.
+  if(s.reading()) installAbandon();
   vector(utilityModules, [&](u32& module) { s(module); });
   s(imposeLanguage); s(imposeButton);
   //character code conversion's tables and error characters (ccc.cpp): layout 18 on, none set in older states

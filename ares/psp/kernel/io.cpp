@@ -43,6 +43,13 @@ static auto sameName(const std::string& a, const std::string& b) -> bool {
   return true;
 }
 
+//Whether a name at the memory stick's top names the game data install's copies' folder (Kernel::InstallCopies): in
+//any case, and with dots or spaces at its end, which Windows and Linux's FAT driver drop from a name.
+static auto copiesName(std::string name) -> bool {
+  while(!name.empty() && (name.back() == '.' || name.back() == ' ')) name.pop_back();
+  return sameName(name, Kernel::InstallCopies);
+}
+
 //A path's names, after its device: "." and ".." worked out, either slash as a separator. Returns 0, or why the path
 //can't be: it climbs above its device's top, or holds a colon (FAT allows none, and a host might read it as a drive).
 static auto pathNames(const std::string& rest, std::vector<std::string>& names) -> u32 {
@@ -99,10 +106,13 @@ static auto programFolder(const std::string& path) -> std::string {
   return folder;
 }
 
-//Lets a device's paths reach a host folder (an empty folder unmounts it).
+//Lets a device's paths reach a host folder (an empty folder unmounts it). A memory stick put in (as the system powers
+//on) has the copies game data installs left in their own folder taken away (install.cpp's installLeftovers(): Phobos
+//stopped part way through one), as no install is running then.
 auto Kernel::mount(const std::string& device, const std::string& folder) -> void {
   if(folder.empty()) devices.erase(deviceName(device));
   else devices[deviceName(device)] = folder;
+  if(deviceName(device) == "ms0" && !folder.empty()) installLeftovers(folder);
 }
 
 //A path's device as the program wrote it and the rest of it; a path with no device goes on from the working folder.
@@ -141,7 +151,10 @@ static auto throughUmd(const std::string& path) -> bool {
 //A path as the program gives it (a device and a path on it, or a path relative to the working folder) to its host
 //file, and to its normalized form ("ms0:/PSP/GAME"). Returns 0, or why it can't: no such device, or a path that would
 //climb out of its device (by "..", or through a symbolic link in its folder) or names something no PSP file could be
-//called. Names not on the host yet (a file about to be created) keep the case given.
+//called. Names not on the host yet (a file about to be created) keep the case given. The game data install's copies'
+//folder at the memory stick's top (Kernel::InstallCopies) isn't there for programs, however it's named (copiesName())
+//or reached: through a link, or by another name the host's FAT gives it (a short 8.3 name), the path's real place is
+//compared with it by name and as a file. Nothing in it is theirs, and the next install takes it all away.
 auto Kernel::resolve(const std::string& path, std::string& host, std::string& normalized) -> u32 {
   std::string device, rest;
   if(!split(path, device, rest)) return ErrorFileNotFound;
@@ -150,6 +163,7 @@ auto Kernel::resolve(const std::string& path, std::string& host, std::string& no
   if(mounted == devices.end()) return ErrorDeviceNotFound;
   std::vector<std::string> names;
   if(u32 error = pathNames(rest, names)) return error;
+  if(device == "ms0" && !names.empty() && copiesName(names[0])) return ErrorFileNotFound;
   normalized = device + ":/";
   std::filesystem::path at = mounted->second;
   for(size_t n = 0; n < names.size(); n++) {
@@ -173,22 +187,36 @@ auto Kernel::resolve(const std::string& path, std::string& host, std::string& no
   if(error || std::mismatch(root.begin(), root.end(), real.begin(), real.end()).first != root.end()) {
     return ErrorNoPermission;
   }
+  if(device == "ms0" && !names.empty() && real != root) {
+    auto top = root / *std::next(real.begin(), std::distance(root.begin(), root.end()));
+    auto copies = root / InstallCopies;
+    if(copiesName(top.filename().string())) return ErrorFileNotFound;
+    if(std::filesystem::exists(copies, error) && std::filesystem::equivalent(top, copies, error)) {
+      return ErrorFileNotFound;
+    }
+  }
   host = real.string();
   return 0;
 }
 
-//Fills a SceIoStat (pspiofilemgr_stat.h, 88 bytes) for a host file or folder: its kind (FIO_S_IFDIR or FIO_S_IFREG,
-//readable, writable and runnable by all, as FAT has no permissions), size, and when it was made, read and changed.
-//Its last six words (st_private) are left as the program had them, as the PSP leaves them (PPSSPP's notes).
+//Fills a SceIoStat (pspiofilemgr_stat.h, 88 bytes) for a host file or folder: its mode (FIO_S_IFDIR or FIO_S_IFREG,
+//readable, writable and runnable by all, as FAT has no permissions), its attributes (FAT's: 0x10 a folder, 0x20 a
+//file, as pspautotests' io/stat recorded a PSP's memory stick), size, and when it was made, read and changed. A file
+//its owner may not write is read-only, as sceIoChstat() makes one: the mode without its write bits and the attributes
+//with 0x01 (io/stat/readonly: 0x216d and 0x21); a folder never is, as sceIoChstat() makes none. Its last six words
+//(st_private) are left as the program had them, as the PSP leaves them (PPSSPP's notes).
 auto Kernel::writeStat(u32 address, const std::string& host) -> void {
   std::error_code error;
   bool folder = std::filesystem::is_directory(host, error);
   u64 size = folder ? 0 : std::filesystem::file_size(host, error);
   if(error) size = 0;
   if(!folder) size = fileLength(host, size);
+  auto permissions = std::filesystem::status(host, error).permissions();
+  bool readOnly = !folder && !error
+               && (permissions & std::filesystem::perms::owner_write) == std::filesystem::perms::none;
   memory.fill(address, 0, 64);
-  memory.write(4, address + 0, folder ? 0x11ff : 0x21ff);
-  memory.write(4, address + 4, folder ? 0x0017 : 0x0027);
+  memory.write(4, address + 0, (folder ? 0x11ff : 0x21ff) & ~(readOnly ? 0222 : 0));
+  memory.write(4, address + 4, (folder ? 0x0010 : 0x0020) | readOnly);
   memory.write(4, address + 8, u32(size));
   memory.write(4, address + 12, u32(size >> 32));
   writeTimes(address + 16, host);
@@ -974,6 +1002,42 @@ auto Kernel::sceIoGetstat() -> void {
   result(0);
 }
 
+//(path, status, bits): changes what the bits name of a file's or folder's status (pspiofilemgr_stat.h's FIO_CST_*: 0x01
+//the mode, 0x02 the attributes, 0x04 the size, 0x08, 0x10 and 0x20 the times made, read and changed, 0x40 the private
+//words). On a PSP's memory stick the mode's write bits and the attributes' 0x01 are one read-only flag, as
+//pspautotests' io/stat/readonly recorded: a file made 0444 reads mode 0x216d and attributes 0x21, made 0777 again
+//0x21ff and 0x20, and given the attributes 0x21 alone the same as 0444, each change answered 0. Here the flag is the
+//host file's write permission, its owner's (writeStat() reads it back): made read-only, no one may write it; made
+//writable, its owner may again. Where both are named the attributes say which (chosen: the recording names both only
+//once, agreeing). A host that can't keep it (a phone's shared storage may not) answers 0 all the same, as the PSP
+//would. The recording has a file's flag alone: a folder's is answered 0 and changed nowhere (chosen: a host folder
+//that can't be written takes no files, while Windows' and Linux's FAT drivers ignore a folder's flag; a game setting
+//it on PSP/SAVEDATA would have made saving impossible). The device's top is refused as sceIoGetstat refuses it
+//(io/stat: "ms0:" 0x80010016). The rest isn't changed (no recording has any of it), and is answered 0 too. Kingdom
+//Hearts Birth by Sleep Final Mix's install takes the flag off its folders where sceIoGetstat says they have it, and
+//off its data file before each piece it writes, and gives the install up when this fails.
+auto Kernel::sceIoChstat() -> void {
+  namespace fs = std::filesystem;
+  std::string path = memory.readString(arg(0), 1024), host, normalized;
+  u32 status = arg(1), bits = arg(2);
+  auto colon = path.find(':');
+  if(colon != std::string::npos && path.find_first_not_of("/\\", colon + 1) == path.npos) {
+    return result(ErrorInvalidArgument);
+  }
+  if(onDisc(path)) return result(ErrorReadOnly);
+  if(u32 error = resolve(path, host, normalized)) return result(error);
+  std::error_code error;
+  if(!fs::exists(host, error)) return result(ErrorFileNotFound);
+  if(!memory.reaches(status, 64)) return result(ErrorIllegalAddress);
+  if(bits & 3 && fs::is_regular_file(host, error)) {
+    bool writable = bits & 2 ? !(memory.read(4, status + 4) & 1) : (memory.read(4, status) & 0222) != 0;
+    if(writable) fs::permissions(host, fs::perms::owner_write, fs::perm_options::add, error);
+    else fs::permissions(host, fs::perms::owner_write | fs::perms::group_write | fs::perms::others_write,
+                         fs::perm_options::remove, error);
+  }
+  result(0);
+}
+
 //(path): a folder's descriptor, for reading its entries one at a time: "." and ".." first (except at a device's top,
 //as on FAT), then the names in alphabetical order, whatever their case.
 auto Kernel::sceIoDopen() -> void {
@@ -1010,10 +1074,13 @@ auto Kernel::sceIoDopen() -> void {
   open.host = host;
   open.folder = true;
   if(normalized.back() != '/') open.entries = {".", ".."};
-  //names no PSP path can name are left out: a '\' parts a path as '/' does, and a ':' ends a device's name
+  //names no PSP path can name are left out: a '\' parts a path as '/' does, and a ':' ends a device's name; and at the
+  //memory stick's top, the game data install's copies' folder, which resolve() keeps from programs
   std::vector<std::string> names;
+  bool stickTop = normalized == "ms0:/";
   for(auto& entry : std::filesystem::directory_iterator(host, error)) {
     auto name = entry.path().filename().string();
+    if(stickTop && copiesName(name)) continue;
     if(name.find_first_of("\\:") == std::string::npos) names.push_back(name);
   }
   std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) {
@@ -1393,8 +1460,8 @@ auto Kernel::traceIo(const Function& function) -> void {
   };
   bool fileFirst = name != "sceIoOpen" && name != "sceIoOpenAsync" && name != "sceIoRemove" && name != "sceIoMkdir"
                 && name != "sceIoRmdir" && name != "sceIoRename" && name != "sceIoChdir" && name != "sceIoAssign"
-                && name != "sceIoGetstat" && name != "sceIoDopen" && name != "sceIoDevctl" && name != "sceIoGetFdList"
-                && !(name == "sceIoChangeAsyncPriority" && a[0] == 0xffff'ffff);
+                && name != "sceIoGetstat" && name != "sceIoChstat" && name != "sceIoDopen" && name != "sceIoDevctl"
+                && name != "sceIoGetFdList" && !(name == "sceIoChangeAsyncPriority" && a[0] == 0xffff'ffff);
   std::string call = fileFirst ? described(a[0]) : std::string{};
   bool read = name == "sceIoRead" || name == "sceIoReadAsync";
   bool write = name == "sceIoWrite" || name == "sceIoWriteAsync";
@@ -1413,6 +1480,11 @@ auto Kernel::traceIo(const Function& function) -> void {
     call = quoted(a[0]) + " to " + quoted(a[1]) + " " + quoted(a[2]);
   } else if(name == "sceIoMkdir") {
     call = quoted(a[0]) + " mode " + octal(a[1]);
+  } else if(name == "sceIoChstat") {
+    call = quoted(a[0]) + " bits " + hex(a[2]);
+    if(memory.reaches(a[1], 64)) {
+      call += " mode " + octal(memory.read(4, a[1])) + " attr " + hex(memory.read(4, a[1] + 4));
+    }
   } else if(!fileFirst && name != "sceIoDevctl" && name != "sceIoGetFdList" && name != "sceIoChangeAsyncPriority") {
     call = quoted(a[0]);  //remove, rmdir, chdir, getstat, dopen
   } else if(name == "sceIoIoctl" || name == "sceIoIoctlAsync" || name == "sceIoDevctl") {
