@@ -1249,13 +1249,13 @@ auto GPU::triangleAt(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex&
 //PRIMs between them are one draw where their settings are the same: Army of Two and Ghost of Sparta alternate between
 //the two 2,000 times a frame.
 auto GPU::screenTriangle(const Vertex (&v)[3]) -> bool {
-  auto& models = recorded.models;
-  if(models.size() + 3 > MostVertices) flush();
+  if(recorded.models.size() + 3 > MostVertices) flush();
   u32 index = meshState();
   if(index == ~0u) return screenable = false;
-  u32 base = models.size();
-  for(u32 n = 0; n < 3; n++) {  //(each grown into place: a resize() is a call)
-    auto& m = models.emplace_back();
+  u32 base = recorded.models.size();
+  Model* models = recorded.models.append(3);
+  for(u32 n = 0; n < 3; n++) {
+    auto& m = models[n];
     m.x = v[n].x, m.y = v[n].y, m.z = v[n].z;
     m.normal[0] = v[n].w, m.normal[1] = v[n].q, m.normal[2] = v[n].fog;
     m.u = v[n].u, m.v = v[n].v, m.color = v[n].color;
@@ -1265,7 +1265,8 @@ auto GPU::screenTriangle(const Vertex (&v)[3]) -> bool {
   }
   reachOver(v, 3);
   u32 first = recorded.indices.size();
-  for(u32 n = 0; n < 3; n++) recorded.indices.push_back(base + n);
+  u32* indices = recorded.indices.append(3);
+  for(u32 n = 0; n < 3; n++) indices[n] = base + n;
   meshDraw(index, first, 3);
   statistics.primitives++, statistics.screened++;
   return true;
@@ -1450,8 +1451,7 @@ auto GPU::mesh(GE& ge, const GE::Transform& t, const std::vector<GE::Vertex>& ve
     if(recorded.models.size() + count > MostVertices) flush();
     meshFirst = recorded.models.size(), meshGeneration = recorded.generation;
     u32 transform = transformed(t);
-    recorded.models.resize(meshFirst + count);
-    Model* models = recorded.models.data() + meshFirst;
+    Model* models = recorded.models.append(count);
     for(u32 n = 0; n < count; n++) {
       auto& v = vertices[n];
       auto& m = models[n];
@@ -1463,8 +1463,7 @@ auto GPU::mesh(GE& ge, const GE::Transform& t, const std::vector<GE::Vertex>& ve
     }
   }
   u32 first = recorded.indices.size();
-  recorded.indices.resize(first + corners.size());
-  u32* indices = recorded.indices.data() + first;
+  u32* indices = recorded.indices.append(corners.size());
   for(u32 n = 0; n < corners.size(); n++) indices[n] = meshFirst + corners[n];
   //(where on the screen the GPU puts them isn't known here: anywhere inside the scissor)
   changed(*target, state.scissor[0], state.scissor[1], state.scissor[0] + state.scissor[2] - 1,

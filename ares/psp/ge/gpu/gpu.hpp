@@ -226,13 +226,33 @@ struct GPU : GE::Renderer {
     u32 rowBytes = 0, sourceRowBytes = 0;
     bool barrier = false;  //Draw: what the pass drew before made visible to its reading first (emit())
   };
+  //(a run of models or indices, its room made larger out of line and kept as it's cleared: an append is a bound's check
+  //and a sum, where a vector's resize() is a call and its emplace_back() has its reallocation inline at each. Fast
+  //mode's screen triangles append three of each, a hundred thousand times a frame in Super Monkey Ball.)
+  template<typename T> struct Run {
+    auto size() const -> size_t { return used; }
+    auto empty() const -> bool { return !used; }
+    auto data() const -> const T* { return room.data(); }
+    auto clear() -> void { used = 0; }
+    //(n more at the end: their room, which the caller fills)
+    alwaysinline auto append(size_t n) -> T* {
+      if(made - used < n) [[unlikely]] grow(n);
+      T* at = room.data() + used;
+      used += n;
+      return at;
+    }
+  private:
+    NALL_NOINLINE auto grow(size_t n) -> void { room.resize(made = std::max(made * 2, used + n)); }
+    std::vector<T> room;
+    size_t made = 0, used = 0;
+  };
   struct Recorded {
     std::vector<Command> commands;
     std::vector<State> states;
     std::vector<Vertex> vertices;
     std::vector<u8> uploads;
-    std::vector<Model> models;   //(Mesh's)
-    std::vector<u32> indices;
+    Run<Model> models;   //(Mesh's)
+    Run<u32> indices;
     std::vector<Transformed> transforms;
     u32 readbacks = 0;
     u64 generation = 0;  //(goes up as it's cleared: what was recorded before is gone)
