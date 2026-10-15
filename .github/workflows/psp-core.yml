@@ -191,7 +191,8 @@ jobs:
   # tests/psp again built as the app's release builds are (PHOBOS_TESTS_MODE=release: BUILD_RELEASE, -O3, no
   # sanitizers), with the same requirements. GCC 13 at -O3 -Werror rejected four of its files with false positives,
   # each settled in the code, not the flags (the handoff's package 06 entry): four.cpp's sprite fours,
-  # serialization.cpp's right stick, pspIconKey()'s digest (desktop/PspDiscInfo.cpp) and crypto.cpp's put32().
+  # serialization.cpp's right stick and pools.cpp's poolStatus() (kernel.cpp), pspIconKey()'s digest
+  # (desktop/PspDiscInfo.cpp) and crypto.cpp's put32().
   system-release:
     name: PSP system tests, built as the app is
     runs-on: ubuntu-24.04
