@@ -14321,7 +14321,8 @@ overwrite?" first). Its statuses are a dialog's: starting, running while it copi
 - At its first Update the dialog lists INSDIR's files (folders in it aren't copied), from the disc image or a host
   folder standing for the disc, and checks the request; then each Update copies a piece, 1 MiB
   (`InstallBytesPerUpdate`: a fixed amount, so a run takes as many Updates every time; 22 to 27 ms a piece from a CHD
-  on the Mac while it was shared), writes the progress and, once every file is there, makes it the save's folder. The statuses and timing are the other dialogs': 200 ms starting, 40 ms closing.
+  on the Mac while it was shared), writes the progress and, once every file is there, makes it the save's folder. The
+  statuses and timing are the other dialogs': 200 ms starting, 40 ms closing.
 - **What it writes, and what it may write over** (the PSP's dialog would write the same): the folder
   PSP/SAVEDATA/<game><data>; in it INSDIR's files and PARAM.SFO, over the files of those names already there. Nothing
   else in that folder is touched, and nothing anywhere else on the memory stick but its own copy folder, below.
