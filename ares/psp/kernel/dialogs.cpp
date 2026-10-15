@@ -496,16 +496,21 @@ auto Kernel::dialogSaved(u32 p, const DialogRequest& asked, const DialogAnswer& 
 //it names one that's there), whatever its save name, which names only the save focus 0 takes; or, that one broken,
 //the one the same focus takes among those that aren't (chosen: a player told it's corrupted takes another, the latest
 //still where the latest was focused; the focused one if all are broken). A list's save naming no save of its own
-//("", "<>", or a pattern: savePattern()), or naming one its dialog doesn't show, takes the list's first name, whatever
-//the focus (chosen: where the automatic answer's later loads will find it; a dialog focusing a new slot, 7 or 8, would
-//spread the saves over the list, and a load focusing the first would then take the oldest). A PSP's list save shows
-//the list's names alone (dialogSaves()) and saves to the one chosen, its save name choosing only what focus 0 focuses:
-//Lumines II names "GAME" beside GAME01 to GAME03, and taken as it was named, its save made a folder no PSP's would.
-//Either name is written into the request's save name, as a choice is (savedata()). Every other mode, a list save
-//naming one of the saves its dialog shows (chosen: that one, which focus 0 takes), a list with no first name, a
-//game's name that isn't a plain one, a list save led by "<>" (to the game's folder alone) or by a pattern (refused)
-//and a list the dialog would show nothing from are answered by savedata() as before (no data to load, or a name
-//refused). Taking the list's first name whether there or not, a load from a list whose first save wasn't made
+//("", "<>", or a pattern: savePattern()) takes the list's first name, whatever the focus (chosen: where the automatic
+//answer's later loads will find it; a dialog focusing a new slot, 7 or 8, would spread the saves over the list, and a
+//load focusing the first would then take the oldest). A PSP's list save shows the list's names alone (dialogSaves())
+//and saves to the one chosen, its save name choosing only what focus 0 focuses: Lumines II names "GAME" beside GAME01
+//to GAME03, and taken as it was named, its save made a folder no PSP's would. So one naming a save its dialog doesn't
+//show, and that isn't on the memory stick, is answered as one naming none, but that focus 7 or 8 (the first or last
+//new slot) takes the slot the dialog focuses, never a save there over a new one (Lumines II's new profile after a
+//broken GAME01 goes to GAME02, GAME01 kept). Where that save is on the memory stick, made so by an older
+//Phobos, it's kept, as before: a second folder for it would leave two saves the game's loads choose between by their
+//dates, a stale one taken and the next save, by its name, sent over the newer. Either name is written into the
+//request's save name, as a choice is (savedata()). Every other mode, a list save naming one of the saves its dialog
+//shows (chosen: that one, which focus 0 takes), a list with no first name, a game's name that isn't a plain one, a
+//list save led by "<>" (to the game's folder alone) or by a pattern (refused) and a list the dialog would show nothing
+//from are answered by savedata() as before (no data to load, or a name refused). Taking the list's first name whether
+//there or not, a load from a list whose first save wasn't made
 //found no data with others there (7th Dragon 2020 lists DATA00 to DATA49); taking the request's own save name before
 //the list, a load whose save name was a pattern looked for a save of that name (Dissidia Final Fantasy's and its
 //012's "GameData*": no data, and back to the title), and one naming a save not there found no data with others in
@@ -519,15 +524,22 @@ auto Kernel::savedataUnshown(u32 p) -> u32 {
   bool unnamed = save.empty() || save == "<>" || savePattern(save);
   if((mode != 4 && mode != 5) || first.empty() || !plainName(game, 13)) return savedata(p);
   if(mode == 5) {
+    std::string chosen = first;
     if(!unnamed && plainName(save, 20)) {
+      std::error_code error;
+      std::string own = savePath(game + save);
+      if(!own.empty() && std::filesystem::is_directory(own, error)) return savedata(p);
       DialogRequest request;
       request.kind = DialogSavedata;
       dialogSaves(p, request, false);
       auto& shown = request.saves;
-      unnamed = std::none_of(shown.begin(), shown.end(), [&](auto& entry) { return entry.name == save; });
+      if(std::any_of(shown.begin(), shown.end(), [&](auto& entry) { return entry.name == save; })) return savedata(p);
+      u32 focus = memory.read(4, p) > 1480 ? memory.read(4, p + 1480) : 0;  //(as dialogFocus() reads it)
+      if((focus == 7 || focus == 8) && !shown.empty()) chosen = shown[request.focus].name;
+      unnamed = true;
     }
     bool takes = unnamed && first != "<>" && plainName(first, 20) && !savePattern(first);
-    return takes ? savedata(p, &first) : savedata(p);
+    return takes ? savedata(p, &chosen) : savedata(p);
   }
   DialogRequest request;
   request.kind = DialogSavedata;
