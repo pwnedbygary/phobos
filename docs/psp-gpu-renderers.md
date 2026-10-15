@@ -164,15 +164,43 @@ one after another, or a texture read across them, puts nothing back. A PRIM reac
 addresses run on into the next row) or the last row, or one drawn with its depth buffer, keeps a target of its own.
 
 **Filled from memory.** Before a target is first drawn into, the rows a PRIM reaches are filled from memory's VRAM:
-the pixels widened to 8888, the stencil from their alpha, the depth from the depth buffer's bytes. Its bytes are then
-watched (`Memory::watch()`): whoever changes them (the CPU, a block transfer, a texture upload, another target's
-pixels put back) makes it stale, and its colors and stencil are filled afresh before it's next drawn into. The depth
-buffer's bytes are watched too, through VRAM's fourth copy as the GE sees them, but on their own: a change there (the
-CPU clearing depth, a block transfer, the software renderer's drawing) has the rows it may be in (all of each 16 KiB
-it touches, which the fourth copy rearranges) filled again from memory, and the rest of the GPU's depth kept; a change
-to the colors leaves the GPU's depth alone; and a PRIM with another depth buffer than the target's last fills it
-afresh. The rows changed are filled before the next PRIM that tests or writes depth, not before one that doesn't (part
-83: Darkstalkers' CPU writes beside its depth buffer between its 2D PRIMs, 90 fills a frame).
+the pixels widened to 8888, the stencil from their alpha, the depth from the depth buffer's bytes, in the order the GE
+keeps them for the target's format (part 96: as VRAM's second copy shows them for a 16-bit frame buffer, as the fourth
+does for an 8888 one; `Memory::depthCopy()`). Its bytes are then watched (`Memory::watch()`): whoever changes them
+(the CPU, a block transfer, a texture upload, another target's pixels put back) makes it stale, and its colors and
+stencil are filled afresh before it's next drawn into. The depth buffer's bytes are watched too, through that copy as
+the GE sees them, but on their own: a change there (the CPU clearing depth, a block transfer, the software renderer's
+drawing, another target's pixels drawn there) has the rows it may be in (all of each 16 KiB it touches, which the
+copy rearranges) filled again from memory, and the rest of the GPU's depth kept; a change to the colors leaves the
+GPU's depth alone; and a PRIM with another depth buffer than the target's last fills it afresh. The rows changed are
+filled before the next PRIM that tests or writes depth, not before one that doesn't (part 83: Darkstalkers' CPU writes
+beside its depth buffer between its 2D PRIMs, 90 fills a frame). Depth filled from memory (the target's new rows and
+those memory changed, and those memory changed of a target it takes depth from: all of each 16 KiB they reach) from
+bytes other targets have drawn on the GPU since the last finish, as colors, is what a finish then the fill would leave
+(part 96: the Kurohyou games draw their pre-rendered depth into the depth buffer's memory as a 5650 frame buffer,
+WipEout Pure tests its HUD against the bloom it draws there, a dozen games draw their post-processing there): their
+pixels moved into the depth on the GPU (`moveIntoDepth()`, called by `fill()`: a Move into the depth, move.frag's DEPTH
+build over the rectangle filled, each depth the two bytes of the other's pixel at the depth's bytes, in the copy's
+order, narrowed as a read back for memory narrows it), whether the PRIM reads them or not, so a later one that finds
+those rows filled reads them current too. A PRIM drawing again in those pages has the depths over them filled again,
+though memory heard of its rectangle before (`own()`, `depthSources`). Where the rows filled take pages the target
+filled drew in itself as well as another's (its own pixels don't go into its own depth), the renderer finishes first
+(`begin()`, `depthMovable()`, counted in `Statistics::depthFinishes`) and the depth is filled from memory, which has
+both then; where they take its own pages alone, nothing is finished, and the depth there is memory's as it is (part
+96's "Still not done"). Where the GPU can't move them at all (`Backend::depthMoves`: no such pipeline, or the start-up
+check fails it, and System checks again without, saying so in one line), it finishes first only where the PRIM's
+depth test reads what's filled: not a clear's, nor a test always or never true, nor one its depths decide, and in
+the rows its pixels can be in (a 3D PRIM's vertices on the screen, `GE::reachedBy()` through `Renderer::begin()`,
+asked only then); the rest is filled from memory as it is, master's stale depth for a later PRIM that finds it
+filled. A finish for every such fill had the dozen games that draw their post-processing over their depth buffer
+wait one to three times a frame (part 96: Dirt 2 at 181 finishes in 60 frames, master 2).
+Where the moves put pixels in every depth filled (each 16 KiB the rows reach all one other target's pages and its
+drawn rectangle's full rows over them), nothing is taken from memory first (`depthCovered()`,
+`Statistics::depthsCovered`): without that, WipEout's HUD target filled its depth's rows from memory on the CPU each
+frame, every depth then moved over.
+IL-2 Sturmovik draws its bloom each frame in the 16 KiB that holds its depth buffer's 273rd row: the fills of that row
+take the bloom's pixels, and its 3D, whose scissor reaches row 272 (its other frame buffer's first), tests the bloom
+there (in fast mode that row was tested against the bloom memory had at the last finish).
 
 **A depth buffer drawn with two frame buffers** (part 90): on the PSP the depth buffer is memory, whichever frame buffer
 it's drawn with, where each target's depth is its own on the GPU. So a target's depth says which depth it holds (the
@@ -184,7 +212,15 @@ narrower frame buffer, this one's columns past it are left as they'd be without 
 draw their scene into the screen's frame buffer, then their characters into a frame buffer of their own, cleared
 without its depth, tested against the scene's; Colin McRae Rally's terrain shadows are drawn so too. The same memory as
 depth buffers of other row widths isn't taken across. A double-buffered game that clears depth each frame takes the
-other screen's depth into the one it clears first (a copy of a frame's depth, and the clear over it).
+other screen's depth into the one it clears first (a copy of a frame's depth, and the clear over it). Between an 8888
+frame buffer and a 16-bit one, which read the depth buffer's bytes in two orders (part 96: Twisted Metal draws small
+5551 frame buffers against its 8888 scene's depth), the depth is placed by runs: the two orders move 32-byte pieces
+whole, so each run of 16 of the target's depths is 16 of the other's, those its order puts at the same bytes
+(`Command::runs`, the backend's copy through the staging buffer taking each run from the other's depth and placing
+it, down as many rows as move alike; 32 runs for a depth buffer 512 wide, the buffer holding the target's columns
+alone). Where a run's bytes lie past what the other holds (a depth buffer not on 32 bytes,
+rows past its), the depth goes through memory instead: put there in its frame buffer's order (`putDepth()`, below)
+and filled into the other in that one's, a wait.
 
 **What the GPU doesn't draw.** A PRIM the renderer can't take is drawn by the software renderer instead, once the
 renderer has put back what it drew (`begin()` says so): no target for its frame buffer (the GPU out of room), rows
@@ -206,10 +242,14 @@ by a finish (the GPU's depth stays the GPU's; a game that reads depth with the C
 PRIM the software renderer draws, above): PPSSPP makes the same choice by default, and it's on the list below. But a
 texture read through VRAM's second or fourth copy (part 90: `holds()`) over a depth buffer whose newest depth is the
 GPU's has that depth put into memory first (`putDepth()`: a read back of the depth alone, each pixel's as the GE's
-16-bit depth, written through the fourth copy's order; a wait, but once until more depth is drawn, `Target::depthKept`),
-and the GE decodes it from there: Cars Race-O-Rama takes its race's depth through a palette into the alpha its sky is
-blended by. So a load (`Memory::read()`: the CPU's, an HLE function's) through VRAM's second
-or fourth copy, the views the GE keeps its depth buffer in, doesn't finish the renderer (part 68:
+16-bit depth, written in the order of the copy the target's format has; a wait, but once until more depth is drawn,
+`Target::depthKept`), and the GE decodes it from there: Cars Race-O-Rama takes its race's depth through a palette into
+the alpha its sky is blended by, Kurohyou its depth into its depth of field. Pixels other targets drew in the
+texture's bytes, which its decoding waits for, are put in memory first (a finish, the same as that wait), then the
+depth over them: where they're newer than the depth, its rows memory changed are filled with them before it's put.
+So a load (`Memory::read()`: the CPU's,
+an HLE function's) through VRAM's second or fourth copy, the views the GE keeps its depth buffer in, doesn't finish
+the renderer (part 68:
 `Memory::vramDrawnOver`'s `depthLoad`): finishing couldn't give it the GPU's depth, only the colors of a frame buffer
 drawn over the same bytes. (Stores, and copies in or out through those views, still finish.) WipEout reads its depth
 buffer at the screen's middle and a few more points as it draws, where its bloom's buffers are: one finish a frame,
@@ -251,7 +291,12 @@ A move draws the colors and the stencil in one draw where a shader can give the 
 `VK_EXT_shader_stencil_export`, `move.frag`'s EXPORT build), else the colors and then the stencil's bits a draw each,
 only those the target's format keeps (one for 5551, four for 4444, eight for 8888; `stencilBits()`); a 5650 target has
 no stencil, which no draw tests and which read backs and moves leave out, so moves into it leave it and moves from it
-don't take it.
+don't take it. The source's stencils go through the staging buffer in one copy, all their rows, each pixel's middle
+row then taken from there (MoltenVK records each copy region as a blit of its own, on the CPU: a region a row cost
+WipEout's two moves into the depth a frame more than their draws). A move's render pass covers its rectangle alone,
+as an upload's does, everything it clears and draws being inside it, and its images change layout in three barriers
+(`transitions()`), where a barrier an image had GTA Chinatown Wars' one move a frame waiting 0.3 ms more on the M1
+(part 96).
 
 **Submitting.** What's recorded is handed to the GPU every 128 commands, at a list's end once 32 commands are
 recorded (`submit()`; part 52: WipEout Pure ends 209 lists a frame, each a `vkQueueSubmit` and a wait for the slot
