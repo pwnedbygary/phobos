@@ -93,6 +93,60 @@ again).
   78, 0; tests/psp/ares 348, 0; CI green. Mutations: the finish taken out fails both frames, the changed rows not looked
   at fails the second.
 
+## PSP NPDRM: EDATA decrypted — the PGD past the EDATA's header, on the memory stick too, its size and end the data's; a PGD file's end its data's — 2026-10-14
+
+Branch `cursor/psp-pgd-edata-2b67`, on master `14b181707` (part 95, #257, with #256); draft PR #259.
+docs/psp-core.md, part 97, has the evidence (part 96 is #258's). **The owner's area**: his PGD/EDATA proposal of
+13 Oct (`~/phobos-work/scratch/pgd-offset/`: REPORT.md, proposed-fix.patch), rebased at his request (14 Oct 20:30),
+to merge once CI is green and an independent review finds nothing (his approval, 21:18). Clean room: tpu's
+decompilation of the firmware's PGD layer and his edata.c and pgd.c, the PSP Developer Wiki, uOFW's names,
+npdecrypter's behaviour on hardware; PPSSPP only as a design cross-check; JPCSP not read. Save states unchanged
+(layout 32).
+- **The bug** (part 88's review remark): DLC EDATA on the memory stick read raw, with the file's size. Stick files had
+  no size, so sceNpDrmEdataSetupKey found no magic; the PGD's header was read at 0 and its data from 0x90 (in a
+  download's EDATA they're at 0x90 and 0x120); GetDataSize gave the file's size. And a UMD PGD file's SEEK_END was the
+  whole file's, headers and block MACs and all.
+- **The change** (io.cpp, kernel.hpp): `pgdDataOffset` is where the PGD starts until its descriptor is read, then
+  where its data starts (no new field); the header read there, on the disc or the stick; SetupKey takes the PGD's
+  offset from the EDATA header's word at 0x0c and readies only over "\0PGD"; GetDataSize gives the data's size;
+  0x04100002 is where the PGD starts, 0x04100001 looks for "\0PGD" there; an unlocked PGD ends where its data does,
+  and every seek of it is clamped there (round 2).
+- **The rebase** (part 95's meeting point; the patch applied 3-way with no textual conflict, reconciled by hand): a
+  stick file's length for the PGD code is `fileLength()`'s, the PSP's, and `pgdFileRead()` refuses bytes past it, so
+  an EDATA emptied through another descriptor isn't readied; `seek()` keeps both ends (a stick file's PSP length, an
+  unlocked PGD's data size). A descriptor that emptied its file is never a PGD: SetupKey now readies only a file open
+  to read alone, as the PGD layer's open does (it refuses one opened to write, 0x80510201; every EDATA open in the
+  library's runs is read-only), and only a descriptor opened to write empties its file. The two ends do meet on a
+  reading descriptor whose readied EDATA another descriptor empties: its end stays the data's while its reads find
+  nothing. No layout change.
+- **Review** (independent, of `8d3d08dbb`): no blockers. Its should-fix, taken in round 2: an unlocked PGD's seeks
+  weren't clamped to its data's size, as tpu's decompilation clamps them (SEEK_SET 5000 on 3000 bytes of data gave
+  5000, then SEEK_CUR -1000 4000 and an empty read; SEEK_END +100 3100; the asynchronous seeks the same). Now clamped,
+  with the review's cases as a test group, which fails on `8d3d08dbb` (22 checks). Its wording points taken (the
+  read-only check follows the decompilation; the two ends' meeting); part 97's "Not done" gains its three findings:
+  SetupKey ignoring the 0x40000000 flag, 0x04100002's argument read as a pointer, SEEK_END before the key (master's).
+- **Tests**: the proposal's three groups (an EDATA on the stick, a disc PGD past its file's start, PGD files' ends)
+  and `psp_pgd::edata()`, and one for the meeting point (an EDATA beside files emptied as they're opened). On master
+  they fail (4 groups, 25 checks); on the proposal applied 3-way without the reconciliation the meeting point's fails
+  (3 checks: an EDATA the PSP sees emptied is readied, its size and end 3000 where they're 0); on the branch they pass.
+  Round 2 adds the review's seeks past the data's end (a UMD file and an EDATA, sync and async).
+- **Games** (scratch runners with part 95's file I/O trace and NPDRM's calls, the clock pinned): the five DLC games
+  with the synthetic EDATA at their paths (Metal Slug XX, Disgaea 2, La Pucelle Ragnarok, SOCOM Fireteam Bravo 3,
+  Super Stardust Portable) get its plaintext and the data's size, 16384, where master hands them the raw bytes and
+  16736; SOCOM reads it once. The seven UMD PGD games: traces and captures identical to master's (1200 frames, and 3000
+  for four of them), but for the SEEK_END answers of the three that seek to the end (Black Wolves Saga, Shining Blade,
+  Valkyria Chronicles III); Naruto seeks from the start only. Two captures that differed once were master's own
+  noise: its reruns give the branch's pictures byte for byte.
+- **Checks**: round 2 (`3d500b9e2`): tests/psp 548/0 sanitized and unsanitized; tests/psp/ares 348/0; the 16 game
+  runs again on round 2's runner, each trace and capture round 1's; the 21 scenes in Software, every hash master's;
+  CI green.
+  Round 1 (`61ddbad0e`): tests/psp 547/0 sanitized and unsanitized; tests/allegrex 78/0; tests/psp/ares 348/0; the 21
+  scenes in Software: every hash master's, the machine's state too.
+- **Left**: no real encrypted DLC tested (the library has none); the PGD offset 0x80 unsettled; drm types other than 1
+  unsupported, as before; PGD ioctls on stick files, 0x04100010, SetupKey's error returns and the licence checks not
+  done; and the review's three, none of which a game does (SetupKey ignoring the 0x40000000 flag, 0x04100002's
+  argument read as a pointer where the decompilation stores the value, SEEK_END before the key not refused).
+
 ## PSP I/O: memory stick files emptied as they're opened keep their bytes (LittleBigPlanet's install), and the runner's file I/O trace — 2026-10-14
 
 Branch `cursor/psp-installs-2b67`, on master `dd37263c8`, merged with `e78b4a364` (part 93; only the docs met); draft

@@ -680,8 +680,10 @@ struct Kernel {
     u32 sector = 0;
     u64 size = 0;
     //PGD (Protected Game Data): a UMD data file, or an NPDRM EDATA, whose data the PSP decrypts as it's read. The
-    //version key (sceIoIoctl's 0x04100001) and where the data starts (0x04100002) set it; the reads of that data in
-    //io.cpp are decrypted (ares/psp/kernel/pgd.cpp).
+    //version key (sceIoIoctl's 0x04100001, or the licensee key: sceNpDrmEdataSetupKey) and where the PGD starts in
+    //the file (0x04100002, or past an EDATA's header) set it; the reads of that data in io.cpp are decrypted
+    //(ares/psp/kernel/pgd.cpp). pgdDataOffset is where the PGD starts until its descriptor is read, then where its
+    //data starts (io.cpp's pgdDescriptor()).
     bool pgd = false;
     u8 pgdVersionKey[16] = {};
     bool pgdReady = false;
@@ -753,6 +755,8 @@ struct Kernel {
   auto readCount(OpenFile& open, u32 data, u32 size, u64& count) -> u32;
   auto readMove(OpenFile& open, u64 at, u64 count, u32 data) -> s64;
   //pgd.cpp: a PGD data file's decryption, set up by the two ioctl commands and applied to its reads
+  auto pgdFileLength(OpenFile& open) -> u64;  //how long the file is, wherever it lies (the disc, or the host)
+  auto pgdFileRead(OpenFile& open, u64 at, u64 size, u8* bytes) -> bool;  //its bytes, wherever it lies
   auto pgdDescriptor(OpenFile& open) -> std::string;  //its header's descriptor, decrypted once; why it can't
   auto pgdDecryptRead(OpenFile& open, u32 data, u64 count) -> void;  //its reads' data region, decrypted in place
   auto writeFile(u32 file, u32 data, u32 size) -> u32;
