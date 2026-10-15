@@ -523,7 +523,9 @@ static auto installCopiesFolder() -> void {
 //last; and, on a disc whose first file fills the first Update, the copy's own folder, or the copies' folder it's in,
 //put in place of by a link to a folder off the stick. Each time the install gives up with 0x80111904 (the stick
 //couldn't be written) rather than install short or write through the link: nothing among the saves, no copy left,
-//nothing off the stick written or taken away; the next install installs whole.
+//nothing off the stick written or taken away; the next install installs whole. And the game aborting it, or the
+//machine reset, after another leftover was put in the copies' folder, or a link to a folder off the stick holding a
+//folder of the copy's name was put in its place: no copies' folder left, and nothing behind the link touched.
 static auto installCopyChanged() -> void {
   HostFolder outside;
   outside.put("KEEP.BIN", "off the stick");
@@ -599,6 +601,29 @@ static auto installCopyChanged() -> void {
     CHECK(tree(off.path).size() == 1 && off.get("ULJM99999DATA/KEEP.BIN") == "off the stick", true);
     CHECK(fs::exists(m.saved("ULJM99999DATA")) || fs::exists(fs::symlink_status(m.copies())), false);
     CHECK(m.close(), true);
+  }
+  for(bool link : {false, true}) {
+    for(bool reset : {false, true}) {
+      HostFolder off;
+      off.put("ULJM99999DATA/KEEP.BIN", "off the stick");
+      InstallMachine m;
+      installParameters(m, 0x598, 0, "ULJM99999", "DATA");
+      CHECK(m.start() && !m.update() && m.status() == 2, true);
+      std::error_code error;
+      if(link) {
+        fs::remove_all(m.copies(), error);
+        fs::create_directory_symlink(off.path, m.copies(), error);
+      } else {
+        m.stick.put(".phobos-install/OLD/STALE.BIN", "left");
+      }
+      CHECK(error.value(), 0);
+      if(reset) m.kernel.power();
+      else CHECK(!m.call("sceUtilityGamedataInstallAbort", {}) && m.status() == 3 && m.result() == 1, true);
+      CHECK(fs::exists(fs::symlink_status(m.copies())), false);
+      CHECK(tree(off.path).size() == 1 && off.get("ULJM99999DATA/KEEP.BIN") == "off the stick", true);
+      CHECK(fs::exists(m.saved("ULJM99999DATA")), false);
+      if(!reset) CHECK(m.close(), true);
+    }
   }
 }
 

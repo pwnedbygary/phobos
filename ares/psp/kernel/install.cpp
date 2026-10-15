@@ -311,18 +311,15 @@ auto Kernel::installFinish(u32 answer) -> void {
   dialogWithdraw();
 }
 
-//The copy's own folder taken away, with whatever's left in it (nothing, once it's become the save's), and the stick's
-//folder for copies with it if that leaves it empty; nothing else. As the dialog finishes, as the game aborts it, as
-//the machine is reset, and as a state is loaded. A link a host put in the place of either folder is taken away
-//itself: nothing is taken away through it.
+//The copies' folder taken away with all it holds, as installLeftovers() takes it: the copy (nothing, once it's become
+//the save's), and anything else in it, a leftover, as one install runs at a time; nothing else. As the dialog
+//finishes, as the game aborts it, as the machine is reset, and as a state is loaded. The copies' folder is the last
+//name of the path taken away, so a link a host put in its place, even while this runs, is taken away itself, and
+//nothing through it (the copy's folder, a name after it, would be looked up through such a link).
 auto Kernel::installAbandon() -> void {
   namespace fs = std::filesystem;
   std::error_code error;
-  if(!install.partial.empty()) {
-    fs::path folder = install.partial;
-    if(!fs::is_symlink(folder.parent_path(), error)) fs::remove_all(folder, error);
-    fs::remove(folder.parent_path(), error);
-  }
+  if(!install.partial.empty()) fs::remove_all(fs::path(install.partial).parent_path(), error);
   install = {};
 }
 
