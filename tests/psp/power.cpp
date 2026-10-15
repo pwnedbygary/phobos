@@ -1006,6 +1006,105 @@ static auto clockZones() -> void {
   }
 }
 
+//Ticks as text (sceRtcFormatRFC2822, sceRtcFormatRFC3339 and their LocalTime forms, rtc.cpp). pspautotests'
+//rtc/convert's recordings with no time zone (2012-01-30 02:12:15 and 900 microseconds, 2010-09-20 07:12:15 and 500,
+//and tick 0 in RFC 3339), and its earlier calls' zone of 256 minutes (+0416 and +04:16, the time moved by it, the
+//seconds' hundredths); then a zone west of UTC taking the date back over a year's end, zones of half an hour and an
+//hour and a half, a day below 10, every day's and month's name, hundredths cut, the largest tick (the date
+//sceRtcSetTick gives); the clock's tick now; the LocalTime forms with the host in New York in summer and in winter
+//(the settings' zone for every tick), in Tokyo and in UTC; each text and its NUL alone written. Refused, writing
+//nothing: a text or a tick at the kernel's addresses (top bit set: PRIV_REQUIRED, INVALID_POINTER from
+//RFC2822LocalTime), and where the program's memory isn't (INVALID_POINTER). MediEvil Resurrection's save details.
+static auto datesAsText() -> void {
+  constexpr u32 Tick = R, Text = R + 0x40;
+  constexpr u64 From1To1970 = 62'135'596'800ull * 1'000'000;
+  KernelMachine m;
+  auto putTick = [&](u64 tick) {
+    m.system.memory.write(4, Tick, u32(tick));
+    m.system.memory.write(4, Tick + 4, u32(tick >> 32));
+  };
+  //the text a function gives, the 64 bytes there filled with 'x' first: its answer 0, and the byte after its NUL left
+  auto text = [&](int line, const char* function, u64 tick, s32 zone, const std::string& expected) {
+    putTick(tick);
+    m.system.memory.fill(Text, 'x', 64);
+    u32 answer = m.call(function, {Text, Tick, u32(zone)});
+    std::string got = m.system.memory.readString(Text, 64);
+    check(line, (std::string(function) + ": \"" + got + "\"").c_str(), got == expected && !answer, true);
+    check(line, "the byte after its NUL", m.system.memory.read(1, Text + got.size() + 1), 'x');
+  };
+  auto both = [&](int line, u64 tick, s32 zone, const std::string& rfc2822, const std::string& rfc3339) {
+    text(line, "sceRtcFormatRFC2822", tick, zone, rfc2822);
+    text(line, "sceRtcFormatRFC3339", tick, zone, rfc3339);
+  };
+  //(as pspautotests' rtc/convert recorded)
+  both(__LINE__, 63'463'486'335'000'900ull, 0, "Mon, 30 Jan 2012 02:12:15 +0000", "2012-01-30T02:12:15.00Z");
+  both(__LINE__, 63'420'563'535'000'500ull, 0, "Mon, 20 Sep 2010 07:12:15 +0000", "2010-09-20T07:12:15.00Z");
+  both(__LINE__, 0, 0, "Mon, 01 Jan 0001 00:00:00 +0000", "0001-01-01T00:00:00.00Z");
+  both(__LINE__, 63'420'537'600'000'000ull, 256, "Mon, 20 Sep 2010 04:16:00 +0416", "2010-09-20T04:16:00.00+04:16");
+  both(__LINE__, 63'420'563'535'710'000ull, 256, "Mon, 20 Sep 2010 11:28:15 +0416", "2010-09-20T11:28:15.71+04:16");
+  //west of UTC, part hours, a day below 10, hundredths cut, the largest tick
+  both(__LINE__, 63'934'369'200'000'000ull, -300, "Thu, 31 Dec 2026 22:00:00 -0500", "2026-12-31T22:00:00.00-05:00");
+  both(__LINE__, 63'918'460'800'000'000ull, 330, "Wed, 01 Jul 2026 05:30:00 +0530", "2026-07-01T05:30:00.00+05:30");
+  both(__LINE__, 63'918'460'800'000'000ull, -90, "Tue, 30 Jun 2026 22:30:00 -0130", "2026-06-30T22:30:00.00-01:30");
+  both(__LINE__, 63'918'547'199'999'999ull, 0, "Wed, 01 Jul 2026 23:59:59 +0000", "2026-07-01T23:59:59.99Z");
+  both(__LINE__, ~0ull, 0, "Sun, 19 Jan 60267 08:01:49 +0000", "60267-01-19T08:01:49.55Z");
+  CHECK(m.call("sceRtcSetTick", {R + 0x100, Tick}), 0);  //(the date it gives that tick)
+  CHECK(m.system.memory.read(2, R + 0x100) | m.system.memory.read(2, R + 0x102) << 16, 60267 | 1 << 16);
+  CHECK(m.system.memory.read(2, R + 0x104), 19);
+  //every month's name (the first of each in 2026) and every day's (11 to 17 October 2026, Sunday to Saturday)
+  static const char* Firsts[] = {"Thu, 01 Jan", "Sun, 01 Feb", "Sun, 01 Mar", "Wed, 01 Apr", "Fri, 01 May",
+                                 "Mon, 01 Jun", "Wed, 01 Jul", "Sat, 01 Aug", "Tue, 01 Sep", "Thu, 01 Oct",
+                                 "Sun, 01 Nov", "Tue, 01 Dec"};
+  static const char* Week[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+  auto midnight = [](u32 days) { return From1To1970 + u64(days) * 86'400'000'000; };  //(days since 1970)
+  static const u32 FirstDays[] = {20454, 20485, 20513, 20544, 20574, 20605, 20635, 20666, 20697, 20727, 20758, 20788};
+  for(u32 n = 0; n < 12; n++) {
+    text(__LINE__, "sceRtcFormatRFC2822", midnight(FirstDays[n]), 0, std::string(Firsts[n]) + " 2026 00:00:00 +0000");
+  }
+  for(u32 n = 0; n < 7; n++) {
+    text(__LINE__, "sceRtcFormatRFC2822", midnight(20737 + n), 0,
+         std::string(Week[n]) + ", " + std::to_string(11 + n) + " Oct 2026 00:00:00 +0000");
+  }
+  //the clock's tick now (2026-07-01 00:00:00 UTC)
+  m.kernel.startTime = 1'782'864'000ull * 1'000'000;
+  m.kernel.cycles = 0;
+  CHECK(m.call("sceRtcGetCurrentTick", {Tick}), 0);
+  CHECK(m.call("sceRtcFormatRFC3339", {Text, Tick, 0}), 0);
+  CHECK(m.system.memory.readString(Text, 64) == "2026-07-01T00:00:00.00Z", true);
+  //the LocalTime forms: the zone the settings give now, for every tick (2026-07-01 12:00:00 UTC here)
+  struct Zone { const char* rule; u64 now; const char* rfc2822; const char* rfc3339; };
+  constexpr const char* NewYork = "EST5EDT,M3.2.0,M11.1.0";
+  for(auto [rule, now, rfc2822, rfc3339] : {
+        Zone{NewYork, 1'782'864'000, "Wed, 01 Jul 2026 08:00:00 -0400", "2026-07-01T08:00:00.00-04:00"},
+        Zone{NewYork, 1'768'435'200, "Wed, 01 Jul 2026 07:00:00 -0500", "2026-07-01T07:00:00.00-05:00"},
+        Zone{"JST-9", 1'782'864'000, "Wed, 01 Jul 2026 21:00:00 +0900", "2026-07-01T21:00:00.00+09:00"},
+        Zone{"UTC0", 1'782'864'000, "Wed, 01 Jul 2026 12:00:00 +0000", "2026-07-01T12:00:00.00Z"}}) {
+    HostZone host(rule);
+    m.kernel.startTime = now * 1'000'000;
+    text(__LINE__, "sceRtcFormatRFC2822LocalTime", 63'918'504'000'000'000ull, 0, rfc2822);
+    text(__LINE__, "sceRtcFormatRFC3339LocalTime", 63'918'504'000'000'000ull, 0, rfc3339);
+  }
+  //refused, nothing written: the kernel's addresses, and memory that isn't there (RAM ends at 0x0a00'0000; the text
+  //wouldn't fit before it)
+  putTick(63'918'504'000'000'000ull);
+  struct Refusal { const char* function; u32 kernel; };
+  for(auto [function, kernel] : {Refusal{"sceRtcFormatRFC2822", Kernel::ErrorPrivilegeRequired},
+                                 Refusal{"sceRtcFormatRFC3339", Kernel::ErrorPrivilegeRequired},
+                                 Refusal{"sceRtcFormatRFC2822LocalTime", Kernel::ErrorInvalidPointer},
+                                 Refusal{"sceRtcFormatRFC3339LocalTime", Kernel::ErrorPrivilegeRequired}}) {
+    m.system.memory.fill(Text, 'x', 64);
+    m.system.memory.fill(0x0a00'0000 - 16, 'x', 16);
+    check(__LINE__, function, m.call(function, {Text | 0x8000'0000, Tick, 0}), kernel);
+    check(__LINE__, function, m.call(function, {Text, Tick | 0x8000'0000, 0}), kernel);
+    check(__LINE__, function, m.call(function, {0, Tick, 0}), Kernel::ErrorInvalidPointer);
+    check(__LINE__, function, m.call(function, {Text, 0x0a00'0000 - 4, 0}), Kernel::ErrorInvalidPointer);
+    check(__LINE__, function, m.call(function, {0x0a00'0000 - 16, Tick, 0}), Kernel::ErrorInvalidPointer);
+    check(__LINE__, function, m.system.memory.readString(Text, 64) == std::string(64, 'x'), true);
+    check(__LINE__, function, m.system.memory.readString(0x0a00'0000 - 16, 16) == std::string(16, 'x'), true);
+  }
+  CHECK(m.notes.size(), 0);
+}
+
 auto powerTests() -> Tests {
   return {
     {"power callbacks", powerCallbacks}, {"power clocks", powerClocks}, {"power volatile memory", volatileMemory},
@@ -1013,7 +1112,7 @@ auto powerTests() -> Tests {
     {"power volatile memory locked at once", volatileLockedAtOnce}, {"kernel thread delays' lengths", delayLengths},
     {"kernel thread control", threadControl}, {"kernel thread status", threadStatus}, {"kernel clocks", clocks},
     {"kernel mersenne twister", mersenneTwister}, {"kernel md5", md5Hashes}, {"kernel clock zones", clockZones},
-    {"kernel odds and ends", oddsAndEnds},
+    {"kernel ticks as RFC 2822 and RFC 3339 text", datesAsText}, {"kernel odds and ends", oddsAndEnds},
     {"kernel thread priorities", threadPriorities}, {"kernel thread stack free", stackFree},
     {"remote and running time", remoteAndRunningTime},
     {"power the clock beside the wireless LAN", wlanClock},
