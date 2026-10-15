@@ -1411,9 +1411,83 @@ static auto fileTrace() -> void {
   CHECK(stick.get("A.BIN") == "abcd", true);
 }
 
+//A file's status changed (sceIoChstat), as pspautotests' io/stat recorded a PSP's memory stick: a file reads mode
+//0x21ff and attributes 0x20, a folder 0x11ff and 0x10, sceIoDread as sceIoGetstat (io/stat); made 0444 the file reads
+//0x216d and 0x21, made 0777 again 0x21ff and 0x20, and given the attributes 0x21 alone the same as 0444, each change 0
+//(io/stat/readonly), the host file's owner kept from writing it meanwhile. The attributes win where both are named
+//(chosen). A folder's flag is answered 0 and changed nowhere (chosen: the recording has a file's alone), so a folder
+//told read-only (PSP/SAVEDATA, say) still takes new files; the device's top is refused as sceIoGetstat refuses it
+//(io/stat: "ms0:" 0x80010016), and left as it was. On the disc nothing can be changed (the disc's own refusal); a path
+//that isn't there isn't found. (Kingdom Hearts Birth by Sleep Final Mix's install takes the flag off its folders
+//where they have it, and off its data file before it writes it.)
+static auto fileStatusChanged() -> void {
+  namespace fs = std::filesystem;
+  HostFolder folder;
+  folder.put("PSP/CHSTTST/file.txt", "x");
+  KernelMachine m;
+  m.kernel.mount("ms0", folder.path.string());
+  constexpr u32 Change = 0x0894'0000;
+  auto& memory = m.system.memory;
+  auto stat = [&](const char* path) -> std::pair<u32, u32> {
+    memory.fill(Buffer, 0xcc, 88);
+    if(m.call("sceIoGetstat", {m.string(path), Buffer})) return {0, 0};
+    return {memory.read(4, Buffer), memory.read(4, Buffer + 4)};
+  };
+  auto change = [&](u32 mode, u32 attributes, u32 bits) {
+    memory.fill(Change, 0, 88);
+    memory.write(4, Change, mode);
+    memory.write(4, Change + 4, attributes);
+    return m.call("sceIoChstat", {m.string("ms0:/PSP/CHSTTST/file.txt"), Change, bits});
+  };
+  auto writable = [&] {
+    return (fs::status(folder.path / "PSP/CHSTTST/file.txt").permissions() & fs::perms::owner_write) != fs::perms::none;
+  };
+  using Pair = std::pair<u32, u32>;
+  CHECK(stat("ms0:/PSP/CHSTTST/file.txt") == Pair(0x21ff, 0x20), true);
+  CHECK(stat("ms0:/PSP/CHSTTST") == Pair(0x11ff, 0x10), true);
+  CHECK(change(0444, 0, 0x0001), 0);
+  CHECK(stat("ms0:/PSP/CHSTTST/file.txt") == Pair(0x216d, 0x21), true);
+  CHECK(writable(), false);
+  u32 listing = m.call("sceIoDopen", {m.string("ms0:/PSP/CHSTTST")});
+  while(m.call("sceIoDread", {listing, Buffer}) == 1 && memory.readString(Buffer + 88, 256) != "file.txt") {}
+  CHECK(memory.read(4, Buffer) == 0x216d && memory.read(4, Buffer + 4) == 0x21, true);
+  CHECK(m.call("sceIoDclose", {listing}), 0);
+  CHECK(change(0777, 0, 0x0001), 0);
+  CHECK(stat("ms0:/PSP/CHSTTST/file.txt") == Pair(0x21ff, 0x20), true);
+  CHECK(writable(), true);
+  CHECK(change(0, 0x21, 0x0002), 0);
+  CHECK(stat("ms0:/PSP/CHSTTST/file.txt") == Pair(0x216d, 0x21), true);
+  CHECK(change(0444, 0x20, 0x0003), 0);  //(the attributes win)
+  CHECK(stat("ms0:/PSP/CHSTTST/file.txt") == Pair(0x21ff, 0x20), true);
+  CHECK(change(0777, 0x20, 0x0038), 0);  //(the times: answered, not changed)
+  CHECK(stat("ms0:/PSP/CHSTTST/file.txt") == Pair(0x21ff, 0x20), true);
+  auto folderWritable = [&](const fs::path& folder) {
+    return (fs::status(folder).permissions() & fs::perms::owner_write) != fs::perms::none;
+  };
+  auto changeFolder = [&](const char* path, u32 mode, u32 attributes, u32 bits) {
+    memory.fill(Change, 0, 88);
+    memory.write(4, Change, mode);
+    memory.write(4, Change + 4, attributes);
+    return m.call("sceIoChstat", {m.string(path), Change, bits});
+  };
+  CHECK(changeFolder("ms0:/PSP/CHSTTST", 0, 0x11, 0x0002), 0);
+  CHECK(changeFolder("ms0:/PSP/CHSTTST", 0555, 0, 0x0001), 0);
+  CHECK(stat("ms0:/PSP/CHSTTST") == Pair(0x11ff, 0x10), true);
+  CHECK(folderWritable(folder.path / "PSP/CHSTTST"), true);
+  u32 made = m.call("sceIoOpen", {m.string("ms0:/PSP/CHSTTST/new.txt"), 0x0602, 0777});
+  CHECK(made < 0x8000'0000 && m.call("sceIoClose", {made}) == 0, true);
+  CHECK(fs::is_regular_file(folder.path / "PSP/CHSTTST/new.txt"), true);
+  for(auto top : {"ms0:/", "ms0:", "fatms0:/"}) CHECK(changeFolder(top, 0, 0x11, 0x0003), Kernel::ErrorInvalidArgument);
+  CHECK(folderWritable(folder.path), true);
+  CHECK(m.call("sceIoChstat", {m.string("ms0:/PSP/CHSTTST/none.txt"), Change, 1}), Kernel::ErrorFileNotFound);
+  m.kernel.disc = discFrom(disc_image::makeIso({{"FILE.BIN", std::vector<u8>(16, 1)}}).bytes);
+  CHECK(m.call("sceIoChstat", {m.string("disc0:/FILE.BIN"), Change, 1}), Kernel::ErrorReadOnly);
+}
+
 auto fileTests() -> Tests {
   return {
     {"files basics", fileBasics}, {"files folders", fileFolders},
+    {"files status changed (sceIoChstat): the memory stick's read-only flag", fileStatusChanged},
     {"files emptied as they're opened keep their bytes for a write past the end", fileTruncation},
     {"files emptied: the cut reaches only the file emptied", fileCutReach},
     {"files emptied: Phobos killed part way", fileCutKilled},
