@@ -14353,7 +14353,7 @@ overwrite?" first). Its statuses are a dialog's: starting, running while it copi
   PARAM.SFO and one for the folder, as savedata's sizes count a save, and more than the free clusters is no space before
   anything is written. Where the host itself hasn't room for the copy and 64 MiB more (a phone's storage nearly full),
   the same answer: an install never fills the host's storage. Every install in the library fits (the largest INSDIR,
-  7th Dragon 2020's translation, is 1,532,651,653 bytes, 46,774 clusters).
+  7th Dragon 2020's translation, is 1,532,651,653 bytes: 46,776 clusters with its PARAM.SFO and folder).
 - **sceIoChstat** (`io.cpp`, new): as io/stat/readonly recorded, the mode's write bits and the attributes' 0x01 are one
   read-only flag on a PSP's memory stick (made 0444 a file reads mode 0x216d and attributes 0x21, made 0777 again 0x21ff
   and 0x20, given the attributes 0x21 alone the same as 0444, each change answered 0). Here the flag is the host file's
