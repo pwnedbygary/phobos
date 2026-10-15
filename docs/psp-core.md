@@ -14142,7 +14142,8 @@ frame buffer formats; 60 frames from each of the 128 deep-play games' states, an
   tested "greater or equal" against its 8888 scene's depth buffer (0x110000, 512 wide), which come out the same either
   way in its 100 frames.
 
-**The change** (memory.hpp, pixel.cpp, four.cpp, gpu.cpp, gpu.hpp, vulkan.cpp; in the third round ge.hpp and draw.cpp):
+**The change** (memory.hpp, pixel.cpp, four.cpp, gpu.cpp, gpu.hpp, vulkan.cpp, check.cpp; in the fourth round move.frag,
+compile.sh, shaders.hpp and system.cpp, and the third round's ge.hpp and draw.cpp taken back):
 - `Memory::depthCopy(format)`: the copy in whose order the GE keeps its depth buffer, the second for 5650, 5551 and
   4444, the fourth for 8888. The software renderer's depth reads and writes (a pixel at a time and four at a time) take
   it from the frame buffer's format, a template argument there (no cost); the four depths of a run stay side by side, as
@@ -14198,6 +14199,44 @@ frame buffer formats; 60 frames from each of the 128 deep-play games' states, an
   rows meet another target's pages, as the second round looked, so rarely (once a frame in Kurohyou and GTA). Depth
   filled that the PRIM doesn't read is filled from memory as it is, as the second round's rows it doesn't draw in. The
   ten other games' finishes are master's again, WipEout's not (below); Kurohyou 1's and 2's as before.
+- The fourth round, after the third was measured on the RP6 (the coordinator's runs: headless, Vulkan fast, master
+  cc0638372 against the third round, three rounds' medians; the RP6 on its default profile, so only the pairs count):
+  WipEout Pure's race 62.2 -> 55.6 frames a second (10.7% more CPU time a frame, 24.9% more instructions: the CPU's work
+  after the finish, not only the wait), Kurohyou 2 65.8 -> 55.8 (17.5% more CPU time; the X3 clocked down to 2.14 GHz
+  from 2.46 while it waited), Dirt 2 1.2% more CPU time, Kurohyou 1 2.4% less, IL-2, GTA Chinatown Wars and Twisted
+  Metal the same. WipEout below full speed was the review's trigger for the move on the GPU, which this round is. Depth
+  filled from memory into a target, where other targets drew those bytes on the GPU since the last finish, is made what
+  a finish then the fill would make it, on the GPU (`moveIntoDepth()`, from `fill()`): for each such target and run of
+  the pages it owns, a Move into the depth (`Command::Move`, parts 2: the backend's moves take the source's pixels into
+  pictures of the PSP's size, one of each pixel's as a read back takes it, then move.frag's DEPTH build is drawn over
+  the rectangle filled), each depth the two bytes of the source's pixel at the depth's bytes (the second copy's order
+  for a 16-bit target, the fourth's for 8888, worked out in the shader as memory.cpp's `vramOffset()`; half of an 8888
+  pixel), narrowed to its format as a read back for memory narrows it, the stencil its alpha. Where those bytes are
+  outside its drawn rectangle or its pages, the depth stays memory's; the source's bytes memory has newer (the CPU's
+  over what it drew: dead) are filled into it first, as a move does. Every depth fill does so, whether the PRIM reads
+  what's filled or not, so a PRIM after that finds those rows filled reads them current too (the second review's five
+  cases, below), and round three's rule is gone, with `GE::reachedBy()` and `Renderer::begin()`'s `reachedBy` (ge.hpp
+  and draw.cpp are master's again). The sources' pages are kept until the next finish (`depthSources`): a PRIM drawing
+  there again, in a rectangle memory heard of before (`own()`'s told ones, which round three's finish had told
+  afresh), has the depths over them filled again, as a change of memory would. A texture read through the depth
+  buffer's views finishes first where its decoding would wait for the GPU anyway (`putDepth()`: the same finishes, a
+  moment earlier): where the depth put is newer than the pixels drawn in its bytes, the finish after had put them back
+  over it (the depth orders' test showed it: 5,561 bytes apart); where they're newer, the depth's rows they changed are
+  filled with them before it's put. Where the GPU can't (no such pipeline,
+  `Backend::depthMoves`; or the start-up check's new case fails it, and the check runs again without), and where the
+  target filled drew in those pages itself (its own pixels don't go into its own depth: a finish puts both in memory),
+  a finish comes first and the fill takes memory's bytes (`begin()`'s look at the rows filled, `depthMovable()`,
+  `Statistics::depthFinishes`): exact either way. Where the moves put pixels in every depth filled (each 16 KiB the
+  rows reach all one other target's pages and its drawn rectangle's full rows over them, short of VRAM's end), the
+  depth isn't taken from memory first (`depthCovered()`, `Statistics::depthsCovered`): the bench found WipEout's HUD
+  target filling its depth's rows from memory on the CPU each frame (the bloom's pages tell it of the bloom's drawing
+  again), every depth then moved over. And the backend's moves take the source's stencils in one copy, all their rows,
+  then each pixel's middle row from the staging buffer: a copy region a row, which MoltenVK records as a blit each on
+  the emulation thread, had cost WipEout's two moves a frame more than the moves' draws. A move's render pass is its
+  rectangle's alone, as an upload's is (the target's pictures loaded and stored there only; the move's draws and its
+  stencil's clearing are all inside it), and its images change layout in three barriers, not nine (`transitions()`):
+  GTA Chinatown Wars' one move a frame (its radar's depth, in rows its bloom draws in) had cost the M1 0.3 ms more
+  waiting a frame, 8% of its speed there (below).
 
 **Pictures** (the kit's runners, -O3 with thin LTO, from the batch's states and presses, 300 frames, Vulkan against
 Software: the mean channel difference and the pixels more than 24 apart):
@@ -14240,6 +14279,17 @@ outcome:
   block, the same depths in the second copy's order, as the 7's), and in Vulkan the bloom's memory (0x110000-0x153fff,
   its depth buffer's), which the HUD's finish puts there each frame as it's drawn: after frame 100 its bytes 43,289
   apart from the software renderer's, master's 180,130 (dumps; nothing else apart).
+- The fourth round, master cc0638372 against this, the same 26 scenes and WipEout's race: Software the third round's
+  hashes in all 27 (19 master's, the 7 and WipEout's as above). Vulkan accurate and fast master's in 25 of the 26 and
+  in WipEout's race, VRAM too (the bloom bytes the third round's finish put in memory aren't put there now). IL-2
+  Sturmovik's play is the one apart, the RAM the same: its 3D, whose scissor reaches row 272 (the first of its other
+  frame buffer, at 0x88000 after the 272 rows of the one at 0), tests that row against its depth buffer's row 272, in
+  the 16 KiB its bloom draws each frame, which now holds the bloom as a finish would put it there, not as memory had it
+  at the last finish. In fast mode 84 of the 100 frames are apart, 8,258 pixels: 7,527 in row 0, where master's were
+  1,116 more than 24 from the software renderer's and this one's 10 (the mean channel difference 13.5 against 0.2; all
+  of row 0 in the 100 frames 1,130 against 24, as accurate mode had it on master: 23); and 731 in rows 8-11, a level or
+  two apart (0.73 against 0.37, none more than 24 apart). In accurate mode 72 frames, 733 pixels in rows 8-11 (0.75
+  against 0.57; one more than 24 apart, none on master) and 5 in row 0.
 
 **Speed.** Kurohyou 2 finishes once more a frame (601 -> 901 in 300 frames, both modes), before its characters' depth
 is filled from the picture the GPU has just drawn there: the finish is needed, and it costs. The second review's runs
@@ -14250,11 +14300,12 @@ second without a screen. This round's runs the same way on the M1 (three pairs i
 9-14): fast 61.8, 80.9 and 85.6 frames a second on master against 66.3, 72.9 and 74.1, the waits 4.6, 4.0 and 3.6 ms a
 frame against 5.5, 4.9 and 4.8, about 1 ms more each time (accurate: 7.2, 7.1 and 7.3 against 7.5, 7.5 and 10.1; its
 frames a second too scattered to tell). The first round said "no change past the runs' spread" (Kurohyou 2 fast 62.8 ->
-63.5): wrong, its rounds too far apart to show it. The move on the GPU of the 5650 frame buffer's pixels into the
-depth (still not done, below) would take that finish, and its cost, away. Kurohyou 1's finishes are as many as
-master's (601 in 300 frames): the second of its two a frame, before its depth-of-field texture through the second copy
-after the characters, comes before the characters now, and the texture finds memory's depth current (5% less CPU on
-the RP6). IL-2 Sturmovik: 601 and 841 finishes in 120 frames (fast, accurate), master's; the first round's 840 and
+63.5): wrong, its rounds too far apart to show it. The fourth round moves the 5650 frame buffer's pixels into the
+depth on the GPU, which takes that finish, and its cost, away (below). Kurohyou 1's finishes are as many as
+master's (601 in 300 frames): in the first three rounds the second of its two a frame, before its depth-of-field
+texture through the second copy after the characters, came before the characters, and the texture found memory's
+depth current (5% less CPU on the RP6); in the fourth the texture's put finishes first (`putDepth()`), the same two.
+IL-2 Sturmovik: 601 and 841 finishes in 120 frames (fast, accurate), master's; the first round's 840 and
 1,080 had it waiting about 29% more on the M1. Twisted Metal's play, Vulkan fast and accurate, 300 frames: one finish
 and the same draws and uploads as master's; with the first take, 1.0 ms a frame of waiting and 340 more uploads. (A
 first measurement, the base's pipelines made during the run, had Kurohyou 1 twice as fast: not so.) The third round:
@@ -14264,7 +14315,23 @@ a second on master against 77.7, 85.8 and 70.0, GTA at 207.9, 125.7 and 186.0 ag
 in Arms at 41.6, 39.5 and 46.0 against 40.8, 39.6 and 40.9, their waits as close (the second review had them 17-33%
 slower). WipEout's race keeps its finish a frame (301 in 300 frames, master 1): the second review's M1 runs had fast
 mode at 103.0, 109.5 and 113.1 frames a second on master against 83.3, 82.1 and 84.7, accurate 35.4, 36.5 and 40.2
-against 28.3, 34.6 and 36.4.
+against 28.3, 34.6 and 36.4. The fourth round on the M1 (fast mode unless said, 120 frames from the deep-play states
+and scenes, master cc0638372 and this in turns, three pairs, the pipelines kept, the Mac's load 2-3;
+`kit/logs/bench8.log`): WipEout's race 103.4, 107.1 and 102.3 frames a second on master against 100.9, 102.0 and
+105.1, 0.45% more instructions a frame (49.5 million against 49.7), 0.2 ms more waiting (its two moves); over 1,500
+frames, two pairs, 109.4 and 108.9 against 106.5 and 107.6, 39.59 million instructions against 39.78, the CPU's time
+5.03 and 5.00 ms a frame against 5.11 and 5.08. Kurohyou 2 91.2, 89.5 and 91.8 against 91.7, 92.3 and 92.5, 5.3% fewer
+instructions (113.4 million against 107.4: its characters' depth moved, none filled on the CPU), the same waits;
+accurate 57.9, 58.2 and 57.8 against 56.5, 55.9 and 55.9, 0.7 ms more waiting (7.8-8.0 against 8.5-8.7). Kurohyou 1
+53.0, 53.2 and 54.1 against 50.6, 50.2 and 50.4, 3.0% fewer instructions, 1.0 ms more waiting (7.5-7.9 against
+8.7-8.8): round three's runner had 0.8 ms more the same way (8.3-8.6 against 7.6-7.7; `kit/logs/bench7.log`) with no
+move and no finish more, the GPU drawing the pedestrians the scrambled depth had hidden; the move is the rest. GTA
+Chinatown Wars 238.3, 229.0 and 234.2 against 235.4, 228.8 and 231.7, 0.1 ms more waiting; before the move's pass was
+its rectangle's and its barriers three, 248.3, 240.4 and 250.0 against 229.2, 226.1 and 223.1, 0.3 ms more
+(`kit/logs/bench5.log`). Dirt 2 98.0, 98.4 and 98.6 against 97.8, 100.9 and 100.7 (2.5% fewer instructions), IL-2
+35.6, 35.8 and 35.7 against 35.4, 36.1 and 35.4, Twisted Metal 226.9, 225.7 and 226.6 against 227.3, 226.6 and 228.5
+(1.0% more instructions in 120 frames: the start-up check's new case), WipEout accurate 39.7, 39.8 and 39.5 against
+40.0, 39.2 and 40.0.
 
 **Tests** (tests/psp: draw.cpp, gpu.cpp, measure.cpp; and the start-up check, check.cpp. On master's core with only
 these tests, and `Statistics::depthFinishes` added, never counted, for gpu.cpp to compile, the first three fail and the
@@ -14295,24 +14362,57 @@ other 538 groups run there pass):
   row, and the 5650 frame buffer's last sprite tested against it ("greater or equal", not written), after its depth is
   taken across the two orders by runs: before, nothing the check compared depended on that take (the colors only); a
   driver that copies the runs wrong now fails it, and the software renderer draws the game.
-- "gpu a finish before a depth fill only where the PRIM's test reads it" (the third round; 1x and 2x, both modes): a
-  picture of depths drawn into the depth buffer's first 16 rows as a 5650 frame buffer on the GPU (the 5551 screen 512
-  wide and 32 rows), then, on machines of their own: a clear of all of the depth, or a sprite over all of it written
-  with a test always true, then a sprite tested against what they left (no finish); a sprite at 65535 tested "greater
-  or equal" (none), and one at 65534, which fails where the picture's 65535 (one); a 3D quad tested in rows 18-31,
-  below the picture's 16 KiB (none), and one in rows 2-13 (one); and another picture drawn after a sprite tested
-  against the first, then a sprite tested against it (two): the screen's depth the only one over the depth buffer, its
-  rows filled already, only its own rows memory changed find the picture's pages (the second review's ask: in the
-  depth orders' second frame the 8888 frame buffer's changed rows find them too). Every byte the software renderer's,
-  each one's finishes as said. Mutations, each in a copy of the tree, the depth groups run, each failing this group
-  alone in either mode at 1x and 2x: a clear and a test always true read: those two a finish too many; no test decided
-  by its depths: the sprite at 65535 a finish; decided at 65534 too: that sprite 2,342 bytes apart, no finish; the
-  region's rows, not the vertices': the quad below a finish; a 3D PRIM's rows as none: the quad over it 7,026 bytes
-  apart, no finish; the target's own changed rows not looked at: another picture 5,187 bytes apart, one finish of two.
-  With the taken target's changed rows not looked at, everything passes (the second review: the other two terms find
-  what that one finds).
+- The fourth round's (1x and 2x, or 1x to 3x, both modes, and both ways: the pixels moved into the depth on the GPU,
+  and put in memory first, `Backend::depthMoves` off, as a GPU that can't has them; each compares the depth the screen
+  has, read back with `GPU::depthOf()`, the tests', with the software renderer's memory in the screen's order, depth for
+  depth):
+  - "gpu depth filled from memory as a finish would leave it, for every PRIM after" (replaces the third round's group):
+    a picture of depths drawn into the depth buffer's first 16 rows as a 5650 frame buffer on the GPU (the 5551 screen
+    512 wide and 32 rows), then, on machines of their own: a clear of all of the depth, or a sprite over all of it
+    written with a test always true, then a sprite tested; sprites at 65535 and 65534; 3D quads below the picture's
+    16 KiB and over it; the second review's five, each leaving the picture's rows filled for a sprite tested over them
+    after (a sprite at 65535, a quad below the picture, the left half written with a test always true, or cleared, a
+    sprite in rows 16-31); another picture drawn after a sprite tested against the first, where the first was drawn
+    (memory heard of that rectangle then), and a sprite tested against it; and the screen at 0x8c000, its own colors
+    the depth buffer's last 16 rows, tested there (a finish either way). Every byte of VRAM but the depth buffer's the
+    software renderer's, and every depth; moved, no finish but the last case's; in memory, a finish. On the third
+    round's code the five fail in both modes at 1x and 2x (the second review's run: 4,688, 9,376, 4,720, 4,720 and
+    9,376 bytes apart).
+  - "gpu other frame buffers' pixels as the depth in every pair of formats": a picture (a texture's texels, their
+    alphas the stencil) drawn in each of the four formats over the depth buffer's bytes (at its first byte, a page on,
+    64 bytes on or half a 16 KiB back, or 480 pixels a row, rows not whole pages, at its first byte or 64 bytes on),
+    over part of its rows and columns (the rest memory's, a pattern the CPU left), all of them, all its rows in part of
+    its columns, or all its columns from its third row, some of it written over by the CPU after (dead), then a screen
+    of each format tested against it: 80 cases at 1x, 2x and 3x, every depth and every byte of VRAM the software
+    renderer's, and the depth not taken from memory first (`depthsCovered`) exactly where the picture's drawn bytes
+    are all of the depth's 16 KiB.
+  - "gpu the depth buffer in each format's order" now runs both ways, no finish when the pixels are moved.
+  - The start-up check: a 5551 frame buffer 128x64 drawn over a depth buffer's 16 KiB, tested against by an 8888 one,
+    and an 8888 one 64 wide under a 4444 one's: exactly. Failing it alone, System checks again with the move off.
+  - Mutations, each in a copy of the tree, the depth groups run: nothing moved: all four fail (the start-up check too:
+    a driver whose move draws nothing falls back); a PRIM drawing again where memory heard of it not filling the depth
+    again: another picture 5,187 bytes and 6,953 depths apart; the source's dead bytes not filled into it first: 16
+    bytes and 16 depths; the target's own pages no reason to finish: its case 16,384 depths; a texture's put not
+    finishing first: the depth orders 5,561 bytes; begin()'s finish gone: the memory way fails in all three groups;
+    every depth in the second copy's order: 7,286 bytes (an 8888 screen's depth); an 8888 pixel's low half always: 6,392
+    bytes and 6,400 depths, and the start-up check. Three changes pass, each by design: the shader's page bounds gone
+    (the drawn rectangle's rows reach no other target's page: one can't take a page a target drew in whose rows aren't
+    whole pages without a finish), the rows held to the pages' 16 KiB gone (the shader finds the bytes itself), and the
+    taken target's changed rows not looked at (the other rows find the same pages, as in round three). The fill's skip
+    and the stencils' one copy, the depth, move and check groups run: every fill's depth skipped where moves are on:
+    three groups fail (the depth orders 7,690 bytes); a source drawn in part of its columns counting: 3,590 bytes and
+    3,584 depths; its drawn rows not looked at: 960 bytes and 960 depths (480 wide, drawn from row 2); a 16 KiB that
+    starts before the source counting: 988 bytes and 992 depths (480 wide, 64 bytes on); the stencils' rows not every
+    scale-th: the two move groups and the formats' (2,433 bytes at 2x, 3,306 at 3x). One passes by design: the 16
+    KiB's other pages not looked at (no test has another target's page inside a source's 16 KiB). The move's pass
+    over its rectangle alone has none: MoltenVK and lavapipe draw outside a pass's render area anyway, so nothing
+    here could fail; the area is the scissor its draws already had, and its stencil clearing's rectangle.
 
-**Checks.** The third round, on d67ef308f (173931a54 the code and its test, d67ef308f the merge of master cc0638372):
+**Checks.** The fourth round, on e78ccb495 (the code and its tests, on d67ef308f): `tests/psp/run-tests.sh` 553
+groups, 0 failures, sanitized (the container check off) and without the sanitizers, its 61 GPU groups run on the M1's
+Vulkan, none skipped (Vulkan, the test programs and both rounds of the PSP's measurements required);
+`tests/allegrex/run-tests.sh` 78, 0; `tests/psp/ares/run-tests.sh` 348 checks, 0 failed; CI green on e78ccb495.
+The third round, on d67ef308f (173931a54 the code and its test, d67ef308f the merge of master cc0638372):
 `tests/psp/run-tests.sh` 552 groups, 0 failures, sanitized (the container check off) and without the sanitizers, its 60
 GPU groups run on the M1's Vulkan, none skipped (Vulkan, the test programs and both rounds of the PSP's measurements
 required); `tests/allegrex/run-tests.sh` 78, 0; `tests/psp/ares/run-tests.sh` 348 checks, 0 failed; CI green on
@@ -14327,23 +14427,22 @@ first round, on dbd8139bc (bd084145f the change, a0d5a5598 the tests, dbbb6f1b0 
 the pages looked through only where they weren't known free): 531, 68 and 340, CI green on dbbb6f1b0 and dbd8139bc.
 The pictures above are the first round's; the second round's captures of Kurohyou 1 and 2 (frames 30, 90, 150, 210, 270
 and 300 in Software, Vulkan accurate and fast: 36) are the same pixels, and so are the third round's (Kurohyou 2's fast
-frame 90 taken a frame late in one run: a rerun's the same).
+frame 90 taken a frame late in one run: a rerun's the same) and the fourth's (that frame the rerun's).
 
 Still not done:
-- A move on the GPU of a target's pixels into another's depth, which would take away Kurohyou 2's finish a frame (and
-  its cost, above; Kurohyou 1's is moved, not added), and WipEout's (next).
-- WipEout Pure's HUD waits for the GPU once a frame (301 finishes in 300 frames, master 1, in both modes): it's tested
-  ("greater" at 65241) against the bloom drawn over its whole depth buffer just before, whose bytes the PSP's depth test
-  reads there. Master doesn't give it them (without a finish, the HUD meets memory's older bytes or the screen's own
-  depth), and the pictures are master's in the frames compared, but the outcome turns on the bloom (3-27 pixels a
-  frame in 12 traced): an exact rule can't drop this finish, only the move can.
-- Depth filled from memory that the PRIM doesn't read (a clear's, a test's always true, rows it doesn't draw in),
-  where another target's pixels are the GPU's: filled from memory as it is, as before part 96, and a later PRIM reading
-  it there (not filling it again) reads memory's older bytes. IL-2 Sturmovik's 3D, whose scissor reaches row 272 (the
-  other screen's first row), tests that row against its bloom as memory had it, the GPU's newer bloom not put back;
-  exact would keep such depth waiting until a PRIM reads it, then finish (once a frame in IL-2), or move the bloom's
-  pixels on the GPU. The second review saw it in about 200 pixels of rows 0 and 8-11, a level or two, which the first
-  round's extra finishes had brought nearer the software renderer's.
+- A frame buffer drawn over its own depth buffer's bytes: its own pixels aren't moved into its depth. Where another
+  target's are there too, a finish puts both in memory first (exact); where they're alone, the depth is filled from
+  memory as before part 96. The fourth round's sweep (the 128 deep-play states, 60 frames fast) found the first in
+  Burnout Dominator, a finish 14 times (its finishes in all master's 15), and the second in Cars Race-O-Rama, IL-2
+  Sturmovik and MX vs. ATV Reflex, 269-270 fills each (master fills them all so).
+- Where the GPU can't move pixels into a depth (the fallback), a depth put into memory for a texture, or taken across
+  the two orders through memory, fills the target's changed rows outside the texture's 16 KiB from memory as it is,
+  as before part 96 (on the GPU's way they're moved in).
+- Rows memory changed are filled again whole, as before part 96: the target's own depth drawn there since is lost
+  where nothing drew over it (memory never has the GPU's depth). A source's drawing counts as memory changing there,
+  as the finish after it did.
+- The fourth round's RP6 numbers: the coordinator measures the head (WipEout's race, Kurohyou 2, Dirt 2, GTA
+  Chinatown Wars, IL-2, Twisted Metal, Kurohyou 1).
 - Depth between depth buffers of other row widths over the same memory, as before (part 90).
 - A 16-bit frame buffer's depth layout measured on a PSP: round 3's depth-layout case drawn with 5650, 5551 and 4444
   frame buffers (tools/psp-measure would show it in one run). Until then 5650's and 4444's go with 5551's by size.
@@ -14360,7 +14459,12 @@ The third round's: `kit/patches/r3trace-patch.py` (each depth-fill finish: the P
 its vertices' depths: `kit/logs/r3/`), `r3count-patch.py` (the rule's counters), two frames' commands
 (`kit/logs/r3dbg/wo-f6.log`, `gta-f6.log`), `kit/r3mqueue.sh` (the sweep `kit/logs/r3m-sweep-*.log`, compared by
 `kit/sweepcmp.py`; the counts `kit/logs/r3m-counts.log`; the hashes `kit/logs/r3mhash-*.log`; the captures
-`runs/r3m-*`), `mut3/` (the mutations) and `kit/bench4.sh`.
+`runs/r3m-*`), `mut3/` (the mutations) and `kit/bench4.sh`. The fourth round's: `kit/patches/r4count-patch.py` (the
+moves' counters), `kit/r4queue.sh` and `kit/r4bqueue.sh` (the sweep `kit/logs/r4-sweep-r4count.log`, compared in
+`kit/logs/r4-sweep-cmp.txt` by `kit/sweepcmp4.py`; the counts `kit/logs/r4-counts.log`; the hashes
+`kit/logs/r4hash-*.log`; the captures `runs/r4-*`; the bench `kit/bench5.sh`, `kit/logs/bench5.log` and
+`kit/logs/bench6-wo1500.log`; the first version's as `*-r4a*`), `kit/tmp/prof/` (its WipEout profiles), `mut4/` and
+`mut5/` (the mutations), the IL-2 close-ups `png/r4-il2-*.png`.
 
 ## Part 97: NPDRM EDATA decrypted — the PGD past the EDATA's header, on the memory stick too, its size and end the data's; a PGD file's end its data's
 
