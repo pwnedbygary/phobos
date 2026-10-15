@@ -2,6 +2,7 @@
 //buttons and stick as the system sets them; with PSP_TEST_PROGRAMS, a real program that uses both through newlib.
 #include "kernel-machine.hpp"
 #include "disc-image.hpp"
+#include "pgd.hpp"
 
 #include <array>
 #include <cstdlib>
@@ -671,6 +672,132 @@ static auto downloadDrm() -> void {
   CHECK(m.notes.size(), 0);
 }
 
+//An NPDRM EDATA on the stick, as a download's added content comes (Metal Slug XX's MSXXLEONA.EDAT, opened with
+//0x40000001): a "\0PSPEDAT" header, then a whole PGD (tests/psp/pgd.hpp makes both). Readied by
+//sceNpDrmEdataSetupKey, it reads as the PGD's decrypted data from its first byte, both headers hidden, whole, from
+//the middle and past the end, and its data's size is the PGD's. The PGD starts where the header's word at 0x0c says:
+//0x90 in a download's EDATA, 0x80 in one without a licence's MAC. The licensee key isn't the PGD's version key (npdrm
+//derives that from it), which is recovered from the PGD header's MAC. An EDATA holding something else (a module) is
+//read as it is.
+static auto downloadEdata() -> void {
+  auto plain = psp_pgd::scrambled(3000, 11);
+  auto versionKey = psp_pgd::scrambled(16, 0x1234);
+  psp_pgd::Options options;
+  options.keyIndex = 1;  //as games' PGD headers say
+  options.blockSize = 0x400;
+  options.versionKey = versionKey.data();
+  auto pgd = psp_pgd::build(plain, options);
+  CHECK(pgd.empty(), false);
+  for(u32 at : {0x90u, 0x80u}) {
+    auto file = psp_pgd::edata(pgd, at);
+    HostFolder folder;
+    folder.put("PSP/GAME/NPUH00000/DLC.EDAT", std::string(file.begin(), file.end()));
+    KernelMachine m;
+    m.kernel.mount("ms0", folder.path.string());
+    m.system.memory.fill(Buffer, 0x5a, 16);
+    CHECK(m.call("sceNpDrmSetLicenseeKey", {Buffer}), 0);
+    u32 edat = m.call("sceIoOpen", {m.string("ms0:/PSP/GAME/NPUH00000/DLC.EDAT"), 0x4000'0001, 0});
+    CHECK(edat >= 3 && edat < 0x8000'0000, true);
+    CHECK(m.call("sceNpDrmEdataSetupKey", {edat}), 0);
+    CHECK(m.call("sceNpDrmEdataGetDataSize", {edat}), plain.size());
+    CHECK(m.call("sceIoRead", {edat, Buffer, 4000}), plain.size());  //the data, and nothing after it
+    std::vector<u8> read(plain.size());
+    m.system.memory.copyOut(read.data(), Buffer, u32(read.size()));
+    CHECK(read == plain, true);
+    CHECK(m.call("sceIoLseek32", {edat, 1001, 0}), 1001);
+    CHECK(m.call("sceIoRead", {edat, Buffer, 100}), 100);
+    std::vector<u8> piece(100);
+    m.system.memory.copyOut(piece.data(), Buffer, 100);
+    CHECK(piece == std::vector<u8>(plain.begin() + 1001, plain.begin() + 1101), true);
+    CHECK(m.call("sceIoLseek32", {edat, 2950, 0}), 2950);
+    CHECK(m.call("sceIoRead", {edat, Buffer, 4000}), 50);  //past the data's end: only the data
+    CHECK(m.call("sceIoClose", {edat}), 0);
+    CHECK(m.notes.size(), 0);
+  }
+  //an EDATA holding a module (its "~PSP" header, then made-up bytes) rather than a PGD: read as it is
+  auto module = psp_pgd::scrambled(0x200, 12);
+  memcpy(module.data(), "~PSP", 4);
+  auto file = psp_pgd::edata(module);
+  HostFolder folder;
+  folder.put("PSP/GAME/NPUH00000/MODULE.EDAT", std::string(file.begin(), file.end()));
+  KernelMachine m;
+  m.kernel.mount("ms0", folder.path.string());
+  m.system.memory.fill(Buffer, 0x5a, 16);
+  CHECK(m.call("sceNpDrmSetLicenseeKey", {Buffer}), 0);
+  u32 edat = m.call("sceIoOpen", {m.string("ms0:/PSP/GAME/NPUH00000/MODULE.EDAT"), 0x4000'0001, 0});
+  CHECK(m.call("sceNpDrmEdataSetupKey", {edat}), 0);
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {edat}), file.size());
+  CHECK(m.call("sceIoRead", {edat, Buffer, 0x1000}), file.size());
+  std::vector<u8> read(file.size());
+  m.system.memory.copyOut(read.data(), Buffer, u32(read.size()));
+  CHECK(read == file, true);
+  CHECK(m.notes.size(), 0);
+}
+
+//An EDATA on the stick beside files emptied as they're opened (part 95), each as long as the PSP sees it. Readied, an
+//EDATA's size and end are its PGD's data's, and it reads as its data, from its end too, while a plain file emptied as
+//it was opened ends at its PSP length (nothing, then as far as it's written), its old bytes past that still on the
+//host. An EDATA emptied through another descriptor holds nothing to the PSP, so a descriptor opened on it then finds
+//no header to ready: its size and end are 0, while its host file holds the EDATA until the cut. A file open to write
+//isn't readied (sceNpDrmEdataSetupKey readies a file open to read alone), so no descriptor is a PGD with a cut pending.
+static auto downloadEdataEmptied() -> void {
+  auto plain = psp_pgd::scrambled(3000, 13);
+  auto versionKey = psp_pgd::scrambled(16, 0x4321);
+  psp_pgd::Options options;
+  options.keyIndex = 1;
+  options.blockSize = 0x400;
+  options.versionKey = versionKey.data();
+  auto edata = psp_pgd::edata(psp_pgd::build(plain, options));
+  std::string bytes(edata.begin(), edata.end());
+  HostFolder stick;
+  stick.put("PSP/GAME/NPUH00000/DLC.EDAT", bytes);
+  stick.put("PSP/SAVEDATA/NPUH00000/DATA.BIN", "0123456789");
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  auto open = [&](const char* path, u32 flags) { return m.call("sceIoOpen", {m.string(path), flags, 0777}); };
+  m.system.memory.fill(Buffer, 0x5a, 16);
+  CHECK(m.call("sceNpDrmSetLicenseeKey", {Buffer}), 0);
+  u32 save = open("ms0:/PSP/SAVEDATA/NPUH00000/DATA.BIN", 0x0602);  //write, create, truncate: emptied
+  u32 edat = open("ms0:/PSP/GAME/NPUH00000/DLC.EDAT", 0x4000'0001);
+  CHECK(m.call("sceNpDrmEdataSetupKey", {edat}), 0);
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {edat}), plain.size());
+  CHECK(m.call("sceIoLseek32", {edat, 0, 2}), plain.size());  //the data's end
+  CHECK(m.call("sceIoLseek32", {edat, u32(-100), 2}), 2900);
+  CHECK(m.call("sceIoRead", {edat, Buffer, 4000}), 100);
+  std::vector<u8> read(100);
+  m.system.memory.copyOut(read.data(), Buffer, 100);
+  CHECK(read == std::vector<u8>(plain.begin() + 2900, plain.end()), true);
+  CHECK(m.call("sceIoLseek32", {edat, 0, 0}), 0);
+  CHECK(m.call("sceIoRead", {edat, Buffer, 4000}), plain.size());
+  read.resize(plain.size());
+  m.system.memory.copyOut(read.data(), Buffer, u32(read.size()));
+  CHECK(read == plain, true);
+  CHECK(m.call("sceIoClose", {edat}), 0);
+  CHECK(m.call("sceIoLseek32", {save, 0, 2}), 0);  //emptied: its PSP length, its bytes kept on the host
+  CHECK(m.call("sceIoLseek32", {save, 3, 0}), 3);
+  m.system.memory.copyIn(Buffer, "xy", 2);
+  CHECK(m.call("sceIoWrite", {save, Buffer, 2}), 2);  //past its end: 0 to 2 back
+  CHECK(m.call("sceIoLseek32", {save, 0, 2}), 5);
+  CHECK(stick.get("PSP/SAVEDATA/NPUH00000/DATA.BIN") == "012xy56789", true);
+  CHECK(m.call("sceNpDrmEdataSetupKey", {save}), 0);  //open to write: not readied
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {save}), 5);
+  CHECK(m.call("sceIoClose", {save}), 0);
+  CHECK(stick.get("PSP/SAVEDATA/NPUH00000/DATA.BIN") == "012xy", true);
+  u32 emptying = open("ms0:/PSP/GAME/NPUH00000/DLC.EDAT", 0x4000'0602);
+  CHECK(m.call("sceNpDrmEdataSetupKey", {emptying}), 0);
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {emptying}), 0);
+  edat = open("ms0:/PSP/GAME/NPUH00000/DLC.EDAT", 0x4000'0001);
+  CHECK(m.call("sceNpDrmEdataSetupKey", {edat}), 0);
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {edat}), 0);
+  CHECK(m.call("sceIoLseek32", {edat, 0, 2}), 0);
+  CHECK(m.call("sceIoRead", {edat, Buffer, 4000}), 0);
+  CHECK(stick.get("PSP/GAME/NPUH00000/DLC.EDAT") == bytes, true);
+  CHECK(m.call("sceIoClose", {edat}), 0);
+  CHECK(m.call("sceIoClose", {emptying}), 0);
+  CHECK(stick.get("PSP/GAME/NPUH00000/DLC.EDAT").empty(), true);
+  CHECK(m.notes.size(), 0);
+}
+
 //Descriptors handed out: the lowest number free, from 3 (io/open/tty0 recorded small numbers counting up), a closed
 //file's number given to the next file or folder, whatever it is; an asynchronous open's descriptor holding its
 //number until its result is taken; the movie player's file keeping its number while the player has a movie, and a
@@ -1309,6 +1436,8 @@ auto fileTests() -> Tests {
     {"controller new samples", controllerReadNew}, {"controller cycle", controllerCycle},
     {"controller read", controllerRead}, {"controller two readers", controllerTwoReaders},
     {"system program", systemProgram}, {"download DRM on a game's own files", downloadDrm},
+    {"download DRM on an EDATA (a PGD past its header)", downloadEdata},
+    {"download DRM on an EDATA beside files emptied as they're opened", downloadEdataEmptied},
   };
 }
 

@@ -203,4 +203,21 @@ inline auto build(const Bytes& plaintext, const Options& options = {}) -> Bytes 
   return file;
 }
 
+//An NPDRM EDATA holding a PGD file, as a download's added content comes: a "\0PSPEDAT" header, the PGD at pgdOffset,
+//then a table's worth of bytes after its data, as the PGD's block MACs follow it (the PSP Developer Wiki's PSP_EDAT
+//page; "tpu"'s edata.c). The header's word at 0x0c says where the PGD starts, in its low 24 bits; its top byte holds
+//flags, 1 for the licence's MAC at 0x80 that fills a download's header out to 0x90. The content ID is made up, and the
+//signature and MAC left empty: nothing here checks them.
+inline auto edata(const Bytes& pgd, u32 pgdOffset = 0x90) -> Bytes {
+  Bytes file(pgdOffset, 0);
+  memcpy(file.data(), "\0PSPEDAT", 8);
+  put32(file.data() + 0x0c, pgdOffset | (pgdOffset >= 0x90 ? 1u << 24 : 0));
+  const char id[] = "UP0000-NPUH00000_00-0000000000000001";
+  memcpy(file.data() + 0x10, id, sizeof(id) - 1);
+  file.insert(file.end(), pgd.begin(), pgd.end());
+  auto table = scrambled(0x40, 0xedad);
+  file.insert(file.end(), table.begin(), table.end());
+  return file;
+}
+
 }
