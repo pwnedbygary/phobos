@@ -274,6 +274,9 @@ struct GE {
 
   //Where a primitive may draw (draw.cpp): pixels inside left-right and top-bottom (inclusive).
   struct Region { s32 left, top, right, bottom; };
+  //Where a primitive's pixels can be, inside its region, and the depths they can have, lowest and highest (0-65535):
+  //its region and every depth where they can't be told (draw.cpp's reachedBy()).
+  struct Reached { Region region; u32 lowest, highest; };
   struct Batch;  //(threads.cpp)
   struct Renderer;
 
@@ -451,6 +454,8 @@ struct GE {
   auto lookFor(const PixelState& pixel, const Sampler* texture) const -> Look;
   auto primitive(u32 kind, u32 count) -> void;
   auto drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>& vertices, u32 strip) -> void;
+  auto reachedBy(bool through, const std::vector<Vertex>& vertices, const Transform& t, const Region& region)
+    -> Reached;
   auto meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip, s32 facing,
                      std::vector<Vertex>& vertices) -> void;
   auto submit(Job& job) -> bool;
@@ -630,6 +635,7 @@ struct GE {
     std::condition_variable wake, finished;
     u64 round = 0;            //goes up as each batch starts being drawn, which the workers wake for
     bool quit = false;
+    bool held = false;        //the workers take no batch (tests: one kept being drawn till they've looked)
     u64 shared = 8192;        //a batch with fewer pixels is drawn on the GE's thread alone (tests may make it 0)
   } drawing;
 
@@ -650,7 +656,10 @@ struct GE {
   struct Renderer {
     virtual ~Renderer() = default;
     virtual auto ready() const -> bool = 0;
-    virtual auto begin(GE& ge, const Look& look, bool through, const Region& region) -> bool = 0;
+    //(vertices, t: the PRIM's, for GE::reachedBy() where it needs where the PRIM's pixels can be and their depths: a
+    //3D PRIM's are its vertices on the screen, worked out only then)
+    virtual auto begin(GE& ge, const Look& look, bool through, const Region& region,
+                       const std::vector<Vertex>& vertices, const Transform& t) -> bool = 0;
     virtual auto triangle(const Vertex& a, const Vertex& b, const Vertex& c) -> void = 0;
     //(triangle() with its corners' places as the GE holds them, in sixteenths, which it worked out: draw.cpp's fixed())
     virtual auto triangleAt(const Vertex& a, const Vertex& b, const Vertex& c, const s64 (&)[3], const s64 (&)[3])

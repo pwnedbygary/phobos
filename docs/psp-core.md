@@ -346,7 +346,8 @@ MiB as on later models). Anything else (the hardware registers, the boot ROM) is
 writing goes nowhere, and `unmapped()` is told, since under HLE that means a bug or something not emulated yet.
 The bytes are kept little-endian, as the PSP sees them. VRAM's first and third copies show it as it is; the second
 and fourth rearrange it in 32-byte pieces, for the GE's depth buffer, which the GE itself reaches as the fourth copy
-shows it, in order (`vramOffset()`, `vramSeen()`; measured: see "Round 3's results").
+shows it, in order (`vramOffset()`, `vramSeen()`; measured: see "Round 3's results"). (Since part 96: so with an 8888
+frame buffer, as round 3 drew; with a 16-bit one as the second copy shows it, `Memory::depthCopy()`.)
 
 Every change, the CPU's stores and the loader's or HLE functions' copies alike, is reported to `written()`, which
 the CPU's owner points at the recompiler so that code compiled from there is dropped. A change to VRAM is reported
@@ -14079,6 +14080,473 @@ whose bytes past the state's length are byte for byte the ones the state hashed 
 within a session, another program on the host writing the file in place, as long, while a cut is pending (only the
 length is checked then; Phobos's own savedata utility drops the cut on what it writes).
 
+## Part 96: the depth buffer in the order its frame buffer's format has it — the Kurohyou games' characters at the screen's middle, their floor's seam
+
+On branch `cursor/psp-kurohyou-2b67`, on master at e78b4a364 (#254), with master at 14b181707 (#257; parts 94 and 95,
+other branches') merged in for the second round, after the review, and master at cc0638372 (#259, part 97) for the
+third, after the second review, and master at 02cd1fa8c (#260, part 98) for the fifth. Clean room: no PPSSPP code read,
+JPCSP not read; the PSP's behaviour relied on is round 3's measurement of VRAM's copies (memory.hpp), pspautotests'
+`gpu/ge/edramswizzle` recording (the copies' layouts, which `sceGeEdramSetAddrTranslation` changes), and what the games
+themselves do on the PSP (below). Save states are unchanged (their layout and what's in them: the depth order is worked
+out from the frame buffer's format as it's drawn). A state saved before this part holds a 16-bit frame buffer's depth in
+the old order (the fourth copy's): a game that clears its depth or draws it again each frame doesn't notice (every kit
+scene, and Kurohyou 1 and 2, right from the first frame), but one that drew its depth once and kept it would test
+against it scrambled until it drew it again.
+
+**The problem.** Deep play batch 04's bug 2 (HIGH, both renderers): in Kurohyou: Ryu ga Gotoku Shinshou and Kurohyou 2,
+characters crossing the screen's vertical middle (x = 240) lost their left part under Software, cut along a
+dead-straight edge at x = 240, and vanished under Vulkan; characters wholly to one side were drawn; both games' floors
+had a faint seam at x = 240. The interpreter drew the same. On master (e78b4a364) the same, in both of Vulkan's modes.
+
+**How it was found.** A scratch runner logging every command of a frame (the scissor, the region, the offsets, each
+BOUNDING_BOX's vertices and its BJUMP), each PRIM's settings and vertices, and VRAM dumped just before chosen PRIMs
+(everything drawn settled first). Kurohyou's frame has no bounding box at all, and its scissor, region and offsets are
+ordinary (the whole screen, the viewport's middle at x = 240): the suspects of the report were out. Its street is one
+pre-rendered picture (a 3D quad), and the picture's depth goes into the depth buffer (0x88000, 512 wide, beside a 5551
+screen) in three passes of four 120-pixel sprites: a swizzled 5650 texture holding the depth, scaled onto the depth
+buffer's memory drawn as a 5650 frame buffer (a plain-order picture of the street's depth, `D`); that memory taken back
+through VRAM's second copy (0x04288000) as a 5650 texture into a frame buffer of its own (0x116400); and that copied
+into the depth buffer's memory again. The characters (skinned, depth tested "greater or equal", writing the stencil) are
+drawn against it. The GE read its depth as the fourth copy shows it (memory.hpp, round 3's measurement), which left
+pixel (x, y)'s depth `D`'s pixel (rot(x), y), bits 4-8 of x turned round: for x below 256 the even 16-pixel pieces of
+`D`'s row, a squeezed copy of the whole street; from 256 the odd ones, another; and x 240-255 from `D`'s columns
+480-495, which no sprite drew (0). A character at x 226-239 met the depth of the right-hand buildings (near: it failed),
+at 240-255 0 (it passed: the sliver), from 256 the left-hand ones (failed again). Through the second copy's order
+instead (the offset with bits 6 and 13 flipped), the depth the GE reads is `D` at all 130,560 of the screen's pixels
+(29,337 through the fourth's). And Kurohyou takes its depth again through the second copy as a CLUT16 texture of the
+depth's high byte, straight (four sprites of 120 texels onto a 256-wide buffer), for its depth of field: with the depth
+scrambled, its mask broke at x = 240, the floor's seam. Kurohyou 2 makes its depth the same way.
+
+**What the PSP does.** Round 3 drew depth with an 8888 frame buffer and read it back with the CPU through each copy:
+the fourth in order, the second each 16 pixels of a row 32 apart (only columns 0-255 drawn). pspautotests' recording
+of the copies (`edramswizzle`, at the PSP's starting translation, 0x400) is memory.hpp's. Kurohyou never calls
+`sceGeEdramSetAddrTranslation`. So the layout the GE writes must differ by something round 3 held fixed: the frame
+buffer's format. With a 16-bit frame buffer the GE keeps its depth as the second copy shows it in order, with an 8888
+one as the fourth does: two copies that rearrange, one for each size of pixel, where a single layout would have needed
+one. Unmeasured, but every game that reads its depth buffer agrees, and none disagrees. Every 16-bit game among them
+draws 5551: 5650 and 4444 go with it by their pixels' size only (no game or measurement shows them). A census (a
+scratch runner counting each texture read and CPU load through the second and fourth copies, and each depth buffer's
+frame buffer formats; 60 frames from each of the 128 deep-play games' states, and WipEout Pure's race):
+- 16-bit frame buffers reading their depth in order through the second copy: Kurohyou 1 and 2 (5551: the round trip,
+  and Kurohyou's depth of field), Genso Suikoden Tsumugareshi Hyakunen no Toki (5551: a depth of field, four sprites of
+  120 texels onto a 256-wide buffer, CLUT16), Me & My Katamari (5551: fog by depth, sprites with u = x onto the screen),
+  MediEvil Resurrection (a 5551 frame buffer 64 wide: its CPU reads a 16x16 block of the depth in order, 32 bytes a row,
+  rows 128 apart).
+- 8888 frame buffers reading theirs in order through the fourth copy: Disney-Pixar Cars and IL-2 Sturmovik (the same
+  depth of field as Kurohyou's and Genso Suikoden's, the texture at 0x04710000), Killzone and WipEout Pure (the CPU's
+  loads).
+- 8888 frame buffers reading theirs through the second copy undo its spread: MX vs. ATV Reflex, MX vs. ATV Untamed and
+  Cars Race-O-Rama take it in 30 strips of 16 texels, the even pieces then the gaps (columns 256-479 there, as
+  memory.hpp guessed them).
+- None of them draws one depth buffer (its address and row width) with both a 16-bit format and 8888. Of the kit's
+  scenes, Twisted Metal: Head On's play does: small 5551 frame buffers (64 and 128 pixels wide, about 230 PRIMs a frame)
+  tested "greater or equal" against its 8888 scene's depth buffer (0x110000, 512 wide), which come out the same either
+  way in its 100 frames.
+
+**The change** (memory.hpp, pixel.cpp, four.cpp, gpu.cpp, gpu.hpp, vulkan.cpp, check.cpp; in the fourth round move.frag,
+compile.sh, shaders.hpp and system.cpp; ge.hpp and draw.cpp in the third round, taken back in the fourth, back for the
+fallback in the fifth):
+- `Memory::depthCopy(format)`: the copy in whose order the GE keeps its depth buffer, the second for 5650, 5551 and
+  4444, the fourth for 8888. The software renderer's depth reads and writes (a pixel at a time and four at a time) take
+  it from the frame buffer's format, a template argument there (no cost); the four depths of a run stay side by side, as
+  either copy leaves an offset's low 5 bits.
+- Vulkan, both modes: a target's depth is filled from memory, watched and put into memory (`putDepth()`) in its format's
+  order. Before a PRIM's depth is filled from memory, a finish where rows it draws in are filled from bytes another
+  target has drawn on the GPU since the last one (`begin()`, `depthOwned()`, `Statistics::depthFinishes`): the rows
+  filled are the target's new ones and those memory changed, and those memory changed of the target it takes depth
+  from, all of each 16 KiB they reach (past VRAM's end, its start's). Kurohyou draws its depth into the depth buffer's
+  memory as a 5650 frame buffer, on the GPU, and its characters' depth was filled from memory's older bytes (none of it
+  drawn: the characters gone in both modes). And a depth taken from another target over the same depth buffer, where
+  their formats read it in two orders (Twisted Metal's), is placed on the GPU by runs (`takeDepth()`, `Command::runs`):
+  the two orders move 32-byte pieces whole, so each run of 16 of this target's depths is 16 of the other's, those the
+  other's order puts at the same bytes; the backend's copy takes each run from the other's depth into its staging
+  buffer, one after another, and places it from there, down as many rows as move alike (32 runs for a depth buffer 512
+  wide). Where a run's bytes lie past what the other holds (a depth buffer not on 32 bytes, rows past its), its depth
+  goes through memory instead (put in its order, filled in this one's: a wait). A first take of this part put the
+  depth into memory every time: Twisted Metal's waits for the GPU went from 0.03-0.14 to 1.0 ms a frame.
+- The second round, after the review: the first round's finish looked at all of the depth buffer's pages, as far as
+  any target over it had rows, whatever this PRIM filled (with a cache of the pages found free, `Target::depthAlone`,
+  which no test broke: a test that did would have lost Kurohyou's characters from its second frame). IL-2 Sturmovik
+  (its depth buffer at 0x114000, 512 wide, 273 rows: its 3D's scissor reaches row 272) draws its bloom, 256 pixels wide
+  and 8888, at 0x158000 each frame, in the 16 KiB that holds that 273rd row, and finished 239 times more in 120 frames
+  (601 to 840 in fast mode, 841 to 1,080 in accurate). Looking only at the rows filled wasn't enough: the bloom's
+  drawing changes row 272 for every target over the depth buffer, and its depth-of-field target (64 rows) and the
+  other screen's clear (272 rows) fill that row whole, theirs or the one they take depth from (a trace of each such
+  finish: 179 the taken one's changed rows, 60 their own; the cache was gone and they stayed). The finish now looks at
+  the rows filled that the PRIM draws in; rows past them are filled from memory as before. IL-2's finishes are
+  master's again, 601 and 841, none before a depth fill; Kurohyou 1's and 2's as in the first round (below). The staging
+  buffer holds the target's columns alone (each run taken from the other's depth, not the other's whole rows):
+  Twisted Metal's 64- and 128-pixel frame buffers staged 5.5 million pixels in 300 frames (5,538,816, what a take
+  of one format would), against 33.8 million.
+- The third round, after the second review: the finish still came before depth fills whose result couldn't matter, one
+  to three times a frame in games that draw their post-processing into their depth buffer's memory (the review's run of
+  all 128 deep-play states and WipEout Pure's race: Brave Story, Brothers in Arms, Burnout Dominator, Chili Con Carnage,
+  Crazy Taxi, Dirt 2, both Fate Extras, GTA Chinatown Wars, Jak and Daxter and WipEout; their pictures master's, fast
+  mode 17-33% slower on the M1; the first round's too). A trace of each such finish (the PRIM, memory's depths in the
+  rows it draws in before the finish and after, and its vertices' depths) sorts them. Seven games' PRIM doesn't read its
+  depth: Brothers in Arms, Brave Story, Crazy Taxi, both Fate Extras and Jak and Daxter clear it, Burnout writes it with
+  a test always true. Chili Con Carnage's and Dirt 2's are 2D sprites at 65535 tested "greater or equal", which pass
+  whatever they find. GTA's is its radar's stamp (a fan of 256 triangles writing depth 32763, "greater or equal", its
+  colors masked; the radar then drawn where the depth is 32763), which its scissor says reaches all 272 rows: its
+  vertices lie in rows 186-262, below the 176 rows its bloom changed. WipEout's (its HUD: 3D quads at the screen's top
+  and bottom, "greater" at 65241, drawn after its bloom over all of the depth buffer's rows) and Kurohyou's (its
+  characters) read the depth the other target drew: in WipEout 9,700-12,200 of the 130,560 depths in its region's rows
+  differ before the finish and after, the test's outcome at 3-27 pixels a frame (12 frames traced); in Kurohyou about
+  120,000, the outcome at 24,700-27,000. So the finish now comes only where the PRIM's test reads the depth filled: not
+  a clear's, nor a test always or never true, nor one its depths decide whatever it finds (nothing's greater than 65535
+  or less than 0; a 2D PRIM's depths are its vertices', held to 0-65535 as the GE takes them); and only in the rows its
+  pixels can be in, a 3D PRIM's vertices put on the screen as the GE puts them, the rectangle round them a pixel wider
+  each way (its whole region where one is off the screen, past either end of the depths, behind the camera or cut). The
+  renderer asks the GE for that (`Renderer::begin()`'s `reachedBy`, `GE::reachedBy()`) only where the PRIM's region's
+  rows meet another target's pages, as the second round looked, so rarely (once a frame in Kurohyou and GTA). Depth
+  filled that the PRIM doesn't read is filled from memory as it is, as the second round's rows it doesn't draw in. The
+  ten other games' finishes are master's again, WipEout's not (below); Kurohyou 1's and 2's as before.
+- The fourth round, after the third was measured on the RP6 (the coordinator's runs: headless, Vulkan fast, master
+  cc0638372 against the third round, three rounds' medians; the RP6 on its default profile, so only the pairs count):
+  WipEout Pure's race 62.2 -> 55.6 frames a second (10.7% more CPU time a frame, 24.9% more instructions: the CPU's work
+  after the finish, not only the wait), Kurohyou 2 65.8 -> 55.8 (17.5% more CPU time; the X3 clocked down to 2.14 GHz
+  from 2.46 while it waited), Dirt 2 1.2% more CPU time, Kurohyou 1 2.4% less, IL-2, GTA Chinatown Wars and Twisted
+  Metal the same. WipEout below full speed was the review's trigger for the move on the GPU, which this round is. Depth
+  filled from memory into a target, where other targets drew those bytes on the GPU since the last finish, is made what
+  a finish then the fill would make it, on the GPU (`moveIntoDepth()`, from `fill()`): for each such target and run of
+  the pages it owns, a Move into the depth (`Command::Move`, parts 2: the backend's moves take the source's pixels into
+  pictures of the PSP's size, one of each pixel's as a read back takes it, then move.frag's DEPTH build is drawn over
+  the rectangle filled), each depth the two bytes of the source's pixel at the depth's bytes (the second copy's order
+  for a 16-bit target, the fourth's for 8888, worked out in the shader as memory.cpp's `vramOffset()`; half of an 8888
+  pixel), narrowed to its format as a read back for memory narrows it, the stencil its alpha. Where those bytes are
+  outside its drawn rectangle or its pages, the depth stays memory's; the source's bytes memory has newer (the CPU's
+  over what it drew: dead) are filled into it first, as a move does. Every depth fill does so, whether the PRIM reads
+  what's filled or not, so on the GPU's way a PRIM after that finds those rows filled reads them current too (the
+  second review's five cases, below; not a target's own pixels over its own depth, which stay memory's: "Still not
+  done"), and round three's rule went with the moves (it came back for the fallback in the fifth round, below). The
+  sources' pages are kept until the next finish (`depthSources`): a PRIM drawing
+  there again, in a rectangle memory heard of before (`own()`'s told ones, which round three's finish had told
+  afresh), has the depths over them filled again, as a change of memory would. A texture read through the depth
+  buffer's views finishes first where its decoding would wait for the GPU anyway (`putDepth()`: the same finishes, a
+  moment earlier): where the depth put is newer than the pixels drawn in its bytes, the finish after had put them back
+  over it (the depth orders' test showed it: 5,561 bytes apart); where they're newer, the depth's rows they changed are
+  filled with them before it's put. Where the target filled drew in those pages itself (its own pixels don't go into
+  its own depth: a finish puts both in memory), a finish comes first and the fill takes memory's bytes (`begin()`'s
+  look at the rows filled, `depthMovable()`, `Statistics::depthFinishes`), exact; and in this round so, before every
+  such fill, where the GPU can't move at all (no such pipeline, `Backend::depthMoves`; or the start-up check's new case
+  fails it, and the check runs again without: the fifth round's fallback, below). Where the moves put pixels in every
+  depth filled (each 16 KiB the rows reach all one other target's pages and its drawn rectangle's full rows over them,
+  short of VRAM's end), the depth isn't taken from memory first (`depthCovered()`, `Statistics::depthsCovered`): the
+  bench found WipEout's HUD target filling its depth's rows from memory on the CPU each frame (the bloom's pages tell it
+  of the bloom's drawing again), every depth then moved over. And the backend's moves take the source's stencils in one
+  copy, all their rows, then each pixel's middle row from the staging buffer: a copy region a row, which MoltenVK
+  records as a blit each on the emulation thread, had cost WipEout's two moves a frame more than the moves' draws. A
+  move's render pass is its rectangle's alone, as an upload's is (the target's pictures loaded and stored there only;
+  the move's draws and its stencil's clearing are all inside it), and its images change layout in three barriers, not
+  nine (`transitions()`): GTA Chinatown Wars' one move a frame (its radar's depth, in rows its bloom draws in) had cost
+  the M1 0.3 ms more waiting a frame, 8% of its speed there (below).
+- The fifth round, after the fourth's review (no blockers: its own 108 runs of cases the groups hadn't, the GPU's way
+  exact) and the owner's decision: where the GPU can't move pixels into a depth (`Backend::depthMoves` off: no such
+  pipeline, or the start-up check's new case failed and the check passed again without), the finish before a depth
+  fill comes only where round three's rule has the PRIM's test read what's filled: not a clear's, nor a test always or
+  never true, nor one its depths decide, and in the rows its pixels can be in (`GE::reachedBy()` back, round three's;
+  `Renderer::begin()` takes the PRIM's vertices and transform and asks it itself, only then, where round three handed
+  it a `std::function` built for every PRIM: the fifth round's first version ran 0.3% more instructions a frame than
+  the fourth in God of War's menu (about 17,000 PRIMs a frame), two fifths of it that (on the M1, 300 frames fast:
+  304.54 million a frame in six runs with it against 304.13 without, the fourth round 303.58 in three; the frames a
+  second within the runs' spread). The rest is filled from memory as it is. Without the rule that fallback was round
+  two's slowdown: the review's runs of the fourth round with the moves off had Dirt 2 at 181 finishes in 60 frames
+  (master 2; 62.5 -> 33.8 frames a second on the M1), GTA Chinatown Wars at 31 (1) and Brothers in Arms at 70 (1).
+  With it the fallback is round three exactly: the sweep's 128 states without moves (60 frames fast, every frame
+  hashed) drew round three's runner's pictures, VRAM and RAM in every frame, with its finishes (the start-up check's
+  second run aside, without moves: 3 finishes a process, 2 of them before depth fills), and so did Kurohyou 1 and 2,
+  WipEout's race and IL-2 in both modes (Kurohyou 2 901 finishes in 300 frames, WipEout 301). The fallback then has
+  master's accuracy, the stale depth master has included: a PRIM after one whose fill wasn't put in memory first,
+  finding those rows filled, reads memory's bytes as they were (the second review's five cases, as on master and in
+  round three). With the moves on nothing changes: `begin()` takes the fourth round's look, and the hashes are its
+  byte for byte. The start-up log says when they're off, in one line ("the Vulkan renderer's depth moves are off:
+  frame buffers drawn over a depth buffer are put in memory before a PRIM's depth test reads them there (a wait for
+  the GPU each time), elsewhere the depth is taken from memory as it is"), after the check's own where it failed them.
+
+**Pictures** (the kit's runners, -O3 with thin LTO, from the batch's states and presses, 300 frames, Vulkan against
+Software: the mean channel difference and the pixels more than 24 apart):
+- Kurohyou 1 (Tenkaichi Street): the character crossing x = 240 whole in all three renderers, and the street full of
+  pedestrians the scrambled depth had hidden all over it (before, the street's middle nearly empty: in Software slivers
+  at 240-255 and a few people, in Vulkan only the nearest characters). Vulkan accurate 0.20-0.26 at frames 30-300 (a
+  capture of frame 90 a frame apart in one run, 1.84, matched in a rerun: 0.26), fast 0.56-0.90, no pixel more than 24
+  apart; before, 1.24-2.53 and 1.6-6.5%.
+- Kurohyou 2 (Nakaichi Street): the player at the screen's middle and the people about him drawn in all three; Vulkan
+  0.35-0.48 in both modes at frames 30-300, none more than 24 apart (before 0.67-1.08, 0.7-1.9%).
+- The seam: of rows 100-269, x = 240 the largest step between neighbouring columns among 228-252 in 66 rows before and
+  23 after (Kurohyou 1, frame 30), 44 and 11 (frame 150), 18 and 4-6 (Kurohyou 2); columns 120, 200, 300 and 360 so in
+  2-19. What's left at 240 is the game's own: its depth picture and its depth of field are drawn in sprites of 120
+  pixels, each stepping its texels from its own start, as on the PSP.
+
+**The other scenes.** The kit's 21 scenes, Hammerin' Hero, Jeanne d'Arc, Cars Race-O-Rama and MX vs. ATV Untamed's race,
+and in the second round IL-2 Sturmovik's normal play (its deep-play state and presses), 100 frames from each state,
+every frame's picture and VRAM hashed (drawing settled), then the end's RAM and machine, master against this: the first
+round master e78b4a364 against dbbb6f1b0 (25 scenes), the second master 14b181707 against 318a7c5c2 (26), the same
+outcome:
+- Vulkan accurate and fast: the same in all (IL-2 too: the second review's 200 pixels of its pictures, which the first
+  round's extra finishes had changed, are master's again).
+- Software: the same in all but 7. In those, every frame's picture is the same and so is the RAM, and VRAM differs:
+  Colin McRae's race, Need for Speed Most Wanted's race and profile, Need for Speed Underground Rivals' title, Disaster
+  Report 3's play, Hammerin' Hero and Jeanne d'Arc, the games among them drawing 16-bit with a depth buffer (each at
+  0x88000, 512 wide: 5551, or 5650 in the Need for Speeds). Their VRAM after frame 100, master's against this: every
+  byte outside the depth buffer's 16 KiB blocks the same, and of the depth buffer all 130,560 pixels drawn (columns
+  0-479) the same depth, master's through the fourth copy's order and this one's through the second's; what moved
+  besides are the bytes past column 479, which neither draws (the state's, in the other order). Colin McRae also draws
+  the same memory as a depth buffer 256 wide (part 90), its bytes those of the two widths mixed; its pictures the same.
+  The second round's dumps give the first's counts scene by scene (2,176 to 4,352 depths apart past column 479, none
+  before it; Colin McRae's 256-wide view 2,062 of 69,632).
+- Twisted Metal's play (one depth buffer, 8888 and 5551, above) is the same in all three. With the first take of the
+  change, which put the depth into memory between the formats, its Vulkan VRAM differed (the depth bytes memory got;
+  the pictures the same), and its waits rose (below).
+- The third round, master cc0638372 against the merged code (d67ef308f), the 26 scenes and WipEout Pure's race: Vulkan
+  accurate and fast the same in all 26, Software in 19, and the 7 as above (every picture and the RAM the same, VRAM
+  apart in the depth buffer). WipEout's race (its HUD's finish a frame, below), in all three renderers: every frame's
+  picture and the RAM the same, VRAM apart: the small 5650 frame buffer's depth buffer (0x15c000, 128 wide: one 16 KiB
+  block, the same depths in the second copy's order, as the 7's), and in Vulkan the bloom's memory (0x110000-0x153fff,
+  its depth buffer's), which the HUD's finish puts there each frame as it's drawn: after frame 100 its bytes 43,289
+  apart from the software renderer's, master's 180,130 (dumps; nothing else apart).
+- The fourth round, master cc0638372 against this, the same 26 scenes and WipEout's race: Software the third round's
+  hashes in all 27 (19 master's, the 7 and WipEout's as above). Vulkan accurate and fast master's in 25 of the 26 and
+  in WipEout's race, VRAM too (the bloom bytes the third round's finish put in memory aren't put there now). IL-2
+  Sturmovik's play is the one apart, the RAM the same: its 3D, whose scissor reaches row 272 (the first of its other
+  frame buffer, at 0x88000 after the 272 rows of the one at 0), tests that row against its depth buffer's row 272, in
+  the 16 KiB its bloom draws each frame, which now holds the bloom as a finish would put it there, not as memory had it
+  at the last finish. In fast mode 84 of the 100 frames are apart, 8,258 pixels: 7,527 in row 0, where master's were
+  1,116 more than 24 from the software renderer's and this one's 10 (the mean channel difference 13.5 against 0.2; all
+  of row 0 in the 100 frames 1,130 against 24, as accurate mode had it on master: 23); and 731 in rows 8-11, a level or
+  two apart (0.73 against 0.37, none more than 24 apart). In accurate mode 72 frames, 733 pixels in rows 8-11 (0.75
+  against 0.57; one more than 24 apart, none on master) and 5 in row 0.
+- The fifth round, with the moves: the 26 scenes and WipEout's race in Vulkan accurate and fast, every hash file (each
+  frame's picture and VRAM, then the RAM and the machine) the fourth round's byte for byte (`kit/logs/r5hash-*.log`),
+  and the sweep's counts (128 states, every counter the counting build prints) the fourth round's in every line
+  (`kit/logs/r5-sweep-on.log`). Without them (a scratch switch failing the start-up check's new case, as a driver that
+  moves wrong would: the check passed again without, and the log said so): the sweep's 128 states, 60 frames fast, every
+  frame's picture and VRAM hashed, then the RAM: round three's runner's in every frame of all 128
+  (`kit/logs/r5-off-pictures.txt`).
+
+**Speed.** Kurohyou 2 finishes once more a frame (601 -> 901 in 300 frames, both modes), before its characters' depth
+is filled from the picture the GPU has just drawn there: the finish is needed, and it costs. The second review's runs
+on the M1 (late frames at 1x, the pipelines kept, master and this in turns, three pairs): Vulkan fast 41.7, 39.3 and
+31.6 frames a second on master against 33.9, 28.2 and 27.7, about 5 ms a frame more waiting for the GPU; on the RP6
+(the coordinator's measurement) 0.64 ms a frame more waiting (3.90 -> 4.54) and 2.5% more CPU, still 77 frames a
+second without a screen. This round's runs the same way on the M1 (three pairs in turns, the Mac's load
+9-14): fast 61.8, 80.9 and 85.6 frames a second on master against 66.3, 72.9 and 74.1, the waits 4.6, 4.0 and 3.6 ms a
+frame against 5.5, 4.9 and 4.8, about 1 ms more each time (accurate: 7.2, 7.1 and 7.3 against 7.5, 7.5 and 10.1; its
+frames a second too scattered to tell). The first round said "no change past the runs' spread" (Kurohyou 2 fast 62.8 ->
+63.5): wrong, its rounds too far apart to show it. The fourth round moves the 5650 frame buffer's pixels into the
+depth on the GPU, which takes that finish, and its cost, away (below). Kurohyou 1's finishes are as many as
+master's (601 in 300 frames): in the first three rounds the second of its two a frame, before its depth-of-field
+texture through the second copy after the characters, came before the characters, and the texture found memory's
+depth current (5% less CPU on the RP6); in the fourth the texture's put finishes first (`putDepth()`), the same two.
+IL-2 Sturmovik: 601 and 841 finishes in 120 frames (fast, accurate), master's; the first round's 840 and
+1,080 had it waiting about 29% more on the M1. Twisted Metal's play, Vulkan fast and accurate, 300 frames: one finish
+and the same draws and uploads as master's; with the first take, 1.0 ms a frame of waiting and 340 more uploads. (A
+first measurement, the base's pipelines made during the run, had Kurohyou 1 twice as fast: not so.) The third round:
+the ten games' finishes are master's (above), and so are their waits: on the M1 (fast mode, 120 frames from the
+deep-play states, master and this in turns, three pairs, the Mac's load 12-16) Dirt 2 ran at 62.1, 74.7 and 83.1 frames
+a second on master against 77.7, 85.8 and 70.0, GTA at 207.9, 125.7 and 186.0 against 202.5, 171.2 and 185.6, Brothers
+in Arms at 41.6, 39.5 and 46.0 against 40.8, 39.6 and 40.9, their waits as close (the second review had them 17-33%
+slower). WipEout's race keeps its finish a frame (301 in 300 frames, master 1): the second review's M1 runs had fast
+mode at 103.0, 109.5 and 113.1 frames a second on master against 83.3, 82.1 and 84.7, accurate 35.4, 36.5 and 40.2
+against 28.3, 34.6 and 36.4. The fourth round on the M1 (fast mode unless said, 120 frames from the deep-play states
+and scenes, master cc0638372 and this in turns, three pairs, the pipelines kept, the Mac's load 2-3;
+`kit/logs/bench8.log`): WipEout's race 103.4, 107.1 and 102.3 frames a second on master against 100.9, 102.0 and
+105.1, 0.45% more instructions a frame (49.5 million against 49.7), 0.2 ms more waiting (its two moves); over 1,500
+frames, two pairs, 109.4 and 108.9 against 106.5 and 107.6, 39.59 million instructions against 39.78, the CPU's time
+5.03 and 5.00 ms a frame against 5.11 and 5.08. Kurohyou 2 91.2, 89.5 and 91.8 against 91.7, 92.3 and 92.5, 5.3% fewer
+instructions (113.4 million against 107.4: its characters' depth moved, none filled on the CPU), the same waits;
+accurate 57.9, 58.2 and 57.8 against 56.5, 55.9 and 55.9, 0.7 ms more waiting (7.8-8.0 against 8.5-8.7). Kurohyou 1
+53.0, 53.2 and 54.1 against 50.6, 50.2 and 50.4, 3.0% fewer instructions, 1.0 ms more waiting (7.5-7.9 against
+8.7-8.8): round three's runner had 0.8 ms more the same way (8.3-8.6 against 7.6-7.7; `kit/logs/bench7.log`) with no
+move and no finish more, the GPU drawing the pedestrians the scrambled depth had hidden; the move is the rest. GTA
+Chinatown Wars 238.3, 229.0 and 234.2 against 235.4, 228.8 and 231.7, 0.1 ms more waiting; before the move's pass was
+its rectangle's and its barriers three, 248.3, 240.4 and 250.0 against 229.2, 226.1 and 223.1, 0.3 ms more
+(`kit/logs/bench5.log`). Dirt 2 98.0, 98.4 and 98.6 against 97.8, 100.9 and 100.7 (2.5% fewer instructions), IL-2
+35.6, 35.8 and 35.7 against 35.4, 36.1 and 35.4, Twisted Metal 226.9, 225.7 and 226.6 against 227.3, 226.6 and 228.5
+(1.0% more instructions in 120 frames: the start-up check's new case), WipEout accurate 39.7, 39.8 and 39.5 against
+40.0, 39.2 and 40.0. On the RP6 (the coordinator's runs on the owner's profile, master against the fourth round, whose
+way the fifth's with the moves is): WipEout's race 70.7 -> 70.6 frames a second, Kurohyou 2 83.1 -> 82.7, Dirt 2 61.8
+-> 62.6, GTA Chinatown Wars 92.9 -> 93.5, IL-2 34.9 -> 34.5, Twisted Metal 176.8 -> 175.9, Kurohyou 1 48.9 -> 47.7; its
+Adreno passed the start-up check with the moves on. Without depth moves (the fallback, as a driver failing the
+start-up check's new case has it), the fourth round finished before every fill from another target's bytes: the
+fourth review's runs had Dirt 2 at 181 finishes in 60 frames (master 2), 33.8 frames a second against 62.5, GTA
+Chinatown Wars at 31 (1) and Brothers in Arms at 70 (1), round two's slowdown. The fifth round's fallback finishes as
+round three did (the sweep's 128 states; Kurohyou 2 901 finishes in 300 frames, WipEout's race 301, in both modes), so
+it runs at round three's speed (above: on the RP6 WipEout's race 62.2 -> 55.6 frames a second, Kurohyou 2 65.8 ->
+55.8).
+
+**Tests** (tests/psp: draw.cpp, gpu.cpp, measure.cpp; and the start-up check, check.cpp. On master's core with only
+these tests, and `Statistics::depthFinishes` added, never counted, for gpu.cpp to compile, the first three fail and the
+other 538 groups run there pass):
+- "draw depth in the order each frame buffer format has it": points with depths of their own over 512x16 pixels (the
+  depth buffer at 0x88000, 512 wide), each read back through the copies: 8888 in order through the fourth and spread
+  through the second (round 3's), 5650, 5551 and 4444 in order through the second and at (y ^ 8) * 512 + (x ^ 32)
+  through the first. On master's core 15,360 of each 16-bit format's 16,384 depths are elsewhere.
+- "draw against a depth made as a picture and taken back through VRAM's second copy": Kurohyou's three passes in
+  miniature (512x16), then a sprite into the 5551 screen tested "greater or equal" against it: drawn exactly where its
+  depth is the picture's or more. On master's core 3,675 of its 7,680 pixels are wrong.
+- "gpu the depth buffer in each format's order" (1x and 2x, both modes): the same passes on the GPU, then the depth the
+  screen drew read through the second copy as a texture (Kurohyou's depth of field), then a depth buffer an 8888 frame
+  buffer and a 5551 one draw with in turn, every byte the software renderer's, the pixels checked (the 5551 one's pixel
+  (20, 4) reading the 8888 one's (260, 4), its (128, 4) the 8888's (64, 4)), one finish before a depth fill
+  (`depthFinishes`), and one depth put into memory, the texture's (the takes across the formats placed on the GPU). Then
+  a second frame: the depth made again from another picture, the screen cleared and its sprite tested against it, the
+  screen now taking its depth from the 8888 frame buffer's, whose rows the picture changed: every byte the software
+  renderer's again, the pixels checked, a second such finish. On master's core 9,977 bytes apart in the first frame and
+  14,641 in the second, no finish counted, in every mode and resolution. With the finish taken out, 10,007 bytes apart
+  in the first frame and 14,761 in the second, no finish counted; with the changed rows not looked at (the new rows
+  only, the kind of slip a cache of free pages could make), the first frame right and the second 9,200 bytes apart, one
+  finish counted: in every mode and resolution. (Either changed-row term alone still finishes there: the screen's own
+  rows and the 8888 one's are the same 16 KiB.)
+- "psp measure" (measure.cpp): round 3's depth-layout-0 to -3, the 8888 depth buffer read through each copy, now
+  checked byte for byte against the PSP's files (they were listed, not checked): the same.
+- The start-up check (check.cpp): the 8888 sprites' depth written alone (clear mode), a level for each 16 pixels of each
+  row, and the 5650 frame buffer's last sprite tested against it ("greater or equal", not written), after its depth is
+  taken across the two orders by runs: before, nothing the check compared depended on that take (the colors only); a
+  driver that copies the runs wrong now fails it, and the software renderer draws the game.
+- The fourth round's (1x and 2x, or 1x to 3x, both modes, and both ways: the pixels moved into the depth on the GPU,
+  and put in memory first, `Backend::depthMoves` off, as a GPU that can't has them; each compares the depth the screen
+  has, read back with `GPU::depthOf()`, the tests', with the software renderer's memory in the screen's order, depth for
+  depth):
+  - "gpu depth filled from memory as a finish would leave it, for every PRIM after" (replaces the third round's group):
+    a picture of depths drawn into the depth buffer's first 16 rows as a 5650 frame buffer on the GPU (the 5551 screen
+    512 wide and 32 rows), then, on machines of their own: a clear of all of the depth, or a sprite over all of it
+    written with a test always true, then a sprite tested; sprites at 65535 and 65534; 3D quads below the picture's
+    16 KiB and over it; the second review's five, each leaving the picture's rows filled for a sprite tested over them
+    after (a sprite at 65535, a quad below the picture, the left half written with a test always true, or cleared, a
+    sprite in rows 16-31); another picture drawn after a sprite tested against the first, where the first was drawn
+    (memory heard of that rectangle then), and a sprite tested against it; and the screen at 0x8c000, its own colors
+    the depth buffer's last 16 rows, tested there (a finish either way). Every byte of VRAM but the depth buffer's the
+    software renderer's, and every depth; moved, no finish but the last case's; in memory, a finish. On the third
+    round's code the five fail in both modes at 1x and 2x (the second review's run: 4,688, 9,376, 4,720, 4,720 and
+    9,376 bytes apart).
+  - "gpu other frame buffers' pixels as the depth in every pair of formats": a picture (a texture's texels, their
+    alphas the stencil) drawn in each of the four formats over the depth buffer's bytes (at its first byte, a page on,
+    64 bytes on or half a 16 KiB back, or 480 pixels a row, rows not whole pages, at its first byte or 64 bytes on),
+    over part of its rows and columns (the rest memory's, a pattern the CPU left), all of them, all its rows in part of
+    its columns, or all its columns from its third row, some of it written over by the CPU after (dead), then a screen
+    of each format tested against it: 80 cases at 1x, 2x and 3x, every depth and every byte of VRAM the software
+    renderer's, and the depth not taken from memory first (`depthsCovered`) exactly where the picture's drawn bytes
+    are all of the depth's 16 KiB.
+  - "gpu the depth buffer in each format's order" now runs both ways, no finish when the pixels are moved.
+  - The start-up check: a 5551 frame buffer 128x64 drawn over a depth buffer's 16 KiB, tested against by an 8888 one,
+    and an 8888 one 64 wide under a 4444 one's: exactly. Failing it alone, System checks again with the move off.
+  - Mutations, each in a copy of the tree, the depth groups run: nothing moved: all four fail (the start-up check too:
+    a driver whose move draws nothing falls back); a PRIM drawing again where memory heard of it not filling the depth
+    again: another picture 5,187 bytes and 6,953 depths apart; the source's dead bytes not filled into it first: 16
+    bytes and 16 depths; the target's own pages no reason to finish: its case 16,384 depths; a texture's put not
+    finishing first: the depth orders 5,561 bytes; begin()'s finish gone: the memory way fails in all three groups;
+    every depth in the second copy's order: 7,286 bytes (an 8888 screen's depth); an 8888 pixel's low half always: 6,392
+    bytes and 6,400 depths, and the start-up check. Three changes pass, each by design: the shader's page bounds gone
+    (the drawn rectangle's rows reach no other target's page: one can't take a page a target drew in whose rows aren't
+    whole pages without a finish), the rows held to the pages' 16 KiB gone (the shader finds the bytes itself), and the
+    taken target's changed rows not looked at (the other rows find the same pages, as in round three). The fill's skip
+    and the stencils' one copy, the depth, move and check groups run: every fill's depth skipped where moves are on:
+    three groups fail (the depth orders 7,690 bytes); a source drawn in part of its columns counting: 3,590 bytes and
+    3,584 depths; its drawn rows not looked at: 960 bytes and 960 depths (480 wide, drawn from row 2); a 16 KiB that
+    starts before the source counting: 988 bytes and 992 depths (480 wide, 64 bytes on); the stencils' rows not every
+    scale-th: the two move groups and the formats' (2,433 bytes at 2x, 3,306 at 3x). One passes by design: the 16
+    KiB's other pages not looked at (no test has another target's page inside a source's 16 KiB). The move's pass
+    over its rectangle alone has none: MoltenVK and lavapipe draw outside a pass's render area anyway, so nothing
+    here could fail; the area is the scissor its draws already had, and its stencil clearing's rectangle.
+- The fifth round's:
+  - "gpu other frame buffers' pixels as the depth in every pair of formats" gains the fourth review's two (83 cases):
+    an 8888 picture in rows 0, 7, 8 and 15, the pages between its rows none's (its drawn rectangle full rows over both
+    16 KiB, not their pages), with a 5551 and an 8888 screen; and one 480 pixels wide in rows 0 and 5 (pages 0 and 2:
+    two moves), the CPU's bytes in page 1 after, in row 2 and in row 4, which cross its ends. The review's was drawn
+    in rows 0 and 20, whose page 9 is past the depth's 16 KiB: one move, from the source's first byte, so only the
+    bound above was tested.
+  - "gpu depth filled from memory as a finish would leave it": without moves, round three's finishes, one for the
+    sprite at 65534, one for the quad over the picture and two for the second picture, none for the rest; every depth
+    and byte the software renderer's in those, the clear and the sprite always true; the others' depth memory's as
+    master leaves it, not compared (the screen's own last rows among them: the rows it tests are its own pages).
+  - Mutations, each in a copy of the tree, the depth groups run: the 16 KiB's other pages not looked at
+    (`depthCovered()`, which passed in the fourth round): the gap case 8,216 bytes and 8,192 depths apart, the fill
+    skipped; move.frag keeping bytes below its move's pages, above them, or either: the straddle case 64, 64 and 128
+    depths apart (60, 64 and 124 bytes). Without moves: a clear's fill and a test always true's finishing too (round
+    three's rule gone): 16 failures in the depth-current group; the rows the PRIM's region's, not where its pixels can
+    be: 8 (the quads below the picture); a test its depths decide counted as reading: 8 (the sprites at 65535).
+
+**Checks.** The fifth round, on d68f08bd8 (the code and its tests): `tests/psp/run-tests.sh` 553 groups, 0 failures,
+sanitized (the container check off) and without the sanitizers, its 61 GPU groups on the M1's Vulkan, none skipped;
+`tests/allegrex` 78, 0; `tests/psp/ares` 348, 0. On the merge of master's 02cd1fa8c (ec16a9237): 555 groups, 0
+failures, without the sanitizers and sanitized (the first sanitized run, on the loaded Mac, had one wait for the GPU
+last past five seconds, so the device counted as lost and every GPU group after it failed; run again, the
+coordinator's run and mine, none did); `tests/allegrex` 78, 0; `tests/psp/ares` 348, 0. With `begin()` taking the
+PRIM's vertices (no `std::function` a PRIM), on the merge: 555 groups, 0 failures, sanitized and not, and God of War's
+menu, IL-2's play and WipEout's race in both Vulkan modes, with the moves, round four's hash files byte for byte; CI
+on the pushed head. The library check in Vulkan of the fourth round's head (58ed0e5fd, whose way with the moves the
+fifth round keeps byte for byte; the coordinator's, the games apart from master's run again with both builds): in
+accurate mode 11 of them the same as master's again and 8 where master's own runs are apart, in fast mode 8 and 10,
+none apart in every run; the only flag Monster Hunter 3rd HD's intro movie, a frame apart in 3 of 5 runs.
+The fourth round, on e78ccb495 (the code and its tests, on d67ef308f): `tests/psp/run-tests.sh` 553
+groups, 0 failures, sanitized (the container check off) and without the sanitizers, its 61 GPU groups run on the M1's
+Vulkan, none skipped (Vulkan, the test programs and both rounds of the PSP's measurements required);
+`tests/allegrex/run-tests.sh` 78, 0; `tests/psp/ares/run-tests.sh` 348 checks, 0 failed; CI green on e78ccb495.
+The third round, on d67ef308f (173931a54 the code and its test, d67ef308f the merge of master cc0638372):
+`tests/psp/run-tests.sh` 552 groups, 0 failures, sanitized (the container check off) and without the sanitizers, its 60
+GPU groups run on the M1's Vulkan, none skipped (Vulkan, the test programs and both rounds of the PSP's measurements
+required); `tests/allegrex/run-tests.sh` 78, 0; `tests/psp/ares/run-tests.sh` 348 checks, 0 failed; CI green on
+d67ef308f.
+The second round, on 318a7c5c2 (acd733840 the merge of master 14b181707, 318a7c5c2 the code):
+`tests/psp/run-tests.sh` 546 groups, 0 failures, sanitized (the address sanitizer's container check off on the Mac,
+part 93's false positive) and again without the sanitizers, the GPU groups run on the M1's Vulkan, none skipped
+(Vulkan, the test programs and both rounds of the PSP's measurements required); `tests/allegrex/run-tests.sh` 78, 0;
+`tests/psp/ares/run-tests.sh` 348 checks, 0 failed; CI green on 318a7c5c2 (the PSP system tests on Mesa's lavapipe,
+which run the start-up check, the Allegrex tests, the runners, and the Android, Windows, macOS and Linux builds). The
+first round, on dbd8139bc (bd084145f the change, a0d5a5598 the tests, dbbb6f1b0 the runs across the formats, dbd8139bc
+the pages looked through only where they weren't known free): 531, 68 and 340, CI green on dbbb6f1b0 and dbd8139bc.
+The pictures above are the first round's; the second round's captures of Kurohyou 1 and 2 (frames 30, 90, 150, 210, 270
+and 300 in Software, Vulkan accurate and fast: 36) are the same pixels, and so are the third round's (Kurohyou 2's fast
+frame 90 taken a frame late in one run: a rerun's the same) and the fourth's (that frame the rerun's).
+
+Still not done:
+What's left of the stale depth, past the GPU's way (which moves every fill's other targets' pixels in):
+- A frame buffer drawn over its own depth buffer's bytes: its own pixels aren't moved into its depth. Where another
+  target's are there too, a finish puts both in memory first (exact); where they're alone, the depth is filled from
+  memory as before part 96 (the fourth review's case, a screen's own colors over its depth buffer's last 16 rows:
+  8,192 depths apart, moved or not). The fourth round's sweep (the 128 deep-play states, 60 frames fast) found the
+  first in Burnout Dominator, a finish 14 times (its finishes in all master's 15), and the second in Cars Race-O-Rama,
+  IL-2 Sturmovik and MX vs. ATV Reflex, 269-270 fills each (master fills them all so).
+- Without depth moves (the fallback: the fifth round), a fill whose PRIM's test doesn't read it is memory's as it is,
+  and a PRIM after that finds those rows filled reads them so: master's stale depth (the second review's five cases;
+  in games its review found none certain in 60 frames of the eleven, a few possible in Burnout, GTA's 30 and IL-2's
+  row 272).
+- Where the GPU can't move pixels into a depth (the fallback), a depth put into memory for a texture, or taken across
+  the two orders through memory, fills the target's changed rows outside the texture's 16 KiB from memory as it is,
+  as before part 96 (on the GPU's way they're moved in).
+- Rows memory changed are filled again whole, as before part 96: the target's own depth drawn there since is lost
+  where nothing drew over it (memory never has the GPU's depth). A source's drawing counts as memory changing there,
+  as the finish after it did.
+And the rest:
+- Depth between depth buffers of other row widths over the same memory, as before (part 90).
+- A 16-bit frame buffer's depth layout measured on a PSP: round 3's depth-layout case drawn with 5650, 5551 and 4444
+  frame buffers (tools/psp-measure would show it in one run). Until then 5650's and 4444's go with 5551's by size.
+
+Scratch: `~/phobos-work/scratch/kurohyou` (`NOTES.md`; `kit/patches/k96dbg-patch.py`, the command and PRIM log, the VRAM
+dumps; `k96census-patch.py`, `census.sh`, `census-sum.py` and `census-summary.txt`, the census; `viewprims.sh`, the
+depth views' sprites; `kit/`, the hash runs, `depthperm.sh` the depth rearranged; `png/`, the sheets:
+`pr-k1-30-full.png`, `pr-k1-30-centre.png`, `pr-k1-150-centre.png`, `pr-k2-90-full.png`, `pr-k2-90-centre.png`, before
+above after, Software, Vulkan accurate and fast). The second round's: `kit/patches/r2count-patch.py` (the review's
+counters for this code) and `r2trace-patch.py` (each depth-fill finish, its rows and owner: `kit/logs/r2trace-il2.err`),
+`kit/r2counts-all.sh` (`kit/logs/r2counts-all.log`), `kit/r2hash.sh` (`kit/logs/r2hash-*.log`), `depthperm2.sh`,
+`mut/` (the mutations), `basetests/` (the tests on master's core), `bench2.sh` and `piccmp.py` (`tmp/r2final.log`).
+The third round's: `kit/patches/r3trace-patch.py` (each depth-fill finish: the PRIM, memory's depths before and after,
+its vertices' depths: `kit/logs/r3/`), `r3count-patch.py` (the rule's counters), two frames' commands
+(`kit/logs/r3dbg/wo-f6.log`, `gta-f6.log`), `kit/r3mqueue.sh` (the sweep `kit/logs/r3m-sweep-*.log`, compared by
+`kit/sweepcmp.py`; the counts `kit/logs/r3m-counts.log`; the hashes `kit/logs/r3mhash-*.log`; the captures
+`runs/r3m-*`), `mut3/` (the mutations) and `kit/bench4.sh`. The fourth round's: `kit/patches/r4count-patch.py` (the
+moves' counters), `kit/r4queue.sh` and `kit/r4bqueue.sh` (the sweep `kit/logs/r4-sweep-r4count.log`, compared in
+`kit/logs/r4-sweep-cmp.txt` by `kit/sweepcmp4.py`; the counts `kit/logs/r4-counts.log`; the hashes
+`kit/logs/r4hash-*.log`; the captures `runs/r4-*`; the bench `kit/bench5.sh`, `kit/logs/bench5.log` and
+`kit/logs/bench6-wo1500.log`; the first version's as `*-r4a*`), `kit/tmp/prof/` (its WipEout profiles), `mut4/` and
+`mut5/` (the mutations), the IL-2 close-ups `png/r4-il2-*.png`. The fifth round's: `kit/patches/nomoves-patch.py`
+(`PHOBOS_NO_DEPTH_MOVES=1` fails the start-up check's new case), `kit/r5queue.sh` (the sweep with the moves
+`kit/logs/r5-sweep-on.log` and without `kit/logs/r5-sweep-off.log`, round three's runner's pictures
+`kit/logs/r3h-sweep.log`, the hashes `kit/logs/r4/*.hashes`; the counts without `kit/logs/r5-counts-off.log`; the
+scenes' hashes `kit/logs/r5hash-*.log`), `mut6/` (the mutations), `kit/r5dqueue.sh` (`begin()` without the
+`std::function`: `kit/logs/r5dhash-*.log`, God of War's menu's instructions `kit/logs/r5dbench.log` and
+`kit/logs/r5dbench2.log`).
+
 ## Part 97: NPDRM EDATA decrypted — the PGD past the EDATA's header, on the memory stick too, its size and end the data's; a PGD file's end its data's
 
 On branch `cursor/psp-pgd-edata-2b67` (draft PR #259), on master `14b181707` (part 95, #257, after part 94, #256);
@@ -14277,11 +14745,259 @@ machine's state): all 102 hashes the same in all 21, the state too (no layout ch
   `src-before/` and `io-3way.cpp` the trees before the fix and before the reconciliation; `hashkit/`, the scenes).
   Nothing was run on the RP6.
 
+## Part 98: ticks as RFC 2822 and RFC 3339 text (MediEvil's save details), a list save to its list's names (Lumines II), the depth-view loads' test deterministic
+
+On branch `cursor/psp-small-fixes-2b67` (draft PR #260), on master `cc0638372` (part 97, #259); part 96 is #258's,
+still open. Deep play's batch 04 bugs 4 and 5 (both low), and a test that failed now and then on a loaded Mac. Clean
+room: the PSP's behaviour from pspautotests' `rtc/convert` (recorded on a PSP), uOFW's decompilation of the rtc
+module (`src/kd/rtc/rtc.c`, firmware 6.60) and Phobos's own model of the save dialog; PPSSPP's sceRtc read only as a
+design cross-check (it writes the same shape, but its RFC 3339 hundredths are a constant `.00` and its bad pointers
+-1, "not well tested": neither taken), nothing copied or translated; Vita3K's SceRtc read too (the Vita's library
+keeps these functions; its four are empty stubs, nothing taken); JPCSP not read. Save states are unchanged: no field
+added (`GE::Drawing::held` isn't state).
+
+### 1. MediEvil Resurrection's blank save details: sceRtcFormatRFC2822 and its family
+
+**The problem.** Batch 04's bug 4: MediEvil Resurrection calls sceRtcFormatRFC2822LocalTime (NID 0x7de6711b) just
+before its pause menu's SAVE GAME, and Phobos had none of the family (sceRtcFormatRFC2822, sceRtcFormatRFC3339 and the
+two LocalTime forms). The call did nothing ("not implemented yet") and the save's PARAM.SFO had an empty
+SAVEDATA_DETAIL, the line a PSP's save list shows under the save's title. Cube calls it too, as it makes its profile:
+its detail's second line came out as a stray byte (`"0% Complete.\n\x04"`, whatever the game's buffer held).
+
+**What a PSP does.**
+- pspautotests' `rtc/convert` recorded on a PSP (the lines Unknown W. Brackets added in 2013, `116693b781`), with no
+  time zone: 2012-01-30 02:12:15 and 900 microseconds as `Mon, 30 Jan 2012 02:12:15 +0000` and
+  `2012-01-30T02:12:15.00Z`; 2010-09-20 07:12:15 and 500 microseconds alike; and, after sceRtcParseDateTime's
+  failures, tick 0 as `0001-01-01T00:00:00.00Z`.
+- The lines those replaced (recorded at the test's first version, `789720b617`, before any emulator had these
+  functions) came from calls with the wrong signature: the text's address the test's 16-byte date, the tick the
+  buffer the test then printed, the zone 256 (the buffer's size). The PSP's text ran on past the date into that
+  buffer, so each call's tick was the previous text's bytes 16 to 23 (the first's, zeros), and what was printed is
+  each text from its 17th byte: ` 04:16:00 +0416`, ` 14:48:07 +0416`, `:15.71+04:16` and `:07.29+04:16`. Rebuilt so
+  (the review's reconstruction, `~/phobos-work/scratch/review-260/py/garbage.py`), the ticks give those texts
+  exactly: the time moved by the zone, written as hours and minutes (`+0416`, and `+04:16` in RFC 3339,
+  whose UTC is `Z`); the seconds' hundredths cut, not rounded (the last tick's 299,386 microseconds print `.29`);
+  and 16 characters before the 17th: tick 0's `Mon, 01 Jan 0001` (the day in two digits, the year in four), and the
+  other three ticks' years, 110124, 110124 and 109990, in four characters too. Which four for those years, and their
+  days of the week, fell in the 16 bytes nothing printed.
+- uOFW's rtc: the LocalTime forms check both pointers against the caller (`pspK1PtrOk`: an address with its top bit
+  set, the kernel's, is refused to a program) and call the zone's form with the two zone settings added
+  (`ctx.cUnk + ctx.dUnk`, the time zone and daylight saving time, as its local clock and its conversions use them).
+  RFC3339LocalTime, whose body uOFW gives as checked against the firmware's code ("ASM OK"), refuses with
+  PRIV_REQUIRED (0x80000023); RFC2822LocalTime, whose body it doesn't mark so, with INVALID_POINTER (0x80000103). The
+  two forms with a zone aren't worked out there.
+
+**The change** (`rtc.cpp`, `system.cpp`, `kernel.hpp`, `kernel.cpp`). `rtcFormat()` reads the tick (microseconds
+since 0001-01-01 00:00:00 UTC, as sceRtcGetCurrentTick gives it, sceRtcGetTickResolution's 1,000,000 a second), moves
+it by the zone's minutes, and writes `Ddd, DD Mon YYYY HH:MM:SS +HHMM` or `YYYY-MM-DDTHH:MM:SS.hh` and `Z` or
+`+HH:MM`, then a NUL, and returns 0. The LocalTime forms take the zone the system's settings give, `localZone()`: the
+host's zone at the clock's now and an hour more while its daylight saving time is kept, the two settings
+sceUtilityGetSystemParamInt reports (one function now for it and for sceRtcConvertUtcToLocalTime, which each worked it
+out themselves). As recorded: the day in two digits, the hundredths cut, the year in four characters.
+Chosen where no recording says: which four past the year 9999 (the last four digits of the year sceRtcSetTick gives,
+in its 16 bits, as uOFW's rtc builds its local clock's date with sceRtcSetTick: the largest tick, the year 60267
+there, is `0267`), and such a date's day of the week (its own day's); a zone west of UTC as `-` and its size; a
+pointer with its top bit set refused as uOFW has the LocalTime forms refuse it, and by the forms with a zone with
+PRIV_REQUIRED, as the module's other functions; a pointer outside the program's memory, where a PSP would fault,
+INVALID_POINTER, as the tick arithmetic's. Nothing is written when refused.
+
+**Test** (`kernel ticks as RFC 2822 and RFC 3339 text`, tests/psp/power.cpp): the recordings above, the old four calls
+rebuilt as a chain (each tick the previous text's bytes 16 to 23, the zone 256; each text from its 17th byte as
+recorded); the zone of 256 minutes, with hundredths; a zone west of UTC across a year's end (`Thu, 31 Dec 2026
+22:00:00 -0500`); zones of 330 and -90 minutes; a day below 10; every month's and day's name; hundredths cut
+(`23:59:59.99Z`, still the same day); the largest tick (`***, 19 Jan **** 08:01:49 +0000`: its date as
+`rtc/arithmetic` recorded sceRtcSetTick giving it, the year four characters, which four and the day of the week left
+out); the clock's own tick; the LocalTime forms with the host in New York in summer (`-0400`) and in winter (`-0500`,
+for the same July tick: the settings' zone for every tick), in Tokyo (`+09:00`) and in UTC (`Z`); only the text and
+its NUL written; and the refusals (the kernel's addresses for the text and the tick, address 0, a tick or a text
+running past RAM's end), nothing written. Every expected text was worked out apart from the code (Python's calendar,
+Howard Hinnant's days-to-date for the largest tick). On master it fails 125 checks: nothing is written, and the four
+functions are "not implemented". On the first round's head it fails 5: the old chain's three texts after the first and
+the largest tick's two, each with its year in five characters.
+
+**Games** (master's runner and the branch's, the batch's runs on fresh copies of the batch's sticks, one runner at a
+time; `~/phobos-work/scratch/small-fixes/savecheck.sh`):
+- MediEvil Resurrection (from `st-t2.bin` with `sv.txt`, 600 frames, a copy of `stick-t2`): master writes
+  SAVEDATA_DETAIL `""` and notes the missing function; the branch writes `Wed, 14 Oct 2026 05:46:56 -0400` (the
+  state's clock, in the Mac's zone), with no note, DATA.BIN and ICON0.PNG byte for byte master's, the savedata trace
+  line for line. The next boot's LOAD GAME (`rb.txt`, 4800 frames, on a copy of the branch's stick) list-loads it
+  (`read 32850`), the stick unchanged. The second round's runner writes the same save, byte for byte.
+- Cube (`script.txt` from boot, a fresh stick, the clock pinned): master's detail `"0% Complete.\n\x04"`, the
+  branch's `"0% Complete.\nMon, 13 Oct 2025 20:00:24 -0400"`; PROFILE.PRO and the icons byte for byte master's. The
+  next boot's autoload (`reload.txt`) reads it back (`read 2908`).
+
+### 2. Lumines II's list save: GAME01, not GAME
+
+**The problem.** Batch 04's bug 5: Lumines II saves its profile by a list save with the save name `GAME` and the list
+`GAME01`, `GAME02`, `GAME03`, focus 7 (the first new). Phobos's answer saved it to `ULUS10183GAME`. The next boot's
+list load (focus 3, the latest) took that folder (a list load shows the request's own save where it's there) and
+wrote `GAME` back, and the save after it (focus 0, by name) went there again. It round-tripped in Phobos, but no PSP
+makes that folder: a PSP's dialog wouldn't show Phobos's profile, and a profile carried over from a PSP (in GAME01)
+would sit beside Phobos's saves, never written to by them.
+
+**What a PSP does.** A list save's dialog shows the list's names (saveNameList), each there or new, and saves to the
+one the player chooses, writing its name back into the request; the request's own save name only picks what focus 0
+(by name) focuses. Phobos's front end for the dialogs (`dialogSaves()`) already showed the list's names alone; the
+automatic answer (`savedataUnshown()`, for a dialog no front end shows: the runner's, and the app's with "Dialogs"
+off) took the list's first name only when the save name was empty, `<>` or a pattern, and a plain one as it was,
+whether the list held it or not.
+
+**The change** (`dialogs.cpp`; the comments in `utility.cpp` too). The automatic answer to a list save looks at the
+saves its dialog shows (`dialogSaves()`). A plain save name that isn't among them, and whose own folder isn't on the
+memory stick, names none of them: the list's first name is taken, as for none (the earlier choice, the first whatever
+the focus, where the automatic answer's later loads find it), but for focus 7 or 8, the first or last new slot, which
+take the slot the dialog focuses (on a fresh stick, as here, focus 7 focuses the first, GAME01). Where the slot it
+would take is on the stick (every slot there for focus 7 or 8, whose focus then falls back to the first; the list's
+first for the others), the request's own name is kept, as master keeps it: a save the game still has is never written
+over. Where its own folder is on the stick, made so by an older Phobos, the name is kept too, as master keeps it: an
+upgraded player's GAME stays GAME, and Phobos never makes the second folder. A name its list holds is still that save:
+every other plain-named list save in deep play's logs names one of its list's (La Pucelle Ragnarok's LAPUCELLE000 with
+focus 0, Gunhound EX's GHSAVE00 with 1, Manhunt 2's 000 with 7, ULUS10476's USER0 with 3).
+
+**Test** (`utility savedata list saves go to their lists' names (Lumines II)`, tests/psp/utility.cpp), each save's
+bytes its own so that one written over shows: on a fresh stick, `GAME` beside GAME01-GAME03 with focus 7 goes to
+GAME01, written back, and the trace shows it chosen; the next load (focus 3) takes GAME01 and writes it back, and the
+save by that name (focus 0) goes there again. `GAME`, its folder not there, beside GAME01: focus 7 goes to GAME02 and
+focus 8 to GAME03, GAME01 kept; on an empty stick focus 0 goes to GAME01. With every slot there (focus 7 and 8), or
+the list's first there and no GAME (focus 0), the save goes to GAME, as master saves it, no slot's bytes changed. An
+upgraded player's GAME: its load takes it and the save by its name goes there, no GAME01 made; then with a GAME01
+beside it dated before it (the review's case A), the load takes GAME and the save by GAME's name goes to GAME, GAME01
+kept. A GAME01 whose PARAM.SFO is broken (case B): DATA_BROKEN, the new profile's save (focus 7) goes to GAME02,
+GAME01's data kept, and the next load takes GAME02. LAPUCELLE000 (focus 0) and Manhunt 2's 000 (focus 7, twice: the
+second over the first, not to 001) as before. On master it fails 11 checks; on the second round's head 6 (every slot
+there for focus 7 and 8, the list's first there for focus 0: each save sent over GAME01); on the first round's head 13
+(those six, focus 7 and 8 writing over GAME01 beside it, the upgraded player's save made into a GAME01, the stale
+case's load and save, case B's save over GAME01 and the load after it); the La Pucelle and Manhunt checks pass on all
+three, as they should, and the new all-slot checks on master, which keeps the request's own name.
+
+**Games.** Lumines II, batch 04's repro (a fresh stick, `script.txt`, 2200 frames, the clock pinned): master writes
+`ULUS10183GAME`; the branch `ULUS10183GAME01` (`[001515] ... focus 7, chosen "GAME01" ... -> 0x00000000, save
+"GAME01"`), DATA.BIN, ICON0.PNG and PIC1.PNG byte for byte master's, PARAM.SFO apart from its directory's name.
+The next boot (`t1.txt`, 1700 frames, on a copy of the branch's stick) list-loads GAME01 (`focus 3, chosen "GAME01"
+... read 18488, save "GAME01"`), goes straight to the menu as batch 04's reboot did (the first boot's profile screens
+skipped), and its save at 1215 names GAME01 (focus 0) and goes there.
+
+### 3. The depth-view loads' test made deterministic
+
+**The problem.** `ge loads through the depth buffer's views wait for the threads` (tests/psp/ge.cpp) checks that a
+batch drawing the depths is still being drawn right after the list is queued, else the loads it then makes would wait
+for nothing. On a loaded host the drawing threads could finish the batch before the test looked: `drawing = 0x0,
+expected 0x1` in the colinsave, npdrm-modules, round6 and cpu-round3 runs, each passing when run again.
+
+**The change.** `GE::Drawing::held` (`ge.hpp`, `threads.cpp`): while it's set, the workers take no batch (one more
+term in their wait's condition, read under the mutex). Nothing but the test sets it. The test holds them from before
+the list is queued till it has seen the batch still drawn, then either lets them go as the loads come (the test as
+it was: the workers drawing while the CPU runs on, whichever finishes first) or holds them through the loads, which
+must then wait for the batch, drawing it themselves. Both give the one thread's depths, at two and four threads,
+compiled and interpreted.
+
+**Shown.** With a 200 ms sleep added just after the list is queued (scratch only), master's test fails its
+precondition at both thread counts with both engines (4 checks, the logs' message); the branch's test with the same
+sleep passes, sanitized.
+
+### The review
+
+An independent review of `2a45e6531` (with its own runner and probes, `~/phobos-work/scratch/review-260/`) asked
+for changes over one data-safety blocker. The first round sent every unlisted plain name to the list's first name,
+even where that save was on the stick, so a list save could go over a save the game still had:
+- Case A, an upgraded player: the first save after the upgrade made GAME01 beside the old GAME. Which of the two a
+  list load takes is the one whose PARAM.SFO is dated later (whole seconds, ties to GAME01). With GAME dated later
+  (a copy or restore that doesn't keep file times, a device clock that was behind), the load took the stale GAME, and
+  the game's next save, by GAME's name (focus 0), went over GAME01: the newest progress lost. Master never makes
+  GAME01 for such a player, and on a PSP a stale slot that loads is one of the list's names, whose next save goes back
+  into it.
+- Case B: a GAME01 with its data intact and its PARAM.SFO damaged loads as DATA_BROKEN, Lumines II makes a new
+  profile, and its focus-7 save went over GAME01's data, where master makes a new GAME and Phobos's own focus model
+  says the first new slot, GAME02. The first round's test pinned that overwrite.
+
+The reviewer reproduced both with the game on scratch sticks. Now (item 2's change) a name whose save is on the stick
+is kept, so the second folder is never made, and focus 7 or 8 takes the new slot. Its should-fix: the old zone-256
+calls rebuilt give the recorded texts only with a four-character year, for the years 110124 and 109990 too, where the
+first round printed the 16-bit year (five characters there) and its test pinned 60267; the year is four characters
+now, and the test pins only what's recorded. Its nits, taken: the hundredths cut and the day's two digits are
+recorded (the first round called them choices), the four old lines are quoted, Vita3K is named, and
+sceUtilityGetSystemParamInt takes `localZone()` rather than repeating it.
+
+**Walked again** with the game (`~/phobos-work/scratch/small-fixes/walks.sh`, `logs/walks.log`: master's runner, the
+first round's and this round's, on scratch copies, never the owner's sticks, the clock pinned):
+- The reviewer's upgrade sequence (a copy of batch 04's `stick-t1`, an older Phobos's GAME; three boots of `t1.txt`,
+  each on a copy of the last one's stick, GAME's PARAM.SFO touched before the third): master and this round load
+  GAME and save to GAME at every boot, their traces and files alike; the first round made GAME01 at the first boot,
+  loaded it at the second, and at the third loaded the touched GAME and sent the save over GAME01 (`chosen "GAME01"
+  ... there`).
+- The first round's second-boot stick (GAME and the GAME01 it made), GAME touched, one boot of this round: the load
+  takes GAME and the save goes to GAME; GAME01's files keep their times.
+- Case B (GAME01 with its PARAM.SFO cut to 64 bytes and a mark after its data; `script.txt` from boot): all three
+  load DATA_BROKEN; master saves the new profile to a new GAME, the first round over GAME01 (the mark gone), this
+  round to GAME02 (`focus 7, chosen "GAME02" ... not there`), GAME01's two files byte for byte as they were.
+- A fresh stick (batch 04's repro): GAME01, byte for byte the first round's.
+
+**The re-review** of `bac0374f3` found both cases fixed and the year's change safe (its 25,896 texts below the year
+10000 byte for byte the first round's, the year always four characters, the longest text 37 bytes), and one overwrite
+left: with GAME01 to GAME03 all on the stick, focus 7 or 8 finds no new slot and the dialog's focus falls back to the
+first (`dialogFocus()`), so the redirect sent Lumines II's new profile over GAME01 (reproduced with the game: all
+three slots with damaged PARAM.SFOs and intact data, the boot's load DATA_BROKEN, the focus-7 save `chosen "GAME01"
+... there`, GAME01's mark gone, where master writes a new GAME); and with focus 0 to 6, an unlisted name with no
+folder of its own went over GAME01 whenever GAME01 was there (no Lumines II flow known, the same harm). Now the
+redirect never lands on a slot that's on the stick: the request's own name is kept, as master keeps it (item 2's
+change). The test has every slot there (focus 7 and 8) and the list's first there with no GAME (focus 0), each save's
+bytes its own: the save goes to GAME, no slot touched.
+
+**Walked again** for this round (`~/phobos-work/scratch/small-fixes/walks3.sh`, `logs/walks3.log`, scratch copies, the
+clock pinned). The reviewer's all-slot case (GAME01 to GAME03 each with its PARAM.SFO cut to 64 bytes and its own mark
+after its data; `script.txt` from boot): all three runners load DATA_BROKEN; master writes the new profile to a new
+GAME, the second round over GAME01 (its mark gone), this round to a new GAME, its trace and the stick byte for byte
+master's, the three slots' files and times as they were. And the second round's four walks with this round's runner
+(the upgrade's three boots, the first round's stick with GAME touched, case B, the fresh stick): each savedata trace
+line for line the second round's, and the same files.
+
+### Checks
+
+The third round (`ce436b2e7`): tests/psp 550 groups, 0 failures, sanitized and unsanitized (none skipped);
+tests/allegrex 78 groups, 0 failures; tests/psp/ares 348 checks, 0 failed. Only `savedataUnshown()` changed (and
+comments), so the 21 scenes weren't run again (the second round's: every hash master's). The new checks on the second
+round's head, the first round's and master: above. The walks: above. CI: the draft PR's checks.
+
+The second round (`0707dccc9`): tests/psp 550 groups, 0 failures, sanitized and unsanitized (none skipped);
+tests/allegrex 78 groups, 0 failures; tests/psp/ares 348 checks, 0 failed; GCC 13.3 `-Werror` on `kernel.cpp` and the
+two changed test files. The new tests on the first round's head and on master: above. The 21 scenes in Software,
+master's bench runner against this round's: all 102 hashes master's in all 21. MediEvil's save with this round's
+runner: the first round's, byte for byte. The walks: above. CI: the draft PR's checks.
+
+The first round (`7b1c3d49c`, the three fixes and their tests): tests/psp 550 groups, 0 failures, sanitized
+(`detect_container_overflow=0`) and unsanitized, the Vulkan groups run on the Mac's GPU (none skipped); tests/allegrex
+78 groups, 0 failures; tests/psp/ares 348 checks, 0 failed. GCC 13.3 (Ubuntu 24.04 in Docker, `-Wall -Wextra
+-Werror`): `kernel.cpp` and the three test files build; the GE's unity file only with `four.cpp`'s twelve
+maybe-uninitialized warnings, which master's gives the same. The 21 scenes in Software (the kit's bench runners,
+master's against the branch's, 100 frames from each scene's state, every frame's picture and VRAM settled, then RAM
+and the machine's state): all 102 hashes master's in all 21. Batch 04's other saves (master's runner and the
+branch's, the installs task's runs on copies of the same sticks): Gundam NEXT PLUS, Kurohyou 1, Lunar, Killzone,
+Lumines and La Pucelle Ragnarok byte for byte master's (and as the installs task's runs of 14 Oct wrote them), their
+savedata traces line for line. CI: the draft PR's checks.
+
+### Left
+
+- Not recorded on a PSP, chosen as above: which four digits a year past 9999 shows (its width is recorded) and such a
+  date's day of the week, a zone west of UTC as `-` and its size, zones of 100 hours or more (more digits), and the
+  error answers of the two forms with a zone. RFC2822LocalTime's INVALID_POINTER follows a body uOFW doesn't mark as
+  checked, where its RFC 3339 twin's PRIV_REQUIRED is.
+- An upgraded player's Lumines II profile stays in the GAME folder an older Phobos made, which no PSP makes: moving
+  it to GAME01 would put two saves before the game's loads again, which choose between them by date.
+- sceRtcParseRFC3339 and sceRtcParseDateTime (rtc/convert records the second) aren't done: no game in the library is
+  known to call them.
+- The automatic answer still takes a list's first name whatever the focus for a save naming none (a choice of
+  Phobos's, as before: a focus-7 save of a game naming none, as Killzone's or Kurohyou 1's, goes over the list's first
+  save each time, where a PSP's player would see the first new slot focused); a front end's player chooses.
+- Scratch: `~/phobos-work/scratch/small-fixes` (`NOTES.md`; `refs/`, the sources read; `savecheck.sh`,
+  `rebootcheck.sh`, `games.sh` and `logs/games.log`, the game checks; `before-src/`, master with the new tests;
+  `delay-patch.py`, the test's sleep; `hashkit/`, the scenes). Nothing was run on the RP6.
+
 ## Part 99: the game data install dialog — the disc's INSDIR copied to the memory stick, a piece at each Update, through a folder of its own; sceIoChstat (Kingdom Hearts Birth by Sleep Final Mix's DATA INSTALL)
 
 On branch `cursor/psp-gamedata-install-2b67` (draft PR #261), on master `cc0638372` (part 97, #259, after part 95,
-#257); parts 96 and 98 are other open PRs'. Deep play batch 04's bug 3: Kingdom Hearts Birth by Sleep Final Mix's DATA
-INSTALL ended in "An error has occurred. Data installation will be canceled.", and Gunhound EX's was cancelled too,
+#257), with master `6ff82f9f1` merged in after the fifth round (parts 96, #258, and 98, #260). Deep play batch 04's
+bug 3: Kingdom Hearts Birth by Sleep Final Mix's DATA INSTALL ended in "An error has occurred. Data installation will
+be canceled.", and Gunhound EX's was cancelled too,
 because part 37 had made the system's game data install dialog one that runs and is cancelled. Clean room: the PSP's
 behaviour from pspautotests' recordings (utility/dialog/sizes: the dialog's two sizes; io/stat and io/stat/readonly:
 sceIoChstat and the memory stick's attributes), players' reports of Kingdom Hearts' install failing on real PSPs

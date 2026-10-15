@@ -1954,6 +1954,12 @@ struct Kernel {
   auto sceRtcTickAddWeeks() -> void;
   auto sceRtcTickAddMonths() -> void;
   auto sceRtcTickAddYears() -> void;
+  //and dates as text (sceRtcFormat*)
+  auto rtcFormat(bool rfc3339, s32 zone, u32 refused) -> void;
+  auto sceRtcFormatRFC2822() -> void;
+  auto sceRtcFormatRFC2822LocalTime() -> void;
+  auto sceRtcFormatRFC3339() -> void;
+  auto sceRtcFormatRFC3339LocalTime() -> void;
 
   //mt19937.cpp: the Mersenne Twister, the kernel's and its library's (sceMt19937)
   auto mt19937Init(u32 context, u32 seed) -> void;
@@ -2278,6 +2284,7 @@ struct Kernel {
   static auto localSeconds(s64 seconds, s64& local) -> bool;
   static auto hostZone(s64 seconds, s32& minutes, bool& daylight) -> void;
   auto writeDate(u32 address, u64 microseconds, bool local) -> bool;
+  auto localZone(s32* minutes = nullptr, bool* daylight = nullptr) -> s32;
   auto rtcConvertZone(bool toLocal) -> void;
   auto sceRtcConvertUtcToLocalTime() -> void;
   auto sceRtcConvertLocalTimeToUTC() -> void;
