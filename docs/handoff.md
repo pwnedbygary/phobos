@@ -30,6 +30,49 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: the game data install dialog — the disc's INSDIR copied to the memory stick through a folder of its own; sceIoChstat (part 99) — 2026-10-15
+
+Branch `cursor/psp-gamedata-install-2b67`, on master `cc0638372` (part 97, #259); draft PR #261. docs/psp-core.md, part
+99, has the evidence (parts 96 and 98 are other open PRs'). Clean room: pspautotests' utility/dialog/sizes, io/stat
+and io/stat/readonly; players' reports of Kingdom Hearts' install failing on PSPs (80111904); the games' code and
+discs; PPSSPP's gamedata install dialog, error codes and sceIoChstat notes read only as a description; JPCSP not read.
+Save states unchanged (layout 32: the copy isn't state).
+- **The bug** (deep play batch 04's bug 3): Kingdom Hearts Birth by Sleep Final Mix's DATA INSTALL ended in "An error
+  has occurred", and Gunhound EX's was cancelled: part 37 had made sceUtilityGamedataInstall a dialog that's cancelled.
+  Behind it, Kingdom Hearts' own copy of BBS1.DAT calls sceIoChstat, which was missing (the 80111904 players saw on bad
+  memory sticks is that path's message).
+- **What it does now** (`install.cpp`): each Update copies 1 MiB of the disc's PSP_GAME/INSDIR (from the image or a
+  host folder standing for the disc) into `<stick>/.phobos-install/<game><data>`, writes the progress (at 1372), and at
+  the end writes PARAM.SFO (the request's titles; a PARAM.SFO there keeps its other keys) and renames the copy into
+  PSP/SAVEDATA/<game><data>, or moves its files into the folder there, PARAM.SFO last. It writes over only what a PSP's
+  dialog would: INSDIR's files and PARAM.SFO in that folder. Phobos stopped part way leaves no half folder: aborted,
+  reset or a state loaded, the copy is taken away; killed, it stays out of sight until the next install of the same
+  data. Answers: 0; 1 (Abort; a disc with nothing to install, as before); 0x80111901 no stick; 0x80111902 no space
+  (chosen from the codes' pattern; io.cpp's 57,344 free clusters, and never filling the host's storage); 0x80111904
+  the stick unwritable (also chosen for bad names); 0x80111908 mode ≥ 2.
+- **sceIoChstat** (io.cpp, new): the memory stick's read-only flag as io/stat/readonly recorded (the host file's owner's
+  write permission); sceIoGetstat and sceIoDread give a stick file's attributes as io/stat recorded (0x20 a file, 0x10
+  a folder, 0x01 more when read-only), where they had been 0x27 and 0x17.
+- **The app**: in mode 1 (the PSP's own progress screen) a request of kind 7, made afresh as the progress moves on and
+  taking no answer, shown by `PspInstallDialog` (icon, titles, size, "Installing… N%"; no button). Mode 0 shows
+  nothing, as a PSP does (Kingdom Hearts draws its own screen).
+- **Games**: Kingdom Hearts installs (INSTALLATION COMPLETE; BBS1.DAT, ICON0.PNG, PIC1.PNG byte for byte the disc's)
+  and, booted again, reads BBS1.DAT from the memory stick (41 reads, none from the disc's copy) to its first gameplay.
+  Gunhound EX installs all 797 files byte for byte; 7th Dragon 2020 its 1.5 GB. Both then read their install through
+  the PGD layer (flag 0x40000000, ioctl 0x04100001), which io.cpp refuses on memory stick files (the owner's area,
+  part 97's "left"), say so at boot and play from the disc. All 30 INSDIR discs in the library import the dialog.
+- **Tests**: tests/psp/install.cpp's 7 groups (the whole install in both sizes, a host folder disc, every answer, cut
+  short by Abort, a reset or Phobos killed, a state saved part way, over an install there, the progress screen and its
+  byte form) and files.cpp's sceIoChstat group; on master all 8 fail, part 37's own group passing on both. Android:
+  `PspDialogsTest.readsTheCoresInstallProgress`.
+- **Checks**: tests/psp 556/0 sanitized (`detect_container_overflow=0`) and unsanitized; tests/allegrex 78/0;
+  tests/psp/ares 348/0; the runner's test; GCC 13.3 `-Wall -Wextra -Werror` on the changed files; Android 344 unit
+  tests, 0 failures. The 21 scenes in Software: every hash master's, the state too. Batch 04's saves (7 games): the same
+  files byte for byte and the same savedata requests as master's runner. Nothing run on the RP6.
+- **Left**: the PGD layer on memory stick files (the owner's: Gunhound EX and 7th Dragon 2020 use their installs once
+  it's there); the dialog's own screens and timing, the words after the progress, and the no-space code aren't recorded;
+  sceIoChstat's times and size aren't changed.
+
 ## PSP NPDRM: EDATA decrypted — the PGD past the EDATA's header, on the memory stick too, its size and end the data's; a PGD file's end its data's — 2026-10-14
 
 Branch `cursor/psp-pgd-edata-2b67`, on master `14b181707` (part 95, #257, with #256); draft PR #259.
