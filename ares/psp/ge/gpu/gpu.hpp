@@ -418,7 +418,8 @@ struct GPU : GE::Renderer {
     //for a texture read from a depth buffer (putDepth(): those of one texture a wait for the GPU, as a finish)
     u64 depthsTaken = 0, depthsPut = 0;
     //rectangles of other targets' pixels put into a target's depth on the GPU as it's filled from memory, as memory
-    //would have them after a finish (moveIntoDepth()); and finishes before such a fill, where the GPU can't (begin())
+    //would have them after a finish (moveIntoDepth()); and finishes before such a fill, where the GPU can't (begin():
+    //with no moves, only where the PRIM's depth test reads what's filled)
     u64 depthsMoved = 0, depthFinishes = 0;
     u64 depthsCovered = 0;  //depth fills those moves put pixels in all of, none of it taken from memory (fill())
     u64 alphas = 0;    //rectangles of targets' colors whose alpha was set from their stencil (catchAlpha())
@@ -447,7 +448,8 @@ struct GPU : GE::Renderer {
   GPU(std::unique_ptr<Backend> backend);
   ~GPU();
   auto ready() const -> bool override { return backend && !backend->lost; }
-  auto begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region) -> bool override;
+  auto begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region,
+             const std::function<auto () -> GE::Reached>& reachedBy) -> bool override;
   auto triangle(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c) -> void override;
   auto triangleAt(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c, const s64 (&x)[3], const s64 (&y)[3])
     -> void override;

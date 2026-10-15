@@ -793,6 +793,11 @@ auto System::startRenderer() -> void {
                    : gpu->backend->readsInOrder ? ", blending in the shader, in order"
                                                 : ", blending in 8888 by the GPU, the rest in the shader, overlaps "
                                                   "apart"));
+    if(!gpu->backend->depthMoves) {
+      report(true, "the Vulkan renderer's depth moves are off: frame buffers drawn over a depth buffer are put in "
+                   "memory before a PRIM's depth test reads them there (a wait for the GPU each time), elsewhere the "
+                   "depth is taken from memory as it is");
+    }
     gpu->report = [this](const std::string& what) { tell("The Vulkan renderer stopped: " + what); };
   }
   if(gpu && gpu->ready()) ge.setRenderer(gpu.get());

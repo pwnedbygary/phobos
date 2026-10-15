@@ -1166,7 +1166,8 @@ auto GPU::settings(const GE::Look& look) -> void {
 //GPU lost, no target for its frame buffer, rows past the target's (past VRAM's end, where the PSP's addresses run
 //round to its start, or past 512), or a texture the GE reads from memory as it draws, which the GPU can't have),
 //for the software renderer to draw; true for one that draws nothing too.
-auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region) -> bool {
+auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region,
+                const std::function<auto () -> GE::Reached>& reachedBy) -> bool {
   this->ge = &ge;
   drawing = false;
   reached();
@@ -1222,8 +1223,16 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   if(t->stale && t->drawn()) finish(ge), moving.clear();  //(what the GPU drew, then memory's changes over it)
   //Depth filled from memory below (its own new rows and those memory changed, and those memory changed of the target
   //it takes depth from), in pages another target has drawn in on the GPU since the last finish: as a finish then the
-  //fill would leave it, the other's pixels moved into it on the GPU (moveIntoDepth()); else, where the GPU can't, or
-  //where the target filled drew in those pages itself (a finish would put both in memory), put in memory first.
+  //fill would leave it, the other's pixels moved into it on the GPU (moveIntoDepth()); else, where the target filled
+  //drew in those pages itself (a finish would put both in memory), put in memory first. Where the GPU can't move
+  //pixels into a depth (Backend::depthMoves), put in memory first only where this PRIM's depth test reads what's
+  //filled: not a clear's, nor a test always or never true, nor one its depths decide (nothing's greater than 65535,
+  //nor less than 0: Chili Con Carnage and Dirt 2 test 2D sprites at 65535 "greater or equal" over what they drew into
+  //their depth buffer's memory), in the rows its pixels can be in (a 3D one's vertices on the screen, worked out only
+  //where those rows are asked about: GTA Chinatown Wars' radar is tested below the rows its bloom drew over). The rest
+  //is filled from memory as it is, as before the moves: a PRIM after that finds those rows filled reads them so (the
+  //stale depth master has), where finishing for each would have the dozen games that draw their post-processing over
+  //their depth buffer wait for the GPU once to three times a frame.
   bool depth = !column && !row && (p.clear ? p.clearDepth : p.depthTest);
   Target* taken = nullptr;
   if(depth) {
@@ -1231,19 +1240,41 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
     u32 rows = same ? t->depthRows : 0, changedFrom = same ? t->depthChangedFrom : 0;
     u32 changedTo = same ? t->depthChangedTo : 0;
     taken = newestDepth(*t, p.depthBuffer, p.depthStride, same ? t->depthAt : 0);
-    bool onGPU = true;
-    auto fills = [&](const Target& into, u32 from, u32 to) {
-      onGPU = onGPU && depthMovable(into, p.depthBuffer, p.depthStride, from, to);
+    auto filled = [&](const auto& each) {  //(each(target filled, from, to) of the rows the fills below take)
+      if(taken) {  //(as takeDepth() fills them: the other's changes, and where it's narrower, this one's rows to its)
+        each(*taken, taken->depthChangedFrom, std::min(taken->depthChangedTo, taken->depthRows));
+        bool narrower = Memory::depthCopy(taken->format) == Memory::depthCopy(t->format) &&
+                        taken->stride < std::min(t->stride, p.depthStride);
+        if(narrower) each(*t, rows, std::min(taken->depthRows, t->height));
+      }
+      each(*t, changedFrom, std::min(changedTo, rows));
+      each(*t, rows, u32(bottom + 1));
     };
-    if(taken) {  //(as takeDepth() fills them: the other's changes, and where it's narrower, this one's rows to its)
-      fills(*taken, taken->depthChangedFrom, std::min(taken->depthChangedTo, taken->depthRows));
-      bool narrower = Memory::depthCopy(taken->format) == Memory::depthCopy(t->format) &&
-                      taken->stride < std::min(t->stride, p.depthStride);
-      if(narrower) fills(*t, rows, std::min(taken->depthRows, t->height));
+    if(backend->depthMoves) {
+      bool onGPU = true;
+      filled([&](const Target& into, u32 from, u32 to) {
+        onGPU = onGPU && depthMovable(into, p.depthBuffer, p.depthStride, from, to);
+      });
+      if(!onGPU) statistics.depthFinishes++, finish(ge), moving.clear();
+    } else {
+      auto owned = [&](s32 first, s32 last) {  //(another target's pages in the rows filled from first to last)
+        bool found = false;
+        filled([&](const Target&, u32 from, u32 to) {
+          from = std::max<u32>(from, first), to = std::min<u32>(to, last + 1);
+          found = found || !depthMovable(*t, p.depthBuffer, p.depthStride, from, to);
+        });
+        return found;
+      };
+      if(!p.clear && p.depthFunction > 1 && owned(top, bottom)) {
+        GE::Reached r = reachedBy();
+        u32 f = p.depthFunction;
+        bool decided = (f == 4 || f == 7) ? r.lowest == 65535 : (f == 5 || f == 6) && r.highest == 0;
+        s32 first = std::max(top, r.region.top), last = std::min(bottom, r.region.bottom);
+        if(!decided && r.region.left <= r.region.right && first <= last && owned(first, last)) {
+          statistics.depthFinishes++, finish(ge), moving.clear();
+        }
+      }
     }
-    fills(*t, changedFrom, std::min(changedTo, rows));
-    fills(*t, rows, bottom + 1);
-    if(!onGPU) statistics.depthFinishes++, finish(ge), moving.clear();
   }
   if(!ready()) return held.reset(), false;
   //(the colors filled afresh where memory's changed, the depth where memory's depth has: rows of it, or all of it
