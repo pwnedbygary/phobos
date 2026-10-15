@@ -56,19 +56,23 @@ auto Kernel::sceRtcTickAddYears() -> void { rtcTickAddMonths(s64(s32(arg(2))) * 
 //The tick (microseconds since 0001-01-01 00:00:00 UTC, as sceRtcGetCurrentTick gives one) moved by the zone, written
 //as RFC 2822 writes a date or RFC 3339 does, then a NUL; 0. As pspautotests' rtc/convert recorded with no zone:
 //2012-01-30 02:12:15 and 900 microseconds is "Mon, 30 Jan 2012 02:12:15 +0000" and "2012-01-30T02:12:15.00Z",
-//2010-09-20 07:12:15 and 500 microseconds alike, tick 0 "0001-01-01T00:00:00.00Z"; and before the test called them
-//rightly (a zone of 256 minutes, a tick from whatever its stack held, the text running on past a 16-byte structure
-//into the buffer it printed) " 04:16:00 +0416", ":15.71+04:16" and ":07.29+04:16": the date and time moved by the
-//zone, written as hours and minutes (RFC 3339's with a colon, and UTC as Z), RFC 3339's seconds with their hundredths.
-//Chosen, as no recording shows them: a day below 10 and a year below 1000 zero-padded (as RFC 3339's recorded year
-//is), a zone west of UTC as '-' and its size, the hundredths cut rather than rounded, the date as sceRtcSetTick gives
-//it (a year past 65535 in its 16 bits). The LocalTime forms take the zone the system's settings give (localZone()),
-//as uOFW's rtc does. Refused, with nothing written: an address with its top bit set, the kernel's, which uOFW's rtc
-//refuses a program (PRIV_REQUIRED from RFC3339LocalTime, whose body it gives as checked against the firmware's code,
-//INVALID_POINTER from RFC2822LocalTime, whose body it doesn't mark so; the two with a zone, which it hasn't worked
-//out, chosen as the module's other functions refuse one: PRIV_REQUIRED); and an address the program's memory doesn't
-//hold, where a PSP would fault, INVALID_POINTER, as the tick arithmetic's (chosen). MediEvil Resurrection writes the
-//time it saves at into the save's details so (RFC2822LocalTime).
+//2010-09-20 07:12:15 and 500 microseconds alike, tick 0 "0001-01-01T00:00:00.00Z". Before the test called them
+//rightly, it gave a 16-byte date as the text's address (the text running on into the buffer it then printed), that
+//buffer as the tick and 256 as the zone, so each call's tick was the previous text's bytes 16 to 23: its four calls
+//printed " 04:16:00 +0416", " 14:48:07 +0416", ":15.71+04:16" and ":07.29+04:16", which those ticks give exactly:
+//the time moved by the zone, written as hours and minutes (RFC 3339's with a colon, UTC as Z), the seconds'
+//hundredths cut (the last tick's 299,386 microseconds are .29), and 16 characters before the text's 17th (tick 0's
+//"Mon, 01 Jan 0001": the day in two digits, the year in four), the year four characters for the years 110124 and
+//109990 too. Which four, and such a date's day of the week, fell in the 16 bytes: chosen, the last four digits of
+//the year sceRtcSetTick gives (its 16 bits; uOFW's rtc builds its local clock's date with sceRtcSetTick), and the
+//week's day of the tick's own day. Chosen too: a zone west of UTC as '-' and its size, a zone of 100 hours or more
+//in more digits. The LocalTime forms take the zone the system's settings give (localZone()), as uOFW's rtc does.
+//Refused, with nothing written: an address with its top bit set, the kernel's, which uOFW's rtc refuses a program
+//(PRIV_REQUIRED from RFC3339LocalTime, whose body it gives as checked against the firmware's code, INVALID_POINTER
+//from RFC2822LocalTime, whose body it doesn't mark so; the two with a zone, which it hasn't worked out, chosen as the
+//module's other functions refuse one: PRIV_REQUIRED); and an address the program's memory doesn't hold, where a PSP
+//would fault, INVALID_POINTER, as the tick arithmetic's (chosen). MediEvil Resurrection writes the time it saves at
+//into the save's details so (RFC2822LocalTime).
 auto Kernel::rtcFormat(bool rfc3339, s32 zone, u32 refused) -> void {
   static constexpr const char* Days[] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};  //(0001-01-01 a Monday)
   static constexpr const char* Months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct",
@@ -83,17 +87,17 @@ auto Kernel::rtcFormat(bool rfc3339, s32 zone, u32 refused) -> void {
   u32 month, day;
   dateFromYearOne(s64(days), year, month, day);
   u32 hour = seconds / 3'600 % 24, minute = seconds / 60 % 60, second = seconds % 60;
-  u32 size = u32(std::abs(s64(zone))), hundredths = tick % 1'000'000 / 10'000;
+  u32 size = u32(std::abs(s64(zone))), hundredths = tick % 1'000'000 / 10'000, digits = u16(year) % 10'000;
   char sign = zone < 0 ? '-' : '+', out[128];
   int length;
   if(rfc3339) {
-    length = std::snprintf(out, sizeof(out), "%04u-%02u-%02uT%02u:%02u:%02u.%02u", u32(u16(year)), month, day, hour,
+    length = std::snprintf(out, sizeof(out), "%04u-%02u-%02uT%02u:%02u:%02u.%02u", digits, month, day, hour,
                            minute, second, hundredths);
     if(!zone) length += std::snprintf(out + length, sizeof(out) - length, "Z");
     else length += std::snprintf(out + length, sizeof(out) - length, "%c%02u:%02u", sign, size / 60, size % 60);
   } else {
     length = std::snprintf(out, sizeof(out), "%s, %02u %s %04u %02u:%02u:%02u %c%02u%02u", Days[days % 7], day,
-                           Months[month - 1], u32(u16(year)), hour, minute, second, sign, size / 60, size % 60);
+                           Months[month - 1], digits, hour, minute, second, sign, size / 60, size % 60);
   }
   if(!memory.reaches(text, length + 1)) return result(ErrorInvalidPointer);
   memory.copyIn(text, out, length + 1);

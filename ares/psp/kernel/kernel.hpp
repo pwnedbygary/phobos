@@ -2246,7 +2246,7 @@ struct Kernel {
   static auto localSeconds(s64 seconds, s64& local) -> bool;
   static auto hostZone(s64 seconds, s32& minutes, bool& daylight) -> void;
   auto writeDate(u32 address, u64 microseconds, bool local) -> bool;
-  auto localZone() -> s32;
+  auto localZone(s32* minutes = nullptr, bool* daylight = nullptr) -> s32;
   auto rtcConvertZone(bool toLocal) -> void;
   auto sceRtcConvertUtcToLocalTime() -> void;
   auto sceRtcConvertLocalTimeToUTC() -> void;

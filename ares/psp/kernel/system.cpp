@@ -110,14 +110,14 @@ auto Kernel::sceKernelStopUnloadSelfModule() -> void {
 }
 
 //(which setting, where to put it): the system's settings (psputility_sysparam.h). The time zone and daylight saving
-//time are the host's at the clock's now (hostZone()), as the clock's local time and the memory stick's dates have
+//time are the host's at the clock's now (localZone()), as the clock's local time and the memory stick's dates have
 //them. Language 1 is English; button swap 1 means the cross button confirms, as outside Japan; anything else reads 0.
 auto Kernel::sceUtilityGetSystemParamInt() -> void {
   u32 which = arg(0), value = 0;
   if(which == 6 || which == 7) {  //PSP_SYSTEMPARAM_ID_INT_TIMEZONE, PSP_SYSTEMPARAM_ID_INT_DAYLIGHTSAVINGS
     s32 minutes = 0;
     bool daylight = false;
-    hostZone(s64((startTime + cycles / (CPUFrequency / 1'000'000)) / 1'000'000), minutes, daylight);
+    localZone(&minutes, &daylight);
     value = which == 6 ? u32(minutes) : u32(daylight);
   }
   if(which == 8) value = 1;  //PSP_SYSTEMPARAM_ID_INT_LANGUAGE
@@ -504,12 +504,15 @@ auto Kernel::sceRtcGetCurrentClockLocalTime() -> void {
 
 //The minutes the system's settings put between UTC and local time: its time zone, and an hour more while daylight
 //saving time is kept (uOFW's rtc adds the two settings for its local clock, its conversions and its dates as text),
-//here the settings sceUtilityGetSystemParamInt reports (the host's zone at the clock's now: hostZone()).
-auto Kernel::localZone() -> s32 {
-  s32 minutes = 0;
-  bool daylight = false;
-  hostZone(s64((startTime + cycles / (CPUFrequency / 1'000'000)) / 1'000'000), minutes, daylight);
-  return minutes + (daylight ? 60 : 0);
+//here the host's zone at the clock's now (hostZone()); the two settings themselves into minutes and daylight, where
+//given (sceUtilityGetSystemParamInt reports them).
+auto Kernel::localZone(s32* minutes, bool* daylight) -> s32 {
+  s32 zone = 0;
+  bool kept = false;
+  hostZone(s64((startTime + cycles / (CPUFrequency / 1'000'000)) / 1'000'000), zone, kept);
+  if(minutes) *minutes = zone;
+  if(daylight) *daylight = kept;
+  return zone + (kept ? 60 : 0);
 }
 
 //A tick moved by the minutes the system's settings put between UTC and local time (localZone()), the same for every

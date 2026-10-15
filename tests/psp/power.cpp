@@ -1008,13 +1008,15 @@ static auto clockZones() -> void {
 
 //Ticks as text (sceRtcFormatRFC2822, sceRtcFormatRFC3339 and their LocalTime forms, rtc.cpp). pspautotests'
 //rtc/convert's recordings with no time zone (2012-01-30 02:12:15 and 900 microseconds, 2010-09-20 07:12:15 and 500,
-//and tick 0 in RFC 3339), and its earlier calls' zone of 256 minutes (+0416 and +04:16, the time moved by it, the
-//seconds' hundredths); then a zone west of UTC taking the date back over a year's end, zones of half an hour and an
-//hour and a half, a day below 10, every day's and month's name, hundredths cut, the largest tick (the date
-//sceRtcSetTick gives); the clock's tick now; the LocalTime forms with the host in New York in summer and in winter
-//(the settings' zone for every tick), in Tokyo and in UTC; each text and its NUL alone written. Refused, writing
-//nothing: a text or a tick at the kernel's addresses (top bit set: PRIV_REQUIRED, INVALID_POINTER from
-//RFC2822LocalTime), and where the program's memory isn't (INVALID_POINTER). MediEvil Resurrection's save details.
+//and tick 0 in RFC 3339), and its earlier four calls rebuilt (each tick the previous text's bytes 16-23, the zone
+//256: the texts from their 17th byte as they printed them, which take the day in two digits, the hundredths cut and
+//the year in four characters, years past 9999 too); then a zone west of UTC taking the date back over a year's end,
+//zones of half an hour and an hour and a half, a day below 10, every day's and month's name, hundredths cut, the
+//largest tick (the date sceRtcSetTick gives, its year in four characters: which four, and its day of the week, no
+//recording shows, so they're left out); the clock's tick now; the LocalTime forms with the host in New York in
+//summer and in winter (the settings' zone for every tick), in Tokyo and in UTC; each text and its NUL alone written.
+//Refused, writing nothing: a text or a tick at the kernel's addresses (top bit set: PRIV_REQUIRED, INVALID_POINTER
+//from RFC2822LocalTime), and where the program's memory isn't (INVALID_POINTER). MediEvil Resurrection's details.
 static auto datesAsText() -> void {
   constexpr u32 Tick = R, Text = R + 0x40;
   constexpr u64 From1To1970 = 62'135'596'800ull * 1'000'000;
@@ -1042,12 +1044,34 @@ static auto datesAsText() -> void {
   both(__LINE__, 0, 0, "Mon, 01 Jan 0001 00:00:00 +0000", "0001-01-01T00:00:00.00Z");
   both(__LINE__, 63'420'537'600'000'000ull, 256, "Mon, 20 Sep 2010 04:16:00 +0416", "2010-09-20T04:16:00.00+04:16");
   both(__LINE__, 63'420'563'535'710'000ull, 256, "Mon, 20 Sep 2010 11:28:15 +0416", "2010-09-20T11:28:15.71+04:16");
+  u64 chained = 0;  //(the earlier calls)
+  for(auto [function, printed] : {std::pair{"sceRtcFormatRFC2822", " 04:16:00 +0416"},
+                                  std::pair{"sceRtcFormatRFC2822", " 14:48:07 +0416"},
+                                  std::pair{"sceRtcFormatRFC3339", ":15.71+04:16"},
+                                  std::pair{"sceRtcFormatRFC3339", ":07.29+04:16"}}) {
+    putTick(chained);
+    m.system.memory.fill(Text, 'x', 64);
+    check(__LINE__, function, m.call(function, {Text, Tick, 256}), 0);
+    std::string got = m.system.memory.readString(Text, 64);
+    check(__LINE__, (std::string(function) + ": \"" + got + "\"").c_str(), got.size() > 16 && got.substr(16) == printed,
+          true);
+    chained = 0;
+    for(u32 n = 0; n < 8; n++) chained |= u64(m.system.memory.read(1, Text + 16 + n)) << n * 8;
+  }
   //west of UTC, part hours, a day below 10, hundredths cut, the largest tick
   both(__LINE__, 63'934'369'200'000'000ull, -300, "Thu, 31 Dec 2026 22:00:00 -0500", "2026-12-31T22:00:00.00-05:00");
   both(__LINE__, 63'918'460'800'000'000ull, 330, "Wed, 01 Jul 2026 05:30:00 +0530", "2026-07-01T05:30:00.00+05:30");
   both(__LINE__, 63'918'460'800'000'000ull, -90, "Tue, 30 Jun 2026 22:30:00 -0130", "2026-06-30T22:30:00.00-01:30");
   both(__LINE__, 63'918'547'199'999'999ull, 0, "Wed, 01 Jul 2026 23:59:59 +0000", "2026-07-01T23:59:59.99Z");
-  both(__LINE__, ~0ull, 0, "Sun, 19 Jan 60267 08:01:49 +0000", "60267-01-19T08:01:49.55Z");
+  for(auto [function, shape] : {std::pair{"sceRtcFormatRFC2822", "***, 19 Jan **** 08:01:49 +0000"},
+                                std::pair{"sceRtcFormatRFC3339", "****-01-19T08:01:49.55Z"}}) {
+    putTick(~0ull);
+    m.system.memory.fill(Text, 'x', 64);
+    check(__LINE__, function, m.call(function, {Text, Tick, 0}), 0);
+    std::string got = m.system.memory.readString(Text, 64), expected = shape;
+    for(u32 n = 0; n < std::min(got.size(), expected.size()); n++) if(expected[n] == '*') got[n] = '*';
+    check(__LINE__, (std::string(function) + ": \"" + got + "\"").c_str(), got == expected, true);
+  }
   CHECK(m.call("sceRtcSetTick", {R + 0x100, Tick}), 0);  //(the date it gives that tick)
   CHECK(m.system.memory.read(2, R + 0x100) | m.system.memory.read(2, R + 0x102) << 16, 60267 | 1 << 16);
   CHECK(m.system.memory.read(2, R + 0x104), 19);
