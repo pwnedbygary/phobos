@@ -904,6 +904,84 @@ static auto savedataListAnswers() -> void {
   CHECK(saved() == "DATA05", true);
 }
 
+//A list's save answered with no front end goes to one of its list's names, as a PSP's dialog shows those alone, its
+//save name choosing only what focus 0 focuses. Lumines II on a fresh stick: its profile saved with "GAME" beside
+//GAME01 to GAME03, focus 7 (the first new), goes to GAME01, written back (the trace shows it chosen); the next boot's
+//load (focus 3, the latest) takes GAME01 and writes it back, and its save by that name (focus 0) goes there again;
+//"GAME" with GAME01 there goes to GAME01 still, whatever the focus. A save an older Phobos made under GAME still
+//loads (the request's own save, shown where it's there), and the save after it goes to GAME01, which the next load
+//takes (the latest), GAME left as it was. A list save naming a save its list holds takes it, as before: La Pucelle
+//Ragnarok's LAPUCELLE000 (focus 0), Manhunt 2's 000 (focus 7) with 000 there already.
+static auto savedataListNames() -> void {
+  namespace fs = std::filesystem;
+  HostFolder stick;
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  auto listed = [&](u32 mode, const char* game, const char* save, std::vector<const char*> names, u32 focus,
+                    const char* data = "") {
+    saveParameters(m, mode, game, save, strlen(data));
+    m.system.memory.fill(Buffer + 0x100, 0, 0x400);
+    for(u32 n = 0; n < names.size(); n++) m.system.memory.copyIn(Buffer + 0x100 + n * 20, names[n], strlen(names[n]));
+    m.system.memory.write(4, Parameters + 96, Buffer + 0x100);
+    m.system.memory.write(4, Parameters + 1480, focus);
+    m.system.memory.fill(Buffer, 0, 8);
+    m.system.memory.copyIn(Buffer, data, strlen(data));
+  };
+  auto saved = [&] { return m.system.memory.readString(Parameters + 76, 20); };
+  auto loaded = [&] { return m.system.memory.readString(Buffer, 8); };
+  auto saves = stick.path / "PSP/SAVEDATA";
+  std::vector<const char*> slots = {"GAME01", "GAME02", "GAME03"};
+  std::vector<std::string> lines;
+  m.kernel.savedataTrace = [&](const std::string& text) { lines.push_back(text); };
+  listed(5, "ULUS10183", "GAME", slots, 7, "one");
+  CHECK(runSave(m), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS10183GAME01/DATA.BIN") == "one" && saved() == "GAME01", true);
+  CHECK(fs::exists(saves / "ULUS10183GAME"), false);
+  m.kernel.savedataTrace = nullptr;
+  std::string expected = "mode 5 (listsave), size 1536, game \"ULUS10183\", save \"GAME\", list \"GAME01\" \"GAME02\" "
+    "\"GAME03\", focus 7, chosen \"GAME01\", file \"DATA.BIN\", buffer 0x08930000 of 4096, data 3, \"ULUS10183GAME01\" "
+    "not there, title \"\" -> 0x00000000, save \"GAME01\"";
+  if(lines.size() != 1 || lines[0] != expected) std::printf("  trace: %s\n", lines.empty() ? "" : lines[0].c_str());
+  CHECK(lines.size() == 1 && lines[0] == expected, true);
+  listed(4, "ULUS10183", "GAME", slots, 3);
+  CHECK(runSave(m), 0);
+  CHECK(loaded() == "one" && saved() == "GAME01", true);
+  listed(5, "ULUS10183", "GAME01", slots, 0, "two");
+  CHECK(runSave(m), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS10183GAME01/DATA.BIN") == "two" && saved() == "GAME01", true);
+  for(u32 focus : {0u, 7u, 8u}) {
+    listed(5, "ULUS10183", "GAME", slots, focus, "three");
+    check(__LINE__, "saved", runSave(m), 0);
+    check(__LINE__, "to GAME01", stick.get("PSP/SAVEDATA/ULUS10183GAME01/DATA.BIN") == "three" && saved() == "GAME01",
+          true);
+  }
+  CHECK(!fs::exists(saves / "ULUS10183GAME") && !fs::exists(saves / "ULUS10183GAME02"), true);
+  //an older Phobos's GAME: loaded, then saved past to GAME01, which the next load takes, GAME left
+  fs::remove_all(saves / "ULUS10183GAME01");
+  stick.put("PSP/SAVEDATA/ULUS10183GAME/DATA.BIN", "old");
+  fs::last_write_time(saves / "ULUS10183GAME", fs::file_time_type::clock::now() - std::chrono::hours(1));
+  listed(4, "ULUS10183", "GAME", slots, 3);
+  CHECK(runSave(m), 0);
+  CHECK(loaded() == "old" && saved() == "GAME", true);
+  listed(5, "ULUS10183", "GAME", slots, 0, "new");
+  CHECK(runSave(m), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS10183GAME01/DATA.BIN") == "new" && saved() == "GAME01", true);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS10183GAME/DATA.BIN") == "old", true);
+  listed(4, "ULUS10183", "GAME", slots, 3);
+  CHECK(runSave(m), 0);
+  CHECK(loaded() == "new" && saved() == "GAME01", true);
+  //names their lists hold
+  listed(5, "ULJS00244", "LAPUCELLE000", {"LAPUCELLE000", "LAPUCELLE001", "LAPUCELLE002"}, 0, "pucelle");
+  CHECK(runSave(m), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULJS00244LAPUCELLE000/DATA.BIN") == "pucelle" && saved() == "LAPUCELLE000", true);
+  for(const char* data : {"first", "second"}) {
+    listed(5, "ULUS10280", "000", {"000", "001", "002"}, 7, data);
+    check(__LINE__, "saved", runSave(m), 0);
+    check(__LINE__, data, stick.get("PSP/SAVEDATA/ULUS10280000/DATA.BIN") == data && saved() == "000", true);
+  }
+  CHECK(fs::exists(saves / "ULUS10280001"), false);
+}
+
 //A save's name with '*' or '?' in it is a pattern (utility/savedata/idlist's "A?C" listed its ABC), naming no folder a
 //memory stick can hold. The list mode lists the game's saves it takes, in their names' order, as many as asked for:
 //Dissidia's "GameData*" its GameData saves and not its others, Final Fantasy Type-0's "GAMEDATA*" none where it has
@@ -1963,6 +2041,7 @@ auto utilityTests() -> Tests {
     {"utility savedata broken saves", savedataBroken},
     {"utility savedata through memstick: (Colin McRae Rally 2005 Plus)", savedataMemstick},
     {"utility savedata lists answered with no front end (7th Dragon 2020, Brandish)", savedataListAnswers},
+    {"utility savedata list saves go to their lists' names (Lumines II)", savedataListNames},
     {"utility savedata patterns (Dissidia, Final Fantasy Type-0)", savedataPatterns},
     {"utility savedata trace", savedataTrace},
     {"utility savedata over files the game emptied", savedataOverEmptied},

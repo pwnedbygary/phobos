@@ -245,10 +245,11 @@ auto Kernel::dialogKeyboard(u32 p, DialogRequest& request) -> void {
 //game's saves (its folders whose names start with the game's): every one, chosen (PPSSPP's notes take one for each
 //"<>", the first not yet listed, marked as unsure). Chosen beside a list's: loading or deleting from it also shows the
 //request's own save where it's there and not listed (savedata() takes it before the list where nothing is chosen, as
-//a list save or delete naming it is answered with no front end). A pattern (savePattern(): '*' or '?') names no save
-//a memory stick holds: in a list, or among the folders "<>" stands for, it's left out (chosen), and as the request's
-//own save in a list mode it's shown as none, with a list or without. Chosen: a list's names are shown whatever the
-//request's pattern takes (PPSSPP's notes show the list's names alone; Dissidia's "GameData*" takes all twenty of its).
+//a list delete naming it is answered with no front end), so saves an older Phobos made under a list save's own name
+//(Lumines II's GAME) still load. A pattern (savePattern(): '*' or '?') names no save a memory stick holds: in a
+//list, or among the folders "<>" stands for, it's left out (chosen), and as the request's own save in a list mode
+//it's shown as none, with a list or without. Chosen: a list's names are shown whatever the request's pattern takes
+//(PPSSPP's notes show the list's names alone; Dissidia's "GameData*" takes all twenty of its).
 //Mode 7 shows every save on the memory stick, of any game (pspautotests' utility/savedata/deletedata: its list all
 //delete went on after deleting the test's save, the PSP's memory stick holding others, and finished CANCEL); the
 //others, the one save they name. Each save as its PARAM.SFO describes it, with the size of its files, the time of its
@@ -495,10 +496,13 @@ auto Kernel::dialogSaved(u32 p, const DialogRequest& asked, const DialogAnswer& 
 //it names one that's there), whatever its save name, which names only the save focus 0 takes; or, that one broken,
 //the one the same focus takes among those that aren't (chosen: a player told it's corrupted takes another, the latest
 //still where the latest was focused; the focused one if all are broken). A list's save naming no save of its own
-//("", "<>", or a pattern: savePattern()) takes the list's first name, whatever the focus (chosen: where the automatic
-//answer's later loads will find it; a dialog focusing a new slot, 7 or 8, would spread the saves over the list, and a
-//load focusing the first would then take the oldest). Either name is written into the request's save name, as a choice
-//is (savedata()). Every other mode, a list save that names its save (chosen: that save), a list with no first name, a
+//("", "<>", or a pattern: savePattern()), or naming one its dialog doesn't show, takes the list's first name, whatever
+//the focus (chosen: where the automatic answer's later loads will find it; a dialog focusing a new slot, 7 or 8, would
+//spread the saves over the list, and a load focusing the first would then take the oldest). A PSP's list save shows
+//the list's names alone (dialogSaves()) and saves to the one chosen, its save name choosing only what focus 0 focuses:
+//Lumines II names "GAME" beside GAME01 to GAME03, and taken as it was named, its save made a folder no PSP's would.
+//Either name is written into the request's save name, as a choice is (savedata()). Every other mode, a list save
+//naming one of the saves its dialog shows (chosen: that one, which focus 0 takes), a list with no first name, a
 //game's name that isn't a plain one, a list save led by "<>" (to the game's folder alone) or by a pattern (refused)
 //and a list the dialog would show nothing from are answered by savedata() as before (no data to load, or a name
 //refused). Taking the list's first name whether there or not, a load from a list whose first save wasn't made
@@ -515,6 +519,13 @@ auto Kernel::savedataUnshown(u32 p) -> u32 {
   bool unnamed = save.empty() || save == "<>" || savePattern(save);
   if((mode != 4 && mode != 5) || first.empty() || !plainName(game, 13)) return savedata(p);
   if(mode == 5) {
+    if(!unnamed && plainName(save, 20)) {
+      DialogRequest request;
+      request.kind = DialogSavedata;
+      dialogSaves(p, request, false);
+      auto& shown = request.saves;
+      unnamed = std::none_of(shown.begin(), shown.end(), [&](auto& entry) { return entry.name == save; });
+    }
     bool takes = unnamed && first != "<>" && plainName(first, 20) && !savePattern(first);
     return takes ? savedata(p, &first) : savedata(p);
   }
