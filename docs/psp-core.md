@@ -14276,3 +14276,157 @@ machine's state): all 102 hashes the same in all 21, the state too (no layout ch
   `check-edata.py`, `compare-umd.sh`, `repeat.sh` and `runs/`, the game checks; `tests.sh` and `logs/`, the suites,
   `src-before/` and `io-3way.cpp` the trees before the fix and before the reconciliation; `hashkit/`, the scenes).
   Nothing was run on the RP6.
+
+## Part 98: ticks as RFC 2822 and RFC 3339 text (MediEvil's save details), a list save to its list's names (Lumines II), the depth-view loads' test deterministic
+
+On branch `cursor/psp-small-fixes-2b67` (a draft PR), on master `cc0638372` (part 97, #259); part 96 is #258's,
+still open. Deep play's batch 04 bugs 4 and 5 (both low), and a test that failed now and then on a loaded Mac. Clean
+room: the PSP's behaviour from pspautotests' `rtc/convert` (recorded on a PSP), uOFW's decompilation of the rtc
+module (`src/kd/rtc/rtc.c`, firmware 6.60) and Phobos's own model of the save dialog; PPSSPP's sceRtc read only as a
+design cross-check (it writes the same shape, but its RFC 3339 hundredths are a constant `.00` and its bad pointers
+-1, "not well tested": neither taken), nothing copied or translated; JPCSP not read. Save states are unchanged: no
+field added (`GE::Drawing::held` isn't state).
+
+### 1. MediEvil Resurrection's blank save details: sceRtcFormatRFC2822 and its family
+
+**The problem.** Batch 04's bug 4: MediEvil Resurrection calls sceRtcFormatRFC2822LocalTime (NID 0x7de6711b) just
+before its pause menu's SAVE GAME, and Phobos had none of the family (sceRtcFormatRFC2822, sceRtcFormatRFC3339 and the
+two LocalTime forms). The call did nothing ("not implemented yet") and the save's PARAM.SFO had an empty
+SAVEDATA_DETAIL, the line a PSP's save list shows under the save's title. Cube calls it too, as it makes its profile:
+its detail's second line came out as a stray byte (`"0% Complete.\n\x04"`, whatever the game's buffer held).
+
+**What a PSP does.**
+- pspautotests' `rtc/convert` recorded on a PSP (the lines Unknown W. Brackets added in 2013, `116693b781`), with no
+  time zone: 2012-01-30 02:12:15 and 900 microseconds as `Mon, 30 Jan 2012 02:12:15 +0000` and
+  `2012-01-30T02:12:15.00Z`; 2010-09-20 07:12:15 and 500 microseconds alike; and, after sceRtcParseDateTime's
+  failures, tick 0 as `0001-01-01T00:00:00.00Z`.
+- The lines those replaced came from calls with the wrong signature: the text's address the test's 16-byte date, the
+  tick whatever its stack held, the zone 256 (the buffer's size). The PSP's text ran on past the date into the buffer
+  the test printed: ` 04:16:00 +0416`, `:15.71+04:16` and `:07.29+04:16`. So the date and time are moved by the zone,
+  which is written as hours and minutes (`+0416`, and `+04:16` in RFC 3339, whose UTC is `Z`), and RFC 3339's seconds
+  carry the tick's hundredths, not a constant `.00`.
+- uOFW's rtc: the LocalTime forms check both pointers against the caller (`pspK1PtrOk`: an address with its top bit
+  set, the kernel's, is refused to a program) and call the zone's form with the two zone settings added
+  (`ctx.cUnk + ctx.dUnk`, the time zone and daylight saving time, as its local clock and its conversions use them).
+  RFC3339LocalTime, whose body uOFW gives as checked against the firmware's code ("ASM OK"), refuses with
+  PRIV_REQUIRED (0x80000023); RFC2822LocalTime, whose body it doesn't mark so, with INVALID_POINTER (0x80000103). The
+  two forms with a zone aren't worked out there.
+
+**The change** (`rtc.cpp`, `system.cpp`, `kernel.hpp`, `kernel.cpp`). `rtcFormat()` reads the tick (microseconds
+since 0001-01-01 00:00:00 UTC, as sceRtcGetCurrentTick gives it, sceRtcGetTickResolution's 1,000,000 a second), moves
+it by the zone's minutes, and writes `Ddd, DD Mon YYYY HH:MM:SS +HHMM` or `YYYY-MM-DDTHH:MM:SS.hh` and `Z` or
+`+HH:MM`, then a NUL, and returns 0. The LocalTime forms take the zone the system's settings give, `localZone()`: the
+host's zone at the clock's now and an hour more while its daylight saving time is kept, as sceUtilityGetSystemParamInt
+reports the two settings (shared now with sceRtcConvertUtcToLocalTime, which worked it out itself). Chosen where no
+recording says: a day below 10 and a year below 1000 zero-padded, as RFC 3339's recorded year is; a zone west of UTC
+as `-` and its size; the hundredths cut, not rounded; the date as sceRtcSetTick gives it (a year past 65535 in its
+16 bits: the largest tick is the year 60267); a pointer with its top bit set refused as uOFW has the LocalTime forms
+refuse it, and by the forms with a zone with PRIV_REQUIRED, as the module's other functions; a pointer outside the
+program's memory, where a PSP would fault, INVALID_POINTER, as the tick arithmetic's. Nothing is written when refused.
+
+**Test** (`kernel ticks as RFC 2822 and RFC 3339 text`, tests/psp/power.cpp): the recordings above; the zone of 256
+minutes, with hundredths; a zone west of UTC across a year's end (`Thu, 31 Dec 2026 22:00:00 -0500`); zones of 330
+and -90 minutes; a day below 10; every month's and day's name; hundredths cut (`23:59:59.99Z`, still the same day);
+the largest tick and the date sceRtcSetTick gives it; the clock's own tick; the LocalTime forms with the host in New
+York in summer (`-0400`) and in winter (`-0500`, for the same July tick: the settings' zone for every tick), in Tokyo
+(`+09:00`) and in UTC (`Z`); only the text and its NUL written; and the refusals (the kernel's addresses for the text
+and the tick, address 0, a tick or a text running past RAM's end), nothing written. Every expected text was worked out
+apart from the code (Python's calendar, Howard Hinnant's days-to-date for the largest tick). On master it fails 117
+checks: nothing is written, and the four functions are "not implemented".
+
+**Games** (master's runner and the branch's, the batch's runs on fresh copies of the batch's sticks, one runner at a
+time; `~/phobos-work/scratch/small-fixes/savecheck.sh`):
+- MediEvil Resurrection (from `st-t2.bin` with `sv.txt`, 600 frames, a copy of `stick-t2`): master writes
+  SAVEDATA_DETAIL `""` and notes the missing function; the branch writes `Wed, 14 Oct 2026 05:46:56 -0400` (the
+  state's clock, in the Mac's zone), with no note, DATA.BIN and ICON0.PNG byte for byte master's, the savedata trace
+  line for line. The next boot's LOAD GAME (`rb.txt`, 4800 frames, on a copy of the branch's stick) list-loads it
+  (`read 32850`), the stick unchanged.
+- Cube (`script.txt` from boot, a fresh stick, the clock pinned): master's detail `"0% Complete.\n\x04"`, the
+  branch's `"0% Complete.\nMon, 13 Oct 2025 20:00:24 -0400"`; PROFILE.PRO and the icons byte for byte master's. The
+  next boot's autoload (`reload.txt`) reads it back (`read 2908`).
+
+### 2. Lumines II's list save: GAME01, not GAME
+
+**The problem.** Batch 04's bug 5: Lumines II saves its profile by a list save with the save name `GAME` and the list
+`GAME01`, `GAME02`, `GAME03`, focus 7 (the first new). Phobos's answer saved it to `ULUS10183GAME`. The next boot's
+list load (focus 3, the latest) took that folder (a list load shows the request's own save where it's there) and
+wrote `GAME` back, and the save after it (focus 0, by name) went there again. It round-tripped in Phobos, but no PSP
+makes that folder: a PSP's dialog wouldn't show Phobos's profile, and a profile carried over from a PSP (in GAME01)
+would sit beside Phobos's saves, never written to by them.
+
+**What a PSP does.** A list save's dialog shows the list's names (saveNameList), each there or new, and saves to the
+one the player chooses, writing its name back into the request; the request's own save name only picks what focus 0
+(by name) focuses. Phobos's front end for the dialogs (`dialogSaves()`) already showed the list's names alone; the
+automatic answer (`savedataUnshown()`, for a dialog no front end shows: the runner's, and the app's with "Dialogs"
+off) took the list's first name only when the save name was empty, `<>` or a pattern, and a plain one as it was,
+whether the list held it or not.
+
+**The change** (`dialogs.cpp`; the comments in `utility.cpp` too). The automatic answer to a list save looks at the
+saves its dialog shows (`dialogSaves()`); a plain save name that isn't among them names none of them, and the list's
+first name is taken, as for none. Which of the list's names stays the earlier choice, the first whatever the focus,
+where the automatic answer's later loads find it (a PSP's player would take the focused one; on a fresh stick, as
+here, focus 7 focuses the first). A name its list holds is still that save: every other plain-named list save in
+deep play's logs names one of its list's (La Pucelle Ragnarok's LAPUCELLE000 with focus 0, Gunhound EX's GHSAVE00
+with 1, Manhunt 2's 000 with 7, ULUS10476's USER0 with 3). Saves an older Phobos made under GAME still load (a list
+load still shows the request's own save where it's there), and the save after one goes to GAME01, which the next list
+load (the latest) takes; GAME is left as it was.
+
+**Test** (`utility savedata list saves go to their lists' names (Lumines II)`, tests/psp/utility.cpp): on a fresh
+stick, `GAME` beside GAME01-GAME03 with focus 7 goes to GAME01, written back, and the trace shows it chosen; the next
+load (focus 3) takes GAME01 and writes it back, and the save by that name (focus 0) goes there again; `GAME` with
+GAME01 there goes to GAME01 whatever the focus (0, 7, 8); an older GAME save alone loads, the save after it goes to
+GAME01, the next load takes GAME01, and GAME keeps its bytes; LAPUCELLE000 (focus 0) and Manhunt 2's 000 (focus 7,
+twice: the second over the first, not to 001) as before. On master it fails 11 checks (the save in GAME, the trace,
+the loads, GAME written over); the La Pucelle and Manhunt checks pass there, as they should.
+
+**Games.** Lumines II, batch 04's repro (a fresh stick, `script.txt`, 2200 frames, the clock pinned): master writes
+`ULUS10183GAME`; the branch `ULUS10183GAME01` (`[001515] ... focus 7, chosen "GAME01" ... -> 0x00000000, save
+"GAME01"`), DATA.BIN, ICON0.PNG and PIC1.PNG byte for byte master's, PARAM.SFO apart from its directory's name.
+The next boot (`t1.txt`, 1700 frames, on a copy of the branch's stick) list-loads GAME01 (`focus 3, chosen "GAME01"
+... read 18488, save "GAME01"`), goes straight to the menu as batch 04's reboot did (the first boot's profile screens
+skipped), and its save at 1215 names GAME01 (focus 0) and goes there.
+
+### 3. The depth-view loads' test made deterministic
+
+**The problem.** `ge loads through the depth buffer's views wait for the threads` (tests/psp/ge.cpp) checks that a
+batch drawing the depths is still being drawn right after the list is queued, else the loads it then makes would wait
+for nothing. On a loaded host the drawing threads could finish the batch before the test looked: `drawing = 0x0,
+expected 0x1` in the colinsave, npdrm-modules, round6 and cpu-round3 runs, each passing when run again.
+
+**The change.** `GE::Drawing::held` (`ge.hpp`, `threads.cpp`): while it's set, the workers take no batch (one more
+term in their wait's condition, read under the mutex). Nothing but the test sets it. The test holds them from before
+the list is queued till it has seen the batch still drawn, then either lets them go as the loads come (the test as
+it was: the workers drawing while the CPU runs on, whichever finishes first) or holds them through the loads, which
+must then wait for the batch, drawing it themselves. Both give the one thread's depths, at two and four threads,
+compiled and interpreted.
+
+**Shown.** With a 200 ms sleep added just after the list is queued (scratch only), master's test fails its
+precondition at both thread counts with both engines (4 checks, the logs' message); the branch's test with the same
+sleep passes, sanitized.
+
+### Checks
+
+On `7b1c3d49c` (the three fixes and their tests): tests/psp 550 groups, 0 failures, sanitized
+(`detect_container_overflow=0`) and unsanitized, the Vulkan groups run on the Mac's GPU (none skipped); tests/allegrex
+78 groups, 0 failures; tests/psp/ares 348 checks, 0 failed. GCC 13.3 (Ubuntu 24.04 in Docker, `-Wall -Wextra
+-Werror`): `kernel.cpp` and the three test files build; the GE's unity file only with `four.cpp`'s twelve
+maybe-uninitialized warnings, which master's gives the same. The 21 scenes in Software (the kit's bench runners,
+master's against the branch's, 100 frames from each scene's state, every frame's picture and VRAM settled, then RAM
+and the machine's state): all 102 hashes master's in all 21. Batch 04's other saves (master's runner and the
+branch's, the installs task's runs on copies of the same sticks): Gundam NEXT PLUS, Kurohyou 1, Lunar, Killzone,
+Lumines and La Pucelle Ragnarok byte for byte master's (and as the installs task's runs of 14 Oct wrote them), their
+savedata traces line for line. CI: the draft PR's checks.
+
+### Left
+
+- Not recorded on a PSP, chosen as above: RFC 2822's day below 10 and year below 1000 zero-padded, a zone west of UTC
+  as `-` and its size, the hundredths cut, years past 65535, zones of 100 hours or more (more digits), and the error
+  answers of the two forms with a zone. RFC2822LocalTime's INVALID_POINTER follows a body uOFW doesn't mark as checked,
+  where its RFC 3339 twin's PRIV_REQUIRED is.
+- sceRtcParseRFC3339 and sceRtcParseDateTime (rtc/convert records the second) aren't done: no game in the library is
+  known to call them.
+- The automatic answer still takes a list's first name whatever the focus (a choice of Phobos's, as before); a
+  front end's player chooses.
+- Scratch: `~/phobos-work/scratch/small-fixes` (`NOTES.md`; `refs/`, the sources read; `savecheck.sh`,
+  `rebootcheck.sh`, `games.sh` and `logs/games.log`, the game checks; `before-src/`, master with the new tests;
+  `delay-patch.py`, the test's sleep; `hashkit/`, the scenes). Nothing was run on the RP6.

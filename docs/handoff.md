@@ -30,6 +30,38 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP: ticks as RFC 2822 and RFC 3339 text (MediEvil's save details), a list save to its list's names (Lumines II), the depth-view loads' test deterministic — 2026-10-15
+
+Branch `cursor/psp-small-fixes-2b67`, on master `cc0638372` (part 97, #259); a draft PR. docs/psp-core.md,
+part 98, has the evidence (part 96 is #258's, still open). Clean room: pspautotests' `rtc/convert` (recorded on a
+PSP) and uOFW's decompilation of the rtc module; PPSSPP's sceRtc only as a design cross-check; JPCSP not read. Save
+states unchanged.
+- **MediEvil Resurrection's blank save details** (deep play batch 04, bug 4): sceRtcFormatRFC2822LocalTime and the
+  rest of its family (sceRtcFormatRFC2822, sceRtcFormatRFC3339, sceRtcFormatRFC3339LocalTime) weren't there. Now as
+  `rtc/convert` recorded them on a PSP (`Mon, 30 Jan 2012 02:12:15 +0000`, `2012-01-30T02:12:15.00Z`; a zone as
+  `+0416` and `+04:16`, the seconds' hundredths), the tick microseconds since 0001-01-01; the LocalTime forms with
+  the zone the settings give (`localZone()`, the host's zone and its daylight saving time, as
+  sceUtilityGetSystemParamInt reports them), the kernel's addresses refused as uOFW's rtc refuses them. MediEvil's
+  SAVEDATA_DETAIL `""` -> `Wed, 14 Oct 2026 05:46:56 -0400`; Cube's detail's second line, a stray byte, now its date.
+- **Lumines II's list save** (bug 5): the automatic answer kept a save name the list doesn't hold (`GAME` beside
+  GAME01-GAME03) and made `ULUS10183GAME`, where a PSP's dialog shows and saves to the list's names alone. Such a name
+  now names none, and the list's first name is taken (GAME01), as for none; a name its list holds is kept, as every
+  other list save in deep play's logs has. Older GAME saves still load, and the save after goes to GAME01.
+- **The flaky test** (`ge loads through the depth buffer's views wait for the threads`, which failed on loaded Macs in
+  the colinsave, npdrm-modules, round6 and cpu-round3 runs): `GE::Drawing::held` keeps the drawing threads from taking
+  a batch; the test holds them till it has seen the batch still drawn, then lets them go as the loads come, or holds
+  them through the loads, which then wait for the batch and draw it themselves. With a 200 ms sleep after the list,
+  master's test fails 4 checks; the branch's passes.
+- **Tests**: two new groups (the RTC texts, 117 checks failing on master; Lumines II's list saves, 11) and the
+  depth-view loads' group changed.
+- **Checks**: tests/psp 550 groups, 0 failures, sanitized and unsanitized; tests/allegrex 78/0; tests/psp/ares
+  348/0; GCC 13.3 `-Werror` (only master's own `four.cpp` warnings); the 21 scenes in Software, every hash master's;
+  batch 04's saves of Gundam NEXT PLUS, Kurohyou 1, Lunar, Killzone, Lumines and La Pucelle byte for byte master's,
+  their traces line for line.
+- **Left**: what no PSP recording shows, chosen (RFC 2822's day below 10 zero-padded, a zone west of UTC as `-` and its
+  size, the hundredths cut, the two zone forms' refusals); sceRtcParseRFC3339 and sceRtcParseDateTime not done (no
+  game in the library known to call them).
+
 ## PSP NPDRM: EDATA decrypted — the PGD past the EDATA's header, on the memory stick too, its size and end the data's; a PGD file's end its data's — 2026-10-14
 
 Branch `cursor/psp-pgd-edata-2b67`, on master `14b181707` (part 95, #257, with #256); draft PR #259.
