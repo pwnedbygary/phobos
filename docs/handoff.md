@@ -910,6 +910,22 @@ scripts and CI only: the app's build and its flags are unchanged.
   before, never reached. None is fixed here: `four.cpp`'s wants measuring (above), #229 is changing the kernel's
   serialization, nall is shared with every ares system, and a change to `crypto.cpp` alone wouldn't turn the lane
   green.
+- **Settled** (#249, 2026-10-15, the owner's call: fixed in the code, `-Werror` kept): each of the four is written so
+  GCC follows it, with nothing it does changed. `spriteFours()` sets `four.depth = s32x4{};` before `depthFirst()`,
+  as `triangleFours()` does, and starts each row's `downAxis[]` at `{}`; the loaded samples' right stick is centred
+  in the samples' own loop in `serialization.cpp`, not in a loop of its own that GCC turned into 64 stores past
+  `Controller::buttons`; `pspIconKey()` writes the SHA-256's bytes (`output()`) as lowercase hexadecimal itself, not
+  through nall's string (nall unchanged; `iconKeys()` now pins a key's value, so the cache's file names stay as they
+  were); `crypto.cpp`'s `put32()` stores through `at()`. Checks: GCC 13.3 (Ubuntu 24.04 in Docker, arm64: x86-64's
+  packages couldn't be fetched) at the lane's flags builds all 52 files (master's `spins.cpp` the 52nd) but
+  `kernel.cpp`, for a warning only aarch64's GCC gives (below); CI's x86-64 lane: the PR's checks. The 21 scenes in
+  Software, Vulkan fast and accurate, master's bench runner against the fixed one: all 63 sets of hashes master's.
+  Army of Two's gameplay and menu in Software, its sprite-heaviest scenes (42% and 32% of their fours sprites'):
+  the same instructions a frame within the runs' spread (+0.00% and +0.02% drawn on one thread, -0.05% and +0.05% on
+  four), the times within their noise. tests/psp 555/0 sanitized, unsanitized and built as the app is (Apple clang),
+  tests/allegrex 78/0, tests/psp/ares 348/0. Left: aarch64's GCC 13.3 also rejects `kernel.cpp` at `pools.cpp:216`
+  (`-Warray-bounds` in a `std::vector`'s insert of an initializer list, a false positive), which x86-64's doesn't; no
+  lane builds tests/psp so on ARM64.
 - **Checks** (the Mac, arm64, Apple clang 21): `PHOBOS_TESTS_MODE=release tests/allegrex/run-tests.sh` 60/0 (7
   objects of its own, 18 s with the run); `tests/rsp-vu-neon/run-tests.sh 3000 0x5253505655`: 10,420,000 checks, no
   NEON or reference mismatch; actionlint on the workflows. CI on #247 (run 38439997353): Allegrex 60/0 sanitized and
