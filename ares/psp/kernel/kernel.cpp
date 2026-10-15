@@ -288,6 +288,10 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
         {"sceRtcTickAddYears", &Kernel::sceRtcTickAddYears}}) {
     add("sceRtc", name, handler);
   }
+  add("sceRtc",            "sceRtcFormatRFC2822",           &Kernel::sceRtcFormatRFC2822);
+  add("sceRtc",            "sceRtcFormatRFC2822LocalTime",  &Kernel::sceRtcFormatRFC2822LocalTime);
+  add("sceRtc",            "sceRtcFormatRFC3339",           &Kernel::sceRtcFormatRFC3339);
+  add("sceRtc",            "sceRtcFormatRFC3339LocalTime",  &Kernel::sceRtcFormatRFC3339LocalTime);
   add("sceOpenPSID",       "sceOpenPSIDGetOpenPSID",        &Kernel::sceOpenPSIDGetOpenPSID);
   add("SysMemUserForUser", "sceKernelPrintf",               &Kernel::sceKernelPrintf);
   //the kernel's own debug printf, which kernel modules print with (pspautotests' modules/loadexec/simple)

@@ -95,7 +95,9 @@ auto GE::worker() -> void {
     Batch* batch;
     {
       std::unique_lock lock(drawing.mutex);
-      drawing.wake.wait(lock, [&] { return drawing.quit || (drawing.drawn && drawing.round != seen); });
+      drawing.wake.wait(lock, [&] {
+        return drawing.quit || (!drawing.held && drawing.drawn && drawing.round != seen);
+      });
       if(drawing.quit) return;
       seen = drawing.round;
       batch = drawing.drawn;

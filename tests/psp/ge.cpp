@@ -1358,7 +1358,9 @@ static auto geThreads() -> void {
 //A load through VRAM's fourth copy (the depth buffer as the GE has it) of depths a batch still draws, and through its
 //second copy: the batch is waited for, as for a load through the first copy (only a hardware renderer's depth isn't
 //memory's to wait for: Memory::vramDrawnOver's depthLoad). The depths found are those drawing it all on one thread
-//writes, compiled loads and the interpreter's alike.
+//writes, compiled loads and the interpreter's alike. The drawing threads are held till the batch is seen still being
+//drawn (on a busy host they could draw it all first, and the loads would wait for nothing), then let go as the loads
+//come, or held through them, so that the loads must wait for the batch, drawing it themselves.
 static auto geDepthViewLoads() -> void {
   constexpr u32 Depth = 0x11'0000;  //(VRAM offset: 512 depths a row)
   auto build = [&](Memory& memory) {
@@ -1386,10 +1388,18 @@ static auto geDepthViewLoads() -> void {
     list.put(GE::Finish), list.put(GE::End);
   };
   u32 middle = Depth + (136 * 512 + 240) * 2, corner = Depth + (60 * 512 + 300) * 2;
-  auto loads = [&](u32 threads, bool recompile) {
+  auto loads = [&](u32 threads, bool recompile, bool heldThrough) {
     KernelMachine m;
     m.system.ge.setThreads(threads);
     m.system.ge.drawing.shared = 0;
+    auto hold = [&](bool held) {
+      {
+        std::lock_guard lock(m.system.ge.drawing.mutex);
+        m.system.ge.drawing.held = held;
+      }
+      m.system.ge.drawing.wake.notify_all();
+    };
+    hold(true);
     build(m.system.memory);
     m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
     if(threads > 1) {  //(a batch drawing the depths still being drawn: else the loads wait for nothing)
@@ -1399,18 +1409,22 @@ static auto geDepthViewLoads() -> void {
       }
       CHECK(drawing, true);
     }
+    if(!heldThrough) hold(false);
     u32 fourth = 0x0460'0000 + middle, second = 0x0420'0000 + Memory::vramSeen(1, Memory::vramOffset(3, corner));
     m.system.runProgram(0x0890'0000, {lui(t0, fourth >> 16), ori(t0, t0, fourth & 0xffff), lhu(t1, 0, t0),
                                       lui(t2, second >> 16), ori(t2, t2, second & 0xffff), lhu(t3, 0, t2),
                                       lui(t4, 0x0892), sw(t1, 0, t4), sw(t3, 4, t4)}, recompile);
+    hold(false);
     m.system.ge.settle();
     return std::array<u32, 2>{m.system.memory.read(4, 0x0892'0000), m.system.memory.read(4, 0x0892'0004)};
   };
-  auto one = loads(1, false);
+  auto one = loads(1, false, false);
   CHECK(one[0], 59000u);  //(the last sprite over each, its depth written as it was drawn)
   CHECK(one[1], 57000u);
   for(u32 threads : {2u, 4u}) {
-    for(bool recompile : {false, true}) CHECK(loads(threads, recompile) == one, true);
+    for(bool recompile : {false, true}) {
+      for(bool heldThrough : {false, true}) CHECK(loads(threads, recompile, heldThrough) == one, true);
+    }
   }
 }
 
