@@ -14336,11 +14336,14 @@ running while it copies, finished, shutting down.
   save's folder by one rename once every file and PARAM.SFO are written; where the folder is there already, each file
   is moved into it over the one of its name, PARAM.SFO last. Programs can neither see nor reach that folder
   (`io.cpp`): `resolve()` answers "not found" for any memory stick path whose first name is `.phobos-install`,
-  whatever its case and however the path is written (`fatms0:`, `..`, from the working folder), so no game can open,
-  make, remove or rename anything in it, and sceIoDopen of the stick's top leaves it out; the savedata utility looks
-  in PSP/SAVEDATA alone. (Without this, a game's sceIoRemove and sceIoRmdir took a running install's copy away on
-  `1fbabdf43`, below.) Phobos stopped part way (killed, the machine reset, the game aborting the dialog, a state
-  loaded) leaves the saves as they were, never a half folder a game would take for its install: the savedata utility
+  whatever its case, with dots or spaces at its end (which Windows and Linux's FAT driver drop from a name), and
+  however the path is written (`fatms0:`, `..`, from the working folder); and for any path whose real place, links
+  followed, is in it, compared by name and as a file (`std::filesystem::equivalent`), so a link to it or a short 8.3
+  name a FAT host gives it doesn't reach it either. So no game can open, make, remove or rename anything in it, and
+  sceIoDopen of the stick's top leaves it out; the savedata utility looks in PSP/SAVEDATA alone. (Without this, a
+  game's sceIoRemove and sceIoRmdir took a running install's copy away on `1fbabdf43`, below.) Phobos stopped part
+  way (killed, the machine reset, the game aborting the dialog, a state loaded) leaves the saves as they were, never
+  a half folder a game would take for its install: the savedata utility
   still says NO_DATA for it. Aborted, reset or a state loaded, the copy is taken away at once. As one install runs at a
   time, whatever is in `.phobos-install` when an install starts, or when the memory stick is put in at power on
   (`mount()`, after the kernel's power has given up any install), is a copy left so, and all of it is taken away
@@ -14349,6 +14352,14 @@ running while it copies, finished, shutting down.
   followed; a link in its place is taken away itself at power on, and an install that finds one there gives up
   (0x80111904) with nothing behind it touched; and where something in it can't be taken away (no permission), the
   install answers 0x80111904 before anything is written, PSP/SAVEDATA untouched.
+- **The copy checked as it goes.** Only the host can change the copy (programs can't reach it), but a host may: a tool
+  keeping the memory stick in step with another device's, say, that mirrors that device's power-on cleanup. Before
+  each piece the copy must be as the install left it: nothing yet before a file's first piece, and after that a file
+  of its own (not a link) as long as what's been copied. At the end, before PARAM.SFO is written, every file must be a
+  file of its own as long as the disc's. Otherwise the install gives up with 0x80111904 and the copy is taken away,
+  as when a write fails. Before this, later pieces were added at whatever end a file had: a copy taken away after
+  the first piece was made again and installed 1.5 MiB of the test's 2.5 MiB, answered 0. A link in a copy's place
+  would have been written through, its target off the stick added to or cut short.
 - **Not state.** The copy's place isn't in a save state (so no layout change, and every state the same as master's):
   loading a state takes the copy's folder away, and an install running in the loaded state starts again at its next
   Update, its progress from 0. Phobos never loads states behind the player's back (the stored "run ahead" setting is
@@ -14363,7 +14374,8 @@ running while it copies, finished, shutting down.
   reports above); chosen too for names that would lead out of SAVEDATA, a folder's name ending in '.' or ' ' (FAT and
   Windows drop those, so "DATA." would go into DATA's folder on one host and be a folder of its own on another), a
   file where the folder goes (found at the first Update, before anything is copied, and looked at again at the end),
-  a copy left before that can't be taken away, a write failing with room on the host, and the disc failing to read.
+  a copy left before that can't be taken away, a copy the host changed meanwhile, a write failing with room on the
+  host, and the disc failing to read.
   **0x80111908**, a mode of 2 or more (PPSSPP's notes). The free space is the memory stick's as every function tells
   it (io.cpp's 57,344 free clusters of 32 KiB): the install takes each file in whole clusters, one for PARAM.SFO and
   one for the folder, as savedata's sizes count a save, and more than the free clusters is no space before anything is
@@ -14430,10 +14442,18 @@ running while it copies, finished, shutting down.
 - `... the copies' folder, hidden from programs, links in its place`: while a copy runs, sceIoDopen of `ms0:/` lists
   only `NOTE.TXT` and `PSP`; sceIoGetstat, sceIoOpen (to read, to write, to make a file), sceIoMkdir, sceIoRemove,
   sceIoRmdir, sceIoRename (to it and from it) and sceIoDopen on it, in other cases, through `..`, from the working
-  folder and through `fatms0:` all answer "not found", and the install then completes. A link in its place to a
-  folder off the stick: the stick mounted takes the link away, the folder behind it untouched; one made while the
-  machine runs makes the install answer 0x80111904, the folder behind it untouched. Links inside it, to a folder and a
-  file off the stick: the stick mounted, and an install's start, take the links away, never what they lead to.
+  folder, through `fatms0:`, with dots and spaces at its name's end (sceIoMkdir of `ms0:/.phobos-install.` too), and
+  through links to it at the top (`ALIAS`) and in PSP (`PSP/INTO`) all answer "not found", and the install then
+  completes. A link in its place to a folder off the stick: the stick mounted takes the link away, the folder behind
+  it untouched; one made while the machine runs makes the install answer 0x80111904, the folder behind it untouched.
+  Links inside it, to a folder and a file off the stick: the stick mounted, and an install's start, take the links
+  away, never what they lead to.
+- `... its copy changed behind its back`: after the first piece, the host takes the copy's DATA.BIN away, cuts it to
+  4 KiB, or puts a link to a file off the stick in its place (0x80111904 at the next Update), or puts such a link
+  where ICON0.PNG is yet to go (0x80111904 at the Update that reaches it); on a disc of a 1,000-byte file and a 2 MiB
+  one, the small file, copied whole at the first Update, taken away or cut to 10 bytes (0x80111904 at the end). Each
+  time nothing is among the saves, no copy is left, the file off the stick is untouched, and the next install
+  installs whole.
 - `... a state saved part way`: the state round-trips; loaded into another machine and into the same one, the install
   starts again and installs whole.
 - `... over an install there`: over a save the savedata utility made: INSDIR's files written over (a longer DATA.BIN
@@ -14460,6 +14480,13 @@ the copy, and a leftover that couldn't be taken away was passed over. The copies
 every function reached it, the program's sceIoRemove and sceIoRmdir took the running install's copy away (the
 install then failed), and the links in its place and in it stayed. sceIoChstat's 9: the folder was made read-only and
 unwritable (no file could be made in it), and the device's top was changed and made unwritable.
+
+On the second round's head with the third round's tests (`4b671947d`, `beforesrc3`, unsanitized): the two groups
+the round changed fail, 26 checks, and the other 556 pass. The copies' folder's 9: sceIoMkdir made
+`.phobos-install.` (a folder of its own on the Mac, the copies' folder itself on a FAT host), both links reached the
+folder, and sceIoRemove through `ALIAS` took the running copy's DATA.BIN away. The changed copy's 17: each change
+installed short or wrote through the link and answered 0 (the file off the stick added to, and cut short and
+overwritten with the icon).
 
 **The games** (runners built from master and from this branch; every memory stick a fresh folder under
 `~/phobos-work/scratch/gamedata-install`).
@@ -14502,6 +14529,25 @@ was built before the attributes were fixed and still gave 0x17, and on the secon
 game changes no folder at all (`kh/run-r2`): it reads the flag back and clears it where it's set (above). Kept, as
 the review asked: the merge over an install there, which no clean-room recording covers (above).
 
+**The re-review.** An independent review of the second round (`063633d84` and `4b671947d`, read-only, with a driver
+of its own, 21 groups passing plain and under the address and undefined-behavior sanitizers) approved it, with one
+should-fix the first round already had: the host could turn the copy into a short install, a file of it taken away
+or cut short between Updates and then made again or added to (`install.cpp`'s pieces appended, nothing checked at
+the end). Taken in a third round ("The copy checked as it goes", above). Its optional nit, taken too: on Windows
+(and on Linux's FAT driver) a name with dots or spaces at its end, or the short 8.3 name the host gives the folder,
+would reach the copies' folder past a name compared as written. Now such names are compared with the dots and
+spaces dropped, and the path's real place is compared with the folder as a file, which a short name can't get past.
+It also found its first review's Kingdom Hearts nit wrong (`kh/run-v2`'s runner predated the attributes' fix).
+
+**Checks** (the third round, `d5771d7fb`). tests/psp: 558 groups, 0 failures, sanitized
+(`detect_container_overflow=0`) and unsanitized (`r3-tests-asan.log`, `r3-tests-plain.log`); tests/allegrex 78 groups,
+0 failures; tests/psp/ares 348 checks, 0 failed. GCC 13.3 not run here again (Ubuntu's archive still unreachable from
+the Mac): CI's Linux build compiles with it. No Kotlin changed. Kingdom Hearts with the third round's runner
+(`kh/run-r3`, `run-r3boot`): the install and the boot (a 3 MiB copy left in `.phobos-install` again) as in the
+second round, every file and frame the same, nothing left in `.phobos-install`, 41 reads of BBS1.DAT from the stick
+and none from the disc. The 21 scenes in Software (master's bench runner against the third round's, as `resolve()`
+changed): all 102 hashes the same in all 21, the state too.
+
 **Checks** (the second round, `063633d84`). tests/psp: 557 groups, 0 failures, sanitized
 (`detect_container_overflow=0`) and unsanitized; tests/allegrex 78 groups, 0 failures; tests/psp/ares 348 checks, 0
 failed; the runner's test passes. GCC 13.3 wasn't run here this round (its container couldn't reach Ubuntu's
@@ -14540,6 +14586,11 @@ sticks, the clock pinned): the same files byte for byte and the same savedata re
   says a PSP's has one.
 - sceIoChstat's times, size and private words are answered but not changed (no recording has them), and a folder's
   read-only flag isn't kept (chosen, above).
+- A short 8.3 name for the copies' folder is kept out by comparing files, which wasn't tried on a host that makes such
+  names (Windows, Linux's FAT driver): the Mac's file systems have none. The tests try the dots and spaces, the cases
+  and the links.
+- The copy is checked by its files' lengths, not their bytes: a host that put other bytes of the same length in a
+  file of the copy would go unseen.
 - Scratch: `~/phobos-work/scratch/gamedata-install` (`NOTES.md`; `disclist/`, a scratch lister of a disc image's
   folders; `insdir-survey.txt`; `imports-survey.sh` and `survey/`; `kh/` with the dump, `code.dis` and the runs;
   `gunhound/`; `7d/`; `beforesrc/` and `tests-before-*.log`, the tests on master; `beforesrc2/` and
