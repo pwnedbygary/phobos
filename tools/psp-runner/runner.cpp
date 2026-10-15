@@ -36,6 +36,9 @@
 //    --fonts DIR                the PSP's system fonts (the .pgf files of a PSP's flash0), for the game's text
 //    --trace-savedata           each savedata request and its answer, a line with its frame: the mode, the game's
 //                                and the save's names, the data file's, the sizes and the result
+//    --trace-io                 each file request (sceIo*) and its answer, a line with its frame: the PSP's time and
+//                                the thread, the descriptor with its path and position, the sizes, buffers and a hash
+//                                of the bytes moved, and each asynchronous request as it's done
 //    --report FILE              the run as JSON ("phobos-psp-runner 1"; tools/psp-runner/README.md): the runner's
 //                                build, the game, what was asked and what ran (the renderer, its device and
 //                                resolution, the engine, the GE's threads, the clock), and what came of it
@@ -456,7 +459,7 @@ auto main(int argc, char** argv) -> int {
   fs::path reportFile;
   u32 startTime = 0, screenStopsAt = 0;
   bool startTimeGiven = false, framesGiven = false;
-  bool interpreter = false, traceSavedata = false;
+  bool interpreter = false, traceSavedata = false, traceIo = false;
   for(int i = 1; i < argc; i++) {
     auto option = std::string{argv[i]};
     auto next = [&]() -> std::string {
@@ -500,6 +503,7 @@ auto main(int argc, char** argv) -> int {
     else if(option == "--memory-stick") memoryStick = next();
     else if(option == "--fonts") fonts = next();
     else if(option == "--trace-savedata") traceSavedata = true;
+    else if(option == "--trace-io") traceIo = true;
     else if(option == "--report") reportFile = next();
     else if(option == "--start-time") startTime = parseUint(next(), option), startTimeGiven = true;
     else if(option == "--screen-stops-at") screenStopsAt = parseUint(next(), option);
@@ -657,6 +661,11 @@ auto main(int argc, char** argv) -> int {
   if(traceSavedata) {
     psp.kernel.savedataTrace = [&](const std::string& text) {
       std::printf("[%06u] savedata: %s\n", frameNumber.load(), text.c_str());
+    };
+  }
+  if(traceIo) {
+    psp.kernel.ioTrace = [&](const std::string& text) {
+      std::printf("[%06u] io: %s\n", frameNumber.load(), text.c_str());
     };
   }
 

@@ -266,6 +266,14 @@ auto conversions() -> void {
   CHECK(pack.cpu.vfpu.r[S(3, 0, 0)], 0x7f0200ffu);
   CHECK(pack.cpu.vfpu.r[S(4, 0, 0)], 0x001fffffu);
   CHECK(pack.cpu.vfpu.r[S(4, 1, 0)], 0xf80007e0u);
+
+  //vfim of a half NaN gives its bits as a float's, a signaling one's too (not quieted), as of an infinity and a -0.
+  for(auto [value, expected] : {std::pair{0xffd8u, 0xff8003d8u}, {0x7c01u, 0x7f800001u}, {0x7e00u, 0x7f800200u},
+                                 {0xfc00u, 0xff800000u}, {0x8000u, 0x80000000u}}) {
+    Machine constant;
+    constant.run({vfim(S(3, 0, 0), value)});
+    CHECK(constant.cpu.vfpu.r[S(3, 0, 0)], expected);
+  }
 }
 
 auto functions() -> void {
@@ -982,6 +990,13 @@ auto compiledLanes() -> void {
     {"vcos", 0b110100000, Vcos, 1}, {"vexp2", 0b110100000, Vexp2, 1}, {"vlog2", 0b110100000, Vlog2, 1},
     {"vsqrt", 0b110100000, Vsqrt, 1}, {"vasin", 0b110100000, Vasin, 1}, {"vnrcp", 0b110100000, 0x18, 1},
     {"vnsin", 0b110100000, 0x1a, 1}, {"vrexp2", 0b110100000, 0x1c, 1},
+    //the instructions with helpers at rest only (recompiler-vfpu.cpp's vfpuRestPack() and the rest): the conversions
+    //that move bits about, vcst (rt 0x60 on), vcmovt and vcmovf (rt 0x20 on), vcrs, vcrsp and vqmul, and vrot
+    {"vf2h", 0b110100000, 0x32, 1}, {"vh2f", 0b110100000, 0x33, 1}, {"vuc2i", 0b110100000, 0x38, 1},
+    {"vc2i", 0b110100000, 0x39, 1}, {"vus2i", 0b110100000, 0x3a, 1}, {"vs2i", 0b110100000, 0x3b, 1},
+    {"vi2uc", 0b110100000, 0x3c, 1}, {"vi2c", 0b110100000, 0x3d, 1}, {"vi2us", 0b110100000, 0x3e, 1},
+    {"vi2s", 0b110100000, 0x3f, 1}, {"vcst", 0b110100000, 0x300, 1}, {"vcmov", 0b110100101, 0x400, 1},
+    {"vcrs", 0b011001101, 0x80, 1}, {"vcrsp/vqmul", 0b111100101, 0x80, 1}, {"vrot", 0b111100111, 0x500, 1},
   };
   Engines engines;
   Values values(0x5eed'0002);
@@ -993,6 +1008,9 @@ auto compiledLanes() -> void {
       if(kind.rt < 0x80) rt = kind.rt;
       if(kind.rt == 0x100) rt &= 0x1f;  //vi2f: the scale
       if(kind.rt == 0x200) rt = (rt & 0x1f) | (values.next() & 3) << 5;  //vf2i: the scale, and the mode
+      if(kind.rt == 0x300) rt = 0x60 | (rt & 0x1f);  //vcst: the constant
+      if(kind.rt == 0x400) rt = 0x20 | (rt & 0x0f);  //vcmov: on false, and which condition code bit
+      if(kind.rt == 0x500) rt = 0x20 | (rt & 0x1f);  //vrot: the placement
       std::vector<uint32_t> words;
       uint32_t state[3] = {0xe4, 0xe4, 0};  //the prefixes as the program starts
       auto prefix = [&](uint32_t which) {

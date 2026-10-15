@@ -953,9 +953,11 @@ auto Allegrex::VFAD(u8 vd, u8 vs, u32 size) -> void {
 
 //vfim and viim put a constant from the instruction into one register: a half float (vfim), or a 16-bit signed
 //integer turned into a float (viim). They write through the destination prefix, and use the prefixes up
-//themselves, as their decoder leaves the prefixes alone.
+//themselves, as their decoder leaves the prefixes alone. A half float is a float exactly, nothing in it below
+//2^-126, so vfim's is halfToFloat()'s bits, a NaN's as it makes them (a float's trip through a double, as vfpuBits()
+//takes it, would leave a signaling NaN so or quiet it as the host's compiler chose).
 auto Allegrex::VFIM(u8 vd, u16 half) -> void {
-  Vector d{{vfpuBits(std::bit_cast<f32>(halfToFloat(half)))}};
+  Vector d{{halfToFloat(half)}};
   vfpuWrite(vd, 1, d, vfpu.pfxd);
   vfpuPrefixesUsed();
 }

@@ -67,6 +67,11 @@ struct Allegrex {
   //GE keeps decoded (memory.hpp); the owner tells the recompiler of each page newly watched (recompiler.protect()).
   const u8* watched = nullptr;
 
+  //Pages, numbered as above, whose entries in the page table never change (nonzero bytes), as the owner promises:
+  //the PSP's main RAM and scratchpad, which nothing takes out or moves. A block goes on to a block in one of them
+  //without looking at its entry again (emitChainTo()); without this, it always looks.
+  const u8* steady = nullptr;
+
   //Why the CPU stopped a program. The numbers are the ones MIPS uses in its Cause register.
   enum class Exception : u32 {
     AddressLoad         =  4,  //an instruction fetch or load from an address that isn't aligned to its size
@@ -473,6 +478,10 @@ struct Allegrex {
   template<u32 Size, bool Max> auto vfpuRestMinMax(u32 vd, u32 vs, u32 vt) -> void;
   template<u32 Size, bool Less> auto vfpuRestSet(u32 vd, u32 vs, u32 vt) -> void;
   template<u32 Size> auto vfpuRestHalfDot(u32 vd, u32 vs, u32 vt) -> void;
+  template<u32 Op> auto vfpuRestPack(u32 d, u32 s, u32 size) -> void;
+  template<u32 Size> auto vfpuRestConditionalMove(u32 d, u32 s, u32 which) -> void;
+  template<u32 Op> auto vfpuRestCross(u32 d, u32 s, u32 t) -> void;
+  template<u32 Size> auto vfpuRestRotate(u32 d, u32 s, u32 placement) -> void;
   template<u32 Op> auto vfpuLane(u32 s, u32 t) const -> u32;
   template<u32 Size, u32 Op> auto vfpuEach(u64 s, u64 t, u64 d) -> void;
   auto vfpuMatrix(u32 which, u32 registers, u32 size) -> void;
@@ -570,8 +579,20 @@ struct Allegrex {
       u32 target = 0;
     } destination;
 
-    //recompiler.cpp: the game's registers a block holds in host registers, saved registers S3 on (emit())
-    static constexpr u32 Held = SLJIT_NUMBER_OF_SAVED_REGISTERS - 3 < 7 ? SLJIT_NUMBER_OF_SAVED_REGISTERS - 3 : 7;
+    //recompiler.cpp: the game's registers a block holds in host registers, saved registers S3 on (emit()), and on
+    //ARM64, whose ten saved registers leave room, the run's count in the next one (Counted: left())
+    static constexpr bool Counted = Architecture::arm64;
+    static constexpr u32 Held = SLJIT_NUMBER_OF_SAVED_REGISTERS - 3 - Counted < 7 ? SLJIT_NUMBER_OF_SAVED_REGISTERS - 3 - Counted : 7;
+    //The run's count, where Counted: as compiled code runs, left() holds runLimit less instructionsRun, the
+    //instructions the run has left, which each block's end counts down. instructionsRun in memory stays as it was
+    //where the code began or last called the interpreter: it's brought up to date (storeCount()) before anything that
+    //reads it runs (a call into the interpreter, whose syscalls read it and may move it and runLimit on, after which
+    //left() is worked out again: loadCount()) and before the code leaves for run(). Otherwise each block's end counts
+    //in instructionsRun itself.
+    auto left() const -> sreg { return sreg(3 + Held); }
+    auto storeCount() -> void;
+    auto loadCount() -> void;
+    auto emitCount(u32 count, std::vector<sljit_jump*>& leave) -> void;
     struct Holding {
       s8 slot[32];       //the host register holding each game register's value, or -1
       s8 held[Held];     //the game register each host register holds the value of, or -1
@@ -581,6 +602,7 @@ struct Allegrex {
       u32 clock = 0;
     } holding;
     auto take() -> u32;
+    auto pinSources(u32 instruction) -> void;
     auto use(u32 index) -> op_base;
     auto def(u32 index) -> op_base;
     auto wrote() -> void;
@@ -610,6 +632,8 @@ struct Allegrex {
 
     //recompiler-fpu.cpp
     auto emitFPU(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
+    auto emitFlush(reg r, reg scratch) -> void;
+    auto emitFlushedInputs(u32 instruction) -> void;
     auto emitFPUArithmetic(u32 address, u32 instruction, u32 count, bool delaySlot, s32 op) -> void;
     auto emitFPUCompare(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
     auto emitCOP2(u32 instruction) -> bool;
@@ -640,7 +664,8 @@ struct Allegrex {
     bool enabled = false;
     bool chains = true;  //blocks go on to the next by themselves (emitChain()); tests turn it off to compare
     //The block being compiled calls the interpreter somewhere (emitInterpreter()), which may halt the CPU. (Calls
-    //that halt it only by an exception, after which the block leaves, needn't say so: emitVFPUCall().)
+    //that halt it only by an exception, after which the block leaves, needn't say so: emitVFPUCall(), and a native
+    //instruction's way to the interpreter, emitColdFallback().)
     bool calls = false;
     //How many instructions the last block ran, not yet counted in instructionsRun: each block sets it as it leaves
     //for run() (0 when it counted them itself, going on to the next: emitChain()), and as it calls the interpreter

@@ -185,6 +185,7 @@ struct Memory {
     changed(address, size);
   }
   auto buildPages(std::vector<u8*>& table) -> void;
+  auto buildSteady(std::vector<u8>& steady) -> void;
   auto copyIn(u32 address, const void* data, u32 size) -> bool;
   auto copyOut(void* data, u32 address, u32 size) -> bool;
   auto fill(u32 address, u8 value, u32 size) -> bool;

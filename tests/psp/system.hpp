@@ -1,5 +1,6 @@
 //The PSP system tests' machine: the Allegrex with the real memory map (ares/psp/memory) behind it, as the PSP
-//system has it, and the GE, plus the Allegrex tests' instruction encoders and checks.
+//system has it (its page table, and the pages whose entries never change, so compiled code reaches main RAM as the
+//system's does), and the GE, plus the Allegrex tests' instruction encoders and checks.
 #pragma once
 
 #include "../allegrex/harness.hpp"
@@ -17,6 +18,7 @@ struct System : Allegrex {
   Memory memory;
   GE ge{memory};
   std::vector<u8*> table;
+  std::vector<u8> steadyTable;  //the pages whose entries in table never change (Memory::buildSteady)
   std::vector<std::pair<u32, bool>> unmapped;  //accesses with nothing behind them: the address, and whether a store
   std::vector<std::pair<Exception, u32>> exceptions;
 
@@ -24,6 +26,8 @@ struct System : Allegrex {
     memory.power(ramSize);
     memory.buildPages(table);
     pages = table.data();
+    memory.buildSteady(steadyTable);
+    steady = steadyTable.data();
     watched = memory.watched.data();
     memory.watching = [this](u32 page) { recompiler.protect(page); };
     memory.unwatched = [this](u32 page) { recompiler.unwatched(page); };

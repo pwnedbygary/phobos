@@ -141,6 +141,10 @@ auto Kernel::asyncDone(u32 file) -> bool {
     open.position = open.asyncFrom + std::max<s64>(moved, 0);
     open.asyncResult = moved < 0 ? u64(s64(s32(ErrorIOError))) : u64(moved);
   }
+  if(ioTrace) {
+    u64 landed = open.asyncData && s64(open.asyncResult) > 0 ? open.asyncResult : 0;
+    traceIoDone(file, open.asyncData, landed * (open.sectors ? Disc::SectorSize : 1));
+  }
   open.asyncData = 0;
   if(open.asyncCallback && notifyCallback(open.asyncCallback, open.asyncArgument)) woke = true;
   for(auto thread : asyncWaiters(file)) woke = asyncResume(*thread) || woke;
@@ -184,7 +188,7 @@ auto Kernel::sceIoOpenAsync() -> void {
 auto Kernel::sceIoCloseAsync() -> void {
   auto open = asyncIssue(arg(0));
   if(!open) return;
-  open->stream.reset();
+  closeFile(*open);
   open->flags = 0;
   open->entries.clear();
   open->resultOnly = true;

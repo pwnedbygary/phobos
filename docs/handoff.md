@@ -77,6 +77,127 @@ side. Clean room: no PPSSPP code read, JPCSP not read. Save states unchanged.
   0 failures, sanitized (the container check off) and not, the GPU groups run; tests/allegrex 68, 0; tests/psp/ares
   340, 0; CI green.
 
+## PSP I/O: memory stick files emptied as they're opened keep their bytes (LittleBigPlanet's install), and the runner's file I/O trace — 2026-10-14
+
+Branch `cursor/psp-installs-2b67`, on master `dd37263c8`, merged with `e78b4a364` (part 93; only the docs met); draft
+PR #257. docs/psp-core.md, part 95, has the evidence. Clean room:
+PPSSPP's issue 579 and its directory file system's comments read as the hardware's description, none of its code;
+JPCSP not read. Save states: layout 32 (31 and older load as before; `tests/psp/ares/system.cpp` now refuses 33).
+- **The bug** (deep play batch 04's bug 1, high): LittleBigPlanet's first-boot install left GUI.ARC's first 4 MiB zero,
+  and the game asked "Save data load failed because the data is corrupt. Retry?" for good.
+- **The trace** (`tools/psp-runner --trace-io`, `Kernel::ioTrace`): each IoFileMgrForUser call with its answer, the
+  descriptor's path and position, sizes, buffers and the bytes' hash, and asynchronous requests as they're done. It
+  showed the game's file library copying GUI.ARC a MiB at a time, opening the stick's file with O_TRUNC (0x02000602)
+  for each MiB, seeking to its place and writing it; each open emptied the file.
+- **What a PSP does** (PPSSPP's issue 579, this game, tested on a PSP's memory stick): a file emptied as it's opened
+  keeps its bytes for a write past its end ("test", then O_TRUNC, seek 4, "abc": "testabc"), and with nothing written
+  it ends empty.
+- **The change** (io.cpp, async.cpp, kernel.cpp, kernel.hpp, serialization.cpp, system.cpp, utility.cpp, dialogs.cpp):
+  such a file isn't emptied on the host; its descriptor holds the PSP's length of it, from 0, which reads, seeks from
+  the end, sceIoGetstat, a folder's entries and appends see; writes raise it. The host file is cut to it through a
+  second handle held on the file itself (never by path), only while the file has the length the kernel left it, and
+  only ever shorter: as soon as a write starts at or before the length (a save rewritten from its start), or as the
+  file is closed (sceIoClose, sceIoCloseAsync, the kernel powering on, a state loaded over the program). sceIoRemove
+  and the savedata utility's writes and deletes drop a cut on their files; sceIoRename moves descriptors with their
+  file (PSP paths matched whatever their case). Files are matched by the host's identity of them, so two names for one
+  file share its length and cut. A state keeps both lengths and the hash of the bytes a pending cut would drop, and a
+  loaded one keeps its cut only while the host file has that length and those bytes.
+- **The review** (round 2, changes requested on `300e03e14`: the delayed cut could reach save data master leaves whole):
+  a cut by path (R1: a file renamed onto an emptied file's name emptied at the old descriptor's close; R2: an emptied
+  file renamed while open never cut), a state's descriptor cutting a newer save or padding a shorter one (R4, R5), a
+  state load dropping the session's cuts (R3), and Phobos killed between a rewrite's last write and its close leaving
+  the old tail (R6). All fixed as above; R1 to R7 are tests now. The reviewer's NPDRM nit (a memory stick EDATA gets
+  no PGD state, as on master) is the owner's area, left to him. Round 3 (the second review approved `6b26d4b63`,
+  leaving three small things): its P4 (a state's cut and a newer save exactly as long, which the length alone let
+  through) closed by the tail hash; its P7 (a write through another name for the file lost at the close: part 95's
+  claim was inexact) closed by matching files by identity; renames spelled otherwise than the open now carry the PSP
+  path. P4 and P7 are tests; its P1 to P7 and R1 to R7 pass.
+- **LittleBigPlanet now**: GUI.ARC byte for byte the disc's archives/gui.arc; one boot from a fresh stick reaches its
+  first level, where Sackboy walks, and a second boot takes the installed data (deepplay/LittleBigPlanet:
+  fixed-path.txt, sheet-fx4.png, z-fixed-install-to-level.png, sheet-fx4b.png; round 2: run-r2a, sheet-r2a.png).
+  Its profile saves (18 files through its file library, each emptied as it's opened and written from its start): a
+  second boot rewrites PS.BIN over the file there, a third reads it back, master's runner leaving the same files byte
+  for byte at each boot (r2-profile-roundtrip.txt).
+- **Kingdom Hearts BbS FM's DATA INSTALL** (bug 3, medium), traced, not fixed: it uses the system's game data install
+  dialog (sceUtilityGamedataInstall), part 37's cancel stub, so nothing is copied and the game's clean-up finds no
+  ULJM05775DATA folder. Needs that utility implemented (a feature of its own).
+- **Checks** (round 2): tests/psp 541/0 sanitized (`detect_container_overflow=0`) and unsanitized; tests/allegrex
+  68/0; tests/psp/ares 348/0; the runner's test passes; GCC 13.3 builds the changed files with `-Wall -Wextra -Werror`.
+  Against master the review's R1-R6 pass and R7 fails (zeros where the old bytes come back); against the first round
+  R1-R6 fail. The 21 scenes in Software against master: every frame's picture and VRAM, and RAM, identical; the
+  machine's state differs only by layout 32 (the version, 17 bytes an open file: the branch writing layout 31 gives
+  master's states byte for byte). Batch 04's saves (Gundam NEXT PLUS, Kurohyou 1, Lunar, Killzone, Lumines, La Pucelle
+  Ragnarok, MediEvil): the same files byte for byte as master's runner makes (and as the first round's), and each loads
+  on a second boot.
+- **Left**: the game data install utility (KH BbS FM; Gunhound EX's DATA INSTALL cancels too). What a PSP's
+  sceIoGetstat says of a file emptied so before it's written, and what a gap past its old bytes holds, aren't recorded.
+  What the cut can't tell from a file left as it was (part 95): a newer save whose dropped bytes are the state's byte
+  for byte, and within a session another host program's in-place write of the same length.
+
+## PSP CPU: the FPU's flush to zero compiled, block endings in fewer steps, the run's count in a register, more of the VFPU compiled — 2026-10-14
+
+Branch `cursor/psp-cpu-round3-2b67`, on master (`dd37263c8`, #253). docs/psp-core.md, part 94, has the evidence.
+Clean room: PPSSPP not read at all, JPCSP not read. Save states unchanged (layout 31). Nothing a game sees changes on
+clang's builds (Android, macOS); on GCC's (the Linux desktop) vfim of a NaN half may (part 94, change 6).
+- **Measured first** (the M1; xctrace with round 2's block map, sorted over the whole thread by a new script; a probe
+  build counting the interpreter's calls from compiled code): the GE is 36 to 84% of the emulation thread, compiled
+  code 12 to 40%, the VFPU's helpers 1 to 13%. Hot Wheels: Ultimate Racing sets FCSR's flush-to-zero bit, so 660,000
+  FPU instructions a frame went to the interpreter (a fifth of its thread). Colin McRae, Killzone and Hot Wheels ran
+  14,000 to 16,000 VFPU instructions a frame through the interpreter (packing conversions, vcrs, vcrsp, vrot, vcst).
+  A block's end stored and loaded the run's count, checked halted after any load or store, and loaded the target's
+  page entry; a result into a register it read took its host register first and loaded the source again.
+- **Changes** (recompiler*.cpp, allegrex.hpp, memory.cpp/hpp, system.cpp/hpp; five commits, each measured alone): the
+  FPU's arithmetic and compares compiled for the flush bit as the block finds it (inputs and result flushed in integer
+  registers, after the host's rounding as the interpreter does; checked per instruction); the registers an instruction
+  reads kept for it (`pinSources()`); no halted check after a native instruction's way to the interpreter; no page
+  check going on to pages the owner says never change (`Allegrex::steady`: main RAM, the scratchpad); r0 as the
+  constant 0; the run's count in a saved register on ARM64 alone (held game registers 7 -> 6); vf2h, vh2f, the
+  integer packings, vcst, vcmov, vcrs, vcrsp, vqmul and vrot compiled with the prefixes at rest. A sixth, main RAM's
+  loads without the page table (d5c43999b), measured nothing on the Mac or the RP6 and is taken out (3081c98e2).
+- **Numbers** (the M1, Vulkan fast, master -> 2ce7026e9 with the direct loads still in, emulation thread, medians of three rounds taking turns): Hot Wheels' race 340 -> 249 M host instructions a frame (-27%; 30.4 -> 24.3 ms), Colin
+  McRae -8.7%, Disaster Report 3 -5.0%, Killzone's gameplay and Armored Core -4.5%, Army of Two and Killzone's menu
+  -2.8%, Monkey Ball -2.0%, the GE-bound scenes (Ghost of Sparta, Chains of Olympus, MX vs. ATV, Death Jr. II) 0.6 to
+  2.1%; the software renderer Hot Wheels -12%, the rest within 3% (its emulation thread draws bands too). Each change
+  measured alone: part 94's step table.
+- **Exact**: settled hashes, master against the branch (100 frames, every frame's picture and VRAM,
+  then RAM and the machine's state): 78/78 identical on 2ce7026e9 (the 21 scenes in Vulkan fast, Software and Vulkan
+  accurate, and Hot Wheels, Killzone's gameplay and menu, MX vs. ATV and Chains of Olympus in all three), 78/78 again on 622fd6a0f and on the last code (3081c98e2, against master with #254); tests/allegrex's new groups (fpu flushing, loads across pages, runs moved by syscalls; the recompiler
+  cases of a page taken out unheard and of a halting syscall; 15 new kinds in vfpu compiled lanes); 43 broken versions of the new code, 39 caught, the other 4 equivalent (part 94; 52 and 48 with the direct loads'
+  nine, all caught).
+  vfim of a NaN half now gives halfToFloat()'s bits in both engines whatever the compiler (clang's builds gave that
+  already; GitHub's GCC at -O3 quieted it in compiled code once this round changed its inlining).
+- **Checks**: tests/allegrex 74/0 (sanitized and release on ARM64; built for x86-64 and run under Rosetta, debug and
+  release), tests/psp 525/0 (sanitized, with detect_container_overflow=0, and unsanitized), tests/psp/ares 340/0;
+  GitHub's checks on 622fd6a0f all pass (the PSP core's, desktop, Android).
+- **Merged with master** (#254) as cd97a4630, the docs alone conflicting (part 93 before 94): the 26 scenes' hashes
+  against that master 78/78 identical; tests/psp 528/0 (sanitized), tests/psp/ares 340/0, tests/allegrex 74/0.
+- **Review** (independent, read-only, to 1c951a6f3): no blocker; its points taken in f055ec9f3: the count in a
+  register on ARM64 alone (Windows' x86-64 had it, untested); tests/psp's machine sets the steady pages, so its groups
+  take the skipped page checks (and took the direct loads while they were in), and the Allegrex harness's data is in
+  a steady page; the review's probes as tests (the flush bit switched in a block and a delay slot, code rewritten
+  after a link through each mirror, loads at RAM's end, runs of 2^62 to 2^64, r0 as every operand, threads switched
+  by syscalls);
+  emitFallback() keeps calls. Flush to zero from a cold boot measured: Hot Wheels from boot to its race sends no FPU
+  arithmetic to the interpreter (sqrt.s and floor.w.s, which have no native code, as before). Mutations again: the
+  same 48 caught, the same 4 equivalent. After it: tests/allegrex 78/0 (sanitized, release, x86-64 both), tests/psp
+  528/0 (sanitized and not, nothing skipped), tests/psp/ares 340/0, the 78 hashes against master with #254 identical.
+- **Left**: the GE (most of every scene's thread); jumps through a register (2 to 3%: a cache of the last target); the
+  VFPU's NEON helpers and vfpuEach; vcmp, vdot and vfad with prefixes; the FPU's mode check once a block; sqrt.s.
+- **RP6** (the coordinator's runs, master dd37263c8 against 622fd6a0f, the direct loads still in; Vulkan fast, 600
+  frames, three rounds; emulation thread CPU ms / M instructions / M cycles a frame): Colin McRae -4.7% / -7.3% /
+  -4.8%, Hot Wheels -4.2% / -10.8% / -3.8%, Killzone's gameplay -3.5% / -5.1% / -3.4%, Disaster Report 3 -3.2% / -4.9%
+  / -3.2%, Monkey Ball -2.7% / -1.9% / -2.6%, Army of Two -2.2% / -2.9% / -2.1%, Ghost of Sparta -0.7% / -0.7% / -1.2%,
+  MX vs. ATV -0.5% / -0.7% / -0.6% (waits on the GPU); nothing slower. The direct loads alone (9586b8c4e against
+  d5c43999b): Army of Two -0.3% / -0.1% / -0.0%, Colin McRae -0.3% / -0.5% / -0.4%, Killzone +0.1% / -0.3% / +0.0%:
+  nothing, as on the Mac, so they are out.
+- **Direct loads taken out** (3081c98e2): loads compiled as on master again (S1 the page table; the region,
+  directBase() and pageTable() gone), everything else kept; "direct loads" is "loads across pages", without the
+  region's checks. After it: tests/allegrex 78/0 (sanitized, release, x86-64 both), tests/psp
+  528/0 (sanitized and not, nothing skipped), tests/psp/ares 340/0, the 78 hashes against master with #254 identical,
+  39 of the 43 mutations caught (the same 4 equivalent); the Mac's gains the same (master -> 3081c98e2: Hot Wheels
+  -26.3% host instructions, Colin McRae -7.9%, Killzone -4.2%, Monkey Ball -1.6%; 0.4 to 0.6% more than 622fd6a0f).
+- Scratch: `~/phobos-work/scratch/cpu-round3` (`NOTES.md`, `cats.py`, `mutate3.py`, `queue-hash.sh`, `queue-final.sh`).
+
 ## PSP Vulkan: the frame buffer's alpha as its stencil has it — MX vs. ATV Untamed's race (the haze over its hills and trees, the tree's shadow) — 2026-10-14
 
 Branch `cursor/psp-vk-mx-2b67`, on master with #251 merged (`5893dbdc0`), then merged with #253 (`dd37263c8`, part 92:
