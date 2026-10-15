@@ -187,7 +187,11 @@ auto Kernel::installBegin() -> u32 {
 
 //A piece of the copy: up to InstallBytesPerUpdate bytes, the next of each file in turn, onto the end of its copy (an
 //empty file made as it's reached). 0, or the answer the dialog finishes with (for a write that fails,
-//installWriteFailed()'s).
+//installWriteFailed()'s). The copy must be as the install left it, nothing there before a file's first piece and a
+//file of its own as long as what's been copied after: one the host took away, cut short or put a link in place of
+//meanwhile (a tool keeping the stick in step with another device's, say) would otherwise be made again or written on
+//at its end, a short install answered 0, or be written through the link. It gives the install up instead
+//(0x80111904), as a write failing does.
 auto Kernel::installStep() -> u32 {
   namespace fs = std::filesystem;
   std::vector<u8> bytes;
@@ -196,8 +200,14 @@ auto Kernel::installStep() -> u32 {
     u64 count = std::min(left, file.size - install.at);
     bytes.resize(count);
     if(count && !installRead(file, install.at, count, bytes.data())) return InstallAccess;
+    auto path = fs::path(install.partial) / file.name;
+    std::error_code error;
+    auto status = fs::symlink_status(path, error);
+    if(install.at ? !fs::is_regular_file(status) || fs::file_size(path, error) != install.at : fs::exists(status)) {
+      return InstallAccess;
+    }
     auto mode = std::ios::binary | (install.at ? std::ios::app : std::ios::trunc);
-    std::ofstream stream(fs::path(install.partial) / file.name, mode);
+    std::ofstream stream(path, mode);
     stream.write((const char*)bytes.data(), count);
     stream.close();
     if(!stream) return installWriteFailed();
@@ -217,11 +227,19 @@ auto Kernel::installRead(const Install::File& file, u64 at, u64 size, u8* data) 
 //Every file copied: the install's PARAM.SFO written beside them (from INSDIR's own if it had one, else the one in the
 //folder there, else afresh; a broken one afresh), then the copy made the save's folder, or each of its files moved into
 //the one there over the file of its name, PARAM.SFO last. 0, or the answer the dialog finishes with. (What's at the
-//save's folder is looked at again here: installBegin() looked before the copy, which a host may have changed since.)
+//save's folder is looked at again here: installBegin() looked before the copy, which a host may have changed since.
+//So is each file of the copy, a file of its own as long as the disc's, as a host may have taken one away or cut it
+//short after its last piece: 0x80111904 rather than a short install.)
 auto Kernel::installCommit() -> u32 {
   namespace fs = std::filesystem;
   u32 p = dialog.parameters;
   std::error_code error;
+  for(auto& file : install.files) {
+    auto path = fs::path(install.partial) / file.name;
+    if(!fs::is_regular_file(fs::symlink_status(path, error)) || fs::file_size(path, error) != file.size) {
+      return InstallAccess;
+    }
+  }
   std::string target = savePath(install.folder);
   if(target.empty()) return InstallAccess;
   bool there = fs::exists(fs::symlink_status(target, error));

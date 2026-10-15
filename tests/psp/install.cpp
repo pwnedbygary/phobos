@@ -3,8 +3,8 @@
 //parameters; its statuses and their timing; each answer (installed, cancelled, no memory stick, no space, the stick
 //unwritable, a mode it doesn't take); an install cut short by the game, a reset, Phobos killed or a state loaded,
 //which leaves the saves as they were, and the copies it leaves taken away at the next boot or install; the copies'
-//folder kept from programs; an install over one already there; a front end shown its progress in mode 1; the trace's
-//lines. Called directly, the clock moved on by hand.
+//folder kept from programs; a copy the host changes meanwhile given up; an install over one already there; a front
+//end shown its progress in mode 1; the trace's lines. Called directly, the clock moved on by hand.
 #include "kernel-machine.hpp"
 #include "disc-image.hpp"
 
@@ -422,7 +422,8 @@ static auto installInterrupted() -> void {
 //The copies' folder at the memory stick's top is the install's own: while an install copies into it, programs can't see
 //it (sceIoDopen of ms0:/ leaves it out) or reach it, whatever its case and however the path is written (sceIoGetstat,
 //sceIoOpen to read or to make a file, sceIoMkdir, sceIoRemove, sceIoRename to it or from it, sceIoDopen, from the
-//working folder too: not found), and the install goes on and installs whole. A link put in its place, to a folder off
+//working folder too, with dots or spaces at its name's end, and through links to it at the top and in PSP: not
+//found), and the install goes on and installs whole. A link put in its place, to a folder off
 //the stick: the stick put in takes the link away and nothing behind it; one put there while the machine runs makes
 //the next install give up (0x80111904) with nothing behind it touched. Links inside it, to a folder and a file off the
 //stick: the stick put in, and an install's start, take the links away and never what they lead to.
@@ -457,6 +458,21 @@ static auto installCopiesFolder() -> void {
   CHECK(m.call("sceIoDopen", {m.string("ms0:/.phobos-install")}), Kernel::ErrorFileNotFound);
   CHECK(m.call("sceIoChdir", {m.string("ms0:/")}), 0);
   CHECK(m.call("sceIoGetstat", {m.string(".phobos-install/ULJM99999DATA"), Entry}), Kernel::ErrorFileNotFound);
+  CHECK(m.call("sceIoMkdir", {m.string("ms0:/.phobos-install."), 0777}), Kernel::ErrorFileNotFound);
+  CHECK(m.call("sceIoGetstat", {m.string("ms0:/.Phobos-Install. ./ULJM99999DATA"), Entry}), Kernel::ErrorFileNotFound);
+  {
+    std::error_code error;
+    fs::create_directory_symlink(".phobos-install", m.stick.path / "ALIAS", error);
+    fs::create_directory_symlink("../.phobos-install", m.stick.path / "PSP/INTO", error);
+    CHECK(error.value(), 0);
+    for(auto path : {"ms0:/ALIAS/ULJM99999DATA/DATA.BIN", "ms0:/PSP/INTO/ULJM99999DATA", "ms0:/ALIAS"}) {
+      CHECK(m.call("sceIoGetstat", {m.string(path), Entry}), Kernel::ErrorFileNotFound);
+    }
+    CHECK(m.call("sceIoRemove", {m.string("ms0:/ALIAS/ULJM99999DATA/DATA.BIN")}), Kernel::ErrorFileNotFound);
+    CHECK(m.call("sceIoDopen", {m.string("ms0:/PSP/INTO")}), Kernel::ErrorFileNotFound);
+    fs::remove(m.stick.path / "ALIAS", error);
+    fs::remove(m.stick.path / "PSP/INTO", error);
+  }
   CHECK(m.stick.get("NOTE.TXT") == "a note" && fs::exists(m.copies() / "ULJM99999DATA" / "DATA.BIN"), true);
   CHECK(m.finish() == 2 && m.result() == 0 && m.close(), true);
   CHECK(installed(m.saved("ULJM99999DATA")), true);
@@ -498,6 +514,73 @@ static auto installCopiesFolder() -> void {
   CHECK(fs::exists(fs::symlink_status(m.copies())), false);
   CHECK(tree(outside.path).size() == 1 && outside.get("KEEP.BIN") == "off the stick", true);
   CHECK(installed(m.saved("ULJM99999DATA")), true);
+}
+
+//The copy changed behind the install's back between Updates, by the host (no program can reach it), as a tool keeping
+//the memory stick in step with another device's might change it: the data file being copied taken away, cut short to
+//4 KiB, or a link to a file off the stick put in its place, or such a link where a file is yet to go; and, on a disc of
+//a small file and a large one, the small file (copied whole at the first Update) taken away or cut short before the
+//last. Each time the install gives up with 0x80111904 (the stick couldn't be written) rather than install short or
+//write through the link: nothing among the saves, no copy left, the file off the stick untouched; the next install
+//installs whole.
+static auto installCopyChanged() -> void {
+  HostFolder outside;
+  outside.put("KEEP.BIN", "off the stick");
+  auto untouched = [&] { return tree(outside.path).size() == 1 && outside.get("KEEP.BIN") == "off the stick"; };
+  auto copied = [](InstallMachine& m, const char* name) { return m.copies() / "ULJM99999DATA" / name; };
+  struct Change {
+    std::function<bool(InstallMachine&)> make;
+    u32 updates;  //the Updates after the first until it gives up
+  };
+  std::vector<Change> changes = {
+    {[&](InstallMachine& m) {
+       std::error_code error;
+       return fs::remove(copied(m, "DATA.BIN"), error);
+     }, 1},
+    {[&](InstallMachine& m) {
+       std::error_code error;
+       fs::resize_file(copied(m, "DATA.BIN"), 4096, error);
+       return !error;
+     }, 1},
+    {[&](InstallMachine& m) {
+       std::error_code error;
+       fs::remove(copied(m, "DATA.BIN"), error);
+       fs::create_symlink(outside.path / "KEEP.BIN", copied(m, "DATA.BIN"), error);
+       return !error;
+     }, 1},
+    {[&](InstallMachine& m) {
+       std::error_code error;
+       fs::create_symlink(outside.path / "KEEP.BIN", copied(m, "ICON0.PNG"), error);
+       return !error;
+     }, 2},
+  };
+  for(auto& change : changes) {
+    InstallMachine m;
+    installParameters(m, 0x598, 0, "ULJM99999", "DATA");
+    CHECK(m.start() && !m.update() && m.status() == 2, true);
+    CHECK(change.make(m), true);
+    CHECK(m.finish() == change.updates && m.result() == 0x8011'1904, true);
+    CHECK(fs::exists(m.saved("ULJM99999DATA")) || fs::exists(fs::symlink_status(m.copies())), false);
+    CHECK(untouched(), true);
+    CHECK(m.close(), true);
+    CHECK(m.start() && m.finish() == 3 && m.result() == 0 && m.close(), true);
+    CHECK(installed(m.saved("ULJM99999DATA")), true);
+  }
+  for(bool cut : {false, true}) {
+    InstallMachine m;
+    m.kernel.disc = discFrom(disc_image::makeIso({{"PSP_GAME/INSDIR/A.BIN", pattern(1000, 7)},
+                                                   {"PSP_GAME/INSDIR/B.BIN", pattern(Piece * 2, 8)}}).bytes);
+    installParameters(m, 0x598, 0, "ULJM99999", "DATA");
+    CHECK(m.start() && !m.update() && m.status() == 2, true);
+    std::error_code error;
+    CHECK(fs::file_size(copied(m, "A.BIN"), error), 1000);
+    if(cut) fs::resize_file(copied(m, "A.BIN"), 10, error);
+    else fs::remove(copied(m, "A.BIN"), error);
+    CHECK(error.value(), 0);
+    CHECK(m.finish() == 2 && m.result() == 0x8011'1904, true);
+    CHECK(fs::exists(m.saved("ULJM99999DATA")) || fs::exists(fs::symlink_status(m.copies())), false);
+    CHECK(m.close(), true);
+  }
 }
 
 //A state saved part way through the copy: the copy isn't in it, so the state round-trips as any does; loaded (into
@@ -642,6 +725,7 @@ auto installTests() -> Tests {
     {"game data install: each answer", installAnswers},
     {"game data install: cut short by the game, a reset, Phobos killed", installInterrupted},
     {"game data install: the copies' folder, hidden from programs, links in its place", installCopiesFolder},
+    {"game data install: its copy changed behind its back", installCopyChanged},
     {"game data install: a state saved part way", installStates},
     {"game data install: over an install there", installOver},
     {"game data install: the progress screen shown by a front end", installShown},

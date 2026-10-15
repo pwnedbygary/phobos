@@ -43,6 +43,13 @@ static auto sameName(const std::string& a, const std::string& b) -> bool {
   return true;
 }
 
+//Whether a name at the memory stick's top names the game data install's copies' folder (Kernel::InstallCopies): in
+//any case, and with dots or spaces at its end, which Windows and Linux's FAT driver drop from a name.
+static auto copiesName(std::string name) -> bool {
+  while(!name.empty() && (name.back() == '.' || name.back() == ' ')) name.pop_back();
+  return sameName(name, Kernel::InstallCopies);
+}
+
 //A path's names, after its device: "." and ".." worked out, either slash as a separator. Returns 0, or why the path
 //can't be: it climbs above its device's top, or holds a colon (FAT allows none, and a host might read it as a drive).
 static auto pathNames(const std::string& rest, std::vector<std::string>& names) -> u32 {
@@ -145,8 +152,9 @@ static auto throughUmd(const std::string& path) -> bool {
 //file, and to its normalized form ("ms0:/PSP/GAME"). Returns 0, or why it can't: no such device, or a path that would
 //climb out of its device (by "..", or through a symbolic link in its folder) or names something no PSP file could be
 //called. Names not on the host yet (a file about to be created) keep the case given. The game data install's copies'
-//folder at the memory stick's top (Kernel::InstallCopies) isn't there for programs, whatever its case: nothing in it is
-//theirs, and the next install takes it all away.
+//folder at the memory stick's top (Kernel::InstallCopies) isn't there for programs, however it's named (copiesName())
+//or reached: through a link, or by another name the host's FAT gives it (a short 8.3 name), the path's real place is
+//compared with it by name and as a file. Nothing in it is theirs, and the next install takes it all away.
 auto Kernel::resolve(const std::string& path, std::string& host, std::string& normalized) -> u32 {
   std::string device, rest;
   if(!split(path, device, rest)) return ErrorFileNotFound;
@@ -155,7 +163,7 @@ auto Kernel::resolve(const std::string& path, std::string& host, std::string& no
   if(mounted == devices.end()) return ErrorDeviceNotFound;
   std::vector<std::string> names;
   if(u32 error = pathNames(rest, names)) return error;
-  if(device == "ms0" && !names.empty() && sameName(names[0], InstallCopies)) return ErrorFileNotFound;
+  if(device == "ms0" && !names.empty() && copiesName(names[0])) return ErrorFileNotFound;
   normalized = device + ":/";
   std::filesystem::path at = mounted->second;
   for(size_t n = 0; n < names.size(); n++) {
@@ -178,6 +186,14 @@ auto Kernel::resolve(const std::string& path, std::string& host, std::string& no
   auto real = std::filesystem::weakly_canonical(at, error);
   if(error || std::mismatch(root.begin(), root.end(), real.begin(), real.end()).first != root.end()) {
     return ErrorNoPermission;
+  }
+  if(device == "ms0" && !names.empty() && real != root) {
+    auto top = root / *std::next(real.begin(), std::distance(root.begin(), root.end()));
+    auto copies = root / InstallCopies;
+    if(copiesName(top.filename().string())) return ErrorFileNotFound;
+    if(std::filesystem::exists(copies, error) && std::filesystem::equivalent(top, copies, error)) {
+      return ErrorFileNotFound;
+    }
   }
   host = real.string();
   return 0;
@@ -1064,7 +1080,7 @@ auto Kernel::sceIoDopen() -> void {
   bool stickTop = normalized == "ms0:/";
   for(auto& entry : std::filesystem::directory_iterator(host, error)) {
     auto name = entry.path().filename().string();
-    if(stickTop && sameName(name, InstallCopies)) continue;
+    if(stickTop && copiesName(name)) continue;
     if(name.find_first_of("\\:") == std::string::npos) names.push_back(name);
   }
   std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) {
