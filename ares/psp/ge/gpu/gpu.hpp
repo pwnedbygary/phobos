@@ -641,13 +641,14 @@ private:
   //(settings()' inputs as the last PRIM had them, where its state is kept for the next with the same: its pixel
   //pipeline's, its texture's (the copy alive still: lastDecoded's), the write masks, its target and place in it, and
   //the backend's ways of drawing; and the shading and filter, which its draws in fast mode's 3D take as well. kept()
-  //compares them where they are, word by word, with a branch at the end alone)
+  //compares them where they are, word by word, with a branch at the end alone: every field read, valid or not, so
+  //they start zeroed)
   struct KeptSettings {
     GE::PixelState pixel;
     u32 width, height, function, environment, maskColor, maskAlpha, target, stride, rows, column, row, shade, filter;
     bool valid = false;
     bool textured, clampU, clampV, withAlpha, doubled, reads, readsBlending, dualSource, logicOps;
-  } keptSettings;
+  } keptSettings{};
   auto kept(const GE::Look& look) const -> bool;
   bool blendsByAlpha = false;  //(the PRIM blends by the frame buffer's alpha: settings(), for begin())
   auto clearStencil(u32 color) -> void;
