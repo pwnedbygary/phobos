@@ -909,7 +909,8 @@ static auto savedataListAnswers() -> void {
 //its profile saved with "GAME" beside GAME01 to GAME03, focus 7 (the first new), goes to GAME01, written back (the
 //trace shows it chosen); the next boot's load (focus 3, the latest) takes GAME01 and writes it back, and its save by
 //that name (focus 0) goes there again. "GAME", its folder not there, with GAME01 there: focus 7 goes to the first new
-//slot, GAME02, focus 8 to the last, GAME03, GAME01 kept; on an empty stick focus 0 goes to the list's first, GAME01.
+//slot, GAME02, focus 8 to the last, GAME03, GAME01 kept; on an empty stick focus 0 goes to the list's first, GAME01;
+//with every slot there (focus 7, 8), or the list's first there (focus 0), to GAME, as master saves it, no slot touched.
 //An older Phobos's GAME (an upgraded player's) stays GAME: its load takes it and its save by that name goes there,
 //no GAME01 made; with a GAME01 beside it dated before it (the stale one taken by the load), the save by GAME's name
 //goes to GAME, GAME01 kept. A GAME01 whose PARAM.SFO is broken loads as DATA_BROKEN, and the new profile the game
@@ -971,6 +972,18 @@ static auto savedataListNames() -> void {
   listed(5, "ULUS10183", "GAME", slots, 0, "first");
   CHECK(runSave(m), 0);
   CHECK(data("GAME01") == "first" && saved() == "GAME01" && !fs::exists(saves / "ULUS10183GAME"), true);
+  //the slot it would take there: its own name kept, no slot touched
+  for(u32 focus : {7u, 8u, 0u}) {
+    fs::remove_all(saves);
+    stick.put("PSP/SAVEDATA/ULUS10183GAME01/DATA.BIN", "one");
+    if(focus) stick.put("PSP/SAVEDATA/ULUS10183GAME02/DATA.BIN", "two");
+    if(focus) stick.put("PSP/SAVEDATA/ULUS10183GAME03/DATA.BIN", "three");
+    listed(5, "ULUS10183", "GAME", slots, focus, "own");
+    check(__LINE__, "saved", runSave(m), 0);
+    check(__LINE__, "to GAME", data("GAME") == "own" && saved() == "GAME", true);
+    check(__LINE__, "no slot touched", data("GAME01") == "one" && data("GAME02") == (focus ? "two" : "-")
+          && data("GAME03") == (focus ? "three" : "-"), true);
+  }
   //an upgraded player's GAME stays GAME: loaded, saved over by its name, no GAME01
   fs::remove_all(saves);
   stick.put("PSP/SAVEDATA/ULUS10183GAME/DATA.BIN", "old");
