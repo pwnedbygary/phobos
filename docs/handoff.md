@@ -33,11 +33,11 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 ## PSP GE: the depth buffer in the order its frame buffer's format has it — the Kurohyou games' characters at the screen's middle (deep play batch 04, bug 2) — 2026-10-14
 
 Branch `cursor/psp-kurohyou-2b67`, on master at e78b4a364 (#254), master 14b181707 (#256, #257) merged in for the second
-round; PR #258. docs/psp-core.md, part 96, has the evidence; docs/psp-gpu-renderers.md ("Filled from memory", "A depth
-buffer drawn with two frame buffers") the GPU's side. Clean room: no PPSSPP code read, JPCSP not read. Save states
-unchanged (an old state's 16-bit depth is in the old order: games that clear or redraw their depth each frame, all the
-kit's and Kurohyou's, don't notice; one that drew it once and kept it would test against it scrambled until it drew it
-again).
+round and cc0638372 (#259) for the third; PR #258. docs/psp-core.md, part 96, has the evidence;
+docs/psp-gpu-renderers.md ("Filled from memory", "A depth buffer drawn with two frame buffers") the GPU's side. Clean
+room: no PPSSPP code read, JPCSP not read. Save states unchanged (an old state's 16-bit depth is in the old order: games
+that clear or redraw their depth each frame, all the kit's and Kurohyou's, don't notice; one that drew it once and kept
+it would test against it scrambled until it drew it again).
 - **The bug**: in Kurohyou 1 and 2, characters crossing x = 240 lost their left part under Software (a straight edge at
   240) and vanished under Vulkan (both modes); a faint seam in the floors at 240. Not the scissor, region, offsets or
   bounding boxes (none in the frame): the games draw their pre-rendered depth into the depth buffer's memory as a 5650
@@ -66,10 +66,24 @@ again).
   clear fill it whole (a trace: the rows filled, not just the pages, still had all 239). The finish now looks at the
   filled rows the PRIM draws in: IL-2 601 and 841 (master's), Kurohyou 1 601 and Kurohyou 2 901 as before, the page
   cache gone. IL-2's row 272 is filled from memory as on master (part 96's "still not done").
+- **Third round** (the second review's blocker): the finish still came one to three times a frame in games that draw
+  their post-processing into their depth buffer's memory (Brave Story, Brothers in Arms, Burnout Dominator, Chili Con
+  Carnage, Crazy Taxi, Dirt 2, both Fate Extras, GTA Chinatown Wars, Jak and Daxter, WipEout Pure), pictures master's,
+  fast mode 17-33% slower on the M1. A trace of each: seven clear their depth or write it with a test always true
+  (nothing read), Chili's and Dirt 2's 2D sprites at 65535 "greater or equal" pass whatever they find, GTA's radar
+  stamp lies in rows 186-262 below the 176 its bloom changed (its scissor said 272). Now the finish comes only where the
+  PRIM's test reads the depth filled (not a clear, not always or never true, not decided by its depths), in the rows its
+  pixels can be in (a 3D PRIM's vertices put on the screen by the GE, `GE::reachedBy()`, asked through
+  `Renderer::begin()` only where its region's rows meet another target's pages). The review's sweep (all 128
+  deep-play states, 60 frames fast, master cc0638372 against this): 127 with master's finishes, Kurohyou 2 its needed
+  one more a frame (121 -> 181); the ten games' master's (Kurohyou 1's too, 121). WipEout's HUD is tested
+  against the bloom over its whole depth buffer, which the PSP reads there (3-27 pixels a frame turn on it): its
+  finish a frame stays (part 96's "still not done": the GPU move would take it, and Kurohyou 2's, away).
 - **Pictures**: both games' centre characters whole in Software, Vulkan accurate and fast, and the streets full of the
   pedestrians the scrambled depth had hidden; Vulkan against Software 0.20-0.90 (Kurohyou 1) and 0.35-0.48 (Kurohyou 2)
   at frames 30-300, no pixel more than 24 apart. The second round's 36 captures (both games, frames 30-300, all three
-  renderers) are pixel for pixel the first's. Sheets (before above after; Software, Vulkan accurate, fast):
+  renderers) are pixel for pixel the first's; the third round's too (Kurohyou 2's fast frame 90 taken a frame late in
+  one run: a rerun's the same). Sheets (before above after; Software, Vulkan accurate, fast):
   `~/phobos-work/scratch/kurohyou/png/` `pr-k1-30-full.png`, `pr-k1-30-centre.png`, `pr-k1-150-centre.png`,
   `pr-k2-90-full.png`, `pr-k2-90-centre.png`.
 - **Hashes**: master 14b181707 against 318a7c5c2 (the kit's 21 scenes, Hammerin' Hero, Jeanne d'Arc, Cars Race-O-Rama,
@@ -77,13 +91,21 @@ again).
   again); Software the same in 19, and in the 7 others (Colin McRae, both Need for Speed Most Wanted scenes, Need for
   Speed Underground Rivals, Disaster Report 3's play, Hammerin' Hero, Jeanne d'Arc: 16-bit with a depth buffer) every
   picture and the RAM the same, VRAM apart only in the depth buffer: all 130,560 drawn depths the same in the second
-  copy's order (dumps after frame 100; nothing outside its 16 KiB blocks), the first round's counts exactly.
+  copy's order (dumps after frame 100; nothing outside its 16 KiB blocks), the first round's counts exactly. Third
+  round, master cc0638372 against d67ef308f's code: the same (Vulkan 26 of 26 in both modes, Software 19 and the same
+  7); WipEout's race, added, every picture and the RAM the same in all three renderers, VRAM apart in its small 16-bit
+  depth buffer (the same depths reordered, as the 7's) and, in Vulkan, in its bloom's memory, which the HUD's finish
+  puts there each frame (after frame 100 nearer the software renderer's than master's: 43,289 bytes apart against
+  180,130).
 - **Speed**: Kurohyou 2's extra finish a frame is needed and costs: the review's M1 runs 41.7/39.3/31.6 fps on master
   against 33.9/28.2/27.7 (about 5 ms a frame more waiting), the RP6 0.64 ms a frame more GPU waiting (3.90 -> 4.54) and
   2.5% more CPU, still 77 fps headless. This round's M1 runs: about 1 ms a frame more GPU waiting in fast mode
   (4.6/4.0/3.6 -> 5.5/4.9/4.8). The first round's "no change" was wrong. A GPU move of the 5650 pixels into the depth
   would remove it (left). Kurohyou 1: master's finishes (601), 5% less CPU on the RP6. IL-2: master's finishes. Twisted
-  Metal: master's finishes; 5.5 million pixels staged in 300 frames (33.8 million in the first round).
+  Metal: master's finishes; 5.5 million pixels staged in 300 frames (33.8 million in the first round). Third round: the
+  ten games' finishes master's, Dirt 2, GTA and Brothers in Arms back at master's speed on the M1 (fast, three pairs in
+  turns: within the runs' spread; the second review had them 17-33% slower); WipEout's race keeps a finish a frame (the
+  review's M1 runs: fast 103-113 fps on master against 82-85).
 - **Tests**: three groups (draw.cpp: the depth in each format's order through each copy, Kurohyou's round trip in
   miniature; gpu.cpp: the same on the GPU over two frames, the second taking its depth from an 8888 frame buffer whose
   rows the picture changed, a 5551 depth read as a texture, a depth buffer drawn by 8888 and 5551 frame buffers, 1x and
@@ -91,7 +113,12 @@ again).
   depth-layout files against the PSP's; the start-up check tests a sprite against a depth taken across the formats. On
   318a7c5c2: tests/psp 546 groups, 0 failures, sanitized (the container check off) and not, none skipped; tests/allegrex
   78, 0; tests/psp/ares 348, 0; CI green. Mutations: the finish taken out fails both frames, the changed rows not looked
-  at fails the second.
+  at fails the second. Third round: a gpu.cpp group for the rule (a clear and a test always true over the picture, no
+  finish; sprites at 65535 and 65534, none and one; 3D quads below the picture's rows and over them, none and one;
+  another picture, the screen's own changed rows alone finding it, two), 1x and 2x, both modes. On d67ef308f: tests/psp
+  552 groups, 0 failures, sanitized and not, none skipped; tests/allegrex 78, 0; tests/psp/ares 348, 0; CI green.
+  Mutations: each part of the rule taken out or loosened fails the new group alone (the own changed rows not looked at:
+  5,187 bytes apart, one finish of two); the taken target's changed rows taken out, all pass.
 
 ## PSP NPDRM: EDATA decrypted — the PGD past the EDATA's header, on the memory stick too, its size and end the data's; a PGD file's end its data's — 2026-10-14
 

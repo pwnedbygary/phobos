@@ -174,16 +174,22 @@ drawing, another target's pixels drawn there) has the rows it may be in (all of 
 copy rearranges) filled again from memory, and the rest of the GPU's depth kept; a change to the colors leaves the
 GPU's depth alone; and a PRIM with another depth buffer than the target's last fills it afresh. The rows changed are
 filled before the next PRIM that tests or writes depth, not before one that doesn't (part 83: Darkstalkers' CPU writes
-beside its depth buffer between its 2D PRIMs, 90 fills a frame). Where rows a PRIM draws in are about to be filled
-from memory (the target's new rows and those memory changed, and those memory changed of a target it takes depth
-from: all of each 16 KiB they reach) from bytes another target has drawn on the GPU since the last finish (as colors:
-the Kurohyou games draw their pre-rendered depth into the depth buffer's memory as a 5650 frame buffer, part 96), the
-renderer finishes first (`begin()`, `depthOwned()`, counted in `Statistics::depthFinishes`), so that what's filled is
-those pixels, as the PSP's depth test reads them. Rows filled already aren't looked at again, so most PRIMs, filling
-none, look at nothing; rows filled that the PRIM doesn't draw in are filled from memory as it is, as before part 96
-(IL-2 Sturmovik draws its bloom each frame in the 16 KiB that holds its depth buffer's 273rd row: its depth-of-field
-target, 64 rows, and its clear, 272, fill that row without waiting; its 3D, whose scissor reaches row 272, then tests
-that row against the bloom as memory had it: part 96's "still not done").
+beside its depth buffer between its 2D PRIMs, 90 fills a frame). Where the depth a PRIM's test reads is about to be
+filled from memory (the target's new rows and those memory changed, and those memory changed of a target it takes
+depth from: all of each 16 KiB they reach) from bytes another target has drawn on the GPU since the last finish (as
+colors: the Kurohyou games draw their pre-rendered depth into the depth buffer's memory as a 5650 frame buffer, part
+96), the renderer finishes first (`begin()`, `depthOwned()`, counted in `Statistics::depthFinishes`), so that what's
+filled is those pixels, as the PSP's depth test reads them. A test reads the depth unless it's always or never true,
+or the PRIM's depths decide it whatever it finds (2D sprites at 65535 tested "greater or equal"), and only in the rows
+the PRIM's pixels can be in: a 3D PRIM's vertices put on the screen by the GE (`GE::reachedBy()`, which `begin()` asks
+for only where the PRIM's region's rows meet such bytes). Rows filled already aren't looked at again, so most PRIMs,
+filling none, look at nothing; depth filled that the PRIM doesn't read is filled from memory as it is, as before part
+96. Games that draw their post-processing into their depth buffer's memory clear their depth over it (Brothers in
+Arms, Brave Story, Fate Extra: no wait), and GTA Chinatown Wars tests its radar below the rows its bloom drew over (no
+wait); WipEout Pure's HUD is tested against its bloom, which the PSP's depth test reads (a finish a frame). IL-2
+Sturmovik draws its bloom each frame in the 16 KiB that holds its depth buffer's 273rd row: its depth-of-field target,
+64 rows, and its clear, 272, fill that row without waiting; its 3D, whose scissor reaches row 272, then tests that row
+against the bloom as memory had it (part 96's "still not done").
 
 **A depth buffer drawn with two frame buffers** (part 90): on the PSP the depth buffer is memory, whichever frame buffer
 it's drawn with, where each target's depth is its own on the GPU. So a target's depth says which depth it holds (the
