@@ -15,17 +15,21 @@
 //chosen, as every save Phobos writes has them, SAVEDATA_FILE_LIST naming no secure file and SAVEDATA_PARAMS of
 //zeros). Kingdom Hearts' INSDIR holds the install's icons alone (ICON0.PNG, PIC1.PNG), the game copying its data into
 //the folder itself afterwards; Gunhound EX's holds all of its 460 MB, 797 files. A folder of that name already there
-//(an install made before, which the games ask about first) is written over as the PSP's dialog writes it: INSDIR's
-//files and PARAM.SFO replaced (its keys the request doesn't set kept), anything else in it left as it was. Nothing
-//else on the memory stick is touched.
+//(an install made before, which the games ask about first) is written over as the PSP's dialog writes it, PPSSPP's
+//notes describe, and Gunhound EX's own install again shows: INSDIR's files and PARAM.SFO replaced (its keys the
+//request doesn't set kept), anything else in it left as it was; no clean-room recording covers it. Nothing else on
+//the memory stick is touched.
 //
 //Phobos copies a piece at each Update (InstallBytesPerUpdate, a fixed amount, so a run takes as many Updates every
-//time; Gunhound EX's install takes about 8 seconds at 60 a second), into a folder of its own first, out of the games'
-//sight (<the memory stick>/.phobos-install/<game><data>), which becomes the save's folder (or whose files go into the
-//one there, PARAM.SFO last) once every file and PARAM.SFO are written. So Phobos stopped part way (killed, the machine
-//reset, the game aborting the dialog) leaves the saves as they were, never a half folder a game would take for its
-//install; a copy left so is taken away by the next install of the same data. The copy isn't state: loading a state
-//takes the copy's folder away (and nothing else), and an install running in the state starts again at its next Update.
+//time; Gunhound EX's install takes about 8 seconds at 60 a second), into a folder of its own first,
+//<the memory stick>/.phobos-install/<game><data> (InstallCopies: io.cpp keeps it from the programs' sight and reach),
+//which becomes the save's folder (or whose files go into the one there, PARAM.SFO last) once every file and PARAM.SFO
+//are written. So Phobos stopped part way (killed, the machine reset, the game aborting the dialog) leaves the saves as
+//they were, never a half folder a game would take for its install. As one install runs at a time, whatever is in that
+//folder when one starts, or when the memory stick is put in at power on (mount()), is a copy left so, and is taken
+//away: a phone that killed Phobos part way through a 1.5 GB install gets its room back at the next boot. The copy
+//isn't state: loading a state takes the copy's folder away (and nothing else), and an install running in the state
+//starts again at its next Update.
 //
 //Its answers, the common part's result at 28: 0, installed. 1, cancelled: the game's Abort, and (chosen) a disc with
 //nothing to install, as the dialog answered every install before part 99. 0x80111901, no memory stick (PPSSPP's
@@ -33,12 +37,13 @@
 //group's 0x80110382 to 0x80110385 are removed, no space, protected and access, as 0x80111901, PPSSPP's notes'
 //0x80111903 WRITE_PROTECTED and 0x80111904 are removed, protected and access). 0x80111904, the memory stick couldn't be
 //written (what PSPs show for Kingdom Hearts' install failing on a bad memory stick, in players' reports: "The Memory
-//Stick could not be accessed (80111904)"); chosen too for names that would lead out of SAVEDATA, and for the disc
-//failing to read. 0x80111908, a mode the PSP doesn't take, 2 or more (PPSSPP's notes). The free space is the memory
-//stick's as every function tells it (io.cpp's StickFreeClusters), the install taking each file in whole clusters, and
-//a cluster for its PARAM.SFO and one for the folder, as savedata's sizes count a save. Where the host itself hasn't
-//room for the copy (a phone's storage nearly full), the same answer, before anything is written: an install never
-//fills it.
+//Stick could not be accessed (80111904)"); chosen too for names that would lead out of SAVEDATA, a file where the
+//folder goes, a copy left before that can't be taken away, and the disc failing to read. 0x80111908, a mode the PSP
+//doesn't take, 2 or more (PPSSPP's notes). The free space is the memory stick's as every function tells it (io.cpp's
+//StickFreeClusters), the install taking each file in whole clusters, and a cluster for its PARAM.SFO and one for the
+//folder, as savedata's sizes count a save. Where the host itself hasn't room for the copy and 64 MiB more (a phone's
+//storage nearly full), the same answer, before anything is written; and the same where a write fails with the host
+//short of that room (filled meanwhile), the copy given up and its room given back.
 
 namespace {
   constexpr u32 InstallRemoved = 0x8011'1901, InstallNoSpace = 0x8011'1902, InstallAccess = 0x8011'1904;
@@ -46,7 +51,6 @@ namespace {
   constexpr s32 InstallShowsProgress = 1;   //the mode the PSP shows its progress screen in
   constexpr u64 InstallHostRoom = 64_MiB;   //what an install leaves free on the host, at least
   constexpr u32 InstallIconMost = 1_MiB;    //(INSDIR's ICON0.PNG shown by a front end: anything larger isn't one)
-  constexpr const char* InstallCopies = ".phobos-install";  //the folder the copies are made in, the stick's own
 
   auto installAnswerName(u32 answer) -> const char* {
     switch(answer) {
@@ -66,6 +70,25 @@ auto Kernel::installTrace(const std::string& text) -> void {
   if(savedataTrace) savedataTrace("gamedata install: " + text);
 }
 
+//The copies' folder at the top of the memory stick in the host folder `stick` taken away with all it holds: copies
+//installs left (Phobos stopped part way), as no install is running when this is asked. A link put in its place is
+//taken away itself, never followed. Whether nothing of it is left.
+auto Kernel::installLeftovers(const std::string& stick) -> bool {
+  namespace fs = std::filesystem;
+  std::error_code error;
+  fs::remove_all(fs::path(stick) / InstallCopies, error);
+  return !error;
+}
+
+//Why a write to the copy failed: the host short of room (the 64 MiB an install leaves free), so no space, as a full
+//memory stick would answer; anything else, the memory stick couldn't be written.
+auto Kernel::installWriteFailed() -> u32 {
+  namespace fs = std::filesystem;
+  std::error_code error;
+  auto space = fs::space(fs::path(install.partial).parent_path(), error);
+  return !error && space.available < InstallHostRoom ? InstallNoSpace : InstallAccess;
+}
+
 //(at an Update while the dialog runs, from dialogUpdate()) The copy begun, or carried on a piece, its progress
 //written; once every file is there, made the save's folder, and the dialog finished.
 auto Kernel::installUpdate() -> void {
@@ -79,9 +102,10 @@ auto Kernel::installUpdate() -> void {
   installFinish(installCommit());
 }
 
-//The copy begun: INSDIR's files listed (a disc with none answered first, as before part 99), the request checked, the
-//files measured against the free space, and the folder the copy is made in emptied of any copy cut short before. 0,
-//or the answer the dialog finishes with.
+//The copy begun: INSDIR's files listed (a disc with none answered first, as before part 99), the request checked (a
+//file where the folder goes found before anything is copied), the files measured against the free space, and the
+//copies' folder emptied of every copy left in it (installLeftovers()), or the install given up if it can't be. 0, or
+//the answer the dialog finishes with.
 auto Kernel::installBegin() -> u32 {
   namespace fs = std::filesystem;
   u32 p = dialog.parameters;
@@ -99,7 +123,11 @@ auto Kernel::installBegin() -> u32 {
   };
   std::string root, normalized, target;
   std::error_code error;
+  //(names that are plain, as a save's must be, and a folder's not ending in '.' or ' ': FAT and Windows drop those,
+  //so "DATA." would go into DATA's folder there and be a folder of its own elsewhere. The savedata utility's names are
+  //left as they were, a save made so still loading.)
   bool plain = plainName(game, 13) && (data.empty() || plainName(data, 20));
+  plain = plain && install.folder.back() != '.' && install.folder.back() != ' ';
   if(plain && devices.count("ms0")) target = savePath(install.folder);
   //INSDIR's files (folders in it aren't copied), from the disc image, or from the host folder standing for the disc
   //(sorted, as the disc's are)
@@ -136,14 +164,14 @@ auto Kernel::installBegin() -> u32 {
   if(!memory.reaches(p, 0x590) || !plain || target.empty() || resolve("ms0:/", root, normalized)) {
     return refused(InstallAccess);
   }
+  if(fs::exists(fs::symlink_status(target, error)) && !there) return refused(InstallAccess);
   if(clusters > StickFreeClusters) return refused(InstallNoSpace);
   auto space = fs::space(root, error);
   if(!error && space.available < install.total + InstallHostRoom) return refused(InstallNoSpace);
-  //(its own folder: a real one, so what's taken away is the copy's alone)
+  //(its own folder, a real one, so what's taken away is the copies' alone)
   auto copies = fs::path(root) / InstallCopies;
-  if(fs::is_symlink(copies, error)) return refused(InstallAccess);
+  if(fs::is_symlink(copies, error) || !installLeftovers(root)) return refused(InstallAccess);
   install.partial = (copies / install.folder).string();
-  fs::remove_all(install.partial, error);
   fs::create_directories(install.partial, error);
   if(error || !fs::is_directory(install.partial, error)) return refused(InstallAccess);
   if(frontDialogs && mode == InstallShowsProgress) {
@@ -158,7 +186,8 @@ auto Kernel::installBegin() -> u32 {
 }
 
 //A piece of the copy: up to InstallBytesPerUpdate bytes, the next of each file in turn, onto the end of its copy (an
-//empty file made as it's reached). 0, or the answer the dialog finishes with.
+//empty file made as it's reached). 0, or the answer the dialog finishes with (for a write that fails,
+//installWriteFailed()'s).
 auto Kernel::installStep() -> u32 {
   namespace fs = std::filesystem;
   std::vector<u8> bytes;
@@ -171,7 +200,7 @@ auto Kernel::installStep() -> u32 {
     std::ofstream stream(fs::path(install.partial) / file.name, mode);
     stream.write((const char*)bytes.data(), count);
     stream.close();
-    if(!stream) return InstallAccess;
+    if(!stream) return installWriteFailed();
     install.at += count, install.copied += count, left -= count;
     if(install.at == file.size) install.file++, install.at = 0;
   }
@@ -187,7 +216,8 @@ auto Kernel::installRead(const Install::File& file, u64 at, u64 size, u8* data) 
 
 //Every file copied: the install's PARAM.SFO written beside them (from INSDIR's own if it had one, else the one in the
 //folder there, else afresh; a broken one afresh), then the copy made the save's folder, or each of its files moved into
-//the one there over the file of its name, PARAM.SFO last. 0, or the answer the dialog finishes with.
+//the one there over the file of its name, PARAM.SFO last. 0, or the answer the dialog finishes with. (What's at the
+//save's folder is looked at again here: installBegin() looked before the copy, which a host may have changed since.)
 auto Kernel::installCommit() -> u32 {
   namespace fs = std::filesystem;
   u32 p = dialog.parameters;
@@ -213,7 +243,7 @@ auto Kernel::installCommit() -> u32 {
   if(broken) sfo.values.clear();
   describe();
   if(sfo.size() > 64_KiB) sfo.values.clear(), describe();
-  if(!sfo.write(written)) return InstallAccess;
+  if(!sfo.write(written)) return installWriteFailed();
   fs::create_directories(fs::path(target).parent_path(), error);
   if(!there) {
     fs::rename(install.partial, target, error);

@@ -2187,6 +2187,10 @@ struct Kernel {
     std::vector<u8> icon;     //INSDIR's ICON0.PNG, for a front end
   } install;
   static constexpr u64 InstallBytesPerUpdate = 1_MiB;
+  //the memory stick's own folder the copies are made in, at its top, which programs can neither see nor reach (io.cpp)
+  static constexpr const char* InstallCopies = ".phobos-install";
+  auto installLeftovers(const std::string& stick) -> bool;
+  auto installWriteFailed() -> u32;
   auto installUpdate() -> void;
   auto installBegin() -> u32;
   auto installStep() -> u32;
