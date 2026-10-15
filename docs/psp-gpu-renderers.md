@@ -183,10 +183,17 @@ pixels moved into the depth on the GPU (`moveIntoDepth()`, called by `fill()`: a
 build over the rectangle filled, each depth the two bytes of the other's pixel at the depth's bytes, in the copy's
 order, narrowed as a read back for memory narrows it), whether the PRIM reads them or not, so a later one that finds
 those rows filled reads them current too. A PRIM drawing again in those pages has the depths over them filled again,
-though memory heard of its rectangle before (`own()`, `depthSources`). Where the GPU can't (`Backend::depthMoves`: no
-such pipeline, or the start-up check fails it, and System checks again without), or where the target filled drew in
-those pages itself (its own pixels don't go into its own depth), the renderer finishes first (`begin()`,
-`depthMovable()`, counted in `Statistics::depthFinishes`) and the depth is filled from memory, which has them then.
+though memory heard of its rectangle before (`own()`, `depthSources`). Where the rows filled take pages the target
+filled drew in itself as well as another's (its own pixels don't go into its own depth), the renderer finishes first
+(`begin()`, `depthMovable()`, counted in `Statistics::depthFinishes`) and the depth is filled from memory, which has
+both then; where they take its own pages alone, nothing is finished, and the depth there is memory's as it is (part
+96's "Still not done"). Where the GPU can't move them at all (`Backend::depthMoves`: no such pipeline, or the start-up
+check fails it, and System checks again without, saying so in one line), it finishes first only where the PRIM's
+depth test reads what's filled: not a clear's, nor a test always or never true, nor one its depths decide, and in
+the rows its pixels can be in (a 3D PRIM's vertices on the screen, `GE::reachedBy()` through `Renderer::begin()`,
+asked only then); the rest is filled from memory as it is, master's stale depth for a later PRIM that finds it
+filled. A finish for every such fill had the dozen games that draw their post-processing over their depth buffer
+wait one to three times a frame (part 96: Dirt 2 at 181 finishes in 60 frames, master 2).
 Where the moves put pixels in every depth filled (each 16 KiB the rows reach all one other target's pages and its
 drawn rectangle's full rows over them), nothing is taken from memory first (`depthCovered()`,
 `Statistics::depthsCovered`): without that, WipEout's HUD target filled its depth's rows from memory on the CPU each

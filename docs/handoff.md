@@ -33,11 +33,11 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 ## PSP GE: the depth buffer in the order its frame buffer's format has it — the Kurohyou games' characters at the screen's middle (deep play batch 04, bug 2) — 2026-10-14
 
 Branch `cursor/psp-kurohyou-2b67`, on master at e78b4a364 (#254), master 14b181707 (#256, #257) merged in for the second
-round and cc0638372 (#259) for the third (the fourth on it too); PR #258. docs/psp-core.md, part 96, has the evidence;
-docs/psp-gpu-renderers.md ("Filled from memory", "A depth buffer drawn with two frame buffers") the GPU's side. Clean
-room: no PPSSPP code read, JPCSP not read. Save states unchanged (an old state's 16-bit depth is in the old order: games
-that clear or redraw their depth each frame, all the kit's and Kurohyou's, don't notice; one that drew it once and kept
-it would test against it scrambled until it drew it again).
+round, cc0638372 (#259) for the third (the fourth on it too) and 02cd1fa8c (#260) for the fifth; PR #258.
+docs/psp-core.md, part 96, has the evidence; docs/psp-gpu-renderers.md ("Filled from memory", "A depth buffer drawn with
+two frame buffers") the GPU's side. Clean room: no PPSSPP code read, JPCSP not read. Save states unchanged (an old
+state's 16-bit depth is in the old order: games that clear or redraw their depth each frame, all the kit's and
+Kurohyou's, don't notice; one that drew it once and kept it would test against it scrambled until it drew it again).
 - **The bug**: in Kurohyou 1 and 2, characters crossing x = 240 lost their left part under Software (a straight edge at
   240) and vanished under Vulkan (both modes); a faint seam in the floors at 240. Not the scissor, region, offsets or
   bounding boxes (none in the frame): the games draw their pre-rendered depth into the depth buffer's memory as a 5650
@@ -84,19 +84,31 @@ it would test against it scrambled until it drew it again).
   those bytes on the GPU since the last finish is made what a finish then the fill would make it, on the GPU
   (`moveIntoDepth()` from `fill()`: a Move into the depth, move.frag's DEPTH build, each depth the two bytes of the
   other's pixel at the depth's bytes in its format's copy order, narrowed as memory would have it), at every such fill,
-  so a later PRIM that finds those rows filled reads them current too (the second review's five cases, now tests);
-  round three's rule, `GE::reachedBy()` and `begin()`'s argument are gone. A PRIM drawing again where a depth took
-  from has that depth filled again (told rectangles too); a texture through the depth views finishes first where its
-  decoding would anyway. Where the GPU can't (no pipeline, or the start-up check's new case fails: checked again
-  without), or the target drew in those pages itself, a finish first: exact either way. The sweep (the 128 deep-play
-  states, 60 frames fast): all 128 with master's finishes, Kurohyou 2's too (121; the third round 181). In 300 frames,
-  both modes: Kurohyou 1 and 2 601 (master's; the third round had Kurohyou 2 at 901), WipEout's race 1 (master's; the
-  third round 301). Instead, the Kurohyous move pixels into the depth once a frame and WipEout twice. Where those
-  moves put pixels in every depth filled (each 16 KiB all another target's drawn full rows), the fill takes nothing
-  from memory first (`depthCovered()`), and the moves' stencils go through the staging buffer in one copy: the first
-  version's M1 bench showed WipEout's HUD depth filled on the CPU each frame and a copy region a row (MoltenVK records
-  each as a blit), 27% more instructions a frame than master. A move's render pass is its rectangle's alone and its
-  layout changes three barriers, not nine: GTA's one move a frame had cost 0.3 ms more waiting on the M1.
+  so on the GPU's way a later PRIM that finds those rows filled reads them current too (the second review's five
+  cases, now tests; not a target's own pixels over its own depth, which stay memory's: part 96's "Still not done");
+  round three's rule, `GE::reachedBy()` and `begin()`'s argument went (back for the fallback in the fifth round). A
+  PRIM drawing again where a depth took from has that depth filled again (told rectangles too); a texture through the
+  depth views finishes first where its decoding would anyway. Where the target drew in those pages itself, a finish
+  first (exact); where the GPU can't move at all, in this round a finish before every such fill. The sweep (the 128
+  deep-play states, 60 frames fast): all 128 with master's finishes, Kurohyou 2's too (121; the third round 181). In 300
+  frames, both modes: Kurohyou 1 and 2 601 (master's; the third round had Kurohyou 2 at 901), WipEout's race 1
+  (master's; the third round 301). Instead, the Kurohyous move pixels into the depth once a frame and WipEout twice.
+  Where those moves put pixels in every depth filled (each 16 KiB all another target's drawn full rows), the fill takes
+  nothing from memory first (`depthCovered()`), and the moves' stencils go through the staging buffer in one copy: the
+  first version's M1 bench showed WipEout's HUD depth filled on the CPU each frame and a copy region a row (MoltenVK
+  records each as a blit), 27% more instructions a frame than master. A move's render pass is its rectangle's alone and
+  its layout changes three barriers, not nine: GTA's one move a frame had cost 0.3 ms more waiting on the M1.
+- **Fifth round** (the fourth's review: no blockers, its should-fixes; the owner's decision): without depth moves (no
+  pipeline, or the start-up check's new case fails and it passes again without), round three's rule decides the finish
+  again: not a clear's, nor a test always or never true, nor one its depths decide, and in the rows its pixels can be in
+  (`GE::reachedBy()` and `begin()`'s argument back); the rest is filled from memory as it is, master's accuracy, its
+  stale depth included. The fourth round's fallback had been round two's slowdown (the review: Dirt 2 from 2 to 181
+  finishes in 60 frames, 62.5 -> 33.8 fps; GTA from 1 to 31; Brothers in Arms from 1 to 70). Now it's round three
+  exactly: the sweep's 128 states without moves have round three's pictures, VRAM and RAM in every frame and its
+  finishes (the start-up check's second run aside: 3 a process), and so do Kurohyou 1 and 2, WipEout's race and IL-2 in
+  both modes. The start-up log says in one line when the moves are off. The review's gap and straddle cases are tests
+  now (83 in the formats' group; the straddle two-sided), catching the two mutations that had passed. With the moves on
+  nothing changes: the sweep's counts and the hashes are the fourth round's.
 - **Pictures**: both games' centre characters whole in Software, Vulkan accurate and fast, and the streets full of the
   pedestrians the scrambled depth had hidden; Vulkan against Software 0.20-0.90 (Kurohyou 1) and 0.35-0.48 (Kurohyou 2)
   at frames 30-300, no pixel more than 24 apart. The second round's 36 captures (both games, frames 30-300, all three
@@ -131,7 +143,12 @@ it would test against it scrambled until it drew it again).
   turns): WipEout's race 102.3-107.1 fps on master against 100.9-105.1 (0.45% more instructions; 0.5% in 1,500
   frames), Kurohyou 2 89.5-91.8 against 91.7-92.5 (5.3% fewer instructions); GTA, Dirt 2, IL-2 and Twisted Metal
   within the runs' spread; Kurohyou 1 53.0-54.1 against 50.2-50.6 and Kurohyou 2 accurate 57.8-58.2 against 55.9-56.5,
-  1.0 and 0.7 ms more GPU waiting a frame, 0.8 ms of Kurohyou 1's round three's too: the pedestrians drawn.
+  1.0 and 0.7 ms more GPU waiting a frame, 0.8 ms of Kurohyou 1's round three's too: the pedestrians drawn. The RP6
+  (the owner's profile, master against the fourth round): WipEout's race 70.7 -> 70.6 fps, Kurohyou 2 83.1 -> 82.7,
+  Dirt 2 61.8 -> 62.6, GTA 92.9 -> 93.5, IL-2 34.9 -> 34.5, Twisted Metal 176.8 -> 175.9, Kurohyou 1 48.9 -> 47.7; the
+  start-up check passed on its Adreno with the moves on. Fifth round without moves: round three's finishes, so its
+  speed (Dirt 2, GTA and Brothers in Arms at master's finishes; WipEout's race and Kurohyou 2 one more a frame, the
+  RP6's 62.2 -> 55.6 and 65.8 -> 55.8 on the third round).
 - **Tests**: three groups (draw.cpp: the depth in each format's order through each copy, Kurohyou's round trip in
   miniature; gpu.cpp: the same on the GPU over two frames, the second taking its depth from an 8888 frame buffer whose
   rows the picture changed, a 5551 depth read as a texture, a depth buffer drawn by 8888 and 5551 frame buffers, 1x and
@@ -151,7 +168,13 @@ it would test against it scrambled until it drew it again).
   shapes, the CPU's bytes over them; every depth and VRAM byte the software renderer's), the formats' group both ways,
   and the start-up check's new case. On e78ccb495: tests/psp 553 groups, 0 failures, sanitized and not, none skipped;
   tests/allegrex 78, 0; tests/psp/ares 348, 0; CI green. Mutations: 17, 13 failing (nothing moved fails all four, the
-  start-up check too), 4 passing by design (part 96).
+  start-up check too), 4 passing by design (part 96). Fifth round: the review's gap and straddle cases in the formats'
+  group (83 cases); the depth-current group's way without moves has round three's finishes (one, one and two in three
+  cases, none in the rest), exact where round three is. On the merge of master's 02cd1fa8c: tests/psp 555, 0
+  without the sanitizers and sanitized (run again: the first lost the Mac's GPU under load, a wait past five
+  seconds); tests/allegrex 78, 0; tests/psp/ares 348, 0; CI on the pushed head. The library check in Vulkan of the
+  fourth round's head (its way the fifth's with the moves): none apart from master's in every run, the only flag
+  Monster Hunter 3rd HD's intro movie a frame apart in 3 of 5 runs.
 
 ## PSP: ticks as RFC 2822 and RFC 3339 text (MediEvil's save details), a list save to its list's names (Lumines II), the depth-view loads' test deterministic — 2026-10-15
 
