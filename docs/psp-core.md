@@ -15765,3 +15765,159 @@ dialog (the branch's runner and master's, built from `1d62fed2d` and `1c75c5600`
   they failed on; `hashkit/`, the scenes; the review's round: `resolve-merge.py`, the merge's docs; `mut-scaffold.patch`
   and `mut.sh`, the mutations, `logs/mut-*.log`; `e2e/`, the installs and boots on fresh sticks; `bws-r2.sh` and
   `runs-r2/`, Black Wolves Saga). Nothing was run on the RP6.
+
+## Part 102: Vulkan at 5x on the RP6 — what grows with the resolution (the scene passes' hidden pixels, shaded because the shader writes the depth; Activision Hits' depth copies through the staging buffer), the depth-writing shader's depth declared never above the depth rasterized, another frame buffer's depth taken image to image
+
+On branch `cursor/psp-hires-2b67` (draft PR #265), on master `a8d5640f5` (part 101, #263). The 5x collapse the nightly
+sweep found on the RP6, found out game by game on the M1 with a measurement build and then on the RP6 itself (the
+coordinator's runs: no agent touches the RP6). Clean room: no PPSSPP for the GE or GPU code, JPCSP not read; for what
+Turnip does, Mesa's documentation and Igalia's write-up of Adreno's low-resolution Z. Save states: unchanged.
+
+**The problem.** The sweep (nightly-215681, the owner's profile, Turnip v37, Vulkan fast) at 5x against 1x: Activision
+Hits 57.6 → 2.9 fps, Chains of Olympus 59.6 → 9.8, Ghost of Sparta 36.8 → 10.8, Killzone 59.7 → 24.0, Super Monkey
+Ball Adventure 35.6 → 26.3, Army of Two: The 40th Day 42.5 → 25.6, Colin McRae Rally 59.2 → 52.9; the HUD in the 5x
+shots had the GPU 93-98% busy at 615-680 MHz and the CPU at 7-19%.
+
+**What grows with the resolution** (the M1, MoltenVK, Vulkan fast, late frames as the app presents them, 120 frames;
+a scratch build with a timestamp query before each pass of draws and each other command, `~/phobos-work/scratch/
+psp-hires/patches/gputime-patch.py`):
+- Nothing on the CPU: no finish or read back a frame, the CPU's conversions under 0.1 ms a frame, the emulation
+  thread's instructions flat from 1x to 5x (Chains of Olympus 100 → 107 million); the CPU waits for the GPU.
+- The GPU's milliseconds a frame, 1x → 5x, are the passes of draws: Chains of Olympus 18.5 → 138.6 (passes 10.0 →
+  124.0: its scene, one pass of 37 draws, 36 meshes of 6,500 triangles, every one depth-tested, 2-4 ms at 1x and
+  47-49 at 5x), Ghost of Sparta 19.0 → 148.0 (136.1), Army of Two 23.8 → 87.8 (75.3), Killzone 28.1 → 86.0 (76.1),
+  Super Monkey Ball 13.6 → 71.0 (62.8), Activision Hits' copyright screen 10.4 → 86.1 (62.0, and its depth copies
+  4.5 → 23.7).
+- Those passes' fragments: every pipeline whose depth test or write depends on the depth takes `draw.frag`'s `DEPTHS`
+  build (part 83), which writes the GE's whole number as `gl_FragDepth`; the GPU tests such a depth after the shader,
+  so every hidden pixel is shaded, its texels filtered in the shader. Without that build (timing only: the pictures
+  aren't exact) Chains of Olympus at 5x ran 7.3 → 13.4 fps on the M1 and 9.6 → 19.1 on the RP6. A Metal System
+  Trace of it: 18.2 s of fragment work in a 21.9 s run.
+- Chains of Olympus draws its scene two or three times a vblank (below). Activision Hits' copyright screen loops
+  about ten times a vblank over three frame buffers that share a depth buffer: 28 whole-screen depth copies a frame
+  (`Command::Depth`, 98.7 million pixels a frame at 5x, through the run's staging buffer) and 42 whole-target blended
+  quads.
+
+**The RP6** (the coordinator's runs of a measurement build, `rp6/hires-rp6.sh`: 150 frames, two rounds, the best of
+them; Turnip StevenMXZ v26.3.0 loaded as the app loads its own, and Qualcomm's driver; fps, with the GPU's ms a frame):
+
+| 5x, Turnip | master | the declaration | no DEPTHS (inexact) | render areas | depth image to image |
+|---|---|---|---|---|---|
+| Chains of Olympus (menu) | 9.6 / 103.2 | 9.8 / 100.5 | 19.1 / 51.2 | 9.8 / 100.4 | 10.1 / 97.9 |
+| Ghost of Sparta (menu) | 8.9 / 111.8 | 8.9 / 111.8 | 10.6 / 92.9 | 8.9 / 111.7 | 9.2 / 107.6 |
+| Super Monkey Ball (story) | 13.4 / 72.2 | 14.2 / 68.3 | 15.3 / 63.3 | 14.3 / 67.6 | 15.8 / 61.0 |
+| Killzone (play) | 15.8 / 61.4 | 16.0 / 60.8 | 17.1 / 56.8 | 16.1 / 60.4 | 16.0 / 60.8 |
+| Army of Two (play) | 14.9 / 65.4 | 14.9 / 65.4 | 18.8 / 51.6 | 15.0 / 65.1 | 15.8 / 61.4 |
+| Activision Hits (copyright) | 2.7 / 373.7 | 2.7 / 373.7 | 3.1 / 324.4 | 2.7 / 374.0 | 19.3 / 50.9 |
+
+(The declaration there is the measurement build's, both directions, below; "render areas" and "image to image" have
+it too.) At 1x nothing changed (Chains of Olympus 127.7 / 128.3 fps). Qualcomm's driver: the declaration +1-2%, its
+passes slower than Turnip's everywhere (Chains of Olympus 106 against 92 ms) but its staging copies of depth fast
+(Activision Hits 12.9 fps at 5x, 28 ms of depth copies against Turnip's 331). Everything at 5x is the GPU's (Chains
+of Olympus 17.5 ms of CPU a frame against 103 of GPU).
+
+### The depth declared never above the depth rasterized
+
+`draw.frag`'s `DEPTHS` build declares `layout(depth_less) out float gl_FragDepth`: the depth it writes, the GE's whole
+number floor(z) / 65536, is never above the depth the GPU rasterizes. Rasterized as the GE's, z / 65535, it's above the
+whole number by z / 65535 - floor(z) / 65536, nothing at 0; so where the device clamps depth, the pipelines that take
+the build rasterize it a step and a half above, (z + 1.5) / 65536.5 (`draw.vert`'s and `transform.vert`'s
+specialization constant `ABOVE`, set by `pipelineFor()`): the whole number lies a step below it at least, whatever
+the GPU's rounding between its depth and the depth interpolated beside it, and every 3D corner's depth rasterized lies
+within 0-1 (held to 0-65535; 1.0 at 65535). A 2D corner's depth isn't held, and past 0-65535 it's clamped there as
+before. A GPU that takes the declaration may then reject, before the shader runs, a fragment a greater or
+greater-or-equal test fails, as it would fail it after. Metal takes it; Turnip doesn't (the table: +0-6%), nor
+Qualcomm's driver; it costs nothing where it isn't taken (the same pipelines, the same SPIR-V but for the
+declaration).
+
+What was tried and left out: a "never below" build for less and less-or-equal tests, which Chains of Olympus, Ghost of
+Sparta, Army of Two and Killzone draw their scenes with (Super Monkey Ball tests "greater or equal"), the one that gave
+the M1 its gain (Chains of Olympus at 5x 7.2 → 12.3 fps, its scene pass 47 → 18-19 ms). Its depth rasterized must lie
+below the whole number, which is 0 for any depth below 1: a corner's depth rasterized below 0 (clamped per pixel), or
+the declaration untrue. The test below found both wrong on the M1: a 2D depth past 65535 clamped to 1.0, above the
+65535 written (fixed by holding it first); and a 3D floor with the depth range turned around, its far corners' depth
+0.73, whose less-or-equal strip lost whole rows to the first drawing, at 1x and 2x, in both modes — with no
+declaration at all too: MoltenVK moves the depth interpolated beside a corner rasterized below 0 (depthClampEnable
+or not; nothing's clipped, every pixel is drawn), and whole numbers flip where the depth is steep. Held at 0, the
+corner's depth makes the declaration untrue wherever the held corner weighs in (a coplanar less-or-equal redraw then
+loses pixels). Exact on any GPU, it would need a depth encoding with room below 0 (below, Left).
+
+**The test** (`tests/psp/gpu.cpp`, "gpu depth a GPU may test before the shader runs"): the builds' SPIR-V execution
+modes (DEPTHS and SINGLE DEPTHS DepthReplacing and DepthLess, the others none); then the same triangles drawn twice,
+the first time written with "always", the second tested with each comparison, every comparison over a strip of its
+own, their depths across all of 0-65535: always, equal, at most and at least draw over every pixel the first drew, the
+others over none. In both modes, at 1x and 2x: 2D strips against the software renderer, 2D depths past 65535 (at
+most, equal and at least over 65535, where the GPU clamps depth: the capability `vulkan-depth-clamp`, which CI's
+lavapipe lanes require), and a 3D floor from the near plane to the far one, its depth 36-65534 along it, the depth
+range either way. It fails on the measurement build's both-ways placement (the two cases above).
+
+### Another frame buffer's depth taken image to image
+
+`takeDepth()`'s `Command::Depth` (part 90) copied the other target's depth into the buffer and out into this one's, as
+MoltenVK's copy between images of their depth aspect alone takes the stencil too, where the stencil is each frame
+buffer's own. Now it's copied from image to image (`vkCmdCopyImage`, the depth aspect alone, the same regions and runs)
+where the device's such copy is found to leave the stencil: `depthAloneProbe()`, as the backend starts, clears two
+128x64 pictures of the depth format to depths and stencils of their own, copies the first's depth into the second and
+reads the second's stencil and depth back (`Backend::depthAlone`); elsewhere the staging buffer as before, no room
+reserved in it where it isn't used. The same depths by construction either way (a copy of the same format's depth
+values), and the stencil left by construction: the copy is made only where it's been seen to leave it. Not on the
+M1: MoltenVK's copy takes the stencil (Metal copies a depth and stencil picture whole), and so does lavapipe's (the
+first push of this work had the copy on every device but a portability implementation, and CI's lavapipe lanes failed
+gpuSharedDepth's stencil bytes, 0x5a expected, the other frame buffer's 0xa5, every depth right). On the RP6 the probe
+decides (Turnip keeps the stencil of a depth and stencil picture in a plane of its own, so its copy should leave it;
+the RP6's runs say, "hires driver" and the depth copies' milliseconds). The tests that take depth between frame buffers
+(gpuSharedDepth: each its own stencil; gpuDepthOrders: the runs between an 8888 frame buffer and a 16-bit one, at 1x
+and 2x) pass either way; where the probe says no, gpuSharedDepth forces the copy once and finds the stencil taken, as
+the probe said; forced on MoltenVK with each run's two offsets swapped, the copy fails gpuDepthOrders in every way it's
+run. Activision Hits' copyright screen at 5x on the RP6, with the copy (the measurement build's, made on Turnip without
+a probe): 2.7 → 19.3 fps.
+
+### Exactness
+
+The 21 kit scenes and five more (Hot Wheels' race, Killzone's play and menu, MX vs. ATV's ride, Chains of Olympus'
+menu), 100 frames each, every frame's picture and VRAM once its drawing settled, then RAM and the machine's state:
+the same as master's at 1x in all three renderers, and at 5x, with Activision Hits' copyright screen, in both Vulkan
+modes: every hash the same (26 scenes x 3 renderers, 27 x 2). On the M1 the depth goes through the staging buffer
+(the probe's no), so the image copy is exercised by the RP6: the states saved at a frame by master's build and this
+one compared there (the handoff's commands). tests/psp: 574 groups, 0 failures (sanitized).
+
+### The Mac's numbers
+
+On the M1 (MoltenVK) this branch changes only the declaration's pipelines (the depth keeps the staging buffer: the
+probe's no), which help a greater-or-equal test (Super Monkey Ball), not the less-or-equal scenes; the 1x, 2x and 5x
+before and after are to follow (the shared Mac was taken by another session's timing when this was written; a timing
+run that overlapped it was thrown away). For scale, the 134dfc49d measurement build's quiet run (best of three, 120
+late frames): Chains of Olympus at 5x 8.80 fps without the declarations, 15.77 with both directions (the never-below
+build, left out, gave that), 17.06 with no depth written at all; at 1x 61.4, 70.9 and 71.3.
+
+### Chains of Olympus' scenes a vblank: ours
+
+Its menu draws its scene two or three times a vblank (the same 37 draws each time, in fast and accurate mode alike), and
+each costs the host its drawing at 5x. That's the GE's time (part 62's): Chains of Olympus' loop never waits for the
+vertical blank (sceGeListSync of the last frame's list, the frame shown at once, the next queued), so it draws as often
+as the GE finishes, and geTime() charges a list Sony's peak figures, a lower bound: about 4.2 million pixels a scene
+at four a clock, 6.3 ms at 166 MHz, 2.6 scenes a vblank. A PSP's GE is slower and draws fewer (part 62's "Left"); how
+many, nothing measured says. At one pixel a clock it would be 0.65 a vblank, a quarter of the host's work now. The way
+there is a round of measurements on the owner's PSP (fills textured and not, 16- and 32-bit, triangles of a few sizes,
+transfers, timed around sceGeDrawSync) and geTime() from them: GE timing, not the renderer's.
+
+### Left
+
+- **The shader's depth write on Adreno**, the RP6's biggest cost (without it, timing only, Chains of Olympus +100%,
+  Army of Two +26%, Ghost of Sparta +20%, Activision Hits +15%, Super Monkey Ball +14%, Killzone +8%). Taking the depth
+  from the GPU's fixed function (that build left out, D16 rounding, a shifted depth with a shifted comparison,
+  gl_FragCoord.z) decides whole numbers by another interpolator than the shader's, and where the two straddle one the
+  pixel differs. Exact ways, designed, none made: flat draws (every corner one depth) without the write, their depth
+  rasterized as the whole number written (a constant interpolates exactly, as master's shader already assumes); the
+  shader reading the depth as it is (rasterization order) and discarding before its texels where the GE's comparison
+  fails, a failure that changes nothing else (stencil); Turnip taking the declaration (low-resolution Z before the
+  shader, the depth test after), in the app's own Turnip; and the "never below" build exact on any GPU with an
+  encoding with room below 0 and above 65535 (floor(z) + K over 2^17, every corner's depth within 0-1), which changes
+  the depth's conversions (`GPU::depthToFloat()` and the rest, `copy.frag`, `move.frag`).
+- Render areas over what a pass's draws reach: the RP6 +0-1% (Chains of Olympus' passes 388 → 119 a frame, its GPU
+  time the same), so not made.
+- A 2D corner's depth past 0-65535 is clamped per pixel on the GPU (the software renderer holds each corner's), as
+  before.
+- Scratch: `~/phobos-work/scratch/psp-hires` (`NOTES.md`; `patches/`, the measurement builds' patches; `rp6/`, the RP6
+  build, `hires-rp6.sh` and its table; `logs/`, the tests, experiments and suites; `hash/`, the hash runs;
+  `coo-time.sh`, the Mac's timing).
