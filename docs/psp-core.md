@@ -15765,3 +15765,70 @@ dialog (the branch's runner and master's, built from `1d62fed2d` and `1c75c5600`
   they failed on; `hashkit/`, the scenes; the review's round: `resolve-merge.py`, the merge's docs; `mut-scaffold.patch`
   and `mut.sh`, the mutations, `logs/mut-*.log`; `e2e/`, the installs and boots on fresh sticks; `bws-r2.sh` and
   `runs-r2/`, Black Wolves Saga). Nothing was run on the RP6.
+
+
+## Part 104: Activision Hits Remixed's clocks — what a PSP's power service grants a game, the bus asked for alone, and the owner's PSP's overclock
+
+On branch `cursor/psp-power-clock-2b67`, from master `a8d5640f5`. The question (part 103): on the owner's PSP Activision
+Hits Remixed's copyright screen ran at 333/166 MHz, in Phobos's state at 222/111, which matters once the GE takes a
+PSP's time (its time goes with the bus's clock). Was `scePowerSetBusClockFrequency`'s refusal of anything over 111 the
+cause? Sources: uOFW's reading of the power service (its `power` branch, pull request #82: `clockFrequency.c`,
+`power.c`), its reading of Init and the module manager; ARK-4's README and default settings. No PPSSPP or JPCSP.
+Save states are unchanged (layout 32).
+
+### What the game asks for, and what a PSP grants
+
+- **The game** (the runner from boot with a scratch build noting each power call, 1200 frames): as it starts, its
+  thread asks for a CPU of 333 (`scePowerSetCpuClockFrequency`) and a bus of 166 (`scePowerSetBusClockFrequency`),
+  then prints what it reads back. It asks for nothing else in the 1200 frames: the copyright screen, the menu's
+  loading, the startup movie.
+- **The power service**, as uOFW reads it: the CPU no faster than the PLL; the bus asked for alone no faster than half
+  the PLL, then set to half the PLL whatever a game asked; `scePowerSetClockFrequency` checks a PLL of 19 to 333, a
+  CPU of 1 to 333 and a bus of 1 to 167, the CPU no faster than the PLL and the bus no faster than half of it. A game
+  starts at the service's startup clocks for games, 222/222/111 (`_scePowerInitCallback()`, as Init finishes
+  starting the game's modules). So at a PLL of 222 both of the game's requests are refused, as Phobos refused them,
+  and it runs at 222/111.
+- **The owner's PSP granted them**: its capture, begun 4 seconds into the game (its Activision thread running),
+  found 333/166, and the GE's lists took the same time all through the copyright screen; at the capture's end the
+  clocks were 222/111, with no call of the game's to say so. The PLL was at 333 when the game asked. ARK-4's default
+  settings (`contrib/SETTINGS.TXT`) hold `always, overclock, on`: most likely that. (uOFW's reading also has the
+  service raise every clock to its most as the system reboots into a game, `_scePowerModuleRebootPhase()`, till
+  Init's callback; but traced here the game asks only after its main thread first sleeps, where Init's thread,
+  priority 32 and ready once the program's `module_start` has returned, would have had the CPU: a PSP without the
+  overclock refuses the requests.)
+
+### What changed
+
+- `scePowerSetBusClockFrequency` takes a bus up to half the PLL's speed (it refused anything over 111 whatever the
+  PLL: at 333, 112 to 166 are granted now, the bus staying at 166), as uOFW reads it.
+- `scePowerSetClockFrequency` refuses a bus above half the PLL (222/222/166 was taken, the PLL set to 222); a bus of
+  167 passes the range check, as the service's does, and fails this one at any PLL.
+- Activision Hits runs as before, at 222/111: what a PSP without the overclock gives it.
+
+### What it means
+
+- Part 103's comparison of the copyright screen put the owner's PSP at 333/166 beside Phobos at 222/111. For the GE
+  timing work it's compared at the same clocks (the PSP's GE time scaled by 166/111, or the menu's, 222/111 on
+  both, beside it).
+- The owner's captures: with ARK's overclock on, a game that leaves its clocks to the system, or asks for more than
+  a stock PSP grants, runs faster than on a stock PSP. The captures so far are at the games' own clocks (Chains of
+  Olympus and Ghost of Sparta set 333/166 themselves, Phobos's states have them too; Killzone and Super Monkey Ball
+  222/111) but for this boot. For the next ones, ARK's `overclock` setting off.
+
+### Tests
+
+"power clocks" (tests/psp/power.cpp): a bus above half the PLL refused by `scePowerSetClockFrequency`, the PLL left as
+it was; the bus asked for alone granted up to half the PLL's speed (112 at 333, the bus staying at 166), 167 refused,
+112 refused at 222 and 111 granted; and Activision Hits' start, the CPU's 333 and the bus's 166 refused at a PLL of
+222, the clocks staying 222/111. The first two fail on master.
+
+### Checks
+
+`tests/psp/run-tests.sh` (sanitized; the address sanitizer's container-overflow check off, as part 101 ran it):
+573 groups, 0 failures. CI runs tests/allegrex, tests/psp/ares and the builds.
+
+### Scratch
+
+`~/phobos-work/scratch/psp-ge-profile/power/` (`ahr-boot.sh`, the traced boots; `ahr-boot.log`, the last);
+`ref/uofw-power` (uOFW's power branch at `f7ed03aa7`), `ref/ark4-r205/README.md` and `contrib/SETTINGS.TXT`.
+Nothing was run on the RP6.

@@ -35,6 +35,19 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP power: Activision Hits Remixed's clocks — the bus asked for alone up to half the PLL, a bus above half the PLL refused, and the owner's PSP's overclock — 2026-10-16
+
+Branch `cursor/psp-power-clock-2b67` (from master `a8d5640f5`); docs/psp-core.md, part 104.
+- **The question** (part 103): the owner's PSP ran Activision Hits' copyright screen at 333/166, Phobos at 222/111.
+- **The game** asks, as it starts, for a CPU of 333 and a bus of 166 with the separate setters, and nothing else in
+  1200 frames (traced). uOFW's power service refuses both at a game's startup PLL of 222, as Phobos did; the owner's
+  PSP granted them, its PLL at 333: ARK-4's default `always, overclock, on`, most likely. Phobos's 222/111 is a stock
+  PSP's; the clocks fell to 222/111 on the owner's PSP later without a call of the game's.
+- **The change** (power.cpp): `scePowerSetBusClockFrequency` up to half the PLL (was: nothing over 111);
+  `scePowerSetClockFrequency` refuses a bus above half the PLL. "power clocks" tests both and the game's start.
+- **For the GE timing work**: the copyright screen compared at the same clocks; the owner's next captures with ARK's
+  `overclock` off.
+
 ## PSP NPDRM: PGD files on the memory stick — a game's installed data read through the PGD layer (Gunhound EX, 7th Dragon 2020); a wrong key, a damaged header and a write refused as the PGD layer refuses them — 2026-10-15
 
 Branch `cursor/psp-pgd-stick-2b67`, on master `6ff82f9f1` (part 96, #258), masters `462f8ff2f` (part 99, #261) and
