@@ -49,6 +49,8 @@
 namespace ares::PlayStationPortable {
 
 struct Memory;
+//(the render GE's reads as of a PRIM's place, with what the model declares it may read: GE::AsOf)
+struct ReadsAsOf { u64 place = 0; bool declared = false; GeModel::Interest interest; };
 
 struct GE {
   //The commands the code here refers to, by pspsdk's names for them.
@@ -547,6 +549,15 @@ struct GE {
 
   //transfer.cpp
   auto transfer() -> void;
+  struct Transfer {
+    u32 source = 0, destination = 0, sourceStride = 0, destinationStride = 0, sourceX = 0, sourceY = 0;
+    u32 destinationX = 0, destinationY = 0, width = 0, height = 0, bytes = 0;
+    std::bitset<(2 << 20) / 4096> read, written;  //(VRAM's pages: VRAMPages)
+  };
+  auto transferAsked() const -> Transfer;
+  auto transferOverwrite(u32 to, u32 size) -> void;
+  auto transferChecks() -> void;    //(the render GE's, threaded: thread.cpp)
+  auto transferThreaded() -> void;  //(the kernel's GE's, threaded: thread.cpp)
 
   //threads.cpp
   static constexpr u32 VRAMPages = (2 << 20) / 4096;  //VRAM's 2 MiB in 4 KiB pages (memory.hpp)
@@ -616,6 +627,9 @@ struct GE {
     bool depth = false;                 //some of them reach the depth buffer
     std::bitset<VRAMPages> pending;     //VRAM's 4 KiB pages it may draw over
     std::bitset<VRAMPages> reads;       //those its deferred textures are read from as it starts (Look::deferRows)
+    //(threaded, on the GE thread: each of its Looks deferred, with the place of its PRIM and what the model declares
+    //that PRIM may read, for the decode's reads as of then, whichever record the thread does as the batch starts: AsOf)
+    std::vector<std::pair<const Look*, ReadsAsOf>> asOf;
     std::atomic<bool> readsDone{false}; //and they have been, decoded (ensureDecoded)
     bool launched = false;              //handed to the workers: being drawn, or next once those before are done
     std::atomic<bool> finished{false};  //launched, and every band drawn: its pixels are all in VRAM
@@ -797,6 +811,21 @@ struct GE {
   //bytes low to high, the GPU lost; and whether every software pixel handed to it is drawn.
   auto reportFinish() -> void;
   auto reportPuts(u64 low, u64 high) -> void;
+  //(the render GE, checking: the pages the PRIM it does may read, as the model declares them, GeModel::Interest; each
+  //of its reads of memory there is asked about: VRAM's bytes low to high, offsets, or size bytes from address)
+  const GeModel::Interest* declared = nullptr;
+  auto readDeclared(u64 low, u64 high) -> void;
+  auto readDeclared(u32 address, u32 size) -> void;
+  //(the place the render GE's reads are as of, and what's declared it may read then: the record it does, or, while an
+  //AsOf lives on this thread, a deferred texture's PRIM's as its decode runs as its batch starts: ensureDecoded())
+  static thread_local const ReadsAsOf* readingAsOf;
+  auto readPlace() const -> u64;
+  auto readInterest() const -> const GeModel::Interest*;
+  struct AsOf {
+    const ReadsAsOf* was = readingAsOf;
+    AsOf(const ReadsAsOf* asOf) { if(asOf) readingAsOf = asOf; }
+    ~AsOf() { readingAsOf = was; }
+  };
   auto reportLost() -> void;
   auto drawnAll() const -> bool;
   //(the render GE, threaded) Its reads of memory and its write-backs as of the record it does (place), through the

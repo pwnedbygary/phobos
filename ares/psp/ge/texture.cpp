@@ -410,6 +410,9 @@ auto GE::ensureDecoded(Batch& batch) -> void {
   Memory::KnownDrawn known;
   for(auto look = batch.looks.begin(); look != batch.looks.end(); look++) {
     if(!look->deferRows) continue;
+    const ReadsAsOf* itsPrimitive = nullptr;  //(threaded: as of its PRIM's place, whatever record the thread does now)
+    for(auto& [deferred, reads] : batch.asOf) itsPrimitive = deferred == &*look ? &reads : itsPrimitive;
+    AsOf asOf{itsPrimitive};
     Sampler& t = look->texture;
     bool indexed = t.format >= 4 && t.format < 8;
     //every Look after it with this texture and palette, and the most rows any of them takes

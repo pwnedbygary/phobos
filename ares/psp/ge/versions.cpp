@@ -114,7 +114,8 @@ auto GeVersions::Hold::read(u32 page, u32 offset, u32 size, u8* out) const -> vo
   }
 }
 
-auto GeVersions::Hold::writeBack(u32 page, u32 offset, u32 size, const u8* in) const -> void {
+auto GeVersions::Hold::writeBack(u32 page, u32 offset, u32 size, const u8* in,
+                                 const std::function<auto (u32 byte) -> void>* stored) const -> void {
   u8* storage = page < Pages ? v.host(v.context, page) : nullptr;
   if(!storage || !size) return;
   u64 taken[PageBytes / 64] = {};
@@ -131,7 +132,9 @@ auto GeVersions::Hold::writeBack(u32 page, u32 offset, u32 size, const u8* in) c
   }
   for(u32 byte = offset; byte < offset + size; byte++) {
     if(taken[byte >> 6] >> (byte & 63) & 1) continue;
-    if(storage[byte] != in[byte - offset]) storage[byte] = in[byte - offset];
+    if(storage[byte] == in[byte - offset]) continue;
+    if(stored) (*stored)(byte);
+    storage[byte] = in[byte - offset];
   }
 }
 
@@ -170,8 +173,11 @@ auto GE::vramBytes() -> u8* {
 }
 
 //(readingVRAM()'s on the GE thread)
+//(Version places are 2 a record: the record at place n is 2n, a write with a record of its own at n 2n, one without,
+//after the record at n, 2n + 1: GeThread::before().)
 auto GE::readingVersions(u64 low, u64 high, const std::function<auto (const u8* vram) -> void>& use) -> void {
-  auto hold = vramHold(*versions, place, false, low, high);
+  readDeclared(low, high);
+  auto hold = vramHold(*versions, 2 * readPlace(), false, low, high);
   if(!hold.versioned) return use(memory.vram.data());
   u32 base = Memory::VRAMBase / GeVersions::PageBytes;
   versionedVRAM.resize(Memory::VRAMSize);
@@ -185,7 +191,7 @@ auto GE::readingVersions(u64 low, u64 high, const std::function<auto (const u8* 
 
 //(writingVRAM()'s on the GE thread)
 auto GE::writingVersions(u64 low, u64 high, const std::function<auto (const Writes&) -> void>& use) -> void {
-  auto hold = vramHold(*versions, place, true, low, high);
+  auto hold = vramHold(*versions, 2 * place, true, low, high);
   use(Writes{*this, hold.versioned ? &hold : nullptr});
 }
 
@@ -201,9 +207,14 @@ auto GE::Writes::put(u32 offset, const u8* bytes, u32 size) const -> void {
     return;
   }
   u32 base = Memory::VRAMBase / GeVersions::PageBytes;
+  bool checking = ge.reporting && ge.reporting->checking;
   for(u32 done = 0; done < size;) {
     u32 at = offset + done, part = std::min(size - done, GeVersions::PageBytes - at % GeVersions::PageBytes);
-    hold->writeBack(base + at / GeVersions::PageBytes, at % GeVersions::PageBytes, part, bytes + done);
+    u32 page = at / GeVersions::PageBytes;
+    std::function<auto (u32) -> void> stored = [&](u32 byte) {
+      ge.reporting->checkChanged(page * GeVersions::PageBytes + byte);
+    };
+    hold->writeBack(base + page, at % GeVersions::PageBytes, part, bytes + done, checking ? &stored : nullptr);
     done += part;
   }
 }
@@ -225,8 +236,9 @@ static auto pageOf(const Memory& memory, u32 address, u32& page, u32& offset) ->
 
 GE::Reading::Reading(GE& ge, u32 address, u32 size) : ge(ge) {
   u32 first, last;
+  if(ge.versioned()) ge.readDeclared(address, size);
   if(ge.versioned() && ge.memory.pagesOf(address, size, first, last)) {
-    hold.emplace(*ge.versions, ge.place, false, first, last);
+    hold.emplace(*ge.versions, 2 * ge.readPlace(), false, first, last);
   }
 }
 

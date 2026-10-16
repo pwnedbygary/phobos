@@ -280,6 +280,8 @@ struct Kernel {
   auto dispatch(u32 code, bool& quiet) -> bool;
   auto dispatchImport(u32 code, bool& quiet) -> bool;
   auto runUntilNextEvent() -> void;
+  auto runUntilNextEventThreaded() -> void;
+  auto goThreaded(u64 end) -> void;
   auto arg(u32 n) const -> u32;
   auto result(u32 value) -> void;
   auto note(const std::string& text) -> void;

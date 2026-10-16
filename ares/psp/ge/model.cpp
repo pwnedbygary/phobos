@@ -45,6 +45,7 @@ static auto putBlocks(const GeModel& model, u64 first, u64 last, std::bitset<GeM
 
 auto GE::modelPrimitive(GeModel& model, u32 word, u32 vertexAt, u32 indexAt, const GeThread::Copies& copies,
                         const u8* bytes, bool hardware, u64 at) -> bool {
+  if(model.declares) model.interest = {};
   auto p = pixelState();
   auto format = vertexFormat();
   bool patching = word >> 24 != Primitive;
@@ -52,6 +53,33 @@ auto GE::modelPrimitive(GeModel& model, u32 word, u32 vertexAt, u32 indexAt, con
   if(!patching && (kind == 7 || !format.positionFormat)) return false;  //(draws nothing: primitive())
   bool textured = (commands[TextureMappingEnable] & 1) && !p.clear;
   Sampler texture = sampler();
+  //(declaring: its texture's bytes, decoded or held before it's begun, whether or not it draws anything, and in VRAM
+  //the rows of the targets with pages there; a put point's depth buffers and the targets over them)
+  auto declareVRAM = [&](const std::bitset<GeModel::Pages>& pages) {
+    model.interest.vram |= pages;
+    model.targetsOver(pages, model.interest.vram);
+  };
+  auto declareBlocks = [&](const std::bitset<GeModel::Blocks>& blocks) {
+    std::bitset<GeModel::Pages> pages;
+    for(u32 block = 0; block < GeModel::Blocks; block++) {
+      if(blocks[block]) for(u32 n = 0; n < 4; n++) pages.set(block * 4 + n);
+    }
+    declareVRAM(pages);
+  };
+  if(model.declares && textured) {
+    u32 low, high, first, last;
+    textureBytes(texture, std::min<u32>(texture.height, 512), low, high);
+    if(high > low && memory.pagesOf(low, high - low, first, last)) {
+      u32 base = Memory::VRAMBase / Memory::PageSize;
+      if(first >= base && last < base + GeModel::Pages) {
+        std::bitset<GeModel::Pages> pages;
+        for(u32 page = first; page <= last; page++) pages.set(page - base);
+        declareVRAM(pages);
+      } else {
+        model.interest.first = first, model.interest.last = last;
+      }
+    }
+  }
   //A put point first: a texture read through VRAM's depth views has the GPU's depth put into memory (holds()), with
   //a hardware renderer, as the PRIM begins.
   u32 physical = texture.address & 0x1fff'ffff;
@@ -68,6 +96,7 @@ auto GE::modelPrimitive(GeModel& model, u32 word, u32 vertexAt, u32 indexAt, con
         if(point.covers[block]) point.before[block] = model.gpuDepth[block];
       }
       if(point.covers.any()) model.putPoints.push_back(point);
+      if(model.declares) declareBlocks(point.covers);
     }
   }
   //Where it may draw: the scissor rectangle, and in 2D, where its vertices reach (drawVertices(): the widest of
@@ -121,6 +150,26 @@ auto GE::modelPrimitive(GeModel& model, u32 word, u32 vertexAt, u32 indexAt, con
   //target's rows enough); else the software renderer's too, which draws what the GPU refuses.
   u32 address, row, column, height;
   targetPlace(p, region, address, row, column, height);
+  //(declaring: its target's rows, the target begin() picks from the PRIM's own region being this one or the frame
+  //buffer's (targetPlace()'s two), and the targets over them; where it tests or clears depth, its depth buffer's 16
+  //KiBs down to the most rows any PRIM over it has reached, this one's too (R24), and the targets over those (R22))
+  if(model.declares && hardware) {
+    u32 rowBytes = p.stride * (p.format == 3 ? 4 : 2);
+    u32 aligned = p.frameBuffer - p.frameBuffer % (Memory::PageSize % rowBytes ? rowBytes : Memory::PageSize);
+    std::bitset<GeModel::Pages> pages;
+    for(u32 start : {aligned, p.frameBuffer}) {
+      GeModel::KnownTarget t{start, p.stride, p.format};
+      model.knowTarget(start, p.stride, p.format);
+      GeModel::targetRows(t, pages);
+    }
+    declareVRAM(pages);
+    if((p.clear ? p.clearDepth : p.depthTest) && p.depthStride) {
+      std::bitset<GeModel::Blocks> blocks;
+      u32 rows = std::max<u32>(model.depthBuffer(p.depthBuffer, p.depthStride).rows, region.bottom + 1);
+      GeModel::depthBlocks(p.depthBuffer, p.depthStride, rows, [&](u32 block) { blocks.set(block); });
+      declareBlocks(blocks);
+    }
+  }
   bool gpu = hardware, certain = hardware && !model.unsure && height && region.bottom + s32(row) < s32(height);
   if(certain && textured) {
     u32 low, high;
@@ -165,6 +214,7 @@ auto GE::modelPrimitive(GeModel& model, u32 word, u32 vertexAt, u32 indexAt, con
           if(point.covers[block]) point.before[block] = model.gpuDepth[block];
         }
         model.putPoints.push_back(point);
+        if(model.declares) declareBlocks(point.covers);
       }
       if(depthWrites) d.newestClass = certain ? mine : (d.newestClass == ~0u ? 0 : d.newestClass) | mine;
     }
@@ -204,6 +254,11 @@ auto GE::modelPrimitive(GeModel& model, u32 word, u32 vertexAt, u32 indexAt, con
       }
       t->hullAt = std::max(t->hullAt, at);
     }
+  }
+  if(software && textured) {  //(its texture, which the software renderer may read from memory as it draws)
+    u32 low, high, first, last;
+    textureBytes(texture, std::min<u32>(texture.height, 512), low, high);
+    if(high > low && memory.pagesOf(low, high - low, first, last)) model.softwareTextures.push_back({first, last, at});
   }
   if(software) {
     //(its pixels may run on past a row's end into the next: as one run from its first to its last)

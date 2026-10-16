@@ -415,6 +415,7 @@ auto GE::clearBatch(Batch& batch) -> void {
     if(std::find(copies.begin(), copies.end(), look.decoded) == copies.end()) copies.push_back(look.decoded);
   }
   batch.looks.clear();
+  batch.asOf.clear();
   if(!copies.empty()) {
     std::lock_guard lock(spares->mutex);
     for(auto& copy : copies) {

@@ -1701,7 +1701,7 @@ static auto geDeferredReach() -> void {
 //More batches than the GE has (ge/threads.cpp's Batches), each launched as the render target changes, round and
 //round, three targets drawn into in turn, each also drawn with by the next (render to texture): the GE's thread fills
 //each batch again only once it's drawn. It comes out as on one thread, with 2, 4 and 8 threads, every batch shared.
-static auto geRing() -> void {
+static auto ringList(Memory& memory) -> void {
   constexpr u32 Targets[3] = {0x10'0000, 0x11'0000, 0x12'0000};  //(VRAM offsets: 64 by 64, 8888)
   auto build = [&](Memory& memory) {
     ListWriter list{memory, ListA};
@@ -1730,17 +1730,84 @@ static auto geRing() -> void {
     }
     list.put(GE::Finish), list.put(GE::End);
   };
-  auto drawn = [&](u32 threads) {
-    KernelMachine m;
-    m.system.ge.setThreads(threads);
-    m.system.ge.drawing.shared = 0;
-    build(m.system.memory);
-    m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
-    m.system.ge.settle();
-    return m.system.memory.vram;
+  build(memory);
+}
+//(the ring's list drawn with threads, every batch shared; threaded: the GE on its own thread)
+static auto ringDrawn(u32 threads, bool threaded = false) -> std::vector<u8> {
+  KernelMachine m;
+  m.system.threadGE(threaded || testsGeThread());
+  m.system.ge.setThreads(threads);
+  m.system.ge.drawing.shared = 0;
+  ringList(m.system.memory);
+  m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
+  m.system.ge.settle();
+  return {m.system.memory.vram.begin(), m.system.memory.vram.end()};
+}
+static auto geRing() -> void {
+  auto one = ringDrawn(1);
+  for(u32 threads : {2u, 4u, 8u}) CHECK(ringDrawn(threads) == one, true);
+}
+
+//With the GE on its thread: the ring's textures, render to texture from batches still being drawn, decoded as their
+//batches start (deferred), on whichever thread starts each, the GE thread's among them while it does a later record:
+//their reads are as of their own PRIMs' places, and lie in what the model declares those PRIMs may read (the
+//G-interest check, on in every threaded machine), not the record's the thread does then. Many rounds, as which thread
+//starts a batch goes by timing; each comes out as on one thread without the thread.
+static auto geThreadDeferredDecodes() -> void {
+  auto one = ringDrawn(1);
+  u32 apart = 0;
+  for(u32 round = 0; round < 10; round++) {
+    for(u32 threads : {2u, 4u, 8u}) apart += ringDrawn(threads, true) != one;
+  }
+  CHECK(apart, 0u);
+}
+
+//With the GE on its thread: a block transfer made outside a list by the GE's transfer(), its commands set from outside
+//(as a test sets them), its texels into a texture a sprite was just drawn with (decoded, its pages watched on the GE
+//thread): the render GE replays the transfer's checks with those commands (the state handed over first, as a PRIM's
+//outside a list is), so the texture is heard written and decoded again, and the sprite drawn again takes the new
+//texels, as without the thread.
+static auto geThreadTransferOutside() -> void {
+  constexpr u32 Texture = VRAM + 0x8000, Source = 0x0899'0000;
+  auto set = [](System& s) {
+    auto& c = s.ge.commands;
+    c[GE::FrameBufferPointer] = 0, c[GE::FrameBufferWidth] = 64, c[GE::FrameBufferPixelFormat] = 3;
+    c[GE::Scissor2] = 63 | 47 << 10, c[GE::Region2] = 1023 | 1023 << 10;
+    c[GE::VertexType] = 0x80'019f, c[GE::ShadeMode] = 1;
+    c[GE::TextureMappingEnable] = 1, c[GE::TextureAddress0] = Texture & 0xff'ffff;
+    c[GE::TextureBufferWidth0] = (Texture >> 24 & 0xf) << 16 | 16, c[GE::TextureSize0] = 4 << 8 | 4;
+    c[GE::TextureFormat] = 3, c[GE::TextureFunction] = 3 | 1 << 8, c[GE::TextureFilter] = 0;
   };
-  auto one = drawn(1);
-  for(u32 threads : {2u, 4u, 8u}) CHECK(drawn(threads) == one, true);
+  auto sprite = [](System& s) {
+    u32 at = Vertices;
+    for(auto [u, x] : {std::pair{0.0f, 8.0f}, std::pair{16.0f, 24.0f}}) {
+      for(float value : {u, u}) s.memory.write(4, at, std::bit_cast<u32>(value)), at += 4;
+      s.memory.write(4, at, 0xffff'ffff), at += 4;
+      for(float value : {x, x, 0.0f}) s.memory.write(4, at, std::bit_cast<u32>(value)), at += 4;
+    }
+    s.ge.vertexAddress = Vertices;
+    s.ge.primitive(GE::Sprites, 2);
+  };
+  System plain, threaded;
+  plain.threadGE(false), threaded.threadGE(true);
+  for(System* s : {&plain, &threaded}) {
+    s->ge.setThreads(1);
+    for(u32 n = 0; n < 16 * 16; n++) s->memory.write(4, Texture + n * 4, 0xff00'0000 | n * 0x01'0305);
+    for(u32 n = 0; n < 16 * 16; n++) s->memory.write(4, Source + n * 4, 0xff00'0000 | n * 0x07'0b0d);
+    set(*s);
+    sprite(*s);
+    auto& c = s->ge.commands;
+    c[GE::TransferSource] = Source & 0xff'fff0, c[GE::TransferSourceWidth] = (Source >> 24) << 16 | 16;
+    c[GE::TransferSourcePosition] = 0;
+    c[GE::TransferDestination] = Texture & 0xff'fff0, c[GE::TransferDestinationWidth] = (Texture >> 24) << 16 | 16;
+    c[GE::TransferDestinationPosition] = 0;
+    c[GE::TransferSize] = 15 | 15 << 10, c[GE::TransferStart] = 1;
+    s->ge.transfer();
+    sprite(*s);
+    s->ge.settleAll();
+  }
+  CHECK(plain.memory.read(4, VRAM + (16 * 64 + 16) * 4) & 0xff'ffff, (8 * 16 + 8) * 0x07'0b0du & 0xff'ffff);  //(new)
+  CHECK(plain.memory.vram == threaded.memory.vram, true);
 }
 
 //Sprites drawing over their own texture, from a copy where none takes a texel it has drawn by then (ge/draw.cpp's
@@ -3064,7 +3131,8 @@ static auto geTransformKept() -> void {
 //thread and by one without, leave VRAM, RAM and the GE's registers the same byte for byte. Clears, untextured and
 //textured sprites (a CLUT8 texture in RAM, its palette loaded by the list), a block transfer from RAM into VRAM and one
 //within VRAM, and the matrices' DATA; then the CPU's store into the texture just after the list (where the render GE
-//may not have drawn it yet: the store waits for it, Memory::drawer), and the list again, which draws the new texels.
+//may not have drawn it yet: its old bytes kept as a version, which the render GE decodes from), and the list again,
+//which draws the new texels.
 static auto geThreadSame() -> void {
   constexpr u32 Texture = 0x0899'0000, Palette = 0x0899'4000, Copied = VRAM + 0x2'0000;
   auto build = [](Memory& memory) {
@@ -3201,6 +3269,62 @@ static auto geThreadReads() -> void {
   s.geThreading->gate = nullptr;
   CHECK(plain.memory.read(4, Inside) != 0, true);  //(the sprite drew there)
   s.ge.settleAll();
+  CHECK(plain.memory.vram == s.memory.vram, true);
+}
+
+//With the GE on its thread, held back before it draws a sprite with the software renderer: the CPU's store onto a
+//pixel the sprite may draw waits for the thread (once, counted), its record going first, so that the sprite is drawn
+//before the store lands, as without the thread; a store on a page nothing handed over reaches doesn't wait.
+static auto geThreadConflicts() -> void {
+  auto build = [](Memory& memory) {
+    ListWriter list{memory, ListA};
+    list.put(GE::FrameBufferPointer, 0);
+    list.put(GE::FrameBufferWidth, 64);
+    list.put(GE::FrameBufferPixelFormat, 3);
+    list.put(GE::Scissor1, 0);
+    list.put(GE::Scissor2, 47 << 10 | 63);
+    list.put(GE::Region2, 1023 << 10 | 1023);
+    list.put(GE::VertexType, 0x80'019f);
+    list.to(GE::VertexAddress, Vertices);
+    list.put(GE::Primitive, GE::Sprites << 16 | 2);
+    list.put(GE::Finish);
+    list.put(GE::End);
+    auto vertex = [&](u32 at, u32 color, float x, float y) {
+      for(float value : {0.0f, 0.0f}) { u32 word; std::memcpy(&word, &value, 4); memory.write(4, at, word); at += 4; }
+      memory.write(4, at, color), at += 4;
+      for(float value : {x, y, 0.0f}) { u32 word; std::memcpy(&word, &value, 4); memory.write(4, at, word); at += 4; }
+    };
+    vertex(Vertices, 0xff40'80c0, 2, 3), vertex(Vertices + 24, 0xff40'80c0, 20, 17);
+  };
+  constexpr u32 Inside = VRAM + (10 * 64 + 10) * 4, Outside = VRAM + (40 * 64 + 40) * 4;
+  System plain;
+  plain.threadGE(false);
+  build(plain.memory);
+  plain.ge.list = {}, plain.ge.list.address = ListA;
+  CHECK(u32(plain.ge.run(1000)), u32(GE::Stop::Finished));
+  plain.memory.write(4, Outside, 0x0102'0304);
+  plain.memory.write(4, Inside, 0x0506'0708);
+  plain.ge.settleAll();
+  System s;
+  s.threadGE(true);
+  s.ge.setThreads(1);
+  build(s.memory);
+  std::atomic<bool> held{true};
+  s.geThreading->gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
+  s.ge.list = {}, s.ge.list.address = ListA;
+  CHECK(u32(s.ge.run(1000)), u32(GE::Stop::Finished));
+  u64 waits = s.geThreading->waits;
+  s.memory.write(4, Outside, 0x0102'0304);
+  CHECK(s.geThreading->waits, waits);
+  CHECK(held.load(), true);
+  std::thread release([&] { std::this_thread::sleep_for(std::chrono::milliseconds(20)); held = false; });
+  s.memory.write(4, Inside, 0x0506'0708);
+  release.join();
+  CHECK(s.geThreading->waits, waits + 1);
+  s.geThreading->drain();
+  s.geThreading->gate = nullptr;
+  s.ge.settleAll();
+  CHECK(plain.memory.read(4, Inside), 0x0506'0708u);  //(the store after the sprite, over it)
   CHECK(plain.memory.vram == s.memory.vram, true);
 }
 
@@ -3375,6 +3499,9 @@ auto geTests() -> Tests {
     {"gu program", guProgram}, {"copy sample", copySample},
     {"ge on its own thread draws the same", geThreadSame},
     {"ge on its own thread: a read waits only where the thread may still change the bytes", geThreadReads},
+    {"ge on its own thread: a store waits only for pixels the drawing threads may still draw", geThreadConflicts},
+    {"ge on its own thread: deferred texture decodes read as of their own PRIMs", geThreadDeferredDecodes},
+    {"ge on its own thread: a block transfer outside a list after commands set from outside", geThreadTransferOutside},
     {"ge versions of memory, and neither thread waiting while it holds what the other waits for", geVersions},
   };
 }

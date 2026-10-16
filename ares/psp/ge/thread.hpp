@@ -12,6 +12,7 @@
 
 #include "ring.hpp"
 #include "model.hpp"
+#include "../memory/memory.hpp"
 
 //The GE on a thread of its own (option "GE Thread": docs/psp-core.md). The kernel's GE, on the emulation
 //thread, runs each list's commands as it always has (the control pass: every command word, JUMP and CALL, SIGNAL,
@@ -26,9 +27,11 @@
 //The emulation thread waits for it only where it may still change bytes the emulation thread reads (the value rule:
 //model.hpp, a model of what each PRIM handed over may change, and what the render GE reports done); where the render
 //GE's memory may be busy, the read is handed over too, for its checks there (Read). Where the emulation thread writes
-//VRAM, or a page of a texture the render GE may still decode, it waits for the render GE to take every record so far
-//(drain()), then has the render GE's own checks made as the synchronous GE would have made them there: so the two run
-//one after another wherever they meet, and each of the GE's results is the synchronous GE's.
+//VRAM, or a page of a texture the render GE may still decode, it writes at once and hands the write over (Store,
+//Copy, Transfer), the render GE making the write's checks from its record where the synchronous GE would have made
+//them; the old bytes kept first where the render GE may still read them or write them back as of an earlier place
+//(versions.hpp), and a write over pixels the drawing threads may still draw, or a texture they may still read, made
+//only once the render GE has passed its record: so each of the GE's results is the synchronous GE's.
 
 namespace ares::PlayStationPortable {
 
@@ -36,7 +39,7 @@ struct GE;
 struct Memory;
 struct GeVersions;
 
-struct GeThread {
+struct GeThread : Memory::Writer {
   //Records: a header, then the kind's own.
   enum class Kind : u32 {
     Words,       //runs of words: how many runs, each its first word's address and count, then the words (their state
@@ -51,6 +54,11 @@ struct GeThread {
                  //size and whether it's a load, for pointer()'s check (Memory::busyCheck(): a load through VRAM's depth
                  //views waits for the drawing threads alone, not a hardware renderer's pixels)
     Wrote,       //(checking) the emulation thread's write to VRAM: its first and last byte, and its place
+    Store,       //the emulation thread's store the GE hears of (Memory::Writer): its address, size and place (cx), for
+                 //writeElsewhere()'s checks (Memory::storeChecks())
+    Copy,        //its copy or fill: the same, for copyIn()'s (Memory::copyChecks())
+    Transfer,    //TRANSFER_START's copy, the kernel GE's: the place of its rows' writes, for transfer()'s checks
+                 //(GE::transferChecks())
     RunStart,    //a kick: the render GE defers its primitives into batches
     RunEnd,      //its end: what's batched drawn, a hardware renderer's work submitted (or finished, unguarded)
     State,       //the GE's state put back whole (sceGeRestoreContext's): commands, matrices and their indices (GE::State)
@@ -74,6 +82,7 @@ struct GeThread {
   auto clut(u32 word, u32 wordAddress, u32 address, const u8* bytes, u32 size) -> void;
   auto drawnFirst(u32 address, u32 size) -> u64;
   auto read(u32 address, u32 size, bool loading) -> u64;
+  auto write(u32 address, u32 size, Kind kind, u64 cx) -> u64;
   auto runStart() -> void;
   auto runEnd() -> void;
   auto state(const GE& from) -> void;
@@ -99,8 +108,8 @@ struct GeThread {
   u64 waits = 0;  //(how often it waited for the render GE to pass a read: the tests')
   auto place() const -> u64 { return serial; }
   //(the emulation thread's memory hooked up to the thread, as the system's machine and the tests' both have it: its
-  //drawer drains the thread, its loads from VRAM go by the value rule, its writes to VRAM are the model's; unhooked
-  //as the thread goes)
+  //drawer drains the thread, its loads from VRAM go by the value rule, its writes to VRAM and to watched pages are
+  //handed over (writer) and are the model's; unhooked as the thread goes)
   auto hook(Memory& memory, Memory& renderMemory) -> void;
   static auto unhook(Memory& memory) -> void;
   //(the render GE's renderer as the model takes it, read with the thread drained: as it starts, and when it changes)
@@ -130,6 +139,28 @@ struct GeThread {
   //back there)
   std::function<auto (u64 place) -> void> gate;
 
+  //(the emulation thread's) Its writes the GE hears of (Memory::Writer): before one, where it lands on pixels the
+  //drawing threads may still draw or a texture a PRIM drawn by the software renderer may still read (a conflict), its
+  //record goes first and the write waits for the render GE to pass it; else, where the render GE may still read or
+  //write back the bytes at an earlier place (it hasn't passed every record), their old contents are kept first
+  //(versions: with the place of the write's record, 2 per record); after it, its record (where it hasn't gone).
+  auto before(u32 address, u32 size, Memory::Writer::Kind kind) -> void override;
+  auto after(u32 address, u32 size, Memory::Writer::Kind kind) -> void override;
+  auto conflicts(u32 address, u32 size) -> bool;
+  auto dirtyRange(u32 address, u32 size) -> bool;  //(the value rule over any of memory's bytes: VRAM's)
+  auto behind() const -> bool { return done.load(std::memory_order_acquire) < serial; }
+  auto gpuBusy(u32 address, u32 size) -> bool;  //(a write's bytes on pages the GPU may have drawn in since a finish)
+  auto save(u32 address, u32 size, u64 at) -> void;  //(versions of the bytes, at a version place)
+  auto transfer(u64 cx) -> u64;                     //(the record of TRANSFER_START's copy)
+  auto wrote(u64 at) -> void;
+  u64 writePlace = 0;  //(the record of the write under way, where it went first)
+  //(each page's newest PRIM handed over whose texture is in it, as Memory::watched numbers pages: a store there unwatches
+  //it, as ever, but while the render GE hasn't passed that PRIM, which may still decode from it, it's watched again,
+  //so that later stores go on being heard of, their old bytes kept: protect())
+  std::vector<u64> textureUntil = std::vector<u64>(512_MiB / Memory::PageSize, 0);
+  auto protect(u32 address, u32 size) -> void;
+  std::vector<std::pair<u32, u32>> written;  //(checking: the VRAM bytes of the write under way, for its record)
+
   GE& control;
   GE& render;
   //(the versions of memory the emulation thread keeps for the render GE's reads and write-backs: versions.hpp)
@@ -148,9 +179,6 @@ private:
   std::vector<u32> words;
   std::vector<std::pair<u32, u32>> wordRuns;  //(the emulation thread's: each run's first address and count)
   u32 undrawn = ~0u;  //(the render GE's: run()'s page found with nothing drawn over it, as run() keeps it)
-  //(the render GE's watches and changes since the last drain, which the kernel's GE's memory hears of then)
-  std::vector<u32> watches;
-  std::vector<std::pair<u32, u32>> changes;
   std::vector<std::string> notes;
   u64 serial = 0;                     //(the emulation thread's) records appended
   alignas(64) std::atomic<u64> done{0};  //(the GE thread's) records taken and done

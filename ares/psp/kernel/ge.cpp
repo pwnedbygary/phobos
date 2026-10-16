@@ -103,8 +103,7 @@ auto Kernel::geTime() -> void {
   ge.owedPixels = ge.owedPrimitives = 0;
   u32 bus = std::clamp<u32>(powerState.bus, 1, 166);
   if(ge.thread) return geRuns.push_back({ge.thread->runsHanded(), cycles, bus});  //(counted there: geFold())
-  if(!pixels && !primitives) return;
-  geDoneAt = std::max(geDoneAt, cycles) + geOwed(pixels, primitives, bus);
+  if(pixels || primitives) geDoneAt = std::max(geDoneAt, cycles) + geOwed(pixels, primitives, bus);
 }
 
 auto Kernel::geOwed(u64 pixels, u64 primitives, u32 bus) -> u64 {
@@ -141,7 +140,8 @@ auto Kernel::geBound() const -> u64 {
 //Whether the GE's time has come (cycles at or past geDoneAt): at once where the bound is past cycles, else once the GE
 //thread has counted every run handed over (a wait for it: the GE thread is then what the emulation thread waits on).
 auto Kernel::geReached() -> bool {
-  if(!geRuns.empty() && geBound() > cycles) return false;
+  if(geRuns.empty()) return cycles >= geDoneAt;  //(none handed over: always so with the thread off)
+  if(geBound() > cycles) return false;
   geFold(true);
   return cycles >= geDoneAt;
 }

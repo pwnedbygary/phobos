@@ -71,8 +71,9 @@ struct GeVersions {
     //The page's size bytes from offset as of q into out, from the versions and memory.
     auto read(u32 page, u32 offset, u32 size, u8* out) const -> void;
     //in's size bytes into the page from offset as of q: each that changes into the earliest version at or after q
-    //that has it, else memory.
-    auto writeBack(u32 page, u32 offset, u32 size, const u8* in) const -> void;
+    //that has it, else memory (stored(byte) told first of each of those, where it's given).
+    auto writeBack(u32 page, u32 offset, u32 size, const u8* in,
+                   const std::function<auto (u32 byte) -> void>* stored = nullptr) const -> void;
     GeVersions& v;
     u64 q;
     bool write;

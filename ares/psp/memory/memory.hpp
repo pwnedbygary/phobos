@@ -184,12 +184,28 @@ struct Memory {
   //and a store to a page watched here (one a texture the render GE may still decode is in) waits for it first. None:
   //this one's own.
   std::function<auto () -> Memory&> drawer;
-  //Threaded, the loads from VRAM (read()): the GE thread asked about them as it must be (its checks replayed where its
-  //memory may be busy, and waited for where it may still change the bytes: ge/model.hpp), instead of drawer(). load:
-  //read()'s, whose check through VRAM's depth views asks only about the drawing threads (pointer()'s load).
+  //Threaded, the reads of VRAM (read()'s, and copyOut()'s and readString()'s: copyingOut): the GE thread asked about
+  //them as it must be (its checks replayed where its memory may be busy, and waited for where it may still change the
+  //bytes: ge/model.hpp), instead of drawer(). load: read()'s, whose check through VRAM's depth views asks only about
+  //the drawing threads; a copy out's is a write's.
   std::function<auto (u32 address, u32 size, bool load) -> void> reading;
   //Threaded, each change to VRAM's bytes first to last (offsets: exactly those written), as changed() hears of it.
   std::function<auto (u32 first, u32 last) -> void> wroteVRAM;
+  //Threaded, whoever keeps the GE thread's records of this memory's writes (ge/thread.cpp): told before and after each
+  //write to VRAM, or to a watched page of the rest, that writeElsewhere(), write(), copyIn() or fill() makes, which
+  //then make it here without the GE's checks (drawer()'s): the GE thread replays those from the record, in their
+  //order, with their own code (storeChecks(), copyChecks(), heard()). recording: inside such a write.
+  struct Writer {
+    enum class Kind : u32 { Store, Copy };
+    virtual ~Writer() = default;
+    virtual auto before(u32 address, u32 size, Kind kind) -> void = 0;
+    virtual auto after(u32 address, u32 size, Kind kind) -> void = 0;
+  };
+  Writer* writer = nullptr;
+  bool recording = false;
+  //Set on a thread while copyOut() or readString() reads, threaded: pointer()'s check is a write's, but the bytes are
+  //read (reading).
+  static thread_local bool copyingOut;
 
   //The copy of VRAM in whose order the GE keeps its depth buffer, drawing into a frame buffer of this format (0-3):
   //the second for 16-bit formats, the fourth for 8888 (above).
@@ -209,6 +225,18 @@ struct Memory {
   auto serialize(serializer& s) -> void;
   auto pointerElsewhere(u32 address, u32 size, bool load) -> u8*;
   auto busyCheck(u32 address, u32 size, bool load) -> void;
+  auto watchedIn(u32 address, u32 size) const -> bool;
+  auto recorded(u32 address, u32 size) const -> bool;
+  auto writeRecorded(u32 size, u32 address, u32 data) -> void;
+  auto writeWatched(u32 size, u32 address, u32 data) -> void;
+  NALL_NOINLINE auto copyRecorded(u32 address, u32 size, const std::function<auto (u8*, u32, u32) -> void>& use)
+    -> bool;
+  auto copyInDirect(u32 address, const void* data, u32 size) -> bool;
+  auto storeDirect(u32 address, u8 byte) -> void;
+  auto storeChecks(u32 size, u32 address) -> void;
+  auto copyChecks(u32 address, u32 size, bool out = false) -> bool;
+  auto copyOutReading(void* data, u32 address, u32 size) -> bool;
+  auto heard(u32 address, u32 size) -> void;
   auto reachesElsewhere(u32 address, u32 size) -> bool;
   auto readElsewhere(u32 size, u32 address) -> u32;
   auto writeElsewhere(u32 size, u32 address, u32 data) -> void;
@@ -241,7 +269,7 @@ struct Memory {
   auto write(u32 size, u32 address, u32 data) -> void {
     u32 offset;
     if(!ramOffset(address, size, offset)) return writeElsewhere(size, address, data);
-    if(drawer && watchedPages && watched[(RAMBase + offset) / PageSize]) drawer();
+    if(drawer && watchedPages && watched[(RAMBase + offset) / PageSize]) return writeWatched(size, address, data);
     if(size == 1) ram[offset] = data;
     else if(size == 2) { u16 half = data; std::memcpy(&ram[offset], &half, 2); }
     else std::memcpy(&ram[offset], &data, 4);

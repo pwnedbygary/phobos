@@ -27,6 +27,9 @@ struct Unthreaded {
   Unthreaded() { unthreadedTests++; }
   ~Unthreaded() { unthreadedTests--; }
 };
+//(every test machine with the GE on its thread, for drainThreads())
+struct System;
+inline std::vector<System*> threadedSystems;
 inline auto testsGeThread() -> bool {
   const char* value = std::getenv("PHOBOS_TESTS_GE_THREAD");
   return !unthreadedTests && value && (std::string{value} == "On" || std::string{value} == "1");
@@ -98,7 +101,9 @@ struct System : Allegrex {
       ge.render = &renderGE, ge.thread = geThreading.get();
       geThreading->hook(memory, renderMemory);
       vramPages(true);
+      threadedSystems.push_back(this);
     } else {
+      std::erase(threadedSystems, this);
       geThreading->drain();
       renderGE.settleAll();
       auto* renderer = renderGE.renderer;
@@ -127,6 +132,12 @@ struct System : Allegrex {
     if(!scc.halted) std::fprintf(stderr, "program didn't halt\n");
   }
 };
+
+//Every threaded test machine's GE thread done with what it was handed (drain()): before a test looks at the render
+//GE's own state (a hardware renderer's statistics), which is that thread's while it runs.
+inline auto drainThreads() -> void {
+  for(auto* s : threadedSystems) s->geThreading->drain();
+}
 
 auto memoryTests() -> Tests;
 auto loaderTests() -> Tests;

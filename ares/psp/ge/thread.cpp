@@ -8,11 +8,13 @@ GeThread::GeThread(GE& control, GE& render) : control(control), render(render) {
   render.versions = versions.get();
   render.reporting = this;
   if(const char* check = std::getenv("PHOBOS_GE_CHECK")) checking = check[0] && check[0] != '0';
-  //(the render GE's watches posted to the kernel's GE's memory as the thread drains: compiled stores to those pages
-  //go through memory's slow path, which reaches the render GE's view: Memory::drawer)
-  render.memory.watching = [this](u32 page) { watches.push_back(page); };
+  //(the render GE's watches are pages the kernel's GE's memory watches already: textures' pages, which it watches as
+  //it hands their PRIMs over, and VRAM's, all out of the CPU's page table while the thread is on, its code run by the
+  //interpreter. So none needs telling it, nor do its changes to VRAM: watching only so that the render GE keeps
+  //textures decoded, Memory::canWatch())
+  render.memory.watching = [](u32) {};
   render.memory.unwatched = nullptr;
-  render.memory.written = [this](u32 address, u32 size) { changes.push_back({address, size}); };
+  render.memory.written = nullptr;
   render.memory.unmapped = nullptr;
   thread = std::thread([this] { take(); });
 }
@@ -116,12 +118,163 @@ auto GeThread::read(u32 address, u32 size, bool loading) -> u64 {
   return serial;
 }
 
+//(a write's record: its address, size and place (cx), and, checking, the VRAM bytes it wrote, as the model was told
+//of them: wroteVRAM())
+auto GeThread::write(u32 address, u32 size, Kind kind, u64 cx) -> u64 {
+  flushWords();
+  u32 ranges = written.size(), head[3] = {address, size, ranges};
+  u8* at = append(kind, sizeof(head) + sizeof(cx) + ranges * 2 * sizeof(u32));
+  std::memcpy(at, head, sizeof(head));
+  std::memcpy(at + sizeof(head), &cx, sizeof(cx));
+  for(u32 n = 0; n < ranges; n++) {
+    u32 range[2] = {written[n].first, written[n].second};
+    std::memcpy(at + sizeof(head) + sizeof(cx) + n * sizeof(range), range, sizeof(range));
+  }
+  ring.publish();
+  written.clear();
+  return serial;
+}
+
+auto GeThread::transfer(u64 cx) -> u64 {
+  return write(0, 0, Kind::Transfer, cx);
+}
+
+auto GeThread::before(u32 address, u32 size, Memory::Writer::Kind kind) -> void {
+  flushWords();
+  takeReports();
+  writePlace = 0;
+  if(conflicts(address, size)) {
+    writePlace = write(address, size, kind == Memory::Writer::Kind::Store ? Kind::Store : Kind::Copy, serial + 1);
+    return waitFor(writePlace);
+  }
+  //(where the render GE may still read or write back the bytes at an earlier place, or the write's own record's
+  //checks, which come before it in the stream's order though made after it, may finish over them)
+  if(behind() || gpuBusy(address, size)) save(address, size, 2 * (serial + 1));  //(the record after() appends next)
+}
+
+auto GeThread::after(u32 address, u32 size, Memory::Writer::Kind kind) -> void {
+  if(!writePlace) write(address, size, kind == Memory::Writer::Kind::Store ? Kind::Store : Kind::Copy, serial);
+  else wrote(writePlace);  //(its record went first: the bytes it wrote told after)
+  writePlace = 0;
+  protect(address, size);
+  versions->free(2 * done.load(std::memory_order_acquire));
+}
+
+//(the pages of a write that a texture the render GE may still decode from is in, watched again after the write's
+//changed() let them go: VRAM's are heard of anyway, out of the CPU's page table)
+auto GeThread::protect(u32 address, u32 size) -> void {
+  u32 first, last, physical = address & 0x1fff'ffff;
+  if(physical >= Memory::VRAMBase && physical - Memory::VRAMBase < Memory::VRAMWindow) return;
+  if(!control.memory.pagesOf(address, size, first, last)) return;
+  u64 passed = done.load(std::memory_order_acquire);
+  for(u32 page = first; page <= last && page < textureUntil.size(); page++) {
+    if(textureUntil[page] > passed && !control.memory.watched[page]) control.memory.watch(page * Memory::PageSize, 1);
+  }
+}
+
+//(checking: the VRAM bytes written since a record that went before them, with their place, for the render GE's model)
+auto GeThread::wrote(u64 at) -> void {
+  for(auto [first, last] : written) {
+    u32 head[2] = {first, last};
+    u8* to = append(Kind::Wrote, sizeof(head) + sizeof(at));
+    std::memcpy(to, head, sizeof(head));
+    std::memcpy(to + sizeof(head), &at, sizeof(at));
+    ring.publish();
+  }
+  written.clear();
+}
+
+//(where a write lands on pixels the drawing threads may still draw, or a texture a PRIM the software renderer may still
+//draw reads from memory as it's drawn: the model's, the reports taken)
+auto GeThread::conflicts(u32 address, u32 size) -> bool {
+  u32 first, last;
+  if(!model.softwareTextures.empty() && control.memory.pagesOf(address, size, first, last)) {
+    for(auto& t : model.softwareTextures) {
+      if(t.at > model.drawnKnown && t.first <= last && first <= t.last) return true;
+    }
+  }
+  u32 physical = address & 0x1fff'ffff;
+  if(physical < Memory::VRAMBase || physical - Memory::VRAMBase >= Memory::VRAMWindow) return false;
+  u32 copy = (physical - Memory::VRAMBase) / Memory::VRAMSize, seen = (physical - Memory::VRAMBase) % Memory::VRAMSize;
+  u32 end = std::min<u32>(seen + size, Memory::VRAMSize);
+  for(u32 at = seen; at < end;) {  //(through a rearranging copy, each piece's bytes)
+    u32 run = copy & 1 ? std::min(end - at, 32 - at % 32) : end - at;
+    u32 offset = copy & 1 ? Memory::vramOffset(copy, at) : at;
+    if(model.software.newerThan(offset, offset + run - 1, model.drawnKnown)) return true;
+    at += run;
+  }
+  return false;
+}
+
+//(whether size bytes from address lie on pages of VRAM the GPU may have drawn in since the last finish reported, the
+//pages a finish may write back: through a rearranging copy, each piece's; the reports taken)
+auto GeThread::gpuBusy(u32 address, u32 size) -> bool {
+  u32 physical = address & 0x1fff'ffff;
+  if(physical < Memory::VRAMBase || physical - Memory::VRAMBase >= Memory::VRAMWindow) return false;
+  u32 copy = (physical - Memory::VRAMBase) / Memory::VRAMSize, seen = (physical - Memory::VRAMBase) % Memory::VRAMSize;
+  u32 end = std::min<u32>(seen + size, Memory::VRAMSize);
+  for(u32 at = seen; at < end;) {
+    u32 run = copy & 1 ? std::min(end - at, 32 - at % 32) : end - at;
+    u32 offset = copy & 1 ? Memory::vramOffset(copy, at) : at;
+    for(u32 page = offset >> 12; page <= (offset + run - 1) >> 12; page++) {
+      if(model.gpu.pageNewest[page] > model.finishKnown) return true;
+    }
+    at += run;
+  }
+  return false;
+}
+
+//(the value rule over size bytes from address, the reports taken: VRAM's, through any copy; the rest's never dirty)
+auto GeThread::dirtyRange(u32 address, u32 size) -> bool {
+  u32 physical = address & 0x1fff'ffff;
+  if(physical < Memory::VRAMBase || physical - Memory::VRAMBase >= Memory::VRAMWindow) return false;
+  u32 copy = (physical - Memory::VRAMBase) / Memory::VRAMSize, seen = (physical - Memory::VRAMBase) % Memory::VRAMSize;
+  u32 end = std::min<u32>(seen + size, Memory::VRAMSize);
+  for(u32 at = seen; at < end;) {
+    u32 run = copy & 1 ? std::min(end - at, 32 - at % 32) : end - at;
+    u32 offset = copy & 1 ? Memory::vramOffset(copy, at) : at;
+    if(model.dirty(offset, offset + run - 1)) return true;
+    at += run;
+  }
+  return false;
+}
+
+//(the old contents of size bytes from address kept as versions with the place at, each page's piece: VRAM's through
+//any copy as the bytes lie, the first copy's pages; RAM's and the scratchpad's as they are)
+auto GeThread::save(u32 address, u32 size, u64 at) -> void {
+  u32 physical = address & 0x1fff'ffff;
+  auto pieces = [&](u32 base, u32 offset, u32 count) {  //(bytes offset to offset + count in an area at base)
+    for(u32 done = 0; done < count;) {
+      u32 page = (base + offset + done) / GeVersions::PageBytes, within = (base + offset + done) % GeVersions::PageBytes;
+      u32 part = std::min(count - done, GeVersions::PageBytes - within);
+      versions->save(page, within, part, at);
+      done += part;
+    }
+  };
+  if(physical >= Memory::VRAMBase && physical - Memory::VRAMBase < Memory::VRAMWindow) {
+    u32 copy = (physical - Memory::VRAMBase) / Memory::VRAMSize, seen = (physical - Memory::VRAMBase) % Memory::VRAMSize;
+    u32 end = std::min<u32>(seen + size, Memory::VRAMSize);
+    for(u32 offset = seen; offset < end;) {
+      u32 run = copy & 1 ? std::min(end - offset, 32 - offset % 32) : end - offset;
+      pieces(Memory::VRAMBase, copy & 1 ? Memory::vramOffset(copy, offset) : offset, run);
+      offset += run;
+    }
+  } else if(physical >= Memory::RAMBase && physical - Memory::RAMBase < control.memory.ram.size()) {
+    pieces(Memory::RAMBase, physical - Memory::RAMBase,
+           u32(std::min<u64>(size, control.memory.ram.size() - (physical - Memory::RAMBase))));
+  } else if(physical >= Memory::ScratchpadBase && physical - Memory::ScratchpadBase < Memory::ScratchpadSize) {
+    pieces(Memory::ScratchpadBase, physical - Memory::ScratchpadBase,
+           std::min<u32>(size, Memory::ScratchpadSize - (physical - Memory::ScratchpadBase)));
+  }
+}
+
 //The emulation thread's write to VRAM's bytes first to last (offsets), as it makes it: their place now (cx), and,
-//checking, the render GE's copy of the model told.
+//checking, the render GE's copy of the model told (inside a write it hears of from a record, by that record).
 auto GeThread::wroteVRAM(u32 first, u32 last) -> void {
   flushWords();
   model.write(first, last, serial);
   if(!checking) return;
+  if(control.memory.recording) return written.push_back({first, last});
   u32 head[2] = {first, last};
   u64 at = serial;
   u8* to = append(Kind::Wrote, sizeof(head) + sizeof(at));
@@ -201,6 +354,10 @@ auto GeThread::takeReports() -> void {
   }
   if(lostReported.load(std::memory_order_acquire)) hardware = false;
   if(uncertain.load(std::memory_order_acquire)) model.unsure = true;
+  if(!model.softwareTextures.empty()) {
+    std::erase_if(model.softwareTextures, [&](const GeModel::TexturePages& t) { return t.at <= model.drawnKnown; });
+  }
+  if(versions->versions()) versions->free(2 * model.passed);
 }
 
 auto GeThread::dirty(u32 first, u32 last) -> bool {
@@ -300,11 +457,13 @@ auto GeThread::hook(Memory& memory, Memory& renderMemory) -> void {
   memory.drawer = [this, &renderMemory]() -> Memory& { drain(); return renderMemory; };
   memory.reading = [this](u32 address, u32 size, bool loading) { load(address, size, loading); };
   memory.wroteVRAM = [this](u32 first, u32 last) { wroteVRAM(first, last); };
+  memory.writer = this;
   rendererChanged();
 }
 
 auto GeThread::unhook(Memory& memory) -> void {
   memory.drawer = nullptr, memory.reading = nullptr, memory.wroteVRAM = nullptr;
+  memory.writer = nullptr, memory.recording = false;
 }
 
 auto GeThread::rendererChanged() -> void {
@@ -315,15 +474,10 @@ auto GeThread::rendererChanged() -> void {
 auto GeThread::drain() -> void {
   flushWords();
   for(u64 at; (at = done.load(std::memory_order_acquire)) != serial;) done.wait(at, std::memory_order_acquire);
-  //(what the render GE watched and changed meanwhile, as the kernel's GE's memory hears of it: its watches kept, and
-  //compiled code from what it changed dropped)
-  for(u32 page : watches) control.memory.watch(page * Memory::PageSize, Memory::PageSize);
-  watches.clear();
-  if(control.memory.written) for(auto [address, size] : changes) control.memory.written(address, size);
-  changes.clear();
   for(auto& text : notes) control.note(text);  //(each once, whichever GE noted it)
   notes.clear();
   rendererChanged();  //(its resolution, or the GPU lost, as the render GE has it now)
+  if(versions->versions()) versions->free(2 * serial);  //(it has passed them all)
 }
 
 auto GeThread::take() -> void {
@@ -380,9 +534,14 @@ auto GeThread::replay(const Header& header, const u8* data) -> void {
     std::memcpy(&copies, data + sizeof(head), sizeof(Copies));
     const u8* bytes = data + sizeof(head) + sizeof(Copies);
     if(head[1] != ~0u) listWordDrawn(head[1]);
-    if(checking) render.modelPrimitive(replica, head[0], head[2], head[3], copies, bytes, head[4], header.serial);
+    if(checking) {  //(the model's own copy, which declares what the PRIM may read: readDeclared())
+      replica.declares = true;
+      render.modelPrimitive(replica, head[0], head[2], head[3], copies, bytes, head[4], header.serial);
+      render.declared = &replica.interest;
+    }
     u64 refusals = render.refusals, roomRefusals = render.roomRefusals;
     render.replayPrimitive(head[0], head[2], head[3], copies, bytes, header.kind == Kind::Patch);
+    render.declared = nullptr;
     //(the model took the renderer as surely drawing it, so the software renderer's depth writes weren't its: a
     //refusal there is a fault in the model's certainty, which from then on takes no PRIM as sure; one for want of
     //room on the GPU, which only the host decides, is outside what's exact, as a GPU lost is: the model takes no PRIM
@@ -425,6 +584,21 @@ auto GeThread::replay(const Header& header, const u8* data) -> void {
     std::memcpy(head, data, sizeof(head));
     std::memcpy(&at, data + sizeof(head), sizeof(at));
     if(checking) replica.write(head[0], head[1], at);
+    break;
+  }
+  case Kind::Store: case Kind::Copy: case Kind::Transfer: {  //(the emulation thread's write: its checks, as made there)
+    u32 head[3];
+    u64 cx;
+    std::memcpy(head, data, sizeof(head));
+    std::memcpy(&cx, data + sizeof(head), sizeof(cx));
+    if(header.kind == Kind::Store) render.memory.storeChecks(head[1], head[0]);
+    else if(header.kind == Kind::Copy) render.memory.copyChecks(head[0], head[1]);
+    else render.transferChecks();
+    for(u32 n = 0; n < head[2] && checking; n++) {
+      u32 range[2];
+      std::memcpy(range, data + sizeof(head) + sizeof(cx) + n * sizeof(range), sizeof(range));
+      replica.write(range[0], range[1], cx);
+    }
     break;
   }
   case Kind::RunStart:
@@ -478,6 +652,50 @@ auto GE::reportPuts(u64 low, u64 high) -> void {
 
 auto GE::reportLost() -> void {
   if(reporting) reporting->reportLost();
+}
+
+//(checking) A read of memory the render GE makes as it does a PRIM, outside what the emulation thread's model declares
+//it may read then (its G-interest: the design's 3.7, R19, R22, R24): fails loudly.
+static auto undeclared(u32 page, u64 place) -> void {
+  std::fprintf(stderr, "PSP GE thread: the render GE read memory's page %05x at record %llu, outside what the emulation "
+               "thread's model declares it may read there (its G-interest: ge/model.hpp)\n", page,
+               (unsigned long long)place);
+  std::abort();
+}
+
+thread_local const ReadsAsOf* GE::readingAsOf = nullptr;
+
+auto GE::readPlace() const -> u64 {
+  return readingAsOf ? readingAsOf->place : place;
+}
+
+auto GE::readInterest() const -> const GeModel::Interest* {
+  if(readingAsOf) return readingAsOf->declared ? &readingAsOf->interest : nullptr;
+  return declared;
+}
+
+auto GE::readDeclared(u64 low, u64 high) -> void {
+  auto* interest = readInterest();
+  if(!interest || high < low) return;
+  u64 last = std::min<u64>(high, low + Memory::VRAMSize - 1);
+  for(u64 page = low / Memory::PageSize; page <= last / Memory::PageSize; page++) {
+    if(!interest->vram[page % GeModel::Pages]) {
+      undeclared(Memory::VRAMBase / Memory::PageSize + page % GeModel::Pages, readPlace());
+    }
+  }
+}
+
+auto GE::readDeclared(u32 address, u32 size) -> void {
+  auto* interest = readInterest();
+  u32 first, last;
+  if(!interest || !memory.pagesOf(address, size, first, last)) return;
+  u32 base = Memory::VRAMBase / Memory::PageSize;
+  for(u32 page = first; page <= last; page++) {
+    bool inVRAM = page >= base && page < base + GeModel::Pages;
+    if(inVRAM ? !interest->vram[page - base] : page < interest->first || page > interest->last) {
+      undeclared(page, readPlace());
+    }
+  }
 }
 
 auto GE::drawnAll() const -> bool {
@@ -677,6 +895,14 @@ auto GE::handPrimitive(u32 word, u32 count, bool patching) -> void {
   }
   bool hardware = thread->hardware;
   u64 at = thread->nextPlace();
+  if(commands[TextureMappingEnable] & 1) {  //(the texture's pages: their stores heard of till the render GE passes it)
+    Sampler texture = sampler();
+    u32 low, high, first, last;
+    textureBytes(texture, std::min<u32>(texture.height, 512), low, high);
+    if(high > low && memory.pagesOf(low, high - low, first, last)) {
+      for(u32 page = first; page <= last && page < thread->textureUntil.size(); page++) thread->textureUntil[page] = at;
+    }
+  }
   bool certain = modelPrimitive(thread->model, word, vertexAt, indexAt, copies, handCopies.data(), hardware, at);
   thread->primitive(word, running ? listWordAt : ~0u, vertexAt, indexAt, hardware, certain, copies,
                     handCopies.data());
@@ -701,6 +927,52 @@ auto GE::handClut() -> void {
   if(std::memcmp(clut, palette, bytes)) std::memcpy(clut, palette, bytes), paletteChanged();
   thread->clut(commands[ClutLoad], running ? listWordAt : ~0u, address, palette, bytes);
   if(!running) thread->drain();
+}
+
+//(the kernel's GE, threaded) TRANSFER_START: the copy made here, row by row as transfer() makes it, the render GE
+//replaying transfer()'s checks from its record, in their order (transferChecks()). Where a row's source may still be
+//changed by the render GE (the value rule), or a row lands on pixels the drawing threads may still draw or a texture a
+//PRIM the software renderer may still draw reads (a conflict), the record goes first and the copy waits for the
+//render GE to pass it, so that what it finishes or draws first comes before the copy, as it does synchronously; else
+//each row's old bytes are kept first where the render GE may still read them at an earlier place (it hasn't passed
+//every record: versions), the copy made, then the record.
+auto GE::transferThreaded() -> void {
+  //(outside a list, the state set from outside handed over first, as handPrimitive() does)
+  if(!running) handSwitches(), handState();
+  auto t = transferAsked();
+  u32 size = t.width * t.bytes;
+  auto from = [&](u32 y) { return t.source + ((t.sourceY + y) * t.sourceStride + t.sourceX) * t.bytes; };
+  auto to = [&](u32 y) { return t.destination + ((t.destinationY + y) * t.destinationStride + t.destinationX) * t.bytes; };
+  thread->nextPlace();  //(TRANSFER_START's word handed over first)
+  thread->takeReports();
+  bool first = false;
+  for(u32 y = 0; y < t.height && !first; y++) first = thread->dirtyRange(from(y), size) || thread->conflicts(to(y), size);
+  u64 recorded = 0;
+  if(first) recorded = thread->transfer(thread->place() + 1), thread->waitFor(recorded);
+  bool behind = !first && thread->behind();
+  u64 at = 2 * (thread->place() + 1);  //(its record's version place)
+  std::vector<u8> row(size);
+  memory.recording = true;
+  for(u32 y = 0; y < t.height; y++) {
+    u32 source = from(y), target = to(y);
+    bool read = [&] { Memory::KnownDrawn known; return memory.copyOut(row.data(), source, size); }();
+    //(kept where the render GE may still read or write back the bytes at an earlier place, or the transfer's own
+    //checks, before its rows in the stream's order though made after them, may finish over them)
+    bool keep = !first && (behind || thread->gpuBusy(target, size));
+    if(read) {
+      if(keep) thread->save(target, size, at);
+      if(memory.copyInDirect(target, row.data(), size)) continue;
+    }
+    for(u32 n = 0; n < size; n++) {  //across a piece's end, as transfer()
+      u8 byte = [&] { Memory::KnownDrawn known; return memory.read(1, source + n); }();
+      if(keep) thread->save(target + n, 1, at);
+      memory.storeDirect(target + n, byte);
+    }
+  }
+  memory.recording = false;
+  if(!first) thread->transfer(thread->place());
+  else thread->wrote(recorded);
+  for(u32 y = 0; y < t.height; y++) thread->protect(to(y), size);
 }
 
 //(the render GE) readVertices() of a PRIM handed over: its bytes from the copies (copied), which hold every byte it

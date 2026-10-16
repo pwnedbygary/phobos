@@ -3,6 +3,7 @@
 namespace ares::PlayStationPortable {
 
 thread_local bool Memory::knownDrawn = false;
+thread_local bool Memory::copyingOut = false;
 
 //Where in VRAM an offset seen through copy 0-3 is (see memory.hpp), and the reverse: the offset through that copy
 //that sees a byte of VRAM. Each keeps an offset in its 16 KiB.
@@ -134,7 +135,7 @@ auto Memory::pointerElsewhere(u32 address, u32 size, bool load) -> u8* {
   if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow) {
     if(!knownDrawn) {
       if(!drawer) { if(vramBusy) busyCheck(address, size, load); }
-      else if(load && reading) reading(address, size, load);  //(threaded: ge/thread.cpp)
+      else if((load || copyingOut) && reading) reading(address, size, load);  //(threaded: ge/thread.cpp)
       else drawer().busyCheck(address, size, load);
     }
     u32 copy = (physical - VRAMBase) / VRAMSize, offset = (physical - VRAMBase) % VRAMSize;
@@ -202,7 +203,9 @@ auto Memory::readElsewhere(u32 size, u32 address) -> u32 {
 }
 
 //The CPU's stores, as aligned as its loads (and HLE functions', likewise a byte at a time across such a piece).
+//(Threaded, those the GE thread hears of from its records: writeRecorded().)
 auto Memory::writeElsewhere(u32 size, u32 address, u32 data) -> void {
+  if(writer && recorded(address, size)) return writeRecorded(size, address, data);
   if(!knownDrawn) {  //(not through the second or fourth copy, which rearrange the bytes)
     u32 physical = address & 0x1fff'ffff;
     if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow && !((physical - VRAMBase) / VRAMSize & 1)) {
@@ -230,10 +233,11 @@ auto Memory::writeElsewhere(u32 size, u32 address, u32 data) -> void {
 //through one is a change to all of them, and code compiled from any copy must go. Inside one 32-byte piece each copy
 //sees the change in one place; a longer one, through a copy that rearranges pieces or seen through one, is reported
 //as every 16 KiB it touches (where the rearranging keeps it).
+//(Threaded, inside a write the GE thread hears of from its record, recording, the GE's half is that thread's: heard().)
 auto Memory::changed(u32 address, u32 size) -> void {
   u32 physical = address & 0x1fff'ffff;
   bool inVRAM = physical >= VRAMBase && physical - VRAMBase < VRAMWindow;
-  if(Memory& m = drawer && inVRAM ? drawer() : *this; m.vramBusy && m.vramChangedBusy && size && inVRAM) {
+  if(Memory& m = drawer && inVRAM && !recording ? drawer() : *this; m.vramBusy && m.vramChangedBusy && size && inVRAM) {
     u32 seen = (physical - VRAMBase) % VRAMSize, last = std::min<u32>(seen + size, VRAMSize) - 1;
     if((physical - VRAMBase) / VRAMSize & 1) seen &= ~0x3fffu, last |= 0x3fff;
     m.vramChangedBusy(seen, last);  //(the bytes as pointer() has them)
@@ -258,7 +262,9 @@ auto Memory::changed(u32 address, u32 size) -> void {
           if(!eight) { page += 7; continue; }
         }
         if(!watched[page]) continue;
-        if(drawer) drawer().unwatch(page);  //(the drawing memory's watch: those it watches are watched here too)
+        //(the drawing memory's watch: those it watches are watched here too; inside a write it hears of from its
+        //record, its own replay's: heard())
+        if(drawer && !recording) drawer().unwatch(page);
         watched[page] = 0;
         watchedPages--;
         if(watchedWritten) watchedWritten(page);
@@ -282,6 +288,63 @@ auto Memory::changed(u32 address, u32 size) -> void {
     return;
   }
   written(address, size);
+}
+
+//Threaded (ge/thread.hpp): the writes the GE thread hears of from its records (Writer) are VRAM's, in any copy, and
+//those reaching a watched page (a texture the render GE may decode is in one: the kernel's GE watches them as it hands
+//a PRIM over).
+auto Memory::watchedIn(u32 address, u32 size) const -> bool {
+  u32 first, last;
+  if(!watchedPages || !size || !pagesOf(address, size, first, last)) return false;
+  for(u32 page = first; page <= last; page++) {
+    if(watched[page]) return true;
+  }
+  return false;
+}
+
+auto Memory::recorded(u32 address, u32 size) const -> bool {
+  u32 physical = address & 0x1fff'ffff;
+  return (physical >= VRAMBase && physical - VRAMBase < VRAMWindow) || watchedIn(address, size);
+}
+
+//(threaded, the emulation thread's) writeElsewhere()'s store, which the GE thread hears of from its record: made here
+//without the GE's checks, which it replays (storeChecks()), the writer told first and after (versions of the bytes, or
+//a wait for drawing over them). As writeElsewhere() does: a byte at a time where they aren't side by side.
+auto Memory::writeRecorded(u32 size, u32 address, u32 data) -> void {
+  writer->before(address, size, Writer::Kind::Store);
+  recording = true;
+  u8* bytes;
+  { KnownDrawn known; bytes = pointer(address, size); }
+  if(bytes) {
+    if(size == 1) bytes[0] = data;
+    else if(size == 2) { u16 half = data; std::memcpy(bytes, &half, 2); }
+    else std::memcpy(bytes, &data, 4);
+    changed(address, size);
+  } else if(size > 1 && reaches(address, size)) {
+    for(u32 n = 0; n < size; n++) {
+      u8* byte;
+      { KnownDrawn known; byte = pointer(address + n, 1); }
+      if(byte) *byte = data >> 8 * n, changed(address + n, 1);
+      else if(unmapped) unmapped(address + n, true);
+    }
+  } else if(unmapped) {
+    unmapped(address, true);
+  }
+  recording = false;
+  writer->after(address, size, Writer::Kind::Store);
+}
+
+//(the emulation thread's) write()'s store to a watched page of main RAM: threaded, one the GE thread hears of from its
+//record (writeRecorded()'s way); else, with a drawing memory, what that memory may still read done first (drawer).
+auto Memory::writeWatched(u32 size, u32 address, u32 data) -> void {
+  u32 offset = (address & 0x1fff'ffff) - RAMBase;
+  if(writer) writer->before(address, size, Writer::Kind::Store), recording = true;
+  else drawer();
+  if(size == 1) ram[offset] = data;
+  else if(size == 2) { u16 half = data; std::memcpy(&ram[offset], &half, 2); }
+  else std::memcpy(&ram[offset], &data, 4);
+  changed(address, size);
+  if(writer) recording = false, writer->after(address, size, Writer::Kind::Store);
 }
 
 //The host's bytes behind size bytes from address, for the copies below: one piece, or up to 32 bytes at a time
@@ -308,6 +371,88 @@ template<typename Use> static auto pieces(Memory& memory, u32 address, u32 size,
   return true;
 }
 
+//(the emulation thread's) copyIn()'s and fill()'s copy, which the GE thread hears of from its record: made here
+//without the GE's checks, which it replays (copyChecks()), the writer told first and after; nothing where the bytes
+//aren't all reached, as pieces() finds (nor checked there, nor recorded). (use a function of its own: pieces() for
+//copyIn()'s and fill()'s own copy, called from there alone, stays inside them.)
+auto Memory::copyRecorded(u32 address, u32 size, const std::function<auto (u8*, u32, u32) -> void>& use) -> bool {
+  u32 ramAt = (address & 0x1fff'ffff) - RAMBase;
+  if(ramAt < ram.size() ? size > ram.size() - ramAt : !reaches(address, size)) return false;
+  writer->before(address, size, Writer::Kind::Copy);
+  recording = true;
+  { KnownDrawn known; pieces(*this, address, size, use); }
+  changed(address, size);
+  recording = false;
+  writer->after(address, size, Writer::Kind::Copy);
+  return true;
+}
+
+//(the kernel's GE, threaded: a block transfer's rows, whose checks the GE thread makes from the transfer's record) The
+//copy itself, and a store of a byte, with no checks of the GE's and no record of their own; what changed() hears
+//inside the transfer (recording) its own half. copyInDirect(): false where the bytes aren't all reached (nothing
+//copied); storeDirect(): unmapped() told where the byte has nothing behind it.
+auto Memory::copyInDirect(u32 address, const void* data, u32 size) -> bool {
+  if(!size) return true;
+  auto in = [&](u8* bytes, u32 done, u32 count) { std::memcpy(bytes, (const u8*)data + done, count); };
+  bool copied = [&] { KnownDrawn known; return pieces(*this, address, size, in); }();
+  if(copied) changed(address, size);
+  return copied;
+}
+
+auto Memory::storeDirect(u32 address, u8 byte) -> void {
+  u8* at = [&] { KnownDrawn known; return pointer(address, 1); }();
+  if(!at) return void(unmapped ? unmapped(address, true) : void());
+  *at = byte;
+  changed(address, 1);
+}
+
+//The GE thread's replays of the emulation thread's writes (ge/thread.cpp): what this memory's GE side does for each
+//as the access itself would have it done here, but the access, which the emulation thread made.
+//storeChecks(): writeElsewhere()'s, for a store: vramStoring(), pointer()'s check, those of each byte where its bytes
+//aren't side by side, and changed()'s for the GE (heard()).
+auto Memory::storeChecks(u32 size, u32 address) -> void {
+  u32 physical = address & 0x1fff'ffff;
+  if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow && !((physical - VRAMBase) / VRAMSize & 1)) {
+    u32 seen = (physical - VRAMBase) % VRAMSize;
+    if(vramBusy && vramStoring && seen + size <= VRAMSize) vramStoring(seen, seen + size - 1);
+  }
+  u8* bytes = pointer(address, size);
+  if(!bytes && size > 1 && reaches(address, size)) {
+    for(u32 n = 0; n < size; n++) storeChecks(1, address + n);
+    return;
+  }
+  if(bytes) heard(address, size);
+}
+
+//copyIn()'s and fill()'s (pieces()' checks, storing()'s drawer the emulation thread's), and copyOut()'s (out,
+//nothing heard): whether the bytes were all reached.
+auto Memory::copyChecks(u32 address, u32 size, bool out) -> bool {
+  if(!size) return true;
+  if(!pieces(*this, address, size, [](u8*, u32, u32) {})) return false;
+  if(!out) heard(address, size);
+  return true;
+}
+
+//changed()'s for the GE: a busy page's change heard of, watched pages unwatched (the emulation thread's own written()
+//and watches its own).
+auto Memory::heard(u32 address, u32 size) -> void {
+  u32 physical = address & 0x1fff'ffff;
+  if(vramBusy && vramChangedBusy && size && physical >= VRAMBase && physical - VRAMBase < VRAMWindow) {
+    u32 seen = (physical - VRAMBase) % VRAMSize, last = std::min<u32>(seen + size, VRAMSize) - 1;
+    if((physical - VRAMBase) / VRAMSize & 1) seen &= ~0x3fffu, last |= 0x3fff;
+    vramChangedBusy(seen, last);
+  }
+  u32 first, last;
+  if(!watchedPages || !pagesOf(address, size, first, last)) return;
+  for(u32 page = first; page <= last; page++) {
+    if(!watched[page]) continue;
+    watched[page] = 0;
+    watchedPages--;
+    if(watchedWritten) watchedWritten(page);
+    if(unwatched) unwatched(page);
+  }
+}
+
 //Fills the CPU's page table (Allegrex::pages): one entry per 4 KiB of physical memory, pointing at that page in
 //the host's memory, or nullptr where there's nothing. The table may list each piece of memory once, so VRAM is
 //listed at its first copy only: the others go through read() and write(), whose changes are reported for all four
@@ -332,6 +477,7 @@ auto Memory::buildSteady(std::vector<u8>& steady) -> void {
 auto Memory::copyIn(u32 address, const void* data, u32 size) -> bool {
   if(!size) return true;
   auto in = [&](u8* bytes, u32 done, u32 count) { std::memcpy(bytes, (const u8*)data + done, count); };
+  if(writer && recorded(address, size)) [[unlikely]] return copyRecorded(address, size, in);  //(threaded)
   storing(address, size);
   if(!pieces(*this, address, size, in)) return false;
   changed(address, size);
@@ -340,13 +486,25 @@ auto Memory::copyIn(u32 address, const void* data, u32 size) -> bool {
 
 auto Memory::copyOut(void* data, u32 address, u32 size) -> bool {
   if(!size) return true;
+  if(reading) [[unlikely]] return copyOutReading(data, address, size);  //(threaded)
   auto out = [&](u8* bytes, u32 done, u32 count) { std::memcpy((u8*)data + done, bytes, count); };
   return pieces(*this, address, size, out);
+}
+
+//(threaded) copyOut()'s, its reads of VRAM asked about by the value rule (copyingOut).
+auto Memory::copyOutReading(void* data, u32 address, u32 size) -> bool {
+  bool was = copyingOut;
+  copyingOut = true;
+  auto out = [&](u8* bytes, u32 done, u32 count) { std::memcpy((u8*)data + done, bytes, count); };
+  bool copied = pieces(*this, address, size, out);
+  copyingOut = was;
+  return copied;
 }
 
 auto Memory::fill(u32 address, u8 value, u32 size) -> bool {
   if(!size) return true;
   auto set = [&](u8* bytes, u32, u32 count) { std::memset(bytes, value, count); };
+  if(writer && recorded(address, size)) [[unlikely]] return copyRecorded(address, size, set);  //(threaded)
   storing(address, size);
   if(!pieces(*this, address, size, set)) return false;
   changed(address, size);
@@ -357,11 +515,14 @@ auto Memory::fill(u32 address, u8 value, u32 size) -> bool {
 //memory goes.
 auto Memory::readString(u32 address, u32 limit) -> std::string {
   std::string text;
+  bool was = copyingOut;
+  if(reading) copyingOut = true;  //(threaded: copyOut()'s way)
   while(text.size() < limit) {
     u8* byte = pointer(address + text.size());
     if(!byte || !*byte) break;
     text.push_back(char(*byte));
   }
+  copyingOut = was;
   return text;
 }
 

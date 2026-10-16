@@ -158,6 +158,10 @@ struct GeModel {
   }
 
   Rects gpu, software;
+  //The pages (numbered as Memory::watched numbers them: main RAM's or VRAM's) of the textures PRIMs the software
+  //renderer may draw read straight from memory as they're drawn, until they're drawn: a write there waits.
+  struct TexturePages { u32 first = 0, last = 0; u64 at = 0; };
+  std::vector<TexturePages> softwareTextures;
   //(the GE thread's reports, as last taken)
   u64 finishKnown = 0, drawnKnown = 0, passed = 0;
   std::array<u64, Blocks> putKnown{};
@@ -190,6 +194,44 @@ struct GeModel {
   std::vector<Target> targets;
   bool scaled = false;
   bool unsure = false;  //(the renderer refused a PRIM taken as surely its own: from then on none is taken so)
+
+  //Declaring (the GE thread's copy of the model, checking: GeThread::checking): the pages the render GE may read memory
+  //from as it does a PRIM handed over, as the design's G-interest has them (DESIGN.md 3.7): its target's rows (to its
+  //height), the rows of every target with pages in them (R19: begin()'s moves revive their sources); where it tests or
+  //clears depth, its depth buffer's 16 KiBs (all its rows: R24) and the rows of every target with pages there (R22:
+  //moveIntoDepth() revives those sources); its texture's bytes and, in VRAM, the rows of every target with pages there
+  //(take(), holds()); a put point's depth buffers and the rows of the targets with pages in their 16 KiBs. VRAM's pages,
+  //and the pages (main RAM's or the scratchpad's, Memory::watched's numbers) of a texture outside it. The targets: those
+  //of the GPU PRIMs handed over (GPU::targetFor()'s address, row width and format, as targetPlace() has them).
+  struct Interest { std::bitset<Pages> vram; u32 first = 1, last = 0; };
+  struct KnownTarget { u32 address = 0, stride = 0, format = 0; };
+  bool declares = false;
+  Interest interest;
+  std::vector<KnownTarget> knownTargets;
+  auto knowTarget(u32 address, u32 stride, u32 format) -> void {
+    for(auto& t : knownTargets) {
+      if(t.address == address && t.stride == stride && t.format == format) return;
+    }
+    knownTargets.push_back({address, stride, format});
+  }
+  //(a target's rows, to its height, its pages)
+  static auto targetRows(const KnownTarget& t, std::bitset<Pages>& pages) -> void {
+    u32 rowBytes = t.stride * (t.format == 3 ? 4 : 2);
+    if(!rowBytes || t.address >= VRAMBytes) return;
+    u32 height = std::min<u32>(512, (VRAMBytes - t.address) / rowBytes);
+    if(!height) return;
+    for(u32 page = t.address / 4096; page <= (t.address + height * rowBytes - 1) / 4096 && page < Pages; page++) {
+      pages.set(page);
+    }
+  }
+  //(every known target with pages among these: all its rows' pages added, once round)
+  auto targetsOver(const std::bitset<Pages>& among, std::bitset<Pages>& pages) const -> void {
+    for(auto& t : knownTargets) {
+      std::bitset<Pages> its;
+      targetRows(t, its);
+      if((its & among).any()) pages |= its;
+    }
+  }
 
   //Whether bytes first to last of VRAM (offsets, first <= last, inside VRAM) are dirty now.
   auto dirty(u32 first, u32 last) const -> bool {
@@ -255,7 +297,7 @@ struct GeModel {
     std::fill(written.begin(), written.end(), Piece{});
     finishKnown = drawnKnown = passed = 0;
     putKnown = {}, gpuDepth = {};
-    putPoints.clear(), depthBuffers.clear(), targets.clear();
+    putPoints.clear(), depthBuffers.clear(), targets.clear(), softwareTextures.clear();
   }
 };
 

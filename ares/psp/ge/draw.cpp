@@ -589,6 +589,9 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   const Look& drawn = drawing.recording ? drawing.batch->looks.emplace_back(std::move(look)) : look;
   if(drawing.recording && drawn.deferRows) {  //(the CPU waits for its texture's pages till it's decoded: threads.cpp)
     for(u32 page = drawn.deferFirst >> 12; page <= drawn.deferLast >> 12; page++) drawing.batch->reads.set(page);
+    if(versioned()) {
+      drawing.batch->asOf.push_back({&drawn, {place, declared != nullptr, declared ? *declared : GeModel::Interest{}}});
+    }
   }
   if(!format.through && !transformed) {
     //(a renderer transforming its own: the triangles the GE would draw whole handed over as they are)

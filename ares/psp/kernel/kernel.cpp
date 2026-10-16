@@ -1152,30 +1152,14 @@ auto Kernel::run(u64 budget) -> u64 {
     stuck = false;  //something runs: should nothing run again later, that's worth a note again
     counted = 0;
     going = true;
-    goOffset = 0, goExact = ~0ull, geLimits.clear(), geFolded.clear();
-    geBounded = false;
-    u64 first = std::min(end - cycles, std::max<u64>(1, untilNextEvent()));
-    if(geBounded) geLimit.before = 0, geLimit.cap = end - cycles, geLimits.push_back(geLimit);
-    else goExact = first;
-    u64 ran = cpu.run(first);
-    cycles += ran - counted;
-    counted = ran;  //(what cpu.instructionsRun stays at till the next run: a call made outside one adds nothing)
-    //With the GE on its thread, a limit worked out from its time's bound (geBound()) may have ended the go before the
-    //synchronous GE's time would have: once each is worked out exactly (the GE thread's counts waited for), a go that
-    //ended short goes on, the CPU run again from where it stopped with none of the loop's steps between (its blocks
-    //end where they always do, and the interpreter's at its limit), as the go would have run on.
-    while(!geLimits.empty() && !cpu.scc.halted && !exec.pending && !exited) {
-      for(auto& limit : geLimits) goExact = std::min(goExact, geExactLimit(limit));
-      geLimits.clear(), geFolded.clear();
-      u64 at = goOffset + ran;
-      if(goExact <= at) break;
-      goOffset = at, counted = 0;
-      ran = cpu.run(goExact - at);
+    if(!ge.thread) {
+      u64 ran = cpu.run(std::min(end - cycles, std::max<u64>(1, untilNextEvent())));
+      going = false;
       cycles += ran - counted;
-      counted = ran;
+      counted = ran;  //(what cpu.instructionsRun stays at till the next run: a call made outside one adds nothing)
+    } else {
+      goThreaded(end);
     }
-    geLimits.clear(), geFolded.clear();
-    going = false;
     if((current || interrupting) && cpu.scc.halted) {  //it stopped by itself: a halt, or an exception nobody handled
       note(interrupting ? "the CPU stopped in a call into the program" : "the CPU stopped in thread " + current->name);
       break;
@@ -1296,6 +1280,40 @@ auto Kernel::dispatchImport(u32 code, bool& quiet) -> bool {
 //the CPU to the end of its go, a frame at most: pspautotests' threads/scheduling/preemptuser had a better thread's
 //1000-microsecond delays take 8 to 17 ms while main spun.)
 auto Kernel::runUntilNextEvent() -> void {
+  if(ge.thread) return runUntilNextEventThreaded();
+  u64 limit = cpu.instructionsBefore() + untilNextEvent();
+  if(limit < cpu.runLimit) cpu.runLimit = limit;
+}
+
+//With the GE on its thread (ge/thread.hpp), a go of run()'s: a limit worked out from the GE's time's bound (geBound())
+//may end it before the synchronous GE's time would have: once each is worked out exactly (the GE thread's counts
+//waited for), a go that ended short goes on, the CPU run again from where it stopped with none of the loop's steps
+//between (its blocks end where they always do, and the interpreter's at its limit), as the go would have run on.
+auto Kernel::goThreaded(u64 end) -> void {
+  goOffset = 0, goExact = ~0ull, geLimits.clear(), geFolded.clear();
+  geBounded = false;
+  u64 first = std::min(end - cycles, std::max<u64>(1, untilNextEvent()));
+  if(geBounded) geLimit.before = 0, geLimit.cap = end - cycles, geLimits.push_back(geLimit);
+  else goExact = first;
+  u64 ran = cpu.run(first);
+  cycles += ran - counted;
+  counted = ran;
+  while(!geLimits.empty() && !cpu.scc.halted && !exec.pending && !exited) {
+    for(auto& limit : geLimits) goExact = std::min(goExact, geExactLimit(limit));
+    geLimits.clear(), geFolded.clear();
+    u64 at = goOffset + ran;
+    if(goExact <= at) break;
+    goOffset = at, counted = 0;
+    ran = cpu.run(goExact - at);
+    cycles += ran - counted;
+    counted = ran;
+  }
+  geLimits.clear(), geFolded.clear();
+  going = false;
+}
+
+//(runUntilNextEvent()'s with the GE on its thread: its limits worked out from the bound kept for goThreaded())
+auto Kernel::runUntilNextEventThreaded() -> void {
   geBounded = false;
   u64 before = cpu.instructionsBefore(), limit = before + untilNextEvent();
   if(going && geBounded) geLimit.before = goOffset + before, geLimit.cap = ~0ull, geLimits.push_back(geLimit);
