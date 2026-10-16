@@ -37,7 +37,8 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## Android input: Colin McRae's dropped held Cross on the RP6 — the app's input paths replayed and cleared, an opt-in input log for the device capture that decides it — 2026-10-16
 
-Branch `cursor/held-button-2b67`, on master `a8d5640f5` (part 101, #263). Not the fix: what's left needs the RP6.
+Branch `cursor/held-button-2b67`, on master `a8d5640f5` (part 101, #263); draft PR #264. Not the fix: what's left
+needs the RP6.
 - **The bug** (owner, 15 Oct): in Colin McRae Rally 2005 Plus (PSP core), holding Cross to accelerate while steering
   with the left stick and pressing the D-pad, Square and L or R, the game sometimes stops seeing Cross until it's let
   go of and pressed again. Not noticed in other cores; not ruled out.
