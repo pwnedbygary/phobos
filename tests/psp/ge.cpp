@@ -5,12 +5,15 @@
 //a GU program of Phobos's own and pspsdk's GU sample "copy".
 #include "kernel-machine.hpp"
 
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <fstream>
 #include <unistd.h>
 
 namespace allegrex_test::psp {
+
+using ares::PlayStationPortable::GeVersions;
 
 constexpr u32 ListA = 0x0894'0000, ListB = 0x0895'0000, Vertices = 0x0896'0000, Saved = 0x0897'0000;
 constexpr u32 Image = 0x0898'0000;
@@ -3146,6 +3149,154 @@ static auto geThreadSame() -> void {
   CHECK(plain.memory.read(4, Copied + (6 * 64 + 6) * 4), plain.memory.read(4, VRAM + (10 * 64 + 10) * 4));
 }
 
+//Versions of memory (ge/versions.hpp), by themselves: the GE thread reads as of its place in the stream, a version's
+//bytes where one newer than its place has them; its write-backs go under the emulation thread's later writes (into
+//the earliest version at or after its place), storing only the bytes that change; of two versions over the same bytes
+//the earlier counts; versions are freed once the GE thread has passed them. And neither thread waits for the other
+//while holding what the other waits for (R13): stopped between pinning and looking for versions, the GE thread finds
+//the emulation thread's version published but not ready, lets go and waits, and the emulation thread, which was
+//waiting for that pin, copies and goes on; stopped between publishing and looking at the pin, the emulation thread
+//finds the pin let go of once the GE thread has found its version not ready. Each order under a time limit.
+static auto geVersions() -> void {
+  static u8 bytes[2][4096];
+  auto host = [](void*, u32 page) -> u8* { return page == 5 ? bytes[0] : page == 6 ? bytes[1] : nullptr; };
+  for(u32 n = 0; n < 4096; n++) bytes[0][n] = n, bytes[1][n] = n ^ 0x55;
+  {
+    GeVersions v{host, nullptr};
+    v.save(5, 100, 4, 10);
+    for(u32 n = 100; n < 104; n++) bytes[0][n] = 0x99;  //(the emulation thread's write at 10)
+    u8 out[8];
+    {
+      GeVersions::Hold hold{v, 9, false, 5, 5};
+      CHECK(hold.versioned, true);
+      hold.read(5, 98, 8, out);
+      CHECK(out[0] | out[1] << 8 | out[2] << 16 | u32(out[3]) << 24, 98u | 99u << 8 | 100u << 16 | 101u << 24);
+      CHECK(out[4] | out[5] << 8 | out[6] << 16 | u32(out[7]) << 24, 102u | 103u << 8 | 104u << 16 | 105u << 24);
+    }
+    {
+      GeVersions::Hold hold{v, 10, false, 5, 5};  //(at the write's place: after it)
+      CHECK(hold.versioned, false);
+    }
+    {
+      GeVersions::Hold hold{v, 10, true, 5, 5};  //(a write-back at 10: before the write)
+      CHECK(hold.versioned, true);
+      u8 in[8] = {7, 7, 7, 7, 7, 7, 7, 7};
+      hold.writeBack(5, 98, 8, in);
+    }
+    CHECK(bytes[0][98] | bytes[0][99] << 8 | bytes[0][104] << 16 | u32(bytes[0][105]) << 24, 0x0707'0707u);
+    CHECK(bytes[0][100] | bytes[0][101] << 8 | bytes[0][102] << 16 | u32(bytes[0][103]) << 24, 0x9999'9999u);
+    {
+      GeVersions::Hold hold{v, 9, false, 5, 5};
+      hold.read(5, 100, 4, out);
+      CHECK(out[0] | out[1] << 8 | out[2] << 16 | u32(out[3]) << 24, 0x0707'0707u);
+    }
+    {
+      GeVersions::Hold hold{v, 11, true, 5, 5};
+      CHECK(hold.versioned, false);
+    }
+    //two versions over the same bytes: the earlier newer than the place counts
+    bytes[1][0] = 1;
+    v.save(6, 0, 1, 20), bytes[1][0] = 2;
+    v.save(6, 0, 1, 22), bytes[1][0] = 3;
+    for(auto [q, expected] : {std::pair<u64, u32>{19, 1}, {20, 2}, {21, 2}, {22, 3}}) {
+      GeVersions::Hold hold{v, q, false, 6, 6};
+      hold.read(6, 0, 1, out);
+      CHECK(out[0], expected);
+    }
+    CHECK(v.versions(), 3u);
+    v.free(10);
+    CHECK(v.versions(), 2u);
+    v.free(22);
+    CHECK(v.versions(), 0u);
+    GeVersions::Hold hold{v, 0, false, 5, 6};
+    CHECK(hold.versioned, false);
+  }
+  //R13: both orders, each thread stopped between its two steps, under a time limit
+  for(u32 order = 0; order < 2; order++) {
+    GeVersions v{host, nullptr};
+    bytes[0][200] = 0x11;
+    std::atomic<u32> gePinned{0}, emulationPublished{0};
+    std::atomic<bool> geDone{false}, emulationDone{false};
+    u8 seen = 0;
+    if(order == 0) {  //(the GE thread pinned first, then the version published while it's stopped)
+      v.pinned = [&] { if(!gePinned++) while(!emulationPublished) std::this_thread::yield(); };
+      v.published = [&] { emulationPublished = 1; };
+    } else {  //(the version published first, then the GE thread pinned, looking and letting go while it's stopped)
+      v.published = [&] {
+        emulationPublished = 1;
+        while(!gePinned) std::this_thread::yield();
+        while(v.pages[5].pins.load()) std::this_thread::yield();  //(it found the version not ready, let go: waits)
+      };
+      v.pinned = [&] { gePinned++; };
+    }
+    std::thread ge([&] {
+      if(order == 1) while(!emulationPublished) std::this_thread::yield();
+      GeVersions::Hold hold{v, 40, false, 5, 5};
+      hold.read(5, 200, 1, &seen);
+      geDone = true;
+    });
+    std::thread emulation([&] {
+      if(order == 0) while(!gePinned) std::this_thread::yield();
+      v.save(5, 200, 1, 41);
+      bytes[0][200] = 0x22;
+      emulationDone = true;
+    });
+    auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while(!(geDone && emulationDone) && std::chrono::steady_clock::now() < until) std::this_thread::yield();
+    if(!(geDone && emulationDone)) {
+      std::fprintf(stderr, "ge versions: order %u deadlocked\n", order);
+      std::abort();  //(the threads can't be joined)
+    }
+    ge.join(), emulation.join();
+    CHECK(seen, 0x11u);  //(the GE thread at 40 reads the byte as before the write at 41)
+    CHECK(gePinned >= 2u, true);  //(it let go and pinned again)
+  }
+  //A version published while the GE thread holds its page, another version found there as it pinned: not ready till
+  //the page is let go of, so its read takes memory's byte, as the version will have it, and its write-back goes to
+  //memory, which the version's copy then takes (not into the version's room, where the copy would undo it)
+  {
+    GeVersions v{host, nullptr};
+    bytes[0][200] = 0x11, bytes[0][300] = 0x44;
+    v.save(5, 200, 1, 41), bytes[0][200] = 0x22;
+    std::atomic<bool> held{false}, published{false}, geDone{false}, emulationDone{false};
+    u8 seen = 0;
+    bool versioned = false;
+    v.published = [&] { published = true; };
+    std::thread ge([&] {
+      {
+        GeVersions::Hold hold{v, 40, true, 5, 5};
+        versioned = hold.versioned;
+        held = true;
+        while(!published) std::this_thread::yield();
+        hold.read(5, 300, 1, &seen);
+        u8 value = 0x66;
+        hold.writeBack(5, 300, 1, &value);
+      }
+      geDone = true;
+    });
+    std::thread emulation([&] {
+      while(!held) std::this_thread::yield();
+      v.save(5, 300, 1, 45);
+      bytes[0][300] = 0x77;
+      emulationDone = true;
+    });
+    auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while(!(geDone && emulationDone) && std::chrono::steady_clock::now() < until) std::this_thread::yield();
+    if(!(geDone && emulationDone)) {
+      std::fprintf(stderr, "ge versions: a version published under a hold deadlocked\n");
+      std::abort();
+    }
+    ge.join(), emulation.join();
+    CHECK(versioned, true);
+    CHECK(seen, 0x44u);
+    CHECK(bytes[0][300], 0x77u);
+    GeVersions::Hold hold{v, 44, false, 5, 5};
+    u8 kept = 0;
+    hold.read(5, 300, 1, &kept);
+    CHECK(kept, 0x66u);  //(the write-back at 40 is under the write at 45)
+  }
+}
+
 auto geTests() -> Tests {
   return {
     {"ge commands", geCommands}, {"ge moving", geMoving}, {"ge stops", geStops}, {"ge vertices", geVertices},
@@ -3168,6 +3319,7 @@ auto geTests() -> Tests {
     {"event flags", eventFlags}, {"event flag waiting", eventFlagWaiting}, {"display picture", displayPicture},
     {"gu program", guProgram}, {"copy sample", copySample},
     {"ge on its own thread draws the same", geThreadSame},
+    {"ge versions of memory, and neither thread waiting while it holds what the other waits for", geVersions},
   };
 }
 

@@ -500,7 +500,8 @@ auto GE::decodeTexels(const Sampler& t, const u8* palette, u32 low, u32 high, u3
       }
     }
   };
-  if(const u8* base = memory.pointer(low, high - low); base && t.format < 8) {
+  Reading reading{*this, low, high - low};  //(as of the PRIM's place, threaded: versions.cpp)
+  if(const u8* base = reading.pointer(low, high - low); base && t.format < 8) {
     decodeRows(t, palette, base, low, width, from, rows, texels, left, right, outTop, outLeft);
   } else if(base) {
     decodeWith([&](u32 size, u32 at) -> u32 {
@@ -510,7 +511,7 @@ auto GE::decodeTexels(const Sampler& t, const u8* palette, u32 low, u32 high, u3
       return bytes[0] | bytes[1] << 8 | bytes[2] << 16 | u32(bytes[3]) << 24;
     });
   } else {
-    decodeWith([&](u32 size, u32 at) { return memory.read(size, at); });
+    decodeWith([&](u32 size, u32 at) { return reading.read(size, at); });
   }
 }
 
@@ -561,7 +562,8 @@ auto GE::fillDecoded(Look& look, u32 rows, const std::function<auto () -> TexelB
     if(covers(*entry)) {
       drawnFirst(boxLow, boxHigh - boxLow);  //(from VRAM primitives waiting to be drawn draw over: threads.cpp)
       Memory::KnownDrawn known;
-      const u8* bytes = memory.pointer(boxLow, boxHigh - boxLow);
+      Reading reading{*this, boxLow, boxHigh - boxLow};
+      const u8* bytes = reading.pointer(boxLow, boxHigh - boxLow);
       u32 at = boxLow - t.address - (entry->part ? entry->top * pitch : 0);  //(where they are in its source)
       same = bytes && u64(at) + (boxHigh - boxLow) <= entry->source.size() &&
              !std::memcmp(bytes, entry->source.data() + at, boxHigh - boxLow);
@@ -577,7 +579,8 @@ auto GE::fillDecoded(Look& look, u32 rows, const std::function<auto () -> TexelB
     textureBytes(t, entry->rows, kept, keptEnd);
     drawnFirst(kept, keptEnd - kept);  //(from VRAM primitives waiting to be drawn draw over: threads.cpp)
     Memory::KnownDrawn known;
-    const u8* bytes = memory.pointer(kept, keptEnd - kept);
+    Reading reading{*this, kept, keptEnd - kept};
+    const u8* bytes = reading.pointer(kept, keptEnd - kept);
     if(bytes && entry->source.size() == keptEnd - kept && !std::memcmp(bytes, entry->source.data(), keptEnd - kept)) {
       entry->suspect = false;
       memory.watch(kept, keptEnd - kept);
@@ -624,8 +627,11 @@ auto GE::fillDecoded(Look& look, u32 rows, const std::function<auto () -> TexelB
     if(indexed) entry->palette.assign(clut, clut + sizeof(clut)), entry->paletteChecked = clutVersion;
     //(no copy bigger than the texels: a texture of rows longer than it is wide, as a frame buffer's part, goes as
     //its pages are written, as before)
-    const u8* bytes = high - low <= entry->texels.size() * 4 ? memory.pointer(low, high - low) : nullptr;
-    if(bytes) entry->source.assign(bytes, bytes + (high - low));
+    if(high - low <= entry->texels.size() * 4) {
+      Reading reading{*this, low, high - low};
+      const u8* bytes = reading.pointer(low, high - low);
+      if(bytes) entry->source.assign(bytes, bytes + (high - low));
+    }
     memory.pagesOf(low, high - low, entry->firstPage, entry->lastPage);
     memory.watch(low, high - low);
     for(u32 page = entry->firstPage; page <= entry->lastPage; page++) textures.pages[page].push_back(entry.get());

@@ -188,7 +188,6 @@ auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts, u
   if(from >= to || left > right) return;
   (void)p;
   u32 width = right - left + 1, height = to - from, count = width * height, bytes = t.bytes();
-  auto& vram = ge->memory.vram;
   u32 depthCopy = Memory::depthCopy(t.format);
   u8 taken = parts;  //(the parts taken from memory)
   if(parts & 2 && depthCovered(t, from, to, right)) taken &= ~2, statistics.depthsCovered++;
@@ -202,24 +201,32 @@ auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts, u
     c.parts = taken;
     recorded.uploads.resize(c.depth + (taken & 2 ? count * 2 : 0));
     u8* out = recorded.uploads.data();
-    if(taken & 1) {
+    if(taken & 1) {  //(memory's as of the PRIM's place, threaded: GE::readingVRAM())
       u32 at = t.address + (from * t.stride + left) * bytes;
-      auto rows = [&](auto widen) { widen(vram.data(), at, t.stride, width, height, out + c.colors, out + c.stencil); };
-      if(t.format == 0) rows(widenRows<0>);
-      if(t.format == 1) rows(widenRows<1>);
-      if(t.format == 2) rows(widenRows<2>);
-      if(t.format == 3) rows(widenRows<3>);
+      ge->readingVRAM(at, at + u64((height - 1) * t.stride + width) * bytes - 1, [&](const u8* vram) {
+        auto rows = [&](auto widen) { widen(vram, at, t.stride, width, height, out + c.colors, out + c.stencil); };
+        if(t.format == 0) rows(widenRows<0>);
+        if(t.format == 1) rows(widenRows<1>);
+        if(t.format == 2) rows(widenRows<2>);
+        if(t.format == 3) rows(widenRows<3>);
+      });
     }
-    for(u32 y = 0; y < height && taken & 2; y++) {
-      for(u32 x = left; x <= right; x++) {
-        u16 depth = 0;
-        if(x < t.depthStride) {
-          u32 offset = Memory::vramOffset(depthCopy, (t.depthBuffer + ((from + y) * t.depthStride + x) * 2) &
-                                                       (Memory::VRAMSize - 1));
-          depth = vram[offset] | vram[offset + 1] << 8;
+    if(taken & 2) {
+      u64 low = (u64(t.depthBuffer) + u64(from) * t.depthStride * 2) & ~u64(0x3fff);
+      u64 high = (u64(t.depthBuffer) + u64(to) * t.depthStride * 2 - 1) | 0x3fff;
+      ge->readingVRAM(low, high, [&](const u8* vram) {
+        for(u32 y = 0; y < height; y++) {
+          for(u32 x = left; x <= right; x++) {
+            u16 depth = 0;
+            if(x < t.depthStride) {
+              u32 offset = Memory::vramOffset(depthCopy, (t.depthBuffer + ((from + y) * t.depthStride + x) * 2) &
+                                                           (Memory::VRAMSize - 1));
+              depth = vram[offset] | vram[offset + 1] << 8;
+            }
+            std::memcpy(out + c.depth + (y * width + x - left) * 2, &depth, 2);
+          }
         }
-        std::memcpy(out + c.depth + (y * width + x - left) * 2, &depth, 2);
-      }
+      });
     }
     recorded.commands.push_back(c);
     statistics.uploads++;
@@ -475,12 +482,16 @@ auto GPU::putDepth(u32 first, u32 last, bool finishing) -> void {
     u32 across = 0, down = 0;
     if(!backend->readDepth(n, depths, across, down) || across != width(t) || down != t.depthRows) continue;
     u32 depthCopy = Memory::depthCopy(t.format);
-    for(u32 y = 0; y < down; y++) {
-      for(u32 x = 0; x < across; x++, depths++) {
-        u32 at = Memory::vramOffset(depthCopy, (t.depthBuffer + (y * t.depthStride + x) * 2) & (Memory::VRAMSize - 1));
-        memory.vram[at] = u8(*depths), memory.vram[at + 1] = u8(*depths >> 8);
+    auto [low, high] = bytes(t);
+    ge->writingVRAM(low, high, [&](const GE::Writes& writes) {  //(only those that change: GE::writingVRAM())
+      for(u32 y = 0; y < down; y++) {
+        for(u32 x = 0; x < across; x++, depths++) {
+          u32 at = Memory::vramOffset(depthCopy, (t.depthBuffer + (y * t.depthStride + x) * 2) & (Memory::VRAMSize - 1));
+          u8 depth[2] = {u8(*depths), u8(*depths >> 8)};
+          writes.put(at, depth, 2);
+        }
       }
-    }
+    });
     done[n] = true;
     statistics.depthsPut++;
   }
@@ -1828,19 +1839,25 @@ auto GPU::finish(GE& ge) -> void {
     const u8* stencil;
     if(!backend->read(n, colors, stencil)) continue;
     u32 bytes = t.bytes(), width = t.right - t.left + 1;
-    for(s32 y = t.top; y <= t.bottom; y++) {
-      for(s32 x = t.left, next = 0; x <= t.right; x = next) {  //(the row a page at a time)
-        u32 at = (t.address + (y * t.stride + x) * bytes) & (Memory::VRAMSize - 1);
-        next = std::min<s32>(t.right + 1, x + (Memory::PageSize - at % Memory::PageSize + bytes - 1) / bytes);
-        if(owners[at / Memory::PageSize] != &t) continue;
-        u32 i = (y - t.top) * width + (x - t.left);
-        for(s32 column = x; column < next; column++, i++, at += bytes) {
-          if(!t.dead.empty() && t.covered(at, at + bytes - 1)) continue;  //(memory's)
-          u32 pixel = narrowTarget((colors[i] & 0xff'ffff) | u32(stencil[i]) << 24, t.format);
-          std::memcpy(&memory.vram[at], &pixel, bytes);
+    //(only the bytes that change, into the versions of the emulation thread's later writes where it has made some:
+    //GE::writingVRAM())
+    u64 low = t.address + (u64(t.top) * t.stride + t.left) * bytes;
+    u64 high = t.address + (u64(t.bottom) * t.stride + t.right + 1) * bytes - 1;
+    ge.writingVRAM(low, high, [&](const GE::Writes& writes) {
+      for(s32 y = t.top; y <= t.bottom; y++) {
+        for(s32 x = t.left, next = 0; x <= t.right; x = next) {  //(the row a page at a time)
+          u32 at = (t.address + (y * t.stride + x) * bytes) & (Memory::VRAMSize - 1);
+          next = std::min<s32>(t.right + 1, x + (Memory::PageSize - at % Memory::PageSize + bytes - 1) / bytes);
+          if(owners[at / Memory::PageSize] != &t) continue;
+          u32 i = (y - t.top) * width + (x - t.left);
+          for(s32 column = x; column < next; column++, i++, at += bytes) {
+            if(!t.dead.empty() && t.covered(at, at + bytes - 1)) continue;  //(memory's)
+            u32 pixel = narrowTarget((colors[i] & 0xff'ffff) | u32(stencil[i]) << 24, t.format);
+            writes.put(at, (const u8*)&pixel, bytes);
+          }
         }
       }
-    }
+    });
     statistics.readbacks++;
     u32 from = t.address + t.top * t.stride * bytes, to = t.address + (t.bottom * t.stride + t.right + 1) * bytes;
     for(auto& other : targets) {

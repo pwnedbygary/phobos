@@ -16,6 +16,7 @@ namespace ares::PlayStationPortable {
 #include "threads.cpp"
 #include "transfer.cpp"
 #include "thread.cpp"
+#include "versions.cpp"
 
 //The GE watches the pages of the textures it keeps decoded (texture.cpp), and a hardware renderer those of its frame
 //buffers (ge.hpp's Renderer), and hears of their changes here.

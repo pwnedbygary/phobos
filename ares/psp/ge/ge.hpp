@@ -11,6 +11,7 @@
 #include <list>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -43,6 +44,7 @@
 //says (each such place says so).
 
 #include "thread.hpp"
+#include "versions.hpp"
 
 namespace ares::PlayStationPortable {
 
@@ -775,6 +777,36 @@ struct GE {
   //handed over as they run, but its state set from outside (a context restored, a test's) goes as a whole (handState())
   State handedState{};
   bool handedStateValid = false;
+  //(the render GE, threaded) Its reads of memory and its write-backs as of the record it does (place), through the
+  //versions the emulation thread keeps of what it writes meanwhile (versions.hpp); on its own thread alone
+  //(onGeThread): drained, the emulation thread does as the synchronous GE does.
+  GeVersions* versions = nullptr;
+  u64 place = 0;
+  static thread_local bool onGeThread;
+  std::vector<u8> versionedVRAM;  //(VRAM's pages as of place where versions are to be taken over them)
+  //versions.cpp
+  static auto hostPage(void* context, u32 page) -> u8*;
+  auto versioned() const -> bool { return versions && onGeThread; }
+  //VRAM's bytes low to high (offsets: those past its end its start's) held while use(vram) reads them as of place:
+  //vram VRAM's 2 MiB as memory has them, or a copy of their pages with the versions newer than place in.
+  auto readingVRAM(u64 low, u64 high, const std::function<auto (const u8* vram) -> void>& use) -> void;
+  //VRAM's bytes low to high held for a write-back as of place: put() stores each byte that changes, into the earliest
+  //version at or after place that has it, else memory.
+  struct Writes {
+    GE& ge;
+    GeVersions::Hold* hold;
+    auto put(u32 offset, const u8* bytes, u32 size) const -> void;
+  };
+  auto writingVRAM(u64 low, u64 high, const std::function<auto (const Writes&) -> void>& use) -> void;
+  //Memory's size bytes from address held while it lives: pointer() and read() as memory's, as of place.
+  struct Reading {
+    Reading(GE& ge, u32 address, u32 size);
+    auto pointer(u32 address, u32 size) -> const u8*;
+    auto read(u32 size, u32 address) -> u32;
+    GE& ge;
+    std::optional<GeVersions::Hold> hold;
+    std::vector<u8> copy;
+  };
 };
 
 }

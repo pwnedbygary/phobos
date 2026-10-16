@@ -1,7 +1,11 @@
 //The GE on a thread of its own: thread.hpp says how the kernel's GE and the render GE share the work.
 
+thread_local bool GE::onGeThread = false;
+
 GeThread::GeThread(GE& control, GE& render) : control(control), render(render) {
   words.reserve(WordsMost);
+  versions = std::make_unique<GeVersions>(&GE::hostPage, &control.memory);
+  render.versions = versions.get();
   //(the render GE's watches posted to the kernel's GE's memory as the thread drains: compiled stores to those pages
   //go through memory's slow path, which reaches the render GE's view: Memory::drawer)
   render.memory.watching = [this](u32 page) { watches.push_back(page); };
@@ -17,6 +21,7 @@ GeThread::~GeThread() {
   thread.join();
   render.memory.watching = nullptr;
   render.memory.written = nullptr;
+  render.versions = nullptr;
 }
 
 auto GeThread::append(Kind kind, u32 size) -> u8* {
@@ -153,9 +158,11 @@ auto GeThread::drain() -> void {
 }
 
 auto GeThread::take() -> void {
+  GE::onGeThread = true;
   while(const u8* at = ring.next()) {
     Header header;
     std::memcpy(&header, at, sizeof(header));
+    render.place = header.serial;
     replay(header, at + sizeof(header));
     ring.release();
     done.store(header.serial, std::memory_order_release);

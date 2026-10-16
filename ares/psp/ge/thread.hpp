@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -22,6 +23,7 @@ namespace ares::PlayStationPortable {
 
 struct GE;
 struct Memory;
+struct GeVersions;
 
 struct GeThread {
   //Records: a header, then the kind's own.
@@ -67,6 +69,8 @@ struct GeThread {
 
   GE& control;
   GE& render;
+  //(the versions of memory the emulation thread keeps for the render GE's reads and write-backs: versions.hpp)
+  std::unique_ptr<GeVersions> versions;
 
 private:
   static constexpr u32 WordsMost = 1024;
