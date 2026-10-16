@@ -1,0 +1,5 @@
+plugin/*.o
+plugin/*.elf
+plugin/*.prx
+plugin/exports.c
+__pycache__/
