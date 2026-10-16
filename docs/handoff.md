@@ -1036,15 +1036,27 @@ scripts and CI only: the app's build and its flags are unchanged.
   same instructions a frame within the runs' spread (+0.00% and +0.02% drawn on one thread, -0.05% and +0.05% on
   four), the times within their noise. tests/psp 555/0 sanitized, unsanitized and built as the app is (Apple clang),
   tests/allegrex 78/0, tests/psp/ares 348/0.
-- **Still red: what the lane's first full run found** (run 38803233475; the tests had never run built so on Linux):
-  "ge vertices read in runs as one at a time" fails, 1,248 of its 3,000 rounds differing, with aarch64's GCC 13.3 as
-  well; 553 others pass, and `vulkan-unordered-reads` skips. A float vertex field holding a signaling NaN reads
-  quieted one vertex at a time (`readTarget()`: the number times its scale, 1 for a float, multiplied at run time)
-  but as it is in runs (`readVerticesFrom()`: GCC, seeing the scale is 1 in `byFormat()`'s float case, drops the
-  multiplication, as its default `-fno-signaling-nans` allows). Apple clang quiets it both ways, so the app's builds
-  read both the same and the test passes there. Not fixed here: it's the GE's behaviour, not a warning, and the runs
-  path is hot (Army of Two reads 650,000 vertices a frame). A fix that keeps clang's results: both readers set a
-  float's quiet bit when it's a NaN, which is what the multiplication does on both hosts.
+- **What the lane's first full run found, settled for GCC** (run 38803233475; the tests had never run built so on
+  Linux): "ge vertices read in runs as one at a time" failed, 1,248 of its 3,000 rounds differing, with aarch64's GCC
+  13.3 as well. A float vertex field holding a signaling NaN read quieted one vertex at a time (`readTarget()`: the
+  number times its unit, 1 for a float, multiplied at run time) but as it was in runs (`readVerticesFrom()`: GCC,
+  seeing the unit is 1 in `byFormat()`'s float case, drops the multiplication, as its default `-fno-signaling-nans`
+  allows). Clang, Apple's and the NDK's, keeps the multiplication in both readers, so the app's builds read both the
+  same. The owner's call (2026-10-15): GCC's builds read as clang's. Under GCC alone (`#if defined(__GNUC__) &&
+  !defined(__clang__)`), both readers take a float through `vertexFloat()`, which sets a NaN's quiet bit in whole
+  numbers, which no optimizer may drop; clang compiles master's reads, so the app pays nothing. (With the quieting
+  on clang too, `003dff253`, the Mac's bench in Vulkan fast had Ghost of Sparta's menu at +1.24% emulation-thread
+  instructions and Super Monkey Ball at +0.83%; `-fsignaling-nans`, experimental in GCC's manual and needed over the
+  whole PSP core, wasn't taken.) Clang relies on its own multiplication, which a new test pins on the Mac (CI's
+  system tests are GCC's): "ge vertex floats that are signaling NaNs read quieted, in runs and one at a time" reads
+  twelve values, four of them signaling NaNs, in every float of a 3D vertex both ways and checks their bits. With
+  the unit made a 1 that clang sees, so that it folds the multiplication away, it fails on the Mac (each signaling
+  NaN read as stored, in all ten floats, both ways), while "ge vertices read in runs as one at a time" passes.
+  Checks: clang's code for `ge.cpp` byte-identical with master's `vertex.cpp` and with this one (Apple clang at the
+  lane's flags, the NDK's 28.2 at the app's, modern and legacy), its six vertex readers the same as master
+  `1c75c5600`'s own build's; the 21 scenes in Software, Vulkan fast and accurate, master's runner against this one:
+  all 63 sets of hashes the same; tests/psp 568/0 built as the app is, unsanitized and sanitized (Apple clang). CI's
+  lane passed with this GCC code (run 38827011901, on `003dff253`).
 - **Checks** (the Mac, arm64, Apple clang 21): `PHOBOS_TESTS_MODE=release tests/allegrex/run-tests.sh` 60/0 (7
   objects of its own, 18 s with the run); `tests/rsp-vu-neon/run-tests.sh 3000 0x5253505655`: 10,420,000 checks, no
   NEON or reference mismatch; actionlint on the workflows. CI on #247 (run 38439997353): Allegrex 60/0 sanitized and
