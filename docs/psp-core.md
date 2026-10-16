@@ -15914,8 +15914,8 @@ probe's no), which help a greater-or-equal test (Super Monkey Ball), not the les
 branch's measurement builds (`builds-time2.sh`: Vulkan fast, 120 late frames, three rounds, the two builds interleaved
 and their order alternating), in a window the coordinator kept the other sessions out of: each run started with no
 other session's suite, runner, batch or build running, watched for one every second, and the 19 runs of the first
-pass that started at a 1-minute load over 9 or saw it jump were run again; the runs kept started at loads of 3.3-8.8
-(Cursor's windows the rest). The best of the rounds, fps, master → this branch (GPU ms a frame):
+pass that started at a 1-minute load over 9 or saw it jump were run again; the runs kept started at loads of 3.3-8.8.
+The best of the rounds, fps, master → this branch (GPU ms a frame):
 
 | scene | 1x | 2x | 5x |
 |---|---|---|---|
