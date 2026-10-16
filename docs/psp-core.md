@@ -15924,8 +15924,8 @@ charged. The CPU's part, a loop's time not blocked in a sync or a vblank wait:
   **0.875 bus clocks a pixel and 104 a primitive**, against the model's 0.25 and 4.74 (Sony's peaks), and puts those
   three within 11% (27.25, 30.71 and 21.09 ms against 27.60, 29.62 and 23.64). Killzone's scene list it puts at 28 ms
   (the PSP's 23.4 and 17.2), its full-screen list at 1.0 ms (1.72: a blended pass); Activision Hits' lists at 1.4 ms
-  (4.46: their block transfers, which the model charges nothing, are most of it, by the psp-hires agent's count of 28
-  whole-screen depth copies a frame).
+  (4.46), most likely for their whole-screen blended passes, whose pixels cost more than the 3D scenes' average (the
+  depth copies the psp-hires agent counted there are the Vulkan renderer's own, not the game's block transfers).
 - **The CPU.** The PSP's CPU part of a loop is 7 to 9 times Phobos's in every scene (7.0, 8.3, 8.9, 8.0 and 7.8),
   where Phobos counts an instruction a cycle at 333 MHz. It doesn't pace these loops on the PSP (they wait on the GE,
   which takes longer), but for Killzone (two lists a frame, 15.5 ms of CPU each: its frame is the CPU's there).
@@ -15942,11 +15942,11 @@ charged. The CPU's part, a loop's time not blocked in a sync or a vblank wait:
   under 64 KB for the records, so the first captures were refused (as they're meant to be, with a note); 0.2.3's
   default is 256, some 300 KB for records ten seconds of these games fill 50 to 130 KB of.
 - geTime() is unchanged here: the captures say by how much it's short, not yet how a PSP's GE spends its time. The
-  fit above is three scenes' averages with Phobos's own counts; the next step is a model of the GE's time per list
-  fitted to every list the captures hold (each scene's pixels and primitives from Phobos's profile of it), with the
-  block transfers counted, checked against the scenes left out, then tools/psp-measure's fills on the owner's PSP
-  (part 64's "Left") for what averages can't separate: textured or not, blended, 16 or 32 bits, lit and skinned
-  vertices.
+  fit above is three scenes' averages with Phobos's own counts. Round 6 already timed the GE's parts on this PSP, and
+  part 76 fitted a model to them (25 terms, half of round 6's 906 lists within 4.2%), left unmerged over the RP6's
+  polling cost and the fewer frames it gave, which no PSP had confirmed then; these captures confirm them in game. A
+  design for the next step (part 76's model checked against these captures, the GE's sync calls skipped through when
+  a game polls them, a round 8 for what round 6 left) waits for the owner's approval.
 - The CPU's 7 to 9 times: Phobos's instruction a cycle against a PSP's CPU in these loops. It paces none of these
   scenes but Killzone; a model of the CPU's time is a separate question (the captures give its part of each loop).
 - The decoder counts frames by flips; Killzone's, set to one buffer, it counts by the calls (a note says so).

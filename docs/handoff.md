@@ -76,9 +76,10 @@ sources; no PPSSPP, no JPCSP. Save states unchanged; nothing of the PSP's behavi
   movie player's file read trips that check), with the new "ge profile" (the calls, the wait to its
   thread going on, the FINISH's callback, the vblank and the model's charge, record by record; the file byte by
   byte; nothing recorded without a profile); the plugin's and the load test's host tests; the decoder's 19.
-- **Left**: a model of the GE's time fitted to every list the captures hold (with the block
-  transfers counted), then tools/psp-measure's fills on the PSP for what averages can't separate; geTime() unchanged
-  here. The CPU's 7 to 9 times is a question of its own.
+- **Left**: geTime() unchanged here. Part 76's model, fitted to round 6's timings on this PSP and left unmerged, is
+  the starting point: a design (that model checked against these captures, the GE's sync calls skipped through when a
+  game polls them, a round 8 for what round 6 left) waits for the owner's approval. The CPU's 7 to 9 times is a
+  question of its own.
 
 ## PSP NPDRM: PGD files on the memory stick — a game's installed data read through the PGD layer (Gunhound EX, 7th Dragon 2020); a wrong key, a damaged header and a write refused as the PGD layer refuses them — 2026-10-15
 
