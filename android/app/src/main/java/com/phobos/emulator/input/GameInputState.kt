@@ -87,6 +87,7 @@ object GameInputState {
         lastHatBits = 0
         rightStickDirections = 0
         if (hwButtons != 0 || virtualButtons != 0 || rightStickButtons != 0) {
+            InputLog.letGoOfAll(buttons)
             hwButtons = 0
             virtualButtons = 0
             rightStickButtons = 0
@@ -126,13 +127,19 @@ object GameInputState {
     fun handleMotionEvent(event: MotionEvent, mappings: Map<Int, String>, systemName: String, pspRightStick: PspRightStick): Boolean {
         if ((event.source and InputDevice.SOURCE_JOYSTICK) != InputDevice.SOURCE_JOYSTICK) return false
         if (event.action != MotionEvent.ACTION_MOVE) return false
-        val bindings = InputBindings.of(mappings)
-        val hatActive = updateHatDpad(event)
+        onJoystickMove(event::getAxisValue, mappings, systemName, pspRightStick)
+        return true
+    }
 
-        val newLx = stickAxis(event, bindings, PhobosCore.Input.LS_LEFT, PhobosCore.Input.LS_RIGHT, MotionEvent.AXIS_X)
-        val newLy = stickAxis(event, bindings, PhobosCore.Input.LS_UP, PhobosCore.Input.LS_DOWN, MotionEvent.AXIS_Y)
-        val newRx = stickAxis(event, bindings, PhobosCore.Input.RS_LEFT, PhobosCore.Input.RS_RIGHT, MotionEvent.AXIS_Z)
-        val newRy = stickAxis(event, bindings, PhobosCore.Input.RS_UP, PhobosCore.Input.RS_DOWN, MotionEvent.AXIS_RZ)
+    /** A joystick move, its axes read through [axisValue]: what [handleMotionEvent] does with one. */
+    internal fun onJoystickMove(axisValue: (Int) -> Float, mappings: Map<Int, String>, systemName: String, pspRightStick: PspRightStick) {
+        val bindings = InputBindings.of(mappings)
+        val hatActive = updateHatDpad(axisValue)
+
+        val newLx = stickAxis(axisValue, bindings, PhobosCore.Input.LS_LEFT, PhobosCore.Input.LS_RIGHT, MotionEvent.AXIS_X)
+        val newLy = stickAxis(axisValue, bindings, PhobosCore.Input.LS_UP, PhobosCore.Input.LS_DOWN, MotionEvent.AXIS_Y)
+        val newRx = stickAxis(axisValue, bindings, PhobosCore.Input.RS_LEFT, PhobosCore.Input.RS_RIGHT, MotionEvent.AXIS_Z)
+        val newRy = stickAxis(axisValue, bindings, PhobosCore.Input.RS_UP, PhobosCore.Input.RS_DOWN, MotionEvent.AXIS_RZ)
 
         // Only the N64 latches stick-as-button bits (17-24): its right stick drives the
         // C-buttons. Every other system leaves stick bits alone: the right stick is analog there
@@ -143,7 +150,7 @@ object GameInputState {
         for (binding in bindings.axisBindings) {
             val isStickBit = binding.bit in FIRST_STICK_BIT..LAST_STICK_BIT
             if (isStickBit && !latchStickBits) continue
-            val value = event.getAxisValue(binding.axis)
+            val value = axisValue(binding.axis)
             val magnitude = if (binding.positive) value else -value
             val wasPressed = axisDigitalState[binding.bit] ?: false
             val pressed = axisPressed(magnitude, wasPressed)
@@ -157,7 +164,6 @@ object GameInputState {
 
         val stickActive = maxOf(abs(newLx), abs(newLy), abs(newRx), abs(newRy)) > PHYSICAL_ACTIVITY_THRESHOLD
         if (hatActive || axisButtonPressed || stickActive) onPhysicalInput?.invoke()
-        return true
     }
 
     /**
@@ -194,8 +200,19 @@ object GameInputState {
 
     /** Push the combined sticks + buttons to the native core. */
     fun push() {
-        PhobosCore.setInput(lx, ly, rx, ry, buttons)
+        val now = buttons
+        if (now != pushedButtons) {
+            InputLog.buttons(pushedButtons, now)
+            pushedButtons = now
+        }
+        coreInput(lx, ly, rx, ry, now)
     }
+
+    /** The buttons [push] last sent. */
+    private var pushedButtons = 0
+
+    /** Where [push] sends the state: the native core (JVM tests, without the native library, replace it). */
+    internal var coreInput: (Float, Float, Float, Float, Int) -> Unit = { lx, ly, rx, ry, buttons -> PhobosCore.setInput(lx, ly, rx, ry, buttons) }
 
     /**
      * Latches the D-pad hat (AXIS_HAT_X/Y) into the gameplay D-pad bits and the hotkey key set.
@@ -204,9 +221,9 @@ object GameInputState {
      *
      * @return true when any hat direction is pressed.
      */
-    private fun updateHatDpad(event: MotionEvent): Boolean {
-        val hatX = event.getAxisValue(MotionEvent.AXIS_HAT_X)
-        val hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
+    private fun updateHatDpad(axisValue: (Int) -> Float): Boolean {
+        val hatX = axisValue(MotionEvent.AXIS_HAT_X)
+        val hatY = axisValue(MotionEvent.AXIS_HAT_Y)
         val left = hatX < -HAT_PRESS_THRESHOLD
         val right = hatX > HAT_PRESS_THRESHOLD
         val up = hatY < -HAT_PRESS_THRESHOLD
@@ -247,20 +264,20 @@ object GameInputState {
      * core, which applies its own authoritative dead zone and response curve; pre-dead-zoning
      * here would stack with the core's and make sticks feel unresponsive.
      */
-    private fun stickAxis(event: MotionEvent, bindings: InputBindings, negBit: Int, posBit: Int, defaultAxis: Int): Float {
+    private fun stickAxis(axisValue: (Int) -> Float, bindings: InputBindings, negBit: Int, posBit: Int, defaultAxis: Int): Float {
         var negValue = 0f
         var posValue = 0f
         bindings.axisFor(negBit)?.let { b ->
-            val v = event.getAxisValue(b.axis)
+            val v = axisValue(b.axis)
             if (!b.positive && v < 0f) negValue = v
             else if (b.positive && v > 0f) negValue = -v
         }
         bindings.axisFor(posBit)?.let { b ->
-            val v = event.getAxisValue(b.axis)
+            val v = axisValue(b.axis)
             if (b.positive && v > 0f) posValue = v
             else if (!b.positive && v < 0f) posValue = -v
         }
         if (negValue != 0f || posValue != 0f) return (negValue + posValue).coerceIn(-1f, 1f)
-        return event.getAxisValue(defaultAxis).coerceIn(-1f, 1f)
+        return axisValue(defaultAxis).coerceIn(-1f, 1f)
     }
 }

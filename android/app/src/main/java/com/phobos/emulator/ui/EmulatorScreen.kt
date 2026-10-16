@@ -82,6 +82,7 @@ import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.input.GameInputState
 import com.phobos.emulator.input.HotkeyAction
 import com.phobos.emulator.input.InputBindings
+import com.phobos.emulator.input.InputLog
 import com.phobos.emulator.input.comboUsesDpad
 import com.phobos.emulator.input.mapKeyCodeToBit
 import com.phobos.emulator.input.matchingHotkeys
@@ -261,6 +262,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     // ── Lifecycle ────────────────────────────────────────────────────────────
     LaunchedEffect(isLoaded) {
         if (isLoaded && !viewModel.emulatorScreenReplaced(screen)) {
+            InputLog.refresh()
+            InputLog.note("$systemName game, bindings ${controls.mappings}, hotkeys ${controls.hotkeys}")
             viewModel.setPause(false)
             PhobosCore.setEmulationRunning(true)
             // Take focus right away so hardware keys (hotkeys, gamepad) reach onPreviewKeyEvent.
@@ -376,11 +379,15 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             .onSizeChanged { landscapeScreen = it.width >= it.height }
             .background(Color.Black)
             // Before focusable() so it observes this node's focus (hasFocus includes children).
-            .onFocusChanged { if (!it.hasFocus) GameInputState.releaseAllButtons() }
+            .onFocusChanged {
+                InputLog.note("game focus $it")
+                if (!it.hasFocus) GameInputState.releaseAllButtons()
+            }
             .focusRequester(focusRequester)
             .focusable()
             .onPreviewKeyEvent { keyEvent ->
                 val native = keyEvent.nativeKeyEvent
+                InputLog.key("game", native)
                 val keyCode = native.keyCode
                 val isDown = keyEvent.type == KeyEventType.KeyDown
                 // Leave volume keys to the system, and every key to the layout editors.

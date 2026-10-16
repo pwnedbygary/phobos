@@ -35,6 +35,42 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Android input: Colin McRae's dropped held Cross on the RP6 — the app's input paths replayed and cleared, an opt-in input log for the device capture that decides it — 2026-10-16
+
+Branch `cursor/held-button-2b67`, on master `a8d5640f5` (part 101, #263). Not the fix: what's left needs the RP6.
+- **The bug** (owner, 15 Oct): in Colin McRae Rally 2005 Plus (PSP core), holding Cross to accelerate while steering
+  with the left stick and pressing the D-pad, Square and L or R, the game sometimes stops seeing Cross until it's let
+  go of and pressed again. Not noticed in other cores; not ruled out.
+- **The core** (the session before this one, with a local trace patch kept at
+  `~/phobos-work/scratch/held-button/psp-ctrl-trace.patch`): the game reads only sceCtrlPeekBufferPositive(count 1),
+  once a frame, the newest sample, the front end's state that frame; scripted runs (Cross held 2,000 frames, the
+  stick swept, Square, L, R and the D-pad tapped across it, a one-frame drop, a 70-frame release) show it follows
+  Cross's level each frame. So the front end sends Cross released while it's held.
+- **The app** (this entry): every writer of the buttons sent to the core read. With Cross bound to a key (the RP6's
+  pad is an "Xbox Wireless Controller" in its Xbox layout: Cross is the bottom button, BUTTON_A, the A bit), only a
+  key event for Cross's own key code that isn't a press (`setButton`), `releaseAllButtons()` (the game screen losing
+  Compose focus, a pause, the activity's onPause among them, a PSP dialog) or `reset()` clears it. The axis loop
+  rewrites only bits bound to an axis, the hat only the D-pad bits it set; a hotkey runs only on exactly the keys
+  held, so none runs with Cross held unless it holds Cross; nothing in the game's screen asks for focus but itself
+  and the PSP dialogs. Compose 1.7.6 (bytecode read) drops a key event while a focus invalidation is pending
+  ("FocusRelatedWarning: Dispatching key event while focus system is invalidated." on System.out), but those are
+  scheduled and run within a composition's apply, and a dropped event loses a press or leaves a key down, never lets
+  go of a held one.
+- **Replay** (`HeldCrossReplayTest`, through `GameInputState`'s new seams `coreInput` and `onJoystickMove`, the key
+  handler as the game screen runs it): Cross stays in every state sent through 20 stages of 3,000 joystick moves (the
+  stick swept, the hat in its eight directions, Square, L1 and R1 tapped and held, the triggers), with the bindings
+  the RP6 captures for its triggers and hat, with L and R moved to the triggers, with each PSP Right Stick choice and
+  with Select-, Start- and Xbox-button hotkeys; a let-go of everything or a release of Cross alone gives the report's
+  symptom exactly.
+- **Left, for the RP6**: Android cancelling the held key (a KeyUp with FLAG_CANCELED: InputReader's buffer overrun or
+  a device reset, the window losing focus), an activity pause and resume, the pad's own firmware letting go of
+  BTN_SOUTH, or the owner's bindings or hotkeys. `InputLog` (input/InputLog.kt) tells them apart:
+  `adb shell setprop log.tag.PhobosInput DEBUG`, then start the game; it logs each key event the window and the game's
+  handler get (flags, device, uptime), each change of the buttons sent to the core, a let-go of everything with its
+  caller, the window's, the activity's and the game screen's focus, and the bindings and hotkeys as the game starts,
+  beside `adb shell getevent -lt` on the pad's node (the same clock).
+- **Checks**: the JVM unit tests, modern flavor, 349/0 on the Mac (the new five among them); CI runs both flavors.
+
 ## PSP NPDRM: PGD files on the memory stick — a game's installed data read through the PGD layer (Gunhound EX, 7th Dragon 2020); a wrong key, a damaged header and a write refused as the PGD layer refuses them — 2026-10-15
 
 Branch `cursor/psp-pgd-stick-2b67`, on master `6ff82f9f1` (part 96, #258), masters `462f8ff2f` (part 99, #261) and
