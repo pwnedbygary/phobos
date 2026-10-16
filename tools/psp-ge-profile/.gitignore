@@ -2,4 +2,6 @@ plugin/*.o
 plugin/*.elf
 plugin/*.prx
 plugin/exports.c
+plugin/hosttest
+plugin/hosttest.bin
 __pycache__/

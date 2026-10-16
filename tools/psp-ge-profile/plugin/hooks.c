@@ -62,7 +62,7 @@ u32 geState(void) {
   u32 interrupts = sceKernelCpuSuspendIntr();
   int status = geDrawSync(1);
   u32 ge = GeNotSampled;
-  if(status == GeDrawing || status == GeStalled) ge = (*(volatile u32*)0xBD400108 & ~3u) | status;
+  if(status == GeDrawing || status == GeStalled) ge = (GeNextCommand & ~3u) | status;
   else if(status == 0) ge = GeIdle;
   sceKernelCpuResumeIntr(interrupts);
   return ge;
@@ -74,7 +74,7 @@ static u32 readListWord(u32 address) {
   u32 physical = address & 0x1FFFFFFF;
   if(address & 3) return 0;
   if((physical >= 0x08000000 && physical < 0x0A000000) || (physical >= 0x04000000 && physical < 0x04200000))
-    return *(volatile u32*)(physical | 0xA0000000);
+    return UncachedWord(physical);
   return 0;
 }
 
@@ -419,9 +419,9 @@ void installHooks(void) {
     status->name = hook->name;
     status->original = findFunction(hook->module, hook->library, hook->nid);
     if(!status->original) continue;
-    *hook->original = (void*)status->original;
+    *hook->original = status->original;
     if(!firmware.patchSyscall) continue;
-    firmware.patchSyscall((void*)status->original, hook->hook);
+    firmware.patchSyscall(status->original, hook->hook);
     if(firmware.querySystemCall) {
       status->syscall = firmware.querySystemCall(hook->hook);
       status->installed = status->syscall >= 0;

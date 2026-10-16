@@ -80,6 +80,8 @@ int textEqual(const char* a, const char* b) {
   return *a == *b;
 }
 
+//On the Mac (hosttest.c), the C library's are used.
+#ifndef HOST
 void* memset(void* target, int value, unsigned int size) {
   unsigned char* p = target;
   while(size--) *p++ = value;
@@ -92,3 +94,4 @@ void* memcpy(void* target, const void* source, unsigned int size) {
   while(size--) *p++ = *q++;
   return target;
 }
+#endif

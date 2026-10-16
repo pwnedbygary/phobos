@@ -1,0 +1,16 @@
+# Phobos GE profiler settings for a capture from the game's start (Activision Hits Remixed's copyright screen). Copy
+# this over ms0:/PHOBOS/prof.txt (same name, prof.txt) for that game only, then back. See README.md in
+# tools/psp-ge-profile.
+
+mode = capture
+
+# The capture starts as the game does and runs 12 seconds: the copyright screen is about seconds 2 to 8.
+start = 0
+length = 12
+
+# The buttons still work afterwards.
+buttons = L+R+SELECT
+delay = 1
+
+buffer = 2048
+keep = 512

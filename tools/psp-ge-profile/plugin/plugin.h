@@ -70,13 +70,25 @@ typedef struct {
 } Firmware;
 extern Firmware firmware;
 
-u32 findFunction(const char* module, const char* library, u32 nid);
+void* findFunction(const char* module, const char* library, u32 nid);
+
+//The GE's next-command register, and a word of memory as the GE reads it (uncached); hosttest.c, which runs hooks.c
+//on the Mac (HOST), has fakes of its own.
+#ifdef HOST
+extern volatile u32 fakeGeNextCommand;
+u32 fakeWord(u32 physical);
+#define GeNextCommand fakeGeNextCommand
+#define UncachedWord(physical) fakeWord(physical)
+#else
+#define GeNextCommand (*(volatile u32*)0xBD400108)
+#define UncachedWord(physical) (*(volatile u32*)((physical) | 0xA0000000))
+#endif
 
 //hooks.c
 enum { HookCount = KindCount };
 typedef struct {
   const char* name;
-  u32 original;       //the firmware's function, 0 if it wasn't found
+  void* original;     //the firmware's function, 0 if it wasn't found
   int syscall;        //its syscall number once patched (from sctrlKernelQuerySystemCall), < 0 if unknown
   int installed;
 } HookStatus;
@@ -98,5 +110,9 @@ void measureCosts(u32* idleNanoseconds, u32* captureNanoseconds, u32* monitorNan
 typedef struct { char* data; int size, length; } Text;
 void textFormat(Text* text, const char* format, ...);
 int textEqual(const char* a, const char* b);
+#ifdef HOST
+#include <string.h>
+#else
 void* memset(void* target, int value, unsigned int size);
 void* memcpy(void* target, const void* source, unsigned int size);
+#endif

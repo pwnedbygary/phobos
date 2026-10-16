@@ -67,45 +67,44 @@ static u32 vblankCount(void) {
   return firmware.displayGetVcount ? firmware.displayGetVcount() : 0;
 }
 
-static u32 arkFunction(u32 nid) {
-  return sctrlHENFindFunction(ArkModule, ArkLibrary, nid);
+static void* arkFunction(u32 nid) {
+  return (void*)sctrlHENFindFunction(ArkModule, ArkLibrary, nid);
 }
 
 //A function by its module and library; failing that, by library alone if this ARK can search every module.
-u32 findFunction(const char* module, const char* library, u32 nid) {
+void* findFunction(const char* module, const char* library, u32 nid) {
   u32 address = sctrlHENFindFunction(module, library, nid);
   if(!address && firmware.findFunctionOnSystem) address = firmware.findFunctionOnSystem(library, nid, 0);
-  return address;
+  return (void*)address;
 }
 
 #define SysMem "sceSystemMemoryManager", "SysMemForKernel"
 static void findFirmware(void) {
-  firmware.findFunctionOnSystem = (void*)arkFunction(NidFindFunctionOnSystem);
-  firmware.patchSyscall = (void*)arkFunction(NidPatchSyscall);
-  if(!firmware.patchSyscall) firmware.patchSyscall = (void*)arkFunction(NidPatchSyscallOld);
-  if(!firmware.patchSyscall) firmware.patchSyscall = (void*)arkFunction(NidPatchSyscallOlder);
-  firmware.querySystemCall = (void*)arkFunction(NidQuerySystemCall);
-  firmware.getInitParam = (void*)arkFunction(NidGetInitParam);
-  firmware.msIsEf = (void*)arkFunction(NidMsIsEf);
-  firmware.flushCache = (void*)arkFunction(NidFlushCache);
-  firmware.henVersion = (void*)arkFunction(NidHenVersion);
-  firmware.henMinorVersion = (void*)arkFunction(NidHenMinorVersion);
-  firmware.allocPartitionMemory = (void*)findFunction(SysMem, NidAllocPartitionMemory);
-  firmware.freePartitionMemory = (void*)findFunction(SysMem, NidFreePartitionMemory);
-  firmware.getBlockHeadAddr = (void*)findFunction(SysMem, NidGetBlockHeadAddr);
-  firmware.partitionMaxFreeMemSize = (void*)findFunction(SysMem, NidPartitionMaxFreeMemSize);
-  firmware.partitionTotalFreeMemSize = (void*)findFunction(SysMem, NidPartitionTotalFreeMemSize);
-  firmware.queryMemoryPartitionInfo = (void*)findFunction(SysMem, NidQueryMemoryPartitionInfo);
-  firmware.getModel = (void*)findFunction(SysMem, NidGetModel);
-  firmware.devkitVersion = (void*)findFunction("sceSystemMemoryManager", "SysMemUserForUser", NidDevkitVersion);
+  firmware.findFunctionOnSystem = arkFunction(NidFindFunctionOnSystem);
+  firmware.patchSyscall = arkFunction(NidPatchSyscall);
+  if(!firmware.patchSyscall) firmware.patchSyscall = arkFunction(NidPatchSyscallOld);
+  if(!firmware.patchSyscall) firmware.patchSyscall = arkFunction(NidPatchSyscallOlder);
+  firmware.querySystemCall = arkFunction(NidQuerySystemCall);
+  firmware.getInitParam = arkFunction(NidGetInitParam);
+  firmware.msIsEf = arkFunction(NidMsIsEf);
+  firmware.flushCache = arkFunction(NidFlushCache);
+  firmware.henVersion = arkFunction(NidHenVersion);
+  firmware.henMinorVersion = arkFunction(NidHenMinorVersion);
+  firmware.allocPartitionMemory = findFunction(SysMem, NidAllocPartitionMemory);
+  firmware.freePartitionMemory = findFunction(SysMem, NidFreePartitionMemory);
+  firmware.getBlockHeadAddr = findFunction(SysMem, NidGetBlockHeadAddr);
+  firmware.partitionMaxFreeMemSize = findFunction(SysMem, NidPartitionMaxFreeMemSize);
+  firmware.partitionTotalFreeMemSize = findFunction(SysMem, NidPartitionTotalFreeMemSize);
+  firmware.queryMemoryPartitionInfo = findFunction(SysMem, NidQueryMemoryPartitionInfo);
+  firmware.getModel = findFunction(SysMem, NidGetModel);
+  firmware.devkitVersion = findFunction("sceSystemMemoryManager", "SysMemUserForUser", NidDevkitVersion);
   firmware.registerSubIntrMonitor =
-    (void*)findFunction("sceInterruptManager", "InterruptManagerForKernel", NidRegisterSubIntrMonitor);
-  firmware.releaseSubIntrMonitor =
-    (void*)findFunction("sceInterruptManager", "InterruptManagerForKernel", NidReleaseSubIntrMonitor);
-  firmware.ctrlPeekBufferPositive = (void*)findFunction("sceController_Service", "sceCtrl", NidCtrlPeekBufferPositive);
-  firmware.cpuClock = (void*)findFunction("scePower_Service", "scePower", NidCpuClockInt);
-  firmware.busClock = (void*)findFunction("scePower_Service", "scePower", NidBusClockInt);
-  firmware.displayGetVcount = (void*)findFunction("sceDisplay_Service", "sceDisplay", NidDisplayGetVcount);
+    findFunction("sceInterruptManager", "InterruptManagerForKernel", NidRegisterSubIntrMonitor);
+  firmware.releaseSubIntrMonitor = findFunction("sceInterruptManager", "InterruptManagerForKernel", NidReleaseSubIntrMonitor);
+  firmware.ctrlPeekBufferPositive = findFunction("sceController_Service", "sceCtrl", NidCtrlPeekBufferPositive);
+  firmware.cpuClock = findFunction("scePower_Service", "scePower", NidCpuClockInt);
+  firmware.busClock = findFunction("scePower_Service", "scePower", NidBusClockInt);
+  firmware.displayGetVcount = findFunction("sceDisplay_Service", "sceDisplay", NidDisplayGetVcount);
 }
 
 static int exists(const char* path) {
@@ -590,13 +589,14 @@ static int controlThread(SceSize args, void* argp) {
   snapshotMemory(memoryAtStart);
   int timedPending = settings.start >= 0;
   u32 timedAt = pluginStart + (u32)(settings.start < 0 ? 0 : settings.start) * Second;
+  u32 lastRunEnd = pluginStart;
   int held = 0;
   for(;;) {
     sceKernelDelayThread(PollInterval);
     int timed = 0;
     if(timedPending && (s32)(now() - timedAt) >= 0) {
       timedPending = 0;
-      timed = (s32)(now() - timedAt) < 2 * Second;  //missed while another run was on: skipped
+      timed = (s32)(timedAt - lastRunEnd) >= 0;  //skipped if a run was on when its time came
     }
     if(!timed) {
       if(settings.buttons && (readButtons() & settings.buttons) == settings.buttons) held++;
@@ -608,6 +608,7 @@ static int controlThread(SceSize args, void* argp) {
     }
     if(settings.dry) dryRun(timed);
     else capture(timed);
+    lastRunEnd = now();
     waitForRelease();
   }
   return 0;
