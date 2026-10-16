@@ -734,6 +734,57 @@ static auto downloadEdata() -> void {
   CHECK(m.notes.size(), 0);
 }
 
+//An EDATA readied by sceNpDrmEdataSetupKey (opened 0x40000001), then given the PGD layer's requests, which npdrm
+//itself makes on a PSP to ready it ("tpu"'s decompilation of iofilemgr_dnas): where its PGD starts (0x04100002)
+//changes nothing; a key that isn't its PGD's (0x04100001), given before anything is read, is refused (0x80510206), as
+//the PGD layer refuses it when the key is given again, and leaves no PGD open: the EDATA reads as it is, its size the
+//file's, until its PGD's own key opens it there.
+static auto downloadEdataKeys() -> void {
+  auto plain = psp_pgd::scrambled(3000, 14);
+  auto versionKey = psp_pgd::scrambled(16, 0x2468);
+  psp_pgd::Options options;
+  options.keyIndex = 1;
+  options.blockSize = 0x400;
+  options.versionKey = versionKey.data();
+  auto file = psp_pgd::edata(psp_pgd::build(plain, options));
+  HostFolder folder;
+  folder.put("PSP/GAME/NPUH00000/DLC.EDAT", std::string(file.begin(), file.end()));
+  KernelMachine m;
+  auto& memory = m.system.memory;
+  m.kernel.mount("ms0", folder.path.string());
+  constexpr u32 In = Buffer + 0x2000;
+  memory.fill(Buffer, 0x5a, 16);
+  CHECK(m.call("sceNpDrmSetLicenseeKey", {Buffer}), 0);
+  memory.write(4, In, 0x90);  //where its PGD starts
+  memory.copyIn(In + 16, versionKey.data(), 16);
+  memory.fill(In + 32, 0x5a, 16);  //the licensee key, which isn't its PGD's
+  auto readsAs = [&](u32 edat, const psp_pgd::Bytes& expected) {  //read whole from its start
+    std::vector<u8> read(expected.size());
+    if(m.call("sceIoLseek32", {edat, 0, 0}) != 0) return false;
+    if(m.call("sceIoRead", {edat, Buffer, u32(expected.size() + 100)}) != expected.size()) return false;
+    memory.copyOut(read.data(), Buffer, u32(read.size()));
+    return read == expected;
+  };
+  u32 edat = m.call("sceIoOpen", {m.string("ms0:/PSP/GAME/NPUH00000/DLC.EDAT"), 0x4000'0001, 0});
+  CHECK(m.call("sceNpDrmEdataSetupKey", {edat}), 0);
+  CHECK(m.call("sceIoIoctl", {edat, 0x0410'0002, In, 4, 0, 0}), 0);
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {edat}), plain.size());
+  CHECK(readsAs(edat, plain), true);
+  CHECK(m.call("sceIoClose", {edat}), 0);
+  edat = m.call("sceIoOpen", {m.string("ms0:/PSP/GAME/NPUH00000/DLC.EDAT"), 0x4000'0001, 0});
+  CHECK(m.call("sceNpDrmEdataSetupKey", {edat}), 0);
+  CHECK(m.call("sceIoIoctl", {edat, 0x0410'0001, In + 32, 16, 0, 0}), Kernel::ErrorPgdSecureInstallId);
+  CHECK(m.call("sceIoIoctl", {edat, 0x0410'0010, 0, 0, 0, 0}), Kernel::ErrorPgdSecureInstallId);
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {edat}), file.size());
+  CHECK(readsAs(edat, file), true);
+  CHECK(m.call("sceIoIoctl", {edat, 0x0410'0001, In + 16, 16, 0, 0}), 0);
+  CHECK(m.call("sceIoIoctl", {edat, 0x0410'0010, 0, 0, 0, 0}), plain.size());
+  CHECK(readsAs(edat, plain), true);
+  CHECK(m.call("sceIoClose", {edat}), 0);
+  CHECK(folder.get("PSP/GAME/NPUH00000/DLC.EDAT") == std::string(file.begin(), file.end()), true);
+  CHECK(m.notes.size(), 0);
+}
+
 //An EDATA on the stick beside files emptied as they're opened (part 95), each as long as the PSP sees it. Readied, an
 //EDATA's size and end are its PGD's data's, and it reads as its data, from its end too, while a plain file emptied as
 //it was opened ends at its PSP length (nothing, then as far as it's written), its old bytes past that still on the
@@ -783,7 +834,10 @@ static auto downloadEdataEmptied() -> void {
   CHECK(m.call("sceNpDrmEdataGetDataSize", {save}), 5);
   CHECK(m.call("sceIoClose", {save}), 0);
   CHECK(stick.get("PSP/SAVEDATA/NPUH00000/DATA.BIN") == "012xy", true);
-  u32 emptying = open("ms0:/PSP/GAME/NPUH00000/DLC.EDAT", 0x4000'0602);
+  //(through the PGD layer it can't be: its open refuses a file opened with 0x40000000 to write, and leaves it be)
+  CHECK(open("ms0:/PSP/GAME/NPUH00000/DLC.EDAT", 0x4000'0602), Kernel::ErrorPgdInvalidArgument);
+  CHECK(stick.get("PSP/GAME/NPUH00000/DLC.EDAT") == bytes, true);
+  u32 emptying = open("ms0:/PSP/GAME/NPUH00000/DLC.EDAT", 0x0602);
   CHECK(m.call("sceNpDrmEdataSetupKey", {emptying}), 0);
   CHECK(m.call("sceNpDrmEdataGetDataSize", {emptying}), 0);
   edat = open("ms0:/PSP/GAME/NPUH00000/DLC.EDAT", 0x4000'0001);
@@ -1511,6 +1565,7 @@ auto fileTests() -> Tests {
     {"controller read", controllerRead}, {"controller two readers", controllerTwoReaders},
     {"system program", systemProgram}, {"download DRM on a game's own files", downloadDrm},
     {"download DRM on an EDATA (a PGD past its header)", downloadEdata},
+    {"download DRM on an EDATA given the PGD layer's requests", downloadEdataKeys},
     {"download DRM on an EDATA beside files emptied as they're opened", downloadEdataEmptied},
   };
 }

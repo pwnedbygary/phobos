@@ -457,8 +457,10 @@ static auto discRequests() -> void {
 }
 
 //A file's PGD key (ioctl 0x04100001): given for a file without PGD's header, the file is read as it is (the fan
-//translations of 7th Dragon 2020 and its sequel); one with the header keeps the key and decrypts its reads (pgd.cpp);
-//a key shorter than 16 bytes, umd0:, and a file off the disc are refused, as every request was before.
+//translations of 7th Dragon 2020 and its sequel); one with the header but not a PGD's MACs is refused as the PGD layer
+//refuses a damaged header (0x80510204); a key shorter than 16 bytes, umd0:, and a memory stick file opened without
+//0x40000000 are refused, as every request was before. Opened with 0x40000000 to write, a disc file is refused by the
+//PGD layer before the disc's own refusal.
 static auto discKeys() -> void {
   KernelMachine m;
   auto& memory = m.system.memory;
@@ -480,8 +482,14 @@ static auto discKeys() -> void {
   CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 8, 0, 0}), Kernel::ErrorFunctionNotSupported);
   m.call("sceIoClose", {file});
   file = m.call("sceIoOpen", {m.string("disc0:/PSP_GAME/INSDIR/PGD.DNS"), 0x4000'4001, 0});
-  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), 0);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), Kernel::ErrorPgdInvalidFormat);
+  CHECK(m.call("sceIoRead", {file, Buffer, 4000}), 3000);  //left as it is
+  memory.copyOut(read.data(), Buffer, 3000);
+  CHECK(read == encrypted, true);
   m.call("sceIoClose", {file});
+  u32 name = m.string("disc0:/PSP_GAME/INSDIR/GAME.DNS");
+  CHECK(m.call("sceIoOpen", {name, 0x4000'0002, 0}), Kernel::ErrorPgdInvalidArgument);
+  CHECK(m.call("sceIoOpen", {name, 0x0002, 0}), Kernel::ErrorInvalidFlag);
   file = m.call("sceIoOpen", {m.string("umd0:"), 0x0001, 0});
   CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), Kernel::ErrorFunctionNotSupported);
   m.call("sceIoClose", {file});
@@ -495,7 +503,9 @@ static auto discKeys() -> void {
 
 //A PGD file's reads, once its key is given: the file reads as its decrypted data, its 0x90-byte header hidden. What
 //Black Wolves Saga's CRI file system stalls on without: it reads the first sector, wants "CPK " at its start, and
-//opens the file again, for good. Made with the tests' PGD maker (pgd.hpp), read whole and in pieces.
+//opens the file again, for good. Made with the tests' PGD maker (pgd.hpp), read whole and in pieces; its data's size
+//from ioctl 0x04100010. A key its header's MAC doesn't take is refused, as the PGD layer refuses it (0x80510206: it
+//recovers no key), and leaves the file locked, reading as it is, until its own key is given.
 static auto discPgdReads() -> void {
   KernelMachine m;
   auto& memory = m.system.memory;
@@ -515,7 +525,9 @@ static auto discPgdReads() -> void {
   for(u32 at = 0; at < 16; at++) memory.write(1, In + at, 0x40 + at);  //the key
   u32 file = m.call("sceIoOpen", {m.string("disc0:/PSP_GAME/INSDIR/DATA.BIN"), 0x4000'4001, 0});
   CHECK(file >= 3 && file < 0x8000'0000, true);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0010, 0, 0, 0, 0}), Kernel::ErrorPgdSecureInstallId);  //not unlocked yet
   CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), 0);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0010, 0, 0, 0, 0}), 3000);
   CHECK(m.call("sceIoRead", {file, Buffer, 3000}), 3000);  //the data at the file's start, not its header
   std::vector<u8> read(3000);
   memory.copyOut(read.data(), Buffer, 3000);
@@ -531,11 +543,17 @@ static auto discPgdReads() -> void {
   memory.copyOut(tail.data(), Buffer, 100);
   CHECK(tail == std::vector<u8>(plain.begin() + 2900, plain.end()), true);
   m.call("sceIoClose", {file});
-  //a wrong key is recovered from the header's own MAC and reads the data all the same (pgd.cpp)
+  //a wrong key: refused, the file left as it is until its own key comes
   file = m.call("sceIoOpen", {m.string("disc0:/PSP_GAME/INSDIR/DATA.BIN"), 0x4000'4001, 0});
   CHECK(file >= 3 && file < 0x8000'0000, true);
-  for(u32 at = 0; at < 16; at++) memory.write(1, In + at, u8(0x80 + at));  //not the key
+  for(u32 at = 0; at < 16; at++) memory.write(1, In + 16 + at, u8(0x80 + at));  //not the key
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In + 16, 16, 0, 0}), Kernel::ErrorPgdSecureInstallId);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0010, 0, 0, 0, 0}), Kernel::ErrorPgdSecureInstallId);
+  CHECK(m.call("sceIoRead", {file, Buffer, 3000}), 3000);
+  memory.copyOut(read.data(), Buffer, 3000);
+  CHECK(read == std::vector<u8>(pgd.begin(), pgd.begin() + 3000), true);
   CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), 0);
+  CHECK(m.call("sceIoLseek32", {file, 0, 0}), 0);
   CHECK(m.call("sceIoRead", {file, Buffer, 3000}), 3000);
   memory.copyOut(read.data(), Buffer, 3000);
   CHECK(read == plain, true);
@@ -683,6 +701,343 @@ static auto pgdSeekClamped() -> void {
     m.call("sceIoClose", {file});
     CHECK(m.notes.size(), 0);
   }
+}
+
+//The disc's own seek request (ioctl 0x01010005) on an unlocked PGD file works where sceIoLseek does, in its data: its
+//end the data's, not the file's with its header and block MACs, and a seek past that end refused as one past a plain
+//file's end is. Sought from its start, from where it is and from its end, and read there; still locked, the file's
+//own end.
+static auto pgdDiscSeek() -> void {
+  KernelMachine m;
+  auto& memory = m.system.memory;
+  auto plain = pattern(3000, 14);
+  u8 key[16];
+  for(u32 at = 0; at < 16; at++) key[at] = u8(0x40 + at);
+  psp_pgd::Options options;
+  options.keyIndex = 1;
+  options.versionKey = key;
+  auto pgd = psp_pgd::build(plain, options);
+  auto table = pattern(0x40, 15);  //the block MACs a PGD's data has after it
+  pgd.insert(pgd.end(), table.begin(), table.end());
+  auto image = disc_image::makeIso({{"PSP_GAME/INSDIR/DATA.BIN", pgd}, {"UMD_DATA.BIN", pattern(32, 4)}});
+  std::string error;
+  m.kernel.disc = openDisc(image.bytes, error);
+  for(u32 at = 0; at < 16; at++) memory.write(1, In + at, 0x40 + at);  //the key
+  u32 file = m.call("sceIoOpen", {m.string("disc0:/PSP_GAME/INSDIR/DATA.BIN"), 0x4000'4001, 0});
+  CHECK(file >= 3 && file < 0x8000'0000, true);
+  auto seekTo = [&](s64 offset, u32 whence) {  //(a 64-bit offset, a word nobody knows, whence)
+    memory.write(4, In + 16, u32(offset)); memory.write(4, In + 20, u32(u64(offset) >> 32));
+    memory.write(4, In + 24, 0); memory.write(4, In + 28, whence);
+    return m.call("sceIoIoctl", {file, 0x0101'0005, In + 16, 16, 0, 0});
+  };
+  auto where = [&] {
+    m.call("sceIoIoctl", {file, 0x0102'0004, 0, 0, Out, 4});
+    return memory.read(4, Out);
+  };
+  CHECK(seekTo(0, 2), 0);  //locked: the file's own end
+  CHECK(where(), pgd.size());
+  CHECK(seekTo(0, 0), 0);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), 0);
+  CHECK(seekTo(0, 2), 0);
+  CHECK(where(), 3000);
+  CHECK(seekTo(-100, 2), 0);
+  CHECK(where(), 2900);
+  CHECK(m.call("sceIoRead", {file, Buffer, 4000}), 100);
+  std::vector<u8> read(100);
+  memory.copyOut(read.data(), Buffer, 100);
+  CHECK(read == std::vector<u8>(plain.begin() + 2900, plain.end()), true);
+  CHECK(seekTo(2500, 0), 0);
+  memory.write(4, In + 32, 1000);
+  CHECK(m.call("sceIoIoctl", {file, 0x0103'0008, In + 32, 4, Buffer, 1000}), 500);  //the disc's read request
+  read.resize(500);
+  memory.copyOut(read.data(), Buffer, 500);
+  CHECK(read == std::vector<u8>(plain.begin() + 2500, plain.end()), true);
+  CHECK(seekTo(-3000, 1), 0);
+  CHECK(where(), 0);
+  CHECK(seekTo(3000, 0), 0);  //the data's end
+  CHECK(seekTo(3001, 0), Kernel::ErrorIOError);  //past it, as past a plain file's end
+  CHECK(seekTo(1, 2), Kernel::ErrorIOError);
+  CHECK(seekTo(1, 1), Kernel::ErrorIOError);
+  CHECK(where(), 3000);
+  m.call("sceIoClose", {file});
+  CHECK(m.notes.size(), 0);
+}
+
+//A PGD file installed to the memory stick, opened with 0x40000000 as games open their installed data (Gunhound EX's
+//797 files): the PSP's PGD layer takes a file opened so on any device ("tpu"'s decompilation of iofilemgr_dnas), so
+//its key unlocks it as a disc file's does (0, and it reads as its data, its header hidden). Still locked, it reads as
+//it is, ends where the file does and has no data size to give (0x80510206). Read whole, and in pieces across its
+//16-byte cipher blocks and its 1 KiB blocks, up to and past its data's end; sought past the end (where it stops), back
+//from there and from its end; its size from its end, from ioctl 0x04100010 and from sceNpDrmEdataGetDataSize, while
+//sceIoGetstat gives the file's; its key and a read made asynchronously; a second key, even a wrong one, leaves it as
+//it is; a state saved part way loads and reads on. Its host file is never written.
+static auto stickPgd() -> void {
+  auto plain = pattern(5000, 16);
+  u8 key[16];
+  for(u32 at = 0; at < 16; at++) key[at] = u8(0x40 + at);
+  psp_pgd::Options options;
+  options.keyIndex = 1;  //as the games' headers say, MAC type 1
+  options.blockSize = 0x400;  //as Gunhound EX's descriptors say
+  options.versionKey = key;
+  auto pgd = psp_pgd::build(plain, options);
+  std::string bytes(pgd.begin(), pgd.end());
+  HostFolder stick;
+  stick.put("PSP/SAVEDATA/NPJH5072300INST00/00000313.DAT", bytes);
+  const char* path = "ms0:/PSP/SAVEDATA/NPJH5072300INST00/00000313.DAT";
+  KernelMachine m;
+  auto& memory = m.system.memory;
+  m.kernel.mount("ms0", stick.path.string());
+  for(u32 at = 0; at < 16; at++) memory.write(1, In + at, 0x40 + at);  //the key
+  for(u32 at = 0; at < 16; at++) memory.write(1, In + 16 + at, 0x80 + at);  //not the key
+  auto readBack = [&](KernelMachine& on, u32 size) {
+    std::vector<u8> read(size);
+    on.system.memory.copyOut(read.data(), Buffer, size);
+    return read;
+  };
+  auto data = [&](u32 from, u32 size) { return std::vector<u8>(plain.begin() + from, plain.begin() + from + size); };
+  u32 file = m.call("sceIoOpen", {m.string(path), 0x4000'0001, 0});
+  CHECK(file >= 3 && file < 0x8000'0000, true);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0010, 0, 0, 0, 0}), Kernel::ErrorPgdSecureInstallId);  //locked
+  CHECK(m.call("sceIoLseek32", {file, 0, 2}), pgd.size());
+  CHECK(m.call("sceIoLseek32", {file, 0, 0}), 0);
+  CHECK(m.call("sceIoRead", {file, Buffer, 16}), 16);
+  CHECK(readBack(m, 16) == std::vector<u8>(pgd.begin(), pgd.begin() + 16), true);
+  CHECK(m.call("sceIoLseek32", {file, 0, 0}), 0);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), 0);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0010, 0, 0, 0, 0}), plain.size());
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {file}), plain.size());
+  CHECK(m.call("sceIoGetstat", {m.string(path), Stat}), 0);
+  CHECK(memory.read(4, Stat + 8), pgd.size());  //the file, as its folder lists it
+  CHECK(m.call("sceIoLseek32", {file, 0, 2}), plain.size());
+  CHECK(m.call("sceIoLseek32", {file, 0, 0}), 0);
+  CHECK(m.call("sceIoRead", {file, Buffer, 8000}), plain.size());
+  CHECK(readBack(m, plain.size()) == plain, true);
+  for(u32 start : {0u, 1u, 15u, 16u, 17u, 0x3ffu, 0x400u, 0x401u, 0x7f0u, 0x800u, 4983u, 4984u, 4999u}) {
+    for(u32 size : {1u, 15u, 16u, 17u, 0x400u, 0x401u}) {
+      CHECK(m.call("sceIoLseek32", {file, start, 0}), start);
+      u32 got = std::min<u32>(size, plain.size() - start);
+      CHECK(m.call("sceIoRead", {file, Buffer, size}), got);
+      CHECK(readBack(m, got) == data(start, got), true);
+    }
+  }
+  CHECK(m.call("sceIoLseek32", {file, 7000, 0}), plain.size());  //no further than the data's end
+  CHECK(m.call("sceIoRead", {file, Buffer, 100}), 0);
+  CHECK(m.call("sceIoLseek32", {file, u32(-1000), 1}), 4000);
+  CHECK(m.call("sceIoRead", {file, Buffer, 2000}), 1000);
+  CHECK(readBack(m, 1000) == data(4000, 1000), true);
+  CHECK(m.call("sceIoLseek32", {file, 100, 2}), plain.size());
+  CHECK(m.call("sceIoLseek32", {file, u32(-0x401), 2}), plain.size() - 0x401);
+  CHECK(m.call("sceIoRead", {file, Buffer, 0x1000}), 0x401);
+  CHECK(readBack(m, 0x401) == data(plain.size() - 0x401, 0x401), true);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In + 16, 16, 0, 0}), 0);  //a second key: as it was
+  CHECK(m.call("sceIoLseek32", {file, 0x3f8, 0}), 0x3f8);
+  CHECK(m.call("sceIoRead", {file, Buffer, 16}), 16);
+  CHECK(readBack(m, 16) == data(0x3f8, 16), true);
+  //a state saved there loads, the file unlocked, and reads on from where it was
+  KernelMachine loaded;
+  loaded.kernel.mount("ms0", stick.path.string());
+  CHECK(loadState(loaded, saveState(m)), true);
+  CHECK(loaded.call("sceIoRead", {file, Buffer, 0x500}), 0x500);
+  CHECK(readBack(loaded, 0x500) == data(0x408, 0x500), true);
+  CHECK(loaded.call("sceIoLseek32", {file, 0, 2}), plain.size());
+  m.call("sceIoClose", {file});
+  //the key and a read, asynchronously (opened as 7th Dragon 2020 opens its GAME.DNS)
+  file = m.call("sceIoOpen", {m.string(path), 0x4000'4001, 0});
+  auto done = [&]() -> u64 {  //the file's request, once it's done: its result, through a poll
+    m.kernel.cycles = std::max(m.kernel.cycles, m.kernel.files[file].asyncDoneAt);
+    m.kernel.events();
+    if(m.call("sceIoPollAsync", {file, KernelMachine::Results})) return ~u64(0);
+    return memory.read(4, KernelMachine::Results) | u64(memory.read(4, KernelMachine::Results + 4)) << 32;
+  };
+  CHECK(m.call("sceIoIoctlAsync", {file, 0x0410'0001, In, 16, 0, 0}), 0);
+  CHECK(done(), 0);
+  CHECK(m.call("sceIoLseek32", {file, 0x3f0, 0}), 0x3f0);
+  CHECK(m.call("sceIoReadAsync", {file, Buffer, 0x420}), 0);
+  CHECK(done(), 0x420);
+  CHECK(readBack(m, 0x420) == data(0x3f0, 0x420), true);
+  m.call("sceIoClose", {file});
+  CHECK(stick.get("PSP/SAVEDATA/NPJH5072300INST00/00000313.DAT") == bytes, true);
+  CHECK(m.notes.size(), 0);
+}
+
+//What the PGD layer refuses on the memory stick, as on the disc ("tpu"'s decompilation of iofilemgr_dnas): a key its
+//header's MAC doesn't take (0x80510206), the file then left locked, reading as it is, until its own key comes; a
+//header damaged or cut short, or a descriptor putting the data past its file (0x80510204); and a file opened with
+//0x40000000 to write, before the stick sees it (0x80510201), neither made nor emptied. A file without PGD's header
+//reads as it is once given a key, answered 0 as on the disc (7th Dragon 2020's translation installs its GAME.DNS so),
+//as does one too short to hold that header. A file opened without 0x40000000 isn't the PGD layer's and takes none of
+//its requests, as no request on a stick file was taken before; one opened with it takes those three alone, not the
+//disc's own (0x8001b000, the stick's device knowing none). A descriptor open to write with the flag, as a state saved
+//before the open refused one may hold, takes none of the three (0x80510201). And a PGD past its file's start, there by
+//0x04100002.
+static auto stickPgdRefusals() -> void {
+  auto plain = pattern(3000, 17);
+  u8 key[16];
+  for(u32 at = 0; at < 16; at++) key[at] = u8(0x40 + at);
+  psp_pgd::Options options;
+  options.keyIndex = 1;
+  options.blockSize = 0x400;
+  options.versionKey = key;
+  auto pgd = psp_pgd::build(plain, options);
+  std::string bytes(pgd.begin(), pgd.end()), damaged = bytes, cpk = "CPK " + std::string(2000, 'c');
+  damaged[0x40] ^= 0x01;  //in the descriptor, which the DNAS MAC covers
+  auto packed = pattern(0x800, 18);
+  packed.insert(packed.end(), pgd.begin(), pgd.end());
+  std::map<std::string, std::string> files = {
+    {"PGD.DAT", bytes}, {"DAMAGED.DAT", damaged},
+    {"SHORT.DAT", bytes.substr(0, 0x50)},  //"\0PGD", then too little for a header
+    {"CUT.DAT", bytes.substr(0, 0x90 + 1000)},  //its descriptor says 3000 bytes of data
+    {"GAME.DNS", cpk}, {"TINY.DAT", "ab"}, {"PACKED.DAT", std::string(packed.begin(), packed.end())},
+  };
+  HostFolder stick;
+  for(auto& [name, contents] : files) stick.put("PSP/SAVEDATA/X/" + name, contents);
+  KernelMachine m;
+  auto& memory = m.system.memory;
+  m.kernel.mount("ms0", stick.path.string());
+  for(u32 at = 0; at < 16; at++) memory.write(1, In + at, 0x40 + at);  //the key
+  for(u32 at = 0; at < 16; at++) memory.write(1, In + 16 + at, 0x80 + at);  //not the key
+  memory.write(4, In + 32, 0x800);  //where PACKED.DAT's PGD starts
+  auto open = [&](const char* name, u32 flags) {
+    return m.call("sceIoOpen", {m.string(std::string("ms0:/PSP/SAVEDATA/X/") + name), flags, 0777});
+  };
+  auto readsAs = [&](u32 file, const std::string& expected) {  //the file read whole from its start
+    std::vector<u8> read(expected.size());
+    if(m.call("sceIoLseek32", {file, 0, 0}) != 0) return false;
+    if(m.call("sceIoRead", {file, Buffer, u32(expected.size() + 100)}) != expected.size()) return false;
+    memory.copyOut(read.data(), Buffer, u32(read.size()));
+    return std::string(read.begin(), read.end()) == expected;
+  };
+  std::string data(plain.begin(), plain.end());
+  u32 file = open("PGD.DAT", 0x4000'0001);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In + 16, 16, 0, 0}), Kernel::ErrorPgdSecureInstallId);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0010, 0, 0, 0, 0}), Kernel::ErrorPgdSecureInstallId);
+  CHECK(m.call("sceIoLseek32", {file, 0, 2}), pgd.size());
+  CHECK(readsAs(file, bytes), true);  //locked: as it is
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), 0);  //its own key
+  CHECK(readsAs(file, data), true);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 8, 0, 0}), Kernel::ErrorFunctionNotSupported);  //a short key
+  //the disc's own requests: where it is, a seek, its first sector, its size, a read
+  for(u32 request : {0x0102'0004u, 0x0101'0005u, 0x0102'0006u, 0x0102'0007u, 0x0103'0008u}) {
+    CHECK(m.call("sceIoIoctl", {file, request, In + 32, 16, Out, 16}), Kernel::ErrorFunctionNotSupported);
+  }
+  CHECK(readsAs(file, data), true);
+  m.call("sceIoClose", {file});
+  for(const char* name : {"DAMAGED.DAT", "SHORT.DAT", "CUT.DAT"}) {
+    file = open(name, 0x4000'0001);
+    CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), Kernel::ErrorPgdInvalidFormat);
+    CHECK(m.call("sceIoIoctl", {file, 0x0410'0010, 0, 0, 0, 0}), Kernel::ErrorPgdSecureInstallId);
+    CHECK(readsAs(file, files[name]), true);
+    m.call("sceIoClose", {file});
+  }
+  for(const char* name : {"GAME.DNS", "TINY.DAT"}) {
+    file = open(name, 0x4000'4001);
+    CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), 0);  //no PGD: read as it is
+    CHECK(m.call("sceIoIoctl", {file, 0x0410'0010, 0, 0, 0, 0}), Kernel::ErrorPgdSecureInstallId);
+    CHECK(m.call("sceIoLseek32", {file, 0, 2}), files[name].size());
+    CHECK(readsAs(file, files[name]), true);
+    m.call("sceIoClose", {file});
+  }
+  file = open("PGD.DAT", 0x0001);  //not through the PGD layer
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), Kernel::ErrorFunctionNotSupported);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0002, In + 32, 4, 0, 0}), Kernel::ErrorFunctionNotSupported);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0010, 0, 0, 0, 0}), Kernel::ErrorFunctionNotSupported);
+  CHECK(readsAs(file, bytes), true);
+  m.call("sceIoClose", {file});
+  for(u32 flags : {0x4000'0002u, 0x4000'0003u, 0x4000'0602u, 0x4000'0102u}) {
+    CHECK(open("PGD.DAT", flags), Kernel::ErrorPgdInvalidArgument);
+    CHECK(open("NEW.DAT", flags), Kernel::ErrorPgdInvalidArgument);
+  }
+  CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/X/NEW.DAT"), false);
+  file = open("PGD.DAT", 0x0003);
+  m.kernel.files[file].flags |= 0x4000'0000;  //opened 0x40000003 before such opens were refused, kept in a state
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), Kernel::ErrorPgdInvalidArgument);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0002, In + 32, 4, 0, 0}), Kernel::ErrorPgdInvalidArgument);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0010, 0, 0, 0, 0}), Kernel::ErrorPgdInvalidArgument);
+  CHECK(readsAs(file, bytes), true);
+  m.call("sceIoClose", {file});
+  file = open("PACKED.DAT", 0x4000'0001);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0002, In + 32, 4, 0, 0}), 0);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In + 16, 16, 0, 0}), Kernel::ErrorPgdSecureInstallId);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), 0);  //the PGD's start kept for its own key
+  CHECK(m.call("sceIoLseek32", {file, 0, 2}), plain.size());
+  CHECK(readsAs(file, data), true);
+  m.call("sceIoClose", {file});
+  for(auto& [name, contents] : files) CHECK(stick.get("PSP/SAVEDATA/X/" + name) == contents, true);  //all as they were
+  CHECK(m.notes.size(), 0);
+}
+
+//Where a memory stick file's PGD starts (ioctl 0x04100002), as the PGD layer keeps it ("tpu"'s decompilation of
+//iofilemgr_dnas, its sub_E3C): where it starts already, nothing changes; anywhere else, no PGD is open until a key
+//opens one there. Given alone, then, it unlocks nothing: no data size (0x80510206, as the PGD layer answers), the
+//file's own end and bytes (where the PGD layer refuses a seek before a key, 0x80510206), and a wrong key refused
+//(0x80510206), its own key opening the PGD there. Given while a PGD is unlocked: the same place keeps it so; another
+//leaves none open, even where the same key opens the PGD there, and where it doesn't, no key is recovered for it.
+//Three PGDs in one file, the first under one key, the next two under another.
+static auto stickPgdOffsets() -> void {
+  auto plainA = pattern(1000, 19), plainB = pattern(1500, 20), plainC = pattern(700, 21);
+  u8 keyA[16], keyB[16];
+  for(u32 at = 0; at < 16; at++) keyA[at] = u8(0x40 + at), keyB[at] = u8(0x80 + at);
+  psp_pgd::Options options;
+  options.keyIndex = 1;
+  options.blockSize = 0x400;
+  options.versionKey = keyA;
+  auto three = psp_pgd::build(plainA, options);
+  u32 startB = three.size();
+  options.versionKey = keyB;
+  auto pgdB = psp_pgd::build(plainB, options), pgdC = psp_pgd::build(plainC, options);
+  three.insert(three.end(), pgdB.begin(), pgdB.end());
+  u32 startC = three.size();
+  three.insert(three.end(), pgdC.begin(), pgdC.end());
+  std::string bytes(three.begin(), three.end());
+  HostFolder stick;
+  stick.put("PSP/SAVEDATA/X/THREE.DAT", bytes);
+  KernelMachine m;
+  auto& memory = m.system.memory;
+  m.kernel.mount("ms0", stick.path.string());
+  for(u32 at = 0; at < 16; at++) memory.write(1, In + at, keyA[at]), memory.write(1, In + 16 + at, keyB[at]);
+  memory.write(4, In + 32, 0), memory.write(4, In + 36, startB), memory.write(4, In + 40, startC);
+  u32 file = m.call("sceIoOpen", {m.string("ms0:/PSP/SAVEDATA/X/THREE.DAT"), 0x4000'0001, 0});
+  auto key = [&](u32 which) { return m.call("sceIoIoctl", {file, 0x0410'0001, In + which * 16, 16, 0, 0}); };
+  auto startAt = [&](u32 which) { return m.call("sceIoIoctl", {file, 0x0410'0002, In + 32 + which * 4, 4, 0, 0}); };
+  auto dataSize = [&] { return m.call("sceIoIoctl", {file, 0x0410'0010, 0, 0, 0, 0}); };
+  auto readsAs = [&](const std::vector<u8>& expected) {  //the file read whole from its start
+    std::vector<u8> read(expected.size());
+    if(m.call("sceIoLseek32", {file, 0, 0}) != 0) return false;
+    if(m.call("sceIoRead", {file, Buffer, u32(expected.size() + 100)}) != expected.size()) return false;
+    memory.copyOut(read.data(), Buffer, u32(read.size()));
+    return read == expected;
+  };
+  for(u32 which : {0u, 1u}) {  //alone: where the file's first PGD starts, then the second's
+    CHECK(startAt(which), 0);
+    CHECK(dataSize(), Kernel::ErrorPgdSecureInstallId);
+    CHECK(m.call("sceIoLseek32", {file, 0, 2}), three.size());
+    CHECK(readsAs(three), true);
+  }
+  CHECK(key(0), Kernel::ErrorPgdSecureInstallId);  //the first's key, not the second's
+  CHECK(readsAs(three), true);
+  CHECK(key(1), 0);
+  CHECK(readsAs(plainB), true);
+  CHECK(m.call("sceIoLseek32", {file, 100, 0}), 100);
+  CHECK(startAt(1), 0);  //the same place: still unlocked, where it was
+  CHECK(dataSize(), plainB.size());
+  CHECK(m.call("sceIoRead", {file, Buffer, 16}), 16);
+  std::vector<u8> read(16);
+  memory.copyOut(read.data(), Buffer, 16);
+  CHECK(read == std::vector<u8>(plainB.begin() + 100, plainB.begin() + 116), true);
+  CHECK(startAt(2), 0);  //the third's, which the second's key opens too: none open until it's given
+  CHECK(dataSize(), Kernel::ErrorPgdSecureInstallId);
+  CHECK(readsAs(three), true);
+  CHECK(key(1), 0);
+  CHECK(readsAs(plainC), true);
+  CHECK(startAt(0), 0);  //the first's, which it doesn't open: none open, no key recovered
+  CHECK(dataSize(), Kernel::ErrorPgdSecureInstallId);
+  CHECK(m.call("sceIoLseek32", {file, 0, 2}), three.size());
+  CHECK(readsAs(three), true);
+  CHECK(key(0), 0);
+  CHECK(readsAs(plainA), true);
+  m.call("sceIoClose", {file});
+  CHECK(stick.get("PSP/SAVEDATA/X/THREE.DAT") == bytes, true);
+  CHECK(m.notes.size(), 0);
 }
 
 //The drive's state, and waiting for it.
@@ -1107,6 +1462,9 @@ auto discTests() -> Tests {
     {"disc requests", discRequests},
     {"disc PGD keys", discKeys}, {"disc PGD reads", discPgdReads}, {"disc PGD past a file's start", discPgdOffset},
     {"PGD files end where their data does", pgdSeekEnd}, {"PGD files' seeks stop at their data's end", pgdSeekClamped},
+    {"PGD files' disc seek requests stop at their data's end", pgdDiscSeek},
+    {"memory stick PGD files through the PGD layer", stickPgd}, {"memory stick PGD files refused", stickPgdRefusals},
+    {"where a memory stick PGD starts, as the PGD layer keeps it (0x04100002)", stickPgdOffsets},
     {"disc drive", umdDrive}, {"disc drive's callback", umdCallback},
     {"disc drive mounting as it's activated", umdMounting}, {"memory stick's callback", stickCallback},
   };
