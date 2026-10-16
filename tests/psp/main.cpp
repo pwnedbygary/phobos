@@ -1,6 +1,9 @@
 //The PSP system's tests: ares/psp beyond the CPU (which tests/allegrex covers), built on the host the same way.
 #include "system.hpp"
 
+#include <cstdlib>
+#include <string>
+
 int main() {
   using namespace allegrex_test;
   using namespace allegrex_test::psp;
@@ -46,6 +49,9 @@ int main() {
   for(auto& test : measured6Tests()) tests.push_back(test);
   for(auto& test : gpuTests()) tests.push_back(test);
   checkRequired();
+  //(PHOBOS_TESTS_ONLY: only the tests whose names have it in them, for a quicker run while one is worked on)
+  const char* only = std::getenv("PHOBOS_TESTS_ONLY");
+  if(only && *only) std::erase_if(tests, [&](auto& test) { return std::string{test.first}.find(only) == std::string::npos; });
   for(auto& [name, run] : tests) {
     currentTest = name;
     int before = failures;

@@ -253,6 +253,7 @@ auto Kernel::fontDraw(const PGF::Glyph& glyph, u32 image, s64 clipLeft, s64 clip
     u32 address = buffer + u32(y * line) + u32(format == 2 ? x : x >> 1);
     u8* byte = memory.pointer(address);
     if(!byte) return;
+    memory.storing(address, 1);
     if(format == 2) {
       *byte = std::min<u32>(255, *byte + amount);
     } else {

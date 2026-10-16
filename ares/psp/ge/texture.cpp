@@ -87,6 +87,7 @@ auto GE::sampler() const -> Sampler {
 
 //CLUT_LOAD: the palette copied into the GE.
 auto GE::loadClut() -> void {
+  if(render) return handClut();  //(threaded: thread.cpp)
   u32 address = (commands[ClutAddress] & 0xff'fff0) | (commands[ClutAddressUpper] << 8 & 0x0f00'0000);
   u32 bytes = std::min<u32>((commands[ClutLoad] & 0x3f) * 32, sizeof(clut));
   drawnFirst(address, bytes);  //(from VRAM primitives waiting to be drawn draw over: threads.cpp)

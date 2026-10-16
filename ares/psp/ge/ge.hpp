@@ -42,6 +42,8 @@
 //their arguments are laid out; uOFW's reading of the GE driver for the GE's registers; PPSSPP, for what neither
 //says (each such place says so).
 
+#include "thread.hpp"
+
 namespace ares::PlayStationPortable {
 
 struct Memory;
@@ -733,6 +735,46 @@ struct GE {
 
   Stop pending = Stop::Ended;  //what the next END means: a FINISH or SIGNAL before it changes it
   std::set<std::string> noted;
+
+  //The GE on a thread of its own (thread.hpp, option "GE Thread"). The kernel's GE then runs the lists (the control
+  //pass) and hands what draws to the render GE through the thread; the checks of drawing state the control pass makes
+  //(drawnFirst(), drawnBefore(), settling) are the render GE's, once the thread has done everything handed to it
+  //(drawer()). The render GE reads a handed-over PRIM's vertices and indices, and a palette, from the copies made as
+  //they came (copied).
+  GE* render = nullptr;        //(the kernel's GE, threaded) the render GE
+  GeThread* thread = nullptr;  //(the kernel's GE, threaded) the thread it hands over through
+  bool running = false;        //(the kernel's GE) inside run(): a PRIM handed over outside it is drawn at once
+  struct Copied {
+    u32 ranges = 0, address[2] = {}, size[2] = {};
+    const u8* bytes[2] = {};
+    auto at(u32 address, u32 size) const -> const u8*;
+  } copied;
+  //The state the commands set, as a context saves it (GE::State: commands, the matrices and their indices).
+  struct State {
+    u32 commands[256], bones[96], world[12], view[12], projection[16], textureMatrix[12];
+    u32 boneIndex, worldIndex, viewIndex, projectionIndex, textureIndex;
+  };
+  //thread.cpp
+  auto drawer() -> GE&;
+  auto stateOf() const -> State;
+  auto takeState(const State& state) -> void;
+  auto apply(u32 word) -> void;
+  auto runStart() -> void;
+  auto runEnd() -> void;
+  auto replayPrimitive(u32 word, u32 vertexAt, u32 indexAt, const GeThread::Copies& copies, const u8* bytes,
+                       bool patching) -> void;
+  auto replayClut(u32 word, const u8* bytes, u32 size) -> void;
+  auto copyVertices(u32 count, const VertexFormat& format, GeThread::Copies& copies, std::vector<u8>& bytes) -> void;
+  auto handPrimitive(u32 word, u32 count, bool patching) -> void;
+  auto handClut() -> void;
+  auto readCopiedVertices(u32 count, const VertexFormat& format) -> void;
+  auto handState() -> void;
+  auto handSwitches() -> void;
+  std::vector<u8> handCopies;  //(the kernel's GE) a PRIM's copies as they're made
+  //(the kernel's GE) its state as the render GE has it once it has taken everything handed over: the words it ran are
+  //handed over as they run, but its state set from outside (a context restored, a test's) goes as a whole (handState())
+  State handedState{};
+  bool handedStateValid = false;
 };
 
 }

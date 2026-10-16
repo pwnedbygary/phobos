@@ -16,6 +16,12 @@ constexpr u32 ListA = 0x0894'0000, ListB = 0x0895'0000, Vertices = 0x0896'0000, 
 constexpr u32 Image = 0x0898'0000;
 constexpr u32 VRAM = Memory::VRAMBase;
 
+//The GE's time as the kernel has it, every run handed to the GE's thread counted (Kernel::geFold()).
+static auto geDone(KernelMachine& m) -> u64 {
+  m.kernel.geFold(true);
+  return m.kernel.geDoneAt;
+}
+
 //Writes a display list into memory a command at a time.
 struct ListWriter {
   Memory& memory;
@@ -1177,6 +1183,7 @@ static auto geEndless() -> void {
 //machine, to the same picture. Its last primitives still being drawn as the CPU runs on, the CPU's compiled stores
 //and loads find them drawn.
 static auto geThreads() -> void {
+  Unthreaded unthreaded;  //(the batches looked at directly: system.hpp)
   constexpr u32 Texture = 0x0898'0000, Offscreen = 0x15'4000;  //(the off-screen picture: VRAM offset)
   u32 stall = 0;
   auto build = [&](Memory& memory) {
@@ -1362,6 +1369,7 @@ static auto geThreads() -> void {
 //drawn (on a busy host they could draw it all first, and the loads would wait for nothing), then let go as the loads
 //come, or held through them, so that the loads must wait for the batch, drawing it themselves.
 static auto geDepthViewLoads() -> void {
+  Unthreaded unthreaded;  //(the drawing threads held and looked at directly: system.hpp)
   constexpr u32 Depth = 0x11'0000;  //(VRAM offset: 512 depths a row)
   auto build = [&](Memory& memory) {
     ListWriter list{memory, ListA};
@@ -1436,6 +1444,7 @@ static auto geDepthViewLoads() -> void {
 //decoded by then. Into a frame buffer narrower than itself (32 pixels) the sprite can't wait in a batch (defer()):
 //it's drawn at once, after the batch before it, its texture (decoded for no batch) read from memory as it draws.
 static auto geDeferredBusy() -> void {
+  Unthreaded unthreaded;  //(the batches looked at directly: system.hpp)
   constexpr u32 Offscreen = 0x15'4000;  //(VRAM offset)
   auto build = [&](Memory& memory, u32 width) {
     ListWriter list{memory, ListA};
@@ -1512,6 +1521,7 @@ static auto geDeferredBusy() -> void {
 //rectangle round what the copy decoded). It comes out as on one thread, where nothing is deferred. And Looks sharing a
 //copy (ensureDecoded()) have it decoded over all of their texels.
 static auto geDeferredReach() -> void {
+  Unthreaded unthreaded;  //(the batches looked at directly: system.hpp)
   constexpr u32 Offscreen = 0x15'4000, Picture = Image, Palette = Image + 0x4000;  //(Offscreen: a VRAM offset)
   struct Quad { float x0, y0, x1, y1, u0, v0, u1, v1, w1; u32 filter, wrap, format; };
   constexpr Quad Quads[] = {
@@ -1815,6 +1825,7 @@ static auto geOwnTexture() -> void {
 //triangles, the second taking the first's pixels. It comes out as reading every texture from memory as it's drawn (a
 //machine without watching()) does on one thread, with 1, 2, 4 and 8 threads, batches shared out however small.
 static auto geOwnTexture3D() -> void {
+  Unthreaded unthreaded;  //(the batches looked at directly: system.hpp)
   constexpr u32 Picture = 0x10'0000;  //(VRAM offset: 64 by 64, 8888)
   //(each quad's left and right edges at a z of their own, its w -z: z above 0 is behind the camera)
   struct Quad { float x0, y0, x1, y1, u0, v0, u1, v1, z0, z1; u32 filter; };
@@ -1951,6 +1962,7 @@ static auto geOwnTexture3D() -> void {
 //their pixels has them drawn first, as one landing in them through VRAM's second copy does; one reading pixels a
 //batch launched before draws waits for it, and one reaching nothing a launched batch draws doesn't.
 static auto geTransfers() -> void {
+  Unthreaded unthreaded;  //(the batches looked at directly: system.hpp)
   constexpr u32 Texture = 0x0898'0000, Back = 0x0899'0000;  //(two 64 by 64 pictures in RAM; and where one comes back)
   constexpr u32 Offscreen = 0x15'4000, Staging = 0x18'0000, Copied = 0x1c'0000;  //(VRAM offsets)
   struct V { float u, v; u32 color; float x, y, z; };
@@ -2396,7 +2408,7 @@ static auto geQuietFunctions() -> void {
   a.finish();
   m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
   m.call("sceCtrlSetSamplingCycle", {5555});
-  CHECK(m.kernel.geFinishDue && m.kernel.geDoneAt > m.kernel.cycles, true);
+  CHECK(m.kernel.geFinishDue && geDone(m) > m.kernel.cycles, true);
   CHECK(m.kernel.alarms.size(), 1u), CHECK(m.kernel.controller.cycle, 5555u);
   constexpr u32 Out = KernelMachine::Results + 0x200;
   memory.write(4, Out, 108), memory.write(4, Out + 0x80, 44);
@@ -2425,7 +2437,7 @@ static auto geQuietFunctions() -> void {
   m.kernel.dispatch(m.kernel.importCode("test", Kernel::nid("sceKernelGetThreadExitStatus")), quiet);
   CHECK(quiet, false), CHECK(m.kernel.geFinishDue, true);
   auto timeLow = m.kernel.importCode("test", Kernel::nid("sceKernelGetSystemTimeLow"));
-  m.kernel.cycles = m.kernel.geDoneAt;
+  m.kernel.cycles = geDone(m);
   quiet = true;
   m.kernel.dispatch(timeLow, quiet);
   CHECK(quiet, false), CHECK(m.kernel.geFinishDue, false);
@@ -2520,7 +2532,7 @@ static auto geTime() -> void {
   u32 id = enqueue(ListA);
   CHECK(memory.read(4, VRAM + (31 * 512 + 63) * 4), 0xffu);  //drawn at once
   CHECK(memory.read(4, VRAM + (32 * 512 + 63) * 4), 0u);
-  CHECK(m.kernel.geDoneAt, start + 1536);
+  CHECK(geDone(m), start + 1536);
   CHECK(m.call("sceGeListSync", {id, 1}), 2);  //drawing still
   CHECK(m.call("sceGeDrawSync", {1}), 2);
   CHECK(m.call("sceGeSaveContext", {Saved}), 0xffff'ffff);
@@ -2539,13 +2551,13 @@ static auto geTime() -> void {
   CHECK(m.call("scePowerSetClockFrequency", {333, 333, 166}), 0);
   start = m.kernel.cycles;
   id = enqueue(ListA);
-  CHECK(m.kernel.geDoneAt, start + 1027);
+  CHECK(geDone(m), start + 1027);
   u32 behind = enqueue(ListB);
   CHECK(m.call("sceGeListSync", {behind, 1}), 1);  //queued
   m.kernel.run(1028);
   CHECK(m.call("sceGeListSync", {id, 1}), 0);
   CHECK(m.call("sceGeListSync", {behind, 1}), 2);  //taken up as the first was done with
-  CHECK(m.kernel.geDoneAt, start + 1027 + 951);
+  CHECK(geDone(m), start + 1027 + 951);
   m.kernel.run(951);
   CHECK(m.call("sceGeListSync", {behind, 1}), 0);
 
@@ -2560,11 +2572,11 @@ static auto geTime() -> void {
     CHECK(m.call("sceGeListSync", {id, 1}), 3);
     u64 first = m.kernel.cycles;
     CHECK(m.call("sceGeListUpdateStallAddr", {id, middle}), 0);
-    CHECK(m.kernel.geDoneAt, first + 1027);
+    CHECK(geDone(m), first + 1027);
     m.kernel.cycles += late ? 2000 : 1000;  //(time passing, which nothing waits on while the list stalls)
     u64 second = m.kernel.cycles;
     CHECK(m.call("sceGeListUpdateStallAddr", {id, 0}), 0);
-    CHECK(m.kernel.geDoneAt, late ? second + 513 : first + 1027 + 513);
+    CHECK(geDone(m), late ? second + 513 : first + 1027 + 513);
     m.kernel.run(2000);
     CHECK(m.call("sceGeListSync", {id, 1}), 0);
   }
@@ -3002,6 +3014,95 @@ static auto geTransformKept() -> void {
   CHECK(differing, 0u);
 }
 
+//The GE on a thread of its own (option "GE Thread", ge/thread.hpp): the same lists, run by a machine with the GE on its
+//thread and by one without, leave VRAM, RAM and the GE's registers the same byte for byte. Clears, untextured and
+//textured sprites (a CLUT8 texture in RAM, its palette loaded by the list), a block transfer from RAM into VRAM and one
+//within VRAM, and the matrices' DATA; then the CPU's store into the texture just after the list (where the render GE
+//may not have drawn it yet: the store waits for it, Memory::drawer), and the list again, which draws the new texels.
+static auto geThreadSame() -> void {
+  constexpr u32 Texture = 0x0899'0000, Palette = 0x0899'4000, Copied = VRAM + 0x2'0000;
+  auto build = [](Memory& memory) {
+    ListWriter list{memory, ListA};
+    list.put(GE::FrameBufferPointer, 0);
+    list.put(GE::FrameBufferWidth, 64);
+    list.put(GE::FrameBufferPixelFormat, 3);
+    list.put(GE::Scissor1, 0);
+    list.put(GE::Scissor2, 47 << 10 | 63);
+    list.put(GE::Region2, 1023 << 10 | 1023);
+    list.put(GE::VertexType, 0x80'019f);  //(through: u, v, 8888 color, x, y, z, all floats but the color)
+    list.put(GE::ClearMode, 0x701);
+    list.to(GE::VertexAddress, Vertices);
+    list.put(GE::Primitive, GE::Sprites << 16 | 2);
+    list.put(GE::ClearMode, 0);
+    list.put(GE::WorldMatrixNumber, 0);
+    for(u32 n = 0; n < 12; n++) list.put(GE::WorldMatrixData, 0x3f'8000 + n);
+    list.to(GE::VertexAddress, Vertices + 48);
+    list.put(GE::Primitive, GE::Sprites << 16 | 4);  //two sprites, untextured
+    list.put(GE::ClutAddress, Palette & 0xff'fff0);
+    list.put(GE::ClutAddressUpper, Palette >> 8 & 0xf'0000);
+    list.put(GE::ClutFormat, 3 | 0xff << 8);  //8888 entries, all 8 bits of the index
+    list.put(GE::ClutLoad, 32);
+    list.put(GE::TextureAddress0, Texture & 0xff'fff0);
+    list.put(GE::TextureBufferWidth0, (Texture >> 24 & 0xf) << 16 | 16);
+    list.put(GE::TextureSize0, 4 << 8 | 4);  //16x16
+    list.put(GE::TextureFormat, 5);           //CLUT8
+    list.put(GE::TextureFunction, 0 | 1 << 8);  //modulate, with alpha
+    list.put(GE::TextureMappingEnable, 1);
+    list.to(GE::VertexAddress, Vertices + 144);
+    list.put(GE::Primitive, GE::Sprites << 16 | 2);  //textured
+    list.put(GE::TextureMappingEnable, 0);
+    list.put(GE::TransferSource, Texture);
+    list.put(GE::TransferSourceWidth, (Texture >> 24) << 16 | 16);
+    list.put(GE::TransferSourcePosition, 0);
+    list.put(GE::TransferDestination, VRAM + 0x1'0000);
+    list.put(GE::TransferDestinationWidth, (VRAM >> 24) << 16 | 64);
+    list.put(GE::TransferDestinationPosition, 0);
+    list.put(GE::TransferSize, (16 - 1) << 10 | (4 - 1));
+    list.put(GE::TransferStart, 1);  //RAM into VRAM, 4-byte pixels
+    list.put(GE::TransferSource, VRAM);
+    list.put(GE::TransferSourceWidth, (VRAM >> 24) << 16 | 64);
+    list.put(GE::TransferSourcePosition, 4 << 10 | 4);
+    list.put(GE::TransferDestination, Copied);
+    list.put(GE::TransferDestinationWidth, (Copied >> 24) << 16 | 64);
+    list.put(GE::TransferDestinationPosition, 0);
+    list.put(GE::TransferSize, (24 - 1) << 10 | (40 - 1));
+    list.put(GE::TransferStart, 1);  //VRAM into VRAM: what the sprites drew
+    list.put(GE::Finish);
+    list.put(GE::End);
+    auto vertex = [&](u32 at, float u, float v, u32 color, float x, float y) {
+      for(float value : {u, v}) { u32 word; std::memcpy(&word, &value, 4); memory.write(4, at, word); at += 4; }
+      memory.write(4, at, color), at += 4;
+      for(float value : {x, y, 0.0f}) { u32 word; std::memcpy(&word, &value, 4); memory.write(4, at, word); at += 4; }
+    };
+    vertex(Vertices, 0, 0, 0xff10'2030, 0, 0), vertex(Vertices + 24, 0, 0, 0xff10'2030, 64, 48);  //the clear
+    vertex(Vertices + 48, 0, 0, 0xff00'00ff, 2, 3), vertex(Vertices + 72, 0, 0, 0xff00'00ff, 20, 17);
+    vertex(Vertices + 96, 0, 0, 0x8000'ff00, 10, 9), vertex(Vertices + 120, 0, 0, 0x8000'ff00, 37, 30);
+    vertex(Vertices + 144, 0, 0, 0xffff'ffff, 24, 20), vertex(Vertices + 168, 16, 16, 0xffff'ffff, 56, 44);
+    for(u32 n = 0; n < 256; n++) memory.write(4, Palette + n * 4, n * 0x0001'0305u | 0xff00'0000);
+    for(u32 n = 0; n < 256; n++) memory.write(1, Texture + n, n * 7);
+  };
+  System plain, threaded;
+  plain.threadGE(false), threaded.threadGE(true);
+  for(System* s : {&plain, &threaded}) {
+    build(s->memory);
+    s->ge.list = {}, s->ge.list.address = ListA;
+    CHECK(u32(s->ge.run(1000)), u32(GE::Stop::Finished));
+    for(u32 n = 0; n < 256; n += 4) s->memory.write(4, Texture + n, 0x0102'0304u * (n + 1));  //(after the list: waits)
+    s->ge.list = {}, s->ge.list.address = ListA;
+    CHECK(u32(s->ge.run(1000)), u32(GE::Stop::Finished));
+    s->ge.settleAll();
+  }
+  CHECK(plain.memory.vram == threaded.memory.vram, true);
+  CHECK(plain.memory.ram == threaded.memory.ram, true);
+  CHECK(std::memcmp(plain.ge.commands, threaded.ge.commands, sizeof(plain.ge.commands)), 0);
+  CHECK(std::memcmp(plain.ge.world, threaded.ge.world, sizeof(plain.ge.world)), 0);
+  CHECK(std::memcmp(plain.ge.clut, threaded.ge.clut, sizeof(plain.ge.clut)), 0);
+  CHECK(plain.ge.vertexAddress, threaded.ge.vertexAddress);
+  //(and what was drawn is what the lists draw: the texture's new texels in the second, the copy of the sprites)
+  CHECK(plain.memory.read(4, VRAM + (25 * 64 + 40) * 4) != 0x10'2030, true);
+  CHECK(plain.memory.read(4, Copied + (6 * 64 + 6) * 4), plain.memory.read(4, VRAM + (10 * 64 + 10) * 4));
+}
+
 auto geTests() -> Tests {
   return {
     {"ge commands", geCommands}, {"ge moving", geMoving}, {"ge stops", geStops}, {"ge vertices", geVertices},
@@ -3022,6 +3123,7 @@ auto geTests() -> Tests {
     {"ge vertices read in runs as one at a time", geVertexRuns},
     {"event flags", eventFlags}, {"event flag waiting", eventFlagWaiting}, {"display picture", displayPicture},
     {"gu program", guProgram}, {"copy sample", copySample},
+    {"ge on its own thread draws the same", geThreadSame},
   };
 }
 

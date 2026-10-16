@@ -47,6 +47,14 @@ struct System {
   Processor cpu{memory};
   GE ge{memory};
   Kernel kernel{cpu, memory, ge};
+  //The GE on a thread of its own (option "GE Thread": ge/thread.hpp): the render GE draws there, through its own
+  //view of memory, what the kernel's GE hands it as it runs the lists.
+  string geThread = "Off";     //"Off" or "On"
+  Memory renderMemory;
+  GE renderGE{renderMemory};
+  std::unique_ptr<GeThread> geThreading;
+  auto threadGE(bool on) -> void;
+  auto renderFromState() -> void;
 
   string memoryStick;          //the host folder standing for ms0: (option "Memory Stick")
   string fonts;                //the host folder with the PSP's system fonts, from the owner's flash0 (option "Fonts")

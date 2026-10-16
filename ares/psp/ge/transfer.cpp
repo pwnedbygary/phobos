@@ -45,10 +45,12 @@ auto GE::transfer() -> void {
   //(a hardware renderer's pixels a row lands on whole, after it's read, are memory's from then on: overwritten())
   auto overwrite = [&](u32 to, u32 size) {
     u32 physical = to & 0x1fff'ffff, copy = (physical - Memory::VRAMBase) / Memory::VRAMSize;
-    if(!renderer || physical < Memory::VRAMBase || physical - Memory::VRAMBase >= Memory::VRAMWindow) return;
+    if(physical < Memory::VRAMBase || physical - Memory::VRAMBase >= Memory::VRAMWindow) return;
     if(copy & 1) return;
+    GE& drawing = drawer();  //(threaded: the render GE's renderer, thread.cpp)
+    if(!drawing.renderer) return;
     u32 offset = (physical - Memory::VRAMBase) % Memory::VRAMSize;
-    if(offset + size <= Memory::VRAMSize) renderer->overwritten(*this, offset, offset + size - 1);
+    if(offset + size <= Memory::VRAMSize) drawing.renderer->overwritten(drawing, offset, offset + size - 1);
   };
   std::vector<u8> row(width * bytes);
   for(u32 y = 0; y < height; y++) {

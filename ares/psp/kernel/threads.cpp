@@ -283,9 +283,18 @@ auto Kernel::waiterLeft(Wait wait, u32 id) -> void {
 auto Kernel::untilNextEvent() const -> u64 {
   u64 next = std::min({nextVblank, nextAudioEvent(), nextAsyncEvent(), nextTimerEvent()});
   if(controller.cycle) next = std::min(next, controller.nextSample);
-  if(geFinishDue && geDoneAt > cycles) next = std::min(next, geDoneAt);  //(due already: taken once it may be)
   for(auto& [uid, thread] : threads) {
     if(thread->status == Status::Waiting && thread->wakeAt) next = std::min(next, thread->wakeAt);
+  }
+  //(the GE's time, due already: taken once it may be. Where runs are still being counted on the GE's thread and its
+  //bound doesn't put it past the rest, a time no later than it, the inputs left for run() to work out exactly: geLimit)
+  if(geFinishDue && geRuns.empty() && geDoneAt > cycles) next = std::min(next, geDoneAt);
+  if(geFinishDue && !geRuns.empty()) {
+    if(u64 bound = geBound(); bound < next) {
+      geBounded = true;
+      geLimit = {0, cycles, next, ~0ull, geFoldedRun, geDoneAt, ge.thread ? ge.thread->runsHanded() : 0, true};
+      next = std::min(next, std::max(bound, cycles + 1));
+    }
   }
   return next > cycles ? next - cycles : 1;
 }
@@ -311,6 +320,7 @@ auto Kernel::idle(u64 end) -> bool {
     stuck = true;
     return false;
   }
+  if(geFinishDue) geFold(true);  //(the GE's exact time, where it may be the next thing: ge/thread.hpp)
   cycles = std::min(end, cycles + untilNextEvent());
   events();
   return true;

@@ -1100,6 +1100,8 @@ auto Kernel::serialize(serializer& s) -> bool {
         || geTranslation == 0x1000);
   //when the GE will have drawn what it was given, and whether the list it runs has met its FINISH (layout 24 on: an
   //older layout's lists were done the moment the GE met their FINISH, which left it nothing to draw)
+  if(s.writing()) geFold(true);  //(every run handed to the GE's thread counted first: ge/thread.hpp)
+  if(s.reading()) geClearRuns();
   if(s.reading() && stateLayout < 24) geDoneAt = 0, geFinishDue = false;
   else s(geDoneAt), s(geFinishDue);
   if(s.reading() && valid) {

@@ -228,6 +228,7 @@ static auto keep15(float coordinate) -> float {
 //address or by the indices at the index address; then the next carries on where this one stopped: after its
 //indices if it had them, else after its vertices.
 auto GE::readVertices(u32 count, const VertexFormat& format) -> void {
+  if(copied.ranges) return readCopiedVertices(count, format);  //(the render GE's, handed over: thread.cpp)
   u32 ambient = (commands[AmbientColor] & 0xff'ffff) | (commands[AmbientAlpha] & 0xff) << 24;
   u32 indexBytes = format.indexFormat == 3 ? 4 : format.indexFormat;
   auto& vertices = primitiveVertices;  //(kept from one primitive to the next, with room for them)
@@ -294,6 +295,7 @@ auto GE::readVertices(u32 count, const VertexFormat& format) -> void {
 }
 
 auto GE::primitive(u32 kind, u32 count) -> void {
+  if(render) return handPrimitive(Primitive << 24 | (kind & 7) << 16 | (count & 0xffff), count, false);  //(thread.cpp)
   if(!drawing.deferring) settle();  //(called by itself, outside run(): what the last list left being drawn first)
   auto format = vertexFormat();
   readVertices(count, format);

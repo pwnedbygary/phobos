@@ -19,10 +19,23 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
   drawing.deferring = drawing.threads > 1;
   //As it returns, a hardware renderer hands the GPU what it drew, to go on drawing while the CPU runs; without the
   //CPU's owner's guard over VRAM's busy pages (Memory::vramGuard), it puts them back in memory's VRAM at once.
+  //(Threaded, the render GE does that as the thread hands it the run's end, and counts what the run's primitives owe
+  //for the kernel's clock: thread.cpp.)
+  running = true;
+  if(thread) {
+    handSwitches(), handState();
+    thread->runStart();
+  }
   struct Drawn {
     GE& ge;
     ~Drawn() {
       ge.drawing.deferring = false;
+      ge.running = false;
+      if(ge.thread) {
+        ge.thread->runEnd();
+        ge.handedState = ge.stateOf(), ge.handedStateValid = true;  //(the render GE takes every word the run ran)
+        return;
+      }
       ge.launch(true);
       if(!ge.renderer) return;
       if(ge.memory.vramGuard) ge.renderer->submit(ge);
@@ -55,6 +68,9 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
     list.address = (at + 4) & 0x0fff'ffff;
     u32 command = word >> 24, argument = word & 0xff'ffff;
     commands[command] = word;
+    if(thread && command != Primitive && command != Bezier && command != Spline && command != ClutLoad) {
+      thread->word(word);  //(the render GE's state: those four hand over their own, thread.cpp)
+    }
     switch(command) {
     case VertexAddress: vertexAddress = relative(argument); break;
     case IndexAddress:  indexAddress = relative(argument); break;

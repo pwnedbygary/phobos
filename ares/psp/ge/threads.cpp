@@ -61,6 +61,7 @@ GE::~GE() {
 
 //count threads draw from now on: the GE's own and count - 1 workers.
 auto GE::setThreads(u32 count) -> void {
+  if(render) return drawer().setThreads(count);  //(threaded: the render GE draws, thread.cpp)
   count = std::max(1u, count);
   if(count == drawing.threads && drawing.workers.size() == count - 1) return;
   flush();
@@ -182,6 +183,7 @@ auto GE::unfinished(const Batch& batch) -> bool {
 
 //Draws the batch being filled (see the top of this file) and waits for it, after any being drawn; then empties it.
 auto GE::flush() -> void {
+  if(render) return drawer().flush();  //(threaded: the render GE's batches, thread.cpp)
   settle();
   Batch& batch = *drawing.batch;
   if(batch.jobs.empty()) return clearBatch(batch);
@@ -308,6 +310,7 @@ auto GE::reap() -> void {
 //Waits for every batch handed to the workers (the GE's thread drawing bands too), and empties them: VRAM is
 //anyone's again.
 auto GE::settle() -> void {
+  if(render) return drawer().settle();
   if(!launched()) return;
   std::unique_lock lock(drawing.mutex);
   auto users = [&] {
@@ -347,6 +350,7 @@ auto GE::freeVRAM() -> void {
 //Everything drawn put in memory's VRAM: the batches settled, and what a hardware renderer owns put back (ge.hpp's
 //Renderer). What a save state and the power wait for (Memory::finishDrawing).
 auto GE::settleAll() -> void {
+  if(render) return drawer().settleAll();
   settle();
   if(renderer) renderer->finish(*this);
 }
@@ -358,6 +362,7 @@ auto GE::settleAll() -> void {
 //it reaches those pages. Those drawn are then emptied, their pages given back (reap()). With a hardware renderer,
 //everything (settleAll()). It's the emulation thread's (Memory::pointer(), for the CPU and HLE functions).
 auto GE::settleOver(u32 first, u32 last) -> void {
+  if(render) return drawer().settleOver(first, last);
   if(renderer) return settleAll();
   bool waited = settleThrough([&](const Batch& batch) {
     bool reading = !batch.readsDone.load(std::memory_order_acquire);
@@ -438,6 +443,7 @@ auto GE::clearBatch(Batch& batch) -> void {
 auto GE::undrawnPage(u32 address) -> bool {
   u32 first, last;
   if(!vramSpan(address & ~0xfffu, 0x1000, first, last)) return true;
+  if(render) return drawer().undrawnPage(address);  //(threaded: the render GE's drawing, thread.cpp)
   auto over = [&](const Batch& batch) {
     for(u32 page = first >> 12; page <= last >> 12; page++) {
       if(batch.pending[page] || batch.reads[page]) return true;
@@ -454,6 +460,7 @@ auto GE::undrawnPage(u32 address) -> bool {
 auto GE::drawnFirst(u32 address, u32 size) -> void {
   u32 first, last;
   if(!vramSpan(address, size, first, last)) return;
+  if(render) return drawer().drawnFirst(address, size);
   auto over = [&](const Batch& batch) {
     for(u32 page = first >> 12; page <= last >> 12; page++) {
       if(batch.pending[page]) return true;
@@ -479,6 +486,7 @@ auto GE::drawnFirst(u32 address, u32 size) -> void {
 //it there, as anyone's would.) With a hardware renderer, everything waiting is drawn first, as ever (the copy then
 //waits for what the renderer drew, by memory's busy pages).
 auto GE::drawnBefore(const std::bitset<VRAMPages>& read, const std::bitset<VRAMPages>& written) -> void {
+  if(render) return drawer().drawnBefore(read, written);
   if(renderer) return flush();
   auto reaches = [&](const Batch& batch) {
     if((batch.pending & (read | written)).any()) return true;
@@ -493,6 +501,7 @@ auto GE::drawnBefore(const std::bitset<VRAMPages>& read, const std::bitset<VRAMP
 //renderer's pixels themselves (Memory::vramDrawnOver, for whoever touches busy pages; the batches alone for a load
 //through the depth buffer's views).
 auto GE::drawnOver(u32 first, u32 last, bool rendered) -> bool {
+  if(render) return drawer().drawnOver(first, last, rendered);
   for(auto& batch : drawing.batches) {
     if(!unfinished(batch)) continue;
     bool reading = !batch.readsDone.load(std::memory_order_acquire);

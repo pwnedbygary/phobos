@@ -1056,8 +1056,32 @@ struct Kernel {
   s32 geFinishing = -1;     //the list whose finish callback runs: the rest of its ending waits for it
   u64 geLeft = GeBudget;    //commands the GE may still run this frame (each vertical blank gives it GeBudget again)
   u64 geCommands = 0;       //commands the GE has run since power on (not saved: a count for tests and notes)
-  u64 geDoneAt = 0;         //when (cycles) a PSP's GE would have drawn all it has been given (geTime())
+  mutable u64 geDoneAt = 0; //when (cycles) a PSP's GE would have drawn all it has been given (geTime())
   bool geFinishDue = false; //the list it runs met its FINISH: its interrupt is taken from geDoneAt on (geInterrupt())
+  //With the GE on a thread of its own (ge/thread.hpp), what a run owes is counted there, after it's handed over: the
+  //runs whose counts aren't folded into geDoneAt yet wait in geRuns, each with the cycles and the bus's clock geTime()
+  //takes for it as it's handed over, and geDoneAt is a lower bound of the synchronous GE's till none is left
+  //(geFold()). A time compared with it takes the bound where that decides (geBound(): with the run under way's counts
+  //so far), else waits for the GE thread's counts (geReached()). Folded runs are kept (geFolded) while a go of the
+  //CPU's has limits worked out from the bound, for run() to work out their exact values once it ends (GeLimit).
+  struct GeRun { u64 run, cycles; u32 bus; u64 pixels = 0, primitives = 0; };
+  mutable std::deque<GeRun> geRuns, geFolded;
+  mutable u64 geFoldedRun = 0;  //the last run folded
+  static auto geOwed(u64 pixels, u64 primitives, u32 bus) -> u64;
+  auto geFold(bool wait, u64 through = ~0ull) const -> void;
+  auto geBound() const -> u64;
+  auto geReached() -> bool;
+  auto geClearRuns() -> void;  //(geDoneAt set afresh: the runs before don't count)
+  //A limit of the go's worked out from the bound: the go's instructions before it, the time then, the other events'
+  //first, whether a FINISH was due, the cap the go's start puts on it, and the fold's state then (geFoldedRun, geDoneAt)
+  //with the last run handed over; untilNextEvent() leaves its own in geLimit where it took the bound (geBounded).
+  struct GeLimit { u64 before, cycles, others, cap, foldedRun, foldedAt, run; bool due; };
+  mutable bool geBounded = false;
+  mutable GeLimit geLimit{};
+  std::vector<GeLimit> geLimits;  //the go's limits from the bound, not yet worked out exactly
+  u64 goOffset = 0;               //the go's instructions run before the CPU's run under way (run(): a go's parts)
+  u64 goExact = ~0ull;            //the least of the go's limits known exactly (in the go's instructions)
+  auto geExactLimit(const GeLimit& limit) -> u64;
   auto geIndex(u32 id) const -> s32;
   auto geTime() -> void;
   auto geInterrupt() -> bool;

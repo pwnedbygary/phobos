@@ -172,7 +172,7 @@ static auto gpuRenderToTexture() -> void {
     texture(*s, Memory::VRAMBase, 64, 64, 64);
     for(auto& one : sampled) sprite(*s, one);
   }
-  CHECK(hardware.memory.vramBusy, true);  //(nothing read back yet)
+  CHECK(hardware.ge.drawer().memory.vramBusy, true);  //(nothing read back yet: the drawing GE's memory's pages)
   u32 bytes = apart(software, hardware);
   CHECK(bytes, 0u);
   CHECK(gpu->statistics.copies > before.copies, true);
@@ -581,7 +581,7 @@ static auto gpuScreenMeshes() -> void {
         c[GE::MaterialColor] = 2, c[GE::MaterialSpecular] = 0xff'ffff, c[GE::MaterialSpecularCoefficient] = f24(2);
         c[GE::AmbientLightColor] = 0x30'3030, c[GE::AmbientLightAlpha] = 0xff;
       }
-      u64 before = s.ge.renderer ? gpu->statistics.draws : 0;
+      u64 before = s.ge.drawer().renderer ? gpu->statistics.draws : 0;  //(the drawing GE's: ge/thread.hpp)
       for(u32 prim = 0; prim < 8; prim++) {
         std::vector<Corner> corners;
         for(u32 n = 0; n < (prim & 1 ? 6u : 30u); n++) {
@@ -594,7 +594,7 @@ static auto gpuScreenMeshes() -> void {
         if(prim == 0) corners[2].at[2] = -0.5f;  //(nearer than the near plane: its triangle cut)
         draw(s, GE::Triangles, corners);
       }
-      if(s.ge.renderer) draws.push_back(gpu->statistics.draws - before);
+      if(s.ge.drawer().renderer) draws.push_back(gpu->statistics.draws - before);
     }
     c[GE::LightingEnable] = 0, c[GE::LightMode] = 0, c[GE::LightType0] = 0;
   };
@@ -726,10 +726,10 @@ static auto gpuLost() -> void {
   auto first = randomSprites(random, 8, false), after = randomSprites(random, 8, false);
   for(System* s : {&software, &hardware}) prepare(*s, 0, 3);
   for(auto& one : first) sprite(hardware, one);
-  CHECK(hardware.memory.vramBusy, true);
+  CHECK(hardware.ge.drawer().memory.vramBusy, true);
   hardware.ge.settleAll();
   CHECK(gpu.ready(), false);
-  CHECK(hardware.memory.vramBusy, false);
+  CHECK(hardware.ge.drawer().memory.vramBusy, false);
   CHECK(apart(software, hardware), 0u);  //(the first sprites, never put in memory, gone)
   u32 runs = pretend.runs;
   for(System* s : {&software, &hardware}) for(auto& one : after) sprite(*s, one);
@@ -1097,7 +1097,7 @@ static auto gpuMemorysRows() -> void {
     quad3D(*s, 128, 0, 64, 0, 44, 0);  //(its texels short of the frame buffer below: see gpuPalettes)
   }
   CHECK(gpu->statistics.finishes, before.finishes);
-  CHECK(hardware.memory.vramBusy, true);
+  CHECK(hardware.ge.drawer().memory.vramBusy, true);
   CHECK(apart(software, hardware), 0u);
   hardware.ge.setRenderer(nullptr);
 }
@@ -4025,13 +4025,13 @@ static auto gpuTallTexture() -> void {
   //a short list's end: nothing handed over yet; a long one's, or a finish, hands it over
   auto submits = gpu->statistics.submits;
   sprite(hardware, {{{0, 0, 0, 0}, {0, 0, 4, 4}}, 0xff12'3456});
-  gpu->submit(hardware.ge);
+  gpu->submit(hardware.ge.drawer());  //(the GE drawing: the render GE with the GE on its thread)
   CHECK(gpu->statistics.submits, submits);
   for(u32 n = 0; n < 40; n++) {  //(each scissor its own draw)
     hardware.ge.commands[GE::Scissor2] = (24 + n) | 47 << 10;
     sprite(hardware, {{{0, 0, 8, 8}, {0, 0, f32(12 + n % 7), 12}}, 0xff00'0000 | n << 8});
   }
-  gpu->submit(hardware.ge);
+  gpu->submit(hardware.ge.drawer());
   CHECK(gpu->statistics.submits, submits + 1);
   hardware.ge.settleAll();
   CHECK(hardware.memory.read(4, Memory::VRAMBase + 0x2'0000 + (3 * 64 + 3) * 4) & 0xff'ffff, 0x12'3456u);
@@ -4171,7 +4171,7 @@ static auto gpuGlowParts() -> void {
         textures[n] = gpu->statistics.textures - before.textures;
         palettesMade[n] = gpu->statistics.palettes - before.palettes;
         texels[n] = 0, partsKept[n] = 0, rowsKept[n] = 0;
-        for(auto& [key, entry] : s.ge.textures.entries) {
+        for(auto& [key, entry] : s.ge.drawer().textures.entries) {  //(the drawing GE's: ge/thread.hpp)
           texels[n] += entry->texels.size();
           partsKept[n] += entry->part, rowsKept[n] += !entry->part && entry->rows == 48;
         }
