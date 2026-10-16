@@ -15910,11 +15910,24 @@ their start, not these scenes), so the RP6 can draw them at 5x: the gap is Phobo
 ### The Mac's numbers
 
 On the M1 (MoltenVK) this branch changes only the declaration's pipelines (the depth keeps the staging buffer: the
-probe's no), which help a greater-or-equal test (Super Monkey Ball), not the less-or-equal scenes; the 1x, 2x and 5x
-before and after are to follow (the shared Mac has been busy with another session's runs; timing runs that overlapped
-them were thrown away). For scale, the 134dfc49d measurement build's quiet run (best of three, 120 late frames): Chains
-of Olympus at 5x 8.80 fps without the declarations, 15.77 with both directions (the never-below build, left out, gave
-that), 17.06 with no depth written at all; at 1x 61.4, 70.9 and 71.3.
+probe's no), which help a greater-or-equal test (Super Monkey Ball), not the less-or-equal scenes. Master's and this
+branch's measurement builds (`builds-time2.sh`: Vulkan fast, 120 late frames, three rounds, the two builds interleaved
+and their order alternating), in a window the coordinator kept the other sessions out of: each run started with no
+other session's suite, runner, batch or build running, watched for one every second, and the 19 runs of the first
+pass that started at a 1-minute load over 9 or saw it jump were run again; the runs kept started at loads of 3.3-8.8
+(Cursor's windows the rest). The best of the rounds, fps, master → this branch (GPU ms a frame):
+
+| scene | 1x | 2x | 5x |
+|---|---|---|---|
+| Chains of Olympus (menu) | 50.2 → 50.7 (19.5 → 19.4) | 27.6 → 27.4 (35.9 → 36.1) | 7.19 → 7.21 (138.6 → 138.2) |
+| Super Monkey Ball (story) | 32.7 → 32.5 (13.9 → 12.8) | 32.3 → 32.3 (16.6 → 16.7) | 14.04 → 14.97 (68.9 → 65.4) |
+| Activision Hits (copyright) | 98.1 → 98.3 (10.0 → 9.9) | 50.0 → 49.9 (19.6 → 19.7) | 11.58 → 11.55 (85.3 → 85.5) |
+| Ghost of Sparta (menu) | 44.6 → 44.6 (18.6 → 18.9) | 27.6 → 27.6 (35.6 → 35.7) | 6.73 → 6.72 (148.2 → 148.0) |
+
+Super Monkey Ball at 5x +6.6% (at 1x and 2x it waits for the CPU, its GPU time 13.9 → 12.8 ms at 1x); everything else
+within 1%, the rounds' spread. The never-below build, left out, is what gave the M1 its gain: in the 134dfc49d
+measurement build's quiet run (a build of its own, with switches; best of three), Chains of Olympus at 5x 8.80 fps
+without the declarations, 15.77 with both directions, 17.06 with no depth written at all.
 
 ### Chains of Olympus' scenes a vblank: ours
 
@@ -15951,5 +15964,5 @@ timed around sceGeDrawSync) and geTime() from them: GE timing, not the renderer'
   before.
 - Scratch: `~/phobos-work/scratch/psp-hires` (`NOTES.md`; `patches/`, the measurement builds' patches; `rp6/`, the RP6
   builds, `hires-rp6.sh` and its table, `hires-pr-rp6.sh`, this branch against master, and its table and states;
-  `logs/`, the tests, experiments and suites; `hash/`, the hash runs; `coo-time.sh` and `builds-time.sh`, the Mac's
-  timing).
+  `logs/`, the tests, experiments and suites; `hash/`, the hash runs; `builds-time2.sh` and `time-table.py`, the
+  Mac's timing, `logs/time-pr5-final.log` its runs).

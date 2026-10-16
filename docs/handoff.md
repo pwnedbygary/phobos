@@ -68,8 +68,9 @@ Clean room: no PPSSPP for GE/GPU code, JPCSP not read. Save states unchanged.
   +18%, Army of Two +6%, Ghost of Sparta +4%, Chains of Olympus +3%, Killzone 0; Qualcomm's driver at 5x Activision
   Hits +29%, Super Monkey Ball +6%, the others +0-3%; at 1x on Turnip everything but Activision Hits within 1%. For
   scale: PPSSPP 1.20.4 runs the 5x sweep's 11 slowest games at 59.8-60.0 fps at 5x on the same RP6 (the gap is
-  Phobos's). Mac (MoltenVK: the staging buffer stays, only the declaration differs): to follow (the shared Mac has
-  been busy with another session's runs).
+  Phobos's). Mac (MoltenVK: the staging buffer stays, only the declaration differs; best of three rounds in a window
+  kept free of other sessions' runs and builds, loads 3.3-8.8): Super Monkey Ball at 5x 14.04 → 14.97 fps (+6.6%,
+  GPU 68.9 → 65.4 ms a frame); Chains of Olympus, Ghost of Sparta and Activision Hits within 1% at 1x, 2x and 5x.
 - **Next**: the shader's depth write on Adreno (exact designs in part 102's Left: flat draws without it, a
   raster-ordered early discard, Turnip doing more with the declaration); Chains of Olympus' 2-3 scenes a vblank are
   ours (geTime()'s peak rates, a lower bound; the owner's PSP-1000 draws its menus about 0.6 times a vblank, his
