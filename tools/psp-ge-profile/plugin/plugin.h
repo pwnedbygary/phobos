@@ -11,9 +11,20 @@
 #include <pspkernel.h>
 #include "profile.h"
 
+//An address the firmware gives: 32 bits on the PSP, a pointer's size in hosttest.c's build on the Mac (HOST), which
+//compiles main.c without the PSP's module info.
+#ifdef HOST
+#include <stdint.h>
+typedef uintptr_t Address;
+#undef PSP_MODULE_INFO
+#define PSP_MODULE_INFO(name, attributes, major, minor)
+#else
+typedef u32 Address;
+#endif
+
 //ARK's SystemControl (SystemCtrlForKernel). Its NIDs are the first four bytes of each name's SHA-1, as PRO's were;
 //sctrlHENPatchSyscall has two older ones too, tried in turn.
-u32 sctrlHENFindFunction(const char* module, const char* library, u32 nid);
+Address sctrlHENFindFunction(const char* module, const char* library, u32 nid);
 #define ArkModule "SystemControl"
 #define ArkLibrary "SystemCtrlForKernel"
 enum {
@@ -52,7 +63,7 @@ typedef struct {
   void (*flushCache)(void);
   int (*henVersion)(void);
   int (*henMinorVersion)(void);
-  u32 (*findFunctionOnSystem)(const char* library, u32 nid, int userModulesOnly);
+  Address (*findFunctionOnSystem)(const char* library, u32 nid, int userModulesOnly);
   SceUID (*allocPartitionMemory)(SceUID partition, const char* name, int type, SceSize size, void* address);
   int (*freePartitionMemory)(SceUID block);
   void* (*getBlockHeadAddr)(SceUID block);
@@ -108,7 +119,7 @@ void measureCosts(u32* idleNanoseconds, u32* captureNanoseconds, u32* monitorNan
 
 //text.c: a small formatter (%s %c %d %u %x %X, with a width and 0 fill) for the report and file names.
 typedef struct { char* data; int size, length; } Text;
-void textFormat(Text* text, const char* format, ...);
+void textFormat(Text* text, const char* format, ...) __attribute__((format(printf, 2, 3)));
 int textEqual(const char* a, const char* b);
 #ifdef HOST
 #include <string.h>

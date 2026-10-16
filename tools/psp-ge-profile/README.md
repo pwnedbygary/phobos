@@ -298,12 +298,16 @@ code uses no `$gp` (`psp-objdump -d phobosprof.elf | grep -w gp` finds nothing: 
 the firmware's `$gp`), and the imports are only `SystemCtrlForKernel` (one), `IoFileMgrForKernel`,
 `InterruptManagerForKernel` and `ThreadManForKernel`.
 
-`make hosttest` (in `plugin/`) builds `hooks.c` and `text.c` for the Mac with the firmware faked (`hosttest.c`) and
-plays a scripted game through the hooks and the monitor: lists built while the GE runs them, syncs during which the
-FINISH interrupt arrives, a SIGNAL, flips, vblank waits during which the vblank interrupt arrives, across the 32-bit
-timer's wrap. It checks every record, that idle hooks record nothing, the dry run's counts, that a thread asleep in a
-wait when its capture ends writes nothing, that a full buffer drops and counts, and the formatter; then it writes the
-capture through `profile.h`'s structs, and the decoder's tests read it back.
+`make hosttest` (in `plugin/`) builds the plugin's C (`main.c`, `hooks.c`, `text.c`) for the Mac with the firmware
+faked (`hosttest.c`), the memory stick and the disc being folders in a temporary one, and plays a scripted game
+whenever the control thread sleeps: lists built while the GE runs them, syncs during which the FINISH interrupt
+arrives, a SIGNAL, flips, vblank waits during which the vblank interrupt arrives, across the 32-bit timer's wrap. It
+checks the module's start and the hooks it installs, the settings file's parsing, that idle hooks record nothing, every
+record of a capture, that a thread asleep in a wait when its capture ends writes nothing, that a full buffer drops and
+counts, the dry run's report line by line, the capture file `main.c` writes, the note when memory is short, the disc
+ID from `PARAM.SFO` when ARK can't give it, and all along that no file is touched while a capture or a dry run's
+window is on, that files are written only at the writing priority, and that nothing is written outside
+`ms0:/PHOBOS/`. The decoder's tests then read the capture back.
 
 ## Files
 
@@ -316,7 +320,7 @@ capture through `profile.h`'s structs, and the decoder's tests read it back.
 | `plugin/text.c` | A small formatter, and the memory functions the compiler may call (no kernel libc is linked). |
 | `plugin/systemctrl.S` | The one import stub for ARK (`sctrlHENFindFunction`). |
 | `plugin/exports.exp`, `plugin/Makefile` | The module's exports and its build (and `make hosttest`). |
-| `plugin/hosttest.c` | The record path on the Mac: `hooks.c` with the firmware faked, driven by a scripted game. |
+| `plugin/hosttest.c` | The plugin on the Mac: its C with the firmware faked, driven by a scripted game. |
 | `plugin/prof.txt`, `prof-capture.txt`, `prof-boot.txt` | Settings: the dry run, captures by buttons, the capture from boot. |
 | `decoder/geprof.py` | The decoder (and `write_capture`, for synthetic captures). |
 | `decoder/test_geprof.py` | Its tests. |
@@ -327,8 +331,9 @@ The plugin can't run in Phobos (there's no custom firmware there), so its first 
 Mac: it builds as a kernel PRX (attribute 0x1001, ELF type 0xFFA0, module info in a kernel segment) with exactly the
 imports above; every static NID is confirmed by two sources (uOFW's 6.60 export lists or pspsdk's 6.60 libraries,
 and pspsdk's stub libraries; ARK's by its name's SHA-1 and pspsdk's `libpspsystemctrl_kernel`); the hooks' idle path
-was read in the disassembly; the record path runs on the Mac with the firmware faked (`make hosttest`), and the
-decoder reads its capture back and passes its tests on synthetic ones. Not checked until the PSP runs it: that ARK's
+was read in the disassembly; GCC checks every report line's format against its arguments; the plugin's C runs on
+the Mac with the firmware faked (`make hosttest`), and the decoder reads its capture back and passes its tests on
+synthetic ones. Not checked until the PSP runs it: that ARK's
 `sctrlHENFindFunction` finds the user libraries by these module names (`sceGE_Manager` and `sceController_Service`
 are uOFW's; `sceDisplay_Service` and `scePower_Service` are the firmware's usual names, with ARK's library-wide
 search as a fallback where it has one), that `sctrlHENPatchSyscall` and the monitor behave as uOFW and ARK's header

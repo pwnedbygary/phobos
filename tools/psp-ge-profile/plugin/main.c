@@ -38,9 +38,10 @@ typedef struct {
 
 static Settings settings = {1, PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_SELECT, 1, 20, 10, 2048, 512, 1, 0};
 
+//In the order the report names them, so the default reads as prof.txt writes it.
 static const struct { const char* name; u32 mask; } buttonNames[] = {
-  {"SELECT", PSP_CTRL_SELECT}, {"START", PSP_CTRL_START}, {"UP", PSP_CTRL_UP}, {"RIGHT", PSP_CTRL_RIGHT},
-  {"DOWN", PSP_CTRL_DOWN}, {"LEFT", PSP_CTRL_LEFT}, {"L", PSP_CTRL_LTRIGGER}, {"R", PSP_CTRL_RTRIGGER},
+  {"L", PSP_CTRL_LTRIGGER}, {"R", PSP_CTRL_RTRIGGER}, {"SELECT", PSP_CTRL_SELECT}, {"START", PSP_CTRL_START},
+  {"UP", PSP_CTRL_UP}, {"RIGHT", PSP_CTRL_RIGHT}, {"DOWN", PSP_CTRL_DOWN}, {"LEFT", PSP_CTRL_LEFT},
   {"TRIANGLE", PSP_CTRL_TRIANGLE}, {"CIRCLE", PSP_CTRL_CIRCLE}, {"CROSS", PSP_CTRL_CROSS},
   {"SQUARE", PSP_CTRL_SQUARE}, {"NOTE", PSP_CTRL_NOTE}, {"SCREEN", PSP_CTRL_SCREEN}, {"VOLUP", PSP_CTRL_VOLUP},
   {"VOLDOWN", PSP_CTRL_VOLDOWN},
@@ -73,7 +74,7 @@ static void* arkFunction(u32 nid) {
 
 //A function by its module and library; failing that, by library alone if this ARK can search every module.
 void* findFunction(const char* module, const char* library, u32 nid) {
-  u32 address = sctrlHENFindFunction(module, library, nid);
+  Address address = sctrlHENFindFunction(module, library, nid);
   if(!address && firmware.findFunctionOnSystem) address = firmware.findFunctionOnSystem(library, nid, 0);
   return (void*)address;
 }
@@ -291,13 +292,13 @@ static ProfileRecord* allocateBuffer(u32* bytes, Text* why) {
   if(size > settings.bufferKb * 1024u) size = settings.bufferKb * 1024u;
   size &= ~0xFFFu;
   if(size < 64 * 1024) {
-    textFormat(why, "partition %d's largest free block is %u KB; with keep = %d KB that leaves under 64 KB\n", id,
+    textFormat(why, "partition %d's largest free block is %lu KB; with keep = %d KB that leaves under 64 KB\n", id,
                free / 1024, settings.keepKb);
     return 0;
   }
   block = firmware.allocPartitionMemory(id, "PhobosGeProfile", PSP_SMEM_High, size, 0);
   if(block < 0) {
-    textFormat(why, "allocating %u KB in partition %d failed (0x%08X)\n", size / 1024, id, block);
+    textFormat(why, "allocating %lu KB in partition %d failed (0x%08X)\n", size / 1024, id, block);
     return 0;
   }
   *bytes = size;
@@ -412,7 +413,7 @@ static void describeMemory(Text* text) {
     Partition* b = &memoryNow[id];
     if(!a->valid && !b->valid) continue;
     Partition* p = b->valid ? b : a;
-    textFormat(text, "  %2d at 0x%08X, attr %X: %6u | %6u %6u | %6u %6u\n", id, p->start, p->attr, p->size / 1024,
+    textFormat(text, "  %2d at 0x%08lX, attr %lX: %6lu | %6lu %6lu | %6lu %6lu\n", id, p->start, p->attr, p->size / 1024,
                a->maxFree / 1024, a->totalFree / 1024, b->maxFree / 1024, b->totalFree / 1024);
   }
   if(!firmware.queryMemoryPartitionInfo) textFormat(text, "  (the memory manager's query functions weren't found)\n");
@@ -439,7 +440,7 @@ static void dryRun(int timed) {
   textFormat(&text, "Phobos GE profiler %s: dry run (hooks counting only; nothing recorded)\n", ProfileVersion);
   describeSystem(&text);
   u32 tenths = elapsed / 100000, after = (start - pluginStart) / 100000;
-  textFormat(&text, "window: %u.%u s, from %u.%u s after the game started (%s)\n\n", tenths / 10, tenths % 10,
+  textFormat(&text, "window: %lu.%lu s, from %lu.%lu s after the game started (%s)\n\n", tenths / 10, tenths % 10,
              after / 10, after % 10, timed ? "timed" : "buttons");
   textFormat(&text, "%-34s %-24s %8s\n", "hook", "state", "calls");
   for(int kind = 1; kind < KindCount; kind++) {
@@ -454,13 +455,13 @@ static void dryRun(int timed) {
     else if(status->installed && status->syscall >= 0) textFormat(&cell, "in place, syscall 0x%X", status->syscall);
     else if(status->installed) textFormat(&cell, "patched");
     else textFormat(&cell, "patch not confirmed");
-    textFormat(&text, "%-34s %-24s %8u\n", status->name ? status->name : "?", state, counts[kind]);
+    textFormat(&text, "%-34s %-24s %8lu\n", status->name ? status->name : "?", state, counts[kind]);
   }
   u32 seconds10 = elapsed / 100000 ? elapsed / 100000 : 1;
   u32 perSecond = total * 10 / seconds10, bytesPerSecond = perSecond * ProfileRecordSize;
-  textFormat(&text, "\nrecords: %u in the window, %u a second, %u KB a second; a %d s capture needs %u KB\n", total,
+  textFormat(&text, "\nrecords: %lu in the window, %lu a second, %lu KB a second; a %d s capture needs %lu KB\n", total,
              perSecond, bytesPerSecond / 1024, settings.length, bytesPerSecond * settings.length / 1024);
-  textFormat(&text, "cost per call: %u ns idle (the hook's own), %u ns capturing; %u ns per callback (monitor)\n",
+  textFormat(&text, "cost per call: %lu ns idle (the hook's own), %lu ns capturing; %lu ns per callback (monitor)\n",
              idleNs, captureNs, monitorNs);
   textFormat(&text, "GE now: %s\n", (ge & 3) == GeIdle ? "idle" : (ge & 3) == GeDrawing ? "drawing" :
                                     (ge & 3) == GeStalled ? "stalled" : "not sampled");
@@ -470,8 +471,8 @@ static void dryRun(int timed) {
     u32 keep = settings.keepKb * 1024u, size = p->maxFree > keep ? p->maxFree - keep : 0;
     if(size > settings.bufferKb * 1024u) size = settings.bufferKb * 1024u;
     size &= ~0xFFFu;
-    textFormat(&text, "a capture's buffer now: %u KB in partition %d", size / 1024, settings.partition);
-    if(bytesPerSecond) textFormat(&text, ", about %u s of this window's calls", size / bytesPerSecond);
+    textFormat(&text, "a capture's buffer now: %lu KB in partition %d", size / 1024, settings.partition);
+    if(bytesPerSecond) textFormat(&text, ", about %lu s of this window's calls", size / bytesPerSecond);
     textFormat(&text, "\n");
   }
   textFormat(&text, "functions found: patch %d, query %d, flush %d, init param %d, alloc %d, monitor %d, ctrl %d, "

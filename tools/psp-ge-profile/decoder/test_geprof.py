@@ -19,7 +19,8 @@ import geprof as g
 P = g.VBLANK_US
 LIST = 0x08900000
 FRAMEBUFFERS = (0x04000000, 0x04088000, 0x04110000)
-# Written by the plugin's own record path, run on the Mac (make hosttest in ../plugin): three frames.
+# Written by the plugin itself, run on the Mac with its firmware faked (make hosttest in ../plugin): three seconds of
+# a game whose every frame is a list built while the GE runs it, a SIGNAL, a sync, a flip and a vblank wait.
 PLUGIN_CAPTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "plugin", "hosttest.bin")
 
 
@@ -307,20 +308,25 @@ class Decoder(unittest.TestCase):
     def test_plugin_capture(self):
         # The plugin's structs (profile.h) and this decoder agree, across the timer's wrap.
         capture = g.read_capture(PLUGIN_CAPTURE)
-        self.assertEqual(capture.header["discId"], "UCUS98653")
-        self.assertEqual(len(capture.records), 30)
+        self.assertEqual((capture.header["discId"], capture.header["title"]), ("UCUS98653", "God of War: Chains of Olympus"))
+        self.assertEqual((capture.header["cpuMhz"], capture.header["busMhz"]), (222, 111))
         self.assertFalse(capture.truncated or capture.warnings)
         self.assertEqual(capture.thread_name(1), "render")
-        self.assertTrue(all(0 <= r.entry < capture.length_us for r in capture.records))
+        self.assertTrue(all(-20 <= r.entry < capture.length_us for r in capture.records))
+        frames = len(capture.records) // 10
+        self.assertEqual(len(capture.records), frames * 10)
         lists = g.display_lists(capture)
-        self.assertEqual([gl.ended_by for gl in lists], ["FINISH"] * 3)
+        self.assertEqual(len(lists), frames)
+        self.assertTrue(all(gl.ended_by == "FINISH" for gl in lists))
         self.assertTrue(all(len(gl.updates) == 3 and gl.starved == 2 and 0 < gl.tail_us < gl.ge_us for gl in lists))
         self.assertIn("monitor", g.vblank_times(capture)[1])
         rows = g.per_vblank(capture, lists)
         full = [row for row in rows if row.lists]
-        self.assertEqual(len(full), 3)
+        self.assertEqual(len(full), frames)
         self.assertTrue(all(row.finishes == 1 and row.signals == 1 and row.flips == 1 and row.updates == 3
                             for row in full))
+        seconds = g.per_second(rows)
+        self.assertAlmostEqual(seconds[1].renders_per_frame, 1.0)
 
     def test_report_and_json(self):
         game = Game()

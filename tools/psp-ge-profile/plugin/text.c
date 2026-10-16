@@ -27,7 +27,8 @@ static void putNumber(Text* text, u32 value, u32 base, int upper, int width, cha
   for(; length < width; length++) put(text, ' ');
 }
 
-//%s %c %d %u %x %X and %%, each with an optional '-' (pad on the right), '0' (fill with zeros) and width.
+//%s %c %d %u %x %X and %%, each with an optional '-' (pad on the right), '0' (fill with zeros) and width. An 'l' is
+//taken and ignored: u32 is unsigned long on the PSP, the same size as int, and %lu keeps GCC's format check quiet.
 void textFormat(Text* text, const char* format, ...) {
   va_list args;
   va_start(args, format);
@@ -42,6 +43,7 @@ void textFormat(Text* text, const char* format, ...) {
     if(*p == '-') left = 1, p++;
     if(*p == '0') fill = '0', p++;
     while(*p >= '0' && *p <= '9') width = width * 10 + *p++ - '0';
+    if(*p == 'l') p++;
     switch(*p) {
     case 's': {
       const char* s = va_arg(args, const char*);

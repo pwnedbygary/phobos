@@ -16,11 +16,11 @@ include $(PSPSDK)/lib/build.mak
 #after build.mak, so that its first rule stays the one make builds; build.mak doesn't follow headers itself
 main.o hooks.o text.o: plugin.h profile.h
 
-#The record path on the Mac (hosttest.c: hooks.c and text.c with the firmware faked), then the decoder's tests, which
-#read the capture it writes back.
-hosttest: hosttest.c hooks.c text.c plugin.h profile.h
-	cc -std=gnu11 -O1 -Wall -Wextra -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast -Wno-unused-function -DHOST \
-	  -I. -I$(PSPSDK)/include -o hosttest hosttest.c hooks.c text.c
+#The plugin on the Mac (hosttest.c, which includes main.c: the firmware faked, a scripted game), then the decoder's
+#tests, which read the capture it writes back. u32 is unsigned int there, so main.c's %lu would trip the format check.
+hosttest: hosttest.c main.c hooks.c text.c plugin.h profile.h
+	cc -std=gnu11 -O1 -Wall -Wextra -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast -Wno-unused-function -Wno-format \
+	  -DHOST -I. -I$(PSPSDK)/include -o hosttest hosttest.c hooks.c text.c
 	./hosttest hosttest.bin
 	cd ../decoder && python3 -m unittest test_geprof
 .PHONY: hosttest
