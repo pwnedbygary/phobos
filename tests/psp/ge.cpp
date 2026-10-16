@@ -2940,6 +2940,49 @@ static auto geVertexRuns() -> void {
   CHECK(runs > 1500, true);
 }
 
+//A float in a vertex that's a signaling not-a-number reads quieted (the fraction's top bit set, its other bits and the
+//sign kept), as the host's float operations leave one, in a run and one at a time, whichever compiler built it: GCC's
+//builds quiet it in vertexFloat(); clang's rely on the readers' multiplication by the float's unit, 1, which GCC drops
+//in runs, so on the Mac this fails if clang ever drops it too. Quiet ones, infinities and numbers read as they are.
+//Each value fills every float of a 3D vertex: two weights, the texture coordinates, normal and position.
+static auto geVertexFloatsQuieted() -> void {
+  System s;
+  auto& ge = s.ge;
+  auto& memory = s.memory;
+  const u32 values[][2] = {  //what's stored, what's read
+    {0x7f80'0001, 0x7fc0'0001}, {0x7f84'a03e, 0x7fc4'a03e}, {0x7fbf'ffff, 0x7fff'ffff}, {0xff84'a03e, 0xffc4'a03e},
+    {0x7fc0'0000, 0x7fc0'0000}, {0xffff'ffff, 0xffff'ffff}, {0x7f80'0000, 0x7f80'0000}, {0xff80'0000, 0xff80'0000},
+    {0x0000'0001, 0x0000'0001}, {0x8000'0000, 0x8000'0000}, {0x3f80'0000, 0x3f80'0000}, {0x7f7f'ffff, 0x7f7f'ffff},
+  };
+  constexpr u32 count = std::size(values);
+  ge.commands[GE::VertexType] = 3 << 0 | 3 << 5 | 3 << 7 | 3 << 9 | 1 << 14;
+  auto format = ge.vertexFormat();
+  CHECK(format.size, 40u);
+  for(u32 n = 0; n < count; n++) {
+    for(u32 at = 0; at < format.size; at += 4) memory.write(4, Vertices + n * format.size + at, values[n][0]);
+  }
+  auto bits = [](float x) { u32 word; std::memcpy(&word, &x, 4); return word; };
+  u32 wrong = 0;
+  for(bool inRuns : {false, true}) {
+    u64 before = ge.vertexRunsRead;
+    ge.vertexRuns = inRuns;
+    ge.vertexAddress = Vertices;
+    ge.readVertices(count, format);
+    CHECK(ge.vertexRunsRead - before, u64(inRuns));
+    CHECK(ge.primitiveVertices.size(), u64(count));
+    for(u32 n = 0; n < count && n < ge.primitiveVertices.size(); n++) {
+      auto& v = ge.primitiveVertices[n];
+      for(float x : {v.weights[0], v.weights[1], v.u, v.v, v.normal[0], v.normal[1], v.normal[2], v.x, v.y, v.z}) {
+        if(bits(x) != values[n][1] && wrong++ < 4) {
+          std::printf("  %s: %08x read as %08x\n", inRuns ? "in a run" : "one at a time", values[n][0], bits(x));
+        }
+      }
+    }
+  }
+  ge.vertexRuns = true;
+  CHECK(wrong, 0u);
+}
+
 //The 3D settings kept from one PRIM to the next (transformKept()), taken after a few of the GE's commands (any of the
 //256) and matrix elements are changed at random, round after round: field for field (floats bit for bit) the
 //Transform transformState() works out afresh. (Changes to the world matrix alone, most PRIMs' in a 3D game, are as
@@ -3020,6 +3063,7 @@ auto geTests() -> Tests {
     {"ge FINISH after a quiet function", geQuietFunctions},
     {"ge 3D settings kept from PRIM to PRIM", geTransformKept}, {"ge vertices and lists drawn first", geVerticesDrawn},
     {"ge vertices read in runs as one at a time", geVertexRuns},
+    {"ge vertex floats that are signaling NaNs read quieted, in runs and one at a time", geVertexFloatsQuieted},
     {"event flags", eventFlags}, {"event flag waiting", eventFlagWaiting}, {"display picture", displayPicture},
     {"gu program", guProgram}, {"copy sample", copySample},
   };

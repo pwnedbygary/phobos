@@ -1020,6 +1020,43 @@ scripts and CI only: the app's build and its flags are unchanged.
   before, never reached. None is fixed here: `four.cpp`'s wants measuring (above), #229 is changing the kernel's
   serialization, nall is shared with every ares system, and a change to `crypto.cpp` alone wouldn't turn the lane
   green.
+- **Settled** (#249, 2026-10-15, the owner's call: fixed in the code, `-Werror` kept): each is written so GCC follows
+  it, with nothing it does changed. `spriteFours()` sets `four.depth = s32x4{};` before `depthFirst()`, as
+  `triangleFours()` does, and starts each row's `downAxis[]` at `{}`; the loaded samples' right stick is centred in
+  the samples' own loop in `serialization.cpp`, not in a loop of its own that GCC turned into 64 stores past
+  `Controller::buttons`; `pspIconKey()` writes the SHA-256's bytes (`output()`) as lowercase hexadecimal itself, not
+  through nall's string (nall unchanged; `iconKeys()` now pins a key's value, so the cache's file names stay as they
+  were); `crypto.cpp`'s `put32()` stores through `at()`. With those four gone, the lane's next run (38801413445)
+  found a fifth in `kernel.cpp`: `pools.cpp:216`, `-Warray-bounds` in a `std::vector`'s insert of an initializer
+  list, which aarch64's GCC gives on master too; `poolStatus()` now keeps its words in a `u32[5]` with their count.
+  Checks: GCC 13.3 (Ubuntu 24.04 in Docker, arm64: x86-64's packages couldn't be fetched) at the lane's flags builds
+  all 52 files (master's `spins.cpp` the 52nd), as CI's x86-64 lane does (run 38803233475). The 21 scenes in
+  Software, Vulkan fast and accurate, master's bench runner against the fixed one: all 63 sets of hashes master's.
+  Army of Two's gameplay and menu in Software, its sprite-heaviest scenes (42% and 32% of their fours sprites'): the
+  same instructions a frame within the runs' spread (+0.00% and +0.02% drawn on one thread, -0.05% and +0.05% on
+  four), the times within their noise. tests/psp 555/0 sanitized, unsanitized and built as the app is (Apple clang),
+  tests/allegrex 78/0, tests/psp/ares 348/0.
+- **What the lane's first full run found, settled for GCC** (run 38803233475; the tests had never run built so on
+  Linux): "ge vertices read in runs as one at a time" failed, 1,248 of its 3,000 rounds differing, with aarch64's GCC
+  13.3 as well. A float vertex field holding a signaling NaN read quieted one vertex at a time (`readTarget()`: the
+  number times its unit, 1 for a float, multiplied at run time) but as it was in runs (`readVerticesFrom()`: GCC,
+  seeing the unit is 1 in `byFormat()`'s float case, drops the multiplication, as its default `-fno-signaling-nans`
+  allows). Clang, Apple's and the NDK's, keeps the multiplication in both readers, so the app's builds read both the
+  same. The owner's call (2026-10-15): GCC's builds read as clang's. Under GCC alone (`#if defined(__GNUC__) &&
+  !defined(__clang__)`), both readers take a float through `vertexFloat()`, which sets a NaN's quiet bit in whole
+  numbers, which no optimizer may drop; clang compiles master's reads, so the app pays nothing. (With the quieting
+  on clang too, `003dff253`, the Mac's bench in Vulkan fast had Ghost of Sparta's menu at +1.24% emulation-thread
+  instructions and Super Monkey Ball at +0.83%; `-fsignaling-nans`, experimental in GCC's manual and needed over the
+  whole PSP core, wasn't taken.) Clang relies on its own multiplication, which a new test pins on the Mac (CI's
+  system tests are GCC's): "ge vertex floats that are signaling NaNs read quieted, in runs and one at a time" reads
+  twelve values, four of them signaling NaNs, in every float of a 3D vertex both ways and checks their bits. With
+  the unit made a 1 that clang sees, so that it folds the multiplication away, it fails on the Mac (each signaling
+  NaN read as stored, in all ten floats, both ways), while "ge vertices read in runs as one at a time" passes.
+  Checks: clang's code for `ge.cpp` byte-identical with master's `vertex.cpp` and with this one (Apple clang at the
+  lane's flags, the NDK's 28.2 at the app's, modern and legacy), its six vertex readers the same as master
+  `1c75c5600`'s own build's; the 21 scenes in Software, Vulkan fast and accurate, master's runner against this one:
+  all 63 sets of hashes the same; tests/psp 568/0 built as the app is, unsanitized and sanitized (Apple clang). CI's
+  lane passed with this GCC code (run 38827011901, on `003dff253`).
 - **Checks** (the Mac, arm64, Apple clang 21): `PHOBOS_TESTS_MODE=release tests/allegrex/run-tests.sh` 60/0 (7
   objects of its own, 18 s with the run); `tests/rsp-vu-neon/run-tests.sh 3000 0x5253505655`: 10,420,000 checks, no
   NEON or reference mismatch; actionlint on the workflows. CI on #247 (run 38439997353): Allegrex 60/0 sanitized and

@@ -212,11 +212,12 @@ auto Kernel::poolStatus(bool variable) -> void {
   for(u32 offset = 4; offset < 36 && offset < size; offset++) {
     memory.write(1, info + offset, offset - 4 < pool.name.size() ? u8(pool.name[offset - 4]) : 0);
   }
-  std::vector<u32> words = {pool.attributes};
-  if(variable) words.insert(words.end(), {pool.size, poolFree(pool)});
-  else words.insert(words.end(), {pool.blockSize, u32(pool.used.size()), poolFree(pool)});
-  words.push_back(poolWaiters(pool).size());
-  for(u32 n = 0; n < words.size(); n++) if(36 + n * 4 + 4 <= size) memory.write(4, info + 36 + n * 4, words[n]);
+  u32 words[5], count = 0;
+  words[count++] = pool.attributes;
+  if(variable) words[count++] = pool.size, words[count++] = poolFree(pool);
+  else words[count++] = pool.blockSize, words[count++] = u32(pool.used.size()), words[count++] = poolFree(pool);
+  words[count++] = poolWaiters(pool).size();
+  for(u32 n = 0; n < count; n++) if(36 + n * 4 + 4 <= size) memory.write(4, info + 36 + n * 4, words[n]);
   result(0);
 }
 

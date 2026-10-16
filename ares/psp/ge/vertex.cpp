@@ -45,16 +45,35 @@ auto GE::vertexFormat() const -> VertexFormat {
   return f;
 }
 
+//GCC only: a float vertex number's bits as a float, a signaling not-a-number quieted (the fraction's top bit set) as
+//the host's float operations quiet one. The readers' multiplication by the number's unit, 1 for a float, is what
+//quiets it, and GCC at -O3 drops it where it sees the 1 (in runs), its default -fno-signaling-nans allowing that, so
+//under GCC it's done here in whole numbers, which no optimizer may drop. Clang keeps the multiplication in both
+//readers, so its builds (the app's, on Android and the Mac) do without this and pay nothing for it;
+//tests/psp/ge.cpp's "ge vertex floats that are signaling NaNs read quieted" fails on a clang that drops it.
+#if defined(__GNUC__) && !defined(__clang__)
+static alwaysinline auto vertexFloat(u32 bits) -> float {
+  bits |= u32((bits << 1) > 0xff00'0000) << 22;  //(not a number: exponent all ones, fraction not 0; either sign)
+  float value;
+  std::memcpy(&value, &bits, sizeof(value));
+  return value;
+}
+#endif
+
 //A number of format (8-bit, 16-bit or float) at address, as a float: signed or not as asked. read(size, address)
 //reads memory (readVertex() says how).
 template<typename Read>
 static auto readNumber(const Read& read, u32 address, u32 format, bool isSigned) -> float {
   if(format == 1) return isSigned ? float(s8(read(1, address))) : float(read(1, address));
   if(format == 2) return isSigned ? float(s16(read(2, address))) : float(read(2, address));
+  #if defined(__GNUC__) && !defined(__clang__)
+  return vertexFloat(read(4, address));
+  #else
   u32 bits = read(4, address);
   float value;
   std::memcpy(&value, &bits, sizeof(value));
   return value;
+  #endif
 }
 
 //A color in one of the vertex formats, as 8888 with red in the low byte. Narrow fields widen by repeating their top
@@ -161,7 +180,11 @@ template<typename Body> static alwaysinline auto byFormat(u32 format, bool isSig
   case 5: return body([](const u8* at) { return float(s8(at[0])); });
   case 2: return body([](const u8* at) { u16 value; std::memcpy(&value, at, 2); return float(value); });
   case 6: return body([](const u8* at) { u16 value; std::memcpy(&value, at, 2); return float(s16(value)); });
+  #if defined(__GNUC__) && !defined(__clang__)
+  case 3: case 7: return body([](const u8* at) { u32 bits; std::memcpy(&bits, at, 4); return vertexFloat(bits); });
+  #else
   case 3: case 7: return body([](const u8* at) { float value; std::memcpy(&value, at, 4); return value; });
+  #endif
   }
 }
 

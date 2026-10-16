@@ -32,8 +32,14 @@ static auto fileStamp(const std::string& path, u64& size) -> u64 {
 auto pspIconKey(const std::string& path, u64 size, u64 mtime) -> std::string {
   //The parts, joined with separators (the Android app's key does the same): no two files share a key.
   auto key = path + "|" + std::to_string(size) + "|" + std::to_string(mtime);
-  auto digest = Hash::SHA256({(const u8*)key.data(), key.size()}).digest();
-  return std::string(digest.data(), digest.size());
+  //Its SHA-256 in lowercase hexadecimal, as Hash::digest() writes it, but not through nall's string, whose allocator
+  //GCC 13 at -O3 takes for an overflow there (-Wstringop-overflow).
+  std::string digest;
+  for(u8 byte : Hash::SHA256({(const u8*)key.data(), key.size()}).output()) {
+    digest += "0123456789abcdef"[byte >> 4];
+    digest += "0123456789abcdef"[byte & 15];
+  }
+  return digest;
 }
 
 PspIconCache::PspIconCache(std::string dir) : directory(std::move(dir)) {
