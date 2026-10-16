@@ -35,7 +35,7 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
-## PSP Vulkan at 5x: the depth-writing shader's depth declared never above the depth rasterized; another frame buffer's depth taken image to image where the device's copy leaves the stencil (Activision Hits' copyright screen at 5x on the RP6 2.7 → 19.3 fps) — 2026-10-16
+## PSP Vulkan at 5x: the depth-writing shader's depth declared never above the depth rasterized; another frame buffer's depth taken image to image where the device's copy leaves the stencil (Activision Hits' copyright screen at 5x on the RP6 2.7 → 19.4 fps) — 2026-10-16
 
 Branch `cursor/psp-hires-2b67`, on master `a8d5640f5` (part 101, #263); draft PR #265. docs/psp-core.md, part 102, has
 the evidence. The nightly sweep's 5x collapse on the RP6 (Activision Hits 57.6 → 2.9 fps, Chains of Olympus 59.6 →
@@ -47,9 +47,10 @@ Clean room: no PPSSPP for GE/GPU code, JPCSP not read. Save states unchanged.
   whole-screen depth copies a frame through the staging buffer, which Turnip does slowly (331 ms a frame at 5x).
 - **The changes** (vulkan.cpp, draw.frag, draw.vert, transform.vert, gpu.hpp): `DEPTHS` declares `depth_less`; where
   the device clamps depth its pipelines rasterize the depth a step and a half above the GE's ((z + 1.5) / 65536.5), the
-  whole number written a step below it at least, every 3D corner's within 0-1. Metal takes the declaration; Turnip
-  and Qualcomm's driver don't (+0-6%). `takeDepth()`'s depth from image to image (`vkCmdCopyImage`, the depth aspect
-  alone) where `depthAloneProbe()`, as the backend starts, finds the device's such copy leaves the stencil;
+  whole number written a step below it at least, every 3D corner's within 0-1. Metal takes the declaration, Turnip
+  in part (Super Monkey Ball's greater-or-equal scene: its passes 63.2 → 59.3 ms at 5x), Qualcomm's driver not.
+  `takeDepth()`'s depth from image to image (`vkCmdCopyImage`, the depth aspect alone) where `depthAloneProbe()`, as
+  the backend starts, finds the device's such copy leaves the stencil (Turnip's and Qualcomm's driver's do);
   MoltenVK's and lavapipe's take it too (CI's lavapipe lanes caught it on the first push), so they keep the staging
   buffer.
 - **Left out**: a "never below" build for less-or-equal tests (Chains of Olympus' and most scenes'): on MoltenVK a
@@ -60,24 +61,28 @@ Clean room: no PPSSPP for GE/GPU code, JPCSP not read. Save states unchanged.
   renderers and at 5x (with Activision Hits' copyright screen) in both Vulkan modes. Tests: gpuDepthEarly (the
   declarations; nothing rejected first that passes after; 2D, 2D past 65535, 3D with the depth range either way);
   gpuSharedDepth forces the image copy where the probe says no and finds the stencil taken; swapped run offsets fail
-  gpuDepthOrders. tests/psp 574 groups, 0 failures. On the RP6 the probe decides: the states saved at a frame by
-  master's build and this one are compared there (below).
-- **Numbers**: RP6 (Turnip, 5x, the measurement build's copy): Activision Hits' copyright 2.7 → 19.3 fps, Super Monkey
-  Ball +12% (+6% more with the declaration), Army of Two +6%, Ghost of Sparta +4%, Chains of Olympus +3%, Killzone 0.
-  Mac (MoltenVK: the staging buffer stays): to follow (the shared Mac was taken by another session's timing); on MoltenVK only the
-  declaration differs.
+  gpuDepthOrders. tests/psp 574 groups, 0 failures. On the RP6 (the image copy) the states saved at frame 120 at 5x
+  by master's build and this one are the same file for Activision Hits, Chains of Olympus and Super Monkey Ball.
+- **Numbers**: RP6, this branch against master (the coordinator's run of `hires-pr-rp6.sh`, best of two rounds; the
+  table in part 102): Turnip at 5x Activision Hits' copyright 2.7 → 19.4 fps (1x 15.4 → 247.1), Super Monkey Ball
+  +18%, Army of Two +6%, Ghost of Sparta +4%, Chains of Olympus +3%, Killzone 0; Qualcomm's driver at 5x Activision
+  Hits +29%, Super Monkey Ball +6%, the others +0-3%; at 1x on Turnip everything but Activision Hits within 1%. For
+  scale: PPSSPP 1.20.4 runs the 5x sweep's 11 slowest games at 59.8-60.0 fps at 5x on the same RP6 (the gap is
+  Phobos's). Mac (MoltenVK: the staging buffer stays, only the declaration differs): to follow (the shared Mac has
+  been busy with another session's runs).
 - **Next**: the shader's depth write on Adreno (exact designs in part 102's Left: flat draws without it, a
-  raster-ordered early discard, Turnip taking the declaration); Chains of Olympus' 2-3 scenes a vblank are ours
-  (geTime()'s peak rates, a lower bound): a round of GE measurements on the owner's PSP.
-- **RP6 commands** (the coordinator's; the agent never runs adb): `cd ~/phobos-work/scratch/psp-hires/rp6 &&
-  QUALCOMM=1 STATES=1 ./hires-pr-rp6.sh` (about 40 minutes: master's and this branch's measurement builds,
-  `hiresprobe-a8d5640f5-modern` and `hiresprobe-3c20bdbf5-modern`, six scenes at 1x and 5x on Turnip, two rounds,
-  Qualcomm's driver at 5x; `hires-pr-rp6-table.txt`, its "driver of pr" line saying "image copy 1" where the probe
-  took the copy; `hires-pr-rp6-states.txt`, three scenes' states at frame 120 at 5x, "same" each). Qualcomm's driver
-  with plain builds: `cd ~/phobos-work/scratch/runner-android && ./rp6-compare.sh --rounds 3 --label hires-pr-ahr5x
-  a8d5640f5 3c20bdbf5 -- "Activision Hits Remixed" --frames 300 --renderer Vulkan-fast --late-frames --resolution 5
-  --load-state ~/phobos-work/scratch/psp-hires/scenes/ahr-legal/state` (and the same for coo-diff, its state in
-  `~/phobos-work/scratch/cpu-round3/scenes`).
+  raster-ordered early discard, Turnip doing more with the declaration); Chains of Olympus' 2-3 scenes a vblank are
+  ours (geTime()'s peak rates, a lower bound; the owner's PSP-1000 draws its menus about 0.6 times a vblank, his
+  captures of the scene itself to come): GE timing from a round of measurements on his PSP.
+- **RP6 commands** (the coordinator's; the agent never runs adb; run 14:55-15:20, all 60 runs exit 0):
+  `cd ~/phobos-work/scratch/psp-hires/rp6 && QUALCOMM=1 STATES=1 ./hires-pr-rp6.sh` (about 25 minutes: master's and
+  this branch's measurement builds, `hiresprobe-a8d5640f5-modern` and `hiresprobe-3c20bdbf5-modern`, six scenes at 1x
+  and 5x on Turnip, two rounds, Qualcomm's driver at 5x; `hires-pr-rp6-table.txt`, its "driver of pr" lines saying
+  "image copy 1" where the probe took the copy; `hires-pr-rp6-states.txt`, three scenes' states at frame 120 at 5x,
+  "same" each). Qualcomm's driver with plain builds: `cd ~/phobos-work/scratch/runner-android && ./rp6-compare.sh
+  --rounds 3 --label hires-pr-ahr5x a8d5640f5 3c20bdbf5 -- "Activision Hits Remixed" --frames 300 --renderer
+  Vulkan-fast --late-frames --resolution 5 --load-state ~/phobos-work/scratch/psp-hires/scenes/ahr-legal/state` (and
+  the same for coo-diff, its state in `~/phobos-work/scratch/cpu-round3/scenes`).
 
 ## PSP NPDRM: PGD files on the memory stick — a game's installed data read through the PGD layer (Gunhound EX, 7th Dragon 2020); a wrong key, a damaged header and a write refused as the PGD layer refuses them — 2026-10-15
 
