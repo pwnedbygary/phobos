@@ -37,8 +37,9 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP NPDRM: PGD files on the memory stick — a game's installed data read through the PGD layer (Gunhound EX, 7th Dragon 2020); a wrong key, a damaged header and a write refused as the PGD layer refuses them — 2026-10-15
 
-Branch `cursor/psp-pgd-stick-2b67`, on master `6ff82f9f1` (part 96, #258); draft PR #263. docs/psp-core.md, part
-101, has the evidence (parts 99 and 100 are #261's and #262's, still open). The first work in the PGD/NPDRM code
+Branch `cursor/psp-pgd-stick-2b67`, on master `6ff82f9f1` (part 96, #258), masters `462f8ff2f` (part 99, #261) and
+`1c75c5600` (part 100, #262) merged in for the review's round; draft PR #263. docs/psp-core.md, part 101, has the
+evidence; part 99's "Left" item, the PGD layer on stick files, is this one. The first work in the PGD/NPDRM code
 since the owner opened it to agents (the standing note above). Clean room: tpu's decompilation of the firmware's PGD
 layer (iofilemgr_dnas), uOFW's names, the games; PPSSPP's sceIo.cpp only as a description; JPCSP not read. Save states
 unchanged.
@@ -51,10 +52,13 @@ unchanged.
   for a key the header's MAC refuses (no key recovered); 0x04100010 gives the data's size, 0x80510206 with no PGD open.
 - **The change** (io.cpp, pgd.cpp, pgd.hpp, kernel.hpp): a stick file opened with 0x40000000 takes the PGD layer's
   requests as a disc file does; the key checks the header at once on either device (`pgdUnlock()`: 0x80510204,
-  0x80510206, the file left locked; pgd.cpp's key recovery only where no key is checked, sceNpDrmEdataSetupKey's
-  EDATA above all); a file without PGD's magic still reads as it is (0, as the translations need); 0x04100010; a file
-  opened with 0x40000000 to write refused, so the PGD path never writes; and #259's leftover, the disc's seek request
-  (0x01010005) in an unlocked PGD's data, its end the data's.
+  0x80510206, the file left locked; pgd.cpp's key recovery only where no key is checked, since the review's round
+  sceNpDrmEdataSetupKey's EDATA alone); a file without PGD's magic still reads as it is (0, as the translations
+  need); 0x04100010; a file opened with 0x40000000 to write refused, so the PGD path never writes, and since the
+  review's round the PGD requests on a descriptor open to write too (an older state's: 0x80510201); 0x04100002 as
+  the PGD layer keeps it since the review's round (the same place changes nothing, another leaves no PGD open until
+  a key opens one there; it used to mark the file and have its key recovered); and #259's leftover, the disc's seek
+  request (0x01010005) in an unlocked PGD's data, its end the data's.
 - **Games**: Gunhound EX reads 74 installed files from the stick (83 keys, each 0; 254 reads) and plays Mission 01;
   178 of its stick reads are master's disc reads of the same data, hash for hash, and the disc's own INSDIR copies,
   read through the disc's PGD path, give the stick's bytes, 74 of 74. 7th Dragon 2020 reads GAME.DNS from the stick
@@ -63,13 +67,24 @@ unchanged.
   refuses the game's first key and opens with its second (master's key recovery hid that), every capture master's.
 - **Tests**: three new groups (stick PGD files through the PGD layer, their refusals, the disc's seek request) and
   three changed (a fake "\0PGD" now 0x80510204, a wrong key 0x80510206, part 97's EDATA emptied through a plain
-  descriptor). On master the six fail, 152 checks.
+  descriptor). On master the six fail, 152 checks. The review's round: two new (where a stick PGD starts, 0x04100002,
+  three PGDs in a file; a readied EDATA's PGD start and a wrong key), and the refusals grown (a flagged stick file's
+  disc requests, 0x8001b000; an older state's writer, 0x80510201); five mutations each caught (0x04100002 as it was:
+  13 checks; the review's one-line fix alone: 7; every request on a flagged stick file: 5; no writer refusal: 3; a
+  readied EDATA's key unchecked: 4).
 - **Checks**: tests/psp 558/0 sanitized and unsanitized; tests/allegrex 78/0; tests/psp/ares 348/0; the 21 scenes in
-  Software, every hash master's; batch 04's saves byte for byte master's.
+  Software, every hash master's; batch 04's saves byte for byte master's. The review's round (`1d62fed2d`, #261 and
+  #262 merged in): tests/psp 572/0 sanitized and unsanitized; Gunhound EX and 7th Dragon 2020 installed through
+  master's own dialog from power on, on fresh sticks, then booted: the branch reads the installs from the stick (the
+  same reads and traces as the first round), master falls back to the disc, the sticks byte for byte as installed;
+  Black Wolves Saga the first round's; the 21 scenes in Software, every hash master's (`1c75c5600`).
+- **Review** (of `eb48c3626`): approved with two should-fixes, no blockers (a lone 0x04100002 still unlocked a file
+  with no key; nothing pinned a flagged stick file's three requests alone), and nits; all taken (above).
 - **Left**: a file without PGD's magic answered 0 (the PGD layer says 0x80510204); disc files opened without the flag
-  still take the PGD requests; the PGD layer's version, block-size and table-MAC checks and its eight-file limit; a
-  second key on an unlocked file; 0x04100002 as part 97 left it; the disc's requests on an unlocked PGD see its data
-  (a PSP's PGD layer passes them to the disc's driver); Black Wolves Saga's install not run; part 97's EDATA items.
+  still take the PGD requests; the PGD layer's version, block-size and table-MAC checks, its eight-file limit, and the
+  second fixed DNAS key it takes for a file opened with 0x04000000; a second key on an unlocked file; 0x04100002's
+  argument read as a pointer (part 97's); the disc's requests on an unlocked PGD see its data (a PSP's PGD layer
+  passes them to the disc's driver); Black Wolves Saga's install not run; part 97's EDATA items.
 
 ## PSP GE: #253's per-PRIM paths cheaper on the RP6's Cortex-X3 — a PRIM's kept settings compared where they are, fast mode's screen triangles without calls — 2026-10-15
 
@@ -178,8 +193,8 @@ Save states unchanged (layout 32: the copy isn't state).
   boot every file and frame the second round's; the 21 scenes' hashes master's. GCC 13.3 (Docker) couldn't be run in
   rounds two and three (Ubuntu's archive unreachable); CI's Linux build compiles with it.
 - **Left**: the PGD layer on memory stick files (its own task now: Gunhound EX and 7th Dragon 2020 use their installs once
-  it's there); the dialog's own screens and timing, the words after the progress, and the no-space code aren't recorded;
-  sceIoChstat's times and size aren't changed.
+  it's there; done since, part 101's entry above); the dialog's own screens and timing, the words after the progress,
+  and the no-space code aren't recorded; sceIoChstat's times and size aren't changed.
 
 ## PSP GE: the depth buffer in the order its frame buffer's format has it — the Kurohyou games' characters at the screen's middle (deep play batch 04, bug 2) — 2026-10-14
 
