@@ -32,6 +32,13 @@ struct Pgd {
     u32 dataSize, blockSize, dataOffset;
   };
 
+  //Whether a header's (0x90 bytes) 0x80 MAC, the fixed DNAS key's over its first 0x80 bytes, holds: false for a header
+  //damaged in any byte it covers.
+  static auto intact(const u8* file) -> bool;
+
+  //Whether a header's (0x90 bytes) 0x70 MAC is the one `versionKey` makes: whether the key is the file's own.
+  static auto keyMatches(const u8* file, const u8 versionKey[16]) -> bool;
+
   //A file's header descriptor (0x30 bytes at 0x30), decrypted with the version key the game gave. The file is checked
   //against its two MACs first (0x80 with a fixed DNAS key, 0x70 with the version key); why it can't be, or nothing.
   static auto descriptor(const u8* file, u64 size, const u8 versionKey[16], Descriptor& out) -> std::string;

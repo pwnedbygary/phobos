@@ -201,6 +201,10 @@ struct Kernel {
   static constexpr u32 ErrorFunctionNotSupported  = 0x8001'b000;  //an ioctl or devctl the device doesn't have
   static constexpr u32 ErrorInvalidFileSize       = 0x8001'b003;  //seeking umd0: past the disc
   static constexpr u32 ErrorInvalidFlag           = 0x8001'b004;  //opening a file on the disc to write it
+  //the PGD layer's (the firmware's iofilemgr_dnas: "tpu"'s decompilation, kirk_engine's npdrm/dnas_ida.c)
+  static constexpr u32 ErrorPgdInvalidArgument    = 0x8051'0201;  //a file opened with 0x40000000 to write it
+  static constexpr u32 ErrorPgdInvalidFormat      = 0x8051'0204;  //a PGD header cut short or damaged
+  static constexpr u32 ErrorPgdSecureInstallId    = 0x8051'0206;  //a key the header refuses, or no PGD unlocked
   static constexpr u32 ErrorDevctlBadParameters   = 0x8022'0081;  //a devctl's buffers too small or misplaced
   static constexpr u32 ErrorAsyncBusy             = 0x8002'0329;  //a file's asynchronous request still under way
   static constexpr u32 ErrorNoAsync               = 0x8002'032a;  //no asynchronous request to wait for or poll
@@ -758,6 +762,7 @@ struct Kernel {
   auto pgdFileLength(OpenFile& open) -> u64;  //how long the file is, wherever it lies (the disc, or the host)
   auto pgdFileRead(OpenFile& open, u64 at, u64 size, u8* bytes) -> bool;  //its bytes, wherever it lies
   auto pgdDescriptor(OpenFile& open) -> std::string;  //its header's descriptor, decrypted once; why it can't
+  auto pgdUnlock(OpenFile& open, const u8* key) -> u32;  //unlocked with a key (ioctl 0x04100001): its answer
   auto pgdDecryptRead(OpenFile& open, u32 data, u64 count) -> void;  //its reads' data region, decrypted in place
   auto writeFile(u32 file, u32 data, u32 size) -> u32;
   auto fileWaitRefused() const -> u32;

@@ -14,6 +14,7 @@ enum : u32 {
   StandardInput = 0, StandardOutput = 1, StandardError = 2,
   OpenRead = 0x0001, OpenWrite = 0x0002, OpenAppend = 0x0100, OpenCreate = 0x0200, OpenTruncate = 0x0400,
   OpenExclusive = 0x0800,  //pspiofilemgr_fcntl.h
+  OpenGameData = 0x4000'0000,  //uOFW's SCE_FGAMEDATA: the file goes through the PGD layer (ioctl() below)
 };
 
 #include "pgd.hpp"
@@ -421,8 +422,13 @@ static auto sameHostFile(const std::string& a, const std::string& b) -> bool {
 //LittleBigPlanet writes each MiB of its install but the first past the length, and its profile saves (STORY.SLV,
 //PS.BIN and others, emptied as they're opened) from their starts. An empty file has nothing to keep, and one emptied
 //while another descriptor still keeps its bytes is cut to that one's length first: one length at a time.
+//
+//A file opened with 0x40000000 (OpenGameData) goes through the PSP's PGD layer, on any device, and its open refuses
+//one opened to write before the device sees it (0x80510201: "tpu"'s decompilation of iofilemgr_dnas, its dnas_open),
+//so a file that can be a PGD (ioctl()) is only ever read: the PGD layer never writes a player's files.
 auto Kernel::openFile(const std::string& path, u32 flags) -> u32 {
   std::string host, normalized;
+  if((flags & OpenGameData) && (flags & OpenWrite)) return ErrorPgdInvalidArgument;
   if(onDisc(path)) return openOnDisc(path, flags);
   if(u32 error = resolve(path, host, normalized)) return error;
   bool read = flags & OpenRead, write = flags & OpenWrite;
@@ -656,6 +662,39 @@ auto Kernel::pgdDescriptor(OpenFile& open) -> std::string {
   return {};
 }
 
+//A PGD file's key (ioctl 0x04100001), taken as the PSP's PGD layer takes it ("tpu"'s decompilation of iofilemgr_dnas):
+//the 0x90-byte header read where the PGD starts (the file's start, or where 0x04100002 put it), on the disc or the
+//memory stick alike, and checked at once: its DNAS MAC, then its 0x70 MAC against the key given, then its descriptor.
+//0: unlocked, the file reads as its decrypted data from then on (pgdDecryptRead()). 0x80510204: a header cut short or
+//damaged, or a descriptor that puts the data past its file. 0x80510206: a key its MAC refuses. The PGD layer recovers
+//no key, and none is recovered here: a game's key is its file's own (pgd.cpp recovers the version key where no key
+//was checked: an NPDRM EDATA readied with its licensee key, which isn't it, by sceNpDrmEdataSetupKey). Refused, the
+//file is left locked, reading as it is, and keeps where its PGD starts for another key. A file without PGD's header
+//("\0PGD") there is read as it is, and answered 0: the fan translations of 7th Dragon 2020 and its sequel carry their
+//INSDIR data decrypted and set its key all the same, taking anything but success as the drive failing (from the disc,
+//opening the file again for good; installed on the memory stick, turning the install off). The PGD layer answers
+//0x80510204 there, its magic checked first; PPSSPP's notes go on with 0, as here.
+auto Kernel::pgdUnlock(OpenFile& open, const u8* key) -> u32 {
+  u32 at = open.pgdDataOffset;  //where the PGD starts, while it isn't unlocked
+  open.pgd = open.pgdReady = false;
+  u64 length = pgdFileLength(open);
+  u8 header[0x90];
+  if(at > length || length - at < 4) return 0;  //too short to hold PGD's header: read as it is
+  if(!pgdFileRead(open, at, 4, header)) return ErrorIOError;
+  if(!Pgd::is(header)) return 0;
+  if(length - at < sizeof(header)) return ErrorPgdInvalidFormat;
+  if(!pgdFileRead(open, at, sizeof(header), header)) return ErrorIOError;
+  if(!Pgd::intact(header)) return ErrorPgdInvalidFormat;
+  if(!Pgd::keyMatches(header, key)) return ErrorPgdSecureInstallId;
+  memcpy(open.pgdVersionKey, key, 16);
+  open.pgd = true;
+  if(!pgdDescriptor(open).empty()) {
+    open.pgd = false;
+    return ErrorPgdInvalidFormat;
+  }
+  return 0;
+}
+
 //A PGD file's reads: unlocked with its key (ioctl 0x04100001), the file reads as its decrypted data, its 0x90-byte
 //header (and an EDATA's own before it) hidden: file offset p is data byte p, "CPK " and all. The ciphertext lives
 //behind the header, so it's read from there and decrypted over what the read moved. readCount() already clamped the
@@ -835,7 +874,8 @@ auto Kernel::sceIoWrite() -> void {
 //(pgdDecryptRead()), so its end is the data's, not the file's, headers and block MACs and all, and no seek goes past
 //it, as the PSP's PGD layer seeks it ("tpu"'s decompilation: from the descriptor's size, each result clamped to it).
 //A descriptor that emptied its file is never a PGD: a PGD file is open only to read (the disc's files can't be opened
-//to write, and sceNpDrmEdataSetupKey readies an EDATA only so), and only a descriptor opened to write empties its file
+//to write, a memory stick file is unlocked only opened with 0x40000000, which can't be opened to write (openFile(),
+//ioctl()), and sceNpDrmEdataSetupKey readies an EDATA only so), and only a descriptor opened to write empties its file
 //as it's opened (openFile()). The two meet where another descriptor empties a readied EDATA: its end stays its data's
 //while its reads find nothing past the PSP's length (readCount()), as the PGD layer, which answers from its
 //descriptor, plausibly does too.
@@ -1191,8 +1231,17 @@ auto Kernel::sceIoGetFdList() -> void {
 //A request a file's device answers rather than reading or writing (file, command, in, in length, out, out length):
 //its result, and how many bytes it put in out (moved: an asynchronous request takes the time of moving them). A file
 //on the disc answers those PPSSPP's notes on the hardware describe (games use them to find where a file starts on
-//the disc and read it by sector); anything else, and any other device's file, isn't supported. sceIoIoctl, and
-//sceIoIoctlAsync (async.cpp).
+//the disc and read it by sector); anything else isn't supported. sceIoIoctl, and sceIoIoctlAsync (async.cpp).
+//
+//The PGD layer's requests (0x04100001, 0x04100002, 0x04100010) are its own, not a device's: the firmware's PGD layer
+//(iofilemgr_dnas, a hook on every device: "tpu"'s decompilation, kirk_engine's npdrm/dnas_ida.c) takes each file
+//opened with 0x40000000 (OpenGameData), whatever device it's on, so a memory stick file opened so answers them as a
+//disc file does: the data a game installs to the stick (Gunhound EX's PGD files, 7th Dragon 2020's GAME.DNS) is read
+//there as it is from the disc. A stick file opened without that flag isn't the PGD layer's, and the stick's own
+//device answers none of its requests here, as before. A disc file answers them however it was opened, as before (a
+//PSP's PGD layer would leave one opened without the flag to the disc's driver). A descriptor open to write takes
+//none of them (0x80510201), as the PGD layer opens none so (openFile()): one is only there from a state saved before
+//that refusal.
 auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 outLength, u64* moved) -> u32 {
   u64 unused;
   if(!moved) moved = &unused;
@@ -1200,7 +1249,9 @@ auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 out
   auto found = files.find(file);
   if(found == files.end() || found->second.folder || found->second.resultOnly) return ErrorBadFile;
   auto& open = found->second;
-  if(!open.onDisc) return ErrorFunctionNotSupported;
+  bool pgdRequest = command == 0x0410'0001 || command == 0x0410'0002 || command == 0x0410'0010;
+  if(!open.onDisc && !(pgdRequest && (open.flags & OpenGameData))) return ErrorFunctionNotSupported;
+  if(pgdRequest && (open.flags & OpenWrite)) return ErrorPgdInvalidArgument;
   auto writeOut = [&](u32 size, auto&& write) -> u32 {
     if(outLength < size || !memory.reaches(out, size)) return ErrorInvalidArgument;
     write();
@@ -1208,13 +1259,16 @@ auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 out
     return 0;
   };
   //a seek's request: a 64-bit offset, a word nobody knows, and where from (as sceIoLseek's whence). Not before the
-  //start, nor past the end (unlike sceIoLseek): that fails with `outside`.
+  //start, nor past the end (unlike sceIoLseek): that fails with `outside`. An unlocked PGD file is its decrypted data
+  //(pgdDecryptRead()), so its end is the data's, as sceIoLseek has it (seek()).
   auto seekBy = [&](u32 outside) -> u32 {
     if(inLength < 4 || !memory.reaches(in, 16)) return ErrorInvalidArgument;
+    if(open.pgd && !open.pgdReady) pgdDescriptor(open);
+    s64 end = open.pgd && open.pgdReady ? s64(open.pgdDataSize) : s64(open.size);
     s64 offset = s64(u64(memory.read(4, in + 4)) << 32 | memory.read(4, in));
     u32 whence = memory.read(4, in + 12);
-    s64 base = whence == 0 ? 0 : whence == 1 ? s64(open.position) : whence == 2 ? s64(open.size) : -1;
-    if(base < 0 || base + offset < 0 || base + offset > s64(open.size)) return outside;
+    s64 base = whence == 0 ? 0 : whence == 1 ? s64(open.position) : whence == 2 ? end : -1;
+    if(base < 0 || base + offset < 0 || base + offset > end) return outside;
     open.position = u64(base + offset);
     return 0;
   };
@@ -1264,36 +1318,35 @@ auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 out
     return writeOut(4, [&] { memory.write(4, out, u32(open.position)); });
   case 0x01f1'00a6:  //seek in umd0:, in sectors
     return seekBy(ErrorInvalidFileSize);
-  case 0x0410'0001: {  //the file's key (16 bytes), for data encrypted as PGD, which the PSP decrypts as it's read
-    //A file without PGD's header ("\0PGD") is read as it is: the fan translations of 7th Dragon 2020 and its sequel
-    //carry their INSDIR data decrypted, and the games set its key all the same, taking anything but success as the
-    //drive failing and opening the file again, for good. A file with the header keeps the key, and reads as its
-    //decrypted data with the header hidden (pgdDecryptRead()); its key (0x10) is in the clear. The header is looked
-    //for where the PGD starts: the file's start, or where 0x04100002 put it. A file already unlocked stays as it is:
-    //its descriptor came out under the key its own header's MAC holds, whatever key is given now.
+  case 0x0410'0001:  //the file's key (16 bytes), for data encrypted as PGD, which the PSP decrypts as it's read
     if(open.sectors || inLength < 16 || !memory.reaches(in, 16)) return ErrorFunctionNotSupported;
-    if(open.pgdReady) return 0;
-    u32 at = open.pgd ? open.pgdDataOffset : 0;
-    u8 head[4] = {};
-    if(open.size >= u64(at) + 4 && !disc->read(u64(open.sector) * Disc::SectorSize + at, 4, head)) return ErrorIOError;
-    if(!memcmp(head, "\0PGD", 4)) {
-      memcpy(open.pgdVersionKey, memory.pointer(in, 16), 16);
-      open.pgd = true;
-      open.pgdReady = false;
-      open.pgdDataOffset = at;
-    }
-    return 0;
-  }
+    if(open.pgd && open.pgdReady) return 0;  //unlocked already: under its own header's key, whatever is given now
+    return pgdUnlock(open, memory.pointer(in, 16));
   //where the PGD starts, relative to the file: the PSP's PGD layer reads its header there when the key is given
   //(0x04100001), and its data where its descriptor says, counted from there ("tpu"'s decompilation; PPSSPP's notes
-  //have npdrm give an EDATA's 0x90 so).
+  //have npdrm give an EDATA's 0x90 so). Given where its PGD starts already, nothing changes; given anywhere else, no
+  //PGD is open until a key opens one there (the decompilation's sub_E3C), so this alone unlocks nothing, no key
+  //recovered. An unlocked file keeps where its data starts, not its PGD, so its own key tells which: the PGD it opens
+  //there, its data where it was, is the same one.
   case 0x0410'0002: {
     if(open.sectors || inLength < 4 || !memory.reaches(in, 4)) return ErrorFunctionNotSupported;
-    open.pgd = true;
-    open.pgdReady = false;
-    open.pgdDataOffset = memory.read(4, in);
+    u32 at = memory.read(4, in), was = open.pgdDataOffset;
+    bool unlocked = open.pgd && open.pgdReady;
+    if(!unlocked && at == was) return 0;
+    u8 key[16];
+    memcpy(key, open.pgdVersionKey, 16);
+    open.pgdDataOffset = at;
+    if(unlocked && !pgdUnlock(open, key) && open.pgd && open.pgdDataOffset == was) return 0;
+    open.pgd = open.pgdReady = false;
+    open.pgdDataOffset = at;
     return 0;
   }
+  //the PGD's data size, as the result: its descriptor's (the size sceIoLseek's end and sceNpDrmEdataGetDataSize give),
+  //refused with 0x80510206 while no PGD is unlocked, as the PGD layer refuses it ("tpu"'s decompilation, its case 15)
+  case 0x0410'0010:
+    if(open.sectors) return ErrorFunctionNotSupported;
+    if(open.pgd && !open.pgdReady) pgdDescriptor(open);
+    return open.pgd && open.pgdReady ? open.pgdDataSize : ErrorPgdSecureInstallId;
   }
   return ErrorFunctionNotSupported;
 }
