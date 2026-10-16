@@ -232,6 +232,26 @@ struct GPU : GE::Renderer {
     u32 address = 0, low = 0, high = 0;  //Move into the depth
     bool barrier = false;  //Draw: what the pass drew before made visible to its reading first (emit())
   };
+  //(a pile of models or indices, its room made larger out of line and kept as it's cleared: an append is a bound's
+  //check and a sum, where a vector's resize() is a call and its emplace_back() has its reallocation inline at each.
+  //Fast mode's screen triangles append three of each, a hundred thousand times a frame in Super Monkey Ball.)
+  template<typename T> struct Pile {
+    auto size() const -> size_t { return used; }
+    auto empty() const -> bool { return !used; }
+    auto data() const -> const T* { return room.data(); }
+    auto clear() -> void { used = 0; }
+    //(n more at the end: their room, which the caller fills)
+    alwaysinline auto append(size_t n) -> T* {
+      if(made - used < n) [[unlikely]] grow(n);
+      T* at = room.data() + used;
+      used += n;
+      return at;
+    }
+  private:
+    NALL_NOINLINE auto grow(size_t n) -> void { room.resize(made = std::max(made * 2, used + n)); }
+    std::vector<T> room;
+    size_t made = 0, used = 0;
+  };
   //A Depth command's run: the target's rectangle at x, y, width x height taken from the source's at sourceX, sourceY.
   struct DepthRun { u16 x, y, sourceX, sourceY, width, height; };
   struct Recorded {
@@ -239,8 +259,8 @@ struct GPU : GE::Renderer {
     std::vector<State> states;
     std::vector<Vertex> vertices;
     std::vector<u8> uploads;
-    std::vector<Model> models;   //(Mesh's)
-    std::vector<u32> indices;
+    Pile<Model> models;   //(Mesh's)
+    Pile<u32> indices;
     std::vector<Transformed> transforms;
     std::vector<DepthRun> runs;  //(Depth's)
     u32 readbacks = 0;
@@ -655,17 +675,24 @@ private:
   auto catchAlpha(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;
   auto own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;
   auto textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken, u8& indexed, u32& palette) -> u32;
-  auto settings(const GE::Look& look) -> void;
+  NALL_NOINLINE auto settings(const GE::Look& look) -> void;
   //(settings()' inputs as the last PRIM had them, where its state is kept for the next with the same: its pixel
   //pipeline's, its texture's (the copy alive still: lastDecoded's), the write masks, its target and place in it, and
-  //the backend's ways of drawing; and the shading and filter, which its draws in fast mode's 3D take as well)
+  //the backend's ways of drawing; and the shading and filter, which its draws in fast mode's 3D take as well. kept()
+  //compares them where they are, word by word, with a branch at the end alone: every field read, valid or not, so
+  //they start zeroed)
   struct KeptSettings {
-    bool valid = false;
     GE::PixelState pixel;
-    bool textured, clampU, clampV, withAlpha, doubled;
     u32 width, height, function, environment, maskColor, maskAlpha, target, stride, rows, column, row, shade, filter;
-    bool reads, readsBlending, dualSource, logicOps;
-  } keptSettings;
+    bool valid = false;
+    bool textured, clampU, clampV, withAlpha, doubled, reads, readsBlending, dualSource, logicOps;
+  } keptSettings{};
+  //(kept() compares each field by name and settings() records each: a field added must be in both, and these the new
+  //size and last place. A bool added last fits the padding, but settings()' list then misses it: -Wextra says so.)
+  static_assert(sizeof(KeptSettings) == sizeof(GE::PixelState) + 13 * 4 + 12 &&
+                offsetof(KeptSettings, logicOps) == sizeof(GE::PixelState) + 13 * 4 + 9);
+  auto kept(const GE::Look& look) const -> bool;
+  bool blendsByAlpha = false;  //(the PRIM blends by the frame buffer's alpha: settings(), for begin())
   auto clearStencil(u32 color) -> void;
   auto emit(const Vertex* vertices, u32 count) -> void;
   auto reachOver(const Vertex* vertices, u32 count) -> std::array<float, 4>;  //(their box, given to reach's)
@@ -673,9 +700,12 @@ private:
   //make its pipeline), kept while it's the last; whether the PRIM's triangles the GE put on the screen may go among
   //the meshes; and a draw of its indices from first, or more of the last one)
   bool meshKept = false, screenable = true;
+  bool drawableKnown = false;  //(meshDrawable() found the PRIM's pipeline drawable, its settings kept since)
   auto meshDrawable() -> bool;
   auto meshState() -> u32;
+  auto recordMeshState() -> u32;
   auto meshDraw(u32 state, u32 first, u32 count) -> void;
+  auto newMeshDraw(u32 state, u32 first, u32 count) -> void;
   auto screenTriangle(const Vertex (&v)[3]) -> bool;
   auto vertex(const GE::Vertex& v, bool perspective, s32 x, s32 y) const -> Vertex;
   auto transformed(const GE::Transform& t) -> u32;  //(mesh()'s Transformed block for t: its index in transforms)
