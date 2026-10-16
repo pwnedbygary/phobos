@@ -32,6 +32,11 @@ static void putNumber(Text* text, u32 value, u32 base, int upper, int width, cha
 void textFormat(Text* text, const char* format, ...) {
   va_list args;
   va_start(args, format);
+  textFormatList(text, format, args);
+  va_end(args);
+}
+
+void textFormatList(Text* text, const char* format, va_list args) {
   for(const char* p = format; *p; p++) {
     if(*p != '%') {
       put(text, *p);
@@ -69,7 +74,6 @@ void textFormat(Text* text, const char* format, ...) {
     default: put(text, '%'); put(text, *p); break;
     }
   }
-  va_end(args);
 }
 
 //Case doesn't matter.

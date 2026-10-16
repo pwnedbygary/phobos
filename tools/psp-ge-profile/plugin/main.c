@@ -4,7 +4,9 @@
 //
 //This file: the module's start, the settings (<device>:/PHOBOS/prof.txt), the control thread that waits for a
 //trigger (a button combination held for a second, or a time after the game started) and runs a capture or a dry run,
-//and the files it writes once that's over (<device>:/PHOBOS/PROF/<disc id>-<n>.bin, or .txt). Nothing is drawn; no
+//the notices it puts on screen (notice.c draws them), and the files it writes once that's over
+//(<device>:/PHOBOS/PROF/<disc id>-<n>.bin, or .txt, and the trace, <device>:/PHOBOS/trace.txt). The device is looked
+//for again before every run and every write, so a memory stick not ready at the game's boot doesn't stop anything. No
 //file is opened while a capture runs; nothing is written, renamed or deleted outside <device>:/PHOBOS.
 
 #include "plugin.h"
@@ -22,7 +24,8 @@ Firmware firmware;
 //time (it wakes for a few microseconds every 50 ms while idle, every 250 ms while capturing); it writes files at
 //the lowest priority, when the game's threads are waiting.
 enum { WaitingPriority = 0x18, WritingPriority = 0x7E, ThreadStack = 0x2000 };
-enum { Second = 1000000, PollInterval = 50000, CaptureCheck = 250000, HeldPolls = 20 };
+enum { Second = 1000000, PollInterval = 50000, CaptureCheck = 250000, HeldPolls = 20, FallbackInterval = 10000 };
+enum { StartNotice = 4000, CountdownNotice = 30000, SavedNotice = 5000, FailedNotice = 8000, EarlyTrace = 6 * Second };
 
 typedef struct {
   int dry;          //mode = dry (the default) or capture
@@ -33,10 +36,11 @@ typedef struct {
   int bufferKb;     //the most kernel memory a capture's buffer takes
   int keepKb;       //what it leaves free in its partition
   int partition;
+  int notices;      //on-screen notices on (the default) or off
   int read;         //prof.txt was found
 } Settings;
 
-static Settings settings = {1, PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_SELECT, 1, 20, 10, 2048, 512, 1, 0};
+static Settings settings = {1, PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_SELECT, 1, 20, 10, 2048, 512, 1, 1, 0};
 
 //In the order the report names them, so the default reads as prof.txt writes it.
 static const struct { const char* name; u32 mask; } buttonNames[] = {
@@ -68,44 +72,65 @@ static u32 vblankCount(void) {
   return firmware.displayGetVcount ? firmware.displayGetVcount() : 0;
 }
 
+Address lastLookup;
+
 static void* arkFunction(u32 nid) {
-  return (void*)sctrlHENFindFunction(ArkModule, ArkLibrary, nid);
+  lastLookup = sctrlHENFindFunction(ArkModule, ArkLibrary, nid);
+  return PlausibleFunction(lastLookup) ? (void*)lastLookup : 0;
 }
 
 //A function by its module and library; failing that, by library alone if this ARK can search every module.
 void* findFunction(const char* module, const char* library, u32 nid) {
   Address address = sctrlHENFindFunction(module, library, nid);
-  if(!address && firmware.findFunctionOnSystem) address = firmware.findFunctionOnSystem(library, nid, 0);
-  return (void*)address;
+  if(!PlausibleFunction(address) && firmware.findFunctionOnSystem) address = firmware.findFunctionOnSystem(library, nid, 0);
+  lastLookup = address;
+  return PlausibleFunction(address) ? (void*)address : 0;
+}
+
+//A lookup's result for the trace: where it was found, or what came back instead.
+static void* found(const char* name, void* function) {
+  if(function) traceLine("found %s at 0x%08lX", name, (unsigned long)(Address)function);
+  else if(lastLookup) traceLine("refused %s: the lookup gave 0x%08lX", name, (unsigned long)lastLookup);
+  else traceLine("not found: %s", name);
+  return function;
 }
 
 #define SysMem "sceSystemMemoryManager", "SysMemForKernel"
+#define Interrupts "sceInterruptManager", "InterruptManagerForKernel"
 static void findFirmware(void) {
-  firmware.findFunctionOnSystem = arkFunction(NidFindFunctionOnSystem);
+  firmware.findFunctionOnSystem = found("sctrlHENFindFunctionOnSystem", arkFunction(NidFindFunctionOnSystem));
   firmware.patchSyscall = arkFunction(NidPatchSyscall);
   if(!firmware.patchSyscall) firmware.patchSyscall = arkFunction(NidPatchSyscallOld);
   if(!firmware.patchSyscall) firmware.patchSyscall = arkFunction(NidPatchSyscallOlder);
-  firmware.querySystemCall = arkFunction(NidQuerySystemCall);
-  firmware.getInitParam = arkFunction(NidGetInitParam);
-  firmware.msIsEf = arkFunction(NidMsIsEf);
-  firmware.flushCache = arkFunction(NidFlushCache);
-  firmware.henVersion = arkFunction(NidHenVersion);
-  firmware.henMinorVersion = arkFunction(NidHenMinorVersion);
-  firmware.allocPartitionMemory = findFunction(SysMem, NidAllocPartitionMemory);
-  firmware.freePartitionMemory = findFunction(SysMem, NidFreePartitionMemory);
-  firmware.getBlockHeadAddr = findFunction(SysMem, NidGetBlockHeadAddr);
-  firmware.partitionMaxFreeMemSize = findFunction(SysMem, NidPartitionMaxFreeMemSize);
-  firmware.partitionTotalFreeMemSize = findFunction(SysMem, NidPartitionTotalFreeMemSize);
-  firmware.queryMemoryPartitionInfo = findFunction(SysMem, NidQueryMemoryPartitionInfo);
-  firmware.getModel = findFunction(SysMem, NidGetModel);
-  firmware.devkitVersion = findFunction("sceSystemMemoryManager", "SysMemUserForUser", NidDevkitVersion);
-  firmware.registerSubIntrMonitor =
-    findFunction("sceInterruptManager", "InterruptManagerForKernel", NidRegisterSubIntrMonitor);
-  firmware.releaseSubIntrMonitor = findFunction("sceInterruptManager", "InterruptManagerForKernel", NidReleaseSubIntrMonitor);
-  firmware.ctrlPeekBufferPositive = findFunction("sceController_Service", "sceCtrl", NidCtrlPeekBufferPositive);
-  firmware.cpuClock = findFunction("scePower_Service", "scePower", NidCpuClockInt);
-  firmware.busClock = findFunction("scePower_Service", "scePower", NidBusClockInt);
-  firmware.displayGetVcount = findFunction("sceDisplay_Service", "sceDisplay", NidDisplayGetVcount);
+  found("sctrlHENPatchSyscall", firmware.patchSyscall);
+  firmware.querySystemCall = found("sctrlKernelQuerySystemCall", arkFunction(NidQuerySystemCall));
+  firmware.getInitParam = found("sctrlGetInitPARAM", arkFunction(NidGetInitParam));
+  firmware.msIsEf = found("sctrlKernelMsIsEf", arkFunction(NidMsIsEf));
+  firmware.flushCache = found("sctrlFlushCache", arkFunction(NidFlushCache));
+  firmware.henVersion = found("sctrlHENGetVersion", arkFunction(NidHenVersion));
+  firmware.henMinorVersion = found("sctrlHENGetMinorVersion", arkFunction(NidHenMinorVersion));
+  firmware.allocPartitionMemory = found("sceKernelAllocPartitionMemory", findFunction(SysMem, NidAllocPartitionMemory));
+  firmware.freePartitionMemory = found("sceKernelFreePartitionMemory", findFunction(SysMem, NidFreePartitionMemory));
+  firmware.getBlockHeadAddr = found("sceKernelGetBlockHeadAddr", findFunction(SysMem, NidGetBlockHeadAddr));
+  firmware.partitionMaxFreeMemSize =
+    found("sceKernelPartitionMaxFreeMemSize", findFunction(SysMem, NidPartitionMaxFreeMemSize));
+  firmware.partitionTotalFreeMemSize =
+    found("sceKernelPartitionTotalFreeMemSize", findFunction(SysMem, NidPartitionTotalFreeMemSize));
+  firmware.queryMemoryPartitionInfo =
+    found("sceKernelQueryMemoryPartitionInfo", findFunction(SysMem, NidQueryMemoryPartitionInfo));
+  firmware.getModel = found("sceKernelGetModel", findFunction(SysMem, NidGetModel));
+  firmware.devkitVersion =
+    found("sceKernelDevkitVersion", findFunction("sceSystemMemoryManager", "SysMemUserForUser", NidDevkitVersion));
+  firmware.registerSubIntrMonitor = found("RegisterSubIntrruptMonitor", findFunction(Interrupts, NidRegisterSubIntrMonitor));
+  firmware.releaseSubIntrMonitor = found("ReleaseSubIntrruptMonitor", findFunction(Interrupts, NidReleaseSubIntrMonitor));
+  firmware.ctrlPeekBufferPositive =
+    found("sceCtrlPeekBufferPositive", findFunction("sceController_Service", "sceCtrl", NidCtrlPeekBufferPositive));
+  firmware.cpuClock = found("scePowerGetCpuClockFrequencyInt", findFunction("scePower_Service", "scePower", NidCpuClockInt));
+  firmware.busClock = found("scePowerGetBusClockFrequencyInt", findFunction("scePower_Service", "scePower", NidBusClockInt));
+  firmware.displayGetVcount =
+    found("sceDisplayGetVcount", findFunction("sceDisplay_Service", "sceDisplay", NidDisplayGetVcount));
+  firmware.displayGetFrameBuf =
+    found("sceDisplayGetFrameBuf", findFunction("sceDisplay_Service", "sceDisplay", NidDisplayGetFrameBuf));
 }
 
 static int exists(const char* path) {
@@ -199,10 +224,48 @@ static void readSettings(void) {
         settings.keepKb = clamp(number(value, settings.keepKb), 0, 8192);
       } else if(textEqual(name, "partition")) {
         settings.partition = clamp(number(value, settings.partition), 1, 12);
+      } else if(textEqual(name, "notices")) {
+        if(textEqual(value, "on")) settings.notices = 1;
+        if(textEqual(value, "off")) settings.notices = 0;
       }
     }
     line = next;
   }
+}
+
+static void traceSettings(void) {
+  if(!settings.read) {
+    traceLine("settings: prof.txt not read yet, defaults (mode %s, start %d s, notices %s)",
+              settings.dry ? "dry" : "capture", settings.start, settings.notices ? "on" : "off");
+    return;
+  }
+  traceLine("settings read: mode %s, buttons 0x%lX, delay %d s, start %d s, length %d s, buffer %d KB, keep %d KB, "
+            "partition %d, notices %s", settings.dry ? "dry" : "capture", (unsigned long)settings.buttons,
+            settings.delay, settings.start, settings.length, settings.bufferKb, settings.keepKb, settings.partition,
+            settings.notices ? "on" : "off");
+}
+
+//The device with a PHOBOS folder, looked for again each time (a memory stick may not be ready at the game's boot);
+//the settings are read the first time it's there.
+static int deviceLooked;
+static const char* ensureDevice(void) {
+  const char* seen = exists("ms0:/PHOBOS") ? "ms0:" : exists("ef0:/PHOBOS") ? "ef0:" : 0;
+  if(!deviceLooked || seen != device) traceLine("device: %s", seen ? seen : "no PHOBOS folder on ms0: or ef0:");
+  deviceLooked = 1;
+  device = seen;
+  if(device && !settings.read) {
+    readSettings();
+    noticeEnable(settings.notices);
+    traceSettings();
+  }
+  return device;
+}
+
+//At the writing priority, as every file is written.
+static void flushTrace(void) {
+  sceKernelChangeThreadPriority(0, WritingPriority);
+  traceWrite(ensureDevice());
+  sceKernelChangeThreadPriority(0, WaitingPriority);
 }
 
 //Letters and digits only, so a disc id can't make a path.
@@ -322,17 +385,23 @@ static void waitForRelease(void) {
   while(settings.buttons && (readButtons() & settings.buttons) == settings.buttons) sceKernelDelayThread(PollInterval);
 }
 
-//<device>:/PHOBOS/PROF/<disc id>-<n>.<extension> with the first n neither a .bin nor a .txt has; PROF is made inside
-//an existing PHOBOS folder, and nothing else is ever made. Returns n, or 0.
-static int newFile(char* path, int size, const char* extension) {
+//Why a file wasn't written, as the notice and the trace say it.
+enum { Saved, NoFolder, NoProfFolder, NoNumber, OpenFailed, WriteFailed, NoMemory };
+static const char* const reasons[] = {
+  "SAVED", "NO PHOBOS FOLDER", "CANNOT MAKE PHOBOS/PROF", "NO FREE FILE NUMBER", "CANNOT CREATE THE FILE",
+  "WRITE FAILED", "NOT ENOUGH MEMORY",
+};
+
+//<device>:/PHOBOS/PROF/<disc id>-<n>.<extension> with the first n neither a .bin nor a .txt has, the device looked for
+//again first; PROF is made inside an existing PHOBOS folder, and nothing else is ever made. Returns a reason (Saved:
+//path and number are set).
+static int newFile(char* path, int size, const char* extension, int* number) {
   char other[64];
-  if(!device) return 0;
+  if(!ensureDevice()) return NoFolder;
   Text text = {path, size, 0};
-  textFormat(&text, "%s/PHOBOS", device);
-  if(!exists(path)) return 0;
-  text.length = 0;
   textFormat(&text, "%s/PHOBOS/PROF", device);
   if(!exists(path)) sceIoMkdir(path, 0777);
+  if(!exists(path)) return NoProfFolder;
   for(int n = 1; n < 10000; n++) {
     Text binary = {other, sizeof(other), 0};
     textFormat(&binary, "%s/PHOBOS/PROF/%s-%d.bin", device, discId, n);
@@ -342,9 +411,16 @@ static int newFile(char* path, int size, const char* extension) {
     if(exists(other)) continue;
     text.length = 0;
     textFormat(&text, "%s/PHOBOS/PROF/%s-%d.%s", device, discId, n, extension);
-    return n;
+    *number = n;
+    return Saved;
   }
-  return 0;
+  return NoNumber;
+}
+
+static void fileName(char* name, int size, int number, const char* extension) {
+  Text text = {name, size, 0};
+  name[0] = 0;
+  textFormat(&text, "%s-%d.%s", discId, number, extension);
 }
 
 //In pieces, with a pause between them, so the game's own reads of the stick get turns.
@@ -360,15 +436,29 @@ static int writeAll(SceUID file, const void* data, u32 size) {
   return 1;
 }
 
-static int writeText(const char* text, int length) {
+//Returns a reason; name is the file's (when one was made).
+static int writeText(const char* text, int length, char* name, int nameSize) {
   char path[64];
-  int n = newFile(path, sizeof(path), "txt");
-  if(!n) return 0;
+  int number = 0, reason = newFile(path, sizeof(path), "txt", &number);
+  name[0] = 0;
+  if(reason != Saved) return reason;
+  fileName(name, nameSize, number, "txt");
   SceUID file = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT, 0777);
-  if(file < 0) return 0;
+  if(file < 0) return OpenFailed;
   int ok = writeAll(file, text, length);
   sceIoClose(file);
-  return ok ? n : 0;
+  return ok ? Saved : WriteFailed;
+}
+
+//The notice after a run, and its trace line.
+static void showResult(const char* what, int reason, const char* name, const char* extra) {
+  if(reason == Saved) {
+    traceLine("%s: wrote %s%s%s", what, name, extra[0] ? ", " : "", extra);
+    noticeShow("SAVED", name, extra, SavedNotice);
+  } else {
+    traceLine("%s: not saved: %s%s%s", what, reasons[reason], name[0] ? ", " : "", name);
+    noticeShow("NOT SAVED", reasons[reason], extra, FailedNotice);
+  }
 }
 
 static const char* modelName(int model) {
@@ -402,8 +492,8 @@ static void describeSystem(Text* text) {
   textFormat(text, ", delay %d s, start ", settings.delay);
   if(settings.start < 0) textFormat(text, "off");
   else textFormat(text, "%d s", settings.start);
-  textFormat(text, ", length %d s, buffer %d KB, keep %d KB, partition %d\n", settings.length, settings.bufferKb,
-             settings.keepKb, settings.partition);
+  textFormat(text, ", length %d s, buffer %d KB, keep %d KB, partition %d, notices %s\n", settings.length,
+             settings.bufferKb, settings.keepKb, settings.partition, settings.notices ? "on" : "off");
 }
 
 static void describeMemory(Text* text) {
@@ -423,11 +513,14 @@ static void describeMemory(Text* text) {
 //called, what a capture would take, and what the hooks cost here.
 static void dryRun(int timed) {
   u32 counts[KindCount];
+  noticeClear();
+  noticeMarker(1);
   u32 start = now();
   startCounting();
   sceKernelDelayThread(settings.length * Second);
   u32 total = stopCounting(counts);
   u32 elapsed = now() - start;
+  noticeMarker(0);
   u32 idleNs, captureNs, monitorNs;
   measureCosts(&idleNs, &captureNs, &monitorNs);
   snapshotMemory(memoryNow);
@@ -476,15 +569,22 @@ static void dryRun(int timed) {
     textFormat(&text, "\n");
   }
   textFormat(&text, "functions found: patch %d, query %d, flush %d, init param %d, alloc %d, monitor %d, ctrl %d, "
-             "clocks %d, vcount %d, find on system %d\n", !!firmware.patchSyscall, !!firmware.querySystemCall,
-             !!firmware.flushCache, !!firmware.getInitParam, !!firmware.allocPartitionMemory, monitorAvailable,
-             !!firmware.ctrlPeekBufferPositive, !!firmware.cpuClock, !!firmware.displayGetVcount,
-             !!firmware.findFunctionOnSystem);
-  writeText(scratch, text.length);
+             "clocks %d, vcount %d, frame buffer %d, find on system %d\n", !!firmware.patchSyscall,
+             !!firmware.querySystemCall, !!firmware.flushCache, !!firmware.getInitParam, !!firmware.allocPartitionMemory,
+             monitorAvailable, !!firmware.ctrlPeekBufferPositive, !!firmware.cpuClock, !!firmware.displayGetVcount,
+             !!firmware.displayGetFrameBuf, !!firmware.findFunctionOnSystem);
+  u32 flip = noticeFirstFlip();
+  if(flip) textFormat(&text, "first flip through the sceDisplaySetFrameBuf hook: %lu ms after the start\n",
+                      (flip - pluginStart) / 1000);
+  else textFormat(&text, "no flip through the sceDisplaySetFrameBuf hook yet (notices drawn through %s)\n",
+                  firmware.displayGetFrameBuf ? "sceDisplayGetFrameBuf" : "nothing: not shown");
+  char name[32];
+  showResult("dry run", writeText(scratch, text.length, name, sizeof(name)), name, "");
   sceKernelChangeThreadPriority(0, WaitingPriority);
 }
 
-static void note(const char* why) {
+//Why a capture couldn't run, in a .txt of its own when that can be written. Returns the reason for the notice.
+static int note(const char* why, char* name, int nameSize) {
   sceKernelChangeThreadPriority(0, WritingPriority);
   snapshotMemory(memoryNow);
   readParamSfo();
@@ -493,22 +593,25 @@ static void note(const char* why) {
   textFormat(&text, "Phobos GE profiler %s: no capture: %s", ProfileVersion, why);
   describeSystem(&text);
   describeMemory(&text);
-  writeText(scratch, text.length);
+  int reason = writeText(scratch, text.length, name, nameSize);
   sceKernelChangeThreadPriority(0, WaitingPriority);
+  return reason;
 }
 
-static int writeCapture(ProfileHeader* header, const ProfileRecord* records) {
+static int writeCapture(ProfileHeader* header, const ProfileRecord* records, char* name, int nameSize) {
   static u32 uids[64];
   static ProfileThread entry;
   char path[64];
   int threads = threadTable(uids, 64);
-  int n = newFile(path, sizeof(path), "bin");
-  if(!n) return 0;
-  header->captureNumber = n;
+  int number = 0, reason = newFile(path, sizeof(path), "bin", &number);
+  name[0] = 0;
+  if(reason != Saved) return reason;
+  fileName(name, nameSize, number, "bin");
+  header->captureNumber = number;
   header->threadTableOffset = ProfileHeaderSize + header->recordCount * ProfileRecordSize;
   header->threadCount = threads;
   SceUID file = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT, 0777);
-  if(file < 0) return 0;
+  if(file < 0) return OpenFailed;
   int ok = writeAll(file, header, ProfileHeaderSize) &&
            writeAll(file, records, header->recordCount * ProfileRecordSize);
   for(int index = 0; ok && index < threads; index++) {
@@ -521,7 +624,7 @@ static int writeCapture(ProfileHeader* header, const ProfileRecord* records) {
     ok = writeAll(file, &entry, sizeof(entry));
   }
   sceIoClose(file);
-  return ok ? n : 0;
+  return ok ? Saved : WriteFailed;
 }
 
 static void copyString(char* target, const char* source, int size) {
@@ -538,7 +641,12 @@ static void capture(int timed) {
   u32 bytes = 0;
   ProfileRecord* records = allocateBuffer(&bytes, &why);
   if(!records) {
-    note(reason);
+    char name[32], extra[32];
+    Text see = {extra, sizeof(extra), 0};
+    extra[0] = 0;
+    traceLine("capture: no buffer: %s", reason);
+    if(note(reason, name, sizeof(name)) == Saved) textFormat(&see, "SEE %s", name);
+    showResult("capture", NoMemory, "", extra);
     return;
   }
   memset(&header, 0, sizeof(header));
@@ -560,6 +668,8 @@ static void capture(int timed) {
   header.bufferBytes = bytes;
   header.flags = (timed ? ProfileTimed : 0) | (monitorAvailable ? ProfileMonitor : 0) | ProfileGeSampled;
   header.startVcount = vblankCount();
+  noticeClear();
+  noticeMarker(1);
   header.startTime = now();
   startCapture(records, header.capacity);
   u32 length = settings.length * Second;
@@ -569,6 +679,7 @@ static void capture(int timed) {
   }
   stopCapture(&header.recordCount, &header.dropped);
   header.endTime = now();
+  noticeMarker(0);
   header.endVcount = vblankCount();
   header.cpuMhzEnd = firmware.cpuClock ? firmware.cpuClock() : 0;
   header.busMhzEnd = firmware.busClock ? firmware.busClock() : 0;
@@ -577,50 +688,135 @@ static void capture(int timed) {
   readParamSfo();
   copyString(header.discId, discId, sizeof(header.discId));
   copyString(header.title, title, sizeof(header.title));
-  writeCapture(&header, records);
+  char name[32], extra[32];
+  Text detail = {extra, sizeof(extra), 0};
+  extra[0] = 0;
+  if(header.dropped) textFormat(&detail, "BUFFER FILLED: %lu LOST", header.dropped);
+  else textFormat(&detail, "%lu RECORDS", header.recordCount);
+  showResult("capture", writeCapture(&header, records, name, sizeof(name)), name, extra);
   freeBuffer();
   sceKernelChangeThreadPriority(0, WaitingPriority);
 }
 
+//Sleeps; while the hook sees no flips and there's text to show, wakes every 10 ms to draw it the other way.
+static void rest(u32 microseconds) {
+  u32 start = now();
+  for(u32 elapsed = 0; elapsed < microseconds; elapsed = now() - start) {
+    u32 left = microseconds - elapsed;
+    if(!noticeWantsFallback()) {
+      sceKernelDelayThread(left);
+      return;
+    }
+    noticeFallback();
+    sceKernelDelayThread(left < FallbackInterval ? left : FallbackInterval);
+  }
+}
+
+static int hooksMissing(void) {
+  int missing = !monitorAvailable;
+  for(int kind = 1; kind < KindCount; kind++) {
+    if(kind != KindGeSignal && kind != KindGeFinish && kind != KindVblank && !hookStatus[kind].installed) missing++;
+  }
+  return missing;
+}
+
+//For the game's first seconds on screen: the plugin is on, for which game, in which mode, and the first thing in the
+//way if anything is.
+static void showStart(void) {
+  char line2[32], line3[32];
+  Text second = {line2, sizeof(line2), 0}, third = {line3, sizeof(line3), 0};
+  line2[0] = line3[0] = 0;
+  textFormat(&second, "%s %s", discId, settings.dry ? "DRY RUN" : "CAPTURE");
+  int missing = hooksMissing();
+  if(!device) textFormat(&third, "NO PHOBOS FOLDER YET");
+  else if(!firmware.patchSyscall) textFormat(&third, "NO HOOKS: SEE TRACE.TXT");
+  else if(missing) textFormat(&third, "%d HOOKS MISSING: SEE TRACE", missing);
+  noticeShow("PHOBOS PROFILER ON", line2, line3, StartNotice);
+}
+
+static void controlStart(void) {
+  traceLine("control thread running");
+  ensureDevice();
+  if(!settings.read) traceSettings();
+  readGameInfo();
+  traceLine("disc id %s, title \"%s\"%s", discId, title, firmware.getInitParam ? "" : " (no sctrlGetInitPARAM)");
+  noticeEnable(settings.notices);
+  snapshotMemory(memoryAtStart);
+  showStart();
+  flushTrace();
+}
+
+//A run: the countdown notice through the delay when the buttons started it, the dry run or the capture, the trace.
+static void trigger(int timed) {
+  ensureDevice();
+  traceLine("trigger (%s): %s", timed ? "timed" : "buttons", settings.dry ? "dry run" : "capture");
+  if(!timed) {
+    char line[32];
+    Text text = {line, sizeof(line), 0};
+    line[0] = 0;
+    textFormat(&text, "%s IN %d S", settings.dry ? "DRY RUN" : "CAPTURE", settings.delay);
+    noticeShow(line, "", "", CountdownNotice);
+    waitForRelease();
+    rest(settings.delay * Second);
+  }
+  if(settings.dry) dryRun(timed);
+  else capture(timed);
+  flushTrace();
+}
+
 static int controlThread(SceSize args, void* argp) {
   (void)args, (void)argp;
-  device = exists("ms0:/PHOBOS") ? "ms0:" : exists("ef0:/PHOBOS") ? "ef0:" : 0;
-  readSettings();
-  readGameInfo();
-  snapshotMemory(memoryAtStart);
-  int timedPending = settings.start >= 0;
-  u32 timedAt = pluginStart + (u32)(settings.start < 0 ? 0 : settings.start) * Second;
+  controlStart();
+  int hadDevice = device != 0, timedDone = 0, earlyTrace = 1, flipTraced = 0, held = 0;
   u32 lastRunEnd = pluginStart;
-  int held = 0;
   for(;;) {
-    sceKernelDelayThread(PollInterval);
+    rest(PollInterval);
+    if(!flipTraced && noticeFirstFlip()) {
+      traceLine("first flip through the sceDisplaySetFrameBuf hook, %lu ms after the start",
+                (noticeFirstFlip() - pluginStart) / 1000);
+      flipTraced = 1;
+    }
+    if(earlyTrace && (s32)(now() - pluginStart) >= EarlyTrace) {
+      if(!flipTraced) traceLine("no flip through the sceDisplaySetFrameBuf hook yet");
+      flushTrace();
+      earlyTrace = 0;
+      if(!hadDevice && device) showStart();  //the PHOBOS folder turned up after the boot
+      hadDevice = device != 0;
+    }
     int timed = 0;
-    if(timedPending && (s32)(now() - timedAt) >= 0) {
-      timedPending = 0;
-      timed = (s32)(timedAt - lastRunEnd) >= 0;  //skipped if a run was on when its time came
+    if(!timedDone && settings.start >= 0) {
+      u32 timedAt = pluginStart + (u32)settings.start * Second;
+      if((s32)(now() - timedAt) >= 0) {
+        timedDone = 1;
+        timed = (s32)(timedAt - lastRunEnd) >= 0;  //skipped if a run was on when its time came
+      }
     }
     if(!timed) {
       if(settings.buttons && (readButtons() & settings.buttons) == settings.buttons) held++;
       else held = 0;
       if(held < HeldPolls) continue;
       held = 0;
-      waitForRelease();
-      sceKernelDelayThread(settings.delay * Second);
     }
-    if(settings.dry) dryRun(timed);
-    else capture(timed);
+    trigger(timed);
     lastRunEnd = now();
     waitForRelease();
   }
   return 0;
 }
 
+//Nothing after the thread's start is traced here: the thread, at a higher priority, may already be running.
 int module_start(SceSize args, void* argp) {
   (void)args, (void)argp;
   pluginStart = now();
+  traceStart(pluginStart);
+  traceLine("---- Phobos GE profiler %s: module_start", ProfileVersion);
   findFirmware();
   installHooks();
   SceUID thread = sceKernelCreateThread("PhobosGeProfile", controlThread, WaitingPriority, ThreadStack, 0, 0);
-  if(thread >= 0) sceKernelStartThread(thread, 0, 0);
+  traceLine(thread >= 0 ? "control thread made (0x%08X)" : "control thread not made (0x%08X)", thread);
+  if(thread >= 0) {
+    int started = sceKernelStartThread(thread, 0, 0);
+    if(started < 0) traceLine("control thread not started (0x%08X)", started);
+  }
   return 0;
 }

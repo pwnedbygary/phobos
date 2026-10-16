@@ -13,14 +13,17 @@ scenes are captured here as Phobos measures from save states, so the two compare
 
 - `plugin/`: the plugin, a kernel module (PRX) for ARK-4's plugin loader. It records the game's calls to the GE's and
   the display's functions, with microsecond times, into kernel memory, and writes them to the memory stick after the
-  capture. Nothing is drawn on screen.
+  capture. It shows short notices on screen (that it's on, that a capture is coming, that it was saved or why not;
+  only a small blinking square while it counts) and keeps a trace of every step in `PHOBOS/trace.txt`.
 - `decoder/geprof.py`: reads a capture and prints, per vblank and per second, what the GE and the CPU did.
 
 ## The owner's steps
 
 These are for a PSP running ARK-4 on firmware 6.61. The first run is a dry run: the plugin installs its hooks and
 only counts calls, then writes a short text report, so it shows the plugin loads and hooks without recording
-anything. Captures come after that report has been looked at.
+anything. Captures come after that report has been looked at. From version 0.2.0 the plugin says on screen what it's
+doing (see "What the notices mean", below), so a run that writes nothing still shows how far it got, and
+`PHOBOS/trace.txt` says the rest.
 
 ### What goes where
 
@@ -33,8 +36,9 @@ anything. Captures come after that report has been looked at.
 On a PSP Go without a memory stick card, the same folders go on the internal storage (`ef0:`), and the paths in
 `PLUGINS.TXT` start with `ef0:` instead of `ms0:`.
 
-The plugin writes only inside `PHOBOS` (its captures go in `PHOBOS/PROF`, which it makes), never renames or deletes
-anything, and opens no file while a capture runs. If there's no `PHOBOS` folder, it writes nothing at all.
+The plugin writes only inside `PHOBOS` (its reports and captures go in `PHOBOS/PROF`, which it makes, and its trace
+in `PHOBOS/trace.txt`, which it adds to and never shortens), never renames or deletes anything, and opens no file
+while a capture runs. If there's no `PHOBOS` folder, it writes nothing at all (and says so on screen).
 
 ### Before the first run
 
@@ -49,44 +53,72 @@ anything, and opens no file while a capture runs. If there's no `PHOBOS` folder,
 
 Add these lines to ARK's `PLUGINS.TXT`. ARK reads it from `SEPLUGINS/PLUGINS.TXT` or from
 `PSP/SAVEDATA/ARK_01234/PLUGINS.TXT`; if one of those already exists, add the lines to it, otherwise make
-`SEPLUGINS/PLUGINS.TXT`. Each line turns the plugin on for one game only: its first ID is the copy Phobos's scenes
-were made from, the others are that game's other regions (Europe, Japan, Asia, Korea), so whichever copy you have,
-its ID is there.
+`SEPLUGINS/PLUGINS.TXT`. Each line turns the plugin on for one game only, by the game's ID: the copies Phobos's
+scenes were made from, and for Chains of Olympus the two other copies you have saves of (the Asian disc and the
+PlayStation Store version), since which one the PSP runs isn't known.
 
 ```
-UCUS98653 UCES00842 ULJM05348 UCAS40198 UCKS45084, ms0:/SEPLUGINS/phobosprof.prx, on
-UCUS98737 UCES01401 UCES01473 UCJS10114 UCAS40323 UCKS45161, ms0:/SEPLUGINS/phobosprof.prx, on
-ULUS10186 ULES00640, ms0:/SEPLUGINS/phobosprof.prx, on
-UCUS98646 UCES00279 UCKS45041 UCUS80170 NPEG00007, ms0:/SEPLUGINS/phobosprof.prx, on
-ULES00364 ULUS10132, ms0:/SEPLUGINS/phobosprof.prx, on
-ULUS10472 ULES01381 ULJM05643 ULJM05849, ms0:/SEPLUGINS/phobosprof.prx, on
+UCUS98653 UCAS40198 NPUG80325, ms0:/SEPLUGINS/phobosprof.prx, on
+UCUS98737, ms0:/SEPLUGINS/phobosprof.prx, on
+ULUS10186, ms0:/SEPLUGINS/phobosprof.prx, on
+UCUS98646, ms0:/SEPLUGINS/phobosprof.prx, on
+ULES00364, ms0:/SEPLUGINS/phobosprof.prx, on
+ULUS10472, ms0:/SEPLUGINS/phobosprof.prx, on
 ```
 
 In order: God of War: Chains of Olympus, God of War: Ghost of Sparta, Activision Hits Remixed, Killzone:
-Liberation, Super Monkey Ball Adventure, Army of Two: The 40th Day. (A game bought on the PlayStation Store can have
-an ID of its own, starting with NP; it's on the game's info screen in ARK's launcher, "View info", and can be added
-to its line, separated by a space.)
+Liberation, Super Monkey Ball Adventure, Army of Two: The 40th Day. If no notice at all appears when one of them
+starts, the plugin wasn't loaded for it: its ID isn't on its line. The ID is on the game's info screen in ARK's
+launcher ("View info"); add it to the line, after a space. The other regions' IDs:
+
+| Game | Other IDs |
+|---|---|
+| Chains of Olympus | UCES00842 (Europe), ULJM05348 (Japan), UCKS45084 (Korea) |
+| Ghost of Sparta | UCES01401, UCES01473 (Europe), UCJS10114 (Japan), UCAS40323 (Asia), UCKS45161 (Korea) |
+| Activision Hits Remixed | ULES00640 (Europe) |
+| Killzone: Liberation | UCES00279 (Europe), UCKS45041 (Korea), UCUS80170 and NPEG00007 (PlayStation Store) |
+| Super Monkey Ball Adventure | ULUS10132 (North America) |
+| Army of Two: The 40th Day | ULES01381 (Europe), ULJM05643, ULJM05849 (Japan) |
 
 ### The dry run (first)
 
-1. Start Chains of Olympus (any of the six would do) and let it run: on its menus is fine. From 20 seconds after
-   the game starts, the plugin counts the calls for 10 seconds, then writes `PHOBOS/PROF/UCUS98653-1.txt` (or the ID
-   of your copy). The memory stick light flashes as it does.
-2. Then (after that first report, so at least half a minute after the game started) try the buttons once: on a
-   menu, hold L, R and SELECT together for a second or two, and let go. Eleven seconds later (a second's pause, then
-   10 seconds counted) the next report, `...-2.txt`, is written.
-3. Quit the game and send both `.txt` files back. They say whether every hook went in, how often the game called
-   each function, how much memory a capture can have, and what the hooks cost on your PSP.
+1. Start Chains of Olympus (any of the six would do) and let it run: on its menus is fine. As soon as the game shows
+   its first picture, a black box at the top left says, for about 4 seconds, `PHOBOS PROFILER ON` and, under it,
+   your copy's ID and `DRY RUN`. A third line, if there is one, is the first thing in the way (see below).
+2. From 20 seconds after the game starts, a small square blinks at the top right for 10 seconds while the plugin
+   counts the calls; then the box says `SAVED` and `UCUS98653-1.TXT` (or your copy's ID), or `NOT SAVED` and why.
+3. Then try the buttons once: on a menu, hold L, R and SELECT together for a second or two. The box says
+   `DRY RUN IN 1 S`; let go, and a second later the square blinks for 10 seconds, then `SAVED` and `...-2.TXT`.
+4. Quit the game and send back `PHOBOS/trace.txt` and the `.txt` files in `PHOBOS/PROF`, and say what appeared on
+   screen and when (a photo of a notice helps). The reports say whether every hook went in, how often the game called
+   each function, how much memory a capture can have, and what the hooks cost on your PSP; the trace says each step
+   the plugin took, from its start.
 
-If no file appears, check that `PHOBOS/prof.txt` is on the stick and the line in `PLUGINS.TXT` has your copy's ID.
+If nothing appears on screen at all, the plugin wasn't loaded for that game: check its ID (above). If the box appears
+but nothing is saved, the box and `trace.txt` say why.
+
+### What the notices mean
+
+| On screen | What it means |
+|---|---|
+| `PHOBOS PROFILER ON`, then `<ID> DRY RUN` or `<ID> CAPTURE` | The plugin is loaded for this game, in this mode. |
+| `NO PHOBOS FOLDER YET` (third line) | There was no `PHOBOS` folder on the stick when the game started. The plugin looks again before each run and each file, and shows the box again if it turns up. |
+| `n HOOKS MISSING: SEE TRACE` | Some of the firmware's functions weren't found; `trace.txt` says which. |
+| `NO HOOKS: SEE TRACE.TXT` | ARK's function for hooking wasn't found, so nothing can be counted or recorded. |
+| `DRY RUN IN 1 S` or `CAPTURE IN 1 S` | The buttons were recognised; the run starts a second after you let go. |
+| A small square blinking at the top right | Counting (dry run) or recording (capture). Nothing else is drawn meanwhile. |
+| `SAVED`, the file's name (a capture: its records, or `BUFFER FILLED`) | The file was written. |
+| `NOT SAVED`, then a reason | `NO PHOBOS FOLDER`, `CANNOT MAKE PHOBOS/PROF`, `NO FREE FILE NUMBER`, `CANNOT CREATE THE FILE`, `WRITE FAILED`, or `NOT ENOUGH MEMORY` (then `SEE <ID>-<n>.TXT`, which says how much memory there was). |
+
+`notices = off` in `prof.txt` turns them all off.
 
 ### Captures (when the dry run's report has been looked at)
 
 1. Copy `prof-capture.txt` over `PHOBOS/prof.txt` (keep the name `prof.txt`).
-2. For each scene below, get to it, wait about five seconds for it to settle, then hold L + R + SELECT for a second
-   and let go. The capture starts a second later and runs 10 seconds; keep doing what the scene says during it. When
-   it ends, the memory stick light flashes while the file is written (a few seconds): wait for that before the next
-   capture.
+2. For each scene below, get to it, wait about five seconds for it to settle, then hold L + R + SELECT until the box
+   says `CAPTURE IN 1 S`, and let go. The capture starts a second later and runs 10 seconds (the square blinks at
+   the top right); keep doing what the scene says during it. When it ends, the memory stick light flashes while the
+   file is written, then the box says `SAVED` and the file's name: wait for that before the next capture.
 3. Each capture is `PHOBOS/PROF/<ID>-<n>.bin`, numbered from 1 per game. If a capture couldn't run (not enough
    memory, say), a `.txt` with that number says why instead.
 4. For Activision Hits Remixed's copyright screen, which comes as the game boots, copy `prof-boot.txt` over
@@ -96,13 +128,15 @@ If no file appears, check that `PHOBOS/prof.txt` is on the stick and the line in
 
 ### Copying the files back
 
-Connect the PSP to the computer by USB (USB connection in the XMB's settings) and copy the `PHOBOS/PROF` folder.
-Delete its files from the stick afterwards if you like (the plugin only adds new numbers, it never overwrites).
+Connect the PSP to the computer by USB (USB connection in the XMB's settings) and copy the `PHOBOS/PROF` folder and
+`PHOBOS/trace.txt`. Delete them from the stick afterwards if you like (the plugin only adds new numbers and new trace
+lines, it never overwrites).
 
 ### Switching it off
 
 - For good: change `on` to `off` at the end of the six lines in `PLUGINS.TXT` (or delete them). ARK's plugin
   manager (in the XMB, or the recovery menu) can turn them off too. The `PHOBOS` folder can then be deleted.
+- Only the notices: `notices = off` in `prof.txt`.
 - For one game boot: hold START while the game starts (ARK's vanilla mode starts it without plugins, that once).
 - If a game won't start with the plugin on: hold START when starting it, as above; if the PSP itself won't start,
   hold R while switching it on (or while running ARK Loader, for a live install) to get ARK's recovery menu, and
@@ -142,10 +176,12 @@ NID 0x159AF5CC, the SHA-1 of its name, which is how ARK exports), through the pl
 (`plugin/systemctrl.S`), so the plugin doesn't link ARK's or PRO's GPL code. Everything else is found at run time
 through it: ARK's `sctrlHENPatchSyscall` (three NIDs tried), `sctrlKernelQuerySystemCall`, `sctrlGetInitPARAM`,
 `sctrlFlushCache`; the firmware's kernel memory functions (`SysMemForKernel`), its sub-interrupt monitor
-(`InterruptManagerForKernel`), the controller, the clocks and the vblank count. A function that isn't found leaves
-that one feature off, and the dry run's report names it; the plugin still loads. The statically linked firmware
-functions (threads, files, interrupts) come from pspsdk's `libpspkernel`, with NIDs that uOFW's 6.60 export lists
-and pspsdk's own 6.60 libraries agree on.
+(`InterruptManagerForKernel`), the controller, the clocks, the vblank count and the frame buffer. A lookup's answer is
+taken only if it's plausibly a function: firmware functions live in kernel memory, from 0x88000000, while 0 and a PSP
+error code (0x8002xxxx) don't, so a lookup that fails either way leaves its feature off instead of being called. A
+function that isn't taken leaves that one feature off, and `trace.txt` and the dry run's report name it; the plugin
+still loads. The statically linked firmware functions (threads, files, interrupts) come from pspsdk's
+`libpspkernel`, with NIDs that uOFW's 6.60 export lists and pspsdk's own 6.60 libraries agree on.
 
 ### The hooks
 
@@ -191,6 +227,9 @@ What a hook costs, by instruction count (the dry run measures it on the PSP itse
   the capture starts `delay` seconds (default 1) after the buttons are let go, so the press isn't in it.
 - `start = N` in `prof.txt` also starts one N seconds after the plugin started (the game's boot), once per boot; it's
   skipped if another capture was running then.
+- The memory stick's `PHOBOS` folder is looked for at the start and again before every run, every file and every
+  write of the trace (a stick not ready at the game's boot is found later); `prof.txt` is read the first time the
+  folder is there.
 - A capture's events go to a buffer in kernel memory (partition 1), taken when the capture starts and given back
   after its file is written: as much as `buffer` KB (default 2048), leaving `keep` KB (default 512) of the
   partition's largest free block for the game and the firmware. If that leaves under 64 KB, there's no capture, and a
@@ -207,8 +246,37 @@ What a hook costs, by instruction count (the dry run measures it on the PSP itse
 - Dry mode (`mode = dry`, the default) counts calls instead of recording them, for the same window, and writes a
   report: each hook's state and count, the records a second a capture would need, the hooks' cost measured on the
   PSP (half a millisecond with interrupts off, after the window), the memory partitions' sizes and free space at the
-  game's start and after the window, the clocks, the model, the firmware and ARK versions, and which firmware
-  functions were found.
+  game's start and after the window, the clocks, the model, the firmware and ARK versions, which firmware
+  functions were found, and when the first flip came through the `sceDisplaySetFrameBuf` hook.
+
+### On-screen notices
+
+The notices (`plugin/notice.c`) are a few lines in a black box at the screen's top left (yellow first line, white
+after), drawn into the frame buffer the game hands `sceDisplaySetFrameBuf`, once the firmware has accepted it and
+after the call's record is closed, in the game's pixel format (5650, 5551, 4444 or 8888), through the uncached
+address so the display sees the writes at once. The font is the plugin's own: 5x7 glyphs drawn twice their size. A
+notice's time starts when it's first drawn, so one set before the game's first picture is still seen. Nothing is drawn
+unless the buffer is plausible: 64 to 1024 pixels wide, a known format, aligned, with all of the screen's 272 rows
+inside VRAM or inside the user RAM every model has.
+
+- While a capture or a dry run counts, only an 8x8 square blinks at the top right: 64 pixel writes a flip, under
+  about 6 microseconds at 222 MHz (0.04% of a frame), after the flip's timestamp, so no recorded time includes them.
+  The countdown is cleared as the window starts.
+- The box itself (some 300x50 pixels) costs perhaps half a millisecond to a millisecond a flip, for the few seconds it
+  shows, never during a window.
+- If the hook sees no flips for 200 ms (it isn't in place, or the game doesn't flip), the control thread draws the
+  text into the buffer `sceDisplayGetFrameBuf` reports instead, every 10 ms while there's text to show: it flickers,
+  but it shows. It never draws during a window.
+
+### The trace
+
+`plugin/trace.c` keeps a line per step, each starting with the seconds since the module started: the module's start;
+each firmware function found (with its address), refused (with what the lookup gave) or not found; each hook
+(found, patched, its syscall number); the monitor; the control thread made; the device found or not; the settings;
+the disc ID; the first flip through the hook; each trigger; each file written or not and why. The lines are kept in
+memory (6 KB) and appended to `PHOBOS/trace.txt`, never truncated, by the control thread at the writing priority:
+when the control thread starts, 6 seconds after the start, and after every run, never while a capture or a dry run's
+window is on. Lines from before the `PHOBOS` folder is found wait until it is.
 
 ### Settings (`PHOBOS/prof.txt`)
 
@@ -224,6 +292,7 @@ What a hook costs, by instruction count (the dry run measures it on the PSP itse
 | `buffer` | 2048 | KB of kernel memory at most (64-16384) |
 | `keep` | 512 | KB left free beside it (0-8192) |
 | `partition` | 1 | the memory partition (1-12); leave it at 1 unless the dry run's report suggests otherwise |
+| `notices` | `on` | `on` or `off`: the on-screen notices |
 
 ## The capture file
 
@@ -298,23 +367,31 @@ code uses no `$gp` (`psp-objdump -d phobosprof.elf | grep -w gp` finds nothing: 
 the firmware's `$gp`), and the imports are only `SystemCtrlForKernel` (one), `IoFileMgrForKernel`,
 `InterruptManagerForKernel` and `ThreadManForKernel`.
 
-`make hosttest` (in `plugin/`) builds the plugin's C (`main.c`, `hooks.c`, `text.c`) for the Mac with the firmware
-faked (`hosttest.c`), the memory stick and the disc being folders in a temporary one, and plays a scripted game
-whenever the control thread sleeps: lists built while the GE runs them, syncs during which the FINISH interrupt
-arrives, a SIGNAL, flips, vblank waits during which the vblank interrupt arrives, across the 32-bit timer's wrap. It
-checks the module's start and the hooks it installs, the settings file's parsing, that idle hooks record nothing, every
-record of a capture, that a thread asleep in a wait when its capture ends writes nothing, that a full buffer drops and
-counts, the dry run's report line by line, the capture file `main.c` writes, the note when memory is short, the disc
-ID from `PARAM.SFO` when ARK can't give it, and all along that no file is touched while a capture or a dry run's
-window is on, that files are written only at the writing priority, and that nothing is written outside
-`ms0:/PHOBOS/`. The decoder's tests then read the capture back.
+`make hosttest` (in `plugin/`) builds the plugin's C (`main.c`, `notice.c`, `trace.c`, `hooks.c`, `text.c`) for the
+Mac with the firmware faked (`hosttest.c`), the memory stick and the disc being folders in a temporary one, VRAM and a
+stretch of user RAM being arrays, and plays a scripted game whenever the control thread sleeps: lists built while the
+GE runs them, syncs during which the FINISH interrupt arrives, a SIGNAL, flips, vblank waits during which the vblank
+interrupt arrives, across the 32-bit timer's wrap. It checks the module's start, the functions it takes and one it
+refuses (a lookup giving an error code), the hooks it installs; that idle hooks record nothing; every record of a
+capture; that a thread asleep in a wait when its capture ends writes nothing; that a full buffer drops and counts; the
+notices, drawn in each pixel format with the exact colors, never into an unsafe buffer (none, outside VRAM and user
+RAM, running past VRAM's end, an unknown format or width, misaligned), timed from their first drawing, the 64-pixel
+marker alone during a window, drawn through `sceDisplayGetFrameBuf` when the hook sees no flips, and not at all when
+off; the `PHOBOS` folder turning up after the start (the start notice says so; the next run finds it, reads the
+settings and writes the trace kept since the module's start); the settings file's parsing; the dry run's report line
+by line; the capture file `main.c` writes; the note and notice when memory is short; the disc ID from `PARAM.SFO` when
+ARK can't give it; every expected line of `trace.txt`, in order; and all along that no file is touched while a
+capture or a dry run's window is on, that files are written only at the writing priority and never truncated, and
+that nothing is written outside `ms0:/PHOBOS/`. The decoder's tests then read the capture back.
 
 ## Files
 
 | File | What it is |
 |---|---|
-| `plugin/main.c` | The module's start, the settings, the control thread (trigger, capture, dry run) and the files. |
+| `plugin/main.c` | The module's start, the settings, the control thread (trigger, capture, dry run, notices) and the files. |
 | `plugin/hooks.c` | The hooks, the sub-interrupt monitor, the record buffer and the cost measure. |
+| `plugin/notice.c` | The on-screen notices: the font, the frame buffer's formats and checks. |
+| `plugin/trace.c` | The trace, kept in memory and appended to `PHOBOS/trace.txt`. |
 | `plugin/plugin.h` | What those share: the firmware's and ARK's functions found at run time, with their NIDs. |
 | `plugin/profile.h` | The capture file's layout. |
 | `plugin/text.c` | A small formatter, and the memory functions the compiler may call (no kernel libc is linked). |
@@ -327,8 +404,10 @@ window is on, that files are written only at the writing priority, and that noth
 
 ## What's been checked, and what hasn't
 
-The plugin can't run in Phobos (there's no custom firmware there), so its first run is the owner's dry run. On the
-Mac: it builds as a kernel PRX (attribute 0x1001, ELF type 0xFFA0, module info in a kernel segment) with exactly the
+The plugin can't run in Phobos (there's no custom firmware there), so it's checked on the owner's PSP. Version 0.1.0's
+first dry run there (Chains of Olympus, ARK 4.20.69, a PSP-2000/3000) wrote nothing and showed nothing, which can't
+tell "not loaded" (most likely: his copy's ID wasn't on its line) from "loaded but stopped"; 0.2.0's notices and
+trace tell them apart. On the Mac: it builds as a kernel PRX (attribute 0x1001, ELF type 0xFFA0, module info in a kernel segment) with exactly the
 imports above; every static NID is confirmed by two sources (uOFW's 6.60 export lists or pspsdk's 6.60 libraries,
 and pspsdk's stub libraries; ARK's by its name's SHA-1 and pspsdk's `libpspsystemctrl_kernel`); the hooks' idle path
 was read in the disassembly; GCC checks every report line's format against its arguments; the plugin's C runs on

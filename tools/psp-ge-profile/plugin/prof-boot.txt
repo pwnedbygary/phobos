@@ -14,3 +14,6 @@ delay = 1
 
 buffer = 2048
 keep = 512
+
+# On-screen notices: on or off.
+notices = on

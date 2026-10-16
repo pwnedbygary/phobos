@@ -1,14 +1,21 @@
-//psp-ge-profile's plugin on the Mac: main.c, hooks.c and text.c with the firmware faked here, the memory stick and
-//the disc being folders in a temporary one. A scripted game (lists queued, stall updates, syncs during which the
-//GE's FINISH interrupt arrives, a SIGNAL, flips, vblank waits during which the vblank interrupt arrives) plays
-//whenever the plugin's control thread sleeps. Checked: the module's start and the hooks it installs, the settings
-//file, idle hooks recording nothing, the dry run (its counts and its report), a capture (every record, and the file,
-//which the decoder's tests read back), a call asleep when its capture ends writing nothing, a full buffer, too little
-//memory, the disc ID from PARAM.SFO when ARK can't give it, the formatter; and, all along, that no file is touched
-//while the monitor is on (a capture or a dry run's window), that files are written only at the writing priority,
-//and that nothing is written outside ms0:/PHOBOS. `make hosttest` in this folder builds and runs it.
+//psp-ge-profile's plugin on the Mac: main.c, notice.c, trace.c, hooks.c and text.c with the firmware faked here, the
+//memory stick and the disc being folders in a temporary one, VRAM and a stretch of user RAM being arrays. A scripted
+//game (lists queued, stall updates, syncs during which the GE's FINISH interrupt arrives, a SIGNAL, flips, vblank
+//waits during which the vblank interrupt arrives) plays whenever the plugin's control thread sleeps.
+//
+//Checked: the module's start, the functions it takes and the one it refuses (a lookup giving an error code), the
+//hooks it installs; idle hooks recording nothing; every record of a capture; a call asleep when its capture ends
+//writing nothing; a full buffer; the notices, drawn in each pixel format, never where it isn't safe, timed from
+//their first drawing, the marker alone during a window, drawn the other way when the hook sees no flips, and not at
+//all when off; the PHOBOS folder turning up after the start (the device looked for again, the settings read then);
+//the dry run's report; a capture's file, which the decoder's tests read back; too little memory; the disc ID from
+//PARAM.SFO when ARK can't give it; the trace's lines; the formatter; and, all along, that no file is touched while a
+//capture or a dry run's window is on, that files are written only at the writing priority, and that nothing is
+//written outside ms0:/PHOBOS. `make hosttest` in this folder builds and runs it.
 
 #include "main.c"
+#include "notice.c"
+#include "trace.c"
 #include <assert.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -55,7 +62,7 @@ int sceKernelReferThreadStatus(SceUID thread, SceKernelThreadInfo* info) {
 
 //The memory stick and the disc: "ms0:/X" is <root>/ms0/X.
 static char root[256];
-static char written[32][96];
+static char written[40][96];
 static int writtenCount;
 static MonitorFunction monitorBefore, monitorAfter;
 
@@ -67,7 +74,7 @@ static void hostPath(char* out, const char* path) {
 
 static void noteWrite(const char* path) {
   assert(!monitorBefore);  //never while a capture or a dry run's window is on
-  assert(writtenCount < 32);
+  assert(writtenCount < 40);
   snprintf(written[writtenCount++], sizeof(written[0]), "%s", path);
 }
 
@@ -88,9 +95,11 @@ SceUID sceIoOpen(const char* file, int flags, SceMode mode) {
   if(flags & PSP_O_CREAT) host |= O_CREAT;
   if(flags & PSP_O_TRUNC) host |= O_TRUNC;
   if(flags & PSP_O_EXCL) host |= O_EXCL;
+  if(flags & PSP_O_APPEND) host |= O_APPEND;
   if(flags & PSP_O_WRONLY) {
     noteWrite(file);
     assert(currentPriority == WritingPriority);
+    assert(!(flags & PSP_O_TRUNC));
   }
   int fd = open(path, host, mode);
   return fd >= 0 ? fd : -1;
@@ -129,10 +138,24 @@ static int readFile(const char* psp, char* data, size_t size) {
   return length;
 }
 
+//VRAM and a stretch of user RAM; the plugin may draw only there.
+static u8 vram[2 << 20], ram[1 << 20];
+volatile u8* hostFrameBuffer(u32 physical) {
+  if(physical >= 0x04000000 && physical < 0x04200000) return vram + (physical - 0x04000000);
+  if(physical >= 0x08800000 && physical < 0x08900000) return ram + (physical - 0x08800000);
+  fprintf(stderr, "hosttest: a frame buffer outside the fakes, 0x%08X\n", physical);
+  exit(1);
+}
+
+//The fakes live wherever the Mac puts them; 0 and a PSP error code are still refused.
+int hostPlausible(Address address) {
+  return address && !(address & 3) && (address >> 16) != 0x8002;
+}
+
 //The firmware's other functions.
 static u32 fakeVcount = 1000, fakeMaxFree = 1536 * 1024, nextId = 0x08A00000, lastList;
-static int geQueued, geStalled, initParamWorks = 1, flushes, stopInsideWait, blocks;
-static u32 insideCount, insideDropped;
+static int geQueued, geStalled, initParamWorks = 1, flushes, stopInsideWait, blocks, frameBufFormat = 3;
+static u32 insideCount, insideDropped, frameBufTop = 0x04088000;
 static void* blockMemory;
 volatile u32 fakeGeNextCommand;
 
@@ -181,6 +204,14 @@ static int setFrameBuf(void* top, int width, int format, int sync) {
   return 0;
 }
 
+static int getFrameBuf(void** top, int* width, int* format, int sync) {
+  assert(sync == 1);
+  *top = (void*)(uintptr_t)frameBufTop;
+  *width = 512;
+  *format = frameBufFormat;
+  return 0;
+}
+
 //Sleeps until the next vblank, the vblank interrupt arriving meanwhile; the capture can be ended from inside, as the
 //control thread would while the game sleeps here.
 static int waitVblankStart(void) {
@@ -226,7 +257,6 @@ static int getInitParam(const char* name, u16* type, u32* length, void* buffer) 
   *length = strlen(value) + 1;
   return 0;
 }
-static int msIsEf(void) { return 0; }
 static int henVersion(void) { return 0x1004; }
 static int henMinorVersion(void) { return 0x3; }
 static SceUID allocPartitionMemory(SceUID partition, const char* name, int type, SceSize size, void* address) {
@@ -256,7 +286,8 @@ static int busClock(void) { return 111; }
 static u32 getVcount(void) { return fakeVcount; }
 static int unusedFakes[32];
 
-//ARK's lookup: each function by its NID (none collide), and the module and library asked for checked.
+//ARK's lookup: each function by its NID (none collide), the module and library asked for checked. sctrlKernelMsIsEf
+//gives an error code instead, which must be refused.
 Address sctrlHENFindFunction(const char* module, const char* library, u32 nid) {
   if(!strcmp(library, ArkLibrary)) assert(!strcmp(module, ArkModule));
   if(!strcmp(library, "sceGe_user")) assert(!strcmp(module, "sceGE_Manager"));
@@ -265,7 +296,7 @@ Address sctrlHENFindFunction(const char* module, const char* library, u32 nid) {
   case NidPatchSyscall: return (Address)patchSyscall;
   case NidQuerySystemCall: return (Address)querySystemCall;
   case NidGetInitParam: return (Address)getInitParam;
-  case NidMsIsEf: return (Address)msIsEf;
+  case NidMsIsEf: return 0x8002013A;
   case NidFlushCache: return (Address)flushCache;
   case NidHenVersion: return (Address)henVersion;
   case NidHenMinorVersion: return (Address)henMinorVersion;
@@ -284,6 +315,7 @@ Address sctrlHENFindFunction(const char* module, const char* library, u32 nid) {
   case NidCpuClockInt: return (Address)cpuClock;
   case NidBusClockInt: return (Address)busClock;
   case NidDisplayGetVcount: return (Address)getVcount;
+  case NidDisplayGetFrameBuf: return (Address)getFrameBuf;
   case 0xAB49E76A: return (Address)geEnQueue;
   case 0xE0D68148: return (Address)geUpdateStall;
   case 0xB287BD61: return (Address)geDrawSync;
@@ -301,7 +333,7 @@ typedef int (*FrameBufFunction)(void*, int, int, int);
 typedef int (*WaitFunction)(void);
 
 //A frame: a list built while the GE runs it (three stall updates, the GE stalled at the first and third), a SIGNAL
-//from it, a sync during which it finishes, a flip, the wait for the next vblank. Ten records.
+//from it, a sync during which it finishes, a flip (format 3, 512 wide), the wait for the next vblank. Ten records.
 static int frames;
 static void frame(void) {
   u32 list = List + (frames & 1) * 0x10000;
@@ -434,6 +466,106 @@ static void testRecords(void) {
   assert(!monitorBefore && interruptDepth == 0 && !interruptsOff);
 }
 
+static u32 pixelAt(u32 top, int width, int format, int x, int y) {
+  volatile u8* p = hostFrameBuffer((top & 0x1FFFFFFF) + (u32)(y * width + x) * (format == 3 ? 4 : 2));
+  return format == 3 ? *(volatile u32*)p : *(volatile u16*)p;
+}
+
+static int vramUntouched(void) {
+  for(size_t n = 0; n < sizeof(vram); n++) if(vram[n] != 0xAA) return 0;
+  return 1;
+}
+
+static void testNotices(void) {
+  //each format: the box, a glyph of each line in its color, and nothing past the box
+  static const u32 black[4] = {0x0000, 0x8000, 0xF000, 0xFF000000};
+  static const u32 yellow[4] = {0x07FF, 0x83FF, 0xF0FF, 0xFF00FFFF};
+  static const u32 white[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFFFFFF};
+  for(int format = 0; format < 4; format++) {
+    u32 sentinel = format == 3 ? 0xAAAAAAAA : 0xAAAA;
+    memset(vram, 0xAA, sizeof(vram));
+    noticeShow("PHOBOS PROFILER ON", "UCUS98653 DRY RUN", "", 3000);
+    noticeDraw((void*)(uintptr_t)0x44000000, 512, format);  //the uncached alias names the same buffer
+    assert(pixelAt(0x04000000, 512, format, 8, 8) == black[format]);
+    assert(pixelAt(0x04000000, 512, format, 14, 14) == yellow[format]);   //P's top left
+    assert(pixelAt(0x04000000, 512, format, 15, 15) == yellow[format]);   //twice the glyph's size
+    assert(pixelAt(0x04000000, 512, format, 14, 32) == white[format]);    //U's top left, on the second line
+    assert(pixelAt(0x04000000, 512, format, 233, 51) == black[format]);   //the box's far corner
+    assert(pixelAt(0x04000000, 512, format, 234, 8) == sentinel && pixelAt(0x04000000, 512, format, 8, 52) == sentinel);
+    assert(pixelAt(0x04000000, 512, format, 300, 200) == sentinel);
+  }
+
+  //never where it isn't safe: no buffer, outside VRAM and user RAM, running past VRAM's end, an unknown format or
+  //width, a misaligned address
+  memset(vram, 0xAA, sizeof(vram));
+  noticeShow("UNSAFE", "", "", 3000);
+  u32 unsafe[] = {0, 0x00010000, 0x041F0000, 0x08000000, 0x0A000000, 0x88000000, 0x04000002};
+  for(size_t n = 0; n < sizeof(unsafe) / sizeof(unsafe[0]); n++) noticeDraw((void*)(uintptr_t)unsafe[n], 512, 3);
+  noticeDraw((void*)(uintptr_t)0x04000000, 512, 4);
+  noticeDraw((void*)(uintptr_t)0x04000000, 32, 3);
+  noticeDraw((void*)(uintptr_t)0x04000000, 2048, 3);
+  assert(vramUntouched());
+
+  //user RAM is drawn into too
+  memset(ram, 0xAA, sizeof(ram));
+  noticeDraw((void*)(uintptr_t)0x08800000, 512, 1);
+  assert(pixelAt(0x08800000, 512, 1, 8, 8) == 0x8000);
+
+  //the marker alone: an 8x8 square at the top right, nothing else
+  memset(vram, 0xAA, sizeof(vram));
+  noticeClear();
+  noticeMarker(1);
+  noticeDraw((void*)(uintptr_t)0x04000000, 512, 3);
+  int changed = 0;
+  for(int y = 0; y < 272; y++) {
+    for(int x = 0; x < 512; x++) {
+      if(pixelAt(0x04000000, 512, 3, x, y) == 0xAAAAAAAA) continue;
+      changed++;
+      assert(x >= 464 && x < 472 && y >= 8 && y < 16);
+    }
+  }
+  assert(changed == 64);
+  noticeMarker(0);
+
+  //a notice's time starts at its first drawing
+  noticeShow("TIMED", "", "", 1000);
+  fakeNow += 5000000;
+  memset(vram, 0xAA, sizeof(vram));
+  noticeDraw((void*)(uintptr_t)0x04000000, 512, 3);
+  assert(!vramUntouched());
+  fakeNow += 900000;
+  memset(vram, 0xAA, sizeof(vram));
+  noticeDraw((void*)(uintptr_t)0x04000000, 512, 3);
+  assert(!vramUntouched());
+  fakeNow += 200000;
+  memset(vram, 0xAA, sizeof(vram));
+  noticeDraw((void*)(uintptr_t)0x04000000, 512, 3);
+  assert(vramUntouched());
+
+  //no flip through the hook for a while: the control thread draws through sceDisplayGetFrameBuf; a hooked flip ends it
+  noticeShow("FALLBACK", "", "", 3000);
+  fakeNow += 1000000;
+  assert(noticeWantsFallback());
+  frameBufFormat = 0;
+  memset(vram, 0xAA, sizeof(vram));
+  noticeFallback();
+  assert(pixelAt(frameBufTop, 512, 0, 8, 8) == 0x0000 && pixelAt(0x04000000, 512, 0, 8, 8) == 0xAAAA);
+  noticeDraw((void*)(uintptr_t)0x04000000, 512, 3);
+  assert(!noticeWantsFallback());
+  frameBufFormat = 3;
+
+  //off: nothing at all
+  noticeEnable(0);
+  noticeShow("OFF", "", "", 3000);
+  noticeMarker(1);
+  memset(vram, 0xAA, sizeof(vram));
+  noticeDraw((void*)(uintptr_t)0x04000000, 512, 3);
+  assert(vramUntouched() && !noticeWantsFallback());
+  noticeMarker(0);
+  noticeClear();
+  noticeEnable(1);
+}
+
 int main(int argc, char** argv) {
   const char* out = argc > 1 ? argv[1] : "hosttest.bin";
   testText();
@@ -442,48 +574,53 @@ int main(int argc, char** argv) {
   char path[512];
   hostPath(path, "ms0:/");
   mkdir(path, 0777);
-  hostPath(path, "ms0:/PHOBOS");
-  mkdir(path, 0777);
   hostPath(path, "disc0:/");
   mkdir(path, 0777);
   hostPath(path, "disc0:/PSP_GAME");
   mkdir(path, 0777);
-  const char settingsText[] =
-    "# a comment\r\n  mode = dry   # trailing\r\nbuttons = L+R+START\nbuttons = L+BOGUS\ndelay=2\nstart = off\n"
-    "length = 3\nbuffer = 512\nkeep = 256\nunknown = 5\n= 7\nlength\n";
-  writeFile("ms0:/PHOBOS/prof.txt", settingsText, sizeof(settingsText) - 1);
 
-  //the module's start: the functions found, the hooks in, the control thread made
+  //the module's start: the functions found (and the error code refused), the hooks in, the control thread made
   assert(module_start(0, 0) == 0);
   assert(threadCreated && currentPriority == WaitingPriority && flushes == 1);
+  assert(!firmware.msIsEf && firmware.patchSyscall && firmware.displayGetFrameBuf);
   assert(hookStatus[KindGeEnQueue].installed && hookStatus[KindGeEnQueue].syscall >= 0x2000);
   assert(hookStatus[KindWaitVblankStartMultiCB].installed && monitorAvailable);
   assert(hooksInstalledMask() >> 31 && (hooksInstalledMask() >> KindSetFrameBuf & 1));
 
   testRecords();
+  testNotices();
 
-  //the control thread's start, step by step (its loop waits for buttons for ever)
-  device = exists("ms0:/PHOBOS") ? "ms0:" : exists("ef0:/PHOBOS") ? "ef0:" : 0;
-  assert(device && !strcmp(device, "ms0:"));
-  readSettings();
-  assert(settings.read && settings.dry && settings.buttons == (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_START));
-  assert(settings.delay == 2 && settings.start == -1 && settings.length == 3 && settings.bufferKb == 512);
-  assert(settings.keepKb == 256 && settings.partition == 1);
-  readGameInfo();
-  assert(!strcmp(discId, "UCUS98653") && !strcmp(title, "God of War: Chains of Olympus"));
-  snapshotMemory(memoryAtStart);
-  assert(memoryAtStart[1].valid && memoryAtStart[2].valid && !memoryAtStart[3].valid);
+  //the control thread's start with no PHOBOS folder yet: defaults, the start notice says so, nothing written
+  controlStart();
+  assert(!device && !settings.read && settings.dry && settings.notices);
+  assert(!strcmp(text[shown][0], "PHOBOS PROFILER ON") && !strcmp(text[shown][1], "UCUS98653 DRY RUN"));
+  assert(!strcmp(text[shown][2], "NO PHOBOS FOLDER YET"));
+  assert(writtenCount == 0 && used > 0);
+  memset(vram, 0xAA, sizeof(vram));
+  frame();  //the game's next flip shows it
+  assert(pixelAt(0x04000000 + ((frames - 1) & 1) * 0x88000, 512, 3, 8, 8) == 0xFF000000);
 
-  //a dry run, the game playing through its window
+  //the folder turns up: the next run finds it, reads the settings, and writes the trace kept since the start
+  hostPath(path, "ms0:/PHOBOS");
+  mkdir(path, 0777);
+  const char settingsText[] =
+    "# a comment\r\n  mode = dry   # trailing\r\nbuttons = L+R+START\nbuttons = L+BOGUS\ndelay=2\nstart = off\n"
+    "length = 3\nbuffer = 512\nkeep = 256\nnotices = on\nunknown = 5\n= 7\nlength\n";
+  writeFile("ms0:/PHOBOS/prof.txt", settingsText, sizeof(settingsText) - 1);
   gamePlaying = 1;
-  dryRun(1);
-  assert(currentPriority == WaitingPriority && !monitorBefore);
+  trigger(1);
+  assert(device && !strcmp(device, "ms0:") && settings.read);
+  assert(settings.buttons == (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_START) && settings.delay == 2);
+  assert(settings.start == -1 && settings.length == 3 && settings.bufferKb == 512 && settings.keepKb == 256);
+  assert(currentPriority == WaitingPriority && !monitorBefore && !markerOn);
+  assert(!strcmp(text[shown][0], "SAVED") && !strcmp(text[shown][1], "UCUS98653-1.txt"));
   char report[8192];
   assert(readFile("ms0:/PHOBOS/PROF/UCUS98653-1.txt", report, sizeof(report)) > 0);
   assert(strstr(report, "dry run") && strstr(report, "game: UCUS98653  God of War: Chains of Olympus"));
   assert(strstr(report, "PSP-3000") && strstr(report, "firmware 0x06060110") && strstr(report, "ARK 0x1004.3"));
   assert(strstr(report, "mode dry, buttons L+R+START, delay 2 s, start off, length 3 s, buffer 512 KB, keep 256 KB"));
-  assert(strstr(report, "window: 3.0 s"));
+  assert(strstr(report, "partition 1, notices on") && strstr(report, "window: 3.0 s"));
+  assert(strstr(report, "first flip through the sceDisplaySetFrameBuf hook"));
   char line[96];
   snprintf(line, sizeof(line), "%-34s %-24s", "sceGeListEnQueue", "in place, syscall 0x2000");
   assert(strstr(report, line));
@@ -494,11 +631,16 @@ int main(int argc, char** argv) {
   int enqueues = 0;
   sscanf(strstr(report, "sceGeListEnQueue "), "sceGeListEnQueue %*s %*s %*s %*s %d", &enqueues);
   assert(enqueues >= 170 && enqueues <= 182);  //3 s of frames
+  memset(vram, 0xAA, sizeof(vram));
+  frame();
+  assert(pixelAt(0x04000000 + ((frames - 1) & 1) * 0x88000, 512, 3, 8, 8) == 0xFF000000);  //SAVED shows
 
-  //a capture, written for the decoder's tests to read back
+  //a capture started by the buttons: the countdown, the marker during it, the file (read back by the decoder's tests)
   settings.dry = 0;
-  capture(0);
-  assert(blocks == 0 && currentPriority == WaitingPriority && !monitorBefore);
+  trigger(0);
+  assert(blocks == 0 && currentPriority == WaitingPriority && !monitorBefore && !markerOn);
+  assert(!strcmp(text[shown][0], "SAVED") && !strcmp(text[shown][1], "UCUS98653-2.bin"));
+  assert(!strncmp(text[shown][2], "17", 2) || !strncmp(text[shown][2], "18", 2));  //"1800 RECORDS" or so
   static char data[1 << 20];
   hostPath(path, "ms0:/PHOBOS/PROF/UCUS98653-2.bin");
   FILE* file = fopen(path, "rb");
@@ -507,6 +649,7 @@ int main(int argc, char** argv) {
   fclose(file);
   ProfileHeader* header = (ProfileHeader*)data;
   assert(!memcmp(header->magic, "PHGEPROF", 8) && header->format == ProfileFormat && header->captureNumber == 2);
+  assert(!strcmp(header->pluginVersion, ProfileVersion));
   assert(header->recordCount >= 1700 && header->recordCount <= 1820 && header->dropped == 0);
   assert(header->capacity == 512 * 1024 / ProfileRecordSize && header->bufferBytes == 512 * 1024);
   assert(header->endTime - header->startTime >= 3000000 && header->endTime - header->startTime < 3020000);
@@ -519,11 +662,13 @@ int main(int argc, char** argv) {
   fwrite(data, 1, size, file);
   fclose(file);
 
-  //too little memory: a note instead
+  //too little memory: a note, and a notice saying so
   fakeMaxFree = 300 * 1024;
   capture(0);
   assert(readFile("ms0:/PHOBOS/PROF/UCUS98653-3.txt", report, sizeof(report)) > 0);
   assert(strstr(report, "no capture: partition 1's largest free block is 300 KB; with keep = 256 KB"));
+  assert(!strcmp(text[shown][0], "NOT SAVED") && !strcmp(text[shown][1], "NOT ENOUGH MEMORY"));
+  assert(!strcmp(text[shown][2], "SEE UCUS98653-3.txt"));
   fakeMaxFree = 1536 * 1024;
 
   //ARK can't give the disc ID: the disc's PARAM.SFO does, once the capture is over
@@ -537,8 +682,31 @@ int main(int argc, char** argv) {
   hostPath(path, "ms0:/PHOBOS/PROF/ULES00364-1.bin");
   struct stat s;
   assert(stat(path, &s) == 0 && !strcmp(title, "Super Monkey Ball Adventure"));
+  flushTrace();
 
-  //only ever under ms0:/PHOBOS
+  //the trace: from the module's start (kept until the folder turned up) to the last file
+  static char trace[16384];
+  assert(readFile("ms0:/PHOBOS/trace.txt", trace, sizeof(trace)) > 0);
+  const char* expected[] = {
+    "---- Phobos GE profiler 0.2.0: module_start", "not found: sctrlHENFindFunctionOnSystem",
+    "found sctrlHENPatchSyscall at 0x", "refused sctrlKernelMsIsEf: the lookup gave 0x8002013A",
+    "found sceDisplayGetFrameBuf at 0x", "hook sceGeListEnQueue: found at 0x", "patched, syscall 0x2000",
+    "hook sceDisplaySetFrameBuf: found at 0x", "sub-interrupt monitor: available", "control thread made (0x00600000)",
+    "control thread running", "device: no PHOBOS folder on ms0: or ef0:", "settings: prof.txt not read yet",
+    "disc id UCUS98653, title \"God of War: Chains of Olympus\"", "device: ms0:", "settings read: mode dry",
+    "trigger (timed): dry run", "dry run: wrote UCUS98653-1.txt", "trigger (buttons): capture",
+    "capture: wrote UCUS98653-2.bin", "capture: no buffer: partition 1's largest free block is 300 KB",
+    "capture: not saved: NOT ENOUGH MEMORY", "capture: wrote ULES00364-1.bin",
+  };
+  const char* at = trace;
+  for(size_t n = 0; n < sizeof(expected) / sizeof(expected[0]); n++) {
+    const char* match = strstr(at, expected[n]);
+    if(!match) fprintf(stderr, "hosttest: trace.txt lacks, in order: %s\n", expected[n]);
+    assert(match);
+    at = match;
+  }
+
+  //only ever under ms0:/PHOBOS, and never truncating
   for(int n = 0; n < writtenCount; n++) assert(!strncmp(written[n], "ms0:/PHOBOS/", 12));
 
   printf("hosttest: all checks passed; a capture of %lu records written to %s (files in %s)\n",

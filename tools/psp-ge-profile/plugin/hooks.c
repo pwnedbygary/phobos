@@ -246,11 +246,13 @@ static int hookGeUnsetCallback(int id) {
   return result;
 }
 
+//The notices are drawn here, after the record is closed, into a frame buffer the firmware has accepted.
 static int hookDisplaySetFrameBuf(void* top, int width, int format, int sync) {
   Call call;
   begin(&call, KindSetFrameBuf, (u32)top, width, (format & 0xFF) | (sync & 0xFF) << 8);
   int result = displaySetFrameBuf(top, width, format, sync);
   end(&call, result);
+  if(result >= 0) noticeDraw(top, width, format);
   return result;
 }
 
@@ -418,9 +420,17 @@ void installHooks(void) {
     HookStatus* status = &hookStatus[hook->kind];
     status->name = hook->name;
     status->original = findFunction(hook->module, hook->library, hook->nid);
-    if(!status->original) continue;
+    if(!status->original) {
+      if(lastLookup) traceLine("hook %s: refused, the lookup gave 0x%08lX", hook->name, (unsigned long)lastLookup);
+      else traceLine("hook %s: not found", hook->name);
+      continue;
+    }
     *hook->original = status->original;
-    if(!firmware.patchSyscall) continue;
+    if(!firmware.patchSyscall) {
+      traceLine("hook %s: found at 0x%08lX, not patched (no sctrlHENPatchSyscall)", hook->name,
+                (unsigned long)(Address)status->original);
+      continue;
+    }
     firmware.patchSyscall(status->original, hook->hook);
     if(firmware.querySystemCall) {
       status->syscall = firmware.querySystemCall(hook->hook);
@@ -428,9 +438,15 @@ void installHooks(void) {
     } else {
       status->installed = 1;
     }
+    unsigned long address = (unsigned long)(Address)status->original;
+    if(!firmware.querySystemCall) traceLine("hook %s: found at 0x%08lX, patched (unconfirmed)", hook->name, address);
+    else if(status->installed) traceLine("hook %s: found at 0x%08lX, patched, syscall 0x%X", hook->name, address,
+                                         status->syscall);
+    else traceLine("hook %s: found at 0x%08lX, patch not confirmed (0x%08X)", hook->name, address, status->syscall);
   }
   if(firmware.flushCache) firmware.flushCache();
   monitorAvailable = firmware.registerSubIntrMonitor && firmware.releaseSubIntrMonitor;
+  traceLine("sub-interrupt monitor: %s", monitorAvailable ? "available" : "missing (no FINISH, SIGNAL or vblank records)");
   hookStatus[KindGeSignal].installed = monitorAvailable;
   hookStatus[KindGeFinish].installed = monitorAvailable;
   hookStatus[KindVblank].installed = monitorAvailable;
