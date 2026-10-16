@@ -45,16 +45,24 @@ auto GE::vertexFormat() const -> VertexFormat {
   return f;
 }
 
+//A float vertex number's bits as a float, a signaling not-a-number quieted (the fraction's top bit set) as the host's
+//float operations quiet one: the readers' multiplication by the number's unit, 1 for a float, quiets it only where
+//the compiler keeps it (GCC drops it where it sees the 1, its default -fno-signaling-nans allowing that; clang kept
+//it), so it's done here in whole numbers, which no optimizer may drop.
+static alwaysinline auto vertexFloat(u32 bits) -> float {
+  bits |= u32((bits << 1) > 0xff00'0000) << 22;  //(not a number: exponent all ones, fraction not 0; either sign)
+  float value;
+  std::memcpy(&value, &bits, sizeof(value));
+  return value;
+}
+
 //A number of format (8-bit, 16-bit or float) at address, as a float: signed or not as asked. read(size, address)
 //reads memory (readVertex() says how).
 template<typename Read>
 static auto readNumber(const Read& read, u32 address, u32 format, bool isSigned) -> float {
   if(format == 1) return isSigned ? float(s8(read(1, address))) : float(read(1, address));
   if(format == 2) return isSigned ? float(s16(read(2, address))) : float(read(2, address));
-  u32 bits = read(4, address);
-  float value;
-  std::memcpy(&value, &bits, sizeof(value));
-  return value;
+  return vertexFloat(read(4, address));
 }
 
 //A color in one of the vertex formats, as 8888 with red in the low byte. Narrow fields widen by repeating their top
@@ -161,7 +169,7 @@ template<typename Body> static alwaysinline auto byFormat(u32 format, bool isSig
   case 5: return body([](const u8* at) { return float(s8(at[0])); });
   case 2: return body([](const u8* at) { u16 value; std::memcpy(&value, at, 2); return float(value); });
   case 6: return body([](const u8* at) { u16 value; std::memcpy(&value, at, 2); return float(s16(value)); });
-  case 3: case 7: return body([](const u8* at) { float value; std::memcpy(&value, at, 4); return value; });
+  case 3: case 7: return body([](const u8* at) { u32 bits; std::memcpy(&bits, at, 4); return vertexFloat(bits); });
   }
 }
 
