@@ -166,6 +166,8 @@ struct VulkanBackend : GPU::Backend {
   std::string deviceName;
   VkPhysicalDeviceProperties chosen{};  //(the device's: a kept pipeline cache's owner, pipelineData())
   VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+  bool depthAlone = false;  //(a copy between images of their depth alone leaves their stencils: not a portability
+                            //implementation's, as MoltenVK's takes the stencil too)
   VkRenderPass renderPass = VK_NULL_HANDLE;
   VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
   VkDescriptorSetLayout frameLayout = VK_NULL_HANDLE;  //(set 1 of draws: a target's Target::frame)
@@ -1160,7 +1162,9 @@ struct VulkanBackend : GPU::Backend {
                                                       aligned(u64(c.width) * c.height);
       if(c.kind == GPU::Command::Kind::Present && !c.target) size = aligned(size) + u64(c.width) * c.height * 4;
       if(c.kind == GPU::Command::Kind::Move) size = aligned(size) + movedBytes(c);
-      if(c.kind == GPU::Command::Kind::Depth) size = aligned(size) + u64(c.width) * c.height * scale * scale * 4;
+      if(c.kind == GPU::Command::Kind::Depth && !depthAlone) {
+        size = aligned(size) + u64(c.width) * c.height * scale * scale * 4;
+      }
     }
     for(u32 id : uploading) {
       auto found = textureImages.find(id);
@@ -1421,8 +1425,9 @@ struct VulkanBackend : GPU::Backend {
         boundPipeline = VK_NULL_HANDLE, boundSet = VK_NULL_HANDLE, lastState = ~0u, transformsBound = false;
         continue;
       }
-      //(the depth alone, through the slot's staging buffer: the stencil is each frame buffer's own, and a copy between
-      //images of their depth alone takes the stencil too on MoltenVK)
+      //(the depth alone, the stencil being each frame buffer's own: from image to image where that leaves the stencil
+      //(depthAlone), else through the slot's staging buffer, as a copy between images of their depth alone takes the
+      //stencil too on MoltenVK)
       if(c.kind == GPU::Command::Kind::Depth) {
         auto from = targetImages.find(c.source);
         if(from == targetImages.end() || from == found) continue;
@@ -1430,7 +1435,7 @@ struct VulkanBackend : GPU::Backend {
           return lost = true, false;
         }
         u64 depths = aligned(at);
-        at = depths + u64(c.width) * c.height * scale * scale * 4;
+        if(!depthAlone) at = depths + u64(c.width) * c.height * scale * scale * 4;
         constexpr auto Source = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         constexpr auto Destination = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         //(the source's rectangle into the buffer and out into the target's; with runs, each of the target's from the
@@ -1454,6 +1459,20 @@ struct VulkanBackend : GPU::Backend {
                 scaled(from->second, run.sourceX, run.sourceY, run.width, run.height));
         }
         if(outs.empty()) continue;
+        if(depthAlone) {
+          std::vector<VkImageCopy> copies;
+          for(size_t n = 0; n < outs.size(); n++) {
+            copies.push_back({outs[n].imageSubresource, outs[n].imageOffset, ins[n].imageSubresource,
+                              ins[n].imageOffset, outs[n].imageExtent});
+          }
+          transition(commands, from->second.depth.image, DepthStencil, DepthLayout, Source);
+          transition(commands, t.depth.image, DepthStencil, DepthLayout, Destination);
+          vk.vkCmdCopyImage(commands, from->second.depth.image, Source, t.depth.image, Destination, copies.size(),
+                            copies.data());
+          transition(commands, from->second.depth.image, DepthStencil, Source, DepthLayout);
+          transition(commands, t.depth.image, DepthStencil, Destination, DepthLayout);
+          continue;
+        }
         transition(commands, from->second.depth.image, DepthStencil, DepthLayout, Source);
         vk.vkCmdCopyImageToBuffer(commands, from->second.depth.image, Source, slot.staging.buffer, outs.size(),
                                   outs.data());
@@ -2247,9 +2266,10 @@ struct VulkanBackend : GPU::Backend {
     extensions.resize(count);
     vk.vkEnumerateDeviceExtensionProperties(physical, nullptr, &count, extensions.data());
     std::vector<const char*> deviceExtensions;
+    depthAlone = true;
     for(auto& extension : extensions) {  //(a portability implementation's subset must be named when it has one)
       if(!std::strcmp(extension.extensionName, "VK_KHR_portability_subset")) {
-        deviceExtensions.push_back("VK_KHR_portability_subset");
+        deviceExtensions.push_back("VK_KHR_portability_subset"), depthAlone = false;
       }
       if(surfaces && !std::strcmp(extension.extensionName, "VK_KHR_swapchain")) {
         deviceExtensions.push_back("VK_KHR_swapchain"), canPresent = true;
