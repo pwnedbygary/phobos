@@ -2858,10 +2858,16 @@ static auto gpuDepthViewLoads() -> void {
 //GPU (taken across on the GPU), and each keeps its own stencil. The second frame buffer's sprite, behind what the
 //first drew, is drawn only where the first drew nothing; then the first's, behind what the second drew since,
 //likewise; then a 3D mesh into the second (in fast mode the GPU's transform), behind what the first drew since. At 1x
-//and 2x, in either mode.
+//and 2x, in either mode. Where the device's copy of the depth alone takes the stencil too (vulkan.cpp's probe:
+//Backend::depthAlone off, the depth through the staging buffer), that copy forced once more at 1x: the second frame
+//buffer's stencil is then the first's, as the probe found.
 static auto sharedDepth(GPU* gpu) -> void {
   auto f24 = [](float value) { return bitsOf(value) >> 8; };
-  for(u32 scale : {1u, 2u}) {
+  bool alone = gpu->backend->depthAlone;
+  for(u32 scale : {1u, 2u, 0u}) {
+    bool forced = scale == 0;
+    if(forced && alone) break;
+    if(forced) scale = 1, gpu->backend->depthAlone = true;
     gpu->resolution(scale);
     auto before = gpu->statistics;
     System software, hardware;
@@ -2908,6 +2914,13 @@ static auto sharedDepth(GPU* gpu) -> void {
       s->ge.vertexAddress = GPUVertices;
       s->ge.primitive(GE::Triangles, count);
       c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0;
+    }
+    if(forced) {
+      hardware.ge.settleAll();
+      CHECK(u32(hardware.memory.vram[0x1'0000 + (30 * 64 + 8) * 4 + 3]), 0xa5u);
+      gpu->backend->depthAlone = false;
+      hardware.ge.setRenderer(nullptr);
+      continue;
     }
     u32 bytes = apart(software, hardware);
     if(bytes) std::printf("  %s %ux: %u bytes apart\n", gpu->fast ? "fast" : "accurate", scale, bytes);

@@ -309,6 +309,10 @@ struct GPU : GE::Renderer {
     //depth is rasterized above the GE's then (draw.vert), and a 2D depth past 0-65535 is drawn, held there as the GE
     //holds it, not cut away
     bool depthClamp = false;
+    //Whether it takes another target's depth from image to image (Command::Depth: a copy of the depth alone), where
+    //the device's such copy leaves the stencil, each frame buffer's own (vulkan.cpp's depthAloneProbe()); else through
+    //the staging buffer
+    bool depthAlone = false;
     u64 texturesKept = 0;  //textures made from one let go of (makeTexture(): the tests')
     //Whether the last run put a picture on the window: a Present's swapchain image acquired and presented (not
     //where there's no window, or the acquiring timed out: the host shows the frame itself then)
