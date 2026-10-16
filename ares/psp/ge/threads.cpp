@@ -460,7 +460,7 @@ auto GE::undrawnPage(u32 address) -> bool {
 auto GE::drawnFirst(u32 address, u32 size) -> void {
   u32 first, last;
   if(!vramSpan(address, size, first, last)) return;
-  if(render) return drawer().drawnFirst(address, size);
+  if(render) return thread->controlRead(address, size, first, last);  //(threaded: the render GE's, thread.cpp)
   auto over = [&](const Batch& batch) {
     for(u32 page = first >> 12; page <= last >> 12; page++) {
       if(batch.pending[page]) return true;

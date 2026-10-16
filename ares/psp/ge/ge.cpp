@@ -17,6 +17,7 @@ namespace ares::PlayStationPortable {
 #include "transfer.cpp"
 #include "thread.cpp"
 #include "versions.cpp"
+#include "model.cpp"
 
 //The GE watches the pages of the textures it keeps decoded (texture.cpp), and a hardware renderer those of its frame
 //buffers (ge.hpp's Renderer), and hears of their changes here.
@@ -40,7 +41,10 @@ GE::GE(Memory& memory) : memory(memory) {
 //drew put back in memory's VRAM), and the new one told that its copies of VRAM, if it has any, aren't this
 //machine's.
 auto GE::setRenderer(Renderer* next) -> void {
-  if(render) return drawer().setRenderer(next);  //(threaded: the render GE draws, thread.cpp)
+  if(render) {  //(threaded: the render GE draws, thread.cpp; the model takes its renderer as it is now)
+    drawer().setRenderer(next);
+    return thread->rendererChanged();
+  }
   settleAll();
   renderer = next;
   if(renderer) renderer->forget(*this);

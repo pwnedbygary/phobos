@@ -571,6 +571,7 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     if(!look.texture.decoded && !look.deferRows) look.texture.bytes = direct(look.texture);
   }
   if(hardware && !renderer->begin(*this, look, format.through, region, vertices, t)) {
+    if(renderer->ready()) renderer->refusedForRoom() ? roomRefusals++ : refusals++;
     renderer->finish(*this);
     hardware = false, refused = true;
     if(textured) {

@@ -3149,6 +3149,61 @@ static auto geThreadSame() -> void {
   CHECK(plain.memory.read(4, Copied + (6 * 64 + 6) * 4), plain.memory.read(4, VRAM + (10 * 64 + 10) * 4));
 }
 
+//The value rule (ge/model.hpp), with the GE on its thread: held back before it takes anything of a list that draws a
+//sprite, the CPU's load of a word of VRAM no PRIM handed over reaches is read from memory at once, the thread still
+//held, and a load of a word the sprite may draw waits for the thread to draw it (once, counted), reading what a machine
+//without the thread reads there.
+static auto geThreadReads() -> void {
+  auto build = [](Memory& memory) {
+    ListWriter list{memory, ListA};
+    list.put(GE::FrameBufferPointer, 0);
+    list.put(GE::FrameBufferWidth, 64);
+    list.put(GE::FrameBufferPixelFormat, 3);
+    list.put(GE::Scissor1, 0);
+    list.put(GE::Scissor2, 47 << 10 | 63);
+    list.put(GE::Region2, 1023 << 10 | 1023);
+    list.put(GE::VertexType, 0x80'019f);  //(through: u, v, 8888 color, x, y, z, all floats but the color)
+    list.to(GE::VertexAddress, Vertices);
+    list.put(GE::Primitive, GE::Sprites << 16 | 2);
+    list.put(GE::Finish);
+    list.put(GE::End);
+    auto vertex = [&](u32 at, u32 color, float x, float y) {
+      for(float value : {0.0f, 0.0f}) { u32 word; std::memcpy(&word, &value, 4); memory.write(4, at, word); at += 4; }
+      memory.write(4, at, color), at += 4;
+      for(float value : {x, y, 0.0f}) { u32 word; std::memcpy(&word, &value, 4); memory.write(4, at, word); at += 4; }
+    };
+    vertex(Vertices, 0xff40'80c0, 2, 3), vertex(Vertices + 24, 0xff40'80c0, 20, 17);
+  };
+  constexpr u32 Inside = VRAM + (10 * 64 + 10) * 4, Outside = VRAM + (40 * 64 + 40) * 4;  //(row 40: page 2's)
+  System plain;
+  plain.threadGE(false);
+  build(plain.memory);
+  plain.ge.list = {}, plain.ge.list.address = ListA;
+  CHECK(u32(plain.ge.run(1000)), u32(GE::Stop::Finished));
+  plain.ge.settleAll();
+  System s;
+  s.threadGE(true);
+  s.ge.setThreads(1);
+  build(s.memory);
+  std::atomic<bool> held{true};
+  s.geThreading->gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
+  s.ge.list = {}, s.ge.list.address = ListA;
+  CHECK(u32(s.ge.run(1000)), u32(GE::Stop::Finished));
+  u64 waits = s.geThreading->waits;
+  CHECK(s.memory.read(4, Outside), plain.memory.read(4, Outside));
+  CHECK(s.geThreading->waits, waits);
+  CHECK(held.load(), true);  //(read with the thread still held)
+  std::thread release([&] { std::this_thread::sleep_for(std::chrono::milliseconds(20)); held = false; });
+  CHECK(s.memory.read(4, Inside), plain.memory.read(4, Inside));
+  release.join();
+  CHECK(s.geThreading->waits, waits + 1);
+  s.geThreading->drain();
+  s.geThreading->gate = nullptr;
+  CHECK(plain.memory.read(4, Inside) != 0, true);  //(the sprite drew there)
+  s.ge.settleAll();
+  CHECK(plain.memory.vram == s.memory.vram, true);
+}
+
 //Versions of memory (ge/versions.hpp), by themselves: the GE thread reads as of its place in the stream, a version's
 //bytes where one newer than its place has them; its write-backs go under the emulation thread's later writes (into
 //the earliest version at or after its place), storing only the bytes that change; of two versions over the same bytes
@@ -3319,6 +3374,7 @@ auto geTests() -> Tests {
     {"event flags", eventFlags}, {"event flag waiting", eventFlagWaiting}, {"display picture", displayPicture},
     {"gu program", guProgram}, {"copy sample", copySample},
     {"ge on its own thread draws the same", geThreadSame},
+    {"ge on its own thread: a read waits only where the thread may still change the bytes", geThreadReads},
     {"ge versions of memory, and neither thread waiting while it holds what the other waits for", geVersions},
   };
 }

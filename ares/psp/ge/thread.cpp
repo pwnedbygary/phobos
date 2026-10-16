@@ -6,6 +6,8 @@ GeThread::GeThread(GE& control, GE& render) : control(control), render(render) {
   words.reserve(WordsMost);
   versions = std::make_unique<GeVersions>(&GE::hostPage, &control.memory);
   render.versions = versions.get();
+  render.reporting = this;
+  if(const char* check = std::getenv("PHOBOS_GE_CHECK")) checking = check[0] && check[0] != '0';
   //(the render GE's watches posted to the kernel's GE's memory as the thread drains: compiled stores to those pages
   //go through memory's slow path, which reaches the render GE's view: Memory::drawer)
   render.memory.watching = [this](u32 page) { watches.push_back(page); };
@@ -22,6 +24,7 @@ GeThread::~GeThread() {
   render.memory.watching = nullptr;
   render.memory.written = nullptr;
   render.versions = nullptr;
+  render.reporting = nullptr;
 }
 
 auto GeThread::append(Kind kind, u32 size) -> u8* {
@@ -32,14 +35,30 @@ auto GeThread::append(Kind kind, u32 size) -> u8* {
   return at + sizeof(header);
 }
 
+//(a list word as run() read it, at its address, or ~0 for one from no list (the kernel's): runs of words one after
+//another kept as a run)
+auto GeThread::word(u32 word, u32 address) -> void {
+  if(words.size() == WordsMost) flushWords();
+  if(wordRuns.empty() || address == ~0u || wordRuns.back().first == ~0u ||
+     ((wordRuns.back().first + wordRuns.back().second * 4) & 0x0fff'ffff) != address) {
+    wordRuns.push_back({address, 0});
+  }
+  wordRuns.back().second++;
+  words.push_back(word);
+}
+
 auto GeThread::flushWords() -> void {
   if(words.empty()) return;
-  u32 count = words.size();
-  u8* at = append(Kind::Words, sizeof(u32) + count * sizeof(u32));
-  std::memcpy(at, &count, sizeof(u32));
-  std::memcpy(at + sizeof(u32), words.data(), count * sizeof(u32));
+  u32 count = words.size(), runCount = wordRuns.size();
+  u8* at = append(Kind::Words, sizeof(u32) + runCount * 2 * sizeof(u32) + count * sizeof(u32));
+  std::memcpy(at, &runCount, sizeof(u32));
+  for(u32 n = 0; n < runCount; n++) {
+    u32 run[2] = {wordRuns[n].first, wordRuns[n].second};
+    std::memcpy(at + sizeof(u32) + n * sizeof(run), run, sizeof(run));
+  }
+  std::memcpy(at + sizeof(u32) + runCount * 2 * sizeof(u32), words.data(), count * sizeof(u32));
   ring.publish();
-  words.clear();
+  words.clear(), wordRuns.clear();
 }
 
 //(a PRIM's or curved surface's record: its word, addresses and copies; one too big for the ring is drawn by the
@@ -50,50 +69,70 @@ static auto copiedBytes(const GeThread::Copies& copies) -> u32 {
   return bytes;
 }
 
-auto GeThread::primitive(u32 word, u32 vertexAddress, u32 indexAddress, const Copies& copies, const u8* bytes)
-  -> void {
+auto GeThread::primitive(u32 word, u32 wordAddress, u32 vertexAddress, u32 indexAddress, bool hardware, bool certain,
+                         const Copies& copies, const u8* bytes) -> u64 {
   flushWords();
-  u32 size = 3 * sizeof(u32) + sizeof(Copies) + copiedBytes(copies);
-  u8* at = append(Kind::Primitive, size);
-  if(!at) {
+  bool patching = word >> 24 != GE::Primitive;
+  u32 size = 6 * sizeof(u32) + sizeof(Copies) + copiedBytes(copies);
+  u8* at = append(patching ? Kind::Patch : Kind::Primitive, size);
+  if(!at) {  //(as the record it would be, there and then: the place of the next)
     drain();
-    render.replayPrimitive(word, vertexAddress, indexAddress, copies, bytes, false);
-    return;
+    if(wordAddress != ~0u) listWordDrawn(wordAddress);
+    if(checking) render.modelPrimitive(replica, word, vertexAddress, indexAddress, copies, bytes, hardware, serial + 1);
+    render.replayPrimitive(word, vertexAddress, indexAddress, copies, bytes, patching);
+    undrawn = ~0u;
+    return serial + 1;
   }
-  u32 head[3] = {word, vertexAddress, indexAddress};
+  u32 head[6] = {word, wordAddress, vertexAddress, indexAddress, hardware, certain};
   std::memcpy(at, head, sizeof(head));
   std::memcpy(at + sizeof(head), &copies, sizeof(Copies));
   std::memcpy(at + sizeof(head) + sizeof(Copies), bytes, copiedBytes(copies));
   ring.publish();
+  return serial;
 }
 
-auto GeThread::patch(u32 word, u32 vertexAddress, u32 indexAddress, const Copies& copies, const u8* bytes) -> void {
+auto GeThread::clut(u32 word, u32 wordAddress, u32 address, const u8* bytes, u32 size) -> void {
   flushWords();
-  u32 size = 3 * sizeof(u32) + sizeof(Copies) + copiedBytes(copies);
-  u8* at = append(Kind::Patch, size);
-  if(!at) {
-    drain();
-    render.replayPrimitive(word, vertexAddress, indexAddress, copies, bytes, true);
-    return;
-  }
-  u32 head[3] = {word, vertexAddress, indexAddress};
-  std::memcpy(at, head, sizeof(head));
-  std::memcpy(at + sizeof(head), &copies, sizeof(Copies));
-  std::memcpy(at + sizeof(head) + sizeof(Copies), bytes, copiedBytes(copies));
-  ring.publish();
-}
-
-auto GeThread::clut(u32 word, u32 address, const u8* bytes, u32 size) -> void {
-  flushWords();
-  u8* at = append(Kind::Clut, 3 * sizeof(u32) + size);
-  u32 head[3] = {word, address, size};
+  u8* at = append(Kind::Clut, 4 * sizeof(u32) + size);
+  u32 head[4] = {word, wordAddress, address, size};
   std::memcpy(at, head, sizeof(head));
   std::memcpy(at + sizeof(head), bytes, size);
   ring.publish();
 }
 
+auto GeThread::drawnFirst(u32 address, u32 size) -> u64 {
+  flushWords();
+  u32 head[2] = {address, size};
+  std::memcpy(append(Kind::DrawnFirst, sizeof(head)), head, sizeof(head));
+  ring.publish();
+  return serial;
+}
+
+auto GeThread::read(u32 address, u32 size, bool loading) -> u64 {
+  flushWords();
+  u32 head[3] = {address, size, loading};
+  std::memcpy(append(Kind::Read, sizeof(head)), head, sizeof(head));
+  ring.publish();
+  return serial;
+}
+
+//The emulation thread's write to VRAM's bytes first to last (offsets), as it makes it: their place now (cx), and,
+//checking, the render GE's copy of the model told.
+auto GeThread::wroteVRAM(u32 first, u32 last) -> void {
+  flushWords();
+  model.write(first, last, serial);
+  if(!checking) return;
+  u32 head[2] = {first, last};
+  u64 at = serial;
+  u8* to = append(Kind::Wrote, sizeof(head) + sizeof(at));
+  std::memcpy(to, head, sizeof(head));
+  std::memcpy(to + sizeof(head), &at, sizeof(at));
+  ring.publish();
+}
+
 auto GeThread::runStart() -> void {
   flushWords();
+  dirtyPage = ~0u;
   runs++;
   for(u64 ended; runs - (ended = runsEnded.load(std::memory_order_acquire)) > RunsKept;) {
     runsEnded.wait(ended, std::memory_order_acquire);
@@ -144,6 +183,135 @@ auto GeThread::publishSoFar() -> void {
   soFarVersion.fetch_add(1, std::memory_order_release);
 }
 
+//The value rule, the emulation thread's side (model.hpp): what the render GE has reported taken into the model (the
+//records it has done, its finishes, the software pixels it has drawn, its depth put back; the put points it has passed
+//let go), and the emulation thread's reads of VRAM looked at by it.
+auto GeThread::takeReports() -> void {
+  model.passed = done.load(std::memory_order_acquire);
+  model.finishKnown = std::max(model.finishKnown, finishReported.load(std::memory_order_acquire));
+  model.drawnKnown = std::max(model.drawnKnown, drawnReported.load(std::memory_order_acquire));
+  if(u64 made = puts.load(std::memory_order_acquire); made != putsTaken) {
+    putsTaken = made;
+    for(u32 block = 0; block < GeModel::Blocks; block++) {
+      model.putKnown[block] = std::max(model.putKnown[block], putReported[block].load(std::memory_order_relaxed));
+    }
+  }
+  if(!model.putPoints.empty()) {
+    std::erase_if(model.putPoints, [&](const GeModel::PutPoint& point) { return point.at <= model.passed; });
+  }
+  if(lostReported.load(std::memory_order_acquire)) hardware = false;
+  if(uncertain.load(std::memory_order_acquire)) model.unsure = true;
+}
+
+auto GeThread::dirty(u32 first, u32 last) -> bool {
+  takeReports();
+  return model.dirty(first, last);
+}
+
+auto GeThread::waitFor(u64 at) -> void {
+  flushWords();
+  if(done.load(std::memory_order_acquire) < at) waits++;
+  for(u64 now; (now = done.load(std::memory_order_acquire)) < at;) done.wait(now, std::memory_order_acquire);
+  takeReports();
+}
+
+//A read of VRAM (Memory::reading: the CPU's loads, an HLE function's; loading: a load, read()'s, whose check through
+//VRAM's depth views asks only about the drawing threads): handed over where pointer()'s check could act in the render
+//GE's memory (its pages busy there, as the model knows it), waited for where the render GE may still change the bytes;
+//else read as memory has them.
+auto GeThread::load(u32 address, u32 size, bool loading) -> void {
+  u32 physical = address & 0x1fff'ffff;
+  u32 copy = (physical - Memory::VRAMBase) / Memory::VRAMSize, seen = (physical - Memory::VRAMBase) % Memory::VRAMSize;
+  u32 end = std::min<u32>(seen + size, Memory::VRAMSize);
+  if(end <= seen) return;
+  u32 low = seen, high = end - 1;  //(the pages pointer()'s check looks at: Memory::busyCheck())
+  if(copy & 1) low &= ~0x3fffu, high |= 0x3fff;
+  takeReports();
+  bool busy = false;
+  for(u32 page = low >> 12; page <= high >> 12; page++) busy = busy || model.busy(page);
+  bool dirtied = false;
+  for(u32 at = seen; at < end && !dirtied;) {  //(the bytes themselves: through a rearranging copy, each piece's)
+    u32 run = copy & 1 ? std::min(end - at, 32 - at % 32) : end - at;
+    u32 offset = copy & 1 ? Memory::vramOffset(copy, at) : at;
+    dirtied = model.dirty(offset, offset + run - 1);
+    at += run;
+  }
+  if(!busy && !dirtied) return;
+  u64 record = read(address, size, loading);
+  if(dirtied) waitFor(record);
+}
+
+//A list word the control pass is about to read at address (run()): whether its page is all clean, its words then read
+//without asking again till the next PRIM; else the word looked at, and where it's dirty, the drawnFirst() the render
+//GE makes for it handed over first, and waited for. (The render GE makes run()'s drawnFirst() for every word itself,
+//from the words' addresses: listWordDrawn().)
+auto GeThread::listWord(u32 address) -> bool {
+  u32 first, last;
+  if(!vramSpan(address & ~0xfffu, 0x1000, first, last)) return true;  //(RAM: the render GE never changes it)
+  takeReports();
+  if(address >> 12 != dirtyPage) {
+    if(!model.dirty(first, last)) return true;
+    dirtyPage = address >> 12;
+  }
+  vramSpan(address, 4, first, last);
+  if(model.dirty(first, last)) waitFor(drawnFirst(address, 4));
+  return false;
+}
+
+//Bytes the control pass reads (a PRIM's vertices and indices, a palette) after the drawnFirst() the render GE makes for
+//them as it does the record: where the render GE may still change them, that drawnFirst() handed over first, and
+//waited for (the render GE's own then finds nothing left to do).
+auto GeThread::readClean(u32 address, u32 size) -> void {
+  u32 first, last;
+  if(!vramSpan(address, size, first, last)) return;
+  if(dirty(first, last)) waitFor(drawnFirst(address, size));
+}
+
+//The control pass's own drawnFirst() (a bounding box's vertices: no record of its own), of VRAM's bytes first to last:
+//handed over where the render GE's drawing may reach them (pages busy there), waited for where it may still change
+//them.
+auto GeThread::controlRead(u32 address, u32 size, u32 first, u32 last) -> void {
+  takeReports();
+  bool busy = false;
+  for(u32 page = first >> 12; page <= last >> 12; page++) busy = busy || model.busy(page);
+  bool dirtied = model.dirty(first, last);
+  if(!busy && !dirtied) return;
+  u64 at = drawnFirst(address, size);
+  if(dirtied) waitFor(at);
+}
+
+auto GeThread::reportPuts(const std::bitset<GeModel::Blocks>& blocks, u64 place) -> void {
+  for(u32 block = 0; block < GeModel::Blocks; block++) {
+    if(blocks[block]) putReported[block].store(place ? place - 1 : 0, std::memory_order_relaxed);
+  }
+  puts.fetch_add(1, std::memory_order_release);
+}
+
+//(checking, the render GE's) A byte of VRAM a finish or a depth put-back changes as it does the record at place: it
+//must be dirty for the model as the emulation thread may have it there, knowing of every finish and put-back before.
+auto GeThread::checkChanged(u32 offset) -> void {
+  if(replica.dirty(offset, offset)) return;
+  std::fprintf(stderr, "PSP GE thread: VRAM's byte %06x changed by the render GE at record %llu, clean for the "
+               "emulation thread (the value rule's check: ge/model.hpp)\n", offset, (unsigned long long)render.place);
+  std::abort();
+}
+
+auto GeThread::hook(Memory& memory, Memory& renderMemory) -> void {
+  memory.drawer = [this, &renderMemory]() -> Memory& { drain(); return renderMemory; };
+  memory.reading = [this](u32 address, u32 size, bool loading) { load(address, size, loading); };
+  memory.wroteVRAM = [this](u32 first, u32 last) { wroteVRAM(first, last); };
+  rendererChanged();
+}
+
+auto GeThread::unhook(Memory& memory) -> void {
+  memory.drawer = nullptr, memory.reading = nullptr, memory.wroteVRAM = nullptr;
+}
+
+auto GeThread::rendererChanged() -> void {
+  hardware = render.renderer && render.renderer->ready();
+  model.scaled = replica.scaled = render.renderer && render.renderer->scale() > 1;
+}
+
 auto GeThread::drain() -> void {
   flushWords();
   for(u64 at; (at = done.load(std::memory_order_acquire)) != serial;) done.wait(at, std::memory_order_acquire);
@@ -155,6 +323,7 @@ auto GeThread::drain() -> void {
   changes.clear();
   for(auto& text : notes) control.note(text);  //(each once, whichever GE noted it)
   notes.clear();
+  rendererChanged();  //(its resolution, or the GPU lost, as the render GE has it now)
 }
 
 auto GeThread::take() -> void {
@@ -163,45 +332,106 @@ auto GeThread::take() -> void {
     Header header;
     std::memcpy(&header, at, sizeof(header));
     render.place = header.serial;
+    if(checking) replica.passed = header.serial - 1;
+    if(gate) gate(header.serial);
     replay(header, at + sizeof(header));
     ring.release();
+    //(every software pixel of the records so far in memory: none waits to be drawn)
+    if(render.drawnAll()) {
+      drawnReported.store(header.serial, std::memory_order_release);
+      if(checking) replica.drawnKnown = header.serial;
+    }
     done.store(header.serial, std::memory_order_release);
     done.notify_all();
   }
 }
 
+//(the render GE) run()'s drawnFirst() for a list word it read at address: where its page isn't the one last found
+//with nothing drawn over it (since the list's last PRIM, curved surface or block transfer, or its start)
+auto GeThread::listWordDrawn(u32 address) -> void {
+  if(address >> 12 == undrawn) return;
+  render.drawnFirst(address, 4);
+  undrawn = render.undrawnPage(address) ? address >> 12 : ~0u;
+}
+
 auto GeThread::replay(const Header& header, const u8* data) -> void {
   switch(header.kind) {
   case Kind::Words: {
-    u32 count;
-    std::memcpy(&count, data, sizeof(u32));
-    for(u32 n = 0; n < count; n++) {
-      u32 word;
-      std::memcpy(&word, data + sizeof(u32) + n * sizeof(u32), sizeof(u32));
-      render.apply(word);
+    u32 runCount;
+    std::memcpy(&runCount, data, sizeof(u32));
+    const u8* word = data + sizeof(u32) + runCount * 2 * sizeof(u32);
+    for(u32 n = 0; n < runCount; n++) {
+      u32 run[2];
+      std::memcpy(run, data + sizeof(u32) + n * sizeof(run), sizeof(run));
+      for(u32 k = 0; k < run[1]; k++, word += sizeof(u32)) {
+        u32 value;
+        std::memcpy(&value, word, sizeof(u32));
+        if(run[0] != ~0u) listWordDrawn((run[0] + k * 4) & 0x0fff'ffff);
+        render.apply(value);
+        if(value >> 24 == GE::TransferStart) undrawn = ~0u;
+      }
     }
     break;
   }
   case Kind::Primitive: case Kind::Patch: {
-    u32 head[3];
+    u32 head[6];
     std::memcpy(head, data, sizeof(head));
     Copies copies;
     std::memcpy(&copies, data + sizeof(head), sizeof(Copies));
-    render.replayPrimitive(head[0], head[1], head[2], copies, data + sizeof(head) + sizeof(Copies),
-                           header.kind == Kind::Patch);
+    const u8* bytes = data + sizeof(head) + sizeof(Copies);
+    if(head[1] != ~0u) listWordDrawn(head[1]);
+    if(checking) render.modelPrimitive(replica, head[0], head[2], head[3], copies, bytes, head[4], header.serial);
+    u64 refusals = render.refusals, roomRefusals = render.roomRefusals;
+    render.replayPrimitive(head[0], head[2], head[3], copies, bytes, header.kind == Kind::Patch);
+    //(the model took the renderer as surely drawing it, so the software renderer's depth writes weren't its: a
+    //refusal there is a fault in the model's certainty, which from then on takes no PRIM as sure; one for want of
+    //room on the GPU, which only the host decides, is outside what's exact, as a GPU lost is: the model takes no PRIM
+    //as sure from then on either)
+    if(head[5] && render.roomRefusals != roomRefusals) uncertain.store(true, std::memory_order_release);
+    if(head[5] && render.refusals != refusals) {
+      if(checking) {
+        std::fprintf(stderr, "PSP GE thread: the renderer refused a PRIM the model took as surely its own, at record "
+                     "%llu (ge/model.cpp)\n", (unsigned long long)header.serial);
+        std::abort();
+      }
+      uncertain.store(true, std::memory_order_release);
+    }
+    undrawn = ~0u;
     publishSoFar();
     break;
   }
   case Kind::Clut: {
+    u32 head[4];
+    std::memcpy(head, data, sizeof(head));
+    if(head[1] != ~0u) listWordDrawn(head[1]);
+    render.replayClut(head[0], head[2], data + sizeof(head), head[3]);
+    break;
+  }
+  case Kind::DrawnFirst: {
+    u32 head[2];
+    std::memcpy(head, data, sizeof(head));
+    render.drawnFirst(head[0], head[1]);
+    break;
+  }
+  case Kind::Read: {
     u32 head[3];
     std::memcpy(head, data, sizeof(head));
-    render.replayClut(head[0], data + sizeof(head), head[2]);
+    render.memory.busyCheck(head[0], head[1], head[2]);
+    break;
+  }
+  case Kind::Wrote: {
+    u32 head[2];
+    u64 at;
+    std::memcpy(head, data, sizeof(head));
+    std::memcpy(&at, data + sizeof(head), sizeof(at));
+    if(checking) replica.write(head[0], head[1], at);
     break;
   }
   case Kind::RunStart:
     takenRuns++;
     render.owedPixels = render.owedPrimitives = 0;
     publishSoFar();
+    undrawn = ~0u;
     render.runStart();
     break;
   case Kind::RunEnd:
@@ -221,6 +451,38 @@ auto GeThread::replay(const Header& header, const u8* data) -> void {
 }
 
 //The GE's side.
+
+//(the render GE) Its renderer's finish, its depth put back over VRAM's bytes low to high (past its end, its start's),
+//the GPU lost: told to the thread, and, checking, its copy of the model knowing of them once the bytes they changed
+//were looked at.
+auto GE::reportFinish() -> void {
+  //(none once the GPU is lost: the software renderer draws from then on, its batches maybe still being drawn after
+  //such a "finish", which puts nothing in memory)
+  if(!reporting || (renderer && !renderer->ready())) return;
+  reporting->reportFinish(place);
+  if(reporting->checking) reporting->replica.finishKnown = std::max(reporting->replica.finishKnown, place ? place - 1 : 0);
+}
+
+auto GE::reportPuts(u64 low, u64 high) -> void {
+  if(!reporting || high < low) return;
+  std::bitset<GeModel::Blocks> blocks;
+  for(u64 block = low >> 14; block <= high >> 14 && block < (low >> 14) + GeModel::Blocks; block++) {
+    blocks.set(block % GeModel::Blocks);
+  }
+  reporting->reportPuts(blocks, place);
+  if(!reporting->checking) return;
+  for(u32 block = 0; block < GeModel::Blocks; block++) {
+    if(blocks[block]) reporting->replica.putKnown[block] = std::max(reporting->replica.putKnown[block], place ? place - 1 : 0);
+  }
+}
+
+auto GE::reportLost() -> void {
+  if(reporting) reporting->reportLost();
+}
+
+auto GE::drawnAll() const -> bool {
+  return !launched() && drawing.batch->jobs.empty();
+}
 
 //The GE whose drawing state counts for this one's: the render GE, the thread drained (the kernel's GE, threaded), or
 //this one.
@@ -301,9 +563,10 @@ auto GE::replayPrimitive(u32 word, u32 vertexAt, u32 indexAt, const GeThread::Co
   copied.ranges = 0;
 }
 
-//(the render GE) CLUT_LOAD from the palette's bytes the kernel's GE copied.
-auto GE::replayClut(u32 word, const u8* bytes, u32 size) -> void {
+//(the render GE) CLUT_LOAD from the palette's bytes the kernel's GE copied, after loadClut()'s drawnFirst().
+auto GE::replayClut(u32 word, u32 address, const u8* bytes, u32 size) -> void {
   commands[ClutLoad] = word;
+  drawnFirst(address, size);
   u8 before[sizeof(clut)];
   std::memcpy(before, clut, sizeof(clut));
   std::memcpy(clut, bytes, std::min<u32>(size, sizeof(clut)));
@@ -333,11 +596,12 @@ static auto byteAt(Memory& memory, u32 address) -> u8 {
   return 0;
 }
 
-//(the kernel's GE) A PRIM's vertices and indices, as readVertices() would read them, copied for the render GE. Its
-//reads are made as readVertices() makes them, the vertices decoded and dropped, so that VRAM's waits and drawnFirst()
-//come where they come synchronously (the render GE's, the thread drained, where they reach VRAM: drawer()); then the
-//bytes copied, its indices' and its vertices', as memory holds them now, and the addresses moved on as readVertices()
-//moves them.
+//(the kernel's GE) A PRIM's vertices and indices, as readVertices() would read them, copied for the render GE, which
+//makes readVertices()' drawnFirst() calls itself (readCopiedVertices()). Where the render GE may still change bytes
+//they're read from (the value rule: GeThread::model), those calls are handed over as they come and waited for first;
+//its reads are readVertices()' (those with nothing behind them reported as there), the vertices decoded and dropped;
+//then the bytes copied, its indices' and its vertices', as memory holds them now, and the addresses moved on as
+//readVertices() moves them.
 auto GE::copyVertices(u32 count, const VertexFormat& format, GeThread::Copies& copies, std::vector<u8>& bytes) -> void {
   copies = {};
   bytes.clear();
@@ -348,14 +612,15 @@ auto GE::copyVertices(u32 count, const VertexFormat& format, GeThread::Copies& c
   bool together = !format.indexFormat && count && (inside(Memory::RAMBase, memory.ram.size()) ||
                   (low >= Memory::VRAMBase && inside(copy, Memory::VRAMSize) &&
                    inside(Memory::VRAMBase, Memory::VRAMWindow)));
-  if(together) drawnFirst(vertexAddress, count * format.size);
+  if(together) thread->readClean(vertexAddress, count * format.size);
   u32 most = 0;
   if(!together && count && format.size) {  //(readVertices()' way a vertex at a time; by indices all in RAM, no wait)
+    Memory::KnownDrawn known;
     for(u32 n = 0; n < count; n++) {
-      if(format.indexFormat) drawnFirst(indexAddress + n * indexBytes, indexBytes);
+      if(format.indexFormat) thread->readClean(indexAddress + n * indexBytes, indexBytes);
       u32 index = format.indexFormat ? readIndex(n, format) : n;
       u32 address = vertexAddress + index * format.size;
-      drawnFirst(address, format.size);
+      thread->readClean(address, format.size);
       (void)readVertex(address, format);
       most = std::max(most, index);
     }
@@ -398,6 +663,7 @@ auto GE::handSwitches() -> void {
 //texture's pages watched, so that a store there before the render GE has decoded it waits for that first (memory's
 //drawer: VRAM's stores wait anyway), with its word and the addresses it reads from.
 auto GE::handPrimitive(u32 word, u32 count, bool patching) -> void {
+  (void)patching;
   if(!running) handSwitches(), handState();
   auto format = vertexFormat();
   u32 vertexAt = vertexAddress, indexAt = indexAddress;
@@ -409,8 +675,11 @@ auto GE::handPrimitive(u32 word, u32 count, bool patching) -> void {
     textureBytes(texture, std::min<u32>(texture.height, 512), low, high);
     if(high > low) memory.watch(low, high - low);
   }
-  if(patching) thread->patch(word, vertexAt, indexAt, copies, handCopies.data());
-  else thread->primitive(word, vertexAt, indexAt, copies, handCopies.data());
+  bool hardware = thread->hardware;
+  u64 at = thread->nextPlace();
+  bool certain = modelPrimitive(thread->model, word, vertexAt, indexAt, copies, handCopies.data(), hardware, at);
+  thread->primitive(word, running ? listWordAt : ~0u, vertexAt, indexAt, hardware, certain, copies,
+                    handCopies.data());
   if(!running) handedState = stateOf(), thread->drain();  //(outside a list the GE draws a PRIM at once: primitive())
 }
 
@@ -420,7 +689,7 @@ auto GE::handClut() -> void {
   if(!running) handSwitches(), handState();
   u32 address = (commands[ClutAddress] & 0xff'fff0) | (commands[ClutAddressUpper] << 8 & 0x0f00'0000);
   u32 bytes = std::min<u32>((commands[ClutLoad] & 0x3f) * 32, sizeof(clut));
-  drawnFirst(address, bytes);
+  thread->readClean(address, bytes);  //(loadClut()'s drawnFirst() the render GE's, handed over first where it's dirty)
   u8 palette[sizeof(clut)] = {};
   bool copied = [&] {
     Memory::KnownDrawn known;
@@ -430,12 +699,13 @@ auto GE::handClut() -> void {
     for(u32 n = 0; n < bytes; n++) palette[n] = memory.read(1, address + n);
   }
   if(std::memcmp(clut, palette, bytes)) std::memcpy(clut, palette, bytes), paletteChanged();
-  thread->clut(commands[ClutLoad], address, palette, bytes);
+  thread->clut(commands[ClutLoad], running ? listWordAt : ~0u, address, palette, bytes);
   if(!running) thread->drain();
 }
 
 //(the render GE) readVertices() of a PRIM handed over: its bytes from the copies (copied), which hold every byte it
-//reads; drawnFirst() and memory's waits were the kernel's GE's (copyVertices()).
+//reads; its drawnFirst() calls made as readVertices() makes them, the drawing over what it reads finished or drawn
+//first where the synchronous GE's would be.
 auto GE::readCopiedVertices(u32 count, const VertexFormat& format) -> void {
   u32 ambient = (commands[AmbientColor] & 0xff'ffff) | (commands[AmbientAlpha] & 0xff) << 24;
   u32 indexBytes = format.indexFormat == 3 ? 4 : format.indexFormat;
@@ -448,6 +718,19 @@ auto GE::readCopiedVertices(u32 count, const VertexFormat& format) -> void {
     if(indexBytes == 2) return at[0] | at[1] << 8;
     return (at[0] | at[1] << 8) & 0xffff;
   };
+  {  //(in a row in one area: once for them all; else each index and vertex, those in RAM asking nothing)
+    u64 low = vertexAddress & 0x1fff'ffff, high = low + u64(count) * format.size;
+    auto inside = [&](u64 base, u64 size) { return low >= base && high <= base + size; };
+    u64 copy = (low - Memory::VRAMBase) / Memory::VRAMSize * Memory::VRAMSize + Memory::VRAMBase;
+    bool together = !format.indexFormat && count && (inside(Memory::RAMBase, memory.ram.size()) ||
+                    (low >= Memory::VRAMBase && inside(copy, Memory::VRAMSize) &&
+                     inside(Memory::VRAMBase, Memory::VRAMWindow)));
+    if(together) drawnFirst(vertexAddress, count * format.size);
+    for(u32 n = 0; !together && n < count && format.size; n++) {
+      if(format.indexFormat) drawnFirst(indexAddress + n * indexBytes, indexBytes);
+      drawnFirst(vertexAddress + (format.indexFormat ? index(n) : n) * format.size, format.size);
+    }
+  }
   if(count && format.size) {
     auto& offsets = vertexOffsets;
     offsets.resize(count);

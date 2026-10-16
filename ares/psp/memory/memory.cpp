@@ -132,18 +132,10 @@ auto Memory::serialize(serializer& s) -> void {
 auto Memory::pointerElsewhere(u32 address, u32 size, bool load) -> u8* {
   u32 physical = address & 0x1fff'ffff;
   if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow) {
-    Memory& m = knownDrawn || !drawer ? *this : drawer();
-    if(!knownDrawn && m.vramBusy) {  //(the first and third copies: the bytes; others: the 16 KiB they rearrange)
-      u32 seen = (physical - VRAMBase) % VRAMSize, last = std::min<u32>(seen + size, VRAMSize) - 1;
-      bool depthView = (physical - VRAMBase) / VRAMSize & 1;
-      if(depthView) seen &= ~0x3fffu, last |= 0x3fff;
-      for(u32 page = seen / PageSize; page <= last / PageSize; page++) {
-        if(!m.vramPageBusy(page)) continue;
-        if(m.vramDrawnOver && !m.vramDrawnOver(seen, last, load && depthView)) break;
-        if(m.finishDrawingOver) m.finishDrawingOver(seen, last);
-        else m.finishDrawing();
-        break;
-      }
+    if(!knownDrawn) {
+      if(!drawer) { if(vramBusy) busyCheck(address, size, load); }
+      else if(load && reading) reading(address, size, load);  //(threaded: ge/thread.cpp)
+      else drawer().busyCheck(address, size, load);
     }
     u32 copy = (physical - VRAMBase) / VRAMSize, offset = (physical - VRAMBase) % VRAMSize;
     if(copy & 1) {
@@ -157,6 +149,24 @@ auto Memory::pointerElsewhere(u32 address, u32 size, bool load) -> u8* {
     return size <= ScratchpadSize - offset ? &scratchpad[offset] : nullptr;
   }
   return nullptr;
+}
+
+//What pointer() waits for before VRAM's size bytes from address are reached: the drawing over them, where any of their
+//pages is busy (the first and third copies: the bytes; others: the 16 KiB they rearrange). load: they're about to be
+//read (read()). (Threaded, the render GE's memory's, which the emulation thread's loads have it replay: ge/thread.cpp.)
+auto Memory::busyCheck(u32 address, u32 size, bool load) -> void {
+  u32 physical = address & 0x1fff'ffff;
+  if(!vramBusy || physical < VRAMBase || physical - VRAMBase >= VRAMWindow) return;
+  u32 seen = (physical - VRAMBase) % VRAMSize, last = std::min<u32>(seen + size, VRAMSize) - 1;
+  bool depthView = (physical - VRAMBase) / VRAMSize & 1;
+  if(depthView) seen &= ~0x3fffu, last |= 0x3fff;
+  for(u32 page = seen / PageSize; page <= last / PageSize; page++) {
+    if(!vramPageBusy(page)) continue;
+    if(vramDrawnOver && !vramDrawnOver(seen, last, load && depthView)) break;
+    if(finishDrawingOver) finishDrawingOver(seen, last);
+    else finishDrawing();
+    break;
+  }
 }
 
 //Whether the size bytes from address all have something behind them, inside one area (one copy of VRAM): what an HLE
@@ -227,6 +237,16 @@ auto Memory::changed(u32 address, u32 size) -> void {
     u32 seen = (physical - VRAMBase) % VRAMSize, last = std::min<u32>(seen + size, VRAMSize) - 1;
     if((physical - VRAMBase) / VRAMSize & 1) seen &= ~0x3fffu, last |= 0x3fff;
     m.vramChangedBusy(seen, last);  //(the bytes as pointer() has them)
+  }
+  if(inVRAM && wroteVRAM && size) {  //(the bytes themselves: through a rearranging copy, each 32-byte piece's)
+    u32 copy = (physical - VRAMBase) / VRAMSize, seen = (physical - VRAMBase) % VRAMSize;
+    u32 end = std::min<u32>(seen + size, VRAMSize);
+    if(!(copy & 1)) wroteVRAM(seen, end - 1);
+    else for(u32 at = seen; at < end;) {
+      u32 run = std::min(end - at, 32 - at % 32), offset = vramOffset(copy, at);
+      wroteVRAM(offset, offset + run - 1);
+      at += run;
+    }
   }
   if(watchedPages) {
     u32 first, last;

@@ -184,6 +184,12 @@ struct Memory {
   //and a store to a page watched here (one a texture the render GE may still decode is in) waits for it first. None:
   //this one's own.
   std::function<auto () -> Memory&> drawer;
+  //Threaded, the loads from VRAM (read()): the GE thread asked about them as it must be (its checks replayed where its
+  //memory may be busy, and waited for where it may still change the bytes: ge/model.hpp), instead of drawer(). load:
+  //read()'s, whose check through VRAM's depth views asks only about the drawing threads (pointer()'s load).
+  std::function<auto (u32 address, u32 size, bool load) -> void> reading;
+  //Threaded, each change to VRAM's bytes first to last (offsets: exactly those written), as changed() hears of it.
+  std::function<auto (u32 first, u32 last) -> void> wroteVRAM;
 
   //The copy of VRAM in whose order the GE keeps its depth buffer, drawing into a frame buffer of this format (0-3):
   //the second for 16-bit formats, the fourth for 8888 (above).
@@ -202,6 +208,7 @@ struct Memory {
   auto pagesOf(u32 address, u32 size, u32& first, u32& last) const -> bool;
   auto serialize(serializer& s) -> void;
   auto pointerElsewhere(u32 address, u32 size, bool load) -> u8*;
+  auto busyCheck(u32 address, u32 size, bool load) -> void;
   auto reachesElsewhere(u32 address, u32 size) -> bool;
   auto readElsewhere(u32 size, u32 address) -> u32;
   auto writeElsewhere(u32 size, u32 address, u32 data) -> void;

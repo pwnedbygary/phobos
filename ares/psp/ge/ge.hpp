@@ -423,6 +423,7 @@ struct GE {
   //list.cpp
   auto run(u64 budget) -> Stop;
   auto run(u64 budget, u64& ran) -> Stop;  //and how many commands ran
+  template<bool Threaded> auto runList(u64 budget, u64& ran) -> Stop;
   auto relative(u32 argument) const -> u32;
 
   //vertex.cpp
@@ -660,6 +661,10 @@ struct GE {
   struct Renderer {
     virtual ~Renderer() = default;
     virtual auto ready() const -> bool = 0;
+    virtual auto scale() const -> u32 { return 1; }  //(its pixels per the PSP's each way: a GPU's resolution)
+    //(whether the PRIM begin() last refused had no room to go in: a GPU out of memory, which only the host decides;
+    //asked after a refusal, and forgotten then)
+    virtual auto refusedForRoom() -> bool { return false; }
     //(vertices, t: the PRIM's, for GE::reachedBy() where it needs where the PRIM's pixels can be and their depths: a
     //3D PRIM's are its vertices on the screen, worked out only then)
     virtual auto begin(GE& ge, const Look& look, bool through, const Region& region,
@@ -765,7 +770,7 @@ struct GE {
   auto runEnd() -> void;
   auto replayPrimitive(u32 word, u32 vertexAt, u32 indexAt, const GeThread::Copies& copies, const u8* bytes,
                        bool patching) -> void;
-  auto replayClut(u32 word, const u8* bytes, u32 size) -> void;
+  auto replayClut(u32 word, u32 address, const u8* bytes, u32 size) -> void;
   auto copyVertices(u32 count, const VertexFormat& format, GeThread::Copies& copies, std::vector<u8>& bytes) -> void;
   auto handPrimitive(u32 word, u32 count, bool patching) -> void;
   auto handClut() -> void;
@@ -777,6 +782,23 @@ struct GE {
   //handed over as they run, but its state set from outside (a context restored, a test's) goes as a whole (handState())
   State handedState{};
   bool handedStateValid = false;
+  u32 listWordAt = ~0u;           //(the kernel's GE) the address of the list word run() is at
+  GeThread* reporting = nullptr;  //(the render GE, threaded) the thread it reports its finishes and put-backs to
+  //model.cpp: what a PRIM handed over may change in memory (GeModel), from its commands and copies as the renderer
+  //will take them; where a frame buffer's target starts (GPU::targetFor()'s, shared)
+  //(returns whether it takes the renderer as surely drawing it: no software renderer's pixels or depth then)
+  auto modelPrimitive(GeModel& model, u32 word, u32 vertexAt, u32 indexAt, const GeThread::Copies& copies,
+                      const u8* bytes, bool hardware, u64 at) -> bool;
+  //(PRIMs a hardware renderer, still ready, refused: begin(), draw.cpp; those for want of room, apart)
+  u64 refusals = 0, roomRefusals = 0;
+  static auto targetPlace(const PixelState& p, const Region& region, u32& address, u32& row, u32& column,
+                          u32& height) -> void;
+  //(the render GE) What its renderer did, told to the thread (thread.cpp): a finish, its depth put back over VRAM's
+  //bytes low to high, the GPU lost; and whether every software pixel handed to it is drawn.
+  auto reportFinish() -> void;
+  auto reportPuts(u64 low, u64 high) -> void;
+  auto reportLost() -> void;
+  auto drawnAll() const -> bool;
   //(the render GE, threaded) Its reads of memory and its write-backs as of the record it does (place), through the
   //versions the emulation thread keeps of what it writes meanwhile (versions.hpp); on its own thread alone
   //(onGeThread): drained, the emulation thread does as the synchronous GE does.
@@ -788,16 +810,32 @@ struct GE {
   static auto hostPage(void* context, u32 page) -> u8*;
   auto versioned() const -> bool { return versions && onGeThread; }
   //VRAM's bytes low to high (offsets: those past its end its start's) held while use(vram) reads them as of place:
-  //vram VRAM's 2 MiB as memory has them, or a copy of their pages with the versions newer than place in.
-  auto readingVRAM(u64 low, u64 high, const std::function<auto (const u8* vram) -> void>& use) -> void;
-  //VRAM's bytes low to high held for a write-back as of place: put() stores each byte that changes, into the earliest
-  //version at or after place that has it, else memory.
+  //vram VRAM's 2 MiB as memory has them, or, on the GE thread where versions newer than place are over them, a copy of
+  //their pages with those versions in. (Elsewhere, and with the thread off, memory's as ever, at no cost.)
+  template<typename Use> auto readingVRAM(u64 low, u64 high, const Use& use) -> void {
+    if(!versioned()) return use((const u8*)vramBytes());
+    readingVersions(low, high, use);
+  }
+  auto vramBytes() -> u8*;  //(memory's VRAM: versions.cpp)
+  auto readingVersions(u64 low, u64 high, const std::function<auto (const u8* vram) -> void>& use) -> void;
+  //VRAM's bytes low to high written back as of place: write(put) has put(offset, bytes, size) store them, on the GE
+  //thread each byte that changes, into the earliest version at or after place that has it, else memory (Writes);
+  //elsewhere, and with the thread off, memory's as ever, at no cost.
   struct Writes {
     GE& ge;
     GeVersions::Hold* hold;
     auto put(u32 offset, const u8* bytes, u32 size) const -> void;
   };
-  auto writingVRAM(u64 low, u64 high, const std::function<auto (const Writes&) -> void>& use) -> void;
+  template<typename Write> auto writingVRAM(u64 low, u64 high, const Write& write) -> void {
+    if(!versioned()) {
+      u8* vram = vramBytes();
+      return write([vram](u32 offset, const u8* bytes, u32 size) { std::memcpy(vram + offset, bytes, size); });
+    }
+    writingVersions(low, high, [&](const Writes& writes) {
+      write([&writes](u32 offset, const u8* bytes, u32 size) { writes.put(offset, bytes, size); });
+    });
+  }
+  auto writingVersions(u64 low, u64 high, const std::function<auto (const Writes&) -> void>& use) -> void;
   //Memory's size bytes from address held while it lives: pointer() and read() as memory's, as of place.
   struct Reading {
     Reading(GE& ge, u32 address, u32 size);

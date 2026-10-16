@@ -37,7 +37,7 @@ auto Kernel::geLoad(GeList& list) -> void {
 auto Kernel::geRestoreBase(u32 word) -> void {
   if(word >> 24 != GE::Base) return;
   ge.commands[GE::Base] = word;
-  if(ge.thread) ge.thread->word(word);  //(the render GE's too: ge/thread.hpp)
+  if(ge.thread) ge.thread->word(word, ~0u);  //(the render GE's too, from no list: ge/thread.hpp)
 }
 
 //Whether the GE waits at a list's stall address: the list's own, not the GE's. They differ for a paused list the GE

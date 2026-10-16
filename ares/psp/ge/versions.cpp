@@ -165,8 +165,12 @@ static auto vramHold(GeVersions& versions, u64 place, bool write, u64 low, u64 h
   return {versions, place, write, first, last, first2, last2};
 }
 
-auto GE::readingVRAM(u64 low, u64 high, const std::function<auto (const u8* vram) -> void>& use) -> void {
-  if(!versioned()) return use(memory.vram.data());
+auto GE::vramBytes() -> u8* {
+  return memory.vram.data();
+}
+
+//(readingVRAM()'s on the GE thread)
+auto GE::readingVersions(u64 low, u64 high, const std::function<auto (const u8* vram) -> void>& use) -> void {
   auto hold = vramHold(*versions, place, false, low, high);
   if(!hold.versioned) return use(memory.vram.data());
   u32 base = Memory::VRAMBase / GeVersions::PageBytes;
@@ -179,8 +183,8 @@ auto GE::readingVRAM(u64 low, u64 high, const std::function<auto (const u8* vram
   use(versionedVRAM.data());
 }
 
-auto GE::writingVRAM(u64 low, u64 high, const std::function<auto (const Writes&) -> void>& use) -> void {
-  if(!versioned()) return use(Writes{*this, nullptr});
+//(writingVRAM()'s on the GE thread)
+auto GE::writingVersions(u64 low, u64 high, const std::function<auto (const Writes&) -> void>& use) -> void {
   auto hold = vramHold(*versions, place, true, low, high);
   use(Writes{*this, hold.versioned ? &hold : nullptr});
 }
@@ -188,8 +192,11 @@ auto GE::writingVRAM(u64 low, u64 high, const std::function<auto (const Writes&)
 auto GE::Writes::put(u32 offset, const u8* bytes, u32 size) const -> void {
   if(!hold) {
     u8* vram = ge.memory.vram.data() + offset;
+    bool checking = ge.reporting && ge.reporting->checking;
     for(u32 n = 0; n < size; n++) {
-      if(vram[n] != bytes[n]) vram[n] = bytes[n];
+      if(vram[n] == bytes[n]) continue;
+      if(checking) ge.reporting->checkChanged(offset + n);
+      vram[n] = bytes[n];
     }
     return;
   }

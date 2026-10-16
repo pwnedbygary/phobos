@@ -381,7 +381,7 @@ auto System::threadGE(bool on) -> void {
     geThreading = std::make_unique<GeThread>(ge, renderGE);
     renderGE.log = [this](const std::string& text) { geThreading->note(text); };
     ge.render = &renderGE, ge.thread = geThreading.get();
-    memory.drawer = [this]() -> Memory& { geThreading->drain(); return renderMemory; };
+    geThreading->hook(memory, renderMemory);  //(as the tests' machines have it: ge/thread.cpp)
     vramPages(true);
   } else {
     kernel.geFold(true);  //(the runs handed over counted: the kernel's clock needs the thread for them)
@@ -389,7 +389,7 @@ auto System::threadGE(bool on) -> void {
     renderGE.settleAll();
     auto* renderer = renderGE.renderer;
     u32 threads = renderGE.drawing.threads;
-    memory.drawer = nullptr;
+    GeThread::unhook(memory);
     ge.render = nullptr, ge.thread = nullptr;
     geThreading.reset();
     renderGE.log = nullptr;
@@ -404,6 +404,7 @@ auto System::threadGE(bool on) -> void {
 //forgets what it had decoded and drawn of the memory before (as GE::serialize() has the kernel's GE forget it).
 auto System::renderFromState() -> void {
   geThreading->drain();
+  geThreading->model.clear(), geThreading->replica.clear();  //(memory's all new: nothing drawn over it yet)
   renderMemory.unwatchAll();
   renderGE.takeState(ge.stateOf());
   std::memcpy(renderGE.clut, ge.clut, sizeof(ge.clut));

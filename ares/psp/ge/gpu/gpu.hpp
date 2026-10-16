@@ -8,6 +8,7 @@
 #include <optional>
 #include <tuple>
 #include <unordered_map>
+#include <utility>
 
 //The GE's hardware renderer (docs/psp-gpu-renderers.md): the GPU's own rasterizer, texture units and blending
 //drawing the GE's primitives, fast and with room for upscaling, as close to the PSP as the hardware allows. The
@@ -468,6 +469,9 @@ struct GPU : GE::Renderer {
   GPU(std::unique_ptr<Backend> backend);
   ~GPU();
   auto ready() const -> bool override { return backend && !backend->lost; }
+  auto refusedForRoom() -> bool override { return std::exchange(roomless, false); }
+  bool roomless = false;  //(a target it had no room for since asked: targetFor())
+  auto scale() const -> u32 override { return resolution(); }
   auto begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region,
              const std::vector<GE::Vertex>& vertices, const GE::Transform& transform) -> bool override;
   auto triangle(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c) -> void override;

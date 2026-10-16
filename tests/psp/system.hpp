@@ -93,16 +93,17 @@ struct System : Allegrex {
       std::memcpy(renderGE.clut, ge.clut, sizeof(ge.clut)), renderGE.paletteChanged();
       renderGE.setThreads(threads), renderGE.setRenderer(renderer);
       geThreading = std::make_unique<GeThread>(ge, renderGE);
+      geThreading->checking = true;  //(the value rule's check of every byte a finish or put-back changes: ge/thread.hpp)
       renderGE.log = [this](const std::string& text) { geThreading->note(text); };
       ge.render = &renderGE, ge.thread = geThreading.get();
-      memory.drawer = [this]() -> Memory& { geThreading->drain(); return renderMemory; };
+      geThreading->hook(memory, renderMemory);
       vramPages(true);
     } else {
       geThreading->drain();
       renderGE.settleAll();
       auto* renderer = renderGE.renderer;
       u32 threads = renderGE.drawing.threads;
-      memory.drawer = nullptr;
+      GeThread::unhook(memory);
       ge.render = nullptr, ge.thread = nullptr;
       geThreading.reset();
       renderGE.log = nullptr;
