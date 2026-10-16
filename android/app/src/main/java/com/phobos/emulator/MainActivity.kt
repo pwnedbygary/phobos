@@ -229,7 +229,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        InputLog.note("window focus $hasFocus")
+        InputLog.note { "window focus $hasFocus" }
     }
 
     private fun isDebugLoad(intent: android.content.Intent?): Boolean = intent?.getStringExtra("load_uri") != null

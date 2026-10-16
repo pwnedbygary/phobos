@@ -1,8 +1,10 @@
 package com.phobos.emulator.input
 
+import androidx.compose.ui.focus.FocusState
 import com.phobos.emulator.PhobosCore.Input
 import com.phobos.emulator.launch.LaunchSystems
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -11,50 +13,59 @@ import kotlin.math.sin
 import kotlin.random.Random
 
 /**
- * The RP6's event sequences while Colin McRae is driven, replayed through GameInputState: Cross held while the left
- * stick sweeps, the hat D-pad, Square, L1 and R1 are pressed, and the triggers pulled. What the core is sent each time
- * is recorded. The RP6's built-in pad is an "Xbox Wireless Controller": its D-pad is HAT_X/HAT_Y only, its triggers
- * axes only, Cross the bottom face button (BUTTON_A, the A bit).
+ * The RP6's event sequences while Colin McRae is driven, replayed through the game screen's keys (GameKeys: its key
+ * handler, hat listener and focus) and GameInputState: Cross held while the left stick sweeps, the hat D-pad, Square,
+ * L1 and R1 are pressed, and the triggers pulled. What the core is sent each time is recorded. The RP6's built-in pad
+ * is an "Xbox Wireless Controller": its D-pad is HAT_X/HAT_Y only, its triggers axes only, Cross the bottom face
+ * button (BUTTON_A, the A bit).
  */
 class HeldCrossReplayTest {
     private val pushes = mutableListOf<Int>()
-    private val pressedKeys = mutableSetOf<Int>()
+    private var sticksSent = FloatArray(4)
     private val hotkeysRun = mutableListOf<String>()
     private var mappings: Map<Int, String> = DEFAULT_MAPPINGS
     private var hotkeys: Map<String, List<Int>> = DEFAULT_HOTKEYS
     private var rightStick = PspRightStick.OFF
+    private lateinit var coreInput: GameInputState.CoreInput
+
+    /** The game screen as GameKeys asks it: a PSP game running, no editor open, no ZX key being bound. */
+    private val screen = object : GameKeys.Screen {
+        override fun controls() = ActiveControls(mappings, hotkeys)
+        override fun paused() = false
+        override fun editing() = false
+        override fun fastForwardToggled() = false
+        override fun zxKeyToBind(): String? = null
+        override fun bindZxKey(key: String, bit: Int) {}
+        // As EmulatorScreen's runHotkey answers for a PSP game: every action but the keyboard's and the PS1's runs.
+        override fun hotkey(action: String): Boolean {
+            if (action == HotkeyAction.KEYBOARD || action == HotkeyAction.PS1_ANALOG_TOGGLE) return false
+            hotkeysRun += action
+            return true
+        }
+        override fun stopFastForward() {}
+    }
+    private val gameKeys = GameKeys(screen)
 
     @Before
     fun start() {
         GameInputState.reset()
-        GameInputState.coreInput = { _, _, _, _, buttons -> pushes += buttons }
-        GameInputState.onHotkeyKeysChanged = {
-            for (action in matchingHotkeys(hotkeys, pressedKeys + GameInputState.hotkeyKeys)) {
-                if (comboUsesDpad(hotkeys[action].orEmpty())) hotkeysRun += action
-            }
+        coreInput = GameInputState.coreInput
+        GameInputState.coreInput = GameInputState.CoreInput { lx, ly, rx, ry, buttons ->
+            pushes += buttons
+            sticksSent = floatArrayOf(lx, ly, rx, ry)
         }
+        GameInputState.onHotkeyKeysChanged = { gameKeys.onHatChanged() }
     }
 
     @After
     fun stop() {
         GameInputState.onHotkeyKeysChanged = null
         GameInputState.reset()
+        GameInputState.coreInput = coreInput
     }
 
-    /** EmulatorScreen's onPreviewKeyEvent with the game running: repeats ignored, hotkeys first, then the mapped bits. */
     private fun key(code: Int, down: Boolean, repeat: Int = 0) {
-        if (repeat > 0) return
-        if (down) pressedKeys += code else pressedKeys -= code
-        if (down) {
-            val matched = matchingHotkeys(hotkeys, pressedKeys + GameInputState.hotkeyKeys)
-                .filter { it != HotkeyAction.KEYBOARD && it != HotkeyAction.PS1_ANALOG_TOGGLE }
-            if (matched.isNotEmpty()) {
-                hotkeysRun += matched
-                return
-            }
-        }
-        val bits = InputBindings.of(mappings).bitsForKey(code)
-        if (bits != 0) GameInputState.setButton(bits, down)
+        gameKeys.onKey(code, down, repeat)
     }
 
     private fun tap(code: Int) {
@@ -62,7 +73,7 @@ class HeldCrossReplayTest {
         key(code, down = false)
     }
 
-    /** A joystick move: every axis the RP6 reports, at rest unless given. */
+    /** A joystick move: every axis the RP6 reports, at rest unless given. The sticks sent for it are checked. */
     private fun move(lx: Float = 0f, ly: Float = 0f, rx: Float = 0f, ry: Float = 0f, hatX: Float = 0f, hatY: Float = 0f,
                      lt: Float = 0f, rt: Float = 0f) {
         val axes = mapOf(
@@ -70,14 +81,17 @@ class HeldCrossReplayTest {
             AXIS_LTRIGGER to lt, AXIS_RTRIGGER to rt, AXIS_BRAKE to lt, AXIS_GAS to rt,
         )
         GameInputState.onJoystickMove({ axes[it] ?: 0f }, mappings, LaunchSystems.PSP, rightStick)
+        // The PSP's stick is the left one, or the right one as its Analog choice; the right stick goes as itself too.
+        val pspStick = if (rightStick == PspRightStick.ANALOG) floatArrayOf(rx, ry) else floatArrayOf(lx, ly)
+        assertArrayEquals("sticks sent", pspStick + floatArrayOf(rx, ry), sticksSent, 0f)
     }
 
     /**
      * Cross held through [steps] joystick moves of a stage: the stick swept, the hat pressed in each of its eight
-     * directions, Square, L1 and R1 tapped and held (alone, together, on the same move as a hat change), the triggers
-     * pulled, and the right stick moved. Android repeats Cross until another key goes down.
+     * directions, [buttons] tapped and held (alone, together, on the same move as a hat change), the triggers pulled,
+     * and the right stick moved. Android repeats Cross until another key goes down.
      */
-    private fun driveWithCrossHeld(steps: Int, seed: Int) {
+    private fun driveWithCrossHeld(steps: Int, seed: Int, buttons: List<Int> = listOf(BUTTON_X, BUTTON_L1, BUTTON_R1)) {
         val random = Random(seed)
         key(BUTTON_A, down = true)
         var crossRepeats = 0
@@ -92,11 +106,11 @@ class HeldCrossReplayTest {
                 0 -> { val (x, y) = hats[random.nextInt(hats.size)]; hatX = x; hatY = y }
                 1 -> { hatX = 0f; hatY = 0f }
                 2, 3 -> {
-                    val button = listOf(BUTTON_X, BUTTON_L1, BUTTON_R1).random(random)
+                    val button = buttons.random(random)
                     if (button in held) { key(button, down = false); held -= button } else { key(button, down = true); held += button }
                     crossRepeats = -1
                 }
-                4 -> { tap(listOf(BUTTON_X, BUTTON_L1, BUTTON_R1).random(random)); crossRepeats = -1 }
+                4 -> { tap(buttons.random(random)); crossRepeats = -1 }
                 else -> {}
             }
             val t = step / 40.0
@@ -121,6 +135,14 @@ class HeldCrossReplayTest {
         }
     }
 
+    /** The screen's focus: on the screen itself ([onScreen]), or on something in it ([inScreen] without [onScreen]). */
+    private fun focus(onScreen: Boolean, inScreen: Boolean) = object : FocusState {
+        override val isFocused = onScreen
+        override val hasFocus = inScreen
+        override val isCaptured = false
+        override fun toString() = "isFocused $isFocused, hasFocus $hasFocus"
+    }
+
     @Test
     fun crossStaysHeldThroughTheStickTheHatSquareLAndRWithTheDefaultBindings() {
         for (seed in 1..20) {
@@ -130,7 +152,6 @@ class HeldCrossReplayTest {
             key(BUTTON_A, down = false)
             assertEquals("seed $seed: Cross let go", 0, pushes.last() and Input.A)
         }
-        assertTrue("no hotkey runs with the defaults", hotkeysRun.isEmpty())
     }
 
     @Test
@@ -165,20 +186,69 @@ class HeldCrossReplayTest {
     }
 
     @Test
-    fun hotkeysOnTheRp6sButtonsDontRunWhileCrossIsHeld() {
-        // Combos an RP6 owner might set without Z or C: none holds Cross, and a combo must be exactly what's pressed.
-        hotkeys = mapOf(
-            HotkeyAction.PAUSE to listOf(BUTTON_SELECT, BUTTON_START),
-            HotkeyAction.SAVE_STATE to listOf(BUTTON_SELECT, BUTTON_R1),
-            HotkeyAction.LOAD_STATE to listOf(BUTTON_SELECT, BUTTON_L1),
-            HotkeyAction.NEXT_SLOT to listOf(BUTTON_SELECT, DPAD_RIGHT),
-            HotkeyAction.PREVIOUS_SLOT to listOf(BUTTON_SELECT, DPAD_LEFT),
-            HotkeyAction.FAST_FORWARD_TOGGLE to listOf(BUTTON_MODE),
-            HotkeyAction.LIBRARY to listOf(BUTTON_MODE, BUTTON_X),
-        )
-        driveWithCrossHeld(steps = 5_000, seed = 11)
-        assertCrossHeldInEveryPushAfter(0, "RP6 hotkeys")
+    fun aHotkeyRunsOnExactlyItsKeysSoNoneRunsWhileCrossIsHeld() {
+        hotkeys = RP6_HOTKEYS
+        // Without Cross: each runs, and the key completing it isn't the game's.
+        key(BUTTON_SELECT, down = true)
+        key(BUTTON_R1, down = true)
+        assertEquals(listOf(HotkeyAction.SAVE_STATE), hotkeysRun)
+        assertEquals(0, GameInputState.buttons and Input.R1)
+        key(BUTTON_R1, down = false)
+        key(BUTTON_SELECT, down = false)
+        key(BUTTON_MODE, down = true)
+        key(BUTTON_X, down = true)
+        assertEquals(listOf(HotkeyAction.SAVE_STATE, HotkeyAction.LIBRARY), hotkeysRun)
+        key(BUTTON_X, down = false)
+        key(BUTTON_MODE, down = false)
+        key(BUTTON_SELECT, down = true)
+        move(hatX = 1f)
+        assertEquals(listOf(HotkeyAction.SAVE_STATE, HotkeyAction.LIBRARY, HotkeyAction.NEXT_SLOT), hotkeysRun)
+        move()
+        key(BUTTON_SELECT, down = false)
+        hotkeysRun.clear()
+
+        // With Cross held, the same presses run nothing: R1, Square and the D-pad are the game's, and Cross stays.
+        val from = pushes.size
+        key(BUTTON_A, down = true)
+        key(BUTTON_SELECT, down = true)
+        key(BUTTON_R1, down = true)
+        assertEquals(Input.R1, GameInputState.buttons and Input.R1)
+        key(BUTTON_R1, down = false)
+        key(BUTTON_SELECT, down = false)
+        key(BUTTON_MODE, down = true)
+        key(BUTTON_X, down = true)
+        assertEquals(Input.X, GameInputState.buttons and Input.X)
+        key(BUTTON_X, down = false)
+        key(BUTTON_MODE, down = false)
+        key(BUTTON_SELECT, down = true)
+        move(hatX = 1f)
+        assertEquals(Input.RIGHT, GameInputState.buttons and Input.RIGHT)
+        move()
+        key(BUTTON_SELECT, down = false)
         assertTrue("ran $hotkeysRun", hotkeysRun.isEmpty())
+        assertCrossHeldInEveryPushAfter(from, "Cross held through the combos")
+
+        // And through a stage with those keys in it.
+        driveWithCrossHeld(steps = 5_000, seed = 11, buttons = listOf(BUTTON_X, BUTTON_L1, BUTTON_R1, BUTTON_SELECT, BUTTON_MODE))
+        assertTrue("ran $hotkeysRun", hotkeysRun.isEmpty())
+        assertCrossHeldInEveryPushAfter(from, "a stage with the hotkeys' keys")
+    }
+
+    @Test
+    fun focusMovingIntoTheScreensChildrenKeepsCrossAndOnlyLeavingItLetsGo() {
+        key(BUTTON_A, down = true)
+        val from = pushes.size
+        gameKeys.onFocusChanged(focus(onScreen = true, inScreen = true))
+        move(lx = 0.5f)
+        // Focus moving to something in the screen (the game picture's view) is still the screen's focus.
+        gameKeys.onFocusChanged(focus(onScreen = false, inScreen = true))
+        move(lx = -0.5f)
+        gameKeys.onFocusChanged(focus(onScreen = true, inScreen = true))
+        move(lx = 0.2f)
+        assertCrossHeldInEveryPushAfter(from, "focus in the screen")
+        // Leaving the screen (a dialog, the pause menu) lets go of everything.
+        gameKeys.onFocusChanged(focus(onScreen = false, inScreen = false))
+        assertEquals(0, pushes.last())
     }
 
     @Test
@@ -188,7 +258,6 @@ class HeldCrossReplayTest {
         // FLAG_CANCELED, when it cancels a held key) is all that does it; afterwards no move or other key brings it back.
         for (drop in listOf<() -> Unit>({ GameInputState.releaseAllButtons() }, { key(BUTTON_A, down = false) })) {
             GameInputState.reset()
-            pressedKeys.clear()
             key(BUTTON_A, down = true)
             move(lx = 0.5f)
             drop()
@@ -201,6 +270,7 @@ class HeldCrossReplayTest {
             for (n in after until pushes.size) assertEquals("push $n", 0, pushes[n] and Input.A)
             key(BUTTON_A, down = true)
             assertEquals(Input.A, pushes.last() and Input.A)
+            key(BUTTON_A, down = false)
         }
     }
 
@@ -236,13 +306,23 @@ class HeldCrossReplayTest {
             1 shl 21 to "a:14:0", 1 shl 22 to "a:14:1", 1 shl 23 to "a:11:0", 1 shl 24 to "a:11:1",
         )
 
-        /** SettingsStore's default hotkeys. */
+        /** SettingsStore's default hotkeys (Z and C, which the RP6 hasn't). */
         val DEFAULT_HOTKEYS = mapOf(
             "save" to listOf(101, 103), "load" to listOf(101, 102), "inc_slot" to listOf(101, 22),
             "dec_slot" to listOf(101, 21), "pause" to listOf(101, 96), "reset" to listOf(101, 109, 108),
             "reload" to listOf(101, 99), "quit" to listOf(101, 97), "screenshot" to listOf(101, 107),
             "mute" to listOf(101, 100), "ff_toggle" to listOf(101, 105), "analog_toggle" to listOf(98),
             "keyboard" to listOf(101, 104), "library" to listOf(101, 98),
+        )
+
+        /** Combos an RP6 owner might set without Z or C, on Select and the Xbox button. */
+        val RP6_HOTKEYS = mapOf(
+            HotkeyAction.PAUSE to listOf(BUTTON_SELECT, BUTTON_START),
+            HotkeyAction.SAVE_STATE to listOf(BUTTON_SELECT, BUTTON_R1),
+            HotkeyAction.LOAD_STATE to listOf(BUTTON_SELECT, BUTTON_L1),
+            HotkeyAction.NEXT_SLOT to listOf(BUTTON_SELECT, DPAD_RIGHT),
+            HotkeyAction.PREVIOUS_SLOT to listOf(BUTTON_SELECT, DPAD_LEFT),
+            HotkeyAction.LIBRARY to listOf(BUTTON_MODE, BUTTON_X),
         )
     }
 }

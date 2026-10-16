@@ -322,7 +322,7 @@ class MainViewModel(
     private var wasEmulationRunningBeforePause = false
 
     override fun onPause(owner: LifecycleOwner) {
-        InputLog.note("activity paused")
+        InputLog.note { "activity paused" }
         if (_isLoaded.value && !_isPaused.value) {
             wasEmulationRunningBeforePause = true
             setPause(true)
@@ -332,7 +332,7 @@ class MainViewModel(
     }
 
     override fun onResume(owner: LifecycleOwner) {
-        InputLog.note("activity resumed")
+        InputLog.note { "activity resumed" }
         if (_isLoaded.value && wasEmulationRunningBeforePause) {
             setPause(false)
         }

@@ -54,23 +54,35 @@ needs the RP6.
   rewrites only bits bound to an axis, the hat only the D-pad bits it set; a hotkey runs only on exactly the keys
   held, so none runs with Cross held unless it holds Cross; nothing in the game's screen asks for focus but itself
   and the PSP dialogs. Compose 1.7.6 (bytecode read) drops a key event while a focus invalidation is pending
-  ("FocusRelatedWarning: Dispatching key event while focus system is invalidated." on System.out), but those are
-  scheduled and run within a composition's apply, and a dropped event loses a press or leaves a key down, never lets
-  go of a held one.
-- **Replay** (`HeldCrossReplayTest`, through `GameInputState`'s new seams `coreInput` and `onJoystickMove`, the key
-  handler as the game screen runs it): Cross stays in every state sent through 20 stages of 3,000 joystick moves (the
-  stick swept, the hat in its eight directions, Square, L1 and R1 tapped and held, the triggers), with the bindings
-  the RP6 captures for its triggers and hat, with L and R moved to the triggers, with each PSP Right Stick choice and
-  with Select-, Start- and Xbox-button hotkeys; a let-go of everything or a release of Cross alone gives the report's
-  symptom exactly.
+  ("FocusRelatedWarning: Dispatching key event while focus system is invalidated." on System.out); those are
+  scheduled and run within a composition's apply. A dropped event never lets go of a held key, but a dropped
+  re-press (Cross lifted for a moment) looks to the player just like the report.
+- **Replay** (`HeldCrossReplayTest`): the game screen's key handler, its hat listener for hotkeys and its focus hook
+  moved, unchanged, from EmulatorScreen into `GameKeys` (input/GameKeys.kt), which the screen and the test both call;
+  `GameInputState` sends through `coreInput` and takes moves through `onJoystickMove` (interfaces with primitive
+  parameters, one reused reader for the event: nothing allocated per move with the log off). The test checks the
+  buttons and the sticks sent with every move. Cross stays in every state sent through 20 stages of 3,000 joystick
+  moves (the stick swept, the hat in its eight directions, Square, L1 and R1 tapped and held, the triggers, Android's
+  repeats of Cross), with the bindings the RP6 captures for its triggers and hat, with L and R moved to the triggers,
+  with each PSP Right Stick choice and with focus moving inside the screen; hotkeys on Select and the Xbox button run
+  without Cross held and don't with it. A let-go of everything, a release of Cross alone or focus leaving the screen
+  gives the report's symptom exactly. Mutations, each alone, each caught: a key repeat releasing its key, focus
+  inside the screen releasing everything, hotkeys matching a subset of the keys held, `push()` skipping updates
+  whose buttons didn't change.
 - **Left, for the RP6**: Android cancelling the held key (a KeyUp with FLAG_CANCELED: InputReader's buffer overrun or
-  a device reset, the window losing focus), an activity pause and resume, the pad's own firmware letting go of
-  BTN_SOUTH, or the owner's bindings or hotkeys. `InputLog` (input/InputLog.kt) tells them apart:
-  `adb shell setprop log.tag.PhobosInput DEBUG`, then start the game; it logs each key event the window and the game's
-  handler get (flags, device, uptime), each change of the buttons sent to the core, a let-go of everything with its
-  caller, the window's, the activity's and the game screen's focus, and the bindings and hotkeys as the game starts,
-  beside `adb shell getevent -lt` on the pad's node (the same clock).
-- **Checks**: the JVM unit tests, modern flavor, 349/0 on the Mac (the new five among them); CI runs both flavors.
+  a device reset, the window losing focus), an activity pause and resume, a lost re-press, the pad's own firmware
+  letting go of Cross (code 0x130, which getevent prints as BTN_GAMEPAD), or the owner's bindings or hotkeys.
+  `InputLog` (input/InputLog.kt) tells them apart: `adb shell setprop log.tag.PhobosInput DEBUG`, then start the
+  game (it's read as a game starts); it logs each key event the window and the game's handler get (flags, scan code,
+  device, down and event times), each change of the buttons sent to the core, a let-go of everything with its caller
+  and each reset, the window's, the activity's and the game screen's focus, and the bindings and hotkeys as the game
+  starts. The capture steps, the reading guide and a safe install (never uninstall: it deletes saves, states and
+  settings; check the installed versionCode, `-PversionCode` if it's higher) are in PR #264's description.
+- **Review** (of `acd317dd9`): approve with should-fixes, no blockers: the tests ran a copy of the key handler, the
+  hotkey test couldn't fail, nothing checked the sticks sent, two values in the reading guide were wrong and it missed
+  a lost re-press, the install step could be refused (and the obvious way past it deletes data), and the joystick
+  path boxed. All taken, with the nits on `coreInput`'s restore, `reset()` and the key lines.
+- **Checks**: the JVM unit tests on the Mac: input 45/0, the suite 350/0 in each flavor (48 classes); CI runs both.
 
 ## PSP NPDRM: PGD files on the memory stick — a game's installed data read through the PGD layer (Gunhound EX, 7th Dragon 2020); a wrong key, a damaged header and a write refused as the PGD layer refuses them — 2026-10-15
 
