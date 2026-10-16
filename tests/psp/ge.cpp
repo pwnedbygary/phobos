@@ -2941,9 +2941,10 @@ static auto geVertexRuns() -> void {
 }
 
 //A float in a vertex that's a signaling not-a-number reads quieted (the fraction's top bit set, its other bits and the
-//sign kept), as the host's float operations leave one, in a run and one at a time, whichever compiler built it: GCC
-//drops the readers' multiplications by 1 that clang keeps (vertexFloat()). Quiet ones, infinities and numbers read as
-//they are. Each value fills every float of a 3D vertex: two weights, the texture coordinates, normal and position.
+//sign kept), as the host's float operations leave one, in a run and one at a time, whichever compiler built it: GCC's
+//builds quiet it in vertexFloat(); clang's rely on the readers' multiplication by the float's unit, 1, which GCC drops
+//in runs, so on the Mac this fails if clang ever drops it too. Quiet ones, infinities and numbers read as they are.
+//Each value fills every float of a 3D vertex: two weights, the texture coordinates, normal and position.
 static auto geVertexFloatsQuieted() -> void {
   System s;
   auto& ge = s.ge;
