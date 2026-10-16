@@ -40,7 +40,7 @@ typedef struct {
   int read;         //prof.txt was found
 } Settings;
 
-static Settings settings = {1, PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_SELECT, 1, 20, 10, 2048, 512, 1, 1, 0};
+static Settings settings = {1, PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_SELECT, 1, 20, 10, 2048, 256, 1, 1, 0};
 
 //In the order the report names them, so the default reads as prof.txt writes it.
 static const struct { const char* name; u32 mask; } buttonNames[] = {

@@ -15895,10 +15895,13 @@ CPU in sceGeListSync 838 ms a second); so a PSP's 28 ms a loop had to be its GE'
 times the model's 6.27 ms over the same list (4.16 M pixels): about 0.9 pixels a bus clock, not four. Part 64's "Left"
 guessed it; the psp-hires agent's estimate (a pixel a clock, 0.65 scenes a vblank) came close.
 
-**The owner's captures** (capture mode, plugin 0.2.0: Chains of Olympus UCUS98653 one, Ghost of Sparta three, Super
-Monkey Ball one, Killzone two, Activision Hits two; Army of Two not yet), each beside Phobos's profile of its scene
-(the PSP's window of whole seconds where the scene is: Super Monkey Ball's first 7 s, before vblank waits begin;
-Activision Hits' copyright screen, seconds 3 to 7 of its capture from the boot, against Phobos's first 2 s). A list's
+**The owner's captures** (capture mode, plugin 0.2.0, `~/phobos-work/scratch/psp-ge-profile/captures`): Chains of
+Olympus's difficulty menu (UCUS98653-5: coo-diff itself); Ghost of Sparta's main menu (UCUS98737-1) and two later,
+busier scenes (-2, -3); Super Monkey Ball's Story Mode (ULES00364-1, a system dialog at its end); Killzone's gameplay
+(UCUS98646-1, -2); Activision Hits' whole copyright screen from the boot (ULUS10186-boot2), a first boot capture cut
+short and the 3D main menu. Army of Two, optional, wasn't captured. Each is set beside Phobos's profile of its scene
+over the PSP's window of whole seconds where the scene is: Super Monkey Ball's first 7 s, before the dialog's vblank
+waits; the copyright screen, seconds 3 to 7 of the boot capture, against Phobos's first 2 s. A list's
 GE time is the median, from when the GE could begin it to its end; on the PSP measured, in Phobos what the model
 charged. The CPU's part, a loop's time not blocked in a sync or a vblank wait:
 
@@ -15906,7 +15909,7 @@ charged. The CPU's part, a loop's time not blocked in a sync or a vblank wait:
 |---|---|---|---|---|
 | coo-diff | 36.2, 36.2 (0.60) | 159.5, 159.4 (2.66) | 27.60 ms, 6.24 ms (4.4) | 7.12 ms, 1.02 ms |
 | gos-menu | 33.6, 33.6 (0.56) | 247.0, 246.9 (4.12) | 29.62, 4.05 (7.3) | 9.82, 1.19 |
-| gos-menu, captures 2 and 3 | 29.5, 30.0 (0.49, 0.50) | the same | 32.93, 31.72 (8.1, 7.8) | 22.2, 31.1 |
+| Ghost of Sparta's two later scenes (no state in Phobos) | 29.5, 30.0 (0.49, 0.50) | | 32.93, 31.72 | 22.2, 31.1 |
 | smba-story | 39.8, 40.0 (0.67) | 434.5, 434.3 (7.25) | 23.64, 1.98 (11.9) | 18.75, 2.10 |
 | kz-gp (frames: frame buffer calls) | 64.4, 32.2 (0.54) | 516.9, 258.3 (4.31) | its scene list 23.4 (17.2 in capture 2), 3.57 (6.6, 4.8); its full-screen list 1.72, 0.29 (5.9) | 15.5, 1.93 |
 | ahr-legal, the copyright screen | 216.3, 108.6 (1.81) | 1698, 850 (14.2) | 4.46, 0.59 (7.6) | 4.62, 0.59 |
@@ -15933,8 +15936,11 @@ charged. The CPU's part, a loop's time not blocked in a sync or a vblank wait:
 
 ### Left
 
-- Army of Two's capture, still to come; Ghost of Sparta's and Killzone's captures differ among themselves (where in
-  the menu or the level), and their scenes aren't yet matched to Phobos's frame for frame.
+- Ghost of Sparta's two later scenes have no state in Phobos, and Killzone's two captures differ between themselves
+  (where in the level): their scenes aren't matched to Phobos's frame for frame. Army of Two wasn't captured.
+- A capture's memory: on the owner's PSP-1000 a game leaves some 560 KB of kernel memory free, and `keep = 512` left
+  under 64 KB for the records, so the first captures were refused (as they're meant to be, with a note); 0.2.3's
+  default is 256, some 300 KB for records ten seconds of these games fill 50 to 130 KB of.
 - geTime() is unchanged here: the captures say by how much it's short, not yet how a PSP's GE spends its time. The
   fit above is three scenes' averages with Phobos's own counts; the next step is a model of the GE's time per list
   fitted to every list the captures hold (each scene's pixels and primitives from Phobos's profile of it), with the

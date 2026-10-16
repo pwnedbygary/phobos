@@ -154,7 +154,9 @@ name and the time.
    the top right); keep doing what the scene says during it. When it ends, the memory stick light flashes while the
    file is written, then the box says `SAVED` and the file's name: wait for that before the next capture.
 3. Each capture is `PHOBOS/PROF/<ID>-<n>.bin`, numbered from 1 per game. If a capture couldn't run (not enough
-   memory, say), a `.txt` with that number says why instead.
+   memory, say), a `.txt` with that number says why instead. (On the owner's PSP-1000 a game leaves some 560 KB of
+   kernel memory free: with `keep = 512`, 0.2.2's and before, the first captures were refused that way; from 0.2.3
+   `keep` is 256, which leaves some 300 KB for the records, where ten seconds of these games took 50 to 130 KB.)
 4. For Activision Hits Remixed's copyright screen, which comes as the game boots, copy `prof-boot.txt` over
    `prof.txt` instead, then start the game and leave it: the capture runs for the game's first 12 seconds. Copy
    `prof-capture.txt` back afterwards.
@@ -265,7 +267,7 @@ What a hook costs, by instruction count (the dry run measures it on the PSP itse
   write of the trace (a stick not ready at the game's boot is found later); `prof.txt` is read the first time the
   folder is there.
 - A capture's events go to a buffer in kernel memory (partition 1), taken when the capture starts and given back
-  after its file is written: as much as `buffer` KB (default 2048), leaving `keep` KB (default 512) of the
+  after its file is written: as much as `buffer` KB (default 2048), leaving `keep` KB (default 256) of the
   partition's largest free block for the game and the firmware. If that leaves under 64 KB, there's no capture, and a
   `.txt` says how much memory there was. Records are 32 bytes. Phobos counts at most about 17 GE submissions a frame
   in these six scenes; with their callbacks, syncs, waits, flips and vblanks that's perhaps 3,000 records a second,
@@ -335,7 +337,7 @@ wait until it is.
 | `start` | 20 | seconds after the game's start for a timed run, or `off` (0-3600) |
 | `length` | 10 | seconds (1-60) |
 | `buffer` | 2048 | KB of kernel memory at most (64-16384) |
-| `keep` | 512 | KB left free beside it (0-8192) |
+| `keep` | 256 | KB left free beside it (0-8192) |
 | `partition` | 1 | the memory partition (1-12); leave it at 1 unless the dry run's report suggests otherwise |
 | `notices` | `on` | `on` or `off`: the on-screen notices |
 

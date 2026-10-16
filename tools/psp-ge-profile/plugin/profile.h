@@ -8,7 +8,7 @@
 #pragma once
 #include <psptypes.h>
 
-#define ProfileVersion "0.2.2"
+#define ProfileVersion "0.2.3"
 enum { ProfileFormat = 1, ProfileHeaderSize = 256, ProfileRecordSize = 32, ProfileThreadNameSize = 32 };
 
 //What a record is. The calls are the game's own, seen through the patched syscalls, with entry and return times;

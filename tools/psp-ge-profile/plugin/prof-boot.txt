@@ -13,7 +13,7 @@ buttons = L+R+SELECT
 delay = 1
 
 buffer = 2048
-keep = 512
+keep = 256
 
 # On-screen notices: on or off.
 notices = on

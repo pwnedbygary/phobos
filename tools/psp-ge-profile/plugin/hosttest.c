@@ -594,7 +594,7 @@ static int bootFolderTest(void) {
   static char trace[8192];
   assert(readFile("ms0:/PHOBOS/trace.txt", trace, sizeof(trace)) > 0);
   const char* expected[] = {
-    "---- Phobos GE profiler 0.2.2: module_start", "device: ms0:", "settings read: mode capture",
+    "---- Phobos GE profiler 0.2.3: module_start", "device: ms0:", "settings read: mode capture",
     "found sctrlHENPatchSyscall at 0x", "hook sceGeListEnQueue: found at 0x", "sub-interrupt monitor: available",
     "control thread not made (0x80020190)",
   };
@@ -740,7 +740,7 @@ int main(int argc, char** argv) {
   static char trace[16384];
   assert(readFile("ms0:/PHOBOS/trace.txt", trace, sizeof(trace)) > 0);
   const char* expected[] = {
-    "---- Phobos GE profiler 0.2.2: module_start", "device: no PHOBOS folder on ms0: or ef0:",
+    "---- Phobos GE profiler 0.2.3: module_start", "device: no PHOBOS folder on ms0: or ef0:",
     "not found: sctrlHENFindFunctionOnSystem", "found sctrlHENPatchSyscall at 0x",
     "refused sctrlKernelMsIsEf: the lookup gave 0x8002013A", "found sceDisplayGetFrameBuf at 0x",
     "hook sceGeListEnQueue: found at 0x", "patched, syscall 0x2000", "hook sceDisplaySetFrameBuf: found at 0x",
