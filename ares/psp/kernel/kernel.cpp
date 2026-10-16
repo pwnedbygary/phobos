@@ -886,7 +886,9 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
           {"sceKernelRotateThreadReadyQueue", &Kernel::spinRotateThreadReadyQueue},
           {"sceKernelSignalSema", &Kernel::spinSignalSema},
           {"sceMpegRingbufferAvailableSize", &Kernel::spinMpegRingbufferAvailableSize},
-          {"sceDisplayGetVcount", &Kernel::spinGetVcount}}) {
+          {"sceDisplayGetVcount", &Kernel::spinGetVcount},
+          {"sceGeListSync", &Kernel::spinGeListSync},
+          {"sceGeDrawSync", &Kernel::spinGeDrawSync}}) {
       if(!std::strcmp(function.name, name)) function.spin = spin;
     }
   }

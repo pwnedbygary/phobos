@@ -446,10 +446,11 @@ auto Kernel::sceGeListUpdateStallAddr() -> void {
 }
 
 //(list, mode): 0 waits for the list to finish; 1 says how it's doing: 0 finished, 1 queued, 2 drawing, 3 stopped at
-//its stall address, 4 paused (or queued again after running).
+//its stall address, 4 paused (or queued again after running). A look, or a call refused, changes nothing (calm):
+//games poll the look in a loop while the GE draws (spins.cpp).
 auto Kernel::sceGeListSync() -> void {
   s32 index = geIndex(arg(0));
-  if(index < 0) return result(ErrorInvalidID);
+  if(index < 0) return calm = true, result(ErrorInvalidID);
   auto& list = geLists[index];
   using State = GeList::State;
   if(arg(1) == 0) {
@@ -460,19 +461,28 @@ auto Kernel::sceGeListSync() -> void {
     }
     return;
   }
-  if(arg(1) != 1) return result(ErrorInvalidMode);
+  calm = true;
+  result(geListLook(index, arg(1)));
+}
+
+//What sceGeListSync says of list index in a mode other than 0 (which waits): its state, or the mode refused.
+auto Kernel::geListLook(u32 index, u32 mode) const -> u32 {
+  if(mode != 1) return ErrorInvalidMode;
+  auto& list = geLists[index];
+  using State = GeList::State;
   switch(list.state) {
-  case State::Queued:    return result(list.started ? 4 : 1);
-  case State::Running:   return result(geAtStall(index) ? 3 : 2);
-  case State::Completed: return result(0);
-  case State::Paused:    return result(4);
-  default:               return result(ErrorInvalidID);
+  case State::Queued:    return list.started ? 4 : 1;
+  case State::Running:   return geAtStall(index) ? 3 : 2;
+  case State::Completed: return 0;
+  case State::Paused:    return 4;
+  default:               return ErrorInvalidID;
   }
 }
 
 //(mode): 0 waits for every list to finish, then forgets the finished ones; 1 says how the GE is doing: 0 nothing to
 //do, 2 drawing, 3 stopped at a stall address. A list whose finish callback runs is still queued but done: in it, 0
-//if it was the last, 2 with another behind it (pspautotests' gpu/signals and gpu/ge/queue2 recorded both).
+//if it was the last, 2 with another behind it (pspautotests' gpu/signals and gpu/ge/queue2 recorded both). A look,
+//or a mode refused, changes nothing (calm), as with sceGeListSync.
 auto Kernel::sceGeDrawSync() -> void {
   if(arg(0) == 0) {
     if(!mayWait()) return;
@@ -480,11 +490,17 @@ auto Kernel::sceGeDrawSync() -> void {
     if(geQueue.empty()) return geDrawSynced();
     return block(Wait::GeDraw, 0, 0);
   }
-  if(arg(0) != 1) return result(ErrorInvalidMode);
+  calm = true;
+  result(geDrawLook(arg(0)));
+}
+
+//What sceGeDrawSync says in a mode other than 0 (which waits): how the GE is doing, or the mode refused.
+auto Kernel::geDrawLook(u32 mode) const -> u32 {
+  if(mode != 1) return ErrorInvalidMode;
   for(u32 index : geQueue) {
-    if(geLists[index].state != GeList::State::Completed) return result(geAtStall(index) ? 3 : 2);
+    if(geLists[index].state != GeList::State::Completed) return geAtStall(index) ? 3 : 2;
   }
-  result(0);
+  return 0;
 }
 
 //(PspGeCallbackData: signal function and argument, finish function and argument): the callbacks' number, for

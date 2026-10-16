@@ -3,9 +3,10 @@
 //ID and its own status (for its priority) first, 175,000 times a frame (half a million calls) till a count another
 //thread or a handler keeps moves on; the Twisted Metal, Disaster Report 3 and Armored Core intro movies ask the
 //movie's ring how full it is (and signal a semaphore already at its most) in 90,000 to 370,000 calls a frame till the
-//reader thread feeds it. A system call costs the clock one cycle, so a turn of such a loop is a few dozen cycles of the
-//PSP's time, and nothing else happens till the CPU's go ends at the next thing due (Kernel::run(): only system
-//functions bring that end sooner, and these, quiet or calm, don't).
+//reader thread feeds it; Need for Speed: Shift and Resistance ask the GE how it's doing (sceGeDrawSync(1)) thousands
+//of times a frame till it's done drawing. A system call costs the clock one cycle, so a turn of such a loop is a few
+//dozen cycles of the PSP's time, and nothing else happens till the CPU's go ends at the next thing due (Kernel::run():
+//only system functions bring that end sooner, and these, quiet or calm, don't).
 //
 //So once a loop has come round the same way a few times, the kernel proves that its next turn leaves everything a
 //later turn sees as it was, and jumps ahead by whole turns to just before the go's end, the last turns running as
@@ -297,5 +298,22 @@ auto Kernel::spinMpegRingbufferAvailableSize(SpinShadow& shadow, u64) -> bool {
 
 auto Kernel::spinGetVcount(SpinShadow& shadow, u64) -> bool {
   shadow.ipu.r[2] = vblanks;
+  return true;
+}
+
+//The GE's looks (a mode but 0, which waits): what the GE and its lists are doing changes only in a system call or
+//between the CPU's goes (a list's FINISH is taken at a call once it's due, and the go ends by then: spinSkip()), so
+//every turn of a go finds what this one finds.
+auto Kernel::spinGeListSync(SpinShadow& shadow, u64) -> bool {
+  s32 index = geIndex(shadow.arg(0));
+  if(index < 0) return shadow.ipu.r[2] = ErrorInvalidID, true;
+  if(shadow.arg(1) == 0) return false;
+  shadow.ipu.r[2] = geListLook(index, shadow.arg(1));
+  return true;
+}
+
+auto Kernel::spinGeDrawSync(SpinShadow& shadow, u64) -> bool {
+  if(shadow.arg(0) == 0) return false;
+  shadow.ipu.r[2] = geDrawLook(shadow.arg(0));
   return true;
 }

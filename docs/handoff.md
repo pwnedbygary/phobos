@@ -35,6 +35,20 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP kernel: the GE's looks skipped through when a game polls them — sceGeDrawSync(1) and sceGeListSync(id, 1) as part 91's spins — 2026-10-16
+
+Branch `cursor/psp-ge-sync-spin-2b67` (from master `a8d5640f5`); docs/psp-core.md, part 105. The GE timing design's
+first step (approved by the owner): part 76's GE timing made polling games slower on the host (Resistance 59.9 to 40.4
+and Need for Speed: Shift 45.3 to 32.9 on the RP6 at 5x; Shift asks `sceGeDrawSync(1)` some 7000 times a frame).
+- **The change** (kernel/ge.cpp, spins.cpp, kernel.cpp, kernel.hpp): the looks (mode 1, or a mode or list refused)
+  are calm; their spin handlers answer through the same functions as the calls (`geDrawLook()`, `geListLook()`); mode
+  0, which waits, isn't a spin. Exact as part 91's: the GE's state changes only in a system call or between the CPU's
+  goes, and a skip already stops before a list's FINISH falls due.
+- **Tests**: "the GE's looks polled, skipped as run" (both engines, the skip on and off, the whole state the same
+  after every eighth of a frame: the two looks and a stalled list; a loop counting its turns not skipped); "ge FINISH
+  after a quiet function" dispatches the looks as calm.
+- **Left**: nothing changes much with today's GE; it matters with the PSP's GE timing (the setting, next).
+
 ## PSP NPDRM: PGD files on the memory stick — a game's installed data read through the PGD layer (Gunhound EX, 7th Dragon 2020); a wrong key, a damaged header and a write refused as the PGD layer refuses them — 2026-10-15
 
 Branch `cursor/psp-pgd-stick-2b67`, on master `6ff82f9f1` (part 96, #258), masters `462f8ff2f` (part 99, #261) and
