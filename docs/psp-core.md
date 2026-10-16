@@ -15859,9 +15859,11 @@ it would make. The other profiled functions, which had frames already, add five.
 makes some eight profiled calls a frame and a few context switches, against the 101.5 million instructions the
 emulation thread runs a frame there: a hundred or so instructions, a millionth. Measured as part 100 measures, the
 emulation thread's retired instructions a frame (300 frames from the scene's state, Vulkan fast with late frames,
-master `a8d5640f5` and the branch built alike, taking turns; `offcost/`): the first round, master 101.537 M, the
-branch 101.468 M (−0.07%, as far apart as rounds of one build are); more rounds and Super Monkey Ball's story scene
-are running as the Mac's other jobs let them.
+master `a8d5640f5` and the branch built alike, taking turns, five rounds a side; `offcost/`): Chains of Olympus's
+menu, master 101.625 M (the middle of 101.498 to 102.673), the branch 101.555 M (101.088 to 101.814), −0.07%; Super
+Monkey Ball's story scene, master 416.008 M (415.993 to 416.486), the branch 415.874 M (415.434 to 417.938), −0.03%.
+Round by round the branch's difference was −1.54 to +0.47%, its middle −0.07 and −0.06%: nothing to tell apart from
+the rounds' own spread.
 
 ### Phobos's tables
 

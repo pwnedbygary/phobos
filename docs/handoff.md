@@ -57,8 +57,9 @@ sources; no PPSSPP, no JPCSP. Save states unchanged; nothing of the PSP's behavi
   threads.cpp, interrupts.cpp): the same records from Phobos's HLE in the PSP's time (a call from its start to its
   return, or to its thread going on after a wait; the callbacks as they run; the vblanks), plus the model's charges
   (kind 64: pixels, primitives, cycles, the GE's done time). Off with no profile: a pointer tested at each place, about
-  ten instructions a profiled call (coo-diff: 101.537 M instructions a frame on master, 101.468 M on the branch, one
-  round so far). The runner: `--ge-profile FILE`, `--ge-profile-from F`
+  ten instructions a profiled call (five rounds a side, the emulation thread's instructions a frame: coo-diff 101.625 M
+  on master, 101.555 M on the branch, −0.07%; smba-story 416.008 M, 415.874 M, −0.03%; within the rounds' spread).
+  The runner: `--ge-profile FILE`, `--ge-profile-from F`
   (tools/psp-runner/README.md). The decoder: the charges per list and over the window, `--counts`, the same tables
   for both.
 - **Phobos's tables** (the six scenes from their states, software renderer, 10 s): none waits for the vblank; all draw
