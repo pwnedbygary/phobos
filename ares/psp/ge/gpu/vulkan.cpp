@@ -50,7 +50,6 @@
   F(vkCmdBindDescriptorSets) F(vkCmdBindVertexBuffers) F(vkCmdSetViewport) F(vkCmdSetScissor) \
   F(vkCmdSetStencilReference) F(vkCmdSetStencilCompareMask) F(vkCmdSetStencilWriteMask) \
   F(vkCmdSetBlendConstants) F(vkCmdPushConstants) F(vkCmdDraw) F(vkCmdBlitImage) F(vkCmdClearAttachments) \
-  F(vkCmdClearDepthStencilImage) \
   F(vkCmdBindIndexBuffer) F(vkCmdDrawIndexed)
 //Presenting's, where there's a window to show on: missing ones mean only that there's no presenting
 #define PSP_VULKAN_SURFACE(F) \
@@ -177,10 +176,12 @@ struct VulkanBackend : GPU::Backend {
   VkSampler sampler = VK_NULL_HANDLE;
   VkShaderModule vertexModule = VK_NULL_HANDLE, fragmentModule = VK_NULL_HANDLE;
   VkShaderModule fragmentDepthModule = VK_NULL_HANDLE;  //(draw.frag's DEPTHS build)
+  VkShaderModule fragmentUndeclaredModule = VK_NULL_HANDLE;  //(and without its declaration: GPU::undeclared())
   VkShaderModule transformModule = VK_NULL_HANDLE;  //(fast mode's: transform.vert)
   VkPipelineCache pipelineCache = VK_NULL_HANDLE;
   VkCommandPool commandPool = VK_NULL_HANDLE;
   std::unordered_map<GPU::Pipeline, VkPipeline, GPU::Pipeline::Hash> pipelineCache_;  //(VK_NULL_HANDLE: it failed)
+  std::unordered_map<GPU::Pipeline, u32, GPU::Pipeline::Hash> depthBuilds;  //(depthBuild()'s, as each was made)
   std::unordered_map<u32, Target> targetImages;
   std::unordered_map<u32, Texture> textureImages;  //0: a blank one, bound for untextured draws
   //Textures let go of, once their runs are done, kept for a texture of their size to take (makeTexture()), rather
@@ -324,6 +325,7 @@ struct VulkanBackend : GPU::Backend {
       if(transformModule) vk.vkDestroyShaderModule(device, transformModule, nullptr);
       if(fragmentModule) vk.vkDestroyShaderModule(device, fragmentModule, nullptr);
       if(fragmentDepthModule) vk.vkDestroyShaderModule(device, fragmentDepthModule, nullptr);
+      if(fragmentUndeclaredModule) vk.vkDestroyShaderModule(device, fragmentUndeclaredModule, nullptr);
       if(sampler) vk.vkDestroySampler(device, sampler, nullptr);
       if(descriptorPool) vk.vkDestroyDescriptorPool(device, descriptorPool, nullptr);
       if(pipelineLayout) vk.vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
@@ -712,10 +714,12 @@ struct VulkanBackend : GPU::Backend {
     VkSpecializationMapEntry entries[20];
     for(u32 n = 0; n < 20; n++) entries[n] = {n, n * 4, 4};
     VkSpecializationInfo specialization{20, entries, sizeof(constants), constants};
-    //(the GE's whole-number depth, draw.frag's DEPTHS, where the depth decides the test or is written; where the
-    //depth is clamped, rasterized a step and a half above the GE's: draw.vert's ABOVE)
-    bool depths = k.depthWrite || (k.depthTest && k.depthCompare > 1);
-    u32 above = depths && depthClamp;
+    //(the GE's whole-number depth, draw.frag's DEPTHS, where the depth decides the test or is written: declared never
+    //above the depth rasterized, which is then a step and a half above the GE's (draw.vert's ABOVE), where the
+    //device clamps the depth and the corners' depths are the GE's 0-65535, as 3D's are held; else undeclared, the
+    //depth rasterized at the GE's: Backend::depthBuild())
+    bool depths = k.depths(), declared = depths && depthClamp && !k.outside;
+    u32 above = declared;
     VkSpecializationMapEntry aboveEntry{0, 0, 4};
     VkSpecializationInfo vertexSpecialization{1, &aboveEntry, sizeof(above), &above};
     //(fast mode's 3D: transform.vert, taking the GE's vertices)
@@ -723,7 +727,7 @@ struct VulkanBackend : GPU::Backend {
       {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT,
        k.transformed ? transformModule : vertexModule, "main", &vertexSpecialization},
       {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT,
-       depths ? fragmentDepthModule : fragmentModule, "main", &specialization}};
+       !depths ? fragmentModule : declared ? fragmentDepthModule : fragmentUndeclaredModule, "main", &specialization}};
     using V = GPU::Vertex;
     using M = GPU::Model;
     VkVertexInputBindingDescription binding{0, k.transformed ? u32(sizeof(M)) : u32(sizeof(V)),
@@ -811,7 +815,14 @@ struct VulkanBackend : GPU::Backend {
       std::chrono::steady_clock::now() - start).count();
     pipelines++;
     pipelineCache_[k] = pipeline;
+    if(depths) depthBuilds[k] = (stages[1].module == fragmentDepthModule) | (above ? 2 : 0);
     return pipeline;
+  }
+
+  auto depthBuild(const GPU::Pipeline& k) -> u32 override {
+    if(!k.depths() || !pipelineFor(k)) return 0;
+    auto found = depthBuilds.find(k);
+    return found != depthBuilds.end() ? found->second : 0;
   }
 
   //copy.frag's pipeline for a MODE: the colors written as they are (0), the depth through gl_FragDepth (1), or the
@@ -1462,7 +1473,9 @@ struct VulkanBackend : GPU::Backend {
           for(size_t n = 0; n < outs.size(); n++) {
             copies.push_back({outs[n].imageSubresource, outs[n].imageOffset, ins[n].imageSubresource,
                               ins[n].imageOffset, outs[n].imageExtent});
+            depthCopyAspects |= copies[n].srcSubresource.aspectMask | copies[n].dstSubresource.aspectMask;
           }
+          depthCopies += copies.size();
           transition(commands, from->second.depth.image, DepthStencil, DepthLayout, Source);
           transition(commands, t.depth.image, DepthStencil, DepthLayout, Destination);
           vk.vkCmdCopyImage(commands, from->second.depth.image, Source, t.depth.image, Destination, copies.size(),
@@ -2443,12 +2456,16 @@ struct VulkanBackend : GPU::Backend {
     Code fragmentDepthCode = dualSource
       ? Code{GPUShaders::fragmentDepthSPIRV, sizeof(GPUShaders::fragmentDepthSPIRV)}
       : Code{GPUShaders::fragmentSingleDepthSPIRV, sizeof(GPUShaders::fragmentSingleDepthSPIRV)};
+    auto undeclared = GPU::undeclared(fragmentDepthCode.words, fragmentDepthCode.size);
+    if(undeclared.empty()) return error = "the shaders weren't taken", false;
+    Code fragmentUndeclaredCode{undeclared.data(), undeclared.size() * 4};
     Code copyVertexCode{GPUShaders::copyVertexSPIRV, sizeof(GPUShaders::copyVertexSPIRV)};
     Code copyFragmentCode{GPUShaders::copyFragmentSPIRV, sizeof(GPUShaders::copyFragmentSPIRV)};
     Code copyAlphaCode{GPUShaders::copyAlphaSPIRV, sizeof(GPUShaders::copyAlphaSPIRV)};
     Code presentCode{GPUShaders::presentSPIRV, sizeof(GPUShaders::presentSPIRV)};
     for(auto [code, module] : {std::pair{vertexCode, &vertexModule}, std::pair{fragmentCode, &fragmentModule},
                                std::pair{fragmentDepthCode, &fragmentDepthModule},
+                               std::pair{fragmentUndeclaredCode, &fragmentUndeclaredModule},
                                std::pair{copyVertexCode, &copyVertexModule},
                                std::pair{copyFragmentCode, &copyFragmentModule},
                                std::pair{copyAlphaCode, &copyAlphaModule},
@@ -2525,6 +2542,7 @@ struct VulkanBackend : GPU::Backend {
       }
     }
     depthAlone = depthAloneProbe();
+    if(lost) return error = "the device was lost", false;
     //the blank texture, texture 0
     u32 blank = 0;
     nextId = 0;
@@ -2534,45 +2552,76 @@ struct VulkanBackend : GPU::Backend {
   }
 
   //Whether a copy between two images of the depth format, of their depth alone, leaves the stencil of the one copied
-  //into (Backend::depthAlone): two pictures of a frame buffer's kind, 128x64, cleared to depths and stencils of their
-  //own, the first's depth copied into the second, whose stencil and depth are read back. MoltenVK's copy takes the
-  //stencil too (Metal copies a depth and stencil picture whole), and so does lavapipe's (its depth and stencil kept
-  //together); any failure on the way says no.
+  //into (Backend::depthAlone), as Command::Depth's copies are made: three pictures of a frame buffer's kind, 128x64,
+  //their depths and stencils patterns of their own from a buffer (not cleared ones, which a driver may copy apart;
+  //the depths no whole steps of either format, which a copy keeps bit for bit), the first's depth copied into the
+  //second whole and into the third as a part, 45x27 from (5, 3) to (37, 9) (a run's sort of place: no tile's or
+  //block's), both read back: the depth taken inside the part, every other depth and every stencil as it was.
+  //MoltenVK's copy takes the stencil too (Metal copies a depth and stencil picture whole), and so does lavapipe's (its
+  //depth and stencil kept together); any failure on the way says no. One the GPU doesn't finish loses the device as
+  //wait() does, the fence, the commands and the pictures left as they are.
   auto depthAloneProbe() -> bool {
-    constexpr u32 Wide = 128, Tall = 64;
+    constexpr u32 Wide = 128, Tall = 64, Pixels = Wide * Tall, PartWide = 45, PartTall = 27;
+    constexpr u32 FromX = 5, FromY = 3, IntoX = 37, IntoY = 9;
     constexpr auto Source = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     constexpr auto Destination = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     constexpr auto Usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                            VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    constexpr auto Both = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-    Image from, into;
-    Buffer read;
+    constexpr VkImageAspectFlags Depth = VK_IMAGE_ASPECT_DEPTH_BIT, Stencil = VK_IMAGE_ASPECT_STENCIL_BIT;
+    constexpr VkImageAspectFlags Both = Depth | Stencil;
+    //(each buffer two pictures' depths, then their stencils; picture p's depth at pixel n, 31 bits of a fraction as a
+    //float, or 24 as the 24-bit format's; the stencil of the two copied into, the first's every bit apart)
+    bool floats = depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT;
+    u32 kept = floats ? ~0u : 0xff'ffffu;
+    auto depth = [&](u32 p, u32 n) -> u32 {
+      u32 bits = (n * 2 + p + 1) * 0x9e37'79b9u;
+      if(!floats) return bits >> 8;
+      f32 value = f32(bits >> 1) * (1.0f / 2147483648.0f);
+      std::memcpy(&bits, &value, 4);
+      return bits;
+    };
+    auto stencil = [](u32 n) { return u8(n * 37 + (n >> 7) * 11 + 0x22); };
+    Image from, whole, part;
+    Buffer upload, read;
     auto& slot = slots[0];
     bool recorded = make(from, Wide, Tall, depthFormat, Usage, Both) &&
-                    make(into, Wide, Tall, depthFormat, Usage, Both) &&
-                    make(read, Wide * Tall * 5, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+                    make(whole, Wide, Tall, depthFormat, Usage, Both) &&
+                    make(part, Wide, Tall, depthFormat, Usage, Both) &&
+                    make(upload, Pixels * 10, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false) &&
+                    make(read, Pixels * 10, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
     if(recorded) {
+      for(u32 n = 0; n < Pixels; n++) {
+        u32 first = depth(0, n), second = depth(1, n);
+        std::memcpy(upload.mapped + n * 4, &first, 4), std::memcpy(upload.mapped + (Pixels + n) * 4, &second, 4);
+        upload.mapped[Pixels * 8 + n] = stencil(n) ^ 0xff, upload.mapped[Pixels * 9 + n] = stencil(n);
+      }
       auto begin = made<VkCommandBufferBeginInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
       begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
       VkCommandBuffer commands = slot.commands;
       recorded = vk.vkBeginCommandBuffer(commands, &begin) == VK_SUCCESS;
       if(recorded) {
-        VkImageSubresourceRange all{Both, 0, 1, 0, 1};
-        VkClearDepthStencilValue first{0.25f, 0x11}, second{0.75f, 0x22};
-        transition(commands, from.image, Both, VK_IMAGE_LAYOUT_UNDEFINED, Destination);
-        transition(commands, into.image, Both, VK_IMAGE_LAYOUT_UNDEFINED, Destination);
-        vk.vkCmdClearDepthStencilImage(commands, from.image, Destination, &first, 1, &all);
-        vk.vkCmdClearDepthStencilImage(commands, into.image, Destination, &second, 1, &all);
+        VkBufferImageCopy first[2] = {{0, 0, 0, {Depth, 0, 0, 1}, {0, 0, 0}, {Wide, Tall, 1}},
+                                      {Pixels * 8, 0, 0, {Stencil, 0, 0, 1}, {0, 0, 0}, {Wide, Tall, 1}}};
+        VkBufferImageCopy second[2] = {{Pixels * 4, 0, 0, {Depth, 0, 0, 1}, {0, 0, 0}, {Wide, Tall, 1}},
+                                       {Pixels * 9, 0, 0, {Stencil, 0, 0, 1}, {0, 0, 0}, {Wide, Tall, 1}}};
+        for(VkImage image : {from.image, whole.image, part.image}) {
+          transition(commands, image, Both, VK_IMAGE_LAYOUT_UNDEFINED, Destination);
+        }
+        vk.vkCmdCopyBufferToImage(commands, upload.buffer, from.image, Destination, 2, first);
+        vk.vkCmdCopyBufferToImage(commands, upload.buffer, whole.image, Destination, 2, second);
+        vk.vkCmdCopyBufferToImage(commands, upload.buffer, part.image, Destination, 2, second);
         transition(commands, from.image, Both, Destination, Source);
-        transition(commands, into.image, Both, Destination, Destination);
-        VkImageCopy copy{{VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1}, {0, 0, 0}, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1},
-                         {0, 0, 0}, {Wide, Tall, 1}};
-        vk.vkCmdCopyImage(commands, from.image, Source, into.image, Destination, 1, &copy);
-        transition(commands, into.image, Both, Destination, Source);
-        VkBufferImageCopy back[2] = {
-          {0, 0, 0, {VK_IMAGE_ASPECT_STENCIL_BIT, 0, 0, 1}, {0, 0, 0}, {Wide, Tall, 1}},
-          {Wide * Tall, 0, 0, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1}, {0, 0, 0}, {Wide, Tall, 1}}};
-        vk.vkCmdCopyImageToBuffer(commands, into.image, Source, read.buffer, 2, back);
+        transition(commands, whole.image, Both, Destination, Destination);
+        transition(commands, part.image, Both, Destination, Destination);
+        VkImageCopy all{{Depth, 0, 0, 1}, {0, 0, 0}, {Depth, 0, 0, 1}, {0, 0, 0}, {Wide, Tall, 1}};
+        VkImageCopy some{{Depth, 0, 0, 1}, {FromX, FromY, 0}, {Depth, 0, 0, 1}, {IntoX, IntoY, 0},
+                         {PartWide, PartTall, 1}};
+        vk.vkCmdCopyImage(commands, from.image, Source, whole.image, Destination, 1, &all);
+        vk.vkCmdCopyImage(commands, from.image, Source, part.image, Destination, 1, &some);
+        transition(commands, whole.image, Both, Destination, Source);
+        transition(commands, part.image, Both, Destination, Source);
+        vk.vkCmdCopyImageToBuffer(commands, whole.image, Source, read.buffer, 2, first);
+        vk.vkCmdCopyImageToBuffer(commands, part.image, Source, read.buffer, 2, second);
         auto done = made<VkBufferMemoryBarrier>(VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER);
         done.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, done.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
         done.srcQueueFamilyIndex = done.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -2586,27 +2635,29 @@ struct VulkanBackend : GPU::Backend {
     if(recorded) {
       auto submit = made<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
       submit.commandBufferCount = 1, submit.pCommandBuffers = &slot.commands;
-      if(vk.vkQueueSubmit(queue, 1, &submit, slot.fence) == VK_SUCCESS &&
-         vk.vkWaitForFences(device, 1, &slot.fence, VK_TRUE, Timeout) == VK_SUCCESS) {
+      if(vk.vkQueueSubmit(queue, 1, &submit, slot.fence) == VK_SUCCESS) {
+        VkResult waited = vk.vkWaitForFences(device, 1, &slot.fence, VK_TRUE, Timeout);
+        if(waited == VK_TIMEOUT) return lost = timedOut = true, false;
+        if(waited != VK_SUCCESS) return lost = true, false;
+        vk.vkResetFences(device, 1, &slot.fence);
         if(!read.coherent) {
           auto range = made<VkMappedMemoryRange>(VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
           range.memory = read.memory, range.size = VK_WHOLE_SIZE;
           vk.vkInvalidateMappedMemoryRanges(device, 1, &range);
         }
         alone = true;
-        for(u32 n = 0; n < Wide * Tall; n++) {
-          u32 word;
-          f32 value;
-          std::memcpy(&word, read.mapped + Wide * Tall + n * 4, 4), std::memcpy(&value, &word, 4);
-          bool taken = depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT ? GPU::depthFromFloat(value) == 16384
-                                                                   : GPU::depthFrom24(word) == 16384;
-          alone = alone && read.mapped[n] == 0x22 && taken;
+        for(u32 n = 0; n < Pixels; n++) {
+          u32 x = n % Wide, y = n / Wide, wholeDepth, partDepth;
+          bool inside = x - IntoX < PartWide && y - IntoY < PartTall;  //(unsigned: below wraps past)
+          u32 taken = inside ? depth(0, (y - IntoY + FromY) * Wide + x - IntoX + FromX) : depth(1, n);
+          std::memcpy(&wholeDepth, read.mapped + n * 4, 4), std::memcpy(&partDepth, read.mapped + (Pixels + n) * 4, 4);
+          alone = alone && !((wholeDepth ^ depth(0, n)) & kept) && !((partDepth ^ taken) & kept) &&
+                  read.mapped[Pixels * 8 + n] == stencil(n) && read.mapped[Pixels * 9 + n] == stencil(n);
         }
       }
-      vk.vkResetFences(device, 1, &slot.fence);
     }
     vk.vkResetCommandBuffer(slot.commands, 0);
-    destroy(from), destroy(into), release(read);
+    destroy(from), destroy(whole), destroy(part), release(upload), release(read);
     return alone;
   }
 };
@@ -2618,4 +2669,19 @@ auto GPU::vulkan(void* getInstanceProcAddr, std::string& error, bool fast, const
   auto gpu = std::make_unique<GPU>(std::move(backend));
   gpu->fast = fast;
   return gpu;
+}
+
+//(each instruction's first word gives its length and opcode: OpExecutionMode is 16, its mode DepthLess 15; none
+//where the words don't make whole instructions)
+auto GPU::undeclared(const u32* words, size_t size) -> std::vector<u32> {
+  size_t count = size / 4;
+  if(count < 5) return {};
+  std::vector<u32> kept(words, words + 5);
+  for(size_t n = 5; n < count;) {
+    u32 length = words[n] >> 16, opcode = words[n] & 0xffff;
+    if(!length || n + length > count) return {};
+    if(!(opcode == 16 && length >= 3 && words[n + 2] == 15)) kept.insert(kept.end(), words + n, words + n + length);
+    n += length;
+  }
+  return kept;
 }

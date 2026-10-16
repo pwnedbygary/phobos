@@ -2658,33 +2658,20 @@ static auto depthModes(const u32* words, u32 size) -> std::vector<u32> {
 
 //The depth a GPU may test before the shader runs (draw.frag's conservative depth). The builds that write the depth
 //(DEPTHS) declare it never above the depth rasterized, which draw.vert and transform.vert put a step and a half above
-//the GE's where the depth is clamped (depth_less); the builds that write none declare nothing. And what a GPU may
-//reject first is only what the test fails after, nor do the corners' depths rasterized move what's interpolated beside
-//them: the same triangles drawn twice, the first time writing the depth, the second testing it with each comparison
-//over a strip of its own, their depths across all of 0-65535 (the depth the shader writes from, interpolated beside the
-//GPU's own, crosses whole numbers where the GPU's rounding may put its depth the other side of them): always, equal, at
-//most and at least draw over every pixel drawn the first time, the others over none. In either mode, at 1x and 2x: 2D
-//strips, against the software renderer, and 2D depths past 65535 (held there, by the GE as by the shader), at most,
-//equal and at least over 65535, where the GPU clamps the depth (without, it clips by it); in 3D (fast mode:
-//transform.vert's), a floor from the near plane to the far one, its depth from 36 to 65534 along it, and the depth
-//range turned around (its far corners' depth below 1.5: on MoltenVK a corner's depth rasterized below 0 moves the
-//depth interpolated beside it, so none is).
-static auto gpuDepthEarly() -> void {
-  namespace Shaders = ares::PlayStationPortable::GPUShaders;
-  struct Build { const char* name; const u32* words; u32 size; std::vector<u32> modes; };
-  Build builds[] = {
-    {"draw.frag", Shaders::fragmentSPIRV, sizeof(Shaders::fragmentSPIRV), {}},
-    {"SINGLE", Shaders::fragmentSingleSPIRV, sizeof(Shaders::fragmentSingleSPIRV), {}},
-    {"DEPTHS", Shaders::fragmentDepthSPIRV, sizeof(Shaders::fragmentDepthSPIRV), {12, 15}},
-    {"SINGLE DEPTHS", Shaders::fragmentSingleDepthSPIRV, sizeof(Shaders::fragmentSingleDepthSPIRV), {12, 15}},
-  };
-  for(auto& build : builds) {
-    auto modes = depthModes(build.words, build.size);
-    std::sort(modes.begin(), modes.end());
-    if(modes != build.modes) std::printf("  %s: the depth's execution modes aren't as declared\n", build.name);
-    CHECK(modes == build.modes, true);
-  }
-  if(!renderer()) return;
+//the GE's where the depth is clamped (depth_less); the builds that write none declare nothing; and the DEPTHS builds
+//undeclared (GPU::undeclared(): for the pipelines the declaration's proof doesn't reach, gpuDepthBuilds) have the
+//depth's DepthReplacing alone, one instruction fewer. And what a GPU may reject first is only what the test fails
+//after, nor do the corners' depths rasterized move what's interpolated beside them: the same triangles drawn twice,
+//the first time writing the depth, the second testing it with each comparison over a strip of its own, their depths
+//across all of 0-65535 (the depth the shader writes from, interpolated beside the GPU's own, crosses whole numbers
+//where the GPU's rounding may put its depth the other side of them): always, equal, at most and at least draw over
+//every pixel drawn the first time, the others over none. In either mode, at 1x and 2x: 2D strips, against the
+//software renderer, and 2D depths past 65535 (held there, by the GE as by the shader), at most, equal and at least
+//over 65535, where the GPU clamps the depth (without, it clips by it); in 3D (fast mode: transform.vert's), a floor
+//from the near plane to the far one, its depth from 36 to 65534 along it, and the depth range turned around (its far
+//corners' depth below 1.5: on MoltenVK a corner's depth rasterized below 0 moves the depth interpolated beside it, so
+//none is).
+static auto depthEarly(GPU* gpu, bool past) -> void {
   auto f24 = [](float value) { return bitsOf(value) >> 8; };
   constexpr u32 First = 0xff30'6090;  //(the first drawing's color; the second's, each comparison's own)
   auto second = [](u32 n) { return 0xff00'0000 | (n + 1) * 0x1f'2b37; };
@@ -2748,66 +2735,231 @@ static auto gpuDepthEarly() -> void {
     s.ge.vertexAddress = GPUVertices;
     s.ge.primitive(GE::Triangles, 24);
   };
+  const char* mode = gpu->fast ? "fast" : "accurate";
+  for(u32 scale : {1u, 2u}) {
+    if(!scaleTaken(gpu, scale)) break;
+    gpu->resolution(scale);
+    System software, hardware;
+    hardware.ge.setRenderer(gpu);
+    flat(software, past), flat(hardware, past);
+    u32 bytes = apart(software, hardware);
+    if(bytes) std::printf("  %s %ux, 2D: %u bytes apart\n", mode, scale, bytes);
+    CHECK(bytes, 0u);
+    auto pixel = [&](u32 x, u32 y) {  //(the software renderer's, as the GE's comparisons have it)
+      u32 value;
+      std::memcpy(&value, &software.memory.vram[(y * 64 + x) * 4], 4);
+      return value & 0xff'ffff;
+    };
+    for(u32 n = 0; n < 8; n++) CHECK(pixel(n * 8 + 4, 20), (passes(n) ? second(n) : First) & 0xff'ffff);
+    for(u32 n = 0; past && n < 4; n++) {
+      CHECK(pixel(n * 16 + 8, 44), (passes(Overs[n]) ? second(8 + Overs[n]) : First) & 0xff'ffff);
+    }
+    hardware.ge.setRenderer(nullptr);
+    for(bool turned : {false, true}) {
+      System s;
+      s.ge.setRenderer(gpu);
+      auto& c = s.ge.commands;
+      prepare(s, 0, 3);
+      c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 1;
+      floor(s, turned, First);
+      c[GE::DepthMask] = 1;
+      for(u32 n = 0; n < 8; n++) {
+        c[GE::Scissor1] = n * 8, c[GE::Scissor2] = (n * 8 + 7) | 47 << 10, c[GE::DepthTest] = n;
+        floor(s, turned, second(n));
+      }
+      std::vector<u32> picture;
+      CHECK(gpu->picture(0, 64, 3, 64, 48, picture, scale), true);
+      s.ge.setRenderer(nullptr);
+      u32 wrong = 0, drawn[8] = {}, strips[8] = {};
+      for(u32 y = 0; y < 48 * scale && picture.size() == 64 * 48 * scale * scale; y++) {
+        for(u32 x = 0; x < 64 * scale; x++) {
+          u32 n = x / scale / 8, color = picture[y * 64 * scale + x] & 0xff'ffff;
+          if(color == 0) continue;
+          drawn[n]++;
+          strips[n] += color != ((passes(n) ? second(n) : First) & 0xff'ffff);
+        }
+      }
+      for(u32 n = 0; n < 8; n++) {
+        wrong += strips[n];
+        const char* range = turned ? ", the depth range turned" : "";
+        if(strips[n]) std::printf("  %s %ux, 3D%s, comparison %u: %u of %u pixels the wrong drawing's\n", mode, scale,
+                                  range, n, strips[n], drawn[n]);
+      }
+      CHECK(picture.size(), u64(64 * 48 * scale * scale));
+      CHECK(wrong, 0u);
+      for(u32 n = 0; n < 8; n++) CHECK(drawn[n] > 8 * 10 * scale * scale, true);
+    }
+  }
+  gpu->resolution(1);
+}
+static auto gpuDepthEarly() -> void {
+  namespace Shaders = ares::PlayStationPortable::GPUShaders;
+  struct Build { const char* name; const u32* words; u32 size; std::vector<u32> modes; };
+  Build builds[] = {
+    {"draw.frag", Shaders::fragmentSPIRV, sizeof(Shaders::fragmentSPIRV), {}},
+    {"SINGLE", Shaders::fragmentSingleSPIRV, sizeof(Shaders::fragmentSingleSPIRV), {}},
+    {"DEPTHS", Shaders::fragmentDepthSPIRV, sizeof(Shaders::fragmentDepthSPIRV), {12, 15}},
+    {"SINGLE DEPTHS", Shaders::fragmentSingleDepthSPIRV, sizeof(Shaders::fragmentSingleDepthSPIRV), {12, 15}},
+  };
+  for(auto& build : builds) {
+    auto modes = depthModes(build.words, build.size);
+    std::sort(modes.begin(), modes.end());
+    if(modes != build.modes) std::printf("  %s: the depth's execution modes aren't as declared\n", build.name);
+    CHECK(modes == build.modes, true);
+    if(build.modes.empty()) continue;
+    auto undeclared = GPU::undeclared(build.words, build.size);
+    CHECK(depthModes(undeclared.data(), undeclared.size() * 4) == std::vector<u32>{12}, true);
+    CHECK(u32(undeclared.size() * 4 + 12), build.size);
+  }
+  if(!renderer()) return;
   for(GPU* gpu : {renderer(), fastRenderer()}) {
     if(!gpu) continue;
-    const char* mode = gpu->fast ? "fast" : "accurate";
     bool past = gpu->backend->depthClamp;
     if(!past) skip("vulkan-depth-clamp", "the GPU clips by the depth: 2D depths past 65535 not tried");
-    for(u32 scale : {1u, 2u}) {
+    depthEarly(gpu, past);
+  }
+}
+
+//2D PRIMs whose corners' depths lie past the GE's 0-65535 (through mode's float positions), where the depth decides:
+//there the GPU's two interpolations, of the depth rasterized and of the one written beside it, may part by more than
+//the declaration's margin (a float's own step is a whole one at ten million), so their pipelines are made
+//undeclared, the depth rasterized at the GE's (Pipeline::outside), and only theirs: a pretend backend sees the keys of
+//the quad below, tested and written, then one in range, then the quad neither tested nor written, then fast mode's 3D
+//mesh, held in range. On the GPU, where it clamps the depth, as gpuDepthEarly's: the quad, its corners at -10 million,
+//10 million, 5 million and -5 million, moved for each strip (the "at least" strip's at -9.9 million, 9.8 million, 5.3
+//million and -5.3 million, of which MoltenVK lost 1 of 384 pixels at 1x and 2 of 1,536 at 2x to the declaration),
+//drawn twice, written always then tested with each comparison over a strip of its own, at 1x-5x, in either mode.
+static auto gpuDepthOutside() -> void {
+  constexpr u32 First = 0xff30'6090;
+  auto second = [](u32 n) { return 0xff00'0000 | (n + 1) * 0x1f'2b37; };
+  auto passes = [](u32 comparison) { return comparison == 1 || comparison == 2 || comparison == 5 || comparison == 7; };
+  auto quad = [](System& s, float left, const float (&z)[4], u32 color) {  //(8 pixels across, 48 down)
+    float corners[6][3] = {{left, 0, z[0]}, {left + 8, 0, z[1]}, {left, 48, z[2]},
+                           {left + 8, 0, z[1]}, {left + 8, 48, z[3]}, {left, 48, z[2]}};
+    u32 to = GPUVertices;
+    for(auto& corner : corners) {
+      for(float value : {0.0f, 0.0f}) s.memory.write(4, to, bitsOf(value)), to += 4;
+      s.memory.write(4, to, color), to += 4;
+      for(float value : corner) s.memory.write(4, to, bitsOf(value)), to += 4;
+    }
+    s.ge.vertexAddress = GPUVertices;
+    s.ge.primitive(GE::Triangles, 6);
+  };
+  auto far = [](u32 n, float (&z)[4]) {  //(strip n's corners: top left, top right, bottom left, bottom right)
+    constexpr float Corners[4] = {-1.0e7f, 1.0e7f, 5.0e6f, -5.0e6f};
+    for(u32 i = 0; i < 4; i++) z[i] = Corners[i] + n * 12345.6f * (i + 1) * (i & 1 ? -1 : 1);
+  };
+  {
+    auto backend = std::make_unique<RecordingBackend>();
+    auto& pretend = *backend;
+    pretend.transforms = true;
+    GPU gpu(std::move(backend));
+    gpu.fast = true;
+    System s;
+    s.ge.setRenderer(&gpu);
+    prepare(s, 0, 3);
+    auto& c = s.ge.commands;
+    float z[4], near[4] = {0.25f, 65534.75f, 30000.5f, 1.6f};
+    far(7, z);
+    c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 7;  //(at least, written)
+    quad(s, 0, z, First), quad(s, 8, near, First);
+    c[GE::DepthTestEnable] = 0;
+    quad(s, 16, z, First);
+    c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 1;
+    quads3D(s, 3);
+    s.ge.settleAll();
+    std::string keys;  //(each draw's kind, Pipeline::outside and whether its depth decides)
+    for(auto& [kind, state] : pretend.drawn) {
+      keys += kind == GPU::Command::Kind::Mesh ? 'M' : 'D';
+      keys += char('0' + state.pipeline.outside), keys += state.pipeline.depths() ? '+' : '-';
+      keys += ' ';
+    }
+    if(keys != "D1+ D0+ D0- M0+ ") std::printf("  the draws' keys: %s\n", keys.c_str());
+    CHECK(keys == "D1+ D0+ D0- M0+ ", true);
+    s.ge.setRenderer(nullptr);
+  }
+  if(!renderer()) return;
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(!gpu || !gpu->backend->depthClamp) continue;  //(without, the quad clips: gpuDepthEarly says so)
+    const char* mode = gpu->fast ? "fast" : "accurate";
+    for(u32 scale : {1u, 2u, 3u, 4u, 5u}) {
       if(!scaleTaken(gpu, scale)) break;
       gpu->resolution(scale);
-      System software, hardware;
-      hardware.ge.setRenderer(gpu);
-      flat(software, past), flat(hardware, past);
-      u32 bytes = apart(software, hardware);
-      if(bytes) std::printf("  %s %ux, 2D: %u bytes apart\n", mode, scale, bytes);
-      CHECK(bytes, 0u);
-      auto pixel = [&](u32 x, u32 y) {  //(the software renderer's, as the GE's comparisons have it)
-        u32 value;
-        std::memcpy(&value, &software.memory.vram[(y * 64 + x) * 4], 4);
-        return value & 0xff'ffff;
-      };
-      for(u32 n = 0; n < 8; n++) CHECK(pixel(n * 8 + 4, 20), (passes(n) ? second(n) : First) & 0xff'ffff);
-      for(u32 n = 0; past && n < 4; n++) {
-        CHECK(pixel(n * 16 + 8, 44), (passes(Overs[n]) ? second(8 + Overs[n]) : First) & 0xff'ffff);
-      }
-      hardware.ge.setRenderer(nullptr);
-      for(bool turned : {false, true}) {
-        System s;
-        s.ge.setRenderer(gpu);
-        auto& c = s.ge.commands;
-        prepare(s, 0, 3);
-        c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 1;
-        floor(s, turned, First);
-        c[GE::DepthMask] = 1;
+      System s;
+      s.ge.setRenderer(gpu);
+      auto& c = s.ge.commands;
+      prepare(s, 0, 3);
+      c[GE::DepthTestEnable] = 1;
+      for(u32 pass = 0; pass < 2; pass++) {
+        c[GE::DepthMask] = pass;  //(the first written, always; the second not)
         for(u32 n = 0; n < 8; n++) {
-          c[GE::Scissor1] = n * 8, c[GE::Scissor2] = (n * 8 + 7) | 47 << 10, c[GE::DepthTest] = n;
-          floor(s, turned, second(n));
+          float z[4];
+          far(n, z);
+          c[GE::DepthTest] = pass ? n : 1;
+          quad(s, n * 8.0f, z, pass ? second(n) : First);
         }
-        std::vector<u32> picture;
-        CHECK(gpu->picture(0, 64, 3, 64, 48, picture, scale), true);
-        s.ge.setRenderer(nullptr);
-        u32 wrong = 0, drawn[8] = {}, strips[8] = {};
-        for(u32 y = 0; y < 48 * scale && picture.size() == 64 * 48 * scale * scale; y++) {
-          for(u32 x = 0; x < 64 * scale; x++) {
-            u32 n = x / scale / 8, color = picture[y * 64 * scale + x] & 0xff'ffff;
-            if(color == 0) continue;
-            drawn[n]++;
-            strips[n] += color != ((passes(n) ? second(n) : First) & 0xff'ffff);
-          }
-        }
-        for(u32 n = 0; n < 8; n++) {
-          wrong += strips[n];
-          const char* range = turned ? ", the depth range turned" : "";
-          if(strips[n]) std::printf("  %s %ux, 3D%s, comparison %u: %u of %u pixels the wrong drawing's\n", mode, scale,
-                                    range, n, strips[n], drawn[n]);
-        }
-        CHECK(picture.size(), u64(64 * 48 * scale * scale));
-        CHECK(wrong, 0u);
-        for(u32 n = 0; n < 8; n++) CHECK(drawn[n] > 8 * 10 * scale * scale, true);
       }
+      c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0;
+      std::vector<u32> picture;
+      CHECK(gpu->picture(0, 64, 3, 64, 48, picture, scale), true);
+      s.ge.setRenderer(nullptr);
+      u32 wrong = 0, drawn[8] = {}, strips[8] = {};
+      for(u32 y = 0; y < 48 * scale && picture.size() == 64 * 48 * scale * scale; y++) {
+        for(u32 x = 0; x < 64 * scale; x++) {
+          u32 n = x / scale / 8, color = picture[y * 64 * scale + x] & 0xff'ffff;
+          if(color == 0) continue;
+          drawn[n]++;
+          strips[n] += color != ((passes(n) ? second(n) : First) & 0xff'ffff);
+        }
+      }
+      for(u32 n = 0; n < 8; n++) {
+        wrong += strips[n];
+        if(strips[n]) std::printf("  %s %ux, comparison %u: %u of %u pixels the wrong drawing's\n", mode, scale, n,
+                                  strips[n], drawn[n]);
+      }
+      CHECK(picture.size(), u64(64 * 48 * scale * scale));
+      CHECK(wrong, 0u);
+      for(u32 n = 0; n < 8; n++) CHECK(drawn[n], 8 * 48 * scale * scale);
     }
     gpu->resolution(1);
+  }
+}
+
+//How the pipelines whose depth decides are made (Backend::depthBuild()): with the declaration and the margin its proof
+//needs (draw.vert's ABOVE; a pipeline with the one but not the other, for any comparison, is wrong), the two together
+//for every comparison, written or not, in 2D and in fast mode's 3D, where the device clamps the depth and the corners'
+//depths are the GE's; neither for a 2D PRIM's past them (Pipeline::outside), nor any where the device doesn't clamp:
+//renderers of their own, accurate and fast, their depth clamping turned off before they make a pipeline (as a device
+//without it makes them), which then draw gpuDepthEarly's 2D strips and 3D floor as the GE does.
+static auto gpuDepthBuilds() -> void {
+  if(!renderer()) return;
+  auto builds = [](GPU* gpu) {
+    GPU::Pipeline k{};
+    k.alphaTest = 8, k.colorTest = 4, k.quantize = 4, k.logic = 3, k.texels = 4, k.colorMask = 15;
+    u32 wrong = 0;
+    for(u8 transformed : {0, 1}) for(u8 outside : {0, 1}) for(u8 written : {0, 1}) for(u8 n = 0; n < 8; n++) {
+      if(transformed && !gpu->backend->transforms) continue;
+      k.transformed = transformed, k.outside = outside, k.depthTest = 1, k.depthCompare = n, k.depthWrite = written;
+      u32 expected = k.depths() && gpu->backend->depthClamp && !outside ? 3 : 0, made = gpu->backend->depthBuild(k);
+      if(made != expected && wrong++ < 4) {
+        std::printf("  %s%s%s, comparison %u%s: made %u, not %u\n", gpu->fast ? "fast" : "accurate",
+                    transformed ? ", 3D" : "", outside ? ", outside" : "", n, written ? ", written" : "", made,
+                    expected);
+      }
+    }
+    return wrong;
+  };
+  for(GPU* gpu : {renderer(), fastRenderer()}) {
+    if(gpu) CHECK(builds(gpu), 0u);
+  }
+  for(bool fast : {false, true}) {
+    std::string error;
+    auto plain = GPU::vulkan(nullptr, error, fast);
+    CHECK(bool(plain), true);
+    if(!plain) continue;
+    plain->backend->depthClamp = false;
+    CHECK(builds(plain.get()), 0u);
+    depthEarly(plain.get(), false);
   }
 }
 
@@ -2860,7 +3012,7 @@ static auto gpuDepthViewLoads() -> void {
 //likewise; then a 3D mesh into the second (in fast mode the GPU's transform), behind what the first drew since. At 1x
 //and 2x, in either mode. Where the device's copy of the depth alone takes the stencil too (vulkan.cpp's probe:
 //Backend::depthAlone off, the depth through the staging buffer), that copy forced once more at 1x: the second frame
-//buffer's stencil is then the first's, as the probe found.
+//buffer's stencil is then the first's, as the probe found. Wherever the copy is made, the depth's aspect alone named.
 static auto sharedDepth(GPU* gpu) -> void {
   auto f24 = [](float value) { return bitsOf(value) >> 8; };
   bool alone = gpu->backend->depthAlone;
@@ -2869,6 +3021,7 @@ static auto sharedDepth(GPU* gpu) -> void {
     if(forced && alone) break;
     if(forced) scale = 1, gpu->backend->depthAlone = true;
     gpu->resolution(scale);
+    gpu->backend->depthCopyAspects = 0;
     auto before = gpu->statistics;
     System software, hardware;
     hardware.ge.setRenderer(gpu);
@@ -2915,8 +3068,8 @@ static auto sharedDepth(GPU* gpu) -> void {
       s->ge.primitive(GE::Triangles, count);
       c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0;
     }
+    if(gpu->backend->depthAlone) hardware.ge.settleAll(), CHECK(gpu->backend->depthCopyAspects, 2u);
     if(forced) {
-      hardware.ge.settleAll();
       CHECK(u32(hardware.memory.vram[0x1'0000 + (30 * 64 + 8) * 4 + 3]), 0xa5u);
       gpu->backend->depthAlone = false;
       hardware.ge.setRenderer(nullptr);
@@ -3011,7 +3164,10 @@ static auto apartBut(System& a, System& b, u32 skip, u32 skipEnd) -> u32 {
 //    then takes its depth from the 8888 frame buffer's, whose rows the picture changed (filled from memory, the
 //    picture's pixels with them).
 //Every byte of the screens the software renderer's, at 1x and 2x, in either mode, the picture's pixels moved into the
-//depth on the GPU (no finish) and put in memory first (a finish for a depth fill each frame: depthWays()).
+//depth on the GPU (no finish) and put in memory first (a finish for a depth fill each frame: depthWays()). Where the
+//device's copy of the depth alone takes the stencil (vulkan.cpp's probe: Backend::depthAlone off, the depth through the
+//staging buffer), that copy forced as well, which the runs then take image to image: their regions the staging
+//buffer's, and the depth's aspect alone named (Backend::depthCopyAspects).
 static auto depthOrders(GPU* gpu) -> void {
   constexpr u32 Depth = 0x8'8000, Scratch = 0x11'6400, Second = 0x1'0000, Rows = 16;
   DepthMovesKept kept{gpu};
@@ -3044,11 +3200,15 @@ static auto depthOrders(GPU* gpu) -> void {
     sprite(s, {{{0, 0, 0, 0}, {0, 0, 480, Rows}}, 0xffff'ffff}, 500);
     c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0;
   };
-  for(bool moves : depthWays(gpu)) for(u32 scale : {1u, 2u}) {
-    if(!scaleTaken(gpu, scale)) continue;
+  bool alone = gpu->backend->depthAlone;
+  for(bool forced : {false, true}) for(bool moves : depthWays(gpu)) for(u32 scale : {1u, 2u}) {
+    if((forced && alone) || !scaleTaken(gpu, scale)) continue;
     gpu->resolution(scale);
-    gpu->backend->depthMoves = moves;
+    gpu->backend->depthMoves = moves, gpu->backend->depthAlone = alone || forced;
+    gpu->backend->depthCopyAspects = 0;
     auto before = gpu->statistics;
+    u64 copies = gpu->backend->depthCopies;
+    const char* how = forced ? ", the image copy forced" : "";
     System software, hardware;
     hardware.ge.setRenderer(gpu);
     for(System* s : {&software, &hardware}) {
@@ -3081,7 +3241,9 @@ static auto depthOrders(GPU* gpu) -> void {
       return count;
     };
     u32 bytes = apart(software, hardware);
-    if(bytes) std::printf("  %s %ux, %s: %u bytes apart\n", gpu->fast ? "fast" : "accurate", scale, way(moves), bytes);
+    if(bytes) {
+      std::printf("  %s %ux, %s%s: %u bytes apart\n", gpu->fast ? "fast" : "accurate", scale, way(moves), how, bytes);
+    }
     CHECK(bytes, 0u);
     CHECK(wrong(0, 200), 0u);
     //(the screen's depth, the picture's)
@@ -3094,14 +3256,19 @@ static auto depthOrders(GPU* gpu) -> void {
     for(System* s : {&software, &hardware}) frame(*s, 1);
     bytes = apart(software, hardware);
     if(bytes) {
-      std::printf("  %s %ux, %s, second frame: %u bytes apart\n", gpu->fast ? "fast" : "accurate", scale, way(moves),
-                  bytes);
+      std::printf("  %s %ux, %s%s, second frame: %u bytes apart\n", gpu->fast ? "fast" : "accurate", scale,
+                  way(moves), how, bytes);
     }
     CHECK(bytes, 0u);
     CHECK(wrong(1, 0), 0u);
     CHECK(gpu->statistics.depthFinishes - before.depthFinishes, moves ? 0u : 2u);
+    if(gpu->backend->depthAlone) {  //(the runs copied image to image, of the depth's aspect alone: Vulkan's 2)
+      CHECK(gpu->backend->depthCopies > copies, true);
+      CHECK(gpu->backend->depthCopyAspects, 2u);
+    }
     hardware.ge.setRenderer(nullptr);
   }
+  gpu->backend->depthAlone = alone;
   gpu->resolution(1);
 }
 static auto gpuDepthOrders() -> void {
@@ -4766,6 +4933,10 @@ auto gpuTests() -> Tests {
     {"gpu depth as the GE's whole numbers: a fraction of a step above meets the GE's comparisons", gpuDepthSteps},
     {"gpu depth a GPU may test before the shader runs: declared, and nothing rejected first that passes after",
      gpuDepthEarly},
+    {"gpu depth past 0-65535 in 2D: its pipelines undeclared, and nothing rejected first that passes after",
+     gpuDepthOutside},
+    {"gpu depth's pipelines: declared with the margin where the depth clamps and is in range, else undeclared",
+     gpuDepthBuilds},
     {"gpu memory's changes to depth kept past PRIMs that don't use it, for the next that does", gpuDepthUnused},
     {"gpu loads through the depth buffer's views: memory's, without waiting", gpuDepthViewLoads},
     {"gpu a depth buffer two frame buffers draw with: the depth either drew taken by the other", gpuSharedDepth},
