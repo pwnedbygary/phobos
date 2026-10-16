@@ -3201,7 +3201,8 @@ static auto depthOrders(GPU* gpu) -> void {
     c[GE::DepthTestEnable] = 0, c[GE::DepthMask] = 0;
   };
   bool alone = gpu->backend->depthAlone;
-  for(bool forced : {false, true}) for(bool moves : depthWays(gpu)) for(u32 scale : {1u, 2u}) {
+  auto ways = depthWays(gpu);
+  for(bool forced : {false, true}) for(bool moves : ways) for(u32 scale : {1u, 2u}) {
     if((forced && alone) || !scaleTaken(gpu, scale)) continue;
     gpu->resolution(scale);
     gpu->backend->depthMoves = moves, gpu->backend->depthAlone = alone || forced;
