@@ -1239,7 +1239,9 @@ auto Kernel::sceIoGetFdList() -> void {
 //disc file does: the data a game installs to the stick (Gunhound EX's PGD files, 7th Dragon 2020's GAME.DNS) is read
 //there as it is from the disc. A stick file opened without that flag isn't the PGD layer's, and the stick's own
 //device answers none of its requests here, as before. A disc file answers them however it was opened, as before (a
-//PSP's PGD layer would leave one opened without the flag to the disc's driver).
+//PSP's PGD layer would leave one opened without the flag to the disc's driver). A descriptor open to write takes
+//none of them (0x80510201), as the PGD layer opens none so (openFile()): one is only there from a state saved before
+//that refusal.
 auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 outLength, u64* moved) -> u32 {
   u64 unused;
   if(!moved) moved = &unused;
@@ -1249,6 +1251,7 @@ auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 out
   auto& open = found->second;
   bool pgdRequest = command == 0x0410'0001 || command == 0x0410'0002 || command == 0x0410'0010;
   if(!open.onDisc && !(pgdRequest && (open.flags & OpenGameData))) return ErrorFunctionNotSupported;
+  if(pgdRequest && (open.flags & OpenWrite)) return ErrorPgdInvalidArgument;
   auto writeOut = [&](u32 size, auto&& write) -> u32 {
     if(outLength < size || !memory.reaches(out, size)) return ErrorInvalidArgument;
     write();
@@ -1321,12 +1324,21 @@ auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 out
     return pgdUnlock(open, memory.pointer(in, 16));
   //where the PGD starts, relative to the file: the PSP's PGD layer reads its header there when the key is given
   //(0x04100001), and its data where its descriptor says, counted from there ("tpu"'s decompilation; PPSSPP's notes
-  //have npdrm give an EDATA's 0x90 so).
+  //have npdrm give an EDATA's 0x90 so). Given where its PGD starts already, nothing changes; given anywhere else, no
+  //PGD is open until a key opens one there (the decompilation's sub_E3C), so this alone unlocks nothing, no key
+  //recovered. An unlocked file keeps where its data starts, not its PGD, so its own key tells which: the PGD it opens
+  //there, its data where it was, is the same one.
   case 0x0410'0002: {
     if(open.sectors || inLength < 4 || !memory.reaches(in, 4)) return ErrorFunctionNotSupported;
-    open.pgd = true;
-    open.pgdReady = false;
-    open.pgdDataOffset = memory.read(4, in);
+    u32 at = memory.read(4, in), was = open.pgdDataOffset;
+    bool unlocked = open.pgd && open.pgdReady;
+    if(!unlocked && at == was) return 0;
+    u8 key[16];
+    memcpy(key, open.pgdVersionKey, 16);
+    open.pgdDataOffset = at;
+    if(unlocked && !pgdUnlock(open, key) && open.pgd && open.pgdDataOffset == was) return 0;
+    open.pgd = open.pgdReady = false;
+    open.pgdDataOffset = at;
     return 0;
   }
   //the PGD's data size, as the result: its descriptor's (the size sceIoLseek's end and sceNpDrmEdataGetDataSize give),
