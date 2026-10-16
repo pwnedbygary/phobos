@@ -15765,3 +15765,188 @@ dialog (the branch's runner and master's, built from `1d62fed2d` and `1c75c5600`
   they failed on; `hashkit/`, the scenes; the review's round: `resolve-merge.py`, the merge's docs; `mut-scaffold.patch`
   and `mut.sh`, the mutations, `logs/mut-*.log`; `e2e/`, the installs and boots on fresh sticks; `bws-r2.sh` and
   `runs-r2/`, Black Wolves Saga). Nothing was run on the RP6.
+
+## Part 103: how the games drive the GE, on a PSP and in Phobos — tools/psp-ge-profile's plugin on the owner's PSP, the same records from the core (the runner's --ge-profile); a PSP's GE takes 4 to 12 times the model's time over the same lists
+
+On branch `cursor/psp-ge-profile-2b67`, on master `a8d5640f5` (part 101, #263). Clean room: the plugin, the recorder
+and the decoder are this project's own; the references were pspsdk's headers and libraries, uOFW (the GE, display,
+interrupt and memory drivers, their NIDs, and how the module loader links and starts a module), and ARK-4's README,
+wiki, `systemctrl.h`, its plugin loader's and launcher's sources and its own plugins' Makefiles (how it loads plugins,
+what they look like). No PPSSPP or JPCSP code was read. Nothing of the PSP's behaviour changes: with no profile the
+core does what it did (the Off cost below), and save states are unchanged (no field saved).
+
+**Why.** Phobos's GE time (part 64, "The GE's time": geTime()) is Sony's peaks, four pixels or 35/166 of a primitive a
+bus clock, the least a PSP could take, because nothing measured on a PSP said more. Chains of Olympus paces its loop
+by the GE (part 64, "Why the menu drew 28 million fours"): it draws its menu's scene two or three times a vblank in
+Phobos, and Vulkan draws each of them (at 5x, most of a frame's GPU time). Whether a PSP draws it once, or as often,
+decides both the accuracy and that work. tools/psp-ge-profile records how a game drives the GE and the display on the
+owner's PSP; the core now records the same in Phobos, and one decoder prints both.
+
+### The plugin (tools/psp-ge-profile; its README has the details)
+
+A kernel module for ARK-4's plugin loader. It finds the firmware's GE and display functions through ARK's
+`sctrlHENFindFunction` and patches their syscalls (`sctrlHENPatchSyscall`), so every call a game makes to
+sceGeListEnQueue(Head), sceGeListUpdateStallAddr, sceGeListSync, sceGeDrawSync, sceGeListDeQueue, sceGeBreak,
+sceGeContinue, sceGeSetCallback/UnsetCallback, sceDisplaySetFrameBuf and the vblank waits goes through a hook: six
+instructions straight into the firmware's function while idle; while capturing, a 32-byte record with the call's entry
+and return times (sceKernelGetSystemTimeLow), its thread, arguments, result, the vblank count and the GE's state (the
+firmware's own sceGeDrawSync(1), and the GE's next command while it draws). The GE's FINISH and SIGNAL callbacks and
+the vertical blanks come from the interrupt manager's sub-interrupt monitor, registered only while capturing. Records
+go to kernel memory and the file (`PHOBOS/PROF/<disc id>-<n>.bin`, a 256-byte header, the records, a thread table) is
+written after the capture at the lowest priority. A dry mode only counts calls and writes a report. Captures start by
+a button combination held a second, or at a time after the game starts. It shows short notices on screen and keeps a
+trace of its steps (`PHOBOS/trace.txt`). `decoder/geprof.py` (Python, standard library only) prints per vblank and per
+second the lists, each list's GE time (from when the GE could begin it to its FINISH, or to the sync that waited for it
+when it has no callback), the GE's busy share, the CPU's time blocked in syncs and vblank waits, flips and displayed
+frames.
+
+Bringing it up on the owner's PSP took four trips: 0.1.0 wrote nothing (a thread that looked for the memory stick's
+folder once, as the game booted); 0.2.0 added the notices and the trace, and still showed nothing from a line naming
+Chains of Olympus's three IDs; a load test (`hello/`: modules that only append a line) and 0.2.1 (the trace written
+from `module_start`) were ready when 0.2.0 loaded from a line with his copy's ID alone. ARK-4's r205 source reads
+several IDs on a line; one ID a line is what worked, and what the README now says. 0.2.2 asks for the disc ID again at
+the game's first flip (ARK reads it from the disc, unreadable as the game boots: 0.2.0's trace said UNKNOWN) and holds
+its start notice until then (0.2.0's flickered through the boot, drawn the other way, and was over by the game's first
+frame).
+
+### What the PSP said
+
+The owner's PSP-1000 (model 0), firmware 6.61, ARK 4.20.69 r205 (cIPL), Chains of Olympus UCAS40198 (the Asian disc,
+an ISO), two dry runs of 10 seconds on its menus: all 17 hooks in place and the monitor; the game's first flip through
+the hook 4.35 s after the plugin started; a hook's cost 24 ns idle, about 1.85 microseconds capturing; a 10-second
+capture's records 52 KB, with some 580 KB of kernel memory free. Each window: **357 sceGeListEnQueue, 357
+sceGeListSync, 357 sceDisplaySetFrameBuf, 600 vertical blanks, no vblank wait, no GE callback**: one list, one sync,
+one flip a loop, 35.7 loops a second, 0.6 a vblank. The loop part 64 read from the game's code, at a quarter of
+Phobos's pace (below).
+
+### The same records from the core
+
+`ares/psp/kernel/geprofile.cpp` and `GeProfile` (kernel.hpp): a host hands the kernel a profile
+(`geProfileStart()`), and until `geProfileStop()` it records what the plugin records, in its format:
+- **The calls.** The ten sceGe_user functions and seven display functions above begin with a `ProfiledCall`: with a
+  profile, a record begun with the call's arguments (profile.h's: a frame buffer's format with its sync mode above it,
+  callbacks as their SIGNAL and FINISH functions), its thread (the profile's table, by UID, names as the kernel has
+  them) and the GE's state (sceGeDrawSync(1)'s answer, the GE's next command while it draws); finished as the function
+  returns, with v0, or, if its thread waits in it, as `switchTo()` gives the thread the CPU back with the wait's result
+  (`Thread::geProfileCall`). Times are sceKernelGetSystemTimeLow's microseconds.
+- **The callbacks.** A FINISH's or SIGNAL's callback is recorded as the driver queues it (`geCall()`: its callback
+  number, the FINISH's or SIGNAL's low 16 bits, where the list had got to past the END, a SIGNAL's own word), from when
+  the call into the program starts to when it returns (`Call::profile`, `callProfile`).
+- **The vertical blanks**, each at its own time, with the count.
+- **The model's charges** (kind 64, Phobos's own): each piece of drawing geTime() charges the GE for, its pixels,
+  primitives and cycles, when the GE is then done with all it has, and the list it runs. On a PSP that time is
+  measured; here it's charged, and this says what for.
+- **Off.** With no profile, each place tests the pointer (or, in `switchTo()`, a thread's record number, always 0): the
+  profiled functions, the context switch, the vblank, a call into the program starting and returning, geTime() and a
+  callback queued. Measured below. Not saved: a state loaded drops the record numbers it would hold.
+- **The runner** (`--ge-profile FILE`, `--ge-profile-from F`): the profile from frame F to the run's end, the file
+  written as it ends (its version "phobos" and the runner's commit, the disc ID and title from the disc), and a
+  summary line (`ge profile:`). tools/psp-runner/README.md says how.
+- **The decoder** names kind 64, sums the charges per list (by its ID, from its enqueue call to its end) and over the
+  window ("Phobos's GE model: ... charges, pixels, primitives, ms; the share set by pixels"), adds them to `--lists`
+  and the JSON, and counts each kind as the dry run does (`--counts`). The tables themselves are the same for both.
+- **Tests**: "ge profile" (tests/psp/ge.cpp): a program that sets callbacks, queues a list that draws a 64x32 sprite
+  and finishes, waits for it, shows a frame buffer and waits for the vblank, recorded record by record (the sync from
+  its call to its thread going on after the FINISH's callback, with what the wait gave; the callback as it ran; the
+  model's 2048 pixels and 1536 cycles; the blank at its own time), the file in profile.h's layout byte for byte; with
+  no profile the program sees the same and nothing is recorded. The decoder's tests: a capture of Chains of Olympus's
+  loop with charges, the model's sums per list and over the window, the counts.
+
+**Off cost.** In the bench runner's build (O3, thin LTO, as Android builds it), master's sceDisplaySetFrameBuf is nine
+instructions with no frame; the branch's is the same nine and ten more while no profile records: the pointer's load
+and branch, the record's and the caller's zeroed, the test of the record at its end, and a stack frame for the calls
+it would make. The other profiled functions, which had frames already, add five. Chains of Olympus's difficulty menu
+makes some eight profiled calls a frame and a few context switches, against the 101.5 million instructions the
+emulation thread runs a frame there: a hundred or so instructions, a millionth. Measured as part 100 measures, the
+emulation thread's retired instructions a frame (300 frames from the scene's state, Vulkan fast with late frames,
+master `a8d5640f5` and the branch built alike, taking turns; `offcost/`): the first round, master 101.537 M, the
+branch 101.468 M (−0.07%, as far apart as rounds of one build are); more rounds and Super Monkey Ball's story scene
+are running as the Mac's other jobs let them.
+
+### Phobos's tables
+
+The six scenes the owner is capturing, from their states (`~/phobos-work/scratch/cpu-round3/scenes`, ahr-legal
+`psp-hires/scenes`), the branch's runner, the software renderer, 900 frames with the profile from frame 301 (10 s;
+ahr-legal, from frame 240 of a boot, 360 frames from its first, the copyright screen its first 2.7 s), each table
+`geprof.py` (`--counts --lists`). A loop is what the game does for each frame it draws; the frames, its flips
+(Killzone sets one frame buffer each time, applied at the next vblank: its calls); the CPU's part, a loop's time not
+blocked in a sync, for the games that sync:
+
+| Scene (clocks) | A loop | Lists a second | Frames a second (a vblank) | GE busy (model) | CPU blocked in syncs | Charged a list: ms, pixels, primitives | CPU's part |
+|---|---|---|---|---|---|---|---|
+| coo-diff (333/166) | enqueue, sceGeListSync, flip | 159.5 | 159.5 (2.66) | 100% | 838 ms a second | 6.27, 4.16 M, 8,644 | 1.02 ms |
+| gos-menu (333/166) | enqueue, sceGeListSync, flip | 247.1 | 247.1 (4.12) | 100% | 707 ms | 4.05, 2.69 M, 26,297 | 1.19 ms |
+| smba-story (222/111) | enqueue, stall update, FINISH, sceGeDrawSync, flip | 434.7 | 434.7 (7.25) | 86% | 88 ms | 1.97, 0.87 M, 15,100 | 2.10 ms |
+| kz-gp (222/111) | two lists, each a SIGNAL and a FINISH; the frame buffer set | 517.0 | 258.3 (4.31) | 93% | none | 1.93, 0.86 M, 8,258 | |
+| a2-gp (222/111) | enqueue, two stall updates, SIGNAL, FINISH, sceGeDrawSync, flip | 252.6 | 252.6 (4.21) | 92% | 92 ms | 3.55, 1.58 M, 22,603 | 3.60 ms |
+| ahr-legal (222/111), its copyright screen | two lists, each a FINISH; flip | 1,701 | 851 (14.2) | 100% | none | 0.59, 0.26 M, 11 | |
+
+None of them waits for the vblank (Activision Hits only in its logo's movie, after the copyright screen): each draws as
+fast as Phobos's GE lets it, the GE busy nearly all the time, and shows one of its 2.7 to 14 frames a vblank. Every
+charge in all six is set by its pixels (four a bus clock), none by its primitives.
+
+### The comparison: the dry runs, then the owner's captures
+
+**The dry runs** against Phobos's coo-diff, 10 seconds each: the same loop, one enqueue, one sync and one flip each
+time round and nothing else of these (no stall updates, no callbacks, no vblank waits; Phobos's records show the order
+part 64 read from the code), 35.7 times a second on the PSP (0.60 a vblank), 159.5 in Phobos (2.66): 4.47 times as
+often. In Phobos the loop's CPU part, its time not blocked in the sync, is 1.02 ms, the rest the GE's (busy 100%, the
+CPU in sceGeListSync 838 ms a second); so a PSP's 28 ms a loop had to be its GE's (or a CPU 25 times slower), some 4.5
+times the model's 6.27 ms over the same list (4.16 M pixels): about 0.9 pixels a bus clock, not four. Part 64's "Left"
+guessed it; the psp-hires agent's estimate (a pixel a clock, 0.65 scenes a vblank) came close.
+
+**The owner's captures** (capture mode, plugin 0.2.0: Chains of Olympus UCUS98653 one, Ghost of Sparta three, Super
+Monkey Ball one, Killzone two, Activision Hits two; Army of Two not yet), each beside Phobos's profile of its scene
+(the PSP's window of whole seconds where the scene is: Super Monkey Ball's first 7 s, before vblank waits begin;
+Activision Hits' copyright screen, seconds 3 to 7 of its capture from the boot, against Phobos's first 2 s). A list's
+GE time is the median, from when the GE could begin it to its end; on the PSP measured, in Phobos what the model
+charged. The CPU's part, a loop's time not blocked in a sync or a vblank wait:
+
+| Scene | PSP: lists, frames a second (a vblank) | Phobos | A list's GE time: PSP, Phobos (times) | CPU's part: PSP, Phobos |
+|---|---|---|---|---|
+| coo-diff | 36.2, 36.2 (0.60) | 159.5, 159.4 (2.66) | 27.60 ms, 6.24 ms (4.4) | 7.12 ms, 1.02 ms |
+| gos-menu | 33.6, 33.6 (0.56) | 247.0, 246.9 (4.12) | 29.62, 4.05 (7.3) | 9.82, 1.19 |
+| gos-menu, captures 2 and 3 | 29.5, 30.0 (0.49, 0.50) | the same | 32.93, 31.72 (8.1, 7.8) | 22.2, 31.1 |
+| smba-story | 39.8, 40.0 (0.67) | 434.5, 434.3 (7.25) | 23.64, 1.98 (11.9) | 18.75, 2.10 |
+| kz-gp (frames: frame buffer calls) | 64.4, 32.2 (0.54) | 516.9, 258.3 (4.31) | its scene list 23.4 (17.2 in capture 2), 3.57 (6.6, 4.8); its full-screen list 1.72, 0.29 (5.9) | 15.5, 1.93 |
+| ahr-legal, the copyright screen | 216.3, 108.6 (1.81) | 1698, 850 (14.2) | 4.46, 0.59 (7.6) | 4.62, 0.59 |
+
+- **The same games.** Each scene's loop is the same on both: the same calls in the same order (Killzone's two scene
+  lists taking turns and three full-screen ones; Super Monkey Ball's stall updates, FINISH and sceGeDrawSync), the
+  same clocks but for Activision Hits (333/166 on the PSP at its copyright screen, 222/111 in Phobos's state).
+- **The GE.** On the PSP the GE is busy 94 to 100% of these windows (Killzone 70 to 77%), and a list takes 4.4 to 12
+  times what the model charges for it. Every one of Phobos's charges is set by its pixels; the PSP's times say the
+  primitives count too: a least-squares fit of a sum (each pixel and each primitive its own time, where the model
+  takes the larger of the two) over three scenes (coo-diff, gos-menu, smba-story) gives
+  **0.875 bus clocks a pixel and 104 a primitive**, against the model's 0.25 and 4.74 (Sony's peaks), and puts those
+  three within 11% (27.25, 30.71 and 21.09 ms against 27.60, 29.62 and 23.64). Killzone's scene list it puts at 28 ms
+  (the PSP's 23.4 and 17.2), its full-screen list at 1.0 ms (1.72: a blended pass); Activision Hits' lists at 1.4 ms
+  (4.46: their block transfers, which the model charges nothing, are most of it, by the psp-hires agent's count of 28
+  whole-screen depth copies a frame).
+- **The CPU.** The PSP's CPU part of a loop is 7 to 9 times Phobos's in every scene (7.0, 8.3, 8.9, 8.0 and 7.8),
+  where Phobos counts an instruction a cycle at 333 MHz. It doesn't pace these loops on the PSP (they wait on the GE,
+  which takes longer), but for Killzone (two lists a frame, 15.5 ms of CPU each: its frame is the CPU's there).
+- **What it means for Phobos.** With a GE that takes the PSP's time, these loops would run at about the PSP's rate:
+  coo-diff's 27 ms list against its 1 ms of CPU, 36 loops a second; Super Monkey Ball's 23.6 ms against 2.1 ms, about
+  42 (the PSP's 40). Each frame drawn and not shown is work for the host now: two to fourteen frames a vblank for Vulkan
+  to draw, one shown.
+
+### Left
+
+- Army of Two's capture, still to come; Ghost of Sparta's and Killzone's captures differ among themselves (where in
+  the menu or the level), and their scenes aren't yet matched to Phobos's frame for frame.
+- geTime() is unchanged here: the captures say by how much it's short, not yet how a PSP's GE spends its time. The
+  fit above is three scenes' averages with Phobos's own counts; the next step is a model of the GE's time per list
+  fitted to every list the captures hold (each scene's pixels and primitives from Phobos's profile of it), with the
+  block transfers counted, checked against the scenes left out, then tools/psp-measure's fills on the owner's PSP
+  (part 64's "Left") for what averages can't separate: textured or not, blended, 16 or 32 bits, lit and skinned
+  vertices.
+- The CPU's 7 to 9 times: Phobos's instruction a cycle against a PSP's CPU in these loops. It paces none of these
+  scenes but Killzone; a model of the CPU's time is a separate question (the captures give its part of each loop).
+- The decoder counts frames by flips; Killzone's, set to one buffer, it counts by the calls (a note says so).
+- The plugin's lines in PLUGINS.TXT: ARK-4's r205 source matches several IDs on a line, but the owner's PSP loaded it
+  only from a line of one; one a line is what the README asks.
+- Scratch: `~/phobos-work/scratch/psp-ge-profile` (`NOTES.md`; `stick/`, the owner's files; `stick-diag/`, the load
+  test's; `ref/`, the references read; `phase2/`: `profile.sh` and `run_all.sh`, the scenes' profiles, `out/`, their
+  captures, tables and JSON, `summary.py`; `psp/`, the owner's captures as they came, their tables and JSON;
+  `compare.py`, the two side by side; `offcost/`, the Off cost's builds and runs). Nothing was run on the RP6.
