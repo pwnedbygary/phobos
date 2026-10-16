@@ -320,6 +320,7 @@ auto round6Files() -> std::filesystem::path {
   std::filesystem::create_directories(game);
   KernelMachine m;
   m.system.recompiler.enabled = true;
+  m.kernel.gePspTiming = true;  //(the GE timed as the PSP's: measured6.cpp's GE time and driver statuses)
   m.kernel.mount("ms0", stick.path.string());
   std::string error;
   bool loaded = m.kernel.load(program.data(), program.size(), "ms0:/PSP/GAME/PSPMEASURE/EBOOT.PBP", error);

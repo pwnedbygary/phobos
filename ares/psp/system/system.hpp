@@ -60,6 +60,7 @@ struct System {
   bool lateFrames = false;       //the GPU's frames shown a frame or so late, not waited for (option "Late Frames")
   string pipelineCache;          //the host's file the GPU's pipelines are kept in (option "Pipeline Cache")
   bool dialogs = false;          //the host shows the system's dialogs itself (option "Dialogs")
+  bool gePspTiming = false;      //the GE takes a PSP's time, not Sony's peaks (option "GE Timing": "PSP", or "Fast")
   void* vulkanLoader = nullptr;  //the host's vkGetInstanceProcAddr (vulkanLoader()), none for the system's loader
   //The screen's picture: shown times the PSP's 480x272 each way, the GPU's read back at that size where it draws at
   //a higher resolution (at most MostShown: 1920x1088, a big window's), the software renderer's enlarged to it.

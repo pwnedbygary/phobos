@@ -1112,6 +1112,10 @@ auto Kernel::serialize(serializer& s) -> bool {
   //older layout's lists were done the moment the GE met their FINISH, which left it nothing to draw)
   if(s.reading() && stateLayout < 24) geDoneAt = 0, geFinishDue = false;
   else s(geDoneAt), s(geFinishDue);
+  //the texture the GE's cache holds whole, for the PSP's GE timing (GE::owePrimitive(); layout 33 on: none in older
+  //states)
+  if(s.reading() && stateLayout < 33) ge.cachedTexture = {};
+  else s(ge.cachedTexture.address), s(ge.cachedTexture.format), s(ge.cachedTexture.size), s(ge.cachedTexture.held);
   if(s.reading() && valid) {
     //Every list is in the queue or free, once. A list queued, running or paused is in the queue (sceGeListDeQueue
     //and geEnded() take it out of there); one never queued is free; a completed one is either (it leaves the queue

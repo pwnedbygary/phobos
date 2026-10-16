@@ -452,17 +452,21 @@ private fun N64Section(viewModel: MainViewModel, settings: EmulatorSettings, onO
 }
 
 /**
- * Settings → Emulation's PSP settings. The core takes the renderer, resolution and drawing threads as the game starts,
- * so once they differ from those the running game started with, a row offers to restart it with them ([onRestart]).
+ * Settings → Emulation's PSP settings. The core takes the renderer, resolution, drawing threads and GE timing as the
+ * game starts, so once they differ from those the running game started with, a row offers to restart it with them
+ * ([onRestart]).
  */
 @Composable
 private fun PspSection(viewModel: MainViewModel, settings: EmulatorSettings, onRestart: () -> Unit) {
     val started by viewModel.pspStartSettings.collectAsState()
-    val chosen = PspStartSettings.of(settings.pspRenderer, settings.pspResolution, settings.pspDrawingThreads)
+    val chosen = PspStartSettings.of(
+        settings.pspRenderer, settings.pspResolution, settings.pspDrawingThreads, settings.pspGeTiming,
+    )
     MenuSection("PlayStation Portable") {
         PspRendererItem(settings.pspRenderer) { viewModel.setPspRenderer(it) }
         PspResolutionItem(settings.pspResolution) { viewModel.setPspResolution(it) }
         PspDrawingThreadsItem(settings.pspDrawingThreads) { viewModel.setPspDrawingThreads(it) }
+        PspGeTimingItem(settings.pspGeTiming) { viewModel.setPspGeTiming(it) }
         if (started?.runsAs(chosen) == false) {
             ListItem(
                 headlineContent = { Text("Restart to Apply") },

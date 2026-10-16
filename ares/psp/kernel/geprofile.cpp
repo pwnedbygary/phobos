@@ -16,6 +16,7 @@ auto Kernel::geProfileStart(GeProfile& profile) -> void {
   profile.cpuMhz = powerState.cpu;
   profile.busMhz = powerState.bus;
   profile.firmware = DevkitVersion;
+  profile.pspTiming = gePspTiming;
 }
 
 //The calls still waiting stay unfinished (exit 0), as the plugin leaves a call it's asleep in when its capture ends.
@@ -141,7 +142,8 @@ auto Kernel::geProfileWork(u64 pixels, u64 primitives, u64 owed) -> void {
 }
 
 //profile.h's layout, little-endian. The flags: the interrupt kinds are there (the plugin's monitor), the recording
-//started where the host asked (a time, not the buttons), and the GE's state sampled at each record. Every kind's
+//started where the host asked (a time, not the buttons), the GE's state sampled at each record, and (16, Phobos's
+//alone) the model's charges the PSP's timing's (pspTiming), not Sony's peaks'. Every kind's
 //"hook" is in place; ARK's version 0, the model ~0 (none: neither is the plugin's to know here).
 auto GeProfile::file(const std::string& version, const std::string& discId, const std::string& title) const
   -> std::vector<u8> {
@@ -153,7 +155,7 @@ auto GeProfile::file(const std::string& version, const std::string& discId, cons
   u32 count = records.size(), table = 256 + count * 32;
   for(char c : std::string("PHGEPROF")) out.push_back(c);
   word(1), word(256), word(32), word(count);
-  word(2 | 4 | 8), word(0);
+  word(2 | 4 | 8 | (pspTiming ? 16 : 0)), word(0);
   text(version, 16), text(discId, 16), text(title, 64);
   word(startTime), word(endTime), word(startVcount), word(endVcount);
   word(cpuMhz), word(busMhz), word(cpuMhzEnd), word(busMhzEnd);

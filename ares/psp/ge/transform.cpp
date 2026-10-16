@@ -380,6 +380,7 @@ auto GE::clipTriangle(const Look& look, const Transform& t, const Vertex& a, con
   if(a.clip[3] < 0 && b.clip[3] < 0 && c.clip[3] < 0) return;
   auto nearer = [](const Vertex& v) { return v.clip[2] + v.clip[3]; };  //below zero: nearer than the near plane
   if(nearer(a) >= 0 && nearer(b) >= 0 && nearer(c) >= 0) return triangle(look, a, b, c, facing, true);
+  owed.front += Cost::Cut;
 
   //Walk round the edges, keeping each corner on the far side of the plane and making one wherever an edge crosses
   //it: a triangle cut by a plane leaves three or four corners. Four are drawn as two triangles split from the second

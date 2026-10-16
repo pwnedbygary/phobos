@@ -127,6 +127,7 @@ struct GeProfile {
   std::vector<std::pair<u32, std::string>> threads{{0, "interrupt"}};  //each thread's UID and name
   u32 startTime = 0, endTime = 0, startVcount = 0, endVcount = 0;
   u32 cpuMhz = 0, busMhz = 0, cpuMhzEnd = 0, busMhzEnd = 0, firmware = 0;
+  bool pspTiming = false;  //the GE timed as a PSP's (the option "GE Timing"), not by Sony's peaks: flag 16
   //The capture file: the 256-byte header (the version, disc ID and title as given, cut to fit), the records, the
   //thread table.
   auto file(const std::string& version, const std::string& discId, const std::string& title) const -> std::vector<u8>;
@@ -1100,10 +1101,16 @@ struct Kernel {
   s32 geFinishing = -1;     //the list whose finish callback runs: the rest of its ending waits for it
   u64 geLeft = GeBudget;    //commands the GE may still run this frame (each vertical blank gives it GeBudget again)
   u64 geCommands = 0;       //commands the GE has run since power on (not saved: a count for tests and notes)
+  static constexpr u64 GeEnqueueCycles = 5200;  //the CPU's own cycles sceGeListEnQueue (or Head) takes (geDriven())
+  static constexpr u64 GeStallCycles = 510;     //and sceGeListUpdateStallAddr
   u64 geDoneAt = 0;         //when (cycles) a PSP's GE would have drawn all it has been given (geTime())
+  bool gePspTiming = false; //the GE takes the time a PSP's took, not Sony's peaks (option "GE Timing", geTime());
+                            //power() leaves it
   bool geFinishDue = false; //the list it runs met its FINISH: its interrupt is taken from geDoneAt on (geInterrupt())
   auto geIndex(u32 id) const -> s32;
-  auto geTime() -> void;
+  auto geTime(u64 commands) -> void;
+  auto geOwe(f64 clocks) -> void;
+  auto geDriven(u64 cpuCycles) -> void;
   auto geInterrupt() -> bool;
   auto geEnqueue(bool head) -> void;
   auto geLoad(GeList& list) -> void;
@@ -2107,7 +2114,7 @@ struct Kernel {
     u32 error = 0;         //what an aborted message finishes with: 0, or the error of one a PSP doesn't show
     bool deleted = false;  //a save was deleted from its list, which asks the front end again (dialogs.cpp)
   } dialog;
-  u32 stateLayout = 32;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 33;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;
