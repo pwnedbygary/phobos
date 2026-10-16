@@ -714,9 +714,11 @@ the design; none of its code is used, copied or translated.
   the GE's place, depth, clip w, q, fog, coordinates, colors and flags), with the PRIM's state as its meshes take it,
   and `transform.vert` hands them on with `draw.vert`'s arithmetic on the same numbers: the same pixels as a draw of
   their own, and the meshes before and after them, the small PRIMs between, one draw. (Army of Two drew 3,144 draws a
-  frame alternating between the two, 642 now; Ghost of Sparta's menu 3,684, now 346.) `draw.vert` doesn't declare
-  its position invariant as `transform.vert` does, so a driver could compile the same expression apart in the two:
-  fast mode's corners alone, by a float's rounding.
+  frame alternating between the two, 642 now; Ghost of Sparta's menu 3,684, now 346.) Recorded without a call
+  (part 100): on the RP6's Cortex-X3 they still cost Super Monkey Ball, Chains of Olympus and Army of Two a little
+  against drawing them apart, in the driver's and the GPU's work for the larger draws, and gain Ghost of Sparta and
+  Killzone more. `draw.vert` doesn't declare its position invariant as `transform.vert` does, so a driver could
+  compile the same expression apart in the two: fast mode's corners alone, by a float's rounding.
 - **The filter chosen once a triangle**, as the GE chooses it: `draw.frag` takes the texels a pixel covers from the
   texture coordinates straight across the screen (`vertexTexels`, `noperspective`), whose steps are the triangle's
   own texels to its pixels: the GE's ratio exactly, for a triangle the GE didn't cut.

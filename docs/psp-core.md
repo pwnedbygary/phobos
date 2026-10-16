@@ -15347,3 +15347,187 @@ sticks, the clock pinned): the same files byte for byte and the same savedata re
   `gunhound/`; `7d/`; `beforesrc/` and `tests-before-*.log`, the tests on master; `beforesrc2/` and
   `r2-tests-before.log`, the second round's tests on `1fbabdf43`; `diskfull/`, the disk filling during a copy;
   `hashkit/`; `savecheck/`). Nothing was run on the RP6.
+
+## Part 100: the GE's per-PRIM paths on the RP6's Cortex-X3 — a PRIM's kept settings compared where they are, fast mode's screen triangles without calls (GE round 4, part A)
+
+On branch `cursor/psp-ge-round4a-2b67` (draft PR #262), on master `cc0638372` (part 97, #259), with masters `02cd1fa8c`
+(part 98, #260), `6ff82f9f1` (part 96, #258) and `462f8ff2f` (part 99, #261) merged in. Clean room: no PPSSPP code read
+(its GPU backend not opened), JPCSP not read. Nothing of the PSP's behaviour changes: the host's work for each PRIM and
+each triangle, the same draws in the same order, so Vulkan (fast), Vulkan (accurate) and the software renderer draw the
+same frames, VRAM, RAM and machine state as master (checked below). Save states unchanged (no field added).
+
+**The problem.** The coordinator's bisect on the RP6 (14 Oct, the headless runner built for Android (#255), the
+emulation thread, Vulkan fast, 600 frames, medians of three rounds taking turns; `runner-android/runs/sb-*`): #253 (part
+92) took 1.4% of the instructions out of Super Monkey Ball's story scene (50,000 PRIMs a frame) but added 3.3% cycles
+and 2.5% CPU time; Chains of Olympus's difficulty menu −1.3% instructions, +1.9% cycles, +4.5% CPU time; #254 (part 93)
+0.6% more cycles in Monkey Ball. On the Mac's M1 #253 was a clear win. The X3's counters (each beside the pinned
+instructions and cycles in turns, scaled): Monkey Ball's frontend stalls rose from 8.3% to 10.1% of its cycles, two
+thirds of the cycles added, while its backend stalls (16.2% → 16.0%), mispredicts (0.79 → 0.72 a thousand instructions)
+and data refills (1.99 → 1.89) didn't; L1I refills 3.2 → 3.4 (and 6.0 with #254, its frontend share unchanged). The
+instructions' supply, not the data.
+
+**What the X3 ran** (master's Android build, its symbols, `llvm-objdump`; how often from a counting build on the Mac,
+`paths-patch.py`, a frame):
+- Monkey Ball: 50,306 PRIMs begun, 97.6% of them keeping their settings; 91,333 triangles of its small PRIMs drawn
+  among the meshes (screen triangles, part 92); 1,763 meshes. Ghost of Sparta's menu 18,514 PRIMs and 51,056 screen
+  triangles; Chains of Olympus 6,121 and 11,902; Army of Two 5,657 and 4,491 (and 638,000 mesh models); Killzone's
+  gameplay 1,182 PRIMs, their settings kept for 149.
+- **The kept check**, at the head of `settings()`: a 276-byte key built on the stack at each PRIM (the PixelState
+  copied in with sixteen-byte stores), compared by a call to bionic's `memcmp` through the PLT and then field by
+  field, a branch each, all inside `settings()`'s frame: twelve registers saved, 608 bytes, the stack protector's
+  canary (the app's builds have `-fstack-protector-strong`). A key that differed was copied whole (`memcpy`, another
+  PLT call).
+- **Each screen triangle** (`screenTriangle()`, inlined into `triangleAt()`): four calls. `meshState()` (its whole
+  prologue and canary even where the state was kept, around a ten-instruction answer), the models' and the indices'
+  `resize()` (libc++'s `vector::__append`, the indices zeroed before they were written), `meshDraw()`. Before #253
+  such a triangle was one call (`emit()`).
+- **The X3's own profile** (`rp6-profile.sh` at the session's end, below: simpleperf sampling cycles and frontend
+  stalls in Monkey Ball, master's run) names them: `settings()` 2.7% of the emulation thread's cycles, libc's
+  `memcmp` 1.3%, the screen triangle's calls 4.0% (`vector::__append` 1.7%, `meshState()` 1.2%, `meshDraw()` 1.1%),
+  `memset` 0.3%.
+
+**The changes** (`20d0ae180`, `88cbac19e`, `d5b5ec227`):
+1. **The kept settings compared where they are** (`GPU::kept()`): the PixelState's 208 bytes as they're laid out
+   (its padding too, as `memcmp` compared it) in sixteen-byte lanes, XORed and ORed, and the key's other inputs (the
+   texture's size and clamps, its function, environment and alpha, the write masks, the target, its rows and the
+   frame buffer's place in it, the shading and filter, the backend's ways of drawing) likewise, with a branch at the
+   end alone. `settings()` is the work done where they differ, a call of its own (`NALL_NOINLINE`), and records them
+   (`keptSettings`). The key has every input it had: a PRIM keeps its settings exactly where master's did. It starts
+   zeroed with the renderer, as `kept()` reads each field before it looks at `valid` (the checks below).
+   `meshDrawable()` answers once for a PRIM's settings while they're kept (`drawableKnown`, cleared by `settings()`,
+   the one place the pipeline changes), not with a hash of the pipeline at each mesh. #254's blending by the frame
+   buffer's alpha is decided with the settings (`blendsByAlpha`), from the bits the key holds.
+2. **`meshState()` and `meshDraw()`** keep their kept and joining paths inline; what records a new state or a new
+   draw is out of line (`recordMeshState()`, `newMeshDraw()`).
+3. **The recording's models and indices are piles** (`GPU::Pile<T>`): an append is a bound's check and a sum, the room
+   made larger out of line (`NALL_NOINLINE`) and kept as the recording's cleared, as a vector's capacity was; the
+   backend reads them as it read the vectors (`size()`, `empty()`, `data()`). A screen triangle's hot code on the X3
+   makes no call now (what's left out of line comes after the function's return). `mesh()` no longer zeroes the
+   indices it writes over (2 MB a frame in Army of Two). Tried first: `emplace_back()` and `push_back()`, which libc++
+   compiled with each one's reallocation inline: six blocks in `triangleAt()` (2,508 → 3,540 bytes), each jumped
+   over at each triangle. Replaced before the RP6 measured it; `triangleAt()` is 2,580 bytes now.
+
+**Numbers.** The Mac (M1, MoltenVK, the bench runner at -O3 with thin LTO, 300 frames from each scene's state, the
+emulation thread a frame, medians of two rounds taking turns; master `cc0638372` → `88cbac19e`): Super Monkey Ball
+427.1 → 407.6 M instructions (−4.6%), 34.96 → 33.71 ms (−3.6%); Ghost of Sparta 302.2 → 293.3 (−2.9%), 22.50 → 21.93
+ms (−2.5%); Chains of Olympus 106.1 → 103.6 (−2.4%), 9.89 → 9.81 ms; Army of Two 288.4 → 286.3 (−0.7%), 31.51 →
+31.24 ms; Killzone 158.9 → 158.7 (−0.2%), 17.29 → 17.48 ms, its cycles within the rounds' spread.
+
+The RP6 (the coordinator's session of 15 Oct, `ge4a-rp6.sh`: the owner's usual profile, performance mode 2, the X3
+held at 3.19 GHz, the GPU at 615 MHz, as every table before 14 Oct's restart; 600 frames, Vulkan fast, three rounds
+taking turns, Monkey Ball four; medians; `runner-android/runs/ge4a-*`, `counters.py`), the emulation thread a frame,
+master `cc0638372` → `88cbac19e`:
+
+| scene | CPU ms | M instructions | M cycles |
+| --- | --- | --- | --- |
+| Super Monkey Ball, story | 37.47 → 34.61 (−7.6%) | 434.0 → 410.5 (−5.4%) | 117.7 → 108.4 (−7.9%) |
+| Ghost of Sparta, menu | 26.85 → 25.67 (−4.4%) | 306.4 → 295.3 (−3.6%) | 83.9 → 80.0 (−4.7%) |
+| Chains of Olympus, difficulty menu | 12.18 → 11.89 (−2.4%) | 114.0 → 110.9 (−2.7%) | 36.4 → 35.4 (−2.9%) |
+| Army of Two, gameplay | 34.15 → 33.82 (−1.0%) | 264.5 → 262.3 (−0.8%) | 107.0 → 106.0 (−1.0%) |
+| Killzone, gameplay | 16.78 → 16.81 (+0.2%) | 154.6 → 154.4 (−0.1%) | 52.1 → 52.3 (+0.5%) |
+
+#253's cycles are back in both scenes the bisect named, and more: Monkey Ball −7.9% where #253 added 3.3%, Chains of
+Olympus −2.9% where it added 1.9%. Monkey Ball's frontend stalls 10.0% → 9.4% of its cycles and its L1I refills 4.37
+→ 1.92 a thousand instructions (Ghost of Sparta 4.85 → 3.88, Chains of Olympus 6.68 → 6.06).
+Killzone's runs overlap (master 16.72-16.78 ms, the branch 16.78-16.87, 0.14% fewer instructions); its cycles are
+0.2-0.5% more in each run, as they are with its settings never kept (+0.2%, 0.06% fewer instructions, below), which
+changes little of its work (it keeps them for 149 PRIMs of 1,182): the unity file's layout, not its work.
+
+**Why the X3 paid** (Monkey Ball's profiles, master's and the branch's, the same 600 frames, `profcmp.py`): the screen
+triangle's four calls took 2,912 M cycles of master's run and are 91 M more of `triangleAt()` now; `settings()` and
+`begin()`, the kept check's, 3,534 M → 2,753 M; `memcmp` 944 M → 374 M; `memset` 190 M → 0. The thread's cycles −7.1%,
+its frontend stalls −12.6%, and those fell all through the GE's code this round doesn't touch (`transformAll()` 409 M →
+233 M of them, `drawVertices()` 403 M → 246 M, the command loop, `decode()`, `readVertices()`), with the L1I's refills
+420 M → 169 M and its TLB's 10.9 M → 6.9 M (the counting pass; the X3 counts none of the frontend stall's kinds): the
+per-PRIM code, its calls and libraries, had been pushing the rest of the front end out of the X3's 64 KB instruction
+cache, which the M1's 192 KB holds.
+
+**What the diagnostics say** (three builds not for merging, in the same session; CPU time a frame):
+- **Settings never kept** (master, `0637bad57`): Monkey Ball +6.5%, Ghost of Sparta +3.6%, Chains of Olympus +2.2%,
+  Army of Two and Killzone +0.2%. Part 92's kept settings were worth more than they cost on the X3 too: what the X3
+  paid for was the check's form (the stack key, the call through the PLT, the frame around it), not keeping them.
+- **Screen meshes off** (`GPU::screenMeshes`, as the start-up check's fallback leaves it): on master (`da6fc4cc4`)
+  Monkey Ball −6.2%, Chains of Olympus −5.7%, Army of Two −1.5%, Ghost of Sparta −0.1%, Killzone +2.2%; on the
+  branch (`c9647a681` against it) Monkey Ball −1.4%, Chains of Olympus −3.8%, Army of Two −0.5%, Ghost of Sparta
+  +2.7%, Killzone +1.9%. They stay on: Ghost of Sparta and Killzone gain by them, and the rest pay far less than on
+  master.
+- **Where the screen meshes' cost is now**: not in the recording. With them every scene runs fewer instructions
+  (Monkey Ball 6.0 M a frame fewer, Army of Two 10.7 M), fewer draws (Monkey Ball 2,089 → 1,168 a frame, Ghost of
+  Sparta 2,457 → 346, Army of Two 2,718 → 608) and fewer submits (21.4 → 15.1, 21.6 → 5.1, 25.4 → 9.1), but its cycles
+  stall more (backend stalls 1.1 to 1.3 points more of them, Army of Two's 3.0), it takes 8 to 20 more page faults a
+  frame (Killzone 3 fewer), and the frame's end waits longer for the GPU (Monkey Ball 0.81 → 1.11 ms, Ghost of Sparta
+  1.64 → 2.98, Army of Two 0.94 → 1.46): the driver's and the GPU's work for fewer, larger indexed draws through
+  `transform.vert`, which the emulation thread's counters can't place. Monkey Ball's and Army of Two's difference is
+  cycles; Chains of Olympus's is mostly user time the cycle counter barely ran in (0.54 ms a frame more user time,
+  0.16 ms more cycles, its system time the same), as a wait that idles the core in user mode would be. Not looked
+  into further here: the next step is `rp6-profile.sh` on the two builds in Chains of Olympus and Army of Two (and
+  page faults by call stack: `PROFILE_EVENTS=page-faults PROFILE_EXTRA="--call-graph fp"`) and the same comparison
+  with `--late-frames` (the runner waits for each frame's read-back, which the app doesn't).
+
+**Checks.** The settled hashes (the kit's bench runners, 100 frames from each scene's state, every frame's picture and
+VRAM with the drawing settled, then RAM and the machine's state): the 21 kit scenes, Hammerin' Hero, Jeanne d'Arc, Cars
+Race-O-Rama and MX vs. ATV Untamed in each renderer: the merged head (`e947fe9df`) against master `02cd1fa8c`, 75 of 75
+the same. Before the merge, `88cbac19e` against `cc0638372`: 75 of 75 the same; `20d0ae180` in Vulkan fast 25 of 25. The
+suites on the merged head: tests/psp 550 groups, 0 failures, sanitized (`detect_container_overflow=0`) and unsanitized,
+the Vulkan groups run on the Mac's GPU (none skipped); tests/allegrex 78 groups, 0 failures; tests/psp/ares 348 checks,
+0 failed. The sanitized system tests on `88cbac19e` stopped at UBSan's "load of value 48, which is not a valid value for
+type 'bool'" in `kept()`: the renderer's first PRIMs read the key's bools before any `settings()` had written them
+(master's chain of `&&` never read them while `valid` was false); its answer was thrown away for `valid`'s sake, but the
+load was undefined. `d5b5ec227` zeroes the key with the renderer: 548 groups, 0 failures, sanitized. The X3's code read
+again on each commit's Android build (`syms.py`, `llvm-objdump`): `begin()` calls `settings()` only where the key
+differs; the screen triangle's calls (`recordMeshState()`, `newMeshDraw()`, `Pile::grow()`) only on their slow paths.
+CI: the draft PR's checks.
+
+**Kit.** `~/phobos-work/scratch/ge-round4/part-a` (`NOTES.md`): the bench and hash kit (round 3's, the scenes linked),
+`paths-patch.py` (the paths counted), `syms.py` (the X3's function sizes), the RP6's `ge4a-rp6.sh`, `counters.py` (the
+runs' stall shares, refills, faults and switches beside the runner's table), `rp6-profile.sh` (simpleperf on the RP6
+for a run made already: its command line again with the build's unstripped binary, counted, then sampled; its report
+on the device took the thread by its short name and found nothing, since fixed: the profiles above are the pulled
+`perf.data` reported on the Mac, the NDK's simpleperf with `--symfs`), `profcmp.py` (two reports side by side) and
+`mut/` (the review round's mutants: `mutate.py`, `mutants.sh`, on a copy of the tree with a test filter).
+
+**The review** (independent, of `c2dc921fa`): approve with should-fixes, no blockers. It found `kept()` comparing
+exactly master's inputs, the moved alpha decision and the drawable answer unable to go stale while settings are kept,
+and the piles sound; and three gaps in the tests, by mutation (each fault, all 58 GPU groups and 32 hashed scenes still
+passing): the alpha caught up on a PRIM whose settings are kept, most of `kept()`'s inputs one at a time, and
+`drawableKnown` against a pipeline the driver won't make. Taken (`3e819d440`):
+- **The review's path** in `stencilAlphaPaths` (two sprites alike blending by the frame buffer's alpha, the first
+  beside what lags, the second over it): it passes; without the catch-up on a kept PRIM, 8 failures (2,304 bytes
+  apart, accurate and fast, 1x and 2x).
+- **`gpuKeptInputs`** (a pretend backend that keeps each draw's state): two PRIMs the same but for one input, 28
+  inputs in turn, the second must have a state of its own. Each term of `kept()` left out alone (`mut/mutate.py`,
+  `mut/summary.txt`) fails it, one case each: the texture's height, function, environment, alpha and doubling, both
+  clamps, MASK_COLOR (a 5650 frame buffer's red, whose low bits its write mask doesn't keep), fast mode's shading and
+  filter, the backend's four ways, the texture as its decoded copy, and each 16-byte block of the PixelState from
+  byte 16 on (twelve). Left out without a failure, as each goes with another input: the texture's width and
+  `textured` (an untextured PRIM's sampler is zeroed: width, height and `textured` left out together fail), MASK_ALPHA
+  (the PixelState's write mask holds what `settings()` takes of it, in every format), the target, its row width and
+  rows and the frame buffer's place in it (they go with the frame buffer's address), and bytes 0-15 (the clear flags
+  leave the settings unkept; the frame buffer, its width and format change the target). `valid` left out fails
+  `gpuKeptAfterFailedTexture`; `clear` and `held` left out pass all 63 GPU groups (a clear PRIM records `valid` false;
+  a held one has no decoded texture, which the identity check refuses).
+- **`gpuMeshRefused`** (a pretend backend refusing blended pipelines): a mesh, then the same PRIM blended, which
+  mustn't be a mesh: it passes; with `drawableKnown` never cleared, 3 failures.
+- **KeptSettings' size and its last field's place pinned** (`static_assert`): a field added must go in `kept()` and
+  `settings()` too. A bool added last fits the padding, but `settings()`' list then misses it, which
+  `-Wmissing-field-initializers` (in `-Wextra`) stops the tests' build on (tried).
+- **`GPU::Run<T>` named `GPU::Pile<T>`**: a run is a submission to the GPU, and #258's `Recorded::runs` are depth runs.
+- **Chains of Olympus and Killzone hashed**, with #258's four scenes (below).
+
+**Master merged** (`6ff82f9f1`, #258, part 96: `5cd00b30e`): gpu.hpp met at one place (the piles' template and #258's
+`DepthRun`, both kept) and the handoff at its top (this entry first); gpu.cpp merged by itself. #258 leaves `settings()`
+and `kept()`'s inputs as they were, and its `Recorded::runs` (a vector) is cleared with the piles. Then master
+`462f8ff2f` (#261, part 99): only the docs met (part 99 before this part, its handoff entry after this one).
+
+**The review round's checks** (the merged head's code, `3e819d440`, against master `6ff82f9f1`): settled hashes on 31
+scenes (the 21 kit scenes, #258's Kurohyou 1 and 2, WipEout and IL-2, Chains of Olympus's difficulty menu, Killzone's
+gameplay, Hammerin' Hero, Jeanne d'Arc, Cars, MX) in each renderer: 93 of 93 the same (31 in each), none run again.
+tests/psp: 557 groups, 0 failures, plain and sanitized (`detect_container_overflow=0`), the Vulkan groups required (none
+skipped). The Mac's bench (Vulkan fast, 300 frames, medians of two rounds taking turns): Super Monkey Ball 432.6 → 412.9
+M instructions a frame (−4.6%), Ghost of Sparta 304.5 → 295.5 (−2.9%), the gain as before the merge.
+
+**Left:**
+- The screen meshes' cost on the X3 for Monkey Ball, Chains of Olympus and Army of Two (above), the driver's and the
+  GPU's: a profile first.
+- The GE's own work a PRIM, untouched here (`pixelState()`, the `Look` made and copied, the small PRIMs' transform):
+  part B, the GE's front end on a thread of its own.

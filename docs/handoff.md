@@ -30,6 +30,48 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP GE: #253's per-PRIM paths cheaper on the RP6's Cortex-X3 — a PRIM's kept settings compared where they are, fast mode's screen triangles without calls — 2026-10-15
+
+Branch `cursor/psp-ge-round4a-2b67`, on master `cc0638372` (part 97, #259), masters `02cd1fa8c` (part 98, #260),
+`6ff82f9f1` (part 96, #258) and `462f8ff2f` (part 99, #261) merged in; draft PR #262. docs/psp-core.md, part 100, has
+the evidence. GE round 4, part A; part B (the GE's front end on a thread of its own, its design in
+`~/phobos-work/scratch/ge-round4/DESIGN.md`) comes after. Clean room: no PPSSPP code read, JPCSP not read. Nothing of
+the PSP's behaviour changes; save states unchanged.
+- **The problem** (the coordinator's RP6 bisect): #253 (part 92) took 1.4% of Super Monkey Ball's instructions but
+  added 3.3% cycles (Chains of Olympus −1.3%, +1.9%), the X3's frontend stalls 8.3% → 10.1% of its cycles.
+- **Why** (master's X3 code, `llvm-objdump`, and the X3's own profile, simpleperf): the kept-settings check built a
+  276-byte key on the stack at each PRIM and called bionic's `memcmp` through the PLT, inside a frame of twelve saved
+  registers and a stack canary; each screen triangle made four calls (`meshState()`, the models' and indices'
+  `vector::__append`, `meshDraw()`): 4% of Monkey Ball's cycles, and their code pushed the rest of the GE out of the
+  X3's 64 KB instruction cache (its refills 60% fewer now, frontend stalls 12.6% fewer, most in code this round doesn't
+  touch).
+- **The change** (gpu.cpp, gpu.hpp): `kept()` compares the key's inputs where they are, word by word, with a branch at
+  the end alone, `settings()` the work where they differ; `meshState()`/`meshDraw()` inline where kept and joining;
+  the recording's models and indices are `GPU::Pile`s (an append a bound's check and a sum, the room grown out of
+  line); `meshDrawable()` answered once for a PRIM's settings while they're kept; #254's blending by the frame
+  buffer's alpha decided with the settings. The key starts zeroed: UBSan caught `kept()` reading it unwritten.
+- **RP6** (the coordinator's session, 15 Oct, the owner's usual profile, 600 frames, Vulkan fast, three rounds; master
+  → branch, CPU ms a frame): Super Monkey Ball −7.6% (cycles −7.9%), Ghost of Sparta −4.4%, Chains of Olympus −2.4%,
+  Army of Two −1.0%, Killzone +0.2% (its runs overlap). The Mac: instructions −4.6%, −2.9%, −2.4%, −0.7%, −0.2%.
+- **Diagnostics** (same session): settings never kept cost Monkey Ball 6.5% on the X3 (part 92's keeping is a win, its
+  check's form wasn't); screen meshes off, on the branch: Monkey Ball −1.4%, Chains of Olympus −3.8%, Army of Two
+  −0.5%, Ghost of Sparta +2.7%, Killzone +1.9%: kept on. What they still cost is the driver's and the GPU's (more page
+  faults, longer waits for the GPU, backend stalls), not their recording: next, `rp6-profile.sh` on Chains of Olympus
+  and Army of Two with and without them (page faults by call stack), and `--late-frames`.
+- **Review** (independent, of `c2dc921fa`: approve with should-fixes, no blockers), taken in `3e819d440`: the
+  review's test of the alpha caught up on a PRIM whose settings are kept; `gpuKeptInputs` (each of `kept()`'s inputs
+  changed alone; each term left out alone fails it, but those that go with another input: part 100's table);
+  `gpuMeshRefused` (a pipeline the driver won't make, after a mesh); KeptSettings' size and last place pinned;
+  `GPU::Run` named `GPU::Pile` (#258's runs are depth runs). Master `6ff82f9f1` (#258) merged: gpu.hpp and this top
+  met, nothing else; then `462f8ff2f` (#261): the docs alone.
+- **Review round's checks** (`3e819d440` against master `6ff82f9f1`): settled hashes 93 of 93 the same (the 21 kit
+  scenes, #258's Kurohyou 1 and 2, WipEout and IL-2, Chains of Olympus, Killzone, Hammerin' Hero, Jeanne d'Arc, Cars,
+  MX, in the three renderers); tests/psp 557/0 plain and sanitized; the Mac's bench: Monkey Ball −4.6% instructions,
+  Ghost of Sparta −2.9%, as before.
+- **First round's checks**: the merged head's settled hashes against master `02cd1fa8c`, 75 of 75 the same (the 21 kit
+  scenes, Hammerin' Hero, Jeanne d'Arc, Cars, MX, in the three renderers); tests/psp 550/0 sanitized and unsanitized
+  (the Vulkan groups run), tests/allegrex 78/0, tests/psp/ares 348/0; CI: the draft PR's checks.
+
 ## PSP: the game data install dialog — the disc's INSDIR copied to the memory stick through a folder of its own; sceIoChstat (part 99) — 2026-10-15
 
 Branch `cursor/psp-gamedata-install-2b67`, on master `cc0638372` (part 97, #259), master `6ff82f9f1` (parts 96 and 98)
