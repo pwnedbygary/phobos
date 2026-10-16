@@ -305,6 +305,10 @@ struct GPU : GE::Renderer {
     //Whether a move draws the stencil with the colors (move.frag's EXPORT build, with stencilExport): a move between
     //frame buffers of other row widths, which leaves the pixels it doesn't reach, needs it (movable())
     bool moveExport = false;
+    //Whether it clamps the depth rather than clipping by it (the device's depthClamp): the depth-writing pipelines'
+    //depth is rasterized above the GE's then (draw.vert), and a 2D depth past 0-65535 is drawn, held there as the GE
+    //holds it, not cut away
+    bool depthClamp = false;
     u64 texturesKept = 0;  //textures made from one let go of (makeTexture(): the tests')
     //Whether the last run put a picture on the window: a Present's swapchain image acquired and presented (not
     //where there's no window, or the acquiring timed out: the host shows the frame itself then)

@@ -7,6 +7,9 @@
 //to say (GE::meshTriangles(): it drops and culls them, and cuts and draws those reaching past the near plane
 //itself), so the GPU clips nothing more.
 
+//(draw.vert's: the depth rasterized a step and a half above the GE's, for draw.frag's DEPTHS)
+layout(constant_id = 0) const uint ABOVE = 0u;
+
 layout(push_constant) uniform Push {
   vec2 scale;  //2 / the target's width and height: pixels to Vulkan's -1 to 1
 } push;
@@ -188,7 +191,8 @@ void main() {
   //(draw.vert's main(), each output the same arithmetic on the same numbers)
   if(transform == OnScreen) {
     float w = normal.x;
-    gl_Position = vec4((position.xy * push.scale - 1.0) * w, position.z / 65535.0 * w, w);
+    float depth = ABOVE != 0u ? (position.z + 1.5) / 65536.5 : position.z / 65535.0;
+    gl_Position = vec4((position.xy * push.scale - 1.0) * w, depth * w, w);
     vertexColor = color * 255.0;
     vertexSpecular = shine * 255.0;
     vertexCoordinates = vec3(coordinates, normal.y);
@@ -271,7 +275,8 @@ void main() {
     precise vec2 pixels = 2048.0 + trunc((screen - 2048.0) * 16.0) / 16.0 - t.offset.xy;
     precise float z = clip.z * t.viewport.z / w + t.center.z;
     float held = z > 0.0 ? min(z, 65535.0) : 0.0;
-    gl_Position = vec4((pixels * push.scale - 1.0) * w, held / 65535.0 * w, w);
+    float depth = ABOVE != 0u ? (held + 1.5) / 65536.5 : held / 65535.0;
+    gl_Position = vec4((pixels * push.scale - 1.0) * w, depth * w, w);
     vertexDepth = held;
   } else {
     vec2 pixels = clip.xy * t.viewport.xy + (t.center.xy - t.offset.xy) * w;

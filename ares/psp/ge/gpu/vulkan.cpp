@@ -166,7 +166,6 @@ struct VulkanBackend : GPU::Backend {
   std::string deviceName;
   VkPhysicalDeviceProperties chosen{};  //(the device's: a kept pipeline cache's owner, pipelineData())
   VkFormat depthFormat = VK_FORMAT_UNDEFINED;
-  bool depthClamp = false;
   VkRenderPass renderPass = VK_NULL_HANDLE;
   VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
   VkDescriptorSetLayout frameLayout = VK_NULL_HANDLE;  //(set 1 of draws: a target's Target::frame)
@@ -712,12 +711,16 @@ struct VulkanBackend : GPU::Backend {
     VkSpecializationMapEntry entries[20];
     for(u32 n = 0; n < 20; n++) entries[n] = {n, n * 4, 4};
     VkSpecializationInfo specialization{20, entries, sizeof(constants), constants};
-    //(the GE's whole-number depth, draw.frag's DEPTHS, where the depth decides the test or is written)
+    //(the GE's whole-number depth, draw.frag's DEPTHS, where the depth decides the test or is written; where the
+    //depth is clamped, rasterized a step and a half above the GE's: draw.vert's ABOVE)
     bool depths = k.depthWrite || (k.depthTest && k.depthCompare > 1);
+    u32 above = depths && depthClamp;
+    VkSpecializationMapEntry aboveEntry{0, 0, 4};
+    VkSpecializationInfo vertexSpecialization{1, &aboveEntry, sizeof(above), &above};
     //(fast mode's 3D: transform.vert, taking the GE's vertices)
     VkPipelineShaderStageCreateInfo stages[2] = {
       {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT,
-       k.transformed ? transformModule : vertexModule, "main", nullptr},
+       k.transformed ? transformModule : vertexModule, "main", &vertexSpecialization},
       {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT,
        depths ? fragmentDepthModule : fragmentModule, "main", &specialization}};
     using V = GPU::Vertex;
