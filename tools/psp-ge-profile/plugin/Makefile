@@ -22,6 +22,7 @@ main.o hooks.o notice.o trace.o text.o: plugin.h profile.h
 hosttest: hosttest.c main.c hooks.c notice.c trace.c text.c plugin.h profile.h
 	cc -std=gnu11 -O1 -Wall -Wextra -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast -Wno-unused-function -Wno-format \
 	  -DHOST -I. -I$(PSPSDK)/include -o hosttest hosttest.c hooks.c text.c
+	./hosttest --boot-folder
 	./hosttest hosttest.bin
 	cd ../decoder && python3 -m unittest test_geprof
 .PHONY: hosttest

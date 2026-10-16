@@ -26,7 +26,7 @@
 //Time (near the 32-bit wrap, which the decoder must handle), threads, interrupts.
 static u32 fakeNow = 0xFFF00000u;
 static SceUID fakeThread = 0x04A1B2C3;
-static int interruptDepth, interruptsOff, currentPriority, threadCreated;
+static int interruptDepth, interruptsOff, currentPriority, threadCreated, threadFails, inModuleStart;
 
 unsigned int sceKernelGetSystemTimeLow(void) { return fakeNow; }
 int sceKernelGetThreadId(void) { return fakeThread; }
@@ -43,6 +43,7 @@ void sceKernelCpuResumeIntr(unsigned int flags) {
 SceUID sceKernelCreateThread(const char* name, SceKernelThreadEntry entry, int priority, int stack, SceUInt attr,
                              SceKernelThreadOptParam* option) {
   (void)name, (void)entry, (void)stack, (void)attr, (void)option;
+  if(threadFails) return (SceUID)0x80020190;  //no memory
   threadCreated = 1;
   currentPriority = priority;
   return 0x0600000;
@@ -98,7 +99,7 @@ SceUID sceIoOpen(const char* file, int flags, SceMode mode) {
   if(flags & PSP_O_APPEND) host |= O_APPEND;
   if(flags & PSP_O_WRONLY) {
     noteWrite(file);
-    assert(currentPriority == WritingPriority);
+    assert(currentPriority == WritingPriority || inModuleStart);
     assert(!(flags & PSP_O_TRUNC));
   }
   int fd = open(path, host, mode);
@@ -107,7 +108,7 @@ SceUID sceIoOpen(const char* file, int flags, SceMode mode) {
 
 int sceIoRead(SceUID fd, void* data, SceSize size) { return read(fd, data, size); }
 int sceIoWrite(SceUID fd, const void* data, SceSize size) {
-  assert(!monitorBefore && currentPriority == WritingPriority);
+  assert(!monitorBefore && (currentPriority == WritingPriority || inModuleStart));
   return write(fd, data, size);
 }
 int sceIoClose(SceUID fd) { return close(fd); }
@@ -566,6 +567,44 @@ static void testNotices(void) {
   noticeEnable(1);
 }
 
+//Lines that must be in a trace, in this order.
+static void expectTrace(const char* trace, const char* const* expected, size_t count) {
+  const char* at = trace;
+  for(size_t n = 0; n < count; n++) {
+    const char* match = strstr(at, expected[n]);
+    if(!match) fprintf(stderr, "hosttest: trace.txt lacks, in order: %s\n", expected[n]);
+    assert(match);
+    at = match;
+  }
+}
+
+//A boot with the PHOBOS folder already there and no memory for the control thread: module_start writes the trace
+//itself, from its first line to the thread it couldn't make, and nothing else is written.
+static int bootFolderTest(void) {
+  char path[512];
+  hostPath(path, "ms0:/PHOBOS");
+  mkdir(path, 0777);
+  const char settingsText[] = "mode = capture\n";
+  writeFile("ms0:/PHOBOS/prof.txt", settingsText, sizeof(settingsText) - 1);
+  threadFails = 1;
+  inModuleStart = 1;
+  assert(module_start(0, 0) == 0);
+  inModuleStart = 0;
+  assert(!threadCreated && device && settings.read && !settings.dry && used == 0);
+  static char trace[8192];
+  assert(readFile("ms0:/PHOBOS/trace.txt", trace, sizeof(trace)) > 0);
+  const char* expected[] = {
+    "---- Phobos GE profiler 0.2.1: module_start", "device: ms0:", "settings read: mode capture",
+    "found sctrlHENPatchSyscall at 0x", "hook sceGeListEnQueue: found at 0x", "sub-interrupt monitor: available",
+    "control thread not made (0x80020190)",
+  };
+  expectTrace(trace, expected, sizeof(expected) / sizeof(expected[0]));
+  for(int n = 0; n < writtenCount; n++) assert(!strcmp(written[n], "ms0:/PHOBOS/trace.txt"));
+  assert(writtenCount == 2);  //the first line at once, then the rest
+  printf("hosttest: the boot with the folder there passed (files in %s)\n", root);
+  return 0;
+}
+
 int main(int argc, char** argv) {
   const char* out = argc > 1 ? argv[1] : "hosttest.bin";
   testText();
@@ -578,10 +617,14 @@ int main(int argc, char** argv) {
   mkdir(path, 0777);
   hostPath(path, "disc0:/PSP_GAME");
   mkdir(path, 0777);
+  if(!strcmp(out, "--boot-folder")) return bootFolderTest();
 
-  //the module's start: the functions found (and the error code refused), the hooks in, the control thread made
+  //the module's start: the functions found (and the error code refused), the hooks in, the control thread made; no
+  //PHOBOS folder yet, so the trace stays in memory
+  inModuleStart = 1;
   assert(module_start(0, 0) == 0);
-  assert(threadCreated && currentPriority == WaitingPriority && flushes == 1);
+  inModuleStart = 0;
+  assert(threadCreated && currentPriority == WaitingPriority && flushes == 1 && writtenCount == 0);
   assert(!firmware.msIsEf && firmware.patchSyscall && firmware.displayGetFrameBuf);
   assert(hookStatus[KindGeEnQueue].installed && hookStatus[KindGeEnQueue].syscall >= 0x2000);
   assert(hookStatus[KindWaitVblankStartMultiCB].installed && monitorAvailable);
@@ -688,23 +731,18 @@ int main(int argc, char** argv) {
   static char trace[16384];
   assert(readFile("ms0:/PHOBOS/trace.txt", trace, sizeof(trace)) > 0);
   const char* expected[] = {
-    "---- Phobos GE profiler 0.2.0: module_start", "not found: sctrlHENFindFunctionOnSystem",
-    "found sctrlHENPatchSyscall at 0x", "refused sctrlKernelMsIsEf: the lookup gave 0x8002013A",
-    "found sceDisplayGetFrameBuf at 0x", "hook sceGeListEnQueue: found at 0x", "patched, syscall 0x2000",
-    "hook sceDisplaySetFrameBuf: found at 0x", "sub-interrupt monitor: available", "control thread made (0x00600000)",
-    "control thread running", "device: no PHOBOS folder on ms0: or ef0:", "settings: prof.txt not read yet",
-    "disc id UCUS98653, title \"God of War: Chains of Olympus\"", "device: ms0:", "settings read: mode dry",
-    "trigger (timed): dry run", "dry run: wrote UCUS98653-1.txt", "trigger (buttons): capture",
-    "capture: wrote UCUS98653-2.bin", "capture: no buffer: partition 1's largest free block is 300 KB",
-    "capture: not saved: NOT ENOUGH MEMORY", "capture: wrote ULES00364-1.bin",
+    "---- Phobos GE profiler 0.2.1: module_start", "device: no PHOBOS folder on ms0: or ef0:",
+    "not found: sctrlHENFindFunctionOnSystem", "found sctrlHENPatchSyscall at 0x",
+    "refused sctrlKernelMsIsEf: the lookup gave 0x8002013A", "found sceDisplayGetFrameBuf at 0x",
+    "hook sceGeListEnQueue: found at 0x", "patched, syscall 0x2000", "hook sceDisplaySetFrameBuf: found at 0x",
+    "sub-interrupt monitor: available", "control thread made (0x00600000)", "control thread running",
+    "settings: prof.txt not read yet", "disc id UCUS98653, title \"God of War: Chains of Olympus\"", "device: ms0:",
+    "settings read: mode dry", "trigger (timed): dry run", "dry run: wrote UCUS98653-1.txt",
+    "trigger (buttons): capture", "capture: wrote UCUS98653-2.bin",
+    "capture: no buffer: partition 1's largest free block is 300 KB", "capture: not saved: NOT ENOUGH MEMORY",
+    "capture: wrote ULES00364-1.bin",
   };
-  const char* at = trace;
-  for(size_t n = 0; n < sizeof(expected) / sizeof(expected[0]); n++) {
-    const char* match = strstr(at, expected[n]);
-    if(!match) fprintf(stderr, "hosttest: trace.txt lacks, in order: %s\n", expected[n]);
-    assert(match);
-    at = match;
-  }
+  expectTrace(trace, expected, sizeof(expected) / sizeof(expected[0]));
 
   //only ever under ms0:/PHOBOS, and never truncating
   for(int n = 0; n < writtenCount; n++) assert(!strncmp(written[n], "ms0:/PHOBOS/", 12));

@@ -94,8 +94,9 @@ launcher ("View info"); add it to the line, after a space. The other regions' ID
    each function, how much memory a capture can have, and what the hooks cost on your PSP; the trace says each step
    the plugin took, from its start.
 
-If nothing appears on screen at all, the plugin wasn't loaded for that game: check its ID (above). If the box appears
-but nothing is saved, the box and `trace.txt` say why.
+If nothing appears on screen at all, the plugin wasn't loaded for that game, or stopped before it could show
+anything: check its ID (above), then run the load test (below). If the box appears but nothing is saved, the box and
+`trace.txt` say why.
 
 ### What the notices mean
 
@@ -111,6 +112,34 @@ but nothing is saved, the box and `trace.txt` say why.
 | `NOT SAVED`, then a reason | `NO PHOBOS FOLDER`, `CANNOT MAKE PHOBOS/PROF`, `NO FREE FILE NUMBER`, `CANNOT CREATE THE FILE`, `WRITE FAILED`, or `NOT ENOUGH MEMORY` (then `SEE <ID>-<n>.TXT`, which says how much memory there was). |
 
 `notices = off` in `prof.txt` turns them all off.
+
+### If nothing appears on screen: the load test
+
+`hello/` builds two modules whose `module_start` only appends a line to `PHOBOS/hello.txt`: `phoboshello.prx`, a
+kernel module built the way `phobosprof.prx` is (the same flags, module attributes and exports; pspsdk's libraries
+only, nothing from ARK), and `phoboshellou.prx`, the same as a user module. For one session, `PLUGINS.TXT` holds just
+these three lines (keep the old file as `PLUGINS.OLD` and put it back afterwards):
+
+```
+psp, ms0:/SEPLUGINS/phoboshello.prx, on
+psp, ms0:/SEPLUGINS/phoboshellou.prx, on
+psp, ms0:/SEPLUGINS/phobosprof.prx, on
+```
+
+ARK matches `psp` for every PSP game, from a UMD, an ISO or the PlayStation Store, so only the game being tested is
+started that session. ARK loads the three in this order. Afterwards:
+
+| On the stick | What it means |
+|---|---|
+| No `hello.txt` line from that boot | ARK started none of the three: it isn't loading plugins for that boot (START held, plugins off, another `PLUGINS.TXT` read), or the game isn't in its `psp` runlevel (homebrew is `game` or `homebrew`). |
+| A `phoboshellou` line only | ARK starts user modules from `SEPLUGINS` there, but not kernel ones. |
+| A `phoboshello` line, but no line of 0.2.1's in `trace.txt` | ARK loads and starts kernel modules there, but `phobosprof.prx` doesn't start: the difference is the plugin itself. The line's kernel memory figures say whether its 53 KB could fit. |
+| A `phoboshello` line and 0.2.1's lines in `trace.txt` | The plugin starts, and `trace.txt` says how far it got. The `phoboshello` line's title ID is the ID ARK compares `PLUGINS.TXT`'s game IDs with: if it isn't on the plugin's game line, that's why that line didn't load it. |
+
+The kernel module's line reads `phoboshello loaded: kernel module, time <microseconds since power-on> us, api type
+<0x120 a UMD, 0x123 to 0x126 an ISO or a PlayStation Store game, 0x141 or 0x152 homebrew>, boot file <the game's
+file>, title id <the game's ID>, kernel memory free <bytes> in one block, <bytes> in all`; the user module's, just its
+name and the time.
 
 ### Captures (when the dry run's report has been looked at)
 
@@ -274,9 +303,13 @@ inside VRAM or inside the user RAM every model has.
 each firmware function found (with its address), refused (with what the lookup gave) or not found; each hook
 (found, patched, its syscall number); the monitor; the control thread made; the device found or not; the settings;
 the disc ID; the first flip through the hook; each trigger; each file written or not and why. The lines are kept in
-memory (6 KB) and appended to `PHOBOS/trace.txt`, never truncated, by the control thread at the writing priority:
-when the control thread starts, 6 seconds after the start, and after every run, never while a capture or a dry run's
-window is on. Lines from before the `PHOBOS` folder is found wait until it is.
+memory (6 KB) and appended to `PHOBOS/trace.txt`, never truncated. `module_start` writes them itself (in the module
+manager's thread, at the game's boot, before the game runs): first thing, so the file shows the module started even
+if nothing after that works, then once the functions and hooks are found, and again if the control thread can't
+run. From then on the control thread writes them at the writing priority: when it starts (before it asks ARK for the
+game's `PARAM.SFO`, which may mean reading a disc not yet ready, and again after), 6 seconds after the start, and
+after every run, never while a capture or a dry run's window is on. Lines from before the `PHOBOS` folder is found
+wait until it is.
 
 ### Settings (`PHOBOS/prof.txt`)
 
@@ -367,6 +400,10 @@ code uses no `$gp` (`psp-objdump -d phobosprof.elf | grep -w gp` finds nothing: 
 the firmware's `$gp`), and the imports are only `SystemCtrlForKernel` (one), `IoFileMgrForKernel`,
 `InterruptManagerForKernel` and `ThreadManForKernel`.
 
+`make` in `hello/` gives the load test's `phoboshello.prx` and `phoboshellou.prx` the same way, and `make hosttest`
+there runs `hello.c` on the Mac as both (the line in each case; `ms0:` or else `ef0:`; nothing written without a
+`PHOBOS` folder; a missing function's error code or a bad pointer never read as text).
+
 `make hosttest` (in `plugin/`) builds the plugin's C (`main.c`, `notice.c`, `trace.c`, `hooks.c`, `text.c`) for the
 Mac with the firmware faked (`hosttest.c`), the memory stick and the disc being folders in a temporary one, VRAM and a
 stretch of user RAM being arrays, and plays a scripted game whenever the control thread sleeps: lists built while the
@@ -399,6 +436,9 @@ that nothing is written outside `ms0:/PHOBOS/`. The decoder's tests then read th
 | `plugin/exports.exp`, `plugin/Makefile` | The module's exports and its build (and `make hosttest`). |
 | `plugin/hosttest.c` | The plugin on the Mac: its C with the firmware faked, driven by a scripted game. |
 | `plugin/prof.txt`, `prof-capture.txt`, `prof-boot.txt` | Settings: the dry run, captures by buttons, the capture from boot. |
+| `hello/hello.c` | The load test: a line in `PHOBOS/hello.txt` from `module_start`, as a kernel module and as a user one. |
+| `hello/Makefile`, `kernel.mak`, `user.mak`, `exports.exp` | Its two builds (and `make hosttest`). |
+| `hello/hosttest.c` | The load test on the Mac. |
 | `decoder/geprof.py` | The decoder (and `write_capture`, for synthetic captures). |
 | `decoder/test_geprof.py` | Its tests. |
 
@@ -407,7 +447,15 @@ that nothing is written outside `ms0:/PHOBOS/`. The decoder's tests then read th
 The plugin can't run in Phobos (there's no custom firmware there), so it's checked on the owner's PSP. Version 0.1.0's
 first dry run there (Chains of Olympus, ARK 4.20.69, a PSP-2000/3000) wrote nothing and showed nothing, which can't
 tell "not loaded" (most likely: his copy's ID wasn't on its line) from "loaded but stopped"; 0.2.0's notices and
-trace tell them apart. On the Mac: it builds as a kernel PRX (attribute 0x1001, ELF type 0xFFA0, module info in a kernel segment) with exactly the
+trace were to tell them apart. 0.2.0's run, with all three of his copies' IDs on the line, showed nothing either.
+What could stop the plugin before its first line runs was then checked against ARK-4 r205's plugin loader and uOFW's
+module loader, and nothing was found: ARK reads `PLUGINS.TXT` as these lines are written and matches a game's ID for
+UMD, ISO and PlayStation Store games alike; the imports are marked weak (attribute 0x0009, as in ARK's and pspsdk's
+own stubs), so a missing library or function can't fail the load; the module's layout, exports and relocations are
+the usual ones; `module_start` uses well under the 4 KB stack a kernel module's start gets. 0.2.1 writes `trace.txt`
+from `module_start` itself, so a module that starts but gets no further, or whose control thread can't run, still
+leaves a trace, and the load test (above) tells "ARK starts no such module there" from "this plugin fails". On the
+Mac: it builds as a kernel PRX (attribute 0x1001, ELF type 0xFFA0, module info in a kernel segment) with exactly the
 imports above; every static NID is confirmed by two sources (uOFW's 6.60 export lists or pspsdk's 6.60 libraries,
 and pspsdk's stub libraries; ARK's by its name's SHA-1 and pspsdk's `libpspsystemctrl_kernel`); the hooks' idle path
 was read in the disassembly; GCC checks every report line's format against its arguments; the plugin's C runs on
@@ -419,6 +467,8 @@ search as a fallback where it has one), that `sctrlHENPatchSyscall` and the moni
 describe on this firmware, what the hooks really cost, and how much kernel memory a game leaves (the dry run's
 report answers each).
 
-Clean room: the plugin and decoder are this project's own code. The references were pspsdk's headers and
-libraries, uOFW (for what the GE, display, interrupt and memory drivers do, and their NIDs) and ARK-4's README,
-wiki and `systemctrl.h` (for its plugin API); no emulator's code and no other plugin's.
+Clean room: the plugin, the load test and the decoder are this project's own code. The references were pspsdk's
+headers and libraries, uOFW (for what the GE, display, interrupt and memory drivers do, their NIDs, and how the
+module loader links and starts a module), and ARK-4's README, wiki and `systemctrl.h` (for its plugin API), its
+plugin loader's and game launcher's sources and its own plugins' Makefiles (for how it loads plugins and what they
+look like); no emulator's code and no other plugin's.

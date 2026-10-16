@@ -734,10 +734,12 @@ static void showStart(void) {
   noticeShow("PHOBOS PROFILER ON", line2, line3, StartNotice);
 }
 
+//The trace goes out before ARK is asked for the game's PARAM.SFO, which it may read from a disc not ready this early.
 static void controlStart(void) {
   traceLine("control thread running");
   ensureDevice();
   if(!settings.read) traceSettings();
+  flushTrace();
   readGameInfo();
   traceLine("disc id %s, title \"%s\"%s", discId, title, firmware.getInitParam ? "" : " (no sctrlGetInitPARAM)");
   noticeEnable(settings.notices);
@@ -804,19 +806,27 @@ static int controlThread(SceSize args, void* argp) {
   return 0;
 }
 
-//Nothing after the thread's start is traced here: the thread, at a higher priority, may already be running.
+//The trace is written from here too, in the module manager's thread at the game's boot (before the game runs, so not
+//at the writing priority): first thing, so trace.txt shows the module started even if nothing after works; then
+//with the functions and hooks found; and once more if the control thread, which writes the rest, can't run. Nothing
+//after the thread's start is traced here: the thread, at a higher priority, may already be running.
 int module_start(SceSize args, void* argp) {
   (void)args, (void)argp;
   pluginStart = now();
   traceStart(pluginStart);
   traceLine("---- Phobos GE profiler %s: module_start", ProfileVersion);
+  traceWrite(ensureDevice());
   findFirmware();
   installHooks();
   SceUID thread = sceKernelCreateThread("PhobosGeProfile", controlThread, WaitingPriority, ThreadStack, 0, 0);
   traceLine(thread >= 0 ? "control thread made (0x%08X)" : "control thread not made (0x%08X)", thread);
+  traceWrite(ensureDevice());
   if(thread >= 0) {
     int started = sceKernelStartThread(thread, 0, 0);
-    if(started < 0) traceLine("control thread not started (0x%08X)", started);
+    if(started < 0) {
+      traceLine("control thread not started (0x%08X)", started);
+      traceWrite(ensureDevice());
+    }
   }
   return 0;
 }

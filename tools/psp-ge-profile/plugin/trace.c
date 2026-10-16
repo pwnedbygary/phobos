@@ -2,8 +2,9 @@
 //each hook; the control thread; the device; the settings; the disc id; the first flip; each trigger; each file
 //written or not), so a run that writes nothing else still says how far it got. Each line starts with the seconds
 //since the module started. Lines are kept in memory and appended to <device>:/PHOBOS/trace.txt (never truncated) by
-//the control thread whenever it may open a file, never while a capture or a dry run's window is on; lines from
-//before the PHOBOS folder is found wait until it is. Past the buffer's 6 KB, lines are counted, not kept.
+//module_start at the game's boot, then by the control thread whenever it may open a file, never while a capture or
+//a dry run's window is on; lines from before the PHOBOS folder is found wait until it is. Past the buffer's 6 KB,
+//lines are counted, not kept.
 
 #include "plugin.h"
 #include <pspiofilemgr.h>

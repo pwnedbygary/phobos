@@ -4,4 +4,10 @@ plugin/*.prx
 plugin/exports.c
 plugin/hosttest
 plugin/hosttest.bin
+hello/*.o
+hello/*.elf
+hello/*.prx
+hello/exports.c
+hello/hosttest-kernel
+hello/hosttest-user
 __pycache__/
