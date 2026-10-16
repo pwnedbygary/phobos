@@ -26,7 +26,7 @@ static auto scrambled(u32 size, u32 seed) -> std::vector<u8> {
 }
 
 static auto put32(std::vector<u8>& data, u32 at, u32 value) -> void {
-  for(u32 n = 0; n < 4; n++) data[at + n] = u8(value >> n * 8);
+  for(u32 n = 0; n < 4; n++) data.at(at + n) = u8(value >> n * 8);
 }
 
 //What KIRK's command 4 makes (the wiki's "Commands 4/7"): data encrypted with AES-128-CBC, a zero IV and the key of

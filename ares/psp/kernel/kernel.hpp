@@ -780,6 +780,7 @@ struct Kernel {
   auto sceIoChdir() -> void;
   auto sceIoAssign() -> void;
   auto sceIoGetstat() -> void;
+  auto sceIoChstat() -> void;
   auto sceIoDopen() -> void;
   auto sceIoDread() -> void;
   auto sceIoDclose() -> void;
@@ -2122,7 +2123,8 @@ struct Kernel {
   //it's asked to show (the texts UTF-8):
   struct DialogRequest {
     u32 id = 0;            //which request (0: none), a number of its own for its answer to name
-    u32 kind = 0;          //1 saving or loading, 2 a message, 3 the keyboard (utility.cpp's kinds)
+    u32 kind = 0;          //1 saving or loading, 2 a message, 3 the keyboard, 7 a game data install's progress, which
+                           //takes no answer (utility.cpp's kinds; install.cpp)
     u32 language = 1;      //the dialog's (its common part's: psputility_sysparam.h's numbers, 1 English)
     bool circle = false;   //circle confirms and cross backs out, as in Japan (the common part's buttonSwap 0)
     //a message: its text, or for an error's (text empty) the error's number; its buttons, 0 none (the game takes
@@ -2145,7 +2147,8 @@ struct Kernel {
     std::vector<Field> fields;
     //saving and loading: the mode (2 load, 3 save, 4 load from a list, 5 save to a list, 6 delete from a list, 7
     //delete any of the memory stick's saves, 10 delete), the saves to choose from, the one chosen at first, and
-    //whether a save was just deleted from this list
+    //whether a save was just deleted from this list; a game data install: mode 1, its progress (0 to 100) as the
+    //focus, and the install as the one save (install.cpp's installShow())
     u32 mode = 0;
     struct Save {
       std::string name;    //the save's name after the game's (for mode 7, its folder's)
@@ -2193,6 +2196,41 @@ struct Kernel {
   auto dialogAnswered(const DialogRequest& asked, const DialogAnswer& given) -> void;
   auto dialogSaved(u32 parameters, const DialogRequest& asked, const DialogAnswer& given) -> std::optional<u32>;
   auto savedataUnshown(u32 parameters) -> u32;
+
+  //install.cpp: the game data install dialog's copy of the disc's PSP_GAME/INSDIR into the memory stick
+  //(docs/psp-core.md, part 99), a piece at each Update. Not state: a state loaded while it copies starts it again.
+  struct Install {
+    struct File {
+      std::string name;
+      u64 size = 0;
+      u32 sector = 0;    //where it starts on the disc image
+      std::string host;  //or its host file, where a host folder stands for the disc
+    };
+    bool started = false;
+    std::vector<File> files;  //INSDIR's files, as listed when the copy started
+    u32 file = 0;             //the one being copied
+    u64 at = 0;               //how far into it
+    u64 copied = 0, total = 0;
+    u32 shown = ~0u;          //the progress a front end was last shown
+    std::string folder;       //the save's folder: the game's name and the data's
+    std::string partial;      //the host folder it's copied into first
+    std::vector<u8> icon;     //INSDIR's ICON0.PNG, for a front end
+  } install;
+  static constexpr u64 InstallBytesPerUpdate = 1_MiB;
+  //the memory stick's own folder the copies are made in, at its top, which programs can neither see nor reach (io.cpp)
+  static constexpr const char* InstallCopies = ".phobos-install";
+  auto installLeftovers(const std::string& stick) -> bool;
+  auto installWriteFailed() -> u32;
+  auto installFolderIntact() -> bool;
+  auto installUpdate() -> void;
+  auto installBegin() -> u32;
+  auto installStep() -> u32;
+  auto installCommit() -> u32;
+  auto installRead(const Install::File& file, u64 at, u64 size, u8* data) -> bool;
+  auto installAbandon() -> void;
+  auto installFinish(u32 answer) -> void;
+  auto installShow() -> void;
+  auto installTrace(const std::string& text) -> void;
 
   //power.cpp: the battery, the clocks, the power switch's callbacks, the volatile memory
   struct Power {

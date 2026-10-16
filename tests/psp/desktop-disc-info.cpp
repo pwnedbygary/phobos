@@ -99,6 +99,8 @@ static auto iconKeys() -> void {
   auto key = pspIconKey("/games/a.iso", 100, 200);
   CHECK(key.size() == 64, true);
   for(auto c : key) CHECK((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'), true);
+  //(the SHA-256 of "/games/a.iso|100|200", as shasum -a 256 gives it: the names the cache's files already have)
+  CHECK(key == "764ced81df7774cc696dbb4d86bd579e334a8bf854aa0c1500a132f0d3af4a09", true);
   CHECK(pspIconKey("/games/a.iso", 100, 200) == key, true);
   CHECK(pspIconKey("/games/a.iso", 101, 200) != key, true);  //the size changed
   CHECK(pspIconKey("/games/a.iso", 100, 201) != key, true);  //the mtime changed

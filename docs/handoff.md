@@ -30,6 +30,116 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP GE: #253's per-PRIM paths cheaper on the RP6's Cortex-X3 — a PRIM's kept settings compared where they are, fast mode's screen triangles without calls — 2026-10-15
+
+Branch `cursor/psp-ge-round4a-2b67`, on master `cc0638372` (part 97, #259), masters `02cd1fa8c` (part 98, #260),
+`6ff82f9f1` (part 96, #258) and `462f8ff2f` (part 99, #261) merged in; draft PR #262. docs/psp-core.md, part 100, has
+the evidence. GE round 4, part A; part B (the GE's front end on a thread of its own, its design in
+`~/phobos-work/scratch/ge-round4/DESIGN.md`) comes after. Clean room: no PPSSPP code read, JPCSP not read. Nothing of
+the PSP's behaviour changes; save states unchanged.
+- **The problem** (the coordinator's RP6 bisect): #253 (part 92) took 1.4% of Super Monkey Ball's instructions but
+  added 3.3% cycles (Chains of Olympus −1.3%, +1.9%), the X3's frontend stalls 8.3% → 10.1% of its cycles.
+- **Why** (master's X3 code, `llvm-objdump`, and the X3's own profile, simpleperf): the kept-settings check built a
+  276-byte key on the stack at each PRIM and called bionic's `memcmp` through the PLT, inside a frame of twelve saved
+  registers and a stack canary; each screen triangle made four calls (`meshState()`, the models' and indices'
+  `vector::__append`, `meshDraw()`): 4% of Monkey Ball's cycles, and their code pushed the rest of the GE out of the
+  X3's 64 KB instruction cache (its refills 60% fewer now, frontend stalls 12.6% fewer, most in code this round doesn't
+  touch).
+- **The change** (gpu.cpp, gpu.hpp): `kept()` compares the key's inputs where they are, word by word, with a branch at
+  the end alone, `settings()` the work where they differ; `meshState()`/`meshDraw()` inline where kept and joining;
+  the recording's models and indices are `GPU::Pile`s (an append a bound's check and a sum, the room grown out of
+  line); `meshDrawable()` answered once for a PRIM's settings while they're kept; #254's blending by the frame
+  buffer's alpha decided with the settings. The key starts zeroed: UBSan caught `kept()` reading it unwritten.
+- **RP6** (the coordinator's session, 15 Oct, the owner's usual profile, 600 frames, Vulkan fast, three rounds; master
+  → branch, CPU ms a frame): Super Monkey Ball −7.6% (cycles −7.9%), Ghost of Sparta −4.4%, Chains of Olympus −2.4%,
+  Army of Two −1.0%, Killzone +0.2% (its runs overlap). The Mac: instructions −4.6%, −2.9%, −2.4%, −0.7%, −0.2%.
+- **Diagnostics** (same session): settings never kept cost Monkey Ball 6.5% on the X3 (part 92's keeping is a win, its
+  check's form wasn't); screen meshes off, on the branch: Monkey Ball −1.4%, Chains of Olympus −3.8%, Army of Two
+  −0.5%, Ghost of Sparta +2.7%, Killzone +1.9%: kept on. What they still cost is the driver's and the GPU's (more page
+  faults, longer waits for the GPU, backend stalls), not their recording: next, `rp6-profile.sh` on Chains of Olympus
+  and Army of Two with and without them (page faults by call stack), and `--late-frames`.
+- **Review** (independent, of `c2dc921fa`: approve with should-fixes, no blockers), taken in `3e819d440`: the
+  review's test of the alpha caught up on a PRIM whose settings are kept; `gpuKeptInputs` (each of `kept()`'s inputs
+  changed alone; each term left out alone fails it, but those that go with another input: part 100's table);
+  `gpuMeshRefused` (a pipeline the driver won't make, after a mesh); KeptSettings' size and last place pinned;
+  `GPU::Run` named `GPU::Pile` (#258's runs are depth runs). Master `6ff82f9f1` (#258) merged: gpu.hpp and this top
+  met, nothing else; then `462f8ff2f` (#261): the docs alone.
+- **Review round's checks** (`3e819d440` against master `6ff82f9f1`): settled hashes 93 of 93 the same (the 21 kit
+  scenes, #258's Kurohyou 1 and 2, WipEout and IL-2, Chains of Olympus, Killzone, Hammerin' Hero, Jeanne d'Arc, Cars,
+  MX, in the three renderers); tests/psp 557/0 plain and sanitized; the Mac's bench: Monkey Ball −4.6% instructions,
+  Ghost of Sparta −2.9%, as before.
+- **First round's checks**: the merged head's settled hashes against master `02cd1fa8c`, 75 of 75 the same (the 21 kit
+  scenes, Hammerin' Hero, Jeanne d'Arc, Cars, MX, in the three renderers); tests/psp 550/0 sanitized and unsanitized
+  (the Vulkan groups run), tests/allegrex 78/0, tests/psp/ares 348/0; CI: the draft PR's checks.
+
+## PSP: the game data install dialog — the disc's INSDIR copied to the memory stick through a folder of its own; sceIoChstat (part 99) — 2026-10-15
+
+Branch `cursor/psp-gamedata-install-2b67`, on master `cc0638372` (part 97, #259), master `6ff82f9f1` (parts 96 and 98)
+merged in; draft PR #261. docs/psp-core.md, part 99, has the evidence. Clean room: pspautotests'
+utility/dialog/sizes, io/stat and io/stat/readonly; players' reports of Kingdom Hearts' install failing on PSPs
+(80111904); the games' code and
+discs; PPSSPP's gamedata install dialog, error codes and sceIoChstat notes read only as a description; JPCSP not read.
+Save states unchanged (layout 32: the copy isn't state).
+- **The bug** (deep play batch 04's bug 3): Kingdom Hearts Birth by Sleep Final Mix's DATA INSTALL ended in "An error
+  has occurred", and Gunhound EX's was cancelled: part 37 had made sceUtilityGamedataInstall a dialog that's cancelled.
+  Behind it, Kingdom Hearts' own copy of BBS1.DAT calls sceIoChstat, which was missing (the 80111904 players saw on bad
+  memory sticks is that path's message).
+- **What it does now** (`install.cpp`): each Update copies 1 MiB of the disc's PSP_GAME/INSDIR (from the image or a
+  host folder standing for the disc) into `<stick>/.phobos-install/<game><data>`, writes the progress (at 1372), and at
+  the end writes PARAM.SFO (the request's titles; a PARAM.SFO there keeps its other keys) and renames the copy into
+  PSP/SAVEDATA/<game><data>, or moves its files into the folder there, PARAM.SFO last. It writes over only what a PSP's
+  dialog would: INSDIR's files and PARAM.SFO in that folder. Phobos stopped part way leaves no half folder: aborted,
+  reset or a state loaded, the copy is taken away; killed, the whole `.phobos-install` is emptied at the next power on
+  or install start (never following a link out of it). Programs can't see or reach `.phobos-install` (io.cpp's
+  `resolve()` and sceIoDopen: any case, trailing dots/spaces, and by file identity, so links and 8.3 names too). The
+  copy is checked before each piece (as the install left it) and at the end (every file the disc's length): a copy
+  the host changed meanwhile gives 0x80111904, never a short install. Answers: 0; 1 (Abort; a disc with nothing to
+  install, as before); 0x80111901 no stick;
+  0x80111902 no space (chosen from the codes' pattern; io.cpp's 57,344 free clusters, never filling the host's
+  storage, and the host filling during the copy); 0x80111904 the stick unwritable (also chosen for bad names, a
+  folder name ending in '.' or ' ', a file in the folder's place, a leftover that can't be removed); 0x80111908 mode
+  ≥ 2. The trailing '.'/' ' refusal is the install's alone: savedata's names (the shared `plainName()`) are unchanged.
+- **sceIoChstat** (io.cpp, new): a memory stick file's read-only flag as io/stat/readonly recorded (the host file's
+  owner's write permission); a folder's answered 0 and changed nowhere, the device's top refused (0x80010016, as
+  sceIoGetstat). sceIoGetstat and sceIoDread give a stick file's attributes as io/stat recorded (0x20 a file, 0x10 a
+  folder, 0x01 more when a file is read-only), where they had been 0x27 and 0x17.
+- **The app**: in mode 1 (the PSP's own progress screen) a request of kind 7, made afresh as the progress moves on and
+  taking no answer, shown by `PspInstallDialog` (icon, titles, size, "Installing… N%"; no button). Mode 0 shows
+  nothing, as a PSP does (Kingdom Hearts draws its own screen).
+- **Games**: Kingdom Hearts installs (INSTALLATION COMPLETE; BBS1.DAT, ICON0.PNG, PIC1.PNG byte for byte the disc's)
+  and, booted again, reads BBS1.DAT from the memory stick (41 reads, none from the disc's copy) to its first gameplay.
+  Gunhound EX installs all 797 files byte for byte; 7th Dragon 2020 its 1.5 GB. Both then read their install through
+  the PGD layer (flag 0x40000000, ioctl 0x04100001), which io.cpp refuses on memory stick files (part 97's "left",
+  its own task now), say so at boot and play from the disc. All 30 INSDIR discs in the library import the dialog.
+- **Tests**: tests/psp/install.cpp's 9 groups (the whole install in both sizes, a host folder disc, every answer, cut
+  short by Abort, a reset or Phobos killed, the copies' folder hidden and links in its place, its copy changed behind
+  its back, a state saved part way, over an install there, the progress screen and its byte form) and files.cpp's
+  sceIoChstat group; on master the first round's 8 fail, part 37's own group passing on both. Android:
+  `PspDialogsTest.readsTheCoresInstallProgress`.
+- **Review round** (review of `1fbabdf43`: approve with should-fixes): the leftovers' cleanup at power on and every
+  install start; sceIoChstat files only, top refused; the copies' folder hidden; the cleanup's errors checked; names
+  ending in '.'/' ' refused; a file in the folder's place found before the copy; a disk filling mid-copy 0x80111902;
+  two doc wordings (a third didn't hold: Kingdom Hearts clears its folders' read-only flag only where sceIoGetstat
+  says it's set, so with the PSP's 0x10 it changes none). The merge over an install there is kept (PPSSPP's
+  description; no clean-room recording covers it). Re-review of that round: approved with one should-fix the first
+  round had (the host could turn the copy into a short install), taken in a third round with its optional nit (the
+  folder's other names on Windows and FAT).
+- **Checks**: tests/psp 556/0 sanitized (`detect_container_overflow=0`) and unsanitized; tests/allegrex 78/0;
+  tests/psp/ares 348/0; the runner's test; GCC 13.3 `-Wall -Wextra -Werror` on the changed files; Android 344 unit
+  tests, 0 failures. The 21 scenes in Software: every hash master's, the state too. Batch 04's saves (7 games): the same
+  files byte for byte and the same savedata requests as master's runner. Nothing run on the RP6. Second round
+  (`063633d84`): tests/psp 557/0 sanitized and unsanitized, tests/allegrex 78/0, tests/psp/ares 348/0, the runner's
+  test; the round's tests fail on `1fbabdf43` (4 groups, 45 checks) and the other 553 pass; Kingdom Hearts installs
+  and boots again on a scratch stick (files the disc's, a planted leftover gone at power on, 41 reads from the stick,
+  every frame the first round's); a disk image filled mid-copy answers 0x80111902; the 21 scenes' hashes master's.
+  Third round (`d5771d7fb`): tests/psp 558/0 sanitized and unsanitized, tests/allegrex 78/0, tests/psp/ares 348/0;
+  the round's tests fail on `4b671947d` (2 groups, 26 checks) and the other 556 pass; Kingdom Hearts' install and
+  boot every file and frame the second round's; the 21 scenes' hashes master's. GCC 13.3 (Docker) couldn't be run in
+  rounds two and three (Ubuntu's archive unreachable); CI's Linux build compiles with it.
+- **Left**: the PGD layer on memory stick files (its own task now: Gunhound EX and 7th Dragon 2020 use their installs once
+  it's there); the dialog's own screens and timing, the words after the progress, and the no-space code aren't recorded;
+  sceIoChstat's times and size aren't changed.
+
 ## PSP GE: the depth buffer in the order its frame buffer's format has it — the Kurohyou games' characters at the screen's middle (deep play batch 04, bug 2) — 2026-10-14
 
 Branch `cursor/psp-kurohyou-2b67`, on master at e78b4a364 (#254), master 14b181707 (#256, #257) merged in for the second
@@ -910,6 +1020,43 @@ scripts and CI only: the app's build and its flags are unchanged.
   before, never reached. None is fixed here: `four.cpp`'s wants measuring (above), #229 is changing the kernel's
   serialization, nall is shared with every ares system, and a change to `crypto.cpp` alone wouldn't turn the lane
   green.
+- **Settled** (#249, 2026-10-15, the owner's call: fixed in the code, `-Werror` kept): each is written so GCC follows
+  it, with nothing it does changed. `spriteFours()` sets `four.depth = s32x4{};` before `depthFirst()`, as
+  `triangleFours()` does, and starts each row's `downAxis[]` at `{}`; the loaded samples' right stick is centred in
+  the samples' own loop in `serialization.cpp`, not in a loop of its own that GCC turned into 64 stores past
+  `Controller::buttons`; `pspIconKey()` writes the SHA-256's bytes (`output()`) as lowercase hexadecimal itself, not
+  through nall's string (nall unchanged; `iconKeys()` now pins a key's value, so the cache's file names stay as they
+  were); `crypto.cpp`'s `put32()` stores through `at()`. With those four gone, the lane's next run (38801413445)
+  found a fifth in `kernel.cpp`: `pools.cpp:216`, `-Warray-bounds` in a `std::vector`'s insert of an initializer
+  list, which aarch64's GCC gives on master too; `poolStatus()` now keeps its words in a `u32[5]` with their count.
+  Checks: GCC 13.3 (Ubuntu 24.04 in Docker, arm64: x86-64's packages couldn't be fetched) at the lane's flags builds
+  all 52 files (master's `spins.cpp` the 52nd), as CI's x86-64 lane does (run 38803233475). The 21 scenes in
+  Software, Vulkan fast and accurate, master's bench runner against the fixed one: all 63 sets of hashes master's.
+  Army of Two's gameplay and menu in Software, its sprite-heaviest scenes (42% and 32% of their fours sprites'): the
+  same instructions a frame within the runs' spread (+0.00% and +0.02% drawn on one thread, -0.05% and +0.05% on
+  four), the times within their noise. tests/psp 555/0 sanitized, unsanitized and built as the app is (Apple clang),
+  tests/allegrex 78/0, tests/psp/ares 348/0.
+- **What the lane's first full run found, settled for GCC** (run 38803233475; the tests had never run built so on
+  Linux): "ge vertices read in runs as one at a time" failed, 1,248 of its 3,000 rounds differing, with aarch64's GCC
+  13.3 as well. A float vertex field holding a signaling NaN read quieted one vertex at a time (`readTarget()`: the
+  number times its unit, 1 for a float, multiplied at run time) but as it was in runs (`readVerticesFrom()`: GCC,
+  seeing the unit is 1 in `byFormat()`'s float case, drops the multiplication, as its default `-fno-signaling-nans`
+  allows). Clang, Apple's and the NDK's, keeps the multiplication in both readers, so the app's builds read both the
+  same. The owner's call (2026-10-15): GCC's builds read as clang's. Under GCC alone (`#if defined(__GNUC__) &&
+  !defined(__clang__)`), both readers take a float through `vertexFloat()`, which sets a NaN's quiet bit in whole
+  numbers, which no optimizer may drop; clang compiles master's reads, so the app pays nothing. (With the quieting
+  on clang too, `003dff253`, the Mac's bench in Vulkan fast had Ghost of Sparta's menu at +1.24% emulation-thread
+  instructions and Super Monkey Ball at +0.83%; `-fsignaling-nans`, experimental in GCC's manual and needed over the
+  whole PSP core, wasn't taken.) Clang relies on its own multiplication, which a new test pins on the Mac (CI's
+  system tests are GCC's): "ge vertex floats that are signaling NaNs read quieted, in runs and one at a time" reads
+  twelve values, four of them signaling NaNs, in every float of a 3D vertex both ways and checks their bits. With
+  the unit made a 1 that clang sees, so that it folds the multiplication away, it fails on the Mac (each signaling
+  NaN read as stored, in all ten floats, both ways), while "ge vertices read in runs as one at a time" passes.
+  Checks: clang's code for `ge.cpp` byte-identical with master's `vertex.cpp` and with this one (Apple clang at the
+  lane's flags, the NDK's 28.2 at the app's, modern and legacy), its six vertex readers the same as master
+  `1c75c5600`'s own build's; the 21 scenes in Software, Vulkan fast and accurate, master's runner against this one:
+  all 63 sets of hashes the same; tests/psp 568/0 built as the app is, unsanitized and sanitized (Apple clang). CI's
+  lane passed with this GCC code (run 38827011901, on `003dff253`).
 - **Checks** (the Mac, arm64, Apple clang 21): `PHOBOS_TESTS_MODE=release tests/allegrex/run-tests.sh` 60/0 (7
   objects of its own, 18 s with the run); `tests/rsp-vu-neon/run-tests.sh 3000 0x5253505655`: 10,420,000 checks, no
   NEON or reference mismatch; actionlint on the workflows. CI on #247 (run 38439997353): Allegrex 60/0 sanitized and

@@ -7,7 +7,8 @@ import java.nio.ByteOrder
 /**
  * A PSP system dialog waiting for the player: a message, the on-screen keyboard, or saving and loading. The PSP core
  * asks for it in the byte form ares/psp/kernel/dialogs.cpp's dialogBytes() writes (docs/psp-core.md, part 73), and
- * the game runs on until [PspDialogAnswer] answers it.
+ * the game runs on until [PspDialogAnswer] answers it. A game data install's progress ([KIND_INSTALL], part 99) comes
+ * the same way, afresh as it moves on, and takes no answer: the core takes it down once the install is done.
  */
 data class PspDialogRequest(
     val id: Int,
@@ -27,7 +28,8 @@ data class PspDialogRequest(
     val backLabel: String,
     val fields: List<PspKeyboardField>,
     // Saving and loading: the mode (SAVE_* below), the save chosen first, whether a save was just deleted from this
-    // list, and the saves to choose from.
+    // list, and the saves to choose from. A game data install: mode 1, its progress (0 to 100) as the focus, and the
+    // install as the one save (its data's name, titles and detail, the bytes it copies, its icon).
     val mode: Int,
     val focus: Int,
     val deleted: Boolean,
@@ -37,6 +39,7 @@ data class PspDialogRequest(
         const val KIND_SAVEDATA = 1
         const val KIND_MESSAGE = 2
         const val KIND_KEYBOARD = 3
+        const val KIND_INSTALL = 7
 
         const val MESSAGE_NO_BUTTONS = 0
         const val MESSAGE_OK = 1
@@ -364,3 +367,6 @@ fun PspDialogRequest.nothingThere(): Boolean = when (mode) {
 
 /** Whether a save dialog shows a list to choose from (else one save and its question). */
 fun PspDialogRequest.listed(): Boolean = mode in PspDialogRequest.SAVE_LIST_LOAD..PspDialogRequest.SAVE_LIST_ALL_DELETE
+
+/** A game data install's progress, 0 to 100. */
+fun PspDialogRequest.installProgress(): Int = focus.coerceIn(0, 100)

@@ -135,6 +135,7 @@ auto powerTests() -> Tests;
 auto audioTests() -> Tests;
 auto utilityTests() -> Tests;
 auto dialogTests() -> Tests;
+auto installTests() -> Tests;
 auto poolTests() -> Tests;
 auto fileTests() -> Tests;
 auto geTests() -> Tests;
