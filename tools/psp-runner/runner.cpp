@@ -39,6 +39,12 @@
 //    --trace-io                 each file request (sceIo*) and its answer, a line with its frame: the PSP's time and
 //                                the thread, the descriptor with its path and position, the sizes, buffers and a hash
 //                                of the bytes moved, and each asynchronous request as it's done
+//    --ge-profile FILE          how the game drives the GE and the display, as a capture of tools/psp-ge-profile's
+//                                (its decoder, geprof.py, reads it as it reads the plugin's from a PSP): each call to
+//                                the GE driver's and the display's functions, the GE's callbacks, the vertical blanks
+//                                and the GE time the model charges, in the PSP's time, from --ge-profile-from's frame
+//                                to the run's end
+//    --ge-profile-from F        the frame the GE profile starts at (default 1)
 //    --report FILE              the run as JSON ("phobos-psp-runner 1"; tools/psp-runner/README.md): the runner's
 //                                build, the game, what was asked and what ran (the renderer, its device and
 //                                resolution, the engine, the GE's threads, the clock), and what came of it
@@ -448,10 +454,10 @@ auto main(int argc, char** argv) -> int {
   }
 
   //The options: parsed first, as they name the run's shape.
-  fs::path game, outDir, wav, loadState, saveStateFile, memoryStick, fonts, script;
+  fs::path game, outDir, wav, loadState, saveStateFile, memoryStick, fonts, script, geProfileFile;
   std::string renderer;
   u32 resolution = 0;  //(0: the core's own, 1)
-  u32 frames = 3600, pngEvery = 0, saveStateAt = 0, geThreads = 0;
+  u32 frames = 3600, pngEvery = 0, saveStateAt = 0, geThreads = 0, geProfileFrom = 1;
   std::set<u32> pngAt;
   std::vector<std::string> pressItems;
   bool lateFrames = false;
@@ -504,6 +510,8 @@ auto main(int argc, char** argv) -> int {
     else if(option == "--fonts") fonts = next();
     else if(option == "--trace-savedata") traceSavedata = true;
     else if(option == "--trace-io") traceIo = true;
+    else if(option == "--ge-profile") geProfileFile = next();
+    else if(option == "--ge-profile-from") geProfileFrom = parseUint(next(), option);
     else if(option == "--report") reportFile = next();
     else if(option == "--start-time") startTime = parseUint(next(), option), startTimeGiven = true;
     else if(option == "--screen-stops-at") screenStopsAt = parseUint(next(), option);
@@ -578,9 +586,15 @@ auto main(int argc, char** argv) -> int {
   if(title.empty()) title = game.stem().string();
   std::printf("game: %s\n", game.string().c_str());
 
-  //The folders the run writes to, made if they aren't there: the PNGs' folder, and the WAV's, the save-state file's
-  //and the report's. One that can't be made ends the run, before it has a scratch to leave behind.
-  for(auto& folder : {outDir, wav.parent_path(), saveStateFile.parent_path(), reportFile.parent_path()}) {
+  if(!geProfileFile.empty() && (geProfileFrom < 1 || geProfileFrom > frames)) {
+    std::fprintf(stderr, "--ge-profile-from is a frame the run runs, 1 to %u: %u\n", frames, geProfileFrom);
+    return 1;
+  }
+
+  //The folders the run writes to, made if they aren't there: the PNGs' folder, and the WAV's, the save-state file's,
+  //the report's and the GE profile's. One that can't be made ends the run, before it has a scratch to leave behind.
+  for(auto& folder : {outDir, wav.parent_path(), saveStateFile.parent_path(), reportFile.parent_path(),
+                      geProfileFile.parent_path()}) {
     if(folder.empty()) continue;
     std::error_code error;
     fs::create_directories(folder, error);
@@ -697,6 +711,7 @@ auto main(int argc, char** argv) -> int {
   u64 clockStart = psp.kernel.startTime;            //the clock the run began with (a loaded state's own)
   struct Capture { u32 frame, arrivedIn; f64 waited; bool fresh, picture; };
   std::vector<Capture> captures;                    //each PNG asked for, for the report
+  PlayStationPortable::GeProfile geProfile;         //(--ge-profile) recorded from its frame on
   //The clock asked for, held: a game that starts itself again (sceKernelLoadExec, or largeRestart with all of RAM)
   //powers the kernel on again, which takes the host's clock again (Kernel::power()). The kernel's run returns as the
   //new program is started, before any of it runs, so the clock is set again at the next frame's top (and after the
@@ -733,6 +748,7 @@ auto main(int argc, char** argv) -> int {
       file.write((const char*)state.data(), state.size());
     }
     if(saveStateAt == frame) captured += std::chrono::steady_clock::now() - stateStarted;
+    if(!geProfileFile.empty() && frame == geProfileFrom) psp.kernel.geProfileStart(geProfile);
     root->run();
     if(host.pngEvery ? frame % host.pngEvery == 0 : host.pngAt.count(frame)) {
       auto pngStarted = std::chrono::steady_clock::now();
@@ -776,6 +792,7 @@ auto main(int argc, char** argv) -> int {
   holdClock(frames);
   auto end = std::chrono::steady_clock::now();  //the speed is the frame loop's, not the screen's catch-up
   host.running = false;
+  psp.kernel.geProfileStop();
   //The GPU renderer's counts, before unloading lets it go; none if it didn't start (the software renderer drew).
   std::optional<PlayStationPortable::GPU::Statistics> gpu;
   if(psp.gpu) gpu = psp.gpu->statistics;
@@ -803,6 +820,29 @@ auto main(int argc, char** argv) -> int {
 
   fs::remove_all(scratch);
 
+  //The GE profile, written beside its name, then renamed (as the report is). Its version, in the field's 15
+  //characters: the runner's commit (from its source's description, "-g" and the hash), and "+" if it was changed.
+  if(!geProfileFile.empty()) {
+    std::string source = PHOBOS_RUNNER_SOURCE, commit = source;
+    if(auto at = source.rfind("-g"); at != std::string::npos) commit = source.substr(at + 2);
+    commit = commit.substr(0, std::min<size_t>(commit.find('-'), 7));
+    if(source.find("-dirty") != std::string::npos) commit += "+";
+    auto bytes = geProfile.file("phobos " + commit, npid, title);
+    auto part = geProfileFile;
+    part += ".part-" + std::to_string(::getpid());
+    std::ofstream out(part, std::ios::binary);
+    out.write((const char*)bytes.data(), bytes.size());
+    out.close();
+    std::error_code renameError;
+    if(!out.fail()) fs::rename(part, geProfileFile, renameError);
+    if(out.fail() || renameError) {
+      std::error_code ignored;
+      fs::remove(part, ignored);
+      std::fprintf(stderr, "the GE profile can't be written: %s\n", geProfileFile.string().c_str());
+      return 1;
+    }
+  }
+
   //The summary: the frames run, the program's end, the speed, the missing functions, and the last note. Scripts find
   //its lines by their first words (or any line with "frames per second" in it), so a new line has words of its own.
   auto elapsed = std::chrono::duration<double>(end - start).count();
@@ -816,6 +856,10 @@ auto main(int argc, char** argv) -> int {
                 frames / std::max(elapsed - capturedSeconds, 1e-9));
   }
   if(staleCaptures) std::printf("stale captures: %u\n", staleCaptures);
+  if(!geProfileFile.empty()) {
+    std::printf("ge profile: %zu records, frames %u to %u (%.3f s of the PSP's time), %s\n", geProfile.records.size(),
+                geProfileFrom, frames, (geProfile.endTime - geProfile.startTime) / 1e6, geProfileFile.string().c_str());
+  }
   if(gpu) {
     std::printf("gpu: %llu draws, %llu primitives, %llu 3D PRIMs transformed by the GPU, %llu submits, %llu "
                 "finishes, %llu uploads, %llu read-backs, %llu textures, %llu copies, %llu frames shown from the "

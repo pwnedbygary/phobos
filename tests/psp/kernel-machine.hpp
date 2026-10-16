@@ -14,6 +14,7 @@
 namespace allegrex_test::psp {
 
 using ares::PlayStationPortable::Kernel;
+using ares::PlayStationPortable::GeProfile;
 
 //A machine with the kernel: what the program writes and what the kernel notes are collected. Test programs call
 //system functions through stubs (jr ra; syscall code) at Stubs, one per function, as the loader would make them.

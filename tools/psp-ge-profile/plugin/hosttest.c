@@ -594,7 +594,7 @@ static int bootFolderTest(void) {
   static char trace[8192];
   assert(readFile("ms0:/PHOBOS/trace.txt", trace, sizeof(trace)) > 0);
   const char* expected[] = {
-    "---- Phobos GE profiler 0.2.1: module_start", "device: ms0:", "settings read: mode capture",
+    "---- Phobos GE profiler 0.2.2: module_start", "device: ms0:", "settings read: mode capture",
     "found sctrlHENPatchSyscall at 0x", "hook sceGeListEnQueue: found at 0x", "sub-interrupt monitor: available",
     "control thread not made (0x80020190)",
   };
@@ -633,12 +633,21 @@ int main(int argc, char** argv) {
   testRecords();
   testNotices();
 
-  //the control thread's start with no PHOBOS folder yet: defaults, the start notice says so, nothing written
+  //the control thread's start as the game boots: its disc not readable yet (no disc ID), no PHOBOS folder yet:
+  //defaults, the start notice held for the game's first flip, nothing written
+  initParamWorks = 0;
   controlStart();
-  assert(!device && !settings.read && settings.dry && settings.notices);
+  assert(!device && !settings.read && settings.dry && settings.notices && !strcmp(discId, "UNKNOWN"));
+  assert(!startShown && !bannerOn && !noticeWantsFallback());
+  assert(writtenCount == 0 && used > 0);
+  //the game's first flip: the disc ID asked for again, and the start notice, which says the folder's missing
+  initParamWorks = 1;
+  frame();
+  assert(noticeFirstFlip());
+  firstFlipSeen();
+  assert(!strcmp(discId, "UCUS98653") && startShown && !startShownWithDevice);
   assert(!strcmp(text[shown][0], "PHOBOS PROFILER ON") && !strcmp(text[shown][1], "UCUS98653 DRY RUN"));
   assert(!strcmp(text[shown][2], "NO PHOBOS FOLDER YET"));
-  assert(writtenCount == 0 && used > 0);
   memset(vram, 0xAA, sizeof(vram));
   frame();  //the game's next flip shows it
   assert(pixelAt(0x04000000 + ((frames - 1) & 1) * 0x88000, 512, 3, 8, 8) == 0xFF000000);
@@ -731,12 +740,13 @@ int main(int argc, char** argv) {
   static char trace[16384];
   assert(readFile("ms0:/PHOBOS/trace.txt", trace, sizeof(trace)) > 0);
   const char* expected[] = {
-    "---- Phobos GE profiler 0.2.1: module_start", "device: no PHOBOS folder on ms0: or ef0:",
+    "---- Phobos GE profiler 0.2.2: module_start", "device: no PHOBOS folder on ms0: or ef0:",
     "not found: sctrlHENFindFunctionOnSystem", "found sctrlHENPatchSyscall at 0x",
     "refused sctrlKernelMsIsEf: the lookup gave 0x8002013A", "found sceDisplayGetFrameBuf at 0x",
     "hook sceGeListEnQueue: found at 0x", "patched, syscall 0x2000", "hook sceDisplaySetFrameBuf: found at 0x",
     "sub-interrupt monitor: available", "control thread made (0x00600000)", "control thread running",
-    "settings: prof.txt not read yet", "disc id UCUS98653, title \"God of War: Chains of Olympus\"", "device: ms0:",
+    "settings: prof.txt not read yet", "disc id UNKNOWN, title \"\"", "first flip through the sceDisplaySetFrameBuf hook",
+    "disc id UCUS98653, title \"God of War: Chains of Olympus\" (asked again at the first flip)", "device: ms0:",
     "settings read: mode dry", "trigger (timed): dry run", "dry run: wrote UCUS98653-1.txt",
     "trigger (buttons): capture", "capture: wrote UCUS98653-2.bin",
     "capture: no buffer: partition 1's largest free block is 300 KB", "capture: not saved: NOT ENOUGH MEMORY",

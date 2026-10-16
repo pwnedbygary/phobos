@@ -1041,6 +1041,11 @@ auto Kernel::serialize(serializer& s) -> bool {
   s(interrupting); s(rescheduleAfter);
   s(callKind); s(callID);
   check(callKind <= Call::Ge && (interrupting || callKind == Call::Plain));
+  if(s.reading()) {  //(the GE profile's records are the host's, numbered in its profile, not the state's)
+    callProfile = 0;
+    for(auto& call : calls) call.profile = 0;
+    for(auto& [uid, thread] : threads) thread->geProfileCall = 0;
+  }
   //a timer marked as having its handler called has exactly one call, waiting its turn or running, and a timer's call
   //waiting its turn is for a timer there is, so marked (cancelling or deleting a timer drops its call). The one
   //running may have lost its alarm (cancelled by its own handler).

@@ -211,6 +211,7 @@ auto Kernel::switchTo(Thread* next) -> void {
     cpu.scc.halted = 0;
   }
   if(next->wait != Wait::None) runCallbacks(*next);
+  else if(next->geProfileCall) [[unlikely]] geProfileResumed(*next);
 }
 
 //What's due by now: vertical blanks, delays ending, timeouts running out. A thread woken with a higher priority than
@@ -220,6 +221,7 @@ auto Kernel::events() -> void {
   while(cycles >= nextVblank) {
     nextVblank += VblankCycles;
     vblanks++;
+    if(geProfile) [[unlikely]] geProfileVblank();
     geLeft = GeBudget;  //the GE's commands for the next frame
     for(auto& [uid, thread] : threads) {
       if(thread->status != Status::Waiting || thread->wait != Wait::Vblank) continue;

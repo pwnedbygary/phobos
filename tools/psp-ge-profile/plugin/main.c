@@ -722,7 +722,10 @@ static int hooksMissing(void) {
 
 //For the game's first seconds on screen: the plugin is on, for which game, in which mode, and the first thing in the
 //way if anything is.
+static int startShown, startShownWithDevice;
 static void showStart(void) {
+  startShown = 1;
+  startShownWithDevice = device != 0;
   char line2[32], line3[32];
   Text second = {line2, sizeof(line2), 0}, third = {line3, sizeof(line3), 0};
   line2[0] = line3[0] = 0;
@@ -734,7 +737,14 @@ static void showStart(void) {
   noticeShow("PHOBOS PROFILER ON", line2, line3, StartNotice);
 }
 
-//The trace goes out before ARK is asked for the game's PARAM.SFO, which it may read from a disc not ready this early.
+static int discKnown(void) {
+  return discId[0] != 'U' || discId[1] != 'N' || discId[2] != 'K';
+}
+
+//The control thread starts with the plugin, as the game boots, before the game runs: ARK reads the game's PARAM.SFO
+//from a disc that may not be readable yet (the owner's PSP gave no disc ID this early), and nothing is on the screen.
+//So the trace goes out before ARK is asked, and the start notice waits for the game's first flip through the hook
+//(firstFlipSeen()), unless that hook isn't in place: then it's shown now, for the other way of drawing to show.
 static void controlStart(void) {
   traceLine("control thread running");
   ensureDevice();
@@ -744,8 +754,20 @@ static void controlStart(void) {
   traceLine("disc id %s, title \"%s\"%s", discId, title, firmware.getInitParam ? "" : " (no sctrlGetInitPARAM)");
   noticeEnable(settings.notices);
   snapshotMemory(memoryAtStart);
-  showStart();
+  if(!hookStatus[KindSetFrameBuf].installed) showStart();
   flushTrace();
+}
+
+//The game's first flip through the hook: the game runs, its disc readable, so the disc ID is asked for again if the
+//start didn't get it; and the start notice is shown, the game's next flip drawing it.
+static void firstFlipSeen(void) {
+  traceLine("first flip through the sceDisplaySetFrameBuf hook, %lu ms after the start",
+            (noticeFirstFlip() - pluginStart) / 1000);
+  if(!discKnown()) {
+    readGameInfo();
+    traceLine("disc id %s, title \"%s\" (asked again at the first flip)", discId, title);
+  }
+  if(!startShown) showStart();
 }
 
 //A run: the countdown notice through the delay when the buttons started it, the dry run or the capture, the trace.
@@ -769,21 +791,21 @@ static void trigger(int timed) {
 static int controlThread(SceSize args, void* argp) {
   (void)args, (void)argp;
   controlStart();
-  int hadDevice = device != 0, timedDone = 0, earlyTrace = 1, flipTraced = 0, held = 0;
+  int timedDone = 0, earlyTrace = 1, flipTraced = 0, held = 0;
   u32 lastRunEnd = pluginStart;
   for(;;) {
     rest(PollInterval);
     if(!flipTraced && noticeFirstFlip()) {
-      traceLine("first flip through the sceDisplaySetFrameBuf hook, %lu ms after the start",
-                (noticeFirstFlip() - pluginStart) / 1000);
+      firstFlipSeen();
       flipTraced = 1;
     }
     if(earlyTrace && (s32)(now() - pluginStart) >= EarlyTrace) {
       if(!flipTraced) traceLine("no flip through the sceDisplaySetFrameBuf hook yet");
       flushTrace();
       earlyTrace = 0;
-      if(!hadDevice && device) showStart();  //the PHOBOS folder turned up after the boot
-      hadDevice = device != 0;
+      //shown now if no flip came through the hook (the other way draws it), or again if the PHOBOS folder turned up
+      //after it was
+      if(!startShown || (!startShownWithDevice && device)) showStart();
     }
     int timed = 0;
     if(!timedDone && settings.start >= 0) {

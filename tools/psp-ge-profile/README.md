@@ -53,12 +53,15 @@ while a capture runs. If there's no `PHOBOS` folder, it writes nothing at all (a
 
 Add these lines to ARK's `PLUGINS.TXT`. ARK reads it from `SEPLUGINS/PLUGINS.TXT` or from
 `PSP/SAVEDATA/ARK_01234/PLUGINS.TXT`; if one of those already exists, add the lines to it, otherwise make
-`SEPLUGINS/PLUGINS.TXT`. Each line turns the plugin on for one game only, by the game's ID: the copies Phobos's
-scenes were made from, and for Chains of Olympus the two other copies you have saves of (the Asian disc and the
-PlayStation Store version), since which one the PSP runs isn't known.
+`SEPLUGINS/PLUGINS.TXT`. Each line turns the plugin on for one game only, by the game's ID, one ID to a line: the
+copies Phobos's scenes were made from, and for Chains of Olympus the other two copies you have saves of. Yours is
+the Asian disc, UCAS40198 (as an ISO); the plugin loaded for it only from a line of its own, where a line with all
+three IDs didn't load it (ARK-4's source reads several IDs on a line, but one to a line is what worked).
 
 ```
-UCUS98653 UCAS40198 NPUG80325, ms0:/SEPLUGINS/phobosprof.prx, on
+UCAS40198, ms0:/SEPLUGINS/phobosprof.prx, on
+UCUS98653, ms0:/SEPLUGINS/phobosprof.prx, on
+NPUG80325, ms0:/SEPLUGINS/phobosprof.prx, on
 UCUS98737, ms0:/SEPLUGINS/phobosprof.prx, on
 ULUS10186, ms0:/SEPLUGINS/phobosprof.prx, on
 UCUS98646, ms0:/SEPLUGINS/phobosprof.prx, on
@@ -66,10 +69,10 @@ ULES00364, ms0:/SEPLUGINS/phobosprof.prx, on
 ULUS10472, ms0:/SEPLUGINS/phobosprof.prx, on
 ```
 
-In order: God of War: Chains of Olympus, God of War: Ghost of Sparta, Activision Hits Remixed, Killzone:
-Liberation, Super Monkey Ball Adventure, Army of Two: The 40th Day. If no notice at all appears when one of them
-starts, the plugin wasn't loaded for it: its ID isn't on its line. The ID is on the game's info screen in ARK's
-launcher ("View info"); add it to the line, after a space. The other regions' IDs:
+In order: God of War: Chains of Olympus (three copies), God of War: Ghost of Sparta, Activision Hits Remixed,
+Killzone: Liberation, Super Monkey Ball Adventure, Army of Two: The 40th Day. If no notice at all appears when one of
+them starts, the plugin wasn't loaded for it: its ID isn't on a line. The ID is on the game's info screen in ARK's
+launcher ("View info"); add a line for it. The other regions' IDs:
 
 | Game | Other IDs |
 |---|---|
@@ -84,7 +87,9 @@ launcher ("View info"); add it to the line, after a space. The other regions' ID
 
 1. Start Chains of Olympus (any of the six would do) and let it run: on its menus is fine. As soon as the game shows
    its first picture, a black box at the top left says, for about 4 seconds, `PHOBOS PROFILER ON` and, under it,
-   your copy's ID and `DRY RUN`. A third line, if there is one, is the first thing in the way (see below).
+   your copy's ID and `DRY RUN`. A third line, if there is one, is the first thing in the way (see below). (Version
+   0.2.0 showed the box flickering during the boot, before the game's first picture, and `UNKNOWN` for the ID: from
+   0.2.2 it waits for the game's first frame, and asks for the ID again then.)
 2. From 20 seconds after the game starts, a small square blinks at the top right for 10 seconds while the plugin
    counts the calls; then the box says `SAVED` and `UCUS98653-1.TXT` (or your copy's ID), or `NOT SAVED` and why.
 3. Then try the buttons once: on a menu, hold L, R and SELECT together for a second or two. The box says
@@ -133,8 +138,8 @@ started that session. ARK loads the three in this order. Afterwards:
 |---|---|
 | No `hello.txt` line from that boot | ARK started none of the three: it isn't loading plugins for that boot (START held, plugins off, another `PLUGINS.TXT` read), or the game isn't in its `psp` runlevel (homebrew is `game` or `homebrew`). |
 | A `phoboshellou` line only | ARK starts user modules from `SEPLUGINS` there, but not kernel ones. |
-| A `phoboshello` line, but no line of 0.2.1's in `trace.txt` | ARK loads and starts kernel modules there, but `phobosprof.prx` doesn't start: the difference is the plugin itself. The line's kernel memory figures say whether its 53 KB could fit. |
-| A `phoboshello` line and 0.2.1's lines in `trace.txt` | The plugin starts, and `trace.txt` says how far it got. The `phoboshello` line's title ID is the ID ARK compares `PLUGINS.TXT`'s game IDs with: if it isn't on the plugin's game line, that's why that line didn't load it. |
+| A `phoboshello` line, but no line of 0.2.1's (or a later version's) in `trace.txt` | ARK loads and starts kernel modules there, but `phobosprof.prx` doesn't start: the difference is the plugin itself. The line's kernel memory figures say whether its 53 KB could fit. |
+| A `phoboshello` line and 0.2.1's (or a later version's) lines in `trace.txt` | The plugin starts, and `trace.txt` says how far it got. The `phoboshello` line's title ID is the ID ARK compares `PLUGINS.TXT`'s game IDs with: if it isn't on the plugin's game line, that's why that line didn't load it. |
 
 The kernel module's line reads `phoboshello loaded: kernel module, time <microseconds since power-on> us, api type
 <0x120 a UMD, 0x123 to 0x126 an ISO or a PlayStation Store game, 0x141 or 0x152 homebrew>, boot file <the game's
@@ -296,6 +301,13 @@ inside VRAM or inside the user RAM every model has.
 - If the hook sees no flips for 200 ms (it isn't in place, or the game doesn't flip), the control thread draws the
   text into the buffer `sceDisplayGetFrameBuf` reports instead, every 10 ms while there's text to show: it flickers,
   but it shows. It never draws during a window.
+- The start notice waits for the game's first flip through the hook (on the owner's PSP, Chains of Olympus's came
+  4.35 s after the plugin started): the plugin starts as the game boots, before there's anything on the screen, and
+  0.2.0's box, shown at once, was drawn the other way through the boot, flickering, its 4 seconds over before the
+  game's first frame. With the hook not in place, or no flip through it 6 seconds after the start, it's shown then,
+  and drawn the other way. At the first flip the disc ID is asked for again if the start didn't get it: ARK reads it
+  from the game's `PARAM.SFO` on its disc, which isn't readable yet as the game boots (0.2.0's trace had `UNKNOWN`
+  there; its files were named right, from `PARAM.SFO` read after the window).
 
 ### The trace
 
@@ -444,17 +456,22 @@ that nothing is written outside `ms0:/PHOBOS/`. The decoder's tests then read th
 
 ## What's been checked, and what hasn't
 
-The plugin can't run in Phobos (there's no custom firmware there), so it's checked on the owner's PSP. Version 0.1.0's
-first dry run there (Chains of Olympus, ARK 4.20.69, a PSP-2000/3000) wrote nothing and showed nothing, which can't
-tell "not loaded" (most likely: his copy's ID wasn't on its line) from "loaded but stopped"; 0.2.0's notices and
-trace were to tell them apart. 0.2.0's run, with all three of his copies' IDs on the line, showed nothing either.
+The plugin can't run in Phobos (there's no custom firmware there), so it's checked on the owner's PSP: a PSP-1000
+(model 0) on firmware 6.61 with ARK 4.20.69 r205 (cIPL). Version 0.1.0's first dry run there (Chains of Olympus)
+wrote nothing and showed nothing, which can't tell "not loaded" from "loaded but stopped"; 0.2.0's notices and trace
+were to tell them apart. 0.2.0's run, with all three of his copies' IDs on one line, showed nothing either.
 What could stop the plugin before its first line runs was then checked against ARK-4 r205's plugin loader and uOFW's
 module loader, and nothing was found: ARK reads `PLUGINS.TXT` as these lines are written and matches a game's ID for
 UMD, ISO and PlayStation Store games alike; the imports are marked weak (attribute 0x0009, as in ARK's and pspsdk's
 own stubs), so a missing library or function can't fail the load; the module's layout, exports and relocations are
 the usual ones; `module_start` uses well under the 4 KB stack a kernel module's start gets. 0.2.1 writes `trace.txt`
 from `module_start` itself, so a module that starts but gets no further, or whose control thread can't run, still
-leaves a trace, and the load test (above) tells "ARK starts no such module there" from "this plugin fails". On the
+leaves a trace, and the load test (above) tells "ARK starts no such module there" from "this plugin fails". Then
+0.2.0 loaded from a line with his copy's ID alone (UCAS40198, the Asian disc, an ISO on the memory stick), and its
+dry runs worked: all 17 hooks in place and the sub-interrupt monitor there, the first flip through the hook 4.35 s
+after the start, 24 ns a call idle and about 1.85 microseconds capturing, 52 KB of records for a 10-second capture
+and some 580 KB of kernel memory free. In each 10-second window on the game's menus it counted 357 sceGeListEnQueue,
+357 sceGeListSync and 357 sceDisplaySetFrameBuf, 600 vertical blanks, no vblank waits and no GE callbacks. On the
 Mac: it builds as a kernel PRX (attribute 0x1001, ELF type 0xFFA0, module info in a kernel segment) with exactly the
 imports above; every static NID is confirmed by two sources (uOFW's 6.60 export lists or pspsdk's 6.60 libraries,
 and pspsdk's stub libraries; ARK's by its name's SHA-1 and pspsdk's `libpspsystemctrl_kernel`); the hooks' idle path

@@ -357,6 +357,62 @@ class Decoder(unittest.TestCase):
         self.assertIn("per second", sink.getvalue())
         self.assertNotIn("per vblank", sink.getvalue())
 
+    def test_one_frame_buffer(self):
+        # Killzone's way in Phobos: its lists draw elsewhere, and every sceDisplaySetFrameBuf names one buffer.
+        game = Game()
+        for k in range(20):
+            game.vblank(k * P, 500 + k)
+            game.flip(k * P + 1000, FRAMEBUFFERS[0])
+        capture, lists, rows = self.decode(game, 20 * P)
+        self.assertEqual(sum(row.flips for row in rows), 1)
+        self.assertTrue(any("sets the same buffer (04000000, 20 times)" in w for w in capture.warnings))
+
+    def test_model_charges(self):
+        # Phobos's runner's captures: CoO's loop (sync the last list, flip, queue the next, no callbacks, no vblank
+        # waits), each list charged by the model in two pieces, one set by its pixels, one by its primitives; and the
+        # counts a dry run would give.
+        game = Game()
+        list_id = None
+        for k in range(30):
+            t = k * 6000
+            if k % 3 == 0:
+                game.vblank(t, 100 + k // 3)
+            if list_id is not None:
+                game.call(g.LIST_SYNC, t, t + 500, list_id, 0, ge=g.GE_DRAWING)
+            game.flip(t + 600, FRAMEBUFFERS[k % 2], sync=0)
+            list_id = game.enqueue(t + 700, LIST + (k % 2) * 0x10000, cbid=-1)
+            game.records.append((g.MODEL, 1, 0, game.at(t + 705), game.at(t + 4705), g.GE_DRAWING, 400_000, 100,
+                                 1_332_000, list_id))
+            game.records.append((g.MODEL, 1, 0, game.at(t + 706), game.at(t + 5706), g.GE_DRAWING, 1000, 30_000,
+                                 333_000, list_id))
+        capture, lists, rows = self.decode(game, 30 * 6000)
+        model = g.model_charges(capture, lists)
+        self.assertEqual((model.charges, model.pixels, model.primitives, model.pixel_bound), (60, 30 * 401_000, 30 * 30_100, 30))
+        self.assertAlmostEqual(model.ms, 30 * 5.0)
+        self.assertTrue(all(gl.model_cycles == 1_665_000 and gl.model_pixels == 401_000 for gl in lists))
+        self.assertEqual(g.counts(capture)[g.ENQUEUE], 30)
+        self.assertEqual(g.counts(capture, 0, 60_000)[g.LIST_SYNC], 9)
+        out = io.StringIO()
+        g.print_report(capture, out, show_lists=True, show_counts=True)
+        text = out.getvalue()
+        self.assertIn("Phobos's GE model: 60 charges, 12.03 M pixels, 903000 primitives, 150.00 ms", text)
+        self.assertIn("50% of the charges set by their pixels", text)
+        self.assertIn("model ms", text)
+        self.assertIn("sceGeListEnQueue                        30", text)
+        report = g.report_json(capture)
+        self.assertEqual(report["model"]["charges"], 60)
+        self.assertEqual(report["counts"]["GE model's charge"], 60)
+        self.assertEqual(report["lists"][0]["model_cycles"], 1_665_000)
+        # a capture from the PSP has no charges, and no model line
+        plain = Game()
+        once_a_vblank(plain, 10)
+        capture, lists, rows = self.decode(plain, 10 * P)
+        self.assertIsNone(g.model_charges(capture, lists))
+        out = io.StringIO()
+        g.print_report(capture, out, show_lists=True)
+        self.assertNotIn("GE model", out.getvalue())
+        self.assertNotIn("model ms", out.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

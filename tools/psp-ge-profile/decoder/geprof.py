@@ -10,7 +10,11 @@
 # sceGeListUpdateStallAddr) spends part of that waiting for the CPU; its "tail" is the GE time after its last stall
 # update, when it was all there, and the stall updates that found the GE waiting are counted.
 #
-# usage: geprof.py CAPTURE.bin [--lists] [--events] [--no-vblanks] [--from S] [--to S] [--json FILE]
+# Phobos's runner writes the same captures from the emulator (tools/psp-runner --ge-profile), with one kind of record
+# more: each piece of GE time its model charged (pixels, primitives, cycles). The tables are the same for both; a
+# capture with charges also gets the model's own summary, and its lists the charges each was given.
+#
+# usage: geprof.py CAPTURE.bin [--lists] [--events] [--no-vblanks] [--counts] [--from S] [--to S] [--json FILE]
 #
 # Standard library only. write_capture() writes the same format, for the tests (test_geprof.py) and for any
 # program that wants its own captures read the same way.
@@ -37,7 +41,7 @@ KINDS = {
     10: "sceGeUnsetCallback", 11: "SIGNAL", 12: "FINISH", 13: "sceDisplaySetFrameBuf",
     14: "sceDisplayWaitVblankStart", 15: "sceDisplayWaitVblankStartCB", 16: "sceDisplayWaitVblank",
     17: "sceDisplayWaitVblankCB", 18: "sceDisplayWaitVblankStartMulti", 19: "sceDisplayWaitVblankStartMultiCB",
-    20: "vblank",
+    20: "vblank", 64: "GE model's charge",
 }
 ENQUEUE, ENQUEUE_HEAD, DEQUEUE, UPDATE_STALL, LIST_SYNC, DRAW_SYNC, BREAK, CONTINUE = 1, 2, 3, 4, 5, 6, 7, 8
 SET_CALLBACK, UNSET_CALLBACK, SIGNAL, FINISH, SET_FRAMEBUF = 9, 10, 11, 12, 13
@@ -46,6 +50,10 @@ WAIT_VBLANK_START_MULTI, WAIT_VBLANK_START_MULTI_CB = 18, 19
 WAITS = {14, 15, 16, 17, 18, 19}
 VBLANK = 20
 INTERRUPT_KINDS = {SIGNAL, FINISH, VBLANK}
+# Phobos's runner only: a piece of GE time its model charged (a: pixels, b: primitives, c: cycles at the CPU's
+# 333 MHz; exit: when the GE was done with all it had; result: the list it ran, -1 none).
+MODEL = 64
+MODEL_CYCLES_PER_US = 333
 
 GE_IDLE, GE_NOT_SAMPLED, GE_DRAWING, GE_STALLED = 0, 1, 2, 3
 GE_STATES = {0: "idle", 1: "?", 2: "drawing", 3: "stalled"}
@@ -266,6 +274,10 @@ class GeList:
     end: int = None
     freed: int = None               # when the GE could start the next one (the FINISH callback's return)
     ended_by: str = None            # "FINISH", "sync", "dequeue", None (not seen)
+    called: int = None              # when the enqueue call was made
+    model_cycles: int = None        # Phobos's model: the GE time charged for it (cycles at 333 MHz), its pixels and
+    model_pixels: int = None        # primitives (model_charges())
+    model_primitives: int = None
 
     @property
     def last_stall(self):
@@ -338,7 +350,8 @@ def display_lists(capture):
         if r.kind in (ENQUEUE, ENQUEUE_HEAD):
             if r.result < 0:
                 continue
-            gelist = GeList(r.result, r.kind == ENQUEUE_HEAD, r.a, r.b, signed(r.c), r.exit, r.thread, r.ge_state)
+            gelist = GeList(r.result, r.kind == ENQUEUE_HEAD, r.a, r.b, signed(r.c), r.exit, r.thread, r.ge_state,
+                            called=r.entry)
             lists.append(gelist)
             by_id[gelist.id] = gelist
             if gelist.head:
@@ -390,6 +403,57 @@ def display_lists(capture):
     if any(r.kind in (BREAK, ENQUEUE_HEAD) for r in capture.records):
         capture.warnings.append("the game used sceGeBreak or sceGeListEnQueueHead: those lists' times are approximate")
     return lists
+
+
+@dataclass
+class ModelSummary:
+    charges: int = 0
+    pixels: int = 0
+    primitives: int = 0
+    cycles: int = 0
+    pixel_bound: int = 0            # charges whose pixels set their time (four a bus clock), not their primitives
+
+    @property
+    def ms(self):
+        return self.cycles / MODEL_CYCLES_PER_US / 1000
+
+
+def model_charges(capture, lists, start_us=None, end_us=None):
+    """Phobos's runner only: the GE time its model charged (the MODEL records), given to the lists they were for (by
+    the list's ID, from its enqueue call, in which the GE runs it as far as it can, to its end), and summed over the
+    window. Its time is max(pixels / 4, primitives x 166 / 35) bus clocks (ares/psp/kernel/ge.cpp's geTime()). None
+    if the capture has no charges."""
+    charges = [r for r in capture.records if r.kind == MODEL]
+    if not charges:
+        return None
+    by_id = {}
+    for g in lists:
+        by_id.setdefault(g.id, []).append(g)
+    end = capture.length_us
+    summary = ModelSummary()
+    for r in charges:
+        if (start_us is None or r.entry >= start_us) and (end_us is None or r.entry < end_us):
+            summary.charges += 1
+            summary.pixels += r.a
+            summary.primitives += r.b
+            summary.cycles += r.c
+            summary.pixel_bound += r.a * 35 >= r.b * 664
+        for g in by_id.get(r.result, ()):
+            if g.called <= r.entry <= (g.end if g.end is not None else end):
+                g.model_cycles = (g.model_cycles or 0) + r.c
+                g.model_pixels = (g.model_pixels or 0) + r.a
+                g.model_primitives = (g.model_primitives or 0) + r.b
+                break
+    return summary
+
+
+def counts(capture, start_us=None, end_us=None):
+    """The calls and interrupts of each kind in the window, as the plugin's dry run counts them."""
+    found = {}
+    for r in capture.records:
+        if (start_us is None or r.entry >= start_us) and (end_us is None or r.entry < end_us):
+            found[r.kind] = found.get(r.kind, 0) + 1
+    return found
 
 
 def _union(intervals):
@@ -480,6 +544,11 @@ def per_vblank(capture, lists=None, vblanks=None):
     _spread(rows, starts, [(r.entry, r.exit if r.exit is not None else end) for r in capture.records if r.kind in WAITS],
             "wait_us")
     flips = [(r.entry, r.a) for r in capture.records if r.kind == SET_FRAMEBUF and r.result >= 0]
+    if len(flips) > 1 and len({address for _, address in flips}) == 1:
+        note = ("every sceDisplaySetFrameBuf sets the same buffer (%08x, %d times): renders and displayed frames, counted "
+                "by flips, are none; its frames are counted by those calls" % (flips[0][1], len(flips)))
+        if note not in capture.warnings:
+            capture.warnings.append(note)
     shown, f = None, 0
     for n, row in enumerate(rows):
         while f < len(flips) and flips[f][0] < row.start:
@@ -555,7 +624,8 @@ def describe(capture, out):
     out.write("threads: %s\n" % (names or "none"))
 
 
-def print_report(capture, out=None, show_lists=False, show_events=False, show_vblanks=True, start_s=None, end_s=None):
+def print_report(capture, out=None, show_lists=False, show_events=False, show_vblanks=True, start_s=None, end_s=None,
+                 show_counts=False):
     out = out or sys.stdout
     vblanks, source = vblank_times(capture)
     lists = display_lists(capture)
@@ -564,6 +634,8 @@ def print_report(capture, out=None, show_lists=False, show_events=False, show_vb
         rows = [r for r in rows if r.start >= start_s * 1e6]
     if end_s is not None:
         rows = [r for r in rows if r.start < end_s * 1e6]
+    window = (start_s * 1e6 if start_s is not None else None, end_s * 1e6 if end_s is not None else None)
+    model = model_charges(capture, lists, *window)
     describe(capture, out)
     out.write("vblanks: %s\n" % source)
     by = {}
@@ -573,6 +645,22 @@ def print_report(capture, out=None, show_lists=False, show_events=False, show_vb
               % (len(lists), by.get("FINISH", 0), by.get("sync", 0), by.get("dequeue", 0), by.get(None, 0)))
     for warning in capture.warnings:
         out.write("note: %s\n" % warning)
+    if model is not None:
+        displayed = sum(r.new_frame for r in rows)
+        out.write("Phobos's GE model: %d charges, %.2f M pixels, %d primitives, %.2f ms of the GE's time (%s ms a "
+                  "displayed frame); %.0f%% of the charges set by their pixels (four a bus clock), the rest by their "
+                  "primitives\n"
+                  % (model.charges, model.pixels / 1e6, model.primitives, model.ms,
+                     "%.2f" % (model.ms / displayed) if displayed else "-",
+                     100 * model.pixel_bound / model.charges if model.charges else 0))
+    if show_counts:
+        found = counts(capture, *window)
+        length = (min(end_s * 1e6, capture.length_us) if end_s is not None else capture.length_us) \
+            - (start_s * 1e6 if start_s is not None else 0)
+        out.write("\ncalls and interrupts in %.2f s (as the dry run counts them)\n" % (length / 1e6))
+        for kind in sorted(found):
+            out.write("%-34s %7d %9.1f a second\n" % (KINDS.get(kind, "kind %d" % kind), found[kind],
+                                                    found[kind] / (length / 1e6) if length > 0 else 0))
 
     out.write("\nper second (renders: flips, frame buffer changes; displayed: vblanks after a flip, showing a new frame)\n")
     out.write("%6s %7s %9s %7s %8s %6s %8s %8s %5s %8s %9s\n" % ("second", "vblanks", "displayed", "renders", "per frame",
@@ -598,14 +686,21 @@ def print_report(capture, out=None, show_lists=False, show_events=False, show_vb
                          "%08x" % row.shown if row.shown is not None else "-", " new" if row.new_frame else ""))
 
     if show_lists:
-        out.write("\ndisplay lists (ms from the capture's start)\n")
-        out.write("%10s %8s %9s %9s %9s %7s %7s %7s %5s %8s %-8s %s\n" % ("id", "address", "queued", "start", "end",
-                                                                          "GE ms", "tail", "stalls", "cb", "thread", "ended", ""))
+        out.write("\ndisplay lists (ms from the capture's start%s)\n"
+                  % ("; model: the GE time Phobos's model charged, its pixels and primitives" if model else ""))
+        out.write("%10s %8s %9s %9s %9s %7s %7s %7s %5s %8s %-8s%s\n"
+                  % ("id", "address", "queued", "start", "end", "GE ms", "tail", "stalls", "cb", "thread", "ended",
+                     " %8s %9s %6s" % ("model ms", "pixels", "prims") if model else ""))
         for g in lists:
-            out.write("%10x %08x %9s %9s %9s %7s %7s %7s %5d %8s %-8s %s\n"
+            charged = ""
+            if model:
+                charged = " %8s %9s %6s" % (_ms(g.model_cycles / MODEL_CYCLES_PER_US) if g.model_cycles is not None else "-",
+                                            g.model_pixels if g.model_pixels is not None else "-",
+                                            g.model_primitives if g.model_primitives is not None else "-")
+            out.write("%10x %08x %9s %9s %9s %7s %7s %7s %5d %8s %-8s%s%s\n"
                       % (g.id, g.address, _ms(g.enqueued), _ms(g.start), _ms(g.end), _ms(g.ge_us), _ms(g.tail_us),
                          "%d(%d)" % (len(g.updates), g.starved), g.cbid, capture.thread_name(g.thread)[:8],
-                         g.ended_by or "-", "head" if g.head else ""))
+                         g.ended_by or "-", charged, " head" if g.head else ""))
 
     if show_events:
         out.write("\nrecords (us from the capture's start)\n")
@@ -620,13 +715,19 @@ def report_json(capture):
     vblanks, source = vblank_times(capture)
     lists = display_lists(capture)
     rows = per_vblank(capture, lists, vblanks)
+    model = model_charges(capture, lists)
     return {
         "header": capture.header,
         "vblank_source": source,
         "warnings": capture.warnings,
+        "counts": {KINDS.get(kind, "kind %d" % kind): n for kind, n in sorted(counts(capture).items())},
+        "model": None if model is None else dict(charges=model.charges, pixels=model.pixels,
+                                                 primitives=model.primitives, cycles=model.cycles, ms=model.ms,
+                                                 pixel_bound=model.pixel_bound),
         "lists": [dict(id=g.id, address=g.address, cbid=g.cbid, queued=g.enqueued, start=g.start, end=g.end,
                        ge_us=g.ge_us, tail_us=g.tail_us, stall_updates=len(g.updates), starved=g.starved,
-                       ended_by=g.ended_by, thread=capture.thread_name(g.thread)) for g in lists],
+                       ended_by=g.ended_by, thread=capture.thread_name(g.thread), model_cycles=g.model_cycles,
+                       model_pixels=g.model_pixels, model_primitives=g.model_primitives) for g in lists],
         "vblanks": [dict(index=r.index, start=r.start, length=r.length, lists=r.lists, finishes=r.finishes,
                          signals=r.signals, stall_updates=r.updates, starved=r.starved, ge_us=r.ge_us, tail_us=r.tail_us,
                          sync_us=r.sync_us, wait_us=r.wait_us, setframebufs=r.setframebufs, flips=r.flips,
@@ -643,6 +744,7 @@ def main(argv=None):
     parser.add_argument("--lists", action="store_true", help="each display list's times")
     parser.add_argument("--events", action="store_true", help="every record")
     parser.add_argument("--no-vblanks", action="store_true", help="leave out the per-vblank table")
+    parser.add_argument("--counts", action="store_true", help="the calls and interrupts of each kind, as a dry run counts")
     parser.add_argument("--from", dest="start", type=float, help="seconds from the capture's start")
     parser.add_argument("--to", dest="end", type=float, help="seconds from the capture's start")
     parser.add_argument("--json", help="write the tables as JSON to this file")
@@ -653,7 +755,7 @@ def main(argv=None):
         sys.stderr.write("geprof: %s: %s\n" % (args.capture, error))
         return 1
     print_report(capture, show_lists=args.lists, show_events=args.events, show_vblanks=not args.no_vblanks,
-                 start_s=args.start, end_s=args.end)
+                 start_s=args.start, end_s=args.end, show_counts=args.counts)
     if args.json:
         with open(args.json, "w") as file:
             json.dump(report_json(capture), file, indent=1)
