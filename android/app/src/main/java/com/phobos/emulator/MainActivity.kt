@@ -35,6 +35,7 @@ import com.phobos.emulator.data.UiEffects
 import com.phobos.emulator.data.XmbBackdropScene
 import com.phobos.emulator.input.GameInputState
 import com.phobos.emulator.input.InputBindings
+import com.phobos.emulator.input.InputLog
 import com.phobos.emulator.launch.launchRequestOf
 import com.phobos.emulator.ui.ConsoleArtFetcher
 import com.phobos.emulator.ui.ConsoleArtKeyer
@@ -165,6 +166,7 @@ class MainActivity : ComponentActivity() {
         window.callback = object : android.view.Window.Callback by originalCallback {
             private val pressedKeys = mutableSetOf<Int>()
             override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+                InputLog.key("window", event)
                 viewModel.noteUserActivity()
                 // A press being captured for a binding goes nowhere else — including the screensaver.
                 val systemBack = event.keyCode == KeyEvent.KEYCODE_BACK && event.deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD
@@ -223,6 +225,11 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         debugScope.cancel()
         super.onDestroy()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        InputLog.note { "window focus $hasFocus" }
     }
 
     private fun isDebugLoad(intent: android.content.Intent?): Boolean = intent?.getStringExtra("load_uri") != null
@@ -351,6 +358,7 @@ class MainActivity : ComponentActivity() {
             }
 
             if (viewModel.isLoaded.value && !viewModel.isPaused.value) {
+                InputLog.key("fallback", event)
                 // Swallow auto-repeat so held buttons don't rapidly toggle.
                 if (event.repeatCount > 0) return@setOnKeyListener true
 
