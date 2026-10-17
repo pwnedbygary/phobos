@@ -17,6 +17,9 @@
 
 PSP_MODULE_INFO("PSPMEASURE", PSP_MODULE_USER, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);  //the VFPU's tests need it switched on for this thread
+//newlib's heap, which would otherwise take all the memory left as the program starts: nothing here allocates from it,
+//and cpu.c's memory tests ask the kernel for 8 MiB of their own
+PSP_HEAP_SIZE_KB(1024);
 
 //Every button there is: a choice waits for all of them to be let go.
 enum {
@@ -38,6 +41,9 @@ static unsigned int choose(unsigned int buttons) {
 enum { Vfpu, Ge, Afresh, Leave };
 typedef struct { const char* text; int what, round; const char* note; } Choice;
 static const Choice choices[] = {
+  {"Round 8: the GE's time again, and the CPU's (about 1 MB)", Ge, 8,
+   "It runs the PSP at other clocks part of the time, as round 6 did,\n"
+   "and puts them back after each test. Keep the charger in.\n"},
   {"Round 7: the GE's anti-aliased lines (about 1.5 MB)", Ge, 7, 0},
   {"Round 6: the GE's time, lighting, reciprocal, curves (about 7 MB)", Ge, 6,
    "Four tests near the end stop the GE on purpose: each waits 5\n"
@@ -112,6 +118,7 @@ int main(int argc, char** argv) {
     geRound(5);
     geRound(6);
     geRound(7);
+    geRound(8);
     geEnd();
     sceKernelExitGame();
     return 0;

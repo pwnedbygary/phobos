@@ -26,8 +26,9 @@ was rebuilt on 2026-10-06 with its round 4 (docs/psp-core.md, part 29), again on
 surfaces (part 33), again on 2026-10-08 with round 5 (part 48), again on 2026-10-09 with the GE's waits timed
 (a stall is reset and recorded, rather than freezing the PSP), again on 2026-10-10 with round 6 (part 66), and
 again on 2026-10-12 with round 7 (part 78), in pspdev's Docker image
-(`ghcr.io/pspdev/pspdev@sha256:54895e6f5afb71b8f4f6915ee6d5023e1e087ca7afdf2dcb1d7a694a5233e45f`), the rest left as
-they were. They hold no Sony code, no game and no firmware. Their parts come from:
+(`ghcr.io/pspdev/pspdev@sha256:54895e6f5afb71b8f4f6915ee6d5023e1e087ca7afdf2dcb1d7a694a5233e45f`), and on
+2026-10-16 with round 8 (part 107) with pspdev's v20261001 release for macOS on arm64 (its psp-gcc 15.2.0), the rest
+left as they were. They hold no Sony code, no game and no firmware. Their parts come from:
 - Phobos's own sources (the programs in `tools/psp-test-programs` and `tools/psp-measure`);
 - pspsdk, the free PSP SDK, including its GU samples (pspsdk's BSD-style license; see the pspsdk sources);
 - newlib, pspdev's C library (BSD-style licenses; see the newlib sources).

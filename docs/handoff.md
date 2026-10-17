@@ -35,6 +35,22 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP measure, round 8: the GE's time where part 76's model misses the owner's captures, and the CPU's — 2026-10-16
+
+Branch `cursor/psp-measure-round8-2b67` (from master `a8d5640f5`); docs/psp-core.md, part 107.
+- **Why**: part 76's model of the GE's time (behind the option "GE Timing" on #269) misses the owner's captures by
+  −59% to +180%. Counting its terms over each scene puts the misses on what round 6 never measured: textures read
+  from VRAM in strips (Killzone's 512x512 CLUT32 buffer, 79% of its GE time; Activision Hits' menus), a big CLUT8
+  texture drawn whole, and Super Monkey Ball's many small primitives, state changes and CALLs.
+- **What**: a new first menu line, round 8: 12 timing tests of the GE (big textures in strips, other textures,
+  pixels, setup, vertices, state between draws, lists and stall updates, transfers, clears, the two ends' overlap,
+  lists like the captured scenes', the CPU beside the GE) and cpu.c's tests of the CPU (ALU, latencies, memory,
+  system and driver calls, the clocks the power service grants); `manifest8.txt` lists every case. About 3 minutes
+  on the PSP, about 1 MB of results. newlib's heap is held to 1 MiB, so the CPU's memory tests get 8 MiB.
+- **Test**: "psp measure" runs round 8 too and checks every record; `tests/psp/programs/pspmeasure.elf` rebuilt.
+- **Next**: the owner runs round 8 (charger in; ARK's `overclock` off) and sends `results/`; then the fit
+  (`ge-fit.py`, `GE::Cost`, `measured8`) with the runner's per-list counts (`--ge-terms`), on #269.
+
 ## PSP NPDRM: PGD files on the memory stick — a game's installed data read through the PGD layer (Gunhound EX, 7th Dragon 2020); a wrong key, a damaged header and a write refused as the PGD layer refuses them — 2026-10-15
 
 Branch `cursor/psp-pgd-stick-2b67`, on master `6ff82f9f1` (part 96, #258), masters `462f8ff2f` (part 99, #261) and

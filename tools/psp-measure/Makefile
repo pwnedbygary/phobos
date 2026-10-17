@@ -1,6 +1,6 @@
 #psp-measure: built with pspdev's toolchain (psp-config on the PATH). See main.c.
 TARGET = pspmeasure
-OBJS = main.o results.o vfpu.o ge.o
+OBJS = main.o results.o vfpu.o ge.o cpu.o
 CFLAGS = -O2 -G0 -Wall
 ifdef SMOKE
 CFLAGS += -DSMOKE  #a quick version for an emulator (see measure.h)
