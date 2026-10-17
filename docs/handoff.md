@@ -37,7 +37,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## Screenshots: the pause menu's Shot and the hotkey say where the picture went or why it didn't, and name it for the game and the time — 2026-10-17
 
-Branch `cursor/screenshot-feedback-2b67`, on master `5442acb8b` (part 102, #265); draft PR #<PR>.
+Branch `cursor/screenshot-feedback-2b67`, on master `5442acb8b` (part 102, #265); draft PR #273.
 - **The report** (owner, 17 Oct): Shot in the pause menu gave no sign it worked, so he pressed it three times and fell
   back to Android's screenshot. It had worked: three files, each named for the ROM's file name and milliseconds
   (`God of War - Ghost of Sparta.chd_1792260870863.png`, 480x272).
