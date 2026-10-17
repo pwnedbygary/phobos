@@ -45,26 +45,30 @@ Clean room: no PPSSPP for GE/GPU code, JPCSP not read. Save states unchanged.
   writes the GE's whole number as gl_FragDepth, so every hidden pixel is shaded (without it, timing only: Chains of
   Olympus at 5x +100% on the RP6, Army of Two +26%, Ghost of Sparta +20%). Activision Hits' copyright screen: 28
   whole-screen depth copies a frame through the staging buffer, which Turnip does slowly (331 ms a frame at 5x).
-- **The changes** (vulkan.cpp, gpu.cpp, gpu.hpp, draw.frag, draw.vert, transform.vert): `DEPTHS` declares
-  `depth_less` where the device clamps depth and the PRIM's corners' depths are in 0-65535 (3D's are held): those
-  pipelines rasterize the depth a step and a half above the GE's ((z + 1.5) / 65536.5), the whole number written a
-  step below it at least while the GPU's two interpolations part by less than a step. A 2D PRIM with a corner past
-  0-65535 (`Pipeline::outside`, per primitive in `emit()`) and every pipeline of a device without clamping take the
-  build undeclared, rasterized at the GE's: master's pipelines (the `DepthLess` mode taken out at start,
-  `GPU::undeclared()`, master's SPIR-V word for word). Metal takes the declaration, Turnip in part (Super Monkey
-  Ball's greater-or-equal scene: its passes 63.2 → 59.3 ms at 5x), Qualcomm's driver not. `takeDepth()`'s depth from
-  image to image (`vkCmdCopyImage`, the depth aspect alone) where `depthAloneProbe()`, as the backend starts, finds
-  the device's such copy leaves the stencil: a whole copy and an unaligned 45x27 part of pictures written from a
-  buffer, every depth bit for bit, every stencil, inside and outside (Turnip's and Qualcomm's driver's did with the
-  whole copy alone; the fix round's builds say for the part). MoltenVK's and lavapipe's take it too (CI's lavapipe
-  lanes caught it on the first push), so they keep the staging buffer.
+- **The changes** (vulkan.cpp, gpu.cpp, gpu.hpp, draw.frag, draw.vert, transform.vert): `DEPTHS` declares `depth_less`
+  where the device clamps depth and the PRIM's corners' depths are in 0-65535 (3D's are held): those pipelines rasterize
+  the depth a step and a half above the GE's ((z + 1.5) / 65536.5), the whole number written a step below it at least
+  while the GPU's two interpolations part by less than a step. A 2D PRIM with a corner past 0-65535
+  (`Pipeline::outside`, per primitive in `emit()`) and every pipeline of a device without clamping take the build
+  undeclared, rasterized at the GE's: master's fragment SPIR-V word for word (the `DepthLess` mode taken out at start,
+  `GPU::undeclared()`), the vertex shaders with `ABOVE` off (master's arithmetic, not master's SPIR-V); devices without
+  clamping left out by caution (the margin would fit). Metal takes the declaration, Turnip in part (Super Monkey Ball's
+  greater-or-equal scene: its passes 63.2 → 59.3 ms at 5x), Qualcomm's driver not. `takeDepth()`'s depth from image to
+  image (`vkCmdCopyImage`, the depth aspect alone) where `depthAloneProbe()`, as the backend starts, finds the device's
+  such copy leaves the stencil: a whole copy and an unaligned 45x27 part of pictures written from a buffer, every depth
+  bit for bit, every stencil, inside and outside (Turnip's and Qualcomm's driver's did with the whole copy alone; the
+  fix round's builds say for the part). MoltenVK's and lavapipe's take it too (CI's lavapipe lanes caught it on the
+  first push), so they keep the staging buffer.
 - **Review round** (independent review, changes requested; 77143a9ff and 47e0c5d74): B1 the declaration false for 2D
   float depths near ten million (the review's quad lost 1 of 384 pixels at 1x on MoltenVK): those take the undeclared
-  pipelines; B2 no clamping, no margin: no declaration there; S1 the image copy forced in gpuDepthOrders where the
-  probe says no, its aspects counted; S2 `Backend::depthBuild()`, the declaration and the margin pinned together; S3
-  the probe's timeout as `wait()`'s; S4 the probe's partial, unaligned copy; S5/S6 the docs (MoltenVK's effect of
-  `ABOVE` on 2D depths outside 0-65535: those draws are master's now). Every one of the review's mutations, and the
-  fix's own, fails a committed test now.
+  pipelines; B2 no clamping, no margin: no declaration there; S1 the image copy forced in gpuDepthOrders where the probe
+  says no, its aspects counted; S2 `Backend::depthBuild()`, the declaration and the margin pinned together; S3 the
+  probe's timeout as `wait()`'s; S4 the probe's partial, unaligned copy; S5/S6 the docs (MoltenVK's effect of `ABOVE` on
+  2D depths outside 0-65535: those draws are master's now). Every one of the review's mutations, and the fix's own,
+  fails a committed test now. Second round: approved; its should-fix, `emit()`'s test of every corner on either side of
+  the range, pinned by two more pretend-backend keys (corners below 0 unseen, or only the first corner looked at, fail
+  gpuDepthOutside now); its nits in the docs (the margin's size, which the M1 can't show; the hashes not reaching the
+  outside pipelines, which the library check does) and the probe's device-lost return freeing its pictures and buffers.
 - **Left out**: a "never below" build for less-or-equal tests (Chains of Olympus' and most scenes'): on MoltenVK a
   corner's depth rasterized below 0 moves the depth interpolated beside it (found by the new test), and held at 0
   the declaration isn't true; exact on any GPU only with a depth encoding with room below 0 (part 102's Left). Render
@@ -78,7 +82,8 @@ Clean room: no PPSSPP for GE/GPU code, JPCSP not read. Save states unchanged.
   offsets fail it), every copy of the depth's aspect alone. tests/psp 576 groups, 0 failures. On the RP6 (the image
   copy) the states saved at frame 120 at 5x by master's build and 3c20bdbf5's are the same file for Activision Hits,
   Chains of Olympus and Super Monkey Ball; the coordinator's targeted check of 3c20bdbf5's image copy over the library
-  (237 pairs, from boot at 2x and 5x) had 152 the same file and none different at 19:58, still running.
+  (237 pairs, from boot at 2x and 5x, Turnip, 18:50-20:28) found all 237 the same file, "image copy 1" in every run.
+  The hashes don't reach the outside pipelines (no kit scene draws one); the coordinator's Vulkan library check does.
 - **Numbers**: RP6, this branch against master (the coordinator's run of `hires-pr-rp6.sh`, best of two rounds; the
   table in part 102): Turnip at 5x Activision Hits' copyright 2.7 → 19.4 fps (1x 15.4 → 247.1), Super Monkey Ball
   +18%, Army of Two +6%, Ghost of Sparta +4%, Chains of Olympus +3%, Killzone 0; Qualcomm's driver at 5x Activision

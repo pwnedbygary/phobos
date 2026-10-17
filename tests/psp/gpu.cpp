@@ -2823,12 +2823,14 @@ static auto gpuDepthEarly() -> void {
 //2D PRIMs whose corners' depths lie past the GE's 0-65535 (through mode's float positions), where the depth decides:
 //there the GPU's two interpolations, of the depth rasterized and of the one written beside it, may part by more than
 //the declaration's margin (a float's own step is a whole one at ten million), so their pipelines are made
-//undeclared, the depth rasterized at the GE's (Pipeline::outside), and only theirs: a pretend backend sees the keys of
-//the quad below, tested and written, then one in range, then the quad neither tested nor written, then fast mode's 3D
-//mesh, held in range. On the GPU, where it clamps the depth, as gpuDepthEarly's: the quad, its corners at -10 million,
-//10 million, 5 million and -5 million, moved for each strip (the "at least" strip's at -9.9 million, 9.8 million, 5.3
-//million and -5.3 million, of which MoltenVK lost 1 of 384 pixels at 1x and 2 of 1,536 at 2x to the declaration),
-//drawn twice, written always then tested with each comparison over a strip of its own, at 1x-5x, in either mode.
+//undeclared, the depth rasterized at the GE's (Pipeline::outside), and only theirs. A pretend backend sees the keys of
+//the quad below, tested and written; one in range; a quad past the range below 0 alone (its second triangle's first
+//corner in range); one in range again; a triangle whose first corner is in range and another past 65535; the quad
+//neither tested nor written; then fast mode's 3D mesh, held in range: every corner weighs, on either side of the
+//range. On the GPU, where it clamps the depth, as gpuDepthEarly's: the quad, its corners at -10 million, 10 million,
+//5 million and -5 million, moved for each strip (the "at least" strip's at -9.9 million, 9.8 million, 5.3 million and
+//-5.3 million, of which MoltenVK lost 1 of 384 pixels at 1x and 2 of 1,536 at 2x to the declaration), drawn twice,
+//written always then tested with each comparison over a strip of its own, at 1x-5x, in either mode.
 static auto gpuDepthOutside() -> void {
   constexpr u32 First = 0xff30'6090;
   auto second = [](u32 n) { return 0xff00'0000 | (n + 1) * 0x1f'2b37; };
@@ -2845,6 +2847,17 @@ static auto gpuDepthOutside() -> void {
     s.ge.vertexAddress = GPUVertices;
     s.ge.primitive(GE::Triangles, 6);
   };
+  auto triangle = [](System& s, float left, const float (&z)[3], u32 color) {  //(top left, top right, bottom left)
+    float corners[3][3] = {{left, 0, z[0]}, {left + 8, 0, z[1]}, {left, 48, z[2]}};
+    u32 to = GPUVertices;
+    for(auto& corner : corners) {
+      for(float value : {0.0f, 0.0f}) s.memory.write(4, to, bitsOf(value)), to += 4;
+      s.memory.write(4, to, color), to += 4;
+      for(float value : corner) s.memory.write(4, to, bitsOf(value)), to += 4;
+    }
+    s.ge.vertexAddress = GPUVertices;
+    s.ge.primitive(GE::Triangles, 3);
+  };
   auto far = [](u32 n, float (&z)[4]) {  //(strip n's corners: top left, top right, bottom left, bottom right)
     constexpr float Corners[4] = {-1.0e7f, 1.0e7f, 5.0e6f, -5.0e6f};
     for(u32 i = 0; i < 4; i++) z[i] = Corners[i] + n * 12345.6f * (i + 1) * (i & 1 ? -1 : 1);
@@ -2859,10 +2872,13 @@ static auto gpuDepthOutside() -> void {
     s.ge.setRenderer(&gpu);
     prepare(s, 0, 3);
     auto& c = s.ge.commands;
-    float z[4], near[4] = {0.25f, 65534.75f, 30000.5f, 1.6f};
+    float z[4], near[4] = {0.25f, 65534.75f, 30000.5f, 1.6f}, below[4] = {-1.0e7f, 30000, 60000, -5.0e6f};
+    float some[3] = {1000, 70000, 2000};
     far(7, z);
     c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 7;  //(at least, written)
     quad(s, 0, z, First), quad(s, 8, near, First);
+    quad(s, 24, below, First), quad(s, 32, near, First);
+    triangle(s, 40, some, First);
     c[GE::DepthTestEnable] = 0;
     quad(s, 16, z, First);
     c[GE::DepthTestEnable] = 1, c[GE::DepthTest] = 1;
@@ -2874,8 +2890,8 @@ static auto gpuDepthOutside() -> void {
       keys += char('0' + state.pipeline.outside), keys += state.pipeline.depths() ? '+' : '-';
       keys += ' ';
     }
-    if(keys != "D1+ D0+ D0- M0+ ") std::printf("  the draws' keys: %s\n", keys.c_str());
-    CHECK(keys == "D1+ D0+ D0- M0+ ", true);
+    if(keys != "D1+ D0+ D1+ D0+ D1+ D0- M0+ ") std::printf("  the draws' keys: %s\n", keys.c_str());
+    CHECK(keys == "D1+ D0+ D1+ D0+ D1+ D0- M0+ ", true);
     s.ge.setRenderer(nullptr);
   }
   if(!renderer()) return;

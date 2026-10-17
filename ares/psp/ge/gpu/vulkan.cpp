@@ -2559,7 +2559,8 @@ struct VulkanBackend : GPU::Backend {
   //block's), both read back: the depth taken inside the part, every other depth and every stencil as it was.
   //MoltenVK's copy takes the stencil too (Metal copies a depth and stencil picture whole), and so does lavapipe's (its
   //depth and stencil kept together); any failure on the way says no. One the GPU doesn't finish loses the device as
-  //wait() does, the fence, the commands and the pictures left as they are.
+  //wait() does, the fence, the commands and the pictures left as they are; a device lost on the way lets its pictures
+  //and buffers go.
   auto depthAloneProbe() -> bool {
     constexpr u32 Wide = 128, Tall = 64, Pixels = Wide * Tall, PartWide = 45, PartTall = 27;
     constexpr u32 FromX = 5, FromY = 3, IntoX = 37, IntoY = 9;
@@ -2638,7 +2639,10 @@ struct VulkanBackend : GPU::Backend {
       if(vk.vkQueueSubmit(queue, 1, &submit, slot.fence) == VK_SUCCESS) {
         VkResult waited = vk.vkWaitForFences(device, 1, &slot.fence, VK_TRUE, Timeout);
         if(waited == VK_TIMEOUT) return lost = timedOut = true, false;
-        if(waited != VK_SUCCESS) return lost = true, false;
+        if(waited != VK_SUCCESS) {
+          destroy(from), destroy(whole), destroy(part), release(upload), release(read);
+          return lost = true, false;
+        }
         vk.vkResetFences(device, 1, &slot.fence);
         if(!read.coherent) {
           auto range = made<VkMappedMemoryRange>(VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
