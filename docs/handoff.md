@@ -68,31 +68,34 @@ behaviour changes.
   as fast as the model's GE allows, busy 86-100%: coo-diff 159.5 frames a second (2.66 a vblank), gos-menu 247 (4.1),
   smba-story 435 (7.3), kz-gp 258 (4.3; one frame buffer), a2-gp 253 (4.2), ahr-legal's copyright screen 851 (14).
   Every charge set by its pixels.
-- **The comparison** (the dry runs, then the owner's captures of five of the six scenes; Army of Two was optional):
-  each game's loop is the same on both, but a PSP's GE takes 4.4 to 12 times what the model charges for a list
-  (coo-diff 27.6 ms against 6.24; gos-menu 29.6 against 4.05; smba-story 23.6 against 1.98; Killzone's scene list 24.3
-  or 27.3 against 3.57; Activision Hits' copyright screen 4.46 against 0.59), so the PSP draws 0.5 to 1.8 frames a
-  vblank where Phobos draws 2.7 to 14. A first fit over three scenes: 0.875 bus clocks a pixel and 104 a primitive
-  (the model's peaks: 0.25 and 4.74), within 11% for those three. In the scenes that sync, the PSP's CPU part of a
-  loop is 7 to 9 times Phobos's; it paces none of them (Killzone's GE is busy 89 and 98% of its windows).
+- **The comparison** (the dry runs, then the owner's captures of all six scenes' games; Army of Two's of other
+  moments than its state's): each game's loop is the same on both (Army of Two's but for the vblank wait the PSP's
+  next-vblank flip brings, #271), but a PSP's GE takes 4.4 to 12 times what the model charges for a list (coo-diff
+  27.6 ms against 6.24; gos-menu 29.6 against 4.05; smba-story 23.6 against 1.98; Killzone's scene list 24.3 or 27.3
+  against 3.57; Army of Two 31.9 or 32.7 against 3.49; Activision Hits' copyright screen 4.46 against 0.59), so the
+  PSP draws 0.4 to 1.8 frames a vblank where Phobos draws 2.7 to 14. A first fit over three scenes: 0.875 bus clocks
+  a pixel and 104 a primitive (the model's peaks: 0.25 and 4.74), within 11% for those three. In the scenes that
+  sync, the PSP's CPU part of a loop is 7 to 9 times Phobos's; it paces none of them (Killzone's GE is busy 89 and
+  98% of its windows).
 - **The review's fix round**: the decoder ends a FINISH's list at the queue's head (the driver is first in, first
   out; Killzone's FINISH can come from below its list, which the address matching misread), counts the lists queued
   before a capture by where their FINISHes fall, counts a one-buffer game's frames by its calls, and files interrupt
-  handlers' calls under `interrupt`: only Killzone's figures moved (above; Phobos's profile now has every list
-  charged and 59.9 frames shown a second). Plugin 0.2.4 (untested on a PSP, as 0.2.1 to 0.2.3): the captures'
-  192 KB buffer as the default, the boot capture from 4 s with 128 KB, its result notice kept up, interrupt-context
-  calls, files opened as new ones and removed if their writing fails, the trace capped at 256 KB. The recorder: a
-  wait whose callbacks run first ends where its thread goes on, sceGeSetCallback's functions read only as the
-  function reads them, a profile ends at a program's restart, the PSP's hooks word, no end of 0. The runner:
-  `--ge-profile-from` alone is an error, a WAV failure no longer skips the profile.
-- **Tests**: tests/psp 578 groups, 0 failures, sanitized (container overflows not checked, as part 101 ran it: the
+  handlers' calls under `interrupt`: of the owner's twelve captures and Phobos's six profiles, only Killzone's
+  figures moved (above; Phobos's profile now has every list charged and 59.9 frames shown a second). Plugin 0.2.4
+  (untested on a PSP, as 0.2.1 to 0.2.3): the captures' 192 KB buffer as the default, the boot capture from 4 s with
+  128 KB, its result notice kept up, interrupt-context calls, files opened as new ones and removed if their writing
+  fails, the trace capped at 256 KB. The recorder: a wait whose callbacks run first ends where its thread goes on,
+  sceGeSetCallback's functions read only as the function reads them, a profile ends at a program's restart, the PSP's
+  hooks word, no end of 0. The runner: `--ge-profile-from` alone is an error, a WAV failure no longer skips the
+  profile.
+- **Tests**: tests/psp 579 groups, 0 failures, sanitized (container overflows not checked, as part 101 ran it: the
   movie player's file read trips that check), with the new "ge profile" (the calls, the wait to its
   thread going on, the FINISH's callback, the vblank and the model's charge, record by record; the file byte by
   byte; nothing recorded without a profile, the machine ending the same to the cycle, its registers, memory and
-  state; a state loaded mid-callback; sceGeSetCallback with no slot free) and "ge profile: calls whose callbacks run
-  in them", and the loadExec test's profile ending; three mutants of the recorder caught; the plugin's and the load
-  test's host tests (a boot capture's notice through the control loop, interrupt-context calls, a failed write, the
-  trace's cap); the decoder's 23.
+  state; a state loaded mid-callback; sceGeSetCallback with no slot free), "ge profile: calls whose callbacks run in
+  them" and "ge profile: a callback notified in the wait" (the review's), and the loadExec test's profile ending;
+  three mutants of the recorder caught; the plugin's and the load test's host tests (a boot capture's notice through
+  the control loop, interrupt-context calls, a failed write, the trace's cap); the decoder's 23.
 - **Left**: geTime() unchanged here. Part 76's model, fitted to round 6's timings on this PSP and left unmerged, is
   the starting point: a design (that model checked against these captures, the GE's sync calls skipped through when a
   game polls them, a round 8 for what round 6 left) waits for the owner's approval. The CPU's 7 to 9 times is a

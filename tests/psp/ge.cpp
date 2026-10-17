@@ -3269,6 +3269,44 @@ static auto geProfileCallbacks() -> void {
   CHECK(r[3].entry >= r[0].exit && r[3].exit >= r[3].entry + 4, true); CHECK(r[3].result, 1);
 }
 
+//The GE profile's call whose thread's callback is notified while it waits in sceDisplayWaitVblankStartCB (by a worse
+//thread that runs once main waits): the callback runs in the wait, its record put aside meanwhile, and the call still
+//ends at the blank with 0.
+static auto geProfileNotifiedInWait() -> void {
+  KernelMachine m;
+  Assembler callback{m, 0x0880'3000};
+  callback.put(jr(ra)); callback.put(addu(v0, zero, zero));
+  Assembler other{m, 0x0880'2000};
+  other.li(t0, KernelMachine::Results); other.put(lw(a0, 8, t0)); other.li(a1, 7);
+  other.call("sceKernelNotifyCallback");
+  other.li(a0, 0); other.call("sceKernelExitThread");
+  Assembler main{m, 0x0880'1000};
+  main.li(s1, KernelMachine::Results);
+  main.li(a0, m.string("cb")); main.li(a1, 0x0880'3000); main.li(a2, 0);
+  main.call("sceKernelCreateCallback");
+  main.put(sw(v0, 8, s1));
+  main.li(a0, m.string("other")); main.li(a1, 0x0880'2000); main.li(a2, 0x30); main.li(a3, 0x1000);
+  main.li(t0, 0); main.li(t1, 0);
+  main.call("sceKernelCreateThread");
+  main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+  main.call("sceKernelStartThread");
+  main.call("sceDisplayWaitVblankStartCB");
+  main.put(sw(v0, 0, s1));
+  main.call("sceKernelExitGame");
+  GeProfile profile;
+  m.kernel.geProfileStart(profile);
+  runMain(m, false);
+  m.kernel.geProfileStop();
+  CHECK(m.system.memory.read(4, KernelMachine::Results), 0);
+  auto& r = profile.records;
+  CHECK(r.size(), 2);
+  if(r.size() != 2) return;
+  u32 vblank = u32(Kernel::VblankCycles / 333);
+  CHECK(r[0].kind, GeProfile::WaitVblankStartCB);
+  CHECK(r[0].exit, vblank); CHECK(r[0].result, 0);
+  CHECK(r[1].kind, GeProfile::Vblank);
+}
+
 auto geTests() -> Tests {
   return {
     {"ge commands", geCommands}, {"ge moving", geMoving}, {"ge stops", geStops}, {"ge vertices", geVertices},
@@ -3286,6 +3324,7 @@ auto geTests() -> Tests {
     {"ge break and callbacks", geBreakCallbacks}, {"ge time", geTime}, {"ge time's interrupt", geTimeInterrupts},
     {"ge FINISH after a quiet function", geQuietFunctions}, {"ge profile", geProfile},
     {"ge profile: calls whose callbacks run in them", geProfileCallbacks},
+    {"ge profile: a callback notified in the wait", geProfileNotifiedInWait},
     {"ge 3D settings kept from PRIM to PRIM", geTransformKept}, {"ge vertices and lists drawn first", geVerticesDrawn},
     {"ge vertices read in runs as one at a time", geVertexRuns},
     {"ge vertex floats that are signaling NaNs read quieted, in runs and one at a time", geVertexFloatsQuieted},
