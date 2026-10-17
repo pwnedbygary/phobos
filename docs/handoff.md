@@ -37,8 +37,8 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP power: Activision Hits Remixed's clocks — the bus asked for alone up to half the PLL, a bus above half the PLL refused, and the owner's captures' 333/166, read before the game ran — 2026-10-16
 
-Branch `cursor/psp-power-clock-2b67` (from master `a8d5640f5`, master `5442acb8b` merged in: #264, #265);
-docs/psp-core.md, part 104.
+Branch `cursor/psp-power-clock-2b67` (from master `a8d5640f5`, masters `5442acb8b` and `03eca2a69` merged in: #264,
+#265, #274); docs/psp-core.md, part 104.
 - **The question** (part 103): the owner's captures of Activision Hits' boot read 333/166, Phobos 222/111.
 - **The game** asks, as it starts, for a CPU of 333 and a bus of 166 with the separate setters, and nothing else in
   1200 frames (traced). uOFW's power service refuses both at a game's startup PLL of 222 (set by its Init callback
@@ -51,6 +51,56 @@ docs/psp-core.md, part 104.
   `scePowerSetClockFrequency` refuses a bus above half the PLL. "power clocks" tests both and the game's start.
 - **For the GE timing work**: the copyright screen is at 222/111 on both, compared unscaled; ARK's clock settings
   stay at Auto for the owner's captures.
+
+## README: a development progress section, generated from docs/progress/data.json — 2026-10-17
+
+Branch `cursor/readme-progress-2b67`, on master `5442acb8b` (part 102, #265); PR #274. Documentation and the script
+that generates it: nothing the app, the cores or the desktop program build changes.
+- **What**: README.md's new last section, "Development progress", between `<!-- progress:begin -->` and
+  `<!-- progress:end -->`: four headline numbers, three charts (the 266-game library runs, the 22 slow games at full
+  speed by build, pull requests opened per day), a four-period Mermaid `timeline` and the PSP releases. The full
+  story is docs/progress.md: the seven eras (in two timelines) and their milestones, the firsts, all twelve charts (the
+  5x runs on the RP6, PPSSPP and Phobos at 5x, the GE's list time on a PSP-1000 against Phobos's model among them),
+  every release, and the setbacks with what changed after them. Download no longer names a latest release: it links
+  releases/latest, which GitHub keeps on the newest tagged release (nightly pre-releases sit above it on the Releases
+  page); v2.0.0 was the first with the PSP.
+- **How**: docs/progress/data.json holds the curated data, each chart with its source note; tools/progress/render.py
+  (Python 3's standard library only) writes docs/images/progress/<id>-light.svg and -dark.svg (for `<picture>` and
+  prefers-color-scheme, about 880x360, a system font stack), docs/progress.md and the README section, replacing only
+  what's between the markers. The same data gives the same bytes. `--check` writes nothing and exits 1 when a file
+  differs from the data or a chart no longer comes from it. Headlines, alt texts and a few milestones name a chart's
+  numbers (`{chart:series:selector}`) rather than copying them, so they can't drift from the charts. The timelines
+  carry a Mermaid theme (dark fills, white text, gray lines) that reads alike on GitHub's light and dark pages, at
+  most four periods each, since GitHub shrinks a wider one, text and all. For each release: update the data, run the
+  script, commit the result (docs/development-process.md says so).
+- **Sources**: the numbers are the ones docs/psp-core.md, docs/psp-compatibility.md, tools/psp-measure/README.md and
+  the pull requests already report, and GitHub's pull request and release data (to 17 Oct, 2:38 PM). Private details
+  are left out: no device serial numbers, local paths, session IDs, personal notes, or where any game came from.
+- **Checks**: the script run twice, every output byte-identical (SHA-256); `--check` passes, and fails on a changed
+  page and on a stray chart; all 24 SVGs rendered to PNG with headless Chrome, light and dark, and looked at (titles,
+  axis labels, legends, captions; nothing clipped or overlapping); the timelines in plain `timeline` syntax (the script
+  refuses `:`, `#` and `;` in their text) and rendered with Mermaid 11 and 10 on white and near-black pages;
+  `git diff --check`; no line of the script over 120 characters; a privacy scan of every new and changed line. After
+  the push (`3da67b189`), the branch's README and docs/progress.md screenshotted on GitHub in its light and dark
+  themes with headless Chrome: each chart showed its matching variant, and all three timelines read in large white
+  text on dark boxes, their gray axes visible on both.
+- **Review**: an independent review of `a22b56455` passed the script, its determinism, the rendering (GitHub's light
+  and dark themes and Mermaid included) and privacy, and checked every chart series and over 40 dates against their
+  sources, but found five wrong public statements, all corrected: the Download line's "newest at the top" (nightlies
+  sit above the latest release); 29 Sep's decision (the PSP went on the plan through PPSSPP, docs/new-systems.md; a
+  core of Phobos's own was decided on 3 Oct, now that milestone's); two "firsts" that weren't (round 6 had timed test
+  lists on the same PSP, so 16 Oct is the first timing of games' own lists; part 43 had run a scratch runner from adb
+  on the RP6, so #255 is no first and its milestone says what it added, the runner built for Android); and #256's Hot
+  Wheels figure (4.2%: 48.58 to 46.52 ms; 3.5% was Killzone's row). Its should-fixes, taken: the headlines dated and
+  their methods said (the 11 Oct run; 150-second scripted runs; the 5x pass's two-minute runs from launch, mostly
+  logos, intros and menus, on Turnip), "first code" for "first instruction"; the drivers in the PPSSPP chart (PPSSPP on
+  Qualcomm's, Phobos on Turnip, with part 102's 2.7 against 12.9 fps on one scene); parts 51, 64 and 72 in the test
+  chart, which now ends at master's 576 (draft #272's 595 in the caption), and draft #266 named as a draft. Its nits,
+  taken: the README intro no longer repeats the first headline; the library headline agrees with the PSP section (the
+  last game plays its opening a few seconds past the minute); Midnight Club 3's 24.2 to 32.3 fps credited to part 43's
+  drawing off the emulation thread; the part count's note (parts 2 and 4 are under "The recompiler"); v2.0.0's #210
+  and #211; era 1 ending 3 Oct; #265's 19.4 fps named as its final build's (the 19.3 is an experimental build's); the
+  Mermaid theme; two lines over 120 characters. A CI lane for `--check` is left for a follow-up.
 
 ## PSP Vulkan at 5x: the depth-writing shader's depth declared never above the depth rasterized; another frame buffer's depth taken image to image where the device's copy leaves the stencil (Activision Hits' copyright screen at 5x on the RP6 2.7 → 19.4 fps) — 2026-10-16
 
