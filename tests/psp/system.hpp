@@ -41,6 +41,7 @@ struct System : Allegrex {
   std::vector<u8*> table;
   std::vector<u8> steadyTable;  //the pages whose entries in table never change (Memory::buildSteady)
   std::vector<std::pair<u32, bool>> unmapped;  //accesses with nothing behind them: the address, and whether a store
+  std::mutex unmappedMutex;
   std::vector<std::pair<Exception, u32>> exceptions;
 
   System(u32 ramSize = 32_MiB) {
@@ -61,7 +62,10 @@ struct System : Allegrex {
       }
     };
     memory.written = [this](u32 address, u32 size) { recompiler.invalidateRange(address, size); };
-    memory.unmapped = [this](u32 address, bool store) { unmapped.push_back({address, store}); };
+    memory.unmapped = [this](u32 address, bool store) {  //(the drawing threads and the GE's thread report too)
+      std::lock_guard lock{unmappedMutex};
+      unmapped.push_back({address, store});
+    };
     exceptionHook = [this](Exception exception, u32 address) {
       exceptions.push_back({exception, address});
       scc.halted = 1;

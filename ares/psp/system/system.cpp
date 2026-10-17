@@ -443,8 +443,11 @@ auto System::power(bool reset) -> void {
   };
   memory.written = [this](u32 address, u32 size) { cpu.recompiler.invalidateRange(address, size); };
   memory.unmapped = [this](u32 address, bool store) {
-    //Under HLE nothing should reach these; a game that does is reported, but only so often.
-    if(unmappedReports < 16 && ++unmappedReports) {
+    //Under HLE nothing should reach these; a game that does is reported, but only so often. (The drawing threads and
+    //the GE's thread report too: the count saturates, so their order doesn't change it.)
+    u32 seen = unmappedReports.load(std::memory_order_relaxed);
+    while(seen < 16 && !unmappedReports.compare_exchange_weak(seen, seen + 1, std::memory_order_relaxed)) {}
+    if(seen < 16) {
       report(true, std::string{store ? "a store to " : "a load from "} + hex(address) + ", where nothing is");
     }
   };
@@ -705,7 +708,8 @@ auto System::snapshot() -> serializer {
   ge.serialize(s);
   kernel.serialize(s);
   s(soundOwed);
-  s(unmappedReports);
+  u32 reports = unmappedReports;
+  s(reports);
   return s;
 }
 
@@ -719,7 +723,9 @@ auto System::restore(serializer& s, u32 length) -> bool {
   if(geThreading) renderFromState();
   valid = kernel.serialize(s) && valid;
   s(soundOwed);
-  s(unmappedReports);
+  u32 reports = 0;
+  s(reports);
+  unmappedReports = reports;
   return valid && soundOwed >= 0 && soundOwed < 1 && s.size() <= length;
 }
 

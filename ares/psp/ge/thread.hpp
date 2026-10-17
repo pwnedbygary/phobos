@@ -91,6 +91,9 @@ struct GeThread : Memory::Writer {
   //numbered from 1 as they're handed over (runStart()): published by the GE thread as each ends, and the one under
   //way's counts so far after each of its PRIMs, for the emulation thread's clock (kernel/ge.cpp).
   struct Owed { u64 pixels = 0, primitives = 0; };
+  //(the runs whose counts it keeps: the emulation thread folds the oldest before it hands over more than that many
+  //not folded, Kernel::geTime(), and waits past that many not ended)
+  static constexpr u32 RunsKept = 4096;
   auto runsHanded() const -> u64 { return runs; }
   auto owedOf(u64 run, bool wait, Owed& owed) -> bool;  //(once it has ended; with wait, waiting for that)
   auto owedSoFar(u64 run, Owed& owed) const -> bool;    //(while it's under way)
@@ -106,6 +109,7 @@ struct GeThread : Memory::Writer {
   GeModel model;
   bool hardware = false;
   u64 waits = 0;  //(how often it waited for the render GE to pass a read: the tests')
+  u64 reportWork = 0;  //(the entries taking the reports went through: the tests')
   auto backlog() const -> u64 { return ring.backlog(); }  //(the bytes of records handed over not yet taken: the tests')
   auto place() const -> u64 { return serial; }
   //(the emulation thread's memory hooked up to the thread, as the system's machine and the tests' both have it: its
@@ -177,7 +181,6 @@ struct GeThread : Memory::Writer {
 
 private:
   static constexpr u32 WordsMost = 1024;
-  static constexpr u32 RunsKept = 4096;  //(runs handed over and not yet ended: the emulation thread waits past that)
   auto append(Kind kind, u32 size) -> u8*;
   auto publish() -> void;  //(the record appended, handed over: ring.publish(), and the fuzzing's)
   auto flushWords() -> void;

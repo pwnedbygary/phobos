@@ -3521,6 +3521,58 @@ static auto gpuThreadR14() -> void {
   CHECK(vramApart(plain, threaded), 0u);
 }
 
+//With the GE on its thread held back after a list draws on the GPU, an HLE function's copy out of VRAM's fourth copy
+//(an 8888 frame buffer's depth view) of bytes nothing drew, on the 16 KiB block the GPU drew in: clean, so it doesn't
+//wait, but today's check for it (pointer()'s busy check, which through that copy covers the whole block) finishes the
+//GPU, and the GE thread makes that check from the copy's Read record where the synchronous GE made it (a finish
+//changes later pictures in Vulkan fast). Seen twice: the GPU finishes as often as without the thread, and a load of a
+//pixel it drew then needn't wait (the finish known). Without the record neither holds.
+static auto gpuThreadCleanCheck() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 At = 0x3'0000, Clean = At + 56 * 256;  //(the sprite draws rows 0-47; row 56 is in the same 16 KiB)
+  const u32 copied = Memory::VRAMBase + 3 * Memory::VRAMSize + Memory::vramSeen(3, Clean);
+  const u32 drawn = Memory::VRAMBase + At + (10 * 64 + 10) * 4;
+  auto build = [&](Memory& memory) {
+    for(u32 n = 0; n < 0x4000; n += 4) memory.write(4, Memory::VRAMBase + At + n, 0x0102'0304 * (n / 4 + 1));
+    ThreadedList list{memory};
+    list.prepare(At, 3), list.sprite({{{0, 0, 0, 0}, {0, 0, 40, 48}}, 0xff10'2030}), list.end();
+  };
+  u32 bytes[2] = {}, pixel[2] = {};
+  u64 finished[2] = {};
+  System plain, threaded;
+  plain.threadGE(false), threaded.threadGE(true);
+  plain.ge.setRenderer(gpu);
+  build(plain.memory);
+  u64 finishes = stats(gpu).finishes;
+  runList(plain, 0x0894'0000);
+  CHECK(plain.memory.copyOut(&bytes[0], copied, 4), true);
+  finished[0] = stats(gpu).finishes - finishes;
+  pixel[0] = plain.memory.read(4, drawn);
+  plain.ge.settleAll();
+  plain.ge.setRenderer(nullptr);
+  threaded.ge.setRenderer(gpu);
+  build(threaded.memory);
+  finishes = stats(gpu).finishes;  //(before the thread's held back: stats() drains it)
+  {
+    HeldBack back{*threaded.geThreading};
+    runList(threaded, 0x0894'0000);
+    CHECK(back.waited([&] { CHECK(threaded.memory.copyOut(&bytes[1], copied, 4), true); }), false);
+  }
+  finished[1] = stats(gpu).finishes - finishes;
+  u64 waits = threaded.geThreading->waits;
+  pixel[1] = threaded.memory.read(4, drawn);
+  CHECK(threaded.geThreading->waits, waits);
+  threaded.ge.settleAll();
+  threaded.ge.setRenderer(nullptr);
+  CHECK(finished[0], 1u);  //(the synchronous GE's check finished the GPU)
+  CHECK(finished[1], finished[0]);
+  CHECK(bytes[1], bytes[0]);
+  CHECK(pixel[1], pixel[0]);
+  CHECK(pixel[0] != 0x0102'0304u * (10 * 64 + 11), true);  //(the GPU's pixel, finished)
+  CHECK(vramApart(plain, threaded), 0u);
+}
+
 //R15 (DESIGN.md 3.6, the review's round two): with the GE on its thread held back after a list draws on the GPU, the
 //CPU's halfword and byte stores into drawn 8888 and 16-bit pixels, one after another with nothing between (each
 //replayed by itself: part of a pixel finishes the GPU first, as today's code does), and two aligned words across the
@@ -5656,6 +5708,8 @@ auto gpuTests() -> Tests {
      gpuThreadR22},
     {"gpu with the GE on its thread: R14, a waited load through the depth views leaves the GPU's pixels dirty",
      gpuThreadR14},
+    {"gpu with the GE on its thread: a copy out of clean bytes through the depth views, its check made, the GPU "
+     "finished", gpuThreadCleanCheck},
     {"gpu with the GE on its thread: R15, halfword and byte stores into drawn pixels, each replayed alone",
      gpuThreadR15},
     {"gpu with the GE on its thread: R16, a depth of the other order taken through memory: a put point",

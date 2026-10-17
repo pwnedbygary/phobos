@@ -102,7 +102,11 @@ auto Kernel::geTime() -> void {
   u64 pixels = ge.owedPixels, primitives = ge.owedPrimitives;
   ge.owedPixels = ge.owedPrimitives = 0;
   u32 bus = std::clamp<u32>(powerState.bus, 1, 166);
-  if(ge.thread) return geRuns.push_back({ge.thread->runsHanded(), cycles, bus});  //(counted there: geFold())
+  if(ge.thread) {  //(counted there: geFold(); the oldest folded first where the thread keeps no more runs' counts)
+    geRuns.push_back({ge.thread->runsHanded(), cycles, bus});
+    while(geRuns.size() >= GeThread::RunsKept) geFold(true, geRuns.front().run);
+    return;
+  }
   if(pixels || primitives) geDoneAt = std::max(geDoneAt, cycles) + geOwed(pixels, primitives, bus);
 }
 

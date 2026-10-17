@@ -28,7 +28,9 @@ GeThread::GeThread(GE& control, GE& render) : control(control), render(render) {
   render.memory.watching = [](u32) {};
   render.memory.unwatched = nullptr;
   render.memory.written = nullptr;
-  render.memory.unmapped = nullptr;
+  //(its reads of nothing, the software renderer's texels among them, reported as the kernel's GE's memory reports
+  //them: the count a state keeps saturates, so the two threads' order doesn't change it)
+  render.memory.unmapped = control.memory.unmapped;
   thread = std::thread([this] { take(); });
 }
 
@@ -380,6 +382,7 @@ auto GeThread::takeReports() -> void {
   if(!model.putPoints.empty() && model.putPoints.front().at <= model.passed) {  //(in their places' order)
     auto kept = std::find_if(model.putPoints.begin(), model.putPoints.end(),
                              [&](const GeModel::PutPoint& point) { return point.at > model.passed; });
+    reportWork += kept - model.putPoints.begin() + (kept != model.putPoints.end());
     model.putPoints.erase(model.putPoints.begin(), kept);
   }
   if(lostReported.load(std::memory_order_acquire)) hardware = false;

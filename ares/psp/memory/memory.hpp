@@ -269,7 +269,11 @@ struct Memory {
   auto write(u32 size, u32 address, u32 data) -> void {
     u32 offset;
     if(!ramOffset(address, size, offset)) return writeElsewhere(size, address, data);
-    if(drawer && watchedPages && watched[(RAMBase + offset) / PageSize]) return writeWatched(size, address, data);
+    //(the last byte's page too: an HLE write may straddle two)
+    if(drawer && watchedPages && (watched[(RAMBase + offset) / PageSize] ||
+                                  watched[(RAMBase + offset + size - 1) / PageSize])) {
+      return writeWatched(size, address, data);
+    }
     if(size == 1) ram[offset] = data;
     else if(size == 2) { u16 half = data; std::memcpy(&ram[offset], &half, 2); }
     else std::memcpy(&ram[offset], &data, 4);
