@@ -138,6 +138,14 @@ struct GeThread : Memory::Writer {
   //(the tests': called on the GE thread before it does each record, with its place: one that waits holds the thread
   //back there)
   std::function<auto (u64 place) -> void> gate;
+  //Schedule fuzzing (the tests' and the runner's: PHOBOS_GE_FUZZ=seed,mode,n; DESIGN.md section 9), which changes how
+  //far apart the two threads run and never a result: delay, the GE thread pausing up to n microseconds (seeded) before
+  //one record in four; behind, the GE thread holding each record back till the emulation thread has appended up to n
+  //more (seeded), or waits for it, or has filled a quarter of the ring, or 2 ms have gone by; ahead, the emulation
+  //thread waiting for the GE thread to take each record it appends (but where a test holds that thread back: gate).
+  enum class Fuzz : u32 { None, Delay, Behind, Ahead };
+  Fuzz fuzz = Fuzz::None;
+  u32 fuzzMost = 0;
 
   //(the emulation thread's) Its writes the GE hears of (Memory::Writer): before one, where it lands on pixels the
   //drawing threads may still draw or a texture a PRIM drawn by the software renderer may still read (a conflict), its
@@ -170,6 +178,7 @@ private:
   static constexpr u32 WordsMost = 1024;
   static constexpr u32 RunsKept = 4096;  //(runs handed over and not yet ended: the emulation thread waits past that)
   auto append(Kind kind, u32 size) -> u8*;
+  auto publish() -> void;  //(the record appended, handed over: ring.publish(), and the fuzzing's)
   auto flushWords() -> void;
   auto take() -> void;  //the thread's loop
   auto replay(const Header& header, const u8* data) -> void;
@@ -198,6 +207,18 @@ private:
   std::atomic<u64> putReported[GeModel::Blocks] = {};
   std::atomic<bool> lostReported{false}, uncertain{false};
   u64 putsTaken = 0;     //(the emulation thread's)
+  //(the fuzzing's: the records published, the emulation thread's waits for the GE thread under way, the seeded
+  //sequence the GE thread draws from)
+  alignas(64) std::atomic<u64> appended{0};
+  std::atomic<u32> blocked{0};
+  u64 fuzzState = 0;
+  auto fuzzBefore(u64 place) -> void;
+  auto fuzzNext() -> u64;
+  struct Blocked {
+    std::atomic<u32>& count;
+    explicit Blocked(std::atomic<u32>& count) : count(count) { count.fetch_add(1, std::memory_order_acq_rel); }
+    ~Blocked() { count.fetch_sub(1, std::memory_order_acq_rel); }
+  };
   u32 dirtyPage = ~0u;  //(the emulation thread's: a list page found not all clean in this run, its words looked at)
 };
 

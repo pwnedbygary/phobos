@@ -472,6 +472,7 @@ struct GPU : GE::Renderer {
   auto refusedForRoom() -> bool override { return std::exchange(roomless, false); }
   bool roomless = false;  //(a target it had no room for since asked: targetFor())
   auto scale() const -> u32 override { return resolution(); }
+  auto depthMoves() const -> bool override { return backend && backend->depthMoves; }
   auto begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region,
              const std::vector<GE::Vertex>& vertices, const GE::Transform& transform) -> bool override;
   auto triangle(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c) -> void override;

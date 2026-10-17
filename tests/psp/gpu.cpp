@@ -3033,6 +3033,484 @@ static auto gpuThreadR22() -> void {
   }
 }
 
+//A list for the tests with the GE on its thread (outside a list a PRIM is drawn at once, the thread drained: a list
+//leaves it behind), from at on: commands one after another, sprites' vertices from GPUVertices on as sprite() writes
+//them, and texture()'s and prepare()'s state as those set it.
+struct ThreadedList {
+  Memory& memory;
+  u32 at = 0x0894'0000, vertex = GPUVertices;
+  auto put(u32 command, u32 argument = 0) -> void {
+    memory.write(4, at, command << 24 | (argument & 0xff'ffff)), at += 4;
+  }
+  auto sprite(const Corners& sprite, float z = 0) -> void {
+    put(GE::Base, vertex >> 8 & 0xf'0000), put(GE::VertexAddress, vertex);
+    for(auto& corner : sprite.at) {
+      for(float value : {corner[0], corner[1]}) memory.write(4, vertex, bitsOf(value)), vertex += 4;
+      memory.write(4, vertex, sprite.color), vertex += 4;
+      for(float value : {corner[2], corner[3], z}) memory.write(4, vertex, bitsOf(value)), vertex += 4;
+    }
+    put(GE::Primitive, GE::Sprites << 16 | 2);
+  }
+  auto texture(u32 address, u32 width, u32 height, u32 bufferWidth, u32 format = 3) -> void {
+    put(GE::TextureMappingEnable, 1);
+    put(GE::TextureAddress0, address), put(GE::TextureBufferWidth0, (address >> 24 & 0xf) << 16 | bufferWidth);
+    put(GE::TextureSize0, std::countr_zero(height) << 8 | std::countr_zero(width));
+    put(GE::TextureFormat, format), put(GE::TextureFunction, 3 | 1 << 8), put(GE::TextureFilter, 0);
+  }
+  auto prepare(u32 buffer, u32 format, u32 rows = 48) -> void {
+    put(GE::FrameBufferPointer, buffer), put(GE::FrameBufferWidth, 64), put(GE::FrameBufferPixelFormat, format);
+    put(GE::DepthBufferPointer, 0x1f'0000), put(GE::DepthBufferWidth, 64);
+    put(GE::Region2, 1023 << 10 | 1023), put(GE::Scissor1, 0), put(GE::Scissor2, 63 | (rows - 1) << 10);
+    put(GE::VertexType, 0x80'019f), put(GE::ShadeMode, 1);
+  }
+  auto end() -> void { put(GE::Finish), put(GE::End); }
+};
+static auto runList(System& s, u32 from) -> void {
+  s.ge.list = {}, s.ge.list.address = from;
+  CHECK(u32(s.ge.run(100'000)), u32(GE::Stop::Finished));
+}
+
+//The GE thread held back before the next record it takes, while this lives (then let go, the thread drained);
+//waited(access): access made while it's held, let go of from another thread after a while, and whether the emulation
+//thread waited for the thread meanwhile (it's held again after). The thread drained first: held over a ring part
+//full, the emulation thread could wait for room it never makes.
+struct HeldBack {
+  GeThread& thread;
+  std::atomic<bool> held{true};
+  explicit HeldBack(GeThread& thread) : thread(thread) {
+    thread.drain();
+    thread.gate = [this](u64) { while(held.load()) std::this_thread::yield(); };
+  }
+  ~HeldBack() { held = false; thread.drain(); thread.gate = nullptr; }
+  template<typename Access> auto waited(const Access& access) -> bool {
+    u64 waits = thread.waits;
+    std::thread release([&] { std::this_thread::sleep_for(std::chrono::milliseconds(20)); held = false; });
+    access();
+    release.join();
+    held = true;
+    return thread.waits > waits;
+  }
+};
+
+//R14 (DESIGN.md 3.5, the review's round two): with the GE on its thread, a load through VRAM's fourth copy of a
+//pixel the GPU drew, which today's code reads from memory without finishing, waits for the thread and leaves the
+//pixel the GPU's: the bytes may still change. A block transfer then writes half of a pixel further down the frame
+//buffer (overwritten(): the GPU finished first), the thread held back before it, and a second load of the pixel waits
+//again and reads what the finish put there; had the first load's wait made the bytes clean, it would read memory at
+//once, the finish not made yet. Then the GPU's depth: a load through the depth views reads memory's at once (only a
+//put point puts the GPU's depth there), and after a PRIM sampling that depth through the depth views, the thread
+//held back before it, one waits and reads the depth put there. Every load as a machine without the thread reads.
+static auto gpuThreadR14() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 At = 0x3'0000, Pixel = At + 20 * 256 + 8 * 4, Row = 0x0897'0000;  //(row 20, column 8)
+  constexpr u32 Second = 0x0894'1000, Third = 0x0894'2000;
+  const u32 seen = Memory::VRAMBase + 3 * Memory::VRAMSize + Memory::vramSeen(3, Pixel);
+  const u32 depth = 0x0460'0000 + 0x1f'0000 + (20 * 64 + 8) * 2;  //(through the fourth copy, in order)
+  auto build = [&](Memory& memory) {
+    for(u32 n = 0; n < 0x8'0000; n += 4) memory.write(4, Memory::VRAMBase + n, 0x0102'0304 * (n / 4 + 1));
+    for(u32 n = 0; n < 0x8000; n += 4) memory.write(4, Memory::VRAMBase + 0x1f'0000 + n, 0x1111 * (n / 4 + 1));
+    for(u32 n = 0; n < 32; n++) memory.write(4, Row + n * 4, 0xff00'0000 | n * 0x05'0607);
+    ThreadedList first{memory};
+    first.prepare(At, 3), first.sprite({{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff10'2030}), first.end();
+    ThreadedList second{memory, Second, GPUVertices + 0x100};
+    second.prepare(0x5'0000, 3);
+    second.put(GE::DepthTestEnable, 1), second.put(GE::DepthTest, 1);  //(always, written)
+    second.sprite({{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff40'5060}, 0x4321), second.end();
+    ThreadedList third{memory, Third, GPUVertices + 0x200};
+    third.prepare(0x6'0000, 3);
+    third.texture(0x0460'0000 + 0x1f'0000, 64, 64, 64, 0);  //(the depth through the fourth copy, as 5650's colors)
+    third.sprite({{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0xffff'ffff}), third.end();
+  };
+  auto transfer = [&](System& s) {  //(rows 40 and 41, from the middle of a pixel: 2-byte pixels from column 1)
+    auto& c = s.ge.commands;
+    c[GE::TransferSource] = Row & 0xff'fff0, c[GE::TransferSourceWidth] = (Row >> 24) << 16 | 64;
+    c[GE::TransferSourcePosition] = 0;
+    c[GE::TransferDestination] = At & 0xff'fff0;
+    c[GE::TransferDestinationWidth] = (Memory::VRAMBase >> 24) << 16 | 128;
+    c[GE::TransferDestinationPosition] = 1 | 40 << 10;
+    c[GE::TransferSize] = 15 | 1 << 10, c[GE::TransferStart] = 0;
+    s.ge.transfer();
+  };
+  System plain, threaded;
+  plain.threadGE(false), threaded.threadGE(true);
+  u32 read[4] = {}, expected[4] = {};
+  plain.ge.setRenderer(gpu);
+  build(plain.memory);
+  runList(plain, 0x0894'0000);
+  expected[0] = plain.memory.read(4, seen);
+  transfer(plain);
+  expected[1] = plain.memory.read(4, seen);
+  runList(plain, Second);
+  expected[2] = plain.memory.read(2, depth);
+  runList(plain, Third);
+  expected[3] = plain.memory.read(2, depth);
+  plain.ge.settleAll();
+  plain.ge.setRenderer(nullptr);
+  threaded.ge.setRenderer(gpu);
+  build(threaded.memory);
+  {
+    HeldBack back{*threaded.geThreading};
+    runList(threaded, 0x0894'0000);
+    CHECK(back.waited([&] { read[0] = threaded.memory.read(4, seen); }), true);
+    transfer(threaded);
+    CHECK(back.waited([&] { read[1] = threaded.memory.read(4, seen); }), true);
+    runList(threaded, Second);
+    CHECK(back.waited([&] { read[2] = threaded.memory.read(2, depth); }), false);
+    runList(threaded, Third);
+    CHECK(back.waited([&] { read[3] = threaded.memory.read(2, depth); }), true);
+  }
+  threaded.ge.settleAll();
+  threaded.ge.setRenderer(nullptr);
+  for(u32 n = 0; n < 4; n++) CHECK(read[n], expected[n]);
+  CHECK(expected[0] != expected[1], true);  //(the finish put the GPU's pixel there)
+  CHECK(expected[3], 0x4321u);              //(the depth put there)
+  CHECK(vramApart(plain, threaded), 0u);
+}
+
+//R15 (DESIGN.md 3.6, the review's round two): with the GE on its thread held back after a list draws on the GPU, the
+//CPU's halfword and byte stores into drawn 8888 and 16-bit pixels, one after another with nothing between (each
+//replayed by itself: part of a pixel finishes the GPU first, as today's code does), and two aligned words across the
+//right edge of what it drew (the first's pixel memory's from then on, the second's bytes beside it, kept): none
+//waits, and memory comes out as the same list's and stores' without the thread.
+static auto gpuThreadR15() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 Wide = 0x3'0000, Narrow = 0x5'0000;  //(8888, 5650)
+  auto build = [&](Memory& memory) {
+    for(u32 n = 0; n < 0x3'0000; n += 4) memory.write(4, Memory::VRAMBase + Wide + n, 0x0102'0304 * (n / 4 + 1));
+    ThreadedList list{memory};
+    list.prepare(Wide, 3), list.put(GE::Scissor2, 39 | 47 << 10);  //(a picture 40 pixels wide in rows of 64)
+    list.sprite({{{0, 0, 0, 0}, {0, 0, 40, 48}}, 0xff10'2030});
+    list.prepare(Narrow, 0), list.sprite({{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff40'5060});
+    list.end();
+  };
+  auto stores = [&](System& s) {
+    auto wide = [&](u32 x, u32 y) { return Memory::VRAMBase + Wide + (y * 64 + x) * 4; };
+    auto narrow = [&](u32 x, u32 y) { return Memory::VRAMBase + Narrow + (y * 64 + x) * 2; };
+    s.memory.write(2, wide(5, 3), 0x1122), s.memory.write(2, wide(5, 3) + 2, 0x3344);  //(a pixel, in halves)
+    s.memory.write(1, wide(9, 7) + 1, 0x55), s.memory.write(1, wide(9, 7) + 2, 0x66);  //(two of a pixel's bytes)
+    s.memory.write(1, narrow(3, 4), 0x77), s.memory.write(1, narrow(3, 4) + 1, 0x88);   //(a 16-bit pixel, in bytes)
+    s.memory.write(1, narrow(10, 20) + 1, 0x99);
+    s.memory.write(4, wide(39, 30), 0xaabb'ccdd), s.memory.write(4, wide(40, 30), 0xeeff'0011);  //(across the edge)
+  };
+  System plain, threaded;
+  plain.threadGE(false), threaded.threadGE(true);
+  plain.ge.setRenderer(gpu);
+  build(plain.memory);
+  runList(plain, 0x0894'0000);
+  stores(plain);
+  plain.ge.settleAll();
+  plain.ge.setRenderer(nullptr);
+  threaded.ge.setRenderer(gpu);
+  build(threaded.memory);
+  {
+    HeldBack back{*threaded.geThreading};
+    runList(threaded, 0x0894'0000);
+    u64 waits = threaded.geThreading->waits;
+    stores(threaded);
+    CHECK(threaded.geThreading->waits, waits);
+    CHECK(back.held.load(), true);
+  }
+  threaded.ge.settleAll();
+  threaded.ge.setRenderer(nullptr);
+  u32 apart = vramApart(plain, threaded);
+  if(apart) std::printf("  %u bytes apart\n", apart);
+  CHECK(apart, 0u);
+  CHECK(plain.memory.read(4, Memory::VRAMBase + Wide + (3 * 64 + 5) * 4), 0x3344'1122u);
+}
+
+//R16 (DESIGN.md 3.5, the review's round two): a frame buffer drawing with the depth one of the other order drew
+//(Memory::depthCopy(): 5650 against 8888), where the depth buffer's pieces don't start on 32 bytes, takes it through
+//memory (takeDepth()): the drawer's depth put there in its order first (putDepth()), a put point. With the GE on its
+//thread held back, the CPU's store past the taker's rows, into the drawer's, stays over the put (whose write-back,
+//before it in the stream, goes under it), and its load of the depth waits for the thread and reads the depth put
+//there: memory as the same list's and accesses' without the thread, the depth moves on and off.
+static auto gpuThreadR16() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 Depth = 0x1f'0010;  //(16 bytes past 32: no runs placed)
+  constexpr u32 Loaded = 0x0420'0000 + Depth + (8 * 64 + 4) * 2;   //(through the second copy, the 5650's order)
+  constexpr u32 Stored = 0x0420'0000 + Depth + (40 * 64 + 4) * 2;  //(row 40: past the taker's 16)
+  auto build = [&](Memory& memory) {
+    ThreadedList list{memory};
+    list.prepare(0x3'0000, 0), list.put(GE::DepthBufferPointer, Depth);
+    list.put(GE::DepthTestEnable, 1), list.put(GE::DepthTest, 1);  //(always, written)
+    list.sprite({{{0, 0, 0, 0}, {0, 0, 64, 48}}, 0xff10'2030}, 0x2345);
+    list.prepare(0x6'0000, 3, 16), list.put(GE::DepthBufferPointer, Depth);
+    list.put(GE::DepthTestEnable, 1), list.put(GE::DepthTest, 7);  //(greater or equal, written)
+    list.sprite({{{0, 0, 0, 0}, {0, 0, 64, 16}}, 0xff40'5060}, 0x3456);
+    list.end();
+  };
+  for(bool moves : depthWays(gpu)) {
+    DepthMovesKept kept{gpu};
+    gpu->backend->depthMoves = moves;
+    System plain, threaded;
+    plain.threadGE(false), threaded.threadGE(true);
+    plain.ge.setRenderer(gpu);
+    build(plain.memory);
+    u64 put = stats(gpu).depthsPut;
+    runList(plain, 0x0894'0000);
+    CHECK(stats(gpu).depthsPut, put + 1);  //(through memory)
+    plain.memory.write(2, Stored, 0x7777);
+    u32 expected = plain.memory.read(2, Loaded);
+    plain.ge.settleAll();
+    plain.ge.setRenderer(nullptr);
+    threaded.ge.setRenderer(gpu);
+    build(threaded.memory);
+    u32 read = 0;
+    {
+      HeldBack back{*threaded.geThreading};
+      runList(threaded, 0x0894'0000);
+      u64 waits = threaded.geThreading->waits;
+      threaded.memory.write(2, Stored, 0x7777);
+      CHECK(threaded.geThreading->waits, waits);
+      CHECK(back.waited([&] { read = threaded.memory.read(2, Loaded); }), true);
+    }
+    threaded.ge.settleAll();
+    threaded.ge.setRenderer(nullptr);
+    CHECK(read, expected);
+    CHECK(expected, 0x2345u);  //(the drawer's depth, put)
+    u32 apart = vramApart(plain, threaded);
+    if(apart) std::printf("  %s: %u bytes apart\n", way(moves), apart);
+    CHECK(apart, 0u);
+    CHECK(threaded.memory.read(2, Stored), 0x7777u);
+  }
+}
+
+//R24 (DESIGN.md 3.7, the review's round four): a frame buffer taking the depth of a newer drawer with more rows over
+//the same depth buffer (takeDepth()) first fills the drawer's rows memory changed since it drew, which can lie past
+//the taker's: here in the depth buffer's second 16 KiB, which the taker's 32 rows don't reach. With the GE on its
+//thread held back, the CPU changes those rows between the two lists and again after the second: the render GE fills
+//them as they were before the second change (its version), inside what the model declares the PRIM may read (the
+//depth buffer's 16 KiBs to the most rows any frame buffer drew with it). Memory as the same lists' and stores'
+//without the thread, the depth moves on and off.
+static auto gpuThreadR24() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 Second = 0x0894'1000;
+  auto build = [&](Memory& memory) {
+    ThreadedList tall{memory};
+    tall.prepare(0x3'0000, 3, 192);  //(its depth's rows 128 on in the depth buffer's second 16 KiB)
+    tall.put(GE::DepthTestEnable, 1), tall.put(GE::DepthTest, 1);  //(always, written)
+    tall.sprite({{{0, 0, 0, 0}, {0, 0, 64, 192}}, 0xff10'2030}, 0x2000);
+    tall.end();
+    ThreadedList taker{memory, Second, GPUVertices + 0x100};
+    taker.prepare(0x9'0000, 3, 32);
+    taker.put(GE::DepthTestEnable, 1), taker.put(GE::DepthTest, 7);  //(greater or equal, written)
+    taker.sprite({{{0, 0, 0, 0}, {0, 0, 64, 32}}, 0xff40'5060}, 0x3000);
+    taker.end();
+  };
+  auto change = [&](System& s, u32 z) {  //(rows 140-179 of the depth, through the fourth copy, in order)
+    for(u32 y = 140; y < 180; y++) {
+      for(u32 x = 0; x < 64; x += 2) s.memory.write(4, 0x0460'0000 + 0x1f'0000 + (y * 64 + x) * 2, z | z << 16);
+    }
+  };
+  for(bool moves : depthWays(gpu)) {
+    DepthMovesKept kept{gpu};
+    gpu->backend->depthMoves = moves;
+    System plain, threaded;
+    plain.threadGE(false), threaded.threadGE(true);
+    plain.ge.setRenderer(gpu);
+    build(plain.memory);
+    runList(plain, 0x0894'0000), change(plain, 0x5000), runList(plain, Second), change(plain, 0x6000);
+    plain.ge.settleAll();
+    plain.ge.setRenderer(nullptr);
+    u64 taken = stats(gpu).depthsTaken;
+    threaded.ge.setRenderer(gpu);
+    build(threaded.memory);
+    {
+      HeldBack back{*threaded.geThreading};
+      u64 waits = threaded.geThreading->waits;
+      runList(threaded, 0x0894'0000), change(threaded, 0x5000), runList(threaded, Second), change(threaded, 0x6000);
+      CHECK(threaded.geThreading->waits, waits);
+      CHECK(back.held.load(), true);
+    }
+    threaded.ge.settleAll();
+    threaded.ge.setRenderer(nullptr);
+    CHECK(stats(gpu).depthsTaken > taken, true);  //(the taker took the tall one's depth)
+    u32 apart = vramApart(plain, threaded);
+    if(apart) std::printf("  %s: %u bytes apart\n", way(moves), apart);
+    CHECK(apart, 0u);
+  }
+}
+
+//R19 (DESIGN.md 3.7, the review's round two): a frame buffer drawing over a page of another's (a move source:
+//begin()) first fills the source's bytes beside its pixels from memory where it keeps more than 16 ranges of them
+//(besideFull: all of them, revive()), wherever they lie in the source's rows: here in its rows 14-31, before the
+//drawer's own rows start (it starts at the source's row 32). With the GE on its thread held back, the CPU writes those
+//bytes (columns 48-63, beside a picture 48 wide) after the first list and again after the second: the render GE fills
+//them as they were before the second writes (their versions), inside what the model declares the PRIM may read (the
+//rows of every frame buffer with pages in its own). Memory as the same lists' and stores' without the thread.
+static auto gpuThreadR19() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 Source = 0x3'0000, Second = 0x0894'1000;
+  auto build = [&](Memory& memory) {
+    for(u32 n = 0; n < 0x3000; n += 4) memory.write(4, Memory::VRAMBase + Source + n, 0x0102'0304 * (n / 4 + 1));
+    ThreadedList source{memory};
+    source.prepare(Source, 3), source.put(GE::Scissor2, 47 | 47 << 10);  //(a picture 48 wide in rows of 64)
+    source.sprite({{{0, 0, 0, 0}, {0, 0, 48, 48}}, 0xff10'2030});
+    source.end();
+    ThreadedList drawer{memory, Second, GPUVertices + 0x100};
+    drawer.prepare(Source + 0x2000, 0, 32);  //(5650 over the source's rows 32-47: its third page)
+    drawer.sprite({{{0, 0, 0, 0}, {0, 0, 64, 32}}, 0xff40'5060});
+    drawer.end();
+  };
+  auto beside = [&](System& s, u32 value) {  //(columns 48-63 of rows 14-31: 18 ranges)
+    for(u32 y = 14; y < 32; y++) {
+      for(u32 x = 48; x < 64; x++) s.memory.write(4, Memory::VRAMBase + Source + (y * 64 + x) * 4, value + y * 64 + x);
+    }
+  };
+  System plain, threaded;
+  plain.threadGE(false), threaded.threadGE(true);
+  plain.ge.setRenderer(gpu);
+  build(plain.memory);
+  runList(plain, 0x0894'0000), beside(plain, 0x5500'0000), runList(plain, Second), beside(plain, 0x6600'0000);
+  plain.ge.settleAll();
+  plain.ge.setRenderer(nullptr);
+  threaded.ge.setRenderer(gpu);
+  build(threaded.memory);
+  {
+    HeldBack back{*threaded.geThreading};
+    u64 waits = threaded.geThreading->waits;
+    runList(threaded, 0x0894'0000), beside(threaded, 0x5500'0000), runList(threaded, Second);
+    beside(threaded, 0x6600'0000);
+    CHECK(threaded.geThreading->waits, waits);
+    CHECK(back.held.load(), true);
+  }
+  threaded.ge.settleAll();
+  threaded.ge.setRenderer(nullptr);
+  u32 apart = vramApart(plain, threaded);
+  if(apart) std::printf("  %u bytes apart\n", apart);
+  CHECK(apart, 0u);
+}
+
+//Above 1x (DESIGN.md 3.5, the hull rule): at 2x a sprite with edges half a pixel in (its edge pixels' samples
+//differ), finished by the CPU's load of one of them (which waits for the GE on its thread); then two small sprites at
+//its corners, the target's box grown over the first's pixels but nothing drawn there again. A load of the same pixel
+//finishes again, the box read back at 2x, which may take another of its samples: with the thread held back it waits
+//(the target's hull since its last finish reaches the pixel, drawn since memory's write of it), and reads what the
+//machine without the thread reads.
+static auto gpuThreadAbove1x() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 Second = 0x0894'1000, Pixel = Memory::VRAMBase + 0x3'0000 + (4 * 64 + 8) * 4;  //(row 4, column 8)
+  gpu->resolution(2);
+  auto build = [&](Memory& memory) {
+    for(u32 n = 0; n < 0x3000; n += 4) memory.write(4, Memory::VRAMBase + 0x3'0000 + n, 0x0102'0304 * (n / 4 + 1));
+    ThreadedList first{memory};
+    first.prepare(0x3'0000, 3), first.sprite({{{0, 0, 8.5f, 4.5f}, {0, 0, 23.5f, 11.5f}}, 0xff10'2030}), first.end();
+    ThreadedList second{memory, Second, GPUVertices + 0x100};
+    second.prepare(0x3'0000, 3);
+    second.sprite({{{0, 0, 0, 0}, {0, 0, 4, 2}}, 0xff40'5060});
+    second.sprite({{{0, 0, 28, 14}, {0, 0, 32, 16}}, 0xff70'8090});
+    second.end();
+  };
+  System plain, threaded;
+  plain.threadGE(false), threaded.threadGE(true);
+  u32 expected[2] = {}, read[2] = {};
+  plain.ge.setRenderer(gpu);
+  build(plain.memory);
+  runList(plain, 0x0894'0000), expected[0] = plain.memory.read(4, Pixel);
+  runList(plain, Second), expected[1] = plain.memory.read(4, Pixel);
+  plain.ge.settleAll();
+  plain.ge.setRenderer(nullptr);
+  threaded.ge.setRenderer(gpu);
+  build(threaded.memory);
+  {
+    HeldBack back{*threaded.geThreading};
+    runList(threaded, 0x0894'0000);
+    CHECK(back.waited([&] { read[0] = threaded.memory.read(4, Pixel); }), true);
+    runList(threaded, Second);
+    CHECK(back.waited([&] { read[1] = threaded.memory.read(4, Pixel); }), true);
+  }
+  threaded.ge.settleAll();
+  threaded.ge.setRenderer(nullptr);
+  gpu->resolution(1);
+  CHECK(read[0], expected[0]), CHECK(read[1], expected[1]);
+  if(expected[0] != expected[1]) std::printf("  (the second finish took another sample: %08x, then %08x)\n",
+                                             expected[0], expected[1]);
+  u32 apart = vramApart(plain, threaded);
+  if(apart) std::printf("  %u bytes apart\n", apart);
+  CHECK(apart, 0u);
+}
+
+//R23 (DESIGN.md 3.5, the review's round four): a frame buffer's depth drawn over two 16 KiB and put into memory (a
+//texture through the depth views); a source drawn over the second 16 KiB's bytes, edges half a pixel in; the frame
+//buffer drawing again with its depth in the first 16 KiB, its rows in the second filled first (the source's pixels
+//moved into them, or with the moves off memory's as it is); the source finished by the CPU's load of one of its
+//pixels; and the depth put into memory again. The second put changes bytes the colour rule has clean again, in a
+//16 KiB whose newest GPU depth write was put back already: above 1x a moved pixel is the move's sample and the finish
+//may take another, and with the moves off the depth filled is the one before the source's, at 1x too (at 1x with the
+//moves the second put changes nothing: a moved pixel is the bytes the finish put there). With the GE on its thread
+//held back, a load of the pixel after the second put waits for the thread where it may change, and reads what the
+//machine without the thread reads. At 1x and 2x, the depth moves on and off.
+static auto gpuThreadR23() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 Depth = 0x1f'0000, Source = Depth + 0x4000, Second = 0x0894'1000;
+  constexpr u32 Pixel = Memory::VRAMBase + Source + (10 * 64 + 12) * 4;  //(the source's row 10, column 12)
+  auto build = [&](Memory& memory) {
+    for(u32 n = 0; n < 0x8000; n += 4) memory.write(4, Memory::VRAMBase + Depth + n, 0x0102'0304 * (n / 4 + 1));
+    ThreadedList first{memory};
+    first.prepare(0x3'0000, 3, 200);  //(its depth's rows 128-199 in the depth buffer's second 16 KiB)
+    first.put(GE::DepthTestEnable, 1), first.put(GE::DepthTest, 1);  //(always, written)
+    first.sprite({{{0, 0, 0, 0}, {0, 0, 64, 200}}, 0xff10'2030}, 0x1000);
+    first.put(GE::DepthTestEnable, 0), first.prepare(0x7'0000, 3);
+    first.texture(0x0460'0000 + Depth, 64, 256, 64, 0);  //(the depth through the fourth copy: put into memory first)
+    first.sprite({{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0xffff'ffff});
+    first.put(GE::TextureMappingEnable, 0), first.prepare(Source, 3);
+    first.sprite({{{0, 0, 4.5f, 2.5f}, {0, 0, 40.5f, 30.5f}}, 0xff40'5060});
+    first.prepare(0x3'0000, 3, 24);
+    first.put(GE::DepthTestEnable, 1), first.put(GE::DepthTest, 7);  //(greater or equal, written)
+    first.sprite({{{0, 0, 0, 0}, {0, 0, 64, 24}}, 0xff70'8090}, 0x2000);
+    first.end();
+    ThreadedList second{memory, Second, GPUVertices + 0x200};
+    second.prepare(0x8'0000, 3), second.texture(0x0460'0000 + Depth, 64, 256, 64, 0);
+    second.sprite({{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0xffff'ffff});
+    second.end();
+  };
+  for(u32 scale : {1u, 2u}) {
+    for(bool moves : depthWays(gpu)) {
+      DepthMovesKept kept{gpu};
+      gpu->backend->depthMoves = moves;
+      gpu->resolution(scale);
+      System plain, threaded;
+      plain.threadGE(false), threaded.threadGE(true);
+      u32 expected[2] = {}, read[2] = {};
+      plain.ge.setRenderer(gpu);
+      build(plain.memory);
+      u64 put = stats(gpu).depthsPut;
+      runList(plain, 0x0894'0000), expected[0] = plain.memory.read(4, Pixel);
+      runList(plain, Second), expected[1] = plain.memory.read(4, Pixel);
+      CHECK(stats(gpu).depthsPut - put, 2u);
+      plain.ge.settleAll();
+      plain.ge.setRenderer(nullptr);
+      threaded.ge.setRenderer(gpu);
+      build(threaded.memory);
+      {
+        HeldBack back{*threaded.geThreading};
+        runList(threaded, 0x0894'0000);
+        CHECK(back.waited([&] { read[0] = threaded.memory.read(4, Pixel); }), true);
+        runList(threaded, Second);
+        CHECK(back.waited([&] { read[1] = threaded.memory.read(4, Pixel); }), scale > 1 || !moves);
+      }
+      threaded.ge.settleAll();
+      threaded.ge.setRenderer(nullptr);
+      CHECK(read[0], expected[0]), CHECK(read[1], expected[1]);
+      if(expected[0] != expected[1]) {
+        std::printf("  %ux, %s: the second put changed the pixel (%08x, then %08x)\n", scale, way(moves), expected[0],
+                    expected[1]);
+      }
+      u32 apart = vramApart(plain, threaded);
+      if(apart) std::printf("  %ux, %s: %u bytes apart\n", scale, way(moves), apart);
+      CHECK(apart, 0u);
+    }
+  }
+  gpu->resolution(1);
+}
+
 //The depth a frame buffer of format has on the GPU (GPU::depthOf()), its depth buffer at depthBuffer, 512 wide, against
 //the software renderer's memory there (in the order the format keeps it in: memory.hpp): the depths apart, the first
 //few said.
@@ -4808,6 +5286,19 @@ auto gpuTests() -> Tests {
     {"gpu with the GE on its thread, caught up: a write whose own checks finish first, kept under them", gpuThreadOwnFinish},
     {"gpu with the GE on its thread: R22, a depth fill revives a source's dead bytes on a page no rectangle reaches",
      gpuThreadR22},
+    {"gpu with the GE on its thread: R14, a waited load through the depth views leaves the GPU's pixels dirty",
+     gpuThreadR14},
+    {"gpu with the GE on its thread: R15, halfword and byte stores into drawn pixels, each replayed alone",
+     gpuThreadR15},
+    {"gpu with the GE on its thread: R16, a depth of the other order taken through memory: a put point",
+     gpuThreadR16},
+    {"gpu with the GE on its thread: R24, a taller drawer's changed depth rows filled as they were",
+     gpuThreadR24},
+    {"gpu with the GE on its thread: R19, a move source's bytes beside its pixels, before the drawer's rows",
+     gpuThreadR19},
+    {"gpu with the GE on its thread: above 1x, a finish's box grown over pixels not drawn again: the hull rule",
+     gpuThreadAbove1x},
+    {"gpu with the GE on its thread: R23, a depth put back over pixels a finish put there since", gpuThreadR23},
     {"gpu a frame buffer near VRAM's end sampled as a texture declared past it, nothing finished",
      gpuTextureAtVRAMsEnd},
     {"gpu a frame buffer it drew sampled as palette indices: looked up on the GPU, nothing finished", gpuPalettes},

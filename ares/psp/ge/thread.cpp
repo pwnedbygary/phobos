@@ -1,5 +1,7 @@
 //The GE on a thread of its own: thread.hpp says how the kernel's GE and the render GE share the work.
 
+#include <chrono>
+
 thread_local bool GE::onGeThread = false;
 
 GeThread::GeThread(GE& control, GE& render) : control(control), render(render) {
@@ -8,6 +10,17 @@ GeThread::GeThread(GE& control, GE& render) : control(control), render(render) {
   render.versions = versions.get();
   render.reporting = this;
   if(const char* check = std::getenv("PHOBOS_GE_CHECK")) checking = check[0] && check[0] != '0';
+  if(const char* fuzzing = std::getenv("PHOBOS_GE_FUZZ"); fuzzing && fuzzing[0]) {
+    unsigned long long seed = 0;
+    unsigned most = 0;
+    char mode[16] = {};
+    if(std::sscanf(fuzzing, "%llu,%15[a-z],%u", &seed, mode, &most) >= 2) {
+      std::string name = mode;
+      fuzz = name == "delay" ? Fuzz::Delay : name == "behind" ? Fuzz::Behind : name == "ahead" ? Fuzz::Ahead
+           : Fuzz::None;
+      fuzzState = seed, fuzzMost = most ? most : fuzz == Fuzz::Delay ? 50 : 256;
+    }
+  }
   //(the render GE's watches are pages the kernel's GE's memory watches already: textures' pages, which it watches as
   //it hands their PRIMs over, and VRAM's, all out of the CPU's page table while the thread is on, its code run by the
   //interpreter. So none needs telling it, nor do its changes to VRAM: watching only so that the render GE keeps
@@ -49,6 +62,14 @@ auto GeThread::word(u32 word, u32 address) -> void {
   words.push_back(word);
 }
 
+auto GeThread::publish() -> void {
+  ring.publish();
+  if(fuzz == Fuzz::None) return;
+  appended.store(serial, std::memory_order_release);
+  if(fuzz != Fuzz::Ahead || gate) return;
+  for(u64 now; (now = done.load(std::memory_order_acquire)) < serial;) done.wait(now, std::memory_order_acquire);
+}
+
 auto GeThread::flushWords() -> void {
   if(words.empty()) return;
   u32 count = words.size(), runCount = wordRuns.size();
@@ -59,7 +80,7 @@ auto GeThread::flushWords() -> void {
     std::memcpy(at + sizeof(u32) + n * sizeof(run), run, sizeof(run));
   }
   std::memcpy(at + sizeof(u32) + runCount * 2 * sizeof(u32), words.data(), count * sizeof(u32));
-  ring.publish();
+  publish();
   words.clear(), wordRuns.clear();
 }
 
@@ -89,7 +110,7 @@ auto GeThread::primitive(u32 word, u32 wordAddress, u32 vertexAddress, u32 index
   std::memcpy(at, head, sizeof(head));
   std::memcpy(at + sizeof(head), &copies, sizeof(Copies));
   std::memcpy(at + sizeof(head) + sizeof(Copies), bytes, copiedBytes(copies));
-  ring.publish();
+  publish();
   return serial;
 }
 
@@ -99,14 +120,14 @@ auto GeThread::clut(u32 word, u32 wordAddress, u32 address, const u8* bytes, u32
   u32 head[4] = {word, wordAddress, address, size};
   std::memcpy(at, head, sizeof(head));
   std::memcpy(at + sizeof(head), bytes, size);
-  ring.publish();
+  publish();
 }
 
 auto GeThread::drawnFirst(u32 address, u32 size) -> u64 {
   flushWords();
   u32 head[2] = {address, size};
   std::memcpy(append(Kind::DrawnFirst, sizeof(head)), head, sizeof(head));
-  ring.publish();
+  publish();
   return serial;
 }
 
@@ -114,7 +135,7 @@ auto GeThread::read(u32 address, u32 size, bool loading) -> u64 {
   flushWords();
   u32 head[3] = {address, size, loading};
   std::memcpy(append(Kind::Read, sizeof(head)), head, sizeof(head));
-  ring.publish();
+  publish();
   return serial;
 }
 
@@ -130,7 +151,7 @@ auto GeThread::write(u32 address, u32 size, Kind kind, u64 cx) -> u64 {
     u32 range[2] = {written[n].first, written[n].second};
     std::memcpy(at + sizeof(head) + sizeof(cx) + n * sizeof(range), range, sizeof(range));
   }
-  ring.publish();
+  publish();
   written.clear();
   return serial;
 }
@@ -179,7 +200,7 @@ auto GeThread::wrote(u64 at) -> void {
     u8* to = append(Kind::Wrote, sizeof(head) + sizeof(at));
     std::memcpy(to, head, sizeof(head));
     std::memcpy(to + sizeof(head), &at, sizeof(at));
-    ring.publish();
+    publish();
   }
   written.clear();
 }
@@ -280,7 +301,7 @@ auto GeThread::wroteVRAM(u32 first, u32 last) -> void {
   u8* to = append(Kind::Wrote, sizeof(head) + sizeof(at));
   std::memcpy(to, head, sizeof(head));
   std::memcpy(to + sizeof(head), &at, sizeof(at));
-  ring.publish();
+  publish();
 }
 
 auto GeThread::runStart() -> void {
@@ -288,30 +309,37 @@ auto GeThread::runStart() -> void {
   dirtyPage = ~0u;
   runs++;
   for(u64 ended; runs - (ended = runsEnded.load(std::memory_order_acquire)) > RunsKept;) {
+    Blocked holding{blocked};
     runsEnded.wait(ended, std::memory_order_acquire);
   }
   append(Kind::RunStart, 0);
-  ring.publish();
+  publish();
 }
 
 auto GeThread::runEnd() -> void {
   flushWords();
   append(Kind::RunEnd, 0);
-  ring.publish();
+  publish();
 }
 
 auto GeThread::state(const GE& from) -> void {
   flushWords();
   GE::State state = from.stateOf();
   std::memcpy(append(Kind::State, sizeof(state)), &state, sizeof(state));
-  ring.publish();
+  publish();
 }
 
 auto GeThread::owedOf(u64 run, bool wait, Owed& owed) -> bool {
   u64 ended = runsEnded.load(std::memory_order_acquire);
   if(ended < run && !wait) return false;
-  if(ended < run) flushWords();
-  while(ended < run) runsEnded.wait(ended, std::memory_order_acquire), ended = runsEnded.load(std::memory_order_acquire);
+  if(ended < run) {
+    flushWords();
+    Blocked holding{blocked};
+    while(ended < run) {
+      runsEnded.wait(ended, std::memory_order_acquire);
+      ended = runsEnded.load(std::memory_order_acquire);
+    }
+  }
   owed = owedRuns[run % RunsKept];
   return true;
 }
@@ -367,8 +395,11 @@ auto GeThread::dirty(u32 first, u32 last) -> bool {
 
 auto GeThread::waitFor(u64 at) -> void {
   flushWords();
-  if(done.load(std::memory_order_acquire) < at) waits++;
-  for(u64 now; (now = done.load(std::memory_order_acquire)) < at;) done.wait(now, std::memory_order_acquire);
+  if(done.load(std::memory_order_acquire) < at) {
+    waits++;
+    Blocked holding{blocked};
+    for(u64 now; (now = done.load(std::memory_order_acquire)) < at;) done.wait(now, std::memory_order_acquire);
+  }
   takeReports();
 }
 
@@ -469,11 +500,15 @@ auto GeThread::unhook(Memory& memory) -> void {
 auto GeThread::rendererChanged() -> void {
   hardware = render.renderer && render.renderer->ready();
   model.scaled = replica.scaled = render.renderer && render.renderer->scale() > 1;
+  model.staleDepth = replica.staleDepth = model.scaled || (render.renderer && !render.renderer->depthMoves());
 }
 
 auto GeThread::drain() -> void {
   flushWords();
-  for(u64 at; (at = done.load(std::memory_order_acquire)) != serial;) done.wait(at, std::memory_order_acquire);
+  {
+    Blocked holding{blocked};
+    for(u64 at; (at = done.load(std::memory_order_acquire)) != serial;) done.wait(at, std::memory_order_acquire);
+  }
   for(auto& text : notes) control.note(text);  //(each once, whichever GE noted it)
   notes.clear();
   rendererChanged();  //(its resolution, or the GPU lost, as the render GE has it now)
@@ -488,6 +523,7 @@ auto GeThread::take() -> void {
     render.place = header.serial;
     if(checking) replica.passed = header.serial - 1;
     if(gate) gate(header.serial);
+    if(fuzz != Fuzz::None) fuzzBefore(header.serial);
     replay(header, at + sizeof(header));
     ring.release();
     //(every software pixel of the records so far in memory: none waits to be drawn)
@@ -498,6 +534,30 @@ auto GeThread::take() -> void {
     done.store(header.serial, std::memory_order_release);
     done.notify_all();
   }
+}
+
+//(the GE thread's, fuzzing, before it does the record at place: thread.hpp)
+auto GeThread::fuzzBefore(u64 place) -> void {
+  u64 drawn = fuzzNext();
+  if(fuzz == Fuzz::Delay) {
+    if(drawn % 4 == 0) std::this_thread::sleep_for(std::chrono::microseconds(drawn / 4 % (fuzzMost + 1)));
+    return;
+  }
+  if(fuzz != Fuzz::Behind) return;
+  u64 deep = place + 1 + drawn % fuzzMost;
+  auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
+  while(appended.load(std::memory_order_acquire) < deep && !blocked.load(std::memory_order_acquire) &&
+        ring.backlog() < ring.capacity() / 4 && std::chrono::steady_clock::now() < until) {
+    std::this_thread::sleep_for(std::chrono::microseconds(20));
+  }
+}
+
+//(splitmix64)
+auto GeThread::fuzzNext() -> u64 {
+  u64 z = fuzzState += 0x9e37'79b9'7f4a'7c15;
+  z = (z ^ z >> 30) * 0xbf58'476d'1ce4'e5b9;
+  z = (z ^ z >> 27) * 0x94d0'49bb'1331'11eb;
+  return z ^ z >> 31;
 }
 
 //(the render GE) run()'s drawnFirst() for a list word it read at address: where its page isn't the one last found
@@ -760,7 +820,7 @@ auto GE::runEnd() -> void {
   drawing.deferring = false;
   launch(true);
   if(!renderer) return;
-  if(memory.vramGuard) renderer->submit(*this);
+  if(memory.vramGuard && !stressed()) renderer->submit(*this);
   else renderer->finish(*this);
 }
 

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <bitset>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <functional>
@@ -676,6 +677,9 @@ struct GE {
     virtual ~Renderer() = default;
     virtual auto ready() const -> bool = 0;
     virtual auto scale() const -> u32 { return 1; }  //(its pixels per the PSP's each way: a GPU's resolution)
+    //(whether a depth filled from memory takes the pixels other targets drew over its bytes since the last finish, as
+    //a finish would put them, or memory's bytes as they are: a GPU's Backend::depthMoves)
+    virtual auto depthMoves() const -> bool { return true; }
     //(whether the PRIM begin() last refused had no room to go in: a GPU out of memory, which only the host decides;
     //asked after a refusal, and forgotten then)
     virtual auto refusedForRoom() -> bool { return false; }
@@ -734,6 +738,19 @@ struct GE {
   bool skipping = false;  //the primitive being drawn changes no pixel: set up, not drawn (drawVertices())
   bool boxes = true;      //a renderer's textures decoded only as far as its triangles take them (texelBox()); tests
                           //turn it off to compare
+  //(the stress mode, in a build with PHOBOS_GE_STRESS_HOOK, for the GE thread's tests: DESIGN.md section 9. With
+  //PHOBOS_GE_STRESS=n a hardware renderer is finished at every kick's end and before every n-th PRIM, as the model
+  //probe's was, in the same places with the GE on its thread or not)
+#if defined(PHOBOS_GE_STRESS_HOOK)
+  static inline const u32 stressEvery = [] {
+    const char* every = std::getenv("PHOBOS_GE_STRESS");
+    return every ? u32(std::strtoul(every, nullptr, 10)) : 0u;
+  }();
+  u64 stressPrims = 0;
+  static auto stressed() -> bool { return stressEvery; }
+#else
+  static constexpr auto stressed() -> bool { return false; }
+#endif
   std::vector<LinePixel> hardwareLine;
   //A PRIM's corners on the screen, meshTriangles()' or drawVertices()' (each with its own bits, draw.cpp's): each
   //one's place in sixteenths, as fixed() has it, and what its triangles ask of it; and the run of triangles

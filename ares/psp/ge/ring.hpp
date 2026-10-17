@@ -38,8 +38,12 @@ struct RecordRing {
     wakes.fetch_add(1, std::memory_order_release);
     wakes.notify_one();
   }
-  //Whether the reader has taken everything published.
+  //Whether the reader has taken everything published; the bytes published and not yet taken, of the ring's size.
   auto empty() const -> bool { return taken.load(std::memory_order_acquire) == published.load(std::memory_order_acquire); }
+  auto backlog() const -> u64 {
+    return published.load(std::memory_order_acquire) - taken.load(std::memory_order_acquire);
+  }
+  auto capacity() const -> u64 { return ring.size(); }
 
   //(the reader) The next record's bytes, waiting for one; then release() frees its room. nullptr once stop() is called
   //with nothing left.

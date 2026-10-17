@@ -42,7 +42,7 @@ template<bool Threaded> auto GE::runList(u64 budget, u64& ran) -> Stop {
       } else {
         ge.launch(true);
         if(!ge.renderer) return;
-        if(ge.memory.vramGuard) ge.renderer->submit(ge);
+        if(ge.memory.vramGuard && !GE::stressed()) ge.renderer->submit(ge);
         else ge.renderer->finish(ge);
       }
     }

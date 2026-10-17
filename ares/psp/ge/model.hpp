@@ -193,6 +193,10 @@ struct GeModel {
   struct Target { u32 address = 0, stride = 0, format = 0; Rect hull; u64 hullAt = 0; };
   std::vector<Target> targets;
   bool scaled = false;
+  //A depth put back may not be memory's newest there, even after a finish put the pixels drawn over its bytes: above
+  //1x a pixel moved into a depth is the move's sample, the finish's another; with the depth moves off a depth filled
+  //from memory took the bytes as they were before those pixels were finished (Backend::depthMoves).
+  bool staleDepth = false;
   bool unsure = false;  //(the renderer refused a PRIM taken as surely its own: from then on none is taken so)
 
   //Declaring (the GE thread's copy of the model, checking: GeThread::checking): the pages the render GE may read memory
@@ -248,7 +252,7 @@ struct GeModel {
       if(scaled) {
         for(auto& t : targets) hullMay = hullMay || (t.hullAt > finishKnown && !t.hull.empty());
       }
-      if(!gpuMay && !softwareMay && !depthMay && !(scaled && (putMay || hullMay))) continue;
+      if(!gpuMay && !softwareMay && !depthMay && !(staleDepth && putMay) && !(scaled && hullMay)) continue;
       u32 from = std::max(first, page << 12), to = std::min(last, (page << 12) + 4095);
       for(u32 piece = from >> 5; piece <= to >> 5; piece++) {
         u32 low = std::max(from, piece << 5), high = std::min(to, (piece << 5) + 31);
@@ -275,10 +279,11 @@ struct GeModel {
         if(point.at > passed && point.covers[block] && point.before[block] > std::max(cx, putKnown[block])) return true;
       }
     }
-    if(!scaled || !(putMay || hullMay)) return false;
+    bool puts = staleDepth && putMay, hulls = scaled && hullMay;
+    if(!puts && !hulls) return false;
     for(u32 byte = first; byte <= last; byte++) {
       if(gpu.newest(byte) <= cx) continue;  //(not rasterized since it was written)
-      if(putMay) return true;
+      if(puts) return true;
       for(auto& t : targets) {
         if(t.hullAt > std::max(cx, finishKnown) && t.hull.reaches(byte)) return true;
       }

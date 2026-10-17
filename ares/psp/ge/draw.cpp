@@ -469,6 +469,9 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   //first, and the texture decoded for the region it draws in; and at once, not left waiting in the batch, as what
   //the renderer draws next takes its pixels from memory, and a batch's settle gives every busy page back to the CPU,
   //the renderer's too (freeVRAM()).
+#if defined(PHOBOS_GE_STRESS_HOOK)
+  if(stressEvery && renderer && ++stressPrims % stressEvery == 0) renderer->finish(*this);
+#endif
   hardware = renderer && renderer->ready();
   bool refused = false;
   //A primitive drawn with settings that leave every pixel as it was (keepsPixels()) is set up as ever, and what it
