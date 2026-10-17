@@ -35,6 +35,31 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP display: the frame buffer set for the next vertical sync shown from the sync, sceDisplayGetFrameBuf answering for the one asked (Army of Two's 30/20 frames a second) — 2026-10-16
+
+Branch `cursor/psp-display-latch-2b67` (from master `5442acb8b`, master `03eca2a69` merged in: #274); docs/psp-core.md,
+part 108.
+- **Why**: Army of Two flips from its list's SIGNAL callback for the next sync, then asks which frame buffer is shown
+  and waits for the blank while its flip isn't yet: two flips and a wait a frame, 30/20 fps on the owner's PSP.
+  Phobos took every frame buffer at once, so the game never waited: master draws 251 frames a second for 60 shown.
+- **Change** (display.cpp): sceDisplaySetFrameBuf's sync 1 sets the address shown from the next blank's start, or,
+  set in a blank before its vertical sync (631.5 us in), from that sync; the width and format at once (pspautotests'
+  setframebuf, isstate); sceDisplayGetFrameBuf's which 1 reads the one coming, 0 the one shown; the screen shows the
+  last one set in the frame after the blank, as before. Layout 33 keeps one waiting (13 bytes); #269 takes 33 too:
+  second to land renumbers to 34.
+- **Effect** (34 scenes x Software, Vulkan, Vulkan-fast against master; their display calls traced): 31 the same in
+  every frame. Army of Two: 120 frames a second drawn instead of 251 (gameplay; menu 194), two a blank, a blank
+  waited for every second one, a new picture each (with #269's PSP timing, both merged: 30/20 fps, two flips and a
+  wait a frame, as on the PSP); Death Jr. II's character screen: pictures the same, the VRAM in alternate frames and
+  the RAM not (its handler's and main thread's reads before the sync find the old buffer). The first try (the next
+  blank's start for every next-sync flip) also showed Death Jr. II's gameplay, Sonic Rivals, Disaster Report 3's
+  intro and Twisted Metal's logos a blank late: now master's. No picture repeats where master's doesn't; no wait
+  past the next blank. Games that read sceDisplayGetFrameBuf(0) after a next-sync flip are the ones that can change:
+  Army of Two, Death Jr. II, Sonic Rivals here.
+- **Checks**: tests/psp/run-tests.sh (sanitized): 577 groups, 0 failures; the new test fails on master.
+- **Left out**: setframebuf's refusals (round 8's display-start first); a frame buffer set in the blank's handler,
+  before the sync, taken at that sync (unrecorded).
+
 ## README: a development progress section, generated from docs/progress/data.json — 2026-10-17
 
 Branch `cursor/readme-progress-2b67`, on master `5442acb8b` (part 102, #265); PR #274. Documentation and the script

@@ -904,11 +904,17 @@ struct Kernel {
   //display.cpp: where the program's frame is, and the vertical blank
   struct Display {
     u32 mode = 0, width = 480, height = 272;
-    u32 frameBuffer = 0, bufferWidth = 0, pixelFormat = 0;
+    u32 frameBuffer = 0, bufferWidth = 0, pixelFormat = 0;  //the frame buffer shown; the width and format last set
     u32 hcountBase = 0;  //what the accumulated count of lines adds (sceDisplayAdjustAccumulatedHcount)
+    u32 nextFrameBuffer = 0;  //set for the next vertical blank (sceDisplaySetFrameBuf's sync 1), shown from nextAt
+    bool nextSet = false;
+    u64 nextAt = 0;
   } display;
   static constexpr u64 LineCycles = CPUFrequency * 525 / 9'000'000;  //a line: 525 dots at 9 MHz (286 to a frame)
   static constexpr u64 VblankLength = CPUFrequency * 77 / 100'000;    //the vertical blank lasts 0.77 ms
+  static constexpr u64 VsyncCycles = CPUFrequency * 6315 / 10'000'000;  //its vertical sync, 631.5 us into it
+  auto latchFrameBuffer() -> void;
+  auto presentedFrameBuffer() const -> u32;
   auto inVblank() const -> bool;
   auto waitVblank(bool callbacks, u32 count = 1) -> void;
   auto sceDisplaySetMode() -> void;
@@ -2036,7 +2042,7 @@ struct Kernel {
     u32 error = 0;         //what an aborted message finishes with: 0, or the error of one a PSP doesn't show
     bool deleted = false;  //a save was deleted from its list, which asks the front end again (dialogs.cpp)
   } dialog;
-  u32 stateLayout = 32;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 33;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;

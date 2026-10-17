@@ -220,6 +220,7 @@ auto Kernel::events() -> void {
   while(cycles >= nextVblank) {
     nextVblank += VblankCycles;
     vblanks++;
+    latchFrameBuffer();  //(one set for the last blank's sync: sceDisplaySetFrameBuf)
     geLeft = GeBudget;  //the GE's commands for the next frame
     for(auto& [uid, thread] : threads) {
       if(thread->status != Status::Waiting || thread->wait != Wait::Vblank) continue;
