@@ -35,6 +35,31 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## Screenshots: the pause menu's Shot and the hotkey say where the picture went or why it didn't, and name it for the game and the time — 2026-10-17
+
+Branch `cursor/screenshot-feedback-2b67`, on master `5442acb8b` (part 102, #265); draft PR #<PR>.
+- **The report** (owner, 17 Oct): Shot in the pause menu gave no sign it worked, so he pressed it three times and fell
+  back to Android's screenshot. It had worked: three files, each named for the ROM's file name and milliseconds
+  (`God of War - Ghost of Sparta.chd_1792260870863.png`, 480x272).
+- **The change**: `MainViewModel.takeScreenshot`, which the pause menu's Shot and the screenshot hotkey both call, in
+  every core, saves through `Screenshots.save` (util/Screenshots.kt) and shows a toast: "Screenshot saved:" with the
+  file and its folder (shown from the shared storage's root; in the app's own storage, which no file manager shows,
+  where to choose a folder), or "Screenshot not saved:" and why (a folder that can't be written, or no picture yet).
+  The name is the ROM's file name without its extension (`romTitle`, as the pause menu's title drops it) and the local
+  date and time: `God of War - Ghost of Sparta 2026-10-17 14-15-45.png`. What FAT, exFAT and SAF's providers refuse
+  (`\ / : * ? " < > |`) becomes `_`, control characters go, so do spaces around the title and dots before it, the
+  title is cut at 150 UTF-8 bytes on a whole character, and it's "Screenshot" when nothing's left. Each file is made
+  (`createNewFile`) before the core writes the picture into it, so a shot never replaces a file, and shots taken in the
+  same second, even at once, get `-2`, `-3`. The folder (`<Screenshots Path, or the app's own>/<system>`) and the
+  picture's size and content are as before.
+- **Why the core's failure means no picture**: its `takeScreenshot` returns false before writing (no frame yet; the
+  PSP's or the N64's picture unreadable) or when the PNG can't be opened for writing, and the file made first shows the
+  folder takes one.
+- **Tests**: `ScreenshotsTest` (the name, the characters, long titles, never overwriting, the folder made, no
+  picture, a folder that can't be written, the messages).
+- **Checks**: the JVM unit tests on the Mac, modern flavor: `ScreenshotsTest` 8/0, the suite 358/0 (49 classes); CI
+  runs both flavors. Not run on the RP6.
+
 ## PSP Vulkan at 5x: the depth-writing shader's depth declared never above the depth rasterized; another frame buffer's depth taken image to image where the device's copy leaves the stencil (Activision Hits' copyright screen at 5x on the RP6 2.7 → 19.4 fps) — 2026-10-16
 
 Branch `cursor/psp-hires-2b67`, on master `a8d5640f5` (part 101, #263), master `7023fb080` (#264 and the PGD layer's
