@@ -16096,6 +16096,15 @@ not across frames; showing the frame from G (every GPU call there, at most two f
 and unloading with G stuck (R10, R18), and Auto with its handover both ways (R17) are the second part's (design steps
 3 and 4), which the app's option waits for.
 
+**Speed, in this first part**: On is exact, but on the M1 it's seldom faster than Off and in some games much slower
+(the library's slowest with the software renderer, all 3,600 frames from their start, Off then On: BlazBlue 4 s and
+20 s, SSX on Tour 8 s and 43 s, Aces of War 10 s and 41 s). Every CPU load and store reaching VRAM takes the slow path
+(VRAM is out of E's page table all the while) and each store is a record of its own, G woken for it, about a
+microsecond each: the design's access records only on pages where checks could act, with runs encoded as one record
+(costed there at 5 ns a record), aren't done yet. And a game that touches what G is still drawing, or reads
+the frame back, has the two threads take turns, the frame's end draining G. Auto keeps such a game synchronous;
+until then On is for the tests and the runner.
+
 **Off costs nothing.** Every Off path is master's (or the stage's own arithmetic, measured): the emulation thread's
 retired instructions a frame against master on the M1, Vulkan fast, late frames as the app shows them, 300 frames,
 5 rounds alternating: Super Monkey Ball's story -0.29% (ms -2.4%), Ghost of Sparta's menu -0.02% (ms +0.7%), Chains of
@@ -16110,14 +16119,18 @@ it was (the deferred decode's place kept by its batch), `transfer()`'s overwrite
   Olympus) in Vulkan fast, Software and Vulkan accurate, 100 frames, each frame's picture and VRAM with the drawing
   settled, then RAM and the machine's state: 78 of 78 the same;
 - the 26 scenes 600 frames with only the end hashed and a state saved every 150 frames, each compared: all the same;
+- Ghost of Sparta from its start with the library check's presses, 2,400 frames, each frame's picture and VRAM, then
+  RAM and the state, in Software and Vulkan fast: the same (the clock started at a fixed time: a game booted takes
+  the host's, which runs on between two runs);
 - schedule fuzzing (`PHOBOS_GE_FUZZ=seed,mode,n`: G pausing before records; G held back till E has appended n more,
   waits for it, fills a quarter of the ring or 2 ms pass; E waiting for every record): 10 scenes three ways, 300
   frames, states every 100: all the same, none hung (every run under a hang timeout);
 - the stress mode (a build with `PHOBOS_GE_STRESS_HOOK`; `PHOBOS_GE_STRESS=97`: the GPU finished at every kick's end
   and before every 97th PRIM, the same places with the thread or not; a scene's 101 finishes become 6,224): the 26
   scenes at 1x and 2x and eight at 4x: all the same;
-- the suite: with the thread Off and On, and On fuzzed each of the three ways, 590 groups, 0 failures; On under
-  ThreadSanitizer with the GPU groups skipped, no report, nothing suppressed (the GPU groups under it: below).
+- the suite: with the thread Off and On, and On fuzzed each of the three ways, 0 failures (595 groups now, with
+  #265's merged in and this round's two tests; the delay fuzzing on the 590 before them); On under ThreadSanitizer
+  with the GPU groups skipped, no report, nothing suppressed (the GPU groups under it: below).
 
 **The targeted tests** (tests/psp/gpu.cpp and ge.cpp; each on an explicitly threaded machine, G held back by a test gate
 where it would lag, against the same lists and accesses without the thread, both checks on; each fails with its rule
@@ -16149,6 +16162,19 @@ the hull rule.
   which waits for them, it reads past, memory having the bytes the copy will take (one of the two threads always sees
   the other's step: both store, then load, in one order). The R13 test's interleavings now include E stopped while
   copying (G waits) and E stopped after publishing till G is done (G goes on; the old protocol deadlocks there).
+- Found by the coordinator's library check with the thread On (every game from its start, 3,600 frames; the pictures
+  were Off's): two costs of the control pass that grew without bound. The textures the software renderer reads from
+  memory as it draws were kept one entry per PRIM until drawn, and E went through them all at every report it took,
+  which is at each load of VRAM, each list word read from VRAM and each vertex read, and at every write's look for a
+  conflict: quadratic in the PRIMs G had yet to draw. Ghost of Sparta, its lists in VRAM, crawled past the check's 15
+  minutes from its start (Off: 7), and Gran Turismo took 226 s (Off: 14). They're kept by page now, the newest PRIM
+  over each, with nothing to go through (and the put points are dropped as a prefix: they come in their places'
+  order): Gran Turismo 15 s. And an indexed PRIM's vertices were copied from the vertex address up to its most index,
+  a byte at a time, so a big buffer's few vertices were copied whole for every PRIM (85% of E in Jeanne d'Arc); now
+  from the least index to the most, in one copy from RAM: Jeanne d'Arc 123 s → 36 s (Off: 30). The tests: loads of
+  VRAM with 8,000 software PRIMs behind take as long as with 500 (15 times as long before; a ratio of the best of
+  three rounds, so that the machine's speed and a sanitizer's cancel out), and a sprite by indices 4000 and 4001
+  hands G a record no bigger than one by 0 and 1, which G reads as a run from the copy.
 
 **ThreadSanitizer and the GPU.** MoltenVK runs under ThreadSanitizer, nothing suppressed: every GPU group (77) with the
 thread On, pspsdk's samples included, the five GE-thread groups and the versions' group: 0 failures, no report. Its first run, with the
