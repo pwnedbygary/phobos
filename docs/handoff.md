@@ -49,7 +49,8 @@ merged in); docs/psp-core.md, part 106.
   in, where Phobos took it 31 ms early). Round 8's time-signals2 measures the queue. Army of Two's pacing needs the
   display's next-vblank switching too (part 108, its own pull request).
 - **First comparison**: within 15% Chains of Olympus (+11%), Ghost of Sparta (+3%), Activision Hits' copyright screen
-  (−9%); Super Monkey Ball −59%; Killzone +106 to +180%; Activision Hits' menu +138% (part 107: VRAM textures).
+  (−9%); Super Monkey Ball −59%; Killzone +77 to +98% (its PSP lists as #266's reviewed decoder ends them);
+  Activision Hits' menu +138% (part 107: VRAM textures).
 - **Checks**: suite 577 groups, 0 failures; "Fast" against master the same on 27 scenes, Software and Vulkan-fast,
   every frame; older layouts load, master refuses layout 33.
 - **Not yet**: fixed-point charges before any default change; round 8's fit; the 15% gate.

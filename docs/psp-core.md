@@ -16311,15 +16311,16 @@ a list's GE time from when the GE could start it to its FINISH.
 | Chains of Olympus, a list | 27.60 ms | 30.67 ms | +11% | 6.24 ms |
 | Ghost of Sparta, a list | 29.62 ms | 30.45 ms | +3% | 4.05 ms |
 | Super Monkey Ball, a list | 23.64 ms | 9.62 ms | −59% | 1.98 ms |
-| Killzone, its scene list | 17.2 to 23.4 ms | 48.2 ms | +106 to +180% | 3.57 ms |
+| Killzone, its scene list | 24.3 to 27.3 ms | 48.2 ms | +77 to +98% | 3.57 ms |
 | Killzone, its full-screen pass | 1.72 ms | 9.5 ms | +450% | 0.29 ms |
 | Activision Hits, menu, a list | 5.41 ms | 12.87 ms | +138% | — |
 | Activision Hits, copyright screen | 4.46 ms | 4.07 ms | −9% | 0.59 ms |
 
 - Within 15%: Chains of Olympus, Ghost of Sparta and Activision Hits' copyright screen (222/111 on both: the boot
-  capture's 333/166 was read before the game's program had started, part 104). Too fast: Super Monkey Ball. Too slow:
-  Killzone and Activision Hits' menu. Part 107 has each scene's terms: VRAM textures read in strips carry the misses,
-  and round 8 measures them.
+  capture's 333/166 was read before the game's program had started and set its own). Too fast: Super Monkey Ball.
+  Too slow: Killzone and Activision Hits' menu. Part 107 has each scene's terms: VRAM textures read in strips carry the
+  misses, and round 8 measures them. (Killzone's PSP times are the decoder's since #266's review, which ends each
+  FINISH's list at the queue's head: its scene lists' 17.2 to 23.4 ms before that were lists misattributed.)
 - Army of Two has no capture of the same moment: 33.25 ms a frame in PSP timing, where the captures show 23 to 35.
 
 ### Tests
