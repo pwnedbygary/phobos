@@ -27,6 +27,9 @@ struct Canvas {
   Memory& memory = s.memory;
   u32 format;
   Canvas(u32 format = 3) : format(format) {
+    //(its state set and its PRIMs drawn by calling the GE directly, not by a list: the GE on the emulation thread,
+    //whatever PHOBOS_TESTS_GE_THREAD says, as the GE thread hands over only what lists run)
+    s.threadGE(false);
     ge.commands[GE::FrameBufferPointer] = 0;
     ge.commands[GE::FrameBufferWidth] = 16;
     ge.commands[GE::FrameBufferPixelFormat] = format;

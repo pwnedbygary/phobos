@@ -38,6 +38,7 @@ auto option(string name, string value) -> bool {
   if(name == "Fonts") system.fonts = value;
   if(name == "Recompiler") system.recompile = value.boolean();
   if(name == "GE Threads") system.geThreads = std::min<u64>(value.natural(), System::MostGeThreads);
+  if(name == "GE Thread") system.geThread = value == "On" ? "On" : "Off";
   if(name == "Renderer") {
     system.renderer = value == "Vulkan" || value == "Vulkan (accurate)" ? "Vulkan"
                     : value == "Vulkan (fast)" ? "Vulkan (fast)" : "Software";
@@ -144,7 +145,9 @@ auto System::run() -> void {
   if(!kernel.exited) kernel.run(Kernel::VblankCycles);
 
   //Where the GPU presents on the host's window itself, the frame is shown there (present()), and the screen only
-  //hands the host its turn (passthrough: nothing converted, nothing drawn).
+  //hands the host its turn (passthrough: nothing converted, nothing drawn). (With the GE on its thread, its renderer
+  //is the render GE's, once the thread has drawn everything handed to it: ge/thread.hpp.)
+  GE& drawing = ge.drawer();
   if(++framesSinceKept >= 600) framesSinceKept = 0, keepPipelines();
   bool presented = present();
   presents = presented;
@@ -157,7 +160,7 @@ auto System::run() -> void {
   //has it, which finishes what the GPU drew there.
   bool drawn = false;
   u32 at = 1;  //(the picture's size, times the PSP's)
-  if(ge.renderer && gpu && kernel.display.frameBuffer) {
+  if(drawing.renderer && gpu && kernel.display.frameBuffer) {
     auto& display = kernel.display;
     u32 physical = display.frameBuffer & 0x1fff'ffff;  //(VRAM's first copy alone: the others aren't the same bytes)
     u32 width = display.width ? display.width : 480, height = display.height ? display.height : 272;
@@ -218,7 +221,7 @@ auto System::present() -> bool {
   u32 width = display.width ? display.width : 480, height = display.height ? display.height : 272;
   u32 physical = display.frameBuffer & 0x1fff'ffff;  //(VRAM's first copy alone: the others aren't the same bytes)
   bool fromTarget = false;
-  if(ge.renderer && display.frameBuffer && physical >= Memory::VRAMBase &&
+  if(ge.drawer().renderer && display.frameBuffer && physical >= Memory::VRAMBase &&
      physical - Memory::VRAMBase < Memory::VRAMSize) {
     fromTarget = gpu->show(physical - Memory::VRAMBase, display.bufferWidth, display.pixelFormat & 3, width, height);
   }
@@ -294,6 +297,7 @@ auto System::load(Node::System& root, string name) -> bool {
 
 auto System::unload() -> void {
   if(!node) return;
+  threadGE(false);
   save();
   disconnect();
   //The machine goes too, until the next game: the files the program left open (on the memory stick, still open on
@@ -348,6 +352,67 @@ auto System::unload() -> void {
   node.reset();
 }
 
+//The GE on a thread of its own from now on, or not (option "GE Thread": ge/thread.hpp). On: the render GE takes the
+//kernel's GE's renderer, drawing threads and state, its memory sees memory's bytes, and VRAM's pages leave the CPU's
+//page table, so that every access to them goes through memory, whose drawer has the thread done first. Off: all of
+//that back, once the thread has drawn and put back everything handed to it.
+auto System::threadGE(bool on) -> void {
+  if(on == (bool)geThreading) return;
+  auto vramPages = [&](bool out) {
+    if(pageTable.empty()) return;
+    for(u32 offset = 0; offset < Memory::VRAMSize; offset += Memory::PageSize) {
+      u32 page = (Memory::VRAMBase + offset) / Memory::PageSize;
+      pageTable[page] = out ? nullptr : &memory.vram[offset];
+      cpu.recompiler.writable(page);
+    }
+  };
+  if(on) {
+    ge.settleAll();
+    auto* renderer = ge.renderer;
+    u32 threads = ge.drawing.threads;
+    ge.setRenderer(nullptr), ge.setThreads(1);
+    renderMemory.view(memory);
+    renderMemory.vramGuard = [](bool) {};  //(VRAM is out of the CPU's page table all the while)
+    renderGE.power();
+    renderGE.takeState(ge.stateOf());
+    std::memcpy(renderGE.clut, ge.clut, sizeof(ge.clut)), renderGE.paletteChanged();
+    renderGE.vertexAddress = ge.vertexAddress, renderGE.indexAddress = ge.indexAddress;
+    renderGE.setThreads(threads), renderGE.setRenderer(renderer);
+    geThreading = std::make_unique<GeThread>(ge, renderGE);
+    renderGE.log = [this](const std::string& text) { geThreading->note(text); };
+    ge.render = &renderGE, ge.thread = geThreading.get();
+    geThreading->hook(memory, renderMemory);  //(as the tests' machines have it: ge/thread.cpp)
+    vramPages(true);
+  } else {
+    kernel.geFold(true);  //(the runs handed over counted: the kernel's clock needs the thread for them)
+    geThreading->drain();
+    renderGE.settleAll();
+    auto* renderer = renderGE.renderer;
+    u32 threads = renderGE.drawing.threads;
+    GeThread::unhook(memory);
+    ge.render = nullptr, ge.thread = nullptr;
+    geThreading.reset();
+    renderGE.log = nullptr;
+    renderGE.setRenderer(nullptr), renderGE.setThreads(1);
+    renderMemory.unwatchAll();
+    vramPages(false);
+    ge.setThreads(threads), ge.setRenderer(renderer);
+  }
+}
+
+//A state loaded with the GE on its thread: the render GE takes the kernel's GE's state as the state left it, and
+//forgets what it had decoded and drawn of the memory before (as GE::serialize() has the kernel's GE forget it).
+auto System::renderFromState() -> void {
+  geThreading->drain();
+  geThreading->model.clear(), geThreading->replica.clear();  //(memory's all new: nothing drawn over it yet)
+  renderMemory.unwatchAll();
+  renderGE.takeState(ge.stateOf());
+  std::memcpy(renderGE.clut, ge.clut, sizeof(ge.clut));
+  renderGE.vertexAddress = ge.vertexAddress, renderGE.indexAddress = ge.indexAddress;
+  renderGE.dropTextures(), renderGE.paletteChanged();
+  if(renderGE.renderer) renderGE.renderer->forget(renderGE);
+}
+
 //Nothing to write back: the memory stick is a host folder, written as the game writes it.
 auto System::save() -> void {
 }
@@ -356,6 +421,7 @@ auto System::power(bool reset) -> void {
   for(auto& setting : node->find<Node::Setting::Setting>()) setting->setLatch();
 
   //(what the hardware renderer drew is the old memory's: let go)
+  threadGE(false);
   ge.setRenderer(nullptr);
   if(gpu) gpu->drop();
   latePixels = {}, lateWidth = lateHeight = 0;
@@ -417,6 +483,7 @@ auto System::power(bool reset) -> void {
   //the system's fonts, read from the owner's folder at each power on, as a PSP has them in its flash
   kernel.fontsFrom((const char*)fonts);
   startProgram();
+  threadGE(geThread == "On");
 }
 
 //The game: a program from the game's pak, started with the path a PSP would give it (the program's folder on the
@@ -649,6 +716,7 @@ auto System::restore(serializer& s, u32 length) -> bool {
   memory.serialize(s);
   cpu.serialize(s);
   bool valid = ge.serialize(s);
+  if(geThreading) renderFromState();
   valid = kernel.serialize(s) && valid;
   s(soundOwed);
   s(unmappedReports);
@@ -810,6 +878,7 @@ auto System::startRenderer() -> void {
 //frames (System::run()), and as the renderer is let go of. Past MostPipelineBytes (every game's pipelines in one
 //file), the file is let go of, for the next session to start afresh; one that can't be written is said once.
 auto System::keepPipelines() -> void {
+  ge.drawer();  //(the GE thread done with the GPU first: ge/thread.hpp)
   if(!pipelineCache || !gpu || !gpu->ready() || gpu->backend->pipelines == pipelinesKept) return;
   pipelinesKept = gpu->backend->pipelines;
   auto data = gpu->backend->pipelineData();

@@ -7,12 +7,33 @@
 #include "../../ares/psp/memory/memory.hpp"
 #include "../../ares/psp/ge/ge.hpp"
 
+#include <cstdlib>
+#include <memory>
+
 //Inside the Allegrex tests' namespace, so its register names (s0, s1...) hide ares's integer types of the same
 //names.
 namespace allegrex_test::psp {
 
 using ares::PlayStationPortable::Memory;
 using ares::PlayStationPortable::GE;
+using ares::PlayStationPortable::GeThread;
+
+//Whether the tests' machines run the GE on a thread of its own (PHOBOS_TESTS_GE_THREAD=On, run-tests.sh), as the
+//system's option "GE Thread" has it (ge/thread.hpp): every result must be the same either way. Tests that look at the
+//GE's own drawing machinery (its batches, the CPU's page table) keep their machines' GE on the emulation thread while
+//an Unthreaded lives: the render GE has that machinery, run the same.
+inline int unthreadedTests = 0;
+struct Unthreaded {
+  Unthreaded() { unthreadedTests++; }
+  ~Unthreaded() { unthreadedTests--; }
+};
+//(every test machine with the GE on its thread, for drainThreads())
+struct System;
+inline std::vector<System*> threadedSystems;
+inline auto testsGeThread() -> bool {
+  const char* value = std::getenv("PHOBOS_TESTS_GE_THREAD");
+  return !unthreadedTests && value && (std::string{value} == "On" || std::string{value} == "1");
+}
 
 struct System : Allegrex {
   Memory memory;
@@ -45,6 +66,57 @@ struct System : Allegrex {
       exceptions.push_back({exception, address});
       scc.halted = 1;
     };
+    if(testsGeThread()) threadGE(true);
+  }
+  ~System() { threadGE(false); }
+
+  //(as the system's System::threadGE(): the render GE takes the GE's renderer, drawing threads and state, its
+  //memory sees memory's bytes, VRAM leaves the page table, and memory's drawer has the thread done first)
+  Memory renderMemory;
+  GE renderGE{renderMemory};
+  std::unique_ptr<GeThread> geThreading;
+  auto threadGE(bool on) -> void {
+    if(on == (bool)geThreading) return;
+    auto vramPages = [&](bool out) {
+      for(u32 offset = 0; offset < Memory::VRAMSize; offset += Memory::PageSize) {
+        u32 page = (Memory::VRAMBase + offset) / Memory::PageSize;
+        table[page] = out ? nullptr : &memory.vram[offset];
+        recompiler.writable(page);
+      }
+    };
+    if(on) {
+      ge.settleAll();
+      auto* renderer = ge.renderer;
+      u32 threads = ge.drawing.threads;
+      ge.setRenderer(nullptr), ge.setThreads(1);
+      renderMemory.view(memory);
+      renderMemory.vramGuard = [](bool) {};
+      renderGE.power();
+      renderGE.takeState(ge.stateOf());
+      std::memcpy(renderGE.clut, ge.clut, sizeof(ge.clut)), renderGE.paletteChanged();
+      renderGE.setThreads(threads), renderGE.setRenderer(renderer);
+      geThreading = std::make_unique<GeThread>(ge, renderGE);
+      geThreading->checking = true;  //(the value rule's check of every byte a finish or put-back changes: ge/thread.hpp)
+      renderGE.log = [this](const std::string& text) { geThreading->note(text); };
+      ge.render = &renderGE, ge.thread = geThreading.get();
+      geThreading->hook(memory, renderMemory);
+      vramPages(true);
+      threadedSystems.push_back(this);
+    } else {
+      std::erase(threadedSystems, this);
+      geThreading->drain();
+      renderGE.settleAll();
+      auto* renderer = renderGE.renderer;
+      u32 threads = renderGE.drawing.threads;
+      GeThread::unhook(memory);
+      ge.render = nullptr, ge.thread = nullptr;
+      geThreading.reset();
+      renderGE.log = nullptr;
+      renderGE.setRenderer(nullptr), renderGE.setThreads(1);
+      renderMemory.unwatchAll();
+      vramPages(false);
+      ge.setThreads(threads), ge.setRenderer(renderer);
+    }
   }
 
   auto read(u32 size, u32 address) -> u32 override { return memory.read(size, address); }
@@ -60,6 +132,12 @@ struct System : Allegrex {
     if(!scc.halted) std::fprintf(stderr, "program didn't halt\n");
   }
 };
+
+//Every threaded test machine's GE thread done with what it was handed (drain()): before a test looks at the render
+//GE's own state (a hardware renderer's statistics), which is that thread's while it runs.
+inline auto drainThreads() -> void {
+  for(auto* s : threadedSystems) s->geThreading->drain();
+}
 
 auto memoryTests() -> Tests;
 auto loaderTests() -> Tests;

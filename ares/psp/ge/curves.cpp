@@ -159,6 +159,10 @@ static auto patchSteps(bool spline, u32 count, u32 ends, u32 divisions, std::vec
 }
 
 auto GE::patch(bool spline, u32 argument) -> void {
+  if(render) {  //(threaded: thread.cpp)
+    return handPrimitive((spline ? Spline : Bezier) << 24 | (argument & 0xff'ffff),
+                         (argument & 0xff) * (argument >> 8 & 0xff), true);
+  }
   if(!drawing.deferring) settle();  //(as primitive())
   auto format = vertexFormat();
   u32 ucount = argument & 0xff, vcount = argument >> 8 & 0xff;
