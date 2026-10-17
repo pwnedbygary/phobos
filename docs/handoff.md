@@ -39,7 +39,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 Branch `cursor/psp-measure-round8-2b67` (from master `a8d5640f5`); docs/psp-core.md, part 107.
 - **Why**: part 76's model of the GE's time (behind the option "GE Timing" on #269) misses the owner's captures by
-  −59% to +180%. Counting its terms over each scene puts the misses on what round 6 never measured: textures read
+  −59% to +138%. Counting its terms over each scene puts the misses on what round 6 never measured: textures read
   from VRAM in strips (Killzone's 512x512 CLUT32 buffer, 79% of its GE time; Activision Hits' menus), a big CLUT8
   texture drawn whole, and Super Monkey Ball's many small primitives, state changes and CALLs.
 - **What**: a new first menu line, round 8: 13 timing tests of the GE (big textures in strips, other textures,

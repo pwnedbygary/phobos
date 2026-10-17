@@ -305,10 +305,10 @@ from the bus's, if the PSP grants it) and 266/133 too:
 - **The CPU beside the GE** (`cpu-contention`): the CPU's reads of RAM while the GE draws from RAM and from VRAM,
   and the GE's drawing while a thread reads RAM.
 - **The CPU alone** (`cpu.c`: `cpu-alu`, `cpu-latency`, `cpu-memory`, `cpu-syscalls`, `cpu-clocks`): in every
-  captured scene a PSP's CPU took 7 to 9 times Phobos's time between a loop's waits; these time ALU work, branches,
-  loads and stores, multiplies, divides, the FPU's and the VFPU's latencies, memory at working sets from 1 KiB to
-  8 MiB (cached, uncached, the scratchpad, VRAM), system calls, a thread switch and the GE's and the display's calls,
-  at all four clock settings, and record what the power service grants for each clock call.
+  captured scene that syncs, a PSP's CPU took 7 to 9 times Phobos's time between a loop's waits; these time ALU work,
+  branches, loads and stores, multiplies, divides, the FPU's and the VFPU's latencies, memory at working sets from
+  1 KiB to 8 MiB (cached, uncached, the scratchpad, VRAM), system calls, a thread switch and the GE's and the
+  display's calls, at all four clock settings, and record what the power service grants for each clock call.
 
 Round 8 takes a few minutes. It changes the PSP's clocks part of the time and puts them back after each test.
 

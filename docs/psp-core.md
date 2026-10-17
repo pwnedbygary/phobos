@@ -16060,9 +16060,9 @@ timed around sceGeDrawSync) and geTime() from them: GE timing, not the renderer'
 On branch `cursor/psp-measure-round8-2b67`, from master `a8d5640f5`. Round 8 of `tools/psp-measure`, for the owner's
 PSP: what round 6 left of the GE's time, chosen by where part 76's model (fitted to round 6, ported behind the option
 "GE Timing" on #269) misses the owner's captures of games (part 103), and the CPU's own time, which in every captured
-scene is 7 to 9 times Phobos's. Nothing in the core changes: the program, its test, and the test programs' copy of
-it. The owner approved the plan (the design's section 4, the CPU block with it); the fit that follows the results
-(`ge-fit.py`, `GE::Cost`, a `measured8` test) and the runner's counts for it (`--ge-terms`) come after them.
+scene that syncs is 7 to 9 times Phobos's. Nothing in the core changes: the program, its test, and the test programs'
+copy of it. The owner approved the plan (the design's section 4, the CPU block with it); the fit that follows the
+results (`ge-fit.py`, `GE::Cost`, a `measured8` test) and the runner's counts for it (`--ge-terms`) come after them.
 
 ### Where the model misses, term by term
 
@@ -16076,18 +16076,19 @@ the GE's time:
 | Chains of Olympus, difficulty menu | +11% | 32-bit pixels 35%, VRAM texels 31% (its 512x512 frame buffers read back at 2 texels a pixel), the depth test 18%, block transfers 7% |
 | Ghost of Sparta, main menu | +3% | VRAM texels 46%, 32-bit pixels 18%, the depth test 11%, transfers 8% |
 | Super Monkey Ball Adventure, Story Mode | −59% | 32-bit pixels 27%, the depth test 22%, small textures loaded whole 12%, primitives 10%, texels 10%; its front end 78% of its back end (15,000 primitives, 84,000 words and 3,500 CALLs a list) |
-| Killzone, gameplay | +106 to +180% | VRAM texels 79%: a 512x512 VRAM buffer read as a CLUT32 texture in strips 32 texels wide, 1:1 (37 of its 49 ms a scene list); its full-screen list, a 512x512 VRAM texture over the screen in strips 120 wide into 5650, 96% |
+| Killzone, gameplay | +77 to +98% | VRAM texels 79%: a 512x512 VRAM buffer read as a CLUT32 texture in strips 32 texels wide, 1:1 (37 of its 49 ms a scene list); its full-screen list, a 512x512 VRAM texture over the screen in strips 120 wide into 5650, 96% |
 | Activision Hits Remixed, menu | +138% | VRAM texels 67% (the same CLUT32 strips), point lights 20% |
 | Activision Hits Remixed, copyright screen | −9% (222/111 on both) | a 512x256 CLUT8 texture in RAM, swizzled, drawn 512 across: 65% |
 
 - **The VRAM texture rate** (round 6's: 1.93 clocks a byte, from a 256x256 texture drawn as one sprite) carries
   Killzone's and Activision Hits' menus. At the swizzled cache rate instead, Killzone's scene list would take about
-  19 ms, inside the PSP's 17-23. Round 6 never read a texture from VRAM in strips, as a CLUT32 texture, or shrunk.
+  19 ms, under the PSP's 24 to 27 (its captures as #266's reviewed decoder reads them): the strips' rate lies between
+  the two. Round 6 never read a texture from VRAM in strips, as a CLUT32 texture, or shrunk.
 - **Super Monkey Ball's lists aren't paced by its CPU**: on the PSP each list is built within 0.12 ms of being queued
   (one stall update, none finding the GE waiting), and the GE takes 23.5 ms more. What the model leaves out is in the
   GE: its many small textured primitives, the state set between them, and the CALLs.
 - **Activision Hits' copyright screen** is within the gate: the PSP ran it at 222/111, as Phobos does (its boot
-  capture's 333/166 was read before the game's program had started, part 104), where the first comparison had scaled
+  capture's 333/166 was read before the game's program had started and set its own), where the first comparison had scaled
   the PSP's time to 333/166 (−39%). Its big CLUT8 texture drawn 512 across is measured all the same.
 
 ### What round 8 measures
