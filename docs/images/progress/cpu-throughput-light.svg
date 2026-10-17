@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="360" viewBox="0 0 880 360" role="img" aria-labelledby="title desc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Noto Sans, Helvetica, Arial, sans-serif">
+<title id="title">The Allegrex CPU on the host: interpreter against recompiler</title>
+<desc id="desc">On a Mac the interpreter runs 150 million PSP instructions a second, the recompiler 505, and the recompiler with its page table 1,206; in a Linux container 135, 219 and 1,212.</desc>
+<rect x="0.5" y="0.5" width="879" height="359" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+<text x="20" y="30" font-size="15" fill="#1f2328" font-weight="600">The Allegrex CPU on the host: interpreter against recompiler</text>
+<rect x="20" y="45" width="10" height="10" rx="2" fill="#0969da"/>
+<text x="34" y="54" font-size="12" fill="#1f2328">Mac (ARM64)</text>
+<rect x="133.8" y="45" width="10" height="10" rx="2" fill="#8c959f"/>
+<text x="147.8" y="54" font-size="12" fill="#1f2328">Linux container (ARM64, 4 cores)</text>
+<text x="20" y="332" font-size="11" fill="#59636e">Source: docs/psp-core.md, “The recompiler”: a benchmark loop of loads, stores and arithmetic, the test build at -O1. The page table lets compiled</text>
+<text x="20" y="346" font-size="11" fill="#59636e">loads and stores reach RAM directly. Phobos counts one PSP cycle per instruction, at up to 333 MHz.</text>
+<line x1="72.8" y1="278" x2="856" y2="278" stroke="#8c959f" stroke-width="1"/>
+<text x="64.8" y="282" font-size="11" fill="#59636e" text-anchor="end">0</text>
+<line x1="72.8" y1="244.3" x2="856" y2="244.3" stroke="#e6e9ed" stroke-width="1"/>
+<text x="64.8" y="248.3" font-size="11" fill="#59636e" text-anchor="end">250</text>
+<line x1="72.8" y1="210.7" x2="856" y2="210.7" stroke="#e6e9ed" stroke-width="1"/>
+<text x="64.8" y="214.7" font-size="11" fill="#59636e" text-anchor="end">500</text>
+<line x1="72.8" y1="177" x2="856" y2="177" stroke="#e6e9ed" stroke-width="1"/>
+<text x="64.8" y="181" font-size="11" fill="#59636e" text-anchor="end">750</text>
+<line x1="72.8" y1="143.3" x2="856" y2="143.3" stroke="#e6e9ed" stroke-width="1"/>
+<text x="64.8" y="147.3" font-size="11" fill="#59636e" text-anchor="end">1,000</text>
+<line x1="72.8" y1="109.7" x2="856" y2="109.7" stroke="#e6e9ed" stroke-width="1"/>
+<text x="64.8" y="113.7" font-size="11" fill="#59636e" text-anchor="end">1,250</text>
+<line x1="72.8" y1="76" x2="856" y2="76" stroke="#e6e9ed" stroke-width="1"/>
+<text x="64.8" y="80" font-size="11" fill="#59636e" text-anchor="end">1,500</text>
+<text x="0" y="0" font-size="12" fill="#59636e" text-anchor="middle" transform="translate(20 177) rotate(-90)">Million PSP instructions a second</text>
+<line x1="72.8" y1="233.2" x2="856" y2="233.2" stroke="#59636e" stroke-width="1.2" stroke-dasharray="5 4"/>
+<rect x="138.8" y="257.8" width="63" height="20.2" fill="#0969da"/>
+<rect x="204.8" y="259.8" width="63" height="18.2" fill="#8c959f"/>
+<rect x="399.9" y="210" width="63" height="68" fill="#0969da"/>
+<rect x="465.9" y="248.5" width="63" height="29.5" fill="#8c959f"/>
+<rect x="661" y="115.6" width="63" height="162.4" fill="#0969da"/>
+<rect x="727" y="114.8" width="63" height="163.2" fill="#8c959f"/>
+<text x="170.3" y="251.8" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">150</text>
+<text x="236.3" y="253.8" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">135</text>
+<text x="431.4" y="204" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">505</text>
+<text x="497.4" y="242.5" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">219</text>
+<text x="692.5" y="109.6" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">1,206</text>
+<text x="758.5" y="108.8" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">1,212</text>
+<text x="78.8" y="228.2" font-size="10.5" fill="#59636e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">PSP clock: 333 MHz</text>
+<text x="203.3" y="292" font-size="11" fill="#1f2328" text-anchor="middle">Interpreter</text>
+<text x="464.4" y="292" font-size="11" fill="#1f2328" text-anchor="middle">Recompiler</text>
+<text x="725.5" y="292" font-size="11" fill="#1f2328" text-anchor="middle">Recompiler with page table</text>
+<text x="464.4" y="309" font-size="12" fill="#59636e" text-anchor="middle">Execution engine (parts 2 and 4, 3 Oct 2026)</text>
+</svg>

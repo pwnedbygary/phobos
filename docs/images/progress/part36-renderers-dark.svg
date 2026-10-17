@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="430" viewBox="0 0 880 430" role="img" aria-labelledby="title desc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Noto Sans, Helvetica, Arial, sans-serif">
+<title id="title">Software against the first Vulkan renderer on the RP6 (7 Oct 2026)</title>
+<desc id="desc">Six scenes on the RP6: the first Vulkan renderer on one thread is faster than the software renderer on seven threads in every scene, for example Lumines 295.2 against 127.8 fps.</desc>
+<rect x="0.5" y="0.5" width="879" height="429" rx="8" fill="#0d1117" stroke="#30363d"/>
+<text x="20" y="30" font-size="15" fill="#e6edf3" font-weight="600">Software against the first Vulkan renderer on the RP6 (7 Oct 2026)</text>
+<rect x="20" y="45" width="10" height="10" rx="2" fill="#6e7681"/>
+<text x="34" y="54" font-size="12" fill="#e6edf3">Software, 1 thread</text>
+<rect x="174.6" y="45" width="10" height="10" rx="2" fill="#4493f8"/>
+<text x="188.6" y="54" font-size="12" fill="#e6edf3">Software, 7 threads</text>
+<rect x="335.8" y="45" width="10" height="10" rx="2" fill="#3fb950"/>
+<text x="349.8" y="54" font-size="12" fill="#e6edf3">Vulkan, first version</text>
+<text x="20" y="402" font-size="11" fill="#9198a1">Source: docs/psp-core.md part 36: frames a second from the same six scenes on the RP6&#39;s Adreno 740. Vulkan on one thread beat the seven-thread</text>
+<text x="20" y="416" font-size="11" fill="#9198a1">software renderer in all six; 28-65% of its pixels matched the software renderer&#39;s exactly, nearly all the rest within one or two levels.</text>
+<line x1="238.6" y1="76" x2="238.6" y2="347" stroke="#656c76" stroke-width="1"/>
+<text x="238.6" y="361" font-size="11" fill="#9198a1" text-anchor="middle">0</text>
+<line x1="385" y1="76" x2="385" y2="347" stroke="#21262d" stroke-width="1"/>
+<text x="385" y="361" font-size="11" fill="#9198a1" text-anchor="middle">100</text>
+<line x1="531.5" y1="76" x2="531.5" y2="347" stroke="#21262d" stroke-width="1"/>
+<text x="531.5" y="361" font-size="11" fill="#9198a1" text-anchor="middle">200</text>
+<line x1="678" y1="76" x2="678" y2="347" stroke="#21262d" stroke-width="1"/>
+<text x="678" y="361" font-size="11" fill="#9198a1" text-anchor="middle">300</text>
+<line x1="824.5" y1="76" x2="824.5" y2="347" stroke="#21262d" stroke-width="1"/>
+<text x="824.5" y="361" font-size="11" fill="#9198a1" text-anchor="middle">400</text>
+<text x="230.6" y="102.6" font-size="12" fill="#e6edf3" text-anchor="end">Lumines</text>
+<rect x="238.6" y="82.4" width="128.5" height="9.4" rx="1.5" fill="#6e7681"/>
+<rect x="238.6" y="93.9" width="187.2" height="9.4" rx="1.5" fill="#4493f8"/>
+<rect x="238.6" y="105.3" width="432.4" height="9.4" rx="1.5" fill="#3fb950"/>
+<text x="230.6" y="147.8" font-size="12" fill="#e6edf3" text-anchor="end">Peace Walker, title</text>
+<rect x="238.6" y="127.6" width="96.2" height="9.4" rx="1.5" fill="#6e7681"/>
+<rect x="238.6" y="139" width="328.1" height="9.4" rx="1.5" fill="#4493f8"/>
+<rect x="238.6" y="150.5" width="576.3" height="9.4" rx="1.5" fill="#3fb950"/>
+<text x="230.6" y="192.9" font-size="12" fill="#e6edf3" text-anchor="end">Midnight Club 3, menu</text>
+<rect x="238.6" y="172.8" width="34.6" height="9.4" rx="1.5" fill="#6e7681"/>
+<rect x="238.6" y="184.2" width="38.8" height="9.4" rx="1.5" fill="#4493f8"/>
+<rect x="238.6" y="195.6" width="77.2" height="9.4" rx="1.5" fill="#3fb950"/>
+<text x="230.6" y="238.1" font-size="12" fill="#e6edf3" text-anchor="end">Midnight Club 3, race</text>
+<rect x="238.6" y="217.9" width="31.1" height="9.4" rx="1.5" fill="#6e7681"/>
+<rect x="238.6" y="229.4" width="35.4" height="9.4" rx="1.5" fill="#4493f8"/>
+<rect x="238.6" y="240.8" width="54.9" height="9.4" rx="1.5" fill="#3fb950"/>
+<text x="230.6" y="283.2" font-size="12" fill="#e6edf3" text-anchor="end">Liberty City Stories, park edge</text>
+<rect x="238.6" y="263.1" width="54.2" height="9.4" rx="1.5" fill="#6e7681"/>
+<rect x="238.6" y="274.5" width="72.2" height="9.4" rx="1.5" fill="#4493f8"/>
+<rect x="238.6" y="286" width="101.7" height="9.4" rx="1.5" fill="#3fb950"/>
+<text x="230.6" y="328.4" font-size="12" fill="#e6edf3" text-anchor="end">Liberty City Stories, woods</text>
+<rect x="238.6" y="308.3" width="56.4" height="9.4" rx="1.5" fill="#6e7681"/>
+<rect x="238.6" y="319.7" width="79.8" height="9.4" rx="1.5" fill="#4493f8"/>
+<rect x="238.6" y="331.1" width="138.3" height="9.4" rx="1.5" fill="#3fb950"/>
+<text x="372" y="90.7" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">87.7</text>
+<text x="430.8" y="102.2" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">127.8</text>
+<text x="676" y="113.6" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">295.2</text>
+<text x="339.8" y="135.9" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">65.7</text>
+<text x="571.7" y="147.3" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">224.0</text>
+<text x="819.8" y="158.8" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">393.4</text>
+<text x="278.1" y="181.1" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">23.6</text>
+<text x="282.4" y="192.5" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">26.5</text>
+<text x="320.8" y="204" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">52.7</text>
+<text x="274.6" y="226.2" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">21.2</text>
+<text x="279" y="237.7" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">24.2</text>
+<text x="298.5" y="249.1" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">37.5</text>
+<text x="297.8" y="271.4" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">37.0</text>
+<text x="315.8" y="282.8" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">49.3</text>
+<text x="345.2" y="294.3" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">69.4</text>
+<text x="300" y="316.6" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">38.5</text>
+<text x="323.4" y="328" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">54.5</text>
+<text x="381.8" y="339.5" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">94.4</text>
+<text x="0" y="0" font-size="12" fill="#9198a1" text-anchor="middle" transform="translate(20 211.5) rotate(-90)">Benchmark scene</text>
+<text x="531.5" y="379" font-size="12" fill="#9198a1" text-anchor="middle">Frames a second, uncapped</text>
+</svg>
