@@ -69,10 +69,12 @@ import androidx.compose.ui.unit.sp
 import com.phobos.emulator.util.PxInsets
 import com.phobos.emulator.util.PxRect
 import com.phobos.emulator.util.ScreenshotNote
+import com.phobos.emulator.util.ShotClockRun
 import com.phobos.emulator.util.ShotErrorTimeline
 import com.phobos.emulator.util.ShotGeometry
 import com.phobos.emulator.util.ShotTimeline
 import com.phobos.emulator.util.flapCorners
+import com.phobos.emulator.util.runSavedShot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -190,9 +192,11 @@ private fun ShotLayer(shot: Shot, onDone: () -> Unit) {
     val noted = remember { mutableFloatStateOf(Float.POSITIVE_INFINITY) }
     val done by rememberUpdatedState(onDone)
     LaunchedEffect(Unit) {
+        if (shot.event.note.value != null) noted.floatValue = 0f
         val note = launch {
             shot.event.note.first { it != null }
-            noted.floatValue = clock.value
+            // One that comes after the wait gave up changes nothing: the held time stands for it.
+            if (noted.floatValue == Float.POSITIVE_INFINITY) noted.floatValue = clock.value
         }
         // Compose runs an animation at the animator duration scale, so under Remove animations the clock would end at
         // once; a delay isn't scaled, so the still effect stays its time.
@@ -206,17 +210,17 @@ private fun ShotLayer(shot: Shot, onDone: () -> Unit) {
                 withTimeoutOrNull(ShotTimeline.NOTE_WAIT_MS.toLong()) { note.join() }
                 delay(ShotTimeline.REDUCED_MS.toLong())
             }
-            else -> {
-                clock.animateTo(ShotTimeline.PILL_AT, linear(ShotTimeline.PILL_AT))
-                if (!note.isCompleted) {
-                    // The card, the folder and the sparkles run on while the pill and the slide-off wait for the note.
-                    launch { clock.animateTo(ShotTimeline.PILL_AT + ShotTimeline.NOTE_WAIT_MS, linear(ShotTimeline.NOTE_WAIT_MS)) }
-                    withTimeoutOrNull(ShotTimeline.NOTE_WAIT_MS.toLong()) { note.join() }
+            else -> object : ShotClockRun {
+                override val time: Float get() = clock.value
+                override val noteAt: Float get() = noted.floatValue
+                override suspend fun runTo(target: Float) {
+                    clock.animateTo(target, linear((target - clock.value).coerceAtLeast(0f)))
                 }
-                // On from wherever the wait left the clock: this animation cancels the wait's.
-                val end = ShotTimeline.end(noted.floatValue)
-                clock.animateTo(end, linear((end - clock.value).coerceAtLeast(0f)))
-            }
+                override suspend fun awaitNote(ms: Long) = withTimeoutOrNull(ms) { note.join() } != null
+                override fun settleNoteAt(time: Float) {
+                    noted.floatValue = time
+                }
+            }.runSavedShot()
         }
         note.cancel()
         done()

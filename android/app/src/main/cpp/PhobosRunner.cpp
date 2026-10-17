@@ -5124,6 +5124,8 @@ else if (port->type() == "Keyboard") {
     // nall's encoder carries on past failed writes (a full disk), so the file is checked: it must be the size the
     // encoder writes (signature 8, IHDR 25, IDAT 12 + 6 + 6 + 4 x width a row, IEND 12), or, where the encoder then had
     // optipng or pngcrush recompress it (a desktop: nall runs nothing on Android), smaller and still ending in IEND.
+    // This size must change with nall/encode/png.hpp: a larger file is refused outright, so a chunk added to the
+    // encoder would make every shot "not saved" and delete it.
     u64 whole = 63 + (u64)picture.height * (6 + 4 * (u64)picture.width);
     u64 size = file::size(path);
     if (size == whole) return true;

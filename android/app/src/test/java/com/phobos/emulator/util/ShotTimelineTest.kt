@@ -1,5 +1,6 @@
 package com.phobos.emulator.util
 
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -439,6 +440,88 @@ class ShotTimelineTest {
         assertEquals(1f, timeline.trayAlpha(ShotTimeline.PILL_AT + ShotTimeline.NOTE_WAIT_MS, never), 0f)
         assertEquals(0f, timeline.trayAlpha(end, never), 0f)
         assertTrue(timeline.trayX(end, never) + psp.back.right < 0f)
+    }
+
+    @Test
+    fun onceSettledNothingButThePillAndTheSlideOffMoves() {
+        // What lets the clock hold still at SETTLED_MS while a late note is awaited.
+        assertEquals(2196f, ShotTimeline.SETTLED_MS, 0f)
+        for (g in screens) {
+            val timeline = ShotTimeline(g, reduced = false)
+            val settled = ShotTimeline.SETTLED_MS
+            fun still(t: Float): List<Float> {
+                val values = mutableListOf(
+                    timeline.cardX(t), timeline.cardY(t), timeline.cardScale(t), timeline.cardTurn(t), timeline.develop(t),
+                    timeline.holes(t), timeline.folderScaleX(t), timeline.folderScaleY(t), timeline.folderAlpha(t), timeline.flap(t),
+                )
+                for (i in 0 until ShotTimeline.SPARKS) {
+                    values += listOf(timeline.sparkX(i, t), timeline.sparkY(i, t), timeline.sparkScale(i, t), timeline.sparkTurn(i, t), timeline.sparkAlpha(i, t))
+                }
+                return values
+            }
+            val atRest = still(settled)
+            var t = settled
+            while (t <= ShotTimeline.TOTAL_MS + ShotTimeline.NOTE_WAIT_MS) {
+                assertEquals("at $t", atRest, still(t))
+                t += 1f
+            }
+        }
+    }
+
+    /** A saved shot's clock for runSavedShot, logging what it's told: its note known [from] the start, or coming as the clock passes [comesAt], or while it's held ([whileHeld]), or never. */
+    private class FakeClock(from: Float = Float.POSITIVE_INFINITY, private val comesAt: Float? = null, private val whileHeld: Boolean = false) :
+        ShotClockRun {
+        override var time = 0f
+        override var noteAt = from
+        val log = mutableListOf<String>()
+
+        override suspend fun runTo(target: Float) {
+            log += "run to $target"
+            if (comesAt != null && comesAt <= target && noteAt > comesAt) noteAt = comesAt
+            time = target
+        }
+
+        override suspend fun awaitNote(ms: Long): Boolean {
+            log += "held at $time for at most $ms ms"
+            if (whileHeld) noteAt = time
+            return whileHeld
+        }
+
+        override fun settleNoteAt(time: Float) {
+            log += "note taken at $time"
+            noteAt = time
+        }
+    }
+
+    private fun runs(clock: FakeClock): List<String> {
+        runBlocking { clock.runSavedShot() }
+        return clock.log
+    }
+
+    @Test
+    fun theClockHoldsStillWhileALateNoteIsAwaited() {
+        val settled = ShotTimeline.SETTLED_MS
+        val after = ShotTimeline.end(settled)
+        // Late: on to where everything but the pill has stopped, held there (no run, so no frames) until the note
+        // comes, then on from there, the held time standing for the note's.
+        val late = FakeClock(whileHeld = true)
+        assertEquals(listOf("run to $settled", "held at $settled for at most 8000 ms", "run to $after"), runs(late))
+        assertEquals(settled, late.noteAt, 0f)
+        // Never: the same hold, given up after 8 s, the held time taken for the note's.
+        val never = FakeClock()
+        assertEquals(listOf("run to $settled", "held at $settled for at most 8000 ms", "note taken at $settled", "run to $after"), runs(never))
+        // Either way the pill's whole slide-in and stay, and the slide-off, play after the hold.
+        assertEquals(ShotTimeline.TOTAL_MS + settled - ShotTimeline.PILL_AT, after, 0f)
+    }
+
+    @Test
+    fun anOnTimeNoteNeverHoldsTheClock() {
+        val settled = ShotTimeline.SETTLED_MS
+        // Known from the start: one run, straight to the end.
+        assertEquals(listOf("run to ${ShotTimeline.TOTAL_MS}"), runs(FakeClock(from = 0f)))
+        // Coming while the clock runs, before the pill's time or after it: no hold, on to its end.
+        assertEquals(listOf("run to $settled", "run to ${ShotTimeline.TOTAL_MS}"), runs(FakeClock(comesAt = 900f)))
+        assertEquals(listOf("run to $settled", "run to ${ShotTimeline.end(1900f)}"), runs(FakeClock(comesAt = 1900f)))
     }
 
     @Test

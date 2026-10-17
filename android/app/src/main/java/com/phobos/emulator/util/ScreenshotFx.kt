@@ -336,6 +336,8 @@ internal class ShotTimeline(private val g: ShotGeometry, private val reduced: Bo
         const val SPARKS = 9
         /** When the pill begins to slide out. */
         const val PILL_AT = 1720f
+        /** By when everything but the pill and the slide-off has stopped: the last sparkle goes out. */
+        const val SETTLED_MS = 1640f + (SPARKS - 1) * 12f + 460f
         /** The longest the pill and the slide-off wait for a late note. */
         const val NOTE_WAIT_MS = 8000f
 
@@ -350,6 +352,34 @@ internal class ShotTimeline(private val g: ShotGeometry, private val reduced: Bo
         /** When the effect ends, its note known at [noteAt]. */
         fun end(noteAt: Float) = TOTAL_MS + lateness(Float.POSITIVE_INFINITY, noteAt)
     }
+}
+
+/** What a saved shot's clock can do, for [runSavedShot]: the effect's own, or a test's. */
+internal interface ShotClockRun {
+    /** The clock now (ms). */
+    val time: Float
+    /** When the pill's note came, on the clock: ahead of [time] until it does. */
+    val noteAt: Float
+    /** Runs the clock on to [target] at the effect's pace. */
+    suspend fun runTo(target: Float)
+    /** Waits for the note at most [ms], the clock still: whether it came. */
+    suspend fun awaitNote(ms: Long): Boolean
+    /** Takes [time] for when the note came. */
+    fun settleNoteAt(time: Float)
+}
+
+/**
+ * Runs a saved shot's clock: on to [ShotTimeline.SETTLED_MS], when everything but the pill and the slide-off has
+ * stopped; with the note not known by then, held there (nothing moves, so nothing's drawn) until it comes, at most
+ * [ShotTimeline.NOTE_WAIT_MS], the held time then standing for the note's; then on to the end the note fixes. With the
+ * note known from the start, straight to the end.
+ */
+internal suspend fun ShotClockRun.runSavedShot() {
+    if (noteAt > time) {
+        runTo(ShotTimeline.SETTLED_MS)
+        if (noteAt > time && !awaitNote(ShotTimeline.NOTE_WAIT_MS.toLong())) settleNoteAt(time)
+    }
+    runTo(ShotTimeline.end(noteAt))
 }
 
 /**
