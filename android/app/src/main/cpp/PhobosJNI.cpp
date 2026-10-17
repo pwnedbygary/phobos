@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <map>
+#include <mutex>
 #include <vector>
 #include <jni.h>
 #include <android/log.h>
@@ -240,6 +242,72 @@ Java_com_phobos_emulator_PhobosCore_takeScreenshot(JNIEnv* env, jobject, jstring
     bool success = ares::takeScreenshot(nativePath);
     env->ReleaseStringUTFChars(path, nativePath);
     return success ? JNI_TRUE : JNI_FALSE;
+}
+
+// The picture captureScreenshot took, kept for writeScreenshot: the app takes one screenshot at a time.
+static std::mutex keptShotMutex;
+static ares::ScreenshotPicture keptShot;
+
+extern "C" JNIEXPORT jintArray JNICALL
+Java_com_phobos_emulator_PhobosCore_captureScreenshot(JNIEnv* env, jobject, jint maxSize) {
+    ares::ScreenshotPicture picture;
+    if (!ares::captureScreenshot(picture)) return nullptr;
+    // A copy to show, at most maxSize either way: each of its pixels the average of a square of the picture's.
+    u32 longest = std::max(picture.width, picture.height);
+    u32 limit = (u32)std::max<jint>(1, maxSize);
+    u32 step = std::max<u32>(1, (longest + limit - 1) / limit);
+    u32 width = std::max<u32>(1, picture.width / step);
+    u32 height = std::max<u32>(1, picture.height / step);
+    std::vector<jint> copy(2 + (size_t)width * height);
+    copy[0] = (jint)width;
+    copy[1] = (jint)height;
+    u32 area = step * step;
+    for (u32 y = 0; y < height && (y + 1) * step <= picture.height; y++) {
+        for (u32 x = 0; x < width && (x + 1) * step <= picture.width; x++) {
+            u32 r = 0, g = 0, b = 0;
+            for (u32 dy = 0; dy < step; dy++) {
+                const u32* line = picture.pixels.data() + (size_t)(y * step + dy) * picture.width + x * step;
+                for (u32 dx = 0; dx < step; dx++) {
+                    r += (line[dx] >> 16) & 0xFF;
+                    g += (line[dx] >> 8) & 0xFF;
+                    b += line[dx] & 0xFF;
+                }
+            }
+            copy[2 + (size_t)y * width + x] = (jint)(0xFF000000u | ((r / area) << 16) | ((g / area) << 8) | (b / area));
+        }
+    }
+    jintArray array = env->NewIntArray((jsize)copy.size());
+    if (array) {
+        env->SetIntArrayRegion(array, 0, (jsize)copy.size(), copy.data());
+    } else {
+        // No room for the copy: the picture's still written, shown as none.
+        env->ExceptionClear();
+        array = env->NewIntArray(2);
+    }
+    std::lock_guard<std::mutex> lock(keptShotMutex);
+    keptShot = std::move(picture);
+    return array;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_phobos_emulator_PhobosCore_writeScreenshot(JNIEnv* env, jobject, jstring path) {
+    ares::ScreenshotPicture picture;
+    {
+        std::lock_guard<std::mutex> lock(keptShotMutex);
+        picture = std::move(keptShot);
+        keptShot = {};
+    }
+    if (picture.pixels.empty()) return JNI_FALSE;
+    const char* nativePath = env->GetStringUTFChars(path, 0);
+    bool written = ares::writeScreenshot(picture, nativePath);
+    env->ReleaseStringUTFChars(path, nativePath);
+    return written ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_releaseScreenshot(JNIEnv*, jobject) {
+    std::lock_guard<std::mutex> lock(keptShotMutex);
+    keptShot = {};
 }
 
 extern "C" JNIEXPORT void JNICALL
