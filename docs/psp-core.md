@@ -16054,3 +16054,58 @@ timed around sceGeDrawSync) and geTime() from them: GE timing, not the renderer'
   library scan `scan-takes.sh` and `gen-takes-list.py`; `rp6b/`, the fix round's build and its scripts; `logs/`, the
   tests, experiments, mutations and suites; `hash/`, the hash runs; `builds-time2.sh` and `time-table.py`, the Mac's
   timing, `logs/time-pr5-final.log` its runs).
+
+## Part 105: the GE's looks skipped through when a game polls them — sceGeDrawSync(1) and sceGeListSync(id, 1) as part 91's spins
+
+On branch `cursor/psp-ge-sync-spin-2b67`, from master `a8d5640f5`. The task (the GE timing design's first step, which
+the owner approved): part 76's GE timing, a PSP's time for each list, made the games that poll the GE slower on the
+host, as they asked for as long as a PSP's GE draws: on the RP6 at 5x Resistance went from 59.9 to 40.4 frames a
+second and Need for Speed: Shift from 45.3 to 32.9, Shift calling `sceGeDrawSync(1)` some 7000 times a frame with
+about 765 cycles of its own work between calls. Part 91 skips loops of calls that change nothing to just before the
+CPU's go ends, every register, byte and cycle as running them would give; the GE's looks weren't among the calls it
+could work out. Clean room: our code, uOFW for the driver's behaviour, nothing of PPSSPP or JPCSP. Save states are
+unchanged (layout 32): nothing new is kept.
+
+### What changed
+
+- **The looks are calm** (kernel/ge.cpp): `sceGeDrawSync` and `sceGeListSync` in mode 1, or with a mode or list
+  refused, change nothing (`Kernel::calm`), so the call leaves the CPU's go as it was and may be a spin's turn
+  (part 91's `spinTurn()`). Mode 0, which waits, isn't one.
+- **Their spin handlers** (spins.cpp: `spinGeDrawSync()`, `spinGeListSync()`) give the shadow the call's answer
+  without making it, through the same function the call answers with (`geDrawLook()`, `geListLook()`), so the two
+  can't differ; mode 0 isn't worked out, so a turn calling it isn't skipped.
+- **Why it's exact.** What the GE and its lists are doing changes only in a system call (an enqueue, a stall update,
+  a list's FINISH taken) or between the CPU's goes (the GE given more of a frame's commands, `geBusy`). A list's
+  FINISH falls due at `geDoneAt`, which `untilNextEvent()` makes the go's end, and `spinSkip()` already refuses a skip
+  past it; the FINISH is taken by the first call after, as before. So every turn a skip passes over would have had
+  the same answer, and the turns left run as they would.
+
+### Tests
+
+- **"the GE's looks polled, skipped as run"** (tests/psp/spins.cpp): a program queues a list of 16 sprites covering
+  the screen (each a fill the GE takes its time over) with a finish callback, then asks how the GE is doing till it
+  says done, the clock noted after each, three lists: through `sceGeDrawSync(1)`, through `sceGeListSync(id, 1)`,
+  and with the list held at its start (its stall address) till a mover thread moves that to its end, the looks
+  saying 3 and then 2. On both engines, with the skip on and off, the machine's whole state is the same after every
+  eighth of a frame, and thousands of turns are skipped; with a register counting the turns (a loop that isn't one
+  turn over and over) none are. The finish callbacks run once a list, the clock noted moving on.
+- **"ge FINISH after a quiet function"** (tests/psp/ge.cpp): the looks, and a mode or a list refused, are dispatched as
+  calm, the next thing's time where it was after each.
+
+### Checks
+
+`tests/psp/run-tests.sh` (sanitized; the address sanitizer's container-overflow check off, as part 101 ran it):
+574 groups, 0 failures (the new group's list first put where the test machine keeps its stubs, which drew
+nothing: moved to the GE tests' addresses, about 174,000 looks a list, 4.7 ms each). CI runs tests/allegrex,
+tests/psp/ares and the builds.
+
+### What it changes
+
+With today's GE (Sony's peaks), a list is done long before most polling loops come round many times, so little
+changes now; with the PSP's GE timing (the next step, a setting) Shift's and Resistance's polling is skipped through
+as part 91 skips the Need for Speeds' idle loop.
+
+### Scratch
+
+`~/phobos-work/scratch/psp-ge-profile/sync/` (this part's draft) and `tests.sh` (the suites as the load rules let
+them run). Nothing was run on the RP6.

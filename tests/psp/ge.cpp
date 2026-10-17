@@ -2384,7 +2384,8 @@ static auto geQuietFunctions() -> void {
     }
   }
   //Each quiet function is dispatched as one, and makes nothing due sooner: with a thread delayed, an alarm set, a
-  //list's FINISH to come and the controller sampled on a cycle, the next thing's time is where it was after each.
+  //list's FINISH to come and the controller sampled on a cycle, the next thing's time is where it was after each. So
+  //are the GE's looks, calm each time: sceGeDrawSync and sceGeListSync in mode 1, or a mode or list refused.
   KernelMachine m;
   auto& memory = m.system.memory;
   s32 uid = m.kernel.createThread("delayed", 0x0880'1000, 0x10, 0x1000, 0, 0);
@@ -2394,7 +2395,7 @@ static auto geQuietFunctions() -> void {
   DrawingList a{memory, ListA, Vertices};
   a.draw(GE::Sprites, {{0, 0}, {64, 32}});
   a.finish();
-  m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
+  u32 drawing = m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
   m.call("sceCtrlSetSamplingCycle", {5555});
   CHECK(m.kernel.geFinishDue && m.kernel.geDoneAt > m.kernel.cycles, true);
   CHECK(m.kernel.alarms.size(), 1u), CHECK(m.kernel.controller.cycle, 5555u);
@@ -2408,7 +2409,9 @@ static auto geQuietFunctions() -> void {
                     Call{"sceKernelGetSystemTimeWide", {}}, Call{"sceRtcGetCurrentTick", {Out + 0x110}},
                     Call{"sceKernelSysClock2USec", {Out + 0x100, Out + 0x120, Out + 0x124}},
                     Call{"sceKernelSysClock2USecWide", {123'456'789, 0, Out + 0x128, Out + 0x12c}},
-                    Call{"sceMpegRingbufferAvailableSize", {Out + 0x140}}}) {
+                    Call{"sceMpegRingbufferAvailableSize", {Out + 0x140}}, Call{"sceGeDrawSync", {1}},
+                    Call{"sceGeListSync", {drawing, 1}}, Call{"sceGeDrawSync", {2}},
+                    Call{"sceGeListSync", {drawing, 2}}, Call{"sceGeListSync", {0x7777, 1}}}) {
     u32 n = 0;
     for(u32 value : call.arguments) m.system.ipu.r[n < 4 ? 4 + n : 8 + n - 4] = value, n++;
     u64 next = m.kernel.cycles + m.kernel.untilNextEvent();
