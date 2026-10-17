@@ -1,68 +1,69 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="360" viewBox="0 0 880 360" role="img" aria-labelledby="title desc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Noto Sans, Helvetica, Arial, sans-serif">
 <title id="title">The written record: parts in docs/psp-core.md</title>
-<desc id="desc">Parts documented in docs/psp-core.md per day in October 2026, rising from 7 on 3 October to 94 on 16 October.</desc>
+<desc id="desc">“## Part” sections in docs/psp-core.md per day in October 2026, rising from 7 on 3 October to 94 on 16 October.</desc>
 <rect x="0.5" y="0.5" width="879" height="359" rx="8" fill="#ffffff" stroke="#d0d7de"/>
 <text x="20" y="30" font-size="15" fill="#1f2328" font-weight="600">The written record: parts in docs/psp-core.md</text>
-<text x="20" y="332" font-size="11" fill="#59636e">Source: the file&#39;s git history on master (373 commits). It grew from 486 lines on 3 Oct to 16,056 on 16 Oct. Part numbers reach 102 because some</text>
-<text x="20" y="346" font-size="11" fill="#59636e">belong to work kept on other branches, such as the compute renderer&#39;s parts 34 and 35.</text>
-<line x1="63.1" y1="278" x2="856" y2="278" stroke="#8c959f" stroke-width="1"/>
-<text x="55.1" y="282" font-size="11" fill="#59636e" text-anchor="end">0</text>
-<line x1="63.1" y1="241" x2="856" y2="241" stroke="#e6e9ed" stroke-width="1"/>
-<text x="55.1" y="245" font-size="11" fill="#59636e" text-anchor="end">20</text>
-<line x1="63.1" y1="204" x2="856" y2="204" stroke="#e6e9ed" stroke-width="1"/>
-<text x="55.1" y="208" font-size="11" fill="#59636e" text-anchor="end">40</text>
-<line x1="63.1" y1="167" x2="856" y2="167" stroke="#e6e9ed" stroke-width="1"/>
-<text x="55.1" y="171" font-size="11" fill="#59636e" text-anchor="end">60</text>
-<line x1="63.1" y1="130" x2="856" y2="130" stroke="#e6e9ed" stroke-width="1"/>
-<text x="55.1" y="134" font-size="11" fill="#59636e" text-anchor="end">80</text>
-<line x1="63.1" y1="93" x2="856" y2="93" stroke="#e6e9ed" stroke-width="1"/>
-<text x="55.1" y="97" font-size="11" fill="#59636e" text-anchor="end">100</text>
+<text x="20" y="318" font-size="11" fill="#59636e">Source: the file&#39;s git history on master (373 commits). It grew from 486 lines on 3 Oct to 16,056 on 16 Oct. The count is of “## Part” headings,</text>
+<text x="20" y="332" font-size="11" fill="#59636e">which is why it stops short of part 102: parts 2 and 4 are written up under “The recompiler”, and some numbers belong to work kept on other</text>
+<text x="20" y="346" font-size="11" fill="#59636e">branches, such as the compute renderer&#39;s parts 34 and 35.</text>
+<line x1="63.1" y1="264" x2="856" y2="264" stroke="#8c959f" stroke-width="1"/>
+<text x="55.1" y="268" font-size="11" fill="#59636e" text-anchor="end">0</text>
+<line x1="63.1" y1="229.3" x2="856" y2="229.3" stroke="#e6e9ed" stroke-width="1"/>
+<text x="55.1" y="233.3" font-size="11" fill="#59636e" text-anchor="end">20</text>
+<line x1="63.1" y1="194.7" x2="856" y2="194.7" stroke="#e6e9ed" stroke-width="1"/>
+<text x="55.1" y="198.7" font-size="11" fill="#59636e" text-anchor="end">40</text>
+<line x1="63.1" y1="160" x2="856" y2="160" stroke="#e6e9ed" stroke-width="1"/>
+<text x="55.1" y="164" font-size="11" fill="#59636e" text-anchor="end">60</text>
+<line x1="63.1" y1="125.3" x2="856" y2="125.3" stroke="#e6e9ed" stroke-width="1"/>
+<text x="55.1" y="129.3" font-size="11" fill="#59636e" text-anchor="end">80</text>
+<line x1="63.1" y1="90.7" x2="856" y2="90.7" stroke="#e6e9ed" stroke-width="1"/>
+<text x="55.1" y="94.7" font-size="11" fill="#59636e" text-anchor="end">100</text>
 <line x1="63.1" y1="56" x2="856" y2="56" stroke="#e6e9ed" stroke-width="1"/>
 <text x="55.1" y="60" font-size="11" fill="#59636e" text-anchor="end">120</text>
-<text x="0" y="0" font-size="12" fill="#59636e" text-anchor="middle" transform="translate(20 167) rotate(-90)">Parts documented</text>
-<polygon points="91.5,278 91.5,265.1 148.1,259.5 204.7,244.7 261.4,228.1 318,218.8 374.6,196.6 431.3,183.7 487.9,167 544.5,155.9 601.2,144.8 657.8,128.1 714.4,115.2 771.1,105.9 827.7,104.1 827.7,278" fill="#0969da" fill-opacity="0.12"/>
-<polyline points="91.5,265.1 148.1,259.5 204.7,244.7 261.4,228.1 318,218.8 374.6,196.6 431.3,183.7 487.9,167 544.5,155.9 601.2,144.8 657.8,128.1 714.4,115.2 771.1,105.9 827.7,104.1" fill="none" stroke="#0969da" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="91.5" cy="265.1" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
-<circle cx="148.1" cy="259.5" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
-<circle cx="204.7" cy="244.7" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
-<circle cx="261.4" cy="228.1" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
-<circle cx="318" cy="218.8" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
-<circle cx="374.6" cy="196.6" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
-<circle cx="431.3" cy="183.7" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
-<circle cx="487.9" cy="167" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
-<circle cx="544.5" cy="155.9" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
-<circle cx="601.2" cy="144.8" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
-<circle cx="657.8" cy="128.1" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
-<circle cx="714.4" cy="115.2" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
-<circle cx="771.1" cy="105.9" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
-<circle cx="827.7" cy="104.1" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
-<text x="91.5" y="256.1" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">7</text>
-<text x="148.1" y="250.5" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">10</text>
-<text x="204.7" y="235.7" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">18</text>
-<text x="261.4" y="219.1" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">27</text>
-<text x="318" y="209.8" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">32</text>
-<text x="374.6" y="187.6" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">44</text>
-<text x="431.3" y="174.7" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">51</text>
-<text x="487.9" y="158" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">60</text>
-<text x="544.5" y="146.9" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">66</text>
-<text x="601.2" y="135.8" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">72</text>
-<text x="657.8" y="119.1" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">81</text>
-<text x="714.4" y="106.2" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">88</text>
-<text x="771.1" y="96.9" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">93</text>
-<text x="827.7" y="95.1" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">94</text>
-<text x="91.5" y="292" font-size="11" fill="#1f2328" text-anchor="middle">3</text>
-<text x="148.1" y="292" font-size="11" fill="#1f2328" text-anchor="middle">4</text>
-<text x="204.7" y="292" font-size="11" fill="#1f2328" text-anchor="middle">5</text>
-<text x="261.4" y="292" font-size="11" fill="#1f2328" text-anchor="middle">6</text>
-<text x="318" y="292" font-size="11" fill="#1f2328" text-anchor="middle">7</text>
-<text x="374.6" y="292" font-size="11" fill="#1f2328" text-anchor="middle">8</text>
-<text x="431.3" y="292" font-size="11" fill="#1f2328" text-anchor="middle">9</text>
-<text x="487.9" y="292" font-size="11" fill="#1f2328" text-anchor="middle">10</text>
-<text x="544.5" y="292" font-size="11" fill="#1f2328" text-anchor="middle">11</text>
-<text x="601.2" y="292" font-size="11" fill="#1f2328" text-anchor="middle">12</text>
-<text x="657.8" y="292" font-size="11" fill="#1f2328" text-anchor="middle">13</text>
-<text x="714.4" y="292" font-size="11" fill="#1f2328" text-anchor="middle">14</text>
-<text x="771.1" y="292" font-size="11" fill="#1f2328" text-anchor="middle">15</text>
-<text x="827.7" y="292" font-size="11" fill="#1f2328" text-anchor="middle">16</text>
-<text x="459.6" y="309" font-size="12" fill="#59636e" text-anchor="middle">Day in October 2026 (the day&#39;s last commit to the file)</text>
+<text x="0" y="0" font-size="12" fill="#59636e" text-anchor="middle" transform="translate(20 160) rotate(-90)">Parts documented</text>
+<polygon points="91.5,264 91.5,251.9 148.1,246.7 204.7,232.8 261.4,217.2 318,208.5 374.6,187.7 431.3,175.6 487.9,160 544.5,149.6 601.2,139.2 657.8,123.6 714.4,111.5 771.1,102.8 827.7,101.1 827.7,264" fill="#0969da" fill-opacity="0.12"/>
+<polyline points="91.5,251.9 148.1,246.7 204.7,232.8 261.4,217.2 318,208.5 374.6,187.7 431.3,175.6 487.9,160 544.5,149.6 601.2,139.2 657.8,123.6 714.4,111.5 771.1,102.8 827.7,101.1" fill="none" stroke="#0969da" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="91.5" cy="251.9" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="148.1" cy="246.7" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="204.7" cy="232.8" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="261.4" cy="217.2" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="318" cy="208.5" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="374.6" cy="187.7" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="431.3" cy="175.6" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="487.9" cy="160" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="544.5" cy="149.6" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="601.2" cy="139.2" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="657.8" cy="123.6" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="714.4" cy="111.5" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="771.1" cy="102.8" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="827.7" cy="101.1" r="3.5" fill="#0969da" stroke="#ffffff" stroke-width="1.5"/>
+<text x="91.5" y="242.9" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">7</text>
+<text x="148.1" y="237.7" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">10</text>
+<text x="204.7" y="223.8" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">18</text>
+<text x="261.4" y="208.2" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">27</text>
+<text x="318" y="199.5" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">32</text>
+<text x="374.6" y="178.7" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">44</text>
+<text x="431.3" y="166.6" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">51</text>
+<text x="487.9" y="151" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">60</text>
+<text x="544.5" y="140.6" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">66</text>
+<text x="601.2" y="130.2" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">72</text>
+<text x="657.8" y="114.6" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">81</text>
+<text x="714.4" y="102.5" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">88</text>
+<text x="771.1" y="93.8" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">93</text>
+<text x="827.7" y="92.1" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">94</text>
+<text x="91.5" y="278" font-size="11" fill="#1f2328" text-anchor="middle">3</text>
+<text x="148.1" y="278" font-size="11" fill="#1f2328" text-anchor="middle">4</text>
+<text x="204.7" y="278" font-size="11" fill="#1f2328" text-anchor="middle">5</text>
+<text x="261.4" y="278" font-size="11" fill="#1f2328" text-anchor="middle">6</text>
+<text x="318" y="278" font-size="11" fill="#1f2328" text-anchor="middle">7</text>
+<text x="374.6" y="278" font-size="11" fill="#1f2328" text-anchor="middle">8</text>
+<text x="431.3" y="278" font-size="11" fill="#1f2328" text-anchor="middle">9</text>
+<text x="487.9" y="278" font-size="11" fill="#1f2328" text-anchor="middle">10</text>
+<text x="544.5" y="278" font-size="11" fill="#1f2328" text-anchor="middle">11</text>
+<text x="601.2" y="278" font-size="11" fill="#1f2328" text-anchor="middle">12</text>
+<text x="657.8" y="278" font-size="11" fill="#1f2328" text-anchor="middle">13</text>
+<text x="714.4" y="278" font-size="11" fill="#1f2328" text-anchor="middle">14</text>
+<text x="771.1" y="278" font-size="11" fill="#1f2328" text-anchor="middle">15</text>
+<text x="827.7" y="278" font-size="11" fill="#1f2328" text-anchor="middle">16</text>
+<text x="459.6" y="295" font-size="12" fill="#59636e" text-anchor="middle">Day in October 2026 (the day&#39;s last commit to the file)</text>
 </svg>

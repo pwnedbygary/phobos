@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="430" viewBox="0 0 880 430" role="img" aria-labelledby="title desc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Noto Sans, Helvetica, Arial, sans-serif">
 <title id="title">Software against the first Vulkan renderer on the RP6 (7 Oct 2026)</title>
-<desc id="desc">Six scenes on the RP6: the first Vulkan renderer on one thread is faster than the software renderer on seven threads in every scene, for example Lumines 295 against 128 fps.</desc>
+<desc id="desc">Six scenes on the RP6: the first Vulkan renderer on one thread is faster than the software renderer on seven threads in every scene, for example Lumines 295.2 against 127.8 fps.</desc>
 <rect x="0.5" y="0.5" width="879" height="429" rx="8" fill="#ffffff" stroke="#d0d7de"/>
 <text x="20" y="30" font-size="15" fill="#1f2328" font-weight="600">Software against the first Vulkan renderer on the RP6 (7 Oct 2026)</text>
 <rect x="20" y="45" width="10" height="10" rx="2" fill="#8c959f"/>

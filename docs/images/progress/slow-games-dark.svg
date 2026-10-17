@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="360" viewBox="0 0 880 360" role="img" aria-labelledby="title desc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Noto Sans, Helvetica, Arial, sans-serif">
 <title id="title">The 22 slow games on the RP6: how many average full speed at 1x</title>
-<desc id="desc">Bars by build: 7 of the 22 slow games averaged full speed with v2.2.0 and v2.3.0, 15 with the 14 October nightly, and 18 with both nightlies of 15 October.</desc>
+<desc id="desc">Bars by build: 7 of the 22 slow games averaged full speed with v2.2.0 and 7 with v2.3.0, 15 with the 14 October nightly, and 18 and 18 with the two nightlies of 15 October.</desc>
 <rect x="0.5" y="0.5" width="879" height="359" rx="8" fill="#0d1117" stroke="#30363d"/>
 <text x="20" y="30" font-size="15" fill="#e6edf3" font-weight="600">The 22 slow games on the RP6: how many average full speed at 1x</text>
 <text x="20" y="332" font-size="11" fill="#9198a1">Source: runs on a Retroid Pocket 6 (Snapdragon 8 Gen 2), Vulkan (fast) at native resolution: mean fps after the first 18 s of 150 s runs with scripted</text>

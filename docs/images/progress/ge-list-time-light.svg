@@ -8,7 +8,7 @@
 <rect x="183.2" y="45" width="10" height="10" rx="2" fill="#bc4c00"/>
 <text x="197.2" y="54" font-size="12" fill="#1f2328">Phobos&#39;s GE model</text>
 <text x="20" y="372" font-size="11" fill="#59636e">Source: a PSP-1000 measured with a GE profiler plugin under ARK custom firmware (16 Oct 2026), against the time Phobos&#39;s model charges for the</text>
-<text x="20" y="386" font-size="11" fill="#59636e">same scenes&#39; lists (the headless runner&#39;s --ge-profile, from saved states; #266).</text>
+<text x="20" y="386" font-size="11" fill="#59636e">same scenes&#39; lists (the headless runner&#39;s --ge-profile from saved states, in draft pull request #266).</text>
 <line x1="258.7" y1="76" x2="258.7" y2="317" stroke="#8c959f" stroke-width="1"/>
 <text x="258.7" y="331" font-size="11" fill="#59636e" text-anchor="middle">0</text>
 <line x1="354" y1="76" x2="354" y2="317" stroke="#e6e9ed" stroke-width="1"/>

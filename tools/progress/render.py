@@ -9,12 +9,15 @@ README.md's "Development progress" section, which sits between <!-- progress:beg
     python3 tools/progress/render.py --check    write nothing; exit 1 if any of them differs from what the data gives
 
 Python 3 standard library only. The same data always gives byte-identical files: no clocks, no randomness, every
-number formatted explicitly.
+number formatted explicitly. Text in the data can name a chart's numbers instead of copying them, as
+{chart-id:series name:selector} (selector: first, last, min, max or an index), {chart-id:count} or
+{chart-id:value_max}, so a headline or an alt text can't drift from the chart it describes.
 """
 
 import argparse
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -70,6 +73,12 @@ THEMES = {
 }
 
 KIND_LABELS = {"first": "a first", "release": "release", "decision": "decision", "work": ""}
+
+# Mermaid's timeline gives each period 200 pixels, and GitHub shrinks a wider diagram to fit its column, text and all:
+# four periods to a diagram (with mermaid_init's narrow left margin) keep the text near full size.
+TIMELINE_PERIODS = 4
+TIMELINE_FILLS = ["#0b5cad", "#116329", "#6639ba", "#953800", "#1b6a75", "#a40e26", "#57606a"]
+TIMELINE_LINE = "#8c959f"
 
 
 # ---- Text and numbers ------------------------------------------------------------------------------------------------
@@ -189,7 +198,10 @@ def text_el(x, y, content, size=12, fill=None, anchor="start", weight=None, halo
 
 def rect_el(x, y, w, h, fill, rx=0):
     corner = f' rx="{coord(rx)}"' if rx else ""
-    return f'<rect x="{coord(x)}" y="{coord(y)}" width="{coord(max(w, 0))}" height="{coord(max(h, 0))}"{corner} fill="{fill}"/>'
+    return (
+        f'<rect x="{coord(x)}" y="{coord(y)}" width="{coord(max(w, 0))}" height="{coord(max(h, 0))}"'
+        f'{corner} fill="{fill}"/>'
+    )
 
 
 def line_el(x1, y1, x2, y2, stroke, width=1, dash=None):
@@ -419,7 +431,9 @@ def horizontal_chart(chart, theme_name):
     plot_bottom = tick_y - 14
     label_lines = [wrap(c, 12, 260) for c in categories]
     plot_left = 36 + max(text_width(line, 12) for lines in label_lines for line in lines) + 12
-    value_room = max(text_width(value_text(v, decimals), 10.5) for s in series for v in s["values"]) if show_values else 0
+    value_room = 0
+    if show_values:
+        value_room = max(text_width(value_text(v, decimals), 10.5) for s in series for v in s["values"])
     plot_right = frame.width - 20 - value_room - (8 if show_values else 0)
     plot_w = plot_right - plot_left
     plot_h = plot_bottom - plot_top
@@ -486,12 +500,28 @@ def picture(chart, prefix):
     ])
 
 
-def mermaid_timeline(data, events_per_era):
-    lines = ["```mermaid", "timeline", f"    title {data['timeline_title']}"]
-    for era in data["eras"]:
-        period = era["timeline"]["period"]
-        events = era["timeline"]["events"][:events_per_era]
-        lines.append(f"    {period} : " + " : ".join(events))
+def mermaid_init():
+    """A theme for Mermaid's timeline that reads the same on GitHub's light and dark pages.
+
+    The timeline fills each period's boxes with cScale0-11 and writes on them in cScaleLabel0-11; its axis takes the
+    last cScaleLabel and the stems under each period cScaleInv. GitHub's default light theme puts white text on pale
+    boxes, so: dark fills with white text, and mid-gray lines, which show on white and on near-black alike. A 10-pixel
+    left margin (150 by default) and 20-pixel text keep the words large once GitHub fits the diagram to its column.
+    """
+    variables = {}
+    for i in range(12):
+        variables[f"cScale{i}"] = TIMELINE_FILLS[i % len(TIMELINE_FILLS)]
+        variables[f"cScaleLabel{i}"] = "#ffffff" if i < len(TIMELINE_FILLS) else TIMELINE_LINE
+        variables[f"cScaleInv{i}"] = TIMELINE_LINE
+    variables["fontSize"] = "20px"
+    config = {"theme": "base", "themeVariables": variables, "timeline": {"leftMargin": 10}}
+    return "%%{init: " + json.dumps(config) + "}%%"
+
+
+def mermaid_timeline(entries):
+    lines = ["```mermaid", mermaid_init(), "timeline"]
+    for entry in entries:
+        lines.append(f"    {entry['period']} : " + " : ".join(entry["events"]))
     lines.append("```")
     return lines
 
@@ -514,7 +544,7 @@ def readme_section(data, charts):
     out.append("")
     for chart_id in data["readme_charts"]:
         out += [picture(charts[chart_id], "docs/images/progress/"), ""]
-    out += mermaid_timeline(data, 2)
+    out += mermaid_timeline(data["readme_timeline"])
     out.append("")
     out += releases_table([by_tag[tag] for tag in data["readme_releases"]])
     out += ["", data["nightlies"], ""]
@@ -539,8 +569,10 @@ def page_text(data, charts):
     out += [f"{data['intro']} As of {data['as_of']}.", ""]
     out += headline_list(data)
     out += ["", "## Timeline", ""]
-    out += mermaid_timeline(data, None)
-    out += ["", "## Firsts", "", "| Date | First |", "|---|---|"]
+    periods = [era["timeline"] for era in data["eras"]]
+    for start in range(0, len(periods), TIMELINE_PERIODS):
+        out += mermaid_timeline(periods[start:start + TIMELINE_PERIODS]) + [""]
+    out += ["## Firsts", "", "| Date | First |", "|---|---|"]
     out += [f"| {cell(f['date'])} | {cell(f['what'])} |" for f in data["firsts"]]
     out += ["", "## The eras", ""]
     for number, era in enumerate(data["eras"], 1):
@@ -595,10 +627,13 @@ def validate(data):
         if tag not in tags:
             raise SystemExit(f"progress: no release {tag}")
     # Mermaid's timeline splits on colons; '#' and ';' start its entity codes.
-    for era in data["eras"]:
-        for text in [era["timeline"]["period"]] + era["timeline"]["events"]:
+    timeline = [era["timeline"] for era in data["eras"]] + data["readme_timeline"]
+    for entry in timeline:
+        for text in [entry["period"]] + entry["events"]:
             if any(ch in text for ch in ":#;"):
                 raise SystemExit(f"progress: the timeline can't show {text!r} (no ':', '#' or ';')")
+    if len(data["readme_timeline"]) > TIMELINE_PERIODS:
+        raise SystemExit(f"progress: README's timeline has more than {TIMELINE_PERIODS} periods")
     for era in data["eras"]:
         for m in era["milestones"]:
             if m["kind"] not in KIND_LABELS:
@@ -606,7 +641,57 @@ def validate(data):
     return charts
 
 
+PLACEHOLDER = re.compile(r"\{([a-z0-9-]+):([^{}:]+)(?::([^{}:]+))?\}")
+
+
+def chart_number(charts, match):
+    """A number from a chart, for {chart:value_max}, {chart:count} or {chart:series:selector}.
+
+    The selector is first, last, min, max or an index; the series "total" sums all series at each category.
+    """
+    chart_id, name, selector = match.groups()
+    chart = charts.get(chart_id)
+    if chart is None:
+        raise SystemExit(f"progress: {match.group(0)}: no chart called {chart_id}")
+    if selector is None:
+        if name == "count":
+            return str(len(chart["categories"]))
+        if name == "value_max" and "value_max" in chart:
+            top = chart["value_max"]
+            return value_text(top, 0 if float(top).is_integer() else chart_decimals(chart))
+        raise SystemExit(f"progress: {match.group(0)}: use count, value_max or series:selector")
+    if name == "total":
+        values = [sum(s["values"][i] for s in chart["series"]) for i in range(len(chart["categories"]))]
+    else:
+        found = [s["values"] for s in chart["series"] if s["name"] == name]
+        if not found:
+            raise SystemExit(f"progress: {match.group(0)}: {chart_id} has no series called {name!r}")
+        values = found[0]
+    picks = {"first": lambda v: v[0], "last": lambda v: v[-1], "min": min, "max": max}
+    if selector in picks:
+        return value_text(picks[selector](values), chart_decimals(chart))
+    try:
+        return value_text(values[int(selector)], chart_decimals(chart))
+    except (ValueError, IndexError):
+        raise SystemExit(f"progress: {match.group(0)}: no value {selector!r} in {name!r}") from None
+
+
+def resolve(node, charts):
+    """Every {chart:...} in the data's text replaced by the number it names, so text can't drift from the charts."""
+    if isinstance(node, dict):
+        return {key: resolve(value, charts) for key, value in node.items()}
+    if isinstance(node, list):
+        return [resolve(value, charts) for value in node]
+    if isinstance(node, str):
+        text = PLACEHOLDER.sub(lambda match: chart_number(charts, match), node)
+        if "{" in text or "}" in text:
+            raise SystemExit(f"progress: a placeholder in {node!r} names nothing")
+        return text
+    return node
+
+
 def outputs(data):
+    data = resolve(data, {chart["id"]: chart for chart in data["charts"]})
     charts = validate(data)
     files = {}
     for chart in data["charts"]:
