@@ -49,7 +49,8 @@ Branch `cursor/psp-ge-time-2b67`, stacked on #266 (`cursor/psp-ge-profile-2b67`)
   display's next-vblank switching too (part 108, its own pull request).
 - **First comparison**: within 15% Chains of Olympus (+11%), Ghost of Sparta (+3%), Activision Hits' copyright screen
   (−9%); Super Monkey Ball −59%; Killzone +106 to +180%; Activision Hits' menu +138% (part 107: VRAM textures).
-- **Checks**: suite 577 groups, 0 failures; "Fast" against master the same on 27 scenes, Software and Vulkan-fast, every frame; older layouts load, master refuses layout 33.
+- **Checks**: suite 577 groups, 0 failures; "Fast" against master the same on 27 scenes, Software and Vulkan-fast,
+  every frame; older layouts load, master refuses layout 33.
 - **Not yet**: fixed-point charges before any default change; round 8's fit; the 15% gate.
 
 ## PSP GE: how the games drive the GE on a PSP and in Phobos — tools/psp-ge-profile's plugin on the owner's PSP, the same records from the core (the runner's --ge-profile) — 2026-10-16
