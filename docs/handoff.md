@@ -47,11 +47,14 @@ Branch `cursor/psp-display-latch-2b67` (from master `5442acb8b`); docs/psp-core.
   last one set in the frame after the blank, as before. Layout 33 keeps one waiting (13 bytes); #269 takes 33 too:
   second to land renumbers to 34.
 - **Effect** (34 scenes x Software, Vulkan, Vulkan-fast against master; their display calls traced): 31 the same in
-  every frame. Army of Two: ~120 frames a second drawn instead of 251 (gameplay; menu 194), a blank waited for each
-  frame (with #269's PSP timing: 30/20 fps as on the PSP); Death Jr. II's character screen: pictures the same, its
-  drawing ~0.6 ms later (its main thread waits for its handler's flip till the sync). Games that read
-  sceDisplayGetFrameBuf(0) after a next-sync flip are the ones that can change: Army of Two, Death Jr. II, Sonic
-  Rivals here.
+  every frame. Army of Two: 120 frames a second drawn instead of 251 (gameplay; menu 194), two a blank, a blank
+  waited for every second one, a new picture each (with #269's PSP timing, both merged: 30/20 fps, two flips and a
+  wait a frame, as on the PSP); Death Jr. II's character screen: pictures the same, the VRAM in alternate frames and
+  the RAM not (its handler's and main thread's reads before the sync find the old buffer). The first try (the next
+  blank's start for every next-sync flip) also showed Death Jr. II's gameplay, Sonic Rivals, Disaster Report 3's
+  intro and Twisted Metal's logos a blank late: now master's. No picture repeats where master's doesn't; no wait
+  past the next blank. Games that read sceDisplayGetFrameBuf(0) after a next-sync flip are the ones that can change:
+  Army of Two, Death Jr. II, Sonic Rivals here.
 - **Checks**: tests/psp/run-tests.sh (sanitized): 577 groups, 0 failures; the new test fails on master.
 - **Left out**: setframebuf's refusals (round 8's display-start first); a frame buffer set in the blank's handler,
   before the sync, taken at that sync (unrecorded).
