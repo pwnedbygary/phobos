@@ -11,6 +11,7 @@
 
 #include "plugin.h"
 #include <pspintrman.h>
+#include <pspintrman_kernel.h>
 #include <pspthreadman.h>
 
 HookStatus hookStatus[HookCount];
@@ -127,12 +128,14 @@ static void __attribute__((noinline)) beginActive(Call* call, int kind, u32 a, u
   u32 entry = sceKernelGetSystemTimeLow();
   u32 ge = geState();
   u32 vblanks = vcount();
-  SceUID thread = sceKernelGetThreadId();
+  //a call from a GE callback or a vblank handler runs in interrupt context, where sceKernelGetThreadId() gives an
+  //error code: those are thread 0, as the format has it
+  SceUID thread = sceKernelIsIntrContext() ? 0 : sceKernelGetThreadId();
   u32 interrupts = sceKernelCpuSuspendIntr();
   if(state == Capturing) {
     ProfileRecord* record = reserve();
     if(record) {
-      fill(record, kind, threadIndex(thread), vblanks, entry, ge, a, b, c);
+      fill(record, kind, thread ? threadIndex(thread) : 0, vblanks, entry, ge, a, b, c);
       call->record = record;
       call->generation = generation;
     }

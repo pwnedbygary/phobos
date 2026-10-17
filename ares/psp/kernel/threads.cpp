@@ -332,6 +332,7 @@ auto Kernel::endThread(Thread& thread, s32 status) -> void {
   thread.wait = Wait::None;
   thread.callbacks = thread.inCallback = false;
   thread.waitBeforeCallback = {};
+  thread.geProfileCall = thread.geProfileCallAside = 0;  //(a profiled call it ended in never returns)
   thread.exitStatus = status;
   extensionsEnded(thread);
   for(auto& [uid, other] : threads) {

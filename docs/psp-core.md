@@ -16077,7 +16077,8 @@ A kernel module for ARK-4's plugin loader. It finds the firmware's GE and displa
 `sctrlHENFindFunction` and patches their syscalls (`sctrlHENPatchSyscall`), so every call a game makes to
 sceGeListEnQueue(Head), sceGeListUpdateStallAddr, sceGeListSync, sceGeDrawSync, sceGeListDeQueue, sceGeBreak,
 sceGeContinue, sceGeSetCallback/UnsetCallback, sceDisplaySetFrameBuf and the vblank waits goes through a hook: six
-instructions straight into the firmware's function while idle; while capturing, a 32-byte record with the call's entry
+instructions straight into the firmware's function while idle (sceDisplaySetFrameBuf's, which also notes each flip for
+the notices, some tens); while capturing, a 32-byte record with the call's entry
 and return times (sceKernelGetSystemTimeLow), its thread, arguments, result, the vblank count and the GE's state (the
 firmware's own sceGeDrawSync(1), and the GE's next command while it draws). The GE's FINISH and SIGNAL callbacks and
 the vertical blanks come from the interrupt manager's sub-interrupt monitor, registered only while capturing. Records
@@ -16096,7 +16097,14 @@ from `module_start`) were ready when 0.2.0 loaded from a line with his copy's ID
 several IDs on a line; one ID a line is what worked, and what the README now says. 0.2.2 asks for the disc ID again at
 the game's first flip (ARK reads it from the disc, unreadable as the game boots: 0.2.0's trace said UNKNOWN) and holds
 its start notice until then (0.2.0's flickered through the boot, drawn the other way, and was over by the game's first
-frame).
+frame). The captures below were all 0.2.0's, with the owner's `buffer = 192`. 0.2.3 (256 KB kept free, not 512) and
+0.2.4 came after them, 0.2.4 from the review: its memory defaults are that 192 KB buffer with 256 KB kept free
+(0.2.3's 2 MB would have taken all but those 256 KB of the 560 to 580 KB a game leaves free), and a boot capture's
+128 KB with 320 kept, started 4 s after the plugin, not holding memory through the game's boot; the boot capture's
+result notice stays up its full time (0.2.2 put the start notice over it at the game's first flip); a call from an
+interrupt handler is filed under `interrupt` (`sceKernelIsIntrContext`: the thread ID the firmware gives there is an
+error code, 0x80020064); a file is opened as a new one only and removed if its writing fails; the trace stops at
+256 KB. None of 0.2.1 to 0.2.4 has run on a PSP yet.
 
 ### What the PSP said
 
@@ -16117,7 +16125,13 @@ Phobos's pace (below).
   callbacks as their SIGNAL and FINISH functions), its thread (the profile's table, by UID, names as the kernel has
   them) and the GE's state (sceGeDrawSync(1)'s answer, the GE's next command while it draws); finished as the function
   returns, with v0, or, if its thread waits in it, as `switchTo()` gives the thread the CPU back with the wait's result
-  (`Thread::geProfileCall`). Times are sceKernelGetSystemTimeLow's microseconds.
+  (`Thread::geProfileCall`). A wait whose callbacks run first (one notified before it, or as it returns at once) has
+  its record put aside with the wait while they run (`Thread::geProfileCallAside`, in `runCallbacks()` and
+  `backFromCallbacks()`), so the call still ends where its thread goes on from it, with what it gave, and a call one of
+  those callbacks makes is recorded as its own. sceGeSetCallback's functions are read only as the function reads them,
+  with a slot free for them, and only from main RAM, where a read changes nothing. Times are
+  sceKernelGetSystemTimeLow's microseconds; an end is never 0, the format's mark of a call that hasn't ended (the
+  plugin's guard alike).
 - **The callbacks.** A FINISH's or SIGNAL's callback is recorded as the driver queues it (`geCall()`: its callback
   number, the FINISH's or SIGNAL's low 16 bits, where the list had got to past the END, a SIGNAL's own word), from when
   the call into the program starts to when it returns (`Call::profile`, `callProfile`).
@@ -16127,19 +16141,45 @@ Phobos's pace (below).
   measured; here it's charged, and this says what for.
 - **Off.** With no profile, each place tests the pointer (or, in `switchTo()`, a thread's record number, always 0): the
   profiled functions, the context switch, the vblank, a call into the program starting and returning, geTime() and a
-  callback queued. Measured below. Not saved: a state loaded drops the record numbers it would hold.
-- **The runner** (`--ge-profile FILE`, `--ge-profile-from F`): the profile from frame F to the run's end, the file
-  written as it ends (its version "phobos" and the runner's commit, the disc ID and title from the disc), and a
-  summary line (`ge profile:`). tools/psp-runner/README.md says how.
+  callback queued. Measured below. Not saved: a state loaded drops the record numbers it would hold. A program that
+  starts itself again (sceKernelLoadExec, `loadExec()`) ends the profile, its clock and threads starting again: one
+  profile is one program's.
+- **The runner** (`--ge-profile FILE`, `--ge-profile-from F`): the profile from frame F to the run's end (or to where
+  the program starts itself again, the summary saying at which frame), the file written as it ends (its version
+  "phobos" and the runner's commit, the disc ID and title from the disc), even if the WAV can't be, and a summary line
+  (`ge profile:`). `--ge-profile-from` without `--ge-profile` is an error. tools/psp-runner/README.md says how.
 - **The decoder** names kind 64, sums the charges per list (by its ID, from its enqueue call to its end) and over the
   window ("Phobos's GE model: ... charges, pixels, primitives, ms; the share set by pixels"), adds them to `--lists`
   and the JSON, and counts each kind as the dry run does (`--counts`). The tables themselves are the same for both.
+  A FINISH ends the list at the head of the queue, as the GE driver runs lists first in, first out: Killzone's lists
+  lie within some 350 KB of each other and its FINISH can come from commands below its list's start, so the address
+  the first decoder matched by (the list whose commands it ends, within 4 MB) gave its lists the wrong ends: in the
+  owner's captures a fifth to a third of its scene lists ended as if by a sync, and as many of its full-screen lists
+  took 0 ms. The lists the GE still had from before the capture, when it was busy at its
+  start, end first; how many there were (0 to 8) is the count that puts the most FINISHes inside the lists they end,
+  then the nearest, then the fewest: the owner's Killzone captures had 2, Phobos's profile 4 (two frames ahead in its
+  fast timing; the model's own records confirm each list's end). Calls and FINISHes at the same microsecond are taken
+  in the order they were recorded (Phobos can run a list whole inside its enqueue). A game that sets the same frame
+  buffer at every call (Killzone) has each call counted as a frame, shown from the next vblank; and a call made in an
+  interrupt handler is filed under `interrupt` (plugin 0.2.0's error-code thread IDs too).
 - **Tests**: "ge profile" (tests/psp/ge.cpp): a program that sets callbacks, queues a list that draws a 64x32 sprite
   and finishes, waits for it, shows a frame buffer and waits for the vblank, recorded record by record (the sync from
   its call to its thread going on after the FINISH's callback, with what the wait gave; the callback as it ran; the
   model's 2048 pixels and 1536 cycles; the blank at its own time), the file in profile.h's layout byte for byte; with
-  no profile the program sees the same and nothing is recorded. The decoder's tests: a capture of Chains of Olympus's
-  loop with charges, the model's sums per list and over the window, the counts.
+  no profile the program sees the same and nothing is recorded: the machine ends as it does unprofiled, every
+  register as each call left it (stored after each), its memory and the kernel's state the same, and to the cycle,
+  which the same program without its vblank wait (where a difference in time would be taken up) shows too. A state
+  loaded as the FINISH's callback runs leaves the calls under way then unfinished, and the rest is recorded as before;
+  with every callback slot taken, nothing is read of what sceGeSetCallback is given. "ge profile: calls whose
+  callbacks run in them": a callback notified before sceDisplayWaitVblankStartCB runs in its wait and itself waits for
+  the blank in sceDisplayWaitVblankStart (recorded as its own call), the outer call ending as the thread goes on from
+  it with 0; sceDisplayWaitVblankCB in the blank returns 1 after its callback, recorded to there. "programs started in
+  another's place" (modules.cpp): a profile ends with the old program. Each of these fails without its fix, and three
+  mutants of the recorder (a charge of 100 cycles at a callback's start, a bit of v1 flipped at a call's start, the
+  reset of a loaded state's record numbers dropped) are caught. The decoder's tests: a capture of Chains of Olympus's
+  loop with charges, the model's sums per list and over the window, the counts; Killzone's FINISH from below its list
+  (five records of the owner's capture), the lists queued before the capture, a list run inside its enqueue, a game
+  drawing into one frame buffer, interrupt handlers' calls.
 
 **Off cost.** In the bench runner's build (O3, thin LTO, as Android builds it), master's sceDisplaySetFrameBuf is nine
 instructions with no frame; the branch's is the same nine and ten more while no profile records: the pointer's load
@@ -16160,15 +16200,15 @@ The six scenes the owner is capturing, from their states (`~/phobos-work/scratch
 `psp-hires/scenes`), the branch's runner, the software renderer, 900 frames with the profile from frame 301 (10 s;
 ahr-legal, from frame 240 of a boot, 360 frames from its first, the copyright screen its first 2.7 s), each table
 `geprof.py` (`--counts --lists`). A loop is what the game does for each frame it draws; the frames, its flips
-(Killzone sets one frame buffer each time, applied at the next vblank: its calls); the CPU's part, a loop's time not
-blocked in a sync, for the games that sync:
+(Killzone sets one frame buffer each time, applied at the next vblank: its calls, of which it shows one each vblank,
+59.9 a second); the CPU's part, a loop's time not blocked in a sync, for the games that sync:
 
 | Scene (clocks) | A loop | Lists a second | Frames a second (a vblank) | GE busy (model) | CPU blocked in syncs | Charged a list: ms, pixels, primitives | CPU's part |
 |---|---|---|---|---|---|---|---|
 | coo-diff (333/166) | enqueue, sceGeListSync, flip | 159.5 | 159.5 (2.66) | 100% | 838 ms a second | 6.27, 4.16 M, 8,644 | 1.02 ms |
 | gos-menu (333/166) | enqueue, sceGeListSync, flip | 247.1 | 247.1 (4.12) | 100% | 707 ms | 4.05, 2.69 M, 26,297 | 1.19 ms |
 | smba-story (222/111) | enqueue, stall update, FINISH, sceGeDrawSync, flip | 434.7 | 434.7 (7.25) | 86% | 88 ms | 1.97, 0.87 M, 15,100 | 2.10 ms |
-| kz-gp (222/111) | two lists, each a SIGNAL and a FINISH; the frame buffer set | 517.0 | 258.3 (4.31) | 93% | none | 1.93, 0.86 M, 8,258 | |
+| kz-gp (222/111) | two lists, each a SIGNAL and a FINISH; the frame buffer set | 517.0 | 258.3 (4.31) | 100% | none | 1.93 (its two lists 3.57 and 0.29), 0.86 M, 8,262 | |
 | a2-gp (222/111) | enqueue, two stall updates, SIGNAL, FINISH, sceGeDrawSync, flip | 252.6 | 252.6 (4.21) | 92% | 92 ms | 3.55, 1.58 M, 22,603 | 3.60 ms |
 | ahr-legal (222/111), its copyright screen | two lists, each a FINISH; flip | 1,701 | 851 (14.2) | 100% | none | 0.59, 0.26 M, 11 | |
 
@@ -16193,8 +16233,9 @@ busier scenes (-2, -3); Super Monkey Ball's Story Mode (ULES00364-1, a system di
 short and the 3D main menu. Army of Two, optional, wasn't captured. Each is set beside Phobos's profile of its scene
 over the PSP's window of whole seconds where the scene is: Super Monkey Ball's first 7 s, before the dialog's vblank
 waits; the copyright screen, seconds 3 to 7 of the boot capture, against Phobos's first 2 s. A list's
-GE time is the median, from when the GE could begin it to its end; on the PSP measured, in Phobos what the model
-charged. The CPU's part, a loop's time not blocked in a sync or a vblank wait:
+GE time is the median, from when the GE could begin it to its end (Killzone's two kinds of list apart); on the PSP
+measured, in Phobos what the model charged. The CPU's part, a loop's time not blocked in a sync or a vblank wait (for
+Killzone and the copyright screen, which never sync, a loop's whole time):
 
 | Scene | PSP: lists, frames a second (a vblank) | Phobos | A list's GE time: PSP, Phobos (times) | CPU's part: PSP, Phobos |
 |---|---|---|---|---|
@@ -16202,25 +16243,27 @@ charged. The CPU's part, a loop's time not blocked in a sync or a vblank wait:
 | gos-menu | 33.6, 33.6 (0.56) | 247.0, 246.9 (4.12) | 29.62, 4.05 (7.3) | 9.82, 1.19 |
 | Ghost of Sparta's two later scenes (no state in Phobos) | 29.5, 30.0 (0.49, 0.50) | | 32.93, 31.72 | 22.2, 31.1 |
 | smba-story | 39.8, 40.0 (0.67) | 434.5, 434.3 (7.25) | 23.64, 1.98 (11.9) | 18.75, 2.10 |
-| kz-gp (frames: frame buffer calls) | 64.4, 32.2 (0.54) | 516.9, 258.3 (4.31) | its scene list 23.4 (17.2 in capture 2), 3.57 (6.6, 4.8); its full-screen list 1.72, 0.29 (5.9) | 15.5, 1.93 |
+| kz-gp (frames: frame buffer calls) | 64.4, 32.2 (0.54) | 516.9, 258.3 (4.31) | its scene list 24.3 (27.3 in capture 2), 3.57 (6.8, 7.6); its full-screen list 1.72, 0.29 (5.9) | 15.5, 1.93 |
 | ahr-legal, the copyright screen | 216.3, 108.6 (1.81) | 1698, 850 (14.2) | 4.46, 0.59 (7.6) | 4.62, 0.59 |
 
 - **The same games.** Each scene's loop is the same on both: the same calls in the same order (Killzone's two scene
   lists taking turns and three full-screen ones; Super Monkey Ball's stall updates, FINISH and sceGeDrawSync), the
   same clocks (Activision Hits' copyright screen 222/111 on both: the boot capture's 333/166 at its start was read
-  before the game's program had started, part 104).
-- **The GE.** On the PSP the GE is busy 94 to 100% of these windows (Killzone 70 to 77%), and a list takes 4.4 to 12
+  before the game's program had started and set its own).
+- **The GE.** On the PSP the GE is busy 94 to 100% of these windows (Killzone's 89 and 98%), and a list takes 4.4 to 12
   times what the model charges for it. Every one of Phobos's charges is set by its pixels; the PSP's times say the
   primitives count too: a least-squares fit of a sum (each pixel and each primitive its own time, where the model
   takes the larger of the two) over three scenes (coo-diff, gos-menu, smba-story) gives
   **0.875 bus clocks a pixel and 104 a primitive**, against the model's 0.25 and 4.74 (Sony's peaks), and puts those
   three within 11% (27.25, 30.71 and 21.09 ms against 27.60, 29.62 and 23.64). Killzone's scene list it puts at 28 ms
-  (the PSP's 23.4 and 17.2), its full-screen list at 1.0 ms (1.72: a blended pass); Activision Hits' lists at 1.4 ms
+  (the PSP's 24.3 and 27.3), its full-screen list at 1.0 ms (1.72: a blended pass); Activision Hits' lists at 1.4 ms
   (4.46), most likely for their whole-screen blended passes, whose pixels cost more than the 3D scenes' average (the
   depth copies the psp-hires agent counted there are the Vulkan renderer's own, not the game's block transfers).
-- **The CPU.** The PSP's CPU part of a loop is 7 to 9 times Phobos's in every scene (7.0, 8.3, 8.9, 8.0 and 7.8),
-  where Phobos counts an instruction a cycle at 333 MHz. It doesn't pace these loops on the PSP (they wait on the GE,
-  which takes longer), but for Killzone (two lists a frame, 15.5 ms of CPU each: its frame is the CPU's there).
+- **The CPU.** In the three scenes that sync, the PSP's CPU part of a loop is 7 to 9 times Phobos's (7.0, 8.3 and
+  8.9), where Phobos counts an instruction a cycle at 333 MHz. It doesn't pace these loops on the PSP: they wait on
+  the GE, which takes longer. Killzone and the copyright screen never sync, so their figures (15.5 and 4.62 ms on the
+  PSP) are a loop's whole time, not the CPU's; Killzone's GE is busy 89 and 98% of its windows, its frame the GE's
+  there too.
 - **What it means for Phobos.** With a GE that takes the PSP's time, these loops would run at about the PSP's rate:
   coo-diff's 27 ms list against its 1 ms of CPU, 36 loops a second; Super Monkey Ball's 23.6 ms against 2.1 ms, about
   42 (the PSP's 40). Each frame drawn and not shown is work for the host now: two to fourteen frames a vblank for Vulkan
@@ -16228,11 +16271,12 @@ charged. The CPU's part, a loop's time not blocked in a sync or a vblank wait:
 
 ### Left
 
-- Ghost of Sparta's two later scenes have no state in Phobos, and Killzone's two captures differ between themselves
-  (where in the level): their scenes aren't matched to Phobos's frame for frame. Army of Two wasn't captured.
-- A capture's memory: on the owner's PSP-1000 a game leaves some 560 KB of kernel memory free, and `keep = 512` left
-  under 64 KB for the records, so the first captures were refused (as they're meant to be, with a note); 0.2.3's
-  default is 256, some 300 KB for records ten seconds of these games fill 50 to 130 KB of.
+- Ghost of Sparta's two later scenes have no state in Phobos, and Killzone's two captures differ a little between
+  themselves (scene lists of 24.3 and 27.3 ms: where in the level): their scenes aren't matched to Phobos's frame for
+  frame. Army of Two wasn't captured.
+- A capture's memory: on the owner's PSP-1000 a game leaves some 560 to 580 KB of kernel memory free, and ten seconds
+  of these games fill 50 to 130 KB of records. Every capture so far had a 192 KB buffer (the owner's `buffer = 192`),
+  0.2.4's default, with 256 KB kept free; `keep = 512`, 0.2.2's, could leave too little for a capture.
 - geTime() is unchanged here: the captures say by how much it's short, not yet how a PSP's GE spends its time. The
   fit above is three scenes' averages with Phobos's own counts. Round 6 already timed the GE's parts on this PSP, and
   part 76 fitted a model to them (25 terms, half of round 6's 906 lists within 4.2%), left unmerged over the RP6's
@@ -16241,13 +16285,20 @@ charged. The CPU's part, a loop's time not blocked in a sync or a vblank wait:
   a game polls them, a round 8 for what round 6 left) waits for the owner's approval.
 - The CPU's 7 to 9 times: Phobos's instruction a cycle against a PSP's CPU in these loops. It paces none of these
   scenes but Killzone; a model of the CPU's time is a separate question (the captures give its part of each loop).
-- The decoder counts frames by flips; Killzone's, set to one buffer, it counts by the calls (a note says so).
+- The decoder counts frames by flips; a game that sets the same buffer at every call (Killzone) has each call counted
+  as a frame, shown from the next vblank (a note says so): Killzone shows 32.1 and 33.4 frames a second on the PSP,
+  27.7 and 29.4 ms of GE time each, and 59.9 in Phobos, 4.3 drawn for each shown.
+- The GE sync spin (#268) works out a polled sceGeDrawSync or sceGeListSync without the call being made, so with it a
+  profile of a game that polls them counts fewer of those calls than the game made. None of these scenes polls: they
+  wait in their syncs (mode 0) or don't sync.
 - The plugin's lines in PLUGINS.TXT: ARK-4's r205 source matches several IDs on a line, but the owner's PSP loaded it
   only from a line of one; one a line is what the README asks.
 - Scratch: `~/phobos-work/scratch/psp-ge-profile` (`NOTES.md`; `stick/`, the owner's files; `stick-diag/`, the load
   test's; `ref/`, the references read; `phase2/`: `profile.sh` and `run_all.sh`, the scenes' profiles, `out/`, their
   captures, tables and JSON, `summary.py`; `psp/`, the owner's captures as they came, their tables and JSON;
-  `compare.py`, the two side by side; `offcost/`, the Off cost's builds and runs). Nothing was run on the RP6.
+  `compare.py`, the two side by side; `offcost/`, the Off cost's builds and runs; `phase5/`, everything decoded again
+  by the decoder as it is now and as it was, side by side, with Killzone's lists by kind, `kzkinds.py`, and the
+  count of lists queued before each capture scored, `ahead.py`). Nothing was run on the RP6.
 
 ## Part 106: the GE's time as the owner's PSP took it — part 76's model behind the option "GE Timing", off by default; the first comparison with the captures; a SIGNAL's interrupt at its time
 

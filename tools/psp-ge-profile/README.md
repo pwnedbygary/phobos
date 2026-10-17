@@ -36,9 +36,11 @@ doing (see "What the notices mean", below), so a run that writes nothing still s
 On a PSP Go without a memory stick card, the same folders go on the internal storage (`ef0:`), and the paths in
 `PLUGINS.TXT` start with `ef0:` instead of `ms0:`.
 
-The plugin writes only inside `PHOBOS` (its reports and captures go in `PHOBOS/PROF`, which it makes, and its trace
-in `PHOBOS/trace.txt`, which it adds to and never shortens), never renames or deletes anything, and opens no file
-while a capture runs. If there's no `PHOBOS` folder, it writes nothing at all (and says so on screen).
+The plugin writes only inside `PHOBOS` (its reports and captures go in `PHOBOS/PROF`, which it makes, each a new
+file, and its trace in `PHOBOS/trace.txt`, which it adds to up to 256 KB and never shortens), never renames anything,
+deletes nothing but a file of its own it couldn't finish writing, and opens no file while a capture runs. If there's
+no `PHOBOS` folder, it writes nothing at all (and says so on screen). Leave a megabyte or so free on the stick: a
+capture is at most `buffer` KB (192 by default), a report a few KB.
 
 ### Before the first run
 
@@ -160,12 +162,14 @@ name and the time.
    the top right); keep doing what the scene says during it. When it ends, the memory stick light flashes while the
    file is written, then the box says `SAVED` and the file's name: wait for that before the next capture.
 3. Each capture is `PHOBOS/PROF/<ID>-<n>.bin`, numbered from 1 per game. If a capture couldn't run (not enough
-   memory, say), a `.txt` with that number says why instead. (On the owner's PSP-1000 a game leaves some 560 KB of
-   kernel memory free: with `keep = 512`, 0.2.2's and before, the first captures were refused that way; from 0.2.3
-   `keep` is 256, which leaves some 300 KB for the records, where ten seconds of these games took 50 to 130 KB.)
+   memory, say), a `.txt` with that number says why instead. (On the owner's PSP-1000 a game leaves some 560 to
+   580 KB of kernel memory free, and ten seconds of these games took 50 to 130 KB of records. Every capture so far
+   ran with a 192 KB buffer (`buffer = 192` in the owner's `prof.txt`), the default from 0.2.4, with 256 KB kept
+   free: 0.2.2 and before kept 512 KB, which could refuse a capture there, and 0.2.3's 2 MB buffer would have taken
+   all but the 256 KB kept.)
 4. For Activision Hits Remixed's copyright screen, which comes as the game boots, copy `prof-boot.txt` over
-   `prof.txt` instead, then start the game and leave it: the capture runs for the game's first 12 seconds. Copy
-   `prof-capture.txt` back afterwards.
+   `prof.txt` instead, then start the game and leave it: the capture starts 4 seconds after the game does and runs
+   12 seconds, the copyright screen about its seconds 3 to 7. Copy `prof-capture.txt` back afterwards.
 5. Two or three captures of each scene are better than one, in separate visits if you can.
 6. Two scenes added after the first captures, a minute each, with `prof-capture.txt` as in step 2 (the table's last
    two rows): Killzone's language menu and, if you have the game, Super Stardust Portable's intro. Phobos's earlier
@@ -259,8 +263,10 @@ callback before it starts the next list, so the callback's return is when the ne
 
 What a hook costs, by instruction count (the dry run measures it on the PSP itself and reports it):
 
-- Idle (no capture): six instructions, a load, a branch and a jump straight into the firmware's function, with no
-  stack frame: tens of nanoseconds.
+- Idle (no capture), the GE's hooks and the vblank waits': six instructions, a load, a branch and a jump straight
+  into the firmware's function, with no stack frame: tens of nanoseconds. `sceDisplaySetFrameBuf`'s, once a frame,
+  does more: it has a stack frame, and after the firmware's call it notes the flip's time for the notices and looks
+  whether one is showing, some tens of instructions, well under a microsecond.
 - Capturing: about 170 instructions of the plugin's own and about as many in the firmware's helpers (the time twice,
   the GE's state, the vblank count, the thread id, interrupts off and on four times), roughly 2 microseconds at
   222 MHz. A game making 50 of these calls a frame spends about 0.1 ms of its 16.7 ms on them.
@@ -279,18 +285,18 @@ What a hook costs, by instruction count (the dry run measures it on the PSP itse
   write of the trace (a stick not ready at the game's boot is found later); `prof.txt` is read the first time the
   folder is there.
 - A capture's events go to a buffer in kernel memory (partition 1), taken when the capture starts and given back
-  after its file is written: as much as `buffer` KB (default 2048), leaving `keep` KB (default 256) of the
+  after its file is written: as much as `buffer` KB (default 192), leaving `keep` KB (default 256) of the
   partition's largest free block for the game and the firmware. If that leaves under 64 KB, there's no capture, and a
-  `.txt` says how much memory there was. Records are 32 bytes. Phobos counts at most about 17 GE submissions a frame
-  in these six scenes; with their callbacks, syncs, waits, flips and vblanks that's perhaps 3,000 records a second,
-  so 1 MB holds about 11 seconds (the dry run counts the real number for each game). When the buffer fills,
-  recording stops cleanly: the capture ends there, the records that didn't fit are counted, and the file's header
-  says so.
+  `.txt` says how much memory there was. Records are 32 bytes. Ten seconds of the owner's games took 50 to 130 KB
+  (1,600 to 4,200 records), so the default holds ten seconds of each (the dry run counts the real number for each
+  game). When the buffer fills, recording stops cleanly: the capture ends there, the records that didn't fit are
+  counted, and the file's header says so.
 - While capturing, the thread wakes every 250 ms only to see whether the time is up or the buffer full. Then it
   stops the hooks (with interrupts off), lowers itself to priority 0x7E, next to the lowest there is, and writes the
-  file in 32 KB pieces with pauses between them, so the game's own reads of the stick get turns. A call that returns
-  after its capture ended (a thread asleep in a vblank wait) writes nothing: each record carries its capture's
-  generation.
+  file in 32 KB pieces with pauses between them, so the game's own reads of the stick get turns. The file is opened
+  as a new one only (`O_EXCL`), never another's, and one whose writing fails (the stick full) is removed, so no
+  half-written capture is left; the notice says `WRITE FAILED`. A call that returns after its capture ended (a thread
+  asleep in a vblank wait) writes nothing: each record carries its capture's generation.
 - Dry mode (`mode = dry`, the default) counts calls instead of recording them, for the same window, and writes a
   report: each hook's state and count, the records a second a capture would need, the hooks' cost measured on the
   PSP (half a millisecond with interrupts off, after the window), the memory partitions' sizes and free space at the
@@ -329,13 +335,14 @@ inside VRAM or inside the user RAM every model has.
 each firmware function found (with its address), refused (with what the lookup gave) or not found; each hook
 (found, patched, its syscall number); the monitor; the control thread made; the device found or not; the settings;
 the disc ID; the first flip through the hook; each trigger; each file written or not and why. The lines are kept in
-memory (6 KB) and appended to `PHOBOS/trace.txt`, never truncated. `module_start` writes them itself (in the module
-manager's thread, at the game's boot, before the game runs): first thing, so the file shows the module started even
-if nothing after that works, then once the functions and hooks are found, and again if the control thread can't
-run. From then on the control thread writes them at the writing priority: when it starts (before it asks ARK for the
-game's `PARAM.SFO`, which may mean reading a disc not yet ready, and again after), 6 seconds after the start, and
-after every run, never while a capture or a dry run's window is on. Lines from before the `PHOBOS` folder is found
-wait until it is.
+memory (6 KB) and appended to `PHOBOS/trace.txt`, never truncated, up to 256 KB: the lines that reach that are
+written with a note that it's full, and later ones are let go (delete it to start it again). `module_start` writes
+them itself (in the module manager's thread, at the game's boot, before the game runs): first thing, so the file
+shows the module started even if nothing after that works, then once the functions and hooks are found, and again
+if the control thread can't run. From then on the control thread writes them at the writing priority: when it starts
+(before it asks ARK for the game's `PARAM.SFO`, which may mean reading a disc not yet ready, and again after),
+6 seconds after the start, and after every run, never while a capture or a dry run's window is on. Lines from before
+the `PHOBOS` folder is found wait until it is.
 
 ### Settings (`PHOBOS/prof.txt`)
 
@@ -348,7 +355,7 @@ wait until it is.
 | `delay` | 1 | seconds from letting go to the start (0-30) |
 | `start` | 20 | seconds after the game's start for a timed run, or `off` (0-3600) |
 | `length` | 10 | seconds (1-60) |
-| `buffer` | 2048 | KB of kernel memory at most (64-16384) |
+| `buffer` | 192 | KB of kernel memory at most (64-16384) |
 | `keep` | 256 | KB left free beside it (0-8192) |
 | `partition` | 1 | the memory partition (1-12); leave it at 1 unless the dry run's report suggests otherwise |
 | `notices` | `on` | `on` or `off`: the on-screen notices |
@@ -393,23 +400,33 @@ How it reads the records:
 - Vblanks come from the monitor's vblank records (gaps filled from the vblank counts); without those, from the
   returns of vblank waits, fitted to the LCD's period (1001/60000 s); failing both, from the period alone.
 - A list's GE time runs from when the GE could begin it (when it was queued, or when the previous list's FINISH
-  callback returned, whichever is later) to its FINISH callback. A FINISH is matched to the queued list whose
-  commands it ends (its list address lies between the list's start and its last stall address), else to the head of
-  the queue. A list without a callback ends at the sync that waited for it. FINISHes that match no list seen, before
-  the GE has been seen idle, are counted as lists queued before the capture.
+  callback returned, whichever is later) to its FINISH callback. The GE driver runs lists first in, first out, so a
+  FINISH ends the list at the head of the queue (Killzone's lists lie within some 350 KB of each other, and its
+  FINISH can come from commands below its list's start: the address alone would pick the wrong one). The lists the
+  GE still had from before the capture, when it was busy at its start, end first: how many there were is the count
+  (0 to 8) that puts the most FINISHes inside the lists they end, the nearest, then the fewest (the owner's Killzone
+  captures had 2; Phobos, two frames ahead in its fast timing, 4). A list without a callback ends at the sync that
+  waited for it. A list queued and finished within one call (Phobos can run one whole inside its enqueue) ends after
+  it began, as calls and FINISHes at the same microsecond are taken in the order they were recorded.
+- A call made in an interrupt handler (a vblank handler's, a GE callback's) has no thread: it's filed under
+  `interrupt`. Plugins before 0.2.4 took the thread ID the firmware gives there, an error code (0x80020064), and the
+  decoder reads those as `interrupt` too.
 - A list the game builds while the GE runs it (queued with a stall address, then extended with
   `sceGeListUpdateStallAddr`) spends part of its span waiting for the CPU. Its tail is the GE time after its last
   stall update, when the whole list was there: pure GE work, a lower bound for the list's.
 - A flip is a `sceDisplaySetFrameBuf` to another buffer than the call before; a vblank shows a new frame if the
   vblank before it had a flip. (A game that renders twice a vblank into two buffers ends each vblank on the same
-  buffer, but shows a new image every vblank; a game that draws into one buffer and never flips shows no frames
-  here.)
+  buffer, but shows a new image every vblank.) A game that sets the same buffer at every call, drawing into the one
+  buffer the screen shows (Killzone), has each call counted as a frame, shown from the next vblank; the decoder
+  says so in a note.
 
 `decoder/test_geprof.py` checks all this on synthetic captures written with `geprof.write_capture`
 (`python3 -m unittest test_geprof` in `decoder/`), among them a game rendering once a vblank, three times a vblank,
 and at 30 frames a second, stall-driven lists, lists without callbacks, captures without vblank records, the timer
-wrapping, files cut short and lists left running from before the capture; and, once `make hosttest` has written it,
-the capture the plugin's own record path makes.
+wrapping, files cut short and lists left running from before the capture (how many, from where their FINISHes
+fall), Killzone's FINISH from below its list's start (five records of a capture of the owner's), a list run whole
+inside its enqueue, a game drawing into one frame buffer, and interrupt handlers' calls with an error code for a
+thread; and, once `make hosttest` has written it, the capture the plugin's own record path makes.
 
 ## Building
 
@@ -444,10 +461,15 @@ RAM, running past VRAM's end, an unknown format or width, misaligned), timed fro
 marker alone during a window, drawn through `sceDisplayGetFrameBuf` when the hook sees no flips, and not at all when
 off; the `PHOBOS` folder turning up after the start (the start notice says so; the next run finds it, reads the
 settings and writes the trace kept since the module's start); the settings file's parsing; the dry run's report line
-by line; the capture file `main.c` writes; the note and notice when memory is short; the disc ID from `PARAM.SFO` when
-ARK can't give it; every expected line of `trace.txt`, in order; and all along that no file is touched while a
-capture or a dry run's window is on, that files are written only at the writing priority and never truncated, and
-that nothing is written outside `ms0:/PHOBOS/`. The decoder's tests then read the capture back.
+by line; the capture file `main.c` writes, a call from an interrupt handler in it filed under `interrupt`
+(`sceKernelIsIntrContext`); the note and notice when memory is short; the disc ID from `PARAM.SFO` when ARK can't give
+it; a capture whose writing fails (the stick full) removed, its number used again; every expected line of
+`trace.txt`, in order, and the trace stopping at 256 KB; and all along that no file is touched while a capture or a
+dry run's window is on, that files are written only at the writing priority, opened as new ones (`O_EXCL`) or
+appended to, never truncated, and that nothing is written outside `ms0:/PHOBOS/`. Two more runs check a boot: with
+the `PHOBOS` folder there from the start (`--boot-folder`), and a timed capture from the boot (`--boot-capture`),
+stepping the control thread's loop as it runs, whose `SAVED` notice stays up its full time, the start notice never
+put over it. The decoder's tests then read the capture back.
 
 ## Files
 
@@ -487,7 +509,11 @@ leaves a trace, and the load test (above) tells "ARK starts no such module there
 dry runs worked: all 17 hooks in place and the sub-interrupt monitor there, the first flip through the hook 4.35 s
 after the start, 24 ns a call idle and about 1.85 microseconds capturing, 52 KB of records for a 10-second capture
 and some 580 KB of kernel memory free. In each 10-second window on the game's menus it counted 357 sceGeListEnQueue,
-357 sceGeListSync and 357 sceDisplaySetFrameBuf, 600 vertical blanks, no vblank waits and no GE callbacks. On the
+357 sceGeListSync and 357 sceDisplaySetFrameBuf, 600 vertical blanks, no vblank waits and no GE callbacks. The
+owner's nine captures (docs/psp-core.md, part 103) were all made with 0.2.0 and a 192 KB buffer. Versions 0.2.1 to
+0.2.4 haven't run on a PSP yet (the owner's next capture will be the first): their changes (the trace from
+`module_start`, the start notice at the first flip, the memory defaults, the boot capture's notice, the interrupt
+handlers' calls, the files' safety) are checked on the Mac only. On the
 Mac: it builds as a kernel PRX (attribute 0x1001, ELF type 0xFFA0, module info in a kernel segment) with exactly the
 imports above; every static NID is confirmed by two sources (uOFW's 6.60 export lists or pspsdk's 6.60 libraries,
 and pspsdk's stub libraries; ARK's by its name's SHA-1 and pspsdk's `libpspsystemctrl_kernel`); the hooks' idle path

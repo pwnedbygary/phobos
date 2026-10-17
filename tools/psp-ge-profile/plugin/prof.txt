@@ -14,8 +14,9 @@ start = 20
 # Seconds recorded.
 length = 10
 
-# Kernel memory for a capture's events (KB): at most "buffer", leaving "keep" free for the game.
-buffer = 2048
+# Kernel memory for a capture's events (KB): at most "buffer", leaving "keep" free for the game. Ten seconds of a
+# game's events take 50 to 130 KB.
+buffer = 192
 keep = 256
 
 # On-screen notices (a box at the top left; a small blinking square at the top right while counting): on or off.

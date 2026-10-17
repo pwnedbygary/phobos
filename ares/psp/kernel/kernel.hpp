@@ -459,6 +459,7 @@ struct Kernel {
     };
     std::vector<Extension> extensions;  //innermost last; stackBlock and stackSize are the innermost's lent stack
     u32 geProfileCall = 0;  //the GE profile's record (and 1) of the call it waits in, finished as it goes on
+    u32 geProfileCallAside = 0;  //the same, put aside with its wait while its callbacks run (runCallbacks())
   };
   struct Semaphore {
     u32 uid;
@@ -1141,7 +1142,7 @@ struct Kernel {
   auto geProfileThread(const Thread* thread) -> u8;
   auto geProfileRecord(u8 kind, u8 thread, u32 a, u32 b, u32 c) -> u32;
   auto geProfileBegin(u8 kind) -> u32;
-  auto geProfileEnd(u32 record, Thread* caller) -> void;
+  auto geProfileEnd(u32 record, Thread* caller, bool fromCallback) -> void;
   auto geProfileResumed(Thread& thread) -> void;
   auto geProfileVblank() -> void;
   auto geProfileCallback(bool finish, const GeList& list, u32 id) -> u32;
@@ -1154,14 +1155,16 @@ struct Kernel {
     Kernel& kernel;
     u32 record = 0;
     Thread* caller = nullptr;
+    bool fromCallback = false;  //made by one of the thread's callbacks
     ProfiledCall(Kernel& kernel, u8 kind) : kernel(kernel) {
       if(kernel.geProfile) [[unlikely]] {
         record = kernel.geProfileBegin(kind);
         caller = kernel.interrupting ? nullptr : kernel.current;
+        fromCallback = caller && caller->inCallback;
       }
     }
     ~ProfiledCall() {
-      if(record) [[unlikely]] kernel.geProfileEnd(record, caller);
+      if(record) [[unlikely]] kernel.geProfileEnd(record, caller, fromCallback);
     }
   };
   u32 geTranslation = 0x400;  //sceGeEdramSetAddrTranslation's width (the PSP starts at 0x400)

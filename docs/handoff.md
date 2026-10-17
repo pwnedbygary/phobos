@@ -37,8 +37,8 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP GE: the GE's time as the owner's PSP took it — part 76's model behind the option "GE Timing" (off by default), the first comparison with the captures, a SIGNAL's interrupt at its time — 2026-10-16
 
-Branch `cursor/psp-ge-time-2b67`, stacked on #266 (`cursor/psp-ge-profile-2b67`; its merge of master `5442acb8b`
-merged in); docs/psp-core.md, part 106.
+Branch `cursor/psp-ge-time-2b67`, stacked on #266 (`cursor/psp-ge-profile-2b67`; its review's fix round and its
+merge of master `03eca2a69` merged in); docs/psp-core.md, part 106.
 - **The model**: part 76's fit of round 6 (`GE::Cost`): the longer of the GE's front and back ends a run, a list's
   start, the driver's CPU time in its calls; texture bytes with an 8 KiB cache (layout 33 keeps it).
 - **The option** "GE Timing": "Fast" (default) is Sony's peaks bit for bit as before; "PSP" the model. App: Settings →
@@ -57,15 +57,16 @@ merged in); docs/psp-core.md, part 106.
 
 ## PSP GE: how the games drive the GE on a PSP and in Phobos — tools/psp-ge-profile's plugin on the owner's PSP, the same records from the core (the runner's --ge-profile) — 2026-10-16
 
-Branch `cursor/psp-ge-profile-2b67`, on master `a8d5640f5` (part 101, #263), master `5442acb8b` (#264, #265) merged
-in. docs/psp-core.md, part 103, has the evidence; tools/psp-ge-profile/README.md the owner's steps and how the plugin
+Branch `cursor/psp-ge-profile-2b67`, on master `a8d5640f5` (part 101, #263), masters `5442acb8b` (#264, #265) and
+`03eca2a69` (#274: the progress section, its chart of the GE's list time given Killzone's 24.3 ms) merged in.
+docs/psp-core.md, part 103, has the evidence; tools/psp-ge-profile/README.md the owner's steps and how the plugin
 works. Clean room: pspsdk's headers and libraries, uOFW, ARK-4's README, wiki, `systemctrl.h` and (for how it loads
 plugins) its plugin loader's and launcher's sources; no PPSSPP, no JPCSP. Save states unchanged; nothing of the PSP's
 behaviour changes.
 - **Why**: Phobos's GE time (part 64's geTime()) is Sony's peaks, four pixels a bus clock; Chains of Olympus paces its
   loop by the GE and draws its menu's scene 2-3 times a vblank in Phobos, each drawn by Vulkan. Whether a PSP draws it
   once decides accuracy and that work. Nothing had measured a PSP's GE in a game.
-- **The plugin** (`tools/psp-ge-profile/plugin`, 0.2.3): a kernel PRX for ARK-4 that patches the GE driver's and the
+- **The plugin** (`tools/psp-ge-profile/plugin`, 0.2.4): a kernel PRX for ARK-4 that patches the GE driver's and the
   display's syscalls (`sctrlHENPatchSyscall`) and records every call (entry and return times, thread, arguments,
   result, the GE's state), the FINISH/SIGNAL callbacks and the vblanks (the sub-interrupt monitor) into kernel memory,
   written after the capture; a dry mode that counts; notices on screen; `PHOBOS/trace.txt`. `decoder/geprof.py`:
@@ -89,19 +90,83 @@ behaviour changes.
   Every charge set by its pixels.
 - **The comparison** (the dry runs, then the owner's captures of five of the six scenes; Army of Two was optional):
   each game's loop is the same on both, but a PSP's GE takes 4.4 to 12 times what the model charges for a list
-  (coo-diff 27.6 ms against 6.24; gos-menu 29.6 against 4.05; smba-story 23.6 against 1.98; Killzone's scene list 23.4
-  or 17.2 against 3.57; Activision Hits' copyright screen 4.46 against 0.59), so the PSP draws 0.5 to 1.8 frames a
+  (coo-diff 27.6 ms against 6.24; gos-menu 29.6 against 4.05; smba-story 23.6 against 1.98; Killzone's scene list 24.3
+  or 27.3 against 3.57; Activision Hits' copyright screen 4.46 against 0.59), so the PSP draws 0.5 to 1.8 frames a
   vblank where Phobos draws 2.7 to 14. A first fit over three scenes: 0.875 bus clocks a pixel and 104 a primitive
-  (the model's peaks: 0.25 and 4.74), within 11% for those three. The PSP's CPU part of a loop is 7 to 9 times
-  Phobos's, but paces only Killzone.
-- **Tests**: tests/psp 574 groups, 0 failures, sanitized (container overflows not checked, as part 101 ran it: the
+  (the model's peaks: 0.25 and 4.74), within 11% for those three. In the scenes that sync, the PSP's CPU part of a
+  loop is 7 to 9 times Phobos's; it paces none of them (Killzone's GE is busy 89 and 98% of its windows).
+- **The review's fix round**: the decoder ends a FINISH's list at the queue's head (the driver is first in, first
+  out; Killzone's FINISH can come from below its list, which the address matching misread), counts the lists queued
+  before a capture by where their FINISHes fall, counts a one-buffer game's frames by its calls, and files interrupt
+  handlers' calls under `interrupt`: only Killzone's figures moved (above; Phobos's profile now has every list
+  charged and 59.9 frames shown a second). Plugin 0.2.4 (untested on a PSP, as 0.2.1 to 0.2.3): the captures'
+  192 KB buffer as the default, the boot capture from 4 s with 128 KB, its result notice kept up, interrupt-context
+  calls, files opened as new ones and removed if their writing fails, the trace capped at 256 KB. The recorder: a
+  wait whose callbacks run first ends where its thread goes on, sceGeSetCallback's functions read only as the
+  function reads them, a profile ends at a program's restart, the PSP's hooks word, no end of 0. The runner:
+  `--ge-profile-from` alone is an error, a WAV failure no longer skips the profile.
+- **Tests**: tests/psp 578 groups, 0 failures, sanitized (container overflows not checked, as part 101 ran it: the
   movie player's file read trips that check), with the new "ge profile" (the calls, the wait to its
   thread going on, the FINISH's callback, the vblank and the model's charge, record by record; the file byte by
-  byte; nothing recorded without a profile); the plugin's and the load test's host tests; the decoder's 19.
+  byte; nothing recorded without a profile, the machine ending the same to the cycle, its registers, memory and
+  state; a state loaded mid-callback; sceGeSetCallback with no slot free) and "ge profile: calls whose callbacks run
+  in them", and the loadExec test's profile ending; three mutants of the recorder caught; the plugin's and the load
+  test's host tests (a boot capture's notice through the control loop, interrupt-context calls, a failed write, the
+  trace's cap); the decoder's 23.
 - **Left**: geTime() unchanged here. Part 76's model, fitted to round 6's timings on this PSP and left unmerged, is
   the starting point: a design (that model checked against these captures, the GE's sync calls skipped through when a
   game polls them, a round 8 for what round 6 left) waits for the owner's approval. The CPU's 7 to 9 times is a
   question of its own.
+
+## README: a development progress section, generated from docs/progress/data.json — 2026-10-17
+
+Branch `cursor/readme-progress-2b67`, on master `5442acb8b` (part 102, #265); PR #274. Documentation and the script
+that generates it: nothing the app, the cores or the desktop program build changes.
+- **What**: README.md's new last section, "Development progress", between `<!-- progress:begin -->` and
+  `<!-- progress:end -->`: four headline numbers, three charts (the 266-game library runs, the 22 slow games at full
+  speed by build, pull requests opened per day), a four-period Mermaid `timeline` and the PSP releases. The full
+  story is docs/progress.md: the seven eras (in two timelines) and their milestones, the firsts, all twelve charts (the
+  5x runs on the RP6, PPSSPP and Phobos at 5x, the GE's list time on a PSP-1000 against Phobos's model among them),
+  every release, and the setbacks with what changed after them. Download no longer names a latest release: it links
+  releases/latest, which GitHub keeps on the newest tagged release (nightly pre-releases sit above it on the Releases
+  page); v2.0.0 was the first with the PSP.
+- **How**: docs/progress/data.json holds the curated data, each chart with its source note; tools/progress/render.py
+  (Python 3's standard library only) writes docs/images/progress/<id>-light.svg and -dark.svg (for `<picture>` and
+  prefers-color-scheme, about 880x360, a system font stack), docs/progress.md and the README section, replacing only
+  what's between the markers. The same data gives the same bytes. `--check` writes nothing and exits 1 when a file
+  differs from the data or a chart no longer comes from it. Headlines, alt texts and a few milestones name a chart's
+  numbers (`{chart:series:selector}`) rather than copying them, so they can't drift from the charts. The timelines
+  carry a Mermaid theme (dark fills, white text, gray lines) that reads alike on GitHub's light and dark pages, at
+  most four periods each, since GitHub shrinks a wider one, text and all. For each release: update the data, run the
+  script, commit the result (docs/development-process.md says so).
+- **Sources**: the numbers are the ones docs/psp-core.md, docs/psp-compatibility.md, tools/psp-measure/README.md and
+  the pull requests already report, and GitHub's pull request and release data (to 17 Oct, 2:38 PM). Private details
+  are left out: no device serial numbers, local paths, session IDs, personal notes, or where any game came from.
+- **Checks**: the script run twice, every output byte-identical (SHA-256); `--check` passes, and fails on a changed
+  page and on a stray chart; all 24 SVGs rendered to PNG with headless Chrome, light and dark, and looked at (titles,
+  axis labels, legends, captions; nothing clipped or overlapping); the timelines in plain `timeline` syntax (the script
+  refuses `:`, `#` and `;` in their text) and rendered with Mermaid 11 and 10 on white and near-black pages;
+  `git diff --check`; no line of the script over 120 characters; a privacy scan of every new and changed line. After
+  the push (`3da67b189`), the branch's README and docs/progress.md screenshotted on GitHub in its light and dark
+  themes with headless Chrome: each chart showed its matching variant, and all three timelines read in large white
+  text on dark boxes, their gray axes visible on both.
+- **Review**: an independent review of `a22b56455` passed the script, its determinism, the rendering (GitHub's light
+  and dark themes and Mermaid included) and privacy, and checked every chart series and over 40 dates against their
+  sources, but found five wrong public statements, all corrected: the Download line's "newest at the top" (nightlies
+  sit above the latest release); 29 Sep's decision (the PSP went on the plan through PPSSPP, docs/new-systems.md; a
+  core of Phobos's own was decided on 3 Oct, now that milestone's); two "firsts" that weren't (round 6 had timed test
+  lists on the same PSP, so 16 Oct is the first timing of games' own lists; part 43 had run a scratch runner from adb
+  on the RP6, so #255 is no first and its milestone says what it added, the runner built for Android); and #256's Hot
+  Wheels figure (4.2%: 48.58 to 46.52 ms; 3.5% was Killzone's row). Its should-fixes, taken: the headlines dated and
+  their methods said (the 11 Oct run; 150-second scripted runs; the 5x pass's two-minute runs from launch, mostly
+  logos, intros and menus, on Turnip), "first code" for "first instruction"; the drivers in the PPSSPP chart (PPSSPP on
+  Qualcomm's, Phobos on Turnip, with part 102's 2.7 against 12.9 fps on one scene); parts 51, 64 and 72 in the test
+  chart, which now ends at master's 576 (draft #272's 595 in the caption), and draft #266 named as a draft. Its nits,
+  taken: the README intro no longer repeats the first headline; the library headline agrees with the PSP section (the
+  last game plays its opening a few seconds past the minute); Midnight Club 3's 24.2 to 32.3 fps credited to part 43's
+  drawing off the emulation thread; the part count's note (parts 2 and 4 are under "The recompiler"); v2.0.0's #210
+  and #211; era 1 ending 3 Oct; #265's 19.4 fps named as its final build's (the 19.3 is an experimental build's); the
+  Mermaid theme; two lines over 120 characters. A CI lane for `--check` is left for a follow-up.
 
 ## PSP Vulkan at 5x: the depth-writing shader's depth declared never above the depth rasterized; another frame buffer's depth taken image to image where the device's copy leaves the stencil (Activision Hits' copyright screen at 5x on the RP6 2.7 → 19.4 fps) — 2026-10-16
 

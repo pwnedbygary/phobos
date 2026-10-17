@@ -45,8 +45,8 @@
 //                                (its decoder, geprof.py, reads it as it reads the plugin's from a PSP): each call to
 //                                the GE driver's and the display's functions, the GE's callbacks, the vertical blanks
 //                                and the GE time the model charges, in the PSP's time, from --ge-profile-from's frame
-//                                to the run's end
-//    --ge-profile-from F        the frame the GE profile starts at (default 1)
+//                                to the run's end (or to where the program starts itself again: one program's)
+//    --ge-profile-from F        the frame the GE profile starts at (default 1; with --ge-profile only)
 //    --report FILE              the run as JSON ("phobos-psp-runner 1"; tools/psp-runner/README.md): the runner's
 //                                build, the game, what was asked and what ran (the renderer, its device and
 //                                resolution, the engine, the GE's threads, the clock), and what came of it
@@ -466,7 +466,7 @@ auto main(int argc, char** argv) -> int {
   std::string pipelineCache;
   fs::path reportFile;
   u32 startTime = 0, screenStopsAt = 0;
-  bool startTimeGiven = false, framesGiven = false;
+  bool startTimeGiven = false, framesGiven = false, geProfileFromGiven = false;
   bool interpreter = false, traceSavedata = false, traceIo = false;
   for(int i = 1; i < argc; i++) {
     auto option = std::string{argv[i]};
@@ -521,7 +521,7 @@ auto main(int argc, char** argv) -> int {
     else if(option == "--trace-savedata") traceSavedata = true;
     else if(option == "--trace-io") traceIo = true;
     else if(option == "--ge-profile") geProfileFile = next();
-    else if(option == "--ge-profile-from") geProfileFrom = parseUint(next(), option);
+    else if(option == "--ge-profile-from") geProfileFrom = parseUint(next(), option), geProfileFromGiven = true;
     else if(option == "--report") reportFile = next();
     else if(option == "--start-time") startTime = parseUint(next(), option), startTimeGiven = true;
     else if(option == "--screen-stops-at") screenStopsAt = parseUint(next(), option);
@@ -534,6 +534,10 @@ auto main(int argc, char** argv) -> int {
       std::fprintf(stderr, "no such option: %s\n", option.c_str());
       return 1;
     }
+  }
+  if(geProfileFromGiven && geProfileFile.empty()) {
+    std::fprintf(stderr, "--ge-profile-from goes with --ge-profile (the file to record to)\n");
+    return 1;
   }
 
   //The script's presses, one per line, "#" beginning a comment.
@@ -723,6 +727,7 @@ auto main(int argc, char** argv) -> int {
   struct Capture { u32 frame, arrivedIn; f64 waited; bool fresh, picture; };
   std::vector<Capture> captures;                    //each PNG asked for, for the report
   PlayStationPortable::GeProfile geProfile;         //(--ge-profile) recorded from its frame on
+  u32 geProfileTo = frames;                         //its last frame: the run's, or the program's restart's
   //The clock asked for, held: a game that starts itself again (sceKernelLoadExec, or largeRestart with all of RAM)
   //powers the kernel on again, which takes the host's clock again (Kernel::power()). The kernel's run returns as the
   //new program is started, before any of it runs, so the clock is set again at the next frame's top (and after the
@@ -761,6 +766,9 @@ auto main(int argc, char** argv) -> int {
     if(saveStateAt == frame) captured += std::chrono::steady_clock::now() - stateStarted;
     if(!geProfileFile.empty() && frame == geProfileFrom) psp.kernel.geProfileStart(geProfile);
     root->run();
+    if(!geProfileFile.empty() && frame >= geProfileFrom && geProfileTo == frames && !psp.kernel.geProfile) {
+      geProfileTo = frame;  //the program started again (Kernel::loadExec()), ending the profile
+    }
     if(host.pngEvery ? frame % host.pngEvery == 0 : host.pngAt.count(frame)) {
       auto pngStarted = std::chrono::steady_clock::now();
       auto deadline = pngStarted + std::chrono::seconds(2);
@@ -816,7 +824,8 @@ auto main(int argc, char** argv) -> int {
   u32 ranResolution = psp.gpu ? psp.gpu->resolution() : 1, ranThreads = psp.ge.drawing.threads;
   root->unload();
 
-  //The sound, as a WAV.
+  //The sound, as a WAV (a WAV that can't be written fails the run, once the GE profile is written too).
+  bool wavFailed = false;
   if(!wav.empty()) {
     std::vector<s32> sound;
     {
@@ -825,7 +834,7 @@ auto main(int argc, char** argv) -> int {
     }
     if(!writeWav(wav, sound)) {
       std::fprintf(stderr, "the WAV can't be written: %s\n", wav.string().c_str());
-      return 1;
+      wavFailed = true;
     }
   }
 
@@ -853,6 +862,7 @@ auto main(int argc, char** argv) -> int {
       return 1;
     }
   }
+  if(wavFailed) return 1;
 
   //The summary: the frames run, the program's end, the speed, the missing functions, and the last note. Scripts find
   //its lines by their first words (or any line with "frames per second" in it), so a new line has words of its own.
@@ -868,8 +878,9 @@ auto main(int argc, char** argv) -> int {
   }
   if(staleCaptures) std::printf("stale captures: %u\n", staleCaptures);
   if(!geProfileFile.empty()) {
-    std::printf("ge profile: %zu records, frames %u to %u (%.3f s of the PSP's time), %s\n", geProfile.records.size(),
-                geProfileFrom, frames, (geProfile.endTime - geProfile.startTime) / 1e6, geProfileFile.string().c_str());
+    std::printf("ge profile: %zu records, frames %u to %u%s (%.3f s of the PSP's time), %s\n", geProfile.records.size(),
+                geProfileFrom, geProfileTo, geProfileTo < frames ? ", where the program started again" : "",
+                (geProfile.endTime - geProfile.startTime) / 1e6, geProfileFile.string().c_str());
   }
   if(gpu) {
     std::printf("gpu: %llu draws, %llu primitives, %llu 3D PRIMs transformed by the GPU, %llu submits, %llu "

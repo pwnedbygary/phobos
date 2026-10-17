@@ -7,7 +7,8 @@
 //the notices it puts on screen (notice.c draws them), and the files it writes once that's over
 //(<device>:/PHOBOS/PROF/<disc id>-<n>.bin, or .txt, and the trace, <device>:/PHOBOS/trace.txt). The device is looked
 //for again before every run and every write, so a memory stick not ready at the game's boot doesn't stop anything. No
-//file is opened while a capture runs; nothing is written, renamed or deleted outside <device>:/PHOBOS.
+//file is opened while a capture runs; nothing is written, renamed or deleted outside <device>:/PHOBOS. A capture or
+//report is always a new file (opened with O_EXCL) and is removed if its writing fails; the trace stops at 256 KB.
 
 #include "plugin.h"
 #include <pspctrl.h>
@@ -40,7 +41,9 @@ typedef struct {
   int read;         //prof.txt was found
 } Settings;
 
-static Settings settings = {1, PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_SELECT, 1, 20, 10, 2048, 256, 1, 1, 0};
+//192 KB, the buffer every capture so far had on the owner's PSP-1000 (some 560-580 KB free under a game; ten seconds of
+//a game's records took 50 to 130 KB), and 256 KB kept free.
+static Settings settings = {1, PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_SELECT, 1, 20, 10, 192, 256, 1, 1, 0};
 
 //In the order the report names them, so the default reads as prof.txt writes it.
 static const struct { const char* name; u32 mask; } buttonNames[] = {
@@ -436,6 +439,19 @@ static int writeAll(SceUID file, const void* data, u32 size) {
   return 1;
 }
 
+//A new file's, made here and never there before (O_EXCL), or a negative error code.
+static SceUID createFile(const char* path) {
+  return sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_EXCL, 0777);
+}
+
+//A file written in part (the stick full, say) is removed: no file is left that reads as a capture or a report.
+static int closeFile(SceUID file, const char* path, int ok) {
+  sceIoClose(file);
+  if(ok) return Saved;
+  sceIoRemove(path);
+  return WriteFailed;
+}
+
 //Returns a reason; name is the file's (when one was made).
 static int writeText(const char* text, int length, char* name, int nameSize) {
   char path[64];
@@ -443,11 +459,9 @@ static int writeText(const char* text, int length, char* name, int nameSize) {
   name[0] = 0;
   if(reason != Saved) return reason;
   fileName(name, nameSize, number, "txt");
-  SceUID file = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT, 0777);
+  SceUID file = createFile(path);
   if(file < 0) return OpenFailed;
-  int ok = writeAll(file, text, length);
-  sceIoClose(file);
-  return ok ? Saved : WriteFailed;
+  return closeFile(file, path, writeAll(file, text, length));
 }
 
 //The notice after a run, and its trace line.
@@ -610,7 +624,7 @@ static int writeCapture(ProfileHeader* header, const ProfileRecord* records, cha
   header->captureNumber = number;
   header->threadTableOffset = ProfileHeaderSize + header->recordCount * ProfileRecordSize;
   header->threadCount = threads;
-  SceUID file = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT, 0777);
+  SceUID file = createFile(path);
   if(file < 0) return OpenFailed;
   int ok = writeAll(file, header, ProfileHeaderSize) &&
            writeAll(file, records, header->recordCount * ProfileRecordSize);
@@ -623,8 +637,7 @@ static int writeCapture(ProfileHeader* header, const ProfileRecord* records, cha
     else memcpy(entry.name, index ? "?" : "interrupt", index ? 2 : 10);
     ok = writeAll(file, &entry, sizeof(entry));
   }
-  sceIoClose(file);
-  return ok ? Saved : WriteFailed;
+  return closeFile(file, path, ok);
 }
 
 static void copyString(char* target, const char* source, int size) {
@@ -758,6 +771,8 @@ static void controlStart(void) {
   flushTrace();
 }
 
+static int runs;  //runs begun: a run's own notices take the start notice's place, which isn't shown after one
+
 //The game's first flip through the hook: the game runs, its disc readable, so the disc ID is asked for again if the
 //start didn't get it; and the start notice is shown, the game's next flip drawing it.
 static void firstFlipSeen(void) {
@@ -767,11 +782,12 @@ static void firstFlipSeen(void) {
     readGameInfo();
     traceLine("disc id %s, title \"%s\" (asked again at the first flip)", discId, title);
   }
-  if(!startShown) showStart();
+  if(!startShown && !runs) showStart();
 }
 
 //A run: the countdown notice through the delay when the buttons started it, the dry run or the capture, the trace.
 static void trigger(int timed) {
+  runs++;
   ensureDevice();
   traceLine("trigger (%s): %s", timed ? "timed" : "buttons", settings.dry ? "dry run" : "capture");
   if(!timed) {
@@ -788,43 +804,47 @@ static void trigger(int timed) {
   flushTrace();
 }
 
+typedef struct { int timedDone, earlyTrace, flipTraced, held; u32 lastRunEnd; } Control;
+
+//The control thread's loop, a poll at a time.
+static void controlStep(Control* control) {
+  rest(PollInterval);
+  if(!control->flipTraced && noticeFirstFlip()) {
+    firstFlipSeen();
+    control->flipTraced = 1;
+  }
+  if(control->earlyTrace && (s32)(now() - pluginStart) >= EarlyTrace) {
+    if(!control->flipTraced) traceLine("no flip through the sceDisplaySetFrameBuf hook yet");
+    flushTrace();
+    control->earlyTrace = 0;
+    //shown now if no flip came through the hook (the other way draws it), or again if the PHOBOS folder turned up
+    //after it was
+    if(!runs && (!startShown || (!startShownWithDevice && device))) showStart();
+  }
+  int timed = 0;
+  if(!control->timedDone && settings.start >= 0) {
+    u32 timedAt = pluginStart + (u32)settings.start * Second;
+    if((s32)(now() - timedAt) >= 0) {
+      control->timedDone = 1;
+      timed = (s32)(timedAt - control->lastRunEnd) >= 0;  //skipped if a run was on when its time came
+    }
+  }
+  if(!timed) {
+    if(settings.buttons && (readButtons() & settings.buttons) == settings.buttons) control->held++;
+    else control->held = 0;
+    if(control->held < HeldPolls) return;
+    control->held = 0;
+  }
+  trigger(timed);
+  control->lastRunEnd = now();
+  waitForRelease();
+}
+
 static int controlThread(SceSize args, void* argp) {
   (void)args, (void)argp;
   controlStart();
-  int timedDone = 0, earlyTrace = 1, flipTraced = 0, held = 0;
-  u32 lastRunEnd = pluginStart;
-  for(;;) {
-    rest(PollInterval);
-    if(!flipTraced && noticeFirstFlip()) {
-      firstFlipSeen();
-      flipTraced = 1;
-    }
-    if(earlyTrace && (s32)(now() - pluginStart) >= EarlyTrace) {
-      if(!flipTraced) traceLine("no flip through the sceDisplaySetFrameBuf hook yet");
-      flushTrace();
-      earlyTrace = 0;
-      //shown now if no flip came through the hook (the other way draws it), or again if the PHOBOS folder turned up
-      //after it was
-      if(!startShown || (!startShownWithDevice && device)) showStart();
-    }
-    int timed = 0;
-    if(!timedDone && settings.start >= 0) {
-      u32 timedAt = pluginStart + (u32)settings.start * Second;
-      if((s32)(now() - timedAt) >= 0) {
-        timedDone = 1;
-        timed = (s32)(timedAt - lastRunEnd) >= 0;  //skipped if a run was on when its time came
-      }
-    }
-    if(!timed) {
-      if(settings.buttons && (readButtons() & settings.buttons) == settings.buttons) held++;
-      else held = 0;
-      if(held < HeldPolls) continue;
-      held = 0;
-    }
-    trigger(timed);
-    lastRunEnd = now();
-    waitForRelease();
-  }
+  Control control = {0, 1, 0, 0, pluginStart};
+  for(;;) controlStep(&control);
   return 0;
 }
 
