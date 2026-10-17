@@ -15789,7 +15789,7 @@ the GE's time:
 | Super Monkey Ball Adventure, Story Mode | −59% | 32-bit pixels 27%, the depth test 22%, small textures loaded whole 12%, primitives 10%, texels 10%; its front end 78% of its back end (15,000 primitives, 84,000 words and 3,500 CALLs a list) |
 | Killzone, gameplay | +106 to +180% | VRAM texels 79%: a 512x512 VRAM buffer read as a CLUT32 texture in strips 32 texels wide, 1:1 (37 of its 49 ms a scene list); its full-screen list, a 512x512 VRAM texture over the screen in strips 120 wide into 5650, 96% |
 | Activision Hits Remixed, menu | +138% | VRAM texels 67% (the same CLUT32 strips), point lights 20% |
-| Activision Hits Remixed, copyright screen | −39% at equal clocks | a 512x256 CLUT8 texture in RAM, swizzled, drawn 512 across: 65% |
+| Activision Hits Remixed, copyright screen | −9% (222/111 on both) | a 512x256 CLUT8 texture in RAM, swizzled, drawn 512 across: 65% |
 
 - **The VRAM texture rate** (round 6's: 1.93 clocks a byte, from a 256x256 texture drawn as one sprite) carries
   Killzone's and Activision Hits' menus. At the swizzled cache rate instead, Killzone's scene list would take about
@@ -15797,8 +15797,9 @@ the GE's time:
 - **Super Monkey Ball's lists aren't paced by its CPU**: on the PSP each list is built within 0.12 ms of being queued
   (one stall update, none finding the GE waiting), and the GE takes 23.5 ms more. What the model leaves out is in the
   GE: its many small textured primitives, the state set between them, and the CALLs.
-- **Activision Hits' copyright screen** takes the PSP about 2.3 clocks a pixel more than the model: a big CLUT8
-  texture's palette, or its rate across 512 texels.
+- **Activision Hits' copyright screen** is within the gate: the PSP ran it at 222/111, as Phobos does (its boot
+  capture's 333/166 was read before the game's program had started, part 104), where the first comparison had scaled
+  the PSP's time to 333/166 (−39%). Its big CLUT8 texture drawn 512 across is measured all the same.
 
 ### What round 8 measures
 
