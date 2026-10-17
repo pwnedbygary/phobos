@@ -207,7 +207,9 @@ it's drawn with, where each target's depth is its own on the GPU. So a target's 
 serial of the last PRIM that wrote depth there, `Target::depthAt`, 0 for memory's), and before a PRIM that tests or
 writes depth draws into a target, the newer depth of another target over the same depth buffer (address and row
 width) is copied into its depth on the GPU (`takeDepth()`, `Command::Depth`: the depth aspect alone, the stencil being
-each frame buffer's own), for the rows and columns that one has, its changes from memory filled first (where it's a
+each frame buffer's own; since part 102 from image to image where the device's copy of the depth alone is found at
+start to leave the stencil, `depthAloneProbe()`, else through the run's staging buffer: MoltenVK's and lavapipe's take
+it too), for the rows and columns that one has, its changes from memory filled first (where it's a
 narrower frame buffer, this one's columns past it are left as they'd be without it). Hammerin' Hero and Jeanne d'Arc
 draw their scene into the screen's frame buffer, then their characters into a frame buffer of their own, cleared
 without its depth, tested against the scene's; Colin McRae Rally's terrain shadows are drawn so too. The same memory as
@@ -216,7 +218,7 @@ other screen's depth into the one it clears first (a copy of a frame's depth, an
 frame buffer and a 16-bit one, which read the depth buffer's bytes in two orders (part 96: Twisted Metal draws small
 5551 frame buffers against its 8888 scene's depth), the depth is placed by runs: the two orders move 32-byte pieces
 whole, so each run of 16 of the target's depths is 16 of the other's, those its order puts at the same bytes
-(`Command::runs`, the backend's copy through the staging buffer taking each run from the other's depth and placing
+(`Command::runs`, the backend's copy taking each run from the other's depth and placing
 it, down as many rows as move alike; 32 runs for a depth buffer 512 wide, the buffer holding the target's columns
 alone). Where a run's bytes lie past what the other holds (a depth buffer not on 32 bytes,
 rows past its), the depth goes through memory instead: put there in its frame buffer's order (`putDepth()`, below)
@@ -444,7 +446,21 @@ What the GPU does with the GPU's own units, and how near the PSP it comes:
   one GE depth meet as the GE's do: Daxter draws its shadow twice over the floor with "at most", and with float depths
   a little apart on the GPU the second layer didn't darken it again. That's `draw.frag`'s `DEPTHS` build: a shader
   that writes the depth may keep a GPU from testing it before the shader runs, so the other pipelines take the build
-  without the write.
+  without the write. Since part 102 the build declares the depth it writes never above the depth rasterized
+  (`depth_less`), where the device clamps depth and the PRIM's corners' depths are the GE's 0-65535 (every 3D one's,
+  held; a 2D one's past them takes another pipeline: `Pipeline::outside`): those pipelines rasterize the depth a step
+  and a half above the GE's, (z + 1.5) / 65536.5 (`draw.vert`'s and `transform.vert`'s `ABOVE`), so the whole number
+  written lies a step below it at least while the GPU's depth and the one interpolated beside it part by less than a
+  step (a float's step at 65535 is about 1/256 of one), and a GPU that takes the declaration may still reject before
+  the shader runs a fragment a greater or greater-or-equal test fails (Metal does, Turnip in part; Qualcomm's driver
+  doesn't). Elsewhere the build is undeclared (its `DepthLess` taken out of the SPIR-V at start, `GPU::undeclared()`:
+  the build before part 102, word for word) and the depth rasterized at the GE's, as before (`ABOVE` off): past
+  0-65535 in 2D a float's own step reaches a whole one at ten million (a quad with corners near ten million lost a
+  pixel of a greater-or-equal redraw on MoltenVK with the declaration), and devices without clamping are left out by
+  caution, the margin fitting there too (at most (65535 + 1.5) / 65536.5, 1.0 exactly) but no such device having run
+  those pipelines. No "never below" for less and less-or-equal tests: it would need a 3D corner's depth rasterized
+  below 0 (the whole number at depth 0 is 0), where MoltenVK moves the depth interpolated beside it, and held at 0 it
+  isn't true (part 102).
 - **Stencil**: the GPU's 8-bit stencil, with the GE's comparison, reference, masks and operations (keep, zero,
   replace, invert, increment and decrement clamped). The alpha written to the color follows the stencil where the pass
   operation's result is known in advance (replace, zero), so blending by the frame buffer's alpha reads it; the
