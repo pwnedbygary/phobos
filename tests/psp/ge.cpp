@@ -1034,7 +1034,7 @@ static auto copySample() -> void {
     u32 swaps = 0, shown = 0;
     for(u32 slice = 0; slice < 500 && swaps < 4 && !m.kernel.exited; slice++) {
       m.kernel.run(100'000);
-      if(m.kernel.display.frameBuffer != shown) swaps++, shown = m.kernel.display.frameBuffer;
+      if(m.kernel.presentedFrameBuffer() != shown) swaps++, shown = m.kernel.presentedFrameBuffer();
     }
     CHECK(swaps, 4);
     CHECK(m.kernel.exited, false);  //it runs until the player quits

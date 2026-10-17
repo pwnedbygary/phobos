@@ -759,7 +759,8 @@ static auto atracContextsOlder() -> void {
   for(u32 id : range(6)) m.kernel.atracContext(id);
   m.system.memory.write(1, contexts + 128 + 21, 16);
   //this state as layout 26 has it: without sceVaudio's 15 bytes, where saving it with sceVaudio held shows them,
-  //nor the program's count of imported variables (4 bytes before them: layout 28's)
+  //nor the program's count of imported variables (4 bytes before them: layout 28's), nor a frame buffer set for the
+  //next vertical sync (13 bytes after them: layout 33's)
   auto state = saveState(m);
   m.kernel.audio.vaudio.reserved = true;
   auto held = saveState(m);
@@ -767,12 +768,18 @@ static auto atracContextsOlder() -> void {
   m.kernel.module.variables.push_back({"Lib", 1, 2, 0});
   auto imported = saveState(m);
   m.kernel.module.variables.clear();
+  m.kernel.display.nextFrameBuffer = 1;
+  auto latched = saveState(m);
+  m.kernel.display.nextFrameBuffer = 0;
   u32 vaudio = 0;
   while(vaudio < state.size() && vaudio < held.size() && state[vaudio] == held[vaudio]) vaudio++;
   u32 variables = 0;
   while(variables < state.size() && variables < imported.size() && state[variables] == imported[variables]) variables++;
-  CHECK(variables + 4 <= vaudio && vaudio + 15 < state.size(), true);
-  if(variables + 4 > vaudio || vaudio + 15 >= state.size()) return;
+  u32 display = 0;
+  while(display < state.size() && display < latched.size() && state[display] == latched[display]) display++;
+  CHECK(variables + 4 <= vaudio && vaudio + 15 <= display && display + 13 < state.size(), true);
+  if(variables + 4 > vaudio || vaudio + 15 > display || display + 13 >= state.size()) return;
+  state.erase(state.begin() + display, state.begin() + display + 13);
   state.erase(state.begin() + vaudio, state.begin() + vaudio + 15);
   state.erase(state.begin() + variables, state.begin() + variables + 4);
   Machine n;

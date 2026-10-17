@@ -35,6 +35,27 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP display: the frame buffer set for the next vertical sync shown from the sync, sceDisplayGetFrameBuf answering for the one asked (Army of Two's 30/20 frames a second) — 2026-10-16
+
+Branch `cursor/psp-display-latch-2b67` (from master `5442acb8b`); docs/psp-core.md, part 108.
+- **Why**: Army of Two flips from its list's SIGNAL callback for the next sync, then asks which frame buffer is shown
+  and waits for the blank while its flip isn't yet: two flips and a wait a frame, 30/20 fps on the owner's PSP.
+  Phobos took every frame buffer at once, so the game never waited: master draws 251 frames a second for 60 shown.
+- **Change** (display.cpp): sceDisplaySetFrameBuf's sync 1 sets the address shown from the next blank's start, or,
+  set in a blank before its vertical sync (631.5 us in), from that sync; the width and format at once (pspautotests'
+  setframebuf, isstate); sceDisplayGetFrameBuf's which 1 reads the one coming, 0 the one shown; the screen shows the
+  last one set in the frame after the blank, as before. Layout 33 keeps one waiting (13 bytes); #269 takes 33 too:
+  second to land renumbers to 34.
+- **Effect** (34 scenes x Software, Vulkan, Vulkan-fast against master; their display calls traced): 31 the same in
+  every frame. Army of Two: ~120 frames a second drawn instead of 251 (gameplay; menu 194), a blank waited for each
+  frame (with #269's PSP timing: 30/20 fps as on the PSP); Death Jr. II's character screen: pictures the same, its
+  drawing ~0.6 ms later (its main thread waits for its handler's flip till the sync). Games that read
+  sceDisplayGetFrameBuf(0) after a next-sync flip are the ones that can change: Army of Two, Death Jr. II, Sonic
+  Rivals here.
+- **Checks**: tests/psp/run-tests.sh (sanitized): 577 groups, 0 failures; the new test fails on master.
+- **Left out**: setframebuf's refusals (round 8's display-start first); a frame buffer set in the blank's handler,
+  before the sync, taken at that sync (unrecorded).
+
 ## PSP Vulkan at 5x: the depth-writing shader's depth declared never above the depth rasterized; another frame buffer's depth taken image to image where the device's copy leaves the stencil (Activision Hits' copyright screen at 5x on the RP6 2.7 → 19.4 fps) — 2026-10-16
 
 Branch `cursor/psp-hires-2b67`, on master `a8d5640f5` (part 101, #263), master `7023fb080` (#264 and the PGD layer's

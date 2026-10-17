@@ -16054,3 +16054,100 @@ timed around sceGeDrawSync) and geTime() from them: GE timing, not the renderer'
   library scan `scan-takes.sh` and `gen-takes-list.py`; `rp6b/`, the fix round's build and its scripts; `logs/`, the
   tests, experiments, mutations and suites; `hash/`, the hash runs; `builds-time2.sh` and `time-table.py`, the Mac's
   timing, `logs/time-pr5-final.log` its runs).
+
+## Part 108: the display's frame buffer for the next vertical sync — sceDisplaySetFrameBuf's sync 1 shown from the sync, sceDisplayGetFrameBuf answering for the one asked (Army of Two's 30/20 frames a second)
+
+On branch `cursor/psp-display-latch-2b67`, from master `5442acb8b`. Sources: pspautotests' display/setframebuf and
+display/isstate (their recordings), pspsdk's `pspdisplay.h`. No PPSSPP or JPCSP. Save states: layout 33 (its own:
+#269's GE timing takes 33 too, and whichever lands second renumbers its layout to 34).
+
+### Why
+
+- Army of Two (part 103's captures ULUS10472-1 and -2): each frame its list's SIGNAL callback sets the next frame
+  buffer for the next vertical sync; after its draw sync the game asks `sceDisplayGetFrameBuf` which is shown (0),
+  and while it isn't the new one yet, sets it again and waits for the blank: two flips and one wait a frame, 30
+  frames a second while the GE's frame fits two blanks, 20 above, on the owner's PSP. Phobos took every frame buffer
+  at once, so the game found its flip shown and never waited: master draws 251 frames a second (the GE timing
+  "Fast") for 60 shown, part 106's PSP timing 29 to 32 a second with no cap.
+
+### What a PSP does
+
+- display/setframebuf: a frame buffer set with sync 1 (pspsdk's NEXTVSYNC) reads at once as the one coming
+  (`sceDisplayGetFrameBuf`'s 1) and as the one shown (0) only from the next blank (read after
+  `sceDisplayWaitVblankStart`); its width and format read at once from both. display/isstate: a frame buffer of 0 so
+  set leaves the display in the foreground till then, and the vertical sync comes 631.5 microseconds into the blank.
+- Five of the scenes below set theirs with sync 1 just as a blank starts (from a vertical blank handler, or a thread
+  that waited for the blank): if the frame buffer were taken at the blank's start, each of their frames would show a
+  blank late. Set in a blank before its sync, here they're taken at that sync, for the frame after the blank; set
+  anywhere else, at the next blank's start, as setframebuf read it.
+- (Also recorded, left out here: refusals of a sync other than 0 and 1, of a width or format set at once that isn't
+  the one shown (0x80000107), of widths not a multiple of 64 (0x80000104), formats past 3 (0x80000108) and addresses
+  misaligned or outside VRAM and RAM (0x80000103). What a PSP's display holds as a game starts isn't known here, and
+  a game's first frame buffer, set at once, mustn't be refused for not matching it: round 8's display-start, part
+  107, records it.)
+
+### What changed
+
+- display.cpp: `sceDisplaySetFrameBuf`'s sync 1 sets the address shown from the next blank's start, or, set in a
+  blank before its sync, from that sync (`Display::nextFrameBuffer`, `nextAt`; `Kernel::VsyncCycles`), the width and
+  format at once; sync 0 (anything else) as before, replacing one waiting. `latchFrameBuffer()` makes it the one
+  shown once its sync has come, as `sceDisplayGetFrameBuf` and `sceDisplayIsForeground` read and each blank goes by;
+  `sceDisplayGetFrameBuf`'s which 1 reads the one coming. The screen (`presentedFrameBuffer()`: `Kernel::picture()`,
+  system.cpp) shows in the frame after a blank the frame buffer its sync takes: the last one set, as before.
+- Save states: layout 33 keeps one waiting and its sync (13 bytes); older layouts load with none.
+
+### What it does
+
+- Every scene of both libraries (34, `cpu-round3/scenes` and `psp-hires/scenes`), the bench runners against master,
+  100 frames from each state, in Software, Vulkan and Vulkan-fast: 31 the same as master in every frame's picture
+  and VRAM and the RAM after, in all three. Three change, the same way in all three renderers:
+  - Army of Two's gameplay and menu: every frame, and the RAM: its pacing (below).
+  - Death Jr. II's character screen: every frame's picture the same; the VRAM in alternate frames (50 of 100) and
+    the RAM: its vertical blank handler sets the frame buffer for the sync as the blank starts, and its main thread
+    asks which is shown till it's the new one: from that sync now, 631.5 microseconds on, so its drawing starts that
+    much later. (Its gameplay scene, the same calls, comes out the same in its 100 frames.)
+
+- Each scene 600 frames (10 s) in Software, its display calls traced (`phase3/calltrace-patch.py`): frames a second
+  the same in 32 scenes. Army of Two, with the GE timing "Fast" (the default): drawn 251 times a second in its
+  gameplay and 194 in its menu, for 60 shown, now about 120 in both, waiting for the blank once a frame. Fast's GE
+  is done with its next frame within a line of the blank, so that frame's flip comes before the blank's sync and is
+  taken there, and the game draws once more before it waits; a PSP's GE never is (the owner's captures: 23 to 35 ms
+  a frame). With the PSP's timing (part 106, #269) its flips come mid-frame, and it flips twice and waits once a
+  frame, 30 or 20 frames a second, as on the owner's PSP (part 106's scratch run).
+- Which games read the display back: `sceDisplayGetFrameBuf`'s 0, after flipping for the next sync: Army of Two (after
+  its draw sync), Death Jr. II and Sonic Rivals (their main threads, after their vertical blank handlers' flips): the
+  ones whose behaviour can change. Activision Hits Remixed reads 0 and Twisted Metal Head On's game 1, but set theirs
+  at once: unchanged. Next-sync flips besides: Colin McRae Rally 2005, Disaster Report 3's intro, Chinatown Wars, Hot
+  Wheels Ultimate Racing (half its flips), Killzone Liberation, Twisted Metal's logos: their pictures as master's,
+  Twisted Metal's, Death Jr. II's and Sonic Rivals' set as the blank starts, for the frame after it. No game here
+  asks `sceDisplayIsForeground`.
+
+### Tests
+
+- "display frame buffer set for the next vsync" (callbacks.cpp): setframebuf's and isstate's recordings (on master
+  the address reads as shown at once and the display leaves the foreground at once: the test fails there); set
+  mid-frame, shown from the next blank's start; set as a blank starts, from that blank's sync; set after the sync,
+  from the next blank's start; the frame after the blank showing it either way; one set at once replacing one
+  waiting; two for one sync, the last; a state keeping one.
+- The layout tests (states.cpp, font.cpp, atrac.cpp, ares/system.cpp) for layout 33; the tests that read the screen's
+  frame buffer (draw.cpp's and ge.cpp's samples, kernel.cpp's hello program) read the one presented.
+
+### Checks
+
+- `tests/psp/run-tests.sh` (sanitized; the address sanitizer's container-overflow check off, as part 101 ran it):
+  577 groups, 0 failures. With sync 1 taken at once, as master takes it (the rest kept, so the test builds): the new
+  test's 5 checks of the frame buffer shown and the foreground fail, every other group passes.
+
+### Not yet
+
+- The refusals above, once round 8's display-start says what a game's first frame buffer meets.
+- Whether a PSP's display takes a frame buffer set inside the vertical blank handler, before the sync, at that sync:
+  taken so here (the sync is 631.5 microseconds in, the handlers run as the blank starts), unrecorded.
+
+### Scratch
+
+`~/phobos-work/scratch/psp-ge-profile/latch/`: `latchcheck.sh` (the blank's start taken as the moment) and
+`latchcheck2.sh` (the sync) and `latchcheck3.sh` (the sync for a frame buffer set in the blank, the blank's start
+for one set before it), their `summary.txt`, `hashes/` and `pacing/` (each scene's display calls, traced with
+`phase3/calltrace-patch.py`); `phase3/latch-patch.py`, the first try; `round8/`, display-start. Nothing was run on the
+RP6.

@@ -1626,7 +1626,8 @@ static auto idsRunOut() -> void {
   CHECK(n.kernel.nextUID, Kernel::LastUID + 1);
 }
 
-//States of the layouts before this one load: 31's (no emptied file's length), 26's (nor sceVaudio), 25's (nor the
+//States of the layouts before this one load: 32's (no frame buffer waiting for a vertical sync), 31's (nor an
+//emptied file's length), 26's (nor sceVaudio), 25's (nor the
 //dialog's error and deleted save), 24's (nor any file's PGD decryption), 23's (nor GE time: when the GE will
 //have drawn what it was given, and whether its list's FINISH waits), 22's (nor any file's place in the order files
 //were opened), 21's (nor part 58's sceJpeg, sceHprm and low-level ATRAC fields, with files' count still kept and no
@@ -1680,6 +1681,9 @@ static auto olderLayouts() -> void {
   m.kernel.workingDirectory = "ms0:/LIST";
   u32 workingDirectory = where(kernelState(), state);
   m.kernel.workingDirectory = "ms0:/";
+  m.kernel.display.nextFrameBuffer = 1;
+  u32 latched = where(kernelState(), state);
+  m.kernel.display.nextFrameBuffer = 0;
   m.kernel.jpeg.initialized = true;
   u32 jpeg = where(kernelState(), state);
   m.kernel.jpeg.initialized = false;
@@ -1713,13 +1717,19 @@ static auto olderLayouts() -> void {
               && dialogDeleted < jpeg
               && jpeg < files && files < asyncData && asyncData < opened && opened + 8 <= pgd && pgd < pgdEnd
               && pgdEnd == truncation && truncation < truncationEnd && truncationEnd <= workingDirectory
-              && workingDirectory < geDone && geFinish == geDone + 8 && geFinish < state.size();
+              && workingDirectory < latched && latched + 13 <= geDone && geFinish == geDone + 8
+              && geFinish < state.size();
   CHECK(ordered, true);
   if(!ordered) return;
+  //Layouts before 33 have no frame buffer set for the next vertical sync (13 bytes after the working folder and
+  //before the GE's time, so taken out of each older state first of all, the GE's time moving back as much)
+  auto layout32 = state;
+  layout32.erase(layout32.begin() + latched, layout32.begin() + latched + 13);
+  geDone -= 13, geFinish -= 13;
   //Layouts before 32 have no emptied file's lengths (the file's last fields, after everything but the working folder
-  //and the GE's time, so taken out of each older state first, those after it moving back as much)
+  //and the GE's time, so taken out of each older state next, those after it moving back as much)
   u32 cut = truncationEnd - truncation;
-  auto older = state;
+  auto older = layout32;
   older.erase(older.begin() + truncation, older.begin() + truncationEnd);
   workingDirectory -= cut, geDone -= cut, geFinish -= cut;
   //Layouts before 26 have no dialog error and deleted save (5 bytes, before everything else changed here but the
@@ -1749,6 +1759,7 @@ static auto olderLayouts() -> void {
     n.kernel.atracs[1].lowLevel = true;
     n.kernel.geDoneAt = 12345;
     n.kernel.audio.vaudio.effect = 3;
+    n.kernel.display.nextFrameBuffer = 0x0400'0000, n.kernel.display.nextSet = true, n.kernel.display.nextAt = 99;
     n.kernel.stateLayout = layout;
     serializer s{bytes.data(), u32(bytes.size())};
     bool loaded = n.kernel.serialize(s) && s.size() == bytes.size();
@@ -1757,6 +1768,8 @@ static auto olderLayouts() -> void {
     n.kernel.serialize(again);
     return loaded && std::vector<u8>{again.data(), again.data() + again.size()} == state;
   };
+  CHECK(loads(32, layout32), true);
+  CHECK(loads(current, layout32), false);
   CHECK(loads(31, older), true);
   CHECK(loads(current, older), false);
   CHECK(loads(28, before31(older)), true);
@@ -1802,15 +1815,19 @@ static auto olderLayouts() -> void {
   m.kernel.geDoneAt = 1;
   u32 geAt = where(kernelState(), twoFiles);
   m.kernel.geDoneAt = 0;
+  m.kernel.display.nextFrameBuffer = 1;
+  u32 latchedAt = where(kernelState(), twoFiles);
+  m.kernel.display.nextFrameBuffer = 0;
   m.kernel.dialog.error = 1;
   u32 dialogAt = where(kernelState(), twoFiles);
   m.kernel.dialog.error = 0;
   m.kernel.audio.vaudio.reserved = true;
   u32 vaudioAt = where(kernelState(), twoFiles);
   m.kernel.audio.vaudio.reserved = false;
-  CHECK(places[0] < places[1] && places[1] < geAt, true);
-  if(!(places[0] < places[1] && places[1] < geAt)) return;
+  CHECK(places[0] < places[1] && places[1] < latchedAt && latchedAt + 13 <= geAt, true);
+  if(!(places[0] < places[1] && places[1] < latchedAt && latchedAt + 13 <= geAt)) return;
   twoFiles.erase(twoFiles.begin() + geAt, twoFiles.begin() + geAt + 9);
+  twoFiles.erase(twoFiles.begin() + latchedAt, twoFiles.begin() + latchedAt + 13);
   for(u32 at : {places[1], places[0]}) {  //each file's place, and its PGD decryption and lengths after it
     twoFiles.erase(twoFiles.begin() + at, twoFiles.begin() + at + (truncationEnd - opened));
   }
