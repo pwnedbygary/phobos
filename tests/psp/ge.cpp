@@ -3254,6 +3254,7 @@ static auto geThreadReads() -> void {
   s.ge.setThreads(1);
   build(s.memory);
   std::atomic<bool> held{true};
+  s.geThreading->drain();  //(the thread reads its gate as it takes each record)
   s.geThreading->gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
   s.ge.list = {}, s.ge.list.address = ListA;
   CHECK(u32(s.ge.run(1000)), u32(GE::Stop::Finished));
@@ -3310,6 +3311,7 @@ static auto geThreadConflicts() -> void {
   s.ge.setThreads(1);
   build(s.memory);
   std::atomic<bool> held{true};
+  s.geThreading->drain();  //(the thread reads its gate as it takes each record)
   s.geThreading->gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
   s.ge.list = {}, s.ge.list.address = ListA;
   CHECK(u32(s.ge.run(1000)), u32(GE::Stop::Finished));
@@ -3332,13 +3334,24 @@ static auto geThreadConflicts() -> void {
 //bytes where one newer than its place has them; its write-backs go under the emulation thread's later writes (into
 //the earliest version at or after its place), storing only the bytes that change; of two versions over the same bytes
 //the earlier counts; versions are freed once the GE thread has passed them. And neither thread waits for the other
-//while holding what the other waits for (R13): stopped between pinning and looking for versions, the GE thread finds
-//the emulation thread's version published but not ready, lets go and waits, and the emulation thread, which was
-//waiting for that pin, copies and goes on; stopped between publishing and looking at the pin, the emulation thread
-//finds the pin let go of once the GE thread has found its version not ready. Each order under a time limit.
+//while holding what the other waits for (R13), nor does the GE thread wait for a version not being copied: stopped
+//between pinning and looking for versions, the GE thread finds the emulation thread's version published, not ready
+//and not copied (the emulation thread waits for its pin), and reads past it, memory's byte as the version will have
+//it; the same where the emulation thread is stopped between publishing and looking at the pin, and where it's
+//stopped till the GE thread is done (as it writes on and on into a page the GE thread writes back: waiting for that
+//version, as before, the GE thread would never be done); stopped as it copies, the GE thread finds the copy under
+//way, lets go and waits, and reads the version once it's ready. Each order under a time limit.
 static auto geVersions() -> void {
   static u8 bytes[2][4096];
-  auto host = [](void*, u32 page) -> u8* { return page == 5 ? bytes[0] : page == 6 ? bytes[1] : nullptr; };
+  static std::atomic<bool> stopCopy{false}, copyStopped{false};
+  static std::thread::id copier;
+  auto host = [](void*, u32 page) -> u8* {
+    if(stopCopy && std::this_thread::get_id() == copier) {  //(the emulation thread copying a version's bytes)
+      copyStopped = true;
+      while(stopCopy) std::this_thread::yield();
+    }
+    return page == 5 ? bytes[0] : page == 6 ? bytes[1] : nullptr;
+  };
   for(u32 n = 0; n < 4096; n++) bytes[0][n] = n, bytes[1][n] = n ^ 0x55;
   {
     GeVersions v{host, nullptr};
@@ -3390,8 +3403,8 @@ static auto geVersions() -> void {
     GeVersions::Hold hold{v, 0, false, 5, 6};
     CHECK(hold.versioned, false);
   }
-  //R13: both orders, each thread stopped between its two steps, under a time limit
-  for(u32 order = 0; order < 2; order++) {
+  //R13: each thread stopped between its steps, in each order, under a time limit
+  for(u32 order = 0; order < 4; order++) {
     GeVersions v{host, nullptr};
     bytes[0][200] = 0x11;
     std::atomic<u32> gePinned{0}, emulationPublished{0};
@@ -3400,26 +3413,42 @@ static auto geVersions() -> void {
     if(order == 0) {  //(the GE thread pinned first, then the version published while it's stopped)
       v.pinned = [&] { if(!gePinned++) while(!emulationPublished) std::this_thread::yield(); };
       v.published = [&] { emulationPublished = 1; };
-    } else {  //(the version published first, then the GE thread pinned, looking and letting go while it's stopped)
+    } else if(order == 1) {  //(the version published first, the emulation thread stopped till the GE thread pins)
       v.published = [&] {
         emulationPublished = 1;
         while(!gePinned) std::this_thread::yield();
-        while(v.pages[5].pins.load()) std::this_thread::yield();  //(it found the version not ready, let go: waits)
+      };
+      v.pinned = [&] { gePinned++; };
+    } else if(order == 2) {  //(the emulation thread stopped as it copies the version's bytes, the GE thread pinning)
+      stopCopy = true, copyStopped = false;
+      v.pinned = [&] { gePinned++; };
+    } else {  //(the emulation thread stopped after publishing till the GE thread is done)
+      v.published = [&] {
+        emulationPublished = 1;
+        while(!geDone) std::this_thread::yield();
       };
       v.pinned = [&] { gePinned++; };
     }
     std::thread ge([&] {
-      if(order == 1) while(!emulationPublished) std::this_thread::yield();
-      GeVersions::Hold hold{v, 40, false, 5, 5};
-      hold.read(5, 200, 1, &seen);
+      if(order == 1 || order == 3) while(!emulationPublished) std::this_thread::yield();
+      if(order == 2) while(!copyStopped) std::this_thread::yield();
+      {
+        GeVersions::Hold hold{v, 40, false, 5, 5};
+        hold.read(5, 200, 1, &seen);
+      }
       geDone = true;
     });
     std::thread emulation([&] {
+      copier = std::this_thread::get_id();
       if(order == 0) while(!gePinned) std::this_thread::yield();
       v.save(5, 200, 1, 41);
       bytes[0][200] = 0x22;
       emulationDone = true;
     });
+    if(order == 2) {  //(the copy let go on once the GE thread, finding it under way, has let go of the page)
+      while(!gePinned || v.pages[5].pins.load()) std::this_thread::yield();
+      stopCopy = false;
+    }
     auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while(!(geDone && emulationDone) && std::chrono::steady_clock::now() < until) std::this_thread::yield();
     if(!(geDone && emulationDone)) {
@@ -3428,7 +3457,8 @@ static auto geVersions() -> void {
     }
     ge.join(), emulation.join();
     CHECK(seen, 0x11u);  //(the GE thread at 40 reads the byte as before the write at 41)
-    CHECK(gePinned >= 2u, true);  //(it let go and pinned again)
+    if(order == 2) CHECK(gePinned >= 2u, true);  //(it let go of the copy under way and pinned again)
+    else CHECK(gePinned, 1u);                     //(it read past the version not copied)
   }
   //A version published while the GE thread holds its page, another version found there as it pinned: not ready till
   //the page is let go of, so its read takes memory's byte, as the version will have it, and its write-back goes to

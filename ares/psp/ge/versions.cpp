@@ -21,6 +21,7 @@ auto GeVersions::save(u32 page, u32 offset, u32 size, u64 at) -> void {
   else version = spare.back(), spare.pop_back();
   version->at = at, version->offset = offset, version->size = size;
   version->ready.store(false, std::memory_order_relaxed);
+  version->copying.store(false, std::memory_order_relaxed);
   version->next.store(nullptr, std::memory_order_relaxed);
   version->bytes.resize(size);
   //1. published, the newest last
@@ -28,8 +29,15 @@ auto GeVersions::save(u32 page, u32 offset, u32 size, u64 at) -> void {
   else p.first.store(version, std::memory_order_seq_cst);
   p.last = version;
   if(published) published();
-  //2. the GE thread's access to the page, if one is under way, ended
-  unpinned(p.pins);
+  //2. the GE thread's access to the page, if one is under way, ended, and copying said: then the pins looked at again,
+  //as the GE thread pins and then looks at copying, so that one of the two sees the other (it waits only for a copy
+  //under way: one published under its pins, which waits for them, it reads past, as memory has the bytes)
+  while(true) {
+    unpinned(p.pins);
+    version->copying.store(true, std::memory_order_seq_cst);
+    if(!p.pins.load(std::memory_order_seq_cst)) break;
+    version->copying.store(false, std::memory_order_seq_cst);
+  }
   //3. the bytes as they are now (the GE thread's write-backs under the pin among them), then ready; the caller then
   //writes memory (4.)
   if(u8* bytes = host(context, page)) std::memcpy(version->bytes.data(), bytes + offset, size);
@@ -63,7 +71,10 @@ GeVersions::Hold::Hold(GeVersions& v, u64 q, bool write, u32 first, u32 last, u3
         Version* version = v.pages[page].first.load(std::memory_order_seq_cst);
         for(; version; version = version->next.load(std::memory_order_seq_cst)) {
           if(!applies(*version)) continue;
-          if(!version->ready.load(std::memory_order_acquire)) { waiting = version; break; }
+          if(!version->ready.load(std::memory_order_acquire)) {
+            if(version->copying.load(std::memory_order_seq_cst)) { waiting = version; break; }
+            continue;  //(published under these pins: not copied till they're let go of, memory's bytes its own)
+          }
           versioned = true;
         }
       }

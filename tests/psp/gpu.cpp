@@ -1049,6 +1049,7 @@ static auto gpuThreadVersions() -> void {
   software.threadGE(false), hardware.threadGE(true);
   hardware.ge.setRenderer(gpu);
   std::atomic<bool> held{true};
+  hardware.geThreading->drain();  //(the thread reads its gate as it takes each record)
   hardware.geThreading->gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
   u64 waits = hardware.geThreading->waits;
   for(System* s : {&software, &hardware}) {
@@ -1160,6 +1161,7 @@ static auto gpuThreadTransferredList() -> void {
   software.threadGE(false), hardware.threadGE(true);
   hardware.ge.setRenderer(gpu);
   std::atomic<bool> held{true};
+  hardware.geThreading->drain();  //(the thread reads its gate as it takes each record)
   hardware.geThreading->gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
   u64 waits = hardware.geThreading->waits;
   for(System* s : {&software, &hardware}) {
@@ -3363,6 +3365,7 @@ static auto gpuThreadR22() -> void {
     threaded.ge.setRenderer(gpu);
     build(threaded.memory);
     std::atomic<bool> held{true};
+    threaded.geThreading->drain();  //(the thread reads its gate as it takes each record)
     threaded.geThreading->gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
     u64 waits = threaded.geThreading->waits;
     threaded.ge.list = {}, threaded.ge.list.address = List;

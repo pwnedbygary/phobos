@@ -38,6 +38,7 @@ struct GeVersions {
     u64 at = 0;
     u32 offset = 0, size = 0;
     std::atomic<bool> ready{false};
+    std::atomic<bool> copying{false};     //(the emulation thread taking the bytes: it found the page unpinned)
     std::atomic<Version*> next{nullptr};  //(the page's next newer one)
     std::vector<u8> bytes;
   };
