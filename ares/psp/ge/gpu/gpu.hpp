@@ -145,19 +145,24 @@ struct GPU : GE::Renderer {
     //each texel the index its bits are, 1 those of a 16-bit frame buffer's (in texels' format), 2 an 8888 one's,
     //looked up in the palette Push::palette names; 0 none
     u8 indexed;
+    //Where the depth decides (depths()), a 2D PRIM with a corner's depth past the GE's 0-65535 (through mode's float
+    //positions, each pixel's held there: draw.frag): its pipeline writes the depth as the GE's alone has it,
+    //undeclared and rasterized at the GE's (vulkan.cpp's pipelineFor(); emit())
+    u8 outside;
+    //(draw.frag's DEPTHS build: the depth decides the test, or is written)
+    auto depths() const -> bool { return depthWrite || (depthTest && depthCompare > 1); }
     auto operator==(const Pipeline& other) const -> bool { return !std::memcmp(this, &other, sizeof(Pipeline)); }
     struct Hash {  //(of its bytes: the backend's pipelines are found by it, as meshDrawable()'s)
       auto operator()(const Pipeline& k) const -> size_t {
-        u64 words[4];
-        u32 last;
-        std::memcpy(words, &k, 32), std::memcpy(&last, reinterpret_cast<const u8*>(&k) + 32, 4);
+        u64 words[4], last = 0;
+        std::memcpy(words, &k, 32), std::memcpy(&last, reinterpret_cast<const u8*>(&k) + 32, sizeof(Pipeline) - 32);
         u64 h = last;
         for(u64 word : words) h = (h ^ word) * 0x9e37'79b9'7f4a'7c15ull, h ^= h >> 32;
         return size_t(h);
       }
     };
   };
-  static_assert(sizeof(Pipeline) == 36);
+  static_assert(sizeof(Pipeline) == 37);
   //draw.frag's push constants
   struct Push {
     float scale[2];
@@ -306,6 +311,18 @@ struct GPU : GE::Renderer {
     //Whether a move draws the stencil with the colors (move.frag's EXPORT build, with stencilExport): a move between
     //frame buffers of other row widths, which leaves the pixels it doesn't reach, needs it (movable())
     bool moveExport = false;
+    //Whether it clamps the depth rather than clipping by it (the device's depthClamp): the depth-writing pipelines'
+    //depth is rasterized above the GE's then (draw.vert), the depth written declared never above it (draw.frag),
+    //where the corners' depths are the GE's (depthBuild()); and a 2D depth past 0-65535 is drawn, held there as the GE
+    //holds it, not cut away
+    bool depthClamp = false;
+    //Whether it takes another target's depth from image to image (Command::Depth: a copy of the depth alone), where
+    //the device's such copy leaves the stencil, each frame buffer's own (vulkan.cpp's depthAloneProbe()); else through
+    //the staging buffer. (Those copies' regions made, and the aspects they named, Vulkan's: 2 the depth, 4 the
+    //stencil, which they mustn't name: the tests')
+    bool depthAlone = false;
+    u64 depthCopies = 0;
+    u32 depthCopyAspects = 0;
     u64 texturesKept = 0;  //textures made from one let go of (makeTexture(): the tests')
     //Whether the last run put a picture on the window: a Present's swapchain image acquired and presented (not
     //where there's no window, or the acquiring timed out: the host shows the frame itself then)
@@ -344,6 +361,12 @@ struct GPU : GE::Renderer {
     //Whether draws of this pipeline can be made (the driver took its shaders): fast mode's 3D asks before it records
     //one (mesh()), so that a driver refusing them leaves the GE to transform those PRIMs itself
     virtual auto drawable(const Pipeline&) -> bool { return true; }
+    //How the pipeline of a key whose depth decides (Pipeline::depths()) was made, made first if it wasn't: 1 its
+    //shader declared never to write a depth above the one rasterized (draw.frag's DEPTHS), 2 that rasterized a step
+    //and a half above the GE's (draw.vert's ABOVE), which the declaration's proof needs; both where the device clamps
+    //the depth and the corners' depths are the GE's (Pipeline::outside), else neither, as the GE's depth has it alone
+    //(the tests')
+    virtual auto depthBuild(const Pipeline& k) -> u32 { (void)k; return 0; }
     //The pipelines made so far, as the driver keeps them, for the next session to start with (System's "Pipeline
     //Cache": the GPU::vulkan() of a game's next start); none where it has nothing to say
     virtual auto pipelineData() -> std::vector<u8> { return {}; }
@@ -558,6 +581,9 @@ struct GPU : GE::Renderer {
   //cached: pipelines a session before made (Backend::pipelineData()), taken where they're this device's and driver's.
   static auto vulkan(void* getInstanceProcAddr, std::string& error, bool fast = false,
                      const std::vector<u8>& cached = {}) -> std::unique_ptr<GPU>;
+  //vulkan.cpp: a SPIR-V module (size in bytes) without its DepthLess execution mode (draw.frag's DEPTHS build
+  //undeclared, as the pipelines whose depth isn't declared take it: Backend::depthBuild())
+  static auto undeclared(const u32* words, size_t size) -> std::vector<u32>;
 
 private:
   static constexpr u32 SubmitEvery = 128;  //commands recorded, handed to the GPU without waiting for the list's end

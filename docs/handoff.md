@@ -35,6 +35,138 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP Vulkan at 5x: the depth-writing shader's depth declared never above the depth rasterized; another frame buffer's depth taken image to image where the device's copy leaves the stencil (Activision Hits' copyright screen at 5x on the RP6 2.7 → 19.4 fps) — 2026-10-16
+
+Branch `cursor/psp-hires-2b67`, on master `a8d5640f5` (part 101, #263), master `7023fb080` (#264 and the PGD layer's
+comments) merged in; draft PR #265. docs/psp-core.md, part 102, has the evidence. The nightly sweep's 5x collapse on the
+RP6 (Activision Hits 57.6 → 2.9 fps, Chains of Olympus 59.6 → 9.8, Ghost of Sparta 36.8 → 10.8, Killzone 59.7 → 24.0),
+found out game by game: GPU-bound everywhere, no CPU cause. Clean room: no PPSSPP for GE/GPU code, JPCSP not read. Save
+states unchanged.
+- **What grows**: the scene passes' fragments. Every depth-tested pipeline takes `draw.frag`'s `DEPTHS` build, which
+  writes the GE's whole number as gl_FragDepth, so every hidden pixel is shaded (without it, timing only: Chains of
+  Olympus at 5x +100% on the RP6, Army of Two +26%, Ghost of Sparta +20%). Activision Hits' copyright screen: 28
+  whole-screen depth copies a frame through the staging buffer, which Turnip does slowly (331 ms a frame at 5x).
+- **The changes** (vulkan.cpp, gpu.cpp, gpu.hpp, draw.frag, draw.vert, transform.vert): `DEPTHS` declares `depth_less`
+  where the device clamps depth and the PRIM's corners' depths are in 0-65535 (3D's are held): those pipelines rasterize
+  the depth a step and a half above the GE's ((z + 1.5) / 65536.5), the whole number written a step below it at least
+  while the GPU's two interpolations part by less than a step. A 2D PRIM with a corner past 0-65535
+  (`Pipeline::outside`, per primitive in `emit()`) and every pipeline of a device without clamping take the build
+  undeclared, rasterized at the GE's: master's fragment SPIR-V word for word (the `DepthLess` mode taken out at start,
+  `GPU::undeclared()`), the vertex shaders with `ABOVE` off (master's arithmetic, not master's SPIR-V); devices without
+  clamping left out by caution (the margin would fit). Metal takes the declaration, Turnip in part (Super Monkey Ball's
+  greater-or-equal scene: its passes 63.2 → 59.3 ms at 5x), Qualcomm's driver not. `takeDepth()`'s depth from image to
+  image (`vkCmdCopyImage`, the depth aspect alone) where `depthAloneProbe()`, as the backend starts, finds the device's
+  such copy leaves the stencil: a whole copy and an unaligned 45x27 part of pictures written from a buffer, every depth
+  bit for bit, every stencil, inside and outside (Turnip's and Qualcomm's driver's do, with the whole copy and with the
+  part: the fix round's build said "image copy 1" in every run on both). MoltenVK's and lavapipe's take it too (CI's
+  lavapipe lanes caught it on the first push), so they keep the staging buffer.
+- **Review round** (independent review, changes requested; 77143a9ff and 47e0c5d74): B1 the declaration false for 2D
+  float depths near ten million (the review's quad lost 1 of 384 pixels at 1x on MoltenVK): those take the undeclared
+  pipelines; B2 no clamping, no margin: no declaration there; S1 the image copy forced in gpuDepthOrders where the probe
+  says no, its aspects counted; S2 `Backend::depthBuild()`, the declaration and the margin pinned together; S3 the
+  probe's timeout as `wait()`'s; S4 the probe's partial, unaligned copy; S5/S6 the docs (MoltenVK's effect of `ABOVE` on
+  2D depths outside 0-65535: those draws are master's now). Every one of the review's mutations, and the fix's own,
+  fails a committed test now. Second round: approved; its should-fix, `emit()`'s test of every corner on either side of
+  the range, pinned by two more pretend-backend keys (corners below 0 unseen, or only the first corner looked at, fail
+  gpuDepthOutside now); its nits in the docs (the margin's size, which the M1 can't show; the hashes not reaching the
+  outside pipelines, which the library check does) and the probe's device-lost return freeing its pictures and buffers.
+- **Left out**: a "never below" build for less-or-equal tests (Chains of Olympus' and most scenes'): on MoltenVK a
+  corner's depth rasterized below 0 moves the depth interpolated beside it (found by the new test), and held at 0
+  the declaration isn't true; exact on any GPU only with a depth encoding with room below 0 (part 102's Left). Render
+  areas over what a pass draws: the RP6 +0-1%.
+- **Exact**: the 21 kit scenes and five more, 100 frames, pictures, VRAM, RAM and state: master's at 1x in all three
+  renderers and at 5x (with Activision Hits' copyright screen) in both Vulkan modes, on 3c20bdbf5 and again on the fix
+  round. Tests: gpuDepthEarly (the declarations; nothing rejected first that passes after; 2D, 2D past 65535, 3D with
+  the depth range either way); gpuDepthOutside (the review's quad: its keys, and drawn twice at 1x-5x); gpuDepthBuilds
+  (declaration and margin together exactly where they belong; renderers without clamping); gpuSharedDepth and
+  gpuDepthOrders force the image copy where the probe says no (the stencil taken; swapped run offsets fail it), every
+  copy of the depth's aspect alone. tests/psp 576 groups, 0 failures. On the RP6 (the image copy) the states saved at
+  frame 120 at 5x by master's build and 3c20bdbf5's are the same file for Activision Hits, Chains of Olympus and Super
+  Monkey Ball; the coordinator's targeted check of 3c20bdbf5's image copy over the library (237 pairs, from boot at 2x
+  and 5x, Turnip, 18:50-20:28) found all 237 the same file, "image copy 1" in every run. The fix round's build
+  (77143a9ff): the six scenes' states at frame 150 at 5x master's on Turnip and on Qualcomm's driver, and the targeted
+  check's first 20 pairs 20 the same, "image copy 1" in every run on both drivers (the review's second-round should-fix
+  met). The hashes don't reach the outside pipelines (no kit scene draws one); the coordinator's Vulkan library check
+  does.
+- **Numbers**: RP6, the fix round's build against master (the coordinator's run of `hires-fix-rp6.sh`, best of two
+  rounds; the table in part 102; the first build's run the same at 5x): Turnip at 5x Activision Hits' copyright
+  2.7 → 19.4 fps (1x 15.4 → 247.0), Super Monkey Ball +18%, Army of Two +6%, Ghost of Sparta +4%, Chains of Olympus +3%,
+  Killzone 0; Qualcomm's driver at 5x Activision Hits +29%, Super Monkey Ball +6%, Army of Two +4%, Ghost of Sparta +2%,
+  Chains of Olympus +1%, Killzone 0; at 1x on Turnip everything but Activision Hits within 1%. For scale: PPSSPP 1.20.4
+  runs the 5x sweep's 11 slowest games at 59.8-60.0 fps at 5x on the same RP6 (the gap is Phobos's). Mac (MoltenVK: the
+  staging buffer stays, only the declaration differs; best of three rounds in a window kept free of other sessions' runs
+  and builds, loads 3.3-8.8): Super Monkey Ball at 5x 14.04 → 14.97 fps (+6.6%, GPU 68.9 → 65.4 ms a frame); Chains of
+  Olympus, Ghost of Sparta and Activision Hits within 1% at 1x, 2x and 5x.
+- **Next**: the shader's depth write on Adreno (exact designs in part 102's Left: flat draws without it, a
+  raster-ordered early discard, Turnip doing more with the declaration); Chains of Olympus' 2-3 scenes a vblank are
+  ours (geTime()'s peak rates, a lower bound; the owner's PSP-1000 draws its menus about 0.6 times a vblank, his
+  captures of the scene itself to come): GE timing from a round of measurements on his PSP.
+- **RP6 commands** (the coordinator's; the agent never runs adb). The fix round's builds against master (master's copied
+  from `rp6/bin`, the fix's `hiresfix-77143a9ff-modern`), the speed table and the frame-150 states at 5x on Turnip and
+  Qualcomm's driver: `cd ~/phobos-work/scratch/psp-hires/rp6b && QUALCOMM=1 STATES=1 ./hires-fix-rp6.sh` (about 50
+  minutes; `hires-fix-rp6-table.txt`, its "driver of fix" lines giving "image copy" and the depth format;
+  `hires-fix-rp6-states.txt`); the targeted image-copy check on the fix build, the six scenes and the 8 heaviest games:
+  `./hires-takes-fix-rp6.sh` there (about 30 minutes; all 237 pairs with `LIST=../rp6/hires-takes-games.txt`, about 2.5
+  hours). Both run 20:28-21:21, results above. Before the fix round (run 14:55-15:20, all 60 runs exit 0):
+  `cd ~/phobos-work/scratch/psp-hires/rp6 && QUALCOMM=1 STATES=1 ./hires-pr-rp6.sh` (about 25 minutes: master's and this
+  branch's measurement builds, `hiresprobe-a8d5640f5-modern` and `hiresprobe-3c20bdbf5-modern`, six scenes at 1x and 5x
+  on Turnip, two rounds, Qualcomm's driver at 5x; `hires-pr-rp6-table.txt`, its "driver of pr" lines saying "image copy
+  1" where the probe took the copy; `hires-pr-rp6-states.txt`, three scenes' states at frame 120 at 5x, "same" each).
+  Qualcomm's driver with plain builds: `cd ~/phobos-work/scratch/runner-android && ./rp6-compare.sh --rounds 3 --label
+  hires-pr-ahr5x a8d5640f5 3c20bdbf5 -- "Activision Hits Remixed" --frames 300 --renderer Vulkan-fast --late-frames
+  --resolution 5 --load-state ~/phobos-work/scratch/psp-hires/scenes/ahr-legal/state` (and the same for coo-diff, its
+  state in `~/phobos-work/scratch/cpu-round3/scenes`).
+
+## Android input: Colin McRae's dropped held Cross on the RP6 — the app's input paths replayed and cleared, an opt-in input log for the device capture that decides it — 2026-10-16
+
+Branch `cursor/held-button-2b67`, on master `a8d5640f5` (part 101, #263); draft PR #264. Not the fix: what's left
+needs the RP6.
+- **The bug** (owner, 15 Oct): in Colin McRae Rally 2005 Plus (PSP core), holding Cross to accelerate while steering
+  with the left stick and pressing the D-pad, Square and L or R, the game sometimes stops seeing Cross until it's let
+  go of and pressed again. Not noticed in other cores; not ruled out.
+- **The core** (the session before this one, with a local trace patch kept at
+  `~/phobos-work/scratch/held-button/psp-ctrl-trace.patch`): the game reads only sceCtrlPeekBufferPositive(count 1),
+  once a frame, the newest sample, the front end's state that frame; scripted runs (Cross held 2,000 frames, the
+  stick swept, Square, L, R and the D-pad tapped across it, a one-frame drop, a 70-frame release) show it follows
+  Cross's level each frame. So the front end sends Cross released while it's held.
+- **The app** (this entry): every writer of the buttons sent to the core read. With Cross bound to a key (the RP6's
+  pad is an "Xbox Wireless Controller" in its Xbox layout: Cross is the bottom button, BUTTON_A, the A bit), only a
+  key event for Cross's own key code that isn't a press (`setButton`), `releaseAllButtons()` (the game screen losing
+  Compose focus, a pause, the activity's onPause among them, a PSP dialog) or `reset()` clears it. The axis loop
+  rewrites only bits bound to an axis, the hat only the D-pad bits it set; a hotkey runs only on exactly the keys
+  held, so none runs with Cross held unless it holds Cross; nothing in the game's screen asks for focus but itself
+  and the PSP dialogs. Compose 1.7.6 (bytecode read) drops a key event while a focus invalidation is pending
+  ("FocusRelatedWarning: Dispatching key event while focus system is invalidated." on System.out); those are
+  scheduled and run within a composition's apply. A dropped event never lets go of a held key, but a dropped
+  re-press (Cross lifted for a moment) looks to the player just like the report.
+- **Replay** (`HeldCrossReplayTest`): the game screen's key handler, its hat listener for hotkeys and its focus hook
+  moved, unchanged, from EmulatorScreen into `GameKeys` (input/GameKeys.kt), which the screen and the test both call;
+  `GameInputState` sends through `coreInput` and takes moves through `onJoystickMove` (interfaces with primitive
+  parameters, one reused reader for the event: the seams allocate nothing with the log off; master's own allocations
+  on the path stay, the capture check's bound reference per move in MainActivity and the axis loop's boxed keys). The
+  test checks the buttons and the sticks sent with every move. Cross stays in every state sent through 20 stages of 3,000 joystick
+  moves (the stick swept, the hat in its eight directions, Square, L1 and R1 tapped and held, the triggers, Android's
+  repeats of Cross), with the bindings the RP6 captures for its triggers and hat, with L and R moved to the triggers,
+  with each PSP Right Stick choice and with focus moving inside the screen; hotkeys on Select and the Xbox button run
+  without Cross held and don't with it. A let-go of everything, a release of Cross alone or focus leaving the screen
+  gives the report's symptom exactly. Mutations, each alone, each caught: a key repeat releasing its key, focus
+  inside the screen releasing everything, hotkeys matching a subset of the keys held, `push()` skipping updates
+  whose buttons didn't change.
+- **Left, for the RP6**: Android cancelling the held key (a KeyUp with FLAG_CANCELED: InputReader's buffer overrun or
+  a device reset, the window losing focus), an activity pause and resume, a lost re-press, the pad's own firmware
+  letting go of Cross (code 0x130, which getevent prints as BTN_GAMEPAD), or the owner's bindings or hotkeys.
+  `InputLog` (input/InputLog.kt) tells them apart: `adb shell setprop log.tag.PhobosInput DEBUG`, then start the
+  game (it's read as a game starts); it logs each key event the window and the game's handler get (flags, scan code,
+  device, down and event times), each change of the buttons sent to the core, a let-go of everything with its caller
+  and each reset, the window's, the activity's and the game screen's focus, and the bindings and hotkeys as the game
+  starts. The capture steps, the reading guide and a safe install (never uninstall: it deletes saves, states and
+  settings; check the installed versionCode, `-PversionCode` if it's higher) are in PR #264's description.
+- **Review** (of `acd317dd9`): approve with should-fixes, no blockers: the tests ran a copy of the key handler, the
+  hotkey test couldn't fail, nothing checked the sticks sent, two values in the reading guide were wrong and it missed
+  a lost re-press, the install step could be refused (and the obvious way past it deletes data), and the joystick
+  path boxed. All taken, with the nits on `coreInput`'s restore, `reset()` and the key lines.
+- **Checks**: the JVM unit tests on the Mac: input 45/0, the suite 350/0 in each flavor (48 classes); CI runs both.
+
 ## PSP NPDRM: PGD files on the memory stick — a game's installed data read through the PGD layer (Gunhound EX, 7th Dragon 2020); a wrong key, a damaged header and a write refused as the PGD layer refuses them — 2026-10-15
 
 Branch `cursor/psp-pgd-stick-2b67`, on master `6ff82f9f1` (part 96, #258), masters `462f8ff2f` (part 99, #261) and
