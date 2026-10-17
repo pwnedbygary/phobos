@@ -79,16 +79,25 @@ object PspResolution {
     fun forCore(scale: Int): Int = if (scale in choices) scale else NATIVE
 }
 
-/** The PSP's settings a game takes as it starts, as the core is told them: kept for the running game. */
-data class PspStartSettings(val renderer: Int, val resolution: Int, val drawingThreads: Int) {
+/**
+ * The PSP's settings a game takes as it starts, as the core is told them: kept for the running game. [geTiming]: the
+ * GE timed as a real PSP's (the core's "GE Timing"), which paces the game as a PSP does, not by Sony's peak rates.
+ */
+data class PspStartSettings(
+    val renderer: Int,
+    val resolution: Int,
+    val drawingThreads: Int,
+    val geTiming: Boolean = false,
+) {
     /** Whether a game started with these runs as one started with [other] would: Resolution is the Vulkan renderer's alone. */
     fun runsAs(other: PspStartSettings): Boolean =
-        renderer == other.renderer && drawingThreads == other.drawingThreads &&
+        renderer == other.renderer && drawingThreads == other.drawingThreads && geTiming == other.geTiming &&
             (renderer == PspRenderer.SOFTWARE || resolution == other.resolution)
 
     companion object {
-        fun of(renderer: Int, resolution: Int, drawingThreads: Int) = PspStartSettings(
+        fun of(renderer: Int, resolution: Int, drawingThreads: Int, geTiming: Boolean = false) = PspStartSettings(
             PspRenderer.forCore(renderer), PspResolution.forCore(resolution), PspDrawingThreads.forCore(drawingThreads),
+            geTiming,
         )
     }
 }

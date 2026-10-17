@@ -269,6 +269,8 @@ data class EmulatorSettings(
     val pspRenderer: Int = 0,
     /** The Vulkan renderer's internal resolution (util/PspVideo.kt): 1, Native, to 10 times the PSP's. */
     val pspResolution: Int = 1,
+    /** The GE takes the time a real PSP's took over the same work, not Sony's peak rates (the core's "GE Timing"). */
+    val pspGeTiming: Boolean = false,
     /** What a controller's right stick does in a PSP game. */
     val pspRightStick: PspRightStick = PspRightStick.OFF,
     val arcadeRomsPath: String = "",
@@ -400,6 +402,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
         val PSP_DRAWING_THREADS = intPreferencesKey("psp_drawing_threads")
         val PSP_RENDERER = intPreferencesKey("psp_renderer")
         val PSP_RESOLUTION = intPreferencesKey("psp_resolution")
+        val PSP_GE_TIMING = booleanPreferencesKey("psp_ge_timing")
         val PSP_RIGHT_STICK = stringPreferencesKey("psp_right_stick")
         val ZX_TAPE_AUTO = booleanPreferencesKey("zx_tape_auto")
         val BUSY_WAIT_PACING = booleanPreferencesKey("busy_wait_pacing")
@@ -647,6 +650,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
             pspDrawingThreads = safeGet(PSP_DRAWING_THREADS, 0),
             pspRenderer = safeGet(PSP_RENDERER, 0),
             pspResolution = safeGet(PSP_RESOLUTION, 1),
+            pspGeTiming = safeGet(PSP_GE_TIMING, false),
             pspRightStick = enumOrDefault(safeGetString(PSP_RIGHT_STICK, ""), PspRightStick.OFF),
             arcadeRomsPath = safeGetString(ARCADE_ROMS_PATH, ""),
             shaderPath = safeGetString(SHADER_PATH, ""),
@@ -886,6 +890,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) {
     suspend fun setPspDrawingThreads(threads: Int) = dataStore.edit { it[PSP_DRAWING_THREADS] = threads }
     suspend fun setPspRenderer(renderer: Int) = dataStore.edit { it[PSP_RENDERER] = renderer }
     suspend fun setPspResolution(scale: Int) = dataStore.edit { it[PSP_RESOLUTION] = scale }
+    suspend fun setPspGeTiming(psp: Boolean) = dataStore.edit { it[PSP_GE_TIMING] = psp }
     suspend fun setPspRightStick(choice: PspRightStick) = dataStore.edit { it[PSP_RIGHT_STICK] = choice.name }
     suspend fun setZxTapeAuto(enabled: Boolean) = dataStore.edit { it[ZX_TAPE_AUTO] = enabled }
     suspend fun setBusyWaitPacing(enabled: Boolean) = dataStore.edit { it[BUSY_WAIT_PACING] = enabled }

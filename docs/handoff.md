@@ -35,6 +35,26 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP GE: the GE's time as the owner's PSP took it — part 76's model behind the option "GE Timing" (off by default), the first comparison with the captures, a SIGNAL's interrupt at its time — 2026-10-16
+
+Branch `cursor/psp-ge-time-2b67`, stacked on #266 (`cursor/psp-ge-profile-2b67`; its review's two rounds and its
+merge of master `03eca2a69` merged in); docs/psp-core.md, part 106.
+- **The model**: part 76's fit of round 6 (`GE::Cost`): the longer of the GE's front and back ends a run, a list's
+  start, the driver's CPU time in its calls; texture bytes with an 8 KiB cache (layout 33 keeps it).
+- **The option** "GE Timing": "Fast" (default) is Sony's peaks bit for bit as before; "PSP" the model. App: Settings →
+  Emulation and the in-game PSP menu; runner `--ge-timing psp|fast`; a profile's flag 16.
+- **A SIGNAL at its time** (PSP timing only): the GE waits at a SIGNAL till its front end would have got there, no
+  more than 16 primitives ahead of the back end (`GE::Cost::Queue`, provisional: round 6's time-signals had the
+  callback within 84 microseconds after 16 big sprites; Army of Two's came 0.27 ms before its list's FINISH, 30 ms
+  in, where Phobos took it 31 ms early). Round 8's time-signals2 measures the queue. Army of Two's pacing needs the
+  display's next-vblank switching too (part 108, its own pull request).
+- **First comparison**: within 15% Chains of Olympus (+11%), Ghost of Sparta (+3%), Activision Hits' copyright screen
+  (−9%); Super Monkey Ball −59%; Killzone +77 to +98% (its PSP lists as #266's reviewed decoder ends them);
+  Activision Hits' menu +138% (part 107: VRAM textures).
+- **Checks**: suite 577 groups, 0 failures; "Fast" against master the same on 27 scenes, Software and Vulkan-fast,
+  every frame; older layouts load, master refuses layout 33.
+- **Not yet**: fixed-point charges before any default change; round 8's fit; the 15% gate.
+
 ## PSP GE: how the games drive the GE on a PSP and in Phobos — tools/psp-ge-profile's plugin on the owner's PSP, the same records from the core (the runner's --ge-profile) — 2026-10-16
 
 Branch `cursor/psp-ge-profile-2b67`, on master `a8d5640f5` (part 101, #263), masters `5442acb8b` (#264, #265) and

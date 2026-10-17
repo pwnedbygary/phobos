@@ -34,6 +34,7 @@ auto GE::transfer() -> void {
   u32 destinationY = commands[TransferDestinationPosition] >> 10 & 0x3ff;
   u32 width = (commands[TransferSize] & 0x3ff) + 1, height = (commands[TransferSize] >> 10 & 0x3ff) + 1;
   u32 bytes = commands[TransferStart] & 1 ? 4 : 2;
+  oweTransfer(width, height, bytes, source, destination);
 
   //every row of each image lies between its first row's first byte and its last row's last
   std::bitset<VRAMPages> read, written;

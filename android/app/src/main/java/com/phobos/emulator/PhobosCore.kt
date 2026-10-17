@@ -94,6 +94,8 @@ object PhobosCore {
     external fun setPspRenderer(renderer: Int)
     /** The Vulkan renderer's internal resolution (the core's "Resolution", as a game starts): [PspResolution]. */
     external fun setPspResolution(scale: Int)
+    /** The GE timed as a real PSP's (the core's "GE Timing" "PSP", as a game starts), or by Sony's peak rates. */
+    external fun setPspGeTiming(psp: Boolean)
     /** What the PSP's core has to tell the user, once (its Vulkan renderer didn't start, or stopped); "" if none. */
     external fun takePspNotice(): String
     /** The number of the PSP's system dialog waiting for the player (util/PspDialogs.kt); 0 for none. */

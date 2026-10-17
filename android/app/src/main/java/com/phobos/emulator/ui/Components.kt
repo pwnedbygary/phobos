@@ -233,6 +233,19 @@ fun ValuePill(text: String, modifier: Modifier = Modifier, trailingIcon: ImageVe
     }
 }
 
+/**
+ * The PSP's GE timing: as long as a real PSP's GE takes over its work (games paced as on a PSP), or Sony's peak rates
+ * (the default).
+ */
+@Composable
+fun PspGeTimingItem(checked: Boolean, onCheckedChange: (Boolean) -> Unit) = SettingsSwitchItem(
+    "PSP GE Timing",
+    "Draw at a real PSP's speed: games pace as on a PSP, fewer frames drawn. " +
+        "Off: Sony's peak rates (more frames drawn)",
+    checked,
+    onCheckedChange,
+)
+
 @Composable
 fun SettingsSwitchItem(title: String, description: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     ListItem(

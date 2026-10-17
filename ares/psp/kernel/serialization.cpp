@@ -1112,6 +1112,15 @@ auto Kernel::serialize(serializer& s) -> bool {
   //older layout's lists were done the moment the GE met their FINISH, which left it nothing to draw)
   if(s.reading() && stateLayout < 24) geDoneAt = 0, geFinishDue = false;
   else s(geDoneAt), s(geFinishDue);
+  //the texture the GE's cache holds whole, for the PSP's GE timing (GE::owePrimitive(); layout 33 on: none in older
+  //states)
+  if(s.reading() && stateLayout < 33) ge.cachedTexture = {};
+  else s(ge.cachedTexture.address), s(ge.cachedTexture.format), s(ge.cachedTexture.size), s(ge.cachedTexture.held);
+  //when the GE's front end will have got through what it was given, and whether, with the PSP's timing, the list it
+  //runs has met a SIGNAL whose interrupt waits for that (layout 33 on: an older layout's were taken the moment the
+  //GE met them)
+  if(s.reading() && stateLayout < 33) geReachAt = 0, geSignalDue = false;
+  else s(geReachAt), s(geSignalDue);
   if(s.reading() && valid) {
     //Every list is in the queue or free, once. A list queued, running or paused is in the queue (sceGeListDeQueue
     //and geEnded() take it out of there); one never queued is free; a completed one is either (it leaves the queue
@@ -1132,10 +1141,10 @@ auto Kernel::serialize(serializer& s) -> bool {
     }
     for(s32 index : {geRunning, geFinishing}) check(index == -1 || (index >= 0 && index < 64 && queued[index]));
     if(valid && geFinishing >= 0) check(geLists[geFinishing].state == GeList::State::Completed);
-    //a FINISH met is the running list's, whose interrupt isn't taken yet: it hasn't completed (it's drawing, or
-    //paused on its way to a PAUSE's FINISH), nor waits for a callback
-    if(valid && geFinishDue) {
-      check(geRunning >= 0 && !geSuspended);
+    //a FINISH (or SIGNAL) met is the running list's, whose interrupt isn't taken yet: it hasn't completed (it's
+    //drawing, or paused on its way to a PAUSE's FINISH), nor waits for a callback; the GE meets one at a time
+    if(valid && (geFinishDue || geSignalDue)) {
+      check(geRunning >= 0 && !geSuspended && !(geFinishDue && geSignalDue));
       if(valid) {
         auto& list = geLists[geRunning];
         check(list.state == GeList::State::Running || (list.state == GeList::State::Paused && list.pausing));

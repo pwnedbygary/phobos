@@ -2628,6 +2628,238 @@ static auto geTime() -> void {
   CHECK(roundTrip(m), true);
 }
 
+//The GE's time with the option "GE Timing" "PSP" (kernel/ge.cpp's geTime(), GE::Cost): a list is done for the program
+//only once a PSP's GE would have drawn it, as the owner's PSP took its time (docs/psp-core.md, part 76), in the bus's
+//clocks, counted in the CPU's 333 MHz; and sceGeListEnQueue takes the driver's own 5200 of the CPU's cycles, the GE
+//drawing meanwhile (7800 of
+//the 333 MHz count at the CPU's first 222 MHz, 5200 at 333), sceGeListUpdateStallAddr 510. A list starting takes
+//2170 clocks of its own (at the bus's first 111 MHz 6510 cycles, at 166 MHz 4353). List A's 12 words and two 12-byte
+//vertices take its front end 12 * 2.28 + 24 * 0.515 = 39.72 clocks, its 256x256 sprite its back end 7.03 + 256 rows *
+//256 * 0.535 = 35068.79, the longer: at 111 MHz 105206 cycles, at 166 MHz 70348. List B's hundred one-pixel sprites
+//take its front end 27.36 + 2400 * 0.515 = 1263.36 (its back end 100 * (7.03 + 1.65)), at 166 MHz 2534 cycles. A
+//64x32 sprite with its list's first 10 words takes 7.03 + 32 * 64 * 0.535 = 1102.71 clocks, 2212 cycles; a 32x32 one
+//after it, with the FINISH, 7.03 + 32 * 32 * 0.319 = 333.686, 669; an 8x8 one 7.03 + 8 * 8 * 0.319 = 27.446 clocks,
+//its list's 12 words and two vertices 39.72 the longer, 79 cycles at most. A list a SIGNAL stops runs in two goes,
+//each the longer of its ends: its first 9 words, to the SIGNAL's END, 20.52 clocks, 41 cycles, then the rest, from
+//when the SIGNAL's interrupt is taken (as a FINISH's: as the call returns, the driver's 5200 cycles in).
+//The pixels are drawn at once; the list reads as drawing for sceGeListSync and sceGeDrawSync till then. A list
+//queued behind is taken up as the GE is done with the one before; a list given in parts takes each up as it comes,
+//or once the GE is done with the last, whichever is later. A list whose stall address is just past its END reads as
+//drawing till then, not stalled. A PAUSE's list stops at the FINISH after it once that FINISH's time has come,
+//keeping a stall address moved meanwhile; after a SYNC the GE goes on past the FINISH then. A SIGNAL stops the GE
+//till its front end gets there, its words and vertices done and no more than 16 primitives' drawing left (GE::Cost::
+//Queue): a list's SIGNAL after one sprite comes as the call returns, after 24 once the back end has the last 16 left;
+//without the PSP's timing the GE goes past it at once. sceGeBreak(0) at a FINISH whose time hasn't come takes it
+//first, and the FINISHes the lists after it meet as they start; and a state keeps a FINISH or a SIGNAL waiting.
+static auto geTimePsp() -> void {
+  KernelMachine m;
+  m.kernel.gePspTiming = true;
+  auto& memory = m.system.memory;
+  auto enqueue = [&](u32 at, u32 stall = 0) { return m.call("sceGeListEnQueue", {at, stall, 0xffff'ffff, 0}); };
+  auto past = [&](u64 time) { m.kernel.run(time + 1 - m.kernel.cycles); };  //(the kernel's loop gone round past it)
+  DrawingList a{memory, ListA, Vertices};
+  a.draw(GE::Sprites, {{0, 0}, {256, 256}});
+  a.finish();
+  std::vector<std::pair<s32, s32>> dots;
+  for(s32 n = 0; n < 100; n++) dots.push_back({n, 40}), dots.push_back({n + 1, 41});
+  DrawingList b{memory, ListB, Vertices + 0x1000};
+  b.draw(GE::Sprites, dots);
+  b.finish();
+
+  u64 start = m.kernel.cycles;
+  u32 id = enqueue(ListA);
+  CHECK(memory.read(4, VRAM + (255 * 512 + 255) * 4), 0xffu);  //drawn at once
+  CHECK(memory.read(4, VRAM + 256 * 4), 0u);
+  CHECK(m.kernel.geDoneAt, start + 6510 + 105206);
+  CHECK(m.kernel.cycles, start + 7800);  //(the driver's own time in the call)
+  CHECK(m.call("sceGeListSync", {id, 1}), 2);  //drawing still
+  CHECK(m.call("sceGeDrawSync", {1}), 2);
+  CHECK(m.call("sceGeSaveContext", {Saved}), 0xffff'ffff);
+  CHECK(roundTrip(m), true);
+  m.kernel.run(start + 6510 + 105206 - 1 - m.kernel.cycles);
+  CHECK(m.call("sceGeListSync", {id, 1}), 2);
+  m.kernel.run(2);  //(the FINISH is taken as the kernel's loop goes round, past its time)
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+  CHECK(m.call("sceGeDrawSync", {1}), 0);
+  start = m.kernel.cycles;
+  id = enqueue(ListA, a.list.address);  //its stall address just past its END, as GU leaves it: drawing, not stalled
+  CHECK(m.call("sceGeListSync", {id, 1}), 2);
+  CHECK(m.call("sceGeDrawSync", {1}), 2);
+  past(start + 6510 + 105206);
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+
+  CHECK(m.call("scePowerSetClockFrequency", {333, 333, 166}), 0);
+  start = m.kernel.cycles;
+  id = enqueue(ListA);
+  CHECK(m.kernel.geDoneAt, start + 4353 + 70348);
+  u32 behind = enqueue(ListB);
+  CHECK(m.call("sceGeListSync", {behind, 1}), 1);  //queued
+  past(start + 4353 + 70348);
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+  CHECK(m.call("sceGeListSync", {behind, 1}), 2);  //taken up as the first was done with
+  CHECK(m.kernel.geDoneAt, start + 4353 + 70348 + 4353 + 2534);
+  past(start + 4353 + 70348 + 4353 + 2534);
+  CHECK(m.call("sceGeListSync", {behind, 1}), 0);
+
+  //in parts: a 64x32 sprite, then a 32x32 one, the second given before the first is drawn, then after
+  DrawingList c{memory, ListA + 0x400, Vertices + 0x2000};
+  c.draw(GE::Sprites, {{0, 0}, {64, 32}});
+  u32 middle = c.list.address;
+  c.draw(GE::Sprites, {{100, 0}, {132, 32}});
+  c.finish();
+  for(bool late : {false, true}) {
+    id = enqueue(ListA + 0x400, ListA + 0x400);
+    CHECK(m.call("sceGeListSync", {id, 1}), 3);
+    u64 first = m.kernel.cycles;
+    CHECK(m.call("sceGeListUpdateStallAddr", {id, middle}), 0);
+    CHECK(m.kernel.geDoneAt, first + 2212);
+    CHECK(m.kernel.cycles, first + 510);  //(the driver's own time in the call)
+    m.kernel.cycles += late ? 3000 : 1000;  //(time passing, which nothing waits on while the list stalls)
+    u64 second = m.kernel.cycles;
+    CHECK(m.call("sceGeListUpdateStallAddr", {id, 0}), 0);
+    CHECK(m.kernel.geDoneAt, late ? second + 669 : first + 2212 + 669);
+    m.kernel.run(4000);
+    CHECK(m.call("sceGeListSync", {id, 1}), 0);
+  }
+  //a list stalled before its last words, moved on to its end: done inside the call, its 8x8 sprite's 79 cycles
+  //within the driver's 510, so done as the call returns (Cube queues the same list again just after: busy, else)
+  DrawingList e{memory, ListA + 0x1000, Vertices + 0x5000};
+  e.draw(GE::Sprites, {{0, 0}, {8, 8}});
+  e.finish();
+  id = enqueue(ListA + 0x1000, ListA + 0x1000);
+  CHECK(m.call("sceGeListSync", {id, 1}), 3);  //at its stall address
+  CHECK(m.call("sceGeListUpdateStallAddr", {id, 0}), 0);
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+
+  //a PAUSE, then the 256x256 sprite and the FINISH it pauses at, as far as the stall address; the rest after it
+  DrawingList d{memory, ListA + 0x800, Vertices + 0x3000};
+  d.list.put(GE::Signal, 0x03'0000);
+  d.list.put(GE::End);
+  d.draw(GE::Sprites, {{0, 0}, {256, 256}});
+  d.finish();
+  u32 pause = d.list.address;
+  d.draw(GE::Sprites, {{400, 0}, {408, 8}});
+  d.finish();
+  start = m.kernel.cycles;
+  id = enqueue(ListA + 0x800, pause);
+  CHECK(m.kernel.geFinishDue, true);
+  //(the PAUSE's interrupt, due 4353 + 41 cycles in, taken as the call returns after the driver's 5200, as a FINISH's
+  //would be: the GE goes on from there)
+  CHECK(m.kernel.geDoneAt, start + 5200 + 70348);
+  CHECK(roundTrip(m), true);
+  CHECK(m.call("sceGeContinue", {}), Kernel::ErrorBusy);
+  CHECK(m.call("sceGeListUpdateStallAddr", {id, 0}), 0);
+  past(start + 5200 + 70348);
+  CHECK(m.call("sceGeListSync", {id, 1}), 4);  //paused
+  CHECK(m.call("sceGeContinue", {}), 0);
+  CHECK(memory.read(4, VRAM + (7 * 512 + 407) * 4), 0xffu);  //the rest, past the stall address moved
+  m.kernel.run(100);
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+
+  //a SYNC: the FINISH after it doesn't end the list, and the GE goes on past it once it's taken
+  DrawingList s{memory, ListA + 0xc00, Vertices + 0x4000};
+  s.list.put(GE::Signal, 0x08'0000);
+  s.list.put(GE::End);
+  s.draw(GE::Sprites, {{0, 0}, {256, 256}});
+  s.finish();
+  s.draw(GE::Sprites, {{300, 0}, {308, 8}});
+  s.finish();
+  start = m.kernel.cycles;
+  id = enqueue(ListA + 0xc00);
+  CHECK(memory.read(4, VRAM + (7 * 512 + 307) * 4), 0u);
+  CHECK(m.kernel.geDoneAt, start + 5200 + 70348);  //(as the PAUSE's)
+  past(start + 5200 + 70348);
+  CHECK(memory.read(4, VRAM + (7 * 512 + 307) * 4), 0xffu);
+  CHECK(m.call("sceGeListSync", {id, 1}), 2);
+  m.kernel.run(100);
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+
+  //a SIGNAL after the 256x256 sprite (kind 2: the GE goes on as its callback runs): the front end gets there in its
+  //list's first 12 words and two vertices, 39.72 clocks, 79 cycles, the sprite handed on, so it's taken as the call
+  //returns (round 6's time-signals had the callback 77 microseconds in, after 16 such sprites); the FINISH at the
+  //sprite's time
+  DrawingList g{memory, ListA + 0x1400, Vertices + 0x6000};
+  g.draw(GE::Sprites, {{0, 0}, {256, 256}});
+  g.list.put(GE::Signal, 0x02'0007);
+  g.list.put(GE::End);
+  g.finish();
+  start = m.kernel.cycles;
+  id = enqueue(ListA + 0x1400);
+  CHECK(m.kernel.geSignalDue, false);
+  CHECK(m.kernel.geFinishDue, true);
+  CHECK(m.kernel.geDoneAt, start + 4353 + 70348 + 9);  //(then the FINISH's two words, as the GE went on)
+  past(m.kernel.geDoneAt);
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+  //after 24 sprites of 64x32 it waits for the back end to have but the last 16 left (GE::Cost::Queue): 8 sprites'
+  //1102.71 clocks, 17696 cycles, past the call's 5200; the list drawing meanwhile and a state keeping it so; then
+  //the GE goes on to the FINISH, taken at the sprites' time (Army of Two's last SIGNAL came 0.27 ms before its
+  //list's FINISH on the owner's PSP)
+  std::vector<std::pair<s32, s32>> tiles;
+  for(u32 n = 0; n < 24; n++) tiles.push_back({0, 0}), tiles.push_back({64, 32});
+  DrawingList q{memory, ListA + 0x1800, Vertices + 0x7000};
+  q.draw(GE::Sprites, tiles);
+  q.list.put(GE::Signal, 0x02'0007);
+  q.list.put(GE::End);
+  q.finish();
+  start = m.kernel.cycles;
+  id = enqueue(ListA + 0x1800);
+  CHECK(m.kernel.geReachAt, start + 4353 + 17696);
+  CHECK(m.kernel.geSignalDue, true);
+  CHECK(m.kernel.geFinishDue, false);
+  CHECK(m.call("sceGeListSync", {id, 1}), 2);
+  CHECK(roundTrip(m), true);
+  CHECK(m.kernel.geSignalDue, true);
+  m.kernel.run(start + 4353 + 17696 - 1 - m.kernel.cycles);
+  CHECK(m.kernel.geSignalDue, true);
+  m.kernel.run(2);
+  CHECK(m.kernel.geSignalDue, false);
+  CHECK(m.kernel.geFinishDue, true);  //(the FINISH, met as the GE went on)
+  CHECK(m.kernel.geDoneAt >= start + 4353 + 53088, true);  //(the 24 sprites' 26465.04 clocks)
+  CHECK(m.call("sceGeListSync", {id, 1}), 2);
+  past(m.kernel.geDoneAt);
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+  {  //without the PSP's timing the GE goes past the SIGNAL at once, to the FINISH
+    KernelMachine fast;
+    DrawingList h{fast.system.memory, ListA, Vertices};
+    h.draw(GE::Sprites, {{0, 0}, {256, 256}});
+    h.list.put(GE::Signal, 0x02'0007);
+    h.list.put(GE::End);
+    h.finish();
+    fast.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
+    CHECK(fast.kernel.geSignalDue, false);
+    CHECK(fast.kernel.geFinishDue, true);
+  }
+
+  //a list put at the head of an empty queue waits, paused, for sceGeContinue, which starts it: a list's start too
+  id = m.call("sceGeListEnQueueHead", {ListA, 0, 0xffff'ffff, 0});
+  CHECK(m.call("sceGeListSync", {id, 1}), 4);
+  start = m.kernel.cycles;
+  CHECK(m.call("sceGeContinue", {}), 0);
+  CHECK(m.kernel.geDoneAt, start + 4353 + 70348);
+  past(start + 4353 + 70348);
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+
+  id = enqueue(ListA);
+  CHECK(m.kernel.geFinishDue, true);
+  CHECK(m.call("sceGeBreak", {0, 0}), Kernel::ErrorAlready);  //its FINISH taken first: nothing left to break off
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+  CHECK(m.kernel.geFinishDue, false);
+  id = enqueue(ListA);
+  behind = enqueue(ListB);
+  CHECK(m.call("sceGeBreak", {0, 0}), Kernel::ErrorAlready);  //the list behind it met its own as it started
+  CHECK(m.call("sceGeListSync", {behind, 1}), 0);
+  CHECK(m.kernel.geFinishDue, false);
+  id = enqueue(ListA);
+  behind = enqueue(ListB);
+  u32 stalled = enqueue(ListA + 0x400, ListA + 0x400);
+  CHECK(m.call("sceGeBreak", {0, 0}), stalled);  //the two FINISHes before it taken, the third broken off at its stall
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+  CHECK(m.call("sceGeListSync", {behind, 1}), 0);
+  CHECK(m.call("sceGeListSync", {stalled, 1}), 4);
+  CHECK(m.kernel.geFinishDue, false);
+  CHECK(roundTrip(m), true);
+}
+
 //The GE's FINISH comes to the program as an interrupt (kernel/ge.cpp's geInterrupt()), as pspautotests recorded: with
 //interrupts held off the list stays drawing past its time, its callback once they're back on (gpu/ge/intrsuspend);
 //a SIGNAL's callback that lets the GE go on finds its list drawing, though the GE has run its FINISH (
@@ -3321,7 +3553,8 @@ auto geTests() -> Tests {
     {"ge pause", gePause}, {"ge callbacks see the ge stopped", geCallbackState}, {"ge pause window", gePauseWindow},
     {"ge lists queued twice", geQueuedTwice}, {"ge suspending signals' callbacks", geSuspendedCallbacks},
     {"ge calls and threads", geCallsAndThreads}, {"ge break", geBreak},
-    {"ge break and callbacks", geBreakCallbacks}, {"ge time", geTime}, {"ge time's interrupt", geTimeInterrupts},
+    {"ge break and callbacks", geBreakCallbacks}, {"ge time", geTime}, {"ge time, the PSP's", geTimePsp},
+    {"ge time's interrupt", geTimeInterrupts},
     {"ge FINISH after a quiet function", geQuietFunctions}, {"ge profile", geProfile},
     {"ge profile: calls whose callbacks run in them", geProfileCallbacks},
     {"ge profile: a callback notified in the wait", geProfileNotifiedInWait},

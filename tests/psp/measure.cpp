@@ -296,9 +296,10 @@ static auto waitFor(KernelMachine& m, u32 frames, const std::function<bool()>& d
   return done();
 }
 
-//Round 6's files as this core writes them, for measured6.cpp's comparisons with the owner's PSP: the measure test's
-//run hands its over; otherwise the program's round 6 alone (its menu's second line) runs once, in
-//a machine of its own, the first time they're asked for. None without the program.
+//Round 6's files as this core writes them, for measured6.cpp's comparisons with the owner's PSP: the program's round 6
+//alone (its menu's second line) runs once, in a machine of its own with the GE timed as the PSP's (the option "GE
+//Timing"), the first time they're asked for (the measure test's run, with the default timing, keeps none). None
+//without the program.
 static std::unique_ptr<HostFolder> round6Kept;
 static auto keepRound6(const std::filesystem::path& results) -> void {
   round6Kept = std::make_unique<HostFolder>();
@@ -320,6 +321,7 @@ auto round6Files() -> std::filesystem::path {
   std::filesystem::create_directories(game);
   KernelMachine m;
   m.system.recompiler.enabled = true;
+  m.kernel.gePspTiming = true;  //(the GE timed as the PSP's: measured6.cpp's GE time and driver statuses)
   m.kernel.mount("ms0", stick.path.string());
   std::string error;
   bool loaded = m.kernel.load(program.data(), program.size(), "ms0:/PSP/GAME/PSPMEASURE/EBOOT.PBP", error);
@@ -457,7 +459,6 @@ static auto pspMeasure() -> void {
   CHECK(waitFor(m, 20000, exists(results / "curves-count-v-255.bin")), true);
   press(m, Cross);
   onlyStallCheckStalled();
-  keepRound6(results);
   //the GE's round 7
   move(m, GeRound6Line, GeRound7Line);
   press(m, Cross);

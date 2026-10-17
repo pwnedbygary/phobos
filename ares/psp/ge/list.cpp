@@ -63,9 +63,9 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
     case Spline:        patch(true, argument), undrawn = ~0u; break;
     case BoundingBox:   boxOutside = boundingBox(argument & 0xffff); break;
     case ConditionalJump:  //where JUMP would go, if the last BOUNDING_BOX was out of sight (pspsdk's sceGuEndObject)
-      if(boxOutside) list.address = relative(argument & ~3u);
+      if(boxOutside) list.address = relative(argument & ~3u), owed.front += Cost::Jump;
       break;
-    case Jump:          list.address = relative(argument & ~3u); break;
+    case Jump:          list.address = relative(argument & ~3u), owed.front += Cost::Jump; break;
     case Call:
       if(list.depth == 2) {
         note("a display list CALLed three deep, and the GE has room for two");
@@ -75,6 +75,7 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
       list.returnOffset[list.depth] = list.offset;
       list.depth++;
       list.address = relative(argument & ~3u);
+      owed.front += Cost::Call;
       break;
     case Return:
       //With no CALL to return from, the GE goes on with the next command. Need for Speed: Most Wanted runs lists
@@ -83,6 +84,7 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
       list.depth--;
       list.address = list.returnAddress[list.depth];
       list.offset = list.returnOffset[list.depth];
+      owed.front += Cost::Call;
       break;
     case Signal: signalWord = word; pending = Stop::Signaled; break;
     case Finish: finishWord = word; pending = Stop::Finished; break;
@@ -106,6 +108,7 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
     case TextureMatrixData:      matrixData(textureMatrix, 12, textureIndex, argument); break;
     case TransferStart:          transfer(), undrawn = ~0u; break;  //(after the drawing it depends on: threads.cpp)
     case ClutLoad:               loadClut(); break;
+    case TextureFlush:           cachedTexture.held = false; break;  //(the GE's time: its cache emptied, Cost)
     }
   }
   return Stop::Busy;
