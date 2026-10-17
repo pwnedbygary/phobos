@@ -56,9 +56,9 @@ unchanged (the same file with the thread on or off).
   same; 26 scenes' 600 frames with states every 150 all the same; schedule fuzzing (10 scenes x three ways) and the
   stress mode (a finish every 97th PRIM and kick end, 1x/2x on 26 scenes, 4x on 8) all the same; Ghost of Sparta
   from its start, 2,400 frames, every frame, Software and Vulkan fast, the same; the suite Off, On and On fuzzed three
-  ways 0 failures (595 groups now, with #265's merged in and this round's two tests); ThreadSanitizer over the suite
-  with the thread On, and over every GPU group on MoltenVK with the thread On (pspsdk's samples included), no report,
-  nothing suppressed.
+  ways 0 failures (601 groups now: #265's merged in, the library check's two tests, the review's six);
+  ThreadSanitizer over the suite with the thread On, and over every GPU group on MoltenVK with the thread On
+  (pspsdk's samples included), no report, nothing suppressed.
   Targeted tests for the review's findings (R14-R16, R19, R22-R24, the hull rule) each fail with their rule out.
 - **Found and fixed on the way**: a write whose own checks finish the GPU had the finish's write-back land over it
   (now versioned where its pages may be the GPU's); with the depth moves off a later depth put could change bytes the
@@ -70,16 +70,21 @@ unchanged (the same file with the thread on or off).
   every report the emulation thread takes (each VRAM load, each list word in VRAM): Ghost of Sparta from its start
   crawled past the check's 15 minutes, Gran Turismo 226 s On against 14 Off (now kept by page: 15 s); and an indexed
   PRIM's vertices copied from the buffer's start to its most index (now least to most: Jeanne d'Arc 123 s → 36 s, Off
-  30). A test each, failing without its fix.
+  30). A test each, failing without its fix. The independent review found: past 4,096 runs handed over before a
+  FINISH (GU's direct lists: a run per draw) the thread's counts of later runs overwrote ones not yet folded, a race,
+  the GE's time wrong (the kernel now folds the oldest at each run past 4,096); the render GE's reads of nothing went
+  unreported, so the count a state keeps differed (now reported through the kernel's GE's memory, the count atomic,
+  saturating at 16); and three rules no test caught (software textures' conflicts, software depth rectangles, the
+  busy check for a clean read on a busy page). A test each now, failing with its rule or fix taken out.
 - **Speed**: On is exact but seldom faster than Off on the M1, and in some games much slower (BlazBlue 4 s Off, 20 s
   On; SSX on Tour 8 s, 43 s): every CPU access to VRAM takes the slow path and each store is a record of its own (the
   design's narrower access records and run encoding aren't done yet), and games touching what the GE thread still
   draws have the threads take turns. Auto (step 4) keeps such games synchronous; On is for the tests and the runner.
-- **For the reviewer**: the clock's go split is kept as designed though no known case needs it (taken out, the suite
-  and 10 scenes' 600-frame runs are unchanged).
-- **Next**: the coordinator's library check with `--ge-thread On` again (Off equalled master; the first On pass's
-  Vulkan half drew with the software renderer, the loader not found through a wrapper script); then design steps 3-4
-  on a stacked branch.
+- **The clock's go split is needed** (the review found the case: an alarm's call held back with interrupts off, mtic
+  turning them on inside a go limited by the GE time's bound; without the split the call starts at the bound): kept,
+  with a test that fails without it.
+- **Next**: the coordinator's library check with `--ge-thread On` again; then design steps 3-4 and the narrower,
+  batched access records in later PRs.
 
 ## PSP Vulkan at 5x: the depth-writing shader's depth declared never above the depth rasterized; another frame buffer's depth taken image to image where the device's copy leaves the stencil (Activision Hits' copyright screen at 5x on the RP6 2.7 → 19.4 fps) — 2026-10-16
 

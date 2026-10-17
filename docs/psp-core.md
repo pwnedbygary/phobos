@@ -16128,9 +16128,9 @@ it was (the deferred decode's place kept by its batch), `transfer()`'s overwrite
 - the stress mode (a build with `PHOBOS_GE_STRESS_HOOK`; `PHOBOS_GE_STRESS=97`: the GPU finished at every kick's end
   and before every 97th PRIM, the same places with the thread or not; a scene's 101 finishes become 6,224): the 26
   scenes at 1x and 2x and eight at 4x: all the same;
-- the suite: with the thread Off and On, and On fuzzed each of the three ways, 0 failures (595 groups now, with
-  #265's merged in and this round's two tests; the delay fuzzing on the 590 before them); On under ThreadSanitizer
-  with the GPU groups skipped, no report, nothing suppressed (the GPU groups under it: below).
+- the suite: with the thread Off and On, and On fuzzed each of the three ways, 0 failures (601 groups now, with
+  #265's merged in, the library check's two tests and the review's six; the delay fuzzing on the 590 before them); On
+  under ThreadSanitizer with the GPU groups skipped, no report, nothing suppressed (the GPU groups under it: below).
 
 **The targeted tests** (tests/psp/gpu.cpp and ge.cpp; each on an explicitly threaded machine, G held back by a test gate
 where it would lag, against the same lists and accesses without the thread, both checks on; each fails with its rule
@@ -16142,7 +16142,9 @@ R15 (halfword and byte stores into drawn pixels, each replayed alone), R16 (a de
 memory), R19 (a move source's bytes beside its pixels before the drawer's rows), R22 (a depth fill reviving a source's
 dead bytes on a page no rectangle reaches, after a long transfer row onto it), R23 (a depth put back over pixels a
 finish put there since, at 1x and 2x, the moves on and off), R24 (a taller drawer's changed depth rows), and above 1x
-the hull rule.
+the hull rule; and after the independent review: a store onto a texel a software PRIM reads but doesn't draw over,
+software depth read through the depth views, a copy out of clean bytes on a block the GPU drew in, more runs than G
+keeps counts of before a FINISH, reads of nothing reported, and the go split.
 
 **Found on the way** (each with a test that fails without its fix):
 - A write whose own record's checks finish the GPU (a store through VRAM's depth views onto a drawn pixel, a
@@ -16171,10 +16173,22 @@ the hull rule.
   over each, with nothing to go through (and the put points are dropped as a prefix: they come in their places'
   order): Gran Turismo 15 s. And an indexed PRIM's vertices were copied from the vertex address up to its most index,
   a byte at a time, so a big buffer's few vertices were copied whole for every PRIM (85% of E in Jeanne d'Arc); now
-  from the least index to the most, in one copy from RAM: Jeanne d'Arc 123 s → 36 s (Off: 30). The tests: loads of
-  VRAM with 8,000 software PRIMs behind take as long as with 500 (15 times as long before; a ratio of the best of
-  three rounds, so that the machine's speed and a sanitizer's cancel out), and a sprite by indices 4000 and 4001
-  hands G a record no bigger than one by 0 and 1, which G reads as a run from the copy.
+  from the least index to the most, in one copy from RAM: Jeanne d'Arc 123 s → 36 s (Off: 30). The tests: the
+  reports taken at 20,000 loads of VRAM go through as many entries with 8,000 software PRIMs behind as with 500
+  (counted, not timed: `GeThread::reportWork`), and a sprite by indices 4000 and 4001 hands G a record no bigger than
+  one by 0 and 1, which G reads as a run from the copy.
+- Found by the independent review. Past 4,096 runs handed over before a FINISH is due (a GU direct list, its stall
+  address moved at each draw, makes a run each), G's counts of later runs overwrote earlier ones' that E hadn't
+  folded (runs fold only while a FINISH is due), a data race too: the GE's time came out wrong, and differently run
+  to run. E now folds the oldest as each run past 4,096 is handed over (`Kernel::geTime()`; exact, the fold taking
+  the cycles and the bus's clock kept at the hand-over). G's memory reported no read of nothing, so a texture where
+  nothing is left the count a state keeps (`System::unmappedReports`) short of Off's by the software renderer's texel
+  reads: G's memory reports through E's now, the count atomic and saturating at 16 (the drawing threads report too,
+  with the thread off as well). Three rules no test caught (each taken out, the suites passed with the thread On)
+  have tests now: the software textures' conflicts, page by page; the software depth rectangles; and the busy check
+  made for a read whose page is busy but whose bytes are clean (an HLE copy out of VRAM's depth views, whose check
+  covers the whole 16 KiB block and finishes the GPU wherever it drew there). And a write straddling two pages looks
+  at both for a watched texture (an HLE write may).
 
 **ThreadSanitizer and the GPU.** MoltenVK runs under ThreadSanitizer, nothing suppressed: every GPU group (77) with the
 thread On, pspsdk's samples included, the five GE-thread groups and the versions' group: 0 failures, no report. Its first run, with the
@@ -16182,10 +16196,12 @@ samples left out, found one race, in the tests (a test gate set while G was stil
 the tests now drain the thread before setting it), none in the emulator, the render GE driving the GPU backend
 included; its run with the samples found the starvation above.
 
-**Left for the reviewer.** The clock's go split (a go stopped at the GE time's bound runs on from where it stopped,
-with none of the run loop's steps between) is kept as designed, but no known case needs it: taken out, the suite with
-the thread On passes and 10 scenes' 600-frame runs (states every 150) are all Off's; read from the code, the steps
-between are no-ops at the bound.
+**The go split is needed.** A go stopped at the GE time's bound runs on from where it stopped, with none of the run
+loop's steps between, and the review found the case that needs it (the design's R5): a call into the program held
+back while interrupts are off (an alarm gone off), the program turning them on with mtic, no system call, so the go
+goes on, inside a go whose limit came from the bound. Ended at the bound, the loop's startCall() would start the call
+there, at count 9,791 where the synchronous GE starts it at 19,583, with either engine. A test has it now, and fails
+with the split taken out (the suite and the scenes didn't).
 
 **Next (the second PR, stacked):** design steps 3 and 4: the frame shown from G (`Present` records, at most two
 frames in flight, `Shot` and `Settings` records, the window handed over through G), the drains bounded and unloading
