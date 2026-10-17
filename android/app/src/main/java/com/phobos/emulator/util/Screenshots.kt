@@ -16,6 +16,9 @@ sealed interface ScreenshotResult {
     data object NoPicture : ScreenshotResult
 }
 
+/** What the screenshot effect's pill says (its two lines; [failed] tints it), and what TalkBack reads out. */
+data class ScreenshotNote(val title: String, val detail: String, val failed: Boolean, val spoken: String)
+
 /**
  * A screenshot's file, named for the game and when it was taken ("God of War - Ghost of Sparta 2026-10-17 14-15-45.png"),
  * and what the player is told about it.
@@ -68,22 +71,33 @@ object Screenshots {
     }
 
     /**
-     * What the player is told: the file and its folder, or why there's none. A folder in shared storage is shown from
-     * [sharedStorage] (its root, /storage/emulated/0); one in [appStorage], the app's own files that no file manager
-     * shows, says where to choose another.
+     * What the player is told: where a saved shot went, as its folder's last two names ("Screenshots › PlayStation
+     * Portable"), or why it wasn't saved. A folder in shared storage is shown from [sharedStorage] (its root,
+     * /storage/emulated/0); one in [appStorage], the app's own files that no file manager shows, says where to choose
+     * another.
      */
-    fun message(result: ScreenshotResult, sharedStorage: String, appStorage: String): String = when (result) {
+    fun note(result: ScreenshotResult, sharedStorage: String, appStorage: String): ScreenshotNote = when (result) {
         is ScreenshotResult.Saved -> {
             val folder = result.file.parentFile?.path.orEmpty()
             if (folder == appStorage || folder.startsWith("$appStorage/")) {
-                "Screenshot saved: ${result.file.name}\nin Phobos's own storage (Settings → Paths → Screenshots Path " +
-                    "sets a folder you can open)"
+                ScreenshotNote(
+                    "Screenshot saved", "In Phobos's own storage: Settings → Paths → Screenshots Path sets a folder you can open",
+                    failed = false,
+                    spoken = "Screenshot saved in Phobos's own storage. Settings, Paths, Screenshots Path sets a folder you can open.",
+                )
             } else {
-                "Screenshot saved: ${result.file.name}\nin ${shown(folder, sharedStorage)}"
+                val names = shown(folder, sharedStorage).split('/').filter { it.isNotEmpty() }.takeLast(2)
+                ScreenshotNote("Screenshot saved", names.joinToString(" › "), failed = false, spoken = "Screenshot saved to ${names.joinToString(", ")}")
             }
         }
-        is ScreenshotResult.NotWritable -> "Screenshot not saved: can't write in ${shown(result.folder.path, sharedStorage)}"
-        ScreenshotResult.NoPicture -> "Screenshot not saved: the game has no picture to save yet"
+        is ScreenshotResult.NotWritable -> {
+            val folder = shown(result.folder.path, sharedStorage)
+            ScreenshotNote("Screenshot not saved", "Can't write in $folder", failed = true, spoken = "Screenshot not saved: can't write in $folder")
+        }
+        ScreenshotResult.NoPicture -> ScreenshotNote(
+            "Screenshot not saved", "The game has no picture to save yet", failed = true,
+            spoken = "Screenshot not saved: the game has no picture to save yet",
+        )
     }
 
     private fun shown(folder: String, sharedStorage: String) = folder.removePrefix("$sharedStorage/")

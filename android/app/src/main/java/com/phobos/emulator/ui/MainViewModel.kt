@@ -64,6 +64,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -1900,7 +1901,12 @@ class MainViewModel(
         PhobosCore.setSkipBootRom(enabled)
     }
 
-    /** The pause menu's Shot and the screenshot hotkey: saves the picture, then says where it went or why it didn't. */
+    // Each shot for the game screen's effect (ScreenshotEffect), which says where it went or why it didn't. Only the
+    // newest waits to be taken; with no game screen showing, it's dropped.
+    private val _screenshotEvents = MutableSharedFlow<ScreenshotEvent>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    val screenshotEvents: SharedFlow<ScreenshotEvent> = _screenshotEvents.asSharedFlow()
+
+    /** The pause menu's Shot and the screenshot hotkey: saves the picture, then hands it to the game screen's effect. */
     fun takeScreenshot(systemName: String, romName: String) {
         viewModelScope.launch(Dispatchers.IO) {
             // Task 41: resolve the SAF path to a REAL filesystem path; fall back to
@@ -1916,10 +1922,8 @@ class MainViewModel(
             } else {
                 Log.e("Phobos", "Screenshot not saved: $result")
             }
-            val message = Screenshots.message(result, Environment.getExternalStorageDirectory().absolutePath, context.filesDir.absolutePath)
-            withContext(Dispatchers.Main) {
-                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-            }
+            val note = Screenshots.note(result, Environment.getExternalStorageDirectory().absolutePath, context.filesDir.absolutePath)
+            _screenshotEvents.tryEmit(ScreenshotEvent((result as? ScreenshotResult.Saved)?.file, note))
         }
     }
 

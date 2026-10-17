@@ -377,10 +377,13 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     }
     LaunchedEffect(isPaused) { if (isPaused) menuRevealed = false }
 
+    val pictureBounds = remember { PictureBounds() }
+
     // ── Main container ───────────────────────────────────────────────────────
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .onPlaced { pictureBounds.screen = it }
             .onSizeChanged { landscapeScreen = it.width >= it.height }
             .background(Color.Black)
             // Before focusable() so it observes this node's focus (hasFocus includes children).
@@ -409,6 +412,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             contentHz = contentHz,
             alignTop = settings.showTouchControls,
             bottomReserve = if (isLoaded && showKeyboard && hasKeyboard) keyboardHeight else 0.dp,
+            bounds = pictureBounds,
             onTap = {
                 // With touch controls hidden for a controller, the first tap brings them back.
                 if (controllerActive && settings.showTouchControls && touchPrefs.hideOnController) controllerActive = false
@@ -530,6 +534,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             )
         }
 
+        ScreenshotEffect(viewModel.screenshotEvents, pictureBounds, touchControlsShown = touchVisible)
+
         if (editingTouchLayout) {
             TouchLayoutEditor(
                 layout = touchLayout,
@@ -550,6 +556,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
  * [geometry] (4:3 / 320x240 until the first frame). With touch controls enabled the picture sits
  * at the top in portrait so the controls get the lower part of the screen. [bottomReserve] is
  * kept free below the picture, which then sits at the top (the ZX Spectrum or MSX keyboard).
+ * Where it's placed goes in [bounds], for the screenshot effect.
  */
 @Composable
 private fun GamePicture(
@@ -560,6 +567,7 @@ private fun GamePicture(
     contentHz: Double,
     alignTop: Boolean,
     bottomReserve: Dp,
+    bounds: PictureBounds,
     onTap: () -> Unit,
 ) {
     val currentOnTap by rememberUpdatedState(onTap)
@@ -633,7 +641,8 @@ private fun GamePicture(
             modifier = Modifier
                 .align(if (atTop) Alignment.TopCenter else Alignment.Center)
                 .padding(top = topInset)
-                .size(width, height),
+                .size(width, height)
+                .onPlaced { bounds.picture = it },
         )
     }
 }

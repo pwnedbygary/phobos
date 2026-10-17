@@ -104,31 +104,44 @@ class ScreenshotsTest {
     }
 
     @Test
-    fun theMessageSaysWhereTheShotWentOrWhyThereIsNone() {
+    fun theNoteSaysWhereTheShotWentOrWhyThereIsNone() {
         val saved = File("$shared/Emulation Settings/Phobos/Screenshots/PlayStation Portable/God of War - Ghost of Sparta 2026-10-17 14-15-45.png")
+        // The pill's two lines, and what TalkBack reads out.
         assertEquals(
-            "Screenshot saved: God of War - Ghost of Sparta 2026-10-17 14-15-45.png\nin Emulation Settings/Phobos/Screenshots/PlayStation Portable",
-            Screenshots.message(ScreenshotResult.Saved(saved), shared, app),
+            ScreenshotNote("Screenshot saved", "Screenshots › PlayStation Portable", failed = false, spoken = "Screenshot saved to Screenshots, PlayStation Portable"),
+            Screenshots.note(ScreenshotResult.Saved(saved), shared, app),
         )
-        // An SD card's folder, shown whole.
+        // An SD card's folder: its last two names too.
         assertEquals(
-            "Screenshot saved: a.png\nin /storage/1C1F-1234/Pictures/PlayStation Portable",
-            Screenshots.message(ScreenshotResult.Saved(File("/storage/1C1F-1234/Pictures/PlayStation Portable/a.png")), shared, app),
+            "Pictures › PlayStation Portable",
+            Screenshots.note(ScreenshotResult.Saved(File("/storage/1C1F-1234/Pictures/PlayStation Portable/a.png")), shared, app).detail,
         )
         // The app's own storage, which no file manager shows: where to choose another folder.
         assertEquals(
-            "Screenshot saved: a.png\nin Phobos's own storage (Settings → Paths → Screenshots Path sets a folder you can open)",
-            Screenshots.message(ScreenshotResult.Saved(File("$app/screenshots/PlayStation Portable/a.png")), shared, app),
+            ScreenshotNote(
+                "Screenshot saved", "In Phobos's own storage: Settings → Paths → Screenshots Path sets a folder you can open", failed = false,
+                spoken = "Screenshot saved in Phobos's own storage. Settings, Paths, Screenshots Path sets a folder you can open.",
+            ),
+            Screenshots.note(ScreenshotResult.Saved(File("$app/screenshots/PlayStation Portable/a.png")), shared, app),
         )
         // A folder whose name only starts like the app's isn't in it.
         assertEquals(
-            "Screenshot saved: a.png\nin ${app}system/PlayStation Portable",
-            Screenshots.message(ScreenshotResult.Saved(File("${app}system/PlayStation Portable/a.png")), shared, app),
+            "filessystem › PlayStation Portable",
+            Screenshots.note(ScreenshotResult.Saved(File("${app}system/PlayStation Portable/a.png")), shared, app).detail,
         )
         assertEquals(
-            "Screenshot not saved: can't write in Emulation Settings/Phobos/Screenshots/PlayStation Portable",
-            Screenshots.message(ScreenshotResult.NotWritable(File("$shared/Emulation Settings/Phobos/Screenshots/PlayStation Portable")), shared, app),
+            ScreenshotNote(
+                "Screenshot not saved", "Can't write in Emulation Settings/Phobos/Screenshots/PlayStation Portable", failed = true,
+                spoken = "Screenshot not saved: can't write in Emulation Settings/Phobos/Screenshots/PlayStation Portable",
+            ),
+            Screenshots.note(ScreenshotResult.NotWritable(File("$shared/Emulation Settings/Phobos/Screenshots/PlayStation Portable")), shared, app),
         )
-        assertEquals("Screenshot not saved: the game has no picture to save yet", Screenshots.message(ScreenshotResult.NoPicture, shared, app))
+        assertEquals(
+            ScreenshotNote(
+                "Screenshot not saved", "The game has no picture to save yet", failed = true,
+                spoken = "Screenshot not saved: the game has no picture to save yet",
+            ),
+            Screenshots.note(ScreenshotResult.NoPicture, shared, app),
+        )
     }
 }
