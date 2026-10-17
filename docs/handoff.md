@@ -63,7 +63,10 @@ that generates it: nothing the app, the cores or the desktop program build chang
   page and on a stray chart; all 24 SVGs rendered to PNG with headless Chrome, light and dark, and looked at (titles,
   axis labels, legends, captions; nothing clipped or overlapping); the timelines in plain `timeline` syntax (the script
   refuses `:`, `#` and `;` in their text) and rendered with Mermaid 11 and 10 on white and near-black pages;
-  `git diff --check`; no line of the script over 120 characters; a privacy scan of every new and changed line.
+  `git diff --check`; no line of the script over 120 characters; a privacy scan of every new and changed line. After
+  the push (`3da67b189`), the branch's README and docs/progress.md screenshotted on GitHub in its light and dark
+  themes with headless Chrome: each chart showed its matching variant, and all three timelines read in large white
+  text on dark boxes, their gray axes visible on both.
 - **Review**: an independent review of `a22b56455` passed the script, its determinism, the rendering (GitHub's light
   and dark themes and Mermaid included) and privacy, and checked every chart series and over 40 dates against their
   sources, but found five wrong public statements, all corrected: the Download line's "newest at the top" (nightlies
