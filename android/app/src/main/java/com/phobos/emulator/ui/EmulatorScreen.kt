@@ -1,7 +1,6 @@
 package com.phobos.emulator.ui
 
 import android.app.Activity
-import android.view.KeyEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.activity.compose.BackHandler
@@ -80,11 +79,10 @@ import com.phobos.emulator.PhobosCore
 import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.input.GameInputState
+import com.phobos.emulator.input.GameKeys
 import com.phobos.emulator.input.HotkeyAction
-import com.phobos.emulator.input.InputBindings
-import com.phobos.emulator.input.comboUsesDpad
-import com.phobos.emulator.input.mapKeyCodeToBit
-import com.phobos.emulator.input.matchingHotkeys
+import com.phobos.emulator.input.InputLog
+import com.phobos.emulator.input.VOLUME_KEYS
 import com.phobos.emulator.launch.LaunchSystems
 import com.phobos.emulator.ui.hud.PerformanceHudOverlay
 import com.phobos.emulator.ui.hud.hudConfig
@@ -104,7 +102,6 @@ import com.phobos.emulator.util.pictureMultiple
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
-private val VOLUME_KEYS = setOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE)
 private const val MENU_REVEAL_MS = 3000L
 
 @Composable
@@ -156,7 +153,6 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     val screen = remember { Any() }
     fun takeFocus() { if (!viewModel.emulatorScreenReplaced(screen)) focusRequester.requestFocus() }
 
-    var pressedKeys by remember { mutableStateOf(setOf<Int>()) }
     var fastForwardToggled by remember { mutableStateOf(false) }
 
     fun toggleFastForward() {
@@ -194,18 +190,28 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
         return true
     }
 
-    // Controllers that report the D-pad as a hat send motion events, not keys, so combos that
-    // include a D-pad direction are re-checked when the hat changes. Hold-to-fast-forward needs
-    // a key release and is not supported from the hat.
-    val onHatChanged = rememberUpdatedState<() -> Unit> {
-        val pressed = pressedKeys + GameInputState.hotkeyKeys
-        for (action in matchingHotkeys(controls.hotkeys, pressed)) {
-            val combo = controls.hotkeys[action].orEmpty()
-            if (action != HotkeyAction.FAST_FORWARD_HOLD && comboUsesDpad(combo)) runHotkey(action)
-        }
+    // Keys, the hat's hotkeys and focus go through GameKeys, remembered once: what it reads must be state, read at each
+    // call, or fixed for the screen, as systemName and romName are (each game gets its own screen: MainScaffold pops
+    // the old game's entry, with no launchSingleTop).
+    val gameKeys = remember {
+        GameKeys(object : GameKeys.Screen {
+            override fun controls() = controls
+            override fun paused() = isPaused
+            override fun editing() = editingTouchLayout || editingHud
+            override fun fastForwardToggled() = fastForwardToggled
+            override fun zxKeyToBind() = zxRebindTarget
+            override fun bindZxKey(key: String, bit: Int) {
+                viewModel.setZxKeyBinding(systemName, key, bit)
+                zxRebindTarget = null
+            }
+            override fun hotkey(action: String) = runHotkey(action)
+            override fun stopFastForward() {
+                PhobosCore.setFastForward(false)
+            }
+        })
     }
     DisposableEffect(Unit) {
-        val hotkeyListener: () -> Unit = { onHatChanged.value() }
+        val hotkeyListener: () -> Unit = { gameKeys.onHatChanged() }
         val physicalListener: () -> Unit = { if (!controllerActive) controllerActive = true }
         GameInputState.onHotkeyKeysChanged = hotkeyListener
         GameInputState.onPhysicalInput = physicalListener
@@ -261,6 +267,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     // ── Lifecycle ────────────────────────────────────────────────────────────
     LaunchedEffect(isLoaded) {
         if (isLoaded && !viewModel.emulatorScreenReplaced(screen)) {
+            InputLog.refresh()
+            InputLog.note { "$systemName game, bindings ${controls.mappings}, hotkeys ${controls.hotkeys}" }
             viewModel.setPause(false)
             PhobosCore.setEmulationRunning(true)
             // Take focus right away so hardware keys (hotkeys, gamepad) reach onPreviewKeyEvent.
@@ -270,7 +278,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     LaunchedEffect(isPaused, editingTouchLayout) {
         if (isPaused) {
             GameInputState.releaseAllButtons()
-            pressedKeys = emptySet() // Re-arm hotkey combos.
+            gameKeys.forgetPressedKeys() // Re-arm hotkey combos.
         } else if (isLoaded && !editingTouchLayout) {
             // Controller navigation of the pause menu moves focus into it; game input needs it back.
             takeFocus()
@@ -310,7 +318,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     LaunchedEffect(shownPspDialog?.id) {
         if (shownPspDialog != null) {
             GameInputState.releaseAllButtons()
-            pressedKeys = emptySet()
+            gameKeys.forgetPressedKeys()
         } else if (isLoaded && !isPaused) {
             takeFocus()
         }
@@ -376,51 +384,13 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             .onSizeChanged { landscapeScreen = it.width >= it.height }
             .background(Color.Black)
             // Before focusable() so it observes this node's focus (hasFocus includes children).
-            .onFocusChanged { if (!it.hasFocus) GameInputState.releaseAllButtons() }
+            .onFocusChanged { gameKeys.onFocusChanged(it) }
             .focusRequester(focusRequester)
             .focusable()
             .onPreviewKeyEvent { keyEvent ->
                 val native = keyEvent.nativeKeyEvent
-                val keyCode = native.keyCode
-                val isDown = keyEvent.type == KeyEventType.KeyDown
-                // Leave volume keys to the system, and every key to the layout editors.
-                if (keyCode in VOLUME_KEYS || editingTouchLayout || editingHud) return@onPreviewKeyEvent false
-                // Paused: let key repeats drive focus navigation in the pause menu.
-                if (native.repeatCount > 0) return@onPreviewKeyEvent !isPaused
-
-                // ZX CUSTOM rebinding captures the next controller button.
-                val rebind = zxRebindTarget
-                if (rebind != null && isDown) {
-                    val bit = mapKeyCodeToBit(keyCode)
-                    if (bit != 0) {
-                        viewModel.setZxKeyBinding(systemName, rebind, bit)
-                        zxRebindTarget = null
-                        return@onPreviewKeyEvent true
-                    }
-                }
-
-                pressedKeys = if (isDown) pressedKeys + keyCode else pressedKeys - keyCode
-
-                // Hotkeys match on keys plus hat D-pad directions (GameInputState.hotkeyKeys),
-                // so combos like Z + D-pad Right work on controllers with a hat D-pad.
-                var consumed = false
-                if (isDown) {
-                    for (action in matchingHotkeys(controls.hotkeys, pressedKeys + GameInputState.hotkeyKeys)) {
-                        if (runHotkey(action)) consumed = true
-                    }
-                } else if (!fastForwardToggled && controls.hotkeys[HotkeyAction.FAST_FORWARD_HOLD]?.contains(keyCode) == true) {
-                    PhobosCore.setFastForward(false)
-                }
-                if (consumed) return@onPreviewKeyEvent true
-                // Paused: mapped buttons navigate the menu (BUTTON_A falls back to DPAD_CENTER).
-                if (isPaused) return@onPreviewKeyEvent false
-
-                val bits = InputBindings.of(controls.mappings).bitsForKey(keyCode)
-                if (bits != 0) {
-                    GameInputState.setButton(bits, isDown)
-                    return@onPreviewKeyEvent true
-                }
-                false
+                InputLog.key("game", native)
+                gameKeys.onKey(native.keyCode, keyEvent.type == KeyEventType.KeyDown, native.repeatCount)
             }
             .onKeyEvent { keyEvent ->
                 val keyCode = keyEvent.nativeKeyEvent.keyCode

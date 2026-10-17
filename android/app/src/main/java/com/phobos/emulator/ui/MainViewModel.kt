@@ -26,6 +26,7 @@ import com.phobos.emulator.input.ControlCapture
 import com.phobos.emulator.input.ControlLevel
 import com.phobos.emulator.input.Controls
 import com.phobos.emulator.input.GameInputState
+import com.phobos.emulator.input.InputLog
 import com.phobos.emulator.input.PspRightStick
 import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.CatalogBackdrop
@@ -321,6 +322,7 @@ class MainViewModel(
     private var wasEmulationRunningBeforePause = false
 
     override fun onPause(owner: LifecycleOwner) {
+        InputLog.note { "activity paused" }
         if (_isLoaded.value && !_isPaused.value) {
             wasEmulationRunningBeforePause = true
             setPause(true)
@@ -330,6 +332,7 @@ class MainViewModel(
     }
 
     override fun onResume(owner: LifecycleOwner) {
+        InputLog.note { "activity resumed" }
         if (_isLoaded.value && wasEmulationRunningBeforePause) {
             setPause(false)
         }
