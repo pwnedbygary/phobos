@@ -37,7 +37,8 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## Screenshots: a film-strip card pops out of the picture and hops into a folder, and a pill says where it went or why it didn't; named for the game and the time; the core lets the picture go before it encodes — 2026-10-17
 
-Branch `cursor/screenshot-feedback-2b67`, on master `5442acb8b` (part 102, #265); draft PR #273.
+Branch `cursor/screenshot-feedback-2b67`, on master `5442acb8b` (part 102, #265); draft PR #273, with the fix round of
+its review (b5974400: approve with should-fixes).
 - **The report** (owner, 17 Oct): Shot in the pause menu gave no sign it worked, so he pressed it three times and fell
   back to Android's screenshot. It had worked: three files, each named for the ROM's file name and milliseconds
   (`God of War - Ghost of Sparta.chd_1792260870863.png`, 480x272).
@@ -45,51 +46,75 @@ Branch `cursor/screenshot-feedback-2b67`, on master `5442acb8b` (part 102, #265)
   "aesthetic, but performant at all costs", with fun and whimsy. It matches the coordinator's preview
   (scratch/screenshot-fx/preview.html): its layout, keyframes and CSS easings.
 - **The effect** (ui/ScreenshotEffect.kt): `MainViewModel.takeScreenshot`, which the pause menu's Shot and the
-  screenshot hotkey both call, in every core, saves through `Screenshots.save` and hands a `ScreenshotEvent` (the file,
-  `Screenshots.note`) to `screenshotEvents`, which holds only the newest. `ScreenshotEffect`, after the pause menu in
-  EmulatorScreen's Box, collects it. Saved, over 2.7 s: a film-strip card holding the picture (decoded from the PNG)
-  starts exactly over the game picture, washed white, and springs to the bottom-left corner (the top-left with the touch
-  controls showing; clear of the system bars and the cutout, as the effect starts) as it develops; the film winds on two holes; a manila folder springs in beside it, its front panel
-  tips open, the card hops in between its panels, the front snaps shut, the folder squashes, nine sparkles burst, and a
-  pill says "Screenshot saved" over "Screenshots › PlayStation Portable" (in the app's own storage, which no file
-  manager shows, where to choose a folder); then it all slides off to the left. Not saved: the pill alone,
-  error-tinted, with the reason, 3 s. A new shot restarts it. Remove animations: the card in the folder with the pill,
-  still, 1.6 s (a delay, which the animator scale doesn't shorten). TalkBack hears where it went.
-- **Its cost**: nothing in composition while none runs; one clock (an `Animatable`, linear), read only in
-  `graphicsLayer {}` and draw lambdas, so a frame recomposes and lays out nothing (EmulatorScreen never recomposes for
-  it). One `Layout` places fixed-size nodes once: the folder's back, the card, the front, the sparkles, the pill, each
-  its own small layer; paths and brushes cached; no blur; shadows only on the card (none while it covers the picture)
-  and the folder's back. The picture is decoded on IO at 640 px wide at most, as a hardware bitmap, and dropped at the
-  end. No pointer input or focus: the touch controls, the game and the pause menu keep theirs.
-- **The motion** (util/ScreenshotFx.kt, pure Kotlin): `CssEase` (CSS's cubic-bezier, solved as browsers do),
+  screenshot hotkey both call, in every core, takes one shot at a time (a press while one is being taken and written is
+  dropped). `Screenshots.save` makes the file; `PhobosCore.captureScreenshot` takes the picture, which the core keeps,
+  and hands back a copy at most 640 px either way, which goes straight to the effect as a `ScreenshotEvent`; then
+  `writeScreenshot` writes the PNG while the effect plays, and the pill joins once `Screenshots.note` says how that
+  went. `ScreenshotEffect`, after the pause menu in EmulatorScreen's Box, collects `screenshotEvents` (only the newest
+  waits). Saved, over 2.7 s: a film-strip card holding the picture starts exactly over the game picture, washed white,
+  and springs to the bottom-left corner as it develops (the top-left where the touch controls show in play, even when
+  shot from the pause menu; clear of the system bars and the cutout); the film winds on two holes; a manila folder
+  springs in beside it, its front panel tips open, the card hops in between its panels, the front snaps shut, the
+  folder squashes, nine sparkles burst, and a pill says "Screenshot saved" over "Screenshots › PlayStation Portable"
+  (in the app's own storage, which no file manager shows, where to choose a folder); then it all slides off to the
+  left. On a narrow screen the pill keeps to its title, as the preview does, but for that hint or a failure, which wrap.
+  No picture, or a folder that can't be written: the pill alone, error-tinted, with the reason, 3 s; a write that fails
+  once the card is out: the pill beside the folder says so. A new shot restarts it. Remove animations: the card in the
+  folder with the pill, still, 1.6 s (a delay, which the animator scale doesn't shorten). TalkBack hears where it went
+  once that's known.
+- **Its cost**: nothing in composition while none runs; one clock (an `Animatable`, linear) read through `ShotClock`
+  (a fun interface returning a primitive float, so nothing's boxed) only in `graphicsLayer {}` and draw lambdas, so a
+  frame recomposes and lays out nothing (EmulatorScreen never recomposes for it; the pill is composed once, when its
+  text is known). One `Layout` places fixed-size nodes once: the folder's back, the card, the front, the sparkles, the
+  pill, each its own small layer, each fading on its own (`ModulateAlpha`: no offscreen buffer, which would cut off the
+  folder's tab, drawn above its node; so the card shows through the front panel as they fade at the end). Paths and
+  brushes cached; no blur; shadows only on the card (none while it covers the picture) and the folder's back (one
+  corner radius, so its outline needs no Path). What's left per frame is Compose's own: each animated layer's block
+  makes its outline anew (javap of Compose UI 1.7.6), and the `Animatable` boxes its value. The card's picture is the
+  capture's copy (averaged down in native code) as a hardware bitmap, dropped at the end. No pointer input or focus: the
+  touch controls, the game and the pause menu keep theirs.
+- **The motion** (util/ScreenshotFx.kt, pure Kotlin, internal): `CssEase` (CSS's cubic-bezier, solved as browsers do),
   `Track` (keyframes as Web Animations hold them), `ShotGeometry` (the preview's layout in hundredths of the screen's
   width; a tall picture's card, the WonderSwan held upright, goes into the folder narrower than 80% so its bottom
   stays behind the front panel), `ShotTimeline`, `ShotErrorTimeline`, and `flapCorners` (the front panel's CSS
   `perspective() rotateX()`, drawn through `Matrix.setPolyToPoly`).
-- **Native** (PhobosRunner.cpp): `takeScreenshot`'s general path held `windowMutex`, which `video()` takes for every
-  frame, through the colour conversion of the whole buffer and the PNG encode. It now copies the frame's width x
-  height pixels under the lock and converts and encodes after. The N64 and PSP Vulkan paths are as they were.
+- **Native** (PhobosRunner.cpp, PhobosJNI.cpp): `takeScreenshot` is now `captureScreenshot` then `writeScreenshot`
+  (both at once for the save states' previews and the desktop). Its general path held `windowMutex`, which `video()`
+  takes for every frame, through the colour conversion of the whole buffer and the PNG encode; it now copies the frame
+  under the lock and converts after. It takes the frame's own size, kept with `lastFrameBuffer` as `video()` writes it
+  (`currentWidth`/`currentHeight` followed the window's target size, which a frame of another size can share, and are
+  gone), and turns a WonderSwan held upright as `video()` turns it for the window (its PNG, and the card, were
+  sideways). The last frame is let go as a game unloads. The JNI keeps the captured picture for `writeScreenshot` (or
+  `releaseScreenshot`) and hands back its copy, each pixel the average of a square of the picture's. The N64 and PSP
+  Vulkan paths are as they were.
 - **The name** is the ROM's file name without its extension (`romTitle`, as the pause menu's title drops it) and the
   local date and time: `God of War - Ghost of Sparta 2026-10-17 14-15-45.png`. What FAT, exFAT and SAF's providers
   refuse (`\ / : * ? " < > |`) becomes `_`, control characters go, so do spaces around the title and dots before it,
   the title is cut at 150 UTF-8 bytes on a whole character, and it's "Screenshot" when nothing's left. Each file is
   made (`createNewFile`) before the core writes the picture into it, so a shot never replaces a file, and shots taken
-  in the same second, even at once, get `-2`, `-3`. The folder (`<Screenshots Path, or the app's own>/<system>`) and
-  the picture's size and content are as before.
-- **Why the core's failure means no picture**: its `takeScreenshot` returns false before writing (no frame yet; the
-  PSP's or the N64's picture unreadable) or when the PNG can't be opened for writing, and the file made first shows the
-  folder takes one.
+  in the same second, even at once, get `-2`, `-3`. A file still empty after the write wasn't written (nall's PNG
+  writer says it was even when its writes fail): it's deleted and the pill says the folder can't be written. The
+  folder (`<Screenshots Path, or the app's own>/<system>`) and the PNG are as before, but a WonderSwan held upright's
+  is upright.
+- **Why the core's failure means no picture**: `captureScreenshot` finds none (no frame yet; the PSP's or the N64's
+  picture unreadable) before anything is written, and the file made first shows the folder takes one.
 - **Tests**: `ShotTimelineTest` (at 0 ms the card's picture is the game picture's rectangle, for six screens; it
-  rests in its corner, clear of the system bars; it ends in the folder between its panels with its top showing; the hop; the folder's opening,
-  shutting and sparkles; at the end everything is off to the left and transparent; never NaN, opacities in 0-1; no jump
-  where keyframes meet; Remove animations still; the failure's pill; the easings against values solved apart; the front
-  panel's perspective). `ScreenshotsTest` (the name, the characters, long titles, never overwriting, the folder made,
-  no picture, a folder that can't be written, the note: the old message's texts as the pill's two lines and TalkBack's).
-- **Checks**: the JVM unit tests on the Mac, modern flavor: `ScreenshotsTest` 8/0, `ShotTimelineTest` 12/0, the suite
-  370/0 (50 classes); CI runs both flavors and builds the APKs, the native change with them. Not run on the RP6: the
-  coordinator measures the effect there (frame stats during one, the emulator's frame times with and without). Not
-  seen drawn here (no device, no preview renderer): the `@Preview`s at 420, 1400 and 2000 ms and the failure show it in
-  Android Studio.
+  rests in its corner, clear of the system bars; it ends in the folder between its panels with its top showing; the
+  hop; the folder's opening, shutting and sparkles; at the end everything is off to the left and transparent; never
+  NaN, opacities in 0-1; no jump where keyframes meet; Remove animations still, every value; the failure's pill; the
+  easings against values solved apart; the front panel's perspective; and 64 values at 17 mid-span times as the preview
+  itself moves, sampled from its animations in Chrome: scratch/screenshot-feedback/golden). `ScreenshotsTest` (the
+  name, the characters, long titles, never overwriting, the folder made, no picture, a picture left unwritten, a folder
+  that can't be written, the note: the old message's texts as the pill's two lines and TalkBack's, the hint).
+- **Checks**: on the Mac, modern flavor: `ScreenshotsTest` 9/0, `ShotTimelineTest` 13/0, the suite 372/0 (50
+  classes). The four mutations the review found surviving the old tests each fail a test now (each span eased with the
+  next span's curve, the 330 ms pose changed, the hop eased out: the golden test; Remove animations' turn ignoring it:
+  its test), each reverted. The native files pass clang's syntax check for arm64-v8a with the build's definitions and
+  include paths; CI compiles them in both flavors' APKs and the desktop builds. Not run on the RP6: the coordinator
+  measures the effect there. Not seen drawn here (no device, no preview renderer): the `@Preview`s at 420, 1400 and
+  2000 ms and the failure show it in Android Studio. For that measurement: nall's PNG writer ends by trying `optipng`
+  and `pngcrush` through `nall::execute`, a fork of the process each (neither is on Android); the effect no longer
+  waits for the write, but every PNG still pays for them.
 
 ## PSP Vulkan at 5x: the depth-writing shader's depth declared never above the depth rasterized; another frame buffer's depth taken image to image where the device's copy leaves the stencil (Activision Hits' copyright screen at 5x on the RP6 2.7 → 19.4 fps) — 2026-10-16
 
