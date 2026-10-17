@@ -3045,6 +3045,268 @@ static auto geTransformKept() -> void {
   CHECK(differing, 0u);
 }
 
+//Whether the machine's state is the other's, saying where they part if not: the part (memory, the CPU and the system,
+//the GE, the kernel) and the byte in it.
+static auto sameState(KernelMachine& m, const std::vector<u8>& other) -> bool {
+  auto state = saveState(m);
+  if(state == other) return true;
+  serializer s;
+  m.system.memory.serialize(s);
+  size_t memory = s.size();
+  m.system.serialize(s);
+  size_t system = s.size();
+  m.system.ge.serialize(s);
+  size_t ge = s.size(), at = 0;
+  while(at < state.size() && at < other.size() && state[at] == other[at]) at++;
+  const char* part = at < memory ? "memory" : at < system ? "the CPU and the system" : at < ge ? "the GE" : "the kernel";
+  size_t from = at < memory ? 0 : at < system ? memory : at < ge ? system : ge;
+  std::printf("  the states part in %s, at its byte %zu (%zu and %zu bytes)\n", part, at - from, state.size(),
+              other.size());
+  return false;
+}
+
+//The GE profile (kernel/geprofile.cpp, the runner's --ge-profile): a program that sets callbacks, queues a list that
+//draws a 64x32 sprite (1536 cycles of the GE's time) and finishes, waits for it, shows a frame buffer and waits for
+//the vertical blank, recorded as tools/psp-ge-profile's plugin records it on a PSP: each call from where it's made to
+//where it returns, a wait to where its thread goes on with what the wait gave, the thread, the GE's state, the FINISH
+//callback as it ran, the blank at its own time, all in microseconds (a call ending at 0 ending at 1, 0 being the
+//format's mark of a call that hasn't), and the model's charge; the file in plugin/profile.h's layout, its hooks word
+//the PSP's. With no profile the program sees the same, and nothing is recorded: the profile records and
+//never charges, so the machine ends as it does unprofiled, with every register as each call left it (stored after
+//each), its memory and the kernel's state all the same, and to the cycle, which the same program without the
+//vblank wait (where a difference in time would be taken up) shows too. A state loaded as the FINISH callback runs is
+//the state's, not the profile's: the calls under way then (the callback, and the sync waiting for it) stay
+//unfinished (exit 0), as a capture leaves the calls it ends in, and the rest is recorded as before. With every
+//callback slot taken, sceGeSetCallback reads nothing of what it's given, and the profile doesn't either.
+static auto geProfile() -> void {
+  constexpr u32 Registers = KernelMachine::Results + 0x1000;  //after each call, 32 words
+  enum Run : u32 { Unprofiled, Profiled, Loaded, UnprofiledUnwaited, ProfiledUnwaited };
+  std::vector<u8> unprofiled[2];
+  u64 unprofiledCycles[2] = {};
+  for(u32 run : {Unprofiled, Profiled, Loaded, UnprofiledUnwaited, ProfiledUnwaited}) {
+    bool waits = run <= Loaded, profiled = run == Profiled || run == Loaded || run == ProfiledUnwaited;
+    KernelMachine m;
+    m.kernel.startTime = 1'791'290'096'000'000ull;  //(the host's clock at power on, in the state: the same for each)
+    auto& memory = m.system.memory;
+    memory.write(4, Callbacks, 0);
+    memory.write(4, Callbacks + 8, recorder(m, 0x0880'4100, Finished));
+    memory.write(4, Callbacks + 12, 0x2222);
+    DrawingList list{memory, ListA, Vertices};
+    list.draw(GE::Sprites, {{0, 0}, {64, 32}});
+    list.finish(42);
+    Assembler main{m, 0x0880'1000};
+    u32 calls = 0;
+    auto stored = [&] {  //every register but k0, which points where they go
+      main.li(k0, Registers + calls++ * 128);
+      for(u32 r = 1; r < 32; r++) if(r != k0) main.put(sw(r, r * 4, k0));
+    };
+    main.li(a0, Callbacks); main.call("sceGeSetCallback"); stored();
+    main.li(a0, ListA); main.li(a1, 0); main.put(addu(a2, v0, zero)); main.li(a3, 0);
+    main.call("sceGeListEnQueue"); stored();
+    main.put(addu(a0, v0, zero)); main.li(a1, 0); main.call("sceGeListSync"); stored();
+    main.li(t0, KernelMachine::Results); main.put(sw(v0, 0, t0));
+    main.li(a0, VRAM); main.li(a1, 512); main.li(a2, 3); main.li(a3, 1); main.call("sceDisplaySetFrameBuf");
+    stored();
+    if(waits) {
+      main.call("sceDisplayWaitVblankStart"); stored();
+      main.li(t0, KernelMachine::Results); main.put(sw(v0, 4, t0));
+    }
+    main.call("sceKernelExitGame");
+    GeProfile profile;
+    if(profiled) m.kernel.geProfileStart(profile);
+    if(run == Loaded) {  //on to the FINISH callback's start, a cycle at a time; there the state saved and loaded
+      m.system.recompiler.enabled = false;
+      m.system.power(0x0880'1000);
+      s32 uid = m.kernel.createThread("main", 0x0880'1000, 0x20, 0x4000, 0, 0x0812'3456);
+      m.kernel.startThread(*m.kernel.threads[uid], 0, 0);
+      for(u32 n = 0; n < 100'000 && !m.kernel.callProfile && !m.kernel.exited; n++) m.kernel.run(1);
+      CHECK(m.kernel.callProfile, 5);  //the FINISH's record
+      CHECK(loadState(m, saveState(m)), true);
+      m.kernel.run(Kernel::VblankCycles * 4);
+      CHECK(m.kernel.exited, true);
+    } else {
+      runMain(m, false);
+    }
+    m.kernel.geProfileStop();
+    CHECK(m.kernel.geProfile == nullptr, true);
+    CHECK(memory.read(4, KernelMachine::Results), 0);
+    CHECK(memory.read(4, KernelMachine::Results + 4), 0);
+    CHECK(memory.read(4, Finished), 42);
+    auto& r = profile.records;
+    if(!profiled) {
+      CHECK(r.size(), 0);
+      unprofiled[waits] = saveState(m);
+      unprofiledCycles[waits] = m.kernel.cycles;
+      continue;
+    }
+    if(run == Loaded) {
+      CHECK(r.size(), 8);
+      if(r.size() != 8) return;
+      CHECK(r[3].kind, GeProfile::ListSync); CHECK(r[3].exit, 0);
+      CHECK(r[4].kind, GeProfile::Finish); CHECK(r[4].entry != 0, true); CHECK(r[4].exit, 0);
+      CHECK(r[5].kind, GeProfile::SetFrameBuf); CHECK(r[5].exit != 0, true);
+      CHECK(r[6].kind, GeProfile::WaitVblankStart); CHECK(r[6].exit != 0, true); CHECK(r[6].result, 0);
+      CHECK(r[7].kind, GeProfile::Vblank);
+      continue;
+    }
+    CHECK(m.kernel.cycles, unprofiledCycles[waits]);
+    CHECK(sameState(m, unprofiled[waits]), true);
+    if(!waits) continue;
+    CHECK(r.size(), 8);
+    if(r.size() != 8) return;
+    u32 doneAt = u32(m.kernel.geDoneAt / 333), vblank = u32(Kernel::VblankCycles / 333);
+    CHECK(r[0].kind, GeProfile::SetCallback);
+    CHECK(r[0].thread, 1);
+    CHECK(r[0].a, 0); CHECK(r[0].b, 0x0880'4100); CHECK(r[0].c, Callbacks); CHECK(r[0].result, 0);
+    CHECK(r[0].entry, 0); CHECK(r[0].exit, 1);  //it ended at 0 us too: 1, as 0 is a call that hasn't ended
+    CHECK(r[1].kind, GeProfile::EnQueue);
+    CHECK(r[1].a, ListA); CHECK(r[1].b, 0); CHECK(r[1].c, 0); CHECK(r[1].result, Kernel::GeListIDs);
+    CHECK(r[1].ge, 0);  //idle as it was called
+    CHECK(r[2].kind, GeProfile::ModelWork);
+    CHECK(r[2].a, 64 * 32); CHECK(r[2].b, 1); CHECK(r[2].c, 1536);
+    CHECK(r[2].exit, doneAt); CHECK(r[2].result, Kernel::GeListIDs);
+    CHECK(r[3].kind, GeProfile::ListSync);
+    CHECK(r[3].a, Kernel::GeListIDs); CHECK(r[3].b, 0); CHECK(r[3].result, 0);
+    CHECK(r[3].ge, list.list.address | 2);  //drawing, the GE past its END already
+    CHECK(r[3].exit >= doneAt && r[3].exit < doneAt + 2, true);  //back once the FINISH's callback had run
+    CHECK(r[4].kind, GeProfile::Finish);
+    CHECK(r[4].thread, 0);
+    CHECK(r[4].a, 0); CHECK(r[4].b, 42); CHECK(r[4].c, list.list.address);
+    CHECK(r[4].entry, doneAt); CHECK(r[4].exit >= r[4].entry && r[4].exit <= r[3].exit, true);
+    CHECK(r[5].kind, GeProfile::SetFrameBuf);
+    CHECK(r[5].a, VRAM); CHECK(r[5].b, 512); CHECK(r[5].c, 0x103); CHECK(r[5].result, 0);
+    CHECK(r[6].kind, GeProfile::WaitVblankStart);
+    CHECK(r[6].exit, vblank); CHECK(r[6].result, 0); CHECK(r[6].thread, 1);
+    CHECK(r[7].kind, GeProfile::Vblank);
+    CHECK(r[7].entry, vblank); CHECK(r[7].exit, vblank); CHECK(r[7].a, 1); CHECK(r[7].vcount, 1);
+    CHECK(profile.threads.size(), 2);
+    CHECK(profile.threads.size() == 2 && profile.threads[1].second == "main", true);
+    CHECK(profile.startTime, 0); CHECK(profile.endVcount, 1);
+    CHECK(profile.cpuMhz, 222); CHECK(profile.busMhz, 111);
+
+    auto file = profile.file("phobos test", "UCUS98653", "a title");
+    auto word = [&](u32 at) { return u32(file[at] | file[at + 1] << 8 | file[at + 2] << 16 | file[at + 3] << 24); };
+    auto text = [&](u32 at) { return std::string((const char*)file.data() + at); };
+    CHECK(file.size(), 256 + 8 * 32 + 2 * 36);
+    if(file.size() != 256 + 8 * 32 + 2 * 36) return;
+    CHECK(std::string((const char*)file.data(), 8) == "PHGEPROF", true);
+    CHECK(word(8), 1); CHECK(word(12), 256); CHECK(word(16), 32); CHECK(word(20), 8); CHECK(word(24), 14);
+    CHECK(text(32) == "phobos test" && text(48) == "UCUS98653" && text(64) == "a title", true);
+    CHECK(word(140), 1); CHECK(word(144), 222); CHECK(word(148), 111);
+    CHECK(word(160), Kernel::DevkitVersion); CHECK(word(172), 0xffff'ffff); CHECK(word(176), 0x801f'fffe);
+    CHECK(word(188), 8); CHECK(word(192), 256 + 8 * 32); CHECK(word(196), 2);
+    u32 sync = 256 + 3 * 32;
+    CHECK(file[sync], GeProfile::ListSync); CHECK(file[sync + 1], 1);
+    CHECK(word(sync + 4), r[3].entry); CHECK(word(sync + 8), r[3].exit); CHECK(word(sync + 12), r[3].ge);
+    CHECK(word(sync + 16), Kernel::GeListIDs); CHECK(word(sync + 28), 0);
+    u32 table = 256 + 8 * 32;
+    CHECK(word(table + 36), profile.threads[1].first);
+    CHECK(text(table + 4) == "interrupt" && text(table + 40) == "main", true);
+  }
+
+  KernelMachine m;
+  m.system.memory.write(4, Callbacks + 8, 0x0880'4100);
+  for(u32 n = 0; n < 16; n++) CHECK(m.call("sceGeSetCallback", {Callbacks}), n);
+  GeProfile profile;
+  m.kernel.geProfileStart(profile);
+  CHECK(m.call("sceGeSetCallback", {Callbacks}), Kernel::ErrorOutOfMemory);
+  CHECK(m.call("sceGeSetCallback", {0x10}), Kernel::ErrorOutOfMemory);  //(nothing there)
+  m.kernel.geProfileStop();
+  CHECK(profile.records.size(), 2);
+  if(profile.records.size() != 2) return;
+  CHECK(profile.records[0].a, 0); CHECK(profile.records[0].b, 0); CHECK(profile.records[0].c, Callbacks);
+  CHECK(profile.records[1].c, 0x10);
+  CHECK(m.system.unmapped.size(), 0);
+}
+
+//The GE profile's calls whose thread's callbacks run in them, recorded to where the call returns, with what it gave:
+//a callback notified before sceDisplayWaitVblankStartCB runs first, in the wait, and itself waits for the blank in
+//sceDisplayWaitVblankStart (a call of its own, recorded too), the wait ending as it's done; and in the blank,
+//sceDisplayWaitVblankCB returns 1 at once, its callback (a thousand turns of a loop) run as it returns.
+static auto geProfileCallbacks() -> void {
+  KernelMachine m;
+  Assembler callback{m, 0x0880'3000};  //(count, word, argument): waits for the blank the first time, then loops
+  callback.put(addiu(sp, sp, -16)); callback.put(sw(ra, 0, sp));
+  callback.li(t0, Turn); callback.put(lw(t1, 0, t0)); callback.put(addiu(t2, t1, 1)); callback.put(sw(t2, 0, t0));
+  callback.put(bne(t1, zero, 3)); callback.put(nop);  //past the wait
+  callback.call("sceDisplayWaitVblankStart");
+  callback.li(t3, 1000);
+  u32 loop = callback.here();
+  callback.put(addiu(t3, t3, -1));
+  callback.put(bne(t3, zero, int32_t(loop - (callback.here() + 4)) / 4)); callback.put(nop);
+  callback.put(lw(ra, 0, sp)); callback.put(addiu(sp, sp, 16));
+  callback.put(jr(ra)); callback.put(addu(v0, zero, zero));
+  Assembler main{m, 0x0880'1000};
+  main.li(s1, KernelMachine::Results);
+  main.li(a0, m.string("cb")); main.li(a1, 0x0880'3000); main.li(a2, 0);
+  main.call("sceKernelCreateCallback");
+  main.put(addu(s0, v0, zero));
+  main.put(addu(a0, s0, zero)); main.li(a1, 7); main.call("sceKernelNotifyCallback");
+  main.call("sceDisplayWaitVblankStartCB");
+  main.put(sw(v0, 0, s1));
+  main.put(addu(a0, s0, zero)); main.li(a1, 8); main.call("sceKernelNotifyCallback");
+  main.call("sceDisplayWaitVblankCB");
+  main.put(sw(v0, 4, s1));
+  main.call("sceKernelExitGame");
+  GeProfile profile;
+  m.kernel.geProfileStart(profile);
+  runMain(m, false);
+  m.kernel.geProfileStop();
+  CHECK(m.system.memory.read(4, KernelMachine::Results), 0);
+  CHECK(m.system.memory.read(4, KernelMachine::Results + 4), 1);
+  CHECK(m.system.memory.read(4, Turn), 2);
+  auto& r = profile.records;
+  CHECK(r.size(), 4);
+  if(r.size() != 4) return;
+  u32 vblank = u32(Kernel::VblankCycles / 333);
+  CHECK(r[0].kind, GeProfile::WaitVblankStartCB);
+  CHECK(r[1].kind, GeProfile::WaitVblankStart);
+  CHECK(r[2].kind, GeProfile::Vblank);
+  CHECK(r[3].kind, GeProfile::WaitVblankCB);
+  CHECK(r[1].thread, 1); CHECK(r[1].exit, vblank); CHECK(r[1].result, 0);
+  CHECK(r[0].thread, 1); CHECK(r[0].exit >= r[1].exit + 4 && r[0].exit < vblank + 100, true); CHECK(r[0].result, 0);
+  CHECK(r[2].entry, vblank);
+  CHECK(r[3].entry >= r[0].exit && r[3].exit >= r[3].entry + 4, true); CHECK(r[3].result, 1);
+}
+
+//The GE profile's call whose thread's callback is notified while it waits in sceDisplayWaitVblankStartCB (by a worse
+//thread that runs once main waits): the callback runs in the wait, its record put aside meanwhile, and the call still
+//ends at the blank with 0.
+static auto geProfileNotifiedInWait() -> void {
+  KernelMachine m;
+  Assembler callback{m, 0x0880'3000};
+  callback.put(jr(ra)); callback.put(addu(v0, zero, zero));
+  Assembler other{m, 0x0880'2000};
+  other.li(t0, KernelMachine::Results); other.put(lw(a0, 8, t0)); other.li(a1, 7);
+  other.call("sceKernelNotifyCallback");
+  other.li(a0, 0); other.call("sceKernelExitThread");
+  Assembler main{m, 0x0880'1000};
+  main.li(s1, KernelMachine::Results);
+  main.li(a0, m.string("cb")); main.li(a1, 0x0880'3000); main.li(a2, 0);
+  main.call("sceKernelCreateCallback");
+  main.put(sw(v0, 8, s1));
+  main.li(a0, m.string("other")); main.li(a1, 0x0880'2000); main.li(a2, 0x30); main.li(a3, 0x1000);
+  main.li(t0, 0); main.li(t1, 0);
+  main.call("sceKernelCreateThread");
+  main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+  main.call("sceKernelStartThread");
+  main.call("sceDisplayWaitVblankStartCB");
+  main.put(sw(v0, 0, s1));
+  main.call("sceKernelExitGame");
+  GeProfile profile;
+  m.kernel.geProfileStart(profile);
+  runMain(m, false);
+  m.kernel.geProfileStop();
+  CHECK(m.system.memory.read(4, KernelMachine::Results), 0);
+  auto& r = profile.records;
+  CHECK(r.size(), 2);
+  if(r.size() != 2) return;
+  u32 vblank = u32(Kernel::VblankCycles / 333);
+  CHECK(r[0].kind, GeProfile::WaitVblankStartCB);
+  CHECK(r[0].exit, vblank); CHECK(r[0].result, 0);
+  CHECK(r[1].kind, GeProfile::Vblank);
+}
+
 auto geTests() -> Tests {
   return {
     {"ge commands", geCommands}, {"ge moving", geMoving}, {"ge stops", geStops}, {"ge vertices", geVertices},
@@ -3060,7 +3322,9 @@ auto geTests() -> Tests {
     {"ge lists queued twice", geQueuedTwice}, {"ge suspending signals' callbacks", geSuspendedCallbacks},
     {"ge calls and threads", geCallsAndThreads}, {"ge break", geBreak},
     {"ge break and callbacks", geBreakCallbacks}, {"ge time", geTime}, {"ge time's interrupt", geTimeInterrupts},
-    {"ge FINISH after a quiet function", geQuietFunctions},
+    {"ge FINISH after a quiet function", geQuietFunctions}, {"ge profile", geProfile},
+    {"ge profile: calls whose callbacks run in them", geProfileCallbacks},
+    {"ge profile: a callback notified in the wait", geProfileNotifiedInWait},
     {"ge 3D settings kept from PRIM to PRIM", geTransformKept}, {"ge vertices and lists drawn first", geVerticesDrawn},
     {"ge vertices read in runs as one at a time", geVertexRuns},
     {"ge vertex floats that are signaling NaNs read quieted, in runs and one at a time", geVertexFloatsQuieted},
