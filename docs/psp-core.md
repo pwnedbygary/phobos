@@ -15795,8 +15795,10 @@ owner runs, and master's `7c03c37` the same). No PPSSPP or JPCSP. Save states ar
 - **The owner's PSP did the same**: the captures' 333/166 were read before the game ran. The plugin counts from its
   own `module_start`, which ARK runs as Init starts `sceMediaSync` (systemctrl's `loadercore.c`), before the game's
   program is loaded. The boot captures read 333/166 0.3 s and 4.0 s after that, and the game's thread made its first
-  GE call 4.0 s (ULUS10186-boot1) and 4.23 s (-boot2) after it: the reboot's clocks, Init still loading the 7.6 MB
-  program. boot1's capture, ended by its full buffer 9.6 s in, in the copyright screen, read 222/111 there, and the
+  GE call 4.0 s (ULUS10186-boot1) and 4.23 s (-boot2) after it; in Phobos that call (the same list, sync and
+  callbacks) comes 3.6 ms after the program starts, with no file read before it, the clock requests just before it.
+  So the program started about 4.0 and 4.22 s in: the 333/166 were the reboot's clocks, Init still loading the
+  7.6 MB program. boot1's capture, ended by its full buffer 9.6 s in, in the copyright screen, read 222/111 there, and the
   screen's lists took the same time from its first frame (6.3 s) to that end, and in boot2 to the screen's: all of it
   at 222/111. In the menu (31 s) 222/111 too. With ARK's clock settings at Auto, as the owner had them, ARK neither
   sets the clocks nor touches the setters: `overclock`, `powersave` and `defaultclock` each set a level (1 to 3) that,
@@ -15841,5 +15843,5 @@ it was; the bus asked for alone granted up to half the PLL's speed (112 at 333, 
 `~/phobos-work/scratch/psp-ge-profile/power/` (`ahr-boot.sh`, the traced boots; `ahr-boot.log`, the last);
 `ref/uofw-power` (uOFW's power branch at `f7ed03aa7`), `ref/uofw/src/kd/init/init.c`, `ref/ark4-r205/README.md` and
 `contrib/SETTINGS.TXT`, `ref/ark4-src` (ARK-4's sources at `7c03c37`) and `ref/ark4-r205-clock` (r205's clock files,
-the same); the boot captures `captures/ULUS10186-boot1-cut.bin`, `-boot2.bin`, `-menu.bin`. Nothing was run on the
-RP6.
+the same); the boot captures `captures/ULUS10186-boot1-cut.bin`, `-boot2.bin`, `-menu.bin`; `phase3/ahrstart.sh` (the
+game from boot in #269's runner, its GE profiled and its files traced). Nothing was run on the RP6.
