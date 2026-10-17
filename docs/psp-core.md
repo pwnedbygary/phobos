@@ -16054,3 +16054,139 @@ timed around sceGeDrawSync) and geTime() from them: GE timing, not the renderer'
   library scan `scan-takes.sh` and `gen-takes-list.py`; `rp6b/`, the fix round's build and its scripts; `logs/`, the
   tests, experiments, mutations and suites; `hash/`, the hash runs; `builds-time2.sh` and `time-table.py`, the Mac's
   timing, `logs/time-pr5-final.log` its runs).
+
+## Part 107: psp-measure round 8 — the GE's time where part 76's model misses the owner's captures, and the CPU's
+
+On branch `cursor/psp-measure-round8-2b67`, from master `a8d5640f5`. Round 8 of `tools/psp-measure`, for the owner's
+PSP: what round 6 left of the GE's time, chosen by where part 76's model (fitted to round 6, ported behind the option
+"GE Timing" on #269) misses the owner's captures of games (part 103), and the CPU's own time, which in every captured
+scene that syncs is 7 to 9 times Phobos's. Nothing in the core changes: the program, its test, and the test programs'
+copy of it. The owner approved the plan (the design's section 4, the CPU block with it); the fit that follows the
+results (`ge-fit.py`, `GE::Cost`, a `measured8` test) and the runner's counts for it (`--ge-terms`) come after them.
+
+### Where the model misses, term by term
+
+A scratch build of #269's runner totalled each of the model's terms over each captured scene's profile window (900
+frames from the scene's state, profiled from frame 301; the GE timing "PSP"). A piece of drawing takes the longer of
+the GE's two ends, so a term counts toward the time when its end is the longer; every scene's back end is. Shares of
+the GE's time:
+
+| Scene | Against the PSP | What the time is |
+| --- | --- | --- |
+| Chains of Olympus, difficulty menu | +11% | 32-bit pixels 35%, VRAM texels 31% (its 512x512 frame buffers read back at 2 texels a pixel), the depth test 18%, block transfers 7% |
+| Ghost of Sparta, main menu | +3% | VRAM texels 46%, 32-bit pixels 18%, the depth test 11%, transfers 8% |
+| Super Monkey Ball Adventure, Story Mode | −59% | 32-bit pixels 27%, the depth test 22%, small textures loaded whole 12%, primitives 10%, texels 10%; its front end 78% of its back end (15,000 primitives, 84,000 words and 3,500 CALLs a list) |
+| Killzone, gameplay | +77 to +98% | VRAM texels 79%: a 512x512 VRAM buffer read as a CLUT32 texture in strips 32 texels wide, 1:1 (37 of its 49 ms a scene list); its full-screen list, a 512x512 VRAM texture over the screen in strips 120 wide into 5650, 96% |
+| Activision Hits Remixed, menu | +138% | VRAM texels 67% (the same CLUT32 strips), point lights 20% |
+| Activision Hits Remixed, copyright screen | −9% (222/111 on both) | a 512x256 CLUT8 texture in RAM, swizzled, drawn 512 across: 65% |
+
+- **The VRAM texture rate** (round 6's: 1.93 clocks a byte, from a 256x256 texture drawn as one sprite) carries
+  Killzone's and Activision Hits' menus. At the swizzled cache rate instead, Killzone's scene list would take about
+  19 ms, under the PSP's 24 to 27 (its captures as #266's reviewed decoder reads them): the strips' rate lies between
+  the two. Round 6 never read a texture from VRAM in strips, as a CLUT32 texture, or shrunk.
+- **Super Monkey Ball's lists aren't paced by its CPU**: on the PSP each list is built within 0.12 ms of being queued
+  (one stall update, none finding the GE waiting), and the GE takes 23.5 ms more. What the model leaves out is in the
+  GE: its many small textured primitives, the state set between them, and the CALLs.
+- **Activision Hits' copyright screen** is within the gate: the PSP ran it at 222/111, as Phobos does (its boot
+  capture's 333/166 was read before the game's program had started and set its own), where the first comparison had scaled
+  the PSP's time to 333/166 (−39%). Its big CLUT8 texture drawn 512 across is measured all the same.
+
+### What round 8 measures
+
+A new first line of the menu, "Round 8: the GE's time again, and the CPU's (about 1 MB)". Its timed lists are round
+6's kind, built once, each queued alone and timed from just before `sceGeListEnQueue` to the finish callback, every run
+kept: at 222/111 and 333/166 MHz, and `time-lists` and `time-scenes` also at 333/222/166 (the CPU's clock apart from
+the bus's, if the PSP grants it) and 266/133 (a third bus clock). Each record says the clocks scePower gave back.
+`manifest8.txt` lists every case.
+
+- **`time-strips`**: textures 512 texels wide drawn texel for pixel over the target's 512x256, in strips 8, 16, 32,
+  64, 128 and 256 wide and as one sprite: from VRAM as 8888, CLUT32, 5650 and CLUT8 (VRAM's first megabyte, the
+  screen's text: its texels don't matter); from RAM as 8888 swizzled and not, CLUT8 512x256 swizzled and not, 5650
+  swizzled and not.
+- **`time-textures`**: a 512x512 VRAM texture shrunk 2:1 (nearest, bilinear, in strips) and 4:1, as CLUT32, from RAM;
+  stretched; mipmaps (the level chosen or set, linear between levels); perspective; a texture walked by columns; a
+  texture of its own for each sprite (CLUT8 of 1, 4 and 16 KiB, 5650 of 8 KiB, CLUT4, a palette loaded each time).
+- **`time-pixels`**: from round 6's textured fill, one thing varied: the depth test passing and failing (and whether a
+  failing pixel still fetches its texel: failing with round 6's slowest texture), not writing; the alpha, stencil
+  and color tests passing and failing; every blend equation, the destination's alpha, into 5650; the texture
+  functions, color doubling; a game's pixel (CLUT8, depth tested, blended) passing, failing and into 5650.
+- **`time-setup`**: squares of 8x8 to 64x64 tiling 256x256 in 3D, textured and depth tested, as games draw; in
+  perspective, as strips and fans, half or all cut by the near plane, half or all culled, as slivers, bilinear,
+  without a texture or the depth test, from a texture over the cache's size.
+- **`time-vertices`**: the front end alone (strips of back faces, culled): each part of a vertex in each format,
+  lists, fans, 8- and 16-bit indices, the same three vertices again and again (a cache of vertices?), a grid's shared
+  vertices; directional, point and spot lights, one to four, with their shine; skinning, one to eight bones, 8- to
+  32-bit weights; morphing; texture coordinates through the texture matrix, from positions, environment mapping;
+  fog; through mode.
+- **`time-state`**: 8x8 sprites with one thing set before each, as games set state between draws: TEX_FLUSH, a
+  texture changed or set again, a palette loaded, TEX_MODE, a blend or depth function, a matrix, TEX_SYNC, the alpha
+  test switched, each PRIM in a CALLed list, 3D triangles with their world matrix.
+- **`time-lists`**: a list's own time (0 to 64 small sprites); 1 to 8 lists queued at once; one list drawn while its
+  stall address is moved on 1 to 64 times, as fast as the CPU goes and each time once the GE has reached it; 16 to
+  1024 CALLs.
+- **`time-signals2`**: 8 to 128 sprites 64x64, 16 to 1024 sprites 8x8, or 8 to 128 triangles (half a 64x64 square),
+  then a SIGNAL that lets the GE go on, then the FINISH, the signal callback's time beside the finish's: how far
+  ahead of the drawing the GE's front end gets (round 6's time-signals had the callback within 84 microseconds
+  after 16 sprites over the whole target, Army of Two's 0.27 ms before its list's FINISH: part 106's
+  GE::Cost::Queue, 16 for now).
+- **`display-start`**: what `sceDisplayGetFrameBuf` reads as the program starts, before anything is set (asked first
+  of all in `main()`), and which of five frame buffers the firmware refuses from that state: 512 wide in 8888 or
+  5650, the address alone, the display off, each set at once, and one for the next vblank (pspautotests'
+  display/setframebuf refused a width or format set at once that isn't the one shown; whether a game's first frame
+  buffer would be decides whether Phobos may refuse them, part 108).
+- **`time-transfers2`**, **`time-clears`**, **`time-overlap`**: transfers 1 to 32 pixels wide and single rows, frame
+  buffers copied in VRAM; clear mode over 512x256, in one sprite and in sprites 64 wide; front-end pieces (skinned
+  triangles, culled) and back-end pieces (textured squares) in turn, 1, 16 or 256 at a time, and each kind alone.
+- **`time-scenes`**: lists like the captured scenes', built to what the profiles show: Killzone's scene and
+  full-screen lists, Activision Hits' copyright screen and menu, Chains of Olympus's and Super Monkey Ball's, and the
+  two scenes part 76 changed most: Killzone's language menu's background (a 512x512 8888 texture in RAM, not
+  swizzled, in one sprite 480 wide: 62 ms a frame in part 76's model) and Super Stardust Portable's intro's glow.
+- **`cpu-contention`**: the CPU reading RAM, and following a chain of pointers, with the GE idle or drawing from RAM
+  or VRAM; the GE drawing while a thread reads RAM.
+- **The CPU alone** (`cpu.c`): `cpu-alu` (dependent and independent additions, taken branches, loads, stores, a load
+  used at once), `cpu-latency` (multiplies, multiply-adds, divides, the FPU's additions, multiplies, divides and
+  square roots, its loads, stores and moves, the VFPU's additions, multiplies, dot products, sines, reciprocal square
+  roots, loads and stores) and `cpu-memory` (chains of pointers over 1 KiB to 8 MiB of RAM, through RAM's uncached
+  addresses, in the scratchpad and in VRAM; words read and written, cached and not; memcpy), each at all four
+  settings; `cpu-syscalls` (a system call, a semaphore, a thread switch there and back, interrupts held off, the
+  cache written back, the GE's calls: queueing, stall updates, its looks, the display's) at 222/111 and 333/166; and
+  `cpu-clocks`, what the power service gives for 13 clock requests (333/222/166 among them, and the CPU or the bus
+  asked for alone past what a stock PSP grants, part 104), with the CPU's speed timed at each. The loops are in
+  assembly, so each runs what its line says.
+
+### How it runs
+
+- About 3 minutes on the PSP (the GE's part summed from the model's rates, about 1 minute; the CPU's tests, the clock
+  changes and the runs' own overhead the rest), about 1 MB of results. The program changes the clocks part of the
+  time and puts them back after each test, as round 6 did.
+- A list the GE hasn't finished in 5 seconds is a stall (reset, recorded, the test goes on), as since round 4.
+- newlib's heap is held to 1 MiB (`PSP_HEAP_SIZE_KB`): left to itself it takes all the memory free as the program
+  starts, and `cpu-memory` asks the kernel for 8 MiB (4 if that much isn't free; the records say which). Nothing in
+  the program allocates from the heap, so the other rounds draw as before.
+- Round 8's helpers sit beside round 6's (`timeCases8` with settings and its own runs, `awaitFinishes` for several
+  lists); round 6's code is untouched but for the finish callback counting its calls.
+
+### The test
+
+"psp measure" (tests/psp/measure.cpp) runs round 8 after round 7, through the menu (its lines one further down), and
+checks every round 8 file: whole records, as many as the tables give, each test's settings in turn with the clocks
+the core grants for each (all four), every run finished, a stall update's or the last enqueue's return before the
+list's finish (time-signals2's signal callback too), the CPU's loops taking time; cpu-clocks' 13 attempts, the
+first (333/333/166) granted; display-start's seven words and five attempts, the next-vblank one taken. The core's
+GE times are the default timing's, so the times themselves say nothing yet; the fit compares them.
+
+### Checks
+
+- `tests/psp/run-tests.sh` (sanitized; the address sanitizer's container-overflow check off, as part 101 ran it):
+  573 groups, 0 failures; "psp measure" alone, with the final program, again. The program builds without a warning
+  (`-Wall`).
+- The core's round 8 files read as its model has them: every CPU loop a cycle an instruction at 333 MHz whatever the
+  clock (cpu-alu's 16384 passes of 67 instructions in 3,297 microseconds), a chain of pointers as fast over 8 MiB as
+  over 1 KiB, a 512x256 layer 295 microseconds at 111 MHz whatever its texture: what the PSP's files will be set
+  beside.
+
+### Scratch
+
+`~/phobos-work/scratch/psp-ge-profile/phase3/` (`terms.hpp` and `terms.patch`, the scratch counts, applied to
+#269's runner only for its build; `out/terms-*.log`, the tables above); `round8/` (the test's logs, `ours/` the core's
+round 8 files, `r8dump.py` to read them, `EBOOT.PBP` as built). Nothing was run on the RP6.
