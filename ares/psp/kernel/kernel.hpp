@@ -1092,6 +1092,7 @@ struct Kernel {
   auto geExactLimit(const GeLimit& limit) -> u64;
   auto geIndex(u32 id) const -> s32;
   auto geTime() -> void;
+  auto geFoldKept() const -> void;
   auto geInterrupt() -> bool;
   auto geEnqueue(bool head) -> void;
   auto geLoad(GeList& list) -> void;

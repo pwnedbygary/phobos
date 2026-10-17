@@ -102,12 +102,18 @@ auto Kernel::geTime() -> void {
   u64 pixels = ge.owedPixels, primitives = ge.owedPrimitives;
   ge.owedPixels = ge.owedPrimitives = 0;
   u32 bus = std::clamp<u32>(powerState.bus, 1, 166);
-  if(ge.thread) {  //(counted there: geFold(); the oldest folded first where the thread keeps no more runs' counts)
+  if(ge.thread) {  //(counted there: geFold())
     geRuns.push_back({ge.thread->runsHanded(), cycles, bus});
-    while(geRuns.size() >= GeThread::RunsKept) geFold(true, geRuns.front().run);
+    if(geRuns.size() >= GeThread::RunsKept) geFoldKept();
     return;
   }
   if(pixels || primitives) geDoneAt = std::max(geDoneAt, cycles) + geOwed(pixels, primitives, bus);
+}
+
+//(the GE on its thread) The oldest runs folded while the thread keeps no more runs' counts (GeThread::RunsKept) than
+//are waiting to be folded. Out of geTime(), which every run takes.
+NALL_NOINLINE auto Kernel::geFoldKept() const -> void {
+  while(geRuns.size() >= GeThread::RunsKept) geFold(true, geRuns.front().run);
 }
 
 auto Kernel::geOwed(u64 pixels, u64 primitives, u32 bus) -> u64 {
