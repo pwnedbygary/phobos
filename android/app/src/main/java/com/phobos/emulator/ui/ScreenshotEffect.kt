@@ -2,7 +2,6 @@ package com.phobos.emulator.ui
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.provider.Settings
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -23,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -38,6 +38,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.toRect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.TransformOrigin
@@ -73,17 +74,24 @@ import com.phobos.emulator.util.ShotTimeline
 import com.phobos.emulator.util.flapCorners
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
-import java.io.File
 import kotlin.math.roundToInt
 
-/** A screenshot taken, or not: the saved [file] (null when there's none) and what the effect says. */
-data class ScreenshotEvent(val file: File?, val note: ScreenshotNote)
+/**
+ * A screenshot for the effect. With a [card] (the core gave a picture), the card shows [picture] (the capture's copy,
+ * null where it couldn't be made) while the file's written, and the pill joins once [note] says how that went; without
+ * one, the pill alone says why there's no screenshot ([note] is known by then).
+ */
+class ScreenshotEvent(val card: Boolean, val picture: ImageBitmap?, val note: StateFlow<ScreenshotNote?>)
 
 /** Where the game picture lies on the game screen, for the effect's card to start over it. Set as they're placed. */
-class PictureBounds {
+internal class PictureBounds {
     var screen: LayoutCoordinates? = null
     var picture: LayoutCoordinates? = null
 
@@ -95,36 +103,43 @@ class PictureBounds {
     }
 }
 
+/** The effect's time since the shot (ms), read as its layers and drawings are made: a float, never boxed. */
+internal fun interface ShotClock {
+    fun now(): Float
+}
+
 private class Shot(
     val id: Int,
-    val note: ScreenshotNote,
-    val picture: ImageBitmap?,
+    val event: ScreenshotEvent,
     val pictureRect: PxRect?,
     val top: Boolean,
     val reduced: Boolean,
 ) {
-    val aspect = picture?.let { it.width.toFloat() / it.height } ?: 0f
+    val aspect = event.picture?.let { it.width.toFloat() / it.height } ?: 0f
 }
 
 /**
  * The screenshot effect, over the game screen and its pause menu. A saved shot's picture pops out of the game picture
  * as a film-strip card, hops into a manila folder, and a pill says where it went; one that wasn't saved shows the pill
  * alone, saying why. A new shot restarts it. Nothing is in composition while none runs, and a running one recomposes
- * nothing: one clock drives it, read only as its layers and drawings are made. It takes no touches and no focus.
+ * nothing: one clock drives it, read only as its layers and drawings are made. Each piece fades on its own
+ * (ModulateAlpha), never through an offscreen buffer. It takes no touches and no focus.
  */
 @Composable
-fun ScreenshotEffect(events: SharedFlow<ScreenshotEvent>, bounds: PictureBounds, touchControlsShown: Boolean) {
+internal fun ScreenshotEffect(events: SharedFlow<ScreenshotEvent>, bounds: PictureBounds, touchControlsInPlay: Boolean) {
     val context = LocalContext.current
     val view = LocalView.current
-    val touch by rememberUpdatedState(touchControlsShown)
+    val touch by rememberUpdatedState(touchControlsInPlay)
     var shot by remember { mutableStateOf<Shot?>(null) }
     LaunchedEffect(events) {
         var shots = 0
         events.collectLatest { event ->
-            val (picture, reduced) = withContext(Dispatchers.IO) { event.file?.let(::cardPicture) to reducedMotion(context) }
+            val reduced = withContext(Dispatchers.IO) { reducedMotion(context) }
+            shot = Shot(++shots, event, bounds.rect(), touch, reduced)
+            // TalkBack hears where it went once that's known: a saved shot's card shows before its file is written.
+            val note = event.note.filterNotNull().first()
             @Suppress("DEPRECATION")
-            view.announceForAccessibility(event.note.spoken)
-            shot = Shot(++shots, event.note, picture, bounds.rect(), touch, reduced)
+            view.announceForAccessibility(note.spoken)
         }
     }
     val current = shot ?: return
@@ -133,23 +148,26 @@ fun ScreenshotEffect(events: SharedFlow<ScreenshotEvent>, bounds: PictureBounds,
     }
 }
 
-// The card's picture: a few hundred pixels wide is all it's shown at once it has shrunk.
-private const val CARD_PICTURE_MAX_WIDTH = 640
+// The card's picture: a few hundred pixels across is all it's shown at once it has shrunk.
+internal const val CARD_PICTURE_MAX_SIZE = 640
 
-/** The saved shot, decoded to the card's size as a hardware bitmap, so the effect's first frame uploads nothing. */
-private fun cardPicture(file: File): ImageBitmap? = try {
-    val size = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeFile(file.path, size)
-    var sample = 1
-    while (size.outWidth / sample > CARD_PICTURE_MAX_WIDTH) sample *= 2
-    val hardware = BitmapFactory.Options().apply {
-        inSampleSize = sample
-        inPreferredConfig = Bitmap.Config.HARDWARE
+/**
+ * The card's picture from the capture's copy (its width, its height, then its pixels): a hardware bitmap, so the
+ * effect's first frame uploads nothing, or a software one where that can't be made; null for an empty copy.
+ */
+internal fun cardPicture(copy: IntArray): ImageBitmap? {
+    val width = copy.getOrElse(0) { 0 }
+    val height = copy.getOrElse(1) { 0 }
+    if (width <= 0 || height <= 0 || copy.size < 2 + width * height) return null
+    val pixels = Bitmap.createBitmap(copy, 2, width, width, height, Bitmap.Config.ARGB_8888)
+    val hardware = try {
+        pixels.copy(Bitmap.Config.HARDWARE, false)
+    } catch (_: RuntimeException) {
+        null
     }
-    (BitmapFactory.decodeFile(file.path, hardware)
-        ?: BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample }))?.asImageBitmap()
-} catch (_: Exception) {
-    null
+    if (hardware == null) return pixels.asImageBitmap()
+    pixels.recycle()
+    return hardware.asImageBitmap()
 }
 
 /** Remove animations (an animator duration scale of 0), under which Compose would end the clock at once. */
@@ -160,7 +178,7 @@ private fun reducedMotion(context: Context) =
 private fun ShotLayer(shot: Shot, onDone: () -> Unit) {
     val clock = remember { Animatable(0f) }
     val duration = when {
-        shot.note.failed -> ShotErrorTimeline.TOTAL_MS
+        !shot.event.card -> ShotErrorTimeline.TOTAL_MS
         shot.reduced -> ShotTimeline.REDUCED_MS
         else -> ShotTimeline.TOTAL_MS
     }
@@ -171,14 +189,14 @@ private fun ShotLayer(shot: Shot, onDone: () -> Unit) {
         if (shot.reduced) delay(duration.toLong()) else clock.animateTo(duration, tween(duration.toInt(), easing = LinearEasing))
         done()
     }
-    val time = remember { { clock.value } }
+    val time = remember { ShotClock { clock.value } }
     val density = LocalDensity.current
     val direction = LocalLayoutDirection.current
     val safe = WindowInsets.safeDrawing
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val width = constraints.maxWidth.toFloat()
         val height = constraints.maxHeight.toFloat()
-        // The insets as the effect starts: the bars coming or going mid-effect move nothing.
+        // The insets as the effect starts, read again only if the screen's size changes (a rotation lays it out anew).
         val geometry = remember(width, height) {
             val inset = PxInsets(
                 safe.getLeft(density, direction).toFloat(), safe.getTop(density).toFloat(),
@@ -186,20 +204,21 @@ private fun ShotLayer(shot: Shot, onDone: () -> Unit) {
             )
             ShotGeometry(width, height, shot.pictureRect, shot.aspect, shot.top, inset)
         }
-        if (shot.note.failed) {
-            val timeline = remember(geometry) { ShotErrorTimeline(geometry, shot.reduced) }
-            FailedShot(shot.note, geometry, timeline, time)
-        } else {
+        if (shot.event.card) {
             val timeline = remember(geometry) { ShotTimeline(geometry, shot.reduced) }
-            // The pill keeps to its title on a narrow screen, as the preview does.
-            SavedShot(shot.note, shot.picture, geometry, timeline, time, showDetail = maxWidth > 560.dp)
+            // The pill keeps to its title on a narrow screen, as the preview does, unless it's a hint or a failure.
+            SavedShot(shot.event.note, shot.event.picture, geometry, timeline, time, wide = maxWidth > 560.dp)
+        } else {
+            val note = shot.event.note.value ?: return@BoxWithConstraints
+            val timeline = remember(geometry) { ShotErrorTimeline(geometry, shot.reduced) }
+            FailedShot(note, geometry, timeline, time)
         }
     }
 }
 
 @Composable
 private fun SavedShot(
-    note: ScreenshotNote, picture: ImageBitmap?, g: ShotGeometry, timeline: ShotTimeline, time: () -> Float, showDetail: Boolean,
+    note: StateFlow<ScreenshotNote?>, picture: ImageBitmap?, g: ShotGeometry, timeline: ShotTimeline, time: ShotClock, wide: Boolean,
 ) {
     Layout(
         content = {
@@ -207,16 +226,17 @@ private fun SavedShot(
             FilmCard(g, timeline, picture, time)
             FolderFront(g, timeline, time)
             Sparkles(g, timeline, time)
-            Pill(
-                note, g, showDetail,
+            KnownPill(
+                note, g, wide,
                 Modifier.graphicsLayer {
-                    val t = time()
+                    val t = time.now()
                     transformOrigin = LEFT_CENTER
                     translationX = timeline.pillX(t) + timeline.trayX(t)
                     val scale = timeline.pillScale(t)
                     scaleX = scale
                     scaleY = scale
                     alpha = timeline.pillAlpha(t) * timeline.trayAlpha(t)
+                    compositingStrategy = CompositingStrategy.ModulateAlpha
                 },
             )
         },
@@ -227,31 +247,41 @@ private fun SavedShot(
         val card = measurables[1].measure(fixed(g.film))
         val front = measurables[2].measure(fixed(g.front))
         val sparks = measurables[3].measure(Constraints.fixed(sparkSide, sparkSide))
-        val pill = measurables[4].measure(Constraints(maxWidth = (g.width - g.inset.right - g.pillLeft - 3f * g.u).roundToInt().coerceAtLeast(0)))
+        val pillWidth = (g.width - g.inset.right - g.pillLeft - 3f * g.u).roundToInt().coerceAtLeast(0)
+        val pill = measurables.getOrNull(4)?.measure(Constraints(maxWidth = pillWidth))
         layout(constraints.maxWidth, constraints.maxHeight) {
             back.place(g.back.left.roundToInt(), g.back.top.roundToInt())
             card.place(g.film.left.roundToInt(), g.film.top.roundToInt())
             front.place(g.front.left.roundToInt(), g.front.top.roundToInt())
             sparks.place((g.mouthX - sparkSide / 2f).roundToInt(), (g.mouthY - sparkSide / 2f).roundToInt())
-            pill.place(g.pillLeft.roundToInt(), (g.pillBottom - pill.height).roundToInt())
+            if (pill != null) pill.place(g.pillLeft.roundToInt(), (g.pillBottom - pill.height).roundToInt())
         }
     }
 }
 
+/** The pill, once the file's written and it's known what to say: as a rule well before it slides out. */
 @Composable
-private fun FailedShot(note: ScreenshotNote, g: ShotGeometry, timeline: ShotErrorTimeline, time: () -> Float) {
+private fun KnownPill(note: StateFlow<ScreenshotNote?>, g: ShotGeometry, wide: Boolean, motion: Modifier) {
+    val known by note.collectAsState()
+    val said = known ?: return
+    Pill(said, g, showDetail = wide || said.hint || said.failed, motion)
+}
+
+@Composable
+private fun FailedShot(note: ScreenshotNote, g: ShotGeometry, timeline: ShotErrorTimeline, time: ShotClock) {
     Layout(
         content = {
             Pill(
                 note, g, showDetail = true,
                 Modifier.graphicsLayer {
-                    val t = time()
+                    val t = time.now()
                     transformOrigin = LEFT_CENTER
                     translationX = timeline.pillX(t)
                     val scale = timeline.pillScale(t)
                     scaleX = scale
                     scaleY = scale
                     alpha = timeline.pillAlpha(t)
+                    compositingStrategy = CompositingStrategy.ModulateAlpha
                 },
             )
         },
@@ -271,20 +301,24 @@ private fun fixed(box: PxRect) = Constraints.fixed(box.width.roundToInt(), box.h
 
 /** The folder's back panel and its tab, behind the card. */
 @Composable
-private fun FolderBack(g: ShotGeometry, timeline: ShotTimeline, time: () -> Float) {
+private fun FolderBack(g: ShotGeometry, timeline: ShotTimeline, time: ShotClock) {
     val u = g.u
-    val shape = remember(g) { RoundedCornerShape(CornerSize(0.5f * u), CornerSize(0.9f * u), CornerSize(0.7f * u), CornerSize(0.7f * u)) }
+    // The shadow's outline takes one radius (the panel's corners differ a little): with mixed ones Compose would build a
+    // Path for it each frame.
+    val shadow = remember(g) { RoundedCornerShape(CornerSize(0.7f * u)) }
     Spacer(
         Modifier
             .graphicsLayer {
-                val t = time()
+                val t = time.now()
                 transformOrigin = BOTTOM_CENTER
                 scaleX = timeline.folderScaleX(t)
                 scaleY = timeline.folderScaleY(t)
                 alpha = timeline.folderAlpha(t) * timeline.trayAlpha(t)
+                // An offscreen buffer would be the node's size and cut off the tab, drawn above it.
+                compositingStrategy = CompositingStrategy.ModulateAlpha
                 translationX = timeline.trayX(t)
                 shadowElevation = 0.8f * u
-                this.shape = shape
+                shape = shadow
             }
             .drawWithCache {
                 val tab = Path().apply {
@@ -304,13 +338,13 @@ private fun FolderBack(g: ShotGeometry, timeline: ShotTimeline, time: () -> Floa
 
 /** The film-strip card: the picture between two bands of sprocket holes, washed white at first (the flash). */
 @Composable
-private fun FilmCard(g: ShotGeometry, timeline: ShotTimeline, picture: ImageBitmap?, time: () -> Float) {
+private fun FilmCard(g: ShotGeometry, timeline: ShotTimeline, picture: ImageBitmap?, time: ShotClock) {
     val u = g.u
-    val shape = remember(g) { RoundedCornerShape(CornerSize(0.7f * u)) }
+    val outline = remember(g) { RoundedCornerShape(CornerSize(0.7f * u)) }
     Spacer(
         Modifier
             .graphicsLayer {
-                val t = time()
+                val t = time.now()
                 val scale = timeline.cardScale(t)
                 translationX = timeline.cardX(t) + timeline.trayX(t)
                 translationY = timeline.cardY(t)
@@ -318,9 +352,10 @@ private fun FilmCard(g: ShotGeometry, timeline: ShotTimeline, picture: ImageBitm
                 scaleY = scale
                 rotationZ = timeline.cardTurn(t)
                 alpha = timeline.trayAlpha(t)
+                compositingStrategy = CompositingStrategy.ModulateAlpha
                 // No shadow while it covers the game picture; it settles in as the card shrinks to its corner.
                 shadowElevation = 1.2f * u * (2f - scale).coerceIn(0f, 1f)
-                this.shape = shape
+                shape = outline
             }
             .drawWithCache {
                 val frame = g.frame
@@ -340,7 +375,7 @@ private fun FilmCard(g: ShotGeometry, timeline: ShotTimeline, picture: ImageBitm
                 val edgeSize = Size(size.width - 1f, size.height - 1f)
                 val edgeRadius = CornerRadius(0.7f * u - 0.5f)
                 onDrawBehind {
-                    val t = time()
+                    val t = time.now()
                     drawPath(body, FILM)
                     drawRoundRect(FILM_EDGE, Offset(0.5f, 0.5f), edgeSize, edgeRadius, EDGE_STROKE)
                     clipPath(frameClip) {
@@ -364,16 +399,17 @@ private fun FilmCard(g: ShotGeometry, timeline: ShotTimeline, picture: ImageBitm
  * CSS perspective (flapCorners) rather than a layer's camera, so it's that perspective exactly.
  */
 @Composable
-private fun FolderFront(g: ShotGeometry, timeline: ShotTimeline, time: () -> Float) {
+private fun FolderFront(g: ShotGeometry, timeline: ShotTimeline, time: ShotClock) {
     val u = g.u
     Spacer(
         Modifier
             .graphicsLayer {
-                val t = time()
+                val t = time.now()
                 transformOrigin = BOTTOM_CENTER
                 scaleX = timeline.folderScaleX(t)
                 scaleY = timeline.folderScaleY(t)
                 alpha = timeline.folderAlpha(t) * timeline.trayAlpha(t)
+                compositingStrategy = CompositingStrategy.ModulateAlpha
                 translationX = timeline.trayX(t)
             }
             .drawWithCache {
@@ -390,7 +426,7 @@ private fun FolderFront(g: ShotGeometry, timeline: ShotTimeline, time: () -> Flo
                 val tipped = FloatArray(8)
                 val matrix = android.graphics.Matrix()
                 onDrawBehind {
-                    flapCorners(timeline.flap(time()), w, h, g.perspective, tipped)
+                    flapCorners(timeline.flap(time.now()), w, h, g.perspective, tipped)
                     matrix.setPolyToPoly(flat, 0, tipped, 0, 4)
                     val canvas = drawContext.canvas.nativeCanvas
                     canvas.save()
@@ -408,7 +444,7 @@ private fun FolderFront(g: ShotGeometry, timeline: ShotTimeline, time: () -> Flo
 
 /** Nine four-point sparkles bursting from the folder's mouth (the middle of this node). */
 @Composable
-private fun Sparkles(g: ShotGeometry, timeline: ShotTimeline, time: () -> Float) {
+private fun Sparkles(g: ShotGeometry, timeline: ShotTimeline, time: ShotClock) {
     Spacer(
         Modifier
             .graphicsLayer()
@@ -422,7 +458,7 @@ private fun Sparkles(g: ShotGeometry, timeline: ShotTimeline, time: () -> Float)
                 val cx = size.width / 2f
                 val cy = size.height / 2f
                 onDrawBehind {
-                    val t = time()
+                    val t = time.now()
                     for (s in 0 until ShotTimeline.SPARKS) {
                         val alpha = timeline.sparkAlpha(s, t)
                         if (alpha <= 0f) continue
@@ -446,10 +482,17 @@ private fun Pill(note: ScreenshotNote, g: ShotGeometry, showDetail: Boolean, mot
     val density = LocalDensity.current
     val u = with(density) { g.u.toDp().value }
     val edge = with(density) { 1f.toDp() }
+    val titleSize = (1.75f * u).coerceIn(11f, 15f).sp
+    val detailSize = (1.45f * u).coerceIn(11f, 13f).sp
+    // Round at the ends as a pill of two lines is; one that wraps further keeps those corners.
+    val shape = remember(density, u) {
+        val twoLines = with(density) { (2.5f * u).dp.toPx() + (titleSize.toPx() + detailSize.toPx()) * 1.25f }
+        RoundedCornerShape(CornerSize(twoLines / 2f))
+    }
     Column(
         motion
-            .background(if (note.failed) PILL_ERROR else PILL, PILL_SHAPE)
-            .border(edge, if (note.failed) PILL_ERROR_EDGE else PILL_EDGE, PILL_SHAPE)
+            .background(if (note.failed) PILL_ERROR else PILL, shape)
+            .border(edge, if (note.failed) PILL_ERROR_EDGE else PILL_EDGE, shape)
             .padding(start = (2.1f * u).dp, end = (2.1f * u).dp, top = (1.1f * u).dp, bottom = (1.2f * u).dp),
         verticalArrangement = Arrangement.spacedBy((0.2f * u).dp),
     ) {
@@ -457,7 +500,7 @@ private fun Pill(note: ScreenshotNote, g: ShotGeometry, showDetail: Boolean, mot
             note.title,
             style = TextStyle(
                 color = if (note.failed) PILL_ERROR_TITLE else Color.White,
-                fontSize = (1.75f * u).coerceIn(11f, 15f).sp, fontWeight = FontWeight.Medium, lineHeight = 1.25.em,
+                fontSize = titleSize, fontWeight = FontWeight.Medium, lineHeight = 1.25.em,
             ),
         )
         if (showDetail) {
@@ -465,7 +508,7 @@ private fun Pill(note: ScreenshotNote, g: ShotGeometry, showDetail: Boolean, mot
                 note.detail,
                 style = TextStyle(
                     color = if (note.failed) PILL_ERROR_DETAIL else PILL_DETAIL,
-                    fontSize = (1.45f * u).coerceIn(11f, 13f).sp, lineHeight = 1.25.em,
+                    fontSize = detailSize, lineHeight = 1.25.em,
                 ),
             )
         }
@@ -490,7 +533,6 @@ private val PILL_ERROR = Color(0xF02E1216)
 private val PILL_ERROR_EDGE = Color(0x59FF8A8A)
 private val PILL_ERROR_TITLE = Color(0xFFFFE1E1)
 private val PILL_ERROR_DETAIL = Color(0xFFF2BDBD)
-private val PILL_SHAPE = RoundedCornerShape(50)
 private val BOTTOM_CENTER = TransformOrigin(0.5f, 1f)
 private val LEFT_CENTER = TransformOrigin(0f, 0.5f)
 
@@ -499,16 +541,15 @@ private fun ShotPreview(at: Float, failed: Boolean = false) {
     Box(Modifier.fillMaxSize().background(Color(0xFF55604E))) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val g = ShotGeometry(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat(), null, 480f / 272f, top = false)
+            val time = ShotClock { at }
             if (failed) {
                 FailedShot(
                     ScreenshotNote("Screenshot not saved", "The game has no picture to save yet", failed = true, spoken = ""),
-                    g, ShotErrorTimeline(g, reduced = false), { at },
+                    g, ShotErrorTimeline(g, reduced = false), time,
                 )
             } else {
-                SavedShot(
-                    ScreenshotNote("Screenshot saved", "Screenshots › PlayStation Portable", failed = false, spoken = ""),
-                    null, g, ShotTimeline(g, reduced = false), { at }, showDetail = true,
-                )
+                val note = ScreenshotNote("Screenshot saved", "Screenshots › PlayStation Portable", failed = false, spoken = "")
+                SavedShot(MutableStateFlow(note), null, g, ShotTimeline(g, reduced = false), time, wide = true)
             }
         }
     }

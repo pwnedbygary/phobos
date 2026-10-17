@@ -95,6 +95,14 @@ class ScreenshotsTest {
     }
 
     @Test
+    fun aPictureLeftUnwrittenIsNoShot() {
+        // The core had a picture but its file stayed empty (the PNG writer says it wrote even when a full disk refuses).
+        val folder = temp.newFolder("PlayStation Portable")
+        assertEquals(ScreenshotResult.NotWritable(folder), Screenshots.save(folder, "God of War - Ghost of Sparta.chd", taken) { true })
+        assertEquals(0, folder.listFiles()!!.size)
+    }
+
+    @Test
     fun aFolderThatCantBeWrittenTakesNoShot() {
         val folder = File(temp.newFile("not a folder"), "PlayStation Portable")
         var captured = false
@@ -116,11 +124,13 @@ class ScreenshotsTest {
             "Pictures › PlayStation Portable",
             Screenshots.note(ScreenshotResult.Saved(File("/storage/1C1F-1234/Pictures/PlayStation Portable/a.png")), shared, app).detail,
         )
-        // The app's own storage, which no file manager shows: where to choose another folder.
+        // The app's own storage, which no file manager shows: where to choose another folder, shown even on a narrow
+        // screen.
         assertEquals(
             ScreenshotNote(
                 "Screenshot saved", "In Phobos's own storage: Settings → Paths → Screenshots Path sets a folder you can open", failed = false,
                 spoken = "Screenshot saved in Phobos's own storage. Settings, Paths, Screenshots Path sets a folder you can open.",
+                hint = true,
             ),
             Screenshots.note(ScreenshotResult.Saved(File("$app/screenshots/PlayStation Portable/a.png")), shared, app),
         )

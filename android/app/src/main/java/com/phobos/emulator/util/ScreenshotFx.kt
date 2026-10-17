@@ -12,7 +12,7 @@ import kotlin.math.sin
  */
 
 /** CSS's cubic-bezier(x1, y1, x2, y2), solved for x as browsers do; y may overshoot. */
-class CssEase(private val x1: Float, private val y1: Float, private val x2: Float, private val y2: Float) {
+internal class CssEase(private val x1: Float, private val y1: Float, private val x2: Float, private val y2: Float) {
     fun at(p: Float): Float {
         if (p <= 0f) return 0f
         if (p >= 1f) return 1f
@@ -59,10 +59,10 @@ class CssEase(private val x1: Float, private val y1: Float, private val x2: Floa
 }
 
 /** A keyframe: [value] at [time] (ms); the span from it to the next is eased by [ease] (linear when null). */
-class Key(val time: Float, val value: Float, val ease: CssEase? = null)
+internal class Key(val time: Float, val value: Float, val ease: CssEase? = null)
 
 /** Keyframes as the preview's Web Animations hold them: before the first and after the last, the end values. */
-class Track(vararg keys: Key) {
+internal class Track(vararg keys: Key) {
     private val times = FloatArray(keys.size) { keys[it].time }
     private val values = FloatArray(keys.size) { keys[it].value }
     private val eases = Array(keys.size) { keys[it].ease }
@@ -83,7 +83,7 @@ class Track(vararg keys: Key) {
 }
 
 /** A rectangle in pixels. */
-data class PxRect(val left: Float, val top: Float, val width: Float, val height: Float) {
+internal data class PxRect(val left: Float, val top: Float, val width: Float, val height: Float) {
     val right get() = left + width
     val bottom get() = top + height
     val centerX get() = left + width / 2f
@@ -91,7 +91,7 @@ data class PxRect(val left: Float, val top: Float, val width: Float, val height:
 }
 
 /** Room kept clear at each edge of the screen, in pixels: the system bars and the camera's cutout. */
-data class PxInsets(val left: Float = 0f, val top: Float = 0f, val right: Float = 0f, val bottom: Float = 0f)
+internal data class PxInsets(val left: Float = 0f, val top: Float = 0f, val right: Float = 0f, val bottom: Float = 0f)
 
 /**
  * Where the effect's pieces sit on a [width] x [height] screen, in pixels, in the preview's units of a hundredth of
@@ -99,7 +99,7 @@ data class PxInsets(val left: Float = 0f, val top: Float = 0f, val right: Float 
  * ([top]: their D-pad has the bottom-left), clear of [inset], with the folder beside it and the pill beside that; it
  * starts over the game [picture] (or, unknown, a picture of [aspect] fitted to the screen), its frame shaped like it.
  */
-class ShotGeometry(
+internal class ShotGeometry(
     val width: Float,
     val height: Float,
     picture: PxRect?,
@@ -194,7 +194,7 @@ class ShotGeometry(
  * 1.6 s instead, nothing moving. Each value is the preview's: offsets in pixels, angles in degrees (clockwise for the
  * card and the sparkles), the front panel's tip as CSS's rotateX (negative: its top toward the viewer).
  */
-class ShotTimeline(private val g: ShotGeometry, private val reduced: Boolean) {
+internal class ShotTimeline(private val g: ShotGeometry, private val reduced: Boolean) {
     val duration = if (reduced) REDUCED_MS else TOTAL_MS
 
     private val u = g.u
@@ -339,7 +339,7 @@ class ShotTimeline(private val g: ShotGeometry, private val reduced: Boolean) {
  * A shot that wasn't saved: no card or folder, only the pill, error-tinted, in the corner, 3 s; [reduced] holds it
  * still. Offsets in pixels.
  */
-class ShotErrorTimeline(g: ShotGeometry, private val reduced: Boolean) {
+internal class ShotErrorTimeline(g: ShotGeometry, private val reduced: Boolean) {
     val duration = TOTAL_MS
 
     private val pop = CssEase(0.2f, 0.9f, 0.3f, 1.2f)
@@ -369,7 +369,7 @@ private fun opacity(value: Float) = value.coerceIn(0f, 1f)
  * preview tips it: [out] gets the top-left, top-right, bottom-right and bottom-left corners (x, y pairs) of a [w] x [h]
  * panel. Negative degrees tip its top toward the viewer: nearer, so wider, and lower.
  */
-fun flapCorners(degrees: Float, w: Float, h: Float, p: Float, out: FloatArray) {
+internal fun flapCorners(degrees: Float, w: Float, h: Float, p: Float, out: FloatArray) {
     val a = Math.toRadians(degrees.toDouble())
     val y = (-h * cos(a)).toFloat()
     // CSS's z, toward the viewer.

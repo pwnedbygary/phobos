@@ -9,15 +9,24 @@ import java.time.format.DateTimeFormatter
 sealed interface ScreenshotResult {
     data class Saved(val file: File) : ScreenshotResult
 
-    /** The folder couldn't be made, or no file made in it. */
+    /** The folder couldn't be made, or no file made in it, or the picture not written into the file. */
     data class NotWritable(val folder: File) : ScreenshotResult
 
     /** The core had no picture to give: none drawn yet. */
     data object NoPicture : ScreenshotResult
 }
 
-/** What the screenshot effect's pill says (its two lines; [failed] tints it), and what TalkBack reads out. */
-data class ScreenshotNote(val title: String, val detail: String, val failed: Boolean, val spoken: String)
+/**
+ * What the screenshot effect's pill says (its two lines; [failed] tints it), and what TalkBack reads out. A [hint]'s
+ * detail says what to do, so it shows even where the pill keeps to its title.
+ */
+data class ScreenshotNote(
+    val title: String,
+    val detail: String,
+    val failed: Boolean,
+    val spoken: String,
+    val hint: Boolean = false,
+)
 
 /**
  * A screenshot's file, named for the game and when it was taken ("God of War - Ghost of Sparta 2026-10-17 14-15-45.png"),
@@ -49,9 +58,10 @@ object Screenshots {
     }
 
     /**
-     * Takes a screenshot of [romName] at [time] into [folder], made if it isn't there: [capture] writes the picture to
-     * the file it's given (false when there's none). Never over a file already there: the second taken in a second is
-     * "-2", the third "-3"; each file is made before it's written, so even shots taken at once get their own.
+     * Takes a screenshot of [romName] at [time] into [folder], made if it isn't there: [capture] takes the picture and
+     * writes it to the file it's given (false when there's no picture). Never over a file already there: the second
+     * taken in a second is "-2", the third "-3"; each file is made before it's written, so even shots taken at once get
+     * their own. A file left empty wasn't written (the core's PNG writer says it was even when its writes fail).
      */
     fun save(folder: File, romName: String, time: LocalDateTime, capture: (File) -> Boolean): ScreenshotResult {
         val name = name(romName, time)
@@ -65,9 +75,10 @@ object Screenshots {
         } catch (_: SecurityException) {
             null
         } ?: return ScreenshotResult.NotWritable(folder)
-        if (capture(file)) return ScreenshotResult.Saved(file)
+        val pictured = capture(file)
+        if (pictured && file.length() > 0) return ScreenshotResult.Saved(file)
         file.delete()
-        return ScreenshotResult.NoPicture
+        return if (pictured) ScreenshotResult.NotWritable(folder) else ScreenshotResult.NoPicture
     }
 
     /**
@@ -84,6 +95,7 @@ object Screenshots {
                     "Screenshot saved", "In Phobos's own storage: Settings → Paths → Screenshots Path sets a folder you can open",
                     failed = false,
                     spoken = "Screenshot saved in Phobos's own storage. Settings, Paths, Screenshots Path sets a folder you can open.",
+                    hint = true,
                 )
             } else {
                 val names = shown(folder, sharedStorage).split('/').filter { it.isNotEmpty() }.takeLast(2)

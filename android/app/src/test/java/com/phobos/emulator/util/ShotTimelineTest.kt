@@ -5,6 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.sin
 
 class ShotTimelineTest {
@@ -203,11 +204,15 @@ class ShotTimelineTest {
                 assertEquals(g.inX, timeline.cardX(t), 0f)
                 assertEquals(g.inY, timeline.cardY(t), 0f)
                 assertEquals(g.inScale, timeline.cardScale(t), 0f)
+                assertEquals(-2f, timeline.cardTurn(t), 0f)
                 assertEquals(0f, timeline.develop(t), 0f)
+                assertEquals(0f, timeline.holes(t), 0f)
                 assertEquals(0f, timeline.flap(t), 0f)
                 assertEquals(1f, timeline.folderAlpha(t), 0f)
                 assertEquals(1f, timeline.folderScaleX(t), 0f)
+                assertEquals(1f, timeline.folderScaleY(t), 0f)
                 assertEquals(1f, timeline.pillAlpha(t), 0f)
+                assertEquals(1f, timeline.pillScale(t), 0f)
                 assertEquals(0f, timeline.pillX(t), 0f)
                 assertEquals(1f, timeline.trayAlpha(t), 0f)
                 assertEquals(0f, timeline.trayX(t), 0f)
@@ -218,6 +223,116 @@ class ShotTimelineTest {
             assertEquals(1f, failed.pillAlpha(0f), 0f)
             assertEquals(1f, failed.pillAlpha(ShotErrorTimeline.TOTAL_MS), 0f)
             assertEquals(0f, failed.pillX(0f), 0f)
+        }
+    }
+
+    /** A value of the preview's: [what] at [ms]; with a span ([from] to [to]), the eased share of its travel across it. */
+    private class Golden(val what: String, val ms: Float, val value: Float, val from: Float = 0f, val to: Float = 0f)
+
+    // The preview (scratch/screenshot-fx/preview.html) run in Chrome, its animations sampled mid-span as the browser
+    // computed them (scratch/screenshot-feedback/golden): turns in degrees, the pill's offset in hundredths of the
+    // screen's width, the holes in hole pitches, a sparkle's reach as a share of its own. Travel is compared as the eased
+    // share of its span: the preview builds its keyframes from whole-pixel layout values.
+    private val golden = listOf(
+        Golden("cardX", 120f, 0.83387f, 0f, 330f),
+        Golden("cardY", 120f, 0.83387f, 0f, 330f),
+        Golden("cardX", 1280f, 0.87645f, 1170f, 1390f),
+        Golden("cardY", 1280f, 0.87645f, 1170f, 1390f),
+        Golden("cardX", 1500f, 0.18657f, 1390f, 1600f),
+        Golden("cardY", 1500f, 0.18657f, 1390f, 1600f),
+        Golden("cardY", 1610f, 0.16057f, 1600f, 1700f),
+        Golden("cardY", 1765f, 0.50000f, 1700f, 1830f),
+        Golden("cardScale", 120f, 0.83387f, 0f, 330f),
+        Golden("cardTurn", 120f, -5.00321f),
+        Golden("cardTurn", 400f, -3.60375f),
+        Golden("cardTurn", 530f, -2.93393f),
+        Golden("cardTurn", 1280f, 7.02326f),
+        Golden("cardTurn", 1500f, 6.94769f),
+        Golden("cardScale", 400f, 0.99608f),
+        Golden("cardScale", 530f, 1.00849f),
+        Golden("cardScale", 1280f, 0.67127f),
+        Golden("cardScale", 1500f, 0.57242f),
+        Golden("develop", 120f, 0.49955f),
+        Golden("holes", 400f, -0.00722f),
+        Golden("holes", 530f, -0.83433f),
+        Golden("holes", 800f, -1.08765f),
+        Golden("folderScaleX", 650f, 1.03199f),
+        Golden("folderScaleY", 650f, 1.03199f),
+        Golden("folderScaleX", 800f, 1.04000f),
+        Golden("folderScaleY", 800f, 1.04000f),
+        Golden("folderScaleX", 900f, 0.97328f),
+        Golden("folderScaleY", 900f, 0.97328f),
+        Golden("folderScaleX", 1650f, 1.08216f),
+        Golden("folderScaleY", 1650f, 0.90415f),
+        Golden("folderScaleX", 1720f, 1.09376f),
+        Golden("folderScaleY", 1720f, 0.88933f),
+        Golden("folderAlpha", 650f, 0.92142f),
+        Golden("flap", 1030f, -40.03879f),
+        Golden("flap", 1610f, -36.86266f),
+        Golden("flap", 1720f, 0.90981f),
+        Golden("pillX", 1800f, 0.33875f),
+        Golden("pillScale", 1800f, 1.03303f),
+        Golden("pillAlpha", 1800f, 1.00000f),
+        Golden("pillX", 1950f, 0.09461f),
+        Golden("pillScale", 1950f, 1.00946f),
+        Golden("pillAlpha", 1950f, 1.00000f),
+        Golden("trayX", 2500f, 0.06800f, 2380f, 2700f),
+        Golden("trayAlpha", 2500f, 0.93200f),
+        Golden("sparkReach0", 1650f, 0.00000f),
+        Golden("sparkScale0", 1650f, 0.35000f),
+        Golden("sparkTurn0", 1650f, 0.00000f),
+        Golden("sparkAlpha0", 1650f, 0.50000f),
+        Golden("sparkReach0", 1720f, 0.57672f),
+        Golden("sparkScale0", 1720f, 0.86112f),
+        Golden("sparkTurn0", 1720f, 53.79741f),
+        Golden("sparkAlpha0", 1720f, 1.00000f),
+        Golden("sparkReach0", 2000f, 0.84737f),
+        Golden("sparkScale0", 2000f, 0.68949f),
+        Golden("sparkTurn0", 2000f, 97.16980f),
+        Golden("sparkAlpha0", 2000f, 0.61186f),
+        Golden("sparkReach8", 1765f, 0.12543f),
+        Golden("sparkScale8", 1765f, 0.50033f),
+        Golden("sparkTurn8", 1765f, 11.70480f),
+        Golden("sparkAlpha8", 1765f, 1.00000f),
+        Golden("sparkReach8", 2000f, 0.75902f),
+        Golden("sparkScale8", 2000f, 0.97152f),
+        Golden("sparkTurn8", 2000f, 72.49160f),
+        Golden("sparkAlpha8", 2000f, 0.96441f),
+    )
+
+    @Test
+    fun midSpanEverythingMovesAsThePreviewDoes() {
+        val g = unknown
+        val timeline = ShotTimeline(g, reduced = false)
+        val reach = mapOf(0 to 8f, 8 to 12.5f)
+        fun share(of: (Float) -> Float, gold: Golden) = (of(gold.ms) - of(gold.from)) / (of(gold.to) - of(gold.from))
+        for (gold in golden) {
+            val t = gold.ms
+            val spark = gold.what.last().digitToIntOrNull() ?: 0
+            val actual = when (gold.what) {
+                "cardX" -> share(timeline::cardX, gold)
+                "cardY" -> share(timeline::cardY, gold)
+                "cardScale" -> if (gold.to > 0f) share(timeline::cardScale, gold) else timeline.cardScale(t)
+                "cardTurn" -> timeline.cardTurn(t)
+                "develop" -> timeline.develop(t)
+                "holes" -> timeline.holes(t) / g.pitch
+                "folderScaleX" -> timeline.folderScaleX(t)
+                "folderScaleY" -> timeline.folderScaleY(t)
+                "folderAlpha" -> timeline.folderAlpha(t)
+                "flap" -> timeline.flap(t)
+                "pillX" -> timeline.pillX(t) / g.u
+                "pillScale" -> timeline.pillScale(t)
+                "pillAlpha" -> timeline.pillAlpha(t)
+                "trayX" -> share(timeline::trayX, gold)
+                "trayAlpha" -> timeline.trayAlpha(t)
+                "sparkReach$spark" -> hypot(timeline.sparkX(spark, t), timeline.sparkY(spark, t)) / (reach.getValue(spark) * g.u)
+                "sparkScale$spark" -> timeline.sparkScale(spark, t)
+                "sparkTurn$spark" -> timeline.sparkTurn(spark, t)
+                "sparkAlpha$spark" -> timeline.sparkAlpha(spark, t)
+                else -> error(gold.what)
+            }
+            val tolerance = if (gold.what.startsWith("sparkTurn") || gold.what == "cardTurn" || gold.what == "flap") 0.01f else 2e-3f
+            assertNear(gold.value, actual, tolerance, "${gold.what} at ${gold.ms} ms")
         }
     }
 

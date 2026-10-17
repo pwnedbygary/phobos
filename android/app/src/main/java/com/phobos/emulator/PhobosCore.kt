@@ -66,6 +66,15 @@ object PhobosCore {
     /** Writes every battery save, the Controller Pak's included, to disk now. */
     external fun flushSaves()
     external fun takeScreenshot(path: String): Boolean
+    /**
+     * Takes a screenshot's picture now and keeps it for [writeScreenshot]: a copy to show, at most [maxSize] pixels
+     * either way (its width, its height, then its pixels as 0xAARRGGBB), or null when there's no picture.
+     */
+    external fun captureScreenshot(maxSize: Int): IntArray?
+    /** Writes the picture [captureScreenshot] kept to [path] as a PNG and lets it go: false when it can't. */
+    external fun writeScreenshot(path: String): Boolean
+    /** Lets the kept picture go unwritten. */
+    external fun releaseScreenshot()
     external fun setFastBoot(enabled: Boolean)
     external fun setSkipBootRom(enabled: Boolean)
     external fun setRegion(regionIndex: Int)

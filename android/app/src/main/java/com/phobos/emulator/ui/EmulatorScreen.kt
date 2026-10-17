@@ -357,8 +357,11 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     val portraitLayout = settings.touchLayouts[touchLayoutKey(touchFamily, landscape = false)]
     val landscapeOverrides = remember(landscapeLayout) { TouchLayoutCodec.decode(landscapeLayout) }
     val portraitOverrides = remember(portraitLayout) { TouchLayoutCodec.decode(portraitLayout) }
-    val touchVisible = isLoaded && !isPaused && !editingTouchLayout && settings.showTouchControls &&
+    // Whether the touch controls show while the game runs (the screenshot effect keeps clear of their D-pad even when
+    // shot from the pause menu), and whether they show now.
+    val touchInPlay = isLoaded && !editingTouchLayout && settings.showTouchControls &&
         !(touchPrefs.hideOnController && controllerActive)
+    val touchVisible = touchInPlay && !isPaused
     // Match TouchControlsOverlay: landscape vs portrait from this screen's own size,
     // not Configuration (which can disagree in split-screen / inset layouts).
     var landscapeScreen by remember { mutableStateOf(true) }
@@ -534,7 +537,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             )
         }
 
-        ScreenshotEffect(viewModel.screenshotEvents, pictureBounds, touchControlsShown = touchVisible)
+        ScreenshotEffect(viewModel.screenshotEvents, pictureBounds, touchControlsInPlay = touchInPlay)
 
         if (editingTouchLayout) {
             TouchLayoutEditor(
