@@ -1353,6 +1353,12 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
 //Vertices for the GPU, in the PRIM's draw: one with the last if its settings are the same.
 auto GPU::emit(const Vertex* vertices, u32 count) -> void {
   if(recorded.vertices.size() + count > MostVertices) flush();
+  //(a corner's depth past the GE's where the depth decides: another pipeline, Pipeline::outside)
+  bool outside = false;
+  if(state.pipeline.depths()) {
+    for(u32 n = 0; n < count; n++) outside |= !(vertices[n].z >= 0 && vertices[n].z <= 65535);
+  }
+  if(outside != bool(state.pipeline.outside)) state.pipeline.outside = outside, stateKept = false;
   if(!stateKept || recorded.states.empty()) {
     if(recorded.states.empty() || !(recorded.states.back() == state)) recorded.states.push_back(state);
     stateKept = true, meshKept = false;
@@ -1628,6 +1634,7 @@ auto GPU::meshDrawable() -> bool {
   Pipeline k = state.pipeline;
   k.transformed = 1;
   k.flat = !(shade & 1);
+  k.outside = 0;  //(3D: the corners' depths held in 0-65535)
   auto& known = drawables[Pipeline::Hash{}(k) % drawables.size()];
   if(!(known && *known == k)) {
     if(!backend->drawable(k)) return false;
@@ -1649,6 +1656,7 @@ auto GPU::recordMeshState() -> u32 {
   State s = state;
   s.pipeline.transformed = 1;
   s.pipeline.flat = !(shade & 1);
+  s.pipeline.outside = 0;
   if(textured) s.push.filter = filter;
   if(recorded.states.empty() || !(recorded.states.back() == s)) {
     if(!meshDrawable()) return ~0u;
