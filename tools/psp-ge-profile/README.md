@@ -42,12 +42,12 @@ while a capture runs. If there's no `PHOBOS` folder, it writes nothing at all (a
 
 ### Before the first run
 
-1. In ARK's settings (the XMB's CFW settings, or the recovery menu), set the CPU clock to the default: not
-   Overclock, not Power Save, not Balanced. The games set their own clocks, and those are part of what's measured.
-   ARK-4's own settings file, `SEPLUGINS/SETTINGS.TXT`, comes with the line `always, overclock, on`; if yours has
-   it, make it `always, overclock, off`. With it on, the PSP's PLL runs at 333 MHz, and a game that asks for more
-   than its 222/111 is given it, where a PSP without it would refuse: the first Activision Hits Remixed captures
-   ran at 333/166 that way (docs/psp-core.md, part 104).
+1. In ARK's settings (the XMB's CFW settings, or the recovery menu), leave the clock settings ("Overclock in XMB",
+   "Overclock in Game") at Auto: not Overclock, not Power Save, not Balanced. The games set their own clocks, and
+   those are part of what's measured. With any of the others, ARK sets every game's clocks once the system has booted
+   (333/166, 133/66 or 222/111) and makes the game's own clock calls do nothing. ARK-4's own settings file,
+   `SEPLUGINS/SETTINGS.TXT`, comes with the line `always, overclock, on`; if yours has it, make it
+   `always, overclock, off`.
 2. Turn off any other plugin for these games (cheats, frame counters, overclockers) while profiling: a plugin that
    hooks the same functions would hide them from this one.
 3. Don't save the game while the plugin is on. (The plugin doesn't touch saves, but it writes to the same stick,
@@ -360,7 +360,9 @@ wait until it is.
 - A 256-byte header: `PHGEPROF`, the format (1), the header's and a record's sizes, the record count, flags (1: the
   buffer filled; 2: the monitor was on; 4: started by time, not buttons; 8: GE states sampled), records dropped, the
   plugin's version, the disc ID and title (from ARK's `sctrlGetInitPARAM`, else the disc's `PARAM.SFO`), the
-  capture's start and end times and vblank counts, the CPU and bus clocks at its start and end, the firmware version,
+  capture's start and end times and vblank counts, the CPU and bus clocks at its start and end (a capture begun before
+  the game's program has started, before any record of the game's threads, reads the clocks a PSP reboots into a
+  game at, 333/166, not the game's), the firmware version,
   ARK's version, the model, which hooks were in place (bit n for record kind n, bit 31 the monitor), the capture's
   number, the plugin's start time, the buffer's capacity, the thread table's offset and size, and the memory
   partition and bytes used.

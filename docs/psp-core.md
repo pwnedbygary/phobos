@@ -15918,7 +15918,8 @@ charged. The CPU's part, a loop's time not blocked in a sync or a vblank wait:
 
 - **The same games.** Each scene's loop is the same on both: the same calls in the same order (Killzone's two scene
   lists taking turns and three full-screen ones; Super Monkey Ball's stall updates, FINISH and sceGeDrawSync), the
-  same clocks but for Activision Hits (333/166 on the PSP at its copyright screen, 222/111 in Phobos's state).
+  same clocks (Activision Hits' copyright screen 222/111 on both: the boot capture's 333/166 at its start was read
+  before the game's program had started, part 104).
 - **The GE.** On the PSP the GE is busy 94 to 100% of these windows (Killzone 70 to 77%), and a list takes 4.4 to 12
   times what the model charges for it. Every one of Phobos's charges is set by its pixels; the PSP's times say the
   primitives count too: a least-squares fit of a sum (each pixel and each primitive its own time, where the model
