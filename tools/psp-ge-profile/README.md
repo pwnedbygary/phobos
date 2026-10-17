@@ -164,9 +164,9 @@ name and the time.
 3. Each capture is `PHOBOS/PROF/<ID>-<n>.bin`, numbered from 1 per game. If a capture couldn't run (not enough
    memory, say), a `.txt` with that number says why instead. (On the owner's PSP-1000 a game leaves some 560 to
    580 KB of kernel memory free, and ten seconds of these games took 50 to 130 KB of records. Every capture so far
-   ran with a 192 KB buffer (`buffer = 192` in the owner's `prof.txt`), the default from 0.2.4, with 256 KB kept
-   free: 0.2.2 and before kept 512 KB, which could refuse a capture there, and 0.2.3's 2 MB buffer would have taken
-   all but the 256 KB kept.)
+   but the first boot capture (68 KB at the game's very start, which filled) ran with a 192 KB buffer (`buffer = 192`
+   in the owner's `prof.txt`), the default from 0.2.4, with 256 KB kept free: 0.2.2 and before kept 512 KB, which
+   could refuse a capture there, and 0.2.3's 2 MB buffer would have taken all but the 256 KB kept.)
 4. For Activision Hits Remixed's copyright screen, which comes as the game boots, copy `prof-boot.txt` over
    `prof.txt` instead, then start the game and leave it: the capture starts 4 seconds after the game does and runs
    12 seconds, the copyright screen about its seconds 3 to 7. Copy `prof-capture.txt` back afterwards.
@@ -510,11 +510,11 @@ dry runs worked: all 17 hooks in place and the sub-interrupt monitor there, the 
 after the start, 24 ns a call idle and about 1.85 microseconds capturing, 52 KB of records for a 10-second capture
 and some 580 KB of kernel memory free. In each 10-second window on the game's menus it counted 357 sceGeListEnQueue,
 357 sceGeListSync and 357 sceDisplaySetFrameBuf, 600 vertical blanks, no vblank waits and no GE callbacks. The
-owner's nine captures (docs/psp-core.md, part 103) were all made with 0.2.0 and a 192 KB buffer. Versions 0.2.1 to
-0.2.4 haven't run on a PSP yet (the owner's next capture will be the first): their changes (the trace from
-`module_start`, the start notice at the first flip, the memory defaults, the boot capture's notice, the interrupt
-handlers' calls, the files' safety) are checked on the Mac only. On the
-Mac: it builds as a kernel PRX (attribute 0x1001, ELF type 0xFFA0, module info in a kernel segment) with exactly the
+owner's twelve captures (docs/psp-core.md, part 103) were all made with 0.2.0, all but the first boot capture with a
+192 KB buffer. Versions 0.2.1 to 0.2.4 haven't run on a PSP yet (the owner's next capture will be the first): their
+changes (the trace from `module_start`, the start notice at the first flip, the memory defaults, the boot capture's
+notice, the interrupt handlers' calls, the files' safety) are checked on the Mac only. On the Mac: it builds as a
+kernel PRX (attribute 0x1001, ELF type 0xFFA0, module info in a kernel segment) with exactly the
 imports above; every static NID is confirmed by two sources (uOFW's 6.60 export lists or pspsdk's 6.60 libraries,
 and pspsdk's stub libraries; ARK's by its name's SHA-1 and pspsdk's `libpspsystemctrl_kernel`); the hooks' idle path
 was read in the disassembly; GCC checks every report line's format against its arguments; the plugin's C runs on

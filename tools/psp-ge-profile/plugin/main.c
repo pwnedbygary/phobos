@@ -41,8 +41,8 @@ typedef struct {
   int read;         //prof.txt was found
 } Settings;
 
-//192 KB, the buffer every capture so far had on the owner's PSP-1000 (some 560-580 KB free under a game; ten seconds of
-//a game's records took 50 to 130 KB), and 256 KB kept free.
+//192 KB, the buffer the owner's captures had on his PSP-1000, all but one at a game's very start (some 560-580 KB free
+//under a game; ten seconds of a game's records took 50 to 130 KB), and 256 KB kept free.
 static Settings settings = {1, PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_SELECT, 1, 20, 10, 192, 256, 1, 1, 0};
 
 //In the order the report names them, so the default reads as prof.txt writes it.
