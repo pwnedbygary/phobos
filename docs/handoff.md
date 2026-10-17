@@ -51,6 +51,56 @@ Branch `cursor/psp-measure-round8-2b67` (from master `a8d5640f5`); docs/psp-core
 - **Next**: the owner runs round 8 (charger in; ARK's `overclock` off) and sends `results/`; then the fit
   (`ge-fit.py`, `GE::Cost`, `measured8`) with the runner's per-list counts (`--ge-terms`), on #269.
 
+## Android input: Colin McRae's dropped held Cross on the RP6 — the app's input paths replayed and cleared, an opt-in input log for the device capture that decides it — 2026-10-16
+
+Branch `cursor/held-button-2b67`, on master `a8d5640f5` (part 101, #263); draft PR #264. Not the fix: what's left
+needs the RP6.
+- **The bug** (owner, 15 Oct): in Colin McRae Rally 2005 Plus (PSP core), holding Cross to accelerate while steering
+  with the left stick and pressing the D-pad, Square and L or R, the game sometimes stops seeing Cross until it's let
+  go of and pressed again. Not noticed in other cores; not ruled out.
+- **The core** (the session before this one, with a local trace patch kept at
+  `~/phobos-work/scratch/held-button/psp-ctrl-trace.patch`): the game reads only sceCtrlPeekBufferPositive(count 1),
+  once a frame, the newest sample, the front end's state that frame; scripted runs (Cross held 2,000 frames, the
+  stick swept, Square, L, R and the D-pad tapped across it, a one-frame drop, a 70-frame release) show it follows
+  Cross's level each frame. So the front end sends Cross released while it's held.
+- **The app** (this entry): every writer of the buttons sent to the core read. With Cross bound to a key (the RP6's
+  pad is an "Xbox Wireless Controller" in its Xbox layout: Cross is the bottom button, BUTTON_A, the A bit), only a
+  key event for Cross's own key code that isn't a press (`setButton`), `releaseAllButtons()` (the game screen losing
+  Compose focus, a pause, the activity's onPause among them, a PSP dialog) or `reset()` clears it. The axis loop
+  rewrites only bits bound to an axis, the hat only the D-pad bits it set; a hotkey runs only on exactly the keys
+  held, so none runs with Cross held unless it holds Cross; nothing in the game's screen asks for focus but itself
+  and the PSP dialogs. Compose 1.7.6 (bytecode read) drops a key event while a focus invalidation is pending
+  ("FocusRelatedWarning: Dispatching key event while focus system is invalidated." on System.out); those are
+  scheduled and run within a composition's apply. A dropped event never lets go of a held key, but a dropped
+  re-press (Cross lifted for a moment) looks to the player just like the report.
+- **Replay** (`HeldCrossReplayTest`): the game screen's key handler, its hat listener for hotkeys and its focus hook
+  moved, unchanged, from EmulatorScreen into `GameKeys` (input/GameKeys.kt), which the screen and the test both call;
+  `GameInputState` sends through `coreInput` and takes moves through `onJoystickMove` (interfaces with primitive
+  parameters, one reused reader for the event: the seams allocate nothing with the log off; master's own allocations
+  on the path stay, the capture check's bound reference per move in MainActivity and the axis loop's boxed keys). The
+  test checks the buttons and the sticks sent with every move. Cross stays in every state sent through 20 stages of 3,000 joystick
+  moves (the stick swept, the hat in its eight directions, Square, L1 and R1 tapped and held, the triggers, Android's
+  repeats of Cross), with the bindings the RP6 captures for its triggers and hat, with L and R moved to the triggers,
+  with each PSP Right Stick choice and with focus moving inside the screen; hotkeys on Select and the Xbox button run
+  without Cross held and don't with it. A let-go of everything, a release of Cross alone or focus leaving the screen
+  gives the report's symptom exactly. Mutations, each alone, each caught: a key repeat releasing its key, focus
+  inside the screen releasing everything, hotkeys matching a subset of the keys held, `push()` skipping updates
+  whose buttons didn't change.
+- **Left, for the RP6**: Android cancelling the held key (a KeyUp with FLAG_CANCELED: InputReader's buffer overrun or
+  a device reset, the window losing focus), an activity pause and resume, a lost re-press, the pad's own firmware
+  letting go of Cross (code 0x130, which getevent prints as BTN_GAMEPAD), or the owner's bindings or hotkeys.
+  `InputLog` (input/InputLog.kt) tells them apart: `adb shell setprop log.tag.PhobosInput DEBUG`, then start the
+  game (it's read as a game starts); it logs each key event the window and the game's handler get (flags, scan code,
+  device, down and event times), each change of the buttons sent to the core, a let-go of everything with its caller
+  and each reset, the window's, the activity's and the game screen's focus, and the bindings and hotkeys as the game
+  starts. The capture steps, the reading guide and a safe install (never uninstall: it deletes saves, states and
+  settings; check the installed versionCode, `-PversionCode` if it's higher) are in PR #264's description.
+- **Review** (of `acd317dd9`): approve with should-fixes, no blockers: the tests ran a copy of the key handler, the
+  hotkey test couldn't fail, nothing checked the sticks sent, two values in the reading guide were wrong and it missed
+  a lost re-press, the install step could be refused (and the obvious way past it deletes data), and the joystick
+  path boxed. All taken, with the nits on `coreInput`'s restore, `reset()` and the key lines.
+- **Checks**: the JVM unit tests on the Mac: input 45/0, the suite 350/0 in each flavor (48 classes); CI runs both.
+
 ## PSP NPDRM: PGD files on the memory stick — a game's installed data read through the PGD layer (Gunhound EX, 7th Dragon 2020); a wrong key, a damaged header and a write refused as the PGD layer refuses them — 2026-10-15
 
 Branch `cursor/psp-pgd-stick-2b67`, on master `6ff82f9f1` (part 96, #258), masters `462f8ff2f` (part 99, #261) and
