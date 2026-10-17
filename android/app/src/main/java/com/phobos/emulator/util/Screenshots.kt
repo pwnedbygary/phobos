@@ -57,13 +57,16 @@ object Screenshots {
         return safe.trimEnd(' ', '.').ifEmpty { "Screenshot" }
     }
 
+    /** What a screenshot's capture did with the file it was given: wrote all of the picture, had none, or wrote less. */
+    enum class Capture { Written, NoPicture, NotWritten }
+
     /**
      * Takes a screenshot of [romName] at [time] into [folder], made if it isn't there: [capture] takes the picture and
-     * writes it to the file it's given (false when there's no picture). Never over a file already there: the second
-     * taken in a second is "-2", the third "-3"; each file is made before it's written, so even shots taken at once get
-     * their own. A file left empty wasn't written (the core's PNG writer says it was even when its writes fail).
+     * writes it to the file it's given. Never over a file already there: the second taken in a second is "-2", the third
+     * "-3"; each file is made before it's written, so even shots taken at once get their own. A file not written whole
+     * (a full disk) is deleted, as is one left empty.
      */
-    fun save(folder: File, romName: String, time: LocalDateTime, capture: (File) -> Boolean): ScreenshotResult {
+    fun save(folder: File, romName: String, time: LocalDateTime, capture: (File) -> Capture): ScreenshotResult {
         val name = name(romName, time)
         val file = try {
             folder.mkdirs()
@@ -75,10 +78,10 @@ object Screenshots {
         } catch (_: SecurityException) {
             null
         } ?: return ScreenshotResult.NotWritable(folder)
-        val pictured = capture(file)
-        if (pictured && file.length() > 0) return ScreenshotResult.Saved(file)
+        val captured = capture(file)
+        if (captured == Capture.Written && file.length() > 0) return ScreenshotResult.Saved(file)
         file.delete()
-        return if (pictured) ScreenshotResult.NotWritable(folder) else ScreenshotResult.NoPicture
+        return if (captured == Capture.NoPicture) ScreenshotResult.NoPicture else ScreenshotResult.NotWritable(folder)
     }
 
     /**

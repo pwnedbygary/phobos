@@ -71,7 +71,7 @@ object PhobosCore {
      * either way (its width, its height, then its pixels as 0xAARRGGBB), or null when there's no picture.
      */
     external fun captureScreenshot(maxSize: Int): IntArray?
-    /** Writes the picture [captureScreenshot] kept to [path] as a PNG and lets it go: false when it can't. */
+    /** Writes the picture [captureScreenshot] kept to [path] as a PNG and lets it go: false unless all of it got there. */
     external fun writeScreenshot(path: String): Boolean
     /** Lets the kept picture go unwritten. */
     external fun releaseScreenshot()

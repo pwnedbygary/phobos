@@ -190,7 +190,8 @@ internal class ShotGeometry(
 }
 
 /**
- * The saved shot's effect on [g], 2.7 s; [reduced] (Remove animations) holds the card in the folder with the pill for
+ * The saved shot's effect on [g], 2.7 s, longer when its file's written late: the pill waits for its note and the
+ * slide-off waits for the pill (lateness). [reduced] (Remove animations) holds the card in the folder with the pill for
  * 1.6 s instead, nothing moving. Each value is the preview's: offsets in pixels, angles in degrees (clockwise for the
  * card and the sparkles), the front panel's tip as CSS's rotateX (negative: its top toward the viewer).
  */
@@ -293,9 +294,9 @@ internal class ShotTimeline(private val g: ShotGeometry, private val reduced: Bo
 
     init {
         val pop = CssEase(0.2f, 0.9f, 0.3f, 1.2f)
-        pillX = Track(Key(0f, -2f * u), Key(1720f, -2f * u, pop), Key(1900f, 0.3f * u, CssEase.EASE_OUT), Key(2000f, 0f), Key(TOTAL_MS, 0f))
-        pillScale = Track(Key(0f, 0.85f), Key(1720f, 0.85f, pop), Key(1900f, 1.03f, CssEase.EASE_OUT), Key(2000f, 1f), Key(TOTAL_MS, 1f))
-        pillAlpha = Track(Key(0f, 0f), Key(1720f, 0f, pop), Key(1900f, 1f, CssEase.EASE_OUT), Key(2000f, 1f), Key(TOTAL_MS, 1f))
+        pillX = Track(Key(0f, -2f * u), Key(PILL_AT, -2f * u, pop), Key(1900f, 0.3f * u, CssEase.EASE_OUT), Key(2000f, 0f), Key(TOTAL_MS, 0f))
+        pillScale = Track(Key(0f, 0.85f), Key(PILL_AT, 0.85f, pop), Key(1900f, 1.03f, CssEase.EASE_OUT), Key(2000f, 1f), Key(TOTAL_MS, 1f))
+        pillAlpha = Track(Key(0f, 0f), Key(PILL_AT, 0f, pop), Key(1900f, 1f, CssEase.EASE_OUT), Key(2000f, 1f), Key(TOTAL_MS, 1f))
     }
 
     // Then everything slides off to the left and fades.
@@ -322,16 +323,32 @@ internal class ShotTimeline(private val g: ShotGeometry, private val reduced: Bo
     fun sparkScale(i: Int, t: Float) = if (reduced) 0f else sparkScale[i].at(t)
     fun sparkTurn(i: Int, t: Float) = if (reduced) 0f else sparkTurn[i].at(t)
     fun sparkAlpha(i: Int, t: Float) = if (reduced) 0f else opacity(sparkAlpha[i].at(t))
-    fun pillX(t: Float) = if (reduced) 0f else pillX.at(t)
-    fun pillScale(t: Float) = if (reduced) 1f else pillScale.at(t)
-    fun pillAlpha(t: Float) = if (reduced) 1f else opacity(pillAlpha.at(t))
-    fun trayX(t: Float) = if (reduced) 0f else trayX.at(t)
-    fun trayAlpha(t: Float) = if (reduced) 1f else opacity(trayAlpha.at(t))
+    // The pill and the slide-off, their note known at noteAt (ms on the effect's clock; by default from the start).
+    fun pillX(t: Float, noteAt: Float = 0f) = if (reduced) 0f else pillX.at(t - lateness(t, noteAt))
+    fun pillScale(t: Float, noteAt: Float = 0f) = if (reduced) 1f else pillScale.at(t - lateness(t, noteAt))
+    fun pillAlpha(t: Float, noteAt: Float = 0f) = if (reduced) 1f else opacity(pillAlpha.at(t - lateness(t, noteAt)))
+    fun trayX(t: Float, noteAt: Float = 0f) = if (reduced) 0f else trayX.at(t - lateness(t, noteAt))
+    fun trayAlpha(t: Float, noteAt: Float = 0f) = if (reduced) 1f else opacity(trayAlpha.at(t - lateness(t, noteAt)))
 
     companion object {
         const val TOTAL_MS = 2700f
         const val REDUCED_MS = 1600f
         const val SPARKS = 9
+        /** When the pill begins to slide out. */
+        const val PILL_AT = 1720f
+        /** The longest the pill and the slide-off wait for a late note. */
+        const val NOTE_WAIT_MS = 8000f
+
+        /**
+         * How far behind the pill and the slide-off run at [t] when the pill's note is only known at [noteAt] (once the
+         * file's written; ms on the effect's clock): from the pill's time they wait for it, at most [NOTE_WAIT_MS], then
+         * run as they would have, so the pill slides in and stays up as long before the slide-off as ever. Nothing waits
+         * for a note known by the pill's time.
+         */
+        fun lateness(t: Float, noteAt: Float) = (minOf(t, noteAt) - PILL_AT).coerceIn(0f, NOTE_WAIT_MS)
+
+        /** When the effect ends, its note known at [noteAt]. */
+        fun end(noteAt: Float) = TOTAL_MS + lateness(Float.POSITIVE_INFINITY, noteAt)
     }
 }
 

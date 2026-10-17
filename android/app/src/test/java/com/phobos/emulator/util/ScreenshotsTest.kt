@@ -17,7 +17,7 @@ class ScreenshotsTest {
     private val shared = "/storage/emulated/0"
     private val app = "/data/user/0/com.phobos.emulator/files"
 
-    private fun picture(bytes: String): (File) -> Boolean = { it.writeText(bytes); true }
+    private fun picture(bytes: String): (File) -> Screenshots.Capture = { it.writeText(bytes); Screenshots.Capture.Written }
 
     @Test
     fun aScreenshotIsNamedForTheGameAndWhenItWasTaken() {
@@ -90,15 +90,27 @@ class ScreenshotsTest {
     @Test
     fun noPictureLeavesNoFile() {
         val folder = temp.newFolder("PlayStation Portable")
-        assertEquals(ScreenshotResult.NoPicture, Screenshots.save(folder, "God of War - Ghost of Sparta.chd", taken) { false })
+        assertEquals(
+            ScreenshotResult.NoPicture,
+            Screenshots.save(folder, "God of War - Ghost of Sparta.chd", taken) { Screenshots.Capture.NoPicture },
+        )
         assertEquals(0, folder.listFiles()!!.size)
     }
 
     @Test
-    fun aPictureLeftUnwrittenIsNoShot() {
-        // The core had a picture but its file stayed empty (the PNG writer says it wrote even when a full disk refuses).
+    fun aPictureNotWrittenWholeIsNoShot() {
+        // The core wrote part of the picture (a full disk), and says so: what's there goes.
         val folder = temp.newFolder("PlayStation Portable")
-        assertEquals(ScreenshotResult.NotWritable(folder), Screenshots.save(folder, "God of War - Ghost of Sparta.chd", taken) { true })
+        assertEquals(
+            ScreenshotResult.NotWritable(folder),
+            Screenshots.save(folder, "God of War - Ghost of Sparta.chd", taken) { it.writeText("\u0089PNG half"); Screenshots.Capture.NotWritten },
+        )
+        assertEquals(0, folder.listFiles()!!.size)
+        // A file left empty though the core says it wrote it isn't a shot either.
+        assertEquals(
+            ScreenshotResult.NotWritable(folder),
+            Screenshots.save(folder, "God of War - Ghost of Sparta.chd", taken) { Screenshots.Capture.Written },
+        )
         assertEquals(0, folder.listFiles()!!.size)
     }
 
@@ -106,7 +118,7 @@ class ScreenshotsTest {
     fun aFolderThatCantBeWrittenTakesNoShot() {
         val folder = File(temp.newFile("not a folder"), "PlayStation Portable")
         var captured = false
-        val result = Screenshots.save(folder, "God of War - Ghost of Sparta.chd", taken) { captured = true; true }
+        val result = Screenshots.save(folder, "God of War - Ghost of Sparta.chd", taken) { captured = true; Screenshots.Capture.Written }
         assertEquals(ScreenshotResult.NotWritable(folder), result)
         assertFalse(captured)
     }

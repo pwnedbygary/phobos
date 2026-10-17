@@ -167,8 +167,14 @@ class ShotTimelineTest {
                     for (i in 0 until ShotTimeline.SPARKS) {
                         values += listOf(timeline.sparkX(i, t), timeline.sparkY(i, t), timeline.sparkScale(i, t), timeline.sparkTurn(i, t), timeline.sparkAlpha(i, t))
                     }
-                    assertTrue("at $t: $values", values.all { it.isFinite() })
-                    for (alpha in listOf(timeline.folderAlpha(t), timeline.pillAlpha(t), timeline.trayAlpha(t), failed.pillAlpha(t))) {
+                    val opacities = mutableListOf(timeline.folderAlpha(t), timeline.pillAlpha(t), timeline.trayAlpha(t), failed.pillAlpha(t))
+                    // A note that comes late, or never.
+                    for (noteAt in listOf(2500f, Float.POSITIVE_INFINITY)) {
+                        values += listOf(timeline.pillX(t, noteAt), timeline.pillScale(t, noteAt), timeline.trayX(t, noteAt))
+                        opacities += listOf(timeline.pillAlpha(t, noteAt), timeline.trayAlpha(t, noteAt))
+                    }
+                    assertTrue("at $t: $values", (values + opacities).all { it.isFinite() })
+                    for (alpha in opacities) {
                         assertTrue("an opacity of $alpha at $t", alpha in 0f..1f)
                     }
                     t += 0.5f
@@ -236,20 +242,24 @@ class ShotTimelineTest {
     private val golden = listOf(
         Golden("cardX", 120f, 0.83387f, 0f, 330f),
         Golden("cardY", 120f, 0.83387f, 0f, 330f),
+        Golden("cardX", 1115f, 0.68464f, 1060f, 1170f),
+        Golden("cardY", 1115f, 0.68464f, 1060f, 1170f),
         Golden("cardX", 1280f, 0.87645f, 1170f, 1390f),
         Golden("cardY", 1280f, 0.87645f, 1170f, 1390f),
         Golden("cardX", 1500f, 0.18657f, 1390f, 1600f),
         Golden("cardY", 1500f, 0.18657f, 1390f, 1600f),
         Golden("cardY", 1610f, 0.16057f, 1600f, 1700f),
-        Golden("cardY", 1765f, 0.50000f, 1700f, 1830f),
+        Golden("cardY", 1735f, 0.15033f, 1700f, 1830f),
         Golden("cardScale", 120f, 0.83387f, 0f, 330f),
         Golden("cardTurn", 120f, -5.00321f),
         Golden("cardTurn", 400f, -3.60375f),
         Golden("cardTurn", 530f, -2.93393f),
+        Golden("cardTurn", 1115f, -5.89622f),
         Golden("cardTurn", 1280f, 7.02326f),
         Golden("cardTurn", 1500f, 6.94769f),
         Golden("cardScale", 400f, 0.99608f),
         Golden("cardScale", 530f, 1.00849f),
+        Golden("cardScale", 1115f, 1.02397f),
         Golden("cardScale", 1280f, 0.67127f),
         Golden("cardScale", 1500f, 0.57242f),
         Golden("develop", 120f, 0.49955f),
@@ -266,6 +276,8 @@ class ShotTimelineTest {
         Golden("folderScaleY", 1650f, 0.90415f),
         Golden("folderScaleX", 1720f, 1.09376f),
         Golden("folderScaleY", 1720f, 0.88933f),
+        Golden("folderScaleX", 1880f, 0.99228f),
+        Golden("folderScaleY", 1880f, 1.00772f),
         Golden("folderAlpha", 650f, 0.92142f),
         Golden("flap", 1030f, -40.03879f),
         Golden("flap", 1610f, -36.86266f),
@@ -334,6 +346,99 @@ class ShotTimelineTest {
             val tolerance = if (gold.what.startsWith("sparkTurn") || gold.what == "cardTurn" || gold.what == "flap") 0.01f else 2e-3f
             assertNear(gold.value, actual, tolerance, "${gold.what} at ${gold.ms} ms")
         }
+    }
+
+    /** The pill and the slide-off at [t], their note known at [noteAt], are an on-time note's [by] ms earlier. */
+    private fun assertLater(timeline: ShotTimeline, t: Float, noteAt: Float, by: Float) {
+        val what = "at $t, the note at $noteAt"
+        assertEquals(what, timeline.pillX(t - by), timeline.pillX(t, noteAt), 1e-3f)
+        assertEquals(what, timeline.pillScale(t - by), timeline.pillScale(t, noteAt), 1e-5f)
+        assertEquals(what, timeline.pillAlpha(t - by), timeline.pillAlpha(t, noteAt), 1e-5f)
+        assertEquals(what, timeline.trayX(t - by), timeline.trayX(t, noteAt), 1e-3f)
+        assertEquals(what, timeline.trayAlpha(t - by), timeline.trayAlpha(t, noteAt), 1e-5f)
+    }
+
+    @Test
+    fun aNoteKnownByThePillsTimeChangesNothing() {
+        for (g in screens) {
+            val timeline = ShotTimeline(g, reduced = false)
+            for (noteAt in listOf(0f, 900f, ShotTimeline.PILL_AT)) {
+                assertEquals(ShotTimeline.TOTAL_MS, ShotTimeline.end(noteAt), 0f)
+                var t = -10f
+                while (t <= ShotTimeline.TOTAL_MS + 100f) {
+                    assertEquals(timeline.pillX(t), timeline.pillX(t, noteAt), 0f)
+                    assertEquals(timeline.pillScale(t), timeline.pillScale(t, noteAt), 0f)
+                    assertEquals(timeline.pillAlpha(t), timeline.pillAlpha(t, noteAt), 0f)
+                    assertEquals(timeline.trayX(t), timeline.trayX(t, noteAt), 0f)
+                    assertEquals(timeline.trayAlpha(t), timeline.trayAlpha(t, noteAt), 0f)
+                    t += 0.5f
+                }
+            }
+        }
+    }
+
+    @Test
+    fun aLateNoteKeepsThePillsWholeSlideAndItsTimeUpBeforeTheSlideOff() {
+        for (g in screens) {
+            val timeline = ShotTimeline(g, reduced = false)
+            // The file's written at 2.5 s, when the slide-off would have been under way.
+            val noteAt = 2500f
+            val late = noteAt - ShotTimeline.PILL_AT
+            assertEquals(ShotTimeline.TOTAL_MS + late, ShotTimeline.end(noteAt), 0f)
+            // Until then the pill waits, unseen, and everything else stays where it is.
+            var t = ShotTimeline.PILL_AT
+            while (t <= noteAt) {
+                assertEquals(0f, timeline.pillAlpha(t, noteAt), 0f)
+                assertEquals(1f, timeline.trayAlpha(t, noteAt), 0f)
+                assertEquals(0f, timeline.trayX(t, noteAt), 0f)
+                t += 5f
+            }
+            // Then all of it as on time, that much later: the slide-in, the pill up 660 ms before the slide-off begins.
+            t = noteAt
+            while (t <= ShotTimeline.end(noteAt) + 100f) {
+                assertLater(timeline, t, noteAt, late)
+                t += 2.5f
+            }
+            assertEquals(1f, timeline.pillAlpha(noteAt + 180f, noteAt), 0f)
+            assertEquals(0f, timeline.pillX(noteAt + 280f, noteAt), 0f)
+            assertEquals(1f, timeline.trayAlpha(noteAt + 660f, noteAt), 0f)
+            assertEquals(0f, timeline.trayX(noteAt + 660f, noteAt), 0f)
+            assertEquals(0f, timeline.trayAlpha(ShotTimeline.end(noteAt), noteAt), 0f)
+            // Nothing jumps as the note comes.
+            assertEquals(timeline.pillAlpha(noteAt - 0.01f, noteAt), timeline.pillAlpha(noteAt + 0.01f, noteAt), 1e-3f)
+            assertEquals(timeline.pillX(noteAt - 0.01f, noteAt), timeline.pillX(noteAt + 0.01f, noteAt), 0.05f)
+        }
+    }
+
+    @Test
+    fun aWriteThatFailsAfterTheCardIsInStillShowsItsPill() {
+        // The note comes after the on-time effect would have ended (a slow card's write failing at last): the card waits
+        // in the folder, then the pill (the error pill, for a failure) slides out and stays up before it all goes.
+        val timeline = ShotTimeline(psp, reduced = false)
+        val noteAt = 3200f
+        var t = 2380f
+        while (t < noteAt) {
+            assertEquals(1f, timeline.trayAlpha(t, noteAt), 0f)
+            assertEquals(0f, timeline.trayX(t, noteAt), 0f)
+            assertEquals(0f, timeline.pillAlpha(t, noteAt), 0f)
+            assertEquals(psp.inX, timeline.cardX(t), 0f)
+            t += 10f
+        }
+        assertEquals(1f, timeline.pillAlpha(noteAt + 180f, noteAt), 0f)
+        assertEquals(1f, timeline.trayAlpha(noteAt + 660f, noteAt), 0f)
+        assertEquals(ShotTimeline.TOTAL_MS + noteAt - ShotTimeline.PILL_AT, ShotTimeline.end(noteAt), 0f)
+        assertEquals(0f, timeline.trayAlpha(ShotTimeline.end(noteAt), noteAt), 0f)
+    }
+
+    @Test
+    fun withoutANoteTheEffectStillEnds() {
+        val timeline = ShotTimeline(psp, reduced = false)
+        val never = Float.POSITIVE_INFINITY
+        val end = ShotTimeline.end(never)
+        assertEquals(ShotTimeline.TOTAL_MS + ShotTimeline.NOTE_WAIT_MS, end, 0f)
+        assertEquals(1f, timeline.trayAlpha(ShotTimeline.PILL_AT + ShotTimeline.NOTE_WAIT_MS, never), 0f)
+        assertEquals(0f, timeline.trayAlpha(end, never), 0f)
+        assertTrue(timeline.trayX(end, never) + psp.back.right < 0f)
     }
 
     @Test

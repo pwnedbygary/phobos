@@ -25,6 +25,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -80,7 +81,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 
 /**
@@ -103,9 +106,13 @@ internal class PictureBounds {
     }
 }
 
-/** The effect's time since the shot (ms), read as its layers and drawings are made: a float, never boxed. */
-internal fun interface ShotClock {
+/**
+ * The effect's time since the shot, and when its note came (once the file's written), in ms on the same clock: read as
+ * its layers and drawings are made, as floats, never boxed.
+ */
+internal interface ShotClock {
     fun now(): Float
+    fun noteAt(): Float
 }
 
 private class Shot(
@@ -174,22 +181,52 @@ internal fun cardPicture(copy: IntArray): ImageBitmap? {
 private fun reducedMotion(context: Context) =
     Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
 
+private fun linear(ms: Float) = tween<Float>(ms.roundToInt(), easing = LinearEasing)
+
 @Composable
 private fun ShotLayer(shot: Shot, onDone: () -> Unit) {
     val clock = remember { Animatable(0f) }
-    val duration = when {
-        !shot.event.card -> ShotErrorTimeline.TOTAL_MS
-        shot.reduced -> ShotTimeline.REDUCED_MS
-        else -> ShotTimeline.TOTAL_MS
-    }
+    // When the pill's note came, on the effect's clock: still ahead of it until then.
+    val noted = remember { mutableFloatStateOf(Float.POSITIVE_INFINITY) }
     val done by rememberUpdatedState(onDone)
     LaunchedEffect(Unit) {
+        val note = launch {
+            shot.event.note.first { it != null }
+            noted.floatValue = clock.value
+        }
         // Compose runs an animation at the animator duration scale, so under Remove animations the clock would end at
-        // once; a delay isn't scaled, so the still effect stays its 1.6 s (a failure's pill its 3 s).
-        if (shot.reduced) delay(duration.toLong()) else clock.animateTo(duration, tween(duration.toInt(), easing = LinearEasing))
+        // once; a delay isn't scaled, so the still effect stays its time.
+        when {
+            !shot.event.card -> {
+                val total = ShotErrorTimeline.TOTAL_MS
+                if (shot.reduced) delay(total.toLong()) else clock.animateTo(total, linear(total))
+            }
+            shot.reduced -> {
+                // Its 1.6 s count from the note, when the pill shows.
+                withTimeoutOrNull(ShotTimeline.NOTE_WAIT_MS.toLong()) { note.join() }
+                delay(ShotTimeline.REDUCED_MS.toLong())
+            }
+            else -> {
+                clock.animateTo(ShotTimeline.PILL_AT, linear(ShotTimeline.PILL_AT))
+                if (!note.isCompleted) {
+                    // The card, the folder and the sparkles run on while the pill and the slide-off wait for the note.
+                    launch { clock.animateTo(ShotTimeline.PILL_AT + ShotTimeline.NOTE_WAIT_MS, linear(ShotTimeline.NOTE_WAIT_MS)) }
+                    withTimeoutOrNull(ShotTimeline.NOTE_WAIT_MS.toLong()) { note.join() }
+                }
+                // On from wherever the wait left the clock: this animation cancels the wait's.
+                val end = ShotTimeline.end(noted.floatValue)
+                clock.animateTo(end, linear((end - clock.value).coerceAtLeast(0f)))
+            }
+        }
+        note.cancel()
         done()
     }
-    val time = remember { ShotClock { clock.value } }
+    val time = remember {
+        object : ShotClock {
+            override fun now() = clock.value
+            override fun noteAt() = noted.floatValue
+        }
+    }
     val density = LocalDensity.current
     val direction = LocalLayoutDirection.current
     val safe = WindowInsets.safeDrawing
@@ -230,12 +267,13 @@ private fun SavedShot(
                 note, g, wide,
                 Modifier.graphicsLayer {
                     val t = time.now()
+                    val n = time.noteAt()
                     transformOrigin = LEFT_CENTER
-                    translationX = timeline.pillX(t) + timeline.trayX(t)
-                    val scale = timeline.pillScale(t)
+                    translationX = timeline.pillX(t, n) + timeline.trayX(t, n)
+                    val scale = timeline.pillScale(t, n)
                     scaleX = scale
                     scaleY = scale
-                    alpha = timeline.pillAlpha(t) * timeline.trayAlpha(t)
+                    alpha = timeline.pillAlpha(t, n) * timeline.trayAlpha(t, n)
                     compositingStrategy = CompositingStrategy.ModulateAlpha
                 },
             )
@@ -259,7 +297,7 @@ private fun SavedShot(
     }
 }
 
-/** The pill, once the file's written and it's known what to say: as a rule well before it slides out. */
+/** The pill, once the file's written and it's known what to say: it slides out then, however late (ShotTimeline.lateness). */
 @Composable
 private fun KnownPill(note: StateFlow<ScreenshotNote?>, g: ShotGeometry, wide: Boolean, motion: Modifier) {
     val known by note.collectAsState()
@@ -310,13 +348,14 @@ private fun FolderBack(g: ShotGeometry, timeline: ShotTimeline, time: ShotClock)
         Modifier
             .graphicsLayer {
                 val t = time.now()
+                val n = time.noteAt()
                 transformOrigin = BOTTOM_CENTER
                 scaleX = timeline.folderScaleX(t)
                 scaleY = timeline.folderScaleY(t)
-                alpha = timeline.folderAlpha(t) * timeline.trayAlpha(t)
+                alpha = timeline.folderAlpha(t) * timeline.trayAlpha(t, n)
                 // An offscreen buffer would be the node's size and cut off the tab, drawn above it.
                 compositingStrategy = CompositingStrategy.ModulateAlpha
-                translationX = timeline.trayX(t)
+                translationX = timeline.trayX(t, n)
                 shadowElevation = 0.8f * u
                 shape = shadow
             }
@@ -345,13 +384,14 @@ private fun FilmCard(g: ShotGeometry, timeline: ShotTimeline, picture: ImageBitm
         Modifier
             .graphicsLayer {
                 val t = time.now()
+                val n = time.noteAt()
                 val scale = timeline.cardScale(t)
-                translationX = timeline.cardX(t) + timeline.trayX(t)
+                translationX = timeline.cardX(t) + timeline.trayX(t, n)
                 translationY = timeline.cardY(t)
                 scaleX = scale
                 scaleY = scale
                 rotationZ = timeline.cardTurn(t)
-                alpha = timeline.trayAlpha(t)
+                alpha = timeline.trayAlpha(t, n)
                 compositingStrategy = CompositingStrategy.ModulateAlpha
                 // No shadow while it covers the game picture; it settles in as the card shrinks to its corner.
                 shadowElevation = 1.2f * u * (2f - scale).coerceIn(0f, 1f)
@@ -405,12 +445,13 @@ private fun FolderFront(g: ShotGeometry, timeline: ShotTimeline, time: ShotClock
         Modifier
             .graphicsLayer {
                 val t = time.now()
+                val n = time.noteAt()
                 transformOrigin = BOTTOM_CENTER
                 scaleX = timeline.folderScaleX(t)
                 scaleY = timeline.folderScaleY(t)
-                alpha = timeline.folderAlpha(t) * timeline.trayAlpha(t)
+                alpha = timeline.folderAlpha(t) * timeline.trayAlpha(t, n)
                 compositingStrategy = CompositingStrategy.ModulateAlpha
-                translationX = timeline.trayX(t)
+                translationX = timeline.trayX(t, n)
             }
             .drawWithCache {
                 val w = size.width
@@ -541,7 +582,10 @@ private fun ShotPreview(at: Float, failed: Boolean = false) {
     Box(Modifier.fillMaxSize().background(Color(0xFF55604E))) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val g = ShotGeometry(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat(), null, 480f / 272f, top = false)
-            val time = ShotClock { at }
+            val time = object : ShotClock {
+                override fun now() = at
+                override fun noteAt() = 0f
+            }
             if (failed) {
                 FailedShot(
                     ScreenshotNote("Screenshot not saved", "The game has no picture to save yet", failed = true, spoken = ""),

@@ -1928,10 +1928,9 @@ class MainViewModel(
                 val baseDir = resolveSafPath(settings.value.screenshotsPath)
                     ?: File(context.filesDir, "screenshots").absolutePath
                 val result = Screenshots.save(File(baseDir, systemName), romName, LocalDateTime.now()) { file ->
-                    val copy = PhobosCore.captureScreenshot(CARD_PICTURE_MAX_SIZE) ?: return@save false
+                    val copy = PhobosCore.captureScreenshot(CARD_PICTURE_MAX_SIZE) ?: return@save Screenshots.Capture.NoPicture
                     shown = _screenshotEvents.tryEmit(ScreenshotEvent(card = true, picture = cardPicture(copy), note = note))
-                    PhobosCore.writeScreenshot(file.absolutePath)
-                    true
+                    if (PhobosCore.writeScreenshot(file.absolutePath)) Screenshots.Capture.Written else Screenshots.Capture.NotWritten
                 }
                 if (result is ScreenshotResult.Saved) {
                     Log.i("Phobos", "Screenshot saved: ${result.file.absolutePath}")
