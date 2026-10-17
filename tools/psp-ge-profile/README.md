@@ -44,12 +44,16 @@ while a capture runs. If there's no `PHOBOS` folder, it writes nothing at all (a
 
 1. In ARK's settings (the XMB's CFW settings, or the recovery menu), set the CPU clock to the default: not
    Overclock, not Power Save, not Balanced. The games set their own clocks, and those are part of what's measured.
+   ARK-4's own settings file, `SEPLUGINS/SETTINGS.TXT`, comes with the line `always, overclock, on`; if yours has
+   it, make it `always, overclock, off`. With it on, the PSP's PLL runs at 333 MHz, and a game that asks for more
+   than its 222/111 is given it, where a PSP without it would refuse: the first Activision Hits Remixed captures
+   ran at 333/166 that way (docs/psp-core.md, part 104).
 2. Turn off any other plugin for these games (cheats, frame counters, overclockers) while profiling: a plugin that
    hooks the same functions would hide them from this one.
 3. Don't save the game while the plugin is on. (The plugin doesn't touch saves, but it writes to the same stick,
    and a crash during a save is the one way a save could suffer.) Load a save if you need to; just don't save.
 
-### Turning it on for the six games
+### Turning it on for the games
 
 Add these lines to ARK's `PLUGINS.TXT`. ARK reads it from `SEPLUGINS/PLUGINS.TXT` or from
 `PSP/SAVEDATA/ARK_01234/PLUGINS.TXT`; if one of those already exists, add the lines to it, otherwise make
@@ -67,12 +71,14 @@ ULUS10186, ms0:/SEPLUGINS/phobosprof.prx, on
 UCUS98646, ms0:/SEPLUGINS/phobosprof.prx, on
 ULES00364, ms0:/SEPLUGINS/phobosprof.prx, on
 ULUS10472, ms0:/SEPLUGINS/phobosprof.prx, on
+NPUG80221, ms0:/SEPLUGINS/phobosprof.prx, on
 ```
 
 In order: God of War: Chains of Olympus (three copies), God of War: Ghost of Sparta, Activision Hits Remixed,
-Killzone: Liberation, Super Monkey Ball Adventure, Army of Two: The 40th Day. If no notice at all appears when one of
-them starts, the plugin wasn't loaded for it: its ID isn't on a line. The ID is on the game's info screen in ARK's
-launcher ("View info"); add a line for it. The other regions' IDs:
+Killzone: Liberation, Super Monkey Ball Adventure, Army of Two: The 40th Day, Super Stardust Portable (the
+PlayStation Store copy Phobos has; the last line is new since the first captures). If no notice at all appears when
+one of them starts, the plugin wasn't loaded for it: its ID isn't on a line. The ID is on the game's info screen in
+ARK's launcher ("View info"); add a line for it. The other regions' IDs:
 
 | Game | Other IDs |
 |---|---|
@@ -85,7 +91,7 @@ launcher ("View info"); add a line for it. The other regions' IDs:
 
 ### The dry run (first)
 
-1. Start Chains of Olympus (any of the six would do) and let it run: on its menus is fine. As soon as the game shows
+1. Start Chains of Olympus (any of them would do) and let it run: on its menus is fine. As soon as the game shows
    its first picture, a black box at the top left says, for about 4 seconds, `PHOBOS PROFILER ON` and, under it,
    your copy's ID and `DRY RUN`. A third line, if there is one, is the first thing in the way (see below). (Version
    0.2.0 showed the box flickering during the boot, before the game's first picture, and `UNKNOWN` for the ID: from
@@ -161,6 +167,10 @@ name and the time.
    `prof.txt` instead, then start the game and leave it: the capture runs for the game's first 12 seconds. Copy
    `prof-capture.txt` back afterwards.
 5. Two or three captures of each scene are better than one, in separate visits if you can.
+6. Two scenes added after the first captures, a minute each, with `prof-capture.txt` as in step 2 (the table's last
+   two rows): Killzone's language menu and, if you have the game, Super Stardust Portable's intro. Phobos's earlier
+   model of the GE's time (part 76) ran the first at about 15 frames a second and the second at 30; these say what a
+   PSP does.
 
 ### Copying the files back
 
@@ -170,7 +180,7 @@ lines, it never overwrites).
 
 ### Switching it off
 
-- For good: change `on` to `off` at the end of the six lines in `PLUGINS.TXT` (or delete them). ARK's plugin
+- For good: change `on` to `off` at the end of the plugin's lines in `PLUGINS.TXT` (or delete them). ARK's plugin
   manager (in the XMB, or the recovery menu) can turn them off too. The `PHOBOS` folder can then be deleted.
 - Only the notices: `notices = off` in `prof.txt`.
 - For one game boot: hold START while the game starts (ARK's vanilla mode starts it without plugins, that once).
@@ -181,8 +191,8 @@ lines, it never overwrites).
 ## The scenes to capture
 
 The six scenes Phobos measures from save states (`~/phobos-work/scratch/cpu-round3/scenes` and
-`~/phobos-work/scratch/psp-hires/scenes`). Each is captured with nothing pressed unless it says otherwise, as Phobos
-runs them.
+`~/phobos-work/scratch/psp-hires/scenes`), and two more where part 76's model of the GE's time changed what Phobos
+draws (step 6 above). Each is captured with nothing pressed unless it says otherwise, as Phobos runs them.
 
 | Scene | Game (the copy Phobos used) | How to get there | During the capture |
 |---|---|---|---|
@@ -192,6 +202,8 @@ runs them.
 | kz-gp | Killzone: Liberation (UCUS98646) | Gameplay in the first level, at the spot where you saved Phobos's Killzone state on the RP6 (an open yard: concrete, a metal staircase, barrels, your squad mate beside you), with no fight going on. | Stand still. A second capture while walking around is a bonus. |
 | a2-gp | Army of Two: The 40th Day (ULUS10472) | Campaign, then the first chapter (Shanghai Streets), once you have control. | Walk forward, then sideways, and fire now and then, as Phobos's scene does (its script moves the stick and fires for about 25 seconds). A second capture standing still is a bonus. |
 | ahr-legal | Activision Hits Remixed (ULUS10186) | The copyright screen (black text on white) that opens the game, before the Activision logo: frames 120 to 480 after boot in Phobos, so seconds 2 to 8. | Use `prof-boot.txt` (above): start the game and press nothing until the logo. |
+| kz-lang | Killzone: Liberation (UCUS98646) | The language menu that comes as the game starts, about 4 seconds in (Phobos's `kz-lang`): a list of languages over a full-screen picture. If your copy goes past it (a save holding the language, say), it can't be captured: say so. | Nothing: leave the first language selected. |
+| ssp-intro | Super Stardust Portable (NPUG80221, or your copy's ID) | The intro that plays as the game starts, before its title screen (its glowing effects drawn in several passes). | Nothing: start the capture as soon as the intro begins, and let it play. |
 
 Phobos's pictures of five of these scenes are in the coordinator's scratch folders, to send along:
 `speed9/sheets/scene/{coo-diff,gos-menu,smba-story}/frame-000030.png`, `scenes-owner/killzone-gameplay-owner.png`
