@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="360" viewBox="0 0 880 360" role="img" aria-labelledby="title desc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Noto Sans, Helvetica, Arial, sans-serif">
+<title id="title">Pull requests merged per week</title>
+<desc id="desc">Pull requests merged each week: 17, 80, 16 and 42, the PSP core&#39;s from the week of 5 October on.</desc>
+<rect x="0.5" y="0.5" width="879" height="359" rx="8" fill="#0d1117" stroke="#30363d"/>
+<text x="20" y="30" font-size="15" fill="#e6edf3" font-weight="600">Pull requests merged per week</text>
+<rect x="20" y="45" width="10" height="10" rx="2" fill="#4493f8"/>
+<text x="34" y="54" font-size="12" fill="#e6edf3">PSP core</text>
+<rect x="111.7" y="45" width="10" height="10" rx="2" fill="#6e7681"/>
+<text x="125.7" y="54" font-size="12" fill="#e6edf3">Everything else</text>
+<text x="20" y="332" font-size="11" fill="#9198a1">Source: GitHub, the 155 merged pull requests up to 17 Oct 2026. The PSP core&#39;s stack of about 100 pull requests reached master as one merge (#208,</text>
+<text x="20" y="346" font-size="11" fill="#9198a1">11 Oct); four of them had been merged into their stack bases on 7-8 Oct.</text>
+<line x1="63.1" y1="278" x2="856" y2="278" stroke="#656c76" stroke-width="1"/>
+<text x="55.1" y="282" font-size="11" fill="#9198a1" text-anchor="end">0</text>
+<line x1="63.1" y1="237.6" x2="856" y2="237.6" stroke="#21262d" stroke-width="1"/>
+<text x="55.1" y="241.6" font-size="11" fill="#9198a1" text-anchor="end">20</text>
+<line x1="63.1" y1="197.2" x2="856" y2="197.2" stroke="#21262d" stroke-width="1"/>
+<text x="55.1" y="201.2" font-size="11" fill="#9198a1" text-anchor="end">40</text>
+<line x1="63.1" y1="156.8" x2="856" y2="156.8" stroke="#21262d" stroke-width="1"/>
+<text x="55.1" y="160.8" font-size="11" fill="#9198a1" text-anchor="end">60</text>
+<line x1="63.1" y1="116.4" x2="856" y2="116.4" stroke="#21262d" stroke-width="1"/>
+<text x="55.1" y="120.4" font-size="11" fill="#9198a1" text-anchor="end">80</text>
+<line x1="63.1" y1="76" x2="856" y2="76" stroke="#21262d" stroke-width="1"/>
+<text x="55.1" y="80" font-size="11" fill="#9198a1" text-anchor="end">100</text>
+<text x="0" y="0" font-size="12" fill="#9198a1" text-anchor="middle" transform="translate(20 177) rotate(-90)">Pull requests merged</text>
+<rect x="134.2" y="243.7" width="56" height="34.3" fill="#6e7681"/>
+<rect x="332.5" y="116.4" width="56" height="161.6" fill="#6e7681"/>
+<rect x="530.7" y="251.7" width="56" height="26.3" fill="#4493f8"/>
+<rect x="530.7" y="245.7" width="56" height="6.1" fill="#6e7681"/>
+<rect x="728.9" y="209.3" width="56" height="68.7" fill="#4493f8"/>
+<rect x="728.9" y="193.2" width="56" height="16.2" fill="#6e7681"/>
+<text x="162.2" y="237.7" font-size="10.5" fill="#e6edf3" text-anchor="middle" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">17</text>
+<text x="360.5" y="110.4" font-size="10.5" fill="#e6edf3" text-anchor="middle" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">80</text>
+<text x="558.7" y="239.7" font-size="10.5" fill="#e6edf3" text-anchor="middle" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">16</text>
+<text x="756.9" y="187.2" font-size="10.5" fill="#e6edf3" text-anchor="middle" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">42</text>
+<text x="162.2" y="292" font-size="11" fill="#e6edf3" text-anchor="middle">21 Sep</text>
+<text x="360.5" y="292" font-size="11" fill="#e6edf3" text-anchor="middle">28 Sep</text>
+<text x="558.7" y="292" font-size="11" fill="#e6edf3" text-anchor="middle">5 Oct</text>
+<text x="756.9" y="292" font-size="11" fill="#e6edf3" text-anchor="middle">12 Oct</text>
+<text x="459.6" y="309" font-size="12" fill="#9198a1" text-anchor="middle">Week starting Monday (the last runs to 17 October 2026)</text>
+</svg>
