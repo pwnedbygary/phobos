@@ -10,6 +10,14 @@
 //texture coordinates and their divisor) follows the perspective as the GE's u/w and 1/w do, while the colors, fog
 //and depth, which the GE blends straight across the screen, are interpolated "noperspective".
 
+//The depth rasterized: the GE's, z / 65535 (0-65535 onto 0-1); in the pipelines that write the depth from the one
+//interpolated beside it (draw.frag's DEPTHS), where the device clamps depth (ABOVE), a step and a half above it,
+//(z + 1.5) / 65536.5, so that the whole number written lies a step below it at least, whatever the GPU's rounding
+//between the two (the DEPTHS build's depth_less). A 3D corner's depth lies in 0-65535, held so, and its depth
+//rasterized in 0-1 either way; a 2D one's past those is clamped there, not clipped (unclamped, it clips as the GE's
+//z / 65535 does).
+layout(constant_id = 0) const uint ABOVE = 0u;
+
 layout(push_constant) uniform Push {
   vec2 scale;  //2 / the target's width and height: pixels to Vulkan's -1 to 1
 } push;
@@ -39,7 +47,8 @@ layout(location = 10) noperspective out vec2 vertexTexels;  //(transform.vert's 
 
 void main() {
   float w = position.w;
-  gl_Position = vec4((position.xy * push.scale - 1.0) * w, position.z / 65535.0 * w, w);
+  float depth = ABOVE != 0u ? (position.z + 1.5) / 65536.5 : position.z / 65535.0;
+  gl_Position = vec4((position.xy * push.scale - 1.0) * w, depth * w, w);
   vertexColor = color * 255.0;
   vertexSpecular = specular * 255.0;
   vertexCoordinates = coordinates;
