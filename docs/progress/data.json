@@ -1,0 +1,408 @@
+{
+  "as_of": "17 October 2026",
+  "intro": "How Phobos and its PlayStation Portable core came to be: the eras, the firsts, the measured progress, the releases, and the setbacks with what changed after them, measured as the work went on a Retroid Pocket 6 (Snapdragon 8 Gen 2) and a PSP-1000.",
+  "readme_intro": "The PSP core's progress, measured as the work went on a Retroid Pocket 6 (Snapdragon 8 Gen 2) and a PSP-1000.",
+  "headline": [
+    { "value": "13 days", "label": "from the PSP core's first code (3 Oct 2026) to v2.4.0 (16 Oct), the fifth release with it" },
+    { "value": "{library-runs:Menu or gameplay:last} of {library-runs:value_max}", "label": "games reach a menu or gameplay within a minute in the headless library run of 11 Oct, {library-runs:Movie:last} play their opening movies, and the last plays its opening a few seconds later ({library-runs:Black or hung:first} were still black on 7 Oct)" },
+    { "value": "{slow-games:Games averaging 59+ fps:last} of {slow-games:value_max}", "label": "games found slow on a Retroid Pocket 6 average full speed at 1x in 150-second scripted runs with the 15 Oct nightly ({slow-games:Games averaging 59+ fps:1} with v2.3.0)" },
+    { "value": "232 of 266", "label": "games average 59+ fps at 5x internal resolution in two-minute runs from launch with presses on still screens, so mostly logos, intros and menus (nightly-215681, Vulkan fast, Turnip); the other 34 ran 2.9 to 58.9 fps" }
+  ],
+  "readme_charts": ["library-runs", "slow-games", "prs-per-day"],
+  "readme_releases": ["v2.4.0", "v2.3.0", "v2.2.0", "v2.1.0", "v2.0.0"],
+  "readme_timeline": [
+    { "period": "2004 to Sep 2026", "events": ["the ares lineage", "Phobos on Android, v1.0.0 and v1.1.0"] },
+    { "period": "3 to 6 Oct", "events": ["PSP core from a clean room", "first games at full speed on the RP6"] },
+    { "period": "6 to 11 Oct", "events": ["Vulkan renderer", "v2.0.0, the first release with the PSP"] },
+    { "period": "11 to 17 Oct", "events": ["v2.1.0 to v2.4.0", "5x, and GE timing of games on a real PSP"] }
+  ],
+  "eras": [
+    {
+      "name": "Roots: ares, Android and a fast N64",
+      "span": "2004 to 3 Oct 2026",
+      "timeline": { "period": "2004 to 3 Oct 2026", "events": ["the ares lineage", "Phobos on Android, v1.0.0 and v1.1.0", "N64 speed push"] },
+      "summary": "Phobos is a fork of ares, whose lineage runs back to 2004 through higan and bsnes. It came to Android in July 2026 and shipped v1.0.0 in August; late September went to N64 speed and a themed app, and a PSP core went on the plan, by way of PPSSPP if its license allowed.",
+      "milestones": [
+        { "date": "2004", "title": "ares's lineage begins", "detail": "ares began on 14 October 2004 as a descendant of higan and bsnes; this repository carries that history from bsnes in August 2010 onward.", "kind": "work" },
+        { "date": "27 Jul 2026", "title": "Phobos on Android", "detail": "The 64-bit native Android scaffolding, and native Vulkan for the N64 core, on the same day.", "kind": "first" },
+        { "date": "20 Aug 2026", "title": "v1.0.0", "detail": "Neo Geo core support, the GPU driver manager, stable release signing, PC Engine and SuperGrafx working.", "kind": "release" },
+        { "date": "15 Sep", "title": "A change process with evidence", "detail": "Performance claims need measurements, and a change needs an independent review of its exact snapshot before it merges.", "kind": "work" },
+        { "date": "24 Sep", "title": "The first pull request merged (#1)", "detail": "Neo Geo CD's garbled title-menu text: a DMA's byte order.", "kind": "work" },
+        { "date": "25-28 Sep", "title": "The N64 speed push", "detail": "JIT blocks linked and loops kept inside them (dispatcher round trips 10.1 to 0.6 million a second), the RSP's multiply-accumulates as inline NEON, up to 256 parallel-RDP render contexts in flight (Mario Tennis' showcase: 82 late frames to 5), WFE instead of spinning (4.76 to 4.15 W).", "kind": "work" },
+        { "date": "27-28 Sep", "title": "The app's look", "detail": "37 IDE colorway themes with optional Retrowave effects (#9) and a MangoHud-style performance HUD (#5), then glass panels and a floating dock (#20).", "kind": "work" },
+        { "date": "28 Sep", "title": "v1.1.0", "detail": "Pull requests #1-#25: the N64 work, the HUD, the themes and glass, and frontends that can start games (ES-DE, Daijisho, Argosy).", "kind": "release" },
+        { "date": "28 Sep", "title": "In-app updates", "detail": "Phobos updates itself from GitHub releases, every build numbered from git history (#26).", "kind": "work" },
+        { "date": "29 Sep", "title": "A PSP core on the plan, through PPSSPP", "detail": "A PSP core to rival PPSSPP in compatibility and speed, by adopting PPSSPP itself (or a version tuned for accuracy) if its license allowed; the PS2 and GameCube generation left out as too complex to add properly.", "kind": "decision" },
+        { "date": "30 Sep-3 Oct", "title": "Breadth", "detail": "Neo Geo CD's sound and loading speed, multi-disc games with a disc chooser, PS1 memory cards per game, ZX Spectrum and MSX keyboards and tapes, PC Engine CD, LaserActive and the Pocket Challenge V2.", "kind": "work" },
+        { "date": "3 Oct", "title": "Desktop builds and a license", "detail": "A Linux AppImage, a Windows Phobos.exe and a macOS app (#97); Phobos's own code under GPL-3.0-or-later, the firmware outside it (#98).", "kind": "work" }
+      ]
+    },
+    {
+      "name": "A clean room, and the foundations",
+      "span": "3-4 Oct 2026",
+      "timeline": { "period": "3 to 4 Oct", "events": ["PSP core begins in a clean room", "first measurements on a real PSP", "CPU, recompiler, VFPU and GE"] },
+      "summary": "In two days: the rules (an original core, PPSSPP only as a reference for how the PSP behaves), the Allegrex CPU as an interpreter and a recompiler, the VFPU, the memory map, loader and first system functions, the GE drawing in 2D, in 3D and with lighting, and three rounds of measurements on a real PSP.",
+      "milestones": [
+        { "date": "3 Oct", "title": "The rules: a core of Phobos's own", "detail": "PPSSPP can't be adopted: it is GPL-2.0-or-later, and the firmware ares compiles in can't be under the GPL. So an original core in ares's style, with PPSSPP and its test programs read only for how the PSP behaves; nothing is copied, translated or reworded. Retail programs decrypted with the published keys; the PSP's system emulated at a high level, so no firmware is needed; a recompiler from the start, the interpreter as its reference.", "kind": "decision" },
+        { "date": "3 Oct", "title": "Part 1: the Allegrex interpreter", "detail": "The PSP's CPU, its integer and FPU instructions, with host tests (14 groups, run under sanitizers).", "kind": "first" },
+        { "date": "3 Oct", "title": "Parts 2-4: the recompiler, the VFPU, loads and stores straight to RAM", "detail": "Built on ares's sljit framework for ARM64 and x86-64 and tested against the interpreter: 500 generated programs must end identically on both, and four deliberately broken recompilers each failed them.", "kind": "work" },
+        { "date": "3 Oct", "title": "The first measurement on a real PSP", "detail": "A homebrew program measured the VFPU on a PSP (round 1, firmware 6.61): its random numbers matched every word, vadd, vsub, vmul and vdiv every result, and sine and cosine were made exact.", "kind": "first" },
+        { "date": "3 Oct", "title": "Parts 5-9: memory, loader, first system functions, files, the GE's lists", "detail": "pspdev's hello world ran from start to end on the host (part 7).", "kind": "first" },
+        { "date": "4 Oct", "title": "Parts 10-12: drawing in 2D, in 3D, and lighting", "detail": "Each with its own measuring program run on a real PSP, the GE's pictures compared with the core's.", "kind": "work" },
+        { "date": "4 Oct", "title": "Rounds 2 and 3, then one measuring program", "detail": "Matrices, division by zero, NaNs, denormals, comparisons and prefixes matched the PSP; the FPU's rounding and conversions and the GE's rounding, sampling, filtering and lighting were fitted. The tests became one program with a menu (tools/psp-measure).", "kind": "work" },
+        { "date": "4 Oct", "title": "The stack", "detail": "The parts gathered into one GitHub stack of pull requests, to merge as one.", "kind": "work" }
+      ]
+    },
+    {
+      "name": "Into the app, and the first games",
+      "span": "5-6 Oct 2026",
+      "timeline": { "period": "5 to 6 Oct", "events": ["PSP in the Phobos app", "first games at full speed on the RP6", "first retail games"] },
+      "summary": "The core became an ares system inside the Android app, read disc images, saved states, decrypted retail games, made sound and drew text with the PSP's own fonts. On 6 October its first retail games ran at full speed on the RP6, and a headless runner began testing all 266 games of the test library.",
+      "milestones": [
+        { "date": "5 Oct", "title": "A flash0 dumper", "detail": "tools/psp-flash0-dump copies a PSP's system files, the fonts among them, to its memory stick; the copies stay on the user's devices, never in the repository.", "kind": "work" },
+        { "date": "5 Oct", "title": "Part 13: the PSP in Phobos", "detail": "pspsdk's samples and hello ran in the app on the RP6 at 60 frames a second (the cube's frame about 8 ms of its 16.7).", "kind": "first" },
+        { "date": "5 Oct", "title": "Parts 14-16: discs and save states", "detail": "ISO and CSO, then CHD, CSO v2, ZSO, DAX and JSO; save states, versioned.", "kind": "work" },
+        { "date": "5 Oct", "title": "Parts 17-19: retail games start", "detail": "The functions retail games ask for, ~PSP programs decrypted, modules loaded from the disc and the memory stick. On the host, Lumines reached its title screen, and Street Fighter III 3rd Strike's port its own at 60 fps.", "kind": "first" },
+        { "date": "6 Oct", "title": "Part 21: sound", "detail": "sceAudio's channels mixed and sceSas's voices heard.", "kind": "work" },
+        { "date": "6 Oct", "title": "Part 22: the first 3D games in play", "detail": "On the host: Liberty City Stories into the city, SOCOM's first mission, Burnout Legends and Midnight Club 3 racing.", "kind": "first" },
+        { "date": "6 Oct", "title": "Part 23: the system fonts", "detail": "sceLibFont drawing a PSP's own flash0 fonts.", "kind": "work" },
+        { "date": "6 Oct", "title": "Part 24: full speed on the RP6", "detail": "The software renderer on several threads with a texture cache, every pixel as before: Peace Walker's title 10.6 to 60 fps, Liberty City Stories 16.6 to 60, Lumines' demo 24.0 to 59.9.", "kind": "first" },
+        { "date": "6 Oct", "title": "Parts 25-27", "detail": "The first test games into gameplay (Burnout Dominator's GE hang explained), music and movies through FFmpeg's LGPL decoders, and the PSP in the desktop program.", "kind": "work" },
+        { "date": "6 Oct", "title": "The headless runner and the 266-game report (#154)", "detail": "Every game run headless for a minute of PSP time; the first, rough count put about 100 games at a menu or in play and about 155 black.", "kind": "first" }
+      ]
+    },
+    {
+      "name": "The GPU, and the whole library",
+      "span": "6-11 Oct 2026",
+      "timeline": { "period": "6 to 11 Oct", "events": ["Vulkan renderer", "v2.0.0, the first release with the PSP", "266-game library runs"] },
+      "summary": "An exact compute renderer gave way to a hardware renderer on Vulkan; the 266 games ran again and again until one was left black; God of War, the PGD-protected games and measurement rounds 4 to 6 followed; and v2.0.0 shipped the core, marked Experimental, on 11 October.",
+      "milestones": [
+        { "date": "6-7 Oct", "title": "Parts 28-33", "detail": "The functions 266 games ask for; lines, bounding boxes and DXT textures; the software renderer 1.9-3.6x faster again and bit-exact, four pixels at a time; PSMF movies from a clean room; Bezier and spline surfaces.", "kind": "work" },
+        { "date": "7 Oct", "title": "Part 36: a hardware renderer on Vulkan", "detail": "The exact compute renderer (parts 34-35) stopped. On the RP6, one Vulkan thread beat the seven-thread software renderer in all six scenes measured.", "kind": "first" },
+        { "date": "7-8 Oct", "title": "Parts 38-45: faster, and in the app", "detail": "The recompiler compiles more and chains blocks; a list waits only for the batch it fills, so drawing goes on off the emulation thread (part 43, the step behind Midnight Club 3's race going from 24.2 to 32.3 fps on the RP6); a Renderer setting that takes custom drivers, upscaling up to 10x, blending in the shader.", "kind": "work" },
+        { "date": "8 Oct", "title": "OpenGL parked", "detail": "Most phones and handhelds run Vulkan, so the time went to the software renderer's waits and Vulkan's accuracy instead.", "kind": "decision" },
+        { "date": "8 Oct", "title": "The VFPU adder's carry", "detail": "Its rounding now carries into the exponent, and the twitching limbs seen in GTA were gone.", "kind": "work" },
+        { "date": "9 Oct", "title": "Part 51: the whole library again", "detail": "Three regressions fixed; black screens from 73 to 21 of 266.", "kind": "work" },
+        { "date": "9 Oct", "title": "Parts 53-54: Vulkan (fast)", "detail": "The GPU transforms and lights 3D; compiled pipelines kept between sessions.", "kind": "work" },
+        { "date": "9 Oct", "title": "Rounds 4, 5 and 5B on the PSP", "detail": "Round 4 froze the PSP at its curve counts, so the program's waits for the GE were timed and a stall reset (#191).", "kind": "work" },
+        { "date": "10 Oct", "title": "God of War, and round 6 written", "detail": "God of War in the software renderer, and in Vulkan without waiting for the GPU (parts 64-65); round 6 measures the GE's time, lighting's cosine, the reciprocal and curves.", "kind": "work" },
+        { "date": "10-11 Oct", "title": "The PGD games decrypt", "detail": "A fix for PGD-protected disc reads (#206): the six black games' data decrypts; five reach their titles, menus or notices, and the sixth is still loading at the minute mark (its opening plays from about frame 4,200).", "kind": "work" },
+        { "date": "11 Oct", "title": "#208: the stack merged into master", "detail": "About 100 pull requests, #100 to #209, as one.", "kind": "work" },
+        { "date": "11 Oct", "title": "v2.0.0: the first release with the PSP", "detail": "Marked Experimental in the app. In the runner's final run, 194 of 266 games reached a menu or gameplay, 71 their movies, and 1 stayed black.", "kind": "release" }
+      ]
+    },
+    {
+      "name": "Playing it on the RP6",
+      "span": "11-14 Oct 2026",
+      "timeline": { "period": "11 to 14 Oct", "events": ["played on the RP6", "v2.1.0, v2.2.0 and v2.3.0"] },
+      "summary": "With v2.0.0 on a Retroid Pocket 6, the games were played. Each report became a fix, three more releases followed in three days, and a test plan became CI lanes.",
+      "milestones": [
+        { "date": "11 Oct", "title": "The RP6 run of v2.0.0", "detail": "The formerly troubled games, then the whole test library, with buttons pressed whenever a game sat idle. #212-#219 merged that night: WipEout without waiting for the GPU; MACH taking Start; new saves no longer called corrupted; a PSP section in the pause menu with uses for the right stick; Crash Tag Team Racing's save dialog; Kenka Bancho and Final Fantasy IV past their movies; both Metal Gear Acids' menus; the game's name beside “Emulation Paused”.", "kind": "work" },
+        { "date": "12 Oct", "title": "#221: the system's dialogs in the app", "detail": "A game's messages, keyboard, and save and load screens shown as the app's own dialogs, answered by touch or controller.", "kind": "work" },
+        { "date": "12 Oct", "title": "#222: round 6's pictures", "detail": "Lighting's two multiplies, the measured reciprocal, the texel range and patches, fitted to what a real PSP drew in round 6 the night before.", "kind": "work" },
+        { "date": "12 Oct", "title": "v2.1.0", "detail": "Those fixes, the dialogs and round 6: 12 pull requests.", "kind": "release" },
+        { "date": "12-13 Oct", "title": "The slow games, first rounds", "detail": "Render to texture decoded only where it's taken, Killzone's blur from a copy, calmer system calls, more of the VFPU compiled (#224, #233); Vulkan no longer waits for its own pixels (#234).", "kind": "work" },
+        { "date": "13 Oct", "title": "v2.2.0", "detail": "Six pull requests: the slow-game rounds, Colin McRae's save, anti-aliased lines, savedata.", "kind": "release" },
+        { "date": "13 Oct", "title": "More of the library", "detail": "Dissidia's and Type-0's saves, sceFont fixes (Jeanne d'Arc, Final Fantasy III, Hammerin' Hero), God Eater 2 in English from downloaded modules, ATRAC contexts and sceVaudio, and CPU round 2: the VFPU's adder in NEON, blocks linked.", "kind": "work" },
+        { "date": "13-14 Oct", "title": "The test plan's CI lanes", "detail": "Android unit tests gate releases; the renderer's shaders recompiled and validated; the PSP as an ares system and the runner in CI; ARM64 lanes. #241's and #247's lanes were shown to fail when they should, on negative-control pull requests (#242, #248).", "kind": "work" },
+        { "date": "14 Oct", "title": "v2.3.0", "detail": "15 pull requests: the games above, CPU round 2, the CI lanes and a faster GE front end.", "kind": "release" }
+      ]
+    },
+    {
+      "name": "Speed with exactness",
+      "span": "14-16 Oct 2026",
+      "timeline": { "period": "14 to 16 Oct", "events": ["speed with every result identical", "v2.4.0"] },
+      "summary": "Every speedup had to leave every result identical, proved by matching end states and a check of the whole library. Polling loops were skipped only where proved exact, GPU draws were cut, CPU and GE rounds were measured on the RP6 itself, and games found in play were fixed. v2.4.0 shipped on 16 October.",
+      "milestones": [
+        { "date": "14 Oct", "title": "#252: polling loops skipped where proved exact", "detail": "The Need for Speeds and intro movies at full speed on the RP6.", "kind": "work" },
+        { "date": "14 Oct", "title": "#251, #254: Vulkan's depth and stencil", "detail": "The depth buffer kept as the PSP's memory: Hammerin' Hero's and Jeanne d'Arc's characters, Cars' race and MX vs. ATV Untamed's race back.", "kind": "work" },
+        { "date": "14 Oct", "title": "#255: the runner built for Android", "detail": "The headless runner's Android build, driven over adb: a commit measured on the RP6 itself, without the app, before it merges. Killzone's slower fast-forward was bisected with it: not a regression, but the device's conditions.", "kind": "work" },
+        { "date": "14 Oct", "title": "#253: GE round 3", "detail": "Far fewer GPU draws: Ghost of Sparta's menu from 3,684 to 346 a frame in Vulkan (fast), every output identical.", "kind": "work" },
+        { "date": "14 Oct", "title": "#256, #257: CPU round 3, LittleBigPlanet's install", "detail": "Hot Wheels' FPU compiled (4.2% less CPU time a frame on the RP6: 48.58 to 46.52 ms); files reopened with truncate keep their bytes, as on a PSP.", "kind": "work" },
+        { "date": "15 Oct", "title": "#259, #258, #260, #261", "detail": "Download content decrypted (EDATA); Kurohyou's characters at the screen's middle; MediEvil's and Lumines II's saves; Kingdom Hearts Birth by Sleep Final Mix's data install, the game-data install dialog built.", "kind": "work" },
+        { "date": "15 Oct", "title": "#262: GE round 4A", "detail": "#253's extra cycles on the RP6's Cortex-X3 won back (Super Monkey Ball: 7.6% less CPU time a frame).", "kind": "work" },
+        { "date": "15 Oct", "title": "{slow-games:Games averaging 59+ fps:last} of {slow-games:value_max} slow games at full speed", "detail": "At 1x on the RP6 with nightly-215681; v2.3.0 had {slow-games:Games averaging 59+ fps:1}.", "kind": "work" },
+        { "date": "16 Oct", "title": "#263: PGD files on the memory stick", "detail": "Gunhound EX and 7th Dragon 2020 play from the data #261 installs.", "kind": "work" },
+        { "date": "16 Oct", "title": "v2.4.0", "detail": "16 pull requests, released after an RP6 check of #263's nightly.", "kind": "release" }
+      ]
+    },
+    {
+      "name": "5x, and the real PSP's GE",
+      "span": "15-17 Oct 2026",
+      "timeline": { "period": "15 to 17 Oct", "events": ["5x on the RP6", "GE timing of games measured on a real PSP"] },
+      "summary": "At 5x internal resolution a few heavy games collapsed. The RP6 wasn't the limit (PPSSPP holds 60 there); how Phobos draws was. Then a PSP-1000 measured its own GE: real display lists take 4 to 12 times what Phobos's model charged, which is why Phobos's games drew 2.7 to 14 frames per screen refresh where a PSP draws 0.5 to 1.8.",
+      "milestones": [
+        { "date": "15-16 Oct", "title": "The whole library at 5x", "detail": "Overnight on the RP6 (Vulkan fast, 2400x1360): no crashes in 266, 232 averaged 59+ fps, and Chains of Olympus fell from 59.6 at 1x to 9.8.", "kind": "first" },
+        { "date": "16 Oct", "title": "The collapse traced", "detail": "Every heavy scene GPU-bound at 5x: a shader that writes depth stops the GPU skipping hidden pixels, and Activision Hits copied its depth 28 times a frame through a staging buffer.", "kind": "work" },
+        { "date": "16 Oct", "title": "PPSSPP at 5x on the same RP6", "detail": "{ppsspp-5x:PPSSPP 1.20.4 (Vulkan, Qualcomm's driver):min} to {ppsspp-5x:PPSSPP 1.20.4 (Vulkan, Qualcomm's driver):max} fps in all {ppsspp-5x:count} games tried, on Qualcomm's driver (Phobos's runs were on Turnip): a black-box comparison.", "kind": "work" },
+        { "date": "16 Oct", "title": "Games' own display lists timed on a real PSP", "detail": "A GE profiler plugin under ARK custom firmware on a PSP-1000 timed the lists of Chains of Olympus, Ghost of Sparta, Super Monkey Ball, Killzone and Activision Hits, then Army of Two: they took 4 to 12 times what Phobos's model charged. (Round 6 of psp-measure had timed its own test lists on the same PSP before 12 Oct.)", "kind": "first" },
+        { "date": "16-17 Oct", "title": "The GE timing plan", "detail": "Six pull requests, #266-#271, all drafts but round 8's #270: the profiler, the power driver's clocks, GE sync polling skipped, the measured model behind a “PSP GE Timing” switch (off by default), round 8 of psp-measure, and the display's frame-buffer latch.", "kind": "decision" },
+        { "date": "16 Oct", "title": "#265: the first 5x fixes", "detail": "Depth copied image to image where a start-up check proves it safe: with #265's final build, Activision Hits' copyright screen went from 2.7 to 19.4 fps at 5x on Turnip (15.4 to 247 at 1x).", "kind": "work" },
+        { "date": "16 Oct", "title": "#264: Colin McRae's dropped Cross", "detail": "The core's and the app's input paths cleared, and an opt-in input log for one capture on the RP6.", "kind": "work" },
+        { "date": "17 Oct", "title": "#272 (a draft, in review): the GE on a thread of its own", "detail": "Exact and Off by default. With it On, every settled scene and every long, randomized and stress run matched Off; the library check then found a Ghost of Sparta crawl, fixed the same day; the suite reached 595 groups.", "kind": "work" }
+      ]
+    }
+  ],
+  "firsts": [
+    { "date": "27 Jul 2026", "what": "Phobos runs on Android, the N64 on native Vulkan" },
+    { "date": "3 Oct", "what": "The PSP core's first code: the Allegrex interpreter" },
+    { "date": "3 Oct", "what": "First measurement on a real PSP: the VFPU, round 1" },
+    { "date": "3 Oct", "what": "First program run from start to end: hello world, on the host" },
+    { "date": "5 Oct", "what": "First run inside the app on the RP6, at 60 fps" },
+    { "date": "5 Oct", "what": "First retail title screens: Lumines, Street Fighter III 3rd Strike" },
+    { "date": "6 Oct", "what": "First 3D games in play: Liberty City Stories, SOCOM, Burnout Legends" },
+    { "date": "6 Oct", "what": "First retail games at full speed on the RP6: Peace Walker, Liberty City Stories, Lumines" },
+    { "date": "6 Oct", "what": "First run of the whole 266-game library, headless" },
+    { "date": "7 Oct", "what": "First frames drawn on the GPU through Vulkan" },
+    { "date": "11 Oct", "what": "First release with the PSP: v2.0.0" },
+    { "date": "15-16 Oct", "what": "First whole-library pass at 5x on the RP6" },
+    { "date": "16 Oct", "what": "First GE timing of games' own display lists on a real PSP" }
+  ],
+  "releases": [
+    { "tag": "v2.4.0", "date": "16 Oct 2026", "prs": "16", "highlights": "Polling loops, Vulkan depth and stencil, GE rounds 3 and 4A, CPU round 3, the runner on Android, LittleBigPlanet, Kurohyou, Kingdom Hearts' install, EDATA and PGD on the memory stick, new backdrops" },
+    { "tag": "v2.3.0", "date": "14 Oct 2026", "prs": "15", "highlights": "Savedata, sceFont, God Eater 2, ATRAC and sceVaudio, CPU round 2, the test plan's CI lanes, a faster GE front end" },
+    { "tag": "v2.2.0", "date": "13 Oct 2026", "prs": "6", "highlights": "The slow games' first rounds, Vulkan without waiting for its own pixels, Colin McRae's save, anti-aliased lines" },
+    { "tag": "v2.1.0", "date": "12 Oct 2026", "prs": "12", "highlights": "Fixes from playing v2.0.0 on the RP6, the system's dialogs in the app, round 6's pictures" },
+    { "tag": "v2.0.0", "date": "11 Oct 2026", "prs": "#26-#102, the PSP stack (#208), #210 and #211", "highlights": "The PSP core, Experimental: the stack, the headless runner and its report, disc titles; with September's app and core work" },
+    { "tag": "v1.1.0", "date": "28 Sep 2026", "prs": "#1-#25", "highlights": "The N64 speed push, the MangoHud-style HUD, 37 themes and the glass look, frontends that start games" },
+    { "tag": "v1.0.0", "date": "20 Aug 2026", "prs": "before pull requests", "highlights": "Neo Geo core support, the GPU driver manager, stable release signing, PC Engine and SuperGrafx working" }
+  ],
+  "nightlies": "Between releases, every push to master publishes a nightly pre-release: 32 nightly tags are dated 11-16 Oct 2026.",
+  "setbacks": [
+    { "when": "3-4 Oct", "what": "An automated reviewer answered “no bugs found” while its reasoning described bugs.", "after": "Every change now gets an independent, read-only review that reads the code itself." },
+    { "when": "4 Oct", "what": "The PSP switched itself off during measurement round 2.", "after": "The measuring program keeps the PSP awake and gives up on a test that stops it twice." },
+    { "when": "6-7 Oct", "what": "The first library reports' button presses never reached the games, and a re-run showed 22 games going from a menu to black.", "after": "The presses were fixed (part 37) and the black games traced (part 51 fixed three regressions); a game that looks worse is run again without presses before it's called a regression." },
+    { "when": "7 Oct", "what": "The exact compute renderer (parts 34-35) couldn't be expected to match hardware rasterization, least of all when upscaling.", "after": "A hardware renderer on Vulkan came first, the compute work kept on a branch; the software renderer stays the exact reference." },
+    { "when": "7 Oct", "what": "A stale object file in a test harness, and a comparison that restored state every frame, made early renderer scores wrong.", "after": "Both were fixed before any number was published; a deliberately broken renderer must now show as broken." },
+    { "when": "9 Oct", "what": "Round 4 froze the PSP at its curve counts.", "after": "The program's waits for the GE are timed, and a stall is reset (#191)." },
+    { "when": "12-17 Oct", "what": "Network outages and interrupted work sessions.", "after": "Plans and state are written down as work goes, so it resumes where it stopped." },
+    { "when": "14 Oct", "what": "Too many parallel jobs overloaded the build machine, and jobs died.", "after": "At most about three heavy jobs run at once, library checks included." },
+    { "when": "14 Oct", "what": "#253's per-draw shortcuts, a clear win on the Mac, cost 2-3% more cycles on the RP6's Cortex-X3.", "after": "Changes are measured on the device itself (#255's runner); #262 won the cycles back." },
+    { "when": "16 Oct", "what": "A cleanup deleted a temporary folder a library check needed, and its runs aborted; the same day a broadly matched process kill stopped unrelated test runs.", "after": "Scripts create their own temporary folders, and processes are stopped by their own IDs only." },
+    { "when": "16 Oct", "what": "A pull request (#265) was merged before its library check had finished: a stale completion marker, and missing results treated as clean.", "after": "The check came back clean that night (266 games in each Vulkan mode, no real difference), so the merge stands. Merges now wait for a fresh result, scripts fail closed, and nothing merges automatically." },
+    { "when": "16 Oct", "what": "An early reading of the PSP captures suggested a game ran overclocked.", "after": "The readings predated the game, which ran at 222/111 MHz as Phobos assumes; the docs were corrected." },
+    { "when": "17 Oct", "what": "A library-check wrapper lost DYLD_LIBRARY_PATH (macOS strips it when perl starts bash), so a “Vulkan fast” pass ran the software renderer and reported 199 false differences.", "after": "The wrapper exports it, and a smoke run must show the Vulkan renderer. The one real finding, Ghost of Sparta crawling with the GE thread on, was fixed." }
+  ],
+  "chart_sections": [
+    { "title": "Compatibility", "charts": ["library-runs"] },
+    { "title": "Speed", "charts": ["slow-games", "part24-full-speed", "part36-renderers", "cpu-throughput"] },
+    { "title": "Higher resolutions, and the real PSP's GE", "charts": ["rp6-5x-scenes", "ppsspp-5x", "ge-list-time"] },
+    { "title": "Pace", "charts": ["prs-per-day", "merges-per-week", "docs-parts", "test-groups"] }
+  ],
+  "charts": [
+    {
+      "id": "library-runs",
+      "kind": "bar",
+      "orientation": "vertical",
+      "stacked": true,
+      "title": "The 266-game library run: how far each game got in one minute",
+      "category_label": "Library run, 7 to 11 October 2026 (Pt: the docs/psp-core.md part that ran it)",
+      "value_label": "Games",
+      "value_max": 266,
+      "categories": ["7 Oct", "Run 1", "Pt 51", "Pt 55", "Pt 57", "Pt 58", "Pt 59", "Pt 62", "Pt 64", "Final", "Pt 70", "Pt 71", "Pt 72"],
+      "series": [
+        { "name": "Menu or gameplay", "tone": "success", "values": [141, 148, 175, 178, 180, 180, 187, 188, 189, 194, 194, 195, 197] },
+        { "name": "Movie", "tone": "info", "values": [35, 43, 63, 63, 63, 65, 71, 71, 71, 71, 71, 70, 68] },
+        { "name": "Stuck loading or timed out", "tone": "neutral", "values": [17, 11, 7, 6, 6, 6, 2, 1, 0, 0, 0, 0, 0] },
+        { "name": "Black or hung", "tone": "danger", "values": [73, 64, 21, 19, 17, 15, 6, 6, 6, 1, 1, 1, 1] }
+      ],
+      "alt": "Stacked bars for {library-runs:count} library runs from 7 to 11 October 2026: games at a menu or in gameplay rise from {library-runs:Menu or gameplay:first} to {library-runs:Menu or gameplay:last} of {library-runs:value_max}, and black or hung games fall from {library-runs:Black or hung:first} to {library-runs:Black or hung:last}.",
+      "source": "Source: docs/psp-compatibility.md. Each game runs headless for 3600 frames (a minute of PSP time), Start pressed at frame 120 and Cross at 1800, judged from four captures. Run 1 and parts 51-59: 9 Oct; parts 62 and 64: 10 Oct; the final run (v2.0.0) and parts 70-72: 11 Oct. The 7 Oct report's presses never reached the games (fixed in part 37)."
+    },
+    {
+      "id": "slow-games",
+      "kind": "bar",
+      "orientation": "horizontal",
+      "title": "The 22 slow games on the RP6: how many average full speed at 1x",
+      "category_label": "Build (day measured)",
+      "value_label": "Games of 22 averaging 59+ fps",
+      "value_max": 22,
+      "show_values": true,
+      "categories": ["v2.2.0 (13 Oct)", "v2.3.0 (14 Oct)", "nightly-215591 (14 Oct)", "nightly-215624 (15 Oct)", "nightly-215681 (15 Oct)"],
+      "series": [
+        { "name": "Games averaging 59+ fps", "tone": "success", "values": [7, 7, 15, 18, 18] }
+      ],
+      "alt": "Bars by build: {slow-games:Games averaging 59+ fps:0} of the {slow-games:value_max} slow games averaged full speed with v2.2.0 and {slow-games:Games averaging 59+ fps:1} with v2.3.0, {slow-games:Games averaging 59+ fps:2} with the 14 October nightly, and {slow-games:Games averaging 59+ fps:3} and {slow-games:Games averaging 59+ fps:4} with the two nightlies of 15 October.",
+      "source": "Source: runs on a Retroid Pocket 6 (Snapdragon 8 Gen 2), Vulkan (fast) at native resolution: mean fps after the first 18 s of 150 s runs with scripted presses, samples capped at 60. nightly-215624 ran on the device's default performance profile."
+    },
+    {
+      "id": "part24-full-speed",
+      "kind": "bar",
+      "orientation": "horizontal",
+      "title": "The first full speed on the RP6: the software renderer made fast (6 Oct 2026)",
+      "category_label": "Scene",
+      "value_label": "Frames a second in the app (capped at 60)",
+      "value_max": 64,
+      "decimals": 1,
+      "show_values": true,
+      "categories": ["Peace Walker, title", "Liberty City Stories, in the city", "Lumines, demo"],
+      "series": [
+        { "name": "Before part 24", "tone": "neutral", "values": [10.6, 16.6, 24.0] },
+        { "name": "After part 24", "tone": "success", "values": [60.0, 60.0, 59.9] }
+      ],
+      "references": [{ "value": 59.94, "label": "Full speed" }],
+      "alt": "Before and after part 24 on the RP6: Peace Walker's title from {part24-full-speed:Before part 24:0} to {part24-full-speed:After part 24:0} fps, Liberty City Stories from {part24-full-speed:Before part 24:1} to {part24-full-speed:After part 24:1}, Lumines' demo from {part24-full-speed:Before part 24:2} to {part24-full-speed:After part 24:2}.",
+      "source": "Source: docs/psp-core.md part 24: the app's performance overlay on a Retroid Pocket 6 after about 40 s, software renderer. The change: drawing threads and a texture cache, every pixel the same as before."
+    },
+    {
+      "id": "part36-renderers",
+      "kind": "bar",
+      "orientation": "horizontal",
+      "height": 430,
+      "title": "Software against the first Vulkan renderer on the RP6 (7 Oct 2026)",
+      "category_label": "Benchmark scene",
+      "value_label": "Frames a second, uncapped",
+      "decimals": 1,
+      "show_values": true,
+      "categories": ["Lumines", "Peace Walker, title", "Midnight Club 3, menu", "Midnight Club 3, race", "Liberty City Stories, park edge", "Liberty City Stories, woods"],
+      "series": [
+        { "name": "Software, 1 thread", "tone": "neutral", "values": [87.7, 65.7, 23.6, 21.2, 37.0, 38.5] },
+        { "name": "Software, 7 threads", "tone": "info", "values": [127.8, 224.0, 26.5, 24.2, 49.3, 54.5] },
+        { "name": "Vulkan, first version", "tone": "success", "values": [295.2, 393.4, 52.7, 37.5, 69.4, 94.4] }
+      ],
+      "alt": "Six scenes on the RP6: the first Vulkan renderer on one thread is faster than the software renderer on seven threads in every scene, for example Lumines {part36-renderers:Vulkan, first version:0} against {part36-renderers:Software, 7 threads:0} fps.",
+      "source": "Source: docs/psp-core.md part 36: frames a second from the same six scenes on the RP6's Adreno 740. Vulkan on one thread beat the seven-thread software renderer in all six; 28-65% of its pixels matched the software renderer's exactly, nearly all the rest within one or two levels."
+    },
+    {
+      "id": "cpu-throughput",
+      "kind": "bar",
+      "orientation": "vertical",
+      "title": "The Allegrex CPU on the host: interpreter against recompiler",
+      "category_label": "Execution engine (parts 2 and 4, 3 Oct 2026)",
+      "value_label": "Million PSP instructions a second",
+      "show_values": true,
+      "categories": ["Interpreter", "Recompiler", "Recompiler with page table"],
+      "series": [
+        { "name": "Mac (ARM64)", "tone": "info", "values": [150, 505, 1206] },
+        { "name": "Linux container (ARM64, 4 cores)", "tone": "neutral", "values": [135, 219, 1212] }
+      ],
+      "references": [{ "value": 333, "label": "PSP clock: 333 MHz", "label_at": "start" }],
+      "alt": "On a Mac the interpreter runs {cpu-throughput:Mac (ARM64):0} million PSP instructions a second, the recompiler {cpu-throughput:Mac (ARM64):1}, and the recompiler with its page table {cpu-throughput:Mac (ARM64):2}; in a Linux container {cpu-throughput:Linux container (ARM64, 4 cores):0}, {cpu-throughput:Linux container (ARM64, 4 cores):1} and {cpu-throughput:Linux container (ARM64, 4 cores):2}.",
+      "source": "Source: docs/psp-core.md, “The recompiler”: a benchmark loop of loads, stores and arithmetic, the test build at -O1. The page table lets compiled loads and stores reach RAM directly. Phobos counts one PSP cycle per instruction, at up to 333 MHz."
+    },
+    {
+      "id": "rp6-5x-scenes",
+      "kind": "bar",
+      "orientation": "horizontal",
+      "height": 470,
+      "title": "At 5x on the RP6: what the frame rate depends on (16 Oct 2026)",
+      "category_label": "Saved scene",
+      "value_label": "Frames a second, uncapped",
+      "decimals": 1,
+      "show_values": true,
+      "categories": ["Activision Hits, copyright screen", "God of War: Chains of Olympus", "God of War: Ghost of Sparta, menu", "Super Monkey Ball", "Army of Two", "Killzone"],
+      "series": [
+        { "name": "Before the changes", "tone": "neutral", "values": [2.7, 9.6, 8.9, 13.4, 14.9, 15.8] },
+        { "name": "Conservative depth", "tone": "info", "values": [2.7, 9.8, 8.9, 14.2, 14.9, 16.0] },
+        { "name": "Plus direct depth copies", "tone": "success", "values": [19.3, 10.1, 9.2, 15.8, 15.8, 16.0] },
+        { "name": "No depth writes in the shader (inexact test)", "tone": "warning", "values": [3.1, 19.1, 10.6, 15.3, 18.8, 17.1] }
+      ],
+      "alt": "Six heavy scenes at 5x on the RP6: direct depth copies lift Activision Hits' copyright screen from {rp6-5x-scenes:Before the changes:0} to {rp6-5x-scenes:Plus direct depth copies:0} fps, and dropping the shader's depth writes (inexact, a test only) doubles Chains of Olympus from {rp6-5x-scenes:Before the changes:1} to {rp6-5x-scenes:No depth writes in the shader (inexact test):1}.",
+      "source": "Source: the headless runner on a Retroid Pocket 6 from saved scenes, Turnip driver, 5x (2400x1360), 150 frames as fast as possible, best of two rounds: experimental builds of 16 Oct, before #265 merged a depth declaration and the direct depth copies (#265's final build ran the copyright screen at 19.4 fps)."
+    },
+    {
+      "id": "ppsspp-5x",
+      "kind": "bar",
+      "orientation": "horizontal",
+      "height": 520,
+      "title": "At 5x on the RP6: PPSSPP against Phobos in the heavy games (16 Oct 2026)",
+      "category_label": "Game",
+      "value_label": "Frames a second (capped at 60)",
+      "value_max": 64,
+      "decimals": 1,
+      "show_values": true,
+      "categories": ["Activision Hits Remixed", "God of War: Chains of Olympus", "God of War: Ghost of Sparta", "Killzone", "Army of Two", "Super Monkey Ball", "Fat Princess", "After Burner: Black Falcon", "Seen in Liberty City", "Battle vs. Chess", "Colin McRae 2005"],
+      "series": [
+        { "name": "PPSSPP 1.20.4 (Vulkan, Qualcomm's driver)", "tone": "info", "values": [59.9, 59.9, 59.9, 60.0, 59.9, 59.8, 59.8, 59.9, 60.0, 59.9, 59.9] },
+        { "name": "Phobos (Vulkan fast, Turnip, nightly-215681)", "tone": "warning", "values": [2.9, 9.8, 10.8, 24.0, 25.6, 26.3, 26.8, 39.1, 42.5, 45.2, 52.9] }
+      ],
+      "references": [{ "value": 59.94, "label": "Full speed" }],
+      "alt": "At 5x on the same RP6, PPSSPP on Qualcomm's driver runs all {ppsspp-5x:count} heavy games at {ppsspp-5x:PPSSPP 1.20.4 (Vulkan, Qualcomm's driver):min} to {ppsspp-5x:PPSSPP 1.20.4 (Vulkan, Qualcomm's driver):max} fps, while Phobos on Turnip runs them at {ppsspp-5x:Phobos (Vulkan fast, Turnip, nightly-215681):min} to {ppsspp-5x:Phobos (Vulkan fast, Turnip, nightly-215681):max} fps.",
+      "source": "Source: the same Retroid Pocket 6 at 5x, but not the same driver: PPSSPP on Qualcomm's, Phobos on Turnip (on Activision Hits' copyright screen at 5x, Phobos's master ran 2.7 fps on Turnip and 12.9 on Qualcomm's driver; docs/psp-core.md part 102). PPSSPP's speed counter read from screenshots (frame skipping off), Phobos from its overnight 5x library run; mean fps after the first 18 s of 120 s runs with the same presses, so similar scenes rather than identical ones."
+    },
+    {
+      "id": "ge-list-time",
+      "kind": "bar",
+      "orientation": "horizontal",
+      "height": 400,
+      "title": "GE time for one display list: a real PSP against Phobos's timing model",
+      "category_label": "Scene",
+      "value_label": "Milliseconds per display list",
+      "decimals": "auto",
+      "show_values": true,
+      "categories": ["Chains of Olympus, difficulty menu", "Ghost of Sparta, main menu", "Super Monkey Ball, Story Mode", "Killzone, gameplay", "Activision Hits, copyright screen"],
+      "series": [
+        { "name": "PSP-1000 (measured)", "tone": "info", "values": [27.6, 29.6, 23.6, 23.4, 4.46] },
+        { "name": "Phobos's GE model", "tone": "warning", "values": [6.24, 4.05, 1.98, 3.57, 0.59] }
+      ],
+      "alt": "For the same scenes' display lists, a PSP-1000's GE took {ge-list-time:PSP-1000 (measured):min} to {ge-list-time:PSP-1000 (measured):max} ms where Phobos's model charged {ge-list-time:Phobos's GE model:min} to {ge-list-time:Phobos's GE model:max} ms: 4 to 12 times less.",
+      "source": "Source: a PSP-1000 measured with a GE profiler plugin under ARK custom firmware (16 Oct 2026), against the time Phobos's model charges for the same scenes' lists (the headless runner's --ge-profile from saved states, in draft pull request #266)."
+    },
+    {
+      "id": "prs-per-day",
+      "kind": "bar",
+      "orientation": "vertical",
+      "stacked": true,
+      "title": "Pull requests opened per day",
+      "category_label": "Day (US Eastern time), 24 September to 17 October 2026",
+      "value_label": "Pull requests opened",
+      "categories": ["24", "25", "26", "27", "28", "29", "30", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17"],
+      "category_groups": [
+        { "label": "September", "first": 0, "last": 6 },
+        { "label": "October", "first": 7, "last": 23 }
+      ],
+      "series": [
+        { "name": "PSP core", "tone": "info", "values": [0, 0, 0, 0, 0, 0, 0, 0, 0, 14, 20, 8, 11, 7, 18, 11, 6, 15, 9, 14, 7, 4, 6, 2] },
+        { "name": "Everything else", "tone": "neutral", "values": [2, 5, 4, 6, 9, 13, 23, 7, 13, 19, 0, 0, 0, 0, 0, 0, 0, 4, 1, 8, 0, 0, 1, 1] }
+      ],
+      "alt": "Pull requests opened each day from 24 September to 17 October 2026: other work until 3 October, then mostly the PSP core, with up to {prs-per-day:PSP core:max} PSP pull requests a day.",
+      "source": "Source: GitHub, all 268 pull requests (#1-#273) opened up to 17 Oct 2026, 2:38 PM. PSP core: the title names the PSP or one of its parts (VFPU, Allegrex, GE, the runner, PGD, NPDRM). From 4 to 10 Oct every new pull request was a PSP one: the core's parts, stacked to merge as one."
+    },
+    {
+      "id": "merges-per-week",
+      "kind": "bar",
+      "orientation": "vertical",
+      "stacked": true,
+      "show_totals": true,
+      "title": "Pull requests merged per week",
+      "category_label": "Week starting Monday (the last runs to 17 October 2026)",
+      "value_label": "Pull requests merged",
+      "categories": ["21 Sep", "28 Sep", "5 Oct", "12 Oct"],
+      "series": [
+        { "name": "PSP core", "tone": "info", "values": [0, 0, 13, 34] },
+        { "name": "Everything else", "tone": "neutral", "values": [17, 80, 3, 8] }
+      ],
+      "alt": "Pull requests merged each week: {merges-per-week:total:0}, {merges-per-week:total:1}, {merges-per-week:total:2} and {merges-per-week:total:3}, the PSP core's from the week of 5 October on.",
+      "source": "Source: GitHub, the 155 merged pull requests up to 17 Oct 2026. The PSP core's stack of about 100 pull requests reached master as one merge (#208, 11 Oct); four of them had been merged into their stack bases on 7-8 Oct."
+    },
+    {
+      "id": "docs-parts",
+      "kind": "line",
+      "title": "The written record: parts in docs/psp-core.md",
+      "category_label": "Day in October 2026 (the day's last commit to the file)",
+      "value_label": "Parts documented",
+      "show_values": true,
+      "categories": ["3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"],
+      "series": [
+        { "name": "Parts documented", "tone": "info", "values": [7, 10, 18, 27, 32, 44, 51, 60, 66, 72, 81, 88, 93, 94] }
+      ],
+      "alt": "“## Part” sections in docs/psp-core.md per day in October 2026, rising from {docs-parts:Parts documented:first} on 3 October to {docs-parts:Parts documented:last} on 16 October.",
+      "source": "Source: the file's git history on master (373 commits). It grew from 486 lines on 3 Oct to 16,056 on 16 Oct. The count is of “## Part” headings, which is why it stops short of part 102: parts 2 and 4 are written up under “The recompiler”, and some numbers belong to work kept on other branches, such as the compute renderer's parts 34 and 35."
+    },
+    {
+      "id": "test-groups",
+      "kind": "line",
+      "title": "Host tests: groups in the PSP system suite (tests/psp)",
+      "category_label": "Part whose checks reported the count (24-42: 6-8 Oct; 51-72: 9-11 Oct; 78-102: 12-16 Oct)",
+      "value_label": "Test groups",
+      "show_values": true,
+      "categories": ["24", "29", "32", "37", "42", "51", "64", "72", "78", "83", "94", "95", "98", "99", "101", "102"],
+      "series": [
+        { "name": "Test groups", "tone": "success", "values": [226, 281, 302, 312, 321, 362, 417, 438, 468, 489, 528, 543, 550, 558, 572, 576] }
+      ],
+      "alt": "Test groups in the PSP system suite as parts 24 to 102 reported them on master, from {test-groups:Test groups:first} to {test-groups:Test groups:last}.",
+      "source": "Source: the checks recorded in each part of docs/psp-core.md, on master; where a part ran several trees, the largest count. The GE thread's draft pull request (#272, part 109) reports 595."
+    }
+  ],
+  "sources": "Drawn from this repository's git history and docs (docs/psp-core.md, docs/psp-compatibility.md, tools/psp-measure/README.md, README.md), its GitHub releases and pull requests, and the project's measurement logs from a Retroid Pocket 6 and a PSP-1000. Dates are US Eastern (UTC-4)."
+}
