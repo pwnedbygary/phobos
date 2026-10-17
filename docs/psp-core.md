@@ -15958,3 +15958,107 @@ charged. The CPU's part, a loop's time not blocked in a sync or a vblank wait:
   test's; `ref/`, the references read; `phase2/`: `profile.sh` and `run_all.sh`, the scenes' profiles, `out/`, their
   captures, tables and JSON, `summary.py`; `psp/`, the owner's captures as they came, their tables and JSON;
   `compare.py`, the two side by side; `offcost/`, the Off cost's builds and runs). Nothing was run on the RP6.
+
+## Part 106: the GE's time as the owner's PSP took it — part 76's model behind the option "GE Timing", off by default; the first comparison with the captures; a SIGNAL's interrupt at its time
+
+On branch `cursor/psp-ge-time-2b67`, stacked on #266 (`cursor/psp-ge-profile-2b67`, part 103), from master
+`a8d5640f5`. The design the owner approved: the PSP's timing behind an option, off by default and switched in the app;
+on by default only once every captured scene is within 15%, none more than 15% too slow. Sources: the owner's round 6
+(part 76) and captures (part 103); uOFW's reading of the GE driver. No PPSSPP or JPCSP. Save states: layout 33.
+
+### The model
+
+- Part 76's fit of round 6's 906 timed lists (`GE::Cost`, ge.hpp), in the bus's clocks. The front end: a list's word
+  2.28, a vertex's byte 0.515, indexed vertices, lights, skinning weights, cuts at the near plane, patches. The back
+  end: a primitive 7.03, a row 1.65 at least, a pixel of a wide primitive 0.535 into a 32-bit frame buffer and 0.34
+  into a 16-bit one, 0.266 more for the depth test; a texture's bytes, 0.368 swizzled from RAM and 1.38 not (2.4 and
+  13.2 for one over 64 KiB drawn more than 128 texels across), 1.93 from VRAM, with an 8 KiB cache that holds a small
+  texture whole (charged once); palette loads 0.28 a byte; block transfers 0.35 to 0.92 a byte by where from and to.
+- A run of the GE (to a stall address, a SIGNAL or a FINISH) takes the longer of its two ends, which go on at once; a
+  list starting 2170 more; the driver's own CPU time in the call, `sceGeListEnQueue` 5200 of the CPU's cycles and
+  `sceGeListUpdateStallAddr` 510 (`geDriven()`). Pixels are still drawn at once: the time decides when the program
+  hears of them.
+
+### The option
+
+- "GE Timing" (`gePspTiming`): "Fast", the default, is Sony's peaks as before, bit for bit (`GE::owePrimitive()`
+  keeps both sets of counts, `geTime()` charges the peaks as master does); "PSP" is the model, in doubles.
+- The app: "PSP GE Timing" in Settings → Emulation and in the in-game PSP menu (Restart to Apply;
+  `PspStartSettings.geTiming`), taken as a game starts. The runner: `--ge-timing psp|fast`, in its report; a GE profile
+  made with `psp` carries flag 16, and `geprof.py` says so.
+- Save states: layout 33 keeps the GE's cached texture (13 bytes) and whether a SIGNAL waits for its time (1 byte,
+  below); older layouts load with neither. Master refuses a layout-33 state at its header check, before anything of
+  the machine changes: the game runs on.
+
+### A SIGNAL at its time
+
+- A SIGNAL is the front end's: round 6's time-signals (16 timed runs a size) had its callback 17 to 84 microseconds
+  after queueing with 1, 4 or 16 sprites over the whole 256x256 target before it, their drawing 0.4 to 10 ms (part
+  76's evidence that the two ends go on at once). But Army of Two (part 103's captures ULUS10472-1 and -2, at
+  222/111), whose lists end with a SIGNAL whose callback sets the frame buffer for the next vblank, had it 0.27 ms
+  before the list's FINISH, 30 ms after queueing (its callback ran 254 microseconds; the FINISH, held off meanwhile,
+  came 15 after it): over a long list the front end is held back, no further ahead than what it may hand on.
+- Phobos took a SIGNAL's interrupt as soon as its GE met it, with the PSP's timing 31 ms early in Army of Two. Now,
+  with the PSP's timing, the GE waits at a SIGNAL till its front end would have got there: its words and vertices
+  done, and the back end with no more left than the last primitives (or transfers) it was handed, 16 of them
+  (`GE::Cost::Queue`, `GE::queue()`; `geReachAt` from `geTime()`; `geSignalDue` in `geRun()` and `geInterrupt()`;
+  both saved in layout 33). Round 6's lists keep their SIGNAL within a tenth of a millisecond (16 sprites fit); Army
+  of Two's comes near its FINISH. Sixteen is round 6's least; round 8's time-signals2 (part 107) measures how far
+  ahead the front end gets. "Fast" goes past a SIGNAL at once as before.
+- Alone it changes nothing in the seven captured scenes, Army of Two's pacing included: there the game asks
+  `sceDisplayGetFrameBuf` which buffer is shown, and waits for the vblank only while its flip isn't yet, and Phobos's
+  `sceDisplaySetFrameBuf` switches at once. With the display switching at the next vblank as a PSP's does (its own
+  pull request from master, part 108), Army of Two flips twice and waits for the vblank once a frame, as on the PSP:
+  30 fps while the GE takes up to about 32.6 ms a frame, 20 fps above.
+
+### The first comparison
+
+The runner (Software, 900 frames from each scene's state, profiled from frame 301) beside the captures of part 103;
+a list's GE time from when the GE could start it to its FINISH.
+
+| Scene | PSP | PSP timing | Against the PSP | Sony's peaks |
+| --- | --- | --- | --- | --- |
+| Chains of Olympus, a list | 27.60 ms | 30.67 ms | +11% | 6.24 ms |
+| Ghost of Sparta, a list | 29.62 ms | 30.45 ms | +3% | 4.05 ms |
+| Super Monkey Ball, a list | 23.64 ms | 9.62 ms | −59% | 1.98 ms |
+| Killzone, its scene list | 17.2 to 23.4 ms | 48.2 ms | +106 to +180% | 3.57 ms |
+| Killzone, its full-screen pass | 1.72 ms | 9.5 ms | +450% | 0.29 ms |
+| Activision Hits, menu, a list | 5.41 ms | 12.87 ms | +138% | — |
+| Activision Hits, copyright screen | 4.46 ms | 4.07 ms | −9% | 0.59 ms |
+
+- Within 15%: Chains of Olympus, Ghost of Sparta and Activision Hits' copyright screen (222/111 on both: the boot
+  capture's 333/166 was read before the game's program had started, part 104). Too fast: Super Monkey Ball. Too slow:
+  Killzone and Activision Hits' menu. Part 107 has each scene's terms: VRAM textures read in strips carry the misses,
+  and round 8 measures them.
+- Army of Two has no capture of the same moment: 33.25 ms a frame in PSP timing, where the captures show 23 to 35.
+
+### Tests
+
+- measured6's "measured round 6 GE time" and "measured round 6 driver statuses": the model against round 6's timed
+  lists and the driver's statuses, round 6's program run with the PSP's timing (measure.cpp's `round6Files()`).
+- "ge time, the PSP's": a list's start, the driver's own time, the longer of the ends, stall updates, PAUSE, SYNC, a
+  list queued at the head, `sceGeBreak` at a FINISH, states; and a SIGNAL waiting for its time, a state keeping it,
+  "Fast" going past it at once.
+- The layout tests (states.cpp, font.cpp) with layout 33's 14 bytes; master's tests otherwise cover "Fast".
+
+### Checks
+
+- `tests/psp/run-tests.sh` (sanitized; the address sanitizer's container-overflow check off, as part 101 ran it):
+  577 groups, 0 failures.
+- "Fast" against master at #269's base (`a8d5640f5`): the bench runners on 27 scenes, Software and Vulkan-fast, 100
+  frames from each scene's state: all 54 the same, every frame's VRAM and picture and the RAM after; each state 22
+  bytes longer (layout 33's).
+- States of layouts 17, 25, 26, 31 and 32 (wo, a2-gp, gta-cw, k1, ahr-legal) load and run on; a layout-33 state loads
+  back; master's runner refuses it ("the state can't be loaded", exit 1).
+
+### Not yet
+
+- Fixed-point charges in place of doubles, the design's step for determinism, before the default could change.
+- Round 8's fit (part 107), for the terms the comparison shows missing; the 15% gate.
+
+### Scratch
+
+`~/phobos-work/scratch/psp-ge-profile/phase3/`: `run_p76.sh` and `out/`, the profiles; `comparison.md`; `terms.patch`
+and `out/terms-*.log`, each scene's terms; `offcheck.sh` and `offcheck/`, "Fast" against master; `statecheck.sh`;
+`sigtest.sh`, `signal-patch.py`, `calltrace-patch.py`, `latch-patch.py` and `a2trace.sh`, Army of Two's SIGNAL and
+frame buffer. Nothing was run on the RP6.

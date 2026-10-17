@@ -272,9 +272,14 @@ auto measuredTime() -> void {
         CHECK(there[n].middle < there[n].returned, true);
         CHECK(here[n].middle <= here[n].returned && here[n].middle + 1 >= here[n].returned, true);
       }
-      //the SIGNAL's callback, before the list's finish, here as on the PSP
-      if(here[n].times.size() == 16 * 3) {
-        for(u32 run = 0; run < 16; run++) CHECK(here[n].times[run * 3 + 2] <= here[n].times[run * 3], true);
+      //the SIGNAL's callback, before the list's finish, here as on the PSP; and as there, once the GE's front end is
+      //there, within a tenth of a millisecond of queueing however much drawing is ahead of it (the PSP's 17 to 84
+      //microseconds, its finish up to 10 ms)
+      if(here[n].times.size() == 16 * 3 && there[n].times.size() == 16 * 3) {
+        for(u32 run = 0; run < 16; run++) {
+          CHECK(here[n].times[run * 3 + 2] <= here[n].times[run * 3], true);
+          CHECK(here[n].times[run * 3 + 2] < 100 && there[n].times[run * 3 + 2] < 100, true);
+        }
       }
     }
   }

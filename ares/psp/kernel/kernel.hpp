@@ -1107,6 +1107,9 @@ struct Kernel {
   bool gePspTiming = false; //the GE takes the time a PSP's took, not Sony's peaks (option "GE Timing", geTime());
                             //power() leaves it
   bool geFinishDue = false; //the list it runs met its FINISH: its interrupt is taken from geDoneAt on (geInterrupt())
+  u64 geReachAt = 0;        //when (cycles) a PSP's GE's front end would have got through what it was last given
+  bool geSignalDue = false; //with the PSP's timing, the list met a SIGNAL, its interrupt taken from geReachAt on, the
+                            //GE waiting there (geRun())
   auto geIndex(u32 id) const -> s32;
   auto geTime(u64 commands) -> void;
   auto geOwe(f64 clocks) -> void;

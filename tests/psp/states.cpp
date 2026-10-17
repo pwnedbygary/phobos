@@ -1626,8 +1626,8 @@ static auto idsRunOut() -> void {
   CHECK(n.kernel.nextUID, Kernel::LastUID + 1);
 }
 
-//States of the layouts before this one load: 32's (no texture in the GE's cache), 31's (nor an emptied file's
-//length), 26's (nor sceVaudio), 25's (nor the
+//States of the layouts before this one load: 32's (no texture in the GE's cache, no SIGNAL met), 31's (nor an
+//emptied file's length), 26's (nor sceVaudio), 25's (nor the
 //dialog's error and deleted save), 24's (nor any file's PGD decryption), 23's (nor GE time: when the GE will
 //have drawn what it was given, and whether its list's FINISH waits), 22's (nor any file's place in the order files
 //were opened), 21's (nor part 58's sceJpeg, sceHprm and low-level ATRAC fields, with files' count still kept and no
@@ -1718,13 +1718,13 @@ static auto olderLayouts() -> void {
               && jpeg < files && files < asyncData && asyncData < opened && opened + 8 <= pgd && pgd < pgdEnd
               && pgdEnd == truncation && truncation < truncationEnd && truncationEnd <= workingDirectory
               && workingDirectory < geDone && geFinish == geDone + 8 && cached == geFinish + 1
-              && cached + 13 <= state.size();
+              && cached + 22 <= state.size();
   CHECK(ordered, true);
   if(!ordered) return;
-  //Layouts before 33 have no texture in the GE's cache (13 bytes right after the GE's time, after everything else
-  //changed here, so taken out of each older state first of all)
+  //Layouts before 33 have no texture in the GE's cache, front end's time nor SIGNAL met (22 bytes right after the
+  //GE's time, after everything else changed here, so taken out of each older state first of all)
   auto layout32 = state;
-  layout32.erase(layout32.begin() + cached, layout32.begin() + cached + 13);
+  layout32.erase(layout32.begin() + cached, layout32.begin() + cached + 22);
   //Layouts before 32 have no emptied file's lengths (the file's last fields, after everything but the working folder
   //and the GE's time, so taken out of each older state next, those after it moving back as much)
   u32 cut = truncationEnd - truncation;
@@ -1821,7 +1821,8 @@ static auto olderLayouts() -> void {
   m.kernel.audio.vaudio.reserved = false;
   CHECK(places[0] < places[1] && places[1] < geAt, true);
   if(!(places[0] < places[1] && places[1] < geAt)) return;
-  twoFiles.erase(twoFiles.begin() + geAt, twoFiles.begin() + geAt + 9 + 13);  //(the GE's time, its cached texture)
+  //(the GE's time; its cached texture, its front end's time and a SIGNAL met)
+  twoFiles.erase(twoFiles.begin() + geAt, twoFiles.begin() + geAt + 9 + 22);
   for(u32 at : {places[1], places[0]}) {  //each file's place, and its PGD decryption and lengths after it
     twoFiles.erase(twoFiles.begin() + at, twoFiles.begin() + at + (truncationEnd - opened));
   }

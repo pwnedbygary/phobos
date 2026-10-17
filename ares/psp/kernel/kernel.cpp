@@ -998,8 +998,9 @@ auto Kernel::power() -> void {
   geFinishing = -1;
   geLeft = GeBudget;
   geCommands = 0;
-  geDoneAt = 0;
+  geDoneAt = geReachAt = 0;
   geFinishDue = false;
+  geSignalDue = false;
   startTime = u64(std::time(nullptr)) * 1'000'000;
   trampoline();
 }
@@ -1264,7 +1265,7 @@ auto Kernel::dispatchImport(u32 code, bool& quiet) -> bool {
   calm = false;
   if(ioTrace && !std::strcmp(function->library, "IoFileMgrForUser")) traceIo(*function);
   else (this->*function->handler)();
-  bool taken = geFinishDue && geInterrupt();  //(a display list's FINISH, met by the GE in it)
+  bool taken = (geFinishDue || geSignalDue) && geInterrupt();  //(a display list's FINISH, or SIGNAL, met by the GE)
   //what the function set off (a display list finishing) may call into the program now
   bool started = !interrupting && interruptsEnabled && (vblankPending || !calls.empty()) && startCall();
   quiet = (looks || calm) && !taken && !started;

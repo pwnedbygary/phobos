@@ -756,6 +756,11 @@ struct GE {
     static constexpr f64 PaletteByte = 0.28;                    //CLUT_LOAD's
     static constexpr f64 TransferRow = 24.5;                    //a block transfer's row
     static constexpr f64 TransferByte[2][2] = {{0.917, 0.662}, {0.353, 0.382}};  //from RAM or VRAM, to RAM or VRAM
+    //How far the front end gets ahead of the back end: the primitives (or transfers) it has handed on that the back
+    //end hasn't started, at most. Round 6's time-signals had the SIGNAL's callback after 16 primitives over the
+    //whole 256x256 target within 77 microseconds of queueing, their drawing 5 ms; Army of Two's last SIGNAL came 0.27
+    //ms before its list's FINISH, 30 ms in. Unmeasured beyond (round 8's time-signals2 measures it).
+    static constexpr u32 Queue = 16;
   };
   //The work since the driver last looked (Kernel::geTime()), counted as each part is met, whichever renderer then
   //draws it, so the time is the same for all of them (but for a renderer transforming 3D triangles itself, whose
@@ -763,7 +768,15 @@ struct GE {
   struct Owed {
     f64 front = 0, back = 0;  //clocks
     u64 pixels = 0;           //(those drawn, inside the scissor rectangle: whether a patch drew any, patch())
+    f64 last[Cost::Queue] = {};  //the back end's clocks for each of the last primitives (or transfers) met, a ring,
+    u32 next = 0;                //where the next goes,
+    f64 queued = 0;              //and their sum: what the back end may have left as the front end meets what follows
   } owed;
+  auto queue(f64 clocks) -> void {
+    owed.queued += clocks - owed.last[owed.next];
+    owed.last[owed.next] = clocks;
+    owed.next = (owed.next + 1) % Cost::Queue;
+  }
   //And what Sony's peak rates count of the same (the GE timing "Fast", the default): the primitives set up (a
   //triangle cut at the near plane, its pieces) and their pixels inside the scissor rectangle.
   u64 owedPixels = 0, owedPrimitives = 0;

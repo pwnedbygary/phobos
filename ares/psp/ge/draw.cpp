@@ -218,6 +218,11 @@ static auto pixelsAcross(const s64 (&at)[3], s32 first, s32 last) -> s64 {
 //68-texel strips of a 512x512 texture, took the GE longer than they last, and the movie stalled; part 76).
 auto GE::owePrimitive(const Look& look, u64 pixels, s64 rows, s64 columns, f64 texels, f64 across) -> void {
   owedPixels += pixels, owedPrimitives++;  //(what Sony's peaks count: the GE timing "Fast", Kernel::geTime())
+  struct Queued {  //its back end's clocks, into the front end's queue (Cost::Queue) however this returns
+    GE& ge;
+    f64 before;
+    ~Queued() { ge.queue(ge.owed.back - before); }
+  } queued{*this, owed.back};
   auto& p = look.pixel;
   owed.back += Cost::Primitive;
   owed.pixels += pixels;
@@ -257,7 +262,9 @@ auto GE::oweTransfer(u32 width, u32 height, u32 bytes, u32 source, u32 destinati
     return physical >= Memory::VRAMBase && physical < Memory::VRAMBase + Memory::VRAMWindow;
   };
   f64 perByte = Cost::TransferByte[inVRAM(source)][inVRAM(destination)];
-  owed.back += height * Cost::TransferRow + f64(width) * height * bytes * perByte;
+  f64 clocks = height * Cost::TransferRow + f64(width) * height * bytes * perByte;
+  owed.back += clocks;
+  queue(clocks);
 }
 
 //The settings a primitive is drawn with: these pipeline and texture settings, with the commands' texture function.

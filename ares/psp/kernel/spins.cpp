@@ -157,8 +157,8 @@ auto Kernel::spinSkip() -> void {
   u64 room = cpu.runLimit > counted + 1 ? cpu.runLimit - counted - 1 : 0;
   if(room / spin.period <= SpinMargin) return;
   u64 turns = room / spin.period - SpinMargin, skipped = turns * spin.period;
-  //a list's FINISH taken at the first system call once it's due: none comes by within the turns skipped
-  if(geFinishDue && geDoneAt <= cycles + skipped) return;
+  //a list's FINISH (or SIGNAL) taken at the first system call once it's due: none comes by within the turns skipped
+  if((geFinishDue && geDoneAt <= cycles + skipped) || (geSignalDue && geReachAt <= cycles + skipped)) return;
   SpinShadow shadow{*this, memory};
   if(!spinProve(shadow) || shadow.period != spin.period) {
     spin.wait = std::min(spin.wait * 2 + SpinTurns, SpinWaitMost);
