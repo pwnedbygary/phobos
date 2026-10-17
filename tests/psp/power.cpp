@@ -68,7 +68,8 @@ static auto powerCallbacks() -> void {
 
 //The clocks: 222 MHz (PLL 222, bus 111) at first; set to 333 the PLL goes to 333 and the bus to half of it, the
 //calling thread waiting 16.6 ms meanwhile (between 266 and 333: 150 ms otherwise), and the getters read them back,
-//the float ones in f0. Values out of range refused.
+//the float ones in f0. Values out of range refused, as uOFW's reading of the power service checks them: a bus above
+//half the PLL too, and asked for alone, one above half the PLL's speed (the bus staying at that half).
 static auto powerClocks() -> void {
   KernelMachine m;
   CHECK(m.call("scePowerGetCpuClockFrequencyInt", {}), 222);
@@ -85,10 +86,23 @@ static auto powerClocks() -> void {
   CHECK(m.call("scePowerSetClockFrequency", {333, 0, 166}), Kernel::ErrorInvalidValue);
   CHECK(m.call("scePowerSetClockFrequency", {333, 333, 167}), Kernel::ErrorInvalidValue);
   CHECK(m.call("scePowerSetClockFrequency", {334, 333, 166}), Kernel::ErrorInvalidValue);
+  CHECK(m.call("scePowerSetClockFrequency", {222, 222, 166}), Kernel::ErrorInvalidValue);  //the bus above half the PLL
+  CHECK(m.call("scePowerGetPllClockFrequencyInt", {}), 333);  //(as it was)
   CHECK(m.call("scePowerSetCpuClockFrequency", {300}), 0);
   CHECK(m.call("scePowerGetCpuClockFrequencyInt", {}), 300);
   CHECK(m.call("scePowerSetCpuClockFrequency", {334}), Kernel::ErrorInvalidValue);
+  //the bus asked for alone: up to half the PLL's speed, which it stays at
+  CHECK(m.call("scePowerSetBusClockFrequency", {112}), 0);
+  CHECK(m.call("scePowerGetBusClockFrequencyInt", {}), 166);
+  CHECK(m.call("scePowerSetBusClockFrequency", {167}), Kernel::ErrorInvalidValue);
+  CHECK(m.call("scePowerSetClockFrequency", {222, 222, 111}), 0);
   CHECK(m.call("scePowerSetBusClockFrequency", {112}), Kernel::ErrorInvalidValue);
+  CHECK(m.call("scePowerSetBusClockFrequency", {111}), 0);
+  //Activision Hits Remixed's start: the CPU asked for 333 and the bus 166 at a PLL of 222, both refused
+  CHECK(m.call("scePowerSetCpuClockFrequency", {333}), Kernel::ErrorInvalidValue);
+  CHECK(m.call("scePowerSetBusClockFrequency", {166}), Kernel::ErrorInvalidValue);
+  CHECK(m.call("scePowerGetCpuClockFrequencyInt", {}), 222);
+  CHECK(m.call("scePowerGetBusClockFrequencyInt", {}), 111);
   for(bool recompile : {false, true}) {
     KernelMachine n;
     Assembler main{n, 0x0880'1000};

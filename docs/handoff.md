@@ -35,6 +35,23 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP power: Activision Hits Remixed's clocks — the bus asked for alone up to half the PLL, a bus above half the PLL refused, and the owner's captures' 333/166, read before the game ran — 2026-10-16
+
+Branch `cursor/psp-power-clock-2b67` (from master `a8d5640f5`, masters `5442acb8b` and `03eca2a69` merged in: #264,
+#265, #274); docs/psp-core.md, part 104.
+- **The question** (part 103): the owner's captures of Activision Hits' boot read 333/166, Phobos 222/111.
+- **The game** asks, as it starts, for a CPU of 333 and a bus of 166 with the separate setters, and nothing else in
+  1200 frames (traced). uOFW's power service refuses both at a game's startup PLL of 222 (set by its Init callback
+  before the game's program starts), as Phobos did. The captures' 333/166 are the reboot's clocks, read while Init
+  was still loading the program (the plugin counts from its own start, before the program loads; the game's first GE
+  call came 4.0 and 4.23 s in); boot1's capture read 222/111 in the copyright screen, whose lists took the same time
+  throughout. ARK with its clock settings at Auto, as the owner had them, passes the setters through untouched (its
+  clock code read). Phobos's 222/111 is the owner's PSP's.
+- **The change** (power.cpp): `scePowerSetBusClockFrequency` up to half the PLL (was: nothing over 111);
+  `scePowerSetClockFrequency` refuses a bus above half the PLL. "power clocks" tests both and the game's start.
+- **For the GE timing work**: the copyright screen is at 222/111 on both, compared unscaled; ARK's clock settings
+  stay at Auto for the owner's captures.
+
 ## README: a development progress section, generated from docs/progress/data.json — 2026-10-17
 
 Branch `cursor/readme-progress-2b67`, on master `5442acb8b` (part 102, #265); PR #274. Documentation and the script
