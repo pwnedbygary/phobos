@@ -221,6 +221,57 @@ class Decoder(unittest.TestCase):
         self.assertEqual((b.ended_by, b.start, b.end), ("FINISH", 3020, 5000))
         self.assertFalse(capture.warnings)
 
+    def test_finish_below_its_list(self):
+        # Killzone's frame pair (the owner's UCUS98646-1): the first list's FINISH comes from commands below its start,
+        # inside the second list's 4 MB, and the second's from below its own start. The GE runs them in queue order.
+        game = Game()
+        game.vblank(0, 1)
+        game.call(g.ENQUEUE, 37891, 37919, 0x08EE1EF0, 0, 0, 0x35CC5206)
+        game.call(g.ENQUEUE, 37926, 37933, 0x08E8A850, 0, 0, 0x35CC5246, ge=g.GE_DRAWING)
+        game.records.append((g.FINISH, 0, 0, game.at(57703), game.at(57725), g.GE_DRAWING, 0, 2, 0x08EB3FBC, 0))
+        game.records.append((g.FINISH, 0, 0, game.at(59442), game.at(59461), g.GE_DRAWING, 0, 0xA640, 0x08E8A780, 0))
+        capture, lists, rows = self.decode(game, 70000)
+        first, second = lists
+        self.assertEqual((first.ended_by, first.start, first.end), ("FINISH", 37919, 57703))
+        self.assertEqual((second.ended_by, second.start, second.end), ("FINISH", 57725, 59442))
+        self.assertEqual(second.ge_us, 1717)
+        self.assertFalse(capture.warnings)
+
+    def test_lists_ahead_at_the_start(self):
+        # Killzone at the start of Phobos's profile: two lists queued before the capture end first, their FINISHes
+        # inside the 4 MB of our second list (an address match ends it); only two ahead puts each FINISH in its list.
+        game = Game()
+        game.vblank(0, 1)
+        game.call(g.LIST_SYNC, 100, 101, 0x1234, 1, result=2, ge=g.GE_DRAWING)  # the GE busy at the start
+        frames = [(1500, 0x08ECDEF0, 0x08E76850), (3500, 0x08E9BEE0, 0x08E76430)]
+        for t, scene, short in frames:
+            game.enqueue(t, scene, ge=g.GE_DRAWING)
+            game.enqueue(t + 20, short, ge=g.GE_DRAWING)
+        game.finish(2000, 0, 0x08E9F608)  # the lists from before the capture
+        game.finish(2300, 0, 0x08E76780)
+        for t, (_, scene, short) in zip((5000, 8000), frames):
+            game.finish(t, 0, scene + 0x3718)
+            game.finish(t + 300, 0, short + 0x170)
+        capture, lists, rows = self.decode(game, P)
+        self.assertEqual([(gl.ended_by, gl.end) for gl in lists],
+                         [("FINISH", 5000), ("FINISH", 5300), ("FINISH", 8000), ("FINISH", 8300)])
+        self.assertEqual(lists[0].start, 2320)
+        self.assertEqual(capture.warnings, ["2 FINISH callbacks ended lists queued before the capture"])
+        self.assertEqual(g.lists_ahead(capture), 2)
+
+    def test_list_run_inside_its_enqueue(self):
+        # Phobos can run a list whole inside its enqueue call: its FINISH comes the microsecond the call returns
+        # (Activision Hits' last copyright list), and is its own; the next list's FINISH stays the next list's.
+        game = Game()
+        game.vblank(0, 1)
+        game.call(g.ENQUEUE, 1000, 1000, LIST, 0, 0, 0x08A00040)
+        game.records.append((g.FINISH, 0, 0, game.at(1000), game.at(1000), g.GE_IDLE, 0, 0, LIST + 0x100, 0))
+        game.enqueue(5000, LIST + 0x10000)
+        game.finish(7000, 0, LIST + 0x10100)
+        capture, lists, rows = self.decode(game, P)
+        self.assertEqual([(gl.ended_by, gl.end) for gl in lists], [("FINISH", 1000), ("FINISH", 7000)])
+        self.assertFalse(capture.warnings)
+
     def test_list_without_callback(self):
         game = Game()
         game.vblank(0, 1)
@@ -358,14 +409,37 @@ class Decoder(unittest.TestCase):
         self.assertNotIn("per vblank", sink.getvalue())
 
     def test_one_frame_buffer(self):
-        # Killzone's way in Phobos: its lists draw elsewhere, and every sceDisplaySetFrameBuf names one buffer.
+        # Killzone's way: its lists draw elsewhere, and every sceDisplaySetFrameBuf names one buffer, once a frame: each
+        # call is a frame, shown from the next vblank (here 30 a second: a call every other vblank).
         game = Game()
         for k in range(20):
             game.vblank(k * P, 500 + k)
-            game.flip(k * P + 1000, FRAMEBUFFERS[0])
+            if k % 2 == 0:
+                game.flip(k * P + 1000, FRAMEBUFFERS[0])
         capture, lists, rows = self.decode(game, 20 * P)
-        self.assertEqual(sum(row.flips for row in rows), 1)
-        self.assertTrue(any("sets the same buffer (04000000, 20 times)" in w for w in capture.warnings))
+        self.assertEqual(sum(row.flips for row in rows), 10)
+        self.assertEqual(sum(row.new_frame for row in rows), 10)
+        self.assertEqual([row.new_frame for row in rows[:4]], [False, True, False, True])
+        (second,) = g.per_second(rows)
+        self.assertEqual((second.displayed, second.flips, second.renders_per_frame), (10, 10, 1))
+        self.assertTrue(any("sets the same buffer (04000000, 10 times): each call is counted as a frame" in w
+                            for w in capture.warnings))
+
+    def test_interrupt_context_threads(self):
+        # Plugins before 0.2.4 filed calls from GE callbacks and vblank handlers under the error code
+        # sceKernelGetThreadId() returns in interrupt context (0x80020064); they're interrupt context, as Phobos's 0.
+        game = Game()
+        game.vblank(0, 1)
+        game.call(g.ENQUEUE, 1000, 1010, LIST, 0, 0, 0x08A00040)
+        game.records.append((g.FINISH, 0, 0, game.at(3000), game.at(3050), g.GE_DRAWING, 0, 0, LIST + 0x80, 0))
+        game.call(g.ENQUEUE, 3010, 3020, LIST + 0x10000, 0, 0, 0x08A00080, thread=2)  # from the FINISH callback
+        path = os.path.join(self.folder.name, "intr.bin")
+        g.write_capture(path, game.records, [(0, "interrupt"), (0x04A1B2C3, "render"), (0x80020064, "?")],
+                        startTime=game.at(0), endTime=game.at(P), flags=g.MONITOR | g.GE_SAMPLED)
+        capture = g.read_capture(path)
+        self.assertEqual([capture.thread_name(n) for n in range(3)], ["interrupt", "render", "interrupt"])
+        lists = g.display_lists(capture)
+        self.assertEqual([capture.thread_name(gl.thread) for gl in lists], ["render", "interrupt"])
 
     def test_model_charges(self):
         # Phobos's runner's captures: CoO's loop (sync the last list, flip, queue the next, no callbacks, no vblank

@@ -85,7 +85,8 @@ the runner refuses anything else):
   asynchronous request as it's done, as a line `[frame] io: ...` on standard output (below)
 - `--ge-profile FILE` — how the game drives the GE and the display, written as a capture of
   `tools/psp-ge-profile`'s (below), which its decoder reads as it reads one its plugin made on a PSP
-- `--ge-profile-from F` — the frame the GE profile starts at (default 1, the run's first)
+- `--ge-profile-from F` — the frame the GE profile starts at (default 1, the run's first); it goes
+  with `--ge-profile`, and alone is an error
 - `--report FILE` — the run as JSON (below): for comparing runs by what ran, not only by their
   speed
 - `--start-time SECONDS` — the PSP's clock starts there (seconds since 1970, up to 4294967295)
@@ -184,10 +185,12 @@ arguments, result, thread and the GE's state, from where it's made to where it r
 to where its thread goes on); each FINISH and SIGNAL callback as it runs; each vertical blank;
 and, Phobos's own, each piece of GE time the model charges (its pixels, primitives and cycles,
 and when the GE is done with all it has). Times are the PSP's clock in microseconds, as
-sceKernelGetSystemTimeLow gives them. The file is written as the run ends, and a summary line
-(`ge profile:`) gives its records and the PSP's time it covers. `geprof.py FILE` then prints the
-same tables as for a capture from the PSP; with no profile, nothing is recorded, at the cost of a
-test of a pointer at each place that would record.
+sceKernelGetSystemTimeLow gives them. A program that starts itself again (sceKernelLoadExec)
+ends the profile there, as its clock and threads start again: one profile is one program's, and
+the summary says at which frame. The file is written as the run ends (even if the WAV can't be),
+and a summary line (`ge profile:`) gives its records and the PSP's time it covers. `geprof.py FILE`
+then prints the same tables as for a capture from the PSP; with no profile, nothing is recorded,
+at the cost of a test of a pointer at each place that would record.
 
 ```sh
 psp-runner coo.chd --load-state coo-diff.state --frames 900 --ge-profile coo-diff.bin --ge-profile-from 301

@@ -12,7 +12,7 @@ start = off
 
 length = 10
 
-buffer = 2048
+buffer = 192
 keep = 256
 
 # On-screen notices: on or off.

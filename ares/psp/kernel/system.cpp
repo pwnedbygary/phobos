@@ -73,9 +73,10 @@ auto Kernel::execProgram(const std::string& path, std::vector<u8>& program, std:
 //one's place: everything of the old program goes, as at power on (its threads, memory and modules, open files, the
 //calls into it, sound, the GE's lists, the clock), the user partition is cleared, and the new program starts as the
 //system starts one. The devices, the disc and the system fonts stay the system's. One that can't start after all
-//ends the program, noted.
+//ends the program, noted. A GE profile being recorded ends with the old program: its clock and threads start again.
 auto Kernel::loadExec() -> void {
   auto request = std::move(exec);
+  geProfileStop();
   power();
   u64 top = 0x0800'0000 + u64(memory.ram.size());
   memory.fill(UserMemory, 0, top > UserMemory ? u32(top - UserMemory) : 0);

@@ -28,12 +28,17 @@ auto Kernel::geProfileStop() -> void {
   geProfile = nullptr;
   callProfile = 0;
   for(auto& call : calls) call.profile = 0;
-  for(auto& [uid, thread] : threads) thread->geProfileCall = 0;
+  for(auto& [uid, thread] : threads) thread->geProfileCall = thread->geProfileCallAside = 0;
 }
 
 //sceKernelGetSystemTimeLow's clock: microseconds.
 auto Kernel::geProfileTime() const -> u32 {
   return u32(cycles / (CPUFrequency / 1'000'000));
+}
+
+//A record's end: never 0, which the format keeps for a call that hasn't ended (the plugin's guard alike).
+static auto geProfileExit(u32 time) -> u32 {
+  return time ? time : 1;
 }
 
 //sceGeDrawSync(1)'s answer (0 nothing to do, 2 drawing, 3 stopped at a stall address), with, while a list draws, the
@@ -71,35 +76,49 @@ auto Kernel::geProfileRecord(u8 kind, u8 thread, u32 a, u32 b, u32 c) -> u32 {
 }
 
 //A profiled function's call, as it starts: what profile.h has of its arguments. A frame buffer's format comes with
-//its sync mode above it; callbacks come as their SIGNAL and FINISH functions and where the program had them.
+//its sync mode above it; callbacks come as their SIGNAL and FINISH functions and where the program had them, read
+//only as the function reads them (with a slot free for them) and only from main RAM, where a read changes nothing
+//(else 0, as the plugin leaves words it won't read).
 auto Kernel::geProfileBegin(u8 kind) -> u32 {
   u32 a = arg(0), b = arg(1), c = arg(2);
   if(kind == GeProfile::SetFrameBuf) c = (arg(2) & 0xff) | (arg(3) & 0xff) << 8;
-  if(kind == GeProfile::SetCallback) a = memory.read(4, arg(0)), b = memory.read(4, arg(0) + 8), c = arg(0);
+  if(kind == GeProfile::SetCallback) {
+    u32 offset = 0;
+    bool slot = std::any_of(std::begin(geCallbacks), std::end(geCallbacks), [](auto& each) { return !each.used; });
+    bool read = slot && !(arg(0) & 3) && memory.ramOffset(arg(0), 12, offset);
+    a = read ? memory.read(4, arg(0)) : 0, b = read ? memory.read(4, arg(0) + 8) : 0, c = arg(0);
+  }
   return geProfileRecord(kind, geProfileThread(interrupting ? nullptr : current), a, b, c);
 }
 
-//As it ends: finished now with its result, unless its thread waits in it (then as the thread goes on). A thread that
-//didn't wait but lost the CPU to a better one it woke has its result in its context.
-auto Kernel::geProfileEnd(u32 record, Thread* caller) -> void {
+//As it ends: finished now with its result, unless its thread waits in it, then as the thread goes on: a wait it's
+//still in, or was made ready in only to run its callbacks (the wait kept), or whose callbacks it's running now,
+//started in the call, its wait or its return put aside till they're done (events.cpp's runCallbacks() and
+//backFromCallbacks()). A call one of those callbacks makes is its own. A thread that didn't wait but lost the CPU to
+//a better one it woke has its result in its context.
+auto Kernel::geProfileEnd(u32 record, Thread* caller, bool fromCallback) -> void {
   if(!geProfile || record > geProfile->records.size()) return;
-  if(caller && caller->status == Status::Waiting) {
+  if(caller && (caller->status == Status::Waiting || caller->wait != Wait::None)) {
     caller->geProfileCall = record;
     return;
   }
+  if(caller && caller->inCallback && !fromCallback) {
+    caller->geProfileCallAside = record;
+    return;
+  }
   auto& r = geProfile->records[record - 1];
-  r.exit = geProfileTime();
+  r.exit = geProfileExit(geProfileTime());
   r.result = caller && caller != current ? caller->context.gpr[2] : cpu.ipu.r[2];
 }
 
-//A thread back from the wait a profiled call made it wait in: the call returns now, with what the wait gave it (v0,
-//its context just loaded).
+//A thread back from the wait a profiled call made it wait in, or from the callbacks the call ran: the call returns
+//now, with what it gave (v0, the thread's registers just loaded).
 auto Kernel::geProfileResumed(Thread& thread) -> void {
   u32 record = thread.geProfileCall;
   thread.geProfileCall = 0;
   if(!geProfile || record > geProfile->records.size()) return;
   auto& r = geProfile->records[record - 1];
-  r.exit = geProfileTime();
+  r.exit = geProfileExit(geProfileTime());
   r.result = cpu.ipu.r[2];
 }
 
@@ -107,7 +126,8 @@ auto Kernel::geProfileResumed(Thread& thread) -> void {
 auto Kernel::geProfileVblank() -> void {
   u32 record = geProfileRecord(GeProfile::Vblank, 0, vblanks, 0, 0);
   auto& r = geProfile->records[record - 1];
-  r.entry = r.exit = u32((nextVblank - VblankCycles) / (CPUFrequency / 1'000'000));
+  r.entry = u32((nextVblank - VblankCycles) / (CPUFrequency / 1'000'000));
+  r.exit = geProfileExit(r.entry);
 }
 
 //A list's callback, as the driver queues it (geCall()): its callback number, the FINISH's or SIGNAL's low 16 bits,
@@ -126,7 +146,7 @@ auto Kernel::geProfileCallStarted(u32 record) -> void {
 
 auto Kernel::geProfileCallReturned(u32 record) -> void {
   if(!geProfile || record > geProfile->records.size()) return;
-  geProfile->records[record - 1].exit = geProfileTime();
+  geProfile->records[record - 1].exit = geProfileExit(geProfileTime());
 }
 
 //A piece of drawing the GE was charged for (geTime()): its pixels and primitives, the cycles, when the GE is done with
@@ -136,7 +156,7 @@ auto Kernel::geProfileWork(u64 pixels, u64 primitives, u64 owed) -> void {
   u32 record = geProfileRecord(GeProfile::ModelWork, geProfileThread(interrupting ? nullptr : current),
                                fit(pixels), fit(primitives), fit(owed));
   auto& r = geProfile->records[record - 1];
-  r.exit = u32(geDoneAt / (CPUFrequency / 1'000'000));
+  r.exit = geProfileExit(u32(geDoneAt / (CPUFrequency / 1'000'000)));
   r.result = geRunning >= 0 ? GeListIDs + geRunning : 0xffff'ffff;
 }
 
@@ -158,7 +178,7 @@ auto GeProfile::file(const std::string& version, const std::string& discId, cons
   word(startTime), word(endTime), word(startVcount), word(endVcount);
   word(cpuMhz), word(busMhz), word(cpuMhzEnd), word(busMhzEnd);
   word(firmware), word(0), word(0), word(0xffff'ffff);
-  word(0x800f'fffe);  //kinds 1 to 19, and the monitor (31)
+  word(0x801f'fffe);  //kinds 1 to 20 (the vertical blank's with the monitor's), and the monitor (31), as the PSP's
   word(1), word(0), word(count), word(table), word(threads.size()), word(0), word(count * 32);
   for(u32 n = 0; n < 12; n++) word(0);
   for(auto& r : records) {

@@ -4,16 +4,18 @@
 
 mode = capture
 
-# The capture starts as the game does and runs 12 seconds: the copyright screen is about seconds 2 to 8.
-start = 0
+# The capture starts 4 seconds after the plugin does (where 0.2.0's capture began, the disc readable by then; its
+# memory isn't held through the game's boot) and runs 12 seconds: the copyright screen is about its seconds 3 to 7.
+start = 4
 length = 12
 
 # The buttons still work afterwards.
 buttons = L+R+SELECT
 delay = 1
 
-buffer = 2048
-keep = 256
+# Less memory than a capture during play takes, more left for the game while it loads its modules.
+buffer = 128
+keep = 320
 
 # On-screen notices: on or off.
 notices = on

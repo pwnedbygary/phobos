@@ -27,9 +27,11 @@
 static u32 fakeNow = 0xFFF00000u;
 static SceUID fakeThread = 0x04A1B2C3;
 static int interruptDepth, interruptsOff, currentPriority, threadCreated, threadFails, inModuleStart;
+static int inInterruptContext;
 
 unsigned int sceKernelGetSystemTimeLow(void) { return fakeNow; }
-int sceKernelGetThreadId(void) { return fakeThread; }
+int sceKernelGetThreadId(void) { return inInterruptContext ? (int)0x80020064 : fakeThread; }  //illegal context there
+int sceKernelIsIntrContext(void) { return inInterruptContext; }
 unsigned int sceKernelCpuSuspendIntr(void) {
   int was = interruptsOff;
   interruptDepth++;
@@ -80,12 +82,24 @@ static void noteWrite(const char* path) {
 }
 
 int sceIoGetstat(const char* file, SceIoStat* status) {
-  (void)status;
   assert(!monitorBefore);
   char path[512];
   hostPath(path, file);
   struct stat s;
-  return stat(path, &s) == 0 ? 0 : -1;
+  if(stat(path, &s) != 0) return -1;
+  if(status) status->st_size = s.st_size;
+  return 0;
+}
+
+static char removed[96];
+static int writesLeft = -1;  //writes that succeed before the stick "fills" (-1: all)
+
+int sceIoRemove(const char* file) {
+  assert(!monitorBefore && currentPriority == WritingPriority && !strncmp(file, "ms0:/PHOBOS/PROF/", 17));
+  snprintf(removed, sizeof(removed), "%s", file);
+  char path[512];
+  hostPath(path, file);
+  return unlink(path) == 0 ? 0 : -1;
 }
 
 SceUID sceIoOpen(const char* file, int flags, SceMode mode) {
@@ -101,6 +115,7 @@ SceUID sceIoOpen(const char* file, int flags, SceMode mode) {
     noteWrite(file);
     assert(currentPriority == WritingPriority || inModuleStart);
     assert(!(flags & PSP_O_TRUNC));
+    assert((flags & PSP_O_APPEND) || (flags & PSP_O_EXCL));  //a capture or a report: a new file, never another's
   }
   int fd = open(path, host, mode);
   return fd >= 0 ? fd : -1;
@@ -109,6 +124,8 @@ SceUID sceIoOpen(const char* file, int flags, SceMode mode) {
 int sceIoRead(SceUID fd, void* data, SceSize size) { return read(fd, data, size); }
 int sceIoWrite(SceUID fd, const void* data, SceSize size) {
   assert(!monitorBefore && (currentPriority == WritingPriority || inModuleStart));
+  if(writesLeft == 0) return 0x80010000 | 28;  //no space left
+  if(writesLeft > 0) writesLeft--;
   return write(fd, data, size);
 }
 int sceIoClose(SceUID fd) { return close(fd); }
@@ -169,9 +186,11 @@ u32 fakeWord(u32 physical) {
 
 //An interrupt arriving: the monitor around the game's handler, as sceKernelCallSubIntrHandler calls it.
 static void interrupt(int number, int sub, int arg2, int arg3, int handlerTime) {
+  inInterruptContext = 1;
   if(monitorBefore) monitorBefore(number, sub, arg2, 0x1234, arg3, 0x08804000, 0);
   fakeNow += handlerTime;
   if(monitorAfter) monitorAfter(number, sub, arg2, 0x1234, arg3, 0, 0);
+  inInterruptContext = 0;
 }
 
 static int geEnQueue(const void* list, void* stall, int cbid, void* arg) {
@@ -352,11 +371,12 @@ static void frame(void) {
   frames++;
 }
 
-//The control thread's sleeps: the game plays meanwhile.
+//The control thread's sleeps: the game plays meanwhile (from gameStartsAt, as it boots, if that's set).
 static int gamePlaying;
+static u32 gameStartsAt;
 int sceKernelDelayThread(SceUInt delay) {
   u32 until = fakeNow + delay;
-  if(gamePlaying) while((s32)(until - fakeNow) > 0) frame();
+  if(gamePlaying || (gameStartsAt && (s32)(fakeNow - gameStartsAt) >= 0)) while((s32)(until - fakeNow) > 0) frame();
   else fakeNow = until;
   return 0;
 }
@@ -439,6 +459,18 @@ static void testRecords(void) {
   assert(kinds[KindGeEnQueue] == 3 && kinds[KindGeUpdateStallAddr] == 9 && kinds[KindGeFinish] == 3);
   assert(kinds[KindGeSignal] == 3 && kinds[KindVblank] == 3 && kinds[KindWaitVblankStart] == 3);
   assert(kinds[KindGeDrawSync] == 3 && kinds[KindSetFrameBuf] == 3);
+
+  //a flip from a GE callback or a vblank handler, in interrupt context (where sceKernelGetThreadId() gives an error
+  //code): thread 0, and the game's thread still the table's first
+  static ProfileRecord fromInterrupt[4];
+  startCapture(fromInterrupt, 4);
+  inInterruptContext = 1;
+  ((FrameBufFunction)hooked((void*)setFrameBuf))((void*)(uintptr_t)0x04000000, 512, 3, 1);
+  inInterruptContext = 0;
+  ((FrameBufFunction)hooked((void*)setFrameBuf))((void*)(uintptr_t)0x04088000, 512, 3, 1);
+  u32 interruptCount, interruptDropped;
+  stopCapture(&interruptCount, &interruptDropped);
+  assert(interruptCount == 2 && fromInterrupt[0].thread == 0 && fromInterrupt[1].thread == 1);
 
   //a game thread asleep in a vblank wait when its capture ends: its record keeps no return, and the vblank that
   //wakes it isn't recorded
@@ -594,7 +626,7 @@ static int bootFolderTest(void) {
   static char trace[8192];
   assert(readFile("ms0:/PHOBOS/trace.txt", trace, sizeof(trace)) > 0);
   const char* expected[] = {
-    "---- Phobos GE profiler 0.2.3: module_start", "device: ms0:", "settings read: mode capture",
+    "---- Phobos GE profiler 0.2.4: module_start", "device: ms0:", "settings read: mode capture",
     "found sctrlHENPatchSyscall at 0x", "hook sceGeListEnQueue: found at 0x", "sub-interrupt monitor: available",
     "control thread not made (0x80020190)",
   };
@@ -602,6 +634,43 @@ static int bootFolderTest(void) {
   for(int n = 0; n < writtenCount; n++) assert(!strcmp(written[n], "ms0:/PHOBOS/trace.txt"));
   assert(writtenCount == 2);  //the first line at once, then the rest
   printf("hosttest: the boot with the folder there passed (files in %s)\n", root);
+  return 0;
+}
+
+//prof-boot's way, through the control thread's loop: a capture timed from the plugin's start, the game's first flip
+//coming during it. Its result stays on screen for its whole time: the first flip seen after it, and the early trace,
+//don't put the start notice back.
+static int bootCaptureTest(void) {
+  char path[512];
+  hostPath(path, "ms0:/PHOBOS");
+  mkdir(path, 0777);
+  const char settingsText[] = "mode = capture\nstart = 0\nlength = 2\nbuffer = 512\nkeep = 256\n";
+  writeFile("ms0:/PHOBOS/prof.txt", settingsText, sizeof(settingsText) - 1);
+  inModuleStart = 1;
+  assert(module_start(0, 0) == 0);
+  inModuleStart = 0;
+  controlStart();
+  assert(settings.read && !settings.dry && settings.start == 0 && !startShown && !runs);
+  gameStartsAt = pluginStart + Second;
+  Control control = {0, 1, 0, 0, pluginStart};
+  controlStep(&control);  //the first poll: the capture's time, the game still booting; it flips a second in
+  assert(runs == 1 && noticeFirstFlip() && !control.flipTraced);
+  assert(!strcmp(text[shown][0], "SAVED") && !strcmp(text[shown][1], "UCUS98653-1.bin"));
+  int steps = 0;
+  while(!bannerUntil || bannerShowing(fakeNow)) {
+    controlStep(&control);
+    assert(!strcmp(text[shown][0], "SAVED") && !startShown);
+    assert(++steps < 300);
+  }
+  assert(control.flipTraced && !control.earlyTrace);  //both passed while it was up
+  assert(steps >= SavedNotice * 1000 / PollInterval - 4);  //(each poll 50 ms and a frame or so)
+  static char trace[8192];
+  assert(readFile("ms0:/PHOBOS/trace.txt", trace, sizeof(trace)) > 0);
+  const char* expected[] = {
+    "trigger (timed): capture", "capture: wrote UCUS98653-1.bin", "first flip through the sceDisplaySetFrameBuf hook",
+  };
+  expectTrace(trace, expected, sizeof(expected) / sizeof(expected[0]));
+  printf("hosttest: the boot capture's notice passed (files in %s)\n", root);
   return 0;
 }
 
@@ -618,6 +687,7 @@ int main(int argc, char** argv) {
   hostPath(path, "disc0:/PSP_GAME");
   mkdir(path, 0777);
   if(!strcmp(out, "--boot-folder")) return bootFolderTest();
+  if(!strcmp(out, "--boot-capture")) return bootCaptureTest();
 
   //the module's start: the functions found (and the error code refused), the hooks in, the control thread made; no
   //PHOBOS folder yet, so the trace stays in memory
@@ -734,13 +804,23 @@ int main(int argc, char** argv) {
   hostPath(path, "ms0:/PHOBOS/PROF/ULES00364-1.bin");
   struct stat s;
   assert(stat(path, &s) == 0 && !strcmp(title, "Super Monkey Ball Adventure"));
+
+  //the stick fills while a capture is written: the part written is removed, and the next capture takes its number
+  writesLeft = 1;  //the header, then nothing
+  capture(0);
+  writesLeft = -1;
+  hostPath(path, "ms0:/PHOBOS/PROF/ULES00364-2.bin");
+  assert(stat(path, &s) != 0 && !strcmp(removed, "ms0:/PHOBOS/PROF/ULES00364-2.bin"));
+  assert(!strcmp(text[shown][0], "NOT SAVED") && !strcmp(text[shown][1], "WRITE FAILED"));
+  capture(0);
+  assert(stat(path, &s) == 0 && !strcmp(text[shown][0], "SAVED"));
   flushTrace();
 
   //the trace: from the module's start (kept until the folder turned up) to the last file
   static char trace[16384];
   assert(readFile("ms0:/PHOBOS/trace.txt", trace, sizeof(trace)) > 0);
   const char* expected[] = {
-    "---- Phobos GE profiler 0.2.3: module_start", "device: no PHOBOS folder on ms0: or ef0:",
+    "---- Phobos GE profiler 0.2.4: module_start", "device: no PHOBOS folder on ms0: or ef0:",
     "not found: sctrlHENFindFunctionOnSystem", "found sctrlHENPatchSyscall at 0x",
     "refused sctrlKernelMsIsEf: the lookup gave 0x8002013A", "found sceDisplayGetFrameBuf at 0x",
     "hook sceGeListEnQueue: found at 0x", "patched, syscall 0x2000", "hook sceDisplaySetFrameBuf: found at 0x",
@@ -750,9 +830,31 @@ int main(int argc, char** argv) {
     "settings read: mode dry", "trigger (timed): dry run", "dry run: wrote UCUS98653-1.txt",
     "trigger (buttons): capture", "capture: wrote UCUS98653-2.bin",
     "capture: no buffer: partition 1's largest free block is 300 KB", "capture: not saved: NOT ENOUGH MEMORY",
-    "capture: wrote ULES00364-1.bin",
+    "capture: wrote ULES00364-1.bin", "capture: not saved: WRITE FAILED, ULES00364-2.bin", "capture: wrote ULES00364-2.bin",
   };
   expectTrace(trace, expected, sizeof(expected) / sizeof(expected[0]));
+
+  //the trace stops at 256 KB: the lines that reach it, a note, and nothing after
+  hostPath(path, "ms0:/PHOBOS/trace.txt");
+  FILE* big = fopen(path, "ab");
+  assert(big && stat(path, &s) == 0);
+  for(off_t n = s.st_size; n < 256 * 1024 - 10; n++) fputc('.', big);
+  fclose(big);
+  traceLine("reaching the end");
+  flushTrace();
+  stat(path, &s);
+  off_t full = s.st_size;
+  assert(full >= 256 * 1024);
+  FILE* tail = fopen(path, "rb");
+  fseek(tail, -200, SEEK_END);
+  char end[256] = {0};
+  fread(end, 1, 200, tail);
+  fclose(tail);
+  assert(strstr(end, "reaching the end") && strstr(end, "trace.txt is full at 256 KB"));
+  traceLine("after it");
+  flushTrace();
+  stat(path, &s);
+  assert(s.st_size == full);
 
   //only ever under ms0:/PHOBOS, and never truncating
   for(int n = 0; n < writtenCount; n++) assert(!strncmp(written[n], "ms0:/PHOBOS/", 12));
