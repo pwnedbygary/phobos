@@ -42,13 +42,15 @@ Branch `cursor/psp-measure-round8-2b67` (from master `a8d5640f5`); docs/psp-core
   −59% to +180%. Counting its terms over each scene puts the misses on what round 6 never measured: textures read
   from VRAM in strips (Killzone's 512x512 CLUT32 buffer, 79% of its GE time; Activision Hits' menus), a big CLUT8
   texture drawn whole, and Super Monkey Ball's many small primitives, state changes and CALLs.
-- **What**: a new first menu line, round 8: 12 timing tests of the GE (big textures in strips, other textures,
-  pixels, setup, vertices, state between draws, lists and stall updates, transfers, clears, the two ends' overlap,
-  lists like the captured scenes', the CPU beside the GE) and cpu.c's tests of the CPU (ALU, latencies, memory,
-  system and driver calls, the clocks the power service grants); `manifest8.txt` lists every case. About 3 minutes
-  on the PSP, about 1 MB of results. newlib's heap is held to 1 MiB, so the CPU's memory tests get 8 MiB.
+- **What**: a new first menu line, round 8: 13 timing tests of the GE (big textures in strips, other textures,
+  pixels, setup, vertices, state between draws, lists and stall updates, a SIGNAL against its list's end (how far
+  ahead of the drawing the front end gets: part 106's queue), transfers, clears, the two ends' overlap, lists like
+  the captured scenes', the CPU beside the GE) and cpu.c's tests of the CPU (ALU, latencies, memory, system and
+  driver calls, the clocks the power service grants) and of the display as the program starts (what it holds, and
+  which frame buffers set at once the firmware refuses: part 108); `manifest8.txt` lists every case. About 3
+  minutes on the PSP, about 1 MB of results. newlib's heap is held to 1 MiB, so the CPU's memory tests get 8 MiB.
 - **Test**: "psp measure" runs round 8 too and checks every record; `tests/psp/programs/pspmeasure.elf` rebuilt.
-- **Next**: the owner runs round 8 (charger in; ARK's `overclock` off) and sends `results/`; then the fit
+- **Next**: the owner runs round 8 (charger in; ARK's clock settings at Auto) and sends `results/`; then the fit
   (`ge-fit.py`, `GE::Cost`, `measured8`) with the runner's per-list counts (`--ge-terms`), on #269.
 
 ## Android input: Colin McRae's dropped held Cross on the RP6 — the app's input paths replayed and cleared, an opt-in input log for the device capture that decides it — 2026-10-16

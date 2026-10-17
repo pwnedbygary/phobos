@@ -111,7 +111,8 @@ static const TimingFile timingFiles6[] = {
 //record of its own for each attempt, from 222/111 or 333/166.
 struct TimingFile8 { const char* name; u32 records, repeats, values, settings; };
 static const TimingFile8 timingFiles8[] = {
-  {"time-lists", 80, 16, 3, 15}, {"time-state", 68, 8, 2, 3}, {"time-vertices", 228, 16, 2, 3},
+  {"time-lists", 80, 16, 3, 15}, {"time-signals2", 24, 8, 3, 3}, {"time-state", 68, 8, 2, 3},
+  {"time-vertices", 228, 16, 2, 3},
   {"time-setup", 72, 8, 2, 3}, {"time-pixels", 174, 8, 2, 3}, {"time-strips", 280, 8, 2, 3},
   {"time-textures", 100, 8, 2, 3}, {"time-transfers2", 68, 8, 2, 3}, {"time-clears", 48, 8, 2, 3},
   {"time-overlap", 10, 8, 2, 3}, {"time-scenes", 68, 8, 2, 15}, {"cpu-contention", 16, 4, 2, 3},
@@ -602,8 +603,9 @@ static auto pspMeasure() -> void {
   }
   CHECK(std::filesystem::exists(results / "manifest7.txt"), true);
   //round 8's records: whole, as many as the program's tables give, at each test's settings in turn (as many records
-  //at each, the clocks the core grants every one asked for), every run finished (time-lists' third time, where a
-  //case has one, no later than its finish), the CPU's loops taking time (its system calls may take none here)
+  //at each, the clocks the core grants every one asked for), every run finished (time-lists' and time-signals2's
+  //third time, where a case has one, no later than its finish), the CPU's loops taking time (its system calls may
+  //take none here)
   for(auto& file : timingFiles8) {
     std::string name = std::string(file.name) + ".bin";
     auto ours = readWords(results / name);
@@ -650,6 +652,11 @@ static auto pspMeasure() -> void {
     CHECK(shaped, true);
     CHECK(attempts[0].times[0] == 0 && attempts[0].times[1] == 333 && attempts[0].times[2] == 166, true);
   }
+  //display-start: the display read as the program started (seven words), then each of five frame buffers set from
+  //there (what the call gave back, the address, width and format read after); the next-vblank one, taken
+  auto display = readWords(results / "display-start.bin");
+  CHECK(display.size(), 7u + 5 * 4);
+  if(display.size() == 7 + 5 * 4) CHECK(display[7 + 4 * 4], 0u);
   CHECK(std::filesystem::exists(results / "manifest8.txt"), true);
   for(auto name : probeFiles) CHECK(readWords(vfpu / (std::string(name) + ".bin")).size(), 4);
 

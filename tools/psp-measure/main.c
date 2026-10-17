@@ -104,6 +104,7 @@ static void startAfresh(void) {
 }
 
 int main(int argc, char** argv) {
+  displayAtStart();  //(before the screen below sets a frame buffer)
   vfpuStart();
   pspDebugScreenInit();
   findResults(argc > 0 ? argv[0] : 0);

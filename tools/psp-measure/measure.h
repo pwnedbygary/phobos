@@ -57,6 +57,7 @@ void geEnd(void);          //lets the GE go before the program leaves
 
 int cpuTests(void);                                      //0 if a file couldn't be written
 void cpuManifest(SceUID file);                           //their lines of manifest8.txt
+void displayAtStart(void);  //what the display holds as the program starts (round 8's display-start): first of all
 unsigned int cpuRead(const void* from, unsigned int bytes);  //reads every word (cached), returns their sum
 void cpuChain(void* at, unsigned int nodes, unsigned int apart);  //a chain of pointers `apart` bytes apart, in a
                                                                   //scrambled order, through all of them

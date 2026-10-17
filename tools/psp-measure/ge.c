@@ -3975,6 +3975,37 @@ static int runLists(int c, int size, const char* what, unsigned int* times) {
   return 1;
 }
 
+//-- a SIGNAL against its list's end (time-signals2): N primitives, then a SIGNAL that lets the GE go on, then the
+//FINISH; each run's third time the signal callback's. Round 6's time-signals had the callback within 84
+//microseconds of queueing after 16 sprites over the whole target, their drawing up to 10 ms (the GE's front end
+//handing them on to its back end), and Army of Two's came 0.27 ms before its list's FINISH after some 28,000
+//primitives: how far ahead of the drawing the front end gets (part 106's GE::Cost::Queue, 16 for now), by the
+//primitives' count, their size and their kind.
+static const TimedCase signalCases2[] = {
+  {"N sprites 64x64, flat, in turn over 256x256 of the target, then a SIGNAL that lets the GE go on, then the FINISH",
+   "sprites", 4, {8, 16, 32, 128}},
+  {"the same with sprites 8x8", "sprites", 4, {16, 64, 256, 1024}},
+  {"the same with triangles, each half of a 64x64 square", "triangles", 4, {8, 16, 32, 128}},
+};
+static void buildSignals2(int c, int size) {
+  timedList(GU_PSM_8888);
+  int side = c == 1 ? 8 : 64, across = 256 / side;
+  for(int i = 0; i < size; i++) {
+    float x = (float)(i % across * side), y = (float)(i / across % across * side);
+    if(c != 2) {
+      timedSprite(x, y, x + side, y + side, 0, 0, 0, 0, 0xffffffff);
+      continue;
+    }
+    FloatVertex* v = sceGuGetMemory(3 * sizeof(FloatVertex));
+    v[0] = (FloatVertex){0, 0, 0xffffffff, x, y, 0};
+    v[1] = (FloatVertex){0, 0, 0xffffffff, x + side, y, 0};
+    v[2] = (FloatVertex){0, 0, 0xffffffff, x, y + side, 0};
+    sceGuDrawArray(GU_TRIANGLES, FloatVertexType, 3, 0, v);
+  }
+  sceGuSignal(GU_BEHAVIOR_CONTINUE, 1);
+  sceGuFinish();
+}
+
 //-- state between draws (time-state): 8x8 sprites over the target, each from a 16x16 texture (1 KiB, held whole by
 //the cache), with one thing set before each, as games set state between draws (Super Monkey Ball Adventure: some
 //84,000 words and 3,500 CALLs a list): whether a setting costs its words alone or holds the GE up (a pipeline drained
@@ -4874,7 +4905,8 @@ static void writeManifest8(void) {
     "docs/psp-core.md, part 107, what each is for). time-* and cpu-contention: records of words as round 6's: case,\n"
     "size, CPU MHz << 16 | bus MHz (as scePower gave them back), repeats | values << 16, then per run `values` times\n"
     "in microseconds from just before sceGeListEnQueue: to the finish callback, to sceGeListEnQueue's return, and\n"
-    "(time-lists) to the last sceGeListEnQueue's or sceGeListUpdateStallAddr's return; 0xffffffff for a run not\n"
+    "(time-lists) to the last sceGeListEnQueue's or sceGeListUpdateStallAddr's return, (time-signals2) to the signal\n"
+    "callback; 0xffffffff for a run not\n"
     "finished (see <name>.stalled). time-lists and time-scenes run at 222/111, 333/166, 333/222/166 and 266/133 MHz\n"
     "as asked, the rest at the first two; the clocks as found are put back after each. cpu-contention's cases 0-4:\n"
     "the CPU's loop (us), then sceGeDrawSync(1) as it ended. cpu-*: records of words: case, size, CPU MHz << 16 |\n"
@@ -4883,6 +4915,7 @@ static void writeManifest8(void) {
   sceIoWrite(file, text, sizeof(text) - 1);
   static const struct { const char* test; const TimedCase* cases; int count; } tests[] = {
     {"time-lists", listCases, sizeof(listCases) / sizeof(listCases[0])},
+    {"time-signals2", signalCases2, sizeof(signalCases2) / sizeof(signalCases2[0])},
     {"time-state", stateCases, sizeof(stateCases) / sizeof(stateCases[0])},
     {"time-vertices", vertexCases, sizeof(vertexCases) / sizeof(vertexCases[0])},
     {"time-setup", setupCases, sizeof(setupCases) / sizeof(setupCases[0])},
@@ -4919,6 +4952,7 @@ static void round8(void) {
   prepareTexels();
 #define CASES(table) table, sizeof(table) / sizeof(table[0])
   timeCases8("time-lists", CASES(listCases), 16, 3, AtAll, buildLists, runLists);
+  timeCases8("time-signals2", CASES(signalCases2), 8, 3, AtTwo, buildSignals2, 0);
   timeCases8("time-state", CASES(stateCases), 8, 2, AtTwo, buildState, 0);
   timeCases8("time-vertices", CASES(vertexCases), 16, 2, AtTwo, buildVertices, 0);
   timeCases8("time-setup", CASES(setupCases), 8, 2, AtTwo, buildSetup, 0);

@@ -294,6 +294,10 @@ from the bus's, if the PSP grants it) and 266/133 too:
   sprite, and CALLed lists, as Super Monkey Ball Adventure draws.
 - **Lists** (`time-lists`): a list's own time, lists back to back, a list drawn while its stall address is moved on
   (with and without waiting for the GE to reach it), CALLs.
+- **A SIGNAL against its list's end** (`time-signals2`): 8 to 1024 sprites or triangles, then a SIGNAL, then the
+  FINISH: when the signal callback comes beside the finish, how far ahead of the drawing the GE's front end gets.
+- **The display as a program starts** (`display-start`): what `sceDisplayGetFrameBuf` reads before anything is set,
+  and which frame buffers set at once the firmware refuses from there.
 - **Transfers, clears, overlap** (`time-transfers2`, `time-clears`, `time-overlap`): narrow transfers and frame
   buffer copies; clears over 512x256; whether the GE's front and back ends go on at once.
 - **Lists like the captured scenes'** (`time-scenes`): Killzone's, Activision Hits Remixed's, Chains of Olympus's

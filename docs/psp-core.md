@@ -15834,6 +15834,16 @@ the bus's, if the PSP grants it) and 266/133 (a third bus clock). Each record sa
 - **`time-lists`**: a list's own time (0 to 64 small sprites); 1 to 8 lists queued at once; one list drawn while its
   stall address is moved on 1 to 64 times, as fast as the CPU goes and each time once the GE has reached it; 16 to
   1024 CALLs.
+- **`time-signals2`**: 8 to 128 sprites 64x64, 16 to 1024 sprites 8x8, or 8 to 128 triangles (half a 64x64 square),
+  then a SIGNAL that lets the GE go on, then the FINISH, the signal callback's time beside the finish's: how far
+  ahead of the drawing the GE's front end gets (round 6's time-signals had the callback within 84 microseconds
+  after 16 sprites over the whole target, Army of Two's 0.27 ms before its list's FINISH: part 106's
+  GE::Cost::Queue, 16 for now).
+- **`display-start`**: what `sceDisplayGetFrameBuf` reads as the program starts, before anything is set (asked first
+  of all in `main()`), and which of five frame buffers the firmware refuses from that state: 512 wide in 8888 or
+  5650, the address alone, the display off, each set at once, and one for the next vblank (pspautotests'
+  display/setframebuf refused a width or format set at once that isn't the one shown; whether a game's first frame
+  buffer would be decides whether Phobos may refuse them, part 108).
 - **`time-transfers2`**, **`time-clears`**, **`time-overlap`**: transfers 1 to 32 pixels wide and single rows, frame
   buffers copied in VRAM; clear mode over 512x256, in one sprite and in sprites 64 wide; front-end pieces (skinned
   triangles, culled) and back-end pieces (textured squares) in turn, 1, 16 or 256 at a time, and each kind alone.
@@ -15871,8 +15881,9 @@ the bus's, if the PSP grants it) and 266/133 (a third bus clock). Each record sa
 "psp measure" (tests/psp/measure.cpp) runs round 8 after round 7, through the menu (its lines one further down), and
 checks every round 8 file: whole records, as many as the tables give, each test's settings in turn with the clocks
 the core grants for each (all four), every run finished, a stall update's or the last enqueue's return before the
-list's finish, the CPU's loops taking time; cpu-clocks' 13 attempts, the first (333/333/166) granted. The core's GE
-times are the default timing's, so the times themselves say nothing yet; the fit compares them.
+list's finish (time-signals2's signal callback too), the CPU's loops taking time; cpu-clocks' 13 attempts, the
+first (333/333/166) granted; display-start's seven words and five attempts, the next-vblank one taken. The core's
+GE times are the default timing's, so the times themselves say nothing yet; the fit compares them.
 
 ### Checks
 

@@ -587,6 +587,60 @@ static void cpuClocks(const char* name) {
   save(name);
 }
 
+//-- the display as the program starts (display-start): what sceDisplayGetFrameBuf reads before anything is set
+//(main() asks first of all: displayAtStart()), and which frame buffers set at once the firmware refuses from there.
+//pspautotests' display/setframebuf recorded one set at once refused for a width or format that isn't the one shown
+//(0x80000107): whether a game's first frame buffer, set at once, would be decides whether Phobos may refuse them
+//(part 108). The record: the address, width and format read with sync 0, then with sync 1, and
+//sceDisplayIsForeground; then for each attempt, made from the state the program started with (put back with a set
+//for the next vblank, the vblank, and the same set at once), what sceDisplaySetFrameBuf gave back, then the address,
+//width and format read with sync 0. The program's own screen is put back after.
+static unsigned int startedWith[7];
+void displayAtStart(void) {
+  void* address;
+  int width, format;
+  sceDisplayGetFrameBuf(&address, &width, &format, 0);
+  startedWith[0] = (unsigned int)address, startedWith[1] = width, startedWith[2] = format;
+  sceDisplayGetFrameBuf(&address, &width, &format, 1);
+  startedWith[3] = (unsigned int)address, startedWith[4] = width, startedWith[5] = format;
+  startedWith[6] = sceDisplayIsForeground();
+}
+typedef struct { const char* name; unsigned int address; int width, format, sync; } DisplayAttempt;
+static const DisplayAttempt displayAttempts[] = {
+  {"VRAM's start, 512 wide, 8888, at once (as a game's first frame buffer may be)", 0x04000000, 512, 3, 0},
+  {"VRAM's start, 512 wide, 5650, at once", 0x04000000, 512, 0, 0},
+  {"VRAM's start with the width and format the program started with, at once", 0x04000000, -1, -1, 0},
+  {"0, 0, 0 (the display off), at once", 0, 0, 0, 0},
+  {"VRAM's start, 512 wide, 8888, for the next vblank", 0x04000000, 512, 3, 1},
+};
+static void displayStart(const char* name) {
+  int started = begin(&test, name);
+  if(started < 0) failed = 1;
+  if(started <= 0) return;
+  recorded = 0;
+  for(int n = 0; n < 7; n++) record(startedWith[n]);
+  void* shown;
+  int shownWidth, shownFormat;
+  sceDisplayGetFrameBuf(&shown, &shownWidth, &shownFormat, 0);
+  for(unsigned int a = 0; a < sizeof(displayAttempts) / sizeof(displayAttempts[0]); a++) {
+    const DisplayAttempt* attempt = &displayAttempts[a];
+    sceDisplaySetFrameBuf((void*)startedWith[0], startedWith[1], startedWith[2], 1);
+    sceDisplayWaitVblankStart();
+    sceDisplaySetFrameBuf((void*)startedWith[0], startedWith[1], startedWith[2], 0);
+    int width = attempt->width < 0 ? (int)startedWith[1] : attempt->width;
+    int format = attempt->format < 0 ? (int)startedWith[2] : attempt->format;
+    record(sceDisplaySetFrameBuf((void*)attempt->address, width, format, attempt->sync));
+    void* address;
+    int now, as;
+    sceDisplayGetFrameBuf(&address, &now, &as, 0);
+    record((unsigned int)address), record(now), record(as);
+  }
+  sceDisplaySetFrameBuf(shown, shownWidth, shownFormat, 1);
+  sceDisplayWaitVblankStart();
+  sceDisplaySetFrameBuf(shown, shownWidth, shownFormat, 0);
+  save(name);
+}
+
 int cpuTests(void) {
   failed = 0;
   foundCpu = scePowerGetCpuClockFrequencyInt();
@@ -619,6 +673,7 @@ int cpuTests(void) {
     print("No 4 MiB of memory free: cpu-memory and cpu-syscalls left out.\n");
   }
   cpuClocks("cpu-clocks");
+  displayStart("display-start");
   return !failed;
 }
 
@@ -647,6 +702,15 @@ void cpuManifest(SceUID file) {
   }
   for(unsigned int c = 0; c < sizeof(clockAttempts) / sizeof(clockAttempts[0]); c++) {
     int length = snprintf(line, sizeof(line), "cpu-clocks %u: %s\n", c, clockAttempts[c].name);
+    sceIoWrite(file, line, length < (int)sizeof(line) ? length : (int)sizeof(line) - 1);
+  }
+  static const char display[] =
+    "display-start: words: the address, width and format sceDisplayGetFrameBuf read as the program started, before\n"
+    "anything was set, with sync 0, then with sync 1, and sceDisplayIsForeground; then for each attempt, made from\n"
+    "that state, what sceDisplaySetFrameBuf gave back and the address, width and format read with sync 0 after:\n";
+  sceIoWrite(file, display, sizeof(display) - 1);
+  for(unsigned int a = 0; a < sizeof(displayAttempts) / sizeof(displayAttempts[0]); a++) {
+    int length = snprintf(line, sizeof(line), "display-start %u: %s\n", a, displayAttempts[a].name);
     sceIoWrite(file, line, length < (int)sizeof(line) ? length : (int)sizeof(line) - 1);
   }
 }
