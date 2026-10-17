@@ -447,13 +447,19 @@ What the GPU does with the GPU's own units, and how near the PSP it comes:
   a little apart on the GPU the second layer didn't darken it again. That's `draw.frag`'s `DEPTHS` build: a shader
   that writes the depth may keep a GPU from testing it before the shader runs, so the other pipelines take the build
   without the write. Since part 102 the build declares the depth it writes never above the depth rasterized
-  (`depth_less`): where the device clamps depth, those pipelines rasterize it a step and a half above the GE's,
-  (z + 1.5) / 65536.5 (`draw.vert`'s and `transform.vert`'s `ABOVE`), so the whole number written lies a step below
-  it at least, whatever the GPU's rounding between its depth and the one interpolated beside it, and a GPU that takes
-  the declaration may still reject before the shader runs a fragment a greater or greater-or-equal test fails (Metal
-  does, Turnip in part; Qualcomm's driver doesn't). No "never below" for less and less-or-equal tests: it would need a
-  3D corner's depth rasterized below 0 (the whole number at depth 0 is 0), where MoltenVK moves the depth interpolated
-  beside it, and held at 0 it isn't true (part 102).
+  (`depth_less`), where the device clamps depth and the PRIM's corners' depths are the GE's 0-65535 (every 3D one's,
+  held; a 2D one's past them takes another pipeline: `Pipeline::outside`): those pipelines rasterize the depth a step
+  and a half above the GE's, (z + 1.5) / 65536.5 (`draw.vert`'s and `transform.vert`'s `ABOVE`), so the whole number
+  written lies a step below it at least while the GPU's depth and the one interpolated beside it part by less than a
+  step (a float's step at 65535 is about 1/256 of one), and a GPU that takes the declaration may still reject before
+  the shader runs a fragment a greater or greater-or-equal test fails (Metal does, Turnip in part; Qualcomm's driver
+  doesn't). Elsewhere the build is undeclared (its `DepthLess` taken out of the SPIR-V at start, `GPU::undeclared()`:
+  the build before part 102, word for word) and the depth rasterized at the GE's, as before: without clamping there's
+  no room for the margin (at 65535 it would be clipped) and at whole number k the plain one is k/65536 of a step; past
+  0-65535 in 2D a float's own step reaches a whole one at ten million (a quad with corners near ten million lost a
+  pixel of a greater-or-equal redraw on MoltenVK with the declaration). No "never below" for less and less-or-equal
+  tests: it would need a 3D corner's depth rasterized below 0 (the whole number at depth 0 is 0), where MoltenVK moves
+  the depth interpolated beside it, and held at 0 it isn't true (part 102).
 - **Stencil**: the GPU's 8-bit stencil, with the GE's comparison, reference, masks and operations (keep, zero,
   replace, invert, increment and decrement clamped). The alpha written to the color follows the stencil where the pass
   operation's result is known in advance (replace, zero), so blending by the frame buffer's alpha reads it; the
