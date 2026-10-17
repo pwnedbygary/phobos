@@ -5078,14 +5078,19 @@ else if (port->type() == "Keyboard") {
       for (auto& p : pixels) p = 0xFF000000 | ((p >> 16) & 0x000000FF) | (p & 0x0000FF00) | ((p << 16) & 0x00FF0000);
       return nall::Encode::PNG::RGBA8(path, pixels.data(), (s32)width * 4, (s32)width, (s32)height);
     }
-    lock_guard<mutex> lock(windowMutex);
-    if (lastFrameBuffer.empty() || currentWidth == 0 || currentHeight == 0) return false;
+    // The last frame is copied under windowMutex, which video() takes for every frame, and converted and encoded after
+    // it's let go, so a screenshot never holds up the picture.
     std::vector<u32> converted;
-    converted.resize(lastFrameBuffer.size());
-    for(u32 i = 0; i < lastFrameBuffer.size(); i++) {
-        u32 p = lastFrameBuffer[i];
-        converted[i] = (p & 0xFF00FF00) | ((p >> 16) & 0x000000FF) | ((p << 16) & 0x00FF0000);
+    u32 width = 0, height = 0;
+    {
+      lock_guard<mutex> lock(windowMutex);
+      width = currentWidth;
+      height = currentHeight;
+      u64 pixels = (u64)width * height;
+      if (pixels == 0 || lastFrameBuffer.size() < pixels) return false;
+      converted.assign(lastFrameBuffer.data(), lastFrameBuffer.data() + pixels);
     }
-    return nall::Encode::PNG::RGBA8(path, converted.data(), (s32)currentWidth * 4, (s32)currentWidth, (s32)currentHeight);
+    for (auto& p : converted) p = (p & 0xFF00FF00) | ((p >> 16) & 0x000000FF) | ((p << 16) & 0x00FF0000);
+    return nall::Encode::PNG::RGBA8(path, converted.data(), (s32)width * 4, (s32)width, (s32)height);
   }
 }
