@@ -95,6 +95,14 @@ layout(location = 8) flat in vec4 vertexFlatColor;
 layout(location = 9) flat in vec4 vertexFlatSpecular;
 layout(location = 10) noperspective in vec2 vertexTexels;
 
+//(DEPTHS) The depth written, floor(z) / 65536, is never above the depth the GPU rasterizes from the same z: the GE's,
+//z / 65535, or where the device clamps depth a step and a half above it (draw.vert's ABOVE), a step at least below.
+//Declared so, a GPU may still reject before the shader runs a fragment that a greater or greater-or-equal test fails,
+//as it would fail it after.
+#ifdef DEPTHS
+layout(depth_less) out float gl_FragDepth;
+#endif
+
 //Output 1 is the destination's factor for dual-source blending; a GPU without it gets the shader built without
 //(SINGLE: compile.sh), and the renderer approximates those factors (gpu.cpp).
 #ifdef SINGLE
