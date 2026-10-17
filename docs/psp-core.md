@@ -15768,10 +15768,11 @@ dialog (the branch's runner and master's, built from `1d62fed2d` and `1c75c5600`
 
 ## Part 102: Vulkan at 5x on the RP6 — what grows with the resolution (the scene passes' hidden pixels, shaded because the shader writes the depth; Activision Hits' depth copies through the staging buffer), the depth-writing shader's depth declared never above the depth rasterized, another frame buffer's depth taken image to image
 
-On branch `cursor/psp-hires-2b67` (draft PR #265), on master `a8d5640f5` (part 101, #263). The 5x collapse the nightly
-sweep found on the RP6, found out game by game on the M1 with a measurement build and then on the RP6 itself (the
-coordinator's runs: no agent touches the RP6). Clean room: no PPSSPP for the GE or GPU code, JPCSP not read; for what
-Turnip does, Mesa's documentation and Igalia's write-up of Adreno's low-resolution Z. Save states: unchanged.
+On branch `cursor/psp-hires-2b67` (draft PR #265), on master `a8d5640f5` (part 101, #263), master `7023fb080` (#264, no
+part) merged in. The 5x collapse the nightly sweep found on the RP6, found out game by game on the M1 with a measurement
+build and then on the RP6 itself (the coordinator's runs: no agent touches the RP6). Clean room: no PPSSPP for the GE or
+GPU code, JPCSP not read; for what Turnip does, Mesa's documentation and Igalia's write-up of Adreno's low-resolution Z.
+Save states: unchanged.
 
 **The problem.** The sweep (nightly-215681, the owner's profile, Turnip v37, Vulkan fast) at 5x against 1x: Activision
 Hits 57.6 → 2.9 fps, Chains of Olympus 59.6 → 9.8, Ghost of Sparta 36.8 → 10.8, Killzone 59.7 → 24.0, Super Monkey
@@ -15900,23 +15901,24 @@ stencil a pattern of its own, the depths no whole steps of either format (a copy
 copies the first's depth into the second whole and into the third as a part, 45x27 from (5, 3) to (37, 9), placed and
 sized as no tile or block is, as a run's copy is partial and offset; it reads both back and wants the depth taken inside
 the part and every other depth and every stencil as they were. A probe the GPU doesn't finish loses the device as
-`wait()` does (the fence, the command buffer and the pictures it may still use left as they are). The same depths either
-way (a copy of the same format's depth values); the stencil left as far as the probe sees, a whole copy and a partial
-one of pictures written by uploads, not drawn (the RP6's saved states, below, check the copies games make). Not on the
-M1: MoltenVK's copy takes the stencil (Metal copies a depth and stencil picture whole), and so does lavapipe's (the
-first push of this work had the copy on every device but a portability implementation, and CI's lavapipe lanes failed
-gpuSharedDepth's stencil bytes, 0x5a expected, the other frame buffer's 0xa5, every depth right). On the RP6 the first
-probe (the whole copy alone) found the copy leaves the stencil with Turnip and with Qualcomm's driver alike, so both
-copied image to image; whether the part changes that is for the next RP6 runs' "image copy" to say (their measurement
-builds print the depth format too, not logged before). The tests that take depth between frame buffers (gpuSharedDepth:
-each its own stencil; gpuDepthOrders: the runs between an 8888 frame buffer and a 16-bit one, at 1x and 2x) pass either
-way. Where the probe says no (the M1, CI's lavapipe), both force the copy as well: gpuSharedDepth once, finding the
-stencil taken as the probe said, and gpuDepthOrders every way it's run, every byte of the screens the software
-renderer's, so the copy's regions and runs are tested where the probe declines it (each run's offsets swapped fail it);
-and every image copy's aspects are counted (`Backend::depthCopyAspects`), the depth's alone wanted, as a copy naming the
-stencil too looks the same on a device that takes the stencil anyway. Activision Hits' copyright screen on the RP6 (this
-branch's runs, below): at 5x 2.7 → 19.4 fps on Turnip, its depth copies 331 → 8.3 ms of GPU time a frame, and 12.9 →
-16.7 fps on Qualcomm's driver (28.4 → 11.1 ms); at 1x 15.4 → 247.1 fps on Turnip.
+`wait()` does (the fence, the command buffer and the pictures it may still use left as they are); a device lost
+otherwise lets its pictures and buffers go. The same depths either way (a copy of the same format's depth values); the
+stencil left as far as the probe sees, a whole copy and a partial one of pictures written by uploads, not drawn (the
+RP6's saved states, below, check the copies games make). Not on the M1: MoltenVK's copy takes the stencil (Metal copies
+a depth and stencil picture whole), and so does lavapipe's (the first push of this work had the copy on every device but
+a portability implementation, and CI's lavapipe lanes failed gpuSharedDepth's stencil bytes, 0x5a expected, the other
+frame buffer's 0xa5, every depth right). On the RP6 both probes find the copy leaves the stencil, with Turnip and with
+Qualcomm's driver alike: the first (the whole copy alone) and the new one, with the part (the fix round's build: "image
+copy 1" in every run, at 1x and 5x on Turnip and at 5x on Qualcomm's driver, the depth format D32_SFLOAT_S8_UINT on
+both), so both copy image to image. The tests that take depth between frame buffers (gpuSharedDepth: each its own
+stencil; gpuDepthOrders: the runs between an 8888 frame buffer and a 16-bit one, at 1x and 2x) pass either way. Where
+the probe says no (the M1, CI's lavapipe), both force the copy as well: gpuSharedDepth once, finding the stencil taken
+as the probe said, and gpuDepthOrders every way it's run, every byte of the screens the software renderer's, so the
+copy's regions and runs are tested where the probe declines it (each run's offsets swapped fail it); and every image
+copy's aspects are counted (`Backend::depthCopyAspects`), the depth's alone wanted, as a copy naming the stencil too
+looks the same on a device that takes the stencil anyway. Activision Hits' copyright screen on the RP6 (the fix round's
+build, below): at 5x 2.7 → 19.4 fps on Turnip, its depth copies 331.6 → 8.3 ms of GPU time a frame, and 12.9 → 16.7 fps
+on Qualcomm's driver (28.5 → 11.1 ms); at 1x 15.4 → 247.0 fps on Turnip.
 
 ### Exactness
 
@@ -15934,7 +15936,11 @@ check of 3c20bdbf5's image copy over the library (the six scenes from their stat
 another frame buffer's depth most from boot at 5x, and the 217 that take it more than 30 times in their first 900 frames
 at 2x, each saved after its takes, on Turnip; the copy's code is the same in the fix round) found every pair the same
 file: 237 of 237, none different, none missing (18:50-20:28, `rp6/hires-takes-rp6-summary.txt`, every run of this
-branch's build saying "image copy 1"). tests/psp: 576 groups, 0 failures (sanitized).
+branch's build saying "image copy 1"). The fix round's build (77143a9ff) against master's again
+(`rp6b/hires-fix-rp6-states.txt`, `rp6b/hires-takes-fix-rp6.log`): the states at frame 150 at 5x of all six scenes of
+the speed runs below are the same file on Turnip and on Qualcomm's driver, the image copy taken in every run of the fix
+on both; and the targeted check's first 20 pairs (the six scenes from their states at 5x and 2x, the 8 heaviest games
+from boot at 5x) are 20 the same, none different, none missing. tests/psp: 576 groups, 0 failures (sanitized).
 
 ### The review's round
 
@@ -15947,37 +15953,44 @@ own now fails a committed test on the M1: the margin removed, or removed for gre
 without clamping (gpuDepthBuilds); the declaration kept past 0-65535 (gpuDepthBuilds, and gpuDepthOutside loses the
 review's very pixels, 1 of 384 at 1x and 2 of 1,536 at 2x); `emit()` not marking those PRIMs (gpuDepthOutside); the copy
 naming both aspects (gpuSharedDepth, gpuDepthOrders); its offsets swapped (gpuDepthOrders, 2,048 and 9,080 bytes apart).
-The second round approved, with two should-fixes: the new probe on the RP6 (the coordinator's runs, below), and
-`emit()`'s test of every corner, on either side of the range: corners below 0 unseen, or only the first corner looked
-at, passed every test, Metal showing no picture of either; the pretend backend's two keys for them (a quad below 0
-alone, a triangle with only a later corner past 65535) fail both now. Its nits are in these sections: the margin's size
-(above), the reason for leaving out devices without clamping (caution), the vertex shaders (master's arithmetic, not
-master's SPIR-V), the probe's device-lost return (its pictures and buffers let go), the hashes not reaching the outside
-pipelines. Untested still: an early rejection together with a stencil depth-fail operation, and with an alpha test's
-discard; the probe's 24-bit format (MoltenVK and lavapipe take D32_SFLOAT_S8_UINT).
+The second round approved, with two should-fixes: the new probe on the RP6 (met: the fix round's build took the image
+copy on both drivers, its states master's; below), and `emit()`'s test of every corner, on either side of the range:
+corners below 0 unseen, or only the first corner looked at, passed every test, Metal showing no picture of either; the
+pretend backend's two keys for them (a quad below 0 alone, a triangle with only a later corner past 65535) fail both
+now. Its nits are in these sections: the margin's size (above), the reason for leaving out devices without clamping
+(caution), the vertex shaders (master's arithmetic, not master's SPIR-V), the probe's device-lost return (its pictures
+and buffers let go), the hashes not reaching the outside pipelines. Untested still: an early rejection together with a
+stencil depth-fail operation, and with an alpha test's discard; the probe's 24-bit format (MoltenVK and lavapipe take
+D32_SFLOAT_S8_UINT).
 
 ### The RP6's runs of this branch
 
-The coordinator's runs (`rp6/hires-pr-rp6.sh`: master's and this branch's measurement builds, the same scratch patches
-on each, 150 frames; on Turnip two rounds at 1x and 5x, the best of them; Qualcomm's driver one round at 5x). Frames a
-second, master → this branch, and Turnip's GPU ms a frame at 5x:
+The coordinator's runs of the fix round's build (`rp6b/hires-fix-rp6.sh`: master's and 77143a9ff's measurement builds,
+the same scratch patches on each, 150 frames; on Turnip two rounds at 1x and 5x, the best of them; Qualcomm's driver
+one round at 5x; what they draw is this branch's head's, the commits since being tests, docs and the probe's
+device-lost return). Frames a second, master → this branch, and Turnip's GPU ms a frame at 5x:
 
 | scene | Turnip 1x | Turnip 5x | GPU ms, Turnip 5x | Qualcomm 5x |
 |---|---|---|---|---|
-| Activision Hits (copyright) | 15.4 → 247.1 | 2.7 → 19.4 | 374.0 → 50.9 | 12.9 → 16.7 |
-| Super Monkey Ball (story) | 29.7 → 29.4 | 13.5 → 15.9 | 72.2 → 61.0 | 12.3 → 13.0 |
-| Army of Two (play) | 31.4 → 31.2 | 14.9 → 15.8 | 65.3 → 61.5 | 13.5 → 14.0 |
-| Ghost of Sparta (menu) | 42.1 → 42.4 | 8.9 → 9.2 | 111.8 → 107.5 | 7.6 → 7.7 |
-| Chains of Olympus (menu) | 128.1 → 127.8 | 9.6 → 9.8 | 103.2 → 100.6 | 8.2 → 8.3 |
-| Killzone (play) | 69.8 → 69.4 | 15.9 → 15.9 | 61.3 → 61.3 | 13.4 → 13.5 |
+| Activision Hits (copyright) | 15.4 → 247.0 | 2.7 → 19.4 | 374.2 → 50.9 | 12.9 → 16.7 |
+| Super Monkey Ball (story) | 29.7 → 29.8 | 13.5 → 15.9 | 72.2 → 61.0 | 12.3 → 13.0 |
+| Army of Two (play) | 31.3 → 31.3 | 14.9 → 15.8 | 65.4 → 61.5 | 13.5 → 14.0 |
+| Ghost of Sparta (menu) | 42.1 → 42.2 | 8.9 → 9.2 | 111.9 → 107.6 | 7.6 → 7.7 |
+| Chains of Olympus (menu) | 127.4 → 128.0 | 9.6 → 9.8 | 103.1 → 100.5 | 8.2 → 8.3 |
+| Killzone (play) | 69.7 → 69.7 | 15.9 → 15.9 | 61.1 → 61.1 | 13.5 → 13.5 |
 
-The probe took the image copy on both drivers (the runs' "image copy 1"). At 5x on Turnip the depth copies' GPU time
-fell everywhere they're made (Super Monkey Ball 8.9 → 1.6 ms a frame, Army of Two 4.8 → 0.9, Ghost of Sparta 5.1 → 0.9,
-Chains of Olympus 3.2 → 0.6; Killzone makes none), and Super Monkey Ball's passes 63.2 → 59.3 ms (the declaration,
-above); every other scene's passes are the same. At 1x everything but Activision Hits is within 1%: those scenes wait
-for the CPU there (8-34 ms of emulation a frame against 6-9 ms of GPU). For scale (the coordinator's runs): PPSSPP
-1.20.4 runs all 11 of the games the 5x sweep found slowest at 59.8-60.0 fps at 5x on the same RP6 (the games from
-their start, not these scenes), so the RP6 can draw them at 5x: the gap is Phobos's.
+The new probe took the image copy on both drivers: "image copy 1" in every run of the fix, the depth format
+D32_SFLOAT_S8_UINT (130) on both (the table's "?" for Qualcomm's flag is its driver name's line breaks; each run's
+stdout.log says "image copy 1"), which meets the second review's first should-fix. At 5x the depth copies' GPU time fell
+everywhere they're made: on Turnip Super Monkey Ball 8.9 → 1.6 ms a frame, Army of Two 4.9 → 0.9, Ghost of Sparta 5.2 →
+0.9, Chains of Olympus 3.2 → 0.6; on Qualcomm's driver 6.2 → 1.6, 3.5 → 0.9, 3.4 → 1.0 and 2.1 → 0.6 (Killzone makes
+none). Super Monkey Ball's passes 63.2 → 59.3 ms on Turnip (the declaration, above; Qualcomm's 70.6 either way); every
+other scene's passes are the same. At 1x everything but Activision Hits is within 1%: those scenes wait for the CPU
+there (8-34 ms of emulation a frame against 6-9 ms of GPU). The first build's runs (3c20bdbf5 with the first probe,
+`rp6/hires-pr-rp6.sh`, 14:55-15:20) gave the same at 5x on both drivers, to the tenth, and at 1x within 1.5% (Super
+Monkey Ball's 29.4 against 29.8 the most). For scale (the coordinator's runs): PPSSPP 1.20.4 runs all 11 of the games
+the 5x sweep found slowest at 59.8-60.0 fps at 5x on the same RP6 (the games from their start, not these scenes), so the
+RP6 can draw them at 5x: the gap is Phobos's.
 
 ### The Mac's numbers
 
