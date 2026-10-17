@@ -128,9 +128,13 @@ object GameInputState {
     fun handleMotionEvent(event: MotionEvent, mappings: Map<Int, String>, systemName: String, pspRightStick: PspRightStick): Boolean {
         if ((event.source and InputDevice.SOURCE_JOYSTICK) != InputDevice.SOURCE_JOYSTICK) return false
         if (event.action != MotionEvent.ACTION_MOVE) return false
+        val outer = EventAxes.event
         EventAxes.event = event
-        onJoystickMove(EventAxes, mappings, systemName, pspRightStick)
-        EventAxes.event = null
+        try {
+            onJoystickMove(EventAxes, mappings, systemName, pspRightStick)
+        } finally {
+            EventAxes.event = outer
+        }
         return true
     }
 

@@ -60,8 +60,9 @@ needs the RP6.
 - **Replay** (`HeldCrossReplayTest`): the game screen's key handler, its hat listener for hotkeys and its focus hook
   moved, unchanged, from EmulatorScreen into `GameKeys` (input/GameKeys.kt), which the screen and the test both call;
   `GameInputState` sends through `coreInput` and takes moves through `onJoystickMove` (interfaces with primitive
-  parameters, one reused reader for the event: nothing allocated per move with the log off). The test checks the
-  buttons and the sticks sent with every move. Cross stays in every state sent through 20 stages of 3,000 joystick
+  parameters, one reused reader for the event: the seams allocate nothing with the log off; master's own allocations
+  on the path stay, the capture check's bound reference per move in MainActivity and the axis loop's boxed keys). The
+  test checks the buttons and the sticks sent with every move. Cross stays in every state sent through 20 stages of 3,000 joystick
   moves (the stick swept, the hat in its eight directions, Square, L1 and R1 tapped and held, the triggers, Android's
   repeats of Cross), with the bindings the RP6 captures for its triggers and hat, with L and R moved to the triggers,
   with each PSP Right Stick choice and with focus moving inside the screen; hotkeys on Select and the Xbox button run

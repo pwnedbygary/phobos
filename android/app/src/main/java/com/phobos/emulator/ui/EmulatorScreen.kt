@@ -190,8 +190,9 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
         return true
     }
 
-    // Keys, the hat's hotkeys and focus go through GameKeys. Remembered once, so what it reads must be state, as here,
-    // read at each call.
+    // Keys, the hat's hotkeys and focus go through GameKeys, remembered once: what it reads must be state, read at each
+    // call, or fixed for the screen, as systemName and romName are (each game gets its own screen: MainScaffold pops
+    // the old game's entry, with no launchSingleTop).
     val gameKeys = remember {
         GameKeys(object : GameKeys.Screen {
             override fun controls() = controls
