@@ -239,6 +239,10 @@ Java_com_phobos_emulator_PhobosCore_flushSaves(JNIEnv*, jobject) {
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_phobos_emulator_PhobosCore_takeScreenshot(JNIEnv* env, jobject, jstring path) {
     const char* nativePath = env->GetStringUTFChars(path, 0);
+    if (!nativePath) {
+        env->ExceptionClear();
+        return JNI_FALSE;
+    }
     bool success = ares::takeScreenshot(nativePath);
     env->ReleaseStringUTFChars(path, nativePath);
     return success ? JNI_TRUE : JNI_FALSE;
@@ -280,9 +284,14 @@ Java_com_phobos_emulator_PhobosCore_captureScreenshot(JNIEnv* env, jobject, jint
     if (array) {
         env->SetIntArrayRegion(array, 0, (jsize)copy.size(), copy.data());
     } else {
-        // No room for the copy: the picture's still written, shown as none.
+        // No room for the copy: the picture's still written, shown as none ({0, 0}).
         env->ExceptionClear();
         array = env->NewIntArray(2);
+        if (!array) {
+            // Nor for that: no screenshot.
+            env->ExceptionClear();
+            return nullptr;
+        }
     }
     std::lock_guard<std::mutex> lock(keptShotMutex);
     keptShot = std::move(picture);
@@ -299,6 +308,10 @@ Java_com_phobos_emulator_PhobosCore_writeScreenshot(JNIEnv* env, jobject, jstrin
     }
     if (picture.pixels.empty()) return JNI_FALSE;
     const char* nativePath = env->GetStringUTFChars(path, 0);
+    if (!nativePath) {
+        env->ExceptionClear();
+        return JNI_FALSE;
+    }
     bool written = ares::writeScreenshot(picture, nativePath);
     env->ReleaseStringUTFChars(path, nativePath);
     return written ? JNI_TRUE : JNI_FALSE;

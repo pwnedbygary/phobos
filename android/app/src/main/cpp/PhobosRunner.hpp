@@ -74,7 +74,7 @@ namespace ares {
   };
   // The picture a screenshot takes now: false when there's none (no frame yet; the PSP's or the N64's unreadable).
   auto captureScreenshot(ScreenshotPicture& picture) -> bool;
-  // [picture] as a PNG at [path]: false when the file can't be opened.
+  // [picture] as a PNG at [path]: false unless all of it got there (the file couldn't be opened, or a disk filled).
   auto writeScreenshot(const ScreenshotPicture& picture, const char* path) -> bool;
   // Both at once.
   auto takeScreenshot(const char* path) -> bool;

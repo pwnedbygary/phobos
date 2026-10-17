@@ -5120,7 +5120,22 @@ else if (port->type() == "Keyboard") {
   }
 
   auto writeScreenshot(const ScreenshotPicture& picture, const char* path) -> bool {
-    return nall::Encode::PNG::RGBA8(path, picture.pixels.data(), picture.width * 4, picture.width, picture.height);
+    if (!nall::Encode::PNG::RGBA8(path, picture.pixels.data(), picture.width * 4, picture.width, picture.height)) return false;
+    // nall's encoder carries on past failed writes (a full disk), so the file is checked: it must be the size the
+    // encoder writes (signature 8, IHDR 25, IDAT 12 + 6 + 6 + 4 x width a row, IEND 12), or, where the encoder then had
+    // optipng or pngcrush recompress it (a desktop: nall runs nothing on Android), smaller and still ending in IEND.
+    u64 whole = 63 + (u64)picture.height * (6 + 4 * (u64)picture.width);
+    u64 size = file::size(path);
+    if (size == whole) return true;
+    if (size < 12 || size > whole) return false;
+    static const u8 iend[12] = {0, 0, 0, 0, 'I', 'E', 'N', 'D', 0xae, 0x42, 0x60, 0x82};
+    auto fp = file::open(path, file::mode::read);
+    if (!fp) return false;
+    fp.seek(size - 12);
+    for (u8 byte : iend) {
+      if (fp.read() != byte) return false;
+    }
+    return true;
   }
 
   auto takeScreenshot(const char* path) -> bool {
