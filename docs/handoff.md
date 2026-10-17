@@ -51,15 +51,17 @@ draft PR #273, with the fix rounds of its review's two rounds (each: approve wit
   and hands back a copy at most 640 px either way, which goes straight to the effect as a `ScreenshotEvent`; then
   `writeScreenshot` writes the PNG while the effect plays, and the pill joins once `Screenshots.note` says how that
   went. Should that be late, the pill waits for it and the slide-off waits for the pill (the card stays in the folder),
-  so the pill always slides in and stays up 660 ms before it all goes; they wait 8 s at most. `ScreenshotEffect`, after
-  the pause menu in EmulatorScreen's Box, collects `screenshotEvents` (only the newest waits). Saved, over 2.7 s or a
-  late note's more: a film-strip card holding the picture starts exactly over the game picture, washed white,
-  and springs to the bottom-left corner as it develops (the top-left where the touch controls show in play, even when
-  shot from the pause menu; clear of the system bars and the cutout); the film winds on two holes; a manila folder
-  springs in beside it, its front panel tips open, the card hops in between its panels, the front snaps shut, the
-  folder squashes, nine sparkles burst, and a pill says "Screenshot saved" over "Screenshots › PlayStation Portable"
-  (in the app's own storage, which no file manager shows, where to choose a folder); then it all slides off to the
-  left. On a narrow screen the pill keeps to its title, as the preview does, but for that hint or a failure, which wrap.
+  so the pill always slides in and stays up 660 ms before it all goes. While they wait the clock holds still at
+  2196 ms, by when everything else has stopped, so nothing is drawn; after 8 s the held time stands for the note's
+  (`runSavedShot`). `ScreenshotEffect`, after the pause menu in EmulatorScreen's Box, collects `screenshotEvents` (only
+  the newest waits). Saved, over 2.7 s or a late note's more: a film-strip card holding the picture starts exactly over
+  the game picture, washed white, and springs to the bottom-left corner as it develops (the top-left where the touch
+  controls show in play, even when shot from the pause menu; clear of the system bars and the cutout); the film winds
+  on two holes; a manila folder springs in beside it, its front panel tips open, the card hops in between its panels,
+  the front snaps shut, the folder squashes, nine sparkles burst, and a pill says "Screenshot saved" over "Screenshots
+  › PlayStation Portable" (in the app's own storage, which no file manager shows, where to choose a folder); then it
+  all slides off to the left. On a narrow screen the pill keeps to its title, as the preview does, but for that hint or
+  a failure, which wrap.
   No picture, or a folder that can't be written: the pill alone, error-tinted, with the reason, 3 s; a write that fails
   once the card is out: the pill beside the folder says so. A new shot restarts it. Remove animations: the card in the
   folder with the pill, still, 1.6 s from when the pill shows (a delay, which the animator scale doesn't shorten).
@@ -112,20 +114,24 @@ draft PR #273, with the fix rounds of its review's two rounds (each: approve wit
   easings against values solved apart; the front panel's perspective; 70 values at 20 mid-span times as the preview
   itself moves, sampled from its animations in Chrome: scratch/screenshot-feedback/golden; a note known by the pill's
   time changes nothing, a late one keeps the pill's whole slide-in and its 660 ms up before the slide-off, one after
-  the on-time end still gets its pill, and none at all still ends). `ScreenshotsTest` (the name, the characters, long
+  the on-time end still gets its pill, and none at all still ends; once settled nothing but the pill and the slide-off
+  moves, and `runSavedShot` holds the clock still there while a late note is awaited, taking the held time for a
+  note that never comes, but never for an on-time one). `ScreenshotsTest` (the name, the characters, long
   titles, never overwriting, the folder made, no picture, a picture not written whole or left empty, a folder that
   can't be written, the note: the old message's texts as the pill's two lines and TalkBack's, the hint).
-- **Checks**: on the Mac, modern flavor: `ScreenshotsTest` 9/0, `ShotTimelineTest` 17/0, the suite 376/0 (50
-  classes). Seven mutations each fail a test, each reverted: the review's first four (each span eased with the next
-  span's curve, the 330 ms pose changed, the hop eased out: the golden test; Remove animations' turn ignoring it: its
-  test) and its second round's three spans that looked linear to it (the wind-up, the folder's last settle, the dip
-  back: the golden test at 1115, 1880 and 1735 ms). The native files pass clang's syntax check for arm64-v8a with the
-  build's definitions and include paths; CI compiles them in both flavors' APKs and the desktop builds. The PNG size
-  `writeScreenshot` expects matches nall's own output from 1x1 to 1920x1088. Not run on the RP6: the coordinator
-  measures the effect there. Not seen drawn here (no device, no preview renderer): the `@Preview`s at 420, 1400 and
-  2000 ms and the failure show it in Android Studio. nall's PNG writer can't run `optipng` or `pngcrush` on Android
-  (nall defines PLATFORM_ANDROID there, and its `execute()` does nothing): the RP6 never forks for them; the Linux and
-  macOS desktop builds do.
+- **Checks**: on the Mac, modern flavor: `ScreenshotsTest` 9/0, `ShotTimelineTest` 20/0, the suite 379/0 (50
+  classes). The clock's hold tests fail when the clock runs on through the wait or the held time isn't taken on the
+  timeout (each tried, then reverted). Seven mutations each fail a test, each reverted: the review's first four
+  (each span eased with the next span's curve, the 330 ms pose changed, the hop eased out: the golden test; Remove
+  animations' turn ignoring it: its test) and its second round's three spans that looked linear to it (the wind-up,
+  the folder's last settle, the dip back: the golden test at 1115, 1880 and 1735 ms). The native files pass clang's
+  syntax check for arm64-v8a with the build's definitions and include paths; CI compiles them in both flavors' APKs
+  and the desktop builds. The PNG size `writeScreenshot` expects matches nall's own output from 1x1 to 1920x1088 (the
+  review's, to 4800x2720), and must change with nall/encode/png.hpp: a larger file is refused outright. Not run on the
+  RP6: the coordinator measures the effect there. Not seen drawn here (no device, no preview renderer): the
+  `@Preview`s at 420, 1400 and 2000 ms and the failure show it in Android Studio. nall's PNG writer can't run
+  `optipng` or `pngcrush` on Android (nall defines PLATFORM_ANDROID there, and its `execute()` does nothing): the RP6
+  never forks for them; the Linux and macOS desktop builds do.
 
 ## README: a development progress section, generated from docs/progress/data.json — 2026-10-17
 
