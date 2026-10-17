@@ -35,6 +35,32 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## README: a development progress section, generated from docs/progress/data.json — 2026-10-17
+
+Branch `cursor/readme-progress-2b67`, on master `5442acb8b` (part 102, #265); its PR to master. Documentation and the
+script that generates it: nothing the app, the cores or the desktop program build changes.
+- **What**: README.md's new last section, "Development progress", between `<!-- progress:begin -->` and
+  `<!-- progress:end -->`: four headline numbers, three charts (the 266-game library runs, the 22 slow games at full
+  speed by build, pull requests opened per day), a Mermaid `timeline` of the seven eras and the PSP releases. The full
+  story is docs/progress.md: each era's milestones, the firsts, all twelve charts (the 5x runs on the RP6, PPSSPP and
+  Phobos at 5x, the GE's list time on a PSP-1000 against Phobos's model among them), every release, and the setbacks
+  with what changed after them. Download no longer names a latest release (v2.0.0 was the first with the PSP; the
+  Releases page has the newest).
+- **How**: docs/progress/data.json holds the curated data, each chart with its source note; tools/progress/render.py
+  (Python 3's standard library only) writes docs/images/progress/<id>-light.svg and -dark.svg (for `<picture>` and
+  prefers-color-scheme, about 880x360, a system font stack), docs/progress.md and the README section, replacing only
+  what's between the markers. The same data gives the same bytes. `--check` writes nothing and exits 1 when a file
+  differs from the data or a chart no longer comes from it. For each release: update the data, run the script, commit
+  the result (docs/development-process.md says so).
+- **Sources**: the numbers are the ones docs/psp-core.md, docs/psp-compatibility.md, tools/psp-measure/README.md and
+  the pull requests already report, and GitHub's pull request and release data (to 17 Oct, 2:38 PM). Private details
+  are left out: no device serial numbers, local paths, session IDs, personal notes, or where any game came from.
+- **Checks**: the script run twice, every output byte-identical (SHA-256); `--check` passes; all 24 SVGs rendered to
+  PNG with headless Chrome, light and dark, and looked at (titles, axis labels, legends, captions; nothing clipped or
+  overlapping); the Mermaid timeline in plain `timeline` syntax (the script refuses `:`, `#` and `;` in its text);
+  `git diff --check`; a privacy scan of every new and changed line.
+- **Review**: not yet reviewed independently; due before merging (development-process.md).
+
 ## PSP Vulkan at 5x: the depth-writing shader's depth declared never above the depth rasterized; another frame buffer's depth taken image to image where the device's copy leaves the stencil (Activision Hits' copyright screen at 5x on the RP6 2.7 → 19.4 fps) — 2026-10-16
 
 Branch `cursor/psp-hires-2b67`, on master `a8d5640f5` (part 101, #263), master `7023fb080` (#264 and the PGD layer's

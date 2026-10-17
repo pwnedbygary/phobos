@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="520" viewBox="0 0 880 520" role="img" aria-labelledby="title desc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Noto Sans, Helvetica, Arial, sans-serif">
+<title id="title">At 5x on the RP6: PPSSPP against Phobos in the heavy games (16 Oct 2026)</title>
+<desc id="desc">At 5x on the same RP6, PPSSPP runs all 11 heavy games at about 60 fps, while Phobos runs them at 2.9 to 52.9 fps.</desc>
+<rect x="0.5" y="0.5" width="879" height="519" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+<text x="20" y="30" font-size="15" fill="#1f2328" font-weight="600">At 5x on the RP6: PPSSPP against Phobos in the heavy games (16 Oct 2026)</text>
+<rect x="20" y="45" width="10" height="10" rx="2" fill="#0969da"/>
+<text x="34" y="54" font-size="12" fill="#1f2328">PPSSPP 1.20.4 (Vulkan)</text>
+<rect x="195.9" y="45" width="10" height="10" rx="2" fill="#bc4c00"/>
+<text x="209.9" y="54" font-size="12" fill="#1f2328">Phobos (Vulkan fast, nightly-215681)</text>
+<text x="20" y="492" font-size="11" fill="#59636e">Source: both on the same Retroid Pocket 6 at 5x: PPSSPP&#39;s speed counter read from screenshots (frame skipping off), Phobos from its overnight 5x</text>
+<text x="20" y="506" font-size="11" fill="#59636e">library run; mean fps after the first 18 s of 120 s runs with the same presses, so similar scenes rather than identical ones.</text>
+<line x1="233.5" y1="84" x2="233.5" y2="437" stroke="#8c959f" stroke-width="1"/>
+<text x="233.5" y="451" font-size="11" fill="#59636e" text-anchor="middle">0</text>
+<line x1="326.8" y1="84" x2="326.8" y2="437" stroke="#e6e9ed" stroke-width="1"/>
+<text x="326.8" y="451" font-size="11" fill="#59636e" text-anchor="middle">10</text>
+<line x1="420.1" y1="84" x2="420.1" y2="437" stroke="#e6e9ed" stroke-width="1"/>
+<text x="420.1" y="451" font-size="11" fill="#59636e" text-anchor="middle">20</text>
+<line x1="513.4" y1="84" x2="513.4" y2="437" stroke="#e6e9ed" stroke-width="1"/>
+<text x="513.4" y="451" font-size="11" fill="#59636e" text-anchor="middle">30</text>
+<line x1="606.7" y1="84" x2="606.7" y2="437" stroke="#e6e9ed" stroke-width="1"/>
+<text x="606.7" y="451" font-size="11" fill="#59636e" text-anchor="middle">40</text>
+<line x1="700" y1="84" x2="700" y2="437" stroke="#e6e9ed" stroke-width="1"/>
+<text x="700" y="451" font-size="11" fill="#59636e" text-anchor="middle">50</text>
+<line x1="793.3" y1="84" x2="793.3" y2="437" stroke="#e6e9ed" stroke-width="1"/>
+<text x="793.3" y="451" font-size="11" fill="#59636e" text-anchor="middle">60</text>
+<line x1="792.7" y1="80" x2="792.7" y2="437" stroke="#59636e" stroke-width="1.2" stroke-dasharray="5 4"/>
+<text x="792.7" y="75" font-size="10.5" fill="#59636e" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">Full speed</text>
+<text x="225.5" y="104" font-size="12" fill="#1f2328" text-anchor="end">Activision Hits Remixed</text>
+<rect x="233.5" y="88.9" width="558.8" height="10.2" rx="1.5" fill="#0969da"/>
+<rect x="233.5" y="101" width="27.1" height="10.2" rx="1.5" fill="#bc4c00"/>
+<text x="225.5" y="136.1" font-size="12" fill="#1f2328" text-anchor="end">God of War: Chains of Olympus</text>
+<rect x="233.5" y="120.9" width="558.8" height="10.2" rx="1.5" fill="#0969da"/>
+<rect x="233.5" y="133.1" width="91.4" height="10.2" rx="1.5" fill="#bc4c00"/>
+<text x="225.5" y="168.2" font-size="12" fill="#1f2328" text-anchor="end">God of War: Ghost of Sparta</text>
+<rect x="233.5" y="153" width="558.8" height="10.2" rx="1.5" fill="#0969da"/>
+<rect x="233.5" y="165.2" width="100.8" height="10.2" rx="1.5" fill="#bc4c00"/>
+<text x="225.5" y="200.3" font-size="12" fill="#1f2328" text-anchor="end">Killzone</text>
+<rect x="233.5" y="185.1" width="559.7" height="10.2" rx="1.5" fill="#0969da"/>
+<rect x="233.5" y="197.3" width="223.9" height="10.2" rx="1.5" fill="#bc4c00"/>
+<text x="225.5" y="232.4" font-size="12" fill="#1f2328" text-anchor="end">Army of Two</text>
+<rect x="233.5" y="217.2" width="558.8" height="10.2" rx="1.5" fill="#0969da"/>
+<rect x="233.5" y="229.4" width="238.8" height="10.2" rx="1.5" fill="#bc4c00"/>
+<text x="225.5" y="264.5" font-size="12" fill="#1f2328" text-anchor="end">Super Monkey Ball</text>
+<rect x="233.5" y="249.3" width="557.9" height="10.2" rx="1.5" fill="#0969da"/>
+<rect x="233.5" y="261.5" width="245.4" height="10.2" rx="1.5" fill="#bc4c00"/>
+<text x="225.5" y="296.6" font-size="12" fill="#1f2328" text-anchor="end">Fat Princess</text>
+<rect x="233.5" y="281.4" width="557.9" height="10.2" rx="1.5" fill="#0969da"/>
+<rect x="233.5" y="293.6" width="250" height="10.2" rx="1.5" fill="#bc4c00"/>
+<text x="225.5" y="328.7" font-size="12" fill="#1f2328" text-anchor="end">After Burner: Black Falcon</text>
+<rect x="233.5" y="313.5" width="558.8" height="10.2" rx="1.5" fill="#0969da"/>
+<rect x="233.5" y="325.7" width="364.8" height="10.2" rx="1.5" fill="#bc4c00"/>
+<text x="225.5" y="360.8" font-size="12" fill="#1f2328" text-anchor="end">Seen in Liberty City</text>
+<rect x="233.5" y="345.6" width="559.7" height="10.2" rx="1.5" fill="#0969da"/>
+<rect x="233.5" y="357.8" width="396.5" height="10.2" rx="1.5" fill="#bc4c00"/>
+<text x="225.5" y="392.9" font-size="12" fill="#1f2328" text-anchor="end">Battle vs. Chess</text>
+<rect x="233.5" y="377.7" width="558.8" height="10.2" rx="1.5" fill="#0969da"/>
+<rect x="233.5" y="389.9" width="421.7" height="10.2" rx="1.5" fill="#bc4c00"/>
+<text x="225.5" y="425" font-size="12" fill="#1f2328" text-anchor="end">Colin McRae 2005</text>
+<rect x="233.5" y="409.8" width="558.8" height="10.2" rx="1.5" fill="#0969da"/>
+<rect x="233.5" y="422" width="493.5" height="10.2" rx="1.5" fill="#bc4c00"/>
+<text x="797.3" y="97.5" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">59.9</text>
+<text x="265.6" y="109.7" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">2.9</text>
+<text x="797.3" y="129.6" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">59.9</text>
+<text x="329.9" y="141.8" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">9.8</text>
+<text x="797.3" y="161.7" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">59.9</text>
+<text x="339.3" y="173.9" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">10.8</text>
+<text x="798.3" y="193.8" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">60.0</text>
+<text x="462.4" y="206" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">24.0</text>
+<text x="797.3" y="225.9" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">59.9</text>
+<text x="477.3" y="238.1" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">25.6</text>
+<text x="796.4" y="258" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">59.8</text>
+<text x="483.9" y="270.2" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">26.3</text>
+<text x="796.4" y="290.1" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">59.8</text>
+<text x="488.5" y="302.3" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">26.8</text>
+<text x="797.3" y="322.2" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">59.9</text>
+<text x="603.3" y="334.4" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">39.1</text>
+<text x="798.3" y="354.3" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">60.0</text>
+<text x="635" y="366.5" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">42.5</text>
+<text x="797.3" y="386.4" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">59.9</text>
+<text x="660.2" y="398.6" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">45.2</text>
+<text x="797.3" y="418.5" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">59.9</text>
+<text x="732" y="430.7" font-size="10.5" fill="#1f2328" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">52.9</text>
+<text x="0" y="0" font-size="12" fill="#59636e" text-anchor="middle" transform="translate(20 260.5) rotate(-90)">Game</text>
+<text x="532.1" y="469" font-size="12" fill="#59636e" text-anchor="middle">Frames a second (capped at 60)</text>
+</svg>

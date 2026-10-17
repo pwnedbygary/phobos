@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="400" viewBox="0 0 880 400" role="img" aria-labelledby="title desc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Noto Sans, Helvetica, Arial, sans-serif">
+<title id="title">GE time for one display list: a real PSP against Phobos&#39;s timing model</title>
+<desc id="desc">For the same scenes&#39; display lists, a PSP-1000&#39;s GE took 4.46 to 29.6 ms where Phobos&#39;s model charged 0.59 to 6.24 ms: 4 to 12 times less.</desc>
+<rect x="0.5" y="0.5" width="879" height="399" rx="8" fill="#0d1117" stroke="#30363d"/>
+<text x="20" y="30" font-size="15" fill="#e6edf3" font-weight="600">GE time for one display list: a real PSP against Phobos&#39;s timing model</text>
+<rect x="20" y="45" width="10" height="10" rx="2" fill="#4493f8"/>
+<text x="34" y="54" font-size="12" fill="#e6edf3">PSP-1000 (measured)</text>
+<rect x="183.2" y="45" width="10" height="10" rx="2" fill="#db6d28"/>
+<text x="197.2" y="54" font-size="12" fill="#e6edf3">Phobos&#39;s GE model</text>
+<text x="20" y="372" font-size="11" fill="#9198a1">Source: a PSP-1000 measured with a GE profiler plugin under ARK custom firmware (16 Oct 2026), against the time Phobos&#39;s model charges for the</text>
+<text x="20" y="386" font-size="11" fill="#9198a1">same scenes&#39; lists (the headless runner&#39;s --ge-profile, from saved states; #266).</text>
+<line x1="258.7" y1="76" x2="258.7" y2="317" stroke="#656c76" stroke-width="1"/>
+<text x="258.7" y="331" font-size="11" fill="#9198a1" text-anchor="middle">0</text>
+<line x1="354" y1="76" x2="354" y2="317" stroke="#21262d" stroke-width="1"/>
+<text x="354" y="331" font-size="11" fill="#9198a1" text-anchor="middle">5</text>
+<line x1="449.3" y1="76" x2="449.3" y2="317" stroke="#21262d" stroke-width="1"/>
+<text x="449.3" y="331" font-size="11" fill="#9198a1" text-anchor="middle">10</text>
+<line x1="544.7" y1="76" x2="544.7" y2="317" stroke="#21262d" stroke-width="1"/>
+<text x="544.7" y="331" font-size="11" fill="#9198a1" text-anchor="middle">15</text>
+<line x1="640" y1="76" x2="640" y2="317" stroke="#21262d" stroke-width="1"/>
+<text x="640" y="331" font-size="11" fill="#9198a1" text-anchor="middle">20</text>
+<line x1="735.3" y1="76" x2="735.3" y2="317" stroke="#21262d" stroke-width="1"/>
+<text x="735.3" y="331" font-size="11" fill="#9198a1" text-anchor="middle">25</text>
+<line x1="830.6" y1="76" x2="830.6" y2="317" stroke="#21262d" stroke-width="1"/>
+<text x="830.6" y="331" font-size="11" fill="#9198a1" text-anchor="middle">30</text>
+<text x="250.7" y="104.1" font-size="12" fill="#e6edf3" text-anchor="end">Chains of Olympus, difficulty menu</text>
+<rect x="258.7" y="82.8" width="526.1" height="16.3" rx="1.5" fill="#4493f8"/>
+<rect x="258.7" y="101.1" width="118.9" height="16.3" rx="1.5" fill="#db6d28"/>
+<text x="250.7" y="152.3" font-size="12" fill="#e6edf3" text-anchor="end">Ghost of Sparta, main menu</text>
+<rect x="258.7" y="131" width="564.2" height="16.3" rx="1.5" fill="#4493f8"/>
+<rect x="258.7" y="149.3" width="77.2" height="16.3" rx="1.5" fill="#db6d28"/>
+<text x="250.7" y="200.5" font-size="12" fill="#e6edf3" text-anchor="end">Super Monkey Ball, Story Mode</text>
+<rect x="258.7" y="179.2" width="449.9" height="16.3" rx="1.5" fill="#4493f8"/>
+<rect x="258.7" y="197.5" width="37.7" height="16.3" rx="1.5" fill="#db6d28"/>
+<text x="250.7" y="248.7" font-size="12" fill="#e6edf3" text-anchor="end">Killzone, gameplay</text>
+<rect x="258.7" y="227.4" width="446.1" height="16.3" rx="1.5" fill="#4493f8"/>
+<rect x="258.7" y="245.7" width="68.1" height="16.3" rx="1.5" fill="#db6d28"/>
+<text x="250.7" y="296.9" font-size="12" fill="#e6edf3" text-anchor="end">Activision Hits, copyright screen</text>
+<rect x="258.7" y="275.6" width="85" height="16.3" rx="1.5" fill="#4493f8"/>
+<rect x="258.7" y="293.9" width="11.2" height="16.3" rx="1.5" fill="#db6d28"/>
+<text x="789.8" y="94.5" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">27.6</text>
+<text x="382.7" y="112.9" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">6.24</text>
+<text x="828" y="142.7" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">29.6</text>
+<text x="340.9" y="161.1" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">4.05</text>
+<text x="713.6" y="190.9" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">23.6</text>
+<text x="301.5" y="209.3" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">1.98</text>
+<text x="709.8" y="239.1" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">23.4</text>
+<text x="331.8" y="257.5" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">3.57</text>
+<text x="348.7" y="287.3" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">4.46</text>
+<text x="275" y="305.7" font-size="10.5" fill="#e6edf3" stroke="#0d1117" stroke-width="3" stroke-linejoin="round" paint-order="stroke">0.59</text>
+<text x="0" y="0" font-size="12" fill="#9198a1" text-anchor="middle" transform="translate(20 196.5) rotate(-90)">Scene</text>
+<text x="544.7" y="349" font-size="12" fill="#9198a1" text-anchor="middle">Milliseconds per display list</text>
+</svg>

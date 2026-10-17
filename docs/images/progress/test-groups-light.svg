@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="360" viewBox="0 0 880 360" role="img" aria-labelledby="title desc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Noto Sans, Helvetica, Arial, sans-serif">
+<title id="title">Host tests: groups in the PSP system suite (tests/psp)</title>
+<desc id="desc">Test groups in the PSP system suite as each part reported them, from 226 at part 24 to 595 at part 109.</desc>
+<rect x="0.5" y="0.5" width="879" height="359" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+<text x="20" y="30" font-size="15" fill="#1f2328" font-weight="600">Host tests: groups in the PSP system suite (tests/psp)</text>
+<text x="20" y="332" font-size="11" fill="#59636e">Source: the checks recorded in each part of docs/psp-core.md, and in the GE thread&#39;s pull request (#272, part 109). Where a part ran several trees,</text>
+<text x="20" y="346" font-size="11" fill="#59636e">the largest count.</text>
+<line x1="63.1" y1="278" x2="856" y2="278" stroke="#8c959f" stroke-width="1"/>
+<text x="55.1" y="282" font-size="11" fill="#59636e" text-anchor="end">0</text>
+<line x1="63.1" y1="246.3" x2="856" y2="246.3" stroke="#e6e9ed" stroke-width="1"/>
+<text x="55.1" y="250.3" font-size="11" fill="#59636e" text-anchor="end">100</text>
+<line x1="63.1" y1="214.6" x2="856" y2="214.6" stroke="#e6e9ed" stroke-width="1"/>
+<text x="55.1" y="218.6" font-size="11" fill="#59636e" text-anchor="end">200</text>
+<line x1="63.1" y1="182.9" x2="856" y2="182.9" stroke="#e6e9ed" stroke-width="1"/>
+<text x="55.1" y="186.9" font-size="11" fill="#59636e" text-anchor="end">300</text>
+<line x1="63.1" y1="151.1" x2="856" y2="151.1" stroke="#e6e9ed" stroke-width="1"/>
+<text x="55.1" y="155.1" font-size="11" fill="#59636e" text-anchor="end">400</text>
+<line x1="63.1" y1="119.4" x2="856" y2="119.4" stroke="#e6e9ed" stroke-width="1"/>
+<text x="55.1" y="123.4" font-size="11" fill="#59636e" text-anchor="end">500</text>
+<line x1="63.1" y1="87.7" x2="856" y2="87.7" stroke="#e6e9ed" stroke-width="1"/>
+<text x="55.1" y="91.7" font-size="11" fill="#59636e" text-anchor="end">600</text>
+<line x1="63.1" y1="56" x2="856" y2="56" stroke="#e6e9ed" stroke-width="1"/>
+<text x="55.1" y="60" font-size="11" fill="#59636e" text-anchor="end">700</text>
+<text x="0" y="0" font-size="12" fill="#59636e" text-anchor="middle" transform="translate(20 167) rotate(-90)">Test groups</text>
+<polygon points="91.5,278 91.5,206.3 148.1,188.9 204.7,182.2 261.4,179.1 318,176.2 374.6,129.6 431.3,122.9 487.9,110.5 544.5,105.8 601.2,103.6 657.8,101 714.4,96.6 771.1,95.3 827.7,89.3 827.7,278" fill="#1a7f37" fill-opacity="0.12"/>
+<polyline points="91.5,206.3 148.1,188.9 204.7,182.2 261.4,179.1 318,176.2 374.6,129.6 431.3,122.9 487.9,110.5 544.5,105.8 601.2,103.6 657.8,101 714.4,96.6 771.1,95.3 827.7,89.3" fill="none" stroke="#1a7f37" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="91.5" cy="206.3" r="3.5" fill="#1a7f37" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="148.1" cy="188.9" r="3.5" fill="#1a7f37" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="204.7" cy="182.2" r="3.5" fill="#1a7f37" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="261.4" cy="179.1" r="3.5" fill="#1a7f37" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="318" cy="176.2" r="3.5" fill="#1a7f37" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="374.6" cy="129.6" r="3.5" fill="#1a7f37" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="431.3" cy="122.9" r="3.5" fill="#1a7f37" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="487.9" cy="110.5" r="3.5" fill="#1a7f37" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="544.5" cy="105.8" r="3.5" fill="#1a7f37" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="601.2" cy="103.6" r="3.5" fill="#1a7f37" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="657.8" cy="101" r="3.5" fill="#1a7f37" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="714.4" cy="96.6" r="3.5" fill="#1a7f37" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="771.1" cy="95.3" r="3.5" fill="#1a7f37" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="827.7" cy="89.3" r="3.5" fill="#1a7f37" stroke="#ffffff" stroke-width="1.5"/>
+<text x="91.5" y="197.3" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">226</text>
+<text x="148.1" y="179.9" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">281</text>
+<text x="204.7" y="173.2" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">302</text>
+<text x="261.4" y="170.1" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">312</text>
+<text x="318" y="167.2" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">321</text>
+<text x="374.6" y="120.6" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">468</text>
+<text x="431.3" y="113.9" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">489</text>
+<text x="487.9" y="101.5" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">528</text>
+<text x="544.5" y="96.8" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">543</text>
+<text x="601.2" y="94.6" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">550</text>
+<text x="657.8" y="92" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">558</text>
+<text x="714.4" y="87.6" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">572</text>
+<text x="771.1" y="86.3" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">576</text>
+<text x="827.7" y="80.3" font-size="10.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">595</text>
+<text x="91.5" y="292" font-size="11" fill="#1f2328" text-anchor="middle">24</text>
+<text x="148.1" y="292" font-size="11" fill="#1f2328" text-anchor="middle">29</text>
+<text x="204.7" y="292" font-size="11" fill="#1f2328" text-anchor="middle">32</text>
+<text x="261.4" y="292" font-size="11" fill="#1f2328" text-anchor="middle">37</text>
+<text x="318" y="292" font-size="11" fill="#1f2328" text-anchor="middle">42</text>
+<text x="374.6" y="292" font-size="11" fill="#1f2328" text-anchor="middle">78</text>
+<text x="431.3" y="292" font-size="11" fill="#1f2328" text-anchor="middle">83</text>
+<text x="487.9" y="292" font-size="11" fill="#1f2328" text-anchor="middle">94</text>
+<text x="544.5" y="292" font-size="11" fill="#1f2328" text-anchor="middle">95</text>
+<text x="601.2" y="292" font-size="11" fill="#1f2328" text-anchor="middle">98</text>
+<text x="657.8" y="292" font-size="11" fill="#1f2328" text-anchor="middle">99</text>
+<text x="714.4" y="292" font-size="11" fill="#1f2328" text-anchor="middle">101</text>
+<text x="771.1" y="292" font-size="11" fill="#1f2328" text-anchor="middle">102</text>
+<text x="827.7" y="292" font-size="11" fill="#1f2328" text-anchor="middle">109</text>
+<text x="459.6" y="309" font-size="12" fill="#59636e" text-anchor="middle">Part whose checks reported the count (24-42: 6-8 Oct; 78-102: 12-16 Oct; 109: 17 Oct)</text>
+</svg>

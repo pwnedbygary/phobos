@@ -61,6 +61,8 @@ are excluded; copying the portable template elsewhere requires explicit adoption
   (or the same tasks with `./gradlew` in `android/`). CI's Android Build runs them on every
   pull request, master push and tag, and publishes neither its release nor the nightly when
   they fail.
+- Releases: update `docs/progress/data.json` and run `python3 tools/progress/render.py` to refresh README.md's
+  Development progress section, docs/progress.md and their charts (`--check` confirms they match the data).
 - Missing submodules/SDK/device are explicit blockers for their respective checks.
   Use repository tests applicable to touched paths; never invent suite results.
 - Keep Vulkan SyncFull waiting and DP interrupt order. Before any async proposal,
