@@ -1442,7 +1442,8 @@ static auto execModule() -> TestModule {
 //program has the machine to itself: the old one's threads, memory and marks gone, the clock started afresh, and its
 //argument its path with no parameters, the bytes given with them, or none for none. What can't be started is refused
 //with the old program left running: a file there isn't, one that isn't a program, an argument over 4 KiB. A state
-//saved once the new program has run loads into another machine. On both engines.
+//saved once the new program has run loads into another machine. A GE profile being recorded ends with the old
+//program (none of the new one's vertical blanks in it, its end no earlier than its start). On both engines.
 static auto loadExec() -> void {
   HostFolder stick;
   put(stick, "EXEC.PRX", execModule().build());
@@ -1469,7 +1470,10 @@ static auto loadExec() -> void {
       m.system.memory.write(4, Parameters + 4, c.length < 0 ? 0 : u32(c.length));
       m.system.memory.write(4, Parameters + 8, c.argument ? m.string(c.argument) : 0);
       m.system.memory.write(4, Parameters + 12, 0);
+      GeProfile profile;
+      m.kernel.geProfileStart(profile);
       m.runProgram(0x0880'1000, recompile);  //it ends as the new program is put in
+      CHECK(m.kernel.geProfile == nullptr, true);
       CHECK(m.output == "A", true);
       CHECK(m.kernel.exited, false);
       CHECK(m.kernel.module.name == "TESTEXEC", true);
@@ -1482,6 +1486,8 @@ static auto loadExec() -> void {
       CHECK(word(m.system, Results + 0x108), 0xb0b0);
       CHECK(word(m.system, Results + 0x100), c.expectedLength);
       CHECK(word(m.system, Results + 0x104), c.expectedWord);
+      CHECK(profile.records.size(), 0);
+      CHECK(profile.endTime >= profile.startTime, true);
       CHECK(m.notes.size(), 0);
       CHECK(roundTrip(m, [&](KernelMachine& fresh) { fresh.kernel.mount("ms0", stick.path.string()); }), true);
     }
