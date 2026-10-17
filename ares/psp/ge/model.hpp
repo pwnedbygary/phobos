@@ -158,10 +158,11 @@ struct GeModel {
   }
 
   Rects gpu, software;
-  //The pages (numbered as Memory::watched numbers them: main RAM's or VRAM's) of the textures PRIMs the software
-  //renderer may draw read straight from memory as they're drawn, until they're drawn: a write there waits.
-  struct TexturePages { u32 first = 0, last = 0; u64 at = 0; };
-  std::vector<TexturePages> softwareTextures;
+  //Over each page (numbered as Memory::watched numbers them: main RAM's or VRAM's), the newest PRIM the software
+  //renderer may draw reading its texture there straight from memory as it's drawn: a write there waits till it's
+  //drawn. Kept by page, not by PRIM: thousands may wait to be drawn, and every report taken would go through them.
+  std::vector<u64> softwareTextures = std::vector<u64>((512u << 20) / 4096, 0);
+  u64 softwareTexturesNewest = 0;
   //(the GE thread's reports, as last taken)
   u64 finishKnown = 0, drawnKnown = 0, passed = 0;
   std::array<u64, Blocks> putKnown{};
@@ -302,7 +303,8 @@ struct GeModel {
     std::fill(written.begin(), written.end(), Piece{});
     finishKnown = drawnKnown = passed = 0;
     putKnown = {}, gpuDepth = {};
-    putPoints.clear(), depthBuffers.clear(), targets.clear(), softwareTextures.clear();
+    putPoints.clear(), depthBuffers.clear(), targets.clear();
+    std::fill(softwareTextures.begin(), softwareTextures.end(), 0), softwareTexturesNewest = 0;
   }
 };
 

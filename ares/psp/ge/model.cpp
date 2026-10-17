@@ -258,7 +258,12 @@ auto GE::modelPrimitive(GeModel& model, u32 word, u32 vertexAt, u32 indexAt, con
   if(software && textured) {  //(its texture, which the software renderer may read from memory as it draws)
     u32 low, high, first, last;
     textureBytes(texture, std::min<u32>(texture.height, 512), low, high);
-    if(high > low && memory.pagesOf(low, high - low, first, last)) model.softwareTextures.push_back({first, last, at});
+    if(high > low && memory.pagesOf(low, high - low, first, last)) {
+      for(u32 page = first; page <= last && page < model.softwareTextures.size(); page++) {
+        model.softwareTextures[page] = at;
+      }
+      model.softwareTexturesNewest = at;
+    }
   }
   if(software) {
     //(its pixels may run on past a row's end into the next: as one run from its first to its last)

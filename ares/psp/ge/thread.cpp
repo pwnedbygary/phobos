@@ -209,9 +209,9 @@ auto GeThread::wrote(u64 at) -> void {
 //draw reads from memory as it's drawn: the model's, the reports taken)
 auto GeThread::conflicts(u32 address, u32 size) -> bool {
   u32 first, last;
-  if(!model.softwareTextures.empty() && control.memory.pagesOf(address, size, first, last)) {
-    for(auto& t : model.softwareTextures) {
-      if(t.at > model.drawnKnown && t.first <= last && first <= t.last) return true;
+  if(model.softwareTexturesNewest > model.drawnKnown && control.memory.pagesOf(address, size, first, last)) {
+    for(u32 page = first; page <= last && page < model.softwareTextures.size(); page++) {
+      if(model.softwareTextures[page] > model.drawnKnown) return true;
     }
   }
   u32 physical = address & 0x1fff'ffff;
@@ -377,14 +377,13 @@ auto GeThread::takeReports() -> void {
       model.putKnown[block] = std::max(model.putKnown[block], putReported[block].load(std::memory_order_relaxed));
     }
   }
-  if(!model.putPoints.empty()) {
-    std::erase_if(model.putPoints, [&](const GeModel::PutPoint& point) { return point.at <= model.passed; });
+  if(!model.putPoints.empty() && model.putPoints.front().at <= model.passed) {  //(in their places' order)
+    auto kept = std::find_if(model.putPoints.begin(), model.putPoints.end(),
+                             [&](const GeModel::PutPoint& point) { return point.at > model.passed; });
+    model.putPoints.erase(model.putPoints.begin(), kept);
   }
   if(lostReported.load(std::memory_order_acquire)) hardware = false;
   if(uncertain.load(std::memory_order_acquire)) model.unsure = true;
-  if(!model.softwareTextures.empty()) {
-    std::erase_if(model.softwareTextures, [&](const GeModel::TexturePages& t) { return t.at <= model.drawnKnown; });
-  }
   if(versions->versions()) versions->free(2 * model.passed);
 }
 
@@ -891,7 +890,7 @@ auto GE::copyVertices(u32 count, const VertexFormat& format, GeThread::Copies& c
                   (low >= Memory::VRAMBase && inside(copy, Memory::VRAMSize) &&
                    inside(Memory::VRAMBase, Memory::VRAMWindow)));
   if(together) thread->readClean(vertexAddress, count * format.size);
-  u32 most = 0;
+  u32 least = ~0u, most = 0;
   if(!together && count && format.size) {  //(readVertices()' way a vertex at a time; by indices all in RAM, no wait)
     Memory::KnownDrawn known;
     for(u32 n = 0; n < count; n++) {
@@ -900,18 +899,23 @@ auto GE::copyVertices(u32 count, const VertexFormat& format, GeThread::Copies& c
       u32 address = vertexAddress + index * format.size;
       thread->readClean(address, format.size);
       (void)readVertex(address, format);
-      most = std::max(most, index);
+      least = std::min(least, index), most = std::max(most, index);
     }
   }
   auto take = [&](u32 address, u32 size) {
-    u32 at = bytes.size();
+    u32 at = bytes.size(), physical = address & 0x1fff'ffff;
     bytes.resize(at + size);
-    for(u32 n = 0; n < size; n++) bytes[at + n] = byteAt(memory, address + n);
+    if(physical >= Memory::RAMBase && u64(physical - Memory::RAMBase) + size <= memory.ram.size()) {
+      std::memcpy(&bytes[at], &memory.ram[physical - Memory::RAMBase], size);
+    } else {
+      for(u32 n = 0; n < size; n++) bytes[at + n] = byteAt(memory, address + n);
+    }
     copies.address[copies.ranges] = address, copies.size[copies.ranges] = size, copies.ranges++;
   };
-  if(count && format.size) {
-    if(format.indexFormat) take(indexAddress, count * indexBytes), take(vertexAddress, (most + 1) * format.size);
-    else take(vertexAddress, count * format.size);
+  if(count && format.size && !format.indexFormat) take(vertexAddress, count * format.size);
+  if(count && format.size && format.indexFormat) {  //(the vertices from the least to the most: a big buffer's, a few)
+    take(indexAddress, count * indexBytes);
+    take(vertexAddress + least * format.size, (most - least + 1) * format.size);
   }
   if(format.indexFormat) indexAddress += count * indexBytes;
   else vertexAddress += count * format.size;
@@ -1066,19 +1070,21 @@ auto GE::readCopiedVertices(u32 count, const VertexFormat& format) -> void {
   if(count && format.size) {
     auto& offsets = vertexOffsets;
     offsets.resize(count);
-    u32 most = 0;
+    u32 least = ~0u, most = 0;
     for(u32 n = 0; n < count; n++) {
       u32 i = format.indexFormat ? index(n) : n;
-      offsets[n] = i * format.size, most = std::max(most, i);
+      offsets[n] = i, least = std::min(least, i), most = std::max(most, i);
     }
-    const u8* bytes = copied.at(vertexAddress, (most + 1) * format.size);
+    for(auto& offset : offsets) offset = (offset - least) * format.size;  //(from the least's vertex: copyVertices())
+    u32 first = vertexAddress + least * format.size;
+    const u8* bytes = copied.at(first, (most - least + 1) * format.size);
     if(bytes && vertexRuns && format.morphs == 1) {
       vertices.resize(count);
       readVerticesFrom(bytes, offsets.data(), count, format, vertices.data());
       vertexRunsRead++;
     } else {
       for(u32 n = 0; n < count; n++) {
-        u32 address = vertexAddress + offsets[n];
+        u32 address = first + offsets[n];
         const u8* base = copied.at(address, format.size);
         vertices.push_back(readVertexWith([&](u32 size, u32 at) -> u32 {
           if(!base) return 0;

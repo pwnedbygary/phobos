@@ -3330,6 +3330,155 @@ static auto geThreadConflicts() -> void {
   CHECK(plain.memory.vram == s.memory.vram, true);
 }
 
+//With the GE on its thread, held back with thousands of software PRIMs waiting for it, each reading its texture from
+//memory as it's drawn, the emulation thread's look at what the thread may still change costs no more than with a few:
+//loads of VRAM no PRIM reaches, each taking the thread's reports first (those textures' pages: ge/model.hpp). Kept by
+//PRIM, every report taken went through each PRIM not yet drawn, and one is taken at each load of VRAM and each list
+//word there: Ghost of Sparta, its display lists in VRAM, crawled. Timed: the best of three rounds of loads with 8,000
+//PRIMs behind against 500 (a ratio: the machine's speed and a sanitizer's cancel out). Then drawn as without the
+//thread.
+static auto geThreadManyBehind() -> void {
+  constexpr u32 Long = 0x0900'0000, Untouched = VRAM + 0x10'0000;
+  auto build = [](Memory& memory) {
+    for(u32 n = 0; n < 16 * 16 * 4; n += 4) memory.write(4, Image + n, 0xff00'0000 | n * 0x01'0305);
+    auto vertex = [&](u32 at, float u, float v, float x, float y) {
+      for(float value : {u, v}) { u32 word; std::memcpy(&word, &value, 4); memory.write(4, at, word); at += 4; }
+      memory.write(4, at, 0xffff'ffff), at += 4;
+      for(float value : {x, y, 0.0f}) { u32 word; std::memcpy(&word, &value, 4); memory.write(4, at, word); at += 4; }
+    };
+    vertex(Vertices, 0, 0, 0, 0), vertex(Vertices + 24, 16, 16, 8, 8);
+  };
+  auto sprites = [](Memory& memory, u32 address, u32 count) -> u32 {  //(a list of count textured sprites: its end)
+    ListWriter list{memory, address};
+    list.put(GE::FrameBufferPointer, 0);
+    list.put(GE::FrameBufferWidth, 64);
+    list.put(GE::FrameBufferPixelFormat, 3);
+    list.put(GE::Scissor1, 0);
+    list.put(GE::Scissor2, 47 << 10 | 63);
+    list.put(GE::Region2, 1023 << 10 | 1023);
+    list.put(GE::VertexType, 0x80'019f);
+    list.put(GE::TextureAddress0, Image & 0xff'fff0);
+    list.put(GE::TextureBufferWidth0, (Image >> 24 & 0xf) << 16 | 16);
+    list.put(GE::TextureSize0, 4 << 8 | 4);  //16x16
+    list.put(GE::TextureFormat, 3);
+    list.put(GE::TextureFunction, 0 | 1 << 8);
+    list.put(GE::TextureMappingEnable, 1);
+    list.put(GE::Base, Vertices >> 8 & 0xf'0000);
+    for(u32 n = 0; n < count; n++) {
+      list.put(GE::VertexAddress, Vertices), list.put(GE::Primitive, GE::Sprites << 16 | 2);
+    }
+    list.put(GE::Finish);
+    list.put(GE::End);
+    return list.address;
+  };
+  auto run = [](System& s, u32 address) {
+    s.ge.list = {}, s.ge.list.address = address;
+    CHECK(u32(s.ge.run(100'000)), u32(GE::Stop::Finished));
+  };
+  System plain;
+  plain.threadGE(false);
+  build(plain.memory);
+  u32 second = sprites(plain.memory, Long, 500);
+  sprites(plain.memory, second, 7'500);
+  run(plain, Long), run(plain, second);
+  plain.ge.settleAll();
+  System s;
+  s.threadGE(true);
+  s.ge.setThreads(1);
+  build(s.memory);
+  sprites(s.memory, Long, 500);
+  sprites(s.memory, second, 7'500);
+  auto loads = [&] {
+    double best = 1e30;
+    for(u32 round = 0; round < 3; round++) {
+      u32 sum = 0;
+      auto start = std::chrono::steady_clock::now();
+      for(u32 n = 0; n < 20'000; n++) sum += s.memory.read(4, Untouched + n % 64 * 4);
+      best = std::min(best, std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+      CHECK(sum, 0u);
+    }
+    return best;
+  };
+  std::atomic<bool> held{true};
+  s.geThreading->drain();  //(the thread reads its gate as it takes each record)
+  s.geThreading->gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
+  u64 waits = s.geThreading->waits;
+  run(s, Long);
+  double few = loads();
+  run(s, second);
+  double many = loads();
+  CHECK(held.load(), true);  //(all of it with the thread held)
+  CHECK(s.geThreading->waits, waits);
+  held = false;
+  s.geThreading->drain();
+  s.geThreading->gate = nullptr;
+  if(many >= few * 4) std::printf("  loads with 8,000 PRIMs behind took %.1f times as long as with 500\n", many / few);
+  CHECK(many < few * 4, true);
+  s.ge.settleAll();
+  CHECK(plain.memory.vram == s.memory.vram, true);
+}
+
+//With the GE on its thread, a PRIM's vertices by indices are copied for the thread from the least index's vertex to
+//the most's: a sprite by indices 4000 and 4001 of a vertex buffer hands the thread a record no bigger than one by
+//indices 0 and 1 (copied from the buffer's start, the first carried 4,002 vertices: Jeanne d'Arc's PRIMs, a big
+//buffer's few vertices each, had the emulation thread copying most of the time). Drawn as without the thread, the
+//render GE reading the vertices a run at a time from the copy (counted) and, with the GE's vertex runs off, one at a
+//time.
+static auto geThreadIndexedCopies() -> void {
+  constexpr u32 Indices = Image;
+  auto build = [](Memory& memory, u32 first) {
+    ListWriter list{memory, ListA};
+    list.put(GE::FrameBufferPointer, 0);
+    list.put(GE::FrameBufferWidth, 64);
+    list.put(GE::FrameBufferPixelFormat, 3);
+    list.put(GE::Scissor1, 0);
+    list.put(GE::Scissor2, 47 << 10 | 63);
+    list.put(GE::Region2, 1023 << 10 | 1023);
+    list.put(GE::VertexType, 0x80'119f);  //(through, 16-bit indices: u, v, 8888 color, x, y, z)
+    list.to(GE::IndexAddress, Indices);
+    list.to(GE::VertexAddress, Vertices);
+    list.put(GE::Primitive, GE::Sprites << 16 | 2);
+    list.put(GE::Finish);
+    list.put(GE::End);
+    auto vertex = [&](u32 at, u32 color, float x, float y) {
+      for(float value : {0.0f, 0.0f}) { u32 word; std::memcpy(&word, &value, 4); memory.write(4, at, word); at += 4; }
+      memory.write(4, at, color), at += 4;
+      for(float value : {x, y, 0.0f}) { u32 word; std::memcpy(&word, &value, 4); memory.write(4, at, word); at += 4; }
+    };
+    vertex(Vertices + first * 24, 0xff40'80c0, 2, 3), vertex(Vertices + (first + 1) * 24, 0xff40'80c0, 20, 17);
+    memory.write(2, Indices, first), memory.write(2, Indices + 2, first + 1);
+  };
+  System plain;
+  plain.threadGE(false);
+  build(plain.memory, 4000);
+  plain.ge.list = {}, plain.ge.list.address = ListA;
+  CHECK(u32(plain.ge.run(1000)), u32(GE::Stop::Finished));
+  plain.ge.settleAll();
+  CHECK(plain.memory.read(4, VRAM + (10 * 64 + 10) * 4) != 0, true);  //(the sprite drew there)
+  auto handed = [&](u32 first, bool runs) -> u64 {  //(the bytes of the list's records, the thread held back)
+    System s;
+    s.threadGE(true);
+    s.ge.vertexRuns = runs;
+    build(s.memory, first);
+    std::atomic<bool> held{true};
+    s.geThreading->drain();  //(the thread reads its gate as it takes each record)
+    s.geThreading->gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
+    s.ge.list = {}, s.ge.list.address = ListA;
+    CHECK(u32(s.ge.run(1000)), u32(GE::Stop::Finished));
+    u64 bytes = s.geThreading->backlog();
+    held = false;
+    s.geThreading->drain();
+    s.geThreading->gate = nullptr;
+    CHECK(s.geThreading->render.vertexRunsRead, u64(runs));  //(a run of the copy: from the least's vertex)
+    s.ge.settleAll();
+    CHECK(plain.memory.vram == s.memory.vram, true);
+    return bytes;
+  };
+  u64 near = handed(0, true);
+  CHECK(handed(4000, true), near);
+  CHECK(handed(4000, false), near);
+}
+
 //Versions of memory (ge/versions.hpp), by themselves: the GE thread reads as of its place in the stream, a version's
 //bytes where one newer than its place has them; its write-backs go under the emulation thread's later writes (into
 //the earliest version at or after its place), storing only the bytes that change; of two versions over the same bytes
@@ -3530,6 +3679,9 @@ auto geTests() -> Tests {
     {"ge on its own thread draws the same", geThreadSame},
     {"ge on its own thread: a read waits only where the thread may still change the bytes", geThreadReads},
     {"ge on its own thread: a store waits only for pixels the drawing threads may still draw", geThreadConflicts},
+    {"ge on its own thread: thousands of software PRIMs behind, a load costs what it does with a few",
+     geThreadManyBehind},
+    {"ge on its own thread: vertices by indices copied from the least to the most", geThreadIndexedCopies},
     {"ge on its own thread: deferred texture decodes read as of their own PRIMs", geThreadDeferredDecodes},
     {"ge on its own thread: a block transfer outside a list after commands set from outside", geThreadTransferOutside},
     {"ge versions of memory, and neither thread waiting while it holds what the other waits for", geVersions},

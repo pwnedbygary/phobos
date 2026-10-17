@@ -106,6 +106,7 @@ struct GeThread : Memory::Writer {
   GeModel model;
   bool hardware = false;
   u64 waits = 0;  //(how often it waited for the render GE to pass a read: the tests')
+  auto backlog() const -> u64 { return ring.backlog(); }  //(the bytes of records handed over not yet taken: the tests')
   auto place() const -> u64 { return serial; }
   //(the emulation thread's memory hooked up to the thread, as the system's machine and the tests' both have it: its
   //drawer drains the thread, its loads from VRAM go by the value rule, its writes to VRAM and to watched pages are
