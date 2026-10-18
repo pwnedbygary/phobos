@@ -16509,6 +16509,13 @@ Save states: layout 33 (its own: #269's GE timing takes 33 too, and whichever la
 - `tests/psp/run-tests.sh` (sanitized; the address sanitizer's container-overflow check off, as part 101 ran it):
   577 groups, 0 failures. With sync 1 taken at once, as master takes it (the rest kept, so the test builds): the new
   test's 5 checks of the frame buffer shown and the foreground fail, every other group passes.
+- With master `dd63f4ffb` merged in (part 103's GE profile, part 104): 580 groups, 0 failures, the GE profile's and the
+  display's groups among them. The profile still records each `sceDisplaySetFrameBuf` as it's called (its
+  `ProfiledCall` first, then the latch) and each blank after its latch: Army of Two's a2-gp, profiled as part 103
+  profiled it (frames 301 to 900), has the SIGNAL callback's call and the second one its thread makes while the flip
+  isn't shown (1,200 and 600, all for the next sync) and 600 vblank waits, where master has the callback's alone; the
+  decoder counts a flip a list, the second call setting the same buffer, as it counts the PSP's capture (289 flips of
+  565 calls in ULUS10472-1).
 
 ### Not yet
 
