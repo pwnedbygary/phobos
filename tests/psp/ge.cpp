@@ -13,6 +13,7 @@
 
 namespace allegrex_test::psp {
 
+using ares::PlayStationPortable::GeModel;
 using ares::PlayStationPortable::GeVersions;
 
 constexpr u32 ListA = 0x0894'0000, ListB = 0x0895'0000, Vertices = 0x0896'0000, Saved = 0x0897'0000;
@@ -3418,6 +3419,146 @@ static auto geThreadFrame() -> void {
   CHECK(plain.memory.vram == s.memory.vram, true);
 }
 
+//With the GE on its thread, the list pages GeThread::listWord() finds all clean are kept (it's asked after every PRIM),
+//and on a page that isn't, the last 32-byte piece of a word found clean: each only while nothing that may make its
+//bytes dirty has changed. The emulation thread's model driven as handing PRIMs over drives it (GE::modelPrimitive(), a
+//hardware renderer's), at places the thread never reports passing, so that what they mark stays dirty (a finish
+//reported where one is needed), each way in turn: a GPU PRIM's rectangle elsewhere on a page found clean, then over
+//the word's piece, which waits; a software PRIM's, the same; a rectangle's edge inside a piece, which keeps the piece
+//from being kept for the clean word before the edge, so the word after it waits; a put point over the word's 16 KiB
+//with no rectangle there (a PRIM taking depth of the other order through memory, and a texture read through the depth
+//views); above 1x, a target's hull grown over a word rasterized before the last finish, by PRIMs on other pages; and
+//the renderer's depth moves and scale changed under a put point and a hull.
+static auto geThreadListPages() -> void {
+  constexpr u64 Late = u64(1) << 40;
+  //(rows of the 8888 frame buffer at 0, 512 wide)
+  auto rows = [](s32 left, s32 top, s32 right, s32 bottom) {
+    GeModel::Rect r;
+    r.address = 0, r.rowBytes = 2048, r.bytes = 4;
+    r.left = left, r.top = top, r.right = right, r.bottom = bottom;
+    return r;
+  };
+  //(that frame buffer, or a 16-bit one, from row top to bottom; the depth buffer at 1 MiB; positions alone, in 3D)
+  auto state = [](GE& ge, u32 format, bool depth, u32 top, u32 bottom) {
+    ge.commands[GE::FrameBufferPointer] = 0, ge.commands[GE::FrameBufferWidth] = 512;
+    ge.commands[GE::FrameBufferPixelFormat] = format;
+    ge.commands[GE::DepthBufferPointer] = 0x10'0000, ge.commands[GE::DepthBufferWidth] = 512;
+    ge.commands[GE::DepthTestEnable] = depth, ge.commands[GE::DepthMask] = 0;
+    ge.commands[GE::Scissor1] = top << 10, ge.commands[GE::Scissor2] = bottom << 10 | 511;
+    ge.commands[GE::Region1] = 0, ge.commands[GE::Region2] = 1023 << 10 | 1023;
+    ge.commands[GE::VertexType] = 3 << 7, ge.commands[GE::TextureMappingEnable] = 0;
+  };
+  auto primitive = [](System& s, u64 at) {
+    GeThread::Copies copies{};
+    s.ge.modelPrimitive(s.geThreading->model, GE::Primitive << 24 | GE::Triangles << 16 | 3, 0, 0, copies, nullptr,
+                        true, at);
+  };
+  //(a word's own piece made dirty on a page found not all clean: the word waits, the thread held back till then)
+  auto waitsFor = [](System& s, u32 word) {
+    auto& thread = *s.geThreading;
+    std::atomic<bool> held{true};
+    thread.drain();  //(the thread reads its gate as it takes each record)
+    thread.gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
+    u64 waits = thread.waits;
+    std::thread release([&] { std::this_thread::sleep_for(std::chrono::milliseconds(20)); held = false; });
+    bool clean = thread.listWord(word);
+    release.join();
+    thread.drain();
+    thread.gate = nullptr;
+    return !clean && thread.waits == waits + 1;
+  };
+  constexpr u32 Word = VRAM + 0x8'0000, Depth = VRAM + 0x10'0040;  //(row 256's first pixel; the depth buffer's)
+  for(bool gpu : {true, false}) {  //a GPU PRIM's rectangle, then a software PRIM's
+    System s;
+    s.threadGE(true);
+    auto& thread = *s.geThreading;
+    auto& rects = gpu ? thread.model.gpu : thread.model.software;
+    CHECK(thread.listWord(Word), true);
+    rects.add(rows(300, 257, 400, 257), Late);  //(the page's second row, not the word's piece)
+    u64 waits = thread.waits;
+    CHECK(thread.listWord(Word), false);
+    CHECK(thread.waits, waits);  //(its piece clean, kept)
+    rects.add(rows(0, 256, 0, 256), Late + 1);
+    CHECK(waitsFor(s, Word), true);
+  }
+  for(bool gpu : {true, false}) {  //a rectangle's edge inside a piece: the word before it clean, the piece not kept
+    System s;
+    s.threadGE(true);
+    auto& thread = *s.geThreading;
+    (gpu ? thread.model.gpu : thread.model.software).add(rows(1, 256, 1, 256), Late);  //(the piece's second word)
+    u64 waits = thread.waits;
+    CHECK(thread.listWord(Word), false);
+    CHECK(thread.waits, waits);
+    CHECK(waitsFor(s, Word + 4), true);
+  }
+  for(bool texture : {false, true}) {  //a put point: depth of the other order, or a texture through the depth views
+    System s;
+    s.threadGE(true);
+    auto& thread = *s.geThreading;
+    state(s.ge, 3, true, 0, 271);
+    primitive(s, Late);  //(its depth on the GPU, over the word: no rectangle there)
+    CHECK(thread.listWord(Depth), true);
+    if(texture) {
+      s.ge.commands[GE::DepthTestEnable] = 0, s.ge.commands[GE::TextureMappingEnable] = 1;
+      s.ge.commands[GE::TextureFormat] = 3, s.ge.commands[GE::TextureSize0] = 6 << 8 | 6;
+      s.ge.commands[GE::TextureAddress0] = 0x30'0000;  //(0x0430'0000: the depth buffer through the first depth view)
+      s.ge.commands[GE::TextureBufferWidth0] = 0x04'0000 | 64;
+    } else {
+      state(s.ge, 0, true, 0, 271);  //(16-bit over it: the 8888 depth taken through memory)
+    }
+    primitive(s, Late + 1);
+    CHECK(thread.model.putPoints.size(), 1u);
+    CHECK(thread.listWord(Depth), false);
+  }
+  {  //a put point over a word whose piece was kept, on a page a rectangle reaches elsewhere
+    System s;
+    s.threadGE(true);
+    auto& thread = *s.geThreading;
+    state(s.ge, 3, true, 0, 271), primitive(s, Late);
+    GeModel::Rect elsewhere;
+    elsewhere.address = 0x10'0800, elsewhere.rowBytes = 4096, elsewhere.bytes = 4;
+    elsewhere.right = elsewhere.bottom = 0;
+    thread.model.gpu.add(elsewhere, Late);
+    u64 waits = thread.waits;
+    CHECK(thread.listWord(Depth), false);
+    CHECK(thread.waits, waits);
+    state(s.ge, 0, true, 0, 271), primitive(s, Late + 1);
+    CHECK(waitsFor(s, Depth), true);
+  }
+  {  //above 1x, a target's hull grown over a word rasterized before the last finish
+    System s;
+    s.threadGE(true);
+    auto& thread = *s.geThreading;
+    thread.model.scaled = true;
+    state(s.ge, 3, false, 256, 257), primitive(s, Late);
+    thread.model.finishKnown = Late;
+    CHECK(thread.listWord(Word), true);
+    state(s.ge, 3, false, 0, 1), primitive(s, Late + 1);
+    state(s.ge, 3, false, 500, 501), primitive(s, Late + 2);  //(its hull from row 0 to row 502)
+    CHECK(thread.model.gpu.pageNewest[0x80], Late);  //(neither reaches the word's page)
+    CHECK(thread.listWord(Word), false);
+  }
+  for(bool scale : {false, true}) {  //the depth moves turned off under a put point; the scale raised under a hull
+    System s;
+    s.threadGE(true);
+    auto& thread = *s.geThreading;
+    auto& model = thread.model;
+    model.gpu.add(rows(0, 256, 0, 256), Late);
+    model.finishKnown = Late;
+    if(scale) {
+      model.targets.push_back({0, 512, 3, rows(0, 0, 511, 511), Late + 1});
+    } else {
+      GeModel::PutPoint point{Late + 1, {}, {}};
+      point.covers.set(0x8'0000 >> 14);
+      model.putPoints.push_back(point);
+    }
+    model.dirtyings++;
+    CHECK(thread.listWord(Word), true);
+    (scale ? model.scaled : model.staleDepth) = true;
+    CHECK(thread.listWord(Word), false);
+  }
+}
+
 //With the GE on its thread, held back with thousands of software PRIMs waiting for it, each reading its texture from
 //memory as it's drawn, the emulation thread's look at what the thread may still change costs no more than with a few:
 //loads of VRAM no PRIM reaches, each taking the thread's reports first (those textures' pages: ge/model.hpp). Kept by
@@ -4299,6 +4440,8 @@ auto geTests() -> Tests {
     {"ge on its own thread: a read waits only where the thread may still change the bytes", geThreadReads},
     {"ge on its own thread: a store waits only for pixels the drawing threads may still draw", geThreadConflicts},
     {"ge on its own thread: a frame's end taken as of its record, at most a frame behind", geThreadFrame},
+    {"ge on its own thread: a list's clean pages and pieces kept only while nothing may make them dirty",
+     geThreadListPages},
     {"ge on its own thread: thousands of software PRIMs behind, a load costs what it does with a few",
      geThreadManyBehind},
     {"ge on its own thread: vertices by indices copied from the least to the most", geThreadIndexedCopies},

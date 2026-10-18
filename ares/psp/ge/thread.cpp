@@ -479,13 +479,14 @@ NALL_NOINLINE auto GeThread::listWord(u32 address) -> bool {
     dirtyPage = address >> 12;
   }
   vramSpan(address, 4, first, last);
-  //(each word of such a page looked at alone: eight share a piece, clean for all of them as for one)
+  //(each word of such a page looked at alone: eight share a piece, kept once all its bytes are clean, as a rectangle's
+  //edge may fall inside it)
   bool onePiece = first >> 5 == last >> 5;
   CleanPage piece{first >> 5, model.gpu.pageNewest[first >> 12], model.software.pageNewest[first >> 12],
                   model.dirtyings, model.staleDepth, model.scaled};
   if(onePiece && piece == cleanPiece) return false;
   if(model.dirty(first, last)) waitFor(drawnFirst(address, 4));
-  else if(onePiece) cleanPiece = piece;
+  else if(onePiece && !model.dirty(first & ~31u, first | 31u)) cleanPiece = piece;
   return false;
 }
 

@@ -961,6 +961,72 @@ auto geThreadFrames(const fs::path& programs) -> void {
                     std::to_string(late) + " a frame behind)");
 }
 
+//With the GE on its thread, a frame's end waits for that thread only where it's two frames behind, or where the front
+//end asks for the frame's own picture (exactFrame); a frame buffer the thread can't take the picture of (in main
+//memory, whose stores keep no versions) the frame's end takes itself, the thread done first. The program ended
+//(kernel.exited, as after sceKernelExitGame: the frames' ends alone handed over) and the thread held at its gate, let
+//go after a second, each frame's end timed.
+auto geThreadFrameBound(const fs::path& programs) -> void {
+  std::printf("the frames shown with the GE on its thread: waited for two behind, or for the frame's own\n");
+  PlayStationPortable::option("Memory Stick", (scratch / "stick").string().c_str());
+  PlayStationPortable::option("GE Thread", "On");
+  host.game = programPak(programs / "cube.elf", "program.elf");
+  Node::System root;
+  if(!CHECK(start(root), "the PSP starts with the GE on its thread")) return;
+  for(u32 frame = 0; frame < 10; frame++) root->run();
+  psp.kernel.exited = true;
+  std::atomic<bool> held{false};
+  psp.geThreading->drain();  //(the thread reads its gate as it takes each record)
+  psp.geThreading->gate = [&](u64) { while(held.load()) std::this_thread::yield(); };
+  auto timed = [&] {
+    auto started = std::chrono::steady_clock::now();
+    root->run();
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+  };
+  auto held1s = [&](const std::function<void()>& frames) {
+    psp.geThreading->drain();
+    held = true;
+    std::thread release([&] { std::this_thread::sleep_for(std::chrono::seconds(1)); held = false; });
+    frames();
+    release.join();
+  };
+  double ahead = 0, behind = 0, exact = 0, memory = 0;
+  held1s([&] { ahead = timed(), behind = timed(); });
+  CHECK(ahead < 0.5, "a frame behind: no wait (" + std::to_string(ahead) + " s)");
+  CHECK(behind > 0.7, "two frames behind: a wait till the thread goes on (" + std::to_string(behind) + " s)");
+  held1s([&] { psp.exactFrame = true, exact = timed(), psp.exactFrame = false; });
+  CHECK(exact > 0.7, "the frame's own picture asked for: waited for (" + std::to_string(exact) + " s)");
+  //(one color all over, in main memory: the frame's end shows it at once, the thread still held)
+  for(u32 n = 0; n < 512 * 272; n++) psp.memory.write(4, 0x0880'0000 + n * 4, 0x0040'80c0);
+  psp.kernel.display.frameBuffer = 0x0880'0000, psp.kernel.display.nextSet = false;
+  psp.kernel.display.bufferWidth = 512, psp.kernel.display.pixelFormat = 3;
+  u32 before;
+  {
+    std::lock_guard lock{host.mutex};
+    before = host.frames;
+  }
+  std::vector<u32> shown;
+  held1s([&] {
+    memory = timed();
+    for(u32 tries = 0; tries < 100; tries++) {
+      {
+        std::lock_guard lock{host.mutex};
+        if(host.frames > before) break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    std::lock_guard lock{host.mutex};
+    shown = host.frame;
+  });
+  bool even = !shown.empty() && std::all_of(shown.begin(), shown.end(), [&](u32 pixel) { return pixel == shown[0]; });
+  CHECK(memory < 0.5 && even, "a frame buffer in main memory: its picture taken at the frame's end (" +
+                                  std::to_string(memory) + " s)");
+  psp.geThreading->drain();
+  psp.geThreading->gate = nullptr;
+  root->unload();
+  PlayStationPortable::option("GE Thread", "Off");
+}
+
 //The GE on its thread stuck (a driver call that never returns, which a test hook stands for: the thread held at its
 //gate): saving a state gives up after two seconds, with no state; so does unloading, which leaves the thread be with
 //the machine under it (PlayStationPortable::wedged()); a load is refused while it's stuck; let go, it's joined
@@ -1133,6 +1199,7 @@ auto main() -> int {
     systemFonts(fs::path{programs});
     frontDialogs(fs::path{programs});
     geThreadFrames(fs::path{programs});
+    geThreadFrameBound(fs::path{programs});
     geThreadStuck(fs::path{programs});
   } else {
     std::printf("PSP_TEST_PROGRAMS isn't set (or has no hello.elf): the checks that run a program are skipped\n");
